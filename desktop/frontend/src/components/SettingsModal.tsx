@@ -36,6 +36,7 @@ import type {
 import { SHOW_SYSTEM_PROMPT_KEY } from '../types'
 // 本组件已有同名的 useState setter,故取个别名。persist* = 写盘 + 应用 + 跨窗广播。
 import { isSmoothCaretOn, setSmoothCaret as persistSmoothCaret } from '../smoothCaret'
+import { loadHomepageWallpaperPrefs, onHomepageWallpaperPrefsChange, setHomepageWallpaperMotion } from '../views/homepageWallpaper'
 import { selectionBarOrder, setSelectionBarOrder } from '../selectionActions'
 import { isPromptSuggestOn, setPromptSuggest as persistPromptSuggest } from '../views/chat2/promptSuggest'
 import { getVisualsPref, setVisualsPref, VISUALS_VALUES, type VisualsPref } from '../visualsPref'
@@ -421,6 +422,9 @@ export const SettingsModal: React.FC<{
   })
   // 丝滑光标(默认关;localStorage,smoothCaret.ts 全局模块即时生效)。
   const [smoothCaret, setSmoothCaret] = useState<boolean>(isSmoothCaretOn)
+  // 主页壁纸动效:和主页壁纸面板里的开关是同一个值(主页那边听同一份偏好)。
+  const [homeMotion, setHomeMotion] = useState(() => loadHomepageWallpaperPrefs().motion)
+  useEffect(() => onHomepageWallpaperPrefsChange(() => setHomeMotion(loadHomepageWallpaperPrefs().motion)), [])
   // 划线菜单的排法(缺省视图工具在前;localStorage,条每次出现时现读)。
   const [selBarOrder, setSelBarOrder] = useState(selectionBarOrder)
   // 输入建议(默认关;localStorage,promptSuggest.ts 每次现读)。
@@ -3301,6 +3305,17 @@ export const SettingsModal: React.FC<{
                             <button type="button" aria-pressed={p.glassOn} className={p.glassOn ? 'active' : ''} onClick={() => p.onGlassChange(true)}>{t('settings.theme.glassOn')}</button>
                             <button type="button" aria-pressed={!p.glassOn} className={!p.glassOn ? 'active' : ''} onClick={() => p.onGlassChange(false)}>{t('settings.theme.glassOff')}</button>
                           </div>
+                        </div>
+                        <div className="settings-control-row" data-setting-anchor="home-motion">
+                          <div className="settings-control-copy"><ImageIcon size={14} /><span><strong>{t('settings.theme.homeMotion')}</strong><small>{t('settings.theme.homeMotionHint')}</small></span></div>
+                          <button
+                            type="button"
+                            role="switch"
+                            aria-checked={homeMotion}
+                            aria-label={t('settings.theme.homeMotion')}
+                            className={`switch${homeMotion ? ' on' : ''}`}
+                            onClick={() => { setHomeMotion(!homeMotion); setHomepageWallpaperMotion(!homeMotion) }}
+                          />
                         </div>
                         {/* 直接读写 themeStore(同背景轴,不走 props 链 → 三端自动到位)。毛玻璃关着时这行照样在:
                             设置搜索的落点不能时有时无,开关本身只是记下偏好。 */}

@@ -1303,6 +1303,8 @@ const zh: Dict = {
   'settings.theme.glassDescription': '为支持的表面加入半透明模糊效果。',
   'settings.theme.ambient': '外壳随内容取色',
   'settings.theme.ambientHint': 'Genesis 的外围磨砂玻璃跟随当前可见内容的颜色，需要开着毛玻璃。滚动和切换页面时会多占一些性能。',
+  'settings.theme.homeMotion': '主页壁纸动效',
+  'settings.theme.homeMotionHint': '星轨的行星公转、日行的日月光晕；系统打开「减弱动态效果」时不动。和主页壁纸面板里的开关是同一个',
   'settings.theme.typographyTitle': '字体',
   // 中分类(一级页标题下的横排栏目条);只给内容长的页,短页不设
   'settings.sub.connection': '连接',
@@ -3182,6 +3184,8 @@ const en: Dict = {
   'settings.theme.glassDescription': 'Add translucent blur to surfaces that support it.',
   'settings.theme.ambient': 'Tint chrome from content',
   'settings.theme.ambientHint': 'Genesis frosted chrome follows the colors of visible content. Needs frosted glass turned on. Uses more resources while scrolling and switching pages.',
+  'settings.theme.homeMotion': 'Home wallpaper motion',
+  'settings.theme.homeMotionHint': 'The Orbit planet circles and the Sun path glow breathes. Stays still when Reduce motion is on in your system. Same switch as in the Home wallpaper panel.',
   'settings.theme.typographyTitle': 'Typography',
   'settings.sub.connection': 'Connection',
   'settings.sub.models': 'Models',

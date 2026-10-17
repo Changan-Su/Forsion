@@ -56,14 +56,17 @@ import { useRemoteNewChatWorkspaces } from '../stores/newChatWorkspaces'
 import { AgentSelectStrip } from '../components/AgentSelectStrip'
 import { Composer2 } from './chat2/Composer2'
 import { registerMessages, useI18n, type Locale } from '../i18n'
-import { formatLongDate, formatTime } from '../format/time'
+import { formatLongDate, formatMonthDay, formatTime } from '../format/time'
 import { useShallow } from 'zustand/react/shallow'
 import {
-  clearCustomWallpaper, fetchBingWallpapers, loadHomepageWallpaperPrefs, readCustomWallpaper,
+  clearCustomWallpaper, fetchBingWallpapers, loadHomepageWallpaperPrefs, onHomepageWallpaperPrefsChange, readCustomWallpaper,
   saveHomepageWallpaperPrefs, writeCustomWallpaper,
   type BingWallpaper, type HomepageThemePreset, type HomepageWallpaperPrefs, type HomepageWallpaperSource,
 } from './homepageWallpaper'
-import { HOME_CARDS_MAX, loadHomeCards, saveHomeCards, shownHomeCards } from './homeCards'
+import { HomeWallpaperArt } from './homepageWallpaperArt'
+import { DESKTOP_HOME_CARDS_KEY, HOME_CARDS_MAX, loadHomeCards, saveHomeCards, shownHomeCards } from './homeCards'
+import { useAgendaItems } from './DashboardCompactViews'
+import { useInbox } from '../stores/inboxStore'
 import './homepage.css'
 
 /** 本视图所在的 Space id(真源在 builtins/homepage.tsx);坞里要把它自己排掉 —— 但**排序时不能排**,见 dropOn。 */
@@ -77,7 +80,8 @@ const PINNED_SPACES_KEY = 'forsion.homepage.pinned-spaces.v1'
 const PINNED_DROP_ID = 'homepage:pinned-spaces'
 const PINNED_DRAG_PREFIX = 'homepage:pinned:'
 const FIXED_HOME_ACTIONS = ['rb-market', 'rb-achievements'] as const
-const THEME_PRESETS: HomepageThemePreset[] = ['rings', 'topography', 'weave', 'hack2gate']
+const THEME_PRESETS: HomepageThemePreset[] = ['orbit', 'path', 'paper']
+const WALLPAPER_SOURCES: HomepageWallpaperSource[] = ['theme', 'bing', 'image']
 
 /** 指针拖放以「指针真正在谁里面」为准,避免 body zoom 下 active rect 中心偏移选错落点;
  * 键盘拖放没有 pointerCoordinates,回落 closestCenter 保留方向键可访问性。 */
@@ -433,14 +437,15 @@ function SortableFolderMember({
 }
 
 /** 时钟。`setV` 回同一个对象引用时 React 直接跳过重渲 —— 于是 1s 轮询也只在**分钟真的变了**时才画一次。 */
-function useClock(locale: Locale): { time: string; date: string; hour: number } {
-  const calc = (): { time: string; date: string; hour: number } => {
+function useClock(locale: Locale): { time: string; date: string; hour: number; minute: number } {
+  const calc = (): { time: string; date: string; hour: number; minute: number } => {
     const d = new Date()
     return {
       time: formatTime(d),
       // 月日与星期之间留一口气(「8月27日 星期四」),见 format/time 的 formatLongDate。
       date: formatLongDate(d, { locale }),
       hour: d.getHours(),
+      minute: d.getMinutes(),
     }
   }
   const [v, setV] = useState(calc)
@@ -506,7 +511,7 @@ function useDockTiles(): { tiles: Tile[]; topIds: string[]; order: string[] } {
   return { tiles, topIds, order }
 }
 
-interface MenuState { x: number; y: number; kind: 'folder' | 'member'; id?: string }
+interface MenuState { x: number; y: number; kind: 'folder' | 'member' | 'cards'; id?: string }
 
 registerMessages({
   'home.folderMenu.renameTitle': { zh: '重命名收纳夹', en: 'Rename folder' },
@@ -522,6 +527,7 @@ registerMessages({
   'home.cards.editTitle': { zh: '主页卡片', en: 'Home cards' },
   'home.cards.editHint': { zh: '勾选的显示在主页，1 到 {max} 张，按勾选的先后排。', en: 'Checked ones show on Home (1 to {max}), in the order you check them.' },
   'home.cards.done': { zh: '完成', en: 'Done' },
+  'home.card.unread': { zh: '{n} 条未读', en: '{n} unread' },
 })
 
 interface HomeCard { id: string; name: string; statusId: string; spaceId?: string; icon?: SpaceDefinition['icon'] | RibbonItem['icon']; open: () => void }
@@ -579,6 +585,32 @@ function HomeCards({ tiles, actions, onLaunch }: { tiles: Tile[]; actions: Ribbo
   )
 }
 
+/** 桌面近况卡(摆法 C)的那一行。日历、收件箱各自一个组件:日程要读好几份日历库,不摆这张卡就不该算。 */
+function DeskCardStatus({ spaceId }: { spaceId: string }) {
+  if (spaceId === 'calendar') return <CalendarCardStatus />
+  if (spaceId === 'inbox') return <InboxCardStatus />
+  return <CommonCardStatus spaceId={spaceId} />
+}
+function CommonCardStatus({ spaceId }: { spaceId: string }) {
+  return <>{useCardStatus()(spaceId)}</>
+}
+function CalendarCardStatus() {
+  const { t } = useI18n()
+  // 按此刻过滤(不靠 memo):主页时钟每分钟重画一次,结束了的那条就换成下一条
+  const now = Date.now()
+  const next = useAgendaItems().find((item) => item.end >= now)
+  if (!next) return null
+  const today = next.start.toDateString() === new Date().toDateString()
+  const when = next.allDay ? (today ? '' : formatMonthDay(next.start)) : today ? formatTime(next.start) : `${formatMonthDay(next.start)} ${formatTime(next.start)}`
+  return <>{[when, next.title || t('dashcompact.untitled')].filter(Boolean).join(' ')}</>
+}
+function InboxCardStatus() {
+  const { t } = useI18n()
+  const unread = useInbox((s) => s.unreadCount)
+  useEffect(() => { void useInbox.getState().refreshUnread() }, [])
+  return <>{unread ? t('home.card.unread', { n: String(unread) }) : ''}</>
+}
+
 /** 卡片上那一行近况:只说手头就有的事实(最近的会话 / 最近打开的笔记 / 成就 / 已装插件),拿不到就不写。 */
 function useCardStatus(): (id: string) => string {
   const { t } = useI18n()
@@ -621,6 +653,9 @@ export function HomepageView(_props: ViewProps) {
   const [composerFocused, setComposerFocused] = useState(false)
   const [wallpaperOpen, setWallpaperOpen] = useState(false)
   const [wallpaperPrefs, setWallpaperPrefs] = useState<HomepageWallpaperPrefs>(loadHomepageWallpaperPrefs)
+  const [deskPicked, setDeskPicked] = useState(() => loadHomeCards(DESKTOP_HOME_CARDS_KEY))
+  // 窗口最小化 / 被挡住 / 锁屏:壁纸动效停在原地(切到别的 Space 时主页本来就卸掉了)
+  const [pageHidden, setPageHidden] = useState(() => document.hidden)
   const [customWallpaperUrl, setCustomWallpaperUrl] = useState<string | null>(null)
   const [bingWallpapers, setBingWallpapers] = useState<BingWallpaper[]>([])
   const [bingLoading, setBingLoading] = useState(false)
@@ -630,14 +665,28 @@ export function HomepageView(_props: ViewProps) {
   const fileRef = useRef<HTMLInputElement>(null)
   const leaveTimer = useRef<number | null>(null)
   const pending = useRef<(() => void) | null>(null)
-  // 一次性读:动画偏好在会话中途变了也不值得重挂监听(下次进主页即生效)。
-  const [reduceMotion] = useState(() => { try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches } catch { return false } })
+  // 跟着系统实时变:壁纸面板里的「动态效果」在系统「减弱动态效果」关掉后要恢复成用户原来的选择。
+  const [reduceMotion, setReduceMotion] = useState(() => { try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches } catch { return false } })
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   )
 
   useEffect(() => { saveHomepageWallpaperPrefs(wallpaperPrefs) }, [wallpaperPrefs])
+  // 设置 → 外观里的「主页壁纸动效」写的是同一份偏好。只跟这一项:整份换掉会把另一扇窗选的「自己的图片」带过来,
+  // 而那张图(IndexedDB)这边没读过,画出来是主题背景(Codex 评审)。
+  useEffect(() => onHomepageWallpaperPrefsChange(() => setWallpaperPrefs((cur) => {
+    const motion = loadHomepageWallpaperPrefs().motion
+    return motion === cur.motion ? cur : { ...cur, motion }
+  })), [])
+  useEffect(() => {
+    const onVisibility = (): void => setPageHidden(document.hidden)
+    document.addEventListener('visibilitychange', onVisibility)
+    let mq: MediaQueryList | null = null
+    const onMotion = (): void => setReduceMotion(!!mq?.matches)
+    try { mq = window.matchMedia('(prefers-reduced-motion: reduce)'); mq.addEventListener('change', onMotion) } catch { /* 没有 matchMedia 就当不减弱 */ }
+    return () => { document.removeEventListener('visibilitychange', onVisibility); mq?.removeEventListener('change', onMotion) }
+  }, [])
   useEffect(() => {
     try { localStorage.setItem(PINNED_SPACES_KEY, JSON.stringify(pinnedSpaceIds)) } catch { /* ignore */ }
   }, [pinnedSpaceIds])
@@ -649,7 +698,7 @@ export function HomepageView(_props: ViewProps) {
       .then((blob) => {
         if (!alive) return
         if (!blob) {
-          setWallpaperPrefs((prefs) => prefs.source === 'custom' ? { ...prefs, source: 'theme' } : prefs)
+          setWallpaperPrefs((prefs) => prefs.imageChoice === 'custom' ? { ...prefs, imageChoice: 'hack2gate', source: prefs.source === 'image' ? 'theme' : prefs.source } : prefs)
           return
         }
         setCustomWallpaperUrl(URL.createObjectURL(blob))
@@ -717,18 +766,25 @@ export function HomepageView(_props: ViewProps) {
   const hasTangu = spaces.some((s) => s.id === 'tangu')
 
   const greet = clock.hour < 5 ? 'home.greet.night' : clock.hour < 11 ? 'home.greet.morning' : clock.hour < 18 ? 'home.greet.afternoon' : 'home.greet.evening'
+  const greetText = name ? t(greet + '.named', { name }) : t(greet)
   const rb = () => useRibbonStore.getState()
   const closePops = (): void => { setOpenFolder(null); setOrganizerOpen(false); setMenu(null) }
   const wallpaperUrl = wallpaperPrefs.source === 'bing'
     ? wallpaperPrefs.bing?.url || null
-    : wallpaperPrefs.source === 'custom' ? customWallpaperUrl : null
+    : wallpaperPrefs.source === 'image' && wallpaperPrefs.imageChoice === 'custom' ? customWallpaperUrl : null
+  const hack2gate = wallpaperPrefs.source === 'image' && wallpaperPrefs.imageChoice === 'hack2gate'
+  // hack2gate 是随包位图,与 Bing/自定义同走照片管线;真有图片 URL 时内联 style 仍压过它。
+  const photo = !!wallpaperUrl || hack2gate
 
   const patchWallpaperPrefs = (patch: Partial<HomepageWallpaperPrefs>): void => {
     setWallpaperPrefs((prefs) => ({ ...prefs, ...patch }))
   }
 
   const selectWallpaperSource = (source: HomepageWallpaperSource): void => {
-    if (source === 'custom' && !customWallpaperUrl) { fileRef.current?.click(); return }
+    if (source === 'image') {
+      patchWallpaperPrefs({ source, imageChoice: wallpaperPrefs.imageChoice === 'custom' && !customWallpaperUrl ? 'hack2gate' : wallpaperPrefs.imageChoice })
+      return
+    }
     if (source === 'bing') {
       patchWallpaperPrefs({ source, bing: wallpaperPrefs.bing || bingWallpapers[0] || null })
       return
@@ -742,7 +798,7 @@ export function HomepageView(_props: ViewProps) {
     void writeCustomWallpaper(file)
       .then(() => {
         setCustomWallpaperUrl(URL.createObjectURL(file))
-        patchWallpaperPrefs({ source: 'custom' })
+        patchWallpaperPrefs({ source: 'image', imageChoice: 'custom' })
       })
       .catch((error) => {
         setWallpaperError(t(error instanceof Error && error.message === 'TOO_LARGE'
@@ -754,7 +810,7 @@ export function HomepageView(_props: ViewProps) {
   const removeCustomWallpaper = (): void => {
     void clearCustomWallpaper().catch(() => {})
     setCustomWallpaperUrl(null)
-    patchWallpaperPrefs({ source: 'theme' })
+    patchWallpaperPrefs({ source: 'theme', imageChoice: 'hack2gate' })
   }
 
   // ── 收纳:重排 / 拖进收纳夹 ────────────────────────────────────────────────
@@ -843,8 +899,22 @@ export function HomepageView(_props: ViewProps) {
 
   const folderOpen = openFolder ? tiles.find((x) => x.id === openFolder.id) : undefined
   const folderMembers = folderOpen?.kind === 'folder' ? folderOpen.members : []
-  const visibleTiles = tiles.slice(0, COMPACT_TILE_LIMIT)
-  const hiddenCount = Math.max(0, tiles.length - visibleTiles.length)
+  // 桌面近况卡:可选的是架子上所有 Space(收纳夹里的也算);没改过 = 架子上头四个。摆成卡片的不再在架子上重复一遍。
+  const cardChoices = tiles.flatMap((tile) => (tile.kind === 'space' ? [tile.space] : tile.members)).map((space) => ({ id: `space:${space.id}`, space }))
+  // 缺省先取顶层的,不够(Space 都收进了夹子)从夹内补:一张卡都没有就没处右键改了
+  const topChoices = cardChoices.filter((choice) => tiles.some((tile) => tile.id === choice.id))
+  const deskCards = phone ? [] : shownHomeCards(deskPicked, cardChoices, [...topChoices, ...cardChoices.filter((c) => !topChoices.includes(c))].slice(0, 4))
+  const carded = new Set(deskCards.map((card) => card.id))
+  const shelfTiles = tiles.filter((tile) => !carded.has(tile.id))
+  const visibleTiles = shelfTiles.slice(0, COMPACT_TILE_LIMIT)
+  const hiddenCount = Math.max(0, shelfTiles.length - visibleTiles.length)
+  /** 右键近况卡 = 勾选摆哪几张(1 到 HOME_CARDS_MAX 张,新勾的排最后);菜单不关,勾完点别处收起。 */
+  const toggleDeskCard = (id: string): void => {
+    const ids = deskCards.map((card) => card.id)
+    const next = ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]
+    if (!next.length || next.length > HOME_CARDS_MAX) return
+    if (saveHomeCards(next, DESKTOP_HOME_CARDS_KEY)) setDeskPicked(next)
+  }
   const activeTile = drag ? tiles.find((tile) => tile.id === drag) : undefined
   const activePinnedSpace = drag?.startsWith(PINNED_DRAG_PREFIX)
     ? spaces.find((space) => space.id === drag.slice(PINNED_DRAG_PREFIX.length))
@@ -946,6 +1016,12 @@ export function HomepageView(_props: ViewProps) {
 
   /** 收纳夹 / 收纳夹成员菜单的唯一一份条目:Web 浮层与 Android 原生半屏(lcl nativeSheet 可选宿主)都从这里渲染。 */
   const menuItems = (m: MenuState): SheetMenuItem[] => {
+    if (m.kind === 'cards') {
+      return cardChoices.map((choice) => {
+        const on = carded.has(choice.id)
+        return { id: choice.id, label: label(choice.space.name), checked: on, icon: <Check size={13} style={{ opacity: on ? 1 : 0 }} />, run: () => toggleDeskCard(choice.id) }
+      })
+    }
     if (m.kind === 'member') {
       return [{ id: 'move-out', label: t('home.folderMenu.moveOut'), icon: <LogOut size={13} />, run: () => { moveOut(m.id!); setMenu(null); setOpenFolder(null) } }]
     }
@@ -976,9 +1052,11 @@ export function HomepageView(_props: ViewProps) {
     <div
       ref={rootRef}
       className={`hp-root${phone ? ' hp-phone' : ''}${reduceMotion ? ' hp-still' : ''}${composerFocused ? ' hp-composer-focused' : ''}${wallpaperOpen ? ' hp-layer-focused' : ''}${openFolder || organizerOpen ? ' hp-secondary-open' : ''}`}
-      // hack2gate 是随包位图,与 Bing/自定义同走照片管线;真有图片 URL 时内联 style 仍压过它。
-      data-wallpaper={wallpaperUrl || wallpaperPrefs.themePreset === 'hack2gate' ? 'true' : undefined}
+      data-wallpaper={photo ? 'true' : undefined}
       data-theme-preset={wallpaperPrefs.themePreset}
+      data-image={hack2gate ? 'hack2gate' : undefined}
+      data-motion={wallpaperPrefs.motion ? 'on' : 'off'}
+      data-hidden={pageHidden || undefined}
       data-focus-blur={wallpaperPrefs.focusBlur ? 'true' : 'false'}
       data-vignette={wallpaperPrefs.vignette ? 'true' : 'false'}
       onPointerDown={(event) => {
@@ -992,7 +1070,9 @@ export function HomepageView(_props: ViewProps) {
         style={wallpaperUrl ? { backgroundImage: `url(${JSON.stringify(wallpaperUrl)})` } : undefined}
         aria-hidden
       />
-      <div className="hp-wallpaper-art" aria-hidden />
+      <div className="hp-wallpaper-art" aria-hidden>
+        {!photo && <HomeWallpaperArt preset={wallpaperPrefs.themePreset} hour={clock.hour} minute={clock.minute} />}
+      </div>
       <div className="hp-wallpaper-edge" aria-hidden />
       <div className="hp-wallpaper-tone" aria-hidden />
       <div className="hp-glow" aria-hidden />
@@ -1012,8 +1092,13 @@ export function HomepageView(_props: ViewProps) {
           {/* 标志性标题:旧版 SloganCard 的默认文案与字体,原样搬过来。 */}
           <div className="hp-brand">Forsion is All You Need</div>
           <div className="hp-clock">{clock.time}</div>
-          <div className="hp-date">{clock.date}</div>
-          <div className="hp-greet">{name ? t(greet + '.named', { name }) : t(greet)}</div>
+          {/* 桌面:问候 · 日期并成一行(摆法 C)。手机靠 order 重排这几个兄弟节点(homepage.css 文末),保持原样。 */}
+          {phone ? (
+            <>
+              <div className="hp-date">{clock.date}</div>
+              <div className="hp-greet">{greetText}</div>
+            </>
+          ) : <div className="hp-meta">{greetText} · {clock.date}</div>}
         </div>
 
         {hasTangu && <HomepageChatbox onDispatch={dispatchChat} onStartCall={startCallSession} onInputModeChange={setComposerFocused} />}
@@ -1029,6 +1114,22 @@ export function HomepageView(_props: ViewProps) {
         {/* 手机:大卡片,各带一行近况。默认 = 架子上的头两个 Space + 商店、成就;长按任意一张改成自己要的那几张(见 HomeCards)。
             其余 Space 在 Dock 上,收纳层照旧长按空白处进。 */}
         {phone && <HomeCards tiles={tiles} actions={fixedHomeActions} onLaunch={launchSpace} />}
+
+        {deskCards.length > 0 && (
+          <section className="hp-status-cards" style={{ '--hp-card-cols': deskCards.length <= 4 ? deskCards.length : 3, '--hp-card-cols-narrow': Math.min(deskCards.length, 2) } as React.CSSProperties}>
+            {deskCards.map(({ id, space }) => (
+              <button
+                key={id} type="button" className="hp-status-card" data-space-id={space.id}
+                onClick={(event) => { event.stopPropagation(); launchSpace(space.id) }}
+                onContextMenu={(event) => menuAt(event, 'cards')}
+              >
+                <span className="hp-status-card-icon">{space.icon && <space.icon />}</span>
+                <span className="hp-status-card-name">{label(space.name)}</span>
+                <span className="hp-status-card-status"><DeskCardStatus spaceId={space.id} /></span>
+              </button>
+            ))}
+          </section>
+        )}
 
         {/* 收纳架只保留一排摘要;“全部”与空白右键都进入独立二级收纳层。 */}
         {!phone && <section className="hp-spaces" data-total={tiles.length}>
@@ -1073,13 +1174,12 @@ export function HomepageView(_props: ViewProps) {
                           title={t('home.showAll')}
                         >
                           <span className="hp-tile-icon"><Grid2X2 size={20} /></span>
-                          <span className="hp-tile-name">{t('home.showAll')}</span>
-                          <span className="hp-more-count">+{hiddenCount}</span>
+                          <span className="hp-tile-name">{t('home.showAllCount', { n: String(hiddenCount) })}</span>
                         </button>
                       )}
                     </div>
                   </SortableContext>
-                ) : (
+                ) : tiles.length === 0 && (
                   <div className="hp-spaces-empty">{t('home.noSpaces')}</div>
                 )}
               </div>
@@ -1127,7 +1227,7 @@ export function HomepageView(_props: ViewProps) {
             </header>
 
             <div className="hp-wallpaper-sources" aria-label={t('home.wallpaper.source')}>
-              {(['theme', 'bing', 'custom'] as HomepageWallpaperSource[]).map((source) => (
+              {WALLPAPER_SOURCES.map((source) => (
                 <button
                   key={source}
                   type="button"
@@ -1156,12 +1256,18 @@ export function HomepageView(_props: ViewProps) {
                       aria-pressed={wallpaperPrefs.themePreset === preset}
                       onClick={() => patchWallpaperPrefs({ source: 'theme', themePreset: preset })}
                     >
-                      <span className="hp-theme-preview" data-preset={preset} aria-hidden />
+                      {/* 缩略图 = 缩小的主页:同一个组件画壁纸,上面压一条时钟、一块输入区 */}
+                      <span className="hp-theme-preview" data-preset={preset} aria-hidden>
+                        <HomeWallpaperArt preset={preset} hour={clock.hour} minute={clock.minute} thumb />
+                        <span className="hp-theme-mini-clock" />
+                        <span className="hp-theme-mini-box" />
+                      </span>
                       <span>{t(`home.wallpaper.preset.${preset}`)}</span>
                       {wallpaperPrefs.themePreset === preset && <i><Check size={11} /></i>}
                     </button>
                   ))}
                 </div>
+                <p className="hp-theme-note">{t('home.wallpaper.hack2gateMoved')}</p>
               </div>
             )}
 
@@ -1210,19 +1316,58 @@ export function HomepageView(_props: ViewProps) {
               </div>
             )}
 
-            {wallpaperPrefs.source === 'custom' && (
-              <div className="hp-wallpaper-custom">
-                <div className="hp-wallpaper-custom-preview" style={customWallpaperUrl ? { backgroundImage: `url(${JSON.stringify(customWallpaperUrl)})` } : undefined} />
+            {wallpaperPrefs.source === 'image' && (
+              <div className="hp-theme-presets hp-wallpaper-images">
                 <div>
-                  <strong>{t('home.wallpaper.customReady')}</strong>
-                  <span>{t('home.wallpaper.customHint')}</span>
+                  <button
+                    type="button"
+                    className={hack2gate ? 'on' : ''}
+                    data-image="hack2gate"
+                    aria-pressed={hack2gate}
+                    onClick={() => patchWallpaperPrefs({ source: 'image', imageChoice: 'hack2gate' })}
+                  >
+                    <span className="hp-image-preview" data-image="hack2gate" aria-hidden />
+                    <span>{t('home.wallpaper.hack2gate')}</span>
+                    {hack2gate && <i><Check size={11} /></i>}
+                  </button>
+                  <button
+                    type="button"
+                    className={wallpaperUrl && !hack2gate ? 'on' : ''}
+                    data-image="custom"
+                    aria-pressed={!!wallpaperUrl && !hack2gate}
+                    onClick={() => customWallpaperUrl ? patchWallpaperPrefs({ source: 'image', imageChoice: 'custom' }) : fileRef.current?.click()}
+                  >
+                    <span className="hp-image-preview" style={customWallpaperUrl ? { backgroundImage: `url(${JSON.stringify(customWallpaperUrl)})` } : undefined} aria-hidden>
+                      {!customWallpaperUrl && <Upload size={16} />}
+                    </span>
+                    <span>{t(customWallpaperUrl ? 'home.wallpaper.mine' : 'home.wallpaper.upload')}</span>
+                    {wallpaperUrl && !hack2gate && <i><Check size={11} /></i>}
+                  </button>
                 </div>
-                <button type="button" onClick={() => fileRef.current?.click()}><Upload size={13} /> {t('home.wallpaper.replace')}</button>
-                <button type="button" onClick={removeCustomWallpaper}>{t('home.wallpaper.remove')}</button>
+                {customWallpaperUrl ? (
+                  <div className="hp-wallpaper-custom">
+                    <div><span>{t('home.wallpaper.customHint')}</span></div>
+                    <button type="button" onClick={() => fileRef.current?.click()}><Upload size={13} /> {t('home.wallpaper.replace')}</button>
+                    <button type="button" onClick={removeCustomWallpaper}>{t('home.wallpaper.remove')}</button>
+                  </div>
+                ) : <p className="hp-theme-note">{t('home.wallpaper.customHint')}</p>}
               </div>
             )}
 
             <div className="hp-wallpaper-options">
+              {/* 系统打开「减弱动态效果」时灰掉、显示成关;系统那边关掉后恢复成用户原来的选择(存的值不动)。 */}
+              <button
+                type="button"
+                className={wallpaperPrefs.motion && !reduceMotion ? 'on' : ''}
+                role="switch"
+                data-option="motion"
+                aria-checked={wallpaperPrefs.motion && !reduceMotion}
+                disabled={reduceMotion}
+                onClick={() => patchWallpaperPrefs({ motion: !wallpaperPrefs.motion })}
+              >
+                <span><strong>{t('home.wallpaper.motion')}</strong><small>{t(reduceMotion ? 'home.wallpaper.motionReduced' : 'home.wallpaper.motionHint')}</small></span>
+                <i aria-hidden />
+              </button>
               <button
                 type="button"
                 className={wallpaperPrefs.focusBlur ? 'on' : ''}
@@ -1339,7 +1484,7 @@ export function HomepageView(_props: ViewProps) {
       )}
 
       {menu && webMenu && (
-        <OverlayAt className="ctx-menu" x={menu.x} y={menu.y} onClick={(e) => e.stopPropagation()}>
+        <OverlayAt className={`ctx-menu${menu.kind === 'cards' ? ' hp-cards-menu' : ''}`} x={menu.x} y={menu.y} onClick={(e) => e.stopPropagation()}>
           <CtxMenuButtons items={menuItems(menu)} />
         </OverlayAt>
       )}

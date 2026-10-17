@@ -91,7 +91,8 @@ async function main() {
     check('前置区与 Ribbon 同步区由竖线分隔且没有重叠', !!initial.geometry
       && initial.geometry.zoneRight <= initial.geometry.dividerLeft + 1
       && initial.geometry.dividerRight <= initial.geometry.dockLeft + 1
-      && initial.geometry.dividerHeight >= 40, initial.geometry)
+      // 10-17 摆法 C:格子 60px 高、竖线上下各让 12 / 20px,竖线约 30px(旧 78px 格子时是 ≥40)
+      && initial.geometry.dividerHeight >= 24, initial.geometry)
 
     // 市场/成就都开在独立浮窗里(Floating Panel 化 2026-09-20):点之前先 arm window 事件,面板断言打在浮窗上;
     // 「返回应用」= closeSelf(),窗口真关掉,所以下一个面板要重新等一次 window 事件。
