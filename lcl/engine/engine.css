@@ -131,6 +131,11 @@
    两者摞在一起就是用户报的「红点和 ⌘1 重合」。图标位置在展开态是定死的(左内边距 10px + 18px 见方),
    故落点直接写常量;右侧留给 .rb-key。 */
 .rb-expanded .rb-space .rb-badge { top: 2px; left: 21px; right: auto; transform: none; }
+/* 提示红点(RibbonItem.dot:成就有可领;收进「…」/ 收纳夹时挂在它们上):无数字的小圆点,压在图标右上角。
+   宿主钮默认不是定位容器(.rb-space 才是)—— 只给带红点的那颗钮补上,别动所有 .rb-btn 的定位上下文。 */
+.rb-btn:has(> .rb-dot) { position: relative; }
+.rb-badge.rb-dot { top: 4px; right: 4px; min-width: 0; width: 8px; height: 8px; padding: 0; }
+.rb-expanded .rb-btn > .rb-dot { top: 5px; left: 22px; right: auto; }
 .rb-btn {
   -webkit-app-region: no-drag;
   width: 32px;

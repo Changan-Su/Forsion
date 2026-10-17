@@ -33,7 +33,8 @@ import { isBuiltinFileType, isOverridableBuiltinType, OVERRIDABLE_BUILTIN_SUFFIX
 import { isHostPath } from '@amadeus-shared/pdfLink'
 import { claimHostMount, createBlockSurface, mountHostReact } from './blockSurface'
 import { addEditorExtension, clearEditorExtensions } from './editorExtensions'
-import { registerPluginSeries, track, unregisterPluginAchievements } from '../../achievements/store'
+import { registerPluginSeries, track, unregisterPluginAchievements, useAchievements } from '../../achievements/store'
+import { setInboxCard, type PluginInboxCard } from './inboxCards'
 import { act } from '../../activity/log'
 import { notifyApp } from '../../stores/notificationStore'
 import { panelToast } from '../../components/PanelNotice'
@@ -43,10 +44,11 @@ import { registerDeskCompanion, revokeDeskCompanions, type DeskCompanionContribu
 // ctx.desk 的宿主闸:端判定单源(currentPlatform)+ UI 模式(叶子模块,不经 @lcl/engine barrel)。
 import { currentPlatform } from '../../services/agentRunService'
 import { UI_MODE } from '@lcl/engine/uiMode'
+import { setActiveSpace, useCommandStore, useSpaceStore } from '@lcl/engine'
 import { AUTO_WORK_FOLDER_KEY } from './display'
 // 自动化播种 / 禁用即关规则:backendService 依赖图干净(http / agentRunService / localInbox,均不引 appStore),
 // 可静态 import;cfg 必须经 tanguSeam 探针的 waitBackend 拿(appStore 与本模块有 import 环)。
-import { getMuseTriggers, listPlugins, saveMuseTrigger, setPluginEnabled } from '../../services/backendService'
+import { getMuseTriggers, listPlugins, patchInboxMessage, postInboxMessage, saveMuseTrigger, setPluginEnabled } from '../../services/backendService'
 import { buildPluginTriggerUpserts, isPluginOwnedRule, normalizeVaultRel } from './pluginAutomation'
 import { MUTATE_DB_RETRIES, mutateDbCas } from './pluginDb'
 import { useDbStore } from '../store/dbStore'
@@ -88,7 +90,7 @@ import { LIST_CAPABILITIES } from './listTree'
 import { windowKind } from '../../windowKind'
 import { compileDashboardRecipe } from '@amadeus-shared/dashboardRecipe'
 import { openWebFloatingPanel } from '../../pluginPanelSeam'
-import { connectionTarget } from '../../services/engine/targets'
+import { connectionTarget, homeTarget } from '../../services/engine/targets'
 
 // 宿主自己产出的用户可见文案(插件贡献的文案由插件自己带双语,见 display.ts 的语言解析单点)。
 // 命名空间 `pluginhost.*` 是本文件专属,别处不要复用。
@@ -448,6 +450,29 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
     },
     // 库绝对路径:读渲染进程已有的 pageStore 状态,**不调 restoreVault**(那会重开库,有副作用)。
     vaultRoot: () => usePageStore.getState().vaultRoot || null,
+    // 切 Space / 跑命令 / 开 forsion:// 链接(2026-10-17,使用指南的「带我去」)。deepLinkInstall 动态 import:它经 amadeusNav
+    // 反向引本模块,静态引会绕出模块环。切 Space 同步换整个布局,推一帧再 resolve(同 resolveDeepLink 的 view 分支)。
+    openSpace: async (id) => {
+      if (!ok() || typeof id !== 'string') return false
+      if (!useSpaceStore.getState().spaces.some((x) => x.id === id)) return false
+      setActiveSpace(id)
+      await new Promise((r) => requestAnimationFrame(() => r(null)))
+      return true
+    },
+    // 命令里有删除 / 改设置这类动作:只放行首方内置包(同 showResetCardCeremony 的判法)。
+    runCommand: (id) => {
+      if (!ok() || typeof id !== 'string' || !usePluginStore.getState().plugins.find((p) => p.id === pluginId)?.locked) return false
+      const cmds = useCommandStore.getState()
+      if (!cmds.commands.some((c) => c.id === id)) return false
+      cmds.run(id)
+      return true
+    },
+    openLink: async (url) => {
+      if (!ok()) return false
+      const [{ parseDeepLink }, { resolveDeepLink }] = await Promise.all([import('../../deepLinkPlan'), import('../../deepLinkInstall')])
+      const intent = parseDeepLink(String(url ?? ''))
+      return intent ? resolveDeepLink(intent).catch(() => false) : false
+    },
     // 在系统文件管理器里定位库内路径(2026-08-29+)。桥缺席时**整条方法不挂**,同 watchFile 的
     // 纪律 —— 挂个空壳会让插件的「有这个方法就画按钮」分支画出一颗点了没反应的按钮。
     // 桥上有这个方法、但宿主声明做不了(hostCaps.revealInFileManager === false:手机本地库是空操作,
@@ -1594,7 +1619,46 @@ export const usePluginStore = create<PluginState>((set, get) => {
         scope.ownOnce('achievements', () => unregisterPluginAchievements(pluginId))
       },
       track: (event, n) => { if (ctxAlive()) track(`plugin:${pluginId}:${event}`, n) },
+      // 只读:官方事件读裸名(带 `plugin:` 的一律当 0 —— 读别家插件的计数没有正当用途);own 读自己 track 过的那个名字。
+      count: (event, opts) => {
+        const key = opts?.own ? `plugin:${pluginId}:${event}` : String(event ?? '')
+        if (!opts?.own && key.startsWith('plugin:')) return 0
+        return useAchievements.getState().counters[key] || 0
+      },
+      subscribe: (cb) => {
+        if (!ctxAlive()) return () => {}
+        const off = useAchievements.subscribe((s, prev) => { if (s.counters !== prev.counters || s.claimed !== prev.claimed) cb() })
+        const h = scope.own('achievements.subscribe', off)
+        return () => h()
+      },
+      isClaimed: (id) => !!useAchievements.getState().claimed[`plugin:${pluginId}:${id}`],
+      claim: (id) => { if (ctxAlive()) useAchievements.getState().claim(`plugin:${pluginId}:${id}`) },
     },
+    // 收件箱(2026-10-17):只给首方内置包 —— 一封「系统消息」长得和宿主自己发的一样,不能让任意插件往用户面前塞。
+    ...(get().plugins.find((p) => p.id === pluginId)?.locked
+      ? {
+          inbox: {
+            post: async (msg: { title: string; body?: string }): Promise<string | null> => {
+              if (!ctxAlive() || !msg?.title) return null
+              try {
+                const r = await postInboxMessage(homeTarget(), { title: String(msg.title), body: String(msg.body ?? ''), sender_id: `plugin:${pluginId}` })
+                void import('../../stores/inboxStore').then((m) => { void m.useInbox.getState().refreshList(); void m.useInbox.getState().refreshUnread() })
+                return r?.id ?? null
+              } catch { return null }
+            },
+            archive: async (id: string): Promise<void> => {
+              if (!ctxAlive() || !id) return
+              await patchInboxMessage(homeTarget(), id, { archived: true }).catch(() => {})
+              void import('../../stores/inboxStore').then((m) => { void m.useInbox.getState().refreshList(); void m.useInbox.getState().refreshUnread() })
+            },
+            registerCard: (card: PluginInboxCard) => {
+              if (!ctxAlive() || !card) return
+              setInboxCard(pluginId, { sender: card.sender, mount: card.mount })
+              scope.ownOnce('inbox.card', () => setInboxCard(pluginId, null))
+            },
+          },
+        }
+      : {}),
     // 活动日志:同款前缀纪律(插件伪造不了官方事件);拼行/消毒在 main 侧 activityLog.ts。停用后不许再记。
     activity: {
       log: (event, detail) => { if (ctxAlive()) act(`plugin:${pluginId}:${event}`, detail) },

@@ -290,6 +290,16 @@ export interface PluginAppApi extends BlockSurfaceApi {
    *  ⚠️**切库竞态**:本值来自渲染进程 store,而 list/search 来自主进程 —— 切换本地/云端库的那一瞬间
    *  主进程先换根、渲染进程后更新,两边可能短暂不同源。拿它拼绝对路径前后都要复核,别缓存过夜。 */
   vaultRoot?(): string | null
+  /** 切到某个 Space(2026-10-17+),口径同 Ribbon 上点它:id 是 Space 的 id(内置的 `tangu` / `amadeus` / `calendar` …,
+   *  或插件 / 用户 Space 的 `space.json` id)。resolve 在新 Space 的布局建好之后 —— 接着 `ctx.openView(…, { location: 'right' })`
+   *  就落在新 Space 里。不认识的 id → false,不切。没有工作台的宿主 / 旧宿主没有:`ctx.app.openSpace?.(…)`。 */
+  openSpace?(id: string): Promise<boolean>
+  /** 跑一条命令面板里现成的命令(2026-10-17+),按 id(如 `amadeus-new-note`、`open-market`)。只对首方内置包生效,
+   *  别的插件调了恒为 false —— 命令里有删除、改设置这类动作,不能让任意插件替用户按。命令不存在 / 停用 → false。 */
+  runCommand?(id: string): boolean
+  /** 在应用内打开一条 `forsion://` 链接(2026-10-17+):笔记 / 会话 / Space / `open?view=…`,口径同系统唤起的深链 ——
+   *  只导航不执行,白名单外的一律 false。插件页里画的 `<a href="forsion://…">` 宿主本来就会在应用内接住,这条给按钮用。 */
+  openLink?(url: string): Promise<boolean>
 }
 
 /** 插件契约自己的检索结果 DTO(**刻意不复用宿主内部的 SearchHit**:内部结构以后要改,不该牵动插件 API)。 */
@@ -1371,6 +1381,14 @@ export interface PluginContext {
   achievements: {
     registerSeries(def: AchievementSeriesContribution): void
     track(event: string, n?: number): void
+    /** 读计数(2026-10-17+):缺省读**官方**事件(`chat.send`、`note.create` …,只读、伪造不了);`{ own: true }` 读你自己
+     *  `track()` 过的那个名字。从没发生过 = 0。旧宿主没有:`ctx.achievements.count?.(…)`。 */
+    count?(event: string, opts?: { own?: boolean }): number
+    /** 计数或领取状态变了就回调(本窗口与别的窗口写的都算),返回退订;停用时宿主统一收掉。 */
+    subscribe?(cb: () => void): () => void
+    /** 你自己系列里的某条成就:已领取?/ 替用户领取(达成了才领得了,同成就面板的「领取」)。id 不带前缀。 */
+    isClaimed?(id: string): boolean
+    claim?(id: string): void
   }
   /** Tangu 侧的只读探针(2026-08-29+):**当前主区聊天要用的模型** + **模型目录** + **当前 Space id**。
    *  聊天状态住在 Tangu 的 store 里,`ctx.app` 是 Amadeus 的页面/库面 —— 两者不通,所以单开这一截。
@@ -1571,6 +1589,15 @@ export interface PluginContext {
     /** 本宿主的原生表认得的**可选**规格能力(2026-09-21 起;更老的宿主整个成员缺席)。规格里不认识的字段宿主一律静默忽略,
      *  所以「不折叠就没法看」的表先查 `ctx.table.caps?.fold`,没有就走自己的降级(panel-lib 的 `L.table` 已内置这条)。 */
     caps?: { fold?: boolean }
+  }
+  /** 收件箱(2026-10-17+,只给首方内置包;别的插件整个成员缺席)。信是本机的系统消息,发件人记成 `plugin:<id>`。
+   *  - `post` 返回新信的 id(后端不在 → null,不抛)。不排队、不去重:同类信只留一封由插件自己 `archive` 上一封。
+   *  - `registerCard`:你发的信在阅读面板里正文下面挂一块你自己画的卡(`mount(el, { id })`,返回清理函数),
+   *    `sender` 是发件人显示名(列表与阅读面板头部)。重复调用 = 替换;停用时宿主收掉。 */
+  inbox?: {
+    post(msg: { title: string; body?: string }): Promise<string | null>
+    archive(id: string): Promise<void>
+    registerCard(card: { sender?: () => string; mount?(el: HTMLElement, msg: { id: string }): (() => void) | void }): void
   }
 }
 

@@ -47,6 +47,7 @@ import { useOtherVaultCalDbs } from '../stores/otherVaultCalStore'
 import { useIcsCalDbs } from '../stores/icsCalendarStore'
 import { useMdCalDbs } from '../amadeus/store/mdMarkStore'
 import { registerMessages, useI18n } from '../i18n'
+import { track } from '../achievements/store'
 import { EventCard, type Anchor } from './calendar/EventCard'
 import { DraftCard } from './calendar/DraftCard'
 import { MODE_ITEMS, classifyCalKey } from './calendar/calKeys'
@@ -329,6 +330,7 @@ export function CalendarView() {
     if (!m) return
     const before = nav.selection
     const id = await createAggEvent(m.db, m.dateCol, draftValue(d), d.title.trim() || t('calview.newEventTitle'))
+    track('calendar.event')
     // 存盘期间用户已经点了别的事件(常见:打完标题直接点别的块 = 失焦保存)→ 不抢它的选中。
     if (useCalendarNav.getState().selection === before) selectWhenReady(`${m.db.path}::${id}`)
   }
@@ -349,6 +351,7 @@ export function CalendarView() {
       value = `${fmtStamp(start, false)}/${fmtStamp(addMinutes(start, 30), false)}`
     }
     const newId = await createAggEvent(db, dateCol, value, t('calview.newEventTitle'))
+    track('calendar.event')
     setCard({ key: `${db.path}::${newId}`, at })
   }
   /** C:在下一个整刻钟建草稿(月视图 = 今天的全天)。 */
@@ -1198,7 +1201,7 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
                         aria-checked={!!e.done}
                         aria-label={t('calview.a11yDone', { title: e.title })}
                         onPointerDown={(pe) => pe.stopPropagation()}
-                        onClick={(ce) => { ce.stopPropagation(); if (!e.db.readonly) setAggCell(e.db, e.row.rowId, e.check!, e.done ? undefined : true) }}
+                        onClick={(ce) => { ce.stopPropagation(); if (!e.db.readonly) { setAggCell(e.db, e.row.rowId, e.check!, e.done ? undefined : true); if (!e.done) track('todo.done') } }}
                       />
                     )}
                     <span className="amx-cal-event-title">{e.title}</span>

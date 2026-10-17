@@ -31,6 +31,7 @@ import './agentProfile.css'
 import { AgentAvatar } from '../components/AgentAvatar'
 import { thinkingLabel } from '../components/thinkingLabel'
 import { homeTarget } from '../services/engine/targets'
+import { track } from '../achievements/store'
 
 type Section = 'config' | 'skills' | 'mcp' | 'growth' | 'schedule' | 'human'
 // 成长 = Agent 随时间积累的两层:记忆(它知道什么)+ 进化(HARNESS 工作笔记:它怎么做事)。09-19 从两个一级标签并成一个,
@@ -125,6 +126,7 @@ export function AgentsSpaceView({ leaf, params, extendView }: ViewProps) {
     setRosterBusy(true); setRosterError('')
     try {
       const created = await saveAgentDef(homeTarget(), { name, description: newPurpose.trim(), systemPrompt: instructions })
+      track('agent.create') // 成就 / 使用指南「创建你的 Agent」(设置里的旧入口 AgentsTab 也记这一条)
       useApp.setState((s) => ({ agentDefs: [...s.agentDefs, created] }))
       useApp.getState().refreshAgents()
       emitAgentsChange()
