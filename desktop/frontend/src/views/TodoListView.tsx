@@ -157,6 +157,12 @@ export function TodoListView({ params, leaf }: { params?: Record<string, unknown
   const [view, setViewState] = useState<TodoView>(opts.view)
   const [list, setListState] = useState<{ db?: string; src: TodoParams['src'] }>({ db: opts.db, src: opts.src })
   const setView = (v: TodoView): void => { setViewState(v); leaf?.setParams({ view: v }) }
+  // 参数从外面变了(同一个标签就地换到另一组待办参数,Dockview 不会重挂组件):筛选跟上,新建落点重算(10-17 Codex 评审 P2)
+  useEffect(() => { setViewState(opts.view) }, [opts.view])
+  useEffect(() => {
+    setListState((l) => (l.db === opts.db && l.src === opts.src ? l : { db: opts.db, src: opts.src }))
+    setAddTo(null)
+  }, [opts.db, opts.src])
   const setList = (l: { db?: string; src: TodoParams['src'] }): void => { setListState(l); setAddTo(null); leaf?.setParams({ db: l.db ?? '', src: l.src }) }
 
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set([...COLLAPSED_BY_DEFAULT, DONE_KEY]))
@@ -167,6 +173,15 @@ export function TodoListView({ params, leaf }: { params?: Record<string, unknown
   const dragRow = useRef<Row | null>(null)
   // 拖着一行时,「今天 / 明天 / 未排期」即使是空桶也把组头亮出来当落点(空桶平时不渲染)
   const [dragging, setDragging] = useState<Row | null>(null)
+  // 拖进日历后那一行换了组(换父节点重挂),原元素收不到 dragend:任何地方一放下 / 拖动一结束就收尾,
+  // 不然残留的拖动会话会让下一次(比如拖文件)落在组头上时改掉那条旧待办(10-17 Codex 评审 P1)。
+  useEffect(() => {
+    if (!dragging) return
+    const end = (): void => { window.setTimeout(() => { dragRow.current = null; setDragging(null); setDropAt(null) }, 0) }
+    window.addEventListener('drop', end, true)
+    window.addEventListener('dragend', end, true)
+    return () => { window.removeEventListener('drop', end, true); window.removeEventListener('dragend', end, true) }
+  }, [dragging])
   // 刚勾完的行:留在原处 1 秒(期间再点一下就是撤销)再收进「已完成」。
   const [linger, setLinger] = useState<ReadonlySet<string>>(new Set())
   const addRef = useRef<HTMLInputElement>(null)
@@ -398,11 +413,17 @@ export function TodoListView({ params, leaf }: { params?: Record<string, unknown
    *  代价是折起来的段仍占 DOM 节点(本视图量级是几十到几百行,可接受);真到几千行再谈虚拟化。 */
   const section = (key: string, label: string, items: Row[], body: ReactNode, bucket?: TodoBucket): ReactNode => {
     const open = !collapsed.has(key)
+    // 只认本视图发出的拖动(载荷类型对、且和这次拖动会话是同一行);拖文件 / 别处的东西过来一律不接
+    const ours = (e: DragEvent): boolean => { const ty = e.dataTransfer.types; return ty.includes(TODO_DRAG_MIME) || ty.includes(MD_DRAG_MIME) }
+    const sameRow = (e: DragEvent, r: Row): boolean => {
+      if (!(r.db && r.rowId)) return e.dataTransfer.getData(MD_DRAG_MIME) === r.key
+      try { const p = JSON.parse(e.dataTransfer.getData(TODO_DRAG_MIME) || '{}') as { dbPath?: string; rowId?: string }; return p.dbPath === r.db?.db.path && p.rowId === r.rowId } catch { return false }
+    }
     const drop = bucket ? {
-      onDragOver: (e: DragEvent) => { if (canDrop(dragRow.current, bucket)) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; if (dropAt !== bucket) setDropAt(bucket) } },
+      onDragOver: (e: DragEvent) => { if (ours(e) && canDrop(dragRow.current, bucket)) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; if (dropAt !== bucket) setDropAt(bucket) } },
       onDragLeave: () => setDropAt((b) => (b === bucket ? null : b)),
       // 放下后这一行换了组(换了父节点 → 重新挂载),原来那个元素收不到 dragend:收尾在这里也做一遍
-      onDrop: (e: DragEvent) => { e.preventDefault(); const r = dragRow.current; dragRow.current = null; setDragging(null); setDropAt(null); if (r && canDrop(r, bucket)) reschedule(r, bucket) },
+      onDrop: (e: DragEvent) => { e.preventDefault(); const r = dragRow.current; dragRow.current = null; setDragging(null); setDropAt(null); if (r && ours(e) && sameRow(e, r) && canDrop(r, bucket)) reschedule(r, bucket) },
     } : {}
     return (
       <section className="amx-todo-group" key={key}>
@@ -435,7 +456,8 @@ export function TodoListView({ params, leaf }: { params?: Record<string, unknown
   // 清单菜单只在有得选时出现(不止一个来源)
   const hasLists = allSources.length + (hasMd ? 1 : 0) > 1
 
-  const visible = ORDER.filter((b) => inView(view, b) && (buckets.get(b)?.length || canDrop(dragging, b)))
+  // 拖动时能放的组头不受筛选限制(「今天」里也能拖到明天);组里的行仍按当前筛选显示(10-17 Codex 评审 P2)
+  const visible = ORDER.filter((b) => (inView(view, b) && buckets.get(b)?.length) || canDrop(dragging, b))
   const rest = view === 'today' ? ORDER.filter((b) => !inView('today', b) && buckets.get(b)?.length) : []
 
   return (
@@ -519,7 +541,7 @@ export function TodoListView({ params, leaf }: { params?: Record<string, unknown
         </div>
       )}
 
-      {visible.map((b) => section(b, BUCKET_LABEL[b], buckets.get(b) ?? [], <ul className="amx-todo-list">{(buckets.get(b) ?? []).map(renderRow)}</ul>, b))}
+      {visible.map((b) => section(b, BUCKET_LABEL[b], buckets.get(b) ?? [], <ul className="amx-todo-list">{inView(view, b) ? (buckets.get(b) ?? []).map(renderRow) : null}</ul>, b))}
       {rest.length > 0 && (
         <div className="amx-todo-rest">
           {rest.map((b) => t('todolist.restItem', { label: BUCKET_LABEL[b], n: buckets.get(b)!.length })).join(t('todolist.restSep'))}

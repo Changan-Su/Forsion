@@ -153,6 +153,9 @@ async function standalone(win, app, { vault, d0, d1 }) {
   const undone = { group: await groupOf('没有日期的表行'), file: dbFile() }
   check('S9 表行拖到「今天」组头 = 改到今天(落盘),撤销改回未排期', moved.group === '今天' && moved.file === d0 && undone.group === '未排期' && !undone.file, JSON.stringify({ moved, undone }))
 
+  // 在「今天」筛选下拖:明天组头平时被筛掉,拖动时照样要亮出来当落点(10-17 Codex 评审 P2)
+  await win.locator(`${MAIN} .amx-todo-seg button`, { hasText: '今天' }).click()
+  await win.waitForTimeout(300)
   const src = win.locator(`${MAIN} .amx-todo-item`, { hasText: '给 Tangu 增加命令输入' })
   const before = await win.evaluate((sel) => [...document.querySelectorAll(`${sel} .amx-todo-gname`)].map((e) => e.textContent.trim()), MAIN)
   // dragTo 开拖前就要目标可见,而「明天」组头要拖起来才出现 → 手动按下、挪一点、再找组头松开
@@ -168,7 +171,9 @@ async function standalone(win, app, { vault, d0, d1 }) {
   await win.waitForTimeout(1800)
   before.push(hb ? '(拖动时出现了明天)' : '(拖动时没有明天)')
   const md = fs.readFileSync(path.join(vault, '开发计划.md'), 'utf8')
-  check('S10 正文任务拖到「明天」组头(平时没有明天组,拖动时亮出)= 改那一行的 @ 日期', before.includes('(拖动时出现了明天)') && !before.includes('明天') && md.includes(`给 Tangu 增加命令输入 @${d1}`), `${JSON.stringify(before)} ${md.split('\n').find((l) => l.includes('给 Tangu')) ?? ''}`)
+  await win.locator(`${MAIN} .amx-todo-seg button`, { hasText: '全部' }).click()
+  await win.waitForTimeout(300)
+  check('S10 「今天」筛选下把正文任务拖到「明天」组头(平时筛掉,拖动时亮出)= 改那一行的 @ 日期', before.includes('(拖动时出现了明天)') && !before.includes('明天') && md.includes(`给 Tangu 增加命令输入 @${d1}`), `${JSON.stringify(before)} ${md.split('\n').find((l) => l.includes('给 Tangu')) ?? ''}`)
   await win.screenshot({ path: path.join(OUT, 'todo-standalone-light.png') })
 
   // Mini 窗(320 宽):窄档,筛选菜单在,标题藏;浮卡不越出窗口

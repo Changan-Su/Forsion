@@ -8,7 +8,7 @@
  */
 import { useEffect, useMemo } from 'react'
 import { create } from 'zustand'
-import { withChecked, withDue, type MdMark } from '@amadeus-shared/mdMarks'
+import { resolveMark, withChecked, withDue, type MdMark } from '@amadeus-shared/mdMarks'
 import type { CellValue, DbColumn } from '@amadeus-shared/db/schema'
 import { amadeus } from '../api'
 import { usePageStore } from './pageStore'
@@ -99,6 +99,12 @@ async function flush(key: string, fallback: MdMark, vault: string | null): Promi
   }
   // 用**最近一次 load 的**那一行原文当基准:它才是磁盘上此刻的样子。
   const cur = st.marks.find((x) => markKey(x) === key) ?? fallback
+  // 排队期间笔记重排过(插 / 删 / 换了行):这个「路径:行号」上已经是别的任务了 → 丢掉这笔,别写到别人头上。
+  if (resolveMark([cur], fallback) !== cur) {
+    useMdMarkStore.setState((s) => { const rest = { ...s.overlay }; delete rest[key]; return { overlay: rest } })
+    notifyApp({ event: 'system.generic', level: 'warning', text: translate('mdmark.patchFailed', { name: fallback.text }) })
+    return
+  }
   let next = cur.raw
   if (o.checked !== undefined) next = withChecked(next, o.checked) ?? next
   if (o.due !== undefined) next = withDue(next, o.due) ?? next
@@ -191,6 +197,8 @@ export function patchMark(m: MdMark, p: { due?: string; checked?: boolean }): bo
 }
 
 export const useMdMarksReady = (): boolean => useMdMarkStore((s) => s.ready)
+/** 这一条此刻在界面上的日期(乐观覆盖优先,还没落盘的改动也算)。 */
+export const effectiveDue = (m: MdMark): string => useMdMarkStore.getState().overlay[markKey(m)]?.due ?? m.due
 
 // 结构变更(新建/删除/改名笔记)→ 重拉。模块级订阅一次,与 dbAggregateStore 同款。
 // ⚠️ 别再弄丢这一行:只靠 hook 的 vaultRoot/activePage 依赖,改的是**别的**笔记时投影不会更新,

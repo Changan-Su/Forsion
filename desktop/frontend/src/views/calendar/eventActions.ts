@@ -1,7 +1,7 @@
 import { deleteAggRow, restoreAggRow, setAggCell, type AggDb, type AggRow } from '../../amadeus/store/dbAggregateStore'
 import { usePageStore } from '../../amadeus/store/pageStore'
-import { patchMark } from '../../amadeus/store/mdMarkStore'
-import type { MdMark } from '@amadeus-shared/mdMarks'
+import { effectiveDue, patchMark, useMdMarkStore } from '../../amadeus/store/mdMarkStore'
+import { resolveMark, type MdMark } from '@amadeus-shared/mdMarks'
 import { notifyApp } from '../../stores/notificationStore'
 import { registerMessages, translate } from '../../i18n'
 
@@ -61,9 +61,14 @@ export function rescheduleCalendarRow(db: AggDb, row: AggRow, colId: string, bef
 }
 
 /** 笔记正文任务改日期(待办视图拖到分组头):改那一行的 `@日期`,撤销 = 改回原值。
- *  覆盖表按「路径:行号」记账,所以撤销拿同一个 mark 再 patch 一次就落在同一行。 */
+ *  撤销时笔记可能已经插 / 删过行:按「同篇同一句、且只有这一条」找回它,且它的日期还得是我们写进去的值,否则不写只提示
+ *  (只按「路径:行号」会把那个位置上另一条任务的日期改掉 —— 10-17 Codex 评审 P1)。 */
 export function rescheduleNoteTask(mark: MdMark, before: string, after: string, title: string): void {
   if (before === after || !after) return // 正文任务清掉 `@` 就不再是待办(列表里会消失),不收「未排期」
   if (!patchMark(mark, { due: after })) return
-  offerUndo(translate('calevtact.moved', { title: title || translate('calevtact.untitled') }), () => { patchMark(mark, { due: before }) })
+  offerUndo(translate('calevtact.moved', { title: title || translate('calevtact.untitled') }), () => {
+    const hit = resolveMark(useMdMarkStore.getState().marks, mark)
+    if (hit && effectiveDue(hit) === after) patchMark(hit, { due: before })
+    else notifyApp({ event: 'system.generic', level: 'warning', text: translate('mdmark.patchFailed', { name: mark.text }) })
+  })
 }
