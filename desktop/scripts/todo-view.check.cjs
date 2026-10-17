@@ -12,6 +12,9 @@
  *  6 已完成收进底部默认折叠的段,不是消失。
  *  7 快速添加:回车即落进「今天」桶(写路径 = createAggEvent,目标库须可写)。
  *  8 点正文任务 = 打开那篇笔记(**不在这里回写正文**,勾在编辑器里勾)。
+ *  S1–S12(2026-10-17 待办视图方案 A):单独开成主区标签也完整 —— 宽档列表居中有上限、日期列对齐、
+ *    浮卡贴着标题、N 能新建、筛选写回参数(切 Space 回来还在)、清单筛选与新建落点、拖到组头改日期 + 撤销
+ *    (表行与正文任务、空的「明天」组头拖动时亮出)、Mini 窗与日历右栏走窄档。
  *
  * ⚠️ 量的是 out/ 里的产物,源码改了没 `npm run build` 就是白测。
  * 跑:npm run check:todo
@@ -53,6 +56,149 @@ const sections = (win) => win.evaluate(() => [...document.querySelectorAll('.amx
  *  `.amx-todo-reveal.is-open`,否则「已完成默认折叠」那条会假绿(折起来的行照样被 querySelectorAll 拿到)。 */
 const names = (win) => win.evaluate(() => [...document.querySelectorAll('.amx-todo-reveal.is-open .amx-todo-name')].map((e) => e.textContent.trim()))
 
+/** 2026-10-17 方案 A:单独打开 / Mini 窗 / 日历右栏三处的契约。浅色、zh。 */
+async function standalone(win, app, { vault, d0, d1 }) {
+  const MAIN = '.wb-view--main .amx-todo'
+  // 窄档:日历右栏(此时还在日历 Space)
+  const side = await win.evaluate(() => {
+    const el = document.querySelector('.amx-calside2 .amx-todo')
+    return el ? { wide: el.classList.contains('is-wide'), menu: !!el.querySelector('.amx-todo-bar button'), dots: el.querySelectorAll('.amx-todo-duecell .amx-todo-dot').length } : null
+  })
+  check('S12 日历右栏走窄档:没有 is-wide,标题旁一个筛选菜单,来源缩成日期前的色点', side && !side.wide && side.menu && side.dots > 0, JSON.stringify(side))
+
+  // 单独打开:笔记 Space → 新标签 → 启动器「日历 ⌄」→ 待办清单
+  await clickSpace(win, ['笔记', 'Note'])
+  await win.waitForTimeout(1200)
+  await win.locator('.dv-new-tab').first().click()
+  await win.waitForSelector('.newtab', { state: 'visible', timeout: 10_000 })
+  await win.locator('.nt-tile', { hasText: '日历' }).locator('.nt-more').first().click()
+  await win.locator('.ctx-menu button', { hasText: '待办清单' }).first().click()
+  await win.waitForSelector(`${MAIN}.is-wide`, { timeout: 10_000 })
+  await win.waitForTimeout(500)
+  const geo = await win.evaluate((sel) => {
+    const root = document.querySelector(sel); const col = root.querySelector('.amx-todo-col')
+    const r = root.getBoundingClientRect(); const c = col.getBoundingClientRect()
+    const due = [...root.querySelectorAll('.amx-todo-reveal.is-open .amx-todo-duecell')].map((e) => Math.round(e.getBoundingClientRect().right))
+    return { rootW: Math.round(r.width), colW: Math.round(c.width), gapL: Math.round(c.left - r.left), gapR: Math.round(r.right - c.right), dueRights: [...new Set(due)], n: due.length }
+  }, MAIN)
+  check('S1 单独打开是宽档:列表最宽 720 且居中', geo.colW <= 720 && geo.rootW > 900 && Math.abs(geo.gapL - geo.gapR) <= 2, JSON.stringify(geo))
+  check('S2 日期列右缘对齐(笔记任务行不再往左缩)', geo.n >= 4 && geo.dueRights.length === 1, JSON.stringify(geo.dueRights))
+
+  // 浮卡贴着标题文字
+  await win.locator(`${MAIN} .amx-todo-name`, { hasText: '周度复盘' }).click()
+  await win.waitForSelector('.amx-cal-cardwrap', { timeout: 5000 })
+  await win.waitForTimeout(250)
+  const cardGeo = await win.evaluate((sel) => {
+    const name = [...document.querySelectorAll(`${sel} .amx-todo-name`)].find((e) => e.textContent.trim() === '周度复盘').getBoundingClientRect()
+    const card = document.querySelector('.amx-cal-cardwrap').getBoundingClientRect()
+    const main = document.querySelector(sel).getBoundingClientRect()
+    return { gap: Math.round(card.left - name.right), cardL: Math.round(card.left), mainL: Math.round(main.left) }
+  }, MAIN)
+  check('S3 浮卡贴在标题文字右边、不越出主区(不再翻到窗口最左盖住左栏)', cardGeo.gap >= 0 && cardGeo.gap <= 24 && cardGeo.cardL >= cardGeo.mainL, JSON.stringify(cardGeo))
+  await win.keyboard.press('Escape')
+  await win.waitForTimeout(300)
+  const focusRing = await win.evaluate(() => { const a = document.activeElement; return { main: !!a?.classList.contains('amx-todo-main'), outline: a ? getComputedStyle(a).outlineStyle : '' } })
+  check('S4 关卡后焦点回到那一行,但不画横贯整行的描边框', focusRing.main && focusRing.outline === 'none', JSON.stringify(focusRing))
+
+  // N:单独打开时也能新建
+  await win.evaluate(() => document.activeElement?.blur())
+  await win.keyboard.press('n')
+  const nFocus = await win.evaluate((sel) => document.activeElement?.classList.contains('amx-todo-addinput') && !!document.activeElement.closest(sel), MAIN)
+  check('S5 单独打开时按 N 聚焦新建框', nFocus)
+  await win.keyboard.press('Escape')
+
+  // 筛选「今天」写回参数:切到日历 Space 再回来还是「今天」
+  await win.locator(`${MAIN} .amx-todo-seg button`, { hasText: '今天' }).click()
+  await win.waitForTimeout(300)
+  const today1 = await win.evaluate((sel) => ({ secs: [...document.querySelectorAll(`${sel} .amx-todo-gname`)].map((e) => e.textContent.trim()), rest: document.querySelector(`${sel} .amx-todo-rest`)?.textContent ?? '' }), MAIN)
+  await clickSpace(win, ['日历', 'Calendar'])
+  await win.waitForTimeout(800)
+  await clickSpace(win, ['笔记', 'Note'])
+  await win.waitForSelector(MAIN, { timeout: 10_000 })
+  await win.waitForTimeout(500)
+  const segOn = await win.evaluate((sel) => document.querySelector(`${sel} .amx-todo-seg button.active`)?.textContent ?? '', MAIN)
+  check('S6 「今天」只剩逾期和今天,底下报其余条数;切 Space 回来筛选还在(写回了视图参数)',
+    today1.secs.join() === '逾期,今天' && today1.rest.includes('未排期') && today1.rest.includes('看全部') && segOn.startsWith('今天'), JSON.stringify({ ...today1, segOn }))
+  await win.locator(`${MAIN} .amx-todo-seg button`, { hasText: '全部' }).click()
+
+  // 清单筛选 + 新建落点
+  const pickList = async (label) => {
+    await win.locator(`${MAIN} .amx-todo-bar button`, { hasText: /清单|生活|产品日历|笔记里的任务/ }).first().click()
+    await win.getByRole('menuitem', { name: new RegExp(label) }).first().click()
+    await win.waitForTimeout(300)
+  }
+  const targetLabel = await win.evaluate((sel) => document.querySelector(`${sel} .amx-todo-target`)?.textContent ?? '', MAIN)
+  await pickList('^生活')
+  const lifeNames = await win.evaluate((sel) => [...document.querySelectorAll(`${sel} .amx-todo-reveal.is-open .amx-todo-name`)].map((e) => e.textContent.trim()), MAIN)
+  await win.locator(`${MAIN} .amx-todo-addinput`).fill('明天 买灯泡')
+  const prev = await win.evaluate((sel) => document.querySelector(`${sel} .amx-todo-addprev`)?.textContent ?? '', MAIN)
+  await win.locator(`${MAIN} .amx-todo-addinput`).fill('')
+  check('S7 新建框在「所有清单」下有落点选择;筛到「生活」只剩生活的行,新建落到生活', targetLabel.length > 0 && lifeNames.join() === '换季衣物收纳' && prev.includes('加到「生活」'), JSON.stringify({ targetLabel, lifeNames, prev }))
+  await pickList('笔记里的任务')
+  const mdOnly = await win.evaluate((sel) => ({ hint: !!document.querySelector(`${sel} .amx-todo-addhint`), input: !!document.querySelector(`${sel} .amx-todo-addinput`), names: [...document.querySelectorAll(`${sel} .amx-todo-reveal.is-open .amx-todo-name`)].map((e) => e.textContent.trim()) }), MAIN)
+  check('S8 筛到「笔记里的任务」:新建框换成「在笔记里写」的提示,列表只有正文任务', mdOnly.hint && !mdOnly.input && mdOnly.names.includes('给 Tangu 增加命令输入') && !mdOnly.names.includes('换季衣物收纳'), JSON.stringify(mdOnly))
+  await pickList('所有清单')
+
+  // 拖到组头改日期:表行(未排期 → 今天)+ 撤销;正文任务(今天 → 明天,明天组头空着也要在拖动时亮出来)
+  const groupOf = (n) => win.evaluate(([sel, name]) => {
+    const g = [...document.querySelectorAll(`${sel} .amx-todo-group`)].find((x) => [...x.querySelectorAll('.amx-todo-name')].some((e) => e.textContent.trim() === name))
+    return g?.querySelector('.amx-todo-gname')?.textContent?.trim() ?? ''
+  }, [MAIN, n])
+  const dbFile = () => JSON.parse(fs.readFileSync(path.join(vault, 'calendar-demo.db'), 'utf8')).rows.find((r) => r.id === 'r-undated')?.cells?.date ?? ''
+  await win.locator(`${MAIN} .amx-todo-item`, { hasText: '没有日期的表行' }).dragTo(win.locator(`${MAIN} .amx-todo-ghead`, { hasText: '今天' }))
+  await win.waitForTimeout(1500)
+  const moved = { group: await groupOf('没有日期的表行'), file: dbFile() }
+  await win.locator('.ntf-action', { hasText: '撤销' }).first().click().catch(() => {})
+  await win.waitForTimeout(1500)
+  const undone = { group: await groupOf('没有日期的表行'), file: dbFile() }
+  check('S9 表行拖到「今天」组头 = 改到今天(落盘),撤销改回未排期', moved.group === '今天' && moved.file === d0 && undone.group === '未排期' && !undone.file, JSON.stringify({ moved, undone }))
+
+  // 在「今天」筛选下拖:明天组头平时被筛掉,拖动时照样要亮出来当落点(10-17 Codex 评审 P2)
+  await win.locator(`${MAIN} .amx-todo-seg button`, { hasText: '今天' }).click()
+  await win.waitForTimeout(300)
+  const src = win.locator(`${MAIN} .amx-todo-item`, { hasText: '给 Tangu 增加命令输入' })
+  const before = await win.evaluate((sel) => [...document.querySelectorAll(`${sel} .amx-todo-gname`)].map((e) => e.textContent.trim()), MAIN)
+  // dragTo 开拖前就要目标可见,而「明天」组头要拖起来才出现 → 手动按下、挪一点、再找组头松开
+  const sb = await src.boundingBox()
+  await win.mouse.move(sb.x + 60, sb.y + sb.height / 2)
+  await win.mouse.down()
+  await win.mouse.move(sb.x + 70, sb.y + sb.height / 2 + 24, { steps: 5 })
+  await win.waitForTimeout(400)
+  const hb = await win.locator(`${MAIN} .amx-todo-ghead`, { hasText: '明天' }).boundingBox().catch(() => null)
+  if (hb) await win.mouse.move(hb.x + hb.width / 2, hb.y + hb.height / 2, { steps: 6 })
+  await win.waitForTimeout(200)
+  await win.mouse.up()
+  await win.waitForTimeout(1800)
+  before.push(hb ? '(拖动时出现了明天)' : '(拖动时没有明天)')
+  const md = fs.readFileSync(path.join(vault, '开发计划.md'), 'utf8')
+  await win.locator(`${MAIN} .amx-todo-seg button`, { hasText: '全部' }).click()
+  await win.waitForTimeout(300)
+  check('S10 「今天」筛选下把正文任务拖到「明天」组头(平时筛掉,拖动时亮出)= 改那一行的 @ 日期', before.includes('(拖动时出现了明天)') && !before.includes('明天') && md.includes(`给 Tangu 增加命令输入 @${d1}`), `${JSON.stringify(before)} ${md.split('\n').find((l) => l.includes('给 Tangu')) ?? ''}`)
+  await win.screenshot({ path: path.join(OUT, 'todo-standalone-light.png') })
+
+  // Mini 窗(320 宽):窄档,筛选菜单在,标题藏;浮卡不越出窗口
+  await win.evaluate(() => window.tangu.openMini({ spaceId: 'calendar' }))
+  let mini = null
+  for (let i = 0; i < 200 && !mini; i++) { mini = app.windows().find((w) => w.url().includes('window=mini')); if (!mini) await win.waitForTimeout(50) }
+  await mini.waitForSelector('.mini-todo .amx-todo .amx-todo-item', { timeout: 30_000 })
+  await mini.waitForTimeout(600)
+  const m1 = await mini.evaluate(() => {
+    const root = document.querySelector('.mini-todo .amx-todo')
+    const title = root.querySelector('.amx-todo-title')
+    return { wide: root.classList.contains('is-wide'), menu: !!root.querySelector('.amx-todo-bar button'), titleShown: !!title && getComputedStyle(title).display !== 'none', w: innerWidth }
+  })
+  await mini.locator('.mini-todo .amx-todo-name', { hasText: '周度复盘' }).click()
+  await mini.waitForSelector('.amx-cal-cardwrap', { timeout: 5000 })
+  await mini.waitForTimeout(250)
+  const m2 = await mini.evaluate(() => { const c = document.querySelector('.amx-cal-cardwrap').getBoundingClientRect(); return { l: Math.round(c.left), r: Math.round(c.right), w: innerWidth } })
+  await mini.screenshot({ path: path.join(OUT, 'todo-mini-card.png') })
+  await mini.keyboard.press('Escape')
+  await mini.waitForTimeout(300)
+  await mini.screenshot({ path: path.join(OUT, 'todo-mini.png') })
+  check('S11 Mini 窗走窄档:筛选菜单在、标题藏起;浮卡收窄、不越出窗口', !m1.wide && m1.menu && !m1.titleShown && m2.l >= 0 && m2.r <= m2.w, JSON.stringify({ m1, m2 }))
+  await mini.close().catch(() => {})
+}
+
 async function main() {
   if (!fs.existsSync(path.join(ROOT, 'out/main/main.js'))) throw new Error('缺 out/main/main.js —— 先跑 npm run build')
   fs.mkdirSync(OUT, { recursive: true })
@@ -82,6 +228,18 @@ async function main() {
       { id: 'r-undated', cells: { name: '没有日期的表行' } },
       { id: 'r-done', cells: { name: '已经做完的事', date: d0, done: true } },
     ],
+  }, null, 2)}\n`)
+
+  // 第二张待办表(S7 清单筛选 / 新建落点要 ≥ 2 张可写表)。只放一条无日期的:不能有明天的(验 3)、不能有已完成的(验 6)。
+  fs.writeFileSync(path.join(vault, '生活.db'), `${JSON.stringify({
+    version: 1,
+    name: '生活',
+    columns: [
+      { id: 'name', name: '名称', type: 'text' },
+      { id: 'date', name: '日期', type: 'calendarDate' },
+      { id: 'done', name: '完成', type: 'checkbox' },
+    ],
+    rows: [{ id: 'p-undated', cells: { name: '换季衣物收纳' } }],
   }, null, 2)}\n`)
 
   // 笔记正文:带 `@` 标记的任务(落各自的桶)+ 三条负对照(裸勾选框 / 无勾选框的日程行 / 代码块)。
@@ -304,6 +462,7 @@ async function main() {
     check('11 全部勾选框(表行 + 正文任务)宽度与左缘对齐(差 ≤2px)', boxes && boxes.dx <= 2 && boxes.dw <= 2, JSON.stringify(boxes))
 
     await win.screenshot({ path: path.join(OUT, 'todo-view-light.png') })
+    await standalone(win, app, { vault, d0, d1: ymd(addDays(today, 1)) })
     // ⚠️ 暗色必须**重载**切,不能只改 localStorage + DOM 属性。
     //    AstryxScope 读的是 themeStore 的 zustand `mode`(theme/astryxBridge.tsx),外部改属性它不跟 →
     //    astryx 子树停在 data-theme="light" → `color-scheme: light` → 暗底上一排**实心白**原生勾选框。

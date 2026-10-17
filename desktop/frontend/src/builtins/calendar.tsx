@@ -121,7 +121,7 @@ export function installCalendarViews(): void {
     type: 'todo-list', kind: 'collection', embeddable: true,
     intelligent: { description: 'Live saved Forsion tasks, ordered by due date. Users can mark tasks complete. Does not create tasks.', render: () => <TodoDashboardCard size="lg" /> },
     displayName: () => app().tr('view.todo'), icon: ListTodo,
-    factory: ({ params }) => <Suspense fallback={<Skeleton variant="list" />}><TodoListView params={params} /></Suspense>,
+    factory: ({ params, leaf }) => <Suspense fallback={<Skeleton variant="list" />}><TodoListView params={params} leaf={leaf} /></Suspense>,
     dashboard: { sizes: ['wide', 'lg', 'full'], defaultSize: 'lg', surface: 'summary', factory: (_props, ctx) => <TodoDashboardCard size={ctx.size} /> },
   })
   registerView({
