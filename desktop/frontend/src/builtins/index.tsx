@@ -184,8 +184,9 @@ function applyBuiltin(def: BuiltinDef, on: boolean): void {
 }
 
 /** 日历核心插件(方案 B 并行双跑,10-17 用户定「按照B来，但是这算核心插件，不公开」):它启用期间内置日历让位 ——
- *  撤下 Space 与视图,但不改用户的开关;插件停用 → 按开关回来。插件的 Space 另有 id(`calendar` 是宿主保留 id),
- *  不让位的话 Ribbon 上会有两个「日历」,宿主的 Agent 日程轮询 / .ics 刷新也会各跑一份。 */
+ *  只撤下 Space(Ribbon 上不出现两个「日历」),不改用户的开关;插件停用 → 按开关回来。插件的 Space 另有 id
+ *  (`calendar` 是宿主保留 id)。视图类型照旧注册:别的 Space 侧栏 / 仪表盘里摆着的 todo-list、calendar 不能跟着失效
+ *  (Codex 评审);Agent 日程轮询 / .ics 刷新是按挂着的视图订的,没人挂就不跑。 */
 export const CALENDAR_PLUGIN_ID = 'forsion-calendar'
 
 interface BuiltinState {
@@ -207,7 +208,7 @@ export const useBuiltins = create<BuiltinState>((set, get) => ({
     const def = BUILTINS.find((b) => b.id === id)
     if (!def || !def.available()) return
     writeFlag(key(id), on)
-    if (!(id === 'calendar' && get().calendarYielded)) applyBuiltin(def, on) // 让位期间只记开关,插件停用时按它回来
+    applyToggle(def, on)
     set({ enabled: { ...get().enabled, [id]: on } })
   },
   setInAppLinks: (on) => { writeFlag(LINKS_KEY, on); set({ inAppLinks: on }) },
@@ -220,7 +221,15 @@ export function setCalendarYield(yielded: boolean): void {
   useBuiltins.setState({ calendarYielded: yielded })
   const def = BUILTINS.find((b) => b.id === 'calendar')
   if (!def || !def.available() || !s.enabled.calendar) return
-  applyBuiltin(def, !yielded)
+  if (yielded) def.removeSpace?.()
+  else def.installSpace?.()
+}
+
+/** 开关落地(本窗切 / 别的窗切了经 storage 同步):日历让位期间视图跟开关走、Space 不装,插件停用时按开关回来。 */
+function applyToggle(def: BuiltinDef, on: boolean): void {
+  if (def.id !== 'calendar' || !useBuiltins.getState().calendarYielded) return applyBuiltin(def, on)
+  if (!on) applyBuiltin(def, false)
+  else if (!getView(def.types[0])) def.install()
 }
 
 /** 外链去哪:遵「应用内链接」开关 —— 开着走内置浏览器标签,否则交给系统浏览器。
@@ -299,7 +308,7 @@ export function installBuiltins(): void {
     if (!def || !def.available() || (def.id === 'calendar' && PRODUCT.nativeFeatures !== undefined)) return
     const on = readFlag(key(def.id))
     if (useBuiltins.getState().enabled[def.id] === on) return
-    if (!(def.id === 'calendar' && useBuiltins.getState().calendarYielded)) applyBuiltin(def, on)
+    applyToggle(def, on)
     useBuiltins.setState({ enabled: { ...useBuiltins.getState().enabled, [def.id]: on } })
   })
 

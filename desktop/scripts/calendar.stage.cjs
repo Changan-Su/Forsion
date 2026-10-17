@@ -6,6 +6,7 @@
  * 给 computer use 用时同 onboarding.stage.cjs:先把 Electron.app 拷到独有路径、改 bundle id(gui-verify §4.2),
  * 再用 FORSION_STAGE_ELECTRON=<那份拷贝>/Contents/MacOS/Electron 起,测试单里写那个 bundle id。
  * STAGE_READY_FILE=<路径>:窗口起来后往里写一行 pid,外层脚本据此开始下一步。
+ * CALENDAR_PLUGIN_DIR=<Forsion-Calendar 检出>:先把打好的日历核心插件装进临时家目录(内置日历让位,Space 在 Ribbon 上区「…」里)。
  */
 const fs = require('fs')
 const os = require('os')
@@ -51,6 +52,10 @@ async function main() {
   fs.mkdirSync(vault, { recursive: true })
   fs.mkdirSync(`${userData}-dev`, { recursive: true }) // 未打包构建的 userData 是 <dir>-dev
   seedVault(vault)
+  if (process.env.CALENDAR_PLUGIN_DIR) {
+    const src = path.resolve(process.env.CALENDAR_PLUGIN_DIR)
+    for (const f of ['manifest.json', 'main.js', 'spaces']) fs.cpSync(path.join(src, f), path.join(home, 'plugins', 'forsion-calendar', f), { recursive: true })
+  }
   fs.writeFileSync(path.join(`${userData}-dev`, 'amadeus-config.dev.json'), JSON.stringify({ lastVault: vault, localVault: vault }))
   const stub = await startStubEngine({})
   const child = spawn(process.env.FORSION_STAGE_ELECTRON || require('electron'), [`--user-data-dir=${userData}`, `--lang=${lang}`, ROOT, ...MAC_FLAGS], {
