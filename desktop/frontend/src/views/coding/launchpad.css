@@ -17,7 +17,7 @@
 .csl-launchpad input:focus, .csl-launchpad textarea:focus { border-color: var(--accent-ink); }
 .csl-launchpad button { font-family: inherit; cursor: pointer; }
 .csl-launchpad button:disabled { cursor: default; opacity: .45; }
-.csl-launchpad button:focus-visible, .csl-launchpad summary:focus-visible { outline: var(--focus-ring) solid var(--accent-ink); outline-offset: 3px; }
+.csl-launchpad button:focus-visible, .csl-launchpad summary:focus-visible { outline: var(--focus-ring) solid var(--signal-line); outline-offset: 3px; }
 .csl-details { margin-top: 11px; interpolate-size: allow-keywords; }
 .csl-details summary { display: flex; align-items: center; gap: 7px; width: fit-content; min-height: 28px; color: var(--text-muted); cursor: pointer; list-style: none; font-size: var(--ui-font-caption, 11px); transition: color var(--duration-fast); }
 .csl-details summary:hover { color: var(--text); }

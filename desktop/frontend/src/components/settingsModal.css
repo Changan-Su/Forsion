@@ -133,7 +133,7 @@
   bottom: 0;
   height: 2px;
   border-radius: var(--radius-pill);
-  background: var(--accent);
+  background: var(--signal-mark);
 }
 .settings-cloud-advanced-toggle {
   display: flex;

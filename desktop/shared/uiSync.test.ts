@@ -27,6 +27,16 @@ describe('normalizeUiSync', () => {
     expect(normalizeUiSync({ theme: { ...axes, ambient: 'on' } })).toBeNull()
   })
 
+  it('强调色:跟随 / 内置 id / hex 照收,其余丢掉这一项(不凭空补值、不拖累主题那半)', () => {
+    for (const signal of ['', 'sage', '#b4532a']) expect(normalizeUiSync({ theme: { ...axes, signal } })?.theme?.signal).toBe(signal)
+    expect(normalizeUiSync({ theme: axes })?.theme).not.toHaveProperty('signal')
+    for (const signal of ['red; x: url(a)', 42, 'a'.repeat(65)]) {
+      const theme = normalizeUiSync({ theme: { ...axes, signal } })?.theme
+      expect(theme?.lang).toBe(axes.lang)
+      expect(theme).not.toHaveProperty('signal')
+    }
+  })
+
   it('非法颜色归成空串(收方读作「保留本窗现值」),不让任意串进 CSS 变量与 localStorage', () => {
     expect(normalizeUiSync({ theme: { ...axes, seed: 'red; content: url(x)', bgSeed: 'x'.repeat(9999) } })?.theme)
       .toEqual({ ...axes, seed: '', bgSeed: '' })

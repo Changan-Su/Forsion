@@ -80,7 +80,7 @@
   will-change: transform;
 }
 .lcl-ftoc-frame[data-side='right'] .lcl-ftoc-bar { transform-origin: right; }
-.lcl-ftoc-item.active .lcl-ftoc-bar { background: var(--accent-ink); opacity: 0.85; }
+.lcl-ftoc-item.active .lcl-ftoc-bar { background: var(--signal-mark, var(--accent-ink)); }
 .lcl-ftoc-item.primary .lcl-ftoc-bar { opacity: 0.6; }
 .lcl-ftoc.open .lcl-ftoc-item.primary .lcl-ftoc-text { font-weight: 600; }
 .lcl-ftoc-text {

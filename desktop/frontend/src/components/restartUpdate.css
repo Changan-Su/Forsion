@@ -6,4 +6,4 @@
 .rb-restart-update-copy > span { font-size: var(--ui-font-body); }
 .rb-restart-update-copy > small { font-size: var(--ui-font-caption); color: var(--text-muted); }
 .rb-btn.rb-restart-update:disabled { cursor: wait; opacity: .65; }
-.rb-btn.rb-restart-update:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.rb-btn.rb-restart-update:focus-visible { outline: 2px solid var(--signal-line); outline-offset: 2px; }

@@ -47,7 +47,7 @@
   font-size: var(--ui-font-caption, 11px); cursor: pointer;
 }
 .btw-act:hover { background: var(--overlay-light); color: var(--text); }
-.btw-act:focus-visible { outline: var(--focus-ring) solid var(--accent-ink); outline-offset: 1px; }
+.btw-act:focus-visible { outline: var(--focus-ring) solid var(--signal-line); outline-offset: 1px; }
 
 .btw-compose { padding: 10px 14px 14px; display: flex; flex-direction: column; gap: 8px; border-top: var(--border-width, 1px) solid var(--border); }
 .btw-quote-chip {

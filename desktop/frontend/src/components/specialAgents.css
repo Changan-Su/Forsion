@@ -20,7 +20,7 @@
 .special-agent-heading p { max-width: 64ch; margin: 0; color: var(--text-muted); font-size: var(--ui-font-meta); line-height: var(--ui-line-meta); }
 .special-toggle { flex: 0 0 32px; width: 32px; height: 19px; padding: 3px; border: 0; border-radius: var(--radius-pill); background: var(--overlay-strong); cursor: pointer; transition: background 150ms ease; }
 .special-toggle > span { display: block; width: 13px; height: 13px; border-radius: 50%; background: var(--text-muted); transition: translate 150ms ease, background 150ms ease; }
-.special-toggle[aria-checked=true] { background: var(--accent); }
+.special-toggle[aria-checked=true] { background: var(--signal-mark); }
 .special-toggle[aria-checked=true] > span { translate: 13px 0; background: var(--bg-card); }
 .special-toggle-row { display: flex; align-items: center; gap: 24px; }
 .special-toggle-row > div { flex: 1; }

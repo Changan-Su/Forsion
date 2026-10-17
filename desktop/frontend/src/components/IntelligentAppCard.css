@@ -25,7 +25,7 @@
 .iui-app-row small { color: var(--text-muted); font-size: var(--ui-font-caption); }
 .iui-app-row:hover { color: var(--primary); }
 .iui-app-empty { color: var(--text-muted); font-size: var(--ui-font-meta); }
-.iui-app-card :is(button, input):focus-visible { outline: var(--focus-ring) solid var(--accent-ink); outline-offset: 2px; }
+.iui-app-card :is(button, input):focus-visible { outline: var(--focus-ring) solid var(--signal-line); outline-offset: 2px; }
 /* The search field shows focus on its own surface, not as a second ring around the bare input. */
 .iui-app-card .iui-app-search input:focus-visible { outline: none; }
 @media (pointer: coarse) { .iui-app-card .iui-app-open { width: 36px; height: 36px; } }
