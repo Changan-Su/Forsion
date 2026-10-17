@@ -3901,6 +3901,47 @@ html.dark .brand-logo--dark { display: inline-block; }
 .shortcut-key:hover { border-color: var(--accent-ink); }
 .shortcut-capture { outline: none; border-color: var(--accent-ink); color: var(--accent-ink); cursor: default; }
 .shortcut-unbound { color: var(--text-faint); font-family: var(--font-ui); }
+.shortcut-key.is-static { cursor: default; }
+.shortcut-key.is-static:hover { border-color: var(--border); }
+/* 录到但还没存的键:撞命令 = warning、撞系统 = danger;拆成一颗颗键帽 */
+.shortcut-capture--conflict, .shortcut-capture--system { display: inline-flex; align-items: center; justify-content: center; gap: 3px; padding: 3px 6px; }
+.shortcut-capture--conflict { border-color: var(--warning); }
+.shortcut-capture--system { border-color: var(--danger); }
+.shortcut-cap {
+  display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 5px;
+  border-radius: var(--radius-sm); border: var(--border-width) solid var(--border); background: var(--overlay-light);
+  font-family: var(--font-mono); font-size: var(--ui-font-meta, 12px); color: var(--text);
+}
+/* 行下展开的提示行(冲突 / 系统保留 / 编辑器提示) */
+.shortcut-pending {
+  display: flex; align-items: center; gap: 10px; padding: 8px 15px; border-bottom: var(--border-width) solid var(--border);
+  font-size: var(--ui-font-meta, 12px); color: var(--text-muted);
+}
+.shortcut-pending > svg { flex-shrink: 0; }
+.shortcut-pending > span:first-of-type { flex: 1; min-width: 0; }
+.shortcut-pending--conflict { background: var(--warning-light); }
+.shortcut-pending--conflict > svg { color: var(--warning); }
+.shortcut-pending--system { background: var(--danger-light); }
+.shortcut-pending--system > svg { color: var(--danger); }
+.shortcut-pending--info > svg { color: var(--text-faint); }
+.shortcut-pending-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.shortcut-conflict-badge, .shortcut-conflict-chip {
+  display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: var(--radius-pill);
+  font-size: var(--ui-font-caption, 11px); color: var(--warning); background: var(--warning-light); white-space: nowrap;
+}
+.shortcut-conflict-chip { margin-left: auto; border: var(--border-width) solid transparent; cursor: pointer; }
+.shortcut-conflict-chip.is-on { border-color: var(--warning); }
+.shortcut-conflict-chip + span { margin-left: 10px; }
+/* 搜索框里的「按键」开关与按键查询 */
+.settings-filter-input > .shortcut-keymode {
+  display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px; border-radius: var(--radius-sm);
+  font-size: var(--ui-font-caption, 11px); color: var(--text-faint); white-space: nowrap;
+}
+.settings-filter-input > .shortcut-keymode.is-on { color: var(--accent-ink); background: var(--accent-light); }
+.shortcut-keyquery { flex: 1; min-width: 0; display: flex; align-items: center; gap: 3px; outline: none; cursor: default; }
+.shortcut-keyquery-ph { color: var(--text-faint); }
+.shortcut-group { padding: 10px 15px 6px; font-size: var(--ui-font-caption, 11px); color: var(--text-faint); border-bottom: var(--border-width) solid var(--border); }
+.shortcut-layer { margin-left: 8px; font-size: var(--ui-font-caption, 11px); color: var(--text-faint); }
 
 .file-rename-input {
   flex: 1;
