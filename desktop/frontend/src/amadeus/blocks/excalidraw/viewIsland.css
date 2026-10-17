@@ -1,0 +1,73 @@
+/* 底部视图岛(ViewIsland)+ 网格浮层 + 全屏。随画布 chunk 一起加载。
+   岛的皮照抄引擎自己的缩放 / 撤销岛(excalidraw.css 的 .undo-redo-buttons):外层岛底色 + 1px 外圈,
+   按钮底色 --color-surface-low、两端圆角 —— 三座岛并排时要看不出哪座是后加的。 */
+.amx-boardhost .excalidraw .amx-viewisle-wrap { position: relative; display: flex; margin-inline-start: 8px; } /* 和缩放 → 撤销之间同一道 8px */
+.amx-boardhost .excalidraw .amx-viewisle {
+  display: flex;
+  border-radius: var(--border-radius-lg);
+  overflow: hidden;
+  background-color: var(--island-bg-color);
+  box-shadow: 0 0 0 1px var(--color-surface-lowest);
+}
+.amx-boardhost .excalidraw .amx-viewisle .amx-tool {
+  width: var(--lg-button-size, 2.25rem);
+  height: var(--lg-button-size, 2.25rem);
+  border-radius: 0;
+  background-color: var(--color-surface-low);
+}
+/* 悬停 / 开着都是半透明的叠色,必须**叠在按钮的灰底上**:直接换掉 background-color 会露出岛的白底,
+   悬停反而变浅、开着和关着看不出区别(奶油配色实测)。开着再多叠一层 --button-active-bg,带上主题色的色相。 */
+.amx-boardhost .excalidraw .amx-viewisle .amx-tool:hover {
+  background-image: linear-gradient(var(--button-hover-bg, rgba(127, 127, 127, 0.12)) 0 0);
+}
+.amx-boardhost .excalidraw .amx-viewisle .amx-tool[data-on] {
+  background-image: linear-gradient(var(--color-primary-light) 0 0), linear-gradient(var(--button-active-bg, rgba(127, 127, 127, 0.2)) 0 0);
+  color: var(--color-primary);
+}
+
+/* 网格浮层:向上弹,左缘对齐岛。字段沿用汉堡菜单里纸张面板的 .amx-bs-* 一套。 */
+.amx-boardhost .excalidraw .amx-gridpop {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 8px);
+  z-index: 5;
+  width: 248px;
+  padding: 12px 14px;
+  border-radius: var(--border-radius-lg);
+  background-color: var(--island-bg-color);
+  box-shadow: var(--shadow-island);
+}
+.amx-boardhost .excalidraw .amx-gridpop .amx-bs { padding: 0; gap: 9px; }
+.amx-boardhost .excalidraw .amx-gridpop-h {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: var(--ui-font-body, 13px);
+  font-weight: 600;
+}
+.amx-boardhost .excalidraw .amx-gridpop-kbd { font-size: var(--ui-font-caption, 11px); font-weight: 400; opacity: 0.5; }
+.amx-boardhost .excalidraw .amx-gridpop-row { display: flex; align-items: center; gap: 6px; }
+.amx-boardhost .excalidraw .amx-gridpop input[type='checkbox'] { accent-color: var(--color-primary); }
+
+/* 全屏:窗口进系统全屏(documentElement.requestFullscreen,引擎挂在 body 上的弹层仍在全屏里),
+   白板盖住 App 的外框。 */
+.amx-boardhost[data-full] { position: fixed !important; inset: 0; z-index: 2000; }
+.amx-boardhost .amx-fullhint {
+  position: absolute;
+  left: 50%;
+  bottom: 19px; /* 和底部三座岛同一行(方案图 a-full) */
+  z-index: 5;
+  transform: translateX(-50%);
+  padding: 7px 14px;
+  border-radius: 999px;
+  background-color: var(--island-bg-color);
+  box-shadow: var(--shadow-island);
+  color: var(--color-on-surface);
+  font-size: var(--ui-font-meta, 12px);
+  pointer-events: none;
+  animation: amx-fullhint 2.6s ease forwards;
+}
+@keyframes amx-fullhint {
+  0%, 70% { opacity: 1; }
+  100% { opacity: 0; }
+}

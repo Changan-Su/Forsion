@@ -8,6 +8,7 @@
 //   L2 指针落点 == 场景坐标(光标与实际作用位置不许偏)。
 //   L3 打开网格后纸面上真的出现网格线(截图回灌读像素,mix-blend-mode 的结果 JS 读不到)。
 //   L4 选了纸张后视口被钳住,且纸外点不进画布。
+//   L23–L29 底部视图岛(网格 / 吸附 / 查看 / 禅)与网格两条路由(引擎网格 ↔ 纸张覆盖层 ↔ 老网格)。
 //
 // 用法:npm run check:boardlive(自带起停 vite);或 npm run web 后 node scripts/board-live.check.cjs
 const fs = require('fs')
@@ -69,7 +70,8 @@ async function probes(p, pts) {
 ;(async () => {
   const browser = await chromium.launch({ executablePath: findChromium() })
   const p = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1000, height: 760 }, deviceScaleFactor: 1 })
-  p.on('pageerror', (e) => console.log('  [pageerror]', e.message))
+  const errs = []
+  p.on('pageerror', (e) => { errs.push(e.message); console.log('  [pageerror]', e.message) })
   await p.goto(`${BASE}?board`)
   await p.waitForSelector('.excalidraw canvas.excalidraw__canvas.interactive', { timeout: 20000 })
   await p.waitForTimeout(600)
@@ -199,7 +201,11 @@ async function probes(p, pts) {
   // 病根:`onChange` **只在场景(元素)变化时**来,平移/缩放一律不触发 → 一整趟平移里画布重画几十次
   // 而我们的层一次都不更新,内容就从纸和网格底下滑走(用户报的「跟随的漂移」)。这里直接数两边的次数。
   // ⚠️ 必须在**无限画布**下量:开着纸张时视口一顶到边界就被钳住,层不动是正确行为,数出来会假红。
-  await setBoard(p, { gridH: 40, gridV: 40, paper: null, landscape: false })
+  // ⚠️ 无限画布上的覆盖层网格只剩老文件这一种来路:先切到无限、再给网格。一步到位会被当成
+  //    「纸张 → 无限且开着网格」,网格转去引擎(useBoardGrid),这层就不画了。
+  await setBoard(p, { gridH: 0, gridV: 0, paper: null, landscape: false })
+  await p.waitForTimeout(300)
+  await setBoard(p, { gridH: 40, gridV: 40 })
   await p.waitForTimeout(300)
   await p.evaluate(() => {
     window.__ev = { layer: 0, canvas: 0 }
@@ -879,6 +885,157 @@ async function probes(p, pts) {
     pop ? `弹层=${pop.menuFont} 触发器=${pop.trigFont}` : '没量到')
   await p.keyboard.press('Escape')
   await p.waitForTimeout(200)
+
+  // ── L23–L28 底部视图岛(方案 A,10-17)+ 网格两条路由(规则见 board.ts「网格:两条路」)──
+  // ⚠️ 吸附 / 查看 / 禅不进场景 JSON(__scene 里读不到),只认按钮的 data-on 和 .excalidraw 的类名。
+  // Cmd+' 必须带 code:'Quote' —— 引擎按 code 认这颗键,浏览器面板 / 部分驱动发出的 code 是空串。
+  await setBoard(p, { gridH: 0, gridV: 0, paper: null, landscape: false, flow: 'v', gridOpacity: 100 })
+  await p.waitForTimeout(300)
+  const isle = (k) => `.excalidraw .footer-center .amx-viewisle [data-view="${k}"]`
+  const on = (k) => p.evaluate((s) => !!document.querySelector(s)?.hasAttribute('data-on'), isle(k))
+  const eng = async () => (await scene(p))?.appState ?? {}
+  const cmdQuote = () => p.evaluate(() => (document.activeElement || document.body).dispatchEvent(
+    new KeyboardEvent('keydown', { key: "'", code: 'Quote', metaKey: true, ctrlKey: !/Mac/.test(navigator.userAgent), bubbles: true })))
+  // 纸张模式下 .amx-grid 恒在(它也是纸面那层),有没有网格线看它的背景
+  const overlayOn = () => p.evaluate(() => [...document.querySelectorAll('.excalidraw .amx-grid')].some((g) => g.style.backgroundImage.includes('gradient')))
+
+  const geo = await p.evaluate(() => {
+    const u = document.querySelector('.excalidraw .undo-redo-buttons')?.getBoundingClientRect()
+    const v = document.querySelector('.excalidraw .footer-center .amx-viewisle')?.getBoundingClientRect()
+    return u && v ? { gap: Math.round(v.left - u.right), dy: Math.round(Math.abs(v.top - u.top)) } : null
+  })
+  check('L23 视图岛挂在引擎 Footer 槽里,紧跟撤销岛(同一道 8px、同一条基线)', !!geo && geo.gap === 8 && geo.dy <= 1, JSON.stringify(geo))
+
+  await p.click(isle('grid'))
+  await p.waitForTimeout(400)
+  let a = await eng()
+  check('L24 点网格 = 开引擎网格(20px · 每 5 格粗线)并弹出设置', a.gridModeEnabled === true && a.gridSize === 20 && a.gridStep === 5 &&
+    await p.evaluate(() => !!document.querySelector('.excalidraw .amx-gridpop')), JSON.stringify({ on: a.gridModeEnabled, size: a.gridSize, step: a.gridStep }))
+  await p.mouse.click(500, 300)
+  await p.waitForTimeout(250)
+  check('L24 点画布收起网格设置', !(await p.evaluate(() => !!document.querySelector('.excalidraw .amx-gridpop'))))
+
+  await p.click(isle('snap'))
+  await p.waitForTimeout(350)
+  a = await eng()
+  check('L25 开吸附至对象 → 网格关(两种吸附互斥,和引擎快捷键同一条)', (await on('snap')) && a.gridModeEnabled === false && !(await on('grid')))
+  await p.click(isle('grid'))
+  await p.waitForTimeout(350)
+  check('L25 再开网格 → 吸附关', (await on('grid')) && !(await on('snap')))
+  await p.mouse.click(500, 300)
+  await p.click(isle('grid')) // 关掉,后面从干净的无网格起步
+  await p.waitForTimeout(300)
+
+  await p.click(isle('view'))
+  await p.waitForTimeout(350)
+  check('L26 查看模式真的进了引擎的 view mode(没被受控 prop 压回去)', await p.evaluate(() => document.querySelector('.amx-boardhost .excalidraw').classList.contains('excalidraw--view-mode')))
+  await p.keyboard.press('Alt+r')
+  await p.waitForTimeout(350)
+  check('L26 Alt+R 退出查看模式(引擎快捷键仍活着)', !(await p.evaluate(() => document.querySelector('.amx-boardhost .excalidraw').classList.contains('excalidraw--view-mode'))))
+
+  await p.click(isle('zen'))
+  await p.waitForTimeout(700)
+  const zenY = await p.evaluate(() => {
+    const v = document.querySelector('.excalidraw .amx-viewisle')?.getBoundingClientRect()
+    return v ? Math.round(v.top - innerHeight) : null
+  })
+  check('L27 禅模式下视图岛随引擎过渡滑出画面', zenY !== null && zenY >= 0, `岛顶相对视口底 ${zenY}px`)
+  await p.keyboard.press('Alt+z')
+  await p.waitForTimeout(700)
+  check('L27 Alt+Z 退出禅模式,岛回来', await p.evaluate(() => {
+    const v = document.querySelector('.excalidraw .amx-viewisle')?.getBoundingClientRect()
+    return !!v && v.bottom <= innerHeight
+  }))
+
+  // 全屏:只量「白板盖住整个视口 + Esc 退出」那一半;系统全屏在无头浏览器里拿不到(也不该拿)
+  await p.evaluate(() => { document.documentElement.requestFullscreen = () => Promise.reject(new Error('stub')) })
+  await p.click(isle('full'))
+  await p.waitForTimeout(300)
+  const cover = await p.evaluate(() => {
+    const r = document.querySelector('.amx-boardhost').getBoundingClientRect()
+    return { full: document.querySelector('.amx-boardhost').hasAttribute('data-full'), w: Math.round(r.width), h: Math.round(r.height), vw: innerWidth, vh: innerHeight }
+  })
+  check('L27 全屏 = 白板盖住整个视口(拿不到系统全屏也照样盖)', cover.full && cover.w === cover.vw && cover.h === cover.vh, JSON.stringify(cover))
+  await p.keyboard.press('Escape')
+  await p.waitForTimeout(300)
+  check('L27 Esc 退出全屏', !(await p.evaluate(() => document.querySelector('.amx-boardhost').hasAttribute('data-full'))))
+
+  // 纸张:引擎网格恒关,Cmd+' 改切覆盖层(覆盖层对齐页边,引擎网格对不齐)
+  await setBoard(p, { gridH: 0, gridV: 0, paper: 'A4', landscape: false, flow: 'v', gridOpacity: 100, pageFirst: 0, pageLast: 0 })
+  await p.waitForTimeout(400)
+  await p.mouse.click(500, 300)
+  await cmdQuote()
+  await p.waitForTimeout(450)
+  a = await eng()
+  check('L28 纸张模式按 Cmd+\' → 切的是覆盖层,引擎网格仍关', (await overlayOn()) && a.gridModeEnabled === false, `覆盖层=${await overlayOn()} 引擎=${a.gridModeEnabled}`)
+  await cmdQuote()
+  await p.waitForTimeout(450)
+  check('L28 再按一次 → 覆盖层关', !(await overlayOn()) && (await eng()).gridModeEnabled === false)
+  await cmdQuote()
+  await p.waitForTimeout(450)
+  await setBoard(p, { paper: null })
+  await p.waitForTimeout(500)
+  a = await eng()
+  check('L28 纸张 → 无限:开着的覆盖层转成引擎网格,不留两层', a.gridModeEnabled === true && !(await overlayOn()), `引擎=${a.gridModeEnabled} 覆盖层=${await overlayOn()}`)
+  await p.click(isle('grid'))
+  await p.waitForTimeout(300)
+
+  // 老网格(无限画布上的 gridH/gridV):打开不写盘,第一次碰网格才转
+  await setBoard(p, { gridH: 30, gridV: 30, paper: null })
+  await p.waitForTimeout(400)
+  check('L28 老网格照旧由覆盖层画(打开文件不改写)', (await overlayOn()) && (await eng()).gridModeEnabled === false)
+  await p.mouse.click(500, 300)
+  await cmdQuote()
+  await p.waitForTimeout(500)
+  a = await eng()
+  check('L28 老网格 + Cmd+\' → 收成引擎网格一层,格距沿用 30', a.gridModeEnabled === true && a.gridSize === 30 && !(await overlayOn()), `引擎=${a.gridModeEnabled} 格距=${a.gridSize} 覆盖层=${await overlayOn()}`)
+  await p.click(isle('grid'))
+  await p.mouse.click(500, 300)
+  await p.waitForTimeout(300)
+
+  // ── L29 写设置是异步的(真 App:flush → 预读盘面 → 写 → 解析回 props),这段窗口里 props 还是旧值 ──
+  // Codex 评审抓到的三处:老网格迁移在 onChange 里重放成死循环;连着改两项第二次基于旧值;纸张网格关了再开丢格距 / 方向。
+  await p.evaluate(() => window.__board.setLag(400))
+  await setBoard(p, { gridH: 0, gridV: 0, paper: null, gridOpacity: 100 })
+  await p.waitForTimeout(300)
+  await setBoard(p, { gridH: 30, gridV: 30 })
+  await p.waitForTimeout(300)
+  const errs0 = errs.length
+  const n0 = await p.evaluate(() => window.__board.patches.length)
+  await p.mouse.click(500, 300)
+  await cmdQuote()
+  await p.waitForTimeout(900)
+  a = await eng()
+  const mig = await p.evaluate((n0) => window.__board.patches.slice(n0).filter((x) => x.gridH === 0).length, n0)
+  check('L29 老网格迁移在写盘回来之前不重放(否则 updateScene ↔ onChange 死循环)',
+    errs.length === errs0 && mig === 1 && a.gridModeEnabled === true && a.gridSize === 30 && !(await overlayOn()),
+    `迁移写 ${mig} 次 · 新报错 ${errs.length - errs0} · 引擎=${a.gridModeEnabled}/${a.gridSize}`)
+  await p.click(isle('grid'))
+  await p.mouse.click(500, 300)
+  await p.waitForTimeout(600)
+
+  await setBoard(p, { gridH: 20, gridV: 20, paper: 'A4', landscape: false, flow: 'v', pageFirst: 0, pageLast: 0 })
+  await p.waitForTimeout(500)
+  await p.click(isle('grid'), { button: 'right' })
+  await p.waitForTimeout(300)
+  const num = '.excalidraw .amx-gridpop .amx-bs-num >> nth=0'
+  await p.fill(num, '40')
+  await p.press(num, 'Enter')
+  await p.evaluate(() => [...document.querySelectorAll('.excalidraw .amx-gridpop .amx-bs-chip')].find((b) => b.textContent.trim() === '只横线').click())
+  await p.waitForTimeout(900)
+  let bs = await p.evaluate(() => window.__board.get())
+  check('L29 连着改格距和方向(第一次还没落盘)→ 两次都算数', bs.gridH === 40 && bs.gridV === 0, `gridH=${bs.gridH} gridV=${bs.gridV}`)
+  await p.mouse.click(500, 300)
+  await p.click(isle('grid'))
+  await p.waitForTimeout(900)
+  await p.click(isle('grid'))
+  await p.waitForTimeout(900)
+  bs = await p.evaluate(() => window.__board.get())
+  check('L29 纸张网格关掉再打开,格距和方向还在', bs.gridH === 40 && bs.gridV === 0, `gridH=${bs.gridH} gridV=${bs.gridV}`)
+  await p.mouse.click(500, 300)
+  await p.evaluate(() => window.__board.setLag(0))
+  await setBoard(p, { gridH: 0, gridV: 0, paper: null })
+  await p.waitForTimeout(400)
 
   // ── L21 端级 UI 缩放:光标偏移的哨兵 ──
   // `Element.currentCSSZoom` 规范规定「元素未参与渲染时返回 1」—— 白板在隐藏的 Dockview 面板里挂载时

@@ -20,6 +20,9 @@ export const PAPER_IDS = Object.keys(PAPER_MM) as PaperId[]
 /** 多页的排布方向:'v' = 上下(缺省),'h' = 左右。 */
 export type PaperFlow = 'v' | 'h'
 
+/** 网格方向:方格(缺省)/ 只画横线 / 只画竖线。 */
+export type GridDir = 'both' | 'h' | 'v'
+
 export interface BoardSettings {
   /** 横线间距(场景 px);**0 = 不画横线** —— 开关与间距合一,UI 侧自己记住关掉前的值。 */
   gridH: number
@@ -31,6 +34,8 @@ export interface BoardSettings {
   flow: PaperFlow
   /** 网格线不透明度,10–100(百分比)。缺省 100 = 线色本身的浓度。 */
   gridOpacity: number
+  /** 引擎网格的方向(无限画布用;纸张覆盖层的方向由 gridH / gridV 谁为 0 表达)。缺省方格,不写键。 */
+  gridDir: GridDir
   /** 第 0 页**之前**手动加了几页(≤0,记的是最小页号)。缺省 0 = 前面没有额外的页。 */
   pageFirst: number
   /** 第 0 页**之后**手动加了几页(≥0,记的是最大页号)。 */
@@ -44,6 +49,7 @@ export const DEFAULT_BOARD: BoardSettings = {
   landscape: false,
   flow: 'v',
   gridOpacity: 100,
+  gridDir: 'both',
   pageFirst: 0,
   pageLast: 0,
 }
@@ -168,6 +174,60 @@ export function clampViewport(s: BoardSettings, v: Viewport, bounds: Bounds | nu
 
 const clampNum = (v: number, lo: number, hi: number): number => Math.min(Math.max(v, lo), hi)
 
+// ── 网格:两条路 ─────────────────────────────────────────────────────────────
+// 无限画布 → **引擎网格**(appState.gridModeEnabled / gridSize / gridStep,写进场景 JSON,Obsidian 那边同样认;
+//   有粗线、画的时候吸附)。方向 / 淡浓引擎不落盘 → 存 frontmatter 的 gridDir / gridOpacity,挂载时下发。
+// 纸张模式 → **覆盖层**(gridH / gridV,画在每页里、对齐纸边;引擎网格从场景原点铺满全屏,对不齐每页的上边)。
+//   纸张模式下引擎网格必须一直是关的 —— 两层同时开就是叠成两层的那个 bug。
+// 老白板:无限画布上存着 gridH / gridV 的,在用户第一次碰网格时才转成引擎网格(打开文件时不写盘)。
+
+/** 引擎把 gridSize / gridStep 归一到 1–100;再密就是一片糊(覆盖层同一下限)。 */
+export const GRID_MIN = MIN_STEP
+export const GRID_MAX = 100
+/** 每几格一条粗线(引擎缺省)。 */
+export const DEFAULT_MAJOR = 5
+
+export const clampGrid = (n: number): number => Math.min(GRID_MAX, Math.max(GRID_MIN, Math.round(n) || DEFAULT_STEP))
+
+/** 网格面板看到的统一模型(两条路都折算成这一份)。 */
+export interface GridModel {
+  on: boolean
+  size: number
+  dir: GridDir
+}
+
+/** 覆盖层(gridH / gridV)→ 模型。横竖都开但间距不同时,间距取横线的。 */
+export function overlayModel(s: Pick<BoardSettings, 'gridH' | 'gridV'>): GridModel {
+  const { gridH: h, gridV: v } = s
+  if (h <= 0 && v <= 0) return { on: false, size: DEFAULT_STEP, dir: 'both' }
+  return { on: true, size: h > 0 ? h : v, dir: h > 0 && v > 0 ? 'both' : h > 0 ? 'h' : 'v' }
+}
+
+/** 模型 → 覆盖层的两个键。关 = 两个都写 0(开关与间距合一,见 BoardSettings)。 */
+export function overlayFields(m: GridModel): { gridH: number; gridV: number } {
+  if (!m.on) return { gridH: 0, gridV: 0 }
+  return { gridH: m.dir === 'v' ? 0 : m.size, gridV: m.dir === 'h' ? 0 : m.size }
+}
+
+/** 无限画布上的老网格能不能转成引擎网格:没有 → undefined;横竖都开且间距不同 → null(引擎只有正方格,
+ *  留在覆盖层,等用户自己改);其余 → 引擎网格的参数。 */
+export function legacyToEngine(s: Pick<BoardSettings, 'gridH' | 'gridV'>): { size: number; dir: GridDir } | null | undefined {
+  const { gridH: h, gridV: v } = s
+  if (h <= 0 && v <= 0) return undefined
+  if (h > 0 && v > 0 && h !== v) return null
+  const m = overlayModel(s)
+  return { size: clampGrid(m.size), dir: m.dir }
+}
+
+/** gridDir → 引擎的 gridDirection(horizontal = 画横线)。 */
+export const engineDirection = (dir: GridDir): { horizontal: boolean; vertical: boolean } => ({ horizontal: dir !== 'v', vertical: dir !== 'h' })
+
+/** 淡浓 → 引擎的 gridColor。100% = 引擎原样的两档灰;深色下引擎自己会反相,这里只给浅色值。 */
+export function engineGridColor(opacity: number): { Bold: string; Regular: string } {
+  const a = Math.round(Math.min(100, Math.max(10, opacity))) / 100
+  return { Bold: `rgba(204, 204, 204, ${a})`, Regular: `rgba(229, 229, 229, ${a})` }
+}
+
 // ── frontmatter ──────────────────────────────────────────────────────────────
 const FM_RE = /^---\r?\n([\s\S]*?)\r?\n---/
 const KEY_H = 'forsion-grid-h'
@@ -178,6 +238,7 @@ const KEY_FLOW = 'forsion-paper-flow'
 const KEY_OPACITY = 'forsion-grid-opacity'
 const KEY_FIRST = 'forsion-page-first'
 const KEY_LAST = 'forsion-page-last'
+const KEY_DIR = 'forsion-grid-dir'
 /** 手动加页的上限,防手滑按住不放把页带撑到天边。 */
 const MAX_PAGES = 200
 
@@ -200,6 +261,7 @@ export function readBoard(source: string): BoardSettings {
     landscape: /^(true|yes|1)$/i.test(lineRe(KEY_LAND).exec(fm)?.[1]?.trim() ?? ''),
     flow: /^h(orizontal)?$/i.test(lineRe(KEY_FLOW).exec(fm)?.[1]?.trim() ?? '') ? 'h' : 'v',
     gridOpacity: opacityOf(fm),
+    gridDir: dirOf(fm),
     pageFirst: pageKey(fm, KEY_FIRST, -MAX_PAGES, 0),
     pageLast: pageKey(fm, KEY_LAST, 0, MAX_PAGES),
   }
@@ -208,6 +270,11 @@ export function readBoard(source: string): BoardSettings {
 function pageKey(fm: string, key: string, lo: number, hi: number): number {
   const n = Number(lineRe(key).exec(fm)?.[1]?.trim())
   return Number.isFinite(n) ? Math.min(hi, Math.max(lo, Math.round(n))) : 0
+}
+
+function dirOf(fm: string): GridDir {
+  const v = lineRe(KEY_DIR).exec(fm)?.[1]?.trim().toLowerCase()
+  return v === 'h' || v === 'v' ? v : 'both'
 }
 
 function opacityOf(fm: string): number {
@@ -227,6 +294,7 @@ export function writeBoard(source: string, s: BoardSettings): string {
   fm = upsert(fm, KEY_LAND, s.paper && s.landscape ? 'true' : null)
   fm = upsert(fm, KEY_FLOW, s.paper && s.flow === 'h' ? 'h' : null)
   fm = upsert(fm, KEY_OPACITY, s.gridOpacity >= 100 ? null : String(Math.min(100, Math.max(10, Math.round(s.gridOpacity)))))
+  fm = upsert(fm, KEY_DIR, s.gridDir === 'h' || s.gridDir === 'v' ? s.gridDir : null)
   fm = upsert(fm, KEY_FIRST, s.paper && s.pageFirst < 0 ? String(Math.max(-MAX_PAGES, Math.round(s.pageFirst))) : null)
   fm = upsert(fm, KEY_LAST, s.paper && s.pageLast > 0 ? String(Math.min(MAX_PAGES, Math.round(s.pageLast))) : null)
   const nl = m[0].includes('\r\n') ? '\r\n' : '\n'
