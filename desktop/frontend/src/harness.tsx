@@ -1574,7 +1574,8 @@ if (new URLSearchParams(location.search).has('dock')) {
   ;(window as unknown as { __pageStoreFor?: typeof pageStoreFor }).__pageStoreFor = pageStoreFor
   createRoot(document.getElementById('root')!).render(<DashHarness />)
 } else if (new URLSearchParams(location.search).has('board')) {
-  createRoot(document.getElementById('root')!).render(<BoardHarness />)
+  // 真 LocaleProvider:没有它 useI18n 恒回中文,英文界面的排版量不到(check:boardlive L31)
+  createRoot(document.getElementById('root')!).render(<LocaleProvider><BoardHarness /></LocaleProvider>)
 } else if (new URLSearchParams(location.search).has('mindmap')) {
   const iso = new Date().toISOString()
   const mm = JSON.stringify({ b2: { p: 'b1' }, b3: { p: 'b1' } }) // b2/b3 是 b1 的子节点

@@ -3,7 +3,7 @@
  *  原因见那个文件);字体同样自托管(见 ExcalidrawEmbed)。
  *  远端合并(reconcile+restoreElements+updateScene)也必须留在本 chunk 内 —— drawingStore 在启动
  *  bundle 里,绝不能碰引擎;它只经 registerApplier 拿到一个闭包。 */
-import { Excalidraw, MainMenu, Footer, serializeAsJSON, restoreElements, newElementWith, CaptureUpdateAction } from './forkRuntime'
+import { Excalidraw, MainMenu, Footer, serializeAsJSON, restoreElements, newElementWith, CaptureUpdateAction, getCommonBounds } from './forkRuntime'
 import { getBoardUiMode, setBoardUiMode, subscribeBoardUiMode, type BoardUiMode } from './boardUiMode'
 import { newPenState, usePenRestore } from './PenRow'
 import BoardToolbar, { LINE_MEMBERS, SHAPE_MEMBERS, activateTool, newGroupState, type LineMember, type ShapeMember, type ToolRefs } from './BoardToolbar'
@@ -61,6 +61,33 @@ const H_GRAD = 'linear-gradient(180deg, var(--amx-grid-line) 0 1px, transparent 
 
 const clampNum = (v: number, lo: number, hi: number): number => Math.min(Math.max(v, lo), hi)
 const mod = (a: number, n: number): number => ((a % n) + n) % n
+
+/** 无限画布的「适配全图」。引擎的 zoomToFit 按整块画布算,内容会顶进浮动的工具岛 / 汉堡菜单 / 侧栏钮 / 底栏
+ *  下面(走查 P2-4)—— 先扣掉这几条带再适配。放大上限 2,同引擎(zoomToFitMaxLevel)。 */
+function fitInsets(a: ExcalidrawImperativeAPI, host: HTMLElement, st: AppState): void {
+  // 用引擎自己的包围盒:elementBounds 只取 x + width,箭头 / 线的点往负方向走时会算错
+  const [minX, minY, maxX, maxY] = getCommonBounds(a.getSceneElements())
+  const hb = host.getBoundingClientRect()
+  const k = hb.width ? st.width / hb.width : 1 // DOM 尺寸 → 画布 CSS px(宿主带 UI 缩放补偿时两者不同)
+  const tops = [...host.querySelectorAll('.App-menu_top > *')].map((e) => e.getBoundingClientRect()).filter((r) => r.height)
+  const foot = host.querySelector('.layer-ui__wrapper__footer-left')?.getBoundingClientRect()
+  const GAP = 16
+  const top = (tops.length ? Math.max(...tops.map((r) => r.bottom)) - hb.top : 64) * k + GAP
+  const bottom = (foot?.height ? hb.bottom - foot.top : 56) * k + GAP
+  const side = 24
+  const w = st.width - 2 * side
+  const h = st.height - top - bottom
+  if (w <= 0 || h <= 0) return void a.zoomToFit()
+  const zoom = clampNum(Math.min(w / Math.max(1, maxX - minX), h / Math.max(1, maxY - minY)), 0.1, 2)
+  a.updateScene({
+    appState: {
+      scrollX: (side + w / 2) / zoom - (minX + maxX) / 2,
+      scrollY: (top + h / 2) / zoom - (minY + maxY) / 2,
+      zoom: { value: zoom as AppState['zoom']['value'] },
+    },
+    captureUpdate: CaptureUpdateAction.NEVER,
+  })
+}
 
 /** 往引擎自己的 DOM 里插一个挂点,并在引擎重挂那块 DOM 时**自动补回去**。
  *  ⚠️ 只插一次是不够的:属性面板每换一次工具就整块重建,工具栏在切换面板形态时也会重建 ——
@@ -221,6 +248,9 @@ export default function ExcalidrawCanvas({
               ? { zenModeEnabled: !st.zenModeEnabled }
               : { penMode: !st.penMode }
       api.updateScene({ appState: appState as AppState, captureUpdate: CaptureUpdateAction.NEVER })
+      // 进禅模式后视图岛滑走并藏起来,焦点会从刚点的按钮掉到 body —— 引擎只在自己的容器上听键,
+      // Option+Z 就退不出来了。把焦点交回画布容器。
+      if (k === 'zen' && !st.zenModeEnabled) hostRef.current?.querySelector<HTMLElement>('.excalidraw-container')?.focus({ preventScroll: true })
     },
     [api],
   )
@@ -229,6 +259,9 @@ export default function ExcalidrawCanvas({
    *  (取色器、菜单)挂在 body 上,会被挡在全屏外面。浏览器会自己吃掉 Esc 退系统全屏(只能听 fullscreenchange);
    *  Electron 不一定,拿不到系统全屏时更没人管 —— 所以 Esc 也自己听一份。 */
   const [full, setFull] = useState(false)
+  /** 进全屏那一下,白板铺满窗口、视图岛跟着左下角挪走,指针底下就没有按钮了 —— 在刚才那颗按钮的位置
+   *  放一枚「退出全屏」胶囊(几秒后淡出),「点一下进、再点一下出」照样成立(走查 P2-3)。 */
+  const [fullHint, setFullHint] = useState<{ x: number; y: number } | null>(null)
   const fullRef = useRef(full)
   fullRef.current = full
   const alive = useRef(true)
@@ -244,6 +277,8 @@ export default function ExcalidrawCanvas({
       setFull(false)
       return
     }
+    const r = hostRef.current?.querySelector('[data-view="full"]')?.getBoundingClientRect()
+    setFullHint(r ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : { x: window.innerWidth / 2, y: window.innerHeight - 36 })
     setFull(true)
     // ponytail: 拿不到系统全屏(安卓 WebView / 权限)时退化成只盖住 App 外框,不报错。
     // 请求是异步的:落地前用户已经退出 / 关掉了白板,落地后马上退回去,别把窗口留在全屏里
@@ -259,7 +294,9 @@ export default function ExcalidrawCanvas({
       if (!document.fullscreenElement) setFull(false)
     }
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key !== 'Escape') return
+      if (e.key !== 'Escape' || e.defaultPrevented) return
+      // 写字 / 填数字时的 Esc 是「结束编辑」,不是退全屏(走查 P2-2)
+      if ((e.target as HTMLElement | null)?.closest?.('textarea, input, select, [contenteditable="true"]')) return
       if (document.fullscreenElement) void document.exitFullscreen().catch(() => {})
       setFull(false)
     }
@@ -486,7 +523,7 @@ export default function ExcalidrawCanvas({
       const b = elementBounds(els)
       const page = pageRect(settings, pageRange(settings, b).min)
       if (!page) {
-        if (els.length) a.zoomToFit() // 放大上限读假宿主的 zoomToFitMaxLevel(=2,见 forkRuntime)
+        if (els.length) fitInsets(a, host, st)
         return
       }
       const zoom = clampNum(Math.min(st.width / (page.w * (1 + 2 * MARGIN)), st.height / (page.h * (1 + 2 * MARGIN))), 0.1, 2)
@@ -661,7 +698,11 @@ export default function ExcalidrawCanvas({
           </Footer>
         )}
       </Excalidraw>
-      {full && <div className="amx-fullhint">{t('boardview.escHint')}</div>}
+      {full && fullHint && (
+        <button type="button" className="amx-fullhint" style={{ left: fullHint.x, top: fullHint.y }} onClick={toggleFull} onAnimationEnd={() => setFullHint(null)}>
+          {t('boardview.exitFull')} <span className="amx-fullhint-kbd">Esc</span>
+        </button>
+      )}
       {/* 自建工具胶囊。塞进引擎那张已经定好位的 Island(`.App-toolbar`)里,它自己的按钮用 CSS 藏掉 ——
           定位/圆角/投影/HintViewer 全部白捡。引擎的工具栏为什么不能直接改:见 BoardToolbar.tsx。 */}
       {toolbarAnchor && createPortal(<BoardToolbar api={api} ui={ui} refs={toolRefs} />, toolbarAnchor)}

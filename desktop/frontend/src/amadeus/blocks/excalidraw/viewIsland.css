@@ -2,6 +2,13 @@
    岛的皮照抄引擎自己的缩放 / 撤销岛(excalidraw.css 的 .undo-redo-buttons):外层岛底色 + 1px 外圈,
    按钮底色 --color-surface-low、两端圆角 —— 三座岛并排时要看不出哪座是后加的。 */
 .amx-boardhost .excalidraw .amx-viewisle-wrap { position: relative; display: flex; margin-inline-start: 8px; } /* 和缩放 → 撤销之间同一道 8px */
+/* 查看模式下引擎把撤销岛藏了,视图岛会整体左移、刚点的「查看」不在指针下了(走查 P2-3)→ 把撤销岛那块位置空出来。
+   撤销岛 = 两颗 --lg-button-size 的按钮;前后各一道 8px。 */
+.amx-boardhost .excalidraw.excalidraw--view-mode .amx-viewisle-wrap { margin-inline-start: calc(16px + 2 * var(--lg-button-size, 2.25rem)); }
+/* 禅模式:引擎把整条 footer 平移出画面,但按钮仍可聚焦 —— Tab 到它会把画布的 overflow 容器滚上去、露出下面的 App。
+   滑完再藏(visibility 晚 0.5s 翻,同工具岛那条),退出时立刻可见。 */
+.amx-boardhost .excalidraw .footer-center .amx-viewisle-wrap { transition: visibility 0s; }
+.amx-boardhost .excalidraw .footer-center.layer-ui__wrapper__footer-left--transition-bottom .amx-viewisle-wrap { visibility: hidden; transition: visibility 0s linear 0.5s; }
 .amx-boardhost .excalidraw .amx-viewisle {
   display: flex;
   border-radius: var(--border-radius-lg);
@@ -47,26 +54,34 @@
 }
 .amx-boardhost .excalidraw .amx-gridpop-kbd { font-size: var(--ui-font-caption, 11px); font-weight: 400; opacity: 0.5; }
 .amx-boardhost .excalidraw .amx-gridpop-row { display: flex; align-items: center; gap: 6px; }
+.amx-boardhost .excalidraw .amx-gridpop-nums { display: grid; grid-template-columns: 1fr auto auto; align-items: center; column-gap: 6px; row-gap: 9px; }
+/* 百分比定宽:100% 和两位数来回时滑杆轨道不跟着挪(走查 P3-10) */
+.amx-boardhost .excalidraw .amx-gridpop-pct { flex: none; width: 5ch; text-align: end; font-variant-numeric: tabular-nums; } /* 5ch 装得下「100%」(% 比数字宽) */
 .amx-boardhost .excalidraw .amx-gridpop input[type='checkbox'] { accent-color: var(--color-primary); }
 
 /* 全屏:窗口进系统全屏(documentElement.requestFullscreen,引擎挂在 body 上的弹层仍在全屏里),
    白板盖住 App 的外框。 */
 .amx-boardhost[data-full] { position: fixed !important; inset: 0; z-index: 2000; }
+/* 「退出全屏」胶囊:落在刚才那颗全屏按钮的位置(left / top 由画布按按钮中心给),再点一下就出去;几秒后淡出卸掉,悬停时停住。
+   皮同禅模式的退出胶囊。 */
 .amx-boardhost .amx-fullhint {
   position: absolute;
-  left: 50%;
-  bottom: 19px; /* 和底部三座岛同一行(方案图 a-full) */
   z-index: 5;
-  transform: translateX(-50%);
+  transform: translate(-50%, -50%);
   padding: 7px 14px;
+  border: 0;
   border-radius: 999px;
-  background-color: var(--island-bg-color);
-  box-shadow: var(--shadow-island);
+  background-color: var(--color-surface-low);
+  box-shadow: 0 0 0 1px var(--color-surface-lowest), var(--shadow-island);
   color: var(--color-on-surface);
+  font: inherit;
   font-size: var(--ui-font-meta, 12px);
-  pointer-events: none;
-  animation: amx-fullhint 2.6s ease forwards;
+  white-space: nowrap;
+  cursor: pointer;
+  animation: amx-fullhint 3s ease forwards;
 }
+.amx-boardhost .amx-fullhint:hover { animation-play-state: paused; background-image: linear-gradient(var(--button-hover-bg, rgba(127, 127, 127, 0.12)) 0 0); }
+.amx-boardhost .amx-fullhint-kbd { opacity: 0.55; margin-inline-start: 4px; }
 @keyframes amx-fullhint {
   0%, 70% { opacity: 1; }
   100% { opacity: 0; }

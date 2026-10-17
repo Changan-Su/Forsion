@@ -27,6 +27,8 @@ const text = (x, y, w, t, size = 20) => base({ type: 'text', x, y, width: w, hei
 const box = (x, y, w, h, bg, label) => [base({ type: 'rectangle', x, y, width: w, height: h, backgroundColor: bg, roundness: { type: 3 } }), text(x, y + h / 2 - 12.5, w, label)]
 // 内容放在离原点很远的地方:旧行为(回原点 100%)下它完全在屏幕外
 const FAR = [...box(2400, 1600, 220, 90, '#a5d8ff', '收集想法'), ...box(2700, 1600, 220, 90, '#b2f2bb', '整理成笔记'), ...box(3000, 1900, 220, 90, '#ffec99', '画成白板')]
+// 竖长的内容:适配被高度卡住,上下贴边 —— 顶部工具岛和底栏压不压内容只有它量得出来(走查 P2-4)
+const TALL = [...box(1200, 800, 260, 100, '#a5d8ff', '第一步'), ...box(1200, 1300, 260, 100, '#b2f2bb', '第二步'), ...box(1200, 1800, 260, 100, '#ffc9c9', '第三步')]
 const PAGE = [...box(80, 120, 260, 100, '#a5d8ff', '第一页的内容'), ...box(420, 600, 240, 100, '#ffc9c9', '页内另一块')]
 const drawing = (els, fm = []) => ['---', '', 'excalidraw-plugin: parsed', 'tags: [excalidraw]', ...fm, '', '---', '', '', '## Drawing', '```json',
   JSON.stringify({ type: 'excalidraw', version: 2, source: 'Forsion Amadeus', elements: els, appState: { viewBackgroundColor: '#ffffff' }, files: {} }), '```', '%%'].join('\n')
@@ -43,6 +45,7 @@ async function main() {
   fs.writeFileSync(farFile, drawing(FAR), 'utf8')
   fs.writeFileSync(path.join(vault, '纸张白板.excalidraw.md'), drawing(PAGE, ['forsion-paper: A4', 'forsion-page-last: 1']), 'utf8')
   fs.writeFileSync(path.join(vault, '空白板.excalidraw.md'), drawing([]), 'utf8')
+  fs.writeFileSync(path.join(vault, '竖长白板.excalidraw.md'), drawing(TALL), 'utf8')
   for (const d of [userData, `${userData}-dev`]) {
     fs.mkdirSync(d, { recursive: true })
     for (const f of ['amadeus-config.json', 'amadeus-config.dev.json']) fs.writeFileSync(path.join(d, f), JSON.stringify({ lastVault: vault, localVault: vault }))
@@ -75,7 +78,17 @@ async function main() {
       const vb = els.map((e) => ({ x1: (e.x + st.scrollX) * z, y1: (e.y + st.scrollY) * z, x2: (e.x + e.width + st.scrollX) * z, y2: (e.y + e.height + st.scrollY) * z }))
       return { zoom: z, scrollX: st.scrollX, scrollY: st.scrollY, w: st.width, h: st.height, cls: el.className, viewMode: st.viewModeEnabled, zen: st.zenModeEnabled,
         host: { w: r.width, h: r.height }, n: els.length,
-        inView: vb.every((b) => b.x1 >= 0 && b.y1 >= 0 && b.x2 <= st.width && b.y2 <= st.height) }
+        inView: vb.every((b) => b.x1 >= 0 && b.y1 >= 0 && b.x2 <= st.width && b.y2 <= st.height),
+        // 内容和浮动 UI 的上下两条带:顶部(工具岛 / 汉堡 / 侧栏钮)最低处、底栏最高处,都换成画布坐标
+        clear: (() => {
+          const tops = [...el.querySelectorAll('.App-menu_top > *')].map((e) => e.getBoundingClientRect()).filter((q) => q.height)
+          const foot = el.querySelector('.layer-ui__wrapper__footer-left')?.getBoundingClientRect()
+          const k = st.width / r.width
+          const topBand = tops.length ? (Math.max(...tops.map((q) => q.bottom)) - r.top) * k : 0
+          const footBand = foot ? (foot.top - r.top) * k : st.height
+          const y1 = Math.min(...vb.map((b) => b.y1)), y2 = Math.max(...vb.map((b) => b.y2))
+          return { ok: y1 >= topBand && y2 <= footBand, y1: Math.round(y1), topBand: Math.round(topBand), y2: Math.round(y2), footBand: Math.round(footBand) }
+        })() }
     })
     const shot = async (name) => { await win.waitForTimeout(500); await win.screenshot({ path: path.join(OUT, `${name}.png`) }) }
     const canvasFocus = async () => { await win.mouse.click(1350, 820); await win.waitForTimeout(200) }
@@ -91,6 +104,7 @@ async function main() {
     const v0 = await view()
     check('F1 打开远处白板:内容全部在视口内', v0.inView, JSON.stringify(v0))
     check('F2 适配放大不超过 2', v0.zoom <= 2 + 1e-6 && v0.zoom > 0.1, `zoom=${v0.zoom}`)
+    check('F4 适配避开浮动 UI:内容不钻到顶部工具岛 / 侧栏钮下面,也不压底栏(走查 P2-4)', v0.clear.ok, JSON.stringify(v0.clear))
     await win.waitForTimeout(2500)
     const txt1 = fs.readFileSync(farFile, 'utf8'), mt1 = fs.statSync(farFile).mtimeMs
     const j = JSON.parse(txt1.split('```json')[1].split('```')[0])
@@ -98,6 +112,9 @@ async function main() {
     check('F3a 视口没写进文件', !('scrollX' in (j.appState || {})) && !('zoom' in (j.appState || {})))
     await open('空白板.excalidraw'); await open('远处白板.excalidraw'); await win.waitForTimeout(2500)
     check('F3b 再次打开(又适配一次)不改写文件', fs.statSync(farFile).mtimeMs === mt1, `mt1=${mt1} now=${fs.statSync(farFile).mtimeMs}`)
+    await open('竖长白板.excalidraw')
+    const tall = await view()
+    check('F5 竖长内容(适配被高度卡住)也不钻到顶部工具岛下面、不压底栏', tall.inView && tall.clear.ok, JSON.stringify({ zoom: tall.zoom, ...tall.clear }))
     await shot('fit-far-light')
 
     // ── 1 查看模式 ──

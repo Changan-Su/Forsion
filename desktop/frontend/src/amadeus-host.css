@@ -1010,11 +1010,14 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .amx-boardhost .excalidraw .App-toolbar.zen-mode { opacity: 0; visibility: hidden; transition: opacity 0.5s, visibility 0s linear 0.5s; }
 .amx-boardhost .excalidraw .layer-ui__wrapper button.disable-zen-mode {
   left: 50%; right: auto; transform: translateX(-50%);
-  padding: 10px 16px; border: 0; border-radius: var(--radius-pill, 999px); box-shadow: var(--shadow-island);
+  padding: 10px 16px; border: 0; border-radius: var(--radius-pill, 999px);
+  /* 皮同缩放 / 撤销岛的按钮(surface-low + 1px 外圈):岛底色在亮色白画布上几乎看不见(走查 P3-9) */
+  background-color: var(--color-surface-low);
+  box-shadow: 0 0 0 1px var(--color-surface-lowest), var(--shadow-island);
 }
-/* 引擎的悬停底是半透明的 --button-hover-bg,直接换上去胶囊会透出画布 → 叠在岛色上 */
+/* 引擎的悬停底是半透明的 --button-hover-bg,直接换上去胶囊会透出画布 → 叠在按钮底色上 */
 .amx-boardhost .excalidraw .layer-ui__wrapper button.disable-zen-mode:hover {
-  background: linear-gradient(var(--button-hover-bg), var(--button-hover-bg)), var(--island-bg-color);
+  background: linear-gradient(var(--button-hover-bg), var(--button-hover-bg)), var(--color-surface-low);
 }
 
 /* ── 属性面板里的加料(PanelExtras:笔预设 / 形状 / 线)────────────────────────
@@ -1063,6 +1066,8 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .amx-bs-lbl { flex: 1; }
 .amx-bs-num { width: 3.5rem; font: inherit; font-size: var(--ui-font-caption, 11px); padding: 1px 4px; border-radius: var(--radius-sm, 6px); border: 1px solid var(--input-border-color, rgba(127, 127, 127, 0.35)); background: transparent; color: inherit; }
 .amx-bs-num:disabled { opacity: 0.4; }
+/* 焦点跟主题色:系统缺省是一圈不跟主题走的橙色,叠在 1px 边框外面(走查 P3-6) */
+.amx-bs-num:focus-visible { outline: none; border-color: var(--color-primary, var(--primary, #635bff)); box-shadow: 0 0 0 1px var(--color-primary, var(--primary, #635bff)); }
 .amx-bs-range { flex: 1; min-width: 0; max-width: 6rem; accent-color: var(--color-primary, var(--primary, #635bff)); }
 .amx-bs-range:disabled { opacity: 0.4; }
 .amx-bs-note { font-size: var(--ui-font-caption, 11px); opacity: 0.55; }

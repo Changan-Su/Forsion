@@ -3,7 +3,7 @@
  *  | 情形 | 谁说了算 | Cmd+' / 右键「切换网格显示」 |
  *  |---|---|---|
  *  | 无限画布 | 引擎 appState(gridModeEnabled / gridSize / gridStep,进场景 JSON)+ frontmatter 的方向、淡浓 | 引擎自己切 |
- *  | 无限画布 + 老网格(gridH / gridV 还在) | 覆盖层,直到用户第一次碰网格 | 引擎一开 → 当场转成引擎网格,不留两层 |
+ *  | 无限画布 + 老网格(gridH / gridV 还在) | 覆盖层,直到用户第一次碰网格 | 引擎一开 → 当场转成引擎网格并关上(切换 = 关掉显示着的那层) |
  *  | 纸张模式 | 覆盖层(gridH / gridV),引擎网格恒关 | 引擎一开 → 关掉它、改切覆盖层 |
  *  | 纸张 ↔ 无限切换 | 开着的网格跟过去(引擎 ↔ 覆盖层互转) | — |
  *
@@ -175,10 +175,14 @@ export function useBoardGrid(
       return
     }
     if (legacyToEngine(cur) !== undefined && st.gridModeEnabled) {
-      // 老网格 + 引擎网格同时开 → 收成引擎网格一层(write 先清掉 gridH / gridV,所以只会走一次)
+      // 老网格显示着,用户按 Cmd+' / 右键「切换网格显示」= 想关掉它:转成引擎网格并关上(和点岛上的按钮一个结果)。
+      // 第一次 onChange 就开着 = 文件里存着两层同时开的坏状态 → 收成引擎网格一层、保持显示。
+      // write 先清掉 gridH / gridV,所以只会走一次。
       const m = overlayModel(cur)
+      const keep = first || !turnedOn
       write({ gridH: 0, gridV: 0, gridDir: m.dir })
-      scene({ gridSize: clampGrid(m.size), gridDirection: engineDirection(m.dir) })
+      if (!keep) prevOn.current = false
+      scene({ gridModeEnabled: keep, gridSize: clampGrid(m.size), gridDirection: engineDirection(m.dir) })
       return
     }
     // 重置画布 / 打开文件会把方向和颜色打回引擎缺省:漂了就补回

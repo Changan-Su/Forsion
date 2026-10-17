@@ -23,17 +23,15 @@ registerMessages({
   'boardview.gridShow': { zh: '显示网格，拖动时吸附到格点', en: 'Show grid and snap to it' },
   'boardview.gridShowPaper': { zh: '显示网格', en: 'Show grid' },
   'boardview.gridSize': { zh: '格距', en: 'Grid size' },
-  'boardview.gridMajor': { zh: '粗线', en: 'Major lines' },
-  'boardview.gridMajorPre': { zh: '每', en: 'every' },
-  'boardview.gridMajorPost': { zh: '格一条', en: 'cells' },
+  'boardview.gridMajor': { zh: '粗线间隔', en: 'Major every' },
+  'boardview.gridMajorPost': { zh: '格', en: 'cells' },
   'boardview.gridDir': { zh: '方向', en: 'Direction' },
-  'boardview.dirBoth': { zh: '方格', en: 'Square' },
-  'boardview.dirH': { zh: '只横线', en: 'Horizontal only' },
-  'boardview.dirV': { zh: '只竖线', en: 'Vertical only' },
+  'boardview.dirBoth': { zh: '方格', en: 'Both' },
+  'boardview.dirH': { zh: '只横线', en: 'Horizontal' },
+  'boardview.dirV': { zh: '只竖线', en: 'Vertical' },
   'boardview.opacity': { zh: '淡浓', en: 'Opacity' },
   'boardview.noSnapHint': { zh: '拖动时按住 {key} 临时不吸附', en: 'Hold {key} while dragging to skip snapping' },
   'boardview.paperNoSnap': { zh: '纸张模式下网格只画线，不吸附', en: 'In paper mode the grid is drawn only, without snapping' },
-  'boardview.escHint': { zh: '按 Esc 退出全屏', en: 'Press Esc to exit full screen' },
 })
 
 const MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.userAgent)
@@ -73,7 +71,9 @@ export default function ViewIsland({
       if (!wrapRef.current?.contains(e.target as Node)) setPop(false)
     }
     const key = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') setPop(false)
+      if (e.key !== 'Escape') return
+      e.preventDefault() // 这一下只收浮层:全屏的 Esc 监听认 defaultPrevented,不会连全屏一起退
+      setPop(false)
     }
     window.addEventListener('pointerdown', down, true)
     window.addEventListener('keydown', key, true)
@@ -129,19 +129,19 @@ function GridPopover({ grid }: { grid: BoardGrid }): React.JSX.Element {
           <input type="checkbox" checked={model.on} onChange={(e) => grid.set({ on: e.target.checked })} />
           <span className="amx-bs-lbl">{grid.snaps ? t('boardview.gridShow') : t('boardview.gridShowPaper')}</span>
         </label>
-        <div className="amx-gridpop-row">
+        {/* 三列网格:两行的数字框落在同一列(走查 P3-12) */}
+        <div className="amx-gridpop-nums">
           <span className="amx-bs-lbl">{t('boardview.gridSize')}</span>
           <NumField value={model.size} min={GRID_MIN} max={GRID_MAX} onCommit={(v) => grid.set({ size: v })} />
           <span className="amx-bs-note">px</span>
+          {major !== null && (
+            <>
+              <span className="amx-bs-lbl">{t('boardview.gridMajor')}</span>
+              <NumField value={major} min={1} max={100} onCommit={(v) => grid.set({ major: v })} />
+              <span className="amx-bs-note">{t('boardview.gridMajorPost')}</span>
+            </>
+          )}
         </div>
-        {major !== null && (
-          <div className="amx-gridpop-row">
-            <span className="amx-bs-lbl">{t('boardview.gridMajor')}</span>
-            <span className="amx-bs-note">{t('boardview.gridMajorPre')}</span>
-            <NumField value={major} min={1} max={100} onCommit={(v) => grid.set({ major: v })} />
-            <span className="amx-bs-note">{t('boardview.gridMajorPost')}</span>
-          </div>
-        )}
         <div className="amx-bs-h">{t('boardview.gridDir')}</div>
         <div className="amx-bs-row">
           {DIRS.map((d) => (
@@ -168,7 +168,7 @@ function GridPopover({ grid }: { grid: BoardGrid }): React.JSX.Element {
             onPointerUp={() => grid.commitOpacity(op)}
             onKeyUp={() => grid.commitOpacity(op)}
           />
-          <span className="amx-bs-note">{op}%</span>
+          <span className="amx-bs-note amx-gridpop-pct">{op}%</span>
         </label>
         <div className="amx-bs-note">{grid.snaps ? t('boardview.noSnapHint', { key: MOD }) : t('boardview.paperNoSnap')}</div>
       </div>
@@ -176,12 +176,14 @@ function GridPopover({ grid }: { grid: BoardGrid }): React.JSX.Element {
   )
 }
 
-/** 数字框:打字时不夹,失焦 / 回车才夹进范围并提交。 */
+/** 数字框:打字时不夹,失焦 / 回车才夹进范围并提交;↑↓ 和框上的小箭头是整步改值,当场提交(走查 P3-5)。 */
 function NumField({ value, min, max, onCommit }: { value: number; min: number; max: number; onCommit: (v: number) => void }): React.JSX.Element {
   const [txt, setTxt] = useState(String(value))
   useEffect(() => setTxt(String(value)), [value])
-  const commit = (): void => {
-    const n = Math.round(Number(txt))
+  // 这次改值来自 ↑↓ / 小箭头。按下鼠标也先记一笔(点小箭头没有按键事件);接着打字的第一个键会把它清掉
+  const stepping = useRef(false)
+  const commit = (raw: string): void => {
+    const n = Math.round(Number(raw))
     const v = Number.isFinite(n) && n > 0 ? Math.min(max, Math.max(min, n)) : value
     setTxt(String(v))
     if (v !== value) onCommit(v)
@@ -193,10 +195,17 @@ function NumField({ value, min, max, onCommit }: { value: number; min: number; m
       min={min}
       max={max}
       value={txt}
-      onChange={(e) => setTxt(e.target.value)}
-      onBlur={commit}
+      onChange={(e) => {
+        setTxt(e.target.value)
+        if (stepping.current) commit(e.target.value)
+      }}
+      onBlur={() => commit(txt)}
+      onPointerDown={() => {
+        stepping.current = true
+      }}
       onKeyDown={(e) => {
-        if (e.key === 'Enter') commit()
+        stepping.current = e.key === 'ArrowUp' || e.key === 'ArrowDown'
+        if (e.key === 'Enter') commit(txt)
       }}
     />
   )
