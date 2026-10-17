@@ -4,6 +4,8 @@
  * electron/unitWeb.test.ts)。v2 = B 端渲染:设备行动作是「打开对方页面」,不再换本机 cfg。
  *
  * 判据:
+ * 10-17 起点胶囊 = 打开 设置 › 设备(原弹出菜单整页搬进设置,harness 无浮窗 = 窗内设置,只挂那一页);下面
+ * 「列表」「脚部」指设置页上半 / 下半。来访设备缺省折起。
  *   1 胶囊住在命令区(.rb-bottom;10-02 起从 head 挪下来,缺省排在明暗切换与命令面板之间 ——
  *     那条排序是 bootstrapEngine 的一次性迁移,本台架没有 rb-mode,只验它进了命令区)
  *   2 展开态显示当前面(本地/云端,跟 vaultSide);点开列表 = 本地/云端/设备行/「通过地址连接…」,
@@ -88,18 +90,28 @@ async function main() {
     const label = await page.evaluate(() => document.querySelector('.unitsw-pill .unitsw-name')?.textContent?.trim() ?? '')
     check('展开态显示当前面(缺省=本地)', label === '本地', `label=${label}`)
 
-    await page.click('.unitsw-pill')
-    await page.waitForSelector('.unitsw-menu', { timeout: 5000 })
+    const openPage = async () => {
+      await page.click('.unitsw-pill')
+      await page.waitForSelector('.unitset-page', { timeout: 5000 })
+    }
+    await openPage()
+    const tab0 = await page.evaluate(() => ({ tab: window.__forsionStore?.getState().settingsTab ?? null, menu: !!document.querySelector('.unitsw-menu') }))
+    check('点胶囊 → 打开 设置 › 设备(不再弹菜单)', tab0.tab === 'units' && !tab0.menu, JSON.stringify(tab0))
+    const LIST = '.unitset-list .unitsw-row'
     // 探针桩异步回来才长出「MacBook Air 直连」「客厅 mini 直连」两行:等到 9 行(含折叠开关)再断言构成。
-    await page.waitForFunction(() => document.querySelectorAll('.unitsw-menu .unitsw-row').length >= 9, null, { timeout: 5000 })
-    const readRows = () => page.evaluate(() => Array.from(document.querySelectorAll('.unitsw-menu .unitsw-row')).map((r) => ({
+    await page.waitForFunction((sel) => document.querySelectorAll(sel).length >= 9, LIST, { timeout: 5000 })
+    const readRows = () => page.evaluate((sel) => Array.from(document.querySelectorAll(sel)).map((r) => ({
       title: r.querySelector('.unitsw-title')?.textContent?.trim() ?? '',
       off: r.classList.contains('off'),
       fold: r.classList.contains('unitsw-fold'),
       expanded: r.getAttribute('aria-expanded'),
       emoji: r.querySelector('.unitsw-emoji')?.textContent ?? '',
       on: r.classList.contains('on'),
-    })))
+    })), LIST)
+    const clickRow = (text) => page.evaluate(([sel, t]) => {
+      const row = Array.from(document.querySelectorAll(sel)).find((r) => r.textContent.includes(t))
+      row.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    }, [LIST, text])
     let rows = await readRows()
     check('列表 = 本地/云端/在线设备按通路拆行(直连/P2P/中转)/离线设备折叠/通过地址连接',
       rows.length === 9 && rows[0].title === '本地' && rows[1].title === '云端'
@@ -108,105 +120,76 @@ async function main() {
         && rows[7].fold && rows[8].title.includes('地址'),
       JSON.stringify(rows.map((r) => r.title)))
     check('当前项带勾选态(本地)', !!rows[0]?.on)
-    // 10-14 用户定:离线设备缺省折起,只列在线的;折叠开关带离线台数
     check('离线设备缺省折起(开关显 1 台,书房 PC 不在列表里)',
       rows[7].fold && rows[7].expanded === 'false' && rows[7].title === '离线设备1' && !rows.some((r) => r.title.includes('书房 PC')),
       JSON.stringify(rows[7]))
-    // 判据仪器:隧道不在但直连探得通 = 能点 = 在线,不许被折进去(只按 online 判就会把它藏起来)
     check('隧道离线但直连探通的设备留在外面(直连行可点、中转行灰显)', !rows[5].off && rows[6].off, JSON.stringify(rows.slice(5, 7)))
-    await page.mouse.move(700, 600)
-    await page.waitForTimeout(350) // 菜单淡入,别截起始帧
+    await page.mouse.move(1000, 700)
+    await page.waitForTimeout(200)
     await page.screenshot({ path: path.join(SHOT_DIR, 'unit-switcher-folded.png') })
-    await page.evaluate(() => document.querySelector('.unitsw-menu .unitsw-fold').dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    await page.evaluate(() => document.querySelector('.unitset-list .unitsw-fold').dispatchEvent(new MouseEvent('click', { bubbles: true })))
     await page.waitForTimeout(80)
     rows = await readRows()
     check('点开折叠 → 离线设备只剩中转行且灰显(无直连/P2P 行)',
       rows.length === 10 && rows[7].expanded === 'true' && rows[8].title.startsWith('书房 PC中转') && rows[8].off
         && !rows.some((r) => r.title === '书房 PC直连' || r.title === '书房 PCP2P'),
       JSON.stringify(rows.map((r) => r.title)))
-    // P1-K1:名册里的手机(kind=phone)是调用方、不开设备通道 → 一行都不列(否则永远多一台「离线」的手机)
     check('手机(kind=phone)不出现在设备行里', !rows.some((r) => r.title.includes('口袋 Pixel')), JSON.stringify(rows.map((r) => r.title)))
     check('设备自定义 emoji 生效', rows.some((r) => r.emoji === '🦊'))
 
-    const geo = await page.evaluate(() => {
-      const m = document.querySelector('.unitsw-menu').getBoundingClientRect()
-      return { l: m.left, t: m.top, r: m.right, b: m.bottom, iw: innerWidth, ih: innerHeight }
-    })
-    check('菜单整体在视口内', geo.l >= 0 && geo.t >= 0 && geo.r <= geo.iw && geo.b <= geo.ih, JSON.stringify(geo))
-
-    // P1-K4 评审:互联关着时切换器不主动取远程会话视图(取视图 = 主进程问 K5 设备凭据状态 = macOS 可能碰钥匙串)
-    check('互联关着:切换器没取远程会话视图', (await page.evaluate(() => window.__rsGets)) === 0, await page.evaluate(() => window.__rsGets))
-    // 脚部:开互联 → 直连地址 + 已配对回收面(先截「开着互联」那张全家福)
-    await page.evaluate(() => {
-      const btn = document.querySelector('.unitsw-hosttoggle')
-      btn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    })
-    await page.waitForSelector('.unitsw-foot-hint', { timeout: 5000 })
-    await page.waitForSelector('.unitsw-paired-row', { timeout: 5000 })
+    check('互联关着:设置页没取远程会话视图', (await page.evaluate(() => window.__rsGets)) === 0, await page.evaluate(() => window.__rsGets))
+    // 互联:开 → 直连地址 + 来访设备(缺省折起,点开可回收)
+    await page.click('[data-setting-anchor="units-host"] .settings-switch')
+    await page.waitForFunction(() => (document.querySelector('.unitset-hint')?.textContent ?? '').includes('192.168.1.5:8791'), null, { timeout: 5000 }).catch(() => {})
+    await page.waitForSelector('.unitset-paired .unitsw-fold', { timeout: 5000 })
+    const paired0 = await page.evaluate(() => ({
+      hint: document.querySelector('.unitset-hint')?.textContent ?? '',
+      fold: document.querySelector('.unitset-paired .unitsw-fold')?.getAttribute('aria-expanded'),
+      title: document.querySelector('.unitset-paired .unitsw-title')?.textContent?.trim() ?? '',
+      rows: document.querySelectorAll('.unitset-paired .unitsw-paired-row').length,
+    }))
+    check('开互联 → 显示本机直连地址', paired0.hint.includes('192.168.1.5:8791'), paired0.hint)
+    check('来访设备缺省折起(开关带台数,名单不展开)', paired0.fold === 'false' && /^来访设备\d+$/.test(paired0.title) && paired0.rows === 0, JSON.stringify(paired0))
+    await page.click('.unitset-paired .unitsw-fold')
     const foot = await page.evaluate(() => ({
-      hint: document.querySelector('.unitsw-foot-hint')?.textContent ?? '',
       paired: Array.from(document.querySelectorAll('.unitsw-paired-name')).map((n) => n.textContent),
       removable: !!document.querySelector('.unitsw-paired-x'),
     }))
-    check('脚部显示本机直连地址', foot.hint.includes('192.168.1.5:8791'), foot.hint)
-    check('已配对设备列表 + 可回收', foot.paired.includes('客厅 iPad') && foot.removable, JSON.stringify(foot.paired))
+    check('点开 → 来访设备列表 + 可回收', foot.paired.includes('客厅 iPad') && foot.removable, JSON.stringify(foot.paired))
 
-    // P1-K4:父开关 → K5 提示 → 「允许远程会话」子开关 + 「设置 ›」深链(INTEGRATION §2.2 脚部顺序)
-    await page.waitForSelector('[data-unitsw-remote]', { timeout: 5000 })
-    check('互联一开:切换器重取一次视图(拿到真 permitted)', (await page.evaluate(() => window.__rsGets)) >= 1, await page.evaluate(() => window.__rsGets))
-    const sub = await page.evaluate(() => {
-      const foot = document.querySelector('.unitsw-foot')
-      const order = Array.from(foot.children).map((el) => (el.matches('.unitsw-hosttoggle') ? 'host' : el.matches('.secnotice') ? 'secrets' : el.matches('.unitsw-subrow') ? 'remote' : el.matches('.unitsw-foot-hint') ? 'hint' : el.className))
-      const host = document.querySelector('.unitsw-hosttoggle .unitsw-foot-label').getBoundingClientRect()
-      const hostSw = document.querySelector('.unitsw-hosttoggle .unitsw-switch').getBoundingClientRect()
-      const label = document.querySelector('.unitsw-subrow .unitsw-foot-label')
-      const sw = document.querySelector('[data-unitsw-remote] .unitsw-switch').getBoundingClientRect()
-      return { order, on: document.querySelector('[data-unitsw-remote]').getAttribute('aria-checked'), text: label.textContent,
-        dx: Math.round(label.getBoundingClientRect().left - host.left), dr: Math.round(sw.right - hostSw.right) }
-    })
-    check('脚部顺序:父开关 → 远程会话子开关 → 直连地址(K5 提示在两者之间,正常态不渲染)', sub.order.slice(0, 3).join(',') === 'host,remote,hint', JSON.stringify(sub.order))
-    check('子开关:文案「允许远程会话」、缺省开;标签与父开关标签左缘对齐、开关与父开关右缘对齐', sub.text === '允许远程会话' && sub.on === 'true' && Math.abs(sub.dx) <= 1 && Math.abs(sub.dr) <= 1, JSON.stringify(sub))
-    // 整行可点(同父开关)
-    await page.click('.unitsw-subrow .unitsw-foot-label')
-    await page.waitForFunction(() => document.querySelector('[data-unitsw-remote]')?.getAttribute('aria-checked') === 'false', null, { timeout: 3000 })
-    await page.click('.unitsw-subrow .unitsw-foot-label')
-    await page.waitForFunction(() => document.querySelector('[data-unitsw-remote]')?.getAttribute('aria-checked') === 'true', null, { timeout: 3000 })
-    await page.click('[data-unitsw-remote]')
-    await page.waitForFunction(() => document.querySelector('[data-unitsw-remote]')?.getAttribute('aria-checked') === 'false', null, { timeout: 3000 })
-    check('点子开关 → 关(走 remoteSessions.setEnabled)', true)
-    await page.click('[data-unitsw-remote]')
-    await page.waitForFunction(() => document.querySelector('[data-unitsw-remote]')?.getAttribute('aria-checked') === 'true', null, { timeout: 3000 })
-
-    await page.mouse.move(700, 600) // 别把悬停底色截进交付图
-    await page.waitForTimeout(350) // 开关 background/transform 有 150ms 过渡,别把起始帧截进交付图
+    // P1-K4:「允许远程会话」子开关 + 「设置 ›」深链
+    await page.waitForSelector('[data-setting-anchor="units-remote"] [role=switch]', { timeout: 5000 })
+    check('互联一开:重取一次视图(拿到真 permitted)', (await page.evaluate(() => window.__rsGets)) >= 1, await page.evaluate(() => window.__rsGets))
+    const SUB = '[data-setting-anchor="units-remote"] [role=switch]'
+    const subOn = () => page.evaluate((s) => document.querySelector(s)?.getAttribute('aria-checked'), SUB)
+    check('子开关:文案「允许远程会话」、缺省开', (await subOn()) === 'true'
+      && (await page.evaluate(() => document.querySelector('[data-setting-anchor="units-remote"] strong')?.textContent)) === '允许远程会话')
+    await page.click(SUB)
+    await page.waitForFunction((s) => document.querySelector(s)?.getAttribute('aria-checked') === 'false', SUB, { timeout: 3000 })
+    await page.click(SUB)
+    await page.waitForFunction((s) => document.querySelector(s)?.getAttribute('aria-checked') === 'true', SUB, { timeout: 3000 })
+    check('点子开关 → 关 / 再点 → 开(走 remoteSessions.setEnabled)', true)
+    await page.mouse.move(1000, 700)
+    await page.waitForTimeout(300)
     await page.screenshot({ path: path.join(SHOT_DIR, 'unit-switcher-expanded.png') })
 
-    // 探针通了直连行才在(上面 6 行等待已覆盖);描述文案带「局域网」
-    const lanDesc = await page.evaluate(() => Array.from(document.querySelectorAll('.unitsw-menu .unitsw-row'))
-      .some((r) => r.textContent.includes('MacBook Air直连') && r.textContent.includes('局域网')))
+    const lanDesc = await page.evaluate((sel) => Array.from(document.querySelectorAll(sel))
+      .some((r) => r.textContent.includes('MacBook Air直连') && r.textContent.includes('局域网')), LIST)
     check('直连行显局域网描述', lanDesc)
 
-    // 留在外面的那台(隧道离线、直连探通)真能点:点直连行 → 远程面指向它的直连地址(只看 .off 类会假绿,Codex 评审)
-    await page.evaluate(() => {
-      const row = Array.from(document.querySelectorAll('.unitsw-menu .unitsw-row')).find((r) => r.textContent.includes('客厅 mini直连'))
-      row.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    })
+    // 隧道离线但直连探通的那台:点直连行 → 远程面指向它的直连地址,设置页收起
+    await clickRow('客厅 mini直连')
     await page.waitForFunction(() => document.querySelector('.unitrs-web')?.getAttribute('src') === 'http://192.168.1.30:8791/', null, { timeout: 5000 }).catch(() => {})
     const miniSurf = await page.evaluate(() => ({
       src: document.querySelector('.unitrs-web')?.getAttribute('src') ?? '',
       pill: document.querySelector('.unitsw-pill .unitsw-name')?.textContent?.trim() ?? '',
+      page: !!document.querySelector('.unitset-page'),
     }))
-    check('隧道离线但直连探通的设备:点直连行 → 远程面指向它的直连地址', miniSurf.src === 'http://192.168.1.30:8791/' && miniSurf.pill === '客厅 mini', JSON.stringify(miniSurf))
-    await page.click('.unitsw-pill')
-    await page.waitForSelector('.unitsw-menu', { timeout: 5000 })
-    await page.waitForFunction(() => Array.from(document.querySelectorAll('.unitsw-menu .unitsw-row')).some((r) => r.textContent.includes('MacBook Air直连')), null, { timeout: 5000 })
+    check('点直连行 → 远程面指向它的直连地址、胶囊显设备名、设置收起', miniSurf.src === 'http://192.168.1.30:8791/' && miniSurf.pill === '客厅 mini' && !miniSurf.page, JSON.stringify(miniSurf))
 
-    // 直连行 = 整个主区切过去:远程面 .unitrs 携 webview 指向直连地址,不开浏览器标签/外链
-    await page.evaluate(() => {
-      const row = Array.from(document.querySelectorAll('.unitsw-menu .unitsw-row')).find((r) => r.textContent.includes('MacBook Air直连'))
-      row.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    })
-    await page.waitForFunction(() => !document.querySelector('.unitsw-menu'), null, { timeout: 5000 })
+    await openPage()
+    await page.waitForFunction((sel) => Array.from(document.querySelectorAll(sel)).some((r) => r.textContent.includes('MacBook Air直连')), LIST, { timeout: 5000 })
+    await clickRow('MacBook Air直连')
     await page.waitForSelector('.unitrs', { timeout: 5000 })
     const surf = await page.evaluate(() => ({
       src: document.querySelector('.unitrs-web')?.getAttribute('src') ?? '',
@@ -216,95 +199,62 @@ async function main() {
     }))
     check('点直连行 → 远程面指向直连地址(尾斜杠),不开外链', surf.visible && surf.src === 'http://192.168.1.20:8791/' && surf.external === 0, JSON.stringify(surf))
     check('远程面激活时胶囊显示设备名(回来的路)', surf.pill === 'MacBook Air', surf.pill)
-    // 交付截图:远程面激活态(harness 里 webview 不渲染内容,看的是覆盖几何 + 胶囊改显设备)
     await page.screenshot({ path: path.join(SHOT_DIR, 'unit-remote-surface.png') })
+    // 点胶囊不许把远程面踢掉(它是回来的路,点开的是设置)
+    await openPage()
+    check('远程面激活时点胶囊:远程面仍在、设置页打开', await page.evaluate(() => getComputedStyle(document.querySelector('.unitrs')).visibility === 'visible'))
 
-    // 勾选态落在点中的那条通路行;同设备另一条通路行不带勾
-    await page.click('.unitsw-pill')
-    await page.waitForSelector('.unitsw-menu', { timeout: 5000 })
-    const mbaOn = await page.evaluate(() => {
-      const find = (t) => Array.from(document.querySelectorAll('.unitsw-menu .unitsw-row')).find((r) => r.textContent.includes(t))
-      return { lanOn: find('MacBook Air直连').classList.contains('on'), tunnelOn: find('MacBook Air中转').classList.contains('on'), localOn: document.querySelector('.unitsw-menu .unitsw-row').classList.contains('on') }
-    })
-    check('勾选态只落在点中的通路行(直连√ 中转× 本地×)', mbaOn.lanOn && !mbaOn.tunnelOn && !mbaOn.localOn, JSON.stringify(mbaOn))
-    const rightClickMba = () => page.evaluate(() => {
-      const row = Array.from(document.querySelectorAll('.unitsw-menu .unitsw-row')).find((r) => r.textContent.includes('MacBook Air'))
-      row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 300, clientY: 200 }))
-    })
-    // P2P 行:第一次点(桩)打洞失败 → **出声回落中转**(远程面落在隧道页,勾选态归中转行)
-    await page.evaluate(() => {
-      const row = Array.from(document.querySelectorAll('.unitsw-menu .unitsw-row')).find((r) => r.textContent.includes('MacBook AirP2P'))
-      row.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    })
+    // P2P 行:第一次点(桩)打洞失败 → 出声回落中转;第二次成功 → 本机代理地址
+    await clickRow('MacBook AirP2P')
     await page.waitForFunction(() => document.querySelector('.unitrs-web')?.getAttribute('src') === 'https://cloud.test/api/units/u-mba/proxy/', null, { timeout: 5000 })
     check('P2P 打洞失败 → 回落中转(远程面=隧道页)', true)
-    // 第二次点:桩放行 → 远程面切到本机 P2P 代理地址,勾选态落在 P2P 行
-    await page.click('.unitsw-pill')
-    await page.waitForSelector('.unitsw-menu', { timeout: 5000 })
-    await page.evaluate(() => {
-      const row = Array.from(document.querySelectorAll('.unitsw-menu .unitsw-row')).find((r) => r.textContent.includes('MacBook AirP2P'))
-      row.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    })
+    await openPage()
+    await clickRow('MacBook AirP2P')
     await page.waitForFunction(() => document.querySelector('.unitrs-web')?.getAttribute('src') === 'http://127.0.0.1:47123/', null, { timeout: 5000 })
     check('P2P 打洞成功 → 远程面=本机代理地址', true)
-    await page.click('.unitsw-pill')
-    await page.waitForSelector('.unitsw-menu', { timeout: 5000 })
-    const p2pOn = await page.evaluate(() => {
-      const find = (label) => Array.from(document.querySelectorAll('.unitsw-menu .unitsw-row')).find((r) => r.textContent.includes(label))
-      return { p2p: find('MacBook AirP2P').classList.contains('on'), lan: find('MacBook Air直连').classList.contains('on') }
-    })
-    check('P2P 连上后勾选态落在 P2P 行', p2pOn.p2p && !p2pOn.lan, JSON.stringify(p2pOn))
 
-    // 中转是一等行:点「MacBook Air 中转」→ 远程面换隧道页(尾斜杠)
-    await page.evaluate(() => {
-      const row = Array.from(document.querySelectorAll('.unitsw-menu .unitsw-row')).find((r) => r.textContent.includes('MacBook Air中转'))
-      row.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    })
+    await openPage()
+    await clickRow('MacBook Air中转')
     await page.waitForFunction(() => document.querySelector('.unitrs-web')?.getAttribute('src') === 'https://cloud.test/api/units/u-mba/proxy/', null, { timeout: 5000 })
     check('点中转行 → 远程面换隧道页(尾斜杠)', true)
 
-    // 右键菜单两项:改图标 / 在系统浏览器打开(/open 引导页,唯一走外链的路)
-    await page.click('.unitsw-pill')
-    await page.waitForSelector('.unitsw-menu', { timeout: 5000 })
-    await rightClickMba()
+    // 右键菜单两项:改图标 / 在系统浏览器打开
+    await openPage()
+    await page.evaluate((sel) => {
+      const row = Array.from(document.querySelectorAll(sel)).find((r) => r.textContent.includes('MacBook Air'))
+      row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 400, clientY: 200 }))
+    }, LIST)
     await page.waitForSelector('.unitsw-ctx', { timeout: 5000 })
     const ctxTitles = await page.evaluate(() => Array.from(document.querySelectorAll('.unitsw-ctx .unitsw-title')).map((n) => n.textContent))
-    check('右键菜单两项(图标/浏览器,中转已升一等行)', ctxTitles.length === 2 && ctxTitles.some((t) => t.includes('图标')) && ctxTitles.some((t) => t.includes('浏览器')), JSON.stringify(ctxTitles))
+    check('右键菜单两项(图标/浏览器)', ctxTitles.length === 2 && ctxTitles.some((t) => t.includes('图标')) && ctxTitles.some((t) => t.includes('浏览器')), JSON.stringify(ctxTitles))
     await page.evaluate(() => {
       const item = Array.from(document.querySelectorAll('.unitsw-ctx .unitsw-row')).find((r) => r.textContent.includes('浏览器'))
       item.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     })
     await page.waitForFunction(() => window.__unitOpened.length === 1, null, { timeout: 5000 })
     const viaBrowser = await page.evaluate(() => window.__unitOpened[0])
-    check('「在系统浏览器打开」→ /open 引导页(唯一走外链的路)', viaBrowser === 'https://cloud.test/api/units/u-mba/open', viaBrowser)
+    check('「在系统浏览器打开」→ /open 引导页', viaBrowser === 'https://cloud.test/api/units/u-mba/open', viaBrowser)
 
-    // 离线设备点了不切面
-    await page.click('.unitsw-pill')
-    await page.waitForSelector('.unitsw-menu', { timeout: 5000 })
-    await page.evaluate(() => {
-      const row = Array.from(document.querySelectorAll('.unitsw-menu .unitsw-row')).find((r) => r.textContent.includes('书房 PC'))
-      row.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    })
+    // 离线设备点了不切面、设置页不收
+    await page.evaluate(() => document.querySelector('.unitset-list .unitsw-fold').dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    await clickRow('书房 PC')
     await page.waitForTimeout(150)
     const afterOffline = await page.evaluate(() => ({
       src: document.querySelector('.unitrs-web')?.getAttribute('src') ?? '',
-      external: window.__unitOpened.length,
+      page: !!document.querySelector('.unitset-page'),
     }))
-    check('离线设备不切面(就地提示,远程面目标不变)', afterOffline.src === 'https://cloud.test/api/units/u-mba/proxy/' && afterOffline.external === 1, JSON.stringify(afterOffline))
+    check('离线设备不切面(远程面目标不变、设置页留着)', afterOffline.src === 'https://cloud.test/api/units/u-mba/proxy/' && afterOffline.page, JSON.stringify(afterOffline))
 
     // 选「本地」= 切回本机:远程面 visibility 隐藏(webview 保活),胶囊回「本地」
-    await page.evaluate(() => {
-      document.querySelector('.unitsw-menu .unitsw-row').dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    })
-    await page.waitForFunction(() => !document.querySelector('.unitsw-menu'), null, { timeout: 5000 })
+    await clickRow('本地')
+    await page.waitForFunction(() => !document.querySelector('.unitset-page'), null, { timeout: 5000 })
     const backLocal = await page.evaluate(() => ({
       hidden: getComputedStyle(document.querySelector('.unitrs')).visibility === 'hidden',
-      alive: !!document.querySelector('.unitrs-web'), // 保活:webview 还挂着,切回去免重载
+      alive: !!document.querySelector('.unitrs-web'),
       pill: document.querySelector('.unitsw-pill .unitsw-name')?.textContent?.trim() ?? '',
     }))
     check('选「本地」切回:远程面隐藏但保活,胶囊回「本地」', backLocal.hidden && backLocal.alive && backLocal.pill === '本地', JSON.stringify(backLocal))
 
-    // 折叠态只显图标
     await page.evaluate(() => { window.__rb.setState({ expanded: false }) })
     await page.waitForTimeout(120)
     const collapsed = await page.evaluate(() => ({
@@ -314,31 +264,30 @@ async function main() {
     check('折叠态只显图标', !collapsed.name && collapsed.icon, JSON.stringify(collapsed))
     await page.screenshot({ path: path.join(SHOT_DIR, 'unit-switcher-collapsed.png') })
 
-    // P1-K4:「设置 ›」深链到 设置 › 远程会话(菜单随之收起)
+    // 「设置 ›」深链到 设置 › 远程会话
     await page.evaluate(() => { window.__rb.setState({ expanded: true }) })
-    await page.click('.unitsw-pill')
+    await openPage()
     await page.waitForSelector('[data-unitsw-remote-settings]', { timeout: 5000 })
     await page.click('[data-unitsw-remote-settings]')
-    await page.waitForFunction(() => !document.querySelector('.unitsw-menu'), null, { timeout: 3000 })
     const tab = await page.evaluate(() => window.__forsionStore?.getState().settingsTab ?? null)
     check('「设置 ›」→ 打开 设置 › 远程会话', tab === 'remote-sessions', String(tab))
 
-    // P1-K4:设备凭据没加密(K5 plaintext)→ K5 提示夹在父开关与子开关之间,子开关置灰
+    // 设备凭据没加密(K5 plaintext)→ K5 提示在子开关之上,子开关置灰
     await page.goto(`${URL}&secrets=plaintext`, { waitUntil: 'domcontentloaded' })
     await page.waitForSelector('.rb-bottom .unitsw-pill', { timeout: 20000 })
     await page.evaluate(() => { window.__rb.setState({ expanded: true }) })
-    await page.click('.unitsw-pill')
-    await page.waitForSelector('.unitsw-menu', { timeout: 5000 })
-    await page.evaluate(() => document.querySelector('.unitsw-hosttoggle').dispatchEvent(new MouseEvent('click', { bubbles: true })))
-    await page.waitForSelector('[data-unitsw-remote]', { timeout: 5000 })
-    await page.waitForSelector('.unitsw-foot .secnotice', { timeout: 5000 })
-    const locked = await page.evaluate(() => ({
-      order: Array.from(document.querySelector('.unitsw-foot').children).map((el) => (el.matches('.unitsw-hosttoggle') ? 'host' : el.matches('.secnotice') ? 'secrets' : el.matches('.unitsw-subrow') ? 'remote' : el.className)).slice(0, 3),
-      disabled: document.querySelector('[data-unitsw-remote]').disabled,
-      on: document.querySelector('[data-unitsw-remote]').getAttribute('aria-checked'),
-    }))
-    check('设备凭据未加密:父开关 → K5 提示 → 子开关(置灰、显示关)', locked.order.join(',') === 'host,secrets,remote' && locked.disabled && locked.on === 'false', JSON.stringify(locked))
-    await page.waitForTimeout(350)
+    await openPage()
+    await page.click('[data-setting-anchor="units-host"] .settings-switch')
+    await page.waitForSelector('[data-setting-anchor="units-remote"] [role=switch]', { timeout: 5000 })
+    await page.waitForSelector('[data-setting-anchor="units-host"] .secnotice', { timeout: 5000 })
+    const locked = await page.evaluate(() => {
+      const sec = document.querySelector('[data-setting-anchor="units-host"] .secnotice')
+      const row = document.querySelector('[data-setting-anchor="units-remote"]')
+      const sw = row.querySelector('[role=switch]')
+      return { secBefore: !!(sec.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING), disabled: sw.disabled, on: sw.getAttribute('aria-checked') }
+    })
+    check('设备凭据未加密:K5 提示 → 子开关(置灰、显示关)', locked.secBefore && locked.disabled && locked.on === 'false', JSON.stringify(locked))
+    await page.waitForTimeout(300)
     await page.screenshot({ path: path.join(SHOT_DIR, 'unit-switcher-remote-locked.png') })
   } finally {
     await browser.close()
