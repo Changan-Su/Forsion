@@ -165,7 +165,7 @@ describe('③b 毁档防线:插件够得着的另外两个页加载入口', () =
     expect(nav.openFile).toHaveBeenCalledTimes(1)
   })
 
-  // 负对照(10-17 实跑红):去掉 revealHeadingWhenReady 那一步 → 第一条红;不判 typeof → 「不是字符串」那条红。
+  // 负对照(10-17 实跑红):去掉 revealHeadingWhenReady 那一步 → 第一条红;不判 typeof / 不看 activate:false → 末尾计数红。
   it('ctx.app.openNote 带 heading:开完再滚到那个标题;非笔记路径 / 非字符串 heading 不滚', async () => {
     nav.openNote.mockClear(); nav.openFile.mockClear(); nav.revealHeadingWhenReady.mockClear()
     const ctx = ctxOf('heading-open')
@@ -177,6 +177,8 @@ describe('③b 毁档防线:插件够得着的另外两个页加载入口', () =
     await vi.waitFor(() => expect(nav.openFile).toHaveBeenCalledWith('资料/书.pdf'))
     ctx.app.openNote?.('日记.md', { heading: 42 as unknown as string })
     await vi.waitFor(() => expect(nav.openNote).toHaveBeenCalledTimes(2))
+    ctx.app.openNote?.('日记.md', { heading: '周计划', activate: false }) // 不抢焦点 = 只开不跳
+    await vi.waitFor(() => expect(nav.openNote).toHaveBeenCalledTimes(3))
     await new Promise((r) => setTimeout(r, 0))
     expect(nav.revealHeadingWhenReady).toHaveBeenCalledTimes(1)
   })

@@ -1247,7 +1247,7 @@ ctx.calendar?.removeMember?.(db.path)           // 只撤成员,不删表
 - `ready` 只看库里的表读没读完(同 `ctx.databases`);叠加源各自尽力而为,Agent 引擎不在、.ics 拉不下来都只是少几个源,不报错。
 - **写口都返回 boolean**,false = 宿主不收:颜色只收 `#rrggbb`;`setColor` / `setHidden` 的路径只认库里的表或当前的叠加源;
   `setMember` 只认库里可写的表,日期列必须是日期类列(`base === 'date'` 或 `calendarDate`)、勾选列必须是勾选类列;
-  `setDefault` 只认可写的成员;`removeMember` 只认显式登记过的成员。叠加源不能当成员、不能设默认,拿它的 path 调 `ctx.databases` 的写口也是 false。
+  `setDefault` 只认可写的成员;`removeMember` 只认显式登记过的成员,而且日历做过首次整理才收(从没打开过日历的库里,订阅会在 `ready` 后替你做这一步,成员不变 —— 先订阅、等 ready 再撤)。叠加源不能当成员、不能设默认,拿它的 path 调 `ctx.databases` 的写口也是 false。
 - 设置按**当前库**生效,和宿主日历左栏「日历」列表改的是同一处(存在本机,不进库文件、不同步)。
 - 还没有的:.ics 订阅的增删 / 导入(仍在宿主日历设置里做)。
 - 详情页那一行会多一项「读取 Agent 日程、.ics 订阅和另一侧库里的日历，并改日历设置」。
@@ -1255,7 +1255,7 @@ ctx.calendar?.removeMember?.(db.path)           // 只撤成员,不删表
 ### 日历 / 待办类插件的其余入口(2026-10-17 盘点)
 
 - **跳到笔记里的某个标题**:`ctx.app.openNote?.(task.path, { heading: task.heading })` —— 与 `[[笔记#标题]]`、聊天引用条同一套跳转;
-  找不到那个标题就只开笔记;旧宿主忽略 `heading`。**打开多维表视图**:`ctx.app.openFile(db.path)`(`.db` 路由到表格视图),不用另找方法。
+  找不到那个标题就只开笔记;跳标题会聚焦那篇笔记,所以带 `activate: false` 时只开不跳;旧宿主忽略 `heading`。**打开多维表视图**:`ctx.app.openFile(db.path)`(`.db` 路由到表格视图),不用另找方法。
 - **迷你窗**:Space 配方的 `mini`(见上「Mini Panel 适配」)或 `ctx.openMiniPanel`,宿主日历的迷你待办也是这条路。
 - **Intelligent UI**:给待办之类的列表源写 `intelligent`(见「Intelligent UI list cards」),宿主用原生列表画卡片,不画插件 DOM。
 - **用户仪表盘里的卡片**:插件视图**不能**嵌进用户的 `.dashboard.md`(嵌卡是宿主白名单,插件自声明不算数)。要在自己视图里放仪表盘用 `ctx.dashboard.mount`。

@@ -4,7 +4,8 @@
  *  插件停用后订阅不再回调、写口一律 false;设置按 vaultRoot 存(和宿主日历同一个键)。
  *  负对照(10-17 实跑红):释放函数不判 released → 计时器那条红;subscribe 不去重 → 「loading 位」红;
  *  legendPath 不查叠加源 → 改色那条红;setMember 不查列类型 → 成员那条红;vault 键用 `side:root` → 写口五条全红;
- *  回调前不看 scope.alive() → 「停用后」红。 */
+ *  回调前不看 scope.alive() → 「停用后」红;订阅不做一次性迁移 / removeMember 不看迁移 → 「迁移」那条红;
+ *  签名不含语言 → 「切语言」红。 */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type { DbFile } from '@amadeus-shared/db/schema'
 import type { AgentScheduleInfo } from '../../types'
@@ -35,6 +36,7 @@ const { useIcsCalendars } = await import('../../stores/icsCalendarStore')
 const { useOtherSideCal } = await import('../../stores/otherVaultCalStore')
 const { createCalendarApi } = await import('./pluginCalendar')
 const { createDatabasesApi } = await import('./pluginData')
+const { setLocaleGlobal, currentLocale } = await import('../../i18n')
 type Snap = import('./types').PluginCalendarSnapshot
 
 const table = (name: string, cols: DbFile['columns']): DbFile => ({ version: 1, name, columns: cols, rows: [{ id: 'r1', cells: { c1: '甲', d1: '2026-10-20' } }] })
@@ -92,6 +94,31 @@ describe('ctx.calendar.subscribe', () => {
     expect(Object.keys(last.colors).sort()).toEqual(['T.db', AGENT, ICS].sort())
     expect(last.defaultPath).toBeNull()
     off()
+  })
+
+  it('库读完后替插件做一次性迁移(和打开宿主日历一样,成员不变);之后撤掉的成员不会被旧行为补回来', async () => {
+    await useDbStore.getState().reload('T.db', 'T.db')
+    const api = createCalendarApi(fakeScope())
+    expect(api.setMember('T.db', 'd1')).toBe(true)
+    expect(api.removeMember('T.db')).toBe(false) // 还没迁移:撤了也会被「有日期列即入历」补回来,不许报成功
+    const seen: Snap[] = []
+    api.subscribe((x) => seen.push(x))
+    await flush(); await flush()
+    expect(useCalendarConfig.getState().byVault['/V'].migrated).toBe(true)
+    expect(seen.at(-1)!.members.map((m) => m.path)).toEqual(['T.db'])
+    expect(api.removeMember('T.db')).toBe(true)
+    expect(seen.at(-1)!.members).toEqual([])
+  })
+
+  it('切语言会推一份新快照(.ics 的列名 / 回退名跟语言走)', async () => {
+    const before = currentLocale()
+    const seen: Snap[] = []
+    createCalendarApi(fakeScope()).subscribe((x) => seen.push(x))
+    await flush(); await flush()
+    const n = seen.length
+    setLocaleGlobal(before === 'zh' ? 'en' : 'zh')
+    expect(seen.length).toBe(n + 1)
+    setLocaleGlobal(before)
   })
 
   it('只在输入变了时回调:.ics 的 loading 位不推快照,改设置会推', async () => {
@@ -191,6 +218,7 @@ describe('ctx.calendar 写口的信任边界', () => {
     expect(api.setMember('T.db', 'nope')).toBe(false)
     expect(api.setMember(ICS, 'date')).toBe(false)
     expect(api.setMember(AGENT, 'd')).toBe(false)
+    useCalendarConfig.getState().migrate('/V', []) // 迁移过:成员全靠显式登记
     expect(api.removeMember('T.db')).toBe(false) // 还不是显式成员
     expect(api.setMember('T.db', 'd1', 'k1')).toBe(true)
     expect(useCalendarConfig.getState().byVault['/V'].members['T.db']).toEqual({ dateCol: 'd1', checkboxCol: 'k1' })

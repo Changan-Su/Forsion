@@ -2,13 +2,14 @@
  *  读:叠加源(Agent 日程 / .ics 订阅 / 另一侧库)+ 日历设置(成员、颜色、显隐、默认表)。叠加源与日历视图共用同一份
  *  store 和计时器(acquireAgentSchedulePolling / startIcsRefresh / watchOtherSideCal),订阅期间持有、退订或插件停用时释放。
  *  写:与日历左栏同一组 store 动作(calendarConfigStore),按当前库生效。成员解析与日历视图同一个函数(resolveCalendarMembers)。 */
-import { colorForDb, defaultDbPath, isHidden, memberOf, useCalendarConfig } from '../store/calendarConfigStore'
-import { resolveCalendarMembers } from '../store/calendarMembers'
+import { colorForDb, defaultDbPath, isHidden, isMigrated, memberOf, useCalendarConfig } from '../store/calendarConfigStore'
+import { migrationSeeds, resolveCalendarMembers } from '../store/calendarMembers'
 import { getAggDb, isCheckboxCol, isDateCol, watchAllDatabases, type AggDb } from '../store/dbAggregateStore'
 import { usePageStore } from '../store/pageStore'
 import { acquireAgentSchedulePolling, agentScheduleDbs, useAgentSchedules } from '../../stores/agentScheduleStore'
 import { icsCalDbsNow, startIcsRefresh, useIcsCalendars } from '../../stores/icsCalendarStore'
 import { useOtherSideCal, watchOtherSideCal } from '../../stores/otherVaultCalStore'
+import { currentLocale, subscribeLocale } from '../../i18n'
 import { normalizeVaultRel } from './pluginAutomation'
 import { toDb, type DataScope } from './pluginData'
 import type { PluginCalendarOverlay, PluginCalendarSnapshot, PluginContext } from './types'
@@ -68,7 +69,8 @@ export function createCalendarApi(scope: DataScope): CalendarApi {
       const emit = (): void => {
         if (!live || !scope.alive()) return
         // 只在输入真变了时回调:.ics 的 loading 位、另一侧 store 的无关字段变化不该把整份快照推一遍
-        const sig = [dbs, ready, usePageStore.getState().vaultRoot, useCalendarConfig.getState().byVault,
+        // .ics 的列名 / 回退名随语言变 → 语言也进签名
+        const sig = [dbs, ready, currentLocale(), usePageStore.getState().vaultRoot, useCalendarConfig.getState().byVault,
           useAgentSchedules.getState().schedules, useOtherSideCal.getState().dbs, useIcsCalendars.getState().subs, useIcsCalendars.getState().events]
         if (sig.length === last.length && sig.every((x, i) => x === last[i])) return
         last = sig
@@ -76,8 +78,15 @@ export function createCalendarApi(scope: DataScope): CalendarApi {
       }
       const offs = [
         acquireAgentSchedulePolling(), startIcsRefresh(), watchOtherSideCal(),
-        watchAllDatabases((d, r) => { dbs = d; ready = r; emit() }),
+        watchAllDatabases((d, r) => {
+          dbs = d; ready = r
+          // 与打开宿主日历同一步一次性迁移(隐式成员 → 显式,解析结果不变):不迁,插件撤掉的成员会被「有日期列即入历」的旧行为补回来
+          const v = usePageStore.getState().vaultRoot
+          if (r && v && scope.alive() && !isMigrated(v, useCalendarConfig.getState().byVault)) useCalendarConfig.getState().migrate(v, migrationSeeds(d))
+          emit()
+        }),
         useCalendarConfig.subscribe(emit), useAgentSchedules.subscribe(emit), useIcsCalendars.subscribe(emit), useOtherSideCal.subscribe(emit),
+        subscribeLocale(emit),
       ]
       live = true
       emit()
@@ -122,7 +131,9 @@ export function createCalendarApi(scope: DataScope): CalendarApi {
     removeMember: (raw) => {
       const v = vault()
       const p = v ? path(raw) : ''
-      if (!v || !p || !memberOf(v, useCalendarConfig.getState().byVault, p)) return false
+      // 首次迁移前(从没打开过日历、也没订阅到 ready)不收:撤了也会被旧行为补回来,返回 true 就是骗人
+      const byVault = useCalendarConfig.getState().byVault
+      if (!v || !p || !isMigrated(v, byVault) || !memberOf(v, byVault, p)) return false
       useCalendarConfig.getState().removeMember(v, p)
       return true
     },

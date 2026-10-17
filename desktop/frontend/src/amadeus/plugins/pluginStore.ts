@@ -430,7 +430,8 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
       void import('../../amadeusNav').then(async (m) => {
         if (!isPagePipelinePath(String(p ?? ''))) { m.openFile(p); return }
         await m.openNote(p, options)
-        if (heading && ok()) await m.revealHeadingWhenReady(p, heading)
+        // activate:false = 不抢焦点,而跳标题会聚焦那篇笔记 → 这时只开不跳(Codex 评审)
+        if (heading && options?.activate !== false && ok()) await m.revealHeadingWhenReady(p, heading)
       })
     },
     // 只读 vault 查询面(2026-08-14,codex 评审后的口径):纯透传主进程既有 IPC,没有写口。

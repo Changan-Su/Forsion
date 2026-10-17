@@ -222,9 +222,9 @@ export interface PluginAppApi extends BlockSurfaceApi {
    *  updates that pane without stealing focus from the source view. Older hosts lack this seam.
    *  A path that is not a `.md` note (PDF, image, whiteboard) never reaches the note editor: it is
    *  handed to `openFile` instead (2026-10-05+).
-   *  `heading` (2026-10-17+): after opening, scroll to the first heading with that text (the same jump as
-   *  `[[note#heading]]` and chat citations; `PluginNoteTask.heading` fits as is). No such heading: the note just
-   *  opens. Older hosts ignore it and only open the note. To open a database in its table view, pass the `.db`
+   *  `heading` (2026-10-17+): after opening, scroll to the first heading with that text and focus it (the same jump
+   *  as `[[note#heading]]` and chat citations; `PluginNoteTask.heading` fits as is). No such heading: the note just
+   *  opens. Ignored with `activate: false` (the jump would take focus). Older hosts ignore it and only open the note. To open a database in its table view, pass the `.db`
    *  path to `openFile`. */
   openNote?(path: string, options?: { reuseKey?: string; activate?: boolean; newTab?: boolean; heading?: string }): void
 
@@ -1533,7 +1533,8 @@ export interface PluginContext {
    *    `setColor(path, '#rrggbb' | null)`(null = 回到调色板色)、`setHidden(path, bool)` 只认当前的成员或叠加源;
    *    `setDefault(path)` 只认可写的成员表;`setMember(path, dateCol, checkboxCol?)` 把库里一张表加进日历或改它的列映射
    *    (日期列必须是日期类列、勾选列必须是勾选类列;**会覆盖**用户改过的映射 —— 只想「没有就加」用 `ensureMember`);
-   *    `removeMember(path)` 只撤成员,不删表。叠加源不能当成员、不能设默认。
+   *    `removeMember(path)` 只撤成员,不删表;日历还没做过首次整理时(从没打开过日历、也没订阅到 ready)返回 false ——
+   *    订阅会在库读完后替你做这一步(和打开宿主日历一样,成员不变)。叠加源不能当成员、不能设默认。
    *  · .ics 订阅的增删、导入不在这里(还是宿主日历设置里做)。 */
   calendar?: {
     ensureMember(dbPath: string, dateColId: string, checkboxColId?: string): void
