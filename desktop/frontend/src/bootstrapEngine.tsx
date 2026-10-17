@@ -362,7 +362,7 @@ export function installEngine(): void {
   // 默认命令顺序：成就 → 设备互联 → 反馈 → 商店 → 明暗 → 命令面板 → 设置。
   // 无持久顺序时注册序即上下序；已有自定义排序不覆盖。移动端设备入口仍在 head。
   // 红点 = 有「已达成未领取」的成就(收进「更多」时红点挂到「更多」上,见 RibbonItem.dot)。
-  addRibbonIcon({ id: 'rb-achievements', side: 'bottom', icon: Trophy, tooltip: () => app().tr('achievements.title'), onClick: () => app().openAchievements(), dot: { get: () => hasClaimable(), subscribe: (cb) => useAchievements.subscribe(cb) } })
+  addRibbonIcon({ id: 'rb-achievements', side: 'bottom', icon: Trophy, tooltip: () => app().tr('achievements.title'), onClick: () => app().openAchievements(), dot: { get: () => hasClaimable(), subscribe: (cb) => useAchievements.subscribe(cb), label: () => app().tr('achievements.claimable') } })
   // Unit 切换器(设备互联):吸收原「本地|云端」胶囊,列表式切换 本地/云端/其他设备。
   // 默认顺序为成就 → 设备互联 → 反馈；用户保存的自定义顺序仍优先。
   // 桌面 = preload 的 unitsList IPC;mobile 垫片也有 unitsList(UnitsSheet 数据面)→ 移动端照旧挂 head:
