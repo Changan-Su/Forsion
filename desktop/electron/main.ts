@@ -43,6 +43,7 @@ import { loadTanguCreds, saveTanguCreds, forsionAccountId, loadAccountCloudSetti
 import { createAccountCore } from './accountCore'
 import { importMcp, importSkills, scanAll } from './discovery'
 import { checkForUpdates, downloadUpdate, installUpdate, canInstallUpdate, betaChannelOn, getUpdaterStatus } from './updater'
+import { fetchWebsiteReleases } from './websiteReleases'
 import { createRestartGuard, readRestartActivity } from './restartGuard'
 import { createTray, refreshTrayMenu, setTrayIndicator, trayLang } from './tray'
 import { initMainLocale, mainLocale, mt } from './mainI18n'
@@ -2603,6 +2604,8 @@ app.whenReady().then(async () => {
       ])
     },
   })
+  // 定时 / 唤醒触发的检查:下载中别插一脚(下载完 checkForUpdates 自己会原样返回)。
+  const checkAppUpdateQuietly = (): void => { if (getUpdaterStatus().phase !== 'downloading') void checkForUpdates() }
   const checkAllUpdates = () => {
     void corePluginUpdater.check()
     if (PRODUCT.market) void marketPluginUpdater.check().catch((e) => console.warn('[market-updates]', e))
@@ -2612,7 +2615,8 @@ app.whenReady().then(async () => {
   if (app.isPackaged) {
     setTimeout(() => {
       void corePluginUpdater.check()
-      setInterval(() => void corePluginUpdater.check(), 6 * 3600_000).unref()
+      // 应用本体也跟着每 6 小时查一次:原来只在渲染层启动时查,一直开着不退的人永远收不到新版本(What's new 弹窗靠这个广播)
+      setInterval(() => { void corePluginUpdater.check(); checkAppUpdateQuietly() }, 6 * 3600_000).unref()
     }, 60_000).unref()
   }
   // tangu CLI 自动安装/自愈:shim 指向 App 内部资源(App 自动更新 → CLI 同步),幂等注入 PATH;吞错不阻塞。
@@ -2677,6 +2681,7 @@ app.whenReady().then(async () => {
     keepAwake.rearm()
     computerHistory?.recheck()
     unitHub?.reconnect('resume')
+    if (app.isPackaged) checkAppUpdateQuietly() // 合盖一夜回来,新版本在这时候提示
   })
 
   ipcMain.handle('config:get', () => effectiveConfig())
@@ -3599,6 +3604,14 @@ app.whenReady().then(async () => {
   ipcMain.handle('updater:setBeta', async (_e, on: boolean) => {
     await saveHomeSection('updater', (sec: any) => ({ ...sec, beta: !!on }))
     return { ok: true }
+  })
+  // What's new 弹窗:官网更新动态的已发布快照(拿不到回 null,渲染层退回打包的 CHANGELOG)
+  ipcMain.handle('updater:websiteReleases', () => fetchWebsiteReleases())
+  // 设置是独立浮窗:里面点「What's new」要在主窗弹,不在设置窗里弹
+  ipcMain.on('whatsNew:open', (e) => {
+    if (!isTrustedSender(e)) return
+    showMainWindow()
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('whatsNew:open')
   })
   ipcMain.handle('updater:download', () => downloadUpdate())
   ipcMain.handle('updater:install', async (e) => {

@@ -25,6 +25,7 @@ import { AchievementToast } from './achievements/AchievementToast'
 import { debugFireToast } from './achievements/store'
 import { forgetUserSpace } from './userSpaces'
 import { NotificationHost } from './components/NotificationHost'
+import { WhatsNewHost } from './components/WhatsNewDialog'
 import { DesktopStatusBar, installStatusBarItems } from './statusbar/items'
 import { UnitRemoteSurface } from './components/UnitSwitcher'
 import { installNotificationWiring } from './stores/notificationWiring'
@@ -258,6 +259,8 @@ export function Root() {
 
       {/* 旁聊(/btw)在 Web 上的居中窄浮层;桌面走原生 Floating Panel,这里恒为空 */}
       <BtwHost />
+
+      <WhatsNewHost />
 
       <AnimatePresence>
         {pluginFloating?.view && <FloatingPanelFrame key={pluginFloating.id} title={pluginFloating.title} onClose={closeWebFloatingPanel}>

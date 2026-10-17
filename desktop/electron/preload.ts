@@ -182,6 +182,15 @@ const api = {
   /** 测试版通道:开了才会收到 x.y.z-beta.N;关着连看都看不到(feed/端点两层都隔离)。 */
   getUpdateBeta: (): Promise<boolean> => ipcRenderer.invoke('updater:getBeta'),
   setUpdateBeta: (on: boolean): Promise<{ ok: boolean }> => ipcRenderer.invoke('updater:setBeta', on),
+  /** What's new 弹窗正文:官网更新动态快照(拿不到 = null)。 */
+  getWebsiteReleases: (): Promise<any> => ipcRenderer.invoke('updater:websiteReleases'),
+  /** 从任意窗口(设置浮窗)请主窗弹出 What's new;主窗经 onOpenWhatsNew 收到。 */
+  openWhatsNew: (): void => ipcRenderer.send('whatsNew:open'),
+  onOpenWhatsNew: (cb: () => void): (() => void) => {
+    const listener = (): void => cb()
+    ipcRenderer.on('whatsNew:open', listener)
+    return () => { ipcRenderer.removeListener('whatsNew:open', listener) }
+  },
   /** 应用内清空数据(卸载/重置);清完主进程会 relaunch。 */
   clearAppData: (opts: { desktop?: boolean; tangu?: boolean }): Promise<{ ok: boolean }> =>
     ipcRenderer.invoke('app:clearData', opts),
