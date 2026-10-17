@@ -591,8 +591,10 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .am-app .milkdown .ProseMirror blockquote.callout-fold.callout-collapsed[data-fold-animating] > *:not(:first-child) {
   display: block;
 }
+/* 只在点了展开的那一下(data-fold-animating)生效:不加限定的话,正文里任何一段被重新插入 DOM
+   (删除合并段落、回车、撤销、写盘回灌…)都会从高度 0 长回来,下方整页跟着上下抽(10-17 用户报)。 */
 @starting-style {
-  .am-app .milkdown .ProseMirror blockquote.callout-fold:not(.callout-collapsed) > *:not(:first-child) {
+  .am-app .milkdown .ProseMirror blockquote.callout-fold[data-fold-animating]:not(.callout-collapsed) > *:not(:first-child) {
     height: 0;
     opacity: 0;
     margin-block: 0;

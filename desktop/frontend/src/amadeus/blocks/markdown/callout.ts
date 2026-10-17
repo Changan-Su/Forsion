@@ -288,7 +288,8 @@ function holdFoldViewport(pane: HTMLElement, change: () => void): void {
 let foldAnimationId = 0
 function toggleFold(view: EditorView, c: { marker?: string; collapsed: boolean; markerPos: number; bqPos: number }) {
   const fold = view.state.doc.nodeAt(c.bqPos)
-  const isFold = !!fold && calloutOf(fold)?.type === 'fold'
+  // 有色标注也挂动画标记:箭头的入场旋转只在 data-fold-animating 期间生效(见 styles.css 的 @starting-style)。
+  const isFold = !!fold && !!calloutOf(fold)
   const animationId = isFold ? ++foldAnimationId : 0
   if (isFold) {
     view.dispatch(view.state.tr.setMeta(calloutKey, { foldStart: { at: c.bqPos, id: animationId } } satisfies CalloutMeta))
@@ -596,6 +597,8 @@ export function calloutPlugin() {
                   const empty = !inSrcMode && c.first.content.size === hideLen + (mark?.len ?? 0)
                   // 真实行内盒隔开字号 0 的语法与可见标题。PM 将行首选区放在它之后，
                   // 浏览器组合输入也不再向前吸附到隐藏 token。widget 不进入文档/落盘。
+                  // ⚠️ 本插件的 widget key 一律不带文档位置:带了的话,在块上方每敲一个字位置就变、按钮整颗重建,
+                  // 叠上 @starting-style 就是「打字时折叠块箭头一抽一抽」(10-17 用户报)。点击时的位置用 getPos 现取。
                   if (!inSrcMode) decos.push(Decoration.widget(pos + 2 + hideLen + (mark?.len ?? 0), () => {
                     const anchor = document.createElement('span')
                     anchor.className = 'callout-title-anchor'
@@ -603,7 +606,7 @@ export function calloutPlugin() {
                     anchor.setAttribute('aria-hidden', 'true')
                     anchor.textContent = '\u200b'
                     return anchor
-                  }, { side: -1, ignoreSelection: true, key: `ca${pos}` }))
+                  }, { side: -1, ignoreSelection: true, key: 'ca' }))
                   decos.push(Decoration.node(headStart, headEnd, {
                     class: 'callout-toggle-title',
                     ...(empty ? { 'data-placeholder': translate('mdcallout.title') } : {}),
@@ -620,7 +623,7 @@ export function calloutPlugin() {
                     el.setAttribute('aria-hidden', 'true')
                     el.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${icon}</svg>`
                     return el
-                  }, { side: -1, ignoreSelection: true, key: `ci${pos}:${kind ?? 'note'}` }))
+                  }, { side: -1, ignoreSelection: true, key: `ci:${kind ?? 'note'}` }))
                   // 没写标题 → 显示类型名作默认标题(本地化;自定义类型用它自己的名字)。只是装饰,不写进 md。
                   if (!inSrcMode && c.first.content.size === hideLen + (mark?.len ?? 0)) {
                     const label = kind ? translate(`mdcallout.type.${kind}`) : c.raw.charAt(0).toUpperCase() + c.raw.slice(1)
@@ -630,7 +633,7 @@ export function calloutPlugin() {
                       el.contentEditable = 'false'
                       el.textContent = label
                       return el
-                    }, { side: -1, ignoreSelection: true, key: `cd${pos}:${label}` }))
+                    }, { side: -1, ignoreSelection: true, key: `cd:${label}` }))
                   }
                 }
                 // 语法字符(令牌 + 标题前缀)只在显式进入源码态时露出。
@@ -645,15 +648,13 @@ export function calloutPlugin() {
                     )
                 }
                 // 折叠 chevron:改写 token 的 +/- 字符 → 状态进 md(Obsidian 同语义)。
-                // ']' 之后的位置 = pos+2 + '[!' + type + ']'。
-                const markerPos = pos + 2 + type.length + 3
                 // 折叠块按钮固定在行首；有色标注仍在标题文字之后。二者都必须挂在段落内。
                 // 没写 +/- 的有色标注不可折叠,不给箭头(拍板 #19:此前恒有箭头,一点就把 `-` 写进 md)。
                 const chevronAt = type === 'fold' ? pos + 2 : pos + 2 + c.first.content.size
                 if (type === 'fold' || marker) decos.push(
                   Decoration.widget(
                     chevronAt,
-                    (view) => {
+                    (view, getPos) => {
                       const b = document.createElement('button')
                       // ⚠️ 类名不能叫 callout-fold —— 那是 `[!fold]` 类型加在 blockquote 上的类,
                       // 同名会让「chevron 旋转 90°」的规则命中整个引用块。
@@ -668,39 +669,48 @@ export function calloutPlugin() {
                         e.preventDefault()
                         e.stopPropagation()
                       })
-                      const activate = (): void => {
-                        const c = calloutAt(view.state.doc.resolve(pos + 2))
-                        if (c?.bqPos === pos) toggleFold(view, c)
+                      // 按钮在标题段落内:现取位置,最近的标注祖先就是自己这一块(嵌套折叠各认各的)。
+                      const current = () => {
+                        const at = getPos()
+                        return at == null ? null : calloutAt(view.state.doc.resolve(at))
                       }
+                      const activate = (): void => {
+                        const c = current()
+                        if (c) toggleFold(view, c)
+                      }
+                      let focusAt: number | null = null
                       const focusCurrent = (): void => {
-                        const head = view.nodeDOM(pos + 1) as HTMLElement | null
+                        const at = focusAt ?? current()?.bqPos
+                        const head = at == null ? null : view.nodeDOM(at + 1) as HTMLElement | null
                         head?.querySelector<HTMLButtonElement>('.callout-chevron')?.focus()
                       }
                       b.addEventListener('keydown', (e) => {
                         if (e.key !== ' ' && e.key !== 'Enter') return
                         e.preventDefault()
                         e.stopPropagation()
-                        // PM 会重建装饰所在的标题段落；keyup 结束后把焦点交给新按钮。
+                        // PM 会重建装饰所在的标题段落；keyup 结束后把焦点交给新按钮(切换前记下块位置:旧按钮届时已脱离)。
+                        focusAt = current()?.bqPos ?? null
                         document.addEventListener('keyup', focusCurrent, { capture: true, once: true })
                         activate()
                       })
                       b.addEventListener('click', (e) => {
                         e.preventDefault()
                         e.stopPropagation()
+                        focusAt = current()?.bqPos ?? null
                         activate()
                         if ((e as MouseEvent).detail === 0) queueMicrotask(focusCurrent)
                       })
                       return b
                     },
                     // marker 是装饰身份的一部分，撤销/重做与源码编辑时也会重建带正确状态的按钮。
-                    // 键盘触发后的焦点由 keyup 交给新按钮。
-                    { side: type === 'fold' ? -1 : 1, ignoreSelection: true, stopEvent: () => true, key: `cf${pos}:${markerPos}:${marker ?? ''}` },
+                    // 键盘触发后的焦点由 keyup 交给新按钮。位置不进 key(见上面 'ca' 那条)。
+                    { side: type === 'fold' ? -1 : 1, ignoreSelection: true, stopEvent: () => true, key: `cf:${type === 'fold' ? 'f' : 'c'}:${marker ?? ''}` },
                   ),
                 )
                 if (type === 'fold') {
                   // 按钮绝对定位在右侧，但 DOM 装饰放在令牌前；空标题的尾部必须留给
                   // 定位点与 trailingBreak，否则 IME 会把行末的非编辑按钮当作插入边界。
-                  decos.push(Decoration.widget(pos + 2, (view) => {
+                  decos.push(Decoration.widget(pos + 2, (view, getPos) => {
                     const b = document.createElement('button')
                     b.type = 'button'
                     b.className = 'amx-src-btn callout-source'
@@ -712,13 +722,15 @@ export function calloutPlugin() {
                     b.onmousedown = (e) => e.preventDefault()
                     b.onclick = (e) => {
                       e.preventDefault()
-                      view.dispatch(view.state.tr.setMeta(calloutKey, { srcAt: pos })
-                        .setSelection(TextSelection.create(view.state.doc, pos + 2)))
+                      const at = getPos() // = 块起点 + 2
+                      if (at == null) return
+                      view.dispatch(view.state.tr.setMeta(calloutKey, { srcAt: at - 2 })
+                        .setSelection(TextSelection.create(view.state.doc, at)))
                       view.focus()
                     }
                     return b
-                  }, { side: -1, stopEvent: () => true, key: `cs${pos}` }))
-                  if (!collapsed && node.childCount === 1) decos.push(Decoration.widget(headEnd, (view) => {
+                  }, { side: -1, stopEvent: () => true, key: 'cs' }))
+                  if (!collapsed && node.childCount === 1) decos.push(Decoration.widget(headEnd, (view, getPos) => {
                     const b = document.createElement('button')
                     b.type = 'button'
                     b.className = 'callout-empty'
@@ -727,12 +739,14 @@ export function calloutPlugin() {
                     if (!view.editable) b.style.display = 'none'
                     b.onmousedown = (e) => e.preventDefault()
                     b.onclick = () => {
-                      const tr = view.state.tr.insert(headEnd, view.state.schema.nodes.paragraph.create())
-                      view.dispatch(tr.setSelection(TextSelection.create(tr.doc, headEnd + 1)))
+                      const at = getPos() // = 标题段落末尾
+                      if (at == null) return
+                      const tr = view.state.tr.insert(at, view.state.schema.nodes.paragraph.create())
+                      view.dispatch(tr.setSelection(TextSelection.create(tr.doc, at + 1)))
                       view.focus()
                     }
                     return b
-                  }, { side: -1, stopEvent: () => true, key: `ce${pos}:${headEnd}` }))
+                  }, { side: -1, stopEvent: () => true, key: 'ce' }))
                 }
               }
               return true // 嵌套折叠各自保留开关与状态。
