@@ -95,7 +95,7 @@ export const APP_SETTINGS: Readonly<Record<string, Section>> = {
     open: 'web-search',
     effect: 'Applies from the next search.',
     fields: {
-      provider: { t: 'enum', values: ['auto', 'bocha', 'tavily', 'zhipu', 'deepseek', 'duckduckgo'], def: 'auto', note: 'search service used by web_search; a keyed service needs its key to be set' },
+      provider: { t: 'enum', values: ['auto', 'bocha', 'tavily', 'zhipu', 'deepseek', 'duckduckgo'], def: 'auto', note: 'moves this search service to the front of the order the user set in Settings (auto = keep their order); a keyed service needs its key to be set' },
       zhipuEngine: { t: 'enum', values: ZHIPU_ENGINES, def: 'search_pro_quark', note: 'Zhipu search tier' },
     },
     secrets: { bochaApiKey: 'Bocha', tavilyApiKey: 'Tavily', zhipuApiKey: 'Zhipu', deepseekApiKey: 'DeepSeek' },

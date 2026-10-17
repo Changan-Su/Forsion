@@ -3,10 +3,12 @@
  *
  * 场景:未登录 Forsion 或想用自己 key 的用户。配置在 config.json 的 `webSearch` 段:
  *   { "provider": "auto"|"bocha"|"tavily"|"zhipu"|"deepseek"|"duckduckgo",
- *     "bochaApiKey": string, "tavilyApiKey": string, "zhipuApiKey": string, "deepseekApiKey": string }
+ *     "bochaApiKey": string, "tavilyApiKey": string, "zhipuApiKey": string, "deepseekApiKey": string,
+ *     "order": ["bocha", "deepseek", ...] }   // 设置页排的「使用中」顺序;缺省 = 老规则推出来
  *
  * 路由语义见 multiBrain:本地配置了 provider → 本地直搜;否则走云 brain;云不可用 → 本地
- * DuckDuckGo 免费兜底。运行时降级与 server 同款:选中 provider 失败 → 其余已配 key → DDG。
+ * DuckDuckGo 免费兜底。运行时降级与 server 同款:按 order 从上往下试,出错换下一个;
+ * 非中文查询把 Tavily / DuckDuckGo 提到最前(其余相对顺序不变)。
  *
  * provider 协议实现须与 server/microserver/brain-api/services/webSearchService.ts 保持一致(两份)。
  * ponytail: 不支持 outbound proxy —— 引擎零新依赖(Node 裸 fetch 无 ProxyAgent);大陆用户
@@ -15,6 +17,9 @@
 import { getRawSection } from '../../core/config.js';
 
 export type LocalSearchProvider = 'auto' | 'bocha' | 'tavily' | 'zhipu' | 'deepseek' | 'duckduckgo';
+export type ConcreteProvider = Exclude<LocalSearchProvider, 'auto'>;
+/** 老 auto 序(没排过顺序时照它推);DDG 免 Key、恒「已连接」。 */
+export const SEARCH_PROVIDERS: ConcreteProvider[] = ['bocha', 'tavily', 'zhipu', 'deepseek', 'duckduckgo'];
 
 /** 智谱引擎档位(与 server webSearchService 同表):std ¥0.01 基础(长尾专名易糊)/
  *  pro ¥0.03 自研多引擎 / sogou ¥0.05 搜狗 / quark ¥0.05 夸克(默认,真引擎索引)。 */
@@ -29,7 +34,11 @@ export interface LocalWebSearchConfig {
   zhipuApiKey: string | null;
   deepseekApiKey: string | null;
   zhipuEngine: ZhipuEngine;
+  /** 「使用中」的搜索源,按试的顺序;null = 没排过,照老规则。不在里面的已连接源 = 停用。 */
+  order: ConcreteProvider[] | null;
 }
+
+export type LastTest = { ok: boolean; latencyMs: number; resultCount?: number; error?: string; at: number };
 
 export type SearchHit = { title: string; url?: string; snippet?: string };
 export type SearchOk = { provider: string; text: string; results: SearchHit[] };
@@ -50,7 +59,18 @@ export function loadLocalWebSearchConfig(): LocalWebSearchConfig {
     zhipuApiKey: str(o.zhipuApiKey),
     deepseekApiKey: str(o.deepseekApiKey),
     zhipuEngine: ZHIPU_ENGINES.includes(o.zhipuEngine as ZhipuEngine) ? (o.zhipuEngine as ZhipuEngine) : DEFAULT_ZHIPU_ENGINE,
+    order: Array.isArray(o.order) ? normalizeOrder(o.order) : null,
   };
+}
+
+/** 只留认得的、去重。 */
+export function normalizeOrder(v: unknown[]): ConcreteProvider[] {
+  return [...new Set(v.map(String))].filter((p): p is ConcreteProvider => SEARCH_PROVIDERS.includes(p as ConcreteProvider));
+}
+
+export function isConnected(cfg: LocalWebSearchConfig, p: ConcreteProvider): boolean {
+  if (p === 'duckduckgo') return true;
+  return !!({ bocha: cfg.bochaApiKey, tavily: cfg.tavilyApiKey, zhipu: cfg.zhipuApiKey, deepseek: cfg.deepseekApiKey })[p];
 }
 
 /** 用户是否显式配置了本地搜索(任一 key,或明选了具体 provider)。auto 且无 key = 未配置。 */
@@ -67,16 +87,29 @@ function pickProvider(cfg: LocalWebSearchConfig): Exclude<LocalSearchProvider, '
   return 'duckduckgo';
 }
 
-/** 降级顺序:选中者打头 → 其余已配 key → DDG 垫底。纯函数,导出供测试。 */
-export function candidateOrder(cfg: LocalWebSearchConfig): Exclude<LocalSearchProvider, 'auto'>[] {
-  const primary = pickProvider(cfg);
-  const rest: Exclude<LocalSearchProvider, 'auto'>[] = [];
-  if (cfg.bochaApiKey) rest.push('bocha');
-  if (cfg.tavilyApiKey) rest.push('tavily');
-  if (cfg.zhipuApiKey) rest.push('zhipu');
-  if (cfg.deepseekApiKey) rest.push('deepseek');
-  rest.push('duckduckgo');
-  return [primary, ...rest.filter((p) => p !== primary)];
+/** 用户排的顺序(还没按语种调):排过 = order 里已连接的;没排过 = 老规则(选中者打头 → 其余已配 key → DDG 垫底)。
+ *  provider ≠ auto 的「钉住」只有 Tangu 改设置会写(设置页保存顺序时写回 auto),意思是把它提到最前。 */
+export function searchOrder(cfg: LocalWebSearchConfig): ConcreteProvider[] {
+  if (!cfg.order) {
+    const primary = pickProvider(cfg);
+    return [primary, ...SEARCH_PROVIDERS.filter((p) => p !== primary && isConnected(cfg, p))];
+  }
+  const base = cfg.order.filter((p) => isConnected(cfg, p));
+  return cfg.provider === 'auto' ? base : [cfg.provider, ...base.filter((p) => p !== cfg.provider)];
+}
+
+/** 查询含 CJK(汉字/假名/谚文)= 中文生态源(博查/智谱/DeepSeek)的主场;与 server 同一判据。 */
+export function hasCjk(q: string): boolean {
+  return /[\u2e80-\u9fff\u3040-\u30ff\uac00-\ud7af\uf900-\ufaff]/.test(q);
+}
+const GLOBAL_SOURCES: ConcreteProvider[] = ['tavily', 'duckduckgo'];
+
+/** 实际试的顺序:非中文查询把 Tavily / DDG 提到最前,其余相对顺序不变(中文源对英文查询常返回「成功的无关结果」,
+ *  事后降级触发不了,只能事前排;与 server candidateOrder 同一算法)。纯函数,导出供测试。 */
+export function candidateOrder(cfg: LocalWebSearchConfig, queryText?: string): ConcreteProvider[] {
+  const base = searchOrder(cfg);
+  if (!queryText || hasCjk(queryText)) return base;
+  return [...base.filter((p) => GLOBAL_SOURCES.includes(p)), ...base.filter((p) => !GLOBAL_SOURCES.includes(p))];
 }
 
 // ── provider 实现(与 server 同协议)──────────────────────────────────────────
@@ -264,7 +297,7 @@ async function runProvider(which: Exclude<LocalSearchProvider, 'auto'>, cfg: Loc
 export async function runLocalSearch(query: string, maxResults: number, cfgOverride?: Partial<LocalWebSearchConfig>): Promise<SearchOk> {
   const cfg: LocalWebSearchConfig = { ...loadLocalWebSearchConfig(), ...cfgOverride };
   const failures: string[] = [];
-  for (const which of candidateOrder(cfg)) {
+  for (const which of candidateOrder(cfg, query)) {
     try {
       const out = await runProvider(which, cfg, query, maxResults);
       if (failures.length) {
@@ -278,7 +311,10 @@ export async function runLocalSearch(query: string, maxResults: number, cfgOverr
   throw new Error(`All local search providers failed — ${failures.join(' | ')}`);
 }
 
-/** 设置页「连通性测试」:只测指定 provider,不降级、不落盘。apiKey 传 '__keep__' 用已存 key。 */
+// ponytail: 只记在内存里,引擎重启就没了;要跨重启再落 config.json。
+const lastTests: Partial<Record<ConcreteProvider, LastTest>> = {};
+
+/** 设置页「测试」:只测指定 provider,不降级、不落盘(结果记进 lastTests)。apiKey 传 '__keep__' 用已存 key。 */
 export async function testLocalSearch(input: { provider: LocalSearchProvider; apiKey?: string; zhipuEngine?: string }): Promise<{
   ok: boolean; provider: string; latencyMs: number; resultCount?: number; sampleTitle?: string; error?: string;
 }> {
@@ -293,19 +329,23 @@ export async function testLocalSearch(input: { provider: LocalSearchProvider; ap
     ...(input.provider === 'deepseek' && key !== undefined ? { deepseekApiKey: key } : {}),
     ...(ZHIPU_ENGINES.includes(input.zhipuEngine as ZhipuEngine) ? { zhipuEngine: input.zhipuEngine as ZhipuEngine } : {}),
   };
-  const which = input.provider === 'auto' ? pickProvider(cfg) : input.provider;
+  const which = input.provider === 'auto' ? searchOrder({ ...cfg, provider: 'auto' })[0] ?? 'duckduckgo' : input.provider;
   const start = Date.now();
   try {
     const out = await runProvider(which, cfg, 'forsion connectivity test', 3);
+    lastTests[which] = { ok: true, latencyMs: Date.now() - start, resultCount: out.results.length, at: Date.now() };
     return { ok: true, provider: out.provider, latencyMs: Date.now() - start, resultCount: out.results.length, sampleTitle: out.results[0]?.title };
   } catch (e) {
-    return { ok: false, provider: which, latencyMs: Date.now() - start, error: scrubKeys(e instanceof Error ? e.message : String(e), cfg) };
+    const error = scrubKeys(e instanceof Error ? e.message : String(e), cfg);
+    lastTests[which] = { ok: false, latencyMs: Date.now() - start, error, at: Date.now() };
+    return { ok: false, provider: which, latencyMs: Date.now() - start, error };
   }
 }
 
 /** 设置页 GET 用:key 只回 hasKey 布尔,永不回明文。 */
 export function redactedLocalConfig(): {
-  provider: LocalSearchProvider; bochaHasKey: boolean; tavilyHasKey: boolean; zhipuHasKey: boolean; deepseekHasKey: boolean; zhipuEngine: ZhipuEngine; effectiveProvider: string; configured: boolean;
+  provider: LocalSearchProvider; bochaHasKey: boolean; tavilyHasKey: boolean; zhipuHasKey: boolean; deepseekHasKey: boolean; zhipuEngine: ZhipuEngine;
+  effectiveProvider: string; configured: boolean; order: ConcreteProvider[]; lastTests: Partial<Record<ConcreteProvider, LastTest>>;
 } {
   const cfg = loadLocalWebSearchConfig();
   return {
@@ -315,7 +355,9 @@ export function redactedLocalConfig(): {
     zhipuHasKey: !!cfg.zhipuApiKey,
     deepseekHasKey: !!cfg.deepseekApiKey,
     zhipuEngine: cfg.zhipuEngine,
-    effectiveProvider: pickProvider(cfg),
+    effectiveProvider: searchOrder(cfg)[0] ?? 'none',
     configured: hasLocalSearchProvider(cfg),
+    order: searchOrder(cfg).filter((p) => isConnected(cfg, p)), // 设置页「使用中」;钉住了却没 Key 的不列
+    lastTests: { ...lastTests },
   };
 }
