@@ -14,7 +14,7 @@ import { formatDate, formatDateTime, formatRelative } from '../format/time'
 import '../views/agentProfile.css'
 import { homeTarget, connectionKey } from '../services/engine/targets'
 import { HARNESS_CHANGED_EVENT } from '../services/harnessUpdates'
-import { freshJump, revealRecords, type RecordJump } from '../stores/detailsSubject'
+import { freshJump, revealRecords, type RecordJump } from '../services/recordJump'
 
 const MAX_ENTRIES = 30 // 与引擎 harnessStore.MAX_ENTRIES 同值(写入时封顶)
 const HISTORY_PREVIEW = 8

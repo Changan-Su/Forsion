@@ -28,7 +28,7 @@ import { AgentAvatar } from '../components/AgentAvatar'
 import { ProjectIcon } from '../components/ProjectIcon'
 import { IconPicker } from '@amadeus/chrome/pageChrome'
 import { thinkingLabel } from '../components/thinkingLabel'
-import { freshJump, revealRecords, type RecordJump } from '../stores/detailsSubject'
+import { freshJump, revealRecords, type RecordJump } from '../services/recordJump'
 import { homeTarget } from '../services/engine/targets'
 
 type Tab = 'agents' | 'settings' | 'git' | 'human'
