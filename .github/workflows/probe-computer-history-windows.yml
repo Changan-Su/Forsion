@@ -2,6 +2,10 @@ name: probe-computer-history-windows
 
 on:
   workflow_dispatch:
+    inputs:
+      stale:
+        required: false
+        default: ""
   pull_request:
     paths:
       - '.github/workflows/probe-computer-history-windows.yml'
@@ -32,6 +36,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force outputs/computer-history-windows | Out-Null
           $env:CHWIN_PROBE = "$PWD\outputs\computer-history-windows\chwin-probe.log"
+          if ("${{ inputs.stale }}") { $env:CHWIN_STALE = "${{ inputs.stale }}" }
           node node_modules/vitest/vitest.mjs run electron/computerHistoryWin.test.ts
           $code = $LASTEXITCODE
           Select-String -Path $env:CHWIN_PROBE -Pattern '^(SUMMARY|SURVIVED|skip|rm-err)' | Select-Object -First 80 | ForEach-Object { $_.Line }

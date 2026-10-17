@@ -130,7 +130,7 @@ describe.runIf(process.env.CHWIN_PROBE)('chwin cleanup probe', () => {
       mkdirSync(path.dirname(src))
       writeFileSync(src, 'v1')
       const bin = path.join(dir, 'bin')
-      const resolve = createWindowsRecorderResolver({ binDir: bin, source: async () => src, username: () => 'alice', probe: async () => 13, staleMs: 0 })
+      const resolve = createWindowsRecorderResolver({ binDir: bin, source: async () => src, username: () => 'alice', probe: async () => 13, staleMs: Number(process.env.CHWIN_STALE ?? 0) })
       const first = await resolve()
       await resolve()
       writeFileSync(src, 'v2-longer')
@@ -151,7 +151,7 @@ describe.runIf(process.env.CHWIN_PROBE)('chwin cleanup probe', () => {
       const bin = path.join(tmp(), 'bin')
       mkdirSync(bin)
       for (const f of ['windows-bridge-aaaaaaaaaaaa.exe', '.windows-bridge-1-x.tmp']) writeFileSync(path.join(bin, f), 'old')
-      await cleanupRecorderCopies(bin, path.join(bin, 'windows-bridge-bbbbbbbbbbbb.exe'), 0)
+      await cleanupRecorderCopies(bin, path.join(bin, 'windows-bridge-bbbbbbbbbbbb.exe'), Number(process.env.CHWIN_STALE ?? 0))
       const left = readdirSync(bin)
       if (left.length) { survived++; appendFileSync(P, `SURVIVED fixture iter ${i} left=${left.join(',')}\n`) }
     }
