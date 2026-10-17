@@ -4,7 +4,8 @@ import { Check, Download, Loader2, Puzzle } from 'lucide-react'
 import type { MarketCard, MarketInstallProgress, ToolEvent } from '../types'
 import { marketplaceCompatibility, marketplaceItemsOf } from '../../../shared/marketplace'
 import { installMarket, listInstalled, onInstallProgress, installedMarketItem, type InstalledItem } from '../services/marketService'
-import { afterMarketInstall, canRestartBackend, restartBackend } from '../marketPostInstall'
+// 安装后处理按需加载:它经 userSpaces 拉进 spaces.tsx(模块加载期读 window),静态导入会让所有引到聊天消息的 node 测试整文件挂掉。
+const postInstall = () => import('../marketPostInstall')
 import { useApp } from '../stores/appStore'
 import { registerMessages, useI18n } from '../i18n'
 import { MarketRequirements, marketPlatform, useMarketVersion } from './MarketRequirements'
@@ -35,6 +36,7 @@ export function MarketPluginCards({ event }: { event: ToolEvent }) {
   const [progress, setProgress] = useState<MarketInstallProgress | null>(null)
   const [error, setError] = useState('')
   const [needsRestart, setNeedsRestart] = useState(false)
+  const [canReboot, setCanReboot] = useState(false)
   const refresh = () => listInstalled().then(setInstalled).catch(() => {})
   useEffect(() => { void refresh(); const listener = () => { void refresh() }; window.addEventListener('focus', listener); window.addEventListener('forsion:extensions-changed', listener); const off = onInstallProgress(p => setProgress(p)); return () => { off(); window.removeEventListener('focus', listener); window.removeEventListener('forsion:extensions-changed', listener) } }, [])
   if (event.isError) return null
@@ -46,11 +48,12 @@ export function MarketPluginCards({ event }: { event: ToolEvent }) {
     try {
       const wasInstalled = !!installedMarketItem(item, installed)
       const result = await installMarket(item.id)
-      const { restart } = await afterMarketInstall(result.type, result, wasInstalled, text => setError(text))
-      setNeedsRestart(restart); await refresh()
+      const post = await postInstall()
+      const { restart } = await post.afterMarketInstall(result.type, result, wasInstalled, text => setError(text))
+      setCanReboot(post.canRestartBackend()); setNeedsRestart(restart); await refresh()
     } catch (e: any) { setError(e.message) } finally { setBusy(null); setProgress(null) }
   }
-  const reboot = async () => { if (!(await restartBackend())) setError(t('market.cardRestartFailed')); else setNeedsRestart(false) }
+  const reboot = async () => { if (!(await (await postInstall()).restartBackend())) setError(t('market.cardRestartFailed')); else setNeedsRestart(false) }
   return <div className="mk-chat-results" data-marketplace-cards={event.id}>
     {!items.length && <p className="mk-muted">{t('market.cardNoResults')}</p>}
     {items.map(raw => {
@@ -73,6 +76,6 @@ export function MarketPluginCards({ event }: { event: ToolEvent }) {
       </article>
     })}
     {error && <p className="mk-chat-error" role="alert">{error}</p>}
-    {needsRestart && <div role="status">{t('market.cardRestart')}{canRestartBackend() && <button className="btn sm" onClick={() => void reboot()}>{t('market.restartBackend')}</button>}</div>}
+    {needsRestart && <div role="status">{t('market.cardRestart')}{canReboot && <button className="btn sm" onClick={() => void reboot()}>{t('market.restartBackend')}</button>}</div>}
   </div>
 }
