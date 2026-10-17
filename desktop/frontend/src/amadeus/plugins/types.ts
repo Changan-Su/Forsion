@@ -1305,6 +1305,23 @@ export interface PluginContext {
      *  A view that never calls this gets no bar. Feature-detect on older hosts (`ctx.ui?.mountSelectionBar`) and
      *  keep drawing your own menu there. The host disposes it on disable / reload. */
     mountSelectionBar?(root: HTMLElement, opts?: PluginSelectionBarOptions): PluginSelectionBarHandle
+    /** The host's settings parts as one page description (2026-10-17+): groups of rows (switch, value, buttons,
+     *  input, segmented, select, pick-to-run choice, stepper, code + copy), usage meters, empty / loading / error
+     *  states, and `custom` blocks for anything else. You give data and callbacks; the host draws them with its own
+     *  panels and lays them out per device (compact controls stay at the right on phones, wide ones wrap; a choice
+     *  becomes one button + a half sheet). All text comes from you. `update(schema)` replaces the whole description;
+     *  rows are keyed by `id`. Feature-detect on older hosts (`ctx.ui?.mountSettingsPage`) and keep your own page there.
+     *  The host disposes it on disable / reload. See `shared/settingsPage.ts`. */
+    mountSettingsPage?(
+      el: HTMLElement,
+      schema: import('../../../../shared/settingsPage').PluginSettingsPageSchema,
+    ): import('../../../../shared/settingsPage').PluginSettingsPageHandle
+    /** One settings part on its own (2026-10-17+): the same item shapes as in `mountSettingsPage`, placed wherever you
+     *  want — e.g. inside a `custom` block. Feature-detect: `ctx.ui?.mountSettingsItem`. */
+    mountSettingsItem?(
+      el: HTMLElement,
+      item: import('../../../../shared/settingsPage').PluginSettingsItem,
+    ): import('../../../../shared/settingsPage').PluginSettingsItemHandle
     /** A transparent layer of the host whiteboard over your own content (2026-10-10+): the same engine,
      *  pens and stroke feel as a `.excalidraw.md` board, without its chrome. See PluginBoardOptions.
      *  Feature-detect on older hosts: `ctx.ui?.mountBoard`. */

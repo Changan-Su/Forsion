@@ -3129,6 +3129,31 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .settings-switch:disabled { cursor: not-allowed; }
 .is-disabled { opacity: .48; }
 
+/* ── 设置零件(components/SettingsPage → 宿主设置页与插件的 ctx.ui.mountSettingsPage,2026-10-17):面板、行、开关、按钮之外
+ *    新加的几样。颜色只取宿主变量(插件不传颜色),字号只用六档角色。窄屏排法见 ≤820 断点里的 [data-fit]。 */
+.settings-parts-list > * + * { border-top: var(--border-width) solid var(--border); }
+.settings-parts-inline { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.settings-parts-inline > input { width: 200px; min-width: 0; height: 30px; padding-block: 0; font-size: var(--ui-font-body, 13px); }
+.settings-parts-inline > .btn,
+.settings-inline-actions > .btn { white-space: nowrap; }
+.settings-value { color: var(--text); font-size: var(--ui-font-heading, 14px); font-weight: 650; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.settings-stepper { display: inline-flex; align-items: stretch; height: 30px; border: var(--border-width) solid var(--overlay-strong); border-radius: var(--radius-sm); overflow: hidden; }
+.settings-stepper > button { width: 30px; display: inline-flex; align-items: center; justify-content: center; color: var(--text-muted); }
+.settings-stepper > button:hover:not(:disabled) { color: var(--accent-ink); }
+.settings-stepper > button:disabled { opacity: .4; cursor: not-allowed; }
+.settings-stepper > output { min-width: 32px; display: inline-flex; align-items: center; justify-content: center; color: var(--text); font-size: var(--ui-font-body, 13px); font-variant-numeric: tabular-nums; }
+.settings-meters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 28px; padding: 14px 15px 15px; }
+.settings-meter-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.settings-meter-head > span { color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
+.settings-meter-head > strong { color: var(--text); font-size: var(--ui-font-heading, 14px); font-weight: 650; font-variant-numeric: tabular-nums; }
+.settings-meter-track { height: 6px; margin: 8px 0 6px; border-radius: var(--radius-pill, 999px); background: var(--overlay-medium); overflow: hidden; }
+.settings-meter-fill { height: 100%; border-radius: inherit; background: var(--action-fill); }
+.settings-meter > small { display: block; color: var(--text-faint); font-size: var(--ui-font-caption, 11px); }
+.settings-parts-custom { min-width: 0; padding: 12px 15px; }
+.settings-parts-list > .settings-state { min-height: 160px; }
+/* 「选了就执行」在手机上的网页半屏(没有原生 / 浏览器半屏宿主时):第二行说明靠右 */
+.settings-parts-sheet .mb-sheet-row > small { margin-left: auto; color: var(--text-faint); font-size: var(--ui-font-meta, 12px); }
+
 .settings-panel-toolbar {
   min-height: 48px;
   display: flex;
@@ -3259,6 +3284,26 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   .settings-row-wide-control { width: 100%; flex-basis: auto; justify-content: flex-start; min-width: 0; }
   .settings-row-control > select,
   .settings-row-control > input { width: 100%; max-width: none; }
+  /* 设置零件的行自己声明排法(SettingsRow 的 fit;没声明的旧行照上面一律换行):
+     inline = 开关、数值、单个按钮留在右边,放不下才换到下一行;wrap = 输入框、下拉、步进器、两个以上的按钮换到下一行并占满。 */
+  .settings-control-row[data-fit='inline'] { flex-direction: row; flex-wrap: wrap; align-items: center; row-gap: 8px; }
+  .settings-control-row[data-fit='inline'] > .settings-control-copy { flex: 1 1 0; min-width: 120px; }
+  .settings-control-row[data-fit='inline'] > .settings-row-control { width: auto; flex: 0 0 auto; justify-content: flex-end; }
+  .settings-control-row[data-fit='wrap'] .settings-parts-inline,
+  .settings-control-row[data-fit='wrap'] .settings-inline-actions { width: 100%; }
+  .settings-control-row[data-fit='wrap'] .settings-parts-inline > input { flex: 1; width: auto; }
+  .settings-control-row[data-fit='wrap'] .settings-inline-actions { justify-content: stretch; }
+  .settings-control-row[data-fit='wrap'] .settings-inline-actions > .btn { flex: 1 1 0; }
+  .settings-meters { grid-template-columns: 1fr; gap: 16px; }
+}
+/* 触屏上设置零件的按钮、输入框、步进器加高到 36(手指好点)。只认零件画的行与面板,没换过来的旧页面不动。 */
+@media (pointer: coarse) {
+  .settings-control-row[data-fit] .btn,
+  .settings-control-row[data-fit] input,
+  .settings-control-row[data-fit] select,
+  .settings-panel--parts .settings-panel-actions .btn { min-height: 36px; }
+  .settings-control-row[data-fit] .settings-stepper { height: 36px; }
+  .settings-control-row[data-fit] .settings-stepper > button { width: 38px; }
 }
 
 /* 移动预览手机框内的通用二级界面兜底。SettingsModal 会在文件末尾用

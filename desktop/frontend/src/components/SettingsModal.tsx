@@ -73,6 +73,7 @@ import { isPlacedSettingsView, pluginDisplayName, pluginsWithSettingsPanel } fro
 import { SpacesTab } from './SpacesTab'
 import { PanelNotice } from './PanelNotice'
 import { NotificationsTab, StatusBarTab } from './NotificationsTab'
+import { isPhoneSettings } from './SettingsPage'
 import { HooksTab } from './HooksTab'
 import { PluginSettingsPage } from './PluginSettingsPage'
 import { AgentClisTab } from './AgentClisTab'
@@ -378,9 +379,7 @@ export const SettingsModal: React.FC<{
   const showWaitDetails = useChatWaitDetailsEnabled()
   // 真机、开发者移动预览、手机浏览器统一走两层设置 IA。不能只靠窄屏 media query:
   // 桌面里的手机框宽 390px,但物理 viewport 仍是宽屏,而真机又不经过 Root 的预览框。
-  const mobileSettings = !!window.tangu?.mobile || UI_MODE === 'mobile' || (() => {
-    try { return window.matchMedia('(pointer: coarse) and (max-width: 820px)').matches } catch { return false }
-  })()
+  const mobileSettings = isPhoneSettings()
   // 深链解析(一级页 + 子页)只在 resolveSettingsTarget 一处:连接/Forsion → 常规(general)的对应子页;
   // Agent CLI → agents/ag-clis;微信 → 通道;`${tab}/${sub}` 直达二级页。旧 normalizeTab 丢 sub = 登录入口全落错页(U-02)。
   const [initialTarget] = useState(() => resolveSettingsTarget(p.initialTab))

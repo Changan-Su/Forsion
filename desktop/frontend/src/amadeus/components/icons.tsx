@@ -3,7 +3,7 @@
  *  刻意不装 npm 依赖:渲染层三端共享(desktop/web/mobile),本地文件零外部解析。
  *  增补图标照原样从 @blocksuite/icons 摘录,保持 currentColor 不带死色。 */
 import type { ComponentType, ReactElement, ReactNode, SVGProps } from 'react'
-import { Archive, ArchiveRestore, Bot, Cloud, Copy, Highlighter, Mail, MailOpen, RefreshCw, StickyNote, Strikethrough, TextQuote, Trash2, Underline, Workflow, type LucideIcon, type LucideProps } from 'lucide-react'
+import { Activity, Archive, ArchiveRestore, Bell, Bot, Clock, Cloud, Coins, Copy, Gauge, Gift, Highlighter, ListChecks, Mail, MailOpen, MessageSquare, Package, Plug, RefreshCw, Shield, StickyNote, Strikethrough, TextQuote, Trash2, Underline, User, Workflow, type LucideIcon, type LucideProps } from 'lucide-react'
 
 const I = (children: ReactElement) => (props: SVGProps<SVGSVGElement>) => (
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="1em" height="1em" fill="none" aria-hidden {...props}>
@@ -152,6 +152,19 @@ export const PLUGIN_ICONS: Record<string, ComponentType<SVGProps<SVGSVGElement>>
   annotate: L(StickyNote),
   copy: L(Copy),
   cite: L(TextQuote),
+  // 设置页的分组面板(ctx.ui.mountSettingsPage 的 group.icon,2026-10-17):账号、额度、积分、通知这类设置页要的那几枚
+  bell: L(Bell),
+  gauge: L(Gauge),
+  coins: L(Coins),
+  clock: L(Clock),
+  gift: L(Gift),
+  user: L(User),
+  shield: L(Shield),
+  package: L(Package),
+  activity: L(Activity),
+  message: L(MessageSquare),
+  plug: L(Plug),
+  'list-checks': L(ListChecks),
 }
 
 /** 词表键的形状。**未命中词表但长成这样**的字符串 = 插件在叫一个本宿主还不认识的名字。 */
