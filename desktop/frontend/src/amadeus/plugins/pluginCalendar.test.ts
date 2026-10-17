@@ -5,7 +5,7 @@
  *  负对照(10-17 实跑红):释放函数不判 released → 计时器那条红;subscribe 不去重 → 「loading 位」红;
  *  legendPath 不查叠加源 → 改色那条红;setMember 不查列类型 → 成员那条红;vault 键用 `side:root` → 写口五条全红;
  *  回调前不看 scope.alive() → 「停用后」红;订阅不做一次性迁移 / removeMember 不看迁移 → 「迁移」那条红;
- *  签名不含语言 → 「切语言」红。 */
+ *  签名不含语言 → 「切语言」红;ics.add 不查协议 / 不去重、importText 不查大小、refresh 恒 true、add 不看 alive → ics 三条各红。 */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type { DbFile } from '@amadeus-shared/db/schema'
 import type { AgentScheduleInfo } from '../../types'
@@ -251,5 +251,56 @@ describe('ctx.calendar 写口的信任边界', () => {
     expect(db.setCell(AGENT, 'a1', 'n', '改了')).toBe(false)
     expect(db.setCell(ICS, 'u1', 'name', '改了')).toBe(false)
     expect(db.deleteRow(AGENT, 'a1')).toBeNull()
+  })
+})
+
+describe('ctx.calendar.ics:订阅管理的信任边界', () => {
+  const ICS_TEXT = 'BEGIN:VCALENDAR\nVERSION:2.0\nBEGIN:VEVENT\nUID:x1\nSUMMARY:评审\nDTSTART;VALUE=DATE:20261020\nEND:VEVENT\nEND:VCALENDAR\n'
+  afterEach(() => { delete (window as { tangu?: unknown }).tangu })
+
+  it('add:只收 http(s) / webcal;同一个地址不订两份;进快照的 icsSubscriptions', async () => {
+    const api = createCalendarApi(fakeScope())
+    for (const bad of ['ftp://x/a.ics', 'javascript:alert(1)', '', '   ', 42, 'https://' + 'a'.repeat(2100)]) expect(api.ics.add(bad as string), String(bad).slice(0, 20)).toBeNull()
+    const id = api.ics.add(' https://cal.example.com/a.ics ')!
+    expect(id).toBeTruthy()
+    expect(api.ics.add('https://cal.example.com/a.ics')).toBe(id)
+    expect(api.ics.add('webcal://cal.example.com/b.ics')).toBeTruthy()
+    const seen: Snap[] = []
+    api.subscribe((x) => seen.push(x))
+    await flush()
+    expect(seen.at(-1)!.icsSubscriptions.find((x) => x.id === id)).toMatchObject({ path: `ics://${id}`, url: 'https://cal.example.com/a.ics' })
+  })
+
+  it('importText:得像日历、≤ 8MB;rename / remove 只认现有的 id;refresh 成败如实返回', async () => {
+    const api = createCalendarApi(fakeScope())
+    expect(api.ics.importText('x', '<html>login</html>')).toBeNull()
+    expect(api.ics.importText('x', ICS_TEXT + 'X'.repeat(8 * 1024 * 1024))).toBeNull()
+    const imported = api.ics.importText('导入的', ICS_TEXT)!
+    expect(imported).toBeTruthy()
+    await expect(api.ics.refresh(imported)).resolves.toBe(false) // 导入的快照没地址
+    expect(api.ics.rename('没有', '名字')).toBe(false)
+    expect(api.ics.rename(imported, '   ')).toBe(false)
+    expect(api.ics.rename(imported, '改了')).toBe(true)
+    expect(useIcsCalendars.getState().subs.find((x) => x.id === imported)!.name).toBe('改了')
+    ;(window as { tangu?: unknown }).tangu = { fetchIcs: vi.fn(async (u: string) => (u.includes('ok') ? { ok: true, text: ICS_TEXT } : { ok: false, error: 'HTTP 404' })) }
+    const good = api.ics.add('https://cal.example.com/ok.ics')!
+    const bad = api.ics.add('https://cal.example.com/gone.ics')!
+    await expect(api.ics.refresh(good)).resolves.toBe(true)
+    await expect(api.ics.refresh(bad)).resolves.toBe(false)
+    expect(api.ics.remove('没有')).toBe(false)
+    expect(api.ics.remove(bad)).toBe(true)
+    expect(useIcsCalendars.getState().subs.some((x) => x.id === bad)).toBe(false)
+  })
+
+  it('插件停用后:增删改刷一律不做', async () => {
+    const s = fakeScope()
+    const api = createCalendarApi(s)
+    s.dispose()
+    expect(api.ics.add('https://cal.example.com/a.ics')).toBeNull()
+    expect(api.ics.importText('x', ICS_TEXT)).toBeNull()
+    expect(api.ics.rename('s1', 'n')).toBe(false)
+    expect(api.ics.remove('s1')).toBe(false)
+    await expect(api.ics.refresh('s1')).resolves.toBe(false)
+    expect(useIcsCalendars.getState().subs.map((x) => x.id)).toEqual(['s1'])
   })
 })

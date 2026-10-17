@@ -9,6 +9,7 @@
  * 负对照:--nc=nocap(声明的那个探针也不写 capabilities)—— 期望 T1b 起整段变红。
  * 10-17 加 T5:ctx.calendar 的 'calendar' 档(manifest 白名单在主进程过滤,这一环单测摸不到)—— 注入闸、快照里的成员、
  * setColor 写进宿主日历设置(同一个 localStorage 键、按 vaultRoot)并推回快照。叠加源的数据形状由 pluginCalendar.test.ts 管。
+ * 10-17 加 T6:ctx.ui.mountRecord 在真窗口里画出来、勾选落盘、dispose 归还容器;ctx.notify 的动作按钮真出现、点了调 run。
  */
 const fs = require('fs')
 const os = require('os')
@@ -50,6 +51,7 @@ const PROBE_MAIN = [
   'if (ctx.databases) ctx.databases.subscribe(function (s) { me.dbLog.push({ ready: s.ready, dbs: s.databases }) })',
   'if (ctx.noteTasks) ctx.noteTasks.subscribe(function (s) { me.taskLog.push({ ready: s.ready, tasks: s.tasks }) })',
   'me.hasEnsure = !!(ctx.calendar && ctx.calendar.ensureMember); me.hasCal = !!(ctx.calendar && ctx.calendar.subscribe); me.cal = ctx.calendar || null; me.calLog = []',
+  'me.hasRecord = !!(ctx.ui && ctx.ui.mountRecord); me.ui = ctx.ui || null; me.notify = ctx.notify || null; me.undone = 0',
   'if (me.hasCal) ctx.calendar.subscribe(function (s) { me.calLog.push(s) })',
 ].join('\n')
 
@@ -260,6 +262,40 @@ async function main() {
       check('T5c setColor:坏颜色 false;好颜色写进宿主日历设置(按库根存)并推回快照', ret.bad === false && ret.ok === true && stored === '#123456' && pushed, JSON.stringify({ ret, stored, pushed }))
     } else check('T5c setColor 写进宿主日历设置', false, '没有 ctx.calendar.subscribe')
 
+    // ── T6 ctx.ui.mountRecord(宿主行编辑字段挂进插件容器)+ ctx.notify 的动作按钮 ─────────────
+    const recOf = (id) => win.evaluate((k) => { const p = (window.__pdprobe || {})[k]; return p ? p.hasRecord : null }, id)
+    check('T6a mountRecord 只给声明了 databases 的插件', (await recOf(DECLARED)) === true && (await recOf(SILENT)) === false && (await recOf(CAL)) === false)
+    if (table && await recOf(DECLARED)) {
+      await win.evaluate(({ p, k }) => {
+        const box = document.createElement('div')
+        box.id = 'pd-record'
+        box.style.cssText = 'position:fixed;right:24px;top:80px;width:360px;z-index:99999;background:var(--bg-panel,#fff);border:1px solid var(--border);border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.12)'
+        document.body.append(box)
+        window.__pdrec = window.__pdprobe[k].ui.mountRecord(box, { path: p, rowId: 'r1', dateCol: 'date' })
+      }, { p: table.path, k: DECLARED })
+      const shown = await waitFor(() => win.evaluate(() => {
+        const b = document.getElementById('pd-record')
+        const t = b && b.querySelector('.amx-cal-card-title')
+        return t && b.querySelector('.amx-cal-card-timebtn') ? { title: t.value, keys: [...b.querySelectorAll('.amx-cal-card-keyt')].map((n) => n.textContent) } : null
+      }), 8000)
+      check('T6b 画出标题、时间摘要和其余属性(日期列不重复)', shown && shown.title === '周会' && JSON.stringify(shown.keys) === JSON.stringify(['完成']), JSON.stringify(shown))
+      await win.locator('#pd-record input[aria-label="完成"]').click().catch(() => {})
+      const ticked = await waitFor(() => { const r = rowOf(vault, '日程.db', 'r1'); return r && r.cells.done === true && r })
+      check('T6c 在挂进来的字段里勾选 → 落盘到那张表', ticked, JSON.stringify(rowOf(vault, '日程.db', 'r1')))
+      await win.screenshot({ path: SHOT('plugin-record-mount') }).catch(() => {})
+      await win.evaluate(() => { window.__pdrec && window.__pdrec.dispose() })
+      const freed = await win.evaluate(() => document.getElementById('pd-record').childNodes.length)
+      check('T6d dispose 后容器还给插件(空了)', freed === 0, 'children=' + freed)
+      await win.evaluate(() => document.getElementById('pd-record').remove())
+    } else check('T6b-d mountRecord 画面', false, '没有表或没有 mountRecord')
+    await win.evaluate((k) => { const me = window.__pdprobe[k]; me.notify('已删除「周会」', { action: { label: '撤销', run: () => { me.undone++ } }, key: 'undo' }) }, DECLARED)
+    const undoBtn = win.getByRole('button', { name: '撤销', exact: true }).first()
+    const hasBtn = await undoBtn.waitFor({ timeout: 5000 }).then(() => true).catch(() => false)
+    await win.screenshot({ path: SHOT('plugin-notify-action') }).catch(() => {})
+    if (hasBtn) await undoBtn.click().catch(() => {})
+    const undone = await waitFor(() => win.evaluate((k) => window.__pdprobe[k].undone, DECLARED), 3000)
+    check('T6e notify 的动作按钮出现在通知卡上,点了调插件的 run', hasBtn && undone === 1, JSON.stringify({ hasBtn, undone }))
+
     // ── T4 插件详情页如实列出声明的能力(走真 UI)────────────────────────
     const sp = await openSettings(app, win)
     const d1 = sp && await openDetail(sp, DECLARED)
@@ -289,7 +325,7 @@ async function main() {
 
   const bad = results.filter((r) => !r.ok).length
   console.log(`\n${results.length - bad} passed / ${bad} failed  (共 ${results.length})`)
-  console.log(`截图:${SHOT('plugin-data-detail')}、${SHOT('plugin-data-detail-silent')}`)
+  console.log(`截图:${SHOT('plugin-data-detail')}、${SHOT('plugin-data-detail-silent')}、${SHOT('plugin-record-mount')}、${SHOT('plugin-notify-action')}`)
   process.exit(bad ? 1 : 0)
 }
 

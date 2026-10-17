@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.45.0
+  version: 1.46.0
   author: Forsion
   category: Forsion
 ---
@@ -291,6 +291,7 @@ ctx.registerView({ id: 'home', title: 'Muse', mount(el) {
 | `ctx.ui.mountMarkdownEditor` | 视图内原生 Amadeus Markdown 编辑器 | 正文归调用方(API 草稿等),**不碰笔记库**;保存前 `getValue()`;`modes: false` 不画「编辑 / 源码 / 预览」那一排;老宿主没有 → 可选链 |
 | `ctx.ui.mountFloatingToc` | 视图内原生悬浮目录 | 插件保有正文 DOM,宿主负责扫描 / 滚动高亮 / 跳转 / 主题;老宿主没有 → 可选链 |
 | `ctx.ui.mountSelectionBar` | 自己的视图里选中文字后浮出宿主的划线条 | 宿主给「问 Tangu / 翻译 / ⋯」,你声明自己的工具(图标钮 / 颜色点);不接就什么都不出;老宿主没有 → 可选链,保留自己的菜单 |
+| `ctx.ui.mountRecord` | 自己的卡片里挂宿主的「一行记录」编辑字段(标题 / 时间 / 属性,和内置日历的事件浮卡同一份) | 2026-10-17 起;⚠️**声明 `"databases"` 才有**;写口同 `ctx.databases.setCell`,外框 / 关闭 / 打开 / 删除归你;见下「日历 / 待办类插件的其余入口」 |
 | `ctx.ui.mountBoard` / `ctx.ui.boardToSvg` | 盖在自己内容上的透明白板层(手写 / 圈画) | 和 `.excalidraw.md` 白板同一个引擎、同样的七支笔;**视口归调用方**(自己推 `viewport`、自己接滚轮);元素原样存取;不在手写时用 `boardToSvg` 出静态图;老宿主没有 → 不出手写入口 |
 | `ctx.table.mount` | 面板里的原生多维表(只读) | 一份规格 → 真 DbTable(筛选/搜索/隐藏列/排序/统计全套),**不依赖笔记库**;老宿主没有 → 可选链 + 自己的表格降级(见下) |
 
@@ -417,7 +418,7 @@ ctx.registerCommand({
 | `registerFont` | 设置 → 外观 → 字体 | 2026-08-28 起;**返回 disposer**(宿主在禁用/重载时也会自己撤销,返回值可以不接);旧宿主没有 → `ctx.registerFont?.(…)` |
 | `registerPanel` | 右侧栏面板 | ⚠️收 **React 组件** —— 外置插件得自带一份 React(mindmap 有先例),多数场景改用 `registerView` |
 | `registerPropertyType` | 多维表自定义列类型 | ⚠️同上,`Cell` 是 React 组件;`baseType` 决定落盘形状 |
-| `ctx.notify(msg, {level})` | 右上角通知 | 自动标插件名,用户可按插件静音 |
+| `ctx.notify(msg, {level, action, key})` | 右上角通知 | 自动标插件名,用户可按插件静音;`action: { label, run }` 在卡上放一个按钮(典型「撤销」,2026-10-17 起,旧宿主忽略)、`key` 同 key 的通知合并成一条 |
 | `ctx.achievements` | 成就系列 + `track(event, n)` | 宿主强制 `plugin:<id>:` 前缀,伪造不了官方成就 |
 | `ctx.activity.log(event, detail)` | 写进活动日志(Muse 读得到) | 同款前缀纪律 |
 | `ctx.loadData() / saveData()` | 每插件一份 JSON blob | 大块数据走这条(见下「编辑器」节) |
@@ -426,7 +427,7 @@ ctx.registerCommand({
 | `ctx.tangu` | 当前模型 / 模型目录 / 当前 Space / 会话用量 / **agent 此刻在干什么**(只读)+ `agents()` 用户的 Agent 名册 + `startChat` 用指定 Agent 开一个可见的新对话 + `mountChat` 把原生对话挂进自己的视图(2026-10-04 起)+ `complete` 一次性文本补全(2026-09-28 起) | ⚠️**非 Tangu 宿主上整个不存在** → 一律 `ctx.tangu?.`;`agentStatus` / `subscribeAgentStatus` / `startChat` 是 2026-09-19 起、`agents` 是 2026-09-20 起的可选方法 → `ctx.tangu?.startChat?.(…)`;见下「当前模型」「Agent 状态」「Agent 名册」「开新对话」 |
 | `ctx.desk` | Tangu 聊天右侧 **Agent Desk** 里挂一块自绘区(`registerCompanion`,典型:跟着 agent 状态做反应的 3D 形象) | 2026-09-19 起;⚠️**只在桌面 Tangu 上存在**(web / 移动端 / 纯 Amadeus 壳整个没有)→ `ctx.desk?.`;两种模式 `idle` / `always`,见下「Agent Desk 伴随面」 |
 | `ctx.automation` | 播种多维表自动化规则(`ensure(rules)`) | 2026-09-02 起;⚠️**非 Tangu 宿主上整个不存在** → `void ctx.automation?.ensure(…)`;id 宿主加 `plugin:<id>:` 前缀;见下「自动化」 |
-| `ctx.calendar` | 把插件种的表登记进 Calendar Space(`ensureMember`,人人有)+ 叠加源与日历设置(`subscribe` / `setColor` / `setHidden` / `setDefault` / `setMember` / `removeMember`) | `ensureMember` 2026-09-02 起;其余 2026-10-17 起,⚠️**声明 `"calendar"` 才有**(没声明时这几个成员不存在,不是空壳)→ `ctx.calendar?.subscribe`;见下「日历叠加源与设置」 |
+| `ctx.calendar` | 把插件种的表登记进 Calendar Space(`ensureMember`,人人有)+ 叠加源与日历设置(`subscribe` / `setColor` / `setHidden` / `setDefault` / `setMember` / `removeMember`)+ .ics 订阅管理(`ics.add` / `importText` / `rename` / `remove` / `refresh`) | `ensureMember` 2026-09-02 起;其余 2026-10-17 起,⚠️**声明 `"calendar"` 才有**(没声明时这几个成员不存在,不是空壳)→ `ctx.calendar?.subscribe`;见下「日历叠加源与设置」 |
 | `ctx.databases` | 全库多维表的实时聚合(`subscribe`)+ 按行按格读写(`setCell` / `addRow` / `duplicateRow` / `deleteRow`) | 2026-10-16 起;⚠️**manifest `capabilities` 声明 `"databases"` 才存在**;见下「全库多维表与笔记任务」 |
 | `ctx.noteTasks` | 笔记正文里的 `@` 时间任务(`subscribe`)+ 就地勾选 / 改日期(`update`) | 2026-10-16 起;⚠️**声明 `"noteTasks"` 才存在**;同上节 |
 | manifest `events[]` | 自动化(Automation)可订阅的事件 | 纯声明无代码;⚠️目前只有中文 `label`,英文界面下也显示中文 |
@@ -1249,8 +1250,20 @@ ctx.calendar?.removeMember?.(db.path)           // 只撤成员,不删表
   `setMember` 只认库里可写的表,日期列必须是日期类列(`base === 'date'` 或 `calendarDate`)、勾选列必须是勾选类列;
   `setDefault` 只认可写的成员;`removeMember` 只认显式登记过的成员,而且日历做过首次整理才收(从没打开过日历的库里,订阅会在 `ready` 后替你做这一步,成员不变 —— 先订阅、等 ready 再撤)。叠加源不能当成员、不能设默认,拿它的 path 调 `ctx.databases` 的写口也是 false。
 - 设置按**当前库**生效,和宿主日历左栏「日历」列表改的是同一处(存在本机,不进库文件、不同步)。
-- 还没有的:.ics 订阅的增删 / 导入(仍在宿主日历设置里做)。
-- 详情页那一行会多一项「读取 Agent 日程、.ics 订阅和另一侧库里的日历，并改日历设置」。
+- 详情页那一行会多一项「读取 Agent 日程、.ics 订阅和另一侧库里的日历，管理 .ics 订阅并改日历设置」。
+
+**.ics 订阅管理**(同一档,2026-10-17 起):和宿主日历设置里的「订阅」是同一份列表(存在本机,不进库),改了宿主那边立刻看到。
+
+```js
+const id = ctx.calendar?.ics?.add('webcal://example.com/holidays.ics')   // 只收 http(s) / webcal,≤2048 字;同一 URL 已在 → 返回原来那条的 id
+const id2 = ctx.calendar?.ics?.importText('课表', icsText)               // 本地 .ics 文本导入(不联网),≤ 宿主的导入上限;解析不出来 → null
+ctx.calendar?.ics?.rename(id, '节假日')
+const ok = await ctx.calendar?.ics?.refresh(id)  // 立刻联网拉一次;拉成功才 true,导入的(没有 URL)恒 false
+ctx.calendar?.ics?.remove(id)
+// 快照里:icsSubscriptions: [{ id, path: 'ics://<id>', name, url, error? }];事件本身在 overlays(origin 'ics')里
+```
+
+- 不收的一律返回 `null` / `false`,不抛;插件停用后全部不做。删订阅不会删任何库文件(它本来就不在库里)。
 
 ### 日历 / 待办类插件的其余入口(2026-10-17 盘点)
 
@@ -1260,7 +1273,13 @@ ctx.calendar?.removeMember?.(db.path)           // 只撤成员,不删表
 - **Intelligent UI**:给待办之类的列表源写 `intelligent`(见「Intelligent UI list cards」),宿主用原生列表画卡片,不画插件 DOM。
 - **用户仪表盘里的卡片**:插件视图**不能**嵌进用户的 `.dashboard.md`(嵌卡是宿主白名单,插件自声明不算数)。要在自己视图里放仪表盘用 `ctx.dashboard.mount`。
 - **提醒**:笔记里 `@remind:` 的到点通知由宿主发,和日历是哪个插件无关;宿主没有给插件排定时提醒的接口 —— 插件运行期间要提醒用 `ctx.notify`。
-- **界面**:插件拿不到宿主的 React 实例。要宿主组件就走 `ctx.ui.mount*`;画大块自绘界面时自带 React(两份共存没问题,边界是挂载点 DOM)。
+- **带按钮的通知(撤销)**:`ctx.notify(msg, { action: { label, run }, key })` —— `label` 截到 40 字,有按钮时通知留 8 秒;插件停用后点按钮什么都不做;
+  `key` 让同一件事的通知合并成一条(宿主加 `plugin:<id>:` 前缀,和别的插件撞不上);合并时按钮跟新的这条走,新这条没带按钮就清掉旧的。
+- **事件浮卡里的那排字段**:`ctx.ui?.mountRecord?.(el, { path, rowId, dateCol?, readOnly? })` 把宿主的行编辑字段(标题、时间摘要 + 展开编辑、
+  其余属性)画进你的容器,返回 `{ update(patch), dispose() }`;改动直接写那张表(同 `ctx.databases.setCell`,和打开着的表格同一份),
+  行被删 / 换库就什么都不画;`path` 不是库里的表或没有 `rowId` 当场抛 `TypeError`。外框、关闭、「打开 / 删除」按钮、定位归插件。
+  `dateCol` 那一列当时间行、不在属性里重复(必须是日期类列,别的列类型忽略、照常列在属性里);叠加源(只读表)或 `readOnly: true` 只显示值。**声明 `"databases"` 才有。**
+- **界面**:插件拿不到宿主的 React 实例。要宿主组件就走 `ctx.ui.mount*`(行编辑字段就是上面的 `mountRecord`);画大块自绘界面时自带 React(两份共存没问题,边界是挂载点 DOM)。
 
 ## 全库多维表与笔记任务:ctx.databases / ctx.noteTasks(2026-10-16 起)
 

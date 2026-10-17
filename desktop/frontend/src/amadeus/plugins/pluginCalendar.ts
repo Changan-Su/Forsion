@@ -1,13 +1,14 @@
 /** ctx.calendar 的 'calendar' 能力档(2026-10-17;manifest 声明了才注入,接线在 pluginStore,ensureMember 那一档人人有)。
  *  读:叠加源(Agent 日程 / .ics 订阅 / 另一侧库)+ 日历设置(成员、颜色、显隐、默认表)。叠加源与日历视图共用同一份
  *  store 和计时器(acquireAgentSchedulePolling / startIcsRefresh / watchOtherSideCal),订阅期间持有、退订或插件停用时释放。
- *  写:与日历左栏同一组 store 动作(calendarConfigStore),按当前库生效。成员解析与日历视图同一个函数(resolveCalendarMembers)。 */
+ *  写:与日历左栏同一组 store 动作(calendarConfigStore),按当前库生效。成员解析与日历视图同一个函数(resolveCalendarMembers)。
+ *  .ics 订阅管理(ctx.calendar.ics)走 useIcsCalendars 同一组动作;联网仍是主进程的 fetchIcs(私网 / 回环 / 重定向那几道闸在那边)。 */
 import { colorForDb, defaultDbPath, isHidden, isMigrated, memberOf, useCalendarConfig } from '../store/calendarConfigStore'
 import { migrationSeeds, resolveCalendarMembers } from '../store/calendarMembers'
 import { getAggDb, isCheckboxCol, isDateCol, watchAllDatabases, type AggDb } from '../store/dbAggregateStore'
 import { usePageStore } from '../store/pageStore'
 import { acquireAgentSchedulePolling, agentScheduleDbs, useAgentSchedules } from '../../stores/agentScheduleStore'
-import { icsCalDbsNow, startIcsRefresh, useIcsCalendars } from '../../stores/icsCalendarStore'
+import { MAX_IMPORT_BYTES, displayName, icsCalDbsNow, startIcsRefresh, useIcsCalendars } from '../../stores/icsCalendarStore'
 import { useOtherSideCal, watchOtherSideCal } from '../../stores/otherVaultCalStore'
 import { currentLocale, subscribeLocale } from '../../i18n'
 import { normalizeVaultRel } from './pluginAutomation'
@@ -42,7 +43,21 @@ function snapshotOf(dbs: AggDb[], ready: boolean): PluginCalendarSnapshot {
     colors,
     hidden: [...(byVault[vault]?.hidden ?? [])],
     defaultPath: defaultDbPath(vault, byVault),
+    icsSubscriptions: icsSubsNow(),
   }
+}
+
+function icsSubsNow(): PluginCalendarSnapshot['icsSubscriptions'] {
+  const { subs, errors } = useIcsCalendars.getState()
+  return subs.map((s) => ({ id: s.id, path: `ics://${s.id}`, name: displayName(s), url: s.url, ...(errors[s.id] ? { error: errors[s.id] } : {}) }))
+}
+
+/** 订阅地址:http(s) 或 webcal,和设置里「添加订阅」同一个口径(主进程还会再核一遍并挡私网)。 */
+const icsUrl = (raw: unknown): string => {
+  if (typeof raw !== 'string') return ''
+  const u = raw.trim()
+  if (!u || u.length > 2048) return ''
+  try { return ['http:', 'https:', 'webcal:'].includes(new URL(u).protocol) ? u : '' } catch { return '' }
 }
 
 export function createCalendarApi(scope: DataScope): CalendarApi {
@@ -71,7 +86,8 @@ export function createCalendarApi(scope: DataScope): CalendarApi {
         // 只在输入真变了时回调:.ics 的 loading 位、另一侧 store 的无关字段变化不该把整份快照推一遍
         // .ics 的列名 / 回退名随语言变 → 语言也进签名
         const sig = [dbs, ready, currentLocale(), usePageStore.getState().vaultRoot, useCalendarConfig.getState().byVault,
-          useAgentSchedules.getState().schedules, useOtherSideCal.getState().dbs, useIcsCalendars.getState().subs, useIcsCalendars.getState().events]
+          useAgentSchedules.getState().schedules, useOtherSideCal.getState().dbs, useIcsCalendars.getState().subs, useIcsCalendars.getState().events,
+          useIcsCalendars.getState().errors]
         if (sig.length === last.length && sig.every((x, i) => x === last[i])) return
         last = sig
         try { cb(snapshotOf(dbs, ready)) } catch (e) { console.error('[amadeus] ctx.calendar 回调抛错', e) }
@@ -136,6 +152,37 @@ export function createCalendarApi(scope: DataScope): CalendarApi {
       if (!v || !p || !isMigrated(v, byVault) || !memberOf(v, byVault, p)) return false
       useCalendarConfig.getState().removeMember(v, p)
       return true
+    },
+    ics: {
+      add: (raw) => {
+        const url = scope.alive() ? icsUrl(raw) : ''
+        if (!url) return null
+        const st = useIcsCalendars.getState()
+        return (st.subs.find((x) => x.url === url) ?? st.add(url)).id // 同一个地址不订两份
+      },
+      importText: (name, text) => {
+        if (!scope.alive() || typeof text !== 'string' || new TextEncoder().encode(text).length > MAX_IMPORT_BYTES) return null
+        return useIcsCalendars.getState().importText(typeof name === 'string' ? name.slice(0, 200) : '', text)?.id ?? null
+      },
+      rename: (id, name) => {
+        const st = useIcsCalendars.getState()
+        if (!scope.alive() || typeof name !== 'string' || !name.trim() || !st.subs.some((x) => x.id === id)) return false
+        st.rename(String(id), name.slice(0, 200))
+        return true
+      },
+      remove: (id) => {
+        const st = useIcsCalendars.getState()
+        if (!scope.alive() || !st.subs.some((x) => x.id === id)) return false
+        st.remove(String(id))
+        return true
+      },
+      refresh: async (id) => {
+        const st = useIcsCalendars.getState()
+        const sub = scope.alive() ? st.subs.find((x) => x.id === id) : undefined
+        if (!sub?.url) return false // 导入的快照没有地址,刷不了
+        await st.refresh(sub.id)
+        return scope.alive() && !useIcsCalendars.getState().errors[sub.id]
+      },
     },
   }
 }

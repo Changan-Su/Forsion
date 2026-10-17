@@ -487,3 +487,31 @@ describe('ctx.databases / ctx.noteTasks 的能力闸(default-deny)', () => {
     expect(ref!.databases).toBeUndefined()
   })
 })
+
+describe('ctx.notify 的 action / key(10-17)', () => {
+  // 负对照(10-17 实跑红):动作不看 ctxAlive → 「停用后」红;key 不加插件前缀 → dedupeKey 那条红;
+  // 带 key 时不显式给 action / store 合并仍用 ?? 沿用 → 「旧按钮要清掉」红。
+  it('带动作的卡停 8 秒、key 按插件加前缀;动作在插件停用后不调;坏动作不挂按钮', async () => {
+    const { useNotifications } = await import('../../stores/notificationStore')
+    useNotifications.setState({ items: [], queue: [] })
+    const run = vi.fn()
+    const ctx = ctxOf('ntf')
+    ctx.notify?.('已删除', { action: { label: ' 撤销 ', run }, key: 'undo' })
+    const item = useNotifications.getState().items.at(-1)!
+    expect(item).toMatchObject({ dedupeKey: 'plugin:ntf:undo', durationMs: 8000 })
+    expect(item.action?.label).toBe('撤销')
+    item.action!.run()
+    expect(run).toHaveBeenCalledTimes(1)
+    ctx.notify?.('坏的', { action: { label: '', run } })
+    ctx.notify?.('也坏', { action: { label: 'x' } as unknown as { label: string; run(): void } })
+    expect(useNotifications.getState().items.slice(-2).every((i) => !i.action)).toBe(true)
+    // 同 key 的下一条没带动作:合并后旧按钮要清掉(Codex P2:不然「已删除 B」上点撤销撤的是 A)
+    ctx.notify?.('已删除 B', { key: 'undo' })
+    const merged = useNotifications.getState().items.find((i) => i.dedupeKey === 'plugin:ntf:undo')!
+    expect(merged.text).toBe('已删除 B')
+    expect(merged.action).toBeUndefined()
+    usePluginStore.getState().disable('ntf')
+    item.action!.run()
+    expect(run).toHaveBeenCalledTimes(1)
+  })
+})
