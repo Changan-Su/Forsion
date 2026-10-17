@@ -1,0 +1,38 @@
+/* 设置 → 联网搜索:settings-panel 里的有序列表。落点线是 2px 实线(不画虚线框,见 DESIGN §6)。 */
+.wsc .wsc-n { margin-left: 4px; font-weight: 400; color: var(--text-faint); }
+.wsc-item + .wsc-item { border-top: var(--border-width) solid var(--border); }
+.wsc-item.drop-before { box-shadow: inset 0 2px 0 var(--accent); }
+.wsc-item.drop-after { box-shadow: inset 0 -2px 0 var(--accent); }
+.wsc-item.is-ghost { opacity: 0.35; }
+.wsc-row { display: flex; align-items: center; gap: 10px; min-height: 54px; padding: 10px 12px 10px 8px; box-sizing: border-box; }
+.wsc-row[draggable='true']:hover { background: var(--overlay-light); }
+.wsc-grip { width: 14px; flex: none; display: flex; color: var(--text-faint); opacity: 0; cursor: grab; }
+.wsc-row:hover .wsc-grip { opacity: 1; }
+.wsc-rank { width: 16px; flex: none; text-align: center; color: var(--text-faint); font-size: var(--ui-font-meta, 12px); font-variant-numeric: tabular-nums; }
+.wsc-main { flex: 1; min-width: 0; }
+.wsc-main strong { display: block; font-weight: 500; color: var(--text); font-size: var(--ui-font-body, 13px); }
+.wsc-main small { display: block; margin-top: 2px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
+.wsc-item.is-off .wsc-main strong { color: var(--text-muted); }
+.wsc-stat { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; font-size: var(--ui-font-meta, 12px); font-variant-numeric: tabular-nums; }
+.wsc-stat.is-idle { color: var(--text-faint); }
+.wsc-stat.is-ok { color: var(--green); }
+.wsc-stat.is-bad { color: var(--danger); }
+.wsc-acts { display: flex; align-items: center; gap: 4px; flex: none; }
+.wsc-acts .icon-btn { width: 26px; height: 26px; }
+.wsc-acts .icon-btn:disabled { opacity: 0.3; cursor: default; }
+/* ↑↓ 只在悬停 / 键盘聚焦时出现;用 opacity 而不是 visibility,Tab 仍能走到。选择器要压过上面的 :disabled */
+.wsc-acts .wsc-mv, .wsc-acts .wsc-mv:disabled { opacity: 0; }
+.wsc-row:hover .wsc-acts .wsc-mv, .wsc-acts .wsc-mv:focus-visible { opacity: 1; }
+.wsc-row:hover .wsc-acts .wsc-mv:disabled { opacity: 0.3; }
+.wsc .btn.sm { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.wsc .btn.wsc-danger { color: var(--danger); }
+.wsc-exp { display: grid; gap: 10px; padding: 2px 14px 14px 56px; }
+.wsc-f { display: grid; grid-template-columns: 72px minmax(0, 1fr); align-items: center; gap: 10px; }
+.wsc-fl { color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
+.wsc-fv, .wsc-keyform { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; font-size: var(--ui-font-meta, 12px); }
+.wsc-fv select, .wsc-keyform input { max-width: 420px; flex: 1 1 200px; min-width: 0; font-size: var(--ui-font-body, 13px); }
+.wsc-muted { display: inline-flex; align-items: center; gap: 6px; color: var(--text-muted); }
+.wsc-err { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--danger); }
+.wsc-note { display: flex; gap: 6px; align-items: flex-start; padding: 10px 14px; border-top: var(--border-width) solid var(--border); color: var(--text-muted); font-size: var(--ui-font-meta, 12px); line-height: 1.6; }
+.wsc-note svg { flex: none; margin-top: 3px; color: var(--text-faint); }
+.wsc-note.is-bad { color: var(--danger); }
