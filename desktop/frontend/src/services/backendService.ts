@@ -469,6 +469,7 @@ export interface LocalWebSearchRedacted {
   bochaHasKey: boolean
   tavilyHasKey: boolean
   zhipuHasKey: boolean
+  deepseekHasKey: boolean
   zhipuEngine: string
   effectiveProvider: string
   configured: boolean
@@ -479,7 +480,7 @@ export const getLocalWebSearch = (t: EngineTarget) =>
 
 export const saveLocalWebSearch = (
   t: EngineTarget,
-  body: { provider: string; bochaApiKey: string; tavilyApiKey: string; zhipuApiKey: string; zhipuEngine: string },
+  body: { provider: string; bochaApiKey: string; tavilyApiKey: string; zhipuApiKey: string; deepseekApiKey: string; zhipuEngine: string },
 ) =>
   request<{ success: boolean; config: LocalWebSearchRedacted }>(t, '/agent/websearch', {
     method: 'PUT',

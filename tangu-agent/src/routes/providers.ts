@@ -153,7 +153,7 @@ router.put('/agent/websearch', authMiddleware, async (req, res) => {
   try {
     const cur = loadLocalWebSearchConfig();
     const b = req.body ?? {};
-    const VALID = ['auto', 'bocha', 'tavily', 'zhipu', 'duckduckgo'];
+    const VALID = ['auto', 'bocha', 'tavily', 'zhipu', 'deepseek', 'duckduckgo'];
     if (b.provider !== undefined && !VALID.includes(String(b.provider))) {
       return res.status(400).json({ detail: `provider must be one of: ${VALID.join(', ')}` });
     }
@@ -167,6 +167,7 @@ router.put('/agent/websearch', authMiddleware, async (req, res) => {
       bochaApiKey: mergeKey(b.bochaApiKey, cur.bochaApiKey),
       tavilyApiKey: mergeKey(b.tavilyApiKey, cur.tavilyApiKey),
       zhipuApiKey: mergeKey(b.zhipuApiKey, cur.zhipuApiKey),
+      deepseekApiKey: mergeKey(b.deepseekApiKey, cur.deepseekApiKey),
       zhipuEngine: ['search_std', 'search_pro', 'search_pro_sogou', 'search_pro_quark'].includes(String(b.zhipuEngine))
         ? String(b.zhipuEngine)
         : cur.zhipuEngine,

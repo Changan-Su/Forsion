@@ -50,7 +50,7 @@ afterEach(() => {
 describe('配置读取与归一化', () => {
   it('段缺失 → auto 全空,未视作已配置', () => {
     const cfg = loadLocalWebSearchConfig();
-    expect(cfg).toEqual({ provider: 'auto', bochaApiKey: null, tavilyApiKey: null, zhipuApiKey: null, zhipuEngine: 'search_pro_quark' });
+    expect(cfg).toEqual({ provider: 'auto', bochaApiKey: null, tavilyApiKey: null, zhipuApiKey: null, deepseekApiKey: null, zhipuEngine: 'search_pro_quark' });
     expect(hasLocalSearchProvider(cfg)).toBe(false);
   });
 
@@ -67,7 +67,7 @@ describe('配置读取与归一化', () => {
     writeWebSearchSection({ provider: 'auto', tavilyApiKey: 'tvly-secret' });
     const red = redactedLocalConfig();
     expect(red).toEqual({
-      provider: 'auto', bochaHasKey: false, tavilyHasKey: true, zhipuHasKey: false,
+      provider: 'auto', bochaHasKey: false, tavilyHasKey: true, zhipuHasKey: false, deepseekHasKey: false,
       zhipuEngine: 'search_pro_quark', effectiveProvider: 'tavily', configured: true,
     });
     expect(JSON.stringify(red)).not.toContain('tvly-secret');
@@ -97,12 +97,52 @@ describe('zhipuEngine 档位', () => {
 
 describe('candidateOrder 降级顺序', () => {
   it('显式 provider 打头,其余已配 key 随后,DDG 垫底', () => {
-    expect(candidateOrder({ provider: 'tavily', bochaApiKey: 'b', tavilyApiKey: 't', zhipuApiKey: null, zhipuEngine: 'search_pro_quark' }))
+    expect(candidateOrder({ provider: 'tavily', bochaApiKey: 'b', tavilyApiKey: 't', zhipuApiKey: null, deepseekApiKey: null, zhipuEngine: 'search_pro_quark' }))
       .toEqual(['tavily', 'bocha', 'duckduckgo']);
-    expect(candidateOrder({ provider: 'auto', bochaApiKey: null, tavilyApiKey: null, zhipuApiKey: 'z', zhipuEngine: 'search_pro_quark' }))
+    expect(candidateOrder({ provider: 'auto', bochaApiKey: null, tavilyApiKey: null, zhipuApiKey: 'z', deepseekApiKey: null, zhipuEngine: 'search_pro_quark' }))
       .toEqual(['zhipu', 'duckduckgo']);
-    expect(candidateOrder({ provider: 'auto', bochaApiKey: null, tavilyApiKey: null, zhipuApiKey: null, zhipuEngine: 'search_pro_quark' }))
+    expect(candidateOrder({ provider: 'auto', bochaApiKey: null, tavilyApiKey: null, zhipuApiKey: null, deepseekApiKey: null, zhipuEngine: 'search_pro_quark' }))
       .toEqual(['duckduckgo']);
+    // DeepSeek 排在中文源之后、DDG 之前;只配了 DeepSeek 时 auto 选它
+    expect(candidateOrder({ provider: 'auto', bochaApiKey: null, tavilyApiKey: null, zhipuApiKey: 'z', deepseekApiKey: 'd', zhipuEngine: 'search_pro_quark' }))
+      .toEqual(['zhipu', 'deepseek', 'duckduckgo']);
+    expect(candidateOrder({ provider: 'auto', bochaApiKey: null, tavilyApiKey: null, zhipuApiKey: null, deepseekApiKey: 'd', zhipuEngine: 'search_pro_quark' }))
+      .toEqual(['deepseek', 'duckduckgo']);
+  });
+});
+
+describe('DeepSeek Search', () => {
+  it('Bearer 鉴权;query 夹到 128 字符、count 夹到 1~50;summary 优先当摘要', async () => {
+    writeWebSearchSection({ provider: 'deepseek', deepseekApiKey: 'sk-ds' });
+    const f = stubFetch([
+      ['https://api.deepseek.com/v1/tools/search', () => jsonRes(200, { results: [
+        { title: 'DS', url: 'https://ds.co/a', snippet: 'short', summary: 'long summary', content: '' },
+        { title: '', site_name: 'Site', url: 'https://ds.co/b', snippet: 'only snippet', summary: '' },
+      ] })],
+    ]);
+    const out = await runLocalSearch('长'.repeat(200), 999);
+    const [, init] = f.mock.calls[0]! as any[];
+    const body = JSON.parse(String(init.body));
+    expect(init.headers.Authorization).toBe('Bearer sk-ds');
+    expect(Array.from(body.query as string)).toHaveLength(128);
+    expect(body.count).toBe(50);
+    expect(out.provider).toBe('deepseek');
+    expect(out.results).toEqual([
+      { title: 'DS', url: 'https://ds.co/a', snippet: 'long summary' },
+      { title: 'Site', url: 'https://ds.co/b', snippet: 'only snippet' },
+    ]);
+    expect(out.text).toContain('Search results (DeepSeek)');
+  });
+
+  it('402 余额不足 → 降级到 DDG,注记带上游状态码', async () => {
+    writeWebSearchSection({ provider: 'deepseek', deepseekApiKey: 'sk-ds' });
+    stubFetch([
+      ['https://api.deepseek.com', () => jsonRes(402, { error: { message: 'Insufficient Balance' } })],
+      ['https://api.duckduckgo.com', () => jsonRes(200, { AbstractText: 'fallback', AbstractURL: 'https://d.co' })],
+    ]);
+    const out = await runLocalSearch('q', 3);
+    expect(out.text).toContain('DeepSeek HTTP 402');
+    expect(out.text).toContain('fallback');
   });
 });
 

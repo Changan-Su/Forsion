@@ -2,8 +2,8 @@
  * standalone 本地联网搜索(BYO-key)—— server 端 webSearchService 的引擎侧镜像。
  *
  * 场景:未登录 Forsion 或想用自己 key 的用户。配置在 config.json 的 `webSearch` 段:
- *   { "provider": "auto"|"bocha"|"tavily"|"zhipu"|"duckduckgo",
- *     "bochaApiKey": string, "tavilyApiKey": string, "zhipuApiKey": string }
+ *   { "provider": "auto"|"bocha"|"tavily"|"zhipu"|"deepseek"|"duckduckgo",
+ *     "bochaApiKey": string, "tavilyApiKey": string, "zhipuApiKey": string, "deepseekApiKey": string }
  *
  * 路由语义见 multiBrain:本地配置了 provider → 本地直搜;否则走云 brain;云不可用 → 本地
  * DuckDuckGo 免费兜底。运行时降级与 server 同款:选中 provider 失败 → 其余已配 key → DDG。
@@ -14,7 +14,7 @@
  */
 import { getRawSection } from '../../core/config.js';
 
-export type LocalSearchProvider = 'auto' | 'bocha' | 'tavily' | 'zhipu' | 'duckduckgo';
+export type LocalSearchProvider = 'auto' | 'bocha' | 'tavily' | 'zhipu' | 'deepseek' | 'duckduckgo';
 
 /** 智谱引擎档位(与 server webSearchService 同表):std ¥0.01 基础(长尾专名易糊)/
  *  pro ¥0.03 自研多引擎 / sogou ¥0.05 搜狗 / quark ¥0.05 夸克(默认,真引擎索引)。 */
@@ -27,6 +27,7 @@ export interface LocalWebSearchConfig {
   bochaApiKey: string | null;
   tavilyApiKey: string | null;
   zhipuApiKey: string | null;
+  deepseekApiKey: string | null;
   zhipuEngine: ZhipuEngine;
 }
 
@@ -43,17 +44,18 @@ export function loadLocalWebSearchConfig(): LocalWebSearchConfig {
   const o = raw && typeof raw === 'object' ? raw : {};
   const p = String(o.provider ?? 'auto');
   return {
-    provider: (['auto', 'bocha', 'tavily', 'zhipu', 'duckduckgo'] as const).includes(p as any) ? (p as LocalSearchProvider) : 'auto',
+    provider: (['auto', 'bocha', 'tavily', 'zhipu', 'deepseek', 'duckduckgo'] as const).includes(p as any) ? (p as LocalSearchProvider) : 'auto',
     bochaApiKey: str(o.bochaApiKey),
     tavilyApiKey: str(o.tavilyApiKey),
     zhipuApiKey: str(o.zhipuApiKey),
+    deepseekApiKey: str(o.deepseekApiKey),
     zhipuEngine: ZHIPU_ENGINES.includes(o.zhipuEngine as ZhipuEngine) ? (o.zhipuEngine as ZhipuEngine) : DEFAULT_ZHIPU_ENGINE,
   };
 }
 
 /** 用户是否显式配置了本地搜索(任一 key,或明选了具体 provider)。auto 且无 key = 未配置。 */
 export function hasLocalSearchProvider(cfg: LocalWebSearchConfig): boolean {
-  return !!(cfg.bochaApiKey || cfg.tavilyApiKey || cfg.zhipuApiKey) || cfg.provider !== 'auto';
+  return !!(cfg.bochaApiKey || cfg.tavilyApiKey || cfg.zhipuApiKey || cfg.deepseekApiKey) || cfg.provider !== 'auto';
 }
 
 function pickProvider(cfg: LocalWebSearchConfig): Exclude<LocalSearchProvider, 'auto'> {
@@ -61,6 +63,7 @@ function pickProvider(cfg: LocalWebSearchConfig): Exclude<LocalSearchProvider, '
   if (cfg.bochaApiKey) return 'bocha';
   if (cfg.tavilyApiKey) return 'tavily';
   if (cfg.zhipuApiKey) return 'zhipu';
+  if (cfg.deepseekApiKey) return 'deepseek';
   return 'duckduckgo';
 }
 
@@ -71,6 +74,7 @@ export function candidateOrder(cfg: LocalWebSearchConfig): Exclude<LocalSearchPr
   if (cfg.bochaApiKey) rest.push('bocha');
   if (cfg.tavilyApiKey) rest.push('tavily');
   if (cfg.zhipuApiKey) rest.push('zhipu');
+  if (cfg.deepseekApiKey) rest.push('deepseek');
   rest.push('duckduckgo');
   return [primary, ...rest.filter((p) => p !== primary)];
 }
@@ -124,6 +128,24 @@ async function searchZhipu(query: string, maxResults: number, apiKey: string, en
     title: p.title, url: p.link || p.url, snippet: p.content || p.snippet,
   }));
   return { provider: 'zhipu', text: formatHits('Zhipu', results), results };
+}
+
+/** DeepSeek Search(api-docs.deepseek.com/zh-cn/guides/search):¥5/千次成功请求,账号级 5 QPS。
+ *  上游对越界参数直接 400:query 1~128 字符、count 1~50 —— 在这里夹住,别让长查询每次都掉进降级链。 */
+async function searchDeepSeek(query: string, maxResults: number, apiKey: string): Promise<SearchOk> {
+  const count = Math.min(50, Math.max(1, Math.trunc(maxResults) || 5));
+  const r = await fetch('https://api.deepseek.com/v1/tools/search', {
+    method: 'POST',
+    signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({ query: Array.from(query.trim()).slice(0, 128).join(''), count }),
+  });
+  if (!r.ok) throw new Error(`DeepSeek HTTP ${r.status} — ${(await r.text().catch(() => '')).slice(0, 200)}`);
+  const j: any = await r.json();
+  const results: SearchHit[] = (j?.results || []).slice(0, count).map((p: any) => ({
+    title: p.title || p.site_name || '', url: p.url, snippet: p.summary || p.snippet,
+  }));
+  return { provider: 'deepseek', text: formatHits('DeepSeek', results), results };
 }
 
 async function searchDuckDuckGo(query: string, maxResults: number): Promise<SearchOk> {
@@ -224,6 +246,9 @@ async function runProvider(which: Exclude<LocalSearchProvider, 'auto'>, cfg: Loc
     case 'zhipu':
       if (!cfg.zhipuApiKey) throw new Error('Zhipu selected but no API key configured');
       return searchZhipu(query, maxResults, cfg.zhipuApiKey, cfg.zhipuEngine);
+    case 'deepseek':
+      if (!cfg.deepseekApiKey) throw new Error('DeepSeek selected but no API key configured');
+      return searchDeepSeek(query, maxResults, cfg.deepseekApiKey);
     default:
       return searchDuckDuckGo(query, maxResults);
   }
@@ -259,6 +284,7 @@ export async function testLocalSearch(input: { provider: LocalSearchProvider; ap
     ...(input.provider === 'bocha' && key !== undefined ? { bochaApiKey: key } : {}),
     ...(input.provider === 'tavily' && key !== undefined ? { tavilyApiKey: key } : {}),
     ...(input.provider === 'zhipu' && key !== undefined ? { zhipuApiKey: key } : {}),
+    ...(input.provider === 'deepseek' && key !== undefined ? { deepseekApiKey: key } : {}),
     ...(ZHIPU_ENGINES.includes(input.zhipuEngine as ZhipuEngine) ? { zhipuEngine: input.zhipuEngine as ZhipuEngine } : {}),
   };
   const which = input.provider === 'auto' ? pickProvider(cfg) : input.provider;
@@ -273,7 +299,7 @@ export async function testLocalSearch(input: { provider: LocalSearchProvider; ap
 
 /** 设置页 GET 用:key 只回 hasKey 布尔,永不回明文。 */
 export function redactedLocalConfig(): {
-  provider: LocalSearchProvider; bochaHasKey: boolean; tavilyHasKey: boolean; zhipuHasKey: boolean; zhipuEngine: ZhipuEngine; effectiveProvider: string; configured: boolean;
+  provider: LocalSearchProvider; bochaHasKey: boolean; tavilyHasKey: boolean; zhipuHasKey: boolean; deepseekHasKey: boolean; zhipuEngine: ZhipuEngine; effectiveProvider: string; configured: boolean;
 } {
   const cfg = loadLocalWebSearchConfig();
   return {
@@ -281,6 +307,7 @@ export function redactedLocalConfig(): {
     bochaHasKey: !!cfg.bochaApiKey,
     tavilyHasKey: !!cfg.tavilyApiKey,
     zhipuHasKey: !!cfg.zhipuApiKey,
+    deepseekHasKey: !!cfg.deepseekApiKey,
     zhipuEngine: cfg.zhipuEngine,
     effectiveProvider: pickProvider(cfg),
     configured: hasLocalSearchProvider(cfg),

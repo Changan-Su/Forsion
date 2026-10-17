@@ -1069,8 +1069,8 @@ registerMessages({
     "en": "Web search (web_search)"
   },
   "settings.websearch.intro": {
-    "zh": "web_search 工具的本地搜索源（BYO-key）。配置后本机直搜、不依赖云端；不配置则登录用户走云端，未登录回落免费 DuckDuckGo。失败自动按「其余已配 Key → DuckDuckGo」降级。大陆网络 DuckDuckGo 不可达，建议配博查或智谱。",
-    "en": "Local search source for the web_search tool (BYO-key). When configured, searches run from this machine without the cloud; otherwise signed-in users go through the cloud and others fall back to free DuckDuckGo. On failure it degrades through your other configured keys, then DuckDuckGo. DuckDuckGo is unreachable from mainland China — use Bocha or Zhipu there."
+    "zh": "web_search 工具的本地搜索源（BYO-key）。配置后本机直搜、不依赖云端；不配置则登录用户走云端，未登录回落免费 DuckDuckGo。失败自动按「其余已配 Key → DuckDuckGo」降级。大陆网络 DuckDuckGo 不可达，建议配博查、智谱或 DeepSeek。",
+    "en": "Local search source for the web_search tool (BYO-key). When configured, searches run from this machine without the cloud; otherwise signed-in users go through the cloud and others fall back to free DuckDuckGo. On failure it degrades through your other configured keys, then DuckDuckGo. DuckDuckGo is unreachable from mainland China — use Bocha, Zhipu or DeepSeek there."
   },
   "settings.websearch.providerLabel": {
     "zh": "搜索源",
@@ -1115,6 +1115,10 @@ registerMessages({
   "settings.websearch.provider.zhipu": {
     "zh": "智谱 Web Search（国内直连）",
     "en": "Zhipu Web Search (CN-friendly)"
+  },
+  "settings.websearch.provider.deepseek": {
+    "zh": "DeepSeek Search（国内直连，¥5/千次）",
+    "en": "DeepSeek Search (CN-friendly, ¥5 per 1k)"
   },
   "settings.websearch.provider.duckduckgo": {
     "zh": "DuckDuckGo（免 Key）",

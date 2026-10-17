@@ -646,8 +646,8 @@ export const SettingsModal: React.FC<{
   const [wsRed, setWsRed] = useState<LocalWebSearchRedacted | null>(null)
   const [wsProvider, setWsProvider] = useState('auto')
   const [wsZhipuEngine, setWsZhipuEngine] = useState('search_pro_quark')
-  const [wsKeys, setWsKeys] = useState({ bocha: '', tavily: '', zhipu: '' }) // 输入草稿:'' 且未点清除 = 不变
-  const [wsClear, setWsClear] = useState({ bocha: false, tavily: false, zhipu: false })
+  const [wsKeys, setWsKeys] = useState({ bocha: '', tavily: '', zhipu: '', deepseek: '' }) // 输入草稿:'' 且未点清除 = 不变
+  const [wsClear, setWsClear] = useState({ bocha: false, tavily: false, zhipu: false, deepseek: false })
   const [wsMsg, setWsMsg] = useState('')
   const [wsBusy, setWsBusy] = useState(false)
   // 镜像连通性测试(设置页管理后端)
@@ -735,8 +735,8 @@ export const SettingsModal: React.FC<{
         setWsRed(r)
         setWsProvider(r.provider)
         setWsZhipuEngine(r.zhipuEngine || 'search_pro_quark')
-        setWsKeys({ bocha: '', tavily: '', zhipu: '' })
-        setWsClear({ bocha: false, tavily: false, zhipu: false })
+        setWsKeys({ bocha: '', tavily: '', zhipu: '', deepseek: '' })
+        setWsClear({ bocha: false, tavily: false, zhipu: false, deepseek: false })
         setWsMsg('')
       })
       .catch(() => setWsRed(null))
@@ -2604,6 +2604,7 @@ export const SettingsModal: React.FC<{
                                 <option value="bocha">{t('settings.websearch.provider.bocha')}</option>
                                 <option value="tavily">{t('settings.websearch.provider.tavily')}</option>
                                 <option value="zhipu">{t('settings.websearch.provider.zhipu')}</option>
+                                <option value="deepseek">{t('settings.websearch.provider.deepseek')}</option>
                                 <option value="duckduckgo">{t('settings.websearch.provider.duckduckgo')}</option>
                               </select>
                             </div>
@@ -2625,7 +2626,7 @@ export const SettingsModal: React.FC<{
                               </div>
                             </div>
                           </div>
-                          {([['bocha', 'Bocha API Key', wsRed.bochaHasKey], ['tavily', 'Tavily API Key', wsRed.tavilyHasKey], ['zhipu', 'Zhipu API Key', wsRed.zhipuHasKey]] as const).map(([k, label, hasKey]) => (
+                          {([['bocha', 'Bocha API Key', wsRed.bochaHasKey], ['tavily', 'Tavily API Key', wsRed.tavilyHasKey], ['zhipu', 'Zhipu API Key', wsRed.zhipuHasKey], ['deepseek', 'DeepSeek API Key', wsRed.deepseekHasKey]] as const).map(([k, label, hasKey]) => (
                             <div className="field" key={k} style={{ marginTop: 6 }}>
                               <label>
                                 {label}
@@ -2661,18 +2662,19 @@ export const SettingsModal: React.FC<{
                               className="btn primary sm"
                               disabled={wsBusy}
                               onClick={() => {
-                                const keyOut = (k: 'bocha' | 'tavily' | 'zhipu'): string => (wsClear[k] ? '' : (wsKeys[k] || '__keep__'))
+                                const keyOut = (k: 'bocha' | 'tavily' | 'zhipu' | 'deepseek'): string => (wsClear[k] ? '' : (wsKeys[k] || '__keep__'))
                                 setWsBusy(true); setWsMsg('')
                                 void saveLocalWebSearch(homeTarget(), {
                                   provider: wsProvider,
                                   bochaApiKey: keyOut('bocha'),
                                   tavilyApiKey: keyOut('tavily'),
                                   zhipuApiKey: keyOut('zhipu'),
+                                  deepseekApiKey: keyOut('deepseek'),
                                   zhipuEngine: wsZhipuEngine,
                                 }).then((r) => {
                                   setWsRed(r.config)
-                                  setWsKeys({ bocha: '', tavily: '', zhipu: '' })
-                                  setWsClear({ bocha: false, tavily: false, zhipu: false })
+                                  setWsKeys({ bocha: '', tavily: '', zhipu: '', deepseek: '' })
+                                  setWsClear({ bocha: false, tavily: false, zhipu: false, deepseek: false })
                                   setWsMsg(t('settings.websearch.saved'))
                                 }).catch((e) => setWsMsg(`✗ ${e?.message || e}`))
                                   .finally(() => setWsBusy(false))
@@ -2684,8 +2686,8 @@ export const SettingsModal: React.FC<{
                               className="btn ghost sm"
                               disabled={wsBusy}
                               onClick={() => {
-                                const k = wsProvider as 'bocha' | 'tavily' | 'zhipu'
-                                const draft = (wsProvider === 'bocha' || wsProvider === 'tavily' || wsProvider === 'zhipu') ? wsKeys[k] : ''
+                                const k = wsProvider as 'bocha' | 'tavily' | 'zhipu' | 'deepseek'
+                                const draft = (wsProvider === 'bocha' || wsProvider === 'tavily' || wsProvider === 'zhipu' || wsProvider === 'deepseek') ? wsKeys[k] : ''
                                 setWsBusy(true); setWsMsg(t('settings.websearch.testing'))
                                 void testLocalWebSearch(homeTarget(), { provider: wsProvider, apiKey: draft || '__keep__', zhipuEngine: wsZhipuEngine })
                                   .then((r) => setWsMsg(r.ok
