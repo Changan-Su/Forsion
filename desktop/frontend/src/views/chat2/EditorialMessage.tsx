@@ -8,13 +8,12 @@ import { SelfUpdateReceipt } from '../../components/SelfUpdateReceipt'
  * 接 UiMessage,故可直接喂真实 store 数据(集成期用);回调可选(预览传空)。
  */
 import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from 'react'
-import { Copy, RotateCcw, GitBranch, Pencil, ChevronRight, ChevronDown, Volume2, Square, Loader2, LogIn, Zap, History as HistoryIcon, FileCode2, MessageSquare, ShieldQuestion, CircleCheck, CircleX, CircleHelp } from 'lucide-react'
+import { Copy, RotateCcw, GitBranch, Pencil, Volume2, Square, Loader2, LogIn, Zap, History as HistoryIcon, FileCode2, MessageSquare, ShieldQuestion, CircleCheck, CircleX, CircleHelp } from 'lucide-react'
 import { FileInput, Quote } from 'lucide-react'
 import { useNoteInsertState } from './insertToNote'
 import * as api from '../../services/backendService'
 import type { UiMessage, TanguDesktopConfig, AgentConfig, StoredDesktopConfig, ToolEvent, InquiryRequest, SketchItem, LiveWait } from '../../types'
 import type { PreviewTarget } from '../../components/WorkspaceFilePreview'
-import { AnimatedCollapse } from '../../components/AnimatedUI'
 import { Markdown } from '../../components/Markdown'
 import { ChatWikiLink, WikiText } from '../../components/ChatWikiLink'
 import { RefChipView, splitLeadingRefs } from './RefChipView'
@@ -52,6 +51,7 @@ const UPDATE_KEY = {
 } as const
 import { ToolGroup } from '../../components/ToolGroup'
 import { useSpeechReveal } from './useSpeechReveal'
+import { playSendFlight } from './sendFlight'
 import { InquiryCard, PlanCard, TodoList } from '../../components/InquiryCard'
 import { registerMessages, useI18n } from '../../i18n'
 import { useApp } from '../../stores/appStore'
@@ -212,21 +212,6 @@ export interface FileCtx {
   execMode: AgentConfig['execMode']
   onOpenPreview?: (t: PreviewTarget) => void
 }
-
-export function Thinking2({ reasoning }: { reasoning: string }) {
-  const { t } = useI18n()
-  const [open, setOpen] = useState(false)
-  return (
-    <div className="t2-think">
-      <button className="t2-think-head" onClick={() => setOpen((o) => !o)}>
-        {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />} ✦ {t('thinking.process')}{' '}
-        <span className="t2-dim">· {t('thinking.charCount', { count: reasoning.length })}</span>
-      </button>
-      <AnimatedCollapse open={open}><div className="t2-think-body">{reasoning}</div></AnimatedCollapse>
-    </div>
-  )
-}
-
 
 export interface MessageHandlers {
   onCopy?: (text: string) => void
@@ -407,6 +392,17 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
   // 原生回退半屏的在途请求(Android):消息卸载、或它所属的会话 / 消息换了 → 作废(见 openNativeRewind)。
   const rewindReq = useRef<AbortController | null>(null)
   useEffect(() => () => { rewindReq.current?.abort(); rewindReq.current = null }, [msg.id, runSid])
+  // 发送动效:刚发出的那条从输入框升上来(只在挂载时认一次,见 sendFlight.ts)
+  const userWrapRef = useRef<HTMLDivElement | null>(null)
+  const setUserWrap = (el: HTMLDivElement | null): void => {
+    userWrapRef.current = el
+    if (typeof rootRef === 'function') rootRef(el)
+    else if (rootRef) (rootRef as React.MutableRefObject<HTMLDivElement | null>).current = el
+  }
+  useLayoutEffect(() => {
+    if (msg.role === 'user' && userWrapRef.current) playSendFlight(userWrapRef.current, msg.content)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
   // 点外面/Esc 关回退菜单(同 Composer2 的 [data-cmenu] 约定)。
   useEffect(() => {
     if (!rewindOpen) return
@@ -501,7 +497,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
         .then((shown) => { if (!shown) restore() }, restore)
     }
     return (
-      <div ref={rootRef} className={`t2-userwrap${inlineActions ? ' t2-userwrap--inline' : ''}`} id={`tocmsg-${msg.id}`} data-toc-msg-role="user" data-toc-title={tocTitle}>
+      <div ref={setUserWrap} className={`t2-userwrap${inlineActions ? ' t2-userwrap--inline' : ''}`} id={`tocmsg-${msg.id}`} data-toc-msg-role="user" data-toc-title={tocTitle}>
         <div className="t2-user-col">
           <div className="t2-username">{name}</div>
           {atts.length > 0 && (
@@ -594,8 +590,12 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
       <div className="t2-asst-col">
         <div className="t2-name" style={msg.agentColor ? { color: msg.agentColor } : undefined}>{msg.agentName || agentNameFallback || 'Tangu'}{msg.status === 'streaming' && <span className="t2-dot" />}</div>
         {msg.systemPrompt && <SystemPromptBlock content={msg.systemPrompt} />}
-        {msg.reasoning && <Thinking2 reasoning={msg.reasoning} />}
         {(() => {
+          // 思考原文整条消息只有一份:挂在第一条过程行上(前面还没有正文时);否则单独一行过程行放最前(只剩思考那一步)。
+          // 这条「打头的过程行」两条渲染分支都放在同一个位置、同一个 key —— 思考中途第一个工具到达、或之后再追加工具,
+          // 它都不重挂,用户展开着的思考不会被收起、焦点也不丢。
+          // 「思考中」只在它是消息最后一块时亮,后面已经有东西了就不在上头闪。
+          const think = (last: boolean) => msg.reasoning ? { reasoning: msg.reasoning, reasoningMs: msg.reasoningMs, thinking: last && msg.reasoningSince != null } : {}
           // 直播与带锚点的历史:按发生顺序渲染文字/工具,并把 Sketch 插在对应工具完成点。
           // 无段(旧历史 / 语音整条朗读)→ 回退老序:所有工具一块 + 全文。
           if (msg.segments?.length && !voiceMode) {
@@ -605,7 +605,12 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
             // 只有**最后一个文本段**才能把未收口的围栏还回正文:靠前的段后面还有段,围栏可能在那里收口
             // (工具块把一道围栏切成两截),提前还回 = 原文泄漏进正文 + 后半段永远拼不成卡。
             const lastTextIdx = msg.segments.reduce((acc, s2, j) => (s2.t === 'text' ? j : acc), -1)
-            return msg.segments.map((seg, i) => {
+            const firstIdx = msg.segments.findIndex((s2) => s2.t === 'tools' || !!s2.text.trim())
+            const evsOf = (ids: string[]) => ids.map((id) => msg.toolEvents?.find((e) => e.id === id)).filter(Boolean) as ToolEvent[]
+            const first = msg.segments[firstIdx]
+            const firstParts = first?.t === 'tools' ? partitionToolSegment(evsOf(first.ids), msg.sketches, streaming) : []
+            const headEvents = firstParts[0]?.t === 'tools' ? firstParts[0].events : undefined
+            const nodes = msg.segments.map((seg, i) => {
               if (seg.t === 'text') {
                 const parsed = splitSuggestions(seg.text, { streaming: streaming || i !== lastTextIdx, state: fenceState, kinds: fenceKinds })
                 fenceState = parsed.state
@@ -614,12 +619,12 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
                   ? <div key={i} className="t2-content"><Markdown content={segBody} anchorPrefix={`toc-${msg.id}`} run={runCtx} allowRun={!elsewhere} embeds={embeds} /></div>
                   : null
               }
-              const evs = seg.ids.map((id) => msg.toolEvents?.find((e) => e.id === id)).filter(Boolean) as ToolEvent[]
-              const parts = partitionToolSegment(evs, msg.sketches, streaming)
+              const skip = i === firstIdx && headEvents ? 1 : 0
+              const parts = (i === firstIdx ? firstParts : partitionToolSegment(evsOf(seg.ids), msg.sketches, streaming)).slice(skip)
               return parts.length ? (
                 <Fragment key={i}>
-                  {parts.map((part, j) => part.t === 'tools'
-                    ? <ToolGroup key={`tools-${part.events.map((ev) => ev.id).join('-')}-${j}`} events={part.events} running={msg.status === 'streaming'} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} />
+                  {parts.map((part, k) => part.t === 'tools'
+                    ? <ToolGroup key={`tools-${part.events.map((ev) => ev.id).join('-')}-${k + skip}`} events={part.events} running={msg.status === 'streaming'} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} />
                     : part.t === 'marketplace'
                       ? <MarketPluginCards key={`market-${part.event.id}`} event={part.event} />
                     : part.t === 'intelligent'
@@ -628,10 +633,13 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
                 </Fragment>
               ) : null
             })
+            const head = (!!msg.reasoning || !!headEvents) && <ToolGroup key="proc-head" events={headEvents || []} running={streaming} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} {...think(nodes.every((n) => n == null))} />
+            return <>{head}{nodes}</>
           }
+          const head = (!!msg.reasoning || !!msg.toolEvents?.length) && <ToolGroup key="proc-head" events={msg.toolEvents || []} running={streaming} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} {...think(!body)} />
           return (
             <>
-              {!!msg.toolEvents?.length && <ToolGroup events={msg.toolEvents} running={msg.status === 'streaming'} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} />}
+              {head}
               {body && (
                 voiceMode
                   ? <VoiceBubble text={body} stored={voice!.stored} anchorPrefix={`toc-${msg.id}`} />

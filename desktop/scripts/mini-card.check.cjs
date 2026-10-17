@@ -54,10 +54,14 @@ async function main() {
     const geo = await mini.evaluate(() => {
       const root = document.querySelector('.mini-card-shell'), bar = document.querySelector('.mini-card-chrome')
       return { overflow: root.scrollWidth - root.clientWidth, height: bar.getBoundingClientRect().height,
+        caps: bar.querySelectorAll('.mini-card-cap').length, ownBar: document.querySelectorAll('.mini-tangu .mini-native-bar').length,
+        streamTop: document.querySelector('.t2-stream')?.getBoundingClientRect().top, picker: bar.querySelector('.mini-card-picker')?.textContent,
         old: document.querySelectorAll('.mb-drawer,.mb-topbar,.mb-sheet,.mini-card-tab-count').length, actions: bar.querySelectorAll('.mini-card-action').length,
         emptyBottom: document.querySelector('.t2-empty')?.getBoundingClientRect().bottom, composerTop: document.querySelector('.composer-anchor')?.getBoundingClientRect().top }
     })
-    check('one header with main-panel and close actions', geo.height === 44 && geo.actions === 2 && geo.old === 0, JSON.stringify(geo))
+    // 10-17 方案 A:顶栏浮成两颗胶囊(左 Space ▾ │ 会话 ▾,右 新会话 · 主面板 · 关闭),视图不再自带一条栏,对话从胶囊底下滚过
+    check('floating capsule header: two caps, new/main/close, session picker inside', geo.caps === 2 && geo.actions === 3 && geo.ownBar === 0 && geo.picker === 'mini-latest' && geo.old === 0, JSON.stringify(geo))
+    check('chat scrolls under the capsules (stream starts at the card top)', geo.streamTop === 0 && geo.height < 50)
     check('no overflow or composer overlap', geo.overflow === 0 && geo.emptyBottom <= geo.composerTop)
     await mini.screenshot({ path: path.join(shots, 'tangu-light.png') })
     stub.script([{ type: 'token', payload: { delta: 'Mini message received.' } }])
@@ -75,7 +79,8 @@ async function main() {
     check('only adapted native and plugin Spaces', labels.length === 4 && labels.includes('ToDo List') && labels.includes('Mini 探针'), JSON.stringify(labels))
     await mini.screenshot({ path: path.join(shots, 'spaces.png') }); await mini.keyboard.press('Escape')
     await switchTo(labels.find((x) => /Amadeus|笔记/.test(x)))
-    await mini.getByLabel('选择笔记', { exact: true }).selectOption('Mini note.md')
+    await mini.getByRole('button', { name: '选择笔记', exact: true }).click()
+    await mini.locator('.mini-card-popover--picker').getByRole('button', { name: 'Mini note', exact: true }).click()
     await mini.waitForSelector('.mini-amadeus .amx-pane', { timeout: 30000 }); await mini.waitForTimeout(1200)
     check('dedicated Amadeus picker restores vault', await mini.locator('.mini-amadeus .amx-pane').count() === 1)
     check('no full-workspace Amadeus chrome', await mini.locator('.mini-amadeus .amx-toolbar,.mini-amadeus .amx-title-actions,.mini-amadeus .amx-props').count() === 0)

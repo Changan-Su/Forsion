@@ -1,5 +1,6 @@
 import { PRODUCT } from '../product'
 import { ModelPickerSettings } from './ModelPickerSettings'
+import { WebSearchSettings } from './WebSearchSettings'
 import { AutoCompactSetting } from './AutoCompactSetting'
 import { GitSettingsSection } from './GitSettingsSection'
 import { GitAccountsSection } from './GitAccountsSection'
@@ -11,7 +12,7 @@ import { BrowserExtensionPanel } from './BrowserExtensionPanel'
  * 在 Desktop 主界面内替换 Chat/Inspector 区域，而不是覆盖式弹窗。
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { X, Droplets, Shapes, ArrowLeft, Undo2, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2, CircleUserRound, Scaling, Coffee, MonitorCheck, History, MonitorSmartphone, Cloud, SunDim, AlignLeft, Wind, TextSelect, MousePointerClick } from 'lucide-react'
+import { X, Droplets, Shapes, ArrowLeft, Undo2, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2, CircleUserRound, Scaling, Coffee, MonitorCheck, History, MonitorSmartphone, Laptop, Cloud, SunDim, AlignLeft, Wind, TextSelect, MousePointerClick } from 'lucide-react'
 import { ThemeCard } from './ThemeCard'
 import { ThemeSettingsPanel } from './ThemeSettingsPanel'
 import { StartupAppearanceSettings } from './StartupAppearanceSettings'
@@ -25,7 +26,7 @@ import {
   listModels, listTools, setModelContextWindow,
   testProviderConnection, syncNow as backendSyncNow, getSyncStatus as backendGetSyncStatus,
   listPlugins, listAgents, type PluginInfo, type SyncStatusResult,
-  getLocalWebSearch, saveLocalWebSearch, testLocalWebSearch, type LocalWebSearchRedacted,
+  getLocalWebSearch, type LocalWebSearchRedacted,
 } from '../services/backendService'
 import { ChannelsTab } from './ChannelsTab'
 import { buildSessionLogPayload, sessionLogFilename } from '../services/sessionLog'
@@ -55,9 +56,10 @@ import { Markdown } from './Markdown'
 import { UpdateActions } from './UpdateActions'
 import { ChangelogEntries, releaseNotesFor } from '../views/ChangelogView'
 import { openWhatsNew } from './WhatsNewDialog'
-import { ModelSelect } from './ModelSelect'
 import { AsrModelChoice } from './AsrModelChoice'
-import { AuxModelChoice } from './AuxModelChoice'
+import { DefaultModelsPage } from './DefaultModelsPage'
+import { catalogByKind, FETCH_ENABLE_LIMIT, guessProviderModelKind, mergeFetched, providerFieldsFromRows, rowsFromProvider, type ModelKind, type ProviderModelKind, type ProviderModelRow } from './modelKinds'
+import { realtimeCandidates } from './RealtimeVoiceSettings'
 import { AgentSettingsOverview } from './AgentSettingsOverview'
 import { GlobalSkillsLibrary } from './GlobalSkillsLibrary'
 import { openAgentProfile } from '../views/agentProfileNav'
@@ -82,6 +84,7 @@ import { EnvProbeSection } from './EnvProbeSection'
 import { DesktopPermissions, hasDesktopPermissions } from './DesktopPermissions'
 import { ComputerHistorySettings, computerHistoryApi } from './ComputerHistorySettings'
 import { RemoteSessionsSettings, remoteSessionsApi } from './RemoteSessionsSettings' // P1-K4
+import { UnitSettings } from './UnitSwitcher'
 import { debugFireToast } from '../achievements/store'
 import { useTheme } from '../stores/themeStore'
 import { setMobileUiCommand, MOBILE_UI_KEY } from '../mobileUiCommand'
@@ -158,27 +161,51 @@ registerMessages({
   },
   'modelsettings.title': { zh: '模型', en: 'Models' },
   'modelsettings.defaults': { zh: '默认模型', en: 'Default models' },
-  'modelsettings.display': { zh: '分组与显示', en: 'Groups & visibility' },
+  'modelsettings.display': { zh: '模型库', en: 'Model library' },
   'modelsettings.providers': { zh: '提供方', en: 'Providers' },
-  'modelsettings.defaultsHint': { zh: '按用途选择默认模型，修改后自动保存。', en: 'Choose default models for each purpose. Changes save automatically.' },
-  'modelsettings.displayHint': { zh: '整理模型选择器中的分组，选择本地模型的显示范围。', en: 'Organize picker groups and choose which local models appear.' },
-  'modelsettings.providersHint': { zh: '管理提供方登录、API 连接与模型拉取。', en: 'Manage provider sign-ins, API connections and model discovery.' },
+  'modelsettings.defaultsHint': { zh: '每个用途调用哪个模型。不选就跟随 Forsion 云端默认；自选的随时可以恢复跟随。', en: 'Which model each purpose uses. Unset ones follow the Forsion Cloud defaults, and any custom choice can go back to the default.' },
+  'modelsettings.displayHint': { zh: '你能用的全部模型，分类和后台一致。关掉的不出现在选择菜单里。', en: 'Every model you can use, sorted the same way as the admin console. Models you turn off stay out of the pickers.' },
+  'modelsettings.providersHint': { zh: '模型从哪里来：Forsion 云端、订阅账号，或你自己的 API key。', en: 'Where models come from: Forsion Cloud, subscription accounts or your own API keys.' },
   'modelsettings.searchHint': { zh: '配置联网搜索的服务与凭据。', en: 'Configure web search services and credentials.' },
-  'modelsettings.voiceHint': { zh: '语音通话、语音输入和朗读分开设置，音色互不通用。', en: 'Voice calls, voice input and read-aloud are set up separately; their voices are not shared.' },
+  'modelsettings.voiceHint': { zh: '音色、语速和本地语音识别。用哪个模型在「默认模型」里选。', en: 'Voices, speed and on-device speech recognition. Choose the models under Default models.' },
+  'settings.tts.off': { zh: '朗读没开。在「默认模型 → 朗读」里选一个模型就开了。', en: 'Read-aloud is off. Pick a model under Default models → Read aloud to turn it on.' },
   'settings.voice.secCall': { zh: '语音通话', en: 'Voice call' },
   'settings.voice.secInput': { zh: '语音输入', en: 'Voice input' },
   'settings.voice.secRead': { zh: '朗读', en: 'Read aloud' },
-  'modelsettings.defaultUses': { zh: '按用途选择', en: 'Models by purpose' },
   'modelsettings.answerForm': { zh: '回答形式', en: 'Answer format' },
-  'modelsettings.refresh': { zh: '刷新模型', en: 'Refresh models' },
-  'modelsettings.chat': { zh: '对话与任务', en: 'Conversations & tasks' },
-  'modelsettings.chatHint': { zh: '新会话默认使用的主模型。', en: 'The main model for new conversations.' },
-  'modelsettings.image': { zh: '图像生成', en: 'Image generation' },
-  'modelsettings.imageHint': { zh: '用于生成和编辑图片。', en: 'For generating and editing images.' },
-  'modelsettings.followDefault': { zh: '跟随服务默认', en: 'Follow service default' },
   'modelsettings.noModels': { zh: '暂无可用模型。可在提供方中配置连接，然后刷新模型。', en: 'No models available. Configure a provider connection, then refresh models.' },
-  'modelsettings.manageDisplay': { zh: '管理分组与显示', en: 'Manage groups & visibility' },
-  'modelsettings.manageProviders': { zh: '管理提供方', en: 'Manage providers' },
+  'prov.cloud': { zh: 'Forsion 云端', en: 'Forsion Cloud' },
+  'prov.cloudIn': { zh: '已登录 · {count} 个模型由后台统一配置', en: 'Signed in · {count} models set up by your administrator' },
+  'prov.cloudOut': { zh: '未登录', en: 'Not signed in' },
+  'prov.cloudOutHint': { zh: '登录后可以直接用云端的模型，按额度计费。', en: 'Sign in to use cloud models, charged to your quota.' },
+  'prov.manageAccount': { zh: '管理账号', en: 'Manage account' },
+  'prov.subs': { zh: '订阅账号', en: 'Subscription accounts' },
+  'prov.subIn': { zh: '已登录 · 用订阅额度，不计 Forsion 积分', en: 'Signed in · uses your subscription, not Forsion credits' },
+  'prov.signIn': { zh: '登录', en: 'Sign in' },
+  'prov.signInAgain': { zh: '重新登录', en: 'Sign in again' },
+  'prov.add': { zh: '添加连接', en: 'Add connection' },
+  'prov.editing': { zh: '{host} · 编辑中', en: '{host} · editing' },
+  'prov.collapse': { zh: '收起', en: 'Close' },
+  'prov.name': { zh: '名称', en: 'Name' },
+  'prov.nameHint': { zh: '也是模型前缀，如 bailian/qwen3.8-max', en: 'Also the model prefix, e.g. bailian/qwen3.8-max' },
+  'prov.baseUrlHint': { zh: 'OpenAI 兼容端点，含 /v1', en: 'OpenAI-compatible endpoint, including /v1' },
+  'prov.keyHint': { zh: '只存在本机；本地端点可以留空', en: 'Stored on this device only; can be empty for local endpoints' },
+  'prov.models': { zh: '模型', en: 'Models' },
+  'prov.fetched': { zh: '{count} 个模型', en: '{count} models' },
+  'prov.modelsHint': { zh: '类型按模型名自动识别，可改；选「不使用」的不会保存。', en: 'Types are guessed from model names; change them if needed. Models set to Not used are not saved.' },
+  'prov.noRows': { zh: '还没有模型。点「拉取模型」；不拉也行，这条连接任意模型名都能按前缀调用。', en: 'No models yet. Fetch them, or skip it: any model name works on this connection through its prefix.' },
+  'prov.many': { zh: '模型较多，新的对话模型先没启用，在下面选要用的。', en: 'Lots of models found. New chat models start as Not used; pick the ones you want below.' },
+  'prov.changed': { zh: '已手动改过类型', en: 'Type changed by hand' },
+  'prov.kindFor': { zh: '{id} 的类型', en: 'Type of {id}' },
+  'prov.addModel': { zh: '添加模型', en: 'Add model' },
+  'prov.addModelPlaceholder': { zh: '手动填模型名，如 qwen3-tts-flash', en: 'Model name, e.g. qwen3-tts-flash' },
+  'prov.kind.llm': { zh: '对话', en: 'Chat' },
+  'prov.kind.image': { zh: '图像生成', en: 'Image generation' },
+  'prov.kind.tts': { zh: '朗读', en: 'Read aloud' },
+  'prov.kind.asr': { zh: '语音识别', en: 'Speech recognition' },
+  'prov.kind.off': { zh: '不使用', en: 'Not used' },
+  'prov.textOnly': { zh: '纯文本', en: 'Text only' },
+  'prov.textOnlyHint': { zh: '打开 = 这个模型看不了图，遇到图片交给「图像识别」', en: 'On = this model cannot see images; images go to Image recognition' },
   'modelsettings.apiProviders': { zh: 'API 连接', en: 'API connections' },
   'modelsettings.providerHint': { zh: '添加服务地址和 API Key，拉取并保存该连接可用的模型。', en: 'Add a service URL and API key, then fetch and save the models available through that connection.' },
   'modelsettings.loginHint': { zh: '使用提供方账号登录，完成后自动刷新可用模型。', en: 'Sign in with a provider account. Available models refresh after sign-in.' },
@@ -280,6 +307,7 @@ const TAB_ICONS: Partial<Record<Tab, React.ReactNode>> = {
   'amadeus-plugins': <Puzzle size={14} />,
   advanced: <Wrench size={14} />,
   permissions: <MonitorCog size={14} />,
+  units: <Laptop size={14} />,
   'remote-sessions': <MonitorSmartphone size={14} />, // P1-K4
   'computer-history': <History size={14} />,
   developer: <Bug size={14} />,
@@ -391,6 +419,8 @@ export const SettingsModal: React.FC<{
   // 中分类(标题下那排横向栏目)。只存 key,**有效值在渲染时推导**(见下方 activeSub):
   // 这样换一级页 / 某个中分类因条件消失时自动落回第一项,不需要 effect 复位,也就没有复位竞态。
   const [sub, setSub] = useState(initialTarget.sub ?? '')
+  /** 模型库当前的类型标签(默认模型页的「在模型库里管理」带着类型跳过来)。 */
+  const [libKind, setLibKind] = useState<ModelKind>('llm')
   // 滑入方向:+1 点了右边的栏目,-1 左边,0 换了一级页(纯淡入)。喂给 .settings-sub[data-dir]。
   const [subDir, setSubDir] = useState(0)
   const [cloudAdvancedOpen, setCloudAdvancedOpen] = useState(false)
@@ -519,6 +549,8 @@ export const SettingsModal: React.FC<{
     ...(phoneShell ? [] : ([['statusbar', t('settings.tab.statusbar')]] as Array<[Tab, string]>)),
     ['advanced', t('settings.tab.advanced')],
     ...(hasDesktopPermissions() ? ([['permissions', t('desktopPermissions.title')]] as Array<[Tab, string]>) : []),
+    // 设置 › 设备(原 Ribbon 胶囊菜单,10-17 搬进来):只在有 Unit 主进程桥的真桌面列。
+    ...(window.tangu?.unitHostStatus || window.tangu?.unitsList ? ([['units', t('unit.tab')]] as Array<[Tab, string]>) : []),
     // P1-K4:只在执行设备本机(有主进程 API)列;设备页 / web / 手机没有 —— 开关只能在本机改。
     ...(remoteSessionsApi() ? ([['remote-sessions', t('remoteSessions.tab')]] as Array<[Tab, string]>) : []),
     // 不按 darwin 门控:非 mac 也列出来,页内说明「目前仅支持 macOS」,免得用户找不到入口。
@@ -637,7 +669,13 @@ export const SettingsModal: React.FC<{
   const [providerBusy, setProviderBusy] = useState<string | null>(null)
   // 直连 provider 配置(~/.tangu/providers.json)
   const [customProviders, setCustomProviders] = useState<DirectProviderConfig[]>([])
-  const [editProvider, setEditProvider] = useState<(DirectProviderConfig & { modelsCsv: string; imageModelsCsv: string; ttsModelsCsv: string; asrModelsCsv: string; noVisionCsv: string }) | null>(null)
+  /** 装了 Extend 且登录有效:语音通话的云端模型此时才可选(默认模型页、模型库、语音页三处同一口径)。 */
+  const realtimeSignedIn = cloudAccount && !!authSt?.loggedIn && authSt.tokenValid !== false
+  /** 正在编辑的直连连接:rows = 每个模型一行(类型 + 纯文本),保存时再拆回 modelIds / imageModelIds / ttsModelIds / asrModelIds / noVisionModelIds。
+   *  isNew = 「添加连接」(编辑区画在列表下面);否则画在被编辑的那一行下面。base = 打开时的原配置(保存时留住行表示不了的旧归属);
+   *  editId 区分每次打开:拉取回包时编辑区已经换了一条连接,就不往里并。 */
+  const [editProvider, setEditProvider] = useState<(DirectProviderConfig & { rows: ProviderModelRow[]; isNew?: boolean; original?: string; base: Partial<DirectProviderConfig>; editId: number }) | null>(null)
+  const [manualModel, setManualModel] = useState('')
   // 语速输入的编辑态缓冲(null=未在编辑,显示已存值):清空/打半截时不反弹,blur 时非法则恢复旧值。
   const [ttsSpeedText, setTtsSpeedText] = useState<string | null>(null)
   const [ttsTesting, setTtsTesting] = useState(false)
@@ -648,17 +686,10 @@ export const SettingsModal: React.FC<{
   const [providerSaveMsg, setProviderSaveMsg] = useState('')
   // 本地联网搜索(BYO-key;engine /agent/websearch)。wsRed=null 表示端点不可用(云端/旧后端)→ 整段隐藏。
   const [wsRed, setWsRed] = useState<LocalWebSearchRedacted | null>(null)
-  const [wsProvider, setWsProvider] = useState('auto')
-  const [wsZhipuEngine, setWsZhipuEngine] = useState('search_pro_quark')
-  const [wsKeys, setWsKeys] = useState({ bocha: '', tavily: '', zhipu: '' }) // 输入草稿:'' 且未点清除 = 不变
-  const [wsClear, setWsClear] = useState({ bocha: false, tavily: false, zhipu: false })
-  const [wsMsg, setWsMsg] = useState('')
-  const [wsBusy, setWsBusy] = useState(false)
   // 镜像连通性测试(设置页管理后端)
   const [mirrorTesting, setMirrorTesting] = useState(false)
   const [mirrorTest, setMirrorTest] = useState<MirrorTestResult | null>(null)
-  // 「拉取模型」:后端代拉 baseUrl/models → 可搜索多选 → 勾选写回 modelsCsv。
-  const [fetchedModels, setFetchedModels] = useState<string[] | null>(null)
+  // 「拉取模型」:后端代拉 baseUrl/models → 并进 editProvider.rows(按模型名猜类型)。
   const [modelSearch, setModelSearch] = useState('')
   const [fetchingModels, setFetchingModels] = useState(false)
   const [fetchModelsMsg, setFetchModelsMsg] = useState('')
@@ -735,14 +766,7 @@ export const SettingsModal: React.FC<{
   useEffect(() => {
     if (!p.open || tab !== 'model' || !isDesktop) return
     void getLocalWebSearch(homeTarget())
-      .then((r) => {
-        setWsRed(r)
-        setWsProvider(r.provider)
-        setWsZhipuEngine(r.zhipuEngine || 'search_pro_quark')
-        setWsKeys({ bocha: '', tavily: '', zhipu: '' })
-        setWsClear({ bocha: false, tavily: false, zhipu: false })
-        setWsMsg('')
-      })
+      .then(setWsRed)
       .catch(() => setWsRed(null))
   }, [p.open, tab, isDesktop, p.cfg])
   const pluginNm = (pl: PluginInfo): string => (locale === 'en' && pl.nameEn ? pl.nameEn : pl.name)
@@ -1142,6 +1166,7 @@ export const SettingsModal: React.FC<{
     'amadeus-plugins': PRODUCT.nativeFeatures !== undefined ? 'settings.amadeusPlugins.unitIntro' : 'settings.page.pluginsDescription',
     advanced: 'settings.page.advancedDescription',
     permissions: 'desktopPermissions.description',
+    units: 'unit.page',
     'remote-sessions': 'remoteSessions.page', // P1-K4
     'computer-history': 'settingsmodal.page.computerHistory',
     developer: 'settings.page.developerDescription',
@@ -1265,7 +1290,7 @@ export const SettingsModal: React.FC<{
       { key: 'appearance', label: t('settings.group.appearance'), tabs: ['theme', 'shortcuts', 'notifications', 'statusbar'] },
       { key: 'ai', label: t('settings.group.ai'), tabs: ['model', 'agents', 'skills', 'mcp', 'hooks', 'channels', 'browser', 'computer-use'] },
       { key: 'extensions', label: t('settings.group.extensions'), tabs: ['amadeus-plugins'] },
-      { key: 'system', label: t('settings.group.system'), tabs: ['permissions', 'remote-sessions', 'computer-history', 'advanced', 'developer', 'about'] },
+      { key: 'system', label: t('settings.group.system'), tabs: ['permissions', 'units', 'remote-sessions', 'computer-history', 'advanced', 'developer', 'about'] },
     ] },
   ]
   const navItemsForGroup = (grp: { key: string; tabs: Tab[] }): Array<[Tab, string]> => {
@@ -1634,6 +1659,7 @@ export const SettingsModal: React.FC<{
           <div key={`${tab}:${activeSub}`} className={`settings-sub settings-sub--${tab}`} id={cloudTabs.length ? 'settings-cloud-panel' : undefined} role={cloudTabs.length ? 'tabpanel' : undefined} aria-labelledby={cloudTabs.length ? `settings-cloud-tab-${activeSub}` : undefined} data-dir={subDir} data-settings-sub={activeSub || undefined}>
                 {tab === 'permissions' && hasDesktopPermissions() && <DesktopPermissions mode={p.themeMode} />}
                 {tab === 'computer-history' && <ComputerHistorySettings mode={p.themeMode} anchor="computer-history" />}
+                {tab === 'units' && <UnitSettings />}
                 {tab === 'remote-sessions' && <RemoteSessionsSettings />}
                 {/* 小节标题不在正文重复；当前子页面由左侧/移动首页的折叠子项标明。 */}
                 {/* 基本(U-14):用户常改的两项放第一屏;后端技术项挪到「连接」。 */}
@@ -2221,37 +2247,16 @@ export const SettingsModal: React.FC<{
                 {tab === 'sync' && activeSub === 's-remote' && <RemoteSyncSection />}
 
                 {tab === 'model' && activeSub === 'm-models' && (
-                  <>
-                    <SettingsPanel className="model-defaults-panel" title={t('modelsettings.defaultUses')} actions={
-                      <button className="btn ghost sm" disabled={modelsLoading} onClick={() => void loadModels()}>
-                        <RefreshCw size={12} className={modelsLoading ? 'spin' : ''} />{t('modelsettings.refresh')}
-                      </button>
-                    }>
-                      <SettingsRow label={t('modelsettings.chat')} description={t('modelsettings.chatHint')} control={
-                        <ModelSelect
-                          models={(models?.models || []).filter((m) => (m.modelType || 'llm') === 'llm')}
-                          value={draft.modelId || ''}
-                          cloudDefaultId={models?.defaultModelId}
-                          defaultLabel={t('modelsettings.followDefault')}
-                          ariaLabel={t('modelsettings.chat')}
-                          icon={<MessageCircle size={13} />}
-                          disabled={modelsLoading}
-                          onChange={(modelId) => { setDraft({ ...draft, modelId }); p.onConfigChange({ modelId }) }}
-                        />
-                      } />
-                      <SettingsRow label={t('modelsettings.image')} description={t('modelsettings.imageHint')} control={
-                        <ModelSelect
-                          models={(models?.models || []).filter((m) => m.modelType === 'image_gen')}
-                          value={draft.imageModelId || ''}
-                          cloudDefaultId={models?.imageModelId}
-                          ariaLabel={t('modelsettings.image')}
-                          icon={<ImageIcon size={13} />}
-                          disabled={modelsLoading}
-                          onChange={(imageModelId) => { setDraft({ ...draft, imageModelId }); p.onConfigChange({ imageModelId }) }}
-                        />
-                      } />
-                      {isDesktop && <AuxModelChoice models={models} compact />}
-                    </SettingsPanel>
+                  <DefaultModelsPage
+                    models={models} loading={modelsLoading} onRefresh={() => void loadModels()}
+                    chatModelId={draft.modelId || ''} imageModelId={draft.imageModelId || ''}
+                    onChat={(modelId) => { setDraft((d) => ({ ...d, modelId })); p.onConfigChange({ modelId }) }}
+                    onImage={(imageModelId) => { setDraft((d) => ({ ...d, imageModelId })); p.onConfigChange({ imageModelId }) }}
+                    stored={isDesktop ? stored : null} onStored={setStored} providers={customProviders}
+                    subscriptionIds={(providers || []).map((pr) => pr.id)}
+                    realtimeSignedIn={realtimeSignedIn}
+                    onOpen={(target, kind) => { if (kind) setLibKind(kind); setSub(target) }}
+                  >
                     {/* Intelligent UI 的档位是模型怎么作答的事,不是外观:和默认模型放一页(2026-10-14 用户定)。 */}
                     <SettingsPanel icon={<Shapes size={14} />} title={t('modelsettings.answerForm')}>
                       <SettingsRow anchor="visuals" label={t('settings.theme.visuals')} description={t(`settings.theme.visuals.${visualsPref}`)} control={
@@ -2270,16 +2275,16 @@ export const SettingsModal: React.FC<{
                       </div>
                     )}
                     {!modelsLoading && !models?.models.length && <div className="hint">{t('modelsettings.noModels')}</div>}
-                    <div className="model-settings-links">
-                      <button className="btn ghost sm" onClick={() => setSub('m-display')}>{t('modelsettings.manageDisplay')}<ChevronRight size={12} /></button>
-                      {isDesktop && <button className="btn ghost sm" onClick={() => setSub('m-providers')}>{t('modelsettings.manageProviders')}<ChevronRight size={12} /></button>}
-                    </div>
-                  </>
+                  </DefaultModelsPage>
                 )}
 
-                {/* 自动压缩阈值挨着每个模型的窗口输入框(同一套「窗口」心智);写的是本机引擎的 config.json,与 onContextWindow 同门。 */}
-                {tab === 'model' && activeSub === 'm-display' && isDesktop && <AutoCompactSetting cfg={p.cfg} />}
-                {tab === 'model' && activeSub === 'm-display' && <ModelPickerSettings models={models?.models || []} onContextWindow={isDesktop ? async (modelId, tokens) => {
+                {/* 模型库:六类与后台同名同序。自动压缩阈值挨着每个模型的窗口输入框(同一套「窗口」心智),写的是本机引擎的 config.json,与 onContextWindow 同门。 */}
+                {tab === 'model' && activeSub === 'm-display' && <ModelPickerSettings
+                  catalog={catalogByKind(models, isDesktop && stored ? realtimeCandidates(stored, customProviders, models?.realtimeModel, realtimeSignedIn).filter((c) => c.source === 'direct') : [])}
+                  kind={libKind} onKind={setLibKind} subscriptionIds={(providers || []).map((pr) => pr.id)}
+                  onRefresh={() => void loadModels()} loading={modelsLoading}
+                  autoCompact={isDesktop ? <AutoCompactSetting cfg={p.cfg} /> : undefined}
+                  onContextWindow={isDesktop ? async (modelId, tokens) => {
                   // 只在本机引擎下露出(与「提供方」同门):写的是引擎进程的 config.json,云端 worker 是多用户共用的,引擎侧也 404。
                   await setModelContextWindow(homeTarget(), modelId, tokens)
                   const next = await listModels(homeTarget())
@@ -2289,425 +2294,169 @@ export const SettingsModal: React.FC<{
                   useApp.setState((s) => ({ modelsResp: next, ctxInfoBySession: Object.fromEntries(Object.entries(s.ctxInfoBySession).filter(([, v]) => v.modelId !== modelId)) }))
                 } : undefined} />}
 
-                {tab === 'model' && activeSub === 'm-providers' && (
-                  <>
-                    {isDesktop && <>
-                    {providers && providers.length > 0 && (
-                      <div className="field">
-                        <label>{t('settings.provider.loginLabel')}</label>
-                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                          {providers.map((pr) => (
-                            <button
-                              key={pr.id}
-                              className="btn ghost sm"
-                              disabled={providerBusy === pr.id}
-                              onClick={() => void doProviderLogin(pr.id)}
-                            >
-                              {providerBusy === pr.id ? <Loader2 size={12} className="spin" /> : <LogIn size={12} />}
-                              {pr.id}
-                              {pr.loggedIn ? t('settings.provider.loggedInSuffix') : ''}
-                            </button>
+                {tab === 'model' && activeSub === 'm-providers' && isDesktop && (() => {
+                  const hostOf = (url: string) => { try { return new URL(url).host } catch { return url } }
+                  const KINDS: ProviderModelKind[] = ['llm', 'image', 'tts', 'asr', 'off']
+                  const startEdit = (cp: DirectProviderConfig | null) => {
+                    setEditProvider(cp ? { ...cp, rows: rowsFromProvider(cp), original: cp.providerId, base: cp, editId: Date.now() } : { providerId: '', baseUrl: '', apiKey: '', rows: [], isNew: true, base: {}, editId: Date.now() })
+                    setProviderTestMsg(''); setProviderSaveMsg(''); setModelSearch(''); setFetchModelsMsg(''); setManualModel('')
+                  }
+                  const closeEdit = () => { setEditProvider(null); setModelSearch(''); setFetchModelsMsg('') }
+                  const editor = editProvider && (() => {
+                    const ep = editProvider
+                    const mq = modelSearch.trim().toLowerCase()
+                    const rows = mq ? ep.rows.filter((r) => r.id.toLowerCase().includes(mq)) : ep.rows
+                    const setRow = (id: string, patch: Partial<ProviderModelRow>) => setEditProvider({ ...ep, rows: ep.rows.map((r) => (r.id === id ? { ...r, ...patch } : r)) })
+                    // 手填模型名(端点没有 /models、或拉取结果里没有):并成一行,类型照样按名字猜
+                    const addManual = () => {
+                      const id = manualModel.trim()
+                      if (id) setEditProvider({ ...ep, rows: mergeFetched(ep.rows, [id], ep.base.noVisionModelIds) })
+                      setManualModel('')
+                    }
+                    return (
+                      <div className="provider-editor">
+                        <SettingsRow label={t('prov.name')} description={t('prov.nameHint')} control={
+                          <input type="text" value={ep.providerId} placeholder={t('settings.customProvider.idPlaceholder')} onChange={(e) => setEditProvider({ ...ep, providerId: e.target.value.trim() })} />
+                        } />
+                        <SettingsRow label="Base URL" description={t('prov.baseUrlHint')} control={
+                          <input type="text" value={ep.baseUrl} placeholder={t('settings.customProvider.baseUrlPlaceholder')} onChange={(e) => setEditProvider({ ...ep, baseUrl: e.target.value.trim() })} />
+                        } />
+                        <SettingsRow label="API Key" description={t('prov.keyHint')} control={
+                          <input type="password" value={ep.apiKey || ''} placeholder="sk-…" onChange={(e) => setEditProvider({ ...ep, apiKey: e.target.value })} />
+                        } />
+                        <div className="provider-editor-models-head">
+                          <strong>{ep.rows.length ? t('prov.fetched', { count: ep.rows.length }) : t('prov.models')}</strong>
+                          <span className="grow" />
+                          <button className="btn ghost sm" disabled={fetchingModels || !ep.baseUrl} onClick={() => {
+                            setFetchingModels(true); setFetchModelsMsg('')
+                            void fetchProviderModels(homeTarget(), { baseUrl: ep.baseUrl, apiKey: ep.apiKey || undefined })
+                              .then((ms) => {
+                                setEditProvider((cur) => (cur?.editId === ep.editId ? { ...cur, rows: mergeFetched(cur.rows, ms.map((m) => m.id), cur.base.noVisionModelIds) } : cur))
+                                setModelSearch('')
+                                setFetchModelsMsg(!ms.length ? t('settings.customProvider.fetchEmpty') : ms.length > FETCH_ENABLE_LIMIT ? t('prov.many') : '')
+                              })
+                              .catch((e) => setFetchModelsMsg(`✗ ${e?.message || e}`))
+                              .finally(() => setFetchingModels(false))
+                          }}>
+                            {fetchingModels ? <Loader2 size={12} className="spin" /> : <Download size={12} />} {t('settings.customProvider.fetchModels')}
+                          </button>
+                        </div>
+                        <div className="hint provider-editor-hint">{fetchModelsMsg || (ep.rows.length ? t('prov.modelsHint') : t('prov.noRows'))}</div>
+                        <form className="provider-editor-add" onSubmit={(e) => { e.preventDefault(); addManual() }}>
+                          <input value={manualModel} placeholder={t('prov.addModelPlaceholder')} aria-label={t('prov.addModel')} onChange={(e) => setManualModel(e.target.value)} />
+                          <button className="btn ghost sm" disabled={!manualModel.trim()}><Plus size={12} /> {t('prov.addModel')}</button>
+                        </form>
+                        {ep.rows.length > 8 && <span className="model-search provider-editor-search"><Search size={12} /><input value={modelSearch} placeholder={t('model.searchPlaceholder')} onChange={(e) => setModelSearch(e.target.value)} /></span>}
+                        <div className="provider-editor-rows">
+                          {rows.map((r) => (
+                            <SettingsRow key={r.id} className={r.kind === 'off' ? 'model-lib-row is-hidden' : 'model-lib-row'} label={<span title={r.id}>{r.id}</span>}
+                              description={r.kind !== 'off' && r.kind !== guessProviderModelKind(r.id) ? t('prov.changed') : undefined}
+                              control={<div className="model-lib-controls">
+                                {r.kind === 'llm' && <label className="provider-editor-textonly" title={t('prov.textOnlyHint')}>{t('prov.textOnly')}<SettingsSwitch checked={r.textOnly} label={`${t('prov.textOnly')} · ${r.id}`} onChange={(on) => setRow(r.id, { textOnly: on })} /></label>}
+                                <select aria-label={t('prov.kindFor', { id: r.id })} value={r.kind} onChange={(e) => setRow(r.id, { kind: e.target.value as ProviderModelKind })}>
+                                  {KINDS.map((k) => <option key={k} value={k}>{t(`prov.kind.${k}`)}</option>)}
+                                </select>
+                              </div>} />
                           ))}
                         </div>
-                        {providerBusy && <div className="hint" style={{ marginTop: 6 }}>{t('settings.provider.loginBusy')}</div>}
-                        <div className="hint">
-                          {t('modelsettings.loginHint')}
+                        <div className="provider-editor-actions">
+                          <button className="btn primary sm" disabled={!ep.providerId || !ep.baseUrl} onClick={() => {
+                            void window.tangu!.saveProvider!({
+                              providerId: ep.providerId,
+                              baseUrl: ep.baseUrl.replace(/\/+$/, ''),
+                              apiKey: ep.apiKey || undefined,
+                              ...providerFieldsFromRows(ep.rows, ep.base),
+                            }).then((list) => {
+                              // 改了名字 = 另存一条,旧的留着(与旧表单一致):各处存着的「旧名/模型」引用不会一下子全失效
+                              setCustomProviders(list)
+                              closeEdit()
+                              void loadModels() // Provider 保存/后端重启完成后立即刷新显示筛选目录
+                              setProviderSaveMsg(t('settings.customProvider.savedReloading'))
+                            }).catch((e) => setProviderTestMsg(`${t('settings.toast.saveFailed')}${e?.message || e}`))
+                          }}>{t('settings.btn.save')}</button>
+                          <button className="btn ghost sm" disabled={!ep.baseUrl} onClick={() => {
+                            // 已在测试中 → 这个按钮变成「取消」:abort 掉挂起的请求(错误 URL/密钥时不再无限转圈)。
+                            if (providerTesting) { providerTestAbort.current?.abort(); return }
+                            const ac = new AbortController()
+                            providerTestAbort.current = ac
+                            setProviderTesting(true); setProviderTestMsg('')
+                            void testProviderConnection(homeTarget(), { baseUrl: ep.baseUrl, apiKey: ep.apiKey || undefined, modelId: ep.rows.find((r) => r.kind === 'llm')?.id }, ac.signal)
+                              .then((r) => setProviderTestMsg(`${r.success ? '✓' : '✗'} ${r.message}`))
+                              .catch((e) => setProviderTestMsg(
+                                e?.name === 'AbortError' ? t('settings.test.canceled')
+                                  : e?.name === 'TimeoutError' ? t('settings.test.timeout')
+                                  : `✗ ${e?.message || e}`))
+                              .finally(() => { setProviderTesting(false); providerTestAbort.current = null })
+                          }}>
+                            {providerTesting ? <Loader2 size={12} className="spin" /> : <Plug size={12} />} {providerTesting ? t('settings.btn.cancel') : t('settings.btn.testConnection')}
+                          </button>
+                          <button className="btn ghost sm" onClick={closeEdit}>{t('settings.btn.cancel')}</button>
+                          <span className="provider-editor-msg">{providerTestMsg}</span>
                         </div>
                       </div>
-                    )}
-                    <div className="field">
-                      <label>{t('modelsettings.apiProviders')}</label>
-                      <div className="hint" style={{ marginBottom: 8 }}>
-                        {t('modelsettings.providerHint')}
-                      </div>
-                      {customProviders.length > 0 && (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 10 }}>
-                          {customProviders.map((cp) => (
-                            <div key={cp.providerId} className="file-row" style={{ cursor: 'default' }}>
-                              <span className="file-name">
-                                <b>{cp.providerId}</b>
-                                <span style={{ color: 'var(--text-muted)', marginLeft: 8, fontSize: 'var(--ui-font-meta, 12px)' }}>{cp.baseUrl}</span>
-                              </span>
-                              <span className="file-size">
-                                {cp.modelIds?.length ? t('settings.customProvider.modelCount', { count: cp.modelIds.length }) : t('settings.customProvider.anyModel')}
-                                {cp.apiKey ? ' · key✓' : ''}
-                              </span>
-                              <button
-                                className="icon-btn"
-                                title={t('settings.btn.edit')}
-                                onClick={() => {
-                                  setEditProvider({ ...cp, modelsCsv: (cp.modelIds || []).join(', '), imageModelsCsv: (cp.imageModelIds || []).join(', '), ttsModelsCsv: (cp.ttsModelIds || []).join(', '), asrModelsCsv: (cp.asrModelIds || []).join(', '), noVisionCsv: (cp.noVisionModelIds || []).join(', ') })
-                                  setProviderTestMsg('')
-                                  setProviderSaveMsg('')
-                                  setFetchedModels(null); setModelSearch(''); setFetchModelsMsg('')
-                                }}
-                              >
-                                <KeyRound size={13} />
+                    )
+                  })()
+                  const cloudCount = (models?.models || []).filter((m) => m.source === 'forsion').length
+                  return (
+                    <>
+                      {cloudAccount && (
+                        <SettingsPanel icon={<Cloud size={14} />} title={t('prov.cloud')}>
+                          <SettingsRow label={authSt?.loggedIn ? (authSt.nickname || authSt.username || t('prov.cloud')) : t('prov.cloudOut')}
+                            description={authSt?.loggedIn ? t('prov.cloudIn', { count: cloudCount }) : t('prov.cloudOutHint')}
+                            control={<button className="btn ghost sm" onClick={() => goTab('forsion')}>{t('prov.manageAccount')}</button>} />
+                        </SettingsPanel>
+                      )}
+                      {providers && providers.length > 0 && (
+                        <SettingsPanel icon={<KeyRound size={14} />} title={t('prov.subs')} description={t('modelsettings.loginHint')}>
+                          {providers.map((pr) => (
+                            <SettingsRow key={pr.id} label={pr.id} description={pr.loggedIn ? t('prov.subIn') : t('prov.cloudOut')} control={
+                              <button className="btn ghost sm" disabled={providerBusy === pr.id} onClick={() => void doProviderLogin(pr.id)}>
+                                {providerBusy === pr.id ? <Loader2 size={12} className="spin" /> : <LogIn size={12} />}{t(pr.loggedIn ? 'prov.signInAgain' : 'prov.signIn')}
                               </button>
-                              <button
-                                className="icon-btn"
-                                title={t('settings.btn.delete')}
-                                onClick={() => {
+                            } />
+                          ))}
+                          {providerBusy && <div className="hint provider-editor-hint">{t('settings.provider.loginBusy')}</div>}
+                        </SettingsPanel>
+                      )}
+                      <SettingsPanel icon={<Plug size={14} />} title={t('modelsettings.apiProviders')} description={t('modelsettings.providerHint')}>
+                        {customProviders.map((cp) => {
+                          const editing = editProvider && !editProvider.isNew && editProvider.original === cp.providerId
+                          const n = (cp.modelIds?.length || 0) + (cp.imageModelIds?.length || 0) + (cp.ttsModelIds?.length || 0) + (cp.asrModelIds?.length || 0)
+                          return <React.Fragment key={cp.providerId}>
+                            <SettingsRow label={cp.providerId}
+                              description={editing ? t('prov.editing', { host: hostOf(cp.baseUrl) }) : `${hostOf(cp.baseUrl)} · ${n ? t('settings.customProvider.modelCount', { count: n }) : t('settings.customProvider.anyModel')}`}
+                              control={<div className="model-lib-controls">
+                                <button className="btn ghost sm" onClick={() => (editing ? closeEdit() : startEdit(cp))}>{t(editing ? 'prov.collapse' : 'settings.btn.edit')}</button>
+                                <button className="icon-btn" title={t('settings.btn.delete')} aria-label={`${t('settings.btn.delete')} · ${cp.providerId}`} onClick={() => {
                                   if (!window.confirm(t('settings.customProvider.deleteConfirm', { id: cp.providerId }))) return
                                   void window.tangu!.deleteProvider!(cp.providerId).then((list) => {
                                     setCustomProviders(list)
+                                    if (editing) closeEdit()
                                     void loadModels()
                                     setProviderSaveMsg(t('settings.customProvider.deletedReloading'))
                                   })
-                                }}
-                              >
-                                <Trash2 size={13} />
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                      {!editProvider && (
-                        <button
-                          className="btn ghost sm"
-                          onClick={() => {
-                            setEditProvider({ providerId: '', baseUrl: '', apiKey: '', modelIds: [], modelsCsv: '', imageModelsCsv: '', ttsModelsCsv: '', asrModelsCsv: '', noVisionCsv: '' })
-                            setProviderTestMsg('')
-                            setProviderSaveMsg('')
-                            setFetchedModels(null); setModelSearch(''); setFetchModelsMsg('')
-                          }}
-                        >
-                          <Plus size={13} /> {t('settings.customProvider.add')}
-                        </button>
-                      )}
-                      {providerSaveMsg && !editProvider && (
-                        <div className="hint" style={{ marginTop: 6 }}>{providerSaveMsg}</div>
-                      )}
-                    </div>
-
-                    {editProvider && (
-                      <>
-                        <div className="field-row">
-                          <div className="field">
-                            <label>{t('settings.customProvider.idLabel')}</label>
-                            <input
-                              type="text"
-                              value={editProvider.providerId}
-                              onChange={(e) => setEditProvider({ ...editProvider, providerId: e.target.value.trim() })}
-                              placeholder={t('settings.customProvider.idPlaceholder')}
-                            />
-                          </div>
-                        </div>
-                        <div className="field">
-                          <label>{t('settings.customProvider.baseUrlLabel')}</label>
-                          <input
-                            type="text"
-                            value={editProvider.baseUrl}
-                            onChange={(e) => setEditProvider({ ...editProvider, baseUrl: e.target.value.trim() })}
-                            placeholder={t('settings.customProvider.baseUrlPlaceholder')}
-                          />
-                        </div>
-                        <div className="field-row">
-                          <div className="field">
-                            <label>{t('settings.customProvider.apiKeyLabel')}</label>
-                            <input
-                              type="password"
-                              value={editProvider.apiKey || ''}
-                              onChange={(e) => setEditProvider({ ...editProvider, apiKey: e.target.value })}
-                              placeholder="sk-…"
-                            />
-                          </div>
-                          <div className="field">
-                            <label>{t('settings.customProvider.modelsLabel')}</label>
-                            <input
-                              type="text"
-                              value={editProvider.modelsCsv}
-                              onChange={(e) => setEditProvider({ ...editProvider, modelsCsv: e.target.value })}
-                              placeholder={t('settings.customProvider.modelsPlaceholder')}
-                            />
-                          </div>
-                          <div className="field">
-                            <label>{t('settings.customProvider.imageModelsLabel')}</label>
-                            <input
-                              type="text"
-                              value={editProvider.imageModelsCsv}
-                              onChange={(e) => setEditProvider({ ...editProvider, imageModelsCsv: e.target.value })}
-                              placeholder={t('settings.customProvider.imageModelsPlaceholder')}
-                            />
-                          </div>
-                          <div className="field">
-                            <label>{t('settings.customProvider.ttsModelsLabel')}</label>
-                            <input
-                              type="text"
-                              value={editProvider.ttsModelsCsv}
-                              onChange={(e) => setEditProvider({ ...editProvider, ttsModelsCsv: e.target.value })}
-                              placeholder={t('settings.customProvider.ttsModelsPlaceholder')}
-                            />
-                          </div>
-                          <div className="field">
-                            <label>{t('settings.customProvider.asrModelsLabel')}</label>
-                            <input
-                              type="text"
-                              value={editProvider.asrModelsCsv}
-                              onChange={(e) => setEditProvider({ ...editProvider, asrModelsCsv: e.target.value })}
-                              placeholder={t('settings.customProvider.asrModelsPlaceholder')}
-                            />
-                          </div>
-                          {/* 无多模态黑名单:默认认为都能看图,只需登记已知的纯文本模型。 */}
-                          <div className="field">
-                            <label>{t('settings.customProvider.noVisionLabel')}</label>
-                            <input
-                              type="text"
-                              value={editProvider.noVisionCsv}
-                              onChange={(e) => setEditProvider({ ...editProvider, noVisionCsv: e.target.value })}
-                              placeholder="deepseek-chat, qwq-32b"
-                            />
-                            <div className="hint">{t('settings.customProvider.noVisionHint')}</div>
-                          </div>
-                        </div>
-                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                          <button
-                            className="btn ghost sm"
-                            disabled={!editProvider.baseUrl}
-                            onClick={() => {
-                              // 已在测试中 → 这个按钮变成「取消」:abort 掉挂起的请求(错误 URL/密钥时不再无限转圈)。
-                              if (providerTesting) { providerTestAbort.current?.abort(); return }
-                              const ac = new AbortController()
-                              providerTestAbort.current = ac
-                              setProviderTesting(true)
-                              setProviderTestMsg('')
-                              const firstModel = editProvider.modelsCsv.split(',').map((s) => s.trim()).filter(Boolean)[0]
-                              void testProviderConnection(homeTarget(), {
-                                baseUrl: editProvider.baseUrl,
-                                apiKey: editProvider.apiKey || undefined,
-                                modelId: firstModel,
-                              }, ac.signal)
-                                .then((r) => setProviderTestMsg(`${r.success ? '✓' : '✗'} ${r.message}`))
-                                .catch((e) => setProviderTestMsg(
-                                  e?.name === 'AbortError' ? t('settings.test.canceled')
-                                    : e?.name === 'TimeoutError' ? t('settings.test.timeout')
-                                    : `✗ ${e?.message || e}`))
-                                .finally(() => { setProviderTesting(false); providerTestAbort.current = null })
-                            }}
-                          >
-                            {providerTesting ? <Loader2 size={12} className="spin" /> : <Plug size={12} />} {providerTesting ? t('settings.btn.cancel') : t('settings.btn.testConnection')}
-                          </button>
-                          <button
-                            className="btn ghost sm"
-                            disabled={fetchingModels || !editProvider.baseUrl}
-                            onClick={() => {
-                              setFetchingModels(true)
-                              setFetchModelsMsg('')
-                              void fetchProviderModels(homeTarget(), {
-                                baseUrl: editProvider.baseUrl,
-                                apiKey: editProvider.apiKey || undefined,
-                              })
-                                .then((ms) => {
-                                  setFetchedModels(ms.map((m) => m.id))
-                                  setModelSearch('')
-                                  if (!ms.length) setFetchModelsMsg(t('settings.customProvider.fetchEmpty'))
-                                })
-                                .catch((e) => { setFetchedModels([]); setFetchModelsMsg(`✗ ${e?.message || e}`) })
-                                .finally(() => setFetchingModels(false))
-                            }}
-                          >
-                            {fetchingModels ? <Loader2 size={12} className="spin" /> : <Download size={12} />} {t('settings.customProvider.fetchModels')}
-                          </button>
-                          <button
-                            className="btn primary sm"
-                            disabled={!editProvider.providerId || !editProvider.baseUrl}
-                            onClick={() => {
-                              const modelIds = editProvider.modelsCsv.split(',').map((s) => s.trim()).filter(Boolean)
-                              const imageModelIds = editProvider.imageModelsCsv.split(',').map((s) => s.trim()).filter(Boolean)
-                              const ttsModelIds = editProvider.ttsModelsCsv.split(',').map((s) => s.trim()).filter(Boolean)
-                              const asrModelIds = editProvider.asrModelsCsv.split(',').map((s) => s.trim()).filter(Boolean)
-                              const noVisionModelIds = editProvider.noVisionCsv.split(',').map((s) => s.trim()).filter(Boolean)
-                              void window.tangu!.saveProvider!({
-                                providerId: editProvider.providerId,
-                                baseUrl: editProvider.baseUrl.replace(/\/+$/, ''),
-                                apiKey: editProvider.apiKey || undefined,
-                                modelIds: modelIds.length ? modelIds : undefined,
-                                imageModelIds: imageModelIds.length ? imageModelIds : undefined,
-                                ttsModelIds: ttsModelIds.length ? ttsModelIds : undefined,
-                                asrModelIds: asrModelIds.length ? asrModelIds : undefined,
-                                noVisionModelIds: noVisionModelIds.length ? noVisionModelIds : undefined,
-                              }).then((list) => {
-                                setCustomProviders(list)
-                                setEditProvider(null)
-                                void loadModels() // Provider 保存/后端重启完成后立即刷新显示筛选目录
-                                setProviderSaveMsg(t('settings.customProvider.savedReloading'))
-                              }).catch((e) => setProviderTestMsg(`${t('settings.toast.saveFailed')}${e?.message || e}`))
-                            }}
-                          >
-                            {t('settings.btn.save')}
-                          </button>
-                          <button className="btn ghost sm" onClick={() => { setEditProvider(null); setFetchedModels(null); setModelSearch(''); setFetchModelsMsg('') }}>{t('settings.btn.cancel')}</button>
-                          <span style={{ fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-muted)' }}>{providerTestMsg}</span>
-                        </div>
-
-                        {/* 「拉取模型」结果:可搜索多选,勾选写回 modelsCsv(让用户无需手记模型名)。 */}
-                        {fetchedModels && (() => {
-                          const selected = new Set(editProvider.modelsCsv.split(',').map((s) => s.trim()).filter(Boolean))
-                          const mq = modelSearch.trim().toLowerCase()
-                          const shown = mq ? fetchedModels.filter((id) => id.toLowerCase().includes(mq)) : fetchedModels
-                          const toggle = (id: string) => {
-                            const next = new Set(selected)
-                            next.has(id) ? next.delete(id) : next.add(id)
-                            setEditProvider({ ...editProvider, modelsCsv: [...next].join(', ') })
-                          }
-                          return (
-                            <div className="field" style={{ marginTop: 8 }}>
-                              {fetchedModels.length > 0 ? (
-                                <>
-                                  <span className="model-search" style={{ marginBottom: 6 }}>
-                                    <Search size={12} />
-                                    <input value={modelSearch} placeholder={t('model.searchPlaceholder')} onChange={(e) => setModelSearch(e.target.value)} />
-                                  </span>
-                                  <div style={{ maxHeight: 220, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
-                                    {shown.map((id) => (
-                                      <button
-                                        key={id}
-                                        className={`file-row${selected.has(id) ? ' active' : ''}`}
-                                        onClick={() => toggle(id)}
-                                      >
-                                        <span className="file-name" style={{ color: selected.has(id) ? 'var(--accent-ink)' : undefined }}>{id}</span>
-                                        {selected.has(id) && <Check size={12} style={{ color: 'var(--accent-ink)' }} />}
-                                      </button>
-                                    ))}
-                                  </div>
-                                </>
-                              ) : (
-                                <div className="hint">{fetchModelsMsg || t('settings.customProvider.fetchEmpty')}</div>
-                              )}
-                            </div>
-                          )
-                        })()}
-                        {fetchModelsMsg && fetchedModels && fetchedModels.length > 0 && (
-                          <div className="hint" style={{ marginTop: 4 }}>{fetchModelsMsg}</div>
-                        )}
-                      </>
-                    )}
-
+                                }}><Trash2 size={13} /></button>
+                              </div>} />
+                            {editing && editor}
+                          </React.Fragment>
+                        })}
+                        {editProvider?.isNew && editor}
+                        {!editProvider?.isNew && <div className="provider-add"><button className="btn ghost sm" onClick={() => startEdit(null)}><Plus size={13} /> {t('prov.add')}</button></div>}
+                        {providerSaveMsg && !editProvider && <div className="hint provider-editor-hint">{providerSaveMsg}</div>}
+                      </SettingsPanel>
                     {stored?.mode === 'external' && !(stored?.backendUrl || '').includes('localhost') && !(stored?.backendUrl || '').includes('127.0.0.1') && (
                       <div className="hint" style={{ marginTop: 10 }}>
                         {t('settings.customProvider.externalWarning')}
                       </div>
                     )}
 
-                    </>}
-                  </>
-                )}
+                    </>
+                  )
+                })()}
 
                 {/* 本地联网搜索(BYO-key):engine /agent/websearch,写 config.json webSearch 段,搜索时即时生效。 */}
-                {tab === 'model' && isDesktop && activeSub === 'm-websearch' && (
-                  <>
-                    {wsRed && (
-                      <>
-                        <div className="field">
-                          <div className="hint" style={{ marginBottom: 8 }}>{t('settings.websearch.intro')}</div>
-                          <div className="field-row">
-                            <div className="field">
-                              <label>{t('settings.websearch.providerLabel')}</label>
-                              <select value={wsProvider} onChange={(e) => setWsProvider(e.target.value)}>
-                                <option value="auto">{t('settings.websearch.provider.auto')}</option>
-                                <option value="bocha">{t('settings.websearch.provider.bocha')}</option>
-                                <option value="tavily">{t('settings.websearch.provider.tavily')}</option>
-                                <option value="zhipu">{t('settings.websearch.provider.zhipu')}</option>
-                                <option value="duckduckgo">{t('settings.websearch.provider.duckduckgo')}</option>
-                              </select>
-                            </div>
-                            <div className="field">
-                              <label>{t('settings.websearch.zhipuEngineLabel')}</label>
-                              <select value={wsZhipuEngine} onChange={(e) => setWsZhipuEngine(e.target.value)} title={t('settings.websearch.zhipuEngineHint')}>
-                                <option value="search_pro_quark">{t('settings.websearch.zhipuEngine.quark')}</option>
-                                <option value="search_pro_sogou">{t('settings.websearch.zhipuEngine.sogou')}</option>
-                                <option value="search_pro">{t('settings.websearch.zhipuEngine.pro')}</option>
-                                <option value="search_std">{t('settings.websearch.zhipuEngine.std')}</option>
-                              </select>
-                            </div>
-                            <div className="field">
-                              <label>{t('settings.websearch.effectiveLabel')}</label>
-                              <div className="hint" style={{ paddingTop: 8 }}>
-                                {wsRed.configured
-                                  ? t('settings.websearch.effectiveLocal', { provider: wsRed.effectiveProvider })
-                                  : t('settings.websearch.effectiveCloud')}
-                              </div>
-                            </div>
-                          </div>
-                          {([['bocha', 'Bocha API Key', wsRed.bochaHasKey], ['tavily', 'Tavily API Key', wsRed.tavilyHasKey], ['zhipu', 'Zhipu API Key', wsRed.zhipuHasKey]] as const).map(([k, label, hasKey]) => (
-                            <div className="field" key={k} style={{ marginTop: 6 }}>
-                              <label>
-                                {label}
-                                {hasKey && !wsClear[k] && (
-                                  <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}> · {t('settings.websearch.keyStored')}</span>
-                                )}
-                                {wsClear[k] && (
-                                  <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}> · {t('settings.websearch.keyCleared')}</span>
-                                )}
-                              </label>
-                              <div style={{ display: 'flex', gap: 6 }}>
-                                <input
-                                  type="password"
-                                  autoComplete="off"
-                                  style={{ flex: 1 }}
-                                  value={wsKeys[k]}
-                                  placeholder={hasKey && !wsClear[k] ? t('settings.websearch.keyKeepPlaceholder') : t('settings.websearch.keyEmptyPlaceholder')}
-                                  onChange={(e) => {
-                                    setWsKeys({ ...wsKeys, [k]: e.target.value })
-                                    if (e.target.value) setWsClear({ ...wsClear, [k]: false })
-                                  }}
-                                />
-                                {hasKey && !wsClear[k] && (
-                                  <button className="btn ghost sm" onClick={() => { setWsClear({ ...wsClear, [k]: true }); setWsKeys({ ...wsKeys, [k]: '' }) }}>
-                                    {t('settings.websearch.clearKey')}
-                                  </button>
-                                )}
-                              </div>
-                            </div>
-                          ))}
-                          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 10, flexWrap: 'wrap' }}>
-                            <button
-                              className="btn primary sm"
-                              disabled={wsBusy}
-                              onClick={() => {
-                                const keyOut = (k: 'bocha' | 'tavily' | 'zhipu'): string => (wsClear[k] ? '' : (wsKeys[k] || '__keep__'))
-                                setWsBusy(true); setWsMsg('')
-                                void saveLocalWebSearch(homeTarget(), {
-                                  provider: wsProvider,
-                                  bochaApiKey: keyOut('bocha'),
-                                  tavilyApiKey: keyOut('tavily'),
-                                  zhipuApiKey: keyOut('zhipu'),
-                                  zhipuEngine: wsZhipuEngine,
-                                }).then((r) => {
-                                  setWsRed(r.config)
-                                  setWsKeys({ bocha: '', tavily: '', zhipu: '' })
-                                  setWsClear({ bocha: false, tavily: false, zhipu: false })
-                                  setWsMsg(t('settings.websearch.saved'))
-                                }).catch((e) => setWsMsg(`✗ ${e?.message || e}`))
-                                  .finally(() => setWsBusy(false))
-                              }}
-                            >
-                              {t('settings.btn.save')}
-                            </button>
-                            <button
-                              className="btn ghost sm"
-                              disabled={wsBusy}
-                              onClick={() => {
-                                const k = wsProvider as 'bocha' | 'tavily' | 'zhipu'
-                                const draft = (wsProvider === 'bocha' || wsProvider === 'tavily' || wsProvider === 'zhipu') ? wsKeys[k] : ''
-                                setWsBusy(true); setWsMsg(t('settings.websearch.testing'))
-                                void testLocalWebSearch(homeTarget(), { provider: wsProvider, apiKey: draft || '__keep__', zhipuEngine: wsZhipuEngine })
-                                  .then((r) => setWsMsg(r.ok
-                                    ? `✓ ${r.provider} · ${r.latencyMs}ms · ${r.resultCount ?? 0}${r.sampleTitle ? ` · ${String(r.sampleTitle).slice(0, 30)}` : ''}`
-                                    : `✗ ${r.provider}: ${r.error || 'failed'}`))
-                                  .catch((e) => setWsMsg(`✗ ${e?.message || e}`))
-                                  .finally(() => setWsBusy(false))
-                              }}
-                            >
-                              {wsBusy ? <Loader2 size={12} className="spin" /> : null} {t('settings.websearch.test')}
-                            </button>
-                            {wsMsg && <span style={{ fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-muted)' }}>{wsMsg}</span>}
-                          </div>
-                        </div>
-                      </>
-                    )}
-
-                  </>
+                {tab === 'model' && isDesktop && activeSub === 'm-websearch' && wsRed && (
+                  <WebSearchSettings target={homeTarget()} cfg={wsRed} setCfg={setWsRed} />
                 )}
 
                 {/* 语音页分三节,各管输入框上的一个键(10-02 用户报「通话音色和朗读混在一起、很误导」):
@@ -2718,31 +2467,15 @@ export const SettingsModal: React.FC<{
                       <>
                         <div className="settings-sec">{t('settings.voice.secCall')}</div>
                         <RealtimeVoiceSettings stored={stored} providers={customProviders} onSaved={setStored}
-                          cloudModel={models?.realtimeModel} cloudAccount={cloudAccount} signedIn={cloudAccount && !!authSt?.loggedIn && authSt.tokenValid !== false} />
+                          cloudModel={models?.realtimeModel} cloudAccount={cloudAccount} signedIn={realtimeSignedIn} />
                       </>
                     )}
                     <div className={`settings-sec${stored ? ' settings-sec--gap' : ''}`}>{t('settings.voice.secInput')}</div>
-                    <AsrModelChoice models={models} />
+                    <AsrModelChoice onSaved={setStored} />
                     {stored && (
                       <>
                         <div className="settings-sec settings-sec--gap">{t('settings.voice.secRead')}</div>
-                        <div className="field">
-                          <label>{t('settings.tts.model')}</label>
-                          <div className="hint" style={{ marginBottom: 8 }}>{t('settings.tts.intro')}</div>
-                          <input
-                            type="text"
-                            list="tts-model-options"
-                            value={stored.ttsModelId ?? ''}
-                            onChange={(e) => edit({ ttsModelId: e.target.value })}
-                            onBlur={() => void commitEdits(['ttsModelId'], (v) => ({ ttsModelId: (v.ttsModelId || '').trim() }))}
-                            placeholder={t('settings.tts.modelPlaceholder')}
-                          />
-                          {commitErrorHint('ttsModelId')}
-                          {/* Forsion 云端的朗读模型(可输可选;直连提供方的照旧手填 <providerId>/<模型>) */}
-                          <datalist id="tts-model-options">
-                            {(models?.ttsModels || []).map((m) => <option key={m.id} value={m.id} label={m.name} />)}
-                          </datalist>
-                        </div>
+                        {!(stored.ttsModelId || '').trim() && <div className="hint">{t('settings.tts.off')}</div>}
                         <div className="field">
                           <label>{t('settings.tts.voice')}</label>
                           <input

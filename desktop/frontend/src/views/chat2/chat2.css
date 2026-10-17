@@ -50,8 +50,10 @@
 .t2-stream {
   flex: 1; width: 100%; min-height: 0; overflow-y: auto;
   --t2-fade: 24px;
-  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - var(--t2-fade)), transparent 100%);
-  mask-image: linear-gradient(to bottom, #000 calc(100% - var(--t2-fade)), transparent 100%);
+  /* 缓入缓出的 7 档渐隐(10-17):两点线性在起点有一道看得见的「棱」;浓度从 1 → .85 → .7 → .5 → .3 → .15 → .05 → 0 */
+  --t2-fade-mask: linear-gradient(to bottom, #000 calc(100% - var(--t2-fade)), rgb(0 0 0 / .85) calc(100% - var(--t2-fade) * 0.87), rgb(0 0 0 / .7) calc(100% - var(--t2-fade) * 0.75), rgb(0 0 0 / .5) calc(100% - var(--t2-fade) * 0.6), rgb(0 0 0 / .3) calc(100% - var(--t2-fade) * 0.45), rgb(0 0 0 / .15) calc(100% - var(--t2-fade) * 0.3), rgb(0 0 0 / .05) calc(100% - var(--t2-fade) * 0.15), transparent 100%);
+  -webkit-mask-image: var(--t2-fade-mask);
+  mask-image: var(--t2-fade-mask);
 }
 .t2-stream-inner {
   max-width: 820px;
@@ -86,7 +88,6 @@
 }
 .t2-asst-col { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 8px; }
 /* 子件与正文共用阅读宽度,避免卡片拉满整列显空 */
-.t2-asst-col > .t2-think,
 .t2-asst-col > .t2-tool,
 .t2-asst-col > .t2-todo,
 .t2-asst-col > .t2-panelcard,
@@ -245,13 +246,8 @@
 .t2-compact-fill { height: 100%; border-radius: 2px; background: var(--accent-ink); transition: width 0.32s cubic-bezier(0.22, 1, 0.36, 1); }
 @keyframes t2-compact-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
 
-/* ====== 思考块 ====== */
-.t2-think { border-left: 2px solid color-mix(in srgb, var(--accent-ink) 35%, transparent); padding-left: 12px; }
-.t2-think-head {
-  background: none; border: none; padding: 0; cursor: pointer;
-  font-size: var(--ui-font-meta, 12px); color: var(--text-muted); display: inline-flex; align-items: center; gap: 6px;
-}
-.t2-think-body { font-size: 12px; line-height: 1.65; color: var(--text-muted); margin-top: 6px; }
+/* ====== 思考原文(在过程行展开后的第一步下,见 base.css「回答里的过程行」) ====== */
+.t2-think-body { font-size: 12px; line-height: 1.65; color: var(--text-muted); }
 .t2-dim { color: var(--text-faint, var(--text-muted)); }
 
 /* ====== 工具卡 ====== */
@@ -828,6 +824,47 @@
   white-space: pre-wrap; word-break: break-all; color: var(--text);
 }
 
+/* ====== Agent Desk 展开态的悬浮胶囊(10-17 方案 B,替掉「Agent Desk」标题行 + 文件预览自带顶栏) ======
+ * 胶囊样式同 Mini 顶栏(lcl/engine/miniCard.css .mini-card-cap):卡片底 + 细描边 + 卡片阴影,全走主题 token。
+ * 让位:每格顶部留一条 --desk-cap-band;Markdown 预览例外 —— 内边距挪进它自己的滚动容器,正文从胶囊底下滚过。 */
+.agent-desk-pane.has-caps { position: relative; --desk-cap-band: 46px; padding-top: var(--desk-cap-band); }
+.agent-desk-pane.has-caps:has(> .wsfile-tab .wsmd-scope), .agent-desk-pane.agent-desk-companion.has-caps { padding-top: 0; }
+.agent-desk-pane.has-caps > .wsfile-tab .wsmd-scope { padding-top: calc(18px + var(--desk-cap-band)); }
+/* 有保存冲突 / 失败横幅时(它排在滚动容器之前)整格照常让出胶囊带,横幅与「重新加载 / 覆盖」不许被胶囊压住 */
+.agent-desk-pane.has-caps:has(> .wsfile-tab .wsmd-banner) { padding-top: var(--desk-cap-band); }
+.agent-desk-pane.has-caps:has(> .wsfile-tab .wsmd-banner) > .wsfile-tab .wsmd-scope { padding-top: 18px; }
+/* 直播格的头行并进左胶囊;库内笔记的编辑器顶栏同卡片态一样藏掉(入口走 ⋯ →「在 Amadeus 中打开」) */
+.agent-desk-pane.has-caps .agent-desk-livehead, .agent-desk-pane.has-caps .amx-toolbar { display: none; }
+.desk-caps {
+  position: absolute; inset: 0 0 auto; z-index: 5; display: flex; justify-content: space-between; align-items: flex-start;
+  gap: 6px; padding: 8px 10px 0 12px; pointer-events: none;
+}
+.desk-cap {
+  pointer-events: auto; display: flex; align-items: center; gap: 1px; min-width: 0; flex: 0 0 auto; height: 34px; box-sizing: border-box; padding: 2px;
+  border: var(--border-width, 1px) solid var(--border); border-radius: var(--radius-pill, 999px);
+  background: var(--bg-card, var(--bg)); box-shadow: var(--card-shadow);
+}
+.desk-cap-name { flex: 0 1 auto; }
+/* 侧板拖窄:两颗胶囊都能缩,先挤掉的是视图控件槽(裁掉),⋯ 和清空 / 收起恒可见 */
+.desk-cap:last-child { flex-shrink: 1; max-width: 100%; }
+.desk-cap > .icon-btn, .desk-cap > .desk-cap-div { flex-shrink: 0; }
+.desk-cap .icon-btn { width: 28px; height: 28px; flex-shrink: 0; border-radius: var(--radius-pill, 999px); }
+.desk-cap-pick {
+  display: inline-flex; align-items: center; gap: 5px; min-width: 0; height: 28px; padding: 0 8px 0 9px;
+  border: 0; border-radius: var(--radius-pill, 999px); background: transparent; color: var(--text);
+  font: 500 var(--ui-font-caption, 11px)/1 var(--font-ui, sans-serif);
+}
+button.desk-cap-pick { cursor: pointer; }
+button.desk-cap-pick:hover, button.desk-cap-pick[aria-expanded='true'] { background: var(--overlay-light, rgba(127, 127, 127, 0.1)); }
+.desk-cap-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.desk-cap-ic { flex-shrink: 0; color: var(--accent-ink); }
+.desk-cap-caret { flex-shrink: 0; color: var(--text-faint, var(--text-muted)); }
+.desk-cap-slot { display: flex; align-items: center; gap: 1px; min-width: 0; overflow: hidden; }
+.desk-cap-slot .wsfile-seg { margin: 0; }
+.desk-cap-slot .wsfile-seg button { height: 28px; padding: 0 8px; border-radius: var(--radius-pill, 999px); }
+.desk-cap-div { flex: 0 0 auto; width: 1px; height: 14px; margin: 0 3px; background: var(--border); }
+.desk-cap-slot:empty + .desk-cap-div { display: none; }
+
 /* ====== Agent Desk 卡片态(默认态,住 .t2-rail,Pin Summary 下方) ======
  * 正文是"只看不摸"的预览(pointer-events:none + 缩镜),点整卡放大成侧板;
  * wsfile 工具行在迷你尺寸下只会挤成一团 → 藏掉,卡片自带头行。 */
@@ -882,7 +919,8 @@
  * 用 `border-color: transparent` 而非 `border: none`:保住 1px 盒模型,布局不位移,
  * 状态态(拖入高亮、报错)换个颜色就能把边亮回来。
  * 刻意**没动**:.tool-card.err(报错红圈)、.approval-card/.inquiry-card(等你拍板的动作卡,
- * 不是被动折叠块)、.thinking-block/.t2-think 左侧那条 2px 竖条(引用条,不是轮廓)。 */
+ * 不是被动折叠块)、.thinking-block 左侧那条 2px 竖条(引用条,不是轮廓)。
+ * 过程行(.tool-group)10-17 起本来就不垫底不描边,这里留着只为别的主题里那圈边也收掉。 */
 .t2-tool, .t2-todo, .t2-panelcard, .t2-tsum-in, .agent-desk-card,
 .t2-chat-col .tool-card:not(.err), .t2-chat-col .tool-group { border-color: transparent; }
 
@@ -1126,8 +1164,8 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
     animation-timeline: scroll(self inline);
   }
 }
-.mb-shell[data-native-chrome] .t2-think-head { position: relative; }
-.mb-shell[data-native-chrome] .t2-think-head::after { content: ''; position: absolute; inset: -11px 0; }
+.mb-shell[data-native-chrome] .tool-group-head { position: relative; }
+.mb-shell[data-native-chrome] .tool-group-head::after { content: ''; position: absolute; inset: -11px 0; }
 .mb-shell[data-native-chrome] .t2-content pre ~ .icon-btn::after { content: ''; position: absolute; inset: -9px; }
 
 /* ====== 长会话:离视口远的消息跳过样式 / 排版 / 绘制 ======

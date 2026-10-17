@@ -47,7 +47,7 @@ export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchEntry[] = [
   { id: 'cloud-url', tab: 'forsion', sub: 'f-conn', anchor: 'cloud-url', labelKey: 'settings.forsion.cloudUrlLabel', keywords: '云端 服务器 cloud server', needs: ['stored', 'cloud'] },
   { id: 'memory-sync', tab: 'forsion', sub: 'f-sync', anchor: 'memory-sync', labelKey: 'settings.forsion.syncLabel', keywords: '记忆 同步 memory brain sync', needs: ['stored', 'cloud'] },
   { id: 'inbox-notify', tab: 'general', sub: 'g-inbox', anchor: 'inbox-notify', labelKey: 'settings.inbox.notifyLabel', keywords: '收件箱 inbox notification', needs: ['stored'] },
-  { id: 'default-models', tab: 'model', sub: 'm-models', labelKey: 'modelsettings.defaults', keywords: '默认模型 default model' },
+  { id: 'default-models', tab: 'model', sub: 'm-models', labelKey: 'modelsettings.defaults', keywords: '默认模型 后台任务 图像识别 图像生成 翻译 跟随 default model background vision image translate' },
   { id: 'model-providers', tab: 'model', sub: 'm-providers', labelKey: 'modelsettings.providers', keywords: '提供方 服务商 apikey provider' },
   { id: 'web-search', tab: 'model', sub: 'm-websearch', labelKey: 'settings.sub.webSearch', keywords: '联网 搜索 search web' },
   { id: 'voice', tab: 'model', sub: 'm-voice', labelKey: 'settings.sub.voice', keywords: '语音 朗读 音色 通话 打电话 听写 voice tts speech call realtime dictation' },
@@ -76,6 +76,9 @@ export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchEntry[] = [
   // 电脑操作(引擎插件 computer-use)的表单由插件 schema 渲染,锚点落在整页;插件没启用时这一页不在,结果也不出。
   { id: 'strict-background', tab: 'computer-use', anchor: 'computer-use', labelKey: 'settings.search.strictBackground', keywords: '严格后台 后台 前台 抢焦点 抢前台 mini 电脑操作 strict background foreground focus computer use' },
   { id: 'jev', tab: 'computer-use', anchor: 'computer-use', labelKey: 'settings.search.jev', keywords: 'jev 加速 置信度 视觉 定位 typesafe 电脑操作 acceleration confidence vision computer use' },
+  // 设置 › 设备(原 Ribbon 胶囊菜单)
+  { id: 'units-switch', tab: 'units', anchor: 'units-switch', labelKey: 'unit.switchTitle', keywords: '设备 切换 本地 云端 直连 中转 P2P 通过地址连接 devices switch local cloud lan relay address unit' },
+  { id: 'units-host', tab: 'units', anchor: 'units-host', labelKey: 'unit.hostToggle', keywords: '允许其他设备连接 互联 直连地址 来访设备 配对 回收 allow connect host lan address visiting paired revoke' },
   // P1-K4:设置 › 远程会话(只在有主进程 API 的本机列,tab 门控即可)
   { id: 'remote-sessions-switch', tab: 'remote-sessions', anchor: 'remote-sessions-switch', labelKey: 'remoteSessions.switch', keywords: '远程会话 手机 远程 允许 remote session phone allow' },
   { id: 'remote-approval-cap', tab: 'remote-sessions', anchor: 'remote-approval-cap', labelKey: 'remoteSessions.cap', keywords: '远程审批档 全自动 审批 remote approval full auto' },

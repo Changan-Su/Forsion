@@ -1,19 +1,24 @@
-/**
- * 语音输入「用哪个模型」统一选择器:一个列表里列 [本地 SenseVoice(下载/已就绪)] + [云端 asr 模型],
- * 点谁即用谁——选中同时写 asrBackend(local/cloud)+ asrModelId。自包含(getConfig/setConfig + asrLocal* IPC),
- * 设置页与引导页复用。非桌面环境自动隐藏(语音输入目前桌面独有)。
- */
 import { useEffect, useState } from 'react'
-import { Check, Cloud, Download, HardDrive, Loader2, Trash2 } from 'lucide-react'
-import { useI18n } from '../i18n'
-import type { ModelsResponse } from '../types'
+import { Check, Download, HardDrive, Loader2, Trash2 } from 'lucide-react'
+import { registerMessages, useI18n } from '../i18n'
+import type { StoredDesktopConfig } from '../types'
 
-export function AsrModelChoice({ models }: { models: ModelsResponse | null }) {
+/**
+ * 设置 → 模型 → 语音 →「本地语音识别」:下载 / 删除本地 SenseVoice,下载完自动选它。
+ * 语音输入用哪个模型(本地 / 云端 / 自带)在「默认模型 → 语音输入」里选(10-17 方案 C);这里只管本地模型文件。
+ * 自包含(getConfig/setConfig + asrLocal* IPC)。非桌面环境自动隐藏。
+ */
+
+registerMessages({
+  'asr.localTitle': { zh: '本地语音识别', en: 'On-device speech recognition' },
+  'asr.localHint': { zh: '下载后语音输入可以离线用、不计额度；在「默认模型 → 语音输入」里选它。', en: 'Once downloaded, voice input works offline at no cost. Choose it under Default models → Voice input.' },
+})
+
+export function AsrModelChoice({ onSaved }: { onSaved?: (c: StoredDesktopConfig) => void } = {}) {
   const { t } = useI18n()
   const [ready, setReady] = useState(false)
   const [sizeBytes, setSizeBytes] = useState(0)
   const [backend, setBackend] = useState<'local' | 'cloud'>('cloud')
-  const [asrModelId, setAsrModelId] = useState('')
   const [downloading, setDownloading] = useState(false)
   const [progress, setProgress] = useState(0) // 0..1
   const [err, setErr] = useState<string | null>(null)
@@ -21,12 +26,13 @@ export function AsrModelChoice({ models }: { models: ModelsResponse | null }) {
   const refresh = () => window.tangu?.asrLocalStatus?.().then((s) => { setReady(s.ready); setSizeBytes(s.sizeBytes) })
   useEffect(() => {
     void refresh()
-    void window.tangu?.getConfig?.().then((c) => { setBackend(c.asrBackend === 'local' ? 'local' : 'cloud'); setAsrModelId(c.asrModelId || '') })
+    void window.tangu?.getConfig?.().then((c) => { setBackend(c.asrBackend === 'local' ? 'local' : 'cloud') })
   }, [])
   useEffect(() => window.tangu?.onAsrLocalProgress?.((e) => setProgress(e.total ? e.received / e.total : 0)), [])
 
-  const pickLocal = () => { setBackend('local'); void window.tangu?.setConfig?.({ asrBackend: 'local' }) }
-  const pickCloud = (id: string) => { setBackend('cloud'); setAsrModelId(id); void window.tangu?.setConfig?.({ asrBackend: 'cloud', asrModelId: id }) }
+  // 写完回报给设置页:「默认模型 → 语音输入」读的是设置页那份 stored,不回报就显示旧值、撤销也会恢复错
+  const save = (asrBackend: 'local' | 'cloud') => { setBackend(asrBackend); void window.tangu?.setConfig?.({ asrBackend }).then((c) => { if (c) onSaved?.(c) }) }
+  const pickLocal = () => save('local')
 
   const download = async () => {
     setErr(null); setDownloading(true); setProgress(0)
@@ -35,19 +41,18 @@ export function AsrModelChoice({ models }: { models: ModelsResponse | null }) {
   }
   const remove = async () => {
     await window.tangu?.asrLocalRemove?.()
-    if (backend === 'local') { setBackend('cloud'); void window.tangu?.setConfig?.({ asrBackend: 'cloud' }) }
+    if (backend === 'local') save('cloud')
     await refresh()
   }
 
   if (!window.tangu?.asrLocalStatus) return null // 非桌面环境不显示
 
-  const asrs = (models?.models || []).filter((m) => m.modelType === 'asr')
   const localSelected = backend === 'local' && ready
 
   return (
     <div className="field">
-      <label>{t('settings.asr.chooseLabel')}</label>
-      <div className="hint" style={{ marginBottom: 8 }}>{t('settings.asr.chooseHint')}</div>
+      <label>{t('asr.localTitle')}</label>
+      <div className="hint" style={{ marginBottom: 8 }}>{t('asr.localHint')}</div>
       <div className="model-group-body">
         {/* 本地 SenseVoice 行:未下载=下载按钮 / 下载中=进度 / 已就绪=可选中 + 删除 */}
         {ready ? (
@@ -80,20 +85,7 @@ export function AsrModelChoice({ models }: { models: ModelsResponse | null }) {
             <span className="file-name">{t('settings.asr.localName')} — {t('settings.asr.download')}</span>
           </button>
         )}
-        {/* 云端 asr 模型行(Forsion 托管 / 自带 provider) */}
-        {asrs.map((m) => {
-          const sel = backend === 'cloud' && asrModelId === m.id
-          return (
-            <button key={`${m.source}-${m.id}`} className={`file-row${sel ? ' active' : ''}`} onClick={() => pickCloud(m.id)}>
-              <Cloud size={13} />
-              <span className="file-name" style={{ color: sel ? 'var(--accent-ink)' : undefined }}>{m.name}</span>
-              <span className="model-group-tag">{m.source === 'direct' ? t('model.group.direct') : m.provider}</span>
-              {sel && <Check size={12} style={{ color: 'var(--accent-ink)' }} />}
-            </button>
-          )
-        })}
       </div>
-      {!asrs.length && <div className="hint" style={{ marginTop: 4 }}>{t('settings.asr.noCloudHint')}</div>}
       {err && <div className="hint" style={{ color: 'var(--danger)', marginTop: 6 }}>{err}</div>}
     </div>
   )
