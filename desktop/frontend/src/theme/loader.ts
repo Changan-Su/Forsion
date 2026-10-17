@@ -4,7 +4,7 @@
  * 明暗 = data-mode + .dark。切换瞬间挂 theme-no-transition 抑制全树过渡抖动。
  */
 import './skins.css';
-import { themeRegistry, getLanguage, listSkins, skinSwatch, DEFAULT_LANG, DEFAULT_SEED } from './registry';
+import { themeRegistry, getLanguage, listSkins, skinSwatch, DEFAULT_LANG, DEFAULT_SEED, SIGNALS } from './registry';
 import { customAccentVars, customBgVars, CUSTOM_ACCENT_VAR_KEYS, CUSTOM_BG_VAR_KEYS } from './lcl/lovableData';
 import { applyThemeSettings } from './themeSettings';
 
@@ -107,7 +107,7 @@ export function applyTheme(
   skinId: string,
   bgId: string,
   mode: 'light' | 'dark',
-  opts?: { customColor?: string; customBg?: string; persist?: boolean },
+  opts?: { customColor?: string; customBg?: string; signal?: string; persist?: boolean },
 ): void {
   ensureThemeLinks();
 
@@ -166,6 +166,16 @@ export function applyTheme(
   } else {
     for (const k of CUSTOM_BG_VAR_KEYS) root.style.removeProperty(k);
   }
+
+  // 强调色:'' = 跟随(清内联,回落 skins.css 的 --signal-skin / --accent-ink);内置 id 取色卡;
+  // 自定义 hex 借 customAccentVars 的 ink 那套可读性收敛(暗色自动提亮,浅色太亮会压深)。
+  let signal = opts?.signal;
+  if (signal === undefined) { try { signal = localStorage.getItem('forsion_theme_signal') || ''; } catch { signal = ''; } }
+  const builtIn = SIGNALS.find((x) => x.id === signal);
+  const pick = builtIn ? (mode === 'dark' ? builtIn.dark : builtIn.light)
+    : /^#[0-9a-f]{6}$/i.test(signal) ? customAccentVars(signal, mode === 'dark')['--accent-ink'] : '';
+  if (pick) root.style.setProperty('--signal-pick', pick);
+  else root.style.removeProperty('--signal-pick');
 
   ensureFontLink(cssId);
   // 主题自曝参数 → :root 内联 CSS 变量。必须在 currentCssId 改写**之前**取上一个 entry,

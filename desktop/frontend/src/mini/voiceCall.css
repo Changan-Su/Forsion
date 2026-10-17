@@ -54,7 +54,7 @@
 .vc-mute:disabled { opacity: 0.45; cursor: default; }
 .vc-hangup { background: var(--danger); color: var(--on-danger); }
 .vc-hangup:hover { filter: brightness(1.08); }
-.vc-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.vc-btn:focus-visible { outline: 2px solid var(--signal-line); outline-offset: 2px; }
 
 /* ── 手机:同一张卡压成页面顶上的一条(VoiceCallBar,MobileRoot 挂在壳外)。悬浮胶囊 + 毛玻璃,和壳的顶栏胶囊同一种说法。
    位置:壳顶那一条(Web 胶囊顶栏 58px + 刘海;装了原生外壳时 = 原生层报来的 --nc-top,屏幕 dp,要除以端级缩放)之下再让 6px。

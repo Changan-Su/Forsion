@@ -254,7 +254,7 @@
 .t2sf-showall:hover { background: var(--overlay-light); color: var(--text); }
 .t2sf-showall-n { margin-left: auto; font-variant-numeric: tabular-nums; opacity: 0.8; }
 .t2sf-row.sel { background: var(--overlay-medium); }
-.t2sf-row.drop, .t2s-group.drop { background: var(--accent-light); box-shadow: inset 0 0 0 1px var(--accent-ink); border-radius: var(--radius-sm, 8px); }
+.t2sf-row.drop, .t2s-group.drop { background: var(--accent-wash); box-shadow: inset 0 0 0 1px var(--signal-line); border-radius: var(--radius-sm, 8px); }
 .t2sf-input {
   display: block; width: calc(100% - 32px); margin: 1.5px 6px 1.5px 0;
   padding: 1.5px 4.5px; font-size: var(--ui-font-body, 13px); color: var(--text);
@@ -413,7 +413,7 @@
   position: absolute;
   left: 4.5px; top: 5.5px; bottom: 5.5px;
   width: 2px; border-radius: 2px;
-  background: var(--accent-ink);
+  background: var(--signal-mark);
 }
 .t2s-srow-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .t2s-faint { color: var(--text-faint, var(--text-muted)); }
@@ -421,8 +421,8 @@
 /* 会话状态点贴在前导槽图标的右下角:**绝对定位**,不进内联流 —— 曾经内联排在标题前,
  * 有状态的行会被整体推右 6px+gap,会话行自己就先对不齐了。描边让它在深色图标上也看得清。 */
 .t2s-lead .t2s-dot { position: absolute; right: -1px; bottom: -1px; box-shadow: 0 0 0 1.5px var(--sidebar-bg); }
-.t2s-dot.running { background: var(--accent-ink); animation: t2s-pulse 1.4s ease-in-out infinite; }
-.t2s-dot.unread { background: var(--accent-ink); opacity: 0.6; }
+.t2s-dot.running { background: var(--signal-mark); animation: t2s-pulse 1.4s ease-in-out infinite; }
+.t2s-dot.unread { background: var(--signal-line); }
 /* P1-K3「等你处理」:审批 / 询问在等人,优先级高于运行中 / 未读;警示色、不跳动(跳动留给「正在跑」)。 */
 .t2s-dot.attention { background: var(--warning); }
 @keyframes t2s-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.4; transform: scale(0.7); } }
@@ -581,12 +581,12 @@
 /* 行拖到组头的前 / 后:插入线与 .t2sw-plug-item.drop-before 同款(.t2o-row 自己是 position: relative,组头没有选中态,::before 空着) */
 .t2sw-plug-ghead.drag-over::before {
   content: ''; position: absolute; left: 4px; right: 4px; top: -2px; height: 3px;
-  border-radius: var(--radius-pill, 999px); background: var(--accent-ink); z-index: 3; pointer-events: none;
+  border-radius: var(--radius-pill, 999px); background: var(--signal-line); z-index: 3; pointer-events: none;
 }
 .t2sw-plug-ghead.drag-over.below::before { top: auto; bottom: -2px; }
 .t2sw-plug-ghead.dragging { opacity: 0.4; }
 /* 组里的行前导槽里只有这一颗:未读的圆点(和 .t2s-dot.unread 同色同大,只是不贴在图标角上) */
-.t2sw-plug-udot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent-ink); opacity: 0.6; }
+.t2sw-plug-udot { width: 6px; height: 6px; border-radius: 50%; background: var(--signal-line); }
 .t2sw-plug-sec {
   display: flex; align-items: center; gap: 6px;
   margin: 10px 9.5px 2px; font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted));
@@ -602,7 +602,7 @@
 .t2sw-plug-item.drop-before::before,
 .t2sw-plug-item.drop-after::after {
   content: ''; position: absolute; left: 4px; right: 4px; height: 3px;
-  border-radius: var(--radius-pill, 999px); background: var(--accent-ink); z-index: 3; pointer-events: none;
+  border-radius: var(--radius-pill, 999px); background: var(--signal-line); z-index: 3; pointer-events: none;
 }
 .t2sw-plug-item.drop-before::before { top: -2px; }
 .t2sw-plug-item.drop-after::after { bottom: -2px; }

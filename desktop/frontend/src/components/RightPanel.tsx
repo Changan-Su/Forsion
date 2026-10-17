@@ -73,7 +73,7 @@ export const RightPanel: React.FC<{
         <button className={tab === 'subchats' ? 'active' : ''} onClick={() => setTab('subchats')}>
           <MessageCircle size={13} /> {t('panel.tab.subchats')}
           {p.subChats && p.subChats.length > 0 && (
-            <span style={{ marginLeft: 3, fontSize: 'var(--ui-font-caption, 11px)', fontWeight: 700, background: 'var(--accent)', color: 'var(--on-accent)', borderRadius: 'var(--radius-sm, 6px)', padding: '0 4px', lineHeight: '14px' }}>{p.subChats.length}</span>
+            <span style={{ marginLeft: 3, fontSize: 'var(--ui-font-caption, 11px)', fontWeight: 700, background: 'var(--action-fill)', color: 'var(--on-action)', borderRadius: 'var(--radius-sm, 6px)', padding: '0 4px', lineHeight: '14px' }}>{p.subChats.length}</span>
           )}
         </button>
       </div>

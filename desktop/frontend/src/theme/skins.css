@@ -2,8 +2,10 @@
  * 配色层 — 主题模型的「颜色」轴,再拆成**两个自由度**:主题色(data-skin)× 背景色(data-bg)。
  * 语言(data-theme)只决定结构;这里只决定颜色。三套 token 两两不相交,故 语言 × 主题色 × 背景色 自由组合。
  * - **主题色(data-skin)**:只设 accent 家族 —— --accent/-ink/-hover/-light/-rgb、--on-accent(-ink)、--user-bg;单色配色的暗色另压 --action-fill(-hover)。
- *   单色配色(经典 cream / 墨色 ink)另设 --wikilink-ink:它们的 accent 就是正文色,笔记里的双链要有自己的一支颜色(2026-10-14 用户选方案 A,柔蓝);
- *   其余配色不设,双链跟 --accent-ink。
+ *   单色配色(经典 cream / 墨色 ink)另设 --signal-skin(强调色缺省):它们的 accent 就是正文色,指示类元素(落点线、开关、勾选、
+ *   选中框、双链……)要有自己的一支颜色 —— 沿用 10-14 双链那支柔蓝。其余配色不设,强调色跟 --accent-ink。
+ *   用户在设置里另选的强调色走 loader 内联 --signal-pick,优先级 pick > skin > accent-ink(base.css --signal)。
+ *   单色配色的亮色另压 --action-fill(-hover):炭黑实心主按钮退一档(10-17 色彩体系)。
  * - **背景色(data-bg)**:其余全部 —— bg/text/border/shadow/overlay/semantic(green/danger)/tool/glow。
  *   语义色与 tool 面属背景族:它们的可读性由底色决定,不由强调色决定(zhi 的 --tool-bg 更是不透明色)。
  * 每个 id 两块都在(两轴同 id = 拆轴前的整套配色,老用户零迁移)。值仍抄自原 lovable/echo/qbird/dreamer 皮肤。
@@ -16,7 +18,7 @@
  * 此前把 #f8f7f6 整体当 custom seed 定格(三改)使 accent 变纸白,选中/按钮全线对比崩坏,已回炉。
  * base.css :root 同步;暗侧=石墨底+纸白强调(用户确认可读)不动。 */
 :root[data-skin='cream'] {
-  --wikilink-ink: #2c5f9e;
+  --signal-skin: #2c5f9e;
   --accent: #1c1c1c;
   --accent-ink: #1c1c1c;
   --accent-hover: #000000;
@@ -24,6 +26,8 @@
   --accent-rgb: 28, 28, 28;
   --on-accent: #fbfbfa;
   --user-bg: rgba(28, 28, 28, 0.04);
+  --action-fill: #383837;
+  --action-fill-hover: #1c1c1c;
 }
 :root[data-bg='cream'] {
   --bg: #f8f7f6;
@@ -49,7 +53,7 @@
   --glow: radial-gradient(110% 75% at 82% -12%, rgba(191, 188, 182, 0.14), transparent 56%);
 }
 :root.dark[data-skin='cream'] {
-  --wikilink-ink: #8fb4e3;
+  --signal-skin: #8fb4e3;
   --accent: #f8f7f6;
   --accent-ink: #f8f7f6;
   --accent-hover: #f9f8f8;
@@ -93,73 +97,75 @@
   --glow: radial-gradient(110% 75% at 82% -12%, rgba(214, 188, 150, 0.14), transparent 56%);
 }
 
-/* ── 珊瑚 Coral(= 原 echo 配色)──────────────────────────────────────── */
+/* ── 陶土 Clay(id 沿用 coral;10-17 色彩体系重做:原「珊瑚」高彩粉橙整组换成低彩陶土,OKLCH 生成)── */
 :root[data-skin='coral'] {
-  --accent: #ff8a6b;
-  --accent-ink: #99462f;
-  --accent-hover: #ff987d;
-  --accent-light: rgba(255, 138, 107, 0.12);
-  --accent-rgb: 255, 138, 107;
-  --on-accent: #2a160f;
+  --accent: #b36c46;
+  --accent-ink: #8c4e2c;
+  --accent-hover: #8c4e2c;
+  --accent-light: rgba(179, 108, 70, 0.1);
+  --accent-rgb: 179, 108, 70;
+  --on-accent: #ffffff;
   --on-accent-ink: #ffffff;
-  --user-bg: rgba(255, 138, 107, 0.12);
+  --user-bg: rgba(179, 108, 70, 0.08);
 }
 :root[data-bg='coral'] {
-  --bg: #f7e5dc;
-  --bg-card: #fdf5f1;
-  --bg-glass: rgba(253, 245, 241, 0.84);
-  --sidebar-bg: #f0d9ce;
-  --text: #36291f;
-  --text-light: #5c4d42;
-  --text-muted: #695950;
-  --text-faint: #6b5c53;
-  --text-ghost: #bca99f;
-  --border: #e4cfc5;
-  --shadow: rgba(190, 140, 110, 0.12);
-  --green: #376849;
-  --danger: #98463d;
-  --danger-light: rgba(224, 104, 90, 0.1);
-  --overlay-subtle: rgba(120, 80, 55, 0.03);
-  --overlay-light: rgba(120, 80, 55, 0.05);
-  --overlay-medium: rgba(120, 80, 55, 0.09);
-  --overlay-strong: rgba(120, 80, 55, 0.16);
-  --tool-bg: rgba(255, 138, 107, 0.07);
-  --tool-text: #695950;
-  --glow: radial-gradient(110% 75% at 82% -12%, rgba(255, 160, 120, 0.32), transparent 56%);
+  --bg: #f6ede6;
+  --bg-card: #fefaf8;
+  --sidebar-bg: #f1e6dc;
+  --bg-glass: rgba(246, 237, 230, 0.9);
+  --text: #221d18;
+  --text-light: rgba(34, 29, 24, 0.82);
+  --text-muted: #5e5650;
+  --text-faint: #6a635e;
+  --text-ghost: rgba(34, 29, 24, 0.28);
+  --border: #e8dcd3;
+  --shadow: rgba(34, 29, 24, 0.05);
+  --overlay-subtle: rgba(34, 29, 24, 0.03);
+  --overlay-light: rgba(34, 29, 24, 0.04);
+  --overlay-medium: rgba(34, 29, 24, 0.07);
+  --overlay-strong: rgba(34, 29, 24, 0.14);
+  --tool-bg: rgba(34, 29, 24, 0.03);
+  --tool-text: #5e5650;
+  --green: #4f6f52;
+  --danger: #9b4a3a;
+  --danger-light: rgba(155, 74, 58, 0.08);
+  --glow: radial-gradient(110% 75% at 82% -12%, rgba(179, 108, 70, 0.12), transparent 56%);
 }
 :root.dark[data-skin='coral'] {
-  --accent: #ff9a7d;
-  --accent-ink: #ff9a7d;
-  --accent-hover: #ffa68d;
-  --accent-light: rgba(255, 154, 125, 0.14);
-  --accent-rgb: 255, 154, 125;
-  --on-accent: #2a160f;
-  --on-accent-ink: #2a160f;
-  --user-bg: rgba(255, 154, 125, 0.14);
+  --accent: #dea182;
+  --accent-ink: #dea182;
+  --accent-hover: #dea182;
+  --accent-light: rgba(222, 161, 130, 0.14);
+  --accent-rgb: 222, 161, 130;
+  --on-accent: #1e1916;
+  --on-accent-ink: #1e1916;
+  --user-bg: rgba(222, 161, 130, 0.12);
 }
 :root.dark[data-bg='coral'] {
-  --bg: #292727;
-  --bg-card: #353232;
-  --bg-glass: rgba(41, 39, 39, 0.9);
-  --sidebar-bg: #302e2e;
-  --text: #f3efed;
-  --text-light: rgba(243, 239, 237, 0.82);
-  --text-muted: #b0a8a4;
-  --text-faint: #a29b98;
-  --text-ghost: rgba(243, 239, 237, 0.3);
-  --border: #473e3b; /* 10-03 由 #443b38 提亮:卡片 + overlay-light 的合成面与它等亮,描边看不见(settings-ui A'') */
+  --bg: #2b2520;
+  --sidebar-bg: #251f1b;
+  --bg-card: #352e2a;
+  --sidebar-card-bg: var(--bg-card);
+  --bg-glass: rgba(37, 31, 27, 0.9);
+  --text: #f0eae6;
+  --text-light: rgba(240, 234, 230, 0.82);
+  --text-muted: #aea6a1;
+  --text-faint: #a09a96;
+  --text-ghost: rgba(240, 234, 230, 0.28);
+  --border: #463e39;
   --shadow: rgba(0, 0, 0, 0.4);
-  --green: #6fbf8a;
-  --danger: #f08a7a;
-  --danger-light: rgba(240, 138, 122, 0.14);
-  --overlay-subtle: rgba(255, 255, 255, 0.03);
-  --overlay-light: rgba(255, 255, 255, 0.05);
-  --overlay-medium: rgba(255, 255, 255, 0.08);
-  --overlay-strong: rgba(255, 255, 255, 0.15);
-  --tool-bg: rgba(255, 154, 125, 0.05);
-  --tool-text: #b0a8a4;
-  --glow: radial-gradient(110% 75% at 82% -12%, rgba(255, 150, 120, 0.1), transparent 56%);
+  --overlay-subtle: rgba(240, 234, 230, 0.03);
+  --overlay-light: rgba(240, 234, 230, 0.05);
+  --overlay-medium: rgba(240, 234, 230, 0.08);
+  --overlay-strong: rgba(240, 234, 230, 0.15);
+  --tool-bg: rgba(240, 234, 230, 0.035);
+  --tool-text: #aea6a1;
+  --green: #8fb295;
+  --danger: #d99080;
+  --danger-light: rgba(217, 144, 128, 0.12);
+  --glow: radial-gradient(110% 75% at 82% -12%, rgba(222, 161, 130, 0.1), transparent 56%);
 }
+
 
 /* ── 柔青 Teal(= 原 qbird 配色)──────────────────────────────────────── */
 :root[data-skin='teal'] {
@@ -229,150 +235,222 @@
   --glow: radial-gradient(110% 75% at 82% -12%, rgba(95, 163, 178, 0.08), transparent 56%);
 }
 
-/* ── 薰衣草 Lavender(= 原 dreamer 配色;渐变舞台简化为纯色底 + 角落辉光,以便也能用于 lovable 平展语言)── */
+/* ── 暮紫 Dusk(id 沿用 lavender;10-17 重做:原「薰衣草」换成低彩灰紫)──────────────── */
 :root[data-skin='lavender'] {
-  --accent: #8b7fd6;
-  --accent-ink: #5d548e;
-  --accent-hover: #998edb;
-  --accent-light: rgba(139, 127, 214, 0.12);
-  --accent-rgb: 139, 127, 214;
-  --on-accent: #1c1726;
+  --accent: #8177af;
+  --accent-ink: #615889;
+  --accent-hover: #615889;
+  --accent-light: rgba(129, 119, 175, 0.1);
+  --accent-rgb: 129, 119, 175;
+  --on-accent: #ffffff;
   --on-accent-ink: #ffffff;
-  --user-bg: rgba(139, 127, 214, 0.1);
+  --user-bg: rgba(129, 119, 175, 0.08);
 }
 :root[data-bg='lavender'] {
-  --bg: #ede0f5;
-  --bg-card: #faf5fc;
-  --bg-glass: rgba(250, 245, 252, 0.86);
-  --sidebar-bg: #e5d5ef;
-  --text: #2e2a36;
-  --text-light: rgba(46, 42, 54, 0.82);
-  --text-muted: #5b5363;
-  --text-faint: #655d6d;
-  --text-ghost: #b9aac3;
-  --border: #d9c8e5;
-  --shadow: rgba(90, 70, 130, 0.12);
-  --green: #366547;
-  --danger: #95443a;
-  --danger-light: rgba(224, 104, 90, 0.1);
-  --overlay-subtle: rgba(46, 42, 54, 0.03);
-  --overlay-light: rgba(46, 42, 54, 0.05);
-  --overlay-medium: rgba(46, 42, 54, 0.08);
-  --overlay-strong: rgba(46, 42, 54, 0.14);
-  --tool-bg: rgba(139, 127, 214, 0.06);
-  --tool-text: #5b5363;
-  --glow: radial-gradient(110% 75% at 82% -12%, rgba(244, 196, 176, 0.55), transparent 56%);
+  --bg: #f1edf7;
+  --bg-card: #fcfafe;
+  --sidebar-bg: #eae5f2;
+  --bg-glass: rgba(241, 237, 247, 0.9);
+  --text: #1f1d23;
+  --text-light: rgba(31, 29, 35, 0.82);
+  --text-muted: #59565f;
+  --text-faint: #66636b;
+  --text-ghost: rgba(31, 29, 35, 0.28);
+  --border: #e1dce9;
+  --shadow: rgba(31, 29, 35, 0.05);
+  --overlay-subtle: rgba(31, 29, 35, 0.03);
+  --overlay-light: rgba(31, 29, 35, 0.04);
+  --overlay-medium: rgba(31, 29, 35, 0.07);
+  --overlay-strong: rgba(31, 29, 35, 0.14);
+  --tool-bg: rgba(31, 29, 35, 0.03);
+  --tool-text: #59565f;
+  --green: #4f6f52;
+  --danger: #9b4a3a;
+  --danger-light: rgba(155, 74, 58, 0.08);
+  --glow: radial-gradient(110% 75% at 82% -12%, rgba(129, 119, 175, 0.12), transparent 56%);
 }
 :root.dark[data-skin='lavender'] {
-  --accent: #a99cf0;
-  --accent-ink: #a99cf0;
-  --accent-hover: #b3a8f2;
-  --accent-light: rgba(169, 156, 240, 0.16);
-  --accent-rgb: 169, 156, 240;
-  --on-accent: #1c1726;
-  --on-accent-ink: #1c1726;
-  --user-bg: rgba(169, 156, 240, 0.12);
+  --accent: #b1a9dd;
+  --accent-ink: #b1a9dd;
+  --accent-hover: #b1a9dd;
+  --accent-light: rgba(177, 169, 221, 0.14);
+  --accent-rgb: 177, 169, 221;
+  --on-accent: #1b1a1f;
+  --on-accent-ink: #1b1a1f;
+  --user-bg: rgba(177, 169, 221, 0.12);
 }
 :root.dark[data-bg='lavender'] {
-  --bg: #29272c;
-  --bg-card: #353239;
-  --bg-glass: rgba(41, 39, 44, 0.9);
-  --sidebar-bg: #302e34;
-  --text: #f1eef4;
-  --text-light: rgba(241, 238, 244, 0.82);
-  --text-muted: #aca7b2;
-  --text-faint: #9f9aa6;
-  --text-ghost: rgba(241, 238, 244, 0.28);
-  --border: #423c4a;
+  --bg: #26252b;
+  --sidebar-bg: #211f26;
+  --bg-card: #302f35;
+  --sidebar-card-bg: var(--bg-card);
+  --bg-glass: rgba(33, 31, 38, 0.9);
+  --text: #ebeaf0;
+  --text-light: rgba(235, 234, 240, 0.82);
+  --text-muted: #a8a6af;
+  --text-faint: #9b9aa1;
+  --text-ghost: rgba(235, 234, 240, 0.28);
+  --border: #403e47;
   --shadow: rgba(0, 0, 0, 0.4);
-  --green: #6fbf8a;
-  --danger: #f0897a;
-  --danger-light: rgba(240, 137, 122, 0.16);
-  --overlay-subtle: rgba(239, 233, 246, 0.03);
-  --overlay-light: rgba(239, 233, 246, 0.05);
-  --overlay-medium: rgba(239, 233, 246, 0.08);
-  --overlay-strong: rgba(239, 233, 246, 0.15);
-  --tool-bg: rgba(169, 156, 240, 0.05);
-  --tool-text: #aca7b2;
-  --glow: radial-gradient(110% 75% at 82% -12%, rgba(150, 120, 205, 0.12), transparent 56%);
+  --overlay-subtle: rgba(235, 234, 240, 0.03);
+  --overlay-light: rgba(235, 234, 240, 0.05);
+  --overlay-medium: rgba(235, 234, 240, 0.08);
+  --overlay-strong: rgba(235, 234, 240, 0.15);
+  --tool-bg: rgba(235, 234, 240, 0.035);
+  --tool-text: #a8a6af;
+  --green: #8fb295;
+  --danger: #d99080;
+  --danger-light: rgba(217, 144, 128, 0.12);
+  --glow: radial-gradient(110% 75% at 82% -12%, rgba(177, 169, 221, 0.1), transparent 56%);
 }
 
-/* ── 晴蓝 Clear blue(保留旧 zhi 配色 id 与用户偏好，设计语言已退场)─────────────── */
+
+/* ── 雾蓝 Mist(id 沿用 zhi;10-17 重做:原「晴蓝」饱和天蓝换成低彩雾蓝)──────────────── */
 :root[data-skin='zhi'] {
-  --accent: #1e96eb;
-  --accent-ink: #12649d;
-  --accent-hover: #39a3ed;
-  --accent-light: rgba(30, 150, 235, 0.1);
-  --accent-rgb: 30, 150, 235;
-  --on-accent: #071924;
+  --accent: #5485b0;
+  --accent-ink: #38648a;
+  --accent-hover: #38648a;
+  --accent-light: rgba(84, 133, 176, 0.1);
+  --accent-rgb: 84, 133, 176;
+  --on-accent: #ffffff;
   --on-accent-ink: #ffffff;
-  --user-bg: rgba(30, 150, 235, 0.08);
+  --user-bg: rgba(84, 133, 176, 0.08);
 }
 :root[data-bg='zhi'] {
-  --bg: #dcecfb;
-  --bg-card: #f3f8fd;
-  --bg-glass: rgba(243, 248, 253, 0.9);
-  --sidebar-bg: #d1e4f5;
-  --text: #121212;
-  --text-light: rgba(18, 18, 18, 0.78);
-  --text-muted: #59616a;
-  --text-faint: #5d646c;
-  --text-ghost: #91a1b0;
-  --border: #c5d9eb;
-  --shadow: rgba(66, 65, 73, 0.14);
-  --green: #086e48;
-  --danger: #b13228;
-  --danger-light: #fdeceb;
-  --overlay-subtle: rgba(0, 0, 0, 0.02);
-  --overlay-light: rgba(0, 0, 0, 0.04);
-  --overlay-medium: rgba(0, 0, 0, 0.1);
-  --overlay-strong: rgba(0, 0, 0, 0.15);
-  --overlay-scrim: rgba(0, 0, 0, 0.75);
-  --tool-bg: #e8f2fa;
-  --tool-text: #59616a;
-  --glow: radial-gradient(120% 80% at 82% -12%, rgba(0, 0, 0, 0.02), transparent 58%);
+  --bg: #eaf3f9;
+  --bg-card: #f8fcfe;
+  --sidebar-bg: #e0ecf4;
+  --bg-glass: rgba(234, 243, 249, 0.9);
+  --text: #191f23;
+  --text-light: rgba(25, 31, 35, 0.82);
+  --text-muted: #51595f;
+  --text-faint: #5f666b;
+  --text-ghost: rgba(25, 31, 35, 0.28);
+  --border: #d7e2eb;
+  --shadow: rgba(25, 31, 35, 0.05);
+  --overlay-subtle: rgba(25, 31, 35, 0.03);
+  --overlay-light: rgba(25, 31, 35, 0.04);
+  --overlay-medium: rgba(25, 31, 35, 0.07);
+  --overlay-strong: rgba(25, 31, 35, 0.14);
+  --tool-bg: rgba(25, 31, 35, 0.03);
+  --tool-text: #51595f;
+  --green: #4f6f52;
+  --danger: #9b4a3a;
+  --danger-light: rgba(155, 74, 58, 0.08);
+  --glow: radial-gradient(110% 75% at 82% -12%, rgba(84, 133, 176, 0.12), transparent 56%);
 }
 :root.dark[data-skin='zhi'] {
-  --accent: #1c9ee4;
-  --accent-ink: #55b6e8;
-  --accent-hover: #37aae7;
-  --accent-light: rgba(28, 158, 228, 0.14);
-  --accent-rgb: 28, 158, 228;
-  --on-accent: #071924;
-  --on-accent-ink: #071924;
-  --user-bg: rgba(28, 158, 228, 0.14);
+  --accent: #8db6db;
+  --accent-ink: #8db6db;
+  --accent-hover: #8db6db;
+  --accent-light: rgba(141, 182, 219, 0.14);
+  --accent-rgb: 141, 182, 219;
+  --on-accent: #171b1f;
+  --on-accent-ink: #171b1f;
+  --user-bg: rgba(141, 182, 219, 0.12);
 }
 :root.dark[data-bg='zhi'] {
-  --bg: #272a2e;
-  --bg-card: #33363c;
-  --bg-glass: rgba(39, 42, 46, 0.9);
-  --sidebar-bg: #2e3237;
-  --text: #eef2f6;
-  --text-light: rgba(238, 242, 246, 0.82);
-  --text-muted: #a5acb5;
-  --text-faint: #99a0aa;
-  --text-ghost: rgba(238, 242, 246, 0.28);
-  --border: #3a4553;
-  --shadow: rgba(0, 0, 0, 0.24);
-  --green: #35b989;
-  --danger: #e08e87;
-  --danger-light: #2e1a18;
-  --overlay-subtle: rgba(255, 255, 255, 0.03);
-  --overlay-light: rgba(255, 255, 255, 0.05);
-  --overlay-medium: rgba(255, 255, 255, 0.08);
-  --overlay-strong: rgba(255, 255, 255, 0.15);
-  --overlay-scrim: rgba(0, 0, 0, 0.5);
-  --tool-bg: rgba(85, 182, 232, 0.05);
-  --tool-text: #a5acb5;
-  --glow: radial-gradient(120% 80% at 82% -12%, rgba(28, 158, 228, 0.08), transparent 58%);
+  --bg: #21272c;
+  --sidebar-bg: #1c2126;
+  --bg-card: #2b3136;
+  --sidebar-card-bg: var(--bg-card);
+  --bg-glass: rgba(28, 33, 38, 0.9);
+  --text: #e7ecf0;
+  --text-light: rgba(231, 236, 240, 0.82);
+  --text-muted: #a2a9af;
+  --text-faint: #979ca1;
+  --text-ghost: rgba(231, 236, 240, 0.28);
+  --border: #3a4147;
+  --shadow: rgba(0, 0, 0, 0.4);
+  --overlay-subtle: rgba(231, 236, 240, 0.03);
+  --overlay-light: rgba(231, 236, 240, 0.05);
+  --overlay-medium: rgba(231, 236, 240, 0.08);
+  --overlay-strong: rgba(231, 236, 240, 0.15);
+  --tool-bg: rgba(231, 236, 240, 0.035);
+  --tool-text: #a2a9af;
+  --green: #8fb295;
+  --danger: #d99080;
+  --danger-light: rgba(217, 144, 128, 0.12);
+  --glow: radial-gradient(110% 75% at 82% -12%, rgba(141, 182, 219, 0.1), transparent 56%);
 }
+
+
+/* ── 苔绿 Sage(10-17 新增)──────────────────────────────────────────── */
+:root[data-skin='sage'] {
+  --accent: #638c6d;
+  --accent-ink: #466a50;
+  --accent-hover: #466a50;
+  --accent-light: rgba(99, 140, 109, 0.1);
+  --accent-rgb: 99, 140, 109;
+  --on-accent: #ffffff;
+  --on-accent-ink: #ffffff;
+  --user-bg: rgba(99, 140, 109, 0.08);
+}
+:root[data-bg='sage'] {
+  --bg: #ecf3e9;
+  --bg-card: #fafcf8;
+  --sidebar-bg: #e4ecdf;
+  --bg-glass: rgba(236, 243, 233, 0.9);
+  --text: #1c1f1a;
+  --text-light: rgba(28, 31, 26, 0.82);
+  --text-muted: #555a52;
+  --text-faint: #62665f;
+  --text-ghost: rgba(28, 31, 26, 0.28);
+  --border: #dae3d6;
+  --shadow: rgba(28, 31, 26, 0.05);
+  --overlay-subtle: rgba(28, 31, 26, 0.03);
+  --overlay-light: rgba(28, 31, 26, 0.04);
+  --overlay-medium: rgba(28, 31, 26, 0.07);
+  --overlay-strong: rgba(28, 31, 26, 0.14);
+  --tool-bg: rgba(28, 31, 26, 0.03);
+  --tool-text: #555a52;
+  --green: #4f6f52;
+  --danger: #9b4a3a;
+  --danger-light: rgba(155, 74, 58, 0.08);
+  --glow: radial-gradient(110% 75% at 82% -12%, rgba(99, 140, 109, 0.12), transparent 56%);
+}
+:root.dark[data-skin='sage'] {
+  --accent: #93bd9d;
+  --accent-ink: #93bd9d;
+  --accent-hover: #93bd9d;
+  --accent-light: rgba(147, 189, 157, 0.14);
+  --accent-rgb: 147, 189, 157;
+  --on-accent: #181c18;
+  --on-accent-ink: #181c18;
+  --user-bg: rgba(147, 189, 157, 0.12);
+}
+:root.dark[data-bg='sage'] {
+  --bg: #232723;
+  --sidebar-bg: #1d221d;
+  --bg-card: #2c312c;
+  --sidebar-card-bg: var(--bg-card);
+  --bg-glass: rgba(29, 34, 29, 0.9);
+  --text: #e8ede8;
+  --text-light: rgba(232, 237, 232, 0.82);
+  --text-muted: #a3aaa3;
+  --text-faint: #989d98;
+  --text-ghost: rgba(232, 237, 232, 0.28);
+  --border: #3c423c;
+  --shadow: rgba(0, 0, 0, 0.4);
+  --overlay-subtle: rgba(232, 237, 232, 0.03);
+  --overlay-light: rgba(232, 237, 232, 0.05);
+  --overlay-medium: rgba(232, 237, 232, 0.08);
+  --overlay-strong: rgba(232, 237, 232, 0.15);
+  --tool-bg: rgba(232, 237, 232, 0.035);
+  --tool-text: #a3aaa3;
+  --green: #8fb295;
+  --danger: #d99080;
+  --danger-light: rgba(217, 144, 128, 0.12);
+  --glow: radial-gradient(110% 75% at 82% -12%, rgba(147, 189, 157, 0.1), transparent 56%);
+}
+
 
 /* ── 墨色 Ink(10-03 用户定 d1「深墨暖调」;暗色才是它的身份)──────────────────────
  * 暗色:侧栏 #1b1a19 → 主区 #201f1d → 卡片 #282624,每层只差一小档;字与底同一暖色相。
  * 亮色:只比经典略暖一点 —— 身份在暗色;浅色与经典/珊瑚之间没有能同时拉开 3 的暖纸面(theme-contrast 已显式豁免)。
  *   强调色是暖墨,不是经典那支炭黑。 */
 :root[data-skin='ink'] {
-  --wikilink-ink: #2c5f9e;
+  --signal-skin: #2c5f9e;
   --accent: #2b2723;
   --accent-ink: #2b2723;
   --accent-hover: #000000;
@@ -380,6 +458,8 @@
   --accent-rgb: 43, 39, 35;
   --on-accent: #fbfaf8;
   --user-bg: rgba(43, 39, 35, 0.04);
+  --action-fill: #45423e;
+  --action-fill-hover: #2b2723;
 }
 :root[data-bg='ink'] {
   --bg: #f7f6f3;
@@ -405,7 +485,7 @@
   --glow: radial-gradient(110% 75% at 82% -12%, rgba(196, 184, 166, 0.14), transparent 56%);
 }
 :root.dark[data-skin='ink'] {
-  --wikilink-ink: #8fb4e3;
+  --signal-skin: #8fb4e3;
   --accent: #ecebe7;
   --accent-ink: #ecebe7;
   --accent-hover: #ffffff;

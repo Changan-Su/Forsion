@@ -470,7 +470,7 @@
   right: 0;
   height: 3px;
   border-radius: 2px;
-  background: var(--primary);
+  background: var(--signal-line);
   /* 无光晕:与竖向 .block-edge::after 的纯实心 bar 一致(用户要求) */
   z-index: 5;
   pointer-events: none;
@@ -992,7 +992,7 @@
   transition: background 0.1s ease;
 }
 .am-app .block-edge[data-over]::after {
-  background: var(--primary);
+  background: var(--signal-line);
 }
 /* 块选中(Notion 式):accent 描边 + 淡底,非编辑态。只圈正文(.block-body),
    手柄泳道在其左侧不进框(用户要求「选中框贴正文」)。 */
@@ -1219,7 +1219,7 @@ body.amx-marquee-active * {
   .am-app .callout[data-fold-animating] > :first-child > .callout-chevron.collapsed svg { transform: rotate(90deg); }
 }
 .am-app .callout-chevron:hover { color: var(--text); background: var(--overlay-light); }
-.am-app .callout-chevron:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.am-app .callout-chevron:focus-visible { outline: var(--focus-ring, 1px) solid var(--signal-line); outline-offset: 1px; }
 /* 折叠/展开的高度过渡。⚠️ 不能用 display:none —— 那个切不出动画。
    `interpolate-size: allow-keywords` 让 `height: auto ↔ 0` 可插值(Chromium 129+);
    不支持的环境自动退化成瞬切,不会坏。高度 0 + overflow:hidden 的效果与原来一致:
@@ -1421,11 +1421,11 @@ body.amx-marquee-active * {
     -3px -3px 0 -8px var(--accent-ink, #6c5ce7);
 }
 .am-app .milkdown .ProseMirror li[data-item-type='task']:hover::before {
-  border-color: var(--primary);
+  border-color: var(--signal-line);
 }
 .am-app .milkdown .ProseMirror li[data-item-type='task'][data-checked='true']::before {
-  background: var(--primary);
-  border-color: var(--primary);
+  background: var(--signal-mark);
+  border-color: var(--signal-mark);
   /* 爆花终态:粒子飞到 ≈20px 处渐透明(途中 spread≈-7 可见) */
   box-shadow:
     20px 0 0 -6px transparent,
@@ -1443,7 +1443,7 @@ body.amx-marquee-active * {
   top: calc((1lh - 10px) / 2 - 1px);
   width: 6px;
   height: 10px;
-  border: solid var(--on-primary);
+  border: solid var(--bg-card); /* 勾底是强调色记号(--signal-mark):亮色下偏深、暗色下偏浅,卡片色两边都读得出 */
   border-width: 0 2px 2px 0;
   transform: rotate(45deg);
   pointer-events: none;
@@ -1594,7 +1594,7 @@ body.amx-marquee-active * {
 .am-app .itb-ask {
   font-size: var(--ui-font-meta, 12px);
   font-weight: 500;
-  color: var(--accent);
+  color: var(--accent-ink);
   white-space: nowrap;
 }
 .am-app .itb-sep {
@@ -2182,7 +2182,7 @@ body.amx-marquee-active * {
 /* Keyboard focus rings (mouse clicks stay clean;注意文本输入框按规范点击聚焦也算 :focus-visible,须逐个豁免) */
 .am-app :focus-visible {
   /* 线宽走 --focus-ring(base.css :root,当前 1px):这条是全局兜底圈,截图里图库搜索框那圈就是它。 */
-  outline: var(--focus-ring, 1px) solid var(--primary);
+  outline: var(--focus-ring, 1px) solid var(--signal-line);
   outline-offset: 1px;
   border-radius: var(--radius-xs);
 }
@@ -2732,7 +2732,7 @@ body.amx-marquee-active * {
   transition: background var(--dur-fast) var(--ease-apple);
 }
 .am-app .toggle[data-on] {
-  background: var(--primary);
+  background: var(--signal-mark);
 }
 .am-app .toggle-knob {
   position: absolute;
@@ -3035,7 +3035,7 @@ body.amx-marquee-active * {
   left: 0;
   height: 3px;
   border-radius: 2px;
-  background: var(--primary);
+  background: var(--signal-line);
   z-index: 50;
   pointer-events: none;
   animation: amx-dropline-in 100ms cubic-bezier(0.4, 0, 0.2, 1);
@@ -3156,7 +3156,7 @@ body.amx-marquee-active * {
   left: 0;
   width: 3px;
   border-radius: 2px;
-  background: var(--primary);
+  background: var(--signal-line);
   pointer-events: none;
   z-index: 40;
 }
@@ -3524,7 +3524,7 @@ body.amx-marquee-active * {
   content: '';
   position: absolute;
   inset: 50% 0 auto;
-  border-top: 2px solid color-mix(in srgb, var(--primary) 55%, transparent);
+  border-top: 2px solid var(--signal-line);
   border-radius: 1px;
 }
 .am-app .amx-gap-insert span {
@@ -3534,9 +3534,9 @@ body.amx-marquee-active * {
   line-height: 15px;
   text-align: center;
   font-size: var(--ui-font-meta, 12px);
-  color: var(--primary);
+  color: var(--signal);
   background: var(--bg);
-  border: 1px solid color-mix(in srgb, var(--primary) 55%, transparent);
+  border: 1px solid var(--signal-line);
   border-radius: 50%;
 }
 /* 模式切换胶囊:**复用** `.t2s-vaultseg`(云端/本地那颗,真源在 views/chat2/sidebar2.css)。
@@ -3756,7 +3756,7 @@ body.amx-marquee-active * {
   pointer-events: auto;
   cursor: grab;
 }
-.am-app .amx-el-shape.is-sel { outline: 2px solid var(--primary); outline-offset: 1px; }
+.am-app .amx-el-shape.is-sel { outline: 2px solid var(--signal-line); outline-offset: 1px; }
 /* 调尺寸把手(单选时才渲染)。data-grip 是舞台 pointerdown 的判据。 */
 .am-app .amx-el-grip {
   position: absolute;
@@ -3765,7 +3765,7 @@ body.amx-marquee-active * {
   width: 10px;
   height: 10px;
   border-radius: 3px;
-  background: var(--primary);
+  background: var(--signal-mark);
   cursor: nwse-resize;
 }
 /* 元素的四角把手:画在元素层、按盒坐标自由定位(2026-08-19)。
@@ -3854,14 +3854,14 @@ body.amx-marquee-active * {
   margin: -5px 0 0 -5px;
   box-sizing: border-box;
   border-radius: var(--radius-pill, 999px);
-  border: 1.5px solid var(--primary);
+  border: 1.5px solid var(--signal-mark);
   background: var(--bg);
   pointer-events: auto;
   cursor: crosshair;
 }
 .am-app .amx-link-dot { opacity: 0.85; }
-.am-app .amx-link-dot:hover, .am-app .amx-conn-end:hover { opacity: 1; background: var(--primary); }
-.am-app .amx-conn-end { background: var(--primary); cursor: move; }
+.am-app .amx-link-dot:hover, .am-app .amx-conn-end:hover { opacity: 1; background: var(--signal-mark); }
+.am-app .amx-conn-end { background: var(--signal-mark); cursor: move; }
 /* 卡 / 主卡的圆点住在选中框里(随拖拽样式表一起走),按百分比落在四边中点;元素的圆点按盒坐标直接定位(.is-free)。 */
 .am-app .amx-link-dot.is-n:not(.is-free) { left: 50%; top: 0; }
 .am-app .amx-link-dot.is-s:not(.is-free) { left: 50%; top: 100%; }
@@ -3899,7 +3899,7 @@ body.amx-marquee-active * {
   background: color-mix(in srgb, var(--text-muted) 5%, transparent);
   pointer-events: none;
 }
-.am-app .amx-el-frame.is-sel { border-color: var(--primary); }
+.am-app .amx-el-frame.is-sel { border-color: var(--signal-line); }
 .am-app .amx-el-frame-bar {
   position: absolute;
   left: 0;
@@ -4291,7 +4291,7 @@ body.amx-marquee-active * {
 .am-app .amx-canvas .amx-ucard { box-sizing: border-box; }
 /* 块拖拽的落点指示:画布模式下换成「目标卡描边」(那条横线在绝对定位的卡片间必然撒谎,
    见 blockLayer 的 executeDropInCanvas)。outline 不进布局,连线端点不会因此跳。 */
-.am-app .amx-canvas .amx-ucard.amx-droptarget { outline: 2px solid var(--primary); outline-offset: 2px; }
+.am-app .amx-canvas .amx-ucard.amx-droptarget { outline: 2px solid var(--signal-line); outline-offset: 2px; }
 
 /* 顶栏胶囊的插槽与锚(2026-08-18 portal 化,见 unified/CanvasModeSeg 顶注)。
    插槽是顶栏里的一个空 span:里头没有胶囊时不许占位、也不许把 flex 间距撑开。

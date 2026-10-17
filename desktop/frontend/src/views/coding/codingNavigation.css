@@ -5,5 +5,5 @@
 .csn-item > svg { flex: none; }
 .csn-item:hover { background: var(--overlay-light); color: var(--text); }
 .csn-item[aria-current='page'] { background: var(--sel-fill); color: var(--accent-ink); font-weight: 550; }
-.csn-item:focus-visible { outline: var(--focus-ring) solid var(--accent-ink); outline-offset: 2px; }
+.csn-item:focus-visible { outline: var(--focus-ring) solid var(--signal-line); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) { .csn-item { transition: none; } }

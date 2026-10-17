@@ -7,7 +7,7 @@
 .self-receipt > summary, .human-acked { display: inline-flex; align-items: center; gap: 6px; padding: 3px 0; cursor: pointer; border-radius: var(--radius-sm); }
 .self-receipt > summary { list-style: none; }
 .self-receipt > summary::-webkit-details-marker { display: none; }
-.self-receipt > summary:focus-visible, .human-acked:focus-visible, .self-act:focus-visible { outline: var(--focus-ring, 2px) solid var(--accent-ink); outline-offset: 2px; }
+.self-receipt > summary:focus-visible, .human-acked:focus-visible, .self-act:focus-visible { outline: var(--focus-ring, 2px) solid var(--signal-line); outline-offset: 2px; }
 .self-receipt-ic { flex: none; color: var(--green); }
 .self-receipt-first { color: var(--text); font-weight: 600; }
 .self-receipt-chev { flex: none; transition: transform var(--duration-fast, .15s); }
