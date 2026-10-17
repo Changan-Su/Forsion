@@ -7,7 +7,7 @@ import { useModelPickerPreferences } from '../../modelPickerPreferences'
  */
 import React, { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import {
-  ArrowUp, Square, Mic, X, ClipboardList, Check, ChevronDown, FileText, Users, Sparkles,
+  ArrowUp, Square, Mic, X, ClipboardList, Check, ChevronDown, Users, Sparkles,
   Hand, ShieldCheck, ShieldAlert, Settings2, SlidersHorizontal, MessageSquare, Loader2, Clock, Zap, AudioLines, Quote, type LucideIcon } from 'lucide-react'
 import { useVoiceInput } from '../../hooks/useVoiceInput'
 import { CALL_TEXT_MAX, getCallPresence, onCallEvent, openCallLayer, sendTextToCall, subscribeCallPresence, useRealtimeConfig } from '../../services/realtimeCall'
@@ -36,6 +36,7 @@ import { refToText, type ChatRef } from './chatDragRef'
 import { useApp } from '../../stores/appStore'
 import { ApprovalRulesModal } from '../../components/ApprovalRulesModal'
 import { thinkingLabel } from '../../components/thinkingLabel'
+import { AttachmentTile, isLeaving, tileKey } from '../../components/AttachmentTile'
 import { commandsFor } from '../../commandCatalog'
 import { getCustomCommands, expandCustomCommand, listAllMessages, type CustomCommandInfo } from '../../services/backendService'
 import { AddContentMenu, type AddContentReference } from './AddContentMenu'
@@ -1430,7 +1431,7 @@ export const Composer2: React.FC<{
     // 清的是**发出时**那个会话的草稿:新对话的第一句发到一半会话才建出来,输入框那时已经换到新会话上了。
     const sentKey = draftKey
     const known = sentKey === NEW_CHAT_DRAFT ? new Set(useApp.getState().sessions.map((x) => x.id)) : null
-    return onSend(outgoing, attachments, wsFiles, pinnedSkills.map((s) => s.id), mentions).then((accepted) => {
+    return onSend(outgoing, attachments.filter((a) => !isLeaving(a)), wsFiles.filter((a) => !isLeaving(a)), pinnedSkills.map((s) => s.id), mentions).then((accepted) => {
       if (!accepted) {
         // 新对话的第一句没发出去,而输入框已经换到刚建的会话上:那份输入跟过去,留在眼前可以重发(那边有草稿就不动)。
         // 只认发送前还不存在的会话 —— 用户途中自己切去了别的会话,就不往那里塞,那份留在新对话里。
@@ -1784,28 +1785,15 @@ export const Composer2: React.FC<{
               ))}
             </div>
           )}
-          {attachments.length > 0 && (
-            <div className="t2c-chiprow">
-              {attachments.map((a, i) => (
-                <span className="attach-chip" key={`${a.name}-${i}`}>
-                  {a.mimeType.startsWith('image/') && <img src={`data:${a.mimeType};base64,${a.data}`} alt={a.name} />}
-                  <span>{a.name}</span>
-                  <button title={t('input.remove')} onClick={() => setAttachments(attachments.filter((_, j) => j !== i))}><X size={12} /></button>
-                </span>
+          {(attachments.length > 0 || wsFiles.length > 0) && (
+            // 附件磁贴(B2):随消息发的与「到工作区」的排在同一行。删按对象认、写回点删那一刻的草稿(draftKey 闭包),
+            // 淡出那 130ms 里删了别的、切了会话都不会删错;发送时跳过正在淡出的(isLeaving)。
+            <div className="t2c-chiprow t2c-tilerow">
+              {attachments.map((a) => (
+                <AttachmentTile key={tileKey(a)} file={a} removeTitle={t('input.remove')} onRemove={() => setDraftField(draftKey, 'attachments', (prev) => prev.filter((x) => x !== a))} />
               ))}
-            </div>
-          )}
-          {wsFiles.length > 0 && (
-            <div className="t2c-chiprow">
-              {wsFiles.map((a, i) => (
-                <span className="attach-chip" key={`ws-${a.name}-${i}`} title={t('input.wsUploadTitle', { name: a.name })}>
-                  {a.mimeType.startsWith('image/')
-                    ? <img src={`data:${a.mimeType};base64,${a.data}`} alt={a.name} />
-                    : <FileText size={14} style={{ color: 'var(--accent-ink)', flexShrink: 0 }} />}
-                  <span>{a.name}</span>
-                  <span style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)', flexShrink: 0 }}>{t('input.toWorkspace')}</span>
-                  <button title={t('input.remove')} onClick={() => setWsFiles(wsFiles.filter((_, j) => j !== i))}><X size={12} /></button>
-                </span>
+              {wsFiles.map((a) => (
+                <AttachmentTile key={tileKey(a)} file={a} note={t('input.toWorkspace')} removeTitle={t('input.remove')} onRemove={() => setDraftField(draftKey, 'wsFiles', (prev) => prev.filter((x) => x !== a))} />
               ))}
             </div>
           )}

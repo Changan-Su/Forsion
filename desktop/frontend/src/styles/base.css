@@ -2329,25 +2329,42 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .attach-chip button { color: var(--text-faint); display: inline-flex; }
 .attach-chip button:hover { color: var(--danger); }
 
-/* 聊天气泡内的附件缩略图(用户消息已发送的图片/文件) */
-.msg-attach-grid { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
-.msg-attach-img {
-  max-width: 180px;
-  max-height: 180px;
-  object-fit: contain;
-  border-radius: var(--radius-sm);
-  border: var(--border-width) solid var(--border);
-  background: var(--overlay-light);
+/* 附件磁贴(10-17,借鉴 Claude 第二轮 B2;组件 components/AttachmentTile.tsx):输入卡里待发的、已发消息气泡上方的共用。
+   图片 = 方块(--att-tile,输入卡 56px,消息里 120px / 窄栏 96px);其它 = 56px 高的文件条:类型色块 + 文件名(中间省略)+ 类型 · 大小。
+   色块只用现成语义色(表格绿 / PDF 红 / 文档蓝),其它灰。移除钮压在右上角往外探 6px,悬停 / 键盘聚焦才出,触屏常显。 */
+.att-tile { position: relative; flex: none; display: inline-flex; min-width: 0; max-width: 100%; transition: transform 130ms cubic-bezier(.55, .055, .675, .19), opacity 130ms; }
+.att-tile.is-leaving { transform: scale(.6); opacity: 0; pointer-events: none; animation: none; } /* animation:none —— 刚加进来还在入场动画(.t2c-chiprow > *)里就点删,动画会压住淡出 */
+.att-tile--img > img {
+  display: block; width: var(--att-tile, 56px); height: var(--att-tile, 56px);
+  object-fit: cover; object-position: left top; /* 截图的要紧处多在左上 */
+  border-radius: var(--radius-sm); border: var(--border-width) solid var(--border); background: var(--overlay-light);
 }
-.msg-attach-file {
-  display: inline-flex;
-  align-items: center;
-  font-size: var(--ui-font-caption, 11px);
-  color: var(--text-muted);
-  background: var(--overlay-light);
-  border-radius: var(--radius-sm);
-  padding: 3px 8px;
+.att-tile--file {
+  align-items: center; gap: 10px; height: 56px; max-width: 250px; padding: 0 14px 0 7px;
+  background: var(--bg-card); border: var(--border-width) solid var(--border); border-radius: var(--radius-md);
 }
+.att-tile-badge {
+  flex: none; width: 40px; height: 40px; display: grid; place-items: center; object-fit: cover;
+  border-radius: var(--radius-sm); background: var(--overlay-medium); color: var(--text-muted);
+  font-size: var(--ui-font-caption, 11px); font-weight: 650; letter-spacing: .03em;
+}
+.att-tile-badge[data-kind='sheet'] { background: color-mix(in srgb, var(--green) 16%, transparent); color: var(--green); }
+.att-tile-badge[data-kind='pdf'] { background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--danger); }
+.att-tile-badge[data-kind='doc'] { background: color-mix(in srgb, var(--model-tag-blue) 14%, transparent); color: var(--model-tag-blue); }
+.att-tile-meta { min-width: 0; display: flex; flex-direction: column; gap: 1px; text-align: left; }
+.att-tile-name { display: flex; min-width: 0; font-size: var(--ui-font-body, 13px); color: var(--text); white-space: nowrap; }
+.att-tile-head { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.att-tile-tail { flex: none; }
+.att-tile-sub { font-size: var(--ui-font-caption, 11px); color: var(--text-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.att-tile-x {
+  position: absolute; top: -6px; right: -6px; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 50%;
+  display: grid; place-items: center; background: var(--text); color: var(--bg); cursor: pointer;
+  opacity: 0; transition: opacity var(--duration-fast, .15s);
+}
+.att-tile-x::after { content: ''; position: absolute; inset: -6px; } /* 点按区比画出来的大一圈 */
+.att-tile:hover .att-tile-x, .att-tile-x:focus-visible { opacity: 1; }
+@media (hover: none) { .att-tile-x { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .att-tile { transition: none; } }
 
 /* agent 在对话区展示的文件(display_file / 生图 / 表情包):图片缩略图(点击放大)+ 文件卡片 */
 .inline-file-grid { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
