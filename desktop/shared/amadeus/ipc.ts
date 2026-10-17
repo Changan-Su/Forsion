@@ -372,6 +372,8 @@ export interface ExternalPluginSource {
    *  APIs (Electron bridges, local engine, OS shell). Desktop lists and runs it as usual (informational only);
    *  mobile hosts list it as `blocked: 'desktopOnly'`, never evaluate its code and refuse to install it. */
   isDesktopOnly?: boolean
+  /** Manifest `syncData: true` (2026-10-17): the plugin's ctx.saveData blob syncs across devices with the Forsion account. */
+  syncData?: boolean
   /** 捆绑包内嵌内容清单(缺省 = 纯 UI 插件)。 */
   bundle?: PluginBundleInfo
   /** 随 App 内置(主进程 builtinPlugins.ts 播种的捆绑包):设置页标「内置」、不给卸载按钮(只能停用)。
