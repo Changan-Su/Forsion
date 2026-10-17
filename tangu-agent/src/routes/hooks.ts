@@ -17,6 +17,7 @@ import {
   trustHook,
   setHookEnabled,
   discoverAll,
+  withoutPluginHooks,
   normalizeHooksConfig,
   HOOK_EVENT_NAMES,
 } from '../hooks/index.js';
@@ -46,6 +47,7 @@ function discoveredByEvent(): Record<string, any[]> {
       timeout: d.handler.timeout || 0,
       statusMessage: d.handler.statusMessage || '',
       source: d.source,
+      ...(d.plugin ? { plugin: d.plugin } : {}),
       trust: d.trust,
       enabled: d.enabled,
       active: d.active,
@@ -70,6 +72,7 @@ router.put('/agent/hooks', authMiddleware, async (req: AuthRequest, res) => {
     const cur = loadHooksConfig();
     // 只替换 events，保留 state；面板保存即审阅通过 → 同步信任所有 user hook。
     const next = normalizeHooksConfig({ events: body.events ?? {}, state: cur.state });
+    next.events = withoutPluginHooks(next.events, cur.events);
     saveHooksConfig(syncUserTrust(next));
     res.json({ events: loadHooksConfig().events, discovered: discoveredByEvent() });
   } catch (e: any) {

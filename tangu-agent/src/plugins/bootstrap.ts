@@ -49,6 +49,7 @@ import {
 import { appendActivityLine } from '../services/userActivity.js';
 import { seedBundleAgents } from './bundles.js';
 import { attachPluginMcp } from '../mcp/pluginServers.js';
+import { attachPluginHooks } from '../hooks/pluginHooks.js';
 import type {
   PluginCommand,
   PluginRouters,
@@ -97,8 +98,8 @@ interface Instance {
   hostAdapters: Map<string, (o: any) => { host: HostServices }>;
   brainAdapters: Map<string, (o: any) => CloudBrainServices>;
   billingAdapters: Map<string, (o: any) => BillingServices>;
-  /** manifest 的 mcpServers 已交给 manager(见 attachMcpForRunning)。 */
-  mcpAttached?: boolean;
+  /** manifest 的 mcpServers / hooks 已登记(见 attachManifestExtras)。 */
+  extrasAttached?: boolean;
 }
 
 function newInstance(metaIds: Set<string> = new Set()): Instance {
@@ -484,24 +485,26 @@ async function reconcile(): Promise<void> {
         changed = true;
       }
     }
-    if (!changed) return attachMcpForRunning();
+    if (!changed) return attachManifestExtras();
   }
   console.warn('[tangu] 插件收敛未在上限轮数内到达不动点(忽略)');
-  attachMcpForRunning();
+  attachManifestExtras();
 }
 
 /**
- * 收敛落定后才给在跑的实例起 manifest 里的 MCP server —— 启动期「先全部激活一次再收敛」里随即休眠的插件不拉起子进程。
- * 撤销函数进实例台账:停用 / 卸载 / 原地升级时 stopEntry 跑 runtimeDisposers 关掉它们。
+ * 收敛落定后才给在跑的实例登记 manifest 里声明式的部分(mcpServers / hooks)—— 启动期「先全部激活一次再收敛」里
+ * 随即休眠的插件不拉起子进程、不挂 hook。撤销函数进实例台账:停用 / 卸载 / 原地升级时 stopEntry 跑 runtimeDisposers 摘掉。
  */
-function attachMcpForRunning(): void {
+function attachManifestExtras(): void {
   for (const e of entries.values()) {
     const inst = e.inst;
-    if (!inst?.activated || inst.disposed || inst.mcpAttached) continue;
-    inst.mcpAttached = true;
-    const id = e.d.manifest.id;
-    const off = attachPluginMcp(id, String(e.d.manifest.name || id), e.d.dir, e.d.manifest.mcpServers);
-    if (off) inst.runtimeDisposers.push(off);
+    if (!inst?.activated || inst.disposed || inst.extrasAttached) continue;
+    inst.extrasAttached = true;
+    const { id, name, mcpServers, hooks } = e.d.manifest;
+    for (const off of [
+      attachPluginMcp(id, String(name || id), e.d.dir, mcpServers),
+      attachPluginHooks(id, String(name || id), e.d.dir, hooks),
+    ]) if (off) inst.runtimeDisposers.push(off);
   }
 }
 

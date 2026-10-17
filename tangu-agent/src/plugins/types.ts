@@ -54,6 +54,12 @@ export interface TanguPluginManifest {
    * 只在本机引擎上生效(云端 worker 没有 MCP)。见 mcp/pluginServers.ts。只想带 MCP 的插件,入口写个空的 activate 即可。
    */
   mcpServers?: Record<string, unknown>;
+  /**
+   * 自带的 lifecycle hooks(形态同 config.json hooks 段的 `events`)。**只开观察档**:SessionStart / PostToolUse / Stop /
+   * SubagentStart / SubagentStop,hook 照常跑、收事件 JSON,但输出不进判定(拦不住、注入不了上下文)。
+   * command 里的 `${pluginDir}` 展开成插件目录。随插件启停。见 hooks/pluginHooks.ts。
+   */
+  hooks?: Record<string, unknown>;
 }
 
 /** 插件注册的 CLI 子命令（`tangu <name> ...`）。 */

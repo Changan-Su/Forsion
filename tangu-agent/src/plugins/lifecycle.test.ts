@@ -48,6 +48,8 @@ interface PluginSpec {
   providerId?: string;
   /** manifest 的 mcpServers。 */
   mcp?: Record<string, unknown>;
+  /** manifest 的 hooks。 */
+  hooks?: Record<string, unknown>;
 }
 
 const ENV_KEYS = ['TANGU_HOME', 'TANGU_PLUGINS', 'TANGU_PLUGINS_DIR', 'TANGU_BUNDLE_DIRS', 'TANGU_PLUGIN_GRAPH_SWAP'];
@@ -105,6 +107,7 @@ function writePlugin(id: string, spec: PluginSpec = {}): void {
   const manifest: Record<string, unknown> = { id, name: id, version: spec.version ?? '1.0.0', apiVersion: 1, entry: 'dist/index.js' };
   if (spec.requires !== undefined) manifest.requiresPlugins = spec.requires;
   if (spec.mcp !== undefined) manifest.mcpServers = spec.mcp;
+  if (spec.hooks !== undefined) manifest.hooks = spec.hooks;
   writeFileSync(path.join(dir, 'tangu-plugin.json'), JSON.stringify(manifest));
   writeFileSync(path.join(dir, 'package.json'), '{"type":"module"}');
   const tag = JSON.stringify(spec.tag ?? 'v1');
@@ -193,10 +196,13 @@ describe('UUID marketplace engine identity', () => {
 
 describe('manifest mcpServers', () => {
   it('只给收敛后在跑的插件起(启动期随即休眠的不拉子进程);停用撤下,再启用重新加', async () => {
-    writePlugin('lc-m', { mcp: { srv: { command: 'node', args: ['${pluginDir}/s.js'] } } });
-    writePlugin('lc-moff', { defaultEnabled: false, mcp: { srv2: { command: 'node' } } });
+    const stopHook = { Stop: [{ hooks: [{ type: 'command', command: 'true' }] }] };
+    writePlugin('lc-m', { mcp: { srv: { command: 'node', args: ['${pluginDir}/s.js'] } }, hooks: stopHook });
+    writePlugin('lc-moff', { defaultEnabled: false, mcp: { srv2: { command: 'node' } }, hooks: stopHook });
     const h = await host();
     const pm = await import('../mcp/pluginServers.js');
+    const hk = await import('../hooks/config.js');
+    const hookOwners = () => hk.discoverHooks({ events: {}, state: {} }, 'Stop').map((x) => x.plugin?.id);
     const calls: string[] = [];
     pm.bindPluginMcp({
       addServers: (o: { id: string }, s: Record<string, { args?: string[]; cwd?: string }>) => calls.push(`add:${o.id}:${Object.keys(s)}:${s.srv?.args?.[0] === path.join(pluginsRoot, 'lc-m', 's.js')}:${s.srv?.cwd === path.join(pluginsRoot, 'lc-m')}`),
@@ -204,8 +210,10 @@ describe('manifest mcpServers', () => {
     } as any);
     await h.boot.activateAllPlugins();
     expect(calls).toEqual(['add:lc-m:srv:true:true']);
+    expect(hookOwners()).toEqual(['lc-m']); // 随即休眠的 lc-moff 没挂上
     await h.boot.setPluginEnabledLive('lc-m', false);
     expect(calls.at(-1)).toBe('remove:lc-m');
+    expect(hookOwners()).toEqual([]);
     await h.boot.setPluginEnabledLive('lc-moff', true);
     expect(calls.at(-1)).toBe('add:lc-moff:srv2:false:false');
     await h.boot.setPluginEnabledLive('lc-m', true);
