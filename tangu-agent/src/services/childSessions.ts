@@ -44,6 +44,8 @@ const autoRuns = new Map<string, number>();
 /** 在主会话下开一个子会话并起它的第一轮。错误抛英文串(工具原样回给模型)。 */
 export async function startChildSession(p: {
   parentId: string; userId: string; modelId: string; title: string; message: string; remote?: RemoteInfo;
+  /** 主会话这一轮实际在用的配置(工具从 ctx 传):压过存值 —— 存值可能是空的(客户端每轮带配置、没 PUT 过的会话)。 */
+  inherit?: Record<string, unknown>;
 }): Promise<{ sessionId: string; runId: string; title: string }> {
   const [parent] = await query<any[]>(
     `SELECT id, user_id, app_id, kind, parent_session_id, project_path, project_name, projectless, agent_config, model_id FROM chat_sessions WHERE id = ?`,
@@ -57,7 +59,7 @@ export async function startChildSession(p: {
   if (kids.filter((k) => busy.has(String(k.id))).length >= MAX_RUNNING_CHILDREN) {
     throw new Error(`${MAX_RUNNING_CHILDREN} child sessions are already running. Wait for them to report back before starting more.`);
   }
-  const cfg = decode(parent.agent_config);
+  const cfg = { ...decode(parent.agent_config), ...Object.fromEntries(Object.entries(p.inherit || {}).filter(([, v]) => v !== undefined)) };
   const runConfig: Record<string, unknown> = {};
   for (const k of INHERIT_KEYS) if (cfg[k] !== undefined) runConfig[k] = cfg[k];
   // 远程污点的调用方开出的子会话:存值盖远程标记(同 dispatchProjectSession / 远程 POST /agent/sessions),首个 run 抄 input.remote。

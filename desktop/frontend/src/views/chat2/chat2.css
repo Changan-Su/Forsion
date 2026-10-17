@@ -1075,9 +1075,11 @@
 .t2-child-update > svg { color: var(--accent-ink); flex: none; }
 .t2-child-update-item[data-status='waiting_for_user'] { color: var(--warning); }
 .t2-child-update-item[data-status='failed'] { color: var(--danger); }
-/* 子会话顶上「来自 主会话」 */
-.t2-child-from { display: flex; align-items: center; justify-content: center; gap: 5px; margin: 0 0 10px; color: var(--text-muted); }
-.t2-child-from > a { color: var(--accent-ink); cursor: pointer; text-decoration: none; max-width: 40ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.t2-child-update-item + .t2-child-update-item::before { content: '·'; margin-right: 8px; color: var(--text-faint, var(--text-muted)); }
+/* 子会话顶上「来自 主会话」:按一段文字排(窄的子会话面板里会折行,不能是 flex —— 那样每一截各自竖着挤成一列) */
+.t2-child-from { display: block; text-align: center; margin: 0 0 10px; color: var(--text-muted); }
+.t2-child-from > svg { vertical-align: -2px; margin-right: 4px; }
+.t2-child-from > a { display: inline-block; vertical-align: bottom; margin: 0 4px; color: var(--accent-ink); cursor: pointer; text-decoration: none; max-width: 24ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .t2-child-from > a:hover { text-decoration: underline; }
 
 /* 流里给待批审批留的一行指路(卡本身在输入框上方的托盘里) */
