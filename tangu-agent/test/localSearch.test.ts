@@ -134,6 +134,24 @@ describe('DeepSeek Search', () => {
     expect(out.text).toContain('Search results (DeepSeek)');
   });
 
+  it('max_results 为 0 附近的小数 → 夹到 1,不是缺省 5', async () => {
+    writeWebSearchSection({ provider: 'deepseek', deepseekApiKey: 'sk-ds' });
+    const f = stubFetch([['https://api.deepseek.com', () => jsonRes(200, { results: [] })]]);
+    await runLocalSearch('q', 0.5);
+    expect(JSON.parse(String((f.mock.calls[0]![1] as any).body)).count).toBe(1);
+  });
+
+  it('报错里带出的 Key 在进结果 / 聚合错误前被抹掉', async () => {
+    writeWebSearchSection({ provider: 'deepseek', deepseekApiKey: 'sk-ds\nSECRET' });
+    stubFetch([
+      ['https://api.deepseek.com', () => { throw new TypeError('Headers.append: "Bearer sk-ds\nSECRET" is an invalid header value.'); }],
+      ['https://api.duckduckgo.com', () => jsonRes(200, { AbstractText: 'fallback' })],
+    ]);
+    const out = await runLocalSearch('q', 3);
+    expect(out.text).toContain('Bearer ***');
+    expect(out.text).not.toContain('SECRET');
+  });
+
   it('402 余额不足 → 降级到 DDG,注记带上游状态码', async () => {
     writeWebSearchSection({ provider: 'deepseek', deepseekApiKey: 'sk-ds' });
     stubFetch([

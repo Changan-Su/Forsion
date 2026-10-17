@@ -133,7 +133,7 @@ async function searchZhipu(query: string, maxResults: number, apiKey: string, en
 /** DeepSeek Search(api-docs.deepseek.com/zh-cn/guides/search):¥5/千次成功请求,账号级 5 QPS。
  *  上游对越界参数直接 400:query 1~128 字符、count 1~50 —— 在这里夹住,别让长查询每次都掉进降级链。 */
 async function searchDeepSeek(query: string, maxResults: number, apiKey: string): Promise<SearchOk> {
-  const count = Math.min(50, Math.max(1, Math.trunc(maxResults) || 5));
+  const count = Math.min(50, Math.max(1, Number.isFinite(maxResults) ? Math.trunc(maxResults) : 5));
   const r = await fetch('https://api.deepseek.com/v1/tools/search', {
     method: 'POST',
     signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
@@ -235,6 +235,12 @@ function formatHits(label: string, results: SearchHit[]): string {
     .join('\n')}`;
 }
 
+/** 报错会原样进搜索结果:Key 中间夹换行时,fetch 的 header 校验错误会带出整串 `Bearer <key>`,先抹掉。 */
+function scrubKeys(msg: string, cfg: LocalWebSearchConfig): string {
+  for (const k of [cfg.bochaApiKey, cfg.tavilyApiKey, cfg.zhipuApiKey, cfg.deepseekApiKey]) if (k) msg = msg.split(k).join('***');
+  return msg;
+}
+
 async function runProvider(which: Exclude<LocalSearchProvider, 'auto'>, cfg: LocalWebSearchConfig, query: string, maxResults: number): Promise<SearchOk> {
   switch (which) {
     case 'bocha':
@@ -266,7 +272,7 @@ export async function runLocalSearch(query: string, maxResults: number, cfgOverr
       }
       return out;
     } catch (e) {
-      failures.push(`${which}: ${e instanceof Error ? e.message : String(e)}`);
+      failures.push(`${which}: ${scrubKeys(e instanceof Error ? e.message : String(e), cfg)}`);
     }
   }
   throw new Error(`All local search providers failed — ${failures.join(' | ')}`);
@@ -293,7 +299,7 @@ export async function testLocalSearch(input: { provider: LocalSearchProvider; ap
     const out = await runProvider(which, cfg, 'forsion connectivity test', 3);
     return { ok: true, provider: out.provider, latencyMs: Date.now() - start, resultCount: out.results.length, sampleTitle: out.results[0]?.title };
   } catch (e) {
-    return { ok: false, provider: which, latencyMs: Date.now() - start, error: e instanceof Error ? e.message : String(e) };
+    return { ok: false, provider: which, latencyMs: Date.now() - start, error: scrubKeys(e instanceof Error ? e.message : String(e), cfg) };
   }
 }
 
