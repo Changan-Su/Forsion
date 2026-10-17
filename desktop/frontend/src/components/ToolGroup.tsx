@@ -136,7 +136,7 @@ const Dots: React.FC = () => <span className="proc-dots" aria-hidden="true"><i /
 /** 「思考 N 秒」;没有用时(历史消息,用时只在本次运行里记)就写「思考过程」。 */
 export function thoughtLabel(t: (key: string, vars?: Record<string, string | number>) => string, ms?: number): string {
   if (!ms || ms <= 0) return t('tool.thought')
-  const sec = Math.max(1, Math.round(ms / 1000))
+  const sec = Math.max(1, Math.floor(ms / 1000)) // 与回答下方统计行(fmtElapsed)同样取整,两处不差一秒
   return sec < 60 ? t('tool.thoughtSec', { n: sec }) : t('tool.thoughtMin', { m: Math.floor(sec / 60), s: sec % 60 })
 }
 
