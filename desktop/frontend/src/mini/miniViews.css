@@ -11,4 +11,6 @@
 .mini-amadeus .amx-doc, .mini-amadeus .am-app .page-view { padding-inline: 24px; }
 .mini-amadeus .amx-title-input { font-size: 18px; margin-top: 6px; }
 .mini-todo .amx-todo { padding: 8px 12px; }
-.mini-todo .amx-todo-bar { display: none; }
+/* Mini 窗自己的标题栏已写「ToDo List」:只藏标题与计数,筛选菜单留着(10-17 Mini 也要能切今天 / 清单) */
+.mini-todo .amx-todo-title, .mini-todo .amx-todo-total { display: none; }
+.mini-todo .amx-todo-bar { padding-top: 0; }

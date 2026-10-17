@@ -89,5 +89,5 @@ export function registerMiniViews(): void {
   // 语音通话只开在 Mini 里(输入框电话键 → openMini 直达);桌面独有,靠 openMini 判在不在 Electron。
   if (miniFeatureAvailable('tangu') && window.tangu?.openMini) registerView({ type: 'voice-call', kind: 'aux', displayName: () => translate('livecall.title'), icon: Phone, factory: (p) => <VoiceCallView {...p} /> })
   if (miniFeatureAvailable('calendar')) registerView({ type: 'mini-todo', kind: 'aux', displayName: 'ToDo List', icon: ListTodo,
-    factory: ({ params }) => <div className="mini-native mini-todo"><Suspense fallback={null}><Todos params={{ ...params, miniSurface: true }} /></Suspense></div> })
+    factory: ({ params, leaf }) => <div className="mini-native mini-todo"><Suspense fallback={null}><Todos params={{ ...params, miniSurface: true }} leaf={leaf} /></Suspense></div> })
 }

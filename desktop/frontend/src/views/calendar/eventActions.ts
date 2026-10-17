@@ -1,5 +1,7 @@
 import { deleteAggRow, restoreAggRow, setAggCell, type AggDb, type AggRow } from '../../amadeus/store/dbAggregateStore'
 import { usePageStore } from '../../amadeus/store/pageStore'
+import { patchMark } from '../../amadeus/store/mdMarkStore'
+import type { MdMark } from '@amadeus-shared/mdMarks'
 import { notifyApp } from '../../stores/notificationStore'
 import { registerMessages, translate } from '../../i18n'
 
@@ -56,4 +58,12 @@ export function rescheduleCalendarRow(db: AggDb, row: AggRow, colId: string, bef
   if (before === after) return
   setAggCell(db, row.rowId, colId, after)
   offerUndo(translate('calevtact.moved', { title: title || translate('calevtact.untitled') }), () => setAggCell(db, row.rowId, colId, before || undefined))
+}
+
+/** 笔记正文任务改日期(待办视图拖到分组头):改那一行的 `@日期`,撤销 = 改回原值。
+ *  覆盖表按「路径:行号」记账,所以撤销拿同一个 mark 再 patch 一次就落在同一行。 */
+export function rescheduleNoteTask(mark: MdMark, before: string, after: string, title: string): void {
+  if (before === after || !after) return // 正文任务清掉 `@` 就不再是待办(列表里会消失),不收「未排期」
+  if (!patchMark(mark, { due: after })) return
+  offerUndo(translate('calevtact.moved', { title: title || translate('calevtact.untitled') }), () => { patchMark(mark, { due: before }) })
 }
