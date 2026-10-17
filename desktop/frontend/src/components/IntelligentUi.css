@@ -82,7 +82,7 @@
 .iui-pick-card::before, .iui-pick-card::after { content: ''; position: absolute; z-index: 1; pointer-events: none; opacity: 0; scale: .6; transition: opacity var(--duration-fast), scale var(--duration-fast) var(--ease-spring); }
 .iui-pick-card[data-selected]::before, .iui-pick-card[data-selected]::after { opacity: 1; scale: 1; }
 .iui-pick-card::before { top: 8px; right: 8px; width: 22px; height: 22px; border-radius: 50%; background: var(--signal-mark); box-shadow: 0 0 0 1.5px var(--bg); }
-.iui-pick-card::after { top: 12px; right: 12px; width: 14px; height: 14px; background: var(--on-accent, var(--bg)); -webkit-mask: var(--iui-check) center / contain no-repeat; mask: var(--iui-check) center / contain no-repeat; }
+.iui-pick-card::after { top: 12px; right: 12px; width: 14px; height: 14px; background: var(--bg-card); -webkit-mask: var(--iui-check) center / contain no-repeat; mask: var(--iui-check) center / contain no-repeat; }
 /* Looking closer is a separate corner control: it never changes the choice. Retry stays visible. */
 .intelligent-ui .iui-pick-tool { position: absolute; z-index: 1; top: 8px; left: 8px; min-height: 0; height: 24px; padding: 0 6px; border: 0; border-radius: var(--radius-sm); background: color-mix(in srgb, var(--bg) 84%, transparent); font-size: var(--ui-font-caption); transition: opacity var(--duration-fast); }
 .intelligent-ui .iui-pick-tool[aria-expanded="false"] { opacity: 0; }
@@ -123,7 +123,8 @@
 .iui-check-rows label:hover input { border-color: var(--text-muted); }
 .iui-check-rows input:checked, .iui-check-rows input:indeterminate { border-color: var(--signal-mark); }
 .iui-check-rows input:checked { background: var(--signal-mark); }
-.iui-check-rows input::after { content: ''; width: 11px; height: 11px; background: var(--on-accent, var(--bg)); -webkit-mask: var(--iui-check) center / contain no-repeat; mask: var(--iui-check) center / contain no-repeat; scale: 0; transition: scale var(--duration-fast) var(--ease-spring); }
+/* 勾底是强调色记号(--signal-mark),勾本身取卡片色 —— 和 --on-accent 不配对(强调色可以和主题色不是一支)。 */
+.iui-check-rows input::after { content: ''; width: 11px; height: 11px; background: var(--bg-card); -webkit-mask: var(--iui-check) center / contain no-repeat; mask: var(--iui-check) center / contain no-repeat; scale: 0; transition: scale var(--duration-fast) var(--ease-spring); }
 .iui-check-rows input:checked::after { scale: 1; }
 .iui-check-rows input:indeterminate::after { width: 8px; height: 1.5px; border-radius: 1px; background: var(--signal-mark); -webkit-mask: none; mask: none; scale: 1; }
 .iui-check-rows label[data-checked] > span { color: var(--text-muted); }
