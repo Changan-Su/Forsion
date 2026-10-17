@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- **Open files from your system**: PDF and Markdown files can be opened with Forsion (Open With in Finder, dropping onto the Dock icon, or double-clicking on Windows). Files outside your notes vault open in a temporary tab for preview; Markdown can be edited there and is saved back to the original file without being imported into the vault. Files inside the vault open as notes as usual.
 - **Plugin floating panels**: plugins can use `view.close()` from Close, Back and confirmation buttons to close their own view, through the same API on desktop and Web.
 
 ## 2.13.4 (2026-10-14)

@@ -6,7 +6,7 @@
  *   O2 库外 .md 就地编辑 → 写回原文件(「临时编辑」不导入笔记库:库目录里不多出文件)
  *   O3 mac 的 open-file 事件(Finder 双击 / 拖到 Dock)→ 库外 .pdf 进 wsfile,PDF 渲染出来
  *   O4 已开着时二次启动带文件(win/linux 双击)→ 二号进程退出,文件落在一号实例里
- *   O5 本地库内的 .md → Amadeus 笔记视图,不进 wsfile
+ *   O5 本地库内的 .md → Amadeus 笔记视图,不进 wsfile(与已开着的库外文件同名,不许认成那一个)
  *   O6 同一路径再开一次 → 聚焦已有标签页,不重复开
  *   O7 渲染层重载(⌘R)之后再打开 → 照样落地(主进程不记「已就绪」,新页装载时自己来拉)
  *
@@ -74,7 +74,8 @@ async function main() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-openfile-'))
   const vaultDir = path.join(home, 'vault')
   fs.mkdirSync(vaultDir, { recursive: true })
-  fs.writeFileSync(path.join(vaultDir, '库内笔记.md'), '# 库内笔记\n\n这是库里的笔记。\n')
+  // 库内笔记与 O4 的库外文件同名:「已开着就聚焦」不许按文件名把它认成那个库外预览页
+  fs.writeFileSync(path.join(vaultDir, '二次启动.md'), '# 二次启动\n\n这是库里的同名笔记。\n')
   const outside = path.join(home, '桌面')
   fs.mkdirSync(outside, { recursive: true })
   const extMd = path.join(outside, '外部说明.md')
@@ -153,15 +154,15 @@ async function main() {
     if (!o4) await shot('o4')
 
     // O5:本地库内的 .md → Amadeus 原生笔记视图
-    const vaultNote = path.join(vaultDir, '库内笔记.md')
+    const vaultNote = path.join(vaultDir, '二次启动.md')
     await app.evaluate(({ app: a }, p) => { a.emit('open-file', { preventDefault() {} }, p) }, vaultNote)
     const o5 = await waitFor(async () => {
       const titles = await tabTitles(win)
-      return titles.some((t) => t.includes('库内笔记')) && (await activeWsfile(win)) !== vaultNote
-        ? titles : null
+      // 笔记标签的标题不带 .md;库外那页(二次启动.md)不该是激活的
+      return titles.includes('二次启动') && (await activeWsfile(win)) !== secondMd ? titles : null
     }, 15_000)
     const anyWsVault = await win.evaluate((p) => [...document.querySelectorAll('.wsfile-name')].some((e) => e.textContent === p), vaultNote).catch(() => true)
-    const keptPrev = (await tabTitles(win)).some((t) => t.includes('二次启动'))
+    const keptPrev = (await tabTitles(win)).includes('二次启动.md')
     check('O5 本地库内的 .md 走 Amadeus 笔记视图(新开标签,不顶掉当前那个),不进 wsfile', !!o5 && !anyWsVault && keptPrev,
       `tabs=${(await tabTitles(win)).join('|')}`)
     if (!o5) await shot('o5')
@@ -172,7 +173,7 @@ async function main() {
     const pdfTabs = (await tabTitles(win)).filter((t) => t.includes('外部文档')).length
     await app.evaluate(({ app: a }, p) => { a.emit('open-file', { preventDefault() {} }, p) }, vaultNote)
     await win.waitForTimeout(1500)
-    const noteTabs = (await tabTitles(win)).filter((t) => t.includes('库内笔记')).length
+    const noteTabs = (await tabTitles(win)).filter((t) => t === '二次启动').length
     check('O6 同一文件再开一次 → 聚焦已有标签页,不重复开(库外 PDF、库内笔记各一次)', !!o6 && pdfTabs === 1 && noteTabs === 1,
       `pdfTabs=${pdfTabs} noteTabs=${noteTabs}`)
     if (!o6 || pdfTabs !== 1 || noteTabs !== 1) await shot('o6')

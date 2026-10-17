@@ -36,10 +36,11 @@ function whenVaultKnown(timeoutMs = 5000): Promise<void> {
   })
 }
 
-/** 库内文件已开着的那个标签(各视图的身份键不同:notePath / pdfPath / filePath…,按值比)。 */
+/** 库内文件已开着的那个标签。各视图的身份键不同(notePath / pdfPath / filePath / drawingPath…),只比 `*Path` 键:
+ *  wsfile 的 params 里有裸文件名 `name`,按全部值比会把库根下的 `a.md` 认成已开着的库外 `~/Desktop/a.md`。 */
 function openTabOf(rel: string): string | undefined {
   const api = (useWorkspace.getState() as unknown as { api?: { panels: Array<{ id: string; params?: Record<string, unknown> }> } }).api
-  return api?.panels.find((p) => !!p.params && Object.values(p.params).includes(rel))?.id
+  return api?.panels.find((p) => !!p.params && Object.entries(p.params).some(([k, v]) => /Path$/.test(k) && v === rel))?.id
 }
 
 export function openExternalFile(path: string): void {
