@@ -13,7 +13,8 @@
     "preview": "vite preview",
     "prepare-fonts": "node ../desktop/build/gen-fonts.cjs --out public/fonts",
     "prepare-assets": "npm run prepare-board && npm run prepare-fonts",
-    "check:dockerctx": "node scripts/docker-context-build.mjs"
+    "check:dockerctx": "node scripts/docker-context-build.mjs",
+    "e2e:pad": "node scripts/pad-layout.e2e.cjs"
   },
   "dependencies": {
     "@excalidraw/excalidraw": "npm:@zsviczian/excalidraw@0.18.122",

@@ -1,4 +1,4 @@
-/** Pad(平板横屏 / 横屏手机)版式回归闸 —— `cd web && node scripts/pad-layout.e2e.cjs`(先 npm run build 一次,备好白板 / 字体资源)。
+/** Pad(平板横屏 / 横屏手机)版式回归闸 —— `cd web && npm run e2e:pad`(先 npm run build 一次,备好白板 / 字体资源)。
  *
  * 真 web 源码的 vite dev 服务 + 夹具 API(不连账号、不连引擎),触屏视口 + ?ui=mobile = 手机壳。
  * 安卓壳的底栏是原生画的、在 WebView 外:这里在页面里装同一个引擎接缝(installNativeChromeHost spaces:true),
