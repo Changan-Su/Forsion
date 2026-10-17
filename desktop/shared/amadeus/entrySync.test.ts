@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   CLOUD_VAULT_MARKER,
+  cloudVaultMarkerContent,
+  parseCloudVaultMarker,
   cloudVaultMarkerPath,
   cloudVaultNamesFrom,
   coversPath,
@@ -90,5 +92,15 @@ describe('rewritePathList(exclude 跟随改名)', () => {
 
   it('无关路径不动', () => {
     expect(rewritePathList(['A/x.md'], 'B', 'C').changed).toBe(false)
+  })
+})
+
+describe('cloud vault marker devices', () => {
+  it('round-trips the device list; empty file = legacy marker', () => {
+    const devs = [{ id: 'desk-a', name: 'Windows 台式机', since: '2026-10-17' }, { id: 'desk-b', name: 'MacBook Pro' }]
+    expect(parseCloudVaultMarker(cloudVaultMarkerContent(devs))).toEqual(devs)
+    expect(parseCloudVaultMarker(cloudVaultMarkerContent([]))).toEqual([])
+    expect(parseCloudVaultMarker('')).toBeNull()
+    expect(parseCloudVaultMarker('---\ndevices: [broken\n---\n')).toBeNull()
   })
 })

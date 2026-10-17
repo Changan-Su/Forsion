@@ -26,7 +26,7 @@ import {
 } from '@amadeus-shared/compiler'
 import { joinRel } from '@amadeus-shared/assets'
 import { contentStorageKey } from '@lcl/engine/contentStorageScope'
-import { cloudVaultNamesFrom } from '@amadeus-shared/entrySync'
+import { cloudVaultMarkerPath, cloudVaultNamesFrom, parseCloudVaultMarker, type CloudVaultDevice } from '@amadeus-shared/entrySync'
 import { dbFileSchema, parseDb, serializeDb, type DbFile } from '@amadeus-shared/db/schema'
 import { parseDrawing, withSceneJson } from '@amadeus-shared/excalidraw/format'
 import { mergeScenes, type SceneLike } from '@amadeus-shared/excalidraw/reconcile'
@@ -443,6 +443,19 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
   ;(window as unknown as { amadeusCloudVaults?: () => Promise<string[]> }).amadeusCloudVaults = async () => {
     const t = await fetchTree()
     return cloudVaultNamesFrom([...t.pages, ...t.files.map((f) => f.path)])
+  }
+  // 标记正文记着在同步各库的设备(与桌面镜像读法同一个 parseCloudVaultMarker);逐个 GET,库一般只有几个。
+  ;(window as unknown as { amadeusCloudVaultDevices?: (names: string[]) => Promise<Record<string, CloudVaultDevice[]>> }).amadeusCloudVaultDevices = async (names) => {
+    const v = await ensureVault()
+    const out: Record<string, CloudVaultDevice[]> = {}
+    await Promise.all(names.map(async (name) => {
+      try {
+        const f = await http.get<FileDto>(`/amadeus/vaults/${encodeURIComponent(v)}/file`, { path: cloudVaultMarkerPath(name) })
+        const devs = parseCloudVaultMarker(f.content)
+        if (devs?.length) out[name] = devs
+      } catch { /* 读不到就不画设备标签 */ }
+    }))
+    return out
   }
 
   // ---- SSE ------------------------------------------------------------------

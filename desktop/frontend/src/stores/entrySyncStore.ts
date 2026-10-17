@@ -9,6 +9,9 @@ interface EntrySyncStore {
   activeRoot: string | null
   /** 云镜像里已成型的「同步 Vault 文件夹」名。注册表是每机本地的,换设备后只剩这一个来源。 */
   mirrorVaults: string[]
+  /** 库名 → 在同步它的设备(来自标记正文);deviceId = 本机。 */
+  mirrorVaultDevices: Record<string, Array<{ id: string; name: string; since?: string }>>
+  deviceId: string | null
   /** binding(vault 根绝对路径)→ 该条目绑定引擎的最新状态。 */
   status: Record<string, AmadeusSyncStatus>
   refresh(): Promise<void>
@@ -20,6 +23,8 @@ export const useEntrySync = create<EntrySyncStore>((set) => ({
   vaults: [],
   activeRoot: null,
   mirrorVaults: [],
+  mirrorVaultDevices: {},
+  deviceId: null,
   status: {},
   async refresh() {
     const sequence = ++refreshSequence
@@ -30,7 +35,13 @@ export const useEntrySync = create<EntrySyncStore>((set) => ({
       // A move can emit several registry changes while the first IPC is still
       // pending. Never let that old snapshot restore the previous paths.
       if (sequence !== refreshSequence) return
-      set({ vaults: st.vaults, activeRoot: st.activeRoot, mirrorVaults: st.mirrorVaults ?? [] })
+      set({
+        vaults: st.vaults,
+        activeRoot: st.activeRoot,
+        mirrorVaults: st.mirrorVaults ?? [],
+        mirrorVaultDevices: st.mirrorVaultDevices ?? {},
+        deviceId: st.deviceId ?? null,
+      })
     } catch {
       /* 旧主进程构建无此接口:保持空 */
     }
@@ -48,6 +59,8 @@ export function ensureEntrySyncSubscribed(): void {
   api?.onStatus?.((s) => {
     const b = (s as AmadeusSyncStatus).binding
     if (b) useEntrySync.setState((st) => ({ status: { ...st.status, [b]: s as AmadeusSyncStatus } }))
+    // 镜像引擎一轮同步落定:别的设备新写 / 删的分区标记是点开头文件,不进树,树刷新触发不了重取 —— 在这里重取。
+    else if ((s as AmadeusSyncStatus).state === 'idle') void useEntrySync.getState().refresh()
   })
 }
 
