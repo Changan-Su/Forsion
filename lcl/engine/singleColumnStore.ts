@@ -217,13 +217,22 @@ function applySCBlob(raw: unknown): boolean {
     leftActiveId: pick(raw.leftActiveId, left),
     rightActiveId: pick(raw.rightActiveId, right),
     // ponytail: 抽屉开合不还原,冷启动一律收起 —— 单列的侧栏是全屏浮层不是版面的一部分,
-    // 「上次退出时抽屉开着」还原成开着 = 一进 app 先看到侧栏。
+    // 「上次退出时抽屉开着」还原成开着 = 一进 app 先看到侧栏。宽屏并排的左栏除外,见 dockLeftIfWide。
     leftVisible: false, rightVisible: false,
     focusedChatLeafId: main.find((r) => r.type === 'chat')?.id ?? null,
   })
+  dockLeftIfWide()
   useWorkspace.getState().refreshTabs()
   afterLayout?.()
   return true
+}
+
+/** 宽屏(横屏平板 / 手机)的左栏是与主区并排的版面,不是抽屉:布局整份换新(切 Space / 冷启动还原 / 重置)之后
+ *  这个 Space 有左栏视图就展开 —— Host 里「进宽屏左栏默认展开」那条 effect 只在宽窄变化时跑,换 Space 不跑。
+ *  走 toggleSidebar:桶空时按 sidebarDefaults 填。须在 afterLayout 之前:一页式 Space(主页)的落点随后会把面板关掉、左栏收回。 */
+function dockLeftIfWide(): void {
+  const s = useWorkspace.getState()
+  if (s.wideMode && !s.leftVisible && (s.leftLeaves.length > 0 || s.sidebarDefaults.left.length > 0)) s.toggleSidebar('left')
 }
 
 function snapshot(): SCBlob {
@@ -699,6 +708,7 @@ export const useWorkspace = create<WS>((set, get) => {
       })
       useNav.getState().reset() // 同桌面版:布局重建,旧 leaf id 的历史全失效;须在重建之前,重建时记下的栈底要留着
       get().defaultBuilder?.() // = getActiveSpace().build()（切 Space 时 spaceRegistry 已先切 id）
+      dockLeftIfWide()
       // 壳挂上之前(还没有构建器)要的是默认布局:在用的那份是上一个 Space 的(切走时已原样存进它的槽),留着就会被壳还原到
       // 这个 Space 头上。清掉,挂载时落空 → 按它的默认建。只在它确实原样躺在某个槽里时清:存槽失败(配额满)时清掉就是丢了
       // 仅存的一份,宁可让它这一次穿错 Space(Codex 评审)。
