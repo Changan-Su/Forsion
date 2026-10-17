@@ -603,6 +603,23 @@ async function run() {
     assert.equal(await pendingRows.count(), 0, 'A resolved candidate leaves the trace')
     assert.ok((await confirmTrace.innerText()).includes('已处理'))
     console.log('PASS trace candidates: this conversation’s pending one is listed in place and dismissed by its own inbox line')
+    // 留痕的「查看」落到那一条(10-17 用户:只打开了 Tangu 详情,没到对应条目):右栏切到这位 Agent 的「成长 › 进化」,同名条目亮一下、滚进视野
+    harnessEmpty = false
+    await trace.getByRole('button', { name: '查看', exact: true }).click()
+    const scopeEntry = win.locator('[data-tangu-details] [data-agent-harness="research"] [data-harness-entry="h-scope"]')
+    await scopeEntry.waitFor()
+    await win.locator('[data-tangu-details] [data-harness-entry="h-scope"][data-record-flash]').waitFor({ timeout: 3000 })
+    assert.equal(await win.locator('[data-tangu-details] [data-record-flash]').count(), 1, 'Only the entry the trace named lights up')
+    await win.waitForTimeout(700) // 平滑滚动
+    assert.ok(await scopeEntry.evaluate((el) => {
+      let sc = el.parentElement
+      while (sc && !(/(auto|scroll)/.test(getComputedStyle(sc).overflowY) && sc.scrollHeight > sc.clientHeight)) sc = sc.parentElement
+      const r = el.getBoundingClientRect(), b = (sc || document.documentElement).getBoundingClientRect()
+      return r.top >= b.top - 1 && r.top < b.bottom - 20
+    }), 'The named entry is scrolled into the panel')
+    await win.locator('[data-tangu-details]').screenshot({ path: path.join(home, 'trace-view-evolution.png') })
+    await win.locator('[data-tangu-details] [data-act="details-back"]').click()
+    console.log('PASS trace view: lands on the named evolution entry, highlighted and scrolled into view')
     // 日程标签:这个 Agent 自己的 SCHEDULE.db 条目 + 会叫醒它的自动化规则(与 Calendar / 自动化 Space 同一份数据,按 Agent 收拢)。
     await compact.getByRole('tab', { name: '日程', exact: true }).click()
     const schedule = compact.locator('[data-agent-schedule="research"]')

@@ -402,3 +402,7 @@ div.agent-equipment-item > label { display: flex; align-items: flex-start; gap: 
 
 /* Column tabs keep long translated labels inside their own equal-width cells. */
 .compact .agent-section-nav button span { max-width: 100%; min-width: 0; }
+
+/* 「查看」落点(对话里的留痕 / 更新卡 / 通知 → 详情里的那一条):短暂垫一层底,渐隐回原样。只写中间帧,起止都回到元素自己的底色 */
+@keyframes record-flash { 25%, 60% { background: var(--overlay-strong); } }
+[data-record-flash] { animation: record-flash 1.8s ease; }

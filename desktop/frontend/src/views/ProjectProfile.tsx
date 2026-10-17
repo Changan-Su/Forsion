@@ -28,6 +28,7 @@ import { AgentAvatar } from '../components/AgentAvatar'
 import { ProjectIcon } from '../components/ProjectIcon'
 import { IconPicker } from '@amadeus/chrome/pageChrome'
 import { thinkingLabel } from '../components/thinkingLabel'
+import { freshJump, revealRecords, type RecordJump } from '../services/recordJump'
 import { homeTarget } from '../services/engine/targets'
 
 type Tab = 'agents' | 'settings' | 'git' | 'human'
@@ -41,6 +42,8 @@ type Props = {
   renderTeam: (session: SessionRecord, config: AgentConfig) => ReactNode
   /** 「当前会话」标记跟谁:缺省 = session。侧栏「查看详情」打开时 session 只是借来的载体(引擎端点按 sessionId 绑定),传真正的当前会话。 */
   humanJump?: HumanJump
+  /** 对话里「复盘时记进项目记忆」之类的留痕点「查看」:落到「设置 › 项目记忆」里那几条。 */
+  recordJump?: RecordJump
   currentSessionId?: string | null
 }
 
@@ -99,7 +102,7 @@ const githubRepoPage = (remote?: string | null): string | null => {
 /** PROJECT 详情:骨架与 TEAM 详情同一套(头部即基本信息 / 滑块导航 / 一个滚动体 / 底部保存栏),内容换成项目的三面:
  *  Agents(谁在这里工作过)/ 配置(指令文件 · 项目技能 · 计划 · 本机默认项)/ Git(现场 + 用户点的建仓 / 提交 / 建分支 / 拉取 / 推送)。数据全部来自引擎的 project-context,
  *  它读到什么就显示什么 —— 这个面板存在的意义就是回答「Tangu 到底看没看见这个项目的约定」。 */
-export function ProjectProfile({ session, config, workspace, renderAgent, renderTeam, currentSessionId, humanJump }: Props) {
+export function ProjectProfile({ session, config, workspace, renderAgent, renderTeam, currentSessionId, humanJump, recordJump }: Props) {
   const { t, locale } = useI18n()
   const s = useApp(useShallow((a) => ({
     cfg: a.cfg, agents: a.agentDefs, avatars: a.agentAvatars, teams: a.teams, teamAvatars: a.teamAvatars, engines: a.engines, models: a.modelsResp?.models,
@@ -112,8 +115,25 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
   const [ctx, setCtx] = useState<ProjectContext | null>(null)
   const [loadError, setLoadError] = useState('')
   const [reloadAt, setReloadAt] = useState(0)
-  const [tab, setTab] = useState<Tab>(humanJump ? 'human' : 'agents')
+  const [tab, setTab] = useState<Tab>(humanJump ? 'human' : freshJump(recordJump) ? 'settings' : 'agents')
   useEffect(() => { if (humanJump?.at) setTab('human') }, [humanJump?.at])
+  // 落点要等「设置」页连同项目记忆画出来:引擎回来之前 ctx 是 null。已经开着这个项目时手里的 ctx 可能是旧的(后台刚记下的那条还没读到):
+  // 令牌一变先重读,读回来的那份才拿来落。点开着的执行者详情会盖住主区,一并收起(同「返回」)。
+  const rootRef = useRef<HTMLElement>(null)
+  const staleCtx = useRef<ProjectContext | null>(null)
+  useEffect(() => {
+    if (!freshJump(recordJump)) return
+    setTab('settings'); setSelected('')
+    staleCtx.current = ctx
+    if (ctx) setReloadAt((n) => n + 1)
+  }, [recordJump?.at]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const root = rootRef.current
+    if (!freshJump(recordJump) || tab !== 'settings' || !ctx || ctx === staleCtx.current || !root) return
+    const folded = recordJump.part === 'compacted' ? root.querySelector<HTMLDetailsElement>('[data-project-memory-compacted]') : null
+    if (folded) folded.open = true
+    revealRecords(recordJump, root.querySelectorAll<HTMLElement>('[data-project-memory-entry], [data-project-memory-candidate]'), folded || root.querySelector<HTMLElement>('[data-project-memory]'))
+  }, [recordJump, tab, ctx])
   const [selected, setSelected] = useState('')
   const [opened, setOpened] = useState<string[]>([])
   const [picker, setPicker] = useState(false)
@@ -579,7 +599,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
     return null
   }
 
-  return <section className="team-profile project-profile" data-project-profile={dir}>
+  return <section ref={rootRef} className="team-profile project-profile" data-project-profile={dir}>
     <div className="team-profile-main" hidden={!!selected}>
       <header className="team-profile-hero">
         {/* 图标与 TEAM 头部同一套:点图标导入图片(存进项目的 .tangu/),角上笑脸开 emoji 选择器(内含「移除图标」)。 */}
