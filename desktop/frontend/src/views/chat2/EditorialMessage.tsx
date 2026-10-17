@@ -51,6 +51,7 @@ const UPDATE_KEY = {
 } as const
 import { ToolGroup } from '../../components/ToolGroup'
 import { useSpeechReveal } from './useSpeechReveal'
+import { playSendFlight } from './sendFlight'
 import { InquiryCard, PlanCard, TodoList } from '../../components/InquiryCard'
 import { registerMessages, useI18n } from '../../i18n'
 import { useApp } from '../../stores/appStore'
@@ -391,6 +392,17 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
   // 原生回退半屏的在途请求(Android):消息卸载、或它所属的会话 / 消息换了 → 作废(见 openNativeRewind)。
   const rewindReq = useRef<AbortController | null>(null)
   useEffect(() => () => { rewindReq.current?.abort(); rewindReq.current = null }, [msg.id, runSid])
+  // 发送动效:刚发出的那条从输入框升上来(只在挂载时认一次,见 sendFlight.ts)
+  const userWrapRef = useRef<HTMLDivElement | null>(null)
+  const setUserWrap = (el: HTMLDivElement | null): void => {
+    userWrapRef.current = el
+    if (typeof rootRef === 'function') rootRef(el)
+    else if (rootRef) (rootRef as React.MutableRefObject<HTMLDivElement | null>).current = el
+  }
+  useLayoutEffect(() => {
+    if (msg.role === 'user' && userWrapRef.current) playSendFlight(userWrapRef.current, msg.content)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
   // 点外面/Esc 关回退菜单(同 Composer2 的 [data-cmenu] 约定)。
   useEffect(() => {
     if (!rewindOpen) return
@@ -485,7 +497,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
         .then((shown) => { if (!shown) restore() }, restore)
     }
     return (
-      <div ref={rootRef} className={`t2-userwrap${inlineActions ? ' t2-userwrap--inline' : ''}`} id={`tocmsg-${msg.id}`} data-toc-msg-role="user" data-toc-title={tocTitle}>
+      <div ref={setUserWrap} className={`t2-userwrap${inlineActions ? ' t2-userwrap--inline' : ''}`} id={`tocmsg-${msg.id}`} data-toc-msg-role="user" data-toc-title={tocTitle}>
         <div className="t2-user-col">
           <div className="t2-username">{name}</div>
           {atts.length > 0 && (
