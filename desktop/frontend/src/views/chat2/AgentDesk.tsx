@@ -18,7 +18,7 @@ import { useDeskCompanion } from '@amadeus/plugins/deskCompanion'
 import { DeskCompanionHost } from './DeskCompanionHost'
 import { registerMessages, useI18n } from '../../i18n'
 import { iconForFile } from '../../services/fileKinds'
-import { openNote } from '../../amadeusNav'
+import { openDb, openNote } from '../../amadeusNav'
 import type { CtxItem } from '../../components/RightPanel'
 import { DeskChromeContext, DeskMenuButton, DeskMoreButton, type DeskChrome } from './deskChrome'
 
@@ -252,7 +252,8 @@ function DeskCaps({ sessionId, item, panel, switchable, className, children }: {
   const amadeus = rel && (/\.(md|db)$/i.test(rel) || isDrawingPath(rel) || !!findFileType(fileTypes, rel)) ? rel : null
   const moreItems = (): CtxItem[] => [
     ...more.current,
-    ...(amadeus ? [{ label: t('preview.openInAmadeus'), icon: <NotebookPen size={14} />, run: () => void openNote(amadeus) }] : []),
+    // .db 走 openDb:openNote 会把它塞进笔记编辑器,保存时把 Markdown 写回数据库(Codex P1)
+    ...(amadeus ? [{ label: t('preview.openInAmadeus'), icon: <NotebookPen size={14} />, run: () => { if (/\.db$/i.test(amadeus)) openDb(amadeus); else void openNote(amadeus) } }] : []),
     ...(path ? [{ label: t('panel.action.copyPath'), icon: <Copy size={14} />, run: () => void navigator.clipboard?.writeText(path) }] : []),
   ]
   const tools = item && (
@@ -268,6 +269,8 @@ function DeskCaps({ sessionId, item, panel, switchable, className, children }: {
     const tip = [path, !item.live && note].filter(Boolean).join('\n') || undefined
     const inner = <><Icon size={13} className={`desk-cap-ic${item.live ? ' spin' : ''}`} /><span className="desk-cap-label">{label}</span></>
     const others = (all ?? []).filter((x) => x.key !== item.key)
+    // 直播条目只认顶格(直播更新 / 落盘接棒 / 失败清场都按顶格做),有直播时不许换位
+    const liveNow = (all ?? []).some((x) => x.live)
     name = switchable && (others.length || note) ? (
       <DeskMenuButton
         className="desk-cap-pick"
@@ -275,7 +278,7 @@ function DeskCaps({ sessionId, item, panel, switchable, className, children }: {
         items={() => [
           ...(note ? [{ label: note, disabled: true, run: () => {} }] : []),
           ...(all ?? []).map((x, i) => ({
-            label: x.name || x.path, separatorBefore: !!note && i === 0, disabled: x.key === item.key,
+            label: x.name || x.path, separatorBefore: !!note && i === 0, disabled: x.key === item.key || liveNow,
             run: () => useApp.getState().patchDesk(sessionId, { items: [x, ...(all ?? []).filter((y) => y.key !== x.key)] }),
           })),
         ]}
