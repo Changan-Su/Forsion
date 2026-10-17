@@ -99,6 +99,7 @@ export const CLASSIFICATION = {
   'POST /agent/sessions/:id/branch': [A, 'branch a session (remote taint propagates, C5)'],
   'GET /agent/sessions/:id/background': [A, 'background child sessions'],
   'POST /agent/sessions/:id/team-members/:slug': [A, 'open a team member child session (taint propagates, C5)'],
+  'POST /agent/sessions/:id/children': [A, 'task card starts a visible child session; remote taint is copied onto its first run and stored marker (C5)'],
   'GET /agent/sessions/:id/detail': [A, 'session detail'],
   'PATCH /agent/sessions/:id': [A, 'rename / archive / model / project of a session (a remote project_path never widens /unit/host* reads: only locally confirmed project roots count)'],
   'DELETE /agent/sessions/:id': [D, 'irreversible hard delete of a local session (runs, messages, code checkpoints); remote uses archive (PATCH archived)'],
