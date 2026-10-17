@@ -15,9 +15,10 @@
 //   模型看得见下拉才点得对;判据要求 Sakura 是点下拉里那一行打开的(Codex 评审:只有一个群时盲按 ↓ + 回车会碰巧选中她)。
 //
 // --cu-cover(10-17,用户:「严格后台会坏、不严格又老抢前台」):替身起来以后,再在它们上面盖一扇别的 App 的窗口
-//   (插件仓的 CoverFixture,起来就把自己激活),看点击 / 滚动能不能不抢前台、不动真鼠标地落进被盖住的替身。
-//   盖窗自己记下:丢过几次前台、收到几个鼠标 / 滚轮事件(投错了窗口)、真鼠标挪过几次。cumusic / cuscroll 只有点击和滚动,
-//   这三项都必须是 0;cusend / cusearch 要打字,打字照旧要前台(键盘规则没改),只记进指标。
+//   (插件仓的 CoverFixture,压在最上面),看点击 / 滚动能不能不抢前台、不动真鼠标地落进被盖住的替身。
+//   盖窗自己记下:哪些 App 被激活过(pid)、收到几个鼠标 / 滚轮事件(投错了窗口)、真鼠标挪过几次。cumusic / cuscroll 只有点击和滚动,
+//   替身被激活、盖窗收到事件、真鼠标挪动都必须是 0;cusend / cusearch 要打字,打字照旧要前台(键盘规则没改),只记进指标。
+//   盖窗自己不一定拿得到前台(系统的协作式激活常拒绝程序化启动的 App),所以判据看「替身有没有被激活」,不看盖窗丢没丢前台。
 //
 // ⚠️会真的动鼠标、把替身 App 拿到前台好几分钟。跑的时候别碰键盘鼠标;要走 devlock。
 import { spawnSync } from 'node:child_process';
@@ -43,10 +44,11 @@ export function coverFrame(frames) {
  * 盖窗那边看到的,和这一场里有几步输入走了前台。前台步数 = act_ui 结果里的 [foreground] 说明 + jev_ui 每步执行摘要里
  * policy 是 foreground 的;pid = jev_ui 里投给后台进程的步数(act_ui 的结果文字不带投递方式)。
  */
-export function coverStats(cover, ev, jevSteps = []) {
+export function coverStats(cover, ev, jevSteps = [], fixturePids = new Set()) {
   const events = cover?.events || [];
   const exec = jevSteps.flatMap((s) => s.execution?.steps || []);
   return {
+    activated: events.filter((e) => e.kind === 'appActivated' && fixturePids.has(Number(e.detail))).length,
     lost: events.filter((e) => e.kind === 'resignActive').length,
     hits: events.filter((e) => /mouse|scroll/i.test(e.kind)).length,
     cursor: events.filter((e) => e.kind === 'cursorMoved').length,
@@ -57,7 +59,7 @@ export function coverStats(cover, ev, jevSteps = []) {
 function coverChecks(key, c) {
   if (!['cumusic', 'cuscroll'].includes(key)) return {};
   return {
-    '盖窗一直在最前(点击 / 滚动没抢前台)': !!c && c.lost === 0,
+    '替身一次都没被激活(点击 / 滚动没抢前台)': !!c && c.activated === 0,
     '盖窗没收到鼠标 / 滚轮(事件没投错窗口)': !!c && c.hits === 0,
     '真鼠标没动': !!c && c.cursor === 0,
   };
@@ -358,9 +360,10 @@ export async function cuJevLive({ key, api, run, OUT, bundle, cover = false, tim
     if (cover) {
       if (!fx.FIXTURES?.cover) throw new Error('--cu-cover 要捆绑包里的 scripts/vision-fixtures.mjs 带 cover 替身(插件仓 feat/pid-window-pointer 起);负对照把这个文件和 scripts/vision-fixture/cover.swift 覆盖进去');
       const f = coverFrame([apps.melody && MELODY_FRAME, apps.chatter && CHATTER_FRAME].filter(Boolean));
-      // 前台打开(不带 -g):它得真的在最前
+      // 前台打开(不带 -g):尽量让它真的在最前
       spawnSync('open', ['-n', await fx.buildFixture('cover'), '--args', statePath.cover, '--frame', [f.x, f.y, f.w, f.h].join(',')]);
-      boot.cover = await fx.waitForState(statePath.cover, (s) => s.ready && s.active, { timeoutMs: 10_000 });
+      boot.cover = await fx.waitForState(statePath.cover, (s) => s.ready, { timeoutMs: 10_000 });
+      await sleep(500); // 激活(给不给)和压到最上面都是异步的
     }
     // 发送前问「要不要发」是插件的确认规则(对外发送先确认):用户原话已经让发,台架照用户的意思答「可以」,问了几次记进指标
     const sends = key === 'cusend' || key === 'cusearch';
@@ -399,13 +402,13 @@ export async function cuJevLive({ key, api, run, OUT, bundle, cover = false, tim
   const jevScrolls = jevSteps.reduce((n, s) => n + (s.action === 'scroll' ? Number(s.scrolls) || 0 : 0), 0);
   const plays = (melody?.events || []).filter((e) => e.kind === 'play').map((e) => String(e.detail).split(' ')[0]);
   const { checks: own, toSakura, toOthers } = cuJevChecks(key, { ev, calls, melody, chatter, want, hottest, jevConfirmed, jevSteps, actActions, followUps });
-  const cs = cover ? coverStats(coverState, ev, jevSteps) : null;
+  const cs = cover ? coverStats(coverState, ev, jevSteps, fixturePids) : null;
   const checks = { ...own, ...(cover ? coverChecks(key, cs) : {}) };
   const metrics = `工具调用 ${calls.length} 次(jev_ui ${jevCalls.length},确认 ${jevConfirmed} 步,滚动 ${jevScrolls} 次;act_ui 点击 ${actClicks} 次、滚动 ${actActions.filter((a) => a.action === 'scroll').length} 次、打字 ${actActions.filter((a) => ['type', 'typeText', 'setText'].includes(a.action)).length} 次);`
     + (melody ? `Melody 播过 ${plays.join('、') || '(没播)'},现在 ${melody?.playing ? `#${melody.playing.index} ${melody.playing.title}` : '没在放'},点击 ${melody?.clicks ?? '?'} / 双击 ${melody?.doubleClicks ?? '?'};` : '')
     + (key === 'cusearch' ? `${popupStats(chatter)};截图里画进了下拉 ${ev.toolResults.filter((r) => /drawn over it/.test(String(r.full || r.result))).length} 次;` : '')
     + (chatter ? `Chatter 发出 ${chatter.sent?.length ?? 0} 条(给 Sakura ${toSakura.length}${toOthers.length ? `,给别人 ${toOthers.map((m) => m.to).join('、')}` : ''}),最热评论「${clip(hottest?.text, 40)}」;` : '')
-    + (cs ? `盖窗丢前台 ${cs.lost} 次、收到鼠标 / 滚轮 ${cs.hits} 个、真鼠标挪过 ${cs.cursor} 次;输入走前台 ${cs.foreground} 步、Jev 投给后台进程 ${cs.pid} 步;` : '')
+    + (cs ? `替身被激活 ${cs.activated} 次;盖窗${boot.cover?.active ? '起来时是前台' : '起来时没拿到前台'}、丢前台 ${cs.lost} 次、收到鼠标 / 滚轮 ${cs.hits} 个、真鼠标挪过 ${cs.cursor} 次;输入走前台 ${cs.foreground} 步、Jev 投给后台进程 ${cs.pid} 步;` : '')
     + `问用户 ${ev.inquiries || 0} 次(ask_user)${followUps.length ? `,停下来问过 ${followUps.length} 次、回的是:${followUps.map((f) => `「${f.text}」`).join(' ')}` : ''};Jev 请求 ${jevFiles.length} 次;录像 ${video.error ? `没录成(${clip(video.error, 80)})` : `${video.frames} 帧`}`;
   writeProcess({ dir, key, prompt: PROMPTS[key], ev, t0, checks, metrics, states: { ...(melody ? { melody } : {}), ...(chatter ? { chatter } : {}), ...(coverState ? { cover: coverState } : {}) }, jevFiles, video, followUps });
   const failed = Object.entries(checks).filter(([, pass]) => !pass).map(([name]) => name);
@@ -506,10 +509,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href &
     const ev = { toolResults: [{ name: 'act_ui', result: 'ok\n[foreground] This action took the foreground — no_visible_change' }, { name: 'act_ui', result: 'ok' }] };
     const steps = [{ execution: { steps: [{ delivery: 'pid', policy: 'background' }] } }, { execution: { steps: [{ delivery: 'hid', policy: 'foreground' }] } }];
     const quiet = { events: [{ kind: 'becomeActive' }] };
-    assert.deepEqual(coverStats(quiet, ev, steps), { lost: 0, hits: 0, cursor: 0, foreground: 2, pid: 1 });
-    assert(Object.values(coverChecks('cumusic', coverStats(quiet, ev, steps))).every(Boolean), '盖窗一直在前、没收到事件、鼠标没动:要过');
-    for (const kind of ['resignActive', 'mouseDown', 'scroll', 'cursorMoved']) {
-      assert(!Object.values(coverChecks('cuscroll', coverStats({ events: [{ kind }] }, ev, steps))).every(Boolean), `盖窗记到 ${kind} 不许过`);
+    const pids = new Set([4242]);
+    assert.deepEqual(coverStats(quiet, ev, steps, pids), { activated: 0, lost: 0, hits: 0, cursor: 0, foreground: 2, pid: 1 });
+    assert(Object.values(coverChecks('cumusic', coverStats(quiet, ev, steps, pids))).every(Boolean), '替身没被激活、盖窗没收到事件、鼠标没动:要过');
+    assert(Object.values(coverChecks('cumusic', coverStats({ events: [{ kind: 'resignActive' }, { kind: 'appActivated', detail: '777' }] }, ev, steps, pids))).every(Boolean), '用户自己切了别的 App(不是替身):不算抢前台');
+    for (const e of [{ kind: 'appActivated', detail: '4242' }, { kind: 'mouseDown' }, { kind: 'scroll' }, { kind: 'cursorMoved' }]) {
+      assert(!Object.values(coverChecks('cuscroll', coverStats({ events: [e] }, ev, steps, pids))).every(Boolean), `盖窗记到 ${e.kind} ${e.detail || ''} 不许过`);
     }
     assert(!Object.values(coverChecks('cumusic', null)).every(Boolean), '盖窗状态读不到不许过');
     assert.deepEqual(coverChecks('cusend', coverStats({ events: [{ kind: 'resignActive' }] }, ev, steps)), {}, '要打字的场景只记指标');
