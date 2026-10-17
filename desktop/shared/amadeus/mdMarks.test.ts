@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { parseCalDate } from './db/calDate'
-import { findMarkLine, parseMdMarks, withChecked, withDue } from './mdMarks'
+import { findMarkLine, parseMdMarks, resolveMark, withChecked, withDue } from './mdMarks'
 import { stripForIndex } from './links'
 
 const P = 'note.md'
@@ -188,4 +188,16 @@ describe('findMarkLine（清洗坐标 → 磁盘坐标）', () => {
     expect(marks).toHaveLength(2)
     expect(marks.map((m) => findMarkLine(body, m.raw, m.occ))).toEqual([3, 5])
   })
+})
+
+describe('resolveMark(撤销 / 迟到的回写找回原来那一条)', () => {
+  const mk = (line: number, text: string, path = P) => ({ path, line, text })
+  it('原行号上还是同一句 → 就是它', () => expect(resolveMark([mk(3, 'A'), mk(4, 'B')], mk(3, 'A'))?.line).toBe(3))
+  it('前面插了一行:行号挪了,同篇唯一同名 → 认新行号', () => expect(resolveMark([mk(3, 'X'), mk(4, 'A')], mk(3, 'A'))?.line).toBe(4))
+  // 负对照:只按「路径:行号」找会拿到 B,把 B 的日期改掉
+  it('原行号上换成了别的任务、同名也找不到 → 不认', () => expect(resolveMark([mk(3, 'B')], mk(3, 'A'))).toBeUndefined())
+  it('同名不止一条且原行号对不上 → 不猜', () => expect(resolveMark([mk(5, 'A'), mk(9, 'A')], mk(3, 'A'))).toBeUndefined())
+  // 两段互换后原行号上是另一条同名任务:按行号认就会改错那一条
+  it('同名不止一条、原行号上也有一条 → 照样不猜', () => expect(resolveMark([mk(3, 'A'), mk(9, 'A')], mk(3, 'A'))).toBeUndefined())
+  it('别的笔记里的同名任务不算', () => expect(resolveMark([mk(3, 'A', 'other.md')], mk(3, 'A'))).toBeUndefined())
 })

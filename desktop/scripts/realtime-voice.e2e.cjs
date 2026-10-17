@@ -1,6 +1,6 @@
 /**
  * 语音通话桌面整链 e2e:真 Electron × 真 Composer2 × 真 Mini 卡片 × 假麦克风 × 可编剧的假引擎(stub + ws /agent/realtime)。
- *   设置 → 模型 → 语音 选实时模型(真设置浮窗,跨窗生效)→ 主页输入框出电话键(只在普通模式)→ 点它:建会话、主窗切到会话、
+ *   设置 → 模型 → 默认模型「语音通话」选实时模型、语音页选音色(真设置浮窗,跨窗生效)→ 主页输入框出电话键(只在普通模式)→ 点它:建会话、主窗切到会话、
  *   Mini 卡片弹出并在 Mini 里接通(头像 / 名字 / 麦克风 / 扬声器 / Effort)→ 第一句说完,假引擎回 3.5s 语音 → 第二句在放音中途开口
  *   = 插话:播放必须当场清空 → 假引擎报 Tangu 代办 → Mini 状态「Tangu 处理中…」→ 双方的话出现在**主窗**聊天区(跨窗拉取)
  *   → 静音 / 换麦克风 / 换 Effort(引擎收到新委派参数、主窗档位跟着变)→ 同会话再按电话键不重拨 → 挂断:连接断开、Mini 关窗。
@@ -138,37 +138,37 @@ async function main() {
       for (const ctx of browser.contexts()) for (const pg of ctx.pages()) if (await pg.locator('.settings-main').count().catch(() => 0)) return pg
       return null
     }, 15_000, 400)
-    let picked = '', sections = [], onDefault = '', offCfg = {}
+    let picked = '', sections = [], offCfg = {}
     if (sp) {
       await sp.locator('.settings-nav').getByRole('button', { name: '模型', exact: true }).first().click().catch(() => {})
       await sp.waitForTimeout(500)
-      await sp.locator('.settings-nav-subitem', { hasText: '语音' }).first().click().catch(() => {})
-      // 语音页三节:语音通话 / 语音输入 / 朗读;通话是开关,开了才出模型与音色
-      const sw = sp.locator('.realtime-switch').first()
-      await sw.waitFor({ timeout: 8000 }).catch(() => {})
+      const sub = async (name) => { await sp.locator('.settings-nav-subitem', { hasText: name }).first().click().catch(() => {}); await sp.waitForTimeout(500) }
+      // 10-17 方案 C:用哪个通话模型在「默认模型 → 语音通话」里选(选「未开启」= 关);语音页三节:语音通话(音色)/ 语音输入 / 朗读
+      const panel = sp.locator('.model-defaults-panel')
+      const call = panel.getByRole('button', { name: '语音通话', exact: true })
+      const pickCall = async (name) => { await call.click().catch(() => {}); await panel.locator('.composer-menu').getByRole('button', { name, exact: true }).click().catch(() => {}); await sp.waitForTimeout(600) }
+      await sub('语音')
+      await sp.locator('.settings-sec', { hasText: '语音通话' }).first().waitFor({ timeout: 8000 }).catch(() => {})
       sections = await sp.locator('.settings-sec').allTextContents().catch(() => [])
-      const selBefore = await sp.locator('select.realtime-model').count()
-      await sw.click().catch(() => {})
-      const sel = sp.locator('select.realtime-model').first()
-      await sel.waitFor({ timeout: 8000 }).catch(() => {})
-      await sp.waitForTimeout(600)
+      const selBefore = await sp.locator('select.realtime-voice').count()
+      await sub('默认模型')
+      await call.waitFor({ timeout: 8000 }).catch(() => {})
+      await pickCall(RT_MODEL.split('/')[1])
       const cfgNow = () => JSON.parse(fs.readFileSync(path.join(home, 'config.json'), 'utf8')).tts || {}
-      onDefault = cfgNow().realtimeModel
+      await sub('语音')
       await sp.locator('select.realtime-voice').first().selectOption('Cindy').catch(() => {})
       await sp.waitForTimeout(600)
       // 点开「自定义音色 ID」什么都不填就离开:已选的 Cindy 不能被清掉
       await sp.locator('select.realtime-voice').first().selectOption('__custom__').catch(() => {})
       await sp.waitForTimeout(200)
-      await sp.locator('select.realtime-model').first().focus().catch(() => {})
+      await sp.locator('.settings-sec').first().click().catch(() => {})
       await sp.waitForTimeout(600)
-      await sw.click().catch(() => {}) // 关:只清模型,音色留着
-      await sp.waitForTimeout(600)
+      await sub('默认模型')
+      await pickCall('未开启') // 关:只清模型,音色留着
       offCfg = { ...cfgNow(), selBefore }
-      await sw.click().catch(() => {}) // 再开:回到刚才的模型
-      await sel.waitFor({ timeout: 8000 }).catch(() => {})
-      await sel.selectOption(RT_MODEL).catch(() => {})
-      await sp.waitForTimeout(600)
-      picked = await sel.inputValue().catch(() => '')
+      await pickCall(RT_MODEL.split('/')[1]) // 再选回来
+      picked = cfgNow().realtimeModel || ''
+      await sub('语音')
       await sp.locator('.realtime-clone-toggle').first().click().catch(() => {})
       await sp.locator('.settings-body').first().evaluate((el) => { el.scrollTop = 0 }).catch(() => {})
       await sp.waitForTimeout(300)
@@ -181,10 +181,10 @@ async function main() {
       await closed
     }
     const cfgRt = JSON.parse(fs.readFileSync(path.join(home, 'config.json'), 'utf8')).tts?.realtimeModel
-    check('R1 设置 → 模型 → 语音里选得到实时模型,落进 config.json', picked === RT_MODEL && cfgRt === RT_MODEL, `下拉 ${picked || '-'};config.tts.realtimeModel=${cfgRt}`)
-    check('R1b 语音页分「语音通话 / 语音输入 / 朗读」三节;通话是开关:关着不出模型,打开落默认模型,关掉只清模型不丢音色',
-      sections.join('|') === '语音通话|语音输入|朗读' && offCfg.selBefore === 0 && onDefault === RT_MODEL && !offCfg.realtimeModel && offCfg.realtimeVoice === 'Cindy',
-      JSON.stringify({ sections, onDefault, offCfg }))
+    check('R1 设置 → 模型 → 默认模型里选得到实时模型,落进 config.json', picked === RT_MODEL && cfgRt === RT_MODEL, `选后 ${picked || '-'};config.tts.realtimeModel=${cfgRt}`)
+    check('R1b 语音页分「语音通话 / 语音输入 / 朗读」三节;没选通话模型时不出音色,选「未开启」只清模型不丢音色',
+      sections.join('|') === '语音通话|语音输入|朗读' && offCfg.selBefore === 0 && !offCfg.realtimeModel && offCfg.realtimeVoice === 'Cindy',
+      JSON.stringify({ sections, offCfg }))
     const btn = liveBtn().first()
     const shown = await until(() => btn.isVisible().catch(() => false), 8000)
     const callIcon = await btn.locator('svg.lucide-audio-lines').count().catch(() => 0)

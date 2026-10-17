@@ -41,4 +41,5 @@
   transition: opacity var(--duration-fast, 0.15s), transform var(--duration-fast, 0.15s);
 }
 .t2c-send:hover:not(:disabled) { transform: translateY(-1px); }
+.t2c-send:active:not(:disabled) { transform: scale(0.94); transition-duration: 70ms; } /* 按下的回馈(10-17);松手按原时长弹回 */
 .t2c-send:disabled { opacity: 0.35; cursor: default; background: var(--overlay-medium, var(--overlay-light, rgba(127, 127, 127, 0.25))); color: var(--text-faint, var(--text-muted)); }

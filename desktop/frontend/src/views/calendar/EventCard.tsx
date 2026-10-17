@@ -55,16 +55,17 @@ export interface CardTarget {
 
 /** 卡片落点:默认贴锚点右侧,放不下就翻到左侧。maxRight = 右边界(视口像素;缺省窗口右缘)——
  *  日历传主区右缘,卡片翻到事件左边,而不是盖住右栏的待办。 */
-export function cardPos(at: Anchor, { w = 360, h = 380, maxRight }: { w?: number; h?: number; maxRight?: number } = {}): { left: number; top: number } {
+export function cardPos(at: Anchor, { w = 360, h = 380, maxRight }: { w?: number; h?: number; maxRight?: number } = {}): { left: number; top: number; width?: number } {
   const zoom = at.zoom || 1
-  const W = w
+  // 窗口比卡片还窄(Mini 窗 320px):卡片收窄到窗口宽减两侧边距,不越出窗口。
+  const W = Math.min(w, window.innerWidth / zoom - 16)
   const H = h
   const margin = 8 * zoom
   let left = at.right + margin
   if (left + W * zoom > (maxRight ?? window.innerWidth)) left = Math.max(margin, at.left - W * zoom - margin)
   const top = Math.max(margin, Math.min(at.top, window.innerHeight - H * zoom - margin))
   // body 使用 CSS zoom 时，fixed 的 left/top 仍是元素自身的 CSS 像素；锚点则来自视口像素。
-  return { left: left / zoom, top: top / zoom }
+  return { left: left / zoom, top: top / zoom, ...(W < w ? { width: W } : {}) }
 }
 
 /** 属性行的类型图标:自定义类型用注册表已声明的图标,primitive 按 baseType 取。 */

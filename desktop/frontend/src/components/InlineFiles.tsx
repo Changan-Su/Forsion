@@ -14,6 +14,8 @@ import * as api from '../services/backendService'
 import { hostFsForSession } from '../services/engine/hostFs'
 import { notifyApp } from '../stores/notificationStore'
 import { targetForSession } from '../services/engine/targets'
+import { translate } from '../i18n'
+import { viewableProps } from './ImageViewer'
 
 type ExecMode = 'host' | 'sandbox' | undefined
 
@@ -111,7 +113,8 @@ const Thumb: React.FC<{ f: DisplayFile; cfg: TanguDesktopConfig; sessionId: stri
   }, [f.path, f.dataUrl]) // eslint-disable-line react-hooks/exhaustive-deps
   if (failed) return <FileCard f={f} onClick={onClick} />
   if (!src) return null
-  return <img className="inline-file-img" src={src} alt={f.name} title={f.name} onClick={onClick} draggable={false} onError={() => setFailed(true)} />
+  // 点开 = 就地看图(A2);原来的去处(主区文件标签页)挪到看图顶栏的「在标签页打开」
+  return <img className="inline-file-img" src={src} alt={f.name} title={f.name} draggable={false} onError={() => setFailed(true)} {...viewableProps({ name: f.name, alt: { label: translate('viewer.openTab'), run: onClick } })} />
 }
 
 export const InlineFiles: React.FC<{
