@@ -1,5 +1,5 @@
 /**
- * 设置 → 模型 → 分组与显示:每模型「上下文窗口」本机覆盖(2026-09-11)。桩引擎,无需真后端。
+ * 设置 → 模型 → 模型库(10-17 前叫「分组与显示」):每模型「上下文窗口」本机覆盖(2026-09-11)。桩引擎,无需真后端。
  *   npm run e2e:ctxwindow [-- <截图目录>]     需先 npm run build(读 out/main/main.js)
  * 断言:云端/本地行都有输入框;占位符=引擎解析值、悬浮标出来源;填值 → PUT /agent/models/overrides →
  * 刷新后持有值;填 272(把 K 当 token)只报行内错不打后端;清空 → PUT null 回自动;直连模型按完整 id 覆盖;无横向溢出。
@@ -74,10 +74,8 @@ async function main() {
     if (!(await parent.count())) throw new Error('nav has no 模型 parent; nav text=\n' + navText)
     await parent.click()
     await win.waitForTimeout(500)
-    await win.locator('.settings-nav-subitem', { hasText: '分组与显示' }).first().click()
+    await win.locator('.settings-nav-subitem', { hasText: '模型库' }).first().click()
     await win.waitForTimeout(900)
-    await win.locator('.model-catalog-cloud summary').first().click() // 展开云端模型
-    await win.waitForTimeout(500)
     const rows = win.locator('.model-catalog-model')
     check('T1 云端 + 本地模型行都渲染了窗口输入框', (await win.locator('.model-catalog-ctx input').count()) === 5, 'count=' + (await win.locator('.model-catalog-ctx input').count()))
     const astra = win.locator('.model-catalog-ctx input[aria-label*="GPT-6-Astra"]').first()
@@ -119,8 +117,8 @@ async function main() {
     const acw = await win.evaluate(() => { const el = document.querySelector('.auto-compact-setting'); return el ? el.scrollWidth - el.clientWidth : -1 })
     check('T14 自动压缩区无横向溢出', acw <= 0, 'overflow=' + acw)
     // 视觉:输入框不把行撑破(行高、无横向溢出)
-    const box = await win.locator('.model-catalog-settings').first().boundingBox()
-    const sw = await win.evaluate(() => { const el = document.querySelector('.model-catalog-settings'); return el ? el.scrollWidth - el.clientWidth : -1 })
+    const box = await win.locator('.model-lib').first().boundingBox()
+    const sw = await win.evaluate(() => { const el = document.querySelector('.model-lib'); return el ? el.scrollWidth - el.clientWidth : -1 })
     check('T9 设置区无横向溢出', sw <= 0, 'overflow=' + sw + ' box=' + JSON.stringify(box))
     await win.locator('.settings-nav-list button').filter({ hasText: '外观' }).click()
     await win.locator('.settings-theme-behavior').waitFor()
