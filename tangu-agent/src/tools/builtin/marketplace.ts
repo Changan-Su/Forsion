@@ -41,7 +41,7 @@ export const marketplaceProvider: ToolProvider = {
       const score = (item: typeof items[number]) => {
         if (!words.length) return 1;
         const original = originals.get(item.id);
-        const text = [original?.name, original?.author, original?.summary, original?.description, ...item.tags].filter(value => typeof value === 'string').join(' ').toLowerCase();
+        const text = [item.id, original?.name, original?.author, original?.summary, original?.description, ...item.tags].filter(value => typeof value === 'string').join(' ').toLowerCase(); // 带上 ID:chat 里详情工具要先 load_tools,模型常直接拿 ID 来搜
         return words.filter(word => text.includes(word)).length;
       };
       const candidates = items.map(item => ({ item, hits: score(item) }))

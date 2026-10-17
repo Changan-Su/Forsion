@@ -19,6 +19,7 @@ describe('Forsion marketplace tools', () => {
     const tool = (await marketplaceProvider.tools({} as any))[0];
     const ids = marketplaceItemsOf(await tool.execute({ query: 'PDF reading notes annotate summarize' }, {} as any)).map(x => x.id);
     expect(ids).toEqual(['strong', 'weak']);
+    expect(marketplaceItemsOf(await tool.execute({ query: 'strong' }, {} as any)).map(x => x.id)).toEqual(['strong']); // 按 ID 也搜得到
   });
   it('looks up immutable IDs and rejects unavailable entries and path injection', async () => {
     const tool = (await marketplaceProvider.tools({} as any))[1];
