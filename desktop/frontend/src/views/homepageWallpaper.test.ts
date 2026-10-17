@@ -18,6 +18,7 @@ describe('homepage wallpaper prefs', () => {
     expect(normalizeHomepageWallpaperPrefs({ themePreset: 'weave' }).themePreset).toBe('paper')
     expect(normalizeHomepageWallpaperPrefs({ themePreset: 'horizon' }).themePreset).toBe('orbit')
     expect(normalizeHomepageWallpaperPrefs({ themePreset: 'path' }).themePreset).toBe('path')
+    expect(normalizeHomepageWallpaperPrefs({ themePreset: 'glyph' }).themePreset).toBe('glyph')
     // Hack2Gate 是位图,挪进「图片」;正在用必应的人只记下选择,来源不动
     expect(normalizeHomepageWallpaperPrefs({ source: 'theme', themePreset: 'hack2gate' })).toMatchObject({ source: 'image', imageChoice: 'hack2gate', themePreset: 'orbit' })
     expect(normalizeHomepageWallpaperPrefs({ source: 'bing', themePreset: 'hack2gate' })).toMatchObject({ source: 'bing', imageChoice: 'hack2gate' })

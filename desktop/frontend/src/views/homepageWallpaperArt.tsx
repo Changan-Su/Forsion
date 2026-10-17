@@ -1,5 +1,5 @@
 /**
- * 主页「主题背景」的三张图:星轨 / 日行 / 素笺(方案页 docs/ToBeImproved/主页插件化与美化方案_2026-10-17/wallpaper.html、motion.html)。
+ * 主页「主题背景」的四张图:星轨 / 日行 / 素笺 / 字阵(方案页 docs/ToBeImproved/主页插件化与美化方案_2026-10-17/wallpaper.html、motion.html)。
  *
  * 颜色全取 Genesis token,亮暗与主题色自动跟。⚠️面只用 --bg / --bg-card 台阶,--accent-ink 只画细线和点:
  * 大面积 accent 雾在黑白配色(cream,accent = #1c1c1c)下就是一团灰斑(方案里删掉的晨光 / 流光就死在这)。
@@ -8,8 +8,9 @@
  * 会动的(星轨的行星、日行的光晕)是单独的 HTML 层,只动 transform / opacity —— SVG 内部的 <g> 动起来不走合成器,
  * 会把整张图连同全屏颗粒滤镜每帧重画一遍。
  */
-import { useId, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import type { HomepageThemePreset } from './homepageWallpaper'
+import { createGlyphField, type GlyphField } from './homepageGlyphField'
 
 const W = 1600
 const H = 1000
@@ -140,8 +141,23 @@ function Path({ grain, hour, minute }: { grain: number; hour: number; minute: nu
   )
 }
 
+// 字阵:满屏淡字,打字 / 点空白处 / 发送时漾开涟漪(引擎见 homepageGlyphField.ts)。still = 动态效果关、系统减弱动态效果、主页不在前台。
+function Glyphs({ thumb, still }: { thumb: boolean; still: boolean }) {
+  const hostRef = useRef<HTMLDivElement>(null)
+  const field = useRef<GlyphField | null>(null)
+  useEffect(() => {
+    const f = createGlyphField(hostRef.current!, thumb ? { interactive: false, scale: 0.3 } : {})
+    field.current = f
+    return () => { f.destroy(); field.current = null }
+  }, [thumb])
+  useEffect(() => { field.current?.setStill(still) }, [still])
+  return <div ref={hostRef} className="hpw-glyphs" aria-hidden />
+}
+
 /** `thumb`:壁纸面板里的缩略图 —— 不动,颗粒减淡(线宽由 CSS 的 non-scaling-stroke 保住)。 */
-export function HomeWallpaperArt({ preset, hour, minute, thumb = false }: { preset: HomepageThemePreset; hour: number; minute: number; thumb?: boolean }) {
+export function HomeWallpaperArt({ preset, hour, minute, thumb = false, still = false }: { preset: HomepageThemePreset; hour: number; minute: number; thumb?: boolean; still?: boolean }) {
+  // 字阵不按 1600×1000 裁:字格直接铺满可见区域
+  if (preset === 'glyph') return <Glyphs thumb={thumb} still={still} />
   const grain = thumb ? 0.4 : 1
   return (
     <div className="hpw-canvas" aria-hidden>

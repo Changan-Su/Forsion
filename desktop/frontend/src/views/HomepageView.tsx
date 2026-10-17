@@ -80,7 +80,7 @@ const PINNED_SPACES_KEY = 'forsion.homepage.pinned-spaces.v1'
 const PINNED_DROP_ID = 'homepage:pinned-spaces'
 const PINNED_DRAG_PREFIX = 'homepage:pinned:'
 const FIXED_HOME_ACTIONS = ['rb-market', 'rb-achievements'] as const
-const THEME_PRESETS: HomepageThemePreset[] = ['orbit', 'path', 'paper']
+const THEME_PRESETS: HomepageThemePreset[] = ['orbit', 'path', 'paper', 'glyph']
 const WALLPAPER_SOURCES: HomepageWallpaperSource[] = ['theme', 'bing', 'image']
 
 /** 指针拖放以「指针真正在谁里面」为准,避免 body zoom 下 active rect 中心偏移选错落点;
@@ -1071,7 +1071,7 @@ export function HomepageView(_props: ViewProps) {
         aria-hidden
       />
       <div className="hp-wallpaper-art" aria-hidden>
-        {!photo && <HomeWallpaperArt preset={wallpaperPrefs.themePreset} hour={clock.hour} minute={clock.minute} />}
+        {!photo && <HomeWallpaperArt preset={wallpaperPrefs.themePreset} hour={clock.hour} minute={clock.minute} still={!wallpaperPrefs.motion || reduceMotion || pageHidden} />}
       </div>
       <div className="hp-wallpaper-edge" aria-hidden />
       <div className="hp-wallpaper-tone" aria-hidden />

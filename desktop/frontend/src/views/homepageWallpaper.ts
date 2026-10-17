@@ -6,7 +6,7 @@
  */
 
 export type HomepageWallpaperSource = 'theme' | 'bing' | 'image'
-export type HomepageThemePreset = 'orbit' | 'path' | 'paper'
+export type HomepageThemePreset = 'orbit' | 'path' | 'paper' | 'glyph'
 /** 「图片」来源里选哪张:随包的 Hack2Gate 海报,或用户自己上传的那张(IndexedDB)。 */
 export type HomepageImageChoice = 'hack2gate' | 'custom'
 
@@ -26,7 +26,7 @@ export interface HomepageWallpaperPrefs {
   bingDaily: boolean
   focusBlur: boolean
   vignette: boolean
-  /** 主题背景的动态效果(星轨公转、日行光晕);系统「减弱动态效果」打开时一律不动。设置 → 外观里那一行读写同一个值。 */
+  /** 主题背景的动态效果(星轨公转、日行光晕、字阵涟漪);系统「减弱动态效果」打开时一律不动。设置 → 外观里那一行读写同一个值。 */
   motion: boolean
   bing: BingWallpaper | null
 }
@@ -87,7 +87,7 @@ export function normalizeHomepageWallpaperPrefs(value: unknown): HomepageWallpap
   if (raw.source === 'custom') { source = 'image'; imageChoice = 'custom' }
   else if (legacyHack2gate && source === 'theme') { source = 'image'; imageChoice = 'hack2gate' }
   const preset = typeof raw.themePreset === 'string' ? raw.themePreset : ''
-  const themePreset: HomepageThemePreset = preset === 'orbit' || preset === 'path' || preset === 'paper' ? preset : Object.hasOwn(LEGACY_PRESETS, preset) ? LEGACY_PRESETS[preset] : 'orbit'
+  const themePreset: HomepageThemePreset = preset === 'orbit' || preset === 'path' || preset === 'paper' || preset === 'glyph' ? preset : Object.hasOwn(LEGACY_PRESETS, preset) ? LEGACY_PRESETS[preset] : 'orbit'
   return {
     source,
     themePreset,

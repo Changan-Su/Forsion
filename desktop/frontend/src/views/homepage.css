@@ -110,6 +110,9 @@ html.dark .hp-root { --hpw-grain-blend: screen; --hpw-halo: 16%; --hpw-halo-mid:
   from { opacity: 0.3; transform: scale(0.7); }
   to { opacity: 1; transform: scale(1.35); }
 }
+/* 字阵(homepageGlyphField.ts):一张铺满的 canvas,不按 1600×1000 裁;画布不接收指针。 */
+.hpw-glyphs { position: absolute; inset: 0; pointer-events: none; }
+.hpw-glyph-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 /* 关掉 / 窗口看不见:停在原地(paused),不是 animation: none —— 那会跳回起点。减弱动态效果才是 none(文件末尾)。 */
 .hp-root:is([data-motion='off'], [data-hidden]) :is(.hpw-orbit, .hpw-planet, .hpw-halo) { animation-play-state: paused; }
 
@@ -908,7 +911,7 @@ html[data-glass='off'] .hp-root .hp-composer .project-pill::before {
 .hp-wallpaper-error { min-height: 48px; color: var(--danger); }
 .hp-theme-presets { padding-top: 13px; }
 .hp-theme-presets > p { margin: 0 1px 9px; color: var(--text-faint); font-size: var(--ui-font-caption, 11px); line-height: 1.45; }
-.hp-theme-presets > div { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+.hp-theme-presets > div { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; }
 .hp-theme-presets > p.hp-theme-note { margin: 8px 1px 0; }
 .hp-theme-presets button {
   position: relative;
@@ -1270,3 +1273,8 @@ html[data-glass='off'] .hp-root .hp-composer .project-pill::before {
 .hp-root.hp-phone.hp-composer-focused .hp-cards { display: none; }
 .hp-root.hp-phone.hp-composer-focused .hp-composer { transform: none; }
 .hp-root.hp-phone.hp-composer-focused .hp-title { opacity: 1; transform: none; }
+
+/* 字阵下关掉两样(须在文件末尾:与上面的聚焦虚化同特异性):四边的边缘模糊会把边上的字糊掉,且字一变就整屏重新取样;
+ * 聚焦虚化后的字阵是一片灰。只管主题背景,换成照片 / 必应时(data-wallpaper)照旧。 */
+.hp-root[data-theme-preset='glyph']:not([data-wallpaper='true']) .hp-wallpaper-edge { display: none; }
+.hp-root[data-theme-preset='glyph']:not([data-wallpaper='true']) .hp-wallpaper-art { filter: none; transform: none; }

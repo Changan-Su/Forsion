@@ -323,6 +323,7 @@
     "check:astryxhas": "node scripts/astryx-has.check.cjs",
     "check:restylescope": "node scripts/restyle-scope.check.cjs",
     "check:todo": "node scripts/todo-view.check.cjs",
+    "check:homeglyph": "node scripts/home-glyph.check.cjs",
     "check:chattabs": "node scripts/chat-multitab.check.cjs",
     "check:openbeside": "node scripts/open-beside.check.cjs",
     "check:linkmenu": "node scripts/e2e-editor.cjs --check=link-menu",
