@@ -509,7 +509,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
             <div className="t2-user-atts" onContextMenu={onBubbleMenu}>
               {[atts.filter(isImageAtt), atts.filter((a) => !isImageAtt(a))].map((row, r) => row.length > 0 && (
                 <div key={r} className="t2-user-atts-row">
-                  {row.map((a, i) => <AttachmentTile key={`${a.name}-${i}`} file={a} />)}
+                  {row.map((a, i) => <AttachmentTile key={`${a.name}-${i}`} file={a} view />)}
                 </div>
               ))}
             </div>

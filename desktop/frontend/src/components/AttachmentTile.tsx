@@ -8,6 +8,7 @@ import { useState } from 'react'
 import { X } from 'lucide-react'
 import { reducedMotion } from '@lcl/engine'
 import { extOf, fmtSize } from '../services/fileKinds'
+import { viewableProps } from './ImageViewer'
 
 export interface TileFile { name: string; mimeType: string; data?: string; size?: number }
 
@@ -38,8 +39,10 @@ export function splitName(name: string): [string, string] {
   return [chars.slice(0, -4).join(''), chars.slice(-4).join('') + name.slice(base.length)]
 }
 
-export function AttachmentTile({ file, onRemove, removeTitle, note }: {
+export function AttachmentTile({ file, onRemove, removeTitle, note, view }: {
   file: TileFile
+  /** 图片方块点开看图(A2);输入卡里待发的不开 */
+  view?: boolean
   /** 不传 = 只读(已发消息里) */
   onRemove?: () => void
   removeTitle?: string
@@ -64,7 +67,7 @@ export function AttachmentTile({ file, onRemove, removeTitle, note }: {
   return (
     <span className={`att-tile${square ? ' att-tile--img' : ' att-tile--file'}${leaving ? ' is-leaving' : ''}`} title={file.name}>
       {square ? (
-        <img src={`data:${file.mimeType};base64,${file.data}`} alt={file.name} draggable={false} onError={() => setBroken(true)} />
+        <img src={`data:${file.mimeType};base64,${file.data}`} alt={file.name} draggable={false} onError={() => setBroken(true)} {...(view ? viewableProps({ name: file.name }) : {})} />
       ) : (
         <>
           {isImage
