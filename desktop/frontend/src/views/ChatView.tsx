@@ -25,7 +25,7 @@ import { ErrorBoundary } from '../components/ErrorBoundary'
 import { EditorialMessage, type MessageHandlers } from './chat2/EditorialMessage'
 import { ApprovalTray } from './chat2/ApprovalTray'
 import { APPROVAL_UPDATE_OPEN, pendingPromptsOf } from './chat2/approvalQueue'
-import { CHILD_UPDATE_OPEN } from './chat2/ChildSessions'
+import { CHILD_UPDATE_OPEN, ChildFromLine } from './chat2/ChildSessions'
 import { RunStatsLine } from './chat2/RunStatsLine'
 import { SessionTraceLines, useSessionTraces } from '../components/SessionTraces'
 import { SessionOpening } from '../components/SessionOpening'
@@ -572,6 +572,7 @@ export function ChatView({ leaf, params }: ViewProps) {
                 会话不算 —— 对齐原来的 `:has(> .t2-asst, > .t2-userwrap)`。
                 别改回 `:has(…)` 再接 `> :first-child`:那种写法让页面上**任何地方**插入 / 移除一个元素都把整段对话的样式重算一遍。 */}
             <div className="t2-stream-inner" data-has-messages={anyShown ? '' : undefined}>
+            {hasMessages && <ChildFromLine session={activeSession} />}
             {!hasMessages ? (
               // 空状态本身不在流里(见下面 .t2-chat-col 直属的那份):流只占输入框以上,
               // 在里面居中 = 视觉上偏高。骨架屏留在流里 —— 它替代的是消息,本就该从顶部排。

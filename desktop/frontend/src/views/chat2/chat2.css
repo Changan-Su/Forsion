@@ -923,6 +923,10 @@
 .t2-taskcard-actions > button.primary:hover { background: var(--action-fill-hover); }
 .t2-taskcard-actions > button > svg { flex: none; }
 .t2-taskcard-done { color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
+/* 卡头右侧的有效期 / 「等你选」;先问卡按钮下面一句「你选之前什么都不会开始」 */
+.t2-taskcard-expire { margin-left: auto; font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted)); white-space: nowrap; }
+.t2-taskcard-note { font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted)); }
+.t2-tasks > .t2-childs { margin-top: 0; }
 .t2-taskcard.busy .t2-taskcard-actions > button { opacity: .6; cursor: progress; }
 .t2-taskcard-toggle {
   align-self: flex-start; border: none; background: transparent; padding: 0; cursor: pointer;
@@ -1071,6 +1075,10 @@
 .t2-child-update > svg { color: var(--accent-ink); flex: none; }
 .t2-child-update-item[data-status='waiting_for_user'] { color: var(--warning); }
 .t2-child-update-item[data-status='failed'] { color: var(--danger); }
+/* 子会话顶上「来自 主会话」 */
+.t2-child-from { display: flex; align-items: center; justify-content: center; gap: 5px; margin: 0 0 10px; color: var(--text-muted); }
+.t2-child-from > a { color: var(--accent-ink); cursor: pointer; text-decoration: none; max-width: 40ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.t2-child-from > a:hover { text-decoration: underline; }
 
 /* 流里给待批审批留的一行指路(卡本身在输入框上方的托盘里) */
 .t2-apv-pointer { display: flex; align-items: center; gap: 6px; font-size: var(--ui-font-meta, 12px); margin: 4px 0; }

@@ -1,5 +1,6 @@
 /** 任务卡落点(```forsion-task,对标 Claude Code 的 spawn_task)—— 聊天与收件箱共用:
- *   here = 任务书当用户消息发进当前会话;new = 开新会话再发(隐式建会话,沿用当前默认);
+ *   child = 在当前会话下开子会话(任务书当第一条消息,做完送回);here = 任务书当用户消息发进当前会话;
+ *   new = 开新会话再发(隐式建会话,沿用当前默认;收件箱没有当前会话时用);
  *   muse = 写一条 Muse 日程(repeat 1d, auto)= Track,到期回灌 Muse 周期,Calendar 可见;ignore = 只留反馈。
  * 四档都往 Muse 的 LOG 写一条 [feedback] 行(与 TODO 处理同通道)—— 没点 ≠ 不喜欢,反馈只用于调校提议频率。
  * Muse TODO 卡(`todo:` 头 —— 只在收件箱里 Muse 自己的信上生效,见 InboxBody):状态迁移交给引擎 ——
@@ -9,11 +10,11 @@
  *   等退回 pending 落地再返回,调用方随后按真状态重拉。
  * ⚠️ 调用方在别的 Space(收件箱)里点「新会话执行」要**先切到 Tangu Space**(发 Tangu 必须先切 Space),这里不替它切。 */
 import { openNewChat } from '../../sessionNav'
-import { approveMuseTodo, patchMuseTodo, postMuseFeedback, saveAgentScheduleEntry } from '../../services/backendService'
+import { approveMuseTodo, patchMuseTodo, postMuseFeedback, saveAgentScheduleEntry, startChildSession } from '../../services/backendService'
 import { useApp } from '../../stores/appStore'
 import type { TaskCard } from './suggest'
 import type { TaskLanding } from './TaskCards'
-import { homeTarget } from '../../services/engine/targets'
+import { homeTarget, targetForSession } from '../../services/engine/targets'
 
 function localStamp(d: Date): string {
   const p = (x: number): string => String(x).padStart(2, '0')
@@ -45,11 +46,25 @@ async function revertTodo(id: string): Promise<void> {
   })
 }
 
-/** 返回 true = 做成(卡片定格);false = 没做成(卡片保留按钮,toast 说明)。反馈行只在做成后发,免得 LOG 里记着没发生的事。 */
-export async function runTaskCard(card: TaskCard, landing: TaskLanding, sessionId: string | null): Promise<boolean> {
+/** 返回 true = 做成(卡片定格);false = 没做成(卡片保留按钮,toast 说明);{ childId } = 开出了子会话(卡原地变成子会话行)。
+ *  反馈行只在做成后发,免得 LOG 里记着没发生的事。 */
+export async function runTaskCard(card: TaskCard, landing: TaskLanding, sessionId: string | null): Promise<boolean | { childId: string }> {
   const app = useApp.getState()
   const feedback = (line: string): void => { void postMuseFeedback(homeTarget(), line).catch(() => {}) }
   const label = `task-card "${card.title.slice(0, 80)}"`
+  // 开个子会话:挂在当前会话下面,任务书当第一条消息;做完引擎把结果送回当前会话(services/childSessions.ts)
+  if (landing === 'child') {
+    if (!sessionId) return false
+    try {
+      const r = await startChildSession(targetForSession(sessionId), sessionId, { title: card.title, message: card.prompt })
+      await app.refreshSessions(app.cfg).catch(() => [])
+      feedback(`${label} accepted: child session`)
+      return { childId: r.sessionId }
+    } catch (e: any) {
+      app.toast(app.tr('chat.task.childFail', { e: e?.message || String(e) }), true)
+      return false
+    }
+  }
   if (landing === 'here' || landing === 'new') {
     if (card.todo && !(await syncTodo(card.todo, 'injected'))) return false
     let ok = false

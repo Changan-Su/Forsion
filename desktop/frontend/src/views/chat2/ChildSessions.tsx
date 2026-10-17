@@ -5,7 +5,7 @@
  *  - ChildUpdateLine:引擎落库的 <child_sessions_update> 用户行(子会话结果送回主会话)对人画成一行系统行,不摆成用户气泡。
  */
 import React, { useEffect, useState } from 'react'
-import { ChevronRight, CornerDownRight, MessageSquare, Sparkles } from 'lucide-react'
+import { ChevronRight, CornerDownRight, CornerUpLeft, MessageSquare, Sparkles } from 'lucide-react'
 import type { SessionRecord, ToolEvent } from '../../types'
 import { useApp } from '../../stores/appStore'
 import { useSessionAttention } from '../../stores/attentionStore'
@@ -34,6 +34,8 @@ registerMessages({
   'childs.upd.waiting_for_user': { zh: '{title} 在等回答', en: '{title} is waiting for an answer' },
   'childs.upd.failed': { zh: '{title} 出错了', en: '{title} failed' },
   'childs.upd.stopped': { zh: '{title} 被停下了', en: '{title} was stopped' },
+  'childs.from': { zh: '来自', en: 'From' },
+  'childs.fromBrief': { zh: '第一条是它写的简报，做完会把结果送回去', en: 'The first message is its brief; results go back there when done' },
 })
 
 export const CHILD_UPDATE_OPEN = '<child_sessions_update>'
@@ -136,3 +138,18 @@ export function ChildUpdateLine({ content }: { content: string }) {
   )
 }
 const UPD = { finished: 1, waiting_for_user: 1, failed: 1, stopped: 1 }
+
+/** 子会话顶上一行:来自哪个主会话(点了回去)。第一条用户消息是主会话写的简报,不是用户本人打的字。 */
+export function ChildFromLine({ session }: { session?: SessionRecord | null }) {
+  const { t } = useI18n()
+  const parent = useApp((s) => (session?.parent_session_id ? s.sessions.find((x) => x.id === session.parent_session_id) : undefined))
+  // 私聊 @项目派遣出的会话也指回私聊,但它在别的项目里、也不回报 —— 只认同一个项目里的主会话(start_session 开的)
+  if (!parent || !session || (parent.project_path || '') !== (session.project_path || '') || !!parent.projectless !== !!session.projectless) return null
+  return (
+    <div className="t2-sys t2-child-from">
+      <CornerUpLeft size={12} /><span>{t('childs.from')}</span>
+      <a role="button" tabIndex={0} onClick={() => openSession(parent.id)} onKeyDown={(e) => { if (e.key === 'Enter') openSession(parent.id) }}>{displaySessionTitle(parent.title, t)}</a>
+      <span>· {t('childs.fromBrief')}</span>
+    </div>
+  )
+}

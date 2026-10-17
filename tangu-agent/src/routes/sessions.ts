@@ -24,6 +24,7 @@ import { estimateTokensRough } from '../services/contextBudget.js';
 import { deps } from '../seams/runtime.js';
 import { bumpHistoryRevision } from '../services/historyRevision.js';
 import { activeSessionIds, sessionHasActiveRun } from '../services/agentLoop.js';
+import { startChildSession } from '../services/childSessions.js';
 import { getAgent } from '../agents/agentRegistry.js';
 import { branchSession } from '../services/sessionBranch.js';
 import { listCheckpoints, restoreCodeSince, removeSessionCheckpoints } from '../services/checkpoints.js';
@@ -226,6 +227,25 @@ router.get('/agent/sessions/:id/background', authMiddleware, async (req: AuthReq
     res.json({ background });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'list background sessions failed' });
+  }
+});
+
+// 任务卡「开个子会话」(方案「子会话与任务卡」第 3 步):用户点卡 → 在这个会话下开一个可见子会话,任务书当第一条消息;
+// 做完同样送回主会话(services/childSessions.ts)。只在本机引擎。
+router.post('/agent/sessions/:id/children', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    if (!deps().profile.capabilities.hostExec) return res.status(404).json({ detail: 'not available in this deployment' });
+    const userId = req.user!.userId;
+    const s = await getOwnSession(req.params.id, userId);
+    if (!s) return res.status(404).json({ detail: 'Session not found' });
+    const message = typeof req.body?.message === 'string' ? req.body.message.trim() : '';
+    if (!message || message.length > 20_000) return res.status(400).json({ detail: 'message required (max 20000 chars)' });
+    const title = typeof req.body?.title === 'string' ? req.body.title : '';
+    const remote = parseRemoteOrigin(req.headers);
+    const r = await startChildSession({ parentId: s.id, userId, modelId: s.model_id || '', title, message, ...(remote ? { remote } : {}) });
+    res.json({ sessionId: r.sessionId, runId: r.runId, title: r.title });
+  } catch (e: any) {
+    res.status(400).json({ detail: e?.message || 'start child session failed' });
   }
 });
 
