@@ -54,6 +54,7 @@ import { AppRefIcon } from '../../components/appRefs'
 import { useCapsuleSlide } from '../../components/capsuleTabs'
 import { composeQuotes } from './quotes'
 import { NEW_CHAT_DRAFT, clearDraft, moveDraft, setDraftField, useComposerDrafts, useDraftField } from './composerDrafts'
+import { dropSend, fadeOutDraft, noteSend } from './sendFlight'
 import { ContextUsagePop } from './ContextUsagePop'
 import { usePromptSuggest } from './promptSuggest'
 import './composer2.css'
@@ -1431,14 +1432,17 @@ export const Composer2: React.FC<{
     // 清的是**发出时**那个会话的草稿:新对话的第一句发到一半会话才建出来,输入框那时已经换到新会话上了。
     const sentKey = draftKey
     const known = sentKey === NEW_CHAT_DRAFT ? new Set(useApp.getState().sessions.map((x) => x.id)) : null
+    noteSend(outgoing, taRef.current) // 发送动效:气泡从这一行升上去(sendFlight.ts)
     return onSend(outgoing, attachments.filter((a) => !isLeaving(a)), wsFiles.filter((a) => !isLeaving(a)), pinnedSkills.map((s) => s.id), mentions).then((accepted) => {
       if (!accepted) {
+        dropSend(outgoing)
         // 新对话的第一句没发出去,而输入框已经换到刚建的会话上:那份输入跟过去,留在眼前可以重发(那边有草稿就不动)。
         // 只认发送前还不存在的会话 —— 用户途中自己切去了别的会话,就不往那里塞,那份留在新对话里。
         const shown = draftKeyRef.current
         if (known && shown !== sentKey && !known.has(shown)) moveDraft(sentKey, shown)
         return false
       }
+      if (!override && draftKeyRef.current === sentKey) fadeOutDraft(taRef.current) // 输入框里的字上移淡出,再清空
       clearDraft(sentKey, !!override) // 引用里自动那条不在草稿里 —— 它是 activePage 的派生量,下一条消息照旧自动挂上
       if (!override) { setHistPos(0); nativeHaptic('tick') } // 手机:自己发出去的那一下给个轻震(桌面 / 网页无宿主,空操作)
       onClearQuote?.()
