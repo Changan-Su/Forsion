@@ -277,7 +277,8 @@ export const ToolGroup: React.FC<{
                 {groupedEvents.length > 1 && <span className="tool-group-step"> · {t('tool.step', { n: curIdx + 1 })}</span>}
               </span>
             ) : (
-              <span className={`tool-group-sum${busy ? ' chat-run-shimmer-text' : ''}`}>
+              // key:「正在做」和「汇总」不共用节点,换态时旧节点上的流光随节点一起拆掉
+              <span key="sum" className={`tool-group-sum${busy ? ' chat-run-shimmer-text' : ''}`}>
                 <span className="tool-group-sum-long">{summary || thinkLabel}</span>
                 <span className="tool-group-sum-short">{shortSummary}</span>
               </span>

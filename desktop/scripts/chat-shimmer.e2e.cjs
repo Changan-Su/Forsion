@@ -291,6 +291,9 @@ async function main() {
         groupBusy: group?.querySelector('.tool-group-head')?.getAttribute('aria-busy'),
         groupShimmers: group?.querySelectorAll('.chat-run-shimmer-text').length ?? -1,
         groupAnimations: group?.getAnimations({ subtree: true }).filter((a) => a.animationName === 'chat-run-shimmer').length ?? -1,
+        // 红了时看是谁还在动:节点、类名、播放态、是否还在文档里
+        groupAnimTargets: group?.getAnimations({ subtree: true }).filter((a) => a.animationName === 'chat-run-shimmer')
+          .map((a) => { const el = a.effect?.target; return `${el?.tagName}.${el?.className}|${a.playState}|connected=${el?.isConnected}|inGroup=${group.contains(el)}` }),
         taskBusy: task?.getAttribute('aria-busy'),
         taskShimmers: task?.querySelectorAll('.chat-run-shimmer-text').length ?? -1,
       }
