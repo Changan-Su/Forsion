@@ -48,6 +48,7 @@ import {
 } from './loader.js';
 import { appendActivityLine } from '../services/userActivity.js';
 import { seedBundleAgents } from './bundles.js';
+import { attachPluginMcp } from '../mcp/pluginServers.js';
 import type {
   PluginCommand,
   PluginRouters,
@@ -96,6 +97,8 @@ interface Instance {
   hostAdapters: Map<string, (o: any) => { host: HostServices }>;
   brainAdapters: Map<string, (o: any) => CloudBrainServices>;
   billingAdapters: Map<string, (o: any) => BillingServices>;
+  /** manifest 的 mcpServers 已交给 manager(见 attachMcpForRunning)。 */
+  mcpAttached?: boolean;
 }
 
 function newInstance(metaIds: Set<string> = new Set()): Instance {
@@ -481,9 +484,25 @@ async function reconcile(): Promise<void> {
         changed = true;
       }
     }
-    if (!changed) return;
+    if (!changed) return attachMcpForRunning();
   }
   console.warn('[tangu] 插件收敛未在上限轮数内到达不动点(忽略)');
+  attachMcpForRunning();
+}
+
+/**
+ * 收敛落定后才给在跑的实例起 manifest 里的 MCP server —— 启动期「先全部激活一次再收敛」里随即休眠的插件不拉起子进程。
+ * 撤销函数进实例台账:停用 / 卸载 / 原地升级时 stopEntry 跑 runtimeDisposers 关掉它们。
+ */
+function attachMcpForRunning(): void {
+  for (const e of entries.values()) {
+    const inst = e.inst;
+    if (!inst?.activated || inst.disposed || inst.mcpAttached) continue;
+    inst.mcpAttached = true;
+    const id = e.d.manifest.id;
+    const off = attachPluginMcp(id, String(e.d.manifest.name || id), e.d.dir, e.d.manifest.mcpServers);
+    if (off) inst.runtimeDisposers.push(off);
+  }
 }
 
 /** 彻底注销一个已停的条目(meta 也不再列出)。 */

@@ -119,6 +119,8 @@ import { connectionTarget, homeTarget } from '../services/engine/targets'
 
 // 本文件自带的文案片段(命名空间 `settingsmodal.*`,不与 i18n.generated.ts 的 `settings.*` 相交)。
 registerMessages({
+  'settingsmodal.mcp.fromPlugin': { zh: '来自插件「{name}」', en: 'From plugin "{name}"' },
+  'settingsmodal.mcp.fromPluginHint': { zh: '这个 server 随插件启用和停用；要关掉它，请在插件设置里停用这个插件。', en: 'This server starts and stops with its plugin. To turn it off, disable the plugin in plugin settings.' },
   'settingsmodal.selectionBar': { zh: '划线菜单', en: 'Selection menu' },
   'settingsmodal.selectionBarHint': { zh: '选中文字后浮出的那一条：先排当前视图自己的工具，还是先排「问 Tangu」「翻译」这些每个视图都有的动作。', en: 'The bar that appears over selected text: put the current view\'s own tools first, or the actions every view shares, such as Ask Tangu and Translate.' },
   'settingsmodal.selectionBar.tools': { zh: '视图工具在前', en: 'View tools first' },
@@ -2735,6 +2737,28 @@ export const SettingsModal: React.FC<{
                           })}
                         </div>
                       )}
+                      {(() => {
+                        // 插件自带的 server:不在 mcp.json 里(编辑 / 删除会改写用户文件),只读列出,开关在插件设置里
+                        const fromPlugins = (mcpStatus || []).filter((s) => s.origin && !(s.server in mcpServers))
+                        if (!fromPlugins.length) return null
+                        return (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 10 }}>
+                            {fromPlugins.map((st) => (
+                              <div key={`${st.origin!.pluginId}:${st.server}`} className="file-row" style={{ cursor: 'default' }} title={t('settingsmodal.mcp.fromPluginHint')}>
+                                <span className="file-name">
+                                  <b>{st.server}</b>
+                                  <span style={{ color: 'var(--text-muted)', marginLeft: 8, fontSize: 'var(--ui-font-meta, 12px)' }}>
+                                    {t('settingsmodal.mcp.fromPlugin', { name: st.origin!.pluginName })}
+                                  </span>
+                                </span>
+                                <span className="file-size" title={st.error || undefined}>
+                                  {st.status === 'connected' ? t('settings.mcp.statusConnected', { count: st.tools.length }) : st.status === 'error' ? t('settings.mcp.statusError') : st.status}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        )
+                      })()}
                       {!editMcp && (
                         <button
                           className="btn ghost sm"

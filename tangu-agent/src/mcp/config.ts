@@ -4,9 +4,10 @@
  *   { "mcpServers": { "<name>": { command?, args?, env?, url?, transport?, headers?, timeoutMs?, enabled? } } }
  * 类型推断(同 Agents-Manager):有 command → stdio;有 url → transport 显式 sse 否则 streamable-http。
  *
- * **加载语义(prompt 缓存纪律)**:MCP server 集在**后端进程启动时**冻结——manager 启动连一次,
+ * **加载语义(prompt 缓存纪律)**:mcp.json 的 server 集在**后端进程启动时**冻结——manager 启动连一次,
  * 配置变更只对重启后的进程/新 run 生效(desktop 改配置走 ensureBackend 重启链)。
- * 绝不在 run 中途增删工具,否则同会话 defs 漂移打爆前缀缓存。
+ * 绝不在 run 中途增删工具,否则同会话 defs 漂移打爆前缀缓存。插件自带的 server(pluginServers.ts)随插件
+ * 启停在 run 之间增删 —— toolsForRun 每 run 取一次快照,与 tools/list_changed 同一条「只对之后的 run 生效」。
  */
 import { readFileSync } from 'node:fs';
 import { mcpConfigFile } from '../core/tanguHome.js';
@@ -26,6 +27,8 @@ export interface McpServerConfig {
   timeoutMs?: number;
   /** false=配置保留但不连接(导入的外来配置默认 false,用户显式启用)。缺省 true。 */
   enabled?: boolean;
+  /** stdio 子进程的工作目录。只由插件自带的 server 设(= 插件目录,见 pluginServers.ts);mcp.json 里写了也照用。 */
+  cwd?: string;
 }
 
 export interface McpConfig {
