@@ -20,6 +20,7 @@ import { btwSeedOf } from './views/chat2/btwStore'
 import { listSkills } from './services/backendService'
 import { floatingPanelTitle } from './floatingPanelTitle'
 import { homeTarget } from './services/engine/targets'
+import { AskStringHost } from './amadeus/components/askString'
 
 export function FloatingRoot() {
   const { t } = useI18n()
@@ -101,5 +102,7 @@ export function FloatingRoot() {
     {/* 插件检查卡:设置 / 市场自 2026-09-20 住在这个独立窗口里,「运行引导」、手动启用、市场装完都在这里
         触发 —— 检查卡的 store 每个渲染进程一份,只挂在主窗 Root 里的话,这边点了什么都不会出现。 */}
     {(target.builtin === 'settings' || target.builtin === 'market') && <PluginOnboardingHost />}
+    {/* 设置 › 设备的「通过地址连接」「自定义图标」走 askString:prompt store 每个渲染进程一份,浮窗得自己挂宿主 */}
+    {target.builtin === 'settings' && <AskStringHost />}
   </div>
 }

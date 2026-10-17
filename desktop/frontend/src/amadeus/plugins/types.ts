@@ -141,6 +141,12 @@ export interface ResetCardQuota {
   weeklyRemaining?: number
 }
 
+/** One library file event (see `PluginAppApi.onVaultEvent`). */
+export type PluginVaultEvent =
+  | { kind: 'create' | 'delete' | 'modify'; path: string }
+  | { kind: 'rename'; path: string; from: string; folder?: boolean }
+  | { kind: 'vault' }
+
 export interface PluginAppApi extends BlockSurfaceApi {
   /** Vault-relative path of the note the active panel is showing (both carriers), or null. */
   getActivePage(): string | null
@@ -206,6 +212,19 @@ export interface PluginAppApi extends BlockSurfaceApi {
    *  ⚠️路径必须与 `readFile` 用的是同一个字符串(vault 相对、`/` 分隔);大小写按平台。
    *  旧宿主 / 非桌面宿主没有:`const off = ctx.app.watchFile?.(p, cb)`,缺位时自己退化成轮询。 */
   watchFile?(path: string, cb: () => void): () => void
+  /** Library-wide file events (2026-10-17+): files created, deleted, renamed or changed outside the editor, delivered in
+   *  batches (about 200 ms). Returns an unsubscribe; the host also drops it when the plugin is disabled or reloaded.
+   *  - `create` / `delete`: any note or file appearing in / leaving the library listing, whoever did it (the user in
+   *    Forsion, another program, sync). Folders alone are not reported.
+   *  - `rename`: a rename or move done in Forsion (any window): `{ path: new, from: old }`; a whole folder moved =
+   *    one event with `folder: true`. That same move does **not** also arrive as a delete + create. A rename done by
+   *    another program cannot be told apart from a delete + create, so it arrives as those two.
+   *  - `modify`: content changed outside this window's editor (another program, Tangu, another window, sync). Typing in
+   *    the open note is not reported here; use `subscribePage` for the active note.
+   *  - `vault`: the open library was switched or closed. Re-read whatever you cached (`listFiles` etc.).
+   *  Paths are vault-relative with `/`, the same strings `readFile` takes. With no library open nothing arrives.
+   *  Older hosts lack it: `ctx.app.onVaultEvent?.(cb)`, and fall back to `listFiles` polling. */
+  onVaultEvent?(cb: (events: PluginVaultEvent[]) => void): () => void
   /** The plugin's work folder for file output, vault-relative without leading/trailing slash.
    *  Every plugin automatically gets a "工作文件夹" setting (key `workFolder`) on its detail page;
    *  this returns that value, defaulting to `Plugins/<display name>` (since 2026-10-14; before that the default was
@@ -1264,7 +1283,8 @@ export interface PluginContext {
    *  registerSetting 是「一键一个字符串」,存不下片段库这类大块数据,也没有原子性。
    *  旧宿主没有:`await ctx.loadData?.() ?? 默认值`。 */
   loadData?<T = unknown>(): Promise<T | null>
-  /** 原子写本插件的私有 JSON blob(整体覆盖)。宿主缺位时静默 no-op。 */
+  /** 原子写本插件的私有 JSON blob(整体覆盖)。宿主缺位时静默 no-op。
+   *  manifest 写 `"syncData": true` → 登录后这份随账号跨设备同步(本地优先,整份取较新的;单份 ≤512KB)。 */
   saveData?(value: unknown): Promise<void>
   /** Host-native UI primitives (2026-09-07+). A plugin keeps ownership of its content DOM and gives
    *  the host a shell to overlay plus its scroll/content roots. Old hosts omit the whole member.
@@ -1747,6 +1767,9 @@ export interface AmadeusPlugin {
   /** Manifest `isDesktopOnly` (Obsidian-style): the plugin needs desktop-only host APIs. Informational on desktop;
    *  mobile hosts list it as `blocked: 'desktopOnly'` and never evaluate it. External plugins only. */
   isDesktopOnly?: boolean
+  /** Manifest `syncData: true`: ctx.saveData syncs across devices with the Forsion account (desktop / mobile; each
+   *  device can turn it off per plugin in Settings). Local-first; whole-blob newest wins. External plugins only. */
+  syncData?: boolean
   /** Agent 自建 Space 插件的 agent slug(external only;设置页标「<slug> 的 Space」、不给卸载)。 */
   agent?: string
   /** 捆绑包内嵌内容清单(引擎插件 id / agent / 技能 / Space;缺省 = 纯 UI 插件)。External plugins only. */

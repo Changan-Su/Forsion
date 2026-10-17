@@ -199,6 +199,7 @@ router.get('/agent/tools', authMiddleware, async (req: AuthRequest, res) => {
           transport: s.transport,
           status: s.status,
           error: s.error || null,
+          ...(s.origin ? { origin: s.origin } : {}),
           tools: [...mcpManager.toolsForRun([s.name]).values()].map((t) => ({
             name: t.name,
             description: t.definition.function.description || '',

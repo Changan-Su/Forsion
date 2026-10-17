@@ -4,7 +4,7 @@
  *  通用预览。状态在 appStore.deskBySession(会话级快照落 localStorage)。宽度=size 档位或用户
  *  拖出的 fraction —— 一律比例制,对 body 端级 zoom 免疫(px 会被 zoom 缩放,% 不会)。 */
 import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
-import { Eraser, Loader2, Maximize2, Minimize2, Sparkles } from 'lucide-react'
+import { ChevronDown, Copy, Eraser, Loader2, Maximize2, Minimize2, NotebookPen, Sparkles } from 'lucide-react'
 import { getView, subscribeViews } from '@lcl/engine'
 import type { ViewProps } from '@lcl/engine'
 import { useApp, type DeskItem } from '../../stores/appStore'
@@ -17,6 +17,10 @@ import { ensureAmadeusReady } from '../../amadeusPlugins'
 import { useDeskCompanion } from '@amadeus/plugins/deskCompanion'
 import { DeskCompanionHost } from './DeskCompanionHost'
 import { registerMessages, useI18n } from '../../i18n'
+import { iconForFile } from '../../services/fileKinds'
+import { openDb, openNote } from '../../amadeusNav'
+import type { CtxItem } from '../../components/RightPanel'
+import { DeskChromeContext, DeskMenuButton, DeskMoreButton, type DeskChrome } from './deskChrome'
 
 registerMessages({
   'desk.writing': { zh: '正在编辑 {name}', en: 'Editing {name}' },
@@ -25,6 +29,8 @@ registerMessages({
   'desk.collapse': { zh: '收起为卡片', en: 'Collapse to card' },
   'desk.empty': { zh: 'Agent 会在这里展示成果', en: 'Agent will present work here' },
   'desk.clear': { zh: '清空 Desk', en: 'Clear Desk' },
+  'desk.more': { zh: '更多', en: 'More' },
+  'desk.switch': { zh: '切换 Desk 上的内容', en: 'Switch Desk item' },
 })
 
 /** 「清空 Desk」(idle 伴随面的回场键):条目清掉、侧板收回、说明一并作废 —— 卡片空态位交还伴随面。 */
@@ -226,6 +232,72 @@ export function useDeskGrip(sessionId: string, rootRef: React.RefObject<HTMLDivE
   }, [sessionId, rootRef])
 }
 
+/** 展开态的一格 = 悬浮胶囊 + 内容(方案 B,两颗胶囊同 Mini 顶栏 lcl/engine/miniCard.css .mini-card-cap)。
+ *  左胶囊:条目名(第一格且有得切 / 有 Agent 说明时带 ▾ 菜单);右胶囊:视图控件槽 │ ⋯ │ 面板级按钮。
+ *  下面的格(panel=null)不要右胶囊,槽和 ⋯ 跟在名字后面。伴随面(item 缺省)只有右胶囊。 */
+function DeskCaps({ sessionId, item, panel, switchable, className, children }: {
+  sessionId: string; item?: DeskItem; panel: React.ReactNode; switchable?: boolean; className?: string; children: React.ReactNode
+}) {
+  const { t } = useI18n()
+  const [slot, setSlot] = useState<HTMLElement | null>(null)
+  const more = useRef<CtxItem[]>([])
+  const chrome = useMemo<DeskChrome>(() => ({ slot, more }), [slot])
+  const vaultRoot = usePageStore((s) => s.vaultRoot)
+  const fileTypes = usePluginStore((s) => s.fileTypes)
+  const note = useApp((s) => s.deskBySession[sessionId]?.note)
+  const all = useApp((s) => s.deskBySession[sessionId]?.items)
+  const path = item?.path || ''
+  const rel = vaultRelOf(path, vaultRoot)
+  // 「在 Amadeus 中打开」只给 Desk 自己会改道原生 view 的库内类型(与 DeskFilePane 同口径)
+  const amadeus = rel && (/\.(md|db)$/i.test(rel) || isDrawingPath(rel) || !!findFileType(fileTypes, rel)) ? rel : null
+  const moreItems = (): CtxItem[] => [
+    ...more.current,
+    // .db 走 openDb:openNote 会把它塞进笔记编辑器,保存时把 Markdown 写回数据库(Codex P1)
+    ...(amadeus ? [{ label: t('preview.openInAmadeus'), icon: <NotebookPen size={14} />, run: () => { if (/\.db$/i.test(amadeus)) openDb(amadeus); else void openNote(amadeus) } }] : []),
+    ...(path ? [{ label: t('panel.action.copyPath'), icon: <Copy size={14} />, run: () => void navigator.clipboard?.writeText(path) }] : []),
+  ]
+  const tools = item && (
+    <>
+      <span ref={setSlot} className="desk-cap-slot" />
+      {!item.live && (path || !item.view) && <DeskMoreButton items={moreItems} />}
+    </>
+  )
+  let name: React.ReactNode = null
+  if (item) {
+    const Icon = item.live ? Loader2 : item.view ? Sparkles : iconForFile('', item.name || path)
+    const label = item.live ? (path ? t('desk.writing', { name: item.name }) : t('desk.drafting')) : (item.name || path.split(/[/\\]/).pop() || '')
+    const tip = [path, !item.live && note].filter(Boolean).join('\n') || undefined
+    const inner = <><Icon size={13} className={`desk-cap-ic${item.live ? ' spin' : ''}`} /><span className="desk-cap-label">{label}</span></>
+    const others = (all ?? []).filter((x) => x.key !== item.key)
+    // 直播条目只认顶格(直播更新 / 落盘接棒 / 失败清场都按顶格做),有直播时不许换位
+    const liveNow = (all ?? []).some((x) => x.live)
+    name = switchable && (others.length || note) ? (
+      <DeskMenuButton
+        className="desk-cap-pick"
+        title={tip ?? t('desk.switch')}
+        items={() => [
+          ...(note ? [{ label: note, disabled: true, run: () => {} }] : []),
+          ...(all ?? []).map((x, i) => ({
+            label: x.name || x.path, separatorBefore: !!note && i === 0, disabled: x.key === item.key || liveNow,
+            run: () => useApp.getState().patchDesk(sessionId, { items: [x, ...(all ?? []).filter((y) => y.key !== x.key)] }),
+          })),
+        ]}
+      >
+        {inner}<ChevronDown size={12} className="desk-cap-caret" />
+      </DeskMenuButton>
+    ) : <span className="desk-cap-pick" title={tip}>{inner}</span>
+  }
+  return (
+    <div className={`agent-desk-pane has-caps${className ? ' ' + className : ''}`}>
+      <div className="desk-caps">
+        {name ? <div className="desk-cap desk-cap-name">{name}{!panel && tools}</div> : <span />}
+        {panel && <div className="desk-cap">{tools}{item && <span className="desk-cap-div" />}{panel}</div>}
+      </div>
+      <DeskChromeContext.Provider value={chrome}>{children}</DeskChromeContext.Provider>
+    </div>
+  )
+}
+
 export function AgentDesk({ sessionId }: { sessionId: string }) {
   const { t } = useI18n()
   const desk = useApp((s) => s.deskBySession[sessionId])
@@ -244,6 +316,19 @@ export function AgentDesk({ sessionId }: { sessionId: string }) {
   // 空闲面:自己没有条目时演它(见 useDeskHome)
   const items = own.length || !home ? own : [home]
   const clearable = (comp?.mode === 'idle' || !!home) && !always && own.length > 0
+  // 面板级按钮(清空 / 收起)住第一格的右胶囊末尾
+  const panelBtns = (
+    <>
+      {clearable && (
+        <button className="icon-btn" title={t('desk.clear')} onClick={() => clearDesk(sessionId, !!home)}>
+          <Eraser size={14} />
+        </button>
+      )}
+      <button className="icon-btn" title={t('desk.collapse')} onClick={() => useApp.getState().patchDesk(sessionId, { mode: undefined })}>
+        <Minimize2 size={14} />
+      </button>
+    </>
+  )
 
   return (
     // 壳常驻(有内容即挂):open 才有宽度与内容,flex-basis 过渡负责丝滑进出(见 chat2.css)
@@ -253,34 +338,17 @@ export function AgentDesk({ sessionId }: { sessionId: string }) {
         <>
           <div className="agent-desk-grip" onPointerDown={onGrip} />
           <div className="agent-desk-inner">
-            <div className="agent-desk-head">
-              <Sparkles size={13} className="agent-desk-spark" />
-              <span className="agent-desk-title">{t('desk.title')}</span>
-              {!always && desk?.note ? <span className="agent-desk-note" title={desk.note}>{desk.note}</span> : <span className="agent-desk-note" />}
-              {clearable && (
-                <button className="icon-btn" title={t('desk.clear')} onClick={() => clearDesk(sessionId, !!home)}>
-                  <Eraser size={14} />
-                </button>
-              )}
-              <button
-                className="icon-btn"
-                title={t('desk.collapse')}
-                onClick={() => useApp.getState().patchDesk(sessionId, { mode: undefined })}
-              >
-                <Minimize2 size={14} />
-              </button>
-            </div>
             <div className="agent-desk-body">
               {always && comp ? (
-                <div className="agent-desk-pane agent-desk-companion">
+                <DeskCaps sessionId={sessionId} panel={panelBtns} className="agent-desk-companion">
                   <DeskCompanionHost key={comp.key} entry={comp} surface="desk-panel" sessionId={sessionId} />
-                </div>
-              ) : items.map((it) => (
-                <div className="agent-desk-pane" key={it.key}>
+                </DeskCaps>
+              ) : items.map((it, i) => (
+                <DeskCaps key={it.key} sessionId={sessionId} item={it} panel={i === 0 ? panelBtns : null} switchable={i === 0}>
                   {it.live ? <DeskLivePane sessionId={sessionId} item={it} />
                     : it.view ? <DeskShimView type={it.view.type} params={it.view.params ?? {}} k={`desk-view:${it.key}`} />
                       : <DeskFilePane item={it} allowNative={it.key === claimKey} />}
-                </div>
+                </DeskCaps>
               ))}
             </div>
           </div>

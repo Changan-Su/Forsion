@@ -41,6 +41,8 @@ export interface McpServerStatus {
   status: 'connected' | 'connecting' | 'error' | 'disabled';
   toolCount: number;
   error?: string;
+  /** 插件自带的 server:来自哪个引擎插件(用户 mcp.json 里的没有这个字段)。 */
+  origin?: { pluginId: string; pluginName: string };
 }
 
 /** 时间常量覆写(单测用;生产不传)。 */
@@ -74,6 +76,7 @@ interface ServerEntry {
   retryAttempt: number;
   connectedAt: number;
   configError: boolean; // 缺 command/url、保留名、server 名撞名之类的确定性错误:不连接、不重试
+  origin?: McpServerStatus['origin'];
 }
 
 const ABORTED: McpCallResult = { text: 'Error: MCP call aborted (the run was stopped).', isError: true };
@@ -102,6 +105,11 @@ export interface McpManager {
   listStatus(): McpServerStatus[];
   /** 连接(启动时调用一次;失败的 server 记错误不阻断其他,转后台重试)。 */
   start(): Promise<void>;
+  /** 插件自带的 server(pluginServers.ts):在 run 之间加进来并开始连接。与已有 server 撞名的记成 error、不连。
+   *  start() 之前调用的排队,等 mcp.json 的 server 都登记完再加(用户的先占名)。 */
+  addServers(origin: { id: string; name: string }, servers: Record<string, McpServerConfig>): void;
+  /** 关掉并移出某插件的全部 server(stdio 杀子进程)。桥接名的归属不释放:同一插件再启用时原样认领回来。 */
+  removeServers(pluginId: string): Promise<void>;
   dispose(): Promise<void>;
 }
 
@@ -141,6 +149,63 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
   const owner = new Map<string, string>();
   /** 启动时的首批连接落定后才开始认领 —— 首批按 server 名字典序认领,与谁先连上无关(确定性)。 */
   let started = false;
+  /** 消毒后的 server 名 → 先到的 server(start 与插件 addServers 共用;插件 server 移出后不让位,同名再加回来照认)。 */
+  const bySanitized = new Map<string, string>();
+  /**
+   * server 名 → 归属('' = 用户 mcp.json,否则插件 id;进程级,只增不改)。插件停用后名字不让给别的插件:
+   * 旧 run 的工具快照按 server 名派发,换了主人就会把 A 的调用(连同 A 在本会话里攒下的审批)打到 B。
+   * 用户配置里关着的 server 也占名(start 时整份登记),插件拿不走。
+   */
+  const nameOwner = new Map<string, string>();
+  /** removeServers 里还没关完的 server:dispose 要等它们,否则停用后马上退出会留下 stdio 子进程。 */
+  const closing = new Set<Promise<void>>();
+  /** start() 之前就到的插件 server:等 mcp.json 的登记完再加。 */
+  const queued: Array<[{ id: string; name: string }, Record<string, McpServerConfig>]> = [];
+
+  function newEntry(name: string, c: McpServerConfig, origin?: ServerEntry['origin']): ServerEntry {
+    const entry: ServerEntry = {
+      name, cfg: c, transport: inferTransport(c), client: null, tools: [], status: 'connecting',
+      connecting: null, pendingClient: null, retryTimer: null, retryAttempt: 0, connectedAt: 0, configError: false,
+      ...(origin ? { origin } : {}),
+    };
+    let rejected: string | undefined;
+    const who = origin?.pluginId ?? '';
+    const held = nameOwner.get(name);
+    if (isReservedServerName(name)) rejected = RESERVED_SERVER_ERROR;
+    else if (servers.some((s) => s.name === name)) rejected = `a server named "${name}" already exists`;
+    else if (held !== undefined && held !== who) rejected = held ? `the name "${name}" belongs to plugin ${held} for this process` : `a server named "${name}" is in your MCP config`;
+    else {
+      nameOwner.set(name, who);
+      const key = sanitizePart(name);
+      const first = bySanitized.get(key);
+      if (first === undefined) bySanitized.set(key, name);
+      else if (first !== name) rejected = `its tool names would collide with server "${first}" (both bridge to "mcp__${key}__*"); rename one of them`;
+    }
+    servers.push(entry);
+    if (rejected) {
+      entry.status = 'error';
+      entry.error = rejected;
+      entry.configError = true;
+      console.warn(`[mcp] server "${name}" not started: ${rejected}.`);
+    }
+    return entry;
+  }
+
+  function ensureExitHook(): void {
+    if (exitHook || !servers.some((s) => s.transport === 'stdio')) return;
+    exitHook = true;
+    process.on('exit', () => {
+      for (const s of servers) void s.client?.close().catch(() => {});
+    });
+  }
+
+  async function closeEntry(s: ServerEntry): Promise<void> {
+    clearRetry(s);
+    s.configError = true; // 在飞的连接失败后也别再排重试
+    await Promise.all([s.client, s.pendingClient].map((c) => c?.close().catch(() => {})));
+    s.client = null;
+    await s.connecting?.catch(() => {});
+  }
 
   function warnCollision(key: string, msg: string): void {
     if (warnedCollisions.has(key)) return;
@@ -173,6 +238,7 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
           HOME: process.env.HOME ?? '',
           ...(cfg.env ?? {}),
         }) as Record<string, string>,
+        ...(cfg.cwd ? { cwd: cfg.cwd } : {}),
         stderr: 'ignore',
       });
     }
@@ -290,41 +356,36 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
     }
   }
 
-  return {
+  const api: McpManager = {
     async start() {
       // 磁盘视图:保留名的 server 也列出来(error + 原因),用户在 MCP 设置里看得到它为什么没起来
-      const bySanitized = new Map<string, string>(); // 消毒后的 server 名 → 先到的 server
-      for (const [name, c] of enabledServers({ mcpServers: loadRawMcpServers(configFile) })) {
-        const entry: ServerEntry = {
-          name, cfg: c, transport: inferTransport(c), client: null, tools: [], status: 'connecting',
-          connecting: null, pendingClient: null, retryTimer: null, retryAttempt: 0, connectedAt: 0, configError: false,
-        };
-        servers.push(entry);
-        let rejected: string | undefined;
-        if (isReservedServerName(name)) rejected = RESERVED_SERVER_ERROR;
-        else {
-          const key = sanitizePart(name);
-          const first = bySanitized.get(key);
-          if (first === undefined) bySanitized.set(key, name);
-          else rejected = `its tool names would collide with server "${first}" (both bridge to "mcp__${key}__*"); rename one of them`;
-        }
-        if (rejected) {
-          entry.status = 'error';
-          entry.error = rejected;
-          entry.configError = true;
-          console.warn(`[mcp] server "${name}" not started: ${rejected}.`);
-        }
-      }
+      const raw = loadRawMcpServers(configFile);
+      for (const name of Object.keys(raw)) if (!isReservedServerName(name)) nameOwner.set(name, ''); // 关着的也占名
+      for (const [name, c] of enabledServers({ mcpServers: raw })) newEntry(name, c);
       // 失败互不阻断;并行连(没连上的转后台重试,不拖启动)
       await Promise.all(servers.filter((s) => !s.configError).map((s) => connect(s)));
       started = true;
       for (const s of servers) if (s.status === 'connected') claimTools(s); // 按名字典序,同步一口气认领完
-      if (!exitHook && servers.some((s) => s.transport === 'stdio')) {
-        exitHook = true;
-        process.on('exit', () => {
-          for (const s of servers) void s.client?.close().catch(() => {});
-        });
-      }
+      ensureExitHook();
+      for (const [origin, more] of queued.splice(0)) api.addServers(origin, more);
+    },
+
+    addServers(origin, more) {
+      if (disposed) return;
+      if (!started) { queued.push([origin, more]); return; }
+      const o = { pluginId: origin.id, pluginName: origin.name };
+      const added = Object.keys(more).sort().map((name) => newEntry(name, more[name], o));
+      ensureExitHook();
+      for (const s of added) if (!s.configError) void connect(s); // 后台连;连上后 refreshTools 认领(started 已为 true)
+    },
+
+    async removeServers(pluginId) {
+      const gone = servers.filter((s) => s.origin?.pluginId === pluginId);
+      if (!gone.length) return;
+      for (let i = servers.length - 1; i >= 0; i--) if (servers[i].origin?.pluginId === pluginId) servers.splice(i, 1);
+      const p = Promise.all(gone.map(closeEntry)).then(() => {});
+      closing.add(p);
+      try { await p; } finally { closing.delete(p); }
     },
 
     toolsForRun(enabledServerNames?: string[]) {
@@ -394,6 +455,7 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
         status: s.status,
         toolCount: s.tools.length,
         error: s.error,
+        ...(s.origin ? { origin: s.origin } : {}),
       }));
     },
 
@@ -406,11 +468,12 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
       // 超时后照样返回 —— 迟到的连接在 doConnect 里见 disposed 自己关掉。
       let cap: ReturnType<typeof setTimeout> | undefined;
       await Promise.race([
-        Promise.all(servers.map((s) => s.connecting?.catch(() => {}))),
+        Promise.all([...servers.map((s) => s.connecting?.catch(() => {})), ...closing]),
         new Promise<void>((resolve) => { cap = setTimeout(resolve, DISPOSE_WAIT_MS); cap.unref?.(); }),
       ]);
       if (cap) clearTimeout(cap);
       servers.length = 0;
     },
   };
+  return api;
 }

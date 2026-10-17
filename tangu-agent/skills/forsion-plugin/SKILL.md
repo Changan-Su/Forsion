@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.45.0
+  version: 1.47.0
   author: Forsion
   category: Forsion
 ---
@@ -68,6 +68,7 @@ Plugin authors: run the same checker before every release. It is the generic hal
 - **限时**:import + `activate` 合计限时 30s,超时按激活失败处理(设置页显示错因);超时的 `activate` / `deactivate` 宿主不会再等,但在它真正结束前**不会**再激活同一个插件(防止迟到的收尾清掉新实例),结束后自动补上。activate 里别等永远不回的连接 —— 连不上就先返回、后台重试。
 - **工具 provider id 用自己的命名空间**(`plugin:<你的 id>`):两个插件撞了同一个 id,后注册的覆盖前者。
 - **前置插件**:manifest `"requiresPlugins": ["other-id", { "id": "x", "minVersion": "1.2.0" }]`。前置没装 / 版本低 / 关着 / 没在跑时本插件休眠(列出但不运行),前置就位后自动激活;互相依赖成环的永不激活。
+- **Putting a view on the Agent Desk**: inside a tool's `execute(args, ctx)`, `ctx.presentDesk?.({ views: [{ type: 'view', view: 'plugin:<plugin id>:<view id>' }], size: 'half' })` does what the model's `desk_present` does, but code guarantees it instead of the model remembering (computer-use presents its live view this way after the first successful action). Use optional chaining: TUI and cloud runs have no Desk. Present once per run, tracked by `ctx.runId` (fall back to `ctx.sessionId`). Leave out `name` and the host uses the view's registered title, which follows the interface language (the engine does not know it). After the user closes the Desk the host keeps it closed until their next message.
 - 类型契约 `types/tangu-agent.d.ts` 是 apiVersion 1 的 API 拷贝,随模板分发;宿主升 apiVersion 时替换它并同步 manifest 的 `apiVersion`。
 
 装本机:整夹拷到 `~/.forsion/plugins/<id>/` → 设置页重扫即生效,不用重启。同 id 覆盖升级也是重扫即热换代:单文件入口(esbuild 打成一个 bundle,推荐)直接换;多文件的**纯 ESM** 包(`"type": "module"`,入口相对 import 同包文件)在 Node ≥ 22.15 上也能整包换代。宿主证明不了整张模块图都会换代的,如实标「需重启」:包里有 CommonJS(`.cjs`、`require('./x')`、`createRequire` 造的函数)、原生 `.node`、任一层自带 `node_modules`、软链、`import(变量)`、引到插件目录外的文件,或运行时太旧。同一进程里热换代满 20 次后也一律「需重启」(旧模块卸不掉,省内存)。
@@ -204,13 +205,28 @@ ctx.openMiniPanel?.('mini-counter', {
 
 包根 `skills/`(全局技能)是原地扫描、不落盘拷贝,不在上表内。因此 onboarding 里**不要** recommends 自家已内嵌的 agent/skill(会引导去商店重复装)。真实范例:`Forsion-Instrumentality-Project/bluebird/`。
 
-### 插件能自带 MCP 吗?——不能,也别绕(2026-09-06 立规)
+### 插件自带的 MCP server 与 hooks(2026-10-17 起;只收 stdio MCP、只开观察档 hooks)
 
-标志文件只有上面五种,**没有 MCP 这一类**;引擎的 MCP 配置是 `~/.tangu/config.json` 的 `mcp` 段,进程启动时冻结(改了要重启引擎),插件也没有写它的接缝。要给 agent 工具,按能力住在哪选路,不要造第三条:
+两样都写在**包里引擎插件的 `tangu-plugin.json`**(不是包根的 `manifest.json`),开关就跟着引擎插件走:捆绑包在桌面上拨开关时级联到引擎插件,所以「停用插件 → 它的 MCP 进程和 hooks 一起停」是现成的。两样都要在插件**进入运行态之后**才登记,启动时随即休眠的插件不会拉起子进程。入口里照常 `ctx.registerPlugin({ id, name, … })` 登记一次 —— **没登记的引擎插件没有开关**(引擎当它常开),桌面停用捆绑包时级联关不到它,MCP 进程就一直开着;只想带 MCP / hooks 的插件不注册工具也行,但这一步不能省。
 
-- **能力在引擎/本机可跑** → 捆绑包 `tangu-plugins/<pid>/` 里的引擎插件 `registerToolProvider`,工具原地进工具面、自动过审批闸(computer-use / stickers 都是这样)。
-- **能力在某台服务端**(如 Forsion server 的后台管理)→ **服务端自己出 MCP 端点**,插件只做「接入卡」:探测端点、签长效令牌、给出 `claude mcp add …` 命令与 Forsion 设置 → MCP 可粘贴的 JSON。先例 = server-admin 0.7.0 的「接入 Agent(MCP)」+ server `microserver/admin-mcp/`(`/api/admin/mcp`)。这样 Tangu / Claude Code / Codex 吃同一个端点,插件不持有任何监听。
-- 声明式 `mcp.json` 标志**刻意没加**:服务器地址与令牌是运行期数据,写不进 manifest;真有静态 stdio MCP 要随包发时再议(约 30 行,在 `plugins/bundles.ts` + `mcp/config.ts` 合并)。
+```json
+{
+  "id": "my-plugin", "name": "My plugin", "version": "1.0.0", "apiVersion": 1, "entry": "dist/index.js",
+  "mcpServers": {
+    "mytools": { "command": "node", "args": ["${pluginDir}/mcp/server.js"], "env": { "DATA": "${pluginDir}/data" } }
+  },
+  "hooks": {
+    "PostToolUse": [{ "matcher": "write_file", "hooks": [{ "type": "command", "command": "node ${pluginDir}/hooks/audit.js" }] }],
+    "Stop": [{ "hooks": [{ "type": "command", "command": "node ${pluginDir}/hooks/archive.js" }] }]
+  }
+}
+```
+
+- **MCP 只收 stdio**(随包发的静态 server):要有 `command`,`url` / `headers` 不收 —— 远端 server 的地址与令牌是运行期数据,写不进 manifest。能力在某台服务端的,照旧让**服务端自己出 MCP 端点**、插件只做「接入卡」(先例 = server-admin 的「接入 Agent(MCP)」+ server `microserver/admin-mcp/`)。
+- `${pluginDir}` 在 command / args / env 里展开成插件目录的绝对路径;stdio 子进程的工作目录就是插件目录。子进程拿不到引擎凭据(同用户自己配的 MCP)。
+- 工具名照常是 `mcp__<server 名>__<工具>`,server 名用你声明的那个(≤32 字符,字母数字 `_` `-`),取得短而独特;**和用户自己配的 server 撞名时你这份不起**,在设置 → MCP 里显示成错误。设置 → MCP 只读列出插件自带的 server(写着来自哪个插件),用户要关就停用插件。只在本机引擎上生效,云端 worker 没有 MCP。
+- **hooks 只开观察档**:`SessionStart` / `PostToolUse` / `Stop` / `SubagentStart` / `SubagentStop`。hook 照常跑、照常从 stdin 收事件 JSON,但**输出一律不进判定**:`decision: block`、退出码 2、`continue: false`、`additionalContext` 都没有效果 —— 拦不住工具、停不了循环、也往对话里加不了东西。`PreToolUse` / `PermissionRequest` / `UserPromptSubmit` / `PreCompact` 不收(那是审批面的一部分)。适合审计、会话归档、写完文件跑一下自己的索引。设置 → Hooks 只读列出它们(「来自插件 X · 只观察」),排在用户自己的 hook 之后。
+- hook 和 MCP server 都是插件自己的代码,信任级别与引擎插件相同,装上即生效、不走「需审阅」;**别在 hook 里做慢事**(它在 run 的关键路径上,会拖慢每一次工具调用),也别把用户数据往外发。
 
 ### 把动作搬进引擎侧:三档路由(通用纪律 5 的落地写法)
 
@@ -378,6 +394,18 @@ ctx.registerCommand({
 `invoke.run` 可以返回一个字符串,作为**这一次调用**的回执回给模型(如 `'opened week 40'`),优先于 `state()`。
 回执按调用给,并发的两次调用各拿各的;`state()` 每次起 run 都会被读进目录,别在里面放一次性的结果。
 回执与 `state` 一样会被截到 200 字符。
+
+要把**查询结果**交给模型(「白板上有哪些框」「这一页有几条批注」),让 `invoke.run` 返回 `{ state?, result }`(2026-10-17 起):
+`result` 是字符串或能 `JSON.stringify` 的值,渲染端截到约 8000 字,引擎把它圈成**不可信数据**交给模型(带随机标签的围栏,
+模型不会把里面的话当指令)。`state` 仍是一句 200 字以内的确认。老宿主只认字符串回执:对象回执在那里等于没有回执,
+所以要兼容老宿主就别只靠 `result` 传达「做成了没有」。
+
+```js
+invoke: {
+  description: 'List the frames on the open whiteboard (id, title, element count).',
+  run: () => { const frames = listFrames(); return { state: `${frames.length} frames`, result: frames } },
+}
+```
 
 三条硬纪律:
 
@@ -823,6 +851,19 @@ refresh = (rows) => h.update({ ...spec, rows })   // 数据刷新走 update:排�
 | `vaultRoot()` | 库的绝对路径(把路径喂给 Agent 的 host 工具时才需要)。⚠️含用户名/组织目录等**敏感信息,不得默认持久化或上报**;切库瞬间与主进程短暂不同源,**别缓存过夜** |
 | `reveal(path)` | 在系统文件管理器里打开该路径所在目录并高亮它(2026-08-29 起)。⚠️对**不存在**的路径是静默 no-op,而工作文件夹是首写才诞生 → **先 `writeFile` 一份 README 再 reveal 它**;桥缺席时整条方法不存在,`if (ctx.app.reveal)` 才画按钮 |
 | `trash(path)` | 把库内的一个文件或文件夹移进回收站(2026-10-05 起),等同用户在文件树里删它:宿主收掉开着它的编辑器与标签、提示「已移入回收站」,之后可在回收站恢复。返回 Promise,路径不存在 / 没有活动库 / 调用途中换了库 / 移动失败 → **reject**(路径按清单逐字匹配,只归一分隔符与首尾斜杠)。⚠️**文件夹连同里面的一切一起走,宿主不确认、也不看里面是不是别人的文件** —— 只在确认那个文件夹里全是你自己的东西时才传文件夹,否则传文件;⚠️**先让自己的编辑器停笔**(你的视图若还握着待存内容,下一次自动保存会把文件写回来);只有带回收站的宿主(本机桌面)才有这个方法,web / 移动端 / 2.12.2 及更早**整个不存在** → `ctx.app.trash` 没有就别画删除按钮 |
+
+### 库级文件事件 ctx.app.onVaultEvent(2026-10-17 起)
+
+`const off = ctx.app.onVaultEvent?.((events) => …)`:库里文件的新建 / 删除 / 改名 / 外部修改,约 200ms 攒成一批给你,插件停用时宿主自动退订。反链、自动整理、「新文件套模板」这类插件用它,别再轮询 `listFiles`。
+
+| `kind` | 什么时候来 |
+|---|---|
+| `create` / `delete` | 任何笔记或文件进出库的清单,不管是谁做的(用户在 Forsion 里、别的程序、同步)。单独的文件夹不报 |
+| `rename` | 在 Forsion 里(任何窗口)改名 / 移动:`{ path: 新, from: 旧 }`;整个文件夹挪走 = 一条 `folder: true`。**同一次改名不会再报一对删 / 建**。别的程序改的名分不出来,照「删 + 建」来 |
+| `modify` | 内容在**本窗编辑器之外**变了(别的程序、Tangu、别的窗口、同步)。正在打开的那篇里的打字不在这里报,当前页用 `ctx.app.subscribePage` |
+| `vault` | 换库或关库:你缓存的清单作废,重读 |
+
+路径与 `readFile` 同一种写法(vault 相对、`/` 分隔)。没开库时什么都不来。回调里别做重活:一批可能有上百条(批量移动),先合并再处理。老宿主没有 → 可选链,退回轮询。
 
 ### 统一左栏列表源(2026-08-25 起)
 
@@ -1516,6 +1557,12 @@ const off = ctx.app.watchFile?.('Snippets/latex.js', () => reload())
   (定时器、DOM 监听、内嵌的 CodeMirror 实例)。容器上有宿主主题变量但**没有样式重置**,自己带样式、深浅色都要过。
 - **大块数据用 `loadData/saveData`,别塞 localStorage**:`registerSetting` 是每键一个字符串,没有原子性。
   用户手改坏了 JSON,宿主返回 `null` 当没写过 —— 插件要能靠默认值起来。
+- **想让这份数据跟着账号走,manifest 写 `"syncData": true`**(2026-10-17 起,桌面 / 手机;网页版不同步):
+  登录后 `saveData` 先写本机、后台推上云端,换设备时 `loadData` 先拉到较新的那份再返回(最多等 3 秒,
+  没登录 / 断网照旧只用本机)。**整份取较新的,不做字段合并** —— 两台设备都改过,**编辑**得较晚的那次赢(离线改、晚上传的照样按编辑时刻比),
+  另一份服务端留一版。单份 ≤512 KB、每个账号 ≤100 个插件。用户可以在插件详情页逐台设备关掉。
+  内容服务端只存不读,不进任何模型上下文;但**别往里放密钥 / 令牌**(它会出现在用户的每台设备上)。
+  `loadData` 只在调用时对一次账,**运行中别的设备改了不会推给你** —— 要实时互通的数据别走这条。
 - **`watchFile` 缺位时整条方法不挂**(不是空壳):`if (ctx.app.watchFile) … else 轮询` 才走得对。
   它只报「内容变了」,新建/删除/改名不报;自己 `writeFile` 落的盘不会回声。
 

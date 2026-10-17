@@ -12,7 +12,7 @@
 .iv-btn { width: 28px; height: 28px; padding: 0; border: 0; border-radius: 50%; display: grid; place-items: center; background: none; color: var(--text-muted); cursor: pointer; }
 .iv-btn:hover:not(:disabled) { background: var(--overlay-light); color: var(--text); }
 .iv-btn:disabled { opacity: .35; cursor: default; }
-.iv-btn:focus-visible, .iv-arrow:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 1px; }
+.iv-btn:focus-visible, .iv-arrow:focus-visible { outline: 2px solid var(--signal-line); outline-offset: 1px; }
 .iv-zoom { min-width: 46px; text-align: center; color: var(--text); font-variant-numeric: tabular-nums; }
 .iv-sep { width: 1px; height: 16px; margin: 0 6px; background: var(--border); }
 

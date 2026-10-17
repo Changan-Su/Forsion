@@ -14,6 +14,7 @@ export {
   trustHook,
   setHookEnabled,
   syncUserTrust,
+  withoutPluginHooks,
 } from './config.js';
 export { foldVerdict } from './events.js';
 export { runHooks, executeHook, parseHookOutput } from './runner.js';

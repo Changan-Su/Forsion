@@ -27,7 +27,7 @@ import { forgetUserSpace } from './userSpaces'
 import { NotificationHost } from './components/NotificationHost'
 import { WhatsNewHost } from './components/WhatsNewDialog'
 import { DesktopStatusBar, installStatusBarItems } from './statusbar/items'
-import { UnitRemoteSurface } from './components/UnitSwitcher'
+import { UnitRemoteSurface, runUnitRoutePayload } from './components/UnitSwitcher'
 import { installNotificationWiring } from './stores/notificationWiring'
 import { useShallow } from 'zustand/react/shallow'
 import { installFileDropGuard } from './fileDropGuard'
@@ -90,6 +90,8 @@ export function Root() {
     }
     if (action === 'open-agents') openAgentProfile(useApp.getState().defaultAgentSlug || '')
     if (action === 'open-agent' && payload && /^[a-z0-9][a-z0-9-]{0,63}$/.test(payload)) openAgentProfile(payload)
+    // 设置 › 设备(浮窗)里选了去处:远程面 / vaultSide 在主窗,由主窗执行。
+    if (action === 'unit-route' && payload) runUnitRoutePayload(payload)
   }), [])
   const theme = useTheme()
   const visualTheme = useVisualTheme()

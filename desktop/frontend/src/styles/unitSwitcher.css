@@ -1,13 +1,11 @@
-/* Forsion Unit 切换器(Ribbon head 常驻件)。只引用语义 token(DESIGN.md §2);
- * 菜单属 3.5 层薄浮层:bg-card + 描边 + 阴影(按钮/药丸/芯片保边 —— 边就是形状,§5)。 */
+/* Forsion Unit 切换器(Ribbon 命令区胶囊)+ 设置 › 设备(UnitSettings)。只引用语义 token(DESIGN.md §2);
+ * 右键小菜单属 3.5 层薄浮层:bg-card + 描边 + 阴影(按钮/药丸/芯片保边 —— 边就是形状,§5)。 */
 
 .unitsw-pill { position: relative; }
 .unitsw-pill .unitsw-ic { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; }
-.unitsw-pill .unitsw-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.unitsw-pill .unitsw-chev { opacity: 0.55; flex: none; }
+.unitsw-pill .unitsw-name { flex: 1; min-width: 0; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .unitsw-pill.on,
 .unitsw-pill:hover { background: var(--overlay-medium); }
-.unitsw-pill[data-busy] { opacity: 0.6; pointer-events: none; }
 .unitsw-emoji { font-size: 14px; line-height: 1; }
 
 .unitsw-backdrop { position: fixed; inset: 0; z-index: 1000; }
@@ -91,7 +89,7 @@
 /* 迷你开关(纯 CSS 药丸):data-on 时滑块右移 + accent 填充。 */
 .unitsw-switch { flex: none; width: 26px; height: 15px; border-radius: var(--radius-pill, 999px); background: var(--overlay-strong); position: relative; transition: background 0.15s ease; }
 .unitsw-switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 11px; height: 11px; border-radius: 50%; background: var(--bg-card); transition: transform 0.15s ease; }
-.unitsw-hosttoggle[data-on] .unitsw-switch { background: var(--accent); }
+.unitsw-hosttoggle[data-on] .unitsw-switch { background: var(--signal-mark); }
 .unitsw-hosttoggle[data-on] .unitsw-switch::after { transform: translateX(11px); }
 .unitsw-foot-hint { display: flex; align-items: center; gap: 6px; padding: 0 9px 4px; font-size: var(--ui-font-caption, 11px); color: var(--text-faint); user-select: text; }
 .unitsw-refresh { border: none; background: transparent; color: var(--text-faint); cursor: pointer; display: inline-flex; padding: 2px; border-radius: 4px; }
@@ -141,5 +139,15 @@
 .unitsw-sublink:hover { background: var(--overlay-medium); color: var(--text-muted); }
 .unitsw-subswitch { flex: none; display: inline-flex; padding: 0; border: none; background: transparent; cursor: pointer; }
 .unitsw-subswitch:disabled { cursor: default; }
-.unitsw-subswitch[data-on] .unitsw-switch { background: var(--accent); }
+.unitsw-subswitch[data-on] .unitsw-switch { background: var(--signal-mark); }
 .unitsw-subswitch[data-on] .unitsw-switch::after { transform: translateX(11px); }
+
+/* 设置 › 设备(原胶囊菜单整页搬家,10-17):行沿用菜单语汇,住进设置面板 —— 不再限高,四周按面板内距收齐。 */
+.unitset-list { max-height: none; padding: 2px 8px 8px; }
+.unitset-rows:empty { display: none; }
+.unitset-page .unitsw-row.on { background: var(--accent-light); }
+.unitset-page .settings-panel-icon .unitsw-dot { width: 8px; height: 8px; }
+.unitset-hint { user-select: text; }
+.unitset-paired { padding: 2px 8px 8px; }
+.unitset-paired .unitsw-paired-row { padding: 4px 9px; }
+.unitset-page .is-locked .settings-row-control { opacity: .48; }

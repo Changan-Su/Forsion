@@ -48,7 +48,7 @@
 .selbar-btn:focus-visible,
 .selbar-dot:focus-visible,
 .selbar-menu-item:focus-visible {
-  outline: var(--focus-ring, 1px) solid var(--accent-ink, var(--accent));
+  outline: var(--focus-ring, 1px) solid var(--signal-line, var(--accent-ink));
   outline-offset: -2px;
 }
 .selbar-btn svg { flex: 0 0 auto; }

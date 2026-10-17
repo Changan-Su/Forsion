@@ -118,6 +118,8 @@ export function customAccentVars(color: string, dark: boolean): Record<string, s
     '--on-accent': onAccent,
     '--on-accent-ink': readableOnAccent(accentInk),
     '--user-bg': `rgba(${rgb},${dark ? '0.16' : '0.10'})`,
+    // ponytail: RGB 极差 < 24 算无彩,够分「灰黑白」与「有色」;要按感知彩度再换 OKLCH。
+    '--signal-skin': Math.max(r, g, b) - Math.min(r, g, b) < 24 ? (dark ? '#8fb4e3' : '#2c5f9e') : rgbCss(accentInk),
   }
 }
 

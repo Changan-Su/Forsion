@@ -53,6 +53,10 @@ describe('normalizeMainAction', () => {
     expect(normalizeMainAction('open-agents', undefined)).toEqual({ action: 'open-agents' })
     expect(normalizeMainAction('open-agent', 'my-agent')).toEqual({ action: 'open-agent', payload: 'my-agent' })
     expect(normalizeMainAction('open-agent', 'x'.repeat(65))).toBeUndefined()
+    // 设置 › 设备(浮窗)选了去处 → 主窗执行;载荷是 JSON 串,4096 封顶
+    expect(normalizeMainAction('unit-route', '{"kind":"side","side":"local"}')).toEqual({ action: 'unit-route', payload: '{"kind":"side","side":"local"}' })
+    expect(normalizeMainAction('unit-route', 'x'.repeat(4097))).toBeUndefined()
+    expect(normalizeMainAction('unit-route', undefined)).toBeUndefined()
     expect(normalizeMainAction('space-removed', '')).toBeUndefined()
     expect(normalizeMainAction('space-removed', { id: 'x' })).toBeUndefined()
     expect(normalizeMainAction('quit', undefined)).toBeUndefined()
