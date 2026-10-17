@@ -9,7 +9,8 @@
  *
  * 判据:
  *   1 默认开:ribbon 有主页图标,点进去主区是主页视图
- *   2 收纳架默认只露一排(6 项 + 全部),「全部」进入二级收纳层 = spaceRegistry 的完整投影
+ *   2 输入区下一排近况卡(缺省 = 架子上头四个 Space),收纳架让出这几张、其余只露一排(6 项 + 全部),
+ *     「全部」进入二级收纳层 = spaceRegistry 的完整投影
  *   3 输入区字面复用 ChatView 的 ProjectSelector + Composer2：发送前明示会话落在哪个项目，
  *     可切到「不在项目中工作」并即时回显；菜单遵循选择面等宽/32px 行/圆角分组/渐进搜索，
  *     支持 Home/方向键/Escape 与焦点归还；模式/模型/附件/发送全在，旧浏览器搜索选择器完全不在
@@ -31,7 +32,9 @@
  *  12 自定义壁纸:图片进 IndexedDB、偏好进 localStorage;reload 后仍恢复,且设置面板三种来源齐全。
  *  13 壁纸材质:Chatbox 文本区与模型/模式等控件共用聚焦景深;玻璃总开关关掉时回到不透明材质。
  *  14 Bing 壁纸经固定目标 Electron IPC 暴露,不重新引入浏览器搜索或任意 URL 代理。
- *  15 主题背景:四个预设(三个随 token 变化的图形 + Hack2Gate 随包海报,浅/深两版跟 html.dark);右键空白直达紧凑、无重叠的二级收纳层。
+ *  15 主题背景:星轨 / 日行 / 素笺三个随 token 变化的图形;Hack2Gate 随包海报在「图片」来源里(浅/深两版跟 html.dark);
+ *     右键空白直达紧凑、无重叠的二级收纳层。
+ *  15b 壁纸动效:缺省开、在动;面板里关掉 = 停在原地(paused,不是 none);设置窗写同一份偏好(storage 事件)主页跟着变。
  *  16 ⚠️主页视角固定:.hp-root 压根不是滚动容器(壁纸 scale(1.001) 曾撑出 1px → 四边滚动条);
  *     clip 之后放不下就是裁掉,所以矮窗口(1100×420,须先放开 minimumSize)下时钟/输入区/Spaces 坞必须仍在 root 内;
  *     且右键空白这个手势**双向**可用 —— 收纳层面板内右键空白必须原路退回主页。
@@ -104,6 +107,7 @@ const SNAP = `(() => {
     ribbonOrder: JSON.parse(localStorage.getItem('forsion_tangu_ribbon_order') || '[]'),
     totalTiles: Number(document.querySelector('.hp-spaces')?.getAttribute('data-total') || 0),
     more: vis('.hp-more'),
+    cards: [...document.querySelectorAll('.hp-status-card')].map((e) => e.getAttribute('data-space-id') || ''),
     composer: vis('.hp-composer .t2c-card'),
     legacySearch: vis('.hp-engine, .hp-picker, .hp-input'),
     active: localStorage.getItem('forsion_tangu_active_space'),
@@ -341,9 +345,11 @@ async function main() {
     //   ⚠️分母不能用**可见的** .rb-space:ribbon 装不下会把尾部收进收纳夹(实测只剩 6 个,坞里 7 个),
     //   拿它当等式两边只会得到一个恒红的断言。判据改成「展开后 ribbon 上看得见的(除主页)都在坞里」。
     const ribbonOthers = s0.spaces.filter((n) => !HOME_NAMES.includes(n))
-    const compactOk = s0.tiles.length <= COMPACT_TILE_LIMIT_FOR_TEST + 1
+    // 近况卡占掉的 Space 不在架子上重复:架子上的 = 全部 - 卡片
+    const shelfCount = s0.totalTiles - s0.cards.length
+    const compactOk = s0.cards.length === Math.min(4, s0.totalTiles) && s0.tiles.length <= COMPACT_TILE_LIMIT_FOR_TEST + 1
       && s0.totalTiles === ribbonOthers.length
-      && (s0.totalTiles <= COMPACT_TILE_LIMIT_FOR_TEST ? s0.more === 0 : s0.more === 1)
+      && (shelfCount <= COMPACT_TILE_LIMIT_FOR_TEST ? s0.more === 0 : s0.more === 1)
     await openOrganizer(win)
     const expanded = await win.evaluate(SNAP)
     const dockOk = ribbonOthers.length > 0 && expanded.organizer === 1 && expanded.organizerTiles.length === ribbonOthers.length
@@ -359,10 +365,12 @@ async function main() {
     check(
       '2 收纳架只露一排,二级收纳层列全且点击能切 Space',
       compactOk && dockOk && jumped && afterTile.active === 'tangu',
-      JSON.stringify({ compactTiles: s0.tiles, total: s0.totalTiles, more: s0.more, organizer: expanded.organizerTiles, spaces: s0.spaces, jumped, active: afterTile.active }),
+      JSON.stringify({ cards: s0.cards, compactTiles: s0.tiles, total: s0.totalTiles, more: s0.more, organizer: expanded.organizerTiles, spaces: s0.spaces, jumped, active: afterTile.active }),
     )
 
     // 3 首页不再养第二套输入框:直接出现 Composer2 本体,旧搜索引擎 UI 为 0。
+    //   ⚠️项目药丸一律按 `.project-selector:not(.runloc)` 找:旁边的「运行位置」胶囊(RunLocationPicker,10-14)
+    //   借了同一套 .project-selector / .project-pill 类,不排掉就数出两个、点到的是运行位置那颗。
     await enterHome(win)
     const composed = await win.evaluate(SNAP)
     const composerControls = await win.evaluate(`(() => ({
@@ -370,8 +378,8 @@ async function main() {
       add: document.querySelectorAll('.hp-composer .add-pill-wrap').length,
       mode: document.querySelectorAll('.hp-composer .mode-pill-wrap').length,
       send: document.querySelectorAll('.hp-composer .t2c-send').length,
-      project: document.querySelectorAll('.hp-composer .project-selector').length,
-      projectName: (document.querySelector('.hp-composer .project-pill-name')?.textContent || '').trim(),
+      project: document.querySelectorAll('.hp-composer .project-selector:not(.runloc)').length,
+      projectName: (document.querySelector('.hp-composer .project-selector:not(.runloc) .project-pill-name')?.textContent || '').trim(),
     }))()`)
     check(
       '3 输入区复用 Composer2 完整控件,旧浏览器搜索 UI 已移除',
@@ -380,14 +388,14 @@ async function main() {
         && composerControls.project === 1 && composerControls.projectName.length > 0,
       JSON.stringify({ composer: composed.composer, legacySearch: composed.legacySearch, ...composerControls }),
     )
-    await win.click('.hp-composer .project-pill')
-    await win.waitForSelector('.hp-composer .project-menu-projectless', { state: 'visible' })
+    await win.click('.hp-composer .project-selector:not(.runloc) .project-pill')
+    await win.waitForSelector('.hp-composer .project-selector:not(.runloc) .project-menu-projectless', { state: 'visible' })
     await win.waitForTimeout(220)
     const projectMenuUi = await win.evaluate(`(() => {
-      const pill = document.querySelector('.hp-composer .project-pill')
-      const menu = document.querySelector('.hp-composer .project-menu')
-      const item = document.querySelector('.hp-composer .project-menu-list .project-menu-item')
-      const utility = document.querySelector('.hp-composer .project-menu-projectless')
+      const pill = document.querySelector('.hp-composer .project-selector:not(.runloc) .project-pill')
+      const menu = document.querySelector('.hp-composer .project-selector:not(.runloc) .project-menu')
+      const item = document.querySelector('.hp-composer .project-selector:not(.runloc) .project-menu-list .project-menu-item')
+      const utility = document.querySelector('.hp-composer .project-selector:not(.runloc) .project-menu-projectless')
       const p = pill.getBoundingClientRect(), m = menu.getBoundingClientRect(), i = item.getBoundingClientRect()
       const pcs = getComputedStyle(pill), mcs = getComputedStyle(menu), ucs = getComputedStyle(utility)
       return {
@@ -419,26 +427,26 @@ async function main() {
     await win.keyboard.press('ArrowDown')
     const projectKeyboardMoved = await win.evaluate(`document.activeElement?.matches('.project-menu-item:not(.active)') || false`)
     await win.keyboard.press('Escape')
-    const projectKeyboardClosed = await win.evaluate(`!document.querySelector('.hp-composer .project-menu') && document.activeElement?.matches('.hp-composer .project-pill')`)
+    const projectKeyboardClosed = await win.evaluate(`!document.querySelector('.hp-composer .project-selector:not(.runloc) .project-menu') && document.activeElement?.matches('.hp-composer .project-selector:not(.runloc) .project-pill')`)
     check(
       '3b Project 菜单支持 Home / 方向键 / Escape，关闭后焦点回到 pill',
       projectKeyboardHome && projectKeyboardMoved && projectKeyboardClosed,
       JSON.stringify({ projectKeyboardHome, projectKeyboardMoved, projectKeyboardClosed }),
     )
-    await win.click('.hp-composer .project-pill')
-    await win.waitForSelector('.hp-composer .project-menu-projectless', { state: 'visible' })
-    await win.click('.hp-composer .project-menu-projectless')
+    await win.click('.hp-composer .project-selector:not(.runloc) .project-pill')
+    await win.waitForSelector('.hp-composer .project-selector:not(.runloc) .project-menu-projectless', { state: 'visible' })
+    await win.click('.hp-composer .project-selector:not(.runloc) .project-menu-projectless')
     await win.waitForTimeout(180)
-    const projectlessName = await win.locator('.hp-composer .project-pill-name').textContent()
-    await win.click('.hp-composer .project-pill')
-    const projectlessSelected = await win.locator('.hp-composer .project-menu-projectless .project-menu-check').count() === 1
+    const projectlessName = await win.locator('.hp-composer .project-selector:not(.runloc) .project-pill-name').textContent()
+    await win.click('.hp-composer .project-selector:not(.runloc) .project-pill')
+    const projectlessSelected = await win.locator('.hp-composer .project-selector:not(.runloc) .project-menu-projectless .project-menu-check').count() === 1
     check(
       '3c Homepage Project 可切到项目外且立即回显',
       !!projectlessName?.trim() && projectlessSelected,
       JSON.stringify({ projectlessName: projectlessName?.trim(), projectlessSelected }),
     )
     // 后续用例继续按 Work 默认 Project 运行，不让这条交互断言污染其他场景。
-    await win.click('.hp-composer .project-menu-list .project-menu-item')
+    await win.click('.hp-composer .project-selector:not(.runloc) .project-menu-list .project-menu-item')
     await win.waitForTimeout(180)
 
     // 4 切去 Tangu 不许污染主页命名布局。真发送由本台架的断网后端门控;
@@ -635,6 +643,7 @@ async function main() {
         wallpaper: root?.getAttribute('data-wallpaper') || '',
         image: document.querySelector('.hp-wallpaper')?.style.backgroundImage || '',
         source: prefs.source,
+        choice: prefs.imageChoice,
         backdrop: card ? getComputedStyle(card).backdropFilter : '',
         edgeBackdrop: getComputedStyle(document.querySelector('.hp-wallpaper-edge')).backdropFilter,
         edgeMask: getComputedStyle(document.querySelector('.hp-wallpaper-edge')).maskImage,
@@ -642,8 +651,8 @@ async function main() {
     })()`)
     check(
       '12 自定义壁纸:三来源齐全,原图进入设备存储并立即成为主页舞台',
-      JSON.stringify(wallpaperControls.sources) === JSON.stringify(['theme', 'bing', 'custom'])
-        && custom.wallpaper === 'true' && custom.image.startsWith('url("blob:') && custom.source === 'custom'
+      JSON.stringify(wallpaperControls.sources) === JSON.stringify(['theme', 'bing', 'image'])
+        && custom.wallpaper === 'true' && custom.image.startsWith('url("blob:') && custom.source === 'image' && custom.choice === 'custom'
         && custom.edgeBackdrop.includes('blur(') && custom.edgeMask.includes('gradient('),
       JSON.stringify({ wallpaperControls, custom }),
     )
@@ -664,7 +673,8 @@ async function main() {
         await win.screenshot({ path: bingOut })
         console.log(`  截图 → ${bingOut}`)
       } else console.log('  Bing 真机截图跳过:当前网络未返回目录')
-      await win.click('.hp-wallpaper-sources button[data-source="custom"]')
+      await win.click('.hp-wallpaper-sources button[data-source="image"]')
+      await win.click('.hp-wallpaper-images button[data-image="custom"]')
       await win.waitForTimeout(350)
     }
 
@@ -738,7 +748,8 @@ async function main() {
     }))()`)
     // Hack2Gate 是随包位图:走照片管线(data-wallpaper),浅/深两版跟 html.dark 走。
     // 反向验证:删掉 homepage.css 里 html.dark 那条 → dark 仍是 light 图,必红。
-    await win.click('.hp-theme-presets button[data-preset="hack2gate"]')
+    await win.click('.hp-wallpaper-sources button[data-source="image"]')
+    await win.click('.hp-wallpaper-images button[data-image="hack2gate"]')
     await win.waitForTimeout(150)
     const hack2gate = await win.evaluate(`(() => {
       const html = document.documentElement
@@ -749,7 +760,32 @@ async function main() {
       html.classList.toggle('dark', wasDark)
       return out
     })()`)
-    await win.click('.hp-theme-presets button[data-preset="topography"]')
+    await win.click('.hp-wallpaper-sources button[data-source="theme"]')
+    await win.click('.hp-theme-presets button[data-preset="path"]')
+    // 15b 动效:日行的光晕缺省在呼吸;面板里关掉 = 停在原地;设置窗(另一扇窗 = storage 事件)打开 → 主页跟着动起来
+    const haloAnim = () => win.evaluate(`(() => {
+      const h = document.querySelector('.hp-wallpaper-art .hpw-halo')
+      const cs = h ? getComputedStyle(h) : null
+      return { motion: document.querySelector('.hp-root')?.getAttribute('data-motion') || '', name: cs?.animationName || '', state: cs?.animationPlayState || '' }
+    })()`)
+    const motionOn = await haloAnim()
+    await win.click('.hp-wallpaper-options button[data-option="motion"]')
+    await win.waitForTimeout(150)
+    const motionOff = await haloAnim()
+    await win.evaluate(`(() => {
+      const key = 'forsion.homepage.wallpaper.v1'
+      localStorage.setItem(key, JSON.stringify({ ...JSON.parse(localStorage.getItem(key) || '{}'), motion: true }))
+      window.dispatchEvent(new StorageEvent('storage', { key }))
+    })()`)
+    await win.waitForTimeout(200)
+    const motionSynced = await haloAnim()
+    check(
+      '15b 壁纸动效缺省开;关掉停在原地(paused);设置写同一份偏好,主页跟着变',
+      motionOn.motion === 'on' && motionOn.name === 'hpw-breathe' && motionOn.state === 'running'
+        && motionOff.motion === 'off' && motionOff.name === 'hpw-breathe' && motionOff.state === 'paused'
+        && motionSynced.motion === 'on' && motionSynced.state === 'running',
+      JSON.stringify({ motionOn, motionOff, motionSynced }),
+    )
     await win.click('.hp-wallpaper-head > button')
     await win.waitForTimeout(350)
     const themeStage = await win.evaluate(`(() => {
@@ -760,7 +796,7 @@ async function main() {
         preset: root?.getAttribute('data-theme-preset') || '',
         inlineImage: paper?.style.backgroundImage || '',
         backgroundImage: paper ? getComputedStyle(paper).backgroundImage : '',
-        art: getComputedStyle(document.querySelector('.hp-wallpaper-art')).backgroundImage,
+        art: document.querySelectorAll('.hp-wallpaper-art .hpw-static').length,
       }
     })()`)
     // ⚠️ 主页永不滚:壁纸层的 scale(1.001) 曾把滚动溢出撑出 1px,mac 经典滚动条下就是四边各来一条。
@@ -861,10 +897,10 @@ async function main() {
     }, winBounds)
     await win.waitForTimeout(500)
     check(
-      '15 四套自适应主题图形可选,高密度收纳层紧凑且头部不重叠',
+      '15 三套自适应主题图形 + 图片里的 Hack2Gate 可选,高密度收纳层紧凑且头部不重叠',
       themeStage.wallpaper === '' && themeStage.inlineImage === '' && themeStage.backgroundImage.includes('gradient(')
-        && themeStage.preset === 'topography' && themeStage.art.includes('gradient(')
-        && JSON.stringify(themePresets.ids) === JSON.stringify(['rings', 'topography', 'weave', 'hack2gate']) && themePresets.previews
+        && themeStage.preset === 'path' && themeStage.art === 1
+        && JSON.stringify(themePresets.ids) === JSON.stringify(['orbit', 'path', 'paper']) && themePresets.previews
         && hack2gate.wallpaper === 'true' && hack2gate.light.includes('hack2gate-light') && hack2gate.dark.includes('hack2gate-dark') && hack2gate.size === 'cover'
         && rightClickOrganizer.organizer === 1 && rightClickOrganizer.blur.includes('blur(')
         && rightClickOrganizer.panelWidth <= 600 && rightClickOrganizer.columns === 6
@@ -902,14 +938,20 @@ async function main() {
           await win.evaluate(`document.querySelector('.lucide-moon')?.closest('button')?.click()`)
           await win.waitForTimeout(900)
         }
-        // Hack2Gate 是位图、浅/深两张,只能看图自查;最后切回 topography,后续用例状态不变。
-        for (const preset of ['hack2gate', 'topography']) {
+        // Hack2Gate 是位图、浅/深两张,三张主题图跟着 token 走,都只能看图自查;最后切回日行,后续用例状态不变。
+        for (const preset of ['hack2gate', 'orbit', 'paper', 'path']) {
           await win.click('.hp-wallpaper-button')
           await win.waitForSelector('.hp-wallpaper-sheet')
-          await win.click(`.hp-theme-presets button[data-preset="${preset}"]`)
+          if (preset === 'hack2gate') {
+            await win.click('.hp-wallpaper-sources button[data-source="image"]')
+            await win.click('.hp-wallpaper-images button[data-image="hack2gate"]')
+          } else {
+            await win.click('.hp-wallpaper-sources button[data-source="theme"]')
+            await win.click(`.hp-theme-presets button[data-preset="${preset}"]`)
+          }
           await win.click('.hp-wallpaper-head > button')
           await win.waitForTimeout(900)
-          const out = path.join(os.tmpdir(), `forsion-homepage.${mode}${preset === 'hack2gate' ? '.hack2gate' : ''}.png`)
+          const out = path.join(os.tmpdir(), `forsion-homepage.${mode}.${preset}.png`)
           await win.screenshot({ path: out })
           console.log(`  截图 → ${out}`)
         }

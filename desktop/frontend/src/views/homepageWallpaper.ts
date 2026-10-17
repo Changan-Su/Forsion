@@ -5,8 +5,10 @@
  * 不把 data URL 塞 localStorage:一张手机照片就足以撞穿常见的 5–10 MB 配额,继而连主题/布局也写不进去。
  */
 
-export type HomepageWallpaperSource = 'theme' | 'bing' | 'custom'
-export type HomepageThemePreset = 'rings' | 'topography' | 'weave' | 'hack2gate'
+export type HomepageWallpaperSource = 'theme' | 'bing' | 'image'
+export type HomepageThemePreset = 'orbit' | 'path' | 'paper' | 'glyph'
+/** 「图片」来源里选哪张:随包的 Hack2Gate 海报,或用户自己上传的那张(IndexedDB)。 */
+export type HomepageImageChoice = 'hack2gate' | 'custom'
 
 export interface BingWallpaper {
   id: string
@@ -20,9 +22,12 @@ export interface BingWallpaper {
 export interface HomepageWallpaperPrefs {
   source: HomepageWallpaperSource
   themePreset: HomepageThemePreset
+  imageChoice: HomepageImageChoice
   bingDaily: boolean
   focusBlur: boolean
   vignette: boolean
+  /** 主题背景的动态效果(星轨公转、日行光晕、字阵涟漪);系统「减弱动态效果」打开时一律不动。设置 → 外观里那一行读写同一个值。 */
+  motion: boolean
   bing: BingWallpaper | null
 }
 
@@ -31,10 +36,12 @@ export const HOMEPAGE_CUSTOM_WALLPAPER_MAX_BYTES = 32 * 1024 * 1024
 
 export const DEFAULT_HOMEPAGE_WALLPAPER_PREFS: HomepageWallpaperPrefs = {
   source: 'theme',
-  themePreset: 'rings',
+  themePreset: 'orbit',
+  imageChoice: 'hack2gate',
   bingDaily: true,
   focusBlur: true,
   vignette: true,
+  motion: true,
   bing: null,
 }
 
@@ -68,19 +75,27 @@ export function normalizeBingWallpaper(value: unknown): BingWallpaper | null {
   }
 }
 
+/** 10-17 换了一套主题背景:旧三张各映射到气质最近的新图;Hack2Gate 是位图,挪进「图片」来源;旧「自定义」并进「图片」。 */
+const LEGACY_PRESETS: Record<string, HomepageThemePreset> = { rings: 'orbit', topography: 'path', weave: 'paper' }
+
 export function normalizeHomepageWallpaperPrefs(value: unknown): HomepageWallpaperPrefs {
   if (!value || typeof value !== 'object') return { ...DEFAULT_HOMEPAGE_WALLPAPER_PREFS }
   const raw = value as Record<string, unknown>
-  const source: HomepageWallpaperSource = raw.source === 'bing' || raw.source === 'custom' ? raw.source : 'theme'
-  const themePreset: HomepageThemePreset = raw.themePreset === 'topography' || raw.themePreset === 'weave' || raw.themePreset === 'hack2gate'
-    ? raw.themePreset
-    : 'rings'
+  const legacyHack2gate = raw.themePreset === 'hack2gate'
+  let source: HomepageWallpaperSource = raw.source === 'bing' || raw.source === 'image' ? raw.source : 'theme'
+  let imageChoice: HomepageImageChoice = raw.imageChoice === 'custom' ? 'custom' : 'hack2gate'
+  if (raw.source === 'custom') { source = 'image'; imageChoice = 'custom' }
+  else if (legacyHack2gate && source === 'theme') { source = 'image'; imageChoice = 'hack2gate' }
+  const preset = typeof raw.themePreset === 'string' ? raw.themePreset : ''
+  const themePreset: HomepageThemePreset = preset === 'orbit' || preset === 'path' || preset === 'paper' || preset === 'glyph' ? preset : Object.hasOwn(LEGACY_PRESETS, preset) ? LEGACY_PRESETS[preset] : 'orbit'
   return {
     source,
     themePreset,
+    imageChoice,
     bingDaily: raw.bingDaily !== false,
     focusBlur: raw.focusBlur !== false,
     vignette: raw.vignette !== false,
+    motion: raw.motion !== false,
     bing: normalizeBingWallpaper(raw.bing),
   }
 }
@@ -95,6 +110,19 @@ export function loadHomepageWallpaperPrefs(): HomepageWallpaperPrefs {
 
 export function saveHomepageWallpaperPrefs(prefs: HomepageWallpaperPrefs): void {
   try { localStorage.setItem(HOMEPAGE_WALLPAPER_PREFS_KEY, JSON.stringify(prefs)) } catch { /* 无持久化能力时仍保留本次会话态 */ }
+}
+
+const PREFS_CHANGED = 'forsion:homepage-wallpaper'
+/** 设置 → 外观的「主页壁纸动效」写同一份偏好。桌面端设置是另一扇窗(storage 事件);网页版设置在同一个文档里,storage 不触发,补一个自定义事件。 */
+export function setHomepageWallpaperMotion(motion: boolean): void {
+  saveHomepageWallpaperPrefs({ ...loadHomepageWallpaperPrefs(), motion })
+  window.dispatchEvent(new Event(PREFS_CHANGED))
+}
+export function onHomepageWallpaperPrefsChange(run: () => void): () => void {
+  const onStorage = (event: StorageEvent): void => { if (event.key === HOMEPAGE_WALLPAPER_PREFS_KEY || event.key === null) run() }
+  window.addEventListener('storage', onStorage)
+  window.addEventListener(PREFS_CHANGED, run)
+  return () => { window.removeEventListener('storage', onStorage); window.removeEventListener(PREFS_CHANGED, run) }
 }
 
 /** Bing HPImageArchive 的 renderer web 回落与 Electron IPC 返回都汇入同一个窄类型。 */
