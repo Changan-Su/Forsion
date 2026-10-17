@@ -37,6 +37,7 @@
  *   - 回退那次照带凭据的样子跑(把 grant 传进去)→ 「凭据回退」红(环境里还有那三项)
  *   - 回退条件改回 isGitAuthFailure → 「凭据回退」红(403 / 404 不回退)
  *   - 非被拒的失败也回退 → 「凭据回退」红(非快进被拒跑了两次)
+ *   2026-10-17(Codex 评审):回退那次不带 quiet → 「回退那一次也摘掉跟踪」红(跟踪变量还在、Basic 头原样回到 detail)
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -264,6 +265,20 @@ describe('带凭据的推送', () => {
     const offline = await failure(gitPush(cwd));
     expect(offline.code).toBe('git_failed');
     expect(offline.detail).toMatch(/Could not resolve host/);
+  });
+
+  it('凭据回退那一次也摘掉跟踪、遮 Authorization 头(Codex 10-17:用户自己的助手给的凭据不许经 stderr 回到界面)', async () => {
+    const cwd = project('push-own-trace');
+    Object.assign(process.env, { GIT_TRACE_CURL: '1', GIT_CURL_VERBOSE: '1' });
+    registerGitCredentialProvider('test', async () => ({ username: 'dave', password: 'tok-1' }));
+    answer = (call) => (credentialKeys(call.env).length
+      ? { code: 128, stderr: 'The requested URL returned error: 403' }
+      : { code: 128, stderr: '=> Send header: Authorization: Basic b3duOnNlY3JldA==\nfatal: unable to access: Could not resolve host: git.example.test' });
+    const offline = await failure(gitPush(cwd));
+    const own = remoteCalls[1];
+    expect([own.env.GIT_TRACE_CURL, own.env.GIT_CURL_VERBOSE, own.env.GIT_TRACE2]).toEqual([undefined, undefined, '0']);
+    expect(offline.detail).not.toContain('b3duOnNlY3JldA==');
+    expect(offline.detail).toMatch(/Authorization: Basic \*\*\*/);
   });
 
   it('失败原文里的凭据被遮掉(令牌原文、Basic 编码、任何 Authorization 头的值)', async () => {

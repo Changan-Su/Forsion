@@ -7,8 +7,9 @@
  *     forsion / github = 引擎替他带那个账号(GitHub 还要绑了才有;绑的账号被拒时照电脑自己的再跑一次,见 gitActions);
  *     local = 照这台电脑自己的 git 配置(ssh 钥匙、凭据助手、地址里自带的)。所以 `git@github.com:o/r.git` 是 host=github、auth=local。
  *
- * pushRemote = gitPush 不点名远端时推去的那个:当前分支配了上游(branch.<分支>.remote)→ 它;否则 origin;只有一个远端 → 它;都不是 → null。
+ * pushRemote = gitPush 不点名远端时推去的那个:当前分支配了上游(branch.<分支>.remote + .merge)→ 它;否则 origin;只有一个远端 → 它;都不是 → null。
  *   从配置算,不用 @{u}:刚「以后推送到这里」、还没推过时 @{u} 解析不出来,而推送去向已经定了。
+ *   上游写的是一个网址、或者一个已经删掉的远端名时也照报它(不在远端列表里):gitPush 照样往那里推,面板不能说成 origin。
  *
  * 加第二个远端时起名(发布到 Forsion Git / GitHub、连接已有地址):一个都没有 → origin;有了 → 按站点起 forsion / github / 主机名,
  * 撞名加 -2、-3。不碰原来的 origin。
@@ -59,7 +60,7 @@ export function describeRemote(name: string, rawUrl: string, maskedUrl: string, 
 
 /** gitPush 不点名远端时推去哪个(规则见文件头)。upstreamRemote = 当前分支的 branch.<分支>.remote(没有 → 空串)。 */
 export function pushRemoteOf(names: string[], upstreamRemote: string): string | null {
-  if (upstreamRemote && upstreamRemote !== '.' && !upstreamRemote.startsWith('-') && names.includes(upstreamRemote)) return upstreamRemote;
+  if (upstreamRemote && upstreamRemote !== '.' && !upstreamRemote.startsWith('-')) return upstreamRemote;
   if (names.includes('origin')) return 'origin';
   return names.length === 1 ? names[0] : null;
 }

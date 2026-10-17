@@ -92,7 +92,8 @@ export async function readGit(cwd: string, args: string[], opts: { input?: strin
 /** 用户的写动作:照用户自己的 git 配置跑(仓库级的可执行配置须先经 requireTrust),只关终端交互。
  *  credentials = 凭据接缝给这一次的东西(runRemoteAction 传进来):那三项环境变量只进这一个子进程;
  *  带了凭据就先摘掉跟踪开关,输出在离开这个函数之前遮掉密文 —— 之后无论进错误 detail 还是回给界面都是遮过的。 */
-export async function runAction(cwd: string, args: string[], opts: { timeoutMs?: number; input?: string; credentials?: GitCredentialGrant; /** 要认 git 的原文时固定成英文。 */ english?: boolean; /** 只给这一个子进程加的环境变量(提交身份)。 */ env?: Record<string, string> } = {}): Promise<RunResult> {
+export async function runAction(cwd: string, args: string[], opts: { timeoutMs?: number; input?: string; credentials?: GitCredentialGrant; /** 要认 git 的原文时固定成英文。 */ english?: boolean; /** 只给这一个子进程加的环境变量(提交身份)。 */ env?: Record<string, string>;
+  /** 关跟踪、遮 Authorization 头(凭据回退那一次:用户自己的助手给的凭据也不许经 stderr 回到界面 / 日志)。 */ quiet?: boolean } = {}): Promise<RunResult> {
   const env = baseEnv();
   if (opts.env) Object.assign(env, opts.env);
   // 口令短语 / 首次连接确认都会让 ssh 等一个不存在的终端;ssh-agent / 钥匙串里的钥匙照常可用。用户自己设了就不动。
@@ -111,13 +112,14 @@ export async function runAction(cwd: string, args: string[], opts: { timeoutMs?:
     scoped.push('-c', `credential.${grant.origin}.helper=`);
     env.GIT_ASKPASS = '';
   }
+  if (opts.quiet) stripGitTraceEnv(env);
   // 提供方参与的这一次(带了凭据,或者它说暂时取不到)要认 git 的原文来判「是不是认证失败」:消息固定成英文
   // (LANGUAGE 只管 gettext 取哪种语言,不动字符集;没有本地化的 git 不受影响)。别的远端不碰,原文照用户的语言。
   if (secrets.length || grant?.unavailable || opts.english) env.LANGUAGE = 'en';
   const raw = await runBoundedProcess(gitExecutable(), ['--no-pager', '-c', 'core.quotepath=false', ...scoped, '-C', cwd, ...args], {
     cwd, env, input: opts.input, timeoutMs: opts.timeoutMs ?? ACTION_TIMEOUT_MS, maxOutputBytes: 1024 * 1024,
   });
-  const r = secrets.length ? { ...raw, stdout: scrubGitSecrets(raw.stdout, secrets), stderr: scrubGitSecrets(raw.stderr, secrets) } : raw;
+  const r = secrets.length || opts.quiet ? { ...raw, stdout: scrubGitSecrets(raw.stdout, secrets), stderr: scrubGitSecrets(raw.stderr, secrets) } : raw;
   if (r.reason === 'spawn-error') throw new GitActionError('git_unavailable', 'git is not available on this machine');
   if (r.reason === 'timeout') throw new GitActionError('git_timeout', `git ${args[0]} timed out`, tail(r.stderr || r.stdout));
   return r;
@@ -182,7 +184,7 @@ export async function runWithRemoteCredentials(cwd: string, url: string, directi
   }
   if (r.code !== 0 && grant.unavailable && isGitAuthFailure(r.stderr)) throw credentialFailure(grant.unavailable);
   if (r.code !== 0 && carried && isRemoteDenial(r.stderr)) {
-    const own = await runAction(cwd, args, { timeoutMs, english: true });
+    const own = await runAction(cwd, args, { timeoutMs, english: true, quiet: true });
     if (own.code === 0) return { ...own, ownCredentials: true };
     return isRemoteDenial(own.stderr) ? { ...r, denied: true } : own;
   }
@@ -589,8 +591,9 @@ export async function gitSetPushRemote(cwd: string, name: unknown): Promise<{ re
   const remote = typeof name === 'string' ? name.trim() : '';
   const remotes = (await readGit(cwd, ['remote'], { timeoutMs: 5000 })).stdout.split('\n').map((r) => r.trim()).filter(Boolean);
   if (!remote || remote.startsWith('-') || !remotes.includes(remote)) throw new GitActionError('no_remote', 'There is no remote with that name', remote);
-  must(await runAction(cwd, ['config', `branch.${head}.remote`, remote]), 'config');
-  must(await runAction(cwd, ['config', `branch.${head}.merge`, `refs/heads/${head}`]), 'config');
+  // --replace-all:手改过的配置里 .merge 可以有好几行,普通写法会在那里失败、留下「.remote 改了 .merge 没改」的半截配置
+  must(await runAction(cwd, ['config', '--replace-all', `branch.${head}.remote`, remote]), 'config');
+  must(await runAction(cwd, ['config', '--replace-all', `branch.${head}.merge`, `refs/heads/${head}`]), 'config');
   return { remote, branch: head };
 }
 
@@ -635,8 +638,8 @@ export async function gitConnectRemote(cwd: string, url: unknown, trust?: boolea
   const head = (await readGit(cwd, ['symbolic-ref', '--short', '-q', 'HEAD'], { timeoutMs: 5000 })).stdout.trim();
   let upstream: string | null = null;
   if (head && setTarget) {
-    const a = await runAction(cwd, ['config', `branch.${head}.remote`, name]);
-    const b = a.code === 0 ? await runAction(cwd, ['config', `branch.${head}.merge`, `refs/heads/${head}`]) : a;
+    const a = await runAction(cwd, ['config', '--replace-all', `branch.${head}.remote`, name]);
+    const b = a.code === 0 ? await runAction(cwd, ['config', '--replace-all', `branch.${head}.merge`, `refs/heads/${head}`]) : a;
     // upstream 只在远端上真有这条分支时给(界面据此说「上游是 x/main」还是「之后推送会推到这里」)
     if (b.code === 0 && listed.stdout.split('\n').some((line) => line.split('\t')[1]?.trim() === `refs/heads/${head}`)) upstream = `${name}/${head}`;
   }

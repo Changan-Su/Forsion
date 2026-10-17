@@ -13,6 +13,8 @@
  *   - gitPush 的 once 照样带 --set-upstream → 「只推送这一次」红
  *   - gitSetPushRemote 只写 .remote 不写 .merge → 「以后推送到这里」红(原来没上游的分支,推送照旧去了 origin)
  *   - gitSummary 的上游只看 .remote 不看 .merge → 同一条红(只配了 .remote 的分支:面板说 backup,推送去了 origin —— 两边判法不一致)
+ *   - pushRemoteOf 只认远端列表里的上游(Codex 10-17 指出)→ 「推送去向」红;「上游是网址」那段也红(面板说 origin,推送去了网址)
+ *   - gitSetPushRemote 不带 --replace-all → 「.merge 有两行」那段红(.remote 改了、.merge 没改,抛 git_failed)
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
@@ -74,7 +76,9 @@ describe('pushRemoteOf / remoteNameFor', () => {
     expect(pushRemoteOf(['origin', 'github'], '')).toBe('origin');
     expect(pushRemoteOf(['github'], '')).toBe('github');
     expect(pushRemoteOf(['github', 'forsion'], '')).toBeNull();
-    expect(pushRemoteOf(['github', 'forsion'], 'gone')).toBeNull(); // 上游指着已经删掉的远端
+    // 上游指着已经删掉的远端 / 直接写了网址:gitPush 照样往那里推(失败也是在那里失败),去向就报它,不能说成 origin
+    expect(pushRemoteOf(['origin', 'github'], 'gone')).toBe('gone');
+    expect(pushRemoteOf(['origin'], 'https://old.example/repo.git')).toBe('https://old.example/repo.git');
     expect(pushRemoteOf(['origin'], '--upload-pack=x')).toBe('origin');
     expect(pushRemoteOf([], '')).toBeNull();
   });
@@ -133,11 +137,23 @@ describe('面板与推送', () => {
     expect(await gitPush(cwd)).toMatchObject({ remote: 'origin', target: 'origin/odd' });
     git(cwd, 'checkout', '-q', 'main');
 
+    // 上游直接写成网址(手改的配置):gitPush 推到那个网址,面板说的也得是它
+    git(cwd, 'checkout', '-q', '-b', 'byurl');
+    git(cwd, 'config', 'branch.byurl.remote', b); git(cwd, 'config', 'branch.byurl.merge', 'refs/heads/byurl');
+    expect((await gitSummary(cwd)).pushRemote).toBe(b);
+    expect(await gitPush(cwd)).toMatchObject({ remote: b });
+    expect(git(b, 'branch', '--list', 'byurl')).toContain('byurl');
+    // .merge 有两行(手改的配置):「以后推送到这里」两项都换成一行,不留半截
+    git(cwd, 'config', '--add', 'branch.byurl.merge', 'refs/heads/other');
+    expect(await gitSetPushRemote(cwd, 'origin')).toEqual({ remote: 'origin', branch: 'byurl' });
+    expect([git(cwd, 'config', '--get-all', 'branch.byurl.remote'), git(cwd, 'config', '--get-all', 'branch.byurl.merge')]).toEqual(['origin', 'refs/heads/byurl']);
+    git(cwd, 'checkout', '-q', 'main');
+
     for (const bad of ['nope', '--upload-pack=x', '', 42]) {
       await expect(gitSetPushRemote(cwd, bad), String(bad)).rejects.toMatchObject({ code: 'no_remote' });
     }
     expect(git(cwd, 'config', 'branch.main.remote')).toBe('origin');
     git(cwd, 'checkout', '-q', '--detach');
     await expect(gitSetPushRemote(cwd, 'backup')).rejects.toBeInstanceOf(GitActionError);
-  });
+  }, 30_000); // 几十次真 git 子进程:并行跑别的测试时 5 秒缺省会超
 });
