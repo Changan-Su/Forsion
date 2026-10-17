@@ -69,8 +69,8 @@
 [data-platform="mac"] .floating-native-root .settings-nav-brand { display: none; }
 /* 左栏还能往下滚时底部渐隐(先例 chat2.css 的 .t2-stream);滚到底就撤掉,不吞最后一项。不写 ::-webkit-scrollbar。 */
 .settings-nav .settings-nav-list[data-overflow='bottom'] {
-  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent 100%);
-  mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), rgb(0 0 0 / .85) calc(100% - 28px * 0.87), rgb(0 0 0 / .7) calc(100% - 28px * 0.75), rgb(0 0 0 / .5) calc(100% - 28px * 0.6), rgb(0 0 0 / .3) calc(100% - 28px * 0.45), rgb(0 0 0 / .15) calc(100% - 28px * 0.3), rgb(0 0 0 / .05) calc(100% - 28px * 0.15), transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), rgb(0 0 0 / .85) calc(100% - 28px * 0.87), rgb(0 0 0 / .7) calc(100% - 28px * 0.75), rgb(0 0 0 / .5) calc(100% - 28px * 0.6), rgb(0 0 0 / .3) calc(100% - 28px * 0.45), rgb(0 0 0 / .15) calc(100% - 28px * 0.3), rgb(0 0 0 / .05) calc(100% - 28px * 0.15), transparent 100%);
 }
 /* 深链打开靠下的子页时,scrollIntoView(nearest) 会把选中项贴着底边停下 —— 正好落进上面 28px 的渐隐,看着像禁用(W-15)。
  * 给滚动留出渐隐那段的余量;顶部也留一点,分组标题不被切成半行。 */
