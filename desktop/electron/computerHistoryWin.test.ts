@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import {
-  cleanupRecorderCopies, createWindowsRecorderResolver, probeRecorderProtocol, recorderBinDir, recorderPipeName, stageRecorderExe, windowsRecorderSource,
+  cleanupRecorderCopies, createWindowsRecorderResolver, STALE_COPY_MS, probeRecorderProtocol, recorderBinDir, recorderPipeName, stageRecorderExe, windowsRecorderSource,
 } from './computerHistoryWin'
 
 const cleanups: Array<() => void> = []
@@ -114,6 +114,50 @@ describe('computerHistoryWin', () => {
     await expect(probeRecorderProtocol(script('hang', 'sleep 5'), 200)).rejects.toMatchObject({ code: 'helper_probe_timeout' })
     await expect(probeRecorderProtocol(path.join(dir, 'nope'))).rejects.toMatchObject({ code: 'ENOENT' })
   })
+})
+
+// PROBE (temporary, never merged): repeat the two cleanup scenarios and log why copies survive.
+describe.runIf(process.env.CHWIN_PROBE)('chwin cleanup probe', () => {
+  const P = process.env.CHWIN_PROBE!
+  const N = 200
+  it('loop: resolver scenario', async () => {
+    mkdirSync(path.dirname(P), { recursive: true })
+    let survived = 0
+    for (let i = 0; i < N; i++) {
+      appendFileSync(P, `--- resolver iter ${i}\n`)
+      const dir = tmp()
+      const src = path.join(dir, 'src', 'windows-bridge.exe')
+      mkdirSync(path.dirname(src))
+      writeFileSync(src, 'v1')
+      const bin = path.join(dir, 'bin')
+      const resolve = createWindowsRecorderResolver({ binDir: bin, source: async () => src, username: () => 'alice', probe: async () => 13, staleMs: 0 })
+      const first = await resolve()
+      await resolve()
+      writeFileSync(src, 'v2-longer')
+      await resolve()
+      if (existsSync(first!.exe)) {
+        survived++
+        const st = statSync(first!.exe)
+        appendFileSync(P, `SURVIVED resolver iter ${i} nowAtCheck=${Date.now()} birth=${st.birthtimeMs} mtime=${st.mtimeMs}\n`)
+      }
+    }
+    appendFileSync(P, `SUMMARY resolver survived=${survived}/${N}\n`)
+    console.log(`[chwin-probe] resolver survived=${survived}/${N}`)
+  }, 180_000)
+  it('loop: fixture-file scenario (test 1 shape)', async () => {
+    let survived = 0
+    for (let i = 0; i < N; i++) {
+      appendFileSync(P, `--- fixture iter ${i}\n`)
+      const bin = path.join(tmp(), 'bin')
+      mkdirSync(bin)
+      for (const f of ['windows-bridge-aaaaaaaaaaaa.exe', '.windows-bridge-1-x.tmp']) writeFileSync(path.join(bin, f), 'old')
+      await cleanupRecorderCopies(bin, path.join(bin, 'windows-bridge-bbbbbbbbbbbb.exe'), 0)
+      const left = readdirSync(bin)
+      if (left.length) { survived++; appendFileSync(P, `SURVIVED fixture iter ${i} left=${left.join(',')}\n`) }
+    }
+    appendFileSync(P, `SUMMARY fixture survived=${survived}/${N} STALE_COPY_MS=${STALE_COPY_MS}\n`)
+    console.log(`[chwin-probe] fixture survived=${survived}/${N}`)
+  }, 180_000)
 })
 
 describe('recorderBinDir', () => {

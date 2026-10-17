@@ -27,17 +27,16 @@ jobs:
       - name: Install desktop dependencies
         working-directory: desktop
         run: npm ci --no-audit --no-fund
-      - name: Check Windows history and App Dock
+      - name: PROBE chwin cleanup
         working-directory: desktop
         run: |
-          node node_modules/vitest/vitest.mjs run electron/computerHistory.test.ts electron/computerHistoryWin.test.ts electron/appDock.test.ts shared/appDock.test.ts frontend/src/components/ComputerHistorySettings.test.ts frontend/src/components/computerHistoryModel.test.ts frontend/src/components/ToolGroup.computerHistory.test.ts
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          npm run check:computerhistory
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          npm run build
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          node scripts/computer-history-windows.probe.cjs
-          exit $LASTEXITCODE
+          New-Item -ItemType Directory -Force outputs/computer-history-windows | Out-Null
+          $env:CHWIN_PROBE = "$PWD\outputs\computer-history-windows\chwin-probe.log"
+          node node_modules/vitest/vitest.mjs run electron/computerHistoryWin.test.ts
+          $code = $LASTEXITCODE
+          Select-String -Path $env:CHWIN_PROBE -Pattern '^(SUMMARY|SURVIVED|skip|rm-err)' | Select-Object -First 80 | ForEach-Object { $_.Line }
+          Select-String -Path $env:CHWIN_PROBE -Pattern 'existsAfter=true' | Select-Object -First 20 | ForEach-Object { $_.Line }
+          exit $code
       - uses: actions/upload-artifact@v4
         if: always()
         with:

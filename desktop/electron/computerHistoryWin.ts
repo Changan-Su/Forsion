@@ -17,7 +17,7 @@
  */
 import { createHash, randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
-import { createReadStream, existsSync } from 'node:fs'
+import { appendFileSync, createReadStream, existsSync } from 'node:fs'
 import { copyFile, mkdir, readdir, rename, rm, stat } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -96,8 +96,15 @@ export async function cleanupRecorderCopies(binDir: string, keep: string, staleM
     .map(async (n) => {
       const file = path.join(binDir, n)
       const st = await stat(file).catch(() => null)
-      if (!st || now - (st.birthtimeMs || st.mtimeMs) < staleMs) return
-      await rm(file, { force: true }).catch(() => {}) // 还在跑的旧副本删不掉:它会自己闲置退出
+      const P = process.env.CHWIN_PROBE
+      const log = (m: string): void => { if (P) appendFileSync(P, `${m}\n`) }
+      if (!st || now - (st.birthtimeMs || st.mtimeMs) < staleMs) {
+        log(`skip ${n} age=${st ? now - (st.birthtimeMs || st.mtimeMs) : 'nostat'} birth=${st?.birthtimeMs} mtime=${st?.mtimeMs} now=${now} staleMs=${staleMs}`)
+        return
+      }
+      await rm(file, { force: true }).then(
+        () => log(`rm-ok ${n} age=${now - (st.birthtimeMs || st.mtimeMs)} existsAfter=${existsSync(file)}`),
+        (e) => log(`rm-err ${n} code=${e?.code} age=${now - (st.birthtimeMs || st.mtimeMs)} existsAfter=${existsSync(file)}`))
     }))
 }
 
