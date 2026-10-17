@@ -560,6 +560,9 @@ ctx.registerView({ id: 'manual', title: 'Manual', mount(el) {
 - 特殊 DOM 可传 `itemFromElement(element, index) → {text, level, primary?, onSelect?} | null`。
   回调抛错会被宿主隔离;不传 `onSelect` 就按元素位置在 `scrollContainer` 内平滑滚动。
 - DOM 的增删和文字变化会自动重扫;只有 Shadow DOM / 第三方画布等观察不到的变化才调返回句柄的 `refresh()`。
+  内容一直在变(流式输出、打字)时最多每 500ms 扫一次,安静之后的第一处变化下一帧就扫(2026-10-16 起);
+  懒挂的重件(代码高亮、嵌入体)可以包在带 `data-lcl-toc-ignore` 的元素里,里面的变化不触发重扫。
+  跳转落地后宿主会再量一次、差得多就补,正文用了 `content-visibility: auto` 也落得准。
   `dispose()` 幂等,同步摘掉宿主加在 `shell` 里的那层(你的正文不动);插件禁用 / 重载时宿主也会统一卸载。
 - 旧宿主整个 `ctx.ui` 不存在,一律 `ctx.ui?.mountFloatingToc(...)`;缺席时可继续显示正文,不必仿一份目录。
 

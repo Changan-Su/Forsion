@@ -376,7 +376,9 @@
 
 /* 注:曾用 content-visibility:auto 跳过视口外行的 layout/paint(长页优化),但它的 contain:paint 会把
    悬浮到左侧页边距的块手柄裁掉(手柄按设计要浮在正文左缘外)。手柄对齐优先,故移除;长页仍靠 PageView
-   的分片挂载(INITIAL_ROWS + 空闲批)控初始开销。若极长页滚动卡顿再议(可改门户渲染手柄后恢复)。 */
+   的分片挂载(INITIAL_ROWS + 空闲批)控初始开销。若极长页滚动卡顿再议(可改门户渲染手柄后恢复)。
+   v4(unified)10-16 又试过一次给 .ProseMirror > * 加,又撤了:新建的块第一帧被跳过渲染,光标落点错、打的字倒序
+   (check:unifiedkeys 只加这一条就红 9 项);数据库嵌入的 fixed 弹层、公式预览也被它裁 / 挪位。别再加。 */
 
 .am-app .row-cols {
   display: flex;

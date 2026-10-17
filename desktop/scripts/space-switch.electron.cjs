@@ -42,6 +42,14 @@ const waitTransition = (win) => win.evaluate(async () => {
   }
   return { motion: document.documentElement.dataset.spaceSwitch ?? null, work: [], ribbon: 0, all: 0 }
 })
+/** 停在 100ms 时新旧两张快照实际的竖向位移(px):方向变量(--space-dir)写在快照自己身上,读出来的正负就是推的方向。 */
+const pushY = async (win) => {
+  await pauseAt(win, 100)
+  return win.evaluate(() => {
+    const ty = (p) => { const m = getComputedStyle(document.documentElement, p).transform; return m && m !== 'none' ? Math.round(new DOMMatrix(m).m42 * 10) / 10 : null }
+    return { neu: ty('::view-transition-new(space-work)'), old: ty('::view-transition-old(space-work)') }
+  })
+}
 const pauseAt = (win, ms) => win.evaluate((t) => { for (const a of document.getAnimations()) if (a.effect?.pseudoElement?.startsWith('::view-transition')) { a.pause(); a.currentTime = t } }, ms)
 const finish = (win) => win.evaluate(() => { for (const a of document.getAnimations()) if (a.effect?.pseudoElement?.startsWith('::view-transition')) a.finish() })
 /** 播完:属性收掉、工作区的名字摘掉。 */
@@ -67,6 +75,8 @@ async function main() {
     check('往下点 = next', t.motion === 'next', JSON.stringify(t))
     check('工作区跑的是淡出 + 推出 / 淡入 + 推入', ['lcl-space-fade-in', 'lcl-space-fade-out', 'lcl-space-push-in', 'lcl-space-push-out'].every((n) => t.work.some((w) => w.endsWith(':' + n))), t.work.join(' '))
     check('ribbon 不动画', t.ribbon === 0, `ribbon 动画 ${t.ribbon}`)
+    let y = await pushY(win)
+    check('next:新的从下面进、旧的往上走', y.neu > 0 && y.old < 0, JSON.stringify(y))
     if (shots) for (const ms of [0, 60, 120, 200]) { await pauseAt(win, ms); await sleep(120); await captureWindow(app, path.join(shots, `next-light-${ms}.png`)) }
     await finish(win)
     let s = await settled(win)
@@ -81,6 +91,8 @@ async function main() {
     await win.mouse.click(at.x, at.y)
     t = await waitTransition(win)
     check('往上点 = prev', t.motion === 'prev', JSON.stringify(t))
+    y = await pushY(win)
+    check('prev:新的从上面进、旧的往下走', y.neu < 0 && y.old > 0, JSON.stringify(y))
     if (shots) for (const ms of [0, 60, 120, 200]) { await pauseAt(win, ms); await sleep(120); await captureWindow(app, path.join(shots, `prev-dark-${ms}.png`)) }
     await finish(win)
     await settled(win)

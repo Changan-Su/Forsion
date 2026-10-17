@@ -600,7 +600,7 @@ function landOnEntry(): void { landOnOnePage(); landOnList() }
 /** 底栏 / 「全部 Space」面板上点一个 Space。点的就是当前这个:setActiveSpace 同 id 即返回,这里只让一页式 Space(主页)
  *  落回它那一页 —— 人在主页里、前台却是别的东西时,点「主页」就该回到主页。 */
 function enterSpace(id: string): void {
-  // 手机的 Space 横排在底栏:横着推。同一个也经过 switchSpace(作废还在等下一帧的上一次切换)
+  // 手机的 Space 横排在底栏:横着推(10-16 起先不播,直接换;见 switchSpace)。同一个也经过 switchSpace(作废还在等下一帧的上一次切换)
   switchSpace(id, id === useSpaceStore.getState().activeSpaceId ? landOnOnePage : undefined, { axis: 'x' })
 }
 // 人在一页式 Space 里开别的 Space 的视图:先带到那个 Space 去(见 spaceRegistry.redirectOpenFromOnePage)。

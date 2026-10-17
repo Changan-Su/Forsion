@@ -47,15 +47,15 @@ interface CalNavState {
   jumpDate: string | null
   jumpNonce: number
   requestJump(date: string): void
-  /** 主区选中的事件:日历右栏(calendar-side)据此显示详情;null = 右栏显示待办。target 由 CalendarView 随数据刷新重写。 */
+  /** 高亮着的事件(刚建 / 刚复制的那条;点开的事件走浮卡,不在这里):Delete / ⌘D 对它生效,Enter 在它旁边开卡。target 由 CalendarView 随数据刷新重写。 */
   selection: { key: string; target: CardTarget } | null
   setSelection(sel: { key: string; target: CardTarget } | null): void
   draft: CalDraft | null
   setDraft(draft: CalDraft | null): void
-  /** 草稿的保存 / 丢弃(主区日历挂载时登记;右栏草稿面板的按钮走这里)。 */
+  /** 草稿的保存 / 丢弃(主区日历挂载时登记;草稿卡的按钮走这里)。 */
   draftApi: { commit(): void; cancel(): void } | null
   setDraftApi(api: { commit(): void; cancel(): void } | null): void
-  /** 日历右栏面板的根节点(挂载时登记)。它在场且看得见,选中详情才进右栏;否则主区退回浮卡。 */
+  /** 日历右栏(待办)的根节点(挂载时登记):焦点在右栏里时,日历的快捷键照样生效。 */
   sideEl: HTMLElement | null
   setSideEl(el: HTMLElement | null): void
 }
@@ -95,9 +95,3 @@ export const useCalendarNav = create<CalNavState>((set) => ({
   sideEl: null,
   setSideEl: (sideEl) => set({ sideEl }),
 }))
-
-/** 日历右栏此刻看得见(在场、没收起、不是别的标签压在上面)。 */
-export const calendarSideVisible = (): boolean => {
-  const el = useCalendarNav.getState().sideEl
-  return !!el && el.isConnected && el.getClientRects().length > 0
-}

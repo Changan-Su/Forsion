@@ -148,6 +148,7 @@
  *                                                           #   JEV_SETTINGS_FILE 可改);判据看替身状态(在放哪首、Sakura 收到了什么)。全过程(按时间排的 过程.md、Jev 看到的每张图、录像)
  *                                                           #   留在 <场景>-evidence/。--cu-jev-mode auto|vision|elements(缺省 auto)、--cu-jev-threshold(缺省 = 插件缺省)、--cu-timeout(cusend 缺省 900)。
  *                                                           #   捆绑包同 cuvision:以装着的那份为底,另外把插件仓的 scripts/ 也覆盖进去。会真的动鼠标,走 devlock。
+ *                                                           #   cuambig:收件人有歧义先问;cuscroll(反馈 d995c9a2):播放「我喜欢的音乐」第 18 首,要先滚(滚动交给 Jev,不许 act_ui 滚)。
  *   npm run live:harness -- --only inline                    # 正文生成式 AI(09-28,G3-07):POST /agent/inline 润色保事实 / 翻译 / 续写 / 选区里的注入不照做 / 缺字段 400 / 不落会话;改 services/inlineAi.ts 提示词后跑
  *   npm run live:harness -- --only pageinstructions         # 页级 Instructions:分页读带本页约束、下一页不继承、inline 约束与用户当前要求优先
  *   npm run live:harness -- --only tool,stalewrite           # G3-02(09-28):读后被用户改过的文件,write_file 须拒写 → 模型重读 → 终稿留着用户那行;改 write_file / read_file / 读后指纹(readState)后跑
@@ -256,7 +257,7 @@ OPT_IN.add('imgwindow');
 OPT_IN.add('viewimage');
 OPT_IN.add('novision'); // --only novision:主模型没有图像输入时的转写状态与送达(一个 run + 一次转写)
 OPT_IN.add('cuoff'); // --only cuoff:主模型看不到图 → Computer Use 不可用并告诉用户(一个 run)
-for (const k of CU_JEV_KEYS) OPT_IN.add(k); // --only cumusic,cusend,cuambig:Jev 真实案例,两个自绘替身 + 真 Jev(会动真鼠标;要 --cu-plugin)
+for (const k of CU_JEV_KEYS) OPT_IN.add(k); // --only cumusic,cusend,cuambig,cuscroll,cusearch:Jev 真实案例,自绘替身 + 真 Jev(会动真鼠标;要 --cu-plugin)
 OPT_IN.add('cuvision'); // --only cuvision:只能看图的 App,真插件 + 真 helper + 替身 App(一个 run,会动真鼠标;要 --cu-plugin)
 OPT_IN.add('dreamseed');
 OPT_IN.add('layers'); // --only layers:记忆 / 日志分层,每轮 3 个 run + 3 次判官(--rounds);会把 Historian 改成每轮都评,单独跑。
@@ -2762,8 +2763,8 @@ try {
 
   // cumusic / cusend(10-16,反馈 0c0cd24f):用户原话那件事放到两个自绘替身上,真 Jev。说明、判据、过程记录都在 lib/cu-jev-live.mjs。
   for (const key of CU_JEV_KEYS) {
-    await scenario(key, { cumusic: 'cumusic Jev 真实案例:打开 Melody 播放今日推荐第三首', cusend: 'cusend Jev 真实案例:播放第三首,把最热评论发给 Chatter 好友 Sakura(说清了就直接发)', cuambig: 'cuambig Jev 真实案例:收件人有歧义(「小樱」)时先问、列出候选、不发' }[key], () =>
-      cuJevLive({ key, api, run, OUT, bundle: opt('cu-plugin', ''), timeoutMs: Number(opt('cu-timeout', key === 'cusend' ? '900' : '420')) * 1000, tokensOf, ttft }));
+    await scenario(key, { cumusic: 'cumusic Jev 真实案例:打开 Melody 播放今日推荐第三首', cusend: 'cusend Jev 真实案例:播放第三首,把最热评论发给 Chatter 好友 Sakura(说清了就直接发)', cuambig: 'cuambig Jev 真实案例:收件人有歧义(「小樱」)时先问、列出候选、不发', cuscroll: 'cuscroll Jev 真实案例:打开 Melody 播放「我喜欢的音乐」第 18 首(要先滚,滚动交给 Jev)', cusearch: 'cusearch 真实案例:Chatter 的搜索结果在单独的下拉里、排第一的是群,给 Sakura 发一句(不许打开那个群)' }[key], () =>
+      cuJevLive({ key, api, run, OUT, bundle: opt('cu-plugin', ''), timeoutMs: Number(opt('cu-timeout', key === 'cusend' || key === 'cusearch' ? '900' : '420')) * 1000, tokensOf, ttft }));
   }
 
   // 审批档只归用户(09-27,设备能力 MCP 方案 P0 ②):旧版 manage_agent 收 approval_mode,模型一句话就能把 agent(含自己)调成
