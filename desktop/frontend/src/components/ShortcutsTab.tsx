@@ -15,6 +15,9 @@ import { useI18n } from '../i18n'
 import { conflictGroups, editorUseOf, normalizeHotkey, systemReservedOf } from '../shortcutUsage'
 import { SettingsPanel } from './SettingsPrimitives'
 
+/** 录制 / 按键查找期间请主进程挂起全局快捷键(Mini ⌘⇧M、急停):macOS 上它们先于窗口拿到按键。网页 / 旧 preload 没有这条 → 跳过。 */
+const pauseGlobal = (on: boolean): void => { try { void window.tangu?.shortcuts?.pauseGlobal(on).catch(() => {}) } catch { /* 旧 preload */ } }
+
 const isMac = (): boolean => { try { return document.documentElement.dataset.platform === 'mac' } catch { return false } }
 
 interface Row { id: string; title: string; def: string }
@@ -40,7 +43,7 @@ export const ShortcutsTab: React.FC = () => {
   const keyQueryRef = useRef<HTMLSpanElement>(null)
   useEffect(() => { if (keyMode) keyQueryRef.current?.focus() }, [keyMode])
   // 录制 / 按键查找中途被卸载(设置浮窗换页、重挂)时不会有 blur:这里兜底恢复全局热键分发
-  useEffect(() => () => useShortcuts.getState().setRecording(false), [])
+  useEffect(() => () => { useShortcuts.getState().setRecording(false); pauseGlobal(false) }, [])
 
   // 命令面板是引擎内置(非注册命令),作伪命令排首位;其余跟随注册命令。
   const rows: Row[] = [
@@ -64,8 +67,9 @@ export const ShortcutsTab: React.FC = () => {
     return !q || r.title.toLowerCase().includes(q) || r.id.toLowerCase().includes(q) || effOf(r).toLowerCase().includes(q)
   })
 
-  const stopRecord = (): void => { setRecId(null); setRecording(false) }
-  const startRecord = (id: string): void => { setNote(''); setPending(null); setRecId(id); setRecording(true) }
+  const capture = (on: boolean): void => { setRecording(on); pauseGlobal(on) }
+  const stopRecord = (): void => { setRecId(null); capture(false) }
+  const startRecord = (id: string): void => { setNote(''); setPending(null); setRecId(id); capture(true) }
   const save = (id: string, hk: string): void => {
     setOverride(id, hk)
     const action = editorUseOf(hk)
@@ -75,6 +79,7 @@ export const ShortcutsTab: React.FC = () => {
   const onRecKey = (e: React.KeyboardEvent): void => {
     e.preventDefault(); e.stopPropagation()
     if (!recId) return
+    pauseGlobal(true) // 续上主进程的兜底计时
     if (e.key === 'Escape') { stopRecord(); return }
     // 单按 ⌫ / Delete = 解绑(不当成一个可录的键)
     if ((e.key === 'Backspace' || e.key === 'Delete') && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) { setOverride(recId, ''); stopRecord(); return }
@@ -98,10 +103,11 @@ export const ShortcutsTab: React.FC = () => {
     setPending(null)
   }
 
-  const exitKeyMode = (): void => { setKeyMode(false); setKeyQuery(''); setRecording(false) }
+  const exitKeyMode = (): void => { setKeyMode(false); setKeyQuery(''); capture(false) }
   const onKeyModeKey = (e: React.KeyboardEvent): void => {
     if (e.key === 'Tab') return // 留给焦点移动
     e.preventDefault(); e.stopPropagation()
+    pauseGlobal(true)
     if (e.key === 'Escape') { exitKeyMode(); return }
     const hk = hotkeyOfEvent(e)
     if (hk) setKeyQuery(normalizeHotkey(hk))
@@ -191,7 +197,7 @@ export const ShortcutsTab: React.FC = () => {
               <Keyboard size={13} />
               <span
                 ref={keyQueryRef} className="shortcut-keyquery" tabIndex={0} role="textbox" aria-label={t('settings.shortcuts.keyModeTitle')}
-                onKeyDown={onKeyModeKey} onFocus={() => setRecording(true)} onBlur={() => setRecording(false)}
+                onKeyDown={onKeyModeKey} onFocus={() => capture(true)} onBlur={() => capture(false)}
               >
                 {keyQuery ? caps(keyQuery) : <span className="shortcut-keyquery-ph">{t('settings.shortcuts.recording')}</span>}
               </span>

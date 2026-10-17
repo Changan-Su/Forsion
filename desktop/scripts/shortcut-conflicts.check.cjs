@@ -32,6 +32,20 @@ async function main() {
     const shot = (name) => page.screenshot({ path: path.join(OUT, `${name}.png`) })
     const overrides = () => page.evaluate(() => JSON.parse(localStorage.getItem('forsion_shortcuts') || '{}'))
 
+    // ⓪ 录制 / 按键查找期间主进程的全局快捷键挂起(合成按键到不了 globalShortcut,这里直接问主进程注册状态)。
+    //    ⌘⇧M 若被别的进程占着(比如开着的 dev 实例),这次注册本来就失败,跳过这一组。
+    const miniReg = () => app.evaluate(({ globalShortcut }) => globalShortcut.isRegistered('CommandOrControl+Shift+M'))
+    if (await miniReg()) {
+      await row('打开浏览器').locator('.shortcut-key').click(); await page.waitForTimeout(400)
+      check('⓪ 录制中 ⌘⇧M(Mini)已挂起', (await miniReg()) === false, null)
+      await page.keyboard.press('Escape'); await page.waitForTimeout(400)
+      check('⓪ Esc 后 ⌘⇧M 恢复', (await miniReg()) === true, null)
+      await page.locator('.shortcut-keymode').click(); await page.waitForTimeout(400)
+      check('⓪ 按键查找中 ⌘⇧M 已挂起', (await miniReg()) === false, null)
+      await page.keyboard.press('Escape'); await page.waitForTimeout(400)
+      check('⓪ 退出按键查找后 ⌘⇧M 恢复', (await miniReg()) === true, null)
+    } else console.log('SKIP ⓪ ⌘⇧M 本来就没注册上(被别的进程占着),挂起检查跳过')
+
     // ① 录制撞上已有命令:不存,行下出提示;点「改绑到这里」才解绑对方
     await row('打开浏览器').locator('.shortcut-key').click()
     await page.keyboard.press('Meta+N')
