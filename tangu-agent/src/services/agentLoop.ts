@@ -1531,6 +1531,10 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     const visualsPref = visualsPrefOf(uiSettings);
     const nativeUiEnabled = intelligentUiEnabledFor({ ...visualGate, clientCapabilities });
     const sketchTurnSignal = sketchEnabled ? sketchTurnSignalFor(String(input.message || ''), visualsPref, nativeUiEnabled) : undefined;
+    // 商店卡片之后的重画守卫(10-17):本段出过商店卡片 + 用户没点名要图 → sketch / intelligent_ui 不执行。
+    // 单个调用一完成就置位;纯续写分段(applySteering([]))保留,真用户转向开新段时清零、按新消息重算「点名要图」。
+    let marketplaceCardsShown = false;
+    let visualAsked = sketchTurnSignal?.kind === 'explicit';
     if (clientCapabilities?.includes(MARKETPLACE_CARDS_CAPABILITY) && deps().brain.marketplace) systemParts.push('Forsion marketplace search and detail tools automatically render native plugin cards in Chat View. Those cards already satisfy visual delivery and include real details, compatibility and installation actions. After retrieving entries, explain them in brief prose; do not recreate them with sketch or intelligent_ui.');
     if (sketchEnabled) {
       systemParts.push(SKETCH_SECTION);
@@ -2137,6 +2141,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 即「一个 loop 结束即注入」。A 无正文且无工具调用(刚开跑就转向)则不落库,空段交前端丢弃。
     const applySteering = async (msgs: SteerMsg[]): Promise<void> => {
       actionAskText += msgs.map((m) => `\n${String(m.content || '')}`).join('');
+      if (msgs.length) { marketplaceCardsShown = false; visualAsked = msgs.some((m) => sketchTurnSignalFor(String(m.content || ''), visualsPref, nativeUiEnabled)?.kind === 'explicit'); }
       toolFailureGuard.reset(); repeatedToolFailure = false;
       const finalizedId = currentAssistantId;
       const finalizedContent = finalContent;
@@ -2375,9 +2380,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         parallelGroup,
       };
       await publish(runId, 'tool_call', basePayload);
-      // 商店卡片已经画出来了还要 sketch / intelligent_ui = 同一批插件画两遍(10-17 live 6 次里 2 次);用户点名要图的照常放行。
-      if (['sketch', 'intelligent_ui'].includes(call.function.name) && sketchTurnSignal?.kind !== 'explicit'
-        && clientCapabilities?.includes(MARKETPLACE_CARDS_CAPABILITY) && hasMarketplaceCards(allToolResults)) {
+      // 商店卡片已经画出来了还要 sketch / intelligent_ui = 同一批插件画两遍(10-17 live 6 次里 2 次);标志见 marketplaceCardsShown。
+      if (['sketch', 'intelligent_ui'].includes(call.function.name) && !visualAsked
+        && marketplaceCardsShown && clientCapabilities?.includes(MARKETPLACE_CARDS_CAPABILITY)) {
         return mkRejected(call, startedAt, parallelGroup, 'Not run: the store entries are already shown as plugin cards in this reply. Explain them in prose instead of drawing them again.');
       }
 
@@ -2496,6 +2501,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         if (!canRunToolInParallel(calls[i])) {
           const single = await executeOneToolCall(calls[i]);
           toolResults.push(single.toolResult);
+          if (hasMarketplaceCards([single.toolResult])) marketplaceCardsShown = true;
           workingMessages.push(single.toolMessage);
           i += 1;
           continue;
@@ -2510,6 +2516,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           : [await executeOneToolCall(batch[0])];
         for (const item of executed) {
           toolResults.push(item.toolResult);
+          if (hasMarketplaceCards([item.toolResult])) marketplaceCardsShown = true;
           workingMessages.push(item.toolMessage);
         }
         i += batch.length;

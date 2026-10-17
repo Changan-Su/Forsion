@@ -164,6 +164,15 @@ describe('商店卡片之后不再重画(10-17 live:6 次里 2 次 sketch 把插
     expect(toolText(llmPayloads[2], 'sk1')).toContain('already shown as plugin cards');
   }, 20_000);
 
+  it('同一条回复里先搜后画:搜索一完成就置位,同批的 sketch 也不执行', async () => {
+    configureTangu({ ...configured, brain: { ...configured.brain, marketplace: { list: async () => [entry('a1', 'Alice'), entry('b2', 'Bob')], detail: async () => null } } });
+    const both = () => () => ({ ...searchStep()(), toolCalls: [...searchStep()().toolCalls, ...sketchStep()().toolCalls] });
+    script = [both(), finalStep('两个候选作者不同。')];
+    const run = await runToSettled({}, '帮我在商店找 PDF 笔记插件,推荐两个候选', 'desktop/2.13.4', ['marketplace-cards.v1']);
+    expect(run.status).toBe('done');
+    expect(toolText(llmPayloads[1], 'sk1')).toContain('already shown as plugin cards');
+  }, 20_000);
+
   it('负对照:用户点名要图 → sketch 照常执行', async () => {
     configureTangu({ ...configured, brain: { ...configured.brain, marketplace: { list: async () => [entry('a1', 'Alice'), entry('b2', 'Bob')], detail: async () => null } } });
     script = [searchStep(), sketchStep(), finalStep('图里是两个候选。')];
