@@ -710,25 +710,26 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
     }
   }
 
+  // 全天行高由日区量出(随全天事件 / 全天草稿增减变化)→ 喂给左轴 gallday,保证小时刻度与网格线对齐。
+  // 摘下期间(事件照样会更新)offsetTop 读到 0:跳过,挂回来时下面 RO 的那一下再量(Codex 评审)。
+  const measureAllday = (): void => {
+    const el = wrap.current
+    const dc = el?.clientWidth ? el.querySelector('.amx-cal-daycol2') as HTMLElement | null : null
+    if (dc) setAlldayH(Math.max(0, dc.offsetTop - (HEAD_H + 14)))
+  }
   useLayoutEffect(() => {
     const el = wrap.current
     if (!el) return
     // 左轴已是独立 flex 项(52px),日区宽度不再含它 → colw 直接按日区宽均分。
     const minCol = n === 7 ? 84 : n === 3 ? 132 : 180
-    const measure = (): void => { if (el.clientWidth) setColw(Math.max(minCol, el.clientWidth / n)) }
+    const measure = (): void => { if (el.clientWidth) { setColw(Math.max(minCol, el.clientWidth / n)); measureAllday() } }
     measure()
     const ro = new ResizeObserver(measure)
     ro.observe(el)
     return () => ro.disconnect()
-  }, [n])
+  }, [n]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 全天行高由日区量出(随全天事件 / 全天草稿增减变化)→ 喂给左轴 gallday,保证小时刻度与网格线对齐。
-  useLayoutEffect(() => {
-    const el = wrap.current
-    if (!el) return
-    const dc = el.querySelector('.amx-cal-daycol2') as HTMLElement | null
-    if (dc) setAlldayH(Math.max(0, dc.offsetTop - (HEAD_H + 14)))
-  }, [events, colw, n, draftGeom])
+  useLayoutEffect(measureAllday, [events, colw, n, draftGeom]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useLayoutEffect(() => {
     const el = wrap.current

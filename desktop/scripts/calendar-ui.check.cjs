@@ -42,14 +42,17 @@ const calState = (win) => win.evaluate(() => {
   const t = document.querySelector('.amx-cal-title')
   return {
     title: `${t?.textContent}${t?.dataset.week ?? ''}`, cols: cols.length ? `${cols[0]}+${cols.length}` : '', top: Math.round(sc.scrollTop),
+    allday: document.querySelector('.amx-cal-gallday')?.offsetHeight, // 左轴「全天」镜像的高:错了小时刻度和点格子建事件的时刻都偏
     mini: `${document.querySelector('.amx-mini-title')?.textContent} ${[...document.querySelectorAll('.amx-mini-day.band')].map((d) => d.textContent).join(',')}`,
   }
 })
-/** 主区开一个新标签再点回「日历」:标签不显示时 Dockview 把日历的 DOM 整个摘下,点回来再挂上(10-17 回归:回来跳到 8 月)。 */
-async function tabAwayAndBack(win) {
+/** 主区开一个新标签再点回「日历」:标签不显示时 Dockview 把日历的 DOM 整个摘下,点回来再挂上(10-17 回归:回来跳到 8 月)。
+ *  whileHidden:摘下期间改一下数据(事件更新时日历在摘下的 DOM 上重渲)。 */
+async function tabAwayAndBack(win, whileHidden) {
   await win.locator('.dv-new-tab').first().click()
   await win.waitForSelector('.amx-cal', { state: 'detached', timeout: 5000 })
-  await win.waitForTimeout(300)
+  if (whileHidden) whileHidden()
+  await win.waitForTimeout(whileHidden ? 1800 : 300)
   await win.locator('.dv-tab', { hasText: '日历' }).first().click()
   await win.waitForSelector('.amx-cal', { timeout: 5000 })
   await win.waitForTimeout(700)
@@ -289,9 +292,17 @@ async function main() {
     await nudge(-2); await win.waitForTimeout(300)
     check('W-74 周中自由滚动后拉宽窗口不被拽回周首日', midBefore === weekCols[2] && midAfter === midBefore, `${midBefore} → ${midAfter}`)
     const weekBefore = await calState(win)
-    await tabAwayAndBack(win)
+    const evRaw = fs.readFileSync(EVENTS_DB, 'utf8')
+    await tabAwayAndBack(win, () => { // 摘下期间加一条定时事件(不动全天行):全天行高不许被摘下时量到的 0 冲掉(Codex 评审)
+      const db = JSON.parse(evRaw)
+      db.rows.push({ id: 'hidden-edit', cells: { name: '摘下时加的', date: `${d0}T07:00/${d0}T07:30` } })
+      fs.writeFileSync(EVENTS_DB, `${JSON.stringify(db, null, 2)}\n`)
+    })
     const weekBack = await calState(win)
-    check('周视图:开个新标签再点回日历,还停在原来那一周和时刻,小月历不跳', weekBefore.cols.startsWith(weekCols[0]) && JSON.stringify(weekBack) === JSON.stringify(weekBefore), `${JSON.stringify(weekBefore)} → ${JSON.stringify(weekBack)}`)
+    const hiddenEdit = await win.locator('.amx-cal-event[aria-label^="摘下时加的"]').count()
+    fs.writeFileSync(EVENTS_DB, evRaw)
+    await win.waitForSelector('.amx-cal-event[aria-label^="摘下时加的"]', { state: 'detached', timeout: 5000 })
+    check('周视图:开个新标签再点回日历,还停在原来那一周和时刻,小月历不跳,左轴全天行高不变(摘下期间事件更新过)', weekBefore.cols.startsWith(weekCols[0]) && weekBefore.allday > 0 && hiddenEdit === 1 && JSON.stringify(weekBack) === JSON.stringify(weekBefore), `${JSON.stringify(weekBefore)} → ${JSON.stringify(weekBack)} 新事件 ${hiddenEdit}`)
 
     const sticky = await win.evaluate(() => {
       const sc = document.querySelector('.amx-cal-tscroll')
