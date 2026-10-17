@@ -824,6 +824,47 @@
   white-space: pre-wrap; word-break: break-all; color: var(--text);
 }
 
+/* ====== Agent Desk 展开态的悬浮胶囊(10-17 方案 B,替掉「Agent Desk」标题行 + 文件预览自带顶栏) ======
+ * 胶囊样式同 Mini 顶栏(lcl/engine/miniCard.css .mini-card-cap):卡片底 + 细描边 + 卡片阴影,全走主题 token。
+ * 让位:每格顶部留一条 --desk-cap-band;Markdown 预览例外 —— 内边距挪进它自己的滚动容器,正文从胶囊底下滚过。 */
+.agent-desk-pane.has-caps { position: relative; --desk-cap-band: 46px; padding-top: var(--desk-cap-band); }
+.agent-desk-pane.has-caps:has(> .wsfile-tab .wsmd-scope), .agent-desk-pane.agent-desk-companion.has-caps { padding-top: 0; }
+.agent-desk-pane.has-caps > .wsfile-tab .wsmd-scope { padding-top: calc(18px + var(--desk-cap-band)); }
+/* 有保存冲突 / 失败横幅时(它排在滚动容器之前)整格照常让出胶囊带,横幅与「重新加载 / 覆盖」不许被胶囊压住 */
+.agent-desk-pane.has-caps:has(> .wsfile-tab .wsmd-banner) { padding-top: var(--desk-cap-band); }
+.agent-desk-pane.has-caps:has(> .wsfile-tab .wsmd-banner) > .wsfile-tab .wsmd-scope { padding-top: 18px; }
+/* 直播格的头行并进左胶囊;库内笔记的编辑器顶栏同卡片态一样藏掉(入口走 ⋯ →「在 Amadeus 中打开」) */
+.agent-desk-pane.has-caps .agent-desk-livehead, .agent-desk-pane.has-caps .amx-toolbar { display: none; }
+.desk-caps {
+  position: absolute; inset: 0 0 auto; z-index: 5; display: flex; justify-content: space-between; align-items: flex-start;
+  gap: 6px; padding: 8px 10px 0 12px; pointer-events: none;
+}
+.desk-cap {
+  pointer-events: auto; display: flex; align-items: center; gap: 1px; min-width: 0; flex: 0 0 auto; height: 34px; box-sizing: border-box; padding: 2px;
+  border: var(--border-width, 1px) solid var(--border); border-radius: var(--radius-pill, 999px);
+  background: var(--bg-card, var(--bg)); box-shadow: var(--card-shadow);
+}
+.desk-cap-name { flex: 0 1 auto; }
+/* 侧板拖窄:两颗胶囊都能缩,先挤掉的是视图控件槽(裁掉),⋯ 和清空 / 收起恒可见 */
+.desk-cap:last-child { flex-shrink: 1; max-width: 100%; }
+.desk-cap > .icon-btn, .desk-cap > .desk-cap-div { flex-shrink: 0; }
+.desk-cap .icon-btn { width: 28px; height: 28px; flex-shrink: 0; border-radius: var(--radius-pill, 999px); }
+.desk-cap-pick {
+  display: inline-flex; align-items: center; gap: 5px; min-width: 0; height: 28px; padding: 0 8px 0 9px;
+  border: 0; border-radius: var(--radius-pill, 999px); background: transparent; color: var(--text);
+  font: 500 var(--ui-font-caption, 11px)/1 var(--font-ui, sans-serif);
+}
+button.desk-cap-pick { cursor: pointer; }
+button.desk-cap-pick:hover, button.desk-cap-pick[aria-expanded='true'] { background: var(--overlay-light, rgba(127, 127, 127, 0.1)); }
+.desk-cap-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.desk-cap-ic { flex-shrink: 0; color: var(--accent-ink); }
+.desk-cap-caret { flex-shrink: 0; color: var(--text-faint, var(--text-muted)); }
+.desk-cap-slot { display: flex; align-items: center; gap: 1px; min-width: 0; overflow: hidden; }
+.desk-cap-slot .wsfile-seg { margin: 0; }
+.desk-cap-slot .wsfile-seg button { height: 28px; padding: 0 8px; border-radius: var(--radius-pill, 999px); }
+.desk-cap-div { flex: 0 0 auto; width: 1px; height: 14px; margin: 0 3px; background: var(--border); }
+.desk-cap-slot:empty + .desk-cap-div { display: none; }
+
 /* ====== Agent Desk 卡片态(默认态,住 .t2-rail,Pin Summary 下方) ======
  * 正文是"只看不摸"的预览(pointer-events:none + 缩镜),点整卡放大成侧板;
  * wsfile 工具行在迷你尺寸下只会挤成一团 → 藏掉,卡片自带头行。 */

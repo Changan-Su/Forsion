@@ -1212,10 +1212,11 @@ body.amx-marquee-active * {
 }
 .am-app .callout-chevron svg { transform: rotate(90deg); transition: transform 0.12s ease; }
 .am-app .callout-chevron.collapsed svg { transform: rotate(0deg); }
-/* PM 更新 Markdown marker 时会重建按钮；起始样式让新 SVG 仍从上一方向旋转入位。 */
+/* PM 更新 Markdown marker 时会重建按钮；起始样式让新 SVG 仍从上一方向旋转入位。
+   只认正在切换的那一块(data-fold-animating,直属标题行):别的原因重建按钮(撤销、回灌…)不许转一下。 */
 @starting-style {
-  .am-app .callout-chevron:not(.collapsed) svg { transform: rotate(0deg); }
-  .am-app .callout-chevron.collapsed svg { transform: rotate(90deg); }
+  .am-app .callout[data-fold-animating] > :first-child > .callout-chevron:not(.collapsed) svg { transform: rotate(0deg); }
+  .am-app .callout[data-fold-animating] > :first-child > .callout-chevron.collapsed svg { transform: rotate(90deg); }
 }
 .am-app .callout-chevron:hover { color: var(--text); background: var(--overlay-light); }
 .am-app .callout-chevron:focus-visible { outline: var(--focus-ring, 1px) solid var(--signal-line); outline-offset: 1px; }

@@ -102,6 +102,7 @@ const SKIP = {
   getLanguage: 'soft 主题的 panelGap 只喂给 Dockview Shell;单列壳不消费',
   FeedbackModal: '同上:入口(rb-feedback 图标 + open-feedback 命令;图标 2026-08-31 撤下、09-17 放回)门控在 window.tangu?.submitFeedback,移动 shim 无 → 不注册。(组件本身有可选桥检查并显示 unavailable,不会崩;此前这条理由写的「点了就崩」是错的)',
   UnitRemoteSurface: '设备远程面(整个主区切过去)是 <webview>+Electron 分区注入,纯 host 概念;移动端拍板不做被连方/内嵌面,App 互联入口 = UnitsSheet 开外部浏览器引导页(2026-08-25)',
+  runUnitRoutePayload: 'Root 里只接设置浮窗(设置 › 设备)发来的 unit-route 去处,在主窗开远程面 / 切 vaultSide;移动端没有卫星窗也没有远程面(见上一条)',
   Shell: '单列壳 SingleColumnHost 取而代之(mobile/vite.config engineSwap)',
   TopBar: 'Dockview tab 栏专属;单列壳自带导航',
   DesktopStatusBar: '单列壳无 footer 槽',
