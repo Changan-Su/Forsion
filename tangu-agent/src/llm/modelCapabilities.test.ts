@@ -82,7 +82,7 @@ describe('resolveModelCapability — 路由矩阵', () => {
     // Gemini 4 同样关不掉思考:不许落到可关的 gemini-native / gemini-openai-compat / openrouter 通用规则
     ['Gemini 4 托管', { provider: 'gemini', modelId: 'gemini-4-argon' }, 'gemini-native-3'],
     ['Gemini 4 兼容层', { baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', modelId: 'gemini-4-argon' }, 'gemini-openai-compat-3'],
-    ['OpenRouter Gemini 4', { baseUrl: 'https://openrouter.ai/api/v1', modelId: 'google/gemini-4-argon' }, 'openrouter-mandatory-reasoning'],
+    ['OpenRouter Gemini 4', { baseUrl: 'https://openrouter.ai/api/v1', modelId: 'google/gemini-4-argon' }, 'openrouter-gemini-3'],
     ['Gemini 2.5-flash 托管(可关)', { provider: 'gemini', modelId: 'gemini-2.5-flash' }, 'gemini-native'],
     ['Gemini 3 兼容层', { baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', modelId: 'gemini-3-flash-preview' }, 'gemini-openai-compat-3'],
     // ⚠️ 同一个 host,只有路径能区分原生 REST 与兼容层;而调用方**同时**传 provider 与 baseUrl。
@@ -397,6 +397,9 @@ describe('applyThinking — 各家线上形态', () => {
     expect(n.payload.generationConfig.thinkingConfig.thinkingBudget).not.toBe(0);
     expect(n.payload.temperature).toBeUndefined();
     expect(apply({ ...compat, modelId: 'gemini-3.8-flash' }, 'low', { temperature: 0.7 }).payload.temperature).toBeUndefined();
+    // OpenRouter 转发的 Gemini 4:同样不发 none、不发 temperature
+    const or = apply({ baseUrl: 'https://openrouter.ai/api/v1', modelId: 'google/gemini-4-argon' }, 'off', { temperature: 0.7 });
+    expect(or.payload).toEqual({ reasoning: { effort: 'minimal' } });
     // 弃用说明只针对 3+;2.5 不动
     expect(apply({ provider: 'gemini', modelId: 'gemini-2.5-pro' }, 'low', { temperature: 0.7 }).payload.temperature).toBe(0.7);
     expect(apply({ ...compat, modelId: 'gemini-2.5-flash' }, 'low', { temperature: 0.7 }).payload.temperature).toBe(0.7);

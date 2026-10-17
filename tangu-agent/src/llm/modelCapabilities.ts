@@ -691,11 +691,19 @@ const RULES: Rule[] = [
 
   // ── 聚合网关 ───────────────────────────────────────────────────────────
   {
+    // OpenRouter 转发的 Gemini 3/4:同样关不掉思考,且同 gemini-openai-compat-3 不发 temperature
+    // (OpenRouter 把它原样转给 Google)。和下面那条共用档表,只多 dropTemperature。
+    id: 'openrouter-gemini-3',
+    host: /(^|\.)openrouter\.ai$/,
+    model: /gemini-[34]/i,
+    cap: { format: 'openrouter', levels: { ...EFFORT_OPENROUTER, off: null }, maxTokensField: 'max_tokens', dropTemperature: true },
+  },
+  {
     // OpenRouter 归一层用 effort:'none' 表达关思考,但对模型元数据里 `mandatory: true`
     // (思考不可关)的型号会被上游拒。保持 openrouter 形态不变,只把 off 这一格关掉。
     id: 'openrouter-mandatory-reasoning',
     host: /(^|\.)openrouter\.ai$/,
-    model: /glm-5\.3|kimi-k3|gemini-[34]|grok-4\.[5-9]/i,
+    model: /glm-5\.3|kimi-k3|grok-4\.[5-9]/i,
     cap: { format: 'openrouter', levels: { ...EFFORT_OPENROUTER, off: null }, maxTokensField: 'max_tokens' },
   },
   {
