@@ -16,9 +16,9 @@ Forsion 的插件分两类,设置里统一成一页管理,**内置**与**外置*
 
 一个插件包可以同时带**引擎插件、Agent、技能和 Space** —— 装一次全部就位,不必分头去四个地方装。捆绑进来的东西在父插件的卡片里级联管理:一起启停、一起卸载,看得见各自是什么。插件自带的 Space 装好即出现在 Ribbon 上。
 
-给开发者:带引擎插件的包上架商店时,安装目录名要等于 manifest 的 `id`。目录名是从商店条目的显示名推出来的(只留小写字母、数字和连字符,上架后不能改)。桌面 2.13.3 及更早的版本上,两者不一样时页面调不到包里的引擎插件(每次调用都是 404,不报错);之后的版本没有这个限制。投稿时先用一个能推出 `id` 的名字,过审前再改显示名,或者把 `minAppVersion` 设到 2.13.3 之后的版本。
+给开发者:商店给每个条目一个不会变的 ID,新上架的条目装进 `plugins/market-<ID>/`,和显示名无关,所以显示名可以重复。装在这种目录里的插件以目录名为运行身份:包里的引擎插件照常按目录名挂路由,单独上架的引擎插件 id 变成 `market-<ID>`、数据目录在 `plugin-data/market-<ID>/`,它的工具名会被宿主改写成带哈希的唯一名字(两份同 id 的插件互不顶替)。别的插件在 `requiresPlugins` 里写你 manifest 的 `id` 照样认得到,前提是只装着一份。这种条目要 2.13.4 之后的桌面版本才装得了,旧版本会提示先升级 Forsion。更早上架的条目保留原来由显示名推出的目录名;其中带引擎插件的包在桌面 2.13.3 及更早的版本上,目录名和 manifest `id` 不一样时页面调不到包里的引擎插件(每次调用都是 404,不报错)。
 
-For developers: when a bundle that ships an engine plugin is listed in the Store, its install folder name must equal the manifest `id`. The folder name is derived from the listing's display name (lowercase letters, digits and hyphens only; it cannot change after listing). On desktop 2.13.3 and earlier, a bundle whose folder name differs from its id cannot reach its own engine plugin (every call returns 404, with no error shown); later versions have no such limit. Submit under a name that yields the id and change the display name before approval, or set `minAppVersion` to a desktop version after 2.13.3.
+For developers: the Store gives every listing an ID that never changes. New listings install into `plugins/market-<ID>/`, unrelated to the display name, so display names may repeat. A plugin in such a folder runs under the folder name: engine plugins inside a bundle still mount their routes under it, a standalone engine plugin's id becomes `market-<ID>` with its data under `plugin-data/market-<ID>/`, and the host renames its tools to unique hashed names (two plugins sharing an id never replace each other). Other plugins can still list your manifest `id` in `requiresPlugins` as long as only one copy is installed. These listings need a desktop version after 2.13.4; older ones ask the person to update Forsion first. Older listings keep the folder name derived from their display name; for those, a bundle with an engine plugin whose folder name differs from its manifest `id` cannot reach that engine plugin on desktop 2.13.3 and earlier (every call returns 404, with no error shown).
 
 ## 插件能做什么
 
@@ -48,6 +48,10 @@ Engine plugin text settings can set `secret: true` to render a password input (i
 - **npm**(引擎插件)— `tangu install npm:<包名>`,见[命令行](../reference/cli.md)。
 
 插件如果依赖某个本机程序,详情页会列出来并给一键安装引导。
+
+投稿时可以写标签(最多 8 个)、长描述、支持的平台(`desktop` / `macos` / `windows` / `linux` / `android` / `ios` / `web`)和 Forsion 版本范围:最低版本含本身,最高版本不含。包里 manifest 的 `minAppVersion`、`maxAppVersion`、`platforms` 优先于投稿表单。商店首页按这些筛选,安装前桌面和手机会再核一遍包里的 manifest,版本或平台不符的不下载、不写盘。每个条目有公开的评论区,新评论发到你(投稿账号)的收件箱,回复也通知被回复的人;你可以在评论区关掉全部或某一个插件的评论消息,评论照样公开。
+
+When you submit, you can add tags (up to 8), a long description, supported platforms (`desktop`, `macos`, `windows`, `linux`, `android`, `ios`, `web`) and a Forsion version range: the minimum is inclusive, the maximum exclusive. `minAppVersion`, `maxAppVersion` and `platforms` in the package manifest take precedence over the form. The Store home filters on them, and desktop and phone check the package manifest again before installing: a version or platform that does not fit is never downloaded or written to disk. Every listing has a public comment section. New comments reach your inbox (the submitting account) and replies also notify the person replied to; you can turn off comment messages for all your plugins or for one, and the comments stay public.
 
 ## 在 Android 上用插件
 

@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.43.0
+  version: 1.44.0
   author: Forsion
   category: Forsion
 ---
@@ -200,7 +200,7 @@ ctx.openMiniPanel?.('mini-counter', {
 | **播种一次** | Agent 的**人格面**(config.toml / SOUL.md / Library / MEMORY) | 首次发现拷入引擎成为活体,**永不覆盖**,卸载保留 |
 | **指纹自愈** | Agent 的 `skills/`(2026-08-25 起) | 每次启动比指纹:用户没动过的跟着 bundle 更新;动过的(含无指纹老副本)保护不覆盖并在引擎日志报出来 |
 
-**带引擎插件的包上架商店:安装目录名要等于 manifest 的 `id`**。商店把包装进 `plugins/<安装目录名>/`,目录名是从**条目的显示名**推出来的(只留小写字母、数字和连字符,中文全丢;上架后不能改),和 manifest 的 `id` 没有关系;引擎把包内引擎插件的 scoped 路由挂在这个目录名下。桌面 2.13.3 及更早,页面的 `ctx.tangu.request` 拿 manifest `id` 去拼路由,两者不一样时每次调用都是 404、不报错,引擎那一半等于没装。之后的桌面版本由宿主自己按目录名拼,不再有这个限制。发包时二选一:投稿用一个能推出 `id` 的名字(例如 id `notebook` 就先叫「Notebook」,过审前再把显示名改成想要的),或者把 `minAppVersion` 设到 2.13.3 之后的桌面版本。没有引擎插件的包不受影响。
+**上架商店后的安装目录与运行身份(2026-10-17 起)**:商店给每个条目一个不会变的 ID,新上架的条目装进 `plugins/market-<ID>/`(引擎插件是 `~/.tangu/plugins/market-<ID>/`),和显示名无关,显示名可以重复。装在这种目录里的插件以目录名为运行身份:包里的引擎插件照常按这个目录名挂 scoped 路由,`ctx.tangu.request` 由宿主拼好,不用管;单独上架的引擎插件 `ctx.paths.dataDir` 在 `plugin-data/market-<ID>/`,注册的工具名会被宿主改写成 `market_<原名前 16 位>_<哈希>`(两份同 id 的插件互不顶替),所以提示词和文档里别让模型按字面工具名去调;`sdk.runs.start` 的 `toolNames` 与 `sdk.automation.save` 的 `tool` 照写原名,宿主自己换。别的插件在 `requiresPlugins` 里写你 manifest 的 `id` 照样认得到,前提是只装着一份。这种条目只有 2.13.4 之后的桌面版本装得了,旧桌面会收到「请先升级 Forsion」。更早上架的条目保留原来由显示名推出的目录名:其中带引擎插件的包在桌面 2.13.3 及更早的版本上,目录名和 manifest `id` 不一样时页面调不到包里的引擎插件(每次 404、不报错)。没有引擎插件的包不受影响。
 
 包根 `skills/`(全局技能)是原地扫描、不落盘拷贝,不在上表内。因此 onboarding 里**不要** recommends 自家已内嵌的 agent/skill(会引导去商店重复装)。真实范例:`Forsion-Instrumentality-Project/bluebird/`。
 
@@ -899,7 +899,7 @@ operations in existing domain tools/skills. Old hosts ignore the optional declar
 ### 前置插件 requiresPlugins 与生命周期(2026-10-02 起)
 
 - manifest `"requiresPlugins": ["other-id", { "id": "x", "minVersion": "1.2.0", "market": "x-slug", "name": "X" }]`(≤8 条;
-  `market` = 商店 installSlug,设置页「在商店中查找」拿它预填搜索;`name` = 前置没装时显示的名字)。
+  `market` = 商店 installSlug,新上架的条目是 `market-<商店 ID>`;设置页「在商店中查找」拿它预填搜索;`name` = 前置没装时显示的名字)。
   前置算齐 ⇔ 已安装、没被门禁挡、版本 ≥ `minVersion`、**正在运行**。没齐时:用户关着 → 开关灰掉开不了;用户开着 → 「等待前置插件」,
   前置就位自动激活;前置停用 / 卸载 → 自动暂停(依赖方先停),回来自动恢复。互相依赖成环的永不激活。
 - 前置的意思是「我要它注册的东西在」(视图 / 命令 / 文件类型),**不是**「我能 import 它」—— 插件之间仍然不直接互调。
@@ -1508,6 +1508,14 @@ const off = ctx.app.watchFile?.('Snippets/latex.js', () => reload())
 
 推成独立 GitHub 公开仓库(引擎插件记得含 `dist/`)→ 个人中心 → 投稿 选对应类型给仓库链接或传 zip(zip 内容放根或单层文件夹,两层路径装不了)。捆绑包(默认形态)按 **amadeus-plugin** 类投稿(桌面按包内 manifest 实测路由,自然落进 `~/.forsion/plugins/`)。GitHub 来源会**锁定过审时的 release tag**,发新版需重新过审。升版号必写 `CHANGELOG.md` 一节(`## x.y.z — YYYY-MM-DD`),宿主会渲染成插件详情页的更新日志。
 
+### 投稿元数据、版本要求与评论(2026-10-17 起)
+
+- 投稿表单可填:标签(≤8 个,每个 ≤40 字)、长描述(详情页「内容介绍」)、支持平台(`desktop` / `macos` / `windows` / `linux` / `android` / `ios` / `web`)、Forsion 版本范围(`minAppVersion` 含、`maxAppVersion` 不含,语义化版本号)。
+- 包里 manifest 的 `minAppVersion` / `maxAppVersion` / `platforms` 优先于表单;已有的 `isDesktopOnly: true` 等同只支持桌面。桌面和手机安装前都会读包里的 manifest 再核一遍,不符就不下载、不写盘;旧版本的过审包和快照会留着,用户可以在「版本」栏装回历史版本。
+- 不写版本范围 = 「未知」,商店照常展示但不算确认适配;靠新宿主接缝的插件写 `minAppVersion`,已知在某个版本坏掉的写 `maxAppVersion`。
+- 每个条目有公开评论区(登录可评、可回复、本人可改可删)。新评论发到投稿账号的收件箱,回复通知被回复者;作者可以在评论区关掉全部或单个插件的评论消息。
+- Tangu 在聊天里可以用 `search_marketplace` 搜商店、给用户推荐(画成插件卡片,装不装由用户在卡片上点),所以标签和描述写清能力,别堆营销词。
+
 ### Android App 与 `isDesktopOnly`(2026-10-02 起)
 
 Forsion Android App 也跑 Forsion 插件(同一份 `pluginStore`、同一个 `ctx`),**只经市场装**、只装 `amadeus-plugin` 类;插件住在 App 私有目录,`ctx.loadData` / `ctx.saveData` 照常可用。
@@ -1561,7 +1569,7 @@ The returned disposer removes only its own current registration. Disable, unload
 
 Feature-detect these additive interfaces; released 2.12.2 builds do not contain them.
 
-- Renderer `ctx.tangu.request?(enginePluginId, path, {method?,body?,signal?})`: authenticated JSON through the host, restricted to an engine plugin in the caller's bundle. Absolute route fragments only, no query/encoded/dot segments. Local desktop only. Disable aborts pending requests. The host builds the route from the bundle's install folder name, so the plugin never spells the prefix. Desktop 2.13.3 and earlier built it from the manifest `id` instead: there a bundle whose install folder name differs from its manifest `id` gets 404 on every call (see the bundle section for what to do when listing in the Store).
+- Renderer `ctx.tangu.request?(enginePluginId, path, {method?,body?,signal?})`: authenticated JSON through the host, restricted to an engine plugin in the caller's bundle. Absolute route fragments only, no query/encoded/dot segments. Local desktop only. Disable aborts pending requests. The host builds the route from the bundle's install folder name, so the plugin never spells the prefix. Desktop 2.13.3 and earlier built it from the manifest `id` instead: there a bundle whose install folder name differs from its manifest `id` gets 404 on every call (see the bundle section for what to do when listing in the Store). New Store listings install into `market-<listing ID>` folders and need a desktop after 2.13.4, so this only concerns older listings.
 - Renderer `await ctx.tangu.openSession?(id)`: hydrates hidden session metadata/model/config into the native child-session cache, then opens a native chat tab. No new run is started.
 - Engine `ctx.registerScopedRoutes(router => { router.get('/snapshot', handler); })`: host mounts `/extensions/<bundle directory>/<engine id>` (the install folder name as found on disk, never an id the package declares), applies user authentication and rejects remote callers. `req.user.userId` is authoritative. Host removes the route on disable.
 - Engine `ctx.paths.dataDir`: stable host-owned plugin data directory. Do not derive writable runtime data from installation paths.
