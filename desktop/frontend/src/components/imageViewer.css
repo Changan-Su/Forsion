@@ -22,13 +22,13 @@
 .iv-fly { position: absolute; inset: 0; transition: transform 200ms cubic-bezier(.2, .8, .2, 1); }
 .iv-img {
   position: absolute; left: 0; top: 0; max-width: none; transform-origin: 0 0; user-select: none; -webkit-user-drag: none;
-  border-radius: var(--radius-md, 12px); box-shadow: 0 1px 2px rgb(0 0 0 / .06), 0 10px 30px rgb(0 0 0 / .10);
+  border-radius: var(--radius-md, 12px); box-shadow: var(--card-shadow);
 }
 :root.dark .iv-img { box-shadow: none; }
 .iv-img.is-side { opacity: .4; cursor: pointer; }
 .iv-stage.is-zoomed .iv-img { border-radius: 0; }
 
-.iv-arrow { position: absolute; top: 50%; z-index: 2; width: 36px; height: 36px; margin-top: -18px; padding: 0; border: 0; border-radius: 50%; display: grid; place-items: center; background: var(--bg-card); color: var(--text); box-shadow: 0 1px 3px rgb(0 0 0 / .08); cursor: pointer; }
+.iv-arrow { position: absolute; top: 50%; z-index: 2; width: 36px; height: 36px; margin-top: -18px; padding: 0; border: 0; border-radius: 50%; display: grid; place-items: center; background: var(--bg-card); color: var(--text); box-shadow: var(--btn-shadow); cursor: pointer; }
 .iv-arrow.is-prev { left: 20px; }
 .iv-arrow.is-next { right: 20px; }
 :root.dark .iv-arrow { box-shadow: none; }
