@@ -7,16 +7,22 @@ describe('homepage wallpaper prefs', () => {
   it('normalizes old or malformed persisted values to safe defaults', () => {
     expect(normalizeHomepageWallpaperPrefs(null)).toEqual(DEFAULT_HOMEPAGE_WALLPAPER_PREFS)
     expect(normalizeHomepageWallpaperPrefs({ source: 'javascript:', bingDaily: 0, focusBlur: 0 })).toMatchObject({
-      source: 'theme', themePreset: 'rings', bingDaily: true, focusBlur: true, vignette: true,
+      source: 'theme', themePreset: 'orbit', imageChoice: 'hack2gate', bingDaily: true, focusBlur: true, vignette: true, motion: true,
     })
+    expect(normalizeHomepageWallpaperPrefs({ motion: false }).motion).toBe(false)
   })
 
-  it('keeps known theme presets and falls back from unknown ones', () => {
-    expect(normalizeHomepageWallpaperPrefs({ themePreset: 'topography' }).themePreset).toBe('topography')
-    expect(normalizeHomepageWallpaperPrefs({ themePreset: 'hack2gate' }).themePreset).toBe('hack2gate')
-    expect(normalizeHomepageWallpaperPrefs({ themePreset: 'something-else' }).themePreset).toBe('rings')
-    // 晨界已下线,旧偏好回落缺省扶桑环。
-    expect(normalizeHomepageWallpaperPrefs({ themePreset: 'horizon' }).themePreset).toBe('rings')
+  it('maps the retired presets and sources onto the new set', () => {
+    expect(normalizeHomepageWallpaperPrefs({ themePreset: 'rings' }).themePreset).toBe('orbit')
+    expect(normalizeHomepageWallpaperPrefs({ themePreset: 'topography' }).themePreset).toBe('path')
+    expect(normalizeHomepageWallpaperPrefs({ themePreset: 'weave' }).themePreset).toBe('paper')
+    expect(normalizeHomepageWallpaperPrefs({ themePreset: 'horizon' }).themePreset).toBe('orbit')
+    expect(normalizeHomepageWallpaperPrefs({ themePreset: 'path' }).themePreset).toBe('path')
+    expect(normalizeHomepageWallpaperPrefs({ themePreset: 'glyph' }).themePreset).toBe('glyph')
+    // Hack2Gate 是位图,挪进「图片」;正在用必应的人只记下选择,来源不动
+    expect(normalizeHomepageWallpaperPrefs({ source: 'theme', themePreset: 'hack2gate' })).toMatchObject({ source: 'image', imageChoice: 'hack2gate', themePreset: 'orbit' })
+    expect(normalizeHomepageWallpaperPrefs({ source: 'bing', themePreset: 'hack2gate' })).toMatchObject({ source: 'bing', imageChoice: 'hack2gate' })
+    expect(normalizeHomepageWallpaperPrefs({ source: 'custom', themePreset: 'weave' })).toMatchObject({ source: 'image', imageChoice: 'custom', themePreset: 'paper' })
   })
 
   it('accepts only Bing https images from the archive', () => {
