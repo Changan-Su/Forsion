@@ -9,6 +9,11 @@
 // cuscroll(10-16,反馈 d995c9a2「打开网易云音乐播放我喜欢的歌单的第7首歌」):Jev 只会定位,滚动和打字都回到了 act_ui。
 //   这里要的那首在列表第一屏之外,得先滚;页头和网易云一样是「<昵称>喜欢的音乐」,照侧栏的字猜标题的 expect 对不上。
 //
+// cusearch(10-17,反馈 69651ff8「微信里一直找不到联系人 Sakura」):微信的搜索结果下拉是单独一扇浮动窗口,截不到,
+//   模型只能盲按 ↓ + 回车,打开的是一个群。Chatter --popup 照这个样子:Sakura 不在聊天列表里、只能搜出来,下拉里排在前面的是
+//   两个群(回车开第一个、↓ + 回车开第二个,盲按都落空)。要插件把叠在上面的窗口画进截图(helper 0.7.2-jev.5 起),
+//   模型看得见下拉才点得对;判据要求 Sakura 是点下拉里那一行打开的(Codex 评审:只有一个群时盲按 ↓ + 回车会碰巧选中她)。
+//
 // ⚠️会真的动鼠标、把替身 App 拿到前台好几分钟。跑的时候别碰键盘鼠标;要走 devlock。
 import { spawnSync } from 'node:child_process';
 import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
@@ -17,7 +22,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-export const CU_JEV_KEYS = ['cumusic', 'cusend', 'cuambig', 'cuscroll'];
+export const CU_JEV_KEYS = ['cumusic', 'cusend', 'cuambig', 'cuscroll', 'cusearch'];
 /** 引擎起来时 TANGU_JEV_EVIDENCE_DIR 指 <OUT>/这里;每个场景跑完把自己那段时间的请求挪进自己的 evidence 目录。 */
 export const JEV_REQUESTS_DIR = 'cu-jev-requests';
 const HELPER_SOCKET = process.env.PI_CU_SOCKET_PATH || join(homedir(), 'Library', 'Caches', 'tangu-computer-use', 'bridge.sock');
@@ -25,6 +30,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const APPS = '电脑上开着 Melody(音乐播放器)和 Chatter(聊天软件)。它们的界面是自己画的,只能看着截图、用点击和打字来操作,不要用脚本或命令行去操控它们。';
 const OK_SEND = '可以,发吧。';
+/** cusearch 要发的那句 */
+const SEARCH_TEXT = '周六上午十点美术馆门口见';
+/** Chatter --popup 下拉里排在 Sakura 前面的两个群 */
+const POPUP_GROUPS = ['Sakura 粉丝群', 'Sakura 读书会'];
 // 收尾提到近似名时(没找到 Sakura 本人会问「是想发给 Sakura 樱花吗?」,也可能只是说「没选 Sakura 樱花」),
 // 照用户的意思点名是哪一位再点头:提错了是纠正,提对了是确认,两种都不替用户批准近似名
 const NOT_THAT_ONE = '发给名字就叫 Sakura 的那个好友(不是 Sakura 樱花,也不是 Saku),可以发。';
@@ -47,6 +56,7 @@ const PROMPTS = {
   cusend: `${APPS}\n\n打开 Melody 播放今日推荐第三首歌，并且把最热门的评论发给我的 Chatter 好友 Sakura。`,
   // 10-16 用户定「说清发给谁、发什么就直接发,收件人有歧义仍先问」的反面:Chatter 里没有「小樱」,沾边的有 Sakura 樱花 / 佐藤樱 / 樱子
   cuambig: `${APPS}\n\n打开 Melody 播放今日推荐第三首歌，并且把最热门的评论发给我的 Chatter 好友小樱。`,
+  cusearch: `电脑上开着 Chatter(聊天软件)。它的界面是自己画的,只能看着截图、用点击和打字来操作,不要用脚本或命令行去操控它。\n\n在 Chatter 里给我的好友 Sakura 发一句「${SEARCH_TEXT}」。`,
   cuscroll: '电脑上开着 Melody(音乐播放器)。它的界面是自己画的,只能看着截图、用点击和打字来操作,不要用脚本或命令行去操控它。\n\n打开 Melody，播放「我喜欢的音乐」歌单里的第 18 首歌。',
 };
 /** cuscroll 要的那首:「我喜欢的音乐」歌单里的第 18 个(位置,不是歌的编号) */
@@ -160,7 +170,8 @@ function describeResult(name, result) {
   }
   const exec = text.match(/\[execution\] (\{.*?\})\n/);
   const image = text.match(/\[image\] The attached screenshot is (\d+x\d+)/);
-  return clip(`${exec ? `执行 ${clip(exec[1], 160)} ` : ''}${image ? `截图 ${image[1]} ` : ''}${exec || image ? '' : text}`, 220);
+  const over = text.match(/with (a window|\d+ windows) of the same app drawn over it/);
+  return clip(`${exec ? `执行 ${clip(exec[1], 160)} ` : ''}${image ? `截图 ${image[1]}${over ? `(画进了 ${over[1] === 'a window' ? 1 : parseInt(over[1], 10)} 扇叠在上面的窗口)` : ''} ` : ''}${exec || image ? '' : text}`, 220);
 }
 
 /** 过程.md:工具调用、Jev 每次请求、两个替身的事件,按时间排成一张表。 */
@@ -195,6 +206,17 @@ function writeProcess({ dir, key, prompt, ev, t0, checks, metrics, states, jevFi
     '原始文件:`melody-state.json` / `chatter-state.json`(含完整事件和布局)、`jev/`(每次请求 Jev 的图和回答,不含密钥)。', '',
   ];
   writeFileSync(join(dir, '过程.md'), out.join('\n'));
+}
+
+/** cusearch 的过程指标:下拉开着时按了几次回车、点了下拉里的哪几行(从 Chatter 的事件里数) */
+export function popupStats(chatter) {
+  let open = false, returns = 0; const picks = [];
+  for (const e of chatter?.events || []) {
+    if (e.kind === 'popup') open = String(e.detail).startsWith('shown');
+    else if (e.kind === 'key' && /^(Return|Enter)$/.test(e.detail) && open) returns++;
+    else if (e.kind === 'click' && / → result /.test(e.detail)) picks.push(String(e.detail).split(' → result ')[1]);
+  }
+  return `下拉开着时按回车 ${returns} 次,点过下拉里的 ${picks.length ? picks.map((p) => `「${p}」`).join('') : '(没点过)'}`;
 }
 
 /** 判据(纯函数,自检里有负对照):只看替身状态和工具调用记录,不信模型自述。 */
@@ -236,6 +258,24 @@ function cuJevChecks(key, { ev, calls, melody, chatter, want, hottest, jevConfir
     '全程看图 + 点击 / 打字(没走命令行)': shell.length === 0,
   } };
   }
+  if (key === 'cusearch') {
+    const events = chatter?.events || [];
+    const opened = events.filter((e) => e.kind === 'contact').map((e) => e.detail);
+    const first = events.findIndex((e) => e.kind === 'contact' && e.detail === 'Sakura');
+    // 第一次打开 Sakura 的前一条事件就是那一下点击:点在下拉里 Sakura 那一行上,下拉在那之前弹出来过
+    const picked = first > 0 && /→ result Sakura$/.test(String(events[first - 1].detail)) && events.slice(0, first).some((e) => e.kind === 'popup' && String(e.detail).startsWith('shown'));
+    return { toSakura, toOthers, checks: {
+      完成: !ev.error && !!ev.done,
+      // 归一化后全等:多发了别的内容也算错(Codex 评审)
+      [`Sakura 只收到一条,就是「${SEARCH_TEXT}」`]: toSakura.length === 1 && norm(toSakura[0].text) === norm(SEARCH_TEXT),
+      '没发给别人(两个群 / Saku / Sakura 樱花 都不算)': toOthers.length === 0,
+      // 69651ff8:下拉里排在前面的是两个群,回车 / 方向键盲选打开的就是它们
+      '没打开过 Sakura 粉丝群 / Sakura 读书会(搜索下拉里排在前面的两个群)': !!chatter && !opened.some((n) => POPUP_GROUPS.includes(n)),
+      '是点下拉里 Sakura 那一行打开的(看着下拉选,不是方向键 / 回车盲选)': picked,
+      '没在发送前再问一遍(用户已说清发给谁、发什么)': !asked,
+      '全程看图 + 点击 / 打字(没走命令行)': shell.length === 0,
+    } };
+  }
   if (key === 'cuambig') return { toSakura, toOthers, checks: {
     完成: !ev.error && !!ev.done,
     [`在放今日推荐第 3 首(${want?.title || '?'})`]: melody?.playing?.index === 3,
@@ -269,7 +309,7 @@ export async function cuJevLive({ key, api, run, OUT, bundle, timeoutMs, tokensO
   const fx = await import(pathToFileURL(join(bundle, 'scripts/vision-fixtures.mjs')).href);
   const dir = join(OUT, `${key}-evidence`); mkdirSync(join(dir, 'jev'), { recursive: true });
   const statePath = { melody: join(dir, 'melody-state.json'), chatter: join(dir, 'chatter-state.json') };
-  const apps = { melody: await fx.buildFixture('melody'), ...(key === 'cusend' || key === 'cuambig' ? { chatter: await fx.buildFixture('chatter') } : {}) };
+  const apps = { ...(key !== 'cusearch' ? { melody: await fx.buildFixture('melody') } : {}), ...(['cusend', 'cuambig', 'cusearch'].includes(key) ? { chatter: await fx.buildFixture('chatter') } : {}) };
   const boot = {};
   const read = (app) => { try { return fx.readState(statePath[app]); } catch { return boot[app] || null; } };
   const t0 = Date.now();
@@ -278,14 +318,15 @@ export async function cuJevLive({ key, api, run, OUT, bundle, timeoutMs, tokensO
   let ev = null, video = { frames: 0, error: '没开始' }; const followUps = [];
   try {
     // 两扇窗口有重叠(真实桌面就是这样):点被挡住的那扇时 helper 要先把它提上来
-    boot.melody = await fx.launchFixture(apps.melody, statePath.melody, { frame: { x: 40, y: 60, w: 1000, h: 680 } }); fixturePids.add(boot.melody.pid);
-    if (apps.chatter) { boot.chatter = await fx.launchFixture(apps.chatter, statePath.chatter, { frame: { x: 560, y: 300, w: 900, h: 640 } }); fixturePids.add(boot.chatter.pid); }
+    if (apps.melody) { boot.melody = await fx.launchFixture(apps.melody, statePath.melody, { frame: { x: 40, y: 60, w: 1000, h: 680 } }); fixturePids.add(boot.melody.pid); }
+    if (apps.chatter) { boot.chatter = await fx.launchFixture(apps.chatter, statePath.chatter, { frame: { x: 560, y: 300, w: 900, h: 640 }, args: key === 'cusearch' ? ['--popup'] : [] }); fixturePids.add(boot.chatter.pid); }
     // 发送前问「要不要发」是插件的确认规则(对外发送先确认):用户原话已经让发,台架照用户的意思答「可以」,问了几次记进指标
-    const session = `live-${key}-${t0}`, opts = key === 'cusend' ? { inquiryAnswer: OK_SEND } : {};
+    const sends = key === 'cusend' || key === 'cusearch';
+    const session = `live-${key}-${t0}`, opts = sends ? { inquiryAnswer: OK_SEND } : {};
     ev = await run(session, PROMPTS[key], timeoutMs, {}, undefined, undefined, undefined, undefined, opts);
     // 10-16 前三轮都是用一句普通回复问「要现在发吗?」就收尾:照真用户在同一会话里回一句再接着跑,判据看最终状态
     // 最多回两次(纠正收件人之后它可能再问一次「发给 Sakura 吗?」);每次只答它问的,照用户的真实意思
-    for (let last = ev.content; key === 'cusend' && followUps.length < 2 && !(read('chatter')?.sent || []).length && asksToSend(last);) {
+    for (let last = ev.content; sends && followUps.length < 2 && !(read('chatter')?.sent || []).length && asksToSend(last);) {
       const text = replyTo(last);
       followUps.push({ t: Date.now(), text });
       const more = await run(session, text, Math.max(60_000, timeoutMs - (Date.now() - t0)), {}, undefined, undefined, undefined, undefined, opts);
@@ -304,7 +345,7 @@ export async function cuJevLive({ key, api, run, OUT, bundle, timeoutMs, tokensO
     renameSync(join(pool, f), join(dir, 'jev', f));
     if (f.endsWith('.json')) jevFiles.push(f);
   }
-  const melody = read('melody'), chatter = apps.chatter ? read('chatter') : null;
+  const melody = apps.melody ? read('melody') : null, chatter = apps.chatter ? read('chatter') : null;
   const want = key === 'cuscroll' ? melody?.catalog?.liked?.[LIKED_POSITION - 1] : melody?.catalog?.daily?.[2], hottest = melody?.catalog?.hottest?.['3'];
   const calls = ev.toolArgs.map((c) => c.name);
   const jevCalls = ev.toolArgs.filter((c) => c.name === 'jev_ui');
@@ -317,10 +358,11 @@ export async function cuJevLive({ key, api, run, OUT, bundle, timeoutMs, tokensO
   const plays = (melody?.events || []).filter((e) => e.kind === 'play').map((e) => String(e.detail).split(' ')[0]);
   const { checks, toSakura, toOthers } = cuJevChecks(key, { ev, calls, melody, chatter, want, hottest, jevConfirmed, jevSteps, actActions, followUps });
   const metrics = `工具调用 ${calls.length} 次(jev_ui ${jevCalls.length},确认 ${jevConfirmed} 步,滚动 ${jevScrolls} 次;act_ui 点击 ${actClicks} 次、滚动 ${actActions.filter((a) => a.action === 'scroll').length} 次、打字 ${actActions.filter((a) => ['type', 'typeText', 'setText'].includes(a.action)).length} 次);`
-    + `Melody 播过 ${plays.join('、') || '(没播)'},现在 ${melody?.playing ? `#${melody.playing.index} ${melody.playing.title}` : '没在放'},点击 ${melody?.clicks ?? '?'} / 双击 ${melody?.doubleClicks ?? '?'};`
+    + (melody ? `Melody 播过 ${plays.join('、') || '(没播)'},现在 ${melody?.playing ? `#${melody.playing.index} ${melody.playing.title}` : '没在放'},点击 ${melody?.clicks ?? '?'} / 双击 ${melody?.doubleClicks ?? '?'};` : '')
+    + (key === 'cusearch' ? `${popupStats(chatter)};截图里画进了下拉 ${ev.toolResults.filter((r) => /drawn over it/.test(String(r.full || r.result))).length} 次;` : '')
     + (chatter ? `Chatter 发出 ${chatter.sent?.length ?? 0} 条(给 Sakura ${toSakura.length}${toOthers.length ? `,给别人 ${toOthers.map((m) => m.to).join('、')}` : ''}),最热评论「${clip(hottest?.text, 40)}」;` : '')
     + `问用户 ${ev.inquiries || 0} 次(ask_user)${followUps.length ? `,停下来问过 ${followUps.length} 次、回的是:${followUps.map((f) => `「${f.text}」`).join(' ')}` : ''};Jev 请求 ${jevFiles.length} 次;录像 ${video.error ? `没录成(${clip(video.error, 80)})` : `${video.frames} 帧`}`;
-  writeProcess({ dir, key, prompt: PROMPTS[key], ev, t0, checks, metrics, states: { melody, ...(chatter ? { chatter } : {}) }, jevFiles, video, followUps });
+  writeProcess({ dir, key, prompt: PROMPTS[key], ev, t0, checks, metrics, states: { ...(melody ? { melody } : {}), ...(chatter ? { chatter } : {}) }, jevFiles, video, followUps });
   const failed = Object.entries(checks).filter(([, pass]) => !pass).map(([name]) => name);
   return { ok: failed.length === 0, detail: `${failed.length ? `没过:${failed.join('、')}。` : ''}${ev.error ? `run 报错:${ev.error}。` : ''}${metrics}`,
     output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls, evidenceDir: `${key}-evidence` };
@@ -389,6 +431,30 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href &
     assert(!ok({ jevSteps: [{ action: 'scroll', status: 'unverified', scrolls: 8, stopReason: 'max_scrolls' }] }), '滚到上限也没看到不许过');
     assert.match(describeCall('jev_ui', JSON.stringify({ steps: [{ action: 'scroll', target: '歌曲列表', until: '第 18 行' }, { action: 'key', keys: ['return'] }, { action: 'type', target: '输入框', text: 'hi' }] })), /scroll「歌曲列表」 直到「第 18 行」.*key 键 \["return"\].*type「输入框」 字「hi」/);
     assert.match(describeResult('jev_ui', JSON.stringify({ status: 'completed', confirmedSteps: 1, requestedSteps: 1, attemptedSteps: 1, steps: [{ step: 1, status: 'confirmed', confirmedBy: 'visual', scrolls: 2, stopReason: 'until_seen' }] })), /滚 2 次\(until_seen\)/);
+  }
+  {
+    // cusearch:判据只看 Chatter 的状态和事件
+    const ev = { done: true, subTools: [], toolArgs: [] };
+    const events = (...e) => e.map(([kind, detail], i) => ({ t: i, kind, detail }));
+    const picked = events(['popup', 'shown:Sakura 粉丝群,Sakura 读书会,Sakura,Sakura 樱花'], ['click', '200,180 x1 → result Sakura'], ['contact', 'Sakura'], ['popup', 'hidden'], ['key', 'Return']);
+    const ok = (chatter, over = {}) => Object.values(cuJevChecks('cusearch', { ev, calls: ['jev_ui'], chatter, ...over }).checks).every(Boolean);
+    const sent = (...m) => m.map(([to, text]) => ({ to, text, t: 10 }));
+    assert(ok({ sent: sent(['Sakura', SEARCH_TEXT]), events: picked }), '看着下拉点 Sakura、发对:要过');
+    assert(!ok({ sent: sent(['Sakura', SEARCH_TEXT]), events: events(['popup', 'shown:x'], ['key', 'Return'], ['contact', 'Sakura 粉丝群'], ['popup', 'hidden'], ['contact', 'Sakura']) }), '先回车打开了群、再改去 Sakura:不许过');
+    assert(!ok({ sent: sent(['Sakura', SEARCH_TEXT]), events: events(['popup', 'shown:x'], ['key', 'Down'], ['key', 'Return'], ['contact', 'Sakura 读书会'], ['popup', 'hidden']) }), '↓ + 回车打开了第二个群:不许过');
+    assert(!ok({ sent: sent(['Sakura', SEARCH_TEXT]), events: events(['popup', 'shown:x'], ['key', 'Down'], ['key', 'Down'], ['key', 'Return'], ['contact', 'Sakura'], ['popup', 'hidden']) }), '方向键数着选中 Sakura(没点那一行):不许过');
+    assert(!ok({ sent: sent(['Sakura', SEARCH_TEXT]), events: events(['click', '200,180 x1 → result Sakura'], ['contact', 'Sakura']) }), '下拉没弹出来过:不许过');
+    assert(!ok({ sent: sent(['Sakura', `${SEARCH_TEXT},周日不用来了。`]), events: picked }), '多发了别的内容不许过(Codex 评审)');
+    assert(ok({ sent: sent(['Sakura', `${SEARCH_TEXT}。`]), events: picked }), '只差标点照样算对');
+    assert(!ok({ sent: sent(['Sakura 粉丝群', SEARCH_TEXT]), events: events(['contact', 'Sakura 粉丝群']) }), '发进了群不许过');
+    assert(!ok({ sent: sent(['Sakura', SEARCH_TEXT], ['Sakura', SEARCH_TEXT]), events: picked }), '发了两遍不许过');
+    assert(!ok({ sent: sent(['Sakura', '周六见']), events: picked }), '发错了话不许过');
+    assert(!ok(null), '没读到 Chatter 状态不许过');
+    assert(!ok({ sent: sent(['Sakura', SEARCH_TEXT]), events: picked }, { followUps: [{ text: OK_SEND, t: 5 }] }), '说清了还在发送前停下来问不许过');
+    assert.equal(popupStats({ events: picked }), '下拉开着时按回车 0 次,点过下拉里的 「Sakura」');
+    assert.equal(popupStats({ events: events(['popup', 'shown:x'], ['key', 'Down'], ['key', 'Return'], ['popup', 'hidden'], ['key', 'Return']) }), '下拉开着时按回车 1 次,点过下拉里的 (没点过)');
+    assert.match(describeResult('observe_ui', 'Observed\n[image] The attached screenshot is 1600x1137 px and shows the target window with a window of the same app drawn over it (a popup'), /截图 1600x1137\(画进了 1 扇叠在上面的窗口\)/);
+    assert.match(describeResult('observe_ui', 'Observed\n[image] The attached screenshot is 1600x1137 px and shows only the target window.'), /^截图 1600x1137$/, '没画进叠窗就不提');
   }
   console.log('cu-jev-live selftest ok');
 }
