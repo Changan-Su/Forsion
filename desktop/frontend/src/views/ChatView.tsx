@@ -349,6 +349,8 @@ export function ChatView({ leaf, params }: ViewProps) {
       if (activeMessages.length) { s.toast(t('search.jumpOutOfWindow'), true); s.clearJumpTarget() }
       return // 消息还没渲染出来:等下一次 activeMessages 变更再试
     }
+    // 命中可能在长提问折叠起来的那截里(不知道落在哪一段):跳到用户消息先展开
+    el.querySelector<HTMLButtonElement>('.t2-user-more[aria-expanded="false"]')?.click()
     const root = chatScrollRef.current
     if (root) {
       stickToBottom.current = false

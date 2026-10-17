@@ -209,7 +209,24 @@
   white-space: pre-wrap; word-break: break-word;
 }
 .t2-user-col > .t2-actions { align-self: flex-end; margin-top: 2px; }
-.t2-user .msg-attach-grid { margin-bottom: 8px; }
+/* 已发消息的附件磁贴(B2):气泡上方、右对齐,图片一行在前、文件一行在后 */
+.t2-user-atts { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; max-width: 100%; --att-tile: 120px; }
+.t2-user-atts-row { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; max-width: 100%; }
+.t2-user-atts .att-tile--file { max-width: 280px; }
+/* 长提问折叠(C2,UserFold.tsx):高过 300px 收起;底部 64px 七档渐隐(1 → .85 → .7 → .5 → .3 → .15 → .05 → 0),两点线性在起点有一道看得见的棱 */
+.t2-user-fold { position: relative; }
+.t2-user-fold[data-folded] {
+  max-height: 300px; overflow: hidden;
+  --t2-ufold-mask: linear-gradient(to bottom, #000 calc(100% - 64px), rgb(0 0 0 / .85) calc(100% - 56px), rgb(0 0 0 / .7) calc(100% - 48px), rgb(0 0 0 / .5) calc(100% - 38px), rgb(0 0 0 / .3) calc(100% - 29px), rgb(0 0 0 / .15) calc(100% - 19px), rgb(0 0 0 / .05) calc(100% - 10px), transparent 100%);
+  -webkit-mask-image: var(--t2-ufold-mask); mask-image: var(--t2-ufold-mask);
+}
+.t2-user-fold-hit { position: absolute; inset: auto 0 0; height: 64px; cursor: pointer; }
+.t2-user-more {
+  display: inline-flex; align-items: center; gap: 4px; margin-top: 4px; padding: 2px 0; border: 0; background: none; cursor: pointer;
+  font-size: var(--ui-font-meta, 12px); color: var(--text-muted); white-space: nowrap;
+}
+.t2-user-more:hover { color: var(--text); }
+.t2-user-more svg { color: var(--accent-ink); }
 
 /* ====== 系统行(分隔/提示) ====== */
 .t2-sys { text-align: center; font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted)); padding: 2px 0; }
@@ -385,6 +402,7 @@
   .t2c-row { gap: 4px; }
   .t2c-pill-label { max-width: 92px; }
   .t2-user-col { max-width: 100%; }
+  .t2-user-atts { --att-tile: 96px; } /* 窄栏 / 手机:一行放得下三张 */
 }
 
 /* 细长 Chat View 的短会话从输入区上方开始阅读，避免最后一条回复悬在视图中段。

@@ -67,8 +67,12 @@ import { APPROVAL_UPDATE_OPEN, approvalForCall, parseApprovalUpdate, pickPlanInq
 import { isRemoteApprover, wasDecidedHere } from '../../components/ApprovalCard'
 import { answeredByText } from '../../approvalReason'
 import { refForSession, targetForSession, useSessionHostName } from '../../services/engine/targets'
+import { AttachmentTile } from '../../components/AttachmentTile'
+import { UserFold } from './UserFold'
 export type { TaskLanding }
 import './chat2.css'
+
+const isImageAtt = (a: { mimeType?: string; data?: string }): boolean => !!a.mimeType?.startsWith('image/') && !!a.data
 
 export type OrderedToolPart =
   | { t: 'tools'; events: ToolEvent[] }
@@ -462,6 +466,9 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
     const quoted = splitLeadingQuotes(lead ? lead.body : msg.content)
     const body = quoted ? quoted.body : lead ? lead.body : msg.content
     const tocTitle = lead || quoted ? (body.trim() || lead?.refs.map((r) => r.name).join(' ') || quoted?.quotes[0] || '') : msg.content
+    const atts = msg.attachments || []
+    // 只发了附件、没写字:不摆一个空气泡
+    const hasBubble = !!(lead || quoted || msg.content.trim())
     const toggleRewind = (): void => {
       // Android:三档改由原生半屏呈现;没有原生宿主时照旧切换 Web 菜单。
       if (!rewindOpen) {
@@ -497,14 +504,19 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
       <div ref={rootRef} className={`t2-userwrap${inlineActions ? ' t2-userwrap--inline' : ''}`} id={`tocmsg-${msg.id}`} data-toc-msg-role="user" data-toc-title={tocTitle}>
         <div className="t2-user-col">
           <div className="t2-username">{name}</div>
+          {atts.length > 0 && (
+            // 附件磁贴(B2)挪到气泡上方、右对齐:图片一行在前,文件一行在后;不参与长提问折叠
+            <div className="t2-user-atts" onContextMenu={onBubbleMenu}>
+              {[atts.filter(isImageAtt), atts.filter((a) => !isImageAtt(a))].map((row, r) => row.length > 0 && (
+                <div key={r} className="t2-user-atts-row">
+                  {row.map((a, i) => <AttachmentTile key={`${a.name}-${i}`} file={a} />)}
+                </div>
+              ))}
+            </div>
+          )}
+          {hasBubble && (
           <div className="t2-user" onContextMenu={onBubbleMenu}>
-            {!!msg.attachments?.length && (
-              <div className="msg-attach-grid">
-                {msg.attachments.map((a, i) => a.mimeType?.startsWith('image/') && a.data
-                  ? <img key={`${a.name}-${i}`} className="msg-attach-img" src={`data:${a.mimeType};base64,${a.data}`} alt={a.name} title={a.name} />
-                  : <span key={`${a.name}-${i}`} className="msg-attach-file" title={a.name}>📎 {a.name}</span>)}
-              </div>
-            )}
+            <UserFold lines={body.split('\n').length}>
             {lead && (
               <div className="t2-user-refs">
                 {lead.refs.map((r, i) => (
@@ -525,7 +537,9 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
               </div>
             )}
             {lead || quoted ? (body && <WikiText text={body} />) : <WikiText text={msg.content} />}
+            </UserFold>
           </div>
+          )}
           <div className="t2-actions">
             <MsgTime at={msg.timestamp} />
             <button className="t2-iconbtn" title={t('chat.action.copy')} onClick={() => handlers?.onCopy?.(msg.content)}><Copy size={14} /></button>

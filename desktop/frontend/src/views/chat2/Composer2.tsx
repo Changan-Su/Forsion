@@ -7,7 +7,7 @@ import { useModelPickerPreferences } from '../../modelPickerPreferences'
  */
 import React, { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import {
-  ArrowUp, Square, Mic, X, ClipboardList, Check, ChevronDown, FileText, Users, Sparkles,
+  ArrowUp, Square, Mic, X, ClipboardList, Check, ChevronDown, Users, Sparkles,
   Hand, ShieldCheck, ShieldAlert, Settings2, SlidersHorizontal, MessageSquare, Loader2, Clock, Zap, AudioLines, Quote, type LucideIcon } from 'lucide-react'
 import { useVoiceInput } from '../../hooks/useVoiceInput'
 import { CALL_TEXT_MAX, getCallPresence, onCallEvent, openCallLayer, sendTextToCall, subscribeCallPresence, useRealtimeConfig } from '../../services/realtimeCall'
@@ -36,6 +36,7 @@ import { refToText, type ChatRef } from './chatDragRef'
 import { useApp } from '../../stores/appStore'
 import { ApprovalRulesModal } from '../../components/ApprovalRulesModal'
 import { thinkingLabel } from '../../components/thinkingLabel'
+import { AttachmentTile } from '../../components/AttachmentTile'
 import { commandsFor } from '../../commandCatalog'
 import { getCustomCommands, expandCustomCommand, listAllMessages, type CustomCommandInfo } from '../../services/backendService'
 import { AddContentMenu, type AddContentReference } from './AddContentMenu'
@@ -1784,28 +1785,14 @@ export const Composer2: React.FC<{
               ))}
             </div>
           )}
-          {attachments.length > 0 && (
-            <div className="t2c-chiprow">
+          {(attachments.length > 0 || wsFiles.length > 0) && (
+            // 附件磁贴(B2):随消息发的与「到工作区」的排在同一行;删按对象认,动画那 130ms 里别的磁贴先删了也不会删错
+            <div className="t2c-chiprow t2c-tilerow">
               {attachments.map((a, i) => (
-                <span className="attach-chip" key={`${a.name}-${i}`}>
-                  {a.mimeType.startsWith('image/') && <img src={`data:${a.mimeType};base64,${a.data}`} alt={a.name} />}
-                  <span>{a.name}</span>
-                  <button title={t('input.remove')} onClick={() => setAttachments(attachments.filter((_, j) => j !== i))}><X size={12} /></button>
-                </span>
+                <AttachmentTile key={`${a.name}-${i}`} file={a} removeTitle={t('input.remove')} onRemove={() => setAttachments((prev) => prev.filter((x) => x !== a))} />
               ))}
-            </div>
-          )}
-          {wsFiles.length > 0 && (
-            <div className="t2c-chiprow">
               {wsFiles.map((a, i) => (
-                <span className="attach-chip" key={`ws-${a.name}-${i}`} title={t('input.wsUploadTitle', { name: a.name })}>
-                  {a.mimeType.startsWith('image/')
-                    ? <img src={`data:${a.mimeType};base64,${a.data}`} alt={a.name} />
-                    : <FileText size={14} style={{ color: 'var(--accent-ink)', flexShrink: 0 }} />}
-                  <span>{a.name}</span>
-                  <span style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)', flexShrink: 0 }}>{t('input.toWorkspace')}</span>
-                  <button title={t('input.remove')} onClick={() => setWsFiles(wsFiles.filter((_, j) => j !== i))}><X size={12} /></button>
-                </span>
+                <AttachmentTile key={`ws-${a.name}-${i}`} file={a} note={t('input.toWorkspace')} removeTitle={t('input.remove')} onRemove={() => setWsFiles((prev) => prev.filter((x) => x !== a))} />
               ))}
             </div>
           )}

@@ -39,6 +39,7 @@
 
 .t2c-hint { font-size: var(--ui-font-caption, 11px); color: var(--danger, #e0564b); margin-bottom: 6px; }
 .t2c-chiprow { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.t2c-tilerow { gap: 10px; padding-top: 6px; } /* 附件磁贴(B2):上面留出移除钮往外探的 6px */
 /* 「已选择」引用条:标签 + 文件/会话芯片。芯片本体沿用 base.css 的 .attach-chip(与附件同一套观感)。 */
 .t2c-refrow { align-items: center; }
 .t2c-reflabel { font-size: var(--ui-font-meta, 12px); color: var(--text-faint); flex-shrink: 0; }
