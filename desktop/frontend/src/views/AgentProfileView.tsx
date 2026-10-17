@@ -24,7 +24,7 @@ import { ProjectProfile, useProjectSubject, useProjectWorkspace } from './Projec
 import { AgentSkillsPanel, moveAgentSkillsDraft } from './AgentSkillsPanel'
 import { CapabilityMenu } from '../components/CapabilityMenu'
 import { AgentRemoveDialog } from '../components/RemoveDialog'
-import { useDetailsSubject } from '../stores/detailsSubject'
+import { useDetailsSubject, type RecordJump } from '../stores/detailsSubject'
 import './agentProfileMessages'
 import './agentProfile.css'
 import { AgentAvatar } from '../components/AgentAvatar'
@@ -82,8 +82,8 @@ export function TanguDetailsView({ extendView }: Pick<ViewProps, 'extendView'>) 
     <div className="agent-profile-panel-title">{t('agentProfile.title')}
       {viewing && <button type="button" className="profile-text-action" data-act="details-back" onClick={() => useDetailsSubject.setState({ subject: null })}>{t('agentProfile.backToCurrent')}</button>}</div>
     {viewing === 'project' && subjectProject && carrier ? <ProjectProfile key={`subject:${subjectProject.workspace.path}`} session={carrier} config={carrierConfig || carrier.agent_config || EMPTY_CONFIG}
-        workspace={subjectProject.workspace} humanJump={subject?.human} currentSessionId={sessionId} renderAgent={renderMember} renderTeam={renderTeam} />
-      : viewing === 'agent' && subjectAgent ? <AgentProfile key={`subject:${subjectAgent.slug}`} agent={subjectAgent} compact extendView={extendView} humanJump={subject?.human} evolutionJumpAt={subject?.evolution || 0} rewriteSessionId={sessionId} />
+        workspace={subjectProject.workspace} humanJump={subject?.human} recordJump={subject?.records} currentSessionId={sessionId} renderAgent={renderMember} renderTeam={renderTeam} />
+      : viewing === 'agent' && subjectAgent ? <AgentProfile key={`subject:${subjectAgent.slug}`} agent={subjectAgent} compact extendView={extendView} humanJump={subject?.human} evolutionJumpAt={subject?.evolution || 0} recordJump={subject?.records} rewriteSessionId={sessionId} />
       : project && s.session ? <ProjectProfile key={project.path} session={s.session} config={config} workspace={project} renderAgent={renderMember} renderTeam={renderTeam} />
       : config.groupChat || config.teamSlug ? <TeamProfile key={`${sessionId}:${config.teamSlug || ''}`} session={s.session} config={config} renderMember={renderMember} /> : config.engineId || config.soloEngineId ? <section className="agent-profile-team"><h3>{s.engines.find((e) => e.id === (config.engineId || config.soloEngineId))?.name || config.engineId || config.soloEngineId}</h3><div className="agent-current-session"><strong>{s.session?.title}</strong><span>{s.session?.project_name || config.cwd}</span></div></section> : agent ? <AgentProfile key={agent.slug} agent={agent} compact sessionId={sessionId} extendView={extendView} /> : <p className="agent-profile-muted">{t('agentProfile.noAgent')}</p>}
   </div>
@@ -225,7 +225,7 @@ function EquipmentRow({ name, description, checked, onChange, chip, tinted }: { 
 
 /** evolutionJumpAt:一次性跳到「成长 › 进化」的令牌(提名提醒点开要落在工作笔记上)。令牌变了才跳;首挂时也按它初始化,免得先闪一下「配置」。 */
 /** rewriteSessionId:这一页不属于某个会话(从更新卡 / 侧栏「查看详情」进来)时,协作说明的「重写」发给哪个会话。只管这一件事,别的照旧按没有会话处理。 */
-function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evolutionJumpAt = 0, humanJump, extendView }: { agent: NormalAgentDef; compact?: boolean; sessionId?: string | null; rewriteSessionId?: string | null; evolutionJumpAt?: number; humanJump?: HumanJump; extendView?: ViewProps['extendView'] }) {
+function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evolutionJumpAt = 0, recordJump, humanJump, extendView }: { agent: NormalAgentDef; compact?: boolean; sessionId?: string | null; rewriteSessionId?: string | null; evolutionJumpAt?: number; recordJump?: RecordJump; humanJump?: HumanJump; extendView?: ViewProps['extendView'] }) {
   const { t } = useI18n()
   const id = useId()
   const draftKey = `${compact ? 'details' : 'space'}:${agent.slug}`
@@ -551,7 +551,7 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
             <small>{t(`agentProfile.${g}Caption`)}</small>
           </button>) })}</div>
         {/* /refine 只有 host 且非 plan 模式的会话引擎才注入指令(agentLoop 注入门);其余会话不给按钮,发出去只是一条裸 /refine */}
-        {growth === 'evolution' && <AgentHarnessPanel cfg={s.cfg} slug={agent.slug} running={s.running} onCandidates={setCandidates} onRefine={sessionId && s.config?.execMode === 'host' && !s.config?.planMode ? () => useApp.getState().send('/refine', [], undefined, undefined, undefined, sessionId) : undefined} />}
+        {growth === 'evolution' && <AgentHarnessPanel cfg={s.cfg} slug={agent.slug} running={s.running} jump={recordJump} onCandidates={setCandidates} onRefine={sessionId && s.config?.execMode === 'host' && !s.config?.planMode ? () => useApp.getState().send('/refine', [], undefined, undefined, undefined, sessionId) : undefined} />}
       </>}
       {section === 'schedule' && <AgentSchedulePanel cfg={s.cfg} slug={agent.slug} running={s.running} />}
       </div>

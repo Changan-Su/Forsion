@@ -66,7 +66,7 @@ export function HarnessUpdateRows({ changes, sessionId }: { changes: HarnessChan
           {change.evidence && <details><summary>{t('harness.evidence')}</summary><p>{change.evidence}</p></details>}
         </div>
         <div className="self-row-ops">
-          <button type="button" className="self-act" aria-label={t('harness.view')} onClick={() => showDetails({ kind: 'agent', slug: change.agent, evolution: Date.now() })}>{t('harness.viewShort')}</button>
+          <button type="button" className="self-act" aria-label={t('harness.view')} onClick={() => { const at = Date.now(); showDetails({ kind: 'agent', slug: change.agent, evolution: at, records: { at, texts: [change.title] } }) }}>{t('harness.viewShort')}</button>
           {state !== 'undone' && <button type="button" className="self-act" aria-label={t('harness.undo')} disabled={!!busy || state !== 'current'} title={state === 'superseded' ? t('harness.undoConflict') : undefined} onClick={() => void undo(change)}><Undo2 size={12} />{t('harness.undoShort')}</button>}
         </div>
         {errors[change.rev] && <p className="self-row-note agent-profile-error" role="alert">{errors[change.rev]}</p>}

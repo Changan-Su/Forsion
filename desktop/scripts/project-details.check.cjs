@@ -316,6 +316,40 @@ async function run(app, win, stub, seen, home, ctx) {
   await win.screenshot({ path: shots.compactedToast = shot('project-memory-compacted-toast-zh-light') })
   seen.compactedActivity = false
   await dismissToasts(win)
+  // ── 4r 通知的「查看」落到那一条(10-17 用户:只打开了 Tangu 详情,没到对应条目):先切到 Agent 页,点了要回到「配置 › 项目记忆」──
+  const inPanel = (el) => {
+    let sc = el.parentElement
+    while (sc && !(/(auto|scroll)/.test(getComputedStyle(sc).overflowY) && sc.scrollHeight > sc.clientHeight)) sc = sc.parentElement
+    const r = el.getBoundingClientRect(), b = (sc || document.documentElement).getBoundingClientRect()
+    return r.top >= b.top - 1 && r.top < b.bottom - 20
+  }
+  const settingsTab = () => details.locator('[data-project-profile]').getByRole('tab', { name: '配置', exact: true })
+  await profile.getByRole('tab', { name: 'Agent', exact: true }).click()
+  seen.candidatesActivity = true
+  const candToast = win.locator('.ntf').filter({ hasText: '等你确认' })
+  await candToast.first().waitFor({ timeout: 15_000 })
+  await candToast.first().locator('.ntf-action').click()
+  const pc3 = details.locator('[data-project-profile] [data-project-memory-candidate="pc-3"]')
+  await details.locator('[data-project-profile] [data-project-memory-candidate="pc-3"][data-record-flash]').waitFor({ timeout: 5000 })
+  await sleep(700) // 平滑滚动
+  check('4r 「事实等你确认」通知点「查看」→ 切回配置页,末条截断的那句也认得出:只亮 pc-3、滚进视野', await settingsTab().getAttribute('aria-selected') === 'true' && await details.locator('[data-record-flash]').count() === 1 && await pc3.evaluate(inPanel), `selected=${await settingsTab().getAttribute('aria-selected')} flashed=${await details.locator('[data-record-flash]').count()}`)
+  await details.screenshot({ path: shots.viewCandidate = shot('project-memory-view-candidate-zh-light') })
+  seen.candidatesActivity = false
+  await dismissToasts(win)
+  // 第二次压缩:已经开着同一个项目的详情(不重挂),令牌变了照样落 —— 「被合并的原句」展开、滚进视野
+  await details.locator('[data-project-profile]').getByRole('tab', { name: 'Agent', exact: true }).click()
+  seen.compactedActivity = 2
+  const compToast = win.locator('.ntf').filter({ hasText: '写满了' })
+  await compToast.first().waitFor({ timeout: 15_000 })
+  await compToast.first().locator('.ntf-action').click()
+  const foldedRemoved = details.locator('[data-project-profile] [data-project-memory-compacted]')
+  await foldedRemoved.waitFor()
+  await sleep(700)
+  check('4s 「写满被压缩」通知点「查看」→ 配置页、被合并的原句展开并滚进视野', await settingsTab().getAttribute('aria-selected') === 'true' && await foldedRemoved.evaluate((el) => el.open) && await foldedRemoved.evaluate(inPanel), `open=${await foldedRemoved.evaluate((el) => el.open)}`)
+  seen.compactedActivity = false
+  await dismissToasts(win)
+  await details.locator('[data-act="details-back"]').click()
+  await settingsTab().click()
   check('4e 配置页不横向溢出', await noOverflow(profile), await overflowReport(profile))
   await win.waitForTimeout(300)
   await details.screenshot({ path: shots.settingsLight = shot('project-settings-zh-light') })
@@ -941,7 +975,7 @@ async function main() {
   const projectDir = path.join(home, 'Demo Project')
   for (const dir of [userData, `${userData}-dev`, vault, projectDir]) fs.mkdirSync(dir, { recursive: true })
   const ctx = contextFixture(projectDir)
-  const seen = { memoryForgets: [], memoryConflictOnce: false, memoryCandidates: [], memoryCandidateGoneOnce: false, memoryCandidateBusyOnce: false, memoryRestores: [], memoryRestoreGoneOnce: false, compactedActivity: false, ctxGets: [], init: 0, docPuts: [], settingsPuts: [], skills: [], sessionsCreated: 0, iconPosts: [], iconGets: 0, iconDeletes: [], sessionDeletes: [], agentDeletes: [],
+  const seen = { memoryForgets: [], memoryConflictOnce: false, memoryCandidates: [], memoryCandidateGoneOnce: false, memoryCandidateBusyOnce: false, memoryRestores: [], memoryRestoreGoneOnce: false, compactedActivity: false, candidatesActivity: false, ctxGets: [], init: 0, docPuts: [], settingsPuts: [], skills: [], sessionsCreated: 0, iconPosts: [], iconGets: 0, iconDeletes: [], sessionDeletes: [], agentDeletes: [],
     gitMessages: [], gitCommits: [], gitBranches: [], gitPushes: [], gitPulls: [], gitInits: [], gitSettingsPuts: [], gitPendings: [], gitTrusts: [], pushGate: false, hostingGets: [], hosting: null, gitPublishes: [], github: null, pushGithubUnlinkedOnce: false, gitRemotes: [], gitGithubPublishes: [], accountsGets: 0, gitClones: [], cloneExistsOnce: false,
     repos: { forsion: [{ fullName: 'dave/notes', private: true, cloneUrl: 'https://git.forsion.example/dave/notes.git', updatedAt: '2026-10-10T08:00:00Z' }, { fullName: 'dave/plugin-demo', private: false, cloneUrl: 'https://git.forsion.example/dave/plugin-demo.git', updatedAt: null }], github: 'unlinked' },
     accounts: { forsionGit: { webUrl: 'https://git.forsion.example' }, github: { linked: false }, identity: { name: 'Dave', email: 'dave@noreply.git.forsion.example', source: 'forsion' } } }
@@ -959,7 +993,11 @@ async function main() {
     // 后台复盘开着:会话活动的轮询(chat2/HistorianStatus,每 2.5 秒)才挂得上 —— 4q 的通知靠它
     if (route === '/agent/special/config') return { config: { historian: { enabled: true }, muse: { enabled: false } } }
     // 平时没有活动;置位后 pd-main 冒出一条「项目记忆写满被压缩」(引擎在前台 / 后台压完都会记这一行)
-    if (route === '/agent/special/historian/activity') return { running: false, records: [], activity: seen.compactedActivity && url.searchParams.get('sessionId') === 'pd-main' ? [{ id: 'act-compacted-1', action: 'project_memory_compacted', detail: '31 → 3 entries, 7930 → 212 characters (Demo Project)', session_ref: 'pd-main', created_at: new Date().toISOString() }] : [] }
+    // 4r 再冒出一条「留给你确认」(detail 末条截断,同引擎整串截 300 字)和第二次压缩,看通知的「查看」落点
+    if (route === '/agent/special/historian/activity') return { running: false, records: [], activity: url.searchParams.get('sessionId') !== 'pd-main' ? [] : [
+      ...(seen.compactedActivity ? [{ id: `act-compacted-${seen.compactedActivity === 2 ? 2 : 1}`, action: 'project_memory_compacted', detail: '31 → 3 entries, 7930 → 212 characters (Demo Project)', session_ref: 'pd-main', created_at: new Date().toISOString() }] : []),
+      ...(seen.candidatesActivity ? [{ id: 'act-candidates-1', action: 'project_memory_candidates', detail: `Some fact that was dismissed elsewhere | ${ctx.memory.candidates.find((c) => c.id === 'pc-3').content.slice(0, 30)}`, session_ref: 'pd-main', created_at: new Date().toISOString() }] : []),
+    ] }
     if (route.startsWith('/agent/project-context')) {
       const sid = method === 'GET' ? url.searchParams.get('sessionId') : (await body()).sessionId
       if (!projectIds.has(sid)) return { __code: 400, body: { detail: 'stub: not a project session' } }
