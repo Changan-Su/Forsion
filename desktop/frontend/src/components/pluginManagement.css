@@ -7,7 +7,7 @@
 .plugin-management-group[open] summary { margin-bottom: 6px; }
 .plugin-management-group .plugin-card + .plugin-card { margin-top: 6px; }
 .plugin-management .plugin-card--link { outline-offset: 2px; }
-.plugin-management .plugin-card--link:focus-visible { outline: 2px solid var(--accent); }
+.plugin-management .plugin-card--link:focus-visible { outline: 2px solid var(--signal-line); }
 .core-plugin-updates { display: flex; flex-direction: column; gap: 8px; padding-block: 12px; border-block: var(--border-width) solid var(--border); font-size: var(--ui-font-meta); }
 .core-plugin-updates > .btn { align-self: flex-start; }
 .core-plugin-update-row { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 6px 16px; }

@@ -19,7 +19,7 @@
 .feedback-session { margin: 6px 0 14px; font-size: var(--ui-font-caption, 11px); color: var(--text-muted); overflow-wrap: anywhere; }
 .feedback-option { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
 .feedback-option + .feedback-option { margin-top: 14px; }
-.feedback-option input { margin: 3px 0 0; width: 15px; height: 15px; flex-shrink: 0; accent-color: var(--accent); }
+.feedback-option input { margin: 3px 0 0; width: 15px; height: 15px; flex-shrink: 0; accent-color: var(--signal-mark); }
 .feedback-option > span { display: flex; flex-direction: column; gap: 4px; }
 .feedback-option strong { font-size: var(--ui-font-meta, 12px); font-weight: 500; color: var(--text); }
 .feedback-option small { font-size: var(--ui-font-caption, 11px); line-height: 1.5; color: var(--text-muted); }

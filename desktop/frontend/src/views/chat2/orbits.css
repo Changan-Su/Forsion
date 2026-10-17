@@ -297,9 +297,9 @@
 .t2o-desk-row > .t2o-bar-avatar { flex-shrink: 0; }
 .t2o-desk-name { flex-shrink: 0; max-width: 42%; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .t2o-desk-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: var(--text-muted); opacity: 0.45; }
-.t2o-desk-dot[data-status="working"] { background: var(--accent-ink); opacity: 1; animation: t2o-pulse 1.2s ease-in-out infinite; }
+.t2o-desk-dot[data-status="working"] { background: var(--signal-mark); opacity: 1; animation: t2o-pulse 1.2s ease-in-out infinite; }
 .t2o-desk-dot[data-status="waiting"] { background: var(--warning); opacity: 1; }
-.t2o-desk-dot[data-status="done"] { background: var(--accent-ink); opacity: 0.9; }
+.t2o-desk-dot[data-status="done"] { background: var(--signal-mark); }
 .t2o-desk-dot[data-status="failed"] { background: var(--danger); opacity: 1; }
 .t2o-desk-activity { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
 .t2o-desk-strip { display: flex; gap: 4px; padding: 6px 8px; border-bottom: var(--border-width) solid var(--border); overflow: auto; flex-shrink: 0; }

@@ -68,6 +68,8 @@ interface ThemeState {
   seed: string
   /** custom 配色的独立背景色 seed(''=未设,背景跟随强调色微染——旧单色行为)。 */
   bgSeed: string
+  /** 强调色(--signal):'' = 跟随主题色 / registry SIGNALS 的 id / '#rrggbb' 自定义。全局一份,Space 不单独覆盖。 */
+  signal: string
   glass: boolean
   flat: boolean
   /** 外壳随内容取色(Genesis + 毛玻璃下才有意义)。缺省关:开着时取色的过渡会让整页样式逐帧重算。 */
@@ -85,6 +87,7 @@ interface ThemeState {
   setSeedValue(seed: string): void
   /** 设/清自定义背景色 seed(''=清除恢复跟随主题色);背景轴为 custom 时即时重应用。 */
   setBgSeedValue(bg: string): void
+  setSignal(signal: string): void
   setGlass(on: boolean): void
   setFlat(on: boolean): void
   setAmbient(on: boolean): void
@@ -105,6 +108,9 @@ function readSeed(): string {
 }
 function readBgSeed(): string {
   try { return localStorage.getItem('forsion_theme_bg_seed') || '' } catch { return '' }
+}
+function readSignal(): string {
+  try { return localStorage.getItem('forsion_theme_signal') || '' } catch { return '' }
 }
 function readGlass(): boolean {
   try { return localStorage.getItem('forsion_glass') !== 'off' } catch { return true }
@@ -163,7 +169,7 @@ export const useTheme = create<ThemeState>((set, get) => {
     const s = get()
     try {
       window.tangu?.broadcastUi?.({ theme: { lang: s.lang, skin: s.skin, bg: s.bg, modePref: s.modePref,
-        seed: s.seed, bgSeed: s.bgSeed, glass: s.glass, flat: s.flat, ambient: s.ambient } })
+        seed: s.seed, bgSeed: s.bgSeed, signal: s.signal, glass: s.glass, flat: s.flat, ambient: s.ambient } })
     } catch { /* 无 preload */ }
   }
   // glass 只是 <html> 上的属性;抽出来给「本窗动作」和「跨窗重放」共用(后者不能带 notify)。
@@ -199,6 +205,7 @@ export const useTheme = create<ThemeState>((set, get) => {
     apply(lang, skin, bg, pref, seed, bgSeed)
     if (typeof p?.glass === 'boolean') applyGlass(p.glass)
     if (typeof p?.flat === 'boolean') applyFlat(p.flat)
+    if (typeof p?.signal === 'string') set({ signal: p.signal }) // 发方已写同源 localStorage
   }
   // 设置面板自 2026-09-20 起住在独立浮窗(独立渲染进程 = 独立 store 与 DOM):没有这条订阅,
   // 在设置里换肤只有设置窗自己变色(2.11.1 实报)。主进程只转给其余窗口,故收到的必是别处的改动。
@@ -234,6 +241,7 @@ export const useTheme = create<ThemeState>((set, get) => {
     modeLocked: langForcedScheme(initialLang) !== undefined || hasForcedSchemeHint(),
     seed: readSeed(),
     bgSeed: readBgSeed(),
+    signal: readSignal(),
     glass: readGlass(),
     flat: readFlat(),
     ambient: readAmbient(),
@@ -266,6 +274,15 @@ export const useTheme = create<ThemeState>((set, get) => {
         if (bg) localStorage.setItem('forsion_theme_bg_seed', bg)
         else localStorage.removeItem('forsion_theme_bg_seed')
       } catch { /* ignore */ }
+      notify()
+    },
+    setSignal: (signal) => {
+      track('theme.change')
+      try {
+        if (signal) localStorage.setItem('forsion_theme_signal', signal)
+        else localStorage.removeItem('forsion_theme_signal')
+      } catch { /* ignore */ }
+      set({ signal })
       notify()
     },
     setGlass: (on) => { applyGlass(on); notify() },
@@ -352,7 +369,7 @@ function refreshVisualTheme(): void {
   const effective = resolveSpaceAppearance(global, local)
   if (typeof document !== 'undefined') {
     applyTheme(effective.lang, effective.skin, effective.bg, effective.mode, {
-      customColor: effective.seed, customBg: effective.bgSeed, persist: false,
+      customColor: effective.seed, customBg: effective.bgSeed, signal: global.signal, persist: false,
     })
     document.documentElement.dataset.spaceAppearance = spaceId
   }

@@ -295,9 +295,9 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .amx-editor.amx-dragover:has(.amx-stage:not(.amx-stage-off)) { background-image: none; }
 
 /* 双链 [[wikilink]]:彩色配色跟主题色;经典 / 墨色这类单色配色的主题色就是正文色,双链会和正文一个样(10-13 用户实报),
- * 所以它们在 skins.css 另给一支 --wikilink-ink(2026-10-14 用户选方案 A,柔蓝)。曾是固定紫 #6c5ce7。
+ * 所以它们在 skins.css 另给一支 --signal-skin(2026-10-14 用户选方案 A 柔蓝;10-17 升级为强调色缺省,双链改读 --signal)。曾是固定紫 #6c5ce7。
  * 比 styles.css 的选择器多一层 .am-app → 特异性更高,覆盖其 color。 */
-.am-app .milkdown .ProseMirror .wikilink { color: var(--wikilink-ink, var(--accent-ink)); }
+.am-app .milkdown .ProseMirror .wikilink { color: var(--signal); }
 /* 未解析双链:压过上面的颜色覆盖(同层选择器,声明在后),黯淡。 */
 .am-app .milkdown .ProseMirror .wikilink.wikilink-unresolved {
   color: var(--text-muted);
@@ -686,7 +686,7 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .amx-prop-input:hover, .amx-prop-input:focus { background: var(--overlay-light, rgba(127, 127, 127, 0.07)); }
 /* 多行字符串值(`desc: |`,D-20):多行框,观感同单行值框;高度随内容(field-sizing,故不给拖拽把手),rows 兜底。 */
 .amx-prop-multiline { display: block; resize: none; line-height: 1.5; white-space: pre-wrap; field-sizing: content; }
-.amx-prop-check { align-self: center; accent-color: var(--accent, #6c5ce7); }
+.amx-prop-check { align-self: center; accent-color: var(--signal-mark); }
 .amx-prop-nested { flex: 1; white-space: pre-wrap; color: var(--text-muted); font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--ui-font-caption, 11px); padding: 3px 6px; }
 .amx-prop-del { flex: 0 0 auto; align-self: center; border: none; background: transparent; color: var(--text-faint); cursor: pointer; padding: 3px; border-radius: var(--radius-sm, 6px); opacity: 0; }
 .amx-prop-row:hover .amx-prop-del { opacity: 1; }
@@ -843,9 +843,9 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
   background: color-mix(in srgb, var(--primary, var(--accent, #6c5ce7)) 10%, transparent);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary, var(--accent, #6c5ce7)) 38%, transparent);
 }
-.amx-db-checkbox { margin: 6px; accent-color: var(--accent, #6c5ce7); }
+.amx-db-checkbox { margin: 6px; accent-color: var(--signal-mark); }
 /* 事件卡里的完成勾选:裸原生 checkbox 曾不随主题 → 用 accent-color 上色(勾随主题变量,深浅一致可见) */
-.amx-cal-card-check { width: 15px; height: 15px; accent-color: var(--accent, #6c5ce7); cursor: pointer; }
+.amx-cal-card-check { width: 15px; height: 15px; accent-color: var(--signal-mark); cursor: pointer; }
 .amx-db-cellbtn { width: 100%; min-height: 30px; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; border: none; background: transparent; font: inherit; line-height: 22px; cursor: pointer; padding: 6px; text-align: left; }
 .amx-db-cellbtn:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.05)); }
 .amx-db-chip { display: inline-flex; align-items: center; height: 22px; font-size: var(--ui-font-meta, 12px); line-height: 1; color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 0 8px; }
@@ -1344,7 +1344,7 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .amx-db-opt:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.08)); }
 .amx-db-opt:disabled { opacity: 0.4; cursor: default; }
 .amx-db-opt:disabled:hover { background: transparent; }
-.amx-db-opt input[type='checkbox'] { accent-color: var(--accent, #6c5ce7); }
+.amx-db-opt input[type='checkbox'] { accent-color: var(--signal-mark); }
 .amx-db-opt-check { margin-left: auto; color: var(--accent-ink, var(--accent, #6c5ce7)); }
 .amx-db-opt-clear { color: var(--text-muted); }
 .amx-db-opt-danger { color: var(--danger, #e5484d); }
@@ -1953,7 +1953,7 @@ html.dark .amx-cal-chip-ev, html.dark .amx-cal-event {
 
 /* ── 按条目云同步 + 置顶(侧边栏分区/曲别针/开启弹窗) ─────────────────────────── */
 /* 编辑器 toolbar 图钉:默认空心线稿;置顶态强调色 + 实心填充。 */
-.amx-pin-btn.amx-pin-on { color: var(--accent-ink, var(--accent)); }
+.amx-pin-btn.amx-pin-on { color: var(--signal-mark); }
 .amx-pin-btn.amx-pin-on svg { fill: currentColor; }
 
 /* 云同步分区头状态点 */

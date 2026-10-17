@@ -105,7 +105,7 @@
   color: var(--text-muted); font-weight: 600;
   display: inline-flex; align-items: center; gap: 6px;
 }
-.t2-name .t2-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent-ink); }
+.t2-name .t2-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--signal-mark); }
 .t2-content {
   max-width: 700px;
   /* 行距 / 段距走 --chat-*:兜底是缺省值,「宽松正文」开着时由 theme/calm.css 换值。 */
@@ -243,7 +243,7 @@
 .t2-compact-head { display: flex; align-items: baseline; gap: 8px; font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted)); }
 .t2-compact-pct { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--accent-ink); }
 .t2-compact-track { height: 3px; border-radius: 2px; background: var(--overlay-medium, rgba(127, 127, 127, 0.16)); overflow: hidden; }
-.t2-compact-fill { height: 100%; border-radius: 2px; background: var(--accent-ink); transition: width 0.32s cubic-bezier(0.22, 1, 0.36, 1); }
+.t2-compact-fill { height: 100%; border-radius: 2px; background: var(--signal-mark); transition: width 0.32s cubic-bezier(0.22, 1, 0.36, 1); }
 @keyframes t2-compact-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
 
 /* ====== 思考原文(在过程行展开后的第一步下,见 base.css「回答里的过程行」) ====== */
@@ -503,7 +503,7 @@
 }
 .t2-voice-play:hover { filter: brightness(1.08); }
 .t2-voice-track { flex: 1; height: 4px; border-radius: 2px; background: color-mix(in srgb, var(--accent-ink) 22%, transparent); overflow: hidden; }
-.t2-voice-track > span { display: block; height: 100%; background: var(--accent-ink); transition: width .15s linear; }
+.t2-voice-track > span { display: block; height: 100%; background: var(--signal-mark); transition: width .15s linear; }
 .t2-voice-dur { flex-shrink: 0; font-size: var(--ui-font-caption, 11px); color: var(--text-muted); font-variant-numeric: tabular-nums; min-width: 32px; text-align: right; }
 .t2-voice-txt {
   flex-shrink: 0; width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center;
@@ -1013,7 +1013,7 @@
   color: var(--text-muted);
 }
 .t2-quota-action:focus-visible, .t2-quota-dismiss:focus-visible {
-  outline: var(--focus-ring) solid var(--accent-ink); outline-offset: -2px;
+  outline: var(--focus-ring) solid var(--signal-line); outline-offset: -2px;
 }
 @container (max-width: 520px) {
   .t2-quota-advisory { align-items: flex-start; flex-wrap: wrap; gap: 3px 6px; padding-block: 7px; }

@@ -5,7 +5,7 @@
 .csu button svg { flex-shrink: 0; }
 .csu button:hover:not(:disabled) { color: var(--text); background: var(--overlay-light); }
 .csu button:disabled { opacity: .42; cursor: default; }
-.csu button:focus-visible, .csu input:focus-visible, .csu textarea:focus-visible, .csu select:focus-visible { outline: var(--focus-ring, 1px) solid var(--accent-ink); outline-offset: 2px; }
+.csu button:focus-visible, .csu input:focus-visible, .csu textarea:focus-visible, .csu select:focus-visible { outline: var(--focus-ring, 1px) solid var(--signal-line); outline-offset: 2px; }
 .csu button[aria-pressed='true'] { color: var(--accent-ink); background: var(--overlay-medium); }
 .csu .csu-primary { color: var(--on-action); background: var(--action-fill); border-color: transparent; padding-inline: 13px; }
 .csu .csu-primary:hover:not(:disabled) { color: var(--on-action); background: var(--action-fill); filter: brightness(.96); }
@@ -28,7 +28,7 @@
 .csu-status .csu-issue-count { color: var(--danger); }
 .csu-grow { flex: 1; }
 .csu-live { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; white-space: nowrap; }
-.csu input[type='checkbox'] { width: 13px; height: 13px; accent-color: var(--accent-ink); margin: 0; }
+.csu input[type='checkbox'] { width: 13px; height: 13px; accent-color: var(--signal-mark); margin: 0; }
 .csu-workspace { display: flex; flex: 1; min-height: 0; min-width: 0; position: relative; padding: 0 12px; }
 .csu-edit-preview { flex: 1; display: grid; grid-template-columns: 0fr 1fr; min-width: 0; min-height: 0; overflow: hidden; border-radius: var(--radius-md); transition: grid-template-columns 280ms var(--ease-out); }
 .csu-code-pane, .csu-preview-pane { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }

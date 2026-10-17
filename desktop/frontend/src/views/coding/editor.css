@@ -5,7 +5,7 @@
 .cs-editor[data-status='conflict'] .cs-editor-status, .cs-editor[data-status='error'] .cs-editor-status { color: var(--danger); }
 .cs-editor button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 28px; padding: 4px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); background: transparent; font: inherit; font-size: 12px; cursor: pointer; }
 .cs-editor button:hover, .cs-editor button[aria-pressed='true'] { background: var(--overlay-medium); }
-.cs-editor button:focus-visible, .cs-editor summary:focus-visible { outline: var(--focus-ring) solid var(--accent-ink); outline-offset: 2px; }
+.cs-editor button:focus-visible, .cs-editor summary:focus-visible { outline: var(--focus-ring) solid var(--signal-line); outline-offset: 2px; }
 .cs-editor-actions { margin-left: auto; flex-wrap: wrap; }
 .cs-editor-notice { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; padding: 12px 14px; background: var(--warning-light); color: var(--text); font-size: 12px; line-height: 1.6; }
 .cs-editor-notice > span { flex: 1; min-width: min(200px, 100%); }

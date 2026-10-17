@@ -3,7 +3,7 @@
  * 主题注册表:**设计语言(data-theme)× 主题色(data-skin)× 背景色(data-bg)× 明暗(data-mode)**。
  * - 语言 = 文件夹主题(themes/<id>/{theme.json,theme.css}),构建期 import.meta.glob 收集,只管 UI 结构(圆角/字体/阴影/布局)。
  *   bundle 语言按目录自动发现,磁盘语言在运行时合并。
- * - 主题色 / 背景色 = 纯颜色,见 theme/skins.css 的 [data-skin] / [data-bg] 两组块(cream/coral/teal/lavender/zhi/ink);
+ * - 主题色 / 背景色 = 纯颜色,见 theme/skins.css 的 [data-skin] / [data-bg] 两组块(cream/coral/teal/lavender/zhi/sage/ink);
  *   两轴各有 custom,走内联 seed 变量。**两轴同 id = 拆轴前的整套配色**,故老用户默认观感不变。
  * 旧单轴 preset(lovable/echo/qbird/dreamer/custom)首启自动迁移到 (lang, skin);背景色缺省承接 skin。
  */
@@ -71,7 +71,7 @@ export const DEFAULT_SEED = '#8b7fd6';
 /** 配色条目(纯颜色;CSS 在 theme/skins.css)。**同一张表供两根轴用**:主题色轴取 `accent`,背景色轴取 `bg`
  *  —— 它们本来就是同一套调色板被拆成的两半。swatch 仅供设置面板色卡预览。custom 用 seed 动态取色。 */
 export interface SkinInfo {
-  id: 'cream' | 'coral' | 'teal' | 'lavender' | 'zhi' | 'ink' | 'custom';
+  id: 'cream' | 'coral' | 'teal' | 'lavender' | 'zhi' | 'sage' | 'ink' | 'custom';
   /** 强调色(主题色轴的色卡点) */
   accent: string;
   /** 暗色下的强调色 */
@@ -86,14 +86,27 @@ export interface SkinInfo {
 
 /** bg/bgDark 必须与 skins.css 的 --bg 对齐；bgSeed 是生成/辨认背景家族的原色，不直接铺满页面。 */
 const SKINS: SkinInfo[] = [
+  // 10-17 色彩体系:陶土 / 暮紫 / 雾蓝 / 苔绿 四套按 OKLCH 重生成(值见 skins.css),id 沿用;顺序照方案页。
   { id: 'cream', accent: '#1c1c1c', accentDark: '#f8f7f6', bg: '#f8f7f6', bgDark: '#2a292b', bgSeed: '#9a8f84' },
-  { id: 'coral', accent: '#ff8a6b', accentDark: '#ff9a7d', bg: '#f7e5dc', bgDark: '#292727', bgSeed: '#ff8a6b' },
-  { id: 'teal', accent: '#4d8794', accentDark: '#5fa3b2', bg: '#dff1ea', bgDark: '#272a2a', bgSeed: '#4d8794' },
-  { id: 'lavender', accent: '#8b7fd6', accentDark: '#a99cf0', bg: '#ede0f5', bgDark: '#29272c', bgSeed: '#8b7fd6' },
-  { id: 'zhi', accent: '#1e96eb', accentDark: '#1c9ee4', bg: '#dcecfb', bgDark: '#272a2e', bgSeed: '#1e96eb' },
   { id: 'ink', accent: '#2b2723', accentDark: '#ecebe7', bg: '#f7f6f3', bgDark: '#201f1d', bgSeed: '#3a332b' },
+  { id: 'teal', accent: '#4d8794', accentDark: '#5fa3b2', bg: '#dff1ea', bgDark: '#272a2a', bgSeed: '#4d8794' },
+  { id: 'sage', accent: '#638c6d', accentDark: '#93bd9d', bg: '#ecf3e9', bgDark: '#232723', bgSeed: '#638c6d' },
+  { id: 'zhi', accent: '#5485b0', accentDark: '#8db6db', bg: '#eaf3f9', bgDark: '#21272c', bgSeed: '#5485b0' },
+  { id: 'lavender', accent: '#8177af', accentDark: '#b1a9dd', bg: '#f1edf7', bgDark: '#26252b', bgSeed: '#8177af' },
+  { id: 'coral', accent: '#b36c46', accentDark: '#dea182', bg: '#f6ede6', bgDark: '#2b2520', bgSeed: '#b36c46' },
   { id: 'custom', accent: DEFAULT_SEED, accentDark: DEFAULT_SEED, bg: '#f6f6f7', bgDark: '#1b1b1d', bgSeed: DEFAULT_SEED },
 ];
+
+/** 强调色(--signal)内置色卡:[亮, 暗]。柔蓝 = 经典 / 墨色的缺省伴色,其余 = 各彩色配色主题色的 ink。
+ *  强调色的存值:'' = 跟随主题色 / 这里的 id / '#rrggbb' 自定义(loader 按明暗过一遍可读性)。 */
+export const SIGNALS: ReadonlyArray<{ id: string; light: string; dark: string }> = [
+  { id: 'blue', light: '#2c5f9e', dark: '#8fb4e3' },
+  { id: 'teal', light: '#38636d', dark: '#72b4c1' },
+  { id: 'sage', light: '#466a50', dark: '#93bd9d' },
+  { id: 'zhi', light: '#38648a', dark: '#8db6db' },
+  { id: 'lavender', light: '#615889', dark: '#b1a9dd' },
+  { id: 'coral', light: '#8c4e2c', dark: '#dea182' },
+]
 
 /** 色卡取当前明暗那一面 —— 暗色下拿浅色底当背景色卡会骗人。 */
 export function skinSwatch(sk: SkinInfo, dark: boolean, axis: 'accent' | 'bg'): string {

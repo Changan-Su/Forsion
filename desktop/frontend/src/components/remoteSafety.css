@@ -30,12 +30,12 @@
 }
 .rsf-kbd--off { color: var(--text-faint); text-decoration: line-through; }
 .rsf-kbd--recording {
-  border-color: var(--accent);
-  color: var(--accent);
+  border-color: var(--signal-line);
+  color: var(--signal);
   cursor: text;
   letter-spacing: 0;
 }
-.rsf-kbd--recording:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.rsf-kbd--recording:focus-visible { outline: 2px solid var(--signal-line); outline-offset: 1px; }
 
 .rsf-badge {
   display: inline-flex;
