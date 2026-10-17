@@ -1039,6 +1039,8 @@ export const deleteAgentScheduleEntry = (t: EngineTarget, slug: string, id: stri
 export type HookDiscovered = {
   key: string; matcher: string; command: string; commandWindows: string; timeout: number;
   statusMessage: string; source: string; trust: 'trusted' | 'needs-review' | 'managed'; enabled: boolean; active: boolean
+  /** source === 'plugin':来自哪个引擎插件(只观察,开关跟插件走,面板只读)。 */
+  plugin?: { id: string; name: string }
 }
 export type HooksData = { events: Record<string, any>; discovered: Record<string, HookDiscovered[]>; eventNames: string[] }
 

@@ -141,6 +141,12 @@ export interface ResetCardQuota {
   weeklyRemaining?: number
 }
 
+/** One library file event (see `PluginAppApi.onVaultEvent`). */
+export type PluginVaultEvent =
+  | { kind: 'create' | 'delete' | 'modify'; path: string }
+  | { kind: 'rename'; path: string; from: string; folder?: boolean }
+  | { kind: 'vault' }
+
 export interface PluginAppApi extends BlockSurfaceApi {
   /** Vault-relative path of the note the active panel is showing (both carriers), or null. */
   getActivePage(): string | null
@@ -206,6 +212,19 @@ export interface PluginAppApi extends BlockSurfaceApi {
    *  ⚠️路径必须与 `readFile` 用的是同一个字符串(vault 相对、`/` 分隔);大小写按平台。
    *  旧宿主 / 非桌面宿主没有:`const off = ctx.app.watchFile?.(p, cb)`,缺位时自己退化成轮询。 */
   watchFile?(path: string, cb: () => void): () => void
+  /** Library-wide file events (2026-10-17+): files created, deleted, renamed or changed outside the editor, delivered in
+   *  batches (about 200 ms). Returns an unsubscribe; the host also drops it when the plugin is disabled or reloaded.
+   *  - `create` / `delete`: any note or file appearing in / leaving the library listing, whoever did it (the user in
+   *    Forsion, another program, sync). Folders alone are not reported.
+   *  - `rename`: a rename or move done in Forsion (any window): `{ path: new, from: old }`; a whole folder moved =
+   *    one event with `folder: true`. That same move does **not** also arrive as a delete + create. A rename done by
+   *    another program cannot be told apart from a delete + create, so it arrives as those two.
+   *  - `modify`: content changed outside this window's editor (another program, Tangu, another window, sync). Typing in
+   *    the open note is not reported here; use `subscribePage` for the active note.
+   *  - `vault`: the open library was switched or closed. Re-read whatever you cached (`listFiles` etc.).
+   *  Paths are vault-relative with `/`, the same strings `readFile` takes. With no library open nothing arrives.
+   *  Older hosts lack it: `ctx.app.onVaultEvent?.(cb)`, and fall back to `listFiles` polling. */
+  onVaultEvent?(cb: (events: PluginVaultEvent[]) => void): () => void
   /** The plugin's work folder for file output, vault-relative without leading/trailing slash.
    *  Every plugin automatically gets a "工作文件夹" setting (key `workFolder`) on its detail page;
    *  this returns that value, defaulting to `Plugins/<display name>` (since 2026-10-14; before that the default was

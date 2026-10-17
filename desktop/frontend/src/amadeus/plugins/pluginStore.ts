@@ -23,6 +23,7 @@ const hostTangu = (): typeof window.tangu => (typeof window !== 'undefined' ? wi
  *  读回来才准,插件 setup 时往往还没到。桌面主进程不声明这一项 = 照旧注入。 */
 const automationHost = (): boolean => !!readTangu()?.waitBackend && hostTangu()?.executionCapabilities?.host !== false
 import { noteOf, usePageStore } from '../store/pageStore'
+import { subscribeVaultEvents } from './vaultEvents'
 import { useUiStore } from '../store/uiStore'
 import { setTheme as applyAccent, toggleMode } from '../theme/ThemeManager'
 import { amadeus } from '../api'
@@ -409,6 +410,14 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
           },
         }
       : {}),
+    // 库级文件事件:三端都挂(底座是 pageStore 清单 + 改名广播 + 外部改动广播,哪路缺位就少那一类),停用时同 watchFile 收掉。
+    onVaultEvent: (cb) => {
+      if (!alive) return () => {}
+      const off = subscribeVaultEvents(cb)
+      const wrapped = (): void => { off(); fileUnsubs.delete(wrapped) }
+      fileUnsubs.add(wrapped)
+      return wrapped
+    },
     // 工作文件夹(相对 vault 根):读标准设置 plugin.<id>.workFolder;没设或非法(空段/./..)→ Plugins/<插件显示名>。
     workFolder: () => {
       let v = ''

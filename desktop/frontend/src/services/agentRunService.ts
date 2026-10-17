@@ -303,7 +303,7 @@ export async function sendUiAck(
   t: EngineTarget,
   runId: string,
   ackId: string,
-  body: { ok: boolean; error?: string; state?: string; settings?: Record<string, string> },
+  body: { ok: boolean; error?: string; state?: string; result?: string; settings?: Record<string, string> },
 ): Promise<string> {
   const path = `/agent/runs/${encodeURIComponent(runId)}/inquiries/${encodeURIComponent(ackId)}`
   // ⚠️ 界面已经改完了才发这条回执,所以「发丢了」= 用户看见变化、模型被告知失败(Codex 评审 P1-5)。

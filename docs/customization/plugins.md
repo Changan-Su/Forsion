@@ -70,7 +70,8 @@ Forsion Android App 也能装 Forsion 插件,与桌面是同一套插件接口:
 
 - npm 渠道**只下载文件、绝不执行安装脚本**,杜绝装包即中招;
 - 引擎插件提供的工具**纳入审批体系**,插件自己也绕不过"动手前问你",见[工具与审批](../chat/tools-and-approvals.md);
-- 插件跑在受限接缝上,能力按它声明的那些授予 —— 没声明的拿不到;界面上一个插件出问题不会拖垮整个应用。
+- 插件跑在受限接缝上,能力按它声明的那些授予 —— 没声明的拿不到;界面上一个插件出问题不会拖垮整个应用;
+- 插件自带的 MCP 工具同样过审批,它带的 hook 只能看、不能拦也不能往对话里加内容(见下「插件自带的 MCP、hooks 与文件事件」)。
 
 ## 开发者
 
@@ -148,6 +149,16 @@ View 内需要一个完整的常驻对话时（例如创作类 Space 的右栏�
 日历、待办、习惯这类插件需要读写你库里的多维表，以及笔记里带 `@` 时间的任务（`- [ ] 交周报 @2026-10-20`）。插件必须在说明文件里声明 `databases`（多维表）或 `noteTasks`（笔记任务）才拿得到；没声明的插件看不到这些数据。拿到之后，插件改一格、勾一项，和你在表格里、笔记里亲手改是同一条路：打开着的表格立即跟着变，笔记视图的属性写进那篇笔记。插件删经典表的一行可以撤销；笔记视图的一行是一篇笔记，插件只能把它移进回收站。接口细节见插件开发技能「全库多维表与笔记任务」一节。
 
 Calendar, to-do and habit plugins need to read and edit the tables in your vault and the dated tasks in your notes (`- [ ] Send report @2026-10-20`). A plugin gets them only if its manifest declares `databases` (tables) or `noteTasks` (note tasks); plugins that do not declare them cannot see this data. Once granted, a plugin changing a cell or ticking a task goes the same way as your own edit: open tables update at once, and note-view properties are written into that note. A plugin can undo deleting a row from a regular table; a note-view row is a note, so a plugin can only move it to the recycle bin. API details are in the plugin development skill, section "全库多维表与笔记任务".
+
+## 插件自带的 MCP、hooks 与文件事件 / Bundled MCP servers, hooks and file events
+
+插件可以随包带上自己的 MCP server(只限在本机跑的那种),装好、启用之后 Tangu 就多了这些工具,停用插件就一起停掉。设置 → MCP 里会列出它们,写着来自哪个插件;要关掉,在插件设置里停用这个插件。插件也可以带 hook,在会话开始、工具跑完、一次回答结束时收到通知,用来做审计、归档这类事;这种 hook 只能看,拦不住任何操作,也不能往对话里加内容。设置 → Hooks 里同样列出它们,标着「只观察」。
+
+插件还能收到笔记库里的文件事件:新建、删除、在 Forsion 里改名或移动、被别的程序或 Tangu 改动,以及换库。反链、自动整理这类插件靠它跟上库里的变化,不用一遍遍重新扫描。接口细节见插件开发技能的「插件自带的 MCP server 与 hooks」和「库级文件事件」两节;插件命令给 Tangu 交回查询结果的写法在「`invoke`:把一条命令开给 agent」一节。
+
+A plugin can ship its own MCP servers (only ones that run on this computer). Once it is installed and enabled, Tangu gains those tools; disabling the plugin stops them. Settings → MCP lists them with the plugin they come from; to turn them off, disable the plugin in plugin settings. A plugin can also ship hooks that are told when a session starts, when a tool has run and when an answer ends, for auditing or archiving. These hooks only watch: they cannot block anything or add to the conversation. Settings → Hooks lists them too, marked "Observe only".
+
+Plugins can also follow file events in your vault: files created, deleted, renamed or moved in Forsion, changed by another program or by Tangu, and switching vaults. Backlink and tidy-up plugins use this to keep up without rescanning the vault. For the API, see the plugin development skill, sections "插件自带的 MCP server 与 hooks" and "库级文件事件"; how a plugin command hands query results to Tangu is in the "`invoke`" section.
 
 ## 开屏与图标 / Startup and icons
 

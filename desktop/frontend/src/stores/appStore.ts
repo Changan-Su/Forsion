@@ -1555,7 +1555,7 @@ export const useApp = create<AppState>((set, get) => ({
             : await runAgentCommand(pl.id, pl.args && typeof pl.args === 'object' ? pl.args : undefined)
           // 回执带全份设置新值(在 setter 落地**之后**读):引擎据此刷新 run 内快照,同 run 里再 list 才是新值。
           // pending(setter 没在时限内落地)就不带:那一刻读到的还是旧值,写进引擎等于把病换个出口再犯一次。
-          const ack = await sendUiAck(target, runId, ackId, { ok: r.ok, error: r.error, state: r.state, ...(r.pending ? {} : { settings: readUiValues() }) })
+          const ack = await sendUiAck(target, runId, ackId, { ok: r.ok, error: r.error, state: r.state, ...('result' in r && r.result ? { result: r.result } : {}), ...(r.pending ? {} : { settings: readUiValues() }) })
           recordUiAction({ runId, ackId, ...req, ok: r.ok, error: r.error, state: r.state, ack })
         })().catch((e) => { recordUiAction({ runId, ackId, ...req, drop: 'exception', error: String((e as Error)?.message || e) }) /* 动态 import 失败也不该炸掉事件流,引擎会超时兜住 */ })
         break

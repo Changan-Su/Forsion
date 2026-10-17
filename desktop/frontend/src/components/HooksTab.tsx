@@ -13,6 +13,9 @@ import { SettingsState } from './SettingsPrimitives'
 import { homeTarget } from '../services/engine/targets'
 
 registerMessages({
+  'hookstab.fromPlugin': { zh: '来自插件「{name}」', en: 'From plugin "{name}"' },
+  'hookstab.observeOnly': { zh: '只观察', en: 'Observe only' },
+  'hookstab.pluginHint': { zh: '插件自带的 hook 只看事件，不能拦截、也不能往对话里加内容；要关掉它，请在插件设置里停用这个插件。', en: 'Hooks that come with a plugin only watch events. They cannot block anything or add to the conversation. To turn one off, disable the plugin in plugin settings.' },
   'hookstab.ev.PreToolUse': { zh: '工具执行前 · 可拦截 / 改写参数 / 注入上下文', en: 'Before a tool runs · block / rewrite args / inject context' },
   'hookstab.ev.PostToolUse': { zh: '工具执行后 · 跑格式化 / lint / 审计，或把反馈喂回模型', en: 'After a tool runs · format / lint / audit, or feed feedback back' },
   'hookstab.ev.PermissionRequest': { zh: '弹审批前 · 放行 / 拒绝', en: 'Before the approval prompt · allow / deny' },
@@ -78,8 +81,9 @@ export const HooksTab: React.FC<{ cfg: TanguDesktopConfig }> = ({ cfg }) => {
   }, [cfg])
   useEffect(() => { reload() }, [reload])
 
+  // 只回写用户自己的行:插件自带的 hook 不在用户配置里,写回去就成了能拦截的用户 hook(引擎 PUT 也按内容剔一遍)
   const allRows = (): Row[] =>
-    data ? Object.entries(data.discovered).flatMap(([event, list]) => list.map((h) => ({ event, ...h }))) : []
+    data ? Object.entries(data.discovered).flatMap(([event, list]) => list.filter((h) => h.source === 'user').map((h) => ({ event, ...h }))) : []
 
   const rowsToEvents = (rows: Array<{ event: string; matcher: string; command: string; timeout: number | string; commandWindows?: string; statusMessage?: string }>) => {
     const ev: Record<string, any[]> = {}
@@ -194,20 +198,26 @@ export const HooksTab: React.FC<{ cfg: TanguDesktopConfig }> = ({ cfg }) => {
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               {rows.map((h) => (
-                <div key={h.key} style={{ border: 'var(--border-width) solid var(--border)', borderRadius: 'var(--radius-lg, 10px)', padding: 10, display: 'flex', alignItems: 'center', gap: 10, opacity: h.active ? 1 : 0.6 }}>
+                <div key={h.key} title={h.plugin ? t('hookstab.pluginHint') : undefined} style={{ border: 'var(--border-width) solid var(--border)', borderRadius: 'var(--radius-lg, 10px)', padding: 10, display: 'flex', alignItems: 'center', gap: 10, opacity: h.active ? 1 : 0.6 }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                       {h.matcher && badge(h.matcher, 'var(--text-faint)')}
-                      {h.source !== 'user' && badge(h.source, 'var(--text-faint)')}
+                      {h.plugin && badge(t('hookstab.fromPlugin', { name: h.plugin.name }), 'var(--text-faint)')}
+                      {h.plugin && badge(t('hookstab.observeOnly'), 'var(--text-faint)')}
+                      {h.source !== 'user' && !h.plugin && badge(h.source, 'var(--text-faint)')}
                       {h.trust === 'needs-review' && badge(t('hookstab.needsReview'), 'var(--warn, #b8860b)')}
                       {!h.enabled && badge(t('hookstab.disabled'), 'var(--text-faint)')}
                     </div>
                     <div style={{ fontFamily: 'var(--font-mono, monospace)', fontSize: 'var(--ui-font-meta, 12px)', marginTop: 3, wordBreak: 'break-all' }}>{h.command}</div>
                   </div>
                   {h.trust === 'needs-review' && <button className="btn ghost sm" onClick={() => void trust({ ...h, event })}>{t('hookstab.trust')}</button>}
-                  <button className="btn ghost sm" onClick={() => startEdit({ ...h, event })}>{t('hookstab.edit')}</button>
-                  <button className="btn ghost sm" onClick={() => void del(h.key)}>{t('hookstab.delete')}</button>
-                  <input type="checkbox" checked={h.enabled} onChange={() => void toggle({ ...h, event })} style={{ cursor: 'pointer' }} />
+                  {!h.plugin && (
+                    <>
+                      <button className="btn ghost sm" onClick={() => startEdit({ ...h, event })}>{t('hookstab.edit')}</button>
+                      <button className="btn ghost sm" onClick={() => void del(h.key)}>{t('hookstab.delete')}</button>
+                      <input type="checkbox" checked={h.enabled} onChange={() => void toggle({ ...h, event })} style={{ cursor: 'pointer' }} />
+                    </>
+                  )}
                 </div>
               ))}
             </div>
