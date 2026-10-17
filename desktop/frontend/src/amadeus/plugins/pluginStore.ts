@@ -51,6 +51,7 @@ import { buildPluginTriggerUpserts, isPluginOwnedRule, normalizeVaultRel } from 
 import { MUTATE_DB_RETRIES, mutateDbCas } from './pluginDb'
 import { useDbStore } from '../store/dbStore'
 import { createDatabasesApi, createNoteTasksApi } from './pluginData'
+import { loadSyncedPluginData, notePluginDataSaved, pluginDataSyncOn, type LocalData } from './pluginDataSync'
 import { kickAutomation } from '../store/automationKick'
 import { triggerToUpsert } from '../../views/automation/lib'
 import { memberOf, useCalendarConfig } from '../store/calendarConfigStore'
@@ -612,6 +613,7 @@ function pluginMeta(src: ExternalPluginSource): Omit<AmadeusPlugin, 'setup'> {
     blocked: src.blocked,
     blockedReason: src.blockedReason,
     isDesktopOnly: src.isDesktopOnly,
+    syncData: src.syncData,
     agent: src.agent,
     bundle: src.bundle,
     events: src.events,
@@ -1139,6 +1141,10 @@ export const usePluginStore = create<PluginState>((set, get) => {
         },
       }
     }
+    // 本机那份插件数据(主进程 / 手机宿主各自落盘);两样都有才谈得上同步
+    const localData: LocalData | null = amadeus?.readPluginData && amadeus?.writePluginData
+      ? { read: () => Promise.resolve(amadeus.readPluginData!(pluginId)).catch(() => null), write: (text) => amadeus.writePluginData!(pluginId, text) }
+      : null
     const ctx: PluginContext = {
     app: appApi,
     account: hostTangu()?.account ? {
@@ -1342,10 +1348,14 @@ export const usePluginStore = create<PluginState>((set, get) => {
     },
     // 插件私有 JSON blob(~/.forsion/plugins-data/<id>.json)。宿主缺位 → 读 null / 写 no-op,
     // 插件侧一律 `await ctx.loadData?.() ?? 默认值`。坏 JSON 当没写过(用户手改文件改坏了不该让插件起不来)。
+    // manifest `syncData: true` 的插件:本地优先,云端在旁边对账(pluginDataSync.ts)。
     loadData: async () => {
       // ⚠️`amadeus?.readPluginData?.(id).catch(…)` 是错的:方法缺席时 `?.()` 求值成 undefined,
       //   紧跟着的 `.catch` 就是在 undefined 上取属性 → 同步 TypeError。非桌面宿主必炸。
-      const raw = await Promise.resolve(amadeus?.readPluginData?.(pluginId)).catch(() => null)
+      const readLocal = () => Promise.resolve(amadeus?.readPluginData?.(pluginId)).catch(() => null)
+      const raw = pluginDataSyncOn(get().plugins.find((p) => p.id === pluginId)) && localData
+        ? await loadSyncedPluginData(pluginId, localData).catch(readLocal)
+        : await readLocal()
       if (raw == null) return null
       try {
         return JSON.parse(raw)
@@ -1357,6 +1367,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     saveData: async (value) => {
       if (!amadeus?.writePluginData) return
       await amadeus.writePluginData(pluginId, JSON.stringify(value ?? null))
+      if (localData && pluginDataSyncOn(get().plugins.find((p) => p.id === pluginId))) notePluginDataSaved(pluginId, localData)
     },
     // 通用宿主 UI 原语。Floating TOC 是非接管式挂载:插件继续拥有正文 DOM,宿主只在 shell 上叠一层。
     // 与 table/dashboard 一样动态 import 破环;形态错误同步抛,让插件能当场走自己的降级 UI。

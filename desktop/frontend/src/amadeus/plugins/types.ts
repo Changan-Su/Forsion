@@ -1283,7 +1283,8 @@ export interface PluginContext {
    *  registerSetting 是「一键一个字符串」,存不下片段库这类大块数据,也没有原子性。
    *  旧宿主没有:`await ctx.loadData?.() ?? 默认值`。 */
   loadData?<T = unknown>(): Promise<T | null>
-  /** 原子写本插件的私有 JSON blob(整体覆盖)。宿主缺位时静默 no-op。 */
+  /** 原子写本插件的私有 JSON blob(整体覆盖)。宿主缺位时静默 no-op。
+   *  manifest 写 `"syncData": true` → 登录后这份随账号跨设备同步(本地优先,整份取较新的;单份 ≤512KB)。 */
   saveData?(value: unknown): Promise<void>
   /** Host-native UI primitives (2026-09-07+). A plugin keeps ownership of its content DOM and gives
    *  the host a shell to overlay plus its scroll/content roots. Old hosts omit the whole member.
@@ -1749,6 +1750,9 @@ export interface AmadeusPlugin {
   /** Manifest `isDesktopOnly` (Obsidian-style): the plugin needs desktop-only host APIs. Informational on desktop;
    *  mobile hosts list it as `blocked: 'desktopOnly'` and never evaluate it. External plugins only. */
   isDesktopOnly?: boolean
+  /** Manifest `syncData: true`: ctx.saveData syncs across devices with the Forsion account (desktop / mobile; each
+   *  device can turn it off per plugin in Settings). Local-first; whole-blob newest wins. External plugins only. */
+  syncData?: boolean
   /** Agent 自建 Space 插件的 agent slug(external only;设置页标「<slug> 的 Space」、不给卸载)。 */
   agent?: string
   /** 捆绑包内嵌内容清单(引擎插件 id / agent / 技能 / Space;缺省 = 纯 UI 插件)。External plugins only. */

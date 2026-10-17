@@ -25,13 +25,15 @@ export interface InstalledPluginManifest {
   events?: unknown
   /** Obsidian 式平台旗标:true = 只能在桌面端运行(Android 列出但不装载、市场拒装)。 */
   isDesktopOnly?: unknown
+  /** true = ctx.saveData 的数据随 Forsion 账号跨设备同步(用户可在设置里逐个关)。 */
+  syncData?: unknown
 }
 
 /** manifest 推导出的展示 / 门禁字段(id、code、文档、图标、blocked 由调用方补)。
  *  ⚠️ name / version / description 沿用桌面原有的宽松取值(`m.name || 目录名`),别在这里顺手收紧 —— 两端同时变。 */
 export type InstalledPluginFields = Pick<ExternalPluginSource,
   'name' | 'version' | 'description' | 'nameEn' | 'descriptionEn' | 'apiVersion' | 'minAppVersion' | 'requiresApp' | 'packageId'
-  | 'requiresPlugins' | 'capabilities' | 'onboarding' | 'events' | 'fileExtensions' | 'isDesktopOnly'>
+  | 'requiresPlugins' | 'capabilities' | 'onboarding' | 'events' | 'fileExtensions' | 'isDesktopOnly' | 'syncData'>
 
 export function installedPluginFields(m: InstalledPluginManifest, dirName: string, id?: string): InstalledPluginFields {
   return {
@@ -57,5 +59,6 @@ export function installedPluginFields(m: InstalledPluginManifest, dirName: strin
       : undefined,
     // 只认字面量 true:`"true"` / 1 之类不算声明(与 Obsidian 同口径;漏标的插件在手机上照常装载,用到桌面专属接口时由插件自己的可选链 / 报错兜住)。
     isDesktopOnly: m.isDesktopOnly === true ? true : undefined,
+    syncData: m.syncData === true ? true : undefined,
   }
 }
