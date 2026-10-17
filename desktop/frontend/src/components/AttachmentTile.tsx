@@ -11,6 +11,18 @@ import { extOf, fmtSize } from '../services/fileKinds'
 
 export interface TileFile { name: string; mimeType: string; data?: string; size?: number }
 
+/** 点了移除、还在淡出的那 130ms:发送时当它已经删了(用户删掉的东西别发出去)。按对象认,草稿里的附件对象引用是稳的。 */
+const leavingFiles = new WeakSet<object>()
+export const isLeaving = (f: object): boolean => leavingFiles.has(f)
+/** 磁贴的 key 按附件对象给:按「名字 + 下标」的话,同名两张图删掉第一张,第二张会接手它的淡出状态(Codex P1) */
+const tileIds = new WeakMap<object, number>()
+let tileSeq = 0
+export const tileKey = (f: object): number => {
+  let id = tileIds.get(f)
+  if (id === undefined) tileIds.set(f, (id = ++tileSeq))
+  return id
+}
+
 const KIND: Record<string, string> = {
   xlsx: 'sheet', xls: 'sheet', csv: 'sheet', tsv: 'sheet', numbers: 'sheet',
   pdf: 'pdf',
@@ -45,6 +57,7 @@ export function AttachmentTile({ file, onRemove, removeTitle, note }: {
   const remove = (): void => {
     if (!onRemove || leaving) return
     if (reducedMotion()) { onRemove(); return }
+    leavingFiles.add(file)
     setLeaving(true)
     window.setTimeout(onRemove, 130)
   }

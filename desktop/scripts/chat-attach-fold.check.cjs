@@ -132,6 +132,21 @@ async function main() {
     const after = await win.evaluate(() => [...document.querySelectorAll('.t2c-tilerow .att-tile img')].map((i) => i.alt))
     check('移除:先缩小淡出,再删掉的是点的那张', mid === 1 && after.length === 1 && after[0] === 'terminal.png', { mid, after })
 
+    // 同名两张图删掉第一张:第二张不能接手它的淡出状态(按名字 + 下标给 key 时会,Codex P1)
+    await win.evaluate(({ imgs }) => {
+      const bytes = (b64) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))
+      const dt = new DataTransfer()
+      dt.items.add(new File([bytes(imgs[1])], 'same.png', { type: 'image/png' }))
+      dt.items.add(new File([bytes(imgs[2])], 'same.png', { type: 'image/png' }))
+      document.querySelector('.t2c-card .t2c-ta').dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }))
+    }, { imgs: IMG })
+    await win.locator('.t2c-tilerow .att-tile').nth(2).waitFor()
+    await win.locator('.t2c-tilerow .att-tile').nth(1).hover()
+    await win.locator('.t2c-tilerow .att-tile').nth(1).locator('.att-tile-x').click()
+    await win.waitForTimeout(300)
+    const same = await win.evaluate(() => [...document.querySelectorAll('.t2c-tilerow .att-tile')].map((t) => ({ alt: t.querySelector('img')?.alt, leaving: t.classList.contains('is-leaving'), op: getComputedStyle(t).opacity })))
+    check('同名图删掉第一张,第二张照常显示', same.length === 2 && same.every((t) => !t.leaving && t.op === '1') && same[1].alt === 'same.png', same)
+
     // ── C2:搜索跳到折叠的长提问时展开 ──
     await win.evaluate(() => document.querySelector('#tocmsg-u2').scrollIntoView())
     const jumped = await win.evaluate(async (sid) => {
