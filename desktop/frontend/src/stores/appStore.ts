@@ -10,6 +10,7 @@ import { PRODUCT } from '../product'
 import { create } from 'zustand'
 import { contentStorageKey } from '@lcl/engine/contentStorageScope'
 import { useSpaceStore } from '@lcl/engine/spaceRegistry'
+import { getView } from '@lcl/engine/viewRegistry'
 import type { ProjectSettings,
   AgentConfig, AgentRunEvent, Attachment, AuthStatusInfo, CtxInfo, ModelsResponse, NormalAgentDef,
   MsgSeg, SessionRecord, SkillInfo, SketchItem, SubChat, TanguDesktopConfig, ToolEvent, UiMessage, WorkspaceDescriptor, StoredDesktopConfig,
@@ -1269,6 +1270,12 @@ function openerSession(s: Pick<AppState, 'sessions' | 'archivedSessions' | 'acti
   if (typeof window === 'undefined' || windowKind() !== 'main') return {}
   const found = s.sessions.find((x) => x.id === s.activeId) || s.archivedSessions.find((x) => x.id === s.activeId) || null
   return found ? { session: found } : {}
+}
+
+/** desk_present 的视图没给 name(插件自己摆的画面,引擎不知道界面语言)→ 用注册时的视图标题;没注册就退回类型名。 */
+function deskViewTitle(type: string): string {
+  const d = getView(type)?.displayName
+  return (typeof d === 'function' ? d() : d) || type
 }
 
 export const useApp = create<AppState>((set, get) => ({
@@ -3058,7 +3065,7 @@ export const useApp = create<AppState>((set, get) => ({
     const ts = Date.now()
     const items: DeskItem[] = views.map((v: any, i: number) => v.type === 'view'
       ? {
-          key: `view:${v.view}@${ts}:${i}`, path: '', name: v.name || v.view, at: ts,
+          key: `view:${v.view}@${ts}:${i}`, path: '', name: v.name || deskViewTitle(v.view), at: ts,
           view: { type: v.view, ...(v.params && typeof v.params === 'object' && !Array.isArray(v.params) ? { params: v.params } : {}) },
         }
       : { key: `${v.path}@${ts}:${i}`, path: v.path, name: v.name || v.path.split(/[\\/]/).pop() || v.path, at: ts })

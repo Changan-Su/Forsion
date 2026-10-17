@@ -22,6 +22,16 @@ export interface AppProfile {
   capabilities: { hostExec: boolean; groupChat: boolean; memory: boolean; log: boolean };
 }
 
+/** ToolContext.presentDesk 的参数:最多两格,size 是形态(card 收回卡片 / half / wide 展开侧板;不带 = 保持现状)。 */
+export interface DeskPresentSpec {
+  views: Array<
+    | { type: 'file'; path: string; name?: string }
+    | { type: 'view'; view: string; params?: Record<string, unknown>; name?: string }
+  >;
+  size?: 'card' | 'half' | 'wide';
+  note?: string;
+}
+
 export interface ToolContext {
   userId: string;
   sessionId: string;
@@ -35,6 +45,12 @@ export interface ToolContext {
    *  缺省(未装配此闸)时工具应优雅降级,不要假定一定可用。 */
   collectImage?: (img: { url: string; name?: string }) => void;
   displayFile?: (item: { name: string; mime?: string; path?: string; dataUrl?: string }) => void;
+  /** 本次 run 的 id(一条用户消息引起的那一整轮)。拿来做「每轮只做一次」;缺省时按 sessionId 兜底。 */
+  runId?: string;
+  /** Agent Desk 演出闸(同 desk_present 工具):把文件或已注册的视图(插件视图写 `plugin:<插件 id>:<视图 id>`)
+   *  摆到聊天右侧的 Agent Desk。不落库、不回灌上下文;每个 run 有次数上限;用户关掉 Desk 后到下一条用户消息前不再弹。
+   *  view 不带 name 时宿主用注册时的视图标题。缺省(TUI / 云端等没有 Desk 的环境)时工具应优雅降级。 */
+  presentDesk?: (spec: DeskPresentSpec) => void;
   /** 发起端(手机)自报的客户端能力,如 'phone.intents'(run 内冻结)。契约 tangu-agent/docs/phone-control.md §2。 */
   clientCapabilities?: readonly string[];
   /** 让发起端原生层执行一个动作:发 `client_cmd` → 原生 claim → 执行 → 回执。闭包已绑定本 run,只在
