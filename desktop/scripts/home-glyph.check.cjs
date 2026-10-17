@@ -11,6 +11,8 @@
  *  G8 切到暗色,字跟着换色(不用重开主页)
  *  G9 「动态效果」关掉 = 打字、点空白处都不响应
  *  G10 壁纸面板里四张主题背景,字阵那张缩略图有字
+ *  G11 ⚠️从壁纸面板里选字阵(面板开着时聚焦景深把背景层放大 1.045、正在动画):画布尺寸仍按未变换的可见区域算
+ *      (评审抓到的:按 getBoundingClientRect 定尺寸会大 4.5%,之后 ResizeObserver 不再来,字一直糊、涟漪落点偏)
  * 另存截图:亮 / 暗 / 青绿 · 暗的静置与打字、壁纸面板。
  *
  * ⚠️ 量的是 out/ 里的产物,源码改了没 `npm run build` 就是白测。
@@ -63,7 +65,7 @@ async function main() {
     const setLook = (look) => win.evaluate(([m, s]) => { const r = document.documentElement; r.dataset.mode = m; r.classList.toggle('dark', m === 'dark'); r.dataset.skin = s; r.dataset.bg = s }, LOOKS[look])
     const open = async (prefs) => {
       await win.evaluate(({ key, prefs }) => { localStorage.setItem('forsion_tangu_active_space', 'home'); localStorage.setItem(key, JSON.stringify({ source: 'theme', themePreset: 'glyph', ...prefs })) }, { key: KEY, prefs })
-      await win.reload(); await win.waitForSelector('.hp-root .hpw-glyph-canvas', { timeout: 30_000 }); await win.waitForTimeout(1200)
+      await win.reload(); await win.waitForSelector(prefs.themePreset && prefs.themePreset !== 'glyph' ? '.hp-root .hp-wallpaper-art' : '.hp-root .hpw-glyph-canvas', { timeout: 30_000 }); await win.waitForTimeout(1200)
       await win.waitForSelector('.hp-composer .t2c-ta:not(:disabled)', { timeout: 10_000 }).catch(() => {})
       await win.mouse.move(W - 4, H - 4)
     }
@@ -129,6 +131,21 @@ async function main() {
     await typeInto('帮我整理'); const off1 = await pixels(win)
     await win.mouse.click(Math.round(W * 0.16), Math.round(H * 0.3)); await win.waitForTimeout(160); const off2 = await pixels(win)
     check('G9 动态效果关掉:打字、点空白处都不响应', off0.a === off1.a && off0.a === off2.a, `${off0.a} / ${off1.a} / ${off2.a}`)
+
+    await open({ themePreset: 'orbit', motion: true, focusBlur: true })
+    await setLook('light'); await win.waitForTimeout(300)
+    await win.locator('.hp-wallpaper-button').click(); await win.waitForSelector('.hp-wallpaper-sheet', { timeout: 5000 }); await win.waitForTimeout(700)
+    await win.locator('.hp-theme-presets button[data-preset="glyph"]').click(); await win.waitForTimeout(900)
+    const size = () => win.evaluate(() => {
+      const art = document.querySelector('.hp-root .hp-wallpaper-art'); const c = document.querySelector('.hp-root .hpw-glyph-canvas')
+      const want = [Math.round(art.clientWidth * (art.currentCSSZoom || 1) * devicePixelRatio), Math.round(art.clientHeight * (art.currentCSSZoom || 1) * devicePixelRatio)]
+      return { got: c ? [c.width, c.height] : null, want }
+    })
+    const inSheet = await size()
+    await win.keyboard.press('Escape'); await win.waitForTimeout(900)
+    const afterSheet = await size()
+    const same = (x) => x.got && x.got[0] === x.want[0] && x.got[1] === x.want[1]
+    check('G11 从壁纸面板里选字阵,画布尺寸按未变换的可见区域', same(inSheet) && same(afterSheet), JSON.stringify({ inSheet, afterSheet }))
   } finally {
     await app.close().catch(() => {}); stub.close?.()
     fs.rmSync(home, { recursive: true, force: true })

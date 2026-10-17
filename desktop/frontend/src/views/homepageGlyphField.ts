@@ -6,7 +6,9 @@
  * 没有格子在变时 rAF 停下 —— 静置是零帧。指针移动不起作用,画布也不接收指针(点击、选字照旧)。
  * ⚠️方案里调过三次的口径(方案引擎 instrument/glyph-field.cjs):亮度曲线指数 1.6、涟漪尾巴 0.03 秒暗一半、低于 0.05 不亮 ——
  * 曲线平了或尾巴长了,暗色底上淡尾巴连成一整块实心盘。时钟、问候后面是安静区(最多 22%),同色亮字会把时钟吃掉。
- * 坐标:getBoundingClientRect / clientX 是视口坐标(已含 CSS zoom),字号、内边距是未缩放的局部 px,要乘 currentCSSZoom。
+ * 坐标:画布按 clientWidth × currentCSSZoom × dpr 定尺寸 —— 不能用 getBoundingClientRect,它带着祖先的 transform(壁纸面板开着时
+ * 聚焦景深把这一层放大 1.045,从面板里选字阵正好在这段动画里挂上,画布会大 4.5%,ResizeObserver 之后也不会再来)。
+ * 视口坐标(clientX、各种 rect)换到画布像素一律按「画布像素 / 画布 rect」的比例换,字号、内边距是未缩放的局部 px,乘 currentCSSZoom。
  */
 
 const FONT = 12
@@ -43,20 +45,23 @@ export function createGlyphField(host: HTMLElement, { scale = 1, interactive = t
   let dpr = 1; let zoom = 1; let cols = 0; let rows = 0; let cw = 1; let ch = 1; let ox = 0; let oy = 0
   let glyph = new Uint8Array(0); let energy = new Float32Array(0); let drawn = new Uint8Array(0); let noise = new Float32Array(0); let hush = new Float32Array(0)
   let atlas: HTMLCanvasElement | null = null
-  let font = 'monospace'; let text = '#1c1c1c'; let ink = '#1c1c1c'
+  let font = ''; let text = ''; let ink = ''
   const active = new Set<number>()
   let rings: Ring[] = []
-  let raf = 0; let last = 0; let still = !interactive
+  let raf = 0; let themeRaf = 0; let last = 0; let still = !interactive; let alive = true
 
-  function readTheme(): void {
+  /** 读主题色和字体;返回有没有变(没变就不用重画图集)。 */
+  function readTheme(): boolean {
     const probe = doc.createElement('span')
     probe.style.cssText = 'position:absolute;visibility:hidden;color:var(--text);font-family:var(--font-mono, ui-monospace, Menlo, monospace)'
     host.appendChild(probe)
-    text = getComputedStyle(probe).color
-    font = getComputedStyle(probe).fontFamily
+    const next = [getComputedStyle(probe).color, getComputedStyle(probe).fontFamily]
     probe.style.color = 'var(--accent-ink)'
-    ink = getComputedStyle(probe).color
+    next.push(getComputedStyle(probe).color)
     probe.remove()
+    const changed = next[0] !== text || next[1] !== font || next[2] !== ink
+    ;[text, font, ink] = next
+    return changed
   }
 
   function buildAtlas(): void {
@@ -86,24 +91,25 @@ export function createGlyphField(host: HTMLElement, { scale = 1, interactive = t
   }
 
   /** 安静区:直接写在背景上、没有玻璃垫着的字(时钟、问候)后面,亮字最多亮到 22%。 */
+  /** 每放一圈前重算一次:输入框长到几行时整组居中内容会上移,时钟跟着走。 */
   function quietZone(): void {
     hush.fill(1)
     if (!interactive || !root) return
-    const r0 = cv.getBoundingClientRect()
     for (const el of root.querySelectorAll(quiet)) {
-      const b = el.getBoundingClientRect(); const pad = 10
-      const c0 = Math.max(0, Math.floor(((b.left - r0.left - pad) * dpr - ox) / cw)); const c1 = Math.min(cols - 1, Math.floor(((b.right - r0.left + pad) * dpr - ox) / cw))
-      const rA = Math.max(0, Math.floor(((b.top - r0.top - pad) * dpr - oy) / ch)); const rB = Math.min(rows - 1, Math.floor(((b.bottom - r0.top + pad) * dpr - oy) / ch))
+      const b = el.getBoundingClientRect()
+      const [x0, y0] = toCanvas(b.left - 10, b.top - 10); const [x1, y1] = toCanvas(b.right + 10, b.bottom + 10)
+      const c0 = Math.max(0, Math.floor((x0 - ox) / cw)); const c1 = Math.min(cols - 1, Math.floor((x1 - ox) / cw))
+      const rA = Math.max(0, Math.floor((y0 - oy) / ch)); const rB = Math.min(rows - 1, Math.floor((y1 - oy) / ch))
       for (let r = rA; r <= rB; r++) for (let c = c0; c <= c1; c++) hush[r * cols + c] = QUIET
     }
   }
 
+  const readZoom = (): number => (host as HTMLElement & { currentCSSZoom?: number }).currentCSSZoom || 1
   function layout(): void {
-    const r = host.getBoundingClientRect()
-    if (r.width < 1 || r.height < 1) return
+    if (host.clientWidth < 1 || host.clientHeight < 1) return
     dpr = win.devicePixelRatio || 1
-    zoom = (host as HTMLElement & { currentCSSZoom?: number }).currentCSSZoom || 1
-    cv.width = Math.round(r.width * dpr); cv.height = Math.round(r.height * dpr)
+    zoom = readZoom()
+    cv.width = Math.round(host.clientWidth * zoom * dpr); cv.height = Math.round(host.clientHeight * zoom * dpr)
     readTheme()
     g.font = `${FONT * scale * zoom * dpr}px ${font}`
     cw = Math.round(g.measureText('m').width + TRACK * scale * zoom * dpr); ch = Math.round(LINE * scale * zoom * dpr)
@@ -173,14 +179,19 @@ export function createGlyphField(host: HTMLElement, { scale = 1, interactive = t
     full()
   }
 
-  /** x / y 是相对画布的视口 px;其余参数是未缩放的 CSS px。 */
-  function pulse(x: number, y: number, { speed = 380, max = 150, amp = 0.7, width = 12 } = {}): void {
-    if (still) return
+  /** 视口坐标 → 画布像素(按实际比例,带着祖先 transform 也对)。 */
+  function toCanvas(cx: number, cy: number): [number, number] {
+    const r = cv.getBoundingClientRect()
+    return [(cx - r.left) * (cv.width / (r.width || 1)), (cy - r.top) * (cv.height / (r.height || 1))]
+  }
+  /** x / y 是画布像素;其余参数是未缩放的 CSS px。 */
+  function pulse([x, y]: [number, number], { speed = 380, max = 150, amp = 0.7, width = 12 } = {}): void {
+    if (still || !cols) return
+    quietZone()
     const u = zoom * dpr
-    rings.push({ x: x * dpr, y: y * dpr, t0: performance.now(), v: speed * u, max: max * u, amp, w: width * u })
+    rings.push({ x, y, t0: performance.now(), v: speed * u, max: max * u, amp, w: width * u })
     kick()
   }
-  const local = (cx: number, cy: number): [number, number] => { const r = cv.getBoundingClientRect(); return [cx - r.left, cy - r.top] }
 
   let meter: CanvasRenderingContext2D | null = null
   /** 光标大概在哪:同一行光标前那段字的宽度。不追求逐像素准,一圈涟漪的起点而已。 */
@@ -193,36 +204,54 @@ export function createGlyphField(host: HTMLElement, { scale = 1, interactive = t
     const pad = (parseFloat(cs.paddingLeft) || 0) * z
     const w = (meter?.measureText(line).width || 0) * z
     const lh = (parseFloat(cs.lineHeight) || 20) * z
-    return local(r.left + pad + Math.min(w, r.width - pad * 2), r.top + Math.min(r.height, lh) / 2 + (parseFloat(cs.paddingTop) || 0) * z)
+    return toCanvas(r.left + pad + Math.min(w, r.width - pad * 2), r.top + Math.min(r.height, lh) / 2 + (parseFloat(cs.paddingTop) || 0) * z)
   }
   const inComposer = (t: EventTarget | null): t is HTMLTextAreaElement => t instanceof HTMLTextAreaElement && !!t.closest('.hp-composer')
 
   function onInput(ev: Event): void {
-    if (inComposer(ev.target)) { const [x, y] = caret(ev.target); pulse(x, y) }
+    if (inComposer(ev.target)) pulse(caret(ev.target))
   }
   function onKey(ev: KeyboardEvent): void {
-    // 发送:一道环扫过整屏(真主页按回车会马上进对话,多半看不到;留着它是为了在主页多停一会儿时也有反馈)
+    // 发送:一道环扫过整屏(真主页按回车会马上进对话,多半看不到)。回车也用来选 @ / / 弹层里的项、空输入框按回车什么也不发,
+    // 所以等一帧看:按之前有字、按之后空了 = 真发出去了。
     if (ev.key !== 'Enter' || ev.shiftKey || ev.isComposing || !inComposer(ev.target)) return
-    const b = ev.target.getBoundingClientRect(); const r = cv.getBoundingClientRect()
-    const [x, y] = local(b.left + b.width / 2, b.top + b.height / 2)
-    pulse(x, y, { speed: 1000, max: Math.hypot(r.width, r.height) / zoom, amp: 0.75, width: 14 })
+    const ta = ev.target
+    if (!ta.value.trim()) return
+    win.requestAnimationFrame(() => {
+      if (!alive || ta.value.trim()) return
+      const b = ta.getBoundingClientRect()
+      pulse(toCanvas(b.left + b.width / 2, b.top + b.height / 2), { speed: 1000, max: Math.hypot(cv.width, cv.height) / (zoom * dpr), amp: 0.75, width: 14 })
+    })
   }
   function onDown(ev: PointerEvent): void {
     if (ev.button !== 0 || (ev.target as Element | null)?.closest?.(NOT_BLANK)) return
-    const [x, y] = local(ev.clientX, ev.clientY)
-    pulse(x, y, { speed: 520, max: 260, amp: 0.8, width: 16 })
+    pulse(toCanvas(ev.clientX, ev.clientY), { speed: 520, max: 260, amp: 0.8, width: 16 })
   }
 
   const ro = new win.ResizeObserver(() => layout())
   ro.observe(host)
-  // 亮暗 / 主题色 / 背景色换了只重画图集,不重排字
-  let themeQueued = false
-  const mo = new win.MutationObserver(() => {
-    if (themeQueued) return
-    themeQueued = true
-    win.requestAnimationFrame(() => { themeQueued = false; readTheme(); buildAtlas(); full() })
-  })
+  // <html> 上的主题属性 / 行内变量、<body> 的 UI 缩放变了:缩放变了重排字;颜色、字体变了只重画图集;都没变(比如 Space 氛围色
+  // 一秒写好几次 --space-ambient-*)什么也不做。
+  const restyle = (): void => {
+    if (themeRaf) return
+    themeRaf = win.requestAnimationFrame(() => {
+      themeRaf = 0
+      if (readZoom() !== zoom) layout()
+      else if (readTheme()) { buildAtlas(); full() }
+    })
+  }
+  const mo = new win.MutationObserver(restyle)
   mo.observe(doc.documentElement, { attributes: true, attributeFilter: ['class', 'style', 'data-mode', 'data-skin', 'data-bg', 'data-theme'] })
+  mo.observe(doc.body, { attributes: true, attributeFilter: ['style'] })
+  // 挪到另一块缩放比不同的屏上:容器尺寸没变,ResizeObserver 不来
+  let dppx: MediaQueryList | null = null
+  const watchDpr = (): void => {
+    dppx?.removeEventListener('change', onDpr)
+    dppx = win.matchMedia(`(resolution: ${win.devicePixelRatio || 1}dppx)`)
+    dppx.addEventListener('change', onDpr)
+  }
+  function onDpr(): void { layout(); watchDpr() }
+  watchDpr()
   if (interactive && root) {
     root.addEventListener('input', onInput, true)
     root.addEventListener('keydown', onKey, true)
@@ -237,8 +266,10 @@ export function createGlyphField(host: HTMLElement, { scale = 1, interactive = t
       if (still) calm()
     },
     destroy() {
+      alive = false
       if (raf) win.cancelAnimationFrame(raf)
-      ro.disconnect(); mo.disconnect()
+      if (themeRaf) win.cancelAnimationFrame(themeRaf)
+      ro.disconnect(); mo.disconnect(); dppx?.removeEventListener('change', onDpr)
       if (root) {
         root.removeEventListener('input', onInput, true)
         root.removeEventListener('keydown', onKey, true)
