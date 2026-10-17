@@ -1445,7 +1445,7 @@ export const useApp = create<AppState>((set, get) => ({
           const i = evs.findIndex((tt) => tt.id === pl.id)
           if (i >= 0) { evs[i] = { ...evs[i], arguments: (evs[i].arguments || '') + (pl.delta || '') }; return { ...m, toolEvents: evs, ...(m.live ? { live: undefined } : {}) } }
           evs.push({ id: pl.id, name: pl.name || 'tool', arguments: pl.delta || '', done: false })
-          return { ...m, toolEvents: evs, segments: pushToolSeg(m.segments, pl.id), ...(m.live ? { live: undefined } : {}) }
+          return { ...m, toolEvents: evs, segments: pushToolSeg(m.segments, pl.id), ...endThink(m), ...(m.live ? { live: undefined } : {}) }
         })
         // Agent Desk 直播:编辑参数还在流式生成就上台(state 只动上台/路径就位两次,内容 LivePane 自己订)。
         if (pl.name && DESK_EDIT_TOOLS.has(String(pl.name))) get().deskLiveSync(sessionId, assistantId, String(pl.id), String(pl.name))
@@ -3428,7 +3428,7 @@ export const useApp = create<AppState>((set, get) => ({
           get().reduceEvent(sid, runId, { current: terminal.assistantId }, terminal.event)
         } else {
           set((s) => ({ messagesBySession: { ...s.messagesBySession, [sid]: (s.messagesBySession[sid] || []).map((m) =>
-            m.status === 'streaming' ? { ...m, live: undefined,
+            m.status === 'streaming' ? { ...m, live: undefined, ...endThink(m),
               status: status === 'aborted' ? 'stopped' as const : status === 'failed' ? 'error' as const : 'done' as const,
               ...(status === 'failed' ? { error: translate('agentrun.stopUnconfirmed') } : {}),
             } : m) } }))

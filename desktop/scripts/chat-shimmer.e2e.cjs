@@ -303,6 +303,32 @@ async function main() {
       await win.locator('.tool-group').last().screenshot({ path: SHOTS.stopped })
       for (const shot of Object.values(SHOTS)) console.log(`截图: ${shot}`)
     }
+
+    // 回答里的过程行(10-17):思考中途把这条行展开,第一个工具到达时它不能重挂(重挂 = 展开被收回、焦点丢);
+    // 思考一收口就报用时。
+    stub.script([
+      { type: 'reasoning', delay: 300, payload: { delta: '先看 README 里写了什么。' } },
+      { type: 'tool_call', delay: 2500, payload: { id: 'proc-tool', name: 'read_file', arguments: JSON.stringify({ path: '/tmp/shimmer-demo/README.md' }) } },
+      { type: '__hold' },
+    ])
+    await win.waitForTimeout(800)
+    await send(win, '过程行:思考中展开')
+    await win.waitForFunction(() => [...document.querySelectorAll('.tool-group-cur .chat-run-shimmer-text')].some((el) => el.textContent === '思考中'), null, { timeout: 8000 })
+    await win.evaluate(() => [...document.querySelectorAll('.tool-group-head')].pop()?.click())
+    await win.waitForFunction(() => [...document.querySelectorAll('.tool-group')].pop()?.textContent?.includes('README.md'), null, { timeout: 10_000 })
+    await win.waitForTimeout(300)
+    const proc = await win.evaluate(() => {
+      const g = [...document.querySelectorAll('.tool-group')].pop()
+      return {
+        expanded: g?.querySelector('.tool-group-head')?.getAttribute('aria-expanded'),
+        rows: g?.querySelectorAll('.tool-group-list > .tool-row').length ?? -1,
+        think: g?.querySelector('.tool-row--think .tool-row-verb')?.textContent,
+      }
+    })
+    check('思考中展开的过程行在第一个工具到达后仍展开(不重挂)', proc.expanded === 'true' && proc.rows === 2, JSON.stringify(proc))
+    check('思考收口后报用时(思考 N 秒)', /^思考 \d+ 秒$/.test(proc.think || ''), JSON.stringify(proc))
+    await win.locator('.t2c-stop').first().click()
+    await win.waitForTimeout(350)
   } finally {
     await app.close().catch(() => {})
     try { stub.close?.() } catch { /* best-effort test cleanup */ }

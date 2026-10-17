@@ -1392,7 +1392,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 }
 .tool-row-head:hover { color: var(--text); }
 .tool-row-ic { flex: 0 0 20px; height: 20px; display: inline-grid; place-items: center; color: var(--text-faint); }
-.tool-row-copy { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; }
+.tool-row-copy { flex: 0 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; }
 .tool-row-copy-text { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; vertical-align: bottom; }
 .tool-row-verb { flex-shrink: 0; }
 .tool-row-target {
@@ -1406,7 +1406,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .tool-row-status { flex-shrink: 0; display: inline-flex; }
 .tool-row-status:empty { display: none; }
 /* 展开箭头在行尾,平时不抢眼:悬停 / 键盘焦点 / 已展开才露;触屏常显 */
-.tool-row-chev { flex-shrink: 0; color: var(--text-faint); }
+.tool-row-chev { flex-shrink: 0; margin-left: auto; color: var(--text-faint); }
 @media (hover: hover) {
   .tool-row-chev { opacity: 0; transition: opacity var(--duration-fast); }
   .tool-row-head:hover .tool-row-chev, .tool-row-head:focus-visible .tool-row-chev, .tool-row-head[aria-expanded='true'] .tool-row-chev { opacity: 1; }

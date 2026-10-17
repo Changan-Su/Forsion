@@ -563,13 +563,10 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
         {msg.systemPrompt && <SystemPromptBlock content={msg.systemPrompt} />}
         {(() => {
           // 思考原文整条消息只有一份:挂在第一条过程行上(前面还没有正文时);否则单独一行过程行放最前(只剩思考那一步)。
-          // 「思考中」只在它挂的那一行是消息最后一块时亮,后面已经有东西了就不在上头闪。
-          let thinkHost = !!msg.reasoning
-          const thinkProps = (last: boolean) => {
-            if (!thinkHost) return {}
-            thinkHost = false
-            return { reasoning: msg.reasoning, reasoningMs: msg.reasoningMs, thinking: last && msg.reasoningSince != null }
-          }
+          // 这条「打头的过程行」两条渲染分支都放在同一个位置、同一个 key —— 思考中途第一个工具到达、或之后再追加工具,
+          // 它都不重挂,用户展开着的思考不会被收起、焦点也不丢。
+          // 「思考中」只在它是消息最后一块时亮,后面已经有东西了就不在上头闪。
+          const think = (last: boolean) => msg.reasoning ? { reasoning: msg.reasoning, reasoningMs: msg.reasoningMs, thinking: last && msg.reasoningSince != null } : {}
           // 直播与带锚点的历史:按发生顺序渲染文字/工具,并把 Sketch 插在对应工具完成点。
           // 无段(旧历史 / 语音整条朗读)→ 回退老序:所有工具一块 + 全文。
           if (msg.segments?.length && !voiceMode) {
@@ -580,7 +577,10 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
             // (工具块把一道围栏切成两截),提前还回 = 原文泄漏进正文 + 后半段永远拼不成卡。
             const lastTextIdx = msg.segments.reduce((acc, s2, j) => (s2.t === 'text' ? j : acc), -1)
             const firstIdx = msg.segments.findIndex((s2) => s2.t === 'tools' || !!s2.text.trim())
-            const lastIdx = msg.segments.length - 1
+            const evsOf = (ids: string[]) => ids.map((id) => msg.toolEvents?.find((e) => e.id === id)).filter(Boolean) as ToolEvent[]
+            const first = msg.segments[firstIdx]
+            const firstParts = first?.t === 'tools' ? partitionToolSegment(evsOf(first.ids), msg.sketches, streaming) : []
+            const headEvents = firstParts[0]?.t === 'tools' ? firstParts[0].events : undefined
             const nodes = msg.segments.map((seg, i) => {
               if (seg.t === 'text') {
                 const parsed = splitSuggestions(seg.text, { streaming: streaming || i !== lastTextIdx, state: fenceState, kinds: fenceKinds })
@@ -590,28 +590,25 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
                   ? <div key={i} className="t2-content"><Markdown content={segBody} anchorPrefix={`toc-${msg.id}`} run={runCtx} allowRun={!elsewhere} embeds={embeds} /></div>
                   : null
               }
-              const evs = seg.ids.map((id) => msg.toolEvents?.find((e) => e.id === id)).filter(Boolean) as ToolEvent[]
-              const parts = partitionToolSegment(evs, msg.sketches, streaming)
+              const skip = i === firstIdx && headEvents ? 1 : 0
+              const parts = (i === firstIdx ? firstParts : partitionToolSegment(evsOf(seg.ids), msg.sketches, streaming)).slice(skip)
               return parts.length ? (
                 <Fragment key={i}>
-                  {parts.map((part, j) => part.t === 'tools'
-                    ? <ToolGroup key={`tools-${part.events.map((ev) => ev.id).join('-')}-${j}`} events={part.events} running={msg.status === 'streaming'} approvals={msg.approvals} awaitingAnswer={awaitingAnswer}
-                        {...(i === firstIdx && j === 0 ? thinkProps(i === lastIdx && j === parts.length - 1) : {})} />
+                  {parts.map((part, k) => part.t === 'tools'
+                    ? <ToolGroup key={`tools-${part.events.map((ev) => ev.id).join('-')}-${k + skip}`} events={part.events} running={msg.status === 'streaming'} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} />
                     : part.t === 'intelligent'
                       ? <IntelligentUi key={`intelligent-${part.event.id}`} event={part.event} live={streaming} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} />
                     : <SketchCards key={`sketch-${part.item.callId}`} items={[part.item]} actions={sketchActions} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} />)}
                 </Fragment>
               ) : null
             })
-            const lone = thinkHost && <ToolGroup events={[]} running={streaming} {...thinkProps(nodes.every((n) => n == null))} />
-            return <>{lone}{nodes}</>
+            const head = (!!msg.reasoning || !!headEvents) && <ToolGroup key="proc-head" events={headEvents || []} running={streaming} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} {...think(nodes.every((n) => n == null))} />
+            return <>{head}{nodes}</>
           }
-          const tools = !!msg.toolEvents?.length && <ToolGroup events={msg.toolEvents} running={msg.status === 'streaming'} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} {...thinkProps(!body)} />
-          const lone = thinkHost && <ToolGroup events={[]} running={streaming} {...thinkProps(!body)} />
+          const head = (!!msg.reasoning || !!msg.toolEvents?.length) && <ToolGroup key="proc-head" events={msg.toolEvents || []} running={streaming} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} {...think(!body)} />
           return (
             <>
-              {lone}
-              {tools}
+              {head}
               {body && (
                 voiceMode
                   ? <VoiceBubble text={body} stored={voice!.stored} anchorPrefix={`toc-${msg.id}`} />
