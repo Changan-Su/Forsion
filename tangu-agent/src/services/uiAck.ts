@@ -23,8 +23,17 @@ export interface UiAckResult {
   error?: string;
   /** 成功后的新状态,让模型不必再问一次。 */
   state?: string;
+  /** 命令交给模型的数据(插件命令 `invoke.run` 返回 `{ result }`)。远端给的自由文本:run_ui_command 圈成不可信数据。 */
+  result?: string;
   /** 渲染端在 setter 落地**之后**读的全份设置值(key → value):工具据此刷新 run 内快照。老渲染端不带。 */
   settings?: Record<string, string>;
+}
+
+/** 命令结果的消毒:与 sanitizeText 不同,**保留换行与制表符**(结果在 nonce 围栏里,不怕伪造段落),只剥别的控制字符和 bidi 覆写。 */
+export const UI_RESULT_MAX = 8000;
+export function cleanUiResult(v: string): string {
+  const s = v.replace(/[\u0000-\u0008\u000B-\u001F\u007F\u200B-\u200F\u2028\u2029\u202A-\u202E\u2066-\u2069]/g, ' ');
+  return s.length > UI_RESULT_MAX ? `${s.slice(0, UI_RESULT_MAX)}…[truncated]` : s;
 }
 
 /** 日志字段单行化 + 限长:value 是模型给的、state/error 是客户端给的,都可能带换行 —— 桌面日志环按 \n 切条,一条多行文本会伪造出多条日志。 */

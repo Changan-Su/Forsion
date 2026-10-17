@@ -48,6 +48,19 @@ export interface TanguPluginManifest {
    * 不满足时本插件休眠(仍列出,不运行),前置就位后自动激活。激活顺序按依赖拓扑(同层按 id);成环的全部休眠。
    */
   requiresPlugins?: Array<string | { id: string; minVersion?: string }>;
+  /**
+   * 自带的 MCP server(形态同 `~/.tangu/mcp.json` 的 `mcpServers`,**只收 stdio**:随包发的静态 server)。插件激活时起、停用时关;工作目录是插件目录,
+   * command / args / env 里的 `${pluginDir}` 展开成它的绝对路径。和用户自己配的 server 撞名时插件这份不起。
+   * 只在本机引擎上生效(云端 worker 没有 MCP)。见 mcp/pluginServers.ts。⚠️入口仍要 `ctx.registerPlugin(...)`:没登记 meta 的插件
+   * 没有开关(视为常开),桌面停用捆绑包时级联关不到,声明的 MCP 进程就一直开着。
+   */
+  mcpServers?: Record<string, unknown>;
+  /**
+   * 自带的 lifecycle hooks(形态同 config.json hooks 段的 `events`)。**只开观察档**:SessionStart / PostToolUse / Stop /
+   * SubagentStart / SubagentStop,hook 照常跑、收事件 JSON,但输出不进判定(拦不住、注入不了上下文)。
+   * command 里的 `${pluginDir}` 展开成插件目录。随插件启停。见 hooks/pluginHooks.ts。
+   */
+  hooks?: Record<string, unknown>;
 }
 
 /** 插件注册的 CLI 子命令（`tangu <name> ...`）。 */

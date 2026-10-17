@@ -17,6 +17,7 @@ import { loadCreds } from './credStore.js';
 import { loadOAuthDirectProviders } from '../llm/providerOAuth.js';
 import { resolveSandboxMode, setupHost, buildBrain, fixLegacyAppIds, loadProviders } from './assemble.js';
 import { createMcpManager } from '../mcp/manager.js';
+import { bindPluginMcp } from '../mcp/pluginServers.js';
 import { createEngineManager } from '../engines/index.js';
 import { loadMcpConfig, enabledServers } from '../mcp/config.js';
 import { loadEngines, loadEnginePrefs } from '../engines/config.js';
@@ -126,6 +127,7 @@ async function main(): Promise<void> {
   const mcp = createMcpManager();
   bootPhase = `mcp(${enabledServers(loadMcpConfig()).map(([name]) => name).join(', ') || '无'})`; // 唯一全由用户配置决定的启动步骤,点名是哪几个
   await mcp.start();
+  bindPluginMcp(mcp); // 插件自带的 MCP server(manifest mcpServers)随插件启停加进 / 移出这个 manager
 
   // 外部 agent 引擎(~/.tangu/engines.json + 内置 claude-code):host-only,云端 microserver 不装配。
   const engines = createEngineManager();

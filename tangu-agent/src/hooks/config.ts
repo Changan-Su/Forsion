@@ -87,8 +87,59 @@ export function saveHooksConfig(next: HooksConfig): HooksConfig {
   return merged;
 }
 
-/** 展开某事件下所有 handler → DiscoveredHook（带 key/contentHash/trust/active）。P1 仅 user scope。 */
+/** 插件自带的 hook(pluginHooks.ts 登记,只含观察档事件);插件停用即删。 */
+const pluginHooks = new Map<string, { name: string; events: HookEventsConfig }>();
+/** 本进程里挂过的插件 hook 内容 hash(只增):插件停用 / 升级后,打开得早的旧面板整份写回时照样认得出、滤得掉。 */
+const everPluginHashes = new Set<string>();
+export function setPluginHooks(pluginId: string, v: { name: string; events: HookEventsConfig } | null): void {
+  if (v) {
+    pluginHooks.set(pluginId, v);
+    for (const [event, groups] of Object.entries(v.events) as Array<[HookEventName, MatcherGroup[]]>)
+      for (const g of groups) for (const h of g.hooks) everPluginHashes.add(hookContentHash(event, g.matcher, h));
+  } else pluginHooks.delete(pluginId);
+}
+
+/** 插件 hook:trusted(= 插件自己的代码)、恒开(开关跟插件走),按插件 id 序排在用户 hook 之后。 */
+function discoverPluginHooks(event: HookEventName): DiscoveredHook[] {
+  const out: DiscoveredHook[] = [];
+  for (const id of [...pluginHooks.keys()].sort()) {
+    const { name, events } = pluginHooks.get(id)!;
+    for (const g of events[event] || []) {
+      for (const h of g.hooks) {
+        const contentHash = hookContentHash(event, g.matcher, h);
+        out.push({
+          key: `${hookKey('plugin', event, contentHash)}:${id}`,
+          event, matcher: g.matcher, handler: h, source: 'plugin', contentHash,
+          trust: 'trusted', enabled: true, active: true, plugin: { id, name },
+        });
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * 面板 PUT 进来的 events 剔掉插件 hook:旧面板把 discovered 全量当用户行写回,插件的观察档 hook 会因此被「编辑一次」
+ * 升成能拦截、会被 syncUserTrust 信任的用户 hook。按内容 hash 认,用户配置里本来就有同一条的保留。
+ */
+export function withoutPluginHooks(events: HookEventsConfig, current: HookEventsConfig): HookEventsConfig {
+  const out: HookEventsConfig = {};
+  for (const [event, groups] of Object.entries(events) as Array<[HookEventName, MatcherGroup[]]>) {
+    const mine = new Set((current[event] || []).flatMap((g) => g.hooks.map((h) => hookContentHash(event, g.matcher, h))));
+    const kept = groups
+      .map((g) => ({ ...g, hooks: g.hooks.filter((h) => { const c = hookContentHash(event, g.matcher, h); return !everPluginHashes.has(c) || mine.has(c); }) }))
+      .filter((g) => g.hooks.length);
+    if (kept.length) out[event] = kept;
+  }
+  return out;
+}
+
+/** 展开某事件下所有 handler → DiscoveredHook（带 key/contentHash/trust/active）。user scope + 插件自带的(排后)。 */
 export function discoverHooks(cfg: HooksConfig, event: HookEventName): DiscoveredHook[] {
+  return [...discoverUserHooks(cfg, event), ...discoverPluginHooks(event)];
+}
+
+function discoverUserHooks(cfg: HooksConfig, event: HookEventName): DiscoveredHook[] {
   const groups = cfg.events[event] || [];
   const out: DiscoveredHook[] = [];
   for (const g of groups) {
@@ -121,7 +172,7 @@ export function discoverAll(cfg: HooksConfig): DiscoveredHook[] {
 /** 信任某 hook（写入其当前 contentHash，保留 enabled）。用于面板/路由的「审阅通过」。 */
 export function trustHook(key: string): HooksConfig {
   const cfg = loadHooksConfig();
-  const d = discoverAll(cfg).find((h) => h.key === key);
+  const d = discoverAll(cfg).find((h) => h.key === key && h.source === 'user');
   if (d) {
     cfg.state[key] = { enabled: cfg.state[key]?.enabled !== false, trustedHash: d.contentHash };
     return saveHooksConfig(cfg);
@@ -133,6 +184,7 @@ export function trustHook(key: string): HooksConfig {
 export function setHookEnabled(key: string, enabled: boolean): HooksConfig {
   const cfg = loadHooksConfig();
   const d = discoverAll(cfg).find((h) => h.key === key);
+  if (d && d.source !== 'user') return cfg; // 插件 hook 的开关跟插件走,不落用户配置
   const prev = cfg.state[key];
   cfg.state[key] = { enabled, trustedHash: prev?.trustedHash || d?.contentHash || '' };
   return saveHooksConfig(cfg);
@@ -141,6 +193,7 @@ export function setHookEnabled(key: string, enabled: boolean): HooksConfig {
 /** 面板保存 events 后调用：把所有 user hook 标为已信任（用户在自己的面板里编辑即为审阅通过）。 */
 export function syncUserTrust(cfg: HooksConfig): HooksConfig {
   for (const d of discoverAll(cfg)) {
+    if (d.source !== 'user') continue;
     cfg.state[d.key] = { enabled: cfg.state[d.key]?.enabled !== false, trustedHash: d.contentHash };
   }
   return cfg;

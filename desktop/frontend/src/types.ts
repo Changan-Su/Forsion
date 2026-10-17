@@ -830,6 +830,8 @@ export interface ToolsResponse {
     transport: 'stdio' | 'http' | 'sse'
     status: 'connected' | 'connecting' | 'error' | 'disabled'
     error: string | null
+    /** 插件自带的 server(引擎插件 manifest 的 mcpServers):不在 mcp.json 里,设置页只读展示。 */
+    origin?: { pluginId: string; pluginName: string }
     tools: Array<{ name: string; description: string }>
   }>
 }
