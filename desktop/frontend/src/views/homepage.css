@@ -943,7 +943,7 @@ html[data-glass='off'] .hp-root .hp-composer .project-pill::before {
   background: var(--bg-card);
   transition: transform var(--duration-fast) var(--ease-spring);
 }
-.hp-wallpaper-switch.on > span { background: var(--action-fill); }
+.hp-wallpaper-switch.on > span { background: var(--signal-mark); }
 .hp-wallpaper-switch.on > span::after { transform: translateX(11px); }
 .hp-wallpaper-refresh:hover { color: var(--text); }
 .hp-wallpaper-refresh:disabled { opacity: 0.45; cursor: wait; }
@@ -1195,7 +1195,7 @@ html[data-glass='off'] .hp-root .hp-composer .project-pill::before {
 .hp-phone .hp-pill-mic > svg { width: calc(20 * var(--hp-dp)); height: calc(20 * var(--hp-dp)); }
 .hp-phone .hp-pill-send {
   display: grid; place-items: center; width: calc(38 * var(--hp-dp)); height: calc(38 * var(--hp-dp));
-  border-radius: 50%; background: var(--accent); color: var(--on-accent, #fff);
+  border-radius: 50%; background: var(--action-fill); color: var(--on-action, #fff);
 }
 .hp-phone .hp-pill-send > svg { width: calc(18 * var(--hp-dp)); height: calc(18 * var(--hp-dp)); }
 /* 收起 ↔ 展开:完整的输入区一直在页面里(草稿不丢),平时不显示;展开时它顶替输入条,卡片让位。 */

@@ -12,7 +12,7 @@
 .human-source { white-space: pre-wrap; overflow-wrap: anywhere; font: var(--ui-font-body)/1.7 var(--font-mono); background: var(--bg-card); padding: 12px; border-radius: var(--radius-md); }
 .human-path { display: grid; gap: 6px; margin-top: 18px; }
 .human-path code { white-space: pre-wrap; overflow-wrap: anywhere; }
-.human-notice { color: var(--accent); font-size: var(--ui-font-meta); }
+.human-notice { color: var(--accent-ink); font-size: var(--ui-font-meta); }
 .human-history, .human-latest { margin-top: 20px; border-top: 1px solid var(--border); padding-top: 14px; }
 .human-history h4 { font-size: var(--ui-font-heading); margin: 0 0 12px; }
 .human-history article { display: grid; gap: 6px; padding: 12px 0; }

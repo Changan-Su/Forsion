@@ -184,7 +184,7 @@
 .tangu-lovable .session-item:hover { background: var(--overlay-light); }
 .tangu-lovable .session-item.active { background: var(--overlay-medium); color: var(--text); }
 .tangu-lovable .session-dot { width: 6px; height: 6px; border-radius: 50%; flex: 0 0 auto; }
-.tangu-lovable .session-dot.running { background: var(--accent); }
+.tangu-lovable .session-dot.running { background: var(--signal-mark); }
 .tangu-lovable .session-dot.unread { background: var(--danger); }
 .tangu-lovable .session-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tangu-lovable .session-menu-btn { color: var(--text-ghost); opacity: 0; }
@@ -290,14 +290,14 @@
 .tangu-lovable .composer-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; padding: 5px 11px; border-radius: 9999px; border: none; background: var(--overlay-light); color: var(--text-light); cursor: pointer; }
 .tangu-lovable .composer-ctx { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); }
 .tangu-lovable .tg-ctxbar { width: 52px; height: 5px; border-radius: 3px; background: var(--overlay-medium); overflow: hidden; }
-.tangu-lovable .tg-ctxbar > span { display: block; height: 100%; background: var(--accent); }
+.tangu-lovable .tg-ctxbar > span { display: block; height: 100%; background: var(--signal-mark); }
 .tangu-lovable .model-pill { display: inline-flex; align-items: center; font-size: 12.5px; padding: 5px 11px; border-radius: 9999px; border: 1px solid var(--border); color: var(--text-light); cursor: pointer; }
 
 /* ── right panel ── */
 .tangu-lovable .right-panel { width: 248px; flex: 0 0 auto; display: flex; flex-direction: column; border-left: 1px solid var(--border); }
 .tangu-lovable .right-panel-tabs { display: flex; border-bottom: 1px solid var(--border); }
 .tangu-lovable .right-panel-tabs button { flex: 1; padding: 9px 0; border: none; background: transparent; cursor: pointer; font-family: var(--font-ui); font-size: 12px; color: var(--text-muted); border-bottom: 2px solid transparent; }
-.tangu-lovable .right-panel-tabs button.active { color: var(--text); border-bottom-color: var(--accent-ink, var(--accent)); }
+.tangu-lovable .right-panel-tabs button.active { color: var(--text); border-bottom-color: var(--signal-mark); }
 .tangu-lovable .right-panel-body { flex: 1; overflow-y: auto; padding: 10px; }
 .tangu-lovable .file-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: var(--radius-sm); cursor: pointer; font-size: 13px; }
 .tangu-lovable .file-row:hover { background: var(--overlay-light); }

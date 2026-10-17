@@ -12,7 +12,7 @@
 .startup-appearance .startup-appearance-upload { position:relative; overflow:hidden; flex:0 0 30px; width:30px; height:30px; padding:0; justify-content:center; }
 .startup-appearance-upload > svg { flex-shrink:0; }
 .startup-appearance-upload input { position:absolute; inset:0; opacity:0; width:100%; cursor:pointer; }
-.startup-appearance-upload:focus-within { outline:var(--focus-ring) solid var(--accent-ink); outline-offset:2px; }
+.startup-appearance-upload:focus-within { outline:var(--focus-ring) solid var(--signal-line); outline-offset:2px; }
 .startup-appearance-help { border-top:var(--border-width) solid var(--border); padding:10px 15px; color:var(--text-faint); font-size:var(--ui-font-caption); line-height:var(--ui-line-caption); }
 .startup-appearance-help summary { display:flex; align-items:center; gap:5px; width:fit-content; cursor:pointer; list-style:none; }
 .startup-appearance-help summary::-webkit-details-marker { display:none; }
@@ -37,10 +37,10 @@
 .appearance-import-stage > img { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; pointer-events:none; }
 .appearance-import-stage.is-cropping { cursor:grab; }
 .appearance-import-stage.is-cropping:active { cursor:grabbing; }
-.appearance-import-stage:focus-visible { outline:var(--focus-ring) solid var(--accent-ink); outline-offset:3px; }
+.appearance-import-stage:focus-visible { outline:var(--focus-ring) solid var(--signal-line); outline-offset:3px; }
 .appearance-import-grid { position:absolute; inset:0; pointer-events:none; border:1px solid var(--overlay-strong); background-image:linear-gradient(to right, transparent 33.1%, #ffffff60 33.1%, #ffffff60 33.5%, transparent 33.5%, transparent 66.4%, #ffffff60 66.4%, #ffffff60 66.8%, transparent 66.8%),linear-gradient(to bottom, transparent 33.1%, #ffffff60 33.1%, #ffffff60 33.5%, transparent 33.5%, transparent 66.4%, #ffffff60 66.4%, #ffffff60 66.8%, transparent 66.8%); }
 .appearance-import-zoom { display:flex; gap:10px; align-items:center; font-size:var(--ui-font-meta); }
-.appearance-import-zoom input { flex:1; min-width:0; accent-color:var(--accent-ink); }
+.appearance-import-zoom input { flex:1; min-width:0; accent-color: var(--signal-mark); }
 .appearance-import-hint { margin:0; color:var(--text-faint); font-size:var(--ui-font-caption); line-height:var(--ui-line-caption); }
 .appearance-import-result { display:flex; align-items:center; gap:10px; padding-top:12px; border-top:var(--border-width) solid var(--border); }
 .appearance-import-result > canvas { flex:none; width:32px; height:32px; }

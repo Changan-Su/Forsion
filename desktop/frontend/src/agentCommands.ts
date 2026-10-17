@@ -32,6 +32,8 @@ export interface UiActionResult {
   error?: string
   /** 成功时的新状态,让模型不必再问一次。 */
   state?: string
+  /** 命令交给模型的数据(`invoke.run` 返回 `{ result }`;已序列化、截到 UI_RESULT_MAX)。引擎圈成不可信数据。 */
+  result?: string
   /** setter 在 APPLY_SETTLE_MS 内没落地(被节流的隐藏窗口):不报 state,回执也不带设置快照 —— 宁可少说,不把切换前的值当新值写进引擎。 */
   pending?: boolean
 }
@@ -275,7 +277,19 @@ export async function runAgentCommand(id: unknown, args?: Record<string, unknown
     return { ok: false, error: `command failed: ${String((e as Error)?.message || e)}` }
   }
   // 命令自己返回的回执优先(按调用给,并发不串);没有才读 state() 探针。
-  let state: string | undefined = typeof receipt === 'string' && receipt ? receipt : undefined
+  const obj = receipt && typeof receipt === 'object' ? receipt as { state?: unknown; result?: unknown } : null
+  let state: string | undefined = typeof receipt === 'string' && receipt ? receipt
+    : obj && typeof obj.state === 'string' && obj.state ? obj.state : undefined
   if (!state) try { state = cmd.invoke.state?.() } catch { /* ignore */ }
-  return { ok: true, ...(state ? { state } : {}) }
+  const result = obj ? uiResultText(obj.result) : undefined
+  return { ok: true, ...(state ? { state } : {}), ...(result ? { result } : {}) }
+}
+
+/** 引擎那头也截在这个长度(routes/approvals.ts);这边先截,免得把大对象整个塞进回执。 */
+export const UI_RESULT_MAX = 8000
+function uiResultText(v: unknown): string | undefined {
+  if (v === undefined || v === null || v === '') return undefined
+  let s: string
+  try { s = typeof v === 'string' ? v : JSON.stringify(v) } catch { return '[result could not be serialized]' }
+  return s.length > UI_RESULT_MAX ? `${s.slice(0, UI_RESULT_MAX)}…[truncated]` : s
 }

@@ -94,7 +94,7 @@
 .auto-canvas-edges { position: absolute; width: 1px; height: 1px; overflow: visible; color: var(--text-faint); pointer-events: none; }
 .auto-canvas-edges > path { fill: none; stroke: currentColor; stroke-width: 1.5; }
 .auto-flow-node { position: absolute; display: grid; grid-template-columns: 26px minmax(0, 1fr) 16px; grid-template-rows: 24px 1fr; column-gap: 9px; padding: 13px; border: var(--border-width) solid var(--border); border-radius: var(--radius-md); background: var(--bg); color: var(--text); text-align: left; font: inherit; cursor: grab; touch-action: none; user-select: none; }
-.auto-flow-node.selected { border-color: var(--accent-ink, var(--accent)); outline: 1px solid var(--accent-ink, var(--accent)); }
+.auto-flow-node.selected { border-color: var(--accent-ink, var(--accent)); outline: 1px solid var(--signal-line); }
 .auto-flow-icon { display: flex; align-items: center; justify-content: center; color: var(--accent-ink, var(--accent)); }
 .auto-flow-node strong { font-size: var(--ui-font-body); font-weight: 600; align-self: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .auto-flow-status { align-self: center; color: var(--text-faint); }

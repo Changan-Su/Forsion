@@ -38,10 +38,11 @@ const hasZhiCandidate = fs.existsSync(zhiCandidate)
 const LANGS = ['lovable', 'genesis-glass', 'soft', ...(hasZhiCandidate ? ['zhi'] : [])]
 const COMBOS = [
   { id: 'cream', label: '经典' },
-  { id: 'coral', label: '珊瑚' },
+  { id: 'coral', label: '陶土' },
   { id: 'teal', label: '柔青' },
-  { id: 'lavender', label: '薰衣草' },
-  { id: 'zhi', label: '晴蓝' },
+  { id: 'lavender', label: '暮紫' },
+  { id: 'zhi', label: '雾蓝' },
+  { id: 'sage', label: '苔绿' },
   { id: 'ink', label: '墨色' },
   { id: 'custom', label: '自定紫', accent: '#8b7fd6' },
   { id: 'custom', label: '敌意色', accent: '#ffffff', bg: '#000000' },
