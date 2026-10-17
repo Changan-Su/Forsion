@@ -12,6 +12,7 @@ import { query } from '../../core/db.js';
 import type { ToolProvider } from '../toolRegistry.js';
 import { loadSpecialAgentsConfig } from '../../services/specialAgentsConfig.js';
 import { sendInboxMessage, MUSE_SENDER_ID } from './inboxSend.js';
+import { postMuseDm } from '../../services/museDm.js';
 
 /** TODO 的收件箱正文 = detail + 末尾一张任务卡(引擎拼,不靠 Muse 自觉;围栏放最后,与审批信同一纪律)。
  *  `todo:` 头让桌面把落点回写这条 TODO(交给 Muse = 批准它去做 / 新会话 = injected / 忽略 = dismissed);
@@ -49,7 +50,7 @@ export const museTodoProvider: ToolProvider = {
         function: {
           name: 'add_muse_todo',
           description:
-            'Propose one high-value, actionable todo to the user. It lands on the Muse TODO list and in their inbox: the detail becomes the message body ' +
+            'Propose one high-value, actionable todo to the user. It lands on the Muse TODO list and as a message in your direct chat with the user (it waits for their go-ahead there): the detail becomes the message body ' +
             '(rendered as an Amadeus note — markdown, callouts, `[[note]]` links; mention files outside the vault by absolute path), and the app appends an ' +
             'action card (let Muse do it / run in a new session / ignore) whose brief is the title plus the detail — so make the detail self-contained: ' +
             'why it matters, concrete steps, exact paths or symptoms, and how to verify. Do not write forsion-task fences yourself. ' +
@@ -94,15 +95,12 @@ export const museTodoProvider: ToolProvider = {
             `INSERT INTO muse_todos (id, user_id, title, detail, status, source_session_id) VALUES (?, ?, ?, ?, 'pending', ?)`,
             [id, ctx.userId, title, detail, ctx.sessionId],
           );
-          // 收件箱投影(失败不影响 TODO 本身;标题沿用模型写的原文=跟随用户语言,不硬编码文案)。
-          // digest 档不逐条打扰:日报里再汇总(muse.ts 写 Journal),这里只落 TODO。
-          let digest = false;
-          try { digest = loadSpecialAgentsConfig().muse.notify === 'digest'; } catch { /* 默认 immediate */ }
-          if (!digest) {
-            // 正文长度由构造封顶(detail ≤ 4000、标题 ≤ 200、围栏 ≤ 最长反引号串 + 1),照实传上限:截一个字就是半张卡。
-            const body = todoMailBody({ id, title, detail });
-            await sendInboxMessage(ctx.userId, { title, body, senderId: MUSE_SENDER_ID, maxBody: body.length }).catch(() => {});
-          }
+          // 私聊投影(10-18 方案 B:待办在等用户点头,不是成品 → 进 Muse 私聊,不管日报档开没开)。失败不影响 TODO 本身;
+          // 私聊不可用(没有 Muse 这个 agent 目录等)才退回收件箱。标题沿用模型原文 = 跟随用户语言,不硬编码文案。
+          // 正文长度由构造封顶(detail ≤ 4000、标题 ≤ 200、围栏 ≤ 最长反引号串 + 1),照实传上限:截一个字就是半张卡。
+          const body = todoMailBody({ id, title, detail });
+          const dm = await postMuseDm(ctx.userId, body, 'proactive:todo').catch((e: any) => ({ ok: false as const, error: String(e?.message || e) }));
+          if (!dm.ok) await sendInboxMessage(ctx.userId, { title, body, senderId: MUSE_SENDER_ID, maxBody: body.length }).catch(() => {});
           return `已记录 TODO：「${title}」（本时段还可提 ${Math.max(0, maxPerWindow - n - 1)} 条）。`;
 
         } catch (e: any) {

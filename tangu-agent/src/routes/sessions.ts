@@ -25,7 +25,8 @@ import { deps } from '../seams/runtime.js';
 import { bumpHistoryRevision } from '../services/historyRevision.js';
 import { activeSessionIds, sessionHasActiveRun } from '../services/agentLoop.js';
 import { startChildSession } from '../services/childSessions.js';
-import { getAgent } from '../agents/agentRegistry.js';
+import { museDmSessionId } from '../services/museDm.js';
+import { getAgent, MUSE_AGENT_SLUG } from '../agents/agentRegistry.js';
 import { branchSession } from '../services/sessionBranch.js';
 import { listCheckpoints, restoreCodeSince, removeSessionCheckpoints } from '../services/checkpoints.js';
 import { searchSessions, splitTerms, dayArg, fmtDate } from '../services/sessionSearch.js';
@@ -128,6 +129,47 @@ router.get('/agent/sessions', authMiddleware, async (req: AuthRequest, res) => {
     res.json({ sessions: rows.map((r) => ({ ...rowToSession(r), busy: busy.has(r.id) })) });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'list sessions failed' });
+  }
+});
+
+// 会话行的「主动发来没看」与「等你」(Muse 私聊方案 B,10-18):桌面全局轮询器每 4s 拉一次,私聊行尾状态与 Tangu 角标靠它。
+//   unread   = Agent 在后台主动发来、用户还没打开过(proactive_at > last_read_at);一轮对话跑完没看的仍由客户端自己记
+//   awaiting = 问句在等回话(awaiting_user),或 Muse 后台有待批的一步(算在 Muse 私聊上 —— 托盘里批完不起轮,awaiting_user 清不掉)
+// 只返回有状态的会话,没有就是空表。
+router.get('/agent/sessions/attention', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.userId;
+    const appId = deps().profile.appId;
+    const rows = await query<any[]>(
+      `SELECT id, proactive_at, last_read_at, awaiting_user FROM chat_sessions
+       WHERE user_id = ? AND app_id = ? AND archived = ? AND kind = 'user'
+         AND (awaiting_user = TRUE OR (proactive_at IS NOT NULL AND proactive_at > COALESCE(last_read_at, 0)))`,
+      [userId, appId, false],
+    );
+    const out = new Map<string, { id: string; unread: boolean; awaiting: boolean }>(rows.map((r) => [String(r.id), {
+      id: String(r.id), unread: Number(r.proactive_at || 0) > Number(r.last_read_at || 0), awaiting: !!r.awaiting_user,
+    }]));
+    if (deps().profile.capabilities.hostExec) {
+      const [p] = await query<any[]>(
+        `SELECT COUNT(*) AS n FROM pending_approvals WHERE user_id = ? AND agent_slug = ? AND status = 'pending'`, [userId, MUSE_AGENT_SLUG]);
+      const sid = Number(p?.n) > 0 ? await museDmSessionId(userId, appId) : null;
+      if (sid) out.set(sid, { id: sid, unread: out.get(sid)?.unread ?? false, awaiting: true });
+    }
+    res.json({ sessions: [...out.values()] });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'session attention failed' });
+  }
+});
+
+// 用户打开了这个会话:读到现在(只动 last_read_at,不动 updated_at —— 读一下不该把会话顶到列表最上面)。
+router.post('/agent/sessions/:id/read', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const s = await getOwnSession(req.params.id, req.user!.userId);
+    if (!s) return res.status(404).json({ detail: 'Session not found' });
+    await query(`UPDATE chat_sessions SET last_read_at = ? WHERE id = ?`, [Date.now(), s.id]);
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'mark read failed' });
   }
 });
 
@@ -369,7 +411,7 @@ router.get('/agent/sessions/:id/messages', authMiddleware, async (req: AuthReque
     const limit = Math.floor(Math.min(Math.max(1, Number(req.query.limit) || 200), 500)); // floor:非整数插进 LIMIT 会成非法 SQL
     const before = Number(req.query.before) || 0;
     const rows = await query<any[]>(
-      `SELECT id, role, content, reasoning, tool_calls, tool_results, attachments, display_files, agent_slug, timestamp, model_id, is_error
+      `SELECT id, role, content, reasoning, tool_calls, tool_results, attachments, display_files, agent_slug, origin, timestamp, model_id, is_error
        FROM chat_messages WHERE session_id = ?${before ? ' AND timestamp < ?' : ''}
        ORDER BY timestamp DESC LIMIT ${limit}`,
       before ? [req.params.id, before] : [req.params.id],

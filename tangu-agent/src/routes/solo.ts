@@ -92,6 +92,19 @@ async function createSolo(userId: string, appId: string, r: NonNullable<Awaited<
   return rowToSession(rows[0]);
 }
 
+/** 活动私聊会话的 id(不建)。 */
+export async function activeSoloId(userId: string, appId: string, kind: SoloKind, id: string): Promise<string | null> {
+  return (await activeSolo(userId, appId, kind, id))?.id ?? null;
+}
+
+/** 取 / 建该 Agent 或引擎的活动私聊会话(与 open 同一把锁、同一条查询)。Muse 主动发私聊用(services/museDm.ts)。 */
+export async function ensureSoloSession(userId: string, kind: SoloKind, id: string): Promise<any | null> {
+  const appId = deps().profile.appId;
+  const r = await resolveSolo(kind, id);
+  if (!r) return null;
+  return withKeyLock(`solo:${userId}:${r.kind}:${id}`, async () => (await activeSolo(userId, appId, r.kind, id)) ?? createSolo(userId, appId, r));
+}
+
 router.post('/agent/solo/:kind/:id/open', authMiddleware, async (req: AuthRequest, res) => {
   if (!ensureLocal(res)) return;
   try {

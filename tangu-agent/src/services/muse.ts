@@ -507,6 +507,30 @@ async function existingTodoHint(userId: string): Promise<string> {
   }
 }
 
+/** 私聊里最近几条(10-18 方案 B):周期是新会话、看不到私聊,不带上就会把说过的话再说一遍,也不知道用户回了什么。
+ *  只取 7 天内的 6 条,每条折一行截 300 字。失败 / 没有私聊 → 空串。 */
+export async function museDmHint(userId: string): Promise<string> {
+  try {
+    const { museDmSessionId } = await import('./museDm.js');
+    const sid = await museDmSessionId(userId, deps().profile.appId);
+    if (!sid) return '';
+    const rows = await query<any[]>(
+      `SELECT role, content, timestamp, origin FROM chat_messages WHERE session_id = ? AND timestamp >= ? AND role IN ('user', 'model') ORDER BY timestamp DESC LIMIT 6`,
+      [sid, Date.now() - 7 * 86_400_000],
+    );
+    const lines = (rows || []).reverse()
+      .filter((r) => String(r.content || '').trim())
+      .map((r) => {
+        const who = r.role === 'user' ? 'user' : r.origin ? 'you, from a cycle' : 'you';
+        const text = String(r.content).replace(/\s+/g, ' ').trim();
+        return `- ${who} (${localTime(new Date(Number(r.timestamp) || 0))}): ${text.length > 300 ? `${text.slice(0, 300)}…` : text}`;
+      });
+    return lines.length ? `\n\n[Your direct chat with the user, latest messages oldest first — do not repeat what you already said]\n${lines.join('\n')}` : '';
+  } catch {
+    return '';
+  }
+}
+
 /** 授权文件夹的浅列出(注入提示，让 Muse 知道可用 read_file/list_files 探索的路径)。 */
 async function folderHint(folders: string[]): Promise<string> {
   if (!folders.length) return '';
@@ -698,7 +722,12 @@ export function buildCycleMessages(
     'finish briefly and call set_next_wake to sleep until they are likely back; their activity ends the sleep, and your rules and due schedule still wake you meanwhile. ' +
     spaceKickoff() + ' ' +
     (cfg.escalateTo ? `For work that needs a stronger model, delegate to the agent "${cfg.escalateTo}". ` : '') +
-    (cfg.notify === 'digest' ? 'Notification policy is digest: do not message the user per item; write what matters into your journal, a daily digest is sent for you. ' : '') +
+    // 10-18 方案 B:要用户回话 / 拍板的进私聊,做好的成品进收件箱(日报档 = 写进 Journal,每天一封日报替你发)。
+    'Reaching the user: what needs their reply or decision, or a one-screen heads-up, goes to your direct chat via message_user ' +
+    '(todos and approval requests already post there); ' +
+    (cfg.notify === 'digest'
+      ? 'finished work goes into your journal (digest policy: a daily digest reaches their inbox for you, never item by item). '
+      : 'finished work for them to read later goes to their inbox via inbox_send. ') +
     'You may use remember to record durable insights about the user (what they value, accept, or dismiss). When done, briefly say what you did and what you deferred.';
   const ephemeralHint =
     (dyn.quietSince ? '\n\n(No new user messages or in-app activity since your last cycle — this is a heartbeat; maintenance, preparation or simply "nothing to do" are all fine answers, and so is set_next_wake.)' : '') +
@@ -724,6 +753,7 @@ async function startCycle(cfg: MuseConfig, extraKickoff = '', trigger = 'heartbe
     (await recentSessionTitles(userId)) +
     (await folderHint(cfg.allowedFolders)) +
     (await existingTodoHint(userId)) +
+    (await museDmHint(userId)) +
     (await rhythmHint());
   const pending = await countPendingApprovals(userId).catch(() => 0);
   const sleep = await getMuseSleep().catch(() => null);
