@@ -221,8 +221,12 @@ export interface PluginAppApi extends BlockSurfaceApi {
    *  declared by a Space (for example a document companion beside a plugin view); `activate:false`
    *  updates that pane without stealing focus from the source view. Older hosts lack this seam.
    *  A path that is not a `.md` note (PDF, image, whiteboard) never reaches the note editor: it is
-   *  handed to `openFile` instead (2026-10-05+). */
-  openNote?(path: string, options?: { reuseKey?: string; activate?: boolean; newTab?: boolean }): void
+   *  handed to `openFile` instead (2026-10-05+).
+   *  `heading` (2026-10-17+): after opening, scroll to the first heading with that text (the same jump as
+   *  `[[note#heading]]` and chat citations; `PluginNoteTask.heading` fits as is). No such heading: the note just
+   *  opens. Older hosts ignore it and only open the note. To open a database in its table view, pass the `.db`
+   *  path to `openFile`. */
+  openNote?(path: string, options?: { reuseKey?: string; activate?: boolean; newTab?: boolean; heading?: string }): void
 
   // ── 只读 vault 查询面(2026-08-14+)。纯透传主进程既有能力,**没有任何写口**。
   //    定位(codex 2026-08-14 评审的措辞,别写成「读写自然包含枚举」):这是把外置插件**本来就有的**
@@ -302,6 +306,29 @@ export interface PluginDatabase {
   kind: 'table' | 'notes'
   columns: PluginDbColumn[]
   rows: PluginDbRow[]
+}
+/** ctx.calendar 的一个只读叠加源(2026-10-17+):不在库里、改不了的日历 —— Agent 日程、.ics 订阅、
+ *  Local↔Cloud 另一侧库里的表。行和列的形状同 ctx.databases(`kind` 恒 `'table'`);**没有写口**,
+ *  拿它的 path 去调 ctx.databases 的写口一律 false。 */
+export interface PluginCalendarOverlay extends PluginDatabase {
+  /** `agent` = 某个 Agent 的日程表;`ics` = 用户加的 .ics 订阅 / 导入;`otherVault` = 另一侧库里带日期列的经典表 */
+  origin: 'agent' | 'ics' | 'otherVault'
+  /** otherVault:另一侧那个库的名字(图例里淡显) */
+  vaultLabel?: string
+}
+/** ctx.calendar.subscribe 的一份快照。成员只给路径和列映射,行去 ctx.databases 拿(两份订阅,各管各的)。 */
+export interface PluginCalendarSnapshot {
+  /** 同 ctx.databases:false = 库里的表还没读完,这时 members 可能不全。叠加源各自尽力而为,不计入 ready */
+  ready: boolean
+  /** 当前库里「在日历中」的表:日期列与(可选的)完成勾选列已按宿主日历的规则解析好 */
+  members: Array<{ path: string; dateCol: string; checkboxCol?: string }>
+  overlays: PluginCalendarOverlay[]
+  /** 每个成员与叠加源的颜色(`#rrggbb`),与宿主日历图例一致(用户改过的优先,否则按图例顺序取调色板) */
+  colors: Record<string, string>
+  /** 用户在日历里藏起来的源(路径) */
+  hidden: string[]
+  /** 新建事件默认落进的表;null = 没设过(宿主日历这时用第一个可写成员) */
+  defaultPath: string | null
 }
 /** 笔记正文里一条带 `@` 时间标记的行(`- [ ] 交周报 @2026-10-20T15:00`)。 */
 export interface PluginNoteTask {
@@ -1490,9 +1517,30 @@ export interface PluginContext {
   /** 日历成员登记(2026-09-02+)。Calendar Space 是显式成员制 —— 插件种下的任务表不会自动进日历,
    *  用这条把 `dbPath`(库相对路径)以 `dateColId` 为日期锚(可选 `checkboxColId` 为完成勾选)登记进去。
    *  已是成员 → no-op(不覆盖用户改过的列映射);库还没恢复 → 等库恢复后再登记(最多 60s),
-   *  同步返回 void。旧宿主没有:`ctx.calendar?.ensureMember(…)`。 */
+   *  同步返回 void。旧宿主没有:`ctx.calendar?.ensureMember(…)`。
+   *
+   *  ⚠️**两档**:`ensureMember` 每个插件都有(09-02 起就这样,不变);其余成员(2026-10-17+)**只有 manifest
+   *  `capabilities` 里声明了 `'calendar'` 才有** —— 没声明时它们不存在(不是空壳),`ctx.calendar` 只剩 `ensureMember`。
+   *  一律 `if (ctx.calendar?.subscribe) …`。这一档读到的是日历自己的东西:叠加源(Agent 日程、.ics 订阅、另一侧库)
+   *  和日历设置(成员、颜色、显隐、默认表);库里表的行在 ctx.databases(另一个能力,一起声明)。
+   *
+   *  · `subscribe(cb)`:立刻回调一次,之后成员 / 设置 / 叠加源 / 库里的表有变化就再回调;返回退订,插件停用时宿主统一退订。
+   *    **订阅期间宿主替你刷新叠加源**:Agent 日程每分钟拉一次、.ics 订阅每半小时联网拉一次、换库时重读另一侧 ——
+   *    和打开着的日历共用同一个计时器(不会多拉),最后一个订阅者退订就停。用不着叠加源就别订阅。
+   *  · 写口改的是用户的日历设置(和日历左栏「日历」列表里改是同一处,当前库生效),都返回是否改了:
+   *    `setColor(path, '#rrggbb' | null)`(null = 回到调色板色)、`setHidden(path, bool)` 只认当前的成员或叠加源;
+   *    `setDefault(path)` 只认可写的成员表;`setMember(path, dateCol, checkboxCol?)` 把库里一张表加进日历或改它的列映射
+   *    (日期列必须是日期类列、勾选列必须是勾选类列;**会覆盖**用户改过的映射 —— 只想「没有就加」用 `ensureMember`);
+   *    `removeMember(path)` 只撤成员,不删表。叠加源不能当成员、不能设默认。
+   *  · .ics 订阅的增删、导入不在这里(还是宿主日历设置里做)。 */
   calendar?: {
     ensureMember(dbPath: string, dateColId: string, checkboxColId?: string): void
+    subscribe?(cb: (snapshot: PluginCalendarSnapshot) => void): () => void
+    setColor?(path: string, color: string | null): boolean
+    setHidden?(path: string, hidden: boolean): boolean
+    setDefault?(path: string): boolean
+    setMember?(path: string, dateCol: string, checkboxCol?: string): boolean
+    removeMember?(path: string): boolean
   }
   /** 全库多维表的实时聚合 + 行级读写(2026-10-16+;日历 / 待办 / 习惯这类插件的数据来源)。
    *  **只有 manifest `capabilities` 里声明了 `'databases'` 才注入**(没声明 → `ctx.databases` 整个不存在)。

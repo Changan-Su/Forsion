@@ -473,4 +473,17 @@ describe('ctx.databases / ctx.noteTasks 的能力闸(default-deny)', () => {
     expect(typeof ref!.databases?.subscribe).toBe('function')
     expect(ref!.noteTasks).toBeUndefined()
   })
+
+  // 负对照(10-17 实跑红):pluginStore 里 calendar 档改成恒注入 → 第一段红。
+  it("ctx.calendar:ensureMember 人人有;subscribe / 写口只有声明了 'calendar' 才有(不是空壳)", () => {
+    const plain = ctxOf('plain-cal')
+    expect(typeof plain.calendar?.ensureMember).toBe('function')
+    for (const k of ['subscribe', 'setColor', 'setHidden', 'setDefault', 'setMember', 'removeMember'] as const) expect(plain.calendar?.[k], k).toBeUndefined()
+    let ref: Ctx | null = null
+    usePluginStore.setState({ initialized: false, plugins: [], activeIds: [], disabledIds: [], disposers: {} })
+    usePluginStore.getState().init([{ id: 'cal', name: 'cal', version: '0', capabilities: ['calendar'], setup: (c) => { ref = c } }])
+    expect(typeof ref!.calendar?.subscribe).toBe('function')
+    expect(typeof ref!.calendar?.ensureMember).toBe('function')
+    expect(ref!.databases).toBeUndefined()
+  })
 })

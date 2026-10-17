@@ -7,6 +7,8 @@
  *
  * 需先 npm run build。用法:npm run check:plugindata(GUI 台架,走 devlock:见 CLAUDE.md / gui-verify)
  * 负对照:--nc=nocap(声明的那个探针也不写 capabilities)—— 期望 T1b 起整段变红。
+ * 10-17 加 T5:ctx.calendar 的 'calendar' 档(manifest 白名单在主进程过滤,这一环单测摸不到)—— 注入闸、快照里的成员、
+ * setColor 写进宿主日历设置(同一个 localStorage 键、按 vaultRoot)并推回快照。叠加源的数据形状由 pluginCalendar.test.ts 管。
  */
 const fs = require('fs')
 const os = require('os')
@@ -22,6 +24,7 @@ const SHOT = (name) => path.join(SHOT_DIR, `${name}${NC ? '-nc-' + NC : ''}.png`
 const DECLARED = 'pdprobe-declared'
 const SILENT = 'pdprobe-silent'
 const DB_ONLY = 'pdprobe-dbonly' // 只声明 databases:两道闸写反 / 共用一个条件时它会露馅
+const CAL = 'pdprobe-calendar' // 只声明 calendar
 
 const results = []
 function check(name, ok, detail) {
@@ -46,6 +49,8 @@ const PROBE_MAIN = [
   '  db: ctx.databases || null, tasks: ctx.noteTasks || null, dbLog: [], taskLog: [] }',
   'if (ctx.databases) ctx.databases.subscribe(function (s) { me.dbLog.push({ ready: s.ready, dbs: s.databases }) })',
   'if (ctx.noteTasks) ctx.noteTasks.subscribe(function (s) { me.taskLog.push({ ready: s.ready, tasks: s.tasks }) })',
+  'me.hasEnsure = !!(ctx.calendar && ctx.calendar.ensureMember); me.hasCal = !!(ctx.calendar && ctx.calendar.subscribe); me.cal = ctx.calendar || null; me.calLog = []',
+  'if (me.hasCal) ctx.calendar.subscribe(function (s) { me.calLog.push(s) })',
 ].join('\n')
 
 function writeProbe(pluginsDir, id, caps) {
@@ -157,11 +162,12 @@ async function main() {
     writeProbe(pluginsDir, DECLARED, ['databases', 'noteTasks'])
     writeProbe(pluginsDir, SILENT, null)
     writeProbe(pluginsDir, DB_ONLY, ['databases'])
+    writeProbe(pluginsDir, CAL, ['calendar'])
 
     ;({ app, win } = await launch(home, stub.url))
     const probe = (id) => win.evaluate((k) => { const p = (window.__pdprobe || {})[k]; return p ? { hasDb: p.hasDb, hasTasks: p.hasTasks } : null }, id)
-    const loaded = await waitFor(async () => (await probe(DECLARED)) && (await probe(SILENT)) && (await probe(DB_ONLY)), 15000)
-    check('T0 三个探针插件都装载了(外置插件跑起来了)', loaded)
+    const loaded = await waitFor(async () => (await probe(DECLARED)) && (await probe(SILENT)) && (await probe(DB_ONLY)) && (await probe(CAL)), 15000)
+    check('T0 四个探针插件都装载了(外置插件跑起来了)', loaded)
 
     // ── T1 注入闸:没声明 → 整个不存在;声明了 → 都在 ─────────────────────
     const silent = await probe(SILENT)
@@ -237,6 +243,23 @@ async function main() {
       check('T3g noteTasks.update 勾选后笔记那一行变成 `- [x]`', ok === true && md, `ret=${ok} file=${JSON.stringify(fs.readFileSync(path.join(vault, '周计划.md'), 'utf8'))}`)
     } else check('T3g noteTasks.update 勾选落盘', false, '前面没拿到任务')
 
+    // ── T5 ctx.calendar 的 'calendar' 档 ────────────────────────────────
+    const calOf = (id) => win.evaluate((k) => { const p = (window.__pdprobe || {})[k]; return p ? { hasEnsure: p.hasEnsure, hasCal: p.hasCal } : null }, id)
+    const cS = await calOf(SILENT), cD = await calOf(DECLARED), cC = await calOf(CAL)
+    check('T5a 没声明 calendar:ensureMember 在、subscribe 不在(声明了别的也一样);声明了才有', cS && cS.hasEnsure && !cS.hasCal && cD && !cD.hasCal && cC && cC.hasEnsure && cC.hasCal,
+      JSON.stringify({ cS, cD, cC }))
+    const calLog = () => win.evaluate((k) => ((window.__pdprobe || {})[k] || { calLog: [] }).calLog, CAL)
+    const calReady = await waitFor(async () => (await calLog()).find((e) => e.ready && e.members.some((m) => m.path === '日程.db')), 20000)
+    const m0 = calReady && calReady.members.find((m) => m.path === '日程.db')
+    check('T5b 快照里有成员 日程.db(日期列 date、勾选列 done)和它的颜色', m0 && m0.dateCol === 'date' && m0.checkboxCol === 'done' && /^#[0-9a-f]{6}$/i.test(calReady.colors['日程.db'] || ''),
+      calReady ? JSON.stringify({ members: calReady.members, colors: calReady.colors }) : JSON.stringify(await calLog()))
+    if (cC && cC.hasCal) {
+      const ret = await win.evaluate((k) => ({ bad: window.__pdprobe[k].cal.setColor('日程.db', 'red'), ok: window.__pdprobe[k].cal.setColor('日程.db', '#123456') }), CAL)
+      const stored = await win.evaluate((v) => { try { const c = JSON.parse(localStorage.getItem('amadeus.calendar.cfg') || '{}'); return c[v] && c[v].colors && c[v].colors['日程.db'] } catch { return null } }, vault)
+      const pushed = await waitFor(async () => (await calLog()).some((e) => e.colors['日程.db'] === '#123456'), 5000)
+      check('T5c setColor:坏颜色 false;好颜色写进宿主日历设置(按库根存)并推回快照', ret.bad === false && ret.ok === true && stored === '#123456' && pushed, JSON.stringify({ ret, stored, pushed }))
+    } else check('T5c setColor 写进宿主日历设置', false, '没有 ctx.calendar.subscribe')
+
     // ── T4 插件详情页如实列出声明的能力(走真 UI)────────────────────────
     const sp = await openSettings(app, win)
     const d1 = sp && await openDetail(sp, DECLARED)
@@ -248,6 +271,11 @@ async function main() {
     const caps2 = d2 ? await d2.locator('[data-plugin-caps]').count() : -1
     check('T4b 没声明的插件详情页没有这一行', d2 && caps2 === 0, 'count=' + caps2)
     if (sp) await sp.screenshot({ path: SHOT('plugin-data-detail-silent') }).catch(() => {})
+    if (d2) await d2.locator('[data-plugin-back]').first().click().catch(() => {})
+    const d3 = sp && await openDetail(sp, CAL)
+    const caps3 = d3 ? await d3.locator('[data-plugin-caps]').first().textContent({ timeout: 2000 }).catch(() => null) : null
+    check('T4c 只声明 calendar 的插件详情页只列日历那一条', caps3 && caps3.includes('日历') && !caps3.includes('多维表'), 'text=' + JSON.stringify(caps3))
+    if (sp) await sp.screenshot({ path: SHOT('plugin-data-detail-calendar') }).catch(() => {})
   } catch (e) {
     console.error('\n跑挂了:', e && e.stack)
     if (win) await win.screenshot({ path: SHOT('plugin-data-crash') }).catch(() => {})

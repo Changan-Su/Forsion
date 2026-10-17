@@ -217,15 +217,25 @@ export function icsToAggDb(sub: IcsSub, events: IcsEvent[]): AggDb {
   }
 }
 
+/** 自动刷新:立刻拉一轮(refreshAll 有模块级节流,多个使用者叠着开也只拉一次),之后每半小时一次。返回停表。
+ *  日历视图(useIcsCalDbs)与插件接缝 ctx.calendar(pluginCalendar.ts)共用。 */
+export function startIcsRefresh(): () => void {
+  void useIcsCalendars.getState().refreshAll()
+  const t = window.setInterval(() => void useIcsCalendars.getState().refreshAll(), REFRESH_MS)
+  return () => window.clearInterval(t)
+}
+
+/** 当前全部订阅源 → 只读 AggDb(纯读 store,不发请求)。 */
+export function icsCalDbsNow(): AggDb[] {
+  const { subs, events } = useIcsCalendars.getState()
+  return subs.map((s) => icsToAggDb(s, events[s.id] ?? []))
+}
+
 /** 订阅源的只读日历库。挂载即拉一轮(有节流),之后每半小时一次。 */
 export function useIcsCalDbs(): AggDb[] {
   const subs = useIcsCalendars((s) => s.subs)
   const events = useIcsCalendars((s) => s.events)
   const { locale } = useI18n() // 列名/回退名/(无标题)都是本地化文案 → 必须进 memo 依赖,否则切语言不刷新
-  useEffect(() => {
-    void useIcsCalendars.getState().refreshAll()
-    const t = window.setInterval(() => void useIcsCalendars.getState().refreshAll(), REFRESH_MS)
-    return () => window.clearInterval(t)
-  }, [])
+  useEffect(startIcsRefresh, [])
   return useMemo(() => subs.map((s) => icsToAggDb(s, events[s.id] ?? [])), [subs, events, locale])
 }

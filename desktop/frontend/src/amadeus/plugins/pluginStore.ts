@@ -50,6 +50,7 @@ import { buildPluginTriggerUpserts, isPluginOwnedRule, normalizeVaultRel } from 
 import { MUTATE_DB_RETRIES, mutateDbCas } from './pluginDb'
 import { useDbStore } from '../store/dbStore'
 import { createDatabasesApi, createNoteTasksApi } from './pluginData'
+import { createCalendarApi } from './pluginCalendar'
 import { kickAutomation } from '../store/automationKick'
 import { triggerToUpsert } from '../../views/automation/lib'
 import { memberOf, useCalendarConfig } from '../store/calendarConfigStore'
@@ -422,7 +423,16 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
     // 裸 Markdown 必须显式走 Amadeus editor,不能借 openFile(后者对未认领后缀会交给系统默认程序)。
     // reuseKey 让插件 Space 能稳定更新自己声明的文档伴随栏,activate:false 不抢回源视图焦点。
     // 非笔记路径(PDF / 图片 / 白板…)不进笔记编辑器:交给 openFile 按类型开对的视图(同 isPagePipelinePath)。
-    openNote: (p, options) => { if (ok()) void import('../../amadeusNav').then((m) => (isPagePipelinePath(String(p ?? '')) ? m.openNote(p, options) : m.openFile(p))) },
+    // heading(10-17):开完再滚到那个标题(与 [[笔记#标题]] / 聊天引用条同一套 revealHeadingWhenReady,找不到就只开笔记)。
+    openNote: (p, options) => {
+      if (!ok()) return
+      const heading = typeof options?.heading === 'string' ? options.heading.trim() : ''
+      void import('../../amadeusNav').then(async (m) => {
+        if (!isPagePipelinePath(String(p ?? ''))) { m.openFile(p); return }
+        await m.openNote(p, options)
+        if (heading && ok()) await m.revealHeadingWhenReady(p, heading)
+      })
+    },
     // 只读 vault 查询面(2026-08-14,codex 评审后的口径):纯透传主进程既有 IPC,没有写口。
     // 三条统一语义 —— **桥缺席(web/台架未垫)或没有活动库都给空数组,绝不 reject**:
     // 插件侧的可选链只挡得住「宿主没这个方法」,挡不住「方法在但 window.amadeus 是 undefined」,
@@ -1588,7 +1598,11 @@ export const usePluginStore = create<PluginState>((set, get) => {
       : {}),
     // 日历成员登记:只依赖 pageStore 的 vault,不需要探针闸。已是成员 no-op(不覆盖用户改过的列映射);
     // 库还没恢复就等它恢复(与 ensure 同一个 60s 窗口),同步返回 void。
+    // 'calendar' 能力档(叠加源 + 日历设置):**manifest 声明过才有**,ensureMember 这一档人人有(见 types 的两档说明)。
     calendar: {
+      ...(get().plugins.find((p) => p.id === pluginId)?.capabilities?.includes('calendar')
+        ? createCalendarApi({ alive: ctxAlive, own: (off) => scope.own('subscription', off, 'calendar') })
+        : {}),
       ensureMember: (dbPath: string, dateColId: string, checkboxColId?: string) => {
         const p = normalizeVaultRel(dbPath)
         const dateCol = String(dateColId || '').trim()

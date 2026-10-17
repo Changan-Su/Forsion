@@ -318,8 +318,8 @@ export interface PluginBundleInfo {
 }
 
 /** 需要插件在 manifest 里显式声明才注入的宿主敏感能力(default-deny 白名单)。 */
-export type PluginCapability = 'activeWindow' | 'databases' | 'noteTasks'
-export const PLUGIN_CAPABILITIES: readonly PluginCapability[] = ['activeWindow', 'databases', 'noteTasks']
+export type PluginCapability = 'activeWindow' | 'databases' | 'noteTasks' | 'calendar'
+export const PLUGIN_CAPABILITIES: readonly PluginCapability[] = ['activeWindow', 'databases', 'noteTasks', 'calendar']
 
 /** A user (Forsion) plugin discovered under ~/.forsion/plugins/. */
 export interface ExternalPluginSource {

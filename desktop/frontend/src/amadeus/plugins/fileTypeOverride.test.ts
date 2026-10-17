@@ -23,7 +23,7 @@ vi.mock('../components/PageView', () => ({ PageView: () => null }))
 vi.mock('../chrome/pageChrome', () => ({ NoteCover: () => null }))
 vi.mock('../../amadeusViews', () => ({ Breadcrumb: () => null, NoteTitle: () => null }))
 vi.mock('../../amadeusProperties', () => ({ AmadeusPropertiesPanel: () => null }))
-const nav = vi.hoisted(() => ({ openNote: vi.fn(), openFile: vi.fn() }))
+const nav = vi.hoisted(() => ({ openNote: vi.fn(), openFile: vi.fn(), revealHeadingWhenReady: vi.fn() }))
 vi.mock('../../amadeusNav', () => nav)
 
 const { usePluginStore, findFileType, matchFileType, fileTypeBaseName, setFileOpener, syncFileOpeners, fileOpenerChoice, FILE_OPENERS_KEY, BUILTIN_OPENER } = await import('./pluginStore')
@@ -163,6 +163,22 @@ describe('③b 毁档防线:插件够得着的另外两个页加载入口', () =
     ctx.app.openNote?.('日记.md', { activate: false })
     await vi.waitFor(() => expect(nav.openNote).toHaveBeenCalledWith('日记.md', { activate: false }))
     expect(nav.openFile).toHaveBeenCalledTimes(1)
+  })
+
+  // 负对照(10-17 实跑红):去掉 revealHeadingWhenReady 那一步 → 第一条红;不判 typeof → 「不是字符串」那条红。
+  it('ctx.app.openNote 带 heading:开完再滚到那个标题;非笔记路径 / 非字符串 heading 不滚', async () => {
+    nav.openNote.mockClear(); nav.openFile.mockClear(); nav.revealHeadingWhenReady.mockClear()
+    const ctx = ctxOf('heading-open')
+    ctx.app.openNote?.('日记.md', { heading: ' 周计划 ' })
+    await vi.waitFor(() => expect(nav.revealHeadingWhenReady).toHaveBeenCalledWith('日记.md', '周计划'))
+    expect(nav.openNote).toHaveBeenCalledTimes(1)
+    // 一次一条:vitest 里两次同时在飞的动态 import 可能拿到不是桩的那份(见文件头 await import 的注释)
+    ctx.app.openNote?.('资料/书.pdf', { heading: '第一章' })
+    await vi.waitFor(() => expect(nav.openFile).toHaveBeenCalledWith('资料/书.pdf'))
+    ctx.app.openNote?.('日记.md', { heading: 42 as unknown as string })
+    await vi.waitFor(() => expect(nav.openNote).toHaveBeenCalledTimes(2))
+    await new Promise((r) => setTimeout(r, 0))
+    expect(nav.revealHeadingWhenReady).toHaveBeenCalledTimes(1)
   })
 })
 
