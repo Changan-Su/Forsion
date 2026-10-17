@@ -89,9 +89,14 @@ export function saveHooksConfig(next: HooksConfig): HooksConfig {
 
 /** 插件自带的 hook(pluginHooks.ts 登记,只含观察档事件);插件停用即删。 */
 const pluginHooks = new Map<string, { name: string; events: HookEventsConfig }>();
+/** 本进程里挂过的插件 hook 内容 hash(只增):插件停用 / 升级后,打开得早的旧面板整份写回时照样认得出、滤得掉。 */
+const everPluginHashes = new Set<string>();
 export function setPluginHooks(pluginId: string, v: { name: string; events: HookEventsConfig } | null): void {
-  if (v) pluginHooks.set(pluginId, v);
-  else pluginHooks.delete(pluginId);
+  if (v) {
+    pluginHooks.set(pluginId, v);
+    for (const [event, groups] of Object.entries(v.events) as Array<[HookEventName, MatcherGroup[]]>)
+      for (const g of groups) for (const h of g.hooks) everPluginHashes.add(hookContentHash(event, g.matcher, h));
+  } else pluginHooks.delete(pluginId);
 }
 
 /** 插件 hook:trusted(= 插件自己的代码)、恒开(开关跟插件走),按插件 id 序排在用户 hook 之后。 */
@@ -120,10 +125,9 @@ function discoverPluginHooks(event: HookEventName): DiscoveredHook[] {
 export function withoutPluginHooks(events: HookEventsConfig, current: HookEventsConfig): HookEventsConfig {
   const out: HookEventsConfig = {};
   for (const [event, groups] of Object.entries(events) as Array<[HookEventName, MatcherGroup[]]>) {
-    const plugin = new Set(discoverPluginHooks(event).map((h) => h.contentHash));
     const mine = new Set((current[event] || []).flatMap((g) => g.hooks.map((h) => hookContentHash(event, g.matcher, h))));
     const kept = groups
-      .map((g) => ({ ...g, hooks: g.hooks.filter((h) => { const c = hookContentHash(event, g.matcher, h); return !plugin.has(c) || mine.has(c); }) }))
+      .map((g) => ({ ...g, hooks: g.hooks.filter((h) => { const c = hookContentHash(event, g.matcher, h); return !everPluginHashes.has(c) || mine.has(c); }) }))
       .filter((g) => g.hooks.length);
     if (kept.length) out[event] = kept;
   }

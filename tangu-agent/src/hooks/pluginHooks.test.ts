@@ -86,6 +86,8 @@ describe('插件 hook 只观察', () => {
     expect(withoutPluginHooks(incoming, {})).toEqual({ Stop: [{ hooks: [{ type: 'command', command: 'echo mine' }] }] });
     expect(withoutPluginHooks(incoming, { Stop: [{ hooks: [{ type: 'command', command: 'echo plug' }] }] })).toEqual(incoming);
     off();
+    // 插件停用之后,打开得早的旧面板整份写回:照样滤掉(Codex 评审 P1)
+    expect(withoutPluginHooks(incoming, {})).toEqual({ Stop: [{ hooks: [{ type: 'command', command: 'echo mine' }] }] });
   });
 
   it('没声明 / 全是不收的事件 → 不登记', () => {

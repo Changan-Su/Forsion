@@ -26,18 +26,15 @@ let queue: PluginVaultEvent[] = []
 let timer: ReturnType<typeof setTimeout> | null = null
 let baseRoot: string | null = null
 let baseline: Set<string> | null = null
-/** 路径(文件夹以 `/` 结尾)→ 失效时刻。 */
+/** 改名涉及的确切路径 → 失效时刻(文件夹改名展开成里面每个文件,新建进新文件夹的文件不受影响)。 */
 const renamedFrom = new Map<string, number>()
 const renamedTo = new Map<string, number>()
 
 const norm = (p: unknown): string => String(p ?? '').replace(/\\/g, '/').replace(/^\/+/, '')
 
 function covered(map: Map<string, number>, p: string, now: number): boolean {
-  for (const [k, exp] of map) {
-    if (exp < now) { map.delete(k); continue }
-    if (p === k || (k.endsWith('/') && p.startsWith(k))) return true
-  }
-  return false
+  for (const [k, exp] of map) if (exp < now) map.delete(k)
+  return map.has(p)
 }
 
 function push(e: PluginVaultEvent): void {
@@ -52,8 +49,10 @@ function flush(): void {
   const batch = queue.filter((e) => {
     if (e.kind === 'create' && covered(renamedTo, e.path, now)) return false
     if (e.kind === 'delete' && covered(renamedFrom, e.path, now)) return false
-    const key = e.kind === 'vault' ? 'vault' : `${e.kind}\u0000${e.path}`
-    if (e.kind !== 'rename' && seen.has(key)) return false // 同一批里同一个文件改了几次,报一次
+    // 只合并 modify(同一批里同一个文件改了几次,报一次)和 vault;建 / 删 / 改名按发生顺序原样报,合并会改掉最终状态
+    if (e.kind !== 'modify' && e.kind !== 'vault') return true
+    const key = e.kind === 'vault' ? 'vault' : e.path
+    if (seen.has(key)) return false
     seen.add(key)
     return true
   })
@@ -73,6 +72,9 @@ function onStore(st: St, prev: St): void {
   if (st.vaultRoot !== baseRoot) {
     baseRoot = st.vaultRoot
     baseline = listing(st)
+    queue = [] // 旧库还没发出去的路径事件和改名记录作废:插件收到 vault 自己重读
+    renamedFrom.clear()
+    renamedTo.clear()
     push({ kind: 'vault' })
     return
   }
@@ -94,8 +96,13 @@ function wire(): void {
     onNotePathGone((from, kind, to) => {
       if (!to) return // 删除由清单比对报
       const f = norm(from), t = norm(to), exp = Date.now() + RENAME_SUPPRESS_MS
-      renamedFrom.set(kind === 'prefix' ? `${f}/` : f, exp)
-      renamedTo.set(kind === 'prefix' ? `${t}/` : t, exp)
+      const pair = (a: string, b: string) => { renamedFrom.set(a, exp); renamedTo.set(b, exp) }
+      if (kind !== 'prefix') pair(f, t)
+      // 文件夹:按清单展开成挪动的那些文件。清单可能还是旧的(广播先到)也可能已是新的(清单先到),两头都认
+      else for (const p of baseline ?? []) {
+        if (p.startsWith(`${f}/`)) pair(p, t + p.slice(f.length))
+        else if (p.startsWith(`${t}/`)) pair(f + p.slice(t.length), p)
+      }
       push({ kind: 'rename', path: t, from: f, ...(kind === 'prefix' ? { folder: true } : {}) })
     }),
     ...[amadeus?.onExternalChange?.(modify), amadeus?.onDbExternalChange?.(modify), amadeus?.onFileExternalChange?.(modify)]

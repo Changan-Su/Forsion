@@ -96,6 +96,30 @@ describe('插件 server 随插件进出 manager', () => {
     expect(rows.find((s) => s.origin)?.status).toBe('error');
   }, 30_000);
 
+  it('名字归属:插件停用后同名不让给别的插件;用户配置里关着的也占名;原插件再加回来照认', async () => {
+    const m = manager({ off: { ...stdio('u'), enabled: false } });
+    await m.start();
+    m.addServers({ id: 'pa', name: 'A' }, { shared: stdio('a') });
+    expect(await waitFor(() => m.listStatus().find((s) => s.name === 'shared')?.status === 'connected')).toBe(true);
+    await m.removeServers('pa');
+    m.addServers({ id: 'pb', name: 'B' }, { shared: stdio('b'), off: stdio('b2') });
+    expect(m.listStatus().filter((s) => s.origin?.pluginId === 'pb').map((s) => s.status)).toEqual(['error', 'error']);
+    await m.removeServers('pb');
+    m.addServers({ id: 'pa', name: 'A' }, { shared: stdio('a2') });
+    expect(await waitFor(() => toolNames(m).includes('mcp__shared__echo'))).toBe(true);
+  }, 30_000);
+
+  it('dispose 等 removeServers 关完再返回(停用后马上退出不留子进程)', async () => {
+    const m = manager({});
+    await m.start();
+    m.addServers({ id: 'pc', name: 'C' }, { c: stdio('c') });
+    expect(await waitFor(() => m.listStatus().find((s) => s.name === 'c')?.status === 'connected')).toBe(true);
+    let closed = false;
+    void m.removeServers('pc').then(() => { closed = true; });
+    await m.dispose();
+    expect(closed).toBe(true);
+  }, 30_000);
+
   it('attachPluginMcp:没绑 manager / 没声明 → 不做事;绑了 → 撤销函数移出', async () => {
     expect(attachPluginMcp('p3', 'P3', dir, { a: stdio('a') })).toBeUndefined();
     const m = manager({});

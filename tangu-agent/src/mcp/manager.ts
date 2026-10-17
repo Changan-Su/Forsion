@@ -151,6 +151,14 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
   let started = false;
   /** 消毒后的 server 名 → 先到的 server(start 与插件 addServers 共用;插件 server 移出后不让位,同名再加回来照认)。 */
   const bySanitized = new Map<string, string>();
+  /**
+   * server 名 → 归属('' = 用户 mcp.json,否则插件 id;进程级,只增不改)。插件停用后名字不让给别的插件:
+   * 旧 run 的工具快照按 server 名派发,换了主人就会把 A 的调用(连同 A 在本会话里攒下的审批)打到 B。
+   * 用户配置里关着的 server 也占名(start 时整份登记),插件拿不走。
+   */
+  const nameOwner = new Map<string, string>();
+  /** removeServers 里还没关完的 server:dispose 要等它们,否则停用后马上退出会留下 stdio 子进程。 */
+  const closing = new Set<Promise<void>>();
   /** start() 之前就到的插件 server:等 mcp.json 的登记完再加。 */
   const queued: Array<[{ id: string; name: string }, Record<string, McpServerConfig>]> = [];
 
@@ -161,9 +169,13 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
       ...(origin ? { origin } : {}),
     };
     let rejected: string | undefined;
+    const who = origin?.pluginId ?? '';
+    const held = nameOwner.get(name);
     if (isReservedServerName(name)) rejected = RESERVED_SERVER_ERROR;
     else if (servers.some((s) => s.name === name)) rejected = `a server named "${name}" already exists`;
+    else if (held !== undefined && held !== who) rejected = held ? `the name "${name}" belongs to plugin ${held} for this process` : `a server named "${name}" is in your MCP config`;
     else {
+      nameOwner.set(name, who);
       const key = sanitizePart(name);
       const first = bySanitized.get(key);
       if (first === undefined) bySanitized.set(key, name);
@@ -347,7 +359,9 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
   const api: McpManager = {
     async start() {
       // 磁盘视图:保留名的 server 也列出来(error + 原因),用户在 MCP 设置里看得到它为什么没起来
-      for (const [name, c] of enabledServers({ mcpServers: loadRawMcpServers(configFile) })) newEntry(name, c);
+      const raw = loadRawMcpServers(configFile);
+      for (const name of Object.keys(raw)) if (!isReservedServerName(name)) nameOwner.set(name, ''); // 关着的也占名
+      for (const [name, c] of enabledServers({ mcpServers: raw })) newEntry(name, c);
       // 失败互不阻断;并行连(没连上的转后台重试,不拖启动)
       await Promise.all(servers.filter((s) => !s.configError).map((s) => connect(s)));
       started = true;
@@ -369,7 +383,9 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
       const gone = servers.filter((s) => s.origin?.pluginId === pluginId);
       if (!gone.length) return;
       for (let i = servers.length - 1; i >= 0; i--) if (servers[i].origin?.pluginId === pluginId) servers.splice(i, 1);
-      await Promise.all(gone.map(closeEntry));
+      const p = Promise.all(gone.map(closeEntry)).then(() => {});
+      closing.add(p);
+      try { await p; } finally { closing.delete(p); }
     },
 
     toolsForRun(enabledServerNames?: string[]) {
@@ -452,7 +468,7 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
       // 超时后照样返回 —— 迟到的连接在 doConnect 里见 disposed 自己关掉。
       let cap: ReturnType<typeof setTimeout> | undefined;
       await Promise.race([
-        Promise.all(servers.map((s) => s.connecting?.catch(() => {}))),
+        Promise.all([...servers.map((s) => s.connecting?.catch(() => {})), ...closing]),
         new Promise<void>((resolve) => { cap = setTimeout(resolve, DISPOSE_WAIT_MS); cap.unref?.(); }),
       ]);
       if (cap) clearTimeout(cap);

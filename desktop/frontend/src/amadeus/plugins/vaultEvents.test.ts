@@ -78,6 +78,29 @@ describe('subscribeVaultEvents', () => {
     h.off()
   })
 
+  it('文件夹改名后马上往新文件夹里新建的文件照报 create;同一批里建 / 删 / 建按顺序原样报', async () => {
+    const h = await fresh()
+    h.remapScopePaths('dir', 'moved', 'prefix')
+    h.set({ pages: ['a.md', 'moved/b.md', 'moved/new.md'] })
+    await sleep(260)
+    expect(h.got).toEqual([[{ kind: 'rename', path: 'moved', from: 'dir', folder: true }, { kind: 'create', path: 'moved/new.md' }]])
+    h.set({ pages: ['a.md', 'moved/b.md', 'moved/new.md', 'z.md'] })
+    h.set({ pages: ['a.md', 'moved/b.md', 'moved/new.md'] })
+    h.set({ pages: ['a.md', 'moved/b.md', 'moved/new.md', 'z.md'] })
+    await sleep(260)
+    expect(h.got.slice(1)).toEqual([[{ kind: 'create', path: 'z.md' }, { kind: 'delete', path: 'z.md' }, { kind: 'create', path: 'z.md' }]])
+    h.off()
+  })
+
+  it('换库时旧库还没发出去的事件作废', async () => {
+    const h = await fresh()
+    h.set({ pages: ['a.md', 'dir/b.md', 'old-only.md'] })
+    h.set({ vaultRoot: '/v2', pages: ['p.md'], files: [] })
+    await sleep(260)
+    expect(h.got).toEqual([[{ kind: 'vault' }]])
+    h.off()
+  })
+
   it('退订后不再回调,外部改动监听也摘掉', async () => {
     const h = await fresh()
     h.off()
