@@ -1031,7 +1031,7 @@ if (ONLY.has('plugin')) {
 `);
 }
 // pluginext(10-17):夹具引擎插件只靠 manifest 声明一个 stdio MCP(假 server,echo 回 `<tag>:<text>`)和一个 Stop hook ——
-// hook 往文件里记一行,并在 stdout 回 block + continue:false(观察档:不许真的拦住 / 停掉)。入口是空的 activate。
+// hook 往文件里记一行,并在 stdout 回 block + continue:false(观察档:不许真的拦住 / 停掉)。入口只 registerPlugin(给它一个开关,不注册工具)。
 const EXT_TAG = `EXT-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
 const extHookFile = join(OUT, 'pluginext-stop-hook.log');
 if (ONLY.has('pluginext')) {
@@ -1044,7 +1044,7 @@ if (ONLY.has('pluginext')) {
     hooks: { Stop: [{ hooks: [{ type: 'command', command: `printf 'stop\\n' >> '${extHookFile}'; printf '%s' '${loud}'` }] }] },
   }));
   writeFileSync(join(pdir, 'package.json'), '{"type":"module"}');
-  writeFileSync(join(pdir, 'dist', 'index.js'), "export default { activate() {}, deactivate() {} };\n");
+  writeFileSync(join(pdir, 'dist', 'index.js'), "export default { activate(ctx) { ctx.registerPlugin({ id: 'live-ext', name: 'Live ext', description: 'live-harness fixture', defaultEnabled: true }); }, deactivate() {} };\n");
 }
 // cuoff(10-08):隔离 home 里放一个夹具引擎插件,几个工具都声明 concurrencyKey:'computer-use' —— 引擎认「Computer Use 那组工具」
 // 只看这个声明(toolRegistry.isComputerUseTool),MCP 工具声明不了,所以不能复用上面的假 MCP。
