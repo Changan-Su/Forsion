@@ -163,8 +163,12 @@ function parseUnitRoute(raw: string): UnitRoute | null {
 
 const sayUnit = (text: string): void => { notifyApp({ text, event: 'system.unit' }) }
 
+/** 每次选去处 +1:迟到的打洞结果只在自己仍是最后一次选择时才落(否则会把用户后来选的面顶掉,Codex 评审)。 */
+let routeSeq = 0
+
 /** 在本窗口(主窗,或无浮窗的 harness / web)执行去处。 */
 export function runUnitRoute(r: UnitRoute): void {
+  const seq = ++routeSeq
   const remote = useUnitRemote.getState()
   if (r.kind === 'side') {
     remote.hide() // 从设备页切回本机(target 保留 = webview 保活,再切回去免重载)
@@ -186,7 +190,8 @@ export function runUnitRoute(r: UnitRoute): void {
   if (r.via === 'p2p' && window.tangu?.unitsP2pOpen) {
     // p2p 档特殊:打洞是异步的,失败**出声回落**中转(拆行拍板管的是选项可见性,不禁优雅降级)。
     sayUnit(translate('unit.p2pConnecting', { name: r.name }))
-    void window.tangu.unitsP2pOpen(r.id).then((res) => to(res.url)).catch((e) => {
+    void window.tangu.unitsP2pOpen(r.id).then((res) => { if (seq === routeSeq) to(res.url) }).catch((e) => {
+      if (seq !== routeSeq) return
       sayUnit(translate('unit.p2pFallback', { why: ipcErrorText(e) }))
       to(tunnelPageUrl(cloudUrl, r.id), 'tunnel') // 回落即中转:key 归中转行,勾选态如实
     })
@@ -242,6 +247,8 @@ export function UnitSettings(): React.ReactElement {
   const [host, setHost] = useState<{ running: boolean; connected: boolean; unitId: string | null; lanUrl: string | null } | null>(null)
   const [paired, setPaired] = useState<UnitPairedDevice[]>([])
   const [busy, setBusy] = useState(false)
+  /** 页内提示:本页可能在浮窗里,浮窗没有通知宿主 —— 出错 / 离线说明就地显示(Codex 评审)。 */
+  const [note, setNote] = useState<string | null>(null)
   /** LAN 探针结果(进页时探;true = 该设备的 lanUrl 此刻可达)。 */
   const [lanOk, setLanOk] = useState<Record<string, boolean>>({})
   const [ctxMenu, setCtxMenu] = useState<{ u: UnitInfo; x: number; y: number } | null>(null)
@@ -290,7 +297,8 @@ export function UnitSettings(): React.ReactElement {
   const guard = (fn: () => Promise<void>): void => {
     if (busy) return
     setBusy(true)
-    void fn().catch((e) => sayUnit(String((e as Error)?.message || e))).finally(() => setBusy(false))
+    setNote(null)
+    void fn().catch((e) => setNote(String((e as Error)?.message || e))).finally(() => setBusy(false))
   }
 
   /** 去处交给主窗执行并收起设置(浮窗);无浮窗的端就地执行。 */
@@ -307,7 +315,7 @@ export function UnitSettings(): React.ReactElement {
   /** 切到设备页(整个主区切过去)。via 必填:走哪条路由行本身决定,不自动择路
    *  —— 择路会让被顶掉的那条通路在界面上消失。 */
   const openUnit = (u: UnitInfo, via: 'lan' | 'p2p' | 'tunnel'): void => {
-    if (via !== 'lan' && !u.online) { sayUnit(t('unit.offlineNote', { name: u.name })); return }
+    if (via !== 'lan' && !u.online) { setNote(t('unit.offlineNote', { name: u.name })); return }
     go({ kind: 'unit', id: u.id, name: u.name, icon: u.icon, platform: u.platform, via, lanUrl: u.lanUrl })
   }
 
@@ -354,7 +362,7 @@ export function UnitSettings(): React.ReactElement {
         setRemoteView(await api.setEnabled(!(remoteView.enabled && remoteView.permitted === true)))
       } catch (e) {
         const msg = ipcErrorText(e)
-        sayUnit(msg.includes(SECRET_STORE_INSECURE) ? t('remoteSessions.insecure') : t('remoteSessions.actionFailed', { error: msg }))
+        setNote(msg.includes(SECRET_STORE_INSECURE) ? t('remoteSessions.insecure') : t('remoteSessions.actionFailed', { error: msg }))
       }
     })
   }
@@ -409,6 +417,7 @@ export function UnitSettings(): React.ReactElement {
 
   return (
     <div className="unitset-page" data-busy={busy || undefined}>
+      {note !== null && <div className="rs-alert unitset-note" role="alert">{note}</div>}
       <SettingsPanel anchor="units-switch" icon={<Laptop size={16} />} title={t('unit.switchTitle')} description={t('unit.switchHint')}>
         <div className="unitsw-row-group unitset-list">
           <button className={`unitsw-row${vaultSide !== 'cloud' ? ' on' : ''}`} onClick={() => go({ kind: 'side', side: 'local' })}>

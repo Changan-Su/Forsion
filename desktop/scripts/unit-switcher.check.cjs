@@ -242,8 +242,9 @@ async function main() {
     const afterOffline = await page.evaluate(() => ({
       src: document.querySelector('.unitrs-web')?.getAttribute('src') ?? '',
       page: !!document.querySelector('.unitset-page'),
+      note: document.querySelector('.unitset-note')?.textContent ?? '',
     }))
-    check('离线设备不切面(远程面目标不变、设置页留着)', afterOffline.src === 'https://cloud.test/api/units/u-mba/proxy/' && afterOffline.page, JSON.stringify(afterOffline))
+    check('离线设备不切面(远程面目标不变、设置页留着、页内说明不在线)', afterOffline.src === 'https://cloud.test/api/units/u-mba/proxy/' && afterOffline.page && afterOffline.note.includes('书房 PC'), JSON.stringify(afterOffline))
 
     // 选「本地」= 切回本机:远程面 visibility 隐藏(webview 保活),胶囊回「本地」
     await clickRow('本地')
