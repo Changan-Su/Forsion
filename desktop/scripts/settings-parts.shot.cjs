@@ -38,15 +38,20 @@ async function open(browser, { form, mode = 'light', skin, query }) {
     localStorage.setItem('tangu_locale', 'zh')
     if (skin) { localStorage.setItem('forsion_theme_skin', skin); localStorage.setItem('forsion_theme_bg', skin) }
   }, { skin })
-  // context 的第一张页有时没有触屏模拟(见记忆 project_mobile_e2e_first_page_no_touch):开第二张用
-  const p0 = await ctx.newPage(); const page = await ctx.newPage(); await p0.close()
-  const errors = []
-  page.on('pageerror', (e) => errors.push(e.message))
   const q = [desk ? 'desktop' : '', mode === 'dark' ? 'dark' : '', query].filter(Boolean).join('&')
-  await page.goto(`${BASE}?${q}`, { waitUntil: 'domcontentloaded' })
-  await page.waitForSelector('.settings-panel', { timeout: 60000 })
-  await page.waitForTimeout(900) // 等 .settings-sub 的入场动画走完
-  return { ctx, page, errors }
+  // 手机形态要真有触屏模拟:有时一张页拿不到(pointer: coarse 不成立,见记忆 project_mobile_e2e_first_page_no_touch),
+  // 量出来就是桌面高度 —— 先确认,不成立就换一张页再开,三次都不成立直接报错,别把假红 / 假绿当结果。
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const page = await ctx.newPage()
+    const errors = []
+    page.on('pageerror', (e) => errors.push(e.message))
+    await page.goto(`${BASE}?${q}`, { waitUntil: 'domcontentloaded' })
+    await page.waitForSelector('.settings-panel', { timeout: 60000 })
+    if (!desk && !(await page.evaluate(() => matchMedia('(pointer: coarse)').matches))) { await page.close(); continue }
+    await page.waitForTimeout(900) // 等 .settings-sub 的入场动画走完
+    return { ctx, page, errors }
+  }
+  throw new Error('手机形态三次都没拿到触屏模拟(pointer: coarse)')
 }
 
 /** 每行:标题框、控件框、行框,以及控件是不是和标题同一行(竖向有交叠)、是不是靠右。 */

@@ -87,7 +87,8 @@ export type PluginSettingsItem =
   /** Number with − / +, optionally with a button that receives the number. Moves under the title on phones. */
   | (RowBase & {
       type: 'stepper'
-      value: number
+      /** Leave it out on later updates to keep the number the user stepped to. Default `min`, else 0. */
+      value?: number
       min?: number
       max?: number
       step?: number

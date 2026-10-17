@@ -9,10 +9,10 @@
  *   两样都没有时退到 mb-sheet(singleColumn.css,手机壳里总在)。
  * - 状态归调用方,输入中的值归这里(useDraft):调用方 update 一次 = 以它为准;输入框 / 步进器不给 value 就保留用户输入的。
  */
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
+import { Component, createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { AlertCircle, Check, Copy, Inbox, Loader2, Minus, Plus } from 'lucide-react'
-import { openNativeSheetMenu, presentNativeConfirm, UI_MODE } from '@lcl/engine'
+import { runNativeSheetMenu, presentNativeConfirm, UI_MODE } from '@lcl/engine'
 import { PLUGIN_ICONS } from '../amadeus/components/icons'
 import { registerMessages, useI18n } from '../i18n'
 import { SettingsPanel, SettingsRow, SettingsState, SettingsSwitch } from './SettingsPrimitives'
@@ -37,7 +37,33 @@ export function isPhoneSettings(): boolean {
 const Live = createContext<{ alive(): boolean; rev: number }>({ alive: () => true, rev: 0 })
 export const SettingsPartsLive = Live.Provider
 
-const arr = <T,>(x: T[] | undefined): T[] => (Array.isArray(x) ? x : [])
+/** 插件给的数组:不是数组当空;里面的 null / 非对象项丢掉(一条坏项不该让整页画不出来)。 */
+const arr = <T,>(x: T[] | undefined): T[] => (Array.isArray(x) ? x.filter((v) => v != null && typeof v === 'object') : [])
+
+/** 一个控件自己的寿命:卸载(行被 update 拿掉、整页 dispose)时 abort。半屏 / 确认还开着时行没了,答了也不再调回调。 */
+function useLifetime(): () => AbortSignal | undefined {
+  const ref = useRef<AbortController | null>(null)
+  useEffect(() => {
+    const c = new AbortController()
+    ref.current = c
+    return () => c.abort()
+  }, [])
+  return useCallback(() => ref.current?.signal, [])
+}
+
+/** 只认最后一次改动:先选 b(回调还没回)、再选 c,b 晚到的失败不许把 c 弹回去。 */
+function useGeneration(): [() => number, (n: number) => boolean] {
+  const gen = useRef(0)
+  return [() => ++gen.current, (n) => n === gen.current]
+}
+
+/** 插件给的数据在渲染时出错(字段类型不对)只丢这一项 / 这一组,其余照画。 */
+class Guard extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false }
+  static getDerivedStateFromError(): { failed: boolean } { return { failed: true } }
+  componentDidCatch(e: unknown): void { console.error('[settings] 这一项画不出来,已跳过', e) }
+  render(): ReactNode { return this.state.failed ? null : this.props.children }
+}
 
 /** 调调用方给的回调。同步返回 → undefined;返回 promise → 等它,成功 true、失败 false;抛错算失败。挂载没了就不调。 */
 function invoke(alive: () => boolean, fn: () => unknown): Promise<boolean> | undefined {
@@ -73,8 +99,9 @@ function glyph(name: unknown, size: number): ReactNode {
   return <G width={size} height={size} />
 }
 
-async function confirmPart(c: PluginSettingsConfirm, cancel: string): Promise<boolean> {
-  const out = await presentNativeConfirm({ title: c.title, ...(c.message ? { message: c.message } : {}), confirm: c.confirmLabel, cancel, danger: c.danger ?? true })
+async function confirmPart(c: PluginSettingsConfirm, cancel: string, signal: AbortSignal | undefined): Promise<boolean> {
+  const out = await presentNativeConfirm({ title: c.title, ...(c.message ? { message: c.message } : {}), confirm: c.confirmLabel, cancel, danger: c.danger ?? true }, signal)
+  if (signal?.aborted) return false
   if (out.handled) return out.value != null
   // 设置页的确认一律用 window.confirm(桌面主进程弹原生框);手机上走上面的半屏
   return window.confirm(c.message ? `${c.title}\n\n${c.message}` : c.title)
@@ -84,9 +111,12 @@ function PartButton<V>({ b, value, disabled }: { b: PluginSettingsButton<V>; val
   const { alive } = useContext(Live)
   const { t } = useI18n()
   const [busy, setBusy] = useState(false)
+  const lifetime = useLifetime()
   const kind = b.kind === 'primary' || b.kind === 'danger' ? b.kind : 'ghost'
   const click = async (): Promise<void> => {
-    if (b.confirm && !(await confirmPart(b.confirm, t('settingsparts.cancel')))) return
+    const signal = lifetime()
+    if (b.confirm && !(await confirmPart(b.confirm, t('settingsparts.cancel'), signal))) return
+    if (signal?.aborted) return
     const p = invoke(alive, () => b.onClick(value))
     if (p) { setBusy(true); void p.then(() => setBusy(false)) }
   }
@@ -100,12 +130,14 @@ function PartButton<V>({ b, value, disabled }: { b: PluginSettingsButton<V>; val
 function SwitchControl({ item }: { item: Extract<PluginSettingsItem, { type: 'switch' }> }) {
   const { alive } = useContext(Live)
   const [on, setOn] = useDraft(item.value, false)
+  const [bump, current] = useGeneration()
   const latest = useRef(item.value)
   latest.current = item.value
   return (
     <SettingsSwitch checked={!!on} label={item.title} disabled={item.disabled} onChange={(next) => {
       setOn(next)
-      void invoke(alive, () => item.onChange(next))?.then((ok) => { if (!ok) setOn(latest.current) })
+      const n = bump()
+      void invoke(alive, () => item.onChange(next))?.then((ok) => { if (!ok && current(n)) setOn(latest.current) })
     }} />
   )
 }
@@ -114,12 +146,14 @@ function SwitchControl({ item }: { item: Extract<PluginSettingsItem, { type: 'sw
 function useChoose(item: { value: string; onChange(v: string): unknown }): [string, (v: string) => void] {
   const { alive } = useContext(Live)
   const [v, setV] = useDraft(item.value, '')
+  const [bump, current] = useGeneration()
   const latest = useRef(item.value)
   latest.current = item.value
   return [v, (next) => {
     if (next === v) return
     setV(next)
-    void invoke(alive, () => item.onChange(next))?.then((ok) => { if (!ok) setV(latest.current) })
+    const n = bump()
+    void invoke(alive, () => item.onChange(next))?.then((ok) => { if (!ok && current(n)) setV(latest.current) })
   }]
 }
 
@@ -163,7 +197,7 @@ function StepperControl({ item }: { item: Extract<PluginSettingsItem, { type: 's
   const min = num(item.min, -Infinity)
   const max = num(item.max, Infinity)
   const step = num(item.step, 1) > 0 ? num(item.step, 1) : 1
-  const [v, setV] = useDraft(item.value, Number.isFinite(min) ? min : 0)
+  const [v, setV] = useDraft<number>(item.value, Number.isFinite(min) ? min : 0)
   const set = (n: number): void => {
     const c = Math.min(max, Math.max(min, n))
     if (c === v) return
@@ -229,6 +263,7 @@ function ChoiceControl({ item, phone }: { item: Extract<PluginSettingsItem, { ty
   const { alive } = useContext(Live)
   const [sheet, setSheet] = useState(false)
   const close = useCallback(() => setSheet(false), [])
+  const lifetime = useLifetime()
   const options = arr(item.options)
   if (!phone) {
     return (
@@ -240,11 +275,11 @@ function ChoiceControl({ item, phone }: { item: Extract<PluginSettingsItem, { ty
   const title = item.sheetTitle ?? item.title
   const pick = (v: string): void => { setSheet(false); void invoke(alive, () => item.onPick(v)) }
   const open = (): void => {
-    const native = openNativeSheetMenu(() => ({
+    const signal = lifetime()
+    void runNativeSheetMenu({
       title,
-      sections: [{ items: options.map((o) => ({ id: o.value, label: o.label, ...(o.detail ? { detail: o.detail } : {}), run: () => pick(o.value) })) }],
-    }), { onFallback: () => setSheet(true) })
-    if (!native) setSheet(true)
+      sections: [{ items: options.map((o) => ({ id: o.value, label: o.label, ...(o.detail ? { detail: o.detail } : {}), run: () => { if (!signal?.aborted) pick(o.value) } })) }],
+    }, { signal }).then((handled) => { if (!handled && !signal?.aborted) setSheet(true) })
   }
   return (
     <>
@@ -343,7 +378,7 @@ function Group({ group, phone }: { group: PluginSettingsGroup; phone: boolean })
   return (
     <SettingsPanel className="settings-panel--parts" icon={glyph(group.icon, 16)} title={group.title} description={group.desc}
       actions={actions.length ? actions.map((b, i) => <PartButton key={i} b={b} value={undefined} />) : undefined}>
-      {items.length > 0 && <div className="settings-control-list settings-parts-list">{items.map((it, i) => <Item key={keyOf(it, i)} item={it} phone={phone} />)}</div>}
+      {items.length > 0 && <div className="settings-control-list settings-parts-list">{items.map((it, i) => <Guard key={keyOf(it, i)}><Item item={it} phone={phone} /></Guard>)}</div>}
     </SettingsPanel>
   )
 }
@@ -352,11 +387,12 @@ function Group({ group, phone }: { group: PluginSettingsGroup; phone: boolean })
 export function SettingsPage({ schema }: { schema: PluginSettingsPageSchema }) {
   const [phone] = useState(isPhoneSettings)
   if (schema?.state) return <PartState state={schema.state} />
-  return <>{arr(schema?.groups).map((g, i) => <Group key={keyOf(g, i)} group={g} phone={phone} />)}</>
+  return <>{arr(schema?.groups).map((g, i) => <Guard key={keyOf(g, i)}><Group group={g} phone={phone} /></Guard>)}</>
 }
 
 /** 一件(方案 A):和整页里同一个 item 画法一样,插件自己决定放哪。 */
 export function SettingsItem({ item }: { item: PluginSettingsItem }) {
   const [phone] = useState(isPhoneSettings)
-  return <Item item={item} phone={phone} />
+  // 按 id 认:换了 id 就是另一件(自定义块的收尾 / 新挂、输入中的值都不能串过去)
+  return <Guard key={keyOf(item, 0)}><Item item={item} phone={phone} /></Guard>
 }

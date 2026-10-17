@@ -202,6 +202,59 @@ describe('settings page description', () => {
     expect(el.childElementCount).toBe(0)
   })
 
+  it('a stale rejection does not flip back a newer choice (Codex 10-17)', async () => {
+    const pending: Array<(e?: Error) => void> = []
+    const onChange = vi.fn((v: string) => v === 'b' ? new Promise((_, r) => { pending.push(r) }) : undefined)
+    await act(async () => { page = mountPluginSettingsItem(el, { type: 'segmented', id: 's', title: 'S', value: 'a', options: ['a', 'b', 'c'].map((v) => ({ value: v, label: v })), onChange }) })
+    const pick = (v: string) => click([...el.querySelectorAll('[role="radio"]')].find((b) => b.textContent === v))
+    const checked = () => el.querySelector('[role="radio"][aria-checked="true"]')?.textContent
+    await pick('b'); await pick('c')
+    expect(checked()).toBe('c')
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    await act(async () => { pending[0](new Error('late')) })
+    expect(checked()).toBe('c')
+  })
+
+  it('one malformed item is skipped; the rest of the page still draws (Codex 10-17)', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    await act(async () => {
+      page = mountPluginSettingsPage(el, { groups: [null as never, { id: 'g', title: 'G', items: [
+        null as never,
+        { type: 'value', id: 'bad', title: { oops: true } as never, value: '1' },
+        { type: 'value', id: 'ok', title: 'OK', value: '2' },
+      ] }] })
+    })
+    expect(el.querySelector('.settings-panel-head strong')?.textContent).toBe('G')
+    expect([...el.querySelectorAll('.settings-value')].map((n) => n.textContent)).toEqual(['2'])
+  })
+
+  it('a confirm still open when its row is removed never runs the removed callback (Codex 10-17)', async () => {
+    let answer!: (ok: boolean) => void
+    vi.spyOn(window, 'confirm').mockImplementation(() => false)
+    installNativeSheetPresenter((() => new Promise((r) => { answer = (ok) => r(ok ? { ok: true } : null) })) as never)
+    const onClick = vi.fn()
+    const schema = (withRow: boolean): PluginSettingsPageSchema => ({ groups: [{ id: 'g', title: 'G', items: withRow
+      ? [{ type: 'button', id: 'b', title: 'B', buttons: [{ label: 'Go', confirm: { title: 'Sure?', confirmLabel: 'Go' }, onClick }] }]
+      : [] }] })
+    let h!: PluginSettingsPageHandle
+    await act(async () => { h = page = mountPluginSettingsPage(el, schema(true)) })
+    await click(el.querySelector('.settings-control-row .btn'))
+    await act(async () => { h.update(schema(false)) })
+    await act(async () => { answer(true) })
+    await flush()
+    expect(onClick).not.toHaveBeenCalled()
+    expect(window.confirm).not.toHaveBeenCalled()
+  })
+
+  it('a standalone item whose id changes is a different part: old custom block cleaned up, new one mounted (Codex 10-17)', async () => {
+    const offA = vi.fn(), mountA = vi.fn(() => offA), mountB = vi.fn()
+    let h!: ReturnType<typeof mountPluginSettingsItem>
+    await act(async () => { h = page = mountPluginSettingsItem(el, { type: 'custom', id: 'a', mount: mountA }) })
+    await act(async () => { h.update({ type: 'custom', id: 'b', mount: mountB }) })
+    expect(offA).toHaveBeenCalledOnce()
+    expect(mountB).toHaveBeenCalledOnce()
+  })
+
   it('a single item mounts on its own and updates in place', async () => {
     let h!: ReturnType<typeof mountPluginSettingsItem>
     await act(async () => { h = page = mountPluginSettingsItem(el, { type: 'value', id: 'v', title: '余额', value: '1' }) })
