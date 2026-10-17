@@ -9,9 +9,10 @@
  *      credentials 正好问两次、invalidate 一次。
  *   ③ 另一个克隆里提交并推上去 → 这边 gitPull 快进拿到(updated / commits = 1)。
  *   ④ 两边各有新提交 → gitPull 报 diverged,本地 HEAD 不动。
- *   ⑤ 令牌一直是坏的:只重试一次(credentials 问两次)就按 git_failed 收场;进程环境里开着 GIT_TRACE_CURL / GIT_CURL_VERBOSE
- *      时,失败原文里一行跟踪都没有(带凭据的子进程摘掉了跟踪开关;开着的话请求头会连同 Authorization 一起进 stderr)。
- *      用户自己的凭据助手里存着这个站的旧凭据时,一次也不去问它(问了的话,git 会带着它重试、失败,再叫助手把它删掉)。
+ *   ⑤ 令牌一直是坏的:只重取一次(credentials 问两次),再照用户自己的 git 设置跑一次(凭据回退),也被拒 → credential_denied;
+ *      进程环境里开着 GIT_TRACE_CURL / GIT_CURL_VERBOSE 时,报出来的原文(我们那次的)里一行跟踪都没有(带凭据的子进程摘掉了跟踪开关;
+ *      开着的话请求头会连同 Authorization 一起进 stderr)。用户自己的凭据助手:带凭据的那两次一次也不去问它(问了的话,git 会带着它重试、
+ *      失败,再叫助手把它删掉);只有回退那一次照 git 的常规问一轮(get,存的那份也被拒 → erase —— 与他在终端里推是同一件事)。
  *   ⑥ 提供方说「这次暂时取不到」(fallback)→ 照没有凭据跑,git 认证失败时报提供方给的 code;说「到此为止」→ 直接按它的 code 报。
  *   ⑦ 发布到 Forsion Git(services/forsionGitPublish × Forsion Git 提供方,云端接缝是假的、站是真的):没有远端的项目 →
  *      入口给出由文件夹名整理出来的仓库名(「我的 Demo 站点 (v2)」→ Demo-v2)→ origin 设好并推上去,站上建出私有仓库、上游设好;
@@ -20,9 +21,14 @@
  *      挑一个克隆下来 → 文件在、克隆出来的仓库配置里没有凭据;站上没有的仓库 → remote_unreachable,不留半个文件夹;
  *      目标已经在了 → target_exists,原来的东西不动。
  *   ⑨ 连接已有远端(gitActions.gitConnectRemote):本地仓库连到站上已有的同名分支 → origin 设好、上游设好;
- *      连一个站上没有的仓库 → remote_unreachable,刚加的 origin 撤掉。
+ *      连一个站上没有的仓库 → remote_unreachable,刚加的 origin 撤掉;已有远端时再连一个、不改去向 → 按主机名另起名,上游不动。
  *   ⑩ 提交身份(services/gitIdentity):git 没配名字和邮箱 → 由账号推出 `<用户名>@noreply.<站的主机>`,只进这一次提交;
  *      推上去之后 Gitea 把这条提交记在这个用户名下(站的 DOMAIN = 主机名,同线上)。仓库和全局配置里都没写身份。
+ *   ⑪ 两个远端(2026-10-14):发布到 Forsion Git 两次,第二次不改去向 → 新远端叫 forsion、只推这一次、上游还是 origin;
+ *      面板(gitSummary)列出两个、都认成 Forsion Git、去向 origin;「以后推送到这里」→ 去向 forsion,之后的推送进 forsion、不进 origin。
+ *   ⑫ 凭据回退(2026-10-14,做法 A):第二个用户 erin 的私有仓库,提供方给的是 dave 的令牌(站上看不见那个仓库 → 被拒),
+ *      用户自己的凭据助手里存着 erin 的 → 照它推上去、结果带 ownCredentials;助手里什么都没有 → credential_denied。
+ *      顺带打印 Gitea 对「令牌有效、看不见这个私有仓库」回的是什么(GitHub 那边没真连过,按它的公开行为写的)。
  *   全程:任何一条错误的 message / detail、任何一次返回的 output 里都没有令牌原文或它的 Basic 编码。
  *
  * 负对照(2026-10-10 实跑,各自改一处再跑,下面对应的那条红):
@@ -36,6 +42,9 @@
  *   - gitConnectRemote 连不上时不撤 origin → ⑨ 红。
  *   - gitClone 失败时不删文件夹 → ⑧ 红(目标文件夹是引擎自己先独占地建出来的,git 克隆失败不会替它删)。
  *   ⑩ 的对照写在脚本里:同一个人推上去、邮箱是站上不认识的那条提交,站上不记名。
+ *   2026-10-14 实跑:
+ *   - runWithRemoteCredentials 去掉凭据回退 → ⑫ 红(erin 的仓库推不上去)、⑤ 红(报成 git_failed)。
+ *   - publishToForsionGit 不改去向时照样设上游 → ⑪ 红(上游被改到 forsion)。
  *
  * 前置:PATH 上有 gitea(macOS:brew install gitea)与 git ≥ 2.31;先 `npm run build`(本脚本引 dist/)。
  * 用法:node scripts/git-credentials.gitea.mjs      (KEEP=1 保留临时目录并打印 Gitea 日志尾部)
@@ -70,7 +79,8 @@ Object.assign(process.env, {
 for (const key of Object.keys(process.env)) if (/^GIT_(TRACE|CURL_VERBOSE|CONFIG_(COUNT|KEY_|VALUE_))/.test(key)) delete process.env[key];
 mkdirSync(process.env.TANGU_HOME, { recursive: true });
 
-const { GitActionError, gitCommit, gitConnectRemote, gitPull, gitPush } = await import('../dist/services/gitActions.js');
+const { GitActionError, gitCommit, gitConnectRemote, gitPull, gitPush, gitSetPushRemote } = await import('../dist/services/gitActions.js');
+const { gitSummary } = await import('../dist/services/projectContext.js');
 const { GitCredentialError, isGitAuthFailure, registerGitCredentialProvider, resetGitCredentialProvidersForTest } = await import('../dist/services/gitCredentials.js');
 const { installForsionGit } = await import('../dist/services/forsionGit.js');
 const { forsionPublishInfo, publishToForsionGit } = await import('../dist/services/forsionGitPublish.js');
@@ -247,14 +257,15 @@ ROOT_PATH = ${join(work, 'log')}
   writeFileSync(join(work, 'gitconfig'), '');
   for (const key of ['GIT_TRACE_CURL', 'GIT_CURL_VERBOSE', 'GIT_TRACE']) delete process.env[key];
   const helperCalls = existsSync(helperLog) ? readFileSync(helperLog, 'utf8').trim().split('\n') : [];
-  assert.deepEqual(helperCalls, [], `带凭据的推送被拒之后不该去问用户的凭据助手(实际:${helperCalls.join(' → ')})`);
-  if (readGcm) { assert.equal(readGcm(), savedGcm, '推送认证失败不得删除真 GCM 已存的旧凭据'); console.log('⑤ Windows 真 GCM:隔离存储中的旧凭据保留,没有 get / erase 调用或交互提示'); }
-  assert.equal(refused.code, 'git_failed', JSON.stringify(refused));
+  // 带凭据的那两次不问助手;回退那一次是用户自己的 git:问一次 get,存的那份(old-stored-pat)也被拒 → git 叫它 erase(终端里同样如此)
+  assert.deepEqual(helperCalls, ['get', 'erase'], `只有回退那一次该问用户的凭据助手(实际:${helperCalls.join(' → ')})`);
+  if (readGcm) console.log('⑤ Windows 真 GCM:带凭据的两次没有调用它;回退那一次照 git 的常规 get → erase(存的旧凭据本来就无效)');
+  assert.equal(refused.code, 'credential_denied', JSON.stringify(refused));
   assert.equal(askedBad.length, 2, `坏令牌只该重取一次,实际问了 ${askedBad.length} 次`);
   // 跟踪开着时 git 把每个请求头 / 响应头都打进 stderr(Authorization 那一行在前面,失败原文只取末尾一段,所以这里钉的是
   // 「一行跟踪都没有」= 带凭据的子进程确实摘掉了开关,而不是碰巧被截掉)
   assert.ok(!/(Send|Recv) header|== Info|Authorization/i.test(refused.detail), `带凭据的子进程不该开着跟踪:${refused.detail.slice(-300)}`);
-  console.log('⑤ 令牌一直是坏的 → 只重取一次就收场;进程环境里开着 GIT_TRACE_CURL 时带凭据的子进程也没有打跟踪;用户的凭据助手一次也没被问到');
+  console.log('⑤ 令牌一直是坏的 → 重取一次、再照用户自己的跑一次 → credential_denied;开着 GIT_TRACE_CURL 时带凭据的子进程没有打跟踪;用户的凭据助手只在回退那一次被问到');
 
   // ⑥ 提供方带话:暂时取不到(照没有凭据跑,认证失败时报它的 code)/ 到此为止(直接报)
   resetGitCredentialProvidersForTest();
@@ -332,11 +343,13 @@ ROOT_PATH = ${join(work, 'log')}
   assert.equal(nowhere.code, 'remote_unreachable', JSON.stringify(nowhere));
   assert.equal(await git(local, 'remote'), '');
   const connected = note(await outcome(gitConnectRemote(local, `${gitea}/dave/hello.git`)));
-  assert.deepEqual(connected.value, { remote: 'origin', upstream: 'origin/main' }, JSON.stringify(connected));
+  assert.deepEqual(connected.value, { remote: 'origin', upstream: 'origin/main', target: true }, JSON.stringify(connected));
   assert.equal(await git(local, 'remote', 'get-url', 'origin'), `${gitea}/dave/hello.git`);
   assert.equal(await git(local, 'config', 'branch.main.merge'), 'refs/heads/main');
-  assert.equal(note(await outcome(gitConnectRemote(local, `${gitea}/dave/Demo-v2.git`))).code, 'has_remote');
-  console.log('⑨ 连接已有远端:连不存在的仓库 → remote_unreachable、origin 撤掉;连站上有 main 的仓库 → origin + 上游设好;已有远端 → has_remote');
+  const second = note(await outcome(gitConnectRemote(local, `${gitea}/dave/Demo-v2.git`, undefined, false)));
+  assert.deepEqual(second.value, { remote: 'remote', upstream: null, target: false }, JSON.stringify(second)); // 主机是 IP → remote
+  assert.equal(await git(local, 'config', 'branch.main.remote'), 'origin');
+  console.log('⑨ 连接已有远端:连不存在的仓库 → remote_unreachable、origin 撤掉;连站上有 main 的仓库 → origin + 上游设好;再连一个不改去向 → 叫 remote、上游不动');
 
   // ⑩ 提交身份:git 没配 → 由账号推出不公开的地址,只进这一次提交;推上去后 Gitea 记到这个人名下
   const mine = got.value.path; // ⑧ 克隆下来的 hello
@@ -362,12 +375,74 @@ ROOT_PATH = ${join(work, 'log')}
   assert.ok(note(await outcome(gitPush(mine))).ok);
   const strangerSha = await git(mine, 'rev-parse', 'HEAD');
   assert.equal(JSON.parse((await api(`/api/v1/repos/dave/hello/git/commits/${strangerSha}`, token)).body).author, null);
-  installForsionGit(undefined);
   console.log('⑩ 提交身份:git 没配 → Dave D <dave@noreply.127.0.0.1> 只进这一次提交、配置里没写;推上去后 Gitea 记在 dave 名下(站上不认识的邮箱 → 不记名)');
+
+  // ⑪ 两个远端:第二次发布不改去向 → forsion 只推这一次;面板认得两个;「以后推送到这里」之后推送进 forsion
+  const two = join(work, 'two');
+  mkdirSync(two);
+  writeFileSync(join(two, 'a.txt'), 'two remotes\n');
+  await git(two, 'init', '-q', '-b', 'main');
+  await git(two, 'add', '-A');
+  await git(two, 'commit', '-q', '-m', 'first');
+  assert.ok(note(await outcome(publishToForsionGit(two, 'two-a'))).ok);
+  const once = note(await outcome(publishToForsionGit(two, 'two-b', undefined, false)));
+  assert.deepEqual({ remote: once.value?.remote, target: once.value?.target }, { remote: 'forsion', target: 'forsion/main' }, JSON.stringify(once));
+  assert.equal(await git(two, 'config', 'branch.main.remote'), 'origin', '不改去向的发布不该动上游');
+  let summary = await gitSummary(two);
+  assert.deepEqual(summary.remoteList.map((r) => [r.name, r.host, r.auth, r.path]), [['forsion', 'forsion', 'forsion', 'dave/two-b'], ['origin', 'forsion', 'forsion', 'dave/two-a']]);
+  assert.equal(summary.pushRemote, 'origin');
+  assert.deepEqual(note(await outcome(gitSetPushRemote(two, 'forsion'))).value, { remote: 'forsion', branch: 'main' });
+  writeFileSync(join(two, 'b.txt'), 'second\n');
+  await git(two, 'add', '-A');
+  await git(two, 'commit', '-q', '-m', 'second');
+  const toForsion = note(await outcome(gitPush(two)));
+  assert.equal(toForsion.value?.target, 'forsion/main', JSON.stringify(toForsion));
+  const head = await git(two, 'rev-parse', 'HEAD');
+  const tip = async (name) => JSON.parse((await api(`/api/v1/repos/dave/${name}/branches/main`, token)).body).commit?.id;
+  assert.equal(await tip('two-b'), head);
+  assert.notEqual(await tip('two-a'), head, '去向换了之后不该再推进 origin');
+  summary = await gitSummary(two);
+  assert.deepEqual({ push: summary.pushRemote, upstream: summary.upstream }, { push: 'forsion', upstream: 'forsion/main' });
+  installForsionGit(undefined);
+  console.log('⑪ 两个远端:第二次发布不改去向 → forsion 只推这一次、上游还是 origin;面板认出两个 Forsion Git 远端;「以后推送到这里」之后推送进 forsion、origin 没动');
+
+  // ⑫ 凭据回退:erin 的私有仓库,提供方给 dave 的令牌(看不见)→ 照用户自己的凭据助手(存着 erin 的)推上去
+  await cli('admin', 'user', 'create', '--username', 'erin', '--email', 'erin@example.com', '--random-password', '--must-change-password=false');
+  const erinToken = (await cli('admin', 'user', 'generate-access-token', '--username', 'erin', '--token-name', 'own', '--scopes', 'write:repository,read:user', '--raw')).trim();
+  const secret = join(work, 'secret');
+  mkdirSync(secret);
+  writeFileSync(join(secret, 's.txt'), 'erin only\n');
+  await git(secret, 'init', '-q', '-b', 'main');
+  await git(secret, 'add', '-A');
+  await git(secret, 'commit', '-q', '-m', 'erin first');
+  await run('git', ['push', '-q', `${gitea}/erin/secret.git`, 'HEAD:refs/heads/main'], { cwd: secret, env: { ...withCred(erinToken), GIT_CONFIG_VALUE_0: `Authorization: Basic ${basic('erin', erinToken)}` }, timeout: 30_000 });
+  await git(secret, 'remote', 'add', 'origin', `${gitea}/erin/secret.git`);
+  // Gitea 对「令牌有效、这个人看不见这个私有仓库」回什么(记下来,与 GitHub 的说法对照)
+  const seen = await run('git', ['ls-remote', `${gitea}/erin/secret.git`], { cwd: secret, env: withCred(token), timeout: 30_000 }).then(() => 'ok', (e) => String(e.stderr || '').trim().split('\n').pop());
+  console.log(`⑫ Gitea 对 dave 的令牌看 erin 的私有仓库:${seen}`);
+  resetGitCredentialProvidersForTest();
+  registerGitCredentialProvider('e2e', async (origin) => (origin === gitea ? { username: 'dave', password: token } : null));
+  writeFileSync(join(work, 'own-helper.sh'), `#!/bin/sh\nif [ "$1" = get ]; then echo username=erin; echo password=${erinToken}; fi\n`, { mode: 0o755 });
+  await git(secret, 'config', '--file', join(work, 'gitconfig'), 'credential.helper', `!sh ${shellPath(join(work, 'own-helper.sh'))}`);
+  writeFileSync(join(secret, 't.txt'), 'pushed by Forsion with erin\'s own credentials\n');
+  await git(secret, 'add', '-A');
+  await git(secret, 'commit', '-q', '-m', 'second');
+  const fellBack = note(await outcome(gitPush(secret)));
+  assert.equal(fellBack.ok, true, `应当照用户自己的凭据推上去:${JSON.stringify(fellBack)}`);
+  assert.equal(fellBack.value.ownCredentials, true);
+  assert.equal(JSON.parse((await api('/api/v1/repos/erin/secret/branches/main', erinToken)).body).commit?.id, await git(secret, 'rev-parse', 'HEAD'));
+  writeFileSync(join(work, 'gitconfig'), '');
+  writeFileSync(join(secret, 'u.txt'), 'no own credentials\n');
+  await git(secret, 'add', '-A');
+  await git(secret, 'commit', '-q', '-m', 'third');
+  const nobody = note(await outcome(gitPush(secret)));
+  assert.equal(nobody.code, 'credential_denied', JSON.stringify(nobody));
+  resetGitCredentialProvidersForTest();
+  console.log('⑫ 凭据回退:dave 的令牌看不见 erin 的私有仓库 → 照用户自己的凭据助手(erin)推上去、带 ownCredentials;助手里没有 → credential_denied');
 
   // 全程:令牌原文 / Basic 编码不出现在引擎交出来的任何文字里
   const everything = shown.join('\n');
-  const secrets = [token, bogus, `${bogus}1`, `${bogus}2`].flatMap((p) => [p, basic('dave', p)]);
+  const secrets = [...[token, bogus, `${bogus}1`, `${bogus}2`].flatMap((p) => [p, basic('dave', p)]), erinToken, basic('erin', erinToken)];
   for (const secret of secrets) assert.ok(!everything.includes(secret), '引擎交出来的文字里出现了令牌或它的 Basic 编码');
   console.log(`全程 ${shown.length} 份输出里没有令牌原文或它的 Basic 编码`);
   console.log('PASS');

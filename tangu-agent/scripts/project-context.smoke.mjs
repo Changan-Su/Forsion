@@ -3,7 +3,8 @@
  * 单测(services/projectContext.test.ts)证的是服务层;这里证路由接线 —— 鉴权、按 sessionId 绑定项目、hostExec 闸、
  * 真 git 仓 / 真目录上的读写、409 冲突、用户侧 settings 落点、项目图标(上传 / 读 / 删)、负对照(伪造 sessionId → 404,无根会话 → 400)。
  * Git 账号与身份那几条路由(没登录云端的引擎):账号面板的数据、提交身份(git 没配 → 提交被拒 → 设置里填了 → 提交署它、git 配置里不写)、
- * 连接已有远端 / 克隆的入参校验与失败不留东西、仓库清单。带凭据的真推拉 / 真克隆在 git-credentials.gitea.mjs。
+ * 连接已有远端 / 克隆的入参校验与失败不留东西、仓库清单;两个远端时的远端一览、「以后推送到这里」「只推送这一次」(本机裸仓)。
+ * 带凭据的真推拉 / 真克隆 / 凭据回退在 git-credentials.gitea.mjs。
  * 负对照(2026-10-14 实跑):提交路由不把身份交给 gitCommit(`who.env` 换成空对象)→ 「提交 → 署设置里填的名字和邮箱」红(no_identity)。
  * 用法:node scripts/project-context.smoke.mjs [dist/standalone/main.js](先 npm run build)。
  */
@@ -124,6 +125,23 @@ try {
     cloneLocal.body?.error === 'invalid_remote_url' && cloneDead.status === 400 && cloneDead.body.error === 'remote_unreachable' && !existsSync(join(OUT, 'copy'))
     && cloneTaken.body?.error === 'target_exists' && existsSync(join(proj, 'README.md')) && cloneEscape.body?.error === 'invalid_folder_name',
     JSON.stringify({ local: cloneLocal.body, dead: cloneDead.body, taken: cloneTaken.body, escape: cloneEscape.body }));
+  // ── 两个远端(本机裸仓,不连网):面板列出全部远端与推送去向;「以后推送到这里」/「只推送这一次」──
+  const bareA = join(OUT, 'a.git'); const bareB = join(OUT, 'b.git');
+  for (const b of [bareA, bareB]) execFileSync('git', ['init', '-q', '--bare', '-b', 'main', b]);
+  git('remote', 'add', 'origin', bareA); git('push', '-q', '-u', 'origin', 'main'); git('remote', 'add', 'backup', bareB);
+  const two = (await api(`/agent/project-context?sessionId=${sid}`)).body?.git;
+  check('GET context:remoteList 列出 backup / origin(别的站、照电脑自己的凭据)、推送去向 origin;旧字段 remote / remotes 还在',
+    JSON.stringify(two?.remoteList?.map((r) => [r.name, r.host, r.auth])) === JSON.stringify([['backup', 'other', 'local'], ['origin', 'other', 'local']]) && two.pushRemote === 'origin' && two.remotes === 2 && two.remote === bareA,
+    JSON.stringify({ list: two?.remoteList, push: two?.pushRemote, remote: two?.remote, remotes: two?.remotes }));
+  const target = await post('/agent/project-context/git/push-target', { sessionId: sid, remote: 'backup' });
+  const badTarget = await post('/agent/project-context/git/push-target', { sessionId: sid, remote: '--upload-pack=x' });
+  check('POST git/push-target backup → 回新 context(去向 backup)、只改配置不推;不存在的名字 → 400 no_remote',
+    target.status === 200 && target.body.pushTarget?.remote === 'backup' && target.body.context?.git?.pushRemote === 'backup' && gitOut('config', 'branch.main.remote') === 'backup'
+    && execFileSync('git', ['-C', bareB, 'branch', '--list'], { encoding: 'utf8' }).trim() === '' && badTarget.status === 400 && badTarget.body.error === 'no_remote',
+    JSON.stringify({ target: target.body?.pushTarget, push: target.body?.context?.git?.pushRemote, bad: badTarget.body }));
+  const once = await post('/agent/project-context/git/push', { sessionId: sid, remote: 'origin', trust: true });
+  check('POST git/push { remote: origin } = 只推这一次:推到 origin,去向还是 backup', once.status === 200 && once.body.target === 'origin/main' && gitOut('config', 'branch.main.remote') === 'backup' && once.body.context?.git?.pushRemote === 'backup',
+    JSON.stringify({ status: once.status, target: once.body?.target, error: once.body?.error, upstream: gitOut('config', 'branch.main.remote') }));
 } finally {
   child.kill('SIGTERM');
   await sleep(500);

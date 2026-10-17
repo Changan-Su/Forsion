@@ -22,6 +22,8 @@ import { PROJECT_DOC_FILENAMES, isPlainFileUnder, loadProjectDocSafe } from './p
 import { listProjectSkills } from '../skills/localSkills.js';
 import { runGit } from './runtimeContext.js';
 import { isRepoTrusted, repoConfigRisks } from './gitTrust.js';
+import { REMOTES_LISTED, describeRemote, pushRemoteOf, type GitRemoteInfo } from './gitRemotes.js';
+import { forsionGit } from './forsionGit.js';
 import { AVATAR_EXT_MIME, AVATAR_MAX_BYTES } from '../agents/agentRegistry.js';
 import { normalizeApprovalMode } from './approvals.js';
 
@@ -77,6 +79,10 @@ export interface GitSummary {
   remote?: string | null;
   /** 远端个数(没有 origin 但只有一个远端时也能推)。 */
   remotes?: number;
+  /** 全部远端(前 REMOTES_LISTED 个):站点、仓库、推拉带谁的凭据(services/gitRemotes.ts)。老引擎没有这一项。 */
+  remoteList?: GitRemoteInfo[];
+  /** 不点名远端时「推送」推去哪个(当前分支的上游配置 → origin → 唯一那个);定不下来 → null。 */
+  pushRemote?: string | null;
   /** 仓库级「会执行程序」的配置项与钩子(gitTrust 的 write 级);空 = 没有。 */
   configRisks?: string[];
   /** 用户在面板上信任过这个仓的配置。 */
@@ -500,6 +506,19 @@ export async function gitSummary(cwd: string): Promise<GitSummary> {
     const m = counts.code === 0 ? /^(\d+)\s+(\d+)/.exec(counts.stdout.trim()) : null;
     if (m) { ahead = Number(m[1]); behind = Number(m[2]); }
   }
+  // 远端一览:名字来自仓库配置,以 - 开头的不拿去问(会被当成选项);Forsion Git 的站点读缓存(读不到 = 认不出那个站,照 other 显示)
+  const names = remotesR.code === 0 ? remotesR.stdout.split('\n').map((line) => line.trim()).filter(Boolean) : [];
+  const [urls, upstreamRemote, site] = await Promise.all([
+    Promise.all(names.filter((n) => !n.startsWith('-')).slice(0, REMOTES_LISTED).map(async (name) => ({ name, r: await g(['remote', 'get-url', name]) }))),
+    // 与 gitPush 同一个判法:.remote 和 .merge(refs/heads/…)都在才算配了上游,缺一样 gitPush 不跟它走
+    rawBranch && !detached ? Promise.all([g(['config', '--get', `branch.${rawBranch}.remote`]), g(['config', '--get', `branch.${rawBranch}.merge`])])
+      .then(([r, m]) => (r.code === 0 && m.code === 0 && m.stdout.trim().startsWith('refs/heads/') ? r.stdout.trim() : '')) : Promise.resolve(''),
+    Promise.resolve(forsionGit()?.hosting()).catch(() => null),
+  ]);
+  const remoteList = urls.filter((u) => u.r.code === 0).map((u) => {
+    const raw = u.r.stdout.split('\n')[0].trim();
+    return describeRemote(u.name, raw, maskRemoteUrl(raw), site?.origin ?? null);
+  });
   const lines = statusR.code === 0 ? statusR.stdout.split('\n').filter(Boolean) : [];
   const changes = lines.map(parseStatusLine).filter((c): c is GitChangeInfo => !!c);
   let staged = 0;
@@ -515,7 +534,7 @@ export async function gitSummary(cwd: string): Promise<GitSummary> {
     available: true, repo: true, nested: !!top && top !== real, branch, detached, upstream, ahead, behind,
     staged, unstaged, untracked, changes: changes.slice(0, GIT_CHANGES_SHOWN), changesTotal: changes.length, commits,
     remote: remoteR.code === 0 ? maskRemoteUrl(remoteR.stdout) : null,
-    remotes: remotesR.code === 0 ? remotesR.stdout.split('\n').filter((line) => line.trim()).length : 0,
+    remotes: names.length, remoteList, pushRemote: pushRemoteOf(names, upstreamRemote),
     configRisks: risk?.write ?? [], trusted, ...(unread ? { changesUnread: true } : {}),
   };
 }

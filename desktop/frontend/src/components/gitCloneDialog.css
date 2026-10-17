@@ -22,3 +22,24 @@
 .am-app .git-clone-error p { margin: 0; }
 .am-app .git-clone-error pre { margin: 0; max-width: 100%; max-height: 110px; overflow: auto; padding: 6px 8px; border-radius: var(--radius-sm); background: var(--overlay-medium); color: var(--text-muted); font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--ui-font-caption, 11px); white-space: pre-wrap; overflow-wrap: anywhere; }
 .am-app .git-clone-dialog .dialog-btn { display: inline-flex; align-items: center; gap: 6px; }
+
+/* 「添加远端」对话框(GitAddRemoteDialog):同一个外壳,三条去向是一组单选卡片 */
+.am-app .git-add-remote-dialog { width: min(440px, 92vw); }
+.am-app .git-remote-choices { display: grid; gap: 6px; }
+.am-app .git-remote-choice { display: grid; grid-template-columns: 14px 24px minmax(0, 1fr); align-items: start; gap: 9px; width: 100%; padding: 10px; border: 0; border-radius: var(--radius-md, 12px); background: transparent; box-shadow: inset 0 0 0 1px var(--overlay-strong); color: var(--text); text-align: left; font: inherit; cursor: pointer; }
+.am-app .git-remote-choice:hover { background: var(--menu-hover); }
+.am-app .git-remote-choice.on { background: var(--overlay-light); box-shadow: inset 0 0 0 1.5px var(--text); }
+.am-app .git-remote-radio { width: 14px; height: 14px; margin-top: 5px; border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--overlay-strong); }
+.am-app .git-remote-choice.on .git-remote-radio { box-shadow: inset 0 0 0 4px var(--text); }
+.am-app .git-remote-choice-text { display: grid; gap: 2px; min-width: 0; }
+.am-app .git-remote-choice-text strong { font-size: var(--ui-font-body, 13px); font-weight: 600; }
+.am-app .git-remote-choice-text small { color: var(--text-muted); font-size: var(--ui-font-caption, 11px); line-height: 1.45; }
+.am-app .git-add-remote-bad { color: var(--danger); font-size: var(--ui-font-caption, 11px); }
+.am-app .git-add-remote-target { position: relative; display: grid; grid-template-columns: 14px minmax(0, 1fr); gap: 8px; align-items: start; font-size: var(--ui-font-meta, 12px); cursor: pointer; }
+.am-app .git-add-remote-target input { position: absolute; opacity: 0; pointer-events: none; }
+.am-app .git-add-remote-box { width: 14px; height: 14px; margin-top: 2px; border-radius: 4px; display: grid; place-items: center; box-shadow: inset 0 0 0 1.5px var(--overlay-strong); color: var(--on-accent, #fff); }
+.am-app .git-add-remote-target input:checked + .git-add-remote-box { background: var(--accent); box-shadow: none; }
+.am-app .git-add-remote-target input:focus-visible + .git-add-remote-box { outline: 2px solid var(--accent); outline-offset: 2px; }
+.am-app .git-add-remote-target strong { display: block; font-weight: 500; }
+.am-app .git-add-remote-target small { display: block; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
+.am-app .git-add-remote-dialog .project-git-host { margin-top: 1px; }

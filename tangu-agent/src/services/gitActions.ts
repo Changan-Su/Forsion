@@ -30,7 +30,8 @@ import { GIT_SCRUBBED_ENV, READ_ONLY_GIT_ARGS, gitExecutable } from './gitExec.j
 import { isRepoTrusted, repoConfigRisks, trustRepo, untrustedRisks } from './gitTrust.js';
 import { gitSettings } from './gitSettings.js';
 import { defaultWorkspaceDir } from '../channels/config.js';
-import { GitCredentialError, gitCredentialEnv, isGitAuthFailure, refreshGitCredential, scrubGitSecrets, stripGitTraceEnv, type GitCredentialGrant } from './gitCredentials.js';
+import { GitCredentialError, gitCredentialEnv, isGitAuthFailure, isRemoteDenial, refreshGitCredential, scrubGitSecrets, stripGitTraceEnv, type GitCredentialGrant } from './gitCredentials.js';
+import { remoteNameFor } from './gitRemotes.js';
 
 const ACTION_TIMEOUT_MS = 60_000;
 const PUSH_TIMEOUT_MS = 120_000;
@@ -67,7 +68,11 @@ export class GitActionError extends Error {
   constructor(readonly code: string, message: string, readonly detail?: string) { super(message); }
 }
 
-interface RunResult { code: number; stdout: string; stderr: string; reason?: string }
+interface RunResult {
+  code: number; stdout: string; stderr: string; reason?: string;
+  /** 带去的账号被拒、这一次是照这台电脑自己的 git 凭据跑成的(runWithRemoteCredentials)。 */ ownCredentials?: boolean;
+  /** 带去的账号被拒、电脑自己的也被拒(原文是我们那一次的)。推送 / 拉取报 credential_denied;克隆 / 连接照「连不上」报。 */ denied?: boolean;
+}
 
 const baseEnv = (): NodeJS.ProcessEnv => {
   const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: '0' };
@@ -139,7 +144,14 @@ async function requireTransportTrust(cwd: string, trust: boolean | undefined): P
  *  - 提供方说这次暂时取不到(限次 / 够不着)→ 先照没有凭据跑;git 也因为认证失败时,报提供方给的 code(否则用户只看到
  *    「could not read Username」)。用户自己配过凭据的照常成功。
  *  args[0] 必须是子命令(push / fetch / ls-remote):带凭据时紧跟着它插 `--no-recurse-submodules`(ls-remote 除外)。
- *  fetch(= 拉取,新动作)的消息固定成英文,好认「远端没有这条分支」;push 不带凭据时原文照用户的语言(现状)。 */
+ *  fetch(= 拉取,新动作)的消息固定成英文,好认「远端没有这条分支」;push 不带凭据时原文照用户的语言(现状)。
+ *
+ *  凭据回退(2026-10-14 用户定的做法 A):带去的账号重取过还被拒(认证失败,或者 403 / 404 = 这个账号没有这个仓库的权限 ——
+ *  组织的仓库、别人拉你做协作者的仓库、绑的是另一个号),就**照这台电脑自己的 git 设置再跑一次**:不带我们的头、不清凭据助手、
+ *  不关 askpass、不插 --no-recurse-submodules —— 与没绑定的用户逐字一样(所以也不过传输信任闸;Windows 的 Git Credential Manager
+ *  这时可能弹出它自己的登录窗,那也是没绑定时的现状)。成了 → 结果带 ownCredentials,界面写明这次用的是谁的;
+ *  也被拒 → 回我们那一次(遮过的原文)并标 denied(推送 / 拉取据此报 credential_denied;克隆 / 连接已有地址照「连不上」报 ——
+ *  站上「没有这个仓库」和「看不见这个仓库」回的是同一句);别的失败(断网)→ 回那一次的原样。 */
 async function runRemoteAction(cwd: string, remote: string, direction: 'push' | 'fetch', args: string[], timeoutMs: number, trust: boolean | undefined): Promise<RunResult> {
   // 远端名来自仓库配置(branch.<分支>.remote):以 - 开头的当不成远端名,只会被 git 当成选项 —— 不拿它去问地址
   const located = remote.startsWith('-') ? null : await readGit(cwd, ['remote', 'get-url', ...(direction === 'push' ? ['--push'] : []), remote], { timeoutMs: 5000 });
@@ -155,6 +167,7 @@ export async function runWithRemoteCredentials(cwd: string, url: string, directi
     }
   };
   let grant = url ? await ask() : { env: {}, secrets: [] } as GitCredentialGrant;
+  const carried = !!grant.credential;
   if (grant.credential) await requireTransportTrust(cwd, trust);
   // 带着凭据就不递归进子模块:子模块是另一个仓库,它自带的配置(凭据助手、sshCommand、钩子)没过信任闸,
   // 而递归起的 git 继承同一份环境 —— 那些程序读得到这枚凭据。不带凭据时照用户自己的配置(现状)。
@@ -168,10 +181,16 @@ export async function runWithRemoteCredentials(cwd: string, url: string, directi
     if (grant.credential) r = await run(grant);
   }
   if (r.code !== 0 && grant.unavailable && isGitAuthFailure(r.stderr)) throw credentialFailure(grant.unavailable);
+  if (r.code !== 0 && carried && isRemoteDenial(r.stderr)) {
+    const own = await runAction(cwd, args, { timeoutMs, english: true });
+    if (own.code === 0) return { ...own, ownCredentials: true };
+    return isRemoteDenial(own.stderr) ? { ...r, denied: true } : own;
+  }
   return r;
 }
 
 const tail = (text: string, max = 1500): string => { const t = text.trim(); return t.length > max ? `…${t.slice(-max)}` : t; };
+const deniedError = (r: RunResult): GitActionError => new GitActionError('credential_denied', "The account Forsion signs in with cannot access this repository, and neither can this computer's own git credentials", tail(r.stderr));
 
 function must(r: RunResult, what: string): RunResult {
   if (r.code !== 0 || r.reason) throw new GitActionError('git_failed', `git ${what} failed`, tail(r.stderr || r.stdout));
@@ -524,7 +543,9 @@ export async function gitCreateBranch(cwd: string, name: unknown, trust?: boolea
  *  没有 → 推到 origin(只有一个远端时推到它)的同名分支并设为上游。
  *  「设置 → Git」开了 forceWithLease 才带 `--force-with-lease --force-if-includes`:
  *  后者要求远端跟踪分支的尖端已被本地吸收 —— 后台 fetch 把别人的新提交拉进远端跟踪分支之后,单靠 lease 挡不住覆盖。 */
-export async function gitPush(cwd: string, trust?: boolean, /** 给了 = 就推到这个远端的同名分支并把它设成上游,不看分支上原有的上游设置(「发布」用:刚加的 origin 才是目的地)。 */ to?: string): Promise<{ remote: string; branch: string; target: string; output: string }> {
+export async function gitPush(cwd: string, trust?: boolean, /** 给了 = 就推到这个远端的同名分支并把它设成上游,不看分支上原有的上游设置(「发布」用:刚加的远端才是目的地)。 */ to?: string,
+  /** once = 只推这一次(「远端」卡片的「只推送这一次」、加第二个远端但不改去向时的发布):推到 to 的同名分支,**不动**分支的上游设置。 */
+  opts: { once?: boolean } = {}): Promise<{ remote: string; branch: string; target: string; output: string; ownCredentials?: boolean }> {
   await requireRepoRoot(cwd);
   const head = must(await readGit(cwd, ['rev-parse', '--abbrev-ref', 'HEAD']), 'rev-parse').stdout.trim();
   if (!head || head === 'HEAD') throw new GitActionError('detached', 'HEAD is detached; switch to a branch before pushing');
@@ -544,17 +565,33 @@ export async function gitPush(cwd: string, trust?: boolean, /** 给了 = 就推�
     const target = to ? (remotes.includes(to) ? to : '') : remotes.includes('origin') ? 'origin' : remotes.length === 1 ? remotes[0] : '';
     if (!target) throw new GitActionError(remotes.length ? 'ambiguous_remote' : 'no_remote', remotes.length ? 'Several remotes are configured and none is called origin' : 'No remote is configured', remotes.join('\n'));
     remote = target; ref = `refs/heads/${head}`;
-    args = ['push', ...force, '--set-upstream', remote, `HEAD:${ref}`];
+    args = ['push', ...force, ...(to && opts.once ? [] : ['--set-upstream']), remote, `HEAD:${ref}`];
   }
   // 远端名来自仓库配置(branch.<分支>.remote):以 - 开头的会被 git 当成选项(--receive-pack=… 就是一条本机命令)
   if (remote.startsWith('-')) throw new GitActionError('no_remote', 'The upstream remote of this branch is not a valid remote name', remote);
   const r = await runRemoteAction(cwd, remote, 'push', args, PUSH_TIMEOUT_MS, trust);
+  if (r.denied) throw deniedError(r);
   if (r.code !== 0 && force.length && /force-if-includes/.test(r.stderr) && /unknown option|usage:/i.test(r.stderr)) {
     throw new GitActionError('git_too_old', 'This git is too old for a safe --force-with-lease push (needs 2.30 or later)', tail(r.stderr));
   }
   must(r, 'push');
   const branch = ref.replace(/^refs\/heads\//, '');
-  return { remote, branch, target: `${remote}/${branch}`, output: tail(r.stderr || r.stdout, 600) };
+  return { remote, branch, target: `${remote}/${branch}`, output: tail(r.stderr || r.stdout, 600), ...(r.ownCredentials ? { ownCredentials: true } : {}) };
+}
+
+/** 「以后推送到这里」:把当前分支的上游设成这个远端的同名分支(只写 branch.<分支>.remote / .merge 两项配置,不连网、不推)。
+ *  之后的「推送」「拉取」都跟它走(gitPush / gitPull 认的就是这两项);远端上还没有这条分支时,第一次推送会建出来,在那之前拉取报 no_upstream。
+ *  只写配置、不执行仓库里的任何东西 → 不过信任闸。远端名必须是 `git remote` 列出来的那几个之一(以 - 开头的不收:会被当成选项)。 */
+export async function gitSetPushRemote(cwd: string, name: unknown): Promise<{ remote: string; branch: string }> {
+  await requireRepoRoot(cwd);
+  const head = (await readGit(cwd, ['symbolic-ref', '--short', '-q', 'HEAD'], { timeoutMs: 5000 })).stdout.trim();
+  if (!head) throw new GitActionError('detached', 'HEAD is detached; switch to a branch first');
+  const remote = typeof name === 'string' ? name.trim() : '';
+  const remotes = (await readGit(cwd, ['remote'], { timeoutMs: 5000 })).stdout.split('\n').map((r) => r.trim()).filter(Boolean);
+  if (!remote || remote.startsWith('-') || !remotes.includes(remote)) throw new GitActionError('no_remote', 'There is no remote with that name', remote);
+  must(await runAction(cwd, ['config', `branch.${head}.remote`, remote]), 'config');
+  must(await runAction(cwd, ['config', `branch.${head}.merge`, `refs/heads/${head}`]), 'config');
+  return { remote, branch: head };
 }
 
 // ── 连接已有远端 ──────────────────────────────────────────────────────────
@@ -573,39 +610,44 @@ export function remoteAddress(raw: unknown): string | null {
   return (url.protocol === 'https:' || url.protocol === 'ssh:') && url.hostname && !url.password && !url.search && !url.hash ? text : null;
 }
 
-/** 「连接已有远端」:仓库一个远端都没有时,把 origin 设成用户给的地址,并当场连一次(只列分支,不下载):
- *  地址贴错了 / 没有权限现在就说,别等到推送;连不上就把刚加的 origin 撤掉,仓库回到点之前的样子。
- *  远端上有和当前分支同名的分支 → 把它记成上游(面板随即出现「拉取」;第一次拉取才真正下载,两边历史对不上时照旧只报告)。
- *  远端是空的(刚建的仓库)→ 没有上游,之后的「推送」会设上。连远端 = 会用仓库配的凭据助手 → 与别的写动作同一道信任闸。 */
-export async function gitConnectRemote(cwd: string, url: unknown, trust?: boolean): Promise<{ remote: string; upstream: string | null }> {
+/** 「连接已有远端」:把用户给的地址加成一个远端,并当场连一次(只列分支,不下载):地址贴错了 / 没有权限现在就说,别等到推送;
+ *  连不上就把刚加的远端撤掉,仓库回到点之前的样子。
+ *  名字:一个远端都没有 → origin;已经有了 → 按站点起(services/gitRemotes.ts 的 remoteNameFor),不碰原来的。
+ *  target = 以后推送到这里(一个远端都没有时恒为真):把当前分支的上游设成它的同名分支 —— **不管远端上有没有这条分支**都写,
+ *  否则分支上留着的旧上游还在,下一次推送去了老地方;远端上还没有这条分支时第一次推送会建出来。target 为假:只加远端,去向不变。
+ *  连远端 = 会用仓库配的凭据助手 → 与别的写动作同一道信任闸。 */
+export async function gitConnectRemote(cwd: string, url: unknown, trust?: boolean, target = true): Promise<{ remote: string; upstream: string | null; target: boolean }> {
   await requireRepoRoot(cwd);
-  const target = remoteAddress(url);
-  if (!target) throw new GitActionError('invalid_remote_url', 'That is not a remote address this app can use');
+  const address = remoteAddress(url);
+  if (!address) throw new GitActionError('invalid_remote_url', 'That is not a remote address this app can use');
   await requireTrust(cwd, 'write', trust);
   const remotes = (await readGit(cwd, ['remote'], { timeoutMs: 5000 })).stdout.split('\n').map((r) => r.trim()).filter(Boolean);
-  if (remotes.length) throw new GitActionError('has_remote', 'This repository already has a remote', remotes.join('\n'));
-  must(await runAction(cwd, ['remote', 'add', 'origin', target]), 'remote add');
+  const name = remoteNameFor(address, remotes);
+  const setTarget = target || !remotes.length;
+  must(await runAction(cwd, ['remote', 'add', name, address]), 'remote add');
   // 只删刚写的那一节配置(理由同 forsionGitPublish:`git remote remove` 还会清掉以前留下的上游设置和远端跟踪引用)
-  const undo = (): Promise<unknown> => runAction(cwd, ['config', '--remove-section', 'remote.origin']).catch(() => {});
+  const undo = (): Promise<unknown> => runAction(cwd, ['config', '--remove-section', `remote.${name}`]).catch(() => {});
   let listed: RunResult;
   try {
-    listed = await runRemoteAction(cwd, 'origin', 'fetch', ['ls-remote', '--heads', 'origin'], ACTION_TIMEOUT_MS, trust);
+    listed = await runRemoteAction(cwd, name, 'fetch', ['ls-remote', '--heads', name], ACTION_TIMEOUT_MS, trust);
   } catch (e) { await undo(); throw e; }
   if (listed.code !== 0) { await undo(); throw new GitActionError('remote_unreachable', 'Could not reach that remote', tail(listed.stderr || listed.stdout)); }
   const head = (await readGit(cwd, ['symbolic-ref', '--short', '-q', 'HEAD'], { timeoutMs: 5000 })).stdout.trim();
   let upstream: string | null = null;
-  if (head && listed.stdout.split('\n').some((line) => line.split('\t')[1]?.trim() === `refs/heads/${head}`)) {
-    const a = await runAction(cwd, ['config', `branch.${head}.remote`, 'origin']);
+  if (head && setTarget) {
+    const a = await runAction(cwd, ['config', `branch.${head}.remote`, name]);
     const b = a.code === 0 ? await runAction(cwd, ['config', `branch.${head}.merge`, `refs/heads/${head}`]) : a;
-    if (b.code === 0) upstream = `origin/${head}`;
+    // upstream 只在远端上真有这条分支时给(界面据此说「上游是 x/main」还是「之后推送会推到这里」)
+    if (b.code === 0 && listed.stdout.split('\n').some((line) => line.split('\t')[1]?.trim() === `refs/heads/${head}`)) upstream = `${name}/${head}`;
   }
-  return { remote: 'origin', upstream };
+  return { remote: name, upstream, target: setTarget };
 }
 
 // ── 拉取 ──────────────────────────────────────────────────────────────────
 
 export interface PullResult {
   remote: string; branch: string; /** `origin/main` 这样的显示名。 */ upstream: string;
+  /** 带去的账号被拒、这次照这台电脑自己的 git 凭据取到的(见 runWithRemoteCredentials 的凭据回退)。 */ ownCredentials?: boolean;
   /** false = 没有要拉的(已经一致,或者只是本地领先)。 */
   updated: boolean; /** 快进了多少个提交。 */ commits: number; /** 本地领先上游多少个(没推的)。 */ ahead: number;
 }
@@ -641,6 +683,7 @@ export async function gitPull(cwd: string, trust?: boolean): Promise<PullResult>
   const refspec = tracking.startsWith('refs/remotes/') ? `+${merge}:${tracking}` : merge;
   const fetched = await runRemoteAction(cwd, remote, 'fetch', ['fetch', '--no-recurse-submodules', '--refmap=', remote, refspec], PUSH_TIMEOUT_MS, trust);
   if (fetched.code !== 0 && /couldn't find remote ref/i.test(fetched.stderr)) throw new GitActionError('no_upstream', 'The upstream branch no longer exists on the remote', upstream);
+  if (fetched.denied) throw deniedError(fetched);
   must(fetched, 'fetch');
   // 刚取回来的那个提交(FETCH_HEAD 的第一行就是点名要的这条分支);不靠远端跟踪分支 —— 映射不到它的仓库里它不存在
   const tip = await readGit(cwd, ['rev-parse', '--verify', '--quiet', 'FETCH_HEAD^{commit}'], { timeoutMs: 5000 });
@@ -653,7 +696,8 @@ export async function gitPull(cwd: string, trust?: boolean): Promise<PullResult>
   };
   const diverged = (c: { ahead: number; behind: number }): GitActionError => new GitActionError('diverged', 'The branch and its upstream have both moved; nothing was merged', `${head}: ${c.ahead}\n${upstream}: ${c.behind}`);
   const before = await measure();
-  if (!before.behind) return { remote, branch: head, upstream, updated: false, commits: 0, ahead: before.ahead };
+  const own = fetched.ownCredentials ? { ownCredentials: true } : {};
+  if (!before.behind) return { remote, branch: head, upstream, updated: false, commits: 0, ahead: before.ahead, ...own };
   if (before.ahead) throw diverged(before);
   // 按量过的那个提交快进:量完之后别的进程又 fetch 了一次,也不会把没量过的东西合进来。
   // merge.autoStash 关掉:开着它时 git 会先把没提交的改动收进 stash、快进完再放回来 —— 放不回来就在工作区留下冲突标记,
@@ -667,7 +711,7 @@ export async function gitPull(cwd: string, trust?: boolean): Promise<PullResult>
   // 量完之后本地又多了提交(别的窗口 / 终端里刚提交):快进不了,同样只报告
   if (merged.code !== 0 && /not possible to fast-forward/i.test(merged.stderr)) throw diverged(await measure());
   must(merged, 'merge');
-  return { remote, branch: head, upstream, updated: true, commits: before.behind, ahead: 0 };
+  return { remote, branch: head, upstream, updated: true, commits: before.behind, ahead: 0, ...own };
 }
 
 // ── 生成提交信息 ──────────────────────────────────────────────────────────

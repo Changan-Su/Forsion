@@ -7,7 +7,7 @@ import { SettingsPanel, SettingsRow, SettingsSwitch } from './SettingsPrimitives
 import { homeTarget } from '../services/engine/targets'
 
 registerMessages({
-  'gitSettings.title': { zh: 'Git', en: 'Git' },
+  'gitSettings.title': { zh: '提交与推送', en: 'Commits and pushes' },
   'gitSettings.description': {
     zh: '项目详情「Git」页里的提交、新建分支和推送按这里的设置来；Agent 替你建分支或写提交信息时也会照做。',
     en: 'The commit, new branch and push actions on the Git page of project details follow these settings. Agents follow them too when they create a branch or write a commit message for you.',
