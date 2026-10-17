@@ -2375,6 +2375,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         parallelGroup,
       };
       await publish(runId, 'tool_call', basePayload);
+      // 商店卡片已经画出来了还要 sketch / intelligent_ui = 同一批插件画两遍(10-17 live 6 次里 2 次);用户点名要图的照常放行。
+      if (['sketch', 'intelligent_ui'].includes(call.function.name) && sketchTurnSignal?.kind !== 'explicit'
+        && clientCapabilities?.includes(MARKETPLACE_CARDS_CAPABILITY) && hasMarketplaceCards(allToolResults)) {
+        return mkRejected(call, startedAt, parallelGroup, 'Not run: the store entries are already shown as plugin cards in this reply. Explain them in prose instead of drawing them again.');
+      }
 
       // —— PreToolUse hook：拦截 / 改写参数 / 注入上下文（host-only；云端在 runHooks 顶部即空判定）——
       const preV = await runHooks('PreToolUse', {

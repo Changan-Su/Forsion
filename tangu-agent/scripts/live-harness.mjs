@@ -2194,10 +2194,12 @@ try {
     const items = results.flatMap(r => marketplaceItemsOf(r.result));
     const selected = items[0];
     const follow = selected ? await run(sessionId, `请查询 ID ${selected.id} 的详细说明和版本要求。`, 240000, cfg, 'desktop/2.13.4') : null;
-    const detail = follow?.toolResults.find(r => r.name === 'get_marketplace_plugin' && !r.isError);
-    const ok = !ev.toolCalls.some(name => ['sketch', 'intelligent_ui'].includes(name)) && !items.some(item => item.minAppVersion === '99.0.0') && ev.done && !ev.error && items.length >= 2 && !!detail && marketplaceItemsOf(detail.result).some(i => i.id === selected.id) && !follow.error && follow.done;
+    const detail = follow?.toolResults.find(r => r.name === 'get_marketplace_plugin' && !r.isError && marketplaceItemsOf(r.result).some(i => i.id === selected.id));
+    // chat 预设里 get_marketplace_plugin 要先 load_tools:模型判断搜索结果够用、第二轮再搜一次作答也算(skill 原话「搜索结果通常够推荐」),结果里写明走的哪条。
+    const viaSearch = cfg.preset === 'chat' && !detail && follow?.toolResults.some(r => r.name === 'search_marketplace' && !r.isError && marketplaceItemsOf(r.result).some(i => i.id === selected.id));
+    const ok = !ev.toolCalls.some(name => ['sketch', 'intelligent_ui'].includes(name)) && !items.some(item => item.minAppVersion === '99.0.0') && ev.done && !ev.error && items.length >= 2 && (!!detail || viaSearch) && !follow.error && follow.done;
     writeFileSync(join(OUT, `${key}-evidence.json`), JSON.stringify({ recommendation: ev, detail: follow, items }, null, 2));
-    return { ok, detail: `approved entries=${items.length}; immutable ID detail=${!!detail}; no installation tool exposed`, output: ev.content + '\n\n' + (follow?.content || ''), toolCalls: [...ev.toolCalls, ...(follow?.toolCalls || [])], ttftMs: ttft(ev), tokens: tokensOf(ev) + (follow ? tokensOf(follow) : 0) };
+    return { ok, detail: `approved entries=${items.length}; immutable ID detail=${detail ? 'get' : viaSearch ? 'search' : 'none'}; no installation tool exposed`, output: ev.content + '\n\n' + (follow?.content || ''), toolCalls: [...ev.toolCalls, ...(follow?.toolCalls || [])], ttftMs: ttft(ev), tokens: tokensOf(ev) + (follow ? tokensOf(follow) : 0) };
   });
 
   await scenario('visualfigures', 'visualfigures 图表与流程图组件', async () => {
