@@ -57,3 +57,20 @@ describe('run_ui_command 的回执按调用返回', () => {
     expect(buildCommandCatalog().find((c) => c.id === 't-open')?.state).toBeUndefined()
   })
 })
+
+describe('run_ui_command 的结构化回执 { state, result }', () => {
+  it('result 序列化成字符串交回;超长截断;state 取对象里的;旧的字符串回执照旧', async () => {
+    const { runAgentCommand, UI_RESULT_MAX } = await import('@/agentCommands')
+    const { addCommand } = await import('@lcl/engine')
+    addCommand({ id: 't-query', title: 'query', run: () => {}, invoke: {
+      description: 'test', run: () => ({ state: '2 frames', result: { frames: ['a', 'b'] } }),
+    } })
+    addCommand({ id: 't-text', title: 'text', run: () => {}, invoke: { description: 'test', run: () => ({ result: 'plain' }), state: () => 'probe' } })
+    addCommand({ id: 't-big', title: 'big', run: () => {}, invoke: { description: 'test', run: () => ({ result: 'x'.repeat(UI_RESULT_MAX + 50) }) } })
+    addCommand({ id: 't-cyc', title: 'cyc', run: () => {}, invoke: { description: 'test', run: () => { const o: Record<string, unknown> = {}; o.self = o; return { result: o } } } })
+    expect(await runAgentCommand('t-query')).toEqual({ ok: true, state: '2 frames', result: '{"frames":["a","b"]}' })
+    expect(await runAgentCommand('t-text')).toEqual({ ok: true, state: 'probe', result: 'plain' })
+    expect((await runAgentCommand('t-big')).result).toHaveLength(UI_RESULT_MAX + '…[truncated]'.length)
+    expect((await runAgentCommand('t-cyc')).result).toBe('[result could not be serialized]')
+  })
+})

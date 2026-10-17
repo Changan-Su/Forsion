@@ -19,7 +19,7 @@ import { saveSection } from '../core/config.js';
 import { deps } from '../seams/runtime.js';
 import { resolveInquiry } from '../services/inquiries.js';
 import { parseDeskShotBody, resolveDeskShot } from '../services/deskCapture.js';
-import { resolveUiAction } from '../services/uiAck.js';
+import { cleanUiResult, resolveUiAction } from '../services/uiAck.js';
 import { normalizeClientResult, normalizeUiValues, sanitizeText } from './runs.js';
 import { parseRemoteOrigin, remoteArgsOverrideRejected, remoteArgsOverrideBody, taintRunRemote, type RemoteInfo } from '../services/remoteOrigin.js';
 import { listPrompts, onPromptChange, promptsRev, sessionAttention, sweepTerminal, type AnswerBy, type PendingPrompt } from '../services/pendingPromptIndex.js';
@@ -234,6 +234,7 @@ router.post('/agent/runs/:runId/inquiries/:inquiryId', authMiddleware, async (re
         ok: b.ok === true,
         ...(typeof b.error === 'string' ? { error: sanitizeText(b.error, 500) } : {}),
         ...(typeof b.state === 'string' ? { state: sanitizeText(b.state, 200) } : {}),
+        ...(typeof b.result === 'string' && b.result ? { result: cleanUiResult(b.result) } : {}),
         ...(settings ? { settings } : {}),
       });
       if (!okUi) return res.status(410).json({ detail: 'ui action is no longer pending' });
