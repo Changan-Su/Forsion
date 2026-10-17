@@ -31,6 +31,7 @@ import {
   paperSize,
   reflowPoint,
   PAPER_IDS,
+  MARGIN,
   type BoardSettings,
   type Bounds,
 } from '@amadeus-shared/excalidraw/board'
@@ -58,6 +59,7 @@ const MIN_VISIBLE_PX = 4
 const V_GRAD = 'linear-gradient(90deg, var(--amx-grid-line) 0 1px, transparent 1px)'
 const H_GRAD = 'linear-gradient(180deg, var(--amx-grid-line) 0 1px, transparent 1px)'
 
+const clampNum = (v: number, lo: number, hi: number): number => Math.min(Math.max(v, lo), hi)
 const mod = (a: number, n: number): number => ((a % n) + n) % n
 
 /** 往引擎自己的 DOM 里插一个挂点,并在引擎重挂那块 DOM 时**自动补回去**。
@@ -463,6 +465,41 @@ export default function ExcalidrawCanvas({
     [],
   )
 
+  /** 打开时适配全图(对标 Obsidian 插件缺省开的 zoomToFitOnOpen),每次挂载只做一次。
+   *  - 挂 onInitialize 而不是 onExcalidrawAPI:后者在引擎装载初始内容**之前**就来,那时场景还是空的。
+   *    再晚一帧:onInitialize 与装载后的第一次 onChange 同在一次 didUpdate 里且排在它前面,
+   *    等一帧 bounds 才是真的,下面 onScrollChange → clampView 用的就是对的页带,不会把适配结果拽走。
+   *  - 后台 tab 里挂载(画布 0×0)时先挂着,等 ResizeObserver 看见真尺寸再补。⚠️ 判尺寸看 DOM,别看
+   *    appState.width/height:引擎拿窗口尺寸当初值,DOM 是 0×0 时又不更新它 —— 按那个假尺寸适配,
+   *    露出来以后内容被裁(Codex 评审抓到)。
+   *  - 空白板不动:原点在左上、100%,就是新建时该有的样子。
+   *  - 纸张:适配到页带第一页,算法与 clampViewport 同一套余量;结果先过一遍钳制再下发,
+   *    所以随后那次 clampView 必然是空操作 —— 两边不会互相拉扯。 */
+  const fitState = useRef<'loading' | 'pending' | 'done'>('loading')
+  const tryFit = useCallback(
+    (a: ExcalidrawImperativeAPI) => {
+      const host = hostRef.current
+      if (fitState.current !== 'pending' || !host?.offsetWidth || !host.offsetHeight) return
+      const st = a.getAppState()
+      fitState.current = 'done'
+      const els = a.getSceneElements()
+      const b = elementBounds(els)
+      const page = pageRect(settings, pageRange(settings, b).min)
+      if (!page) {
+        if (els.length) a.zoomToFit() // 放大上限读假宿主的 zoomToFitMaxLevel(=2,见 forkRuntime)
+        return
+      }
+      const zoom = clampNum(Math.min(st.width / (page.w * (1 + 2 * MARGIN)), st.height / (page.h * (1 + 2 * MARGIN))), 0.1, 2)
+      const v = { scrollX: (st.width / zoom - page.w) / 2 - page.x, scrollY: (st.height / zoom - page.h) / 2 - page.y, zoom, width: st.width, height: st.height }
+      const c = clampViewport(settings, v, b) ?? v
+      a.updateScene({
+        appState: { scrollX: c.scrollX, scrollY: c.scrollY, zoom: { value: c.zoom as AppState['zoom']['value'] } },
+        captureUpdate: CaptureUpdateAction.NEVER,
+      })
+    },
+    [settings],
+  )
+
   /** 换排布方向 = **搬用户内容**:每个元素跟着它所在的那一页走,页内偏移不变。
    *  进 undo 栈(IMMEDIATELY),后悔了 ⌘Z 就能回去。首次挂载不跑 —— 只认真正的切换。 */
   const prevFlow = useRef(settings.flow)
@@ -524,10 +561,12 @@ export default function ExcalidrawCanvas({
     const ro = new ResizeObserver(() => {
       syncZoom() // 从隐藏变可见的那一下:currentCSSZoom 这才有真值(见上面那条 effect 的长注释)
       layout(clampView(api.getAppState()))
+      // 引擎自己的 ResizeObserver 未必排在这条前面,等一帧它的 width/height 才是新的
+      if (fitState.current === 'pending') requestAnimationFrame(() => tryFit(api))
     })
     ro.observe(el)
     return () => ro.disconnect()
-  }, [api, layout, clampView, syncZoom])
+  }, [api, layout, clampView, syncZoom, tryFit])
 
   return (
     <div className="amx-boardhost" ref={hostRef} data-full={full || undefined}>
@@ -536,8 +575,13 @@ export default function ExcalidrawCanvas({
         initialData={initialData}
         theme={theme}
         langCode={langCode}
-        // 只在分享页传(受控 = 引擎的 Option+R 与右键「查看模式」都失效);其余时候交给引擎和视图岛
+        // ⚠️ 只在分享页传 true,其余传 undefined:prop 一旦有值(哪怕 false)就是受控,引擎的「查看模式」
+        //    动作(Option+R / 右键菜单)predicate 要求 `typeof props.viewModeEnabled === 'undefined'`,整个失效。
         viewModeEnabled={viewMode || undefined}
+        onInitialize={(a) => {
+          fitState.current = 'pending'
+          requestAnimationFrame(() => tryFit(a))
+        }}
         // serializeAsJSON 出的正是 .excalidraw 的规范形状({type,version,source,elements,appState,files}),
         // 且自带 appState 裁剪(去掉 collaborators/选中态等瞬时字段)—— 别自己拼,拼不全也裁不干净。
         // 顺带一提:裁剪把 scrollX/zoom 也剪掉了,所以视口纠偏不会额外触发写盘。

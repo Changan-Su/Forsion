@@ -69,7 +69,6 @@ html .excalidraw.amx-board-portal {
   --color-brand-hover: var(--accent-hover);
   --color-brand-active: var(--accent-hover);
   --color-selection: var(--accent-ink);
-  --select-highlight-color: var(--accent-ink);
   --focus-highlight-color: var(--accent-ink);
   --link-color: var(--accent-ink);
   --link-color-hover: var(--accent-hover);
@@ -89,6 +88,9 @@ html .excalidraw.amx-board-portal {
   --button-hover-bg: var(--overlay-light);
   --button-active-bg: var(--overlay-medium);
   --button-active-border: var(--overlay-strong);
+  /* 右键菜单悬停行的底(引擎里只有 `.context-menu-item:hover` 读它),字还是 --popup-text-color。
+     ⚠️ 别再接 --accent-ink:它和正文同色系,亮档黑底黑字、暗档白底白字。照 DESIGN 菜单口径走中性悬停底。 */
+  --select-highlight-color: var(--menu-hover);
   --input-bg-color: var(--bg-card);
   --input-hover-bg-color: var(--overlay-subtle);
   --overlay-bg-color: var(--overlay-light);
