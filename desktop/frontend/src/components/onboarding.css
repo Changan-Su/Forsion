@@ -377,3 +377,6 @@ button.ob-progress-item:focus-visible { outline: var(--focus-ring) solid var(--s
   .ob-done-mark::after { content: ''; position: absolute; inset: 0; border-radius: inherit; animation: ob-ring .9s ease-out .55s both; }
   .ob-done-mark .ob-draw path, .ob-done-mark .ob-draw polyline { animation-duration: .45s; animation-delay: .5s; }
 }
+/* 完成页「之后在使用指南里慢慢学」:与上面几行同一排法,按钮靠右、与文字垂直居中。 */
+.ob-next-steps > .ob-next-guide { align-items: center; }
+.ob-next-guide .btn { margin-left: auto; flex: none; }

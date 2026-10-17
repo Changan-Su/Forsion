@@ -6,7 +6,7 @@
  *    两区高度弹性分配,都挤时各保一半。
  *  - 右键空白/两区 + 号 = 新建 Space / 添加命令(从命令面板选)/ 新建收纳夹;账号卡(pinned)钉死最底。
  *  - 左面板收起时,指针停在 Space 图标上 → 右侧浮出那个 Space 的左面板(SpacePeek),可直接操作;移开即收。 */
-import { useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronDown, ChevronUp, ChevronsLeft, ChevronsRight, Folder as FolderIcon, MoreHorizontal, Plus, Zap } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
@@ -57,7 +57,16 @@ function slotHint(i: number): string {
   return hk ? formatHotkey(hk, isMacPlatform()) : ''
 }
 
-function RibbonItemView({ item, expanded }: { item: RibbonItem; expanded: boolean }) {
+/** 带 dot 的那几项里此刻亮着的 id(一处订阅,图标、「…」、收纳夹三处共用)。 */
+function useDotted(items: RibbonItem[]): Set<string> {
+  // 按 items 本身重订阅:同 id 的项换了 dot 来源(重注册)也要跟着换,别只看 id 序列(Codex 评审)
+  const withDot = useMemo(() => items.filter((i) => i.dot), [items])
+  const subscribe = useCallback((cb: () => void) => { const offs = withDot.map((i) => i.dot!.subscribe(cb)); return () => { for (const off of offs) off() } }, [withDot])
+  const key = useSyncExternalStore(subscribe, () => withDot.filter((i) => i.dot!.get()).map((i) => i.id).join('\n'))
+  return useMemo(() => new Set(key ? key.split('\n') : []), [key])
+}
+
+function RibbonItemView({ item, expanded, dot }: { item: RibbonItem; expanded: boolean; dot?: boolean }) {
   if (item.component) {
     const C = item.component
     return <C expanded={expanded} />
@@ -68,6 +77,7 @@ function RibbonItemView({ item, expanded }: { item: RibbonItem; expanded: boolea
   return (
     <button className="rb-btn" aria-label={name || undefined} data-rb-tip={expanded ? undefined : name || undefined} onClick={item.onClick}>
       {Icon && <Icon size={18} />}
+      {dot && <span className="rb-badge rb-dot" aria-hidden="true" />}
       {expanded && <span className="rb-label">{name}</span>}
     </button>
   )
@@ -111,6 +121,7 @@ const HOME_DELAY = 600
 
 export function Ribbon() {
   const items = useRibbonStore((s) => s.items)
+  const dotted = useDotted(items)
   const expanded = useRibbonStore((s) => s.expanded)
   const order = useRibbonStore((s) => s.order)
   const bottomOrder = useRibbonStore((s) => s.bottomOrder)
@@ -894,6 +905,7 @@ export function Ribbon() {
         onDrop={(e) => { if (!drag || drag.id.startsWith('folder:')) return; e.preventDefault(); e.stopPropagation(); dropIntoFolder(f) }}
       >
         <Icon size={18} />
+        {f.items.some((id) => dotted.has(id)) && <span className="rb-badge rb-dot" aria-hidden="true" />}
         {expanded && <span className="rb-label">{f.name}</span>}
       </button>
     )
@@ -917,13 +929,14 @@ export function Ribbon() {
         onDrop={(e) => { e.preventDefault(); e.stopPropagation(); dropOnBar(zone, zone === 'bottom' ? (botE[0]?.id ?? null) : null) }}
       >
         <Icon size={18} />
+        {!open && (zone === 'top' ? top : bot).tail.some((e) => e.kind === 'item' ? dotted.has(e.id) : e.kind === 'folder' && e.folder.items.some((id) => dotted.has(id))) && <span className="rb-badge rb-dot" aria-hidden="true" />}
         {expanded && <span className="rb-label">{name}</span>}
       </button>
     )
   }
   const renderEntry = (e: Entry, forceExpanded?: boolean): React.ReactNode => {
     const ex = forceExpanded ?? expanded
-    if (e.kind === 'item') return <RibbonItemView item={e.item} expanded={ex} />
+    if (e.kind === 'item') return <RibbonItemView item={e.item} expanded={ex} dot={dotted.has(e.id)} />
     if (e.kind === 'cmd') return <CmdItemView cmd={e.cmd} expanded={ex} overrideIcon={iconByName(commandIcons[e.cmd.id])} />
     return renderFolderBtn(e.folder)
   }

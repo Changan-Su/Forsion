@@ -3,7 +3,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { MotionConfig, motion } from 'framer-motion'
 import {
   ArrowRight, ArrowLeft, Bot, Check, ChevronRight, Cloud, Flag, KeyRound, Loader2, LogIn, ExternalLink,
-  MonitorCog, FolderOpen, Sun, Moon, X, FileText, RefreshCw, Palette, ShieldCheck, Sparkles, Wrench, Globe2, Zap,
+  MonitorCog, FolderOpen, Sun, Moon, X, FileText, RefreshCw, Palette, ShieldCheck, Sparkles, Wrench, Globe2, Zap, BookOpen,
 } from 'lucide-react'
 import { listModels, testProviderConnection } from '../services/backendService'
 import { DesktopPermissions, hasDesktopPermissions } from './DesktopPermissions'
@@ -33,6 +33,10 @@ import { EnvProbeSection } from './EnvProbeSection'
 import './onboardingMessages'
 import './onboarding.css'
 import { connectionTarget } from '../services/engine/targets'
+import { setActiveSpace, useSpaceStore } from '@lcl/engine'
+
+/** 使用指南 Space(Forsion Extend 0.9 起随包):引导最后一步给一个入口。 */
+const GUIDE_SPACE_ID = 'forsion-guide'
 
 export const likelyMainlandChina = (): boolean => {
   try {
@@ -287,6 +291,7 @@ export const OnboardingWizard: React.FC<{
   }, [showChangelog])
   // 结束只走一次:退场动效那半秒里引导还挂着,再按一次回车 / 再点一次按钮不能重复收尾。
   const finished = useRef(false)
+  const guideReady = useSpaceStore((s) => s.spaces.some((x) => x.id === GUIDE_SPACE_ID))
   const finish = (): void => {
     if (finished.current) return
     finished.current = true
@@ -766,6 +771,9 @@ export const OnboardingWizard: React.FC<{
               <div><Sparkles size={18} /><span>{t('onboarding.guide.moreModels')}<small>{t('onboarding.guide.moreModelsPath')}</small></span></div>
               <div><MonitorCog size={18} /><span>{t('onboarding.guide.moreTools')}<small>{t('onboarding.guide.moreToolsPath')}</small></span></div>
             </> : <p>{t('onboarding.done.cloudLine1')}<br />{t('onboarding.done.cloudLine2')}</p>}
+            {/* 使用指南随 Extend 装上(Space id 见 Extend 的 spaces/guide/space.json);没装 / 被关掉就不提 */}
+            {guideReady && <div className="ob-next-guide"><BookOpen size={18} /><span>{t('onboarding.guide.moreGuide')}</span>
+              <button type="button" className="btn ghost sm" disabled={navLocked} onClick={() => { finish(); setActiveSpace(GUIDE_SPACE_ID) }}>{t('onboarding.guide.openGuide')}</button></div>}
           </div>
         </div>}
       </div>

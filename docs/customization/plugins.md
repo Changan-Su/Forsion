@@ -238,3 +238,23 @@ they are not immutable historical snapshots or cross-device data replicas.
 首方内置包的 `registerSettingsView({ category: 'forsion', ... })` 可用 `parent` 指向同插件的一级页 ID；宿主只在左栏列出父页，在正文上方用页内标签切换父页与子页。父页本身是默认标签，`tabTitle` 指定它的标签文案；`title` 仍是左栏页名。两种标签均可传函数以跟随语言。`aliases` 是旧页 ID，优先认真实 ID；`keywords` 为设置搜索提供中英别名。父页缺失、跨插件或成环时保留为独立入口，不静默隐藏。挂载与卸载契约不变，切换分段仍调用现有 mount / dispose。旧宿主忽略这些可选元数据，继续显示平铺页面。
 
 First-party `registerSettingsView({ category: 'forsion', ... })` pages may set `parent` to a top-level page ID in the same plugin. The sidebar lists the parent; section tabs select the parent page or one of its children. The parent is the default tab, and `tabTitle` supplies its section label while `title` remains the sidebar label. Both labels may be functions evaluated after locale changes. `aliases` maps old page IDs, with real IDs taking priority; `keywords` supplies search aliases. Missing, cross-plugin or cyclic parents remain standalone. The existing mount/dispose lifecycle applies to every section switch. Older hosts ignore these optional fields and retain flat navigation.
+
+### 使用指南用到的接缝 / Seams used by the Guide
+
+2026-10-17 起，宿主给插件多了几条接缝（随 Forsion Extend 的「使用指南」Space 一起加的）：
+
+- `ctx.app.openSpace?(id)`：切到某个 Space，布局建好后 resolve；不认识的 id 返回 `false`。
+- `ctx.app.openLink?(url)`：在应用内打开 `forsion://` 链接，只导航不执行。插件页、收件箱信和笔记正文里的 `forsion://` 链接，宿主本来就在应用内处理，不经过系统。
+- `ctx.app.runCommand?(id)`：执行命令面板里已有的命令。**只对首方内置包生效**，其他插件调用一律返回 `false`。
+- `ctx.achievements.count?(event, { own? })` / `subscribe?(cb)` / `isClaimed?(id)` / `claim?(id)`：读成就计数（缺省读官方事件，只读；读不到别家插件的计数），计数或领取变了就回调，读或领取自己系列里的成就。
+- `ctx.inbox`（**只给首方内置包**）：`post({ title, body })` 发一封本机系统消息，`archive(id)`，`registerCard({ sender, mount })` 在你自己的信下面挂一块自绘卡片，并设置发件人显示名。
+- 列表图标词表新增 `circle`（没做完）、`circle-check`（做完）、`lock`（锁住），给进度类列表用。`todo` 是块菜单的「待办」图标，自带勾，别拿它表示没做完。
+
+Since 2026-10-17 the host offers a few more seams (added with the Guide Space in Forsion Extend):
+
+- `ctx.app.openSpace?(id)` switches to a Space and resolves once its layout is built; an unknown id returns `false`.
+- `ctx.app.openLink?(url)` opens a `forsion://` link inside the app. It only navigates, never runs anything. `forsion://` links in plugin pages, inbox letters and note text are already routed inside the app without going through the system.
+- `ctx.app.runCommand?(id)` runs an existing command-palette command. **First-party built-in bundles only**; for any other plugin it returns `false`.
+- `ctx.achievements.count?(event, { own? })` / `subscribe?(cb)` / `isClaimed?(id)` / `claim?(id)` read achievement counters (official events by default, read-only; other plugins' counters always read 0), call back when counters or claims change, and read or claim achievements in your own series.
+- `ctx.inbox` (**first-party built-in bundles only**): `post({ title, body })` sends a local system message, `archive(id)` archives one, and `registerCard({ sender, mount })` draws your own card under your letters and sets the sender name.
+- The list icon vocabulary gains `circle` (not done), `circle-check` (done) and `lock` (locked) for progress lists. `todo` is the block menu's to-do icon and already shows a tick, so don't use it for "not done".

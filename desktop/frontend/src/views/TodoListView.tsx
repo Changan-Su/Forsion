@@ -42,6 +42,7 @@ import { todoDueMeta } from './calendar/todoMeta'
 import { BUCKET_LABEL, COLLAPSED_BY_DEFAULT, ORDER, VIEWS, bucketOf, dropDay, inView, moveToDay, sortTimeOf, type TodoBucket, type TodoView } from './calendar/todoGroups'
 import { zoomOf, type Leaf } from '@lcl/engine'
 import { registerMessages, useI18n } from '../i18n'
+import { track } from '../achievements/store'
 
 registerMessages({
   'todolist.title': { zh: '待办', en: 'To-dos' },
@@ -152,6 +153,8 @@ export function TodoListView({ params, leaf }: { params?: Record<string, unknown
   const mdMarks = useMdMarks()
   const rootRef = useRef<HTMLDivElement>(null)
   const wide = useWide(rootRef)
+  // 引导「单独打开待办」:主区标签 / 浮窗才算,侧栏、日历右栏(无 leaf)、Mini 不算;每次挂载计一次。
+  useEffect(() => { if (leaf?.loc === 'main' && !params?.miniSurface) track('todo.open') }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // 筛选:以参数为初值,改了写回参数(有 leaf 的宿主会存进布局)。
   const [view, setViewState] = useState<TodoView>(opts.view)
@@ -240,6 +243,7 @@ export function TodoListView({ params, leaf }: { params?: Record<string, unknown
   const check = (r: Row, next: boolean, write: () => void): void => {
     write()
     if (!next) return
+    track('todo.done')
     setLinger((s) => new Set(s).add(r.key))
     setTimeout(() => setLinger((s) => { const n = new Set(s); n.delete(r.key); return n }), 1000)
   }

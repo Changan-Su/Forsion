@@ -1486,7 +1486,7 @@ function openUrlHandler(wc: Electron.WebContents, fromGuest = false) {
     if (isHttpUrl(url)) {
       if (!wc.isDestroyed()) wc.send('app:open-url', url, fromGuest)
       else shell.openExternal(url)
-    }
+    } else if (!fromGuest && isForsionUrl(url)) deliverDeepLink(url) // 应用自己页里 window.open 的 forsion://(链接卡的「打开」);网页里的不认
     return { action: 'deny' }
   }
 }

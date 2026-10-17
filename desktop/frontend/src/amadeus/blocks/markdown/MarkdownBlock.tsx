@@ -131,6 +131,7 @@ import { unescapeHighlightAtLineStart, unescapeTagAtLineStart } from './tagEscap
 import { mathLivePreviewPlugin, unescapeMathSource } from './mathLivePreview' // LaTeX 实况预览:公式常驻纯文本,离行才渲染(见该文件）
 import { pluginEditorExtensions } from '../../plugins/editorExtensions'
 import { registerMessages, subscribeLocale, translate, useI18n } from '../../../i18n'
+import { track } from '../../../achievements/store'
 
 // 本文件的文案命名空间恒为 `mdblock.*`(别的组件在同一本全局字典里注册,撞键=静默覆盖)。
 // ⚠️ 模块作用域的表(SLASH_ITEMS)只存**键**,取文案一律在渲染期 t()/translate() ——
@@ -1430,6 +1431,7 @@ export function MilkdownInner({
           view.dispatch(tr.setSelection(TextSelection.create(tr.doc, w.from + inner.length + 2)))
         } else {
           view.dispatch(view.state.tr.insertText(`${name}]]`, w.from, w.to))
+          track('note.wikilink') // 新写一条双链(改已有链接的目标名不算)
         }
         view.focus()
       })
