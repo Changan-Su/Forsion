@@ -399,15 +399,18 @@ export default function ExcalidrawCanvas({
    *  - 挂 onInitialize 而不是 onExcalidrawAPI:后者在引擎装载初始内容**之前**就来,那时场景还是空的。
    *    再晚一帧:onInitialize 与装载后的第一次 onChange 同在一次 didUpdate 里且排在它前面,
    *    等一帧 bounds 才是真的,下面 onScrollChange → clampView 用的就是对的页带,不会把适配结果拽走。
-   *  - 画布 0×0(后台 tab 里挂载)时适配会缩到最小:先挂着,等 ResizeObserver 看见真尺寸再补。
+   *  - 后台 tab 里挂载(画布 0×0)时先挂着,等 ResizeObserver 看见真尺寸再补。⚠️ 判尺寸看 DOM,别看
+   *    appState.width/height:引擎拿窗口尺寸当初值,DOM 是 0×0 时又不更新它 —— 按那个假尺寸适配,
+   *    露出来以后内容被裁(Codex 评审抓到)。
    *  - 空白板不动:原点在左上、100%,就是新建时该有的样子。
    *  - 纸张:适配到页带第一页,算法与 clampViewport 同一套余量;结果先过一遍钳制再下发,
    *    所以随后那次 clampView 必然是空操作 —— 两边不会互相拉扯。 */
   const fitState = useRef<'loading' | 'pending' | 'done'>('loading')
   const tryFit = useCallback(
     (a: ExcalidrawImperativeAPI) => {
+      const host = hostRef.current
+      if (fitState.current !== 'pending' || !host?.offsetWidth || !host.offsetHeight) return
       const st = a.getAppState()
-      if (fitState.current !== 'pending' || !st.width || !st.height) return
       fitState.current = 'done'
       const els = a.getSceneElements()
       const b = elementBounds(els)

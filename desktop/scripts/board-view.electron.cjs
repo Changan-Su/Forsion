@@ -5,6 +5,7 @@
  *   Z 禅模式:工具岛连同数字角标淡出,「退出禅模式」在底部正中、不压缩放条、是胶囊(亮 / 暗)
  *   C 右键菜单悬停行的字看得见(亮 / 暗)
  *   P 纸张白板适配到第一页,随后的视口钳制是空操作(不拉扯);E 空白板仍是原点 100%
+ *   H 后台(隐藏)挂载的白板露出来时才适配,不按窗口尺寸算
  * 截图(亮暗各一张)落 OUT_DIR,缺省系统临时目录,观感自己看(DESIGN §8)。
  *
  * 跑(先在本检出 `npm run build`;devlock 路径按仓根算):
@@ -136,16 +137,9 @@ async function main() {
       const back = await win.evaluate(() => { const tb = [...document.querySelectorAll('.amx-drawview .excalidraw')].find((e) => e.offsetParent).querySelector('.App-toolbar'); const cs = getComputedStyle(tb); return { op: cs.opacity, vis: cs.visibility } })
       check(`Z5[${mode}] 退出后工具岛回来`, back.op === '1' && back.vis === 'visible', JSON.stringify(back))
 
-      // 右键一个元素,悬停到一行上
-      const target = await win.evaluate(() => {
-        const el = [...document.querySelectorAll('.amx-drawview .excalidraw')].find((e) => e.offsetParent)
-        const key = Object.keys(el).find((k) => k.startsWith('__reactFiber'))
-        let f = el[key]; while (f && !(f.stateNode && f.stateNode.state && f.stateNode.state.zoom)) f = f.return
-        const st = f.stateNode.state, e = f.stateNode.scene.getNonDeletedElements()[0], r = el.getBoundingClientRect(), z = st.zoom.value
-        return { x: r.x + (e.x + e.width / 2 + st.scrollX) * z, y: r.y + (e.y + e.height / 2 + st.scrollY) * z }
-      })
-      await win.mouse.click(target.x, target.y, { button: 'right' }); await win.waitForTimeout(500)
-      const row = win.locator('.context-menu-item').nth(3)
+      // 右键空白画布,悬停到一行上(元素菜单与画布菜单是同一条 .context-menu-item:hover 规则;用空白处,这步就不依赖适配)
+      await win.mouse.click(1350, 820, { button: 'right' }); await win.waitForTimeout(500)
+      const row = win.locator('.context-menu-item').nth(1)
       await row.hover(); await win.waitForTimeout(300)
       const hv = await row.evaluate((b) => {
         const cs = getComputedStyle(b), lab = getComputedStyle(b.querySelector('.context-menu-item__label'))
@@ -178,6 +172,17 @@ async function main() {
     await open('空白板.excalidraw')
     const e1 = await view()
     check('E1 空白板仍是 100%、原点', e1.zoom === 1 && e1.scrollX === 0 && e1.scrollY === 0, JSON.stringify([e1.scrollX, e1.scrollY, e1.zoom]))
+
+    // ── 2d 后台挂载:藏着装载完、露出来才适配(引擎的初始宽高是窗口尺寸,按它适配露出后内容被裁) ──
+    await win.evaluate(() => { const s = document.createElement('style'); s.id = 'bv-hide'; s.textContent = '.amx-drawview{display:none!important}'; document.head.append(s) })
+    const row = win.locator('.t2s-srow', { has: win.locator('.t2s-srow-title', { hasText: /^远处白板\.excalidraw$/ }) }).first()
+    await row.click({ timeout: 15000 })
+    await win.waitForSelector('.amx-drawview .excalidraw canvas.interactive', { timeout: 30000, state: 'attached' })
+    await win.waitForTimeout(2500)
+    await win.evaluate(() => document.getElementById('bv-hide')?.remove())
+    await win.waitForTimeout(1200)
+    const h1 = await view()
+    check('H1 藏着挂载、露出后内容仍全部在视口内', h1.inView, JSON.stringify({ zoom: h1.zoom, w: h1.w, h: h1.h }))
   } finally { await app.close() }
   const bad = results.filter((r) => !r.ok)
   console.log(`\n${results.length - bad.length}/${results.length} PASS  截图:${OUT}`)
