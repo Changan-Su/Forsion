@@ -2447,7 +2447,7 @@
       "type": "function",
       "function": {
         "name": "delegate",
-        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns) and return its final report. One-shot, no back-and-forth: for long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. For multi-round deliberation with a peer, use start_discussion instead.",
+        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns) and return its final report. One-shot, no back-and-forth: for long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. For multi-round deliberation with a peer, use start_discussion instead. For work the user should see as its own session in their list (e.g. they ask you to open child sessions), use start_session instead.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -2850,6 +2850,30 @@
             "id"
           ],
           "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "start_session",
+        "description": "Start a child session: a separate, user-visible conversation (listed under this one in the session list) that works on one self-contained task on its own, in the same project and with your settings, while this conversation stays free. When it finishes or stops to ask something, its result comes back to you automatically in a <child_sessions_update> message (once no other child is still running) — you never need to poll or wait. Use it for independent pieces of work that take a while (research one option each, try an approach, do a separate change); use delegate instead for a quick lookup whose answer you need right now. One call per independent piece. The child cannot see this conversation, so the message must be a complete brief.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "description": "Short title shown in the session list, in the user's language (max ~60 chars)."
+            },
+            "message": {
+              "type": "string",
+              "description": "The complete brief: goal, the context it needs, constraints, and what done looks like."
+            }
+          },
+          "required": [
+            "title",
+            "message"
+          ]
         }
       }
     },
@@ -3232,7 +3256,7 @@
       "type": "function",
       "function": {
         "name": "delegate",
-        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns) and return its final report. One-shot, no back-and-forth: for long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. For multi-round deliberation with a peer, use start_discussion instead.",
+        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns) and return its final report. One-shot, no back-and-forth: for long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. For multi-round deliberation with a peer, use start_discussion instead. For work the user should see as its own session in their list (e.g. they ask you to open child sessions), use start_session instead.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -3635,6 +3659,30 @@
             "id"
           ],
           "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "start_session",
+        "description": "Start a child session: a separate, user-visible conversation (listed under this one in the session list) that works on one self-contained task on its own, in the same project and with your settings, while this conversation stays free. When it finishes or stops to ask something, its result comes back to you automatically in a <child_sessions_update> message (once no other child is still running) — you never need to poll or wait. Use it for independent pieces of work that take a while (research one option each, try an approach, do a separate change); use delegate instead for a quick lookup whose answer you need right now. One call per independent piece. The child cannot see this conversation, so the message must be a complete brief.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "description": "Short title shown in the session list, in the user's language (max ~60 chars)."
+            },
+            "message": {
+              "type": "string",
+              "description": "The complete brief: goal, the context it needs, constraints, and what done looks like."
+            }
+          },
+          "required": [
+            "title",
+            "message"
+          ]
         }
       }
     },
@@ -4190,7 +4238,7 @@
       "type": "function",
       "function": {
         "name": "delegate",
-        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns) and return its final report. One-shot, no back-and-forth: for long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. For multi-round deliberation with a peer, use start_discussion instead.",
+        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns) and return its final report. One-shot, no back-and-forth: for long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. For multi-round deliberation with a peer, use start_discussion instead. For work the user should see as its own session in their list (e.g. they ask you to open child sessions), use start_session instead.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -4764,6 +4812,30 @@
             "id"
           ],
           "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "start_session",
+        "description": "Start a child session: a separate, user-visible conversation (listed under this one in the session list) that works on one self-contained task on its own, in the same project and with your settings, while this conversation stays free. When it finishes or stops to ask something, its result comes back to you automatically in a <child_sessions_update> message (once no other child is still running) — you never need to poll or wait. Use it for independent pieces of work that take a while (research one option each, try an approach, do a separate change); use delegate instead for a quick lookup whose answer you need right now. One call per independent piece. The child cannot see this conversation, so the message must be a complete brief.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "description": "Short title shown in the session list, in the user's language (max ~60 chars)."
+            },
+            "message": {
+              "type": "string",
+              "description": "The complete brief: goal, the context it needs, constraints, and what done looks like."
+            }
+          },
+          "required": [
+            "title",
+            "message"
+          ]
         }
       }
     },
@@ -5338,7 +5410,7 @@
       "type": "function",
       "function": {
         "name": "delegate",
-        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns) and return its final report. One-shot, no back-and-forth: for long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. For multi-round deliberation with a peer, use start_discussion instead.",
+        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns) and return its final report. One-shot, no back-and-forth: for long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. For multi-round deliberation with a peer, use start_discussion instead. For work the user should see as its own session in their list (e.g. they ask you to open child sessions), use start_session instead.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -5918,6 +5990,30 @@
     {
       "type": "function",
       "function": {
+        "name": "start_session",
+        "description": "Start a child session: a separate, user-visible conversation (listed under this one in the session list) that works on one self-contained task on its own, in the same project and with your settings, while this conversation stays free. When it finishes or stops to ask something, its result comes back to you automatically in a <child_sessions_update> message (once no other child is still running) — you never need to poll or wait. Use it for independent pieces of work that take a while (research one option each, try an approach, do a separate change); use delegate instead for a quick lookup whose answer you need right now. One call per independent piece. The child cannot see this conversation, so the message must be a complete brief.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "description": "Short title shown in the session list, in the user's language (max ~60 chars)."
+            },
+            "message": {
+              "type": "string",
+              "description": "The complete brief: goal, the context it needs, constraints, and what done looks like."
+            }
+          },
+          "required": [
+            "title",
+            "message"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
         "name": "wait_for_user",
         "description": "Mark this conversation as waiting for the user. Call it every time your reply asks the user something they must answer before you can continue (a clarifying question, missing information, a choice, an approval): call it before your final message, then end your turn with the question. The session list then shows it as waiting for them until they reply. Do not call it while you are only waiting for child sessions (their results come back to you automatically; just end your turn), when you simply finished, or when you only offer optional next steps.",
         "parameters": {
@@ -6234,7 +6330,7 @@
       "type": "function",
       "function": {
         "name": "delegate",
-        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns) and return its final report. One-shot, no back-and-forth: for long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. For multi-round deliberation with a peer, use start_discussion instead.",
+        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns) and return its final report. One-shot, no back-and-forth: for long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. For multi-round deliberation with a peer, use start_discussion instead. For work the user should see as its own session in their list (e.g. they ask you to open child sessions), use start_session instead.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -6637,6 +6733,30 @@
             "id"
           ],
           "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "start_session",
+        "description": "Start a child session: a separate, user-visible conversation (listed under this one in the session list) that works on one self-contained task on its own, in the same project and with your settings, while this conversation stays free. When it finishes or stops to ask something, its result comes back to you automatically in a <child_sessions_update> message (once no other child is still running) — you never need to poll or wait. Use it for independent pieces of work that take a while (research one option each, try an approach, do a separate change); use delegate instead for a quick lookup whose answer you need right now. One call per independent piece. The child cannot see this conversation, so the message must be a complete brief.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "description": "Short title shown in the session list, in the user's language (max ~60 chars)."
+            },
+            "message": {
+              "type": "string",
+              "description": "The complete brief: goal, the context it needs, constraints, and what done looks like."
+            }
+          },
+          "required": [
+            "title",
+            "message"
+          ]
         }
       }
     },
@@ -6978,7 +7098,7 @@
       "type": "function",
       "function": {
         "name": "delegate",
-        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns) and return its final report. One-shot, no back-and-forth: for long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. For multi-round deliberation with a peer, use start_discussion instead.",
+        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns) and return its final report. One-shot, no back-and-forth: for long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. For multi-round deliberation with a peer, use start_discussion instead. For work the user should see as its own session in their list (e.g. they ask you to open child sessions), use start_session instead.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -7381,6 +7501,30 @@
             "id"
           ],
           "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "start_session",
+        "description": "Start a child session: a separate, user-visible conversation (listed under this one in the session list) that works on one self-contained task on its own, in the same project and with your settings, while this conversation stays free. When it finishes or stops to ask something, its result comes back to you automatically in a <child_sessions_update> message (once no other child is still running) — you never need to poll or wait. Use it for independent pieces of work that take a while (research one option each, try an approach, do a separate change); use delegate instead for a quick lookup whose answer you need right now. One call per independent piece. The child cannot see this conversation, so the message must be a complete brief.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "description": "Short title shown in the session list, in the user's language (max ~60 chars)."
+            },
+            "message": {
+              "type": "string",
+              "description": "The complete brief: goal, the context it needs, constraints, and what done looks like."
+            }
+          },
+          "required": [
+            "title",
+            "message"
+          ]
         }
       }
     },
@@ -7936,7 +8080,7 @@
       "type": "function",
       "function": {
         "name": "delegate",
-        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns) and return its final report. One-shot, no back-and-forth: for long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. For multi-round deliberation with a peer, use start_discussion instead.",
+        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns) and return its final report. One-shot, no back-and-forth: for long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. For multi-round deliberation with a peer, use start_discussion instead. For work the user should see as its own session in their list (e.g. they ask you to open child sessions), use start_session instead.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -8510,6 +8654,30 @@
             "id"
           ],
           "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "start_session",
+        "description": "Start a child session: a separate, user-visible conversation (listed under this one in the session list) that works on one self-contained task on its own, in the same project and with your settings, while this conversation stays free. When it finishes or stops to ask something, its result comes back to you automatically in a <child_sessions_update> message (once no other child is still running) — you never need to poll or wait. Use it for independent pieces of work that take a while (research one option each, try an approach, do a separate change); use delegate instead for a quick lookup whose answer you need right now. One call per independent piece. The child cannot see this conversation, so the message must be a complete brief.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "description": "Short title shown in the session list, in the user's language (max ~60 chars)."
+            },
+            "message": {
+              "type": "string",
+              "description": "The complete brief: goal, the context it needs, constraints, and what done looks like."
+            }
+          },
+          "required": [
+            "title",
+            "message"
+          ]
         }
       }
     },
@@ -9084,7 +9252,7 @@
       "type": "function",
       "function": {
         "name": "delegate",
-        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns) and return its final report. One-shot, no back-and-forth: for long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. For multi-round deliberation with a peer, use start_discussion instead.",
+        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns) and return its final report. One-shot, no back-and-forth: for long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. For multi-round deliberation with a peer, use start_discussion instead. For work the user should see as its own session in their list (e.g. they ask you to open child sessions), use start_session instead.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -9664,6 +9832,30 @@
     {
       "type": "function",
       "function": {
+        "name": "start_session",
+        "description": "Start a child session: a separate, user-visible conversation (listed under this one in the session list) that works on one self-contained task on its own, in the same project and with your settings, while this conversation stays free. When it finishes or stops to ask something, its result comes back to you automatically in a <child_sessions_update> message (once no other child is still running) — you never need to poll or wait. Use it for independent pieces of work that take a while (research one option each, try an approach, do a separate change); use delegate instead for a quick lookup whose answer you need right now. One call per independent piece. The child cannot see this conversation, so the message must be a complete brief.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "description": "Short title shown in the session list, in the user's language (max ~60 chars)."
+            },
+            "message": {
+              "type": "string",
+              "description": "The complete brief: goal, the context it needs, constraints, and what done looks like."
+            }
+          },
+          "required": [
+            "title",
+            "message"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
         "name": "wait_for_user",
         "description": "Mark this conversation as waiting for the user. Call it every time your reply asks the user something they must answer before you can continue (a clarifying question, missing information, a choice, an approval): call it before your final message, then end your turn with the question. The session list then shows it as waiting for them until they reply. Do not call it while you are only waiting for child sessions (their results come back to you automatically; just end your turn), when you simply finished, or when you only offer optional next steps.",
         "parameters": {
@@ -10213,7 +10405,7 @@
       "type": "function",
       "function": {
         "name": "delegate",
-        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns) and return its final report. One-shot, no back-and-forth: for long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. For multi-round deliberation with a peer, use start_discussion instead.",
+        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns) and return its final report. One-shot, no back-and-forth: for long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. For multi-round deliberation with a peer, use start_discussion instead. For work the user should see as its own session in their list (e.g. they ask you to open child sessions), use start_session instead.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -10845,6 +11037,30 @@
             "id"
           ],
           "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "start_session",
+        "description": "Start a child session: a separate, user-visible conversation (listed under this one in the session list) that works on one self-contained task on its own, in the same project and with your settings, while this conversation stays free. When it finishes or stops to ask something, its result comes back to you automatically in a <child_sessions_update> message (once no other child is still running) — you never need to poll or wait. Use it for independent pieces of work that take a while (research one option each, try an approach, do a separate change); use delegate instead for a quick lookup whose answer you need right now. One call per independent piece. The child cannot see this conversation, so the message must be a complete brief.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "description": "Short title shown in the session list, in the user's language (max ~60 chars)."
+            },
+            "message": {
+              "type": "string",
+              "description": "The complete brief: goal, the context it needs, constraints, and what done looks like."
+            }
+          },
+          "required": [
+            "title",
+            "message"
+          ]
         }
       }
     },

@@ -18,12 +18,13 @@ import { query } from '../src/core/db.js';
 import { createRun } from '../src/services/runStore.js';
 import { enqueueRun, activeSessionIds } from '../src/services/agentLoop.js';
 import { childSessionsProvider } from '../src/tools/builtin/childSessions.js';
-import { CHILD_UPDATE_OPEN, deliverPendingChildReports } from '../src/services/childSessions.js';
+import { CHILD_UPDATE_OPEN, deliverPendingChildReports, endsWithQuestion } from '../src/services/childSessions.js';
 
 let home: string | null = null;
 // 主会话 id 每个用例不同:自动接着做的计数在模块内存里,同名会串到下一个用例
 let P = 'P';
 let seq = 0;
+let reply = 'child result';
 afterEach(() => { delete process.env.TANGU_HOME; if (home) { try { rmSync(home, { recursive: true, force: true }); } catch { /* ignore */ } home = null; } });
 
 async function setup(): Promise<void> {
@@ -34,7 +35,7 @@ async function setup(): Promise<void> {
   const fakeLlm: any = {
     resolveModelAndKey: async () => ({ model: { provider: 'test', name: 'test' }, apiKey: 'k', baseUrl: 'b', apiModelId: 'm' }),
     buildProviderPayload: async (o: any) => ({ messages: o.messages.map((m: any) => ({ ...m })), tools: o.tools }),
-    streamProviderCompletion: async () => ({ content: 'child result', reasoning: '', toolCalls: [], usage: { prompt_tokens: 5, completion_tokens: 5 }, finishReason: 'stop' }),
+    streamProviderCompletion: async () => ({ content: reply, reasoning: '', toolCalls: [], usage: { prompt_tokens: 5, completion_tokens: 5 }, finishReason: 'stop' }),
   };
   const fakeBrain: any = { llm: fakeLlm, users: { getUserById: async () => ({ id: 'u1', username: 'u' }) }, memory: { getMemory: async () => ({ content: '' }) }, models: { hasDirectModel: () => false } };
   const fakeBilling: any = { canConsumeTokenPoints: async () => ({ ok: true }), consumeTokenPoints: async () => ({ ok: true }), calculateCost: async () => 0, logApiUsage: async () => {} };
@@ -134,6 +135,23 @@ describe('child sessions', () => {
     await query(`INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, kind, parent_session_id, report_run_id) VALUES (?, 'u1', 'tangu', 'k', 'm1', 'user', ?, 'R0')`, [`${P}-k`, P]);
     expect(String(await tool('wait_for_user').execute({}, ctx()))).toMatch(/^Not marked/);
     expect(!!(await query<any[]>(`SELECT awaiting_user FROM chat_sessions WHERE id = ?`, [P]))[0].awaiting_user).toBe(false);
+  });
+
+  it('没调 wait_for_user:用户在场的一轮以问句收尾 → 引擎兜底置等你;子会话结果没送回时不置', async () => {
+    expect([endsWithQuestion('这周的重点是什么？'), endsWithQuestion('要我修吗? **'), endsWithQuestion('做完了。'), endsWithQuestion('「对吗？」')]).toEqual([true, true, false, true]);
+    await setup();
+    const aw = async () => !!(await query<any[]>(`SELECT awaiting_user FROM chat_sessions WHERE id = ?`, [P]))[0].awaiting_user;
+    reply = '这周的重点是什么？';
+    try {
+      await createRun({ id: `${P}-Q1`, sessionId: P, userId: 'u1', appId: 'tangu', modelId: 'm1', assistantMessageId: `${P}-Q1-a`, input: { origin: 'client', message: 'title?', userMessageId: `${P}-Q1-u`, attachments: [], agentConfig: {} } });
+      enqueueRun(P, `${P}-Q1`); await idle();
+      expect(await aw()).toBe(true);
+      await query(`INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, kind, parent_session_id, report_run_id) VALUES (?, 'u1', 'tangu', 'k', 'm1', 'user', ?, ?)`, [`${P}-k`, P, `${P}-R0`]);
+      await query(`INSERT INTO agent_runs (id, session_id, user_id, status, input) VALUES (?, ?, 'u1', 'running', '{}')`, [`${P}-R0`, `${P}-k`]); // 别的引擎持有、没到终态
+      await createRun({ id: `${P}-Q2`, sessionId: P, userId: 'u1', appId: 'tangu', modelId: 'm1', assistantMessageId: `${P}-Q2-a`, input: { origin: 'client', message: 'again', userMessageId: `${P}-Q2-u`, attachments: [], agentConfig: {} } });
+      enqueueRun(P, `${P}-Q2`); await idle();
+      expect(await aw()).toBe(false);
+    } finally { reply = 'child result'; }
   });
 
   it('子会话有远程污点 → 只写行不起轮;重启补送只写行、摘要取挂起那一轮的回答', async () => {

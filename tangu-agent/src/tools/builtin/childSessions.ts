@@ -22,9 +22,7 @@ export const childSessionsProvider: ToolProvider = {
       name: 'start_session',
       mode: 'both',
       isEnabledFor: guard,
-      deferred: true,
-      deferGroup: 'child_sessions',
-      deferHint: 'Start a visible child session that works on a self-contained task in parallel and reports back to you here when done.',
+      // 不延迟加载:延迟时「开子会话」常被常驻的 delegate 抢走(live 10-17 两次里一次)。send_to_session 留延迟:回报行里点了它的名。
       definition: {
         type: 'function',
         function: {
