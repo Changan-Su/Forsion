@@ -435,7 +435,7 @@ async function dispatchRun(runId: string, ac: AbortController): Promise<void> {
       // P1-K2 单一扼流点(方案 §6.5):锁定时非本机 run 一律不起 —— 覆盖新起的远程 / 通道 / 无人值守 run、锁定前已排队的、
       // 引擎重启后 recoverQueuedRuns 捡回的,以及以后新加的任何生产者。先登记(活动快照 / 急停看得见),收尾在 startRun 的 finally。
       registerRun(runId, run.session_id, input);
-      await onChildRunStart(run.session_id, input).catch(() => {}); // 清「等你」;用户自己发的一轮归零自动接着做的计数
+      await onChildRunStart(run.session_id, input, runId).catch(() => {}); // 清「等你」;记下待送的回报;用户自己发的一轮归零自动接着做的计数
       if (lockedOut(input, runId)) {
         abortReasons.set(runId, 'remote_locked');
         await publish(runId, 'error', { error: 'remote_locked', aborted: true, reason: 'remote_locked', detail: remoteLockedBody.detail }).catch(() => {});
@@ -1171,7 +1171,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     } catch { /* 查不到就不认成员身份 */ }
   }
   const modeSessionId = profile.capabilities.hostExec
-    ? approvalModeSessionId({ fromClient: input.origin === 'client', sessionId, teamSessionId: verifiedTeamSessionId, followSessionMode: teamMember.followSessionMode === true })
+    // 父子会话的派生轮(start_session / send_to_session 起的子会话轮、回报后自动接着做的主会话轮)也跟本会话现档:中途收紧当场生效(Codex 10-17 #6)。
+    // 这两个字段只由引擎内部 createRun 写,POST /agent/runs 按字段名组装 input、客户端塞不进来。
+    ? approvalModeSessionId({ fromClient: input.origin === 'client' || input.fromParent === true || input.childReport === true, sessionId, teamSessionId: verifiedTeamSessionId, followSessionMode: teamMember.followSessionMode === true })
     : undefined;
   // 无人值守的异步审批(Muse ask/agent 档):**只信引擎内部起的 run** —— input.background 由 muse.ts 直接写进
   // createRun 的 input,/agent/runs 路由按字段名组装 input、客户端塞不进来;agentConfig 是请求体可控的,

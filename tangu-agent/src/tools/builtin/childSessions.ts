@@ -111,13 +111,17 @@ export const childSessionsProvider: ToolProvider = {
         function: {
           name: 'wait_for_user',
           description:
-            'Mark this conversation as waiting for the user. Call it right before ending your turn when you stopped because you need the user\'s answer, choice or approval '
-            + 'before you can continue. The session list then shows it as waiting for them until they reply. Do not call it when you simply finished, or when you only offer optional next steps.',
+            'Mark this conversation as waiting for the user. Call it every time your reply asks the user something they must answer before you can continue '
+            + '(a clarifying question, missing information, a choice, an approval): call it before your final message, then end your turn with the question. '
+            + 'The session list then shows it as waiting for them until they reply. Do not call it while you are only waiting for child sessions '
+            + '(their results come back to you automatically; just end your turn), when you simply finished, or when you only offer optional next steps.',
           parameters: { type: 'object', properties: {} },
         },
       },
       execute: async (_args, ctx) => {
-        await markAwaitingUser(ctx.sessionId, ctx.userId);
+        if (!(await markAwaitingUser(ctx.sessionId, ctx.userId))) {
+          return 'Not marked: your child sessions are still working and will report back to you automatically. Just end your turn; do not ask the user to wait.';
+        }
         return 'Marked as waiting for the user. End your turn now with your question.';
       },
     },

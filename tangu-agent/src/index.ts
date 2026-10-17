@@ -41,6 +41,7 @@ import inlineRouter from './routes/inline.js';
 import adminRouter from './routes/admin.js';
 import { runMigration } from './db/migrate.js';
 import { recoverQueuedRuns, abortAllRuns } from './services/agentLoop.js';
+import { deliverPendingChildReports } from './services/childSessions.js';
 import { loadSandboxConfig } from './sandbox/sandboxConfig.js';
 import { startCacheJanitor, stopCacheJanitor, reapOrphanRunContainers } from './sandbox/dockerProvider.js';
 import { startSessionReaper, stopSessionReaper, reapOrphanSessions } from './sandbox/sessionSandbox.js';
@@ -122,6 +123,8 @@ export function createTanguModule(d: TanguDeps): TanguModule {
     if (opts?.recoverRuns !== false) {
       recoverQueuedRuns()
         .then((m) => { if (m) console.log(`[tangu] re-enqueued ${m} pending run(s)`); })
+        .catch(() => {})
+        .then(() => deliverPendingChildReports()) // 上次退出时没送出去的子会话回报(services/childSessions.ts)
         .catch(() => {});
     }
 

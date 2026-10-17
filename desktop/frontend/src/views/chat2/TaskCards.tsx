@@ -82,6 +82,9 @@ export function TaskCards({ tasks, ownerId, onTask, noHere = false, todoStatus, 
   const [taskBusy, setTaskBusy] = useState<string | null>(null)
   const [taskOpen, setTaskOpen] = useState<Record<string, boolean>>({})
   const withdrawn = useWithdrawn(sessionId)
+  // 能开子会话:本机引擎在场 + 这条会话自己不是子会话(子会话 / @项目派遣出的会话不能再开)。否则回落「新会话执行」(Codex 10-17 #8)。
+  const isChild = useApp((s) => !!sessionId && !!s.sessions.find((x) => x.id === sessionId)?.parent_session_id)
+  const [, rerender] = useState(0)
   if (!tasks.some((c) => !c.withdraw)) return null
   const expired = !!createdAt && Date.now() - createdAt > TASK_CARD_TTL_MS
   return (
@@ -103,6 +106,7 @@ export function TaskCards({ tasks, ownerId, onTask, noHere = false, todoStatus, 
         const museOk = !!window.tangu?.backendStatus
         const pick = async (landing: TaskLanding): Promise<void> => {
           if (busy || done || locked || inFlightTaskCards.has(key) || handledTaskCards.has(key)) return
+          if (createdAt && Date.now() - createdAt > TASK_CARD_TTL_MS) { rerender((n) => n + 1); return } // 挂着跨过 7 天:点的这一下定格成已过期
           inFlightTaskCards.add(key)
           setTaskBusy(key)
           let ok = false
@@ -120,12 +124,12 @@ export function TaskCards({ tasks, ownerId, onTask, noHere = false, todoStatus, 
         )
         // Muse 当主按钮:追踪卡(track),以及 Muse 自己提的 TODO 卡(todo:「交给 Muse 执行」= 批准它去做,见 taskLanding)。
         const musePrimary = !!(c.track || c.todo) && museOk
-        // 聊天里(有当前会话):主按钮「开个子会话」(做完送回这里),其次「在这里做」;收件箱(noHere)没有当前会话:
-        // 不给这两颗,主按钮顺延给「新会话执行」。先问卡(ask)只有「新会话 / 在这里做」。
-        const inChat = !noHere && !!sessionId
-        const child = inChat ? btn('child', <MessageSquarePlus size={12} />, t(c.ask ? 'chat.task.askNew' : 'chat.task.child'), c.ask || !musePrimary) : null
-        const here = noHere ? null : btn('here', <Play size={12} />, t('chat.task.here'), !inChat && !musePrimary)
-        const fresh = inChat ? null : btn('new', <MessageSquarePlus size={12} />, t('chat.task.new'), noHere && !musePrimary)
+        // 聊天里能开子会话:主按钮「开个子会话」(做完送回这里),其次「在这里做」;开不了(收件箱 / 子会话里 / 没有本机引擎):
+        // 照旧「在这里做」+「新会话执行」(收件箱主按钮顺延给后者)。先问卡(ask)只有「新会话 / 在这里做」。
+        const canChild = !noHere && !!sessionId && museOk && !isChild
+        const child = canChild ? btn('child', <MessageSquarePlus size={12} />, t(c.ask ? 'chat.task.askNew' : 'chat.task.child'), c.ask || !musePrimary) : null
+        const here = noHere ? null : btn('here', <Play size={12} />, t('chat.task.here'), !c.ask && !canChild && !musePrimary)
+        const fresh = canChild ? null : btn('new', <MessageSquarePlus size={12} />, t(c.ask ? 'chat.task.askNew' : 'chat.task.new'), c.ask || (noHere && !musePrimary))
         const muse = museOk && !c.ask ? btn('muse', <Sparkles size={12} />, t(c.todo ? 'chat.task.museDo' : 'chat.task.muse'), musePrimary) : null
         const doneKey = done === 'here' ? 'chat.task.doneHere' : done === 'new' || done === 'child' ? 'chat.task.doneNew' : done === 'muse' ? (c.todo ? 'chat.task.doneMuseDo' : 'chat.task.doneMuse') : 'chat.task.doneIgnore'
         return (
@@ -154,7 +158,7 @@ export function TaskCards({ tasks, ownerId, onTask, noHere = false, todoStatus, 
                 : (
                 <>
                 <div className="t2-taskcard-actions">
-                  {c.ask ? [child, here] : musePrimary ? [muse, child, here, fresh] : [child, here, fresh, muse]}
+                  {c.ask ? [child ?? fresh, here] : musePrimary ? [muse, child, here, fresh] : [child, here, fresh, muse]}
                   {!c.ask && btn('ignore', <X size={12} />, t('chat.task.ignore'))}
                 </div>
                 {c.ask && <div className="t2-taskcard-note">{t('chat.task.askNote')}</div>}

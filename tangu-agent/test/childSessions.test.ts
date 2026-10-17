@@ -18,7 +18,7 @@ import { query } from '../src/core/db.js';
 import { createRun } from '../src/services/runStore.js';
 import { enqueueRun, activeSessionIds } from '../src/services/agentLoop.js';
 import { childSessionsProvider } from '../src/tools/builtin/childSessions.js';
-import { CHILD_UPDATE_OPEN } from '../src/services/childSessions.js';
+import { CHILD_UPDATE_OPEN, deliverPendingChildReports } from '../src/services/childSessions.js';
 
 let home: string | null = null;
 // 主会话 id 每个用例不同:自动接着做的计数在模块内存里,同名会串到下一个用例
@@ -130,6 +130,31 @@ describe('child sessions', () => {
     enqueueRun(P, 'C1');
     await idle();
     expect(!!(await query<any[]>(`SELECT awaiting_user FROM chat_sessions WHERE id = ?`, [P]))[0].awaiting_user).toBe(false);
+    // 子会话结果还没送回:等子会话 ≠ 等你,不置
+    await query(`INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, kind, parent_session_id, report_run_id) VALUES (?, 'u1', 'tangu', 'k', 'm1', 'user', ?, 'R0')`, [`${P}-k`, P]);
+    expect(String(await tool('wait_for_user').execute({}, ctx()))).toMatch(/^Not marked/);
+    expect(!!(await query<any[]>(`SELECT awaiting_user FROM chat_sessions WHERE id = ?`, [P]))[0].awaiting_user).toBe(false);
+  });
+
+  it('子会话有远程污点 → 只写行不起轮;重启补送只写行、摘要取挂起那一轮的回答', async () => {
+    await setup();
+    const cid = idOf(String(await tool('start_session').execute({ title: 'A', message: 'a' }, ctx())));
+    await idle();
+    expect((await runsOf(P)).filter((r) => r.input.childReport)).toHaveLength(1);
+    await query(`INSERT INTO agent_runs (id, session_id, user_id, status, input) VALUES ('RT', ?, 'u1', 'done', ?)`, [cid, JSON.stringify({ remoteTainted: { at: 'x' } })]);
+    await tool('send_to_session').execute({ session_id: cid, message: 'more' }, ctx()); await idle();
+    expect(await updatesIn(P)).toHaveLength(2);
+    expect((await runsOf(P)).filter((r) => r.input.childReport)).toHaveLength(1);
+    // 上次退出时挂着没送的回报(那一轮之后用户又接着聊了一句)
+    await query(`INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, kind, parent_session_id, report_run_id) VALUES (?, 'u1', 'tangu', 'K', 'm1', 'user', ?, 'RK')`, [`${P}-k`, P]);
+    await query(`INSERT INTO agent_runs (id, session_id, user_id, status, input, assistant_message_id) VALUES ('RK', ?, 'u1', 'aborted', '{}', 'RK-a')`, [`${P}-k`]);
+    await query(`INSERT INTO chat_messages (id, session_id, role, content, timestamp) VALUES ('RK-a', ?, 'model', 'bound reply', 1), ('RK-b', ?, 'model', 'later chat', 2)`, [`${P}-k`, `${P}-k`]);
+    await deliverPendingChildReports(); await idle();
+    const ups = await updatesIn(P);
+    expect(ups).toHaveLength(3);
+    expect(ups[2]).toContain('status="stopped">\nbound reply');
+    expect((await runsOf(P)).filter((r) => r.input.childReport)).toHaveLength(1);
+    expect((await query<any[]>(`SELECT report_run_id FROM chat_sessions WHERE id = ?`, [`${P}-k`]))[0].report_run_id).toBeNull();
   });
 
   it('子会话不能再开子会话;子代理 / Muse / 团队成员 / 通道 run 不可见', async () => {
