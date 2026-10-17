@@ -6,7 +6,7 @@
  * 之前它们各自把全部模型平铺成一排按钮,模型一多整页就被撑爆(2026-08-03 用户反馈)。
  */
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { Check, ChevronDown, Search } from 'lucide-react'
+import { Check, ChevronDown, ChevronRight, Search } from 'lucide-react'
 import { zoomOf } from '@lcl/engine'
 import { ModelMetadata } from './ModelMetadata'
 import { useModelPickerPreferences } from '../modelPickerPreferences'
@@ -17,6 +17,7 @@ import type { ModelInfo } from '../types'
 
 registerMessages({
   'msel.follow': { zh: '跟随云端默认', en: 'Follow cloud default' },
+  'msel.followShort': { zh: '跟随', en: 'Default' },
   'msel.none': { zh: '未选择', en: 'Not selected' },
 })
 
@@ -25,7 +26,7 @@ const SEARCH_THRESHOLD = 12
 /** 菜单最大高度 + 间距,与 .composer-menu 的 max-height:320 对齐(翻转判定用)。 */
 const MENU_MAX = 330
 
-export function ModelSelect({ models, value, onChange, icon, cloudDefaultId, disabled, defaultLabel, ariaLabel }: {
+export function ModelSelect({ models, value, onChange, icon, cloudDefaultId, disabled, defaultLabel, ariaLabel, chip, footer }: {
   models: ModelInfo[]
   /** 空串 = 未选择(跟随云端默认槽)。 */
   value: string
@@ -36,6 +37,10 @@ export function ModelSelect({ models, value, onChange, icon, cloudDefaultId, dis
   disabled?: boolean
   defaultLabel?: string
   ariaLabel?: string
+  /** 按钮里名字后面的小标签(设置 → 默认模型用它标来源:云端 / 自带 key / 订阅 / 本机)。 */
+  chip?: React.ReactNode
+  /** 菜单最底下一行(如「在模型库管理…」),点了先收菜单再调。 */
+  footer?: { label: string; onClick: () => void }
 }) {
   const { t } = useI18n()
   const prefs = useModelPickerPreferences()
@@ -66,7 +71,10 @@ export function ModelSelect({ models, value, onChange, icon, cloudDefaultId, dis
 
   const nameOf = (id: string): string => models.find((m) => m.id === id)?.name || id
   const followLabel = cloudDefaultId ? `${defaultLabel || t('msel.follow')} · ${nameOf(cloudDefaultId)}` : defaultLabel || t('msel.none')
-  const label = value ? nameOf(value) : followLabel
+  // 按钮里的跟随态:灰字前缀 + 实际调到的模型名(菜单里那一项仍写全「跟随云端默认 · X」)
+  const label = value ? nameOf(value) : cloudDefaultId
+    ? <><span className="model-select-follow">{defaultLabel || t('msel.followShort')} ·</span> {nameOf(cloudDefaultId)}</>
+    : <span className="model-select-follow">{followLabel}</span>
 
   const q = query.trim().toLowerCase()
   const groups = groupModelsByProvider(
@@ -79,6 +87,7 @@ export function ModelSelect({ models, value, onChange, icon, cloudDefaultId, dis
       <button className={`model-select-btn${open ? ' is-open' : ''}`} aria-label={ariaLabel} aria-expanded={open} disabled={disabled} onClick={() => setOpen((o) => !o)}>
         {icon}
         <span className="grow">{label}</span>
+        {chip}
         <ChevronDown size={12} />
       </button>
       {open && (
@@ -109,6 +118,9 @@ export function ModelSelect({ models, value, onChange, icon, cloudDefaultId, dis
             </div>
           ))}
           {!groups.length && <div className="menu-section">{t('model.empty')}</div>}
+          {footer && <div className="model-select-footer">
+            <button className="menu-item" onClick={() => { setOpen(false); footer.onClick() }}><span className="grow">{footer.label}</span><ChevronRight size={12} /></button>
+          </div>}
         </div>
       )}
     </div>
