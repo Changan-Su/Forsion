@@ -54,7 +54,7 @@ export function entityParamsSafe(def: ViewDefinition, params: Record<string, str
 }
 
 /** 冷启动 drain 到的 URL 会先于 Dockview 就绪到达 → 等 api 上线再落地(封顶 8s,超时按当前状态硬试)。 */
-function whenWorkspaceReady(timeoutMs = 8000): Promise<void> {
+export function whenWorkspaceReady(timeoutMs = 8000): Promise<void> {
   if (useWorkspace.getState().api) return Promise.resolve()
   return new Promise((resolve) => {
     const off = useWorkspace.subscribe((s) => {
