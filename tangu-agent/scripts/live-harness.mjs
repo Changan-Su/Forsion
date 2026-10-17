@@ -1376,6 +1376,7 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
           // 「调用过」≠「跑成了」:deferred 场景要判 read_document 真解析出了标记,不是报错后被 read_file 兜住。
           // `full` 留**未截断**的原文:bigread 要判的截断标记落在第 4000 字符附近,先截到 4000 就永远看不见
           // (评审 #7)。内存有界 —— 引擎侧 capToolResult 已把单条结果封在 48k。
+          else if (e.type === 'desk_present') (ev.deskPresents ||= []).push({ at: Date.now(), spec: p });
           else if (e.type === 'tool_result') { const full = String(p.result || ''); ev.toolResults.push({ id: p.id, name: p.name || '?', isError: !!p.isError, result: full.slice(0, 4000), fullLength: full.length, full, at: Date.now() }); }
           // 子代理自己的工具调用**不进** tool_call(subAgent.ts 把它们包成 'subagent' 事件发在父 run 上)——
           // 要证「子代理用上了 read_document」只能在这儿收。isError/preview 也要留:只存工具名的话,

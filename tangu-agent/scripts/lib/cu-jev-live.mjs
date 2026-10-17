@@ -357,11 +357,18 @@ export async function cuJevLive({ key, api, run, OUT, bundle, timeoutMs, tokensO
   const jevScrolls = jevSteps.reduce((n, s) => n + (s.action === 'scroll' ? Number(s.scrolls) || 0 : 0), 0);
   const plays = (melody?.events || []).filter((e) => e.kind === 'play').map((e) => String(e.detail).split(' ')[0]);
   const { checks, toSakura, toOthers } = cuJevChecks(key, { ev, calls, melody, chatter, want, hottest, jevConfirmed, jevSteps, actActions, followUps });
+  // 10-17:实时画面由插件在第一次动手成功后自己摆上 Agent Desk(以前靠技能让模型调 desk_present,用户试用时模型一次都没调)
+  const presents = (ev.deskPresents || []).filter((d) => (d.spec?.views || []).some((v) => v.view === 'plugin:tangu-computer-use:live'));
+  const firstAct = Math.min(...ev.toolArgs.filter((c) => c.name === 'act_ui' || c.name === 'jev_ui').map((c) => c.at ?? Infinity));
+  if (Number.isFinite(firstAct)) {
+    checks['实时画面自动摆上了 Agent Desk(第一次动手之后;模型没自己调 desk_present 摆它)'] = presents.length > 0 && presents.every((d) => d.at >= firstAct)
+      && !ev.toolArgs.some((c) => c.name === 'desk_present' && /tangu-computer-use:live/.test(c.arguments || ''));
+  }
   const metrics = `工具调用 ${calls.length} 次(jev_ui ${jevCalls.length},确认 ${jevConfirmed} 步,滚动 ${jevScrolls} 次;act_ui 点击 ${actClicks} 次、滚动 ${actActions.filter((a) => a.action === 'scroll').length} 次、打字 ${actActions.filter((a) => ['type', 'typeText', 'setText'].includes(a.action)).length} 次);`
     + (melody ? `Melody 播过 ${plays.join('、') || '(没播)'},现在 ${melody?.playing ? `#${melody.playing.index} ${melody.playing.title}` : '没在放'},点击 ${melody?.clicks ?? '?'} / 双击 ${melody?.doubleClicks ?? '?'};` : '')
     + (key === 'cusearch' ? `${popupStats(chatter)};截图里画进了下拉 ${ev.toolResults.filter((r) => /drawn over it/.test(String(r.full || r.result))).length} 次;` : '')
     + (chatter ? `Chatter 发出 ${chatter.sent?.length ?? 0} 条(给 Sakura ${toSakura.length}${toOthers.length ? `,给别人 ${toOthers.map((m) => m.to).join('、')}` : ''}),最热评论「${clip(hottest?.text, 40)}」;` : '')
-    + `问用户 ${ev.inquiries || 0} 次(ask_user)${followUps.length ? `,停下来问过 ${followUps.length} 次、回的是:${followUps.map((f) => `「${f.text}」`).join(' ')}` : ''};Jev 请求 ${jevFiles.length} 次;录像 ${video.error ? `没录成(${clip(video.error, 80)})` : `${video.frames} 帧`}`;
+    + `Agent Desk 摆了 ${presents.length} 次;问用户 ${ev.inquiries || 0} 次(ask_user)${followUps.length ? `,停下来问过 ${followUps.length} 次、回的是:${followUps.map((f) => `「${f.text}」`).join(' ')}` : ''};Jev 请求 ${jevFiles.length} 次;录像 ${video.error ? `没录成(${clip(video.error, 80)})` : `${video.frames} 帧`}`;
   writeProcess({ dir, key, prompt: PROMPTS[key], ev, t0, checks, metrics, states: { ...(melody ? { melody } : {}), ...(chatter ? { chatter } : {}) }, jevFiles, video, followUps });
   const failed = Object.entries(checks).filter(([, pass]) => !pass).map(([name]) => name);
   return { ok: failed.length === 0, detail: `${failed.length ? `没过:${failed.join('、')}。` : ''}${ev.error ? `run 报错:${ev.error}。` : ''}${metrics}`,
