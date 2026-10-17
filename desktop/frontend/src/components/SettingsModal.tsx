@@ -1,5 +1,6 @@
 import { PRODUCT } from '../product'
 import { ModelPickerSettings } from './ModelPickerSettings'
+import { WebSearchSettings } from './WebSearchSettings'
 import { AutoCompactSetting } from './AutoCompactSetting'
 import { GitSettingsSection } from './GitSettingsSection'
 import { GitAccountsSection } from './GitAccountsSection'
@@ -25,7 +26,7 @@ import {
   listModels, listTools, setModelContextWindow,
   testProviderConnection, syncNow as backendSyncNow, getSyncStatus as backendGetSyncStatus,
   listPlugins, listAgents, type PluginInfo, type SyncStatusResult,
-  getLocalWebSearch, saveLocalWebSearch, testLocalWebSearch, type LocalWebSearchRedacted,
+  getLocalWebSearch, type LocalWebSearchRedacted,
 } from '../services/backendService'
 import { ChannelsTab } from './ChannelsTab'
 import { buildSessionLogPayload, sessionLogFilename } from '../services/sessionLog'
@@ -677,12 +678,6 @@ export const SettingsModal: React.FC<{
   const [providerSaveMsg, setProviderSaveMsg] = useState('')
   // 本地联网搜索(BYO-key;engine /agent/websearch)。wsRed=null 表示端点不可用(云端/旧后端)→ 整段隐藏。
   const [wsRed, setWsRed] = useState<LocalWebSearchRedacted | null>(null)
-  const [wsProvider, setWsProvider] = useState('auto')
-  const [wsZhipuEngine, setWsZhipuEngine] = useState('search_pro_quark')
-  const [wsKeys, setWsKeys] = useState({ bocha: '', tavily: '', zhipu: '' }) // 输入草稿:'' 且未点清除 = 不变
-  const [wsClear, setWsClear] = useState({ bocha: false, tavily: false, zhipu: false })
-  const [wsMsg, setWsMsg] = useState('')
-  const [wsBusy, setWsBusy] = useState(false)
   // 镜像连通性测试(设置页管理后端)
   const [mirrorTesting, setMirrorTesting] = useState(false)
   const [mirrorTest, setMirrorTest] = useState<MirrorTestResult | null>(null)
@@ -763,14 +758,7 @@ export const SettingsModal: React.FC<{
   useEffect(() => {
     if (!p.open || tab !== 'model' || !isDesktop) return
     void getLocalWebSearch(homeTarget())
-      .then((r) => {
-        setWsRed(r)
-        setWsProvider(r.provider)
-        setWsZhipuEngine(r.zhipuEngine || 'search_pro_quark')
-        setWsKeys({ bocha: '', tavily: '', zhipu: '' })
-        setWsClear({ bocha: false, tavily: false, zhipu: false })
-        setWsMsg('')
-      })
+      .then(setWsRed)
       .catch(() => setWsRed(null))
   }, [p.open, tab, isDesktop, p.cfg])
   const pluginNm = (pl: PluginInfo): string => (locale === 'en' && pl.nameEn ? pl.nameEn : pl.name)
@@ -2457,120 +2445,8 @@ export const SettingsModal: React.FC<{
                 })()}
 
                 {/* 本地联网搜索(BYO-key):engine /agent/websearch,写 config.json webSearch 段,搜索时即时生效。 */}
-                {tab === 'model' && isDesktop && activeSub === 'm-websearch' && (
-                  <>
-                    {wsRed && (
-                      <>
-                        <div className="field">
-                          <div className="hint" style={{ marginBottom: 8 }}>{t('settings.websearch.intro')}</div>
-                          <div className="field-row">
-                            <div className="field">
-                              <label>{t('settings.websearch.providerLabel')}</label>
-                              <select value={wsProvider} onChange={(e) => setWsProvider(e.target.value)}>
-                                <option value="auto">{t('settings.websearch.provider.auto')}</option>
-                                <option value="bocha">{t('settings.websearch.provider.bocha')}</option>
-                                <option value="tavily">{t('settings.websearch.provider.tavily')}</option>
-                                <option value="zhipu">{t('settings.websearch.provider.zhipu')}</option>
-                                <option value="duckduckgo">{t('settings.websearch.provider.duckduckgo')}</option>
-                              </select>
-                            </div>
-                            <div className="field">
-                              <label>{t('settings.websearch.zhipuEngineLabel')}</label>
-                              <select value={wsZhipuEngine} onChange={(e) => setWsZhipuEngine(e.target.value)} title={t('settings.websearch.zhipuEngineHint')}>
-                                <option value="search_pro_quark">{t('settings.websearch.zhipuEngine.quark')}</option>
-                                <option value="search_pro_sogou">{t('settings.websearch.zhipuEngine.sogou')}</option>
-                                <option value="search_pro">{t('settings.websearch.zhipuEngine.pro')}</option>
-                                <option value="search_std">{t('settings.websearch.zhipuEngine.std')}</option>
-                              </select>
-                            </div>
-                            <div className="field">
-                              <label>{t('settings.websearch.effectiveLabel')}</label>
-                              <div className="hint" style={{ paddingTop: 8 }}>
-                                {wsRed.configured
-                                  ? t('settings.websearch.effectiveLocal', { provider: wsRed.effectiveProvider })
-                                  : t('settings.websearch.effectiveCloud')}
-                              </div>
-                            </div>
-                          </div>
-                          {([['bocha', 'Bocha API Key', wsRed.bochaHasKey], ['tavily', 'Tavily API Key', wsRed.tavilyHasKey], ['zhipu', 'Zhipu API Key', wsRed.zhipuHasKey]] as const).map(([k, label, hasKey]) => (
-                            <div className="field" key={k} style={{ marginTop: 6 }}>
-                              <label>
-                                {label}
-                                {hasKey && !wsClear[k] && (
-                                  <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}> · {t('settings.websearch.keyStored')}</span>
-                                )}
-                                {wsClear[k] && (
-                                  <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}> · {t('settings.websearch.keyCleared')}</span>
-                                )}
-                              </label>
-                              <div style={{ display: 'flex', gap: 6 }}>
-                                <input
-                                  type="password"
-                                  autoComplete="off"
-                                  style={{ flex: 1 }}
-                                  value={wsKeys[k]}
-                                  placeholder={hasKey && !wsClear[k] ? t('settings.websearch.keyKeepPlaceholder') : t('settings.websearch.keyEmptyPlaceholder')}
-                                  onChange={(e) => {
-                                    setWsKeys({ ...wsKeys, [k]: e.target.value })
-                                    if (e.target.value) setWsClear({ ...wsClear, [k]: false })
-                                  }}
-                                />
-                                {hasKey && !wsClear[k] && (
-                                  <button className="btn ghost sm" onClick={() => { setWsClear({ ...wsClear, [k]: true }); setWsKeys({ ...wsKeys, [k]: '' }) }}>
-                                    {t('settings.websearch.clearKey')}
-                                  </button>
-                                )}
-                              </div>
-                            </div>
-                          ))}
-                          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 10, flexWrap: 'wrap' }}>
-                            <button
-                              className="btn primary sm"
-                              disabled={wsBusy}
-                              onClick={() => {
-                                const keyOut = (k: 'bocha' | 'tavily' | 'zhipu'): string => (wsClear[k] ? '' : (wsKeys[k] || '__keep__'))
-                                setWsBusy(true); setWsMsg('')
-                                void saveLocalWebSearch(homeTarget(), {
-                                  provider: wsProvider,
-                                  bochaApiKey: keyOut('bocha'),
-                                  tavilyApiKey: keyOut('tavily'),
-                                  zhipuApiKey: keyOut('zhipu'),
-                                  zhipuEngine: wsZhipuEngine,
-                                }).then((r) => {
-                                  setWsRed(r.config)
-                                  setWsKeys({ bocha: '', tavily: '', zhipu: '' })
-                                  setWsClear({ bocha: false, tavily: false, zhipu: false })
-                                  setWsMsg(t('settings.websearch.saved'))
-                                }).catch((e) => setWsMsg(`✗ ${e?.message || e}`))
-                                  .finally(() => setWsBusy(false))
-                              }}
-                            >
-                              {t('settings.btn.save')}
-                            </button>
-                            <button
-                              className="btn ghost sm"
-                              disabled={wsBusy}
-                              onClick={() => {
-                                const k = wsProvider as 'bocha' | 'tavily' | 'zhipu'
-                                const draft = (wsProvider === 'bocha' || wsProvider === 'tavily' || wsProvider === 'zhipu') ? wsKeys[k] : ''
-                                setWsBusy(true); setWsMsg(t('settings.websearch.testing'))
-                                void testLocalWebSearch(homeTarget(), { provider: wsProvider, apiKey: draft || '__keep__', zhipuEngine: wsZhipuEngine })
-                                  .then((r) => setWsMsg(r.ok
-                                    ? `✓ ${r.provider} · ${r.latencyMs}ms · ${r.resultCount ?? 0}${r.sampleTitle ? ` · ${String(r.sampleTitle).slice(0, 30)}` : ''}`
-                                    : `✗ ${r.provider}: ${r.error || 'failed'}`))
-                                  .catch((e) => setWsMsg(`✗ ${e?.message || e}`))
-                                  .finally(() => setWsBusy(false))
-                              }}
-                            >
-                              {wsBusy ? <Loader2 size={12} className="spin" /> : null} {t('settings.websearch.test')}
-                            </button>
-                            {wsMsg && <span style={{ fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-muted)' }}>{wsMsg}</span>}
-                          </div>
-                        </div>
-                      </>
-                    )}
-
-                  </>
+                {tab === 'model' && isDesktop && activeSub === 'm-websearch' && wsRed && (
+                  <WebSearchSettings target={homeTarget()} cfg={wsRed} setCfg={setWsRed} />
                 )}
 
                 {/* 语音页分三节,各管输入框上的一个键(10-02 用户报「通话音色和朗读混在一起、很误导」):
