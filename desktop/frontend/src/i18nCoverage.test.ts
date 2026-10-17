@@ -361,6 +361,10 @@ describe('i18n 覆盖', () => {
     ])
     // 逐键登记:不是由术语拼成、但刻意保留拉丁文的值。
     const ALLOW: Record<string, string> = {
+      'websearch.name.tavily': '搜索服务品牌名',
+      'websearch.name.duckduckgo': '搜索服务品牌名',
+      'websearch.name.deepseek': '搜索服务产品名(DeepSeek 官方叫法)',
+      'websearch.key': 'API Key 是服务商控制台里的原词,用户按它去找',
       'settings.theme.visuals': '用户 2026-10-09 指定功能专名 Intelligent UI，中文界面不译',
       'achievements.a.first-login.title': '成就标题,化用论文名的英文梗',
       'achievements.a.first-message.title': '成就标题,英文梗',
