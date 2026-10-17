@@ -9,7 +9,7 @@
  *  ② 分区头的设备标签:标记里的设备名、本机写「本机」、多台写 +N;本机注册表里条目全关掉的记录不占分区;
  *     本机刚开、标记还没拉回来的库也算上「本机」;
  *  ③ Cloud工作区 里的根文件夹右键有「设为同步库分区」,点了调 entrySyncMark(name, true);
- *     手动 / 旧标记的分区头右键有「不再作为同步库分区」→ entrySyncMark(name, false);本机在同步的库没有这一项。
+ *     手动 / 旧标记的分区头右键只有「不再作为同步库分区」→ entrySyncMark(name, false);本机在同步、或标记里记着设备的库没有这一项。
  *
  * 需先 npm run build(读 out/)。用法:node scripts/cloud-vault-sections.check.cjs [--shots=<目录>](亮 / 暗各拍一张)
  */
@@ -30,7 +30,7 @@ const STATE = {
   ],
   activeRoot: null,
   cloudRoot: '',
-  mirrorVaults: ['Fiary', 'Manual', 'WMOSv11'],
+  mirrorVaults: ['Fiary', 'Manual', 'WMOSv11', 'constructor'], // constructor:库名撞 Object 原型上的键也得照常渲染
   mirrorVaultDevices: {
     WMOSv11: [{ id: 'desk-win', name: 'Windows 台式机', since: '2026-10-17' }],
     Fiary: [{ id: 'desk-me', name: 'MacBook Pro' }, { id: 'desk-win', name: 'Windows 台式机' }],
@@ -57,7 +57,7 @@ async function main() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cloud-vault-sections-'))
   const vault = path.join(home, 'Cloud')
   for (const p of ['WMOSv11/02 Areas/x.md', 'WMOSv11/Daily/y.md', 'WMOSv11/WMOS 首页.md', 'Fiary/2026/a.md', 'Fiary/Fiary 索引.md',
-    'Manual/m.md', 'CMP/x.md', 'docs/x.md', '闪念盒/x.md', '收件箱.md']) {
+    'Manual/m.md', 'constructor/c.md', 'CMP/x.md', 'docs/x.md', '闪念盒/x.md', '收件箱.md']) {
     fs.mkdirSync(path.dirname(path.join(vault, p)), { recursive: true }); fs.writeFileSync(path.join(vault, p), `# ${path.basename(p, '.md')}\n`)
   }
   for (const ud of ['userdata', 'userdata-dev']) {
@@ -98,10 +98,10 @@ async function main() {
     })))
     const labels = secs.map((s) => s.label)
     const ws = labels.indexOf('Cloud工作区')
-    check('① 同步库分区在前,Cloud工作区 在最后', ws === labels.length - 1 && ['Fiary', 'Manual', 'Notes', 'WMOSv11'].every((n) => labels.indexOf(n) > -1 && labels.indexOf(n) < ws), JSON.stringify(labels))
+    check('① 同步库分区在前,Cloud工作区 在最后', ws === labels.length - 1 && ['Fiary', 'Manual', 'Notes', 'WMOSv11', 'constructor'].every((n) => labels.indexOf(n) > -1 && labels.indexOf(n) < ws), JSON.stringify(labels))
     check('② 条目全关掉的本机记录不占分区', !labels.includes('Old'))
     const dev = Object.fromEntries(secs.map((s) => [s.label, s.device]))
-    check('② 设备标签:他机名字 / 本机 +N / 本机刚开的也算 / 旧标记不画', dev.WMOSv11 === 'Windows 台式机' && dev.Fiary === '本机+1' && dev.Notes === '本机' && dev.Manual === '', JSON.stringify(dev))
+    check('② 设备标签:他机名字 / 本机 +N / 本机刚开的也算 / 旧标记不画', dev.WMOSv11 === 'Windows 台式机' && dev.Fiary === '本机+1' && dev.Notes === '本机' && dev.Manual === '' && dev.constructor === '', JSON.stringify(dev))
     check('② 悬停列出全部设备与起始日期', secs.find((s) => s.label === 'WMOSv11')?.title.includes('2026-10-17'), secs.find((s) => s.label === 'WMOSv11')?.title)
 
     if (SHOTS) {
@@ -126,7 +126,13 @@ async function main() {
 
     await win.locator('.amx-tree .amx-sec-grab', { hasText: 'Manual' }).click({ button: 'right' })
     const manual = await menuItems()
-    check('③ 手动分区头右键有「不再作为同步库分区」', manual.includes('不再作为同步库分区'), manual.join(' / '))
+    check('③ 手动分区头右键只有「不再作为同步库分区」(不给整份文件夹菜单,免得从分区头删掉整个库)', JSON.stringify(manual) === '["不再作为同步库分区"]', manual.join(' / '))
+    await win.locator('.ctx-menu button', { hasText: '不再作为同步库分区' }).click().catch(() => {})
+    await win.waitForTimeout(200)
+    check('③ 点了调 entrySyncMark("Manual", false)', JSON.stringify(await win.evaluate(() => window.__markCalls)) === '[["CMP",true],["Manual",false]]', JSON.stringify(await win.evaluate(() => window.__markCalls)))
+    await win.locator('.amx-tree .amx-sec-grab', { hasText: 'WMOSv11' }).click({ button: 'right' })
+    const withDev = await menuItems()
+    check('③ 有设备在同步的分区头右键不给取消(取消了也会被它们补回来)', !withDev.some((m) => m.includes('同步库分区')), withDev.join(' / ') || '(无菜单)')
     await closeMenu()
     await win.locator('.amx-tree .amx-sec-grab', { hasText: 'Notes' }).click({ button: 'right' })
     const mine = await menuItems()

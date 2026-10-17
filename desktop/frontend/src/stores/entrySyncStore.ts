@@ -12,6 +12,8 @@ interface EntrySyncStore {
   /** 库名 → 在同步它的设备(来自标记正文);deviceId = 本机。 */
   mirrorVaultDevices: Record<string, Array<{ id: string; name: string; since?: string }>>
   deviceId: string | null
+  /** 主进程(Forsion Extend 0.9+)认得 entry-sync:mark。 */
+  markSupported: boolean
   /** binding(vault 根绝对路径)→ 该条目绑定引擎的最新状态。 */
   status: Record<string, AmadeusSyncStatus>
   refresh(): Promise<void>
@@ -25,6 +27,7 @@ export const useEntrySync = create<EntrySyncStore>((set) => ({
   mirrorVaults: [],
   mirrorVaultDevices: {},
   deviceId: null,
+  markSupported: false,
   status: {},
   async refresh() {
     const sequence = ++refreshSequence
@@ -41,6 +44,7 @@ export const useEntrySync = create<EntrySyncStore>((set) => ({
         mirrorVaults: st.mirrorVaults ?? [],
         mirrorVaultDevices: st.mirrorVaultDevices ?? {},
         deviceId: st.deviceId ?? null,
+        markSupported: st.mirrorVaultDevices !== undefined,
       })
     } catch {
       /* 旧主进程构建无此接口:保持空 */

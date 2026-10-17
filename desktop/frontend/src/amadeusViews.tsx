@@ -419,7 +419,7 @@ export function Breadcrumb({ path, hideLoneLeaf }: { path?: string; hideLoneLeaf
 // ─────────────────────────────── 左:笔记库(原生 t2s 外壳) ───────────────────────────────
 
 /** 右键菜单目标;kind='multi' = 作用于整批选中(paths)。 */
-interface Ctx { kind: 'page' | 'folder' | 'asset' | 'root' | 'multi'; path: string; paths?: string[]; x: number; y: number }
+interface Ctx { kind: 'page' | 'folder' | 'asset' | 'root' | 'multi' | 'vaultsec'; path: string; paths?: string[]; x: number; y: number }
 
 const isNotePath = (p: string): boolean => /\.md$/i.test(p)
 const isDbPath = (p: string): boolean => /\.db$/i.test(p)
@@ -982,6 +982,14 @@ export function AmadeusPagesView() {
   const mirrorVaults = useEntrySync((s) => s.mirrorVaults)
   const mirrorVaultDevices = useEntrySync((s) => s.mirrorVaultDevices)
   const myDeviceId = useEntrySync((s) => s.deviceId)
+  // 手动设 / 取消同步库分区要 Forsion Extend 0.9+ 的 entry-sync:mark 通道;preload 总是带着这个键,旧 Extend 上点了只会报
+  // 「No handler registered」—— 以 entryGet 带回新字段为准。
+  const markSupported = useEntrySync((s) => s.markSupported) && !!window.amadeusSync?.entrySyncMark
+  const markVaultSection = (name: string, on: boolean): void => {
+    void window.amadeusSync!.entrySyncMark!(name, on)
+      .then((r) => { if (r?.error) throw new Error(r.error) })
+      .catch((e: unknown) => useApp.getState().toast(t('amxv.vaultSection.failed', { e: e instanceof Error ? e.message : String(e) }), true))
+  }
   useEffect(() => { if (renaming) renameRef.current?.select() }, [renaming])
   useEffect(() => {
     if (!menu) return
@@ -1038,7 +1046,9 @@ export function AmadeusPagesView() {
     const devicesOf = isDesktopCloud ? mirrorVaultDevices : webVaultDevices
     const nodeOf = new Map(tree.children.filter((n) => n.kind === 'folder').map((n) => [n.path, n]))
     const vaultSecs = names.map((name) => {
-      const devs = devicesOf[name] ?? []
+      // 只认自有属性:库名可以叫 constructor / toString,普通对象上会取到继承来的函数。
+      const own = Object.prototype.hasOwnProperty.call(devicesOf, name) ? devicesOf[name] : undefined
+      const devs = Array.isArray(own) ? own : []
       // 本机刚开的同步,标记还没拉回镜像:先把「本机」算上。
       const self = mine.has(name) && myDeviceId && !devs.some((d) => d.id === myDeviceId) ? [{ id: myDeviceId, name: '' }] : []
       return { name, node: nodeOf.get(name) ?? null, devices: [...self, ...devs], mine: mine.has(name) }
@@ -1599,14 +1609,16 @@ export function AmadeusPagesView() {
       {/* 云端侧:Cloud工作区(非同步Vault部分)+ 每个同步 Vault 一个分区(镜像内容,双向可编辑;
           注册表有名字但镜像还没拉到时也占位显示)。 */}
       <CloudSkipWarn />
-      {cloudSections.vaultSecs.map(({ name, node, devices }) => (
+      {cloudSections.vaultSecs.map(({ name, node, devices, mine }) => (
         <SideSection
           key={name}
           id={`vault:${name}`}
           defaultOpen
           label={name}
           extra={vaultDeviceChip(devices, myDeviceId)}
-          onContextMenu={node ? (e) => { e.preventDefault(); e.stopPropagation(); setMenu({ kind: 'folder', path: name, x: e.clientX, y: e.clientY }) } : undefined}
+          // 分区头右键只给「不再作为同步库分区」,不弹整份文件夹菜单(那里有删除:删掉别的设备在同步的库会同步删回那台设备)。
+          // 有设备在同步的库取消了也会被它们下次启动补回来,所以只给旧标记 / 手动设的分区。
+          onContextMenu={markSupported && !mine && !devices.length ? (e) => { e.preventDefault(); e.stopPropagation(); setMenu({ kind: 'vaultsec', path: name, x: e.clientX, y: e.clientY }) } : undefined}
         >
           {node && node.children.length
             ? node.children.map((c) => renderNode(c, 0))
@@ -1868,20 +1880,9 @@ export function AmadeusPagesView() {
               <button onClick={() => { const f = menu.path; setMenu(null); openCloudSyncDialog(f, 'folder') }}><Cloud size={13} /> {t('amxv.menu.cloudSyncOn')}</button>
             )
           )}
-          {window.amadeusSync?.entrySyncMark && vaultSide === 'cloud' && !menu.path.includes('/') && !cloudSections?.mine.has(menu.path) && (() => {
-            const on = !!cloudSections?.vaultSecs.some((v) => v.name === menu.path)
-            return (
-              <button onClick={() => {
-                const f = menu.path
-                setMenu(null)
-                void window.amadeusSync!.entrySyncMark!(f, !on)
-                  .then((r) => { if (r?.error) throw new Error(r.error) })
-                  .catch((e: unknown) => useApp.getState().toast(t('amxv.vaultSection.failed', { e: e instanceof Error ? e.message : String(e) }), true))
-              }}>
-                {on ? <FolderMinus size={13} /> : <FolderSync size={13} />} {t(on ? 'amxv.menu.vaultSectionOff' : 'amxv.menu.vaultSectionOn')}
-              </button>
-            )
-          })()}
+          {markSupported && vaultSide === 'cloud' && !menu.path.includes('/') && !cloudSections?.vaultSecs.some((v) => v.name === menu.path) && (
+            <button onClick={() => { const f = menu.path; setMenu(null); markVaultSection(f, true) }}><FolderSync size={13} /> {t('amxv.menu.vaultSectionOn')}</button>
+          )}
           {window.amadeusCollab && (
             <button onClick={() => {
               const f = menu.path
@@ -1894,6 +1895,11 @@ export function AmadeusPagesView() {
             }}><Share2 size={13} /> {t('amxv.menu.publishFolder')}</button>
           )}
           <button className="danger" onClick={() => { const f = menu.path; setMenu(null); if (confirmedDelete('folder', f)) void ps().deleteFolder(f) }}><Trash2 size={13} /> {t('amxv.menu.delete')}</button>
+        </OverlayAt>
+      )}
+      {menu?.kind === 'vaultsec' && (
+        <OverlayAt className="ctx-menu" x={menu.x} y={menu.y} onClick={(e) => e.stopPropagation()}>
+          <button onClick={() => { const f = menu.path; setMenu(null); markVaultSection(f, false) }}><FolderMinus size={13} /> {t('amxv.menu.vaultSectionOff')}</button>
         </OverlayAt>
       )}
       {rootMenu && webRootMenu && (

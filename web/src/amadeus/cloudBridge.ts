@@ -447,7 +447,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
   // 标记正文记着在同步各库的设备(与桌面镜像读法同一个 parseCloudVaultMarker);逐个 GET,库一般只有几个。
   ;(window as unknown as { amadeusCloudVaultDevices?: (names: string[]) => Promise<Record<string, CloudVaultDevice[]>> }).amadeusCloudVaultDevices = async (names) => {
     const v = await ensureVault()
-    const out: Record<string, CloudVaultDevice[]> = {}
+    const out: Record<string, CloudVaultDevice[]> = Object.create(null) // 库名可以叫 __proto__ / constructor
     await Promise.all(names.map(async (name) => {
       try {
         const f = await http.get<FileDto>(`/amadeus/vaults/${encodeURIComponent(v)}/file`, { path: cloudVaultMarkerPath(name) })
