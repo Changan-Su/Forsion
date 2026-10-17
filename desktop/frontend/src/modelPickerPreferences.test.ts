@@ -14,9 +14,10 @@ describe('model picker source boundary and persistence', () => {
     expect(groups.map((g) => g.key)).toEqual(['forsion:early', 'forsion:cloud', 'direct:provider:other', 'direct:provider:same'])
     expect(groups[1].models[0].multiplier).toBe(0.13)
   })
-  it('cannot hide or regroup cloud models even with tampered preferences', () => {
-    const prefs = normalizePickerPreferences({ groups: [{ id: 'g', name: 'Local' }], assignments: { 'cloud-a': 'g' }, hidden: ['cloud-a', 'local/a'] })
+  it('can hide cloud models on this device but never regroup them', () => {
+    const prefs = normalizePickerPreferences({ groups: [{ id: 'g', name: 'Local' }], assignments: { 'cloud-a': 'g' }, hidden: ['local/a'] })
     expect(isPickerModelVisible(models[0], prefs)).toBe(true)
+    expect(isPickerModelVisible(models[0], { ...prefs, hidden: ['cloud-a'] })).toBe(false)
     expect(groupPickerModels(models, prefs).find((g) => g.models.some((m) => m.id === 'cloud-a'))?.key).toBe('forsion:cloud')
     expect(groupPickerModels(models, prefs).flatMap((g) => g.models).some((m) => m.id === 'local/a')).toBe(false)
   })
