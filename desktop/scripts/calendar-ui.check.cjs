@@ -33,6 +33,27 @@ async function slotPoint(win, iso, min) {
   }, { iso, min })
 }
 const hasDraft = (win) => win.evaluate(() => !!document.querySelector('.amx-cal-draft'))
+/** 日历此刻停在哪:标题(含周数)、可见的日列、滚动位置、小月历的月份与高亮段。 */
+const calState = (win) => win.evaluate(() => {
+  const sc = document.querySelector('.amx-cal-tscroll, .amx-cal-mscroll')
+  const s = sc.getBoundingClientRect()
+  const cols = [...document.querySelectorAll('.amx-cal-daycol2[data-date]')]
+    .filter((c) => { const r = c.getBoundingClientRect(); return r.right > s.left + 2 && r.left < s.right - 2 }).map((c) => c.dataset.date)
+  const t = document.querySelector('.amx-cal-title')
+  return {
+    title: `${t?.textContent}${t?.dataset.week ?? ''}`, cols: cols.length ? `${cols[0]}+${cols.length}` : '', top: Math.round(sc.scrollTop),
+    mini: `${document.querySelector('.amx-mini-title')?.textContent} ${[...document.querySelectorAll('.amx-mini-day.band')].map((d) => d.textContent).join(',')}`,
+  }
+})
+/** 主区开一个新标签再点回「日历」:标签不显示时 Dockview 把日历的 DOM 整个摘下,点回来再挂上(10-17 回归:回来跳到 8 月)。 */
+async function tabAwayAndBack(win) {
+  await win.locator('.dv-new-tab').first().click()
+  await win.waitForSelector('.amx-cal', { state: 'detached', timeout: 5000 })
+  await win.waitForTimeout(300)
+  await win.locator('.dv-tab', { hasText: '日历' }).first().click()
+  await win.waitForSelector('.amx-cal', { timeout: 5000 })
+  await win.waitForTimeout(700)
+}
 
 async function clickSpace(win, names) {
   const clicked = await win.evaluate((labels) => {
@@ -267,6 +288,10 @@ async function main() {
     await win.setViewportSize({ width: 1440, height: 900 }); await win.waitForTimeout(700)
     await nudge(-2); await win.waitForTimeout(300)
     check('W-74 周中自由滚动后拉宽窗口不被拽回周首日', midBefore === weekCols[2] && midAfter === midBefore, `${midBefore} → ${midAfter}`)
+    const weekBefore = await calState(win)
+    await tabAwayAndBack(win)
+    const weekBack = await calState(win)
+    check('周视图:开个新标签再点回日历,还停在原来那一周和时刻,小月历不跳', weekBefore.cols.startsWith(weekCols[0]) && JSON.stringify(weekBack) === JSON.stringify(weekBefore), `${JSON.stringify(weekBefore)} → ${JSON.stringify(weekBack)}`)
 
     const sticky = await win.evaluate(() => {
       const sc = document.querySelector('.amx-cal-tscroll')
@@ -493,6 +518,11 @@ async function main() {
 
     await win.keyboard.press('m')
     await win.waitForSelector('.amx-cal-mscroll', { timeout: 5000 })
+    await win.waitForTimeout(400)
+    const monthBefore = await calState(win)
+    await tabAwayAndBack(win)
+    const monthBack = await calState(win)
+    check('月视图:开个新标签再点回日历,还停在原来那个月', monthBefore.top > 0 && JSON.stringify(monthBack) === JSON.stringify(monthBefore), `${JSON.stringify(monthBefore)} → ${JSON.stringify(monthBack)}`)
     const more = win.locator('.amx-cal-more').first()
     await more.waitFor({ timeout: 5000 })
     await more.click()

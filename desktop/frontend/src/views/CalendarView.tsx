@@ -455,7 +455,8 @@ export function CalendarView() {
   useLayoutEffect(() => {
     const el = rootRef.current
     if (!el) return
-    const measure = (): void => { const w = el.clientWidth - 52; setFit(w >= 7 * 84 ? 7 : w >= 3 * 132 ? 3 : 1) }
+    // 标签不显示时 Dockview 把 DOM 摘下,量到的是 0:别拿它改状态(否则挂回来按 1 列的列宽换算滚动位置,跳到 8 月;10-17)。下同。
+    const measure = (): void => { if (!el.clientWidth) return; const w = el.clientWidth - 52; setFit(w >= 7 * 84 ? 7 : w >= 3 * 132 ? 3 : 1) }
     measure()
     const ro = new ResizeObserver(measure)
     ro.observe(el)
@@ -714,7 +715,7 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
     if (!el) return
     // 左轴已是独立 flex 项(52px),日区宽度不再含它 → colw 直接按日区宽均分。
     const minCol = n === 7 ? 84 : n === 3 ? 132 : 180
-    const measure = (): void => setColw(Math.max(minCol, el.clientWidth / n))
+    const measure = (): void => { if (el.clientWidth) setColw(Math.max(minCol, el.clientWidth / n)) }
     measure()
     const ro = new ResizeObserver(measure)
     ro.observe(el)
@@ -1273,7 +1274,7 @@ export const MonthScroll = forwardRef<CalApi, MonthProps>(function MonthScroll({
   useLayoutEffect(() => {
     const el = wrap.current
     if (!el) return
-    const measure = (): void => setRowH(Math.max(64, (el.clientHeight - HEAD_H) / 6))
+    const measure = (): void => { if (el.clientHeight) setRowH(Math.max(64, (el.clientHeight - HEAD_H) / 6)) }
     measure()
     const ro = new ResizeObserver(measure)
     ro.observe(el)
