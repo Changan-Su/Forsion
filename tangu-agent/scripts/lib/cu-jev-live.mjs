@@ -19,6 +19,8 @@
 //   盖窗自己记下:哪些 App 被激活过(pid)、收到几个鼠标 / 滚轮事件(投错了窗口)、真鼠标挪过几次。cumusic / cuscroll 只有点击和滚动,
 //   替身被激活、盖窗收到事件、真鼠标挪动都必须是 0;cusend / cusearch 要打字,打字照旧要前台(键盘规则没改),只记进指标。
 //   盖窗自己不一定拿得到前台(系统的协作式激活常拒绝程序化启动的 App),所以判据看「替身有没有被激活」,不看盖窗丢没丢前台。
+//   真鼠标:开跑前先等它连续 --cu-still 秒(缺省 30)不动,三分钟等不到就 SKIP;挪动只有在插件这一场发过物理输入、或挪到了
+//   插件的落点上时才算插件的(10-17 下午 133831 / 134243 的 cuscroll 被另一个会话的 computer use 拖鼠标冤红过两次)。
 //
 // ⚠️会真的动鼠标、把替身 App 拿到前台好几分钟。跑的时候别碰键盘鼠标;要走 devlock。
 import { spawnSync } from 'node:child_process';
@@ -44,15 +46,20 @@ export function coverFrame(frames) {
  * 盖窗那边看到的,和这一场里有几步输入走了前台。前台步数 = act_ui 结果里的 [foreground] 说明 + jev_ui 每步执行摘要里
  * policy 是 foreground 的;pid = jev_ui 里投给后台进程的步数(act_ui 的结果文字不带投递方式)。
  */
-export function coverStats(cover, ev, jevSteps = [], fixturePids = new Set()) {
+export function coverStats(cover, ev, jevSteps = [], fixturePids = new Set(), points = []) {
   const events = cover?.events || [];
   const exec = jevSteps.flatMap((s) => s.execution?.steps || []);
+  const moves = events.filter((e) => e.kind === 'cursorMoved');
+  const foreground = (ev.toolResults || []).filter((r) => r.name === 'act_ui' && /\[foreground\]/.test(String(r.full || r.result))).length + exec.filter((x) => x.policy === 'foreground').length;
+  // 插件发过物理输入:挪动都算它的(宁严);一下都没发:只有挪到它落点上的才算(物理滚轮挪了光标不还原,报错了投递方式也躲不过)
+  const onPoint = (e) => { const [x, y] = String(e.detail).split(',').map(Number); return points.some((p) => Math.hypot(p.x - x, p.y - y) <= 3); };
   return {
     activated: events.filter((e) => e.kind === 'appActivated' && fixturePids.has(Number(e.detail))).length,
     lost: events.filter((e) => e.kind === 'resignActive').length,
     hits: events.filter((e) => /mouse|scroll/i.test(e.kind)).length,
-    cursor: events.filter((e) => e.kind === 'cursorMoved').length,
-    foreground: (ev.toolResults || []).filter((r) => r.name === 'act_ui' && /\[foreground\]/.test(String(r.full || r.result))).length + exec.filter((x) => x.policy === 'foreground').length,
+    cursor: moves.length,
+    cursorOurs: foreground > 0 ? moves.length : moves.filter(onPoint).length,
+    foreground,
     pid: exec.filter((x) => x.delivery === 'pid').length,
   };
 }
@@ -61,8 +68,28 @@ function coverChecks(key, c) {
   return {
     '替身一次都没被激活(点击 / 滚动没抢前台)': !!c && c.activated === 0,
     '盖窗没收到鼠标 / 滚轮(事件没投错窗口)': !!c && c.hits === 0,
-    '真鼠标没动': !!c && c.cursor === 0,
+    '真鼠标没被插件挪动': !!c && c.cursorOurs === 0,
   };
+}
+
+/** 插件的落点(全局点、左上角原点):jev_ui 每步的 pointFraction 按每扇替身窗口各换算一次(分不清是哪扇,两扇都算,宁严)。
+ * ponytail: act_ui 的坐标是截图像素、要截图尺寸才能换算,没算进来;这些场景都交给 Jev,act_ui 点击是 0。 */
+export function inputPoints(jevSteps, frames) {
+  return jevSteps.filter((s) => s.pointFraction).flatMap((s) => frames.map((f) => ({ x: f.x + s.pointFraction.x * f.w, y: f.y + s.pointFraction.y * f.h })));
+}
+
+/** 等真鼠标连续 stillMs 不动(每 pollMs 问一次 helper 的 getMousePosition),capMs 内等不到就 still: false。helper 不回话就不等。 */
+export async function waitMouseStill({ stillMs, capMs = 180_000, pollMs = 500, where = () => ask('getMousePosition') }) {
+  const start = Date.now();
+  let last = await where(), since = start;
+  if (!last) return { still: true, waitedMs: 0 };
+  while (Date.now() - since < stillMs) {
+    if (Date.now() - start > capMs) return { still: false, waitedMs: Date.now() - start };
+    await sleep(pollMs);
+    const now = await where();
+    if (now && (now.x !== last.x || now.y !== last.y)) { last = now; since = Date.now(); }
+  }
+  return { still: true, waitedMs: Date.now() - start };
 }
 
 const APPS = '电脑上开着 Melody(音乐播放器)和 Chatter(聊天软件)。它们的界面是自己画的,只能看着截图、用点击和打字来操作,不要用脚本或命令行去操控它们。';
@@ -339,9 +366,11 @@ function cuJevChecks(key, { ev, calls, melody, chatter, want, hottest, jevConfir
   return { checks, toSakura, toOthers };
 }
 
-export async function cuJevLive({ key, api, run, OUT, bundle, cover = false, timeoutMs, tokensOf, ttft }) {
+export async function cuJevLive({ key, api, run, OUT, bundle, cover = false, stillMs = 30_000, timeoutMs, tokensOf, ttft }) {
   const plugin = (await api('/agent/plugins')).plugins?.find((p) => /computer-use/.test(p.id));
   if (!plugin) return { ok: false, detail: 'Computer Use 插件没装进隔离 home,场景无效' };
+  const still = cover && stillMs > 0 ? await waitMouseStill({ stillMs }) : null;
+  if (still && !still.still) return { ok: false, skipped: true, detail: `真鼠标 ${Math.round(still.waitedMs / 1000)} 秒里没连续静过 ${stillMs / 1000} 秒(别的会话的 computer use 或有人在用鼠标),盖窗场景没跑:「真鼠标没被插件挪动」判不了` };
   await api(`/agent/plugins/${plugin.id}/enabled`, { method: 'PUT', body: JSON.stringify({ enabled: true }) });
   const fx = await import(pathToFileURL(join(bundle, 'scripts/vision-fixtures.mjs')).href);
   const dir = join(OUT, `${key}-evidence`); mkdirSync(join(dir, 'jev'), { recursive: true });
@@ -404,13 +433,13 @@ export async function cuJevLive({ key, api, run, OUT, bundle, cover = false, tim
   const jevScrolls = jevSteps.reduce((n, s) => n + (s.action === 'scroll' ? Number(s.scrolls) || 0 : 0), 0);
   const plays = (melody?.events || []).filter((e) => e.kind === 'play').map((e) => String(e.detail).split(' ')[0]);
   const { checks: own, toSakura, toOthers } = cuJevChecks(key, { ev, calls, melody, chatter, want, hottest, jevConfirmed, jevSteps, actActions, followUps });
-  const cs = cover ? coverStats(coverState, ev, jevSteps, fixturePids) : null;
+  const cs = cover ? coverStats(coverState, ev, jevSteps, fixturePids, inputPoints(jevSteps, [apps.melody && MELODY_FRAME, apps.chatter && CHATTER_FRAME].filter(Boolean))) : null;
   const checks = { ...own, ...(cover ? coverChecks(key, cs) : {}) };
   const metrics = `工具调用 ${calls.length} 次(jev_ui ${jevCalls.length},确认 ${jevConfirmed} 步,滚动 ${jevScrolls} 次;act_ui 点击 ${actClicks} 次、滚动 ${actActions.filter((a) => a.action === 'scroll').length} 次、打字 ${actActions.filter((a) => ['type', 'typeText', 'setText'].includes(a.action)).length} 次);`
     + (melody ? `Melody 播过 ${plays.join('、') || '(没播)'},现在 ${melody?.playing ? `#${melody.playing.index} ${melody.playing.title}` : '没在放'},点击 ${melody?.clicks ?? '?'} / 双击 ${melody?.doubleClicks ?? '?'};` : '')
     + (key === 'cusearch' ? `${popupStats(chatter)};截图里画进了下拉 ${ev.toolResults.filter((r) => /drawn over it/.test(String(r.full || r.result))).length} 次;` : '')
     + (chatter ? `Chatter 发出 ${chatter.sent?.length ?? 0} 条(给 Sakura ${toSakura.length}${toOthers.length ? `,给别人 ${toOthers.map((m) => m.to).join('、')}` : ''}),最热评论「${clip(hottest?.text, 40)}」;` : '')
-    + (cs ? `替身被激活 ${cs.activated} 次;盖窗${boot.cover?.active ? '起来时是前台' : '起来时没拿到前台'}、丢前台 ${cs.lost} 次、收到鼠标 / 滚轮 ${cs.hits} 个、真鼠标挪过 ${cs.cursor} 次;输入走前台 ${cs.foreground} 步、Jev 投给后台进程 ${cs.pid} 步;` : '')
+    + (cs ? `${still ? `开跑前等真鼠标静止 ${Math.round(still.waitedMs / 1000)} 秒;` : ''}替身被激活 ${cs.activated} 次;盖窗${boot.cover?.active ? '起来时是前台' : '起来时没拿到前台'}、丢前台 ${cs.lost} 次、收到鼠标 / 滚轮 ${cs.hits} 个、真鼠标挪过 ${cs.cursor} 次${cs.cursor ? (cs.cursorOurs ? `(算插件的 ${cs.cursorOurs} 次)` : '(都不是插件挪的:这一场没发物理输入,也不在它的落点上)') : ''};输入走前台 ${cs.foreground} 步、Jev 投给后台进程 ${cs.pid} 步;` : '')
     + `问用户 ${ev.inquiries || 0} 次(ask_user)${followUps.length ? `,停下来问过 ${followUps.length} 次、回的是:${followUps.map((f) => `「${f.text}」`).join(' ')}` : ''};Jev 请求 ${jevFiles.length} 次;录像 ${video.error ? `没录成(${clip(video.error, 80)})` : `${video.frames} 帧`}`;
   writeProcess({ dir, key, prompt: PROMPTS[key], ev, t0, checks, metrics, states: { ...(melody ? { melody } : {}), ...(chatter ? { chatter } : {}), ...(coverState ? { cover: coverState } : {}) }, jevFiles, video, followUps });
   const failed = Object.entries(checks).filter(([, pass]) => !pass).map(([name]) => name);
@@ -512,7 +541,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href &
     const steps = [{ execution: { steps: [{ delivery: 'pid', policy: 'background' }] } }, { execution: { steps: [{ delivery: 'hid', policy: 'foreground' }] } }];
     const quiet = { events: [{ kind: 'becomeActive' }] };
     const pids = new Set([4242]);
-    assert.deepEqual(coverStats(quiet, ev, steps, pids), { activated: 0, lost: 0, hits: 0, cursor: 0, foreground: 2, pid: 1 });
+    assert.deepEqual(coverStats(quiet, ev, steps, pids), { activated: 0, lost: 0, hits: 0, cursor: 0, cursorOurs: 0, foreground: 2, pid: 1 });
     assert(Object.values(coverChecks('cumusic', coverStats(quiet, ev, steps, pids))).every(Boolean), '替身没被激活、盖窗没收到事件、鼠标没动:要过');
     assert(Object.values(coverChecks('cumusic', coverStats({ events: [{ kind: 'resignActive' }, { kind: 'appActivated', detail: '777' }] }, ev, steps, pids))).every(Boolean), '用户自己切了别的 App(不是替身):不算抢前台');
     for (const e of [{ kind: 'appActivated', detail: '4242' }, { kind: 'mouseDown' }, { kind: 'scroll' }, { kind: 'cursorMoved' }]) {
@@ -520,6 +549,19 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href &
     }
     assert(!Object.values(coverChecks('cumusic', null)).every(Boolean), '盖窗状态读不到不许过');
     assert.deepEqual(coverChecks('cusend', coverStats({ events: [{ kind: 'resignActive' }] }, ev, steps)), {}, '要打字的场景只记指标');
+    // 别人在动鼠标(10-17 下午 134243):插件一下物理输入都没发、挪动也不在落点上,不算它的;挪到落点上的照样算
+    const bg = { toolResults: [] }, bgSteps = [{ pointFraction: { x: 0.31, y: 0.545 }, execution: { steps: [{ delivery: 'pid', policy: 'background' }] } }];
+    const pts = inputPoints(bgSteps, [MELODY_FRAME]);
+    assert.deepEqual(pts, [{ x: 350, y: 430.6 }]);
+    const someoneElse = { events: [{ kind: 'cursorMoved', detail: '0,204' }, { kind: 'cursorMoved', detail: '907,280' }] };
+    assert(Object.values(coverChecks('cuscroll', coverStats(someoneElse, bg, bgSteps, pids, pts))).every(Boolean), '没发物理输入、挪动不在落点上:不算插件的');
+    assert(!Object.values(coverChecks('cuscroll', coverStats({ events: [{ kind: 'cursorMoved', detail: '351,431' }] }, bg, bgSteps, pids, pts))).every(Boolean), '挪到了插件的落点上(物理滚轮挪光标不还原):不许过');
+    assert(!Object.values(coverChecks('cuscroll', coverStats(someoneElse, ev, steps, pids, pts))).every(Boolean), '这一场发过物理输入:挪动都算插件的');
+    const seq = (xs) => { let i = 0; return async () => xs[Math.min(i++, xs.length - 1)]; };
+    assert.equal((await waitMouseStill({ stillMs: 40, pollMs: 5, where: seq([{ x: 1, y: 1 }]) })).still, true, '一直不动:等到');
+    let n = 0; const busy = async () => ({ x: n++, y: 0 });
+    assert.equal((await waitMouseStill({ stillMs: 40, capMs: 120, pollMs: 5, where: busy })).still, false, '一直在动:到上限就放弃');
+    assert.deepEqual(await waitMouseStill({ stillMs: 40, where: async () => null }), { still: true, waitedMs: 0 }, 'helper 不回话:不等');
   }
   console.log('cu-jev-live selftest ok');
 }
