@@ -1080,6 +1080,9 @@ export interface UiMessage {
   role: 'user' | 'assistant' | 'system'
   content: string
   reasoning?: string
+  /** 思考累计用时(ms)与本段思考的起点:只在本次运行里由 appStore 记(引擎不落库),渲染成「思考 N 秒」。 */
+  reasoningMs?: number
+  reasoningSince?: number
   /** 开发者调试:本条消息发给模型的完整 system prompt(经 `system_prompt` 事件填入;仅 dev 开关开启时有)。 */
   systemPrompt?: string
   toolEvents?: ToolEvent[]

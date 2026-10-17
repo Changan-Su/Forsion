@@ -113,6 +113,8 @@ async function main() {
       ta.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }))
     }, { imgs: IMG })
     await win.locator('.t2c-tilerow .att-tile--img').nth(1).waitFor()
+    // 磁贴也吃输入卡的芯片入场动画(从 0.85 放大、依次晚 30ms):等它走完再量,否则量到的是缩着的尺寸
+    await win.evaluate(() => Promise.all(document.querySelector('.t2c-tilerow').getAnimations({ subtree: true }).map((a) => a.finished)))
     const tiles = await win.evaluate(() => {
       const row = document.querySelector('.t2c-tilerow')
       const img = row.querySelector('.att-tile--img img').getBoundingClientRect()
