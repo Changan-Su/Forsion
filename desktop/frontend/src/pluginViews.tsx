@@ -163,8 +163,13 @@ export function syncPluginViews(): void {
         const tabs = s === 'left' ? ws.leftTabs : ws.rightTabs
         return (s === 'left' ? ws.leftVisible : ws.rightVisible) && tabs.length > 0 && tabs.every((t) => t.type === type)
       }) : undefined
-      if (side) ws.toggleSidebar(side)
-      else ws.closeViewsOfType(type)
+      if (!side) { ws.closeViewsOfType(type); return }
+      // 别处的同类实例(主区标签、另一侧 / 底部)照常关,只有这一侧收起(Codex 评审 #4)
+      for (const p of ws.api?.panels ?? []) {
+        const m = (p.params ?? {}) as { __type?: string; __loc?: string }
+        if ((m.__type || (p as { component?: string }).component) === type && m.__loc !== side) ws.closeLeaf(p.id)
+      }
+      ws.toggleSidebar(side)
     },
     replace: (from, to, params) => useWorkspace.getState().replaceViewsOfType(from, to, params),
   })
