@@ -4013,8 +4013,14 @@ const tabCountText = (list) => {
   // saveData counter as last observed: every run must add exactly one (an earlier failed check must not cascade)
   let pluginRuns = 0
   async function runPluginCommand() {
-    await tapId('nativeChrome.more')
-    const list = await waitSheet(true, SLOW)
+    // after a boot / reload the plugins load once the shell is up: a ⋯ opened before that lists no command of theirs
+    let list
+    for (let i = 0; ; i++) {
+      await tapId('nativeChrome.more')
+      list = await waitSheet(true, SLOW)
+      if (h.byId(list, pluginItem(PLUGIN_CMD)) || i === 4) break
+      h.key(4); await waitSheet(false); await h.pause(1500)
+    }
     assert.ok(h.byId(list, pluginItem(PLUGIN_CMD)), `plugin command not in ⋯: ${ids(list)}`)
     await tapId(pluginItem(PLUGIN_CMD), list)
     await waitSheet(false, SLOW)
