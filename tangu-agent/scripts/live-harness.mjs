@@ -4131,29 +4131,35 @@ Then reply with only the command output.`,
     const { default: Database } = await import('better-sqlite3');
     const db = new Database(join(home, 'state.db'), { readonly: true, fileMustExist: true });
     let dmId = '';
+    let dmWaits = false;
     let dm = [];
     try {
-      dmId = db.prepare(`SELECT id FROM chat_sessions WHERE kind = 'user' AND archived = 0 AND json_valid(agent_config) AND json_extract(agent_config, '$.soloAgentSlug') = 'muse' ORDER BY updated_at DESC LIMIT 1`).get()?.id || '';
-      dm = dmId ? db.prepare(`SELECT role, origin, content FROM chat_messages WHERE session_id = ? ORDER BY timestamp`).all(dmId) : [];
+      const dmRow = db.prepare(`SELECT * FROM chat_sessions WHERE kind = 'user' AND archived = 0 AND json_valid(agent_config) AND json_extract(agent_config, '$.soloAgentSlug') = 'muse' ORDER BY updated_at DESC LIMIT 1`).get();
+      dmId = dmRow?.id || '';
+      dmWaits = !!dmRow?.awaiting_user; // 只有 message_user 的问句置这一列(审批的「等你」由 attention 现算),拿它判 B 才分得开
+      // 基线引擎(--kind base)没有 origin 列:读成 NULL,红在判据上而不是 SQL 报错上
+      const hasOrigin = db.prepare(`SELECT 1 FROM pragma_table_info('chat_messages') WHERE name = 'origin'`).get();
+      dm = dmId ? db.prepare(`SELECT role, ${hasOrigin ? 'origin' : 'NULL AS origin'}, content FROM chat_messages WHERE session_id = ? ORDER BY timestamp`).all(dmId) : [];
     } finally { db.close(); }
     const said = dm.filter((m) => String(m.origin || '').startsWith('proactive'));
-    const ask = said.find((m) => m.origin === 'proactive' && /抖动|flak|sync\.test/i.test(m.content) && /[?？]\s*$/.test(String(m.content).trim()));
+    const ask = said.find((m) => m.origin === 'proactive' && /抖动|flak|sync\.test/i.test(m.content) && /[?？]/.test(m.content));
     const apps = (t) => ['Obsidian', 'Notion', 'Logseq'].every((a) => String(t || '').includes(a));
     const productInDm = said.some((m) => m.origin === 'proactive' && apps(m.content) && String(m.content).length > 600);
     const inbox = asList(await api('/agent/inbox?filter=all').catch(() => []), 'messages');
-    const letter = inbox.find((m) => m.sender_id === 'muse' && apps(m.body));
+    // 成品信:正文带对比,或指向写好的对比文件(10-18 修后首跑:对比写进 Library、发一封指路信 —— 分流是对的,判据原先只认前一种)
+    const letter = inbox.find((m) => m.sender_id === 'muse' && (apps(m.body) || /对比|同步|compar|sync/i.test(`${m.title} ${m.body}`)));
     const apvLetters = inbox.filter((m) => /```forsion-approval/.test(String(m.body || '')));
     const apvDm = said.filter((m) => m.origin === 'proactive:approval');
     const pending = asList(await api('/agent/special/approvals?status=pending').catch(() => []), 'approvals').filter((a) => a.agent_slug === 'muse');
     const att = asList(await api('/agent/sessions/attention').catch(() => []), 'sessions').find((x) => x.id === dmId);
     const needApv = MUSE_MODE === 'ask';
     const apvOk = !needApv || (pending.length > 0 && apvDm.length > 0 && apvLetters.length === 0);
-    const ok = !!dmId && !!ask && !!letter && !productInDm && !!att?.unread && !!att?.awaiting && apvOk;
+    const ok = !!dmId && !!ask && dmWaits && !!letter && !productInDm && !!att?.unread && !!att?.awaiting && apvOk;
     const museSays = done.sessionId ? asList(await api(`/agent/sessions/${done.sessionId}/messages`).catch(() => []), 'messages').filter((m) => m.role === 'assistant' || m.role === 'model').map((m) => String(m.content || '')).join('\n---\n') : '';
     const detail = [
       `私聊${dmId ? '' : '没建出来 ← 红'}主动 ${said.length} 条(问句 ${said.filter((m) => m.origin === 'proactive').length} / 待办 ${said.filter((m) => m.origin === 'proactive:todo').length} / 审批 ${apvDm.length})`,
-      `B 拍板进私聊:${ask ? '有,问句结尾' : '没有 ← 红'}`,
-      `A 成品进收件箱:${letter ? `有「${String(letter.title).slice(0, 40)}」` : '没有 ← 红'}${productInDm ? ';整篇对比塞进了私聊 ← 红' : ''}`,
+      `B 拍板进私聊:${ask ? (dmWaits ? '有,私聊亮了等你' : '有,但私聊没亮等你 ← 红') : '没有 ← 红'}`,
+      `A 成品进收件箱:${letter ? `有「${String(letter.title).slice(0, 40)}」(${apps(letter.body) ? '正文带对比' : '只是指路'})` : '没有 ← 红'}${productInDm ? ';整篇对比塞进了私聊 ← 红' : ''}`,
       `C 审批:${needApv ? `待批 ${pending.length},私聊里 ${apvDm.length} 条,审批信 ${apvLetters.length}${apvOk ? '' : ' ← 红'}` : `非 ask 档不判(待批 ${pending.length})`}`,
       `attention ${att ? JSON.stringify({ unread: att.unread, awaiting: att.awaiting }) : '没报这条私聊 ← 红'}`,
       `收件箱共 ${inbox.length} 封(muse ${inbox.filter((m) => m.sender_id === 'muse').length})`,

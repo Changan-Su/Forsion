@@ -19,6 +19,13 @@ export const MUSE_DM_MAX_CHARS = 1500;
 
 export type MuseDmResult = { ok: true; sessionId: string; messageId: string } | { ok: false; error: string };
 
+/** 这句在等用户回话:以问号收尾,或问号后面只跟一小句(「…要不要记成已知抖动？我先不替你定。」—— 10-18 live 四次里两次这样收尾,
+ *  工具描述写了「问句放最后」也没拦住)。ponytail: 尾巴 ≤40 字按字数判,「CI 红了？没事,重跑过了。」这类自问自答也会亮等你,
+ *  要更准就让模型显式声明。 */
+export function asksUser(text: string): boolean {
+  return endsWithQuestion(text) || /[?？][^?？\n]{1,40}$/.test(text.trim());
+}
+
 export async function postMuseDm(userId: string, content: string, origin: ProactiveOrigin = 'proactive'): Promise<MuseDmResult> {
   const text = String(content || '').trim();
   if (!text) return { ok: false, error: 'Error: the message is empty' };
@@ -42,7 +49,7 @@ export async function postMuseDm(userId: string, content: string, origin: Proact
      VALUES (?, ?, 'model', ?, ?, NULL, ?, ?, ?)`,
     [id, s.id, text, now, false, MUSE_AGENT_SLUG, origin],
   );
-  const ask = origin === 'proactive' && endsWithQuestion(text);
+  const ask = origin === 'proactive' && asksUser(text);
   await query(
     `UPDATE chat_sessions SET updated_at = CURRENT_TIMESTAMP, proactive_at = ?${ask ? ', awaiting_user = TRUE' : ''} WHERE id = ?`,
     [now, s.id],

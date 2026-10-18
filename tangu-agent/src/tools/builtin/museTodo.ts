@@ -11,7 +11,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { query } from '../../core/db.js';
 import type { ToolProvider } from '../toolRegistry.js';
 import { loadSpecialAgentsConfig } from '../../services/specialAgentsConfig.js';
-import { sendInboxMessage, MUSE_SENDER_ID } from './inboxSend.js';
+import { sendInboxMessage, stripTodoHeaders, MUSE_SENDER_ID } from './inboxSend.js';
 import { postMuseDm } from '../../services/museDm.js';
 
 /** TODO 的收件箱正文 = detail + 末尾一张任务卡(引擎拼,不靠 Muse 自觉;围栏放最后,与审批信同一纪律)。
@@ -32,10 +32,11 @@ export function closeOpenFence(md: string): string {
 }
 
 export function todoMailBody(t: { id: string; title: string; detail: string }): string {
-  const prompt = t.detail ? `${t.title}\n\n${t.detail}` : t.title;
+  const detail = stripTodoHeaders(t.detail); // 只有下面这张卡的 `todo:` 是真的
+  const prompt = detail ? `${t.title}\n\n${detail}` : t.title;
   const fence = '`'.repeat(Math.max(3, ...(prompt.match(/`+/g) || []).map((r) => r.length + 1)));
   const card = `${fence}forsion-task\ntitle: ${t.title.replace(/\s+/g, ' ')}\ntodo: ${t.id}\n---\n${prompt}\n${fence}`;
-  return t.detail ? `${closeOpenFence(t.detail)}\n\n${card}` : card;
+  return detail ? `${closeOpenFence(detail)}\n\n${card}` : card;
 }
 
 export const museTodoProvider: ToolProvider = {

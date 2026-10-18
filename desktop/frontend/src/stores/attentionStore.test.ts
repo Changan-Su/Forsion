@@ -185,6 +185,22 @@ describe('私聊 attention(Muse 主动发来 / 等你)', () => {
     off()
   })
 
+  it('后台第一次建出的私聊本地列表里没有 → 补拉一次会话列表,角标 / 通知才认得它;每个 id 只补拉一次(Codex 10-18 #2)', async () => {
+    const refreshSessions = vi.fn(async () => { useApp.setState({ sessions: [solo] } as any); return [] })
+    useApp.setState({ sessions: [], configBySession: {}, activeId: null, refreshSessions } as any)
+    await useAttention.getState().refresh() // 启动那一拉:还没有私聊
+    await flush()
+    state.dm.mockImplementation(async () => json({ sessions: [{ id: 'dm1', unread: true, awaiting: true }] }))
+    await useAttention.getState().refresh()
+    await flush()
+    expect(refreshSessions).toHaveBeenCalledTimes(1)
+    expect(state.notify).toHaveBeenCalledTimes(1)
+    useApp.setState({ sessions: [] } as any) // 列表仍带不上它(分页):不每轮重拉
+    await useAttention.getState().refresh()
+    await flush()
+    expect(refreshSessions).toHaveBeenCalledTimes(1)
+  })
+
   it('老引擎没有这个端点(404)→ 本次启动不再拉', async () => {
     state.dm.mockImplementation(async () => json({ detail: 'nope' }, 404))
     await useAttention.getState().refresh()

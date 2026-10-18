@@ -31,7 +31,8 @@ export const museMessageProvider: ToolProvider = {
           parameters: {
             type: 'object',
             properties: {
-              text: { type: 'string', description: 'The message (markdown). End with a question when you need an answer.' },
+              // 10-18 live 首跑:问句后面又补了一句「我没有替你定。」→ 引擎按结尾问号判等你,判不到。
+              text: { type: 'string', description: 'The message (markdown). When you need an answer, make the question the very last sentence, with nothing after it; that is what marks the chat as waiting for them.' },
             },
             required: ['text'],
           },

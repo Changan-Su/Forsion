@@ -85,6 +85,7 @@ function sanitizeDm(raw: unknown): Record<string, DmAttention> {
 const inflight = new Set<string>()
 let dmDisabled = false // 老引擎没有这个端点(404):本次启动不再拉
 let dmLoaded = false
+const listTried = new Set<string>() // 为它补拉过会话列表的私聊 id(见 refresh)
 let installs = 0
 let teardown: (() => void) | null = null
 
@@ -116,6 +117,11 @@ export const useAttention = create<AttentionState>((set, get) => ({
           const first = !dmLoaded
           dmLoaded = true
           set({ dm })
+          // 后台第一次建出的私聊(用户从没点开过 Muse 那一行)不在本地会话列表里:角标与通知都按列表找会话,
+          // 先拉一遍列表再弹(Codex 10-18 #2)。每个 id 只补拉一次 —— 列表分页没带上它时不至于每 20s 重拉。
+          const st = useApp.getState()
+          const unknown = Object.keys(dm).filter((id) => !st.sessions.some((x) => x.id === id) && !listTried.has(id))
+          if (unknown.length) { unknown.forEach((id) => listTried.add(id)); await st.refreshSessions(st.cfg).catch(() => {}) }
           readActiveDm()
           if (!first) notifyNewWaits(prev, dm) // 启动那一拉不弹:那些是之前就在等的
         })
@@ -286,6 +292,7 @@ export function __resetAttentionForTests(): void {
   inflight.clear()
   dmDisabled = false
   dmLoaded = false
+  listTried.clear()
   useAttention.setState({ byTarget: {}, dm: {} })
 }
 
