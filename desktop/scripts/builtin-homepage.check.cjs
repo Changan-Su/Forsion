@@ -752,7 +752,8 @@ async function main() {
       tiles: [...document.querySelectorAll('.hp-wallpaper-images button[data-image]')].map((e) => e.getAttribute('data-image')),
       wallpaper: document.querySelector('.hp-root')?.getAttribute('data-wallpaper') || '',
       image: document.querySelector('.hp-wallpaper')?.style.backgroundImage || '',
-      customCols: getComputedStyle(document.querySelector('.hp-wallpaper-custom')).gridTemplateColumns.split(' ').length,
+      // 提示 | 更换 | 移除 一排:提示那列吃剩下的宽度(1fr auto auto);被别的网格规则盖成等宽列 = 回归
+      customCols: getComputedStyle(document.querySelector('.hp-wallpaper-custom')).gridTemplateColumns.split(' ').map(parseFloat),
     }))()`)
     await win.click('.hp-wallpaper-sources button[data-source="theme"]')
     await win.click('.hp-theme-presets button[data-preset="path"]')
@@ -895,7 +896,7 @@ async function main() {
       themeStage.wallpaper === '' && themeStage.inlineImage === '' && themeStage.backgroundImage.includes('gradient(')
         && themeStage.preset === 'path' && themeStage.art === 1
         && JSON.stringify(themePresets.ids) === JSON.stringify(['orbit', 'path', 'paper', 'rings', 'glyph']) && themePresets.previews
-        && JSON.stringify(imageSource.tiles) === JSON.stringify(['custom']) && imageSource.wallpaper === 'true' && imageSource.image.startsWith('url("blob:') && imageSource.customCols === 3
+        && JSON.stringify(imageSource.tiles) === JSON.stringify(['custom']) && imageSource.wallpaper === 'true' && imageSource.image.startsWith('url("blob:') && imageSource.customCols.length === 3 && imageSource.customCols[0] > imageSource.customCols[1] + 40 && imageSource.customCols[0] > imageSource.customCols[2] + 40
         && rightClickOrganizer.organizer === 1 && rightClickOrganizer.blur.includes('blur(')
         && rightClickOrganizer.panelWidth <= 600 && rightClickOrganizer.columns === 6
         && rightClickOrganizer.columnGap <= 8 && rightClickOrganizer.tileWidth <= 80

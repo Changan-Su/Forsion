@@ -969,7 +969,7 @@ html[data-glass='off'] .hp-root .hp-composer .project-pill::before {
 .hp-theme-mini-clock { top: 36%; width: 26%; height: 9%; border-radius: 2px; background: color-mix(in srgb, var(--text) 70%, transparent); }
 .hp-theme-mini-box { top: 54%; width: 58%; height: 13%; border-radius: 3px; background: var(--bg-card); box-shadow: 0 0 0 0.5px var(--border); }
 /* 「图片」来源:自己上传的那张(格子宽度和两列时一样,不铺满整行);只管第一格那排 —— 写成 `> div` 会连下面的
-   .hp-wallpaper-custom 一起吃掉(特异性更高),提示和两个按钮被拆成两列折行 */
+   .hp-wallpaper-custom 一起吃掉,提示和两个按钮被拆成等宽列折行 */
 .hp-wallpaper-images { padding-top: 13px; }
 .hp-wallpaper-images > div:first-child { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
 .hp-image-preview {
@@ -1045,7 +1045,8 @@ html[data-glass='off'] .hp-root .hp-composer .project-pill::before {
   background: var(--action-fill);
   color: var(--on-action);
 }
-.hp-wallpaper-custom { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 8px; padding: 12px 1px 2px; }
+/* 写成 `.hp-wallpaper-images >` 两级:`.hp-theme-presets > div`(三列等宽)也命中这一行,特异性还更高 */
+.hp-wallpaper-images > .hp-wallpaper-custom { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 8px; padding: 12px 1px 2px; }
 .hp-wallpaper-custom > div { min-width: 0; display: flex; flex-direction: column; }
 .hp-wallpaper-custom strong { color: var(--text); font-size: var(--ui-font-caption, 11px); }
 .hp-wallpaper-custom span { color: var(--text-faint); font-size: var(--ui-font-caption, 11px); }
