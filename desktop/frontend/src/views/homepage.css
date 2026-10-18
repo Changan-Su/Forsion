@@ -1221,7 +1221,7 @@ html[data-glass='off'] .hp-root .hp-composer .project-pill::before {
  *    尺寸按屏幕 dp 写:--hp-dp = 1dp 折合的 CSS px(壳里的 px 被 body zoom 放大过)。字号只用六档界面角色。
  *    每条都带 .hp-phone,比它覆盖的基础规则和上面几档媒体查询都多一段;放文件末尾(DESIGN §7.2)。 ── */
 .hp-root.hp-phone { --hp-dp: calc(1px / var(--uiz, 1)); --hp-padding-block: calc(18 * var(--hp-dp)); padding-inline: calc(18 * var(--hp-dp)); }
-.hp-phone .hp-stack { align-items: stretch; height: 100%; margin: 0; gap: calc(14 * var(--hp-dp)); }
+.hp-phone .hp-stack { align-items: stretch; height: 100%; margin: 0 auto; gap: calc(14 * var(--hp-dp)); } /* 横向仍居中:Pad 上宽过 840 的列不贴左 */
 .hp-phone .hp-title { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: calc(6 * var(--hp-dp)); text-align: left; margin-bottom: auto; }
 .hp-phone .hp-brand { flex: 0 0 100%; order: 1; margin: 0 0 calc(4 * var(--hp-dp)); color: var(--text); opacity: 0.38; font-size: var(--ui-font-title, 16px); }
 .hp-phone .hp-greet { flex: 0 0 100%; order: 2; margin: 0; color: var(--text); font-size: var(--ui-font-display, 20px); font-weight: 600; line-height: 1.25; }
