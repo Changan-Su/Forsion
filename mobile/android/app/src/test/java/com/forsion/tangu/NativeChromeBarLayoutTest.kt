@@ -97,6 +97,21 @@ class NativeChromeBarLayoutTest {
         compose.onNodeWithTag("nativeChrome.title").assertTextEquals("Chat")
     }
 
+    /** RibbonItem.dot behind "more" (an achievement to claim): a dot on the glyph's top-right, and the reason told to a screen reader. */
+    @Test fun moreCarriesADotOnlyWhenThePageSaysSo() {
+        var state by mutableStateOf(shell())
+        compose.setContent { Box(Modifier.width(400.dp).height(NATIVE_CHROME_HEIGHT)) { NativeChromeBar(state, Insets.NONE, { _, _ -> }, {}) } }
+        compose.onNodeWithTag("nativeChrome.moreDot", useUnmergedTree = true).assertDoesNotExist()
+        fun said() = compose.onNodeWithTag("nativeChrome.more").fetchSemanticsNode().config.getOrNull(SemanticsProperties.StateDescription)
+        assertEquals(null, said())
+        state = shell(extra = ""","moreDot":{"label":"1 to claim"}""")
+        val more = compose.onNodeWithTag("nativeChrome.more").getUnclippedBoundsInRoot()
+        val dot = compose.onNodeWithTag("nativeChrome.moreDot", useUnmergedTree = true).assertWidthIsEqualTo(10.dp).getUnclippedBoundsInRoot()
+        assertEquals(listOf(more.right - 17.dp, more.top + 7.dp), listOf(dot.left, dot.top)) // centred on the 22dp glyph's corner
+        compose.onNodeWithTag("nativeChrome.more").assertContentDescriptionEquals("More")
+        assertEquals("1 to claim", said())
+    }
+
     @Test fun oneTabNeedsNoCountButton() {
         top(shell(tabCount = 1))
         compose.onNodeWithTag("nativeChrome.tabs").assertDoesNotExist()

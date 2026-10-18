@@ -1560,6 +1560,30 @@ const tabCountText = (list) => {
     assert.ok(r.hit, `the dot stayed after the session was answered (index requests: ${polled()})`)
   })
 
+  // RibbonItem.dot behind ⋯ (2026-10-18): the web capsule's ⋯ had the dot, the native one only the sheet row's subtitle.
+  // The achievements store is seeded on disk and the page reloaded (it reads the disk once at boot).
+  await check('more dot: nothing to claim → no dot; an achievement to claim → a red dot on the native ⋯', async () => {
+    const KEY = 'forsion_tangu_achievements'
+    const kept = await cdp.eval(`localStorage.getItem('${KEY}')`)
+    const put = async (data) => { await cdp.eval(`(localStorage.setItem('${KEY}', ${JSON.stringify(JSON.stringify(data))}), true)`); await reload() }
+    const dotOf = (l) => h.byId(l, 'nativeChrome.moreDot')
+    try {
+      await put({ v: 1, counters: {}, claimed: [] })
+      assert.ok(h.byId(ui(), 'nativeChrome.more') && !dotOf(ui()), 'no ⋯, or a dot with nothing to claim')
+      await put({ v: 1, counters: { 'theme.change': 1 }, claimed: [] })
+      const r = await h.waitNodes((l) => (dotOf(l) ? l : null), { timeout: 10000 })
+      assert.ok(r.hit, 'no dot on ⋯ with an achievement to claim')
+      const [dot, more] = [dotOf(r.hit), h.byId(r.hit, 'nativeChrome.more')]
+      assert.ok(more && within(more, dot), `the dot is not on ⋯ (${dot.bounds} vs ${more?.bounds})`)
+      const c = pixelAt(dot.rect.cx, dot.rect.cy) // --danger, red in every theme
+      assert.ok(c.r > c.g + 60 && c.r > c.b + 60, `the dot is not the danger colour: ${JSON.stringify(c)}`)
+      shot('03g-more-dot')
+    } finally {
+      await cdp.eval(`(${JSON.stringify(kept)} === null ? localStorage.removeItem('${KEY}') : localStorage.setItem('${KEY}', ${JSON.stringify(kept)}), true)`)
+      await reload()
+    }
+  })
+
   await check('haptics: switching Space ticks once (not on the Space you are on); the page-side seam ticks; an unknown kind is silent', async () => {
     const call = (kind) => cdp.eval(`Capacitor.Plugins.NativeChrome.haptic({ kind: ${JSON.stringify(kind)} }).then(() => 'ok', (e) => 'rejected: ' + (e && e.message))`)
     const onTangu = "document.querySelector('.mb-shell')?.dataset.space === 'tangu'"

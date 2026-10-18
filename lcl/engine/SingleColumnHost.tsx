@@ -15,7 +15,7 @@ import { flushSync } from 'react-dom'
 import { PanelLeft, PanelRight, X, MoreHorizontal, Plus, Zap, SlidersHorizontal } from 'lucide-react'
 import { useSpaceStore, setActiveSpace, getActiveSpace, pinSpaceToHome, redirectOpenFromOnePage } from './spaceRegistry'
 import { switchSpace } from './spaceTransition'
-import { useRibbonStore } from './ribbonRegistry'
+import { useDotted, useRibbonStore } from './ribbonRegistry'
 import { useCommandStore } from './commandRegistry'
 import { accountMenuItems, moreCommandGroups, moreCommandOn, moreCommandTitle, moreItems, moreRowLabel, presentedCommand } from './moreSheet'
 import { getView } from './viewRegistry'
@@ -790,7 +790,8 @@ async function presentNativeMore(tr: Tr): Promise<boolean> {
     sections: [
       // 「新建标签页」:原生顶栏在只有一个标签页时不画计数钮(它本是这个动作的入口),所以这里常驻一行。一页式 Space(主页)没有。
       ...(tabsAllowed() ? [{ items: [{ id: NEW_TAB, label: tr('lcl.tab.new'), icon: Plus }] }] : []),
-      ...(items.length ? [{ items: items.map((it) => ({ id: it.id, label: it.tooltip ? moreRowLabel(label(it.tooltip)) : it.id, icon: it.icon })) }] : []),
+      // 原生半屏画不了红点:亮着的那行把红点的意思写成副标题(老版本 App 也认 detail,不用等出包)
+      ...(items.length ? [{ items: items.map((it) => ({ id: it.id, label: it.tooltip ? moreRowLabel(label(it.tooltip)) : it.id, icon: it.icon, ...(it.dot?.get() && it.dot.label ? { detail: it.dot.label() } : {}) })) }] : []),
       ...groups.map((g) => ({
         ...(g.title ? { title: g.title } : {}),
         items: g.commands.map((c) => ({ id: `cmd:${c.id}`, label: moreCommandTitle(c), icon: c.icon ?? Zap, ...(moreCommandOn(c) ? { checked: true } : {}) })),
@@ -816,7 +817,9 @@ async function presentNativeMore(tr: Tr): Promise<boolean> {
  *  账号(rb-account)与设置(rb-settings)住在左抽屉底部常驻(用户拍板 2026-08-05),此处滤掉防重复;
  *  原生宿主画底栏时它们跟着头像走(见 moreSheet.ts 的 moreItems)。 */
 function MoreSheet({ onClose }: { onClose: () => void }) {
-  const items = moreItems(useRibbonStore((s) => s.items), nativeChromeDrawsSpaces()) // 宿主形态在这张 sheet 开着时不会变,取一次即可
+  const all = useRibbonStore((s) => s.items)
+  const items = moreItems(all, nativeChromeDrawsSpaces()) // 宿主形态在这张 sheet 开着时不会变,取一次即可
+  const dotted = useDotted(all)
   const groups = moreCommandGroups(useCommandStore((s) => s.commands))
   const nativeChrome = useNativeChromeInstalled()
   const { t: tr } = useEngineI18n()
@@ -842,6 +845,7 @@ function MoreSheet({ onClose }: { onClose: () => void }) {
             <button key={it.id} className="mb-sheet-row" data-ribbon-id={it.id} onClick={() => { it.onClick?.(); onClose() }}>
               {Icon && <Icon size={20} />}
               <span>{it.tooltip ? moreRowLabel(label(it.tooltip)) : it.id}</span>
+              {dotted.has(it.id) && <span className="rb-badge rb-dot" role="img" aria-label={it.dot?.label?.()} />}
             </button>
           )
         })}
@@ -959,6 +963,13 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
   const leftVisible = useWorkspace((s) => s.leftVisible)
   const rightVisible = useWorkspace((s) => s.rightVisible)
   const tabCount = useWorkspace((s) => s.mainTabs.length)
+  // 「⋯」里有亮红点的项(成就可领…)→「⋯」本身挂红点,同桌面 Ribbon 收进「…」的那条。
+  // 原生顶栏(Android)的「⋯」同一份判据:随 shell 状态推 moreDot,label 给读屏(NativeChromeBar 画点;老 App 不认这个字段,靠半屏里那行的副标题)
+  const ribbonItems = useRibbonStore((s) => s.items)
+  const dotted = useDotted(ribbonItems)
+  const moreDotItem = moreItems(ribbonItems, nativeSpaces).find((i) => dotted.has(i.id))
+  const moreDot = !!moreDotItem
+  const moreDotLabel = moreDotItem ? String(moreDotItem.dot?.label?.() ?? '').slice(0, 120) : null // Kotlin 拒收超过 128 的 label
   const activeSpaceId = useSpaceStore((s) => s.activeSpaceId) // 仪器锚点(data-space):原生底栏接管后 DOM 里没有 .mb-tab.on 可查
 
   const wide = useWideAspect(true)
@@ -1014,6 +1025,7 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
         // 当前这一层的视图给顶栏加的东西(搜索钮、标题的第二段),见 useNativeChromeExtras。
         ...(extras?.search ? { search: extras.search.label } : {}),
         ...(extras?.title ? { titleSub: extras.title.sub, ...(extras.title.run ? { titleTap: true } : {}) } : {}),
+        ...(moreDotLabel !== null ? { moreDot: { label: moreDotLabel } } : {}),
       }, {
         left: () => useWorkspace.getState().toggleSidebar('left'),
         right: () => useWorkspace.getState().toggleSidebar('right'),
@@ -1031,7 +1043,7 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
     const offs = [useWorkspace.subscribe(push), useSpaceStore.subscribe(push), useRibbonStore.subscribe(push), subscribeNativeChromeExtras(push), subscribeDockPicks(push)]
     // 只退订,不清状态:换语言重跑本 effect 时若先清成 null,原生栏会先收起再弹出(WebView 高度跳两下)。
     return () => { offs.forEach((off) => off()) }
-  }, [nativeChrome, chromeLabelsKey])
+  }, [nativeChrome, chromeLabelsKey, moreDotLabel]) // moreDotLabel:点亮 / 熄灭 / 换语言都重推一次
   useEffect(() => () => setNativeChromeShell(null), [])
 
   // Android 系统返回:MobileRoot 派发可取消的 forsion:mobile-back,壳先接管最上层的两个 sheet。
@@ -1092,7 +1104,7 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
         <button className="mb-icon-btn mb-tabsbtn" onClick={openTabs} aria-label="tabs">
           <span className="mb-tabcount">{tabCount || 1}</span>
         </button>
-        <button className="mb-icon-btn" onClick={openMore} aria-label="more"><MoreHorizontal size={20} /></button>
+        <button className={`mb-icon-btn${moreDot ? ' mb-has-dot' : ''}`} onClick={openMore} aria-label="more"><MoreHorizontal size={20} />{moreDot && <span className="rb-badge rb-dot" aria-hidden="true" />}</button>
       </div>
     </header>
   )

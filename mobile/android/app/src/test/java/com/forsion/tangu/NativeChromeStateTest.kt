@@ -152,6 +152,18 @@ class NativeChromeStateTest {
         assertEquals(6, s.spaces.size)
     }
 
+    /** "More" carries a dot only when the page says so; an older page never sends the field. Cosmetic: a bad label
+     *  still draws the dot (unannounced) and never refuses the bar. Pages have no "more" button. */
+    @Test fun moreDotIsOptionalAndItsLabelIsWhatAReaderSays() {
+        assertNull(ChromeState.parse(shell(null)).moreDot)
+        assertEquals("1 to claim", ChromeState.parse(shell(null).put("moreDot", JSONObject().put("label", "1 to claim"))).moreDot)
+        assertEquals("", ChromeState.parse(shell(null).put("moreDot", JSONObject())).moreDot)
+        assertEquals("", ChromeState.parse(shell(null).put("moreDot", JSONObject().put("label", "x".repeat(129)))).moreDot)
+        assertNull(ChromeState.parse(shell(null).put("moreDot", true)).moreDot) // not an object
+        val page = JSONObject("""{"mode":"page","title":"Settings","back":"Back","theme":$theme}""").put("moreDot", JSONObject().put("label", "x"))
+        assertNull(ChromeState.parse(page).moreDot)
+    }
+
     @Test fun warningColourFallsBackToDangerWhenThePageDoesNotSendOne() {
         val plain = ChromeState.parse(shell(null))
         assertEquals(plain.theme.danger, plain.theme.warning)
