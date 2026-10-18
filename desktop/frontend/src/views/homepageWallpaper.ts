@@ -6,9 +6,7 @@
  */
 
 export type HomepageWallpaperSource = 'theme' | 'bing' | 'image'
-export type HomepageThemePreset = 'orbit' | 'path' | 'paper' | 'glyph'
-/** 「图片」来源里选哪张:随包的 Hack2Gate 海报,或用户自己上传的那张(IndexedDB)。 */
-export type HomepageImageChoice = 'hack2gate' | 'custom'
+export type HomepageThemePreset = 'orbit' | 'path' | 'paper' | 'rings' | 'glyph'
 
 export interface BingWallpaper {
   id: string
@@ -22,7 +20,6 @@ export interface BingWallpaper {
 export interface HomepageWallpaperPrefs {
   source: HomepageWallpaperSource
   themePreset: HomepageThemePreset
-  imageChoice: HomepageImageChoice
   bingDaily: boolean
   focusBlur: boolean
   vignette: boolean
@@ -37,7 +34,6 @@ export const HOMEPAGE_CUSTOM_WALLPAPER_MAX_BYTES = 32 * 1024 * 1024
 export const DEFAULT_HOMEPAGE_WALLPAPER_PREFS: HomepageWallpaperPrefs = {
   source: 'theme',
   themePreset: 'orbit',
-  imageChoice: 'hack2gate',
   bingDaily: true,
   focusBlur: true,
   vignette: true,
@@ -75,23 +71,25 @@ export function normalizeBingWallpaper(value: unknown): BingWallpaper | null {
   }
 }
 
-/** 10-17 换了一套主题背景:旧三张各映射到气质最近的新图;Hack2Gate 是位图,挪进「图片」来源;旧「自定义」并进「图片」。 */
+/** 10-17 换了一套主题背景:旧三张各映射到气质最近的新图。扶桑环 10-18 又留了下来(用户要回),
+ *  但 2.13.4 及更早它是缺省值,存着它的几乎都是没选过的人 —— 所以只有旧格式(没有 motion 字段,10-17 之前存的)才映射成星轨,
+ *  之后存下的 rings 就是自己选的。Hack2Gate 海报 10-18 去掉了,选着它的回到主题背景。旧「自定义」并进「图片」。 */
 const LEGACY_PRESETS: Record<string, HomepageThemePreset> = { rings: 'orbit', topography: 'path', weave: 'paper' }
+const PRESETS: readonly string[] = ['orbit', 'path', 'paper', 'rings', 'glyph'] satisfies HomepageThemePreset[]
 
 export function normalizeHomepageWallpaperPrefs(value: unknown): HomepageWallpaperPrefs {
   if (!value || typeof value !== 'object') return { ...DEFAULT_HOMEPAGE_WALLPAPER_PREFS }
   const raw = value as Record<string, unknown>
-  const legacyHack2gate = raw.themePreset === 'hack2gate'
-  let source: HomepageWallpaperSource = raw.source === 'bing' || raw.source === 'image' ? raw.source : 'theme'
-  let imageChoice: HomepageImageChoice = raw.imageChoice === 'custom' ? 'custom' : 'hack2gate'
-  if (raw.source === 'custom') { source = 'image'; imageChoice = 'custom' }
-  else if (legacyHack2gate && source === 'theme') { source = 'image'; imageChoice = 'hack2gate' }
+  // 「图片」来源现在只剩自己上传的那张:选着 Hack2Gate 海报的(imageChoice === 'hack2gate')回到主题背景
+  const source: HomepageWallpaperSource = raw.source === 'bing' ? 'bing'
+    : raw.source === 'custom' || (raw.source === 'image' && raw.imageChoice !== 'hack2gate') ? 'image' : 'theme'
   const preset = typeof raw.themePreset === 'string' ? raw.themePreset : ''
-  const themePreset: HomepageThemePreset = preset === 'orbit' || preset === 'path' || preset === 'paper' || preset === 'glyph' ? preset : Object.hasOwn(LEGACY_PRESETS, preset) ? LEGACY_PRESETS[preset] : 'orbit'
+  const legacy = !Object.hasOwn(raw, 'motion')
+  const themePreset: HomepageThemePreset = legacy && Object.hasOwn(LEGACY_PRESETS, preset) ? LEGACY_PRESETS[preset]
+    : PRESETS.includes(preset) ? preset as HomepageThemePreset : 'orbit'
   return {
     source,
     themePreset,
-    imageChoice,
     bingDaily: raw.bingDaily !== false,
     focusBlur: raw.focusBlur !== false,
     vignette: raw.vignette !== false,

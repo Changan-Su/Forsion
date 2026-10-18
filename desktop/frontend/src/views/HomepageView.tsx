@@ -80,7 +80,7 @@ const PINNED_SPACES_KEY = 'forsion.homepage.pinned-spaces.v1'
 const PINNED_DROP_ID = 'homepage:pinned-spaces'
 const PINNED_DRAG_PREFIX = 'homepage:pinned:'
 const FIXED_HOME_ACTIONS = ['rb-market', 'rb-achievements'] as const
-const THEME_PRESETS: HomepageThemePreset[] = ['orbit', 'path', 'paper', 'glyph']
+const THEME_PRESETS: HomepageThemePreset[] = ['orbit', 'path', 'paper', 'rings', 'glyph']
 const WALLPAPER_SOURCES: HomepageWallpaperSource[] = ['theme', 'bing', 'image']
 
 /** 指针拖放以「指针真正在谁里面」为准,避免 body zoom 下 active rect 中心偏移选错落点;
@@ -698,7 +698,7 @@ export function HomepageView(_props: ViewProps) {
       .then((blob) => {
         if (!alive) return
         if (!blob) {
-          setWallpaperPrefs((prefs) => prefs.imageChoice === 'custom' ? { ...prefs, imageChoice: 'hack2gate', source: prefs.source === 'image' ? 'theme' : prefs.source } : prefs)
+          setWallpaperPrefs((prefs) => prefs.source === 'image' ? { ...prefs, source: 'theme' } : prefs)
           return
         }
         setCustomWallpaperUrl(URL.createObjectURL(blob))
@@ -771,20 +771,15 @@ export function HomepageView(_props: ViewProps) {
   const closePops = (): void => { setOpenFolder(null); setOrganizerOpen(false); setMenu(null) }
   const wallpaperUrl = wallpaperPrefs.source === 'bing'
     ? wallpaperPrefs.bing?.url || null
-    : wallpaperPrefs.source === 'image' && wallpaperPrefs.imageChoice === 'custom' ? customWallpaperUrl : null
-  const hack2gate = wallpaperPrefs.source === 'image' && wallpaperPrefs.imageChoice === 'hack2gate'
-  // hack2gate 是随包位图,与 Bing/自定义同走照片管线;真有图片 URL 时内联 style 仍压过它。
-  const photo = !!wallpaperUrl || hack2gate
+    : wallpaperPrefs.source === 'image' ? customWallpaperUrl : null
+  // 「图片」来源还没上传图片时 photo 为假,背景仍画主题图
+  const photo = !!wallpaperUrl
 
   const patchWallpaperPrefs = (patch: Partial<HomepageWallpaperPrefs>): void => {
     setWallpaperPrefs((prefs) => ({ ...prefs, ...patch }))
   }
 
   const selectWallpaperSource = (source: HomepageWallpaperSource): void => {
-    if (source === 'image') {
-      patchWallpaperPrefs({ source, imageChoice: wallpaperPrefs.imageChoice === 'custom' && !customWallpaperUrl ? 'hack2gate' : wallpaperPrefs.imageChoice })
-      return
-    }
     if (source === 'bing') {
       patchWallpaperPrefs({ source, bing: wallpaperPrefs.bing || bingWallpapers[0] || null })
       return
@@ -798,7 +793,7 @@ export function HomepageView(_props: ViewProps) {
     void writeCustomWallpaper(file)
       .then(() => {
         setCustomWallpaperUrl(URL.createObjectURL(file))
-        patchWallpaperPrefs({ source: 'image', imageChoice: 'custom' })
+        patchWallpaperPrefs({ source: 'image' })
       })
       .catch((error) => {
         setWallpaperError(t(error instanceof Error && error.message === 'TOO_LARGE'
@@ -810,7 +805,7 @@ export function HomepageView(_props: ViewProps) {
   const removeCustomWallpaper = (): void => {
     void clearCustomWallpaper().catch(() => {})
     setCustomWallpaperUrl(null)
-    patchWallpaperPrefs({ source: 'theme', imageChoice: 'hack2gate' })
+    patchWallpaperPrefs({ source: 'theme' })
   }
 
   // ── 收纳:重排 / 拖进收纳夹 ────────────────────────────────────────────────
@@ -1054,7 +1049,6 @@ export function HomepageView(_props: ViewProps) {
       className={`hp-root${phone ? ' hp-phone' : ''}${reduceMotion ? ' hp-still' : ''}${composerFocused ? ' hp-composer-focused' : ''}${wallpaperOpen ? ' hp-layer-focused' : ''}${openFolder || organizerOpen ? ' hp-secondary-open' : ''}`}
       data-wallpaper={photo ? 'true' : undefined}
       data-theme-preset={wallpaperPrefs.themePreset}
-      data-image={hack2gate ? 'hack2gate' : undefined}
       data-motion={wallpaperPrefs.motion ? 'on' : 'off'}
       data-hidden={pageHidden || undefined}
       data-focus-blur={wallpaperPrefs.focusBlur ? 'true' : 'false'}
@@ -1267,7 +1261,6 @@ export function HomepageView(_props: ViewProps) {
                     </button>
                   ))}
                 </div>
-                <p className="hp-theme-note">{t('home.wallpaper.hack2gateMoved')}</p>
               </div>
             )}
 
@@ -1321,27 +1314,16 @@ export function HomepageView(_props: ViewProps) {
                 <div>
                   <button
                     type="button"
-                    className={hack2gate ? 'on' : ''}
-                    data-image="hack2gate"
-                    aria-pressed={hack2gate}
-                    onClick={() => patchWallpaperPrefs({ source: 'image', imageChoice: 'hack2gate' })}
-                  >
-                    <span className="hp-image-preview" data-image="hack2gate" aria-hidden />
-                    <span>{t('home.wallpaper.hack2gate')}</span>
-                    {hack2gate && <i><Check size={11} /></i>}
-                  </button>
-                  <button
-                    type="button"
-                    className={wallpaperUrl && !hack2gate ? 'on' : ''}
+                    className={wallpaperUrl ? 'on' : ''}
                     data-image="custom"
-                    aria-pressed={!!wallpaperUrl && !hack2gate}
-                    onClick={() => customWallpaperUrl ? patchWallpaperPrefs({ source: 'image', imageChoice: 'custom' }) : fileRef.current?.click()}
+                    aria-pressed={!!wallpaperUrl}
+                    onClick={() => customWallpaperUrl ? patchWallpaperPrefs({ source: 'image' }) : fileRef.current?.click()}
                   >
                     <span className="hp-image-preview" style={customWallpaperUrl ? { backgroundImage: `url(${JSON.stringify(customWallpaperUrl)})` } : undefined} aria-hidden>
                       {!customWallpaperUrl && <Upload size={16} />}
                     </span>
                     <span>{t(customWallpaperUrl ? 'home.wallpaper.mine' : 'home.wallpaper.upload')}</span>
-                    {wallpaperUrl && !hack2gate && <i><Check size={11} /></i>}
+                    {wallpaperUrl && <i><Check size={11} /></i>}
                   </button>
                 </div>
                 {customWallpaperUrl ? (
