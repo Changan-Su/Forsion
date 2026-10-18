@@ -4,19 +4,23 @@
 import { switchSpace, useSpaceStore, label, getDetachApi, landOnMainPage } from '@lcl/engine'
 import type { SpaceDefinition } from '@lcl/engine'
 import { useInbox } from '../stores/inboxStore'
+import { soloBadge, useSoloStatus } from '../stores/attentionStore'
 import { useI18n } from '../i18n'
 import '../shellMessages'
 
 export function SpaceButton({ space, expanded }: { space: SpaceDefinition; expanded: boolean }) {
   const { t } = useI18n()
   const active = useSpaceStore((s) => s.activeSpaceId === space.id)
-  // hook 无条件调用(React 规则),选择器按 space.id 归零:只有收件箱图标显示未读角标。
-  const unread = useInbox((s) => (space.id === 'inbox' ? s.unreadCount : 0))
+  // hook 无条件调用(React 规则),选择器按 space.id 归零:收件箱 = 未读信数;Tangu = 有新消息或在等你的私聊个数
+  // (10-18 Muse 私聊方案 B),有一条在等你就换警示色。
+  const inboxUnread = useInbox((s) => (space.id === 'inbox' ? s.unreadCount : 0))
+  const solo = soloBadge(useSoloStatus(space.id === 'tangu'))
+  const unread = space.id === 'tangu' ? solo.n : inboxUnread
   const Icon = space.icon
   const name = label(space.name)
   // 可访问名:原来唯一的文本子节点是角标,读屏念出来就是「1」。名字 + 未读条数进 aria-label,角标对读屏隐藏。
   // 收起态的悬停名走 Ribbon 自绘浮签(data-rb-tip),不再挂原生 title(否则两层提示叠在一起)。
-  const a11y = unread > 0 ? t('ribbon.spaceUnread', { name, n: unread }) : name
+  const a11y = unread > 0 ? t(solo.wait ? 'ribbon.spaceWaiting' : 'ribbon.spaceUnread', { name, n: unread }) : name
   return (
     <button
       className={`rb-btn rb-space${active ? ' on' : ''}`}
@@ -35,7 +39,7 @@ export function SpaceButton({ space, expanded }: { space: SpaceDefinition; expan
     >
       {Icon && <Icon size={18} />}
       {expanded && <span className="rb-label">{name}</span>}
-      {unread > 0 && <span className="rb-badge" aria-hidden="true">{unread > 99 ? '99+' : unread}</span>}
+      {unread > 0 && <span className={`rb-badge${solo.wait ? ' dm-wait' : ''}`} aria-hidden="true">{unread > 99 ? '99+' : unread}</span>}
     </button>
   )
 }

@@ -23,8 +23,10 @@ import { resolveCompactionSettings, globalCompactionLayer, updateGlobalCompactio
 import { estimateTokensRough } from '../services/contextBudget.js';
 import { deps } from '../seams/runtime.js';
 import { bumpHistoryRevision } from '../services/historyRevision.js';
-import { sessionHasActiveRun } from '../services/agentLoop.js';
-import { getAgent } from '../agents/agentRegistry.js';
+import { activeSessionIds, sessionHasActiveRun } from '../services/agentLoop.js';
+import { startChildSession } from '../services/childSessions.js';
+import { museDmSessionId } from '../services/museDm.js';
+import { getAgent, MUSE_AGENT_SLUG } from '../agents/agentRegistry.js';
 import { branchSession } from '../services/sessionBranch.js';
 import { listCheckpoints, restoreCodeSince, removeSessionCheckpoints } from '../services/checkpoints.js';
 import { searchSessions, splitTerms, dayArg, fmtDate } from '../services/sessionSearch.js';
@@ -41,7 +43,7 @@ import { parseRemoteOrigin, applyRemoteConfigWrite, remoteCwdViolation, remoteCw
 
 const router = Router();
 
-export const SESSION_COLS = 'id, title, summary, model_id, archived, emoji, agent_config, project_path, project_name, projectless, created_at, updated_at';
+export const SESSION_COLS = 'id, title, summary, model_id, archived, emoji, agent_config, project_path, project_name, projectless, parent_session_id, awaiting_user, created_at, updated_at';
 
 /** preset 合法值:缺省/null(= work)、'coding'、'chat'。写接口对非法值 400,不静默折成 work(creview 09-07 E5)。 */
 export function validPreset(v: unknown): boolean {
@@ -93,7 +95,7 @@ function parseMaybeJson(v: any): any {
 }
 
 export function rowToSession(r: any): any {
-  return { ...r, agent_config: parseMaybeJson(r.agent_config), projectless: !!r.projectless };
+  return { ...r, agent_config: parseMaybeJson(r.agent_config), projectless: !!r.projectless, awaiting_user: !!r.awaiting_user };
 }
 
 /** 取本人会话行(含 app 归属校验);不存在/非本人 → null。 */
@@ -122,9 +124,52 @@ router.get('/agent/sessions', authMiddleware, async (req: AuthRequest, res) => {
        ORDER BY updated_at DESC LIMIT ${limit}`,
       [userId, profile.appId, archived],
     );
-    res.json({ sessions: rows.map(rowToSession) });
+    // busy = 本进程有在飞 / 排队 run:会话列表行尾的「在跑」要覆盖客户端没订阅的会话(主会话开出的子会话、自动接着做的那一轮)。
+    const busy = activeSessionIds();
+    res.json({ sessions: rows.map((r) => ({ ...rowToSession(r), busy: busy.has(r.id) })) });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'list sessions failed' });
+  }
+});
+
+// 会话行的「主动发来没看」与「等你」(Muse 私聊方案 B,10-18):桌面全局轮询器每 4s 拉一次,私聊行尾状态与 Tangu 角标靠它。
+//   unread   = Agent 在后台主动发来、用户还没打开过(proactive_at > last_read_at);一轮对话跑完没看的仍由客户端自己记
+//   awaiting = 问句在等回话(awaiting_user),或 Muse 后台有待批的一步(算在 Muse 私聊上 —— 托盘里批完不起轮,awaiting_user 清不掉)
+// 只返回有状态的会话,没有就是空表。
+router.get('/agent/sessions/attention', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.userId;
+    const appId = deps().profile.appId;
+    const rows = await query<any[]>(
+      `SELECT id, proactive_at, last_read_at, awaiting_user FROM chat_sessions
+       WHERE user_id = ? AND app_id = ? AND archived = ? AND kind = 'user'
+         AND (awaiting_user = TRUE OR (proactive_at IS NOT NULL AND proactive_at > COALESCE(last_read_at, 0)))`,
+      [userId, appId, false],
+    );
+    const out = new Map<string, { id: string; unread: boolean; awaiting: boolean }>(rows.map((r) => [String(r.id), {
+      id: String(r.id), unread: Number(r.proactive_at || 0) > Number(r.last_read_at || 0), awaiting: !!r.awaiting_user,
+    }]));
+    if (deps().profile.capabilities.hostExec) {
+      const [p] = await query<any[]>(
+        `SELECT COUNT(*) AS n FROM pending_approvals WHERE user_id = ? AND agent_slug = ? AND status = 'pending'`, [userId, MUSE_AGENT_SLUG]);
+      const sid = Number(p?.n) > 0 ? await museDmSessionId(userId, appId) : null;
+      if (sid) out.set(sid, { id: sid, unread: out.get(sid)?.unread ?? false, awaiting: true });
+    }
+    res.json({ sessions: [...out.values()] });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'session attention failed' });
+  }
+});
+
+// 用户打开了这个会话:读到现在(只动 last_read_at,不动 updated_at —— 读一下不该把会话顶到列表最上面)。
+router.post('/agent/sessions/:id/read', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const s = await getOwnSession(req.params.id, req.user!.userId);
+    if (!s) return res.status(404).json({ detail: 'Session not found' });
+    await query(`UPDATE chat_sessions SET last_read_at = ? WHERE id = ?`, [Date.now(), s.id]);
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'mark read failed' });
   }
 });
 
@@ -224,6 +269,25 @@ router.get('/agent/sessions/:id/background', authMiddleware, async (req: AuthReq
     res.json({ background });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'list background sessions failed' });
+  }
+});
+
+// 任务卡「开个子会话」(方案「子会话与任务卡」第 3 步):用户点卡 → 在这个会话下开一个可见子会话,任务书当第一条消息;
+// 做完同样送回主会话(services/childSessions.ts)。只在本机引擎。
+router.post('/agent/sessions/:id/children', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    if (!deps().profile.capabilities.hostExec) return res.status(404).json({ detail: 'not available in this deployment' });
+    const userId = req.user!.userId;
+    const s = await getOwnSession(req.params.id, userId);
+    if (!s) return res.status(404).json({ detail: 'Session not found' });
+    const message = typeof req.body?.message === 'string' ? req.body.message.trim() : '';
+    if (!message || message.length > 20_000) return res.status(400).json({ detail: 'message required (max 20000 chars)' });
+    const title = typeof req.body?.title === 'string' ? req.body.title : '';
+    const remote = parseRemoteOrigin(req.headers);
+    const r = await startChildSession({ parentId: s.id, userId, modelId: s.model_id || '', title, message, ...(remote ? { remote } : {}) });
+    res.json({ sessionId: r.sessionId, runId: r.runId, title: r.title });
+  } catch (e: any) {
+    res.status(400).json({ detail: e?.message || 'start child session failed' });
   }
 });
 
@@ -347,7 +411,7 @@ router.get('/agent/sessions/:id/messages', authMiddleware, async (req: AuthReque
     const limit = Math.floor(Math.min(Math.max(1, Number(req.query.limit) || 200), 500)); // floor:非整数插进 LIMIT 会成非法 SQL
     const before = Number(req.query.before) || 0;
     const rows = await query<any[]>(
-      `SELECT id, role, content, reasoning, tool_calls, tool_results, attachments, display_files, agent_slug, timestamp, model_id, is_error
+      `SELECT id, role, content, reasoning, tool_calls, tool_results, attachments, display_files, agent_slug, origin, timestamp, model_id, is_error
        FROM chat_messages WHERE session_id = ?${before ? ' AND timestamp < ?' : ''}
        ORDER BY timestamp DESC LIMIT ${limit}`,
       before ? [req.params.id, before] : [req.params.id],

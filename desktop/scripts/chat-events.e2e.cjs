@@ -890,12 +890,12 @@ async function main() {
       await win.waitForTimeout(300)
       dot = await win.evaluate(() => {
         const row = [...document.querySelectorAll('.t2s-srow')].find((r) => (r.textContent || '').includes('手机发起的远程会话'))
-        const d = row?.querySelector('.t2s-dot')
+        const d = row?.querySelector('.t2s-st') // 10-17 起状态在行尾
         return d ? { cls: d.className, title: d.getAttribute('title'), n: d.getAttribute('data-attention') } : null
       })
     }
     check('K3a 没订阅的会话按引擎待批索引亮「等你处理」点(1 审批 + 1 询问 = 2)',
-      !!dot && /attention/.test(dot.cls) && dot.n === '2' && /2 项等你处理/.test(dot.title || ''), JSON.stringify(dot) + ` pendingPulls=${stub.seen.pending || 0}`)
+      !!dot && /wait/.test(dot.cls) && dot.n === '2' && /2 项等你处理/.test(dot.title || ''), JSON.stringify(dot) + ` pendingPulls=${stub.seen.pending || 0}`)
     const sidebarBox = await win.locator('.t2s-srow', { hasText: '手机发起的远程会话' }).first().boundingBox().catch(() => null)
     const clip = sidebarBox ? { x: 0, y: Math.max(0, sidebarBox.y - 90), width: Math.min(420, sidebarBox.x + sidebarBox.width + 40), height: 200 } : undefined
     await win.screenshot({ path: process.env.K3_SIDEBAR_SHOT || '/tmp/k3-sidebar-attention.png', ...(clip ? { clip } : {}) }).catch(() => {})
@@ -910,7 +910,7 @@ async function main() {
       await win.waitForTimeout(300)
       cleared = await win.evaluate(() => {
         const row = [...document.querySelectorAll('.t2s-srow')].find((r) => (r.textContent || '').includes('手机发起的远程会话'))
-        return !!row && !row.querySelector('.t2s-dot.attention')
+        return !!row && !row.querySelector('.t2s-st.wait')
       })
     }
     check('K3b 索引清空(对方答掉)→ 点灭', cleared, '')

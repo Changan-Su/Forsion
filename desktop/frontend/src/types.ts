@@ -119,6 +119,12 @@ export interface SessionRecord {
   project_name?: string | null
   /** Codex 式无根会话:不属于本地目录或 Cloud Project,运行在会话自己的隔离沙箱。 */
   projectless?: boolean
+  /** 父子会话:主会话用 start_session 开出的子会话指回主会话(左栏挂在它下面一层)。也可能是私聊 @项目派遣的会话(那时主会话在别的组,照平铺)。 */
+  parent_session_id?: string | null
+  /** 这一轮以问句收尾、在等用户回答(引擎置,下一轮开始清掉)。 */
+  awaiting_user?: boolean
+  /** 引擎这会儿有在飞 / 排队的 run(列表接口现算):客户端没订阅的会话(子会话、自动接着做的一轮)也画「在跑」。 */
+  busy?: boolean
   created_at: string
   updated_at: string
   // P1-K6
@@ -618,6 +624,8 @@ export interface MessageRecord {
   timestamp: number
   model_id: string | null
   is_error: boolean
+  /** Muse 主动发进私聊的消息:proactive / proactive:todo / proactive:approval;其余为空。 */
+  origin?: string | null
 }
 
 export interface ModelInfo {
@@ -1081,6 +1089,8 @@ export interface UiMessage {
   /** system=客户端本地通知行(斜杠命令反馈等;不持久化,reload 会消失)。 */
   role: 'user' | 'assistant' | 'system'
   content: string
+  /** Muse 主动发进私聊的(引擎 chat_messages.origin):proactive / proactive:todo / proactive:approval。 */
+  origin?: string
   reasoning?: string
   /** 思考累计用时(ms)与本段思考的起点:只在本次运行里由 appStore 记(引擎不落库),渲染成「思考 N 秒」。 */
   reasoningMs?: number

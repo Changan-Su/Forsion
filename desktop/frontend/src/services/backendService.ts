@@ -246,6 +246,10 @@ export const getBackgroundSessions = (t: EngineTarget, sessionId: string, kind?:
     t, `/agent/sessions/${encodeURIComponent(sessionId)}/background${kind ? `?kind=${encodeURIComponent(kind)}` : ''}`,
   ).then((r) => r.background)
 
+/** 任务卡「开个子会话」:在这个会话下开一个可见子会话,任务书当第一条消息(做完送回主会话)。 */
+export const startChildSession = (t: EngineTarget, parentId: string, body: { title: string; message: string }) =>
+  request<{ sessionId: string; runId: string; title: string }>(t, `/agent/sessions/${encodeURIComponent(parentId)}/children`, { method: 'POST', body: JSON.stringify(body) })
+
 export const listMessages = (t: EngineTarget, sessionId: string, limit = 200, before?: number) =>
   request<{ messages: MessageRecord[] }>(
     t, `/agent/sessions/${encodeURIComponent(sessionId)}/messages?limit=${limit}${before ? `&before=${before}` : ''}`,

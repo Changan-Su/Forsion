@@ -33,6 +33,8 @@ import { DEFAULT_AGENT_SLUG, readUserMd } from '../core/tanguHome.js';
 import { getAgent, MUSE_AGENT_SLUG } from '../agents/agentRegistry.js';
 import { loadSpecialAgentsConfig, resolveBackgroundModelId } from './specialAgentsConfig.js';
 import { sendInboxMessage } from '../tools/builtin/inboxSend.js';
+import { forwardInboxToChannels } from '../channels/forward.js';
+import { postMuseDm } from './museDm.js';
 import { backgroundClientTag } from '../core/version.js';
 import { publishBackgroundUsage } from './backgroundUsage.js';
 
@@ -390,7 +392,8 @@ export async function decideApproval(
   await appendAgentLog(agentSlug, userId,
     `[approval] approved by ${by} and executed (${status}): ${shownPreview} → ${displayText(exec.result, 300)}`);
   // 收件箱回执(Muse 发信人缺省不转通道;标题沿用预览=模型/工具原文经净化,不硬编码语言)。
-  await sendInboxMessage(userId, {
+  // Muse 的请求在它的私聊里(10-18 方案 B):那张卡按 id 现读状态、原地变「已批准」,不再另发回执信。
+  if (agentSlug !== MUSE_AGENT_SLUG) await sendInboxMessage(userId, {
     title: `${status === 'approved' ? '✓' : '✗'} ${displayText(summary, 180)}`,
     body: exec.result.slice(0, 2000),
     senderId: agentSlug,
@@ -487,6 +490,16 @@ export function approvalRequestBody(a: { id: string; tool: string; preview: stri
  *  刻意绕过 notify=digest —— 审批是等用户拍板的请求,不是通知。发送失败(小时上限 / 落库失败)不阻断排队,
  *  但在该 agent 的 LOG 留痕,否则请求就只剩 Muse 面板一处可见。 */
 async function notifyApprovalRequest(a: { userId: string; agentSlug: string; id: string; tool: string; preview: string; note?: string }): Promise<void> {
+  // Muse 的审批进它的私聊(10-18 方案 B:等用户拍板的进私聊);输入框上方的托盘按 id 列出这条。等用户拍板 → 转发到通道。
+  // 私聊不可用才退回收件箱信。
+  if (a.agentSlug === MUSE_AGENT_SLUG) {
+    const body = approvalRequestBody(a);
+    const dm = await postMuseDm(a.userId, body, 'proactive:approval').catch((e: any) => ({ ok: false as const, error: String(e?.message || e) }));
+    if (dm.ok) {
+      forwardInboxToChannels({ userId: a.userId, title: `⏸ ${displayText(a.preview, 180)}`, body, senderKind: 'agent', senderId: a.agentSlug });
+      return;
+    }
+  }
   const sent = await sendInboxMessage(a.userId, {
     title: `⏸ ${displayText(a.preview, 180)}`,
     body: approvalRequestBody(a),
