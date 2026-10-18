@@ -184,7 +184,7 @@ export function syncPluginViews(): void {
       for (const t of ws.leftTabs) side.set(t.type, 'left')
       for (const t of ws.rightTabs) side.set(t.type, 'right')
       // 底部面板没有 tab 投影:展开着的按 __loc 认,收起的在 stash 里(漏掉 = 热重载把底部视图开进主区)
-      for (const p of [...(ws.api?.panels ?? [])]) { // 先拍下名单:closeLeaf 会就地改 api.panels
+      for (const p of ws.api?.panels ?? []) {
         const q = (p.params ?? {}) as Record<string, unknown>
         if (q.__loc === 'bottom' && typeof q.__type === 'string') side.set(q.__type, 'bottom')
       }
