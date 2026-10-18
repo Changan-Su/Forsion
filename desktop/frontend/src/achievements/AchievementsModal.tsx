@@ -9,7 +9,17 @@ import { ArrowLeft, Check, Cloud, Gift, Trophy } from 'lucide-react'
 import { useApp } from '../stores/appStore'
 import { useI18n } from '../i18n'
 import { OFFICIAL_SERIES, medalTier, seriesPoints, type MedalTier, type SeriesDef } from './definitions'
-import { claimCloudAchievement, cloudClaimable, hasClaimable, refreshCloudAchievements, useAchievements, type Bilingual, type CloudAchievement } from './store'
+import { claimCloudAchievement, cloudClaimable, hasClaimable, refreshCloudAchievements, useAchievements, type Bilingual, type ClaimError, type CloudAchievement } from './store'
+
+const CLAIM_ERROR_KEYS: Record<ClaimError, string> = {
+  not_completed: 'achievements.claimErr.notCompleted',
+  expired: 'achievements.claimErr.expired',
+  not_found: 'achievements.claimErr.notFound',
+  grant_failed: 'achievements.claimErr.grantFailed',
+  signed_out: 'achievements.claimErr.signedOut',
+  network: 'achievements.claimErr.network',
+  unknown: 'achievements.claimErr.unknown',
+}
 import './achievements.css'
 
 const TIERS: MedalTier[] = ['bronze', 'silver', 'gold']
@@ -84,7 +94,7 @@ export function AchievementsModal({ onClose }: { onClose?: () => void } = {}): R
     setBusy(id)
     const r = await claimCloudAchievement(id)
     setBusy(null)
-    if (!r.ok) toast(t('achievements.claimFailed', { msg: r.detail || String(r.status) }), true)
+    if (!r.ok) toast(t('achievements.claimFailed', { msg: t(CLAIM_ERROR_KEYS[r.reason]) }), true)
   }
 
   return (

@@ -201,6 +201,8 @@ export interface CloudAchievement {
   /** 服务端算的账号进度(各设备之和) */
   progress: number
   claimed: { device: string | null; at: string | null } | null
+  /** 后台开关;停用了但领过的也会下发(留着「已领取」) */
+  enabled?: boolean
 }
 export interface CloudState { list: CloudAchievement[]; signedIn: boolean }
 
@@ -221,21 +223,27 @@ export function cloudClaimable(c: CloudState, series?: string): boolean {
   return c.signedIn && c.list.some((a) => (!series || a.series === series) && !a.claimed && !a.expired && a.progress >= a.goal)
 }
 
-type CloudReply = { status: number; json?: any; error?: string }
+type CloudReply = { status: number; json?: any; error?: string; seq: number; epoch: number }
+// 回包按发出顺序认:先发的晚到(进度回包压过领取结果)丢掉;换号(onAuthChanged)前发出的一律丢(A 的回包别落到 B 头上)
+let sentSeq = 0, appliedSeq = 0, authEpoch = 0
 async function cloudCall(path: string, method = 'GET', body?: unknown): Promise<CloudReply | null> {
   const f = typeof window !== 'undefined' ? window.tangu?.cloudFetch : undefined
   if (!f) return null
-  try { return await f({ path, method, ...(body !== undefined ? { body } : {}) }) } catch { return null }
+  const seq = ++sentSeq, epoch = authEpoch
+  try { return { ...(await f({ path, method, ...(body !== undefined ? { body } : {}) })), seq, epoch } } catch { return null }
 }
-/** 回包 → 状态。401 = 没登录 / 令牌失效:定义留着展示,进度与领取清掉(换号的人看不到上一位的)。返回是否拿到了列表。 */
+/** 回包 → 状态。401 = 没登录 / 令牌失效:定义留着展示(停用的去掉),进度与领取清掉(换号的人看不到上一位的)。
+ *  返回是否拿到了列表(过时的回包不落状态,但照样算拿到)。 */
 function absorb(r: CloudReply | null): boolean {
   if (!r) return false
+  const fresh = r.epoch === authEpoch && r.seq > appliedSeq
+  if (fresh) appliedSeq = r.seq
   if (r.status === 401) {
     const { list } = useAchievements.getState().cloud
-    setCloud({ signedIn: false, list: list.map((a) => ({ ...a, progress: 0, claimed: null })) })
+    if (fresh) setCloud({ signedIn: false, list: list.filter((a) => a.enabled !== false).map((a) => ({ ...a, progress: 0, claimed: null })) })
     return false
   }
-  if (r.status === 200 && Array.isArray(r.json?.achievements)) { setCloud({ signedIn: true, list: r.json.achievements }); return true }
+  if (r.status === 200 && Array.isArray(r.json?.achievements)) { if (fresh) setCloud({ signedIn: true, list: r.json.achievements }); return true }
   return false
 }
 
@@ -280,12 +288,15 @@ function scheduleCloudReport(event: string): void {
   reportTimer = setTimeout(() => { reportTimer = null; void refreshCloudAchievements() }, REPORT_DELAY)
 }
 
-/** 领取云端成就。成功后状态已换成服务端回的列表;失败带服务端的说明(没达成 / 过期 / 发放失败…)并重拉一次对齐服务端。 */
-export async function claimCloudAchievement(id: string): Promise<{ ok: true } | { ok: false; status: number; detail?: string }> {
+export type ClaimError = 'not_completed' | 'expired' | 'not_found' | 'grant_failed' | 'signed_out' | 'network' | 'unknown'
+const CLAIM_ERRORS = new Set<string>(['not_completed', 'expired', 'not_found', 'grant_failed'])
+/** 领取云端成就。成功后状态已换成服务端回的列表;失败回错误类别(界面按它取双语文案,不显示服务端的中文 detail)并重拉一次对齐服务端。 */
+export async function claimCloudAchievement(id: string): Promise<{ ok: true } | { ok: false; reason: ClaimError }> {
   const r = await cloudCall(`/achievements/${encodeURIComponent(id)}/claim`, 'POST', { device: deviceLabel() })
   if (absorb(r)) return { ok: true }
   if (r && r.status !== 401) void refreshCloudAchievements()
-  return { ok: false, status: r?.status ?? 0, detail: r?.json?.detail || r?.error }
+  const code = r?.json?.error
+  return { ok: false, reason: !r || !r.status ? 'network' : r.status === 401 ? 'signed_out' : CLAIM_ERRORS.has(code) ? code : 'unknown' }
 }
 
 let cloudInited = false
@@ -295,7 +306,7 @@ export function initCloudAchievements(): void {
   if (cloudInited || typeof window === 'undefined' || !window.tangu?.cloudFetch) return
   cloudInited = true
   setTimeout(() => { void refreshCloudAchievements() }, 4000)
-  window.tangu.onAuthChanged?.(() => { void refreshCloudAchievements() })
+  window.tangu.onAuthChanged?.(() => { authEpoch++; void refreshCloudAchievements() })
   let last = Date.now()
   window.addEventListener('focus', () => { if (Date.now() - last > 60_000) { last = Date.now(); void refreshCloudAchievements() } })
 }
