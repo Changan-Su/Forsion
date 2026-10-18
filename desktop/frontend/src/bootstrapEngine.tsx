@@ -50,7 +50,7 @@ import { matchFileType, fileTypeBaseName, setResetCardCeremonyHandler } from './
 import { ActivityLogView } from './views/ActivityLogView'
 import { ActiveWindowView } from './views/ActiveWindowView'
 import { ActivityDashboardCard, InboxDashboardCard } from './views/DashboardCompactViews'
-import { hasClaimable, track, useAchievements } from './achievements/store'
+import { hasClaimable, initCloudAchievements, track, useAchievements } from './achievements/store'
 import { installDeepLinks } from './deepLinkInstall'
 import { installOpenFiles } from './openFileInstall'
 import { FILE_VIEW_PARAM } from './viewFileMatch'
@@ -361,7 +361,8 @@ export function installEngine(): void {
   // Ribbon：主位 + 5 个 Space；命令区常驻后 5 项，头像与 pinned 控件另计。
   // 默认命令顺序：成就 → 设备互联 → 反馈 → 商店 → 明暗 → 命令面板 → 设置。
   // 无持久顺序时注册序即上下序；已有自定义排序不覆盖。移动端设备入口仍在 head。
-  // 红点 = 有「已达成未领取」的成就(收进「更多」时红点挂到「更多」上,见 RibbonItem.dot)。
+  // 红点 = 有「已达成未领取」的成就(本机 + 已登录时的云端;收进「更多」时红点挂到「更多」上,见 RibbonItem.dot)。
+  initCloudAchievements() // 云端成就:有 cloudFetch 桥(桌面装了 Extend / Android)才启动,首拉延后几秒,登录状态变化重拉
   addRibbonIcon({ id: 'rb-achievements', side: 'bottom', icon: Trophy, tooltip: () => app().tr('achievements.title'), onClick: () => app().openAchievements(), dot: { get: () => hasClaimable(), subscribe: (cb) => useAchievements.subscribe(cb) } })
   // Unit 切换器(设备互联):吸收原「本地|云端」胶囊,列表式切换 本地/云端/其他设备。
   // 默认顺序为成就 → 设备互联 → 反馈；用户保存的自定义顺序仍优先。

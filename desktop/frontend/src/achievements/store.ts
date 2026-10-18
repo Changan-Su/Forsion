@@ -5,12 +5,17 @@
  * - 持久化 localStorage,save=读-合并-写(counter 取 max、claimed 并集,多窗口最终一致)。
  *   ponytail: max 合并意味着将来做「重置成就」须先改此语义。
  * - queue 不持久化:重启不补播 toast,未领取的在面板仍可领。
+ * - 云端成就(cloud):服务端定义 / 判定 / 发奖,跟账号走,见文件末「云端成就」一节。和本机这套是两份数据:
+ *   不进 allSeries()(track 的跨线 / claim 的本地领取都不碰它),只在 hasClaimable(红点)和面板里并进来。
  */
 import { create } from 'zustand'
 import { OFFICIAL_SERIES, type AchievementDef, type SeriesDef } from './definitions'
 
 const KEY = 'forsion_tangu_achievements'
 const COUNTER_CAP = 999_999
+const CLOUD_KEY = 'forsion_cloud_achievements'
+const DEVICE_KEY = 'forsion_achievements_device'
+const REPORT_DELAY = 3000
 
 interface Persisted { v: 1; counters: Record<string, number>; claimed: string[] }
 
@@ -23,6 +28,8 @@ export interface AchievementsState {
   pluginSeries: Array<{ pluginId: string; def: SeriesDef }>
   /** 待播成就 toast 的成就 id(FIFO) */
   queue: string[]
+  /** 云端成就:服务器下发的定义 + 本账号进度 / 领取(缓存在 localStorage,启动即有;没登录时进度与领取清空、定义留着展示) */
+  cloud: CloudState
   claim(id: string): void
   shiftToast(id: string): void
 }
@@ -55,6 +62,7 @@ export const useAchievements = create<AchievementsState>((set, get) => ({
   ...load(),
   pluginSeries: [],
   queue: [],
+  cloud: loadCloud(),
   claim: (id) => {
     const s = get()
     const a = allSeries(s).flatMap((x) => x.achievements).find((x) => x.id === id)
@@ -92,8 +100,13 @@ export function allSeries(s?: Pick<AchievementsState, 'pluginSeries'>): SeriesDe
   return ps.length ? [...OFFICIAL_SERIES, ...ps.map((x) => x.def)] : OFFICIAL_SERIES
 }
 
-/** 「已达成、未领取」—— 成就红点的唯一判据(Ribbon 奖杯 / 「更多」、成就面板系列名)。传 series 只看这一个系列。 */
-export function hasClaimable(s: Pick<AchievementsState, 'pluginSeries' | 'counters' | 'claimed'> = useAchievements.getState(), series?: SeriesDef): boolean {
+/** 「已达成、未领取」—— 成就红点的唯一判据(Ribbon 奖杯 / 「更多」、成就面板系列名)。传 series 只看这一个本机系列;
+ *  不传 = 本机 + 云端一起算(云端只在已登录时算:没登录领不了,亮着也白亮)。 */
+export function hasClaimable(
+  s: Pick<AchievementsState, 'pluginSeries' | 'counters' | 'claimed'> & Partial<Pick<AchievementsState, 'cloud'>> = useAchievements.getState(),
+  series?: SeriesDef,
+): boolean {
+  if (!series && s.cloud && cloudClaimable(s.cloud)) return true
   return (series ? [series] : allSeries(s)).some((x) => x.achievements.some((a) => !s.claimed[a.id] && (s.counters[a.event] || 0) >= a.goal))
 }
 
@@ -122,6 +135,7 @@ export function track(event: string, n = 1): void {
       queue: crossed.length ? [...s.queue, ...crossed] : s.queue,
     })
     save()
+    scheduleCloudReport(event)
   } catch { /* 装饰性功能,绝不拖累调用方 */ }
 }
 
@@ -162,4 +176,126 @@ export function unregisterPluginAchievements(pluginId: string): void {
   useAchievements.setState((s) => (s.pluginSeries.some((x) => x.pluginId === pluginId)
     ? { pluginSeries: s.pluginSeries.filter((x) => x.pluginId !== pluginId) }
     : s))
+}
+
+// ── 云端成就 ──────────────────────────────────────────────────────────────────
+// 服务端(server microserver/achievements)定义、判定、发奖,跟账号走:客户端照旧 track(),登录状态下把云端成就用到的那几个
+// 事件的**本机累计值**节流上报(服务端按 设备 取最大、各设备相加,重报幂等),领取走服务端(每个账号只发一次,数据库唯一约束)。
+// 通道 = window.tangu.cloudFetch(桌面 = Extend 主进程盖令牌;Android 自带同契约实现);没有它(网页版 / 没装 Extend)= 整块不出现。
+
+export interface Bilingual { zh: string; en: string }
+/** 与服务端 GET /api/achievements/me 每一项同形 */
+export interface CloudAchievement {
+  id: string
+  series: string
+  seriesTitle: Bilingual
+  title: Bilingual
+  desc: Bilingual
+  event: string
+  goal: number
+  points: number
+  /** 奖励物品(label 是服务端冻结的双语名);领过的是领取那一刻的快照 */
+  reward: Array<{ kind: string; label?: Bilingual }> | null
+  claimUntil: string | null
+  expired: boolean
+  /** 服务端算的账号进度(各设备之和) */
+  progress: number
+  claimed: { device: string | null; at: string | null } | null
+}
+export interface CloudState { list: CloudAchievement[]; signedIn: boolean }
+
+function loadCloud(): CloudState {
+  try {
+    const raw = JSON.parse(localStorage.getItem(CLOUD_KEY) || 'null') as CloudState | null
+    if (raw && Array.isArray(raw.list)) return { list: raw.list, signedIn: !!raw.signedIn }
+  } catch { /* 首次 / 损坏 / node 测试环境 */ }
+  return { list: [], signedIn: false }
+}
+function setCloud(cloud: CloudState): void {
+  useAchievements.setState({ cloud })
+  try { localStorage.setItem(CLOUD_KEY, JSON.stringify(cloud)) } catch { /* 配额 / 隐私模式 */ }
+}
+
+/** 已登录、达成、没领、没过期 —— 云端那半的红点判据。传 series 只看这一个系列。 */
+export function cloudClaimable(c: CloudState, series?: string): boolean {
+  return c.signedIn && c.list.some((a) => (!series || a.series === series) && !a.claimed && !a.expired && a.progress >= a.goal)
+}
+
+type CloudReply = { status: number; json?: any; error?: string }
+async function cloudCall(path: string, method = 'GET', body?: unknown): Promise<CloudReply | null> {
+  const f = typeof window !== 'undefined' ? window.tangu?.cloudFetch : undefined
+  if (!f) return null
+  try { return await f({ path, method, ...(body !== undefined ? { body } : {}) }) } catch { return null }
+}
+/** 回包 → 状态。401 = 没登录 / 令牌失效:定义留着展示,进度与领取清掉(换号的人看不到上一位的)。返回是否拿到了列表。 */
+function absorb(r: CloudReply | null): boolean {
+  if (!r) return false
+  if (r.status === 401) {
+    const { list } = useAchievements.getState().cloud
+    setCloud({ signedIn: false, list: list.map((a) => ({ ...a, progress: 0, claimed: null })) })
+    return false
+  }
+  if (r.status === 200 && Array.isArray(r.json?.achievements)) { setCloud({ signedIn: true, list: r.json.achievements }); return true }
+  return false
+}
+
+function deviceId(): string {
+  try {
+    let id = localStorage.getItem(DEVICE_KEY)
+    if (!id || !/^[A-Za-z0-9_-]{8,64}$/.test(id)) {
+      id = globalThis.crypto?.randomUUID?.() ?? `d${Date.now().toString(36)}${Math.random().toString(36).slice(2, 12)}`
+      localStorage.setItem(DEVICE_KEY, id)
+    }
+    return id
+  } catch { return 'device-unknown' } // ponytail: 存不了 localStorage 的几台并成一个设备,进度取它们里最大的
+}
+/** 「已在 Mac 上领取」的那个名字 */
+function deviceLabel(): string {
+  const t = typeof window !== 'undefined' ? window.tangu : undefined
+  if (t?.mobile) return 'Android'
+  return ({ darwin: 'Mac', win32: 'Windows', linux: 'Linux' } as Record<string, string>)[t?.platform || ''] || 'Web'
+}
+/** 云端成就用到的事件 → 本机累计值(只报 >0 的);没有可报的回 null */
+function cloudCounts(): Record<string, number> | null {
+  const s = useAchievements.getState()
+  const out: Record<string, number> = {}
+  for (const a of s.cloud.list) if ((s.counters[a.event] || 0) > 0) out[a.event] = s.counters[a.event]
+  return Object.keys(out).length ? out : null
+}
+
+/** 拉一次(有可报的计数就直接报,上报接口回的就是最新列表)。第一次还没有定义时先拉定义,再把本机已有的计数补报上去。永不抛。 */
+export async function refreshCloudAchievements(): Promise<void> {
+  const report = (counts: Record<string, number>) => cloudCall('/achievements/progress', 'POST', { deviceId: deviceId(), counts })
+  const counts = cloudCounts()
+  const got = absorb(await (counts ? report(counts) : cloudCall('/achievements/me')))
+  const late = !counts && got ? cloudCounts() : null
+  if (late) absorb(await report(late))
+}
+
+let reportTimer: ReturnType<typeof setTimeout> | null = null
+/** track() 命中云端成就用到的事件 → 节流上报(REPORT_DELAY 内的多次合成一次;报的是累计值,丢一次下次补上) */
+function scheduleCloudReport(event: string): void {
+  const { cloud } = useAchievements.getState()
+  if (reportTimer || !cloud.signedIn || !cloud.list.some((a) => a.event === event)) return
+  reportTimer = setTimeout(() => { reportTimer = null; void refreshCloudAchievements() }, REPORT_DELAY)
+}
+
+/** 领取云端成就。成功后状态已换成服务端回的列表;失败带服务端的说明(没达成 / 过期 / 发放失败…)并重拉一次对齐服务端。 */
+export async function claimCloudAchievement(id: string): Promise<{ ok: true } | { ok: false; status: number; detail?: string }> {
+  const r = await cloudCall(`/achievements/${encodeURIComponent(id)}/claim`, 'POST', { device: deviceLabel() })
+  if (absorb(r)) return { ok: true }
+  if (r && r.status !== 401) void refreshCloudAchievements()
+  return { ok: false, status: r?.status ?? 0, detail: r?.json?.detail || r?.error }
+}
+
+let cloudInited = false
+/** 宿主启动时调一次(bootstrapEngine 注册奖杯处):首拉延后几秒(等 Extend 的主进程通道就位),登录 / 登出 / 换号重拉,
+ *  窗口回到前台最多每分钟拉一次(别的设备上领了,这边的红点跟着灭)。 */
+export function initCloudAchievements(): void {
+  if (cloudInited || typeof window === 'undefined' || !window.tangu?.cloudFetch) return
+  cloudInited = true
+  setTimeout(() => { void refreshCloudAchievements() }, 4000)
+  window.tangu.onAuthChanged?.(() => { void refreshCloudAchievements() })
+  let last = Date.now()
+  window.addEventListener('focus', () => { if (Date.now() - last > 60_000) { last = Date.now(); void refreshCloudAchievements() } })
 }
