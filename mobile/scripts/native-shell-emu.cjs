@@ -501,6 +501,8 @@ const tabCountText = (list) => {
     return true
   })()`)
   await seed('zh')
+  // pins on the fixture sessions are a pin round-trip a failed run left halfway (the phone list check starts from "pin")
+  await cdp.eval("(localStorage.removeItem('forsion_orbits_pinned_entries_v1'), true)")
   await installStub(cdp)
   // plugin flow: package zip (wrapped in a folder like a GitHub archive), host server, device → host port
   const shOut = (...args) => { try { return h.adb('shell', ...args) } catch (e) { return `${e.stdout || ''}${e.stderr || ''}` || String(e.message) } }
@@ -591,18 +593,32 @@ const tabCountText = (list) => {
   /** Keep a finger on a page element (Android WebView → `contextmenu`): how a list row's menu opens on the phone,
    *  where the rows carry no ⋯ (layout two: long-press, or the tray a left swipe shows). */
   async function holdEl(expr, ms = 900) { const p = await elPoint(expr); await h.holdAt(p.x, p.y, ms) }
-  /** Drag across a page element with a real finger: `dx` / `dy` in dp from its centre. */
-  async function swipeEl(expr, dx, dy = 0, ms = 260) {
-    const p = await elPoint(expr)
-    h.adb('shell', 'input', 'swipe', String(p.x), String(p.y), String(Math.round(p.x + dx * density)), String(Math.round(p.y + dy * density)), String(ms))
-    await h.pause(500)
-  }
   /** A finger drag that reports where it is before it lifts: DOWN, MOVEs, a MOVE at the end point, UP there (device px).
    *  `input swipe` steps by the clock: descheduled under load it lifts at the end point with no move there — the page
-   *  then judges the drag by its last move (half-way: not enough to land), and a drag with no move at all reads as a tap
-   *  where it started. Each step is its own `input` call: slow, so where the finger stops decides, not a fling. */
-  const drag = (x0, y, x1, steps = 5) => h.adb('shell', [['DOWN', x0], ...Array.from({ length: steps }, (_, i) => ['MOVE', x0 + ((x1 - x0) * (i + 1)) / steps]), ['UP', x1]]
-    .map(([a, x]) => `input motionevent ${a} ${Math.round(x)} ${Math.round(y)}`).join(' && '))
+   *  then judges the drag by its last move (half-way: not enough to land; a row resting where it opens needs no spring),
+   *  and a drag with no move at all reads as a tap where it started. Each step is its own `input` call: slow, so where
+   *  the finger stops decides, not a fling. */
+  const drag = (x0, y0, x1, y1 = y0, steps = 5) => h.adb('shell', [['DOWN', 0], ...Array.from({ length: steps }, (_, i) => ['MOVE', (i + 1) / steps]), ['UP', 1]]
+    .map(([a, f]) => `input motionevent ${a} ${Math.round(x0 + (x1 - x0) * f)} ${Math.round(y0 + (y1 - y0) * f)}`).join(' && '))
+  /** Drag across a page element with a real finger: `dx` / `dy` in dp from its centre. */
+  async function swipeEl(expr, dx, dy = 0) {
+    const p = await elPoint(expr)
+    drag(p.x, p.y, p.x + dx * density, p.y + dy * density)
+    await h.pause(500)
+  }
+  /** Evidence for a gesture that missed: every touch event as the page saw it once its own handlers ran (bubble, on
+   *  window) — [type, clientX, event time, handled at (ms), cancelable, prevented, drag side (, target, sideways
+   *  scrollers)] — and each change of level as ['nav', list|detail, ms]. `traceTouches()` arms, `traceOff()` reads + disarms. */
+  const traceTouches = () => cdp.eval(`(() => { window.__swipeOff?.(); const log = window.__swipeLog = [], t0 = performance.now(); const rec = (e) => { if (log.length > 60) return; const t = e.changedTouches[0], wide = []
+      if (e.type === 'touchstart') for (let el = e.target; el && el !== document.body; el = el.parentElement) { const cs = getComputedStyle(el); if ((cs.overflowX === 'auto' || cs.overflowX === 'scroll') && el.scrollWidth > el.clientWidth + 1) wide.push(el.className) }
+      log.push([e.type.slice(5), Math.round(t.clientX), Math.round(e.timeStamp - t0), Math.round(performance.now() - t0), e.cancelable ? 'c' : 'nc', e.defaultPrevented ? 'P' : '-', document.querySelector('.mb-body')?.dataset.drag || '', ...(e.type === 'touchstart' ? [String(e.target.className?.baseVal ?? e.target.className).slice(0, 40), wide.join('|')] : [])]) }
+    const shell = document.querySelector('.mb-shell'), mo = new MutationObserver(() => log.push(['nav', shell.dataset.nav, Math.round(performance.now() - t0)]))
+    mo.observe(shell, { attributes: true, attributeFilter: ['data-nav'] })
+    window.__swipeOff = () => { mo.disconnect(); for (const k of ['touchstart', 'touchmove', 'touchend', 'touchcancel']) window.removeEventListener(k, rec) }
+    for (const k of ['touchstart', 'touchmove', 'touchend', 'touchcancel']) window.addEventListener(k, rec, { passive: true })
+    window.addEventListener('click', (window.__clickRec = (e) => log.push(['click', Math.round(e.clientX), Math.round(e.clientY), String(e.target.className?.baseVal ?? e.target.className).slice(0, 40), Math.round(performance.now() - t0)])), true)
+    return true })()`)
+  const traceOff = () => cdp.eval('(window.__swipeOff?.(), window.removeEventListener("click", window.__clickRec, true), JSON.stringify(window.__swipeLog))')
   /** The day section ('pinned' | 'today' | …) a phone list row sits under; null when the list has no sections. */
   const sectionOf = (rowE) => `(() => { let e = ${rowE}; e = e?.closest('.pl-swipe') || e
     while (e && !e.matches('.pl-sec')) e = e.previousElementSibling; return e ? e.dataset.section : null })()`
@@ -1002,13 +1018,15 @@ const tabCountText = (list) => {
     await h.pause(500)
     assert.deepEqual(await taps(), [], 'a tap on a capsule fell through to the page')
     // a swipe that starts between the capsules still drags the list in
+    await traceTouches()
     h.adb('shell', 'input', 'swipe', String(gap.x), String(gap.y), String(Math.min(screen.w - 20, gap.x + Math.round(260 * density))), String(gap.y), '220')
-    assert.ok(await h.waitPage(cdp, `${nav} === 'list'`, 5000), 'a swipe starting between the capsules did not bring the list back')
+    assert.ok(await h.waitPage(cdp, `${nav} === 'list'`, 5000), `a swipe starting between the capsules did not bring the list back (touch ${await traceOff()})`)
     await h.pause(500)
     // beside the dock
     list = ui()
     const dock = h.byId(list, 'nativeChrome.dock')
-    assert.ok(dock && dock.rect.left > 30, 'no room beside the dock to test')
+    const trace = await traceOff()
+    assert.ok(dock && dock.rect.left > 30, `no room beside the dock to test (nav ${await cdp.eval(nav)}, touch ${trace})`)
     await cdp.eval(arm)
     h.tapAt(Math.round(dock.rect.left / 2), dock.rect.cy)
     await h.pause(500)
@@ -1126,7 +1144,7 @@ const tabCountText = (list) => {
     await waitSheet(false)
     // a horizontal swipe over the list must not slide it away (only an item enters the main view)
     const wv = webViewNode(at.list).rect
-    drag(wv.right - 120, wv.cy, wv.left + 120)
+    drag(wv.right - 120, wv.cy, wv.left + 120, wv.cy)
     await h.pause(900)
     assert.equal(await cdp.eval(nav), 'list', 'a swipe over the list left it')
     // tapping the active Space again does nothing (it used to open a drawer)
@@ -1189,16 +1207,10 @@ const tabCountText = (list) => {
     await tapEl(rowExpr('E2E Session One'))
     assert.ok(await h.waitPage(cdp, `(${nav}) === 'detail'`, 8000), 'the session did not reopen')
     await h.pause(600)
-    // evidence for a miss: every touch event of the swipe as the page saw it once its own handlers ran (bubble, on window)
-    await cdp.eval(`(() => { const log = window.__swipeLog = [], t0 = performance.now(); const rec = (e) => { if (log.length > 40) return; const t = e.changedTouches[0], wide = []
-      if (e.type === 'touchstart') for (let el = e.target; el && el !== document.body; el = el.parentElement) { const cs = getComputedStyle(el); if ((cs.overflowX === 'auto' || cs.overflowX === 'scroll') && el.scrollWidth > el.clientWidth + 1) wide.push(el.className) }
-      log.push([e.type.slice(5), Math.round(t.clientX), Math.round(e.timeStamp - t0), Math.round(performance.now() - t0), e.cancelable ? 'c' : 'nc', e.defaultPrevented ? 'P' : '-', document.querySelector('.mb-body')?.dataset.drag || '', ...(e.type === 'touchstart' ? [String(e.target.className?.baseVal ?? e.target.className).slice(0, 40), wide.join('|')] : [])]) }
-      window.__swipeOff = () => { for (const k of ['touchstart', 'touchmove', 'touchend', 'touchcancel']) window.removeEventListener(k, rec) }
-      for (const k of ['touchstart', 'touchmove', 'touchend', 'touchcancel']) window.addEventListener(k, rec, { passive: true }); return true })()`)
-    drag(wv.left + 150, wv.cy, wv.right - 100)
+    await traceTouches()
+    drag(wv.left + 150, wv.cy, wv.right - 100, wv.cy)
     const back = await h.waitPage(cdp, `(${nav}) === 'list'`, 5000)
-    // [type, clientX, event time, handled at (ms), cancelable, prevented, drag side (, target, sideways scrollers)]
-    const trace = await cdp.eval('(window.__swipeOff?.(), JSON.stringify(window.__swipeLog))')
+    const trace = await traceOff()
     assert.ok(back, `swiping right on the main view did not return to the list (nav ${await cdp.eval(nav)}, touch ${trace}, ${h.adb('shell', 'dumpsys', 'input_method').match(/mInputShown=\w+/)?.[0]})`)
     await h.pause(600)
     // system back on the list = the first level of a Space that is not Home: it leads Home, the app stays in front
@@ -2130,7 +2142,7 @@ const tabCountText = (list) => {
       // evidence, not a verdict: the row's offset every frame through the swipe and its release (the page's own clock)
       await cdp.eval(`(window.__rowTrace = [], (function f() { window.__rowTrace.push([Math.round(performance.now()), ${offset}]); if (window.__rowTrace.length < 150) requestAnimationFrame(f) })(), true)`)
       // the easing the release ran on, read when it starts (the transition is taken off again once it has settled)
-      await cdp.eval(`(window.__rowEase = '', ${tray}.firstElementChild.addEventListener('transitionrun', (e) => { if (e.target === e.currentTarget && !window.__rowEase) window.__rowEase = getComputedStyle(e.target).transitionTimingFunction }), true)`)
+      await cdp.eval(`(window.__rowEase = '', window.__rowTrack = ${tray}.firstElementChild, window.__rowTrack.addEventListener('transitionrun', (e) => { if (e.target === e.currentTarget && !window.__rowEase) window.__rowEase = getComputedStyle(e.target).transitionTimingFunction }), true)`)
       await swipeEl(row, -150)
       assert.ok(await h.waitPage(cdp, open, 3000), `a left swipe did not show the tray (offset ${await cdp.eval(offset)})`)
       if (step === 'pin') {
@@ -2140,7 +2152,7 @@ const tabCountText = (list) => {
         console.log(`  TRACE row offset by frame (ms since the first sample → px): ${moving.map(([t, x]) => `${t - tr[0][0]}:${x}`).join(' ')}`)
       }
       // it got there on a spring (a sampled linear() easing), not on the browser's snap curve
-      assert.ok(await h.waitPage(cdp, `/^linear\\(/.test(window.__rowEase) || null`, 2000), `the row did not settle on a spring (${await cdp.eval('window.__rowEase')})`)
+      assert.ok(await h.waitPage(cdp, `/^linear\\(/.test(window.__rowEase) || null`, 2000), `the row did not settle on a spring (${await cdp.eval('window.__rowEase')}; same track: ${await cdp.eval(`${tray}?.firstElementChild === window.__rowTrack`)}, its transition now: ${await cdp.eval(`${tray}?.firstElementChild.style.transition`)})`)
       assert.equal(await cdp.eval(nav), 'list', 'the swipe was taken as a tap')
       const got = await cdp.eval(`[...${tray}.querySelectorAll('.pl-swipe-act')].map((b) => b.dataset.act)`)
       assert.deepEqual(got, [step, 'rename', 'archive'], 'delete is only offered for archived sessions')
@@ -2170,7 +2182,7 @@ const tabCountText = (list) => {
     // pull down at the top = search (the same palette the capsule's search button opens)
     const scroller = "document.querySelector('.mb-drawer--left .t2s-scroll')"
     await cdp.eval(`(${scroller}.scrollTop = 0, true)`)
-    await swipeEl(row, 0, 190, 500)
+    await swipeEl(row, 0, 190)
     assert.ok(await h.waitPage(cdp, "!!document.querySelector('.amx-qf')", 4000), 'pulling the list down did not open search')
     // the palette covers the page: the capsules leave (they are native — they would sit on its input) and so does the dock
     assert.ok((await h.waitNodes((l) => !h.byId(l, 'nativeChrome.bar') && !h.byId(l, 'nativeChrome.spaces'), { timeout: 6000 })).hit, 'the capsules / dock stayed over the search palette')
@@ -2891,7 +2903,7 @@ const tabCountText = (list) => {
 
       // pulling the list down = its search line, in the list (not the palette), with the keyboard
       await cdp.eval(`(document.querySelector('${L} .t2sw-plug-list').scrollTop = 0, true)`)
-      await swipeEl(rowE('E2E mail one'), 0, 190, 500)
+      await swipeEl(rowE('E2E mail one'), 0, 190)
       assert.ok(await h.waitPage(cdp, `!!${field}`, 4000), 'pulling the list down did not bring up the search line')
       await h.pause(800)
       const byPull = imeShown()
@@ -4586,10 +4598,13 @@ const tabCountText = (list) => {
     await seed('en')
     await cdp.eval("localStorage.setItem('forsion_theme_pref', 'dark'); localStorage.setItem('forsion_theme', 'dark'); true")
     await reload()
+    // evidence for a miss: every change of Space / level from here on (the shell element may be replaced: then it stops)
+    await cdp.eval(`(() => { const shell = document.querySelector('.mb-shell'), t0 = performance.now(), log = window.__spaceLog = [[shell.dataset.space, shell.dataset.nav, 0]]
+      new MutationObserver(() => log.push([shell.dataset.space, shell.dataset.nav, Math.round(performance.now() - t0)])).observe(shell, { attributes: true, attributeFilter: ['data-space', 'data-nav'] }); return true })()`)
     await toSpace('tangu')
     await closeDrawer() // the main view: its left button goes back to the list
     let list = ui()
-    assert.equal(descOf(list, 'nativeChrome.left'), 'Back')
+    assert.equal(descOf(list, 'nativeChrome.left'), 'Back', `not on Tangu's main view (space / nav changes since the reload: ${await cdp.eval('JSON.stringify(window.__spaceLog)')})`)
     shot('14-shell-dark-en')
     await tapId('nativeChrome.more', list)
     list = await waitSheet(true)
