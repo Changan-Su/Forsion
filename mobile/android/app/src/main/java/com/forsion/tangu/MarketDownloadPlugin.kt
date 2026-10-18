@@ -1,6 +1,5 @@
 package com.forsion.tangu
 
-import android.content.pm.ApplicationInfo
 import android.os.SystemClock
 import com.getcapacitor.JSObject
 import com.getcapacitor.Plugin
@@ -20,10 +19,12 @@ import java.util.concurrent.Executors
  * | download({id, url, maxBytes})  | {name, size}: file `name` in the app cache dir. Rejects with the reason  |
  * |                                | as message (`too large`, `HTTP 404`, `timeout`, `stalled`, `insecure url`…) |
  * | discard({name})                | {} : deletes that cache file (JS calls it once the bytes are read)       |
+ * | policy()                       | {allowLoopbackHttp}: the rule below, for the page's own URL check        |
  * event `progress` {id, received, total}: total = -1 when the server sent no Content-Length.
  *
- * Cleartext `http:` is accepted only for loopback hosts and only in debuggable builds (the emulator harness
- * serves the package from the host through `adb reverse`); JS cannot switch that on.
+ * Cleartext `http:` is accepted only for loopback hosts and only in debug-type builds (the emulator harness
+ * serves the package from the host through `adb reverse`); JS cannot switch that on. By build type, not by the
+ * debuggable flag: the side-by-side preview built with -PnativePreviewFast is a debug build without that flag.
  */
 @CapacitorPlugin(name = "ForsionMarketDownload")
 class MarketDownloadPlugin : Plugin() {
@@ -34,6 +35,7 @@ class MarketDownloadPlugin : Plugin() {
         private const val MAX_CAP = 64L * 1024 * 1024
         private const val PROGRESS_INTERVAL_MS = 120L
         private val NAME = Regex("^forsion-market-[0-9a-f-]{36}\\.zip$")
+        private val LOOPBACK_HTTP = BuildConfig.BUILD_TYPE == "debug"
     }
 
     private val io = Executors.newSingleThreadExecutor { r -> Thread(r, "forsion-market-download").apply { isDaemon = true } }
@@ -46,17 +48,21 @@ class MarketDownloadPlugin : Plugin() {
     }
 
     @PluginMethod
+    fun policy(call: PluginCall) {
+        call.resolve(JSObject().put("allowLoopbackHttp", LOOPBACK_HTTP))
+    }
+
+    @PluginMethod
     fun download(call: PluginCall) {
         val id = call.getString("id") ?: ""
         val url = call.getString("url")
         val maxBytes = call.data.optLong("maxBytes", -1L)
         if (maxBytes <= 0 || maxBytes > MAX_CAP) { call.reject("invalid maxBytes", "bad_request"); return }
-        val debuggable = (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
         io.execute {
             val name = PREFIX + UUID.randomUUID() + SUFFIX
             var lastSent = 0L
             try {
-                val size = CappedDownload.download(url, File(context.cacheDir, name), maxBytes, CappedDownload.Policy(allowLoopbackHttp = debuggable)) { received, total ->
+                val size = CappedDownload.download(url, File(context.cacheDir, name), maxBytes, CappedDownload.Policy(allowLoopbackHttp = LOOPBACK_HTTP)) { received, total ->
                     val now = SystemClock.elapsedRealtime()
                     if (now - lastSent >= PROGRESS_INTERVAL_MS) {
                         lastSent = now

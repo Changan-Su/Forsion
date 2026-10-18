@@ -11,7 +11,7 @@
  */
 import { registerMessages, translate } from '@/i18n'
 import { APP_VERSION } from '@/changelog'
-import { capacitorPluginFs, hasNativeMarketDownload, isDebuggableAndroid, nativeMarketDownload } from './capacitorPluginFs'
+import { capacitorPluginFs, hasNativeMarketDownload, nativeAllowsLoopbackHttp, nativeMarketDownload } from './capacitorPluginFs'
 import { createPluginHost, type MobilePluginHost } from './pluginHost'
 import { createFetchDownload, createMobileMarket, type MobileMarket } from './mobileMarket'
 
@@ -52,6 +52,8 @@ export function installMobilePlugins(opts: { cloudApiBase: () => string }): Mobi
   // 门禁用的宿主版本 = 渲染层随包的 CHANGELOG 版本(移动端与桌面同一份渲染层源码,插件 API 能力按它算);
   // 顶节是 Unreleased 时 APP_VERSION 为空 → 传 null,不按 0.0.0 误杀声明了 minAppVersion 的插件。
   const host = createPluginHost(fs, { appVersion: () => APP_VERSION || null })
+  let loopbackHttp = false
+  void nativeAllowsLoopbackHttp().then((v) => { loopbackHttp = v })
   const market = createMobileMarket({
     fs,
     appVersion: () => APP_VERSION,
@@ -59,8 +61,9 @@ export function installMobilePlugins(opts: { cloudApiBase: () => string }): Mobi
     fetch: (input, init) => window.fetch(input, init),
     // 真机:原生下载(不吃 CORS、流式落盘、字节上限在传输中强制);浏览器台架 / dev 预览:fetch(下载主机得给 CORS,同样读到上限即停)。
     download: hasNativeMarketDownload() ? nativeMarketDownload() : createFetchDownload(),
-    // 下载地址只认 https;debug 包额外放行回环明文(台架用 adb reverse 从宿主机发包,原生层按同一条件放行)。
-    allowLoopbackHttp: isDebuggableAndroid(),
+    // 下载地址只认 https;debug 档的包额外放行回环明文(台架用 adb reverse 从宿主机发包)。条件问原生要(启动时一次,
+    // 回来之前按不放行),原生下载时再按同一条件强制。getter:createMobileMarket 每次判地址都现读。
+    get allowLoopbackHttp() { return loopbackHttp },
     mirror: async () => {
       const cfg = (await window.tangu?.getConfig?.().catch(() => null)) as { mirror?: unknown } | null
       return typeof cfg?.mirror === 'string' ? cfg.mirror : 'default'

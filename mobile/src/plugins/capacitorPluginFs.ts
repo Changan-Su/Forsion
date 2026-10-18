@@ -52,15 +52,18 @@ interface MarketDownloadPlugin {
   download(o: { id: string; url: string; maxBytes: number }): Promise<{ name: string; size: number }>
   discard(o: { name: string }): Promise<void>
   addListener(event: 'progress', cb: (p: { id: string; received: number; total: number }) => void): Promise<PluginListenerHandle>
+  policy(): Promise<{ allowLoopbackHttp: boolean }>
 }
 const MARKET_DOWNLOAD_PLUGIN = 'ForsionMarketDownload'
+let marketDownloadPlugin: MarketDownloadPlugin | null = null // registerPlugin 同名只能注册一次(第二次只告警)
+const marketDownload = (): MarketDownloadPlugin => (marketDownloadPlugin ??= registerPlugin<MarketDownloadPlugin>(MARKET_DOWNLOAD_PLUGIN))
 
 /**
  * 原生下载(策略与单测都在 CappedDownload.kt):HttpURLConnection 流式写进应用缓存,字节上限在传输中强制;
  * 只认 https、重定向只跟到 https、不带应用的头与 cookie、连接 / 断流超时。下完由这里按 Directory.Cache 读回,读没读成都删。
  */
 export function nativeMarketDownload(): MarketDownload {
-  const plugin = registerPlugin<MarketDownloadPlugin>(MARKET_DOWNLOAD_PLUGIN)
+  const plugin = marketDownload()
   return createNativeDownload({
     download: (o) => plugin.download(o),
     onProgress: async (cb) => {
@@ -78,5 +81,11 @@ export function nativeMarketDownload(): MarketDownload {
 /** 真机(Android)且原生下载插件在 → 走原生下载;浏览器台架 / dev 预览返回 false,由调用方退回 fetch。 */
 export const hasNativeMarketDownload = (): boolean => Capacitor.getPlatform() === 'android' && Capacitor.isPluginAvailable(MARKET_DOWNLOAD_PLUGIN)
 
-/** debug 包(原生桥按 FLAG_DEBUGGABLE 注入 `Capacitor.DEBUG`):台架从宿主机回环发安装包,见 mobileMarket 的 allowLoopbackHttp。 */
-export const isDebuggableAndroid = (): boolean => Capacitor.getPlatform() === 'android' && Capacitor.DEBUG === true
+/**
+ * 原生下载放不放行回环明文(台架从宿主机经 adb reverse 发安装包,见 mobileMarket 的 allowLoopbackHttp):原生按 debug 包档定。
+ * 不看 `Capacitor.DEBUG`(= 可调试标记):-PnativePreviewFast 的预览包是 debug 档但不可调试,按它判就把台架的下载关了。问不到 = 不放行。
+ */
+export function nativeAllowsLoopbackHttp(): Promise<boolean> {
+  if (!hasNativeMarketDownload()) return Promise.resolve(false)
+  return marketDownload().policy().then((p) => p?.allowLoopbackHttp === true, () => false)
+}
