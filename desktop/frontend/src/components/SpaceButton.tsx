@@ -3,8 +3,10 @@
  *  node 单测里导入即炸,而内置插件(builtins/calendar)与用户 Space(userSpaces)都要复用这个按钮。 */
 import { switchSpace, useSpaceStore, label, getDetachApi, landOnMainPage } from '@lcl/engine'
 import type { SpaceDefinition } from '@lcl/engine'
+import type { CSSProperties } from 'react'
 import { useInbox } from '../stores/inboxStore'
 import { soloBadge, useSoloStatus } from '../stores/attentionStore'
+import { useSpaceProgress } from '../stores/spaceProgress'
 import { useI18n } from '../i18n'
 import '../shellMessages'
 
@@ -16,11 +18,15 @@ export function SpaceButton({ space, expanded }: { space: SpaceDefinition; expan
   const inboxUnread = useInbox((s) => (space.id === 'inbox' ? s.unreadCount : 0))
   const solo = soloBadge(useSoloStatus(space.id === 'tangu'))
   const unread = space.id === 'tangu' ? solo.n : inboxUnread
+  // 插件挂的进度环(ctx.app.setSpaceProgress,如蓬洲云在传文件);有未读角标时让角标
+  const progress = useSpaceProgress((s) => s.progress[space.id])
+  const pct = progress == null ? null : Math.round(progress * 100)
   const Icon = space.icon
   const name = label(space.name)
   // 可访问名:原来唯一的文本子节点是角标,读屏念出来就是「1」。名字 + 未读条数进 aria-label,角标对读屏隐藏。
   // 收起态的悬停名走 Ribbon 自绘浮签(data-rb-tip),不再挂原生 title(否则两层提示叠在一起)。
-  const a11y = unread > 0 ? t(solo.wait ? 'ribbon.spaceWaiting' : 'ribbon.spaceUnread', { name, n: unread }) : name
+  const a11y = unread > 0 ? t(solo.wait ? 'ribbon.spaceWaiting' : 'ribbon.spaceUnread', { name, n: unread })
+    : pct != null ? t('ribbon.spaceProgress', { name, pct }) : name
   return (
     <button
       className={`rb-btn rb-space${active ? ' on' : ''}`}
@@ -40,6 +46,7 @@ export function SpaceButton({ space, expanded }: { space: SpaceDefinition; expan
       {Icon && <Icon size={18} />}
       {expanded && <span className="rb-label">{name}</span>}
       {unread > 0 && <span className={`rb-badge${solo.wait ? ' dm-wait' : ''}`} aria-hidden="true">{unread > 99 ? '99+' : unread}</span>}
+      {unread === 0 && pct != null && <span className="rb-badge rb-ring" style={{ '--p': pct } as CSSProperties} aria-hidden="true" />}
     </button>
   )
 }

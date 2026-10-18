@@ -35,6 +35,7 @@ import { readDisabledPluginIds, usePluginStore } from '@amadeus/plugins/pluginSt
 import { setHiddenPluginSpaces, type HiddenSpace } from './pluginSpaceHealth'
 import { hasBottomPanel } from './pluginViews'
 import { PRODUCT } from './product'
+import { pluginSpaceOwner } from './stores/spaceProgress'
 import { LAST_EXIT_SPACE, awaitedStartupSpace, resolveStartupTarget, startupSpacePref } from './spaces'
 
 // 保留 id:用户/市场的 space.json 不许占用宿主 Space 的 id。calendar 现在是内置插件(关掉即不注册),
@@ -74,8 +75,8 @@ const app = () => useApp.getState()
 /** 本进程内经此文件注册的用户 Space:id → 磁盘目录名。market 安装目录名来自上架名称的 slug,
  *  可与 space.json 的 id 不一致,删除必须按映射删目录,否则残留目录重启后复活。 */
 const userIds = new Map<string, string>()
-/** 插件捆绑包内嵌的 Space:spec id → 所属插件 id。随插件启停显隐,不落 userIds(不可单独删,卸载随插件走)。 */
-const pluginSpaceOwner = new Map<string, string>()
+/** 插件捆绑包内嵌的 Space:spec id → 所属插件 id。随插件启停显隐,不落 userIds(不可单独删,卸载随插件走)。
+ *  表本身在 stores/spaceProgress(插件改自己 Space 的进度环要按它认归属,放这里会和 pluginStore 互引)。 */
 /** 已注册插件 Space 的原始 space.json:配方变了(插件更新)才注销重注册,不变则不动(防 ribbon 无谓抖动)。 */
 const pluginSpaceJson = new Map<string, string>()
 /** 已注册插件 Space 的自绘图标:只换了图就原地重注册(不走注销那条 —— 它会把正在用的 Space 打回 tangu)。 */

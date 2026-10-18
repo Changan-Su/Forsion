@@ -56,6 +56,7 @@ import { createDatabasesApi, createNoteTasksApi } from './pluginData'
 import { loadSyncedPluginData, notePluginDataEdit, pluginDataSyncOn, pushPluginData, type LocalData } from './pluginDataSync'
 import { createCalendarApi } from './pluginCalendar'
 import { createSpacesApi } from './pluginSpaces'
+import { clearSpaceProgressOf, setSpaceProgress } from '../../stores/spaceProgress'
 import { watchAccountName } from '../../services/accountName'
 import { fetchBingWallpapers } from '../../views/homepageWallpaper'
 import { getAggDb } from '../store/dbAggregateStore'
@@ -490,6 +491,8 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
       cmds.run(id)
       return true
     },
+    // Ribbon 上自己那个 Space 图标的进度环(2026-10-18,蓬洲云传文件):只认这个插件自己带的 Space;拆插件时 teardown 收掉
+    setSpaceProgress: (spaceId, progress) => (ok() && typeof spaceId === 'string' ? setSpaceProgress(pluginId, spaceId, progress) : false),
     openLink: async (url) => {
       if (!ok()) return false
       const [{ parseDeepLink }, { resolveDeepLink }] = await Promise.all([import('../../deepLinkPlan'), import('../../deepLinkInstall')])
@@ -2060,6 +2063,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     }
     liveScopes.get(id)?.close()
     liveScopes.delete(id)
+    clearSpaceProgressOf(id) // 停用 / 换代时 Ribbon 上别留着一个不再更新的进度环
     lastEnsure.delete(id) // 旧规则集不随重新启用被重放;再启用时插件自己 setup 里会重新 ensure
     set((s) => ({
       ...dropSlices(s, id),

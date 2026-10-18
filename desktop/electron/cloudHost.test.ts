@@ -49,6 +49,7 @@ const host: CloudHost = {
   setAmadeusSyncFactory: () => {},
   setUnitHubFactory: () => {},
   diagnosticLogs: () => ({ engine: { state: null, lastError: null, lines: [] } }),
+  addQuitGuard: () => () => {},
 }
 const imported: string[] = []
 const load = () => loadBuiltinDesktopEntries({

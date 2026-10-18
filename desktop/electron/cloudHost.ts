@@ -23,6 +23,7 @@ import type { RemoteBackendFactory } from './remotesync/backends'
 import type { Creds, ExternalCredsChange } from './accountCore'
 import type { AmadeusSyncFactory } from './amadeus/cloudSeam'
 import type { UnitHubFactory } from './unitHubSeam'
+import type { QuitGuardFn } from './quitGuard'
 
 /** 验签必须覆盖的文件:入口本身,以及决定 id / 版本 / 门禁的 manifest(否则改一改未签的 minAppVersion 就能改装载判断)。 */
 export const signedEssentials = (entry: string): string[] => [entry, 'manifest.json']
@@ -82,6 +83,10 @@ export interface CloudHost {
   // ── 0.8.2 之后(诊断数据的运行日志:用户打开「上传诊断数据」后,Extend 的 diagnostics.ts 把它带进快照)──
   /** 引擎进程的状态与 stdout/stderr 环形缓冲(backendManager:最近 LOG_CAP 行,App 重启即清)。没有托管的引擎(external / 无 agent 后端)= state null、lines 空。 */
   diagnosticLogs(): { engine: { state: string | null; lastError: string | null; lines: string[] } }
+  // ── 0.10 起(蓬洲云传输队列):退出前问一次 ──
+  /** 登记一条「还有事没做完」的判断:返回非 null 时宿主在退出前弹「退出 / 取消」(文案用它给的,按钮宿主翻)。
+   *  locale = 主进程当前的界面语言(mainI18n)。返回退订。见 electron/quitGuard.ts。 */
+  addQuitGuard(fn: QuitGuardFn): () => void
 }
 export type RegisterCloud = (host: CloudHost) => void | Promise<void>
 

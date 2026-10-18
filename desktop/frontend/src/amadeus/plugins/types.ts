@@ -307,6 +307,10 @@ export interface PluginAppApi extends BlockSurfaceApi {
   /** 在应用内打开一条 `forsion://` 链接(2026-10-17+):笔记 / 会话 / Space / `open?view=…`,口径同系统唤起的深链 ——
    *  只导航不执行,白名单外的一律 false。插件页里画的 `<a href="forsion://…">` 宿主本来就会在应用内接住,这条给按钮用。 */
   openLink?(url: string): Promise<boolean>
+  /** Ribbon 上**你自己带的** Space(包里的 `spaces/<x>/space.json`)图标挂一个进度环(2026-10-18+,蓬洲云传文件用):
+   *  `progress` 0–1,`null` = 收起。只按整百分比画,高频调用没关系;别的插件的 Space / 内置 Space → false。
+   *  插件停用时宿主自己收掉。旧宿主没有:`ctx.app.setSpaceProgress?.(…)`。 */
+  setSpaceProgress?(spaceId: string, progress: number | null): boolean
 }
 
 /** 插件契约自己的检索结果 DTO(**刻意不复用宿主内部的 SearchHit**:内部结构以后要改,不该牵动插件 API)。 */

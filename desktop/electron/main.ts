@@ -47,6 +47,7 @@ import { fetchWebsiteReleases } from './websiteReleases'
 import { createRestartGuard, readRestartActivity } from './restartGuard'
 import { createTray, refreshTrayMenu, setTrayIndicator, trayLang } from './tray'
 import { initMainLocale, mainLocale, mt } from './mainI18n'
+import { createQuitGuards } from './quitGuard'
 import { createUiLocaleSync, UI_LOCALE_FILE } from './uiLocaleSync' // P1-KF:主进程文案跟渲染层的生效语言
 import { createApprovalDelivery, engineFromBackend } from './approvalDelivery' // P1-K3
 import { APPROVAL_OPEN_CHANNEL } from '../shared/approvalOpen' // P1-K3
@@ -902,6 +903,24 @@ const backend = new BackendManager()
 let mainWindow: BrowserWindow | null = null
 // 托盘常驻:关窗默认只隐藏;仅托盘「退出」/before-quit 置 true 后才放行真正关闭。
 let isQuitting = false
+// 退出前问一次(electron/quitGuard.ts):内置包的主进程半身经 CloudHost.addQuitGuard 登记「还有事没做完」
+const quitGuards = createQuitGuards({
+  locale: mainLocale,
+  ask: async (b) => {
+    showMainWindow()
+    // ⚠️ 必须挂父窗(同 K4 confirm):无父的 showMessageBox 在 mac 上冻住主循环;拿不到窗就不拦(照常退)
+    const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
+    if (!win) return true
+    const r = await dialog.showMessageBox(win, {
+      type: 'warning', message: b.message, detail: b.detail,
+      buttons: [mt('main.quitGuard.quit'), mt('main.quitGuard.cancel')], defaultId: 1, cancelId: 1, noLink: true,
+    })
+    return r.response === 0
+  },
+  quit: () => app.quit(),
+  log: (m) => console.warn(m),
+})
+
 
 // MCP 端点(electron/mcpServer.ts):**常驻**(08-24 引擎原生路 P1)——App 启动即起,给引擎当
 // ASR 桥(transcribe_audio,凭每次启动随机的 bridgeSecret)。设置「高级」开关只管**外部 agent 面**:
@@ -2514,6 +2533,8 @@ app.whenReady().then(async () => {
         const st = PRODUCT.agentBackend ? backend.getStatus() : null
         return { engine: { state: st?.state ?? null, lastError: st?.lastError ?? null, lines: st ? backend.getLogs() : [] } }
       },
+      // ── 0.10 起:退出前问一次(蓬洲云还有文件在传)──
+      addQuitGuard: (fn) => quitGuards.add(fn),
     }
     // 插件页停用了的:不装主进程半身 —— 与没装 Extend 同一个形态(cloud:present 空,云端界面整套隐藏)。
     const off = (await loadConfig()).disabledBundles
@@ -2551,6 +2572,8 @@ app.whenReady().then(async () => {
       return (await dialog.showMessageBox(mainWindow, options)).response === 1
     },
     restart: async (install) => {
+      // 还有文件在传(蓬洲云):重启 / 装更新前先问一次;点了退出,后面的 before-quit 就不再问
+      if (!(await quitGuards.confirmFirst())) return
       isQuitting = true
       // Stop before relaunch/quitAndInstall so before-quit cannot bypass either with app.exit.
       try {
@@ -2559,6 +2582,7 @@ app.whenReady().then(async () => {
         else { app.relaunch(); app.quit() }
       } catch (error) {
         isQuitting = false
+        quitGuards.reset()
         throw error
       }
     },
@@ -4210,6 +4234,9 @@ app.whenReady().then(async () => {
 })
 
 app.on('before-quit', (e) => {
+  // 第一件事:有插件说还没做完就拦下问(别先做下面那些收尾 —— 取消的话应用还要接着用)。
+  // 托盘「退出」在 app.quit() 之前就把 isQuitting 置了 true:拦下时还原,否则取消后关窗就真关了
+  if (quitGuards.intercept()) { e.preventDefault(); isQuitting = false; return }
   isQuitting = true // 放行 window close 拦截(否则 hide 会吞掉退出)
   for (const state of persistedDetached) {
     const win = detachedWindows.get(state.id)
