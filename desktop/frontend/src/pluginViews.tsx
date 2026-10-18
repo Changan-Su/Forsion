@@ -165,7 +165,7 @@ export function syncPluginViews(): void {
       }) : undefined
       if (!side) { ws.closeViewsOfType(type); return }
       // 别处的同类实例(主区标签、另一侧 / 底部)照常关,只有这一侧收起(Codex 评审 #4)
-      for (const p of ws.api?.panels ?? []) {
+      for (const p of [...(ws.api?.panels ?? [])]) { // 先拍下名单:closeLeaf 会就地改 api.panels
         const m = (p.params ?? {}) as { __type?: string; __loc?: string }
         if ((m.__type || (p as { component?: string }).component) === type && m.__loc !== side) ws.closeLeaf(p.id)
       }
@@ -184,7 +184,7 @@ export function syncPluginViews(): void {
       for (const t of ws.leftTabs) side.set(t.type, 'left')
       for (const t of ws.rightTabs) side.set(t.type, 'right')
       // 底部面板没有 tab 投影:展开着的按 __loc 认,收起的在 stash 里(漏掉 = 热重载把底部视图开进主区)
-      for (const p of ws.api?.panels ?? []) {
+      for (const p of [...(ws.api?.panels ?? [])]) { // 先拍下名单:closeLeaf 会就地改 api.panels
         const q = (p.params ?? {}) as Record<string, unknown>
         if (q.__loc === 'bottom' && typeof q.__type === 'string') side.set(q.__type, 'bottom')
       }
