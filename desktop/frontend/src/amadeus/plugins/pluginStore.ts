@@ -55,6 +55,9 @@ import { useDbStore } from '../store/dbStore'
 import { createDatabasesApi, createNoteTasksApi } from './pluginData'
 import { loadSyncedPluginData, notePluginDataEdit, pluginDataSyncOn, pushPluginData, type LocalData } from './pluginDataSync'
 import { createCalendarApi } from './pluginCalendar'
+import { createSpacesApi } from './pluginSpaces'
+import { watchAccountName } from '../../services/accountName'
+import { fetchBingWallpapers } from '../../views/homepageWallpaper'
 import { getAggDb } from '../store/dbAggregateStore'
 import { kickAutomation } from '../store/automationKick'
 import { triggerToUpsert } from '../../views/automation/lib'
@@ -416,6 +419,14 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
         }
       : {}),
     // 库级文件事件:三端都挂(底座是 pageStore 清单 + 改名广播 + 外部改动广播,哪路缺位就少那一类),停用时同 watchFile 收掉。
+    // 登录名(10-18,主页插件化 S5):和内置主页的问候同一份读法;退订跟着插件的文件事件那一组一起收
+    watchAccountName: (cb) => {
+      if (!alive || typeof cb !== 'function') return () => {}
+      const off = watchAccountName((name) => { if (alive) cb(name) })
+      const wrapped = (): void => { off(); fileUnsubs.delete(wrapped) }
+      fileUnsubs.add(wrapped)
+      return wrapped
+    },
     onVaultEvent: (cb) => {
       if (!alive) return () => {}
       const off = subscribeVaultEvents(cb)
@@ -1507,6 +1518,25 @@ export const usePluginStore = create<PluginState>((set, get) => {
         }).catch(e => console.error(`[amadeus] plugin "${pluginId}" model picker mount failed`, e))
         return { update(patch) { if (!cancelled) { Object.assign(pending, patch); if (patch.onChange) pending.onChange = value => { if (ctxAlive()) patch.onChange!(value) }; mounted?.update(pending) } }, dispose }
       },
+      // 宿主样式的右键菜单(10-18,主页插件化 S7)。动态 import 破环;形态错同步抛。插件停用后点菜单项不再调它的 run。
+      contextMenu: (x, y, items) => {
+        if (!Number.isFinite(x) || !Number.isFinite(y) || !Array.isArray(items)) throw new TypeError('contextMenu needs x, y and an item list')
+        const clean = items.filter((it) => it && typeof it.run === 'function' && typeof it.label === 'string' && it.label.trim()).slice(0, 40).map((it) => ({
+          label: it.label.trim().slice(0, 80), run: it.run,
+          ...(typeof it.checked === 'boolean' ? { checked: it.checked } : {}), disabled: !!it.disabled, danger: !!it.danger,
+        }))
+        if (!ctxAlive() || !clean.length) return () => {}
+        let close: (() => void) | null = null, cancelled = false
+        const dispose = scope.own('mount', () => { cancelled = true; close?.() }, 'contextMenu')
+        void import('./contextMenuSurface').then((m) => {
+          if (cancelled) return
+          close = m.openPluginContextMenu(x, y, clean, (run) => {
+            if (!ctxAlive()) return
+            try { run() } catch (e) { console.error(`[amadeus] plugin "${pluginId}" menu item threw`, e) }
+          }, () => dispose.forget()) // 自己关掉的(Esc / 点外面 / 点了某项)从账上划掉,别攒到停用(Codex 评审)
+        }).catch((e) => console.error(`[amadeus] plugin "${pluginId}" context menu failed`, e))
+        return dispose
+      },
       mountChatBox: (el, opts) => {
         if (!ctxAlive()) return { update() {}, focus() {}, dispose() {} }
         if (!(el instanceof HTMLElement)) throw new TypeError('mountChatBox needs an HTMLElement')
@@ -1721,6 +1751,14 @@ export const usePluginStore = create<PluginState>((set, get) => {
           },
         }
       : {}),
+    // 必应每日壁纸(10-18,主页插件化 S6):桌面经主进程拉(只认 https + *.bing.com,渲染层直连会被 CSP 拦),网页版走同源
+    // /api/wallpaper/daily —— 和内置主页同一个 fetchBingWallpapers。公开图片,不设能力闸。
+    wallpaper: {
+      bing: async (locale) => {
+        if (!ctxAlive()) return []
+        return fetchBingWallpapers(locale === 'en' ? 'en' : 'zh')
+      },
+    },
     // 活动日志:同款前缀纪律(插件伪造不了官方事件);拼行/消毒在 main 侧 activityLog.ts。停用后不许再记。
     activity: {
       log: (event, detail) => { if (ctxAlive()) act(`plugin:${pluginId}:${event}`, detail) },
@@ -1877,6 +1915,25 @@ export const usePluginStore = create<PluginState>((set, get) => {
                   },
                 }
               : {}),
+            // 新对话输入区(2026-10-18,主页插件化 S2):探针给得出才注入。发送归宿主 —— 插件改不了要发的内容(draft 只读),
+            // 所以和 mountChat 一样不设能力闸;回调在插件停用后不再调(beforeSend 不调 = 宿主照样发,用户那一下不丢)。
+            ...(readTangu()?.mountComposer
+              ? {
+                  mountComposer: (el: HTMLElement, o?: import('./tanguSeam').TanguComposerOptions): import('./tanguSeam').TanguComposerMount => {
+                    if (!(el instanceof HTMLElement)) throw new TypeError('mountComposer needs an HTMLElement')
+                    const probe = readTangu()
+                    if (!ctxAlive() || !probe?.mountComposer) return { focus() {}, startVoice() {}, draft: () => '', dispose() {} }
+                    const onFocusChange = o?.onFocusChange, beforeSend = o?.beforeSend
+                    const mounted = probe.mountComposer(el, {
+                      call: o?.call === true,
+                      ...(typeof onFocusChange === 'function' ? { onFocusChange: (f: boolean) => { if (ctxAlive()) onFocusChange(f) } } : {}),
+                      ...(typeof beforeSend === 'function' ? { beforeSend: () => (ctxAlive() ? beforeSend() : undefined) } : {}),
+                    })
+                    const dispose = scope.own('mount', () => mounted.dispose(), 'composer')
+                    return { focus: () => { if (ctxAlive()) mounted.focus() }, startVoice: () => { if (ctxAlive()) mounted.startVoice() }, draft: () => (ctxAlive() ? mounted.draft() : ''), dispose }
+                  },
+                }
+              : {}),
             // 一次性补全(G3-07)与翻译:探针给得出才注入。插件停用 → 关账中止在飞请求并 reject。
             // translate 走引擎现成的 translate 动作,模型取「翻译」模型槽(tanguProbe.complete 里解析),不跟主对话模型。
             ...(readTangu()?.complete
@@ -1951,6 +2008,10 @@ export const usePluginStore = create<PluginState>((set, get) => {
     // 全库多维表 / 笔记 @ 任务:同样 **manifest 声明过才注入**(写的是用户的表和笔记,default-deny)。
     ...(get().plugins.find((p) => p.id === pluginId)?.capabilities?.includes('databases')
       ? { databases: createDatabasesApi({ alive: ctxAlive, own: (off) => scope.own('subscription', off, 'databases') }) }
+      : {}),
+    // Space 与 Ribbon 收纳架(2026-10-18,主页插件化):改的是用户的 Ribbon → 和 databases 同一道闸,声明了 'spaces' 才有
+    ...(get().plugins.find((p) => p.id === pluginId)?.capabilities?.includes('spaces')
+      ? { spaces: createSpacesApi({ alive: ctxAlive, own: (off) => scope.own('subscription', off, 'spaces') }) }
       : {}),
     ...(get().plugins.find((p) => p.id === pluginId)?.capabilities?.includes('noteTasks')
       ? { noteTasks: createNoteTasksApi({ alive: ctxAlive, own: (off) => scope.own('subscription', off, 'noteTasks') }) }
