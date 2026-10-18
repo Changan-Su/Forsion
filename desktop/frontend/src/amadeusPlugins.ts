@@ -20,6 +20,7 @@ import { syncPluginViews } from './pluginViews'
 import { installPluginStatusBridge } from './pluginStatusBridge'
 import { evaluateAndNudge } from './stores/pluginOnboardingStore'
 import { installAmadeusAutomationBridge } from './amadeusAutomation'
+import { CALENDAR_PLUGIN_ID, setCalendarYield } from './builtins'
 
 let installed = false
 
@@ -37,6 +38,11 @@ export function installAmadeusPlugins(): void {
   if (installed) return
   installed = true
   syncPluginViews() // 插件视图桥先就位:随后的 init/loadExternal 里注册的视图第一时间进 LCL 注册表
+  // 日历核心插件开着 → 内置日历让位(见 builtins/index 的 CALENDAR_PLUGIN_ID)。
+  // ponytail: 并行双跑期插件还是开发装的(没进 CORE_BUNDLE_IDS),只认 id;进了核心名单就改成 isCorePlugin 判定,别让同名第三方插件把内置日历顶掉。
+  const calendarPluginOn = (): boolean => usePluginStore.getState().activeIds.includes(CALENDAR_PLUGIN_ID)
+  setCalendarYield(calendarPluginOn())
+  usePluginStore.subscribe(() => setCalendarYield(calendarPluginOn()))
   installPluginStatusBridge() // 状态条项桥同理(→ 全局状态栏)
   if (amadeusAvailable()) installAmadeusAutomationBridge() // Amadeus「按钮」块 → 本地引擎自动化(云端/移动端不注册=按钮显示不支持)
   // Mini/detached renderers share preferences but own plugin instances. Revoke local views

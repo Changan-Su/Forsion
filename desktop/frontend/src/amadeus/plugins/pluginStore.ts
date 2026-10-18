@@ -54,6 +54,8 @@ import { MUTATE_DB_RETRIES, mutateDbCas } from './pluginDb'
 import { useDbStore } from '../store/dbStore'
 import { createDatabasesApi, createNoteTasksApi } from './pluginData'
 import { loadSyncedPluginData, notePluginDataEdit, pluginDataSyncOn, pushPluginData, type LocalData } from './pluginDataSync'
+import { createCalendarApi } from './pluginCalendar'
+import { getAggDb } from '../store/dbAggregateStore'
 import { kickAutomation } from '../store/automationKick'
 import { triggerToUpsert } from '../../views/automation/lib'
 import { memberOf, useCalendarConfig } from '../store/calendarConfigStore'
@@ -445,7 +447,17 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
     // 裸 Markdown 必须显式走 Amadeus editor,不能借 openFile(后者对未认领后缀会交给系统默认程序)。
     // reuseKey 让插件 Space 能稳定更新自己声明的文档伴随栏,activate:false 不抢回源视图焦点。
     // 非笔记路径(PDF / 图片 / 白板…)不进笔记编辑器:交给 openFile 按类型开对的视图(同 isPagePipelinePath)。
-    openNote: (p, options) => { if (ok()) void import('../../amadeusNav').then((m) => (isPagePipelinePath(String(p ?? '')) ? m.openNote(p, options) : m.openFile(p))) },
+    // heading(10-17):开完再滚到那个标题(与 [[笔记#标题]] / 聊天引用条同一套 revealHeadingWhenReady,找不到就只开笔记)。
+    openNote: (p, options) => {
+      if (!ok()) return
+      const heading = typeof options?.heading === 'string' ? options.heading.trim() : ''
+      void import('../../amadeusNav').then(async (m) => {
+        if (!isPagePipelinePath(String(p ?? ''))) { m.openFile(p); return }
+        await m.openNote(p, options)
+        // activate:false = 不抢焦点,而跳标题会聚焦那篇笔记 → 这时只开不跳(Codex 评审)
+        if (heading && options?.activate !== false && ok()) await m.revealHeadingWhenReady(p, heading)
+      })
+    },
     // 只读 vault 查询面(2026-08-14,codex 评审后的口径):纯透传主进程既有 IPC,没有写口。
     // 三条统一语义 —— **桥缺席(web/台架未垫)或没有活动库都给空数组,绝不 reject**:
     // 插件侧的可选链只挡得住「宿主没这个方法」,挡不住「方法在但 window.amadeus 是 undefined」,
@@ -1281,15 +1293,28 @@ export const usePluginStore = create<PluginState>((set, get) => {
     },
     // 右上角通知(2026-07-23 起):来源自动标插件名;事件 plugin:<id>,用户可在设置里按插件静音。
     // 停用后残留的定时器不许再弹(10-02 补的活性闸,与 ctx.app 的副作用口同一条纪律)。
-    notify: (message, opts) =>
-      void (ctxAlive() && notifyApp({
+    // action(10-17,日历的「撤销」):一个按钮,停留 8 秒(同宿主日历的 U-06);插件停用后点了也不调。
+    // key:同 key 的后一张顶掉前一张,前缀由宿主拼,碰不到别家的 / 宿主的去重键。
+    notify: (message, opts) => {
+      if (!ctxAlive()) return
+      const a = opts?.action
+      const label = a && typeof a.label === 'string' ? a.label.trim().slice(0, 40) : ''
+      const run = a && typeof a.run === 'function' ? a.run : null
+      const action = label && run
+        ? { label, run: () => { if (!ctxAlive()) return; try { run() } catch (e) { console.error(`[amadeus] 插件 ${pluginId} 的通知动作抛错`, e) } } }
+        : undefined
+      notifyApp({
         text: String(message ?? ''),
         level: opts?.level,
         title: opts?.title ? String(opts.title) : undefined,
         sticky: typeof opts?.sticky === 'boolean' ? opts.sticky : undefined,
         event: `plugin:${pluginId}`,
         sourceLabel: get().plugins.find((p) => p.id === pluginId)?.name || pluginId,
-      })),
+        ...(action ? { action, durationMs: 8000 } : {}),
+        // 带 key 时 action 一律显式给(可能是 undefined):同 key 合并时 store 才会清掉上一条的按钮,否则「已删除 B」上挂着撤 A 的按钮
+        ...(typeof opts?.key === 'string' && opts.key ? { dedupeKey: `plugin:${pluginId}:${opts.key.slice(0, 100)}`, action } : {}),
+      })
+    },
     registerView: (view) => set((s) => ({ views: [...s.views, { pluginId, item: view }] })),
     registerListSource: (src) => set((s) => ({ listSources: [...s.listSources, { pluginId, item: src }] })),
     // 内置后缀不给注册(内置优先是硬规则,见 isBuiltinFileType);唯一的口子是「可覆盖」的那几个后缀
@@ -1434,6 +1459,43 @@ export const usePluginStore = create<PluginState>((set, get) => {
     // 通用宿主 UI 原语。Floating TOC 是非接管式挂载:插件继续拥有正文 DOM,宿主只在 shell 上叠一层。
     // 与 table/dashboard 一样动态 import 破环;形态错误同步抛,让插件能当场走自己的降级 UI。
     ...(typeof document !== 'undefined' ? { ui: {
+      // 行编辑字段(10-17):写的是用户的表 → 和 ctx.databases 同一道闸,没声明 'databases' 就没有这个成员。
+      ...(get().plugins.find((p) => p.id === pluginId)?.capabilities?.includes('databases')
+        ? {
+            mountRecord: (el: HTMLElement, opts: import('./types').PluginRecordOptions) => {
+              if (!ctxAlive()) return { update() {}, dispose() {} }
+              const path = typeof opts?.path === 'string' ? normalizeVaultRel(opts.path) : ''
+              if (!(el instanceof HTMLElement) || !path || !getAggDb(path) || typeof opts?.rowId !== 'string') {
+                throw new TypeError('mountRecord needs an HTMLElement, a database path in the vault and a rowId')
+              }
+              const clean = (o: Partial<import('./types').PluginRecordOptions>): Partial<import('./types').PluginRecordOptions> => ({
+                ...(typeof o.path === 'string' && getAggDb(normalizeVaultRel(o.path)) ? { path: normalizeVaultRel(o.path) } : {}),
+                ...(typeof o.rowId === 'string' ? { rowId: o.rowId } : {}),
+                ...('dateCol' in o ? { dateCol: typeof o.dateCol === 'string' ? o.dateCol : undefined } : {}),
+                ...(typeof o.readOnly === 'boolean' ? { readOnly: o.readOnly } : {}),
+              })
+              const pending = { ...clean(opts), path, rowId: opts.rowId } as import('./types').PluginRecordOptions
+              let mounted: { update(p: Partial<import('./types').PluginRecordOptions>): void; dispose(): void } | null = null
+              let cancelled = false
+              const dispose = scope.own('mount', () => { cancelled = true; mounted?.dispose(); mounted = null }, 'record')
+              const mine = cancelled ? () => false : claimHostMount(el)
+              void import('./recordSurface').then((m) => {
+                if (cancelled) return
+                if (!mine()) { dispose(); return }
+                mounted = m.mountPluginRecord(el, pending)
+              }).catch((e) => { console.error(`[amadeus] plugin "${pluginId}" record mount failed`, e) })
+              return {
+                update(patch: Partial<import('./types').PluginRecordOptions>) {
+                  if (cancelled || !patch || typeof patch !== 'object') return
+                  const c = clean(patch)
+                  Object.assign(pending, c)
+                  mounted?.update(c)
+                },
+                dispose,
+              }
+            },
+          }
+        : {}),
       mountMarkdownEditor: (el, opts) => {
         const pending = { ...opts }
         let mounted: import('../../../../shared/markdownEditor').PluginMarkdownEditorHandle | null = null
@@ -1714,7 +1776,11 @@ export const usePluginStore = create<PluginState>((set, get) => {
       : {}),
     // 日历成员登记:只依赖 pageStore 的 vault,不需要探针闸。已是成员 no-op(不覆盖用户改过的列映射);
     // 库还没恢复就等它恢复(与 ensure 同一个 60s 窗口),同步返回 void。
+    // 'calendar' 能力档(叠加源 + 日历设置):**manifest 声明过才有**,ensureMember 这一档人人有(见 types 的两档说明)。
     calendar: {
+      ...(get().plugins.find((p) => p.id === pluginId)?.capabilities?.includes('calendar')
+        ? createCalendarApi({ alive: ctxAlive, own: (off) => scope.own('subscription', off, 'calendar') })
+        : {}),
       ensureMember: (dbPath: string, dateColId: string, checkboxColId?: string) => {
         const p = normalizeVaultRel(dbPath)
         const dateCol = String(dateColId || '').trim()

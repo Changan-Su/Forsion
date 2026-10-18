@@ -17,7 +17,7 @@ export interface DataScope {
   own(off: () => void): () => void
 }
 
-const toDb = (db: AggDb): PluginDatabase => ({
+export const toDb = (db: AggDb): PluginDatabase => ({
   path: db.path,
   name: db.name,
   kind: db.isNoteView ? 'notes' : 'table',
