@@ -68,6 +68,30 @@ describe('buildTurnTree', () => {
     expect(tree.paths.B7).toEqual(['R:u1', 'R:u2', 'B7:k4'])
   })
 
+  it('主线后来把分叉那一轮重新生成了:分支存的是旧回答,不并进主线那张卡,自成一棵', () => {
+    const R2 = [u('u1', '离线同步怎么做?'), a('a1x', '换了个答法'), u('u2', '第一条改哪?'), a('a2', '四处')]
+    const tree = buildTurnTree('R', [br('B1', 'a1', 'R', '2026-10-18 10:00:00')], (s) => ({ R: R2, B1 } as Record<string, UiMessage[]>)[s])
+    expect(tree.paths.B1).toEqual(['B1:b-u1', 'B1:c1', 'B1:c3'])
+    expect(tree.roots).toEqual(['R:u1', 'B1:b-u1'])
+  })
+
+  it('两边窗口错开(主线只拉到后面一段,分支拉到更早的副本):早于主线窗口的副本不画,不重复挂到分叉卡后面', () => {
+    const turn = (p: string, i: number) => [u(`${p}q${i}`, `问题 ${i}`), a(`${p}a${i}`, `回答 ${i}`)]
+    const Rw = Array.from({ length: 6 }, (_, i) => turn('', i + 5)).flat() // 主线只拉到第 5–10 轮
+    const Bw = [...Array.from({ length: 6 }, (_, i) => turn('b', i + 2)).flat(), u('own', '分支自己问的'), a('own-a', '好')] // 分支拉到第 2–7 轮的副本
+    const tree = buildTurnTree('R', [br('Bw', 'a7', 'R', '2026-10-18 10:00:00')], (s) => ({ R: Rw, Bw } as Record<string, UiMessage[]>)[s])
+    expect(tree.paths.Bw).toEqual(['R:q5', 'R:q6', 'R:q7', 'Bw:own'])
+    expect(tree.cards.get('R:q5')!.at.Bw).toEqual({ first: 'bq5', last: 'ba5' })
+    expect(tree.cards.size).toBe(7)
+  })
+
+  it('分叉点在一轮中间(这一轮后面还有回答):副本只抄到那条,照样认成同一轮', () => {
+    const Rm = [u('u1', 'Q'), a('a1', 'A1'), a('a1b', 'A2')]
+    const Bm = [u('m0', 'Q'), a('m1', 'A1'), u('m2', '另问')]
+    const tree = buildTurnTree('R', [br('Bm', 'a1', 'R', '2026-10-18 10:00:00')], (s) => ({ R: Rm, Bm } as Record<string, UiMessage[]>)[s])
+    expect(tree.paths.Bm).toEqual(['R:u1', 'Bm:m2'])
+  })
+
   it('来源还没拉到历史:先不画这一支', () => {
     const tree = buildTurnTree('R', [br('B1', 'a1', 'R', '2026-10-18 10:00:00')], (s) => (s === 'B1' ? B1 : undefined))
     expect(tree.cards.size).toBe(0)

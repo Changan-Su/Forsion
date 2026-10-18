@@ -19,7 +19,7 @@ export type {
 export { label } from './types'
 
 export { Shell } from './Shell'
-export { startOpenDrag, VIEW_CHROME_ATTR } from './WorkspaceHost'
+export { startOpenDrag, useViewChromeSlot, VIEW_CHROME_ATTR } from './WorkspaceHost'
 export { openMainBesideThisTask, mainOpensBeside } from './openBeside'
 export { SingleColumnHost, accountMenuRows, drawerPreview } from './SingleColumnHost'
 export { listFirstNow, useListFirst } from './listFirst'

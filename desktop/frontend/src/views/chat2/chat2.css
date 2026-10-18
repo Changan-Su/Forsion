@@ -1238,7 +1238,8 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
    层级线(同 .amx-el-conn.is-tree:强调色 55%,树根到选中卡那一路加深)、缩放胶囊 / 缩略图(canvasKit 的 .amx-stage-hud / -minimap)。
    ⚠️ .am-app 只包点阵和 chrome(.t2cv-am 是 display: contents):它给 Amadeus 那套几百个通用类开了作用域,包住卡会串进消息排版。
    流照旧挂着、只是藏起来(visibility,不是 display:none):切回对话时滚动位置还在,滚动跟随那套监听也不用重挂。 */
-.t2-chat-view[data-canvas] .t2-chat-body { visibility: hidden; }
+/* 只认本视图自己那一列:右边子会话面板里嵌着的是另一个 ChatView,它的正文不能跟着藏(Codex 评审) */
+.t2-chat-view[data-canvas] > .t2-chat-col > .t2-chat-body { visibility: hidden; }
 .t2cv { position: absolute; inset: 0; z-index: 2; }
 .t2cv-stage { position: absolute; inset: 0; overflow: hidden; touch-action: none; outline: none; }
 .t2cv-am { display: contents; }

@@ -4,9 +4,9 @@
  *
  * 分支把分叉点之前的对话**复制**成新 id(引擎 sessionBranch.ts,时间戳照抄)。认回来源那一轮:
  *  - 来源会话里含 fork_message_id 的那一轮 = 分叉卡;分支的复制段不会越过它;
- *  - 分支里哪几轮是复制的,按问题文字从前往后对齐来源的几轮(连续命中才算)。**不比时间戳**:这一端直播出来的消息
+ *  - 分支里哪几轮是复制的,按「问题 + 回答」的文字对齐来源的几轮(连续命中才算)。**不比时间戳**:这一端直播出来的消息
  *    记的是客户端时刻(appStore.send 的 sentAt),库里的副本是服务端时刻,对不上;
- *  - 两边的历史都只拉最近 200 条(引擎 /messages 缺省 LIMIT),所以第一轮可以对在来源的任意一轮上,不要求从头对齐。
+ *  - 两边的历史都只拉最近 200 条(引擎 /messages 缺省 LIMIT),窗口可能错开:从分支里第一处对上的那一轮开始认。
  * 对不上的轮次一律算分支自己的,挂在分叉卡下面(分叉卡也认不出就各自成一棵)。
  */
 import type { SessionRecord, UiMessage } from '../../types'
@@ -58,7 +58,14 @@ export interface TurnTree {
 }
 
 const byCreated = (a: SessionRecord, b: SessionRecord): number => String(a.created_at || '').localeCompare(String(b.created_at || ''))
-const q = (t: Turn): string => t.user?.content.trim() ?? ''
+/** 前 400 字够认出「是不是同一份」,也不怕这一端对超长正文的截断(capContent)。 */
+const norm = (m: UiMessage): string => m.content.trim().slice(0, 400)
+/** 分支里的这一轮是来源那一轮的副本:问题一样,回答是来源回答的前几条(分叉点落在一轮中间时副本只抄到那条)。
+ *  只比问题不够:主线后来把这一轮重新生成了,分支里存的还是旧回答,不能画成同一张卡(Codex 评审)。 */
+function sameTurn(b: Turn, src: Turn): boolean {
+  if (!b.user || !src.user || norm(b.user) !== norm(src.user) || b.answers.length > src.answers.length) return false
+  return b.answers.every((m, i) => norm(m) === norm(src.answers[i]))
+}
 
 /** @param branches 树根下面 fork_message_id 有值的会话(分支的分支也挂树根,见引擎 routes/sessions.ts)
  *  @param rowsOf 会话已拉到的消息;undefined = 还没拉,先不画它(拉到后重算) */
@@ -93,20 +100,21 @@ export function buildTurnTree(rootId: string, branches: readonly SessionRecord[]
     const forkIdx = b.fork_message_id ? srcTurns.findIndex((t) => t.ids.has(b.fork_message_id!)) : -1
     const limit = forkIdx >= 0 ? forkIdx : srcTurns.length - 1
     const turns = splitTurns(rows)
-    // 复制段:分支开头连续几轮,问题文字依次等于来源的连续几轮(第一轮可对在任意一轮上 —— 两边都可能被截掉开头)
+    // 复制段 = 分支里第一处和来源对上的那一轮起,依次和来源的连续几轮一样(两边都只拉最近 200 条,窗口可以错开);
+    // 对上之前的几轮是来源窗口之外更早的副本,不画(来源那边也看不到它们)。一轮都对不上 = 全是分支自己的。
+    let s = -1
     let j = -1
-    let n = 0
-    for (; n < turns.length; n++) {
-      const want = q(turns[n])
-      const hit = j < 0 ? srcTurns.findIndex((t, i) => i <= limit && !!t.user && q(t) === want) : (j + 1 <= limit && q(srcTurns[j + 1]) === want && srcTurns[j + 1].user ? j + 1 : -1)
-      if (hit < 0) break
-      j = hit
+    for (let i = 0; i < turns.length && s < 0; i++) {
+      j = srcTurns.findIndex((t, k) => k <= limit && sameTurn(turns[i], t))
+      if (j >= 0) s = i
     }
+    let n = s < 0 ? 0 : s + 1
+    if (s >= 0) while (n < turns.length && j + 1 <= limit && sameTurn(turns[n], srcTurns[j + 1])) { j++; n++ }
     // 自己的几轮挂在分叉卡下;分叉消息不在来源已拉到的那段里,就挂在对上的最后一轮下(都没有 = 各自成一棵)
     const end = forkIdx >= 0 ? forkIdx : j
     const seen = srcTurns.slice(0, end + 1)
-    for (let i = 0; i < n; i++) {
-      const k = j - n + 1 + i
+    for (let i = Math.max(s, 0); i < n; i++) {
+      const k = j - (n - 1 - i)
       seen[k] = turns[i]
       cards.get(srcPath[k])!.at[b.id] = { first: turns[i].first, last: turns[i].last }
     }

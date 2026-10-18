@@ -14,7 +14,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import { createPortal } from 'react-dom'
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, CornerDownRight, Hand, ListTree, MoveDown, MoveRight } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
-import { useWorkspace, VIEW_CHROME_ATTR } from '@lcl/engine'
+import { useViewChromeSlot } from '@lcl/engine'
 import type { UiMessage } from '../../types'
 import { useApp } from '../../stores/appStore'
 import { registerMessages, useI18n } from '../../i18n'
@@ -83,23 +83,9 @@ export function ChatCanvasSeg({ on, onChange }: { on: boolean; onChange: (on: bo
   )
 }
 
-/** 投进本视图所在那组标签栏右端的空位(引擎 WorkspaceHost 的 ViewChrome;一组只标活动标签的 id)。
- *  空位晚于本组件出现、或标签栏重画换了一个,都在 mainTabs 变化时重找;一时找不到就逐帧再找一会儿。 */
+/** 投进本视图所在那组标签栏右端的空位(引擎 WorkspaceHost 的 ViewChrome;一组只登记活动标签的 id,重画了会重新登记)。 */
 export function ViewChromePortal({ leafId, children }: { leafId: string; children: React.ReactNode }) {
-  const tabs = useWorkspace((s) => s.mainTabs)
-  const [slot, setSlot] = useState<HTMLElement | null>(null)
-  useEffect(() => {
-    const sel = `[${VIEW_CHROME_ATTR}="${CSS.escape(leafId)}"]`
-    let raf = 0
-    let tries = 0
-    const find = (): void => {
-      const el = document.querySelector<HTMLElement>(sel)
-      setSlot(el)
-      if (!el && ++tries < 60) raf = requestAnimationFrame(find)
-    }
-    find()
-    return () => cancelAnimationFrame(raf)
-  }, [leafId, tabs])
+  const slot = useViewChromeSlot(leafId)
   return slot ? createPortal(children, slot) : null
 }
 
@@ -293,12 +279,26 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onOpenTurn }: {
     return { z, x, y: h - composerInset() - (b.y + b.h) * z }
   }
 
+  // 换了排法:这个排法记过视口就回到那里,没记过就重新落位。⚠️ 排在跟随之前:跟随一写视口就落进新排法的记忆,
+  // 后读就把记着的那份冲掉了(Codex 评审)
+  const lastDir = useRef(dir)
+  useLayoutEffect(() => {
+    if (lastDir.current === dir) return
+    lastDir.current = dir
+    const r = recallViewport(memoKey)
+    if (r) { landed.current = true; view.setVp(r) } else landed.current = false
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dir])
+
   // ── 自动跟随:当前这一支上那张在生成的卡 ──
   const streamKey = activePath.find((k) => tree.cards.get(k)!.answers.some((m) => m.status === 'streaming')) ?? null
   const lastStream = useRef<string | null>(null)
   useLayoutEffect(() => {
     // 这一支上新冒出一张在生成的卡(= 刚发出去一句):重新跟上
     if (streamKey && streamKey !== lastStream.current) { followRef.current = true; setFollow(true) }
+    // 刚写完的那张不折起:正跟着读到它的末尾,一折视野就落到卡下面的空白里(Codex 评审实测卡跳出视口上方一千多像素)
+    const done = lastStream.current
+    if (done && done !== streamKey) setExpanded((s) => (s.has(done) ? s : new Set(s).add(done)))
     lastStream.current = streamKey
   }, [streamKey])
   useLayoutEffect(() => {
@@ -311,15 +311,6 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onOpenTurn }: {
     if (Math.abs(next.x - cur.x) > 0.5 || Math.abs(next.y - cur.y) > 0.5) view.setVp(next)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [boxes, streamKey, follow])
-  // 换了排法:这个排法记过视口就回到那里,没记过就重新落位
-  const lastDir = useRef(dir)
-  useLayoutEffect(() => {
-    if (lastDir.current === dir) return
-    lastDir.current = dir
-    const r = recallViewport(memoKey)
-    if (r) { landed.current = true; view.setVp(r) } else landed.current = false
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dir])
   // 第一次打开(这棵树、这个排法没记过视口):落在当前这一支的最后一张卡上,卡顶留一点边
   useLayoutEffect(() => {
     if (landed.current || !selected || streamKey) return
