@@ -34,29 +34,22 @@ import {
   ArrowUp, Check, FolderMinus, FolderOpen, FolderPlus, Grid2X2, Image, LogOut,
   Mic, Pencil, RefreshCw, Upload, X,
 } from 'lucide-react'
-import { setActiveSpace, useSpaceStore, useRibbonStore, label, moveTo, OverlayAt, useNativeChromeSpaces, useNativeSheetMenu, presentNativeChecklist, getDetachApi, WINDOW_SPACE_ID, type SheetMenuItem } from '@lcl/engine'
+import { setActiveSpace, useSpaceStore, useRibbonStore, label, OverlayAt, useNativeChromeSpaces, useNativeSheetMenu, presentNativeChecklist, getDetachApi, WINDOW_SPACE_ID, type SheetMenuItem } from '@lcl/engine'
 import { CtxMenuButtons } from '../components/CtxMenuButtons'
-import { rankIds, reorderBase, unionOrder } from '@lcl/engine/ribbonRegistry'
-import type { SpaceDefinition, RibbonFolder, RibbonItem, ViewProps } from '@lcl/engine'
+import { shelfAddFolder, shelfMove, shelfMoveIntoFolder, shelfMoveOut, shelfRemoveFolder, shelfRenameFolder, shelfReorderFolder, shelfTiles, type ShelfTile } from './homeShelf'
+import type { SpaceDefinition, RibbonItem, ViewProps } from '@lcl/engine'
 import { askString } from '@amadeus/components/askString'
-import { useApp } from '../stores/appStore'
-import { useAmadeusPrefs } from '../amadeusPrefs'
-import { usePluginStore } from '../amadeus/plugins/pluginStore'
-import { allSeries, useAchievements } from '../achievements/store'
-import { displaySessionTitle } from '../sessionTitle'
 import { NewChatComposer, sendFromNewChat, startNewChatCall, type NewChatDispatch } from './newChatComposer'
 import { registerMessages, useI18n, type Locale } from '../i18n'
-import { formatLongDate, formatMonthDay, formatTime } from '../format/time'
-import { useShallow } from 'zustand/react/shallow'
+import { formatLongDate, formatTime } from '../format/time'
 import {
   clearCustomWallpaper, fetchBingWallpapers, loadHomepageWallpaperPrefs, onHomepageWallpaperPrefsChange, readCustomWallpaper,
   saveHomepageWallpaperPrefs, writeCustomWallpaper,
   type BingWallpaper, type HomepageThemePreset, type HomepageWallpaperPrefs, type HomepageWallpaperSource,
 } from './homepageWallpaper'
 import { HomeWallpaperArt } from './homepageWallpaperArt'
+import { DeskCardStatus, useCardStatus } from './homeCardStatus'
 import { DESKTOP_HOME_CARDS_KEY, HOME_CARDS_MAX, loadHomeCards, saveHomeCards, shownHomeCards } from './homeCards'
-import { useAgendaItems } from './DashboardCompactViews'
-import { useInbox } from '../stores/inboxStore'
 import './homepage.css'
 
 /** 本视图所在的 Space id(真源在 builtins/homepage.tsx);坞里要把它自己排掉 —— 但**排序时不能排**,见 dropOn。 */
@@ -80,10 +73,7 @@ const dockCollision: CollisionDetection = (args) => {
   return hits.length ? hits : closestCenter(args)
 }
 
-/** 坞里的一格:一个 Space,或一个收纳夹(含它当前能解析出来的成员)。 */
-type Tile =
-  | { kind: 'space'; id: string; space: SpaceDefinition }
-  | { kind: 'folder'; id: string; folder: RibbonFolder; members: SpaceDefinition[] }
+type Tile = ShelfTile
 
 function TileVisual({ tile }: { tile: Tile }) {
   if (tile.kind === 'space') {
@@ -283,40 +273,12 @@ function useAccountName(): string {
   return name
 }
 
-/**
- * 坞的条目 = ribbon 上区的顶层条目(Space + 收纳夹),按用户保存的顺序排。
- *
- * ⚠️与 `Ribbon.zoneList` 同一口径:遍历**活的** spaces ∪ folders 再按 `order` 排名,
- * 绝不去遍历 `order` 本身 —— 那份持久数组里留着停用插件、已删用户 Space 的陈年 id
- * (`removeRibbonIcon` 只在真正反注册时清,插件关掉那条路会清,但历史存档不保证干净),
- * 照着它渲染就会画出点不动的幽灵格。收纳夹成员同理:解析不到的成员静默丢掉。
- *
- * 返回的 `topIds` = 顶层序:**排掉夹内成员**(同 Ribbon 的 topE),但**含主页自己**
- * (它只是不显示,顺序上仍然占一格)。重排写回一律以它为基准,见 dropOn 的注释。
- */
-function useDockTiles(): { tiles: Tile[]; topIds: string[]; order: string[] } {
+/** 坞的条目 = ribbon 上区的顶层条目(口径与两条不变式见 homeShelf.ts 的 shelfTiles)。 */
+function useDockTiles(): { tiles: Tile[]; topIds: string[] } {
   const spaces = useSpaceStore((s) => s.spaces)
   const order = useRibbonStore((s) => s.order)
   const folders = useRibbonStore((s) => s.folders)
-
-  const topFolders = folders.filter((f) => f.zone === 'top')
-  const spaceOf = (rid: string): SpaceDefinition | undefined => spaces.find((s) => `space:${s.id}` === rid)
-  const inFolder = new Set(topFolders.flatMap((f) => f.items))
-
-  // 夹内成员**不进顶层序** —— 与 Ribbon.zoneList 的 `.filter((e) => !inFolder.has(e.id))` 同一句。
-  // (Codex 评审 high:不过滤的话,重排写回会把夹内成员当顶层项塞进持久 order,
-  //  解散收纳夹时 removeFolder 又把 items 原样splice 回去 → 同一个 id 在 order 里出现两次。)
-  const topIds = rankIds([...spaces.map((s) => `space:${s.id}`), ...topFolders.map((f) => f.id)], order)
-    .filter((id) => !inFolder.has(id))
-  const tiles: Tile[] = []
-  for (const id of topIds) {
-    if (id === `space:${SELF_SPACE}`) continue // 主页自己不进坞:点了等于原地不动(但**仍在 topIds 里**)
-    const f = topFolders.find((x) => x.id === id)
-    if (f) { tiles.push({ kind: 'folder', id, folder: f, members: f.items.map(spaceOf).filter((s): s is SpaceDefinition => !!s) }); continue }
-    const sp = spaceOf(id)
-    if (sp) tiles.push({ kind: 'space', id, space: sp })
-  }
-  return { tiles, topIds, order }
+  return shelfTiles(spaces, order, folders, SELF_SPACE)
 }
 
 interface MenuState { x: number; y: number; kind: 'folder' | 'member' | 'cards'; id?: string }
@@ -328,14 +290,9 @@ registerMessages({
   'home.folderMenu.moveOut': { zh: '移出收纳夹', en: 'Move out' },
   // 手机(布局「二」):收起的输入条 + 带一行近况的大卡片
   'home.pill': { zh: '问点什么…', en: 'Ask anything…' },
-  'home.card.continue': { zh: '继续：{title}', en: 'Continue: {title}' },
-  'home.card.claimable': { zh: '{n} 项可领取', en: '{n} to claim' },
-  'home.card.earned': { zh: '已得 {n} 项', en: '{n} earned' },
-  'home.card.installed': { zh: '已装 {n} 个插件', en: '{n} plugins installed' },
   'home.cards.editTitle': { zh: '主页卡片', en: 'Home cards' },
   'home.cards.editHint': { zh: '勾选的显示在主页，1 到 {max} 张，按勾选的先后排。', en: 'Checked ones show on Home (1 to {max}), in the order you check them.' },
   'home.cards.done': { zh: '完成', en: 'Done' },
-  'home.card.unread': { zh: '{n} 条未读', en: '{n} unread' },
 })
 
 interface HomeCard { id: string; name: string; statusId: string; spaceId?: string; icon?: SpaceDefinition['icon'] | RibbonItem['icon']; open: () => void }
@@ -393,54 +350,6 @@ function HomeCards({ tiles, actions, onLaunch }: { tiles: Tile[]; actions: Ribbo
   )
 }
 
-/** 桌面近况卡(摆法 C)的那一行。日历、收件箱各自一个组件:日程要读好几份日历库,不摆这张卡就不该算。 */
-function DeskCardStatus({ spaceId }: { spaceId: string }) {
-  if (spaceId === 'calendar') return <CalendarCardStatus />
-  if (spaceId === 'inbox') return <InboxCardStatus />
-  return <CommonCardStatus spaceId={spaceId} />
-}
-function CommonCardStatus({ spaceId }: { spaceId: string }) {
-  return <>{useCardStatus()(spaceId)}</>
-}
-function CalendarCardStatus() {
-  const { t } = useI18n()
-  // 按此刻过滤(不靠 memo):主页时钟每分钟重画一次,结束了的那条就换成下一条
-  const now = Date.now()
-  const next = useAgendaItems().find((item) => item.end >= now)
-  if (!next) return null
-  const today = next.start.toDateString() === new Date().toDateString()
-  const when = next.allDay ? (today ? '' : formatMonthDay(next.start)) : today ? formatTime(next.start) : `${formatMonthDay(next.start)} ${formatTime(next.start)}`
-  return <>{[when, next.title || t('dashcompact.untitled')].filter(Boolean).join(' ')}</>
-}
-function InboxCardStatus() {
-  const { t } = useI18n()
-  const unread = useInbox((s) => s.unreadCount)
-  useEffect(() => { void useInbox.getState().refreshUnread() }, [])
-  return <>{unread ? t('home.card.unread', { n: String(unread) }) : ''}</>
-}
-
-/** 卡片上那一行近况:只说手头就有的事实(最近的会话 / 最近打开的笔记 / 成就 / 已装插件),拿不到就不写。 */
-function useCardStatus(): (id: string) => string {
-  const { t } = useI18n()
-  const session = useApp((s) => s.sessions[0])
-  const note = useAmadeusPrefs((s) => s.recents[0])
-  // 随 App 自带的不算「装了的」
-  const plugins = usePluginStore((s) => s.plugins.filter((x) => !x.builtin && !x.preinstalled).length)
-  const ach = useAchievements(useShallow((s) => ({ counters: s.counters, claimed: s.claimed, pluginSeries: s.pluginSeries })))
-  return (id) => {
-    if (id === 'tangu') return session ? t('home.card.continue', { title: displaySessionTitle(session.title, t) }) : ''
-    if (id === 'amadeus') return note ? (note.split('/').pop() ?? note).replace(/\.md$/i, '') : ''
-    if (id === 'rb-market') return plugins ? t('home.card.installed', { n: String(plugins) }) : ''
-    if (id === 'rb-achievements') {
-      const all = allSeries(ach).flatMap((x) => x.achievements)
-      const open = all.filter((a) => !ach.claimed[a.id] && (ach.counters[a.event] || 0) >= a.goal).length
-      const got = all.filter((a) => ach.claimed[a.id]).length
-      return open ? t('home.card.claimable', { n: String(open) }) : got ? t('home.card.earned', { n: String(got) }) : ''
-    }
-    return ''
-  }
-}
-
 export function HomepageView(_props: ViewProps) {
   const { t, locale } = useI18n()
   const zh = locale === 'zh'
@@ -450,7 +359,7 @@ export function HomepageView(_props: ViewProps) {
   const phone = useNativeChromeSpaces()
   const spaces = useSpaceStore((s) => s.spaces)
   const ribbonItems = useRibbonStore((s) => s.items)
-  const { tiles, topIds, order } = useDockTiles()
+  const { tiles } = useDockTiles()
   const [pinnedSpaceIds, setPinnedSpaceIds] = useState(loadPinnedSpaceIds)
   const [drag, setDrag] = useState<string | null>(null)
   const [over, setOver] = useState<string | null>(null)
@@ -575,7 +484,6 @@ export function HomepageView(_props: ViewProps) {
 
   const greet = clock.hour < 5 ? 'home.greet.night' : clock.hour < 11 ? 'home.greet.morning' : clock.hour < 18 ? 'home.greet.afternoon' : 'home.greet.evening'
   const greetText = name ? t(greet + '.named', { name }) : t(greet)
-  const rb = () => useRibbonStore.getState()
   const closePops = (): void => { setOpenFolder(null); setOrganizerOpen(false); setMenu(null) }
   const wallpaperUrl = wallpaperPrefs.source === 'bing'
     ? wallpaperPrefs.bing?.url || null
@@ -622,31 +530,9 @@ export function HomepageView(_props: ViewProps) {
   }
 
   // ── 收纳:重排 / 拖进收纳夹 ────────────────────────────────────────────────
-  /** 把 `drag` 落到 `targetId` 那一格上 —— 与 Ribbon 的 `dropOnBar` 逐句同构。
-   *  ⚠️两条都不能省:
-   *   · 基准序含**主页自己**(它在坞上不显示,顺序上仍占一格)。漏了 = 它从持久数组消失 →
-   *     `rankIds` 把未列出的排最后 → 主页图标第一次拖坞之后就掉进 ribbon 的「…」。
-   *   · 基准序**不含夹内成员**(`topIds` 已过滤)。混进去 = 夹里的 id 被当顶层项写进 order,
-   *     解散夹时 `removeFolder` 再 splice 一次 → order 里同一个 id 出现两次。 */
-  const dropOn = (moved: string, targetId: string): void => {
-    if (!moved || moved === targetId) return
-    const full = unionOrder(order, topIds) // 保住持久序里「此刻不可见」的项(用户 Space 异步注册)
-    const at = full.indexOf(targetId)
-    rb().setZoneOrder('top', moveTo(full, moved, at >= 0 ? at : full.length))
-  }
-
-  /** 收进收纳夹 —— 同 Ribbon 的 `dropIntoFolder`:改夹成员**必须配一次区顺序写回**,
-   *  把它从顶层序里摘掉,否则解散夹时会多出一个重复 id。 */
-  const dropInto = (moved: string, folderId: string): void => {
-    if (!moved || moved === folderId || moved.startsWith('folder:')) return // 夹套夹:ribbon 也不做
-    rb().moveIntoFolder(folderId, moved)
-    rb().setZoneOrder('top', reorderBase(order, topIds, moved))
-  }
-
-  /** 移出收纳夹 —— 同 Ribbon 浮层右键的那条:去 membership + 把它写回顶层序末尾。 */
+  // 收纳的写法(两条不变式)都在 homeShelf.ts;这里只管收纳层的开合。
   const moveOut = (itemId: string): void => {
-    rb().moveOutOfFolder(itemId)
-    rb().setZoneOrder('top', [...reorderBase(order, topIds, itemId), itemId])
+    shelfMoveOut(itemId)
     setOrganizerOpen(true) // 移出即回到收纳层,让用户立刻看到它回到了顶层。
   }
 
@@ -654,7 +540,7 @@ export function HomepageView(_props: ViewProps) {
     setMenu(null)
     void askString(zh ? '新建收纳夹' : 'New folder', zh ? '收纳夹' : 'Folder').then((v) => {
       const n = v?.trim()
-      if (n) { rb().addFolder('top', n); setOrganizerOpen(true) }
+      if (n) { shelfAddFolder(n); setOrganizerOpen(true) }
     })
   }
 
@@ -683,8 +569,8 @@ export function HomepageView(_props: ViewProps) {
     }
     if (!targetId || moved === targetId) return
     const target = tiles.find((tile) => tile.id === targetId)
-    if (!moved.startsWith('folder:') && target?.kind === 'folder') dropInto(moved, targetId)
-    else dropOn(moved, targetId)
+    if (!moved.startsWith('folder:') && target?.kind === 'folder') shelfMoveIntoFolder(targetId, moved)
+    else shelfMove(moved, targetId)
   }
 
   const menuAt = (e: React.MouseEvent, kind: MenuState['kind'], id?: string): void => {
@@ -737,11 +623,7 @@ export function HomepageView(_props: ViewProps) {
 
   const reorderFolderMember = (event: DragEndEvent): void => {
     if (!folderOpen || folderOpen.kind !== 'folder' || !event.over) return
-    const moved = String(event.active.id)
-    const target = String(event.over.id)
-    if (moved === target) return
-    const at = folderOpen.folder.items.indexOf(target)
-    rb().setFolderItems(folderOpen.id, moveTo(folderOpen.folder.items, moved, at < 0 ? folderOpen.folder.items.length : at))
+    shelfReorderFolder(folderOpen.id, String(event.active.id), String(event.over.id))
   }
 
   /** 主页输入始终开**新**会话(切 Space、发送的顺序契约见 newChatComposer 的 sendFromNewChat);退场动效包在外面。 */
@@ -829,11 +711,11 @@ export function HomepageView(_props: ViewProps) {
           setMenu(null)
           void askString(t('home.folderMenu.renameTitle'), cur?.kind === 'folder' ? cur.folder.name : '').then((v) => {
             const n = v?.trim()
-            if (n) rb().renameFolder(id, n)
+            if (n) shelfRenameFolder(id, n)
           })
         },
       },
-      { id: 'dissolve', label: t('home.folderMenu.dissolve'), icon: <FolderMinus size={13} />, run: () => { rb().removeFolder(m.id!); setMenu(null) } },
+      { id: 'dissolve', label: t('home.folderMenu.dissolve'), icon: <FolderMinus size={13} />, run: () => { shelfRemoveFolder(m.id!); setMenu(null) } },
     ]
   }
   // Android:改由原生半屏呈现(Web 浮层此时不渲染);桌面 / 网页恒走 Web 浮层。

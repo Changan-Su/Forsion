@@ -1146,6 +1146,12 @@ export interface PluginFloatingTocHandle {
   dispose(): void
 }
 
+export interface PluginSpaceInfo { id: string; name: string }
+export interface PluginSpaceAction { id: string; name: string; run(): void }
+export type PluginShelfItem =
+  | { kind: 'space'; id: string; spaceId: string; name: string }
+  | { kind: 'folder'; id: string; name: string; spaceIds: string[] }
+
 export interface PluginAccountStatus {
   loggedIn: boolean
   userId?: string
@@ -1687,6 +1693,33 @@ export interface PluginContext {
    *  - `post` 返回新信的 id(后端不在 → null,不抛)。不排队、不去重:同类信只留一封由插件自己 `archive` 上一封。
    *  - `registerCard`:你发的信在阅读面板里正文下面挂一块你自己画的卡(`mount(el, { id })`,返回清理函数),
    *    `sender` 是发件人显示名(列表与阅读面板头部)。重复调用 = 替换;停用时宿主收掉。 */
+  /** Space 列表、打开、图标、近况、Ribbon 收纳架(2026-10-18+,主页插件化)。manifest 声明 `spaces` 才有(收纳架改的是用户的 Ribbon)。
+   *  - `list()` 全部已注册的 Space(`{ id, name }`,名字按当前语言求值,含主页自己);`subscribe(cb)` Space / Ribbon 变了就回调,返回退订。
+   *  - `open(id)` 口径同 Ribbon 上点它(本窗口是 Space 窗口时开到它自己的窗口);不认识的 id → false。
+   *  - `mountIcon(el, id, { size })` / `mountStatus(el, id)`:宿主把 Space(或 `actions()` 里那两格)的图标、近况那一行画进 `el`,
+   *    跟着数据自己更新;返回卸载函数,之后 `el` 立刻还给你。近况拿不到就是空的(别靠它判断 Space 在不在)。
+   *  - `actions()` 商店、成就两格:`{ id, name, run() }`。
+   *  - `shelf`:Ribbon 上区的顶层顺序与收纳夹 —— 写的就是 Ribbon 那一份,拖一下 Ribbon 上跟着变。`items()` 按用户的顺序给
+   *    `{ kind: 'space', id, spaceId, name }` / `{ kind: 'folder', id, name, spaceIds }`;`move(id, targetId)` 落到 target 那一格,
+   *    `moveIntoFolder` / `moveOutOfFolder` / `reorderFolder(folderId, id, targetId)` / `addFolder` / `renameFolder` / `removeFolder`。 */
+  spaces?: {
+    list(): PluginSpaceInfo[]
+    subscribe(cb: () => void): () => void
+    open(id: string): Promise<boolean>
+    mountIcon(el: HTMLElement, id: string, opts?: { size?: number }): () => void
+    mountStatus(el: HTMLElement, id: string): () => void
+    actions(): PluginSpaceAction[]
+    shelf: {
+      items(): PluginShelfItem[]
+      move(id: string, targetId: string): void
+      moveIntoFolder(folderId: string, id: string): void
+      moveOutOfFolder(id: string): void
+      reorderFolder(folderId: string, id: string, targetId: string): void
+      addFolder(name: string): void
+      renameFolder(id: string, name: string): void
+      removeFolder(id: string): void
+    }
+  }
   inbox?: {
     post(msg: { title: string; body?: string }): Promise<string | null>
     archive(id: string): Promise<void>

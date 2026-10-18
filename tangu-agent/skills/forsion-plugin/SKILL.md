@@ -460,6 +460,7 @@ ctx.registerCommand({
 | `ctx.desk` | Tangu 聊天右侧 **Agent Desk** 里挂一块自绘区(`registerCompanion`,典型:跟着 agent 状态做反应的 3D 形象) | 2026-09-19 起;⚠️**只在桌面 Tangu 上存在**(web / 移动端 / 纯 Amadeus 壳整个没有)→ `ctx.desk?.`;两种模式 `idle` / `always`,见下「Agent Desk 伴随面」 |
 | `ctx.automation` | 播种多维表自动化规则(`ensure(rules)`) | 2026-09-02 起;⚠️**非 Tangu 宿主上整个不存在** → `void ctx.automation?.ensure(…)`;id 宿主加 `plugin:<id>:` 前缀;见下「自动化」 |
 | `ctx.calendar` | 把插件种的表登记进 Calendar Space(`ensureMember`,人人有)+ 叠加源与日历设置(`subscribe` / `setColor` / `setHidden` / `setDefault` / `setMember` / `removeMember`)+ .ics 订阅管理(`ics.add` / `importText` / `rename` / `remove` / `refresh`) | `ensureMember` 2026-09-02 起;其余 2026-10-17 起,⚠️**声明 `"calendar"` 才有**(没声明时这几个成员不存在,不是空壳)→ `ctx.calendar?.subscribe`;见下「日历叠加源与设置」 |
+| `ctx.spaces` | Space 列表 / 打开 / 图标 / 近况那一行 + 商店、成就两格 + Ribbon 上区的收纳架(顺序、收纳夹) | 2026-10-18 起;⚠️**声明 `"spaces"` 才存在**(收纳架改的是用户的 Ribbon);见下「Space 与 Ribbon 收纳架」 |
 | `ctx.databases` | 全库多维表的实时聚合(`subscribe`)+ 按行按格读写(`setCell` / `addRow` / `duplicateRow` / `deleteRow`) | 2026-10-16 起;⚠️**manifest `capabilities` 声明 `"databases"` 才存在**;见下「全库多维表与笔记任务」 |
 | `ctx.noteTasks` | 笔记正文里的 `@` 时间任务(`subscribe`)+ 就地勾选 / 改日期(`update`) | 2026-10-16 起;⚠️**声明 `"noteTasks"` 才存在**;同上节 |
 | manifest `events[]` | 自动化(Automation)可订阅的事件 | 纯声明无代码;⚠️目前只有中文 `label`,英文界面下也显示中文 |
@@ -1345,6 +1346,42 @@ ctx.calendar?.ics?.remove(id)
   行被删 / 换库就什么都不画;`path` 不是库里的表或没有 `rowId` 当场抛 `TypeError`。外框、关闭、「打开 / 删除」按钮、定位归插件。
   `dateCol` 那一列当时间行、不在属性里重复(必须是日期类列,别的列类型忽略、照常列在属性里);叠加源(只读表)或 `readOnly: true` 只显示值。**声明 `"databases"` 才有。**
 - **界面**:插件拿不到宿主的 React 实例。要宿主组件就走 `ctx.ui.mount*`(行编辑字段就是上面的 `mountRecord`);画大块自绘界面时自带 React(两份共存没问题,边界是挂载点 DOM)。
+
+## Space 与 Ribbon 收纳架:ctx.spaces(2026-10-18 起)
+
+做「启动台 / 主页」一类插件时用:列出用户的 Space、点一下打开、画出图标和近况,在自己的界面里调整 Ribbon 上区的顺序和收纳夹。
+manifest 必须声明 `"spaces"`(详情页会列出「打开 Space,调整 Ribbon 上 Space 的顺序和收纳夹」),没声明时 `ctx.spaces` 不存在。
+
+```json
+{ "id": "my-launcher", "capabilities": ["spaces"] }
+```
+
+```js
+const s = ctx.spaces
+const draw = () => {
+  grid.replaceChildren()
+  for (const it of s.shelf.items()) {                 // 按用户在 Ribbon 上排的顺序
+    const tile = document.createElement('button')
+    if (it.kind === 'space') {
+      const icon = document.createElement('span'); tile.append(icon)
+      disposers.push(s.mountIcon(icon, it.spaceId, { size: 20 }))   // 图标由宿主画(Space 图标是宿主组件 / 图片)
+      tile.append(it.name)
+      tile.onclick = () => s.open(it.spaceId)
+    } else tile.textContent = `${it.name} (${it.spaceIds.length})`
+    grid.append(tile)
+  }
+}
+const off = s.subscribe(draw)                        // Space 注册 / Ribbon 顺序变了就重画
+```
+
+- **收纳架写的就是 Ribbon 那一份**:`shelf.move(id, targetId)` 把 `id` 落到 `targetId` 那一格,Ribbon 上跟着变;`moveIntoFolder(folderId, id)` /
+  `moveOutOfFolder(id)`(回到顶层末尾)/ `reorderFolder(folderId, id, targetId)` / `addFolder(name)` / `renameFolder(id, name)` / `removeFolder(id)`(成员回到原位)。
+  别自己存一份顺序 —— 两份迟早对不上。`items()` 不含收纳夹里的成员(它们在 `spaceIds` 里),含你自己那个 Space(不想画就自己滤掉)。
+- `mountStatus(el, id)`:宿主把这个 Space 的近况那一行(继续某会话、最近的笔记、下一条日程、未读数;`actions()` 那两格是已装插件数、可领成就)画进 `el`,
+  跟着数据自己更新;拿不到就是空的。目前只有内置 Space 有近况,插件 Space 还报不了自己的。
+- `actions()`:商店、成就两格 `{ id, name, run() }`,图标同样用 `mountIcon(el, id)`。
+- `open(id)` 口径同 Ribbon 上点它;本窗口是锁在某个 Space 上的 Space 窗口时,开到那个 Space 自己的窗口。不认识的 id → `false`。
+- `mountIcon` / `mountStatus` 返回卸载函数,之后 `el` 立刻还给你;插件被停用 / 重载时宿主统一收掉,`subscribe` 也一并退订。
 
 ## 全库多维表与笔记任务:ctx.databases / ctx.noteTasks(2026-10-16 起)
 

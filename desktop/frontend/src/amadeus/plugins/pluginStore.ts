@@ -55,6 +55,7 @@ import { useDbStore } from '../store/dbStore'
 import { createDatabasesApi, createNoteTasksApi } from './pluginData'
 import { loadSyncedPluginData, notePluginDataEdit, pluginDataSyncOn, pushPluginData, type LocalData } from './pluginDataSync'
 import { createCalendarApi } from './pluginCalendar'
+import { createSpacesApi } from './pluginSpaces'
 import { getAggDb } from '../store/dbAggregateStore'
 import { kickAutomation } from '../store/automationKick'
 import { triggerToUpsert } from '../../views/automation/lib'
@@ -1970,6 +1971,10 @@ export const usePluginStore = create<PluginState>((set, get) => {
     // 全库多维表 / 笔记 @ 任务:同样 **manifest 声明过才注入**(写的是用户的表和笔记,default-deny)。
     ...(get().plugins.find((p) => p.id === pluginId)?.capabilities?.includes('databases')
       ? { databases: createDatabasesApi({ alive: ctxAlive, own: (off) => scope.own('subscription', off, 'databases') }) }
+      : {}),
+    // Space 与 Ribbon 收纳架(2026-10-18,主页插件化):改的是用户的 Ribbon → 和 databases 同一道闸,声明了 'spaces' 才有
+    ...(get().plugins.find((p) => p.id === pluginId)?.capabilities?.includes('spaces')
+      ? { spaces: createSpacesApi({ alive: ctxAlive, own: (off) => scope.own('subscription', off, 'spaces') }) }
       : {}),
     ...(get().plugins.find((p) => p.id === pluginId)?.capabilities?.includes('noteTasks')
       ? { noteTasks: createNoteTasksApi({ alive: ctxAlive, own: (off) => scope.own('subscription', off, 'noteTasks') }) }
