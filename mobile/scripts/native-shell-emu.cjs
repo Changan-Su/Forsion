@@ -3896,7 +3896,10 @@ const tabCountText = (list) => {
     steps.push(`opened: ${fieldState(list)}`)
     await focusedWithKeyboard()
     h.key(4)
-    for (let i = 0; i < 15 && imeShown(); i++) await h.pause(200)
+    for (let i = 0; i < 40 && imeShown(); i++) await h.pause(200)
+    const kbStill = imeShown() // a second back would only go to the keyboard again
+    if (kbStill) step('keyboard still up after back 1')
+    assert.ok(!kbStill, `back did not put the keyboard away · ${await evidence()}`)
     const afterBack = ui()
     if (sheetOpen(afterBack)) h.key(4)
     step('back 1 (then back 2 if open)', afterBack)
