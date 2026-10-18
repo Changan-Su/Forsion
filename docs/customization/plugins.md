@@ -272,3 +272,15 @@ Since 2026-10-17 the host offers a few more seams (added with the Guide Space in
 - `ctx.achievements.count?(event, { own? })` / `subscribe?(cb)` / `isClaimed?(id)` / `claim?(id)` read achievement counters (official events by default, read-only; other plugins' counters always read 0), call back when counters or claims change, and read or claim achievements in your own series.
 - `ctx.inbox` (**first-party built-in bundles only**): `post({ title, body })` sends a local system message, `archive(id)` archives one, and `registerCard({ sender, mount })` draws your own card under your letters and sets the sender name.
 - The list icon vocabulary gains `circle` (not done), `circle-check` (done) and `lock` (locked) for progress lists. `todo` is the block menu's to-do icon and already shows a tick, so don't use it for "not done".
+
+### 网盘用到的接缝 / Seams used by the cloud drive
+
+2026-10-18 起（随 Forsion Extend 蓬洲云的网盘功能一起加的）：
+
+- `ctx.app.setSpaceProgress?(spaceId, progress)`：在 Ribbon 上你自己 Space 的图标外画一圈进度环。只认本插件随包带的 Space，别人的或内置的一律返回 `false`。`progress` 取 `0`–`1`，传 `null` 收起。宿主按整百分比画，高频上报不会让 Ribbon 跟着重画。那个 Space 有未读角标时先显示角标；插件停用时宿主替你收掉。Space 被收进 Ribbon 文件夹或「⋯」时看不到这圈环。
+- 列表图标词表新增 `hard-drive`，给网盘、存储类的行用。旧宿主没有这个图标，可以用 `ctx.app.setSpaceProgress` 在不在判断新旧，旧的退回 `archive`。
+
+Since 2026-10-18 (added with the cloud drive in Forsion Extend's Penzor Cloud):
+
+- `ctx.app.setSpaceProgress?(spaceId, progress)` draws a progress ring around your own Space's icon in the Ribbon. It only accepts a Space bundled with your plugin; for anyone else's or a built-in Space it returns `false`. `progress` is `0`–`1`; pass `null` to remove it. The host draws whole percents, so frequent updates don't re-render the Ribbon. An unread badge on that Space takes precedence, and the host clears the ring when your plugin is disabled. A Space tucked into a Ribbon folder or the "⋯" overflow shows no ring.
+- The list icon vocabulary gains `hard-drive` for drive and storage rows. Older hosts lack it: use whether `ctx.app.setSpaceProgress` exists to tell, and fall back to `archive`.
