@@ -4,7 +4,7 @@
  * 高对比条纹置于真实 wallpaper 层,对比同一材质启用/禁用 backdrop-filter 的截图。
  * computedStyle 有 blur 不算通过:opacity 动画的 fill-mode 会隔断子孙的 backdrop 采样。
  * 插件档(2026-10-18):HOME_PLUGIN_DIR=<Forsion-Home 检出,先 npm run build> 时主页由插件 forsion-home 画(scripts/lib/home-plugin.cjs),
- * 另加 0:正文真的来自插件(挂不上会悄悄退回内置主页,不核就是假绿)。
+ * 另加 0 / 0b:进来时和量完一整轮之后正文都真的来自插件(挂不上、或挂上后异步出错都会悄悄退回内置主页,不核就是假绿)。
  * npm run build && npm run check:homepageglass [--shot]
  */
 const fs = require('fs')
@@ -344,6 +344,10 @@ async function main() {
           await win.waitForTimeout(400)
         }
       }
+    }
+    if (HOME_PLUGIN_DIR) {
+      const body = await homeBody(win)
+      check('0b 插件档:量完一整轮主页仍是插件画的(中途退回内置不会报 pageerror)', body === 'plugin', { body })
     }
     check('交互过程中没有未捕获的渲染异常', pageErrors.length === 0, pageErrors)
   } finally {

@@ -1026,13 +1026,17 @@ async function main() {
         await win.evaluate((url) => window.tangu.setConfig({ mode: 'external', backendUrl: url, token: 'homepage-fallback-fixture' }), stub.url)
         await win.reload({ waitUntil: 'domcontentloaded' })
         await win.waitForSelector('.dv-groupview', { timeout: 30_000 })
-        const before = await homeBody(win)
+        await homeBody(win)
         await win.waitForSelector('.hp-composer .t2c-ta:not(:disabled)', { timeout: 15_000 }).catch(() => {})
-        await win.evaluate(() => {
+        // 「停用前是插件画的」在派发停用的同一拍里取:提前取的话,插件中途自己退回内置,这条照样绿(Codex 评审)
+        const before = await win.evaluate(() => {
+          const root = [...document.querySelectorAll('.hp-root')].find((e) => e.getBoundingClientRect().width > 0)
+          const body = !root ? null : root.closest('[data-home-body="plugin"]') ? 'plugin' : 'builtin'
           window.__homeFallbackSameDoc = true // 重载过就没了:「当场」换回,不是重载后才换
           const KEY = 'amadeus.plugins.disabled'
           localStorage.setItem(KEY, JSON.stringify([...JSON.parse(localStorage.getItem(KEY) || '[]'), 'forsion-home']))
           window.dispatchEvent(new StorageEvent('storage', { key: KEY }))
+          return body
         })
         const after = await homeBody(win, 10_000, 'builtin')
         const swapped = await win.evaluate(() => {
@@ -1041,6 +1045,7 @@ async function main() {
         })
         const TEXT = '停用主页插件之后还能发'
         const ready = await win.waitForSelector('.hp-composer .t2c-ta:not(:disabled)', { timeout: 10_000 }).then(() => true).catch(() => false)
+        const atSend = await homeBody(win, 0, 'builtin') // 打字那一刻仍是内置那份(插件没又接管回去)
         if (ready) {
           await win.locator('.hp-composer .t2c-ta').click()
           await win.keyboard.type(TEXT)
@@ -1049,11 +1054,12 @@ async function main() {
         const sentBy = Date.now() + 10_000
         const reached = () => stub.seen.runs.some((r) => JSON.stringify(r.message || '').includes(TEXT))
         while (!reached() && Date.now() < sentBy) await win.waitForTimeout(250)
+        const sameDocAtEnd = await win.evaluate(() => window.__homeFallbackSameDoc === true) // 发完再核一次:换回之后才重载的也算红
         check(
           '0c 插件档:停用插件 → 当场换回内置主页(不重载),输入区还在、还能发',
           before === 'plugin' && after === 'builtin' && swapped.sameDoc && swapped.roots === 1 && swapped.composer === 1
-            && swapped.pluginWrap === 0 && ready && reached(),
-          JSON.stringify({ before, after, swapped, ready, runs: stub.seen.runs.map((r) => r.message) }),
+            && swapped.pluginWrap === 0 && ready && atSend === 'builtin' && reached() && sameDocAtEnd,
+          JSON.stringify({ before, after, swapped, ready, atSend, sameDocAtEnd, runs: stub.seen.runs.map((r) => r.message) }),
         )
       } finally {
         stub.close?.()

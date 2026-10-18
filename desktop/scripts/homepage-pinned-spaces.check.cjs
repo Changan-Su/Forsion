@@ -1,6 +1,6 @@
 /** Homepage 前置 Space 区：固定入口 + 独立副本持久化 + Ribbon 排序隔离。先 npm run build。
  *  插件档(2026-10-18):HOME_PLUGIN_DIR=<Forsion-Home 检出,先 npm run build> 时主页由插件 forsion-home 画(scripts/lib/home-plugin.cjs),
- *  另加 P0 / P0b:两次进主页正文都真的来自插件(挂不上会悄悄退回内置主页,不核就是假绿)。 */
+ *  另加 P0 / P0b:进主页、刷新后、量完一整轮,正文都真的来自插件(挂不上、或挂上后异步出错都会悄悄退回内置主页,不核就是假绿)。 */
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
@@ -141,10 +141,7 @@ async function main() {
 
     await win.reload()
     await win.waitForSelector('.hp-spaces')
-    if (HOME_PLUGIN_DIR) {
-      bodies.push(await homeBody(win))
-      check('P0b 插件档:刷新后主页仍是插件画的', bodies.length === 2 && bodies.every((b) => b === 'plugin'), bodies)
-    }
+    if (HOME_PLUGIN_DIR) bodies.push(await homeBody(win))
     await win.waitForSelector('#tangu-splash', { state: 'hidden', timeout: 5000 }).catch(() => {})
     const restored = normalId ? await win.locator(`.hp-pinned-space[data-space-id="${normalId.replace(/^space:/, '')}"]`).count() : 0
     check('前置 Space 副本刷新后恢复', restored === 1, { normalId, restored })
@@ -199,6 +196,10 @@ async function main() {
       }, mode)
       await win.waitForTimeout(400)
       await win.screenshot({ path: path.join(os.tmpdir(), `forsion-homepage.pinned-${mode}.png`) })
+    }
+    if (HOME_PLUGIN_DIR) {
+      bodies.push(await homeBody(win))
+      check('P0b 插件档:刷新后、量完一整轮主页仍是插件画的', bodies.length === 3 && bodies.every((b) => b === 'plugin'), bodies)
     }
     check('没有未捕获渲染异常', errors.length === 0, errors)
   } finally {
