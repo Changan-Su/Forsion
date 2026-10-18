@@ -597,6 +597,12 @@ const tabCountText = (list) => {
     h.adb('shell', 'input', 'swipe', String(p.x), String(p.y), String(Math.round(p.x + dx * density)), String(Math.round(p.y + dy * density)), String(ms))
     await h.pause(500)
   }
+  /** A finger drag that reports where it is before it lifts: DOWN, MOVEs, a MOVE at the end point, UP there (device px).
+   *  `input swipe` steps by the clock: descheduled under load it lifts at the end point with no move there — the page
+   *  then judges the drag by its last move (half-way: not enough to land), and a drag with no move at all reads as a tap
+   *  where it started. Each step is its own `input` call: slow, so where the finger stops decides, not a fling. */
+  const drag = (x0, y, x1, steps = 5) => h.adb('shell', [['DOWN', x0], ...Array.from({ length: steps }, (_, i) => ['MOVE', x0 + ((x1 - x0) * (i + 1)) / steps]), ['UP', x1]]
+    .map(([a, x]) => `input motionevent ${a} ${Math.round(x)} ${Math.round(y)}`).join(' && '))
   /** The day section ('pinned' | 'today' | …) a phone list row sits under; null when the list has no sections. */
   const sectionOf = (rowE) => `(() => { let e = ${rowE}; e = e?.closest('.pl-swipe') || e
     while (e && !e.matches('.pl-sec')) e = e.previousElementSibling; return e ? e.dataset.section : null })()`
@@ -1120,7 +1126,7 @@ const tabCountText = (list) => {
     await waitSheet(false)
     // a horizontal swipe over the list must not slide it away (only an item enters the main view)
     const wv = webViewNode(at.list).rect
-    h.adb('shell', 'input', 'swipe', String(wv.right - 120), String(wv.cy), String(wv.left + 120), String(wv.cy), '200')
+    drag(wv.right - 120, wv.cy, wv.left + 120)
     await h.pause(900)
     assert.equal(await cdp.eval(nav), 'list', 'a swipe over the list left it')
     // tapping the active Space again does nothing (it used to open a drawer)
@@ -1182,15 +1188,18 @@ const tabCountText = (list) => {
     // a swipe from the main view back to the list (same gesture as the drawer had)
     await tapEl(rowExpr('E2E Session One'))
     assert.ok(await h.waitPage(cdp, `(${nav}) === 'detail'`, 8000), 'the session did not reopen')
-    // the main view still sliding in (or its spring) is not where the finger lands: swipe once it reads the same twice
-    const mainAt = "JSON.stringify([document.querySelector('.mb-main')?.getBoundingClientRect(), document.querySelector('.mb-body')?.dataset.drag])"
-    for (let i = 0, last = ''; i < 20; i++) { const now = await cdp.eval(mainAt); if (now === last) break; last = now; await h.pause(150) }
-    // evidence for a miss: where the touch landed and what under it scrolls sideways (that exempts it from the gesture)
-    await cdp.eval(`(() => { const log = window.__swipeLog = []; document.addEventListener('touchstart', (e) => { const t = e.touches[0], wide = []
-      for (let el = e.target; el && el !== document.body; el = el.parentElement) { const cs = getComputedStyle(el); if ((cs.overflowX === 'auto' || cs.overflowX === 'scroll') && el.scrollWidth > el.clientWidth + 1) wide.push(el.className) }
-      log.push({ x: Math.round(t.clientX), target: String(e.target.className?.baseVal ?? e.target.className).slice(0, 60), wide, drag: document.querySelector('.mb-body')?.dataset.drag || null }) }, { capture: true, passive: true, once: true }); return true })()`)
-    h.adb('shell', 'input', 'swipe', String(wv.left + 150), String(wv.cy), String(wv.right - 100), String(wv.cy), '200')
-    assert.ok(await h.waitPage(cdp, `(${nav}) === 'list'`, 5000), `swiping right on the main view did not return to the list (nav ${await cdp.eval(nav)}, touch ${await cdp.eval('JSON.stringify(window.__swipeLog)')}, ${h.adb('shell', 'dumpsys', 'input_method').match(/mInputShown=\w+/)?.[0]})`)
+    await h.pause(600)
+    // evidence for a miss: every touch event of the swipe as the page saw it once its own handlers ran (bubble, on window)
+    await cdp.eval(`(() => { const log = window.__swipeLog = [], t0 = performance.now(); const rec = (e) => { if (log.length > 40) return; const t = e.changedTouches[0], wide = []
+      if (e.type === 'touchstart') for (let el = e.target; el && el !== document.body; el = el.parentElement) { const cs = getComputedStyle(el); if ((cs.overflowX === 'auto' || cs.overflowX === 'scroll') && el.scrollWidth > el.clientWidth + 1) wide.push(el.className) }
+      log.push([e.type.slice(5), Math.round(t.clientX), Math.round(e.timeStamp - t0), Math.round(performance.now() - t0), e.cancelable ? 'c' : 'nc', e.defaultPrevented ? 'P' : '-', document.querySelector('.mb-body')?.dataset.drag || '', ...(e.type === 'touchstart' ? [String(e.target.className?.baseVal ?? e.target.className).slice(0, 40), wide.join('|')] : [])]) }
+      window.__swipeOff = () => { for (const k of ['touchstart', 'touchmove', 'touchend', 'touchcancel']) window.removeEventListener(k, rec) }
+      for (const k of ['touchstart', 'touchmove', 'touchend', 'touchcancel']) window.addEventListener(k, rec, { passive: true }); return true })()`)
+    drag(wv.left + 150, wv.cy, wv.right - 100)
+    const back = await h.waitPage(cdp, `(${nav}) === 'list'`, 5000)
+    // [type, clientX, event time, handled at (ms), cancelable, prevented, drag side (, target, sideways scrollers)]
+    const trace = await cdp.eval('(window.__swipeOff?.(), JSON.stringify(window.__swipeLog))')
+    assert.ok(back, `swiping right on the main view did not return to the list (nav ${await cdp.eval(nav)}, touch ${trace}, ${h.adb('shell', 'dumpsys', 'input_method').match(/mInputShown=\w+/)?.[0]})`)
     await h.pause(600)
     // system back on the list = the first level of a Space that is not Home: it leads Home, the app stays in front
     h.key(4)
