@@ -13,6 +13,8 @@ Chat Box 的卡面、输入、操作栏和提交按钮由 `@lcl/components` 维�
 
 `ctx.ui?.mountChatBox` 可挂到插件自己的 View 中，不需要 React。当前支持文本输入、模型选择、思考档、键盘提交；附件、命令、审批和运行控制属于会话编排器，未接线的行为不显示。
 
+要整块「新对话」输入区（主页那一套：附件、模式、项目栏、运行位置、语音、通话）时用 `ctx.tangu?.mountComposer`：宿主组件是 `desktop/frontend/src/views/newChatComposer.tsx` 的 `NewChatComposer`，内置主页和插件挂的是同一份，发送一律由宿主建会话、切到 Tangu。Use `ctx.tangu?.mountComposer` for the full new-chat composer from Home; the host owns sending.
+
 ```js
 ctx.registerView({
   id: 'prompt', title: 'Prompt',

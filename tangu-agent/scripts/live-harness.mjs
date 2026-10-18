@@ -52,6 +52,9 @@
  *   npm run live:harness -- --only recall-unprompted --ab-memory   # B1 行为闸:记忆易变段走 tail vs system 各跑一遍(两次引擎启动,顺序)
  *   npm run live:harness -- --only deferred                  # E2 按需装载:load_tools 先于 read_document + 子代理 read_document 直通 + 子代理自己 load_tools 解锁 browser_snapshot
  *   npm run live:harness -- --only grant                     # 改 delegate.grantTools / 子代理管理面闸后跑:授予时子代理用得上 manage_schedule,不授予时照旧被拒(正负两跑,均 action=list 无副作用)
+ *   npm run live:harness -- --only nested                     # 父子会话(10-17,方案「子会话与任务卡」):让它分头开子会话查三个模块 → start_session ≥2、子会话各自跑完、
+ *                                                              结果以 <child_sessions_update> 送回主会话并自动接着做一轮、汇总点对三个坏文件;再问一句须先问用户的事 → 问句收尾置「等你」、下一句清掉(或走 ask_user,台架照用户原话答)。
+ *                                                              改 services/childSessions.ts / tools/builtin/childSessions.ts 的措辞后跑
  *   npm run live:harness -- --only ultra --model xai/grok-4.7  # Ultra 档(09-27):改 ULTRA_SECTION / delegate 描述 / 子代理成本闸后跑:可并行的题一轮派 ≥2 个且真并行、琐碎题 0 个、不开 Ultra 的对照只记数
  *   TANGU_CONTEXT_WINDOW_TOKENS=100000 npm run live:harness -- --only ultra --model codex/gpt-5.6-luna  # Ultra 拉满上下文(09-27):上限压到 100k,族表 272k 的模型 Ultra 两跑窗口须 272k、对照 100k
  *   npm run live:harness -- --only churn                     # 同会话 6 连发的后续调用命中画像(不设命中率阈值,六个 run 须跑完)
@@ -210,7 +213,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'account'];
+const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'account', 'nested', 'musedm'];
 KEYS.push('signals');
 KEYS.push('musechat');
 KEYS.push('novision');
@@ -250,7 +253,7 @@ const GIT_PREFIX = 'livetest/'; const GIT_TAG = '[LIVE]';
 // opt-in:缺省全量跑里**不带**这几个 —— cache 7 个 run / churn 6 个 run(都慢),cache 与 recall-unprompted
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
-const OPT_IN = new Set(['realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'appsettings', 'control', 'phone']);
+const OPT_IN = new Set(['nested', 'musedm', 'realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'appsettings', 'control', 'phone']);
 OPT_IN.add('signals');
 OPT_IN.add('musechat');
 OPT_IN.add('imgwindow');
@@ -4139,6 +4142,85 @@ Then reply with only the command output.`,
     const ok = twoCycles && (journal.trim().length > 0 || todos.length > 0 || approvals.length > 0) && !spaceAsks && replayOk && g7; // 审批队列、开局上下文都是引擎真实状态,照判
     return { ok, detail: `${g7Text};${slept ? `周期 1 后${slept};` : ''}周期 2 ${twoCycles ? '已起' : blockedBy ? `被 token 预算挡(${blockedBy})` : '600s 未起'}(lastCycleAt ${firstCycleAt || '?'}→${Number(second?.lastCycleAt) || '?'},restarts ${second?.restartsThisWindow ?? '?'});起周期时计费/毛量 ${spent || '?'};开局上下文 ${p1 || '?'}→${p2 || '?'} token${p1 && p2 ? `(×${(p2 / p1).toFixed(2)}${replayOk ? '' : ' ⚠️带着上一周期的对话'})` : twoCycles ? '(⚠️周期 2 首轮 60s 未返回,没量到)' : ''};Journal ${journal.trim() ? '有' : '无'};todo ${todos.length};审批 ${approvals.length}${spaceAsks ? `(其中 Space ${spaceAsks} 条)` : ''};Space ${space.ok ? '' : '⚠️'}${space.text}${space.built ? (spaceUsesAgent ? '(用 ctx.agent 取数)' : '(没用 ctx.agent)') : ''}${space.built ? `;CSS 变量${unknownVars === null ? ' ?' : unknownVars.length ? ` ⚠️宿主没有 ${unknownVars.join(' ')}` : '全在宿主词表'}` : ''};插件技能加载 ${skillLoads} 次;自排日程 ${museSchedule.length}${museSchedule.length ? `(${museSchedule.join(' | ')})` : ''};error ${(second || started).lastError || '无'}`, output: museSays, journal, todos, approvals, status: second || started };
   });
+  // ── musedm(10-18,opt-in,单独跑:`--only musedm`):Muse 私聊 × 收件箱分工(方案 docs/ToBeImproved/Muse私聊与收件箱分工方案_2026-10-17,
+  // 用户选 B「按性质分」)。三件同时到期的事交给 Muse(走「交给 Muse 追踪」同一条路:auto 日程条目到期 → 进周期 kickoff):
+  //   A 读 sync-notes.md 写一份三家对比给用户以后看 → 成品,该进收件箱(inbox_send),不该整篇塞进私聊;
+  //   B CI 抖了一次要不要记成已知抖动 → 要用户拍板,该进私聊(message_user,问句 → 引擎置「等你」);
+  //   C 往授权文件夹里的 STATUS.md 加一行 → ask 档排队审批 → 引擎把请求写进 Muse 私聊(origin=proactive:approval),不发审批信。
+  // 判据全读引擎真状态(私聊消息的 origin、收件箱的信、GET /agent/sessions/attention),不看模型自述。单独跑:别的场景开过的 Muse 周期
+  // 可能先用掉每小时 3 条的私聊额度。模型原话(周期回复 + 私聊里主动发的)进 output。
+  await scenario('musedm', `musedm Muse 私聊 × 收件箱分工(${MUSE_MODE})`, async () => {
+    const seeded = await until(() => existsSync(join(home, 'agents', 'muse', 'config.toml')), 30_000, 500);
+    if (!seeded) return { ok: false, detail: '30s 内没播种出 Muse(agents/muse/config.toml)' };
+    writeFileSync(join(workspace, 'sync-notes.md'), [
+      '# 三家笔记软件的离线同步(调研素材)',
+      '- Obsidian Sync:离线照常编辑;冲突时按行三方合并,合不了留两份(冲突副本)。',
+      '- Notion:离线模式要先手动把页面设为可离线;冲突以最后写入为准,旧版本进页面历史。',
+      '- Logseq:基于文件,同步靠 Logseq Sync 或第三方网盘;冲突时生成 .conflict 文件,要手动合。',
+      '',
+    ].join('\n'));
+    writeFileSync(join(workspace, 'STATUS.md'), '# Status\n');
+    const d = new Date(Date.now() - 2 * 60_000);
+    const due = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+    const ENTRIES = [
+      { name: '三家离线同步对比', prompt: `读 ${join(workspace, 'sync-notes.md')},写一份 Obsidian / Notion / Logseq 离线编辑与冲突处理的对比(一张表 + 两三句建议),给我以后有空看。` },
+      { name: 'CI 抖动要不要记', prompt: 'main 上的 CI 红了一次(sync.test.ts),重跑是绿的。要不要把它记成已知抖动,我来定,你别替我定。' },
+      { name: '状态文件加一行', prompt: `在 ${join(workspace, 'STATUS.md')} 末尾加一行「- 10-18 离线同步调研已完成」。` },
+    ];
+    for (const e of ENTRIES) {
+      const r = await api('/agent/special/schedule/muse/entries', { method: 'POST', body: JSON.stringify({ ...e, date: due, auto: true }) }).catch((err) => ({ error: String(err?.message || err) }));
+      if (!r?.entry) return { ok: false, detail: `建日程条目失败:${JSON.stringify(r).slice(0, 300)}` };
+    }
+    const t0 = Date.now();
+    await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ muse: { enabled: true, modelId: MODEL, mode: MUSE_MODE, heartbeatMinutes: 60, supervisorPollMinutes: 1, maxIterationsPerCycle: 16, maxRestartsPerWindow: 3, allowedFolders: [workspace], notify: 'immediate' } }) });
+    const status = () => api('/agent/special/muse/status').then((x) => (x && typeof x.status === 'object' ? x.status : x));
+    const started = await until(async () => { const x = await status(); return x.running || Number(x.lastCycleAt) >= t0 - 5000 ? x : null; }, 120_000, 3000);
+    if (!started) return { ok: false, detail: `120s 未起周期;[muse] 日志:${museLogTail() || '(无)'}` };
+    const done = await until(async () => { const x = await status(); return !x.running && Number(x.lastCycleAt) > 0 ? x : null; }, 600_000, 5000);
+    if (!done) return { ok: false, detail: '周期 600s 未收尾' };
+    // 模型调用本身失败(额度用完 / 网络)≠ 分流错了:先如实报这个,别把它读成四条红(10-18 首跑就是 usage limit)
+    const runFail = (readFileSync(engineLog, 'utf8').match(/run [0-9a-f-]+ failed: [^\n]*/g) || []).slice(-1)[0];
+    if (done.lastError || runFail) return { ok: false, detail: `周期没跑成(模型调用失败,不是分流问题):${done.lastError || runFail}` };
+    await sleep(2000);
+    const { default: Database } = await import('better-sqlite3');
+    const db = new Database(join(home, 'state.db'), { readonly: true, fileMustExist: true });
+    let dmId = '';
+    let dmWaits = false;
+    let dm = [];
+    try {
+      const dmRow = db.prepare(`SELECT * FROM chat_sessions WHERE kind = 'user' AND archived = 0 AND json_valid(agent_config) AND json_extract(agent_config, '$.soloAgentSlug') = 'muse' ORDER BY updated_at DESC LIMIT 1`).get();
+      dmId = dmRow?.id || '';
+      dmWaits = !!dmRow?.awaiting_user; // 只有 message_user 的问句置这一列(审批的「等你」由 attention 现算),拿它判 B 才分得开
+      // 基线引擎(--kind base)没有 origin 列:读成 NULL,红在判据上而不是 SQL 报错上
+      const hasOrigin = db.prepare(`SELECT 1 FROM pragma_table_info('chat_messages') WHERE name = 'origin'`).get();
+      dm = dmId ? db.prepare(`SELECT role, ${hasOrigin ? 'origin' : 'NULL AS origin'}, content FROM chat_messages WHERE session_id = ? ORDER BY timestamp`).all(dmId) : [];
+    } finally { db.close(); }
+    const said = dm.filter((m) => String(m.origin || '').startsWith('proactive'));
+    const ask = said.find((m) => m.origin === 'proactive' && /抖动|flak|sync\.test/i.test(m.content) && /[?？]/.test(m.content));
+    const apps = (t) => ['Obsidian', 'Notion', 'Logseq'].every((a) => String(t || '').includes(a));
+    const productInDm = said.some((m) => m.origin === 'proactive' && apps(m.content) && String(m.content).length > 600);
+    const inbox = asList(await api('/agent/inbox?filter=all').catch(() => []), 'messages');
+    // 成品信:正文带对比,或指向写好的对比文件(10-18 修后首跑:对比写进 Library、发一封指路信 —— 分流是对的,判据原先只认前一种)
+    const letter = inbox.find((m) => m.sender_id === 'muse' && (apps(m.body) || /对比|同步|compar|sync/i.test(`${m.title} ${m.body}`)));
+    const apvLetters = inbox.filter((m) => /```forsion-approval/.test(String(m.body || '')));
+    const apvDm = said.filter((m) => m.origin === 'proactive:approval');
+    const pending = asList(await api('/agent/special/approvals?status=pending').catch(() => []), 'approvals').filter((a) => a.agent_slug === 'muse');
+    const att = asList(await api('/agent/sessions/attention').catch(() => []), 'sessions').find((x) => x.id === dmId);
+    const needApv = MUSE_MODE === 'ask';
+    const apvOk = !needApv || (pending.length > 0 && apvDm.length > 0 && apvLetters.length === 0);
+    const ok = !!dmId && !!ask && dmWaits && !!letter && !productInDm && !!att?.unread && !!att?.awaiting && apvOk;
+    const museSays = done.sessionId ? asList(await api(`/agent/sessions/${done.sessionId}/messages`).catch(() => []), 'messages').filter((m) => m.role === 'assistant' || m.role === 'model').map((m) => String(m.content || '')).join('\n---\n') : '';
+    const detail = [
+      `私聊${dmId ? '' : '没建出来 ← 红'}主动 ${said.length} 条(问句 ${said.filter((m) => m.origin === 'proactive').length} / 待办 ${said.filter((m) => m.origin === 'proactive:todo').length} / 审批 ${apvDm.length})`,
+      `B 拍板进私聊:${ask ? (dmWaits ? '有,私聊亮了等你' : '有,但私聊没亮等你 ← 红') : '没有 ← 红'}`,
+      `A 成品进收件箱:${letter ? `有「${String(letter.title).slice(0, 40)}」(${apps(letter.body) ? '正文带对比' : '只是指路'})` : '没有 ← 红'}${productInDm ? ';整篇对比塞进了私聊 ← 红' : ''}`,
+      `C 审批:${needApv ? `待批 ${pending.length},私聊里 ${apvDm.length} 条,审批信 ${apvLetters.length}${apvOk ? '' : ' ← 红'}` : `非 ask 档不判(待批 ${pending.length})`}`,
+      `attention ${att ? JSON.stringify({ unread: att.unread, awaiting: att.awaiting }) : '没报这条私聊 ← 红'}`,
+      `收件箱共 ${inbox.length} 封(muse ${inbox.filter((m) => m.sender_id === 'muse').length})`,
+    ].join(';');
+    const output = `${museSays}\n\n=== 私聊里主动发的 ===\n${said.map((m) => `[${m.origin}] ${m.content}`).join('\n---\n')}`;
+    return { ok, detail, output, status: done };
+  });
   // ── musewake(09-24,opt-in,单独跑:`--only musewake`):「用户睡了、没事可做」时 Muse 会不会自己 set_next_wake,
   // 引擎会不会真的跳过心跳,用户一动能不能立刻醒。作息按**当前钟点**播:活跃窗口 = 现在 +6h 起 10 个小时(每天每小时一行,
   // 14 天),于是「现在」恒落在作息的深夜段、最近一次活动约 9 小时前 —— 不管台架几点跑,判断题都是同一道。
@@ -4874,6 +4956,75 @@ Then reply with only the command output.`,
   // 三腿:① 开 Ultra 做一道天然可拆的题(三个互不相关的多文件模块各藏一个 bug)→ 一轮派 ≥2 个 delegate、区间真交叠、
   //       系统提示真带 Ultra 段、请求档是 max、三个模块都查到;② 开 Ultra 问一句琐碎题 → 0 个 delegate(反向条款);
   //       ③ 不开 Ultra 做同一道题 → 系统提示里没有 Ultra 段(注入的负对照),委派数只记录不判(模型不开也可能自己派)。
+  await scenario('nested', 'nested 父子会话:开子会话分头查 → 结果送回主会话自动接着做;先问用户的事置「等你」', async () => {
+    const MODS = {
+      billing: { fn: 'sumLineItems', body: (i) => `  let total = 0;\n  for (let i = ${i === 2 ? 1 : 0}; i < items.length; i++) total += items[i].price * items[i].qty;\n  return total;` },
+      dates: { fn: 'isWeekend', body: (i) => `  const day = d.getDay();\n  return day === 6 || day === ${i === 2 ? 7 : 0};` },
+      strings: { fn: 'capitalize', body: (i) => `  if (!s) return s;\n  return s[0].toUpperCase() + s.slice(${i === 2 ? 0 : 1});` },
+    };
+    const root = join(workspace, 'nested');
+    for (const [mod, spec] of Object.entries(MODS)) {
+      mkdirSync(join(root, mod), { recursive: true });
+      for (let i = 1; i <= 3; i++) {
+        const arg = mod === 'dates' ? 'd' : mod === 'strings' ? 's' : 'items';
+        writeFileSync(join(root, mod, `${spec.fn}_v${i}.js`), `// ${mod} module, variant ${i}\nexport function ${spec.fn}(${arg}) {\n${spec.body(i)}\n}\n`);
+      }
+    }
+    const parent = `live-nested-${Date.now()}`;
+    const TASK = 'nested/ 目录下有 billing、dates、strings 三个互不相关的模块,每个模块里 3 个版本文件,恰好一个版本的主函数有 bug。'
+      + '这三件事分开开子会话各查一个模块,都回来以后给我汇总一张表(哪个文件、错在哪、怎么改)。只读,不要改文件。';
+    // full-auto:子会话继承档位,台架只替主会话点审批,子会话里的 run_bash 会挂到超时(10-17 第三轮)
+    const ev1 = await run(parent, TASK, 300_000, { approvalMode: 'full-auto' });
+    const starts = ev1.toolResults.filter((r) => r.name === 'start_session' && !r.isError).length;
+    // 子会话还在跑时主会话不许是「等你」(等子会话 ≠ 等你;收尾汇总以问句结尾时再标等你是允许的)
+    const midRow = (await api('/agent/sessions?limit=500')).sessions.find((x) => x.id === parent);
+    const midKidsBusy = (await api('/agent/sessions?limit=500')).sessions.some((x) => x.parent_session_id === parent && x.busy);
+    // 子会话各自跑完、主会话自动接着做的那一轮也跑完:轮询会话列表直到主会话和它名下都不 busy(最多 8 分钟)
+    const t0 = Date.now();
+    let kids = []; let settled = false;
+    while (Date.now() - t0 < 480_000) {
+      await new Promise((r) => setTimeout(r, 5000));
+      const { sessions } = await api('/agent/sessions?limit=500');
+      kids = sessions.filter((x) => x.parent_session_id === parent);
+      const p = sessions.find((x) => x.id === parent);
+      if (kids.length && !p?.busy && kids.every((k) => !k.busy)) {
+        // 回报可能还在送的路上(子会话收尾 → 主会话起轮之间那几毫秒):再看一眼
+        await new Promise((r) => setTimeout(r, 3000));
+        const again = (await api('/agent/sessions?limit=500')).sessions;
+        if (!again.find((x) => x.id === parent)?.busy) { settled = true; break; }
+      }
+    }
+    const msgs = (await api(`/agent/sessions/${parent}/messages?limit=200`)).messages || [];
+    const updates = msgs.filter((m) => m.role === 'user' && String(m.content).startsWith('<child_sessions_update>'));
+    const lastUpd = updates.length ? msgs.indexOf(updates[updates.length - 1]) : -1;
+    const after = lastUpd >= 0 ? msgs.slice(lastUpd + 1).filter((m) => m.role === 'model').map((m) => String(m.content || '')).join('\n') : '';
+    const found3 = ['sumLineItems_v2', 'isWeekend_v2', 'capitalize_v2'].every((f) => after.includes(f));
+    const parentRow = (await api('/agent/sessions?limit=500')).sessions.find((x) => x.id === parent);
+    const midWait = midKidsBusy && !!midRow?.awaiting_user;
+    const ok1 = !ev1.error && starts >= 2 && kids.length >= 2 && settled && updates.length >= 1 && found3 && !midWait;
+
+    // ② 要先问用户的事:模型以问句收尾 → 列表「等你」;用户回一句,那一轮开始就清掉。走 ask_user(阻塞询问,界面按 attention 画等你)也算,台架照用户原话答
+    const ask = `live-nested-ask-${Date.now()}`;
+    const ANSWER = '重点是发布了 2.13.4 和修好了冷启动慢。';
+    const ev2 = await run(ask, '帮我给团队周报起个标题。先问我这周的重点是什么,我回答之前不要自己编。', 180_000, {}, undefined, undefined, undefined, undefined, { inquiryAnswer: ANSWER });
+    const row2 = (await api('/agent/sessions?limit=500')).sessions.find((x) => x.id === ask);
+    const viaAsk = (ev2.inquiries || 0) > 0;
+    const waited = viaAsk || !!row2?.awaiting_user;
+    const ev3 = viaAsk ? ev2 : await run(ask, ANSWER, 180_000);
+    const row3 = (await api('/agent/sessions?limit=500')).sessions.find((x) => x.id === ask);
+    const usedAnswer = /2\.13\.4|冷启动/.test(ev3.content);
+    const ok2 = !ev2.error && waited && !ev3.error && !row3?.awaiting_user;
+
+    return {
+      ok: ok1 && ok2,
+      detail: `【分头查】start_session ×${starts}(工具序列 ${ev1.toolCalls.join(' → ') || '无'});子会话 ${kids.length} 个;${settled ? '都收尾' : '8 分钟没收完!'};回报行 ${updates.length} 条;汇总${found3 ? '三个坏文件都点对' : '没点全!'};子会话在跑时主会话「等你」${midWait ? '误置!' : midKidsBusy ? '没置' : '(没赶上子会话在跑)'};收尾后${parentRow?.awaiting_user ? '等你(汇总以问句结尾)' : '没等'}`
+        + ` 【先问用户】${viaAsk ? 'ask_user 询问(台架照原话答)' : `问句收尾,列表「等你」${row2?.awaiting_user ? '在' : '没有!'}`};回答后${row3?.awaiting_user ? '还在!' : '清掉了'}${usedAnswer ? ',标题用上了回答' : ''}`,
+      output: `【① 主会话第一轮】${ev1.content}\n\n【回报行】${updates.map((m) => String(m.content).slice(0, 1200)).join('\n---\n')}\n\n【接着做那一轮】${after}\n\n【② 先问】${ev2.content}\n\n【③ 用户回答后】${ev3.content}`,
+      toolCalls: [...ev1.toolCalls, ...ev2.toolCalls, ...ev3.toolCalls],
+      ttftMs: ttft(ev1), tokens: (tokensOf(ev1) || 0) + (tokensOf(ev2) || 0) + (tokensOf(ev3) || 0) || null,
+    };
+  });
+
   await scenario('ultra', 'ultra Ultra 档:可并行的题主动并行派子代理,琐碎题不派', async () => {
     const MODS = {
       billing: { fn: 'sumLineItems', bug: '循环从 i = 1 开始,漏掉第一项', body: (i) => `  let total = 0;\n  for (let i = ${i === 3 ? 1 : 0}; i < items.length; i++) total += items[i].price * items[i].qty;\n  return total;` },

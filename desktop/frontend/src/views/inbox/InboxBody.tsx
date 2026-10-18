@@ -18,10 +18,10 @@ import { lazyRetry } from '../../lazyRetry'
 import { useI18n } from '../../i18n'
 import { useApp } from '../../stores/appStore'
 import { setActiveSpace } from '@lcl/engine'
-import { getMuseApproval, decideMuseApproval, getMuseTodo, type InboxMessage } from '../../services/backendService'
+import { getMuseApproval, decideMuseApproval, type InboxMessage } from '../../services/backendService'
 import type { PendingApprovalInfo } from '../../types'
 import { splitSuggestions } from '../chat2/suggest'
-import { TaskCards } from '../chat2/TaskCards'
+import { TaskCards, useMuseTodoStatus } from '../chat2/TaskCards'
 import { runTaskCard } from '../chat2/taskLanding'
 import { homeTarget } from '../../services/engine/targets'
 import { previewNeedsScrollHint } from '../../components/approvalText'
@@ -59,25 +59,7 @@ export function InboxBody({ msg }: { msg: InboxMessage }) {
   // `todo:` 头(TODO 状态回写 +「交给 Muse 执行」)只认 Muse 自己的信 —— 那是引擎 add_muse_todo 投影拼的;别的 agent 写了也只是普通任务卡(Codex 09-11 P1)。
   const museMail = msg.sender_id === 'muse'
   const parsed = useMemo(() => (cardsOk ? splitSuggestions(body, { kinds: ['task', 'approval'], todo: museMail }) : null), [body, cardsOk, museMail])
-  // Muse TODO 卡按待办的真状态(按 id 现拉)决定给不给按钮:确认 pending 才给;还在查 / 读失败 / 已不存在 / 已处理都不给
-  // —— 否则一张旧卡(应用重启后模块级记录没了)能把已交给 Muse 的待办改成忽略、或再发一遍(Codex 09-11 P1)。
-  const cfg = useApp((s) => s.cfg)
-  const todoKey = (parsed?.tasks || []).map((c) => c.todo || '').filter(Boolean).join(',')
-  const [todoTick, setTodoTick] = useState(0)
-  // 结果按「这封信 + 这组 id + 第几次拉」分代:换信 / 重拉的第一帧就当「还在查」,不会先闪出上一代的 pending 按钮。
-  const gen = `${msg.id}|${todoKey}|${todoTick}`
-  const [todoRes, setTodoRes] = useState<{ gen: string; map: Record<string, string> }>({ gen: '', map: {} })
-  useEffect(() => {
-    if (!todoKey) return
-    let alive = true
-    for (const id of todoKey.split(',')) {
-      getMuseTodo(homeTarget(), id)
-        .then((t): string => t.status, (e: any): string => (e?.code === 'todo_not_found' ? 'missing' : 'error'))
-        .then((st) => { if (alive) setTodoRes((p) => ({ gen, map: { ...(p.gen === gen ? p.map : {}), [id]: st } })) })
-    }
-    return () => { alive = false }
-  }, [cfg, gen, todoKey])
-  const todoStatus = todoRes.gen === gen ? todoRes.map : {}
+  const todo = useMuseTodoStatus(msg.id, parsed?.tasks || [])
   const text = parsed ? parsed.text : body
   const hasCards = !!parsed && (parsed.tasks.length > 0 || parsed.approvals.length > 0)
   const pluginCard = inboxCardOf(msg, useInboxCards())
@@ -100,13 +82,13 @@ export function InboxBody({ msg }: { msg: InboxMessage }) {
             tasks={parsed!.tasks}
             ownerId={msg.id}
             noHere
-            todoStatus={todoKey ? todoStatus : undefined}
-            onTodoRetry={() => setTodoTick((n) => n + 1)}
+            todoStatus={todo.status}
+            onTodoRetry={todo.retry}
             onTask={async (card, landing) => {
               // 收件箱在自己的 Space 里:新会话必须先切到 Tangu Space,否则聊天开在收件箱布局里(同 InboxReaderView.chatWithSender)。
               if (landing === 'new') setActiveSpace('tangu')
               const ok = await runTaskCard(card, landing, null)
-              if (card.todo) setTodoTick((n) => n + 1) // 以引擎真状态为准:409 / 失败后卡片随之定格
+              if (card.todo) todo.retry() // 以引擎真状态为准:409 / 失败后卡片随之定格
               return ok
             }}
           />
@@ -132,7 +114,7 @@ function PluginCard({ card, id }: { card: PluginInboxCard; id: string }) {
 /** 审批卡:按 id 读 pending_approvals 行渲染(消息正文只是信封);批准 / 拒绝直接调引擎,决定后定格显示结果。
  *  状态:loading → row(pending / executing / 终态)| missing(引擎 404)| error(读失败,可重试);executing 每 3s 重拉直到终态;
  *  决定失败(409 = 别处已裁决 / 网络)→ 按 id 重拉,不把陈腐的 pending 按钮留在屏上(Codex 09-11 P1)。 */
-function ApprovalCard({ id }: { id: string }) {
+export function ApprovalCard({ id, onSettled }: { id: string; onSettled?: () => void }) {
   const { t } = useI18n()
   const cfg = useApp((s) => s.cfg)
   const [row, setRow] = useState<PendingApprovalInfo | null | 'loading' | 'error'>('loading')
@@ -165,6 +147,7 @@ function ApprovalCard({ id }: { id: string }) {
       // 200 也可能是「批准了但工具执行失败」(status=failed,result=错误文本):不能静默当成功。
       setRow({ ...row, status: r.status as PendingApprovalInfo['status'], result: r.result ?? row.result, decided_by: 'user' })
       if (r.status === 'failed') setErr(t('special.muse.execFailed', { e: String(r.result || '').slice(0, 200) }))
+      onSettled?.()
     } catch (e: any) {
       setErr(t('special.muse.approveFail', { e: e?.message || String(e) }))
       refresh() // 409(别处已裁决)/ 网络错:以引擎里的真状态为准

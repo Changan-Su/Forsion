@@ -63,6 +63,8 @@ import { CreationCards } from './CreationCards'
 import { formatDateTime, formatMessageTime } from '../../format/time'
 
 import { TaskCards, type TaskLanding } from './TaskCards'
+import { MuseApprovalLine, MuseTodoCards, ProactiveMark, isProactive } from './MuseDm'
+import { CHILD_UPDATE_OPEN, ChildSessionsBlock, ChildUpdateLine, childIdsOf } from './ChildSessions'
 import { APPROVAL_UPDATE_OPEN, approvalForCall, parseApprovalUpdate, pickPlanInquiry, type ApprovalOutcome } from './approvalQueue'
 import { isRemoteApprover, wasDecidedHere } from '../../components/ApprovalCard'
 import { answeredByText } from '../../approvalReason'
@@ -224,7 +226,7 @@ export interface MessageHandlers {
   onSuggest?: (text: string) => void
   /** 任务卡(```forsion-task)的落点点击:卡片本身什么也不做,点了才发消息 / 建 Muse 日程。
    *  返回 false = 没做成(卡片保留按钮);其余(true / void)= 做成,卡片定格。 */
-  onTask?: (card: TaskCard, landing: TaskLanding) => boolean | void | Promise<boolean | void>
+  onTask?: (card: TaskCard, landing: TaskLanding) => boolean | void | { childId: string } | Promise<boolean | void | { childId: string }>
   /** 回退到本条消息的时刻(B1):仅代码 / 仅对话 / 两者。 */
   onRewind?: (mode: 'code' | 'conversation' | 'both') => void
   /** 把这条回答插回笔记(评审 G3-08,见 insertToNote.ts);宿主没有 Amadeus 编辑能力时不传 → 按钮不渲染。text = 摘掉围栏的正文。 */
@@ -437,6 +439,8 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
     }
     // 挂起审批的结局回灌(引擎落库的 <approval_update> user 行):同理不是用户说的话 —— 每张一行结局。
     // 输出不在这里(引擎把真结果放回了原工具卡),这一行只说谁批了什么。
+    // 子会话结果送回主会话(引擎落库的 <child_sessions_update> user 行):同理画成一行系统行。
+    if (msg.content.startsWith(CHILD_UPDATE_OPEN)) return <div ref={rootRef}><ChildUpdateLine content={msg.content} /></div>
     if (msg.content.startsWith(APPROVAL_UPDATE_OPEN)) {
       const rows = parseApprovalUpdate(msg.content)
       return (
@@ -560,8 +564,12 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
   // 自动化建议围栏不属于正文:渲染/复制/朗读都用摘干净的 body,芯片单独摆一排。
   const streaming = msg.status === 'streaming'
   // 作品卡的按钮要宿主 IPC:只有桌面端认这种围栏,网页 / 手机端原样留在正文(不吞字)
-  const fenceKinds: FenceKind[] = window.tangu?.productsRegister ? ['suggest', 'task', 'creation'] : ['suggest', 'task']
-  const { text: body, items: suggestions, tasks, creations } = splitSuggestions(msg.content, { streaming, kinds: fenceKinds })
+  // Muse 私聊里它自己开口的那条(origin 只有引擎写得出,10-18 方案 B):待办卡的 `todo:` 头生效、审批围栏收成一行(MuseDm.tsx)。
+  const museTodo = msg.origin === 'proactive:todo'
+  const museApproval = msg.origin === 'proactive:approval'
+  const fenceKinds: FenceKind[] = [...(window.tangu?.productsRegister ? ['suggest', 'task', 'creation'] as FenceKind[] : ['suggest', 'task'] as FenceKind[]), ...(museApproval ? ['approval'] as FenceKind[] : [])]
+  const { text: body, items: suggestions, tasks, creations, approvals: museApprovals } = splitSuggestions(msg.content, { streaming, kinds: fenceKinds, todo: museTodo })
+  const childIds = childIdsOf(msg.toolEvents) // 不用 hook:上面 system / user 两支提前 return 了
   // sketch 卡 → 笔记里的交互块(```forsion-sketch 围栏,嵌入层按同一沙箱渲染);与回答的「插入笔记」同一条写口。
   const sketchActions = handlers?.onInsertNote
     ? (it: SketchItem) => <InsertNoteButton onInsert={() => handlers.onInsertNote?.(sketchFence(it.html))} />
@@ -589,6 +597,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
       <div className="t2-avatar" style={!avatarUrl && msg.agentColor ? { background: msg.agentColor, color: '#fff' } : undefined}>{avatarUrl ? <img src={avatarUrl} alt="" /> : firstChar(msg.agentName || agentNameFallback || 'Tangu')}</div>
       <div className="t2-asst-col">
         <div className="t2-name" style={msg.agentColor ? { color: msg.agentColor } : undefined}>{msg.agentName || agentNameFallback || 'Tangu'}{msg.status === 'streaming' && <span className="t2-dot" />}</div>
+        {isProactive(msg) && <ProactiveMark at={msg.timestamp} />}
         {msg.systemPrompt && <SystemPromptBlock content={msg.systemPrompt} />}
         {(() => {
           // 思考原文整条消息只有一份:挂在第一条过程行上(前面还没有正文时);否则单独一行过程行放最前(只剩思考那一步)。
@@ -664,9 +673,14 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
             ))}
           </div>
         )}
+        {/* 这条回答用 start_session 开出的子会话:标题 · 状态 · 最后一句,点开走右侧子会话面板(ChildSessions.tsx)。 */}
+        {runSid && childIds.length > 0 && <ChildSessionsBlock parentId={runSid} ids={childIds} onSuggest={handlers?.onSuggest} />}
         {/* 任务卡:顺手发现的、塞进当前对话会撑爆的活。track=true 的卡主按钮是「交给 Muse 追踪」。同样只在 done 上渲染。
             渲染与落点按钮在 TaskCards(与收件箱共用)。 */}
-        {!!tasks.length && msg.status === 'done' && <TaskCards tasks={tasks} ownerId={msg.id} onTask={handlers?.onTask} />}
+        {!!tasks.length && msg.status === 'done' && (museTodo
+          ? <MuseTodoCards tasks={tasks} ownerId={msg.id} onTask={handlers?.onTask} sessionId={runSid || undefined} createdAt={msg.timestamp || undefined} />
+          : <TaskCards tasks={tasks} ownerId={msg.id} onTask={handlers?.onTask} sessionId={runSid || undefined} createdAt={msg.timestamp || undefined} />)}
+        {museApprovals.map((id) => <MuseApprovalLine key={id} id={id} />)}
         {/* 作品卡:把这条对话里做的东西变成「造物」(点了宿主才建文件夹 / 复制)。同样只在 done 上渲染。 */}
         {!!creations.length && msg.status === 'done' && <CreationCards cards={creations} sessionId={runSid} />}
 

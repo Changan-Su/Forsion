@@ -8,13 +8,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const state = vi.hoisted(() => ({
   fetch: vi.fn(),
+  /** 私聊 attention(/agent/sessions/*,10-18 Muse 私聊方案 B)单独一路,不搅上面那份待批索引的调用计数。 */
+  dm: vi.fn(),
+  notify: vi.fn(),
   targets: [{ key: 'home' }] as Array<{ key: string }>,
 }))
 vi.mock('../services/engine/targets', async (orig) => ({
   ...(await orig<typeof import('../services/engine/targets')>()),
   knownTargets: () => state.targets,
-  engineFetch: (t: unknown, path: string, init: unknown, opts: unknown) => state.fetch(t, path, init, opts),
+  engineFetch: (t: unknown, path: string, init: unknown, opts: unknown) => (path.startsWith('/agent/sessions') ? state.dm(path, init) : state.fetch(t, path, init, opts)),
 }))
+vi.mock('./notificationStore', () => ({ notifyApp: (x: unknown) => state.notify(x) }))
 
 import { __resetAttentionForTests, ATTENTION_POLL_MS, attentionIndex, localAttentionSignature, mergeAttention, useAttention, type SessionAttention } from './attentionStore'
 import { useApp } from './appStore'
@@ -33,6 +37,9 @@ const initial = useApp.getState()
 beforeEach(() => {
   __resetAttentionForTests()
   state.fetch.mockReset()
+  state.dm.mockReset()
+  state.dm.mockImplementation(async () => json({ sessions: [] }))
+  state.notify.mockReset()
   state.targets = [{ key: 'home' }]
   useApp.setState({ connState: 'ok' } as any)
 })
@@ -151,5 +158,55 @@ describe('install', () => {
     await flush()
     expect(state.fetch).toHaveBeenCalledTimes(1)
     off()
+  })
+})
+
+describe('私聊 attention(Muse 主动发来 / 等你)', () => {
+  const solo = { id: 'dm1', title: 'Muse', agent_config: { soloAgentSlug: 'muse' } }
+  it('拉到未读 / 等你;打开那条 = 读过(本地先熄 + POST read);新进入等你才弹(启动那一拉不弹),正看着的不弹', async () => {
+    useApp.setState({ sessions: [solo, { id: 'p1', title: 'x', agent_config: {} }], configBySession: {}, activeId: null } as any)
+    state.dm.mockImplementation(async () => json({ sessions: [{ id: 'dm1', unread: true, awaiting: false }, { id: 7 }] }))
+    await useAttention.getState().refresh()
+    await flush()
+    expect(useAttention.getState().dm).toEqual({ dm1: { unread: true, awaiting: false } })
+    expect(state.notify).not.toHaveBeenCalled()
+
+    state.dm.mockImplementation(async (path: string) => (path.endsWith('/read') ? json({ ok: true }) : json({ sessions: [{ id: 'dm1', unread: true, awaiting: true }, { id: 'p1', unread: false, awaiting: true }] })))
+    await useAttention.getState().refresh()
+    await flush()
+    expect(state.notify).toHaveBeenCalledTimes(1) // 只弹私聊那条;项目会话的等你不弹
+    expect(state.notify.mock.calls[0][0]).toMatchObject({ event: 'dm.waiting', title: 'Muse' })
+
+    const off = useAttention.getState().install()
+    useApp.setState({ activeId: 'dm1' } as any)
+    await flush()
+    expect(useAttention.getState().dm.dm1).toEqual({ unread: false, awaiting: true })
+    expect(state.dm.mock.calls.some(([path, init]) => path === '/agent/sessions/dm1/read' && (init as any)?.method === 'POST')).toBe(true)
+    off()
+  })
+
+  it('后台第一次建出的私聊本地列表里没有 → 补拉一次会话列表,角标 / 通知才认得它;每个 id 只补拉一次(Codex 10-18 #2)', async () => {
+    const refreshSessions = vi.fn(async () => { useApp.setState({ sessions: [solo] } as any); return [] })
+    useApp.setState({ sessions: [], configBySession: {}, activeId: null, refreshSessions } as any)
+    await useAttention.getState().refresh() // 启动那一拉:还没有私聊
+    await flush()
+    state.dm.mockImplementation(async () => json({ sessions: [{ id: 'dm1', unread: true, awaiting: true }] }))
+    await useAttention.getState().refresh()
+    await flush()
+    expect(refreshSessions).toHaveBeenCalledTimes(1)
+    expect(state.notify).toHaveBeenCalledTimes(1)
+    useApp.setState({ sessions: [] } as any) // 列表仍带不上它(分页):不每轮重拉
+    await useAttention.getState().refresh()
+    await flush()
+    expect(refreshSessions).toHaveBeenCalledTimes(1)
+  })
+
+  it('老引擎没有这个端点(404)→ 本次启动不再拉', async () => {
+    state.dm.mockImplementation(async () => json({ detail: 'nope' }, 404))
+    await useAttention.getState().refresh()
+    await flush()
+    await useAttention.getState().refresh()
+    await flush()
+    expect(state.dm).toHaveBeenCalledTimes(1)
   })
 })

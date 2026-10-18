@@ -506,11 +506,19 @@ function BoardHarness() {
   const [settings, setSettings] = useState<BoardSettings>({ ...DEFAULT_BOARD })
   // 深色档要能切:网格层在深色下换的是 mix-blend-mode(multiply → screen),而混合的结果只有截图看得见。
   const [theme, setTheme] = useState<'light' | 'dark'>('light')
+  // 真 App 里写设置是异步的(drawingStore 先 flush、预读盘面再写):lag > 0 模拟那段「props 还是旧值」的窗口
+  const lag = useRef(0)
+  const patches = useRef<Partial<BoardSettings>[]>([])
+  const cur = useRef(settings)
+  cur.current = settings
   useEffect(() => {
     // 合并式:仪器只传改动的字段,别因为漏写新字段把设置打成 undefined
     ;(window as unknown as { __board: unknown }).__board = {
       setSettings: (patch: Partial<BoardSettings>) => setSettings((s) => ({ ...s, ...patch })),
       setTheme,
+      setLag: (ms: number) => { lag.current = ms },
+      patches: patches.current,
+      get: () => cur.current,
     }
   }, [])
   return (
@@ -521,7 +529,12 @@ function BoardHarness() {
           theme={theme}
           langCode="en"
           settings={settings}
-          onSettings={(patch) => setSettings((s) => ({ ...s, ...patch }))}
+          onSettings={(patch) => {
+            patches.current.push(patch)
+            const apply = (): void => setSettings((s) => ({ ...s, ...patch }))
+            if (lag.current) setTimeout(apply, lag.current)
+            else apply()
+          }}
           onSceneChange={(json: string) => {
             ;(window as unknown as { __scene: unknown }).__scene = JSON.parse(json)
           }}
@@ -784,6 +797,15 @@ if (new URLSearchParams(location.search).has('dock')) {
       <div className="am-app tangu-lovable" style={{ position: 'fixed', inset: 0, display: 'flex' }}>
         <Shell dark={false} soft={false} buildDefault={() => getActiveSpace()?.build()} />
       </div>,
+    )
+  })
+} else if (new URLSearchParams(location.search).has('ach')) {
+  // 成就面板(云端 + 本机两组):localStorage 里的计数 / 云端缓存和 window.tangu.cloudFetch 由仪器在加载前预置,
+  // 见 scripts/achievements-cloud.check.cjs。
+  void import('./achievements/AchievementsModal').then(({ AchievementsModal }) => {
+    applyRealTheme(resolveInitialLang(), resolveInitialSkin(), resolveInitialBg(), new URLSearchParams(location.search).has('dark') ? 'dark' : 'light')
+    createRoot(document.getElementById('root')!).render(
+      <LocaleProvider><div className="am-app tangu-lovable" style={{ position: 'fixed', inset: 0 }}><AchievementsModal onClose={() => {}} /></div></LocaleProvider>,
     )
   })
 } else if (new URLSearchParams(location.search).has('ribbon')) {
@@ -1566,7 +1588,8 @@ if (new URLSearchParams(location.search).has('dock')) {
   ;(window as unknown as { __pageStoreFor?: typeof pageStoreFor }).__pageStoreFor = pageStoreFor
   createRoot(document.getElementById('root')!).render(<DashHarness />)
 } else if (new URLSearchParams(location.search).has('board')) {
-  createRoot(document.getElementById('root')!).render(<BoardHarness />)
+  // 真 LocaleProvider:没有它 useI18n 恒回中文,英文界面的排版量不到(check:boardlive L31)
+  createRoot(document.getElementById('root')!).render(<LocaleProvider><BoardHarness /></LocaleProvider>)
 } else if (new URLSearchParams(location.search).has('mindmap')) {
   const iso = new Date().toISOString()
   const mm = JSON.stringify({ b2: { p: 'b1' }, b3: { p: 'b1' } }) // b2/b3 是 b1 的子节点

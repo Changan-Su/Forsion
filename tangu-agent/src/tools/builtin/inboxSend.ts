@@ -21,6 +21,14 @@ const MAX_BODY = 4000;
  *  手机上全推就是打扰;只有 urgent 与日报走通道。 */
 export const MUSE_SENDER_ID = 'muse';
 
+/** 去掉模型写的文本里会被桌面当成 Muse 待办 id 的 `todo: <id>` 头行(与 suggest.ts 的 HEADER + APPROVAL_ID_RE 同口径)。
+ *  桌面对 Muse 来信 / 私聊待办消息信任 `todo:` 头(「交给 Muse 执行」= 批准那条待办),只有引擎自己拼的卡能带它 ——
+ *  否则模型在正文里夹一张围栏、填另一条待办的 id,用户看到的任务书和实际批准的不是一回事(Codex 10-18 评审 #1)。
+ *  ponytail: 按行剥,不认围栏 —— 围栏解析两边各一份,按行剥不怕两边对不齐;代价是正文里恰好整行写成 `todo: abc` 的也会被剥掉。 */
+export function stripTodoHeaders(md: string): string {
+  return md.replace(/^[^\S\n]*todo[^\S\n]*:[^\S\n]*[A-Za-z0-9_-]{1,64}[^\S\n]*$\n?/gim, ''); // [^\S\n] = 桌面 \s 去掉换行(含 NBSP / 全角空格)
+}
+
 export interface InboxSendResult { ok: boolean; error?: string }
 
 /** 投递内核:频控+落库+通道转发。senderId 缺省=默认 agent;自动化 notify 传 `automation:<ruleId>`。
@@ -70,8 +78,10 @@ export const inboxSendProvider: ToolProvider = {
     {
       name: 'inbox_send',
       mode: 'both',
-      // 本地限定(云端 no-op);Muse 不可见:它的出口是 add_muse_todo + 引擎侧回执/日报,直接发信会绕过 notify=digest(Codex 09-10 P2-10)。
-      isEnabledFor: (profile, ctx) => !!profile.capabilities.hostExec && !(ctx as any).muse,
+      // 本地限定(云端 no-op)。Muse 周期(10-18 方案 B):做好的成品走这里、要用户回话的走 message_user。
+      // notify 从此只管日报发不发(方案页「日报:每天一封 / 不发」),不再拦成品信 —— 09-10 P2-10 那条「绕过 digest」随之不成立。
+      // Muse 派出去的子代理不可见。
+      isEnabledFor: (profile, ctx) => !!profile.capabilities.hostExec && (!(ctx as any).muse || !((ctx.subAgentDepth || 0) >= 1)),
 
       definition: {
         type: 'function',
@@ -106,10 +116,12 @@ export const inboxSendProvider: ToolProvider = {
         if (body.length > MAX_BODY) {
           return `Error: body is ${body.length} characters; the inbox limit is ${MAX_BODY}. Shorten it (keep any task cards at the end) and send again.`;
         }
+        const senderId = ctx.agentSlug || DEFAULT_AGENT_SLUG;
         const r = await sendInboxMessage(ctx.userId, {
           title: String(args.title || ''),
-          body,
-          senderId: ctx.agentSlug || DEFAULT_AGENT_SLUG,
+          // Muse 的信桌面信任 `todo:` 头(InboxBody museMail);模型写的这封不许带(10-18 起 Muse 周期能用本工具了)
+          body: senderId === MUSE_SENDER_ID ? stripTodoHeaders(body) : body,
+          senderId,
         });
         if (!r.ok) return r.error || 'Error: send failed';
         return `已投递到用户收件箱：「${String(args.title || '').trim().slice(0, 200)}」。`;

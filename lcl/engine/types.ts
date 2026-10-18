@@ -186,8 +186,8 @@ export interface RibbonItem {
    *  组件自己接了右键(preventDefault)的,Ribbon 不再弹。 */
   menu?: () => { label: string; onClick(): void }[]
   /** 图标上的提示红点(无数字):get 现判、subscribe 在它可能变的时候回调。收进「…」/ 收纳夹时红点挂到「…」/ 收纳夹上。
-   *  只给 icon 项用(component 项自己画)。 */
-  dot?: { get(): boolean; subscribe(cb: () => void): () => void }
+   *  只给 icon 项用(component 项自己画)。label = 红点的意思(读屏;手机原生「⋯」半屏画不了点,用它当行的副标题)。 */
+  dot?: { get(): boolean; subscribe(cb: () => void): () => void; label?: () => string }
 }
 
 /** 底部状态栏的一项(≈ Obsidian addStatusBarItem)。 */
@@ -258,6 +258,11 @@ export interface SpaceDefinition {
    *   · 人在它里面时要开别的 Space 的视图(对话、笔记、日历……)→ 先切到那个视图的主人(pinned.main / launcherViews
    *     里列着它的第一个 Space)再开。认不出主人的(浏览器、没带 Space 的插件视图)照旧开在这儿,下次进来时关掉。 */
   onePage?: boolean
+  /** 默认主页:进这个 Space(切进来、冷启动、人已在里面时再点一次它的图标)先看到的视图 —— 主区里有这种视图就把它顶到前台,
+   *  没有就开一个新标签(params 是开它的参数)。别的标签照旧留着,只是退到后台。**缺省 = 还原上次离开时的前台视图**。
+   *  2026-10-18 用户定:「home page 就应该默认打开 home page view,如果之前在 home page 打开了其他 view 再切回来,应该还是 home page」。
+   *  没固定(pinned.main)的默认主页会被「切进来再就地 openView」顶掉,通常两样一起声明。判定见 pinnedViews.mainPageLanding。 */
+  mainPage?: PersistedPanel
   /** 新建标签页(启动器)里这个 Space 那一格能开的视图:第一项 = 点格子开的,其余进展开菜单。**缺省 = pinned.main**。
    *  只有「主区默认视图不等于固定视图」的 Space 才写(配方 Space 的 layout.main;日历多带一个待办)。
    *  没带身份参数的 entity 视图(聊天 / 编辑器)和 aux 视图由启动器滤掉 —— 滤完没剩的 Space 不出格子。 */

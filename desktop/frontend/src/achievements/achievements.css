@@ -256,3 +256,18 @@
 .ach-claim:hover { filter: brightness(1.06); }
 /* 成就面板左栏:有「已达成未领取」的系列名后一颗红点(同 Ribbon 奖杯上那颗,领完即灭)。 */
 .ach-dot { display: inline-block; width: 6px; height: 6px; margin-left: 6px; border-radius: 50%; background: var(--danger, #e5484d); vertical-align: middle; flex: none; }
+
+/* ── 面板:云端成就 ───────────────────────────────────────── */
+/* 系列标题旁「云端 · 跟账号走」;行尾奖励(积分 / 物品)一枚浅胶囊,和点数、领取并排 */
+.ach-cloud-tag {
+  display: inline-flex; align-items: center; gap: 4px; margin-left: 10px; padding: 1px 8px; vertical-align: middle;
+  border-radius: var(--radius-pill, 999px); background: var(--overlay-light); color: var(--text-muted);
+  font-size: var(--ui-font-caption, 11px); font-weight: 500;
+}
+.ach-reward {
+  display: inline-flex; align-items: center; gap: 4px; flex: none; max-width: 40%; padding: 2px 8px;
+  border-radius: var(--radius-pill, 999px); background: var(--overlay-light); color: var(--text-muted);
+  font-size: var(--ui-font-caption, 11px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ach-reward > svg { flex: none; }
+.ach-claim:disabled { opacity: 0.6; cursor: default; filter: none; }

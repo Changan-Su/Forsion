@@ -13,6 +13,9 @@ export interface SpacePanelSpec {
   /** 固定 View(main / left / right):该区内始终至少留一个这种视图 —— 关不掉、拖不出本区、不被别的类型顶掉
    *  (见 engine/pinnedViews.ts)。底部面板不支持。老宿主不认这个键,照旧当普通条目。 */
   pinned?: boolean
+  /** 默认主页(仅 main,至多一条):进这个 Space 先看到它,而不是上次离开时的前台视图(SpaceDefinition.mainPage)。
+   *  通常和 pinned 一起写,否则切进来后的就地打开会把它换走。老宿主不认这个键。 */
+  mainPage?: boolean
 }
 
 export type MainPanelOpenStep =
@@ -105,12 +108,17 @@ function panelList(v: unknown, field: string): SpacePanelSpec[] | string {
     if (pinned !== undefined && (typeof pinned !== 'boolean' || (pinned && field === 'bottom'))) {
       return `layout.${field} 的 pinned 必须是布尔值,且底部面板不支持固定`
     }
+    const mainPage = (it as { mainPage?: unknown }).mainPage
+    if (mainPage !== undefined && (typeof mainPage !== 'boolean' || (mainPage && (field !== 'main' || out.some((p) => p.mainPage))))) {
+      return `layout.${field} 的 mainPage 必须是布尔值,只能写在 main 里,且至多一条`
+    }
     out.push({
       type: (it as { type: string }).type,
       ...(params ? { params: params as Record<string, unknown> } : {}),
       ...(split ? { split } : {}),
       ...(splitFrom !== undefined ? { splitFrom: splitFrom as number } : {}),
       ...(pinned ? { pinned: true } : {}),
+      ...(mainPage ? { mainPage: true } : {}),
     })
   }
   return out

@@ -16,6 +16,7 @@ import { notePluginGesture, usePluginStore } from '@amadeus/plugins/pluginStore'
 import { recordDevMountError } from '@amadeus/plugins/devRecords'
 import { setDevViewBridge } from '@amadeus/plugins/devSandbox'
 import type { ViewContribution } from '@amadeus/plugins/types'
+import { isClaimingHostView } from '../../shared/corePlugins'
 import { PLUGIN_ICONS } from '@amadeus/components/icons'
 import { registerMessages, translate } from './i18n'
 
@@ -156,7 +157,21 @@ export function syncPluginViews(): void {
   }, !main ? ['main'] : hasBottom ? ['main', 'left', 'right', 'bottom'] : ['main', 'left', 'right'])
   // 关 / 换自己的视图(ctx.closeView / ctx.replaceView):两种 store 都有这两个方法,卫星窗只有一个主区,同样照办。
   usePluginStore.getState().setViewControls({
-    close: (type) => useWorkspace.getState().closeViewsOfType(type),
+    close: (type, opts) => {
+      const ws = useWorkspace.getState()
+      // collapse:整侧只剩这一个视图 → 收起该侧(视图进 stash,展开时回来),不留空占位。侧栏里还有别的视图就照常关。
+      const side = opts?.collapse ? (['left', 'right'] as const).find((s) => {
+        const tabs = s === 'left' ? ws.leftTabs : ws.rightTabs
+        return (s === 'left' ? ws.leftVisible : ws.rightVisible) && tabs.length > 0 && tabs.every((t) => t.type === type)
+      }) : undefined
+      if (!side) { ws.closeViewsOfType(type); return }
+      // 别处的同类实例(主区标签、另一侧 / 底部)照常关,只有这一侧收起(Codex 评审 #4)
+      for (const p of [...(ws.api?.panels ?? [])]) { // 先拍下名单:closeLeaf 会就地改 api.panels
+        const m = (p.params ?? {}) as { __type?: string; __loc?: string }
+        if ((m.__type || (p as { component?: string }).component) === type && m.__loc !== side) ws.closeLeaf(p.id)
+      }
+      ws.toggleSidebar(side)
+    },
     replace: (from, to, params) => useWorkspace.getState().replaceViewsOfType(from, to, params),
   })
 
@@ -205,7 +220,10 @@ export function syncPluginViews(): void {
   const registered = new Map<string, ViewContribution>()
   const sync = (): void => {
     const next = new Map<string, ViewContribution>()
-    for (const o of usePluginStore.getState().views) {
+    const st = usePluginStore.getState()
+    for (const o of st.views) {
+      // 接管宿主视图芯的那一项(主页插件的 home)只经宿主那张 `homepage` 画,不另外注册:否则能开出第二份主页
+      if (isClaimingHostView(st, o)) continue
       next.set(`plugin:${o.pluginId}:${o.item.id}`, o.item)
     }
     for (const [type] of registered) {

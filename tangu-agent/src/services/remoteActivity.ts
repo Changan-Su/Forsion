@@ -141,6 +141,11 @@ export function noteRunTainted(runId: string): void {
 
 /** 在飞 run 是不是无人值守(Muse / 自动化):requestApproval / requestInquiry 入口据此短路 —— 没人会答,等就是把整条 run
  *  (连同 anyMuseRunActive 卡住的后续 Muse 周期)挂到用户哪天翻托盘为止(PI-DSH 评审 R1)。没登记 = false,照旧等。 */
+/** 主会话 start_session / send_to_session 起的子会话那一轮(input.fromParent):询问不阻塞,问题收尾时送回主会话(services/inquiries.ts)。 */
+export function isChildBriefRun(runId: string): boolean {
+  return runs.get(runId)?.input?.fromParent === true;
+}
+
 export function isUnattendedRun(runId: string): boolean {
   const e = runs.get(runId);
   return !!e && runCategory(e.input, runId) === 'unattended';
