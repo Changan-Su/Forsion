@@ -1225,6 +1225,9 @@ export interface SelectionActionContribution {
   }): string | void | Promise<string | void>
 }
 
+/** `ctx.ui.contextMenu` 的一行。 */
+export interface PluginContextMenuItem { label: string; run(): void; checked?: boolean; disabled?: boolean; danger?: boolean }
+
 export interface PluginContext {
   account?: PluginAccount
   app: PluginAppApi
@@ -1374,8 +1377,11 @@ export interface PluginContext {
      *  Feature-detect on older hosts. The host disposes mounts on disable/reload/setup failure. */
     /** 在视口坐标 (x, y) 开一个宿主样式的右键菜单(2026-10-18+),和内置主页、Ribbon 的右键菜单一个样子;放不下自己翻面。
      *  `items`:`{ label, run(), checked?, disabled?, danger? }`(给了 `checked` 的那一组前面画勾)。同一时刻只开一个,
-     *  点菜单外 / Esc / 窗口失焦 / 点了某一项都会关;返回关闭函数。旧宿主没有:`ctx.ui?.contextMenu?.(…)`。 */
-    contextMenu?(x: number, y: number, items: Array<{ label: string; run(): void; checked?: boolean; disabled?: boolean; danger?: boolean }>): () => void
+     *  点菜单外 / Esc / 窗口失焦 / 点了某一项都会关;返回关闭函数。旧宿主没有:`ctx.ui?.contextMenu?.(…)`。
+     *  菜单限高,项多 / 窗口矮时自己滚(最多 200 项)。`opts.keepOpen`:点了某一项不关(勾选清单连勾);插件改完状态调
+     *  返回句柄的 `update(items)` 换一份行(勾和 run 都换成新的;空列表 = 关)。早于这一版的宿主不认 opts、点了照关,
+     *  返回的也没有 `update` —— 拿 `typeof close.update === 'function'` 判。 */
+    contextMenu?(x: number, y: number, items: PluginContextMenuItem[], opts?: { keepOpen?: boolean }): (() => void) & { update?(items: PluginContextMenuItem[]): void }
     mountChatBox?(
       el: HTMLElement,
       opts: import('../../../../shared/chatBox').PluginChatBoxOptions,
