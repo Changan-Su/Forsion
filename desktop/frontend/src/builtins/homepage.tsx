@@ -18,13 +18,17 @@
  * 视图走 lazyRetry:本模块被 builtins/index 静态引,而 index 要能在 node 单测里导入
  * (HomepageView 里的 useApp / engine store 在 node 里活不下来)。
  */
-import { Suspense } from 'react'
+import { Suspense, useState } from 'react'
 import { House } from 'lucide-react'
 import {
   registerView, registerSpace, unregisterSpace, addRibbonIcon, removeRibbonIcon,
   setActiveSpace, useSpaceStore, useWorkspace, Skeleton,
 } from '@lcl/engine'
-import type { SpaceDefinition, PersistedPanel } from '@lcl/engine'
+import type { SpaceDefinition, PersistedPanel, ViewProps } from '@lcl/engine'
+import { usePluginStore } from '@amadeus/plugins/pluginStore'
+import type { ViewContribution } from '@amadeus/plugins/types'
+import { claimedHostView } from '../../../shared/corePlugins'
+import { PluginViewHost } from '../pluginViews'
 import { lazyRetry } from '../lazyRetry'
 import { registerMessages } from '../i18n'
 import { useApp } from '../stores/appStore'
@@ -89,7 +93,27 @@ registerMessages({
   'home.wallpaper.focusBlurHint': { zh: '操作输入框、模型或模式等控件时柔化背景', en: 'Soften the stage while using the chat input, model, mode, or related controls' },
   'home.wallpaper.vignette': { zh: '压暗背景', en: 'Dim background' },
   'home.wallpaper.vignetteHint': { zh: '让文字和控件在明亮壁纸上保持清晰', en: 'Keep text and controls legible on bright images' },
+  'home.claimed': { zh: '主页内容现在来自「主页」插件；关掉那个插件就换回内置的。', en: 'Home content now comes from the Home plugin. Turn that plugin off to switch back to the built-in one.' },
 })
+
+/** 主页视图芯(主页插件化 S1,2026-10-18):核心插件 forsion-home 开着且注册了 `home` 视图 → 画它;
+ *  没装、关着、或这一版挂载抛错 → 画内置那份。Space、`homepage` 视图类型、Ribbon 槽位一律不动(见 shared/corePlugins 的 HOST_VIEW_CLAIMS)。 */
+function HomepageSlot(props: ViewProps) {
+  const claim = usePluginStore((s) => claimedHostView(s, 'homepage'))
+  // 只记「这一版」挂失败:插件重载出新的 item 就再试一次
+  const [failed, setFailed] = useState<ViewContribution | null>(null)
+  if (claim && claim.item !== failed) {
+    return (
+      <div data-home-body="plugin" style={{ height: '100%', minHeight: 0 }}>
+        <PluginViewHost def={claim.item} pluginId={claim.pluginId} onMountError={() => setFailed(claim.item)} {...props} />
+      </div>
+    )
+  }
+  return <Suspense fallback={<Skeleton variant="document" />}><HomepageView {...props} /></Suspense>
+}
+
+/** 设置 → 插件里内置主页那张卡下面的一行(和日历的 `calendar.yielded` 同一位置)。 */
+export const useHomepageClaimed = (): boolean => usePluginStore((s) => !!claimedHostView(s, 'homepage'))
 
 const ws = () => useWorkspace.getState()
 const app = () => useApp.getState()
@@ -126,7 +150,7 @@ export function installHomepageViews(): void {
     kind: 'page',
     displayName: () => app().tr('space.home'),
     icon: House,
-    factory: (props) => <Suspense fallback={<Skeleton variant="document" />}><HomepageView {...props} /></Suspense>,
+    factory: (props) => <HomepageSlot {...props} />,
     closable: true,
     singleton: true,
   })
