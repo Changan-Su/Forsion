@@ -180,7 +180,7 @@ export const useNotifications = create<NtfState>((set, get) => {
           const visible = st.items.some((n) => n.id === found.id)
           const upd: AppNotification = {
             ...found, text, title: title ?? found.title, level, count: found.count + 1,
-            createdAt: Date.now(), sticky: sticky || found.sticky, action: input.action ?? found.action,
+            createdAt: Date.now(), sticky: sticky || found.sticky, action: 'action' in input ? input.action : found.action, // 显式给了(含 undefined)就换,没给才沿用
             durationMs: durationMs ?? found.durationMs, onClose: input.onClose ?? found.onClose,
           }
           set((s) => ({

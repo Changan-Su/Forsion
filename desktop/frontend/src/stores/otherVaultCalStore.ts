@@ -52,13 +52,23 @@ export const useOtherSideCal = create<OtherSideState>((set) => ({
   },
 }))
 
+/** 拉一次,之后活动侧根 / 侧切(vaultRoot / vaultSide 变)时重拉;返回退订。
+ *  日历视图(useOtherVaultCalDbs)与插件接缝 ctx.calendar(pluginCalendar.ts)共用。 */
+export function watchOtherSideCal(): () => void {
+  const key = (): string => { const s = usePageStore.getState(); return `${s.vaultSide}:${s.vaultRoot}` }
+  let last = key()
+  void useOtherSideCal.getState().refresh()
+  return usePageStore.subscribe(() => {
+    const k = key()
+    if (k === last) return
+    last = k
+    void useOtherSideCal.getState().refresh()
+  })
+}
+
 /** 非活动侧只读日历库。挂载即拉;活动侧根/侧切(vaultRoot/vaultSide 变)时重拉。 */
 export function useOtherVaultCalDbs(): AggDb[] {
   const dbs = useOtherSideCal((s) => s.dbs)
-  const vaultRoot = usePageStore((s) => s.vaultRoot)
-  const vaultSide = usePageStore((s) => s.vaultSide)
-  useEffect(() => {
-    void useOtherSideCal.getState().refresh()
-  }, [vaultRoot, vaultSide])
+  useEffect(watchOtherSideCal, [])
   return dbs
 }

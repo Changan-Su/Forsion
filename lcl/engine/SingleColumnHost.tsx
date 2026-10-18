@@ -13,7 +13,7 @@
 import { Suspense, createElement, startTransition, useEffect, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from 'react'
 import { flushSync } from 'react-dom'
 import { PanelLeft, PanelRight, X, MoreHorizontal, Plus, Zap, SlidersHorizontal } from 'lucide-react'
-import { useSpaceStore, setActiveSpace, getActiveSpace, pinSpaceToHome, redirectOpenFromOnePage } from './spaceRegistry'
+import { useSpaceStore, setActiveSpace, getActiveSpace, pinSpaceToHome, redirectOpenFromOnePage, landOnMainPage } from './spaceRegistry'
 import { switchSpace } from './spaceTransition'
 import { useDotted, useRibbonStore } from './ribbonRegistry'
 import { useCommandStore } from './commandRegistry'
@@ -595,13 +595,13 @@ function landOnOnePage(): void {
     if (now[side === 'left' ? 'leftVisible' : 'rightVisible'] && !now[side === 'left' ? 'leftLeaves' : 'rightLeaves'].length) now.toggleSidebar(side)
   }
 }
-/** 进 Space(冷启动还原 / 切进来 / 布局重置)之后的落点。 */
-function landOnEntry(): void { landOnOnePage(); landOnList() }
+/** 进 Space(冷启动还原 / 切进来 / 布局重置)之后的落点。默认主页排在列表层之前:顶它上来会收起抽屉。 */
+function landOnEntry(): void { landOnOnePage(); landOnMainPage(); landOnList() }
 /** 底栏 / 「全部 Space」面板上点一个 Space。点的就是当前这个:setActiveSpace 同 id 即返回,这里只让一页式 Space(主页)
  *  落回它那一页 —— 人在主页里、前台却是别的东西时,点「主页」就该回到主页。 */
 function enterSpace(id: string): void {
   // 手机的 Space 横排在底栏:横着推(10-16 起先不播,直接换;见 switchSpace)。同一个也经过 switchSpace(作废还在等下一帧的上一次切换)
-  switchSpace(id, id === useSpaceStore.getState().activeSpaceId ? landOnOnePage : undefined, { axis: 'x' })
+  switchSpace(id, id === useSpaceStore.getState().activeSpaceId ? () => { landOnOnePage(); landOnMainPage() } : undefined, { axis: 'x' })
 }
 // 人在一页式 Space 里开别的 Space 的视图:先带到那个 Space 去(见 spaceRegistry.redirectOpenFromOnePage)。
 setBeforeMainOpenHook(redirectOpenFromOnePage)
@@ -942,6 +942,8 @@ function useWideAspect(enabled: boolean): boolean {
 export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildDefault?: () => void }> = ({ buildDefault }) => {
   useEffect(() => {
     const ws = useWorkspace.getState()
+    // 宽窄先于还原同步:还原 / 建默认要据此展开并排左栏(dockLeftIfWide);下面 [wide] 那条 effect 排在这条之后才跑
+    ws.setWideMode(window.matchMedia(WIDE_QUERY).matches)
     if (buildDefault) ws.setDefaultBuilder(buildDefault)
     // 冷启动先还原上次的标签 + 激活项(桌面是 WorkspaceHost.onReady 的 tryRestoreLayout,单列这边
     // 是三桶 leaf 的序列化);首启 / 整份不可用才构建当前 Space 的默认布局。挂载之前已经摆上了的由它自己认(照用,但发令枪要响)。

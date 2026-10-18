@@ -103,6 +103,8 @@ export const homepageSpace: SpaceDefinition = {
   icon: House,
   sidebarDefaults: HOME_SIDE_VIEWS,
   pinned: { main: [{ type: 'homepage', params: {} }] },
+  // 进主页先看到主页本体:在主页里开了别的视图、切走再切回来,前台仍是主页(2026-10-18 用户定)。桌面也认,手机另有 onePage。
+  mainPage: { type: 'homepage', params: {} },
   // 手机上主页就是主页这一页:不开标签,在它里面点开的对话 / 笔记去它们自己的 Space 开(2026-10-11 用户定:
   // 「主页就主页维持的好好地」「主页不让开标签」)。别去掉。
   onePage: true,

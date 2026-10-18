@@ -2,14 +2,17 @@
  *  2026-10-16 方案 B + 方向 1(docs/ToBeImproved/Calendar交互与待办右栏方案_2026-10-16/):左栏小月历 + 日历列表、右栏待办;
  *  同日用户改口:编辑事件在事件旁的浮卡、草稿的选日历 / 保存在草稿块旁的草稿卡,右栏不再换成详情 / 草稿面板;
  *  单击空白 = 草稿(不落盘)、按住拖 = 时长、全天行横拖 = 多天;拖动吸附 + ⌘Z;待办拖进时间格;快速添加认自然语言日期。
- *  夹具拆成两张表:「产品日历」只有日期列(日程),「待办」带勾选列(待办来源)—— 只有日期的待办不进全天行。 */
+ *  夹具拆成两张表:「产品日历」只有日期列(日程),「待办」带勾选列(待办来源)—— 只有日期的待办不进全天行。
+ *  插件档(10-17,日历核心插件化方案 B 并行双跑):CALENDAR_PLUGIN_DIR=<Forsion-Calendar 检出> 时先把打好的插件
+ *  (manifest.json / main.js / spaces/)装进隔离 home,内置日历应当让位,下面同一套检查对插件版跑;Astryx 作用域那几条插件版不适用(插件不用 Astryx),跳过。 */
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
 const electron = require('./lib/launch-electron.cjs')
 
 const ROOT = path.resolve(__dirname, '..')
-const OUT = process.env.CALENDAR_UI_ARTIFACT_DIR || path.join(os.tmpdir(), 'forsion-calendar-ui')
+const PLUGIN = process.env.CALENDAR_PLUGIN_DIR ? path.resolve(process.env.CALENDAR_PLUGIN_DIR) : ''
+const OUT = process.env.CALENDAR_UI_ARTIFACT_DIR || path.join(os.tmpdir(), PLUGIN ? 'forsion-calendar-ui-plugin' : 'forsion-calendar-ui')
 const results = []
 const check = (name, ok, detail = '') => {
   results.push({ name, ok: !!ok })
@@ -35,6 +38,14 @@ async function slotPoint(win, iso, min) {
 const hasDraft = (win) => win.evaluate(() => !!document.querySelector('.amx-cal-draft'))
 
 async function clickSpace(win, names) {
+  // 插件的 Space 等插件装载完才注册,且新来的排在 Ribbon 上区末尾、收在「…」里:等它出现,没露面就展开上区
+  await win.waitForFunction((labels) => {
+    const has = () => [...document.querySelectorAll('button.rb-space')].some((b) => labels.includes((b.getAttribute('aria-label') || b.getAttribute('title') || b.textContent || '').trim()))
+    if (has()) return true
+    const more = document.querySelector('.rb-more[data-rb-more="top"]:not(.is-open)')
+    if (more) more.click()
+    return has()
+  }, names, { timeout: 30_000, polling: 500 }).catch(() => {})
   const clicked = await win.evaluate((labels) => {
     const buttons = [...document.querySelectorAll('button.rb-space')]
     const hit = buttons.find((b) => labels.includes((b.getAttribute('aria-label') || b.getAttribute('title') || b.textContent || '').trim()))
@@ -42,7 +53,12 @@ async function clickSpace(win, names) {
     hit.click()
     return true
   }, names)
-  if (!clicked) throw new Error(`找不到 Space：${names.join('/')}`)
+  if (!clicked) {
+    const have = await win.evaluate(() => [...document.querySelectorAll('button.rb-space')].map((b) => `${(b.getAttribute('aria-label') || b.getAttribute('title') || b.textContent || '').trim()}#${b.dataset.spaceId}`))
+    await win.screenshot({ path: path.join(OUT, 'no-space.png') }).catch(() => {})
+    const diag = await win.evaluate(() => ({ pluginStyle: !!document.querySelector('style[data-plugin="forsion-calendar"]'), ls: Object.keys(localStorage).filter((k) => /plugin|builtin|calendar/i.test(k)).map((k) => `${k}=${String(localStorage.getItem(k)).slice(0, 120)}`) }))
+    throw new Error(`找不到 Space：${names.join('/')}(Ribbon 上有:${have.join(' / ')};${JSON.stringify(diag)})`)
+  }
 }
 
 async function forceMode(win, mode) {
@@ -93,6 +109,7 @@ const GLOBAL_RESET = fs.readFileSync(require.resolve('@astryxdesign/core/reset.c
  *  只比看得见的:宽 0 边框的 style、tab-size、appearance、点按高亮看不出来;vertical-align 只对行内级盒子起作用
  *  (flex 子项的计算值已被块化成 block)。盒子(rect)始终逐个比。 */
 async function resetParity(win, label) {
+  if (PLUGIN) return null // 插件不用 Astryx,没有重置作用域可比
   const r = await win.evaluate((css) => {
     const PROPS = ['box-sizing', 'border-top-width', 'border-right-width', 'border-bottom-width', 'border-left-width', 'border-top-style', 'border-left-style', 'border-top-color',
       'margin-top', 'margin-right', 'margin-bottom', 'margin-left', 'padding-top', 'padding-right', 'padding-bottom', 'padding-left', 'display', 'position', 'top', 'bottom',
@@ -191,6 +208,11 @@ async function main() {
   }, null, 2)}\n`)
   fs.writeFileSync(path.join(vault, '欢迎.md'), '# Calendar UI 检查\n')
   fs.writeFileSync(path.join(userDataDev, 'amadeus-config.dev.json'), JSON.stringify({ lastVault: vault, localVault: vault }, null, 2))
+  if (PLUGIN) {
+    const dest = path.join(home, 'plugins', 'forsion-calendar')
+    if (!fs.existsSync(path.join(PLUGIN, 'main.js'))) throw new Error(`插件没打包:${PLUGIN}/main.js 不存在(先在那边 npm run build)`)
+    for (const f of ['manifest.json', 'main.js', 'spaces']) fs.cpSync(path.join(PLUGIN, f), path.join(dest, f), { recursive: true })
+  }
 
   const app = await electron.launch({
     args: [`--user-data-dir=${userData}`, '--lang=zh-CN', ROOT],
@@ -201,6 +223,7 @@ async function main() {
   try {
     const win = await app.firstWindow()
     win.on('pageerror', (e) => errors.push(e.message))
+    if (PLUGIN) win.on('console', (m) => { if (/forsion-calendar|plugin|插件|\[spaces\]/i.test(m.text())) console.log(`[page:${m.type()}] ${m.text().slice(0, 400)}`) })
     await win.setViewportSize({ width: 1440, height: 900 })
     await win.waitForSelector('#root', { timeout: 40_000 })
     await win.waitForTimeout(2200)
@@ -218,6 +241,13 @@ async function main() {
     await win.waitForSelector('.amx-cal', { timeout: 30_000 })
     await win.waitForSelector('.amx-cal-event[aria-label^="产品深度工作"]', { timeout: 30_000 })
     await win.waitForTimeout(1200)
+    if (PLUGIN) {
+      const who = await win.evaluate(() => ({
+        plugin: !!document.querySelector('.amx-cal')?.closest('.fc-root'),
+        spaces: [...document.querySelectorAll('button.rb-space')].filter((b) => ['日历', 'Calendar'].includes((b.getAttribute('aria-label') || b.getAttribute('title') || b.textContent || '').trim())).length,
+      }))
+      check('插件档:屏上的日历是插件画的(.fc-root 里),内置日历已让位(只有一个「日历」Space)', who.plugin && who.spaces === 1, JSON.stringify(who))
+    }
 
     // 方案 B 摆法:左 = 小月历 + 日历列表,右 = 待办(选中事件换成详情);头部左边「月份 第 N 周」。
     const sides = await win.evaluate(() => {
@@ -299,16 +329,21 @@ async function main() {
     check('只有日期的待办不进全天行(住右栏),日程照旧', !allDayNames.includes('补交上周总结') && !allDayNames.includes('回复设计稿反馈') && allDayNames.includes('版本发布'), JSON.stringify(allDayNames))
 
     await resetParity(win, '周视图 + 待办 + 右栏')
-    const leak = await win.evaluate(() => {
-      const probe = (parent) => { const d = parent.appendChild(document.createElement('div')); const v = getComputedStyle(d).borderTopStyle; d.remove(); return v }
-      const wrap = document.querySelector('div[data-astryx-theme]')
-      return { outside: probe(document.body), inside: wrap ? probe(wrap) : null }
-    })
-    check('Astryx 重置只罩包裹层:日历开着时 body 下新 div 不受影响、包裹层里的新 div 受重置', leak.outside === 'none' && leak.inside === 'solid', JSON.stringify(leak))
+    if (!PLUGIN) {
+      const leak = await win.evaluate(() => {
+        const probe = (parent) => { const d = parent.appendChild(document.createElement('div')); const v = getComputedStyle(d).borderTopStyle; d.remove(); return v }
+        const wrap = document.querySelector('div[data-astryx-theme]')
+        return { outside: probe(document.body), inside: wrap ? probe(wrap) : null }
+      })
+      check('Astryx 重置只罩包裹层:日历开着时 body 下新 div 不受影响、包裹层里的新 div 受重置', leak.outside === 'none' && leak.inside === 'solid', JSON.stringify(leak))
+    }
     await win.locator('.amx-cal-modes').getByRole('button', { name: '周', exact: true }).click()
     await win.waitForFunction(() => document.querySelectorAll(':popover-open').length > 0, null, { timeout: 5000 })
-    const menuInWrap = await win.evaluate(() => [...document.querySelectorAll(':popover-open')].every((p) => !!p.closest('div[data-astryx-theme]')))
-    check('Astryx 下拉菜单走原生 popover,DOM 仍在包裹层里(作用域罩得到)', menuInWrap)
+    if (PLUGIN) check('插件档:视图下拉菜单走原生 popover,打开着且挂在插件 DOM 里', await win.evaluate(() => [...document.querySelectorAll(':popover-open')].every((p) => !!p.closest('.fc-root'))))
+    else {
+      const menuInWrap = await win.evaluate(() => [...document.querySelectorAll(':popover-open')].every((p) => !!p.closest('div[data-astryx-theme]')))
+      check('Astryx 下拉菜单走原生 popover,DOM 仍在包裹层里(作用域罩得到)', menuInWrap)
+    }
     await resetParity(win, '视图下拉菜单打开')
     await win.keyboard.press('Escape')
     await win.waitForFunction(() => document.querySelectorAll(':popover-open').length === 0, null, { timeout: 5000 })

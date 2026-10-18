@@ -3,13 +3,17 @@
  *  原因见那个文件);字体同样自托管(见 ExcalidrawEmbed)。
  *  远端合并(reconcile+restoreElements+updateScene)也必须留在本 chunk 内 —— drawingStore 在启动
  *  bundle 里,绝不能碰引擎;它只经 registerApplier 拿到一个闭包。 */
-import { Excalidraw, MainMenu, serializeAsJSON, restoreElements, newElementWith, CaptureUpdateAction } from './forkRuntime'
+import { Excalidraw, MainMenu, Footer, serializeAsJSON, restoreElements, newElementWith, CaptureUpdateAction, getCommonBounds } from './forkRuntime'
 import { getBoardUiMode, setBoardUiMode, subscribeBoardUiMode, type BoardUiMode } from './boardUiMode'
 import { newPenState, usePenRestore } from './PenRow'
 import BoardToolbar, { LINE_MEMBERS, SHAPE_MEMBERS, activateTool, newGroupState, type LineMember, type ShapeMember, type ToolRefs } from './BoardToolbar'
 import PanelExtras from './PanelExtras'
 import { getToolbarLayout, isDefaultLayout, resetToolbarLayout, subscribeToolbarLayout } from './toolbarOrder'
 import { newBoardUi, sameBoardUi, type BoardUi } from './boardUi'
+import ViewIsland, { type ViewToggle } from './ViewIsland'
+import { useBoardGrid } from './useBoardGrid'
+import { Eye, Grid3x3, Magnet } from 'lucide-react'
+import './viewIsland.css'
 import './excalidrawTheme.css' // 引擎 token → LCL 契约(见该文件),随画布 chunk 一起加载
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
@@ -27,7 +31,7 @@ import {
   paperSize,
   reflowPoint,
   PAPER_IDS,
-  DEFAULT_STEP,
+  MARGIN,
   type BoardSettings,
   type Bounds,
 } from '@amadeus-shared/excalidraw/board'
@@ -44,10 +48,6 @@ registerMessages({
   'excalicanvas.flow': { zh: '页面排布', en: 'Page layout' },
   'excalicanvas.flowV': { zh: '上下', en: 'Top to bottom' },
   'excalicanvas.flowH': { zh: '左右', en: 'Left to right' },
-  'excalicanvas.grid': { zh: '网格', en: 'Grid' },
-  'excalicanvas.gridH': { zh: '横线', en: 'Horizontal' },
-  'excalicanvas.gridV': { zh: '竖线', en: 'Vertical' },
-  'excalicanvas.opacity': { zh: '淡浓', en: 'Opacity' },
   'excalicanvas.uiMode': { zh: '属性面板', en: 'Properties panel' },
   'excalicanvas.allBoards': { zh: '所有白板', en: 'All boards' },
   'excalicanvas.toolbar': { zh: '工具栏', en: 'Toolbar' },
@@ -61,6 +61,41 @@ const H_GRAD = 'linear-gradient(180deg, var(--amx-grid-line) 0 1px, transparent 
 
 const clampNum = (v: number, lo: number, hi: number): number => Math.min(Math.max(v, lo), hi)
 const mod = (a: number, n: number): number => ((a % n) + n) % n
+
+/** Esc 来自正在打字的地方(文字编辑框、数字框、可编辑区)= 结束编辑,不是退全屏。复选框 / 滑杆这类 input 不算。 */
+const NON_TEXT_INPUT = new Set(['checkbox', 'radio', 'range', 'button', 'submit', 'reset', 'color', 'file', 'image'])
+function isTextEntry(t: EventTarget | null): boolean {
+  if (!(t instanceof HTMLElement)) return false
+  if (t instanceof HTMLInputElement) return !NON_TEXT_INPUT.has(t.type)
+  return t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement || t.isContentEditable
+}
+
+/** 无限画布的「适配全图」。引擎的 zoomToFit 按整块画布算,内容会顶进浮动的工具岛 / 汉堡菜单 / 侧栏钮 / 底栏
+ *  下面(走查 P2-4)—— 先扣掉这几条带再适配。放大上限 2,同引擎(zoomToFitMaxLevel)。 */
+function fitInsets(a: ExcalidrawImperativeAPI, host: HTMLElement, st: AppState): void {
+  // 用引擎自己的包围盒:elementBounds 只取 x + width,箭头 / 线的点往负方向走时会算错
+  const [minX, minY, maxX, maxY] = getCommonBounds(a.getSceneElements())
+  const hb = host.getBoundingClientRect()
+  const k = hb.width ? st.width / hb.width : 1 // DOM 尺寸 → 画布 CSS px(宿主带 UI 缩放补偿时两者不同)
+  const tops = [...host.querySelectorAll('.App-menu_top > *')].map((e) => e.getBoundingClientRect()).filter((r) => r.height)
+  const foot = host.querySelector('.layer-ui__wrapper__footer-left')?.getBoundingClientRect()
+  const GAP = 16
+  const top = (tops.length ? Math.max(...tops.map((r) => r.bottom)) - hb.top : 64) * k + GAP
+  const bottom = (foot?.height ? hb.bottom - foot.top : 56) * k + GAP
+  const side = 24
+  const w = st.width - 2 * side
+  const h = st.height - top - bottom
+  if (w <= 0 || h <= 0) return void a.zoomToFit()
+  const zoom = clampNum(Math.min(w / Math.max(1, maxX - minX), h / Math.max(1, maxY - minY)), 0.1, 2)
+  a.updateScene({
+    appState: {
+      scrollX: (side + w / 2) / zoom - (minX + maxX) / 2,
+      scrollY: (top + h / 2) / zoom - (minY + maxY) / 2,
+      zoom: { value: zoom as AppState['zoom']['value'] },
+    },
+    captureUpdate: CaptureUpdateAction.NEVER,
+  })
+}
 
 /** 往引擎自己的 DOM 里插一个挂点,并在引擎重挂那块 DOM 时**自动补回去**。
  *  ⚠️ 只插一次是不够的:属性面板每换一次工具就整块重建,工具栏在切换面板形态时也会重建 ——
@@ -204,6 +239,90 @@ export default function ExcalidrawCanvas({
   )
   useBoardPortalRoots(hostZoom)
   usePenRestore(api, ui.tool, ui.snapshot, penState)
+  const grid = useBoardGrid(api, ui, settings, onSettings, hostRef)
+
+  /** 视图岛的四个开关。直接改 appState,**不传受控 prop**(传了引擎对应的快捷键 / 右键项就失效)。
+   *  吸附至对象与引擎网格互斥 —— 照抄引擎 actionToggleObjectsSnapMode 的那条;纸张模式的覆盖层不吸附,不受影响。 */
+  const toggleView = useCallback(
+    (k: ViewToggle): void => {
+      if (!api) return
+      const st = api.getAppState()
+      const appState: Partial<AppState> =
+        k === 'snap'
+          ? { objectsSnapModeEnabled: !st.objectsSnapModeEnabled, ...(st.objectsSnapModeEnabled ? {} : { gridModeEnabled: false }) }
+          : k === 'view'
+            ? { viewModeEnabled: !st.viewModeEnabled }
+            : k === 'zen'
+              ? { zenModeEnabled: !st.zenModeEnabled }
+              : { penMode: !st.penMode }
+      api.updateScene({ appState: appState as AppState, captureUpdate: CaptureUpdateAction.NEVER })
+    },
+    [api],
+  )
+
+  /** 全屏 = 窗口进系统全屏 + 白板盖住 App 外框。⚠️ 不能对白板元素本身 requestFullscreen:引擎的弹层
+   *  (取色器、菜单)挂在 body 上,会被挡在全屏外面。浏览器会自己吃掉 Esc 退系统全屏(只能听 fullscreenchange);
+   *  Electron 不一定,拿不到系统全屏时更没人管 —— 所以 Esc 也自己听一份。 */
+  const [full, setFull] = useState(false)
+  /** 进全屏那一下,白板铺满窗口、视图岛跟着左下角挪走,指针底下就没有按钮了 —— 在刚才那颗按钮的位置
+   *  放一枚「退出全屏」胶囊(几秒后淡出),「点一下进、再点一下出」照样成立(走查 P2-3)。 */
+  const [fullHint, setFullHint] = useState<{ x: number; y: number } | null>(null)
+  // 「减少动态效果」下全局把动画压成 0.001ms,onAnimationEnd 会立刻卸掉胶囊 → 那档改用计时器,CSS 那边去掉动画
+  useEffect(() => {
+    if (!fullHint || !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return
+    const id = window.setTimeout(() => setFullHint(null), 3000)
+    return () => window.clearTimeout(id)
+  }, [fullHint])
+  const fullRef = useRef(full)
+  fullRef.current = full
+  const alive = useRef(true)
+  useEffect(() => {
+    alive.current = true
+    return () => {
+      alive.current = false
+    }
+  }, [])
+  const toggleFull = useCallback((): void => {
+    if (full) {
+      if (document.fullscreenElement) void document.exitFullscreen().catch(() => {})
+      setFull(false)
+      return
+    }
+    const r = hostRef.current?.querySelector('[data-view="full"]')?.getBoundingClientRect()
+    setFullHint(r ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : { x: window.innerWidth / 2, y: window.innerHeight - 36 })
+    setFull(true)
+    // ponytail: 拿不到系统全屏(安卓 WebView / 权限)时退化成只盖住 App 外框,不报错。
+    // 请求是异步的:落地前用户已经退出 / 关掉了白板,落地后马上退回去,别把窗口留在全屏里
+    void document.documentElement.requestFullscreen?.()
+      .then(() => {
+        if (!alive.current || !fullRef.current) void document.exitFullscreen().catch(() => {})
+      })
+      .catch(() => {})
+  }, [full])
+  useEffect(() => {
+    if (!full) return
+    const onChange = (): void => {
+      if (!document.fullscreenElement) setFull(false)
+    }
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return
+      // 写字 / 填数字时的 Esc 是「结束编辑」,不是退全屏(走查 P2-2)
+      if (isTextEntry(e.target)) return
+      if (document.fullscreenElement) void document.exitFullscreen().catch(() => {})
+      setFull(false)
+    }
+    document.addEventListener('fullscreenchange', onChange)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('fullscreenchange', onChange)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [full])
+  // 卸载(关标签 / 切 Space)时还在全屏 → 把窗口也放回来
+  useEffect(() => () => {
+    if (fullRef.current && document.fullscreenElement) void document.exitFullscreen().catch(() => {})
+  }, [])
+  const phone = api?.getEditorInterface().formFactor === 'phone'
 
   // 合并按钮记住「最近用过的成员」。键盘直接按 r/d/o/a/l 也算 —— 所以只能盯 appState,不能只在点击时记。
   useEffect(() => {
@@ -394,6 +513,41 @@ export default function ExcalidrawCanvas({
     [],
   )
 
+  /** 打开时适配全图(对标 Obsidian 插件缺省开的 zoomToFitOnOpen),每次挂载只做一次。
+   *  - 挂 onInitialize 而不是 onExcalidrawAPI:后者在引擎装载初始内容**之前**就来,那时场景还是空的。
+   *    再晚一帧:onInitialize 与装载后的第一次 onChange 同在一次 didUpdate 里且排在它前面,
+   *    等一帧 bounds 才是真的,下面 onScrollChange → clampView 用的就是对的页带,不会把适配结果拽走。
+   *  - 后台 tab 里挂载(画布 0×0)时先挂着,等 ResizeObserver 看见真尺寸再补。⚠️ 判尺寸看 DOM,别看
+   *    appState.width/height:引擎拿窗口尺寸当初值,DOM 是 0×0 时又不更新它 —— 按那个假尺寸适配,
+   *    露出来以后内容被裁(Codex 评审抓到)。
+   *  - 空白板不动:原点在左上、100%,就是新建时该有的样子。
+   *  - 纸张:适配到页带第一页,算法与 clampViewport 同一套余量;结果先过一遍钳制再下发,
+   *    所以随后那次 clampView 必然是空操作 —— 两边不会互相拉扯。 */
+  const fitState = useRef<'loading' | 'pending' | 'done'>('loading')
+  const tryFit = useCallback(
+    (a: ExcalidrawImperativeAPI) => {
+      const host = hostRef.current
+      if (fitState.current !== 'pending' || !host?.offsetWidth || !host.offsetHeight) return
+      const st = a.getAppState()
+      fitState.current = 'done'
+      const els = a.getSceneElements()
+      const b = elementBounds(els)
+      const page = pageRect(settings, pageRange(settings, b).min)
+      if (!page) {
+        if (els.length) fitInsets(a, host, st)
+        return
+      }
+      const zoom = clampNum(Math.min(st.width / (page.w * (1 + 2 * MARGIN)), st.height / (page.h * (1 + 2 * MARGIN))), 0.1, 2)
+      const v = { scrollX: (st.width / zoom - page.w) / 2 - page.x, scrollY: (st.height / zoom - page.h) / 2 - page.y, zoom, width: st.width, height: st.height }
+      const c = clampViewport(settings, v, b) ?? v
+      a.updateScene({
+        appState: { scrollX: c.scrollX, scrollY: c.scrollY, zoom: { value: c.zoom as AppState['zoom']['value'] } },
+        captureUpdate: CaptureUpdateAction.NEVER,
+      })
+    },
+    [settings],
+  )
+
   /** 换排布方向 = **搬用户内容**:每个元素跟着它所在的那一页走,页内偏移不变。
    *  进 undo 栈(IMMEDIATELY),后悔了 ⌘Z 就能回去。首次挂载不跑 —— 只认真正的切换。 */
   const prevFlow = useRef(settings.flow)
@@ -455,19 +609,27 @@ export default function ExcalidrawCanvas({
     const ro = new ResizeObserver(() => {
       syncZoom() // 从隐藏变可见的那一下:currentCSSZoom 这才有真值(见上面那条 effect 的长注释)
       layout(clampView(api.getAppState()))
+      // 引擎自己的 ResizeObserver 未必排在这条前面,等一帧它的 width/height 才是新的
+      if (fitState.current === 'pending') requestAnimationFrame(() => tryFit(api))
     })
     ro.observe(el)
     return () => ro.disconnect()
-  }, [api, layout, clampView, syncZoom])
+  }, [api, layout, clampView, syncZoom, tryFit])
 
   return (
-    <div className="amx-boardhost" ref={hostRef}>
+    <div className="amx-boardhost" ref={hostRef} data-full={full || undefined}>
       <Excalidraw
         onExcalidrawAPI={setApi}
         initialData={initialData}
         theme={theme}
         langCode={langCode}
-        viewModeEnabled={viewMode}
+        // ⚠️ 只在分享页传 true,其余传 undefined:prop 一旦有值(哪怕 false)就是受控,引擎的「查看模式」
+        //    动作(Option+R / 右键菜单)predicate 要求 `typeof props.viewModeEnabled === 'undefined'`,整个失效。
+        viewModeEnabled={viewMode || undefined}
+        onInitialize={(a) => {
+          fitState.current = 'pending'
+          requestAnimationFrame(() => tryFit(a))
+        }}
         // serializeAsJSON 出的正是 .excalidraw 的规范形状({type,version,source,elements,appState,files}),
         // 且自带 appState 裁剪(去掉 collaborators/选中态等瞬时字段)—— 别自己拼,拼不全也裁不干净。
         // 顺带一提:裁剪把 scrollX/zoom 也剪掉了,所以视口纠偏不会额外触发写盘。
@@ -482,11 +644,20 @@ export default function ExcalidrawCanvas({
           // 自建工具栏/面板是 portal 出去的,拿不到引擎的 React 数据流 —— 这里回捞那一小片。
           // 只比对三个字段,画一笔的过程中不会有一次重渲(理由见 boardUi.ts)。
           const so = appState.currentStrokeOptions
+          grid.onAppState(appState)
           const next: BoardUi = {
             tool: appState.activeTool.type,
             locked: !!appState.activeTool.locked,
             snapshot: (appState.resetCustomPen as ObsidianResetCustomPenState | null) ?? null,
             capRound: so ? !!so.options?.start?.cap : null,
+            grid: appState.gridModeEnabled,
+            gridSize: appState.gridSize,
+            gridStep: appState.gridStep,
+            snap: appState.objectsSnapModeEnabled,
+            view: appState.viewModeEnabled,
+            zen: appState.zenModeEnabled,
+            pen: appState.penMode,
+            penDetected: appState.penDetected,
           }
           setUi((cur) => (sameBoardUi(cur, next) ? cur : next))
           onSceneChange(serializeAsJSON(elements, appState, files, 'local'))
@@ -504,6 +675,21 @@ export default function ExcalidrawCanvas({
           <MainMenu.DefaultItems.ClearCanvas />
           <MainMenu.Separator />
           {/* 主题由 App 统一下发(theme prop),这里只要那颗切换按钮,不开 fork 的「跟随系统」档 */}
+          {/* 手机档没有底部视图岛的位置(引擎的手机工具栏占着),三个开关进这里;禅模式引擎本就不给手机 */}
+          {phone && !viewMode && (
+            <>
+              <MainMenu.Item icon={<Grid3x3 size={16} />} selected={grid.model.on} onSelect={() => grid.set({ on: !grid.model.on })}>
+                {t('boardview.grid')}
+              </MainMenu.Item>
+              <MainMenu.Item icon={<Magnet size={16} />} selected={ui.snap} onSelect={() => toggleView('snap')}>
+                {t('boardview.snap')}
+              </MainMenu.Item>
+              <MainMenu.Item icon={<Eye size={16} />} selected={ui.view} onSelect={() => toggleView('view')}>
+                {t('boardview.view')}
+              </MainMenu.Item>
+              <MainMenu.Separator />
+            </>
+          )}
           <MainMenu.DefaultItems.ToggleTheme allowSystemTheme={false} />
           <MainMenu.DefaultItems.ChangeCanvasBackground />
           <MainMenu.Separator />
@@ -511,7 +697,26 @@ export default function ExcalidrawCanvas({
               <BoardPanel settings={settings} onSettings={onSettings} uiMode={uiMode} onUiMode={setBoardUiMode} />
           </MainMenu.ItemCustom>
         </MainMenu>
+        {!viewMode && !phone && (
+          <Footer>
+            <ViewIsland
+              ui={ui}
+              grid={grid}
+              onToggle={toggleView}
+              full={full}
+              onFull={toggleFull}
+            />
+          </Footer>
+        )}
       </Excalidraw>
+      {/* 挂进引擎的 .excalidraw 根:胶囊的底色 / 外圈 / 投影都是引擎 token,只在那棵子树里有值 */}
+      {full && fullHint && root &&
+        createPortal(
+          <button type="button" className="amx-fullhint" style={{ left: fullHint.x, top: fullHint.y }} onClick={toggleFull} onAnimationEnd={() => setFullHint(null)}>
+            {t('boardview.exitFull')} <span className="amx-fullhint-kbd">Esc</span>
+          </button>,
+          root,
+        )}
       {/* 自建工具胶囊。塞进引擎那张已经定好位的 Island(`.App-toolbar`)里,它自己的按钮用 CSS 藏掉 ——
           定位/圆角/投影/HintViewer 全部白捡。引擎的工具栏为什么不能直接改:见 BoardToolbar.tsx。 */}
       {toolbarAnchor && createPortal(<BoardToolbar api={api} ui={ui} refs={toolRefs} />, toolbarAnchor)}
@@ -636,14 +841,7 @@ function BoardPanel({
           </div>
         </>
       )}
-      <div className="amx-bs-h">{t('excalicanvas.grid')}</div>
-      <GridRow label={t('excalicanvas.gridH')} value={settings.gridH} onChange={(v) => patch({ gridH: v })} />
-      <GridRow label={t('excalicanvas.gridV')} value={settings.gridV} onChange={(v) => patch({ gridV: v })} />
-      <OpacityRow
-        value={settings.gridOpacity}
-        disabled={settings.gridH <= 0 && settings.gridV <= 0}
-        onCommit={(v) => patch({ gridOpacity: v })}
-      />
+      {/* 网格的设置 2026-10-17 搬去了底部视图岛的网格浮层(方案 A),这里只剩纸张与面板形态 */}
       <div className="amx-bs-h">{t('excalicanvas.uiMode')} <span className="amx-bs-note">{t('excalicanvas.allBoards')}</span></div>
       <div className="amx-bs-row">
         {UI_MODES.map((m) => (
@@ -671,75 +869,5 @@ function ToolbarResetRow(): React.JSX.Element | null {
         </button>
       </div>
     </>
-  )
-}
-
-/** 网格淡浓。拖动时直接改这几层的 opacity 拿实时预览,**松手才写盘** —— 每动一格写一次文件太蠢。 */
-function OpacityRow({ value, disabled, onCommit }: { value: number; disabled: boolean; onCommit: (v: number) => void }): React.JSX.Element {
-  const { t } = useI18n()
-  const [v, setV] = useState(value)
-  useEffect(() => setV(value), [value])
-  return (
-    <label className="amx-bs-check">
-      <span className="amx-bs-lbl">{t('excalicanvas.opacity')}</span>
-      <input
-        className="amx-bs-range"
-        type="range"
-        min={10}
-        max={100}
-        step={5}
-        disabled={disabled}
-        value={v}
-        onChange={(e) => {
-          const n = Number(e.target.value)
-          setV(n)
-          // 只改自己这块画布的层(同时开着别的白板时别串台)
-          for (const g of e.currentTarget.closest('.excalidraw')?.querySelectorAll<HTMLElement>('.amx-grid') ?? []) {
-            g.style.opacity = n >= 100 ? '' : String(n / 100)
-          }
-        }}
-        onPointerUp={() => onCommit(v)}
-        onKeyUp={() => onCommit(v)}
-      />
-      <span className="amx-bs-note">{v}%</span>
-    </label>
-  )
-}
-
-/** 开关与间距合一(0 = 关)。关掉时把间距留在本地 state 里,再打开还是原来那个值。 */
-function GridRow({ label, value, onChange }: { label: string; value: number; onChange: (v: number) => void }): React.JSX.Element {
-  const [txt, setTxt] = useState(String(value || DEFAULT_STEP))
-  useEffect(() => {
-    if (value > 0) setTxt(String(value))
-  }, [value])
-  const commit = (): void => {
-    const n = Math.round(Number(txt))
-    const v = Number.isFinite(n) && n > 0 ? clampNum(n, 4, 400) : DEFAULT_STEP
-    setTxt(String(v))
-    if (value > 0 && v !== value) onChange(v)
-  }
-  return (
-    <label className="amx-bs-check">
-      <input
-        type="checkbox"
-        checked={value > 0}
-        onChange={(e) => onChange(e.target.checked ? clampNum(Math.round(Number(txt)) || DEFAULT_STEP, 4, 400) : 0)}
-      />
-      <span className="amx-bs-lbl">{label}</span>
-      <input
-        className="amx-bs-num"
-        type="number"
-        min={4}
-        max={400}
-        disabled={value <= 0}
-        value={txt}
-        onChange={(e) => setTxt(e.target.value)}
-        onBlur={commit}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') commit()
-        }}
-      />
-      <span className="amx-bs-note">px</span>
-    </label>
   )
 }

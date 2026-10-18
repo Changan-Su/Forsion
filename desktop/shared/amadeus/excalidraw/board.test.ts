@@ -13,6 +13,11 @@ import {
   DEFAULT_BOARD,
   MARGIN,
   PAGE_GAP,
+  engineDirection,
+  engineGridColor,
+  legacyToEngine,
+  overlayFields,
+  overlayModel,
   type BoardSettings,
   type Viewport,
 } from './board'
@@ -194,5 +199,38 @@ describe('多页', () => {
     const out = writeBoard(src, set({ paper: 'A5', flow: 'h' }))
     expect(readBoard(out).flow).toBe('h')
     expect(writeBoard(src, set({ flow: 'h' }))).not.toMatch(/forsion-paper-flow/)
+  })
+})
+
+describe('grid routing', () => {
+  it('方向进 frontmatter,方格不写键,乱值回落方格', () => {
+    expect(readBoard(writeBoard(src, set({ gridDir: 'h' }))).gridDir).toBe('h')
+    expect(readBoard(writeBoard(src, set({ gridDir: 'v' }))).gridDir).toBe('v')
+    expect(writeBoard(src, set({ gridDir: 'both' }))).not.toMatch(/forsion-grid-dir/)
+    const bad = writeBoard(src, DEFAULT_BOARD).replace(/^---\n/, '---\nforsion-grid-dir: diagonal\n')
+    expect(readBoard(bad).gridDir).toBe('both')
+  })
+
+  it('覆盖层 ↔ 模型往返', () => {
+    for (const m of [{ on: true, size: 24, dir: 'both' }, { on: true, size: 30, dir: 'h' }, { on: true, size: 12, dir: 'v' }] as const) {
+      expect(overlayModel(overlayFields(m))).toEqual(m)
+    }
+    expect(overlayFields({ on: false, size: 24, dir: 'h' })).toEqual({ gridH: 0, gridV: 0 })
+    expect(overlayModel({ gridH: 0, gridV: 0 }).on).toBe(false)
+  })
+
+  it('老网格转引擎网格:没有 / 不等距 / 可转 三种,且夹进引擎的 4–100', () => {
+    expect(legacyToEngine({ gridH: 0, gridV: 0 })).toBeUndefined()
+    expect(legacyToEngine({ gridH: 20, gridV: 30 })).toBeNull()
+    expect(legacyToEngine({ gridH: 20, gridV: 20 })).toEqual({ size: 20, dir: 'both' })
+    expect(legacyToEngine({ gridH: 0, gridV: 16 })).toEqual({ size: 16, dir: 'v' })
+    expect(legacyToEngine({ gridH: 300, gridV: 0 })).toEqual({ size: 100, dir: 'h' })
+  })
+
+  it('方向与淡浓映射到引擎', () => {
+    expect(engineDirection('h')).toEqual({ horizontal: true, vertical: false })
+    expect(engineDirection('both')).toEqual({ horizontal: true, vertical: true })
+    expect(engineGridColor(100)).toEqual({ Bold: 'rgba(204, 204, 204, 1)', Regular: 'rgba(229, 229, 229, 1)' })
+    expect(engineGridColor(1).Regular).toBe('rgba(229, 229, 229, 0.1)')
   })
 })
