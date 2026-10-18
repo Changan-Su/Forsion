@@ -232,18 +232,21 @@ async function cloudCall(path: string, method = 'GET', body?: unknown): Promise<
   const seq = ++sentSeq, epoch = authEpoch
   try { return { ...(await f({ path, method, ...(body !== undefined ? { body } : {}) })), seq, epoch } } catch { return null }
 }
-/** 回包 → 状态。401 = 没登录 / 令牌失效:定义留着展示(停用的去掉),进度与领取清掉(换号的人看不到上一位的)。
- *  返回是否拿到了列表(过时的回包不落状态,但照样算拿到)。 */
-function absorb(r: CloudReply | null): boolean {
+/** 没登录 / 换号:定义留着展示(停用的去掉),进度与领取清掉(换号的人看不到上一位的) */
+function clearAccount(): void {
+  const { list } = useAchievements.getState().cloud
+  setCloud({ signedIn: false, list: list.filter((a) => a.enabled !== false).map((a) => ({ ...a, progress: 0, claimed: null })) })
+}
+/** 回包 → 状态。返回是否拿到了列表:'fresh' = 已落状态;'stale' = 拿到了但比已落的旧(或换号前发出的),没落。 */
+function absorb(r: CloudReply | null): 'fresh' | 'stale' | false {
   if (!r) return false
   const fresh = r.epoch === authEpoch && r.seq > appliedSeq
   if (fresh) appliedSeq = r.seq
-  if (r.status === 401) {
-    const { list } = useAchievements.getState().cloud
-    if (fresh) setCloud({ signedIn: false, list: list.filter((a) => a.enabled !== false).map((a) => ({ ...a, progress: 0, claimed: null })) })
-    return false
+  if (r.status === 401) { if (fresh) clearAccount(); return false }
+  if (r.status === 200 && Array.isArray(r.json?.achievements)) {
+    if (fresh) setCloud({ signedIn: true, list: r.json.achievements })
+    return fresh ? 'fresh' : 'stale'
   }
-  if (r.status === 200 && Array.isArray(r.json?.achievements)) { if (fresh) setCloud({ signedIn: true, list: r.json.achievements }); return true }
   return false
 }
 
@@ -275,7 +278,10 @@ function cloudCounts(): Record<string, number> | null {
 export async function refreshCloudAchievements(): Promise<void> {
   const report = (counts: Record<string, number>) => cloudCall('/achievements/progress', 'POST', { deviceId: deviceId(), counts })
   const counts = cloudCounts()
-  const got = absorb(await (counts ? report(counts) : cloudCall('/achievements/me')))
+  let first = await (counts ? report(counts) : cloudCall('/achievements/me'))
+  // 进度被拒(这个账号的设备数满了):照样拉一次列表,别的设备上的进度 / 领取 / 后台改动还要看得到
+  if (counts && first?.status === 429) first = await cloudCall('/achievements/me')
+  const got = absorb(first)
   const late = !counts && got ? cloudCounts() : null
   if (late) absorb(await report(late))
 }
@@ -293,7 +299,10 @@ const CLAIM_ERRORS = new Set<string>(['not_completed', 'expired', 'not_found', '
 /** 领取云端成就。成功后状态已换成服务端回的列表;失败回错误类别(界面按它取双语文案,不显示服务端的中文 detail)并重拉一次对齐服务端。 */
 export async function claimCloudAchievement(id: string): Promise<{ ok: true } | { ok: false; reason: ClaimError }> {
   const r = await cloudCall(`/achievements/${encodeURIComponent(id)}/claim`, 'POST', { device: deviceLabel() })
-  if (absorb(r)) return { ok: true }
+  const got = absorb(r)
+  // 领到了,但回包比已落的旧(之后发出的刷新先回来、读到的是领取前):再拉一次,别让界面停在「可领取」
+  if (got === 'stale') void refreshCloudAchievements()
+  if (got) return { ok: true }
   if (r && r.status !== 401) void refreshCloudAchievements()
   const code = r?.json?.error
   return { ok: false, reason: !r || !r.status ? 'network' : r.status === 401 ? 'signed_out' : CLAIM_ERRORS.has(code) ? code : 'unknown' }
@@ -306,7 +315,7 @@ export function initCloudAchievements(): void {
   if (cloudInited || typeof window === 'undefined' || !window.tangu?.cloudFetch) return
   cloudInited = true
   setTimeout(() => { void refreshCloudAchievements() }, 4000)
-  window.tangu.onAuthChanged?.(() => { authEpoch++; void refreshCloudAchievements() })
+  window.tangu.onAuthChanged?.(() => { authEpoch++; clearAccount(); void refreshCloudAchievements() })
   let last = Date.now()
   window.addEventListener('focus', () => { if (Date.now() - last > 60_000) { last = Date.now(); void refreshCloudAchievements() } })
 }

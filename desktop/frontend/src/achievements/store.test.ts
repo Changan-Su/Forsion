@@ -225,18 +225,44 @@ describe('云端成就', () => {
     expect(useAchievements.getState().cloud.list[0].claimed).toEqual({ device: 'Mac', at: 'now' })
   })
 
+  it('领取回包比之后发出的刷新晚到:不落旧包,但再拉一次,界面不停在「可领取」', async () => {
+    useAchievements.setState({ cloud: { signedIn: true, list: [def({ progress: 5 })] } })
+    const gates: Array<(v: unknown) => void> = []
+    cloudFetch.mockImplementation(() => new Promise((ok) => gates.push(ok)))
+    const claim = claimCloudAchievement('chat-5')
+    const later = refreshCloudAchievements()
+    gates[1]({ status: 200, json: { achievements: [def({ progress: 5 })] } }) // 刷新先回来,读到的是领取前
+    await later
+    gates[0]({ status: 200, json: { claimed: true, alreadyClaimed: false, achievements: [def({ progress: 5, claimed: { device: 'Mac', at: 'now' } })] } })
+    expect(await claim).toEqual({ ok: true })
+    expect(cloudFetch).toHaveBeenCalledTimes(3)
+    gates[2]({ status: 200, json: { achievements: [def({ progress: 5, claimed: { device: 'Mac', at: 'now' } })] } })
+    await vi.waitFor(() => expect(hasClaimable(useAchievements.getState())).toBe(false))
+  })
+
+  it('进度被拒(设备数满了 429):照样拉一次列表', async () => {
+    track('chat.send', 2)
+    useAchievements.setState({ cloud: { signedIn: true, list: [def()] } })
+    replies.push({ status: 429, json: { error: 'too_many_devices' } }, { status: 200, json: { achievements: [def({ progress: 7 })] } })
+    await refreshCloudAchievements()
+    expect(cloudFetch.mock.calls.map((c) => c[0].path)).toEqual(['/achievements/progress', '/achievements/me'])
+    expect(useAchievements.getState().cloud.list[0].progress).toBe(7)
+  })
+
   it('换号前发出的回包丢掉(A 的进度别落到 B 头上)', async () => {
     vi.useFakeTimers()
     let authChanged = () => {}
     const gates: Array<(v: unknown) => void> = []
     cloudFetch.mockImplementation(() => new Promise((ok) => gates.push(ok)))
     vi.stubGlobal('window', { tangu: { cloudFetch, platform: 'darwin', onAuthChanged: (cb: () => void) => { authChanged = cb } }, addEventListener() {} })
+    useAchievements.setState({ cloud: { signedIn: true, list: [def({ progress: 9, claimed: { device: 'Mac', at: 'x' } })] } })
     initCloudAchievements()
     const stale = refreshCloudAchievements() // 账号 A 发出
-    authChanged() // 换成 B,重拉
+    authChanged() // 换成 B,重拉;新号的请求还没回来,A 的进度 / 领取当场清掉
+    expect(useAchievements.getState().cloud).toEqual({ signedIn: false, list: [def()] })
     gates[0]({ status: 200, json: { achievements: [def({ progress: 9 })] } })
     await stale
-    expect(useAchievements.getState().cloud.list).toEqual([])
+    expect(useAchievements.getState().cloud.list[0].progress).toBe(0)
     gates[1]({ status: 200, json: { achievements: [def({ progress: 1 })] } })
     await vi.advanceTimersByTimeAsync(1)
     expect(useAchievements.getState().cloud.list.map((a) => a.progress)).toEqual([1])
