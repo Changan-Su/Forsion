@@ -10,7 +10,7 @@
  *  G7 输入框聚焦时字阵不被虚化(聚焦景深开着也一样)
  *  G8 切到暗色,字跟着换色(不用重开主页)
  *  G9 「动态效果」关掉 = 打字、点空白处都不响应
- *  G10 壁纸面板里四张主题背景,字阵那张缩略图有字
+ *  G10 壁纸面板里五张主题背景,字阵那张缩略图有字
  *  G11 ⚠️从壁纸面板里选字阵(面板开着时聚焦景深把背景层放大 1.045、正在动画):画布尺寸仍按未变换的可见区域算
  *      (评审抓到的:按 getBoundingClientRect 定尺寸会大 4.5%,之后 ResizeObserver 不再来,字一直糊、涟漪落点偏)
  * 另存截图:亮 / 暗 / 青绿 · 暗的静置与打字、壁纸面板。
@@ -113,7 +113,7 @@ async function main() {
       if (c && c.width) { const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; for (let i = 3; i < d.length; i += 4) if (d[i]) n++ }
       return { presets, n }
     })
-    check('G10 壁纸面板四张主题背景,字阵缩略图有字', thumbs.presets.join() === 'orbit,path,paper,glyph' && thumbs.n > 50, JSON.stringify(thumbs))
+    check('G10 壁纸面板五张主题背景,字阵缩略图有字', thumbs.presets.join() === 'orbit,path,paper,rings,glyph' && thumbs.n > 50, JSON.stringify(thumbs))
     await shot('sheet-light')
     await setLook('dark'); await win.waitForTimeout(400); await shot('sheet-dark')
     await win.keyboard.press('Escape'); await win.mouse.click(W - 40, H - 30); await win.waitForTimeout(1500)

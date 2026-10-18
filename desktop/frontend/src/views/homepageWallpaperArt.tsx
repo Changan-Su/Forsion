@@ -1,5 +1,5 @@
 /**
- * 主页「主题背景」的四张图:星轨 / 日行 / 素笺 / 字阵(方案页 docs/ToBeImproved/主页插件化与美化方案_2026-10-17/wallpaper.html、motion.html)。
+ * 主页「主题背景」的五张图:星轨 / 日行 / 素笺 / 扶桑环 / 字阵(方案页 docs/ToBeImproved/主页插件化与美化方案_2026-10-17/wallpaper.html、motion.html)。
  *
  * 颜色全取 Genesis token,亮暗与主题色自动跟。⚠️面只用 --bg / --bg-card 台阶,--accent-ink 只画细线和点:
  * 大面积 accent 雾在黑白配色(cream,accent = #1c1c1c)下就是一团灰斑(方案里删掉的晨光 / 流光就死在这)。
@@ -158,6 +158,8 @@ function Glyphs({ thumb, still }: { thumb: boolean; still: boolean }) {
 export function HomeWallpaperArt({ preset, hour, minute, thumb = false, still = false }: { preset: HomepageThemePreset; hour: number; minute: number; thumb?: boolean; still?: boolean }) {
   // 字阵不按 1600×1000 裁:字格直接铺满可见区域
   if (preset === 'glyph') return <Glyphs thumb={thumb} still={still} />
+  // 扶桑环:2.13.4 的旧图,纯 CSS(homepage.css 的 .hpw-rings),10-18 用户要回来的
+  if (preset === 'rings') return <div className="hpw-rings" aria-hidden />
   const grain = thumb ? 0.4 : 1
   return (
     <div className="hpw-canvas" aria-hidden>
