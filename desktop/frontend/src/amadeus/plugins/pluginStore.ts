@@ -1877,6 +1877,25 @@ export const usePluginStore = create<PluginState>((set, get) => {
                   },
                 }
               : {}),
+            // 新对话输入区(2026-10-18,主页插件化 S2):探针给得出才注入。发送归宿主 —— 插件改不了要发的内容(draft 只读),
+            // 所以和 mountChat 一样不设能力闸;回调在插件停用后不再调(beforeSend 不调 = 宿主照样发,用户那一下不丢)。
+            ...(readTangu()?.mountComposer
+              ? {
+                  mountComposer: (el: HTMLElement, o?: import('./tanguSeam').TanguComposerOptions): import('./tanguSeam').TanguComposerMount => {
+                    if (!(el instanceof HTMLElement)) throw new TypeError('mountComposer needs an HTMLElement')
+                    const probe = readTangu()
+                    if (!ctxAlive() || !probe?.mountComposer) return { focus() {}, startVoice() {}, draft: () => '', dispose() {} }
+                    const onFocusChange = o?.onFocusChange, beforeSend = o?.beforeSend
+                    const mounted = probe.mountComposer(el, {
+                      call: o?.call === true,
+                      ...(typeof onFocusChange === 'function' ? { onFocusChange: (f: boolean) => { if (ctxAlive()) onFocusChange(f) } } : {}),
+                      ...(typeof beforeSend === 'function' ? { beforeSend: () => (ctxAlive() ? beforeSend() : undefined) } : {}),
+                    })
+                    const dispose = scope.own('mount', () => mounted.dispose(), 'composer')
+                    return { focus: () => { if (ctxAlive()) mounted.focus() }, startVoice: () => { if (ctxAlive()) mounted.startVoice() }, draft: () => (ctxAlive() ? mounted.draft() : ''), dispose }
+                  },
+                }
+              : {}),
             // 一次性补全(G3-07)与翻译:探针给得出才注入。插件停用 → 关账中止在飞请求并 reject。
             // translate 走引擎现成的 translate 动作,模型取「翻译」模型槽(tanguProbe.complete 里解析),不跟主对话模型。
             ...(readTangu()?.complete

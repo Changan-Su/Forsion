@@ -124,6 +124,27 @@ export interface TanguChatMountOptions {
  *  视图卸了重挂的那一拍里投的引用,新挂上的对话照样接得住。 */
 export const pluginChatType = (o: Pick<TanguChatMountOptions, 'owner' | 'folder'>): string => `plugin-chat:${o.owner}:${o.folder ?? ''}`
 
+/** `mountComposer` 入参(2026-10-18+,主页插件化 S2)。新对话输入区整块挂进插件的 DOM;建会话、切到 Tangu、发送都由宿主做。 */
+export interface TanguComposerOptions {
+  /** 输入区(含模型 / 模式 / 附件这些控件和它们的菜单)获得 / 失去焦点。主页拿它做聚焦景深。 */
+  onFocusChange?(focused: boolean): void
+  /** 宿主发送之前先等它(插件放退场动效)。明确回 false = 这次不发;抛错、或插件这时被停用 / 视图被卸,宿主照样发。 */
+  beforeSend?(): Promise<boolean | void> | boolean | void
+  /** 要不要通话按钮。给了 = 挂载时所在的 Space 是当前 Space 时才画(同一时刻只该有一个通话接收方)。 */
+  call?: boolean
+}
+
+/** `mountComposer` 的句柄。 */
+export interface TanguComposerMount {
+  /** 把光标放进输入框。 */
+  focus(): void
+  /** 开始录音(按的就是输入区里那颗话筒)。要在用户的点击处理里同步调:麦克风权限只认用户那一下。 */
+  startVoice(): void
+  /** 输入框里此刻的草稿(只读;草稿归宿主)。 */
+  draft(): string
+  dispose(): void
+}
+
 /** `mountChat` 的句柄。同步返回;会话是异步接上的,`quote` / `prefill` 在接上之前调用也不丢。 */
 export interface TanguChatMount {
   /** 会话接上(重连或新建)→ ok + sessionId;后端没连上 / Agent 不存在 / 建会话失败 → ok:false(不抛)。 */
@@ -180,6 +201,8 @@ export interface TanguProbe {
   /** 把原生对话挂进插件自己的 DOM(2026-10-04+):一个(插件, 工作目录)接一条会话,本机记住、下次重连。
    *  只在有 Tangu 对话能力的宿主上给;台架假探针 / 旧宿主不给 = 插件退回 startChat。 */
   mountChat?(el: HTMLElement, o: TanguChatMountOptions): TanguChatMount
+  /** 新对话输入区(ctx.tangu.mountComposer)。只在有 Tangu 对话能力的宿主上给。 */
+  mountComposer?(el: HTMLElement, o: TanguComposerOptions): TanguComposerMount
   /** Native document actions only; never exported into the plugin context. */
   submitDocumentTask?(o: {
     key: string; agent?: string; prompt: string; vaultRoot: string

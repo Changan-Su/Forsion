@@ -1507,6 +1507,15 @@ export interface PluginContext {
      *    禁用 / 重载时宿主统一收掉。`el` 要有确定的高度(对话撑满它)。
      *  旧宿主 / 没有对话能力的宿主没有:`ctx.tangu?.mountChat`,缺席时退回 `startChat`。 */
     mountChat?(el: HTMLElement, o?: { agent?: string; folder?: string; title?: string }): import('./tanguSeam').TanguChatMount
+    /** 把「新对话」输入区整块挂进 `el`(2026-10-18+):就是主页那一套 —— Agent 条、项目栏、运行位置、额外文件夹、
+     *  模型 / 模式 / 附件 / 引用 / 语音 / 技能。用户按发送 → 宿主建新会话、切到 Tangu、发出去;插件改不了要发的内容(`draft()` 只读)。
+     *  和 `ui.mountChatBox` 的分工:那个是插件自己的草稿、提交归插件;这个提交归宿主。
+     *  - `onFocusChange(focused)`:输入区(连同它的菜单)获得 / 失去焦点。
+     *  - `beforeSend()`:宿主发送前先等它(放退场动效);明确回 `false` = 这次不发,抛错照样发。同一时刻只放一次发送。
+     *  - `call: true`:要通话按钮;只在挂载时所在的 Space 是当前 Space 时画。
+     *  - 句柄:`focus()`、`startVoice()`(在点击处理里同步调)、`draft()`(只读)、`dispose()`(之后 `el` 立刻还给你)。
+     *  没有 Tangu 对话能力的宿主 / 旧宿主没有:`ctx.tangu?.mountComposer`;没有 Tangu Space 时发送不出去(按钮按了不动)。 */
+    mountComposer?(el: HTMLElement, o?: import('./tanguSeam').TanguComposerOptions): import('./tanguSeam').TanguComposerMount
     /** 一次性文本补全(2026-09-28+,评审 G3-07):引擎 `POST /agent/inline`,无工具、不落库、不进任何会话。
      *  **收编插件直连 `/agent/runs` 的做法** —— 那条是 Agent 的 run(带工具、落会话、8192 字符上限),拿来做
      *  「改写这段」既重又危险。`prompt` 是给模型的指令;`selection` / `before` / `after` 是正文上下文(按数据对待,

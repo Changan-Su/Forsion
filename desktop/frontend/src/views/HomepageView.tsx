@@ -5,7 +5,7 @@
  *  · **标志性标题** 「Forsion is All You Need」,手写体(随包 Dancing Script 子集,见 assets/fonts/README)。
  *    旧版这句住在 CardZone 的 title 区(SloganCard),这里做成固定排版。
  *  · **标题区** 时钟 + 日期 + 问候(登录名来自 `window.tangu.authStatus`)。
- *  · **输入区** 直接复用 Tangu Chat View 的 `Composer2`:模型、模式、附件、引用、语音和命令
+ *  · **输入区** `newChatComposer.tsx` 的 NewChatComposer(插件经 ctx.tangu.mountComposer 挂的是同一份),里面就是 Tangu Chat View 的 `Composer2`:模型、模式、附件、引用、语音和命令
  *    一条不少;提交后切到 Tangu Space 并强制建新会话,不再兼任浏览器搜索。
  *  · **Space 收纳架** 旧版底部 Dock 那排 app,在 Genesis 里对应的东西就是 Space;
  *    应用市场、成就和用户额外钉住的 Space 住在独立前置区,竖线后的普通区才与 Ribbon 排序同步。
@@ -20,7 +20,7 @@
  * IndexedDB 自定义原图是三个可切换来源;没有图片时也由 Genesis 主题 token 生成可取样的简约舞台。
  * 旧版窗口管理器与账号角仍不搬;浏览器搜索也不再回来。
  */
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import {
   DndContext, DragOverlay, KeyboardSensor, PointerSensor, closestCenter, pointerWithin,
@@ -34,27 +34,17 @@ import {
   ArrowUp, Check, FolderMinus, FolderOpen, FolderPlus, Grid2X2, Image, LogOut,
   Mic, Pencil, RefreshCw, Upload, X,
 } from 'lucide-react'
-import { setActiveSpace, useSpaceStore, useRibbonStore, useWorkspace, label, moveTo, OverlayAt, useNativeChromeSpaces, useNativeSheetMenu, presentNativeChecklist, getDetachApi, WINDOW_SPACE_ID, type SheetMenuItem } from '@lcl/engine'
+import { setActiveSpace, useSpaceStore, useRibbonStore, label, moveTo, OverlayAt, useNativeChromeSpaces, useNativeSheetMenu, presentNativeChecklist, getDetachApi, WINDOW_SPACE_ID, type SheetMenuItem } from '@lcl/engine'
 import { CtxMenuButtons } from '../components/CtxMenuButtons'
 import { rankIds, reorderBase, unionOrder } from '@lcl/engine/ribbonRegistry'
 import type { SpaceDefinition, RibbonFolder, RibbonItem, ViewProps } from '@lcl/engine'
 import { askString } from '@amadeus/components/askString'
-import { useApp, newChatModelId, stickyDefaults, withAmadeusWorkspace, applyPreset, newSessionPreset, resolveNewSessionWorkspace } from '../stores/appStore'
-import { settleModes } from '../stores/projectSettings'
-import { currentPlatform } from '../services/agentRunService'
-import type { Attachment } from '../types'
-import { usePageStore } from '../amadeus/store/pageStore'
+import { useApp } from '../stores/appStore'
 import { useAmadeusPrefs } from '../amadeusPrefs'
 import { usePluginStore } from '../amadeus/plugins/pluginStore'
 import { allSeries, useAchievements } from '../achievements/store'
 import { displaySessionTitle } from '../sessionTitle'
-import { ProjectSelector } from '../components/ProjectSelector'
-import { ExtraFolders } from '../components/ExtraFolders'
-import { useTargetComposerPlaceholder } from '../components/TargetHealthNotice'
-import { RunLocationPicker } from '../components/RunLocationPicker' // P1-K7a
-import { useRemoteNewChatWorkspaces } from '../stores/newChatWorkspaces'
-import { AgentSelectStrip } from '../components/AgentSelectStrip'
-import { Composer2 } from './chat2/Composer2'
+import { NewChatComposer, sendFromNewChat, startNewChatCall, type NewChatDispatch } from './newChatComposer'
 import { registerMessages, useI18n, type Locale } from '../i18n'
 import { formatLongDate, formatMonthDay, formatTime } from '../format/time'
 import { useShallow } from 'zustand/react/shallow'
@@ -94,188 +84,6 @@ const dockCollision: CollisionDetection = (args) => {
 type Tile =
   | { kind: 'space'; id: string; space: SpaceDefinition }
   | { kind: 'folder'; id: string; folder: RibbonFolder; members: SpaceDefinition[] }
-
-type HomeDispatch = (
-  text: string,
-  attachments: Attachment[],
-  workspaceFiles?: Attachment[],
-  skillIds?: string[],
-  mentions?: { priorityAgent?: string; mentionAgents?: string[] },
-) => Promise<boolean>
-
-/**
- * 主页只做「新对话」的宿主接线,输入 UI 和交互不复制:字面挂的就是 ChatView 里的 Composer2。
- * `sessionId={null}` 强制 slash / 引用菜单也按新对话语义跑,不误操作用户上次停留的会话。
- */
-function HomepageChatbox({ onDispatch, onStartCall, onInputModeChange }: { onDispatch: HomeDispatch; onStartCall: () => Promise<string | null>; onInputModeChange: (focused: boolean) => void }) {
-  const vaultRoot = usePageStore((state) => state.vaultRoot)
-  const activeSpaceId = useSpaceStore((state) => state.activeSpaceId)
-  // 运行位置在一台还没连上的电脑上:占位说「等那台连上」(同 ChatView),不退回本端的「先在设置里连接后端」
-  const targetPlaceholder = useTargetComposerPlaceholder(null)
-  const s = useApp(useShallow((state) => ({
-    cfg: state.cfg,
-    desktopConfig: state.desktopConfig,
-    desktopMode: state.desktopMode,
-    homeDir: state.homeDir,
-    defaultWsDir: state.defaultWsDir,
-    focusDirs: state.focusDirs, // 桌面:运行位置在别的电脑上时新会话的落点用那台的目录
-    modelsResp: state.modelsResp,
-    newChatWs: state.newChatWs,
-    newChatCfg: state.newChatCfg,
-    newChatModel: state.newChatModel,
-    sessionMode: state.sessionMode,
-    setSessionMode: state.setSessionMode,
-    engines: state.engines,
-    engineCaps: state.engineCaps,
-    agentDefs: state.agentDefs,
-    defaultAgentSlug: state.defaultAgentSlug,
-    skillsList: state.skillsList,
-    connState: state.connState,
-    voiceOnByAgent: state.voiceOnByAgent,
-    ensureEngineCaps: state.ensureEngineCaps,
-    refreshVoiceMode: state.refreshVoiceMode,
-    setSessionModel: state.setSessionModel,
-    setNewChatCfg: state.setNewChatCfg,
-    setSessionThinking: state.setSessionThinking,
-    setDefaultModel: state.setDefaultModel,
-    setModelContextWindow: state.setModelContextWindow,
-    setVoiceMode: state.setVoiceMode,
-    setExecConfig: state.setExecConfig,
-    openSettings: state.openSettings,
-    setNewChatWs: state.setNewChatWs,
-    addLocalWorkspace: state.addLocalWorkspace,
-    cloneGitProject: state.cloneGitProject,
-    addCloudProject: state.addCloudProject,
-    workspaces: state.workspaces,
-    sessions: state.sessions,
-    archivedSessions: state.archivedSessions,
-    cloudProjects: state.cloudProjects,
-    channelWorkspaces: state.channelWorkspaces,
-    tr: state.tr,
-  })))
-
-  // Project pill 与 send() 共用真实落点解析：主页不能再继承一枚用户看不见的 newChatWs，
-  // 也不能在 Chat 时无提示地把会话放进「不在项目中工作」。
-  const platform = currentPlatform()
-  const targetWorkspace = resolveNewSessionWorkspace(s, platform)
-  const remoteWs = useRemoteNewChatWorkspaces() // 桌面:运行位置在别的电脑上 → 项目药丸列那台的项目
-  const workspaceList = useMemo(() => s.workspaces(), [
-    s.workspaces, s.sessions, s.archivedSessions, s.cloudProjects, s.channelWorkspaces,
-    s.defaultWsDir, s.homeDir, s.tr, vaultRoot,
-  ])
-  const preset = newSessionPreset(s.sessionMode, targetWorkspace, platform)
-  const cloud = preset === 'chat' || targetWorkspace.kind === 'cloud' || targetWorkspace.kind === 'rootless'
-  // settleModes:与建会话同一口径结算 Ultra 与「团队模式下没有计划模式」,药丸显示什么首条消息就按什么跑
-  const config = useMemo(() => settleModes(withAmadeusWorkspace(applyPreset({
-    execMode: cloud ? 'sandbox' : 'host',
-    ...stickyDefaults(s.desktopConfig, !cloud, preset),
-    cwd: cloud ? undefined : (targetWorkspace.path || undefined),
-    ...s.newChatCfg,
-  }, preset), vaultRoot)), [cloud, preset, s.desktopConfig, s.newChatCfg, targetWorkspace.path, vaultRoot])
-  const modelId = newChatModelId(s) || ''
-  const visibleModels = !s.modelsResp?.models
-    ? null
-    : s.modelsResp.models.filter((m) => (m.modelType || 'llm') === 'llm' && (!cloud || m.source === 'forsion'))
-  const agentSlug = config.agentSlug || s.defaultAgentSlug
-  const voiceOn = agentSlug ? !!s.voiceOnByAgent[agentSlug] : false
-
-  useEffect(() => { void s.ensureEngineCaps(config.engineId || undefined) }, [config.engineId, s.ensureEngineCaps])
-  useEffect(() => { if (agentSlug) void s.refreshVoiceMode(agentSlug) }, [agentSlug, s.refreshVoiceMode])
-
-  return (
-    <div
-      className="hp-composer"
-      data-kb-rise // 手机上跟着键盘一起上去(mobile/src/keyboardRise.ts);别处没人读
-      onClick={(e) => e.stopPropagation()}
-      // 模型/模式/附件和它们的菜单都属于输入准备,共用一个聚焦范围。
-      onPointerDownCapture={() => onInputModeChange(true)}
-      onPointerDown={(event) => event.stopPropagation()}
-      onFocusCapture={() => onInputModeChange(true)}
-      onBlurCapture={(event) => {
-        // 内部焦点转移不退场;选项卸载/点菜单空白导致的 relatedTarget=null 也保留。
-        // 真正点击外部由主页的 onPointerDown 收尾,Tab 到外部控件则在这里退出。
-        if (event.relatedTarget instanceof Node && !event.currentTarget.contains(event.relatedTarget)) onInputModeChange(false)
-      }}
-      onKeyDownCapture={(event) => {
-        if (event.key === 'Escape' && (event.target as HTMLElement).matches?.('.t2c-ta')) {
-          ;(event.target as HTMLTextAreaElement).blur()
-          onInputModeChange(false)
-        }
-      }}
-    >
-      {/* 主页恒是新对话(sessionId=null):Agent 选择条落在项目栏之上(§11 拍板 ⑦ 的推荐档,接线为零)。 */}
-      <div className="newchat-pickers">
-        <AgentSelectStrip sessionId={null} cfg={config} />
-      </div>
-      <div className="hp-projectbar">
-        <RunLocationPicker />
-        <ProjectSelector
-          workspaces={remoteWs ?? workspaceList}
-          value={targetWorkspace.key}
-          onChange={s.setNewChatWs}
-          // 「添加本地项目 / 云端项目」加的都是这一端的:运行位置在别的电脑上时不给
-          onAddProject={!remoteWs && window.tangu?.pickDirectory ? () => void s.addLocalWorkspace() : undefined}
-          onCloneProject={!remoteWs && window.tangu?.pickDirectory ? () => void s.cloneGitProject() : undefined}
-          onAddCloudProject={remoteWs ? undefined : (name) => void s.addCloudProject(name)}
-        />
-        <ExtraFolders />
-      </div>
-      <Composer2
-        sessionId={null}
-        // 通话按钮只画在 Home 空间里的主页(主页被当成标签开进别的 Space 时不当接收方)
-        liveOwner={activeSpaceId === 'home'}
-        prepareLiveSession={onStartCall}
-        autoFocus={false}
-        disabled={s.connState !== 'ok'}
-        disabledPlaceholder={targetPlaceholder}
-        running={false}
-        execConfig={config}
-        models={visibleModels}
-        modelsResponse={s.modelsResp}
-        modelId={modelId}
-        onModelChange={(id) => s.setSessionModel(id, null)}
-        engines={s.engines}
-        engineId={config.engineId}
-        engineModels={config.engineId ? (s.engineCaps[config.engineId]?.models ?? []) : undefined}
-        engineModelId={config.engineModelId}
-        onEngineModelChange={(id) => s.setNewChatCfg((c) => ({ ...c, engineModelId: id || undefined }))}
-        engineCommands={config.engineId ? (s.engineCaps[config.engineId]?.commands ?? []) : undefined}
-        thinkingLevel={config.thinkingLevel}
-        ultra={config.ultra}
-        onThinkingChange={(level, ultra) => s.setSessionThinking(level, null, undefined, ultra)}
-        defaultModelIds={{
-          backgroundModelId: s.desktopConfig?.backgroundModelId || '',
-          imageModelId: s.cfg.imageModelId || '',
-          visionModelId: s.cfg.visionModelId || '',
-        }}
-        onDefaultModelChange={s.setDefaultModel}
-        onContextWindowChange={(id, n) => void s.setModelContextWindow(id, n)}
-        maxIterations={config.maxIterations}
-        onMaxIterationsChange={(n) => s.setNewChatCfg((c) => ({ ...c, maxIterations: n }))}
-        verifyCommand={config.verifyCommand}
-        onVerifyCommandChange={(cmd) => s.setNewChatCfg((c) => ({ ...c, verifyCommand: cmd || undefined }))}
-        planMode={config.planMode}
-        onPlanModeChange={(on) => s.setNewChatCfg((c) => ({ ...c, planMode: on }))}
-        preset={config.preset}
-        onPresetChange={(p) => s.setSessionMode(p)}
-        voiceMode={voiceOn}
-        onVoiceModeChange={agentSlug ? (on) => void s.setVoiceMode(agentSlug, on) : undefined}
-        groupChat={config.groupChat}
-        groupAgents={config.groupAgents}
-        groupTempAgents={config.groupTempAgents}
-        onGroupChange={(patch) => s.setNewChatCfg((c) => ({ ...c, ...patch }))}
-        skills={s.skillsList}
-        agents={s.agentDefs}
-        currentAgentSlug={agentSlug} // 草稿没设思考档时药丸显示该 Agent 的缺省(与引擎同源)
-        onOpenSettings={() => s.openSettings('skills')}
-        onExecConfigChange={(patch) => s.setExecConfig(patch, null)}
-        onSend={(text, attachments, workspaceFiles, skillIds, mentions) => onDispatch(text, attachments, workspaceFiles, skillIds, mentions)}
-        onStop={() => {}}
-        autoRefFromMain={false}
-      />
-    </div>
-  )
-}
 
 function TileVisual({ tile }: { tile: Tile }) {
   if (tile.kind === 'space') {
@@ -936,18 +744,11 @@ export function HomepageView(_props: ViewProps) {
     rb().setFolderItems(folderOpen.id, moveTo(folderOpen.folder.items, moved, at < 0 ? folderOpen.folder.items.length : at))
   }
 
-  /** 主页输入始终开**新**会话。先切 Space 再发,并显式传 `sessionId=null`:
-   *  ① 不会把主页 leaf 就地换成 chat;② 不会把上次 activeId 当成续聊;
-   *  ③ 不调 openNewChat,因此 Composer2 里刚选的模型/模式/工作区不会被它的「清新会话草稿」逻辑擦掉。 */
-  const dispatchChat: HomeDispatch = (text, attachments, workspaceFiles, skillIds, mentions) => {
+  /** 主页输入始终开**新**会话(切 Space、发送的顺序契约见 newChatComposer 的 sendFromNewChat);退场动效包在外面。 */
+  const dispatchChat: NewChatDispatch = (...args) => {
     if (!hasTangu) return Promise.resolve(false)
     return new Promise<boolean>((resolve) => {
-      const queued = leaveThen(() => {
-        setActiveSpace('tangu')
-        // 老用户的 Tangu 命名布局可能把主 chat 关过;首页发话就是显式要去聊天,这里保证有一张聊天视图接住新会话。
-        useWorkspace.getState().openView('chat', { followActive: true, reuseKey: 'primary' }, 'main')
-        resolve(useApp.getState().send(text, attachments, workspaceFiles, skillIds, mentions, null))
-      })
+      const queued = leaveThen(() => resolve(sendFromNewChat(...args)))
       if (!queued) resolve(false) // 连点第二下被重入守卫挡掉:没发
     })
   }
@@ -956,13 +757,7 @@ export function HomepageView(_props: ViewProps) {
   const startCallSession = (): Promise<string | null> => {
     if (!hasTangu) return Promise.resolve(null)
     return new Promise<string | null>((resolve) => {
-      const queued = leaveThen(() => {
-        setActiveSpace('tangu')
-        useWorkspace.getState().openView('chat', { followActive: true, reuseKey: 'primary' }, 'main')
-        const before = useApp.getState().activeId
-        // newSession 自己吞掉失败:activeId 没换 = 没建成,别在旧会话里开通话
-        void useApp.getState().newSession().then(() => { const id = useApp.getState().activeId; resolve(id && id !== before ? id : null) }, () => resolve(null))
-      })
+      const queued = leaveThen(() => resolve(startNewChatCall()))
       if (!queued) resolve(null)
     })
   }
@@ -1101,7 +896,7 @@ export function HomepageView(_props: ViewProps) {
           ) : <div className="hp-meta">{greetText} · {clock.date}</div>}
         </div>
 
-        {hasTangu && <HomepageChatbox onDispatch={dispatchChat} onStartCall={startCallSession} onInputModeChange={setComposerFocused} />}
+        {hasTangu && <NewChatComposer onDispatch={dispatchChat} onStartCall={startCallSession} onInputModeChange={setComposerFocused} liveSpaceId={SELF_SPACE} />}
         {/* 手机:输入区平时收成这一条(完整的那块留在页面里、只是不显示,草稿不丢),点一下展开。 */}
         {phone && hasTangu && (
           <button type="button" className="hp-pill" data-act="home-pill" onClick={(event) => { event.stopPropagation(); openComposer(!!(event.target as Element).closest('.hp-pill-mic')) }}>
