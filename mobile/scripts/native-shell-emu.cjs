@@ -3958,9 +3958,12 @@ const tabCountText = (list) => {
     await cdp.eval(`(window.__e2ePrompt = null, Capacitor.Plugins.NativeSheet.present(${JSON.stringify({ requestId: 'e2e-prompt-clamp', kind: 'prompt', title: 'E2E clamp', initial: 'seed', confirm: 'OK', cancel: 'Cancel', theme })}).then((r) => (window.__e2ePrompt = { cancelled: !!r.cancelled, length: r.result ? r.result.text.length : -1, head: r.result ? r.result.text.slice(0, 8) : '', tail: r.result ? r.result.text.slice(-4) : '' }), (e) => (window.__e2ePrompt = { error: String(e && e.message || e) })), true)`)
     let list = await waitSheet(true)
     assert.equal(textOf(list, 'nativeSheet.prompt.field'), 'seed')
-    await tapId('nativeSheet.prompt.field', list)
-    await h.pause(400)
-    // evidence for a miss (10-18: one `v` too many after the seed): the field's head after each step, and whether the keyboard was up
+    // No tap: the sheet focuses the field and raises the keyboard itself, and moves up with it — under load after the
+    // tree above was read, so a tap where the field was lands on the keyboard (Gboard's `v`: "seedv…", 10-18; a probe
+    // tapping the first-read spot typed it 7 times in 7). Keys go to the focused field: wait for that and the keyboard.
+    const ready = await h.waitNodes((l) => (h.byId(l, 'nativeSheet.prompt.field')?.focused === 'true' && imeShown() ? l : null), { timeout: 8000 })
+    assert.ok(ready.hit, 'the prompt field did not get the focus and the keyboard')
+    // evidence for a miss: the field's head after each step, and whether the keyboard was up
     const steps = []
     const step = (name) => steps.push(`${name}: ${JSON.stringify(textOf(ui(), 'nativeSheet.prompt.field').slice(0, 8))}${imeShown() ? ' (keyboard up)' : ''}`)
     h.key(123) // MOVE_END
