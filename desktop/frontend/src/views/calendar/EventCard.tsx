@@ -136,20 +136,8 @@ export function EventCard({ ev, at, onClose, maxRight }: { ev: CardTarget; at: A
 
 function EventCardBody({ ev, onClose, closeRef }: { ev: CardTarget; onClose: () => void; closeRef?: RefObject<HTMLButtonElement | null> }) {
   const { t } = useI18n()
-  const { db, row, colId, title } = ev
-  // 只读源(agent 日程 / ICS / 另一侧 Vault):全字段展示,底部无删除。
-  // 可编辑投影(笔记 `@` 标记源)有 writeCell:时间可改(回写那行 markdown),但删除仍关着 ——
-  // 「删掉一个日历事件」对一行笔记来说是删整行还是只删 `@`,语义不明,不做。
-  // `readonly` 只管**时间那一行**:可编辑投影把它放开。
-  const readonly = !!db.readonly && !db.writeCell
-  // 其余一律看严格的 db.readonly —— 投影只支持改时间,标题/属性放开就是「看着能改、改了没反应」。
+  const { db, row, title } = ev
   const deletable = !db.readonly
-  const fullyEditable = !db.readonly
-  const nameCol = db.columns[0]
-  const titleEditable = fullyEditable && !(db.isNoteView && nameCol?.type === 'page')
-  const others = db.columns.filter((c) => c.id !== nameCol?.id && c.id !== colId)
-  const summary = colId ? eventTimeSummary(ev.raw) : null
-  const [editTime, setEditTime] = useState(false)
   const accent = ev.color ?? 'var(--accent, #6c5ce7)'
   // 只读聚合源可能来自 Agent / ICS / 另一侧 Vault，路径不是活动 Vault 可打开的数据库路径。
   const canOpenSource = !db.readonly || !!db.openRow
@@ -165,6 +153,44 @@ function EventCardBody({ ev, onClose, closeRef }: { ev: CardTarget; onClose: () 
         <button className="amx-cal-card-x" ref={closeRef} onClick={onClose} aria-label={t('evcard.close')}>×</button>
       </div>
 
+      <RecordFields db={db} row={row} colId={ev.colId ?? undefined} title={title} raw={ev.raw} />
+
+      {(canOpenSource || deletable) && (
+        <div className="amx-cal-card-foot">
+          {canOpenSource && (
+            <button className="amx-cal-card-open" onClick={() => { db.openRow ? db.openRow(row.rowId) : openDb(db.path); onClose() }}>
+              <ExternalLink size={13} /> {db.openRow ? t('evcard.openNote') : t('evcard.openDb')}
+            </button>
+          )}
+          {deletable && (
+            <button className="amx-cal-card-del" onClick={() => { deleteCalendarRow(db, row, title); onClose() }}>{t('evcard.delete')}</button>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** 一行记录的字段:标题、时间(`colId` 那一列)、其余属性。事件浮卡与插件的 ctx.ui.mountRecord(recordSurface)共用 ——
+ *  外框、关闭、打开 / 删除归调用方。`title` / `raw` 缺省取这一行自己的(浮卡传事件流里算好的那份);`lock` = 一律只读。 */
+export function RecordFields({ db, row, colId, title = row.name, raw, lock = false }: {
+  db: AggDb; row: AggRow; colId?: string; title?: string; raw?: string; lock?: boolean
+}) {
+  const { t } = useI18n()
+  // 只读源(agent 日程 / ICS / 另一侧 Vault):全字段展示。
+  // 可编辑投影(笔记 `@` 标记源)有 writeCell:时间可改(回写那行 markdown)。`readonly` 只管**时间那一行**:可编辑投影把它放开。
+  const readonly = lock || (!!db.readonly && !db.writeCell)
+  // 其余一律看严格的 db.readonly —— 投影只支持改时间,标题/属性放开就是「看着能改、改了没反应」。
+  const fullyEditable = !lock && !db.readonly
+  const nameCol = db.columns[0]
+  const titleEditable = fullyEditable && !(db.isNoteView && nameCol?.type === 'page')
+  const others = db.columns.filter((c) => c.id !== nameCol?.id && c.id !== colId)
+  const timeRaw = raw ?? (colId && typeof row.cells[colId] === 'string' ? (row.cells[colId] as string) : '')
+  const summary = colId ? eventTimeSummary(timeRaw) : null
+  const [editTime, setEditTime] = useState(false)
+
+  return (
+    <>
       {/* 标题 */}
       <div className="amx-cal-card-head">
         {titleEditable ? (
@@ -201,7 +227,7 @@ function EventCardBody({ ev, onClose, closeRef }: { ev: CardTarget; onClose: () 
             )}
             {!readonly && (editTime || !summary) && (
               <div className="amx-cal-card-timeedit">
-                <CalDateFields value={ev.raw} onChange={(v) => setAggCell(db, row.rowId, colId, v)} autoFocus={editTime} />
+                <CalDateFields value={timeRaw} onChange={(v) => setAggCell(db, row.rowId, colId, v)} autoFocus={editTime} />
                 {summary && (
                   <button type="button" className="amx-cal-card-timedone" onClick={() => setEditTime(false)}>{t('evcard.done')}</button>
                 )}
@@ -229,20 +255,7 @@ function EventCardBody({ ev, onClose, closeRef }: { ev: CardTarget; onClose: () 
           ))}
         </div>
       )}
-
-      {(canOpenSource || deletable) && (
-        <div className="amx-cal-card-foot">
-          {canOpenSource && (
-            <button className="amx-cal-card-open" onClick={() => { db.openRow ? db.openRow(row.rowId) : openDb(db.path); onClose() }}>
-              <ExternalLink size={13} /> {db.openRow ? t('evcard.openNote') : t('evcard.openDb')}
-            </button>
-          )}
-          {deletable && (
-            <button className="amx-cal-card-del" onClick={() => { deleteCalendarRow(db, row, title); onClose() }}>{t('evcard.delete')}</button>
-          )}
-        </div>
-      )}
-    </div>
+    </>
   )
 }
 

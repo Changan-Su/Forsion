@@ -69,6 +69,10 @@ registerMessages({
   'settings.amadeusPlugins.caps': { zh: '这个插件可以：{list}', en: 'This plugin can: {list}' },
   'settings.amadeusPlugins.capDatabases': { zh: '读写你的多维表', en: 'read and edit your databases' },
   'settings.amadeusPlugins.capNoteTasks': { zh: '读写笔记里的 @ 任务', en: 'read and edit @ tasks in your notes' },
+  'settings.amadeusPlugins.capCalendar': {
+    zh: '读取 Agent 日程、.ics 订阅和另一侧库里的日历，管理 .ics 订阅并改日历设置',
+    en: 'read Agent schedules, .ics subscriptions and calendars in your other vault, manage .ics subscriptions and change calendar settings',
+  },
   'settings.amadeusPlugins.capActiveWindow': { zh: '读取前台窗口', en: 'see which window is in front' },
   'settings.amadeusPlugins.devShadows': {
     zh: '正遮蔽同名的已安装插件；撤下开发副本后，安装版会回来。',
@@ -598,6 +602,7 @@ export const pluginListDetailBack: { current: (() => void) | null } = { current:
 const CAP_LABELS: Array<[PluginCapability, string]> = [
   ['databases', 'settings.amadeusPlugins.capDatabases'],
   ['noteTasks', 'settings.amadeusPlugins.capNoteTasks'],
+  ['calendar', 'settings.amadeusPlugins.capCalendar'],
   ['activeWindow', 'settings.amadeusPlugins.capActiveWindow'],
 ]
 
