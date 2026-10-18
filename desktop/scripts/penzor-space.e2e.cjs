@@ -237,8 +237,17 @@ async function main() {
     check('首启引导点掉', await skipOnboarding(win))
     if (process.env.PENZOR_HOLD) {
       cloud.st.throttle = true
-      console.log(`HOLD ready · home=${home} · 窗口关掉或退出就收场`)
+      // 「踢一下」:往 <home>/kick 写几行本机路径 = 在「上传」里选了它们(computer use 在后台点不动系统的选文件框)
+      const kick = path.join(home, 'kick')
+      const timer = setInterval(() => {
+        if (!fs.existsSync(kick)) return
+        const files = fs.readFileSync(kick, 'utf8').split('\n').filter(Boolean)
+        fs.rmSync(kick)
+        win.locator('.pz input[type=file][multiple]').setInputFiles(files).catch((e) => console.log('kick failed', e.message))
+      }, 1000)
+      console.log(`HOLD ready · kick=${kick} · 窗口关掉或退出就收场`)
       await new Promise((r) => { app.process().once('exit', r); setTimeout(r, 40 * 60_000) })
+      clearInterval(timer)
       return
     }
     const shot = async (name, page = win) => { await page.mouse.move(1000, 5).catch(() => {}); await page.waitForTimeout(500); await page.screenshot({ path: path.join(SHOTS, `${name}.png`) }); console.log('shot', name) }
@@ -459,7 +468,7 @@ async function main() {
     await shot('signed-out')
     check('没有渲染层报错', errors.length === 0, errors.slice(0, 3).join(' || '))
   } finally {
-    await app.close().catch(() => {})
+    await Promise.race([app.close().catch(() => {}), new Promise((r) => setTimeout(r, 5000))]) // 走查里应用已经自己退了,close 会一直等
     await stub.close?.()
     cloud.close()
   }
