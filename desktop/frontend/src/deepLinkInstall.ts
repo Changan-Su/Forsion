@@ -126,7 +126,7 @@ export async function resolveDeepLink(intent: DeepLinkIntent): Promise<boolean> 
   }
 }
 
-/** 装载(bootstrapEngine 调,仅桌面主窗):订阅热推 + 拉冷启动积压。 */
+/** 装载(bootstrapEngine 调,只认主窗):页内 forsion:// 点击三端都接;系统热推 + 冷启动积压只有桌面有。 */
 export function installDeepLinks(): void {
   if (windowKind() !== 'main') return
   const w = window as unknown as {
@@ -140,19 +140,19 @@ export function installDeepLinks(): void {
     // 正在编辑的正文里,单击是放光标:⌘/Ctrl+点击才跳(与编辑器里别的链接同一习惯)
     if (a.closest('[contenteditable="true"]') && !(e.metaKey || e.ctrlKey)) return
     e.preventDefault()
-    handle(a.getAttribute('href') || '')
+    handle(a.getAttribute('href') || '', false) // 点得到链接 = 界面早就起来了,不等 Dockview(手机单列壳的 api 恒 null,等就是白等 8s)
   }, true)
   if (!w.tangu?.onDeepLink || !w.tangu?.drainDeepLinks) return // web/mobile 有各自通道(https /open、tangu://)
-  w.tangu.onDeepLink(handle)
+  w.tangu.onDeepLink((u) => handle(u))
   void w.tangu.drainDeepLinks().then((urls) => { for (const u of urls) handle(u) })
 }
 
-function handle(url: string): void {
+function handle(url: string, coldStart = true): void {
   void (async () => {
     const toast = useApp.getState().toast
     const intent = parseDeepLink(url)
     if (!intent) { toast(translate('deeplink.unrecognized')); return }
-    await whenWorkspaceReady()
+    if (coldStart) await whenWorkspaceReady()
     const ok = await resolveDeepLink(intent).catch(() => false)
     if (!ok) toast(translate('deeplink.unavailable'))
   })()

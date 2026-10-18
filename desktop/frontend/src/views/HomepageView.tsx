@@ -5,7 +5,7 @@
  *  · **标志性标题** 「Forsion is All You Need」,手写体(随包 Dancing Script 子集,见 assets/fonts/README)。
  *    旧版这句住在 CardZone 的 title 区(SloganCard),这里做成固定排版。
  *  · **标题区** 时钟 + 日期 + 问候(登录名来自 `window.tangu.authStatus`)。
- *  · **输入区** 直接复用 Tangu Chat View 的 `Composer2`:模型、模式、附件、引用、语音和命令
+ *  · **输入区** `newChatComposer.tsx` 的 NewChatComposer(插件经 ctx.tangu.mountComposer 挂的是同一份),里面就是 Tangu Chat View 的 `Composer2`:模型、模式、附件、引用、语音和命令
  *    一条不少;提交后切到 Tangu Space 并强制建新会话,不再兼任浏览器搜索。
  *  · **Space 收纳架** 旧版底部 Dock 那排 app,在 Genesis 里对应的东西就是 Space;
  *    应用市场、成就和用户额外钉住的 Space 住在独立前置区,竖线后的普通区才与 Ribbon 排序同步。
@@ -20,7 +20,7 @@
  * IndexedDB 自定义原图是三个可切换来源;没有图片时也由 Genesis 主题 token 生成可取样的简约舞台。
  * 旧版窗口管理器与账号角仍不搬;浏览器搜索也不再回来。
  */
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import {
   DndContext, DragOverlay, KeyboardSensor, PointerSensor, closestCenter, pointerWithin,
@@ -34,39 +34,23 @@ import {
   ArrowUp, Check, FolderMinus, FolderOpen, FolderPlus, Grid2X2, Image, LogOut,
   Mic, Pencil, RefreshCw, Upload, X,
 } from 'lucide-react'
-import { setActiveSpace, useSpaceStore, useRibbonStore, useWorkspace, label, moveTo, OverlayAt, useNativeChromeSpaces, useNativeSheetMenu, presentNativeChecklist, getDetachApi, WINDOW_SPACE_ID, type SheetMenuItem } from '@lcl/engine'
+import { setActiveSpace, useSpaceStore, useRibbonStore, label, OverlayAt, useNativeChromeSpaces, useNativeSheetMenu, presentNativeChecklist, getDetachApi, WINDOW_SPACE_ID, type SheetMenuItem } from '@lcl/engine'
 import { CtxMenuButtons } from '../components/CtxMenuButtons'
-import { rankIds, reorderBase, unionOrder } from '@lcl/engine/ribbonRegistry'
-import type { SpaceDefinition, RibbonFolder, RibbonItem, ViewProps } from '@lcl/engine'
+import { shelfAddFolder, shelfMove, shelfMoveIntoFolder, shelfMoveOut, shelfRemoveFolder, shelfRenameFolder, shelfReorderFolder, shelfTiles, type ShelfTile } from './homeShelf'
+import type { SpaceDefinition, RibbonItem, ViewProps } from '@lcl/engine'
 import { askString } from '@amadeus/components/askString'
-import { useApp, newChatModelId, stickyDefaults, withAmadeusWorkspace, applyPreset, newSessionPreset, resolveNewSessionWorkspace } from '../stores/appStore'
-import { settleModes } from '../stores/projectSettings'
-import { currentPlatform } from '../services/agentRunService'
-import type { Attachment } from '../types'
-import { usePageStore } from '../amadeus/store/pageStore'
-import { useAmadeusPrefs } from '../amadeusPrefs'
-import { usePluginStore } from '../amadeus/plugins/pluginStore'
-import { allSeries, useAchievements } from '../achievements/store'
-import { displaySessionTitle } from '../sessionTitle'
-import { ProjectSelector } from '../components/ProjectSelector'
-import { ExtraFolders } from '../components/ExtraFolders'
-import { useTargetComposerPlaceholder } from '../components/TargetHealthNotice'
-import { RunLocationPicker } from '../components/RunLocationPicker' // P1-K7a
-import { useRemoteNewChatWorkspaces } from '../stores/newChatWorkspaces'
-import { AgentSelectStrip } from '../components/AgentSelectStrip'
-import { Composer2 } from './chat2/Composer2'
+import { NewChatComposer, sendFromNewChat, startNewChatCall, type NewChatDispatch } from './newChatComposer'
 import { registerMessages, useI18n, type Locale } from '../i18n'
-import { formatLongDate, formatMonthDay, formatTime } from '../format/time'
-import { useShallow } from 'zustand/react/shallow'
+import { formatLongDate, formatTime } from '../format/time'
 import {
   clearCustomWallpaper, fetchBingWallpapers, loadHomepageWallpaperPrefs, onHomepageWallpaperPrefsChange, readCustomWallpaper,
   saveHomepageWallpaperPrefs, writeCustomWallpaper,
   type BingWallpaper, type HomepageThemePreset, type HomepageWallpaperPrefs, type HomepageWallpaperSource,
 } from './homepageWallpaper'
 import { HomeWallpaperArt } from './homepageWallpaperArt'
+import { DeskCardStatus, useCardStatus } from './homeCardStatus'
+import { watchAccountName } from '../services/accountName'
 import { DESKTOP_HOME_CARDS_KEY, HOME_CARDS_MAX, loadHomeCards, saveHomeCards, shownHomeCards } from './homeCards'
-import { useAgendaItems } from './DashboardCompactViews'
-import { useInbox } from '../stores/inboxStore'
 import './homepage.css'
 
 /** 本视图所在的 Space id(真源在 builtins/homepage.tsx);坞里要把它自己排掉 —— 但**排序时不能排**,见 dropOn。 */
@@ -80,7 +64,7 @@ const PINNED_SPACES_KEY = 'forsion.homepage.pinned-spaces.v1'
 const PINNED_DROP_ID = 'homepage:pinned-spaces'
 const PINNED_DRAG_PREFIX = 'homepage:pinned:'
 const FIXED_HOME_ACTIONS = ['rb-market', 'rb-achievements'] as const
-const THEME_PRESETS: HomepageThemePreset[] = ['orbit', 'path', 'paper', 'glyph']
+const THEME_PRESETS: HomepageThemePreset[] = ['orbit', 'path', 'paper', 'rings', 'glyph']
 const WALLPAPER_SOURCES: HomepageWallpaperSource[] = ['theme', 'bing', 'image']
 
 /** 指针拖放以「指针真正在谁里面」为准,避免 body zoom 下 active rect 中心偏移选错落点;
@@ -90,192 +74,7 @@ const dockCollision: CollisionDetection = (args) => {
   return hits.length ? hits : closestCenter(args)
 }
 
-/** 坞里的一格:一个 Space,或一个收纳夹(含它当前能解析出来的成员)。 */
-type Tile =
-  | { kind: 'space'; id: string; space: SpaceDefinition }
-  | { kind: 'folder'; id: string; folder: RibbonFolder; members: SpaceDefinition[] }
-
-type HomeDispatch = (
-  text: string,
-  attachments: Attachment[],
-  workspaceFiles?: Attachment[],
-  skillIds?: string[],
-  mentions?: { priorityAgent?: string; mentionAgents?: string[] },
-) => Promise<boolean>
-
-/**
- * 主页只做「新对话」的宿主接线,输入 UI 和交互不复制:字面挂的就是 ChatView 里的 Composer2。
- * `sessionId={null}` 强制 slash / 引用菜单也按新对话语义跑,不误操作用户上次停留的会话。
- */
-function HomepageChatbox({ onDispatch, onStartCall, onInputModeChange }: { onDispatch: HomeDispatch; onStartCall: () => Promise<string | null>; onInputModeChange: (focused: boolean) => void }) {
-  const vaultRoot = usePageStore((state) => state.vaultRoot)
-  const activeSpaceId = useSpaceStore((state) => state.activeSpaceId)
-  // 运行位置在一台还没连上的电脑上:占位说「等那台连上」(同 ChatView),不退回本端的「先在设置里连接后端」
-  const targetPlaceholder = useTargetComposerPlaceholder(null)
-  const s = useApp(useShallow((state) => ({
-    cfg: state.cfg,
-    desktopConfig: state.desktopConfig,
-    desktopMode: state.desktopMode,
-    homeDir: state.homeDir,
-    defaultWsDir: state.defaultWsDir,
-    focusDirs: state.focusDirs, // 桌面:运行位置在别的电脑上时新会话的落点用那台的目录
-    modelsResp: state.modelsResp,
-    newChatWs: state.newChatWs,
-    newChatCfg: state.newChatCfg,
-    newChatModel: state.newChatModel,
-    sessionMode: state.sessionMode,
-    setSessionMode: state.setSessionMode,
-    engines: state.engines,
-    engineCaps: state.engineCaps,
-    agentDefs: state.agentDefs,
-    defaultAgentSlug: state.defaultAgentSlug,
-    skillsList: state.skillsList,
-    connState: state.connState,
-    voiceOnByAgent: state.voiceOnByAgent,
-    ensureEngineCaps: state.ensureEngineCaps,
-    refreshVoiceMode: state.refreshVoiceMode,
-    setSessionModel: state.setSessionModel,
-    setNewChatCfg: state.setNewChatCfg,
-    setSessionThinking: state.setSessionThinking,
-    setDefaultModel: state.setDefaultModel,
-    setModelContextWindow: state.setModelContextWindow,
-    setVoiceMode: state.setVoiceMode,
-    setExecConfig: state.setExecConfig,
-    openSettings: state.openSettings,
-    setNewChatWs: state.setNewChatWs,
-    addLocalWorkspace: state.addLocalWorkspace,
-    cloneGitProject: state.cloneGitProject,
-    addCloudProject: state.addCloudProject,
-    workspaces: state.workspaces,
-    sessions: state.sessions,
-    archivedSessions: state.archivedSessions,
-    cloudProjects: state.cloudProjects,
-    channelWorkspaces: state.channelWorkspaces,
-    tr: state.tr,
-  })))
-
-  // Project pill 与 send() 共用真实落点解析：主页不能再继承一枚用户看不见的 newChatWs，
-  // 也不能在 Chat 时无提示地把会话放进「不在项目中工作」。
-  const platform = currentPlatform()
-  const targetWorkspace = resolveNewSessionWorkspace(s, platform)
-  const remoteWs = useRemoteNewChatWorkspaces() // 桌面:运行位置在别的电脑上 → 项目药丸列那台的项目
-  const workspaceList = useMemo(() => s.workspaces(), [
-    s.workspaces, s.sessions, s.archivedSessions, s.cloudProjects, s.channelWorkspaces,
-    s.defaultWsDir, s.homeDir, s.tr, vaultRoot,
-  ])
-  const preset = newSessionPreset(s.sessionMode, targetWorkspace, platform)
-  const cloud = preset === 'chat' || targetWorkspace.kind === 'cloud' || targetWorkspace.kind === 'rootless'
-  // settleModes:与建会话同一口径结算 Ultra 与「团队模式下没有计划模式」,药丸显示什么首条消息就按什么跑
-  const config = useMemo(() => settleModes(withAmadeusWorkspace(applyPreset({
-    execMode: cloud ? 'sandbox' : 'host',
-    ...stickyDefaults(s.desktopConfig, !cloud, preset),
-    cwd: cloud ? undefined : (targetWorkspace.path || undefined),
-    ...s.newChatCfg,
-  }, preset), vaultRoot)), [cloud, preset, s.desktopConfig, s.newChatCfg, targetWorkspace.path, vaultRoot])
-  const modelId = newChatModelId(s) || ''
-  const visibleModels = !s.modelsResp?.models
-    ? null
-    : s.modelsResp.models.filter((m) => (m.modelType || 'llm') === 'llm' && (!cloud || m.source === 'forsion'))
-  const agentSlug = config.agentSlug || s.defaultAgentSlug
-  const voiceOn = agentSlug ? !!s.voiceOnByAgent[agentSlug] : false
-
-  useEffect(() => { void s.ensureEngineCaps(config.engineId || undefined) }, [config.engineId, s.ensureEngineCaps])
-  useEffect(() => { if (agentSlug) void s.refreshVoiceMode(agentSlug) }, [agentSlug, s.refreshVoiceMode])
-
-  return (
-    <div
-      className="hp-composer"
-      data-kb-rise // 手机上跟着键盘一起上去(mobile/src/keyboardRise.ts);别处没人读
-      onClick={(e) => e.stopPropagation()}
-      // 模型/模式/附件和它们的菜单都属于输入准备,共用一个聚焦范围。
-      onPointerDownCapture={() => onInputModeChange(true)}
-      onPointerDown={(event) => event.stopPropagation()}
-      onFocusCapture={() => onInputModeChange(true)}
-      onBlurCapture={(event) => {
-        // 内部焦点转移不退场;选项卸载/点菜单空白导致的 relatedTarget=null 也保留。
-        // 真正点击外部由主页的 onPointerDown 收尾,Tab 到外部控件则在这里退出。
-        if (event.relatedTarget instanceof Node && !event.currentTarget.contains(event.relatedTarget)) onInputModeChange(false)
-      }}
-      onKeyDownCapture={(event) => {
-        if (event.key === 'Escape' && (event.target as HTMLElement).matches?.('.t2c-ta')) {
-          ;(event.target as HTMLTextAreaElement).blur()
-          onInputModeChange(false)
-        }
-      }}
-    >
-      {/* 主页恒是新对话(sessionId=null):Agent 选择条落在项目栏之上(§11 拍板 ⑦ 的推荐档,接线为零)。 */}
-      <div className="newchat-pickers">
-        <AgentSelectStrip sessionId={null} cfg={config} />
-      </div>
-      <div className="hp-projectbar">
-        <RunLocationPicker />
-        <ProjectSelector
-          workspaces={remoteWs ?? workspaceList}
-          value={targetWorkspace.key}
-          onChange={s.setNewChatWs}
-          // 「添加本地项目 / 云端项目」加的都是这一端的:运行位置在别的电脑上时不给
-          onAddProject={!remoteWs && window.tangu?.pickDirectory ? () => void s.addLocalWorkspace() : undefined}
-          onCloneProject={!remoteWs && window.tangu?.pickDirectory ? () => void s.cloneGitProject() : undefined}
-          onAddCloudProject={remoteWs ? undefined : (name) => void s.addCloudProject(name)}
-        />
-        <ExtraFolders />
-      </div>
-      <Composer2
-        sessionId={null}
-        // 通话按钮只画在 Home 空间里的主页(主页被当成标签开进别的 Space 时不当接收方)
-        liveOwner={activeSpaceId === 'home'}
-        prepareLiveSession={onStartCall}
-        autoFocus={false}
-        disabled={s.connState !== 'ok'}
-        disabledPlaceholder={targetPlaceholder}
-        running={false}
-        execConfig={config}
-        models={visibleModels}
-        modelsResponse={s.modelsResp}
-        modelId={modelId}
-        onModelChange={(id) => s.setSessionModel(id, null)}
-        engines={s.engines}
-        engineId={config.engineId}
-        engineModels={config.engineId ? (s.engineCaps[config.engineId]?.models ?? []) : undefined}
-        engineModelId={config.engineModelId}
-        onEngineModelChange={(id) => s.setNewChatCfg((c) => ({ ...c, engineModelId: id || undefined }))}
-        engineCommands={config.engineId ? (s.engineCaps[config.engineId]?.commands ?? []) : undefined}
-        thinkingLevel={config.thinkingLevel}
-        ultra={config.ultra}
-        onThinkingChange={(level, ultra) => s.setSessionThinking(level, null, undefined, ultra)}
-        defaultModelIds={{
-          backgroundModelId: s.desktopConfig?.backgroundModelId || '',
-          imageModelId: s.cfg.imageModelId || '',
-          visionModelId: s.cfg.visionModelId || '',
-        }}
-        onDefaultModelChange={s.setDefaultModel}
-        onContextWindowChange={(id, n) => void s.setModelContextWindow(id, n)}
-        maxIterations={config.maxIterations}
-        onMaxIterationsChange={(n) => s.setNewChatCfg((c) => ({ ...c, maxIterations: n }))}
-        verifyCommand={config.verifyCommand}
-        onVerifyCommandChange={(cmd) => s.setNewChatCfg((c) => ({ ...c, verifyCommand: cmd || undefined }))}
-        planMode={config.planMode}
-        onPlanModeChange={(on) => s.setNewChatCfg((c) => ({ ...c, planMode: on }))}
-        preset={config.preset}
-        onPresetChange={(p) => s.setSessionMode(p)}
-        voiceMode={voiceOn}
-        onVoiceModeChange={agentSlug ? (on) => void s.setVoiceMode(agentSlug, on) : undefined}
-        groupChat={config.groupChat}
-        groupAgents={config.groupAgents}
-        groupTempAgents={config.groupTempAgents}
-        onGroupChange={(patch) => s.setNewChatCfg((c) => ({ ...c, ...patch }))}
-        skills={s.skillsList}
-        agents={s.agentDefs}
-        currentAgentSlug={agentSlug} // 草稿没设思考档时药丸显示该 Agent 的缺省(与引擎同源)
-        onOpenSettings={() => s.openSettings('skills')}
-        onExecConfigChange={(patch) => s.setExecConfig(patch, null)}
-        onSend={(text, attachments, workspaceFiles, skillIds, mentions) => onDispatch(text, attachments, workspaceFiles, skillIds, mentions)}
-        onStop={() => {}}
-        autoRefFromMain={false}
-      />
-    </div>
-  )
-}
+type Tile = ShelfTile
 
 function TileVisual({ tile }: { tile: Tile }) {
   if (tile.kind === 'space') {
@@ -458,57 +257,19 @@ function useClock(locale: Locale): { time: string; date: string; hour: number; m
   return v
 }
 
-/** 登录名(有就用来问候);未登录 / 非 electron 宿主 → 空串,问候语自己少一截。 */
+/** 登录名(有就用来问候);未登录 / 拿不到 → 空串,问候语自己少一截。读法见 services/accountName。 */
 function useAccountName(): string {
   const [name, setName] = useState('')
-  useEffect(() => {
-    let alive = true
-    const read = (): void => {
-      void window.tangu?.authStatus?.()
-        .then((a) => { if (alive) setName(a?.loggedIn ? (a.nickname || a.username || '') : '') })
-        .catch(() => {})
-    }
-    read()
-    const off = window.tangu?.onAuthChanged?.(read)
-    return () => { alive = false; off?.() }
-  }, [])
+  useEffect(() => watchAccountName(setName), [])
   return name
 }
 
-/**
- * 坞的条目 = ribbon 上区的顶层条目(Space + 收纳夹),按用户保存的顺序排。
- *
- * ⚠️与 `Ribbon.zoneList` 同一口径:遍历**活的** spaces ∪ folders 再按 `order` 排名,
- * 绝不去遍历 `order` 本身 —— 那份持久数组里留着停用插件、已删用户 Space 的陈年 id
- * (`removeRibbonIcon` 只在真正反注册时清,插件关掉那条路会清,但历史存档不保证干净),
- * 照着它渲染就会画出点不动的幽灵格。收纳夹成员同理:解析不到的成员静默丢掉。
- *
- * 返回的 `topIds` = 顶层序:**排掉夹内成员**(同 Ribbon 的 topE),但**含主页自己**
- * (它只是不显示,顺序上仍然占一格)。重排写回一律以它为基准,见 dropOn 的注释。
- */
-function useDockTiles(): { tiles: Tile[]; topIds: string[]; order: string[] } {
+/** 坞的条目 = ribbon 上区的顶层条目(口径与两条不变式见 homeShelf.ts 的 shelfTiles)。 */
+function useDockTiles(): { tiles: Tile[]; topIds: string[] } {
   const spaces = useSpaceStore((s) => s.spaces)
   const order = useRibbonStore((s) => s.order)
   const folders = useRibbonStore((s) => s.folders)
-
-  const topFolders = folders.filter((f) => f.zone === 'top')
-  const spaceOf = (rid: string): SpaceDefinition | undefined => spaces.find((s) => `space:${s.id}` === rid)
-  const inFolder = new Set(topFolders.flatMap((f) => f.items))
-
-  // 夹内成员**不进顶层序** —— 与 Ribbon.zoneList 的 `.filter((e) => !inFolder.has(e.id))` 同一句。
-  // (Codex 评审 high:不过滤的话,重排写回会把夹内成员当顶层项塞进持久 order,
-  //  解散收纳夹时 removeFolder 又把 items 原样splice 回去 → 同一个 id 在 order 里出现两次。)
-  const topIds = rankIds([...spaces.map((s) => `space:${s.id}`), ...topFolders.map((f) => f.id)], order)
-    .filter((id) => !inFolder.has(id))
-  const tiles: Tile[] = []
-  for (const id of topIds) {
-    if (id === `space:${SELF_SPACE}`) continue // 主页自己不进坞:点了等于原地不动(但**仍在 topIds 里**)
-    const f = topFolders.find((x) => x.id === id)
-    if (f) { tiles.push({ kind: 'folder', id, folder: f, members: f.items.map(spaceOf).filter((s): s is SpaceDefinition => !!s) }); continue }
-    const sp = spaceOf(id)
-    if (sp) tiles.push({ kind: 'space', id, space: sp })
-  }
-  return { tiles, topIds, order }
+  return shelfTiles(spaces, order, folders, SELF_SPACE)
 }
 
 interface MenuState { x: number; y: number; kind: 'folder' | 'member' | 'cards'; id?: string }
@@ -520,14 +281,9 @@ registerMessages({
   'home.folderMenu.moveOut': { zh: '移出收纳夹', en: 'Move out' },
   // 手机(布局「二」):收起的输入条 + 带一行近况的大卡片
   'home.pill': { zh: '问点什么…', en: 'Ask anything…' },
-  'home.card.continue': { zh: '继续：{title}', en: 'Continue: {title}' },
-  'home.card.claimable': { zh: '{n} 项可领取', en: '{n} to claim' },
-  'home.card.earned': { zh: '已得 {n} 项', en: '{n} earned' },
-  'home.card.installed': { zh: '已装 {n} 个插件', en: '{n} plugins installed' },
   'home.cards.editTitle': { zh: '主页卡片', en: 'Home cards' },
   'home.cards.editHint': { zh: '勾选的显示在主页，1 到 {max} 张，按勾选的先后排。', en: 'Checked ones show on Home (1 to {max}), in the order you check them.' },
   'home.cards.done': { zh: '完成', en: 'Done' },
-  'home.card.unread': { zh: '{n} 条未读', en: '{n} unread' },
 })
 
 interface HomeCard { id: string; name: string; statusId: string; spaceId?: string; icon?: SpaceDefinition['icon'] | RibbonItem['icon']; open: () => void }
@@ -585,54 +341,6 @@ function HomeCards({ tiles, actions, onLaunch }: { tiles: Tile[]; actions: Ribbo
   )
 }
 
-/** 桌面近况卡(摆法 C)的那一行。日历、收件箱各自一个组件:日程要读好几份日历库,不摆这张卡就不该算。 */
-function DeskCardStatus({ spaceId }: { spaceId: string }) {
-  if (spaceId === 'calendar') return <CalendarCardStatus />
-  if (spaceId === 'inbox') return <InboxCardStatus />
-  return <CommonCardStatus spaceId={spaceId} />
-}
-function CommonCardStatus({ spaceId }: { spaceId: string }) {
-  return <>{useCardStatus()(spaceId)}</>
-}
-function CalendarCardStatus() {
-  const { t } = useI18n()
-  // 按此刻过滤(不靠 memo):主页时钟每分钟重画一次,结束了的那条就换成下一条
-  const now = Date.now()
-  const next = useAgendaItems().find((item) => item.end >= now)
-  if (!next) return null
-  const today = next.start.toDateString() === new Date().toDateString()
-  const when = next.allDay ? (today ? '' : formatMonthDay(next.start)) : today ? formatTime(next.start) : `${formatMonthDay(next.start)} ${formatTime(next.start)}`
-  return <>{[when, next.title || t('dashcompact.untitled')].filter(Boolean).join(' ')}</>
-}
-function InboxCardStatus() {
-  const { t } = useI18n()
-  const unread = useInbox((s) => s.unreadCount)
-  useEffect(() => { void useInbox.getState().refreshUnread() }, [])
-  return <>{unread ? t('home.card.unread', { n: String(unread) }) : ''}</>
-}
-
-/** 卡片上那一行近况:只说手头就有的事实(最近的会话 / 最近打开的笔记 / 成就 / 已装插件),拿不到就不写。 */
-function useCardStatus(): (id: string) => string {
-  const { t } = useI18n()
-  const session = useApp((s) => s.sessions[0])
-  const note = useAmadeusPrefs((s) => s.recents[0])
-  // 随 App 自带的不算「装了的」
-  const plugins = usePluginStore((s) => s.plugins.filter((x) => !x.builtin && !x.preinstalled).length)
-  const ach = useAchievements(useShallow((s) => ({ counters: s.counters, claimed: s.claimed, pluginSeries: s.pluginSeries })))
-  return (id) => {
-    if (id === 'tangu') return session ? t('home.card.continue', { title: displaySessionTitle(session.title, t) }) : ''
-    if (id === 'amadeus') return note ? (note.split('/').pop() ?? note).replace(/\.md$/i, '') : ''
-    if (id === 'rb-market') return plugins ? t('home.card.installed', { n: String(plugins) }) : ''
-    if (id === 'rb-achievements') {
-      const all = allSeries(ach).flatMap((x) => x.achievements)
-      const open = all.filter((a) => !ach.claimed[a.id] && (ach.counters[a.event] || 0) >= a.goal).length
-      const got = all.filter((a) => ach.claimed[a.id]).length
-      return open ? t('home.card.claimable', { n: String(open) }) : got ? t('home.card.earned', { n: String(got) }) : ''
-    }
-    return ''
-  }
-}
-
 export function HomepageView(_props: ViewProps) {
   const { t, locale } = useI18n()
   const zh = locale === 'zh'
@@ -642,7 +350,7 @@ export function HomepageView(_props: ViewProps) {
   const phone = useNativeChromeSpaces()
   const spaces = useSpaceStore((s) => s.spaces)
   const ribbonItems = useRibbonStore((s) => s.items)
-  const { tiles, topIds, order } = useDockTiles()
+  const { tiles } = useDockTiles()
   const [pinnedSpaceIds, setPinnedSpaceIds] = useState(loadPinnedSpaceIds)
   const [drag, setDrag] = useState<string | null>(null)
   const [over, setOver] = useState<string | null>(null)
@@ -698,7 +406,7 @@ export function HomepageView(_props: ViewProps) {
       .then((blob) => {
         if (!alive) return
         if (!blob) {
-          setWallpaperPrefs((prefs) => prefs.imageChoice === 'custom' ? { ...prefs, imageChoice: 'hack2gate', source: prefs.source === 'image' ? 'theme' : prefs.source } : prefs)
+          setWallpaperPrefs((prefs) => prefs.source === 'image' ? { ...prefs, source: 'theme' } : prefs)
           return
         }
         setCustomWallpaperUrl(URL.createObjectURL(blob))
@@ -767,24 +475,18 @@ export function HomepageView(_props: ViewProps) {
 
   const greet = clock.hour < 5 ? 'home.greet.night' : clock.hour < 11 ? 'home.greet.morning' : clock.hour < 18 ? 'home.greet.afternoon' : 'home.greet.evening'
   const greetText = name ? t(greet + '.named', { name }) : t(greet)
-  const rb = () => useRibbonStore.getState()
   const closePops = (): void => { setOpenFolder(null); setOrganizerOpen(false); setMenu(null) }
   const wallpaperUrl = wallpaperPrefs.source === 'bing'
     ? wallpaperPrefs.bing?.url || null
-    : wallpaperPrefs.source === 'image' && wallpaperPrefs.imageChoice === 'custom' ? customWallpaperUrl : null
-  const hack2gate = wallpaperPrefs.source === 'image' && wallpaperPrefs.imageChoice === 'hack2gate'
-  // hack2gate 是随包位图,与 Bing/自定义同走照片管线;真有图片 URL 时内联 style 仍压过它。
-  const photo = !!wallpaperUrl || hack2gate
+    : wallpaperPrefs.source === 'image' ? customWallpaperUrl : null
+  // 「图片」来源还没上传图片时 photo 为假,背景仍画主题图
+  const photo = !!wallpaperUrl
 
   const patchWallpaperPrefs = (patch: Partial<HomepageWallpaperPrefs>): void => {
     setWallpaperPrefs((prefs) => ({ ...prefs, ...patch }))
   }
 
   const selectWallpaperSource = (source: HomepageWallpaperSource): void => {
-    if (source === 'image') {
-      patchWallpaperPrefs({ source, imageChoice: wallpaperPrefs.imageChoice === 'custom' && !customWallpaperUrl ? 'hack2gate' : wallpaperPrefs.imageChoice })
-      return
-    }
     if (source === 'bing') {
       patchWallpaperPrefs({ source, bing: wallpaperPrefs.bing || bingWallpapers[0] || null })
       return
@@ -798,7 +500,7 @@ export function HomepageView(_props: ViewProps) {
     void writeCustomWallpaper(file)
       .then(() => {
         setCustomWallpaperUrl(URL.createObjectURL(file))
-        patchWallpaperPrefs({ source: 'image', imageChoice: 'custom' })
+        patchWallpaperPrefs({ source: 'image' })
       })
       .catch((error) => {
         setWallpaperError(t(error instanceof Error && error.message === 'TOO_LARGE'
@@ -810,35 +512,13 @@ export function HomepageView(_props: ViewProps) {
   const removeCustomWallpaper = (): void => {
     void clearCustomWallpaper().catch(() => {})
     setCustomWallpaperUrl(null)
-    patchWallpaperPrefs({ source: 'theme', imageChoice: 'hack2gate' })
+    patchWallpaperPrefs({ source: 'theme' })
   }
 
   // ── 收纳:重排 / 拖进收纳夹 ────────────────────────────────────────────────
-  /** 把 `drag` 落到 `targetId` 那一格上 —— 与 Ribbon 的 `dropOnBar` 逐句同构。
-   *  ⚠️两条都不能省:
-   *   · 基准序含**主页自己**(它在坞上不显示,顺序上仍占一格)。漏了 = 它从持久数组消失 →
-   *     `rankIds` 把未列出的排最后 → 主页图标第一次拖坞之后就掉进 ribbon 的「…」。
-   *   · 基准序**不含夹内成员**(`topIds` 已过滤)。混进去 = 夹里的 id 被当顶层项写进 order,
-   *     解散夹时 `removeFolder` 再 splice 一次 → order 里同一个 id 出现两次。 */
-  const dropOn = (moved: string, targetId: string): void => {
-    if (!moved || moved === targetId) return
-    const full = unionOrder(order, topIds) // 保住持久序里「此刻不可见」的项(用户 Space 异步注册)
-    const at = full.indexOf(targetId)
-    rb().setZoneOrder('top', moveTo(full, moved, at >= 0 ? at : full.length))
-  }
-
-  /** 收进收纳夹 —— 同 Ribbon 的 `dropIntoFolder`:改夹成员**必须配一次区顺序写回**,
-   *  把它从顶层序里摘掉,否则解散夹时会多出一个重复 id。 */
-  const dropInto = (moved: string, folderId: string): void => {
-    if (!moved || moved === folderId || moved.startsWith('folder:')) return // 夹套夹:ribbon 也不做
-    rb().moveIntoFolder(folderId, moved)
-    rb().setZoneOrder('top', reorderBase(order, topIds, moved))
-  }
-
-  /** 移出收纳夹 —— 同 Ribbon 浮层右键的那条:去 membership + 把它写回顶层序末尾。 */
+  // 收纳的写法(两条不变式)都在 homeShelf.ts;这里只管收纳层的开合。
   const moveOut = (itemId: string): void => {
-    rb().moveOutOfFolder(itemId)
-    rb().setZoneOrder('top', [...reorderBase(order, topIds, itemId), itemId])
+    shelfMoveOut(itemId)
     setOrganizerOpen(true) // 移出即回到收纳层,让用户立刻看到它回到了顶层。
   }
 
@@ -846,7 +526,7 @@ export function HomepageView(_props: ViewProps) {
     setMenu(null)
     void askString(zh ? '新建收纳夹' : 'New folder', zh ? '收纳夹' : 'Folder').then((v) => {
       const n = v?.trim()
-      if (n) { rb().addFolder('top', n); setOrganizerOpen(true) }
+      if (n) { shelfAddFolder(n); setOrganizerOpen(true) }
     })
   }
 
@@ -875,8 +555,8 @@ export function HomepageView(_props: ViewProps) {
     }
     if (!targetId || moved === targetId) return
     const target = tiles.find((tile) => tile.id === targetId)
-    if (!moved.startsWith('folder:') && target?.kind === 'folder') dropInto(moved, targetId)
-    else dropOn(moved, targetId)
+    if (!moved.startsWith('folder:') && target?.kind === 'folder') shelfMoveIntoFolder(targetId, moved)
+    else shelfMove(moved, targetId)
   }
 
   const menuAt = (e: React.MouseEvent, kind: MenuState['kind'], id?: string): void => {
@@ -929,25 +609,14 @@ export function HomepageView(_props: ViewProps) {
 
   const reorderFolderMember = (event: DragEndEvent): void => {
     if (!folderOpen || folderOpen.kind !== 'folder' || !event.over) return
-    const moved = String(event.active.id)
-    const target = String(event.over.id)
-    if (moved === target) return
-    const at = folderOpen.folder.items.indexOf(target)
-    rb().setFolderItems(folderOpen.id, moveTo(folderOpen.folder.items, moved, at < 0 ? folderOpen.folder.items.length : at))
+    shelfReorderFolder(folderOpen.id, String(event.active.id), String(event.over.id))
   }
 
-  /** 主页输入始终开**新**会话。先切 Space 再发,并显式传 `sessionId=null`:
-   *  ① 不会把主页 leaf 就地换成 chat;② 不会把上次 activeId 当成续聊;
-   *  ③ 不调 openNewChat,因此 Composer2 里刚选的模型/模式/工作区不会被它的「清新会话草稿」逻辑擦掉。 */
-  const dispatchChat: HomeDispatch = (text, attachments, workspaceFiles, skillIds, mentions) => {
+  /** 主页输入始终开**新**会话(切 Space、发送的顺序契约见 newChatComposer 的 sendFromNewChat);退场动效包在外面。 */
+  const dispatchChat: NewChatDispatch = (...args) => {
     if (!hasTangu) return Promise.resolve(false)
     return new Promise<boolean>((resolve) => {
-      const queued = leaveThen(() => {
-        setActiveSpace('tangu')
-        // 老用户的 Tangu 命名布局可能把主 chat 关过;首页发话就是显式要去聊天,这里保证有一张聊天视图接住新会话。
-        useWorkspace.getState().openView('chat', { followActive: true, reuseKey: 'primary' }, 'main')
-        resolve(useApp.getState().send(text, attachments, workspaceFiles, skillIds, mentions, null))
-      })
+      const queued = leaveThen(() => resolve(sendFromNewChat(...args)))
       if (!queued) resolve(false) // 连点第二下被重入守卫挡掉:没发
     })
   }
@@ -956,13 +625,7 @@ export function HomepageView(_props: ViewProps) {
   const startCallSession = (): Promise<string | null> => {
     if (!hasTangu) return Promise.resolve(null)
     return new Promise<string | null>((resolve) => {
-      const queued = leaveThen(() => {
-        setActiveSpace('tangu')
-        useWorkspace.getState().openView('chat', { followActive: true, reuseKey: 'primary' }, 'main')
-        const before = useApp.getState().activeId
-        // newSession 自己吞掉失败:activeId 没换 = 没建成,别在旧会话里开通话
-        void useApp.getState().newSession().then(() => { const id = useApp.getState().activeId; resolve(id && id !== before ? id : null) }, () => resolve(null))
-      })
+      const queued = leaveThen(() => resolve(startNewChatCall()))
       if (!queued) resolve(null)
     })
   }
@@ -1034,11 +697,11 @@ export function HomepageView(_props: ViewProps) {
           setMenu(null)
           void askString(t('home.folderMenu.renameTitle'), cur?.kind === 'folder' ? cur.folder.name : '').then((v) => {
             const n = v?.trim()
-            if (n) rb().renameFolder(id, n)
+            if (n) shelfRenameFolder(id, n)
           })
         },
       },
-      { id: 'dissolve', label: t('home.folderMenu.dissolve'), icon: <FolderMinus size={13} />, run: () => { rb().removeFolder(m.id!); setMenu(null) } },
+      { id: 'dissolve', label: t('home.folderMenu.dissolve'), icon: <FolderMinus size={13} />, run: () => { shelfRemoveFolder(m.id!); setMenu(null) } },
     ]
   }
   // Android:改由原生半屏呈现(Web 浮层此时不渲染);桌面 / 网页恒走 Web 浮层。
@@ -1054,7 +717,6 @@ export function HomepageView(_props: ViewProps) {
       className={`hp-root${phone ? ' hp-phone' : ''}${reduceMotion ? ' hp-still' : ''}${composerFocused ? ' hp-composer-focused' : ''}${wallpaperOpen ? ' hp-layer-focused' : ''}${openFolder || organizerOpen ? ' hp-secondary-open' : ''}`}
       data-wallpaper={photo ? 'true' : undefined}
       data-theme-preset={wallpaperPrefs.themePreset}
-      data-image={hack2gate ? 'hack2gate' : undefined}
       data-motion={wallpaperPrefs.motion ? 'on' : 'off'}
       data-hidden={pageHidden || undefined}
       data-focus-blur={wallpaperPrefs.focusBlur ? 'true' : 'false'}
@@ -1101,7 +763,7 @@ export function HomepageView(_props: ViewProps) {
           ) : <div className="hp-meta">{greetText} · {clock.date}</div>}
         </div>
 
-        {hasTangu && <HomepageChatbox onDispatch={dispatchChat} onStartCall={startCallSession} onInputModeChange={setComposerFocused} />}
+        {hasTangu && <NewChatComposer onDispatch={dispatchChat} onStartCall={startCallSession} onInputModeChange={setComposerFocused} liveSpaceId={SELF_SPACE} />}
         {/* 手机:输入区平时收成这一条(完整的那块留在页面里、只是不显示,草稿不丢),点一下展开。 */}
         {phone && hasTangu && (
           <button type="button" className="hp-pill" data-act="home-pill" onClick={(event) => { event.stopPropagation(); openComposer(!!(event.target as Element).closest('.hp-pill-mic')) }}>
@@ -1267,7 +929,6 @@ export function HomepageView(_props: ViewProps) {
                     </button>
                   ))}
                 </div>
-                <p className="hp-theme-note">{t('home.wallpaper.hack2gateMoved')}</p>
               </div>
             )}
 
@@ -1321,27 +982,16 @@ export function HomepageView(_props: ViewProps) {
                 <div>
                   <button
                     type="button"
-                    className={hack2gate ? 'on' : ''}
-                    data-image="hack2gate"
-                    aria-pressed={hack2gate}
-                    onClick={() => patchWallpaperPrefs({ source: 'image', imageChoice: 'hack2gate' })}
-                  >
-                    <span className="hp-image-preview" data-image="hack2gate" aria-hidden />
-                    <span>{t('home.wallpaper.hack2gate')}</span>
-                    {hack2gate && <i><Check size={11} /></i>}
-                  </button>
-                  <button
-                    type="button"
-                    className={wallpaperUrl && !hack2gate ? 'on' : ''}
+                    className={wallpaperUrl ? 'on' : ''}
                     data-image="custom"
-                    aria-pressed={!!wallpaperUrl && !hack2gate}
-                    onClick={() => customWallpaperUrl ? patchWallpaperPrefs({ source: 'image', imageChoice: 'custom' }) : fileRef.current?.click()}
+                    aria-pressed={!!wallpaperUrl}
+                    onClick={() => customWallpaperUrl ? patchWallpaperPrefs({ source: 'image' }) : fileRef.current?.click()}
                   >
                     <span className="hp-image-preview" style={customWallpaperUrl ? { backgroundImage: `url(${JSON.stringify(customWallpaperUrl)})` } : undefined} aria-hidden>
                       {!customWallpaperUrl && <Upload size={16} />}
                     </span>
                     <span>{t(customWallpaperUrl ? 'home.wallpaper.mine' : 'home.wallpaper.upload')}</span>
-                    {wallpaperUrl && !hack2gate && <i><Check size={11} /></i>}
+                    {wallpaperUrl && <i><Check size={11} /></i>}
                   </button>
                 </div>
                 {customWallpaperUrl ? (

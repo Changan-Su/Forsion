@@ -69,6 +69,11 @@ internal data class ChromeState(
     /** Shell mode: a second, quieter part of the title (which vault, which account); with [titleTap] the title is a button. */
     val titleSub: String = "",
     val titleTap: Boolean = false,
+    /**
+     * Shell mode: something behind "more" wants a look (an achievement to claim…): the button carries a dot. The text is
+     * what a screen reader says (may be blank); null = no dot — and what an older page, which never sends it, gets.
+     */
+    val moreDot: String? = null,
 ) {
     enum class Mode { SHELL, PAGE, HIDDEN }
 
@@ -134,6 +139,12 @@ internal data class ChromeState(
             return ChromeBadge(kind, NativeJson.optStr(o, "label", 128))
         }
 
+        /** Cosmetic, never a reason to refuse the bar: a label that is not a short string still draws the dot, only unannounced. */
+        private fun moreDot(json: JSONObject): String? {
+            val o = json.optJSONObject("moreDot") ?: return null
+            return (o.opt("label") as? String)?.takeIf { it.length <= 128 } ?: ""
+        }
+
         private fun spaces(json: JSONObject): List<ChromeSpace> {
             val array = json.optJSONArray("spaces") ?: return emptyList()
             require(array.length() <= MAX_SPACES) { "Too many spaces" }
@@ -174,6 +185,7 @@ internal data class ChromeState(
                         frosted = NativeJson.optBool(json, "floating") && NativeJson.optBool(json, "frosted"),
                         allLabel = NativeJson.optStr(json, "allLabel", 128), search = NativeJson.optStr(json, "search", 128),
                         titleSub = NativeJson.optStr(json, "titleSub", 128), titleTap = NativeJson.optBool(json, "titleTap"),
+                        moreDot = moreDot(json),
                     )
                 }
                 Mode.PAGE -> ChromeState(

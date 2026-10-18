@@ -799,6 +799,15 @@ if (new URLSearchParams(location.search).has('dock')) {
       </div>,
     )
   })
+} else if (new URLSearchParams(location.search).has('ach')) {
+  // 成就面板(云端 + 本机两组):localStorage 里的计数 / 云端缓存和 window.tangu.cloudFetch 由仪器在加载前预置,
+  // 见 scripts/achievements-cloud.check.cjs。
+  void import('./achievements/AchievementsModal').then(({ AchievementsModal }) => {
+    applyRealTheme(resolveInitialLang(), resolveInitialSkin(), resolveInitialBg(), new URLSearchParams(location.search).has('dark') ? 'dark' : 'light')
+    createRoot(document.getElementById('root')!).render(
+      <LocaleProvider><div className="am-app tangu-lovable" style={{ position: 'fixed', inset: 0 }}><AchievementsModal onClose={() => {}} /></div></LocaleProvider>,
+    )
+  })
 } else if (new URLSearchParams(location.search).has('ribbon')) {
   // 点击记账:mod+1..9 的 slot 分发靠它断言(见 ribbon-dnd.e2e.cjs 的 L 组)。
   const hits: string[] = []

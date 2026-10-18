@@ -24,7 +24,7 @@ import { PluginLogo } from '../components/PluginLogo'
 import { calendarAvailable, installCalendarSpace, installCalendarViews, removeCalendarSpace } from './calendar'
 import { museAvailable, installMuseSpace, installMuseViews, removeMuseSpace } from './muse'
 
-import { homepageAvailable, installHomepageSpace, installHomepageViews, removeHomepageSpace } from './homepage'
+import { homepageAvailable, installHomepageSpace, installHomepageViews, removeHomepageSpace, useHomepageClaimed } from './homepage'
 import { imageStudioAvailable, installImageStudioSpace, installImageStudioViews, removeImageStudioSpace } from './imageStudio'
 import { artificialAvailable, installArtificialSpace, installArtificialViews, removeArtificialSpace } from './artificial'
 
@@ -325,6 +325,7 @@ export const BuiltinPluginsSection: React.FC = () => {
   const enabled = useBuiltins((s) => s.enabled)
   const inAppLinks = useBuiltins((s) => s.inAppLinks)
   const calendarYielded = useBuiltins((s) => s.calendarYielded)
+  const homeClaimed = useHomepageClaimed()
   const toggle = useBuiltins((s) => s.toggle)
   const setInAppLinks = useBuiltins((s) => s.setInAppLinks)
   const list = BUILTINS.filter((b) => b.available() && (b.id !== 'calendar' || PRODUCT.nativeFeatures === undefined))
@@ -344,6 +345,9 @@ export const BuiltinPluginsSection: React.FC = () => {
           </div>
           {b.id === 'calendar' && calendarYielded && (
             <div style={{ marginTop: 8, fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-muted)' }}>{t('calendar.yielded')}</div>
+          )}
+          {b.id === 'home' && enabled.home && homeClaimed && (
+            <div style={{ marginTop: 8, fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-muted)' }}>{t('home.claimed')}</div>
           )}
           {b.id === 'browser' && enabled.browser && (
             <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8, fontSize: 'var(--ui-font-meta, 12px)', cursor: 'pointer' }}>

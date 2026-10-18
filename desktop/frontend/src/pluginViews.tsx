@@ -16,6 +16,7 @@ import { notePluginGesture, usePluginStore } from '@amadeus/plugins/pluginStore'
 import { recordDevMountError } from '@amadeus/plugins/devRecords'
 import { setDevViewBridge } from '@amadeus/plugins/devSandbox'
 import type { ViewContribution } from '@amadeus/plugins/types'
+import { isClaimingHostView } from '../../shared/corePlugins'
 import { PLUGIN_ICONS } from '@amadeus/components/icons'
 import { registerMessages, translate } from './i18n'
 
@@ -219,7 +220,10 @@ export function syncPluginViews(): void {
   const registered = new Map<string, ViewContribution>()
   const sync = (): void => {
     const next = new Map<string, ViewContribution>()
-    for (const o of usePluginStore.getState().views) {
+    const st = usePluginStore.getState()
+    for (const o of st.views) {
+      // 接管宿主视图芯的那一项(主页插件的 home)只经宿主那张 `homepage` 画,不另外注册:否则能开出第二份主页
+      if (isClaimingHostView(st, o)) continue
       next.set(`plugin:${o.pluginId}:${o.item.id}`, o.item)
     }
     for (const [type] of registered) {

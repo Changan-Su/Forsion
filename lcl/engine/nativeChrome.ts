@@ -45,6 +45,8 @@ export interface NativeChromeShellState {
   /** A second, quieter part of the title (which vault); `titleTap` = the title is a button. */
   titleSub?: string
   titleTap?: boolean
+  /** Something behind "more" wants a look (a `RibbonItem.dot` is lit): hosts put a dot on the button. `label` = what a screen reader says. */
+  moreDot?: { label: string }
 }
 /** `close` = label of an optional trailing × (e.g. a settings sub-page: back = settings home, × = leave settings). */
 export interface NativeChromePageState { mode: 'page'; title: string; back: string; close?: string }

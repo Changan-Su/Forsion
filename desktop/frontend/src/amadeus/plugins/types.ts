@@ -298,6 +298,9 @@ export interface PluginAppApi extends BlockSurfaceApi {
    *  或插件 / 用户 Space 的 `space.json` id)。resolve 在新 Space 的布局建好之后 —— 接着 `ctx.openView(…, { location: 'right' })`
    *  就落在新 Space 里。不认识的 id → false,不切。没有工作台的宿主 / 旧宿主没有:`ctx.app.openSpace?.(…)`。 */
   openSpace?(id: string): Promise<boolean>
+  /** 当前登录的名字(有昵称用昵称;2026-10-18+,主页的问候用它):先回调一次当前值,换账号 / 登出时再回调;没登录 = 空串。
+   *  只给名字,不给令牌和账号 id。返回退订;插件停用时宿主也会退订。旧宿主没有:`ctx.app.watchAccountName?.(…)`。 */
+  watchAccountName?(cb: (name: string) => void): () => void
   /** 跑一条命令面板里现成的命令(2026-10-17+),按 id(如 `amadeus-new-note`、`open-market`)。只对首方内置包生效,
    *  别的插件调了恒为 false —— 命令里有删除、改设置这类动作,不能让任意插件替用户按。命令不存在 / 停用 → false。 */
   runCommand?(id: string): boolean
@@ -1146,6 +1149,13 @@ export interface PluginFloatingTocHandle {
   dispose(): void
 }
 
+export interface PluginBingWallpaper { id: string; url: string; thumbnailUrl: string; title?: string; copyright?: string; startDate?: string }
+export interface PluginSpaceInfo { id: string; name: string }
+export interface PluginSpaceAction { id: string; name: string; run(): void }
+export type PluginShelfItem =
+  | { kind: 'space'; id: string; spaceId: string; name: string }
+  | { kind: 'folder'; id: string; name: string; spaceIds: string[] }
+
 export interface PluginAccountStatus {
   loggedIn: boolean
   userId?: string
@@ -1365,6 +1375,10 @@ export interface PluginContext {
     ): import('../../../../shared/markdownEditor').PluginMarkdownEditorHandle
     /** Shared prompt input + live model catalog. Local draft; the plugin owns submission.
      *  Feature-detect on older hosts. The host disposes mounts on disable/reload/setup failure. */
+    /** 在视口坐标 (x, y) 开一个宿主样式的右键菜单(2026-10-18+),和内置主页、Ribbon 的右键菜单一个样子;放不下自己翻面。
+     *  `items`:`{ label, run(), checked?, disabled?, danger? }`(给了 `checked` 的那一组前面画勾)。同一时刻只开一个,
+     *  点菜单外 / Esc / 窗口失焦 / 点了某一项都会关;返回关闭函数。旧宿主没有:`ctx.ui?.contextMenu?.(…)`。 */
+    contextMenu?(x: number, y: number, items: Array<{ label: string; run(): void; checked?: boolean; disabled?: boolean; danger?: boolean }>): () => void
     mountChatBox?(
       el: HTMLElement,
       opts: import('../../../../shared/chatBox').PluginChatBoxOptions,
@@ -1510,6 +1524,15 @@ export interface PluginContext {
      *    禁用 / 重载时宿主统一收掉。`el` 要有确定的高度(对话撑满它)。
      *  旧宿主 / 没有对话能力的宿主没有:`ctx.tangu?.mountChat`,缺席时退回 `startChat`。 */
     mountChat?(el: HTMLElement, o?: { agent?: string; folder?: string; title?: string }): import('./tanguSeam').TanguChatMount
+    /** 把「新对话」输入区整块挂进 `el`(2026-10-18+):就是主页那一套 —— Agent 条、项目栏、运行位置、额外文件夹、
+     *  模型 / 模式 / 附件 / 引用 / 语音 / 技能。用户按发送 → 宿主建新会话、切到 Tangu、发出去;插件改不了要发的内容(`draft()` 只读)。
+     *  和 `ui.mountChatBox` 的分工:那个是插件自己的草稿、提交归插件;这个提交归宿主。
+     *  - `onFocusChange(focused)`:输入区(连同它的菜单)获得 / 失去焦点。
+     *  - `beforeSend()`:宿主发送前先等它(放退场动效,最多 2 秒);明确回 `false` = 这次不发,抛错 / 超时 / 视图被卸照样发。发送和开通话共用一把锁。
+     *  - `call: true`:要通话按钮;只在挂载时所在的 Space 是当前 Space 时画。
+     *  - 句柄:`focus()`、`startVoice()`(在点击处理里同步调)、`draft()`(只读)、`dispose()`(之后 `el` 立刻还给你)。
+     *  没有 Tangu 对话能力的宿主 / 旧宿主没有:`ctx.tangu?.mountComposer`;没有 Tangu Space 时发送不出去(按钮按了不动)。 */
+    mountComposer?(el: HTMLElement, o?: import('./tanguSeam').TanguComposerOptions): import('./tanguSeam').TanguComposerMount
     /** 一次性文本补全(2026-09-28+,评审 G3-07):引擎 `POST /agent/inline`,无工具、不落库、不进任何会话。
      *  **收编插件直连 `/agent/runs` 的做法** —— 那条是 Agent 的 run(带工具、落会话、8192 字符上限),拿来做
      *  「改写这段」既重又危险。`prompt` 是给模型的指令;`selection` / `before` / `after` 是正文上下文(按数据对待,
@@ -1681,6 +1704,38 @@ export interface PluginContext {
    *  - `post` 返回新信的 id(后端不在 → null,不抛)。不排队、不去重:同类信只留一封由插件自己 `archive` 上一封。
    *  - `registerCard`:你发的信在阅读面板里正文下面挂一块你自己画的卡(`mount(el, { id })`,返回清理函数),
    *    `sender` 是发件人显示名(列表与阅读面板头部)。重复调用 = 替换;停用时宿主收掉。 */
+  /** Space 列表、打开、图标、近况、Ribbon 收纳架(2026-10-18+,主页插件化)。manifest 声明 `spaces` 才有(收纳架改的是用户的 Ribbon)。
+   *  - `list()` 全部已注册的 Space(`{ id, name }`,名字按当前语言求值,含主页自己);`subscribe(cb)` Space / Ribbon 变了就回调,返回退订。
+   *  - `open(id)` 口径同 Ribbon 上点它(本窗口是 Space 窗口时开到它自己的窗口);不认识的 id → false。
+   *  - `mountIcon(el, id, { size })` / `mountStatus(el, id)`:宿主把 Space(或 `actions()` 里那两格)的图标、近况那一行画进 `el`,
+   *    跟着数据自己更新;返回卸载函数,之后 `el` 立刻还给你。近况拿不到就是空的(别靠它判断 Space 在不在)。
+   *  - `actions()` 商店、成就两格:`{ id, name, run() }`。
+   *  - `shelf`:Ribbon 上区的顶层顺序与收纳夹 —— 写的就是 Ribbon 那一份,拖一下 Ribbon 上跟着变。`items()` 按用户的顺序给
+   *    `{ kind: 'space', id, spaceId, name }` / `{ kind: 'folder', id, name, spaceIds }`;`move(id, targetId)` 落到 target 那一格,
+   *    `moveIntoFolder` / `moveOutOfFolder` / `reorderFolder(folderId, id, targetId)` / `addFolder` / `renameFolder` / `removeFolder`。 */
+  spaces?: {
+    list(): PluginSpaceInfo[]
+    subscribe(cb: () => void): () => void
+    open(id: string): Promise<boolean>
+    mountIcon(el: HTMLElement, id: string, opts?: { size?: number }): () => void
+    mountStatus(el: HTMLElement, id: string): () => void
+    actions(): PluginSpaceAction[]
+    shelf: {
+      items(): PluginShelfItem[]
+      move(id: string, targetId: string): void
+      moveIntoFolder(folderId: string, id: string): void
+      moveOutOfFolder(id: string): void
+      reorderFolder(folderId: string, id: string, targetId: string): void
+      addFolder(name: string): void
+      renameFolder(id: string, name: string): void
+      removeFolder(id: string): void
+    }
+  }
+  /** 必应每日壁纸(2026-10-18+):最近 8 张,`{ id, url, thumbnailUrl, title?, copyright?, startDate? }`。宿主代拉(桌面经主进程,
+   *  插件直连必应会被 CSP 拦)。拿不到 → reject;插件停用后给空数组。 */
+  wallpaper?: {
+    bing(locale?: 'zh' | 'en'): Promise<PluginBingWallpaper[]>
+  }
   inbox?: {
     post(msg: { title: string; body?: string }): Promise<string | null>
     archive(id: string): Promise<void>
