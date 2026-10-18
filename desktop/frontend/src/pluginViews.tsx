@@ -156,7 +156,16 @@ export function syncPluginViews(): void {
   }, !main ? ['main'] : hasBottom ? ['main', 'left', 'right', 'bottom'] : ['main', 'left', 'right'])
   // 关 / 换自己的视图(ctx.closeView / ctx.replaceView):两种 store 都有这两个方法,卫星窗只有一个主区,同样照办。
   usePluginStore.getState().setViewControls({
-    close: (type) => useWorkspace.getState().closeViewsOfType(type),
+    close: (type, opts) => {
+      const ws = useWorkspace.getState()
+      // collapse:整侧只剩这一个视图 → 收起该侧(视图进 stash,展开时回来),不留空占位。侧栏里还有别的视图就照常关。
+      const side = opts?.collapse ? (['left', 'right'] as const).find((s) => {
+        const tabs = s === 'left' ? ws.leftTabs : ws.rightTabs
+        return (s === 'left' ? ws.leftVisible : ws.rightVisible) && tabs.length > 0 && tabs.every((t) => t.type === type)
+      }) : undefined
+      if (side) ws.toggleSidebar(side)
+      else ws.closeViewsOfType(type)
+    },
     replace: (from, to, params) => useWorkspace.getState().replaceViewsOfType(from, to, params),
   })
 
