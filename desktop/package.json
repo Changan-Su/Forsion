@@ -79,6 +79,7 @@
     "e2e:accountpopups": "node scripts/account-popups.shot.cjs",
     "e2e:extend": "node scripts/extend-seam.e2e.cjs",
     "e2e:guide": "node scripts/guide-space.e2e.cjs",
+    "e2e:penzor": "node scripts/penzor-space.e2e.cjs",
     "e2e:musesettings": "node scripts/muse-settings.e2e.cjs",
     "e2e:modelcatalog": "node scripts/model-catalog.e2e.cjs",
     "e2e:museagentspace": "node scripts/muse-agentspace.e2e.cjs",

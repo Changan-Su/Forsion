@@ -1274,8 +1274,11 @@ export interface PluginContext {
   /** Close every open instance of one of this plugin's own views, wherever it is docked (2026-10-02+). A side
    *  panel that loses its last view shows the host's empty placeholder; the bottom panel collapses — as when the
    *  person closes the tab. A collapsed panel keeps its stash. No-op without a workbench; absent on older hosts.
-   *  A view the Space pins (`"pinned": true` in the recipe) keeps its last instance in that panel. */
-  closeView?(viewId: string): void
+   *  A view the Space pins (`"pinned": true` in the recipe) keeps its last instance in that panel.
+   *  `{ collapse: true }` (2026-10-18+): when a side panel holds nothing but this view, fold the panel away instead
+   *  (the view waits in the stash and comes back when the person reopens the panel, or on your next `openView`);
+   *  otherwise it closes as usual. Older hosts ignore the option and leave the placeholder. */
+  closeView?(viewId: string, opts?: { collapse?: boolean }): void
   /** Swap this plugin's view `fromViewId` for `toViewId` where it stands (2026-10-02+): open tabs change in place
    *  (same panel and size, the layout is not rebuilt, the active tab stays where it was), a collapsed panel keeps the
    *  new view in its stash and stays collapsed, and the Space's panel defaults follow. This is the "launch layout →
