@@ -3846,10 +3846,12 @@ const tabCountText = (list) => {
   await check('prompt (askString): homepage "new folder" returns typed text to the web side', async () => {
     await goHome()
     assert.equal(await cdp.eval(folderTiles), 0, 'fixture name already present')
-    // Every key waits for the state it acts on (no fixed pauses). The sheet focuses its field and raises the keyboard
-    // itself; Done answers with what the field holds right then — under load the tail of `input text` was still on its
-    // way 300 ms later (10-18/19: answered "E2E2526" / "E2E29" for E2E25260x / E2E295614, 2 runs in 10, the field
-    // focused with the keyboard up and no key reaching the page). The cancel path below goes by the same rule.
+    // Under load (10-18/19) the sheet answered "E2E2526" / "E2E29" for E2E25260x / E2E295614 (2 runs in 10; the field
+    // focused, the keyboard up, no key reaching the page): the tail of the name never reached the field — waiting 8 s for
+    // it, the field still read "E2E5897" for E2E589794. `input text` makes all its key events up front with one
+    // timestamp and injects them one by one; the app took ~2.4 s per key (each goes through Gboard), and InputDispatcher
+    // drops what it gets to > 10 s after that timestamp (logcat: "Dropped event because it is stale" ×4 = the 2 missing
+    // characters). So: one `input text` per character, and every other key waits for the state it acts on.
     const field = (l) => h.byId(l, 'nativeSheet.prompt.field')
     const fieldState = (l) => { const f = field(l); return f ? `${JSON.stringify(f.text)} focused=${f.focused}` : 'no field' }
     const steps = [] // evidence for a miss: the field per step, what the sheet answered, keys the page got instead
@@ -3875,7 +3877,9 @@ const tabCountText = (list) => {
     shot('09-prompt-keyboard')
     // clear the prefilled name, type ours, confirm with the IME action (Done) once the field reads it
     for (let i = 0; i < 12; i++) h.key(67)
-    h.adb('shell', 'input', 'text', FOLDER)
+    const typing = Date.now()
+    for (const c of FOLDER) h.adb('shell', 'input', 'text', c)
+    console.log(`  typed ${FOLDER.length} characters in ${Date.now() - typing} ms`) // ~adb round trips when idle; ≥ 2 s each under load
     const typed = await h.waitNodes((l) => (field(l)?.text === FOLDER ? l : null), { timeout: 8000 })
     if (!typed.hit) step('typed')
     assert.ok(typed.hit, `the field never read the typed name · ${await evidence()}`)
