@@ -503,7 +503,11 @@ const tabCountText = (list) => {
   await seed('zh')
   await installStub(cdp)
   // plugin flow: package zip (wrapped in a folder like a GitHub archive), host server, device → host port
-  const runAs = (...args) => { try { return h.adb('shell', 'run-as', PKG, ...args) } catch (e) { return `${e.stdout || ''}${e.stderr || ''}` || String(e.message) } }
+  const shOut = (...args) => { try { return h.adb('shell', ...args) } catch (e) { return `${e.stdout || ''}${e.stderr || ''}` || String(e.message) } }
+  // run-as refuses a package that is not debuggable — the preview built with -PnativePreviewFast is one: then the same
+  // command runs as root from the app's data directory (the emulator images have `su`, the notification checks use it).
+  const asRoot = /not debuggable/.test(shOut('run-as', PKG, 'true'))
+  const runAs = (...args) => (asRoot ? shOut(`su 0 sh -c 'cd /data/user/0/${PKG} && ${args.join(' ')}'`) : shOut('run-as', PKG, ...args))
   const cleanPluginFiles = () => runAs('rm', '-rf', `files/plugins/${PLUGIN_ID}`, `files/plugins-data/${PLUGIN_ID}.json`, `files/plugins-data/${PLUGIN_ID}.json.alt`)
   {
     const z = new JSZip()
@@ -1178,9 +1182,15 @@ const tabCountText = (list) => {
     // a swipe from the main view back to the list (same gesture as the drawer had)
     await tapEl(rowExpr('E2E Session One'))
     assert.ok(await h.waitPage(cdp, `(${nav}) === 'detail'`, 8000), 'the session did not reopen')
-    await h.pause(600)
+    // the main view still sliding in (or its spring) is not where the finger lands: swipe once it reads the same twice
+    const mainAt = "JSON.stringify([document.querySelector('.mb-main')?.getBoundingClientRect(), document.querySelector('.mb-body')?.dataset.drag])"
+    for (let i = 0, last = ''; i < 20; i++) { const now = await cdp.eval(mainAt); if (now === last) break; last = now; await h.pause(150) }
+    // evidence for a miss: where the touch landed and what under it scrolls sideways (that exempts it from the gesture)
+    await cdp.eval(`(() => { const log = window.__swipeLog = []; document.addEventListener('touchstart', (e) => { const t = e.touches[0], wide = []
+      for (let el = e.target; el && el !== document.body; el = el.parentElement) { const cs = getComputedStyle(el); if ((cs.overflowX === 'auto' || cs.overflowX === 'scroll') && el.scrollWidth > el.clientWidth + 1) wide.push(el.className) }
+      log.push({ x: Math.round(t.clientX), target: String(e.target.className?.baseVal ?? e.target.className).slice(0, 60), wide, drag: document.querySelector('.mb-body')?.dataset.drag || null }) }, { capture: true, passive: true, once: true }); return true })()`)
     h.adb('shell', 'input', 'swipe', String(wv.left + 150), String(wv.cy), String(wv.right - 100), String(wv.cy), '200')
-    assert.ok(await h.waitPage(cdp, `(${nav}) === 'list'`, 5000), 'swiping right on the main view did not return to the list')
+    assert.ok(await h.waitPage(cdp, `(${nav}) === 'list'`, 5000), `swiping right on the main view did not return to the list (nav ${await cdp.eval(nav)}, touch ${await cdp.eval('JSON.stringify(window.__swipeLog)')}, ${h.adb('shell', 'dumpsys', 'input_method').match(/mInputShown=\w+/)?.[0]})`)
     await h.pause(600)
     // system back on the list = the first level of a Space that is not Home: it leads Home, the app stays in front
     h.key(4)
@@ -2136,8 +2146,8 @@ const tabCountText = (list) => {
       if (step === 'pin') shot('17d-row-swipe-tray')
       await tapEl(act(step))
       assert.ok(await h.waitPage(cdp, `(${sectionOf(row)} === 'pinned') === ${step === 'pin'} || null`, 4000), `${step}: the row did not move`)
-      await h.pause(500)
-      assert.ok(await cdp.eval(`!(${open})`), 'the tray stayed open after its action')
+      // closed = the mark gone **and** the track back home (the mark leaves as the closing spring starts)
+      assert.ok(await h.waitPage(cdp, `!${tray}.hasAttribute('data-open') && Math.abs(${offset}) <= 1`, 3000), `the tray stayed open after its action (offset ${await cdp.eval(offset)})`)
     }
     // an open tray closes when another row is touched, and that touch opens nothing
     await swipeEl(row, -150)
@@ -2834,10 +2844,12 @@ const tabCountText = (list) => {
       // a real finger: the tray behind a left swipe
       const two = rowE('E2E mail two')
       const tray = `${two}.closest('.pl-swipe')`
-      const open = `(${tray}?.scrollLeft || 0) > 40`
+      // the row rides a track the finger moves (since 2026-10-14, like the session list's check; scrollLeft stays 0)
+      const offset = `(() => { const m = getComputedStyle(${tray}.firstElementChild).transform; return m === 'none' ? 0 : Math.round(new DOMMatrixReadOnly(m).m41) })()`
+      const open = `${tray}?.hasAttribute('data-open') && ${offset} < -40`
       assert.ok(await cdp.eval(`!!${tray}`), 'an inbox row has no swipe tray')
       await swipeEl(two, -150)
-      assert.ok(await h.waitPage(cdp, open, 3000), `a left swipe did not show the tray (scrollLeft ${await cdp.eval(`${tray}.scrollLeft`)})`)
+      assert.ok(await h.waitPage(cdp, open, 3000), `a left swipe did not show the tray (offset ${await cdp.eval(offset)})`)
       assert.equal(await cdp.eval(nav), 'list', 'the swipe was taken as a tap')
       const looks = JSON.parse(await cdp.eval(`JSON.stringify([...${tray}.querySelectorAll('.pl-swipe-act')].map((b) => ({ id: b.dataset.act, text: b.textContent.trim(), name: b.getAttribute('aria-label') || '', svg: !!b.querySelector('svg'), opacity: getComputedStyle(b).opacity, scale: getComputedStyle(b).scale })))`))
       assert.deepEqual(looks.map((b) => b.id), ['read', 'archive', 'delete'])
@@ -2847,8 +2859,8 @@ const tabCountText = (list) => {
       shot('17i-inbox-swipe-tray')
       await tapEl(`${tray}.querySelector('[data-act="read"]')`)
       assert.ok(await h.waitPage(cdp, `!${two}.classList.contains('is-unread') || null`, 4000), '"mark read" in the tray did not run')
-      await h.pause(500)
-      assert.ok(await cdp.eval(`!(${open})`), 'the tray stayed open after its action')
+      // closed = the mark gone **and** the track back home (the mark leaves as the closing spring starts)
+      assert.ok(await h.waitPage(cdp, `!${tray}.hasAttribute('data-open') && Math.abs(${offset}) <= 1`, 3000), `the tray stayed open after its action (offset ${await cdp.eval(offset)})`)
 
       // a long-press on a row = its menu, on the native sheet (the rows carry no ⋯ here)
       await holdEl(rowE('E2E mail three'))
@@ -3176,22 +3188,18 @@ const tabCountText = (list) => {
 
   // ── picked content → composer: what the file, photo and camera checks all read ──
   const top = () => h.adb('shell', 'dumpsys', 'activity', 'activities').match(/topResumedActivity=.*/)?.[0] || ''
-  /** Composer state (attachments + workspace files) read from the React fiber of a chip: name, declared size, decoded bytes, sha256. */
-  const composerFiles = `(async () => { const el = document.querySelector('.t2c-chiprow .attach-chip'); if (!el) return []
-    const key = Object.keys(el).find((k) => k.startsWith('__reactFiber$'))
-    for (let f = el[key]; f; f = f.return) {
-      const found = []
-      for (let st = f.memoizedState; st && typeof st === 'object' && 'next' in st; st = st.next) {
-        const v = st.memoizedState
-        if (Array.isArray(v) && v.length && v.every((a) => a && typeof a.name === 'string' && typeof a.data === 'string' && typeof a.size === 'number')) found.push(...v)
-      }
-      if (found.length) return Promise.all(found.map(async (a) => { const bin = Uint8Array.from(atob(a.data), (c) => c.charCodeAt(0))
-        const d = new Uint8Array(await crypto.subtle.digest('SHA-256', bin))
-        return { name: a.name, size: a.size, bytes: bin.length, sha256: [...d].map((b) => b.toString(16).padStart(2, '0')).join('') } }))
-    }
-    return null })()`
+  /** Composer files (attachments + workspace files), one per attachment tile (10-17: tiles replaced the chips), read from
+   *  the tile's React props: name, declared size, decoded bytes, sha256. null = a tile whose file could not be read. */
+  const composerFiles = `(async () => { const files = [...document.querySelectorAll('.t2c-tilerow .att-tile:not(.is-leaving)')].map((el) => {
+      const key = Object.keys(el).find((k) => k.startsWith('__reactFiber$'))
+      for (let f = el[key]; f; f = f.return) { const a = f.memoizedProps?.file; if (a && typeof a.name === 'string' && typeof a.data === 'string' && typeof a.size === 'number') return a }
+      return null })
+    if (files.some((a) => !a)) return null
+    return Promise.all(files.map(async (a) => { const bin = Uint8Array.from(atob(a.data), (c) => c.charCodeAt(0))
+      const d = new Uint8Array(await crypto.subtle.digest('SHA-256', bin))
+      return { name: a.name, size: a.size, bytes: bin.length, sha256: [...d].map((b) => b.toString(16).padStart(2, '0')).join('') } })) })()`
   const want = (f) => ({ name: f.name, size: f.data.length, bytes: f.data.length, sha256: f.sha256 })
-  const chipNames = "[...document.querySelectorAll('.t2c-chiprow .attach-chip > span:first-of-type')].map((e) => e.textContent)"
+  const chipNames = "[...document.querySelectorAll('.t2c-tilerow .att-tile:not(.is-leaving)')].map((e) => e.title)"
   const toasts = "[...document.querySelectorAll('.ntf-text')].map((e) => e.textContent).join(' | ')"
 
   const backInApp = async () => assert.ok((await h.waitNodes(() => resumed(), { timeout: 15000 })).hit, 'did not return to the app (picker hung?)')
@@ -3203,7 +3211,7 @@ const tabCountText = (list) => {
     return got
   }
   /** No attachments in the composer and no notification left on screen. */
-  const clearComposer = () => cdp.eval(`(async () => { for (const sel of ['.t2c-chiprow .attach-chip button', '.ntf-close']) for (let i = 0; i < 8; i++) {
+  const clearComposer = () => cdp.eval(`(async () => { for (const sel of ['.t2c-tilerow .att-tile:not(.is-leaving) .att-tile-x', '.ntf-close']) for (let i = 0; i < 8; i++) {
     const b = document.querySelector(sel); if (!b) break; b.click(); await new Promise((r) => setTimeout(r, 150)) } return true })()`)
 
   await check('files: system picker → composer (content URIs streamed through the local server): right name + bytes, > 25 MB named in the toast and not attached, cancel is a no-op', async () => {
@@ -3306,7 +3314,7 @@ const tabCountText = (list) => {
   // Leave a clean stage whatever the check's outcome: no attachments in the composer, and no error toast left on
   // screen (they stay up for a while and cover the top of the drawer, where the next check taps "new chat").
   try {
-    await cdp.eval(`(async () => { for (const sel of ['.t2c-chiprow .attach-chip button', '.ntf-close']) for (let i = 0; i < 8; i++) {
+    await cdp.eval(`(async () => { for (const sel of ['.t2c-tilerow .att-tile:not(.is-leaving) .att-tile-x', '.ntf-close']) for (let i = 0; i < 8; i++) {
       const b = document.querySelector(sel); if (!b) break; b.click(); await new Promise((r) => setTimeout(r, 150)) } return true })()`)
   } catch { /* page reloading */ }
 
@@ -3562,7 +3570,7 @@ const tabCountText = (list) => {
     const setDraft = async (v) => assert.ok(await cdp.eval(`(() => { const ta = document.querySelector('.t2c-ta'); if (!ta) return false
       Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(ta, ${JSON.stringify(v)}); ta.dispatchEvent(new Event('input', { bubbles: true })); return true })()`), 'no message box on screen')
     const closeToasts = () => cdp.eval(`(async () => { for (let i = 0; i < 8; i++) { const b = document.querySelector('.ntf-close'); if (!b) break; b.click(); await new Promise((r) => setTimeout(r, 150)) } return true })()`)
-    const chips = "[...document.querySelectorAll('.t2c-chiprow .attach-chip > span:first-of-type')].map((e) => e.textContent)"
+    const chips = "[...document.querySelectorAll('.t2c-tilerow .att-tile:not(.is-leaving)')].map((e) => e.title)"
     const toasts = "[...document.querySelectorAll('.ntf-text')].map((e) => e.textContent).join(' | ')"
     const inChat = "!!document.querySelector('.t2-userwrap')" // a message on screen = not a new chat
     const unsent = (from) => assert.ok(!stubLog.slice(from).some((l) => /^POST \S+\/agent\/runs/.test(l)), 'the share was sent on its own')
@@ -3726,7 +3734,7 @@ const tabCountText = (list) => {
   })
   // Leave a clean stage (see the same block before the voice check): no attachments, no toast over the drawer's top.
   try {
-    await cdp.eval(`(async () => { for (const sel of ['.t2c-chiprow .attach-chip button', '.ntf-close']) for (let i = 0; i < 8; i++) {
+    await cdp.eval(`(async () => { for (const sel of ['.t2c-tilerow .att-tile:not(.is-leaving) .att-tile-x', '.ntf-close']) for (let i = 0; i < 8; i++) {
       const b = document.querySelector(sel); if (!b) break; b.click(); await new Promise((r) => setTimeout(r, 150)) } return true })()`)
   } catch { /* page reloading */ }
 
