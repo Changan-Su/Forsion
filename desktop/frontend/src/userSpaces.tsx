@@ -16,7 +16,7 @@ import {
   registerSpace, unregisterSpace, addRibbonIcon, removeRibbonIcon, setActiveSpace, useSpaceStore,
   useWorkspace, deleteNamedLayout, clearLayout, getActiveSpace, getView, label, spaceLayoutName,
   setActiveSpaceCold, BOOT_ACTIVE_SPACE_ID, UI_MODE, WINDOW_SPACE_ID,
-  spaceLayoutsWereReset, bootLayoutFellThrough, namedLayoutRestorable, liveLayoutOwner, landOnMainPage,
+  spaceLayoutsWereReset, bootLayoutFellThrough, namedLayoutRestorable, liveLayoutOwner, landOnMainPage, spaceSwitchPending,
 } from '@lcl/engine'
 import type { Leaf, SpaceDefinition, SpaceIcon, PersistedPanel } from '@lcl/engine'
 import { SpaceButton } from './components/SpaceButton'
@@ -252,6 +252,9 @@ export function loadUserSpaces(): Promise<void> {
  * A pass that only finds the fallback of a named-but-unregistered startup Space does not count as that once. */
 export function settleAsyncStartupSpace(): void {
   if (asyncStartupSpaceResolved || windowKind() !== 'main' || UI_MODE === 'mobile') return
+  // 人已经点了别的 Space、那次切换还在等过渡的下一帧(switchSpace):这时换 Space 会让它的回调当「别处换过」把点击作废,
+  // 人被拽回启动 Space。他已接管导航 —— 结案让路,回调照常把他带过去(check:spacefallback 的 E)。
+  if (spaceSwitchPending()) { asyncStartupSpaceResolved = true; return }
   const want = resolveStartupTarget(BOOT_ACTIVE_SPACE_ID)
   const state = useSpaceStore.getState()
   if (!state.spaces.some((space) => space.id === want)) return

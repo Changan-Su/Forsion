@@ -84,7 +84,7 @@ export { ExtendViewHost } from './ExtendViewHost'
 
 export { contentStorageKey } from './contentStorageScope'
 
-export { switchSpace, setSpaceBarOrder, spaceSwitchDirection, type SpaceSwitchMotion } from './spaceTransition'
+export { switchSpace, spaceSwitchPending, setSpaceBarOrder, spaceSwitchDirection, type SpaceSwitchMotion } from './spaceTransition'
 export { SPRING_PAGE, SPRING_ROW, reducedMotion, springAt, springEasing, springMotion, type Spring } from './spring'
 
 /** Optional native presentation hosts (Android Compose). Absent host ⇒ callers keep their web UI. */

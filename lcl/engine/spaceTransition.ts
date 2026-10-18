@@ -31,6 +31,10 @@ export function spaceSwitchDirection(order: readonly string[], registry: readonl
 type VT = { skipTransition(): void; ready: Promise<void>; finished: Promise<void>; updateCallbackDone: Promise<void> }
 /** 每次请求 +1;回调只认最新的那次 —— 被跳过的那段回调照跑,而且可能晚于新的这段(实测同一帧连点两下落在了前一个)。 */
 let seq = 0
+/** 最新那次请求还在等下一帧的回调。冷启动补定位(userSpaces.settleAsyncStartupSpace)据此让路:人已经点了别处,
+ *  补定位赶在这一帧里换了 Space,下面的回调就会把他的点击当「别处已经换过」作废(check:spacefallback 的 E)。 */
+let pending = false
+export const spaceSwitchPending = (): boolean => pending
 /** 正在播的那段;属性归它收。 */
 let live: VT | null = null
 /** 过渡中按在 ribbon 上的那颗按钮:接下来那次落在 <html> 上的 click 转给它。 */
@@ -66,6 +70,7 @@ function wire(): void {
  *     真手机的 GPU 要多付多少没量过。开回来 = 删掉下面那个 axis === 'x'(横推的关键帧还在 engine.css;mobile e2e:spaceswitch 的横推断言在 git 历史里)。 */
 export function switchSpace(toId: string, run: () => void = () => setActiveSpace(toId), { axis = 'y' }: { axis?: 'x' | 'y' } = {}): void {
   const mine = ++seq
+  pending = false
   const { activeSpaceId: from, spaces } = useSpaceStore.getState()
   const doc = typeof document === 'undefined' ? null : document as Document & { startViewTransition?: (cb: () => void) => VT }
   // 窗口不可见时不出帧,回调要等到下一帧 —— 直接换(看不见也就不用播)
@@ -81,7 +86,12 @@ export function switchSpace(toId: string, run: () => void = () => setActiveSpace
   root.dataset.spaceSwitchAxis = axis
   // flushSync:换布局时 Dockview 往 React 里挂的面板要在回调返回前画完,不然新快照拍到的是空面板,推完内容才弹出来。
   // 等这一帧的工夫里别处已经同步换过 Space(通知、别的窗口发来的导航)= 这次作废,不把人从刚到的地方带走
-  const vt = doc.startViewTransition(() => { if (seq === mine && useSpaceStore.getState().activeSpaceId === from) flushSync(run) })
+  const vt = doc.startViewTransition(() => {
+    if (seq !== mine) return
+    pending = false
+    if (useSpaceStore.getState().activeSpaceId === from) flushSync(run)
+  })
+  pending = true // 回调最早下一帧才跑;放在调用之后,startViewTransition 自己抛了也不会卡在「有切换在等」
   live = vt
   // 被下一段跳过时 ready / finished 以 AbortError 落空
   vt.ready.catch(() => {})

@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { spaceSwitchDirection, switchSpace } from './spaceTransition'
+import { spaceSwitchDirection, spaceSwitchPending, switchSpace } from './spaceTransition'
 import { useSpaceStore } from './spaceRegistry'
 
 const bar = ['home', 'tangu', 'amadeus', 'calendar']
@@ -54,5 +54,18 @@ describe('what a switch costs', () => {
     switchSpace('b', run)
     expect(start).toHaveBeenCalledTimes(1)
     expect(run).not.toHaveBeenCalled() // runs in the transition's callback, a frame later
+  })
+  // 冷启动补定位据此让路(check:spacefallback 的 E):点击到回调之间那一帧算「有切换在等」
+  it('reports a switch as pending until its callback runs', () => {
+    const start = setup()
+    const run = vi.fn()
+    switchSpace('b', run)
+    expect(spaceSwitchPending()).toBe(true)
+    ;(start.mock.calls[0] as unknown as [() => void])[0]()
+    expect(run).toHaveBeenCalledTimes(1)
+    expect(spaceSwitchPending()).toBe(false)
+    switchSpace('b', vi.fn())
+    switchSpace('a', vi.fn(), { axis: 'x' }) // 同步换的那次顶掉了还在等的
+    expect(spaceSwitchPending()).toBe(false)
   })
 })
