@@ -36,14 +36,16 @@ import { ensureMemberSession, memberRunConfig } from '../services/teamRuns.js';
 import { recoverTeamOutputs } from '../services/teamOutputs.js';
 import { withKeyLock } from '../core/keyLock.js';
 import { settleTeamPlanMode } from '../services/sessionSettings.js';
-import { answerAside, normalizeAsideInput } from '../services/aside.js';
+import { answerAside, deleteAside, listAsides, normalizeAsideInput, saveAside } from '../services/aside.js';
 import { suggestNextPrompt } from '../services/promptSuggestion.js';
 import { normalizeClientTag } from './runs.js';
 import { parseRemoteOrigin, applyRemoteConfigWrite, remoteCwdViolation, remoteCwdErrorBody, remoteOriginMarker } from '../services/remoteOrigin.js';
 
 const router = Router();
 
-export const SESSION_COLS = 'id, title, summary, model_id, archived, emoji, agent_config, project_path, project_name, projectless, parent_session_id, awaiting_user, created_at, updated_at';
+// fork_session_id:分叉点那条消息所在的会话(分支的分支挂在树根下,来源支要从消息反查;只在 FROM chat_sessions 不起别名时可用)。
+export const SESSION_COLS = 'id, title, summary, model_id, archived, emoji, agent_config, project_path, project_name, projectless, parent_session_id, fork_message_id, '
+  + '(SELECT fm.session_id FROM chat_messages fm WHERE fm.id = chat_sessions.fork_message_id) AS fork_session_id, awaiting_user, created_at, updated_at';
 
 /** preset 合法值:缺省/null(= work)、'coding'、'chat'。写接口对非法值 400,不静默折成 work(creview 09-07 E5)。 */
 export function validPreset(v: unknown): boolean {
@@ -229,7 +231,14 @@ router.post('/agent/sessions/:id/branch', authMiddleware, async (req: AuthReques
     // 分支照抄源会话 agent_config(源会话的远程标记随之继承);远端发起的分支自己再记一笔 —— 随建会话的同一条 INSERT
     // (见 BranchSessionInput.configOverlay:先插后补会留一个无标记的窗口,复制失败时就一直无标记)。
     const remote = parseRemoteOrigin(req.headers);
-    const r = await branchSession({ sourceSessionId: req.params.id, userId, appId: s.app_id, messageId, title, ...(remote ? { configOverlay: { remoteOrigin: remoteOriginMarker(remote) } } : {}) });
+    // 血缘:分支挂在**树根**下(分支的分支也挂根,左栏的树只画一层);树根 = 来源本身是分支时它的父,否则来源自己。
+    // 从子会话分出的分支挂在子会话下(孙会话,左栏平铺)—— ponytail: 少见,要挂回主会话再说。
+    // 不传标题时叫 New Chat,第一句新问题由 Historian 起名(同源标题的兄弟分支在树里认不出来)。
+    const r = await branchSession({
+      sourceSessionId: req.params.id, userId, appId: s.app_id, messageId, title: title ?? 'New Chat',
+      parentSessionId: s.fork_message_id && s.parent_session_id ? String(s.parent_session_id) : req.params.id, forkMessageId: messageId,
+      ...(remote ? { configOverlay: { remoteOrigin: remoteOriginMarker(remote) } } : {}),
+    });
     if (!r) return res.status(404).json({ detail: 'branch source/message not found' });
     const rows = await query<any[]>(`SELECT ${SESSION_COLS} FROM chat_sessions WHERE id = ?`, [r.id]);
     res.json({ session: rowToSession(rows[0]), copied: r.copied });
@@ -394,6 +403,7 @@ router.delete('/agent/sessions/:id', authMiddleware, async (req: AuthRequest, re
     await query(`DELETE FROM agent_steps WHERE run_id IN (SELECT id FROM agent_runs WHERE session_id = ?)`, [sid]);
     await query(`DELETE FROM agent_runs WHERE session_id = ?`, [sid]);
     await query(`DELETE FROM chat_messages WHERE session_id = ?`, [sid]);
+    await query(`DELETE FROM chat_asides WHERE session_id = ?`, [sid]);
     await query(`DELETE FROM chat_sessions WHERE id = ?`, [sid]);
     bumpHistoryRevision(sid); // 在飞的后台摘要落库前会复核版本 → 丢弃
     await removeSessionCheckpoints(sid); // 代码快照跟着走,否则 home 无界增长
@@ -712,7 +722,8 @@ router.post('/agent/sessions/:id/compact', authMiddleware, async (req: AuthReque
 });
 
 // 旁聊(/btw):带着本会话上下文问一句题外话(services/aside.ts)。SSE:delta* → done | error。
-// 不落库、不进 run 队列 —— 主 run 在飞也能问,且互不打断;客户端断开即中止上游请求。
+// 不进主会话历史、不进 run 队列 —— 主 run 在飞也能问,且互不打断;客户端断开即中止上游请求。
+// 答完写进 chat_asides(aside_id 续写那一条 / 没有就新开,挂在 message_id 上),done 带回 asideId。
 // 每用户在飞上限:客户端一个会话一次一问,这道闸挡的是绕过客户端的并发刷(额度预检在请求前,并发时都能过预检)。
 const ASIDE_MAX_IN_FLIGHT = 3;
 const asideInFlight = new Map<string, number>();
@@ -746,7 +757,15 @@ router.post('/agent/sessions/:id/aside', authMiddleware, async (req: AuthRequest
       sessionId: s.id, userId, modelId, appId: s.app_id, client: normalizeClientTag(req.body?.client),
       input, signal: ac.signal, onToken: (text) => write({ type: 'delta', text }),
     });
-    write({ type: 'done', ...answer, modelId });
+    // 落库失败不影响这次回答(客户端照样拿到全文,只是重开时没有这一条)。
+    const asideId = answer.content
+      ? await saveAside({
+        asideId: typeof req.body?.aside_id === 'string' ? req.body.aside_id : undefined, sessionId: s.id, userId,
+        messageId: typeof req.body?.message_id === 'string' ? req.body.message_id : undefined,
+        turn: { question: input.question, ...(input.quote ? { quote: input.quote } : {}), answer: answer.content }, thread: input.thread,
+      }).catch((e) => { console.warn('[aside] save failed:', e?.message || e); return undefined; })
+      : undefined;
+    write({ type: 'done', ...answer, modelId, ...(asideId ? { asideId } : {}) });
   } catch (e: any) {
     if (!ac.signal.aborted) write({ type: 'error', error: e?.message || 'side question failed' });
   } finally {
@@ -754,6 +773,30 @@ router.post('/agent/sessions/:id/aside', authMiddleware, async (req: AuthRequest
     const left = (asideInFlight.get(userId) || 1) - 1;
     if (left > 0) asideInFlight.set(userId, left); else asideInFlight.delete(userId);
     res.end();
+  }
+});
+
+// 存下来的顺便问(「从这里分出」里重开 / 清空)。
+router.get('/agent/sessions/:id/asides', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.userId;
+    const s = await getOwnSession(req.params.id, userId);
+    if (!s) return res.status(404).json({ detail: 'Session not found' });
+    res.json({ asides: await listAsides(s.id, userId) });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'list asides failed' });
+  }
+});
+
+router.delete('/agent/sessions/:id/asides/:asideId', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.userId;
+    const s = await getOwnSession(req.params.id, userId);
+    if (!s) return res.status(404).json({ detail: 'Session not found' });
+    await deleteAside(req.params.asideId, s.id, userId);
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'delete aside failed' });
   }
 });
 

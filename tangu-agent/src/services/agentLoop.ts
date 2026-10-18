@@ -65,6 +65,7 @@ import { remoteLocked, remoteLockedBody } from './remoteLock.js'; // P1-K2
 import { registerRun, runCategory, unregisterRun, type RunCategory } from './remoteActivity.js'; // P1-K2
 import { loadProjectDocSafe, wrapProjectDoc } from './projectDoc.js';
 import { onUserRunDone, onUserRunStart, type HistorianForkSeed } from './localHistorian.js';
+import { branchesSection } from './branchContext.js';
 import { stashSuggestionSeed } from './promptSuggestion.js';
 import { fitUserImages, normalizeImageAttachments, toImageParts } from './imageAttachments.js';
 import { describeImages, NO_VISION_NOTE, resolveVisionModelId, shouldDescribeImages, whyNoImages, type NoImagesReason } from './visionService.js';
@@ -1787,6 +1788,15 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           );
         }
       } catch { /* 日程读取失败不阻断 run */ }
+    }
+
+    // 8d) 分支段(方案「Chat 画布分支」10-18):分过叉的对话里列出别的支(标题 / 分叉后几条 / 最后一句),细看走 read_session。
+    //     易变区:任何一支多一条消息它就变。只本机引擎(直连库;云端 thin worker 不注入)。
+    if (profile.capabilities.hostExec) {
+      try {
+        const sec = await branchesSection(sessionId, userId);
+        if (sec) systemParts.push(sec);
+      } catch (e) { console.warn('[agent-core] branches section failed:', e); }
     }
 
     // 9) 插件:已启用且带 promptSection 的插件注入各自系统提示片段(如表情包清单)。放在环境段后,
