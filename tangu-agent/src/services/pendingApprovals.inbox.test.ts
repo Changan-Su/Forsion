@@ -7,6 +7,9 @@ const state = vi.hoisted(() => ({
   sent: [] as Array<{ title: string; body?: string; senderId?: string }>,
   logs: [] as string[],
   failSend: false,
+  dmOk: false,
+  dms: [] as Array<{ body: string; origin: string }>,
+  forwarded: [] as Array<{ title: string }>,
 }));
 
 vi.mock('../core/db.js', () => ({
@@ -24,6 +27,15 @@ vi.mock('../tools/builtin/inboxSend.js', () => ({
     return { ok: true };
   }),
 }));
+// 10-18 方案 B:Muse 的审批进它的私聊;私聊不可用才退回收件箱信(下面前三条测的是退回那条路)。
+vi.mock('./museDm.js', () => ({
+  postMuseDm: vi.fn(async (_u: string, body: string, origin: string) => {
+    if (!state.dmOk) return { ok: false, error: 'no dm' };
+    state.dms.push({ body, origin });
+    return { ok: true, sessionId: 'dm', messageId: 'm' };
+  }),
+}));
+vi.mock('../channels/forward.js', () => ({ forwardInboxToChannels: (x: any) => { state.forwarded.push(x); } }));
 vi.mock('../tools/toolRegistry.js', () => ({
   listToolProviders: () => [{ origin: 'builtin', tools: () => [{ name: 'write_file' }] }],
   AGENT_SCOPED_TOOLS: new Set(['manage_harness', 'manage_skill', 'manage_agent']), // deferApproval 的 ALS 闸要读
@@ -37,7 +49,7 @@ import { deferApproval, approvalRequestBody } from './pendingApprovals.js';
 const call = { id: 'c1', type: 'function' as const, function: { name: 'write_file', arguments: JSON.stringify({ path: '/tmp/x.md', content: 'hi' }) } };
 const ctx = { userId: 'u1', sessionId: 's1', agentSlug: 'muse', cwd: '/tmp', approvalDeferral: 'queue' as const };
 
-beforeEach(() => { state.rows.length = 0; state.sent.length = 0; state.logs.length = 0; state.failSend = false; });
+beforeEach(() => { state.rows.length = 0; state.sent.length = 0; state.logs.length = 0; state.failSend = false; state.dmOk = false; state.dms.length = 0; state.forwarded.length = 0; });
 
 describe('审批请求进收件箱', () => {
   it('首次入队 → 一封消息,正文末尾是带该行 id 的 forsion-approval 围栏,发信人=该 agent', async () => {
@@ -68,6 +80,22 @@ describe('审批请求进收件箱', () => {
     expect(state.rows).toHaveLength(1);
     expect(state.sent).toHaveLength(0);
     expect(state.logs.some((l) => l.includes('[approval] request') && l.includes('hourly cap'))).toBe(true);
+  });
+
+  it('Muse 私聊可用 → 请求进私聊(origin=proactive:approval,同一份正文),不发信;等用户拍板的转发到通道', async () => {
+    state.dmOk = true;
+    const d = await deferApproval('r1', call, 'write /tmp/x.md (2 chars)', undefined, ctx);
+    const id = /request ([0-9a-f-]{36})/.exec((d as any).rejectReason)?.[1];
+    expect(state.sent).toHaveLength(0);
+    expect(state.dms).toEqual([{ body: approvalRequestBody({ id: id!, tool: 'write_file', preview: 'write /tmp/x.md (2 chars)' }), origin: 'proactive:approval' }]);
+    expect(state.forwarded).toHaveLength(1);
+  });
+
+  it('别的 agent 的审批仍发信,不进 Muse 私聊', async () => {
+    state.dmOk = true;
+    await deferApproval('r1', call, 'write /tmp/x.md (2 chars)', undefined, { ...ctx, agentSlug: 'xyra' });
+    expect(state.dms).toHaveLength(0);
+    expect(state.sent).toHaveLength(1);
   });
 
   it('正文:围栏放最后,代批意见在中间', () => {

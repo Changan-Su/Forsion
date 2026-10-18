@@ -136,6 +136,8 @@
 .rb-btn:has(> .rb-dot) { position: relative; }
 .rb-badge.rb-dot { top: 4px; right: 4px; min-width: 0; width: 8px; height: 8px; padding: 0; }
 .rb-expanded .rb-btn > .rb-dot { top: 5px; left: 22px; right: auto; }
+/* Tangu 角标:私聊里有人在等你回复 / 拍板时换警示色;字用侧栏底色,深浅两套都压得住。 */
+.rb-badge.dm-wait { background: var(--warning, #d97706); color: var(--sidebar-bg); }
 .rb-btn {
   -webkit-app-region: no-drag;
   width: 32px;

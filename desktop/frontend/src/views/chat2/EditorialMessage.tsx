@@ -63,6 +63,7 @@ import { CreationCards } from './CreationCards'
 import { formatDateTime, formatMessageTime } from '../../format/time'
 
 import { TaskCards, type TaskLanding } from './TaskCards'
+import { MuseApprovalLine, MuseTodoCards, ProactiveMark, isProactive } from './MuseDm'
 import { CHILD_UPDATE_OPEN, ChildSessionsBlock, ChildUpdateLine, childIdsOf } from './ChildSessions'
 import { APPROVAL_UPDATE_OPEN, approvalForCall, parseApprovalUpdate, pickPlanInquiry, type ApprovalOutcome } from './approvalQueue'
 import { isRemoteApprover, wasDecidedHere } from '../../components/ApprovalCard'
@@ -563,8 +564,11 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
   // 自动化建议围栏不属于正文:渲染/复制/朗读都用摘干净的 body,芯片单独摆一排。
   const streaming = msg.status === 'streaming'
   // 作品卡的按钮要宿主 IPC:只有桌面端认这种围栏,网页 / 手机端原样留在正文(不吞字)
-  const fenceKinds: FenceKind[] = window.tangu?.productsRegister ? ['suggest', 'task', 'creation'] : ['suggest', 'task']
-  const { text: body, items: suggestions, tasks, creations } = splitSuggestions(msg.content, { streaming, kinds: fenceKinds })
+  // Muse 私聊里它自己开口的那条(origin 只有引擎写得出,10-18 方案 B):待办卡的 `todo:` 头生效、审批围栏收成一行(MuseDm.tsx)。
+  const museTodo = msg.origin === 'proactive:todo'
+  const museApproval = msg.origin === 'proactive:approval'
+  const fenceKinds: FenceKind[] = [...(window.tangu?.productsRegister ? ['suggest', 'task', 'creation'] as FenceKind[] : ['suggest', 'task'] as FenceKind[]), ...(museApproval ? ['approval'] as FenceKind[] : [])]
+  const { text: body, items: suggestions, tasks, creations, approvals: museApprovals } = splitSuggestions(msg.content, { streaming, kinds: fenceKinds, todo: museTodo })
   const childIds = childIdsOf(msg.toolEvents) // 不用 hook:上面 system / user 两支提前 return 了
   // sketch 卡 → 笔记里的交互块(```forsion-sketch 围栏,嵌入层按同一沙箱渲染);与回答的「插入笔记」同一条写口。
   const sketchActions = handlers?.onInsertNote
@@ -593,6 +597,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
       <div className="t2-avatar" style={!avatarUrl && msg.agentColor ? { background: msg.agentColor, color: '#fff' } : undefined}>{avatarUrl ? <img src={avatarUrl} alt="" /> : firstChar(msg.agentName || agentNameFallback || 'Tangu')}</div>
       <div className="t2-asst-col">
         <div className="t2-name" style={msg.agentColor ? { color: msg.agentColor } : undefined}>{msg.agentName || agentNameFallback || 'Tangu'}{msg.status === 'streaming' && <span className="t2-dot" />}</div>
+        {isProactive(msg) && <ProactiveMark at={msg.timestamp} />}
         {msg.systemPrompt && <SystemPromptBlock content={msg.systemPrompt} />}
         {(() => {
           // 思考原文整条消息只有一份:挂在第一条过程行上(前面还没有正文时);否则单独一行过程行放最前(只剩思考那一步)。
@@ -672,7 +677,10 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
         {runSid && childIds.length > 0 && <ChildSessionsBlock parentId={runSid} ids={childIds} onSuggest={handlers?.onSuggest} />}
         {/* 任务卡:顺手发现的、塞进当前对话会撑爆的活。track=true 的卡主按钮是「交给 Muse 追踪」。同样只在 done 上渲染。
             渲染与落点按钮在 TaskCards(与收件箱共用)。 */}
-        {!!tasks.length && msg.status === 'done' && <TaskCards tasks={tasks} ownerId={msg.id} onTask={handlers?.onTask} sessionId={runSid || undefined} createdAt={msg.timestamp || undefined} />}
+        {!!tasks.length && msg.status === 'done' && (museTodo
+          ? <MuseTodoCards tasks={tasks} ownerId={msg.id} onTask={handlers?.onTask} sessionId={runSid || undefined} createdAt={msg.timestamp || undefined} />
+          : <TaskCards tasks={tasks} ownerId={msg.id} onTask={handlers?.onTask} sessionId={runSid || undefined} createdAt={msg.timestamp || undefined} />)}
+        {museApprovals.map((id) => <MuseApprovalLine key={id} id={id} />)}
         {/* 作品卡:把这条对话里做的东西变成「造物」(点了宿主才建文件夹 / 复制)。同样只在 done 上渲染。 */}
         {!!creations.length && msg.status === 'done' && <CreationCards cards={creations} sessionId={runSid} />}
 

@@ -624,6 +624,8 @@ export interface MessageRecord {
   timestamp: number
   model_id: string | null
   is_error: boolean
+  /** Muse 主动发进私聊的消息:proactive / proactive:todo / proactive:approval;其余为空。 */
+  origin?: string | null
 }
 
 export interface ModelInfo {
@@ -1087,6 +1089,8 @@ export interface UiMessage {
   /** system=客户端本地通知行(斜杠命令反馈等;不持久化,reload 会消失)。 */
   role: 'user' | 'assistant' | 'system'
   content: string
+  /** Muse 主动发进私聊的(引擎 chat_messages.origin):proactive / proactive:todo / proactive:approval。 */
+  origin?: string
   reasoning?: string
   /** 思考累计用时(ms)与本段思考的起点:只在本次运行里由 appStore 记(引擎不落库),渲染成「思考 N 秒」。 */
   reasoningMs?: number

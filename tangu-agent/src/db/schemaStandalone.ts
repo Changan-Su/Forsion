@@ -23,6 +23,8 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
   parent_session_id VARCHAR(36),
   awaiting_user BOOLEAN NOT NULL DEFAULT FALSE,
   report_run_id VARCHAR(36),
+  proactive_at BIGINT,
+  last_read_at BIGINT,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -41,6 +43,7 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   attachments JSONB,
   display_files JSONB,
   agent_slug VARCHAR(64),
+  origin VARCHAR(24),
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

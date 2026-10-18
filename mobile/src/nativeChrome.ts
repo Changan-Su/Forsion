@@ -86,10 +86,13 @@ const BADGE_LABEL: Record<SpaceBadgeKind, () => string> = {
 export function spaceBadges(): Record<string, SpaceBadgeKind> {
   const app = useApp.getState()
   const out: Record<string, SpaceBadgeKind> = {}
-  const waiting = mergeAttention(attentionIndex(useAttention.getState().byTarget), app.messagesBySession, app.runningBySession).size > 0
+  // dm = 引擎 attention 端点(10-18 Muse 私聊方案 B):Muse 主动发来没看的、它在等回答 / 后台有待批的,与桌面 Tangu 角标同一份。
+  const dm = useAttention.getState().dm
+  const dmHas = (k: 'awaiting' | 'unread'): boolean => app.sessions.some((x) => !!dm[x.id]?.[k])
+  const waiting = mergeAttention(attentionIndex(useAttention.getState().byTarget), app.messagesBySession, app.runningBySession).size > 0 || dmHas('awaiting')
   if (waiting) out.tangu = 'attention'
   else if (Object.keys(app.runningBySession).length) out.tangu = 'running'
-  else if (app.unread.size && app.sessions.some((x) => app.unread.has(x.id))) out.tangu = 'unread'
+  else if ((app.unread.size && app.sessions.some((x) => app.unread.has(x.id))) || dmHas('unread')) out.tangu = 'unread'
   if (useInbox.getState().unreadCount > 0) out.inbox = 'unread'
   return out
 }

@@ -213,7 +213,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'account', 'nested'];
+const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'account', 'nested', 'musedm'];
 KEYS.push('signals');
 KEYS.push('musechat');
 KEYS.push('novision');
@@ -253,7 +253,7 @@ const GIT_PREFIX = 'livetest/'; const GIT_TAG = '[LIVE]';
 // opt-in:缺省全量跑里**不带**这几个 —— cache 7 个 run / churn 6 个 run(都慢),cache 与 recall-unprompted
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
-const OPT_IN = new Set(['nested', 'realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'appsettings', 'control', 'phone']);
+const OPT_IN = new Set(['nested', 'musedm', 'realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'appsettings', 'control', 'phone']);
 OPT_IN.add('signals');
 OPT_IN.add('musechat');
 OPT_IN.add('imgwindow');
@@ -4141,6 +4141,85 @@ Then reply with only the command output.`,
     const g7Text = `G7 远程会话${seedR.error ? `种子失败(${seedR.error})` : hintLeak.length ? `漏进周期简报 ${hintLeak.join(',')} ← 红` : '未进周期简报'}、本机活动行${hintPos ? '在' : '不在 ← 红(正对照)'}${saidLeak ? '、Muse 输出里出现了远程标记 ← 红' : ''}(简报 ${hints.length} 份)`;
     const ok = twoCycles && (journal.trim().length > 0 || todos.length > 0 || approvals.length > 0) && !spaceAsks && replayOk && g7; // 审批队列、开局上下文都是引擎真实状态,照判
     return { ok, detail: `${g7Text};${slept ? `周期 1 后${slept};` : ''}周期 2 ${twoCycles ? '已起' : blockedBy ? `被 token 预算挡(${blockedBy})` : '600s 未起'}(lastCycleAt ${firstCycleAt || '?'}→${Number(second?.lastCycleAt) || '?'},restarts ${second?.restartsThisWindow ?? '?'});起周期时计费/毛量 ${spent || '?'};开局上下文 ${p1 || '?'}→${p2 || '?'} token${p1 && p2 ? `(×${(p2 / p1).toFixed(2)}${replayOk ? '' : ' ⚠️带着上一周期的对话'})` : twoCycles ? '(⚠️周期 2 首轮 60s 未返回,没量到)' : ''};Journal ${journal.trim() ? '有' : '无'};todo ${todos.length};审批 ${approvals.length}${spaceAsks ? `(其中 Space ${spaceAsks} 条)` : ''};Space ${space.ok ? '' : '⚠️'}${space.text}${space.built ? (spaceUsesAgent ? '(用 ctx.agent 取数)' : '(没用 ctx.agent)') : ''}${space.built ? `;CSS 变量${unknownVars === null ? ' ?' : unknownVars.length ? ` ⚠️宿主没有 ${unknownVars.join(' ')}` : '全在宿主词表'}` : ''};插件技能加载 ${skillLoads} 次;自排日程 ${museSchedule.length}${museSchedule.length ? `(${museSchedule.join(' | ')})` : ''};error ${(second || started).lastError || '无'}`, output: museSays, journal, todos, approvals, status: second || started };
+  });
+  // ── musedm(10-18,opt-in,单独跑:`--only musedm`):Muse 私聊 × 收件箱分工(方案 docs/ToBeImproved/Muse私聊与收件箱分工方案_2026-10-17,
+  // 用户选 B「按性质分」)。三件同时到期的事交给 Muse(走「交给 Muse 追踪」同一条路:auto 日程条目到期 → 进周期 kickoff):
+  //   A 读 sync-notes.md 写一份三家对比给用户以后看 → 成品,该进收件箱(inbox_send),不该整篇塞进私聊;
+  //   B CI 抖了一次要不要记成已知抖动 → 要用户拍板,该进私聊(message_user,问句 → 引擎置「等你」);
+  //   C 往授权文件夹里的 STATUS.md 加一行 → ask 档排队审批 → 引擎把请求写进 Muse 私聊(origin=proactive:approval),不发审批信。
+  // 判据全读引擎真状态(私聊消息的 origin、收件箱的信、GET /agent/sessions/attention),不看模型自述。单独跑:别的场景开过的 Muse 周期
+  // 可能先用掉每小时 3 条的私聊额度。模型原话(周期回复 + 私聊里主动发的)进 output。
+  await scenario('musedm', `musedm Muse 私聊 × 收件箱分工(${MUSE_MODE})`, async () => {
+    const seeded = await until(() => existsSync(join(home, 'agents', 'muse', 'config.toml')), 30_000, 500);
+    if (!seeded) return { ok: false, detail: '30s 内没播种出 Muse(agents/muse/config.toml)' };
+    writeFileSync(join(workspace, 'sync-notes.md'), [
+      '# 三家笔记软件的离线同步(调研素材)',
+      '- Obsidian Sync:离线照常编辑;冲突时按行三方合并,合不了留两份(冲突副本)。',
+      '- Notion:离线模式要先手动把页面设为可离线;冲突以最后写入为准,旧版本进页面历史。',
+      '- Logseq:基于文件,同步靠 Logseq Sync 或第三方网盘;冲突时生成 .conflict 文件,要手动合。',
+      '',
+    ].join('\n'));
+    writeFileSync(join(workspace, 'STATUS.md'), '# Status\n');
+    const d = new Date(Date.now() - 2 * 60_000);
+    const due = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+    const ENTRIES = [
+      { name: '三家离线同步对比', prompt: `读 ${join(workspace, 'sync-notes.md')},写一份 Obsidian / Notion / Logseq 离线编辑与冲突处理的对比(一张表 + 两三句建议),给我以后有空看。` },
+      { name: 'CI 抖动要不要记', prompt: 'main 上的 CI 红了一次(sync.test.ts),重跑是绿的。要不要把它记成已知抖动,我来定,你别替我定。' },
+      { name: '状态文件加一行', prompt: `在 ${join(workspace, 'STATUS.md')} 末尾加一行「- 10-18 离线同步调研已完成」。` },
+    ];
+    for (const e of ENTRIES) {
+      const r = await api('/agent/special/schedule/muse/entries', { method: 'POST', body: JSON.stringify({ ...e, date: due, auto: true }) }).catch((err) => ({ error: String(err?.message || err) }));
+      if (!r?.entry) return { ok: false, detail: `建日程条目失败:${JSON.stringify(r).slice(0, 300)}` };
+    }
+    const t0 = Date.now();
+    await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ muse: { enabled: true, modelId: MODEL, mode: MUSE_MODE, heartbeatMinutes: 60, supervisorPollMinutes: 1, maxIterationsPerCycle: 16, maxRestartsPerWindow: 3, allowedFolders: [workspace], notify: 'immediate' } }) });
+    const status = () => api('/agent/special/muse/status').then((x) => (x && typeof x.status === 'object' ? x.status : x));
+    const started = await until(async () => { const x = await status(); return x.running || Number(x.lastCycleAt) >= t0 - 5000 ? x : null; }, 120_000, 3000);
+    if (!started) return { ok: false, detail: `120s 未起周期;[muse] 日志:${museLogTail() || '(无)'}` };
+    const done = await until(async () => { const x = await status(); return !x.running && Number(x.lastCycleAt) > 0 ? x : null; }, 600_000, 5000);
+    if (!done) return { ok: false, detail: '周期 600s 未收尾' };
+    // 模型调用本身失败(额度用完 / 网络)≠ 分流错了:先如实报这个,别把它读成四条红(10-18 首跑就是 usage limit)
+    const runFail = (readFileSync(engineLog, 'utf8').match(/run [0-9a-f-]+ failed: [^\n]*/g) || []).slice(-1)[0];
+    if (done.lastError || runFail) return { ok: false, detail: `周期没跑成(模型调用失败,不是分流问题):${done.lastError || runFail}` };
+    await sleep(2000);
+    const { default: Database } = await import('better-sqlite3');
+    const db = new Database(join(home, 'state.db'), { readonly: true, fileMustExist: true });
+    let dmId = '';
+    let dmWaits = false;
+    let dm = [];
+    try {
+      const dmRow = db.prepare(`SELECT * FROM chat_sessions WHERE kind = 'user' AND archived = 0 AND json_valid(agent_config) AND json_extract(agent_config, '$.soloAgentSlug') = 'muse' ORDER BY updated_at DESC LIMIT 1`).get();
+      dmId = dmRow?.id || '';
+      dmWaits = !!dmRow?.awaiting_user; // 只有 message_user 的问句置这一列(审批的「等你」由 attention 现算),拿它判 B 才分得开
+      // 基线引擎(--kind base)没有 origin 列:读成 NULL,红在判据上而不是 SQL 报错上
+      const hasOrigin = db.prepare(`SELECT 1 FROM pragma_table_info('chat_messages') WHERE name = 'origin'`).get();
+      dm = dmId ? db.prepare(`SELECT role, ${hasOrigin ? 'origin' : 'NULL AS origin'}, content FROM chat_messages WHERE session_id = ? ORDER BY timestamp`).all(dmId) : [];
+    } finally { db.close(); }
+    const said = dm.filter((m) => String(m.origin || '').startsWith('proactive'));
+    const ask = said.find((m) => m.origin === 'proactive' && /抖动|flak|sync\.test/i.test(m.content) && /[?？]/.test(m.content));
+    const apps = (t) => ['Obsidian', 'Notion', 'Logseq'].every((a) => String(t || '').includes(a));
+    const productInDm = said.some((m) => m.origin === 'proactive' && apps(m.content) && String(m.content).length > 600);
+    const inbox = asList(await api('/agent/inbox?filter=all').catch(() => []), 'messages');
+    // 成品信:正文带对比,或指向写好的对比文件(10-18 修后首跑:对比写进 Library、发一封指路信 —— 分流是对的,判据原先只认前一种)
+    const letter = inbox.find((m) => m.sender_id === 'muse' && (apps(m.body) || /对比|同步|compar|sync/i.test(`${m.title} ${m.body}`)));
+    const apvLetters = inbox.filter((m) => /```forsion-approval/.test(String(m.body || '')));
+    const apvDm = said.filter((m) => m.origin === 'proactive:approval');
+    const pending = asList(await api('/agent/special/approvals?status=pending').catch(() => []), 'approvals').filter((a) => a.agent_slug === 'muse');
+    const att = asList(await api('/agent/sessions/attention').catch(() => []), 'sessions').find((x) => x.id === dmId);
+    const needApv = MUSE_MODE === 'ask';
+    const apvOk = !needApv || (pending.length > 0 && apvDm.length > 0 && apvLetters.length === 0);
+    const ok = !!dmId && !!ask && dmWaits && !!letter && !productInDm && !!att?.unread && !!att?.awaiting && apvOk;
+    const museSays = done.sessionId ? asList(await api(`/agent/sessions/${done.sessionId}/messages`).catch(() => []), 'messages').filter((m) => m.role === 'assistant' || m.role === 'model').map((m) => String(m.content || '')).join('\n---\n') : '';
+    const detail = [
+      `私聊${dmId ? '' : '没建出来 ← 红'}主动 ${said.length} 条(问句 ${said.filter((m) => m.origin === 'proactive').length} / 待办 ${said.filter((m) => m.origin === 'proactive:todo').length} / 审批 ${apvDm.length})`,
+      `B 拍板进私聊:${ask ? (dmWaits ? '有,私聊亮了等你' : '有,但私聊没亮等你 ← 红') : '没有 ← 红'}`,
+      `A 成品进收件箱:${letter ? `有「${String(letter.title).slice(0, 40)}」(${apps(letter.body) ? '正文带对比' : '只是指路'})` : '没有 ← 红'}${productInDm ? ';整篇对比塞进了私聊 ← 红' : ''}`,
+      `C 审批:${needApv ? `待批 ${pending.length},私聊里 ${apvDm.length} 条,审批信 ${apvLetters.length}${apvOk ? '' : ' ← 红'}` : `非 ask 档不判(待批 ${pending.length})`}`,
+      `attention ${att ? JSON.stringify({ unread: att.unread, awaiting: att.awaiting }) : '没报这条私聊 ← 红'}`,
+      `收件箱共 ${inbox.length} 封(muse ${inbox.filter((m) => m.sender_id === 'muse').length})`,
+    ].join(';');
+    const output = `${museSays}\n\n=== 私聊里主动发的 ===\n${said.map((m) => `[${m.origin}] ${m.content}`).join('\n---\n')}`;
+    return { ok, detail, output, status: done };
   });
   // ── musewake(09-24,opt-in,单独跑:`--only musewake`):「用户睡了、没事可做」时 Muse 会不会自己 set_next_wake,
   // 引擎会不会真的跳过心跳,用户一动能不能立刻醒。作息按**当前钟点**播:活跃窗口 = 现在 +6h 起 10 个小时(每天每小时一行,

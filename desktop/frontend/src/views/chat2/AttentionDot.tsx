@@ -21,8 +21,8 @@ export const AttentionDot: React.FC<{ n: number; localOnly?: boolean }> = ({ n, 
 
 /** 会话行尾的状态(10-17 起状态从图标角挪到行尾):在跑 = 转圈;等你 = 警示色点带一圈淡晕;做完了没看 = 主题色淡点;看过了 = 不画。
  *  「等你」有两个来源:审批 / 询问(上面的 AttentionDot,带个数)和模型说它在等用户回答(awaiting_user)。 */
-export const StatusMark: React.FC<{ status: RowStatus }> = ({ status }) => {
+export const StatusMark: React.FC<{ status: RowStatus; title?: string }> = ({ status, title }) => {
   const { t } = useI18n()
   if (!status) return null
-  return <span className={`t2s-st ${status}`} title={t(`sidebar.st.${status}`)} />
+  return <span className={`t2s-st ${status}`} title={title || t(`sidebar.st.${status}`)} />
 }

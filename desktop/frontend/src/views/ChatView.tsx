@@ -24,6 +24,7 @@ import { useDeskAcceptsFiles } from '../amadeus/plugins/deskCompanion'
 import { ErrorBoundary } from '../components/ErrorBoundary'
 import { EditorialMessage, type MessageHandlers } from './chat2/EditorialMessage'
 import { ApprovalTray } from './chat2/ApprovalTray'
+import { MuseApprovalTray } from './chat2/MuseDm'
 import { APPROVAL_UPDATE_OPEN, pendingPromptsOf } from './chat2/approvalQueue'
 import { CHILD_UPDATE_OPEN, ChildFromLine } from './chat2/ChildSessions'
 import { RunStatsLine } from './chat2/RunStatsLine'
@@ -725,7 +726,8 @@ export function ChatView({ leaf, params }: ViewProps) {
               onDecide={(mid, aid, action, args) => s.decideApproval(mid, aid, action, args, activeId)}
               onAnswer={(mid, iid, ans) => s.answerInquiry(mid, iid, ans, activeId)}
             />
-          ) : undefined}
+          // Muse 私聊:它后台排队的审批也在这里批(10-18 方案 B;没有待批时托盘不画)
+          ) : mvCfg.soloAgentSlug === 'muse' && !params.childSurface ? <MuseApprovalTray key={activeId ?? ''} /> : undefined}
           advisory={!params.childSurface ? (
             // P1-K6:焦点在「我的电脑」且连不上时,顶上这一段换成连接态提示(同一段语汇,两条不叠放)。
             // ⚠️ 本文件的状态条 / disabled 归 K7(INTEGRATION §2.2,合入顺序 K6-S4 → K7):K7 的 RemoteSessionStrip(§3.8)落地时

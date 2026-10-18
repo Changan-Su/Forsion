@@ -94,6 +94,8 @@ export const CLASSIFICATION = {
 
   // ── sessions.ts ──
   'GET /agent/sessions': [A, 'session list'],
+  'GET /agent/sessions/attention': [A, 'per-session unread / waiting flags for row status and the Tangu badge (ids and booleans only)'],
+  'POST /agent/sessions/:id/read': [A, 'mark a session read (only moves last_read_at)'],
   'POST /agent/sessions': [A, 'create a session'],
   'GET /agent/sessions/search': [A, 'session search'],
   'POST /agent/sessions/:id/branch': [A, 'branch a session (remote taint propagates, C5)'],

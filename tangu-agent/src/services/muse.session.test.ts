@@ -112,7 +112,9 @@ describe('C1a 预算口径:跨全部 Muse 会话', () => {
 // 逐周期回放,只随本周期发一次(多 200 来字符 ≈ 60 token,对 ~1.8 万的开局上下文可以忽略)。
 // 同日再放到 3500:补 ctx.agent 返回字段与配色变量表(dev 首个 ctx.agent 版 Space 猜错字段、用了不存在的 --panel),实测 3300。
 // 10-13 放到 3700:加一句「简报末尾的 <computer_history> 怎么用」(实机 Muse 7 天 67 个周期只主动查了 2 次电脑历史)。
-const MAX_KICKOFF = 3700;
+// 10-18 放到 4000:加一句「要回话 / 拍板的进私聊(message_user)、成品进收件箱」(Muse 私聊方案 B),实测约 3880。
+// 同日 live 首跑后放到 4100:补半句「存进 Library 或 display_file 都送不到」(成品被存进 Library、没发信),实测约 4010。
+const MAX_KICKOFF = 4100;
 
 describe('C1b kickoff 拆分', () => {
   const cfg = { ...SPECIAL_AGENTS_DEFAULTS.muse, mode: 'ask' as const, escalateTo: '', notify: 'immediate' as const };
