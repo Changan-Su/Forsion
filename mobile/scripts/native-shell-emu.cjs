@@ -73,16 +73,20 @@ async function check(name, fn) {
     try { shots.push(h.screenshot(OUT, `fail-${checks.length}`)) } catch { /* no device */ }
     // … and the tree: a label or a rectangle is not in a picture (`h.nodes(OUT)` writes last-ui.xml)
     try { h.nodes(OUT); fs.copyFileSync(path.join(OUT, 'last-ui.xml'), path.join(OUT, `fail-${checks.length}.xml`)) } catch { /* no device */ }
-    // Leave a clean stage for the next check: dismiss sheets / drawers left open by the failure.
+    // Leave a clean stage for the next check: dismiss sheets / drawers left open by the failure — and the keyboard and a
+    // page-side palette (command panel / quick find), which no native node shows: left up, they took the next check down.
     // (page mode — settings — keeps the bar: its back button means "still inside a page")
     for (let i = 0; i < 4; i++) {
       const l = h.nodes()
-      if (h.byId(l, 'nativeChrome.bar') && !h.byId(l, 'nativeChrome.back') && !h.byId(l, 'nativeSheet.sheet')) break
+      const ime = /mInputShown=true/.test(h.adb('shell', 'dumpsys', 'input_method'))
+      if (!ime && !(await webOverlay()) && h.byId(l, 'nativeChrome.bar') && !h.byId(l, 'nativeChrome.back') && !h.byId(l, 'nativeSheet.sheet')) break
       h.key(4); await h.pause(500)
     }
   }
 }
 const shot = (name) => { shots.push(h.screenshot(OUT, name)); return name }
+/** A page-side palette is open (set once the page is connected; the failure clean-up asks it). */
+let webOverlay = async () => false
 
 // Chat fixtures (ASCII titles: the English pass asserts no CJK in sheets that list them). execMode 'host' so the
 // composer shows the approval tiers — real Android cloud sessions are usually sandboxed and have none.
@@ -487,6 +491,7 @@ const tabCountText = (list) => {
   h.adb('shell', 'am', 'start', '-n', ACTIVITY)
   let cdp = await h.connect(PKG)
   await cdp.send('Page.enable')
+  webOverlay = () => cdp.eval("!!document.querySelector('.cmd-input, .amx-qf-input')").catch(() => false)
   // Remember what we overwrite; restored at the end.
   const saved = await cdp.eval(`(async () => ({
     token: (await Capacitor.Plugins.Preferences.get({ key: 'forsion_token' })).value,
@@ -795,6 +800,15 @@ const tabCountText = (list) => {
     const wv = webViewNode(ui())
     const px = (v, o) => Math.round(o + v * r.dpr)
     return { left: px(r.left, wv.rect.left), top: px(r.top, wv.rect.top), right: px(r.right, wv.rect.left), bottom: px(r.bottom, wv.rect.top) }
+  }
+  /** Put the keyboard away, then tap. The page keeps re-laying out after the keyboard goes (0.3–3.3 s measured on 10-18):
+   *  tap once the keyboard is reported gone and the element (and the viewport) read the same twice — after a fixed
+   *  pause the tap lands where the element was (quick find "did not open"). */
+  async function tapAfterKeyboard(expr) {
+    if (imeShown()) { h.key(4); for (let i = 0; i < 15 && imeShown(); i++) await h.pause(200) }
+    const at = `JSON.stringify([innerHeight, (${expr})?.getBoundingClientRect()])`
+    for (let i = 0, last = ''; i < 20; i++) { const now = await cdp.eval(at); if (now === last) break; last = now; await h.pause(150) }
+    await tapEl(expr)
   }
   /** What the page was told about the floating chrome (dp) and what it made of it: the room it keeps clear (device px,
    *  measured on a probe) and the plates it draws behind the capsules (device px). */
@@ -2349,16 +2363,14 @@ const tabCountText = (list) => {
     h.adb('shell', 'input', 'text', 'quick')
     const quick = "[...document.querySelectorAll('.cmd-item')].find((r) => r.textContent.includes('快速查找'))"
     assert.ok(await h.waitPage(cdp, `!!${quick}`, 5000), 'control: the command panel does not list quick find')
-    if (imeShown()) { h.key(4); await h.pause(600) }
-    await tapEl(quick)
+    await tapAfterKeyboard(quick)
     assert.ok(await h.waitPage(cdp, "!!document.querySelector('.amx-qf-input')", 5000), 'control: quick find did not open')
     await tapEl("document.querySelector('.amx-qf-input')"); await h.pause(500)
     const TWO = sessions.find((x) => x.id === 'e2e-s2').title // as listed now: the session-row check renames it
     h.adb('shell', 'input', 'text', 'Two')
     const hit = `[...document.querySelectorAll('.amx-qf-row')].find((r) => r.querySelector('.amx-qf-title')?.textContent.trim() === ${JSON.stringify(TWO)})`
     assert.ok(await h.waitPage(cdp, `!!${hit}`, 6000), `control: search does not list the conversation (${await cdp.eval("JSON.stringify([...document.querySelectorAll('.amx-qf-title')].map((e) => e.textContent))")})`)
-    if (imeShown()) { h.key(4); await h.pause(600) }
-    await tapEl(hit)
+    await tapAfterKeyboard(hit)
     await h.waitPage(cdp, `(${dom.view}) === 'chat'`, 6000)
     await h.pause(1200)
     const opened = await st()
@@ -2570,13 +2582,11 @@ const tabCountText = (list) => {
       await tapEl("document.querySelector('.cmd-input')"); await h.pause(500); h.adb('shell', 'input', 'text', 'quick')
       const quick = "[...document.querySelectorAll('.cmd-item')].find((r) => r.textContent.includes('快速查找'))"
       assert.ok(await h.waitPage(cdp, `!!${quick}`, 5000), 'the command panel does not list quick find')
-      if (imeShown()) { h.key(4); await h.pause(600) }
-      await tapEl(quick); assert.ok(await h.waitPage(cdp, "!!document.querySelector('.amx-qf-input')", 5000), 'quick find did not open')
+      await tapAfterKeyboard(quick); assert.ok(await h.waitPage(cdp, "!!document.querySelector('.amx-qf-input')", 5000), 'quick find did not open')
       await tapEl("document.querySelector('.amx-qf-input')"); await h.pause(500); h.adb('shell', 'input', 'text', text)
       const hit = `[...document.querySelectorAll('.amx-qf-row')].find((r) => r.querySelector('.amx-qf-title')?.textContent.trim() === ${JSON.stringify(title)})`
       assert.ok(await h.waitPage(cdp, `!!${hit}`, 6000), `search does not list "${title}"`)
-      if (imeShown()) { h.key(4); await h.pause(600) }
-      await tapEl(hit); await h.waitPage(cdp, `(${dom.view}) === 'chat' && !document.querySelector('.amx-qf-input')`, 6000); await zero()
+      await tapAfterKeyboard(hit); await h.waitPage(cdp, `(${dom.view}) === 'chat' && !document.querySelector('.amx-qf-input')`, 6000); await zero()
     }
     say(`screen ${screen.w}x${screen.h} @${density}x; Android SDK ${sdk}; ${gestures ? 'gesture' : 'button'} navigation; back swipe progress reported: ${reportsProgress}`)
 
@@ -2926,8 +2936,7 @@ const tabCountText = (list) => {
       // the capsule's search button brings the same line up
       await tapId('nativeChrome.search')
       assert.ok(await h.waitPage(cdp, `!!${field} && document.activeElement === ${field}`, 4000), 'the capsule\'s search button did not open the search line with the caret in it')
-      if (imeShown()) { h.key(4); await h.pause(700) }
-      await tapEl(`document.querySelector('${L} .t2sw-plug-toolbar .t2s-search button')`)
+      await tapAfterKeyboard(`document.querySelector('${L} .t2sw-plug-toolbar .t2s-search button')`)
       assert.ok(await h.waitPage(cdp, `!${field}`, 4000), 'the search line did not close')
 
       // a row opens the message one level down; back returns to the list
