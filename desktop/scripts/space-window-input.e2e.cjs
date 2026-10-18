@@ -100,7 +100,7 @@ async function main() {
       })
       await win.evaluate(() => {
         window.__inputDrags = []
-        for (const kind of ['dragstart', 'drop', 'dragend', 'pointerdown', 'pointermove', 'pointerup', 'gotpointercapture', 'lostpointercapture', 'pointercancel', 'blur']) window.addEventListener(kind, (event) => window.__inputDrags.push({ kind, trusted: event.isTrusted, effect: event.dataTransfer?.dropEffect, screenX: event.screenX, screenY: event.screenY, buttons: event.buttons, primary: event.isPrimary, target: event.target?.tagName,
+        for (const kind of ['click', 'dragstart', 'drop', 'dragend', 'pointerdown', 'pointermove', 'pointerup', 'gotpointercapture', 'lostpointercapture', 'pointercancel', 'blur']) window.addEventListener(kind, (event) => window.__inputDrags.push({ kind, trusted: event.isTrusted, effect: event.dataTransfer?.dropEffect, screenX: event.screenX, screenY: event.screenY, buttons: event.buttons, primary: event.isPrimary, target: event.target?.tagName,
           pointerId: event.pointerId, cursor: kind === 'pointerup' ? window.tangu.cursorScreenPoint?.() : undefined }), true)
       })
       const active = await win.evaluate(() => localStorage.getItem('forsion_tangu_active_space'))
@@ -210,7 +210,29 @@ async function main() {
           await win.waitForTimeout(200)
           check(`${scale}: Escape outside ${x < 0 ? 'left' : 'right'} edge opens no window`, satellites().length === 0)
         }
+        // DIAG(temporary): why the ordinary click no longer switches on Windows
+        await win.evaluate(() => {
+          if (!window.__vt) {
+            window.__vt = []; window.__raf = 0
+            const tick = () => { window.__raf++; requestAnimationFrame(tick) }; tick()
+            const orig = document.startViewTransition?.bind(document)
+            if (orig) document.startViewTransition = (cb) => {
+              const rec = { t: Math.round(performance.now()) }; window.__vt.push(rec)
+              const vt = orig(() => { rec.cb = Math.round(performance.now()); return cb() })
+              vt.ready.then(() => { rec.ready = Math.round(performance.now()) }, (e) => { rec.readyErr = String(e) })
+              vt.updateCallbackDone.then(() => { rec.ucd = Math.round(performance.now()) }, (e) => { rec.ucdErr = String(e) })
+              vt.finished.then(() => { rec.fin = Math.round(performance.now()) }, (e) => { rec.finErr = String(e) })
+              return vt
+            }
+          }
+          window.__diagMark = window.__inputDrags.length
+        })
+        const diag = () => win.evaluate(() => ({ now: Math.round(performance.now()), raf: window.__raf, active: localStorage.getItem('forsion_tangu_active_space'), vt: window.__vt, sw: document.documentElement.dataset.spaceSwitch || null, vis: document.visibilityState, focus: document.hasFocus(), events: window.__inputDrags.slice(window.__diagMark).map(e => `${e.kind}:${e.target}:${e.trusted}`) }))
+        console.log('DIAG before', JSON.stringify(await diag()))
+        const clickAt = Date.now()
         await slot.locator('.rb-btn').click()
+        console.log('DIAG click took', Date.now() - clickAt, 'ms', JSON.stringify(await diag()))
+        for (const ms of [50, 200, 1000, 3000]) { await win.waitForTimeout(ms); console.log('DIAG +' + ms, JSON.stringify(await diag())) }
         check(`${scale}: ordinary click still switches the Space`, await win.evaluate(() => localStorage.getItem('forsion_tangu_active_space')) === 'agents')
         const firstSlot = await win.locator('.rb-top .rb-slot').first().boundingBox()
         await begin(); await win.mouse.move(firstSlot.x + firstSlot.width / 2, firstSlot.y + firstSlot.height / 2, { steps: 12 }); await win.mouse.up()
