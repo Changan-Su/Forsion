@@ -3860,7 +3860,12 @@ const tabCountText = (list) => {
     for (let i = 0; i < 20 && !imeShown(); i++) await h.pause(300)
     if (imeShown()) { h.key(4); await h.pause(700) } // long-pressed with the keyboard out of the way
     await cdp.eval("(window.__e2eCtx = 0, window.addEventListener('contextmenu', () => window.__e2eCtx++, true), true)")
-    const node = (await h.waitNodes((l) => l.find((n) => n.text === 'E2E Agent' || n['content-desc'] === 'E2E Agent'), { timeout: 4000 })).hit
+    const findAgent = (l) => l.find((n) => n.text === 'E2E Agent' || n['content-desc'] === 'E2E Agent')
+    let node = (await h.waitNodes(findAgent, { timeout: 4000 })).hit
+    // 收键盘后输入区还在重排:位置连续两次读到一样才按,否则按到旧坐标、长按落在主页空白处(弹「主页卡片」或什么都不弹)
+    const settleFrom = Date.now(), firstBounds = node?.bounds
+    for (let i = 0; node && i < 20; i++) { await h.pause(150); const again = findAgent(h.nodes()); if (again?.bounds === node.bounds) break; node = again }
+    console.log('  settle:', Date.now() - settleFrom, 'ms', firstBounds, '→', node?.bounds)
     console.log('  long-press target:', node ? `${node.class} ${node.bounds}` : 'not in a11y tree → synthetic contextmenu')
     if (node) h.longPress(node)
     else await cdp.eval(`(() => { const el = document.querySelector('[data-agent-slug="e2e-agent"]'); const r = el.getBoundingClientRect()
