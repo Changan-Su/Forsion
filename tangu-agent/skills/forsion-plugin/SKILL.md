@@ -1282,7 +1282,10 @@ ctx.databases?.setCell(db.path, row.id, dateColId, '2026-10-20T15:00/2026-10-20T
 const id = await ctx.databases?.addRow(db.path, { [dateColId]: '2026-10-21' }, '交周报')
 const undo = ctx.databases?.deleteRow(db.path, row.id)   // 经典表才有撤销;笔记视图返回 null
 
-const offTasks = ctx.noteTasks?.subscribe(({ ready, tasks }) => renderTasks(tasks.filter((t) => t.isTask)))
+const offTasks = ctx.noteTasks?.subscribe(({ ready, tasks }) => {
+  if (!ready) return showLoading()          // 同上:库还没恢复 / 刚换库时的空列表 ≠ 笔记里没有任务
+  renderTasks(tasks.filter((t) => t.isTask))
+})
 ctx.noteTasks?.update(task.id, { checked: true })        // false → 让用户去笔记里改:ctx.app.openNote(task.path)
 ```
 
@@ -1299,7 +1302,9 @@ ctx.noteTasks?.update(task.id, { checked: true })        // false → 让用户�
 - **笔记任务**:`id` = `路径:行号`,两次加载之间稳定,笔记里行挪了会变 —— 每次以最新回调为准,别存起来。`isTask:false` 的普通行
   (`交周报 @2026-10-20`)没有勾选框,`update({checked})` 返回 false。`update` 先反映在下一次回调里,稍后写回那一行 markdown;
   那行已经对不上时宿主自己提示用户去笔记里改。网页 / 手机宿主不能回写 → false。
-- 两个 `subscribe` 都**立刻回调一次**,插件停用时宿主统一退订(返回的退订函数照样可以自己调)。
+- 两个 `subscribe` 都**立刻回调一次**,插件停用时宿主统一退订(返回的退订函数照样可以自己调)。`ready` 两边同一个意思:库已恢复、**当前这个库**拉过了;换库那一刻翻回 `false`。(2026-10-16 早些的 seams 分支上 noteTasks 在库恢复前会先给 `ready:true` + 空列表,已修。)
+- **声明的能力会写给用户看**:插件详情页在描述下面列一行「这个插件可以：读写你的多维表、读写笔记里的 @ 任务、读取前台窗口」(只列声明了的那几项,`activeWindow` 同理)。只声明真要用的 —— 多写一项,用户在详情页就多看到一项授权。
+- 端到端台架:Genesis `desktop` 的 `npm run check:plugindata`(真 Electron × 外置探针插件 × 预置库,核对注入闸、ready 先假后真、写口落盘、详情页那一行)。
 
 ## Floating Panel:正式第六种面板(2026-09-17 起)
 
