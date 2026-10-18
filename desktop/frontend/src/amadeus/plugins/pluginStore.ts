@@ -181,7 +181,7 @@ interface PluginState {
   viewLocations: readonly PluginViewLocation[] | null
   setViewOpener(fn: ((type: string, loc?: PluginViewLocation) => void) | null, locations?: readonly PluginViewLocation[]): void
   /** 宿主注入的关 / 换视图(桌面壳 = 引擎的 closeViewsOfType / replaceViewsOfType);没有工作台的宿主保持 null。 */
-  viewControls: { close(type: string): void; replace(from: string, to: string, params?: Record<string, unknown>): number } | null
+  viewControls: { close(type: string, opts?: { collapse?: boolean }): void; replace(from: string, to: string, params?: Record<string, unknown>): number } | null
   setViewControls(controls: PluginState['viewControls']): void
   disposers: Record<string, (() => void) | undefined>
   initialized: boolean
@@ -1341,7 +1341,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     get viewLocations() { return get().viewLocations ?? undefined },
     listCapabilities: LIST_CAPABILITIES,
     // 关 / 换同样按这一代判活:视图类型名按插件 id 命名空间、新旧两代共用,旧一代迟到的回调会关掉 / 换掉新一代开着的视图。
-    closeView: (viewId) => { if (ctxAlive()) get().viewControls?.close(`plugin:${pluginId}:${viewId}`) },
+    closeView: (viewId, opts) => { if (ctxAlive()) get().viewControls?.close(`plugin:${pluginId}:${viewId}`, opts) },
     replaceView: (fromViewId, toViewId, opts) =>
       (ctxAlive() ? get().viewControls?.replace(`plugin:${pluginId}:${fromViewId}`, `plugin:${pluginId}:${toViewId}`, opts?.params) ?? 0 : 0),
     ...(!hostTangu()?.mobile ? { openFloatingPanel: (viewId: string, opts?: import('./types').PluginFloatingPanelOptions) => {

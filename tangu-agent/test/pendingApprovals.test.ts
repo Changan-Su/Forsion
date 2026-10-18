@@ -105,7 +105,7 @@ describe('pendingApprovals', () => {
     expect(await countPendingApprovals(USER)).toBe(0);
   });
 
-  it('批准:按原参数代执行 write_file → 文件落盘、检查点 pre-image、结果写回、LOG 行、收件箱回执(muse 发信人)', async () => {
+  it('批准:按原参数代执行 write_file → 文件落盘、检查点 pre-image、结果写回、LOG 行(Muse 不发回执信)', async () => {
     const target = join(work, 'notes', 'out.md');
     const c = call('write_file', { path: target, content: 'hello from muse' });
     const { id } = await queueApproval({ userId: USER, sessionId: 'S', runId: 'R9', agentSlug: 'muse', call: c, preview: `write ${target}`, cwd: work });
@@ -125,10 +125,8 @@ describe('pendingApprovals', () => {
     expect(String(rows[0].result)).toContain('wrote');
     expect(rows[0].decided_by).toBe('user');
     expect(appendedLogs.some((l) => l.includes('[approval] approved by user and executed (approved)'))).toBe(true);
-    const inbox = await query<any[]>(`SELECT sender_id, title FROM inbox_messages WHERE user_id = ?`, [USER]);
-    expect(inbox.length).toBe(1);
-    expect(inbox[0].sender_id).toBe('muse');
-    expect(String(inbox[0].title)).toContain('✓');
+    // Muse 批完不再发回执信(10-18 方案 B:请求在它的私聊里,那张卡按 id 现读、原地变「已批准」);别的 agent 照旧发,见下面「单行面」
+    expect(await query<any[]>(`SELECT id FROM inbox_messages WHERE user_id = ?`, [USER])).toHaveLength(0);
   });
 
   it('批准但执行失败 → status failed(不吞错)', async () => {
@@ -615,7 +613,8 @@ describe('单行面只用闸门摘要,不带写入内容(四轮复核 #2)', () =
   let outside: string
   beforeEach(() => { outside = mkdtempSync(join(tmpdir(), 'tangu-approvals-summary-')) })
   afterEach(() => { try { rmSync(outside, { recursive: true, force: true }) } catch { /* ignore */ } })
-  const ctx = () => ({ sessionId: 'S', execMode: 'host', approvalMode: 'auto-edit' as const, cwd: work, userId: USER, agentSlug: 'muse', approvalDeferral: 'queue' as const })
+  // 回执标题要有信可看:用默认 agent(Muse 10-18 起批完不发回执信)
+  const ctx = () => ({ sessionId: 'S', execMode: 'host', approvalMode: 'auto-edit' as const, cwd: work, userId: USER, agentSlug: 'tangu', approvalDeferral: 'queue' as const })
   const SECRET = 'secret-token-abc'
   const gatePreview = (c: ToolCall) => `⚠ Write outside the workspace · ${approvalPreview(c)}`
   const queue = async (c: ToolCall) => {

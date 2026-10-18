@@ -10,7 +10,7 @@ vi.mock('../services/backendService', async (importOriginal) => ({
 }))
 vi.mock('./notificationStore', () => ({ notifyApp: h.notify }))
 
-import { useInbox } from './inboxStore'
+import { inboxLetterPops, useInbox } from './inboxStore'
 
 // store 更新角标时摸 window.tangu(桌面桥);node 环境下给个空壳即可。
 vi.stubGlobal('window', {})
@@ -23,7 +23,7 @@ describe('refreshUnread 单飞', () => {
     let release!: (v: { count: number; latestId: string }) => void
     h.count.mockImplementationOnce(() => new Promise((r) => { release = r }))
     h.count.mockResolvedValue({ count: 2, latestId: 'b' })
-    h.list.mockResolvedValue([{ id: 'b', title: 'T', body: '', sender_kind: 'agent', sender_id: 'muse', origin_broadcast_id: null, read_at: null, archived_at: null, created_at: '2026-09-11 09:00:00' }])
+    h.list.mockResolvedValue([{ id: 'b', title: 'T', body: '', sender_kind: 'agent', sender_id: 'automation:t1', origin_broadcast_id: null, read_at: null, archived_at: null, created_at: '2026-09-11 09:00:00' }])
 
     const p1 = useInbox.getState().refreshUnread()
     const p2 = useInbox.getState().refreshUnread()
@@ -41,7 +41,8 @@ describe('refreshUnread 单飞', () => {
  *  读掉那封(本地未读 1 → 0)和回信到达(服务端未读又是 1)落在同一个 15 秒轮询间隔里,
  *  旧判据拿的是「上一次轮询的未读数」,1 > 1 不成立 → 只更新红点不刷列表。 */
 describe('refreshUnread 刷列表', () => {
-  const mk = (id: string, read = false) => ({ id, title: id, body: '', sender_kind: 'agent' as const, sender_id: 'muse', origin_broadcast_id: null, read_at: read ? '2026-09-11 09:00:01' : null, archived_at: null, created_at: '2026-09-11 09:00:00' })
+  // 自动化提醒:10-18 起只有它和审批信还弹通知(见下面「哪些信弹」)
+  const mk = (id: string, read = false) => ({ id, title: id, body: '', sender_kind: 'agent' as const, sender_id: 'automation:t1', origin_broadcast_id: null, read_at: read ? '2026-09-11 09:00:01' : null, archived_at: null, created_at: '2026-09-11 09:00:00' })
 
   it('读掉一封后同一轮询间隔里来了新的一封(未读数 1 → 1):照样刷列表并通知', async () => {
     h.count.mockResolvedValue({ count: 1, latestId: 'x' })
@@ -87,5 +88,15 @@ describe('refreshUnread 刷列表', () => {
     expect(h.list).toHaveBeenCalledTimes(2) // 判别断言:没有守卫时只拉一次,旧快照直接落地
     expect(useInbox.getState().messages.find((m) => m.id === 'p')?.read_at).toBeTruthy()
     expect(h.notify).toHaveBeenCalledTimes(1)
+  })
+})
+
+/** 10-18 Muse 私聊方案 B:收件箱是慢慢看的,新信只亮角标;等你拍板的审批信、你自己定的自动化提醒还弹。 */
+describe('哪些信弹通知', () => {
+  it('成品信(调研 / 日报)不弹;审批信、自动化提醒弹', () => {
+    expect(inboxLetterPops({ sender_id: 'muse', body: '# 调研\n\n三家方案对比……' })).toBe(false)
+    expect(inboxLetterPops({ sender_id: 'xyra', body: 'write_file · x\n\n```forsion-approval\n{"id":"a1"}\n```' })).toBe(true)
+    expect(inboxLetterPops({ sender_id: 'automation:t1', body: '' })).toBe(true)
+    expect(inboxLetterPops({ sender_id: null, body: '```forsion-approvals\n```' })).toBe(false)
   })
 })

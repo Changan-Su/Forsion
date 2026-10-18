@@ -42,7 +42,7 @@ import { displayText } from '../core/displayText.js';
 import { loadSchedule, entriesOf, dueEntries, markEntryFired, ensureEntry, validateEntryInput, type ScheduleEntry } from './agentSchedule.js';
 import { L } from '../tui/i18n.js';
 import { countPendingApprovals } from './pendingApprovals.js';
-import { sendInboxMessage, MUSE_SENDER_ID } from '../tools/builtin/inboxSend.js';
+import { sendInboxMessage, stripTodoHeaders, MUSE_SENDER_ID } from '../tools/builtin/inboxSend.js';
 import { readActivityLines, readUserActivityStamps, activityRhythm, activitySince, parseActivityTs, type ActivityRhythm } from './userActivity.js';
 import { notRemoteTaintedSql } from './remoteTaint.js';
 import { museStateFile, readLastCycleAt, readMuseSessionId, patchMuseState, getMuseSleep, setMuseSleep, type MuseSleep } from './museState.js';
@@ -231,7 +231,7 @@ async function sendDailyDigestIfDue(cfg: MuseConfig, userId: string): Promise<vo
     let body = '';
     try { body = await fs.readFile(museJournalPath(y), 'utf8'); } catch { /* 那天没跑 → 不标记,明天再看(空日不发) */ }
     if (!body.trim()) return;
-    const r = await sendInboxMessage(userId, { title: `Muse · ${y}`, body: body.slice(0, 4000), senderId: MUSE_SENDER_ID, urgent: true });
+    const r = await sendInboxMessage(userId, { title: `Muse · ${y}`, body: stripTodoHeaders(body).slice(0, 4000), senderId: MUSE_SENDER_ID, urgent: true });
     if (r.ok) await fs.writeFile(marker, y, 'utf8'); // 频控/落库失败不标记,下个 tick 重试
   } catch (e: any) {
     log(`日报投递失败:${e?.message || e}`);
@@ -507,6 +507,30 @@ async function existingTodoHint(userId: string): Promise<string> {
   }
 }
 
+/** 私聊里最近几条(10-18 方案 B):周期是新会话、看不到私聊,不带上就会把说过的话再说一遍,也不知道用户回了什么。
+ *  只取 7 天内的 6 条,每条折一行截 300 字。失败 / 没有私聊 → 空串。 */
+export async function museDmHint(userId: string): Promise<string> {
+  try {
+    const { museDmSessionId } = await import('./museDm.js');
+    const sid = await museDmSessionId(userId, deps().profile.appId);
+    if (!sid) return '';
+    const rows = await query<any[]>(
+      `SELECT role, content, timestamp, origin FROM chat_messages WHERE session_id = ? AND timestamp >= ? AND role IN ('user', 'model') ORDER BY timestamp DESC LIMIT 6`,
+      [sid, Date.now() - 7 * 86_400_000],
+    );
+    const lines = (rows || []).reverse()
+      .filter((r) => String(r.content || '').trim())
+      .map((r) => {
+        const who = r.role === 'user' ? 'user' : r.origin ? 'you, from a cycle' : 'you';
+        const text = String(r.content).replace(/\s+/g, ' ').trim();
+        return `- ${who} (${localTime(new Date(Number(r.timestamp) || 0))}): ${text.length > 300 ? `${text.slice(0, 300)}…` : text}`;
+      });
+    return lines.length ? `\n\n[Your direct chat with the user, latest messages oldest first — do not repeat what you already said]\n${lines.join('\n')}` : '';
+  } catch {
+    return '';
+  }
+}
+
 /** 授权文件夹的浅列出(注入提示，让 Muse 知道可用 read_file/list_files 探索的路径)。 */
 async function folderHint(folders: string[]): Promise<string> {
   if (!folders.length) return '';
@@ -698,7 +722,11 @@ export function buildCycleMessages(
     'finish briefly and call set_next_wake to sleep until they are likely back; their activity ends the sleep, and your rules and due schedule still wake you meanwhile. ' +
     spaceKickoff() + ' ' +
     (cfg.escalateTo ? `For work that needs a stronger model, delegate to the agent "${cfg.escalateTo}". ` : '') +
-    (cfg.notify === 'digest' ? 'Notification policy is digest: do not message the user per item; write what matters into your journal, a daily digest is sent for you. ' : '') +
+    // 10-18 方案 B:要用户回话 / 拍板的进私聊,做好的成品进收件箱;notify 只管日报(每天一封 Journal)发不发。
+    'Reaching the user: what needs their reply or decision, or a one-screen heads-up, goes to your direct chat via message_user ' +
+    // 10-18 live:「写对比给我以后看」被存进 Library、或 display_file 给周期会话看,都没发信 —— 点明这两条都送不到。
+    '(todos and approval requests already post there); finished work for them to read later (a report, research, a comparison) goes to their inbox via inbox_send — saving it in your Library or showing it with display_file does not reach them' +
+    (cfg.notify === 'digest' ? '; your journal also reaches them as a daily digest, so routine progress needs no message. ' : '. ') +
     'You may use remember to record durable insights about the user (what they value, accept, or dismiss). When done, briefly say what you did and what you deferred.';
   const ephemeralHint =
     (dyn.quietSince ? '\n\n(No new user messages or in-app activity since your last cycle — this is a heartbeat; maintenance, preparation or simply "nothing to do" are all fine answers, and so is set_next_wake.)' : '') +
@@ -724,6 +752,7 @@ async function startCycle(cfg: MuseConfig, extraKickoff = '', trigger = 'heartbe
     (await recentSessionTitles(userId)) +
     (await folderHint(cfg.allowedFolders)) +
     (await existingTodoHint(userId)) +
+    (await museDmHint(userId)) +
     (await rhythmHint());
   const pending = await countPendingApprovals(userId).catch(() => 0);
   const sleep = await getMuseSleep().catch(() => null);

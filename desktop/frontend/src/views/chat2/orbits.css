@@ -163,18 +163,13 @@
   color: var(--text-muted);
 }
 .t2o-avatar-text.t2o-avatar-gone { color: var(--text-faint, var(--text-muted)); }
-/* 状态点贴槽右下角:**绝对定位**不进内联流(同 `.t2s-lead .t2s-dot` 的手法与理由)。
- * 主动式徽章挪到右上角,与 running 同时亮得下。描边是零模糊环,不是空间高程。 */
+/* 状态点贴槽右下角:**绝对定位**不进内联流(同 `.t2s-lead .t2s-dot` 的手法与理由)。描边是零模糊环,不是空间高程。
+ * Muse 头像角上常亮的「主动式」点 10-18 去掉了(Muse 私聊方案 B):有新消息 / 等你改画在行尾 .t2s-st。 */
 .t2o-lead .t2s-dot {
   position: absolute;
   right: -1px;
   bottom: -1px;
   box-shadow: 0 0 0 1.5px var(--sidebar-bg);
-}
-.t2o-lead .t2s-dot.proactive {
-  top: -1px;
-  bottom: auto;
-  background: var(--accent-ink);
 }
 
 /* 行尾 24×24;hover / 键盘聚焦才现,**触屏常显**(交换规则锁在 (hover: hover) 里,

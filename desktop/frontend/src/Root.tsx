@@ -3,7 +3,7 @@ import { amadeusAvailable } from './features/runtime'
 /** App 根:启动副作用(连接/轮询/更新)+ 主题桥接给纯引擎 Shell + 设置/引导/更新横幅浮层。 */
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { Shell, UI_MODE, useWorkspace } from '@lcl/engine'
+import { Shell, UI_MODE, setActiveSpace, useSpaceStore, useWorkspace } from '@lcl/engine'
 import { useApp } from './stores/appStore'
 import { useTheme, useVisualTheme } from './stores/themeStore'
 import { getLanguage } from './theme/registry'
@@ -92,6 +92,8 @@ export function Root() {
     if (action === 'open-agent' && payload && /^[a-z0-9][a-z0-9-]{0,63}$/.test(payload)) openAgentProfile(payload)
     // 设置 › 设备(浮窗)里选了去处:远程面 / vaultSide 在主窗,由主窗执行。
     if (action === 'unit-route' && payload) runUnitRoutePayload(payload)
+    // 设置浮窗里「在蓬洲云中查看」:切到那个 Space(只认已注册的;选中哪个库由 Extend 自己接,见 RemoteSyncSection)
+    if (action === 'open-space' && payload && useSpaceStore.getState().spaces.some((x) => x.id === payload)) setActiveSpace(payload)
   }), [])
   const theme = useTheme()
   const visualTheme = useVisualTheme()

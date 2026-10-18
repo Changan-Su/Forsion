@@ -435,6 +435,42 @@
 .t2s-srow:hover .t2s-srow-menu { opacity: 0.7; }
 .t2s-srow-menu:hover { opacity: 1; background: var(--overlay-light, rgba(127, 127, 127, 0.12)); }
 
+/* 会话行尾的状态(10-17 起从图标角挪到行尾;方案 docs/ToBeImproved/子会话与任务卡方案_2026-10-17):
+ * 在跑 = 转圈;等你 = 警示色实心点带一圈淡晕(形状也和「做完了」不同,不只靠颜色);做完了没看 = 主题色淡点;看过了 = 不画。 */
+.t2s-st { flex: none; display: inline-grid; place-items: center; width: 14px; height: 14px; }
+.t2s-st::before { content: ''; border-radius: 50%; }
+.t2s-st.run::before {
+  width: 11px; height: 11px; box-sizing: border-box;
+  border: 1.75px solid color-mix(in srgb, var(--accent-ink) 30%, transparent);
+  border-top-color: var(--accent-ink); border-right-color: var(--accent-ink);
+  animation: t2s-spin 0.9s linear infinite;
+}
+.t2s-st.wait::before { width: 7px; height: 7px; background: var(--warning); box-shadow: 0 0 0 3px var(--warning-light); }
+.t2s-st.done::before { width: 6px; height: 6px; background: var(--accent-ink); opacity: 0.5; }
+@keyframes t2s-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .t2s-st.run::before { animation: none; } }
+/* 主会话行尾的子会话个数(点一下收起 / 展开,触屏没有 hover 箭头时靠它) */
+.t2s-kids {
+  flex: none; display: inline-flex; align-items: center; gap: 3px; padding: 0 2px; border-radius: var(--radius-sm, 6px);
+  font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted)); font-variant-numeric: tabular-nums;
+}
+.t2s-kids > svg { width: 11px; height: 11px; }
+.t2s-kids:hover { color: var(--text-muted); background: var(--overlay-light, rgba(127, 127, 127, 0.12)); }
+/* 父子会话的树线:竖线落在主会话图标的中线上(--kid-pad = 主会话的左内边距,槽宽 = --t2s-icon + 1.5);
+ * 最后一个子会话那里拐一个圆角弯进它的图标。子会话图标淡一档。 */
+.t2s-srow.t2s-has-kids::after, .t2s-srow.t2s-kid::after {
+  content: ''; position: absolute; pointer-events: none;
+  left: calc(var(--kid-pad) + (var(--t2s-icon) + 1.5px) / 2);
+  border-left: 1px solid color-mix(in srgb, var(--text) 16%, transparent);
+}
+.t2s-srow.t2s-has-kids::after { top: calc(50% + var(--t2s-icon) / 2 + 2px); bottom: -1px; }
+.t2s-srow.t2s-kid::after { top: -1px; bottom: -1px; }
+.t2s-srow.t2s-kid.last::after {
+  bottom: 50%; width: calc(var(--t2s-icon) / 2 + 1.25px);
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 16%, transparent); border-bottom-left-radius: 6px;
+}
+.t2s-srow.t2s-kid .t2s-lead-icon { opacity: 0.75; }
+
 /* 内联重命名输入 */
 .t2s-rename {
   flex: 1; min-width: 0;

@@ -964,6 +964,10 @@ button.desk-cap-pick:hover, button.desk-cap-pick[aria-expanded='true'] { backgro
 .t2-taskcard-actions > button.primary:hover { background: var(--action-fill-hover); }
 .t2-taskcard-actions > button > svg { flex: none; }
 .t2-taskcard-done { color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
+/* 卡头右侧的有效期 / 「等你选」;先问卡按钮下面一句「你选之前什么都不会开始」 */
+.t2-taskcard-expire { margin-left: auto; font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted)); white-space: nowrap; }
+.t2-taskcard-note { font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted)); }
+.t2-tasks > .t2-childs { margin-top: 0; }
 .t2-taskcard.busy .t2-taskcard-actions > button { opacity: .6; cursor: progress; }
 .t2-taskcard-toggle {
   align-self: flex-start; border: none; background: transparent; padding: 0; cursor: pointer;
@@ -1083,8 +1087,50 @@ button.desk-cap-pick:hover, button.desk-cap-pick[aria-expanded='true'] { backgro
 .t2-user-quote > summary > span { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; }
 .t2-user-quote[open] > summary > span { display: block; }
 
+/* 对话里的子会话块(ChildSessions.tsx;方案「子会话与任务卡」第一轮 B):任务卡同一个壳(--bg-card + 圆角,不描边)。
+ * 行 = [图标][标题][状态字 + 行尾状态标][箭头],下一行是最后一句;在等你的行带两颗按钮。 */
+.t2-childs {
+  margin-top: 10px; max-width: 640px; padding: 4px; display: flex; flex-direction: column; gap: 1px;
+  border: var(--border-width, 1px) solid transparent; border-radius: var(--radius-md, 10px); background: var(--bg-card, transparent);
+  font-family: var(--font-ui);
+}
+.t2-childs-head { display: flex; align-items: center; gap: 6px; padding: 5px 8px 3px; font-size: var(--ui-font-meta, 12px); color: var(--text-muted); }
+.t2-childs-head > b { font-weight: 600; color: var(--text); }
+.t2-childs-head > .grow { flex: 1; }
+.t2-child-row {
+  display: grid; grid-template-columns: 20px minmax(0, 1fr) auto 14px; align-items: center; column-gap: 8px;
+  padding: 6px 8px; border-radius: var(--radius-sm, 6px); color: var(--text); font-size: var(--ui-font-body, 13px); cursor: pointer;
+  transition: background var(--duration-fast, .15s);
+}
+.t2-child-row:hover { background: var(--overlay-light, rgba(127,127,127,.1)); }
+.t2-child-lead { width: 20px; height: 20px; display: grid; place-items: center; color: var(--text-muted); }
+.t2-child-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.t2-child-state { display: inline-flex; align-items: center; gap: 5px; font-size: var(--ui-font-meta, 12px); color: var(--text-muted); white-space: nowrap; }
+.t2-child-state.wait { color: var(--warning); }
+.t2-child-chev { display: grid; color: var(--text-faint, var(--text-muted)); opacity: 0; transition: opacity var(--duration-fast, .15s); }
+.t2-child-row:hover .t2-child-chev { opacity: 1; }
+.t2-child-sub { grid-column: 2 / 4; margin-top: 2px; font-size: var(--ui-font-meta, 12px); color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.t2-child-actions { grid-column: 2 / 4; margin-top: 7px; }
+/* <child_sessions_update> 落库行(子会话结果送回主会话):一行说明谁回来了 */
+.t2-child-update { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 4px 8px; margin: 4px 0; color: var(--text-muted); }
+.t2-child-update > svg { color: var(--accent-ink); flex: none; }
+.t2-child-update-item[data-status='waiting_for_user'] { color: var(--warning); }
+.t2-child-update-item[data-status='failed'] { color: var(--danger); }
+.t2-child-update-item + .t2-child-update-item::before { content: '·'; margin-right: 8px; color: var(--text-faint, var(--text-muted)); }
+/* 子会话顶上「来自 主会话」:按一段文字排(窄的子会话面板里会折行,不能是 flex —— 那样每一截各自竖着挤成一列) */
+.t2-child-from { display: block; text-align: center; margin: 0 0 10px; color: var(--text-muted); }
+.t2-child-from > svg { vertical-align: -2px; margin-right: 4px; }
+.t2-child-from > a { display: inline-block; vertical-align: bottom; margin: 0 4px; color: var(--accent-ink); cursor: pointer; text-decoration: none; max-width: 24ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.t2-child-from > a:hover { text-decoration: underline; }
+
 /* 流里给待批审批留的一行指路(卡本身在输入框上方的托盘里) */
 .t2-apv-pointer { display: flex; align-items: center; gap: 6px; font-size: var(--ui-font-meta, 12px); margin: 4px 0; }
+/* Muse 私聊里它自己开口的那条(MuseDm.tsx,10-18 方案 B):署名下一行「主动发来 · 时间」;它的审批批完后流里留一行回执。 */
+.t2-dm-from { display: flex; align-items: center; gap: 5px; margin: 0 0 6px; font-family: var(--font-ui); font-size: var(--ui-font-meta, 12px); color: var(--text-muted); }
+.t2-dm-from svg { flex: none; color: var(--accent-ink); }
+.t2-dm-receipt { display: flex; align-items: center; gap: 6px; margin: 4px 0; font-size: var(--ui-font-meta, 12px); }
+.t2-dm-receipt svg { flex: none; }
+.t2-dm-receipt.ok svg { color: var(--green); }
 /* 挂起审批的结局(<approval_update> 落库行):每张一行。和打断标记一样是给模型的机器行,对人只是一行说明;输出在原工具卡里。 */
 .t2-apv-update { display: flex; flex-direction: column; align-items: center; gap: 2px; margin: 4px 0; }
 .t2-apv-update-row { display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; }

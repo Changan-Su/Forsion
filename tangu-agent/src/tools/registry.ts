@@ -35,9 +35,11 @@ import { channelToolsProvider } from './builtin/channelTools.js';
 import { applyPatchProvider } from './builtin/applyPatch.js';
 import { discussProvider } from './builtin/discuss.js';
 import { dispatchProvider } from './builtin/startProjectSession.js';
+import { childSessionsProvider } from './builtin/childSessions.js';
 import { displayFileProvider } from './builtin/displayTools.js';
 import { teamSayProvider } from './builtin/teamSay.js';
 import { museWakeProvider } from './builtin/museWake.js';
+import { museMessageProvider } from './builtin/museMessage.js';
 import { deskPresentProvider } from './builtin/deskPresent.js';
 import { imageGenProvider } from './builtin/imageTools.js';
 import { inboxSendProvider } from './builtin/inboxSend.js';
@@ -206,6 +208,7 @@ registerToolProvider(appSettingsProvider); // host-only 前台 run:app_settings 
 registerToolProvider(sessionStatusProvider); // both 前台 run:session_status 读本会话的上下文占用 / 已花 token / 步数 / 用时(只读;deferred,append 末尾,快照不变)
 registerToolProvider(forsionAccountProvider); // both 前台 run、且 brain 有账号面(cloud)时:forsion_account 读额度 / 积分 / 套餐 / 用量,forsion_account_action 代办三件(每次都问;全 deferred,append 末尾,快照不变)
 registerToolProvider(marketplaceProvider); // both 前台 run、且 brain 有商店面时:search_marketplace 查商店条目(chat 常驻)、get_marketplace_plugin 按 ID 取详情(chat 按需;append 末尾,保前缀缓存)
+registerToolProvider(museMessageProvider); // 仅 Muse 周期(ctx.muse,子代理除外):message_user 往 Muse 私聊发一条(要用户回话 / 拍板的;append 末尾,普通 run 不可见,快照不变)
 // 插件(表情包/分段等)现为文件夹插件(plugins/),经 activateAllPlugins→ctx.registerPlugin 注册其工具,不在此处。
 
 /** ctx 自带 profile(loop 按 run.app_id 解析)优先;缺省回退本进程装配的 profile。 */
@@ -508,3 +511,4 @@ function editDistance(a: string, b: string): number {
 }
 
 registerToolProvider(intelligentUiProvider); // Native document renderer, explicit client capability.
+registerToolProvider(childSessionsProvider); // host-only:start_session + send_to_session(deferred)(父子会话;append 末尾,保前缀缓存)

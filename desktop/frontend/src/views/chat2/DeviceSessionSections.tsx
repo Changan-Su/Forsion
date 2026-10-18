@@ -27,7 +27,7 @@ import { runLocationsAvailable } from '../../features/runtime'
 import { currentPlatform } from '../../services/platform'
 import { useRemoteCapability } from '../../services/engine/targets'
 import { sessionActivityAt } from './SidebarPane'
-import { AttentionDot } from './AttentionDot'
+import { AttentionDot, StatusMark } from './AttentionDot'
 import './deviceSessions.css'
 
 registerMessages({
@@ -247,17 +247,14 @@ export function DeviceSessionSections(p: Props): React.ReactElement | null {
                     className={s.id === p.activeId ? 'active' : undefined}
                     depth={1}
                     title={s.summary || s.title || undefined}
-                    lead={<>
-                      <SessionIcon emoji={s.emoji} fallback={<MessageSquare className="t2s-lead-icon t2s-dim" />} />
-                      {p.rowBadge?.(s) ?? (p.runningIds.has(s.id)
-                        ? <span className="t2s-dot running" />
-                        : p.unreadIds.has(s.id) ? <span className="t2s-dot unread" /> : null)}
-                    </>}
-                    trailing={renaming?.id === s.id ? undefined : (
+                    lead={<SessionIcon emoji={s.emoji} fallback={<MessageSquare className="t2s-lead-icon t2s-dim" />} />}
+                    // 状态在行尾(同 SidebarPane 的会话行,10-17)
+                    trailing={renaming?.id === s.id ? undefined : (<>
+                      {p.rowBadge?.(s) ?? <StatusMark status={p.runningIds.has(s.id) ? 'run' : p.unreadIds.has(s.id) ? 'done' : ''} />}
                       <span className="t2s-srow-menu" role="button" aria-label={t('sidebar.device.menu')} onClick={(e) => { e.stopPropagation(); setMenu({ unitId: id, id: s.id, x: e.clientX, y: e.clientY }) }}>
                         <MoreHorizontal size={14} />
                       </span>
-                    )}
+                    </>)}
                     onClick={() => { if (renaming?.id !== s.id) adoptRemoteSession(s, { kind: 'unit', unitId: id }) }}
                     onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMenu({ unitId: id, id: s.id, x: e.clientX, y: e.clientY }) }}
                   >

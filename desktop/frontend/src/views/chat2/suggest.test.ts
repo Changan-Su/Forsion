@@ -300,3 +300,25 @@ describe('按段续读:卡片上限按整条消息算', () => {
     expect(t2.text).toContain('title: three')
   })
 })
+
+describe('任务卡:id / ask / withdraw(子会话与任务卡第 3 步)', () => {
+  it('id 与 ask 头部进卡;withdraw 围栏只出撤回标记、不占两张的名额、不还回正文', () => {
+    const raw = [
+      '正文',
+      '```forsion-task', 'title: 写设计稿', 'id: design-1', 'ask: true', '---', '任务书 A', '```',
+      '```forsion-task', 'withdraw: old-1', 'reason: 你让我在这里做了', '```',
+      '```forsion-task', 'title: 第二张', '---', '任务书 B', '```',
+    ].join('\n')
+    const r = splitSuggestions(raw)
+    expect(r.text).toBe('正文')
+    expect(r.tasks).toEqual([
+      { title: '写设计稿', id: 'design-1', ask: true, prompt: '任务书 A' },
+      { title: '', prompt: '', withdraw: 'old-1', reason: '你让我在这里做了' },
+      { title: '第二张', prompt: '任务书 B' },
+    ])
+  })
+  it('不合法的 id 只丢这个键', () => {
+    const r = splitSuggestions(['```forsion-task', 'title: x', 'id: has space!', '---', 'p', '```'].join('\n'))
+    expect(r.tasks).toEqual([{ title: 'x', prompt: 'p' }])
+  })
+})

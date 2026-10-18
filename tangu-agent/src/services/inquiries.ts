@@ -7,7 +7,7 @@
 import { randomUUID } from 'node:crypto';
 import { publish } from './eventBus.js';
 import { trackPrompt, untrackPrompt, type AnswerBy } from './pendingPromptIndex.js';
-import { isUnattendedRun } from './remoteActivity.js';
+import { isChildBriefRun, isUnattendedRun } from './remoteActivity.js';
 
 export interface InquiryRequestPayload {
   question: string;
@@ -35,6 +35,11 @@ function nextInquiryId(): string {
 export const INQUIRY_UNATTENDED_ANSWER =
   "[No answer] This is an unattended background run, so nobody is available to answer questions. This is a system note, not the user's reply and not permission: do not assume an answer; continue with what is safe without one, or leave the open question in your final result.";
 
+/** 子会话(主会话派的那一轮)里的询问当场兑现:用户多半不在子会话里,挂着等就卡住主会话的回报;问题改为收尾时送回主会话,
+ *  主会话自己答(send_to_session)或再问用户(方案「子会话与任务卡」第 2 步:子会话先问主会话)。 */
+export const INQUIRY_CHILD_ANSWER =
+  "[No answer] You are a child session started by another session, so ask_user can't reach the user from here. This is a system note, not an answer: do not assume one. Finish what you can, then end your turn with the question as your last line; it goes back to the session that started you, which will answer it or ask the user.";
+
 /** 登记一次询问:发事件 + await 用户答案。 */
 export function requestInquiry(
   runId: string,
@@ -43,6 +48,8 @@ export function requestInquiry(
 ): Promise<string> {
   if (signal?.aborted) return Promise.resolve('(用户中止了运行)');
   if (isUnattendedRun(runId)) return Promise.resolve(INQUIRY_UNATTENDED_ANSWER);
+  // 计划审批不短路:用户在子会话里开了计划模式,批准卡照常挂在子会话里等用户(Codex 评审 P1)
+  if (isChildBriefRun(runId) && payload.kind !== 'plan') return Promise.resolve(INQUIRY_CHILD_ANSWER);
   const inquiryId = nextInquiryId();
   return new Promise<string>((resolve) => {
     const onAbort = (): void => {

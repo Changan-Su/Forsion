@@ -147,6 +147,8 @@ export function recordToUi(r: any, resolveGroup?: (name: string) => { slug?: str
     agentId, agentName, agentColor,
     ...(teamDone ? { teamDone: true } : {}),
     ...(teamSummary ? { teamSummary: true } : {}),
+    // Muse 自己开口发进私聊的(引擎 museDm.ts:proactive / proactive:todo / proactive:approval):消息头上画「主动发来 · 时间」。
+    ...(role === 'assistant' && typeof r.origin === 'string' && r.origin.startsWith('proactive') ? { origin: r.origin } : {}),
   }
   if (role === 'assistant' && Array.isArray(r.tool_calls) && r.tool_calls.length) {
     const results = new Map<string, any>((Array.isArray(r.tool_results) ? r.tool_results : []).map((t: any) => [t.tool_call_id, t]))
@@ -1622,8 +1624,9 @@ export const useApp = create<AppState>((set, get) => ({
         break
       case 'session_created': {
         // 私聊里 @项目派遣(start_project_session):引擎在项目里建了一条可见会话 → 刷新列表 + 提示(侧栏没有轮询)。
+        // nested = start_session 开的子会话:左栏挂在本会话下面、对话里有子会话块,不弹提示。
         void get().refreshSessions(get().cfg).catch(() => {})
-        get().toast(get().tr('appstore.dispatchStarted', { name: String(pl.projectName || pl.projectPath || '') }))
+        if (!pl.nested) get().toast(get().tr('appstore.dispatchStarted', { name: String(pl.projectName || pl.projectPath || '') }))
         break
       }
       case 'inquiry_request': {
@@ -2179,6 +2182,15 @@ export const useApp = create<AppState>((set, get) => ({
     // 那条会话此前按那台拉过的历史作废,下次打开从本端重拉。
     for (const id of yieldToHomeListing([...act, ...arch].map((x) => x.id))) loadedHistory.delete(id)
     let merged: SessionRecord[] = act
+    // 引擎报的 busy 从有到无 = 那一轮跑完了;本端没订阅它(子会话 / 自动接着做的一轮)就没人标未读 —— 这里补上(当前会话不标)。
+    const wasBusy = new Set(get().sessions.filter((x) => x.busy).map((x) => x.id))
+    const finished = act.filter((x) => wasBusy.has(x.id) && !x.busy && x.id !== get().activeId && !get().runningBySession[x.id]).map((x) => x.id)
+    if (finished.length) {
+      const next = new Set(get().unread)
+      for (const id of finished) next.add(id)
+      saveUnread(next)
+      set({ unread: next })
+    }
     set((s) => {
       // 列表行自带 agent_config:本地还没有的会话先用它预填。重载/切入会话时 loadSessionHistory 到达前不再按 {} 渲染成 work,
       // 加载窗口里的任何配置写也从存值起步而不是从 {} 起步把 preset 冲掉(creview 09-07 F3;服务端 PUT 另有锁兜底)。
@@ -4370,6 +4382,8 @@ function endRun(set: (fn: (s: AppState) => Partial<AppState>) => void, get: () =
     const rs = s.runStatsBySession[sessionId]
     return {
       runningBySession: next,
+      // 列表行带的 busy 是上次刷新时的快照:本端订阅的这一轮收了尾就别再让行尾转圈等下一次刷新
+      ...(s.sessions.some((x) => x.id === sessionId && x.busy) ? { sessions: s.sessions.map((x) => (x.id === sessionId ? { ...x, busy: false } : x)) } : {}),
       ...(rs?.runId === runId ? { runStatsBySession: { ...s.runStatsBySession, [sessionId]: finishRunStats(rs, Date.now()) } } : {}),
       stoppingBySession: { ...s.stoppingBySession, [sessionId]: undefined },
       ...(leftover?.length ? {

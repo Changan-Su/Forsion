@@ -8,7 +8,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Plus, MoreHorizontal, Pencil, Archive, ArchiveRestore, Trash2, ChevronRight, Folder, FolderOpen, Cloud, FolderPlus, SquarePen, Smartphone, Send, MessagesSquare, MessageSquare, Pin, PinOff, Info, NotebookPen, Smile } from 'lucide-react'
 import { SessionIcon, SessionIconPicker } from '../../components/SessionIcon'
-import { folderPadLeft } from '@amadeus/lib/treeIndent'
+import { folderPadLeft, rowPadLeft } from '@amadeus/lib/treeIndent'
 import { SidebarRow } from '../../components/SidebarRow'
 import { moveTo, startOpenDrag } from '@lcl/engine'
 import { ProjectIcon } from '../../components/ProjectIcon'
@@ -27,7 +27,8 @@ import { displaySessionTitle, workspaceGroupLabel } from '../../sessionTitle'
 import './sidebar2.css'
 import { OverlayAt, nativeSheetPresenter, presentNativePrompt, useNativeChromeSpaces, useNativeSheetMenu, type SheetMenuItem } from '@lcl/engine'
 import { CtxMenuButtons } from '../../components/CtxMenuButtons'
-import { AttentionDot } from './AttentionDot'
+import { AttentionDot, StatusMark } from './AttentionDot'
+import { mergeStatus, nestSessions, rowStatus, type RowStatus, type TreeNode } from './sessionTree'
 import { homeTarget } from '../../services/engine/targets'
 import { canTurnChatIntoNote, turnChatIntoNote } from './chatToNote'
 import { formatRowTime } from '../../format/time'
@@ -52,9 +53,15 @@ registerMessages({
   'sidebar.ws.removeMsg': { zh: '会从侧栏移除它，并删除其中的 {count} 个会话，不可撤销。磁盘上的项目文件夹不会删除。', en: 'It is removed from the sidebar and its {count} session(s) are deleted. This cannot be undone. The project folder on disk is not deleted.' },
   'sidebar.ws.removeFiles': { zh: '同时删除相关文件：项目里的 .tangu 文件夹（Tangu 的指令、技能、计划），移到废纸篓', en: "Also delete related files: the project's .tangu folder (Tangu instructions, skills and plans), moved to the Trash" },
   'sidebar.ws.removeAction': { zh: '移除', en: 'Remove' },
+  'sidebar.kids': { zh: '{n} 个子会话 · 点一下收起或展开', en: '{n} child sessions · click to collapse or expand' },
 })
 
 const COLLAPSE_KEY = 'forsion_tangu_collapsed_projects'
+/** 收起了子会话的主会话 id(缺省全展开)。 */
+const KIDS_COLLAPSE_KEY = 'forsion_tangu_collapsed_parents'
+function loadKidsCollapsed(): Set<string> {
+  try { return new Set(JSON.parse(localStorage.getItem(KIDS_COLLAPSE_KEY) || '[]')) } catch { return new Set() }
+}
 const WS_ORDER_KEY = 'forsion_tangu_workspace_order'
 
 function loadCollapsed(): Set<string> {
@@ -189,6 +196,13 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
   }, [])
   const [showArchived, setShowArchived] = useState(false)
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(loadCollapsed)
+  const [kidsCollapsed, setKidsCollapsed] = useState<Set<string>>(loadKidsCollapsed)
+  const toggleKids = (id: string): void => setKidsCollapsed((cur) => {
+    const next = new Set(cur)
+    if (!next.delete(id)) next.add(id)
+    try { localStorage.setItem(KIDS_COLLAPSE_KEY, JSON.stringify([...next])) } catch { /* ignore */ }
+    return next
+  })
   const [wsOrder, setWsOrder] = useState<string[]>(loadWsOrder)
   const [dragKey, setDragKey] = useState<string | null>(null)
   const [dragOverKey, setDragOverKey] = useState<string | null>(null)
@@ -459,31 +473,49 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
     return ws && ws.kind !== 'rootless' && !ws.system ? workspaceGroupLabel(ws, t) : ''
   }
 
-  const renderItem = (s: SessionRecord) => {
+  const statusOf = (s: SessionRecord): RowStatus => rowStatus(s, !!p.attentionIds?.get(s.id), p.runningIds.has(s.id), p.unreadIds.has(s.id))
+  /** tree.kids = 这一行是主会话(它的子会话);tree.kidLast = 这一行是子会话(是不是最后一个,树线在它这里拐弯)。 */
+  const renderItem = (s: SessionRecord, tree?: { kids?: SessionRecord[]; kidLast?: boolean }) => {
+    const kids = tree?.kids || []
+    const isKid = tree?.kidLast !== undefined
+    const kidsHidden = kids.length > 0 && kidsCollapsed.has(s.id)
+    const att = p.attentionIds?.get(s.id)
+    // 收起的主会话:子会话的状态冒到它的行尾(等你 > 在跑 > 做完了)
+    const st = kidsHidden ? mergeStatus([statusOf(s), ...kids.map(statusOf)]) : statusOf(s)
+    const depth = p.flat ? 0 : 1
+    const pad = rowPadLeft(depth)
+    // 树线(sidebar2.css .t2s-kid / .t2s-has-kids):竖线落在主会话图标的中线上,子会话缩进到线的右边
+    const treeStyle = isKid
+      ? { paddingLeft: `calc(${pad}px + var(--t2s-icon) + 5px)`, ['--kid-pad' as string]: `${pad}px` }
+      : kids.length && !kidsHidden ? { ['--kid-pad' as string]: `${pad}px` } : undefined
     const row = (
     <SidebarRow
       key={s.id}
       as="button"
-      className={`${s.id === p.activeId ? 'active' : ''}${sel.has(s.id) ? ' sel' : ''}`.trim() || undefined}
+      className={[s.id === p.activeId && 'active', sel.has(s.id) && 'sel', isKid && 't2s-kid', tree?.kidLast && 'last', kids.length > 0 && !kidsHidden && 't2s-has-kids'].filter(Boolean).join(' ') || undefined}
       selId={s.id}
       // Historian 会话摘要 → 悬停预览(无摘要回落标题本身,长标题被截断时仍可读全)。
       title={s.summary || s.title || undefined}
       // 组内行缩进一级(组头 depth 0)—— 与笔记树「文件夹内的笔记」同档,见 treeIndent.ts;平铺(Chat 模式)没有组头,顶格。
-      depth={p.flat ? 0 : 1}
+      depth={depth}
       // 时间线的行不走树的缩进:左边距由 phoneList.css 给
-      style={p.timeline ? { paddingLeft: undefined } : undefined}
-      // 前导槽:与笔记/插件源 view 同构 → 三模式切换时图标不跳。状态点绝对定位贴在图标角上,
-      // **不能内联排在标题前** —— 那样有状态的行会被推右 6px,会话行自己就先不齐了。
+      style={p.timeline ? { paddingLeft: undefined } : treeStyle}
+      // 前导槽:与笔记/插件源 view 同构 → 三模式切换时图标不跳。有子会话的行 hover 时图标换成开合箭头(同笔记树)。
+      // 状态 10-17 起在行尾(StatusMark),不再贴在图标角上。
       lead={<>
         <SessionIcon emoji={s.emoji} fallback={p.rowIcon?.(s) ?? <MessageSquare className="t2s-lead-icon t2s-dim" />} />
-        {p.attentionIds?.get(s.id)
-          ? <AttentionDot n={p.attentionIds.get(s.id)!.n} localOnly={p.attentionIds.get(s.id)!.localOnly} />
-          : p.runningIds.has(s.id)
-            ? <span className="t2s-dot running" title={t('sidebar.running')} />
-            : p.unreadIds.has(s.id) ? <span className="t2s-dot unread" title={t('sidebar.unread')} /> : null}
+        {kids.length > 0 && (
+          <span className={`t2s-chev t2s-lead-chev${kidsHidden ? '' : ' open'}`} onClick={(e) => { e.stopPropagation(); toggleKids(s.id) }}><ChevronRight size={12} /></span>
+        )}
       </>}
       // 行尾的时间只在手机的整屏列表里显示(sidebar2.css 按 .mb-shell[data-native-chrome] 放出来);桌面侧栏窄,不显示。
       trailing={<>
+        {kids.length > 0 && (
+          <span className="t2s-kids" title={t('sidebar.kids', { n: kids.length })} onClick={(e) => { e.stopPropagation(); toggleKids(s.id) }}>
+            <MessagesSquare />{kids.length}
+          </span>
+        )}
+        {att && st === 'wait' && !kidsHidden ? <AttentionDot n={att.n} localOnly={att.localOnly} /> : <StatusMark status={st} />}
         <span className="t2s-srow-time">{formatRowTime(s.updated_at)}</span>
         <span className="t2s-srow-menu" onClick={(e) => openMenu(e as React.MouseEvent, s)}><MoreHorizontal size={14} /></span>
       </>}
@@ -540,6 +572,12 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
     )
     return p.timeline ? <SwipeRow key={s.id} actions={swipeActions(s)}>{row}</SwipeRow> : row
   }
+  const renderNode = (n: TreeNode<SessionRecord>) => !n.kids.length ? renderItem(n.s) : (
+    <React.Fragment key={n.s.id}>
+      {renderItem(n.s, { kids: n.kids })}
+      {!kidsCollapsed.has(n.s.id) && n.kids.map((k, i) => renderItem(k, { kidLast: i === n.kids.length - 1 }))}
+    </React.Fragment>
+  )
 
   // 「添加本地工作区」+「已归档」常驻侧栏底部(sticky footer),不随会话列表滚走。
   // 「添加本地工作区」是 Work 的事:Chat 模式(平铺)不露出,列表里也没有其它项目。
@@ -556,7 +594,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
             <span className="t2s-srow-title t2s-faint">{t('sidebar.archived')}</span>
             <span className="t2s-count">{p.archivedSessions.length}</span>
           </button>
-          {showArchived && p.archivedSessions.map(renderItem)}
+          {showArchived && p.archivedSessions.map((x) => renderItem(x))}
         </>
       )}
     </div>
@@ -604,8 +642,10 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
               const ws = en.ws!
               const pinned = isOrbitPinned(p.pinnedEntries || {}, en.key)
               const items = grouped.get(ws.key) || []
+              // 子会话挂在主会话下面(sessionTree.ts);条数上限只数主会话那一层,子会话跟着主会话走。
+              const nodes = nestSessions(items)
               // 平铺(Chat 模式):整组直接铺开,不画组头、不折叠、不限条数(聊天列表就该是整份)。
-              if (p.flat) return <div key={ws.key} className="t2s-group-sessions t2s-flat">{items.map(renderItem)}</div>
+              if (p.flat) return <div key={ws.key} className="t2s-group-sessions t2s-flat">{nodes.map(renderNode)}</div>
               const isCollapsed = collapsedGroups.has(ws.key)
               // 组内会话行也认这一组的落点(否则松手落在会话行上 = 什么都没发生)。
               // 刻意不挂 dragLeave:落点粘住最后悬停过的组,松手落在组间那 4.5px 外边距里也照样成立
@@ -690,10 +730,10 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
                   </div>
                   <AnimatedCollapse open={!isCollapsed}>
                     <div className={`t2s-group-sessions${after && !isCollapsed ? ' drag-over-end' : ''}`} {...dropOn}>
-                      {items.slice(0, sessionLimit).map(renderItem)}
-                      {items.length > sessionLimit && (
+                      {nodes.slice(0, sessionLimit).map(renderNode)}
+                      {nodes.length > sessionLimit && (
                         // 数字是**余下几条**(U-37):列表里已经摆着 sessionLimit 条,再报总数会读成「还有这么多」。
-                        <button className="t2s-viewmore" onClick={() => p.onOpenWorkspace(ws.key)}>{t('sidebar.viewMore')} · {items.length - sessionLimit}</button>
+                        <button className="t2s-viewmore" onClick={() => p.onOpenWorkspace(ws.key)}>{t('sidebar.viewMore')} · {nodes.length - sessionLimit}</button>
                       )}
                     </div>
                   </AnimatedCollapse>

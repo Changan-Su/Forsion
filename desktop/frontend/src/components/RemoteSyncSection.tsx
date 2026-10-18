@@ -7,9 +7,27 @@
  */
 import React, { useEffect, useState } from 'react'
 import { Loader2, RefreshCw } from 'lucide-react'
-import { useI18n } from '../i18n'
+import { registerMessages, useI18n } from '../i18n'
 import { formatDateTime } from '../format/time'
 import type { RemoteSyncConfig, RemoteSyncProgress, RemoteSyncReport, RemoteSyncState } from '../types'
+
+registerMessages({
+  'settings.remotesync.penzorView': { zh: '在蓬洲云中查看 {name}', en: 'View {name} in Penzor Cloud' },
+  'settings.remotesync.maxFilePenzor': { zh: '蓬洲云单个文件最多 {mb} MB，超过的不上传；实际按 {mb} MB 算', en: 'Penzor Cloud takes files up to {mb} MB; larger ones are skipped, so {mb} MB applies' },
+})
+
+/** 蓬洲云 Space(Forsion Extend 0.10)与这里的约定:Extend 在主窗口注册好 Space 后写 READY;这里写 FOCUS(要看哪个库),
+ *  主窗口的 Extend 收到 storage 事件就切过去停在那个库。两个键与 Extend src/renderer/penzor/state.ts 同步改。 */
+const PENZOR_SPACE_ID = 'forsion-penzor'
+const PENZOR_READY = 'forsion-extend.penzor.ready'
+const PENZOR_FOCUS = 'forsion-extend.penzor.focus'
+/** 蓬洲云服务端的单文件上限(Extend penzor.ts PENZOR_MAX_FILE;同步时用户设得更大也会被夹到它)。 */
+const PENZOR_MAX_FILE_MB = 50
+const penzorSpaceReady = (): boolean => { try { return localStorage.getItem(PENZOR_READY) === '1' } catch { return false } }
+function viewInPenzor(vault: string): void {
+  try { localStorage.setItem(PENZOR_FOCUS, JSON.stringify({ vault, at: Date.now() })) } catch { /* 存不了:只切 Space,不选库 */ }
+  window.tangu?.requestMainAction?.('open-space', PENZOR_SPACE_ID)
+}
 
 export function RemoteSyncSection(): React.ReactElement | null {
   const { t } = useI18n()
@@ -187,6 +205,11 @@ export function RemoteSyncSection(): React.ReactElement | null {
               onChange={(e) => patch({ penzor: { vault: e.target.value } })}
             />
             <div className="hint">{t('settings.remotesync.penzorHint')}</div>
+            {penzorSpaceReady() && (
+              <button className="btn" style={{ marginTop: 6 }} onClick={() => viewInPenzor((cfg.penzor?.vault ?? '').trim() || 'default')}>
+                {t('settings.remotesync.penzorView', { name: (cfg.penzor?.vault ?? '').trim() || 'default' })}
+              </button>
+            )}
           </div>
         )}
 
@@ -343,6 +366,9 @@ export function RemoteSyncSection(): React.ReactElement | null {
             />
             <span className="hint">{t('settings.remotesync.maxFile')}</span>
           </div>
+          {cfg.backend === 'penzor' && ((cfg.maxFileMB ?? 100) === 0 || (cfg.maxFileMB ?? 100) > PENZOR_MAX_FILE_MB) && (
+            <div className="hint">{t('settings.remotesync.maxFilePenzor', { mb: PENZOR_MAX_FILE_MB })}</div>
+          )}
           <div className="settings-inline-row" style={{ marginTop: 6 }}>
             <input
               type="number"

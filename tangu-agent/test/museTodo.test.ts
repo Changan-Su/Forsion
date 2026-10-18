@@ -1,5 +1,5 @@
 /**
- * add_muse_todo 的收件箱投影(2026-09-11,用户报「Muse 的信里没有审批 / 执行按钮」):
+ * add_muse_todo 的投影(2026-09-11,用户报「Muse 的信里没有审批 / 执行按钮」;10-18 方案 B 起投进 Muse 私聊,私聊不可用才退回发信):
  * 正文 = detail + 引擎拼在末尾的 forsion-task 卡(`todo:` = muse_todos 行 id,任务书 = 标题 + detail)。
  * 真 SQLite(内存)+ 临时 TANGU_HOME(digest 档读 config.json)。
  * 共享夹具 test/fixtures/muse-todo-mail*.md:桌面 suggest.test 与 e2e:inboxamadeus 读同一份,键名 / 形状一漂就在这里先红
@@ -41,6 +41,8 @@ let home: string;
 beforeEach(async () => {
   home = mkdtempSync(join(tmpdir(), 'tangu-musetodo-'));
   process.env.TANGU_HOME = home;
+  mkdirSync(join(home, 'agents', 'muse'), { recursive: true }); // 有 Muse 这个 agent,私聊才建得出来
+  writeFileSync(join(home, 'agents', 'muse', 'config.toml'), 'name = "Muse"\n');
   const { host, db } = createSqliteHost({ dataDir: 'memory', localToken: 'x', userId: USER });
   db.exec(toSqliteDDL(STANDALONE_SCHEMA));
   configureTangu({ host, brain: {} as any, billing: {} as any, profile: createTanguProfile({ sandboxMode: 'none' }) });
@@ -53,14 +55,15 @@ afterEach(() => {
 });
 
 const mails = (): Promise<any[]> => query<any[]>(`SELECT * FROM inbox_messages WHERE user_id = ?`, [USER]);
+/** 私聊里那条待办消息(body = 正文,与从前的信同形)。 */
+const dms = (): Promise<any[]> => query<any[]>(`SELECT content AS body FROM chat_messages WHERE origin = 'proactive:todo'`);
 const todos = (): Promise<any[]> => query<any[]>(`SELECT * FROM muse_todos WHERE user_id = ?`, [USER]);
 
-describe('add_muse_todo → 收件箱信带任务卡', () => {
+describe('add_muse_todo → 私聊里的待办消息带任务卡', () => {
   it('信 = detail + 末尾 forsion-task 卡:todo 头 = TODO 行 id,任务书 = 标题 + detail', async () => {
     expect(String(await tool.execute({ title: FIXTURE_INPUT.title, detail: FIXTURE_INPUT.detail }, ctx))).toContain('已记录');
     const [t] = await todos();
-    const [m] = await mails();
-    expect(m.sender_id).toBe('muse');
+    const [m] = await dms();
     expect(m.body).toBe(todoMailBody({ id: t.id, title: t.title, detail: t.detail }));
     expect(m.body.startsWith(`${FIXTURE_INPUT.detail}\n\n\`\`\`forsion-task\n`)).toBe(true);
     expect(m.body).toContain(`\ntodo: ${t.id}\n---\n${FIXTURE_INPUT.title}\n\n${FIXTURE_INPUT.detail}\n\`\`\``);
@@ -86,7 +89,7 @@ describe('add_muse_todo → 收件箱信带任务卡', () => {
     const detail = '`'.repeat(4000);
     await tool.execute({ title: 'ticks', detail }, ctx);
     const [t] = await todos();
-    const [m] = await mails();
+    const [m] = await dms();
     expect(m.body).toBe(todoMailBody({ id: t.id, title: 'ticks', detail }));
     expect(m.body.endsWith(`\n${'`'.repeat(4001)}`)).toBe(true);
   });
@@ -95,15 +98,16 @@ describe('add_muse_todo → 收件箱信带任务卡', () => {
     const detail = 'd'.repeat(4000);
     await tool.execute({ title: 'long', detail }, ctx);
     const [t] = await todos();
-    const [m] = await mails();
+    const [m] = await dms();
     expect(m.body).toBe(todoMailBody({ id: t.id, title: 'long', detail }));
     expect(m.body.length).toBeGreaterThan(8000);
   });
 
-  it('digest 档:TODO 照落,不逐条发信', async () => {
+  it('digest 档:TODO 照落、照进私聊,不发信(notify 只管日报)', async () => {
     writeFileSync(join(home, 'config.json'), JSON.stringify({ specialAgents: { muse: { notify: 'digest' } } }), 'utf8');
     await tool.execute({ title: 't', detail: 'd' }, ctx);
     expect((await todos()).length).toBe(1);
+    expect((await dms()).length).toBe(1);
     expect((await mails()).length).toBe(0);
   });
 
