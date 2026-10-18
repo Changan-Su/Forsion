@@ -964,10 +964,12 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
   const rightVisible = useWorkspace((s) => s.rightVisible)
   const tabCount = useWorkspace((s) => s.mainTabs.length)
   // 「⋯」里有亮红点的项(成就可领…)→「⋯」本身挂红点,同桌面 Ribbon 收进「…」的那条。
-  // ponytail: 只画在 Web 顶栏的「⋯」上;Android 原生顶栏的「⋯」要 NativeChromeBar 加一个点(Kotlin + 出包),那之前靠半屏里那行的副标题
+  // 原生顶栏(Android)的「⋯」同一份判据:随 shell 状态推 moreDot,label 给读屏(NativeChromeBar 画点;老 App 不认这个字段,靠半屏里那行的副标题)
   const ribbonItems = useRibbonStore((s) => s.items)
   const dotted = useDotted(ribbonItems)
-  const moreDot = moreItems(ribbonItems, nativeSpaces).some((i) => dotted.has(i.id))
+  const moreDotItem = moreItems(ribbonItems, nativeSpaces).find((i) => dotted.has(i.id))
+  const moreDot = !!moreDotItem
+  const moreDotLabel = moreDotItem ? String(moreDotItem.dot?.label?.() ?? '').slice(0, 120) : null // Kotlin 拒收超过 128 的 label
   const activeSpaceId = useSpaceStore((s) => s.activeSpaceId) // 仪器锚点(data-space):原生底栏接管后 DOM 里没有 .mb-tab.on 可查
 
   const wide = useWideAspect(true)
@@ -1023,6 +1025,7 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
         // 当前这一层的视图给顶栏加的东西(搜索钮、标题的第二段),见 useNativeChromeExtras。
         ...(extras?.search ? { search: extras.search.label } : {}),
         ...(extras?.title ? { titleSub: extras.title.sub, ...(extras.title.run ? { titleTap: true } : {}) } : {}),
+        ...(moreDotLabel !== null ? { moreDot: { label: moreDotLabel } } : {}),
       }, {
         left: () => useWorkspace.getState().toggleSidebar('left'),
         right: () => useWorkspace.getState().toggleSidebar('right'),
@@ -1040,7 +1043,7 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
     const offs = [useWorkspace.subscribe(push), useSpaceStore.subscribe(push), useRibbonStore.subscribe(push), subscribeNativeChromeExtras(push), subscribeDockPicks(push)]
     // 只退订,不清状态:换语言重跑本 effect 时若先清成 null,原生栏会先收起再弹出(WebView 高度跳两下)。
     return () => { offs.forEach((off) => off()) }
-  }, [nativeChrome, chromeLabelsKey])
+  }, [nativeChrome, chromeLabelsKey, moreDotLabel]) // moreDotLabel:点亮 / 熄灭 / 换语言都重推一次
   useEffect(() => () => setNativeChromeShell(null), [])
 
   // Android 系统返回:MobileRoot 派发可取消的 forsion:mobile-back,壳先接管最上层的两个 sheet。
