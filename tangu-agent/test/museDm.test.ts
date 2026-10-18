@@ -21,7 +21,7 @@ import sessionsRouter from '../src/routes/sessions.js';
 import { museMessageProvider } from '../src/tools/builtin/museMessage.js';
 import { museTodoProvider } from '../src/tools/builtin/museTodo.js';
 import { onRunStart } from '../src/services/childSessions.js';
-import { inboxSendProvider } from '../src/tools/builtin/inboxSend.js';
+import { inboxSendProvider, stripTodoHeaders } from '../src/tools/builtin/inboxSend.js';
 import { asksUser } from '../src/services/museDm.js';
 
 let home = '';
@@ -101,6 +101,7 @@ describe('Muse 主动发私聊', () => {
   it('问句后面只跟一小句也算等你(10-18 live:「…要不要记为已知抖动？我先不替你决定。」);没有问号 / 问号后还有一大段的不算', () => {
     expect(asksUser('要不要记为已知抖动？我先不替你决定。')).toBe(true);
     expect(asksUser('Mark it as known flakiness? I won\'t decide for you.')).toBe(true);
+    expect(asksUser('要不要记为已知抖动？\n我先不替你决定。')).toBe(true);
     expect(asksUser('CI 红了一次,重跑是绿的。')).toBe(false);
     expect(asksUser(`为什么会红？${'原因是测试里用了真实时钟,零点前后跑就会跨天,'.repeat(3)}已经改好了。`)).toBe(false);
   });
@@ -115,6 +116,7 @@ describe('Muse 主动发私聊', () => {
     const [mail] = await query<any[]>(`SELECT body FROM inbox_messages WHERE title = '成品'`);
     expect(mail.body).not.toMatch(/other-pending-id/);
     expect(mail.body).toMatch(/title: 无害的小事\n---/);
+    expect(stripTodoHeaders('a\n\u00a0todo:\u3000x-1\nb')).toBe('a\nb'); // 桌面 \s 认 NBSP / 全角空格,这里也得剥
   });
 
   it('Muse 后台有待批 → attention 把「等你」算在 Muse 私聊上;批完(不起轮)就熄', async () => {

@@ -26,7 +26,7 @@ export const MUSE_SENDER_ID = 'muse';
  *  否则模型在正文里夹一张围栏、填另一条待办的 id,用户看到的任务书和实际批准的不是一回事(Codex 10-18 评审 #1)。
  *  ponytail: 按行剥,不认围栏 —— 围栏解析两边各一份,按行剥不怕两边对不齐;代价是正文里恰好整行写成 `todo: abc` 的也会被剥掉。 */
 export function stripTodoHeaders(md: string): string {
-  return md.replace(/^[ \t]*todo[ \t]*:[ \t]*[A-Za-z0-9_-]{1,64}[ \t]*\r?$\n?/gim, '');
+  return md.replace(/^[^\S\n]*todo[^\S\n]*:[^\S\n]*[A-Za-z0-9_-]{1,64}[^\S\n]*$\n?/gim, ''); // [^\S\n] = 桌面 \s 去掉换行(含 NBSP / 全角空格)
 }
 
 export interface InboxSendResult { ok: boolean; error?: string }

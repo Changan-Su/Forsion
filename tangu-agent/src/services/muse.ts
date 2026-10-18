@@ -42,7 +42,7 @@ import { displayText } from '../core/displayText.js';
 import { loadSchedule, entriesOf, dueEntries, markEntryFired, ensureEntry, validateEntryInput, type ScheduleEntry } from './agentSchedule.js';
 import { L } from '../tui/i18n.js';
 import { countPendingApprovals } from './pendingApprovals.js';
-import { sendInboxMessage, MUSE_SENDER_ID } from '../tools/builtin/inboxSend.js';
+import { sendInboxMessage, stripTodoHeaders, MUSE_SENDER_ID } from '../tools/builtin/inboxSend.js';
 import { readActivityLines, readUserActivityStamps, activityRhythm, activitySince, parseActivityTs, type ActivityRhythm } from './userActivity.js';
 import { notRemoteTaintedSql } from './remoteTaint.js';
 import { museStateFile, readLastCycleAt, readMuseSessionId, patchMuseState, getMuseSleep, setMuseSleep, type MuseSleep } from './museState.js';
@@ -231,7 +231,7 @@ async function sendDailyDigestIfDue(cfg: MuseConfig, userId: string): Promise<vo
     let body = '';
     try { body = await fs.readFile(museJournalPath(y), 'utf8'); } catch { /* 那天没跑 → 不标记,明天再看(空日不发) */ }
     if (!body.trim()) return;
-    const r = await sendInboxMessage(userId, { title: `Muse · ${y}`, body: body.slice(0, 4000), senderId: MUSE_SENDER_ID, urgent: true });
+    const r = await sendInboxMessage(userId, { title: `Muse · ${y}`, body: stripTodoHeaders(body).slice(0, 4000), senderId: MUSE_SENDER_ID, urgent: true });
     if (r.ok) await fs.writeFile(marker, y, 'utf8'); // 频控/落库失败不标记,下个 tick 重试
   } catch (e: any) {
     log(`日报投递失败:${e?.message || e}`);

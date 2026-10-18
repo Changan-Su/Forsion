@@ -23,7 +23,7 @@ export type MuseDmResult = { ok: true; sessionId: string; messageId: string } | 
  *  工具描述写了「问句放最后」也没拦住)。ponytail: 尾巴 ≤40 字按字数判,「CI 红了？没事,重跑过了。」这类自问自答也会亮等你,
  *  要更准就让模型显式声明。 */
 export function asksUser(text: string): boolean {
-  return endsWithQuestion(text) || /[?？][^?？\n]{1,40}$/.test(text.trim());
+  return endsWithQuestion(text) || /[?？][^?？]{1,40}$/.test(text.trim()); // 尾巴另起一行也算
 }
 
 export async function postMuseDm(userId: string, content: string, origin: ProactiveOrigin = 'proactive'): Promise<MuseDmResult> {
