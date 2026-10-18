@@ -43,7 +43,7 @@
   padding: 12px 14px;
   border-radius: var(--border-radius-lg);
   background-color: var(--island-bg-color);
-  box-shadow: var(--shadow-island);
+  box-shadow: var(--card-shadow); /* 统一高程 token(DESIGN §7-6),不用引擎的 --shadow-island */
 }
 .amx-boardhost .excalidraw .amx-gridpop .amx-bs { padding: 0; gap: 9px; }
 .amx-boardhost .excalidraw .amx-gridpop-h {
@@ -73,7 +73,8 @@
   border: 0;
   border-radius: 999px;
   background-color: var(--color-surface-low);
-  box-shadow: 0 0 0 1px var(--color-surface-lowest), var(--shadow-island);
+  outline: 1px solid var(--color-surface-lowest);
+  box-shadow: var(--card-shadow);
   color: var(--color-on-surface);
   font: inherit;
   font-size: var(--ui-font-meta, 12px);

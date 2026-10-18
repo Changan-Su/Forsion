@@ -1013,9 +1013,11 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .amx-boardhost .excalidraw .layer-ui__wrapper button.disable-zen-mode {
   left: 50%; right: auto; transform: translateX(-50%);
   padding: 10px 16px; border: 0; border-radius: var(--radius-pill, 999px);
-  /* 皮同缩放 / 撤销岛的按钮(surface-low + 1px 外圈):岛底色在亮色白画布上几乎看不见(走查 P3-9) */
+  /* 皮同缩放 / 撤销岛的按钮(surface-low + 1px 外圈):岛底色在亮色白画布上几乎看不见(走查 P3-9)。
+     投影只走统一高程 token(DESIGN §7-6,扁平模式清零),外圈用 outline,不拼进 box-shadow */
   background-color: var(--color-surface-low);
-  box-shadow: 0 0 0 1px var(--color-surface-lowest), var(--shadow-island);
+  outline: 1px solid var(--color-surface-lowest);
+  box-shadow: var(--card-shadow);
 }
 /* 引擎的悬停底是半透明的 --button-hover-bg,直接换上去胶囊会透出画布 → 叠在按钮底色上 */
 .amx-boardhost .excalidraw .layer-ui__wrapper button.disable-zen-mode:hover {
