@@ -186,8 +186,8 @@ export interface RibbonItem {
    *  组件自己接了右键(preventDefault)的,Ribbon 不再弹。 */
   menu?: () => { label: string; onClick(): void }[]
   /** 图标上的提示红点(无数字):get 现判、subscribe 在它可能变的时候回调。收进「…」/ 收纳夹时红点挂到「…」/ 收纳夹上。
-   *  只给 icon 项用(component 项自己画)。 */
-  dot?: { get(): boolean; subscribe(cb: () => void): () => void }
+   *  只给 icon 项用(component 项自己画)。label = 红点的意思(读屏;手机原生「⋯」半屏画不了点,用它当行的副标题)。 */
+  dot?: { get(): boolean; subscribe(cb: () => void): () => void; label?: () => string }
 }
 
 /** 底部状态栏的一项(≈ Obsidian addStatusBarItem)。 */

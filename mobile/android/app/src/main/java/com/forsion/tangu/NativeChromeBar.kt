@@ -101,7 +101,8 @@ private class CapsuleLook(theme: SheetTheme, frosted: Boolean) {
  * Page mode: back · title on the left, an optional close on the right. JS owns everything; buttons only report actions.
  * Floating (shell pages that asked for it) the view is see-through around the capsules and the WebView runs under
  * it; otherwise the strip is painted and the WebView starts below.
- * Test anchors: `nativeChrome.{bar,capLeft,capRight,left,right,tabs,more,account,back,close,title,titleSub,titleButton,search}` (resource-ids).
+ * "More" carries a dot while something behind it wants a look (`moreDot`; danger red like the web `.rb-dot`).
+ * Test anchors: `nativeChrome.{bar,capLeft,capRight,left,right,tabs,more,moreDot,account,back,close,title,titleSub,titleButton,search}` (resource-ids).
  */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
@@ -142,7 +143,10 @@ internal fun NativeChromeBar(state: ChromeState, insets: Insets, onPlate: PlateS
                         if (state.right) CapsuleIconButton("right", state.labels.getValue("right"), state.icons.right, fg) { onAction("right") }
                         // One tab = nothing to switch between: the count would only take a slot ("New tab" is in ⋯).
                         if (state.tabCount > 1) TabCountButton(state.tabCount, state.labels.getValue("tabs"), fg) { onAction("tabs") }
-                        CapsuleIconButton("more", state.labels.getValue("more"), state.icons.more, fg) { onAction("more") }
+                        CapsuleIconButton(
+                            "more", state.labels.getValue("more"), state.icons.more, fg,
+                            dot = state.moreDot, dotColor = Color(theme.danger), ring = Color(theme.surface),
+                        ) { onAction("more") }
                         state.account?.let { AvatarButton(it, Color(theme.accent)) { onAction("account") } }
                     }
                 }
@@ -207,16 +211,25 @@ private fun RowScope.CapsuleTitle(
     }
 }
 
+/** [dot] non-null = a dot at the icon's top-right corner; its text (if any) is what a screen reader adds to [label]. */
 @Composable
-private fun CapsuleIconButton(id: String, label: String, icon: NativeIconSpec?, tint: Color, onClick: () -> Unit) {
+private fun CapsuleIconButton(
+    id: String, label: String, icon: NativeIconSpec?, tint: Color,
+    dot: String? = null, dotColor: Color = Color.Unspecified, ring: Color = Color.Unspecified, onClick: () -> Unit,
+) {
     Box(
         Modifier.size(40.dp).clip(CircleShape)
             .clickable(role = Role.Button, onClick = onClick)
-            .semantics { contentDescription = label }
+            .semantics {
+                contentDescription = label
+                if (!dot.isNullOrBlank()) stateDescription = dot
+            }
             .testTag("nativeChrome.$id"),
         contentAlignment = Alignment.Center,
     ) {
         if (icon != null) NativeIconView(icon, tint, NATIVE_ICON_SIZE)
+        // centre on the 22dp glyph's top-right corner, where the web capsule puts its `.rb-dot`
+        if (dot != null) Dot(dotColor, ring, Modifier.align(Alignment.TopEnd).offset(x = (-7).dp, y = 7.dp).testTag("nativeChrome.${id}Dot"))
     }
 }
 
@@ -408,7 +421,13 @@ private fun BadgeDot(kind: ChromeBadge.Kind, colors: CellColors, ring: Color, mo
         ChromeBadge.Kind.ATTENTION -> 1f
     }
     val color = if (kind == ChromeBadge.Kind.ATTENTION) colors.warning else colors.accent
-    Box(modifier.size(10.dp).clip(CircleShape).background(ring).testTag("nativeChrome.badge"), contentAlignment = Alignment.Center) {
-        Box(Modifier.size(7.dp).clip(CircleShape).background(color.copy(alpha = alpha).compositeOver(ring)))
+    Dot(color.copy(alpha = alpha), ring, modifier.testTag("nativeChrome.badge"))
+}
+
+/** A 7dp dot in a [ring] of the colour under it, so it reads as cut out of the icon it sits on. */
+@Composable
+private fun Dot(color: Color, ring: Color, modifier: Modifier) {
+    Box(modifier.size(10.dp).clip(CircleShape).background(ring), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(7.dp).clip(CircleShape).background(color.compositeOver(ring)))
     }
 }
