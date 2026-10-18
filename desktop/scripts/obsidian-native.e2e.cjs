@@ -2,7 +2,7 @@
 const fs=require('node:fs'), os=require('node:os'), path=require('node:path'), crypto=require('node:crypto')
 const {execFileSync}=require('node:child_process')
 const electron=require('./lib/launch-electron.cjs'), {startStubEngine}=require('./lib/stub-engine.cjs')
-const ROOT=path.join(__dirname,'..'), BASE=path.join(ROOT,'prototypes/obsidian-bridge')
+const ROOT=path.join(__dirname,'..'), BASE=require('./lib/obsidian-bridge-root.cjs')()
 const ART=process.env.BRIDGE_ARTIFACTS || path.join(BASE,'artifacts/expanded')
 const home=fs.mkdtempSync(path.join(os.tmpdir(),'forsion-obsidian-native-')), vault=path.join(home,'vault')
 const results=[], errors=[]; let app,win,frame,stub
