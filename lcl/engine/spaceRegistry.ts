@@ -9,7 +9,8 @@ import type { SpaceDefinition } from './types'
 import { useWorkspace, liveLayoutOwner, bootLayoutFellThrough, adoptSingleColumnLayoutCold } from './workspaceStore'
 import { loadLayout, saveLayout, clearLayout, loadNamedLayout, saveNamedLayout, listNamedLayouts, deleteNamedLayout } from './layoutPersist'
 import { clearSingleColumnLayouts } from './singleColumnStore'
-import { onePageRedirect } from './pinnedViews'
+import { onePageRedirect, mainPageLanding } from './pinnedViews'
+import { getView } from './viewRegistry'
 import { mainOpensBeside } from './openBeside'
 
 const ACTIVE_KEY = IS_MINI_PANEL ? 'forsion_mini_active_space' : 'forsion_tangu_active_space'
@@ -107,6 +108,7 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
     // 已存布局里缺了固定 View(插件停用时被清场、Space 后来新增了固定项…)→ 补回来;resetLayout 那一路由 build() 负责。
     if (saved && ws.applyNamed(spaceLayoutName(toId))) { ws.ensurePinned(); ws.saveCurrent() }
     else ws.resetLayout()
+    landOnMainPage() // 5. 声明了默认主页的 Space:进来先看到那一页,而不是上次离开时的前台
   },
 }))
 
@@ -125,6 +127,20 @@ export function redirectOpenFromOnePage(type: string): boolean {
   openRedirect = type
   try { useSpaceStore.getState().setActiveSpace(owner) } finally { openRedirect = null }
   return useSpaceStore.getState().activeSpaceId === owner
+}
+
+/** 进 Space 的落点:当前 Space 声明了默认主页(types.ts 的 mainPage)就把它顶到前台,没开着就开出来。别的 Space 是空操作。
+ *  入口:setActiveSpace 末尾、两种宿主的冷启动、手机进 Space 后的落点钩子、人已在里面时再点一次它的图标(SpaceButton / 手机底栏)。
+ *  幂等(手机上一次切换会跑两遍):已在前台什么都不做。东西正被带去这个 Space 开(redirectOpenFromOnePage)时不落 ——
+ *  调用方接着就地 openView,会把刚顶上来的那一页换走。Mini 没有标签,不落。视图还没注册(插件 Space 冷启动)也不落。 */
+export function landOnMainPage(): void {
+  const page = getActiveSpace()?.mainPage
+  if (!page || IS_MINI_PANEL || openRedirect !== null || !getView(page.type)) return
+  const ws = useWorkspace.getState()
+  ws.refreshTabs() // 桌面冷启动时 mainTabs 要到 onReady 末尾才第一次刷,先刷一次免得「找不到 → 再开一份」
+  const { activate, open } = mainPageLanding(getActiveSpace(), useWorkspace.getState().mainTabs)
+  if (activate) ws.activateLeaf(activate)
+  else if (open) ws.openView(open.type, open.params, 'main', open.newTab ? { newTab: true } : undefined)
 }
 
 /** 当前活动 Space(找不到回退首个;无 Space 时 undefined)。 */

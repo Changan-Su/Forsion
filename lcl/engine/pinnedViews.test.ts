@@ -6,10 +6,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { useWorkspace, dropAllowed } from './dockviewStore'
 import { useWorkspace as useSingle } from './singleColumnStore'
-import { isPinned, isLastPinned, missingPinned, onePageLanding, onePageRedirect, type PinnedViews } from './pinnedViews'
+import { isPinned, isLastPinned, missingPinned, onePageLanding, onePageRedirect, mainPageLanding, type PinnedViews } from './pinnedViews'
 import { registerView, unregisterView } from './viewRegistry'
 import type { DropTarget } from './dropModel'
-import { resetSpaceLayouts, spaceLayoutsWereReset, useSpaceStore } from './spaceRegistry'
+import { resetSpaceLayouts, spaceLayoutsWereReset, useSpaceStore, landOnMainPage } from './spaceRegistry'
 import { deleteNamedLayout, listNamedLayouts, loadLayout, saveLayout, saveNamedLayout, type LayoutEnvelopeV4 } from './layoutPersist'
 import type { DockviewApi } from 'dockview-react'
 
@@ -669,5 +669,44 @@ describe('一页式 Space(onePage):落点与转开', () => {
       useSpaceStore.setState({ activeSpaceId: prev, setActiveSpace: realSwitch })
       unregisterSpace('t-home'); unregisterSpace('t-chat')
     }
+  })
+})
+
+describe('默认主页(mainPage):进 Space 先看到它', () => {
+  const page = { type: 'chatv', params: { followActive: true } }
+  const tab = (id: string, type: string, front = false) => ({ id, type, front })
+
+  it('判定:开着 → 顶到前台(已在前台不动);没开 → 开出来,只剩空态占位时就地换;没声明什么都不做', () => {
+    expect(mainPageLanding({ mainPage: page }, [tab('chatv', 'chatv'), tab('filev#1', 'filev', true)])).toEqual({ activate: 'chatv', open: null })
+    expect(mainPageLanding({ mainPage: page }, [tab('chatv', 'chatv', true), tab('filev#1', 'filev')])).toEqual({ activate: null, open: null })
+    expect(mainPageLanding({ mainPage: page }, [tab('filev#1', 'filev', true)])).toEqual({ activate: null, open: { ...page, newTab: true } })
+    expect(mainPageLanding({ mainPage: page }, [tab('home', 'home', true)])).toEqual({ activate: null, open: { ...page, newTab: false } })
+    expect(mainPageLanding({}, [tab('filev#1', 'filev', true)])).toEqual({ activate: null, open: null })
+    expect(mainPageLanding(undefined, [])).toEqual({ activate: null, open: null })
+  })
+
+  it('真的桌面 store:主页里多开了一个标签在前台 → 落点后前台是默认主页,那个标签还在;关掉了也会开回来', () => {
+    const m = mkApi()
+    const ws = useWorkspace.getState()
+    ws.setApi(m.api)
+    useWorkspace.setState({ stash: { left: [], right: [], bottom: [] }, stashActive: { left: null, right: null, bottom: null }, sidebarDefaults: { left: [], right: [], bottom: [] } })
+    ws.setPinned({})
+    const prev = useSpaceStore.getState()
+    useSpaceStore.setState({ spaces: [{ id: 'mp', name: 'MP', build() {}, sidebarDefaults: { left: [], right: [] }, mainPage: page }], activeSpaceId: 'mp' })
+    try {
+      ws.openView('chatv', page.params, 'main')
+      ws.openView('filev', { path: '/a.md' }, 'main', { newTab: true })
+      expect((m.api.activePanel?.params as { __type?: string }).__type).toBe('filev')
+      landOnMainPage()
+      expect((m.api.activePanel?.params as { __type?: string }).__type).toBe('chatv')
+      expect(at(m.panels, 'main')).toEqual(['chatv', 'filev'])
+      landOnMainPage() // 幂等:已在前台不再动(手机一次切换会跑两遍)
+      expect(at(m.panels, 'main')).toEqual(['chatv', 'filev'])
+
+      ws.closeLeaf(idOf(m.panels, 'main', 'chatv'))
+      landOnMainPage()
+      expect(at(m.panels, 'main').sort()).toEqual(['chatv', 'filev'])
+      expect((m.api.activePanel?.params as { __type?: string }).__type).toBe('chatv')
+    } finally { useSpaceStore.setState({ spaces: prev.spaces, activeSpaceId: prev.activeSpaceId }) }
   })
 })
