@@ -62,6 +62,14 @@ const H_GRAD = 'linear-gradient(180deg, var(--amx-grid-line) 0 1px, transparent 
 const clampNum = (v: number, lo: number, hi: number): number => Math.min(Math.max(v, lo), hi)
 const mod = (a: number, n: number): number => ((a % n) + n) % n
 
+/** Esc 来自正在打字的地方(文字编辑框、数字框、可编辑区)= 结束编辑,不是退全屏。复选框 / 滑杆这类 input 不算。 */
+const NON_TEXT_INPUT = new Set(['checkbox', 'radio', 'range', 'button', 'submit', 'reset', 'color', 'file', 'image'])
+function isTextEntry(t: EventTarget | null): boolean {
+  if (!(t instanceof HTMLElement)) return false
+  if (t instanceof HTMLInputElement) return !NON_TEXT_INPUT.has(t.type)
+  return t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement || t.isContentEditable
+}
+
 /** 无限画布的「适配全图」。引擎的 zoomToFit 按整块画布算,内容会顶进浮动的工具岛 / 汉堡菜单 / 侧栏钮 / 底栏
  *  下面(走查 P2-4)—— 先扣掉这几条带再适配。放大上限 2,同引擎(zoomToFitMaxLevel)。 */
 function fitInsets(a: ExcalidrawImperativeAPI, host: HTMLElement, st: AppState): void {
@@ -248,9 +256,6 @@ export default function ExcalidrawCanvas({
               ? { zenModeEnabled: !st.zenModeEnabled }
               : { penMode: !st.penMode }
       api.updateScene({ appState: appState as AppState, captureUpdate: CaptureUpdateAction.NEVER })
-      // 进禅模式后视图岛滑走并藏起来,焦点会从刚点的按钮掉到 body —— 引擎只在自己的容器上听键,
-      // Option+Z 就退不出来了。把焦点交回画布容器。
-      if (k === 'zen' && !st.zenModeEnabled) hostRef.current?.querySelector<HTMLElement>('.excalidraw-container')?.focus({ preventScroll: true })
     },
     [api],
   )
@@ -262,6 +267,12 @@ export default function ExcalidrawCanvas({
   /** 进全屏那一下,白板铺满窗口、视图岛跟着左下角挪走,指针底下就没有按钮了 —— 在刚才那颗按钮的位置
    *  放一枚「退出全屏」胶囊(几秒后淡出),「点一下进、再点一下出」照样成立(走查 P2-3)。 */
   const [fullHint, setFullHint] = useState<{ x: number; y: number } | null>(null)
+  // 「减少动态效果」下全局把动画压成 0.001ms,onAnimationEnd 会立刻卸掉胶囊 → 那档改用计时器,CSS 那边去掉动画
+  useEffect(() => {
+    if (!fullHint || !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return
+    const id = window.setTimeout(() => setFullHint(null), 3000)
+    return () => window.clearTimeout(id)
+  }, [fullHint])
   const fullRef = useRef(full)
   fullRef.current = full
   const alive = useRef(true)
@@ -296,7 +307,7 @@ export default function ExcalidrawCanvas({
     const onKey = (e: KeyboardEvent): void => {
       if (e.key !== 'Escape' || e.defaultPrevented) return
       // 写字 / 填数字时的 Esc 是「结束编辑」,不是退全屏(走查 P2-2)
-      if ((e.target as HTMLElement | null)?.closest?.('textarea, input, select, [contenteditable="true"]')) return
+      if (isTextEntry(e.target)) return
       if (document.fullscreenElement) void document.exitFullscreen().catch(() => {})
       setFull(false)
     }
@@ -698,11 +709,14 @@ export default function ExcalidrawCanvas({
           </Footer>
         )}
       </Excalidraw>
-      {full && fullHint && (
-        <button type="button" className="amx-fullhint" style={{ left: fullHint.x, top: fullHint.y }} onClick={toggleFull} onAnimationEnd={() => setFullHint(null)}>
-          {t('boardview.exitFull')} <span className="amx-fullhint-kbd">Esc</span>
-        </button>
-      )}
+      {/* 挂进引擎的 .excalidraw 根:胶囊的底色 / 外圈 / 投影都是引擎 token,只在那棵子树里有值 */}
+      {full && fullHint && root &&
+        createPortal(
+          <button type="button" className="amx-fullhint" style={{ left: fullHint.x, top: fullHint.y }} onClick={toggleFull} onAnimationEnd={() => setFullHint(null)}>
+            {t('boardview.exitFull')} <span className="amx-fullhint-kbd">Esc</span>
+          </button>,
+          root,
+        )}
       {/* 自建工具胶囊。塞进引擎那张已经定好位的 Island(`.App-toolbar`)里,它自己的按钮用 CSS 藏掉 ——
           定位/圆角/投影/HintViewer 全部白捡。引擎的工具栏为什么不能直接改:见 BoardToolbar.tsx。 */}
       {toolbarAnchor && createPortal(<BoardToolbar api={api} ui={ui} refs={toolRefs} />, toolbarAnchor)}

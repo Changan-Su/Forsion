@@ -83,6 +83,13 @@ export default function ViewIsland({
     }
   }, [pop])
 
+  // 禅模式下整座岛滑走并藏起来,焦点要是还在岛上就掉到 body —— 引擎只在自己的容器上听键,Option+Z / Cmd+' 全失灵。
+  // 进禅时焦点在岛上(点了岛上任一颗再按 Option+Z,或直接点禅)→ 交回画布容器。
+  useEffect(() => {
+    const wrap = wrapRef.current
+    if (ui.zen && wrap?.contains(document.activeElement)) wrap.closest<HTMLElement>('.excalidraw-container')?.focus({ preventScroll: true })
+  }, [ui.zen])
+
   const btn = (key: string, Icon: typeof Eye, label: string, on: boolean, onClick: () => void, extra?: React.ButtonHTMLAttributes<HTMLButtonElement>): React.JSX.Element => (
     <button key={key} type="button" className="amx-tool" data-view={key} data-on={on || undefined} aria-pressed={on} aria-label={label} title={label} onClick={onClick} {...extra}>
       <Icon size={17} />
@@ -90,7 +97,7 @@ export default function ViewIsland({
   )
 
   return (
-    <div className="amx-viewisle-wrap" ref={wrapRef}>
+    <div className="amx-viewisle-wrap" ref={wrapRef} data-viewmode={ui.view || undefined}>
       {pop && <GridPopover grid={grid} />}
       <div className="amx-viewisle" role="toolbar" aria-label={t('boardview.island')}>
         {ui.penDetected && btn('pen', PenLine, t('boardview.pen'), ui.pen, () => onToggle('pen'))}
@@ -180,9 +187,13 @@ function GridPopover({ grid }: { grid: BoardGrid }): React.JSX.Element {
 function NumField({ value, min, max, onCommit }: { value: number; min: number; max: number; onCommit: (v: number) => void }): React.JSX.Element {
   const [txt, setTxt] = useState(String(value))
   useEffect(() => setTxt(String(value)), [value])
-  // 这次改值来自 ↑↓ / 小箭头。按下鼠标也先记一笔(点小箭头没有按键事件);接着打字的第一个键会把它清掉
+  // 这次改值来自 ↑↓ / 框右侧的小箭头(点小箭头没有按键事件,看按下的位置);接着打字的第一个键会把它清掉。
+  // 步进的提交晚 150ms、只认最后一下:按住不放时不至于每一步都整份读写一次文件(纸张模式走 frontmatter)
   const stepping = useRef(false)
+  const timer = useRef<number | undefined>(undefined)
+  useEffect(() => () => window.clearTimeout(timer.current), [])
   const commit = (raw: string): void => {
+    window.clearTimeout(timer.current)
     const n = Math.round(Number(raw))
     const v = Number.isFinite(n) && n > 0 ? Math.min(max, Math.max(min, n)) : value
     setTxt(String(v))
@@ -196,12 +207,16 @@ function NumField({ value, min, max, onCommit }: { value: number; min: number; m
       max={max}
       value={txt}
       onChange={(e) => {
-        setTxt(e.target.value)
-        if (stepping.current) commit(e.target.value)
+        const raw = e.target.value
+        setTxt(raw)
+        if (!stepping.current) return
+        window.clearTimeout(timer.current)
+        timer.current = window.setTimeout(() => commit(raw), 150)
       }}
       onBlur={() => commit(txt)}
-      onPointerDown={() => {
-        stepping.current = true
+      onPointerDown={(e) => {
+        // ponytail: 小箭头画在框右侧约 16px 里(Chromium / WebKit);别处按下 = 点进框里准备打字
+        stepping.current = e.nativeEvent.offsetX > e.currentTarget.clientWidth - 18
       }}
       onKeyDown={(e) => {
         stepping.current = e.key === 'ArrowUp' || e.key === 'ArrowDown'

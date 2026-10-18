@@ -157,21 +157,26 @@ export function useBoardGrid(
 
   const seen = useRef(false)
   const prevOn = useRef(false)
+  // 引擎的「切换网格」动作开网格时无条件关掉吸附至对象;我们把这一下改判成「关覆盖层」时,吸附得还回去
+  const prevSnap = useRef(false)
   const onAppState = (st: AppState): void => {
     const first = !seen.current
     seen.current = true
     const turnedOn = st.gridModeEnabled && !prevOn.current
     prevOn.current = st.gridModeEnabled
+    const snapBefore = prevSnap.current
+    prevSnap.current = st.objectsSnapModeEnabled
     const cur = now()
     if (paperSize(cur)) {
       if (!st.gridModeEnabled) return
       prevOn.current = false
       // 第一次 = 文件里存着的坏状态,只收掉;之后 = 用户按了 Cmd+' / 右键,改切覆盖层
-      if (!first && turnedOn) {
+      const toggled = !first && turnedOn
+      if (toggled) {
         const m = overlayModel(cur)
         write(overlayFields(m.on ? { ...m, on: false } : { ...lastOverlay.current, on: true }))
       }
-      scene({ gridModeEnabled: false })
+      scene({ gridModeEnabled: false, ...(toggled ? { objectsSnapModeEnabled: snapBefore } : {}) })
       return
     }
     if (legacyToEngine(cur) !== undefined && st.gridModeEnabled) {
@@ -182,7 +187,7 @@ export function useBoardGrid(
       const keep = first || !turnedOn
       write({ gridH: 0, gridV: 0, gridDir: m.dir })
       if (!keep) prevOn.current = false
-      scene({ gridModeEnabled: keep, gridSize: clampGrid(m.size), gridDirection: engineDirection(m.dir) })
+      scene({ gridModeEnabled: keep, gridSize: clampGrid(m.size), gridDirection: engineDirection(m.dir), ...(keep ? {} : { objectsSnapModeEnabled: snapBefore }) })
       return
     }
     // 重置画布 / 打开文件会把方向和颜色打回引擎缺省:漂了就补回
