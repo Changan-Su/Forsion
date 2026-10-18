@@ -15,6 +15,8 @@
  *      (评审抓到的:按 getBoundingClientRect 定尺寸会大 4.5%,之后 ResizeObserver 不再来,字一直糊、涟漪落点偏)
  * 另存截图:亮 / 暗 / 青绿 · 暗的静置与打字、壁纸面板。
  *
+ * 插件档(2026-10-18):HOME_PLUGIN_DIR=<Forsion-Home 检出,先 npm run build> 时字阵由插件 forsion-home 画(scripts/lib/home-plugin.cjs),
+ *  另加 G0:正文真的来自插件(挂不上会悄悄退回内置主页,不核就是假绿)。
  * ⚠️ 量的是 out/ 里的产物,源码改了没 `npm run build` 就是白测。
  * 跑:npm run check:homeglyph(GUI 台架,建议走 node ../../.claude/hooks/devlock.cjs run --vehicle=e2e -- npm run check:homeglyph)
  */
@@ -23,6 +25,7 @@ const os = require('os')
 const path = require('path')
 const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
+const { HOME_PLUGIN_DIR, installHomePlugin, homeBody } = require('./lib/home-plugin.cjs')
 
 const ROOT = path.resolve(__dirname, '..')
 const OUT = process.env.HOME_GLYPH_ARTIFACT_DIR || path.join(os.tmpdir(), 'forsion-home-glyph')
@@ -49,6 +52,7 @@ const pixels = (win) => win.evaluate(() => {
 async function main() {
   fs.mkdirSync(OUT, { recursive: true })
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-home-glyph-'))
+  installHomePlugin(home)
   const stub = await startStubEngine({ models: [{ id: 'gpt-6-luna', name: 'GPT-6 Luna', provider: 'stub', source: 'forsion', contextWindow: 272000 }] })
   const app = await electron.launch({
     args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', ROOT], cwd: ROOT,
@@ -64,8 +68,13 @@ async function main() {
 
     const setLook = (look) => win.evaluate(([m, s]) => { const r = document.documentElement; r.dataset.mode = m; r.classList.toggle('dark', m === 'dark'); r.dataset.skin = s; r.dataset.bg = s }, LOOKS[look])
     const open = async (prefs) => {
-      await win.evaluate(({ key, prefs }) => { localStorage.setItem('forsion_tangu_active_space', 'home'); localStorage.setItem(key, JSON.stringify({ source: 'theme', themePreset: 'glyph', ...prefs })) }, { key: KEY, prefs })
-      await win.reload(); await win.waitForSelector(prefs.themePreset && prefs.themePreset !== 'glyph' ? '.hp-root .hp-wallpaper-art' : '.hp-root .hpw-glyph-canvas', { timeout: 30_000 }); await win.waitForTimeout(1200)
+      await win.evaluate(({ key, prefs, trial }) => {
+        localStorage.setItem('forsion_tangu_active_space', 'home'); localStorage.setItem(key, JSON.stringify({ source: 'theme', themePreset: 'glyph', ...prefs }))
+        if (trial) localStorage.setItem('forsion.dev.coreTrial', 'forsion-home')
+      }, { key: KEY, prefs, trial: !!HOME_PLUGIN_DIR })
+      await win.reload(); await win.waitForSelector(prefs.themePreset && prefs.themePreset !== 'glyph' ? '.hp-root .hp-wallpaper-art' : '.hp-root .hpw-glyph-canvas', { timeout: 30_000 })
+      if (HOME_PLUGIN_DIR) bodies.push(await homeBody(win)) // 插件异步装上之前先露出的是内置那份:等它换过来再量
+      await win.waitForTimeout(1200)
       await win.waitForSelector('.hp-composer .t2c-ta:not(:disabled)', { timeout: 10_000 }).catch(() => {})
       await win.mouse.move(W - 4, H - 4)
     }
@@ -73,7 +82,9 @@ async function main() {
     const typeInto = async (text) => { await win.locator('.hp-composer .t2c-ta').click(); await win.keyboard.type(text, { delay: 90 }) }
     const clearComposer = async () => { await win.locator('.hp-composer .t2c-ta').fill(''); await win.mouse.click(W - 40, H - 30); await win.waitForTimeout(1500) }
 
+    const bodies = []
     await open({ motion: true })
+    if (HOME_PLUGIN_DIR) check('G0 插件档:字阵所在的主页来自插件 forsion-home', bodies[0] === 'plugin', JSON.stringify({ body: bodies[0], dir: HOME_PLUGIN_DIR }))
     await setLook('light'); await win.waitForTimeout(300)
     const geo = await win.evaluate(() => {
       const c = document.querySelector('.hp-root .hpw-glyph-canvas').getBoundingClientRect(); const a = document.querySelector('.hp-root .hp-wallpaper-art').getBoundingClientRect()
@@ -146,6 +157,7 @@ async function main() {
     const afterSheet = await size()
     const same = (x) => x.got && x.got[0] === x.want[0] && x.got[1] === x.want[1]
     check('G11 从壁纸面板里选字阵,画布尺寸按未变换的可见区域', same(inSheet) && same(afterSheet), JSON.stringify({ inSheet, afterSheet }))
+    if (HOME_PLUGIN_DIR) check('G0b 插件档:三次重开主页都是插件画的', bodies.length === 3 && bodies.every((b) => b === 'plugin'), JSON.stringify(bodies))
   } finally {
     await app.close().catch(() => {}); stub.close?.()
     fs.rmSync(home, { recursive: true, force: true })
