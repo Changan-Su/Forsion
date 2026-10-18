@@ -111,6 +111,15 @@ describe('<branches> 段', () => {
     expect(await branchesSection('R', USER, { hideRemote: true })).toBeNull();
     expect(await branchesSection(b, USER, { hideRemote: true })).toContain('You are in "Remote said this"');
   });
+
+  it('主线是远端驱动过的 → 本机无污点的分支里不摘主线上那条分叉消息(Codex 10-18 复核)', async () => {
+    const b = await tree();
+    await seed('C', 'clean sibling', { parent: 'R', fork: 'a1' });
+    await query(`UPDATE chat_sessions SET agent_config = ? WHERE id = 'R'`, [JSON.stringify({ remoteContent: true })]);
+    const sec = (await branchesSection(b, USER, { hideRemote: true }))!;
+    expect(sec).toContain('forked after an earlier message');
+    expect(sec).not.toContain('(session id R)');
+  });
 });
 
 describe('顺便问落库', () => {

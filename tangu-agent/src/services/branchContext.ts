@@ -69,7 +69,9 @@ export async function branchesSection(sessionId: string, userId: string, opts: {
   }
   let where = 'You are in main.';
   if (sessionId !== rootId) {
-    const [fm] = me.fork_message_id ? await query<any[]>(`SELECT role, content FROM chat_messages WHERE id = ? LIMIT 1`, [me.fork_message_id]) : [];
+    const [found] = me.fork_message_id ? await query<any[]>(`SELECT session_id, role, content FROM chat_messages WHERE id = ? LIMIT 1`, [me.fork_message_id]) : [];
+    // 分叉那条在被滤掉的(远端驱动过的)支里 → 不摘它(本支复制的那份可能已被改 / 删,Codex 10-18 复核)
+    const fm = found && (!opts.hideRemote || tree.some((s) => String(s.id) === String(found.session_id))) ? found : null;
     const self = tree.find((s) => String(s.id) === sessionId);
     where = `You are in ${name(self)}, which forked after ${fm ? `${fm.role === 'model' ? 'assistant' : 'user'}: "${excerpt(fm.content)}"` : 'an earlier message'}.`;
   }

@@ -141,6 +141,7 @@ export async function saveAside(p: { asideId?: string; sessionId: string; userId
     const hit = await query<any[]>(`UPDATE chat_asides SET turns = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND turns = ? RETURNING id`, [JSON.stringify(turns), row.id, row.turns]);
     if (hit.length) return { id: String(row.id), messageId: row.message_id ? String(row.message_id) : null };
   }
+  // ponytail: 5 次都被抢就落到下面另开一条;真撞上再改成抛错 / 串行写
   const [m] = p.messageId ? await query<any[]>(`SELECT id FROM chat_messages WHERE id = ? AND session_id = ? LIMIT 1`, [p.messageId, p.sessionId]) : [];
   const [latest] = m ? [m] : await query<any[]>(
     `SELECT id FROM chat_messages WHERE session_id = ? AND role = 'model' ORDER BY timestamp DESC LIMIT 1`, [p.sessionId]);
