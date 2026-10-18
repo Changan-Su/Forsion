@@ -1002,6 +1002,28 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
   position: absolute; right: 3px; bottom: 1px; font-size: var(--ui-font-caption, 11px); line-height: 1; opacity: 0.45; pointer-events: none;
 }
 
+/* ── 禅模式(Option+Z)────────────────────────────────────────────────────────
+   ① 引擎在禅模式下只藏自己工具栏的键位角标,而这张岛里装的是我们的胶囊 → 整座岛连同数字角标一起淡出。
+      visibility 晚 0.5s 再翻:淡出播得完,藏好之后也点不到、Tab 不进去;退出时立刻可见再淡入。
+   ② 「退出禅模式」引擎给的是 `[dir=ltr] … { right: 1rem }`,本 App 的 <html> 不带 dir → 掉回静态位,
+      正好压在左下缩放条的「100%」上。挪到底部正中、做成胶囊。footer 本身 absolute、宽 100%,
+      所以 left:50% 就是画布正中。⚠️ 特异性要压过那条 0,4,0(引擎样式在我们后面 link,打平会输)。 */
+.amx-boardhost .excalidraw .App-toolbar { transition: opacity 0.5s, visibility 0s; }
+.amx-boardhost .excalidraw .App-toolbar.zen-mode { opacity: 0; visibility: hidden; transition: opacity 0.5s, visibility 0s linear 0.5s; }
+.amx-boardhost .excalidraw .layer-ui__wrapper button.disable-zen-mode {
+  left: 50%; right: auto; transform: translateX(-50%);
+  padding: 10px 16px; border: 0; border-radius: var(--radius-pill, 999px);
+  /* 皮同缩放 / 撤销岛的按钮(surface-low + 1px 外圈):岛底色在亮色白画布上几乎看不见(走查 P3-9)。
+     投影只走统一高程 token(DESIGN §7-6,扁平模式清零),外圈用 outline,不拼进 box-shadow */
+  background-color: var(--color-surface-low);
+  outline: 1px solid var(--color-surface-lowest);
+  box-shadow: var(--card-shadow);
+}
+/* 引擎的悬停底是半透明的 --button-hover-bg,直接换上去胶囊会透出画布 → 叠在按钮底色上 */
+.amx-boardhost .excalidraw .layer-ui__wrapper button.disable-zen-mode:hover {
+  background: linear-gradient(var(--button-hover-bg), var(--button-hover-bg)), var(--color-surface-low);
+}
+
 /* ── 属性面板里的加料(PanelExtras:笔预设 / 形状 / 线)────────────────────────
    常规档直接吃引擎的 fieldset+legend+buttonList 排版,这里只补两件事:
    ① 笔那 7 颗在窄栏里要能折行;② 紧凑档的面板是贴左边缘的窄竖条,得自己给一套两列几何。 */
@@ -1048,6 +1070,8 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .amx-bs-lbl { flex: 1; }
 .amx-bs-num { width: 3.5rem; font: inherit; font-size: var(--ui-font-caption, 11px); padding: 1px 4px; border-radius: var(--radius-sm, 6px); border: 1px solid var(--input-border-color, rgba(127, 127, 127, 0.35)); background: transparent; color: inherit; }
 .amx-bs-num:disabled { opacity: 0.4; }
+/* 焦点跟主题色:系统缺省是一圈不跟主题走的橙色,叠在 1px 边框外面(走查 P3-6) */
+.amx-bs-num:focus-visible { outline: none; border-color: var(--color-primary, var(--primary, #635bff)); box-shadow: 0 0 0 1px var(--color-primary, var(--primary, #635bff)); }
 .amx-bs-range { flex: 1; min-width: 0; max-width: 6rem; accent-color: var(--color-primary, var(--primary, #635bff)); }
 .amx-bs-range:disabled { opacity: 0.4; }
 .amx-bs-note { font-size: var(--ui-font-caption, 11px); opacity: 0.55; }
