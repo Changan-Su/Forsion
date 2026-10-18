@@ -12,6 +12,8 @@
  * 截图在 $SHOTS_DIR(缺省系统临时目录下 forsion-penzor-space-shots/),交付前人眼看一遍。
  *
  * 需先 npm run build(读 out/)。用法:EXTEND_PKG=<已 build + sign 的 Forsion-Extend 检出> npm run e2e:penzor
+ * 走查用:PENZOR_HOLD=1 摆好(假云端 + 上传限速)就停住、不跑断言,窗口关掉 / 退出才收场;配 STAGE_ELECTRON=<单独一份 Electron.app>/Contents/MacOS/Electron,
+ * computer use 按应用认窗口,别和正开着的 dev 混(见 gui-verify §4.2)。
  */
 const fs = require('fs')
 const os = require('os')
@@ -46,7 +48,8 @@ const now = Date.now()
 const ago = (min) => now - min * 60_000
 const day = (d, h = 12) => { const x = new Date(now); x.setDate(x.getDate() - d); x.setHours(h, 0, 0, 0); return x.getTime() }
 function startFakeCloud() {
-  const st = { signedOut: false, hits: [] }
+  const st = { signedOut: false, hits: [], quota: 10240 * MB, throttle: false, uploads: [], badLength: 0 }
+  let seq = 0
   const appFiles = {
     'ai-studio': [
       { id: 'd-poster', name: '海报', fileType: 'directory', fileSize: 0, updatedAt: day(3), parentId: 'ROOT' },
@@ -57,7 +60,9 @@ function startFakeCloud() {
       { id: 'f-logo', name: 'logo 草稿.svg', fileType: 'file', fileSize: 86 * 1024, updatedAt: day(9), parentId: 'ROOT' },
       { id: 'f-prompt', name: 'prompt 记录.txt', fileType: 'file', fileSize: 12 * 1024, updatedAt: day(9, 10), parentId: 'ROOT' },
     ],
+    penzor: [], // 我的云盘:装好是空的,下面的场景往里传
   }
+  const driveBytes = () => appFiles.penzor.filter((f) => f.fileType === 'file').reduce((n, f) => n + f.fileSize, 0)
   const trash = [
     { id: 't-avatar', appId: 'notebase', parentId: 'ROOT', parentName: null, name: '旧版头像.png', fileType: 'file', fileSize: 2.1 * MB, deletedAt: day(7) },
     { id: 't-sketch', appId: 'photo-studio', parentId: 'ROOT', parentName: null, name: '草图 第一版', fileType: 'directory', fileSize: 0, deletedAt: day(12) },
@@ -81,9 +86,17 @@ function startFakeCloud() {
       { appId: 'ai-studio', bytes: 1160 * MB + live, files: 214, trashBytes: 9.4 * MB, trashFiles: 1 },
       { appId: 'photo-studio', bytes: 642 * MB, files: 88, trashBytes: 64 * MB, trashFiles: 2 },
       { appId: 'notebase', bytes: 34 * MB, files: 41, trashBytes: 2.1 * MB, trashFiles: 1 },
+      { appId: 'penzor', bytes: driveBytes(), files: appFiles.penzor.filter((f) => f.fileType === 'file').length, trashBytes: 0, trashFiles: 0 },
     ]
   }
-  const server = http.createServer((req, res) => {
+  // 上传那条要能「慢」下来(看卡片和进度环):throttle 开着时每块读完歇一下,靠 TCP 背压把客户端压慢
+  const read = (req) => new Promise((resolve) => {
+    const chunks = []
+    req.on('data', (d) => { chunks.push(d); if (st.throttle) { req.pause(); setTimeout(() => req.resume(), 150) } })
+    req.on('end', () => resolve(Buffer.concat(chunks)))
+  })
+  const server = http.createServer(async (req, res) => {
+    const body = () => read(req)
     const u = new URL(req.url || '/', 'http://x')
     const p = u.pathname
     const src = String(req.headers['x-project-source'] || '')
@@ -109,12 +122,59 @@ function startFakeCloud() {
       { path: '读书笔记 · 原则.md', kind: 'page', size: 22 * 1024, updatedAt: new Date(day(4)).toISOString() },
     ] })
     if (p === '/api/amadeus/attachments') return json(200, { attachments: [{ vaultId: 'a1', vaultName: '我的云端笔记', path: '课题组/附件/课题组合影.heic', size: 22.4 * MB }], totalBytes: 22.4 * MB })
-    if (p === '/api/storage/quota') return json(200, { used: 1916 * MB, quota: 10240 * MB, percentage: 18.7 })
+    if (p === '/api/storage/quota') return json(200, { used: 1916 * MB + driveBytes(), quota: st.quota, percentage: 18.7 })
     if (p === '/api/storage/files-by-app') return json(200, {
       apps: appTotals(),
       largest: [{ id: 'f-v3', appId: 'ai-studio', parentId: 'ROOT', name: '海报_v3_4k.png', size: 31.2 * MB }, { id: 'raw', appId: 'photo-studio', parentId: 'ROOT', name: '外景 RAW.dng', size: 24.8 * MB }].filter((f) => f.id !== 'f-v3' || appFiles['ai-studio'].some((x) => x.id === 'f-v3')),
     })
-    if (p === '/api/files' && req.method === 'GET') return json(200, src === 'ai-studio' && !u.searchParams.get('parentId') ? appFiles['ai-studio'].map((f) => ({ ...f, appId: src })) : [])
+    if (p === '/api/files' && req.method === 'GET') {
+      const pid = u.searchParams.get('parentId') || 'ROOT'
+      return json(200, (appFiles[src] || []).filter((f) => f.parentId === pid).map((f) => ({ ...f, appId: src })))
+    }
+    if (p === '/api/files' && req.method === 'POST') { // 建文件夹:同名 409、不自动改名(同真 server)
+      const b = JSON.parse(String(await body()) || '{}')
+      const list = (appFiles[src] ||= [])
+      const pid = b.parentId || 'ROOT'
+      if (list.some((f) => f.parentId === pid && f.name === b.name && f.fileType === 'directory')) return json(409, { detail: 'Directory already exists', code: 'DIRECTORY_EXISTS' })
+      const f = { id: `n${++seq}`, name: String(b.name), fileType: 'directory', fileSize: 0, updatedAt: Date.now(), parentId: pid }
+      list.push(f)
+      return json(201, { id: f.id })
+    }
+    if (p === '/api/files/upload' && req.method === 'POST') { // multipart:读 filename*(UTF-8)与 parentId;撞名按真 server 的「名 (1).扩展名」
+      const raw = await body()
+      if (Number(req.headers['content-length']) !== raw.length) st.badLength++
+      const bd = String(req.headers['content-type'] || '').match(/boundary=(.+)$/)?.[1]
+      const parts = raw.toString('latin1').split(`--${bd}`).slice(1, -1).map((x) => { const i = x.indexOf('\r\n\r\n'); return { h: x.slice(0, i), v: x.slice(i + 4, -2) } })
+      const field = (n) => parts.find((x) => x.h.includes(`name="${n}"`) && !x.h.includes('filename'))?.v
+      const file = parts.find((x) => /filename/.test(x.h))
+      const star = file?.h.match(/filename\*=UTF-8''([^\r\n;]+)/)?.[1]
+      let name = star ? decodeURIComponent(star) : 'unnamed'
+      const size = file ? Buffer.byteLength(file.v, 'latin1') : 0
+      const pid = field('parentId') || 'ROOT'
+      if (1916 * MB + driveBytes() + size > st.quota) return json(400, { detail: 'Storage quota exceeded' })
+      const list = (appFiles[src] ||= [])
+      const taken = (n) => list.some((f) => f.parentId === pid && f.name === n)
+      if (taken(name) && field('autoRename') !== 'false') {
+        const dot = name.lastIndexOf('.'); const stem = dot > 0 ? name.slice(0, dot) : name; const ext = dot > 0 ? name.slice(dot) : ''
+        let i = 1; while (taken(`${stem} (${i})${ext}`)) i++
+        name = `${stem} (${i})${ext}`
+      }
+      const f = { id: `u${++seq}`, name, fileType: 'file', fileSize: size, updatedAt: Date.now(), parentId: pid }
+      list.push(f)
+      st.uploads.push({ name, size, parentId: pid, src })
+      return json(201, { id: f.id, name })
+    }
+    if (p === '/api/files/batch/delete' && req.method === 'POST') {
+      const { ids = [] } = JSON.parse(String(await body()) || '{}')
+      const list = appFiles[src] || []
+      return json(200, { results: ids.map((id) => {
+        const i = list.findIndex((f) => f.id === id)
+        if (i < 0) return { id, success: false }
+        const [f] = list.splice(i, 1)
+        trash.unshift({ id: f.id, appId: src, parentId: f.parentId, parentName: null, name: f.name, fileType: f.fileType, fileSize: f.fileSize, deletedAt: Date.now() })
+        return { id, success: true }
+      }) })
+    }
     const fid = p.match(/^\/api\/files\/([^/]+)$/)
     if (fid && req.method === 'DELETE') {
       const list = appFiles[src] || []
@@ -163,6 +223,7 @@ async function main() {
   }
   const app = await electron.launch({
     args: [`--user-data-dir=${userData}`, '--lang=zh-CN', ROOT], cwd: ROOT,
+    ...(process.env.STAGE_ELECTRON ? { executablePath: process.env.STAGE_ELECTRON } : {}),
     env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url, TANGU_HARNESS_QUIET: '1', PI_CU_SOCKET_PATH: path.join(home, 'bridge.sock') },
     timeout: 90_000,
   })
@@ -174,6 +235,12 @@ async function main() {
     await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.setContentSize(1512, 950) })
     await win.waitForSelector('#root', { timeout: 30_000 })
     check('首启引导点掉', await skipOnboarding(win))
+    if (process.env.PENZOR_HOLD) {
+      cloud.st.throttle = true
+      console.log(`HOLD ready · home=${home} · 窗口关掉或退出就收场`)
+      await new Promise((r) => { app.process().once('exit', r); setTimeout(r, 40 * 60_000) })
+      return
+    }
     const shot = async (name, page = win) => { await page.mouse.move(1000, 5).catch(() => {}); await page.waitForTimeout(500); await page.screenshot({ path: path.join(SHOTS, `${name}.png`) }); console.log('shot', name) }
     const setMode = (mode, skin) => win.evaluate(([m, s]) => { const r = document.documentElement; r.dataset.mode = m; r.classList.toggle('dark', m === 'dark'); if (s) r.dataset.skin = s; else delete r.dataset.skin }, [mode, skin || null])
     const sideWidth = () => win.evaluate(() => { const e = document.querySelector('.pz-side'); return e ? Math.round(e.getBoundingClientRect().width) : 0 })
@@ -247,6 +314,107 @@ async function main() {
     await win.locator('.t2s-srow-title', { hasText: /^我的云端笔记$/ }).first().click()
     await win.waitForSelector('.pz-table tbody tr', { timeout: 10_000 }).catch(() => {})
     await shot('ama')
+
+    // ⑥ 我的云盘(方案 D):新建文件夹 → 上传(中文名 / 并发 3 / 超 50 MB 不发请求)→ 撞名 (1) → 文件夹上传 → 配额预检 → 多选批量删
+    const upDir = path.join(home, 'up')
+    fs.mkdirSync(path.join(upDir, '课题资料', '子目录'), { recursive: true })
+    const mk = (rel, size) => { const f = path.join(upDir, rel); fs.writeFileSync(f, ''); fs.truncateSync(f, size); return f }
+    // 顺序有讲究:前三个大的占满三条道,小的排在第四个(截图时还在排队),超 50 MB 的入队就失败
+    const batch1 = [mk('WMOS 演示录屏.mov', 24 * MB), mk('封面.png', 6 * MB), mk('数据.csv', 3 * MB), mk('组会纪要.md', 40 * 1024), mk('超大.zip', 51 * MB)]
+    mk('课题资料/提纲.md', 8 * 1024); mk('课题资料/子目录/附录.md', 4 * 1024); mk('课题资料/.DS_Store', 1024)
+    const uploadsHit = () => cloud.st.hits.filter((h) => h.startsWith('POST /api/files/upload')).length
+    const cardTitle = () => win.locator('.pz-txcard .pz-txhead b').textContent({ timeout: 1000 }).catch(() => '')
+    const tableNames = () => win.locator('.pz-table td.n b').allTextContents()
+    await win.locator('.t2s-srow-title', { hasText: /^我的云盘$/ }).first().click()
+    await win.waitForSelector('text=这里还空着', { timeout: 10_000 }).catch(() => {})
+    check('⑥ 我的云盘在概览下面,装好是空的', await win.getByText('这里还空着').count() > 0)
+    await shot('drive-empty')
+    await win.locator('.pz-top .pz-ibtn[title="新建文件夹"]').click()
+    await win.waitForFunction(() => document.activeElement?.classList.contains('pz-newname'), null, { timeout: 5000 }).catch(() => {})
+    await win.keyboard.press('Escape')
+    await win.waitForTimeout(300)
+    check('⑥ 新建文件夹:Esc 取消,不发请求', !(await win.locator('.pz-newname').count()) && !cloud.st.hits.some((h) => h.startsWith('POST /api/files [penzor]')))
+    await win.locator('.pz-top .pz-ibtn[title="新建文件夹"]').click()
+    await win.waitForFunction(() => document.activeElement?.classList.contains('pz-newname'), null, { timeout: 5000 }).catch(() => {})
+    const nf = await win.evaluate(() => { const i = document.querySelector('.pz-newname'); const a = document.activeElement; return { has: !!i, focused: i === a, active: a ? `${a.tagName}.${a.className}` : '', sel: i ? [i.selectionStart, i.selectionEnd, i.value] : null } })
+    check('⑥ 新建文件夹:行内一行,名字已选中', nf.has && nf.focused && nf.sel[0] === 0 && nf.sel[1] === nf.sel[2].length && nf.sel[2] === '新建文件夹', JSON.stringify(nf))
+    await win.keyboard.type('资料')
+    await win.keyboard.press('Enter')
+    await win.waitForFunction(() => [...document.querySelectorAll('.pz-table td.n b')].some((b) => b.textContent === '资料'), null, { timeout: 8000 }).catch(() => {})
+    check('⑥ 回车建好「资料」', cloud.st.hits.includes('POST /api/files [penzor]') && (await tableNames()).includes('资料'))
+
+    cloud.st.throttle = true
+    await win.locator('.pz input[type=file][multiple]').setInputFiles(batch1)
+    await win.waitForSelector('.pz-txcard', { timeout: 8000 }).catch(() => {})
+    await win.waitForFunction(() => document.querySelectorAll('.pz-txcard .pz-txrow2').length >= 5, null, { timeout: 8000 }).catch(() => {})
+    check('⑥ 一开传卡片就打开:正在传输 4 项', /正在传输 4 项/.test(await cardTitle()), await cardTitle())
+    await win.waitForTimeout(3500) // 速度是 3 秒均值,等它出来
+    check('⑥ 超 50 MB 的当场失败、不发请求,其余照传', /单个文件超过 50 MB/.test(await win.locator('.pz-txcard').textContent().catch(() => '')) && !cloud.st.uploads.some((x) => x.name === '超大.zip'))
+    const live = await win.evaluate(() => [...document.querySelectorAll('.pz-txcard .pz-txrow2')].map((r) => r.querySelector('.sub')?.textContent || ''))
+    check('⑥ 并发 3:同时在传的不超过 3 个,其余排队', live.filter((x) => /\/s/.test(x)).length <= 3 && live.some((x) => /排队中/.test(x)), live.join(' | '))
+    const ring = await win.evaluate(() => { const r = document.querySelector('.rb .rb-ring'); return r ? r.closest('[aria-label]')?.getAttribute('aria-label') || '?' : '' })
+    check('⑥ Ribbon 上蓬洲云图标外有进度环', /^蓬洲云，进行中 \d+%$/.test(ring), ring)
+    check('⑥ 表格里正在传进来的行带进度', await win.locator('.pz-table .pz-txrow').count() > 0)
+    await shot('drive-uploading')
+    await setMode('dark'); await shot('drive-uploading-dark')
+    await setMode('light', 'teal'); await shot('drive-uploading-teal'); await setMode('light')
+    cloud.st.throttle = false
+    await win.waitForFunction(() => /没传完/.test(document.querySelector('.pz-txcard .pz-txhead b')?.textContent || ''), null, { timeout: 60_000 }).catch(() => {})
+    const names1 = cloud.st.uploads.map((x) => x.name).sort()
+    check('⑥ 四个都传上去了,中文名原样(filename* UTF-8)', JSON.stringify(names1) === JSON.stringify(['WMOS 演示录屏.mov', '封面.png', '数据.csv', '组会纪要.md'].sort()), names1.join(' | '))
+    check('⑥ Content-Length 和实际字节一致', cloud.st.badLength === 0 && cloud.st.uploads.every((x) => x.src === 'penzor'))
+    check('⑥ 有失败的卡片留着:1 项没传完', /1 项没传完/.test(await cardTitle()), await cardTitle())
+    await win.waitForTimeout(800)
+    check('⑥ 传完进度环收掉', !(await win.locator('.rb .rb-ring').count()))
+    await win.waitForFunction(() => document.querySelectorAll('.pz-table td.n b').length >= 5, null, { timeout: 8000 }).catch(() => {})
+    check('⑥ 传完表格刷新出四个文件', ['组会纪要.md', 'WMOS 演示录屏.mov', '封面.png', '数据.csv'].every((n) => names1.includes(n)) && (await tableNames()).includes('WMOS 演示录屏.mov'), (await tableNames()).join(' | '))
+    await shot('drive-done-fail')
+    await win.locator('.pz-txfoot button', { hasText: '清除' }).click().catch(() => {})
+    await win.waitForTimeout(400)
+    check('⑥ 清除后卡片收掉', !(await win.locator('.pz-txcard, .pz-txpill').count()))
+
+    await win.locator('.pz input[type=file][multiple]').setInputFiles([batch1[3]])
+    await win.waitForFunction(() => /全部传完/.test(document.querySelector('.pz-txcard .pz-txhead b')?.textContent || ''), null, { timeout: 15_000 }).catch(() => {})
+    check('⑥ 撞名 → 「组会纪要 (1).md」,卡片说全部传完', cloud.st.uploads.some((x) => x.name === '组会纪要 (1).md') && /全部传完/.test(await cardTitle()))
+    await win.mouse.move(200, 600)
+    await win.waitForTimeout(5000)
+    check('⑥ 全部传完 4 秒后卡片消失', !(await win.locator('.pz-txcard, .pz-txpill').count()))
+
+    await win.locator('.pz input[type=file][webkitdirectory]').setInputFiles(path.join(upDir, '课题资料'))
+    await win.waitForFunction(() => /全部传完/.test(document.querySelector('.pz-txcard .pz-txhead b')?.textContent || ''), null, { timeout: 15_000 }).catch(() => {})
+    await win.waitForFunction(() => [...document.querySelectorAll('.pz-table td.n b')].some((b) => b.textContent === '课题资料'), null, { timeout: 5000 }).catch(() => {})
+    const tops = await win.evaluate(() => [...document.querySelectorAll('.pz-table td.n b')].map((b) => b.textContent))
+    const nested = cloud.st.uploads.filter((x) => x.name === '提纲.md' || x.name === '附录.md')
+    check('⑥ 上传文件夹:保留目录结构,隐藏文件不传', tops.includes('课题资料') && nested.length === 2 && new Set(nested.map((x) => x.parentId)).size === 2 && !cloud.st.uploads.some((x) => x.name === '.DS_Store'), `${tops.join(' | ')} · ${JSON.stringify(nested)}`)
+    await win.mouse.move(200, 600); await win.waitForTimeout(5000)
+
+    const okQuota = cloud.st.quota
+    cloud.st.quota = 1916 * MB + cloud.st.uploads.reduce((n, x) => n + x.size, 0) + 2 * MB // 只剩 2 MB,这批要 9 MB
+    const before6 = uploadsHit()
+    await win.locator('.pz input[type=file][multiple]').setInputFiles([batch1[1], batch1[2]])
+    await win.waitForFunction(() => /空间不够/.test(document.querySelector('.pz-txcard')?.textContent || ''), null, { timeout: 8000 }).catch(() => {})
+    const qtext = await win.locator('.pz-txcard').textContent().catch(() => '')
+    check('⑥ 配额预检:放不下就一个都不传,卡片写还差 7 MB + 去回收站腾地方', /空间不够，还差 7(\.0+)? MB/.test(qtext) && /去回收站腾地方/.test(qtext) && uploadsHit() === before6, qtext.slice(0, 80))
+    await shot('drive-quota')
+    await win.locator('.pz-txcard .pz-txrow2.is-fail .pz-ib').first().click().catch(() => {})
+    cloud.st.quota = okQuota
+
+    await win.locator('.pz-table tbody tr', { hasText: '封面.png' }).first().click()
+    await win.locator('.pz-table tbody tr', { hasText: '数据.csv' }).first().click({ modifiers: ['Meta'] })
+    await win.waitForTimeout(400)
+    const selbar = await win.locator('.pz-selbar').textContent().catch(() => '')
+    const sideTitle = await win.locator('.pz-side .pz-fname').textContent().catch(() => '')
+    check('⑥ ⌘ 点选两项:批量条 + 右栏「已选 2 项」', /^已选 2 项 · 9/.test(selbar) && sideTitle === '已选 2 项', `${selbar} / ${sideTitle}`)
+    await shot('drive-multi')
+    await win.locator('.pz-top .pz-btn.danger', { hasText: '移到回收站' }).click()
+    await win.waitForFunction(() => /已把 2 项移到回收站/.test(document.body.innerText), null, { timeout: 8000 }).catch(() => {})
+    check('⑥ 批量移到回收站:一次 batch/delete,吐司说 2 项', cloud.st.hits.includes('POST /api/files/batch/delete [penzor]') && /已把 2 项移到回收站/.test(await win.evaluate(() => document.body.innerText)))
+    await win.locator('.pz-scroll').click({ position: { x: 600, y: 600 } }).catch(() => {})
+    await win.keyboard.press('Meta+A')
+    await win.waitForTimeout(300)
+    const all = await win.locator('.pz-selbar').textContent().catch(() => '')
+    check('⑥ ⌘A 全选', /^已选 \d+ 项/.test(all) && Number(all.match(/已选 (\d+)/)?.[1]) === (await win.locator('.pz-table tbody tr').count()), all)
+    await win.keyboard.press('Escape')
 
     // ④ 设置 › 同步 › 远程同步
     const before = app.windows().length

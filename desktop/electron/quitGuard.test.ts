@@ -51,6 +51,27 @@ describe('quitGuard', () => {
     expect(g.intercept()).toBe(false)
   })
 
+  it('重启的框开着时再按退出:不叠第二个框;退出的框开着时点重启:答「退出」由重启接手,不单纯退出', async () => {
+    let resolve!: (v: boolean) => void
+    const { g, asked, quit } = setup(() => new Promise((r) => { resolve = r }))
+    g.add(() => ({ message: 'busy' }))
+    const restart = g.confirmFirst()
+    expect(g.intercept()).toBe(true)
+    expect(asked.length).toBe(1)
+    resolve(true)
+    expect(await restart).toBe(true)
+    await flush()
+    expect(quit).not.toHaveBeenCalled()
+    g.reset()
+    expect(g.intercept()).toBe(true)
+    const restart2 = g.confirmFirst()
+    expect(asked.length).toBe(2)
+    resolve(true)
+    expect(await restart2).toBe(true)
+    await flush()
+    expect(quit).not.toHaveBeenCalled()
+  })
+
   it('重启 / 装更新:先问一次,点了退出后面的 before-quit 不再问;取消就不重启', async () => {
     const yes = setup(true)
     yes.g.add(() => ({ message: 'busy' }))

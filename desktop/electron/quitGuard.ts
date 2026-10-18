@@ -17,7 +17,9 @@ export type QuitGuardFn = (locale: MainLocale) => QuitBlock | null
 export function createQuitGuards(deps: { locale(): MainLocale; ask(b: QuitBlock): Promise<boolean>; quit(): void; log?(m: string): void }) {
   const guards = new Set<QuitGuardFn>()
   let confirmed = false
-  let asking = false
+  // 退出和重启 / 装更新共用一个在问的框:两条路同时来只弹一个,答案归最后来的那条路去执行
+  let asking: Promise<boolean> | null = null
+  let quitAfter = false
   /** 第一条说「没做完」的;插件那边抛错 / 给了坏值都当没事(不能因为插件坏了就退不出去)。 */
   const first = (): QuitBlock | null => {
     for (const g of guards) {
@@ -27,6 +29,13 @@ export function createQuitGuards(deps: { locale(): MainLocale; ask(b: QuitBlock)
       } catch (e) { deps.log?.(`[quit-guard] guard threw: ${String((e as Error)?.message || e)}`) }
     }
     return null
+  }
+  const ask = (b: QuitBlock): Promise<boolean> => {
+    if (!asking) {
+      asking = deps.ask(b).then((go) => { if (go) confirmed = true; return go }, () => false)
+      void asking.then((go) => { asking = null; if (go && quitAfter) deps.quit() })
+    }
+    return asking
   }
   return {
     add(fn: QuitGuardFn): () => void {
@@ -38,24 +47,21 @@ export function createQuitGuards(deps: { locale(): MainLocale; ask(b: QuitBlock)
      *  对话框开着时又按了一次退出:照样拦,不叠第二个框。 */
     intercept(): boolean {
       if (confirmed) return false
-      if (asking) return true
+      if (asking) return true // 框还开着(不管是谁弹的):不叠第二个
       const b = first()
       if (!b) return false
-      asking = true
-      void deps.ask(b).then(
-        (go) => { asking = false; if (go) { confirmed = true; deps.quit() } },
-        () => { asking = false },
-      )
+      quitAfter = true
+      void ask(b)
       return true
     },
     /** 自己会走到退出的路(重启、装更新):先问一次;点了「退出」就记下,后面的 before-quit 不再问。 */
     async confirmFirst(): Promise<boolean> {
       if (confirmed) return true
+      if (asking) { quitAfter = false; return asking } // 退出的框正开着:点了「退出」就由重启这条路接手,别再单纯退出
       const b = first()
       if (!b) return true
-      const go = await deps.ask(b)
-      if (go) confirmed = true
-      return go
+      quitAfter = false
+      return ask(b)
     },
     /** 重启失败、退出没成:下次退出照常再问。 */
     reset(): void { confirmed = false },
