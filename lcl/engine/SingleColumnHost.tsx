@@ -938,6 +938,8 @@ function useWideAspect(enabled: boolean): boolean {
 export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildDefault?: () => void }> = ({ buildDefault }) => {
   useEffect(() => {
     const ws = useWorkspace.getState()
+    // 宽窄先于还原同步:还原 / 建默认要据此展开并排左栏(dockLeftIfWide);下面 [wide] 那条 effect 排在这条之后才跑
+    ws.setWideMode(window.matchMedia(WIDE_QUERY).matches)
     if (buildDefault) ws.setDefaultBuilder(buildDefault)
     // 冷启动先还原上次的标签 + 激活项(桌面是 WorkspaceHost.onReady 的 tryRestoreLayout,单列这边
     // 是三桶 leaf 的序列化);首启 / 整份不可用才构建当前 Space 的默认布局。挂载之前已经摆上了的由它自己认(照用,但发令枪要响)。

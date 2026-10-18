@@ -53,6 +53,7 @@ registerMessages({
   'terminal.exited': { zh: '进程已退出（code {code}）', en: 'Process exited (code {code})' },
   'terminal.restart': { zh: '重新启动', en: 'Restart' },
   'terminal.unavailable': { zh: '终端不可用：node-pty 原生模块未就绪。', en: 'Terminal unavailable: the node-pty native module is not ready.' },
+  'calendar.yielded': { zh: '「日历」插件开着，内置日历先让给它；关掉插件就回来。', en: 'The Calendar plugin is on, so the built-in calendar steps aside. Turn the plugin off to bring it back.' },
 })
 
 const tr = (k: string, vars?: Record<string, unknown>): string => useApp.getState().tr(k, vars)
@@ -182,8 +183,16 @@ function applyBuiltin(def: BuiltinDef, on: boolean): void {
   removeCommand(`builtin-${def.id}-open`) // 无此命令时 no-op(日历不注册命令)
 }
 
+/** 日历核心插件(方案 B 并行双跑,10-17 用户定「按照B来，但是这算核心插件，不公开」):它启用期间内置日历让位 ——
+ *  只撤下 Space(Ribbon 上不出现两个「日历」),不改用户的开关;插件停用 → 按开关回来。插件的 Space 另有 id
+ *  (`calendar` 是宿主保留 id)。视图类型照旧注册:别的 Space 侧栏 / 仪表盘里摆着的 todo-list、calendar 不能跟着失效
+ *  (Codex 评审);Agent 日程轮询 / .ics 刷新是按挂着的视图订的,没人挂就不跑。 */
+export const CALENDAR_PLUGIN_ID = 'forsion-calendar'
+
 interface BuiltinState {
   enabled: Record<string, boolean>
+  /** 日历让给了核心插件(见 CALENDAR_PLUGIN_ID) */
+  calendarYielded: boolean
   /** 应用内 http(s) 链接是否走内置浏览器(缺省关 = 交给系统浏览器,见 linksOn)。 */
   inAppLinks: boolean
   toggle(id: string, on: boolean): void
@@ -193,16 +202,35 @@ interface BuiltinState {
 export const useBuiltins = create<BuiltinState>((set, get) => ({
   enabled: Object.fromEntries(BUILTINS.map((b) => [b.id, builtinEnabled(b.id)])),
   inAppLinks: linksOn(),
+  calendarYielded: false,
   toggle: (id, on) => {
     if (id === 'calendar' && PRODUCT.nativeFeatures !== undefined) return
     const def = BUILTINS.find((b) => b.id === id)
     if (!def || !def.available()) return
     writeFlag(key(id), on)
-    applyBuiltin(def, on)
+    applyToggle(def, on)
     set({ enabled: { ...get().enabled, [id]: on } })
   },
   setInAppLinks: (on) => { writeFlag(LINKS_KEY, on); set({ inAppLinks: on }) },
 }))
+
+/** 日历核心插件启用 / 停用时调(amadeusPlugins 订着插件 store)。幂等。 */
+export function setCalendarYield(yielded: boolean): void {
+  const s = useBuiltins.getState()
+  if (s.calendarYielded === yielded) return
+  useBuiltins.setState({ calendarYielded: yielded })
+  const def = BUILTINS.find((b) => b.id === 'calendar')
+  if (!def || !def.available() || !s.enabled.calendar) return
+  if (yielded) def.removeSpace?.()
+  else def.installSpace?.()
+}
+
+/** 开关落地(本窗切 / 别的窗切了经 storage 同步):日历让位期间视图跟开关走、Space 不装,插件停用时按开关回来。 */
+function applyToggle(def: BuiltinDef, on: boolean): void {
+  if (def.id !== 'calendar' || !useBuiltins.getState().calendarYielded) return applyBuiltin(def, on)
+  if (!on) applyBuiltin(def, false)
+  else if (!getView(def.types[0])) def.install()
+}
 
 /** 外链去哪:遵「应用内链接」开关 —— 开着走内置浏览器标签,否则交给系统浏览器。
  *  主进程回投的外链(onOpenUrl)与渲染层自己拦下的链接(聊天网页引用条 Desk 走不通时)
@@ -280,7 +308,7 @@ export function installBuiltins(): void {
     if (!def || !def.available() || (def.id === 'calendar' && PRODUCT.nativeFeatures !== undefined)) return
     const on = readFlag(key(def.id))
     if (useBuiltins.getState().enabled[def.id] === on) return
-    applyBuiltin(def, on)
+    applyToggle(def, on)
     useBuiltins.setState({ enabled: { ...useBuiltins.getState().enabled, [def.id]: on } })
   })
 
@@ -296,6 +324,7 @@ export const BuiltinPluginsSection: React.FC = () => {
   const { t } = useI18n()
   const enabled = useBuiltins((s) => s.enabled)
   const inAppLinks = useBuiltins((s) => s.inAppLinks)
+  const calendarYielded = useBuiltins((s) => s.calendarYielded)
   const toggle = useBuiltins((s) => s.toggle)
   const setInAppLinks = useBuiltins((s) => s.setInAppLinks)
   const list = BUILTINS.filter((b) => b.available() && (b.id !== 'calendar' || PRODUCT.nativeFeatures === undefined))
@@ -313,6 +342,9 @@ export const BuiltinPluginsSection: React.FC = () => {
             </div>
             <input type="checkbox" checked={!!enabled[b.id]} onChange={(e) => toggle(b.id, e.target.checked)} style={{ cursor: 'pointer' }} />
           </div>
+          {b.id === 'calendar' && calendarYielded && (
+            <div style={{ marginTop: 8, fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-muted)' }}>{t('calendar.yielded')}</div>
+          )}
           {b.id === 'browser' && enabled.browser && (
             <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8, fontSize: 'var(--ui-font-meta, 12px)', cursor: 'pointer' }}>
               <input type="checkbox" checked={inAppLinks} onChange={(e) => setInAppLinks(e.target.checked)} />

@@ -11,6 +11,7 @@ const EMPTY = {
   mainLeaves: [], leftLeaves: [], rightLeaves: [],
   activeMainId: null, leftActiveId: null, rightActiveId: null,
   leftVisible: false, rightVisible: false, focusedChatLeafId: null,
+  wideMode: false, sidebarDefaults: { left: [], right: [] }, defaultBuilder: null,
 }
 
 beforeEach(() => {
@@ -161,5 +162,36 @@ describe('原地换视图(replaceViewsOfType,插件 ctx.replaceView 的单列半
     expect(s.sidebarDefaults.left).toEqual([{ type: 'note', params: { path: 'b.md' } }])
     expect(useWorkspace.getState().replaceViewsOfType('note', 'not-registered')).toBe(0)
     expect(useWorkspace.getState().leftLeaves[0].type).toBe('note')
+  })
+})
+
+describe('宽屏并排左栏(横屏平板 / 手机):布局整份换新后有左栏视图就展开', () => {
+  const FILES = { left: [{ type: 'files', params: {} }], right: [] }
+  it('切 Space 落空走默认(resetLayout):宽屏展开并按缺省填;窄屏照旧收起;没有左栏视图不开空栏', () => {
+    useWorkspace.setState({ wideMode: true, sidebarDefaults: FILES })
+    useWorkspace.getState().setDefaultBuilder(() => useWorkspace.getState().openView('chat', {}, 'main'))
+    useWorkspace.getState().resetLayout()
+    expect(useWorkspace.getState().leftVisible).toBe(true)
+    expect(useWorkspace.getState().leftLeaves.map((r) => r.type)).toEqual(['files'])
+
+    useWorkspace.setState({ ...EMPTY, sidebarDefaults: FILES })
+    useWorkspace.getState().resetLayout()
+    expect(useWorkspace.getState().leftVisible).toBe(false)
+
+    useWorkspace.setState({ ...EMPTY, wideMode: true })
+    useWorkspace.getState().resetLayout()
+    expect(useWorkspace.getState().leftVisible).toBe(false)
+  })
+
+  it('冷启动还原 / 切回存过的 Space(applySCBlob):宽屏展开,且先于 afterLayout(一页式 Space 的落点要能再收回)', () => {
+    seed()
+    useWorkspace.getState().saveCurrent()
+    useWorkspace.setState({ ...EMPTY, wideMode: true })
+    let seen: boolean | null = null
+    setAfterLayoutHook(() => { seen = useWorkspace.getState().leftVisible })
+    try { expect(restoreSingleColumnLayout()).toBe(true) } finally { setAfterLayoutHook(null) }
+    expect(useWorkspace.getState().leftVisible).toBe(true)
+    expect(useWorkspace.getState().leftLeaves.map((r) => r.type)).toEqual(['files'])
+    expect(seen).toBe(true)
   })
 })

@@ -240,8 +240,12 @@ export interface PluginAppApi extends BlockSurfaceApi {
    *  declared by a Space (for example a document companion beside a plugin view); `activate:false`
    *  updates that pane without stealing focus from the source view. Older hosts lack this seam.
    *  A path that is not a `.md` note (PDF, image, whiteboard) never reaches the note editor: it is
-   *  handed to `openFile` instead (2026-10-05+). */
-  openNote?(path: string, options?: { reuseKey?: string; activate?: boolean; newTab?: boolean }): void
+   *  handed to `openFile` instead (2026-10-05+).
+   *  `heading` (2026-10-17+): after opening, scroll to the first heading with that text and focus it (the same jump
+   *  as `[[note#heading]]` and chat citations; `PluginNoteTask.heading` fits as is). No such heading: the note just
+   *  opens. Ignored with `activate: false` (the jump would take focus). Older hosts ignore it and only open the note. To open a database in its table view, pass the `.db`
+   *  path to `openFile`. */
+  openNote?(path: string, options?: { reuseKey?: string; activate?: boolean; newTab?: boolean; heading?: string }): void
 
   // ── 只读 vault 查询面(2026-08-14+)。纯透传主进程既有能力,**没有任何写口**。
   //    定位(codex 2026-08-14 评审的措辞,别写成「读写自然包含枚举」):这是把外置插件**本来就有的**
@@ -331,6 +335,41 @@ export interface PluginDatabase {
   kind: 'table' | 'notes'
   columns: PluginDbColumn[]
   rows: PluginDbRow[]
+}
+/** ctx.ui.mountRecord 的参数。 */
+export interface PluginRecordOptions {
+  /** 库相对路径(ctx.databases 快照里那张表的 path) */
+  path: string
+  rowId: string
+  /** 当作时间显示的日期列(给日历成员的 dateCol);不给 = 日期列和别的属性一样列在下面 */
+  dateCol?: string
+  readOnly?: boolean
+}
+/** ctx.calendar 的一个只读叠加源(2026-10-17+):不在库里、改不了的日历 —— Agent 日程、.ics 订阅、
+ *  Local↔Cloud 另一侧库里的表。行和列的形状同 ctx.databases(`kind` 恒 `'table'`);**没有写口**,
+ *  拿它的 path 去调 ctx.databases 的写口一律 false。 */
+export interface PluginCalendarOverlay extends PluginDatabase {
+  /** `agent` = 某个 Agent 的日程表;`ics` = 用户加的 .ics 订阅 / 导入;`otherVault` = 另一侧库里带日期列的经典表 */
+  origin: 'agent' | 'ics' | 'otherVault'
+  /** otherVault:另一侧那个库的名字(图例里淡显) */
+  vaultLabel?: string
+}
+/** ctx.calendar.subscribe 的一份快照。成员只给路径和列映射,行去 ctx.databases 拿(两份订阅,各管各的)。 */
+export interface PluginCalendarSnapshot {
+  /** 同 ctx.databases:false = 库里的表还没读完,这时 members 可能不全。叠加源各自尽力而为,不计入 ready */
+  ready: boolean
+  /** 当前库里「在日历中」的表:日期列与(可选的)完成勾选列已按宿主日历的规则解析好 */
+  members: Array<{ path: string; dateCol: string; checkboxCol?: string }>
+  overlays: PluginCalendarOverlay[]
+  /** 每个成员与叠加源的颜色(`#rrggbb`),与宿主日历图例一致(用户改过的优先,否则按图例顺序取调色板) */
+  colors: Record<string, string>
+  /** 用户在日历里藏起来的源(路径) */
+  hidden: string[]
+  /** 新建事件默认落进的表;null = 没设过(宿主日历这时用第一个可写成员) */
+  defaultPath: string | null
+  /** 用户的 .ics 订阅(含导入的文件):`path` = 它在 overlays 里那张表的路径;`url` 为空 = 导入的快照(刷不了);
+   *  `error` = 上次拉取失败的原因(给用户看的文案)。 */
+  icsSubscriptions: Array<{ id: string; path: string; name: string; url: string; error?: string }>
 }
 /** 笔记正文里一条带 `@` 时间标记的行(`- [ ] 交周报 @2026-10-20T15:00`)。 */
 export interface PluginNoteTask {
@@ -1254,8 +1293,11 @@ export interface PluginContext {
   /** Show a top-right notification card (2026-07-23+). Source is auto-labelled with the plugin
    *  name and users can mute per plugin in 设置 → 通知与状态栏 — treat it as a mutable hint, not a
    *  data channel. error level is sticky (manual close) by default. Old hosts lack this API:
-   *  always call as `ctx.notify?.(…)`. For persistent state prefer registerStatusItem. */
-  notify?(message: string, opts?: { level?: 'info' | 'success' | 'warning' | 'error'; title?: string; sticky?: boolean }): void
+   *  always call as `ctx.notify?.(…)`. For persistent state prefer registerStatusItem.
+   *  `action` (2026-10-17+): one button on the card, e.g. Undo after a delete — the card then stays about 8 seconds;
+   *  `run` is not called once the plugin is disabled. `key` (2026-10-17+): a later card with the same key replaces the
+   *  earlier one instead of stacking (keys are per plugin). Older hosts ignore both: keep the action reachable elsewhere. */
+  notify?(message: string, opts?: { level?: 'info' | 'success' | 'warning' | 'error'; title?: string; sticky?: boolean; action?: { label: string; run(): void }; key?: string }): void
   /** The host UI's current language (2026-08-14+). Plugins ship bilingual strings and pick with this.
    *  Optional in the type only because API v1 hosts predate it — every current host injects it, so
    *  always call as `ctx.getLocale?.() ?? 'zh'` (Chinese is the canonical fallback). */
@@ -1344,6 +1386,15 @@ export interface PluginContext {
      *  bounds in scene units, padding included: place the SVG at `(x + scrollX) * zoom`, sized
      *  `width * zoom`. Feature-detect: `ctx.ui?.boardToSvg`. */
     boardToSvg?(scene: PluginBoardScene, opts?: { theme?: 'light' | 'dark'; padding?: number }): Promise<PluginBoardSvg | null>
+    /** The host's record editor for one row of a vault database (2026-10-17+): the fields the built-in calendar's event
+     *  card shows — the title, `dateCol` as a time summary that opens the native date / time picker, and every other
+     *  property with the editor its column type gets in the database (read-only for relations, lookups, formulas and
+     *  files). Edits go the same way as `ctx.databases.setCell`, so open tables update at once. Your card owns the frame,
+     *  close button and actions (delete with `ctx.databases.deleteRow`, open with `ctx.app.openFile`).
+     *  **Only with the `databases` capability** (absent otherwise). `path` must be a table in the vault right now, else it
+     *  throws synchronously; a row deleted while mounted renders nothing. `readOnly` shows values without editors.
+     *  Same handle contract as the other mounts (`update` in place, `dispose` hands `el` back); feature-detect older hosts. */
+    mountRecord?(el: HTMLElement, opts: PluginRecordOptions): { update(patch: Partial<PluginRecordOptions>): void; dispose(): void }
   }
   /** Dashboard 配方编译(2026-09-01+):声明式配方 → 一份真 `.dashboard.md` 字节。
    *  插件自己经 `ctx.app.writeFile` 落进 workFolder、`ctx.app.openFile` 打开 —— 宿主的
@@ -1530,9 +1581,41 @@ export interface PluginContext {
   /** 日历成员登记(2026-09-02+)。Calendar Space 是显式成员制 —— 插件种下的任务表不会自动进日历,
    *  用这条把 `dbPath`(库相对路径)以 `dateColId` 为日期锚(可选 `checkboxColId` 为完成勾选)登记进去。
    *  已是成员 → no-op(不覆盖用户改过的列映射);库还没恢复 → 等库恢复后再登记(最多 60s),
-   *  同步返回 void。旧宿主没有:`ctx.calendar?.ensureMember(…)`。 */
+   *  同步返回 void。旧宿主没有:`ctx.calendar?.ensureMember(…)`。
+   *
+   *  ⚠️**两档**:`ensureMember` 每个插件都有(09-02 起就这样,不变);其余成员(2026-10-17+)**只有 manifest
+   *  `capabilities` 里声明了 `'calendar'` 才有** —— 没声明时它们不存在(不是空壳),`ctx.calendar` 只剩 `ensureMember`。
+   *  一律 `if (ctx.calendar?.subscribe) …`。这一档读到的是日历自己的东西:叠加源(Agent 日程、.ics 订阅、另一侧库)
+   *  和日历设置(成员、颜色、显隐、默认表);库里表的行在 ctx.databases(另一个能力,一起声明)。
+   *
+   *  · `subscribe(cb)`:立刻回调一次,之后成员 / 设置 / 叠加源 / 库里的表有变化就再回调;返回退订,插件停用时宿主统一退订。
+   *    **订阅期间宿主替你刷新叠加源**:Agent 日程每分钟拉一次、.ics 订阅每半小时联网拉一次、换库时重读另一侧 ——
+   *    和打开着的日历共用同一个计时器(不会多拉),最后一个订阅者退订就停。用不着叠加源就别订阅。
+   *  · 写口改的是用户的日历设置(和日历左栏「日历」列表里改是同一处,当前库生效),都返回是否改了:
+   *    `setColor(path, '#rrggbb' | null)`(null = 回到调色板色)、`setHidden(path, bool)` 只认当前的成员或叠加源;
+   *    `setDefault(path)` 只认可写的成员表;`setMember(path, dateCol, checkboxCol?)` 把库里一张表加进日历或改它的列映射
+   *    (日期列必须是日期类列、勾选列必须是勾选类列;**会覆盖**用户改过的映射 —— 只想「没有就加」用 `ensureMember`);
+   *    `removeMember(path)` 只撤成员,不删表;日历还没做过首次整理时(从没打开过日历、也没订阅到 ready)返回 false ——
+   *    订阅会在库读完后替你做这一步(和打开宿主日历一样,成员不变)。叠加源不能当成员、不能设默认。
+   *  · `ics`:管理 .ics 订阅(和宿主日历设置里「添加订阅 / 导入」同一处,全局、不分库)。`add(url)` 只收 http(s) / webcal
+   *    地址,返回订阅 id(同一个地址已订过就返回那一个);拉取在宿主主进程做(订阅地址都不发 CORS 头),回环 / 私网地址
+   *    一律被拒,结果看快照里的 `icsSubscriptions[].error`。`importText(name, text)` 导入一份 .ics 文件内容(≤ 8MB、
+   *    得像日历),返回 id 或 null。`rename` / `remove` 返回是否改了;`refresh(id)` 立刻拉一次,成功 true(导入的快照没地址 → false)。 */
   calendar?: {
     ensureMember(dbPath: string, dateColId: string, checkboxColId?: string): void
+    subscribe?(cb: (snapshot: PluginCalendarSnapshot) => void): () => void
+    setColor?(path: string, color: string | null): boolean
+    setHidden?(path: string, hidden: boolean): boolean
+    setDefault?(path: string): boolean
+    setMember?(path: string, dateCol: string, checkboxCol?: string): boolean
+    removeMember?(path: string): boolean
+    ics?: {
+      add(url: string): string | null
+      importText(name: string, text: string): string | null
+      rename(id: string, name: string): boolean
+      remove(id: string): boolean
+      refresh(id: string): Promise<boolean>
+    }
   }
   /** 全库多维表的实时聚合 + 行级读写(2026-10-16+;日历 / 待办 / 习惯这类插件的数据来源)。
    *  **只有 manifest `capabilities` 里声明了 `'databases'` 才注入**(没声明 → `ctx.databases` 整个不存在)。
@@ -1560,7 +1643,8 @@ export interface PluginContext {
   }
   /** 笔记正文里的 `@` 时间任务(2026-10-16+;待办视图里「笔记」那一组的来源)。
    *  **只有 manifest `capabilities` 里声明了 `'noteTasks'` 才注入**。
-   *  · `subscribe(cb)`:同 ctx.databases —— 立刻回调、之后有变化再回调;`ready: false` = 还没拉过。
+   *  · `subscribe(cb)`:同 ctx.databases —— 立刻回调、之后有变化再回调;`ready: false` = 还没拉过**当前这个库**
+   *    (库还没恢复、或刚换库)—— 这时的空列表 ≠ 笔记里没有任务。
    *    笔记里刚打的标记要等编辑器落盘后才出现(宿主拉取前会先落盘)。
    *  · `update(id, { checked?, due? })`:就地改笔记里那一行(勾选 / 改日期),先立即反映在下一次回调里,稍后写回
    *    markdown;那一行已经被改得对不上时宿主提示用户去笔记里改。返回 false = 宿主不能回写(网页 / 手机)、
