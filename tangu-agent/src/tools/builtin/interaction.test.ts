@@ -309,6 +309,21 @@ describe('无人值守 run 的询问', () => {
     expect(state.events.filter((e) => e.type === 'inquiry_request')).toHaveLength(0);
   });
 
+  it('子会话那一轮的 exit_plan_mode 不短路:照常发计划卡等用户批', async () => {
+    const r = await unattended('run-child-plan', { fromParent: true, agentConfig: {} }, async () => {
+      const p = Promise.resolve(tool('exit_plan_mode').execute({ plan: '# p' }, { runId: 'run-child-plan', sessionId: 's' } as any));
+      let inq: any;
+      for (let i = 0; i < 50 && !inq; i++) {
+        await new Promise((res) => setTimeout(res, 0));
+        inq = state.events.find((e) => e.runId === 'run-child-plan' && e.type === 'inquiry_request');
+      }
+      expect(inq?.payload.kind).toBe('plan');
+      resolveInquiry(inq.payload.inquiryId, 'no');
+      return p;
+    });
+    expect(r).not.toContain(INQUIRY_CHILD_ANSWER);
+  });
+
   it('exit_plan_mode 同理:不算批准,计划模式不动', async () => {
     const r = await unattended('run-unattended-plan', { background: 'muse' }, () =>
       Promise.resolve(tool('exit_plan_mode').execute({ plan: '# p' }, { runId: 'run-unattended-plan', sessionId: 's' } as any)));

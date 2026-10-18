@@ -48,7 +48,8 @@ export function requestInquiry(
 ): Promise<string> {
   if (signal?.aborted) return Promise.resolve('(用户中止了运行)');
   if (isUnattendedRun(runId)) return Promise.resolve(INQUIRY_UNATTENDED_ANSWER);
-  if (isChildBriefRun(runId)) return Promise.resolve(INQUIRY_CHILD_ANSWER);
+  // 计划审批不短路:用户在子会话里开了计划模式,批准卡照常挂在子会话里等用户(Codex 评审 P1)
+  if (isChildBriefRun(runId) && payload.kind !== 'plan') return Promise.resolve(INQUIRY_CHILD_ANSWER);
   const inquiryId = nextInquiryId();
   return new Promise<string>((resolve) => {
     const onAbort = (): void => {
