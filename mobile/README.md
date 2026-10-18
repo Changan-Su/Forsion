@@ -282,6 +282,9 @@ OUT=/absolute/out npm run emu:nativeshell   # ONLY=tabs,prompt 只跑子集
    「平铺的列表源」在真机上 —— 主按钮拉信、真手指左滑出圆钮、长按出原生菜单、下拉出搜索行并弹键盘、点开信；
    通知卡片对着真胶囊和 Dock 量位置，并用真触摸点它的关闭钮）。
 4. **整套**（70 条，约 15 分钟）：只在合并前跑一遍。
+   - 偶发红先在模拟器里造负载（`adb shell "timeout 240 sh -c 'while :; do :; done'"` 起 4 个，`pkill -f 'while [:]; do'` 清），
+     把可疑那一步单独写成探针跑 20 次，比整套快得多。例：`scripts/prompt-tap-probe-emu.cjs` —— 原生提示框随键盘上移，
+     按先读到的位置点字段会点在键盘上（10-18 那条 10 万字粘贴多出的 `v`）；`MODE=fixed` 是检查现在的做法，必须 0/N。
 
 - ⚠️ **共用的模拟器上先看装上的是谁的包**：`adb install -r` 遇到版本号比设备上低的包会被拒（`INSTALL_FAILED_VERSION_DOWNGRADE`），
   设备上留着别人的构建，台架照跑、照出结果。装包用 `adb install -r -d`，并核对输出里有 `Success`（别接 `| tail` 之后再 `&&`，
