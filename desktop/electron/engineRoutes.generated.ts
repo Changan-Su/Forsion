@@ -172,6 +172,7 @@ export const ENGINE_ROUTES: readonly EngineRoute[] = [
   { method: 'POST', path: '/agent/sessions/:id/branch', access: 'allow', src: 'routes/sessions.ts', why: 'branch a session (remote taint propagates, C5)' },
   { method: 'GET', path: '/agent/sessions/:id/checkpoints', access: 'allow', src: 'routes/sessions.ts', why: 'list code checkpoints' },
   { method: 'POST', path: '/agent/sessions/:id/checkpoints/restore', access: 'deny-remote', src: 'routes/sessions.ts', why: 'restores host files from checkpoints (design appendix C)' },
+  { method: 'POST', path: '/agent/sessions/:id/children', access: 'allow', src: 'routes/sessions.ts', why: 'task card starts a visible child session; remote taint is copied onto its first run and stored marker (C5)' },
   { method: 'POST', path: '/agent/sessions/:id/compact', access: 'allow', src: 'routes/sessions.ts', why: 'compact a session' },
   { method: 'GET', path: '/agent/sessions/:id/config', access: 'allow', src: 'routes/sessions.ts', why: 'read session config' },
   { method: 'PATCH', path: '/agent/sessions/:id/config', access: 'allow', src: 'routes/sessions.ts', why: 'session config patch (field subset + approval ceiling enforced engine-side, P0 ④ / C3)' },

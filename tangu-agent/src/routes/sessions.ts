@@ -23,7 +23,8 @@ import { resolveCompactionSettings, globalCompactionLayer, updateGlobalCompactio
 import { estimateTokensRough } from '../services/contextBudget.js';
 import { deps } from '../seams/runtime.js';
 import { bumpHistoryRevision } from '../services/historyRevision.js';
-import { sessionHasActiveRun } from '../services/agentLoop.js';
+import { activeSessionIds, sessionHasActiveRun } from '../services/agentLoop.js';
+import { startChildSession } from '../services/childSessions.js';
 import { getAgent } from '../agents/agentRegistry.js';
 import { branchSession } from '../services/sessionBranch.js';
 import { listCheckpoints, restoreCodeSince, removeSessionCheckpoints } from '../services/checkpoints.js';
@@ -41,7 +42,7 @@ import { parseRemoteOrigin, applyRemoteConfigWrite, remoteCwdViolation, remoteCw
 
 const router = Router();
 
-export const SESSION_COLS = 'id, title, summary, model_id, archived, emoji, agent_config, project_path, project_name, projectless, created_at, updated_at';
+export const SESSION_COLS = 'id, title, summary, model_id, archived, emoji, agent_config, project_path, project_name, projectless, parent_session_id, awaiting_user, created_at, updated_at';
 
 /** preset 合法值:缺省/null(= work)、'coding'、'chat'。写接口对非法值 400,不静默折成 work(creview 09-07 E5)。 */
 export function validPreset(v: unknown): boolean {
@@ -93,7 +94,7 @@ function parseMaybeJson(v: any): any {
 }
 
 export function rowToSession(r: any): any {
-  return { ...r, agent_config: parseMaybeJson(r.agent_config), projectless: !!r.projectless };
+  return { ...r, agent_config: parseMaybeJson(r.agent_config), projectless: !!r.projectless, awaiting_user: !!r.awaiting_user };
 }
 
 /** 取本人会话行(含 app 归属校验);不存在/非本人 → null。 */
@@ -122,7 +123,9 @@ router.get('/agent/sessions', authMiddleware, async (req: AuthRequest, res) => {
        ORDER BY updated_at DESC LIMIT ${limit}`,
       [userId, profile.appId, archived],
     );
-    res.json({ sessions: rows.map(rowToSession) });
+    // busy = 本进程有在飞 / 排队 run:会话列表行尾的「在跑」要覆盖客户端没订阅的会话(主会话开出的子会话、自动接着做的那一轮)。
+    const busy = activeSessionIds();
+    res.json({ sessions: rows.map((r) => ({ ...rowToSession(r), busy: busy.has(r.id) })) });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'list sessions failed' });
   }
@@ -224,6 +227,25 @@ router.get('/agent/sessions/:id/background', authMiddleware, async (req: AuthReq
     res.json({ background });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'list background sessions failed' });
+  }
+});
+
+// 任务卡「开个子会话」(方案「子会话与任务卡」第 3 步):用户点卡 → 在这个会话下开一个可见子会话,任务书当第一条消息;
+// 做完同样送回主会话(services/childSessions.ts)。只在本机引擎。
+router.post('/agent/sessions/:id/children', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    if (!deps().profile.capabilities.hostExec) return res.status(404).json({ detail: 'not available in this deployment' });
+    const userId = req.user!.userId;
+    const s = await getOwnSession(req.params.id, userId);
+    if (!s) return res.status(404).json({ detail: 'Session not found' });
+    const message = typeof req.body?.message === 'string' ? req.body.message.trim() : '';
+    if (!message || message.length > 20_000) return res.status(400).json({ detail: 'message required (max 20000 chars)' });
+    const title = typeof req.body?.title === 'string' ? req.body.title : '';
+    const remote = parseRemoteOrigin(req.headers);
+    const r = await startChildSession({ parentId: s.id, userId, modelId: s.model_id || '', title, message, ...(remote ? { remote } : {}) });
+    res.json({ sessionId: r.sessionId, runId: r.runId, title: r.title });
+  } catch (e: any) {
+    res.status(400).json({ detail: e?.message || 'start child session failed' });
   }
 });
 

@@ -90,7 +90,8 @@ export const delegateProvider: ToolProvider = {
               'One-shot, no back-and-forth: for long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. ' +
               'Several calls in one turn run in parallel (keep their write scopes disjoint). ' +
               'The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. ' +
-              'For multi-round deliberation with a peer, use start_discussion instead.',
+              'For multi-round deliberation with a peer, use start_discussion instead. '
+              + 'For work the user should see as its own session in their list (e.g. they ask you to open child sessions), use start_session instead.',
             parameters: {
               type: 'object',
               properties: {

@@ -35,6 +35,7 @@ import { channelToolsProvider } from './builtin/channelTools.js';
 import { applyPatchProvider } from './builtin/applyPatch.js';
 import { discussProvider } from './builtin/discuss.js';
 import { dispatchProvider } from './builtin/startProjectSession.js';
+import { childSessionsProvider } from './builtin/childSessions.js';
 import { displayFileProvider } from './builtin/displayTools.js';
 import { teamSayProvider } from './builtin/teamSay.js';
 import { museWakeProvider } from './builtin/museWake.js';
@@ -508,3 +509,4 @@ function editDistance(a: string, b: string): number {
 }
 
 registerToolProvider(intelligentUiProvider); // Native document renderer, explicit client capability.
+registerToolProvider(childSessionsProvider); // host-only:start_session + send_to_session(deferred)(父子会话;append 末尾,保前缀缓存)

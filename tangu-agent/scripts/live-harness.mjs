@@ -52,6 +52,9 @@
  *   npm run live:harness -- --only recall-unprompted --ab-memory   # B1 行为闸:记忆易变段走 tail vs system 各跑一遍(两次引擎启动,顺序)
  *   npm run live:harness -- --only deferred                  # E2 按需装载:load_tools 先于 read_document + 子代理 read_document 直通 + 子代理自己 load_tools 解锁 browser_snapshot
  *   npm run live:harness -- --only grant                     # 改 delegate.grantTools / 子代理管理面闸后跑:授予时子代理用得上 manage_schedule,不授予时照旧被拒(正负两跑,均 action=list 无副作用)
+ *   npm run live:harness -- --only nested                     # 父子会话(10-17,方案「子会话与任务卡」):让它分头开子会话查三个模块 → start_session ≥2、子会话各自跑完、
+ *                                                              结果以 <child_sessions_update> 送回主会话并自动接着做一轮、汇总点对三个坏文件;再问一句须先问用户的事 → 问句收尾置「等你」、下一句清掉(或走 ask_user,台架照用户原话答)。
+ *                                                              改 services/childSessions.ts / tools/builtin/childSessions.ts 的措辞后跑
  *   npm run live:harness -- --only ultra --model xai/grok-4.7  # Ultra 档(09-27):改 ULTRA_SECTION / delegate 描述 / 子代理成本闸后跑:可并行的题一轮派 ≥2 个且真并行、琐碎题 0 个、不开 Ultra 的对照只记数
  *   TANGU_CONTEXT_WINDOW_TOKENS=100000 npm run live:harness -- --only ultra --model codex/gpt-5.6-luna  # Ultra 拉满上下文(09-27):上限压到 100k,族表 272k 的模型 Ultra 两跑窗口须 272k、对照 100k
  *   npm run live:harness -- --only churn                     # 同会话 6 连发的后续调用命中画像(不设命中率阈值,六个 run 须跑完)
@@ -210,7 +213,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'account'];
+const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'account', 'nested'];
 KEYS.push('signals');
 KEYS.push('musechat');
 KEYS.push('novision');
@@ -250,7 +253,7 @@ const GIT_PREFIX = 'livetest/'; const GIT_TAG = '[LIVE]';
 // opt-in:缺省全量跑里**不带**这几个 —— cache 7 个 run / churn 6 个 run(都慢),cache 与 recall-unprompted
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
-const OPT_IN = new Set(['realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'appsettings', 'control', 'phone']);
+const OPT_IN = new Set(['nested', 'realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'appsettings', 'control', 'phone']);
 OPT_IN.add('signals');
 OPT_IN.add('musechat');
 OPT_IN.add('imgwindow');
@@ -4874,6 +4877,75 @@ Then reply with only the command output.`,
   // 三腿:① 开 Ultra 做一道天然可拆的题(三个互不相关的多文件模块各藏一个 bug)→ 一轮派 ≥2 个 delegate、区间真交叠、
   //       系统提示真带 Ultra 段、请求档是 max、三个模块都查到;② 开 Ultra 问一句琐碎题 → 0 个 delegate(反向条款);
   //       ③ 不开 Ultra 做同一道题 → 系统提示里没有 Ultra 段(注入的负对照),委派数只记录不判(模型不开也可能自己派)。
+  await scenario('nested', 'nested 父子会话:开子会话分头查 → 结果送回主会话自动接着做;先问用户的事置「等你」', async () => {
+    const MODS = {
+      billing: { fn: 'sumLineItems', body: (i) => `  let total = 0;\n  for (let i = ${i === 2 ? 1 : 0}; i < items.length; i++) total += items[i].price * items[i].qty;\n  return total;` },
+      dates: { fn: 'isWeekend', body: (i) => `  const day = d.getDay();\n  return day === 6 || day === ${i === 2 ? 7 : 0};` },
+      strings: { fn: 'capitalize', body: (i) => `  if (!s) return s;\n  return s[0].toUpperCase() + s.slice(${i === 2 ? 0 : 1});` },
+    };
+    const root = join(workspace, 'nested');
+    for (const [mod, spec] of Object.entries(MODS)) {
+      mkdirSync(join(root, mod), { recursive: true });
+      for (let i = 1; i <= 3; i++) {
+        const arg = mod === 'dates' ? 'd' : mod === 'strings' ? 's' : 'items';
+        writeFileSync(join(root, mod, `${spec.fn}_v${i}.js`), `// ${mod} module, variant ${i}\nexport function ${spec.fn}(${arg}) {\n${spec.body(i)}\n}\n`);
+      }
+    }
+    const parent = `live-nested-${Date.now()}`;
+    const TASK = 'nested/ 目录下有 billing、dates、strings 三个互不相关的模块,每个模块里 3 个版本文件,恰好一个版本的主函数有 bug。'
+      + '这三件事分开开子会话各查一个模块,都回来以后给我汇总一张表(哪个文件、错在哪、怎么改)。只读,不要改文件。';
+    // full-auto:子会话继承档位,台架只替主会话点审批,子会话里的 run_bash 会挂到超时(10-17 第三轮)
+    const ev1 = await run(parent, TASK, 300_000, { approvalMode: 'full-auto' });
+    const starts = ev1.toolResults.filter((r) => r.name === 'start_session' && !r.isError).length;
+    // 子会话还在跑时主会话不许是「等你」(等子会话 ≠ 等你;收尾汇总以问句结尾时再标等你是允许的)
+    const midRow = (await api('/agent/sessions?limit=500')).sessions.find((x) => x.id === parent);
+    const midKidsBusy = (await api('/agent/sessions?limit=500')).sessions.some((x) => x.parent_session_id === parent && x.busy);
+    // 子会话各自跑完、主会话自动接着做的那一轮也跑完:轮询会话列表直到主会话和它名下都不 busy(最多 8 分钟)
+    const t0 = Date.now();
+    let kids = []; let settled = false;
+    while (Date.now() - t0 < 480_000) {
+      await new Promise((r) => setTimeout(r, 5000));
+      const { sessions } = await api('/agent/sessions?limit=500');
+      kids = sessions.filter((x) => x.parent_session_id === parent);
+      const p = sessions.find((x) => x.id === parent);
+      if (kids.length && !p?.busy && kids.every((k) => !k.busy)) {
+        // 回报可能还在送的路上(子会话收尾 → 主会话起轮之间那几毫秒):再看一眼
+        await new Promise((r) => setTimeout(r, 3000));
+        const again = (await api('/agent/sessions?limit=500')).sessions;
+        if (!again.find((x) => x.id === parent)?.busy) { settled = true; break; }
+      }
+    }
+    const msgs = (await api(`/agent/sessions/${parent}/messages?limit=200`)).messages || [];
+    const updates = msgs.filter((m) => m.role === 'user' && String(m.content).startsWith('<child_sessions_update>'));
+    const lastUpd = updates.length ? msgs.indexOf(updates[updates.length - 1]) : -1;
+    const after = lastUpd >= 0 ? msgs.slice(lastUpd + 1).filter((m) => m.role === 'model').map((m) => String(m.content || '')).join('\n') : '';
+    const found3 = ['sumLineItems_v2', 'isWeekend_v2', 'capitalize_v2'].every((f) => after.includes(f));
+    const parentRow = (await api('/agent/sessions?limit=500')).sessions.find((x) => x.id === parent);
+    const midWait = midKidsBusy && !!midRow?.awaiting_user;
+    const ok1 = !ev1.error && starts >= 2 && kids.length >= 2 && settled && updates.length >= 1 && found3 && !midWait;
+
+    // ② 要先问用户的事:模型以问句收尾 → 列表「等你」;用户回一句,那一轮开始就清掉。走 ask_user(阻塞询问,界面按 attention 画等你)也算,台架照用户原话答
+    const ask = `live-nested-ask-${Date.now()}`;
+    const ANSWER = '重点是发布了 2.13.4 和修好了冷启动慢。';
+    const ev2 = await run(ask, '帮我给团队周报起个标题。先问我这周的重点是什么,我回答之前不要自己编。', 180_000, {}, undefined, undefined, undefined, undefined, { inquiryAnswer: ANSWER });
+    const row2 = (await api('/agent/sessions?limit=500')).sessions.find((x) => x.id === ask);
+    const viaAsk = (ev2.inquiries || 0) > 0;
+    const waited = viaAsk || !!row2?.awaiting_user;
+    const ev3 = viaAsk ? ev2 : await run(ask, ANSWER, 180_000);
+    const row3 = (await api('/agent/sessions?limit=500')).sessions.find((x) => x.id === ask);
+    const usedAnswer = /2\.13\.4|冷启动/.test(ev3.content);
+    const ok2 = !ev2.error && waited && !ev3.error && !row3?.awaiting_user;
+
+    return {
+      ok: ok1 && ok2,
+      detail: `【分头查】start_session ×${starts}(工具序列 ${ev1.toolCalls.join(' → ') || '无'});子会话 ${kids.length} 个;${settled ? '都收尾' : '8 分钟没收完!'};回报行 ${updates.length} 条;汇总${found3 ? '三个坏文件都点对' : '没点全!'};子会话在跑时主会话「等你」${midWait ? '误置!' : midKidsBusy ? '没置' : '(没赶上子会话在跑)'};收尾后${parentRow?.awaiting_user ? '等你(汇总以问句结尾)' : '没等'}`
+        + ` 【先问用户】${viaAsk ? 'ask_user 询问(台架照原话答)' : `问句收尾,列表「等你」${row2?.awaiting_user ? '在' : '没有!'}`};回答后${row3?.awaiting_user ? '还在!' : '清掉了'}${usedAnswer ? ',标题用上了回答' : ''}`,
+      output: `【① 主会话第一轮】${ev1.content}\n\n【回报行】${updates.map((m) => String(m.content).slice(0, 1200)).join('\n---\n')}\n\n【接着做那一轮】${after}\n\n【② 先问】${ev2.content}\n\n【③ 用户回答后】${ev3.content}`,
+      toolCalls: [...ev1.toolCalls, ...ev2.toolCalls, ...ev3.toolCalls],
+      ttftMs: ttft(ev1), tokens: (tokensOf(ev1) || 0) + (tokensOf(ev2) || 0) + (tokensOf(ev3) || 0) || null,
+    };
+  });
+
   await scenario('ultra', 'ultra Ultra 档:可并行的题主动并行派子代理,琐碎题不派', async () => {
     const MODS = {
       billing: { fn: 'sumLineItems', bug: '循环从 i = 1 开始,漏掉第一项', body: (i) => `  let total = 0;\n  for (let i = ${i === 3 ? 1 : 0}; i < items.length; i++) total += items[i].price * items[i].qty;\n  return total;` },

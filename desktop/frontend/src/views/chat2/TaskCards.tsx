@@ -3,16 +3,34 @@
  *  任务书默认折叠但**必须可展开**:点下去发出的是任务书而不是标题,不能让用户看不见自己在同意什么。 */
 import { useState } from 'react'
 import { ClipboardList, ChevronDown, ChevronRight, MessageSquarePlus, Play, Sparkles, X } from 'lucide-react'
-import { useI18n } from '../../i18n'
-import type { TaskCard } from './suggest'
+import { registerMessages, useI18n } from '../../i18n'
+import { useApp } from '../../stores/appStore'
+import type { UiMessage } from '../../types'
+import { splitSuggestions, type TaskCard } from './suggest'
+import { ChildSessionsBlock } from './ChildSessions'
 import './chat2.css'
 
-/** 任务卡落点:在此执行 / 新会话执行 / 交给 Muse 追踪 / 忽略(spawn_task 的 worktree、云端两档刻意不搬)。 */
-export type TaskLanding = 'here' | 'new' | 'muse' | 'ignore'
+registerMessages({
+  'chat.task.child': { zh: '开个子会话', en: 'Start child session' },
+  'chat.task.askNew': { zh: '新会话', en: 'New session' },
+  'chat.task.askTag': { zh: '等你选', en: 'Your call' },
+  'chat.task.askNote': { zh: '你选之前什么都不会开始。', en: 'Nothing starts until you choose.' },
+  'chat.task.valid': { zh: '7 天内有效', en: 'Valid for 7 days' },
+  'chat.task.expired': { zh: '已过期 · 7 天没开始。要做就跟我说一声，我重新写一张。', en: 'Expired · not started within 7 days. Ask me and I’ll write a fresh one.' },
+  'chat.task.withdrawn': { zh: '已撤回', en: 'Withdrawn' },
+  'chat.task.childFail': { zh: '子会话没开起来：{e}', en: 'Couldn’t start the child session: {e}' },
+})
+
+/** 任务卡落点:开个子会话 / 在这里做 / 新会话执行(收件箱,没有当前会话)/ 交给 Muse / 忽略(spawn_task 的 worktree、云端两档刻意不搬)。 */
+export type TaskLanding = 'child' | 'here' | 'new' | 'muse' | 'ignore'
+/** 卡片 7 天内有效(方案「子会话与任务卡」第 3 步):过了就定格成「已过期」,要做让 agent 重写一张。 */
+export const TASK_CARD_TTL_MS = 7 * 24 * 3600_000
 
 /** 已处理的任务卡(模块级,活到应用关闭):切走再切回来组件重挂,卡片不能又长出按钮 —— 那是第二次建同一条日程的入口。
  *  键 = 归属 id(消息 id)+ 卡序 + 内容哈希(重新生成 / 重排后内容不同就不算同一张)。 */
 const handledTaskCards = new Map<string, TaskLanding>()
+/** 从卡开出的子会话(卡键 → 子会话 id):卡原地变成子会话行。 */
+const cardChildren = new Map<string, string>()
 /** 进行中的卡(模块级):同一会话分屏 / 新标签挂了两份视图时,一处点了另一处也必须拒绝 —— busy 是组件私有状态挡不住(Codex 09-11 P1)。 */
 const inFlightTaskCards = new Set<string>()
 function hashStr(s: string): string {
@@ -24,12 +42,33 @@ export function taskCardKey(ownerId: string, index: number, c: TaskCard): string
   return `${ownerId}:${index}:${hashStr(`${c.title}|${c.prompt}`)}`
 }
 
-export function TaskCards({ tasks, ownerId, onTask, noHere = false, todoStatus, onTodoRetry }: {
+/** 一条消息里的撤回标记(`withdraw: <id>`):按消息对象缓存 —— 消息不可变,没变的消息不重扫;流式中的那条不算(还没写完)。 */
+const withdrawCache = new WeakMap<UiMessage, string[]>()
+function withdrawalsOf(m: UiMessage): string[] {
+  if (m.role !== 'assistant' || m.status === 'streaming' || !m.content.includes('withdraw')) return []
+  let hit = withdrawCache.get(m)
+  if (!hit) {
+    hit = splitSuggestions(m.content).tasks.filter((c) => c.withdraw).map((c) => `${c.withdraw}\u0000${c.reason || ''}`)
+    withdrawCache.set(m, hit)
+  }
+  return hit
+}
+/** 同会话里被撤回的卡:id → 理由。选择器回一个串(没变就不重渲染)。 */
+function useWithdrawn(sessionId?: string): Map<string, string> {
+  const sig = useApp((s) => (sessionId ? (s.messagesBySession[sessionId] || []).flatMap(withdrawalsOf).join('\u0001') : ''))
+  return new Map(sig ? sig.split('\u0001').map((x) => x.split('\u0000') as [string, string]) : [])
+}
+
+export function TaskCards({ tasks, ownerId, onTask, noHere = false, todoStatus, onTodoRetry, sessionId, createdAt }: {
   tasks: TaskCard[]
   /** 卡片归属(消息 id):定格记录按它 + 卡序 + 内容哈希索引。 */
   ownerId: string
-  /** 返回 false = 没做成(卡片保留按钮);其余(true / void)= 做成,卡片定格。 */
-  onTask?: (card: TaskCard, landing: TaskLanding) => boolean | void | Promise<boolean | void>
+  /** 返回 false = 没做成(卡片保留按钮);其余(true / void)= 做成,卡片定格;{ childId } = 开出了子会话,卡原地变成子会话行。 */
+  onTask?: (card: TaskCard, landing: TaskLanding) => boolean | void | { childId: string } | Promise<boolean | void | { childId: string }>
+  /** 卡所在的会话(聊天):「开个子会话」挂在它下面,撤回标记也在它的消息里找。收件箱不传。 */
+  sessionId?: string
+  /** 写卡那条消息的时间(ms):超过 7 天的卡定格成「已过期」。不传不过期。 */
+  createdAt?: number
   /** 收件箱没有当前会话:不给「在此执行」。 */
   noHere?: boolean
   /** Muse TODO 的真状态(id → status | 'missing' | 'error',收件箱按 id 现拉;缺键 = 还在查)。传了它,todo 卡只在确认 pending 后给按钮。 */
@@ -42,12 +81,22 @@ export function TaskCards({ tasks, ownerId, onTask, noHere = false, todoStatus, 
   const [taskDone, setTaskDone] = useState<Record<string, TaskLanding>>({})
   const [taskBusy, setTaskBusy] = useState<string | null>(null)
   const [taskOpen, setTaskOpen] = useState<Record<string, boolean>>({})
-  if (!tasks.length) return null
+  const withdrawn = useWithdrawn(sessionId)
+  // 能开子会话:本机引擎在场 + 这条会话自己不是子会话(子会话 / @项目派遣出的会话不能再开)。否则回落「新会话执行」(Codex 10-17 #8)。
+  const isChild = useApp((s) => !!sessionId && !!s.sessions.find((x) => x.id === sessionId)?.parent_session_id)
+  const [, rerender] = useState(0)
+  if (!tasks.some((c) => !c.withdraw)) return null
+  const expired = !!createdAt && Date.now() - createdAt > TASK_CARD_TTL_MS
   return (
     <div className="t2-tasks">
       {tasks.map((c, i) => {
+        if (c.withdraw) return null
         const key = taskCardKey(ownerId, i, c)
         const done = taskDone[key] ?? handledTaskCards.get(key)
+        const childId = cardChildren.get(key)
+        // 开出了子会话:卡原地变成子会话行(同开出子会话那条回答下面的块)
+        if (done === 'child' && childId && sessionId) return <ChildSessionsBlock key={key} parentId={sessionId} ids={[childId]} />
+        const gone = !done && c.id && withdrawn.has(c.id) ? 'withdrawn' : !done && expired ? 'expired' : null
         // Muse TODO 卡只在确认 pending 后给按钮:还在查 / 读失败 / 已不存在 / 已在别处处理 —— 一律不给(Codex 09-11 P1)。
         const todoState = !done && c.todo && todoStatus ? (todoStatus[c.todo] ?? 'checking') : 'pending'
         const locked = todoState !== 'pending'
@@ -57,10 +106,15 @@ export function TaskCards({ tasks, ownerId, onTask, noHere = false, todoStatus, 
         const museOk = !!window.tangu?.backendStatus
         const pick = async (landing: TaskLanding): Promise<void> => {
           if (busy || done || locked || inFlightTaskCards.has(key) || handledTaskCards.has(key)) return
+          if (createdAt && Date.now() - createdAt > TASK_CARD_TTL_MS) { rerender((n) => n + 1); return } // 挂着跨过 7 天:点的这一下定格成已过期
           inFlightTaskCards.add(key)
           setTaskBusy(key)
           let ok = false
-          try { ok = (await onTask?.(c, landing)) !== false } catch { ok = false }
+          try {
+            const r = await onTask?.(c, landing)
+            ok = r !== false
+            if (r && typeof r === 'object') cardChildren.set(key, r.childId)
+          } catch { ok = false }
           inFlightTaskCards.delete(key)
           setTaskBusy((b) => (b === key ? null : b))
           if (ok) { handledTaskCards.set(key, landing); setTaskDone((p) => ({ ...p, [key]: landing })) }
@@ -70,23 +124,29 @@ export function TaskCards({ tasks, ownerId, onTask, noHere = false, todoStatus, 
         )
         // Muse 当主按钮:追踪卡(track),以及 Muse 自己提的 TODO 卡(todo:「交给 Muse 执行」= 批准它去做,见 taskLanding)。
         const musePrimary = !!(c.track || c.todo) && museOk
-        // 收件箱(noHere)没有当前会话:不给「在此执行」,主按钮顺延给「新会话执行」。
-        const here = noHere ? null : btn('here', <Play size={12} />, t('chat.task.here'), !musePrimary)
-        const fresh = btn('new', <MessageSquarePlus size={12} />, t('chat.task.new'), noHere && !musePrimary)
-        const muse = museOk ? btn('muse', <Sparkles size={12} />, t(c.todo ? 'chat.task.museDo' : 'chat.task.muse'), musePrimary) : null
-        const doneKey = done === 'here' ? 'chat.task.doneHere' : done === 'new' ? 'chat.task.doneNew' : done === 'muse' ? (c.todo ? 'chat.task.doneMuseDo' : 'chat.task.doneMuse') : 'chat.task.doneIgnore'
+        // 聊天里能开子会话:主按钮「开个子会话」(做完送回这里),其次「在这里做」;开不了(收件箱 / 子会话里 / 没有本机引擎):
+        // 照旧「在这里做」+「新会话执行」(收件箱主按钮顺延给后者)。先问卡(ask)只有「新会话 / 在这里做」。
+        const canChild = !noHere && !!sessionId && museOk && !isChild
+        const child = canChild ? btn('child', <MessageSquarePlus size={12} />, t(c.ask ? 'chat.task.askNew' : 'chat.task.child'), c.ask || !musePrimary) : null
+        const here = noHere ? null : btn('here', <Play size={12} />, t('chat.task.here'), !c.ask && !canChild && !musePrimary)
+        const fresh = canChild ? null : btn('new', <MessageSquarePlus size={12} />, t(c.ask ? 'chat.task.askNew' : 'chat.task.new'), c.ask || (noHere && !musePrimary))
+        const muse = museOk && !c.ask ? btn('muse', <Sparkles size={12} />, t(c.todo ? 'chat.task.museDo' : 'chat.task.muse'), musePrimary) : null
+        const doneKey = done === 'here' ? 'chat.task.doneHere' : done === 'new' || done === 'child' ? 'chat.task.doneNew' : done === 'muse' ? (c.todo ? 'chat.task.doneMuseDo' : 'chat.task.doneMuse') : 'chat.task.doneIgnore'
         return (
-          <div key={key} className={`t2-taskcard${done || locked ? ' done' : ''}${busy ? ' busy' : ''}`}>
+          <div key={key} className={`t2-taskcard${done || locked || gone ? ' done' : ''}${busy ? ' busy' : ''}`} data-task-state={gone || done || (c.ask ? 'ask' : 'open')}>
             <div className="t2-taskcard-head">
               <ClipboardList size={13} /> <b>{c.title}</b>
               {c.track && <span className="t2-taskcard-tag">{t('chat.task.trackTag')}</span>}
+              {!done && !gone && !locked && (c.ask || createdAt) ? <span className="t2-taskcard-expire">{t(c.ask ? 'chat.task.askTag' : 'chat.task.valid')}</span> : null}
             </div>
             {c.tldr && <div className="t2-taskcard-tldr">{c.tldr}</div>}
             <button className="t2-taskcard-toggle" onClick={() => setTaskOpen((p) => ({ ...p, [key]: !open }))} aria-expanded={open}>
               {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />} {t(open ? 'chat.task.hidePrompt' : 'chat.task.showPrompt')}
             </button>
             {open && <pre className="t2-taskcard-prompt">{c.prompt}</pre>}
-            {done
+            {gone
+              ? <div className="t2-taskcard-done">{gone === 'expired' ? t('chat.task.expired') : `${t('chat.task.withdrawn')}${withdrawn.get(c.id!) ? ` · ${withdrawn.get(c.id!)}` : ''}`}</div>
+              : done
               ? <div className="t2-taskcard-done">{t(doneKey)}</div>
               : locked
                 ? (
@@ -96,10 +156,13 @@ export function TaskCards({ tasks, ownerId, onTask, noHere = false, todoStatus, 
                   </div>
                 )
                 : (
+                <>
                 <div className="t2-taskcard-actions">
-                  {musePrimary ? [muse, here, fresh] : [here, fresh, muse]}
-                  {btn('ignore', <X size={12} />, t('chat.task.ignore'))}
+                  {c.ask ? [child ?? fresh, here] : musePrimary ? [muse, child, here, fresh] : [child, here, fresh, muse]}
+                  {!c.ask && btn('ignore', <X size={12} />, t('chat.task.ignore'))}
                 </div>
+                {c.ask && <div className="t2-taskcard-note">{t('chat.task.askNote')}</div>}
+                </>
               )}
           </div>
         )
