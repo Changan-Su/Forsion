@@ -298,6 +298,9 @@ export interface PluginAppApi extends BlockSurfaceApi {
    *  或插件 / 用户 Space 的 `space.json` id)。resolve 在新 Space 的布局建好之后 —— 接着 `ctx.openView(…, { location: 'right' })`
    *  就落在新 Space 里。不认识的 id → false,不切。没有工作台的宿主 / 旧宿主没有:`ctx.app.openSpace?.(…)`。 */
   openSpace?(id: string): Promise<boolean>
+  /** 当前登录的名字(有昵称用昵称;2026-10-18+,主页的问候用它):先回调一次当前值,换账号 / 登出时再回调;没登录 = 空串。
+   *  只给名字,不给令牌和账号 id。返回退订;插件停用时宿主也会退订。旧宿主没有:`ctx.app.watchAccountName?.(…)`。 */
+  watchAccountName?(cb: (name: string) => void): () => void
   /** 跑一条命令面板里现成的命令(2026-10-17+),按 id(如 `amadeus-new-note`、`open-market`)。只对首方内置包生效,
    *  别的插件调了恒为 false —— 命令里有删除、改设置这类动作,不能让任意插件替用户按。命令不存在 / 停用 → false。 */
   runCommand?(id: string): boolean
@@ -1146,6 +1149,7 @@ export interface PluginFloatingTocHandle {
   dispose(): void
 }
 
+export interface PluginBingWallpaper { id: string; url: string; thumbnailUrl: string; title?: string; copyright?: string; startDate?: string }
 export interface PluginSpaceInfo { id: string; name: string }
 export interface PluginSpaceAction { id: string; name: string; run(): void }
 export type PluginShelfItem =
@@ -1368,6 +1372,10 @@ export interface PluginContext {
     ): import('../../../../shared/markdownEditor').PluginMarkdownEditorHandle
     /** Shared prompt input + live model catalog. Local draft; the plugin owns submission.
      *  Feature-detect on older hosts. The host disposes mounts on disable/reload/setup failure. */
+    /** 在视口坐标 (x, y) 开一个宿主样式的右键菜单(2026-10-18+),和内置主页、Ribbon 的右键菜单一个样子;放不下自己翻面。
+     *  `items`:`{ label, run(), checked?, disabled?, danger? }`(给了 `checked` 的那一组前面画勾)。同一时刻只开一个,
+     *  点菜单外 / Esc / 窗口失焦 / 点了某一项都会关;返回关闭函数。旧宿主没有:`ctx.ui?.contextMenu?.(…)`。 */
+    contextMenu?(x: number, y: number, items: Array<{ label: string; run(): void; checked?: boolean; disabled?: boolean; danger?: boolean }>): () => void
     mountChatBox?(
       el: HTMLElement,
       opts: import('../../../../shared/chatBox').PluginChatBoxOptions,
@@ -1719,6 +1727,11 @@ export interface PluginContext {
       renameFolder(id: string, name: string): void
       removeFolder(id: string): void
     }
+  }
+  /** 必应每日壁纸(2026-10-18+):最近 8 张,`{ id, url, thumbnailUrl, title?, copyright?, startDate? }`。宿主代拉(桌面经主进程,
+   *  插件直连必应会被 CSP 拦)。拿不到 → reject;插件停用后给空数组。 */
+  wallpaper?: {
+    bing(locale?: 'zh' | 'en'): Promise<PluginBingWallpaper[]>
   }
   inbox?: {
     post(msg: { title: string; body?: string }): Promise<string | null>

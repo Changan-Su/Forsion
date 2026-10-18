@@ -49,6 +49,7 @@ import {
 } from './homepageWallpaper'
 import { HomeWallpaperArt } from './homepageWallpaperArt'
 import { DeskCardStatus, useCardStatus } from './homeCardStatus'
+import { watchAccountName } from '../services/accountName'
 import { DESKTOP_HOME_CARDS_KEY, HOME_CARDS_MAX, loadHomeCards, saveHomeCards, shownHomeCards } from './homeCards'
 import './homepage.css'
 
@@ -256,20 +257,10 @@ function useClock(locale: Locale): { time: string; date: string; hour: number; m
   return v
 }
 
-/** 登录名(有就用来问候);未登录 / 非 electron 宿主 → 空串,问候语自己少一截。 */
+/** 登录名(有就用来问候);未登录 / 拿不到 → 空串,问候语自己少一截。读法见 services/accountName。 */
 function useAccountName(): string {
   const [name, setName] = useState('')
-  useEffect(() => {
-    let alive = true
-    const read = (): void => {
-      void window.tangu?.authStatus?.()
-        .then((a) => { if (alive) setName(a?.loggedIn ? (a.nickname || a.username || '') : '') })
-        .catch(() => {})
-    }
-    read()
-    const off = window.tangu?.onAuthChanged?.(read)
-    return () => { alive = false; off?.() }
-  }, [])
+  useEffect(() => watchAccountName(setName), [])
   return name
 }
 

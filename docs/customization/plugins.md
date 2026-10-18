@@ -164,6 +164,8 @@ A calendar plugin also needs the read-only sources the host calendar layers in: 
 
 Launcher and home-style plugins can list your Spaces, open them, show their icons and a status line (continue a chat, the latest note, the next event, unread count), and rearrange Spaces and folders on the Ribbon from their own view. A plugin gets this only if it declares `spaces`; it changes the Ribbon's own order, so a drag in the plugin moves the Ribbon too, and the other way round. The detail page lists "open Spaces and rearrange Spaces and folders on the Ribbon". API details are in the plugin development skill, section "Space 与 Ribbon 收纳架".
 
+另外三件零碎的：插件可以拿到当前登录的名字（`ctx.app.watchAccountName`，有昵称用昵称，只给名字不给令牌）、必应每日壁纸（`ctx.wallpaper.bing`，由 Forsion 代拉），以及和 Forsion 自己一样样式的右键菜单（`ctx.ui.contextMenu`）。Three smaller pieces: plugins can read the signed-in name (`ctx.app.watchAccountName`, the nickname if there is one; the name only, never a token), get Bing's daily wallpapers (`ctx.wallpaper.bing`, fetched by Forsion), and open a right-click menu styled like Forsion's own (`ctx.ui.contextMenu`).
+
 ## 插件自带的 MCP、hooks 与文件事件 / Bundled MCP servers, hooks and file events
 
 插件可以随包带上自己的 MCP server(只限在本机跑的那种),装好、启用之后 Tangu 就多了这些工具,停用插件就一起停掉。设置 → MCP 里会列出它们,写着来自哪个插件;要关掉,在插件设置里停用这个插件。插件也可以带 hook,在会话开始、工具跑完、一次回答结束时收到通知,用来做审计、归档这类事;这种 hook 只能看,拦不住任何操作,也不能往对话里加内容。设置 → Hooks 里同样列出它们,标着「只观察」。
