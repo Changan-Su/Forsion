@@ -442,7 +442,6 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onOpenTurn }: {
             )
           })}
         </div>
-        {!tree.cards.size && !loading && <div className="t2cv-empty">{t('chatcanvas.empty')}</div>}
         <div className="am-app t2cv-am">
           <CanvasChrome
             zoom={vp.z}
@@ -459,15 +458,17 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onOpenTurn }: {
           />
           {mini && <CanvasMiniMap hostRef={host} vp={vp} items={items} onCenter={view.centerOn} />}
         </div>
-        {arrow && (
-          <button type="button" className="jump-bottom t2-jump t2cv-jump" data-dir={arrow} title={t('chatcanvas.follow')} aria-label={t('chatcanvas.follow')} onClick={flyBack}>
-            {arrow === 'up' ? <ArrowUp size={16} /> : arrow === 'left' ? <ArrowLeft size={16} /> : arrow === 'right' ? <ArrowRight size={16} /> : <ArrowDown size={16} />}
-          </button>
-        )}
-        {tailText && (
-          <div className="t2cv-attach-row"><div className="t2cv-attach"><CornerDownRight size={12} /><span>{t('chatcanvas.attach')}</span><b>{tailText}</b></div></div>
-        )}
       </div>
+      {/* 舞台外面:手势层在舞台上拿指针捕获(空白拖 = 平移),放在里面这颗箭头就点不动 */}
+      {arrow && (
+        <button type="button" className="jump-bottom t2-jump t2cv-jump" data-dir={arrow} title={t('chatcanvas.follow')} aria-label={t('chatcanvas.follow')} onClick={flyBack}>
+          {arrow === 'up' ? <ArrowUp size={16} /> : arrow === 'left' ? <ArrowLeft size={16} /> : arrow === 'right' ? <ArrowRight size={16} /> : <ArrowDown size={16} />}
+        </button>
+      )}
+      {!tree.cards.size && !loading && <div className="t2cv-empty">{t('chatcanvas.empty')}</div>}
+      {tailText && (
+        <div className="t2cv-attach-row"><div className="t2cv-attach"><CornerDownRight size={12} /><span>{t('chatcanvas.attach')}</span><b>{tailText}</b></div></div>
+      )}
     </div>
   )
 }
