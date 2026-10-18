@@ -3,6 +3,8 @@
  * 受控后端使模型/模式/附件控件可操作,同时验证整个输入区的聚焦生命周期。
  * 高对比条纹置于真实 wallpaper 层,对比同一材质启用/禁用 backdrop-filter 的截图。
  * computedStyle 有 blur 不算通过:opacity 动画的 fill-mode 会隔断子孙的 backdrop 采样。
+ * 插件档(2026-10-18):HOME_PLUGIN_DIR=<Forsion-Home 检出,先 npm run build> 时主页由插件 forsion-home 画(scripts/lib/home-plugin.cjs),
+ * 另加 0:正文真的来自插件(挂不上会悄悄退回内置主页,不核就是假绿)。
  * npm run build && npm run check:homepageglass [--shot]
  */
 const fs = require('fs')
@@ -10,6 +12,7 @@ const os = require('os')
 const path = require('path')
 const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
+const { HOME_PLUGIN_DIR, installHomePlugin, homeBody } = require('./lib/home-plugin.cjs')
 
 const ROOT = path.join(__dirname, '..')
 const SHOT = process.argv.includes('--shot')
@@ -55,6 +58,7 @@ async function probe(win, app, selector, pseudo = '') {
 async function main() {
   if (!fs.existsSync(path.join(ROOT, 'out/main/main.js'))) throw new Error('先 npm run build')
   const testHome = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-home-glass-'))
+  installHomePlugin(testHome)
   let app
   const stub = await startStubEngine({ models: [
     // 这里是 external host：Homepage 未显式选项目时真实落点是默认云 Project，
@@ -80,7 +84,8 @@ async function main() {
     // TANGU_BACKEND_URL 只覆盖地址,不会把 managed 改成 external;还需配置测试凭证才会 connect。
     await win.evaluate((backendUrl) => window.tangu.setConfig({ mode: 'external', backendUrl, token: 'homepage-focus-fixture' }), stub.url)
     // 固定夹具只写临时 userData,同时覆盖二级收纳夹。
-    await win.evaluate(() => {
+    await win.evaluate((trial) => {
+      if (trial) localStorage.setItem('forsion.dev.coreTrial', 'forsion-home') // 插件档:同下面这次 reload 一起接管主页视图芯
       localStorage.setItem('forsion_tangu_active_space', 'home')
       localStorage.setItem('forsion_theme_lang', 'genesis-glass')
       localStorage.setItem('forsion_theme_skin', 'cream')
@@ -89,9 +94,13 @@ async function main() {
       localStorage.setItem('forsion_tangu_ribbon_v2', JSON.stringify({ bottomOrder: [], commandItems: [], commandIcons: {}, folders: [
         { id: 'folder:glass', name: '工作空间', zone: 'top', items: ['space:calendar', 'space:coding'] },
       ] }))
-    })
+    }, !!HOME_PLUGIN_DIR)
     await win.reload()
     await win.waitForSelector('.hp-root', { timeout: 30000 })
+    if (HOME_PLUGIN_DIR) { // 插件异步装上之前先露出的是内置那份:等它换过来再量(否则下面的探针打在换场中的那份上)
+      const body = await homeBody(win)
+      check('0 插件档:主页正文来自插件 forsion-home(没挂上会悄悄退回内置)', body === 'plugin', { body, dir: HOME_PLUGIN_DIR })
+    }
     await win.waitForTimeout(1000)
     // 真点击 + 真焦点事件,受控后端让模型/附件按钮可用,不靠移除 disabled 伪造交互。
     await win.waitForSelector('.hp-composer .t2c-ta:not(:disabled)', { timeout: 15000 }).catch(async (err) => {
