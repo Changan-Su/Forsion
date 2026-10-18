@@ -188,6 +188,11 @@ async function main() {
     r.check('A3 点箭头飞回去、箭头收起,之后接着跟', (await jump.count()) === 0 && Math.abs(g4) < 40 && Math.abs(g5) < 40, JSON.stringify({ g4, g5 }))
     await win.waitForFunction(() => !document.querySelector('.t2cv-card[data-streaming]'), null, { timeout: 20_000 })
     r.check('A4 跑完:新的一轮长在主线最后一张卡下面', (await win.locator(`.t2cv-card[data-cv-node^="${R}:"]`).count()) === 4, '')
+    await win.waitForTimeout(500)
+    const doneSel = `.t2cv-card[data-cv-node="${R}:u-r1"]`
+    const g6 = await readGap(doneSel)
+    const doneH = await win.locator(doneSel).evaluate((e) => e.offsetHeight)
+    r.check('A5 刚写完的长回答不折起,视野还停在它末尾(不掉进空白)', doneH > 900 && (await win.locator(`${doneSel} .t2cv-body[data-folded]`).count()) === 0 && Math.abs(g6) < 60, JSON.stringify({ g6, doneH }))
 
     // ── 双击:回对话,滚到那一轮 ──
     await card(B2, 'd1').locator('.t2cv-q').dblclick()
