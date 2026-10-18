@@ -9,7 +9,7 @@ export interface PluginMenuItem { label: string; run(): void; checked?: boolean;
 
 let current: (() => void) | null = null
 
-export function openPluginContextMenu(x: number, y: number, items: readonly PluginMenuItem[], guard: (run: () => void) => void): () => void {
+export function openPluginContextMenu(x: number, y: number, items: readonly PluginMenuItem[], guard: (run: () => void) => void, onClosed?: () => void): () => void {
   current?.()
   const host = document.createElement('div')
   document.body.append(host)
@@ -24,6 +24,7 @@ export function openPluginContextMenu(x: number, y: number, items: readonly Plug
     window.removeEventListener('blur', close)
     root.unmount()
     host.remove()
+    onClosed?.()
   }
   const onDown = (e: PointerEvent): void => { if (!(e.target instanceof Node) || !host.contains(e.target)) close() }
   const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') { e.stopPropagation(); close() } }

@@ -897,10 +897,11 @@ async function main() {
     }, winBounds)
     await win.waitForTimeout(500)
     check(
-      '15 三套自适应主题图形 + 图片里的 Hack2Gate 可选,高密度收纳层紧凑且头部不重叠',
+      '15 四张自适应主题图形(星轨 / 日行 / 素笺 / 字阵)+ 图片里的 Hack2Gate 可选,高密度收纳层紧凑且头部不重叠',
       themeStage.wallpaper === '' && themeStage.inlineImage === '' && themeStage.backgroundImage.includes('gradient(')
         && themeStage.preset === 'path' && themeStage.art === 1
-        && JSON.stringify(themePresets.ids) === JSON.stringify(['orbit', 'path', 'paper']) && themePresets.previews
+        // 字阵(glyph)是 10-18 加的第四张(0138c3e3),当时这一条没跟上
+        && JSON.stringify(themePresets.ids) === JSON.stringify(['orbit', 'path', 'paper', 'glyph']) && themePresets.previews
         && hack2gate.wallpaper === 'true' && hack2gate.light.includes('hack2gate-light') && hack2gate.dark.includes('hack2gate-dark') && hack2gate.size === 'cover'
         && rightClickOrganizer.organizer === 1 && rightClickOrganizer.blur.includes('blur(')
         && rightClickOrganizer.panelWidth <= 600 && rightClickOrganizer.columns === 6

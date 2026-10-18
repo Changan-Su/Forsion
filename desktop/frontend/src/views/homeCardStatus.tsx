@@ -2,7 +2,7 @@
  * 近况卡上那一行(从 HomepageView 搬出,2026-10-18 主页插件化 S4):内置主页的卡片和插件经 `ctx.spaces.mountStatus`
  * 拿到的是同一份 —— 只说手头就有的事实(最近的会话 / 最近打开的笔记 / 下一条日程 / 未读 / 已装插件 / 成就),拿不到就不写。
  */
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { mountHostReact } from '@lcl/components'
 import { useApp } from '../stores/appStore'
@@ -33,6 +33,9 @@ function CommonCardStatus({ spaceId }: { spaceId: string }) {
   return <>{useCardStatus()(spaceId)}</>
 }
 function CalendarCardStatus() {
+  // 自己每分钟重画一次:插件挂的那份(ctx.spaces.mountStatus)没有主页时钟带着它重画,结束了的那条会一直挂着(Codex 评审)
+  const [, tick] = useState(0)
+  useEffect(() => { const id = setInterval(() => tick((n) => n + 1), 60_000); return () => clearInterval(id) }, [])
   const { t } = useI18n()
   // 按此刻过滤(不靠 memo):主页时钟每分钟重画一次,结束了的那条就换成下一条
   const now = Date.now()

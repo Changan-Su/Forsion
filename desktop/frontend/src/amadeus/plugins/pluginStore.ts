@@ -1533,7 +1533,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
           close = m.openPluginContextMenu(x, y, clean, (run) => {
             if (!ctxAlive()) return
             try { run() } catch (e) { console.error(`[amadeus] plugin "${pluginId}" menu item threw`, e) }
-          })
+          }, () => dispose.forget()) // 自己关掉的(Esc / 点外面 / 点了某项)从账上划掉,别攒到停用(Codex 评审)
         }).catch((e) => console.error(`[amadeus] plugin "${pluginId}" context menu failed`, e))
         return dispose
       },

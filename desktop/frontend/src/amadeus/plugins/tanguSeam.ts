@@ -128,7 +128,7 @@ export const pluginChatType = (o: Pick<TanguChatMountOptions, 'owner' | 'folder'
 export interface TanguComposerOptions {
   /** 输入区(含模型 / 模式 / 附件这些控件和它们的菜单)获得 / 失去焦点。主页拿它做聚焦景深。 */
   onFocusChange?(focused: boolean): void
-  /** 宿主发送之前先等它(插件放退场动效)。明确回 false = 这次不发;抛错、或插件这时被停用 / 视图被卸,宿主照样发。 */
+  /** 宿主发送之前先等它(插件放退场动效,最多 2 秒)。明确回 false = 这次不发;抛错、超时、或插件这时被停用 / 视图被卸,宿主照样发。 */
   beforeSend?(): Promise<boolean | void> | boolean | void
   /** 要不要通话按钮。给了 = 挂载时所在的 Space 是当前 Space 时才画(同一时刻只该有一个通话接收方)。 */
   call?: boolean

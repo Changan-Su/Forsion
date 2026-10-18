@@ -236,17 +236,28 @@ export function startNewChatCall(): Promise<string | null> {
   return useApp.getState().newSession().then(() => { const id = useApp.getState().activeId; return id && id !== before ? id : null }, () => null)
 }
 
-/** 插件挂载的发送闸:同一时刻只放一次(连点第二下 = 没发);先等插件的 beforeSend(放退场动效),
- *  它明确回 false 才不发;它抛错 / 插件这时被停用、视图被卸 —— 照样发:用户按下的那一下不能因为装饰动画丢掉。 */
-export function guardedSend<A extends unknown[], T>(beforeSend: TanguComposerOptions['beforeSend'], run: (...a: A) => Promise<T>, refused: T): (...a: A) => Promise<T> {
+/** beforeSend 最多等这么久(它是放退场动效用的,不是确认框):动画卡住 / 插件写错,用户按下的那一下照样发出去。 */
+export const BEFORE_SEND_MAX_MS = 2000
+
+/** 插件挂载的发送闸:发送和开通话**共用**一把锁,同一时刻只放一次(连点第二下、发送没走完又点通话 = 没动)。
+ *  先等插件的 beforeSend(放退场动效),它明确回 false 才不发;它抛错、超过 BEFORE_SEND_MAX_MS、或这次挂载被卸掉(插件停用 / 视图关掉,
+ *  动画的 transitionend 永远等不到)—— 照样发:用户按下的那一下不能因为装饰动画丢掉(Codex 评审)。 */
+export function sendGate(beforeSend: TanguComposerOptions['beforeSend'], released: Promise<unknown>) {
   let busy = false
-  return async (...a) => {
-    if (busy) return refused
-    busy = true
-    try {
-      const go = await Promise.resolve().then(() => beforeSend?.()).catch(() => true)
-      return go === false ? refused : await run(...a)
-    } finally { busy = false }
+  return function gate<A extends unknown[], T>(run: (...a: A) => Promise<T>, refused: T): (...a: A) => Promise<T> {
+    return async (...a) => {
+      if (busy) return refused
+      busy = true
+      let timer: ReturnType<typeof setTimeout> | undefined
+      try {
+        const go = await Promise.race([
+          Promise.resolve().then(() => beforeSend?.()).catch(() => true),
+          released.then(() => true),
+          new Promise((r) => { timer = setTimeout(() => r(true), BEFORE_SEND_MAX_MS) }),
+        ])
+        return go === false ? refused : await run(...a)
+      } finally { busy = false; clearTimeout(timer) }
+    }
   }
 }
 
@@ -254,8 +265,12 @@ export function guardedSend<A extends unknown[], T>(beforeSend: TanguComposerOpt
 export function mountNewChatComposer(el: HTMLElement, o: TanguComposerOptions): TanguComposerMount {
   // 通话接收方 = 挂载那一刻所在的 Space(视图都挂在当前 Space 里);没要通话就不画通话按钮
   const liveSpaceId = o.call ? useSpaceStore.getState().activeSpaceId ?? undefined : undefined
-  const send = guardedSend(o.beforeSend, sendFromNewChat, false)
-  const call = guardedSend(o.beforeSend, startNewChatCall, null)
+  // 这次挂载卸了(自己 dispose,或同一个 el 上又挂了一份把它顶掉):句柄作废、还在等的 beforeSend 不再等
+  let alive = true, release!: () => void
+  const released = new Promise<void>((r) => { release = r })
+  const gate = sendGate(o.beforeSend, released)
+  const send = gate(sendFromNewChat, false)
+  const call = gate(startNewChatCall, null)
   const mounted = mountHostReact(el, (
     <HostLocaleProvider>
       <NewChatComposer
@@ -265,12 +280,13 @@ export function mountNewChatComposer(el: HTMLElement, o: TanguComposerOptions): 
         liveSpaceId={liveSpaceId}
       />
     </HostLocaleProvider>
-  ))
-  const ta = (): HTMLTextAreaElement | null => el.querySelector<HTMLTextAreaElement>('.hp-composer .t2c-ta')
+  ), () => { alive = false; release() })
+  // 只在还活着时碰 el:被顶掉的旧句柄不许读到 / 按到新那份的输入框和话筒(Codex 评审)
+  const ta = (): HTMLTextAreaElement | null => (alive ? el.querySelector<HTMLTextAreaElement>('.hp-composer .t2c-ta') : null)
   return {
     focus: () => ta()?.focus(),
     // 按的就是输入区里那颗话筒:麦克风权限只认用户的这一下,调用方要在点击处理里同步调
-    startVoice: () => el.querySelector<HTMLButtonElement>('.hp-composer .t2c-mic-control')?.click(),
+    startVoice: () => { if (alive) el.querySelector<HTMLButtonElement>('.hp-composer .t2c-mic-control')?.click() },
     draft: () => ta()?.value ?? '',
     dispose: mounted.dispose,
   }

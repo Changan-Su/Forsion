@@ -58,6 +58,8 @@ const now = (): { order: string[]; topIds: string[] } => {
 export function shelfMove(moved: string, targetId: string): void {
   if (!moved || moved === targetId) return
   const { order, topIds } = now()
+  // ctx.spaces.shelf 收的是插件给的 id:只认此刻的顶层项。夹内成员被当顶层写进序 = 解散夹时重复(Codex 评审)
+  if (!topIds.includes(moved) || !topIds.includes(targetId)) return
   const full = unionOrder(order, topIds) // 保住持久序里「此刻不可见」的项(用户 Space 异步注册)
   const at = full.indexOf(targetId)
   rb().setZoneOrder('top', moveTo(full, moved, at >= 0 ? at : full.length))
@@ -68,12 +70,15 @@ export function shelfMove(moved: string, targetId: string): void {
 export function shelfMoveIntoFolder(folderId: string, moved: string): void {
   if (!moved || moved === folderId || moved.startsWith('folder:')) return
   const { order, topIds } = now()
+  // 目标夹不存在 / 不在上区、moved 不是顶层项 → 不动(否则成员资格先被摘掉、原位置丢了)
+  if (!rb().folders.some((f) => f.id === folderId && f.zone === 'top') || !topIds.includes(moved)) return
   rb().moveIntoFolder(folderId, moved)
   rb().setZoneOrder('top', reorderBase(order, topIds, moved))
 }
 
 /** 移出收纳夹 —— 同 Ribbon 浮层右键的那条:去 membership + 把它写回顶层序末尾。 */
 export function shelfMoveOut(itemId: string): void {
+  if (!rb().folders.some((f) => f.zone === 'top' && f.items.includes(itemId))) return
   const { order, topIds } = now()
   rb().moveOutOfFolder(itemId)
   rb().setZoneOrder('top', [...reorderBase(order, topIds, itemId), itemId])

@@ -35,6 +35,18 @@ describe('收纳架 = Ribbon 上区的另一个投影', () => {
     expect(order().filter((id) => id === 'space:amadeus')).toHaveLength(1)
   })
 
+  it('插件给错 id 不动 Ribbon:夹内成员当顶层拖、往不存在的夹里放、移出不在夹里的(Codex 评审)', () => {
+    useRibbonStore.getState().addFolder('top', 'Work')
+    const folder = folders()[0]!.id
+    shelfMoveIntoFolder(folder, 'space:amadeus')
+    const before = JSON.stringify({ order: order(), folders: folders() })
+    shelfMove('space:amadeus', 'space:tangu')
+    shelfMoveIntoFolder('folder:nope', 'space:calendar')
+    shelfMoveIntoFolder(folder, 'space:ghost')
+    shelfMoveOut('space:tangu')
+    expect(JSON.stringify({ order: order(), folders: folders() })).toBe(before)
+  })
+
   it('移出收纳夹 = 回到顶层序末尾', () => {
     useRibbonStore.getState().addFolder('top', 'Work')
     const folder = folders()[0]!.id

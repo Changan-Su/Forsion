@@ -1525,7 +1525,7 @@ export interface PluginContext {
      *  模型 / 模式 / 附件 / 引用 / 语音 / 技能。用户按发送 → 宿主建新会话、切到 Tangu、发出去;插件改不了要发的内容(`draft()` 只读)。
      *  和 `ui.mountChatBox` 的分工:那个是插件自己的草稿、提交归插件;这个提交归宿主。
      *  - `onFocusChange(focused)`:输入区(连同它的菜单)获得 / 失去焦点。
-     *  - `beforeSend()`:宿主发送前先等它(放退场动效);明确回 `false` = 这次不发,抛错照样发。同一时刻只放一次发送。
+     *  - `beforeSend()`:宿主发送前先等它(放退场动效,最多 2 秒);明确回 `false` = 这次不发,抛错 / 超时 / 视图被卸照样发。发送和开通话共用一把锁。
      *  - `call: true`:要通话按钮;只在挂载时所在的 Space 是当前 Space 时画。
      *  - 句柄:`focus()`、`startVoice()`(在点击处理里同步调)、`draft()`(只读)、`dispose()`(之后 `el` 立刻还给你)。
      *  没有 Tangu 对话能力的宿主 / 旧宿主没有:`ctx.tangu?.mountComposer`;没有 Tangu Space 时发送不出去(按钮按了不动)。 */
