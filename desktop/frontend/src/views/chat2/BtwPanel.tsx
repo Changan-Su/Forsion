@@ -85,6 +85,8 @@ export function BtwPanel({ seed, onClose, onQuoted }: { seed: BtwSeed; onClose?:
     const ta = taRef.current
     if (!ta) return
     ta.style.height = 'auto'
+    // 空的就用自然的一行高:子会话面板滑出时首帧宽度近 0,那一刻量 scrollHeight 会把空输入框撑到上限、一直不缩(10-18 截图)
+    if (!ta.value) return
     ta.style.height = `${Math.min(ta.scrollHeight, 160)}px`
   }
   const send = (): void => {

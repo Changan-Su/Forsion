@@ -130,24 +130,26 @@ const parseTurns = (v: unknown): AsideTurn[] => {
 };
 
 /** 答完一问 → 写回记录,返回它的 id 和实际挂上的消息。asideId 不是本人本会话的(删掉了 / 伪造)→ 另开一条;
- *  messageId 没给 / 不属于本会话 → 挂在本会话最近一条回答上(输入框 /btw、浮窗里问的不知道挂哪)。
+ *  messageId 没给 / 不属于本会话 → 挂在本会话最近一条回答上(输入框 /btw、浮窗里问的不知道挂哪);一条回答都没有 → 不存(null)。
  *  已有记录以库里的往返为准(客户端只带最近 20 轮),只追加这一问。 */
-export async function saveAside(p: { asideId?: string; sessionId: string; userId: string; messageId?: string; turn: AsideTurn; thread: AsideTurn[] }): Promise<{ id: string; messageId: string | null }> {
-  const [row] = p.asideId
-    ? await query<any[]>(`SELECT id, message_id, turns FROM chat_asides WHERE id = ? AND session_id = ? AND user_id = ? LIMIT 1`, [p.asideId, p.sessionId, p.userId])
-    : [];
-  if (row) {
+export async function saveAside(p: { asideId?: string; sessionId: string; userId: string; messageId?: string; turn: AsideTurn; thread: AsideTurn[] }): Promise<{ id: string; messageId: string | null } | null> {
+  // 续写:比对旧值再写(两扇窗同时续同一段,读到同一份 turns 各自覆盖会丢一问 —— Codex 10-18 #2);被抢了就重读再追加。
+  for (let attempt = 0; p.asideId && attempt < 5; attempt++) {
+    const [row] = await query<any[]>(`SELECT id, message_id, turns FROM chat_asides WHERE id = ? AND session_id = ? AND user_id = ? LIMIT 1`, [p.asideId, p.sessionId, p.userId]);
+    if (!row) break;
     const turns = [...parseTurns(row.turns), p.turn].slice(-SAVED_MAX_TURNS);
-    await query(`UPDATE chat_asides SET turns = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, [JSON.stringify(turns), row.id]);
-    return { id: String(row.id), messageId: row.message_id ? String(row.message_id) : null };
+    const hit = await query<any[]>(`UPDATE chat_asides SET turns = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND turns = ? RETURNING id`, [JSON.stringify(turns), row.id, row.turns]);
+    if (hit.length) return { id: String(row.id), messageId: row.message_id ? String(row.message_id) : null };
   }
   const [m] = p.messageId ? await query<any[]>(`SELECT id FROM chat_messages WHERE id = ? AND session_id = ? LIMIT 1`, [p.messageId, p.sessionId]) : [];
   const [latest] = m ? [m] : await query<any[]>(
     `SELECT id FROM chat_messages WHERE session_id = ? AND role = 'model' ORDER BY timestamp DESC LIMIT 1`, [p.sessionId]);
+  // 还没有回答可挂(空会话里问的):不存 —— 存了也没有地方重开(Codex 10-18 #5),照旧只在本次面板里
+  if (!latest) return null;
   const id = uuidv4();
   await query(`INSERT INTO chat_asides (id, session_id, user_id, message_id, turns) VALUES (?, ?, ?, ?, ?)`,
-    [id, p.sessionId, p.userId, latest ? String(latest.id) : null, JSON.stringify([...p.thread, p.turn].slice(-SAVED_MAX_TURNS))]);
-  return { id, messageId: latest ? String(latest.id) : null };
+    [id, p.sessionId, p.userId, String(latest.id), JSON.stringify([...p.thread, p.turn].slice(-SAVED_MAX_TURNS))]);
+  return { id, messageId: String(latest.id) };
 }
 
 export async function listAsides(sessionId: string, userId: string): Promise<Array<{ id: string; message_id: string | null; turns: AsideTurn[]; created_at: string; updated_at: string }>> {

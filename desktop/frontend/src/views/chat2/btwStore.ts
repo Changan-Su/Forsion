@@ -76,6 +76,8 @@ const MAX_TURNS = 20
 const controllers = new Map<string, AbortController>()
 const savedLoads = new Set<string>()
 const consumedSeeds = new Set<string>()
+/** 上一问还在流时点了别的一段 / 别的挂点:记下,流完再切(Codex 10-18 #3)。每会话只留最后一次。 */
+const pendingSeeds = new Map<string, BtwSeed>()
 let seedSeq = 0
 
 /** 这条指令第一次见 → true(并记下);同一 nonce 再来 → false。 */
@@ -111,7 +113,7 @@ interface BtwState {
   setCompose(sessionId: string, patch: { draft?: string; quote?: string | undefined }): void
   loadSaved(sessionId: string, force?: boolean): void
   /** 按指令切到对应的一段:asideId → 载回那条记录;换了挂点 → 另起一段;否则接着当前这段。 */
-  applySeed(seed: BtwSeed): void
+  applySeed(seed: BtwSeed, refetched?: boolean): void
   ask(sessionId: string, question: string, quote?: string, modelId?: string): Promise<void>
   stop(sessionId: string): void
   clear(sessionId: string): void
@@ -135,18 +137,27 @@ export const useBtw = create<BtwState>((set, get) => ({
       .finally(() => savedLoads.delete(sessionId))
   },
 
-  applySeed: (seed) => {
+  applySeed: (seed, refetched?: boolean) => {
     const sid = seed.sessionId
+    if (controllers.has(sid)) { pendingSeeds.set(sid, seed); return }
     const cur = get().anchors[sid] || {}
     if (seed.asideId) {
       if (cur.asideId === seed.asideId) return
       const rec = get().saved[sid]?.find((a) => a.id === seed.asideId)
-      if (!rec || controllers.has(sid)) return
+      if (!rec) {
+        // 新开的浮窗里 saved 还是空的:取一次再切(Codex 10-18 #4);取回来还没有 = 已删,照旧
+        if (!refetched) {
+          void listAsides(targetForSession(sid), sid)
+            .then((rows) => { set((s) => ({ saved: { ...s.saved, [sid]: rows } })); get().applySeed(seed, true) })
+            .catch(() => {})
+        }
+        return
+      }
       const turns: BtwTurn[] = rec.turns.map((x, i) => ({ id: `${rec.id}-${i}`, question: x.question, quote: x.quote, answer: x.answer, status: 'done' }))
       set((s) => ({ threads: { ...s.threads, [sid]: turns }, anchors: { ...s.anchors, [sid]: { asideId: rec.id, messageId: rec.message_id || undefined } } }))
       return
     }
-    if (seed.messageId && seed.messageId !== cur.messageId && !controllers.has(sid)) {
+    if (seed.messageId && seed.messageId !== cur.messageId) {
       set((s) => ({ threads: { ...s.threads, [sid]: [] }, anchors: { ...s.anchors, [sid]: { messageId: seed.messageId } } }))
     }
   },
@@ -181,6 +192,8 @@ export const useBtw = create<BtwState>((set, get) => ({
       patch((t) => (t.status !== 'streaming' ? {} : ac.signal.aborted ? { status: 'stopped' } : { status: 'error', error: readableError(String(e?.message || e)) }))
     } finally {
       if (controllers.get(sessionId) === ac) controllers.delete(sessionId)
+      const next = pendingSeeds.get(sessionId)
+      if (next && !controllers.has(sessionId)) { pendingSeeds.delete(sessionId); get().applySeed(next) }
     }
   },
 

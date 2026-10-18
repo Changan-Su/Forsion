@@ -1794,7 +1794,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     //     易变区:任何一支多一条消息它就变。只本机引擎(直连库;云端 thin worker 不注入)。
     if (profile.capabilities.hostExec) {
       try {
-        const sec = await branchesSection(sessionId, userId);
+        const sec = await branchesSection(sessionId, userId, { hideRemote: !effectiveRemote({ remote, runId }) });
         if (sec) systemParts.push(sec);
       } catch (e) { console.warn('[agent-core] branches section failed:', e); }
     }

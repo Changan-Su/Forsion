@@ -5041,7 +5041,8 @@ Then reply with only the command output.`,
     const ev3 = B ? await run(B, '如果改用 CRDT 呢?两三句话,不用工具。', 180_000, { debugSystemPrompt: true }) : null;
     const ev4 = B ? await run(B, '这条和主线后来讨论的那个方案比,哪个更适合我们?', 240_000, { debugSystemPrompt: true }) : null;
     const sp3 = String(ev3?.systemPrompt || '');
-    const section = sp3.includes('<branches>') && sp3.includes(`session id ${S}`) && /You are in "/.test(sp3);
+    // 分支第一轮时 Historian 多半还没起名 → 「an untitled branch」;起了名是带引号的标题(两种都算)
+    const section = sp3.includes('<branches>') && sp3.includes(`session id ${S}`) && /You are in (?:"|an untitled branch)/.test(sp3) && !sp3.includes('You are in "New Chat"');
     const negOk = !String(ev1.systemPrompt || '').includes('<branches>');
     const reads = (ev4?.toolArgs || []).filter((t) => t.name === 'read_session');
     const readMain = reads.some((t) => t.arguments.includes(S));

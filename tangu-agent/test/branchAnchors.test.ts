@@ -90,11 +90,26 @@ describe('<branches> 段', () => {
     expect(sec).toContain(`- "If we use CRDT" (session id ${b}) — 2 messages since it forked; last: "Yjs fits; the cost is a bigger bundle"`);
   });
 
+  it('还没起名的分支(New Chat)不把占位名当标题', async () => {
+    const b = await tree();
+    await query(`UPDATE chat_sessions SET title = 'New Chat' WHERE id = ?`, [b]);
+    expect(await branchesSection(b, USER)).toContain('You are in an untitled branch, which forked after');
+    expect(await branchesSection('R', USER)).toContain(`- an untitled branch (session id ${b})`);
+  });
+
   it('别人的会话 / 归档的分支不列', async () => {
     const b = await tree();
     expect(await branchesSection(b, 'someone-else')).toBeNull();
     await query(`UPDATE chat_sessions SET archived = TRUE WHERE id = ?`, [b]);
     expect(await branchesSection('R', USER)).toBeNull();
+  });
+
+  it('本 run 无远程污点 → 远端驱动过的别的支不列;自己那支照列(Codex 10-18 #1)', async () => {
+    const b = await tree();
+    await query(`UPDATE chat_sessions SET title = 'Remote said this', agent_config = ? WHERE id = ?`, [JSON.stringify({ remoteOrigin: { deviceId: 'd' } }), b]);
+    expect(await branchesSection('R', USER)).toContain('Remote said this');
+    expect(await branchesSection('R', USER, { hideRemote: true })).toBeNull();
+    expect(await branchesSection(b, USER, { hideRemote: true })).toContain('You are in "Remote said this"');
   });
 });
 
@@ -105,27 +120,42 @@ describe('顺便问落库', () => {
     await msg('R', 'a2', 'model', 'later answer', 200);
     await seed('S', 'other');
     await msg('S', 'z1', 'model', 'nope', 100);
-    const { id } = await saveAside({ sessionId: 'R', userId: USER, messageId: 'a1', turn: { question: 'What is Yjs?', answer: 'A CRDT library.' }, thread: [] });
-    const { id: id2 } = await saveAside({ asideId: id, sessionId: 'R', userId: USER, messageId: 'a1', turn: { question: 'Size?', answer: 'About 70 KB.' }, thread: [] });
+    const { id } = (await saveAside({ sessionId: 'R', userId: USER, messageId: 'a1', turn: { question: 'What is Yjs?', answer: 'A CRDT library.' }, thread: [] }))!;
+    const { id: id2 } = (await saveAside({ asideId: id, sessionId: 'R', userId: USER, messageId: 'a1', turn: { question: 'Size?', answer: 'About 70 KB.' }, thread: [] }))!;
     expect(id2).toBe(id);
-    const { id: loose, messageId: looseAt } = await saveAside({ sessionId: 'R', userId: USER, messageId: 'z1', turn: { question: 'q', quote: 'excerpt', answer: 'a' }, thread: [] });
-    const { id: bare } = await saveAside({ sessionId: 'R', userId: USER, turn: { question: 'q', answer: 'a' }, thread: [] });
+    const { id: loose, messageId: looseAt } = (await saveAside({ sessionId: 'R', userId: USER, messageId: 'z1', turn: { question: 'q', quote: 'excerpt', answer: 'a' }, thread: [] }))!;
+    const { id: bare } = (await saveAside({ sessionId: 'R', userId: USER, turn: { question: 'q', answer: 'a' }, thread: [] }))!;
     const rows = await listAsides('R', USER);
     expect(rows.map((r) => [r.id, r.message_id, r.turns.length])).toEqual([[id, 'a1', 2], [loose, 'a2', 1], [bare, 'a2', 1]]);
     expect(rows[1].turns[0].quote).toBe('excerpt');
     expect(looseAt).toBe('a2');
   });
 
+  it('两扇窗同时续同一段 → 两问都留下(比对旧值再写,Codex 10-18 #2)', async () => {
+    await seed('R', 'x');
+    await msg('R', 'a1', 'model', 'answer', 100);
+    const { id } = (await saveAside({ sessionId: 'R', userId: USER, messageId: 'a1', turn: { question: 'q0', answer: 'a0' }, thread: [] }))!;
+    await Promise.all(['A', 'B'].map((q) => saveAside({ asideId: id, sessionId: 'R', userId: USER, turn: { question: q, answer: q }, thread: [] })));
+    expect((await listAsides('R', USER))[0].turns.map((t) => t.question).sort()).toEqual(['A', 'B', 'q0']);
+  });
+
+  it('一条回答都没有(空会话里问的)→ 不存(Codex 10-18 #5)', async () => {
+    await seed('R', 'x');
+    expect(await saveAside({ sessionId: 'R', userId: USER, turn: { question: 'q', answer: 'a' }, thread: [] })).toBeNull();
+    expect(await listAsides('R', USER)).toEqual([]);
+  });
+
   it('拿着别人的 / 删掉的 id 续写 → 另开一条;删除只删本人本会话的', async () => {
     await seed('R', 'x');
-    const { id } = await saveAside({ sessionId: 'R', userId: USER, turn: { question: 'q', answer: 'a' }, thread: [] });
-    const { id: other } = await saveAside({ asideId: id, sessionId: 'R', userId: 'u2', turn: { question: 'q2', answer: 'a2' }, thread: [] });
+    await msg('R', 'a1', 'model', 'answer', 100);
+    const { id } = (await saveAside({ sessionId: 'R', userId: USER, turn: { question: 'q', answer: 'a' }, thread: [] }))!;
+    const { id: other } = (await saveAside({ asideId: id, sessionId: 'R', userId: 'u2', turn: { question: 'q2', answer: 'a2' }, thread: [] }))!;
     expect(other).not.toBe(id);
     await deleteAside(id, 'R', 'u2');
     expect((await listAsides('R', USER)).length).toBe(1);
     await deleteAside(id, 'R', USER);
     expect(await listAsides('R', USER)).toEqual([]);
-    const { id: again } = await saveAside({ asideId: id, sessionId: 'R', userId: USER, turn: { question: 'q3', answer: 'a3' }, thread: [{ question: 'q', answer: 'a' }] });
+    const { id: again } = (await saveAside({ asideId: id, sessionId: 'R', userId: USER, turn: { question: 'q3', answer: 'a3' }, thread: [{ question: 'q', answer: 'a' }] }))!;
     expect(again).not.toBe(id);
     expect((await listAsides('R', USER))[0].turns.map((t) => t.question)).toEqual(['q', 'q3']);
   });

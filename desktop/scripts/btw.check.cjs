@@ -102,6 +102,10 @@ async function main() {
     await win.locator('text=Parser 重构').first().click()
     await btw.waitFor({ timeout: 10000 })
     check('切回原会话 → 面板再现,线程原样还在', (await btw.locator('.btw-turn').count()) === 2)
+    // 面板滑出期间对话列在变宽 / 变窄,划线条遇到盒子变化就收(ViewSelectionBar 的 ResizeObserver):等它停下再划
+    await win.waitForTimeout(800)
+    const taH = await btw.locator('.btw-input textarea').evaluate((el) => el.getBoundingClientRect().height)
+    check('面板滑出后空输入框是一行高(没被首帧的窄宽度撑高)', taH < 60, String(taH))
 
     // ── 划线「顺便问」:挂在同一条回答上 → 接着同一段,选区挂成引用 ──
     const pickReply = () => win.evaluate(() => {
@@ -140,6 +144,7 @@ async function main() {
 
     // ── 引用卡:再划一段点「引用」→ 两张卡并排挂着(不顶掉上一段),可以单独移除 ──
     const mainQuotes = win.locator('[data-chat-surface="chat"] .t2c-quote')
+    await win.waitForTimeout(800) // 引用卡挂上后输入区长高、对话区重排:选区会被冲掉,等它落定再划
     await pickReply()
     await win.locator('[data-testid="selection-quote"]').first().click()
     await until(async () => (await mainQuotes.count()) === 2, 5000)
@@ -152,7 +157,10 @@ async function main() {
     const bubble = await win.evaluate(() => {
       const wrap = [...document.querySelectorAll('[data-chat-surface="chat"] .t2-user')].find((el) => el.textContent.includes('这两段是什么关系'))
       const cards = [...(wrap?.querySelectorAll('.t2-user-quote') || [])].map((el) => el.textContent)
-      return { cards, body: [...(wrap?.childNodes || [])].filter((n) => n.nodeType === 3).map((n) => n.textContent).join('').trim(), raw: wrap?.textContent.includes('> ') }
+      // 正文在长提问折叠(UserFold)里面,不是气泡的直接文本节点:去掉引用卡后取剩下的字
+      const rest = wrap?.cloneNode(true)
+      rest?.querySelectorAll('.t2-user-quotes, button').forEach((el) => el.remove())
+      return { cards, body: (rest?.textContent || '').trim(), raw: wrap?.textContent.includes('> ') }
     })
     check('已发消息开头的两段引用是两张卡,正文不再带「> 」', bubble.cards.length === 2 && bubble.cards[1].includes('还有第二行') && bubble.body === '这两段是什么关系?' && !bubble.raw, JSON.stringify(bubble))
     await win.locator('text=另一条会话').first().click()
@@ -160,6 +168,7 @@ async function main() {
     check('切到别的会话 → 主对话输入框上方没有上一个会话的引用卡', (await mainQuotes.count()) === 0)
     await win.locator('text=Parser 重构').first().click()
     await btw.waitFor({ timeout: 10000 })
+    await win.waitForTimeout(800)
     check('切回来 → 这个会话的引用卡还在', (await mainQuotes.count()) === 1)
 
     // ── 上一问还在流时主窗又来一条 /btw:不能被吞(主窗输入框已清空),进旁聊输入框等着 ──

@@ -111,4 +111,24 @@ describe('旁聊 store', () => {
     expect(useBtw.getState().threads.s1.map((t) => t.question)).toEqual(['q1', 'q2'])
     expect(useBtw.getState().anchors.s1).toEqual({ asideId: 'x2', messageId: 'm2' })
   })
+
+  it('流着的时候点了别的一段 → 流完再切过去(Codex 10-18 #3)', async () => {
+    let finish!: (r: Response) => void
+    fetchMock.mockReturnValueOnce(new Promise<Response>((r) => { finish = r }))
+    useBtw.setState({ saved: { s1: [{ id: 'x2', message_id: 'm2', turns: [{ question: 'q1', answer: 'a1' }], created_at: '', updated_at: '' }] } })
+    const asking = useBtw.getState().ask('s1', 'q')
+    useBtw.getState().applySeed({ sessionId: 's1', nonce: 'n1', asideId: 'x2' })
+    expect(useBtw.getState().anchors.s1).toBeUndefined()
+    finish(sse({ type: 'done', content: 'ok' }))
+    await asking
+    expect(useBtw.getState().anchors.s1).toEqual({ asideId: 'x2', messageId: 'm2' })
+    expect(useBtw.getState().threads.s1.map((t) => t.question)).toEqual(['q1'])
+  })
+
+  it('新开的浮窗里还没取过存下来的 → 先取再载回(Codex 10-18 #4)', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ asides: [{ id: 'x2', message_id: 'm2', turns: [{ question: 'q1', answer: 'a1' }], created_at: '', updated_at: '' }] })))
+    useBtw.getState().applySeed({ sessionId: 's1', nonce: 'n1', asideId: 'x2' })
+    await vi.waitFor(() => expect(useBtw.getState().anchors.s1).toEqual({ asideId: 'x2', messageId: 'm2' }))
+    expect(useBtw.getState().threads.s1.map((t) => t.question)).toEqual(['q1'])
+  })
 })
