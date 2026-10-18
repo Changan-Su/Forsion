@@ -758,14 +758,14 @@ router.post('/agent/sessions/:id/aside', authMiddleware, async (req: AuthRequest
       input, signal: ac.signal, onToken: (text) => write({ type: 'delta', text }),
     });
     // 落库失败不影响这次回答(客户端照样拿到全文,只是重开时没有这一条)。
-    const asideId = answer.content
+    const saved = answer.content
       ? await saveAside({
         asideId: typeof req.body?.aside_id === 'string' ? req.body.aside_id : undefined, sessionId: s.id, userId,
         messageId: typeof req.body?.message_id === 'string' ? req.body.message_id : undefined,
         turn: { question: input.question, ...(input.quote ? { quote: input.quote } : {}), answer: answer.content }, thread: input.thread,
       }).catch((e) => { console.warn('[aside] save failed:', e?.message || e); return undefined; })
       : undefined;
-    write({ type: 'done', ...answer, modelId, ...(asideId ? { asideId } : {}) });
+    write({ type: 'done', ...answer, modelId, ...(saved ? { asideId: saved.id, asideMessageId: saved.messageId } : {}) });
   } catch (e: any) {
     if (!ac.signal.aborted) write({ type: 'error', error: e?.message || 'side question failed' });
   } finally {

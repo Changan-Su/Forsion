@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useApp } from '../../stores/appStore'
+import { useChildChat } from '../../stores/childChatStore'
 import { btwSeedOf, consumeSeed, openBtw, useBtw } from './btwStore'
 
 const sse = (...events: object[]): Response => new Response(events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join(''), { headers: { 'Content-Type': 'text/event-stream' } })
@@ -9,7 +10,7 @@ let fetchMock: ReturnType<typeof vi.fn>
 
 beforeEach(() => {
   useApp.setState({ cfg: { ...initialApp.cfg, backendUrl: 'http://engine', token: 'tok' }, activeId: 's1' })
-  useBtw.setState({ threads: {}, webOpen: null })
+  useBtw.setState({ threads: {}, webOpen: null, anchors: {}, saved: {} })
   fetchMock = vi.fn()
   vi.stubGlobal('fetch', fetchMock)
 })
@@ -67,17 +68,47 @@ describe('旁聊 store', () => {
     expect(consumeSeed(seed)).toBe(false)
   })
 
-  it('Web / 手机(没有原生浮窗):挂到 webOpen,归属 = 主窗当前会话;桌面:开 btw:<会话> 浮窗并带会话归属', () => {
+  it('主窗(桌面 / Web)开在对话右边的子会话面板;手机挂 webOpen;卫星窗开 btw:<会话> 浮窗', () => {
     vi.stubGlobal('window', {})
+    openBtw({ sessionId: 'child', title: null, quote: 'sel', messageId: 'm1' })
+    expect(useChildChat.getState().selected.s1?.aside).toMatchObject({ sessionId: 'child', scope: 's1', quote: 'sel', messageId: 'm1' })
+    expect(useBtw.getState().webOpen).toBeNull()
+
+    vi.stubGlobal('window', { tangu: { mobile: true } })
     openBtw({ sessionId: 'child', title: null, quote: 'sel' })
     expect(useBtw.getState().webOpen).toMatchObject({ sessionId: 'child', scope: 's1', quote: 'sel' })
 
     const openFloatingPanel = vi.fn(async () => ({ id: 'x' }))
     vi.stubGlobal('window', { tangu: { openFloatingPanel } })
+    vi.stubGlobal('location', { search: '?window=detached&id=d1' })
     openBtw({ sessionId: 's1', title: 'Parser work', question: 'why?' })
     expect(openFloatingPanel).toHaveBeenCalledWith(expect.objectContaining({
-      id: 'btw:s1', builtin: 'btw', sessionId: 's1', title: '顺便问 · Parser work',
+      id: 'btw:s1', builtin: 'btw', title: '顺便问 · Parser work',
       params: expect.objectContaining({ sessionId: 's1', question: 'why?', nonce: expect.any(String) }),
     }))
+  })
+
+  it('问的时候带上挂点和记录 id;第一问答完记下引擎回的 asideId 并刷新存下来的列表', async () => {
+    useBtw.setState({ anchors: { s1: { messageId: 'm7' } } })
+    fetchMock.mockResolvedValueOnce(sse({ type: 'done', content: 'ok', asideId: 'a9', asideMessageId: 'm7' }))
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ asides: [{ id: 'a9', message_id: 'm7', turns: [{ question: 'q', answer: 'ok' }], created_at: '', updated_at: '' }] })))
+    await useBtw.getState().ask('s1', 'q')
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({ message_id: 'm7' })
+    expect(useBtw.getState().anchors.s1).toEqual({ messageId: 'm7', asideId: 'a9' })
+    await vi.waitFor(() => expect(useBtw.getState().saved.s1?.[0]?.id).toBe('a9'))
+    expect(String(fetchMock.mock.calls[1][0])).toBe('http://engine/agent/sessions/s1/asides')
+  })
+
+  it('换了挂点另起一段;重开存下来的那段载回往返', () => {
+    useBtw.setState({ threads: { s1: [{ id: 't', question: 'old', answer: 'a', status: 'done' }] }, anchors: { s1: { messageId: 'm1', asideId: 'x1' } },
+      saved: { s1: [{ id: 'x2', message_id: 'm2', turns: [{ question: 'q1', answer: 'a1' }, { question: 'q2', answer: 'a2' }], created_at: '', updated_at: '' }] } })
+    useBtw.getState().applySeed({ sessionId: 's1', nonce: 'n1', messageId: 'm1' })
+    expect(useBtw.getState().threads.s1).toHaveLength(1) // 同一个挂点:接着这段
+    useBtw.getState().applySeed({ sessionId: 's1', nonce: 'n2', messageId: 'm3' })
+    expect(useBtw.getState().threads.s1).toEqual([])
+    expect(useBtw.getState().anchors.s1).toEqual({ messageId: 'm3' })
+    useBtw.getState().applySeed({ sessionId: 's1', nonce: 'n3', asideId: 'x2' })
+    expect(useBtw.getState().threads.s1.map((t) => t.question)).toEqual(['q1', 'q2'])
+    expect(useBtw.getState().anchors.s1).toEqual({ asideId: 'x2', messageId: 'm2' })
   })
 })

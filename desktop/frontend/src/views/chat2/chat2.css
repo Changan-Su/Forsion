@@ -1229,3 +1229,6 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 .t2-stream-inner > .t2-asst[data-streaming] { content-visibility: visible; }
 /* 回退菜单是消息里唯一伸出框外的弹层(往下最高 320px),开着的那条不加 containment,否则被裁 */
 .t2-stream-inner > .t2-userwrap:has(.rewind-menu) { content-visibility: visible; }
+
+/* 操作条里带字的那颗(分支里「带回这里」):同 .t2-iconbtn 的底,宽度随字 */
+.t2-iconbtn.t2-textbtn { width: auto; gap: 5px; padding: 0 10px; border-radius: 14px; font-size: var(--ui-font-meta, 12px); font-family: var(--font-ui); }

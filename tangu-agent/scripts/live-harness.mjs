@@ -52,6 +52,7 @@
  *   npm run live:harness -- --only recall-unprompted --ab-memory   # B1 行为闸:记忆易变段走 tail vs system 各跑一遍(两次引擎启动,顺序)
  *   npm run live:harness -- --only deferred                  # E2 按需装载:load_tools 先于 read_document + 子代理 read_document 直通 + 子代理自己 load_tools 解锁 browser_snapshot
  *   npm run live:harness -- --only grant                     # 改 delegate.grantTools / 子代理管理面闸后跑:授予时子代理用得上 manage_schedule,不授予时照旧被拒(正负两跑,均 action=list 无副作用)
+ *   npm run live:harness -- --only branch                     # 分支(10-18,方案「Chat 画布分支」第一步):主线两轮 → 从第一条回答分出一支 → 分支里问一轮、再问「和主线比」:分支挂主线下记分叉点、系统提示有 <branches> 列主线、比之前 read_session 读了主线的 id;负对照 = 分叉前没有 <branches>。改 services/branchContext.ts / 分支路由后跑
  *   npm run live:harness -- --only nested                     # 父子会话(10-17,方案「子会话与任务卡」):让它分头开子会话查三个模块 → start_session ≥2、子会话各自跑完、
  *                                                              结果以 <child_sessions_update> 送回主会话并自动接着做一轮、汇总点对三个坏文件;再问一句须先问用户的事 → 问句收尾置「等你」、下一句清掉(或走 ask_user,台架照用户原话答)。
  *                                                              改 services/childSessions.ts / tools/builtin/childSessions.ts 的措辞后跑
@@ -213,7 +214,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'account', 'nested', 'musedm'];
+const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'account', 'nested', 'branch', 'musedm'];
 KEYS.push('signals');
 KEYS.push('musechat');
 KEYS.push('novision');
@@ -253,7 +254,7 @@ const GIT_PREFIX = 'livetest/'; const GIT_TAG = '[LIVE]';
 // opt-in:缺省全量跑里**不带**这几个 —— cache 7 个 run / churn 6 个 run(都慢),cache 与 recall-unprompted
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
-const OPT_IN = new Set(['nested', 'musedm', 'realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'appsettings', 'control', 'phone']);
+const OPT_IN = new Set(['nested', 'branch', 'musedm', 'realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'appsettings', 'control', 'phone']);
 OPT_IN.add('signals');
 OPT_IN.add('musechat');
 OPT_IN.add('imgwindow');
@@ -5022,6 +5023,37 @@ Then reply with only the command output.`,
       output: `【① 主会话第一轮】${ev1.content}\n\n【回报行】${updates.map((m) => String(m.content).slice(0, 1200)).join('\n---\n')}\n\n【接着做那一轮】${after}\n\n【② 先问】${ev2.content}\n\n【③ 用户回答后】${ev3.content}`,
       toolCalls: [...ev1.toolCalls, ...ev2.toolCalls, ...ev3.toolCalls],
       ttftMs: ttft(ev1), tokens: (tokensOf(ev1) || 0) + (tokensOf(ev2) || 0) + (tokensOf(ev3) || 0) || null,
+    };
+  });
+
+  // ── branch:分支(10-18,方案 docs/ToBeImproved/Chat画布分支方案_2026-10-18 第一步「agent 知道分支」)──
+  // 判「工具被叫、参数是主线 id」而不是「回答提到主线」:前者跨模型稳定(评审 10-18)。没分叉时不带分支段 = 注入的负对照。
+  await scenario('branch', 'branch 分支:分支里知道自己从哪分出、别的支是什么,比之前先读主线', async () => {
+    const S = `live-branch-${Date.now()}`;
+    const ev1 = await run(S, 'Amadeus 笔记想支持离线编辑。给我三条同步路线,从改动最小到最大,每条一句话。不用工具,直接答。', 180_000, { debugSystemPrompt: true });
+    const ev2 = await run(S, '就第一条:合并失败的时候用户在界面上看到什么、能做什么?两三句话,不用工具。', 180_000);
+    const msgs = (await api(`/agent/sessions/${S}/messages?limit=50`)).messages || [];
+    const a1 = msgs.find((m) => m.role === 'model' && m.content);
+    const br = a1 ? await api(`/agent/sessions/${S}/branch`, { method: 'POST', body: JSON.stringify({ message_id: a1.id }) }) : null;
+    const B = br?.session?.id;
+    const row = B ? (await api('/agent/sessions?limit=500')).sessions.find((x) => x.id === B) : null;
+    const lineage = !!row && row.parent_session_id === S && row.fork_message_id === a1.id && row.fork_session_id === S;
+    const ev3 = B ? await run(B, '如果改用 CRDT 呢?两三句话,不用工具。', 180_000, { debugSystemPrompt: true }) : null;
+    const ev4 = B ? await run(B, '这条和主线后来讨论的那个方案比,哪个更适合我们?', 240_000, { debugSystemPrompt: true }) : null;
+    const sp3 = String(ev3?.systemPrompt || '');
+    const section = sp3.includes('<branches>') && sp3.includes(`session id ${S}`) && /You are in "/.test(sp3);
+    const negOk = !String(ev1.systemPrompt || '').includes('<branches>');
+    const reads = (ev4?.toolArgs || []).filter((t) => t.name === 'read_session');
+    const readMain = reads.some((t) => t.arguments.includes(S));
+    const block = (sp3.match(/<branches>[\s\S]*?<\/branches>/) || [''])[0];
+    return {
+      ok: !ev1.error && !ev2.error && lineage && !ev3?.error && !ev4?.error && section && negOk && readMain,
+      detail: `血缘${lineage ? '对(挂主线、记分叉点)' : `不对!${JSON.stringify({ parent: row?.parent_session_id, fork: row?.fork_message_id, forkSession: row?.fork_session_id })}`};`
+        + `分支段${section ? '在、列了主线' : '缺!'};分叉前${negOk ? '没有分支段(负对照对)' : '就有分支段!'};`
+        + `「和主线比」那一轮 ${reads.length ? `read_session ×${reads.length}${readMain ? '(读的是主线)' : '(没读主线!)'}` : '没读别的支!'}(工具序列 ${ev4?.toolCalls.join(' → ') || '无'})`,
+      output: `【分支段】\n${block}\n\n【主线 ①】${ev1.content}\n\n【主线 ②】${ev2.content}\n\n【分支 ①】${ev3?.content || ''}\n\n【分支 · 和主线比】${ev4?.content || ''}`,
+      toolCalls: [...ev1.toolCalls, ...ev2.toolCalls, ...(ev3?.toolCalls || []), ...(ev4?.toolCalls || [])],
+      ttftMs: ttft(ev1), tokens: [ev1, ev2, ev3, ev4].reduce((n, e) => n + (e ? tokensOf(e) || 0 : 0), 0) || null,
     };
   });
 

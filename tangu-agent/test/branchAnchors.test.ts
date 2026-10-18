@@ -99,30 +99,33 @@ describe('<branches> 段', () => {
 });
 
 describe('顺便问落库', () => {
-  it('新开一条挂在消息上;续写以库里为准只追加;别会话的消息不挂', async () => {
+  it('新开一条挂在消息上;续写以库里为准只追加;别会话的消息 / 没给 → 挂本会话最近一条回答', async () => {
     await seed('R', 'x');
     await msg('R', 'a1', 'model', 'answer', 100);
+    await msg('R', 'a2', 'model', 'later answer', 200);
     await seed('S', 'other');
     await msg('S', 'z1', 'model', 'nope', 100);
-    const id = await saveAside({ sessionId: 'R', userId: USER, messageId: 'a1', turn: { question: 'What is Yjs?', answer: 'A CRDT library.' }, thread: [] });
-    const id2 = await saveAside({ asideId: id, sessionId: 'R', userId: USER, messageId: 'a1', turn: { question: 'Size?', answer: 'About 70 KB.' }, thread: [] });
+    const { id } = await saveAside({ sessionId: 'R', userId: USER, messageId: 'a1', turn: { question: 'What is Yjs?', answer: 'A CRDT library.' }, thread: [] });
+    const { id: id2 } = await saveAside({ asideId: id, sessionId: 'R', userId: USER, messageId: 'a1', turn: { question: 'Size?', answer: 'About 70 KB.' }, thread: [] });
     expect(id2).toBe(id);
-    const loose = await saveAside({ sessionId: 'R', userId: USER, messageId: 'z1', turn: { question: 'q', quote: 'excerpt', answer: 'a' }, thread: [] });
+    const { id: loose, messageId: looseAt } = await saveAside({ sessionId: 'R', userId: USER, messageId: 'z1', turn: { question: 'q', quote: 'excerpt', answer: 'a' }, thread: [] });
+    const { id: bare } = await saveAside({ sessionId: 'R', userId: USER, turn: { question: 'q', answer: 'a' }, thread: [] });
     const rows = await listAsides('R', USER);
-    expect(rows.map((r) => [r.id, r.message_id, r.turns.length])).toEqual([[id, 'a1', 2], [loose, null, 1]]);
+    expect(rows.map((r) => [r.id, r.message_id, r.turns.length])).toEqual([[id, 'a1', 2], [loose, 'a2', 1], [bare, 'a2', 1]]);
     expect(rows[1].turns[0].quote).toBe('excerpt');
+    expect(looseAt).toBe('a2');
   });
 
   it('拿着别人的 / 删掉的 id 续写 → 另开一条;删除只删本人本会话的', async () => {
     await seed('R', 'x');
-    const id = await saveAside({ sessionId: 'R', userId: USER, turn: { question: 'q', answer: 'a' }, thread: [] });
-    const other = await saveAside({ asideId: id, sessionId: 'R', userId: 'u2', turn: { question: 'q2', answer: 'a2' }, thread: [] });
+    const { id } = await saveAside({ sessionId: 'R', userId: USER, turn: { question: 'q', answer: 'a' }, thread: [] });
+    const { id: other } = await saveAside({ asideId: id, sessionId: 'R', userId: 'u2', turn: { question: 'q2', answer: 'a2' }, thread: [] });
     expect(other).not.toBe(id);
     await deleteAside(id, 'R', 'u2');
     expect((await listAsides('R', USER)).length).toBe(1);
     await deleteAside(id, 'R', USER);
     expect(await listAsides('R', USER)).toEqual([]);
-    const again = await saveAside({ asideId: id, sessionId: 'R', userId: USER, turn: { question: 'q3', answer: 'a3' }, thread: [{ question: 'q', answer: 'a' }] });
+    const { id: again } = await saveAside({ asideId: id, sessionId: 'R', userId: USER, turn: { question: 'q3', answer: 'a3' }, thread: [{ question: 'q', answer: 'a' }] });
     expect(again).not.toBe(id);
     expect((await listAsides('R', USER))[0].turns.map((t) => t.question)).toEqual(['q', 'q3']);
   });
