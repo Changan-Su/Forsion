@@ -132,13 +132,18 @@ export function redirectOpenFromOnePage(type: string): boolean {
 /** 进 Space 的落点:当前 Space 声明了默认主页(types.ts 的 mainPage)就把它顶到前台,没开着就开出来。别的 Space 是空操作。
  *  入口:setActiveSpace 末尾、两种宿主的冷启动、手机进 Space 后的落点钩子、人已在里面时再点一次它的图标(SpaceButton / 手机底栏)。
  *  幂等(手机上一次切换会跑两遍):已在前台什么都不做。东西正被带去这个 Space 开(redirectOpenFromOnePage)时不落 ——
- *  调用方接着就地 openView,会把刚顶上来的那一页换走。Mini 没有标签,不落。视图还没注册(插件 Space 冷启动)也不落。 */
+ *  调用方接着就地 openView,会把刚顶上来的那一页换走。Mini 没有标签,不落。视图还没注册(插件 Space 冷启动)也不落。
+ *  普通分离窗口(拖出去的标签,URL 带 window 但不是 Space 窗口)不落:它不属于任何 Space,活动 Space 是从共用的键读的主窗那个,
+ *  重载时会在它里面多开一份主页并盖住它自己的标签(Codex 评审)。主区一个标签都没有 = 还没摆上布局(单列壳挂载前的补定位),
+ *  不落:先开出一个 leaf,随后的冷启动还原见主区非空就跳过存档,存着的标签全丢(Codex 评审 High)。 */
 export function landOnMainPage(): void {
   const page = getActiveSpace()?.mainPage
-  if (!page || IS_MINI_PANEL || openRedirect !== null || !getView(page.type)) return
+  if (!page || IS_MINI_PANEL || (!IS_MAIN_WINDOW && !WINDOW_SPACE_ID) || openRedirect !== null || !getView(page.type)) return
   const ws = useWorkspace.getState()
   ws.refreshTabs() // 桌面冷启动时 mainTabs 要到 onReady 末尾才第一次刷,先刷一次免得「找不到 → 再开一份」
-  const { activate, open } = mainPageLanding(getActiveSpace(), useWorkspace.getState().mainTabs)
+  const tabs = useWorkspace.getState().mainTabs
+  if (!tabs.length) return
+  const { activate, open } = mainPageLanding(getActiveSpace(), tabs)
   if (activate) ws.activateLeaf(activate)
   else if (open) ws.openView(open.type, open.params, 'main', open.newTab ? { newTab: true } : undefined)
 }

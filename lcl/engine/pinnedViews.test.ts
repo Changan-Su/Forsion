@@ -694,6 +694,8 @@ describe('默认主页(mainPage):进 Space 先看到它', () => {
     const prev = useSpaceStore.getState()
     useSpaceStore.setState({ spaces: [{ id: 'mp', name: 'MP', build() {}, sidebarDefaults: { left: [], right: [] }, mainPage: page }], activeSpaceId: 'mp' })
     try {
+      landOnMainPage() // 还没摆上布局(主区一个标签都没有):不先开 —— 单列壳随后的冷启动还原见主区非空会跳过存档(Codex 评审 High)
+      expect(at(m.panels, 'main')).toEqual([])
       ws.openView('chatv', page.params, 'main')
       ws.openView('filev', { path: '/a.md' }, 'main', { newTab: true })
       expect((m.api.activePanel?.params as { __type?: string }).__type).toBe('filev')

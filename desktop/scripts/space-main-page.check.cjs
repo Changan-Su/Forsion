@@ -48,23 +48,23 @@ const view = (win) => win.evaluate(() => {
   const hp = [...document.querySelectorAll('.hp-root')].some((el) => el.getBoundingClientRect().height > 0)
   return { active: localStorage.getItem('forsion_tangu_active_space'), tabs, front, hp }
 })
+/** 点 Space 图标;没直接露在 Ribbon 上的(Space 多了收进「更多」)先打开「更多」再点。 */
 const clickSpace = async (win, id) => {
-  const ok = await win.evaluate((sid) => {
-    const b = [...document.querySelectorAll(`.rb [data-space-id="${sid}"]`)].find((x) => x.getBoundingClientRect().height > 0)
-    if (b) b.click()
-    return !!b
-  }, id)
+  const vis = `.rb [data-space-id="${id}"]:visible`
+  if (!(await win.locator(vis).count())) {
+    await win.locator('.rb-more[data-rb-more="top"]:visible').first().click().catch(() => {})
+    await sleep(600)
+  }
+  const b = win.locator(`[data-space-id="${id}"]:visible`).first()
+  if (!(await b.count())) return false
+  await b.click()
   await sleep(1800)
-  return ok
+  return true
 }
 const newTab = async (win) => { await win.locator('.dv-new-tab').first().click(); await sleep(1500) }
-/** 点主区里文字匹配的标签(切到后台的那个)。 */
+/** 点主区里文字匹配的标签(切到后台的那个)。真指针点:Dockview 认 pointerdown,合成的 el.click() 不切标签。 */
 const clickTab = async (win, text) => {
-  await win.evaluate((t) => {
-    const el = [...document.querySelectorAll('.dv-groupview')].filter((g) => !g.querySelector('.wb-tab--icon'))
-      .flatMap((g) => [...g.querySelectorAll('.dv-tab')]).find((x) => (x.textContent || '').trim() === t)
-    el?.click()
-  }, text)
+  await win.locator('.dv-groupview:not(:has(.wb-tab--icon)) .dv-tab').filter({ hasText: new RegExp(`^\\s*${text}\\s*$`) }).first().click()
   await sleep(1200)
 }
 
