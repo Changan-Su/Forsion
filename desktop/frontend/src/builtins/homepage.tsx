@@ -72,13 +72,12 @@ registerMessages({
   'home.wallpaper.preset.orbit': { zh: '星轨', en: 'Orbit' },
   'home.wallpaper.preset.path': { zh: '日行', en: 'Sun path' },
   'home.wallpaper.preset.paper': { zh: '素笺', en: 'Paper' },
+  'home.wallpaper.preset.rings': { zh: '扶桑环', en: 'Forsion rings' },
   'home.wallpaper.preset.glyph': { zh: '字阵', en: 'Glyphs' },
-  'home.wallpaper.hack2gateMoved': { zh: 'Hack2Gate 海报在「图片」里，和你自己上传的图片放在一起', en: 'The Hack2Gate poster is under Images, next to your own uploads' },
-  'home.wallpaper.hack2gate': { zh: 'Hack2Gate 海报', en: 'Hack2Gate poster' },
   'home.wallpaper.mine': { zh: '我的图片', en: 'My image' },
   'home.wallpaper.upload': { zh: '上传图片', en: 'Upload image' },
   'home.wallpaper.motion': { zh: '动态效果', en: 'Motion' },
-  'home.wallpaper.motionHint': { zh: '星轨的行星慢慢公转，日行的日月光晕呼吸，字阵在打字、点空白处时漾开涟漪；素笺不动', en: 'The Orbit planet slowly circles, the Sun path glow breathes, and Glyphs ripple as you type or click empty space; Paper stays still' },
+  'home.wallpaper.motionHint': { zh: '星轨的行星慢慢公转，日行的日月光晕呼吸，字阵在打字、点空白处时漾开涟漪；素笺、扶桑环不动', en: 'The Orbit planet slowly circles, the Sun path glow breathes, and Glyphs ripple as you type or click empty space; Paper and Forsion rings stay still' },
   'home.wallpaper.motionReduced': { zh: '系统已打开「减弱动态效果」，这里跟着系统', en: 'Reduce motion is on in your system, so this follows it' },
   'home.wallpaper.daily': { zh: '每日自动更新', en: 'Update daily' },
   'home.wallpaper.refresh': { zh: '刷新', en: 'Refresh' },
@@ -127,6 +126,8 @@ export const homepageSpace: SpaceDefinition = {
   icon: House,
   sidebarDefaults: HOME_SIDE_VIEWS,
   pinned: { main: [{ type: 'homepage', params: {} }] },
+  // 进主页先看到主页本体:在主页里开了别的视图、切走再切回来,前台仍是主页(2026-10-18 用户定)。桌面也认,手机另有 onePage。
+  mainPage: { type: 'homepage', params: {} },
   // 手机上主页就是主页这一页:不开标签,在它里面点开的对话 / 笔记去它们自己的 Space 开(2026-10-11 用户定:
   // 「主页就主页维持的好好地」「主页不让开标签」)。别去掉。
   onePage: true,

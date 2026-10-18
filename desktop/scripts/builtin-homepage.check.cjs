@@ -32,7 +32,7 @@
  *  12 自定义壁纸:图片进 IndexedDB、偏好进 localStorage;reload 后仍恢复,且设置面板三种来源齐全。
  *  13 壁纸材质:Chatbox 文本区与模型/模式等控件共用聚焦景深;玻璃总开关关掉时回到不透明材质。
  *  14 Bing 壁纸经固定目标 Electron IPC 暴露,不重新引入浏览器搜索或任意 URL 代理。
- *  15 主题背景:星轨 / 日行 / 素笺三个随 token 变化的图形;Hack2Gate 随包海报在「图片」来源里(浅/深两版跟 html.dark);
+ *  15 主题背景:星轨 / 日行 / 素笺 / 扶桑环 / 字阵五张随 token 变化的图形;「图片」来源只剩自己上传的那张(Hack2Gate 海报 10-18 去掉);
  *     右键空白直达紧凑、无重叠的二级收纳层。
  *  15b 壁纸动效:缺省开、在动;面板里关掉 = 停在原地(paused,不是 none);设置窗写同一份偏好(storage 事件)主页跟着变。
  *  16 ⚠️主页视角固定:.hp-root 压根不是滚动容器(壁纸 scale(1.001) 曾撑出 1px → 四边滚动条);
@@ -643,7 +643,6 @@ async function main() {
         wallpaper: root?.getAttribute('data-wallpaper') || '',
         image: document.querySelector('.hp-wallpaper')?.style.backgroundImage || '',
         source: prefs.source,
-        choice: prefs.imageChoice,
         backdrop: card ? getComputedStyle(card).backdropFilter : '',
         edgeBackdrop: getComputedStyle(document.querySelector('.hp-wallpaper-edge')).backdropFilter,
         edgeMask: getComputedStyle(document.querySelector('.hp-wallpaper-edge')).maskImage,
@@ -652,7 +651,7 @@ async function main() {
     check(
       '12 自定义壁纸:三来源齐全,原图进入设备存储并立即成为主页舞台',
       JSON.stringify(wallpaperControls.sources) === JSON.stringify(['theme', 'bing', 'image'])
-        && custom.wallpaper === 'true' && custom.image.startsWith('url("blob:') && custom.source === 'image' && custom.choice === 'custom'
+        && custom.wallpaper === 'true' && custom.image.startsWith('url("blob:') && custom.source === 'image'
         && custom.edgeBackdrop.includes('blur(') && custom.edgeMask.includes('gradient('),
       JSON.stringify({ wallpaperControls, custom }),
     )
@@ -746,20 +745,16 @@ async function main() {
       ids: [...document.querySelectorAll('.hp-theme-presets button')].map((e) => e.getAttribute('data-preset')),
       previews: [...document.querySelectorAll('.hp-theme-preview')].every((e) => { const b = getComputedStyle(e).backgroundImage; return b.includes('gradient(') || b.includes('url(') }),
     }))()`)
-    // Hack2Gate 是随包位图:走照片管线(data-wallpaper),浅/深两版跟 html.dark 走。
-    // 反向验证:删掉 homepage.css 里 html.dark 那条 → dark 仍是 light 图,必红。
+    // 「图片」来源只剩自己上传的那一格(Hack2Gate 海报 10-18 去掉);12 传过的那张还在 → 切过去直接是它。
     await win.click('.hp-wallpaper-sources button[data-source="image"]')
-    await win.click('.hp-wallpaper-images button[data-image="hack2gate"]')
     await win.waitForTimeout(150)
-    const hack2gate = await win.evaluate(`(() => {
-      const html = document.documentElement
-      const paper = document.querySelector('.hp-wallpaper')
-      const wasDark = html.classList.contains('dark')
-      const read = (dark) => { html.classList.toggle('dark', dark); return getComputedStyle(paper).backgroundImage }
-      const out = { wallpaper: document.querySelector('.hp-root')?.getAttribute('data-wallpaper') || '', light: read(false), dark: read(true), size: getComputedStyle(paper).backgroundSize }
-      html.classList.toggle('dark', wasDark)
-      return out
-    })()`)
+    const imageSource = await win.evaluate(`(() => ({
+      tiles: [...document.querySelectorAll('.hp-wallpaper-images button[data-image]')].map((e) => e.getAttribute('data-image')),
+      wallpaper: document.querySelector('.hp-root')?.getAttribute('data-wallpaper') || '',
+      image: document.querySelector('.hp-wallpaper')?.style.backgroundImage || '',
+      // 提示 | 更换 | 移除 一排:提示那列吃剩下的宽度(1fr auto auto);被别的网格规则盖成等宽列 = 回归
+      customCols: getComputedStyle(document.querySelector('.hp-wallpaper-custom')).gridTemplateColumns.split(' ').map(parseFloat),
+    }))()`)
     await win.click('.hp-wallpaper-sources button[data-source="theme"]')
     await win.click('.hp-theme-presets button[data-preset="path"]')
     // 15b 动效:日行的光晕缺省在呼吸;面板里关掉 = 停在原地;设置窗(另一扇窗 = storage 事件)打开 → 主页跟着动起来
@@ -897,17 +892,16 @@ async function main() {
     }, winBounds)
     await win.waitForTimeout(500)
     check(
-      '15 四张自适应主题图形(星轨 / 日行 / 素笺 / 字阵)+ 图片里的 Hack2Gate 可选,高密度收纳层紧凑且头部不重叠',
+      '15 五张自适应主题图形、「图片」只剩自己上传的那格,高密度收纳层紧凑且头部不重叠',
       themeStage.wallpaper === '' && themeStage.inlineImage === '' && themeStage.backgroundImage.includes('gradient(')
         && themeStage.preset === 'path' && themeStage.art === 1
-        // 字阵(glyph)是 10-18 加的第四张(0138c3e3),当时这一条没跟上
-        && JSON.stringify(themePresets.ids) === JSON.stringify(['orbit', 'path', 'paper', 'glyph']) && themePresets.previews
-        && hack2gate.wallpaper === 'true' && hack2gate.light.includes('hack2gate-light') && hack2gate.dark.includes('hack2gate-dark') && hack2gate.size === 'cover'
+        && JSON.stringify(themePresets.ids) === JSON.stringify(['orbit', 'path', 'paper', 'rings', 'glyph']) && themePresets.previews
+        && JSON.stringify(imageSource.tiles) === JSON.stringify(['custom']) && imageSource.wallpaper === 'true' && imageSource.image.startsWith('url("blob:') && imageSource.customCols.length === 3 && imageSource.customCols[0] > imageSource.customCols[1] + 40 && imageSource.customCols[0] > imageSource.customCols[2] + 40
         && rightClickOrganizer.organizer === 1 && rightClickOrganizer.blur.includes('blur(')
         && rightClickOrganizer.panelWidth <= 600 && rightClickOrganizer.columns === 6
         && rightClickOrganizer.columnGap <= 8 && rightClickOrganizer.tileWidth <= 80
         && rightClickOrganizer.headGap >= 4 && rightClickOrganizer.gridHeight <= 414,
-      JSON.stringify({ themePresets, hack2gate, themeStage, rightClickOrganizer }),
+      JSON.stringify({ themePresets, imageSource, themeStage, rightClickOrganizer }),
     )
     check(
       '16 ⚠️主页视角固定(不滚)、矮窗口不裁关键控件、右键空白能原路退出收纳层',
@@ -939,17 +933,12 @@ async function main() {
           await win.evaluate(`document.querySelector('.lucide-moon')?.closest('button')?.click()`)
           await win.waitForTimeout(900)
         }
-        // Hack2Gate 是位图、浅/深两张,三张主题图跟着 token 走,都只能看图自查;最后切回日行,后续用例状态不变。
-        for (const preset of ['hack2gate', 'orbit', 'paper', 'path']) {
+        // 五张主题图跟着 token 走,只能看图自查;最后切回日行,后续用例状态不变。
+        for (const preset of ['orbit', 'paper', 'rings', 'glyph', 'path']) {
           await win.click('.hp-wallpaper-button')
           await win.waitForSelector('.hp-wallpaper-sheet')
-          if (preset === 'hack2gate') {
-            await win.click('.hp-wallpaper-sources button[data-source="image"]')
-            await win.click('.hp-wallpaper-images button[data-image="hack2gate"]')
-          } else {
-            await win.click('.hp-wallpaper-sources button[data-source="theme"]')
-            await win.click(`.hp-theme-presets button[data-preset="${preset}"]`)
-          }
+          await win.click('.hp-wallpaper-sources button[data-source="theme"]')
+          await win.click(`.hp-theme-presets button[data-preset="${preset}"]`)
           await win.click('.hp-wallpaper-head > button')
           await win.waitForTimeout(900)
           const out = path.join(os.tmpdir(), `forsion-homepage.${mode}.${preset}.png`)

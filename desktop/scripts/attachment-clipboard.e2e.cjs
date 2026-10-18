@@ -25,8 +25,8 @@ async function main() {
   fs.mkdirSync(vault, { recursive: true })
   fs.mkdirSync(`${userData}-dev`, { recursive: true })
   fs.writeFileSync(path.join(vault, 'Note.md'), '# Note\n')
-  // 复用仓内已被 Electron 真正加载过的 JPEG,避免“看似 PNG、nativeImage 实际判空”的坏 fixture。
-  fs.copyFileSync(path.join(ROOT, 'frontend/src/assets/wallpapers/hack2gate-light.jpg'), path.join(vault, 'probe.jpg'))
+  // 真 JPEG(原先的 Hack2Gate 浅色壁纸,10-18 壁纸去掉后挪进 fixtures),避免“看似 PNG、nativeImage 实际判空”的坏 fixture。
+  fs.copyFileSync(path.join(ROOT, 'scripts/fixtures/clipboard-probe.jpg'), path.join(vault, 'probe.jpg'))
   fs.writeFileSync(path.join(vault, 'sample.txt'), 'attachment body\n')
   fs.writeFileSync(path.join(`${userData}-dev`, 'amadeus-config.dev.json'), JSON.stringify({ lastVault: vault, localVault: vault }, null, 2))
 

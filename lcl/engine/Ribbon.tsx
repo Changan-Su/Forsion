@@ -6,11 +6,11 @@
  *    两区高度弹性分配,都挤时各保一半。
  *  - 右键空白/两区 + 号 = 新建 Space / 添加命令(从命令面板选)/ 新建收纳夹;账号卡(pinned)钉死最底。
  *  - 左面板收起时,指针停在 Space 图标上 → 右侧浮出那个 Space 的左面板(SpacePeek),可直接操作;移开即收。 */
-import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from 'react'
+import { useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronDown, ChevronUp, ChevronsLeft, ChevronsRight, Folder as FolderIcon, MoreHorizontal, Plus, Zap } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
-import { useRibbonStore, rankIds, reorderBase, unionOrder, moveTo, slotIndexAt, ribbonActions, isRibbonAutoHome, recentRoom, type RibbonZone, type RibbonFolder } from './ribbonRegistry'
+import { useRibbonStore, useDotted, rankIds, reorderBase, unionOrder, moveTo, slotIndexAt, ribbonActions, isRibbonAutoHome, recentRoom, type RibbonZone, type RibbonFolder } from './ribbonRegistry'
 import { RIBBON_ICON_NAMES, iconByName } from './ribbonIcons'
 import { useCommandStore, openCommandPicker, addCommand, removeCommand } from './commandRegistry'
 import { useSpaceStore } from './spaceRegistry'
@@ -55,15 +55,6 @@ function slotHint(i: number): string {
   if (i >= 9) return ''
   const hk = effectiveHotkey({ id: `space-slot-${i + 1}`, hotkey: `mod+${i + 1}` })
   return hk ? formatHotkey(hk, isMacPlatform()) : ''
-}
-
-/** 带 dot 的那几项里此刻亮着的 id(一处订阅,图标、「…」、收纳夹三处共用)。 */
-function useDotted(items: RibbonItem[]): Set<string> {
-  // 按 items 本身重订阅:同 id 的项换了 dot 来源(重注册)也要跟着换,别只看 id 序列(Codex 评审)
-  const withDot = useMemo(() => items.filter((i) => i.dot), [items])
-  const subscribe = useCallback((cb: () => void) => { const offs = withDot.map((i) => i.dot!.subscribe(cb)); return () => { for (const off of offs) off() } }, [withDot])
-  const key = useSyncExternalStore(subscribe, () => withDot.filter((i) => i.dot!.get()).map((i) => i.id).join('\n'))
-  return useMemo(() => new Set(key ? key.split('\n') : []), [key])
 }
 
 function RibbonItemView({ item, expanded, dot }: { item: RibbonItem; expanded: boolean; dot?: boolean }) {

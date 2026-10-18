@@ -118,6 +118,9 @@
 }
 .mb-icon-btn:active { background: var(--bg-hover, rgba(0, 0, 0, 0.06)); transform: scale(0.92); }
 .mb-icon-btn--ghost { pointer-events: none; opacity: 0; }
+/* 「⋯」上的提示红点(RibbonItem.dot,圆点本身是 engine.css 的 .rb-badge.rb-dot)。不用 :has() —— 老 WebView 不认。 */
+.mb-has-dot { position: relative; }
+.mb-icon-btn.mb-has-dot > .rb-dot { top: 8px; right: 8px; }
 
 .mb-main {
   flex: 1 1 auto;
@@ -282,6 +285,8 @@
   transition: background 0.12s ease;
 }
 .mb-sheet-row:active { background: var(--bg-hover, rgba(0, 0, 0, 0.06)); }
+/* 「⋯」里亮红点的那一行:点排在行尾 */
+.mb-sheet-row > .rb-dot { position: static; flex: none; margin-left: auto; }
 .mb-sheet-card { padding: 4px 2px; }
 /* 「⋯」里声明了 moreGroup 的命令组(插件命令):节标题 + 分隔线,行沿用 .mb-sheet-row。 */
 .mb-sheet-group { margin-top: 6px; padding-top: 6px; border-top: var(--border-width, 1px) solid var(--border, rgba(0, 0, 0, 0.1)); }

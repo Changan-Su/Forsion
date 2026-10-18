@@ -1,0 +1,92 @@
+/* 底部视图岛(ViewIsland)+ 网格浮层 + 全屏。随画布 chunk 一起加载。
+   岛的皮照抄引擎自己的缩放 / 撤销岛(excalidraw.css 的 .undo-redo-buttons):外层岛底色 + 1px 外圈,
+   按钮底色 --color-surface-low、两端圆角 —— 三座岛并排时要看不出哪座是后加的。 */
+.amx-boardhost .excalidraw .amx-viewisle-wrap { position: relative; display: flex; margin-inline-start: 8px; } /* 和缩放 → 撤销之间同一道 8px */
+/* 查看模式下引擎把撤销岛藏了,视图岛会整体左移、刚点的「查看」不在指针下了(走查 P2-3)→ 把撤销岛那块位置空出来。
+   撤销岛 = 两颗 --lg-button-size 的按钮 + 引擎给它的 0.6em 左距;再加我们自己那道 8px。
+   ⚠️ 挂在 data-viewmode(= appState.viewModeEnabled)上,别挂 .excalidraw--view-mode:引擎选「链接到元素」时也加那个类,撤销岛却还在。 */
+.amx-boardhost .excalidraw .amx-viewisle-wrap[data-viewmode] { margin-inline-start: calc(8px + 0.6em + 2 * var(--lg-button-size, 2.25rem)); }
+/* 禅模式:引擎把整条 footer 平移出画面,但按钮仍可聚焦 —— Tab 到它会把画布的 overflow 容器滚上去、露出下面的 App。
+   滑完再藏(visibility 晚 0.5s 翻,同工具岛那条),退出时立刻可见。 */
+.amx-boardhost .excalidraw .footer-center .amx-viewisle-wrap { transition: visibility 0s; }
+.amx-boardhost .excalidraw .footer-center.layer-ui__wrapper__footer-left--transition-bottom .amx-viewisle-wrap { visibility: hidden; transition: visibility 0s linear 0.5s; }
+.amx-boardhost .excalidraw .amx-viewisle {
+  display: flex;
+  border-radius: var(--border-radius-lg);
+  overflow: hidden;
+  background-color: var(--island-bg-color);
+  box-shadow: 0 0 0 1px var(--color-surface-lowest);
+}
+.amx-boardhost .excalidraw .amx-viewisle .amx-tool {
+  width: var(--lg-button-size, 2.25rem);
+  height: var(--lg-button-size, 2.25rem);
+  border-radius: 0;
+  background-color: var(--color-surface-low);
+}
+/* 悬停 / 开着都是半透明的叠色,必须**叠在按钮的灰底上**:直接换掉 background-color 会露出岛的白底,
+   悬停反而变浅、开着和关着看不出区别(奶油配色实测)。开着再多叠一层 --button-active-bg,带上主题色的色相。 */
+.amx-boardhost .excalidraw .amx-viewisle .amx-tool:hover {
+  background-image: linear-gradient(var(--button-hover-bg, rgba(127, 127, 127, 0.12)) 0 0);
+}
+.amx-boardhost .excalidraw .amx-viewisle .amx-tool[data-on] {
+  background-image: linear-gradient(var(--color-primary-light) 0 0), linear-gradient(var(--button-active-bg, rgba(127, 127, 127, 0.2)) 0 0);
+  color: var(--color-primary);
+}
+
+/* 网格浮层:向上弹,左缘对齐岛。字段沿用汉堡菜单里纸张面板的 .amx-bs-* 一套。 */
+.amx-boardhost .excalidraw .amx-gridpop {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 8px);
+  z-index: 5;
+  width: 248px;
+  padding: 12px 14px;
+  border-radius: var(--border-radius-lg);
+  background-color: var(--island-bg-color);
+  box-shadow: var(--card-shadow); /* 统一高程 token(DESIGN §7-6),不用引擎的 --shadow-island */
+}
+.amx-boardhost .excalidraw .amx-gridpop .amx-bs { padding: 0; gap: 9px; }
+.amx-boardhost .excalidraw .amx-gridpop-h {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: var(--ui-font-body, 13px);
+  font-weight: 600;
+}
+.amx-boardhost .excalidraw .amx-gridpop-kbd { font-size: var(--ui-font-caption, 11px); font-weight: 400; opacity: 0.5; }
+.amx-boardhost .excalidraw .amx-gridpop-row { display: flex; align-items: center; gap: 6px; }
+.amx-boardhost .excalidraw .amx-gridpop-nums { display: grid; grid-template-columns: 1fr auto auto; align-items: center; column-gap: 6px; row-gap: 9px; }
+/* 百分比定宽:100% 和两位数来回时滑杆轨道不跟着挪(走查 P3-10) */
+.amx-boardhost .excalidraw .amx-gridpop-pct { flex: none; width: 5ch; text-align: end; font-variant-numeric: tabular-nums; } /* 5ch 装得下「100%」(% 比数字宽) */
+.amx-boardhost .excalidraw .amx-gridpop input[type='checkbox'] { accent-color: var(--color-primary); }
+
+/* 全屏:窗口进系统全屏(documentElement.requestFullscreen,引擎挂在 body 上的弹层仍在全屏里),
+   白板盖住 App 的外框。 */
+.amx-boardhost[data-full] { position: fixed !important; inset: 0; z-index: 2000; }
+/* 「退出全屏」胶囊:落在刚才那颗全屏按钮的位置(left / top 由画布按按钮中心给),再点一下就出去;几秒后淡出卸掉,悬停时停住。
+   皮同禅模式的退出胶囊。 */
+.amx-boardhost .amx-fullhint {
+  position: absolute;
+  z-index: 10; /* 挂在 .excalidraw 根里,要压过引擎的 UI 层(4) */
+  transform: translate(-50%, -50%);
+  padding: 7px 14px;
+  border: 0;
+  border-radius: 999px;
+  background-color: var(--color-surface-low);
+  outline: 1px solid var(--color-surface-lowest);
+  box-shadow: var(--card-shadow);
+  color: var(--color-on-surface);
+  font: inherit;
+  font-size: var(--ui-font-meta, 12px);
+  white-space: nowrap;
+  cursor: pointer;
+  animation: amx-fullhint 3s ease forwards;
+}
+.amx-boardhost .amx-fullhint:hover { animation-play-state: paused; background-image: linear-gradient(var(--button-hover-bg, rgba(127, 127, 127, 0.12)) 0 0); }
+.amx-boardhost .amx-fullhint-kbd { opacity: 0.55; margin-inline-start: 4px; }
+/* 「减少动态效果」:全局把动画压成 0.001ms,forwards 会让胶囊一出现就透明 → 这档不播,由画布的计时器 3 秒后卸掉 */
+@media (prefers-reduced-motion: reduce) { .amx-boardhost .amx-fullhint { animation: none !important; } }
+@keyframes amx-fullhint {
+  0%, 70% { opacity: 1; }
+  100% { opacity: 0; }
+}

@@ -16,7 +16,7 @@ import {
   registerSpace, unregisterSpace, addRibbonIcon, removeRibbonIcon, setActiveSpace, useSpaceStore,
   useWorkspace, deleteNamedLayout, clearLayout, getActiveSpace, getView, label, spaceLayoutName,
   setActiveSpaceCold, BOOT_ACTIVE_SPACE_ID, UI_MODE, WINDOW_SPACE_ID,
-  spaceLayoutsWereReset, bootLayoutFellThrough, namedLayoutRestorable, liveLayoutOwner,
+  spaceLayoutsWereReset, bootLayoutFellThrough, namedLayoutRestorable, liveLayoutOwner, landOnMainPage,
 } from '@lcl/engine'
 import type { Leaf, SpaceDefinition, SpaceIcon, PersistedPanel } from '@lcl/engine'
 import { SpaceButton } from './components/SpaceButton'
@@ -155,6 +155,7 @@ function specToDefinition(spec: SpaceSpec, iconUrl?: string): SpaceDefinition {
     // 配方条目上的 pinned:true → 固定 View(引擎按 Space 声明现判,不进布局存档)
     pinned: { main: toPanels(spec.layout.main.filter((p) => p.pinned)), left: toPanels(spec.layout.left.filter((p) => p.pinned)), right: toPanels(spec.layout.right.filter((p) => p.pinned)) },
     launcherViews: toPanels(spec.layout.main),
+    mainPage: toPanels(spec.layout.main.filter((p) => p.mainPage))[0], // 配方条目上的 mainPage:true → 默认主页
     bottomSpan: spec.layout.bottomSpan,
     build() {
       ws().setSidebarDefaults(sides)
@@ -294,6 +295,7 @@ export function settleAsyncStartupSpace(): void {
     if (state.activeSpaceId !== want) setActiveSpaceCold(want)
     configure()
     ws().resetLayout()
+    landOnMainPage() // onReady 那次落点时它还没注册,在这儿补(setActiveSpace 那条路自己会落)
     if (final) asyncStartupSpaceResolved = true
     return
   }
@@ -319,6 +321,7 @@ export function settleAsyncStartupSpace(): void {
         // onReady 已按回落 Space 的 bottomSpan 摆过还原出来的布局 → 按本 Space 重摆(Dockview 未就绪则 no-op)
         ws().realignRegions?.()
       }
+      landOnMainPage()
     } else setActiveSpace(want)
   } else if (ws().sideProfileKey !== want) {
     // 纯插件产品(PRODUCT.spaces 为空):bootstrap 时一个 Space 都没有,画像(含 bottomSpan)从没按它设过(Codex 评审)

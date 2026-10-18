@@ -59,6 +59,19 @@ export function onePageLanding(
   }
 }
 
+/** 有默认主页的 Space(types.ts 的 mainPage)进来时的落点:主区已有这种视图 → `activate` 它(已在前台是 null);
+ *  没有 → `open` 它,主区只剩空态占位时就地换掉(`newTab: false`),否则另开标签。没声明是空操作。 */
+export function mainPageLanding(
+  space: { mainPage?: PersistedPanel } | undefined,
+  mainTabs: Array<{ id: string; type: string; front: boolean }>,
+): { activate: string | null; open: (PersistedPanel & { newTab: boolean }) | null } {
+  const page = space?.mainPage
+  if (!page) return { activate: null, open: null }
+  const tab = mainTabs.find((t) => t.type === page.type)
+  if (tab) return { activate: tab.front ? null : tab.id, open: null }
+  return { activate: null, open: { ...page, newTab: mainTabs.some((t) => t.type !== 'home') } }
+}
+
 /** 引擎自己的占位视图:不是内容,哪个 Space 都不算它的主人。 */
 const PLACEHOLDER_VIEWS = new Set(['launcher', 'home', 'sidebar-empty'])
 
