@@ -400,7 +400,9 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onOpenTurn }: {
             const b = boxes.get(c.key)!
             const dim = focus && !activePath.includes(c.key)
             const streaming = c.answers.some((m) => m.status === 'streaming')
-            const folded = !dim && !streaming && tall.has(c.key) && !expanded.has(c.key)
+            // 一上来就限高(短卡不受影响):等量出「长」再折,先量到的是展开高,镜头按它落位后卡一缩就落空了
+            const clamp = !dim && !streaming && !expanded.has(c.key)
+            const folded = clamp && tall.has(c.key)
             return (
               <div
                 key={c.key}
@@ -419,7 +421,7 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onOpenTurn }: {
                 }}
               >
                 {c.user && <div className="t2cv-q" title={t('chatcanvas.openHint')}>{questionText(c.user)}</div>}
-                <div className="t2cv-body" data-folded={folded ? '' : undefined}>
+                <div className="t2cv-body" data-clamp={clamp ? '' : undefined} data-folded={folded ? '' : undefined}>
                   <div className="t2cv-inner" ref={track} data-cv-inner={c.key}>
                     {c.answers.map((m) => (
                       <EditorialMessage key={m.id} msg={m} fileCtx={ctxFor(c.sid)} handlers={handlersFor(c.sid, m.id)} showWaitDetails={showWaitDetails} />

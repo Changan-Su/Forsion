@@ -109,6 +109,13 @@ async function main() {
     r.check('C2 四根线(每张非根卡一根)', shape.edges === 4, String(shape.edges))
     const q = await card(B1, 'c1').locator('.t2cv-q').textContent()
     r.check('C3 卡头是问题,卡里是真消息渲染', q.includes('Yjs') && (await card(B1, 'c1').locator('.t2-content').count()) === 1, q)
+    await win.waitForTimeout(600) // 长卡量完折起之后
+    const land = await win.evaluate(() => {
+      const c = document.querySelector('.t2cv-card[data-sel]')?.getBoundingClientRect()
+      const s = document.querySelector('.t2cv-stage').getBoundingClientRect()
+      return c && { sel: document.querySelector('.t2cv-card[data-sel]').dataset.cvNode, top: Math.round(c.top - s.top), bottom: Math.round(c.bottom - s.top), h: Math.round(s.height) }
+    })
+    r.check('L1 一打开镜头落在当前这一支最后一张卡上(不落进空白)', !!land && land.sel === `${R}:u3` && land.top >= 0 && land.top < land.h - 40, JSON.stringify(land))
 
     // ── 竖排(缺省):子卡在下、兄弟并排 ──
     const [u1, u2, c1, d1] = [await rect(R, 'u1'), await rect(R, 'u2'), await rect(B1, 'c1'), await rect(B2, 'd1')]
@@ -122,7 +129,7 @@ async function main() {
     const fold = card(R, 'u2').locator('.t2cv-more')
     r.check('R2 超长回答在卡里折起,底部「展开全文」', (await fold.count()) === 1 && (await card(R, 'u2').locator('.t2cv-body[data-folded]').count()) === 1, '')
     const hFolded = (await rect(R, 'u2')).h
-    await fold.click()
+    await fold.evaluate((b) => b.click()) // 按钮常在视口外,Playwright 平移不了画布
     await win.waitForFunction((k) => !document.querySelector(`.t2cv-card[data-cv-node="${k}"] .t2cv-body[data-folded]`), `${R}:u2`, { timeout: 5_000 })
     await win.waitForTimeout(400)
     const hFull = (await rect(R, 'u2')).h

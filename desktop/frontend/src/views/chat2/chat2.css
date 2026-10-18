@@ -1265,7 +1265,8 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 }
 .t2cv-body { position: relative; }
 /* 超长的回答(约 40 行)在卡里折起,底部原地「展开全文」 */
-.t2cv-body[data-folded] { max-height: 880px; overflow: hidden; -webkit-mask-image: linear-gradient(#000 calc(100% - 72px), transparent); mask-image: linear-gradient(#000 calc(100% - 72px), transparent); }
+.t2cv-body[data-clamp] { max-height: 880px; overflow: hidden; }
+.t2cv-body[data-folded] { -webkit-mask-image: linear-gradient(#000 calc(100% - 72px), transparent); mask-image: linear-gradient(#000 calc(100% - 72px), transparent); }
 .t2cv-more {
   display: block; margin: 6px auto 2px; padding: 3px 12px; border: 1px solid var(--border); border-radius: var(--radius-pill, 999px);
   background: transparent; color: var(--text-muted); font: inherit; font-size: var(--ui-font-meta, 12px); cursor: pointer;
