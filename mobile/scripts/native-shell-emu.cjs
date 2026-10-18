@@ -646,7 +646,8 @@ const tabCountText = (list) => {
   // Two-level navigation (a Space with a left list): `.mb-shell[data-nav]` is 'list' (the Space's first level, the left
   // panel full-screen, bottom bar shown) or 'detail' (its main view, no bottom bar, the left button goes back).
   // Without the attribute the Space has no list level: its main view is the first level and a left panel is a drawer.
-  const nav = "document.querySelector('.mb-shell')?.dataset.nav || ''"
+  // In brackets: interpolated as `${nav} === 'list'` it read `… || ('' === 'list')` — any level at all, the wait passed at once.
+  const nav = "(document.querySelector('.mb-shell')?.dataset.nav || '')"
   /** Show the left panel: a two-level Space's list (from its detail page: the back arrow) or a drawer Space's drawer.
    *  A Space without a left panel (Home) has neither: use Tangu's list. */
   async function openDrawer() {
@@ -1031,15 +1032,23 @@ const tabCountText = (list) => {
     h.tapAt(title.rect.cx, title.rect.cy)
     await h.pause(500)
     assert.deepEqual(await taps(), [], 'a tap on a capsule fell through to the page')
-    // a swipe that starts between the capsules still drags the list in
+    // a swipe that starts between the capsules still drags the list in: the page takes it as its own drag of the left
+    // panel (`data-drag`, moves prevented). Whether it then opens is speed: from the gap the finger can travel ~0.36 of
+    // the width, short of half, so only a fling opens it — and `input swipe`, fast enough to fling, lifts under load with
+    // no move at the end (10-18: last move at 140 ms, up 113 ms later → "stopped", springs back). `drag()` reports
+    // every position but is too slow to fling; the list is entered by the back arrow.
     await traceTouches()
-    h.adb('shell', 'input', 'swipe', String(gap.x), String(gap.y), String(Math.min(screen.w - 20, gap.x + Math.round(260 * density))), String(gap.y), '220')
-    assert.ok(await h.waitPage(cdp, `${nav} === 'list'`, 5000), `a swipe starting between the capsules did not bring the list back (touch ${await traceOff()})`)
-    await h.pause(500)
-    // beside the dock
-    list = ui()
-    const dock = h.byId(list, 'nativeChrome.dock')
+    drag(gap.x, gap.y, Math.min(screen.w - 20, gap.x + Math.round(260 * density)), gap.y)
+    await h.pause(800)
     const trace = await traceOff()
+    const dpr = await cdp.eval('devicePixelRatio')
+    const start = JSON.parse(trace).find((e) => e[0] === 'start')
+    assert.ok(start && near(start[1] * dpr, gap.x, 6) && JSON.parse(trace).some((e) => e[0] === 'move' && e[5] === 'P' && e[6] === 'left'),
+      `a swipe starting between the capsules (${gap.x},${gap.y}) did not drag the list (touch ${trace})`)
+    await openDrawer()
+    // beside the dock
+    list = await waitDock()
+    const dock = h.byId(list, 'nativeChrome.dock')
     assert.ok(dock && dock.rect.left > 30, `no room beside the dock to test (nav ${await cdp.eval(nav)}, touch ${trace})`)
     await cdp.eval(arm)
     h.tapAt(Math.round(dock.rect.left / 2), dock.rect.cy)
@@ -3951,11 +3960,17 @@ const tabCountText = (list) => {
     assert.equal(textOf(list, 'nativeSheet.prompt.field'), 'seed')
     await tapId('nativeSheet.prompt.field', list)
     await h.pause(400)
+    // evidence for a miss (10-18: one `v` too many after the seed): the field's head after each step, and whether the keyboard was up
+    const steps = []
+    const step = (name) => steps.push(`${name}: ${JSON.stringify(textOf(ui(), 'nativeSheet.prompt.field').slice(0, 8))}${imeShown() ? ' (keyboard up)' : ''}`)
     h.key(123) // MOVE_END
+    step('end')
     h.key(279) // PASTE
     await h.pause(1500)
+    step('paste 1')
     h.key(279)
     await h.pause(2500)
+    step('paste 2')
     list = ui()
     // Only proves the paste arrived: accessibility text is itself cut at 100,000 chars, so it reads the same with or
     // without the clip. The answer below is what tells them apart (unclipped input used to come back as a cancel).
@@ -3963,7 +3978,7 @@ const tabCountText = (list) => {
     assert.ok(held >= MAX, `paste did not arrive: the field holds ${held} chars`)
     await tapId('nativeSheet.prompt.ok', list)
     const out = await h.waitPage(cdp, 'window.__e2ePrompt', 8000)
-    assert.deepEqual(out, { cancelled: false, length: MAX, head: 'seedxxxx', tail: 'xxxx' })
+    assert.deepEqual(out, { cancelled: false, length: MAX, head: 'seedxxxx', tail: 'xxxx' }, `got ${JSON.stringify(out)} · field ${steps.join(' · ')}`)
     await waitSheet(false)
   })
 
@@ -4612,14 +4627,18 @@ const tabCountText = (list) => {
   await check('English labels arrive from shared i18n (bar + sheets)', async () => {
     await seed('en')
     await cdp.eval("localStorage.setItem('forsion_theme_pref', 'dark'); localStorage.setItem('forsion_theme', 'dark'); true")
-    await reload()
-    // evidence for a miss: every change of Space / level from here on (the shell element may be replaced: then it stops)
+    // evidence for a miss: who switched Space after the reload — every write of the active Space, from the first script on, with its stack
+    const { identifier } = await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: `(() => { const t0 = performance.now(), log = window.__activeWrites = [], set = Storage.prototype.setItem
+      Storage.prototype.setItem = function (k, v) { if (k === 'forsion_tangu_active_space') log.push([v, Math.round(performance.now() - t0), (new Error().stack || '').split('\\n').slice(2, 7).map((l) => l.trim().replace(/https?:\\/\\/[^/]+\\//, '')).join(' < ')]); return set.call(this, k, v) } })()` })
+    try { await reload() } finally { await cdp.send('Page.removeScriptToEvaluateOnNewDocument', { identifier }).catch(() => {}) }
+    // … and every change of Space / level from here on (the shell element may be replaced: then it stops)
     await cdp.eval(`(() => { const shell = document.querySelector('.mb-shell'), t0 = performance.now(), log = window.__spaceLog = [[shell.dataset.space, shell.dataset.nav, 0]]
       new MutationObserver(() => log.push([shell.dataset.space, shell.dataset.nav, Math.round(performance.now() - t0)])).observe(shell, { attributes: true, attributeFilter: ['data-space', 'data-nav'] }); return true })()`)
     await toSpace('tangu')
     await closeDrawer() // the main view: its left button goes back to the list
     let list = ui()
-    assert.equal(descOf(list, 'nativeChrome.left'), 'Back', `not on Tangu's main view (space / nav changes since the reload: ${await cdp.eval('JSON.stringify(window.__spaceLog)')})`)
+    console.log(`  after the reload: ${await cdp.eval('JSON.stringify(window.__spaceLog)')} · writes ${await cdp.eval('JSON.stringify((window.__activeWrites || []).map((w) => w.slice(0, 2)))')}`)
+    assert.equal(descOf(list, 'nativeChrome.left'), 'Back', `not on Tangu's main view (space / nav changes since the reload: ${await cdp.eval('JSON.stringify(window.__spaceLog)')}; active Space written: ${await cdp.eval('JSON.stringify(window.__activeWrites)')})`)
     shot('14-shell-dark-en')
     await tapId('nativeChrome.more', list)
     list = await waitSheet(true)
