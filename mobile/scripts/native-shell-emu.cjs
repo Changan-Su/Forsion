@@ -3846,31 +3846,61 @@ const tabCountText = (list) => {
   await check('prompt (askString): homepage "new folder" returns typed text to the web side', async () => {
     await goHome()
     assert.equal(await cdp.eval(folderTiles), 0, 'fixture name already present')
+    // Every key waits for the state it acts on (no fixed pauses). The sheet focuses its field and raises the keyboard
+    // itself; Done answers with what the field holds right then — under load the tail of `input text` was still on its
+    // way 300 ms later (10-18/19: answered "E2E2526" / "E2E29" for E2E25260x / E2E295614, 2 runs in 10, the field
+    // focused with the keyboard up and no key reaching the page). The cancel path below goes by the same rule.
+    const field = (l) => h.byId(l, 'nativeSheet.prompt.field')
+    const fieldState = (l) => { const f = field(l); return f ? `${JSON.stringify(f.text)} focused=${f.focused}` : 'no field' }
+    const steps = [] // evidence for a miss: the field per step, what the sheet answered, keys the page got instead
+    const step = (name, l = ui()) => steps.push(`${name}: ${fieldState(l)} sheet=${sheetOpen(l)}${imeShown() ? ' (keyboard up)' : ''}`)
+    await cdp.eval(`(() => { window.__e2eKeys = []; window.__e2eLastSheet = null; const C = window.Capacitor
+      if (!window.__e2eKeyHook) { window.__e2eKeyHook = true; window.addEventListener('keydown', (e) => window.__e2eKeys.push(e.key), true)
+        const np = C.nativePromise.bind(C); C.nativePromise = (p, m, o) => { const r = np(p, m, o)
+          if (p === 'NativeSheet' && m === 'present') { window.__e2eLastSheet = 'pending'; r.then((v) => (window.__e2eLastSheet = v), (e) => (window.__e2eLastSheet = { error: String(e) })) }
+          return r } }
+      return true })()`)
+    const evidence = async () => `want ${FOLDER} · ${steps.join(' · ')} · sheet answered ${JSON.stringify(await cdp.eval('window.__e2eLastSheet'))} · page keys [${await cdp.eval("window.__e2eKeys.join(' ')")}] · tiles ${JSON.stringify(await cdp.eval("[...document.querySelectorAll('.hp-tile')].map((e) => e.textContent.trim().slice(0, 16))"))}`
+    const focusedWithKeyboard = async () => {
+      const r = await h.waitNodes((l) => (field(l)?.focused === 'true' && imeShown() ? l : null), { timeout: 8000 })
+      if (!r.hit) step('no focus / keyboard')
+      assert.ok(r.hit, `the prompt field did not get the focus and the keyboard · ${await evidence()}`)
+    }
     const openPrompt = newFolderPrompt
     await openPrompt()
     let list = await waitSheet(true)
-    assert.ok(h.byId(list, 'nativeSheet.prompt.field'), 'prompt field missing')
-    await h.pause(500)
+    assert.ok(field(list), 'prompt field missing')
+    steps.push(`opened: ${fieldState(list)}`)
+    await focusedWithKeyboard()
     shot('09-prompt-keyboard')
-    // clear the prefilled name, type ours, confirm with the IME action (Done)
+    // clear the prefilled name, type ours, confirm with the IME action (Done) once the field reads it
     for (let i = 0; i < 12; i++) h.key(67)
     h.adb('shell', 'input', 'text', FOLDER)
-    await h.pause(300)
+    const typed = await h.waitNodes((l) => (field(l)?.text === FOLDER ? l : null), { timeout: 8000 })
+    if (!typed.hit) step('typed')
+    assert.ok(typed.hit, `the field never read the typed name · ${await evidence()}`)
     h.key(66)
     let closed = await h.waitNodes((l) => (!sheetOpen(l) ? l : null), { timeout: 3000 })
-    if (!closed.hit) { await tapId('nativeSheet.prompt.ok'); closed = await h.waitNodes((l) => (!sheetOpen(l) ? l : null), { timeout: 3000 }) }
-    assert.ok(closed.hit, 'prompt did not close')
-    assert.ok(await h.waitPage(cdp, `(${folderTiles}) > 0`, 5000), 'typed folder name did not reach the web side')
+    if (!closed.hit) { step('enter did not close'); await tapId('nativeSheet.prompt.ok'); closed = await h.waitNodes((l) => (!sheetOpen(l) ? l : null), { timeout: 3000 }) }
+    assert.ok(closed.hit, `prompt did not close · ${await evidence()}`)
+    assert.ok(await h.waitPage(cdp, `(${folderTiles}) > 0`, 5000), `typed folder name did not reach the web side · ${await evidence()}`)
     await h.pause(400)
     shot('10-prompt-result')
-    // cancel path: system back = nothing created
+    // cancel path: system back = nothing created. Back once the keyboard is up (normally it only puts the keyboard away), again
+    // once it is gone: two backs after a fixed 400 ms once left the sheet up with the keyboard down (10-18, 1 run in 20).
     const count = await cdp.eval(folderTiles)
+    steps.length = 0
+    await cdp.eval('(window.__e2eKeys = [], window.__e2eLastSheet = null, true)')
     await openPrompt()
     list = await waitSheet(true)
-    h.key(4) // first back may only hide the IME
-    await h.pause(400)
-    if (sheetOpen(ui())) h.key(4)
-    await waitSheet(false)
+    steps.push(`opened: ${fieldState(list)}`)
+    await focusedWithKeyboard()
+    h.key(4)
+    for (let i = 0; i < 15 && imeShown(); i++) await h.pause(200)
+    const afterBack = ui()
+    if (sheetOpen(afterBack)) h.key(4)
+    step('back 1 (then back 2 if open)', afterBack)
+    try { await waitSheet(false) } catch (e) { step('now'); throw new Error(`${e.message} · ${await evidence()}`) }
     assert.ok(resumed(), 'back left the app')
     assert.equal(await cdp.eval(folderTiles), count, 'cancel changed the folders')
   })
