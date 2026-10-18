@@ -75,6 +75,8 @@ export interface GestureAdapter {
   minH: number
   /** 松手后把重叠的卡推开(与画布同款);关掉则允许叠放。 */
   repel?: boolean
+  /** 空白处左键拖 = 平移(没有框选这回事的画布,如 Chat 画布;缺省是框选)。 */
+  blankPan?: boolean
 }
 
 export interface GestureApi {
@@ -303,7 +305,7 @@ export function useCanvasGestures(
       // 成品页的空白处什么都不做:不平移、不框选。点空白 = 退出交互态(上面那句 setSel 触发)。
       if (locked) return
       // 触屏 / 中键 / 空格 / pan 键:空白拖 = 平移(08-23 拍板,代价 = 触屏没有框选)。
-      const wantPan = e.pointerType === 'touch' || e.button === 1 || e.altKey
+      const wantPan = !!A().blankPan || e.pointerType === 'touch' || e.button === 1 || e.altKey
       const vp = V().vpRef.current
       capture()
       if (wantPan) {

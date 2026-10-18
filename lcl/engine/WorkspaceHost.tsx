@@ -302,6 +302,16 @@ function makeSuffixActions(): React.FC<IDockviewHeaderActionsProps> {
   }
 }
 
+/** 主区组标签栏右端给**当前视图**留的空位(Chat 的「对话 / 画布」胶囊)。视图 portal 进 `[data-view-chrome="<自己的 leaf id>"]`:
+ *  一组只有一个空位、只标活动那个标签的 id,同组没在前台的视图找不到它,不会各投一份。没有视图投东西时不占位。 */
+export const VIEW_CHROME_ATTR = 'data-view-chrome'
+function makeViewChrome(): React.FC<IDockviewHeaderActionsProps> {
+  return function ViewChrome({ panels, activePanel }) {
+    if (!isMainGroup(panels) || !activePanel) return null
+    return <div className="dv-view-chrome" {...{ [VIEW_CHROME_ATTR]: activePanel.id }} />
+  }
+}
+
 // ── 受控自定义拖放层(Dockview disableDnd,自管发起/提示/提交)──
 // 唯一真源 computeDropTarget(dropModel.ts)同时驱动「提示」(竖线/半屏高亮)与「提交」(dropView 程序化 moveTo):
 // 提示显示在哪就落在哪(根治提示≠落点)。固定 3 面板:tab 栏=并标签页;正文半边=面板内分屏(侧栏仅上下,主区四向);违规=null 弹回。
@@ -506,6 +516,7 @@ export const WorkspaceHost: React.FC<{
   }, [version])
   const prefixActions = useMemo(() => makePrefixActions(), [])
   const suffixActions = useMemo(() => makeSuffixActions(), [])
+  const viewChrome = useMemo(() => makeViewChrome(), [])
 
   // 受控拖放全局监听(捕获阶段,仅当 draggingId 存在 = 是我们发起的视图拖拽,故不干扰聊天框的文件拖入):
   //  dragover → computeDropTarget 算落点 + 画提示 + preventDefault 放行;drop → 同一结果 dropView 程序化落子;dragend → 收尾。
@@ -680,6 +691,7 @@ export const WorkspaceHost: React.FC<{
         defaultTabComponent={WbTab}
         prefixHeaderActionsComponent={prefixActions}
         rightHeaderActionsComponent={suffixActions}
+        leftHeaderActionsComponent={viewChrome}
         components={components}
         disableDnd /* 关掉 Dockview 原生手势拖放:全部改走受控自定义层(WbTab draggable + 全局 dragover/drop + dropView 程序化 moveTo)。
                     * 程序化移动/分屏不受 disableDnd 影响,故落子照常;提示与落子同源 computeDropTarget → 天生一致。 */
