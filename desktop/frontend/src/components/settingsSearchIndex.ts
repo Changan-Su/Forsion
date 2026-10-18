@@ -57,6 +57,7 @@ export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchEntry[] = [
   { id: 'color-mode', tab: 'theme', anchor: 'color-mode', labelKey: 'settings.theme.modeLabel', keywords: '深色 浅色 暗色 明暗 dark light' },
   { id: 'ui-zoom', tab: 'theme', anchor: 'ui-zoom', labelKey: 'settings.theme.zoomLabel', keywords: '缩放 界面大小 zoom scale' },
   { id: 'glass', tab: 'theme', anchor: 'glass', labelKey: 'settings.theme.glassLabel', keywords: '毛玻璃 透明 glass blur' },
+  { id: 'home-motion', tab: 'theme', anchor: 'home-motion', labelKey: 'settings.theme.homeMotion', keywords: '主页 壁纸 动效 动画 星轨 日行 home wallpaper motion animation orbit' },
   { id: 'ambient', tab: 'theme', anchor: 'ambient', labelKey: 'settings.theme.ambient', keywords: '取色 染色 外壳 内容 颜色 ambient tint chrome color' },
   { id: 'visuals', tab: 'model', sub: 'm-models', anchor: 'visuals', labelKey: 'settings.theme.visuals', keywords: 'Intelligent UI 智能界面 可视化 图文 图片 来源 图表 Sketch visuals interactive display' },
   { id: 'smooth-caret', tab: 'theme', anchor: 'smooth-caret', labelKey: 'settings.theme.smoothCaret', keywords: '光标 caret cursor' },
@@ -75,6 +76,9 @@ export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchEntry[] = [
   // 电脑操作(引擎插件 computer-use)的表单由插件 schema 渲染,锚点落在整页;插件没启用时这一页不在,结果也不出。
   { id: 'strict-background', tab: 'computer-use', anchor: 'computer-use', labelKey: 'settings.search.strictBackground', keywords: '严格后台 后台 前台 抢焦点 抢前台 mini 电脑操作 strict background foreground focus computer use' },
   { id: 'jev', tab: 'computer-use', anchor: 'computer-use', labelKey: 'settings.search.jev', keywords: 'jev 加速 置信度 视觉 定位 typesafe 电脑操作 acceleration confidence vision computer use' },
+  // 设置 › 设备(原 Ribbon 胶囊菜单)
+  { id: 'units-switch', tab: 'units', anchor: 'units-switch', labelKey: 'unit.switchTitle', keywords: '设备 切换 本地 云端 直连 中转 P2P 通过地址连接 devices switch local cloud lan relay address unit' },
+  { id: 'units-host', tab: 'units', anchor: 'units-host', labelKey: 'unit.hostToggle', keywords: '允许其他设备连接 互联 直连地址 来访设备 配对 回收 allow connect host lan address visiting paired revoke' },
   // P1-K4:设置 › 远程会话(只在有主进程 API 的本机列,tab 门控即可)
   { id: 'remote-sessions-switch', tab: 'remote-sessions', anchor: 'remote-sessions-switch', labelKey: 'remoteSessions.switch', keywords: '远程会话 手机 远程 允许 remote session phone allow' },
   { id: 'remote-approval-cap', tab: 'remote-sessions', anchor: 'remote-approval-cap', labelKey: 'remoteSessions.cap', keywords: '远程审批档 全自动 审批 remote approval full auto' },

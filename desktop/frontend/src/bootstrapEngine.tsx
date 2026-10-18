@@ -50,6 +50,7 @@ import { matchFileType, fileTypeBaseName, setResetCardCeremonyHandler } from './
 import { ActivityLogView } from './views/ActivityLogView'
 import { ActiveWindowView } from './views/ActiveWindowView'
 import { ActivityDashboardCard, InboxDashboardCard } from './views/DashboardCompactViews'
+import { hasClaimable, track, useAchievements } from './achievements/store'
 import { installDeepLinks } from './deepLinkInstall'
 import { installOpenFiles } from './openFileInstall'
 import { FILE_VIEW_PARAM } from './viewFileMatch'
@@ -251,6 +252,14 @@ export function installEngine(): void {
   // 那份陪伴聊天里,且双向互拖(用户实报)。判定见 planSpaceSwitch;Space **内部**的跟随语义原样不动。
   // 只留内存:多窗口按 URL 参数隔离(勿写 localStorage),重启后照旧走 appStore 的启动兜底。
   const spaceSessions = new Map<string, string | null>()
+  // 使用指南「换一个 Space」那条任务的计数。启动后 3s 内的切换不算:冷启动恢复上次的 Space 也会改 activeSpaceId。
+  // ponytail: 3s 是估的;真被冷启动误计,改成只在 Ribbon 点击 / 快捷键那几处 track。
+  const spaceSwitchFrom = Date.now() + 3000
+  useSpaceStore.subscribe((s, p) => {
+    if (s.activeSpaceId === p.activeSpaceId || Date.now() <= spaceSwitchFrom) return
+    track('space.switch')
+    if (s.activeSpaceId === 'muse') track('muse.open') // 指南「Muse」那章:Muse / Historian 缺省就开着,任务是去看一眼
+  })
   useSpaceStore.subscribe((s, p) => {
     if (s.activeSpaceId === p.activeSpaceId) return
     // 手机主页(一页式 Space)里点开的会话是被带到 Tangu 去开的(引擎的 redirectOpenFromOnePage):此刻的 activeId 就是正要开的
@@ -352,7 +361,8 @@ export function installEngine(): void {
   // Ribbon：主位 + 5 个 Space；命令区常驻后 5 项，头像与 pinned 控件另计。
   // 默认命令顺序：成就 → 设备互联 → 反馈 → 商店 → 明暗 → 命令面板 → 设置。
   // 无持久顺序时注册序即上下序；已有自定义排序不覆盖。移动端设备入口仍在 head。
-  addRibbonIcon({ id: 'rb-achievements', side: 'bottom', icon: Trophy, tooltip: () => app().tr('achievements.title'), onClick: () => app().openAchievements() })
+  // 红点 = 有「已达成未领取」的成就(收进「更多」时红点挂到「更多」上,见 RibbonItem.dot)。
+  addRibbonIcon({ id: 'rb-achievements', side: 'bottom', icon: Trophy, tooltip: () => app().tr('achievements.title'), onClick: () => app().openAchievements(), dot: { get: () => hasClaimable(), subscribe: (cb) => useAchievements.subscribe(cb) } })
   // Unit 切换器(设备互联):吸收原「本地|云端」胶囊,列表式切换 本地/云端/其他设备。
   // 默认顺序为成就 → 设备互联 → 反馈；用户保存的自定义顺序仍优先。
   // 桌面 = preload 的 unitsList IPC;mobile 垫片也有 unitsList(UnitsSheet 数据面)→ 移动端照旧挂 head:

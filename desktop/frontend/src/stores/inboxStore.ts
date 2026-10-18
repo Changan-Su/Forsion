@@ -3,6 +3,7 @@
  * 与 appStore 单向解耦——只经 getState() 读 cfg/connState/agentDefs/agentAvatars/desktopConfig/tr,零反向依赖。
  * 失败纪律:轮询/列表静默(external 老后端无 /agent/inbox 时 404 不弹错);用户主动操作失败 toast + 刷新回收。
  */
+import { inboxCardOf } from '@amadeus/plugins/inboxCards'
 import { create } from 'zustand'
 import { setActiveSpace } from '@lcl/engine'
 import { translate } from '../i18n'
@@ -37,7 +38,7 @@ export function isAutomationSender(m: Pick<InboxMessage, 'sender_kind' | 'sender
  *  这是非 React 出口,直接读模块级 translate 快照,冷启动 / 测试期也不会回显裸 key。 */
 export function senderOf(m: Pick<InboxMessage, 'sender_kind' | 'sender_id'>): string {
   if (m.sender_kind === 'server') return 'Forsion'
-  if (m.sender_kind === 'system') return translate('inbox.sender.system')
+  if (m.sender_kind === 'system') return inboxCardOf(m)?.sender?.() || translate('inbox.sender.system')
   if (isAutomationSender(m)) return translate('inbox.sender.automation')
   const a = homeAgentDefs().find((x) => x.slug === m.sender_id) // 收件箱是本端的:焦点在我的电脑时也按本端的 Agent 认发件人
   return a?.name || m.sender_id || 'agent'

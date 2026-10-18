@@ -2,7 +2,7 @@
 .ims button, .ims-panel button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 32px; padding: 6px 9px; border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; color: var(--text-muted); font: inherit; font-size: var(--ui-font-meta, 12px); cursor: pointer; }
 .ims button:hover, .ims-panel button:hover { background: var(--overlay-light); color: var(--text); }
 .ims button:disabled, .ims-panel button:disabled { opacity: .35; cursor: default; }
-.ims button:focus-visible, .ims-panel button:focus-visible, .ims-stage:focus-visible { outline: var(--focus-ring) solid var(--accent-ink); outline-offset: 2px; }
+.ims button:focus-visible, .ims-panel button:focus-visible, .ims-stage:focus-visible { outline: var(--focus-ring) solid var(--signal-line); outline-offset: 2px; }
 .ims .ims-primary, .ims-panel .ims-primary { background: var(--action-fill); color: var(--on-action); padding-inline: 12px; }
 .ims .ims-primary:hover, .ims-panel .ims-primary:hover { background: var(--action-fill-hover); color: var(--on-action); }
 .ims-header { display: flex; align-items: center; gap: 18px; padding: 12px 18px; flex-shrink: 0; border-bottom: 1px solid var(--border); }
@@ -37,7 +37,7 @@
 .ims-drop { position: absolute; inset: 12px; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 16px; background: var(--bg-card); color: var(--accent-ink); border-radius: var(--radius-lg); pointer-events: none; z-index: 5; }
 .ims-footer { padding: 8px 18px; display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: var(--ui-font-caption, 11px); color: var(--text-faint); flex-shrink: 0; }
 .ims-footer input { width: 140px; min-width: 0; border: 1px solid transparent; background: transparent; color: var(--text-muted); font: inherit; text-align: center; border-radius: var(--radius-sm); }
-.ims-footer input:focus { border-color: var(--border); outline-color: var(--accent-ink); }
+.ims-footer input:focus { border-color: var(--border); outline-color: var(--signal-line); }
 .ims-error { display: flex; align-items: center; gap: 9px; padding: 8px 16px; font-size: var(--ui-font-meta, 12px); color: var(--danger); flex-shrink: 0; }
 .ims-error button { flex-shrink: 0; }
 .ims .amx-stage-hud { position: absolute; bottom: 16px; right: 16px; display: flex; align-items: center; gap: 2px; background: var(--bg-card); padding: 4px; border-radius: var(--radius-md); box-shadow: var(--card-shadow); font-size: var(--ui-font-caption, 11px); z-index: 3; }
@@ -68,7 +68,7 @@
 .ims-adjustments { display: grid; gap: 18px; margin-bottom: 14px; }
 .ims-adjustments label > span { display: flex; justify-content: space-between; margin-bottom: 8px; }
 .ims-adjustments output { color: var(--text-faint); font-size: var(--ui-font-caption, 11px); }
-.ims-adjustments input { width: 100%; accent-color: var(--accent-ink); }
+.ims-adjustments input { width: 100%; accent-color: var(--signal-mark); }
 .ims-prompt { margin-top: 20px; font-size: var(--ui-font-caption, 11px); }
 .ims-prompt summary { cursor: pointer; color: var(--text-muted); }
 .ims-prompt p { overflow-wrap: anywhere; white-space: pre-wrap; }
@@ -121,7 +121,7 @@
 .ims-fields input[type='color'] { padding: 2px; height: 32px; cursor: pointer; }
 .ims-properties label.ims-checkbox { flex-direction: row; align-items: center; gap: 7px; }
 .ims-properties label.ims-checkbox { white-space: nowrap; }
-.ims-checkbox input[type='checkbox'] { width: 14px; height: 14px; flex: 0 0 14px; accent-color: var(--accent-ink); }
+.ims-checkbox input[type='checkbox'] { width: 14px; height: 14px; flex: 0 0 14px; accent-color: var(--signal-mark); }
 /* Transparency paper is image content, not UI chrome: it stays neutral in either theme. */
 .ims-preview, .ims-layer-thumb { background: repeating-conic-gradient(#e2e2e2 0 25%, #ffffff 0 50%) 0 / 16px 16px; }
 .ims-button-row { display: flex; align-items: center; gap: 5px; margin-top: 12px; }

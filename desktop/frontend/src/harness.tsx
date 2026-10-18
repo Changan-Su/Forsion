@@ -899,13 +899,18 @@ if (new URLSearchParams(location.search).has('dock')) {
       })(),
     }
     w.amadeusSync = { get: async () => ({ state: 'idle', side: 'local' }), onStatus: () => () => {} }
-    void Promise.all([import('./components/UnitSwitcher'), import('./stores/appStore')]).then(([{ UnitSwitcher, UnitRemoteSurface }, { useApp }]) => {
+    void Promise.all([import('./components/UnitSwitcher'), import('./stores/appStore')]).then(([{ UnitSwitcher, UnitRemoteSurface, UnitSettings }, { useApp }]) => {
       useApp.setState({ desktopConfig: { ...cfg } as never })
       addRibbonIcon({ id: 'rb-unit', side: 'bottom', component: UnitSwitcher })
       // 远程面(设备行「整个主区切过去」)也挂上:裸 harness 无 .shell-work → 组件原地渲染,CSS 退化 fixed 覆盖
       const rsHost = document.createElement('div')
       document.body.appendChild(rsHost)
-      createRoot(rsHost).render(<UnitRemoteSurface />)
+      // 设置 › 设备:胶囊点开走 openSettings('units')(harness 无浮窗 = 窗内设置),这里只挂那一页(真 SettingsModal 太重)。
+      const UnitSettingsHost = (): React.ReactElement | null => {
+        const open = useApp((s) => s.settingsOpen && s.settingsTab === 'units')
+        return open ? <div className="unitset-harness" style={{ position: 'fixed', left: 260, top: 24, width: 560, maxHeight: 'calc(100vh - 48px)', overflow: 'auto', zIndex: 500 }}><UnitSettings /></div> : null
+      }
+      createRoot(rsHost).render(<><UnitRemoteSurface /><UnitSettingsHost /></>)
     })
   }
   installHotkeys() // 裸挂 Ribbon 没有 Shell,热键分发得自己装

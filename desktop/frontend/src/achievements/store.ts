@@ -92,6 +92,11 @@ export function allSeries(s?: Pick<AchievementsState, 'pluginSeries'>): SeriesDe
   return ps.length ? [...OFFICIAL_SERIES, ...ps.map((x) => x.def)] : OFFICIAL_SERIES
 }
 
+/** 「已达成、未领取」—— 成就红点的唯一判据(Ribbon 奖杯 / 「更多」、成就面板系列名)。传 series 只看这一个系列。 */
+export function hasClaimable(s: Pick<AchievementsState, 'pluginSeries' | 'counters' | 'claimed'> = useAchievements.getState(), series?: SeriesDef): boolean {
+  return (series ? [series] : allSeries(s)).some((x) => x.achievements.some((a) => !s.claimed[a.id] && (s.counters[a.event] || 0) >= a.goal))
+}
+
 export function findAchievement(id: string): { a: AchievementDef; series: SeriesDef } | null {
   for (const series of allSeries()) {
     const a = series.achievements.find((x) => x.id === id)

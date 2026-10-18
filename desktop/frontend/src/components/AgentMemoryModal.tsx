@@ -110,7 +110,7 @@ const AgentMemoryModalBody: React.FC<AgentMemoryModalProps> = ({ cfg, slug, name
     <button
       className="btn sm"
       onClick={() => setTab(id)}
-      style={tab === id ? { background: 'var(--accent)', color: 'var(--on-accent)' } : { background: 'transparent' }}
+      style={tab === id ? { background: 'var(--accent-tint)', color: 'var(--text)' } : { background: 'transparent' }}
     >{label}</button>
   )
 

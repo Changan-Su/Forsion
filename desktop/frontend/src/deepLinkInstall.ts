@@ -132,17 +132,28 @@ export function installDeepLinks(): void {
   const w = window as unknown as {
     tangu?: { onDeepLink?: (cb: (u: string) => void) => () => void; drainDeepLinks?: () => Promise<string[]> }
   }
+  // 应用内点到的 `forsion://` 链接(收件箱信、使用指南、笔记正文):就地走同一条 resolver,不绕系统 ——
+  // 系统 handler 只有打包版注册,dev / 网页 / 手机上点了没反应;绕一圈系统也会把窗口抢到前台再回来。
+  document.addEventListener('click', (e) => {
+    const a = (e.target as Element | null)?.closest?.('a[href^="forsion:"]')
+    if (!a || e.button !== 0) return
+    // 正在编辑的正文里,单击是放光标:⌘/Ctrl+点击才跳(与编辑器里别的链接同一习惯)
+    if (a.closest('[contenteditable="true"]') && !(e.metaKey || e.ctrlKey)) return
+    e.preventDefault()
+    handle(a.getAttribute('href') || '')
+  }, true)
   if (!w.tangu?.onDeepLink || !w.tangu?.drainDeepLinks) return // web/mobile 有各自通道(https /open、tangu://)
-  const handle = (url: string): void => {
-    void (async () => {
-      const toast = useApp.getState().toast
-      const intent = parseDeepLink(url)
-      if (!intent) { toast(translate('deeplink.unrecognized')); return }
-      await whenWorkspaceReady()
-      const ok = await resolveDeepLink(intent).catch(() => false)
-      if (!ok) toast(translate('deeplink.unavailable'))
-    })()
-  }
   w.tangu.onDeepLink(handle)
   void w.tangu.drainDeepLinks().then((urls) => { for (const u of urls) handle(u) })
+}
+
+function handle(url: string): void {
+  void (async () => {
+    const toast = useApp.getState().toast
+    const intent = parseDeepLink(url)
+    if (!intent) { toast(translate('deeplink.unrecognized')); return }
+    await whenWorkspaceReady()
+    const ok = await resolveDeepLink(intent).catch(() => false)
+    if (!ok) toast(translate('deeplink.unavailable'))
+  })()
 }

@@ -118,6 +118,12 @@ export interface ViewDefinition {
  *    的意图去调 toggle,界面本来就是英文时会翻成中文;再叠加 run 事件的 SSE 重放,
  *    一次 cycle 会被放成两次翻转。agent 面**必须**是接显式值的 setter。
  */
+/** `CommandInvoke.run` 的结构化回执:`state` = 一句确认(≤200 字),`result` = 交给模型的数据(≤约 8000 字)。 */
+export interface CommandReceipt {
+  state?: string
+  result?: unknown
+}
+
 export interface CommandInvoke {
   /** 英文,给模型看。存在与否 = 是否 opt-in。 */
   description: string
@@ -125,8 +131,10 @@ export interface CommandInvoke {
   params?: Record<string, unknown>
   /** 接显式值的处理函数;缺省时回落 `Command.run()`(仅适用于真正无参且幂等的命令)。
    *  返回字符串 = **这一次调用**的回执(如「opened model/m-voice」),随结果回给模型,优先于 `state()`;
-   *  并发的两次调用各拿各的,不会串。 */
-  run?(args: Record<string, unknown>): void | string | Promise<void | string>
+   *  并发的两次调用各拿各的,不会串。回执最多 200 字,只做确认。
+   *  要把**查询结果**交给模型(「白板上有哪些框」)就返回 `{ state?, result }`:`result` 是字符串或可 JSON 序列化的值,
+   *  最多约 8000 字,引擎把它圈成不可信数据交给模型(模型不会把里面的话当指令)。 */
+  run?(args: Record<string, unknown>): void | string | CommandReceipt | Promise<void | string | CommandReceipt>
   /** 当前值探针,随目录一起回给模型,省得它靠猜(如当前语言 / 当前明暗档)。 */
   state?(): string
 }
@@ -177,6 +185,9 @@ export interface RibbonItem {
   /** 这个图标自己的右键菜单项(弹的时候现取)。Ribbon 会把通用项排在前面(Space 图标的「在新窗口中打开」)。
    *  组件自己接了右键(preventDefault)的,Ribbon 不再弹。 */
   menu?: () => { label: string; onClick(): void }[]
+  /** 图标上的提示红点(无数字):get 现判、subscribe 在它可能变的时候回调。收进「…」/ 收纳夹时红点挂到「…」/ 收纳夹上。
+   *  只给 icon 项用(component 项自己画)。 */
+  dot?: { get(): boolean; subscribe(cb: () => void): () => void }
 }
 
 /** 底部状态栏的一项(≈ Obsidian addStatusBarItem)。 */

@@ -464,22 +464,32 @@ export const getEngineCapabilities = (t: EngineTarget, engineId: string) =>
     }))
 
 /** 本地联网搜索(BYO-key)配置:engine /agent/websearch(写 config.json webSearch 段;云端 404)。 */
+export type WebSearchProvider = 'bocha' | 'tavily' | 'zhipu' | 'deepseek' | 'duckduckgo'
 export interface LocalWebSearchRedacted {
   provider: string
   bochaHasKey: boolean
   tavilyHasKey: boolean
   zhipuHasKey: boolean
+  deepseekHasKey: boolean
   zhipuEngine: string
   effectiveProvider: string
   configured: boolean
+  /** 「使用中」的顺序(只含已连接的);旧引擎没有这个字段 */
+  order?: WebSearchProvider[]
+  /** 本次引擎进程里每个源最近一次测试(重启即清) */
+  lastTests?: Partial<Record<WebSearchProvider, { ok: boolean; latencyMs: number; resultCount?: number; error?: string; at: number }>>
 }
+/** PUT 只发要改的字段:Key 缺省 = 不变、'' = 断开;order 缺省 = 不变 */
+export type LocalWebSearchSave = Partial<{
+  provider: string; bochaApiKey: string; tavilyApiKey: string; zhipuApiKey: string; deepseekApiKey: string; zhipuEngine: string; order: WebSearchProvider[]
+}>
 
 export const getLocalWebSearch = (t: EngineTarget) =>
   request<LocalWebSearchRedacted>(t, '/agent/websearch')
 
 export const saveLocalWebSearch = (
   t: EngineTarget,
-  body: { provider: string; bochaApiKey: string; tavilyApiKey: string; zhipuApiKey: string; zhipuEngine: string },
+  body: LocalWebSearchSave,
 ) =>
   request<{ success: boolean; config: LocalWebSearchRedacted }>(t, '/agent/websearch', {
     method: 'PUT',
@@ -1029,6 +1039,8 @@ export const deleteAgentScheduleEntry = (t: EngineTarget, slug: string, id: stri
 export type HookDiscovered = {
   key: string; matcher: string; command: string; commandWindows: string; timeout: number;
   statusMessage: string; source: string; trust: 'trusted' | 'needs-review' | 'managed'; enabled: boolean; active: boolean
+  /** source === 'plugin':来自哪个引擎插件(只观察,开关跟插件走,面板只读)。 */
+  plugin?: { id: string; name: string }
 }
 export type HooksData = { events: Record<string, any>; discovered: Record<string, HookDiscovered[]>; eventNames: string[] }
 

@@ -54,7 +54,7 @@
 }
 .mini-card-space:active:not(:disabled), .mini-card-action:active { transform: scale(0.94); }
 .mini-card-space:focus-visible, .mini-card-action:focus-visible, .mini-card-row:focus-visible {
-  outline: var(--focus-ring, 1px) solid var(--accent-ink, var(--accent));
+  outline: var(--focus-ring, 1px) solid var(--signal-line, var(--accent-ink));
   outline-offset: -1px;
 }
 
@@ -155,7 +155,7 @@
 .mini-card-picker > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mini-card-picker > svg { flex: 0 0 auto; color: var(--text-faint, var(--text-muted)); }
 .mini-card-picker:hover, .mini-card-picker[aria-expanded='true'] { background: var(--overlay-light, rgba(127, 127, 127, 0.1)); }
-.mini-card-picker:focus-visible { outline: var(--focus-ring, 1px) solid var(--accent-ink, var(--accent)); outline-offset: -1px; }
+.mini-card-picker:focus-visible { outline: var(--focus-ring, 1px) solid var(--signal-line, var(--accent-ink)); outline-offset: -1px; }
 .mini-card-action:disabled { opacity: 0.45; cursor: default; }
 .mini-card-floating .mini-card-dismiss { inset: 0; }
 .mini-card-popover.mini-card-popover--picker { right: auto; width: min(240px, calc(100% - 14px)); }

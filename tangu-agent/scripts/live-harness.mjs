@@ -299,6 +299,8 @@ OPT_IN.add('humanreal'); // 协作说明写成什么样:每轮 6 个 run + 1 次
 OPT_IN.add('appref'); // 四个 run;只在动 APP_REF_SECTION(应用 / 窗口引用那一段提示词)时才有信息量。
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 KEYS.push('marketplace', 'marketplacechat');
+KEYS.push('pluginext');
+OPT_IN.add('pluginext'); // 夹具插件在 tangu-plugin.json 里声明 stdio MCP + Stop hook(10-17);只在动 mcp/pluginServers、hooks/pluginHooks、bootstrap 的 attachManifestExtras 时跑
 OPT_IN.add('marketplace'); OPT_IN.add('marketplacechat'); // marketplacechat:同一判据跑在 chat 预设(详情工具要先 load_tools)
 const ONLY = new Set(opt('only', process.env.TANGU_LIVE_ONLY || KEYS.filter((k) => !OPT_IN.has(k)).join(',')).split(',').map((s) => s.trim()).filter(Boolean));
 const TTFT_ROUNDS = Number(opt('ttft-rounds', process.env.TANGU_LIVE_TTFT_ROUNDS || 5));
@@ -1028,6 +1030,22 @@ if (ONLY.has('plugin')) {
 };
 `);
 }
+// pluginext(10-17):夹具引擎插件只靠 manifest 声明一个 stdio MCP(假 server,echo 回 `<tag>:<text>`)和一个 Stop hook ——
+// hook 往文件里记一行,并在 stdout 回 block + continue:false(观察档:不许真的拦住 / 停掉)。入口只 registerPlugin(给它一个开关,不注册工具)。
+const EXT_TAG = `EXT-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+const extHookFile = join(OUT, 'pluginext-stop-hook.log');
+if (ONLY.has('pluginext')) {
+  const pdir = join(home, 'plugins', 'live-ext');
+  mkdirSync(join(pdir, 'dist'), { recursive: true });
+  const loud = JSON.stringify({ decision: 'block', reason: 'plugin hook tried to block', continue: false, hookSpecificOutput: { additionalContext: 'PLUGIN-HOOK-INJECTED' } });
+  writeFileSync(join(pdir, 'tangu-plugin.json'), JSON.stringify({
+    id: 'live-ext', name: 'Live ext', version: '1.0.0', apiVersion: 1, entry: 'dist/index.js',
+    mcpServers: { liveext: { command: process.execPath, args: [join(root, 'test', 'fixtures', 'fake-mcp-server.mjs')], env: { FAKE_MCP_TAG: EXT_TAG } } },
+    hooks: { Stop: [{ hooks: [{ type: 'command', command: `printf 'stop\\n' >> '${extHookFile}'; printf '%s' '${loud}'` }] }] },
+  }));
+  writeFileSync(join(pdir, 'package.json'), '{"type":"module"}');
+  writeFileSync(join(pdir, 'dist', 'index.js'), "export default { activate(ctx) { ctx.registerPlugin({ id: 'live-ext', name: 'Live ext', description: 'live-harness fixture', defaultEnabled: true }); }, deactivate() {} };\n");
+}
 // cuoff(10-08):隔离 home 里放一个夹具引擎插件,几个工具都声明 concurrencyKey:'computer-use' —— 引擎认「Computer Use 那组工具」
 // 只看这个声明(toolRegistry.isComputerUseTool),MCP 工具声明不了,所以不能复用上面的假 MCP。
 // ⚠️ 工具名必须与真插件一致(find_roots / observe_ui / act_ui / ensure_app):带 --cu-skill 时模型会照真技能里写的名字去
@@ -1376,6 +1394,7 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
           // 「调用过」≠「跑成了」:deferred 场景要判 read_document 真解析出了标记,不是报错后被 read_file 兜住。
           // `full` 留**未截断**的原文:bigread 要判的截断标记落在第 4000 字符附近,先截到 4000 就永远看不见
           // (评审 #7)。内存有界 —— 引擎侧 capToolResult 已把单条结果封在 48k。
+          else if (e.type === 'desk_present') (ev.deskPresents ||= []).push({ at: Date.now(), spec: p });
           else if (e.type === 'tool_result') { const full = String(p.result || ''); ev.toolResults.push({ id: p.id, name: p.name || '?', isError: !!p.isError, result: full.slice(0, 4000), fullLength: full.length, full, at: Date.now() }); }
           // 子代理自己的工具调用**不进** tool_call(subAgent.ts 把它们包成 'subagent' 事件发在父 run 上)——
           // 要证「子代理用上了 read_document」只能在这儿收。isError/preview 也要留:只存工具名的话,
@@ -2482,6 +2501,41 @@ try {
     };
   });
 
+  // pluginext(10-17):manifest 声明的 MCP / hooks 随插件进出。开着 → 模型调得到 mcp__liveext__echo、结果是夹具 tag;Stop hook 跑了
+  // (日志多一行)但它回的 block / continue:false / additionalContext 没有效果(run 照常收尾、回答里没有注入串);停用 → 新会话里调不到、
+  // hook 不再跑;再启用 → 又调得到。负对照 = 去掉 runner.ts 里「插件 hook 丢输出」那一行的 dist:hook 的 continue:false 把 run 停掉 / 注入串进上下文,须红。
+  await scenario('pluginext', 'pluginext 插件 manifest 带的 stdio MCP 与观察档 hook:开着调得到且 hook 只看不拦,停用后都没了,再启用回来', async () => {
+    const ask = 'Call the mcp__liveext__echo tool with text "ping" and reply with exactly what it returns, nothing else. If no such tool is available to you, reply NO_TOOL.';
+    const setOn = (enabled) => api('/agent/plugins/live-ext/enabled', { method: 'PUT', body: JSON.stringify({ enabled }) });
+    const mcpUp = async () => ((await api('/agent/tools')).mcp || []).some((m) => m.server === 'liveext' && m.status === 'connected');
+    const waitMcp = async (want) => { for (let i = 0; i < 40; i++) { if ((await mcpUp()) === want) return true; await new Promise((r) => setTimeout(r, 250)); } return false; };
+    const hookLines = () => (existsSync(extHookFile) ? readFileSync(extHookFile, 'utf8').split('\n').filter(Boolean).length : 0);
+    const up0 = await waitMcp(true);
+    const h0 = hookLines();
+    const ev1 = await run(`live-pluginext-on-${Date.now()}`, ask);
+    const h1 = hookLines();
+    await setOn(false);
+    const down = await waitMcp(false);
+    const ev2 = await run(`live-pluginext-off-${Date.now()}`, ask);
+    const h2 = hookLines();
+    await setOn(true);
+    const up3 = await waitMcp(true);
+    const ev3 = await run(`live-pluginext-back-${Date.now()}`, ask);
+    const want = `${EXT_TAG}:ping`;
+    const ran = (ev) => ev.toolResults.some((r) => r.name === 'mcp__liveext__echo' && !r.isError && r.full.includes(want));
+    const called = (ev) => ev.toolCalls.includes('mcp__liveext__echo');
+    const err = ev1.error || ev2.error || ev3.error;
+    const injected = [ev1, ev3].some((ev) => ev.content.includes('PLUGIN-HOOK-INJECTED'));
+    const ok = !err && up0 && ran(ev1) && ev1.content.includes(want) && ev1.done && h1 > h0 && !injected
+      && down && !called(ev2) && h2 === h1 && up3 && ran(ev3) && ev3.content.includes(want) && ev3.done;
+    const leg = (name, ev) => `${name}:工具 ${ev.toolCalls.join(',') || '无'}${ran(ev) ? '(执行成功)' : ''}${ev.done ? '' : ' 没收尾'}`;
+    return {
+      ok, detail: err || [`MCP 起来 ${up0}`, leg('开着', ev1), `hook ${h0}→${h1}`, `注入串${injected ? '进了回答 ←' : '没进'}`,
+        `停用后 MCP 下线 ${down}`, leg('停用', ev2), `hook ${h1}→${h2}`, `再启用 MCP 起来 ${up3}`, leg('再启用', ev3)].join(';'),
+      output: `开着:${ev1.content}\n停用:${ev2.content}\n再启用:${ev3.content}`, toolCalls: [...ev1.toolCalls, ...ev2.toolCalls, ...ev3.toolCalls],
+    };
+  });
+
   // PI-DSH 评审 R1(10-02):无人值守 run(Muse / 自动化)里没人答询问 —— ask_user 当场拿到 [No answer] 系统说明,模型须照常收尾
   // (不挂、不打转)。agent_config.automationOrigin 把这条 run 标成自动化来源(runCategory → unattended)。
   // 负对照 = 去掉 inquiries.ts 入口短路的 dist:ask_user 挂到超时(须红)。
@@ -3409,7 +3463,7 @@ Then reply with only the command output.`,
   // ⚠️ ENTRY 与 desktop/frontend/src/bootstrapEngine.tsx 的 open-settings 目录项同文(description + params);TARGETS 那一行由
   //    desktop 的 settingsTarget.test.ts 逐字钉住(设置页 / 搜索索引一改,那条单测就红,照它的输出改这里)。
   await scenario('settingsnav', 'settingsnav 「语音在哪设置」:界面命令直达设置页,不用电脑操控', async () => {
-    const TARGETS = 'Pages: general, forsion, model, mcp, hooks, skills, agents, amadeus-plugins, browser, computer-use, channels, notes, sync, spaces, theme, shortcuts, notifications, statusbar, permissions, remote-sessions, computer-history, advanced, developer, about. Settings: workspace-dir, keep-awake, backend-mode, sandbox, python, mirror, external-backend, forsion-account, forsion-submissions, cloud-url, memory-sync, inbox-notify, default-models, model-providers, web-search, voice, theme-language, startup-appearance, palette, color-mode, ui-zoom, glass, ambient, visuals, smooth-caret, selection-bar, prompt-suggest, chat-avatars, calm-dim, calm-reading, calm-motion, ribbon-auto-home, fonts, notes-attachments, daily-notes, agent-browser, strict-background, jev, remote-sessions-switch, remote-approval-cap, remote-trusted-devices, remote-safety, computer-history, mcp-server, reset-layout, clear-data, language.';
+    const TARGETS = 'Pages: general, forsion, model, mcp, hooks, skills, agents, amadeus-plugins, browser, computer-use, channels, notes, sync, spaces, theme, shortcuts, notifications, statusbar, permissions, units, remote-sessions, computer-history, advanced, developer, about. Settings: workspace-dir, keep-awake, backend-mode, sandbox, python, mirror, external-backend, forsion-account, forsion-submissions, cloud-url, memory-sync, inbox-notify, default-models, model-providers, web-search, voice, theme-language, startup-appearance, palette, color-mode, ui-zoom, glass, home-motion, ambient, visuals, smooth-caret, selection-bar, prompt-suggest, chat-avatars, calm-dim, calm-reading, calm-motion, ribbon-auto-home, fonts, notes-attachments, daily-notes, agent-browser, strict-background, jev, units-switch, units-host, remote-sessions-switch, remote-approval-cap, remote-trusted-devices, remote-safety, computer-history, mcp-server, reset-layout, clear-data, language.';
     const ENTRY = { id: 'open-settings',
       description: "Open Forsion's settings window, optionally at one page or at the page holding one specific setting. To answer 'where/how do I set X', open that page and say which page you opened; these settings are not documented on the web, so do not search for them. Unknown targets are rejected.",
       params: { type: 'object', properties: { tab: { type: 'string', description: `A page id or a setting id. Omit for the default page. ${TARGETS}` } } } };

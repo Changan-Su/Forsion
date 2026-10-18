@@ -5,7 +5,7 @@
 .mk-upgrade-filters label, .mk-notification-settings label { display: flex; align-items: center; gap: 6px; }
 .mk-upgrade-filters select { color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 5px 8px; }
 .mk-detail-tabs { display: flex; gap: 4px; margin-bottom: 20px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
-.mk-detail-tabs .btn[aria-pressed="true"] { color: var(--accent); font-weight: 600; border-color: var(--accent); background: var(--accent-light, var(--bg-hover)); }
+.mk-detail-tabs .btn[aria-pressed="true"] { color: var(--text); font-weight: 600; border-color: var(--signal-line); background: var(--accent-wash, var(--bg-hover)); }
 .mk-notification-settings { padding: 12px; background: var(--bg-hover); border-radius: var(--radius-md); display: grid; gap: 10px; margin-bottom: 16px; font-size: var(--ui-font-meta); }
 .mk-notification-settings p { margin: 0; line-height: 1.6; }
 .mk-comment-thread { border-bottom: 1px solid var(--border); padding: 14px 0; }
@@ -28,7 +28,7 @@
 .mk-chat-card-top > div:nth-child(2) { flex: 1; min-width: 0; display: grid; gap: 4px; }
 .mk-chat-card-top strong { font-size: var(--ui-font-heading); overflow-wrap: anywhere; }
 .mk-chat-card-top span:not(.mk-compat) { color: var(--text-muted); font-size: var(--ui-font-meta); }
-.mk-chat-icon { display: grid; place-items: center; flex-shrink: 0; color: var(--accent); background: var(--bg-hover); width: 38px; height: 38px; border-radius: var(--radius-md); }
+.mk-chat-icon { display: grid; place-items: center; flex-shrink: 0; color: var(--accent-ink); background: var(--bg-hover); width: 38px; height: 38px; border-radius: var(--radius-md); }
 .mk-chat-card > p { margin: 12px 0; color: var(--text-muted); font-size: var(--ui-font-body); line-height: 1.6; overflow-wrap: anywhere; }
 .mk-chat-card-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 .mk-chat-search { display: flex; align-items: center; gap: 8px; color: var(--text-muted); padding: 12px 0; }

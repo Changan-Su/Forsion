@@ -244,7 +244,7 @@ export function VoiceSamplePicker({ onChange, disabled }: { onChange: (s: VoiceS
           <>
             <button className="btn primary sm voice-sample-stop" onClick={stop}><Square size={12} /> {t('voicesample.stop')} · {clock(elapsed)}</button>
             <div className="voice-sample-level" aria-hidden style={{ width: 96, height: 4, borderRadius: 'var(--radius-pill)', background: 'var(--border)', overflow: 'hidden' }}>
-              <div style={{ width: `${Math.round(level * 100)}%`, height: '100%', background: 'var(--accent)' }} />
+              <div style={{ width: `${Math.round(level * 100)}%`, height: '100%', background: 'var(--signal-mark)' }} />
             </div>
           </>
         ) : (

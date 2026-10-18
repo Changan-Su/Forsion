@@ -9,7 +9,7 @@
 import { Router } from 'express';
 import { authMiddleware } from '../core/http.js';
 import { deps } from '../seams/runtime.js';
-import { loadLocalWebSearchConfig, redactedLocalConfig, testLocalSearch } from '../adapters/standalone/localSearch.js';
+import { loadLocalWebSearchConfig, redactedLocalConfig, testLocalSearch, normalizeOrder, isConnected } from '../adapters/standalone/localSearch.js';
 import { saveSection } from '../core/config.js';
 
 const router = Router();
@@ -127,7 +127,7 @@ router.post('/agent/providers/fetch-models', authMiddleware, async (req, res) =>
 
 // ── 本地联网搜索(BYO-key)设置:config.json webSearch 段 ─────────────────────
 //   GET  /agent/websearch       → redacted 配置(hasKey 布尔,不回明文)
-//   PUT  /agent/websearch       → 保存(key:'__keep__' 不变 / '' 清除 / 其余覆写)
+//   PUT  /agent/websearch       → 保存(key:'__keep__' 不变 / '' 清除 / 其余覆写;order 缺省不变、null 回老规则)
 //   POST /agent/websearch/test  → 只测指定 provider,不落盘
 // 写的是本机 config.json → 云端(hostExec=false)一律 404,与 special 同门。
 
@@ -153,7 +153,7 @@ router.put('/agent/websearch', authMiddleware, async (req, res) => {
   try {
     const cur = loadLocalWebSearchConfig();
     const b = req.body ?? {};
-    const VALID = ['auto', 'bocha', 'tavily', 'zhipu', 'duckduckgo'];
+    const VALID = ['auto', 'bocha', 'tavily', 'zhipu', 'deepseek', 'duckduckgo'];
     if (b.provider !== undefined && !VALID.includes(String(b.provider))) {
       return res.status(400).json({ detail: `provider must be one of: ${VALID.join(', ')}` });
     }
@@ -162,15 +162,20 @@ router.put('/agent/websearch', authMiddleware, async (req, res) => {
       if (next === null || next === '') return null;
       return String(next);
     };
-    saveSection('webSearch', {
+    const next = {
       provider: b.provider !== undefined ? String(b.provider) : cur.provider,
       bochaApiKey: mergeKey(b.bochaApiKey, cur.bochaApiKey),
       tavilyApiKey: mergeKey(b.tavilyApiKey, cur.tavilyApiKey),
       zhipuApiKey: mergeKey(b.zhipuApiKey, cur.zhipuApiKey),
+      deepseekApiKey: mergeKey(b.deepseekApiKey, cur.deepseekApiKey),
       zhipuEngine: ['search_std', 'search_pro', 'search_pro_sogou', 'search_pro_quark'].includes(String(b.zhipuEngine))
         ? String(b.zhipuEngine)
         : cur.zhipuEngine,
-    });
+    };
+    let order = b.order === undefined ? cur.order : Array.isArray(b.order) ? normalizeOrder(b.order) : null;
+    // 断开 Key 的源同时移出顺序:以后重连按约定排回 DuckDuckGo 前面,而不是回到旧位置
+    if (order) order = order.filter((p) => isConnected({ ...cur, ...next, order } as typeof cur, p));
+    saveSection('webSearch', { ...next, order });
     res.json({ success: true, config: redactedLocalConfig() });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'save websearch config failed' });

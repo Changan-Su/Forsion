@@ -10,6 +10,7 @@ import { PRODUCT } from '../product'
 import { create } from 'zustand'
 import { contentStorageKey } from '@lcl/engine/contentStorageScope'
 import { useSpaceStore } from '@lcl/engine/spaceRegistry'
+import { getView } from '@lcl/engine/viewRegistry'
 import type { ProjectSettings,
   AgentConfig, AgentRunEvent, Attachment, AuthStatusInfo, CtxInfo, ModelsResponse, NormalAgentDef,
   MsgSeg, SessionRecord, SkillInfo, SketchItem, SubChat, TanguDesktopConfig, ToolEvent, UiMessage, WorkspaceDescriptor, StoredDesktopConfig,
@@ -1271,6 +1272,12 @@ function openerSession(s: Pick<AppState, 'sessions' | 'archivedSessions' | 'acti
   return found ? { session: found } : {}
 }
 
+/** desk_present 的视图没给 name(插件自己摆的画面,引擎不知道界面语言)→ 用注册时的视图标题;没注册就退回类型名。 */
+function deskViewTitle(type: string): string {
+  const d = getView(type)?.displayName
+  return (typeof d === 'function' ? d() : d) || type
+}
+
 export const useApp = create<AppState>((set, get) => ({
   tr: (k) => k,
   // 云 web/mobile:boot() 异步回填前的早期请求(布局恢复后的轮询等)会拿默认 cfg 打
@@ -1465,6 +1472,9 @@ export const useApp = create<AppState>((set, get) => ({
         break
       case 'tool_call':
         if (pl.name === 'generate_image') { track('image.generate'); act('image.generate') }
+        // 使用指南「让 Tangu 操作电脑」:电脑操作插件(首方)的两个动作工具。ponytail: 写死了工具名(引擎的 tool_call 不带来源插件);
+        // 引擎给 tool_call 补上所属插件 id 后改成按 id 认。只计数,不碰审批 —— 审批那边照旧不认插件工具名
+        if (pl.name === 'act_ui' || pl.name === 'jev_ui') track('computer.use')
         // 写类工具记进归属账本(G3-03):编辑器回灌时据此认出「这是 Tangu 改的」。cwd 口径同 deskAutoShow。
         if (pl.name && AGENT_WRITE_TOOLS.has(String(pl.name))) {
           const cfg = get().configBySession[sessionId] || {}
@@ -1548,7 +1558,7 @@ export const useApp = create<AppState>((set, get) => ({
             : await runAgentCommand(pl.id, pl.args && typeof pl.args === 'object' ? pl.args : undefined)
           // 回执带全份设置新值(在 setter 落地**之后**读):引擎据此刷新 run 内快照,同 run 里再 list 才是新值。
           // pending(setter 没在时限内落地)就不带:那一刻读到的还是旧值,写进引擎等于把病换个出口再犯一次。
-          const ack = await sendUiAck(target, runId, ackId, { ok: r.ok, error: r.error, state: r.state, ...(r.pending ? {} : { settings: readUiValues() }) })
+          const ack = await sendUiAck(target, runId, ackId, { ok: r.ok, error: r.error, state: r.state, ...('result' in r && r.result ? { result: r.result } : {}), ...(r.pending ? {} : { settings: readUiValues() }) })
           recordUiAction({ runId, ackId, ...req, ok: r.ok, error: r.error, state: r.state, ack })
         })().catch((e) => { recordUiAction({ runId, ackId, ...req, drop: 'exception', error: String((e as Error)?.message || e) }) /* 动态 import 失败也不该炸掉事件流,引擎会超时兜住 */ })
         break
@@ -3058,7 +3068,7 @@ export const useApp = create<AppState>((set, get) => ({
     const ts = Date.now()
     const items: DeskItem[] = views.map((v: any, i: number) => v.type === 'view'
       ? {
-          key: `view:${v.view}@${ts}:${i}`, path: '', name: v.name || v.view, at: ts,
+          key: `view:${v.view}@${ts}:${i}`, path: '', name: v.name || deskViewTitle(v.view), at: ts,
           view: { type: v.view, ...(v.params && typeof v.params === 'object' && !Array.isArray(v.params) ? { params: v.params } : {}) },
         }
       : { key: `${v.path}@${ts}:${i}`, path: v.path, name: v.name || v.path.split(/[\\/]/).pop() || v.path, at: ts })

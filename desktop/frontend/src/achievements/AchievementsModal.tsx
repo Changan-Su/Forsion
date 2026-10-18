@@ -7,7 +7,7 @@ import { ArrowLeft, Check, Trophy } from 'lucide-react'
 import { useApp } from '../stores/appStore'
 import { useI18n } from '../i18n'
 import { OFFICIAL_SERIES, medalTier, seriesPoints, type MedalTier, type SeriesDef } from './definitions'
-import { useAchievements } from './store'
+import { hasClaimable, useAchievements } from './store'
 import './achievements.css'
 
 const TIERS: MedalTier[] = ['bronze', 'silver', 'gold']
@@ -26,6 +26,10 @@ export function AchievementsModal({ onClose }: { onClose?: () => void } = {}): R
   const active = series.find((x) => x.id === activeId) || series[0]
 
   const seriesName = (s: SeriesDef): string => s.title || t(`achievements.s.${s.id}`)
+  // 有可领的系列名后挂红点(领完即灭);aria 里另说一句,不靠颜色传意
+  const navLabel = (s: SeriesDef): React.ReactNode => hasClaimable({ counters, claimed, pluginSeries }, s)
+    ? <>{seriesName(s)}<span className="ach-dot" aria-label={t('achievements.claimable')} /></>
+    : seriesName(s)
   const pts = seriesPoints(active, claimed)
   const total = active.achievements.reduce((sum, a) => sum + a.points, 0)
   const tier = medalTier(active, pts)
@@ -44,14 +48,14 @@ export function AchievementsModal({ onClose }: { onClose?: () => void } = {}): R
           <div className="settings-nav-group">
             <div className="settings-nav-grouphead">{t('achievements.title')}</div>
             {OFFICIAL_SERIES.map((s) => (
-              <button key={s.id} className={s.id === active.id ? 'active' : ''} onClick={() => setActiveId(s.id)}>{seriesName(s)}</button>
+              <button key={s.id} className={s.id === active.id ? 'active' : ''} onClick={() => setActiveId(s.id)}>{navLabel(s)}</button>
             ))}
           </div>
           {pluginSeries.length > 0 && (
             <div className="settings-nav-group">
               <div className="settings-nav-grouphead">{t('achievements.pluginGroup')}</div>
               {pluginSeries.map(({ def }) => (
-                <button key={def.id} className={def.id === active.id ? 'active' : ''} onClick={() => setActiveId(def.id)}>{seriesName(def)}</button>
+                <button key={def.id} className={def.id === active.id ? 'active' : ''} onClick={() => setActiveId(def.id)}>{navLabel(def)}</button>
               ))}
             </div>
           )}

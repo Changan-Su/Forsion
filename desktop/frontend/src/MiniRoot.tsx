@@ -9,6 +9,7 @@ import { ensureAmadeusReady } from './amadeusPlugins'
 import { isDockWindow, windowKind } from './windowKind'
 import type { MiniOpenOptions } from '../../shared/miniPanel'
 import { DockRoot } from './mini/DockRoot'
+import { track } from './achievements/store'
 
 let directMini: MiniOpenOptions | null = null
 /** 侧边拼接面板(DockRoot)也是 direct 形态:它自己定目标,不经 onMiniTarget。 */
@@ -99,6 +100,9 @@ function MiniPanelRoot() {
   }, [])
   useEffect(() => { if (window.amadeus) ensureAmadeusReady() }, [])
   useEffect(() => installFileDropGuard(), [])
+  // 引导「打开一次 Mini」:open-mini 命令 / 全局快捷键都只经主进程建窗,渲染层能看到的就是这张卡挂载(窗口复用时再显示不重计);
+  // Computer Use 的自动观察窗(?transient=1)不算。计数经 localStorage + storage 事件同步回主窗。
+  useEffect(() => { if (!new URLSearchParams(location.search).has('transient')) track('mini.open') }, [])
   // 自动 Mini(?transient=1,Computer Use 的临时观察窗)大小固定;用户自己开的这张可以拖边改大小
   return <MiniColumnHost buildDefault={buildMiniPanel} resizable={!!window.tangu?.miniResize && !new URLSearchParams(location.search).has('transient')} direct={direct?.view ? {
     title: direct.title,

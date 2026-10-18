@@ -31,7 +31,7 @@ if (!SOFT_CSS) throw new Error('缺少第一方 soft 磁盘种子主题')
 const zhiCandidate = path.resolve(__dirname, '../../../Forsion-Instrumentality-Project/forsion-theme-zhi/theme.css')
 const hasZhiCandidate = fs.existsSync(zhiCandidate)
 const LANGS = ['lovable', 'genesis-glass', 'soft', ...(hasZhiCandidate ? ['zhi'] : [])]
-const SKINS = ['cream', 'coral', 'teal', 'lavender', 'zhi', 'ink']
+const SKINS = ['cream', 'coral', 'teal', 'lavender', 'zhi', 'sage', 'ink']
 const COLOR_TOKENS = [
   'bg', 'bg-card', 'bg-glass', 'sidebar-bg', 'sidebar-card-bg', 'text', 'text-light', 'text-muted', 'text-faint', 'text-ghost',
   'border', 'shadow', 'accent', 'accent-ink', 'accent-hover', 'accent-light', 'accent-rgb', 'on-accent',
@@ -141,6 +141,8 @@ body { margin: 0; background: var(--bg); color: var(--text); }
 const COLOR_UTILS = `
 function parseColor(value) {
   const s = String(value)
+  // 10-17 色彩体系的色阶在 oklab 里混色,computed 值序列化成 oklab(L a b):通道不是 RGB,交给 canvas 换算成 sRGB 字节。
+  if (/^okl/.test(s)) { const x = document.createElement('canvas').getContext('2d'); x.fillStyle = s; x.fillRect(0, 0, 1, 1); const d = x.getImageData(0, 0, 1, 1).data; return { r: d[0], g: d[1], b: d[2], a: d[3] / 255 } }
   const values = s.match(/-?[\\d.]+/g) || []
   const scale = /^color\\(/.test(s) ? 255 : 1
   return { r: (+values[0] || 0) * scale, g: (+values[1] || 0) * scale, b: (+values[2] || 0) * scale, a: values.length > 3 ? +values[3] : 1 }
@@ -307,8 +309,9 @@ function filesUnder(dir, out = []) {
       const b = SKINS[j]
       const distance = perceptualDistance(backgroundSamples.light[a].bg, backgroundSamples.light[b].bg)
       if (distance < closestLightBackgrounds.distance) closestLightBackgrounds = { distance, id: `${a}-${b}` }
-      // 墨色(ink)的身份在暗色(10-03 用户定 d1),浅色刻意只比经典略暖;经典与珊瑚之间放不下第三张能都拉开 3 的暖纸面。
-      if (distance < 3 && !(a === 'ink' || b === 'ink')) backgroundAestheticFailures.push(`light/${a}-${b} distance=${distance.toFixed(2)}`)
+      // 10-17 色彩体系:门槛 3 → 1.5。3 只能靠抬彩度凑(当年的珊瑚 / 晴蓝就是这么来的);低彩纸面靠色相分辨,1.5 已一眼可分。
+      // 墨色(ink)的身份在暗色(10-03 用户定 d1),浅色刻意只比经典略暖,照旧豁免。
+      if (distance < 1.5 && !(a === 'ink' || b === 'ink')) backgroundAestheticFailures.push(`light/${a}-${b} distance=${distance.toFixed(2)}`)
     }
   }
   let darkestMaxChroma = { value: 0, id: '' }

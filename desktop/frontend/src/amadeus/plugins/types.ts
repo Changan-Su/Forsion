@@ -141,6 +141,12 @@ export interface ResetCardQuota {
   weeklyRemaining?: number
 }
 
+/** One library file event (see `PluginAppApi.onVaultEvent`). */
+export type PluginVaultEvent =
+  | { kind: 'create' | 'delete' | 'modify'; path: string }
+  | { kind: 'rename'; path: string; from: string; folder?: boolean }
+  | { kind: 'vault' }
+
 export interface PluginAppApi extends BlockSurfaceApi {
   /** Vault-relative path of the note the active panel is showing (both carriers), or null. */
   getActivePage(): string | null
@@ -206,6 +212,19 @@ export interface PluginAppApi extends BlockSurfaceApi {
    *  ⚠️路径必须与 `readFile` 用的是同一个字符串(vault 相对、`/` 分隔);大小写按平台。
    *  旧宿主 / 非桌面宿主没有:`const off = ctx.app.watchFile?.(p, cb)`,缺位时自己退化成轮询。 */
   watchFile?(path: string, cb: () => void): () => void
+  /** Library-wide file events (2026-10-17+): files created, deleted, renamed or changed outside the editor, delivered in
+   *  batches (about 200 ms). Returns an unsubscribe; the host also drops it when the plugin is disabled or reloaded.
+   *  - `create` / `delete`: any note or file appearing in / leaving the library listing, whoever did it (the user in
+   *    Forsion, another program, sync). Folders alone are not reported.
+   *  - `rename`: a rename or move done in Forsion (any window): `{ path: new, from: old }`; a whole folder moved =
+   *    one event with `folder: true`. That same move does **not** also arrive as a delete + create. A rename done by
+   *    another program cannot be told apart from a delete + create, so it arrives as those two.
+   *  - `modify`: content changed outside this window's editor (another program, Tangu, another window, sync). Typing in
+   *    the open note is not reported here; use `subscribePage` for the active note.
+   *  - `vault`: the open library was switched or closed. Re-read whatever you cached (`listFiles` etc.).
+   *  Paths are vault-relative with `/`, the same strings `readFile` takes. With no library open nothing arrives.
+   *  Older hosts lack it: `ctx.app.onVaultEvent?.(cb)`, and fall back to `listFiles` polling. */
+  onVaultEvent?(cb: (events: PluginVaultEvent[]) => void): () => void
   /** The plugin's work folder for file output, vault-relative without leading/trailing slash.
    *  Every plugin automatically gets a "工作文件夹" setting (key `workFolder`) on its detail page;
    *  this returns that value, defaulting to `Plugins/<display name>` (since 2026-10-14; before that the default was
@@ -271,6 +290,16 @@ export interface PluginAppApi extends BlockSurfaceApi {
    *  ⚠️**切库竞态**:本值来自渲染进程 store,而 list/search 来自主进程 —— 切换本地/云端库的那一瞬间
    *  主进程先换根、渲染进程后更新,两边可能短暂不同源。拿它拼绝对路径前后都要复核,别缓存过夜。 */
   vaultRoot?(): string | null
+  /** 切到某个 Space(2026-10-17+),口径同 Ribbon 上点它:id 是 Space 的 id(内置的 `tangu` / `amadeus` / `calendar` …,
+   *  或插件 / 用户 Space 的 `space.json` id)。resolve 在新 Space 的布局建好之后 —— 接着 `ctx.openView(…, { location: 'right' })`
+   *  就落在新 Space 里。不认识的 id → false,不切。没有工作台的宿主 / 旧宿主没有:`ctx.app.openSpace?.(…)`。 */
+  openSpace?(id: string): Promise<boolean>
+  /** 跑一条命令面板里现成的命令(2026-10-17+),按 id(如 `amadeus-new-note`、`open-market`)。只对首方内置包生效,
+   *  别的插件调了恒为 false —— 命令里有删除、改设置这类动作,不能让任意插件替用户按。命令不存在 / 停用 → false。 */
+  runCommand?(id: string): boolean
+  /** 在应用内打开一条 `forsion://` 链接(2026-10-17+):笔记 / 会话 / Space / `open?view=…`,口径同系统唤起的深链 ——
+   *  只导航不执行,白名单外的一律 false。插件页里画的 `<a href="forsion://…">` 宿主本来就会在应用内接住,这条给按钮用。 */
+  openLink?(url: string): Promise<boolean>
 }
 
 /** 插件契约自己的检索结果 DTO(**刻意不复用宿主内部的 SearchHit**:内部结构以后要改,不该牵动插件 API)。 */
@@ -1264,7 +1293,8 @@ export interface PluginContext {
    *  registerSetting 是「一键一个字符串」,存不下片段库这类大块数据,也没有原子性。
    *  旧宿主没有:`await ctx.loadData?.() ?? 默认值`。 */
   loadData?<T = unknown>(): Promise<T | null>
-  /** 原子写本插件的私有 JSON blob(整体覆盖)。宿主缺位时静默 no-op。 */
+  /** 原子写本插件的私有 JSON blob(整体覆盖)。宿主缺位时静默 no-op。
+   *  manifest 写 `"syncData": true` → 登录后这份随账号跨设备同步(本地优先,整份取较新的;单份 ≤512KB)。 */
   saveData?(value: unknown): Promise<void>
   /** Host-native UI primitives (2026-09-07+). A plugin keeps ownership of its content DOM and gives
    *  the host a shell to overlay plus its scroll/content roots. Old hosts omit the whole member.
@@ -1351,6 +1381,14 @@ export interface PluginContext {
   achievements: {
     registerSeries(def: AchievementSeriesContribution): void
     track(event: string, n?: number): void
+    /** 读计数(2026-10-17+):缺省读**官方**事件(`chat.send`、`note.create` …,只读、伪造不了);`{ own: true }` 读你自己
+     *  `track()` 过的那个名字。从没发生过 = 0。旧宿主没有:`ctx.achievements.count?.(…)`。 */
+    count?(event: string, opts?: { own?: boolean }): number
+    /** 计数或领取状态变了就回调(本窗口与别的窗口写的都算),返回退订;停用时宿主统一收掉。 */
+    subscribe?(cb: () => void): () => void
+    /** 你自己系列里的某条成就:已领取?/ 替用户领取(达成了才领得了,同成就面板的「领取」)。id 不带前缀。 */
+    isClaimed?(id: string): boolean
+    claim?(id: string): void
   }
   /** Tangu 侧的只读探针(2026-08-29+):**当前主区聊天要用的模型** + **模型目录** + **当前 Space id**。
    *  聊天状态住在 Tangu 的 store 里,`ctx.app` 是 Amadeus 的页面/库面 —— 两者不通,所以单开这一截。
@@ -1552,6 +1590,15 @@ export interface PluginContext {
      *  所以「不折叠就没法看」的表先查 `ctx.table.caps?.fold`,没有就走自己的降级(panel-lib 的 `L.table` 已内置这条)。 */
     caps?: { fold?: boolean }
   }
+  /** 收件箱(2026-10-17+,只给首方内置包;别的插件整个成员缺席)。信是本机的系统消息,发件人记成 `plugin:<id>`。
+   *  - `post` 返回新信的 id(后端不在 → null,不抛)。不排队、不去重:同类信只留一封由插件自己 `archive` 上一封。
+   *  - `registerCard`:你发的信在阅读面板里正文下面挂一块你自己画的卡(`mount(el, { id })`,返回清理函数),
+   *    `sender` 是发件人显示名(列表与阅读面板头部)。重复调用 = 替换;停用时宿主收掉。 */
+  inbox?: {
+    post(msg: { title: string; body?: string }): Promise<string | null>
+    archive(id: string): Promise<void>
+    registerCard(card: { sender?: () => string; mount?(el: HTMLElement, msg: { id: string }): (() => void) | void }): void
+  }
 }
 
 /** 一张只读表的完整描述(**纯数据**,除注明外不放函数;任何位置都不许放 HTML 字符串)。 */
@@ -1730,6 +1777,9 @@ export interface AmadeusPlugin {
   /** Manifest `isDesktopOnly` (Obsidian-style): the plugin needs desktop-only host APIs. Informational on desktop;
    *  mobile hosts list it as `blocked: 'desktopOnly'` and never evaluate it. External plugins only. */
   isDesktopOnly?: boolean
+  /** Manifest `syncData: true`: ctx.saveData syncs across devices with the Forsion account (desktop / mobile; each
+   *  device can turn it off per plugin in Settings). Local-first; whole-blob newest wins. External plugins only. */
+  syncData?: boolean
   /** Agent 自建 Space 插件的 agent slug(external only;设置页标「<slug> 的 Space」、不给卸载)。 */
   agent?: string
   /** 捆绑包内嵌内容清单(引擎插件 id / agent / 技能 / Space;缺省 = 纯 UI 插件)。External plugins only. */

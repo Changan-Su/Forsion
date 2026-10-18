@@ -88,6 +88,16 @@
    * 深色态近白、浅色态近黑 —— 比没修之前还刺眼。不是「优雅降级」,是反向劣化。 */
   --sel-line: var(--overlay-strong);
   --sel-fill: var(--accent-light);
+  /* 主题色色阶 + 强调色(2026-10-17 用户定方案 C,DESIGN §1「主题色色阶与强调色」)。主题色(--accent-ink)只管动作和氛围,
+   * 强调色(--signal)管状态与指示:落点条、云同步、勾、开关、选中框、焦点环、进度、运行圆点、双链。
+   * --signal 取值:用户在设置里挑的(--signal-pick,loader 内联)> 配色自带的(--signal-skin,经典 / 墨色 = 柔蓝)> 主题色本身。
+   * 下面先给不含 color-mix 的兜底,@supports 里再换成按比例混色的版本(顺序别反,理由同 --sel-line)。 */
+  --signal: var(--signal-pick, var(--signal-skin, var(--accent-ink)));
+  --accent-wash: var(--accent-light);
+  --accent-tint: var(--accent-light);
+  --signal-line: var(--overlay-strong);
+  --signal-mark: var(--signal);
+  --hover-line: var(--overlay-strong);
   /* 选中/聚焦圈的**线宽单点**(2026-08-13 用户拍板由 2px 减半)。全端一切 focus ring / 选中描边
      一律 `var(--focus-ring)`,别再各写各的 px —— 用户问的「这个选中效果应该是统一的吧」答案就在这。
      仪器:npm run check:focusring(会把仓里所有硬编码的圈宽揪出来)。 */
@@ -216,8 +226,14 @@
 /* 支持 color-mix 就换成按 accent 调配的版本(见 :root 里 --sel-line 的长注释)。 */
 @supports (color: color-mix(in srgb, red 50%, transparent)) {
   :root {
-    --sel-line: color-mix(in srgb, var(--accent-ink) 36%, transparent);
-    --sel-fill: color-mix(in srgb, var(--accent-ink) 7%, var(--bg-card));
+    /* 六级:洗底 7% / 浅底 11% 从主题色推(混卡片色);线色 50% / 记号 72% 从强调色推(混底色);悬停边 = 正文色 26%,中性。 */
+    --accent-wash: color-mix(in oklab, var(--accent-ink) 7%, var(--bg-card));
+    --accent-tint: color-mix(in oklab, var(--accent-ink) 11%, var(--bg-card));
+    --signal-line: color-mix(in oklab, var(--signal) 50%, var(--bg));
+    --signal-mark: color-mix(in oklab, var(--signal) 72%, var(--bg));
+    --hover-line: color-mix(in oklab, var(--text) 26%, var(--bg));
+    --sel-line: var(--signal-line);
+    --sel-fill: var(--accent-wash);
     /* 向正文色轻推：亮色把深填充再压暗，暗色把亮填充再提亮；两边都只会提高与 on-action 的对比。 */
     --action-fill-hover: color-mix(in srgb, var(--accent-ink) 88%, var(--text));
   }
@@ -531,7 +547,7 @@ a:hover { color: var(--accent-ink); }
 .composer-chip.project-pill.extra-folder-add { align-self: stretch; }
 .extra-folder-x { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--text-faint); cursor: pointer; }
 .extra-folder-x:hover { background: var(--overlay-medium); color: var(--text); }
-.extra-folder-x:focus-visible { outline: var(--focus-ring, 2px) solid var(--accent-ink); outline-offset: 1px; }
+.extra-folder-x:focus-visible { outline: var(--focus-ring, 2px) solid var(--signal-line); outline-offset: 1px; }
 .composer-menu.project-menu {
   position: absolute;
   bottom: 100%;
@@ -809,7 +825,7 @@ a:hover { color: var(--accent-ink); }
   border-radius: 50%;
   flex-shrink: 0;
 }
-.session-item .session-dot.running { background: var(--accent-ink); animation: pulse-soft 1.6s infinite; }
+.session-item .session-dot.running { background: var(--signal-mark); animation: pulse-soft 1.6s infinite; }
 .session-item .session-dot.unread { background: var(--danger); }
 .session-item .session-menu-btn {
   opacity: 0;
@@ -2035,7 +2051,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   box-shadow: none;
 }
 .cm-effort-input:focus-visible { outline: none; }
-.cm-effort-slider-wrap:has(.cm-effort-input:focus-visible) .cm-effort-thumb { outline: var(--focus-ring) solid var(--accent-ink); outline-offset: 1px; box-shadow: var(--btn-shadow); }
+.cm-effort-slider-wrap:has(.cm-effort-input:focus-visible) .cm-effort-thumb { outline: var(--focus-ring) solid var(--signal-line); outline-offset: 1px; box-shadow: var(--btn-shadow); }
 .cm-effort-slider-wrap:has(.cm-effort-input:active) .cm-effort-thumb { transform: translate(-50%, -50%) scale(1.08); }
 .cm-effort.is-max .cm-effort-thumb {
   /* shadow-contract: effect — 白内圈与紫辉光标识 Max，不承担卡片高程。 */
@@ -2445,7 +2461,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .btn.primary:disabled { background: var(--text-ghost); box-shadow: none; cursor: not-allowed; }
 .btn.primary:active:not(:disabled) { transform: scale(0.97); } /* 主按钮按下的回馈(10-17);普通按钮、图标不加 */
 .btn.ghost { border-color: var(--overlay-strong); color: var(--text); background: transparent; }
-.btn.ghost:hover { border-color: var(--accent-ink); color: var(--accent-ink); }
+.btn.ghost:hover { border-color: var(--hover-line); color: var(--text); background: var(--overlay-light); }
 .btn.danger { border-color: var(--danger); color: var(--danger); background: none; }
 .btn.danger:hover { background: var(--danger-light); }
 .btn.sm { padding: 4px 10px; font-size: var(--ui-font-meta, 12px); }
@@ -2516,7 +2532,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   margin-bottom: -0.5px;
 }
 .modal-tabs button:hover { color: var(--text); }
-.modal-tabs button.active { color: var(--accent-ink); border-bottom-color: var(--accent-ink); }
+.modal-tabs button.active { color: var(--text); border-bottom-color: var(--signal-mark); }
 .modal-body { flex: 1; overflow-y: auto; padding: 16px 18px; }
 
 /* ─── Settings Workspace ─── */
@@ -2703,8 +2719,8 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   background: var(--overlay-light);
 }
 .settings-nav-list button.active {
-  color: var(--accent-ink);
-  background: var(--accent-light);
+  color: var(--text);
+  background: var(--accent-wash);
   font-weight: 600;
 }
 /* Obsidian 式分类分组(P2):分组标题 + 组内项。分组标题本身不参与折叠。 */
@@ -2723,7 +2739,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .settings-nav-grouphead.brand { text-transform: none; letter-spacing: 0.02em; }
 /* 有天然子页面的总项自己是折叠按钮；子项缩进显示在该总项正下方。 */
 .settings-nav-parent { display: flex; flex-direction: column; gap: 2px; }
-.settings-nav-parent > button.has-active { color: var(--accent-ink); font-weight: 600; }
+.settings-nav-parent > button.has-active { color: var(--text); font-weight: 600; }
 .settings-nav-parent-chevron {
   margin-left: auto;
   transition: transform var(--duration-fast), color var(--duration-fast);
@@ -2744,7 +2760,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   border-radius: var(--radius-pill, 999px);
   background: var(--text-faint);
 }
-.settings-nav-subitem.active .settings-nav-subitem-mark { background: var(--accent-ink); }
+.settings-nav-subitem.active .settings-nav-subitem-mark { background: var(--signal-mark); }
 @keyframes settings-group-open {
   from { opacity: 0; transform: translateY(-3px); }
   to { opacity: 1; transform: none; }
@@ -2764,7 +2780,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .settings-nav-section .settings-nav-group + .settings-nav-group { margin-top: 10px; }
 .settings-nav-list button { gap: 7px; }
 .settings-nav-list button svg { color: var(--text-faint); flex-shrink: 0; }
-.settings-nav-list button.active svg { color: var(--accent-ink); }
+.settings-nav-list button.active svg { color: var(--text); }
 .settings-main {
   min-width: 0;
   min-height: 0;
@@ -2988,7 +3004,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .settings-choice-card > span:nth-child(2) { min-width: 0; }
 .settings-choice-card strong { display: block; font-size: var(--ui-font-meta, 12px); font-weight: 650; }
 .settings-choice-card small { display: block; margin-top: 3px; color: var(--text-faint); font-size: var(--ui-font-caption, 11px); line-height: 1.4; }
-.settings-choice-check { color: var(--accent-ink); }
+.settings-choice-check { color: var(--signal-mark); }
 .settings-workspace-panel > .settings-inline-row { padding: 13px 15px 0; }
 .settings-workspace-panel > .hint { padding: 7px 15px 14px; }
 .settings-runtime-panel > .field-row,
@@ -3008,7 +3024,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .settings-runtime-panel > .field { padding: 13px 15px; border-top: var(--border-width) solid var(--border); }
 .settings-external-panel > .field { padding-block: 12px; border-bottom: var(--border-width) solid var(--border); }
 .settings-external-panel > div:last-child { padding: 13px 15px; }
-.settings-runtime-callout { margin: 12px 15px 0; padding: 9px 11px; border-left: 2px solid var(--accent-ink); background: var(--accent-light); color: var(--accent-ink); font-size: var(--ui-font-caption, 11px); line-height: 1.45; }
+.settings-runtime-callout { margin: 12px 15px 0; padding: 9px 11px; border-left: 2px solid var(--signal-mark); background: var(--accent-wash); color: var(--text); font-size: var(--ui-font-caption, 11px); line-height: 1.45; }
 .settings-runtime-details { margin: 0 15px; padding: 11px 0; border-bottom: var(--border-width) solid var(--border); color: var(--text-faint); font-size: var(--ui-font-caption, 11px); }
 .settings-runtime-details summary { display: flex; align-items: center; gap: 7px; color: var(--text-muted); cursor: pointer; user-select: none; }
 .settings-runtime-details p { margin: 9px 0 0 20px; max-width: 76ch; line-height: 1.55; }
@@ -3071,7 +3087,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .settings-theme-live-kicker { color: var(--accent-ink); font-size: var(--ui-font-caption, 11px); font-weight: 650; letter-spacing: .07em; text-transform: uppercase; }
 .settings-theme-live-title { margin-top: 4px; color: var(--text); font-size: var(--ui-font-heading, 14px); font-weight: 680; letter-spacing: -.02em; }
 .settings-theme-live-message { display: flex; align-items: flex-start; gap: 9px; margin-top: 16px; color: var(--text-muted); }
-.settings-theme-live-message > span { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: var(--radius-sm); color: var(--accent-ink); background: var(--accent-light); }
+.settings-theme-live-message > span { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: var(--radius-sm); color: var(--text-muted); background: var(--accent-tint); }
 .settings-theme-live-message p { max-width: 40ch; margin: 3px 0 0; font-size: var(--ui-font-caption, 11px); line-height: 1.5; }
 .settings-theme-live-composer { min-height: 35px; display: flex; align-items: center; gap: 10px; margin-top: auto; padding: 5px 6px 5px 11px; border: var(--border-width) solid var(--overlay-medium); border-radius: var(--radius-md); background: var(--bg-card); color: var(--text-faint); font-size: var(--ui-font-caption, 11px); box-shadow: var(--card-shadow); }
 .settings-theme-live-composer > span { flex: 1; }
@@ -3083,6 +3099,8 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .settings-palette-axis { padding: 13px 15px 15px; }
 .settings-palette-axis + .settings-palette-axis { border-top: var(--border-width) solid var(--border); }
 .settings-palette-axis > strong { display: block; margin-bottom: 10px; color: var(--text); font-size: var(--ui-font-meta, 12px); font-weight: 620; }
+/* 轴下的说明(自定义背景 / 强调色)是辅助信息:比色卡标签再退一档,不抢那一行。 */
+.settings-palette-axis > .hint { color: var(--text-muted); font-size: var(--ui-font-meta, 12px); line-height: var(--ui-line-meta, 1.5); }
 .settings-control-list,
 .settings-font-list { display: flex; flex-direction: column; }
 .settings-control-row,
@@ -3142,9 +3160,9 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
  * 改用背景族的 --text-faint(随 data-bg 走,不碰主题色轴),旋钮对轨道 ≥ 3:1(WCAG 1.4.11);「开」与浅色不变。
  * 仪器:check:themecontrast 的 switch-off 探针(全部语言 × 配色 × 暗色)。 */
 :root[data-mode='dark'] .settings-switch:not(.active) > span { background: var(--text-faint); }
-.settings-switch.active { border-color: var(--accent-ink); background: var(--accent-ink); }
+.settings-switch.active { border-color: var(--signal-mark); background: var(--signal-mark); }
 .settings-switch.active > span { transform: translateX(14px); background: var(--bg-card); }
-.settings-switch:focus-visible { outline: var(--focus-ring) solid var(--accent-ink); outline-offset: 2px; }
+.settings-switch:focus-visible { outline: var(--focus-ring) solid var(--signal-line); outline-offset: 2px; }
 .settings-switch:disabled { cursor: not-allowed; }
 .is-disabled { opacity: .48; }
 
@@ -3335,7 +3353,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   outline: none;
   transition: border-color var(--duration-fast);
 }
-.inline-input:focus { border-color: var(--accent-ink); }
+.inline-input:focus { border-color: var(--signal-line); }
 .inline-input::placeholder { color: var(--text-ghost); }
 .field .hint { font-size: var(--ui-font-caption, 11px); color: var(--text-faint); margin-top: 4px; }
 .field-row { display: flex; gap: 10px; }
@@ -3365,7 +3383,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   transition: background var(--duration-fast), color var(--duration-fast);
 }
 .seg button + button { border-left: var(--border-width) solid var(--overlay-medium, rgba(127, 127, 127, 0.12)); }
-.seg button.active { background: var(--accent-light); color: var(--accent-ink); }
+.seg button.active { background: var(--accent-tint); color: var(--text); }
 
 /* ── 开关(Switch):通用二态开关,<button role="switch" class="switch [on]">;文案配 .switch-row ── */
 .switch {
@@ -3393,9 +3411,9 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   box-shadow: var(--btn-shadow);
   transition: left var(--duration-fast);
 }
-.switch.on { background: var(--accent-ink); border-color: var(--accent-ink); }
+.switch.on { background: var(--signal-mark); border-color: var(--signal-mark); }
 .switch.on::after { left: calc(100% - 16px); background: var(--bg-card); }
-.switch:focus-visible { outline: var(--focus-ring, 1px) solid var(--accent-light); outline-offset: 1px; }
+.switch:focus-visible { outline: var(--focus-ring, 1px) solid var(--signal-line); outline-offset: 1px; }
 .switch-row { display: flex; align-items: center; gap: 10px; font-size: var(--ui-font-body, 13px); color: var(--text); }
 
 /* 主题卡片网格 */
@@ -3412,7 +3430,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   text-align: left;
   transition: border-color var(--duration-fast), box-shadow var(--duration-fast), background var(--duration-fast);
 }
-.theme-card:hover { border-color: var(--sel-line); }
+.theme-card:hover { border-color: var(--hover-line); }
 
 /* ── 主题自曝参数(manifest settings[])的就地展开面板,紧贴主题卡下方 ── */
 .theme-opts {
@@ -3436,7 +3454,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .theme-opt-row { display: flex; align-items: center; gap: 10px; }
 .theme-opt-label { flex: 1; min-width: 0; font-size: var(--ui-font-meta, 12px); color: var(--text); }
 .theme-opt-desc { font-size: var(--ui-font-caption, 11px); color: var(--text-faint); margin-top: 1px; }
-.theme-opt-row input[type='range'] { width: 148px; flex: none; accent-color: var(--accent-ink); }
+.theme-opt-row input[type='range'] { width: 148px; flex: none; accent-color: var(--signal-mark); }
 /* ⚠ 必须显式 width:auto:面板在 .field 内,.field select 给了 width:100%(同特异性、更靠前),
  * 只设 min-width 压不住那个 width → select 会撑满整行、把标签挤成一字一行。 */
 .theme-opt-row select { flex: none; width: auto; min-width: 108px; max-width: 168px; }
@@ -3510,7 +3528,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   border-radius: 50%;
   border: var(--border-width) solid var(--overlay-medium);
 }
-.theme-card-check { position: absolute; top: 7px; right: 7px; width: 19px; height: 19px; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; color: var(--on-action, #fff); background: var(--action-fill); box-shadow: 0 0 0 2px var(--bg-card); }
+.theme-card-check { position: absolute; top: 7px; right: 7px; width: 19px; height: 19px; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; color: var(--bg-card); background: var(--signal-mark); box-shadow: 0 0 0 2px var(--bg-card); }
 
 /* 配色选择:色卡 chip(图标点 + 名称),双轴主题的「配色」轴 */
 .skin-row { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -3528,7 +3546,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   cursor: pointer;
   transition: border-color var(--duration-fast), color var(--duration-fast), background var(--duration-fast);
 }
-.skin-chip:hover { border-color: var(--sel-line); color: var(--text); }
+.skin-chip:hover { border-color: var(--hover-line); color: var(--text); }
 /* 同 .theme-card.active:细线 + 淡底,不再叠外圈 ring。 */
 .skin-chip.active {
   border-color: var(--sel-line);
@@ -3571,7 +3589,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   border-bottom: 2px solid transparent;
   margin-bottom: -0.5px;
 }
-.right-panel-tabs button.active { color: var(--accent-ink); border-bottom-color: var(--accent-ink); }
+.right-panel-tabs button.active { color: var(--text); border-bottom-color: var(--signal-mark); }
 .right-panel-body { flex: 1; overflow-y: auto; padding: 4px 10px 10px; font-size: var(--ui-font-body, 13px); } /* 顶 4:与主区纸卡 32 对齐 */
 
 /* 会话目录(TOC) */
@@ -3960,7 +3978,7 @@ html.dark .brand-logo--dark { display: inline-block; }
   cursor: pointer;
 }
 .check-row:hover { background: var(--overlay-light); }
-.check-row input { margin-top: 3px; accent-color: var(--accent-ink); }
+.check-row input { margin-top: 3px; accent-color: var(--signal-mark); }
 .check-row .check-name { font-size: var(--ui-font-body, 13px); color: var(--text); }
 .check-row .check-desc { font-size: var(--ui-font-caption, 11px); color: var(--text-faint); }
 
@@ -4865,14 +4883,14 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
     white-space: nowrap;
     background: var(--overlay-light);
   }
-  .settings-page:not(.settings-page--mobile) .settings-nav-list button.active { background: var(--accent-light); }
+  .settings-page:not(.settings-page--mobile) .settings-nav-list button.active { background: var(--accent-wash); }
   .settings-page:not(.settings-page--mobile) > .settings-main { flex: 1 1 auto; min-height: 0; }
 }
 
 /* ── remotesync 设置页进度条(执行阶段定宽,对账阶段不定态滑动)── */
 .rsync-progress { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
 .rsync-progress-track { height: 4px; border-radius: 2px; background: var(--border); overflow: hidden; }
-.rsync-progress-fill { height: 100%; border-radius: 2px; background: var(--accent-ink); transition: width 0.15s linear; }
+.rsync-progress-fill { height: 100%; border-radius: 2px; background: var(--signal-mark); transition: width 0.15s linear; }
 .rsync-progress-fill.indet { width: 40%; animation: rsync-indet 1.2s ease-in-out infinite; }
 @keyframes rsync-indet { 0% { margin-left: -40%; } 100% { margin-left: 100%; } }
 
@@ -5076,7 +5094,7 @@ html:root :is(.project-menu, .composer-menu, .engine-picker, .t2c-menu) { transf
    只收可交互的原生语义元素,**不含** [tabindex] 通配(容器级 tabindex=-1 的程序化焦点不该画圈)。
    线宽走 --focus-ring(08-13 拍板 1px),颜色走 --accent-ink。 */
 :where(button, [role='button'], [role='tab'], a[href], summary):focus-visible {
-  outline: var(--focus-ring) solid var(--accent-ink);
+  outline: var(--focus-ring) solid var(--signal-line);
   outline-offset: 1px;
 }
 /* uiux-c: end */

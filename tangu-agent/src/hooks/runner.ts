@@ -177,7 +177,9 @@ export async function runHooks(event: HookEventName, input: HookInput, ctx: Hook
           key: h.key, event, matcher: h.matcher, statusMessage: h.handler.statusMessage,
         });
       }
-      const res = await executeHook(h, input, ctx);
+      let res = await executeHook(h, input, ctx);
+      // 插件 hook 只观察(pluginHooks.ts):输出不进判定 —— 拦不住、停不了、注入不了上下文
+      if (h.source === 'plugin') res = { ...res, output: undefined, ...(res.status === 'blocked' || res.status === 'stopped' ? { status: 'completed' as const } : {}) };
       results.push(res); // 完成序 push → foldVerdict 的 updatedInput「最后完成者赢」成立
       if (publish && ctx.runId) {
         void publish(ctx.runId, 'hook_completed', {

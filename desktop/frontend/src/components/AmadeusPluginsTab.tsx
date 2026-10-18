@@ -15,6 +15,7 @@ import { pluginFootprint, pluginWanted, runningDependents, unmetPluginDeps, useP
 import { amadeus } from '@amadeus/api'
 import { installAmadeusPlugins, reloadPluginsAndAnnounce } from '../amadeusPlugins'
 import { usePluginOnboarding, needsOnboarding, promptIfPending, isGate } from '../stores/pluginOnboardingStore'
+import { pluginDataSyncUserOff, setPluginDataSyncUserOff } from '../amadeus/plugins/pluginDataSync'
 import { registerMessages, useI18n } from '../i18n'
 import { PRODUCT } from '../product'
 import { pluginDisplayName, pluginDisplayDescription, resolvePluginDetail, localizedOnboarding, isPlacedSettingsView } from '../amadeus/plugins/display'
@@ -25,6 +26,7 @@ import { loadUserSpaces } from '../userSpaces'
 import { hiddenSpaceName, hiddenSpaceReason, useHiddenSpacesOf } from '../pluginSpaceHealth'
 import { BuiltinPluginsSection } from '../builtins'
 import { useApp } from '../stores/appStore'
+import { track } from '../achievements/store'
 import { panelToast } from './PanelNotice'
 import { ipcErrorText } from '../ipcError'
 import { windowKind } from '../windowKind'
@@ -44,6 +46,12 @@ registerMessages({
   },
   'settings.amadeusPlugins.restartPending': { zh: '重启 Forsion 后生效。', en: 'Takes effect after Forsion restarts.' },
   'settings.amadeusPlugins.restartNow': { zh: '立即重启', en: 'Restart now' },
+  // manifest syncData:插件数据随账号同步,每台设备各自的开关
+  'settings.amadeusPlugins.syncData': { zh: '跨设备同步插件数据', en: 'Sync plugin data across devices' },
+  'settings.amadeusPlugins.syncDataHint': {
+    zh: '登录 Forsion 账号后，这个插件保存的数据会同步到你的其他设备。关掉后只存在这台设备上。',
+    en: 'When you are signed in to Forsion, the data this plugin saves syncs to your other devices. Turn it off to keep it on this device only.',
+  },
   'settings.amadeusPlugins.unitIntro': { zh: '查看已安装的功能和编辑器扩展。', en: 'View installed features and editor extensions.' },
   'settings.amadeusPlugins.unitBuiltinTitle': { zh: '编辑器扩展', en: 'Editor extensions' },
   'settings.amadeusPlugins.unitBuiltinHint': { zh: '此处开关仅控制编辑器扩展。Unit 已安装功能由部署配置管理。', en: 'These toggles control editor extensions. Installed Unit features are managed through deployment configuration.' },
@@ -342,6 +350,22 @@ export const SettingRow: React.FC<{ pluginId: string; def: SettingContribution }
       ) : (
         <input type="text" value={val} style={{ width: 180 }} onChange={(e) => write(e.target.value)} />
       )}
+    </div>
+  )
+}
+
+/** manifest `syncData: true` 的插件:这台设备上同不同步它的数据(pluginDataSync.ts;没有 cloudFetch 的宿主不画)。 */
+const PluginSyncRow: React.FC<{ p: AmadeusPlugin }> = ({ p }) => {
+  const { t } = useI18n()
+  const [on, setOn] = useState(() => !pluginDataSyncUserOff(p.id))
+  if (!p.syncData || !window.tangu?.cloudFetch) return null
+  return (
+    <div className="plugin-card" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 'var(--ui-font-meta, 12px)' }}>{t('settings.amadeusPlugins.syncData')}</div>
+        <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)' }}>{t('settings.amadeusPlugins.syncDataHint')}</div>
+      </div>
+      <input type="checkbox" data-plugin-sync checked={on} onChange={(e) => { setPluginDataSyncUserOff(p.id, !e.target.checked); setOn(e.target.checked) }} />
     </div>
   )
 }
@@ -745,6 +769,7 @@ const PluginDetail: React.FC<{
           </div>
         </>
       )}
+      <PluginSyncRow p={p} />
       {/* 自绘设置面板:排在声明式旋钮之后 —— 旋钮是宿主统一样式的小项,复杂面往下放才不打断阅读节奏。
           只在插件启用时挂:停用的插件其 setup 没跑过,面板里的按钮点了也没有后端。 */}
       {on && settingsViews.map((o) => <PluginSettingsView key={o.item.id} pluginId={p.id} def={o.item} />)}
@@ -906,7 +931,7 @@ export const AmadeusPluginsTab: React.FC<{
           {/* 设备页(unitPage):插件目录/脚手架都是对方机器上的 shell 行为 —— 藏。Android App(hostCaps.pluginsFolder=false):
               插件住在应用私有目录、只经市场装 —— 文件夹与脚手架两个按钮同样不给。 */}
           {!window.tangu?.unitPage && canOpenPluginsFolder() && <button className="btn ghost sm" onClick={() => openFolder()}>{t('settings.amadeusPlugins.openFolder')}</button>}
-          <button className="btn ghost sm" onClick={() => void reloadPluginsAndAnnounce({ all: true }).then(() => loadUserSpaces())}>{t('settings.amadeusPlugins.reload')}</button>
+          <button className="btn ghost sm" onClick={() => void reloadPluginsAndAnnounce({ all: true }).then(({ fresh }) => { if (fresh.length) track('plugin.local'); return loadUserSpaces() })}>{t('settings.amadeusPlugins.reload')}</button>
           {!window.tangu?.unitPage && canOpenPluginsFolder() && <button className="btn ghost sm" onClick={() => void scaffold()}>{t('settings.amadeusPlugins.scaffold')}</button>}
         </div>
       </details>

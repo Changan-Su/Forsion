@@ -1,5 +1,6 @@
 import { PRODUCT } from '../product'
 import { ModelPickerSettings } from './ModelPickerSettings'
+import { WebSearchSettings } from './WebSearchSettings'
 import { AutoCompactSetting } from './AutoCompactSetting'
 import { GitSettingsSection } from './GitSettingsSection'
 import { GitAccountsSection } from './GitAccountsSection'
@@ -11,11 +12,12 @@ import { BrowserExtensionPanel } from './BrowserExtensionPanel'
  * 在 Desktop 主界面内替换 Chat/Inspector 区域，而不是覆盖式弹窗。
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { X, Droplets, Shapes, ArrowLeft, Undo2, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2, CircleUserRound, Scaling, Coffee, MonitorCheck, History, MonitorSmartphone, Cloud, SunDim, AlignLeft, Wind, TextSelect, MousePointerClick } from 'lucide-react'
+import { X, Droplets, Shapes, ArrowLeft, Undo2, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2, CircleUserRound, Scaling, Coffee, MonitorCheck, History, MonitorSmartphone, Laptop, Cloud, SunDim, AlignLeft, Wind, TextSelect, MousePointerClick } from 'lucide-react'
 import { ThemeCard } from './ThemeCard'
 import { ThemeSettingsPanel } from './ThemeSettingsPanel'
 import { StartupAppearanceSettings } from './StartupAppearanceSettings'
-import { backgroundSwatch, listLanguages, listSkins, skinSwatch, forcedSchemeForLanguage } from '../theme/registry'
+import { backgroundSwatch, listLanguages, listSkins, skinSwatch, forcedSchemeForLanguage, SIGNALS } from '../theme/registry'
+import { customAccentVars } from '../theme/lcl/lovableData'
 import { UI_MODE, UI_ZOOM_EVENT, useNativeChromeClaim, useNativeChromeInstalled, useWorkspace } from '@lcl/engine' // 工作区引擎:恢复默认布局 + 移动预览模式;原生顶栏(Android 可选宿主)
 import { useApp } from '../stores/appStore' // Agent Desk 开关改动即时回流(desktopConfig 平时只在 boot/后端就绪时刷新)
 import { testConnection } from '../services/agentRunService'
@@ -25,7 +27,7 @@ import {
   listModels, listTools, setModelContextWindow,
   testProviderConnection, syncNow as backendSyncNow, getSyncStatus as backendGetSyncStatus,
   listPlugins, listAgents, type PluginInfo, type SyncStatusResult,
-  getLocalWebSearch, saveLocalWebSearch, testLocalWebSearch, type LocalWebSearchRedacted,
+  getLocalWebSearch, type LocalWebSearchRedacted,
 } from '../services/backendService'
 import { ChannelsTab } from './ChannelsTab'
 import { buildSessionLogPayload, sessionLogFilename } from '../services/sessionLog'
@@ -36,6 +38,7 @@ import type {
 import { SHOW_SYSTEM_PROMPT_KEY } from '../types'
 // 本组件已有同名的 useState setter,故取个别名。persist* = 写盘 + 应用 + 跨窗广播。
 import { isSmoothCaretOn, setSmoothCaret as persistSmoothCaret } from '../smoothCaret'
+import { loadHomepageWallpaperPrefs, onHomepageWallpaperPrefsChange, setHomepageWallpaperMotion } from '../views/homepageWallpaper'
 import { selectionBarOrder, setSelectionBarOrder } from '../selectionActions'
 import { isPromptSuggestOn, setPromptSuggest as persistPromptSuggest } from '../views/chat2/promptSuggest'
 import { getVisualsPref, setVisualsPref, VISUALS_VALUES, type VisualsPref } from '../visualsPref'
@@ -82,6 +85,7 @@ import { EnvProbeSection } from './EnvProbeSection'
 import { DesktopPermissions, hasDesktopPermissions } from './DesktopPermissions'
 import { ComputerHistorySettings, computerHistoryApi } from './ComputerHistorySettings'
 import { RemoteSessionsSettings, remoteSessionsApi } from './RemoteSessionsSettings' // P1-K4
+import { UnitSettings } from './UnitSwitcher'
 import { debugFireToast } from '../achievements/store'
 import { useTheme } from '../stores/themeStore'
 import { setMobileUiCommand, MOBILE_UI_KEY } from '../mobileUiCommand'
@@ -119,6 +123,8 @@ import { connectionTarget, homeTarget } from '../services/engine/targets'
 
 // 本文件自带的文案片段(命名空间 `settingsmodal.*`,不与 i18n.generated.ts 的 `settings.*` 相交)。
 registerMessages({
+  'settingsmodal.mcp.fromPlugin': { zh: '来自插件「{name}」', en: 'From plugin "{name}"' },
+  'settingsmodal.mcp.fromPluginHint': { zh: '这个 server 随插件启用和停用；要关掉它，请在插件设置里停用这个插件。', en: 'This server starts and stops with its plugin. To turn it off, disable the plugin in plugin settings.' },
   'settingsmodal.selectionBar': { zh: '划线菜单', en: 'Selection menu' },
   'settingsmodal.selectionBarHint': { zh: '选中文字后浮出的那一条：先排当前视图自己的工具，还是先排「问 Tangu」「翻译」这些每个视图都有的动作。', en: 'The bar that appears over selected text: put the current view\'s own tools first, or the actions every view shares, such as Ask Tangu and Translate.' },
   'settingsmodal.selectionBar.tools': { zh: '视图工具在前', en: 'View tools first' },
@@ -304,6 +310,7 @@ const TAB_ICONS: Partial<Record<Tab, React.ReactNode>> = {
   'amadeus-plugins': <Puzzle size={14} />,
   advanced: <Wrench size={14} />,
   permissions: <MonitorCog size={14} />,
+  units: <Laptop size={14} />,
   'remote-sessions': <MonitorSmartphone size={14} />, // P1-K4
   'computer-history': <History size={14} />,
   developer: <Bug size={14} />,
@@ -431,6 +438,8 @@ export const SettingsModal: React.FC<{
   const setBg = useTheme((s) => s.setBg)
   const themeBgSeed = useTheme((s) => s.bgSeed)
   const setBgSeedValue = useTheme((s) => s.setBgSeedValue)
+  const themeSignal = useTheme((s) => s.signal)
+  const setSignal = useTheme((s) => s.setSignal)
   const ambientOn = useTheme((s) => s.ambient)
   // 应用内自动更新状态(经 window.tangu.onUpdaterStatus 广播驱动;mac 仅检测引导手动下载)。
   const [upd, setUpd] = useState<UpdaterStatusInfo>({ phase: 'idle' })
@@ -448,6 +457,9 @@ export const SettingsModal: React.FC<{
   })
   // 丝滑光标(默认关;localStorage,smoothCaret.ts 全局模块即时生效)。
   const [smoothCaret, setSmoothCaret] = useState<boolean>(isSmoothCaretOn)
+  // 主页壁纸动效:和主页壁纸面板里的开关是同一个值(主页那边听同一份偏好)。
+  const [homeMotion, setHomeMotion] = useState(() => loadHomepageWallpaperPrefs().motion)
+  useEffect(() => onHomepageWallpaperPrefsChange(() => setHomeMotion(loadHomepageWallpaperPrefs().motion)), [])
   // 划线菜单的排法(缺省视图工具在前;localStorage,条每次出现时现读)。
   const [selBarOrder, setSelBarOrder] = useState(selectionBarOrder)
   // 输入建议(默认关;localStorage,promptSuggest.ts 每次现读)。
@@ -542,6 +554,8 @@ export const SettingsModal: React.FC<{
     ...(phoneShell ? [] : ([['statusbar', t('settings.tab.statusbar')]] as Array<[Tab, string]>)),
     ['advanced', t('settings.tab.advanced')],
     ...(hasDesktopPermissions() ? ([['permissions', t('desktopPermissions.title')]] as Array<[Tab, string]>) : []),
+    // 设置 › 设备(原 Ribbon 胶囊菜单,10-17 搬进来):只在有 Unit 主进程桥的真桌面列。
+    ...(window.tangu?.unitHostStatus || window.tangu?.unitsList ? ([['units', t('unit.tab')]] as Array<[Tab, string]>) : []),
     // P1-K4:只在执行设备本机(有主进程 API)列;设备页 / web / 手机没有 —— 开关只能在本机改。
     ...(remoteSessionsApi() ? ([['remote-sessions', t('remoteSessions.tab')]] as Array<[Tab, string]>) : []),
     // 不按 darwin 门控:非 mac 也列出来,页内说明「目前仅支持 macOS」,免得用户找不到入口。
@@ -677,12 +691,6 @@ export const SettingsModal: React.FC<{
   const [providerSaveMsg, setProviderSaveMsg] = useState('')
   // 本地联网搜索(BYO-key;engine /agent/websearch)。wsRed=null 表示端点不可用(云端/旧后端)→ 整段隐藏。
   const [wsRed, setWsRed] = useState<LocalWebSearchRedacted | null>(null)
-  const [wsProvider, setWsProvider] = useState('auto')
-  const [wsZhipuEngine, setWsZhipuEngine] = useState('search_pro_quark')
-  const [wsKeys, setWsKeys] = useState({ bocha: '', tavily: '', zhipu: '' }) // 输入草稿:'' 且未点清除 = 不变
-  const [wsClear, setWsClear] = useState({ bocha: false, tavily: false, zhipu: false })
-  const [wsMsg, setWsMsg] = useState('')
-  const [wsBusy, setWsBusy] = useState(false)
   // 镜像连通性测试(设置页管理后端)
   const [mirrorTesting, setMirrorTesting] = useState(false)
   const [mirrorTest, setMirrorTest] = useState<MirrorTestResult | null>(null)
@@ -763,14 +771,7 @@ export const SettingsModal: React.FC<{
   useEffect(() => {
     if (!p.open || tab !== 'model' || !isDesktop) return
     void getLocalWebSearch(homeTarget())
-      .then((r) => {
-        setWsRed(r)
-        setWsProvider(r.provider)
-        setWsZhipuEngine(r.zhipuEngine || 'search_pro_quark')
-        setWsKeys({ bocha: '', tavily: '', zhipu: '' })
-        setWsClear({ bocha: false, tavily: false, zhipu: false })
-        setWsMsg('')
-      })
+      .then(setWsRed)
       .catch(() => setWsRed(null))
   }, [p.open, tab, isDesktop, p.cfg])
   const pluginNm = (pl: PluginInfo): string => (locale === 'en' && pl.nameEn ? pl.nameEn : pl.name)
@@ -1170,6 +1171,7 @@ export const SettingsModal: React.FC<{
     'amadeus-plugins': PRODUCT.nativeFeatures !== undefined ? 'settings.amadeusPlugins.unitIntro' : 'settings.page.pluginsDescription',
     advanced: 'settings.page.advancedDescription',
     permissions: 'desktopPermissions.description',
+    units: 'unit.page',
     'remote-sessions': 'remoteSessions.page', // P1-K4
     'computer-history': 'settingsmodal.page.computerHistory',
     developer: 'settings.page.developerDescription',
@@ -1293,7 +1295,7 @@ export const SettingsModal: React.FC<{
       { key: 'appearance', label: t('settings.group.appearance'), tabs: ['theme', 'shortcuts', 'notifications', 'statusbar'] },
       { key: 'ai', label: t('settings.group.ai'), tabs: ['model', 'agents', 'skills', 'mcp', 'hooks', 'channels', 'browser', 'computer-use'] },
       { key: 'extensions', label: t('settings.group.extensions'), tabs: ['amadeus-plugins'] },
-      { key: 'system', label: t('settings.group.system'), tabs: ['permissions', 'remote-sessions', 'computer-history', 'advanced', 'developer', 'about'] },
+      { key: 'system', label: t('settings.group.system'), tabs: ['permissions', 'units', 'remote-sessions', 'computer-history', 'advanced', 'developer', 'about'] },
     ] },
   ]
   const navItemsForGroup = (grp: { key: string; tabs: Tab[] }): Array<[Tab, string]> => {
@@ -1662,6 +1664,7 @@ export const SettingsModal: React.FC<{
           <div key={`${tab}:${activeSub}`} className={`settings-sub settings-sub--${tab}`} id={cloudTabs.length ? 'settings-cloud-panel' : undefined} role={cloudTabs.length ? 'tabpanel' : undefined} aria-labelledby={cloudTabs.length ? `settings-cloud-tab-${activeSub}` : undefined} data-dir={subDir} data-settings-sub={activeSub || undefined}>
                 {tab === 'permissions' && hasDesktopPermissions() && <DesktopPermissions mode={p.themeMode} />}
                 {tab === 'computer-history' && <ComputerHistorySettings mode={p.themeMode} anchor="computer-history" />}
+                {tab === 'units' && <UnitSettings />}
                 {tab === 'remote-sessions' && <RemoteSessionsSettings />}
                 {/* 小节标题不在正文重复；当前子页面由左侧/移动首页的折叠子项标明。 */}
                 {/* 基本(U-14):用户常改的两项放第一屏;后端技术项挪到「连接」。 */}
@@ -2457,120 +2460,8 @@ export const SettingsModal: React.FC<{
                 })()}
 
                 {/* 本地联网搜索(BYO-key):engine /agent/websearch,写 config.json webSearch 段,搜索时即时生效。 */}
-                {tab === 'model' && isDesktop && activeSub === 'm-websearch' && (
-                  <>
-                    {wsRed && (
-                      <>
-                        <div className="field">
-                          <div className="hint" style={{ marginBottom: 8 }}>{t('settings.websearch.intro')}</div>
-                          <div className="field-row">
-                            <div className="field">
-                              <label>{t('settings.websearch.providerLabel')}</label>
-                              <select value={wsProvider} onChange={(e) => setWsProvider(e.target.value)}>
-                                <option value="auto">{t('settings.websearch.provider.auto')}</option>
-                                <option value="bocha">{t('settings.websearch.provider.bocha')}</option>
-                                <option value="tavily">{t('settings.websearch.provider.tavily')}</option>
-                                <option value="zhipu">{t('settings.websearch.provider.zhipu')}</option>
-                                <option value="duckduckgo">{t('settings.websearch.provider.duckduckgo')}</option>
-                              </select>
-                            </div>
-                            <div className="field">
-                              <label>{t('settings.websearch.zhipuEngineLabel')}</label>
-                              <select value={wsZhipuEngine} onChange={(e) => setWsZhipuEngine(e.target.value)} title={t('settings.websearch.zhipuEngineHint')}>
-                                <option value="search_pro_quark">{t('settings.websearch.zhipuEngine.quark')}</option>
-                                <option value="search_pro_sogou">{t('settings.websearch.zhipuEngine.sogou')}</option>
-                                <option value="search_pro">{t('settings.websearch.zhipuEngine.pro')}</option>
-                                <option value="search_std">{t('settings.websearch.zhipuEngine.std')}</option>
-                              </select>
-                            </div>
-                            <div className="field">
-                              <label>{t('settings.websearch.effectiveLabel')}</label>
-                              <div className="hint" style={{ paddingTop: 8 }}>
-                                {wsRed.configured
-                                  ? t('settings.websearch.effectiveLocal', { provider: wsRed.effectiveProvider })
-                                  : t('settings.websearch.effectiveCloud')}
-                              </div>
-                            </div>
-                          </div>
-                          {([['bocha', 'Bocha API Key', wsRed.bochaHasKey], ['tavily', 'Tavily API Key', wsRed.tavilyHasKey], ['zhipu', 'Zhipu API Key', wsRed.zhipuHasKey]] as const).map(([k, label, hasKey]) => (
-                            <div className="field" key={k} style={{ marginTop: 6 }}>
-                              <label>
-                                {label}
-                                {hasKey && !wsClear[k] && (
-                                  <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}> · {t('settings.websearch.keyStored')}</span>
-                                )}
-                                {wsClear[k] && (
-                                  <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}> · {t('settings.websearch.keyCleared')}</span>
-                                )}
-                              </label>
-                              <div style={{ display: 'flex', gap: 6 }}>
-                                <input
-                                  type="password"
-                                  autoComplete="off"
-                                  style={{ flex: 1 }}
-                                  value={wsKeys[k]}
-                                  placeholder={hasKey && !wsClear[k] ? t('settings.websearch.keyKeepPlaceholder') : t('settings.websearch.keyEmptyPlaceholder')}
-                                  onChange={(e) => {
-                                    setWsKeys({ ...wsKeys, [k]: e.target.value })
-                                    if (e.target.value) setWsClear({ ...wsClear, [k]: false })
-                                  }}
-                                />
-                                {hasKey && !wsClear[k] && (
-                                  <button className="btn ghost sm" onClick={() => { setWsClear({ ...wsClear, [k]: true }); setWsKeys({ ...wsKeys, [k]: '' }) }}>
-                                    {t('settings.websearch.clearKey')}
-                                  </button>
-                                )}
-                              </div>
-                            </div>
-                          ))}
-                          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 10, flexWrap: 'wrap' }}>
-                            <button
-                              className="btn primary sm"
-                              disabled={wsBusy}
-                              onClick={() => {
-                                const keyOut = (k: 'bocha' | 'tavily' | 'zhipu'): string => (wsClear[k] ? '' : (wsKeys[k] || '__keep__'))
-                                setWsBusy(true); setWsMsg('')
-                                void saveLocalWebSearch(homeTarget(), {
-                                  provider: wsProvider,
-                                  bochaApiKey: keyOut('bocha'),
-                                  tavilyApiKey: keyOut('tavily'),
-                                  zhipuApiKey: keyOut('zhipu'),
-                                  zhipuEngine: wsZhipuEngine,
-                                }).then((r) => {
-                                  setWsRed(r.config)
-                                  setWsKeys({ bocha: '', tavily: '', zhipu: '' })
-                                  setWsClear({ bocha: false, tavily: false, zhipu: false })
-                                  setWsMsg(t('settings.websearch.saved'))
-                                }).catch((e) => setWsMsg(`✗ ${e?.message || e}`))
-                                  .finally(() => setWsBusy(false))
-                              }}
-                            >
-                              {t('settings.btn.save')}
-                            </button>
-                            <button
-                              className="btn ghost sm"
-                              disabled={wsBusy}
-                              onClick={() => {
-                                const k = wsProvider as 'bocha' | 'tavily' | 'zhipu'
-                                const draft = (wsProvider === 'bocha' || wsProvider === 'tavily' || wsProvider === 'zhipu') ? wsKeys[k] : ''
-                                setWsBusy(true); setWsMsg(t('settings.websearch.testing'))
-                                void testLocalWebSearch(homeTarget(), { provider: wsProvider, apiKey: draft || '__keep__', zhipuEngine: wsZhipuEngine })
-                                  .then((r) => setWsMsg(r.ok
-                                    ? `✓ ${r.provider} · ${r.latencyMs}ms · ${r.resultCount ?? 0}${r.sampleTitle ? ` · ${String(r.sampleTitle).slice(0, 30)}` : ''}`
-                                    : `✗ ${r.provider}: ${r.error || 'failed'}`))
-                                  .catch((e) => setWsMsg(`✗ ${e?.message || e}`))
-                                  .finally(() => setWsBusy(false))
-                              }}
-                            >
-                              {wsBusy ? <Loader2 size={12} className="spin" /> : null} {t('settings.websearch.test')}
-                            </button>
-                            {wsMsg && <span style={{ fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-muted)' }}>{wsMsg}</span>}
-                          </div>
-                        </div>
-                      </>
-                    )}
-
-                  </>
+                {tab === 'model' && isDesktop && activeSub === 'm-websearch' && wsRed && (
+                  <WebSearchSettings target={homeTarget()} cfg={wsRed} setCfg={setWsRed} />
                 )}
 
                 {/* 语音页分三节,各管输入框上的一个键(10-02 用户报「通话音色和朗读混在一起、很误导」):
@@ -2735,6 +2626,28 @@ export const SettingsModal: React.FC<{
                           })}
                         </div>
                       )}
+                      {(() => {
+                        // 插件自带的 server:不在 mcp.json 里(编辑 / 删除会改写用户文件),只读列出,开关在插件设置里
+                        const fromPlugins = (mcpStatus || []).filter((s) => s.origin && !(s.server in mcpServers))
+                        if (!fromPlugins.length) return null
+                        return (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 10 }}>
+                            {fromPlugins.map((st) => (
+                              <div key={`${st.origin!.pluginId}:${st.server}`} className="file-row" style={{ cursor: 'default' }} title={t('settingsmodal.mcp.fromPluginHint')}>
+                                <span className="file-name">
+                                  <b>{st.server}</b>
+                                  <span style={{ color: 'var(--text-muted)', marginLeft: 8, fontSize: 'var(--ui-font-meta, 12px)' }}>
+                                    {t('settingsmodal.mcp.fromPlugin', { name: st.origin!.pluginName })}
+                                  </span>
+                                </span>
+                                <span className="file-size" title={st.error || undefined}>
+                                  {st.status === 'connected' ? t('settings.mcp.statusConnected', { count: st.tools.length }) : st.status === 'error' ? t('settings.mcp.statusError') : st.status}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        )
+                      })()}
                       {!editMcp && (
                         <button
                           className="btn ghost sm"
@@ -3081,6 +2994,54 @@ export const SettingsModal: React.FC<{
                           </>
                         )}
                       </div>
+                      {/* 强调色(--signal):指示类元素(落点线 / 开关 / 勾选 / 选中框 / 双链…)的那支色。'' = 跟随主题色,
+                          内置 id 取 SIGNALS,'#hex' 自定义(loader 按明暗收敛可读性)。全局一份,不进 Space 外观。 */}
+                      {(() => {
+                        const dark = p.themeMode === 'dark'
+                        const custom = /^#/.test(themeSignal)
+                        const pair = (id: string) => SIGNALS.find((x) => x.id === id)
+                        const tone = (id: string) => { const x = pair(id); return x ? (dark ? x.dark : x.light) : '' }
+                        const skinInfo = listSkins().find((sk) => sk.id === p.themeSkin)
+                        const accent = p.themeSkin === 'custom' || !skinInfo ? p.themeSeed : skinSwatch(skinInfo, dark, 'accent')
+                        // 「跟随」圆点:左上主题色、右下它带的强调色(单色配色带柔蓝;自定义取 loader 同一个 --signal-skin,近灰也是柔蓝)
+                        const follows = p.themeSkin === 'custom' ? customAccentVars(p.themeSeed, dark)['--signal-skin']
+                          : tone(p.themeSkin === 'cream' || p.themeSkin === 'ink' ? 'blue' : p.themeSkin) || accent
+                        const chips = [
+                          { id: '', label: t('settings.theme.signalFollow'), dot: `linear-gradient(135deg, ${accent} 0 50%, ${follows} 50% 100%)` },
+                          ...SIGNALS.map((x) => ({ id: x.id, label: x.id === 'blue' ? t('settings.theme.signalBlue') : t(`settings.theme.skin.${x.id}`), dot: dark ? x.dark : x.light })),
+                        ]
+                        return (
+                          <div className="settings-palette-axis">
+                            <strong>{t('settings.theme.signalLabel')}</strong>
+                            <div className="skin-row">
+                              {chips.map((c) => (
+                                <button key={c.id || 'follow'} type="button" className={`skin-chip${c.id === themeSignal ? ' active' : ''}`} title={c.label} onClick={() => setSignal(c.id)}>
+                                  <i className="skin-dot" style={{ background: c.dot }} />
+                                  <span>{c.label}</span>
+                                </button>
+                              ))}
+                              <button type="button" className={`skin-chip${custom ? ' active' : ''}`} title={t('settings.theme.skin.custom')} onClick={() => { if (!custom) setSignal('#b4532a') }}>
+                                <i className="skin-dot" style={{ background: custom ? themeSignal : 'conic-gradient(#d9774a, #c9b04a, #5f9a6a, #4f7fb0, #8a6fb0, #d9774a)' }} />
+                                <span>{t('settings.theme.skin.custom')}</span>
+                              </button>
+                            </div>
+                            {custom && (
+                              <div className="field-row" style={{ alignItems: 'center', gap: 10, marginTop: 11 }}>
+                                <input
+                                  type="color"
+                                  value={themeSignal}
+                                  onChange={(e) => setSignal(e.target.value)}
+                                  aria-label={t('settings.theme.customSignalLabel')}
+                                  style={{ width: 48, height: 32, padding: 0, border: 'none', background: 'none', cursor: 'pointer' }}
+                                />
+                                <span className="hint" style={{ fontFamily: 'var(--font-mono)' }}>{themeSignal}</span>
+                                <button className="btn ghost sm" onClick={() => setSignal('')}>{t('settings.theme.customBgClear')}</button>
+                              </div>
+                            )}
+                            <div className="hint" style={{ marginTop: 9 }}>{t('settings.theme.signalHint')}</div>
+                          </div>
+                        )
+                      })()}
                     </section>
                     <section className="settings-panel settings-theme-behavior">
                       <div className="settings-panel-head">
@@ -3152,6 +3113,17 @@ export const SettingsModal: React.FC<{
                             <button type="button" aria-pressed={p.glassOn} className={p.glassOn ? 'active' : ''} onClick={() => p.onGlassChange(true)}>{t('settings.theme.glassOn')}</button>
                             <button type="button" aria-pressed={!p.glassOn} className={!p.glassOn ? 'active' : ''} onClick={() => p.onGlassChange(false)}>{t('settings.theme.glassOff')}</button>
                           </div>
+                        </div>
+                        <div className="settings-control-row" data-setting-anchor="home-motion">
+                          <div className="settings-control-copy"><ImageIcon size={14} /><span><strong>{t('settings.theme.homeMotion')}</strong><small>{t('settings.theme.homeMotionHint')}</small></span></div>
+                          <button
+                            type="button"
+                            role="switch"
+                            aria-checked={homeMotion}
+                            aria-label={t('settings.theme.homeMotion')}
+                            className={`switch${homeMotion ? ' on' : ''}`}
+                            onClick={() => { setHomeMotion(!homeMotion); setHomepageWallpaperMotion(!homeMotion) }}
+                          />
                         </div>
                         {/* 直接读写 themeStore(同背景轴,不走 props 链 → 三端自动到位)。毛玻璃关着时这行照样在:
                             设置搜索的落点不能时有时无,开关本身只是记下偏好。 */}

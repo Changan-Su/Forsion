@@ -69,6 +69,8 @@ export interface DiscoveredHook {
   enabled: boolean;
   /** 真正会运行 = enabled && trust!=='needs-review'。 */
   active: boolean;
+  /** source === 'plugin':来自哪个引擎插件(观察档,输出不进判定,见 pluginHooks.ts)。 */
+  plugin?: { id: string; name: string };
 }
 
 // ── wire 输入（喂给 hook 脚本 stdin 的 JSON）──────────────────────────────
