@@ -20,7 +20,7 @@ import { findSupported, openFindBar } from './findInPage'
 import { useRecentViews } from './recentViews'
 import { planChatRestore, planSpaceSwitch } from './sessionOpenPlan'
 import { registerSpaces, LAST_EXIT_SPACE, startupSpacePref, resolveStartupTarget, awaitedStartupSpace } from './spaces'
-import { loadUserSpaces, settleAsyncStartupSpace, parkOnStartupFallback, saveCurrentAsSpace, createBlankSpace } from './userSpaces'
+import { loadUserSpaces, settleAsyncStartupSpace, watchStartupTakeover, saveCurrentAsSpace, createBlankSpace } from './userSpaces'
 import { installAmadeusPlugins } from './amadeusPlugins'
 import { installTanguProbe } from './tanguProbe'
 import { installBuiltins } from './builtins'
@@ -198,11 +198,11 @@ export function installEngine(): void {
     const target = resolveStartupTarget(lastExit)
     // 用户 L0 Space 作目标:此刻尚未异步装载 → setActiveSpaceCold 认不出会自己放过,下面 loadUserSpaces 完再补定位
     // 点名的 Space(固定档 / 主位槽里的插件 Space)还没注册 → target 只是回落值:只改内存、不落盘(口径同 registerSpaces 的归一)。
-    // 落了盘,补定位没赶上的那一程(下面)盘上就留着「上次退出 = 回落 Space」。人先停在回落 Space 上等它(parkOnStartupFallback)。
+    // 落了盘,补定位没赶上的那一程(下面)盘上就留着「上次退出 = 回落 Space」。人先停在回落 Space 上等它。
     const parked = awaitedStartupSpace() !== null
     setActiveSpaceCold(target, !parked)
     adoptSpaceLayoutCold(lastExit, target)
-    if (parked) parkOnStartupFallback()
+    watchStartupTakeover(parked) // 此后活动 Space 一变 = 用户接管了导航,补定位不再拽他(回落与否都是)
   }
   // Space 窗口(整个 Space 开在自己的窗口里):第一次打开照这个 Space 存着的布局摆,之后记自己的。须在 Dockview 就绪之前。
   seedSpaceWindowLayout()

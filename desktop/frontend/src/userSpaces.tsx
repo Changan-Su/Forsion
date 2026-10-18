@@ -92,11 +92,13 @@ export const isUserSpace = (id: string): boolean => userIds.has(id)
 /** 插件带来的 Space 属于哪个插件(不是插件 Space 时 undefined)。新建标签页据此把该插件的视图归到它的 Space 那一格。 */
 export const pluginOfSpace = (id: string): string | undefined => pluginSpaceOwner.get(id)
 
-/** bootstrapEngine 把人落在回落 Space 上之后调:此后活动 Space 一变 —— 用户自己切(哪怕又切了回来)、宿主把他带去别处 ——
- *  就算他接管了导航,补定位结案,点名的那个到了也不拽他。从落位那一刻就记,不等第一趟补定位(配方装载慢的时候,那之前的
- *  一次往返会漏掉;Codex 评审)。补定位自己把人带过去时也会触发,那时本来就该结案。 */
-export function parkOnStartupFallback(): void {
-  parkedOnFallback = true
+/** bootstrapEngine 冷定位之后就调(`parked` = 落在了回落 Space 上):此后活动 Space 一变 —— 用户自己切(哪怕又切了回来)、
+ *  宿主把他带去别处 —— 就算他接管了导航,补定位结案,不再把他拽回启动 Space。从落位那一刻就记,不等第一趟补定位(配方装载慢的时候,
+ *  那之前的一次往返会漏掉;Codex 评审)。补定位自己把人带过去时也会触发,那时本来就该结案。
+ *  ⚠️ 不只回落那条路:缺省档落在主页、插件还没装完时用户点了别的 Space,第一趟补定位(插件装完才跑)以前照样
+ *  setActiveSpace(主页) 把他拽回去 —— 手机上装着插件时重载后 1~2 秒可见(2026-10-18 模拟器台架实录)。 */
+export function watchStartupTakeover(parked: boolean): void {
+  parkedOnFallback = parked
   const off = useSpaceStore.subscribe((s, p) => { if (s.activeSpaceId !== p.activeSpaceId) { off(); asyncStartupSpaceResolved = true } })
 }
 
@@ -257,7 +259,7 @@ export function settleAsyncStartupSpace(): void {
   // 固定档 / 主位档点名的 Space 还没注册 → want 只是回落值,启动已经落在它上面(bootstrapEngine,只改内存)。这一趟照常往下走
   // (纯插件产品的画像在下面补),但**不结案**:插件比第一趟配方装载晚装完时(两者只差几毫秒,真 Electron 重载 60 次里 2 次),
   // 点名的那个到下一趟才注册 —— 以前在这里结了案,它注册上来也没人再把用户带过去,窗口停在回落 Space(10-04 实报)。
-  // 它永远不来(插件已删)就一直不结案,每一趟都是空转。等的这段时间里用户接管了导航 → parkOnStartupFallback 的订阅结案,
+  // 它永远不来(插件已删)就一直不结案,每一趟都是空转。等的这段时间里用户接管了导航 → watchStartupTakeover 的订阅结案,
   // 走不到这里。结案只进不退:下面只在 final 时置真,从不写回假。
   const final = awaitedStartupSpace() === null
   // 回落之后才等到它,屏上是回落 Space 的现场(Dockview 没就绪就谈不上现场),用户可能已经在里面动过(多开了标签)。
