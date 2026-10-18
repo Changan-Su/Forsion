@@ -416,6 +416,20 @@ async function main() {
     check('⑥ ⌘A 全选', /^已选 \d+ 项/.test(all) && Number(all.match(/已选 (\d+)/)?.[1]) === (await win.locator('.pz-table tbody tr').count()), all)
     await win.keyboard.press('Escape')
 
+    // 退出前确认:还有在传的,退出先问(主进程的对话框换成假的,答「取消」)→ 不退;取消那一项后照常退(收尾的 app.close 就是这条)
+    cloud.st.throttle = true
+    await win.locator('.pz input[type=file][multiple]').setInputFiles([batch1[0]])
+    await win.waitForFunction(() => /正在传输/.test(document.querySelector('.pz-txcard .pz-txhead b')?.textContent || ''), null, { timeout: 8000 }).catch(() => {})
+    await app.evaluate(({ dialog }) => { globalThis.__asked = []; dialog.showMessageBox = async (w, o) => { globalThis.__asked.push(String((o || w)?.message)); return { response: 1, checkboxChecked: false } } })
+    await app.evaluate(({ app: a }) => { a.quit() })
+    await win.waitForTimeout(1500)
+    const asked = await app.evaluate(() => globalThis.__asked)
+    const alive = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)
+    check('⑥ 还有在传的时候退出:先问「还有 1 个文件没传完」,点取消就不退', alive > 0 && asked.length === 1 && asked[0] === '还有 1 个文件没传完', JSON.stringify(asked))
+    await win.locator('.pz-txcard .pz-ib[title="取消"]').first().click().catch(() => {})
+    cloud.st.throttle = false
+    await win.waitForTimeout(600)
+
     // ④ 设置 › 同步 › 远程同步
     const before = app.windows().length
     await win.evaluate(() => window.dispatchEvent(new CustomEvent('forsion:open-settings', { detail: 'sync/s-remote' })))
