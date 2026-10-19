@@ -2,6 +2,7 @@
 // 钉住一条:源码里用字面量写到这些键的文件,必须**自己** import 这个片段 —— 靠别处碰巧先加载过,换个窗口 / 入口就会原样露出键名。
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
+import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 
 const SRC = resolve(__dirname, '..')
@@ -20,12 +21,20 @@ function* sources(dir: string): Generator<string> {
   }
 }
 
+/** 只认真实的 import(注释掉的不算 —— Codex 2c 评审);写法不限副作用 import。 */
 const importsFragment = (file: string, src: string): boolean =>
-  [...src.matchAll(/import\s*['"]([^'"]+)['"]/g)].some((m) => m[1].startsWith('.') && resolve(dirname(file), m[1]).replace(/\.ts$/, '') === FRAGMENT.replace(/\.ts$/, ''))
+  ts.preProcessFile(src, true, true).importedFiles.some(({ fileName }) =>
+    fileName.startsWith('.') && resolve(dirname(file), fileName).replace(/\.ts$/, '') === FRAGMENT.replace(/\.ts$/, ''))
 
 describe('tangu/messages 片段', () => {
   it('仪器自检:片段里的键解析得出来', () => {
     expect(KEYS.length).toBeGreaterThan(300)
+  })
+
+  it('仪器自检:注释掉的 import 不算数', () => {
+    const file = join(SRC, 'views/chat2/X.tsx')
+    expect(importsFragment(file, "import '../../tangu/messages'")).toBe(true)
+    expect(importsFragment(file, "// import '../../tangu/messages'\n/* import '../../tangu/messages' */")).toBe(false)
   })
 
   it('用到片段里的键的文件都自己 import 了它', () => {
