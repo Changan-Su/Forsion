@@ -93,8 +93,16 @@ export function validateUIDocument(raw: unknown, options: { draft?: boolean; max
   // a model wrote version 1 with a stats block and gave up after the rejection).
   const v2 = d.version === 2 || (maxVersion >= 2 && usesVersion2(d))
   const expr = (x: unknown, p: string, scope: ExprScope): string => {
-    try { compileExpr(x, scope) } catch (e) { fail(p, e instanceof Error ? e.message : String(e)) }
-    return x as string
+    // A plain JSON value where an expression goes ("to": 0, "value": true) is that value (live 10-20).
+    const src = typeof x === 'string' || x === undefined ? x : JSON.stringify(x)
+    try { compileExpr(src, scope) } catch (e) { fail(p, e instanceof Error ? e.message : String(e)) }
+    return src as string
+  }
+  /** A shown value: an expression, or text with {{ }} slots (models write both for stats). */
+  const display = (x: unknown, p: string, scope: ExprScope): string => {
+    if (typeof x !== 'string' || !x.includes('{{')) return expr(x, p, scope)
+    for (const src of interpolationSources(str(x, p, 400))) expr(src, `${p} {{${src.slice(0, 40)}}}`, scope)
+    return x
   }
   const inputs = unique(list(d.inputs, 'inputs', 8, (v, p): UIInput => {
     const o = obj(v, p), common = { id: id(o.id, `${p}.id`), label: str(o.label, `${p}.label`, 160) }
@@ -180,7 +188,7 @@ export function validateUIDocument(raw: unknown, options: { draft?: boolean; max
       case 'stats': if (!v2) break
         return { ...common, kind: 'stats', items: list(o.items, `${p}.items`, 4, (v, q) => {
           const a = obj(v, q)
-          return { label: str(a.label, `${q}.label`, 80), value: expr(a.value, `${q}.value`, scope) }
+          return { label: str(a.label, `${q}.label`, 80), value: display(a.value, `${q}.value`, scope) }
         }) }
       case 'table': if (!v2) break
         return { ...common, kind: 'table', columns: list(o.columns, `${p}.columns`, 6, (v, q) => str(v, q, 80)), rows: expr(o.rows, `${p}.rows`, scope) }

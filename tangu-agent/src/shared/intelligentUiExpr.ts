@@ -381,6 +381,7 @@ export function documentEnv(doc: Pick<UIDocument, 'inputs' | 'state' | 'derived'
       try { return { ok: true, value: evaluate(compileExpr(src, scope), env) } } catch (e) { return { ok: false, error: e instanceof Error ? e.message : String(e) } }
     },
     text: src => {
+      if (src.includes('{{')) return src.replace(SLOT, (_, inner: string) => env.text(inner.trim()))
       const c = env.cell(src)
       if (!c.ok) return '—'
       try { return uiText(c.value) } catch { return '—' }
@@ -450,7 +451,7 @@ export function uiDocumentIssues(doc: UIDocument, locale: 'zh' | 'en' = 'en'): s
     if (b.when && 'input' in b.when && b.when.equals !== doc.inputs.find(i => i.id === (b.when as { input: string }).input)?.initial) continue
     if (!shown(b.id, b.when)) continue
     if (b.kind === 'text' || b.kind === 'disclosure') for (const src of interpolationSources(b.markdown)) probe(`${b.id} {{${src}}}`, src, uiText)
-    if (b.kind === 'stats') b.items.forEach((item, i) => probe(`${b.id}.items[${i}]`, item.value, uiText))
+    if (b.kind === 'stats') b.items.forEach((item, i) => { for (const src of item.value.includes('{{') ? interpolationSources(item.value) : [item.value]) probe(`${b.id}.items[${i}]`, src, uiText) })
     if (b.kind === 'table') probe(`${b.id}.rows`, b.rows, v => uiTableRows(v, b.columns.length))
     if (b.kind === 'checklist') for (const item of b.items) shown(`${b.id}.${item.id}`, item.when)
     if (b.kind === 'actions') for (const a of b.items) if (a.kind === 'set' && a.disabled) probe(`${b.id}.${a.id}.disabled`, a.disabled)

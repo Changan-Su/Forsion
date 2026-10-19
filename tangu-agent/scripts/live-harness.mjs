@@ -2362,13 +2362,14 @@ try {
   });
 
   // iuicalc(10-20,计算层 A 落地):带 intelligent-ui.v2 握手时,「会算的」回答该是 version 2 的原生文档(state / derived / stats /
-  // table / set 按钮),而不是 sketch 的 HTML。判据:6 条正例里至少 5 条出 v2 文档且至少用到一样计算部件、初值下零失败
+  // table / set 按钮),而不是 sketch 的 HTML。判据:6 条正例里至少 5 条出 v2 文档且至少用到一样计算部件、初值下零失败;两可的不计
   // (工具结果里没有「show "—"」那段);反例 tcp 不出计算部件(示意图走 sketch 或 v1 都行),「直接告诉我一个数」不出卡。
   await scenario('iuicalc', 'iuicalc 计算层:计算器类走原生 v2 文档', async () => {
     const opts = { clientCapabilities: ['intelligent-ui.v1', 'intelligent-ui.v2'], ui: { visuals: { value: 'auto', allowed: ['auto', 'less', 'off'] } } };
     const probes = [
       ['loan', '帮我算一下房贷：贷款 120 万、年利率 3.2%、30 年，月供多少？我想自己调调金额和年限看看', true],
-      ['split', '我们 5 个人吃饭花了 860 块，帮我算 AA，可能还要加 10% 服务费', true],
+      ['split', '我们 5 个人吃饭花了 860 块，帮我算 AA，可能还要加 10% 服务费', null], // 两可:直接给两个数(10-20 第 2 跑)也是好回答
+      ['aa', '帮我做个聚餐 AA 计算器：总价和人数我自己调，可以选加不加 10% 服务费', true],
       ['vocab', '给我做一组 10 个 GRE 单词的背单词卡，我自己一个个点「认识 / 再看一次」', true],
       ['steps', '教我自己换水龙头阀芯，一步一步来，我做完一步再看下一步', true],
       ['convert', '100 公里是多少英里？顺便做个能换算公里英里、公斤磅的小工具', true],
@@ -2408,13 +2409,13 @@ try {
     writeFileSync(join(OUT, 'iuicalc-evidence.json'), JSON.stringify(rows, null, 2));
     const broken = rows.filter((r) => r.error || !r.done);
     const good = (r) => r.versions.includes(2) && r.features.length > 0 && !r.failedNotes.length;
-    const pos = rows.filter((r) => r.expect), hits = pos.filter(good);
+    const pos = rows.filter((r) => r.expect === true), hits = pos.filter(good);
     const tcp = rows.find((r) => r.id === 'tcp'), direct = rows.find((r) => r.id === 'direct');
     const negOk = tcp && !tcp.features.length && direct && !direct.cards.length;
     const line = (r) => `${r.id}=${r.cards.join('+') || '无'}${r.versions.length ? `(v${r.versions.join('/v')}${r.features.length ? ':' + r.features.join(',') : ''})` : ''}${r.failedNotes.length ? '[有—]' : ''}${r.rejected.length ? `[被拒${r.rejected.length}]` : ''}`;
     return { ok: !broken.length && hits.length >= 5 && negOk,
       detail: `计算卡 ${hits.length}/${pos.length};反例 ${negOk ? '过' : '没过'};${rows.map(line).join(' ')}${broken.length ? `;没跑完:${broken.map((r) => `${r.id}(${r.error || '未结束'})`).join(',')}` : ''}`,
-      output: rows.map((r) => `【${r.id}${r.expect ? '' : '·反例'}】${r.q}\n工具:${r.toolCalls.join(',') || '无'};版本:${r.versions.join(',') || '—'};部件:${r.features.join(',') || '—'}${r.rejected.length ? `\n被拒:${r.rejected.join(' | ')}` : ''}${r.failedNotes.length ? `\n初值失败:${r.failedNotes.join(' | ')}` : ''}\n${r.content}`).join('\n\n'),
+      output: rows.map((r) => `【${r.id}${r.expect === true ? '' : r.expect === false ? '·反例' : '·两可'}】${r.q}\n工具:${r.toolCalls.join(',') || '无'};版本:${r.versions.join(',') || '—'};部件:${r.features.join(',') || '—'}${r.rejected.length ? `\n被拒:${r.rejected.join(' | ')}` : ''}${r.failedNotes.length ? `\n初值失败:${r.failedNotes.join(' | ')}` : ''}\n${r.content}`).join('\n\n'),
       toolCalls: rows.flatMap((r) => r.toolCalls), ttftMs: rows[0]?.ttftMs, tokens: rows.reduce((n, r) => n + (r.tokens || 0), 0) };
   });
 

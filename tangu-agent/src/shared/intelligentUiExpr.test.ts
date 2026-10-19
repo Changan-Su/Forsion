@@ -101,6 +101,16 @@ describe('Intelligent UI v2 validation', () => {
     const parsed = validateUIDocument(doc)
     expect(documentEnv(parsed, { loan: 120, rate: 3.2, years: 30 }, new Map(), 'zh').text("format(payment, 'number', 0)")).toBe('5,190')
   })
+  it('takes a plain JSON value as an expression, and {{ }} text as a stats value (live 10-20 habits)', () => {
+    const doc = structuredClone(gallery.vocab) as unknown as Record<string, any>
+    doc.blocks[5].items[2].steps = [{ set: 'i', to: 0 }, { set: 'known', to: [] }]
+    doc.blocks[4].items[0].value = '{{count(known)}} 个'
+    const parsed = validateUIDocument(doc)
+    const restart = parsed.blocks.flatMap(b => b.kind === 'actions' ? b.items : []).find(a => a.id === 'restart')!
+    expect(restart.kind === 'set' && restart.steps).toEqual([{ set: 'i', to: '0' }, { set: 'known', to: '[]' }])
+    expect(documentEnv(parsed, {}, new Map((parsed.state || []).map(s => [s.id, s.initial])), 'zh').text('{{count(known)}} 个')).toBe('0 个')
+    expect(uiDocumentIssues(parsed)).toEqual([])
+  })
   it('points long data in an expression to state', () => {
     const doc = loan(); doc.derived[0].expr = `[${Array.from({ length: 60 }, (_, i) => `'w${i}'`).join(',')}]`
     expect(() => validateUIDocument(doc)).toThrow("put data such as word lists, steps or rows in a state value's initial")
