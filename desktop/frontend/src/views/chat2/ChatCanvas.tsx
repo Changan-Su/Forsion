@@ -11,10 +11,8 @@
  *  - 单击卡 = 选中(不在当前这一支上就切到那一支,主区就地换);双击 = 切回对话、滚到那一轮。
  */
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, CornerDownRight, Hand, ListTree, MoveDown, MoveRight } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
-import { useViewChromeSlot } from '@lcl/engine'
 import type { UiMessage } from '../../types'
 import { useApp } from '../../stores/appStore'
 import { registerMessages, useI18n } from '../../i18n'
@@ -69,24 +67,6 @@ export function useChatCanvasPref(rootId: string | null): [CanvasPref, (patch: P
   }, [rootId])
   const saved = rootId ? all[rootId] : undefined
   return [{ on: !!saved?.on, dir: saved?.dir === 'h' ? 'h' : 'v' }, set]
-}
-
-/** 标签栏右端「对话 / 画布」胶囊(复用云端 / 本地那颗 .t2s-vaultseg,滑块方向 data-side 认 local / canvas)。 */
-export function ChatCanvasSeg({ on, onChange }: { on: boolean; onChange: (on: boolean) => void }) {
-  const { t } = useI18n()
-  return (
-    <div className="t2s-vaultseg t2cv-seg" role="tablist" aria-label={t('chatcanvas.seg.aria')} data-testid="chat-canvas-seg">
-      <div className="t2s-vaultseg-thumb" data-side={on ? 'canvas' : 'local'} />
-      <button type="button" role="tab" aria-selected={!on} className={on ? '' : 'on'} onMouseDown={(e) => e.preventDefault()} onClick={() => on && onChange(false)}>{t('chatcanvas.seg.chat')}</button>
-      <button type="button" role="tab" aria-selected={on} className={on ? 'on' : ''} onMouseDown={(e) => e.preventDefault()} onClick={() => !on && onChange(true)}>{t('chatcanvas.seg.canvas')}</button>
-    </div>
-  )
-}
-
-/** 投进本视图所在那组标签栏右端的空位(引擎 WorkspaceHost 的 ViewChrome;一组只登记活动标签的 id,重画了会重新登记)。 */
-export function ViewChromePortal({ leafId, children }: { leafId: string; children: React.ReactNode }) {
-  const slot = useViewChromeSlot(leafId)
-  return slot ? createPortal(children, slot) : null
 }
 
 // ── 自动排版 ──

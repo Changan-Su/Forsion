@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.51.0
+  version: 1.52.0
   author: Forsion
   category: Forsion
 ---
@@ -313,6 +313,7 @@ ctx.registerView({ id: 'home', title: 'Muse', mount(el) {
 | `registerSetting` | 详情页声明式表单(number/boolean/text) | 每键一个字符串,**没有原子性**;同 key 重注册即覆盖 |
 | `ctx.ui.mountMarkdownEditor` | 视图内原生 Amadeus Markdown 编辑器 | 正文归调用方(API 草稿等),**不碰笔记库**;保存前 `getValue()`;`modes: false` 不画「编辑 / 源码 / 预览」那一排;老宿主没有 → 可选链 |
 | `ctx.ui.mountFloatingToc` | 视图内原生悬浮目录 | 插件保有正文 DOM,宿主负责扫描 / 滚动高亮 / 跳转 / 主题;老宿主没有 → 可选链 |
+| `ctx.ui.setViewModes(el, spec)` | 视图的几种「看法」(转写 / 笔记 / 纪要、文档 / 画布这类同一份东西换摆法) | 2026-10-19 起;宿主把胶囊画在视图头行最左,⌥⌘V、命令面板「看法：X」、窄宽变形、手机顶栏都归宿主;2–4 种,`icon` 用图标词表名;句柄 `actions` = 同一行右边,把自己栏里的按钮挪进去;记忆归你(按记录 / 文件记);老宿主没有 → 可选链,保留自己的标签。见下「View modes」 |
 | `ctx.ui.mountSelectionBar` | 自己的视图里选中文字后浮出宿主的划线条 | 宿主给「问 Tangu / 翻译 / ⋯」,你声明自己的工具(图标钮 / 颜色点);不接就什么都不出;老宿主没有 → 可选链,保留自己的菜单 |
 | `ctx.ui.mountRecord` | 自己的卡片里挂宿主的「一行记录」编辑字段(标题 / 时间 / 属性,和内置日历的事件浮卡同一份) | 2026-10-17 起;⚠️**声明 `"databases"` 才有**;写口同 `ctx.databases.setCell`,外框 / 关闭 / 打开 / 删除归你;见下「日历 / 待办类插件的其余入口」 |
 | `ctx.ui.contextMenu(x, y, items)` | 宿主样式的右键菜单(和内置主页、Ribbon 的一样) | 2026-10-18 起;`items` = `{ label, run(), checked?, disabled?, danger? }`,视口坐标、放不下自己翻面;同一时刻只开一个,点外面 / Esc / 点了某项就关;返回关闭函数;老宿主没有 → `ctx.ui?.contextMenu?.(…)` |
@@ -610,6 +611,40 @@ ctx.registerView({ id: 'manual', title: 'Manual', mount(el) {
   跳转落地后宿主会再量一次、差得多就补,正文用了 `content-visibility: auto` 也落得准。
   `dispose()` 幂等,同步摘掉宿主加在 `shell` 里的那层(你的正文不动);插件禁用 / 重载时宿主也会统一卸载。
 - 旧宿主整个 `ctx.ui` 不存在,一律 `ctx.ui?.mountFloatingToc(...)`;缺席时可继续显示正文,不必仿一份目录。
+
+### View modes: ctx.ui.setViewModes (2026-10-19+)
+
+Two to four ways to look at the **same thing** (Transcript / Notes / Summary, Document / Canvas, Day / Week / Month)
+are a *view mode* switch. Every view puts it in the same place: the left end of the view's 32px head row. Do not
+draw your own tabs for this on new hosts — report the modes and let the host draw them:
+
+```js
+ctx.registerView({ id: 'session', title: 'Session', mount(el) {
+  const memo = loadMemo()                                     // remember per thing you show (record, file) — the host stores nothing
+  const modes = ctx.ui?.setViewModes?.(el, {                  // el = the element mount() received
+    modes: [
+      { id: 'transcript', label: '转写', labelEn: 'Transcript', icon: 'audio-lines' },
+      { id: 'notes',      label: '笔记', labelEn: 'Notes',      icon: 'notebook-pen' },
+      { id: 'summary',    label: '纪要', labelEn: 'Summary',    icon: 'list-checks' },
+    ],
+    value: memo[recordId] || 'transcript',                    // a newly opened thing starts on the first mode
+    onChange: (id) => { memo[recordId] = id; saveMemo(memo); show(id) },  // click, ⌥⌘V and the command palette all land here
+  })
+  if (modes) modes.actions.append(targetSelect, moreButton)  // your toolbar buttons: right end of the same row
+  else drawOwnTabs(el)                                         // hosts up to 2.13.4: keep your tabs
+  return () => modes?.dispose()
+} })
+```
+
+- The host owns ⌥⌘V (Ctrl+Alt+V) to the next mode, one "View: X" command per mode in the palette, the hover hint,
+  icons only under 480px of view width (only if every mode has a known `icon`), a "Current ▾" menu under 320px,
+  and the phone top bar. `modes.set(id)` moves the switch when *you* switch (it does not call `onChange`);
+  `modes.update(patch)` changes labels or the mode list (call it on a locale change if you pass one language only).
+- `icon` is a name from the plugin icon vocabulary (`audio-lines` / `notebook-pen` / `list-checks` were added for
+  this; `layout`, `page`, `code`… work too). `labelEn` is used in the English UI; otherwise `label` is shown.
+- One switch per view, 2–4 modes; fewer or more throws (more than four belongs in tabs). Calling it again on the same
+  view replaces the previous switch. The host removes it on disable / reload / view close.
+- Filters ("All / Mine") and source switches are not view modes: draw those in your own content, not in this slot.
 
 ### Selection bar: ctx.ui.mountSelectionBar and registerSelectionAction scopes (2026-10-13+)
 

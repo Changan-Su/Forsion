@@ -1309,6 +1309,3 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 }
 /* 回到正在生成的那张卡:同「回到底部」那颗,摆在输入框正上方居中(右下角归缩放胶囊和缩略图) */
 .t2-jump.jump-bottom.t2cv-jump { right: auto; left: 50%; transform: translateX(-50%); bottom: calc(var(--t2-composer-h, 96px) + 26px); }
-/* 标签栏右端的「对话 / 画布」胶囊(引擎 ViewChrome 空位里;云端 / 本地那颗 .t2s-vaultseg 本体在 sidebar2.css) */
-.dv-view-chrome .t2s-vaultseg.t2cv-seg { width: 118px; height: 24px; margin: 0; flex-shrink: 0; }
-.dv-view-chrome .t2s-vaultseg.t2cv-seg button { font-size: var(--ui-font-caption, 11px); }

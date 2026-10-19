@@ -1,7 +1,7 @@
 /** 主区聊天 leaf：followActive 跟随侧栏；分屏 leaf 用 sessionId 固定会话。 */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from 'react'
 import { AnimatePresence } from 'framer-motion'
-import { ArrowDown, Folder, MessageCircleQuestion, Quote } from 'lucide-react'
+import { ArrowDown, Folder, MessageCircleQuestion, MessageSquare, Quote, Waypoints } from 'lucide-react'
 import type { AgentConfig, UiMessage } from '../types'
 import { Composer2 } from './chat2/Composer2'
 import { AgentSelectStrip } from '../components/AgentSelectStrip'
@@ -39,7 +39,7 @@ import { useApp, stickyDefaults, activeChatModelId, withAmadeusWorkspace, applyP
 import { settleModes } from '../stores/projectSettings'
 import { currentPlatform } from '../services/agentRunService'
 import { hasChatRef, readChatRefs } from './chat2/chatDragRef'
-import { useWorkspace, useSpaceStore, UI_MODE, Skeleton, scrollToElement, cancelScrollToElement } from '@lcl/engine'
+import { useWorkspace, useSpaceStore, UI_MODE, Skeleton, scrollToElement, cancelScrollToElement, useViewModes, ViewHead, inSingleColumnShell } from '@lcl/engine'
 import { useTailFirst } from './chat2/useTailFirst'
 import { AgentDesk, DeskCard, useDeskHome } from './chat2/AgentDesk'
 import { HistorianStatus } from './chat2/HistorianStatus'
@@ -47,7 +47,7 @@ import { TeamStatus } from './chat2/TeamDesk'
 import { ChildChatPanel, SubChatStatus } from './chat2/ChildChatPanel'
 import { openBtw, quoteInMainChat } from './chat2/btwStore'
 import { useChildChat } from '../stores/childChatStore'
-import { ChatCanvas, ChatCanvasSeg, ViewChromePortal, useChatCanvasPref } from './chat2/ChatCanvas'
+import { ChatCanvas, useChatCanvasPref } from './chat2/ChatCanvas'
 import { TeamSummary } from './chat2/TeamSummary'
 import { useI18n } from '../i18n'
 import { speakMessage, stopSpeaking, subscribeTts, ttsState, type TtsState } from '../services/ttsService'
@@ -531,10 +531,20 @@ export function ChatView({ leaf, params }: ViewProps) {
   // 画布(方案「Chat 画布分支」第二步):同一棵会话树的另一种看法。偏好按树根记 —— 在画布里点到别的支,不会翻回对话。
   // 不给画布的地方:团队 / 群聊、私聊 Agent / 引擎、子会话面板、小窗、钉住会话的分屏、Coding 工作台、手机(没有这条标签栏)。
   const treeRoot = activeSession?.fork_message_id ? (activeSession.parent_session_id || activeId) : activeId
-  const canvasAllowed = !!activeId && followActive && leaf.loc === 'main' && UI_MODE !== 'mobile' && !params.childSurface && !params.miniSurface && !params.readOnly && !studioChat
+  const canvasAllowed = !!activeId && followActive && leaf.loc === 'main' && !inSingleColumnShell() && !params.childSurface && !params.miniSurface && !params.readOnly && !studioChat
     && !mvCfg.groupChat && !mvCfg.teamSlug && !mvCfg.teamMember && !mvCfg.soloAgentSlug && !mvCfg.soloEngineId && !mvCfg.engineId
   const [canvasPref, setCanvasPref] = useChatCanvasPref(treeRoot)
   const canvasOn = canvasAllowed && canvasPref.on
+  // 「对话 / 画布」= 视图模式(lcl viewModes):胶囊在这一列的头行左端,⌥⌘V 切换;记忆照旧按树根
+  useViewModes(leaf.id, canvasAllowed ? {
+    modes: [
+      { value: 'chat', label: t('chatcanvas.seg.chat'), icon: MessageSquare },
+      { value: 'canvas', label: t('chatcanvas.seg.canvas'), icon: Waypoints },
+    ],
+    value: canvasOn ? 'canvas' : 'chat',
+    onChange: (v) => setCanvasPref({ on: v === 'canvas' }),
+    ariaLabel: t('chatcanvas.seg.aria'),
+  } : null)
   // 画布里双击一张卡:切回对话、滚到那个会话里的那一轮(搜索跳转那条路,历史没到齐会等)
   const openTurn = useCallback((sid: string, mid: string): void => {
     setCanvasPref({ on: false })
@@ -601,6 +611,8 @@ export function ChatView({ leaf, params }: ViewProps) {
           puts it afterwards), the input alone otherwise: an empty chat's mark is centred, not bottom-anchored.
           Markers only; nothing reads them elsewhere. */}
       <div className="t2-chat-col" data-kb-rise={anyShown ? 'end' : undefined}>
+      {/* 头行只盖这一列(右栏卡片不动、不放会话标题);画布模式下它浮在舞台上面 */}
+      <ViewHead leafId={leaf.id} testId="chat-canvas-seg" />
       <ErrorBoundary key={activeId || 'none'}>
         <div className="t2-chat-body">
           {hasMessages && <FloatingToc scrollContainerRef={chatScrollRef} scanTrigger={shownMessages.length} />}
@@ -703,7 +715,6 @@ export function ChatView({ leaf, params }: ViewProps) {
       {canvasOn && activeId && treeRoot && (
         <ChatCanvas key={treeRoot} rootId={treeRoot} activeId={activeId} dir={canvasPref.dir} onDir={(dir) => setCanvasPref({ dir })} onOpenTurn={openTurn} />
       )}
-      {canvasAllowed && <ViewChromePortal leafId={leaf.id}><ChatCanvasSeg on={canvasOn} onChange={(on) => setCanvasPref({ on })} /></ViewChromePortal>}
 
       {/* 空状态优先保持 view 居中;空间不足时按 composer 实高向上避让,小高度逐级精简。 */}
       {!hasMessages && !historyLoading && !canvasOn && <EmptyState2 compact={!!params.miniSurface} title={params.miniSurface ? t('mini.chatHint') : studioChat ? t('studio.chatTitle') : undefined} subtitle={studioChat ? t(studioRoot ? 'studio.chatHint' : 'studio.chooseProject') : undefined} />}

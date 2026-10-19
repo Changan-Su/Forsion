@@ -19,7 +19,9 @@ export type {
 export { label } from './types'
 
 export { Shell } from './Shell'
-export { startOpenDrag, useViewChromeSlot, VIEW_CHROME_ATTR } from './WorkspaceHost'
+export { startOpenDrag } from './WorkspaceHost'
+export { useViewModes, useViewModesOf, viewModesOf, viewModeTarget, nextViewMode, installViewModeCommands, inSingleColumnShell, ViewModeSwitch, ViewHead, VIEW_MODE_NEXT } from './viewModes'
+export type { ViewModeOption, ViewModesSpec } from './viewModes'
 export { openMainBesideThisTask, mainOpensBeside } from './openBeside'
 export { SingleColumnHost, accountMenuRows, drawerPreview } from './SingleColumnHost'
 export { listFirstNow, useListFirst } from './listFirst'

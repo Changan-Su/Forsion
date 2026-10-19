@@ -1,0 +1,133 @@
+/* 看法胶囊 + 视图头行(viewModes.tsx)。
+ * 外观照抄 `.t2s-vaultseg`(desktop views/chat2/sidebar2.css,本地 | 云端那颗):轨道恒比所在面板暗一档,滑块次强调色,
+ * 选中字 --accent-ink。那边改了明暗关系这边要跟着改。自带一份是因为 sidebar2.css 不是全局加载的,插件视图可能先于它渲染。 */
+
+.lcl-vmode { display: inline-flex; align-items: center; flex-shrink: 0; min-width: 0; -webkit-app-region: no-drag; }
+
+.lcl-vmode-pill {
+  position: relative;
+  display: inline-grid;
+  grid-auto-flow: column;
+  /* 各格等宽(取最长那格);两格缺省 118 宽 = 原来 Amadeus / Chat 那颗的尺寸 */
+  grid-auto-columns: minmax(57px, 1fr);
+  height: 24px;
+  padding: 2px;
+  border-radius: var(--radius-pill, 999px);
+  background: rgba(0, 0, 0, 0.05);
+}
+:root.dark .lcl-vmode-pill { background: rgba(0, 0, 0, 0.24); }
+
+.lcl-vmode-thumb {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  left: 2px;
+  width: calc((100% - 4px) / var(--seg-n, 2));
+  border-radius: var(--radius-pill, 999px);
+  background: var(--accent-light, var(--overlay-light, rgba(127, 127, 127, 0.12)));
+  transition: transform 0.3s cubic-bezier(0.32, 1.25, 0.5, 1);
+  transform: translateX(calc(var(--seg-i, 0) * 100%));
+}
+
+/* 选择器都带上 .lcl-vmode 前缀(0,2,1):宿主视图常有 `.csu button` / `.dt button { color: inherit }` 这种宽规则,
+   同特异性时谁后加载谁赢,胶囊会被它们压成别的样子 */
+.lcl-vmode .lcl-vmode-pill > button,
+.lcl-vmode > .lcl-vmode-drop {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 0;
+  height: auto;
+  margin: 0;
+  padding: 0 10px;
+  border: none;
+  background: none;
+  box-shadow: none;
+  border-radius: var(--radius-pill, 999px);
+  font-family: var(--font-ui);
+  font-size: var(--ui-font-caption, 11px);
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  white-space: nowrap;
+  color: var(--text-faint, var(--text-muted));
+  cursor: pointer;
+  transform: none;
+  transition: color 0.25s var(--ease-out, ease);
+}
+.lcl-vmode .lcl-vmode-pill > button:hover { background: none; color: var(--text-muted, var(--text)); }
+.lcl-vmode .lcl-vmode-pill > button.on { color: var(--accent-ink, var(--accent, var(--text))); }
+/* 宽时只显示文字;图标留给窄档 */
+.lcl-vmode .lcl-vmode-ic { display: none; flex-shrink: 0; }
+
+/* 窄档的「当前看法 ▾」:平时不出现 */
+.lcl-vmode > .lcl-vmode-drop { display: none; height: 24px; padding: 0 8px 0 10px; background: rgba(0, 0, 0, 0.05); color: var(--text-muted, var(--text)); }
+:root.dark .lcl-vmode > .lcl-vmode-drop { background: rgba(0, 0, 0, 0.24); }
+.lcl-vmode > .lcl-vmode-drop:hover { color: var(--text); }
+.lcl-vmode-menu .lcl-vmode-check { margin-left: auto; padding-left: 8px; box-sizing: content-box; color: var(--text-muted); }
+
+/* compact:恒只留图标 */
+.lcl-vmode[data-icons][data-compact] .lcl-vmode-pill { grid-auto-columns: 34px; }
+.lcl-vmode[data-icons][data-compact] .lcl-vmode-pill > button { padding: 0; }
+.lcl-vmode[data-icons][data-compact] .lcl-vmode-pill .lcl-vmode-ic { display: block; }
+.lcl-vmode[data-icons][data-compact] .lcl-vmode-pill .lcl-vmode-tx { display: none; }
+
+/* 窄:按头行自己的宽度退化(头行 / 已有顶栏声明 container: lcl-viewhead) */
+@container lcl-viewhead (max-width: 479.98px) {
+  .lcl-vmode[data-icons] .lcl-vmode-pill { grid-auto-columns: 34px; }
+  .lcl-vmode[data-icons] .lcl-vmode-pill > button { padding: 0; }
+  .lcl-vmode[data-icons] .lcl-vmode-pill .lcl-vmode-ic { display: block; }
+  .lcl-vmode[data-icons] .lcl-vmode-pill .lcl-vmode-tx { display: none; }
+}
+@container lcl-viewhead (max-width: 319.98px) {
+  .lcl-vmode .lcl-vmode-pill { display: none; }
+  .lcl-vmode > .lcl-vmode-drop { display: inline-flex; }
+}
+
+/* 视图头行:32px,在纸里、不随正文滚 */
+.lcl-viewhead {
+  container: lcl-viewhead / inline-size;
+  position: relative;
+  z-index: 3;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 10px;
+  box-sizing: border-box;
+  min-width: 0;
+  /* 空白处把指针放给下面(Chat 画布模式下头行浮在舞台上,空白处要能起手平移) */
+  pointer-events: none;
+}
+.lcl-viewhead > * { pointer-events: auto; }
+.lcl-viewhead-actions { margin-left: auto; display: flex; align-items: center; gap: 2px; min-width: 0; }
+.lcl-viewhead-actions:empty { display: none; }
+
+/* 手机顶栏:两颗胶囊中间(SingleColumnHost),外面套一层同 .mb-cap 的药丸皮(singleColumn.css);四格放不下就直接用下拉 */
+.mb-topbar-spacer { display: flex; justify-content: center; align-items: center; container: lcl-vmbar / inline-size; }
+.mb-shell:not(.mini-shell) .mb-topbar-spacer > .lcl-vmode {
+  pointer-events: auto;
+  padding: 2px;
+  border: 1px solid var(--border, rgba(0, 0, 0, 0.08));
+  border-radius: var(--radius-pill, 999px);
+  background: var(--bg-card, var(--bg, #fff));
+  box-shadow: var(--card-shadow);
+}
+.mb-topbar-spacer > .lcl-vmode .lcl-vmode-pill { height: 40px; grid-auto-columns: minmax(44px, 1fr); }
+.mb-topbar-spacer > .lcl-vmode .lcl-vmode-pill > button,
+.mb-topbar-spacer > .lcl-vmode > .lcl-vmode-drop { font-size: var(--ui-font-meta, 12px); }
+.mb-topbar-spacer > .lcl-vmode[data-n='4'] .lcl-vmode-pill { display: none; }
+.mb-topbar-spacer > .lcl-vmode[data-n='4'] > .lcl-vmode-drop { display: inline-flex; height: 40px; background: none; }
+/* 窄机两颗胶囊之间放不下整颗(谛听三格在 360 宽 + 右侧三颗键时)→ 同样换成下拉 */
+@container lcl-vmbar (max-width: 149.98px) {
+  .mb-topbar-spacer > .lcl-vmode[data-n='3'] .lcl-vmode-pill { display: none; }
+  .mb-topbar-spacer > .lcl-vmode[data-n='3'] > .lcl-vmode-drop { display: inline-flex; height: 40px; background: none; }
+}
+@container lcl-vmbar (max-width: 103.98px) {
+  .mb-topbar-spacer > .lcl-vmode .lcl-vmode-pill { display: none; }
+  .mb-topbar-spacer > .lcl-vmode > .lcl-vmode-drop { display: inline-flex; height: 40px; background: none; }
+}

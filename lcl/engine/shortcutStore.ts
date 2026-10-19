@@ -46,6 +46,17 @@ export function effectiveHotkey(cmd: { id: string; hotkey?: string }): string {
   return Object.prototype.hasOwnProperty.call(o, cmd.id) ? (o[cmd.id] || '') : (cmd.hotkey || '')
 }
 
+/** 事件的主键(小写)。mac 上按着 ⌥ 时 e.key 是变体字符(⌥⌘V 给 '√'),字母 / 数字键改认物理键位 e.code ——
+ *  不然 'mod+alt+v' 永远对不上,录键也会录成 'mod+alt+√'。只在 mac 上这样认:Windows / Linux 的 AltGr = Ctrl+Alt,
+ *  那时 e.key 是用户在打的字(波兰语 ż = AltGr+Z),按键位认会把打字当成快捷键。 */
+export function hotkeyKeyOf(e: Pick<KeyboardEvent, 'key' | 'code' | 'altKey'>): string {
+  if (e.altKey && isMacPlatform()) {
+    const m = /^(?:Key([A-Z])|Digit(\d))$/.exec(e.code || '')
+    if (m) return (m[1] ?? m[2]).toLowerCase()
+  }
+  return e.key.toLowerCase()
+}
+
 /** 键盘事件 → 热键字符串('mod+shift+k');纯修饰键时返回 null(继续等待真正的键)。 */
 export function eventToHotkey(e: KeyboardEvent): string | null {
   if (['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) return null
@@ -53,7 +64,7 @@ export function eventToHotkey(e: KeyboardEvent): string | null {
   if (e.metaKey || e.ctrlKey) parts.push('mod')
   if (e.shiftKey) parts.push('shift')
   if (e.altKey) parts.push('alt')
-  let key = e.key.toLowerCase()
+  let key = hotkeyKeyOf(e)
   if (key === ' ') key = 'space'
   else if (key === '{') key = '[' // shift 下 e.key 给 brace,存储统一 bracket(与 hotkeyMatches 归一一致)
   else if (key === '}') key = ']'
@@ -125,7 +136,11 @@ export function formatHotkey(hk: string, isMac: boolean): string {
     ? { mod: '⌘', shift: '⇧', alt: '⌥', space: 'Space', enter: '↵', escape: 'Esc', arrowup: '↑', arrowdown: '↓', arrowleft: '←', arrowright: '→' }
     : { mod: 'Ctrl', shift: 'Shift', alt: 'Alt', space: 'Space', enter: 'Enter', escape: 'Esc', arrowup: '↑', arrowdown: '↓', arrowleft: '←', arrowright: '→' }
   const map = (p: string): string => sym[p] || (p.length === 1 ? p.toUpperCase() : p.charAt(0).toUpperCase() + p.slice(1))
-  return hk.split('+').map(map).join(isMac ? '' : '+')
+  // mac 按系统菜单的顺序排修饰键(⌥⇧⌘:写 'mod+alt+v' 也显示 ⌥⌘V);其它平台照存的顺序(Ctrl+Alt+V)
+  const MAC_ORDER = ['alt', 'shift', 'mod']
+  const parts = hk.split('+')
+  const keyed = isMac ? [...parts.slice(0, -1).sort((a, b) => MAC_ORDER.indexOf(a) - MAC_ORDER.indexOf(b)), parts[parts.length - 1]] : parts
+  return keyed.map(map).join(isMac ? '' : '+')
 }
 
 installModPair()

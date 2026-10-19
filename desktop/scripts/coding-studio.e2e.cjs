@@ -107,11 +107,11 @@ async function recordMotionDemo(app, win) {
   await pause()
   await closeStudioTool(win)
   await pause()
-  await win.locator('.csu-modes').getByRole('button', { name: 'Split', exact: true }).click()
+  await win.locator('.csu-modes').getByRole('tab', { name: 'Split', exact: true }).click()
   await pause()
   await win.getByRole('button', { name: 'Phone · 390', exact: true }).click()
   await pause()
-  await win.locator('.csu-modes').getByRole('button', { name: 'Preview', exact: true }).click()
+  await win.locator('.csu-modes').getByRole('tab', { name: 'Preview', exact: true }).click()
   await recording
   await win.getByRole('button', { name: 'Responsive', exact: true }).click()
 }
@@ -409,16 +409,16 @@ async function main() {
     })
     check('Phone preset applies a real guest viewport of 390 CSS pixels', !!phoneWidth, String(phoneWidth))
     await previewDiagnostic(app, win, 'phone')
-    const previewExit = await traceMotion(win, 'Preview to code animates the actual pane width', '.csu-code-pane', () => win.locator('.csu-modes').getByRole('button', { name: '代码', exact: true }).click())
+    const previewExit = await traceMotion(win, 'Preview to code animates the actual pane width', '.csu-code-pane', () => win.locator('.csu-modes').getByRole('tab', { name: '代码', exact: true }).click())
     check('The real preview remains painted during its exit fade', previewExit.samples.filter(sample => sample.previewVisible && sample.previewOpacity > 0.05 && sample.previewOpacity < 0.95).length >= 3)
     check('Code mode displays the actual project editor', await win.locator('.csu-code-pane').isVisible())
-    await traceMotion(win, 'Code to split animates the actual pane width', '.csu-code-pane', () => win.locator('.csu-modes').getByRole('button', { name: '并排', exact: true }).click())
+    await traceMotion(win, 'Code to split animates the actual pane width', '.csu-code-pane', () => win.locator('.csu-modes').getByRole('tab', { name: '并排', exact: true }).click())
     check('Split mode displays code and preview together', await win.locator('.csu-code-pane').isVisible() && await win.locator('.csu-preview-pane').isVisible())
     check('Code / split / device changes preserve the preview guest and app state', await guestId(win) === initialGuestId && await guestEval(win, 'window.studioCounter') === 1)
     await previewDiagnostic(app, win, 'split')
     // Exercise CodeMirror's actual contenteditable/input path through StudioEditor
     // and the host writer; no direct editor controller or application state writes.
-    await win.locator('.csu-modes').getByRole('button', { name: '代码', exact: true }).click()
+    await win.locator('.csu-modes').getByRole('tab', { name: '代码', exact: true }).click()
     const editor = win.locator('.csu-code-pane .cm-content[contenteditable="true"]').first()
     await editor.waitFor()
     const editorSource = `${SAMPLE}\n<!-- Saved through the real Coding Studio editor. -->`
@@ -432,7 +432,7 @@ async function main() {
       && await win.locator('.cs-editor').getAttribute('data-status') === 'saved')
     check('A second real editor change restores the exact baseline without a pending draft', editorReset)
     if (!editorReset) throw new Error('Editor did not return the project to the baseline')
-    await win.locator('.csu-modes').getByRole('button', { name: '预览', exact: true }).click()
+    await win.locator('.csu-modes').getByRole('tab', { name: '预览', exact: true }).click()
     await win.getByRole('button', { name: '自适应', exact: true }).click()
 
     await win.getByRole('button', { name: '选择页面元素', exact: true }).click()
@@ -649,7 +649,7 @@ async function main() {
     await win.emulateMedia({ reducedMotion: 'no-preference' })
     await recordMotionDemo(app, win)
     // Stable browser surfaces must follow shell zoom and leave overlays above them.
-    await win.locator('.csu-modes').getByRole('button', { name: 'Preview', exact: true }).focus()
+    await win.locator('.csu-modes').getByRole('tab', { name: 'Preview', exact: true }).focus()
     await win.keyboard.press('Meta+k')
     await win.locator('.cmd-panel input').fill('Coding Studio · Versions')
     const commandAbovePreview = await win.locator('.cmd-panel').evaluate(el => {
@@ -660,7 +660,7 @@ async function main() {
     await win.locator('.cmd-item').filter({ hasText: 'Coding Studio · Versions' }).click()
     check('A real command palette action opens the same native Studio tool', !!await until(async () => await win.locator('.wb-extend[data-side=bottom] .csu-tool-view[data-tool=history]').count() === 1))
     await closeStudioTool(win)
-    await win.locator('.csu-modes').getByRole('button', { name: 'Preview', exact: true }).focus()
+    await win.locator('.csu-modes').getByRole('tab', { name: 'Preview', exact: true }).focus()
     await win.keyboard.press('Meta+=')
     const zoomAligned = await until(() => win.evaluate(() => {
       const anchor = document.querySelector('.csp-anchor'), stage = document.querySelector('.csp-stage')
