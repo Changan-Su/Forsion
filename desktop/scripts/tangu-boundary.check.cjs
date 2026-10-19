@@ -43,7 +43,7 @@ const ALIAS = [ // 与各 vite.config 的 alias 同表;长前缀在前
 ]
 const EXT = ['', '.ts', '.tsx', '.js', '.jsx', '.mjs', '.css', '/index.ts', '/index.tsx', '/index.js']
 const EXEMPT = /\.(test|spec)\.[cm]?[tj]sx?$|\/__tests__\/|(^|\/)harness\.tsx$|Harness\.tsx$|\.typecheck\.ts$|\.d\.ts$/
-const IMPORT_RE = /(?:import|export)\s[^'"`]*?from\s*['"]([^'"]+)['"]|import\s*\(\s*(['"`])([^'"`$]+)\2\s*\)|import\s+['"]([^'"]+)['"]|@import\s+(?:url\(\s*)?['"]?([^'")\s;]+)/g
+const IMPORT_RE = /(?:import|export)(?=[\s{*])[^'"`]*?from\s*['"]([^'"]+)['"]|import\s*\(\s*(['"`])([^'"`$]+)\2\s*[,)]|import\s*['"]([^'"]+)['"]|@import\s+(?:url\(\s*)?['"]?([^'")\s;]+)|\brequire\s*\(\s*['"]([^'"]+)['"]\s*\)/g
 
 /** 把注释换成空格,字符串原样留着(这样字符串里的 '/*'、'//' 不会被当成注释)。
  * ponytail: 不认正则字面量 —— /['"]/ 里的引号会被当成字符串开头;import 都在文件头,正文里的正则吞不到它们。 */
@@ -84,10 +84,10 @@ function analyze(files, cfg) {
   const used = new Set(), hostDeps = new Set()
   const known = new Set(cfg.baseline.hostImports)
   for (const [f, src] of files) {
-    if (EXEMPT.test(f)) continue
+    if (isContract(f) ? /\.(test|spec)\.[cm]?[tj]sx?$/.test(f) : EXEMPT.test(f)) continue // 契约里的 .d.ts 也要查(Codex 2b 评审)
     const tangu = isTangu(f)
     for (const m of stripComments(src).matchAll(IMPORT_RE)) {
-      const spec = m[1] || m[3] || m[4] || m[5]
+      const spec = m[1] || m[3] || m[4] || m[5] || m[6]
       if (isContract(f)) {
         const base = spec.startsWith('.') ? path.posix.join(path.posix.dirname(f), spec) : null
         if (!base || !isContract(base + '/') && !isContract(base)) errors.push(`契约文件只许用相对路径引契约目录:${f} import '${spec}'`)
@@ -174,7 +174,13 @@ function selftest() {
   assert.match(runK({ [`${K}c.ts`]: "import { x } from '../../../desktop/frontend/src/stores/x'" }).errors.join(), /契约文件只许/, '契约引宿主')
   assert.match(runK({ [`${K}c.ts`]: "import { y } from '../core/y.js'" }).errors.join(), /契约文件只许/, '契约引引擎内部(不在扫描范围里也要拦)')
   assert.match(runK({ [`${K}c.ts`]: "import { z } from 'zod'" }).errors.join(), /契约文件只许/, '契约引第三方包')
-  console.log('tangu-boundary selftest: 20/20 PASS')
+  // Codex 2b 评审:这些写法也要进契约检查
+  for (const [code, why] of [["import{z}from'zod'", '无空格的静态 import'], ["import fs = require('node:fs')", 'import = require'], ["const m = import('node:fs', {})", '带第二个参数的动态 import'], ["import'node:fs'", '无空格的副作用 import']]) {
+    assert.match(runK({ [`${K}c.ts`]: code }).errors.join(), /契约文件只许/, why)
+  }
+  assert.match(runK({ [`${K}t.d.ts`]: "export type { Stats } from 'node:fs'" }).errors.join(), /契约文件只许/, '契约里的 .d.ts 不豁免')
+  assert.deepEqual(runK({ [`${K}c.test.ts`]: "import { x } from '../../../desktop/frontend/src/stores/x'" }).errors, [], '契约的测试文件照旧不查')
+  console.log('tangu-boundary selftest: 26/26 PASS')
 }
 
 if (process.argv.includes('--selftest')) { selftest(); process.exit(0) }
