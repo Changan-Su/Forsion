@@ -78,31 +78,48 @@ describe('Intelligent UI v2 validation', () => {
     expect(() => validateUIDocument(gallery.loan, { maxVersion: 1 })).toThrow('version 1 only')
   })
   it('names unknown functions, names and inputs, and wrong argument counts, so the model can correct them', () => {
-    const cases: [string, string][] = [['foo(1)', 'unknown function foo()'], ['pay2 + 1', 'unknown name pay2'], ['$nope', 'unknown input $nope'], ['round()', 'round() takes 1-2 arguments'], ['format', 'is a function']]
+    const cases: [string, string][] = [['foo(1)', 'unknown function foo()'], ['pay2 + 1', 'unknown name pay2'], ['$nope', 'unknown name nope'], ['round()', 'round() takes 1-2 arguments'], ['format', 'is a function']]
     for (const [src, message] of cases) {
       const doc = loan(); doc.blocks[2].items[0].value = src
       expect(() => validateUIDocument(doc), src).toThrow(message)
     }
   })
-  it('lets derived values read only earlier names, and keeps names off functions and keywords', () => {
+  it('lets derived values read only earlier names, keeps names unique and off keywords', () => {
     let doc = loan(); doc.derived[0].expr = 'pay * 2'
     expect(() => validateUIDocument(doc)).toThrow('unknown name pay')
-    doc = loan(); doc.derived[4].id = 'format'
-    expect(() => validateUIDocument(doc)).toThrow('expected a new name')
     doc = loan(); doc.state = [{ id: 'and', initial: 1 }]
-    expect(() => validateUIDocument(doc)).toThrow('expected a new name')
+    expect(() => validateUIDocument(doc)).toThrow('"and" is a keyword')
+    doc = loan(); doc.state = [{ id: 'loan', initial: 1 }]
+    expect(() => validateUIDocument(doc)).toThrow('"loan" is already declared')
+    doc = loan(); doc.derived[1].id = 'p'
+    expect(() => validateUIDocument(doc)).toThrow('"p" is already declared')
+  })
+  it('reads $name and name alike, and lets a value share a function name (live 10-20 habits)', () => {
+    const doc = loan()
+    doc.derived = [{ id: 'months', expr: '$years * 12' }, { id: 'monthly_rate', expr: '$rate / 1200' }, { id: 'payment', expr: 'payment($monthly_rate, $months, $loan * 10000)' }]
+    doc.blocks = [doc.blocks[1], { id: 's', kind: 'stats', items: [{ label: '月供', value: "format($payment, 'number', 0)" }, { label: '月数', value: 'months' }] }]
+    const parsed = validateUIDocument(doc)
+    expect(documentEnv(parsed, { loan: 120, rate: 3.2, years: 30 }, new Map(), 'zh').text("format(payment, 'number', 0)")).toBe('5,190')
+  })
+  it('points long data in an expression to state', () => {
+    const doc = loan(); doc.derived[0].expr = `[${Array.from({ length: 60 }, (_, i) => `'w${i}'`).join(',')}]`
+    expect(() => validateUIDocument(doc)).toThrow("put data such as word lists, steps or rows in a state value's initial")
   })
   it('keeps controls always visible, also against expression conditions', () => {
     const doc = loan(); doc.blocks[1].when = { expr: 'true' }
     expect(() => validateUIDocument(doc)).toThrow('controls must remain visible')
   })
-  it('rejects v2 parts in a v1 document', () => {
-    const doc = loan(); doc.version = 1; delete doc.state; delete doc.derived; doc.blocks[0].markdown = 'x'
-    expect(() => validateUIDocument(doc)).toThrow('unknown block kind')
+  it('reads a version 1 document with version 2 parts as version 2 only where 2 is allowed', () => {
+    const doc = loan(); doc.version = 1
+    expect(validateUIDocument(doc).version).toBe(2)
+    expect(() => validateUIDocument(doc, { maxVersion: 1 })).toThrow('unknown block kind "stats"')
+    delete doc.state; delete doc.derived; doc.blocks = [doc.blocks[1], { id: 's', kind: 'stats', items: [{ label: 'x', value: '$loan' }] }]
+    expect(validateUIDocument(doc).version).toBe(2)
+    expect(() => validateUIDocument(doc, { maxVersion: 1 })).toThrow('unknown block kind "stats"')
   })
   it('bounds expression size, loop nesting and set-step targets', () => {
     let doc = loan(); doc.derived[3].expr = 'payment(r, n, p)' + ' + 0'.repeat(80)
-    expect(() => validateUIDocument(doc)).toThrow('max 300 characters')
+    expect(() => validateUIDocument(doc)).toThrow('longer than 300 characters')
     doc = loan(); doc.blocks[3].rows = "each([1], 'a', each([1], 'b', each([1], 'c', c)))"
     expect(() => validateUIDocument(doc)).toThrow('nest at most 2')
     doc = loan(); doc.blocks[5].items.push({ id: 'x', kind: 'set', label: 'x', steps: [{ set: 'pay', to: '1' }] })
@@ -160,6 +177,6 @@ describe('Intelligent UI v2 expressions', () => {
   })
   it('evaluates a compiled tree directly', () => {
     const node = compileExpr('$a * 2', { inputs: new Set(['a']), names: new Set() })
-    expect(evaluate(node, { input: () => 21, name: () => null, locale: 'en', budget: { steps: 0 } })).toBe(42)
+    expect(evaluate(node, { name: () => 21, locale: 'en', budget: { steps: 0 } })).toBe(42)
   })
 })

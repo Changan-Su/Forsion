@@ -120,10 +120,12 @@ recomputes on every input change or button press without another model turn.
 - `State = {id, initial}` (max 16): hidden values the buttons change. `initial` is a number, text,
   true/false, null, or a list (max 200) / object (max 16 keys) of those. Use it for data the card
   walks through (word lists, steps, catalog rows) and for positions, scores and picks.
-- `Derived = {id, expr}` (max 32): evaluated in order; reads inputs as `$inputId`, state by name,
-  and earlier derived names. Never stored, never sent to you.
-- Names are letters, digits and underscore, unique across state and derived, not a function name
-  or one of `and or not true false null`.
+- `Derived = {id, expr}` (max 32): evaluated in order; reads inputs, state and earlier derived
+  values by name (`$loan` and `loan` are the same). Never stored, never sent to you.
+- Names are letters, digits and underscore, unique across inputs, state and derived, and not one of
+  `and or not true false null`. A value may share a function's name: `payment(…)` calls, `payment` reads.
+- Data the card walks through (word lists, steps, catalog rows) goes in a state value's `initial`,
+  never in a long expression; expressions compute from it.
 
 Expressions (max 300 characters each): numbers, `'text'`, `[lists]`, `{key: value}`,
 `+ - * / %`, `== != < <= > >=`, `and or not`, `c ? a : b`, `x.field`, `x[i]`. `+` joins text;

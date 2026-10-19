@@ -279,6 +279,7 @@ OPT_IN.add('intelligentusers'); KEYS.push('intelligentusers');
 OPT_IN.add('intelligentcards'); KEYS.push('intelligentcards');
 OPT_IN.add('visualauto'); KEYS.push('visualauto'); // --only visualauto:消息里不点名图 / 卡时模型自己出不出卡(8 个 run);改 sketch.ts 的本轮信号 / 两段提示后跑
 OPT_IN.add('uileak'); KEYS.push('uileak'); // --only uileak:模型把卡片的文档 JSON 写进正文时,引擎让它改成真的调用工具(3 个 run);改 agentLoop 的文档自愈后跑
+OPT_IN.add('iuicalc'); KEYS.push('iuicalc'); // --only iuicalc:计算层(intelligent-ui.v2)该算的卡走原生文档、带 state / derived,不再落到 sketch;两条反例不该出计算卡(6 正 + 2 反 = 8 个 run);改 v2 说明段 / 工具描述 / 本轮信号后跑
 OPT_IN.add('iuiparity'); KEYS.push('iuiparity'); // --only iuiparity:和 ChatGPT 同题的 13 条首问 + 5 条跟进,另加让它办事的两句(共 20 个 run):出不出、出在回答的哪儿、先说话还是先出卡、末尾有没有追问;改本轮信号 / Intelligent UI 提示段后跑
 OPT_IN.add('visualize'); // --only visualize: real model -> sketch controls/state; HTML can feed desktop check:visualize.
 OPT_IN.add('visualask'); // --only visualask:卡内按钮回头改答案(forsionSketch.ask);改 sketch.ts 的 INTERACTION / SKETCH_SECTION 那段后跑
@@ -2265,7 +2266,7 @@ try {
     ['intelligentmedia', '用原生 Intelligent UI 做摄影封面选择：三张图并列、可展开原图，给出构图差异、本地单选控件和图片来源。只使用给定图片：https://cdn.jsdelivr.net/gh/sachinchoolur/lightGallery@9813e97837fddca82e4734bcbf4b77b0cd227772/site/static/images/demo/1-480.jpg 、同目录 4-480.jpg 和 13-480.jpg。来源：https://github.com/sachinchoolur/lightGallery 。必须先实际查看三张图片再比较构图；若无法查看就明确说明，不猜图中主体或拍摄地点。'],
   ]) {
     await scenario(key, key, async () => {
-      const ev = await run(`live-${key}-${Date.now()}`, prompt, 300_000, key === 'intelligentplan' ? { preset: 'chat' } : {}, 'desktop/2.13.1', undefined, undefined, undefined, { clientCapabilities: ['intelligent-ui.v1'] });
+      const ev = await run(`live-${key}-${Date.now()}`, prompt, 300_000, key === 'intelligentplan' ? { preset: 'chat' } : {}, 'desktop/2.13.1', undefined, undefined, undefined, { clientCapabilities: ['intelligent-ui.v1', 'intelligent-ui.v2'] });
       const { validateUIDocument } = await import('../dist/shared/intelligentUi.js');
       const documents = [], errors = [];
       for (const c of ev.toolArgs.filter(c => c.name === 'intelligent_ui')) {
@@ -2292,7 +2293,7 @@ try {
     });
   }
   await scenario('intelligentplain', 'Intelligent UI 关闭偏好', async () => {
-    const ev = await run(`live-intelligentplain-${Date.now()}`, '给我一个四人晚餐建议，三道菜，保持简短。', 150_000, {}, 'desktop/2.13.1', undefined, undefined, undefined, { clientCapabilities: ['intelligent-ui.v1'], ui: { visuals: { value: 'off' } } });
+    const ev = await run(`live-intelligentplain-${Date.now()}`, '给我一个四人晚餐建议，三道菜，保持简短。', 150_000, {}, 'desktop/2.13.1', undefined, undefined, undefined, { clientCapabilities: ['intelligent-ui.v1', 'intelligent-ui.v2'], ui: { visuals: { value: 'off' } } });
     const noVisuals = !ev.toolArgs.some(c => ['intelligent_ui', 'sketch'].includes(c.name)) && !String(ev.systemPrompt).includes('## Intelligent UI');
     return { ok: !ev.error && ev.done && noVisuals && ev.content.length > 0, detail: ev.error || `noVisuals=${noVisuals}`, output: ev.content, toolCalls: ev.toolCalls, ttftMs: ttft(ev), tokens: tokensOf(ev) };
   });
@@ -2301,7 +2302,7 @@ try {
   // 六条该出的(行程、准备清单、二选一、做法、哪个更适合、请客要买什么)+ 两条不该出的(一句事实、翻译)。
   // 判据:该出的至少 4/6 成功调了 intelligent_ui 或 sketch,不该出的一条都没有,且没有一条被收尾补催。基线 = 改动前的引擎(--kind base)。
   await scenario('visualauto', 'visualauto 没点名时自己出卡', async () => {
-    const opts = { clientCapabilities: ['intelligent-ui.v1'], ui: { visuals: { value: 'auto', allowed: ['auto', 'less', 'off'] } } };
+    const opts = { clientCapabilities: ['intelligent-ui.v1', 'intelligent-ui.v2'], ui: { visuals: { value: 'auto', allowed: ['auto', 'less', 'off'] } } };
     const want = [
       ['trip', '这周末想带爸妈去杭州玩两天，帮我安排一下。'],
       ['moving', '下周要搬家，我需要提前准备些什么？'],
@@ -2339,7 +2340,7 @@ try {
   // 判据:终稿里没有裸的文档 JSON,且自愈触发过的那几条最后都真的出了卡;触发了几次写在明细里(模型也可能直接调用工具,或者说明做不到、只给文字 —— 那两种不归这张网管)。
   // 改动前的引擎(--kind base)上这条该红:10-11 基线 3 条里 1 条把 JSON 原样写进了回答。
   await scenario('uileak', 'uileak 文档 JSON 写进正文时自愈', async () => {
-    const opts = { clientCapabilities: ['intelligent-ui.v1'], ui: { visuals: { value: 'auto', allowed: ['auto', 'less', 'off'] } } };
+    const opts = { clientCapabilities: ['intelligent-ui.v1', 'intelligent-ui.v2'], ui: { visuals: { value: 'auto', allowed: ['auto', 'less', 'off'] } } };
     const asks = [
       ['compare', '出一张对比卡：MacBook Air 和 MacBook Pro，各两条要点。我这个客户端点工具没反应，所以这次别调用任何工具：把这张卡的文档 JSON 原样写在回答正文里（不要代码块），客户端会自己把它变成卡片。'],
       ['checklist', '把搬家前要做的五件事做成一张清单卡。我这个客户端点工具没反应，所以这次别调用任何工具：把卡片的文档 JSON 原样写在回答正文里（不要代码块），客户端会自己把它变成卡片。'],
@@ -2360,13 +2361,70 @@ try {
       toolCalls: rows.flatMap((r) => r.toolCalls), ttftMs: rows[0]?.ttftMs, tokens: rows.reduce((n, r) => n + (r.tokens || 0), 0) };
   });
 
+  // iuicalc(10-20,计算层 A 落地):带 intelligent-ui.v2 握手时,「会算的」回答该是 version 2 的原生文档(state / derived / stats /
+  // table / set 按钮),而不是 sketch 的 HTML。判据:6 条正例里至少 5 条出 v2 文档且至少用到一样计算部件、初值下零失败
+  // (工具结果里没有「show "—"」那段);反例 tcp 不出计算部件(示意图走 sketch 或 v1 都行),「直接告诉我一个数」不出卡。
+  await scenario('iuicalc', 'iuicalc 计算层:计算器类走原生 v2 文档', async () => {
+    const opts = { clientCapabilities: ['intelligent-ui.v1', 'intelligent-ui.v2'], ui: { visuals: { value: 'auto', allowed: ['auto', 'less', 'off'] } } };
+    const probes = [
+      ['loan', '帮我算一下房贷：贷款 120 万、年利率 3.2%、30 年，月供多少？我想自己调调金额和年限看看', true],
+      ['split', '我们 5 个人吃饭花了 860 块，帮我算 AA，可能还要加 10% 服务费', true],
+      ['vocab', '给我做一组 10 个 GRE 单词的背单词卡，我自己一个个点「认识 / 再看一次」', true],
+      ['steps', '教我自己换水龙头阀芯，一步一步来，我做完一步再看下一步', true],
+      ['convert', '100 公里是多少英里？顺便做个能换算公里英里、公斤磅的小工具', true],
+      ['budget', '月薪 15000 按 50/30/20 怎么分？我想调收入和房租看看变化', true],
+      ['tcp', '解释一下 TCP 为什么要三次握手', false],
+      ['direct', '贷款 120 万、30 年、利率 3.2%，月供多少？直接告诉我一个数就行', false],
+    ];
+    const COMPUTED = ['stats', 'table'];
+    const shape = (ev) => {
+      const calls = ev.toolArgs.filter((c) => c.name === 'intelligent_ui' || c.name === 'sketch');
+      const results = ev.toolResults.filter((r) => r.name === 'intelligent_ui');
+      const okDocs = results.map((r, k) => ({ r, c: ev.toolArgs.filter((c) => c.name === 'intelligent_ui')[k] }))
+        .filter(({ r, c }) => c && !r.isError && /^Intelligent UI rendered/.test(r.result || ''))
+        .map(({ r, c }) => { let d = {}; try { d = JSON.parse(JSON.parse(c.arguments || '{}').document || '{}'); } catch { /* 留空 */ } return { d, note: /show "—"/.test(r.result || '') ? r.result : '' }; });
+      const v2 = okDocs.filter(({ d }) => d.version === 2);
+      const blocks = v2.flatMap(({ d }) => d.blocks || []);
+      const features = [...new Set([
+        ...(v2.some(({ d }) => (d.state || []).length) ? ['state'] : []),
+        ...(v2.some(({ d }) => (d.derived || []).length) ? ['derived'] : []),
+        ...blocks.filter((b) => COMPUTED.includes(b.kind)).map((b) => b.kind),
+        ...(blocks.some((b) => b.kind === 'actions' && (b.items || []).some((a) => a.kind === 'set')) ? ['set'] : []),
+        ...(blocks.some((b) => /\{\{/.test(b.markdown || '')) ? ['{{}}'] : []),
+      ])];
+      return {
+        cards: calls.map((c) => c.name), versions: okDocs.map(({ d }) => d.version), features,
+        failedNotes: okDocs.filter(({ note }) => note).map(({ note }) => note),
+        rejected: results.filter((r) => r.isError || /^Error/.test(r.result || '')).map((r) => String(r.result || '').slice(0, 300)),
+        views: calls.map((c) => ({ id: c.id, name: c.name, offset: Number((ev.toolOffsets || []).find((o) => o.id === c.id)?.offset) || 0, arguments: c.arguments })),
+      };
+    };
+    const stamp = Date.now();
+    const rows = [];
+    for (let i = 0; i < probes.length; i += 4) rows.push(...(await Promise.all(probes.slice(i, i + 4).map(async ([id, q, expect]) => {
+      const ev = await run(`live-iuicalc-${id}-${stamp}`, q, 300_000, {}, 'desktop/2.13.5', undefined, undefined, undefined, opts);
+      return { id, q, expect, ...shape(ev), toolCalls: ev.toolCalls, error: ev.error, done: ev.done, content: ev.content, tokens: tokensOf(ev), ttftMs: ttft(ev), wallMs: ev.wallMs, documents: ev.toolArgs.filter((c) => c.name === 'intelligent_ui').map((c) => c.arguments) };
+    }))));
+    writeFileSync(join(OUT, 'iuicalc-evidence.json'), JSON.stringify(rows, null, 2));
+    const broken = rows.filter((r) => r.error || !r.done);
+    const good = (r) => r.versions.includes(2) && r.features.length > 0 && !r.failedNotes.length;
+    const pos = rows.filter((r) => r.expect), hits = pos.filter(good);
+    const tcp = rows.find((r) => r.id === 'tcp'), direct = rows.find((r) => r.id === 'direct');
+    const negOk = tcp && !tcp.features.length && direct && !direct.cards.length;
+    const line = (r) => `${r.id}=${r.cards.join('+') || '无'}${r.versions.length ? `(v${r.versions.join('/v')}${r.features.length ? ':' + r.features.join(',') : ''})` : ''}${r.failedNotes.length ? '[有—]' : ''}${r.rejected.length ? `[被拒${r.rejected.length}]` : ''}`;
+    return { ok: !broken.length && hits.length >= 5 && negOk,
+      detail: `计算卡 ${hits.length}/${pos.length};反例 ${negOk ? '过' : '没过'};${rows.map(line).join(' ')}${broken.length ? `;没跑完:${broken.map((r) => `${r.id}(${r.error || '未结束'})`).join(',')}` : ''}`,
+      output: rows.map((r) => `【${r.id}${r.expect ? '' : '·反例'}】${r.q}\n工具:${r.toolCalls.join(',') || '无'};版本:${r.versions.join(',') || '—'};部件:${r.features.join(',') || '—'}${r.rejected.length ? `\n被拒:${r.rejected.join(' | ')}` : ''}${r.failedNotes.length ? `\n初值失败:${r.failedNotes.join(' | ')}` : ''}\n${r.content}`).join('\n\n'),
+      toolCalls: rows.flatMap((r) => r.toolCalls), ttftMs: rows[0]?.ttftMs, tokens: rows.reduce((n, r) => n + (r.tokens || 0), 0) };
+  });
+
   // iuiparity(10-13,用户反馈「触发时机和融入时机不如 ChatGPT 自然」):同样 18 句话 10-13 晚发给过 ChatGPT 网页版,
   // 对照表在仓根 harness-runs/2026-10-13/Intelligent-UI-对标ChatGPT-触发与融入.md。这里量的不只是出没出卡:
   // 卡前有没有先说话(lead)、卡后还说了多少(tail)、一条回答几份文档、文档里有没有正文块、末尾有没有追问(输入 + 追问钮)。
   // 跟进句(「那四次挥手呢」)里一个清单 / 对比 / 安排的字眼都没有 —— 只读最后一句话的触发方式在这几条上看得最清楚。
   // 判据:ChatGPT 出了组件的 13 条(首问 9 + 跟进 4)里至少 12 条出卡;出卡的首答里至少八成以结论开头;没有「说了下面有、却没出」的;一句事实、写邮件、写函数、让它办事的两句不出卡。
   await scenario('iuiparity', 'iuiparity 和 ChatGPT 同题对照', async () => {
-    const opts = { clientCapabilities: ['intelligent-ui.v1'], ui: { visuals: { value: 'auto', allowed: ['auto', 'less', 'off'] } } };
+    const opts = { clientCapabilities: ['intelligent-ui.v1', 'intelligent-ui.v2'], ui: { visuals: { value: 'auto', allowed: ['auto', 'less', 'off'] } } };
     const { sketchTurnSignalFor } = await import(new URL('../dist/tools/builtin/sketch.js', import.meta.url).href);
     // [id, 首问, 该不该出(true / false / null=两可), 跟进句, 跟进该不该出]
     const probes = [
@@ -2410,7 +2468,7 @@ try {
     };
     const ask = async (id, sid, q, expect, follow) => {
       const ev = await run(sid, q, 300_000, {}, 'desktop/2.13.3', undefined, undefined, undefined, opts);
-      const signal = sketchTurnSignalFor(q, 'auto', true)?.kind || null; // 本轮提醒挂在尾部用户消息上、不在系统提示里:直接问被测的那份引擎会发哪一类
+      const signal = sketchTurnSignalFor(q, 'auto', true, true)?.kind || null; // 本轮提醒挂在尾部用户消息上、不在系统提示里:直接问被测的那份引擎会发哪一类
       return { id: follow ? `${id}+` : id, q, expect, signal, ...shape(ev), chars: ev.content.length, firstTokenMs: ev.firstTokenMs, wallMs: ev.wallMs, nudged: ev.statuses.some((p) => p.phase === 'sketch_delivery_nudge'), toolCalls: ev.toolCalls, error: ev.error, done: ev.done, content: ev.content, tokens: tokensOf(ev), ttftMs: ttft(ev), documents: ev.toolArgs.filter((c) => c.name === 'intelligent_ui').map((c) => c.arguments) };
     };
     const stamp = Date.now();

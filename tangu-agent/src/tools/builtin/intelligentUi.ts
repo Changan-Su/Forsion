@@ -134,8 +134,9 @@ version:2, not sketches: the card recomputes as the user changes inputs or press
 calling you. Keep sketch for charts, diagrams, animated simulations and games.
 Order: {version:2,id,title,inputs,state,derived,resources,blocks}. state (max 16): [{id,initial}],
 hidden values the card's buttons change (number, text, true/false, null, or lists/objects of them).
-derived (max 32): [{id,expr}], evaluated in order; reads inputs as $inputId, state and earlier
-derived names. Names: letters, digits, underscore.
+derived (max 32): [{id,expr}], evaluated in order; reads inputs, state and earlier derived values
+by name ($ prefix optional). Names: letters, digits, underscore, unique. Data the card walks through
+(word lists, steps, rows) goes in a state initial; expressions compute from it.
 Expressions (max 300 chars): numbers, 'text', [lists], {key:value}, + - * / %, == != < <= > >=,
 and or not, c ? a : b, x.field, x[i]; + joins text. Functions: round(x,digits?) floor ceil abs min
 max clamp(x,lo,hi) pow sum avg count percent(part,whole) payment(ratePerPeriod,periods,principal)

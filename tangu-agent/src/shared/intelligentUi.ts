@@ -77,12 +77,21 @@ export function safeUIUrl(x: unknown): x is string {
       && !/^[\d.]+$/.test(h) && !h.includes(':')
   } catch { return false }
 }
+const V2_BLOCKS = new Set(['stats', 'table'])
+function usesVersion2(d: Record<string, unknown>): boolean {
+  if (d.state !== undefined || d.derived !== undefined) return true
+  const blocks = Array.isArray(d.blocks) ? d.blocks as Record<string, unknown>[] : []
+  return blocks.some(b => !!b && (V2_BLOCKS.has(b.kind as string) || (b.when as Record<string, unknown> | undefined)?.expr !== undefined
+    || (b.kind === 'actions' && Array.isArray(b.items) && b.items.some((a: Record<string, unknown>) => a?.kind === 'set'))))
+}
 export function validateUIDocument(raw: unknown, options: { draft?: boolean; maxVersion?: number } = {}): UIDocument {
   if (uiDocumentTooLarge(JSON.stringify(raw) || '')) fail('document', 'too large')
   const d = obj(raw, 'document')
   const maxVersion = options.maxVersion ?? UI_VERSION
   if (d.version !== 1 && !(d.version === 2 && maxVersion >= 2)) fail('version', maxVersion >= 2 ? 'expected 1 or 2' : 'expected 1 (this client renders version 1 only)')
-  const v2 = d.version === 2
+  // A version 1 document that uses version 2 parts is read as version 2 where 2 is allowed (live 10-20:
+  // a model wrote version 1 with a stats block and gave up after the rejection).
+  const v2 = d.version === 2 || (maxVersion >= 2 && usesVersion2(d))
   const expr = (x: unknown, p: string, scope: ExprScope): string => {
     try { compileExpr(x, scope) } catch (e) { fail(p, e instanceof Error ? e.message : String(e)) }
     return x as string
@@ -114,7 +123,9 @@ export function validateUIDocument(raw: unknown, options: { draft?: boolean; max
   const names = new Set<string>()
   const declare = (x: unknown, p: string): string => {
     const name = str(x, p, 40)
-    if (!UI_NAME.test(name) || reservedUIName(name) || names.has(name)) fail(p, 'expected a new name (letters, digits, underscore; not a function name or keyword)')
+    if (!UI_NAME.test(name)) fail(p, `"${name}" is not a name (letters, digits, underscore; not starting with a digit)`)
+    if (reservedUIName(name)) fail(p, `"${name}" is a keyword`)
+    if (names.has(name) || inputMap.has(name)) fail(p, `"${name}" is already declared`)
     names.add(name)
     return name
   }
@@ -217,7 +228,7 @@ export function validateUIDocument(raw: unknown, options: { draft?: boolean; max
         return fail(q, 'unknown action kind')
       }), `${p}.items`) }
     }
-    return fail(p, 'unknown block kind')
+    return fail(p, `unknown block kind ${JSON.stringify(o.kind)} — use ${v2 ? 'text, controls, stats, table, gallery, sources, comparison, checklist, disclosure, actions, app-card' : 'text, controls, gallery, sources, comparison, checklist, disclosure, actions, app-card'}`)
   }), 'blocks')
   if (parsed.some(b => b.kind === 'controls' && b.when)) fail('controls', 'controls must remain visible (no when)')
   // An input shown again in a later controls block is dropped there, not rejected: models restate the

@@ -10,7 +10,6 @@ export const EXPR_LIMITS = { chars: 300, steps: 20_000, list: 200, text: 10_000,
 
 type Node =
   | { t: 'lit'; v: UIValue }
-  | { t: 'input'; id: string }
   | { t: 'name'; id: string }
   | { t: 'list'; items: Node[] }
   | { t: 'obj'; entries: [string, Node][] }
@@ -27,7 +26,7 @@ const STYLES = new Set(['number', 'percent', 'wan', 'compact'])
 const LOOPS = new Set(['each', 'filter', 'sortBy'])
 
 // ── tokens and parsing ──
-type Tok = { k: 'num' | 'str' | 'id' | 'in' | 'op' | 'end'; v: string }
+type Tok = { k: 'num' | 'str' | 'id' | 'op' | 'end'; v: string }
 function tokenize(src: string): Tok[] {
   const out: Tok[] = []
   let i = 0
@@ -44,7 +43,8 @@ function tokenize(src: string): Tok[] {
       if (j >= src.length) throw new Error('unterminated string')
       out.push({ k: 'str', v: s }); i = j + 1; continue
     }
-    if ((m = /^\$[A-Za-z0-9_]+/.exec(rest))) { out.push({ k: 'in', v: m[0].slice(1) }); i += m[0].length; continue }
+    // `$name` and `name` are the same: models write `$` for every variable, not only for inputs.
+    if ((m = /^\$[A-Za-z0-9_]+/.exec(rest))) { out.push({ k: 'id', v: m[0].slice(1) }); i += m[0].length; continue }
     if ((m = /^[A-Za-z_][A-Za-z0-9_]*/.exec(rest))) { out.push({ k: 'id', v: m[0] }); i += m[0].length; continue }
     if ((m = /^(?:==|!=|<=|>=|&&|\|\||[-+*/%<>!?:.,()[\]{}])/.exec(rest))) { out.push({ k: 'op', v: m[0] }); i += m[0].length; continue }
     throw new Error(`unexpected "${c}"`)
@@ -98,7 +98,6 @@ function parse(src: string): Node {
     const t = toks[p]
     if (t.k === 'num') { p++; return { t: 'lit', v: Number(t.v) } }
     if (t.k === 'str') { p++; return { t: 'lit', v: t.v } }
-    if (t.k === 'in') { p++; return { t: 'input', id: t.v } }
     if (t.k === 'id') {
       p++
       if (t.v === 'true' || t.v === 'false') return { t: 'lit', v: t.v === 'true' }
@@ -205,14 +204,16 @@ const FNS = new Map<string, Fn>([
   ['each', { min: 3, max: 3, run: () => null }], ['filter', { min: 3, max: 3, run: () => null }], ['sortBy', { min: 3, max: 3, run: () => null }],
 ])
 export const UI_FUNCTIONS: readonly string[] = [...FNS.keys()]
-export const reservedUIName = (id: string): boolean => KEYWORDS.has(id) || FNS.has(id) || FORBIDDEN.has(id)
+/** Names a document may not declare. Function names stay free: a call is written name(…), a value bare. */
+export const reservedUIName = (id: string): boolean => KEYWORDS.has(id) || FORBIDDEN.has(id)
 
 // ── static check ──
 export type ExprScope = { inputs: ReadonlySet<string>; names: ReadonlySet<string> }
 const parsed = new Map<string, Node>()
 /** Parses (cached by source) and checks every name, function and arity against the scope. */
 export function compileExpr(src: unknown, scope: ExprScope): Node {
-  if (typeof src !== 'string' || !src.trim() || src.length > EXPR_LIMITS.chars) throw new Error(`expected an expression (max ${EXPR_LIMITS.chars} characters)`)
+  if (typeof src !== 'string' || !src.trim()) throw new Error('expected an expression')
+  if (src.length > EXPR_LIMITS.chars) throw new Error(`expression longer than ${EXPR_LIMITS.chars} characters; put data such as word lists, steps or rows in a state value's initial and compute from it`)
   let node = parsed.get(src)
   if (!node) {
     try { node = parse(src) } catch (e) { throw new Error(`${e instanceof Error ? e.message : e} in "${src}"`) }
@@ -221,9 +222,8 @@ export function compileExpr(src: unknown, scope: ExprScope): Node {
   }
   const check = (n: Node, locals: ReadonlySet<string>, nest: number): void => {
     switch (n.t) {
-      case 'input': if (!scope.inputs.has(n.id)) throw new Error(`unknown input $${n.id}`); return
       case 'name':
-        if (!locals.has(n.id) && !scope.names.has(n.id)) throw new Error(FNS.has(n.id) ? `${n.id} is a function; call it as ${n.id}(…)` : `unknown name ${n.id}`)
+        if (!locals.has(n.id) && !scope.names.has(n.id) && !scope.inputs.has(n.id)) throw new Error(FNS.has(n.id) ? `${n.id} is a function; call it as ${n.id}(…)` : `unknown name ${n.id} — declare it as an input, a state value or a derived value before using it`)
         return
       case 'list': if (n.items.length > EXPR_LIMITS.list) throw new Error('list literal too long'); n.items.forEach(x => check(x, locals, nest)); return
       case 'obj':
@@ -259,8 +259,7 @@ export function compileExpr(src: unknown, scope: ExprScope): Node {
 
 // ── evaluation ──
 export type ExprEnv = {
-  input(id: string): UIValue
-  /** State or derived value; throws when a derived value failed. */
+  /** Input, state or derived value; throws when a derived value failed. */
   name(id: string): UIValue
   locale: 'zh' | 'en'
   budget: { steps: number }
@@ -270,7 +269,6 @@ export function evaluate(root: Node, env: ExprEnv): UIValue {
     if (++env.budget.steps > EXPR_LIMITS.steps) throw new Error('too much computation')
     switch (n.t) {
       case 'lit': return n.v
-      case 'input': return env.input(n.id)
       case 'name': return locals?.has(n.id) ? locals.get(n.id)! : env.name(n.id)
       case 'list': return sized(n.items.map(x => ev(x, locals)))
       case 'obj': return Object.fromEntries(n.entries.map(([k, x]) => [k, ev(x, locals)]))
@@ -369,8 +367,8 @@ export function documentEnv(doc: Pick<UIDocument, 'inputs' | 'state' | 'derived'
   const memo = new Map<string, UICell>()
   const env: DocumentEnv = {
     locale, budget: { steps: 0 },
-    input: id => { if (!Object.hasOwn(inputs, id)) throw new Error(`unknown input $${id}`); return inputs[id] },
     name: id => {
+      if (Object.hasOwn(inputs, id)) return inputs[id]
       if (vars.has(id)) return vars.get(id)!
       const src = derived.get(id)
       if (src === undefined) throw new Error(`unknown name ${id}`)
