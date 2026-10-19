@@ -3846,7 +3846,7 @@ export const SettingsModal: React.FC<{
                       <div className="field" data-testid="about-update-source">
                         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                           <div style={{ fontWeight: 600 }}>{t('about.update.source')}</div>
-                          <span className="grow" />
+                          <span style={{ flex: 1 }} />
                           <div className="seg" role="group" aria-label={t('about.update.source')}>
                             {(['auto', 'website', 'github'] as const).map((v) => (
                               <button

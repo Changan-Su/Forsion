@@ -5,6 +5,7 @@ const updater = vi.hoisted(() => ({
   feeds: [] as any[],
   sent: [] as any[],
   download: [] as Array<() => Promise<void>>,
+  reject: false,
 }))
 vi.mock('electron', () => ({
   app: { isPackaged: true, getVersion: () => '2.13.3' },
@@ -18,8 +19,9 @@ vi.mock('electron-updater', () => ({ default: { autoUpdater: {
   checkForUpdates: async () => {
     const feed = updater.feeds.at(-1)
     const version = feed.provider === 'custom' ? feed.installer.version : /\/v([^/]+)$/.exec(feed.url)![1]
+    if (updater.reject) return { isUpdateAvailable: false, updateInfo: { version } } // 例:minimumSystemVersion 高过本机
     updater.events.get('update-available')?.({ version, files: [{ size: 100 }] })
-    return { updateInfo: { version } }
+    return { isUpdateAvailable: true, updateInfo: { version } }
   },
   downloadUpdate: () => (updater.download.shift() ?? (async () => updater.events.get('update-downloaded')!({ version: '2.13.4' })))(),
 } } }))
@@ -33,7 +35,7 @@ const json = (body: unknown) => ({ ok: true, json: async () => body })
 
 beforeEach(() => {
   vi.resetModules()
-  updater.events.clear(); updater.feeds.length = 0; updater.sent.length = 0; updater.download.length = 0; answers.clear()
+  updater.events.clear(); updater.feeds.length = 0; updater.sent.length = 0; updater.download.length = 0; updater.reject = false; answers.clear()
   Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
   vi.stubGlobal('fetch', vi.fn(async (url: string) => {
     for (const [k, v] of answers) if (url.includes(k)) return json(v)
@@ -97,4 +99,20 @@ it('keeps the downloaded installer visible when a later check would fail', async
   await downloadUpdate()
   answers.clear()
   expect(await checkForUpdates()).toMatchObject({ phase: 'downloaded', version: '2.13.4' })
+})
+
+it('ends with nothing-new instead of hanging in checking when electron-updater rejects the pinned version', async () => {
+  answers.set('/website/config', site({ version: '2.13.4' }))
+  updater.reject = true
+  const { checkForUpdates } = await import('./updater')
+  expect(await checkForUpdates()).toMatchObject({ phase: 'not-available' })
+})
+
+it('shares one in-flight check between overlapping callers', async () => {
+  answers.set('/website/config', site({ version: '2.13.4' }))
+  const { checkForUpdates } = await import('./updater')
+  const [a, b] = [checkForUpdates(), checkForUpdates()]
+  expect(a).toBe(b)
+  await a
+  expect(updater.feeds).toHaveLength(1)
 })

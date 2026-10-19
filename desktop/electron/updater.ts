@@ -159,7 +159,8 @@ export async function updateSourcePref(): Promise<UpdateSourcePref> {
  */
 let mainlandMemo: boolean | null = null
 export async function detectMainland(): Promise<boolean | null> {
-  if (mainlandMemo === null) mainlandMemo = parseMainland(await getJson(`${WEBSITE_API}/auth/region`, 3000))
+  // 服务端要现查 IP 归属(ip-api,自带 2.5s 超时),实测 0.6–3s+,给足 8 秒;只影响先走哪边。
+  if (mainlandMemo === null) mainlandMemo = parseMainland(await getJson(`${WEBSITE_API}/auth/region`, 8000))
   return mainlandMemo
 }
 
@@ -217,10 +218,13 @@ function otherSource(): UpdateSource | null {
   return target?.order.find((s) => s !== feedSource && feedFor(s)) ?? null
 }
 
-/** 把 electron-updater 钉到这一边,并确认它答出来的就是这个版本。 */
-async function useSource(src: UpdateSource): Promise<boolean> {
+/**
+ * 把 electron-updater 钉到这一边,并确认它答出来的就是这个版本。
+ * 'rejected' = 版本对得上,但 electron-updater 自己不认(minimumSystemVersion 高过这台电脑等),不会再发 update-available。
+ */
+async function useSource(src: UpdateSource): Promise<'ok' | 'rejected' | 'fail'> {
   const feed = feedFor(src)
-  if (!feed || !target) return false
+  if (!feed || !target) return 'fail'
   // generic 按 channel 拼 yml 名(Linux 自动加 -linux):标准包 latest*.yml,NoExtend latest-no-extend*.yml;
   // 测试版 tag 上也是 latest*.yml(见 electron-builder.config.cjs 的说明)。
   autoUpdater.channel = BUNDLE_EXTEND ? 'latest' : 'latest-no-extend'
@@ -230,8 +234,9 @@ async function useSource(src: UpdateSource): Promise<boolean> {
   busy = true
   try {
     const r = await autoUpdater.checkForUpdates()
-    return r?.updateInfo?.version === target.version
-  } catch { return false } finally { busy = false }
+    if (r?.updateInfo?.version !== target.version) return 'fail'
+    return r.isUpdateAvailable === false ? 'rejected' : 'ok'
+  } catch { return 'fail' } finally { busy = false }
 }
 
 function ensureWired(): void {
@@ -263,7 +268,17 @@ export function getUpdaterStatus(): UpdaterStatus {
   return lastStatus
 }
 
-export async function checkForUpdates(): Promise<UpdaterStatus> {
+/**
+ * 启动、6 小时定时、唤醒、手动四条入口会撞在一起:共用在途的那一次。不然后结束的那次会在用户已经点了下载之后
+ * 重新钉 feed,或把 downloaded 盖回 available(Codex 评审 P2)。
+ */
+let inflight: Promise<UpdaterStatus> | null = null
+export function checkForUpdates(): Promise<UpdaterStatus> {
+  if (!inflight) inflight = runCheck().finally(() => { inflight = null })
+  return inflight
+}
+
+async function runCheck(): Promise<UpdaterStatus> {
   // A verified installer is waiting for the user's restart, or one is downloading; a timer/manual recheck must not reset it.
   if (lastStatus.phase === 'downloaded' || dl) return lastStatus
   if (unsupported()) {
@@ -289,7 +304,11 @@ export async function checkForUpdates(): Promise<UpdaterStatus> {
     ensureWired()
     autoUpdater.allowPrerelease = beta
     feedSource = null
-    for (const src of target.order) if (await useSource(src)) return lastStatus // update-available 已广播
+    for (const src of target.order) {
+      const res = await useSource(src)
+      if (res === 'ok') return lastStatus // update-available 已广播
+      if (res === 'rejected') { target = null; broadcast({ phase: 'not-available' }); return lastStatus }
+    }
     broadcast({ phase: 'error', error: 'unreachable' })
   } catch (err: any) {
     broadcast({ phase: 'error', error: err?.message || String(err) })
@@ -319,7 +338,7 @@ export async function downloadUpdate(): Promise<void> {
       const from = feedSource
       const manual = cur.manual
       const next = manual ?? (autoSwitched ? null : otherSource())
-      if (!next || !(await useSource(next))) {
+      if (!next || (await useSource(next)) !== 'ok') {
         broadcast({ ...lastStatus, phase: 'error', error: err?.message || String(err) })
         return
       }
