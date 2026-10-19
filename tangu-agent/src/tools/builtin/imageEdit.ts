@@ -13,6 +13,8 @@ export function imageQuality(value: unknown): string | undefined {
 
 /** Only explicit current-run attachments can be uploaded. Never resolve arbitrary model URLs or paths. */
 export function editInputs(inputs: ReadonlyArray<{ url: string }>, indices?: unknown) {
+  // 没附件时说清楚原因:旧报错「image_indices must refer to attached images」像是索引写错,模型会原样重试(2026-10-19 连试 5 次)。
+  if (!inputs.length) throw new Error('No images are attached to the current message. File paths written in the message text are not attachments, and images from earlier messages are not reused. Ask the user to attach the source images (paste or drag them into the chat) in their next message, then call edit_image again. Do not retry before that.');
   const chosen = indices === undefined ? inputs.map((_, i) => i + 1) : indices;
   if (!Array.isArray(chosen) || !chosen.length || chosen.length > 8 || new Set(chosen).size !== chosen.length)
     throw new Error('Attach 1–8 reference images and select distinct image_indices.');
@@ -48,7 +50,7 @@ export function makeImageEditTool(pickModel: PickModel): ReturnType<ToolProvider
         quality: {
           type: 'string',
           enum: ['low', 'medium', 'high', 'xhigh', 'max', 'auto'],
-          description: 'Rendering effort/quality tier. Higher tiers cost several times more and take longer; "xhigh"/"max" need a gpt-image-2.5-class model. Omit unless the user asked for a draft or for maximum fidelity.',
+          description: 'Rendering effort/quality tier. Higher tiers cost several times more and take longer; "xhigh"/"max" are only honored by some image models. Omit unless the user asked for a draft or for maximum fidelity.',
         },
         model: { type: 'string', description: 'Optional image model override; otherwise uses the session/default image model.' },
       }, required: ['prompt'] },

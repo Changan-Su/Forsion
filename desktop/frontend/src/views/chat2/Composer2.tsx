@@ -228,6 +228,13 @@ export const fileChip = (path: string): RefChip => ({
   kind: 'file',
 })
 
+/** 拖进来的 OS 文件分两路:放得进附件的图片(与粘贴一致)+ 其余。图片若也变成路径芯片,模型只拿到一串路径,
+ *  edit_image 只认附件 → 改图 / 合成必失败(2026-10-19 反馈:把脸合成到裙子上连失败 5 次)。 */
+export const splitDroppedFiles = <F extends { type: string; size: number }>(files: F[]): { images: F[]; rest: F[] } => {
+  const images = files.filter((f) => f.type.startsWith('image/') && f.size <= MAX_ATTACH_BYTES)
+  return { images, rest: files.filter((f) => !images.includes(f)) }
+}
+
 export const folderChip = (path: string): RefChip => ({
   token: /\s/.test(path) ? `"${path}"` : path,
   name: chipBaseName(path),
@@ -1452,7 +1459,7 @@ export const Composer2: React.FC<{
   }
   const send = () => { void sendMessage() }
 
-  const pickFiles = async (files: FileList | null) => {
+  const pickFiles = async (files: ArrayLike<File> | null) => {
     if (!files) return
     const next: Attachment[] = []
     const skipped: string[] = []
@@ -1469,7 +1476,7 @@ export const Composer2: React.FC<{
     setAttachments((prev) => [...prev, ...next])
   }
 
-  const pickWsFiles = async (files: FileList | null) => {
+  const pickWsFiles = async (files: ArrayLike<File> | null) => {
     if (!files) return
     const next: Attachment[] = []
     const skipped: string[] = []
@@ -1485,11 +1492,13 @@ export const Composer2: React.FC<{
     setWsFiles((prev) => [...prev, ...next])
   }
 
-  /** OS 文件落下:host 走本机路径芯片,其余上传成工作区附件。 */
-  const onFilesDrop = (files: FileList): void => {
+  /** OS 文件落下:图片进图片附件;其余 host 走本机路径芯片,非 host 上传成工作区附件。 */
+  const onFilesDrop = (fileList: FileList): void => {
+    const { images, rest: files } = splitDroppedFiles(Array.from(fileList))
+    if (images.length) void pickFiles(images)
     if (!files.length) return
     if (localFs && window.tangu?.getPathForFile) {
-      const paths = Array.from(files)
+      const paths = files
         .map((f) => { try { return window.tangu!.getPathForFile!(f) } catch { return '' } })
         .filter(Boolean)
       if (paths.length) {

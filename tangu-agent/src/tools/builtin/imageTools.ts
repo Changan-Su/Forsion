@@ -69,7 +69,7 @@ export const imageGenProvider: ToolProvider = {
               quality: {
                 type: 'string',
                 enum: ['low', 'medium', 'high', 'xhigh', 'max', 'auto'],
-                description: 'Rendering effort/quality tier. Higher tiers cost several times more and take longer; "xhigh"/"max" need a gpt-image-2.5-class model. Omit unless the user asks for a draft (low) or for maximum fidelity.',
+                description: 'Rendering effort/quality tier. Higher tiers cost several times more and take longer; "xhigh"/"max" are only honored by some image models. Omit unless the user asks for a draft (low) or for maximum fidelity.',
               },
               model: { type: 'string', description: 'Optional image model id override; defaults to the configured/first available image model.' },
             },

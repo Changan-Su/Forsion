@@ -32,7 +32,7 @@ describe('edit_image attachment boundary', () => {
   });
   it('never uses prior conversation images when the current run has no attachments', async () => {
     const context = { ...ctx(), getImageInputs: undefined, getWorkingMessages: () => [{ role: 'user', content: [{ type: 'image_url', image_url: input }] }] };
-    expect(await tool.execute({ prompt: 'Edit' }, context)).toMatch(/^Error:/);
+    expect(await tool.execute({ prompt: 'Edit', image_indices: [1, 2] }, context)).toMatch(/^Error: No images are attached to the current message/);
     expect(edit).not.toHaveBeenCalled(); expect(displayFile).not.toHaveBeenCalled();
   });
   it('prefers the session model and propagates cancellation without displaying a late result', async () => {
