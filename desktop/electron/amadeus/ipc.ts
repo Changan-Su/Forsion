@@ -14,6 +14,7 @@ import { createPageHistory } from './fs/pageHistory'
 export type { VaultFace } from './fs/vaultHandlers'
 import { VaultWatcher } from './fs/watcher'
 import { VaultIndex } from './fs/vaultIndex'
+import { vaultRel } from './fs/vaultRel'
 import { adoptLegacyCloudState, currentCloudAccountId, readConfig, updateConfig, writeConfig } from './settings'
 import { defaultWorkspaceDir, forsionHomeDir, isDevMode, tanguDataDir } from '../forsionHome'
 import { getProduct } from '../productsRegistry'
@@ -179,10 +180,15 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
   // SSE 事件带 origin(写入者的 clientId / 'host'=B 的渲染层 / null=watcher 等无主来源),
   // 远端桥按 origin 丢自己的回声 —— 路径时间窗方案有预臂竞态+误吞真改动,已废(Codex P1)。
   const vaultEventSubs = new Set<(channel: string, payload: unknown, origin: string | null) => void>()
+  // 带库内路径的回灌事件一律 `/`(vaultRel):payload 常是调用方递进来的原样路径,可能是渲染层老标签的 `\` 写法。
+  const PATH_EVENTS = new Set<string>([IPC.externalChange, IPC.fileChange, IPC.dbChange])
+  const relPayload = (channel: string, payload: unknown): unknown => (PATH_EVENTS.has(channel) && typeof payload === 'string' ? vaultRel(payload) : payload)
   const emitRemote = (channel: string, payload: unknown, origin: string | null): void => {
+    payload = relPayload(channel, payload)
     for (const s of [...vaultEventSubs]) { try { s(channel, payload, origin) } catch { /* 订阅者自理 */ } }
   }
   const notifyWindows = (channel: string, payload?: unknown): void => {
+    payload = relPayload(channel, payload)
     for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send(channel, payload)
   }
   const notifyAll = (channel: string, payload?: unknown): void => {
@@ -264,7 +270,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     },
   )
 
-  const rememberPage = (pagePath: string): Promise<void> => writeConfig({ lastPage: pagePath })
+  const rememberPage = (pagePath: string): Promise<void> => writeConfig({ lastPage: vaultRel(pagePath) })
 
   /** 切到某个根:统一收口(setRoot + watcher + index + 返回渲染端所需载荷)。 */
   const activateRoot = async (root: string, keepLastPage: boolean): Promise<{ root: string; pages: string[]; folders: string[]; lastPage?: string }> => {
@@ -273,7 +279,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     const pages = await vault.listPages()
     const folders = await vault.listFolders()
     await index.build()
-    const { lastPage } = await readConfig()
+    const stored = (await readConfig()).lastPage
+    const lastPage = stored && vaultRel(stored) // 老版本在 Windows 上记的是 `\` 写法
     return {
       root,
       pages,
@@ -334,6 +341,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
   const notifyPeers = (origin: unknown, channel: string, payload?: unknown): void => {
     const sender = (origin as { sender?: unknown } | null)?.sender
     if (!sender) return
+    payload = relPayload(channel, payload)
     for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && w.webContents !== sender) w.webContents.send(channel, payload)
   }
   registerVaultHandlers({ vault, index, handle, rememberPage, notifyAll, notifyPeers, logActivity, logNoteEdit, pageHistory: createPageHistory({ root: () => path.join(tanguDataDir(), 'amadeus-history') }) }) // 版本历史存库外(C-20)

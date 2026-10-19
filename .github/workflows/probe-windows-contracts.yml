@@ -52,7 +52,7 @@ jobs:
         run: |
           npx tsc --noEmit
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          npx vitest run electron/amadeus/ipc.moveFileRefs.test.ts shared/amadeus/assets.test.ts shared/amadeus/propagateNoteRenames.test.ts electron/startupAppearance.test.ts electron/systemIcon.test.ts shared/miniPanel.test.ts
+          npx vitest run electron/amadeus/fs/vaultRel.test.ts frontend/src/amadeus/lib/slashRel.test.ts electron/amadeus/ipc.moveFileRefs.test.ts shared/amadeus/assets.test.ts shared/amadeus/propagateNoteRenames.test.ts electron/startupAppearance.test.ts electron/systemIcon.test.ts shared/miniPanel.test.ts
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run build
           exit $LASTEXITCODE

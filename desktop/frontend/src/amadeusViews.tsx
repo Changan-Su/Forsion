@@ -96,6 +96,7 @@ import { parentOf, rowDropTarget, dropKeyOf, takesHostPaths } from './views/tree
 import { FILE_VIEW_PARAM } from './viewFileMatch'
 import { windowKind } from './windowKind'
 import { registerMessages, translate, useI18n } from './i18n'
+import { useVaultRelParam } from './views/vaultRelParam'
 
 registerMessages({
   'amxv.renameFailed': { zh: '重命名失败：{e}', en: 'Rename failed: {e}' },
@@ -2398,7 +2399,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
     return (eds.find((t) => t.id === am?.id) ?? eds.find((t) => t.front) ?? eds[0])?.id === leaf.id
   })
   const facadeScope = useActivePageScope()
-  const notePath = typeof leaf.params.notePath === 'string' ? leaf.params.notePath : null
+  const notePath = useVaultRelParam(leaf, 'notePath') || null
   const prevActiveRef = useRef(false)
   // ── v4 绞杀者路由(spec §9 step 3 Phase A):先读原文按 fm 分类,素文件/外来 md/v4 →
   // UnifiedPage(统一实例),v3 标记文件 → 下面的 PageView 老路。分类必须**先于** effect ①:
