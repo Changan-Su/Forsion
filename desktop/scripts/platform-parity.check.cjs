@@ -292,12 +292,24 @@ const e = checkMainTab(problems)
  *  每个名字,替身里都得有同名 export。少一个,mobile `vite build` 就 rollup 报 "X is not exported by …",
  *  而 desktop 的 tsc/vitest 碰不到这条路径,只有推 tag 才跑的 build-android 会红 —— v2.7.0 缺 startOpenDrag、
  *  10-19 PR #55 缺 useViewChromeSlot / VIEW_CHROME_ATTR 都是这么挂的。这一段没有 SKIP:缺了就是构建坏。
- *  ponytail: 只看 barrel(lcl/engine/index.ts);少数直接 import 这几个模块的文件没扫,哪天从那条路挂了再扩。 */
+ *  ponytail: 只看 barrel 的 `export { … } from`(lcl/engine/index.ts);`export * from` 被换模块、以及少数
+ *  直接 import 这几个模块的文件没扫,哪天从那条路挂了再扩。 */
 function checkSwapStubs(problems) {
   const vite = fs.readFileSync(path.join(GENESIS, 'mobile/vite.config.ts'), 'utf8')
   const roots = { __dirname: path.join(GENESIS, 'mobile'), HERE: path.join(GENESIS, 'mobile/src') }
-  const swaps = [...vite.matchAll(/\['\/engine\/(\w+)\.tsx?',\s*resolve\((__dirname|HERE),\s*'([^']+)'\)\]/g)]
+  const swaps = [...vite.matchAll(/\[['"]\/engine\/(\w+)\.tsx?['"],\s*resolve\((__dirname|HERE),\s*['"]([^'"]+)['"]\)\]/g)]
     .map(([, mod, root, rel]) => ({ mod, file: path.resolve(roots[root], rel) }))
+  /** 替身真正导出的运行期名字:声明式 export + `export { a, b as c }` 的对外名(c),不算 type-only。 */
+  const exportedNames = (src) => {
+    const out = new Set()
+    for (const m of src.matchAll(/export\s+(?:async\s+)?(?:const|let|var|function\*?|class)\s+([A-Za-z_$][\w$]*)/g)) out.add(m[1])
+    for (const m of src.matchAll(/export\s*\{([^}]*)\}/g))
+      for (const s of m[1].split(',')) {
+        const t = s.trim()
+        if (t && !t.startsWith('type ')) out.add(t.split(/\s+as\s+/).pop())
+      }
+    return out
+  }
   const barrelFile = path.join(GENESIS, 'lcl/engine/index.ts')
   const barrel = read(barrelFile)
   let names = 0
@@ -309,9 +321,8 @@ function checkSwapStubs(problems) {
         const n = s.trim().split(/\s+as\s+/)[0]
         if (n && !n.startsWith('type ')) wanted.push(n)
       }
-    const src = read(file)
-    const has = (n) => new RegExp(`export\\s+(?:const|let|function|class)\\s+${n}\\b|export\\s*\\{[^}]*\\b${n}\\b`).test(src)
-    const missing = wanted.filter((n) => !has(n))
+    const exported = exportedNames(read(file))
+    const missing = wanted.filter((n) => !exported.has(n))
     names += wanted.length
     if (missing.length) problems.push({ label: `F. 移动替身缺同名 export(barrel 从 ./${mod} re-export,替身里要补 stub)`, deskFile: barrelFile, mobFile: file, missing })
   }
