@@ -2808,6 +2808,8 @@ try {
     const cfg = { imageModelId: 'fakeimg/fake-edit' };
     const att = IMGEDIT_PNGS.map((b, i) => ({ name: `photo-${i + 1}.png`, mimeType: 'image/png', data: b.toString('base64') }));
     const want = IMGEDIT_PNGS.map(sha).sort();
+    // 假后端是全局的:同一次 --only 里先跑的场景(如 imgtools ③)也会打到它,第一轮按本场景起点数,别拿总数判 0
+    const n0 = IMGEDIT.calls.length;
     const ev1 = await run(sid, '这两张图先发给你,先别动,回我一句「收到」就行。', 180_000, cfg, undefined, undefined, undefined, undefined, { attachments: att });
     const n1 = IMGEDIT.calls.length;
     const ev2 = await run(sid, '现在用 AI 改图把刚才那两张图合成一张:把第一张叠在第二张上面。', 240_000, cfg);
@@ -2823,9 +2825,9 @@ try {
     const extra = calls3.length && usedOutput && calls3.at(-1).length > 1;
     const ok3 = !ev3.error && args3.some((a) => /previous_outputs/.test(a)) && usedOutput;
     const shortRes = (ev) => ev.toolResults.filter((r) => r.name === 'edit_image').map((r) => r.result.slice(0, 300)).join(' | ') || '(没调 edit_image)';
-    return { ok: !ev1.error && n1 === 0 && ok2 && ok3, inconclusive: ok2 && ok3 && extra,
+    return { ok: !ev1.error && n1 === n0 && ok2 && ok3, inconclusive: ok2 && ok3 && extra,
       detail: ev1.error || ev2.error || ev3.error ||
-        `第一轮没动生图 ${n1 === 0 ? '✓' : '✗'};第二轮 edit_image ${res2.length} 次、后端收到 ${calls2.map((c) => c.length).join('+') || 0} 张,是那两张附件 ${merged ? '✓' : '✗'};` +
+        `第一轮没动生图 ${n1 === n0 ? '✓' : '✗'};第二轮 edit_image ${res2.length} 次、后端收到 ${calls2.map((c) => c.length).join('+') || 0} 张,是那两张附件 ${merged ? '✓' : '✗'};` +
         `第三轮 previous_outputs ${args3.some((a) => /previous_outputs/.test(a)) ? '有' : '没有'}、后端收到上一张产出 ${usedOutput ? '✓' : '✗'}${extra ? '(还多带了别的图)' : ''}`,
       output: `第二轮回复:${ev2.content}\n第二轮 edit_image:${shortRes(ev2)}\n\n第三轮参数:${args3.join(' | ')}\n第三轮回复:${ev3.content}\n第三轮 edit_image:${shortRes(ev3)}`,
       ttftMs: ttft(ev2), tokens: (tokensOf(ev1) || 0) + (tokensOf(ev2) || 0) + (tokensOf(ev3) || 0), toolCalls: [...ev2.toolCalls, ...ev3.toolCalls] };
