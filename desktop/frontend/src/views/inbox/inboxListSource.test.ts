@@ -118,6 +118,10 @@ describe('收件箱列表源(统一工作区)', () => {
     expect(inboxSnippet('~~~js\nsecret\n~~~\n看得见')).toBe('看得见')
     expect(inboxSnippet(`${F}\`forsion-task\ntitle: x\n${F}js\nsecret\n${F}\n${F}\`\n看得见`)).toBe('看得见')
     expect(inboxSnippet(`前 ${F} 行内 ${F} 后`)).toBe('前 行内 后') // 不在行首的三个反引号是行内代码,不是围栏
+    // 10-19:审批信正文是引擎 escapeMd 过的,列表里要还原成字面字符(从前露出 run\_bash、C:\\Users)
+    expect(inboxSnippet('run\\_bash · $ dir /b "C:\\\\Users\\\\Dream\\\\.forsion\\\\tangu"')).toBe('run_bash · $ dir /b "C:\\Users\\Dream\\.forsion\\tangu"')
+    expect(inboxSnippet('a\\*b\\*c \\[x\\](y)')).toBe('a*b*c [x](y)') // 被转义的 * 不当强调剥掉,[x](y) 不当链接
+    expect(inboxSnippet('\\> 不是引用 \\# 也不是标题')).toBe('> 不是引用 # 也不是标题')
     const t0 = performance.now()
     for (let i = 0; i < 200; i++) inboxSnippet('['.repeat(100_000))
     expect(performance.now() - t0).toBeLessThan(500) // 只看开头:恶意长行不拖慢列表

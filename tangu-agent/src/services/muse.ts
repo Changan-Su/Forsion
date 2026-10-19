@@ -299,15 +299,18 @@ function scheduleKickoff(due: ScheduleEntry[]): string {
 function tierKickoff(cfg: MuseConfig): string {
   const lib = museLibraryDir();
   const common = `Your workspace is your Library (${lib}): keep drafts, notes, plugin drafts and your daily journal (Journal/<date>.md) there — the user can browse it in the app. `;
+  // 10-19:Windows 上 Muse 拿 run_bash 的 dir / findstr 读自己的 LOG 和 Library,ask 档每条都排成一张等用户的审批卡。
+  // 看 / 读 / 搜文件的工具本来免审批,这句把它们点出来。
+  const reads = ' To look at files (your log, Library and Journal included) use list_dir, read_file, glob_files, search_files or read_log — no approval needed; every run_bash command has to be approved first.';
   // 「Space 目录免审」必须写进档位句本身:09-27 实机 Muse 只读到「Library 免审、别处排队」,把 Space 当成「Library 外」
   // 等批准(实际 extraRoots 三档都放行),于是只敢改文案。
   if (cfg.mode === 'auto') {
     return common + 'Permission tier: auto — you have full autonomy inside the authorized folders and your Space folder; every file edit is checkpointed so the user can rewind, but still avoid destructive or external actions.';
   }
   if (cfg.mode === 'agent') {
-    return common + 'Permission tier: agent — writes inside your Library and your Space folder are free; writing anywhere else or running shell commands is first judged by the user\'s default agent on their behalf, and queued for the user if declined. Never retry a deferred action in this cycle.';
+    return common + 'Permission tier: agent — writes inside your Library and your Space folder are free; writing anywhere else or running shell commands is first judged by the user\'s default agent on their behalf, and queued for the user if declined. Never retry a deferred action in this cycle.' + reads;
   }
-  return common + 'Permission tier: ask — writes inside your Library and your Space folder are free; writing anywhere else or running shell commands is queued for the user\'s approval (the outcome shows up in your log next cycle as an [approval] entry). Never retry a deferred action in this cycle.';
+  return common + 'Permission tier: ask — writes inside your Library and your Space folder are free; writing anywhere else or running shell commands is queued for the user\'s approval (the outcome shows up in your log next cycle as an [approval] entry). Never retry a deferred action in this cycle.' + reads;
 }
 
 function log(msg: string): void {
