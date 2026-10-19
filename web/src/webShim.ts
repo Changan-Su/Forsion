@@ -10,7 +10,7 @@
  * 共享组件的 `window.tangu?.X` 可选链自然 no-op / 隐藏。
  */
 import { clearCloudAccountCache, syncCloudAccountCache } from '@/services/cloudAccountCache'
-import { createBrowserAccount, type BrowserAccount } from './account'
+import { createBrowserAccount, WEB_CLIENT_TAG, type BrowserAccount } from './account'
 import { createAccountFetch } from './accountFetch'
 
 const TOKEN_KEY = 'forsion_token'
@@ -34,7 +34,9 @@ function readToken(): string { return getWebAccount().getToken() }
 
 function gotoLogin(returnUrl?: string, force = false): void {
   const ret = returnUrl ?? location.origin + (import.meta.env.BASE_URL || '/')
-  location.replace('/auth?redirect=' + encodeURIComponent(ret) + '&app=tangu-web' + (force ? '&logout=1' : ''))
+  // client: the shared /auth page forwards it as X-Forsion-Client, so the sign-in is counted as this Web version.
+  location.replace('/auth?redirect=' + encodeURIComponent(ret) + '&app=tangu-web' + (force ? '&logout=1' : '') +
+    (WEB_CLIENT_TAG ? '&client=' + encodeURIComponent(WEB_CLIENT_TAG) : ''))
 }
 
 /** 捕获 /auth 回跳的 ?token=(落盘 + 清 URL)。邀请页等非主应用入口复用。 */
