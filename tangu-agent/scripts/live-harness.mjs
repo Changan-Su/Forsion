@@ -214,7 +214,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'account', 'nested', 'branch', 'musedm'];
+const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'imgtools', 'account', 'nested', 'branch', 'musedm'];
 KEYS.push('signals');
 KEYS.push('musechat');
 KEYS.push('novision');
@@ -259,6 +259,7 @@ OPT_IN.add('signals');
 OPT_IN.add('musechat');
 OPT_IN.add('imgwindow');
 OPT_IN.add('viewimage');
+OPT_IN.add('imgtools'); // --only imgtools:历史里带图 → 改图 / 生图在 run 起点就在工具面里,不靠中途 load_tools(三个短 run)
 OPT_IN.add('novision'); // --only novision:主模型没有图像输入时的转写状态与送达(一个 run + 一次转写)
 OPT_IN.add('cuoff'); // --only cuoff:主模型看不到图 → Computer Use 不可用并告诉用户(一个 run)
 for (const k of CU_JEV_KEYS) OPT_IN.add(k); // --only cumusic,cusend,cuambig,cuscroll,cusearch:Jev 真实案例,自绘替身 + 真 Jev(会动真鼠标;要 --cu-plugin)
@@ -1363,7 +1364,7 @@ async function phoneResponder(runId, p, phone) {
 async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {}, client, onApproval, headers, approveHeaders, opts = {}) {
   const t0 = Date.now();
   // headers:只加在起 run 这一跳(remoteclamp 用它模拟 unitWeb 盖的 x-forsion-remote);事件流 / 审批兑现照旧本机直连。
-  const { runId } = await api('/agent/runs', { method: 'POST', headers, body: JSON.stringify({ session_id: sessionId, model_id: opts.model || MODEL, message, client, ...(opts.clientCapabilities ? { client_capabilities: opts.clientCapabilities } : {}), ...(opts.ui ? { ui_commands: opts.uiCommands || [], ui_settings: opts.ui } : {}), agent_config: { ...AGENT_CONFIG, ...extraAgentConfig } }) });
+  const { runId } = await api('/agent/runs', { method: 'POST', headers, body: JSON.stringify({ session_id: sessionId, model_id: opts.model || MODEL, message, client, ...(opts.attachments ? { attachments: opts.attachments } : {}), ...(opts.clientCapabilities ? { client_capabilities: opts.clientCapabilities } : {}), ...(opts.ui ? { ui_commands: opts.uiCommands || [], ui_settings: opts.ui } : {}), agent_config: { ...AGENT_CONFIG, ...extraAgentConfig } }) });
   const ev = { runId, tokens: 0, toolCalls: [], toolCallIds: [], toolArgs: [], clientCmds: [], uiCmds: [], toolOffsets: null, toolResults: [], subTools: [], subStarts: [], subDones: [], systemPrompt: null, approvals: 0, approvalList: [], approvalResults: [], usages: [], probes: [], statuses: [], content: '', error: null, done: false, group: { speakers: [], ended: null, starts: [], ends: [], summary: null, remarks: [], outputs: [] }, ttftMs: null, firstTokenMs: null, wallMs: 0 };
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), timeoutMs);
@@ -2739,6 +2740,40 @@ try {
         `图里的数字 ${VIEWIMG_DIGITS} ${seen ? '读出' : '没读出'}`,
       output: `${ev.content}\n\n各轮请求体(KB):${main.map((u) => (Number(u.requestBytes) / 1024).toFixed(0)).join(' → ')}\nview_image 结果:${results.map((r) => r.slice(0, 400)).join(' | ')}`,
       ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
+  });
+
+  // imgtools(10-19,反馈 ebe554d0):用户带图来改图,模型中途调 load_tools 装 edit_image / generate_image,工具定义一变,
+  // 厂商把工具渲染在提示最前面 → 系统提示 + 整段历史全按未命中价重算(Auto 上一次约 45 点)。修后:历史里有原生图片 parts,
+  // 这两件在 run 起点就进 defs。同一会话三个 run:① 无图(对照)② 带图问数字 ③ 再带图要改图。
+  // 判据(引擎行为,决定红绿;工具面从 cache_probe 的 toolNames + tools 段指纹读,字节数相等证不了 —— Codex 10-19):
+  // ① 没带改图 / 生图;②③ 每次请求两件都在;②③ 的 tools 段指纹全同(跨 run 不变 = 前缀不断);②③ 没调 load_tools。
+  // 只记录:③ 第一个工具是不是 edit_image(模型可能先问清楚)、② 有没有不请自来去生图。负对照 = 去掉 registry.ts 的预载(须红)。
+  await scenario('imgtools', 'imgtools 历史里带图:改图 / 生图在起点就在工具面里,不靠中途 load_tools', async () => {
+    const sid = `live-imgtools-${Date.now()}`;
+    const digits = randDigits();
+    const att = [{ name: 'digits.png', mimeType: 'image/png', data: digitsPng(digits).toString('base64') }];
+    // 每次请求的工具面:名字 + tools 段指纹(cacheProbe 双闸,台架 env 已开 TANGU_CACHE_PROBE)。
+    const faces = (ev) => (ev.probes || []).map((p) => ({ names: p.toolNames || [], hash: (p.segments || []).find((x) => x.name === 'tools')?.hash || '' }));
+    const probe = { cacheProbe: true };
+    const ev0 = await run(sid, 'Reply with just: OK', 120_000, probe);
+    const ev1 = await run(sid, 'What 4-digit number is shown in the attached image? Reply with just the number.', 180_000, probe, undefined, undefined, undefined, undefined, { attachments: att });
+    const ev2 = await run(sid, 'Now use your image editing tool to make the background of the attached image light blue. Keep the digits unchanged.', 240_000, probe, undefined, undefined, undefined, undefined, { attachments: att });
+    const [f0, f1, f2] = [faces(ev0), faces(ev1), faces(ev2)];
+    const has = (f, n) => f.length > 0 && f.every((x) => x.names.includes(n));
+    const absent0 = f0.length > 0 && !f0.some((x) => x.names.includes('edit_image') || x.names.includes('generate_image'));
+    const both = ['edit_image', 'generate_image'].every((n) => has(f1, n) && has(f2, n));
+    const hashes = [...f1, ...f2].map((x) => x.hash);
+    const stable = hashes.length > 0 && hashes.every(Boolean) && new Set(hashes).size === 1;
+    const loads = ev2.toolCalls.filter((c) => c === 'load_tools').length + ev1.toolCalls.filter((c) => c === 'load_tools').length;
+    const seen = ev1.content.replace(/(\d)[\s.,·'-]+(?=\d)/g, '$1').includes(digits);
+    const unprompted = ev1.toolCalls.filter((c) => c === 'generate_image' || c === 'edit_image').length;
+    const err = ev0.error || ev1.error || ev2.error;
+    const bytes = (ev) => ev.usages.filter((u) => !u.phase && Number(u.toolsBytes) > 0).map((u) => Number(u.toolsBytes)).join('/');
+    return { ok: !err && absent0 && both && stable && loads === 0,
+      detail: err || `① 无图时没带改图 / 生图${absent0 ? '✓' : '✗'};②③ 每次请求都带 edit_image + generate_image${both ? '✓' : '✗'};` +
+        `②③ tools 段指纹全同(${new Set(hashes).size} 种)${stable ? '✓' : '✗'};load_tools ${loads} 次${loads === 0 ? '✓' : '✗'};` +
+        `〔只记录〕工具定义字节 ①${bytes(ev0)} ②${bytes(ev1)} ③${bytes(ev2)};② 读出 ${digits} ${seen ? '是' : '否'}、不请自来调改图 / 生图 ${unprompted} 次;③ 工具顺序 ${ev2.toolCalls.join(' → ') || '(无)'}`,
+      output: `② ${ev1.content}\n\n③ ${ev2.content}`, toolCalls: [...ev1.toolCalls, ...ev2.toolCalls] };
   });
 
   // novision(10-07,反馈 dbb04870:deepseek × Computer Use 操作微信):主模型没有图像输入 × 一个要按坐标点的任务。
