@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.53.0
+  version: 1.55.0
   author: Forsion
   category: Forsion
 ---
@@ -315,6 +315,7 @@ ctx.registerView({ id: 'home', title: 'Muse', mount(el) {
 | `ctx.ui.mountFloatingToc` | 视图内原生悬浮目录 | 插件保有正文 DOM,宿主负责扫描 / 滚动高亮 / 跳转 / 主题;老宿主没有 → 可选链 |
 | `ctx.ui.setViewModes(el, spec)` | 视图的几种「看法」(转写 / 笔记 / 纪要、文档 / 画布这类同一份东西换摆法) | 2026-10-19 起;宿主把胶囊画在视图头行最左,⌥⌘V、命令面板「看法：X」、窄宽变形、手机顶栏都归宿主;2–4 种,`icon` 用图标词表名;句柄 `actions` = 同一行右边,把自己栏里的按钮挪进去;记忆归你(按记录 / 文件记);老宿主没有 → 可选链,保留自己的标签。见下「View modes」 |
 | `ctx.ui.mountSelectionBar` | 自己的视图里选中文字后浮出宿主的划线条 | 宿主给「问 Tangu / 翻译 / ⋯」,你声明自己的工具(图标钮 / 颜色点);不接就什么都不出;老宿主没有 → 可选链,保留自己的菜单 |
+| `ctx.ui.mountSettingsPage` / `ctx.ui.mountSettingsItem` | 设置类页面(账号、额度、诊断、偏好…)用宿主的设置零件画 | 只给 groups / items 数据和回调,宿主按端排版(手机上紧凑控件留右、宽控件换行、选了就执行 → 半屏);**别再抄宿主的设置 CSS**;老宿主没有 → 可选链,保留自己画的那套 |
 | `ctx.ui.mountRecord` | 自己的卡片里挂宿主的「一行记录」编辑字段(标题 / 时间 / 属性,和内置日历的事件浮卡同一份) | 2026-10-17 起;⚠️**声明 `"databases"` 才有**;写口同 `ctx.databases.setCell`,外框 / 关闭 / 打开 / 删除归你;见下「日历 / 待办类插件的其余入口」 |
 | `ctx.ui.contextMenu(x, y, items)` | 宿主样式的右键菜单(和内置主页、Ribbon 的一样) | 2026-10-18 起;`items` = `{ label, run(), checked?, disabled?, danger? }`,视口坐标、放不下自己翻面;同一时刻只开一个,点外面 / Esc / 点了某项就关;返回关闭函数;老宿主没有 → `ctx.ui?.contextMenu?.(…)` |
 | `ctx.ui.mountBoard` / `ctx.ui.boardToSvg` | 盖在自己内容上的透明白板层(手写 / 圈画) | 和 `.excalidraw.md` 白板同一个引擎、同样的七支笔;**视口归调用方**(自己推 `viewport`、自己接滚轮);元素原样存取;不在手写时用 `boardToSvg` 出静态图;老宿主没有 → 不出手写入口 |
@@ -452,6 +453,7 @@ ctx.registerCommand({
 | `ctx.app.openSpace?(id)` | 切到某个 Space(2026-10-17 起) | resolve 在新 Space 布局建好之后,接着 `ctx.openView(…, { location: 'right' })` 就落在新 Space 里;不认识的 id → `false`;旧宿主没有 → `?.` |
 | `ctx.app.openLink?(url)` | 在应用内打开一条 `forsion://` 链接(2026-10-17 起) | 口径同系统唤起的深链,只导航不执行;插件页 / 收件箱信 / 笔记正文里的 `<a href="forsion://…">` 宿主本来就在应用内接住,这条给按钮用 |
 | `ctx.app.setSpaceProgress?(spaceId, progress)` | 在 Ribbon 上自己 Space 的图标外画一圈进度环(2026-10-18 起) | 只认本插件随包带的 Space,别人的 / 内置的恒 `false`;`0–1`,`null` 收起;按整百分比画,每 0.5 秒报一次也不会重渲;那个 Space 有未读角标时让给角标;插件停用时宿主收掉;Space 收进 Ribbon 文件夹 / 「⋯」时看不到环;旧宿主没有 → `?.` |
+| `ctx.app.setSpaceDot?(spaceId, on)` | 在 Ribbon 上自己 Space 的图标右上角挂提示红点(2026-10-19 起;服务器管理插件给「反馈中心」挂提醒用) | 只认本插件随包带的 Space,别人的 / 内置的恒 `false`;`true` 挂、`false` 收,没变不重渲;红点和收件箱未读角标同一种红,有角标时让给角标,和进度环同时有时只画红点;插件停用时宿主收掉;挂着时图标读屏名带「有新提醒」;列表行的未读仍用 `ListItem.unread`(指示色,不是红),要在别的 Space 也看得到就配上它;旧宿主没有 → `?.` |
 | `ctx.app.runCommand?(id)` | 跑一条命令面板里的现成命令(2026-10-17 起) | **只对首方内置包生效**,别的插件恒 `false`(命令里有删除 / 改设置) |
 | `ctx.app.spotlight?({ anchor, title, body?, step? } \| null)` | 在真界面上圈出一处 + 一张小卡(2026-10-19 起,使用指南的「带我去」) | **只对首方内置包生效**,别的插件恒 resolve `'missing'`;锚点是宿主的一张表(`ribbon-spaces` / `chat-composer` / `note-new` / `note-body` / `note-canvas` / `agent-new`),在收着的侧栏里会先展开;不压暗、不拦点击、同一时刻一处;resolve `ok` / `mute`(用户点了不再提示,插件自己记下)/ `gone` / `missing`(等 2 秒仍不在屏幕上)/ `replaced` / `closed`(传 `null` 收起);旧宿主没有 → `?.`,没有就照老做法 |
 | `ctx.inbox` | 往收件箱发本机系统消息 + 信下挂自己画的卡(2026-10-17 起) | **只给首方内置包**,别的插件整个成员缺席;`post` / `archive` / `registerCard({ sender, mount })`,卡只认发件人 `plugin:<你的 id>` 的本机系统消息 |
@@ -724,6 +726,36 @@ ctx.registerSelectionAction({
   ignores the return value. Report failures yourself or throw: the host shows a toast with the error message.
 - Hosts up to 2.13.3 ignore the new fields: the action stays note-only, sits under "AI ▾ → Plugins", and `cx`
   has only `text` / `markdown` / `pagePath`. Write `run` so it works with just those.
+
+### Settings parts: ctx.ui.mountSettingsPage / mountSettingsItem (2026-10-17+)
+
+For any settings-like page (account, quota, diagnostics, preferences — inside `registerSettingsView`, `registerStoreView` or your own view) describe the page as data and let the host draw it with its own settings parts. Do **not** copy the host's `.settings-*` CSS into your plugin: the copy breaks on phones (blank gaps, controls pushed off the row) and never follows later host changes.
+
+```js
+const zh = ctx.getLocale?.() === 'zh'
+const page = ctx.ui?.mountSettingsPage?.(el, { groups: [
+  { id: 'quota', icon: 'gauge', title: zh ? 'AI 额度' : 'AI quota', desc: zh ? '今日和本周' : 'Today and this week',
+    actions: [{ label: zh ? '充值' : 'Top up', kind: 'primary', onClick: () => openTopUp() }],
+    items: [
+      { type: 'meters', id: 'm', meters: [{ label: zh ? '今日' : 'Today', value: 0.69, caption: zh ? '每天 0:00 重置' : 'Resets daily' }] },
+      { type: 'switch', id: 'fallback', title: zh ? '用完后继续' : 'Continue when used up', value: state.fallback,
+        onChange: async (on) => { await save({ fallback: on }) } },            // reject → the switch flips back
+      { type: 'choice', id: 'convert', title: zh ? '转入' : 'Convert', button: zh ? '转入…' : 'Convert…',
+        options: [{ value: '5', label: '5%' }, { value: '10', label: '10%' }], onPick: (v) => convert(v) },
+      { type: 'input', id: 'code', title: zh ? '兑换码' : 'Redeem code', placeholder: 'XXXX',
+        button: { label: zh ? '兑换' : 'Redeem', onClick: (text) => redeem(text) } },
+    ] },
+] })
+if (!page) drawOwnPage(el)            // hosts before 2026-10-17: keep your own page for one release
+return () => page?.dispose()
+```
+
+- Item types: `switch`, `value` (read-only figure), `button` (`buttons: [...]`; `kind` primary / ghost / danger; optional `confirm: { title, message, confirmLabel, danger }`), `input` (+ optional `button` that receives the text), `segmented` (a setting with a few options), `select`, `choice` (picking **runs** something: a row of buttons on desktop, one button labeled `button` + a half sheet on phones), `stepper` (+ optional `button` that receives the number), `code` (code + copy button), `meters` (fractions 0–1, filled with the host action color), `state` (`empty` / `loading` / `error` with an optional retry `action`), and `custom` (`mount(el)` returns a cleanup; mount parts into it with `ctx.ui.mountSettingsItem`). A page-level `{ state }` replaces the groups (loading / signed out / failed).
+- Every group and item needs a stable `id`. `update(schema)` replaces the whole description; rows keep their identity by id.
+- Values: a defined `value` you pass is applied on every `update()`. Leave an `input` / `stepper` `value` out to keep what the user typed; pass `value: ''` to clear it. Callbacks may return a promise: buttons stay disabled until it settles; a rejected switch / segmented / select flips back.
+- No colors, no text from the host: every label comes from you (both languages). `icon` takes vocabulary names; settings pages gained `bell`, `gauge`, `coins`, `clock`, `gift`, `user`, `shield`, `package`, `activity`, `message`, `plug`, `list-checks`.
+- Layout is the host's: on phones (≤820 px) switches, values, codes and single buttons stay at the right of the title; inputs, selects, steppers and two or more buttons move under it and fill the row; touch targets grow to 36 px. On Android the choice sheet is native; on the mobile web it is the host's sheet.
+- Lifecycle: same mount protocol as the other `ctx.ui.mount*` (element returned to you after `dispose()`, one mount per element, host disposes on disable / reload, callbacks stop after that). Malformed calls throw `TypeError` synchronously.
 
 ### 白板层 ctx.ui.mountBoard / ctx.ui.boardToSvg(2026-10-10 起)
 
@@ -1699,6 +1731,8 @@ const off = ctx.app.watchFile?.('Snippets/latex.js', () => reload())
 - **factory 每个编辑器实例调一次**:一篇 v3 笔记是很多个小编辑器,别把「每编辑器状态」挂在工厂外的共享对象上。
 - **零 schema / 零序列化**:只能产生纯文本改动 + 装饰 + 按键拦截。想改落盘格式的不走这条路。
 - **`props.*` 宿主包了 try/catch,`state.apply` 没包** —— 后者吞异常等于放任状态损坏。状态迁移自己写稳。
+- **设置类页面先用 `ctx.ui.mountSettingsPage`**(2026-10-17 起,见上):开关、按钮、输入、额度条都有宿主零件,手机排法由宿主管;
+  只有清单外的内容才自己画(放进 `custom` 块)。
 - **设置面板会被反复挂载卸载**(用户来回进出详情页):状态别放模块级单例,dispose 要真收干净
   (定时器、DOM 监听、内嵌的 CodeMirror 实例)。容器上有宿主主题变量但**没有样式重置**,自己带样式、深浅色都要过。
 - **大块数据用 `loadData/saveData`,别塞 localStorage**:`registerSetting` 是每键一个字符串,没有原子性。

@@ -57,7 +57,7 @@ import { createDatabasesApi, createNoteTasksApi } from './pluginData'
 import { loadSyncedPluginData, notePluginDataEdit, pluginDataSyncOn, pushPluginData, type LocalData } from './pluginDataSync'
 import { createCalendarApi } from './pluginCalendar'
 import { createSpacesApi } from './pluginSpaces'
-import { clearSpaceProgressOf, setSpaceProgress } from '../../stores/spaceProgress'
+import { clearSpaceProgressOf, setSpaceDot, setSpaceProgress } from '../../stores/spaceProgress'
 import { closeSpotlight, showSpotlight } from './guideSpotlight'
 import { watchAccountName } from '../../services/accountName'
 import { fetchBingWallpapers } from '../../views/homepageWallpaper'
@@ -275,6 +275,17 @@ function listCached(kind: 'pages' | 'files'): Promise<string[]> {
 const isBoardViewport = (v: unknown): v is import('./types').PluginBoardViewport => {
   const o = v as { scrollX?: unknown; scrollY?: unknown; zoom?: unknown } | null
   return !!o && Number.isFinite(o.scrollX) && Number.isFinite(o.scrollY) && Number.isFinite(o.zoom) && (o.zoom as number) > 0
+}
+
+/** ctx.ui.mountSettingsPage 的描述:groups 是数组,或者 state 是对象(整页状态)。单个条目只认对象,出错的画不出来不崩。 */
+const checkSettingsSchema = (s: unknown): void => {
+  const o = s as { groups?: unknown; state?: unknown } | null
+  if (!o || typeof o !== 'object' || (o.groups != null && !Array.isArray(o.groups)) || (o.state != null && typeof o.state !== 'object') || (o.groups == null && o.state == null)) {
+    throw new TypeError('mountSettingsPage needs { groups: [...] } or { state }')
+  }
+}
+const checkSettingsItem = (it: unknown): void => {
+  if (!it || typeof it !== 'object' || typeof (it as { type?: unknown }).type !== 'string') throw new TypeError('mountSettingsItem needs an item with a type')
 }
 
 /** 插件经 ctx.app 写盘**落定之后**作废清单缓存(两种都清:writeFile / writeBytes 也能写 .md)。
@@ -502,6 +513,7 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
     } } : {}),
     // Ribbon 上自己那个 Space 图标的进度环(2026-10-18,蓬洲云传文件):只认这个插件自己带的 Space;拆插件时 teardown 收掉
     setSpaceProgress: (spaceId, progress) => (ok() && typeof spaceId === 'string' ? setSpaceProgress(pluginId, spaceId, progress) : false),
+    setSpaceDot: (spaceId, on) => (ok() && typeof spaceId === 'string' ? setSpaceDot(pluginId, spaceId, on) : false),
     openLink: async (url) => {
       if (!ok()) return false
       const [{ parseDeepLink }, { resolveDeepLink }] = await Promise.all([import('../../deepLinkPlan'), import('../../deepLinkInstall')])
@@ -1141,6 +1153,29 @@ export const usePluginStore = create<PluginState>((set, get) => {
     // registerCompanion 不再挂新伴随面、旧 handle 变哑。语言 / 模型 / 账号订阅、仪表盘 / 原生表 / 宿主 UI 挂载、
     // 字体、伴随面……插件自己能撤,但**最终责任人是宿主**:全记在 scope 上,关账统一撤(codex 评审 2026-08-14 起的纪律)。
     const ctxAlive = (): boolean => scope.alive()
+    // 设置零件两个挂载(整页 / 单件)同一条路:认领 el → 动态 import → 落地时 el 还归这次才挂;关账统一卸。
+    type SettingsSurface = typeof import('./settingsPageSurface')
+    const mountSettingsParts = <T, H extends { update(next: T): void; dispose(): void }>(
+      kind: string, el: HTMLElement, value: T, check: (v: unknown) => void, mount: (m: SettingsSurface, value: T) => H,
+    ): { update(next: T): void; dispose(): void } => {
+      if (!ctxAlive()) return { update() {}, dispose() {} }
+      if (!(el instanceof HTMLElement)) throw new TypeError(`${kind === 'settingsPage' ? 'mountSettingsPage' : 'mountSettingsItem'} needs an HTMLElement`)
+      check(value)
+      let pending = value
+      let mounted: H | null = null
+      let cancelled = false
+      const dispose = scope.own('mount', () => { cancelled = true; mounted?.dispose(); mounted = null }, kind)
+      const mine = cancelled ? () => false : claimHostMount(el) // 已吊销的上下文不许认领(同 mountChatBox)
+      void import('./settingsPageSurface').then((m) => {
+        if (cancelled) return
+        if (!mine()) { dispose(); return }
+        mounted = mount(m, pending)
+      }).catch((e) => console.error(`[amadeus] plugin "${pluginId}" ${kind} mount failed`, e))
+      return {
+        update(next) { if (cancelled) return; check(next); pending = next; mounted?.update(next) },
+        dispose,
+      }
+    }
     // agent 自建 Space 读写自家数据(2026-09-27):**只注入给 agent-<slug> 插件**(来源 <tangu>/agents/<slug>/Space/,
     // plugin.agent = slug),只能碰它自己这个 agent;探针缺这条(纯 Amadeus 壳 / 台架)或该 agent 没有数据源 → 整个不注入。
     // 写只在用户刚在**它自己的视图里**点过之后放行:插件代码是 agent 自己写的,不许它不经点击替用户处理 TODO ——
@@ -1593,6 +1628,10 @@ export const usePluginStore = create<PluginState>((set, get) => {
           dispose,
         }
       },
+      // 设置零件(2026-10-17,见 settingsPageSurface.tsx):整页描述(方案 B)与单件(方案 A)。和 mountChatBox 一样认领 el、
+      // 动态 import 破环;形态错误同步抛。回调的 alive 带上 ctxAlive:插件停用 / 重载后,还开着的半屏选了也不再调插件。
+      mountSettingsPage: (el, schema) => mountSettingsParts('settingsPage', el, schema, checkSettingsSchema, (m, pending) => m.mountPluginSettingsPage(el, pending, ctxAlive)),
+      mountSettingsItem: (el, item) => mountSettingsParts('settingsItem', el, item, checkSettingsItem, (m, pending) => m.mountPluginSettingsItem(el, pending, ctxAlive)),
       // 划线条:插件自己的视图用上宿主那一条(见 selectionBarSurface.tsx)。和 FloatingToc 一样不接管 root(只看它里面的
       // 选区,条浮在 body 上),所以不走 claimHostMount。句柄同步可用:装好之前的 show / update 攒着。
       // 视图看法(视图模式标准):宿主画胶囊、管 ⌥⌘V / 命令面板 / 手机顶栏,插件只报几种、现在哪种(见 pluginViewModes)
@@ -2077,7 +2116,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     }
     liveScopes.get(id)?.close()
     liveScopes.delete(id)
-    clearSpaceProgressOf(id) // 停用 / 换代时 Ribbon 上别留着一个不再更新的进度环
+    clearSpaceProgressOf(id) // 停用 / 换代时 Ribbon 上别留着一个不再更新的进度环 / 红点
     closeSpotlight(id) // 圈注同理
     lastEnsure.delete(id) // 旧规则集不随重新启用被重放;再启用时插件自己 setup 里会重新 ensure
     set((s) => ({

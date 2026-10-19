@@ -488,7 +488,7 @@ function surfaceUnder(el) {
   const compactWiring = [
     PRIMITIVES.includes('role="switch"'),
     SHORTCUTS.includes('settings-filter-input') && SHORTCUTS.includes('visibleRows'),
-    NOTIFICATIONS.includes('SettingsSwitch') && NOTIFICATIONS.includes('settings-drag-list'),
+    NOTIFICATIONS.includes('SettingsSwitch') && NOTIFICATIONS.includes('settings-drag-list') && NOTIFICATIONS.includes('<SettingsPage schema='),
     SPACES.includes('settings-collection-list') && !SPACES.includes('const zh ='),
     TSX.includes("settings.page.notesDescription") && TSX.includes("settings.page.browserDescription"),
   ]

@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { editInputs, makeImageEditTool } from './imageEdit.js';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { editInputs, makeImageEditTool, sha256 } from './imageEdit.js';
 import { configureTangu } from '../../seams/runtime.js';
 import { createTanguProfile } from '../../profiles/index.js';
 
@@ -30,10 +33,41 @@ describe('edit_image attachment boundary', () => {
     expect(displayFile).toHaveBeenCalledWith(expect.objectContaining({ dataUrl: input.url, mime: 'image/png' }));
     expect(result).toContain('Edited 1 image');
   });
-  it('never uses prior conversation images when the current run has no attachments', async () => {
+  it('only uses images the loop exposes: never scans working messages, paths or URLs', async () => {
     const context = { ...ctx(), getImageInputs: undefined, getWorkingMessages: () => [{ role: 'user', content: [{ type: 'image_url', image_url: input }] }] };
-    expect(await tool.execute({ prompt: 'Edit' }, context)).toMatch(/^Error:/);
+    expect(await tool.execute({ prompt: 'Edit', image_indices: [1, 2] }, context)).toMatch(/^Error: No source images are available/);
+    for (const ref of ['/Users/me/Pictures/private.png', 'generated/edit-1.png', 'https://example.com/a.png', '../a.png'])
+      expect(await tool.execute({ prompt: 'Edit', previous_outputs: [ref] }, { ...ctx(), listDisplayFiles: async () => [] })).toMatch(/not paths or URLs/);
     expect(edit).not.toHaveBeenCalled(); expect(displayFile).not.toHaveBeenCalled();
+  });
+  it('says when the visible images came from an earlier message', async () => {
+    const result = await tool.execute({ prompt: 'Merge' }, { ...ctx(), getImageInputsSentAt: () => Date.now() - 3 * 60_000 });
+    expect(result).toContain("1 image(s) from the user's message 3 minutes ago");
+    expect(result).toContain("mentions you used the images from the user's earlier message");
+    expect(await tool.execute({ prompt: 'Merge' }, ctx())).toContain('using 1 attached image(s)');
+  });
+  it('edits its own earlier outputs by file name, without pulling in the visible attachments', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'edit-image-outputs-'));
+    fs.writeFileSync(path.join(dir, 'gen.png'), Buffer.from(png, 'base64'));
+    const files = [
+      { name: 'edit-a.png', mime: 'image/png', dataUrl: input.url, source: 'edit_image' },
+      { name: '1760.png', mime: 'image/png', path: path.join(dir, 'gen.png'), source: 'generate_image', sha256: sha256(Buffer.from(png, 'base64')) },
+    ];
+    const result = await tool.execute({ prompt: 'Beach background', previous_outputs: ['1760.png', 'edit-a.png'] }, { ...ctx(), listDisplayFiles: async () => files });
+    expect(edit.mock.calls[0][0].images).toEqual([{ mime: 'image/png', b64: png }, { mime: 'image/png', b64: png }]); // 只有两张产出,附件没被默认带上
+    expect(result).toContain('using 1760.png and edit-a.png');
+    expect(displayFile).toHaveBeenCalledWith(expect.objectContaining({ source: 'edit_image' }));
+    expect(result).toMatch(/saved as edit-[0-9a-f-]+\.png; to edit one again, pass its file name in previous_outputs/);
+    // 产出落盘后被换成别的图(或软链到别处):对不上落盘时记的 sha256 就不传
+    fs.writeFileSync(path.join(dir, 'gen.png'), Buffer.from('RIFF0000WEBP'));
+    expect(await tool.execute({ prompt: 'Again', previous_outputs: ['1760.png'] }, { ...ctx(), listDisplayFiles: async () => files })).toMatch(/has changed on disk/);
+    expect(edit).toHaveBeenCalledTimes(1);
+  });
+  it('only accepts outputs that image tools produced', async () => {
+    const shown = [{ name: 'private.png', mime: 'image/png', dataUrl: input.url }]; // display_file 展示过的本机文件:没有 source
+    expect(await tool.execute({ prompt: 'Edit', previous_outputs: ['private.png'] }, { ...ctx(), listDisplayFiles: async () => shown })).toMatch(/not an image generated in this conversation/);
+    expect(await tool.execute({ prompt: 'Edit', previous_outputs: ['edit-x.png'] }, { ...ctx(), listDisplayFiles: undefined })).toMatch(/not an image generated in this conversation/);
+    expect(edit).not.toHaveBeenCalled();
   });
   it('prefers the session model and propagates cancellation without displaying a late result', async () => {
     const ac = new AbortController();
