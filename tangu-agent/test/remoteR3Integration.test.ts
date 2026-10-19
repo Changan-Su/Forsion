@@ -198,8 +198,9 @@ describe('I3 本机写配置抹不掉已有标记', () => {
 describe('I5 远端分支的标记随 INSERT 落库', () => {
   const addMsg = (id: string, sessionId: string, ts: number) =>
     query(`INSERT INTO chat_messages (id, session_id, role, content, timestamp) VALUES (?, ?, 'user', 'hi', ?)`, [id, sessionId, ts]);
+  // 分支不再继承来源标题(起名 New Chat 等 Historian),按挂在哪个会话下认
   const branchesOf = async (title: string): Promise<Array<{ id: string; cfg: any }>> =>
-    (await query<any[]>(`SELECT id, agent_config FROM chat_sessions WHERE title = ? AND id <> ?`, [title, `${title}-src`])).map((r) => ({ id: r.id, cfg: json(r.agent_config) }));
+    (await query<any[]>(`SELECT id, agent_config FROM chat_sessions WHERE parent_session_id = ?`, [`${title}-src`])).map((r) => ({ id: r.id, cfg: json(r.agent_config) }));
 
   it('复制消息中途失败:留下的新会话已带标记(修复前:先插无标记的行,补标记在复制之后,失败就一直无标记)', async () => {
     await query(`INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, kind, projectless, project_path, agent_config) VALUES ('I5a-src', 'u1', 'tangu', 'I5a', 'm1', 'user', 0, ?, ?)`,
