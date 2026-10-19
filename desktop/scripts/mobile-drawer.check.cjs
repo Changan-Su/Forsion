@@ -36,7 +36,7 @@ const GENESIS = path.resolve(__dirname, '../..')
 const read = (p) => fs.readFileSync(path.join(GENESIS, p), 'utf8')
 const CSS = [
   'desktop/frontend/src/styles/base.css',
-  'desktop/frontend/src/views/chat2/sidebar2.css',
+  'desktop/frontend/src/styles/sidebar2.css',
   'lcl/engine/engine.css',
   'lcl/engine/singleColumn.css',
 ].map(read).join('\n')

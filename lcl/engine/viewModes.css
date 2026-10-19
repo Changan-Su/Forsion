@@ -1,5 +1,5 @@
 /* 看法胶囊 + 视图头行(viewModes.tsx)。
- * 外观照抄 `.t2s-vaultseg`(desktop views/chat2/sidebar2.css,本地 | 云端那颗):轨道恒比所在面板暗一档,滑块次强调色,
+ * 外观照抄 `.t2s-vaultseg`(desktop styles/sidebar2.css,本地 | 云端那颗):轨道恒比所在面板暗一档,滑块次强调色,
  * 选中字 --accent-ink。那边改了明暗关系这边要跟着改。自带一份是因为 sidebar2.css 不是全局加载的,插件视图可能先于它渲染。 */
 
 .lcl-vmode { display: inline-flex; align-items: center; flex-shrink: 0; min-width: 0; -webkit-app-region: no-drag; }

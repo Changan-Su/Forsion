@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { rowDropTarget, parentOf, takesHostPaths } from './treeDrop'
-import { PATHS_MIME, REF_MIME } from './chat2/chatDragRef'
+import { PATHS_MIME, REF_MIME } from '../components/chatDragRef'
 
 describe('rowDropTarget', () => {
   it('普通笔记行 = 进这篇笔记', () => {

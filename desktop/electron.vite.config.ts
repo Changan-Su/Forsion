@@ -55,6 +55,7 @@ export default defineConfig({
         '@': resolve('frontend/src'),
         '@amadeus': resolve('frontend/src/amadeus'),
         '@amadeus-shared': resolve('shared/amadeus'),
+        '@tangu/ui': resolve('frontend/src'), // 宿主用 Tangu 界面一律经这个前缀(check:tanguboundary)
       },
     },
   },

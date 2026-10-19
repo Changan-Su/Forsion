@@ -20,7 +20,7 @@ import { RunLocationPicker } from '../components/RunLocationPicker'
 import { useRemoteNewChatWorkspaces } from '../stores/newChatWorkspaces'
 import { AgentSelectStrip } from '../components/AgentSelectStrip'
 import { HostLocaleProvider } from '../i18n'
-import { Composer2 } from './chat2/Composer2'
+import { Composer2 } from '@tangu/ui/views/chat2/Composer2'
 import type { TanguComposerMount, TanguComposerOptions } from '../amadeus/plugins/tanguSeam'
 
 export type NewChatDispatch = (

@@ -10,7 +10,7 @@ import { useApp } from './stores/appStore'
 import { LocaleProvider, resolveInitialLocale, translate } from './i18n'
 import './i18n.generated' // 注册全量翻译字典(渲染前)
 import { installEngine } from './bootstrapEngine'
-import { ChatPreview } from './views/chat2/ChatPreview'
+import { ChatPreview } from '@tangu/ui/views/chat2/ChatPreview'
 import { windowKind } from './windowKind'
 import { DetachedRoot } from './DetachedRoot'
 import { MiniRoot } from './MiniRoot'

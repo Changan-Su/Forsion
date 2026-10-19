@@ -11,8 +11,8 @@
  * ⚠️ dragover 阶段读不到 `getData`(浏览器只在 drop 时给数据),判「这拖的是不是引用」只能看
  * `types` —— 故 hasChatRef / readChatRefs 分成两个函数,别合并。
  */
-import { noteRefInsert } from '../../components/wikiChat'
-import { appRefToken, isAppRefId } from '../../../../shared/appRefs'
+import { noteRefInsert } from './wikiChat'
+import { appRefToken, isAppRefId } from '../../../shared/appRefs'
 
 export const REF_MIME = 'application/x-forsion-chatref'
 /** 文件面板/右栏的既有行拖契约(JSON 字符串数组)。 */

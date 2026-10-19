@@ -10,7 +10,7 @@ import { AmadeusOverlays } from '../amadeusOverlays'
 import { VoiceCallView } from './VoiceCallView'
 import './miniViews.css'
 
-const Chat = lazy(() => import('../views/ChatView').then((m) => ({ default: m.ChatView })))
+const Chat = lazy(() => import('@tangu/ui/views/ChatView').then((m) => ({ default: m.ChatView })))
 const Editor = lazy(() => import('../amadeusViews').then((m) => ({ default: m.AmadeusEditorView })))
 const Todos = lazy(() => import('../views/TodoListView').then((m) => ({ default: m.TodoListView })))
 registerMessages({

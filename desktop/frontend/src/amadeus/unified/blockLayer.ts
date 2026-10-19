@@ -36,7 +36,7 @@ import { keyboardPlugins } from './keyboard'
 import { markMachineSlash } from '../blocks/markdown/machineSlash'
 import { isCoarsePointer } from '../../touch'
 import { registerMessages, subscribeLocale, translate } from '../../i18n'
-import { REF_MIME } from '../../views/chat2/chatDragRef'
+import { REF_MIME } from '../../components/chatDragRef'
 
 registerMessages({
   'blocklayer.dragHandle': { zh: '点击打开菜单，按住拖动', en: 'Click for menu, hold to drag' },
