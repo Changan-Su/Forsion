@@ -214,3 +214,26 @@ describe('Intelligent UI v2 expressions', () => {
     expect(evaluate(node, { name: () => 21, locale: 'en', budget: { steps: 0 } })).toBe(42)
   })
 })
+
+// live 10-20 iuiparity:模型把「月预算」「12 周计划」写成写死的表 —— 列是 {id,label}、行是格子文字(带 {{ }}),
+// 被拒两次就退回纯文字(该出 13 → 8)。两种写法都收,行也可按列 id 写成对象。
+describe('written-out tables', () => {
+  const doc = {
+    version: 2, id: 'budget', title: 'Budget', resources: [],
+    inputs: [{ id: 'salary', kind: 'number', label: 'Salary', initial: 15000, min: 0, max: 100000, step: 500 }],
+    derived: [{ id: 'left', expr: 'salary - 4000 - 5000' }],
+    blocks: [{ id: 'c', kind: 'controls', inputIds: ['salary'] }, { id: 't', kind: 'table', columns: [{ id: 'item', label: '项目' }, { id: 'amount', label: '金额' }], rows: [['储蓄', 5000], ['日常', '{{format(left)}} 元'], { item: '房租', amount: '' }] }],
+  }
+  it('takes {id,label} columns and rows of cell text, computing {{ }} cells', () => {
+    const v = validateUIDocument(doc, { maxVersion: 2 })
+    const t = v.blocks[1] as Extract<UIDocument['blocks'][number], { kind: 'table' }>
+    expect(t.columns).toEqual(['项目', '金额'])
+    expect(t.rows).toEqual([['储蓄', '5000'], ['日常', '{{format(left)}} 元'], ['房租', '']])
+    expect(documentEnv(v, { salary: 15000 }, new Map(), 'zh').text('{{format(left)}} 元')).toBe('6,000 元')
+    expect(uiDocumentIssues(v, 'zh')).toEqual([])
+  })
+  it('names the row whose cell count is off and a bad {{ }} cell', () => {
+    expect(() => validateUIDocument({ ...doc, blocks: [doc.blocks[0], { ...doc.blocks[1], rows: [['a']] }] }, { maxVersion: 2 })).toThrow('blocks[1].rows[0]: 1 cells for 2 columns')
+    expect(() => validateUIDocument({ ...doc, blocks: [doc.blocks[0], { ...doc.blocks[1], rows: [['a', '{{nope}}']] }] }, { maxVersion: 2 })).toThrow(/rows\[0\]\[1\].*nope/)
+  })
+})

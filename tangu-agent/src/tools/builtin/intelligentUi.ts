@@ -144,8 +144,8 @@ format(x,'number'|'percent'|'wan'|'compact',digits?) join(list,sep?) range(from,
 (inclusive, max 200) each(list,'x',expr) filter(list,'x',cond) sortBy(list,'x',key)
 includes(list,value). Nothing else: no random numbers, dates or other functions.
 Show results with {{expr}} inside text/disclosure markdown (inserted as plain text), a stats block
-{items:[{label,value:expr}]} for 1-4 headline figures, or a table block {columns:[...],rows:expr}
-where rows gives one list of cells per row (max 50). Any block but controls may have when:{expr}.
+{items:[{label,value:expr}]} for 1-4 headline figures, or a table block {columns:[...],rows} where
+rows is an expression giving one list of cells per row, or the rows written out (max 50). Any block but controls may have when:{expr}.
 Buttons that change state without calling you: actions item {id,label,kind:"set",steps,disabled?:expr};
 steps run in order: {set:id,to:expr} {toggle:id,value?:expr} {append:id,value:expr}
 {remove:id,value:expr} {reset:id}. A value that cannot be computed shows "—"; the tool result lists

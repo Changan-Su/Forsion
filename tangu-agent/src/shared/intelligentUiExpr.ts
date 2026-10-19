@@ -484,7 +484,10 @@ export function uiDocumentIssues(doc: UIDocument, locale: 'zh' | 'en' = 'en'): s
     if (!shown(b.id, b.when)) continue
     if (b.kind === 'text' || b.kind === 'disclosure') for (const src of interpolationSources(b.markdown)) probe(`${b.id} {{${src}}}`, src, uiText)
     if (b.kind === 'stats') b.items.forEach((item, i) => { for (const src of item.value.includes('{{') ? interpolationSources(item.value) : [item.value]) probe(`${b.id}.items[${i}]`, src, uiText) })
-    if (b.kind === 'table') probe(`${b.id}.rows`, b.rows, v => uiTableRows(v, b.columns.length))
+    if (b.kind === 'table') {
+      if (typeof b.rows === 'string') { const rows = b.rows; probe(`${b.id}.rows`, rows, v => uiTableRows(v, b.columns.length)) }
+      else for (const src of b.rows.flat().flatMap(interpolationSources)) probe(`${b.id} {{${src}}}`, src, uiText)
+    }
     if (b.kind === 'checklist') for (const item of b.items) shown(`${b.id}.${item.id}`, item.when)
     if (b.kind === 'actions') for (const a of b.items) if (a.kind === 'set' && a.disabled) probe(`${b.id}.${a.id}.disabled`, a.disabled)
   }

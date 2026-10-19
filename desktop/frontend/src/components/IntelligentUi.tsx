@@ -170,9 +170,12 @@ const contentKey = (text: string): string => { let h = 5381; for (let i = 0; i <
 /** Columns whose cells read as numbers are right-aligned. */
 const numericColumns = (rows: string[][], count: number): boolean[] => Array.from({ length: count }, (_, i) => rows.some(r => /^[-+−]?\d/.test(r[i])) && rows.every(r => /^[-+−]?\d/.test(r[i]) || r[i] === '' || r[i] === '—'))
 function Table({ block, env }: { block: Extract<UIBlock, { kind: 'table' }>; env: DocumentEnv }): React.JSX.Element {
-  const c = env.cell(block.rows)
   let rows: string[][] | undefined
-  try { if (c.ok) rows = uiTableRows(c.value, block.columns.length) } catch { /* shown as a dash */ }
+  if (typeof block.rows !== 'string') rows = block.rows.map(row => row.map(cell => cell.includes('{{') ? env.text(cell) : cell))
+  else {
+    const c = env.cell(block.rows)
+    try { if (c.ok) rows = uiTableRows(c.value, block.columns.length) } catch { /* shown as a dash */ }
+  }
   if (!rows) return <div className="iui-status">—</div>
   const numeric = numericColumns(rows, block.columns.length)
   return <div className="iui-table-wrap"><table className="iui-table">

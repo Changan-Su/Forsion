@@ -148,7 +148,7 @@ Where results appear:
 |---|---|
 | text / disclosure | `{{expr}}` inside `markdown`; inserted as plain text after the markdown is parsed (never a link or formatting) |
 | `stats` block | `items:[{label, value:expr}]`, 1–4 headline figures |
-| `table` block | `columns:[string]` (max 6), `rows:expr` giving one list of cells per row (max 50) |
+| `table` block | `columns:[string]` (max 6); `rows`: an expression giving one list of cells per row, or the rows written out as lists of cell text that may hold `{{expr}}` (max 50) |
 | `when` | `{expr}` on any block except controls, and on checklist items |
 | `actions` | `{id, label, kind:"set", steps, disabled?:expr}`; steps run in order, each seeing the previous: `{set:id, to:expr}` `{toggle:id, value?:expr}` (flip a boolean, or add/remove a list item) `{append:id, value:expr}` `{remove:id, value:expr}` `{reset:id}` |
 

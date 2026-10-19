@@ -2,7 +2,7 @@
  * No HTML, styles, network actions or arbitrary component names. v1 has no expressions; v2 adds
  * state, derived values and expressions over a fixed function list (intelligentUiExpr.ts). */
 import { validAppCardId } from './intelligentCards.js'
-import { compileExpr, documentScope, interpolationSources, reservedUIName, UI_NAME, uiValueIssue, type ExprScope, type UIValue } from './intelligentUiExpr.js'
+import { compileExpr, documentScope, EXPR_LIMITS, interpolationSources, reservedUIName, UI_NAME, uiValueIssue, type ExprScope, type UIValue } from './intelligentUiExpr.js'
 export type { UIValue } from './intelligentUiExpr.js'
 export type UICondition = { input: string; equals: string | number } | { expr: string }
 export type UIStateVar = { id: string; initial: UIValue }
@@ -27,7 +27,8 @@ export type UIBlock = BlockBase & (
   | { kind: 'checklist'; items: UICheckItem[] }
   | { kind: 'disclosure'; markdown: string }
   | { kind: 'stats'; items: { label: string; value: string }[] }
-  | { kind: 'table'; columns: string[]; rows: string }
+  /** rows: an expression giving one list of cells per row, or the rows written out (cell text may hold {{ }}). */
+  | { kind: 'table'; columns: string[]; rows: string | string[][] }
   | { kind: 'actions'; items: ({ id: string; label: string } & (
       | { kind: 'model'; prompt: string } | { kind: 'copy'; text: string } | { kind: 'open'; resourceId: string }
       | { kind: 'set'; steps: UISetStep[]; disabled?: string }
@@ -191,8 +192,24 @@ export function validateUIDocument(raw: unknown, options: { draft?: boolean; max
           const a = obj(v, q)
           return { label: str(a.label, `${q}.label`, 80), value: display(a.value, `${q}.value`, scope) }
         }) }
-      case 'table': if (!v2) break
-        return { ...common, kind: 'table', columns: list(o.columns, `${p}.columns`, 6, (v, q) => str(v, q, 80)), rows: expr(o.rows, `${p}.rows`, scope) }
+      case 'table': {
+        if (!v2) break
+        // Models write a fixed table as {id,label} columns and rows of cell text (live 10-20); both are taken.
+        const cols = list(o.columns, `${p}.columns`, 6, (v, q) => v && typeof v === 'object' ? obj(v, q) : { label: v })
+        const columns = cols.map((c, i) => str(c.label ?? c.title ?? c.name, `${p}.columns[${i}]`, 80))
+        const cell = (c: unknown, q: string): string => {
+          if (c == null || c === '') return ''
+          const text = typeof c === 'number' || typeof c === 'boolean' ? String(c) : str(c, q, 400)
+          for (const src of interpolationSources(text)) expr(src, `${q} {{${src.slice(0, 40)}}}`, scope)
+          return text
+        }
+        const rows = !Array.isArray(o.rows) ? expr(o.rows, `${p}.rows`, scope) : list(o.rows, `${p}.rows`, EXPR_LIMITS.rows, (r, q) => {
+          const cells = Array.isArray(r) ? r : r && typeof r === 'object' ? cols.map(c => (r as Record<string, unknown>)[String(c.id)]) : fail(q, 'expected a list of cells')
+          if (cells.length !== columns.length) fail(q, `${cells.length} cells for ${columns.length} columns`)
+          return cells.map((c, i) => cell(c, `${q}[${i}]`))
+        })
+        return { ...common, kind: 'table', columns, rows }
+      }
       case 'controls': return { ...common, kind: 'controls', inputIds: list(o.inputIds, `${p}.inputIds`, 8, (v, q) => {
         const ref = id(v, q); if (!inputMap.has(ref)) fail(q, 'unknown input'); return ref
       }) }

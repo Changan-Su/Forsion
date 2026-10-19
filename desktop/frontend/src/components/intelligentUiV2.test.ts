@@ -32,6 +32,14 @@ describe('Intelligent UI v2 renderer', () => {
     expect(out.match(/<td>/g)).toHaveLength(2)
     expect(out).toContain('https://evil.example')
   })
+  it('renders a written-out table, computing only its {{ }} cells', () => {
+    const out = html({ version: 2, id: 'w', title: 'Written', inputs: [], state: [{ id: 'n', initial: 3 }], derived: [], resources: [], blocks: [
+      { id: 't', kind: 'table', columns: [{ id: 'a', label: '项目' }, 'Amount'], rows: [['Rent', '{{n * 1000}} 元'], ['Note', 'a|b']] },
+    ] })
+    expect(out).toContain('<th>项目</th>')
+    expect(out).toContain('<td>3000 元</td>')
+    expect(out).toContain('<td>a|b</td>')
+  })
   it('shows the title, opening text and a notice for a document from a later version', () => {
     const out = html({ version: 3, id: 'n', title: 'From the future', inputs: [], blocks: [{ id: 'a', kind: 'text', markdown: 'Opening line.' }, { id: 'b', kind: 'hologram' }] })
     expect(out).toContain('From the future')
