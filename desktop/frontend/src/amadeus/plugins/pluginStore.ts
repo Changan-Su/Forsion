@@ -493,11 +493,12 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
       return true
     },
     // 现场圈注(2026-10-19,使用指南「带我去」方案 B):同 runCommand 只给首方包;null = 收起自己的那一处。
-    spotlight: async (opts) => {
-      if (opts === null) { closeSpotlight(pluginId); return 'closed' }
-      if (!ok() || !opts || typeof opts.anchor !== 'string' || !usePluginStore.getState().plugins.find((p) => p.id === pluginId)?.locked) return 'missing'
+    // 手机上不挂(单列外壳里没有这些锚点,挂了只会让「带我去」白等 2 秒才回退)
+    ...(!hostTangu()?.mobile ? { spotlight: async (opts: Parameters<NonNullable<PluginAppApi['spotlight']>>[0]) => {
+      if (opts === null) { closeSpotlight(pluginId); return 'closed' as const }
+      if (!ok() || !opts || typeof opts.anchor !== 'string' || !usePluginStore.getState().plugins.find((p) => p.id === pluginId)?.locked) return 'missing' as const
       return showSpotlight(pluginId, { anchor: opts.anchor, title: String(opts.title ?? ''), body: opts.body == null ? undefined : String(opts.body), step: opts.step == null ? undefined : String(opts.step) })
-    },
+    } } : {}),
     // Ribbon 上自己那个 Space 图标的进度环(2026-10-18,蓬洲云传文件):只认这个插件自己带的 Space;拆插件时 teardown 收掉
     setSpaceProgress: (spaceId, progress) => (ok() && typeof spaceId === 'string' ? setSpaceProgress(pluginId, spaceId, progress) : false),
     openLink: async (url) => {

@@ -50,6 +50,16 @@ describe('现场圈注', () => {
     expect(document.querySelector('.guide-spot-ring')).toBeNull()
   })
 
+  it('手机上不挂 spotlight(没有锚点,插件直接走老做法)', async () => {
+    const w = window as unknown as { tangu?: unknown; __has?: string }
+    w.tangu = { mobile: true }
+    try {
+      env.sources = [src({ id: 'forsion-extend', preinstalled: true, locked: true, bundleOff: false, code: 'window.__has = typeof ctx.app.spotlight' })]
+      await usePluginStore.getState().loadExternal()
+      expect(w.__has).toBe('undefined')
+    } finally { delete w.tangu }
+  })
+
   it('不再提示 → mute;目标消失 → gone;不认识的锚点 → missing', async () => {
     anchor('note-canvas')
     const p = showSpotlight('x', { anchor: 'note-canvas', title: 'a', step: '第 3 步' })
