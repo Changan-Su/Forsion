@@ -15,6 +15,8 @@
  *      扫描范围里的文件(宿主和 Tangu 界面都算)直引 tangu-agent/src 里契约之外的文件 = 红(第 2d 步起)。
  *      两边引它都不计数;契约文件自己只许用相对路径引契约目录里的文件(不许引宿主 / Tangu / 引擎内部,也不许引第三方包)。
  * 测试文件与 dev 台架页(*.test.* / harness.tsx / *Harness.tsx)不查:它们随被测对象走。
+ * ponytail: 纯正则的已知上限(Codex 10-20 评审):带插值的模板 import(`…/${x}`)、new URL(…, import.meta.url)、require.resolve 认不出;
+ *   普通字符串里写的示例 import 会被当真(误报)。真仓现在两样都没有。要收紧就换 TS AST 遍历 ImportDeclaration / CallExpression。
  *
  * 红了怎么办:
  *   - 宿主要用 Tangu 的新模块 → 先想能不能走 ctx;确需直用,写成 `@tangu/ui/...` 再跑 --update --allow-grow(公开面变大,提交说明写理由);
