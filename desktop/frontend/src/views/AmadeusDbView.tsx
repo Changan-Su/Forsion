@@ -3,6 +3,7 @@
 import { useEffect } from 'react'
 import type { ViewProps } from '@lcl/engine'
 import { useVisualTheme as useTheme } from '../stores/themeStore'
+import { useVaultRelParam } from './vaultRelParam'
 import { useDbStore } from '@amadeus/store/dbStore'
 import { DatabaseEmbed } from '@amadeus/blocks/database/DatabaseEmbed'
 import '@amadeus/blocks' // 属性类型/块注册 side-effect,独立挂载时不能指望编辑器先加载
@@ -10,7 +11,7 @@ import '@amadeus/blocks' // 属性类型/块注册 side-effect,独立挂载时�
 const dbBase = (p: string): string => (p.split(/[\\/]/).pop() || p).replace(/\.db$/i, '')
 
 export function AmadeusDbView({ leaf }: ViewProps) {
-  const dbPath = typeof leaf.params.dbPath === 'string' ? leaf.params.dbPath : ''
+  const dbPath = useVaultRelParam(leaf, 'dbPath')
   /** 活动视图名:与笔记嵌入 `![[db|视图名]]` 同语义 —— 每处(tab / 仪表盘卡)各记各的。
    *  仪表盘卡经 ViewCard.setParams 落进围栏,独立 tab 随布局持久化;都是免费的。 */
   const viewName = typeof leaf.params.view === 'string' && leaf.params.view ? leaf.params.view : null

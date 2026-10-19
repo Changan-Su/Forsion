@@ -6,6 +6,7 @@ import path from 'node:path'
 import type { CompilerIO } from '@amadeus-shared/compiler'
 import { isDrawingPath } from '@amadeus-shared/excalidraw/format'
 import { attachmentPaths } from './attachmentPaths'
+import { vaultRel } from './vaultRel'
 
 export interface VaultManagerHost {
   openDirectory?: () => Promise<string | null>
@@ -115,7 +116,7 @@ export class VaultManager {
         if (e.name.startsWith('.') || e.name === 'node_modules') continue
         const abs = path.join(dir, e.name)
         if (e.isDirectory()) await walk(abs)
-        else if (e.isFile() && pred(e.name)) out.push(path.relative(root, abs))
+        else if (e.isFile() && pred(e.name)) out.push(vaultRel(path.relative(root, abs)))
       }
     }
     await walk(root)
@@ -370,7 +371,7 @@ export class VaultManager {
         if (e.name.startsWith('.') || e.name === 'node_modules') continue
         if (e.isDirectory()) {
           const abs = path.join(dir, e.name)
-          out.push(path.relative(root, abs))
+          out.push(vaultRel(path.relative(root, abs)))
           await walk(abs)
         }
       }

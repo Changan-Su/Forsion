@@ -6,6 +6,7 @@
  */
 
 import { forgetViewport, recallViewport, rememberViewport } from './canvasKit/viewport'
+import { legacyWinRel } from '../lib/vaultFiles'
 
 export type NoteSurfaceMode = 'doc' | 'canvas'
 
@@ -170,14 +171,24 @@ const LOCK_EVENT = 'amadeus:note-lock'
 const lockKey = (vaultRoot: string | null | undefined, path: string): string => `${LOCK_PREFIX}${noteMemoryId(vaultRoot, path)}`
 
 export function readNoteLocked(vaultRoot: string | null | undefined, path: string): boolean {
-  try { return localStorage.getItem(lockKey(vaultRoot, path)) === '1' } catch { return false }
+  // 老版本 Windows 按 `a\b.md` 记的锁也认(锁是安全偏好,不能因为换了分隔符就悄悄解开)。
+  // ponytail: 其余视图记忆(模式 / 滚动 / 页面样式 / 折叠)换分隔符后回到缺省,不迁。
+  // 读到就挪到 `/` 的键上;挪不动(配额满)也照样算锁着。解锁两种写法一起删(writeNoteLocked)。
+  try {
+    const legacy = legacyWinRel(path, vaultRoot)
+    const old = !!legacy && localStorage.getItem(lockKey(vaultRoot, legacy)) === '1'
+    if (old) {
+      try { localStorage.setItem(lockKey(vaultRoot, path), '1'); localStorage.removeItem(lockKey(vaultRoot, legacy!)) } catch { /* 见上 */ }
+    }
+    return old || localStorage.getItem(lockKey(vaultRoot, path)) === '1'
+  } catch { return false }
 }
 
 /** 锁 / 解锁。同窗的其它标签(同一篇开在几处)经事件一起换实例;别的窗口经 `storage` 事件跟上。 */
 export function writeNoteLocked(vaultRoot: string | null | undefined, path: string, on: boolean): void {
   try {
     if (on) localStorage.setItem(lockKey(vaultRoot, path), '1')
-    else localStorage.removeItem(lockKey(vaultRoot, path))
+    else for (const p of [path, legacyWinRel(path, vaultRoot)]) if (p) localStorage.removeItem(lockKey(vaultRoot, p))
   } catch { /* 私有模式:这次会话照样能锁,只是记不住 */ }
   try { window.dispatchEvent(new Event(LOCK_EVENT)) } catch { /* 非浏览器环境 */ }
 }
