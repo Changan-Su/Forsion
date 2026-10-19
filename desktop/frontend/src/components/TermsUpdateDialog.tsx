@@ -10,7 +10,7 @@
  * 通道:桌面(Extend)与 Android 走 cloudFetch,网页版走 webShim 的 termsStatus / termsAgree(网页版不给 cloudFetch,
  * 有它会顺带打开成就 / 插件数据同步这些只给桌面的功能)。老服务端没有这两个端点 → 404 → 不弹。
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ArrowUpRight } from 'lucide-react'
 import { useApp } from '../stores/appStore'
 import { POPUP_PRIORITY, usePopupTurn } from '../stores/popupQueue'
@@ -44,26 +44,40 @@ export interface TermsStatus {
 
 type CloudResult = { status: number; json?: any }
 
-function cloud(method: 'GET' | 'POST', path: string, body?: unknown): Promise<CloudResult> | null {
+/** 15 秒没回 = 失败(网页版的 cloudJson 自己不设超时;挂住的请求会让按钮一直禁用、卡和后面的弹窗都堵着)。 */
+const TIMEOUT_MS = 15_000
+
+async function cloud(method: 'GET' | 'POST', path: string, body?: unknown): Promise<CloudResult | null> {
   const t = window.tangu
-  if (path === '/auth/terms' && t?.termsStatus) return t.termsStatus()
-  if (path === '/auth/terms/agree' && t?.termsAgree) return t.termsAgree((body as { version: string }).version)
-  if (t?.cloudFetch) return t.cloudFetch({ path, method, ...(body !== undefined ? { body } : {}) })
-  return null
+  const req = path === '/auth/terms' && t?.termsStatus ? t.termsStatus()
+    : path === '/auth/terms/agree' && t?.termsAgree ? t.termsAgree((body as { version: string }).version)
+    : t?.cloudFetch ? t.cloudFetch({ path, method, ...(body !== undefined ? { body } : {}) })
+    : null
+  if (!req) return null
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<null>((r) => { timer = setTimeout(() => r(null), TIMEOUT_MS) })
+  try { return await Promise.race([req.catch(() => null), timeout]) } finally { clearTimeout(timer) }
 }
 
-/** 拿这个账号的协议状态;不用弹 / 查不到(未登录、老服务端、断网)= null。 */
-export async function fetchTermsStatus(): Promise<TermsStatus | null> {
-  const r = await cloud('GET', '/auth/terms')?.catch(() => null)
-  const j = r?.status === 200 ? r.json : null
-  if (!j || j.required !== true || typeof j.latest !== 'string' || !j.latest) return null
+/** 拿这个账号的协议状态。'none' = 不用弹(含老服务端 404);'error' = 没查成(断网、5xx、超时)。 */
+export async function loadTermsStatus(): Promise<TermsStatus | 'none' | 'error'> {
+  const r = await cloud('GET', '/auth/terms')
+  if (!r || r.status === 0 || r.status >= 500) return 'error'
+  const j = r.status === 200 ? r.json : null
+  if (!j || j.required !== true || typeof j.latest !== 'string' || !j.latest) return 'none'
   const changes = j.changes && typeof j.changes.zh === 'string' && typeof j.changes.en === 'string' ? { zh: j.changes.zh, en: j.changes.en } : null
   return { latest: j.latest, required: true, mode: j.mode === 'consent' ? 'consent' : 'notice', changes }
 }
 
+/** 登录后那一次:没查成就这次先不弹(下次登录 / 启动再查)。 */
+export async function fetchTermsStatus(): Promise<TermsStatus | null> {
+  const r = await loadTermsStatus()
+  return typeof r === 'string' ? null : r
+}
+
 /** 同意 / 确认看过。'stale' = 服务端版本又变了(该重新拉一次)。 */
 export async function agreeTerms(version: string): Promise<'ok' | 'stale' | 'failed'> {
-  const r = await cloud('POST', '/auth/terms/agree', { version })?.catch(() => null)
+  const r = await cloud('POST', '/auth/terms/agree', { version })
   return r?.status === 200 ? 'ok' : r?.status === 409 ? 'stale' : 'failed'
 }
 
@@ -76,6 +90,9 @@ export function TermsUpdateHost() {
   // 换账号也要重查:按账号认,不只看登录与否
   const account = useApp((s) => (s.authInfo?.loggedIn ? s.authInfo.accountId || s.authInfo.username || '?' : null))
   const [status, setStatus] = useState<TermsStatus | null>(null)
+  // 卡里的请求可能跨过换号 / 登出才回来:回包只认发起时那个账号(否则 A 迟到的成功会关掉 B 的卡)
+  const current = useRef(account)
+  current.current = account
   useEffect(() => {
     setStatus(null)
     if (!account || windowKind() !== 'main' || window.tangu?.unitPage) return
@@ -85,17 +102,19 @@ export function TermsUpdateHost() {
   }, [account])
   const turn = usePopupTurn('terms', !!status, POPUP_PRIORITY.terms)
   if (!turn || !status) return null
+  const mine = account
+  const forMe = (fn: () => void): void => { if (current.current === mine) fn() }
   return (
     <TermsUpdateDialog
-      key={status.latest}
+      key={`${account}:${status.latest}`}
       status={status}
-      onDone={() => setStatus(null)}
-      onStale={() => void fetchTermsStatus().then(setStatus)}
+      onDone={() => forMe(() => setStatus(null))}
+      onReplace={(next) => forMe(() => setStatus(next))}
     />
   )
 }
 
-export function TermsUpdateDialog({ status, onDone, onStale }: { status: TermsStatus; onDone: () => void; onStale: () => void }) {
+export function TermsUpdateDialog({ status, onDone, onReplace }: { status: TermsStatus; onDone: () => void; onReplace: (next: TermsStatus | null) => void }) {
   const { t, locale } = useI18n()
   const [busy, setBusy] = useState<'agree' | 'decline' | null>(null)
   const [failed, setFailed] = useState(false)
@@ -104,11 +123,21 @@ export function TermsUpdateDialog({ status, onDone, onStale }: { status: TermsSt
 
   const agree = async (): Promise<void> => {
     setBusy('agree'); setFailed(false)
-    const r = await agreeTerms(status.latest)
-    setBusy(null)
-    if (r === 'ok') onDone()
-    else if (r === 'stale') onStale()
-    else setFailed(true)
+    try {
+      const r = await agreeTerms(status.latest)
+      if (r === 'ok') return onDone()
+      if (r === 'stale') {
+        // 服务端版本又变了:换成新的那版;重拉没成功就留着这张卡让用户重试,不能当成「不用再确认」放过去
+        const next = await loadTermsStatus()
+        if (next === 'error') return setFailed(true)
+        return onReplace(next === 'none' ? null : next)
+      }
+      // 记账失败:只提醒的那档照样关(没记上,下次启动再提醒一次);要同意的那档留着卡,可以重试或不同意
+      if (!consent) return onDone()
+      setFailed(true)
+    } finally {
+      setBusy(null)
+    }
   }
   const decline = async (): Promise<void> => {
     setBusy('decline')
