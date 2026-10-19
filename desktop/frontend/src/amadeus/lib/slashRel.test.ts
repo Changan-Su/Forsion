@@ -26,6 +26,7 @@ describe('slashRel / legacyWinRel', () => {
     expect(slashRel('夹\\子\\笔记.md', '\\\\nas\\share\\Vault')).toBe('夹/子/笔记.md')
     expect(slashRel('夹\\子\\笔记.md', MAC)).toBe('夹\\子\\笔记.md')
     expect(slashRel('D:\\外面\\a.pdf', WIN)).toBe('D:\\外面\\a.pdf')
+    expect(slashRel('/Users/me/Q1\\Q2.pdf', WIN)).toBe('/Users/me/Q1\\Q2.pdf') // mac 端看 Windows 库时本机的绝对路径
     expect(slashRel('夹\\a.md', null)).toBe('夹\\a.md')
     expect(legacyWinRel('夹/子/笔记.md', WIN)).toBe('夹\\子\\笔记.md')
     expect(legacyWinRel('夹/子/笔记.md', MAC)).toBeNull()
@@ -55,6 +56,20 @@ describe('老 `\\` 键上的锁', () => {
     expect(readNoteLocked(WIN, '夹/笔记.md')).toBe(true)
     writeNoteLocked(WIN, '夹/笔记.md', false)
     expect(readNoteLocked(WIN, '夹/笔记.md')).toBe(false)
+  })
+
+  it('两种写法都锁着时,解锁也真解开', () => {
+    writeNoteLocked(WIN, '夹\\笔记.md', true)
+    writeNoteLocked(WIN, '夹/笔记.md', true)
+    writeNoteLocked(WIN, '夹/笔记.md', false)
+    expect(readNoteLocked(WIN, '夹/笔记.md')).toBe(false)
+  })
+
+  it('挪键失败(配额满)也照样算锁着', () => {
+    writeNoteLocked(WIN, '夹\\笔记.md', true)
+    const real = localStorage.setItem
+    localStorage.setItem = () => { throw new Error('QuotaExceededError') }
+    try { expect(readNoteLocked(WIN, '夹/笔记.md')).toBe(true) } finally { localStorage.setItem = real }
   })
 })
 

@@ -260,12 +260,16 @@ function readDraftAt(vaultRoot: string | null | undefined, path: string, slot: s
 /** 删草稿(slot 那一格)。给了 `onlyIfText` 时只在存着的正是这份内容时才删 —— 别把上一次会话留下、用户还没决定的那份顺手删了。 */
 export function clearDraft(vaultRoot: string | null | undefined, path: string, onlyIfText?: string, slot?: string | null): void {
   try {
-    const key = draftKey(vaultRoot, path, slot)
-    if (onlyIfText != null) {
-      const d = parseDraft(localStorage.getItem(key), slot ?? null)
-      if (!d || d.text !== onlyIfText) return
+    // 老版本 Windows 那种写法的键也删:readDraft 读到时挪不动(配额满)就还在那里。
+    for (const p of [path, legacyWinRel(path, vaultRoot)]) {
+      if (!p) continue
+      const key = draftKey(vaultRoot, p, slot)
+      if (onlyIfText != null) {
+        const d = parseDraft(localStorage.getItem(key), slot ?? null)
+        if (!d || d.text !== onlyIfText) continue
+      }
+      localStorage.removeItem(key)
     }
-    localStorage.removeItem(key)
   } catch { /* 同 stashDraft */ }
 }
 

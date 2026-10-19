@@ -10,9 +10,9 @@ const WIN_ABS = /^[a-zA-Z]:[\\/]|^[\\/]{2}/
 /** 库根是 Windows 路径(`C:\…` / `\\server\…`):这种库里,库内相对路径的 `\` 只能是分隔符。 */
 export const isWinRoot = (root: string | null | undefined): boolean => !!root && WIN_ABS.test(root)
 /** 2.13.4 及更早在 Windows 上存下的库内路径是 `a\b.md`(主进程那时直出 path.relative),现在一律 `a/b.md`。
- *  只在 Windows 库上换:别的平台 `\` 是合法的文件名字符。绝对路径(库外文件)原样。 */
+ *  只在 Windows 库上换:别的平台 `\` 是合法的文件名字符。绝对路径(库外文件,含 mac 端看 Windows 库时本机的 `/…`)原样。 */
 export const slashRel = (p: string, root: string | null | undefined): string =>
-  isWinRoot(root) && !WIN_ABS.test(p) && p.includes('\\') ? p.replace(/\\/g, '/') : p
+  isWinRoot(root) && !/^(?:[a-zA-Z]:)?[\\/]/.test(p) && p.includes('\\') ? p.replace(/\\/g, '/') : p
 /** 反方向:这条 `/` 路径在老版本 Windows 存档里的写法(找老键用);不是 Windows 库或本来就没有 `/` → null。 */
 export const legacyWinRel = (p: string, root: string | null | undefined): string | null =>
   isWinRoot(root) && p.includes('/') ? p.replace(/\//g, '\\') : null
