@@ -22,6 +22,7 @@
  *                                                           #   额度用完时先跑离线接线证据:node scripts/rename-identity.smoke.mjs(假模型端点,截获系统提示词)
  *   npm run live:harness -- --only chat,tool,muse            # 子集(historian→dream→recall 三连有先后依赖)
  *   npm run live:harness -- --only chat,tool,loop            # loop = 轮数耗尽末轮收尾(改 agentLoop 末轮/收尾提示后跑)
+ *   npm run live:harness -- --only imageedit                 # edit_image 图源(10-19,改图跨轮取图方案 B1 + B2):同会话三轮 —— 附两张图先别动 → 不带附件让它合成 → 改刚合成的那张;假生图后端核上传的是哪几张。改 imageEdit.ts / hydrate 的带图消息 / 展示文件 source 后跑
  *   npm run live:harness -- --only skillpick,settingsnav     # 反馈 6a239e58(10-04):指定技能清单只列目录、正文经 use_skill 取(改 services/skillLoadout.ts 后跑);
  *                                                           #   「语音在哪设置」经界面命令直达设置页、不用电脑操控,网页检索次数只计数(改 desktop open-settings 的 description / params 后跑)
  *   npm run live:harness -- --only pluginlook                # 改 skills/forsion-plugin 的「外观开关:跟着宿主走」一节后跑:须经 use_skill 取回正文并答出那一节的三样
@@ -240,6 +241,7 @@ KEYS.push('projteam');
 KEYS.push('projcompact');
 KEYS.push('forkcache');
 KEYS.push('appref');
+KEYS.push('imageedit');
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
 const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
 // P1-K9 · C3:--remote-cap <档> = 起引擎前经 K4 的新写入口写 remote.maxApprovalMode(缺省不写 = 引擎按 auto-edit)
@@ -260,6 +262,7 @@ OPT_IN.add('musechat');
 OPT_IN.add('imgwindow');
 OPT_IN.add('viewimage');
 OPT_IN.add('imgtools'); // --only imgtools:历史里带图 → 改图 / 生图在 run 起点就在工具面里,不靠中途 load_tools(三个短 run)
+OPT_IN.add('imageedit'); // --only imageedit:edit_image 跨轮取图 + 改自己的产出(三个 run,同一会话;假生图后端)
 OPT_IN.add('novision'); // --only novision:主模型没有图像输入时的转写状态与送达(一个 run + 一次转写)
 OPT_IN.add('cuoff'); // --only cuoff:主模型看不到图 → Computer Use 不可用并告诉用户(一个 run)
 for (const k of CU_JEV_KEYS) OPT_IN.add(k); // --only cumusic,cusend,cuambig,cuscroll,cusearch:Jev 真实案例,自绘替身 + 真 Jev(会动真鼠标;要 --cu-plugin)
@@ -987,6 +990,24 @@ const MCP_CFG = ONLY.has('mcp') || ONLY.has('imgwindow') || ONLY.has('novision')
   ...(ONLY.has('novision') ? { desk: fakeMcp({ FAKE_MCP_TAG: 'desk', FAKE_MCP_TOOLS: 'image,click', FAKE_MCP_IMAGE_B64: digitsPng(NOVISION_DIGITS).toString('base64'), FAKE_MCP_IMAGE_TEXT: 'screenshot of the app window captured (310x110 px)' }) } : {}),
   ...(ONLY.has('imgwindow') ? { shots: fakeMcp({ FAKE_MCP_TAG: 'shots', FAKE_MCP_TOOLS: 'image', FAKE_MCP_IMAGE_TEXT: `screenshot {n} of ${IMGWIN_ROUNDS} captured`, FAKE_MCP_IMAGE_SEQ_FILE: IMGWIN_SEQ_FILE }) } : {}),
 } } : null;
+// imageedit(10-19,改图跨轮取图方案 B1 + B2):假的直连生图 provider。收 multipart,按到达顺序记下每次收到的图(sha256),
+// 每次回一张不同数字的 PNG 并记下它的 sha256 —— 场景据此判「上传的就是那两张附件」「改的就是上一张产出」。
+const IMGEDIT_PNGS = ONLY.has('imageedit') ? [randDigits(), randDigits()].map((d) => digitsPng(d, 6)) : [];
+const sha = (buf) => createHash('sha256').update(buf).digest('hex');
+const IMGEDIT = ONLY.has('imageedit') ? await new Promise((resolve) => {
+  const state = { calls: [], outputs: [] };
+  const srv = createHttpServer(async (req, res) => {
+    const chunks = []; for await (const c of req) chunks.push(c);
+    if (!req.url.endsWith('/images/edits')) { res.writeHead(404).end(); return; }
+    const form = await new Response(Buffer.concat(chunks), { headers: { 'content-type': req.headers['content-type'] || '' } }).formData();
+    const parts = [...form.getAll('image[]'), ...form.getAll('image')];
+    state.calls.push(await Promise.all(parts.map(async (b) => sha(Buffer.from(await b.arrayBuffer())))));
+    const out = digitsPng(randDigits(), 6);
+    state.outputs.push(sha(out));
+    res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ data: [{ b64_json: out.toString('base64') }] }));
+  });
+  srv.listen(0, '127.0.0.1', () => resolve({ ...state, port: srv.address().port, server: srv }));
+}) : null;
 { // config.json 住共享域(home 的父目录,见 tanguHome.configFile),不在 home 里
   const gitCfg = ONLY.has('git') && GIT_PREFS ? { branchPrefix: GIT_PREFIX, commitInstructions: `Start every commit subject with the tag ${GIT_TAG} followed by a space.` } : null;
   // realtime / voiceclone:把开发机上的百炼 provider 抄进隔离 config(只这一个 provider;id 钉成 bailian,场景按 bailian/<model> 叫)
@@ -998,7 +1019,8 @@ const MCP_CFG = ONLY.has('mcp') || ONLY.has('imgwindow') || ONLY.has('novision')
     if (!p) { console.error(`realtime:${src} 里没有带 key 的百炼 provider`); process.exit(2); }
     realtimeProviders = [{ providerId: 'bailian', baseUrl: p.baseUrl, apiKey: p.apiKey, modelIds: [] }];
   }
-  if (COMPACTION_CFG || MCP_CFG || gitCfg || realtimeProviders) writeFileSync(join(shared, 'config.json'), JSON.stringify({ ...(COMPACTION_CFG ? { compaction: COMPACTION_CFG } : {}), ...(MCP_CFG ? { mcp: MCP_CFG } : {}), ...(gitCfg ? { git: gitCfg } : {}), ...(realtimeProviders ? { providers: realtimeProviders } : {}) }, null, 2));
+  const providers = [...(realtimeProviders || []), ...(IMGEDIT ? [{ providerId: 'fakeimg', baseUrl: `http://127.0.0.1:${IMGEDIT.port}/v1`, apiKey: 'live', modelIds: [], imageModelIds: ['fake-edit'] }] : [])];
+  if (COMPACTION_CFG || MCP_CFG || gitCfg || providers.length) writeFileSync(join(shared, 'config.json'), JSON.stringify({ ...(COMPACTION_CFG ? { compaction: COMPACTION_CFG } : {}), ...(MCP_CFG ? { mcp: MCP_CFG } : {}), ...(gitCfg ? { git: gitCfg } : {}), ...(providers.length ? { providers } : {}) }, null, 2));
 }
 // cumusic / cusend:隔离 config 里打开 Jev(合并写,所以在上面那次整份写之后)
 if (CU_JEV) cuJevConfig({ shared, mode: opt('cu-jev-mode', 'auto'), threshold: opt('cu-jev-threshold', '') });
@@ -2774,6 +2796,39 @@ try {
         `②③ tools 段指纹全同(${new Set(hashes).size} 种)${stable ? '✓' : '✗'};load_tools ${loads} 次${loads === 0 ? '✓' : '✗'};` +
         `〔只记录〕工具定义字节 ①${bytes(ev0)} ②${bytes(ev1)} ③${bytes(ev2)};② 读出 ${digits} ${seen ? '是' : '否'}、不请自来调改图 / 生图 ${unprompted} 次;③ 工具顺序 ${ev2.toolCalls.join(' → ') || '(无)'}`,
       output: `② ${ev1.content}\n\n③ ${ev2.content}`, toolCalls: [...ev1.toolCalls, ...ev2.toolCalls] };
+  });
+
+  // ── imageedit(10-19,opt-in,反馈 ebe554d0「坚持合成」):同一会话三轮,第一轮附两张图、先别动;第二轮不带附件让它合成;
+  // 第三轮让它改刚合成出来的那张。判据:② 第二轮调了 edit_image 且没报错,假后端收到的恰好是那两张附件(sha256 比对);
+  // ③ 第三轮 edit_image 带了 previous_outputs,假后端收到的里头有上一张产出(只多带了附件记作未判定)。
+  // 负对照 = dist 里两处:services/agentLoop.js 的 `if (!imageInputs.length && contextImages?.images.length)` 前加 `false && `,
+  // tools/builtin/imageEdit.js 的 previousOutputs 开头 `if (refs === undefined) return []` 改成 `return []`(②③ 须红)。
+  await scenario('imageedit', 'imageedit edit_image 用上一条消息的图、改自己刚生成的图', async () => {
+    const sid = `live-imageedit-${Date.now()}`;
+    const cfg = { imageModelId: 'fakeimg/fake-edit' };
+    const att = IMGEDIT_PNGS.map((b, i) => ({ name: `photo-${i + 1}.png`, mimeType: 'image/png', data: b.toString('base64') }));
+    const want = IMGEDIT_PNGS.map(sha).sort();
+    const ev1 = await run(sid, '这两张图先发给你,先别动,回我一句「收到」就行。', 180_000, cfg, undefined, undefined, undefined, undefined, { attachments: att });
+    const n1 = IMGEDIT.calls.length;
+    const ev2 = await run(sid, '现在用 AI 改图把刚才那两张图合成一张:把第一张叠在第二张上面。', 240_000, cfg);
+    const calls2 = IMGEDIT.calls.slice(n1); const n2 = IMGEDIT.calls.length;
+    const res2 = ev2.toolResults.filter((r) => r.name === 'edit_image');
+    const merged = calls2.length >= 1 && JSON.stringify([...calls2.at(-1)].sort()) === JSON.stringify(want);
+    const ok2 = !ev2.error && merged && res2.some((r) => !/^Error:/.test(r.result));
+    const lastOut = IMGEDIT.outputs[n2 - 1];
+    const ev3 = await run(sid, '把背景换成海边。', 240_000, cfg);
+    const calls3 = IMGEDIT.calls.slice(n2);
+    const args3 = ev3.toolArgs.filter((a) => a.name === 'edit_image').map((a) => a.arguments);
+    const usedOutput = calls3.some((c) => c.includes(lastOut));
+    const extra = calls3.length && usedOutput && calls3.at(-1).length > 1;
+    const ok3 = !ev3.error && args3.some((a) => /previous_outputs/.test(a)) && usedOutput;
+    const shortRes = (ev) => ev.toolResults.filter((r) => r.name === 'edit_image').map((r) => r.result.slice(0, 300)).join(' | ') || '(没调 edit_image)';
+    return { ok: !ev1.error && n1 === 0 && ok2 && ok3, inconclusive: ok2 && ok3 && extra,
+      detail: ev1.error || ev2.error || ev3.error ||
+        `第一轮没动生图 ${n1 === 0 ? '✓' : '✗'};第二轮 edit_image ${res2.length} 次、后端收到 ${calls2.map((c) => c.length).join('+') || 0} 张,是那两张附件 ${merged ? '✓' : '✗'};` +
+        `第三轮 previous_outputs ${args3.some((a) => /previous_outputs/.test(a)) ? '有' : '没有'}、后端收到上一张产出 ${usedOutput ? '✓' : '✗'}${extra ? '(还多带了别的图)' : ''}`,
+      output: `第二轮回复:${ev2.content}\n第二轮 edit_image:${shortRes(ev2)}\n\n第三轮参数:${args3.join(' | ')}\n第三轮回复:${ev3.content}\n第三轮 edit_image:${shortRes(ev3)}`,
+      ttftMs: ttft(ev2), tokens: (tokensOf(ev1) || 0) + (tokensOf(ev2) || 0) + (tokensOf(ev3) || 0), toolCalls: [...ev2.toolCalls, ...ev3.toolCalls] };
   });
 
   // novision(10-07,反馈 dbb04870:deepseek × Computer Use 操作微信):主模型没有图像输入 × 一个要按坐标点的任务。

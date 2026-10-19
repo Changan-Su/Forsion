@@ -176,6 +176,17 @@ export function createSqlStateStore(): StateStore {
         [sessionId, limit, offset],
       );
     },
+    async listSessionDisplayFiles(sessionId, limit) {
+      const rows = await query<any[]>(
+        `SELECT display_files FROM chat_messages WHERE session_id = ? AND display_files IS NOT NULL ORDER BY timestamp DESC LIMIT ?`,
+        [sessionId, limit],
+      );
+      return rows.flatMap((r) => {
+        let files = r.display_files; // PG 回对象,SQLite 回字符串
+        if (typeof files === 'string') try { files = JSON.parse(files); } catch { files = null; }
+        return Array.isArray(files) ? [...files].reverse() : [];
+      });
+    },
     async correctUserMessage(m) {
       const rows = await query<any[]>(
         `UPDATE chat_messages SET content = ? WHERE id = ? AND session_id = ? AND role = 'user' AND content <> ? RETURNING id`,

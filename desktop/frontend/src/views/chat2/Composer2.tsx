@@ -228,6 +228,13 @@ export const fileChip = (path: string): RefChip => ({
   kind: 'file',
 })
 
+/** 拖进来的 OS 文件分两路:放得进附件的图片(与粘贴一致)+ 其余。图片若只给路径芯片,模型只拿到一串路径,
+ *  edit_image 只认附件 → 改图 / 合成必失败(2026-10-19 反馈:把脸合成到裙子上连失败 5 次)。 */
+export const splitDroppedFiles = <F extends { type: string; size: number }>(files: F[]): { images: F[]; rest: F[] } => {
+  const images = files.filter((f) => f.type.startsWith('image/') && f.size <= MAX_ATTACH_BYTES)
+  return { images, rest: files.filter((f) => !images.includes(f)) }
+}
+
 export const folderChip = (path: string): RefChip => ({
   token: /\s/.test(path) ? `"${path}"` : path,
   name: chipBaseName(path),
@@ -1452,8 +1459,9 @@ export const Composer2: React.FC<{
   }
   const send = () => { void sendMessage() }
 
-  const pickFiles = async (files: FileList | null) => {
+  const pickFiles = async (files: ArrayLike<File> | null) => {
     if (!files) return
+    const key = draftKey // 读盘是异步的:途中切了会话,图仍归发起时那份草稿
     const next: Attachment[] = []
     const skipped: string[] = []
     for (const f of Array.from(files)) {
@@ -1466,10 +1474,10 @@ export const Composer2: React.FC<{
       next.push({ name: f.name, mimeType: f.type, data: btoa(bin), size: f.size })
     }
     setHint(skipped.length ? t('input.skip.imageHint', { items: skipped.join(t('composer2.listSep')) }) : null)
-    setAttachments((prev) => [...prev, ...next])
+    setDraftField(key, 'attachments', (prev) => [...prev, ...next])
   }
 
-  const pickWsFiles = async (files: FileList | null) => {
+  const pickWsFiles = async (files: ArrayLike<File> | null) => {
     if (!files) return
     const next: Attachment[] = []
     const skipped: string[] = []
@@ -1485,11 +1493,14 @@ export const Composer2: React.FC<{
     setWsFiles((prev) => [...prev, ...next])
   }
 
-  /** OS 文件落下:host 走本机路径芯片,其余上传成工作区附件。 */
-  const onFilesDrop = (files: FileList): void => {
-    if (!files.length) return
+  /** OS 文件落下:图片另进图片附件(edit_image 只认附件)。host 照旧给每个文件出路径芯片 —— 只拖不打字也能发,
+   *  附件超过 8 张时多出来的图也还有路径;非 host 其余文件上传成工作区附件。 */
+  const onFilesDrop = (fileList: FileList): void => {
+    const files = Array.from(fileList)
+    const { images, rest } = splitDroppedFiles(files)
+    if (images.length) void pickFiles(images)
     if (localFs && window.tangu?.getPathForFile) {
-      const paths = Array.from(files)
+      const paths = files
         .map((f) => { try { return window.tangu!.getPathForFile!(f) } catch { return '' } })
         .filter(Boolean)
       if (paths.length) {
@@ -1498,7 +1509,7 @@ export const Composer2: React.FC<{
         return
       }
     }
-    void pickWsFiles(files)
+    if (rest.length) void pickWsFiles(rest)
   }
   const filesDropRef = useRef(onFilesDrop)
   filesDropRef.current = onFilesDrop

@@ -13,7 +13,7 @@
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import { describe, it, expect } from 'vitest'
-import { bindFilesDropZone, DROP_ZONE_SEL } from './Composer2'
+import { bindFilesDropZone, DROP_ZONE_SEL, splitDroppedFiles } from './Composer2'
 
 type H = (e: any) => void
 const mkEl = (): any => {
@@ -112,5 +112,14 @@ describe('bindFilesDropZone', () => {
   it('选择器与 ChatView 根节点类名同步', () => {
     const src = readFileSync(join(__dirname, '../ChatView.tsx'), 'utf8')
     expect(src).toContain(`\`${DROP_ZONE_SEL.slice(1)}\${refDrop ? ' refdrop' : ''}\``)
+  })
+})
+
+describe('splitDroppedFiles', () => {
+  it('5 MB 以内的图片另进附件(与粘贴一致);本机会话里每个文件照旧出路径芯片,非本机的其余文件上传工作区', () => {
+    const photo = { name: 'dress.png', type: 'image/png', size: 3_620_426 } // 反馈里那张裙子截图
+    const huge = { name: 'raw.jpeg', type: 'image/jpeg', size: 6 * 1024 * 1024 }
+    const doc = { name: 'a.pdf', type: 'application/pdf', size: 10 }
+    expect(splitDroppedFiles([photo, huge, doc])).toEqual({ images: [photo], rest: [huge, doc] })
   })
 })
