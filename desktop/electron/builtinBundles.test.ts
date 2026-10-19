@@ -38,7 +38,9 @@ describe('builtinBundles.json 单一来源', () => {
     for (const file of ['electron-builder.config.cjs', 'scripts/release-content.check.cjs']) {
       const src = read(file)
       expect(src, file).toContain("require('./electron/builtinBundles.json')".replace('./electron', file.startsWith('scripts') ? '../electron' : './electron'))
-      expect(src, file).not.toMatch(/node_modules\/@forsion\/[a-z-]+/)
+      // @forsion/clip 不是内置插件包(不播种进 plugins/):它是随包的 Chrome 扩展本体(原 Tangu for Chrome),
+      // 只按文件拷到 tangu-server/browser-extension,单独写一条 extraResources。别的 @forsion 包仍只许走清单。
+      expect(src, file).not.toMatch(/node_modules\/@forsion\/(?!clip\/)[a-z-]+/)
     }
   })
 

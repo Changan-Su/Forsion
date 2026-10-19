@@ -993,10 +993,3 @@ html[data-space-switch-axis='x'][data-space-switch]::view-transition-new(space-w
 html[data-space-switch-axis='x'][data-space-switch]::view-transition-old(space-work) { animation-name: lcl-space-fade-out, lcl-space-push-out-x; }
 html[data-space-switch-axis='x'][data-space-switch]::view-transition-new(space-work) { animation-name: lcl-space-fade-in, lcl-space-push-in-x; }
 
-/* 视图自己的标签栏零件(WorkspaceHost 的 ViewChrome 空位;第一个用它的是 Chat 的「对话 / 画布」胶囊)。
-   Dockview 把这一格排在标签后面,这里排到空白之后 = 标签栏右端;右上浮钮组压着的那条头照旧由 .dv-under-edge 让位。
-   标签栏空白处是窗口拖拽区,投进来的零件得自己 no-drag 才点得动。 */
-.dockview-theme-lcl .dv-tabs-and-actions-container > .dv-left-actions-container { order: 4; }
-.dv-view-chrome { display: flex; align-items: center; height: 100%; padding-right: 6px; }
-.dv-view-chrome:empty { display: none; }
-.dv-view-chrome > * { -webkit-app-region: no-drag; }

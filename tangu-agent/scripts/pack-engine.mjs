@@ -6,7 +6,7 @@
 // --stage-only:只暂存 + 签名,不调 npm 打 tgz(端到端核对用:暂存目录就是装机后的样子,不依赖 npm / tar)。
 // --root:从另一份引擎包根取 dist / skills / package.json(端到端核对用;缺省是本脚本所在的这份)。
 //
-// 包里只有运行要用的东西:dist 下的 .js、skills、agent-skills、browser-extension、LICENSE、package.json、SIGNATURE。
+// 包里只有运行要用的东西:dist 下的 .js、skills、agent-skills、LICENSE、package.json、SIGNATURE。
 // 不改本包 package.json 的 `files` —— server 的 vendor:tangu 靠那份白名单打自己要的 tgz(含类型声明)。
 //
 // 私钥:环境变量 TANGU_ENGINE_SIGNING_KEY(PEM 文本,CI secret);否则 ~/.forsion-dev/secrets/tangu-engine-signing/key.pem。
@@ -61,7 +61,7 @@ cpSync(path.join(root, 'dist'), path.join(stage, 'dist'), {
   recursive: true,
   filter: (from) => !path.basename(from).includes('.') || from.endsWith('.js'),
 })
-for (const dir of ['skills', 'agent-skills', 'browser-extension']) cpSync(path.join(root, dir), path.join(stage, dir), { recursive: true })
+for (const dir of ['skills', 'agent-skills']) cpSync(path.join(root, dir), path.join(stage, dir), { recursive: true })
 if (existsSync(path.join(root, 'LICENSE'))) cpSync(path.join(root, 'LICENSE'), path.join(stage, 'LICENSE'))
 else if (!process.argv.includes('--stage-only')) fail('LICENSE is missing from the package root.')
 writeFileSync(path.join(stage, 'package.json'), JSON.stringify({
@@ -73,7 +73,7 @@ writeFileSync(path.join(stage, 'package.json'), JSON.stringify({
   main: src.main,
   exports: { '.': './dist/index.js' },
   bin: src.bin,
-  files: ['dist', 'skills', 'agent-skills', 'browser-extension', SIGNATURE_FILE],
+  files: ['dist', 'skills', 'agent-skills', SIGNATURE_FILE],
   dependencies: src.dependencies,
   forsion: { minDesktop },
   publishConfig: { access: 'public' },

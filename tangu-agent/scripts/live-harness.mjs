@@ -6030,7 +6030,7 @@ Then reply with only the command output.`,
   if (ONLY.has('browserext')) {
     const status = await api('/agent/browser-extension');
     const [, extPortStr, extToken] = String(status.code || '').split(':');
-    const loaded = await extChrome.cdp('Extensions.loadUnpacked', { path: join(root, 'browser-extension') });
+    const loaded = await extChrome.cdp('Extensions.loadUnpacked', { path: process.env.TANGU_BROWSER_EXTENSION_DIR || join(root, '..', 'desktop', 'node_modules', '@forsion', 'clip', 'chrome-mv3') });
     await pairExtension(extChrome, loaded.id, { port: Number(extPortStr), token: extToken });
     const connected = await until(async () => (await api('/agent/browser-extension')).connected, 15_000, 300);
     const inboxVisible = async () => {

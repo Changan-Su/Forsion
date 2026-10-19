@@ -1415,6 +1415,16 @@ export interface PluginContext {
       el: HTMLElement,
       item: import('../../../../shared/settingsPage').PluginSettingsItem,
     ): import('../../../../shared/settingsPage').PluginSettingsItemHandle
+    /** Your view's view modes (2026-10-19+): two to four ways to look at the same thing ("Transcript / Notes / Summary").
+     *  The host draws the switch at the left end of the view's 32px head row and owns everything around it: ⌥⌘V
+     *  (Ctrl+Alt+V) to the next mode, one "View: X" entry per mode in the command palette, icons only under 480px of view
+     *  width and a "Current ▾" menu under 320px, the phone top bar. `el` is the element `mount()` received (or one
+     *  inside it). `onChange` runs when the user switches; your own `set()` doesn't call it. Put the buttons of your own
+     *  toolbar into `handle.actions` (the right end of the same row) so the view keeps a single head row. Calling it
+     *  again on the same view replaces the previous one; the host removes it on disable / reload / view close.
+     *  Remember the mode per thing you show (a record, a file) yourself — the host stores nothing. Throws for fewer
+     *  than 2 or more than 4 modes. Feature-detect on older hosts (`ctx.ui?.setViewModes`) and keep your own tabs there. */
+    setViewModes?(el: HTMLElement, spec: import('./pluginViewModes').PluginViewModesSpec): import('./pluginViewModes').PluginViewModesHandle
     /** A transparent layer of the host whiteboard over your own content (2026-10-10+): the same engine,
      *  pens and stroke feel as a `.excalidraw.md` board, without its chrome. See PluginBoardOptions.
      *  Feature-detect on older hosts: `ctx.ui?.mountBoard`. */

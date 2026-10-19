@@ -44,6 +44,15 @@ Genesis 当前使用这份 LCL。`apps/Archived/Forsion-LCL` 是早期组合引�
 - 宿主自己的设置页逐页换成整页描述(先换了「通知」);新写的设置类页面直接用 `SettingsPage`,不再手拼行。
 - 插件:`ctx.ui.mountSettingsPage`(整页)、`ctx.ui.mountSettingsItem`(单件);详见 [公共契约](../docs/customization/ui-components.md)。
 
+## 视图模式(View modes)
+
+同一份东西换一种看法的胶囊,全应用一个摆法:视图头行(32px,在纸里、不随正文滚)最左。
+
+- `@lcl/engine`:`useViewModes(leafId, spec)` 登记、`ViewModeSwitch`(给 `leafId` 画登记的那份;给 `spec` 当普通零件)、`ViewHead`(整条头行)、`installViewModeCommands()`(宿主装配期调一次:⌥⌘V 与命令面板「看法：X」)、`inSingleColumnShell()`。真身在 `engine/viewModes.tsx`,不在 components:手机顶栏(SingleColumnHost)也要画它;`@lcl/components` 只转出口。
+- 窄宽按头行自己的宽度(container `lcl-viewhead`):< 480 只留图标,< 320 下拉。手机单列壳里视图不画,顶栏两颗胶囊中间画活动视图那份。
+- 插件:`ctx.ui.setViewModes`;详见 [公共契约](../docs/customization/ui-components.md)。
+- 标签栏不再给视图留空位(原 `useViewChromeSlot` 已删):视图的东西放视图自己的头行。
+
 ## English contract
 
 Space owns layout; View owns a navigable feature; UI components compose the inside of a View. Amadeus document Blocks and Dashboard Cards have different responsibilities. Use `@lcl/components` for host-independent primitives and application adapters for services. Inputs and callbacks are explicit; a component must not implicitly target the active session. DOM plugins consume `ctx.ui` mounts, with lifecycle cleanup owned by the host. Settings parts (panels, rows, switches, buttons, inputs, meters, steppers, sheets) currently live in the application layer (`components/SettingsPrimitives`, `components/SettingsPage`) because their CSS source of truth is `base.css`; plugins reach them through `ctx.ui.mountSettingsPage` / `mountSettingsItem`. Keep types, documentation, consumers, and lifecycle coverage together when changing public APIs.

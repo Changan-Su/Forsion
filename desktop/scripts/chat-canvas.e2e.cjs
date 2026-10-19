@@ -100,10 +100,14 @@ async function main() {
     await win.locator('#tocmsg-a3').waitFor({ timeout: 15_000 })
 
     // ── 入口:标签栏右端的胶囊 ──
-    const seg = win.locator('.dv-view-chrome [data-testid="chat-canvas-seg"]')
+    const seg = win.locator('.t2-chat-col > .lcl-viewhead [data-testid="chat-canvas-seg"]')
     await seg.waitFor({ timeout: 10_000 })
-    const segBox = await seg.evaluate((e) => { const b = e.getBoundingClientRect(); return { top: b.top, right: b.right, inTabbar: !!e.closest('.dv-tabs-and-actions-container'), w: window.innerWidth } })
-    r.check('E1 胶囊在主区标签栏右端', segBox.inTabbar && segBox.top < 40 && segBox.right > segBox.w * 0.6, JSON.stringify(segBox))
+    // 视图模式标准(方案 A):胶囊在对话这一列头行的左端,不在标签栏、不盖右栏
+    const segBox = await seg.evaluate((e) => {
+      const b = e.getBoundingClientRect(); const col = e.closest('.t2-chat-col').getBoundingClientRect(); const head = e.closest('.lcl-viewhead').getBoundingClientRect()
+      return { left: Math.round(b.left - col.left), top: Math.round(b.top - col.top), headH: Math.round(head.height), inTabbar: !!e.closest('.dv-tabs-and-actions-container') }
+    })
+    r.check('E1 胶囊在对话列头行左端', !segBox.inTabbar && segBox.left <= 16 && segBox.top <= 8 && segBox.headH === 32, JSON.stringify(segBox))
     await seg.getByRole('tab').nth(1).click()
     await win.locator('.t2cv').waitFor({ timeout: 10_000 })
     await card(R, 'u1').waitFor({ timeout: 10_000 })

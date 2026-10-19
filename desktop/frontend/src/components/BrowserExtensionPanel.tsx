@@ -7,10 +7,10 @@ import type { TanguDesktopConfig } from '../types'
 import { SettingsPanel, SettingsRow } from './SettingsPrimitives'
 
 registerMessages({
-  'settings.browserExt.title': { zh: 'Chrome 扩展（Tangu for Chrome）', en: 'Chrome extension (Tangu for Chrome)' },
+  'settings.browserExt.title': { zh: 'Chrome 扩展（Forsion Clip）', en: 'Chrome extension (Forsion Clip)' },
   'settings.browserExt.hint': {
-    zh: '装上后，Tangu 能看到你打开的标签页和你正在看的那一个，并在自己的「Tangu」标签组里后台操作，不占用你正在看的页面，也不会再弹「允许远程调试」。',
-    en: 'Once installed, Tangu can see your open tabs and the one you are looking at, and works in its own “Tangu” tab group in the background, without taking over your page or asking to allow remote debugging.',
+    zh: 'Forsion Clip 把网页剪藏进你的智库；配对后，Tangu 还能看到你打开的标签页和你正在看的那一个，并在自己的「Tangu」标签组里后台操作，不占用你正在看的页面，也不会再弹「允许远程调试」。',
+    en: 'Forsion Clip saves web pages to your vault. Once paired, Tangu can also see your open tabs and the one you are looking at, and works in its own “Tangu” tab group in the background, without taking over your page or asking to allow remote debugging.',
   },
   'settings.browserExt.status': { zh: '状态', en: 'Status' },
   'settings.browserExt.connected': { zh: '已连接', en: 'Connected' },
@@ -18,7 +18,7 @@ registerMessages({
   'settings.browserExt.portBusy': { zh: '端口 {port} 不可用：{error}', en: 'Port {port} is unavailable: {error}' },
   'settings.browserExt.unavailable': { zh: '当前引擎不支持 Chrome 扩展（需要本机引擎）。', en: 'The current engine does not support the Chrome extension (a local engine is required).' },
   'settings.browserExt.code': { zh: '连接码', en: 'Connect code' },
-  'settings.browserExt.codeHint': { zh: '粘贴到扩展弹窗里即可配对，只需要一次。', en: 'Paste it into the extension popup to pair. You only need to do this once.' },
+  'settings.browserExt.codeHint': { zh: '粘贴到 Forsion Clip 的设置里即可配对，只需要一次。', en: 'Paste it into Forsion Clip settings to pair. You only need to do this once.' },
   'settings.browserExt.copy': { zh: '复制', en: 'Copy' },
   'settings.browserExt.copied': { zh: '已复制', en: 'Copied' },
   'settings.browserExt.reset': { zh: '换一个', en: 'New code' },
@@ -26,7 +26,8 @@ registerMessages({
   'settings.browserExt.install': { zh: '安装步骤', en: 'How to install' },
   'settings.browserExt.step1': { zh: '在 Chrome 地址栏打开 chrome://extensions，打开右上角的「开发者模式」。', en: 'In Chrome, open chrome://extensions and turn on Developer mode (top right).' },
   'settings.browserExt.step2': { zh: '点「加载已解压的扩展程序」，选择扩展文件夹。', en: 'Click “Load unpacked” and choose the extension folder.' },
-  'settings.browserExt.step3': { zh: '点工具栏里的 Tangu 图标，粘贴上面的连接码。', en: 'Click the Tangu icon in the toolbar and paste the connect code above.' },
+  'settings.browserExt.step3': { zh: '打开 Forsion Clip 的设置 ›「桌面联动与 MCP」，粘贴上面的连接码。', en: 'Open Forsion Clip settings › Desktop & MCP and paste the connect code above.' },
+  'settings.browserExt.step4': { zh: '要把剪藏存进本机智库：在同一页点「请求配对」，再在 Forsion 桌面确认这个配对请求。', en: 'To save clips to your local vault, click “Request pairing” on the same page, then approve the pairing request in Forsion Desktop.' },
   'settings.browserExt.openFolder': { zh: '打开扩展文件夹', en: 'Open extension folder' },
   'settings.browserExt.folder': { zh: '扩展文件夹', en: 'Extension folder' },
   'settings.browserExt.remoteDir': {
@@ -36,7 +37,7 @@ registerMessages({
 })
 
 /**
- * 设置 → 浏览器:Tangu for Chrome 扩展的状态、连接码与安装步骤(连接状态 3 秒刷新一次)。
+ * 设置 → 浏览器:Chrome 扩展(Forsion Clip,并入了原 Tangu for Chrome)的状态、连接码与安装步骤(连接状态 3 秒刷新一次)。
  * managed=false(外部引擎):扩展目录在引擎那台机器上,本机「打开文件夹」没有意义 → 只给路径与说明。
  */
 export function BrowserExtensionPanel({ cfg, managed = true }: { cfg: TanguDesktopConfig; managed?: boolean }): React.ReactElement {
@@ -103,7 +104,7 @@ export function BrowserExtensionPanel({ cfg, managed = true }: { cfg: TanguDeskt
         {!unavailable && info && (
           <SettingsRow
             label={t('settings.browserExt.install')}
-            description={(['settings.browserExt.step1', 'settings.browserExt.step2', 'settings.browserExt.step3'] as const).map((k, i) => (
+            description={(['settings.browserExt.step1', 'settings.browserExt.step2', 'settings.browserExt.step3', 'settings.browserExt.step4'] as const).map((k, i) => (
               <React.Fragment key={k}>{i > 0 && <br />}{`${i + 1}. ${t(k)}`}</React.Fragment>
             ))}
             control={managed ? (

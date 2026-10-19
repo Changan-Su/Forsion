@@ -269,3 +269,32 @@ The small parts used by settings and store pages are open to plugins: group pane
 `ctx.ui?.mountRecord?.(el, { path, rowId, dateCol, readOnly })` 把宿主日历事件浮卡里那排字段（标题、时间摘要和展开编辑、其余属性）画进插件自己的卡片。组件是应用层的 `views/calendar/EventCard` 里的 `RecordFields`，内置日历的浮卡用的是同一个。改动直接写那张表，与 `ctx.databases.setCell` 同一条写口，和打开着的表格是同一份数据。外框、关闭、「打开 / 删除」、定位都归插件。只有声明了 `databases` 的插件才有；`path` 不是库里的表或缺 `rowId` 时同步抛 `TypeError`。`dateCol` 必须是日期类列，否则忽略。行被删或换了库就什么都不画；叠加源（只读表）和 `readOnly: true` 只显示值。句柄是 `update(patch)` 和 `dispose()`，`dispose()` 后 `el` 归还，插件禁用或重载时宿主统一卸载。
 
 `ctx.ui?.mountRecord?.(el, { path, rowId, dateCol, readOnly })` mounts the field list from the host calendar's event card (title, time summary with its editor, other properties) into the plugin's own card. The component is `RecordFields` in the app-level `views/calendar/EventCard`, the same one the built-in calendar card uses. Edits write to the table through the same path as `ctx.databases.setCell`, sharing data with any open table view. The plugin owns the frame, close button, Open / Delete actions and positioning. Only plugins that declare `databases` get it; a `path` that is not a table in the vault or a missing `rowId` throws `TypeError` synchronously. `dateCol` must be a date column and is ignored otherwise. A deleted row or a vault switch renders nothing; overlays (read-only tables) and `readOnly: true` show values only. The handle has `update(patch)` and `dispose()`; after `dispose()` the element is yours again, and the host unmounts on plugin disable or reload.
+
+### 视图模式 / View modes (2026-10-19)
+
+同一份东西换一种看法（对话 / 画布、文档 / 画布、转写 / 笔记 / 纪要、日 / 周 / 3 日 / 月）全应用一个摆法：胶囊在**视图头行的最左**，头行 32px、在纸卡里、不随正文滚；视图自己的标题排在胶囊后面。一个视图最多一颗，2–4 种；超过 4 种的用标签（数据库视图）。筛选、换来源的胶囊长相一样，但不放进这个位置。方案与取舍见仓根 `docs/ToBeImproved/视图模式切换标准方案_2026-10-19`。
+
+- 原生视图：`useViewModes(leaf.id, { modes, value, onChange })`（`@lcl/engine`）登记，再在头行最左放 `<ViewModeSwitch leafId={leaf.id} />`；没有自己顶栏的视图整行用 `<ViewHead leafId>{按钮}</ViewHead>`。已有顶栏的（Amadeus `.amx-toolbar`、日历 `.amx-cal-bar`）给那一行加 `container: lcl-viewhead / inline-size`，窄时的退化才认得这一行的宽度。
+- 宿主统一管：⌥⌘V（Windows / Linux：Ctrl+Alt+V）切到下一种；命令面板里每种一条「看法：X」；悬停提示「X（⌥⌘V）」（选项自带键的如日历「D」写自己的）；视图宽度 < 480 只留图标（每种都给了图标时），< 320 收成「当前 ▾」下拉；手机单列壳里视图自己不画，胶囊在顶栏两颗胶囊中间，原生顶栏下进「⋯」的「看法」一节。
+- 记忆归视图：笔记按篇、对话按树根、谛听按记录、日历全局、Code Studio 按项目；宿主不替它存。
+- 当普通零件用（不进 ⌥⌘V，比如浮窗里的预览 / 源码）：`<ViewModeSwitch spec={{ modes, value, onChange }} />`（`@lcl/components`）；`compact` 恒只留图标。
+
+插件视图用 `ctx.ui?.setViewModes?.(el, spec)`：`el` 是 `mount()` 收到的那个元素，`spec = { modes: [{ id, label, labelEn?, icon? }], value, onChange(id) }`，`icon` 用插件图标词表里的名字（新增 `audio-lines` / `notebook-pen` / `list-checks`）。句柄 `{ set(id), update(patch), actions, dispose() }`：`set` 只改胶囊、不回调 `onChange`；`actions` 是同一行右边的空位，把自己栏里的按钮放进去，整个视图只剩一条头行。同一视图再调一次 = 覆盖；插件禁用 / 重载 / 视图关闭时宿主收回。少于 2 或多于 4 种同步抛错。旧宿主没有这个方法：保留自己的标签。
+
+```js
+mount(el) {
+  const modes = ctx.ui?.setViewModes?.(el, {
+    modes: [{ id: 'transcript', label: '转写', labelEn: 'Transcript', icon: 'audio-lines' }, { id: 'summary', label: '纪要', labelEn: 'Summary', icon: 'list-checks' }],
+    value: memo[recordId] || 'transcript',
+    onChange: (id) => { memo[recordId] = id; show(id) },
+  })
+  if (modes) modes.actions.append(myMoreButton)
+  else drawOwnTabs(el)
+  return () => modes?.dispose()
+}
+```
+
+The same thing seen another way (Chat / Canvas, Document / Canvas, Transcript / Notes / Summary, Day / Week / 3 days / Month) has one place everywhere: a switch at the **left end of the view's head row**, a 32px row inside the paper that does not scroll; the view's own title follows the switch. One switch per view with 2–4 modes; more than four stays as tabs (database views). Filter and source pills look the same but never sit in that slot. Native views register with `useViewModes(leaf.id, { modes, value, onChange })` from `@lcl/engine` and render `<ViewModeSwitch leafId />` (or `<ViewHead leafId>` for a whole row). The host owns ⌥⌘V (Ctrl+Alt+V) to the next mode, one "View: X" command per mode, the hover hint, icons only under 480px of view width, a "Current ▾" menu under 320px, and the phone top bar (the view draws nothing in the single-column shell; under the native Android top bar the modes are a "View mode" section of "⋯"). The view remembers the mode per thing it shows; the host stores nothing. `<ViewModeSwitch spec />` from `@lcl/components` is the plain part for places outside a view.
+
+Plugin views call `ctx.ui?.setViewModes?.(el, spec)` with the element `mount()` received. `spec` is `{ modes: [{ id, label, labelEn?, icon? }], value, onChange(id) }` with icon names from the plugin icon vocabulary. The handle has `set(id)` (moves the switch without calling `onChange`), `update(patch)`, `actions` (the right end of the same row — move your toolbar buttons there so the view keeps one head row) and `dispose()`. Calling it again on the same view replaces the previous one; the host removes it on disable, reload or view close. Fewer than 2 or more than 4 modes throws. Older hosts lack the method: keep your own tabs there.
+

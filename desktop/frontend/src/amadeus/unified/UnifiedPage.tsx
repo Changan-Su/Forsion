@@ -58,7 +58,8 @@ import { createCaretMemory } from './caretMemory'
 import { findTextHit, unfoldToReveal } from './revealText'
 import { isLoneBlockId, trailingBlockId } from '@amadeus-shared/pdfLink'
 import { editorModeOf, useUiOverlay } from '../../amadeusOverlayStore'
-import { CanvasSegPortal } from './CanvasModeSeg'
+import { CanvasSegPortal, canvasModesSpec } from './CanvasModeSeg'
+import { useViewModes } from '@lcl/engine'
 import { claimCanvasToggle, releaseCanvasToggle } from './canvasToggleCommand'
 import { track } from '../../achievements/store'
 import { AmadeusPropertiesPanel, PropsDraftFlushContext } from '../../amadeusProperties'
@@ -1389,6 +1390,8 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   toggleCanvasRef.current = toggleCanvas
   // 源码模式没有胶囊(见下方 CanvasSegPortal 的门),命令同口径空操作。
   canvasToggleImpl.current = mode === 'source' ? null : () => toggleCanvasRef.current()
+  // 视图模式标准(lcl viewModes):同一份「文档 / 画布」登记给 ⌥⌘V、命令面板「看法：X」与手机顶栏;源码模式没有胶囊,同口径不登记。
+  useViewModes(scope, mode === 'source' ? null : canvasModesSpec(canvasOn, () => toggleCanvasRef.current()))
   useEffect(() => {
     claimCanvasToggle(canvasToggleCmd) // 新开一篇不点正文也能用(同 setFocusedBlockApply 的挂载登记)
     return () => releaseCanvasToggle(canvasToggleCmd)
@@ -3237,7 +3240,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
           零尺寸、不吃指针 —— 它不参与任何布局。 */}
       <span ref={segAnchorRef} className="amx-seg-anchor" aria-hidden />
       {mode === 'source' ? null : (
-        <CanvasSegPortal anchor={segAnchor} on={canvasOn} toggle={() => toggleCanvasRef.current()} />
+        <CanvasSegPortal anchor={segAnchor} on={canvasOn} toggle={() => toggleCanvasRef.current()} leafId={scope} />
       )}
       {/* 画布模式满铺(用户 2026-08-17 拍板「像 AFFiNE 一样整个 view 显示」):封面/标题/属性整层
           不渲染,笔记体脱出 920px 纸面铺满面板。⚠️ 这几个槽位用 `x ? <A/> : null` 而不是把它们
