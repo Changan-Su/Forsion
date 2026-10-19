@@ -116,7 +116,7 @@ describe('bindFilesDropZone', () => {
 })
 
 describe('splitDroppedFiles', () => {
-  it('图片进附件(与粘贴一致),非图片与超过 5 MB 的图片照旧走路径芯片 / 工作区', () => {
+  it('5 MB 以内的图片另进附件(与粘贴一致);本机会话里每个文件照旧出路径芯片,非本机的其余文件上传工作区', () => {
     const photo = { name: 'dress.png', type: 'image/png', size: 3_620_426 } // 反馈里那张裙子截图
     const huge = { name: 'raw.jpeg', type: 'image/jpeg', size: 6 * 1024 * 1024 }
     const doc = { name: 'a.pdf', type: 'application/pdf', size: 10 }
