@@ -26,6 +26,8 @@ import { debugFireToast } from './achievements/store'
 import { forgetUserSpace } from './userSpaces'
 import { NotificationHost } from './components/NotificationHost'
 import { WhatsNewHost } from './components/WhatsNewDialog'
+import { TermsUpdateHost } from './components/TermsUpdateDialog'
+import { setPopupsBlocked } from './stores/popupQueue'
 import { DesktopStatusBar, installStatusBarItems } from './statusbar/items'
 import { UnitRemoteSurface, runUnitRoutePayload } from './components/UnitSwitcher'
 import { installNotificationWiring } from './stores/notificationWiring'
@@ -136,6 +138,8 @@ export function Root() {
       return () => clearTimeout(id)
     }
   }, [a.onboarding])
+  // 全屏引导开着时,自己弹出来的弹窗(协议更新 / What's new / 插件公告)先排着,引导结束再按顺序出
+  useEffect(() => setPopupsBlocked(!!a.onboarding), [a.onboarding])
 
   // 只有首启引导仍是全屏任务空间。设置/市场/成就/反馈改为 Floating Panel 后主工作台保持可见。
   const overlayOpen = a.settingsOpen || a.marketOpen || a.achievementsOpen || a.feedbackOpen || !!pluginFloating || a.onboarding
@@ -265,6 +269,7 @@ export function Root() {
       <BtwHost />
 
       <WhatsNewHost />
+      <TermsUpdateHost />
 
       <AnimatePresence>
         {pluginFloating?.view && <FloatingPanelFrame key={pluginFloating.id} title={pluginFloating.title} onClose={closeWebFloatingPanel}>

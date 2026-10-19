@@ -188,6 +188,9 @@ export async function installWebShim(): Promise<boolean> {
       }
       return cloudJson('POST', '/token-quota/reset-card/use', { type: type ?? 'both' })
     },
+    // 协议更新提示(components/TermsUpdateDialog):网页版不给通用 cloudFetch,只开这两条
+    termsStatus: () => cloudJson('GET', '/auth/terms'),
+    termsAgree: (version: string) => cloudJson('POST', '/auth/terms/agree', { version }),
   }
 
   // The same transport guard serves regular Web and Unit visitors, using the

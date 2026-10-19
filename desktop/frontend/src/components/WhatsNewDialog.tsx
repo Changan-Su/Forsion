@@ -15,6 +15,7 @@ import { buildWhatsNewEntries, parseWebsiteReleases, WEBSITE_ORIGIN, WEBSITE_REL
 import { APP_VERSION, changelogFor } from '../changelog'
 import { registerMessages, useI18n } from '../i18n'
 import { windowKind } from '../windowKind'
+import { POPUP_PRIORITY, usePopupTurn } from '../stores/popupQueue'
 import { Markdown } from './Markdown'
 import { UpdateActions, UpdateSourceNote } from './UpdateActions'
 import type { UpdaterStatusInfo } from '../types'
@@ -63,8 +64,10 @@ export function maybeAutoOpenWhatsNew(st: UpdaterStatusInfo): void {
 
 export function WhatsNewHost() {
   const open = useWhatsNew((s) => s.open)
+  // 排队:协议更新 / 插件公告正在显示时等它关了再出(stores/popupQueue)
+  const turn = usePopupTurn('whatsNew', open, POPUP_PRIORITY.whatsNew)
   useEffect(() => window.tangu?.onOpenWhatsNew?.(() => useWhatsNew.setState({ open: true })), [])
-  return open ? <WhatsNewDialog onClose={() => useWhatsNew.setState({ open: false })} /> : null
+  return turn ? <WhatsNewDialog onClose={() => useWhatsNew.setState({ open: false })} /> : null
 }
 
 async function loadWebsiteReleases(): Promise<WebsiteRelease[] | null> {

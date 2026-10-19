@@ -276,6 +276,7 @@
     "probe:startup-windows": "node scripts/startup-windows.probe.cjs",
     "probe:startup-trace": "node scripts/startup-trace.probe.cjs",
     "check:parity": "node scripts/platform-parity.check.cjs",
+    "check:terms": "node scripts/terms-update.check.cjs",
     "check:achcloud": "node scripts/achievements-cloud.check.cjs",
     "e2e:spaceswitch": "node scripts/space-switch.electron.cjs",
     "check:vitecache": "node scripts/vite-cachedir.check.cjs",
