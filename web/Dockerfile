@@ -42,8 +42,9 @@ COPY unit/releasePolicy.mjs ./unit/releasePolicy.mjs
 # 同上,只拷这一个文件,别把 tangu-agent/ 带进上下文。
 COPY tangu-agent/src/core/sessionEmoji.ts ./tangu-agent/src/core/sessionEmoji.ts
 # Intelligent UI 的文档格式与应用卡片 id 校验也与引擎共用:渲染层(IntelligentUi.tsx / IntelligentAppCard.tsx)直接 import 这两个
-# 无依赖的纯函数文件(intelligentUi.ts 只引 ./intelligentCards.js)。同上,只拷文件,别把 tangu-agent/ 带进上下文。
+# 无依赖的纯函数文件(intelligentUi.ts 只引 ./intelligentCards.js 与 v2 表达式 ./intelligentUiExpr.js)。同上,只拷文件,别把 tangu-agent/ 带进上下文。
 COPY tangu-agent/src/shared/intelligentUi.ts ./tangu-agent/src/shared/intelligentUi.ts
+COPY tangu-agent/src/shared/intelligentUiExpr.ts ./tangu-agent/src/shared/intelligentUiExpr.ts
 COPY tangu-agent/src/shared/intelligentCards.ts ./tangu-agent/src/shared/intelligentCards.ts
 COPY tangu-agent/src/shared/marketplace.ts ./tangu-agent/src/shared/marketplace.ts
 COPY tangu-agent/src/shared/pluginAliases.ts ./tangu-agent/src/shared/pluginAliases.ts

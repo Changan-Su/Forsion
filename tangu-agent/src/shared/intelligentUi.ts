@@ -1,7 +1,13 @@
-/** Forsion Intelligent UI v1. Pure data contract shared by the engine and native renderer.
- * No executable expressions, HTML, styles, network actions or arbitrary component names. */
+/** Forsion Intelligent UI v1 / v2. Pure data contract shared by the engine and native renderer.
+ * No HTML, styles, network actions or arbitrary component names. v1 has no expressions; v2 adds
+ * state, derived values and expressions over a fixed function list (intelligentUiExpr.ts). */
 import { validAppCardId } from './intelligentCards.js'
-export type UICondition = { input: string; equals: string | number }
+import { compileExpr, documentScope, interpolationSources, reservedUIName, UI_NAME, uiValueIssue, type ExprScope, type UIValue } from './intelligentUiExpr.js'
+export type { UIValue } from './intelligentUiExpr.js'
+export type UICondition = { input: string; equals: string | number } | { expr: string }
+export type UIStateVar = { id: string; initial: UIValue }
+export type UIDerived = { id: string; expr: string }
+export type UISetStep = { set: string; to: string } | { toggle: string; value?: string } | { append: string; value: string } | { remove: string; value: string } | { reset: string }
 export type UIInput =
   | { id: string; kind: 'number'; label: string; initial: number; min: number; max: number; step: number }
   | { id: string; kind: 'choice'; label: string; initial: string; options: { id: string; label: string; description?: string; imageId?: string }[] }
@@ -20,11 +26,16 @@ export type UIBlock = BlockBase & (
   | { kind: 'comparison'; items: { id: string; title: string; description: string; imageId?: string; facts: string[] }[] }
   | { kind: 'checklist'; items: UICheckItem[] }
   | { kind: 'disclosure'; markdown: string }
+  | { kind: 'stats'; items: { label: string; value: string }[] }
+  | { kind: 'table'; columns: string[]; rows: string }
   | { kind: 'actions'; items: ({ id: string; label: string } & (
       | { kind: 'model'; prompt: string } | { kind: 'copy'; text: string } | { kind: 'open'; resourceId: string }
+      | { kind: 'set'; steps: UISetStep[]; disabled?: string }
     ))[] }
 )
-export type UIDocument = { version: 1; id: string; title: string; inputs: UIInput[]; resources: UIResource[]; blocks: UIBlock[] }
+export type UIDocument = { version: 1 | 2; id: string; title: string; inputs: UIInput[]; state?: UIStateVar[]; derived?: UIDerived[]; resources: UIResource[]; blocks: UIBlock[] }
+/** Highest document version this build reads. Engines accept 2 only from clients that announce intelligent-ui.v2. */
+export const UI_VERSION = 2
 export const UI_DOCUMENT_LIMIT = 65_536
 export const uiDocumentTooLarge = (text: string): boolean => new TextEncoder().encode(text).length > UI_DOCUMENT_LIMIT
 const ID = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/
@@ -66,10 +77,16 @@ export function safeUIUrl(x: unknown): x is string {
       && !/^[\d.]+$/.test(h) && !h.includes(':')
   } catch { return false }
 }
-export function validateUIDocument(raw: unknown, options: { draft?: boolean } = {}): UIDocument {
+export function validateUIDocument(raw: unknown, options: { draft?: boolean; maxVersion?: number } = {}): UIDocument {
   if (uiDocumentTooLarge(JSON.stringify(raw) || '')) fail('document', 'too large')
   const d = obj(raw, 'document')
-  if (d.version !== 1) fail('version', 'expected 1')
+  const maxVersion = options.maxVersion ?? UI_VERSION
+  if (d.version !== 1 && !(d.version === 2 && maxVersion >= 2)) fail('version', maxVersion >= 2 ? 'expected 1 or 2' : 'expected 1 (this client renders version 1 only)')
+  const v2 = d.version === 2
+  const expr = (x: unknown, p: string, scope: ExprScope): string => {
+    try { compileExpr(x, scope) } catch (e) { fail(p, e instanceof Error ? e.message : String(e)) }
+    return x as string
+  }
   const inputs = unique(list(d.inputs, 'inputs', 8, (v, p): UIInput => {
     const o = obj(v, p), common = { id: id(o.id, `${p}.id`), label: str(o.label, `${p}.label`, 160) }
     if (o.kind === 'number') {
@@ -93,8 +110,33 @@ export function validateUIDocument(raw: unknown, options: { draft?: boolean } = 
     return fail(p, 'unknown input kind')
   }), 'inputs')
   const inputMap = new Map(inputs.map(x => [x.id, x]))
+  // v2 names: declared after inputs, before blocks, so a streamed prefix knows them before any block uses them.
+  const names = new Set<string>()
+  const declare = (x: unknown, p: string): string => {
+    const name = str(x, p, 40)
+    if (!UI_NAME.test(name) || reservedUIName(name) || names.has(name)) fail(p, 'expected a new name (letters, digits, underscore; not a function name or keyword)')
+    names.add(name)
+    return name
+  }
+  const state = !v2 || d.state === undefined ? [] : list(d.state, 'state', 16, (v, p) => {
+    const o = obj(v, p), issue = uiValueIssue(o.initial)
+    if (o.initial === undefined || issue) fail(`${p}.initial`, issue || 'required')
+    return { id: declare(o.id, `${p}.id`), initial: o.initial as UIValue }
+  })
+  const inputIds = new Set(inputs.map(i => i.id))
+  const derived = !v2 || d.derived === undefined ? [] : list(d.derived, 'derived', 32, (v, p) => {
+    const o = obj(v, p), source = expr(o.expr, `${p}.expr`, { inputs: inputIds, names: new Set(names) })
+    return { id: declare(o.id, `${p}.id`), expr: source }
+  })
+  const scope = documentScope({ inputs, state, derived })
+  const markdown = (x: unknown, p: string): string => {
+    const text = str(x, p, 10000)
+    if (v2) for (const src of interpolationSources(text)) expr(src, `${p} {{${src.slice(0, 40)}}}`, scope)
+    return text
+  }
   const condition = (x: unknown, p: string): UICondition | undefined => {
     if (x === undefined) return undefined
+    if (v2 && (x as Record<string, unknown> | null)?.expr !== undefined) return { expr: expr(obj(x, p).expr, `${p}.expr`, scope) }
     const o = obj(x, p), input = id(o.input, `${p}.input`), target = inputMap.get(input)
     if (!target) fail(p, 'unknown input')
     if (target.kind === 'choice' ? !target.options.some(v => v.id === o.equals) : typeof o.equals !== 'number' || o.equals < target.min || o.equals > target.max) fail(p, 'invalid condition value')
@@ -123,7 +165,14 @@ export function validateUIDocument(raw: unknown, options: { draft?: boolean } = 
         return { ...common, kind: 'app-card', cardId: o.cardId as string, ...(o.query === undefined ? {} : { query: str(o.query, `${p}.query`, 200) }) }
       case 'text': case 'disclosure':
         if (o.kind === 'disclosure' && !common.title) fail(p, 'disclosure requires title')
-        return { ...common, kind: o.kind, markdown: str(o.markdown, `${p}.markdown`, 10000) }
+        return { ...common, kind: o.kind, markdown: markdown(o.markdown, `${p}.markdown`) }
+      case 'stats': if (!v2) break
+        return { ...common, kind: 'stats', items: list(o.items, `${p}.items`, 4, (v, q) => {
+          const a = obj(v, q)
+          return { label: str(a.label, `${q}.label`, 80), value: expr(a.value, `${q}.value`, scope) }
+        }) }
+      case 'table': if (!v2) break
+        return { ...common, kind: 'table', columns: list(o.columns, `${p}.columns`, 6, (v, q) => str(v, q, 80)), rows: expr(o.rows, `${p}.rows`, scope) }
       case 'controls': return { ...common, kind: 'controls', inputIds: list(o.inputIds, `${p}.inputIds`, 8, (v, q) => {
         const ref = id(v, q); if (!inputMap.has(ref)) fail(q, 'unknown input'); return ref
       }) }
@@ -151,10 +200,24 @@ export function validateUIDocument(raw: unknown, options: { draft?: boolean } = 
         if (a.kind === 'model') return { ...base, kind: 'model' as const, prompt: str(a.prompt, `${q}.prompt`, 2000) }
         if (a.kind === 'copy') return { ...base, kind: 'copy' as const, text: str(a.text, `${q}.text`, 10000) }
         if (a.kind === 'open') return { ...base, kind: 'open' as const, resourceId: resourceRef(a.resourceId, `${q}.resourceId`, 'source') }
+        if (a.kind === 'set' && v2) {
+          const target = (x: unknown, r: string): string => { const t = str(x, r, 40); if (!state.some(s => s.id === t)) fail(r, 'expected a state name'); return t }
+          const steps = list(a.steps, `${q}.steps`, 8, (v, r): UISetStep => {
+            const s = obj(v, r)
+            if (s.set !== undefined) return { set: target(s.set, `${r}.set`), to: expr(s.to, `${r}.to`, scope) }
+            if (s.toggle !== undefined) return { toggle: target(s.toggle, `${r}.toggle`), ...(s.value === undefined ? {} : { value: expr(s.value, `${r}.value`, scope) }) }
+            if (s.append !== undefined) return { append: target(s.append, `${r}.append`), value: expr(s.value, `${r}.value`, scope) }
+            if (s.remove !== undefined) return { remove: target(s.remove, `${r}.remove`), value: expr(s.value, `${r}.value`, scope) }
+            if (s.reset !== undefined) return { reset: target(s.reset, `${r}.reset`) }
+            return fail(r, 'expected one of set, toggle, append, remove, reset')
+          })
+          if (!steps.length) fail(`${q}.steps`, 'expected at least one step')
+          return { ...base, kind: 'set' as const, steps, ...(a.disabled === undefined ? {} : { disabled: expr(a.disabled, `${q}.disabled`, scope) }) }
+        }
         return fail(q, 'unknown action kind')
       }), `${p}.items`) }
-      default: return fail(p, 'unknown block kind')
     }
+    return fail(p, 'unknown block kind')
   }), 'blocks')
   if (parsed.some(b => b.kind === 'controls' && b.when)) fail('controls', 'controls must remain visible (no when)')
   // An input shown again in a later controls block is dropped there, not rejected: models restate the
@@ -171,7 +234,8 @@ export function validateUIDocument(raw: unknown, options: { draft?: boolean } = 
   if (blocks.reduce((n, b) => n + (b.kind === 'checklist' ? b.items.length : 0), 0) > 200) fail('checklist', 'max 200 items per document')
   const boundInputs = controls.flatMap(b => b.inputIds)
   if (!options.draft && inputs.some(i => !boundInputs.includes(i.id))) fail('controls', 'every declared input must be included in a controls block')
-  return { version: 1, id: id(d.id, 'id'), title: str(d.title, 'title', 200), inputs, resources, blocks }
+  const head = { id: id(d.id, 'id'), title: str(d.title, 'title', 200), inputs }
+  return v2 ? { version: 2, ...head, state, derived, resources, blocks } : { version: 1, ...head, resources, blocks }
 }
 
 /** Parse only complete JSON properties and complete array members. No repairs of model tokens.
