@@ -95,6 +95,7 @@ export function showSpotlight(owner: string, opts: SpotlightOptions): Promise<Sp
       else if (y + h + pad + gap + ch < vh) { side = 'below'; cx = x; cy = y + h + pad + gap }
       else { side = 'above'; cx = x; cy = y - pad - gap - ch }
       cx = Math.min(Math.max(8, cx), vw - cw - 8)
+      cy = Math.min(Math.max(8, cy), vh - ch - 8)
       card!.dataset.side = side
       card!.style.setProperty('--guide-spot-arrow', side === 'right' ? `${Math.min(Math.max(14, y + Math.min(h, 40) / 2 - cy), ch - 14)}px` : `${Math.min(Math.max(14, x + Math.min(w, 60) / 2 - cx), cw - 14)}px`)
       Object.assign(card!.style, { left: `${cx}px`, top: `${cy}px` })
@@ -106,7 +107,7 @@ export function showSpotlight(owner: string, opts: SpotlightOptions): Promise<Sp
       if (done) return
       const el = findAnchor(name)
       if (!ring) {
-        if (el) { mount(); place(el) } else {
+        if (el) { el.scrollIntoView?.({ block: 'nearest', inline: 'nearest' }); mount(); place(el) } else { // 侧栏滚过头时目标在视口外(Codex 评审)
           const t = performance.now() - started
           const side = GUIDE_ANCHORS[name]!.side
           if (!opened && side && t > 400) { // 目标在收着的侧栏里:展开一次再等

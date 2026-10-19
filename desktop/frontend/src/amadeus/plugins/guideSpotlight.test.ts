@@ -66,6 +66,18 @@ describe('现场圈注', () => {
     expect(await showSpotlight('x', { anchor: 'no-such', title: 'c' })).toBe('missing')
   })
 
+  it('目标滚出了可视区:先滚进来,卡不落到屏幕外(Codex 评审)', async () => {
+    const el = anchor('note-new')
+    el.getBoundingClientRect = () => ({ x: 50, y: -600, left: 50, top: -600, width: 260, height: 30, right: 310, bottom: -570, toJSON: () => ({}) }) as DOMRect
+    const spy = vi.fn()
+    el.scrollIntoView = spy
+    void showSpotlight('x', { anchor: 'note-new', title: 't' })
+    await until(() => document.querySelector('.guide-spot-card'))
+    expect(spy).toHaveBeenCalledWith({ block: 'nearest', inline: 'nearest' })
+    expect(parseFloat((document.querySelector('.guide-spot-card') as HTMLElement).style.top)).toBeGreaterThanOrEqual(8)
+    closeSpotlight()
+  })
+
   it('新一次顶掉旧的;按插件收起', async () => {
     anchor('note-new'); anchor('chat-composer')
     const first = showSpotlight('a', { anchor: 'note-new', title: '1' })
