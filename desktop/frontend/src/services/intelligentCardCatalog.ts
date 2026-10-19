@@ -1,6 +1,6 @@
 import { allViews } from '@lcl/engine'
 import type { ListSourceContribution } from '../amadeus/plugins/types'
-import { normalizeUIAppCards, type UIAppCardDescriptor } from '../../../../tangu-agent/src/shared/intelligentCards'
+import { normalizeUIAppCards, type UIAppCardDescriptor } from '../../../../tangu-agent/src/contracts/intelligentCards'
 export type PluginIntelligentSource = { pluginId: string; item: ListSourceContribution }
 let sources: PluginIntelligentSource[] = []
 const listeners = new Set<() => void>()

@@ -25,7 +25,7 @@ import { rosterAvailable, runLocationsAvailable } from '../features/runtime'
 import { classify } from '../services/engine/health'
 import { getSessionDetail, updateSession } from '../services/backendService'
 import { AGENT_APP_ID } from '../services/agentRunService'
-import { normalizeSessionEmoji } from '../../../../tangu-agent/src/core/sessionEmoji'
+import { normalizeSessionEmoji } from '../../../../tangu-agent/src/contracts/sessionEmoji'
 
 /** 逐台会话列表的新鲜度:比这更新就不重拉(手动刷新 / force 除外)。 */
 export const DEVICE_LIST_FRESH_MS = 10_000

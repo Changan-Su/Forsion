@@ -12,6 +12,7 @@
  *   2. Tangu 文件之间用相对路径,不许写 `@tangu/ui/`(这个前缀只标宿主一侧的越界)。
  *   3. Tangu → 宿主:Tangu 文件用到的宿主模块集合 = 将来要补的 ctx 接缝面,只许减不许增(baseline.tanguHostDeps)。
  *   4. 契约(`contracts.dirs`,第 2b 步起;方案里包的 contracts/ 子路径):引擎、Tangu 界面、宿主三方共用的纯 TS。
+ *      扫描范围里的文件(宿主和 Tangu 界面都算)直引 tangu-agent/src 里契约之外的文件 = 红(第 2d 步起)。
  *      两边引它都不计数;契约文件自己只许用相对路径引契约目录里的文件(不许引宿主 / Tangu / 引擎内部,也不许引第三方包)。
  * 测试文件与 dev 台架页(*.test.* / harness.tsx / *Harness.tsx)不查:它们随被测对象走。
  *
@@ -31,6 +32,7 @@ const CONFIG = path.join(__dirname, 'tangu-boundary.json')
 const PREFIX = '@tangu/ui/'
 const SCAN = ['desktop/frontend/src', 'desktop/shared', 'desktop/electron', 'lcl', 'mobile/src', 'web/src', 'tangu-agent/src/contracts']
 const SRC = 'desktop/frontend/src'
+const ENGINE_SRC = 'tangu-agent/src/' // 第 2d 步起:宿主 / 界面只许经契约目录用引擎的代码
 const ALIAS = [ // 与各 vite.config 的 alias 同表;长前缀在前
   ['@tangu/ui', SRC],
   ['@amadeus-shared', 'desktop/shared/amadeus'],
@@ -67,15 +69,15 @@ function analyze(files, cfg) {
   const isTangu = (f) => cfg.tangu.dirs.some((d) => f.startsWith(d)) || cfg.tangu.files.includes(f)
   const contractDirs = cfg.contracts?.dirs || []
   const isContract = (f) => contractDirs.some((d) => f.startsWith(d))
+  /** import 指到的仓内路径(不管文件在不在扫描范围里);第三方包 → null。 */
+  const baseOf = (from, spec) => {
+    if (spec.startsWith('.')) return path.posix.join(path.posix.dirname(from), spec).replace(/\?.*$/, '')
+    const a = ALIAS.find(([k]) => spec === k || spec.startsWith(k + '/'))
+    return a ? path.posix.normalize(a[1] + spec.slice(a[0].length)).replace(/\?.*$/, '') : null
+  }
   const resolve = (from, spec) => {
-    let base
-    if (spec.startsWith('.')) base = path.posix.join(path.posix.dirname(from), spec)
-    else {
-      const a = ALIAS.find(([k]) => spec === k || spec.startsWith(k + '/'))
-      if (!a) return null
-      base = path.posix.normalize(a[1] + spec.slice(a[0].length))
-    }
-    base = base.replace(/\?.*$/, '')
+    const base = baseOf(from, spec)
+    if (!base) return null
     for (const e of EXT) if (files.has(base + e)) return base + e
     if (/\.js$/.test(base)) for (const e of ['.ts', '.tsx']) if (files.has(base.replace(/\.js$/, e))) return base.replace(/\.js$/, e)
     return null
@@ -91,6 +93,11 @@ function analyze(files, cfg) {
       if (isContract(f)) {
         const base = spec.startsWith('.') ? path.posix.join(path.posix.dirname(f), spec) : null
         if (!base || !isContract(base + '/') && !isContract(base)) errors.push(`契约文件只许用相对路径引契约目录:${f} import '${spec}'`)
+        continue
+      }
+      const base = baseOf(f, spec)
+      if (base && base.startsWith(ENGINE_SRC) && !isContract(base) && !isContract(base + '/')) {
+        errors.push(`直接引了引擎源码:${f} import '${spec}'。引擎与宿主 / 界面共用的纯 TS 放进 tangu-agent/src/contracts/,从那里引`)
         continue
       }
       const to = resolve(f, spec)
@@ -170,7 +177,7 @@ function selftest() {
   const k1 = runK({ [`${SRC}/Other.tsx`]: "import { a } from '../../../tangu-agent/src/contracts/a'", [`${SRC}/views/chat2/C.tsx`]: "import { a } from '../../../../../tangu-agent/src/contracts/a.js'" })
   assert.deepEqual([k1.errors, k1.current.tanguHostDeps], [[], [`${SRC}/i18n.tsx`]], '宿主 / Tangu 引契约都不计数')
   const k0 = analyze(new Map(Object.entries({ ...base, [`${K}a.ts`]: 'export const a = 1', [`${SRC}/views/chat2/C.tsx`]: "import { a } from '../../../../../tangu-agent/src/contracts/a'" })), cfg)
-  assert.match(k0.errors.join(), /新增了宿主依赖:tangu-agent\/src\/contracts\/a\.ts/, '负对照:不配契约时同一条引用要算宿主依赖(证明上面的路径真解析到了)')
+  assert.match(k0.errors.join(), /直接引了引擎源码:.*contracts\/a'/, '负对照:不配契约时同一条引用要红(2d 起由「直引引擎源码」那条拦)')
   assert.match(runK({ [`${K}c.ts`]: "import { x } from '../../../desktop/frontend/src/stores/x'" }).errors.join(), /契约文件只许/, '契约引宿主')
   assert.match(runK({ [`${K}c.ts`]: "import { y } from '../core/y.js'" }).errors.join(), /契约文件只许/, '契约引引擎内部(不在扫描范围里也要拦)')
   assert.match(runK({ [`${K}c.ts`]: "import { z } from 'zod'" }).errors.join(), /契约文件只许/, '契约引第三方包')
@@ -180,7 +187,12 @@ function selftest() {
   }
   assert.match(runK({ [`${K}t.d.ts`]: "export type { Stats } from 'node:fs'" }).errors.join(), /契约文件只许/, '契约里的 .d.ts 不豁免')
   assert.deepEqual(runK({ [`${K}c.test.ts`]: "import { x } from '../../../desktop/frontend/src/stores/x'" }).errors, [], '契约的测试文件照旧不查')
-  console.log('tangu-boundary selftest: 26/26 PASS')
+  // 第 2d 步:直引引擎源码(契约之外)= 红,不管写法;引契约照旧放行
+  assert.match(runK({ [`${SRC}/views/chat2/C.tsx`]: "import { k } from '../../../../../tangu-agent/src/core/keyLock'" }).errors.join(), /直接引了引擎源码/, 'Tangu 直引引擎内部')
+  assert.match(runK({ [`${SRC}/Other.tsx`]: "import { k } from '@/../../../tangu-agent/src/core/keyLock.js'" }).errors.join(), /直接引了引擎源码/, '经 alias 绕过去也要拦')
+  assert.match(runK({ ['desktop/shared/m.ts']: "export * from '../../tangu-agent/src/shared/marketplace'" }).errors.join(), /直接引了引擎源码/, 'export * from 也算')
+  assert.deepEqual(runK({ [`${SRC}/Other.tsx`]: "import { a } from '../../../tangu-agent/src/contracts/a'" }).errors, [], '引契约放行')
+  console.log('tangu-boundary selftest: 30/30 PASS')
 }
 
 if (process.argv.includes('--selftest')) { selftest(); process.exit(0) }
