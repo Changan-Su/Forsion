@@ -16,7 +16,8 @@
  */
 
 type Ptr = { pointerId: number; pointerType: string }
-type Sample = { clientX: number; clientY: number; pressure: number }
+/** 已换算成场景坐标的一个采样 */
+type Sample = { x: number; y: number; pressure: number }
 type BoardState = {
   penMode: boolean
   penDetected: boolean
@@ -24,7 +25,7 @@ type BoardState = {
 }
 type Gesture = { pointers: Map<number, unknown> }
 /** 引擎的 pointerDownState(每次按下新建一份);我们把这一笔的采样缓冲挂在它上面 */
-type DownState = { fsSamples?: PointerEvent[] }
+type DownState = { fsSamples?: Sample[] }
 type Throttled = ((e: PointerEvent) => void) & { flush: () => void; cancel?: () => void }
 type Freedraw = {
   x: number
@@ -33,7 +34,7 @@ type Freedraw = {
   pressures: readonly number[]
   simulatePressure: boolean
 }
-type ToScene = (e: Sample, st: BoardState) => { x: number; y: number }
+type ToScene = (e: { clientX: number; clientY: number }) => { x: number; y: number }
 
 /** 正在画的那支笔;按着的手指(都是全局唯一的 pointerId,多块白板共用没问题) */
 let penId: number | null = null
@@ -60,25 +61,32 @@ export function wrap<U extends (e: PointerEvent) => void>(
   ds: DownState,
   e: Ptr,
   st: BoardState,
+  toScene: ToScene,
 ): [Throttled, U] {
   if (e.pointerType !== 'pen') return [move, up]
   const pid = (penId = e.pointerId)
   const strict = penRules(st)
-  const buf: PointerEvent[] = (ds.fsSamples = [])
+  const buf: Sample[] = (ds.fsSamples = [])
+  let lastPen: PointerEvent | null = null
   const m = ((ev: PointerEvent) => {
     if (ev.pointerId === pid) {
+      lastPen = ev
       const all = ev.getCoalescedEvents?.()
-      buf.push(...(all?.length ? all : [ev]))
+      // 进缓冲时就换算:同一帧里视口要是动了(滚轮平移),攒到下一帧再算会把前面的点算偏
+      for (const s of all?.length ? all : [ev]) buf.push({ ...toScene(s), pressure: s.pressure })
     } else if (strict) return
     move(ev)
   }) as Throttled
   m.flush = () => move.flush()
   m.cancel = () => move.cancel?.()
-  // 引擎补发抬起(missingPointerEventCleanup)时会传 null 或按下那次的事件 —— 那些照放行
+  // 只拦别的指针**真的抬起**。上一笔的抬起丢了时,引擎在下一次按下补收笔(missingPointerEventCleanup),
+  // 传的是新按下的事件或 null —— 必须放行,否则旧笔画的监听永远摘不掉;终点换成这支笔最后一个采样,
+  // 别让笔画一条直线连到新按下的地方。
   const u = ((ev?: PointerEvent | null) => {
-    if (strict && ev && ev.pointerId !== undefined && ev.pointerId !== pid) return
+    const other = !!ev && ev.pointerId !== undefined && ev.pointerId !== pid
+    if (other && strict && ev?.type === 'pointerup') return
     if (penId === pid) penId = null
-    up(ev as PointerEvent)
+    up(((other && lastPen) || ev) as PointerEvent)
   }) as U
   return [m, u]
 }
@@ -88,7 +96,6 @@ export function freedraw(
   el: Freedraw,
   ds: DownState,
   st: BoardState,
-  toScene: ToScene,
 ): { points: [number, number][]; pressures: readonly number[] } | null | undefined {
   const buf = ds.fsSamples
   if (!buf) return undefined
@@ -99,9 +106,8 @@ export function freedraw(
   const pressures = [...el.pressures]
   const constant = !!st.currentStrokeOptions?.constantPressure
   for (const s of samples) {
-    const { x, y } = toScene(s, st)
-    const dx = x - el.x
-    const dy = y - el.y
+    const dx = s.x - el.x
+    const dy = s.y - el.y
     const last = points[points.length - 1]
     if (last && last[0] === dx && last[1] === dy) continue
     points.push([dx, dy])

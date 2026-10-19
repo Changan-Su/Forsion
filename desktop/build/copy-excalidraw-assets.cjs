@@ -66,15 +66,15 @@ const PEN_PATCHES = [
     'M(this,"handleCanvasPointerDown",t=>{',
     `M(this,"handleCanvasPointerDown",t=>{if(${PEN_HOOK}?.down(t,this.state,ve))return;`,
   ],
-  // 钩子 2:按下后建拖动监听。`l` = pointerDownState,`t` = 这次按下的事件
+  // 钩子 2:按下后建拖动监听。`l` = pointerDownState,`t` = 这次按下的事件,`He` = viewportCoordsToSceneCoords
   [
     'let c=this.onPointerMoveFromPointerDownHandler(l),C=this.onPointerUpFromPointerDownHandler(l),',
-    `let[c,C]=(${PEN_HOOK}?.wrap??((a,b)=>[a,b]))(this.onPointerMoveFromPointerDownHandler(l),this.onPointerUpFromPointerDownHandler(l),l,t,this.state),`,
+    `let[c,C]=(${PEN_HOOK}?.wrap??((a,b)=>[a,b]))(this.onPointerMoveFromPointerDownHandler(l),this.onPointerUpFromPointerDownHandler(l),l,t,this.state,A=>He(A,this.state)),`,
   ],
-  // 钩子 3:自由画笔每帧追加点。`t` = pointerDownState,`He` = viewportCoordsToSceneCoords
+  // 钩子 3:自由画笔每帧追加点。`t` = pointerDownState
   [
     'if(c.type==="freedraw"){let C=c.points,B=i.x-c.x,d=i.y-c.y,E=C.length>0&&C[C.length-1];if(!(E&&E[0]===B&&E[1]===d)){let p=this.state.currentStrokeOptions,u=c.simulatePressure?c.pressures:[...c.pressures,p?.constantPressure?1:o.pressure];this.scene.mutateElement(c,{points:[...C,k(B,d)],pressures:u},{informMutation:!1,isDragging:!1}),this.setState({newElement:c})}}',
-    `if(c.type==="freedraw"){let __fp=${PEN_HOOK}?.freedraw(c,t,this.state,He);if(__fp!==void 0)__fp&&(this.scene.mutateElement(c,__fp,{informMutation:!1,isDragging:!1}),this.setState({newElement:c}));else{let C=c.points,B=i.x-c.x,d=i.y-c.y,E=C.length>0&&C[C.length-1];if(!(E&&E[0]===B&&E[1]===d)){let p=this.state.currentStrokeOptions,u=c.simulatePressure?c.pressures:[...c.pressures,p?.constantPressure?1:o.pressure];this.scene.mutateElement(c,{points:[...C,k(B,d)],pressures:u},{informMutation:!1,isDragging:!1}),this.setState({newElement:c})}}}`,
+    `if(c.type==="freedraw"){let __fp=${PEN_HOOK}?.freedraw(c,t,this.state);if(__fp!==void 0)__fp&&(this.scene.mutateElement(c,__fp,{informMutation:!1,isDragging:!1}),this.setState({newElement:c}));else{let C=c.points,B=i.x-c.x,d=i.y-c.y,E=C.length>0&&C[C.length-1];if(!(E&&E[0]===B&&E[1]===d)){let p=this.state.currentStrokeOptions,u=c.simulatePressure?c.pressures:[...c.pressures,p?.constantPressure?1:o.pressure];this.scene.mutateElement(c,{points:[...C,k(B,d)],pressures:u},{informMutation:!1,isDragging:!1}),this.setState({newElement:c})}}}`,
   ],
 ]
 function patchEngine(src) {

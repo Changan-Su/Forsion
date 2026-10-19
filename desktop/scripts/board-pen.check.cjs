@@ -4,6 +4,8 @@
 //   P1 丢点:一帧里连发好几下笔移动,笔画要把每个采样都收下(引擎原样每帧只留最后一个)。
 //   P2 断笔:笔画到一半手掌按下、再抬起,这一笔不许被收掉 / 删掉,也不许被手掌带着缩放。
 //   P3 手掌先放:手掌按着时笔落下,照样要画出来(引擎原样会把两者当双指,笔画不开始)。
+//   P4 笔的抬起丢了:下一次(鼠标)按下要把上一笔收在笔最后到的地方,鼠标也要能接着画
+//      (Codex 评审抓到:只认这支笔的过滤一度把引擎的补收笔也拦了,旧笔画的监听永远摘不掉)。
 //
 // 每条都跑两遍:补丁版(public/excalidraw 的副本)必须过;**原版引擎**(拦下请求换成 node_modules 里没打补丁的)
 // 必须红 —— 原版也绿 = 这条量不出补丁的作用,判台架失效(负对照,每次都跑)。
@@ -41,6 +43,15 @@ async function open(browser, patched) {
   const p = await ctx.newPage()
   const errs = []
   p.on('pageerror', (e) => errs.push(e.message))
+  // P4 用:吞掉下一次笔的 pointerup(window 捕获阶段最先注册,引擎和 penInput 都收不到 = 抬起丢了)
+  await p.addInitScript(() => {
+    window.addEventListener('pointerup', (e) => {
+      if (window.__dropPenUp && e.pointerType === 'pen') {
+        window.__dropPenUp = false
+        e.stopImmediatePropagation()
+      }
+    }, true)
+  })
   if (!patched) await p.route('**/excalidraw/excalidraw.js', (r) => r.fulfill({ path: ORIGINAL, contentType: 'application/javascript' }))
   await p.goto(`${BASE}?board`)
   await p.waitForSelector('.excalidraw canvas.excalidraw__canvas.interactive', { timeout: 20000 })
@@ -153,6 +164,31 @@ async function scenarios(s) {
     out.P3 = {
       ok: !!el && kept >= sent * 0.9 && near(span, want),
       detail: el ? `画出了,${kept}/${sent} 个点,笔画位移 (${span.x.toFixed(1)},${span.y.toFixed(1)}) 应为 (${want.x},${want.y})` : '笔画没开始(手掌和笔被当成双指)',
+    }
+  }
+  // P4 笔的抬起丢了 → 鼠标按下
+  {
+    const before = (await freedraws(s.p)).length
+    await s.p.evaluate(() => { window.__dropPenUp = true })
+    const start = { x: s.box.x + 500, y: s.box.y + 120 }
+    const { end } = await stroke(s, start, 8, 1, 8, 2)
+    const b = { x: s.box.x + 500, y: s.box.y + 600 }
+    await s.cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: b.x, y: b.y, button: 'none', buttons: 0 })
+    await s.cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: b.x, y: b.y, button: 'left', buttons: 1, clickCount: 1 })
+    for (let i = 1; i <= 10; i++) {
+      await s.cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: b.x + i * 10, y: b.y, button: 'none', buttons: 1 })
+      await s.frame()
+    }
+    await s.cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: b.x + 100, y: b.y, button: 'left', buttons: 0, clickCount: 1 })
+    await settle(s.p)
+    // 按创建顺序认:先笔后鼠标。P3 的手掌平移过画布,不比绝对坐标,比笔画自身的位移
+    const [penEl, mouseEl] = (await freedraws(s.p)).slice(before)
+    const span = penEl ? { x: penEl.points[penEl.points.length - 1][0] - penEl.points[0][0], y: penEl.points[penEl.points.length - 1][1] - penEl.points[0][1] } : null
+    const want = { x: end.x - start.x, y: end.y - start.y }
+    out.P4 = {
+      ok: !!penEl && near(span, want) && !!mouseEl && mouseEl.points.length >= 8,
+      detail: `笔那一笔位移 ${span ? `(${span.x.toFixed(1)},${span.y.toFixed(1)})` : '无'} 应为 (${want.x},${want.y})` +
+        `;鼠标那一笔 ${mouseEl ? mouseEl.points.length + ' 个点' : '没画出来'}`,
     }
   }
   return out
