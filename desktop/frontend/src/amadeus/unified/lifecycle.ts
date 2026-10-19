@@ -179,9 +179,18 @@ export function insertFilesForPath(path: string, files: File[]): boolean {
  *  to = 挪去的新路径(kind='prefix' 时是新的目录前缀):交给实例保全未落盘的字(见 UnifiedPipeHandle.retire)。 */
 export function retireUnifiedPath(path: string, kind: 'file' | 'prefix' = 'file', to?: string | null): void {
   for (const h of handles) {
-    if (kind === 'file' ? h.path !== path : h.path !== path && !h.path.startsWith(`${path}/`)) continue
+    if (!pathHit(h.path, path, kind)) continue
     h.retire(to ? (kind === 'file' ? to : to + h.path.slice(path.length)) : undefined)
   }
+}
+
+/** 按路径认实例 / 标签一律过它:Windows 上 listPages 原样给 `\`(树里的行就用它),主进程挪动 / 改名回的却是 `/` ——
+ *  同一篇两种写法,只比字面的话挪过一次的笔记再拖,就认不出开着它的编辑器:不按住、不退休、标签不跟(2026-10-19 Windows
+ *  e2e:notemove 拖回那步红)。kind='prefix' 含子树。 */
+export function pathHit(p: string, from: string, kind: 'file' | 'prefix' = 'file'): boolean {
+  const a = p.replace(/\\/g, '/')
+  const b = from.replace(/\\/g, '/')
+  return a === b || (kind === 'prefix' && a.startsWith(`${b}/`))
 }
 
 /** 挪动 / 改名的 IPC 在途时按住 path 上(kind='prefix' 含子树)的实例(2026-10-19 e2e:notemove 偶发红):主进程挪完
@@ -190,7 +199,7 @@ export function retireUnifiedPath(path: string, kind: 'file' | 'prefix' = 'file'
  *  返回放手函数,to = 挪成了的新路径(没挪成给 null)。必须在 remapScopePaths **之前** await:新路径的实例一挂载就读盘。
  *  句柄在按住时取好:期间关掉标签的实例照样放手、照样交接。同篇多开逐个放手,后一个并进前一个写下的版本。 */
 export async function holdUnifiedPath(path: string, kind: 'file' | 'prefix' = 'file'): Promise<(to: string | null) => Promise<void>> {
-  const hs = [...handles].filter((h) => h.hold && h.release && (h.path === path || (kind === 'prefix' && h.path.startsWith(`${path}/`))))
+  const hs = [...handles].filter((h) => h.hold && h.release && pathHit(h.path, path, kind))
   await Promise.all(hs.map((h) => h.hold!().catch(() => {})))
   return async (to) => {
     for (const h of hs) await h.release!(to == null ? undefined : kind === 'file' ? to : to + h.path.slice(path.length), kind === 'prefix').catch(() => {})

@@ -17,7 +17,7 @@ import {
 import { useApp } from './stores/appStore'
 import { useVisualTheme as useTheme } from './stores/themeStore'
 import { activePageScope, cascadeFdAfterRename, claimTitleFocus, disposePageScope, flushAllScopes, MAIN_SCOPE, onNotePathGone, pageStoreFor, PageScopeCtx, remapScopePaths, setActivePageScope, trashVaultFiles, useActivePageScope, usePageScope, usePageStore, useScopedPageStore } from '@amadeus/store/pageStore'
-import { retireUnifiedPath, insertFilesForPath, unifiedInsertMarkdown } from '@amadeus/unified/lifecycle'
+import { retireUnifiedPath, insertFilesForPath, pathHit, unifiedInsertMarkdown } from '@amadeus/unified/lifecycle'
 import { treeRefBlocks } from '@amadeus/unified/treeRefDrop'
 import { canExportPdf, canRevealInFileManager } from '@amadeus/lib/hostCaps'
 import { noteOwnership } from '@amadeus/lib/noteOwnership'
@@ -2612,7 +2612,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
   useEffect(() => {
     if (!notePath) return
     return onNotePathGone((from, kind, to) => {
-      const dead = (x: string): boolean => (kind === 'file' ? x === from : x === from || x.startsWith(`${from}/`))
+      const dead = (x: string): boolean => pathHit(x, from, kind)
       if (!dead(notePath)) return
       if (to) { // 挪走/改名:同 remap 规则算出本篇的新路径
         leaf.setParams({ ...leaf.params, notePath: kind === 'file' ? to : to + notePath.slice(from.length) })

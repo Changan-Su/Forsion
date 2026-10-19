@@ -207,7 +207,7 @@ async function main() {
     const disk1 = await until(() => read('目标夹/带图.md'), (v) => v === want1, 15_000)
     check('3 ⚠️ 挪过去的那篇:引用改成从新位置指回去,挪动途中打的字也在', disk1 === want1, JSON.stringify(disk1))
     check('3b ⚠️ 库里没有冲突副本(途中的字没落进原文件夹的副本里)', conflicts().length === 0, JSON.stringify(conflicts()))
-    check('4 ⚠️ 编辑器里的图还是原来那张(不是裂图,也不是目标夹里同路径的 2×2)', drag.img && drag.img.w === 1, JSON.stringify(drag.img))
+    check('4 ⚠️ 编辑器换到了新路径,图还是原来那张(不是裂图,也不是目标夹里同路径的 2×2)', drag.img && drag.img.w === 1 && drag.img.ref.startsWith('目标夹/'), JSON.stringify(drag.img))
 
     // ── 3 换到新路径之后接着打字:不许把引用改回去 ────────────────────────────
     await caretAtLine()
@@ -223,7 +223,8 @@ async function main() {
     const disk3 = await until(() => read('来源夹/带图.md'), (v) => v === want3, 15_000)
     check('6 拖回原文件夹:引用回到原来的写法,途中打的字也在', disk3 === want3,
       JSON.stringify({ disk3, typedMs: dragBack.typedMs, switchedMs: dragBack.switchedMs }))
-    check('6b 图照样显示得出', dragBack.img && dragBack.img.w === 1, JSON.stringify(dragBack.img))
+    // 换到了原文件夹才算(10-19 Windows:树里的 `\` 路径认不出按 `/` 登记的标签,编辑器一直停在目标夹,只看宽度照样过)
+    check('6b 编辑器换回了原文件夹,图照样显示得出', dragBack.img && dragBack.img.w === 1 && dragBack.img.ref.startsWith('来源夹/'), JSON.stringify(dragBack.img))
     check('6c 库里没有冲突副本、目标夹里没留下这篇', conflicts().length === 0 && read('目标夹/带图.md') == null, JSON.stringify(conflicts()))
 
     await win.screenshot({ path: shot })

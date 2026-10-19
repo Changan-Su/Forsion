@@ -25,7 +25,7 @@ import { resolveFileLink, resolveFileName, resolveVaultPath } from '../lib/vault
 import { makeUndoStack, type Snap } from '../lib/undoHistory'
 import { useUiStore } from './uiStore'
 import { awaitTypingQuiet, installTypingGuard, noteLocalEdit } from './typingGuard'
-import { flushUnifiedScopes, holdUnifiedPath, retireUnifiedPath, unifiedPatchFm } from '../unified/lifecycle'
+import { flushUnifiedScopes, holdUnifiedPath, pathHit, retireUnifiedPath, unifiedPatchFm } from '../unified/lifecycle'
 import { remapNotePageStylePrefix, remapNoteViewMemory } from '../unified/viewMemory'
 import { track } from '../../achievements/store'
 import { act } from '../../activity/log'
@@ -1750,7 +1750,7 @@ export function remapScopePaths(oldP: string, newP: string, kind: 'file' | 'pref
     if (kind === 'file') remapNoteViewMemory(root, oldP, newP)
     else remapNotePageStylePrefix(root, oldP, newP)
   }
-  const hit = (a: string): boolean => (kind === 'file' ? a === oldP : a === oldP || a.startsWith(`${oldP}/`))
+  const hit = (a: string): boolean => pathHit(a, oldP, kind)
   const to = (a: string): string => (kind === 'file' ? newP : newP + a.slice(oldP.length))
   for (const s of stores.values()) {
     const st = s.getState()

@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { useWorkspace } from '@lcl/engine'
 import { onNotePathGone, usePageStore } from '@amadeus/store/pageStore'
+import { pathHit } from '@amadeus/unified/lifecycle'
 
 /** 各文件类视图认领文件的参数名(见 features/amadeus.tsx 的 registerView idParam)。 */
 const PATH_PARAM: Record<string, string> = {
@@ -30,7 +31,7 @@ export function installLeafPathFollow(): void {
   if (installed) return
   installed = true
   onNotePathGone((from, kind, to) => {
-    const dead = (p: string): boolean => (kind === 'file' ? p === from : p === from || p.startsWith(`${from}/`))
+    const dead = (p: string): boolean => pathHit(p, from, kind)
     useWorkspace.getState().remapLeaves((type, params) => {
       const key = PATH_PARAM[type]
       const path = key ? params[key] : undefined
@@ -48,7 +49,7 @@ export function useFollowPathGone(leafId: string, key: string, path: string): vo
   useEffect(() => {
     if (!path) return
     return onNotePathGone((from, kind, to) => {
-      if (!(kind === 'file' ? path === from : path === from || path.startsWith(`${from}/`))) return
+      if (!pathHit(path, from, kind)) return
       const ws = useWorkspace.getState()
       const leaf = ws.leafById(leafId)
       if (!leaf) return
