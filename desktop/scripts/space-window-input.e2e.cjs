@@ -211,7 +211,11 @@ async function main() {
           check(`${scale}: Escape outside ${x < 0 ? 'left' : 'right'} edge opens no window`, satellites().length === 0)
         }
         await slot.locator('.rb-btn').click()
-        check(`${scale}: ordinary click still switches the Space`, await win.evaluate(() => localStorage.getItem('forsion_tangu_active_space')) === 'agents')
+        // A Ribbon click switches through a View Transition (lcl/engine/spaceTransition.ts): the switch runs in the
+        // transition callback on the next rendered frame, ~100-300ms on the Windows runner. Also wait for the transition
+        // to settle: while it runs every hit lands on <html>, so the next real-pointer gesture would miss the Ribbon.
+        const switched = await win.waitForFunction(() => localStorage.getItem('forsion_tangu_active_space') === 'agents' && !document.documentElement.dataset.spaceSwitch, null, { timeout: 5000 }).then(() => true, () => false)
+        check(`${scale}: ordinary click still switches the Space`, switched)
         const firstSlot = await win.locator('.rb-top .rb-slot').first().boundingBox()
         await begin(); await win.mouse.move(firstSlot.x + firstSlot.width / 2, firstSlot.y + firstSlot.height / 2, { steps: 12 }); await win.mouse.up()
         await win.waitForTimeout(250)
