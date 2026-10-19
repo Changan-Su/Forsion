@@ -311,6 +311,10 @@ export interface PluginAppApi extends BlockSurfaceApi {
    *  `progress` 0–1,`null` = 收起。只按整百分比画,高频调用没关系;别的插件的 Space / 内置 Space → false。
    *  插件停用时宿主自己收掉。旧宿主没有:`ctx.app.setSpaceProgress?.(…)`。 */
   setSpaceProgress?(spaceId: string, progress: number | null): boolean
+  /** Ribbon 上**你自己带的** Space 图标挂一个提示红点(2026-10-19+,服务器管理:有没看过的反馈):`true` 挂、`false` 收。
+   *  和收件箱未读角标同一种红;和进度环同时有时只画红点。别的插件的 Space / 内置 Space → false。
+   *  插件停用时宿主自己收掉。旧宿主没有:`ctx.app.setSpaceDot?.(…)`。 */
+  setSpaceDot?(spaceId: string, on: boolean): boolean
 }
 
 /** 插件契约自己的检索结果 DTO(**刻意不复用宿主内部的 SearchHit**:内部结构以后要改,不该牵动插件 API)。 */
