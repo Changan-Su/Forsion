@@ -33,8 +33,9 @@ async function claimHomeView(win) {
   return true
 }
 
-/** 此刻看得见的主页是谁画的:'plugin' / 'builtin' / null(没有主页)。插件版会先短暂露出内置那份(插件异步装载),所以等一会儿再判。 */
-async function homeBody(win, timeout = 15_000) {
+/** 此刻看得见的主页是谁画的:'plugin' / 'builtin' / null(没有主页)。插件版会先短暂露出内置那份(插件异步装载),所以等一会儿再判。
+ *  want = 等它变成哪一份(停用插件后等它换回内置就传 'builtin')。 */
+async function homeBody(win, timeout = 15_000, want = 'plugin') {
   const read = () => win.evaluate(() => {
     const root = [...document.querySelectorAll('.hp-root')].find((e) => e.getBoundingClientRect().width > 0)
     if (!root) return null
@@ -43,7 +44,7 @@ async function homeBody(win, timeout = 15_000) {
   if (!DIR) return read()
   const until = Date.now() + timeout
   let body = await read()
-  while (body !== 'plugin' && Date.now() < until) { await win.waitForTimeout(250); body = await read() }
+  while (body !== want && Date.now() < until) { await win.waitForTimeout(250); body = await read() }
   return body
 }
 
