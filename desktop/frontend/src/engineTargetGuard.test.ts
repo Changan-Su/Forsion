@@ -65,6 +65,7 @@ export const RULES: Rule[] = [
       || rel === 'desktop/frontend/src/components/SettingsModal.tsx' // 外部连接表单 / 重启后刚读到的主进程配置
       || rel === 'desktop/frontend/src/components/OnboardingWizard.tsx' // 引导里刚从主进程读到的配置(还没进 store)
       || rel === 'desktop/frontend/src/amadeus/plugins/pluginStore.ts' // waitBackend() 现取(与 appStore 有 import 环)
+      || rel === 'desktop/frontend/src/amadeus/plugins/toolResultCards.ts' // 同 pluginStore:waitBackend() 现取,冷启动时 store 里还没这份配置
       || rel === 'desktop/frontend/src/tanguProbe.ts', // 同上
   },
 ]

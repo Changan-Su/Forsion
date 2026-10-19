@@ -1518,6 +1518,8 @@ export const useApp = create<AppState>((set, get) => ({
         })
         noteAgentWriteEnd(String(pl.id), !pl.isError) // 归属账本:成功 → 宽限期;失败 → 立即撤销(不是写类工具的 id 查不到,无操作)
         if (!pl.isError) get().deskAutoShow(sessionId, String(pl.id)) // 成功:磁盘真身顶格(覆盖直播格)
+        // 插件结果卡片声明落点 desk 的:直播到达这一刻进 Desk 一次(按需加载:卡片模块拉着插件宿主,store 不静态引它)
+        if (!pl.isError && !pl.parked) void import('../components/PluginToolCard').then((m) => m.placeLiveToolCard(sessionId, String(pl.id))).catch(() => {})
         get().deskLiveClear(sessionId, String(pl.id)) // 失败/未切换成功的直播格残留在此清场(成功路径上是 no-op)
         break
       }

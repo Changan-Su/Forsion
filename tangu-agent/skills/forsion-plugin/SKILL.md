@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.55.0
+  version: 1.56.0
   author: Forsion
   category: Forsion
 ---
@@ -310,6 +310,7 @@ ctx.registerView({ id: 'home', title: 'Muse', mount(el) {
 | `registerFileType` | 自定义 `.x.md` 文件类型;`override: true` 可接管内置的 `.pdf` | 撞内置后缀返回 **`false`** → 整体退让(判定写 `=== false`) |
 | `registerFileCreator` | 文件树右键 + 新建标签页启动器 | 与文件类型配套;**四条新建路径都要注册**,少一条用户就会问「为什么这儿没有」 |
 | `registerEmbedRenderer` | `![[x]]` 嵌入的自绘渲染 | |
+| `registerToolResultRenderer` | 对话里**你自己引擎半身注册的工具**跑完后的结果卡片(可直接进 Agent Desk) | 2026-10-19 起;别家插件的、核心的工具认领不了;老宿主没有 → `ctx.registerToolResultRenderer?.(…)`。见下「Tool result cards」 |
 | `registerSetting` | 详情页声明式表单(number/boolean/text) | 每键一个字符串,**没有原子性**;同 key 重注册即覆盖 |
 | `ctx.ui.mountMarkdownEditor` | 视图内原生 Amadeus Markdown 编辑器 | 正文归调用方(API 草稿等),**不碰笔记库**;保存前 `getValue()`;`modes: false` 不画「编辑 / 源码 / 预览」那一排;老宿主没有 → 可选链 |
 | `ctx.ui.mountFloatingToc` | 视图内原生悬浮目录 | 插件保有正文 DOM,宿主负责扫描 / 滚动高亮 / 跳转 / 主题;老宿主没有 → 可选链 |
@@ -999,6 +1000,50 @@ model is not shown. Rows show each item's `title` and `hint` with its `iconUrl`,
 Agents use `list_intelligent_cards` then an `app-card` block in `intelligent_ui`. Rendering does
 not read records into model context, save links, analyze videos, or create tasks. Keep those
 operations in existing domain tools/skills. Old hosts ignore the optional declaration.
+
+### Tool result cards: ctx.registerToolResultRenderer (2026-10-19+)
+
+A bundle whose engine half registers tools can give each tool a native result card in the chat, drawn by your
+desktop half in the host's DOM (not an iframe), instead of the generic one-line tool record:
+
+```js
+ctx.registerToolResultRenderer?.({
+  tool: 'make_chart',             // exactly the name your engine half registered
+  title: () => (ctx.getLocale?.() === 'en' ? 'Chart' : '图表'),   // card / placeholder / Desk capsule name; default = tool name
+  surface: 'inline',              // default; 'desk' = straight into the Agent Desk (see below)
+  mount(el, call) {
+    // call: { id, tool, args (parsed JSON), result (text the model saw), surface, state, quote }
+    const view = drawChart(el, call.args, call.state.get())
+    view.onZoom((z) => call.state.set({ zoom: z }))
+    view.onPick((label) => call.quote(label))
+    return () => view.destroy()
+  },
+})
+```
+
+- **Ownership**: the host only hands you calls of a tool that one of your bundle's engine plugins
+  (`tangu-plugins/<id>/`) has registered right now, and that no core tool or other plugin also registers. A core tool (`write_file`…), another plugin's tool, or any tool
+  while the engine list is not known yet stays a generic record. A market install whose engine half gets a
+  `market_…` alias name does not match its plain tool name: ship engine + desktop halves in one bundle.
+- **When the card shows**: only for finished, successful calls. While the call runs, when it failed (`isError`),
+  while it waits for approval, when your `mount` throws, and while your plugin is disabled or reloading, the generic
+  record shows. Disabling the plugin unmounts every card (your cleanup runs). History works: the host matches by
+  tool name, so reopened conversations get the cards too.
+- **What you get**: data plus two narrow actions. No file writes, no sending messages: changes go through your own
+  commands or engine tools. `call.quote(text)` attaches a quote card above the chat input (same as selecting reply
+  text and pressing Quote); the person decides whether to send it. `result` is what the model saw, so put the
+  structured data your card needs into the tool result itself.
+- **Surfaces and moving**: `inline` cards sit in the reply where the call happened, with an "Open in Desk" button.
+  `surface: 'desk'` cards go straight into the Agent Desk (half width) when the result arrives live, leaving a
+  placeholder in the chat (name, plugin name, "Showing in Desk", "Back to chat"); the Desk capsule's ⋯ has "Move back
+  to chat". Every move remounts you in the new place after cleaning up the old one, with `call.surface` telling
+  you which: keep view state (scroll, zoom, selection) in `call.state` (in memory, keyed by call id) and restore it
+  on mount. Where there is no Desk (phone, Desk turned off, a window too narrow to show it) everything is inline.
+- **Styling**: the host draws the frame and the header (`title · plugin name`); draw only the content, with theme
+  tokens (`var(--text)`, `--text-muted`, `--border`, `--accent-ink`, `--ui-font-body`…). No fixed colors, no own
+  frame or shadow. In the Desk you get the whole pane: size to the element, not to a fixed width.
+- **Not this**: pages from external MCP servers (`ui://` in a sandboxed iframe) are a later, separate step; an
+  Intelligent UI HTML card is drawn by the model's own built-in tool, not something you register.
 
 ### 前置条件:onboarding.requires(2026-09-21 起)
 

@@ -357,6 +357,7 @@
     "e2e:canvaslive": "node scripts/canvas-live.e2e.cjs",
     "e2e:attachment-clipboard": "node scripts/attachment-clipboard.e2e.cjs",
     "e2e:seams": "node scripts/plugin-seams.e2e.cjs",
+    "e2e:toolcard": "node scripts/tool-result-card.e2e.cjs",
     "check:imgsel": "node scripts/image-select.check.cjs",
     "check:coldrag": "node scripts/e2e-editor.cjs --check=columns-realdrag",
     "check:topdrag": "node scripts/e2e-editor.cjs --check=toplevel-realdrag",

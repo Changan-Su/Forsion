@@ -139,6 +139,7 @@
       "desktop/frontend/src/components/MuseView.tsx",
       "desktop/frontend/src/components/OnboardingWizard.tsx",
       "desktop/frontend/src/components/PluginLogo.tsx",
+      "desktop/frontend/src/components/PluginToolCard.tsx",
       "desktop/frontend/src/components/ProjectSelector.tsx",
       "desktop/frontend/src/components/RemoveDialog.tsx",
       "desktop/frontend/src/components/ResetCardCeremony.tsx",
