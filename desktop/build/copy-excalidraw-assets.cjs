@@ -53,6 +53,38 @@ const SRC = {
   'excalidraw.css': path.join(pkgDir, 'dist', 'prod', 'index.css'),
 }
 const FONTS = path.join(pkgDir, 'dist', 'prod', 'fonts')
+
+/** 手写笔补丁:往引擎里插三个钩子,逻辑在 frontend/src/amadeus/blocks/excalidraw/penInput.ts(为什么见那里)。
+ *  按**压缩后的原文**逐字匹配(变量名是这一版构建的),每处必须恰好命中一次,否则构建直接失败 ——
+ *  升级 fork 后先看上游是不是已经修了;没修就照新构建的原文重写这三条。改补丁要把 PEN_PATCH 加一,
+ *  老副本才会被重拷(幂等戳带着它)。 */
+const PEN_PATCH = 1
+const PEN_HOOK = 'globalThis.__forsionPenInput'
+const PEN_PATCHES = [
+  // 钩子 1:画布按下的最开头 —— 要赶在 maybeCleanupAfterMissingPointerUp 收掉正在画的那一笔之前。`ve` = 引擎的手势表
+  [
+    'M(this,"handleCanvasPointerDown",t=>{',
+    `M(this,"handleCanvasPointerDown",t=>{if(${PEN_HOOK}?.down(t,this.state,ve))return;`,
+  ],
+  // 钩子 2:按下后建拖动监听。`l` = pointerDownState,`t` = 这次按下的事件
+  [
+    'let c=this.onPointerMoveFromPointerDownHandler(l),C=this.onPointerUpFromPointerDownHandler(l),',
+    `let[c,C]=(${PEN_HOOK}?.wrap??((a,b)=>[a,b]))(this.onPointerMoveFromPointerDownHandler(l),this.onPointerUpFromPointerDownHandler(l),l,t,this.state),`,
+  ],
+  // 钩子 3:自由画笔每帧追加点。`t` = pointerDownState,`He` = viewportCoordsToSceneCoords
+  [
+    'if(c.type==="freedraw"){let C=c.points,B=i.x-c.x,d=i.y-c.y,E=C.length>0&&C[C.length-1];if(!(E&&E[0]===B&&E[1]===d)){let p=this.state.currentStrokeOptions,u=c.simulatePressure?c.pressures:[...c.pressures,p?.constantPressure?1:o.pressure];this.scene.mutateElement(c,{points:[...C,k(B,d)],pressures:u},{informMutation:!1,isDragging:!1}),this.setState({newElement:c})}}',
+    `if(c.type==="freedraw"){let __fp=${PEN_HOOK}?.freedraw(c,t,this.state,He);if(__fp!==void 0)__fp&&(this.scene.mutateElement(c,__fp,{informMutation:!1,isDragging:!1}),this.setState({newElement:c}));else{let C=c.points,B=i.x-c.x,d=i.y-c.y,E=C.length>0&&C[C.length-1];if(!(E&&E[0]===B&&E[1]===d)){let p=this.state.currentStrokeOptions,u=c.simulatePressure?c.pressures:[...c.pressures,p?.constantPressure?1:o.pressure];this.scene.mutateElement(c,{points:[...C,k(B,d)],pressures:u},{informMutation:!1,isDragging:!1}),this.setState({newElement:c})}}}`,
+  ],
+]
+function patchEngine(src) {
+  for (const [from, to] of PEN_PATCHES) {
+    const n = src.split(from).length - 1
+    if (n !== 1) throw new Error(`[excalidraw-assets] 手写笔补丁点命中 ${n} 次(应为 1):${from.slice(0, 60)}…  fork 版本变了?见 PEN_PATCHES 的注释`)
+    src = src.replace(from, () => to)
+  }
+  return `${src}\n;globalThis.__forsionPenPatch=${PEN_PATCH};\n`
+}
 const nonEmpty = (p) => {
   try {
     return fs.statSync(p).size > 0
@@ -65,7 +97,7 @@ const nonEmpty = (p) => {
 // 留下一个「装过了但白板 404」的坑(而 404 要到用户点开画板才暴露)。
 const complete = Object.keys(SRC).every((f) => nonEmpty(path.join(outDir, f))) && fs.existsSync(path.join(outDir, 'fonts'))
 try {
-  if (complete && fs.readFileSync(stamp, 'utf8') === version) process.exit(0)
+  if (complete && fs.readFileSync(stamp, 'utf8') === `${version}+pen${PEN_PATCH}`) process.exit(0)
 } catch {
   /* 无戳 / 读不动 → 重拷 */
 }
@@ -80,6 +112,7 @@ if (!fs.existsSync(FONTS)) throw new Error(`[excalidraw-assets] 字体目录缺�
 fs.rmSync(outDir, { recursive: true, force: true })
 fs.mkdirSync(outDir, { recursive: true })
 fs.cpSync(FONTS, path.join(outDir, 'fonts'), { recursive: true })
-for (const [name, src] of Object.entries(SRC)) fs.copyFileSync(src, path.join(outDir, name))
-fs.writeFileSync(stamp, version)
+fs.copyFileSync(SRC['excalidraw.css'], path.join(outDir, 'excalidraw.css'))
+fs.writeFileSync(path.join(outDir, 'excalidraw.js'), patchEngine(fs.readFileSync(SRC['excalidraw.js'], 'utf8')))
+fs.writeFileSync(stamp, `${version}+pen${PEN_PATCH}`)
 console.log('[excalidraw-assets] engine + fonts', version, '->', outDir)

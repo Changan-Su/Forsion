@@ -8,7 +8,7 @@
   "main": "out/main/main.js",
   "scripts": {
     "postinstall": "node build/link-lcl.cjs && node build/copy-excalidraw-assets.cjs && node build/gen-fonts.cjs && node build/fix-pty-helper.cjs",
-    "predev": "node scripts/dev-version.check.cjs",
+    "predev": "node scripts/dev-version.check.cjs && node build/copy-excalidraw-assets.cjs",
     "dev": "electron-vite dev --noSandbox",
     "check:marketplace-upgrade": "node scripts/marketplace-upgrade.e2e.cjs",
     "check:visualize": "node scripts/visualize.check.cjs",
@@ -233,6 +233,7 @@
     "check:miniauto": "node scripts/mini-auto.check.cjs",
     "check:board": "node scripts/board-paper.check.cjs",
     "check:boardlive": "node scripts/e2e-editor.cjs --check=board-live",
+    "check:boardpen": "node scripts/e2e-editor.cjs --check=board-pen",
     "check:boardview": "node scripts/board-view.electron.cjs",
     "check:scrollbar": "node scripts/scrollbar-overlay.check.cjs",
     "check:callout": "node scripts/callout-fold.check.cjs",
