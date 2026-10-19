@@ -74,6 +74,7 @@ import { AttachmentTile } from '../../components/AttachmentTile'
 import { UserFold } from './UserFold'
 export type { TaskLanding }
 import './chat2.css'
+import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 const isImageAtt = (a: { mimeType?: string; data?: string }): boolean => !!a.mimeType?.startsWith('image/') && !!a.data
 

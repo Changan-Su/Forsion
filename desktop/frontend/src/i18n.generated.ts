@@ -7,18 +7,6 @@
 import { registerMessages } from "./i18n"
 
 registerMessages({
-  "input.cloudModelHint": {
-    "zh": "云端会话在云端执行，仅可用 Forsion 托管模型；直连 provider 的模型只在本地会话可选。",
-    "en": "Cloud sessions run in the cloud and can only use Forsion-hosted models; direct-provider models are available in local sessions only."
-  },
-  "app.planArchived": {
-    "zh": "计划已存档：{file}",
-    "en": "Plan archived: {file}"
-  },
-  "app.eventStreamInterrupted": {
-    "zh": "事件流中断",
-    "en": "Event stream interrupted"
-  },
   "app.sessionListLoadFail": {
     "zh": "会话列表加载失败：{e}",
     "en": "Failed to load session list: {e}"
@@ -31,10 +19,6 @@ registerMessages({
     "zh": "托管后端已退出",
     "en": "Managed backend has exited"
   },
-  "app.historyLoadFail": {
-    "zh": "历史加载失败：{e}",
-    "en": "Failed to load history: {e}"
-  },
   "app.defaultWorkspace": {
     "zh": "Tangu 默认项目",
     "en": "Tangu default project"
@@ -43,45 +27,9 @@ registerMessages({
     "zh": "Cloud 项目",
     "en": "Cloud project"
   },
-  "app.workspace": {
-    "zh": "工作区",
-    "en": "Workspace"
-  },
-  "app.createSessionFail": {
-    "zh": "新建失败：{e}",
-    "en": "Failed to create: {e}"
-  },
   "app.renameFail": {
     "zh": "重命名失败：{e}",
     "en": "Failed to rename: {e}"
-  },
-  "app.operationFail": {
-    "zh": "操作失败：{e}",
-    "en": "Operation failed: {e}"
-  },
-  "app.deleteFail": {
-    "zh": "删除失败：{e}",
-    "en": "Failed to delete: {e}"
-  },
-  "app.cannotCreateSession": {
-    "zh": "无法创建会话",
-    "en": "Unable to create session"
-  },
-  "app.filesUploaded": {
-    "zh": "已上传 {count} 个文件到工作区",
-    "en": "Uploaded {count} file(s) to the workspace"
-  },
-  "app.workspaceUploadFail": {
-    "zh": "工作区上传失败：{e}",
-    "en": "Workspace upload failed: {e}"
-  },
-  "app.sendFail": {
-    "zh": "发送失败：{e}",
-    "en": "Failed to send: {e}"
-  },
-  "app.modelSwitchSaveFail": {
-    "zh": "模型切换保存失败：{e}",
-    "en": "Failed to save model switch: {e}"
   },
   "app.skillEnabled": {
     "zh": "技能已启用：{id}",
@@ -98,34 +46,6 @@ registerMessages({
   "sidebar.unread": {
     "zh": "有新回复",
     "en": "New reply"
-  },
-  "sidebar.newChatIn": {
-    "zh": "在「{name}」新建会话",
-    "en": "New chat in \"{name}\""
-  },
-  "sidebar.addLocalWorkspace": {
-    "zh": "添加本地项目",
-    "en": "Add local project"
-  },
-  "sidebar.archived": {
-    "zh": "已归档",
-    "en": "Archived"
-  },
-  "sidebar.rename": {
-    "zh": "重命名",
-    "en": "Rename"
-  },
-  "sidebar.unarchive": {
-    "zh": "取消归档",
-    "en": "Unarchive"
-  },
-  "sidebar.archive": {
-    "zh": "归档",
-    "en": "Archive"
-  },
-  "sidebar.delete": {
-    "zh": "删除",
-    "en": "Delete"
   },
   "input.approval.readonly": {
     "zh": "询问我批准",
@@ -195,34 +115,6 @@ registerMessages({
     "zh": "Max",
     "en": "Max"
   },
-  "input.slash.thinkSet": {
-    "zh": "思考档位已设为「{level}」（模型不支持时自动降档）",
-    "en": "Thinking effort set to {level} (auto-clamped if the model can't do it)"
-  },
-  "input.slash.thinkUsage": {
-    "zh": "用法：/think {levels}",
-    "en": "Usage: /think {levels}"
-  },
-  "input.slash.status": {
-    "zh": "本会话",
-    "en": "This session"
-  },
-  "input.slash.copied": {
-    "zh": "已复制上一条回复",
-    "en": "Copied the last reply"
-  },
-  "input.slash.nothingToCopy": {
-    "zh": "没有可复制的回复",
-    "en": "No reply to copy"
-  },
-  "input.slash.nothingToRetry": {
-    "zh": "没有可重试的消息",
-    "en": "No message to retry"
-  },
-  "input.slash.nothingToExport": {
-    "zh": "本会话还没有内容可导出",
-    "en": "Nothing to export in this session yet"
-  },
   "input.slash.planOff": {
     "zh": "关闭计划模式",
     "en": "Turn off plan mode"
@@ -230,14 +122,6 @@ registerMessages({
   "input.slash.planOn": {
     "zh": "开启计划模式（只读调研 → 提交计划求批准）",
     "en": "Turn on plan mode (read-only research → submit plan for approval)"
-  },
-  "input.slash.thinkDesc": {
-    "zh": "思考档位设为「{level}」",
-    "en": "Set thinking effort to {level}"
-  },
-  "input.slash.current": {
-    "zh": "（当前）",
-    "en": " (current)"
   },
   "input.slash.model": {
     "zh": "选择本会话模型…",
@@ -259,69 +143,13 @@ registerMessages({
     "zh": "停用技能 {name}",
     "en": "Disable skill {name}"
   },
-  "input.directPrefix": {
-    "zh": "直连·",
-    "en": "Direct · "
-  },
-  "input.tooLong": {
-    "zh": "消息过长（{len} 字符，上限 {max}）——大段材料请保存为文件，让 Agent 用工具按需读取，整段粘贴会按轮数翻倍烧 token。",
-    "en": "Message too long ({len} chars, limit {max}) — save large material as a file and let the agent read it on demand with tools; pasting it inline burns tokens multiplied by the number of turns."
-  },
-  "input.skip.notImage": {
-    "zh": "{name}（非图片）",
-    "en": "{name} (not an image)"
-  },
-  "input.skip.tooBig": {
-    "zh": "{name}（超 {mb}MB）",
-    "en": "{name} (over {mb}MB)"
-  },
-  "input.skip.imageHint": {
-    "zh": "已跳过：{items}。图片随消息发给模型；其他文件可直接拖进输入框（发送后进工作区）。",
-    "en": "Skipped: {items}. Images are sent to the model with the message; other files can be dragged into the input box (they go to the workspace after sending)."
-  },
-  "input.skip.simple": {
-    "zh": "已跳过：{items}",
-    "en": "Skipped: {items}"
-  },
-  "input.planMode": {
-    "zh": "计划模式",
-    "en": "Plan mode"
-  },
-  "input.normal": {
-    "zh": "常规",
-    "en": "Normal"
-  },
   "input.selectModel": {
     "zh": "选择模型",
     "en": "Select model"
   },
-  "input.remove": {
-    "zh": "移除",
-    "en": "Remove"
-  },
   "input.wsUploadTitle": {
     "zh": "发送后上传到工作区：{name}",
     "en": "Uploaded to workspace after sending: {name}"
-  },
-  "input.toWorkspace": {
-    "zh": "→工作区",
-    "en": "→ workspace"
-  },
-  "input.placeholderDisabled": {
-    "zh": "先在设置里连接后端…",
-    "en": "Connect a backend in settings first…"
-  },
-  "input.placeholder": {
-    "zh": "输入消息，输入 / 唤起技能（Enter 发送，Shift+Enter 换行）",
-    "en": "Type a message, type / to invoke skills (Enter to send, Shift+Enter for a new line)"
-  },
-  "input.placeholderTouch": {
-    "zh": "输入消息，输入 / 唤起技能",
-    "en": "Type a message, type / to invoke skills"
-  },
-  "input.addContent": {
-    "zh": "添加内容",
-    "en": "Add content"
   },
   "input.addImage": {
     "zh": "添加图片",
@@ -335,105 +163,13 @@ registerMessages({
     "zh": "语音输入即将上线",
     "en": "Voice input coming soon"
   },
-  "input.micStart": {
-    "zh": "语音输入（点击开始录音）",
-    "en": "Voice input (click to record)"
-  },
-  "input.micStop": {
-    "zh": "停止并转写",
-    "en": "Stop & transcribe"
-  },
-  "input.micBusy": {
-    "zh": "转写中…",
-    "en": "Transcribing…"
-  },
   "input.micListening": {
     "zh": "聆听中",
     "en": "Listening"
   },
-  "input.stop": {
-    "zh": "停止",
-    "en": "Stop"
-  },
-  "input.slash.verifyUsage": {
-    "zh": "用法：/verify <命令>（收尾前自动跑，不绿不许收）· /verify off 关闭 · 当前：{current}",
-    "en": "Usage: /verify <command> (runs before the turn may end; must pass) · /verify off to clear · current: {current}"
-  },
-  "input.slash.verifyNone": {
-    "zh": "未配置",
-    "en": "not set"
-  },
-  "input.slash.verifySet": {
-    "zh": "验证命令已设：{cmd}（收尾前自动跑）",
-    "en": "Verify command set: {cmd} (runs before each turn ends)"
-  },
-  "input.slash.verifyCleared": {
-    "zh": "验证命令已关闭",
-    "en": "Verify command cleared"
-  },
-  "input.steer.waiting": {
-    "zh": "插话等待区",
-    "en": "Queued messages"
-  },
-  "input.steer.hint": {
-    "zh": "等 Agent 到达可读取点后插入 · ↑ 取回编辑",
-    "en": "Delivered at the next boundary · ↑ to recall"
-  },
-  "input.steer.now": {
-    "zh": "立即插话",
-    "en": "Interrupt & send"
-  },
-  "input.steer.remove": {
-    "zh": "撤回（仍可在 ↑ 历史里找到）",
-    "en": "Remove (still in ↑ history)"
-  },
-  "plan.autoKickoff": {
-    "zh": "计划已批准，开始执行。",
-    "en": "The plan is approved — proceed with it now."
-  },
-  "msg.interrupted": {
-    "zh": "已在此处打断",
-    "en": "Interrupted here"
-  },
   "input.send": {
     "zh": "发送",
     "en": "Send"
-  },
-  "input.modeChipTitle": {
-    "zh": "模式：计划模式（只读调研→提交计划）与审批档（host）",
-    "en": "Mode: plan mode (read-only research → submit plan) and approval level (host)"
-  },
-  "input.planModeOn": {
-    "zh": "计划模式·已开",
-    "en": "Plan mode · On"
-  },
-  "input.planModeEnable": {
-    "zh": "开启计划模式",
-    "en": "Turn on plan mode"
-  },
-  "input.approvalSection": {
-    "zh": "Tangu 的操作如何批准？",
-    "en": "How should Tangu actions be approved?"
-  },
-  "input.approval.readonlyDesc": {
-    "zh": "改文件、跑命令前都先问我",
-    "en": "Asks before editing files or running commands"
-  },
-  "input.approval.autoEditDesc": {
-    "zh": "工作区内可直接改文件，跑命令、写工作区外才问我",
-    "en": "Edits files in the workspace freely; asks before running commands or writing outside it"
-  },
-  "input.approval.fullAutoDesc": {
-    "zh": "不受限地访问网络和你电脑上的任何文件",
-    "en": "Unrestricted access to the internet and any file on your computer"
-  },
-  "input.approval.custom": {
-    "zh": "自定义（config.json）",
-    "en": "Custom (config.json)"
-  },
-  "input.approval.customDesc": {
-    "zh": "按 config.json 的 approval 段（allow / ask / deny）判定",
-    "en": "Uses permissions defined in config.json"
   },
   "input.modelChipTitle": {
     "zh": "本会话模型与思考档位",
@@ -442,26 +178,6 @@ registerMessages({
   "input.thinkingSection": {
     "zh": "思考档位",
     "en": "Thinking effort"
-  },
-  "chat.emptyTitle": {
-    "zh": "纸上得来终觉浅，绝知此事要躬行。",
-    "en": "What's learned on paper stays shallow; true knowing comes from doing."
-  },
-  "chat.emptyHint": {
-    "zh": "输入一句话，让 Tangu 开始干活。",
-    "en": "Type a message to put Tangu to work."
-  },
-  "chat.thinking": {
-    "zh": "思考中",
-    "en": "Thinking"
-  },
-  "chat.aborted": {
-    "zh": "已停止。",
-    "en": "Stopped."
-  },
-  "chat.jumpToBottom": {
-    "zh": "跳到底部",
-    "en": "Jump to bottom"
   },
   "header.sidebar": {
     "zh": "侧栏",
@@ -502,18 +218,6 @@ registerMessages({
   "panel.tab.workspace": {
     "zh": "工作区",
     "en": "Workspace"
-  },
-  "panel.files.noLocalWs": {
-    "zh": "暂无本地项目。添加本地项目后，其文件夹内容会显示在这里。",
-    "en": "No local projects yet. Add one and its folder contents appear here."
-  },
-  "panel.files.refresh": {
-    "zh": "刷新",
-    "en": "Refresh"
-  },
-  "panel.files.empty": {
-    "zh": "（空文件夹）",
-    "en": "(empty)"
   },
   "panel.tab.toc": {
     "zh": "目录",
@@ -1591,74 +1295,6 @@ registerMessages({
     "zh": "开始使用",
     "en": "Get started"
   },
-  "approval.requestExec": {
-    "zh": "{name} 请求执行",
-    "en": "{name} requests execution"
-  },
-  "approval.statusApproved": {
-    "zh": "· 已批准",
-    "en": "· Approved"
-  },
-  "approval.statusRejected": {
-    "zh": "· 已拒绝",
-    "en": "· Rejected"
-  },
-  "approval.statusExpired": {
-    "zh": "· 已失效",
-    "en": "· Expired"
-  },
-  "approval.approve": {
-    "zh": "批准",
-    "en": "Approve"
-  },
-  "approval.approveAlways": {
-    "zh": "本会话总是允许",
-    "en": "Always allow this session"
-  },
-  "approval.reject": {
-    "zh": "拒绝",
-    "en": "Reject"
-  },
-  "tool.argsLabel": {
-    "zh": "参数",
-    "en": "Arguments"
-  },
-  "tool.resultLabel": {
-    "zh": "结果",
-    "en": "Result"
-  },
-  "tool.empty": {
-    "zh": "（空）",
-    "en": "(empty)"
-  },
-  "inquiry.placeholderOrFree": {
-    "zh": "或自由输入…",
-    "en": "Or type freely…"
-  },
-  "inquiry.placeholderAnswer": {
-    "zh": "输入回答…",
-    "en": "Type your answer…"
-  },
-  "inquiry.answer": {
-    "zh": "回答",
-    "en": "Answer"
-  },
-  "inquiry.answered": {
-    "zh": "已回答：{answer}",
-    "en": "Answered: {answer}"
-  },
-  "inquiry.expired": {
-    "zh": "已过期（运行已结束）",
-    "en": "Expired (run has ended)"
-  },
-  "inquiry.planProposal": {
-    "zh": "计划提案",
-    "en": "Plan proposal"
-  },
-  "inquiry.todoList": {
-    "zh": "任务清单",
-    "en": "To-do list"
-  },
   "thinking.thinking": {
     "zh": "思考中…",
     "en": "Thinking…"
@@ -1667,10 +1303,6 @@ registerMessages({
     "zh": "思考过程",
     "en": "Thought process"
   },
-  "thinking.charCount": {
-    "zh": "（{count} 字）",
-    "en": "({count} chars)"
-  }
 })
 
 // ── Forsion 云连接 / Brain 同步设置(2026-06 新增;补到此处,见文件头说明)──
@@ -1695,23 +1327,6 @@ registerMessages({
 
 // ── 群聊模式(Group Chat;2026-06 新增;补到此处,见文件头说明)──
 registerMessages({
-  "group.modeLabel": { "zh": "团队 · {n} 人", "en": "Team · {n}" },
-  "group.menu.section": { "zh": "团队模式", "en": "Team mode" },
-  "group.menu.enable": { "zh": "开启团队模式…", "en": "Start team mode…" },
-  "group.menu.configured": { "zh": "团队模式 · {n} 人", "en": "Team mode · {n} members" },
-  "group.ended.vote": { "zh": "投票过半，讨论结束", "en": "Majority voted to end" },
-  "group.ended.maxRounds": { "zh": "达到轮数上限", "en": "Reached round limit" },
-  "group.ended.costLimit": { "zh": "达到成本上限", "en": "Reached cost limit" },
-  "group.ended.quota": { "zh": "额度不足", "en": "Out of quota" },
-  "group.ended.default": { "zh": "讨论结束", "en": "Discussion ended" },
-  "group.ended.line": { "zh": "团队工作结束 · 共 {rounds} 轮 · {reason}", "en": "Team run ended · {rounds} round(s) · {reason}" },
-  "group.vote.round": { "zh": "第 {round} 轮投票", "en": "Round {round} vote" },
-  "group.vote.tally": { "zh": "{end}/{total} 赞成结束", "en": "{end}/{total} to end" },
-  "group.voting.inProgress": { "zh": "正在投票…", "en": "Voting…" },
-  "input.mention.groupNote": { "zh": "团队内 Agent · 优先发言", "en": "Team agents · speak first" },
-  "input.mention.delegateNote": { "zh": "委派给 Agent · 作为 subagent 处理", "en": "Delegate to agent · runs as subagent" },
-  "group.setup.title": { "zh": "团队模式", "en": "Team mode" },
-  "group.setup.close": { "zh": "关闭", "en": "Close" },
   "group.setup.participants": { "zh": "参与者（{n} 已选）", "en": "Participants ({n} selected)" },
   "group.setup.noAgents": { "zh": "还没有 Agent。先到设置 → Agent 创建几个不同人格的 Agent。", "en": "No agents yet. Create a few in Settings → Agents first." },
   "group.setup.intensity": { "zh": "讨论强度", "en": "Discussion intensity" },
@@ -1719,16 +1334,6 @@ registerMessages({
   "group.setup.customRounds": { "zh": "自定义轮数", "en": "Custom rounds" },
   "group.setup.roundsRange": { "zh": "(1–30)", "en": "(1–30)" },
   "group.setup.scaleHint": { "zh": "最多 {rounds} 轮 × {agents} 个 Agent，每轮末投票决定是否提前结束。", "en": "Up to {rounds} rounds × {agents} agents; a vote at each round can end early." },
-  "group.setup.disable": { "zh": "退出团队模式", "en": "Exit team mode" },
-  "group.setup.update": { "zh": "更新", "en": "Update" },
-  "group.setup.start": { "zh": "开启团队模式", "en": "Start team mode" },
-  "group.setup.needTwo": { "zh": "至少选择 2 个参与者", "en": "Select at least 2 participants" },
-  "group.setup.savedAgents": { "zh": "已有 Agent", "en": "Saved agents" },
-  "group.setup.tempAgents": { "zh": "临时 Agent（仅本会话）", "en": "Temporary agents (this session only)" },
-  "group.setup.addTemp": { "zh": "新建临时 Agent", "en": "New temporary agent" },
-  "group.setup.tempBadge": { "zh": "· 临时", "en": "· temp" },
-  "group.setup.tempSave": { "zh": "添加", "en": "Add" },
-  "group.setup.tempFormHint": { "zh": "临时 Agent 字段与普通 Agent 一样，但只用于本会话、不会保存到设置 → Agent。", "en": "A temporary agent has the same fields as a normal one, but is used only in this session — not saved to Settings → Agents." },
   "group.intensity.relaxed": { "zh": "轻松", "en": "Relaxed" },
   "group.intensity.medium": { "zh": "中等", "en": "Medium" },
   "group.intensity.intense": { "zh": "激烈", "en": "Intense" },
@@ -1771,8 +1376,6 @@ registerMessages({
 registerMessages({
   "sidebar.emptyTitle": { "zh": "空侧栏", "en": "Empty sidebar" },
   "sidebar.empty": { "zh": "这个侧栏是空的，把标签页拖进来试试。", "en": "This sidebar is empty, try dragging a tab here." },
-  "input.fileref.note": { "zh": "引用笔记 / 文件 / 会话", "en": "Reference a note / file / session" },
-  "input.ref.selected": { "zh": "已选择：", "en": "Selected:" },
   "command.navBack": { "zh": "后退（本标签页）", "en": "Back (this tab)" },
   "command.navForward": { "zh": "前进（本标签页）", "en": "Forward (this tab)" },
   "view.workspace": { "zh": "工作区", "en": "Workspace" },
@@ -1789,8 +1392,6 @@ registerMessages({
 
 // ── 语音朗读 TTS(2026-07-03)──
 registerMessages({
-  "chat.action.speak": { "zh": "朗读", "en": "Read aloud" },
-  "chat.action.stopSpeak": { "zh": "停止朗读", "en": "Stop reading" },
   "settings.tts.sectionTitle": { "zh": "语音朗读（TTS）", "en": "Read aloud (TTS)" },
   "settings.tts.intro": { "zh": "把回复念出来：消息下方的朗读键和自动朗读用它，通话不用它。可以选下拉里的 Forsion 云端朗读模型（登录后可用，按字数扣积分）；也可以用自己的提供方（OpenAI 兼容 /audio/speech）：填 <providerId>/<模型>，或在提供方里声明「语音模型」后直接填模型 id。留空关闭朗读。", "en": "Reads replies aloud: used by the read-aloud button under messages and by auto-read, not by voice calls. Pick a Forsion cloud read-aloud model from the list (when signed in, charged per character), or use your own provider (OpenAI-compatible /audio/speech): enter <providerId>/<model>, or declare TTS models on a provider and use the model id directly. Leave empty to turn read-aloud off." },
   "settings.tts.model": { "zh": "朗读模型", "en": "Read-aloud model" },
@@ -1802,8 +1403,6 @@ registerMessages({
   "settings.tts.autoSpeakHint": { "zh": "仅当前打开的会话；后台会话完成不会出声。", "en": "Only the currently open session; background sessions stay silent." },
   "settings.customProvider.ttsModelsLabel": { "zh": "语音模型（逗号分隔，可空）", "en": "TTS models (comma-separated, optional)" },
   "settings.customProvider.ttsModelsPlaceholder": { "zh": "如 tts-1, FunAudioLLM/CosyVoice2-0.5B", "en": "e.g. tts-1, FunAudioLLM/CosyVoice2-0.5B" },
-  "tts.failed": { "zh": "朗读失败：{e}", "en": "Read aloud failed: {e}" },
-  "tts.noText": { "zh": "这条消息没有可朗读的文字", "en": "No speakable text in this message" },
 })
 
 // ── 百炼音色工作室:声音复刻 + 声音设计(2026-07-03)──

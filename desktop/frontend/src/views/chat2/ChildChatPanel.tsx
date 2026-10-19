@@ -12,6 +12,7 @@ import { useDeskGrip } from './AgentDesk'
 import { subChatRows } from './subChatRows'
 import { BtwPanel } from './BtwPanel'
 import './childChat.css'
+import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 registerMessages({
   'childchat.title': { zh: '子会话', en: 'Child conversation' },

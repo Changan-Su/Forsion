@@ -10,6 +10,7 @@ import type { SessionRecord, WorkspaceDescriptor } from '../../../../tangu-agent
 import { useI18n } from '../i18n'
 import { OverlayAt } from '@lcl/engine'
 import { displaySessionTitle, workspaceGroupLabel } from '../sessionTitle'
+import '../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 const PAGE = 11 // 每页会话格数(留一格给 View More)
 

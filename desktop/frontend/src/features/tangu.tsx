@@ -9,6 +9,7 @@ import { AgentsDetailSpecialView, WorkspaceDetailSpecialView } from '../views/Sp
 import { AgentsSpaceView, AgentsRosterView, TanguDetailsView } from '../views/AgentProfileView'
 import { hasNativeFeature } from './runtime'
 import { SessionTabIcon } from '../components/SessionIcon'
+import '../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 const app = () => useApp.getState()
 
 /** Activate only the Tangu package's native view contributions. */

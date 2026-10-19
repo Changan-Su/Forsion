@@ -5,6 +5,7 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import { ArrowUp, Loader2, Square } from 'lucide-react'
+import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 interface Props {
   analyser: AnalyserNode | null

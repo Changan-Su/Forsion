@@ -10,6 +10,7 @@ import { EmptyState2 } from './EmptyState2'
 import { RightPanel } from '../../components/RightPanel'
 import { registerMessages, useI18n } from '../../i18n'
 import './chat2.css'
+import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 // ⚠️ 样例数据必须在渲染期用 t() 求值:模块作用域的字面量会在模块加载时冻结,切语言不再更新。
 registerMessages({

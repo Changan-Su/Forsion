@@ -9,6 +9,7 @@ import { synthesizeToBlobUrl } from '../services/ttsService'
 import { homeTarget } from '../services/engine/targets'
 import { Markdown } from './Markdown'
 import { useI18n } from '../i18n'
+import '../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 export const VoiceBubble: React.FC<{
   text: string
