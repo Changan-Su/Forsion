@@ -21,7 +21,7 @@ import { askOriginOf, insertReplyToNote } from './chat2/insertToNote'
 import { amadeusAvailable } from '../features/runtime'
 import { resolveDeskPath } from '../stores/deskPlan'
 import { useDeskAcceptsFiles } from '../amadeus/plugins/deskCompanion'
-import { ToolCardDeskContext } from '../components/PluginToolCard'
+import { ToolCardDeskContext, toolCardDeskFor } from '../components/PluginToolCard'
 import { ErrorBoundary } from '../components/ErrorBoundary'
 import { EditorialMessage, type MessageHandlers } from './chat2/EditorialMessage'
 import { ApprovalTray } from './chat2/ApprovalTray'
@@ -530,15 +530,13 @@ export function ChatView({ leaf, params }: ViewProps) {
   // Desk 收不收文件(与 store 写入口、引用条同一判据):always 伴随面生效时 Desk 只演伴随面,点开文件一律走新标签页。
   const deskTakesFiles = useDeskAcceptsFiles(deskEnabled)
   const deskQuote = useCallback((text: string) => setQuoteDraft((prev) => quoteAdded(prev, quoteSid, text)), [quoteSid])
-  // 插件结果卡片的 Desk 落点只在 Desk 真看得见时成立(不然对话里只剩一张占位卡、哪儿都看不到内容):
-  // 宽度对齐 chat2.css 末尾 `@container (max-width: 759.9px) { .agent-desk { display: none } }`;子会话面板开着时
-  // 展开的 Desk 不渲染、卡片态又退场了,这时也当没有 Desk。画布 / 手机 / Desk 关着已含在 deskTakesFiles 与 canvasOn 里。
+  // 插件结果卡片的 Desk 落点只在 Desk 真看得见时成立(判定在 toolCardDeskFor;这里量聊天视图宽度,对齐 CSS 容器查询)
   const chatViewRef = useRef<HTMLDivElement>(null)
-  const [deskRoom, setDeskRoom] = useState(true)
+  const [chatViewW, setChatViewW] = useState(Infinity)
   useEffect(() => {
     const el = chatViewRef.current
     if (!el || typeof ResizeObserver === 'undefined') return
-    const ro = new ResizeObserver(([entry]) => setDeskRoom(entry.contentRect.width >= 760))
+    const ro = new ResizeObserver(([entry]) => setChatViewW(Math.round(entry.contentRect.width)))
     ro.observe(el)
     return () => ro.disconnect()
   }, [])
@@ -552,7 +550,7 @@ export function ChatView({ leaf, params }: ViewProps) {
     && !mvCfg.groupChat && !mvCfg.teamSlug && !mvCfg.teamMember && !mvCfg.soloAgentSlug && !mvCfg.soloEngineId && !mvCfg.engineId
   const [canvasPref, setCanvasPref] = useChatCanvasPref(treeRoot)
   const canvasOn = canvasAllowed && canvasPref.on
-  const toolCardDesk = deskTakesFiles && activeId && !canvasOn && deskRoom && !(childSelections[activeId] && deskOpenNow) ? activeId : null
+  const toolCardDesk = toolCardDeskFor({ sessionId: activeId, takesFiles: deskTakesFiles, canvas: canvasOn, width: chatViewW, childOpen: !!(activeId && childSelections[activeId]), deskOpen: deskOpenNow })
   // 「对话 / 画布」= 视图模式(lcl viewModes):胶囊在这一列的头行左端,⌥⌘V 切换;记忆照旧按树根
   useViewModes(leaf.id, canvasAllowed ? {
     modes: [

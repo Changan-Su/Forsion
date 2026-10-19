@@ -18,7 +18,7 @@ const { usePluginStore } = await import('../amadeus/plugins/pluginStore')
 const { setTanguProbe } = await import('../amadeus/plugins/tanguSeam')
 const { useEngineTools, cardStateHandle, __resetToolCards } = await import('../amadeus/plugins/toolResultCards')
 const { useApp } = await import('../stores/appStore')
-const { PluginToolCard, ToolCardDeskContext, placeLiveToolCard, returnToolCardToChat, __resetToolCardPlacement } = await import('./PluginToolCard')
+const { PluginToolCard, ToolCardDeskContext, placeLiveToolCard, returnToolCardToChat, toolCardDeskFor, __resetToolCardPlacement } = await import('./PluginToolCard')
 const { DeskToolCardPane } = await import('../views/chat2/DeskToolCardPane')
 type Contribution = import('../amadeus/plugins/types').ToolResultRendererContribution
 type Call = import('../amadeus/plugins/types').ToolResultCall
@@ -160,6 +160,22 @@ describe('③ 没有 Desk', () => {
     expect(host.querySelector('[data-plugin-tool-stub]')).toBeNull()
     expect(host.querySelector('[data-act="tool-card-desk"]')).toBeNull()
     expect(host.querySelector('[data-plugin-tool-card-body="inline"]')).not.toBeNull()
+  })
+})
+
+describe('③b ChatView 的 Desk 判定(toolCardDeskFor)', () => {
+  const base = { sessionId: SID, takesFiles: true, canvas: false, width: 1100, childOpen: false, deskOpen: false }
+  it('Desk 看得见才给会话 id', () => {
+    expect(toolCardDeskFor(base)).toBe(SID)
+    expect(toolCardDeskFor({ ...base, deskOpen: true })).toBe(SID)
+    expect(toolCardDeskFor({ ...base, childOpen: true }), '子会话开着、Desk 是卡片态:卡片态还在').toBe(SID)
+  })
+  it('子会话面板顶掉展开的 Desk / 窄于 760 / 画布 / Desk 收不下 / 没会话 → null(画卡片)', () => {
+    expect(toolCardDeskFor({ ...base, childOpen: true, deskOpen: true })).toBeNull()
+    expect(toolCardDeskFor({ ...base, width: 759 })).toBeNull()
+    expect(toolCardDeskFor({ ...base, canvas: true })).toBeNull()
+    expect(toolCardDeskFor({ ...base, takesFiles: false })).toBeNull()
+    expect(toolCardDeskFor({ ...base, sessionId: null })).toBeNull()
   })
 })
 

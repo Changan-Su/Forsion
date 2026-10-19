@@ -35,6 +35,13 @@ registerMessages({
  *  子会话面板顶掉了展开的 Desk)→ null,一律画卡片。ChatView 提供。 */
 export const ToolCardDeskContext = createContext<string | null>(null)
 
+/** ChatView 给 ToolCardDeskContext 的值:Desk 真看得见、收得下卡片才给会话 id。宽度阈值对齐 chat2.css 末尾
+ *  `@container (max-width: 759.9px) { .agent-desk { display: none } }`;子会话面板开着时展开的 Desk 不渲染、卡片态又因
+ *  mode=open 退场,这时也当没有 Desk(否则对话里只剩一张哪儿都看不到内容的占位卡)。 */
+export function toolCardDeskFor(o: { sessionId: string | null; takesFiles: boolean; canvas: boolean; width: number; childOpen: boolean; deskOpen: boolean }): string | null {
+  return o.sessionId && o.takesFiles && !o.canvas && o.width >= 760 && !(o.childOpen && o.deskOpen) ? o.sessionId : null
+}
+
 const QUOTE_CAP = 20_000 // 同 quoteInMainChat
 
 export const deskItemsOf = (sessionId: string): DeskItem[] => useApp.getState().deskBySession[sessionId]?.items ?? []
