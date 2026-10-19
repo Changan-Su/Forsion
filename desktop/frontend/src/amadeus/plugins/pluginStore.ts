@@ -57,6 +57,7 @@ import { loadSyncedPluginData, notePluginDataEdit, pluginDataSyncOn, pushPluginD
 import { createCalendarApi } from './pluginCalendar'
 import { createSpacesApi } from './pluginSpaces'
 import { clearSpaceProgressOf, setSpaceProgress } from '../../stores/spaceProgress'
+import { closeSpotlight, showSpotlight } from './guideSpotlight'
 import { watchAccountName } from '../../services/accountName'
 import { fetchBingWallpapers } from '../../views/homepageWallpaper'
 import { getAggDb } from '../store/dbAggregateStore'
@@ -490,6 +491,12 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
       if (!cmds.commands.some((c) => c.id === id)) return false
       cmds.run(id)
       return true
+    },
+    // 现场圈注(2026-10-19,使用指南「带我去」方案 B):同 runCommand 只给首方包;null = 收起自己的那一处。
+    spotlight: async (opts) => {
+      if (opts === null) { closeSpotlight(pluginId); return 'closed' }
+      if (!ok() || !opts || typeof opts.anchor !== 'string' || !usePluginStore.getState().plugins.find((p) => p.id === pluginId)?.locked) return 'missing'
+      return showSpotlight(pluginId, { anchor: opts.anchor, title: String(opts.title ?? ''), body: opts.body == null ? undefined : String(opts.body), step: opts.step == null ? undefined : String(opts.step) })
     },
     // Ribbon 上自己那个 Space 图标的进度环(2026-10-18,蓬洲云传文件):只认这个插件自己带的 Space;拆插件时 teardown 收掉
     setSpaceProgress: (spaceId, progress) => (ok() && typeof spaceId === 'string' ? setSpaceProgress(pluginId, spaceId, progress) : false),
@@ -2064,6 +2071,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     liveScopes.get(id)?.close()
     liveScopes.delete(id)
     clearSpaceProgressOf(id) // 停用 / 换代时 Ribbon 上别留着一个不再更新的进度环
+    closeSpotlight(id) // 圈注同理
     lastEnsure.delete(id) // 旧规则集不随重新启用被重放;再启用时插件自己 setup 里会重新 ensure
     set((s) => ({
       ...dropSlices(s, id),

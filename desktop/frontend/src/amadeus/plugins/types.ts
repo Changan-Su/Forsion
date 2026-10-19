@@ -311,6 +311,13 @@ export interface PluginAppApi extends BlockSurfaceApi {
    *  `progress` 0–1,`null` = 收起。只按整百分比画,高频调用没关系;别的插件的 Space / 内置 Space → false。
    *  插件停用时宿主自己收掉。旧宿主没有:`ctx.app.setSpaceProgress?.(…)`。 */
   setSpaceProgress?(spaceId: string, progress: number | null): boolean
+  /** 在真界面上圈出一处(2026-10-19+,使用指南的「带我去」):宿主在 `[data-guide-anchor="<anchor>"]` 上画圈 + 一张小卡
+   *  (`step` 小字 / `title` / `body` / 「不再提示」「知道了」),不压暗、不拦点击,同一时刻只有一处。只对首方内置包生效。
+   *  锚点名是宿主定的一张表(ribbon-spaces / chat-composer / note-new / note-body / note-canvas / agent-new);目标在收着的
+   *  侧栏里会先替用户展开那一栏。resolve:`ok`(知道了 / Esc)、`mute`(不再提示 —— 插件自己记下别再圈)、`gone`(目标消失,
+   *  多半是用户点它走了)、`missing`(不认识的锚点 / 等 2 秒仍不在屏幕上 / 非首方)、`replaced`(被下一次圈注顶掉)、
+   *  `closed`(传 `null` 收起)。旧宿主没有:`ctx.app.spotlight?.(…)`,没有就照老做法。 */
+  spotlight?(opts: { anchor: string; title: string; body?: string; step?: string } | null): Promise<'ok' | 'mute' | 'gone' | 'missing' | 'replaced' | 'closed'>
 }
 
 /** 插件契约自己的检索结果 DTO(**刻意不复用宿主内部的 SearchHit**:内部结构以后要改,不该牵动插件 API)。 */

@@ -36,7 +36,7 @@ export function CanvasModeSeg({ on, toggle }: { on: boolean; toggle: () => void 
       <button type="button" role="tab" aria-selected={!on} className={on ? '' : 'on'}
         onMouseDown={(e) => e.preventDefault()}
         onClick={() => { if (on) toggle() }}>{t('canvasseg.doc')}</button>
-      <button type="button" role="tab" aria-selected={on} className={on ? 'on' : ''}
+      <button type="button" role="tab" aria-selected={on} className={on ? 'on' : ''} data-guide-anchor="note-canvas"
         onMouseDown={(e) => e.preventDefault()}
         onClick={() => { if (!on) toggle() }}>{t('canvasseg.canvas')}</button>
     </div>

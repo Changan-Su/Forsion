@@ -1754,7 +1754,7 @@ export const Composer2: React.FC<{
           </div>
         )}
         {approvalTray}
-        <ChatBoxSurface ref={cardRef} className={`${phoneCard ? 't2c-card--phone' : ''}${dragOver ? ' dragover' : ''}`}>
+        <ChatBoxSurface ref={cardRef} data-guide-anchor="chat-composer" className={`${phoneCard ? 't2c-card--phone' : ''}${dragOver ? ' dragover' : ''}`}>
           {advisory}
           {hint && <div className="t2c-hint">{hint}</div>}
           {quotes.length > 0 && (

@@ -996,7 +996,7 @@ export function Ribbon() {
         {/* 滑动框(滚轮翻看的平滑动画):整区条目排成一列,框只露 n 格高,列按窗口起点 translateY,过渡 0.2s。
             窗外的是等高空占位 .rb-cell(不是 .rb-slot:拖拽量槽、台架按 .rb-slot 认「露出的格子」都不受影响),
             只在滑动中(手势 + 吸附)临时画出图标(inert:滑动中也别让 Tab 落进去,Codex 评审)。 */}
-        <div className="rb-strip" style={{ height: Math.max(0, part.shown.length * slotH - GAP) }}>
+        <div className="rb-strip" data-guide-anchor={zone === 'top' ? 'ribbon-spaces' : undefined} style={{ height: Math.max(0, part.shown.length * slotH - GAP) }}>
           <div ref={(el) => { stripRefs.current[zone] = el }} className="rb-strip-in" style={part.start ? { transform: `translateY(${-part.start * slotH}px)` } : undefined}>
             {(zone === 'top' ? topE : botE).map((en, k) => {
               const i = k - part.start

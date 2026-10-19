@@ -3343,6 +3343,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         <div
           ref={bodyRef}
           className={`page-view unified-body${canvasOn ? ' amx-canvas' : ''}${fullCanvas ? ' amx-canvas-full' : ''}`}
+          data-guide-anchor={canvasOn || readOnly ? undefined : 'note-body'}
           style={mode === 'source' ? { display: 'none' } : undefined}
           aria-hidden={mode === 'source' || undefined}
           data-bare
