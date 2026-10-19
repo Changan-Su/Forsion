@@ -2,6 +2,8 @@
 // What's new 弹窗的真机检查:隔离 home 起已构建的桌面端(先 npm run build),走两条入口并截图。
 //   ① 设置(独立浮窗)→ 关于 →「What's new」→ 弹在主窗,官网文章加载出来;点一个历史版本切换正文。
 //   ② 主进程广播「有新版本」→ 自动弹出;点「跳过这个版本」后同一版本再广播不再弹。
+//   ③ 下载来源(10-19):底栏小字随状态变(从哪儿下 / 自动换源 / mac 点过下载安装包);设置 → 关于「下载来源」写进 config.json。
+//      dev 构建跑不了真的检查 / 下载(unsupported),主进程那半由 electron/updater.test.ts 管,这里只验渲染层接线。
 // 跑:node ../../.claude/hooks/devlock.cjs run --vehicle=e2e --what="whats-new" --eta=3 -- node scripts/whats-new.check.cjs
 // 截图写到 OUT(缺省 /tmp/whats-new-check)。需要能上 forsion.net(连不上时正文退回 CHANGELOG,第 ① 步会报出来)。
 const fs = require('fs'); const os = require('os'); const path = require('path')
@@ -77,6 +79,39 @@ async function main() {
       ok(!(await win.$('.wn-modal')), '「跳过这个版本」关闭弹窗')
       await announce('9.9.9'); await win.waitForTimeout(1200)
       ok(!(await win.$('.wn-modal')), '跳过的版本再广播不再弹')
+    }
+
+    // ③ 下载来源:底栏小字 + 设置里的「下载来源」
+    const send = (st) => app.evaluate(({ BrowserWindow }, x) => { for (const w of BrowserWindow.getAllWindows()) w.webContents.send('updater:status', x) }, st)
+    const caption = () => win.evaluate(() => document.querySelector('.wn-foot .upd-src')?.textContent || '')
+    await send({ phase: 'available', version: '9.9.8', releaseNotes: '- 演示', source: 'github', size: 447947415 })
+    await win.waitForSelector('.wn-modal', { timeout: 8000 }); await win.waitForTimeout(400)
+    ok((await caption()) === '从 GitHub 下载 · 427 MB', `有新版:小字写来源和大小(${await caption()})`)
+    await send({ phase: 'downloading', version: '9.9.8', releaseNotes: '- 演示', percent: 7, source: 'github', fallbackFrom: 'website', transferred: 31 * 1048576, total: 447947415, canSwitch: true })
+    await win.waitForTimeout(300)
+    ok((await caption()) === '官网下不动，已改从 GitHub 重新下 · 31 MB / 427 MB换官网', `自动换源:小字 + 「换官网」(${await caption()})`)
+    await win.screenshot({ path: path.join(OUT, '5-source-fallback.png') })
+    await send({ phase: 'available', version: '9.9.8', releaseNotes: '- 演示', source: 'website', size: 509163663, opened: true })
+    await win.waitForTimeout(300)
+    const foot = await win.evaluate(() => [...document.querySelectorAll('.wn-foot button')].map((b) => b.textContent.trim()))
+    ok((await caption()).startsWith('安装包在浏览器里下载') && !foot.includes('跳过这个版本') && foot.includes('关闭'), `mac 点过下载安装包:只剩说明和关闭(${foot.join(' / ')})`)
+    await win.keyboard.press('Escape'); await win.waitForTimeout(300)
+    const before3 = new Set(app.windows())
+    await win.click('.rb-btn[aria-label="设置"]'); await win.waitForTimeout(2500)
+    const sw3 = app.windows().find((w) => !before3.has(w)) || app.windows().find((w) => w !== win)
+    if (sw3) {
+      await sw3.evaluate(() => { const el = [...document.querySelectorAll('button, a, li, div')].reverse().find((e) => e.textContent.trim() === '关于' && e.children.length < 3); el?.click() })
+      const row = await sw3.waitForSelector('[data-testid="about-update-source"]', { timeout: 10_000 }).then(() => true).catch(() => false)
+      ok(row, '设置 → 关于有「下载来源」')
+      if (row) {
+        const active = await sw3.evaluate(() => document.querySelector('[data-testid="about-update-source"] .seg button.active')?.textContent)
+        ok(active === '自动', `缺省是「自动」(${active})`)
+        await sw3.click('[data-testid="about-update-source"] .seg button:has-text("GitHub")'); await sw3.waitForTimeout(800)
+        const cfg = JSON.parse(fs.readFileSync(path.join(home, 'config.json'), 'utf8'))
+        ok(cfg?.updater?.source === 'github', `选 GitHub 写进 config.json(${JSON.stringify(cfg?.updater)})`)
+        await sw3.evaluate(() => document.querySelector('[data-testid="about-update-source"]')?.scrollIntoView({ block: 'center' })); await sw3.waitForTimeout(300)
+        await sw3.screenshot({ path: path.join(OUT, '6-settings-source.png') })
+      }
     }
   } finally { await app.close() }
   console.log(fails.length ? `\n✗ ${fails.length} 项失败` : `\n✓ 全部通过;截图在 ${OUT}`)

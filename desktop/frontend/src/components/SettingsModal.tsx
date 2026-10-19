@@ -54,7 +54,7 @@ import { ThemePreview } from './ThemePreview'
 import { RemoteSyncSection } from './RemoteSyncSection'
 import { APP_VERSION } from '../changelog'
 import { Markdown } from './Markdown'
-import { UpdateActions } from './UpdateActions'
+import { UpdateActions, UpdateSourceNote } from './UpdateActions'
 import { ChangelogEntries, releaseNotesFor } from '../views/ChangelogView'
 import { openWhatsNew } from './WhatsNewDialog'
 import { AsrModelChoice } from './AsrModelChoice'
@@ -446,6 +446,13 @@ export const SettingsModal: React.FC<{
   // 测试版通道(真源在主进程 config.json 的 updater.beta,这里只是它的镜像;开面板时拉一次)。
   const [betaChannel, setBetaChannel] = useState(false)
   useEffect(() => { void window.tangu?.getUpdateBeta?.().then((v) => setBetaChannel(!!v)) }, [])
+  // 下载来源(updater.source 的镜像)+ 这台电脑探出来的地区(只用来在说明里告诉用户「自动」会走哪边)。
+  const [updateSource, setUpdateSource] = useState<'auto' | 'website' | 'github'>('auto')
+  const [updateRegion, setUpdateRegion] = useState<boolean | null>(null)
+  useEffect(() => {
+    void window.tangu?.getUpdateSource?.().then((v) => setUpdateSource(v || 'auto'))
+    void window.tangu?.getUpdateRegion?.().then((v) => setUpdateRegion(v ?? null)).catch(() => {})
+  }, [])
   // 开发者模式:关于页连点版本号 10 次解锁(持久化);解锁后多出「开发者选项」tab。
   const [devMode, setDevMode] = useState<boolean>(() => {
     try { return localStorage.getItem(DEV_MODE_KEY) === '1' } catch { return false }
@@ -3799,6 +3806,7 @@ export const SettingsModal: React.FC<{
                       <button className="btn ghost sm" data-testid="about-whats-new" onClick={() => openWhatsNew()}>
                         <Sparkles size={12} /> {t('whatsNew.open')}
                       </button>
+                      <UpdateSourceNote upd={upd} />
                       <UpdateActions upd={upd} />
                     </div>
                     <CorePluginUpdates />
@@ -3815,7 +3823,7 @@ export const SettingsModal: React.FC<{
                       </div>
                     )}
                     {upd.phase === 'error' && upd.error ? (
-                      <div className="field"><div className="hint" style={{ color: 'var(--danger)' }}>{t('about.update.error', { error: upd.error })}</div></div>
+                      <div className="field"><div className="hint" style={{ color: 'var(--danger)' }}>{t('about.update.error', { error: upd.error === 'unreachable' ? t('about.update.unreachable') : upd.error })}</div></div>
                     ) : null}
                     {window.tangu?.setUpdateBeta ? (
                       <div className="field">
@@ -3832,6 +3840,32 @@ export const SettingsModal: React.FC<{
                           {t('about.update.beta')}
                         </label>
                         <div className="hint" style={{ marginTop: 4 }}>{t('about.update.betaHint')}</div>
+                      </div>
+                    ) : null}
+                    {window.tangu?.setUpdateSource ? (
+                      <div className="field" data-testid="about-update-source">
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                          <div style={{ fontWeight: 600 }}>{t('about.update.source')}</div>
+                          <span style={{ flex: 1 }} />
+                          <div className="seg" role="group" aria-label={t('about.update.source')}>
+                            {(['auto', 'website', 'github'] as const).map((v) => (
+                              <button
+                                key={v}
+                                type="button"
+                                aria-pressed={updateSource === v}
+                                className={updateSource === v ? 'active' : ''}
+                                onClick={() => {
+                                  setUpdateSource(v) // 先动 UI:落盘是异步的
+                                  void window.tangu?.setUpdateSource?.(v)
+                                }}
+                              >
+                                {t(v === 'auto' ? 'about.update.sourceAuto' : v === 'website' ? 'about.update.sourceWebsite' : 'about.update.sourceGithub')}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="hint" style={{ marginTop: 4 }}>{t('about.update.sourceHint')}</div>
+                        {updateRegion !== null && <div className="hint" style={{ marginTop: 2 }}>{t(updateRegion ? 'about.update.regionMainland' : 'about.update.regionAbroad')}</div>}
                       </div>
                     ) : null}
                     {window.tangu?.mobile ? (

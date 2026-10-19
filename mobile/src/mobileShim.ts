@@ -20,6 +20,7 @@ import { InAppBrowser, ToolbarPosition, iOSViewStyle, iOSAnimation } from '@capa
 import { registerMessages, translate } from '@/i18n'
 import { APP_VERSION } from '@/changelog'
 import { isNewer } from '../../desktop/shared/updateVersion'
+import { parseMainland, parseWebsiteInstallers, sourceOrder } from '../../desktop/shared/updateSource'
 import { clearCloudAccountCache, syncCloudAccountCache } from '@/services/cloudAccountCache'
 import { isNative, apiBase, forsionWebOrigin, getStoredToken, clearStoredToken, startNativeLogin, bindDeepLinkAuth, refreshStoredToken, clientTag } from './capacitorAuth'
 import { createUnitBridge, type ForsionUnitPlugin } from './unitBridge'
@@ -180,11 +181,12 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
   }
 
   // ── 更新检查 ──────────────────────────────────────────────────────────────
-  // 版本源两处,取更新的那一个:① Forsion 网关 `/website/config`(大陆可达,下载走 dl.forsion.net;
-  // 但要管理员在后台点过「从 GitHub 导入」才会有值,可能落后甚至为空)② GitHub releases/latest
-  // (最新,但大陆不一定连得上,且 build-android 失败时 release 里可能压根没有 APK → 必须核到资产才算数)。
+  // 口径同桌面(desktop/shared/updateSource.ts,2026-10-19 用户定):**有没有新版只看官网** `/website/config`
+  // 的安卓安装包(大陆可达,下载走 dl.forsion.net);官网答了,GitHub 上更新的也不提示。官网没答上才退回 GitHub
+  // releases/latest(build-android 失败时 release 里可能压根没有 APK → 必须核到资产才算数)。
+  // **安装包从哪儿下按地区**:中国大陆 / 查不出 → 官网;其他地区 → GitHub 同一 tag 的 APK(没有就还是官网)。
   // 全程不抛:bootstrap 用 `void checkForUpdates()`,抛出去就是 unhandledrejection(移动端 e2e 直接红)。
-  type UpdStatus = { phase: string; version?: string; error?: string }
+  type UpdStatus = { phase: string; version?: string; error?: string; source?: 'website' | 'github' }
   const updListeners = new Set<(st: UpdStatus) => void>()
   let updStatus: UpdStatus = { phase: 'idle' }
   let apkUrl = ''
@@ -212,37 +214,44 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
       return r.ok ? await r.json() : null
     } catch { return null } finally { clearTimeout(timer) }
   }
+  /** 一个 GitHub release 里的安卓本体 APK(伴随包 Hands 不算)。 */
+  const apkAsset = (rel: any): string => {
+    const asset = (rel?.assets || []).find((a: any) => /-android(-debug)?\.apk$/i.test(String(a?.name || '')) && !/hands/i.test(String(a?.name || '')))
+    return String(asset?.browser_download_url || '')
+  }
 
   let updInflight: Promise<UpdStatus> | null = null
   const runCheck = async (): Promise<UpdStatus> => {
     emitUpd({ phase: 'checking' })
     try {
       const current = await installedVersion()
-      const cands: Array<{ version: string; url: string }> = []
-      let answered = 0
+      const GH = 'https://api.github.com/repos/Changan-Su/Forsion/releases'
       // ⚠️ cloudApiBase 已含 /api,路径从 /api 之后写起(同 cloudJson 的坑)。
-      const cfg = await getJson(`${cloudApiBase}/website/config`)
-      if (cfg) {
-        answered += 1
-        const srvVer = String(cfg?.platforms?.android?.version || '').trim()
-        // 网关那份要管理员点过「从 GitHub 导入」才有值:空 = 还没导入,不是错。
-        if (srvVer) cands.push({ version: srvVer, url: `${cloudApiBase}/website/download/android` })
-      }
-      const rel = await getJson('https://api.github.com/repos/Changan-Su/Forsion/releases/latest')
-      if (rel) {
-        answered += 1
-        const ghVer = String(rel?.tag_name || '').replace(/^v/i, '').trim()
-        const asset = (rel?.assets || []).find((a: any) => /-android(-debug)?\.apk$/i.test(String(a?.name || '')))
+      const site = parseWebsiteInstallers(await getJson(`${cloudApiBase}/website/config`))
+      let version = ''
+      let url = ''
+      let source: 'website' | 'github' = 'website'
+      if (site) {
+        // 官网答了:没挂安卓包 = 没有新版可提示(不是错)。
+        version = site.android?.version || ''
+        url = `${cloudApiBase}/website/download/android`
+        if (version && isNewer(version, current) && sourceOrder('auto', parseMainland(await getJson(`${cloudApiBase}/auth/region`, 3000)))[0] === 'github') {
+          const gh = apkAsset(await getJson(`${GH}/tags/v${version}`))
+          if (gh) { url = gh; source = 'github' }
+        }
+      } else {
+        const rel = await getJson(`${GH}/latest`)
+        // **两个源都没答上**(离线 / 网关挂了 + GitHub 在大陆不可达)不能报「已是最新版」——
+        // 那会把一次失败伪装成「检查过了,没新版」,用户永远等不到提醒(Codex 09-15)。
+        if (!rel) return emitUpd({ phase: 'error', error: translate('about.update.unreachable') })
         // 没有 APK 资产 = 这个 tag 的 build-android 挂了(它不阻断发版),别报一个下不到的新版本。
-        if (ghVer && asset?.browser_download_url) cands.push({ version: ghVer, url: String(asset.browser_download_url) })
+        url = apkAsset(rel)
+        version = url ? String(rel?.tag_name || '').replace(/^v/i, '').trim() : ''
+        source = 'github'
       }
-      // **两个源都没答上**(离线 / 网关挂了 + GitHub 在大陆不可达)不能报「已是最新版」——
-      // 那会把一次失败伪装成「检查过了,没新版」,用户永远等不到提醒(Codex 09-15)。
-      if (!answered) return emitUpd({ phase: 'error', error: translate('about.update.unreachable') })
-      const best = cands.reduce<{ version: string; url: string } | null>((acc, c) => (!acc || isNewer(c.version, acc.version) ? c : acc), null)
-      if (best && isNewer(best.version, current)) {
-        apkUrl = best.url
-        return emitUpd({ phase: 'available', version: best.version })
+      if (version && isNewer(version, current)) {
+        apkUrl = url
+        return emitUpd({ phase: 'available', version, source })
       }
       return emitUpd({ phase: 'not-available' })
     } catch (e) {
