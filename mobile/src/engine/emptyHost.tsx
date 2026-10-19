@@ -12,3 +12,7 @@ export const WorkspaceHost = (): null => null
 
 /** 落点即开的拖拽发起(桌面 Dockview 专属)。移动端没有可停靠的落区,空实现即可。 */
 export const startOpenDrag = (_dt: DataTransfer | null, _spec: { type: string; params?: Record<string, unknown> }): void => {}
+
+/** 视图投进标签栏右端的空位(桌面 Dockview 专属)。移动端没有标签栏,恒 null,调用方(ViewChromePortal)就不渲染。 */
+export const useViewChromeSlot = (_leafId: string): HTMLElement | null => null
+export const VIEW_CHROME_ATTR = 'data-view-chrome'
