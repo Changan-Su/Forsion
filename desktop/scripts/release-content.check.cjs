@@ -79,6 +79,8 @@ for (const dir of resources) {
   const extensionDir = path.join(dir, 'tangu-server', 'browser-extension')
   check(fs.existsSync(path.join(extensionDir, 'manifest.json')), 'Bundled Chrome extension manifest missing')
   check(fs.existsSync(path.join(extensionDir, 'background.js')), 'Bundled Chrome extension background script missing')
+  // 扩展本体是 Forsion Clip(npm @forsion/clip):引擎只认 manifest.key 钉死的那个扩展 ID,丢了 key 就连不上
+  check(!!readJson(path.join(extensionDir, 'manifest.json')).key, 'Bundled Chrome extension has no fixed key (Tangu engine only accepts its pinned ID)')
   check(engine.version === expectedVersion, `Engine version ${engine.version} != ${expectedVersion}`)
   // 引擎的 npm 热更新:桌面与终端都经安装包里的启动器拉起引擎,由它在自带的 dist 与下载的新版之间挑。启动器或它的判定
   // 模块没进包 = 这条通道在这一版里静默不存在;验新版用的公钥编在 signingKey.js 里,必须是一把能解析的 ed25519 公钥。
