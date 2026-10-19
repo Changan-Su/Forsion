@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { AccountChangedError, AccountHttpError, createBrowserAccount } from '../../../../web/src/account'
+import { APP_VERSION } from '../changelog'
 import { authFetch } from './http'
 
 function memoryStorage() {
@@ -38,6 +39,9 @@ describe('shared browser Account', () => {
     expect(fetcher.mock.calls[0][0]).toBe('https://forsion.test/api/auth/login')
     expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body))).toEqual({ username: 'user-b', password: 'test-password' })
     expect(new Headers(fetcher.mock.calls[0][1]?.headers).has('Authorization')).toBe(false)
+    // Server activity stats group sign-ins by this tag (web shares the desktop version line).
+    expect(APP_VERSION).toMatch(/^\d+\.\d+\.\d+/)
+    expect(new Headers(fetcher.mock.calls[0][1]?.headers).get('X-Forsion-Client')).toBe(`web/${APP_VERSION}`)
     expect(fetcher.mock.calls[1][0]).toBe('https://forsion.test/api/auth/me')
     expect(status).toMatchObject({ loggedIn: true, tokenValid: true, tokenSource: 'tangu-login', userId: 'b', username: 'user-b', nickname: 'Name b', accountId: 'https://forsion.test/api::b' })
     expect(storage.getItem('forsion_token')).toBe('token-b')

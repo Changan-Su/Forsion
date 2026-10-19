@@ -95,6 +95,8 @@ describe('existing Web reuses browser Account', () => {
     await browserWindow.tangu.forsionLogout()
     expect(getToken()).toBe('')
     expect(browserLocation.replace).toHaveBeenCalledWith(expect.stringContaining('/auth?redirect='))
+    // The shared /auth page forwards ?client= as X-Forsion-Client, so the next sign-in counts as this Web version.
+    expect(new URL(browserLocation.replace.mock.calls.at(-1)?.[0], 'https://forsion.test').searchParams.get('client')).toMatch(/^web\/\d+\.\d+\.\d+/)
     expect(nativeFetch.mock.calls.at(-1)?.[0]).toBe('https://forsion.test/api/auth/logout')
   })
 
