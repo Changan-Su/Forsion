@@ -28,6 +28,7 @@ registerMessages({
   'human.evidence': { zh: '更新依据', en: 'Reason for this update' },
   'human.project': { zh: '项目协作', en: 'Project collaboration' },
   'human.agent': { zh: '长期协作', en: 'Long-term collaboration' },
+  'human.shared': { zh: '和你协作的共识', en: 'Shared with every Agent' },
   'human.inherited': { zh: '同时适用：与 {name} 的长期协作', en: 'Also applies: collaboration with {name}' },
   'human.loading': { zh: '正在读取协作说明…', en: 'Loading the collaboration handbook…' },
   'human.retry': { zh: '重试', en: 'Retry' },

@@ -16,7 +16,7 @@
  */
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
-import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { constants, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 
 export function tanguHome(): string {
   return process.env.TANGU_HOME || join(homedir(), '.tangu');
@@ -89,13 +89,32 @@ export const engineLibDir = (id: string): string => join(tanguHome(), 'engines',
 export const teamsDir = (): string => join(tanguHome(), 'teams');
 /** 默认 Agent 的 slug(承载迁移自旧全局记忆/日志;无 agentSlug 时记忆落此)。 */
 export const DEFAULT_AGENT_SLUG = 'xyra';
-/** 全局用户画像文件(所有 agent 可见,用户主改、agent 可改)。 */
+/** 人的文件夹(2026-10-20,和 agents/<slug>/ 对称):HUMAN.md 和这个人协作的共识 / AGENT.md 人写给所有 Agent 的要求 /
+ *  SOUL.md Agent 们对人的认识 / MEMORY.md 人自己记的(原 USER.md)。方案页 docs/ToBeImproved/用户资料文件夹对称方案_2026-10-19。 */
+export const humanDir = (): string => join(tanguHome(), 'human');
+/** 全局用户画像文件(旧位置;内容已迁进 human/MEMORY.md,云同步与旧版设备仍读它,两边双写)。 */
 export const userMdFile = (): string => join(tanguHome(), 'USER.md');
-/** 读全局 USER.md(不存在/读失败返回空串)。 */
+/** 人自己写的那份:human/MEMORY.md;还没迁过来时退回旧位置 USER.md。不存在 / 读失败返回空串。 */
 export function readUserMd(): string {
+  try { return readFileSync(join(humanDir(), 'MEMORY.md'), 'utf8'); } catch { return readLegacyUserMd(); }
+}
+/** 旧位置 USER.md 的原文(只给 USER.md ↔ MEMORY.md 那座桥用)。 */
+export function readLegacyUserMd(): string {
   try { return readFileSync(userMdFile(), 'utf8'); } catch { return ''; }
 }
-/** 写全局 USER.md。 */
+/** human/ 里一份的原文;缺文件 / 读失败给空串。给提示词读:不建目录、不碰修改记录。 */
+export function readHumanFile(file: string): string {
+  try { return readFileSync(join(humanDir(), file), 'utf8'); } catch { return ''; }
+}
+/** human/ 首次就位:只复制不删、幂等。human/MEMORY.md 已经在了就不动(USER.md 后来变了是 agents/humanFolder 那座桥的事)。 */
+export function ensureHumanFolder(): void {
+  mkdirSync(humanDir(), { recursive: true });
+  if (lstatSync(humanDir()).isSymbolicLink()) return; // 和 store 一样不认软链:别把画像复制到链过去的别处
+  if (existsSync(join(humanDir(), 'MEMORY.md')) || !existsSync(userMdFile())) return;
+  try { copyFileSync(userMdFile(), join(humanDir(), 'MEMORY.md'), constants.COPYFILE_EXCL); }
+  catch (e) { if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e; }
+}
+/** 写全局 USER.md(旧位置;改 human/MEMORY.md 时双写到这里,好让同步和旧版设备看到)。 */
 export function writeUserMd(content: string): void {
   mkdirSync(tanguHome(), { recursive: true });
   writeFileSync(userMdFile(), content, 'utf8');

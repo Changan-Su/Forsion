@@ -82,6 +82,9 @@ export const CLASSIFICATION = {
   'GET /agent/project-context/human': [D, 'host collaboration configuration'],
   'PUT /agent/project-context/human': [D, 'host collaboration configuration write'],
   'POST /agent/project-context/human/undo': [D, 'host collaboration configuration undo'],
+  'GET /agent/human/:file': [D, 'host human folder (HUMAN / AGENT / SOUL / MEMORY)'],
+  'PUT /agent/human/:file': [D, 'host human folder write'],
+  'POST /agent/human/:file/undo': [D, 'host human folder undo'],
 
   // ── workspace.ts ──
   'GET /agent/workspace/list': [A, 'session workspace listing'],

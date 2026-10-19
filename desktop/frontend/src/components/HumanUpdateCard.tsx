@@ -49,11 +49,12 @@ export function HumanUpdateCard({ changes, cfg, sessionId, agentName }: { change
 function HumanUpdate({ change, engine, cfg, sessionId }: { change: HumanChange; engine: EngineTarget; cfg: TanguDesktopConfig; sessionId: string }) {
   const { t } = useI18n()
   const scope = change.scope
-  const name = useApp(s => scope.kind === 'agent' ? s.agentDefs.find(a => a.slug === scope.slug)?.name || scope.slug : scope.cwd.split(/[\\/]/).filter(Boolean).at(-1))
+  const name = useApp(s => scope.kind === 'agent' ? s.agentDefs.find(a => a.slug === scope.slug)?.name || scope.slug : scope.kind === 'project' ? scope.cwd.split(/[\\/]/).filter(Boolean).at(-1) : '')
   const projectPath = useApp(s => [...s.sessions, ...s.archivedSessions].find(x => x.id === sessionId)?.project_path)
   const [doc, setDoc] = useState<HumanDocument | null>(null), [error, setError] = useState(''), [busy, setBusy] = useState(false)
-  const target: HumanTarget = change.scope.kind === 'agent' ? change.scope : { kind: 'project', sessionId }
-  const validScope = (d: HumanDocument) => d.scope.kind === scope.kind && (d.scope.kind === 'agent' && scope.kind === 'agent' ? d.scope.slug === scope.slug : d.scope.kind === 'project' && scope.kind === 'project' && d.scope.cwd === scope.cwd)
+  const target: HumanTarget = change.scope.kind === 'project' ? { kind: 'project', sessionId } : change.scope
+  const validScope = (d: HumanDocument) => d.scope.kind === scope.kind && (d.scope.kind === 'agent' && scope.kind === 'agent' ? d.scope.slug === scope.slug
+    : d.scope.kind === 'human' && scope.kind === 'human' ? d.scope.file === scope.file : d.scope.kind === 'project' && scope.kind === 'project' && d.scope.cwd === scope.cwd)
   useEffect(() => {
     let alive = true
     const refresh = () => { void getHumanDocument(engine, target).then(d => { if (alive && validScope(d)) setDoc(d) }).catch(() => {}) }
@@ -62,7 +63,8 @@ function HumanUpdate({ change, engine, cfg, sessionId }: { change: HumanChange; 
   }, [engine.key, engine.base, cfg.token, change.id, sessionId])
   const undone = !!doc?.history.some(h => h.undoOf === change.id)
   const canUndo = !!doc?.history.some(h => h.id === change.id && h.canUndo)
-  const open = (edit = false) => showDetails({ ...(change.scope.kind === 'agent' ? { kind: 'agent' as const, slug: change.scope.slug } : { kind: 'project' as const, path: projectPath || change.scope.cwd }), human: { at: Date.now(), edit, changeId: change.id } })
+  // 共识那份的去处(「我」资料页)第 3 步才有:在那之前卡片上只给撤销,不给查看 / 修改
+  const open = (edit = false) => change.scope.kind !== 'human' && showDetails({ ...(change.scope.kind === 'agent' ? { kind: 'agent' as const, slug: change.scope.slug } : { kind: 'project' as const, path: projectPath || change.scope.cwd }), human: { at: Date.now(), edit, changeId: change.id } })
   const undo = async () => {
     if (busy) return
     setBusy(true); setError('')
@@ -71,10 +73,10 @@ function HumanUpdate({ change, engine, cfg, sessionId }: { change: HumanChange; 
     finally { setBusy(false) }
   }
   return <article data-human-update={change.id}>
-    <div className="human-scope">{name} · {t(change.scope.kind === 'agent' ? 'human.agent' : 'human.project')} · <span className="human-applied">{t(undone ? 'human.undone' : 'human.applied')}</span></div>
+    <div className="human-scope">{name ? `${name} · ` : ''}{t(change.scope.kind === 'agent' ? 'human.agent' : change.scope.kind === 'human' ? 'human.shared' : 'human.project')} · <span className="human-applied">{t(undone ? 'human.undone' : 'human.applied')}</span></div>
     <p className="human-say">{change.summary}</p>
     {change.evidence && <p className="human-why">{t('human.ask.why', { text: change.evidence })}</p>}
-    <div className="human-actions"><button type="button" className="profile-text-action" onClick={() => open()}>{t('human.view')}</button><button type="button" className="profile-text-action" onClick={() => open(true)}>{t('human.revise')}</button>
+    <div className="human-actions">{change.scope.kind !== 'human' && <><button type="button" className="profile-text-action" onClick={() => open()}>{t('human.view')}</button><button type="button" className="profile-text-action" onClick={() => open(true)}>{t('human.revise')}</button></>}
       {!undone && <button type="button" className="profile-text-action" disabled={busy || !canUndo} title={!canUndo && doc ? t('human.undoConflict') : undefined} onClick={() => void undo()}><Undo2 size={12} />{t('human.undo')}</button>}
     </div>
     {error && <p className="agent-profile-error" role="alert">{error}</p>}
