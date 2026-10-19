@@ -181,7 +181,7 @@ export function sketchTurnSignalFor(message: string, visuals: VisualsPref = 'aut
   const skip = SKETCH_ACTIONABLE_SKIP_RE.test(text);
   if (!SKETCH_ACTIONABLE_RE.test(text) || skip) {
     // 改 / 查 / 讲代码的、处理现成文字的、和「继续」「好的」这种三个字以内的应答不发:它们在 agent 对话里天天出现,答案不会是一份可读的东西。
-    return nativeUi && !skip && !SKETCH_CODE_FOCUS_RE.test(text) && [...text].length >= 4 ? { kind: 'shape', section: SHAPE_NOTE } : undefined;
+    return nativeUi && !skip && !SKETCH_CODE_FOCUS_RE.test(text) && [...text].length >= 4 ? { kind: 'shape', section: computed ? SHAPE_NOTE_COMPUTED : SHAPE_NOTE } : undefined;
   }
   return {
     kind: 'actionable',
@@ -189,7 +189,7 @@ export function sketchTurnSignalFor(message: string, visuals: VisualsPref = 'aut
       '## Visual-first note for this turn\n' +
       'The answer to this request is something the user will follow, tick off or choose from (a plan or itinerary, things to prepare or buy, a pick among options, a procedure), even though they did not ask for a card. ' +
       (nativeUi
-        ? 'Default to answering with `intelligent_ui`: inputs for what they can adjust (people, days, the option picked), a checklist for things to do, bring or buy, a comparison for the options, disclosures for longer explanations. ' + VIEW_IS_THE_ANSWER
+        ? 'Default to answering with `intelligent_ui`: inputs for what they can adjust (people, days, the option picked), a checklist for things to do, bring or buy, a comparison for the options, disclosures for longer explanations. ' + (computed ? COMPUTED_SHAPES + ' ' : '') + VIEW_IS_THE_ANSWER
         : 'Default to answering with a `sketch` card built from `fs-checklist`, `fs-compare` or `fs-choice`. Keep the prose around it to a short takeaway.') +
       ' Skip the card only if the complete answer is a sentence or two, or the user wants something carried out (code or files changed, a task or calendar entry created) rather than an answer to read.',
   };
@@ -207,6 +207,9 @@ Choose the form of this answer from what the answer will contain, not from the w
 - Part of the answer is things to tick off, bring or buy, options to compare or pick among (an "A or B?" question included), a plan, schedule or procedure to follow, amounts that follow a number the user may change, or a recommendation that hinges on a preference you had to guess: answer with one \`intelligent_ui\` call that carries those parts as native blocks, with \`text\` blocks for the reasoning between them. ${VIEW_IS_THE_ANSWER}
 - The answer walks through a whole mechanism, sequence or structure, several stages or parts of it and not one detail, that is easier to see than to read: load the \`visualize\` skill if you have not, call \`sketch\` for one diagram built from its parts (\`<fs-flow>\` for a sequence or process), then explain in prose.
 A follow-up that changes one part gets a view of that part only.`;
+// 10-20 计算层 live 第 3 跑:背单词、「一步一步来」被这两段的「a checklist for things to do」带成了 v1 清单。v2 客户端多一句。
+const COMPUTED_SHAPES = 'This client renders version 2: numbers that follow values the user may change are derived values shown in stats or a table, and anything gone through one item at a time (flashcards, one step after another, quiz questions) keeps its items and position in state and moves on with set buttons.';
+const SHAPE_NOTE_COMPUTED = SHAPE_NOTE.replace('\nA follow-up that changes one part', `\n- ${COMPUTED_SHAPES}\nA follow-up that changes one part`);
 
 const SKETCH_DEFINITION: Tool = {
   type: 'function',

@@ -81,8 +81,9 @@ const V2_BLOCKS = new Set(['stats', 'table'])
 function usesVersion2(d: Record<string, unknown>): boolean {
   if (d.state !== undefined || d.derived !== undefined) return true
   const blocks = Array.isArray(d.blocks) ? d.blocks as Record<string, unknown>[] : []
-  return blocks.some(b => !!b && (V2_BLOCKS.has(b.kind as string) || (b.when as Record<string, unknown> | undefined)?.expr !== undefined
-    || (b.kind === 'actions' && Array.isArray(b.items) && b.items.some((a: Record<string, unknown>) => a?.kind === 'set'))))
+  const exprWhen = (x: unknown): boolean => !!x && typeof x === 'object' && (x as Record<string, unknown>).expr !== undefined
+  return blocks.some(b => !!b && (V2_BLOCKS.has(b.kind as string) || exprWhen(b.when)
+    || (Array.isArray(b.items) && b.items.some((a: Record<string, unknown>) => a?.kind === 'set' || exprWhen(a?.when)))))
 }
 export function validateUIDocument(raw: unknown, options: { draft?: boolean; maxVersion?: number } = {}): UIDocument {
   if (uiDocumentTooLarge(JSON.stringify(raw) || '')) fail('document', 'too large')

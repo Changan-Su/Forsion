@@ -26,7 +26,7 @@ const STYLES = new Set(['number', 'percent', 'wan', 'compact'])
 const LOOPS = new Set(['each', 'filter', 'sortBy'])
 
 // ── tokens and parsing ──
-type Tok = { k: 'num' | 'str' | 'id' | 'op' | 'end'; v: string }
+type Tok = { k: 'num' | 'str' | 'id' | 'var' | 'op' | 'end'; v: string }
 function tokenize(src: string): Tok[] {
   const out: Tok[] = []
   let i = 0
@@ -44,7 +44,7 @@ function tokenize(src: string): Tok[] {
       out.push({ k: 'str', v: s }); i = j + 1; continue
     }
     // `$name` and `name` are the same: models write `$` for every variable, not only for inputs.
-    if ((m = /^\$[A-Za-z0-9_]+/.exec(rest))) { out.push({ k: 'id', v: m[0].slice(1) }); i += m[0].length; continue }
+    if ((m = /^\$[A-Za-z0-9_]+/.exec(rest))) { out.push({ k: 'var', v: m[0].slice(1) }); i += m[0].length; continue }
     if ((m = /^[A-Za-z_][A-Za-z0-9_]*/.exec(rest))) { out.push({ k: 'id', v: m[0] }); i += m[0].length; continue }
     if ((m = /^(?:==|!=|<=|>=|&&|\|\||[-+*/%<>!?:.,()[\]{}])/.exec(rest))) { out.push({ k: 'op', v: m[0] }); i += m[0].length; continue }
     throw new Error(`unexpected "${c}"`)
@@ -96,7 +96,8 @@ function parse(src: string): Node {
   }
   const primary = (): Node => {
     const t = toks[p]
-    if (t.k === 'num') { p++; return { t: 'lit', v: Number(t.v) } }
+    if (t.k === 'num') { p++; const v = Number(t.v); if (!Number.isFinite(v)) throw new Error(`number ${t.v} is too large`); return { t: 'lit', v } }
+    if (t.k === 'var') { p++; return { t: 'name', id: t.v } } // $true is the value named true, never the keyword
     if (t.k === 'str') { p++; return { t: 'lit', v: t.v } }
     if (t.k === 'id') {
       p++
@@ -126,15 +127,32 @@ function parse(src: string): Node {
 // ── functions ──
 type Ev = (n: Node, locals?: Map<string, UIValue>) => UIValue
 type Fn = { min: number; max: number; run: (args: UIValue[], locale: 'zh' | 'en') => UIValue }
-const num = (x: UIValue): number => { if (typeof x !== 'number') throw new Error(`expected a number, got ${kind(x)}`); return x }
+const num = (x: UIValue): number => { if (typeof x !== 'number' || !Number.isFinite(x)) throw new Error(`expected a number, got ${kind(x)}`); return x }
 const list = (x: UIValue): UIValue[] => { if (!Array.isArray(x)) throw new Error(`expected a list, got ${kind(x)}`); return x }
 const nums = (args: UIValue[]): number[] => (args.length === 1 && Array.isArray(args[0]) ? args[0] : args).map(num)
 const finite = (x: number): number => { if (!Number.isFinite(x)) throw new Error('result is not a finite number'); return x }
 const kind = (x: UIValue): string => x === null ? 'null' : Array.isArray(x) ? 'list' : typeof x
 const digits = (x: UIValue | undefined, fallback: number | undefined): number | undefined => x === undefined ? fallback : Math.max(0, Math.min(6, Math.round(num(x))))
+/** Expanded size of a value: what copying, comparing or saving it costs. Lists and objects share
+ * children (each(range(1, 200), 'x', big) holds big 200 times), so this counts the expansion, cached
+ * per object, and stops counting past the limit. */
+const WEIGHTS = new WeakMap<object, number>()
+export const UI_WEIGHT_LIMIT = 20_000
+export function uiWeight(x: UIValue): number {
+  if (typeof x === 'string') return 1 + (x.length >> 5)
+  if (x === null || typeof x !== 'object') return 1
+  let w = WEIGHTS.get(x)
+  if (w === undefined) {
+    w = 1
+    for (const v of Array.isArray(x) ? x : Object.values(x)) { w += uiWeight(v); if (w > UI_WEIGHT_LIMIT) break }
+    WEIGHTS.set(x, w)
+  }
+  return w
+}
 const sized = <T extends UIValue>(x: T): T => {
   if (typeof x === 'string' && x.length > EXPR_LIMITS.text) throw new Error(`text longer than ${EXPR_LIMITS.text} characters`)
   if (Array.isArray(x) && x.length > EXPR_LIMITS.list) throw new Error(`list longer than ${EXPR_LIMITS.list} items`)
+  if (x && typeof x === 'object' && uiWeight(x) > UI_WEIGHT_LIMIT) throw new Error('value too large')
   return x
 }
 /** Trims binary noise (0.1 + 0.2) so text never shows 17 digits. */
@@ -169,7 +187,7 @@ export function formatUINumber(x: number, style: string, d: number | undefined, 
   throw new Error(`unknown format style "${style}"`)
 }
 const FNS = new Map<string, Fn>([
-  ['round', { min: 1, max: 2, run: ([x, d]) => { const k = 10 ** (digits(d, 0) ?? 0); return clean(Math.round(num(x) * k) / k) } }],
+  ['round', { min: 1, max: 2, run: ([x, d]) => { const k = 10 ** (digits(d, 0) ?? 0); return finite(clean(Math.round(num(x) * k) / k)) } }],
   ['floor', { min: 1, max: 1, run: ([x]) => Math.floor(num(x)) }],
   ['ceil', { min: 1, max: 1, run: ([x]) => Math.ceil(num(x)) }],
   ['abs', { min: 1, max: 1, run: ([x]) => Math.abs(num(x)) }],
@@ -265,13 +283,16 @@ export type ExprEnv = {
   budget: { steps: number }
 }
 export function evaluate(root: Node, env: ExprEnv): UIValue {
+  // Work proportional to a value's size (comparing, joining, summing it) is charged to the same budget.
+  const charge = (n: number): void => { if ((env.budget.steps += n) > EXPR_LIMITS.steps) throw new Error('too much computation') }
+  const weighs = (x: UIValue): number => x !== null && typeof x === 'object' ? uiWeight(x) : 0
   const ev: Ev = (n, locals) => {
-    if (++env.budget.steps > EXPR_LIMITS.steps) throw new Error('too much computation')
+    charge(1)
     switch (n.t) {
       case 'lit': return n.v
       case 'name': return locals?.has(n.id) ? locals.get(n.id)! : env.name(n.id)
       case 'list': return sized(n.items.map(x => ev(x, locals)))
-      case 'obj': return Object.fromEntries(n.entries.map(([k, x]) => [k, ev(x, locals)]))
+      case 'obj': return sized(Object.fromEntries(n.entries.map(([k, x]) => [k, ev(x, locals)])))
       case 'un': { const a = ev(n.a, locals); return n.op === '-' ? -num(a) : !truthy(a) }
       case 'cond': return truthy(ev(n.c, locals)) ? ev(n.a, locals) : ev(n.b, locals)
       case 'get': {
@@ -288,8 +309,8 @@ export function evaluate(root: Node, env: ExprEnv): UIValue {
         if (n.op === 'or') return truthy(ev(n.a, locals)) || truthy(ev(n.b, locals))
         const a = ev(n.a, locals), b = ev(n.b, locals)
         switch (n.op) {
-          case '==': return sameValue(a, b)
-          case '!=': return !sameValue(a, b)
+          case '==': charge(weighs(a) + weighs(b)); return sameValue(a, b)
+          case '!=': charge(weighs(a) + weighs(b)); return !sameValue(a, b)
           case '+':
             if (typeof a === 'number' && typeof b === 'number') return finite(a + b)
             if (Array.isArray(a) && Array.isArray(b)) return sized([...a, ...b])
@@ -316,7 +337,9 @@ export function evaluate(root: Node, env: ExprEnv): UIValue {
           if (!keys.every(k => typeof k === 'number') && !keys.every(k => typeof k === 'string')) throw new Error('sortBy keys must be all numbers or all text')
           return items.map((x, i) => [x, keys[i]] as const).sort((a, b) => a[1]! < b[1]! ? -1 : a[1]! > b[1]! ? 1 : 0).map(([x]) => x)
         }
-        return FNS.get(n.fn)!.run(n.args.map(x => ev(x, locals)), env.locale)
+        const args = n.args.map(x => ev(x, locals))
+        charge(args.reduce((w: number, a) => w + weighs(a) * (n.fn === 'includes' ? 2 : 1), 0))
+        return FNS.get(n.fn)!.run(args, env.locale)
       }
     }
   }
@@ -339,7 +362,8 @@ export function uiValueIssue(x: unknown, depth = 0): string {
 }
 
 // ── interpolation ──
-const SLOT = /\{\{([\s\S]*?)\}\}/g
+// A slot ends at the first }} outside a quoted string: {{'a}}b'}} shows a}}b.
+const SLOT = /\{\{((?:'[^']*'|"[^"]*"|[^'"}]|\}(?!\}))*)\}\}/g
 export const interpolationSources = (markdown: string): string[] => [...markdown.matchAll(SLOT)].map(m => m[1].trim())
 /** Markers a renderer swaps for computed text after parsing the markdown: private-use characters, so
  * no markdown construct (link, autolink, emphasis, table cell) can form from a computed value. Escaping
@@ -388,7 +412,8 @@ export function documentEnv(doc: Pick<UIDocument, 'inputs' | 'state' | 'derived'
     },
     slots: markdown => {
       const values: string[] = []
-      return { markdown: markdown.replace(SLOT, (_, src: string) => `\uE000${values.push(env.text(src.trim())) - 1}\uE001`), values }
+      // Markers the model wrote itself are dropped first, so only this pass's slots get filled.
+      return { markdown: markdown.replace(/[\uE000\uE001]/g, '').replace(SLOT, (_, src: string) => `\uE000${values.push(env.text(src.trim())) - 1}\uE001`), values }
     },
   }
   return env
@@ -422,7 +447,7 @@ export function applyUISteps(doc: Pick<UIDocument, 'inputs' | 'state' | 'derived
     else if ('remove' in step) { const x = value(step.value); v = items().filter(y => !sameValue(y, x)) }
     else if (step.value === undefined) { if (typeof current !== 'boolean') throw new Error(`${target} is not true/false`); v = !current }
     else { const x = value(step.value), l = items(); v = l.some(y => sameValue(y, x)) ? l.filter(y => !sameValue(y, x)) : [...l, x] }
-    const issue = uiValueIssue(v)
+    const issue = uiWeight(v) > UI_WEIGHT_LIMIT ? 'value too large' : uiValueIssue(v)
     if (issue) throw new Error(`${target}: ${issue}`)
     next.set(target, v)
   }
@@ -446,7 +471,14 @@ export function uiDocumentIssues(doc: UIDocument, locale: 'zh' | 'en' = 'en'): s
     }
   }
   const shown = (where: string, when: UIDocument['blocks'][number]['when']): boolean => !when || !('expr' in when) || probe(`${where}.when`, when.expr)
-  for (const d of doc.derived || []) if (!probe(`derived ${d.id}`, d.expr) && !env.cell(d.id).ok) failed.push(d.id)
+  // Through the name, so the memo the shown values use is filled once (a heavy derived value is not computed twice).
+  for (const d of doc.derived || []) {
+    const c = env.cell(d.id)
+    if (c.ok) continue
+    const message = c.error.replace(`${d.id}: `, '')
+    if (!failed.some(id => message.startsWith(`${id}: `))) out.push(`derived ${d.id}: ${message}`)
+    failed.push(d.id)
+  }
   for (const b of doc.blocks) {
     if (b.when && 'input' in b.when && b.when.equals !== doc.inputs.find(i => i.id === (b.when as { input: string }).input)?.initial) continue
     if (!shown(b.id, b.when)) continue

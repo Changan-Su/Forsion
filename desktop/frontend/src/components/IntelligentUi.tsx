@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -212,10 +212,17 @@ function NativeDocument({ doc, complete, live, stateKey, onAsk }: { doc: UIDocum
   }
   const expand = (id: string, expanded: boolean): void => update(s => s.expanded[id] === expanded ? s : ({ ...s, expanded: { ...s.expanded, [id]: expanded } }))
   // A computed disclosure keeps one folding entry per block: the one for the text it shows now.
+  const foldPrefix = (blockId: string): string => JSON.stringify(['disclosure', blockId]).slice(0, -1) + ','
   const fold = (blockId: string, key: string, open: boolean): void => update(s => {
     if (!!s.expanded[key] === open) return s
-    const prefix = JSON.stringify(['disclosure', blockId]).slice(0, -1) + ','
-    return { ...s, expanded: { ...Object.fromEntries(Object.entries(s.expanded).filter(([k]) => !k.startsWith(prefix))), ...(open ? { [key]: true } : {}) } }
+    return { ...s, expanded: { ...Object.fromEntries(Object.entries(s.expanded).filter(([k]) => !k.startsWith(foldPrefix(blockId)))), ...(open ? { [key]: true } : {}) } }
+  })
+  // When a computed disclosure's text changes, the entry for the old text goes too, so coming back to
+  // that text later starts folded. Filled while drawing below; read after the render commits.
+  const foldKeys = new Map<string, string>()
+  useEffect(() => {
+    const stale = Object.keys(state.expanded).filter(k => [...foldKeys].some(([id, key]) => k !== key && k.startsWith(foldPrefix(id))))
+    if (stale.length) update(s => ({ ...s, expanded: Object.fromEntries(Object.entries(s.expanded).filter(([k]) => !stale.includes(k))) }))
   })
   // Layout moves (blocks or rows appearing, tables changing length) glide; v1 only when visibility changes.
   const moves = (nextValues: Record<string, string | number>, nextVars: Map<string, UIValue>): boolean => {
@@ -296,6 +303,7 @@ function NativeDocument({ doc, complete, live, stateKey, onAsk }: { doc: UIDocum
       case 'disclosure': {
         const md = doc.version === 2 ? env.slots(block.markdown) : undefined
         const key = uiExpansionKey('disclosure', block.id, md?.values.length ? contentKey(md.values.join('\u0000')) : undefined)
+        if (md?.values.length) foldKeys.set(block.id, key)
         return <details key={key} open={!!state.expanded[key]} onToggle={e => fold(block.id, key, e.currentTarget.open)}><summary>{block.title}<ChevronDown size={16} /></summary><div className="iui-detail-content iui-prose"><RichText text={md?.markdown ?? block.markdown} values={md?.values} /></div></details>
       }
       case 'actions': return <div className="iui-actions">{block.items.map(action => action.kind === 'open'

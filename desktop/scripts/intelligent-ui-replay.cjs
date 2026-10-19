@@ -3,7 +3,7 @@
  * the wording; this is the instrument for looking at a live run with your own eyes.
  * Input: `iuiparity-evidence.json` / `iuicalc-evidence.json` from a live run (tangu-agent `--only …`).
  *   node scripts/intelligent-ui-replay.cjs <evidence.json> [--only=camp,trip] [--out=<dir>] [--dark]
- *   node scripts/intelligent-ui-replay.cjs --gallery [--only=loan,vocab] [--widths=760,375] [--modes=light,dark]
+ *   node scripts/intelligent-ui-replay.cjs --gallery [--only=loan,vocab] [--widths=auto,375] [--modes=light,dark]
  * --gallery renders the hand-written v2 gallery (scripts/fixtures/intelligent-ui-gallery.json) with no model.
  * --widths / --modes shoot each card by itself at those container widths and themes instead of the
  * whole window; index.html in the output folder lays them out, with the engine's rejections and
@@ -18,7 +18,7 @@ const arg = (name) => process.argv.find((s) => s.startsWith(`--${name}=`))?.slic
 const file = process.argv.slice(2).find((s) => !s.startsWith('--'))
 const galleryMode = process.argv.includes('--gallery')
 if (!file && !galleryMode) { console.error('usage: node scripts/intelligent-ui-replay.cjs <evidence.json> | --gallery [--only=a,b] [--out=<dir>] [--dark] [--widths=760,375] [--modes=light,dark]'); process.exit(2) }
-const widths = arg('widths')?.split(',').map(Number).filter(Boolean)
+const widths = arg('widths')?.split(',').filter(Boolean) // px, or `auto` = the card as the chat column lays it out
 const modes = arg('modes')?.split(',') || [process.argv.includes('--dark') ? 'dark' : 'light']
 /** Gallery documents as answers with one native view each. */
 const galleryRows = () => Object.entries(JSON.parse(fs.readFileSync(path.join(ROOT, 'scripts/fixtures/intelligent-ui-gallery.json'), 'utf8')))
@@ -70,11 +70,11 @@ async function main() {
         const cards = answer.locator('.intelligent-ui')
         for (let k = 0; k < await cards.count(); k++) for (const w of widths) {
           const card = cards.nth(k)
-          await card.evaluate((el, px) => { el.style.width = `${px}px`; el.scrollIntoView({ block: 'start', behavior: 'instant' }) }, w)
+          await card.evaluate((el, px) => { el.style.width = px === 'auto' ? '' : `${px}px`; el.scrollIntoView({ block: 'start', behavior: 'instant' }) }, w)
           await win.waitForTimeout(250)
           const shot = `${name}-${k + 1}-${mode}-${w}.png`
           await card.screenshot({ path: path.join(OUT, shot) })
-          shots.set(r.id, [...(shots.get(r.id) || []), { file: shot, label: `${mode} · ${w}px` }])
+          shots.set(r.id, [...(shots.get(r.id) || []), { file: shot, label: `${mode} · ${w === 'auto' ? '聊天栏宽' : `${w}px`}` }])
         }
         console.log(`SHOT ${name} ${mode} cards=${await cards.count()}`)
         continue

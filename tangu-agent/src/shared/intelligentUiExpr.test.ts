@@ -185,6 +185,30 @@ describe('Intelligent UI v2 expressions', () => {
     const table = loan(); table.blocks[3].rows = "[[1, 2, 3]]"
     expect(uiDocumentIssues(validateUIDocument(table))).toEqual(['balance.rows: row 1 has 3 cells for 2 columns'])
   })
+  it('review 10-20: shared children cannot blow up comparison, saving or the step budget', () => {
+    const derived = Array.from({ length: 32 }, (_, i) => ({ id: `a${i}`, expr: i ? `[a${i - 1}, a${i - 1}]` : '[0]' }))
+    const env = documentEnv({ inputs: [], state: [], derived }, {}, new Map(), 'en')
+    const c = env.cell('a31 == a31')
+    expect(c.ok).toBe(false)
+    expect(!c.ok && c.error).toMatch(/value too large|too much computation/)
+    const doc = { inputs: [], state: [{ id: 's', initial: 'x'.repeat(1000) }], derived: [] }
+    const grow = [{ set: 's', to: "each(range(1, 200), 'x', s)" }]
+    let vars = new Map<string, UIValue>([['s', 'x'.repeat(1000)]])
+    expect(() => { for (let i = 0; i < 3; i++) vars = applyUISteps(doc, grow, {}, vars, 'en') }).toThrow('value too large')
+  })
+  it('review 10-20: no forged slots, no infinite numbers, quoted }} in a slot, $keyword names', () => {
+    const env = documentEnv({ inputs: [{ id: 'true', kind: 'number', label: 't', initial: 5, min: 0, max: 9, step: 1 }], state: [], derived: [] }, { true: 5 }, new Map(), 'en')
+    expect(env.slots('\uE0000\uE001 {{42}}')).toEqual({ markdown: '0 \uE0000\uE001', values: ['42'] })
+    expect(env.slots("{{'a}}b'}}").values).toEqual(['a}}b'])
+    expect(env.cell('1e999').ok).toBe(false)
+    expect(env.cell('round(1e308, 6)').ok).toBe(false)
+    expect(env.text('$true + 1')).toBe('6')
+    expect(env.text('true')).toBe('true')
+  })
+  it('review 10-20: a checklist condition alone makes a version 1 document read as version 2', () => {
+    const doc = { version: 1, id: 'c', title: 'c', inputs: [], resources: [], blocks: [{ id: 'l', kind: 'checklist', items: [{ id: 'a', label: 'a', when: { expr: 'true' } }] }] }
+    expect(validateUIDocument(doc).version).toBe(2)
+  })
   it('evaluates a compiled tree directly', () => {
     const node = compileExpr('$a * 2', { inputs: new Set(['a']), names: new Set() })
     expect(evaluate(node, { name: () => 21, locale: 'en', budget: { steps: 0 } })).toBe(42)
