@@ -138,6 +138,7 @@ function startFakeCloud() {
       if (list.some((f) => f.parentId === pid && f.name === b.name && f.fileType === 'directory')) return json(409, { detail: 'Directory already exists', code: 'DIRECTORY_EXISTS' })
       const f = { id: `n${++seq}`, name: String(b.name), fileType: 'directory', fileSize: 0, updatedAt: Date.now(), parentId: pid }
       list.push(f)
+      if (process.env.PENZOR_HOLD) console.log(`[cloud] mkdir ${src} ${pid}/${f.name} → ${f.id}`)
       return json(201, { id: f.id })
     }
     if (p === '/api/files/upload' && req.method === 'POST') { // multipart:读 filename*(UTF-8)与 parentId;撞名按真 server 的「名 (1).扩展名」
@@ -162,6 +163,7 @@ function startFakeCloud() {
       const f = { id: `u${++seq}`, name, fileType: 'file', fileSize: size, updatedAt: Date.now(), parentId: pid }
       list.push(f)
       st.uploads.push({ name, size, parentId: pid, src })
+      if (process.env.PENZOR_HOLD) console.log(`[cloud] upload ${src} ${pid}/${name} ${size}B`)
       return json(201, { id: f.id, name })
     }
     if (p === '/api/files/batch/delete' && req.method === 'POST') {
