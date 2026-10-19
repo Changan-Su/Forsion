@@ -4,13 +4,15 @@
  * 钉住:
  *  ① Extend 0.9 装在 <home>/plugins/forsion-extend/(比随包新、签名可信 → 播种不碰它),Ribbon 上出现「使用指南」,点开是
  *     只读阅读页(标题栏「只读」+「···」)、左栏章节树(锁住的章节有锁)、右栏「进度 / 问 Tangu」;
- *  ② 「带我去」(写下第一篇笔记 → 新建一篇笔记):切到笔记 Space、跑现成命令、本章任务跟到右栏(伴读),新建完就地打勾;
+ *  ② 「带我去」(写下第一篇笔记 → 新建一篇笔记):切到笔记 Space、本章任务跟到右栏(伴读),**不替你按命令**,在真界面上圈住
+ *     「新建笔记」(ctx.app.spotlight,2026-10-19);真点它 → 就地打勾,圈注自己挪到正文(本章下一条),「知道了」收起;
  *  ③ Lv.1 全做完(按成就计数)→ 重启后收件箱来一封升级信,阅读面板正文下挂着 Extend 画的任务卡;
  *  ④ 有「已达成未领取」的成就 → 奖杯(或收着它的「更多」)上有红点;
- *  ⑤ 页内 forsion:// 链接在应用内路由(不绕系统)。
+ *  ⑤ 页内 forsion:// 链接在应用内路由(不绕系统);
+ *  ⑥ 锚点自检:Genesis guideSpotlight.ts 里 GUIDE_ANCHORS 的每一个名字,在真界面上都找得到(`--anchors` 只跑这一段,不要 Extend)。
  * 截图在 $SHOTS_DIR(缺省系统临时目录下 forsion-guide-space-shots/:阅读页亮 / 暗、伴读、收件箱信),交付前人眼看一遍。
  *
- * 需先 npm run build(读 out/)。用法:EXTEND_PKG=<已 build + sign 的 Forsion-Extend 检出> npm run e2e:guide
+ * 需先 npm run build(读 out/)。用法:EXTEND_PKG=<已 build + sign 的 Forsion-Extend 检出> npm run e2e:guide;只查锚点:npm run check:guide-anchors
  */
 const fs = require('fs')
 const os = require('os')
@@ -22,6 +24,7 @@ const { skipOnboarding } = require('./lib/skip-onboarding.cjs')
 const ROOT = path.join(__dirname, '..')
 const EXTEND = process.env.EXTEND_PKG
 const SHOTS = process.env.SHOTS_DIR || path.join(os.tmpdir(), 'forsion-guide-space-shots')
+const ANCHORS_ONLY = process.argv.includes('--anchors')
 const results = []
 function check(name, ok, detail) {
   results.push({ name, ok: !!ok })
@@ -83,7 +86,44 @@ async function launch(home, stubUrl) {
   return { app, win }
 }
 
+/** ⑥ 锚点名单直接从宿主源码读(GUIDE_ANCHORS),新加的锚点没进这里的路线 → 红,不会静默漏查。 */
+async function checkAnchors(win) {
+  const src = fs.readFileSync(path.join(ROOT, 'frontend/src/amadeus/plugins/guideSpotlight.ts'), 'utf8')
+  const at = src.indexOf('export const GUIDE_ANCHORS')
+  const block = src.slice(at, src.indexOf('\n}', at))
+  const names = [...block.matchAll(/'([a-z][a-z-]+)': \{/g)].map((m) => m[1])
+  const has = (n) => win.waitForFunction((x) => [...document.querySelectorAll(`[data-guide-anchor="${x}"]`)].some((e) => e.getBoundingClientRect().width > 0), n, { timeout: 8000 }).then(() => true, () => false)
+  const space = async (label) => { await win.locator(`.rb-space[aria-label^="${label}"]`).first().click().catch(() => {}); await win.waitForTimeout(1200) }
+  const seen = new Set()
+  const look = async (n) => { if (!names.includes(n)) return; seen.add(n); check(`⑥ 锚点 ${n} 在真界面上`, await has(n)) }
+  await look('ribbon-spaces')
+  await space('Tangu'); await look('chat-composer')
+  await space('笔记'); await look('note-new')
+  await win.locator('.t2s-srow').filter({ hasText: '欢迎' }).first().click().catch(() => {}); await win.waitForTimeout(1500)
+  await look('note-body'); await look('note-canvas')
+  await space('Agents'); await look('agent-new')
+  const missed = names.filter((n) => !seen.has(n))
+  check('⑥ GUIDE_ANCHORS 每个名字都在自检路线上', names.length > 0 && !missed.length, `names=${names.join(',')}${missed.length ? ` 漏查=${missed.join(',')}` : ''}`)
+}
+
 async function main() {
+  if (ANCHORS_ONLY) {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-guide-anchors-'))
+    const vault = path.join(home, 'Vault'); fs.mkdirSync(vault, { recursive: true })
+    fs.writeFileSync(path.join(vault, '欢迎.md'), '# 欢迎\n\n这是隔离台架的笔记库。\n')
+    const userData = path.join(home, 'userdata')
+    for (const d of [userData, `${userData}-dev`]) {
+      fs.mkdirSync(d, { recursive: true })
+      for (const f of ['amadeus-config.json', 'amadeus-config.dev.json']) fs.writeFileSync(path.join(d, f), JSON.stringify({ lastVault: vault, localVault: vault }, null, 2))
+    }
+    const stub = await startStubEngine({ models: [{ id: 'gpt-6-luna', name: 'GPT-6 Luna', provider: 'stub', source: 'forsion' }] })
+    for (const d of [userData, `${userData}-dev`]) fs.writeFileSync(path.join(d, 'tangu-desktop-config.json'), JSON.stringify({ mode: 'external', backendUrl: stub.url, token: 'mock' }))
+    const { app, win } = await launch(home, stub.url)
+    try { check('首启引导点掉', await skipOnboarding(win)); await win.waitForTimeout(1500); await checkAnchors(win) } finally { await app.close().catch(() => {}); stub.close?.() }
+    const failed = results.filter((r) => !r.ok)
+    console.log(`\n${results.length - failed.length}/${results.length} passed`)
+    process.exit(failed.length ? 1 : 0)
+  }
   if (!EXTEND || !fs.existsSync(path.join(EXTEND, 'spaces/guide/space.json')) || !fs.existsSync(path.join(EXTEND, 'SIGNATURE'))) {
     console.error('EXTEND_PKG 要指向一份 build + sign 过的 Forsion-Extend 检出(带 spaces/guide/space.json 和 SIGNATURE)')
     process.exit(2)
@@ -130,14 +170,33 @@ async function main() {
     // ② 带我去:写下第一篇笔记 → 新建一篇笔记
     await win.getByText('写下第一篇笔记', { exact: true }).first().click()
     await win.waitForFunction(() => /写下第一篇笔记/.test(document.querySelector('.fxg-reader .ProseMirror h1')?.textContent || ''), null, { timeout: 10_000 }).catch(() => {})
+    check('A2 阅读页导语下有示意图(三处编号)', await win.locator('.fxg-reader .fxg-figure-cap b').count() === 3)
+    await win.screenshot({ path: path.join(SHOTS, 'reader-figure.png') })
     await win.locator('.fxg-task[data-task="note-create"] .fxg-go').click()
     const companion = win.locator('.fxg-companion')
     await companion.waitFor({ timeout: 15_000 }).catch(() => {})
     check('② 伴读挂到目标 Space 的右栏', await companion.count() > 0 && await win.locator('.fxg-reader').count() === 0)
+    // 圈注:圈套住「新建笔记」(界面缩放下也对齐),卡说点它;命令没替你按
+    const ringOn = (anchor) => win.waitForFunction((a) => {
+      const ring = document.querySelector('.guide-spot-ring'), el = [...document.querySelectorAll(`[data-guide-anchor="${a}"]`)].find((e) => e.getBoundingClientRect().width > 0)
+      if (!ring || !el) return false
+      const r = ring.getBoundingClientRect(), b = el.getBoundingClientRect()
+      return r.left <= b.left && r.top <= b.top && r.right >= b.left + Math.min(b.width, 40) && r.bottom >= b.top + Math.min(b.height, 30)
+    }, anchor, { timeout: 10_000 }).then(() => true, () => false)
+    check('② 圈住了「新建笔记」', await ringOn('note-new'))
+    check('② 小卡写着第几步和要点什么', /第 1 步/.test(await win.locator('.guide-spot-step').textContent().catch(() => '')) && /新建笔记/.test(await win.locator('.guide-spot-title').textContent().catch(() => '')))
+    check('② 伴读标出正在做的这一条', await win.locator('.fxg-companion .fxg-task[data-task="note-create"].is-current').count() > 0)
+    check('② 「带我去」没替你按(笔记还没建)', await win.locator('.fxg-companion .fxg-task[data-task="note-create"].is-done').count() === 0)
+    await win.waitForTimeout(400)
+    await win.screenshot({ path: path.join(SHOTS, 'spot-new-note.png') })
+    await win.locator('[data-guide-anchor="note-new"]').first().click()
     await win.waitForFunction(() => !!document.querySelector('.fxg-companion .fxg-task[data-task="note-create"].is-done'), null, { timeout: 15_000 }).catch(() => {})
-    check('② 新建笔记后伴读就地打勾', await win.locator('.fxg-companion .fxg-task[data-task="note-create"].is-done').count() > 0)
+    check('② 真点了「新建笔记」→ 伴读就地打勾', await win.locator('.fxg-companion .fxg-task[data-task="note-create"].is-done').count() > 0)
+    check('② 圈注自己挪到正文(本章下一条)', await ringOn('note-body') && /\[\[/.test(await win.locator('.guide-spot-title').textContent().catch(() => '')))
     await win.waitForTimeout(600)
     await win.screenshot({ path: path.join(SHOTS, 'companion.png') })
+    await win.locator('.guide-spot-card .btn').click().catch(() => {})
+    check('② 「知道了」收起圈注', await win.waitForFunction(() => !document.querySelector('.guide-spot-ring'), null, { timeout: 3000 }).then(() => true, () => false))
 
     // ⑤ 页内 forsion:// 链接:插一条链接点一下,应用内切到指南 Space(不绕系统)
     const routed = await win.evaluate(async () => {
@@ -177,6 +236,8 @@ async function main() {
     await win.evaluate(() => { const r = document.documentElement; r.dataset.mode = 'dark'; r.classList.add('dark') })
     await win.waitForTimeout(800)
     await win.screenshot({ path: path.join(SHOTS, 'reader-dark.png') })
+    await win.evaluate(() => { const r = document.documentElement; r.dataset.mode = 'light'; r.classList.remove('dark') })
+    await checkAnchors(win)
   } finally {
     await app.close().catch(() => {})
     stub.close?.()
