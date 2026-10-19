@@ -13,7 +13,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, CornerDownRight, Hand, ListTree, MoveDown, MoveRight } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
-import type { UiMessage } from '../../types'
+import type { UiMessage } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { useApp } from '../../stores/appStore'
 import { registerMessages, useI18n } from '../../i18n'
 import { useChatWaitDetailsEnabled } from '../../chatWaitDetails'

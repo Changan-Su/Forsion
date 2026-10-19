@@ -17,10 +17,10 @@ import { useImageStudio } from '../../stores/imageStudioStore'
 import { usePluginChat } from '../../stores/pluginChatStore'
 import { normPath } from '../coding/studioModel'
 import { VoiceRecordingBar } from './VoiceRecordingBar'
-import { THINKING_LEVELS } from '../../types'
+import { THINKING_LEVELS } from '../../../../../tangu-agent/src/contracts/clientTypes'
 
 // context 视图已知注入段 key(与引擎 agentLoop ctxMark 调用一一对应);未知 key 显示原样
-import type { AgentConfig, Attachment, CtxInfo, DefaultModelSlot, MessageRecord, ModelInfo, ModelsResponse, NormalAgentDef, SkillInfo } from '../../types'
+import type { AgentConfig, Attachment, CtxInfo, DefaultModelSlot, MessageRecord, ModelInfo, ModelsResponse, NormalAgentDef, SkillInfo } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { nativeHaptic, nativeSheetPresenter, openNativeSheetMenu, useEdgeNudge, useNativeChromeInstalled, useWorkspace, type SheetMenuItem, type SheetMenuSection } from '@lcl/engine'
 import { ModelPill, contextRingWindow, type ModelPillGroup } from '../../components/ModelPill'
 import { UltraConfirmDialog, ultraConfirmSkipped } from './UltraConfirmDialog'

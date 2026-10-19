@@ -8,7 +8,7 @@
  */
 import { Fragment, useEffect, useRef, useState } from 'react'
 import { ChevronRight } from 'lucide-react'
-import type { CtxInfo } from '../../types'
+import type { CtxInfo } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { registerMessages, useI18n } from '../../i18n'
 import { useApp } from '../../stores/appStore'
 import { TierBadge } from '../../components/TierBadge'

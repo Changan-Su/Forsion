@@ -4,7 +4,7 @@
  */
 import React, { useState } from 'react'
 import { CircleHelp, Send, CheckSquare, Square, Loader2, Check, Pencil, Undo2, ClipboardList } from 'lucide-react'
-import type { InquiryRequest, TodoItem } from '../types'
+import type { InquiryRequest, TodoItem } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { Markdown } from './Markdown'
 import { useI18n, registerMessages } from '../i18n'
 

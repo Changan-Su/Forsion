@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from 'react'
 import { AnimatePresence } from 'framer-motion'
 import { ArrowDown, Folder, MessageCircleQuestion, MessageSquare, Quote, Waypoints } from 'lucide-react'
-import type { AgentConfig, UiMessage } from '../types'
+import type { AgentConfig, UiMessage } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { Composer2 } from './chat2/Composer2'
 import { AgentSelectStrip } from '../components/AgentSelectStrip'
 import { displaySessionTitle } from '../sessionTitle'

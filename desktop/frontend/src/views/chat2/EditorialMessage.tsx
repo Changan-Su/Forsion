@@ -12,7 +12,7 @@ import { Copy, RotateCcw, GitBranch, MessageCircleQuestion, CornerUpLeft, Pencil
 import { FileInput, Quote } from 'lucide-react'
 import { useNoteInsertState } from './insertToNote'
 import * as api from '../../services/backendService'
-import type { UiMessage, TanguDesktopConfig, AgentConfig, StoredDesktopConfig, ToolEvent, InquiryRequest, SketchItem, LiveWait } from '../../types'
+import type { UiMessage, TanguDesktopConfig, AgentConfig, StoredDesktopConfig, ToolEvent, InquiryRequest, SketchItem, LiveWait } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import type { PreviewTarget } from '../../components/WorkspaceFilePreview'
 import { Markdown } from '../../components/Markdown'
 import { ChatWikiLink, WikiText } from '../../components/ChatWikiLink'

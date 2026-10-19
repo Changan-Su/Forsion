@@ -58,6 +58,11 @@
       "desktop/frontend/src/views/teamProfileState.ts"
     ]
   },
+  "contracts": {
+    "dirs": [
+      "tangu-agent/src/contracts/"
+    ]
+  },
   "baseline": {
     "hostImports": [
       "desktop/frontend/src/features/tangu.tsx",
@@ -205,7 +210,6 @@
       "desktop/frontend/src/stores/runStats.ts",
       "desktop/frontend/src/styles/sidebar2.css",
       "desktop/frontend/src/touch.ts",
-      "desktop/frontend/src/types.ts",
       "desktop/frontend/src/views/WsFileView.tsx",
       "desktop/frontend/src/views/agentProfile.css",
       "desktop/frontend/src/views/agentProfileMessages.ts",

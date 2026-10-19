@@ -6,7 +6,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { Plus, Folder, MessagesSquare, Cloud, Pencil, Archive, ArchiveRestore, Trash2, ChevronRight, ChevronDown, Smile } from 'lucide-react'
 import { SessionIcon, SessionIconPicker } from './SessionIcon'
-import type { SessionRecord, WorkspaceDescriptor } from '../types'
+import type { SessionRecord, WorkspaceDescriptor } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { useI18n } from '../i18n'
 import { OverlayAt } from '@lcl/engine'
 import { displaySessionTitle, workspaceGroupLabel } from '../sessionTitle'
