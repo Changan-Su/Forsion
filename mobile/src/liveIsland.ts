@@ -18,7 +18,7 @@ import { useWorkspace } from '@lcl/engine'
 import { useApp } from '@/stores/appStore'
 import { registerMessages, translate } from '@/i18n'
 import { openSession } from '@/sessionNav'
-import { fmtElapsed } from '@/views/chat2/RunStatsLine'
+import { fmtElapsed } from '@tangu/ui/views/chat2/RunStatsLine'
 import { deriveIsland, lastAssistant, shadeAnswer, type IslandState } from './liveIslandDerive'
 
 /** 通知按钮送回来的一次作答(原生从按钮的意图里原样取出,全是不可信的串)。 */

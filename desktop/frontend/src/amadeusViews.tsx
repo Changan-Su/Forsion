@@ -54,7 +54,7 @@ import { printClone } from '@amadeus/lib/printClone'
 import { openManual } from './amadeusManual'
 import { isDrawingPath } from '@amadeus-shared/excalidraw/format'
 import { isDashboardPath } from '@amadeus-shared/dashboard'
-import { REF_MIME, PATHS_MIME, setChatRefDrag } from './views/chat2/chatDragRef'
+import { REF_MIME, PATHS_MIME, setChatRefDrag } from './components/chatDragRef'
 import { newTabOf, useItemSelect } from './views/itemSelect'
 import { useSearchSeed } from './amadeusPanels'
 import { askString } from '@amadeus/components/askString'
@@ -85,7 +85,7 @@ import { openCloudSyncDialog } from './components/CloudSyncDialog'
 import { track } from './achievements/store'
 import { act } from './activity/log'
 import '@amadeus/blocks' // 注册内置块类型(markdown→Milkdown);缺此 side-effect 导入则块显示「未知块类型」
-import './views/chat2/sidebar2.css' // t2s- 侧栏样式(通常已随 SessionsView 全局加载;显式引入以防独立挂载)
+import './styles/sidebar2.css' // t2s- 侧栏样式(通常已随 SessionsView 全局加载;显式引入以防独立挂载)
 import { OverlayAt, useListFirst, useNativeChromeExtras, useNativeSheetMenu, useRibbonStore, type SheetMenuItem } from '@lcl/engine'
 import { CtxMenuButtons } from './components/CtxMenuButtons'
 import { SidebarRow } from './components/SidebarRow'
@@ -96,6 +96,7 @@ import { parentOf, rowDropTarget, dropKeyOf, takesHostPaths } from './views/tree
 import { FILE_VIEW_PARAM } from './viewFileMatch'
 import { windowKind } from './windowKind'
 import { registerMessages, translate, useI18n } from './i18n'
+import { useVaultRelParam } from './views/vaultRelParam'
 
 registerMessages({
   'amxv.renameFailed': { zh: '重命名失败：{e}', en: 'Rename failed: {e}' },
@@ -1685,7 +1686,7 @@ export function AmadeusPagesView() {
           ) : (
             <>
               {!phone && <div className="t2s-special-group">
-                <button className="t2s-special" onClick={() => void ps().createPage()}>
+                <button className="t2s-special" data-guide-anchor="note-new" onClick={() => void ps().createPage()}>
                   <span className="t2s-special-ic"><SquarePen /></span>
                   <span className="t2s-special-title">{t('amadeus.new.note')}</span>
                 </button>
@@ -2398,7 +2399,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
     return (eds.find((t) => t.id === am?.id) ?? eds.find((t) => t.front) ?? eds[0])?.id === leaf.id
   })
   const facadeScope = useActivePageScope()
-  const notePath = typeof leaf.params.notePath === 'string' ? leaf.params.notePath : null
+  const notePath = useVaultRelParam(leaf, 'notePath') || null
   const prevActiveRef = useRef(false)
   // ── v4 绞杀者路由(spec §9 step 3 Phase A):先读原文按 fm 分类,素文件/外来 md/v4 →
   // UnifiedPage(统一实例),v3 标记文件 → 下面的 PageView 老路。分类必须**先于** effect ①:

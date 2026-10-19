@@ -32,7 +32,7 @@ import { track } from '../../achievements/store'
 import { usePageStore } from '../../amadeus/store/pageStore'
 import { ensureAmadeusReady } from '../../amadeusPlugins'
 import { noteRefInsert } from '../../components/wikiChat'
-import { refToText, type ChatRef } from './chatDragRef'
+import { refToText, type ChatRef } from '../../components/chatDragRef'
 import { useApp } from '../../stores/appStore'
 import { ApprovalRulesModal } from '../../components/ApprovalRulesModal'
 import { thinkingLabel } from '../../components/thinkingLabel'
@@ -1765,7 +1765,7 @@ export const Composer2: React.FC<{
           </div>
         )}
         {approvalTray}
-        <ChatBoxSurface ref={cardRef} className={`${phoneCard ? 't2c-card--phone' : ''}${dragOver ? ' dragover' : ''}`}>
+        <ChatBoxSurface ref={cardRef} data-guide-anchor="chat-composer" className={`${phoneCard ? 't2c-card--phone' : ''}${dragOver ? ' dragover' : ''}`}>
           {advisory}
           {hint && <div className="t2c-hint">{hint}</div>}
           {quotes.length > 0 && (

@@ -210,7 +210,7 @@ export function AgentsRosterView() {
       {rosterError && <p className="agent-profile-error" role="alert">{rosterError}</p>}
       {phone
         ? <ListFab label={t('agentProfile.create')} icon={<Plus />} onClick={() => { setCreating(); setRosterError('') }} />
-        : <button className="agent-profile-link agents-roster-create" onClick={() => { setCreating(); setRosterError('') }}><Plus size={14} />{t('agentProfile.create')}</button>}
+        : <button className="agent-profile-link agents-roster-create" data-guide-anchor="agent-new" onClick={() => { setCreating(); setRosterError('') }}><Plus size={14} />{t('agentProfile.create')}</button>}
       {removing && <AgentRemoveDialog agent={removing} onClose={() => setRemoving(null)}
         onDone={() => { if (agent?.slug === removing.slug) selectAgent(useApp.getState().agentDefs[0]?.slug || '') }} />}
     </aside>

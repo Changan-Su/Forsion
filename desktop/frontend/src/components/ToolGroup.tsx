@@ -96,7 +96,7 @@ export function describeTool(ev: ToolEvent): Desc {
     case 'intelligent_ui':
       return { kind: 'other', verbKey: 'tool.verb.sketched', target: 'Intelligent UI', isFile: false }
     case 'sketch':
-      return { kind: 'other', verbKey: 'tool.verb.sketched', target: String(a.title ?? '') || 'sketch', isFile: false }
+      return { kind: 'other', verbKey: 'tool.verb.sketched', target: String(a.title ?? '') || 'Intelligent UI', isFile: false }
     case 'desk_present': {
       const views = Array.isArray(a.views) ? a.views : []
       const names = views.map((v: any) => baseName(String(v?.path || ''))).filter(Boolean).join(', ')

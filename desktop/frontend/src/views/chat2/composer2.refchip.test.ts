@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { refChipOf, fileChip, folderChip, viewChip, appChip, appRefChipOf, canInline, inlineTokenOf, runChipOwners, composeOutgoing } from './Composer2'
-import { refToText, type ChatRef } from './chatDragRef'
+import { refToText, type ChatRef } from '../../components/chatDragRef'
 import { splitLeadingRefs } from './RefChipView'
 
 const VAULT = '/Users/x/vault'

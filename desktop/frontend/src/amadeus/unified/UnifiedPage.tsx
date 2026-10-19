@@ -40,7 +40,7 @@ import { wikiFilesEnabled } from '../lib/wikiFiles'
 import { usePageStore, useScopedPageStore, flushAllScopes, remapScopePaths, cascadeFdAfterRename, claimTitleFocus, PageScopeCtx, useActivePageScope, hasPageScope, activePageScope } from '../store/pageStore'
 // 模式胶囊复用 `.t2s-vaultseg`(见渲染处):样式真源是侧栏那张表。App 里 amadeusViews 已显式引过,
 // 这里再引是给**独立挂载**兜底(harness / 只挂 UnifiedPage 的场景,不引就是一排裸按钮)。
-import '../../views/chat2/sidebar2.css'
+import '../../styles/sidebar2.css'
 import { announceUnifiedWrite, registerUnifiedPipe, retireUnifiedPath, unifiedScopeLive } from './lifecycle'
 import { AlertCircle, History } from 'lucide-react'
 import { Lock as LockIcon } from 'lucide-react'
@@ -3346,6 +3346,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         <div
           ref={bodyRef}
           className={`page-view unified-body${canvasOn ? ' amx-canvas' : ''}${fullCanvas ? ' amx-canvas-full' : ''}`}
+          data-guide-anchor={canvasOn || readOnly ? undefined : 'note-body'}
           style={mode === 'source' ? { display: 'none' } : undefined}
           aria-hidden={mode === 'source' || undefined}
           data-bare

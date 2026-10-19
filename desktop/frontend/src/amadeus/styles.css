@@ -3539,7 +3539,7 @@ body.amx-marquee-active * {
   border: 1px solid var(--signal-line);
   border-radius: 50%;
 }
-/* 模式切换胶囊:**复用** `.t2s-vaultseg`(云端/本地那颗,真源在 views/chat2/sidebar2.css)。
+/* 模式切换胶囊:**复用** `.t2s-vaultseg`(云端/本地那颗,真源在 styles/sidebar2.css)。
    画在**笔记顶栏** `.amx-toolbar` 里(用户 2026-08-17 拍板:跟路径/分享/置顶同一行),
    所以这里只需要把侧栏那套尺寸压到顶栏的高度上。
    宽度由零件自己定(lcl viewModes:每格 ≥57,两格 = 118,与原来写死的一样宽;英文按最长那格放宽)。

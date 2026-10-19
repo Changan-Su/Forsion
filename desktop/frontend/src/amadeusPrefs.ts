@@ -3,6 +3,7 @@
 import { create } from 'zustand'
 import { noteOf, usePageStore } from '@amadeus/store/pageStore'
 import { setRecentsProvider } from '@amadeus/lib/recents'
+import { slashRel } from '@amadeus/lib/vaultFiles'
 
 export interface Collection { name: string; query: string }
 interface Prefs { starred: string[]; recents: string[]; collections: Collection[]; pins: string[] }
@@ -28,11 +29,14 @@ const load = (): Prefs => {
     const v = k && localStorage.getItem(k)
     if (v) {
       const p = JSON.parse(v) as Partial<Prefs>
+      // Windows 老版本存的是 `a\b.md`:读进来就换成 `/`,不然和 pages 对不上,收藏 / 置顶整列消失。
+      const root = usePageStore.getState().vaultRoot
+      const rel = (a: unknown): string[] => (Array.isArray(a) ? a.map((x) => (typeof x === 'string' ? slashRel(x, root) : x)) : [])
       return {
-        starred: Array.isArray(p.starred) ? p.starred : [],
-        recents: Array.isArray(p.recents) ? p.recents : [],
+        starred: rel(p.starred),
+        recents: rel(p.recents),
         collections: Array.isArray(p.collections) ? p.collections : [],
-        pins: Array.isArray(p.pins) ? p.pins : [],
+        pins: rel(p.pins),
       }
     }
   } catch { /* ignore */ }

@@ -80,6 +80,7 @@ export default defineConfig(({ mode }) => {
       '@lcl': resolve(__dirname, '../lcl'),
       '@amadeus-shared': resolve(__dirname, '../desktop/shared/amadeus'),
       '@amadeus': resolve(DESKTOP_SRC, 'amadeus'),
+      '@tangu/ui': DESKTOP_SRC,
       // 云端 vault 桥复用 web 的实现(零外部依赖,纯 @amadeus-shared+相对导入;alias 先例=上面的 desktop 渲染层)。
       '@webamadeus': resolve(__dirname, '../web/src/amadeus'),
       '@': DESKTOP_SRC,

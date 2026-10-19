@@ -3310,7 +3310,7 @@ const en: Dict = {
   'desk.title': 'Agent Desk',
   'desk.close': 'Close panel',
   'tool.verb.presented': 'Presented',
-  'tool.verb.sketched': 'Sketched',
+  'tool.verb.sketched': 'Drew',
   'sketch.mobileUnavailable': "This card isn't available in the mobile app (open it on desktop or web).",
   'sketch.expand': 'Expand card',
   'sketch.collapse': 'Collapse card',

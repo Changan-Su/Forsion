@@ -34,7 +34,7 @@ export function canvasModesSpec(on: boolean, toggle: () => void): ViewModesSpec 
   return {
     modes: [
       { value: 'doc', label: translate('canvasseg.doc'), icon: FileText },
-      { value: 'canvas', label: translate('canvasseg.canvas'), icon: Frame },
+      { value: 'canvas', label: translate('canvasseg.canvas'), icon: Frame, guideAnchor: 'note-canvas' },
     ],
     value: on ? 'canvas' : 'doc',
     onChange: (v) => { if ((v === 'canvas') !== on) toggle() },

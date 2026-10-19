@@ -95,6 +95,7 @@ export default defineConfig(({ mode }) => {
         '@lcl': resolve(__dirname, '../lcl'),
         '@amadeus-shared': resolve(__dirname, '../desktop/shared/amadeus'),
         '@amadeus': resolve(DESKTOP_SRC, 'amadeus'),
+        '@tangu/ui': DESKTOP_SRC,
         '@': DESKTOP_SRC,
         '@web': resolve(__dirname, 'src'),
         // 手机视口装载 Mobile 壳(mobileEntry/MobileRoot),与移动 App 同一套源码(镜像 mobile 侧

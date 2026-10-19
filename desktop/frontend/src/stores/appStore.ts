@@ -31,9 +31,9 @@ import { speakMessage, stopSpeaking, ttsState } from '../services/ttsService'
 import { recordUiAction } from '../diag'
 import { getClientSurface, notifyClientSurfaces } from '../services/clientSurfaces'
 import { windowKind } from '../windowKind'
-import { splitSuggestions } from '../views/chat2/suggest'
-import { clearSuggestion, requestSuggestion } from '../views/chat2/promptSuggest'
-import type { ChatRef } from '../views/chat2/chatDragRef'
+import { splitSuggestions } from '@tangu/ui/views/chat2/suggest'
+import { clearSuggestion, requestSuggestion } from '@tangu/ui/views/chat2/promptSuggest'
+import type { ChatRef } from '../components/chatDragRef'
 import type { PreviewTarget } from '../components/WorkspaceFilePreview'
 import { openWsFile } from '../views/wsFileNav'
 import type { SettingsTarget as SettingsTab } from '../components/SettingsModal'
@@ -1593,7 +1593,7 @@ export const useApp = create<AppState>((set, get) => ({
       }
       case 'desk_capture_request':
         if (pl.shotId) {
-          void import('../views/chat2/deskCapture').then((m) => m.answerDeskCapture(String(pl.runId || runId), sessionId, String(pl.shotId)))
+          void import('@tangu/ui/views/chat2/deskCapture').then((m) => m.answerDeskCapture(String(pl.runId || runId), sessionId, String(pl.shotId)))
         }
         break
       case 'approval_request': {

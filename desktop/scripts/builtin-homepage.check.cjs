@@ -39,6 +39,13 @@
  *     clip 之后放不下就是裁掉,所以矮窗口(1100×420,须先放开 minimumSize)下时钟/输入区/Spaces 坞必须仍在 root 内;
  *     且右键空白这个手势**双向**可用 —— 收纳层面板内右键空白必须原路退回主页。
  *
+ * 插件档(2026-10-18,主页插件化 B):HOME_PLUGIN_DIR=<Forsion-Home 检出,先 npm run build> 时主页视图芯由插件 forsion-home
+ * 接管(scripts/lib/home-plugin.cjs),同一套检查对插件版跑;另加 0 / 0b 两条:每次进主页,正文都真的是插件画的
+ * (挂不上会悄悄退回内置主页 —— 不核这一条,插件坏了整套照样绿)。
+ * 0c(插件档收尾):插件开着时停用它(storage 事件 = 设置页开关与跨窗同步走的同一条 syncDisabledPreferences 路径)→
+ *  主页不重载、当场换回内置那份,输入区还在且还能发。本台架后端是断网的(输入框 disabled),所以只在这一步接上假引擎,
+ *  判据是假引擎真的收到这句(= 发送链路走通);前提「停用前是插件画的」也算在判据里,负对照下才会红。
+ *
  * ⚠️ 量的是 out/ 里的产物,源码改了没 `npm run build` 就是白测。
  * 跑:npm run check:homepage          截图自查(亮/暗各一张):npm run check:homepage -- --shot
  * 报「启动失败」= 有 dev 版 Electron 占着单实例锁,先把它关掉(同 check:calendarplugin)。
@@ -47,12 +54,15 @@ const fs = require('fs')
 const os = require('os')
 const path = require('path')
 const electron = require('./lib/launch-electron.cjs')
+const { startStubEngine } = require('./lib/stub-engine.cjs')
+const { HOME_PLUGIN_DIR, installHomePlugin, claimHomeView, homeBody } = require('./lib/home-plugin.cjs')
 
 const ROOT = path.join(__dirname, '..')
 const APP_ROOT = process.env.FORSION_APP_ROOT || ROOT
 const SHOT = process.argv.includes('--shot')
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-homeplugin-'))
 const UD = path.join(home, 'userdata') // 同一份 user-data-dir = 同一份 localStorage,重启那程才谈得上「关着」
+installHomePlugin(home)
 const WALLPAPER_FIXTURE = path.join(home, 'homepage-wallpaper.svg')
 fs.writeFileSync(WALLPAPER_FIXTURE, `<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900">
   <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#203149"/><stop offset=".52" stop-color="#7b6f8f"/><stop offset="1" stop-color="#d4a56d"/></linearGradient></defs>
@@ -136,6 +146,10 @@ async function boot() {
   }
   await win.waitForSelector('.dv-groupview', { timeout: 30_000 })
   await win.waitForTimeout(1500)
+  if (await claimHomeView(win)) { // 插件档:写 coreTrial 后重载一次(同一份 user-data-dir 只做一次,重启那程照样认)
+    await win.waitForSelector('.dv-groupview', { timeout: 30_000 })
+    await win.waitForTimeout(1500)
+  }
   return { app, win }
 }
 
@@ -167,7 +181,13 @@ async function enterSpace(win, names, id) {
   await win.waitForTimeout(1800)
   return hit
 }
-const enterHome = (win) => enterSpace(win, HOME_NAMES, 'home')
+/** 插件档:每次进主页时正文是谁画的('plugin' / 'builtin' / null),收尾时 0b 一起判。 */
+const bodies = []
+const enterHome = async (win) => {
+  const hit = await enterSpace(win, HOME_NAMES, 'home')
+  if (HOME_PLUGIN_DIR) bodies.push(await homeBody(win))
+  return hit
+}
 
 /** 开启动器并**确认它真的开出来了**:点击失败或没挂载就直接抛 —— 否则 launcher=[] 会让
  *  「入口没了」的断言空跑通过(builtin-calendar 里 Codex 评审抓过的同款假绿)。 */
@@ -293,6 +313,7 @@ async function main() {
   win.on('pageerror', (e) => errs.push(String(e && e.message ? e.message : e)))
   try {
     await enterHome(win)
+    if (HOME_PLUGIN_DIR) check('0 插件档:主页正文来自插件 forsion-home(没挂上会悄悄退回内置)', bodies[0] === 'plugin', JSON.stringify({ body: bodies[0], dir: HOME_PLUGIN_DIR }))
     const s0 = await win.evaluate(SNAP)
     s0.spaces = await ribbonSpaces(win)
     const homeIcons = (l) => l.filter((n) => HOME_NAMES.includes(n)).length
@@ -993,6 +1014,57 @@ async function main() {
         && dropped.bars.length === 1 && dropped.bars.every(Boolean),
       JSON.stringify(dropped),
     )
+    if (HOME_PLUGIN_DIR) check('0b 插件档:每次进主页都是插件画的', bodies.length > 3 && bodies.every((b) => b === 'plugin'), JSON.stringify(bodies))
+
+    // 0c 插件开着时停用它 → 当场换回内置,输入区还能发。放最后:接上假引擎会改连接状态,别连坐前面那些按断网写的用例。
+    //   ⚠️不走 enterHome:0b 已判完,再往 bodies 里推一份内置的没意义。
+    if (HOME_PLUGIN_DIR) {
+      await enterSpace(win, HOME_NAMES, 'home')
+      const stub = await startStubEngine({ models: [{ id: 'gpt-6-luna', name: 'GPT-6 Luna', provider: 'stub', source: 'forsion', contextWindow: 272000 }] })
+      try {
+        // 连上假引擎要重载一次才生效(同 check:homepageglass);这次重载在停用**之前**,「当场换回」的标记在它之后才打
+        await win.evaluate((url) => window.tangu.setConfig({ mode: 'external', backendUrl: url, token: 'homepage-fallback-fixture' }), stub.url)
+        await win.reload({ waitUntil: 'domcontentloaded' })
+        await win.waitForSelector('.dv-groupview', { timeout: 30_000 })
+        await homeBody(win)
+        await win.waitForSelector('.hp-composer .t2c-ta:not(:disabled)', { timeout: 15_000 }).catch(() => {})
+        // 「停用前是插件画的」在派发停用的同一拍里取:提前取的话,插件中途自己退回内置,这条照样绿(Codex 评审)
+        const before = await win.evaluate(() => {
+          const root = [...document.querySelectorAll('.hp-root')].find((e) => e.getBoundingClientRect().width > 0)
+          const body = !root ? null : root.closest('[data-home-body="plugin"]') ? 'plugin' : 'builtin'
+          window.__homeFallbackSameDoc = true // 重载过就没了:「当场」换回,不是重载后才换
+          const KEY = 'amadeus.plugins.disabled'
+          localStorage.setItem(KEY, JSON.stringify([...JSON.parse(localStorage.getItem(KEY) || '[]'), 'forsion-home']))
+          window.dispatchEvent(new StorageEvent('storage', { key: KEY }))
+          return body
+        })
+        const after = await homeBody(win, 10_000, 'builtin')
+        const swapped = await win.evaluate(() => {
+          const vis = (sel) => [...document.querySelectorAll(sel)].filter((e) => e.getBoundingClientRect().width > 0).length
+          return { sameDoc: window.__homeFallbackSameDoc === true, roots: vis('.hp-root'), composer: vis('.hp-composer .t2c-card'), pluginWrap: vis('[data-home-body="plugin"]') }
+        })
+        const TEXT = '停用主页插件之后还能发'
+        const ready = await win.waitForSelector('.hp-composer .t2c-ta:not(:disabled)', { timeout: 10_000 }).then(() => true).catch(() => false)
+        const atSend = await homeBody(win, 0, 'builtin') // 打字那一刻仍是内置那份(插件没又接管回去)
+        if (ready) {
+          await win.locator('.hp-composer .t2c-ta').click()
+          await win.keyboard.type(TEXT)
+          await win.click('.hp-composer .t2c-send')
+        }
+        const sentBy = Date.now() + 10_000
+        const reached = () => stub.seen.runs.some((r) => JSON.stringify(r.message || '').includes(TEXT))
+        while (!reached() && Date.now() < sentBy) await win.waitForTimeout(250)
+        const sameDocAtEnd = await win.evaluate(() => window.__homeFallbackSameDoc === true) // 发完再核一次:换回之后才重载的也算红
+        check(
+          '0c 插件档:停用插件 → 当场换回内置主页(不重载),输入区还在、还能发',
+          before === 'plugin' && after === 'builtin' && swapped.sameDoc && swapped.roots === 1 && swapped.composer === 1
+            && swapped.pluginWrap === 0 && ready && atSend === 'builtin' && reached() && sameDocAtEnd,
+          JSON.stringify({ before, after, swapped, ready, atSend, sameDocAtEnd, runs: stub.seen.runs.map((r) => r.message) }),
+        )
+      } finally {
+        stub.close?.()
+      }
+    }
   } finally {
     await app.close().catch(() => {})
   }

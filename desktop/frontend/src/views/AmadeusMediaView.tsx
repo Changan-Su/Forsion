@@ -15,13 +15,14 @@ import type { ViewProps } from '@lcl/engine'
 import { VIDEO_EXT_RE, type MediaLoc } from '@amadeus-shared/pdfLink'
 import { toAssetUrl } from '@amadeus-shared/assets'
 import { useVisualTheme as useTheme } from '../stores/themeStore'
+import { useVaultRelParam } from './vaultRelParam'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { MediaPlayer } from '@amadeus/components/MediaPlayer'
 
 const baseOf = (p: string): string => p.split(/[\\/]/).pop() || p
 
 export function AmadeusMediaView({ leaf }: ViewProps) {
-  const path = typeof leaf.params.path === 'string' ? leaf.params.path : ''
+  const path = useVaultRelParam(leaf, 'path')
   const at = typeof leaf.params.at === 'number' ? leaf.params.at : null
   const to = typeof leaf.params.to === 'number' ? leaf.params.to : undefined
   const mode = useTheme((s) => s.mode)

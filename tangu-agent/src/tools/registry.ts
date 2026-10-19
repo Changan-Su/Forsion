@@ -326,13 +326,21 @@ export function listDeferredTools(ctx: ToolContext): { name: string; hint: strin
 /** 跨 run 延续解锁(10-02):本 run 喂给模型的历史里调用过的 deferred 工具(连同其 deferGroup 整组)在 run 起点预解锁。
  *  不延续时,上一轮 load_tools 装过的工具下一轮不在 defs 里,模型照着历史直接调同名工具,只能落到最近的常驻名
  *  (实测 manage_schedule → manage_human 空刷 5–9 次,有一次放弃后还说「记好了」)。只看传进来的这份历史:
- *  被压缩摘要吃掉的调用模型看不见,不延续。起点 defs 因此与上一 run 末尾一致,前缀缓存反而更连续。 */
+ *  被压缩摘要吃掉的调用模型看不见,不延续。起点 defs 因此与上一 run 末尾一致,前缀缓存反而更连续。
+ *
+ *  历史里带图(最新带图的那条 user 消息被重建成 image_url parts)→ 改图 / 生图两件也在起点预解锁(10-19,
+ *  反馈 ebe554d0):工具定义被厂商渲染在提示最前面,run 中途 load_tools 一次 = 系统提示 + 整段历史全按未命中价
+ *  重算(9.5 万上下文的 Auto 上一次约 45 点),外加 load_tools 本身那次调用。图还在窗口里就一直带着,defs 跨 run 不变。
+ *  ponytail: 只认原生 image_url parts —— 转写成文字的(主模型看不了图)不预载,照旧走 load_tools。 */
+const IMAGE_CONTEXT_PRELOADS = ['edit_image', 'generate_image'];
 export function deferredUnlocksFromHistory(
-  history: ReadonlyArray<{ tool_calls?: ToolCall[] }>,
+  history: ReadonlyArray<{ tool_calls?: ToolCall[]; content?: unknown }>,
   catalog: ReadonlyArray<{ name: string; group?: string }>,
 ): Set<string> {
   const used = new Set<string>();
   for (const m of history) for (const c of m.tool_calls || []) used.add(canonicalToolName(String(c?.function?.name || '')));
+  const hasImage = history.some((m) => Array.isArray(m.content) && m.content.some((p: any) => p?.type === 'image_url'));
+  if (hasImage) for (const n of IMAGE_CONTEXT_PRELOADS) used.add(n);
   const groups = new Set(catalog.filter((d) => used.has(d.name) && d.group).map((d) => d.group));
   return new Set(catalog.filter((d) => used.has(d.name) || (d.group && groups.has(d.group))).map((d) => d.name));
 }

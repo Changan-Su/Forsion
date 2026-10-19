@@ -10,6 +10,7 @@
 import { amadeus } from '../api'
 import { conflictCopyPath, conflictCopyVariant, textFingerprint } from '@amadeus-shared/writeConflict'
 import { registerMessages, translate } from '../../i18n'
+import { legacyWinRel } from '../lib/vaultFiles'
 
 registerMessages({
   'unisave.conflict.toast': {
@@ -214,6 +215,21 @@ function parseDraft(raw: string | null, slot: string | null): UnsavedDraft | nul
  *  否则没有本槽草稿的 A 会读到仍属于 B 的草稿,点「丢弃」删掉 B 的、点「恢复」把 B 的正文放进 A。
  *  不给 isLive = 一律当活着(只认自己那格)。 */
 export function readDraft(vaultRoot: string | null | undefined, path: string, slot?: string | null, isLive: (slot: string | null) => boolean = () => true): UnsavedDraft | null {
+  const own = readDraftAt(vaultRoot, path, slot, isLive)
+  const legacy = own ? null : legacyWinRel(path, vaultRoot)
+  const old = legacy ? readDraftAt(vaultRoot, legacy, slot, isLive) : null
+  if (!old || !legacy) return own
+  // 老版本 Windows 按 `a\b.md` 存下的草稿:挪到 `/` 的键上(那格已有东西就不动),不然 clearDraft 删不掉,每次打开都再提示一遍。
+  try {
+    const from = draftKey(vaultRoot, legacy, old.slot)
+    const to = draftKey(vaultRoot, path, old.slot)
+    const raw = localStorage.getItem(from)
+    if (raw != null && localStorage.getItem(to) == null) { localStorage.setItem(to, raw); localStorage.removeItem(from) }
+  } catch { /* 同 stashDraft */ }
+  return old
+}
+
+function readDraftAt(vaultRoot: string | null | undefined, path: string, slot: string | null | undefined, isLive: (slot: string | null) => boolean): UnsavedDraft | null {
   try {
     const plainKey = draftKey(vaultRoot, path)
     if (!slot) {
@@ -244,12 +260,16 @@ export function readDraft(vaultRoot: string | null | undefined, path: string, sl
 /** 删草稿(slot 那一格)。给了 `onlyIfText` 时只在存着的正是这份内容时才删 —— 别把上一次会话留下、用户还没决定的那份顺手删了。 */
 export function clearDraft(vaultRoot: string | null | undefined, path: string, onlyIfText?: string, slot?: string | null): void {
   try {
-    const key = draftKey(vaultRoot, path, slot)
-    if (onlyIfText != null) {
-      const d = parseDraft(localStorage.getItem(key), slot ?? null)
-      if (!d || d.text !== onlyIfText) return
+    // 老版本 Windows 那种写法的键也删:readDraft 读到时挪不动(配额满)就还在那里。
+    for (const p of [path, legacyWinRel(path, vaultRoot)]) {
+      if (!p) continue
+      const key = draftKey(vaultRoot, p, slot)
+      if (onlyIfText != null) {
+        const d = parseDraft(localStorage.getItem(key), slot ?? null)
+        if (!d || d.text !== onlyIfText) continue
+      }
+      localStorage.removeItem(key)
     }
-    localStorage.removeItem(key)
   } catch { /* 同 stashDraft */ }
 }
 

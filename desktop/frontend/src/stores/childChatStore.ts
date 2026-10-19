@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import type { SessionRecord } from '../types'
-import type { BtwSeed } from '../views/chat2/btwStore'
+import type { BtwSeed } from '@tangu/ui/views/chat2/btwStore'
 import { inheritChildRows } from '../services/engine/targets'
 
 export interface ChildChatTarget {
