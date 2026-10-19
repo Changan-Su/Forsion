@@ -246,7 +246,7 @@ async function main() {
         win.locator('.pz input[type=file][multiple]').setInputFiles(files).catch((e) => console.log('kick failed', e.message))
       }, 1000)
       console.log(`HOLD ready · kick=${kick} · 窗口关掉或退出就收场`)
-      await new Promise((r) => { app.process().once('exit', r); setTimeout(r, 40 * 60_000) })
+      await new Promise((r) => { app.once('close', r); app.process().once('exit', r); setTimeout(r, 40 * 60_000) }) // 从菜单退出时子进程的 exit 不一定到,认 Playwright 的 close
       clearInterval(timer)
       return
     }
