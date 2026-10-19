@@ -109,7 +109,8 @@ async function main() {
       await win.click('.dv-edge-right', { timeout: 10_000 })
       await win.waitForTimeout(1500)
     }
-    const pill = await win.locator('.t2-chat-view:visible .project-pill-name').first().textContent({ timeout: 5000 }).catch(() => null)
+    // 项目药丸按 `.project-selector:not(.runloc)` 找:左边的「运行位置」胶囊(RunLocationPicker)借了同一套类,不排掉读到的是「这台电脑」
+    const pill = await win.locator('.t2-chat-view:visible .project-selector:not(.runloc) > .project-pill .project-pill-name').first().textContent({ timeout: 5000 }).catch(() => null)
     check('B1 空白新对话的项目药丸 = 笔记库(Amadeus · vault)', !!pill && pill.includes('Amadeus') && pill.includes('vault'), JSON.stringify(pill))
     await win.screenshot({ path: SHOT })
     await send('在库里的一句')
