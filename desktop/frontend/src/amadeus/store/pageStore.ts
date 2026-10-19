@@ -2,6 +2,7 @@ import { createContext, useContext } from 'react'
 import { create, useStore } from 'zustand'
 import type { FocusPlace } from '../blocks/registry'
 import { bumpNextId, generateColumnId, generateRowId, nextBlockId, stripPageBasename } from '@amadeus-shared/compiler/names'
+import { compile, parsePageSource } from '@amadeus-shared/compiler'
 import type {
   BlockEntry,
   BlockId,
@@ -27,6 +28,7 @@ import { useUiStore } from './uiStore'
 import { awaitTypingQuiet, installTypingGuard, noteLocalEdit } from './typingGuard'
 import { flushUnifiedScopes, holdUnifiedPath, pathHit, retireUnifiedPath, unifiedPatchFm } from '../unified/lifecycle'
 import { remapNotePageStylePrefix, remapNoteViewMemory } from '../unified/viewMemory'
+import { mergeMovedText, toastRenameCopy, toastSaveFailed, writeConflictCopy } from '../unified/writeSafety'
 import { track } from '../../achievements/store'
 import { act } from '../../activity/log'
 import { registerMessages, translate } from '../../i18n'
@@ -395,6 +397,9 @@ interface PageState {
   redo(): void
 
   _commit(manifest: PageManifest, blocks?: Record<BlockId, BlockState>): void
+  /** 挪动 / 改名 IPC 在途时按住(holdNotePath):活动页在 path 上(kind='prefix' 含子树)就停写它,已发出的那发写落定、
+   *  记下盘上原文后 resolve 出放手函数(to = 挪成了的新路径,null = 没挪成);不在这条路径上 / 只读 / 内存作用域 → null。 */
+  _holdForMove(path: string, kind: 'file' | 'prefix'): Promise<((to: string | null) => Promise<void>) | null>
 }
 
 function hydrate(page: LoadedPage): {
@@ -436,6 +441,13 @@ function makePageStore(opts: PageStoreOptions = {}) {
   const reconcilePending = new Set<string>()
   let reconcileBusy = false
   let reconcileGate: Promise<void> | null = null
+  // 挪动 IPC 在途的按住(_holdForMove;每次按住一项,放手摘掉自己那项 —— 同一篇慢挪途中又被拖一次,后一次失败放手不许清掉
+  // 前一次)。按住期间 save() 不写被按住的路径,手里那份按路径记进 heldDocs(切页 / 关面板时从这里交接;文件夹改名途中
+  // 在夹里切过几篇就记几篇,Codex 复核 P1);heldSkipped = 期间有字没写。
+  const holds: Array<(p: string) => boolean> = []
+  const heldDocs = new Map<string, { manifest: PageManifest; contents: Record<string, string> }>()
+  let heldSkipped = false
+  const isHeld = (p: string | null): boolean => !!p && holds.some((h) => h(p))
 
   return create<PageState>((set, get) => {
   const scheduleSave = (): void => {
@@ -460,6 +472,83 @@ function makePageStore(opts: PageStoreOptions = {}) {
     return { page: s.activePage, data: { manifest: s.manifest, blocks: s.blocks } }
   }
   const pushUndo = (kind: 'edit' | 'struct'): void => history.push(snapNow(), kind, Date.now())
+
+  const contentsOf = (blocks: Record<BlockId, BlockState>): Record<string, string> =>
+    Object.fromEntries(Object.entries(blocks).map(([id, b]) => [id, b.content]))
+
+  /** 挪成了 → 按住期间手里的字交接到新路径(holdUnifiedPath 那套的 v3 版,UnifiedPage.handOver):主进程已按新位置改写过
+   *  这篇的图片 / 附件引用与 [[链接]],拿手里的旧正文直接存 = 把改写盖回去(图裂),所以与盘上那版按行三方合并(基线 = 挪之前
+   *  盘上的原文)再比对交换写;合不拢 / 一直被抢写 → 全文另存冲突副本(单篇挪动落在原路径旁,那里图打得开;文件夹改名落在新路径旁)。
+   *  末了**按合并结果把本面板装到新路径** —— 手里不能再留旧引用,下一次存盘才不会盖回去;调用方随后的 remapScopePaths 见已改指就跳过。 */
+  const handOverMove = async (from: string, base0: string | null, to: string, wholeFolder: boolean, root: string | null): Promise<void> => {
+    // 手里此刻最新的一版:还在这篇上取 store,切走 / 关掉了取切走时记下的那份(交接 I/O 途中切走也认得到新打的字,Codex 复核 P1)。
+    const latest = (): string | null => {
+      const st = get()
+      if (st.activePage === from && st.manifest) return compile(st.manifest, contentsOf(st.blocks))
+      const d = heldDocs.get(from)
+      return d ? compile(d.manifest, d.contents) : null
+    }
+    let ours = latest()
+    if (ours == null) return // 切走 / 关掉前没有没写的字:没什么可交接
+    const lf = (t: string): string => t.replace(/\r\n/g, '\n') // v3 存盘恒写 LF(compile);盘上若是 CRLF 先拉平再按行合
+    let base = base0 == null ? null : lf(base0)
+    // 每次落笔前核库根(同 v4 交接,Codex 复核 P0)。读**活的**库根:按住途中关掉的面板已出登记处,自己那份不再跟着换库(复核 P1)。
+    const sameVault = (): boolean => liveVaultRoot() === root
+    const copyBeside = wholeFolder ? to : from
+    let theirs: string | null
+    try {
+      theirs = await amadeus.readTextFile(to)
+      // 每轮把手里最新的一版并进盘面;交接途中又打了字就以刚交出去的那版为基线再来一轮 —— 跟进的字也走比对交换,
+      // 不靠事后 savePage 盲写(会抹掉同篇另一面板刚交接进去的字,Codex 复核 P1)。
+      for (let round = 0; round < 5; round++) {
+        if (base == null || ours !== base) {
+          let wrote: string | null = null
+          for (let i = 0; i < 3 && theirs != null; i++) {
+            const merged = base == null ? null : mergeMovedText(base, ours, lf(theirs))
+            if (merged == null || !sameVault()) break
+            const r = await amadeus.writeTextFile(to, merged, { base: textFingerprint(theirs) })
+            if (!r || r.ok !== false) { wrote = merged; break }
+            theirs = r.current // 被抢写:拿现文再合一次;null = 新路径也没了
+          }
+          if (wrote != null) theirs = wrote
+          else {
+            if (!sameVault()) return
+            toastRenameCopy(to, await writeConflictCopy(copyBeside, ours), true)
+            void get().refreshPages() // 副本是新文件:树 / 补全要看得见它
+          }
+        }
+        const next = latest()
+        if (next == null || next === ours) break
+        base = ours
+        ours = next
+      }
+    } catch (e) {
+      if ((base != null && ours === base) || !sameVault()) return
+      // 读写新路径出错:另存副本保字,编辑器改指副本 —— 不走 savePage 盲写,也不留着待写让随后的改指把手里的旧正文
+      // 写到新路径(会抹掉主进程的改写与别处的改动,Codex 复核 P1)。
+      let copy: string
+      try { copy = await writeConflictCopy(copyBeside, ours) } catch { toastSaveFailed(to, e); return }
+      toastRenameCopy(to, copy, true)
+      if (get().activePage === from && sameVault()) {
+        if (saveTimer) { clearTimeout(saveTimer); saveTimer = null }
+        set({ activePage: copy, ...hydrate(parsePageSource(copy, ours, new Date().toISOString())), status: 'ready', error: null })
+      }
+      return
+    }
+    if (theirs == null || !sameVault() || get().activePage !== from) return
+    if (saveTimer) { clearTimeout(saveTimer); saveTimer = null }
+    // ponytail: 追了 5 轮还在变(交接 I/O 途中一直在打字)才走到这:最后这截按本地合并装上、照常存 —— 那一下 savePage 是盲写,
+    // 窗口毫秒级;同一行撞上合不拢就留手里那份照常存(引用退回挪之前的写法,字不丢)。
+    const next = latest()
+    let text: string | null = lf(theirs)
+    if (next != null && next !== ours) {
+      text = mergeMovedText(ours, next, text)
+      if (text == null) { set({ activePage: to }); scheduleSave(); return }
+    }
+    // pendingPage 不动:交接途中开始的别篇导航照常落地(Codex 复核 P2)
+    set({ activePage: to, ...hydrate(parsePageSource(to, text, new Date().toISOString())), status: 'ready', error: null })
+    if (text !== lf(theirs)) scheduleSave()
+  }
 
   /** 拉全库页面 emoji 图标(带重试)。此前失败被 `.catch(() => {})` 静默吞掉 → icons 永远空表:
    *  列表 emoji 与笔记标题大图标(都读这张表)一起消失,要手动刷新/切库才恢复(2026-08-05 用户实报
@@ -1154,7 +1243,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
       // 移动会触发全库引用重写:所有面板先落盘(不止本面板;理由同 renamePage,Codex 评审 P1)。
       await flushAllScopes()
       // IPC 在途时旧路径随时会没、编辑器却还没改指:按住同篇的编辑器不写它,回来后交接到新路径再改指(2026-10-19)。
-      const release = await holdUnifiedPath(pagePath)
+      const release = await holdNotePath(pagePath)
       let held = true
       try {
         const newPath = await amadeus.movePage(pagePath, dst)
@@ -1192,7 +1281,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
     async renameFolder(folderPath, newName) {
       // 文件夹改名触发树下全部页面的引用重写:所有面板先落盘(理由同 renamePage,Codex 评审 P1)。
       await flushAllScopes()
-      const release = await holdUnifiedPath(folderPath, 'prefix') // 同 movePage:IPC 在途时树下开着的笔记不写旧路径
+      const release = await holdNotePath(folderPath, 'prefix') // 同 movePage:IPC 在途时树下开着的笔记不写旧路径
       try {
         const newFolder = await amadeus.renameFolder(folderPath, newName)
         await release(newFolder === folderPath ? null : newFolder)
@@ -1521,6 +1610,13 @@ function makePageStore(opts: PageStoreOptions = {}) {
       if (prev) await prev.catch(() => {})
       const { manifest, activePage, blocks } = get()
       if (!manifest || !activePage) return
+      // 挪动 IPC 在途(_holdForMove):旧路径随时会没,主进程 savePage 缺文件即建 = 原文件夹里复活一篇旧的,挪过去的那篇
+      // 没有这些字。不写,手里这份留到放手时交接。⚠️ 与下面立 inflightSave 之间不许有 await(按住方靠等它收住已发出的写)。
+      if (isHeld(activePage)) {
+        heldDocs.set(activePage, { manifest, contents: contentsOf(blocks) })
+        heldSkipped = true
+        return
+      }
       set({ status: 'saving' })
       // 记在途保存(path+promise):loadPage 借此只在「读写同一文件」时才等写完,其余并行(高 RTT 省一整个往返)。
       const savedPath = activePage
@@ -1619,6 +1715,45 @@ function makePageStore(opts: PageStoreOptions = {}) {
       set(blocks ? { manifest, blocks } : { manifest })
       scheduleSave()
     },
+
+    async _holdForMove(path, kind) {
+      const { activePage, manifest, blocks } = get()
+      const hit = (p: string): boolean => pathHit(p, path, kind)
+      if (opts.sink || !activePage || !manifest || manifest.schemaTooNew || !hit(activePage)) return null
+      const from = activePage
+      const root = liveVaultRoot()
+      holds.push(hit)
+      if (saveTimer) { // 待写不发去旧路径:字留在手里、记一份(之后切走时 flushSave 见不到计时器,Codex 复核 P1),放手时交接
+        clearTimeout(saveTimer)
+        saveTimer = null
+        heldSkipped = true
+        heldDocs.set(from, { manifest, contents: contentsOf(blocks) })
+      }
+      await inflightSave?.catch(() => {}) // 已经发出的那发写先落定(在主进程动文件之前)
+      let base: string | null = null // 挪之前盘上的原文 = 交接时三方合并的基线(读不到 = 有字就落副本)
+      try { base = await amadeus.readTextFile(from) } catch { /* 同上 */ }
+      return async (to) => {
+        const skipped = heldSkipped
+        try {
+          if (to) {
+            const dest = (p: string): string => (kind === 'file' ? to : to + p.slice(path.length))
+            await handOverMove(from, base, dest(from), kind === 'prefix', root)
+            // 文件夹改名途中在夹里切去别篇又打了字:基线不明(没在按住时读到),交接一律落副本 —— 字不丢(Codex 复核 P1)
+            for (const p of [...heldDocs.keys()]) if (p !== from && hit(p)) await handOverMove(p, null, dest(p), true, root)
+          } else {
+            // 没挪成,原路径还在:切走 / 关掉前记下的字照旧写回原处(不写就随清表丢了,Codex 复核 P1);还开着的那篇走下面的防抖。
+            for (const [p, d] of heldDocs) {
+              if (!hit(p) || p === get().activePage || holds.some((h) => h !== hit && h(p))) continue
+              await amadeus.savePage(p, d.manifest, d.contents).catch((e: unknown) => toastSaveFailed(p, e))
+            }
+          }
+        } finally { // 交接做完才摘:交接途中的防抖写照样不许落到旧路径
+          holds.splice(holds.indexOf(hit), 1)
+          if (!holds.length) { heldDocs.clear(); heldSkipped = false }
+        }
+        if (!to && skipped && get().activePage === from && !isHeld(from)) scheduleSave() // 没挪成:原路径还在,照旧写
+      }
+    },
   }
   })
 }
@@ -1713,7 +1848,13 @@ const vaultSlice = (s: PageState): VaultSlice =>
  * 表现就是「切换本地/云端后,本地库里凭空多出一篇云端的笔记」(用户实报)。分屏之前只有一份 store,
  * 所以这条链是分屏引入的:switchVaultSide 里的单份 flush + 作废,分屏后只护住了当前面板。
  */
+/** 挪动 / 改名在途(holdNotePath 按住到交接落定)的次数。 */
+let movesInFlight = 0
+
 export async function flushAllScopes(strict = false): Promise<void> {
+  // 严格冲洗(换库 / 切号屏障)要的是「全落盘」:有笔记正在挪,按住着的字还只在内存里(连按住途中关掉的面板),换了库
+  // 交接就不写了 —— 拒绝(同 v4 按住时的严格冲洗,Codex 复核 P1)。
+  if (strict && movesInFlight) throw new Error('A note is being moved')
   await Promise.all([
     ...[...stores.values()].map((s) => strict ? s.getState().flushSave(true) : s.getState().flushSave().catch(() => {})),
     // unified(v4)实例的写盘管线不在 scope store 里,经登记处一起落盘(Codex P0:换库竞态)。
@@ -1730,6 +1871,29 @@ async function flushFileStores(strict = false): Promise<void> {
   const [{ useDbStore }, { useDrawStore }] = await Promise.all([import('./dbStore'), import('./drawingStore')])
   const settle = (p: Promise<void>): Promise<void> => (strict ? p : p.catch(() => {}))
   await Promise.all([settle(useDbStore.getState().flushAll(strict)), settle(useDrawStore.getState().flushAll(strict))])
+}
+
+/** 挪动 / 改名的 IPC 在途时按住开着 path(kind='prefix' 含子树)的编辑器:v4 实例(holdUnifiedPath)与 v3 面板
+ *  (scope store 的 _holdForMove)一起 —— 主进程挪完文件旧路径就没了,渲染层要等 IPC 回来才改指,中间的防抖写会把
+ *  旧路径写活(v3:savePage 缺文件即建 = 原文件夹复活一篇)/ 进原文件夹的冲突副本(v4)。返回放手函数,to = 挪成了的
+ *  新路径(没挪成给 null);必须在 remapScopePaths **之前** await。面板在按住时取好:期间关掉的照样交接。 */
+async function holdNotePath(path: string, kind: 'file' | 'prefix' = 'file'): Promise<(to: string | null) => Promise<void>> {
+  movesInFlight++
+  const [unified, scoped] = await Promise.all([
+    holdUnifiedPath(path, kind),
+    Promise.all([...stores.values()].map((s) => s.getState()._holdForMove(path, kind).catch(() => null))),
+  ])
+  let done = false
+  return async (to) => {
+    if (done) return // 放手只认一次(调用方出错路径可能再放一次)
+    done = true
+    try {
+      await unified(to)
+      for (const r of scoped) if (r) await r(to).catch(() => {}) // 同篇多开逐个放手,后一个并进前一个写下的版本
+    } finally {
+      movesInFlight--
+    }
+  }
 }
 
 /**
@@ -1859,6 +2023,11 @@ export function resetAllScopeDocs(): void {
   for (const s of stores.values()) {
     s.setState({ activePage: null, pendingPage: null, manifest: null, blocks: {}, status: 'idle', error: null, activeNotePath: null })
   }
+}
+
+/** 此刻的库根(活的):'main' 永不回收,仓库级字段在登记着的面板间恒等。关掉的面板已出登记处,它自己那份不再跟着换库。 */
+function liveVaultRoot(): string | null {
+  return (stores.get(MAIN_SCOPE) ?? stores.values().next().value)?.getState().vaultRoot ?? null
 }
 
 let mirroring = false // 防镜像回弹成无限循环
