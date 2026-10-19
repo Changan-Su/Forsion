@@ -3899,9 +3899,12 @@ const tabCountText = (list) => {
     list = await waitSheet(true)
     steps.push(`opened: ${fieldState(list)}`)
     await focusedWithKeyboard()
+    // Gone = its window too: mInputShown drops as soon as the hide is asked for, and the keyboard keeps taking back until
+    // its window is hidden (sampled under load: mInputShown=false with mWindowVisible=true; Codex review)
+    const keyboardGone = () => !/mInputShown=true|mWindowVisible=true/.test(h.adb('shell', 'dumpsys', 'input_method'))
     h.key(4)
-    for (let i = 0; i < 40 && imeShown(); i++) await h.pause(200)
-    const kbStill = imeShown() // a second back would only go to the keyboard again
+    for (let i = 0; i < 40 && !keyboardGone(); i++) await h.pause(200)
+    const kbStill = !keyboardGone() // a second back would only go to the keyboard again
     if (kbStill) step('keyboard still up after back 1')
     assert.ok(!kbStill, `back did not put the keyboard away · ${await evidence()}`)
     const afterBack = ui()
