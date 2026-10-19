@@ -288,3 +288,15 @@ Since 2026-10-18 (added with the cloud drive in Forsion Extend's Penzor Cloud):
 
 - `ctx.app.setSpaceProgress?(spaceId, progress)` draws a progress ring around your own Space's icon in the Ribbon. It only accepts a Space bundled with your plugin; for anyone else's or a built-in Space it returns `false`. `progress` is `0`–`1`; pass `null` to remove it. The host draws whole percents, so frequent updates don't re-render the Ribbon. An unread badge on that Space takes precedence, and the host clears the ring when your plugin is disabled. A Space tucked into a Ribbon folder or the "⋯" overflow shows no ring.
 - The list icon vocabulary gains `hard-drive` for drive and storage rows. Older hosts lack it: use whether `ctx.app.setSpaceProgress` exists to tell, and fall back to `archive`.
+
+### 服务器管理用到的接缝 / Seams used by Server Admin
+
+2026-10-19 起（服务器管理插件给「反馈中心」挂提醒时加的）：
+
+- `ctx.app.setSpaceDot?(spaceId, on)`：在 Ribbon 上你自己 Space 的图标右上角挂一个提示红点，和收件箱未读角标同一种红。`true` 挂、`false` 收。只认本插件随包带的 Space，别人的或内置的一律返回 `false`。同一个 Space 既有红点又有进度环时只画红点；有未读角标时先显示角标。插件停用时宿主替你收掉。挂着红点时，图标的读屏名会带上「有新提醒」。
+- 列表行里的未读提示照旧用 `ListItem.unread`（共用的未读圆点，颜色跟着主题的指示色走，不是红色）。要从别的 Space 也看得到，就配上 `setSpaceDot`。
+
+Since 2026-10-19 (added when Server Admin started flagging the feedback center):
+
+- `ctx.app.setSpaceDot?(spaceId, on)` puts an attention dot on the top-right of your own Space's icon in the Ribbon, in the same red as the inbox unread badge. Pass `true` to show it and `false` to remove it. It only accepts a Space bundled with your plugin; for anyone else's or a built-in Space it returns `false`. If the Space has both a dot and a progress ring, only the dot is drawn; an unread badge takes precedence over both. The host clears the dot when your plugin is disabled. While the dot is shown, the icon's accessible name says it has new activity.
+- Unread rows in a list still use `ListItem.unread`: the shared unread dot, drawn in the theme's indicator colour rather than red. Pair it with `setSpaceDot` so it can be noticed from other Spaces.
