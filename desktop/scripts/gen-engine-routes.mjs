@@ -115,6 +115,8 @@ export const CLASSIFICATION = {
   'GET /agent/sessions/:id/timeline': [A, 'session timeline'],
   'POST /agent/sessions/:id/compact': [A, 'compact a session'],
   'POST /agent/sessions/:id/aside': [A, 'btw aside (taint propagates, C5)'],
+  'GET /agent/sessions/:id/asides': [A, 'saved btw asides of a session (read)'],
+  'DELETE /agent/sessions/:id/asides/:asideId': [D, 'irreversible delete of a saved btw aside; local only like session hard delete'],
   'POST /agent/sessions/:id/suggest': [A, 'next-message suggestion for the input box (reads a one-shot in-memory snapshot of the run that just ended; writes nothing)'],
   // ── inline.ts:正文生成式 AI(G3-07)──
   'POST /agent/inline': [A, 'inline writing completion for the note editor (no tools, nothing persisted; same shape as aside)'],

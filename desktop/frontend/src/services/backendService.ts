@@ -225,6 +225,15 @@ export const branchSession = (t: EngineTarget, sessionId: string, messageId: str
     { method: 'POST', body: JSON.stringify({ message_id: messageId, ...(title ? { title } : {}) }) },
   ).then((r) => r.session)
 
+/** 存下来的顺便问(挂在某条消息上;引擎 chat_asides)。 */
+export interface SavedAside { id: string; message_id: string | null; turns: Array<{ question: string; quote?: string; answer: string }>; created_at: string; updated_at: string }
+
+export const listAsides = (t: EngineTarget, sessionId: string) =>
+  request<{ asides: SavedAside[] }>(t, `/agent/sessions/${encodeURIComponent(sessionId)}/asides`).then((r) => r.asides || [])
+
+export const deleteAside = (t: EngineTarget, sessionId: string, asideId: string) =>
+  request<{ ok: boolean }>(t, `/agent/sessions/${encodeURIComponent(sessionId)}/asides/${encodeURIComponent(asideId)}`, { method: 'DELETE' })
+
 /** 某会话名下的 Background Session(@讨论 / Historian 辅助讨论等隐藏子会话,含最新 run 供回放)。 */
 export interface BackgroundSessionInfo {
   sessionId: string

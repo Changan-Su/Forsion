@@ -136,6 +136,11 @@
 .rb-btn:has(> .rb-dot) { position: relative; }
 .rb-badge.rb-dot { top: 4px; right: 4px; min-width: 0; width: 8px; height: 8px; padding: 0; }
 .rb-expanded .rb-btn > .rb-dot { top: 5px; left: 22px; right: auto; }
+/* 进度环(插件 Space 经 ctx.app.setSpaceProgress 挂的,如蓬洲云在传文件):和角标同一个角,展开态跟着上面那条落在图标右上;
+   颜色是「指示」那一档(--signal-mark,DESIGN §1),外圈仍用侧栏底色描一圈和图标分开 */
+.rb-badge.rb-ring { top: 1px; right: 1px; min-width: 0; width: 13px; height: 13px; padding: 0;
+  background: conic-gradient(var(--signal-mark, var(--accent-ink)) calc(var(--p) * 1%), var(--overlay-medium) 0);
+  -webkit-mask: radial-gradient(circle, transparent 2.5px, #000 3px); mask: radial-gradient(circle, transparent 2.5px, #000 3px); }
 /* Tangu 角标:私聊里有人在等你回复 / 拍板时换警示色;字用侧栏底色,深浅两套都压得住。 */
 .rb-badge.dm-wait { background: var(--warning, #d97706); color: var(--sidebar-bg); }
 .rb-btn {
@@ -987,3 +992,11 @@ html[data-space-switch-axis='x'][data-space-switch]::view-transition-old(space-w
 html[data-space-switch-axis='x'][data-space-switch]::view-transition-new(space-work) { --space-push: 24px; }
 html[data-space-switch-axis='x'][data-space-switch]::view-transition-old(space-work) { animation-name: lcl-space-fade-out, lcl-space-push-out-x; }
 html[data-space-switch-axis='x'][data-space-switch]::view-transition-new(space-work) { animation-name: lcl-space-fade-in, lcl-space-push-in-x; }
+
+/* 视图自己的标签栏零件(WorkspaceHost 的 ViewChrome 空位;第一个用它的是 Chat 的「对话 / 画布」胶囊)。
+   Dockview 把这一格排在标签后面,这里排到空白之后 = 标签栏右端;右上浮钮组压着的那条头照旧由 .dv-under-edge 让位。
+   标签栏空白处是窗口拖拽区,投进来的零件得自己 no-drag 才点得动。 */
+.dockview-theme-lcl .dv-tabs-and-actions-container > .dv-left-actions-container { order: 4; }
+.dv-view-chrome { display: flex; align-items: center; height: 100%; padding-right: 6px; }
+.dv-view-chrome:empty { display: none; }
+.dv-view-chrome > * { -webkit-app-region: no-drag; }

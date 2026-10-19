@@ -121,6 +121,10 @@ export interface SessionRecord {
   projectless?: boolean
   /** 父子会话:主会话用 start_session 开出的子会话指回主会话(左栏挂在它下面一层)。也可能是私聊 @项目派遣的会话(那时主会话在别的组,照平铺)。 */
   parent_session_id?: string | null
+  /** 分支(「接着问」分出来的):来源会话里分叉的那条消息 id。有值 = 分支(parent_session_id 指树根),没值 = 子会话 / 派遣。 */
+  fork_message_id?: string | null
+  /** 分叉那条消息所在的会话(分支的分支挂树根下,来源支从这里认;引擎列表接口现算)。 */
+  fork_session_id?: string | null
   /** 这一轮以问句收尾、在等用户回答(引擎置,下一轮开始清掉)。 */
   awaiting_user?: boolean
   /** 引擎这会儿有在飞 / 排队的 run(列表接口现算):客户端没订阅的会话(子会话、自动接着做的一轮)也画「在跑」。 */
@@ -1157,7 +1161,20 @@ export interface UpdaterStatusInfo {
   /** 同一节的英文版(CHANGELOG.en.md);没有就只有 releaseNotes */
   releaseNotesEn?: string
   percent?: number
+  /** 'unreachable' = 官网和 GitHub 都没答上 */
   error?: string
+  /** 这次从哪儿下(官网 / GitHub) */
+  source?: 'website' | 'github'
+  /** 安装包字节数(知道才有) */
+  size?: number
+  transferred?: number
+  total?: number
+  /** 自动换过源:原来那边 */
+  fallbackFrom?: 'website' | 'github'
+  /** 下载中能手动换到另一边 */
+  canSwitch?: boolean
+  /** mac:已在浏览器里开了 .dmg 的下载链接 */
+  opened?: boolean
 }
 
 /** 主进程持久化的完整配置;getConfig 返回时 backendUrl/token 已折算为有效值(managed 就绪=托管子进程的)。 */
@@ -1427,7 +1444,7 @@ declare global {
       /** 提交反馈到 Forsion 反馈中心(会话日志 JSON 随附为附件;token 留主进程)。 */
       submitFeedback?(input: { description: string; sessionLogJson?: string; sessionLogName?: string }): Promise<{ ok: boolean; id?: string | null; error?: string; attachmentSkipped?: boolean }>
       appVersion?(): Promise<string>
-      /** 应用内自动更新:检查 / 下载 / 重启安装(mac 仅检测,download/install 为 no-op)。 */
+      /** 应用内自动更新:检查 / 下载 / 重启安装(mac 的 download/install 为 no-op,改用 openUpdateInstaller)。 */
       getCorePluginUpdates?(): Promise<CorePluginUpdates>
       onCorePluginUpdates?(cb: (status: CorePluginUpdates) => void): () => void
       checkForUpdates?(): Promise<UpdaterStatusInfo>
@@ -1439,6 +1456,15 @@ declare global {
        *  Win/Linux 读的是 latest.yml 而非 beta.yml,mac 打的是 /releases/latest(按定义排除 prerelease)。 */
       getUpdateBeta?(): Promise<boolean>
       setUpdateBeta?(on: boolean): Promise<{ ok: boolean }>
+      /** 下载来源:auto = 按地区(大陆官网、其他地区 GitHub);有没有新版始终看官网。 */
+      getUpdateSource?(): Promise<'auto' | 'website' | 'github'>
+      setUpdateSource?(v: 'auto' | 'website' | 'github'): Promise<{ ok: boolean }>
+      /** 这台电脑在不在中国大陆(null = 没探出来)。 */
+      getUpdateRegion?(): Promise<boolean | null>
+      /** 下载中换到另一边。 */
+      switchUpdateSource?(): Promise<boolean>
+      /** mac:在浏览器里开这一版 .dmg 的下载链接。 */
+      openUpdateInstaller?(): Promise<boolean>
       /** What's new 弹窗正文:官网更新动态的已发布快照;拿不到 = null(退回打包的 CHANGELOG)。 */
       getWebsiteReleases?(): Promise<WebsiteRelease[] | null>
       /** 请主窗弹出 What's new(设置是独立浮窗,在那里点也要弹在主窗)。 */

@@ -6,7 +6,7 @@
  * 样式全在 sidebar2.css(t2s- 前缀,token 驱动);右键菜单复用 base.css 的 .ctx-menu。
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { Plus, MoreHorizontal, Pencil, Archive, ArchiveRestore, Trash2, ChevronRight, Folder, FolderOpen, Cloud, FolderPlus, SquarePen, Smartphone, Send, MessagesSquare, MessageSquare, Pin, PinOff, Info, NotebookPen, Smile } from 'lucide-react'
+import { Plus, MoreHorizontal, Pencil, Archive, ArchiveRestore, Trash2, ChevronRight, Folder, FolderOpen, Cloud, FolderPlus, SquarePen, Smartphone, Send, MessagesSquare, MessageSquare, GitBranch, Pin, PinOff, Info, NotebookPen, Smile } from 'lucide-react'
 import { SessionIcon, SessionIconPicker } from '../../components/SessionIcon'
 import { folderPadLeft, rowPadLeft } from '@amadeus/lib/treeIndent'
 import { SidebarRow } from '../../components/SidebarRow'
@@ -503,7 +503,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
       // 前导槽:与笔记/插件源 view 同构 → 三模式切换时图标不跳。有子会话的行 hover 时图标换成开合箭头(同笔记树)。
       // 状态 10-17 起在行尾(StatusMark),不再贴在图标角上。
       lead={<>
-        <SessionIcon emoji={s.emoji} fallback={p.rowIcon?.(s) ?? <MessageSquare className="t2s-lead-icon t2s-dim" />} />
+        <SessionIcon emoji={s.emoji} fallback={s.fork_message_id ? <GitBranch className="t2s-lead-icon t2s-dim" /> : p.rowIcon?.(s) ?? <MessageSquare className="t2s-lead-icon t2s-dim" />} />
         {kids.length > 0 && (
           <span className={`t2s-chev t2s-lead-chev${kidsHidden ? '' : ' open'}`} onClick={(e) => { e.stopPropagation(); toggleKids(s.id) }}><ChevronRight size={12} /></span>
         )}

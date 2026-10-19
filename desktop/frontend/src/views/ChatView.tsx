@@ -1,7 +1,7 @@
 /** 主区聊天 leaf：followActive 跟随侧栏；分屏 leaf 用 sessionId 固定会话。 */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from 'react'
 import { AnimatePresence } from 'framer-motion'
-import { ArrowDown, Folder, MessageCircleQuestion, MessageSquarePlus, Quote } from 'lucide-react'
+import { ArrowDown, Folder, MessageCircleQuestion, Quote } from 'lucide-react'
 import type { AgentConfig, UiMessage } from '../types'
 import { Composer2 } from './chat2/Composer2'
 import { AgentSelectStrip } from '../components/AgentSelectStrip'
@@ -45,8 +45,9 @@ import { AgentDesk, DeskCard, useDeskHome } from './chat2/AgentDesk'
 import { HistorianStatus } from './chat2/HistorianStatus'
 import { TeamStatus } from './chat2/TeamDesk'
 import { ChildChatPanel, SubChatStatus } from './chat2/ChildChatPanel'
-import { openBtw, openBtwInSidebar } from './chat2/btwStore'
+import { openBtw, quoteInMainChat } from './chat2/btwStore'
 import { useChildChat } from '../stores/childChatStore'
+import { ChatCanvas, ChatCanvasSeg, ViewChromePortal, useChatCanvasPref } from './chat2/ChatCanvas'
 import { TeamSummary } from './chat2/TeamSummary'
 import { useI18n } from '../i18n'
 import { speakMessage, stopSpeaking, subscribeTts, ttsState, type TtsState } from '../services/ttsService'
@@ -86,6 +87,14 @@ function JumpToBottom({ setter, title, onClick }: { setter: MutableRefObject<(sh
   const [show, setShow] = useState(false)
   setter.current = setShow
   return show ? <button className="jump-bottom t2-jump" title={title} onClick={onClick}><ArrowDown size={16} /></button> : null
+}
+
+/** 划线所在的那条回答(EditorialMessage 根节点 id = tocmsg-<消息 id>);不在某条回答里 → undefined(引擎挂到最近一条回答)。 */
+function selectedMessageId(): string | undefined {
+  const node = window.getSelection()?.anchorNode
+  const el = node instanceof Element ? node : node?.parentElement
+  const id = el?.closest('.t2-asst[id^="tocmsg-"]')?.id
+  return id ? id.slice('tocmsg-'.length) : undefined
 }
 
 export function ChatView({ leaf, params }: ViewProps) {
@@ -216,6 +225,17 @@ export function ChatView({ leaf, params }: ViewProps) {
   // 画到流里的那一段(长会话先是末尾几条、空闲时往上补,见 useTailFirst;桌面与网页 10-16 起也这样,原来只有手机);
   // 数据层的判断一律仍看 activeMessages。要跳到某条消息(搜索命中)时整段挂。
   const shownMessages = useTailFirst(activeMessages, activeId || null, s.jumpTarget?.sessionId !== activeId)
+  // 分支里最后一条做完的回答带「带回这里」:作为引用挂进来源那一支的输入框(由用户发,agent 不往别的支写)
+  const bringBackTo = activeSession?.fork_message_id ? (activeSession.fork_session_id || activeSession.parent_session_id || null) : null
+  const bringBackMsgId = bringBackTo && !params.childSurface ? [...activeMessages].reverse().find((m) => m.role === 'assistant' && m.status === 'done')?.id : undefined
+  const bringBack = (text: string): void => {
+    if (!bringBackTo) return
+    const st = useApp.getState()
+    const target = st.sessions.find((x) => x.id === bringBackTo) || st.archivedSessions.find((x) => x.id === bringBackTo)
+    openSession(bringBackTo)
+    quoteInMainChat(text)
+    s.toast(t('chat.bringBack.done', { title: displaySessionTitle(target?.title, t) }))
+  }
   const pendingApprovals = useMemo(() => pendingPromptsOf(activeMessages), [activeMessages])
   const running = s.running
   const execConfig = s.execConfig
@@ -462,8 +482,8 @@ export function ChatView({ leaf, params }: ViewProps) {
 
   // 传给每条消息的对象要稳住,EditorialMessage 的 memo 才挡得住「流式每来一段字,整段对话的消息都重渲一遍」。
   // handlers 按「会话 + 哪几个按钮在」整组缓存、组里按消息 id 各一份;函数体经 handlerEnv 取当下的值(提交后才会被点到),不会拿到旧闭包。
-  const handlerEnv = useRef({ s, activeId, activeMessages, copy, speak, startEdit })
-  useLayoutEffect(() => { handlerEnv.current = { s, activeId, activeMessages, copy, speak, startEdit } })
+  const handlerEnv = useRef({ s, activeId, activeMessages, copy, speak, startEdit, activeSession, mvModelId })
+  useLayoutEffect(() => { handlerEnv.current = { s, activeId, activeMessages, copy, speak, startEdit, activeSession, mvModelId } })
   const readOnly = !!params.readOnly
   const childSurface = !!params.childSurface
   const canInsertNote = amadeusAvailable()
@@ -476,6 +496,8 @@ export function ChatView({ leaf, params }: ViewProps) {
       onCopy: (text) => env().copy(text),
       onRegenerate: readOnly ? undefined : () => env().s.regenerate(id, env().activeId),
       onBranch: childSurface ? undefined : () => void env().s.branchFromMessage(id, env().activeId),
+      // 顺便问(挂在这条回答上):开在右边那块面板,不进对话
+      onAside: childSurface ? undefined : () => { const e = env(); if (e.activeId) openBtw({ sessionId: e.activeId, title: e.activeSession?.title, modelId: e.mvModelId || undefined, messageId: id }) },
       onEdit: readOnly ? undefined : () => env().startEdit(id, env().activeMessages.find((m) => m.id === id)?.content ?? ''),
       onRewind: readOnly ? undefined : (mode) => void env().s.rewindTo(id, mode, env().activeId),
       // 建议芯片 = 用户自己把这句话打进去按了回车(运行中则落进 steer 等待区)。
@@ -506,6 +528,19 @@ export function ChatView({ leaf, params }: ViewProps) {
   const deskTakesFiles = useDeskAcceptsFiles(deskEnabled)
   // 团队成员列表嵌入 Pin Summary 的运行状态,Agent Desk 保持独立。
   const teamDesk = !params.childSurface && !studioChat && UI_MODE !== 'mobile' && !!mvCfg.groupChat && (mvCfg.groupAgents?.length || 0) >= 2
+  // 画布(方案「Chat 画布分支」第二步):同一棵会话树的另一种看法。偏好按树根记 —— 在画布里点到别的支,不会翻回对话。
+  // 不给画布的地方:团队 / 群聊、私聊 Agent / 引擎、子会话面板、小窗、钉住会话的分屏、Coding 工作台、手机(没有这条标签栏)。
+  const treeRoot = activeSession?.fork_message_id ? (activeSession.parent_session_id || activeId) : activeId
+  const canvasAllowed = !!activeId && followActive && leaf.loc === 'main' && UI_MODE !== 'mobile' && !params.childSurface && !params.miniSurface && !params.readOnly && !studioChat
+    && !mvCfg.groupChat && !mvCfg.teamSlug && !mvCfg.teamMember && !mvCfg.soloAgentSlug && !mvCfg.soloEngineId && !mvCfg.engineId
+  const [canvasPref, setCanvasPref] = useChatCanvasPref(treeRoot)
+  const canvasOn = canvasAllowed && canvasPref.on
+  // 画布里双击一张卡:切回对话、滚到那个会话里的那一轮(搜索跳转那条路,历史没到齐会等)
+  const openTurn = useCallback((sid: string, mid: string): void => {
+    setCanvasPref({ on: false })
+    if (sid !== useApp.getState().activeId) useApp.getState().setActiveId(sid)
+    useApp.getState().setJumpTarget(sid, mid)
+  }, [setCanvasPref])
 
   // 工作区(会话/笔记/文件)拖进来即引用:**整个聊天区**都是落区,不用瞄准输入框。
   // 只吃 chatDragRef 的两个 MIME —— OS 文件仍归输入框卡片那套(附件/路径插入),两条路不打架。
@@ -542,6 +577,7 @@ export function ChatView({ leaf, params }: ViewProps) {
     <div
       className={`t2-chat-view${refDrop ? ' refdrop' : ''}`}
       data-chat-surface={leaf.type}
+      data-canvas={canvasOn ? '' : undefined}
       data-session-id={activeId || undefined}
       style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'row', minWidth: 0 }}
       onDragOver={onRefDragOver}
@@ -614,6 +650,7 @@ export function ChatView({ leaf, params }: ViewProps) {
                       return curEngineId ? undefined : chatAgentAvatar
                     })()}
                     agentNameFallback={chatAgentName}
+                    onBringBack={m.id === bringBackMsgId ? bringBack : undefined}
                     userName={userName}
                     userAvatar={userAvatar}
                     fileCtx={fileCtx}
@@ -646,7 +683,7 @@ export function ChatView({ leaf, params }: ViewProps) {
             </div>
           </div>
           <JumpToBottom setter={jumpSetter} title={t('chat.jumpToBottom')} onClick={() => scrollToBottom(true)} />
-          {/* 划线条(全应用同一条,components/selectionBar):这里接管「带去对话」那一格 —— 引用 / 在侧栏提问 / 顺便问,
+          {/* 划线条(全应用同一条,components/selectionBar):这里接管「带去对话」那一格 —— 引用 / 顺便问(10-18 起「在侧栏提问」并进顺便问,开在右边那块面板),
               行为与原来的胶囊菜单一字不差;翻译和插件动作(⋯)由共用的那一层给。条自己 portal 到 body。 */}
           <ViewSelectionBar
             view="chat"
@@ -656,17 +693,20 @@ export function ChatView({ leaf, params }: ViewProps) {
             source={() => ({ title: activeSession?.title || undefined, sessionId: activeId || undefined })}
             lead={(sel, done) => [
               { id: 'quote', label: t('chat.action.quote'), icon: <Quote size={14} />, lead: true, testId: 'selection-quote', onRun: () => { setQuoteDraft((prev) => quoteAdded(prev, quoteSid, sel.text)); done() } },
-              // 在侧栏提问 = 旁聊开在右侧栏:带着本会话上下文问,主对话里什么都不发(2026-10-11 起;此前是把引用丢给侧栏那个独立对话)
-              ...(leaf.type !== 'chat-panel' && activeId ? [{ id: 'ask-in-panel', label: t('chat.action.askInPanel'), icon: <MessageSquarePlus size={14} />, testId: 'selection-ask-in-panel', onRun: () => { openBtwInSidebar({ sessionId: activeId, title: activeSession?.title, quote: sel.text, modelId: mvModelId || undefined }); done() } }] : []),
-              // 划线旁聊:选中的那段作为引用开进本会话的旁聊浮窗,主对话里什么都不发
-              ...(activeId ? [{ id: 'btw', label: t('btw.selectionAction'), icon: <MessageCircleQuestion size={14} />, testId: 'selection-btw', onRun: () => { openBtw({ sessionId: activeId, title: activeSession?.title, quote: sel.text, modelId: mvModelId || undefined }); done() } }] : []),
+              // 划线顺便问:选中的那段作为引用,挂在它所在的那条回答上,主对话里什么都不发
+              ...(activeId ? [{ id: 'btw', label: t('btw.selectionAction'), icon: <MessageCircleQuestion size={14} />, testId: 'selection-btw', onRun: () => { openBtw({ sessionId: activeId, title: activeSession?.title, quote: sel.text, modelId: mvModelId || undefined, messageId: selectedMessageId() }); done() } }] : []),
             ]}
           />
         </div>
       </ErrorBoundary>
+      {/* 画布盖在对话流上(流照旧挂着、只是藏起来:切回来滚动位置还在);按树根挂,点到别的支时舞台不重挂 */}
+      {canvasOn && activeId && treeRoot && (
+        <ChatCanvas key={treeRoot} rootId={treeRoot} activeId={activeId} dir={canvasPref.dir} onDir={(dir) => setCanvasPref({ dir })} onOpenTurn={openTurn} />
+      )}
+      {canvasAllowed && <ViewChromePortal leafId={leaf.id}><ChatCanvasSeg on={canvasOn} onChange={(on) => setCanvasPref({ on })} /></ViewChromePortal>}
 
       {/* 空状态优先保持 view 居中;空间不足时按 composer 实高向上避让,小高度逐级精简。 */}
-      {!hasMessages && !historyLoading && <EmptyState2 compact={!!params.miniSurface} title={params.miniSurface ? t('mini.chatHint') : studioChat ? t('studio.chatTitle') : undefined} subtitle={studioChat ? t(studioRoot ? 'studio.chatHint' : 'studio.chooseProject') : undefined} />}
+      {!hasMessages && !historyLoading && !canvasOn && <EmptyState2 compact={!!params.miniSurface} title={params.miniSurface ? t('mini.chatHint') : studioChat ? t('studio.chatTitle') : undefined} subtitle={studioChat ? t(studioRoot ? 'studio.chatHint' : 'studio.chooseProject') : undefined} />}
 
       {/* 输入区整簇(新对话的两条选择器 + 输入卡)一起悬浮:它们**都在 .composer-anchor 里**,
           正文才能真正铺满整列。留在外面就会各占一段布局,反倒被悬浮的卡盖住。
@@ -855,7 +895,8 @@ export function ChatView({ leaf, params }: ViewProps) {
       {/* 右侧车道:任务概览卡 + Agent Desk 卡片态。锚在整列(.t2-chat-col,含输入框区)——
         * Desk 卡底缘与输入框底缘同一条线(都是列底 -16px);滚动条仍在最右缘
         * (卡片右侧留 --tsum-gut 让 thumb 落位)。够宽才显示(容器查询),见 chat2.css .t2-rail */}
-      {!params.childSurface && <div className="t2-rail">
+      {/* 画布模式下右侧车道收起,舞台铺满;切回对话原样回来 */}
+      {!params.childSurface && !canvasOn && <div className="t2-rail">
         <TaskSummary
           teamStatus={activeId ? <>
             {teamDesk && <TeamStatus sessionId={activeId} />}
@@ -900,7 +941,7 @@ export function ChatView({ leaf, params }: ViewProps) {
         {deskEnabled && activeId ? <DeskCard sessionId={activeId} /> : null}
       </div>}
       </div>
-      {deskEnabled && activeId && !childSelections[activeId] ? <AgentDesk sessionId={activeId} /> : null}
+      {deskEnabled && activeId && !childSelections[activeId] && !canvasOn ? <AgentDesk sessionId={activeId} /> : null}
       {!params.childSurface && activeId ? <ChildChatPanel key={activeId} parentId={activeId} /> : null}
     </div>
   )

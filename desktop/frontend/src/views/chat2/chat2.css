@@ -1229,3 +1229,86 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 .t2-stream-inner > .t2-asst[data-streaming] { content-visibility: visible; }
 /* 回退菜单是消息里唯一伸出框外的弹层(往下最高 320px),开着的那条不加 containment,否则被裁 */
 .t2-stream-inner > .t2-userwrap:has(.rewind-menu) { content-visibility: visible; }
+
+/* 操作条里带字的那颗(分支里「带回这里」):同 .t2-iconbtn 的底,宽度随字 */
+.t2-iconbtn.t2-textbtn { width: auto; gap: 5px; padding: 0 10px; border-radius: 14px; font-size: var(--ui-font-meta, 12px); font-family: var(--font-ui); }
+
+/* ── Chat 画布(方案「Chat 画布分支」第二步,ChatCanvas.tsx)────────────────────────────────
+   外观照 Amadeus 画布:点阵(.amx-stage-grid)、卡(同 .amx-canvas .amx-ucard:细描边 + 10px 圆角 + 卡底 + --card-shadow)、
+   层级线(同 .amx-el-conn.is-tree:强调色 55%,树根到选中卡那一路加深)、缩放胶囊 / 缩略图(canvasKit 的 .amx-stage-hud / -minimap)。
+   ⚠️ .am-app 只包点阵和 chrome(.t2cv-am 是 display: contents):它给 Amadeus 那套几百个通用类开了作用域,包住卡会串进消息排版。
+   流照旧挂着、只是藏起来(visibility,不是 display:none):切回对话时滚动位置还在,滚动跟随那套监听也不用重挂。 */
+/* 只认本视图自己那一列:右边子会话面板里嵌着的是另一个 ChatView,它的正文不能跟着藏(Codex 评审) */
+.t2-chat-view[data-canvas] > .t2-chat-col > .t2-chat-body { visibility: hidden; }
+.t2cv { position: absolute; inset: 0; z-index: 2; }
+.t2cv-stage { position: absolute; inset: 0; overflow: hidden; touch-action: none; outline: none; }
+.t2cv-am { display: contents; }
+.t2cv-world { position: absolute; left: 0; top: 0; width: 0; height: 0; transform-origin: 0 0; }
+.t2cv-edges { position: absolute; left: 0; top: 0; width: 1px; height: 1px; overflow: visible; pointer-events: none; }
+.t2cv-edges path { fill: none; stroke: color-mix(in srgb, var(--accent-ink) 55%, transparent); stroke-width: 2; }
+.t2cv-edges path.hot { stroke: var(--accent-ink); stroke-width: 2.5; }
+.t2cv-card {
+  position: absolute; box-sizing: border-box; padding: 14px 16px 10px;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--bg-card, var(--bg)); box-shadow: var(--card-shadow);
+}
+/* 还没量到高的卡先不露面:它的位置是按估高排的,量到后才落定(否则第一帧会叠在别的卡上闪一下) */
+.t2cv-card:not([data-measured]) { visibility: hidden; }
+/* 选中:DESIGN §5 强调带(1px 换强调色 + 0.5px 环,不加粗边框) */
+.t2cv-card[data-sel] { border-color: var(--accent-ink); box-shadow: var(--card-shadow), 0 0 0 0.5px var(--accent-ink); }
+/* 「只看这一支」:旁支只露问题和两行、淡一档,点一下就切过去 */
+.t2cv-card[data-dim] { opacity: 0.55; cursor: pointer; }
+.t2cv-card[data-dim] .t2cv-body { max-height: 3.6em; overflow: hidden; }
+.t2cv-q {
+  margin: 0 0 8px; font-size: var(--ui-font-body, 14px); font-weight: 600; line-height: 1.5; color: var(--text);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden;
+}
+.t2cv-body { position: relative; }
+/* 超长的回答(约 40 行)在卡里折起,底部原地「展开全文」 */
+.t2cv-body[data-clamp] { max-height: 880px; overflow: hidden; }
+.t2cv-body[data-folded] { -webkit-mask-image: linear-gradient(#000 calc(100% - 72px), transparent); mask-image: linear-gradient(#000 calc(100% - 72px), transparent); }
+.t2cv-more {
+  display: block; margin: 6px auto 2px; padding: 3px 12px; border: 1px solid var(--border); border-radius: var(--radius-pill, 999px);
+  background: transparent; color: var(--text-muted); font: inherit; font-size: var(--ui-font-meta, 12px); cursor: pointer;
+}
+.t2cv-more:hover { color: var(--text); background: var(--overlay-light, rgba(127, 127, 127, 0.1)); }
+/* 卡里的消息:不画头像 / 署名 / 时刻,也不画「从这里分出」块(分支在画布上已经是卡);操作条只留两个动词(接着问 / 顺便问) */
+.t2cv-card .t2-avatar, .t2cv-card .t2-name, .t2cv-card .t2-childs, .t2cv-card .t2-msgtime { display: none; }
+.t2cv-card .t2-asst { display: block; }
+.t2cv-card .t2-content { max-width: none; }
+.t2cv-card .t2-actions > :not([data-testid="msg-branch"]):not([data-testid="msg-aside"]) { display: none; }
+.t2cv-card .t2-actions { margin-top: 2px; }
+/* 抓手:拖到哪都是平移(卡里的字也不选了) */
+.t2cv[data-hand] .t2cv-stage { cursor: grab; }
+.t2cv[data-hand] .t2cv-card { user-select: none; cursor: grab; }
+.t2cv-empty {
+  position: absolute; left: 50%; top: 38%; transform: translate(-50%, -50%); max-width: 300px; padding: 22px 26px;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--bg-card, var(--bg)); box-shadow: var(--card-shadow);
+  color: var(--text-muted); font-size: var(--ui-font-meta, 12px); line-height: 1.6; text-align: center; pointer-events: none;
+}
+/* 「接在 · …」:输入框发出去接在哪张卡后面(当前这一支的最后一张)。盒子照抄 .t2c-inner(880 封顶 + 28 内边距),左缘对齐输入卡。 */
+/* 卡会从这一行底下穿过(横排时尤其):给它一枚实底胶囊,字不和卡里的字叠在一起 */
+.t2cv-attach-row {
+  position: absolute; left: 0; right: 0; bottom: calc(var(--t2-composer-h, 96px) + 4px); pointer-events: none; z-index: 3;
+  box-sizing: border-box; max-width: 880px; margin: 0 auto; padding: 0 28px;
+}
+.t2cv-attach {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-width: 0; box-sizing: border-box;
+  padding: 2px 10px 2px 8px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg-card);
+  font-size: var(--ui-font-caption, 11px); color: var(--text-muted);
+}
+.t2cv-attach > svg { flex: none; color: var(--accent-ink); }
+.t2cv-attach > b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; color: var(--text); }
+/* 缩放胶囊 + 缩略图:宽列里放在输入卡右边(同 Amadeus 画布的右下角),窄到挨着输入卡了就抬到它上面。
+   (0,3,0) 压过 .am-app 里的 (0,2,0) 定位。 */
+.t2cv-am.am-app .amx-stage-hud { right: 16px; bottom: 16px; z-index: 11; }
+.t2cv-am.am-app .amx-stage-minimap { right: 16px; bottom: 52px; z-index: 11; }
+@container (max-width: 1440px) {
+  .t2cv-am.am-app .amx-stage-hud { bottom: calc(var(--t2-composer-h, 96px) + 12px); }
+  .t2cv-am.am-app .amx-stage-minimap { bottom: calc(var(--t2-composer-h, 96px) + 48px); }
+}
+/* 回到正在生成的那张卡:同「回到底部」那颗,摆在输入框正上方居中(右下角归缩放胶囊和缩略图) */
+.t2-jump.jump-bottom.t2cv-jump { right: auto; left: 50%; transform: translateX(-50%); bottom: calc(var(--t2-composer-h, 96px) + 26px); }
+/* 标签栏右端的「对话 / 画布」胶囊(引擎 ViewChrome 空位里;云端 / 本地那颗 .t2s-vaultseg 本体在 sidebar2.css) */
+.dv-view-chrome .t2s-vaultseg.t2cv-seg { width: 118px; height: 24px; margin: 0; flex-shrink: 0; }
+.dv-view-chrome .t2s-vaultseg.t2cv-seg button { font-size: var(--ui-font-caption, 11px); }

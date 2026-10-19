@@ -187,4 +187,17 @@ describe('child sessions', () => {
     }
     await idle();
   });
+
+  it('分支(fork_message_id 有值)不是子会话:分支里能开子会话,send_to_session 发不到分支,回报不把分支算进去', async () => {
+    await setup();
+    await query(`INSERT INTO chat_messages (id, session_id, role, content, timestamp) VALUES ('fm', ?, 'model', 'x', 100)`, [P]);
+    const B = `${P}-branch`;
+    await query(`INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, kind, parent_session_id, fork_message_id, agent_config) VALUES (?, 'u1', 'tangu', 'branch', 'm1', 'user', ?, 'fm', ?)`,
+      [B, P, JSON.stringify({ execMode: 'host', cwd: home, approvalMode: 'auto-edit' })]);
+    expect(String(await tool('send_to_session').execute({ session_id: B, message: 'hi' }, ctx()))).toMatch(/No such child session/);
+    const cid = idOf(String(await tool('start_session').execute({ title: 'A', message: 'a' }, ctx(B))));
+    await idle();
+    expect((await updatesIn(B))[0]).toContain(`id="${cid}"`);
+    expect(await updatesIn(P)).toEqual([]); // 分支收尾不往主线送任何东西
+  });
 });
