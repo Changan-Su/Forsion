@@ -2216,9 +2216,14 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       return Promise.resolve()
     }
     stashDraft(vaultRoot, movedTo, text, pipe.lastSaved, pipe.slot)
+    // ponytail: 文件夹改名时合不拢的副本落在新路径旁,指向夹外再绕回原夹的写法(`../A/x.png`)在副本里会断(字不丢);要堵得给副本也跑一遍引用改写。
     const copyBeside = wholeFolder ? movedTo : path
+    // 每次落笔前核库根(Codex 复核 P0):标签在交接途中关掉,实例就出了登记处,换库屏障等不到它 —— 库根换了就不写,
+    // 草稿记在旧库的新路径上(同 retire 的换库分支)。
+    const sameVault = (): boolean => (scoped.getState().vaultRoot ?? null) === (vaultRoot ?? null)
     const io = async (): Promise<void> => {
       try {
+        if (!sameVault()) return
         if (pipe.unpreserved != null && pipe.unpreserved !== text) {
           toastConflictCopy(movedTo, await writeConflictCopy(copyBeside, toDisk(pipe.unpreserved, pipe.eol)))
         }
@@ -2229,6 +2234,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
           const theirs = await amadeus.readTextFile(movedTo)
           const merged = theirs == null ? null : mergeMovedText(base, ours, theirs)
           if (merged == null) break
+          if (!sameVault()) return
           const r = await amadeus.writeTextFile(movedTo, merged, { base: textFingerprint(theirs!) })
           if (!r || r.ok !== false) {
             clearDraft(vaultRoot, movedTo, text, pipe.slot)
@@ -2237,6 +2243,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
           }
           if (r.current == null) break // 新路径也没了
         }
+        if (!sameVault()) return
         toastRenameCopy(movedTo, await writeConflictCopy(copyBeside, ours), true)
         clearDraft(vaultRoot, movedTo, text, pipe.slot)
         settle()
