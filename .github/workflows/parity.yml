@@ -13,8 +13,11 @@ on:
     # 放宽到目录级:门控会陆续搬进新文件(GATE_FILES / E 段 store),逐个列文件必然漂移;脚本几秒跑完,放宽成本可忽略。
     paths: &parity_paths
       - 'desktop/frontend/src/**'
-      - 'lcl/engine/**'
+      - 'lcl/**'                    # check:tanguboundary 扫整个 lcl(parity 只看 lcl/engine)
       - 'mobile/src/**'
+      - 'web/src/**'                # 以下三行同为 check:tanguboundary 的扫描范围
+      - 'desktop/shared/**'
+      - 'desktop/electron/**'
       - 'mobile/vite.config.ts'   # F 段读它的 engineSwap 替身表
       - 'desktop/scripts/platform-parity.check.cjs'
       - 'desktop/scripts/tangu-boundary.*'
