@@ -63,6 +63,7 @@ export function BtwPanel({ seed, onClose, onQuoted }: { seed: BtwSeed; onClose?:
   // 上一问还在流(一次一问)→ 不能直接问,也不能丢(主窗输入框已经清空了):填进本面板输入框,答完再发。
   useEffect(() => {
     if (consumeSeed(seed)) {
+      useBtw.getState().applySeed(seed)
       const streaming = (useBtw.getState().threads[sessionId] || []).some((turn) => turn.status === 'streaming')
       if (seed.question && !streaming) ask(seed.question, seed.quote)
       else {
@@ -84,6 +85,8 @@ export function BtwPanel({ seed, onClose, onQuoted }: { seed: BtwSeed; onClose?:
     const ta = taRef.current
     if (!ta) return
     ta.style.height = 'auto'
+    // 空的就用自然的一行高:子会话面板滑出时首帧宽度近 0,那一刻量 scrollHeight 会把空输入框撑到上限、一直不缩(10-18 截图)
+    if (!ta.value) return
     ta.style.height = `${Math.min(ta.scrollHeight, 160)}px`
   }
   const send = (): void => {
@@ -147,16 +150,14 @@ export function BtwPanel({ seed, onClose, onQuoted }: { seed: BtwSeed; onClose?:
   )
 }
 
-/** 右侧栏里的旁聊(视图 `btw-panel`):跟着主窗当前会话走 —— 线程按会话存,切会话就切到那个会话的旁聊。
- *  「在侧栏提问」带来的引用经 sideSeed 递进来;它属于当前会话时用它(团队成员子聊天里问的,上下文是子会话),否则按当前会话开一扇空的。 */
+/** 右侧栏里的旁聊(视图 `btw-panel`,手动放进侧栏的):跟着主窗当前会话走 —— 线程按会话存,切会话就切到那个会话的旁聊。 */
 export function BtwSideView() {
   const { t } = useI18n()
   const activeId = useApp((s) => s.activeId)
   const session = useApp((s) => s.sessions.find((x) => x.id === s.activeId) || s.archivedSessions.find((x) => x.id === s.activeId) || null)
   const modelId = useApp((s) => activeChatModelId({ ...s, activeSession: session }))
-  const seed = useBtw((s) => s.sideSeed)
   if (!activeId) return <div className="btw-panel"><div className="btw-body"><div className="btw-empty">{t('btw.sideEmpty')}</div></div></div>
-  const shown: BtwSeed = seed && seed.scope === activeId ? seed : { sessionId: activeId, scope: activeId, title: session?.title || undefined, modelId: modelId || undefined, nonce: `side:${activeId}` }
+  const shown: BtwSeed = { sessionId: activeId, scope: activeId, title: session?.title || undefined, modelId: modelId || undefined, nonce: `side:${activeId}` }
   return <BtwPanel key={shown.sessionId} seed={shown} />
 }
 

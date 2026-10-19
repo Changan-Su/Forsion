@@ -3589,9 +3589,9 @@ export const useApp = create<AppState>((set, get) => ({
     let id = messageId
     if (!id) { for (let i = list.length - 1; i >= 0; i--) { if (list[i].role === 'assistant') { id = list[i].id; break } } }
     if (!id) { get().toast(t('chat.branchEmpty'), true); return }
-    const srcTitle = get().sessions.find((s) => s.id === sid)?.title || ''
     try {
-      const branched = await api.branchSession(targetForSession(sid), sid, id, srcTitle ? t('chat.branchTitle', { title: srcTitle }) : undefined)
+      // 不带标题:引擎记成 New Chat,第一句新问题由 Historian 起名(兄弟分支同叫「X（分支）」在树里认不出来)
+      const branched = await api.branchSession(targetForSession(sid), sid, id)
       // S4:分支在父会话那台引擎上建(远程污点同向传播,C5)→ 路由跟父会话走
       if (inheritBinding(branched.id, sid) === 'conflict') throw new Error(t('app.cannotCreateSession'))
       const s = withLocation(branched)

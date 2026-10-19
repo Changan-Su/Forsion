@@ -3,20 +3,24 @@
  *  - ChildSessionsBlock:开出子会话的那条回答下面一块,每个子会话一行(标题 · 状态 · 最后一句),点开走右侧子会话面板,⌘ 开新标签;
  *    在等你的那行给「去回复」「让 Tangu 回答」。数据全从会话列表来(引擎列表接口带 busy / awaiting_user),不另起轮询。
  *  - ChildUpdateLine:引擎落库的 <child_sessions_update> 用户行(子会话结果送回主会话)对人画成一行系统行,不摆成用户气泡。
+ *  - ForkBlock(方案「Chat 画布分支」10-18 第二轮「挂点统一」):一条回答下面一块「从这里分出 N」,分支 / 顺便问 / 子会话一行一个
+ *    (行就是上面子会话那一行的样子)。点分支 = 主区就地换成那一支(⌘ 开新标签);点顺便问 / 子会话 = 右边那块子会话面板。
+ *  - ChildFromLine:子会话顶上「来自 主会话」;分支顶上「从 X 分出」。
  */
 import React, { useEffect, useState } from 'react'
-import { ChevronRight, CornerDownRight, CornerUpLeft, MessageSquare, Sparkles } from 'lucide-react'
+import { ChevronRight, CornerDownRight, CornerUpLeft, GitBranch, MessageCircleQuestion, MessageSquare, Sparkles } from 'lucide-react'
 import type { SessionRecord, ToolEvent } from '../../types'
 import { useApp } from '../../stores/appStore'
 import { useSessionAttention } from '../../stores/attentionStore'
 import { useChildChat } from '../../stores/childChatStore'
-import { listMessages } from '../../services/backendService'
+import { listMessages, type SavedAside } from '../../services/backendService'
 import { targetForSession } from '../../services/engine/targets'
 import { openSession } from '../../sessionNav'
 import { registerMessages, useI18n } from '../../i18n'
 import { displaySessionTitle } from '../../sessionTitle'
 import { StatusMark } from './AttentionDot'
 import { rowStatus, type RowStatus } from './sessionTree'
+import { openBtw, useBtw } from './btwStore'
 
 registerMessages({
   'childs.head': { zh: '子会话', en: 'Child sessions' },
@@ -36,6 +40,11 @@ registerMessages({
   'childs.upd.stopped': { zh: '{title} 被停下了', en: '{title} was stopped' },
   'childs.from': { zh: '来自', en: 'From' },
   'childs.fromBrief': { zh: '第一条是它写的简报，做完会把结果送回去', en: 'The first message is its brief; results go back there when done' },
+  'fork.head': { zh: '从这里分出', en: 'From here' },
+  'fork.branch': { zh: '分支', en: 'Branch' },
+  'fork.aside': { zh: '顺便问', en: 'Aside' },
+  'fork.branchFrom': { zh: '从', en: 'Branched from' },
+  'fork.branchFromTail': { zh: '分出 · 分叉之前的对话和它一样', en: '· the conversation up to the fork is the same' },
 })
 
 export const CHILD_UPDATE_OPEN = '<child_sessions_update>'
@@ -126,6 +135,74 @@ export function ChildSessionsBlock({ parentId, ids, onSuggest }: { parentId: str
   )
 }
 
+/** 分支那一行:点 = 主区就地换成那一支(⌘ 新标签)。状态照会话列表(在跑 / 等你);平时写「分支」。 */
+function BranchRow({ s, status }: { s: SessionRecord; status: RowStatus }) {
+  const { t } = useI18n()
+  const sub = useLastReply(s.id, status, true)
+  const go = (e: React.MouseEvent | React.KeyboardEvent): void => openSession(s.id, e.metaKey || e.ctrlKey ? { newTab: true } : undefined)
+  return (
+    <div className="t2-child-row" role="button" tabIndex={0} data-branch-session={s.id} data-status={status || 'seen'} onClick={go} onKeyDown={(e) => { if (e.key === 'Enter') go(e) }}>
+      <span className="t2-child-lead"><GitBranch size={15} /></span>
+      <span className="t2-child-title">{displaySessionTitle(s.title, t)}</span>
+      <span className={`t2-child-state${status === 'wait' ? ' wait' : ''}`}>{t(status === 'run' ? 'childs.st.run' : status === 'wait' ? 'childs.st.wait' : 'fork.branch')}<StatusMark status={status} /></span>
+      <span className="t2-child-chev"><ChevronRight size={13} /></span>
+      {sub && status !== 'run' && <span className="t2-child-sub">{sub}</span>}
+    </div>
+  )
+}
+
+/** 存下来的顺便问那一行:标题 = 第一问,下一行 = 最后一个回答;点了在右边那块面板里重开。 */
+function AsideRow({ sessionId, aside }: { sessionId: string; aside: SavedAside }) {
+  const { t } = useI18n()
+  const first = aside.turns[0]
+  const last = aside.turns[aside.turns.length - 1]
+  const title = useApp((s) => s.sessions.find((x) => x.id === sessionId)?.title)
+  const open = (): void => openBtw({ sessionId, title, asideId: aside.id, messageId: aside.message_id || undefined })
+  return (
+    <div className="t2-child-row" role="button" tabIndex={0} data-aside={aside.id} data-status="seen" onClick={open} onKeyDown={(e) => { if (e.key === 'Enter') open() }}>
+      <span className="t2-child-lead"><MessageCircleQuestion size={15} /></span>
+      <span className="t2-child-title">{first?.question || t('btw.title')}</span>
+      <span className="t2-child-state">{t('fork.aside')}{aside.turns.length > 1 ? ` · ${aside.turns.length}` : ''}</span>
+      <span className="t2-child-chev"><ChevronRight size={13} /></span>
+      {last?.answer && <span className="t2-child-sub">{plain(last.answer)}</span>}
+    </div>
+  )
+}
+
+const NO_ASIDES: SavedAside[] = []
+
+/** 一条回答下面「从这里分出 N」:分支(fork_message_id = 这条)、挂在这条上的顺便问、这条开出的子会话。都没有就不画。
+ *  ponytail: 分支只认来源会话里的这条消息;在分支里看,分叉前那几条是复制出来的新 id,兄弟分支不挂在它们下面(画布那一步按时间对齐)。 */
+export function ForkBlock({ sessionId, messageId, childIds, onSuggest }: { sessionId: string; messageId: string; childIds: string[]; onSuggest?: (text: string) => void }) {
+  const { t } = useI18n()
+  const sessions = useApp((s) => s.sessions)
+  const running = useApp((s) => s.runningBySession)
+  const unread = useApp((s) => s.unread)
+  const attention = useSessionAttention()
+  const saved = useBtw((s) => s.saved[sessionId] || NO_ASIDES)
+  useEffect(() => { useBtw.getState().loadSaved(sessionId) }, [sessionId])
+  const branches = sessions.filter((x) => x.fork_message_id === messageId).sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')))
+  const asides = saved.filter((a) => a.message_id === messageId)
+  const kids = childIds.map((id) => sessions.find((x) => x.id === id)).filter((x): x is SessionRecord => !!x)
+  const n = branches.length + asides.length + kids.length
+  if (!n) return null
+  const stOf = (k: SessionRecord): RowStatus => rowStatus(k, !!attention.get(k.id), !!running[k.id], unread.has(k.id))
+  const st = kids.map(stOf)
+  const waiting = st.filter((x) => x === 'wait').length
+  const allBack = st.every((x) => x !== 'run' && x !== 'wait')
+  return (
+    <div className="t2-childs" data-forks={n} data-child-sessions={kids.length || undefined}>
+      <div className="t2-childs-head">
+        <b>{t('fork.head')}</b><span>{n}</span><span className="grow" />
+        {kids.length > 0 && <span>{allBack ? t('childs.allBack') : waiting ? t('childs.waitingN', { n: waiting }) : t('childs.pending')}</span>}
+      </div>
+      {branches.map((b) => <BranchRow key={b.id} s={b} status={stOf(b)} />)}
+      {asides.map((a) => <AsideRow key={a.id} sessionId={sessionId} aside={a} />)}
+      {kids.map((k, i) => <ChildRow key={k.id} parentId={sessionId} s={k} status={st[i]} onSuggest={onSuggest} />)}
+    </div>
+  )
+}
+
 export function ChildUpdateLine({ content }: { content: string }) {
   const { t } = useI18n()
   const rows = parseChildUpdate(content)
@@ -142,7 +219,18 @@ const UPD = { finished: 1, waiting_for_user: 1, failed: 1, stopped: 1 }
 /** 子会话顶上一行:来自哪个主会话(点了回去)。第一条用户消息是主会话写的简报,不是用户本人打的字。 */
 export function ChildFromLine({ session }: { session?: SessionRecord | null }) {
   const { t } = useI18n()
-  const parent = useApp((s) => (session?.parent_session_id ? s.sessions.find((x) => x.id === session.parent_session_id) : undefined))
+  const fromId = session?.fork_message_id ? (session.fork_session_id || session.parent_session_id) : session?.parent_session_id
+  const parent = useApp((s) => (fromId ? s.sessions.find((x) => x.id === fromId) || s.archivedSessions.find((x) => x.id === fromId) : undefined))
+  // 分支:从哪一支分出(点了回去);第一条不是简报,是那一支到分叉点为止的对话
+  if (parent && session?.fork_message_id) {
+    return (
+      <div className="t2-sys t2-child-from" data-branch-from={parent.id}>
+        <GitBranch size={12} /><span>{t('fork.branchFrom')}</span>
+        <a role="button" tabIndex={0} onClick={() => openSession(parent.id)} onKeyDown={(e) => { if (e.key === 'Enter') openSession(parent.id) }}>{displaySessionTitle(parent.title, t)}</a>
+        <span>{t('fork.branchFromTail')}</span>
+      </div>
+    )
+  }
   // 私聊 @项目派遣出的会话也指回私聊,但它在别的项目里、也不回报 —— 只认同一个项目里的主会话(start_session 开的)
   if (!parent || !session || (parent.project_path || '') !== (session.project_path || '') || !!parent.projectless !== !!session.projectless) return null
   return (

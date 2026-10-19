@@ -253,6 +253,21 @@ export async function runMigration(): Promise<void> {
   `));
   await query(`CREATE INDEX IF NOT EXISTS idx_automation_exec_trigger ON automation_executions(trigger_id, created_at)`);
 
+  // 顺便问(/btw,services/aside.ts)落库:挂在某会话某条消息上的一段旁聊。turns = JSON 数组 [{question,quote?,answer}](TEXT,方言无关)。
+  // 不进 chat_messages:不进主对话上下文、不被会话搜索 / Historian / 记忆扫到。
+  await query(ddl(`
+    CREATE TABLE IF NOT EXISTS chat_asides (
+      id VARCHAR(36) PRIMARY KEY,
+      session_id VARCHAR(36) NOT NULL,
+      user_id VARCHAR(36) NOT NULL,
+      message_id VARCHAR(36),
+      turns TEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `));
+  await query(`CREATE INDEX IF NOT EXISTS idx_chat_asides_session ON chat_asides(session_id, created_at)`);
+
   // ── 存量库补列(两方言公共段)────────────────────────────────────────────
   // CREATE TABLE IF NOT EXISTS 只管新库;老库(建库时 base schema 还没有这些列)必须显式
   // ALTER 补齐。本清单与 schemaStandalone.ts 同步演进:往 base schema 加列时这里同加一条
@@ -268,6 +283,9 @@ export async function runMigration(): Promise<void> {
     // 父子会话(services/childSessions.ts):「等你」标记(收尾问句置、下一轮开始清)+ 子会话待送回主会话的那一轮。
     ['chat_sessions', 'awaiting_user BOOLEAN NOT NULL DEFAULT FALSE'],
     ['chat_sessions', 'report_run_id VARCHAR(36)'],
+    // 会话分支(/branch,方案「Chat 画布分支」10-18):分叉点 = 来源会话里那条消息的 id。有值 = 分支(parent_session_id 指树根),
+    // 没值而有 parent_session_id = 子会话 / 后台会话。
+    ['chat_sessions', 'fork_message_id VARCHAR(36)'],
     // Muse 主动发私聊(services/museDm.ts):最近一条主动消息的时刻 + 用户读到哪(毫秒)。未读 = proactive_at > last_read_at。
     ['chat_sessions', 'proactive_at BIGINT'],
     ['chat_sessions', 'last_read_at BIGINT'],

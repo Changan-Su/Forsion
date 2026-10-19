@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Bot, ChevronRight, Loader2, X } from 'lucide-react'
+import { Bot, ChevronRight, Loader2, MessageCircleQuestion, X } from 'lucide-react'
 import type { Leaf } from '@lcl/engine/types'
 import { listActiveRuns } from '../../services/agentRunService'
 import { recordToUi, useApp } from '../../stores/appStore'
@@ -10,6 +10,7 @@ import { registerMessages, useI18n } from '../../i18n'
 import { ChatView } from '../ChatView'
 import { useDeskGrip } from './AgentDesk'
 import { subChatRows } from './subChatRows'
+import { BtwPanel } from './BtwPanel'
 import './childChat.css'
 
 registerMessages({
@@ -134,6 +135,16 @@ export function ChildChatPanel({ parentId }: { parentId: string }) {
     setTitle: () => {}, setParams: () => {}, close: () => useChildChat.getState().close(parentId),
   }), [parentId, sessionId])
   if (!target) return null
+  // 顺便问开在同一块面板里(10-18 挂点统一):一次只开一个,开着子会话再点顺便问就换成顺便问
+  if (target.aside) {
+    return <div ref={root} className="agent-desk open child-chat-panel" data-team-desk="panel" data-aside-panel="" style={{ '--desk-w': `${fraction * 100}%` } as React.CSSProperties}>
+      <div className="agent-desk-grip" onPointerDown={grip} />
+      <div className="agent-desk-inner">
+        <div className="agent-desk-head"><MessageCircleQuestion size={15} /><strong className="agent-desk-title">{t('btw.title')}</strong><button className="icon-btn" aria-label={t('teamdesk.collapse')} onClick={leaf.close}><X size={16} /></button></div>
+        <BtwPanel key={target.aside.nonce} seed={target.aside} onClose={leaf.close} />
+      </div>
+    </div>
+  }
   return <div ref={root} className="agent-desk open child-chat-panel" data-team-desk="panel" style={{ '--desk-w': `${fraction * 100}%` } as React.CSSProperties}>
     <div className="agent-desk-grip" onPointerDown={grip} />
     <div className="agent-desk-inner">

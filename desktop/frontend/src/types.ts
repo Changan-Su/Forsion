@@ -121,6 +121,10 @@ export interface SessionRecord {
   projectless?: boolean
   /** 父子会话:主会话用 start_session 开出的子会话指回主会话(左栏挂在它下面一层)。也可能是私聊 @项目派遣的会话(那时主会话在别的组,照平铺)。 */
   parent_session_id?: string | null
+  /** 分支(「接着问」分出来的):来源会话里分叉的那条消息 id。有值 = 分支(parent_session_id 指树根),没值 = 子会话 / 派遣。 */
+  fork_message_id?: string | null
+  /** 分叉那条消息所在的会话(分支的分支挂树根下,来源支从这里认;引擎列表接口现算)。 */
+  fork_session_id?: string | null
   /** 这一轮以问句收尾、在等用户回答(引擎置,下一轮开始清掉)。 */
   awaiting_user?: boolean
   /** 引擎这会儿有在飞 / 排队的 run(列表接口现算):客户端没订阅的会话(子会话、自动接着做的一轮)也画「在跑」。 */
