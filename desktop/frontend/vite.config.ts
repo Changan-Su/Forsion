@@ -29,6 +29,7 @@ export default defineConfig({
       '@': resolve(__dirname, 'src'),
       '@amadeus': resolve(__dirname, 'src/amadeus'),
       '@amadeus-shared': resolve(__dirname, '../shared/amadeus'),
+      '@tangu/ui': resolve(__dirname, 'src'),
     },
   },
   server: { port: 5173, strictPort: true, fs: { allow: [resolve(__dirname, '..'), resolve(__dirname, '../../lcl')] } },

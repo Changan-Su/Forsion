@@ -54,7 +54,7 @@ import { printClone } from '@amadeus/lib/printClone'
 import { openManual } from './amadeusManual'
 import { isDrawingPath } from '@amadeus-shared/excalidraw/format'
 import { isDashboardPath } from '@amadeus-shared/dashboard'
-import { REF_MIME, PATHS_MIME, setChatRefDrag } from './views/chat2/chatDragRef'
+import { REF_MIME, PATHS_MIME, setChatRefDrag } from './components/chatDragRef'
 import { newTabOf, useItemSelect } from './views/itemSelect'
 import { useSearchSeed } from './amadeusPanels'
 import { askString } from '@amadeus/components/askString'
@@ -85,7 +85,7 @@ import { openCloudSyncDialog } from './components/CloudSyncDialog'
 import { track } from './achievements/store'
 import { act } from './activity/log'
 import '@amadeus/blocks' // 注册内置块类型(markdown→Milkdown);缺此 side-effect 导入则块显示「未知块类型」
-import './views/chat2/sidebar2.css' // t2s- 侧栏样式(通常已随 SessionsView 全局加载;显式引入以防独立挂载)
+import './styles/sidebar2.css' // t2s- 侧栏样式(通常已随 SessionsView 全局加载;显式引入以防独立挂载)
 import { OverlayAt, useListFirst, useNativeChromeExtras, useNativeSheetMenu, useRibbonStore, type SheetMenuItem } from '@lcl/engine'
 import { CtxMenuButtons } from './components/CtxMenuButtons'
 import { SidebarRow } from './components/SidebarRow'

@@ -18,7 +18,7 @@
  */
 import type { ReactNode } from 'react'
 import { AppWindow, FileText, Folder, MessageSquare, PanelsTopLeft, X } from 'lucide-react'
-import { sessionIdOfTarget } from './chatDragRef'
+import { sessionIdOfTarget } from '../../components/chatDragRef'
 import type { RefChip } from './Composer2'
 import { parseAppRefInner, type AppRef } from '../../../../shared/appRefs'
 import { AppRefIcon, appRefCardText, appRefsSupported, openAppRef, useAppRefStatus } from '../../components/appRefs'

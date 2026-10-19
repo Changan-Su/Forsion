@@ -35,7 +35,7 @@ function check(name, ok, detail) {
 
 const ROOT = path.resolve(__dirname, '..')
 const BASE_CSS = fs.readFileSync(path.join(ROOT, 'frontend/src/styles/base.css'), 'utf8')
-const SIDE_CSS = fs.readFileSync(path.join(ROOT, 'frontend/src/views/chat2/sidebar2.css'), 'utf8')
+const SIDE_CSS = fs.readFileSync(path.join(ROOT, 'frontend/src/styles/sidebar2.css'), 'utf8')
 
 const LONG = '这是一条很长的命中片段'.repeat(20)
 

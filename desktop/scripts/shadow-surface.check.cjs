@@ -47,7 +47,7 @@ const cssFiles = [
   'frontend/src/hoverTip.css',
   'frontend/src/styles/unitSwitcher.css',
   'frontend/src/amadeus/pdf/pdfAnnotator.css',
-  'frontend/src/views/chat2/sidebar2.css',
+  'frontend/src/styles/sidebar2.css',
   'frontend/src/views/dashCanvas.css',
   '../lcl/engine/singleColumn.css',
 ]

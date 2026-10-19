@@ -5,7 +5,7 @@
  * 每个 token 都换引用,直接按 store 变化打原生会把通知更新打爆(系统每秒只收几条,多的静默丢掉)。
  */
 import type { ApprovalRequest, SessionRecord, UiMessage } from '@/types'
-import { pendingPromptsOf } from '@/views/chat2/approvalQueue'
+import { pendingPromptsOf } from '@tangu/ui/views/chat2/approvalQueue'
 
 /** 岛上那张待批审批在通知上能答到哪一步(原生据此放「拒绝 / 允许」两个按钮,见 LiveIslandPlugin.addAnswers)。 */
 export interface IslandAsk {

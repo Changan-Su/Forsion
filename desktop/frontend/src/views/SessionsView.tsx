@@ -1,9 +1,9 @@
 /** 左侧栏视图:复用真实 <Sidebar/>,props 由 appStore 映射(对齐 App.tsx 的 sidebarEl)。
  *  特殊视图入口(工作区详情)→ openSpecial 开主区 leaf。 */
 import { useEffect, useMemo } from 'react'
-import { SidebarPane } from './chat2/SidebarPane'
+import { SidebarPane } from '@tangu/ui/views/chat2/SidebarPane'
 import { useApp } from '../stores/appStore'
-import { openSpecial } from './SpecialViews'
+import { openSpecial } from '@tangu/ui/views/SpecialViews'
 import { openSession, openNewChat } from '../sessionNav'
 import { useShallow } from 'zustand/react/shallow'
 import { usePageStore } from '../amadeus/store/pageStore'
@@ -14,7 +14,7 @@ import { useSessionAttention } from '../stores/attentionStore' // P1-K3
 import { isHomeSession } from '../types'
 import { runLocationsAvailable } from '../features/runtime'
 import { useRemoteCapability } from '../services/engine/targets'
-import { DeviceSessionSections, attentionBadge } from './chat2/DeviceSessionSections' // P1-K7a
+import { DeviceSessionSections, attentionBadge } from '@tangu/ui/views/chat2/DeviceSessionSections' // P1-K7a
 
 /** sideFilter(工作区 view 左栏胶囊):cloud=只看云端(无 project_path 的会话+云端工作区),
  *  local=只看本地;undefined=不过滤(其他挂载点行为不变)。 */

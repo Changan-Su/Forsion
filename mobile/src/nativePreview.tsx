@@ -13,7 +13,7 @@ import '@/i18n.generated'
 import { applyTheme } from '@/theme/loader'
 import { installNativeModelPicker } from './nativeModelPicker'
 import '@/styles/base.css'
-import '@/views/chat2/composer2.css'
+import '@tangu/ui/views/chat2/composer2.css'
 import './nativePreview.css'
 
 const locale = new URLSearchParams(location.search).get('locale') === 'en' ? 'en' : 'zh'

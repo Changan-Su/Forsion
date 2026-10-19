@@ -6,7 +6,7 @@
  *    唯一目标;根目录笔记只能裸名(天花板:与当前页同夹的同名笔记会优先命中,极罕见)。
  *    (画布的 refToCardMd 是裸 `[[路径]]` 卡片正文,两者用途不同,这里不跟它。)
  *  - 会话 / 工作区文件引用与笔记语义不兼容,编辑器不收。 */
-import { readChatRefs } from '../../views/chat2/chatDragRef'
+import { readChatRefs } from '../../components/chatDragRef'
 
 const isNotePath = (p: string): boolean => /\.md$/i.test(p)
 

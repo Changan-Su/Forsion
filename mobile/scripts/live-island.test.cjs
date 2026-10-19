@@ -9,7 +9,7 @@ const { buildSync } = require('esbuild') // ponytail: 借 vite 的传递依赖(�
 const src = buildSync({
   entryPoints: [path.resolve(__dirname, '../src/liveIslandDerive.ts')],
   bundle: true, write: false, logLevel: 'silent', platform: 'node', format: 'cjs',
-  alias: { '@': path.resolve(__dirname, '../../desktop/frontend/src') }, // 同 vite.config 的 '@' = 桌面渲染层
+  alias: { '@': path.resolve(__dirname, '../../desktop/frontend/src'), '@tangu/ui': path.resolve(__dirname, '../../desktop/frontend/src') }, // 同 vite.config 的 '@' = 桌面渲染层
 }).outputFiles[0].text
 const mod = { exports: {} }
 new Function('module', 'exports', src)(mod, mod.exports)

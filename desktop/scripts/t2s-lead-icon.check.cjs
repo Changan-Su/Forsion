@@ -40,7 +40,7 @@ function check(name, ok, detail) {
 
 const read = (p) => fs.readFileSync(path.join(__dirname, p), 'utf8')
 const HOST_CSS = read('../frontend/src/amadeus-host.css')
-const SIDEBAR_CSS = read('../frontend/src/views/chat2/sidebar2.css')
+const SIDEBAR_CSS = read('../frontend/src/styles/sidebar2.css')
 
 /** lucide-react 出的就是这形状:width/height **表现属性**=24,靠 CSS 压过去。
  *  dim: 文件/多维表/白板的兜底图标带 .t2s-dim(opacity .7);文件夹图标不带 —— 与真实 JSX 一致。 */

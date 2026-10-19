@@ -18,16 +18,16 @@ import { Info, MoreHorizontal, Pencil, Pin, PinOff, Plus, SquarePen, Trash2, Use
 import { useShallow } from 'zustand/react/shallow'
 import { OverlayAt, setActiveSpace, useListFirst, useNativeChromeExtras, useNativeSheetMenu, useSpaceStore, type SheetMenuItem } from '@lcl/engine'
 import { CtxMenuButtons } from '../components/CtxMenuButtons'
-import { SidebarPane, sessionActivityAt } from './chat2/SidebarPane'
+import { SidebarPane, sessionActivityAt } from '@tangu/ui/views/chat2/SidebarPane'
 import { SidebarRow } from '../components/SidebarRow'
 import { ListChips, ListFab, ListHint } from '../components/phoneList'
 import { useQuickFind } from '../quickFind'
 import { EngineIcon } from '../components/EngineIcon'
 import { useApp } from '../stores/appStore'
 import { useSessionAttention, useSoloStatus } from '../stores/attentionStore' // P1-K3
-import { StatusMark } from './chat2/AttentionDot'
-import type { RowStatus } from './chat2/sessionTree'
-import { openSpecial } from './SpecialViews'
+import { StatusMark } from '@tangu/ui/views/chat2/AttentionDot'
+import type { RowStatus } from '@tangu/ui/views/chat2/sessionTree'
+import { openSpecial } from '@tangu/ui/views/SpecialViews'
 import { openNewChat, openSession, openSolo, openTeam, rotateSolo } from '../sessionNav'
 import { AvatarStack } from '../components/AvatarStack'
 import { AgentAvatar } from '../components/AgentAvatar'
@@ -42,9 +42,9 @@ import { sessionsInMode, workspacesInMode } from './sessionMode'
 import { registerMessages, useI18n } from '../i18n'
 import { isHomeSession, isIndependentOrbitConfig, isTeamImageAvatar, sessionWorkspaceKey, type NormalAgentDef, type SessionRecord, type TeamDef } from '../types'
 import { runLocationsAvailable } from '../features/runtime'
-import { DeviceSessionSections, attentionBadge } from './chat2/DeviceSessionSections' // P1-K7a
-import { isOrbitPinned, readOrbitPins, toggleOrbitPin, touchOrbitPin, writeOrbitPins, type OrbitPinTimes } from './chat2/orbitPins'
-import './chat2/orbits.css'
+import { DeviceSessionSections, attentionBadge } from '@tangu/ui/views/chat2/DeviceSessionSections' // P1-K7a
+import { isOrbitPinned, readOrbitPins, toggleOrbitPin, touchOrbitPin, writeOrbitPins, type OrbitPinTimes } from '@tangu/ui/views/chat2/orbitPins'
+import '@tangu/ui/views/chat2/orbits.css'
 import { homeTarget, useRemoteCapability } from '../services/engine/targets'
 
 registerMessages({

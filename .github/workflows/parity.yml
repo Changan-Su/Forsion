@@ -17,6 +17,7 @@ on:
       - 'mobile/src/**'
       - 'mobile/vite.config.ts'   # F 段读它的 engineSwap 替身表
       - 'desktop/scripts/platform-parity.check.cjs'
+      - 'desktop/scripts/tangu-boundary.*'
       - '.github/workflows/parity.yml'
   push:
     paths: *parity_paths
@@ -32,3 +33,7 @@ jobs:
       - name: Platform parity (desktop ↔ mobile)
         working-directory: desktop
         run: node scripts/platform-parity.check.cjs
+      # Tangu 核心插件化第 1 步:宿主只经 @tangu/ui 出口用 Tangu 界面,Tangu 的宿主依赖只许减。纯 fs,几秒。
+      - name: Tangu UI boundary
+        working-directory: desktop
+        run: node scripts/tangu-boundary.check.cjs --selftest && node scripts/tangu-boundary.check.cjs

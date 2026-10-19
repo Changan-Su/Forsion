@@ -31,8 +31,8 @@ import { tipProps, fsTipLines } from '../../hoverTip'
 import { startOpenDrag } from '@lcl/engine'
 import { folderPadLeft, nameLeft, rowPadLeft } from '@amadeus/lib/treeIndent'
 import { useItemSelect, type ClickAct, type ItemSelect } from '../itemSelect'
-import { PATHS_MIME as DRAG_MIME, REF_MIME } from './chatDragRef' // 行拖载荷的单源(RightPanel 同值)
-import './sidebar2.css'
+import { PATHS_MIME as DRAG_MIME, REF_MIME } from '../../components/chatDragRef' // 行拖载荷的单源(RightPanel 同值)
+import '../../styles/sidebar2.css'
 
 registerMessages({
   'panel.files.showAllWs': { zh: '显示全部项目', en: 'Show all projects' },
