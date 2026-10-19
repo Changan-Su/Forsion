@@ -125,27 +125,30 @@ export const imageGenProvider: ToolProvider = {
         const stamp = Date.now();
         const isHost = ctx.execMode === 'host' && !!ctx.cwd;
         const shown: string[] = [];
+        const names: string[] = [];
         for (let i = 0; i < images.length; i++) {
           const buf = Buffer.from(images[i].b64, 'base64');
           const mime = images[i].mime || 'image/png';
           const ext = mime === 'image/jpeg' ? 'jpg' : mime === 'image/webp' ? 'webp' : mime === 'image/gif' ? 'gif' : 'png';
           const name = `${stamp}${images.length > 1 ? `-${i + 1}` : ''}.${ext}`;
           const rel = `generated/${name}`;
+          names.push(name);
           if (isHost) {
             const abs = path.resolve(ctx.cwd!, rel);
             try {
               await fs.mkdir(path.dirname(abs), { recursive: true });
               await fs.writeFile(abs, buf);
-              ctx.displayFile({ name, mime, path: abs });
+              ctx.displayFile({ name, mime, path: abs, source: 'generate_image' });
               shown.push(rel);
               continue;
             } catch { /* 落盘失败 → 退化为 dataUrl 内联 */ }
           }
           // 沙箱 / 无 cwd / 落盘失败:dataUrl 内联展示(单图,占用可控)。
-          ctx.displayFile({ name, mime, dataUrl: `data:${mime};base64,${images[i].b64}` });
+          ctx.displayFile({ name, mime, dataUrl: `data:${mime};base64,${images[i].b64}`, source: 'generate_image' });
           shown.push(name);
         }
-        return `已生成 ${shown.length} 张图片并展示在对话区(${shown.join(', ')})。给一句简短说明即可,不要重复描述图片内容,也不要再调 display_file。`;
+        return `Generated ${shown.length} image(s), shown in the chat (${shown.join(', ')}). To edit one later, pass its file name (${names.join(', ')}) in edit_image previous_outputs. ` +
+          'Give a one-sentence caption; do not re-describe the image and do not call display_file.';
       },
     },
     makeImageEditTool(firstImageModelId),

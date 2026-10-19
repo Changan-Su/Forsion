@@ -758,6 +758,8 @@ export function activeRunCount(): number {
 
 const HYDRATE_MAX = 50;
 const HYDRATE_BLOCK = 10; // 窗口起点按块对齐:跨 run 前缀仅每 ~5 个 run 移动一次,而非逐 run 滑动(缓存友好)
+// ponytail: edit_image 找自己产出的图只翻最近这么多条带展示文件的消息;更早的图要用户重新附。
+const DISPLAY_FILE_LOOKUP_ROWS = 100;
 const HYDRATE_EXTEND_MAX = 100; // 有检查点但没覆盖到窗口起点时,窗口最多再往前扩这么多行(宁可多回放,不静默丢)
 const LAZY_CHECKPOINT_WAIT_MS = 45_000; // 下个 run 等上一个 run 在飞的惰性检查点的上限
 /** 每会话在飞的惰性检查点(run 收尾后起的 fire-and-forget 摘要);下个 run hydrate 前等它落库。 */
@@ -823,7 +825,11 @@ export async function hydrateHistory(
   replayFor?: { apiModelId?: string; protocol?: string },
   /** false = 不等在飞的惰性检查点(旁聊 /btw:一句题外话不值得最多 45s 的等待,窗口外老行少一截可接受)。 */
   waitCheckpoint = true,
-): Promise<{ messages: ChatMessage[]; currentUserIndex: number; checkpointThrough: { ts: number; rowId?: string; partial: boolean } }> {
+): Promise<{
+  messages: ChatMessage[]; currentUserIndex: number; checkpointThrough: { ts: number; rowId?: string; partial: boolean };
+  /** 发给模型的那条带图消息的**原图**(缩图之前):本轮没附件时 edit_image 用它 —— 模型看得见什么就能改什么。 */
+  contextImages?: { images: ReturnType<typeof normalizeImageAttachments>; rowId: string; ts: number };
+}> {
   // 上一个 run 收尾后起的惰性检查点还在跑 → 等它(有界):否则这一轮的窗口起点已经越过那批老行,
   // 而检查点还没落,老行既没摘要也没回放(Codex 09-15 评审 #2)。等的是已经在飞的任务,不是新起摘要。
   const inflight = waitCheckpoint ? lazyCheckpoints.get(sessionId) : undefined;
@@ -854,6 +860,7 @@ export async function hydrateHistory(
   let lastUserWithImages = -1; // out 中最新带图 user 消息的下标
   let currentUserIndex = -1; // out 中「本轮那条 user 消息」的下标(按行 id 认,不靠倒扫猜)
   let lastUserImages: ReturnType<typeof normalizeImageAttachments> = [];
+  let lastUserImagesRow = { id: '', ts: 0 };
   for (const r of rows) {
     if (r.id === excludeMessageId) continue;
     const coverage = rowCoverage(r, checkpoint);
@@ -878,9 +885,11 @@ export async function hydrateHistory(
       if (imgs.length) {
         lastUserWithImages = out.length - 1;
         lastUserImages = imgs;
+        lastUserImagesRow = { id: r.id, ts: src.ts };
       }
     }
   }
+  const contextImages = lastUserWithImages >= 0 ? { images: lastUserImages, rowId: lastUserImagesRow.id, ts: lastUserImagesRow.ts } : undefined;
   if (lastUserWithImages >= 0) {
     const m = out[lastUserWithImages] as any;
     // 这条消息的图此后每一轮请求都带着:大图先缩(imageShrink.ts)。只缩上 wire 的这份,库里的附件原样留着。
@@ -897,7 +906,7 @@ export async function hydrateHistory(
     if (currentUserIndex >= 0) currentUserIndex += 1; // unshift 把所有下标推后一位
   }
   return {
-    messages: out, currentUserIndex,
+    messages: out, currentUserIndex, contextImages,
     checkpointThrough: { ts: through, rowId: checkpoint?.throughMessageId, partial: !!(checkpoint?.throughMessageId && checkpoint.throughToolCallId) },
   };
 }
@@ -1129,6 +1138,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   let thinkingLevel: ThinkingLevel = ultraRequested ? 'max' : (agentConfig.thinkingLevel || 'medium');
   const attachments = input.attachments || [];
   let imageInputs = normalizeImageAttachments(attachments);
+  let imageInputsSentAt: number | undefined; // 回退到之前那条消息的图时记它的时刻,edit_image 据此告诉用户用的是哪条
   // host-exec（TUI/桌面本机模式）注入：execMode/cwd/approvalMode 只经 per-run agentConfig 传入。
   // 缺省 sandbox + full-auto → microserver/standalone-server/worker 行为零变化（审批仅 host 激活）。
   // 能力闸门(红线②/④):未声明 hostExec 的 profile(云端形态)一律强制回 sandbox,杜绝云端拿到真实 FS/shell。
@@ -1416,11 +1426,16 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         return null;
       }
     };
-    const { messages: history, currentUserIndex, checkpointThrough } = await hydrateHistory(
+    const { messages: history, currentUserIndex, checkpointThrough, contextImages } = await hydrateHistory(
       sessionId, run.assistant_message_id || '', describeUserImages,
       typeof input.userMessageId === 'string' ? input.userMessageId : undefined,
       { apiModelId: replayModelKey, protocol: stepItemBinding.protocol },
     );
+    // 本轮没附件(「坚持合成」这类跟进):edit_image 用模型此刻看得见的那批图 —— hydrate 每轮都把它发给对话模型。
+    if (!imageInputs.length && contextImages?.images.length) {
+      imageInputs = contextImages.images;
+      if (contextImages.rowId !== input.userMessageId) imageInputsSentAt = contextImages.ts;
+    }
 
     // 工作笔记(HARNESS.md)在这里读一次:技能目录、工具面(agent 自己收起的装备,kind 'equip')与下面 2b) 的笔记段共用这一份。
     // 笔记段不注入的 run(云端无 agent 目录 / coding 预设下的默认 agent / 临时成员)里收起也不生效 ——
@@ -2187,7 +2202,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           attachments: Array.isArray(m.attachments) && m.attachments.length ? m.attachments : null,
         });
         const originals = normalizeImageAttachments(m.attachments);
-        if (originals.length) imageInputs = originals; // 改图工具要原图,不缩
+        if (originals.length) { imageInputs = originals; imageInputsSentAt = undefined; } // 改图工具要原图,不缩
         const images = fitUserImages(originals);
         const described = images.length ? await describeUserImages(images) : null;
         const pushed = { role: 'user', content: described
@@ -2336,6 +2351,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       // self_brainstorm 的共享前缀真源:执行时取 workingMessages 当刻浅拷贝(逐消息拷,防分身侧误改)。
       getWorkingMessages: () => workingMessages.map((m) => ({ ...m })),
       getImageInputs: () => imageInputs,
+      getImageInputsSentAt: () => imageInputsSentAt,
+      // 本 run 还没落库的在前(最新),再接库里本会话的;edit_image 的 previous_outputs 在这里按名字找自己的产出。
+      listDisplayFiles: async () => [...pendingDisplayFiles].reverse().concat(await deps().state.listSessionDisplayFiles?.(sessionId, DISPLAY_FILE_LOOKUP_ROWS) ?? []),
       thinkingLevel,
       contextWindow: ctxWindowTokens,
       getRunStatus,

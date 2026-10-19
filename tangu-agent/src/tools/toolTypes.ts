@@ -201,8 +201,13 @@ export interface ToolContext {
    * 仅主 agentLoop 装配;子代理/群聊等旁路 loop 不装配,消费方须优雅降级。
    */
   getWorkingMessages?: () => any[];
-  /** Current user-provided image attachments, retained independently of vision/compaction. No history or disk fallback. */
+  /** Images the model can currently see: this run's attachments, else the originals of the latest image-bearing user message
+   *  that hydrate sends to the model (lost once compaction covers it). Never a model-supplied path or URL. */
   getImageInputs?: () => ReadonlyArray<{ url: string }>;
+  /** Timestamp (ms) of the earlier user message getImageInputs fell back to; undefined = this run's own attachments. */
+  getImageInputsSentAt?: () => number | undefined;
+  /** This session's display files, newest first (current run + persisted); edit_image looks up its own outputs here. */
+  listDisplayFiles?: () => Promise<DisplayFileItem[]>;
   /** 本 run 实际用的上下文窗口(token;Ultra 不封顶)。self_brainstorm 的超窗护栏与主 loop 同一分母;只有主 agentLoop 装配。 */
   contextWindow?: number;
   /** 本 run 此刻的进度(上下文占用 / 压缩线 / 已花 token / 步数 / 起始时刻),session_status 工具读它。
@@ -229,6 +234,8 @@ export interface DisplayFileItem {
   path?: string;
   /** 内联数据 URL(data:<mime>;base64,...);用于无工作区路径的小文件。 */
   dataUrl?: string;
+  /** 生图工具自己产出的图才打;edit_image 的 previous_outputs 只认带这个标记的(display_file 展示的本机文件不算)。 */
+  source?: 'generate_image' | 'edit_image';
 }
 
 export interface ToolResult {
