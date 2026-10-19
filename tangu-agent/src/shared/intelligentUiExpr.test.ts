@@ -63,6 +63,16 @@ describe('Intelligent UI v2 gallery', () => {
   })
 })
 
+describe('Intelligent UI skill examples', () => {
+  it('every JSON example in the skill validates, and the v2 example is the gallery card', () => {
+    const skill = readFileSync(new URL('../../skills/intelligent-ui/SKILL.md', import.meta.url), 'utf8')
+    const examples = [...skill.matchAll(/```json\n([\s\S]*?)\n```/g)].map(m => JSON.parse(m[1]))
+    expect(examples.length).toBeGreaterThanOrEqual(2)
+    for (const doc of examples) expect(uiDocumentIssues(validateUIDocument(doc), 'zh')).toEqual([])
+    expect(examples).toContainEqual(gallery.loan)
+  })
+})
+
 describe('Intelligent UI v2 validation', () => {
   it('reads version 2 only where the client renders it', () => {
     expect(() => validateUIDocument(gallery.loan, { maxVersion: 1 })).toThrow('version 1 only')

@@ -1,6 +1,6 @@
 import { hasMarketplaceCards, MARKETPLACE_CARDS_CAPABILITY } from '../shared/marketplace.js';
 import { normalizeUIAppCards } from '../shared/intelligentCards.js';
-import { intelligentUiEnabledFor, INTELLIGENT_UI_SECTION, looksLikeLeakedUiDocument, UI_DOCUMENT_LEAK_CHECK } from '../tools/builtin/intelligentUi.js';
+import { computedUiEnabledFor, intelligentUiEnabledFor, INTELLIGENT_UI_SECTION, INTELLIGENT_UI_V2_SECTION, looksLikeLeakedUiDocument, UI_DOCUMENT_LEAK_CHECK } from '../tools/builtin/intelligentUi.js';
 import { withTaskProjectQueue } from './taskProjectQueue.js';
 import { HUMAN_GUIDANCE, readHuman, renderHumanContext } from '../agents/humanStore.js';
 import { humanProjectScope } from './humanContext.js';
@@ -1560,7 +1560,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     const sketchEnabled = sketchEnabledFor(visualGate);
     const visualsPref = visualsPrefOf(uiSettings);
     const nativeUiEnabled = intelligentUiEnabledFor({ ...visualGate, clientCapabilities });
-    const sketchTurnSignal = sketchEnabled ? sketchTurnSignalFor(String(input.message || ''), visualsPref, nativeUiEnabled) : undefined;
+    // intelligent-ui.v2:客户端能渲染带计算层的文档(state / derived / 表达式)→ 多一段说明,计算器类从 sketch 改道过来。
+    const computedUiEnabled = computedUiEnabledFor({ ...visualGate, clientCapabilities });
+    const sketchTurnSignal = sketchEnabled ? sketchTurnSignalFor(String(input.message || ''), visualsPref, nativeUiEnabled, computedUiEnabled) : undefined;
     // 商店卡片之后的重画守卫(10-17):本段出过商店卡片 + 用户没点名要图 → sketch / intelligent_ui 不执行。
     // 单个调用一完成就置位;纯续写分段(applySteering([]))保留,真用户转向开新段时清零、按新消息重算「点名要图」。
     let marketplaceCardsShown = false;
@@ -1569,6 +1571,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     if (sketchEnabled) {
       systemParts.push(SKETCH_SECTION);
       if (nativeUiEnabled) systemParts.push(INTELLIGENT_UI_SECTION);
+      if (computedUiEnabled) systemParts.push(INTELLIGENT_UI_V2_SECTION);
       if (visualsPref === 'less') systemParts.push(SKETCH_LESS_NOTE);
       // 常驻段稳定,但本轮信号按消息正则取 3 种值 → 跟记忆易变段同一落点(B1),别留在稳定前缀里。
       if (sketchTurnSignal && volatilePlacement === 'system') systemParts.push(sketchTurnSignal.section);
@@ -2180,7 +2183,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 即「一个 loop 结束即注入」。A 无正文且无工具调用(刚开跑就转向)则不落库,空段交前端丢弃。
     const applySteering = async (msgs: SteerMsg[]): Promise<void> => {
       actionAskText += msgs.map((m) => `\n${String(m.content || '')}`).join('');
-      if (msgs.length) { marketplaceCardsShown = false; visualAsked = msgs.some((m) => sketchTurnSignalFor(String(m.content || ''), visualsPref, nativeUiEnabled)?.kind === 'explicit'); }
+      if (msgs.length) { marketplaceCardsShown = false; visualAsked = msgs.some((m) => sketchTurnSignalFor(String(m.content || ''), visualsPref, nativeUiEnabled, computedUiEnabled)?.kind === 'explicit'); }
       toolFailureGuard.reset(); repeatedToolFailure = false;
       const finalizedId = currentAssistantId;
       const finalizedContent = finalContent;

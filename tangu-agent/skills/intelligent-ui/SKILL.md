@@ -1,12 +1,12 @@
 ---
 name: intelligent-ui
-description: Native interactive answers in Forsion chat using intelligent_ui. Use for interactive plans, real image galleries, linked web research, option comparisons and quantity-aware checklists. Use sketch for custom simulations and diagrams.
+description: Native interactive answers in Forsion chat using intelligent_ui. Use for interactive plans, real image galleries, linked web research, option comparisons, quantity-aware checklists and, on clients that render version 2, computed cards (calculators, budgets, step guides, flashcards, quizzes). Use sketch for charts, diagrams and animations.
 ---
 
 # Forsion Intelligent UI
 
 Call `intelligent_ui` with `document`, a JSON-encoded object using the schema below. Never emit HTML,
-JavaScript, CSS, arbitrary expressions or OpenAI directives. The host supplies a quiet parallel
+JavaScript, CSS or OpenAI directives; expressions belong only in the version 2 fields described below. The host supplies a quiet parallel
 layout, local state, light/dark themes, keyboard controls and responsive stacking. Localize content
 to the user's language. Keep prose concise; do not repeat the whole document in your final answer.
 The view IS the answer, not an attachment to it. Open the document with a `text` block (no title)
@@ -105,6 +105,63 @@ partly covered instead of pretending the old purchase is enough. No-quantity ite
   visible follow-up. Reserve for new reasoning (e.g. gluten-free menu), not local selection.
 - `{kind:"copy",text:string}` — copy this literal text. Dynamic checklists already have copy buttons.
 - `{kind:"open",resourceId:sourceId}` — normal source link through the user's link preferences.
+
+## Document v2 (computed cards)
+
+Only when your instructions include the "Computed Intelligent UI (version 2)" section; other clients
+render version 1 only and reject version 2. Calculators, budgets, conversions, step guides,
+flashcards, scored quizzes and filterable or sortable lists belong here, not in sketch: the card
+recomputes on every input change or button press without another model turn.
+
+```
+{version:2, id, title, inputs, state:State[], derived:Derived[], resources, blocks}
+```
+
+- `State = {id, initial}` (max 16): hidden values the buttons change. `initial` is a number, text,
+  true/false, null, or a list (max 200) / object (max 16 keys) of those. Use it for data the card
+  walks through (word lists, steps, catalog rows) and for positions, scores and picks.
+- `Derived = {id, expr}` (max 32): evaluated in order; reads inputs as `$inputId`, state by name,
+  and earlier derived names. Never stored, never sent to you.
+- Names are letters, digits and underscore, unique across state and derived, not a function name
+  or one of `and or not true false null`.
+
+Expressions (max 300 characters each): numbers, `'text'`, `[lists]`, `{key: value}`,
+`+ - * / %`, `== != < <= > >=`, `and or not`, `c ? a : b`, `x.field`, `x[i]`. `+` joins text;
+numbers compare with a small tolerance. Functions, and nothing else:
+
+| Function | Meaning |
+|---|---|
+| `round(x, digits?)` `floor` `ceil` `abs` `pow(a, b)` `clamp(x, lo, hi)` | Arithmetic |
+| `min(a, b, …)` `max(…)` (or one list) `sum(list)` `avg(list)` `count(list or text)` `percent(part, whole)` | Aggregates |
+| `payment(ratePerPeriod, periods, principal)` | Level payment per period (loan / annuity) |
+| `format(x, style?, digits?)` | style `number` (default), `percent` (0.25 → 25%), `wan` (万 in Chinese, 1.2M in English), `compact` |
+| `join(list, sep?)` `range(from, to, step?)` `includes(list or text, value)` | Lists; `range` is inclusive, max 200 |
+| `each(list, 'x', expr)` `filter(list, 'x', cond)` `sortBy(list, 'x', key)` | The quoted name is the item inside the third argument; nest at most 2 deep. Sort descending with a negated key |
+
+No random numbers, dates or clocks: a replayed card must show the same values.
+
+Where results appear:
+
+| Place | Form |
+|---|---|
+| text / disclosure | `{{expr}}` inside `markdown`; inserted as plain text after the markdown is parsed (never a link or formatting) |
+| `stats` block | `items:[{label, value:expr}]`, 1–4 headline figures |
+| `table` block | `columns:[string]` (max 6), `rows:expr` giving one list of cells per row (max 50) |
+| `when` | `{expr}` on any block except controls, and on checklist items |
+| `actions` | `{id, label, kind:"set", steps, disabled?:expr}`; steps run in order, each seeing the previous: `{set:id, to:expr}` `{toggle:id, value?:expr}` (flip a boolean, or add/remove a list item) `{append:id, value:expr}` `{remove:id, value:expr}` `{reset:id}` |
+
+A set button changes only the card: no message, no model turn. Keep `model` actions for new
+reasoning; their follow-up carries the inputs and any state the buttons changed. A value that fails
+(division by zero, a missing field, an empty average) shows "—"; the tool result lists such values
+at the initial values. A follow-up card that continues one keeps the same input and state ids and
+starts from the values the user sent back. `quantity.scaleBy` still works and equals
+`value * $input / base`.
+
+Example (the gallery mortgage card):
+
+```json
+{"version":2,"id":"loan","title":"房贷月供估算","inputs":[{"id":"loan","kind":"number","label":"贷款金额（万元）","initial":120,"min":50,"max":300,"step":5},{"id":"rate","kind":"number","label":"年利率（%）","initial":3.2,"min":2,"max":6,"step":0.05},{"id":"years","kind":"number","label":"贷款年限（年）","initial":30,"min":5,"max":30,"step":5}],"state":[],"derived":[{"id":"p","expr":"$loan * 10000"},{"id":"r","expr":"$rate / 1200"},{"id":"n","expr":"$years * 12"},{"id":"pay","expr":"payment(r, n, p)"},{"id":"interest","expr":"pay * n - p"}],"resources":[],"blocks":[{"id":"intro","kind":"text","markdown":"按**等额本息**：贷款 {{$loan}} 万、年利率 {{$rate}}%、{{$years}} 年，**每月还 {{format(pay, 'number', 0)}} 元**，一共付利息约 {{format(interest, 'wan', 1)}}。"},{"id":"controls","kind":"controls","inputIds":["loan","rate","years"]},{"id":"stats","kind":"stats","items":[{"label":"月供","value":"format(pay, 'number', 0) + ' 元'"},{"label":"总利息","value":"format(interest, 'wan', 1)"},{"label":"总还款","value":"format(pay * n, 'wan', 1)"}]},{"id":"balance","kind":"table","title":"每 5 年剩多少本金","columns":["年末","剩余本金"],"rows":"each(range(5, $years, 5), 'y', ['第 ' + y + ' 年', format(pay * (1 - pow(1 + r, y * 12 - n)) / r, 'wan', 1)])"},{"id":"how","kind":"disclosure","title":"怎么算的","markdown":"月利率 r = 年利率 ÷ 12，期数 n = 年限 × 12；月供 = 本金 × r ÷ (1 − (1 + r)^−n)。提前还款和利率调整不在这张表里。"},{"id":"act","kind":"actions","items":[{"id":"more","kind":"model","label":"按这组取值算提前还款","prompt":"按这组取值，帮我算提前还 20 万能省多少利息"}]}]}
+```
 
 ## Small example (illustrative menu, not measured nutrition or pricing)
 

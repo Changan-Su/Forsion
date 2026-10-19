@@ -16,6 +16,7 @@
  */
 import type { ToolProvider } from '../toolRegistry.js';
 import type { ToolContext } from '../toolTypes.js';
+import type { Tool } from '../../core/types.js';
 import { presetOf } from '../../core/presetTable.js';
 
 /** GUI 客户端面(routes/runs.ts CLIENT_TAG_RE 的子集;移动原生 App 见头注刻意排除)。 */
@@ -144,7 +145,7 @@ const SKETCH_CODE_FOCUS_RE = /(?:修复|改代码|重构|实现|写代码|编译
  * 本轮视觉信号:常驻段负责通识,这里用很窄的语义启发式给当前请求一次额外提醒。
  * 不返回用户原文,不做 LLM 分类器,不因文中单个数字或代码里的 compare 误触发。
  */
-export function sketchTurnSignalFor(message: string, visuals: VisualsPref = 'auto', nativeUi = false): SketchTurnSignal | undefined {
+export function sketchTurnSignalFor(message: string, visuals: VisualsPref = 'auto', nativeUi = false, computed = false): SketchTurnSignal | undefined {
   const tool = nativeUi ? '`intelligent_ui` or `sketch`' : '`sketch`';
   const text = String(message || '')
     .replace(/```[\s\S]*?```/g, ' ')
@@ -173,7 +174,8 @@ export function sketchTurnSignalFor(message: string, visuals: VisualsPref = 'aut
       kind: 'implicit',
       section:
         '## Visual-first note for this turn\n' +
-        `This request contains a comparison, sequence, structure, data shape, or interaction that is faster to understand visually even though the user may not have said "draw". Default to calling ${tool} as part of the answer. Skip only if closer inspection shows that the relationship is trivial or the actual deliverable is code/a file rather than an explanation.`,
+        `This request contains a comparison, sequence, structure, data shape, or interaction that is faster to understand visually even though the user may not have said "draw". Default to calling ${tool} as part of the answer. Skip only if closer inspection shows that the relationship is trivial or the actual deliverable is code/a file rather than an explanation.` +
+        (nativeUi && computed ? ' A calculator, converter, budget, step guide or quiz is a computed `intelligent_ui` document (version 2); keep `sketch` for charts, diagrams and animations.' : ''),
     };
   }
   const skip = SKETCH_ACTIONABLE_SKIP_RE.test(text);
@@ -206,6 +208,55 @@ Choose the form of this answer from what the answer will contain, not from the w
 - The answer walks through a whole mechanism, sequence or structure, several stages or parts of it and not one detail, that is easier to see than to read: load the \`visualize\` skill if you have not, call \`sketch\` for one diagram built from its parts (\`<fs-flow>\` for a sequence or process), then explain in prose.
 A follow-up that changes one part gets a view of that part only.`;
 
+const SKETCH_DEFINITION: Tool = {
+  type: 'function',
+  function: {
+    name: 'sketch',
+    // E1 三段式(§五):何时用 → 策略 → 何时别用。构图/视觉语法**不重复**在这里 ——
+    // 它们是 SKETCH_SECTION 的正文,而段与工具同门禁(sketchEnabledFor),工具在场 ⟺ 段在场。
+    // ponytail: 上限≈1.6KB(10-09 二轮加 PARTS / copy 后靠删 fs-eyebrow / fs-chip / fs-panel / 折叠那句抵回来)。`--fs-*` 变量表与
+    //           `fs-*` 类名表留全(§六 P08:SKETCH_SECTION 里没有这两张表,SKETCH_SECTION 反过来让模型「从工具描述取 .fs-* 类」)。
+    description:
+      'Draw a visual card inline in the chat from self-contained HTML: charts, diagrams, comparisons, ' +
+      'timelines, layouts, small interactive widgets. The "Visual cards" section of your instructions ' +
+      'covers when to draw and how to compose.\n' +
+      'SANDBOX: JavaScript runs, but there is NO network, host API or navigation. Inline all CSS/JS, ' +
+      'embed images as data: URIs, no external scripts/styles/fonts or charting libraries (draw with ' +
+      'inline SVG or divs), no eval/new Function. Links and form submits do nothing.\n' +
+      'THEME: use the injected CSS variables, never hardcode colors — they track the live theme: ' +
+      '--fs-bg (transparent card canvas), --fs-surface, --fs-text, --fs-muted, --fs-faint, --fs-border, ' +
+      '--fs-rule (hairline for gridlines/axes), --fs-accent, --fs-accent-soft, --fs-green, --fs-danger, ' +
+      '--fs-radius, --fs-font, --fs-mono, and the series ramp --fs-s1..--fs-s5 (s1 = accent for the focus ' +
+      'value; s2..s5 fade for context). body inherits background/color/font.\n' +
+      'PARTS: fs-chart, fs-flow, fs-compare, fs-choice, fs-checklist (JSON-driven, see the visualize ' +
+      'skill); classes fs-header, fs-title, fs-subtitle, fs-plot, fs-source, fs-stat-grid, fs-stat, fs-value, ' +
+      'fs-label, fs-row, fs-grid, fs-actions, fs-callout, fs-bar-track; no inline style attributes.\n' +
+      'SIZE: ~700px wide, auto height. It streams in while you write (markup first, scripts last). ' +
+      'Each call appends a NEW card; the result is only a confirmation, the user sees the card.\n' +
+      'INTERACTION: click handlers may call window.forsionSketch.ask(text) (sends that follow-up as ' +
+      'the user\'s next message) or .copy(text).\n' +
+      'Not for source code, files, or one-number answers — those stay in prose.',
+    parameters: {
+      type: 'object',
+      properties: {
+        html: {
+          type: 'string',
+          description: 'Self-contained HTML for the card (body content; the host wraps it in a sandboxed document with a strict CSP and the theme variables).',
+        },
+        title: {
+          type: 'string',
+          description: 'Optional short label for the card, e.g. "Revenue chart".',
+        },
+      },
+      required: ['html'],
+    },
+  },
+};
+const SKETCH_WIDGETS = 'charts, diagrams, comparisons, timelines, layouts, small interactive widgets.';
+const SKETCH_COMPUTED_DEFINITION: Tool = { ...SKETCH_DEFINITION, function: { ...SKETCH_DEFINITION.function, description: SKETCH_DEFINITION.function.description!.replace(SKETCH_WIDGETS, 'charts, diagrams, timelines, layouts, animated simulations and games; calculators, step guides and other cards that only compute from inputs are intelligent_ui documents.') } };
+/** intelligent-ui.v2 without importing intelligentUi.ts (it imports this file). */
+const intelligentUiComputedFor = (ctx: ToolContext): boolean => !!ctx.clientCapabilities?.includes('intelligent-ui.v1') && !!ctx.clientCapabilities?.includes('intelligent-ui.v2');
+
 export const sketchProvider: ToolProvider = {
   id: 'builtin:sketch',
   tools: () => [
@@ -214,50 +265,9 @@ export const sketchProvider: ToolProvider = {
       mode: 'both',
       isEnabledFor: (_profile, ctx) => sketchEnabledFor(ctx),
       capabilities: { sideEffect: 'none', parallel: false, defaultTimeoutMs: 5_000 },
-      definition: {
-        type: 'function',
-        function: {
-          name: 'sketch',
-          // E1 三段式(§五):何时用 → 策略 → 何时别用。构图/视觉语法**不重复**在这里 ——
-          // 它们是 SKETCH_SECTION 的正文,而段与工具同门禁(sketchEnabledFor),工具在场 ⟺ 段在场。
-          // ponytail: 上限≈1.6KB(10-09 二轮加 PARTS / copy 后靠删 fs-eyebrow / fs-chip / fs-panel / 折叠那句抵回来)。`--fs-*` 变量表与
-          //           `fs-*` 类名表留全(§六 P08:SKETCH_SECTION 里没有这两张表,SKETCH_SECTION 反过来让模型「从工具描述取 .fs-* 类」)。
-          description:
-            'Draw a visual card inline in the chat from self-contained HTML: charts, diagrams, comparisons, ' +
-            'timelines, layouts, small interactive widgets. The "Visual cards" section of your instructions ' +
-            'covers when to draw and how to compose.\n' +
-            'SANDBOX: JavaScript runs, but there is NO network, host API or navigation. Inline all CSS/JS, ' +
-            'embed images as data: URIs, no external scripts/styles/fonts or charting libraries (draw with ' +
-            'inline SVG or divs), no eval/new Function. Links and form submits do nothing.\n' +
-            'THEME: use the injected CSS variables, never hardcode colors — they track the live theme: ' +
-            '--fs-bg (transparent card canvas), --fs-surface, --fs-text, --fs-muted, --fs-faint, --fs-border, ' +
-            '--fs-rule (hairline for gridlines/axes), --fs-accent, --fs-accent-soft, --fs-green, --fs-danger, ' +
-            '--fs-radius, --fs-font, --fs-mono, and the series ramp --fs-s1..--fs-s5 (s1 = accent for the focus ' +
-            'value; s2..s5 fade for context). body inherits background/color/font.\n' +
-            'PARTS: fs-chart, fs-flow, fs-compare, fs-choice, fs-checklist (JSON-driven, see the visualize ' +
-            'skill); classes fs-header, fs-title, fs-subtitle, fs-plot, fs-source, fs-stat-grid, fs-stat, fs-value, ' +
-            'fs-label, fs-row, fs-grid, fs-actions, fs-callout, fs-bar-track; no inline style attributes.\n' +
-            'SIZE: ~700px wide, auto height. It streams in while you write (markup first, scripts last). ' +
-            'Each call appends a NEW card; the result is only a confirmation, the user sees the card.\n' +
-            'INTERACTION: click handlers may call window.forsionSketch.ask(text) (sends that follow-up as ' +
-            'the user\'s next message) or .copy(text).\n' +
-            'Not for source code, files, or one-number answers — those stay in prose.',
-          parameters: {
-            type: 'object',
-            properties: {
-              html: {
-                type: 'string',
-                description: 'Self-contained HTML for the card (body content; the host wraps it in a sandboxed document with a strict CSP and the theme variables).',
-              },
-              title: {
-                type: 'string',
-                description: 'Optional short label for the card, e.g. "Revenue chart".',
-              },
-            },
-            required: ['html'],
-          },
-        },
-      },
+      definition: SKETCH_DEFINITION,
+      // A client that renders computed Intelligent UI documents gets calculators routed there.
+      definitionFor: (ctx) => intelligentUiComputedFor(ctx) ? SKETCH_COMPUTED_DEFINITION : SKETCH_DEFINITION,
       execute: (args): string => {
         const html = typeof args.html === 'string' ? args.html : '';
         if (!html.trim()) return 'Error: html is required';

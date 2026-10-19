@@ -71,6 +71,11 @@ describe('registry 级:chat 正向工具面', () => {
     const native = { ...base, preset: 'chat' as const, client: 'web/2.13.1', clientCapabilities: ['intelligent-ui.v1'] };
     expect(names(native)).toEqual([...core, 'sketch', 'search_marketplace', 'intelligent_ui']);
     expect(bytes(native)).toBeLessThanOrEqual(12_450);
+    // 10-20 计算层:带 intelligent-ui.v2 的客户端换两段描述(intelligent_ui 多「计算卡」、sketch 把计算器让出去),
+    // 实测 12,427 → 12,645(+218 B),预算 12,700;不带 v2 的客户端逐字不变(上一行)。
+    const computed = { ...native, clientCapabilities: ['intelligent-ui.v1', 'intelligent-ui.v2'] };
+    expect(names(computed)).toEqual(names(native));
+    expect(bytes(computed)).toBeLessThanOrEqual(12_700);
     // 对照:work 面(25 个),chat 是过滤出来的子集,不是重排
     // 28 → 23:E2(§五「延迟候选」)把 amadeus 日历 CRUD ×5 转成静态 deferred,云端 sandbox 面同受影响。
     // chat 面本身逐字未变(上面那条 toEqual 仍绿):两个日历读工具本就在 CHAT_PRESET_DEFERRED 里。

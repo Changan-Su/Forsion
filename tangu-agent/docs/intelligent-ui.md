@@ -1,18 +1,31 @@
-# Forsion Intelligent UI v1
+# Forsion Intelligent UI v1 / v2
 
-普通交互计划、图片候选、网页来源与定性比较走受控原生组件；自定义图表与模拟器继续走 Sketch 沙箱。
+普通交互计划、图片候选、网页来源与定性比较走受控原生组件；v2 起计算器、预算、换算、分步、闪卡、计分小测验、
+可筛可排的列表也走原生文档（白名单计算层）。图表、示意图、动画模拟与小游戏继续走 Sketch 沙箱（对用户叫 HTML 卡）。
 这是一套 Forsion 实现，不是 ChatGPT 内部协议复刻。用户侧名称为 Intelligent UI。
 
 ## 边界
 
 - `client_capabilities: ["intelligent-ui.v1"]` 是渲染能力握手。没有握手的旧客户端不获得新工具。
   初版仅 desktop/web 可生成；保留原有移动端 Sketch 禁用规则。原生文档本身没有脚本。
+- `"intelligent-ui.v2"` 与 v1 一起发：引擎据此多发一段 `INTELLIGENT_UI_V2_SECTION`、换两段工具描述（`definitionFor`），
+  并接受 `version: 2`。没有 v2 握手的客户端照旧只收 v1，引擎对它们拒收 v2（报错回给模型）。
+  已发的客户端（≤ 2.13.4）遇到同步来的 v2 历史只显示「这部分界面未能生成」那行；从本版起，渲染层对比自己新的版本
+  显示标题、第一段文字和「这张卡要新版 Forsion 才能显示」。
 - 复用 `tool_stream`、`tool_call`、`tool_result` 与现有历史 JSON 存储，不创建另一套 SSE 协议或数据库表。
   `document` 是 JSON 字符串，参数完整落库；工具结果只提供短确认或纠错信息。
 - 服务端及客户端使用同一纯 TypeScript 验证器：`src/shared/intelligentUi.ts`。渲染入口位于
   `desktop/frontend/src/components/IntelligentUi.tsx`，消息顺序由 `EditorialMessage` 保持。
-- 声明式内容不接受 HTML、JavaScript、CSS、表达式或任意 API 动作。富文本不执行代码，不内嵌图片。
+- 声明式内容不接受 HTML、JavaScript、CSS 或任意 API 动作。富文本不执行代码，不内嵌图片。
   外部来源经现有链接路由打开，不是嵌入任意网页的 iframe。
+- v2 表达式（`src/shared/intelligentUiExpr.ts`，引擎与渲染层同一份）：纯函数、结果确定，只读本文档的输入、state 与
+  derived，碰不到网络、时钟、随机数、DOM 或任何没递给它的对象。函数只有 20 个（白名单见技能），没有 random 与日期
+  （历史回放必须算出同样的数）。取字段只认自有属性，`__proto__` / `constructor` / `prototype` 一律拒；每次产出的
+  文字 ≤ 10,000 字、列表 ≤ 200 项、数字必须有限；单个表达式 ≤ 300 字、each/filter/sortBy 嵌套 ≤ 2 层；
+  一次渲染求值 ≤ 20,000 步。写了白名单外的函数、名字、参数个数不对、引用后面才声明的名字 → 校验时报回模型；
+  运行时失败（除以 0、字段不存在、空列表求平均）→ 那个值显示「—」，引擎把初值下失败的列在成功结果后面。
+- 插值 `{{ }}` 的结果在 markdown **解析之后**才作为纯文字节点填进去（私用区占位符），算出来的字符串变不成链接、
+  自动链接、强调或表格格子；单靠反斜杠转义挡不住 GFM 自动链接（渲染层测试实测过）。打开链接仍只认静态 `resourceId`。
 - 图库使用浏览器加载经过 URL 校验的公开 HTTPS 图片，禁用 referrer；失败保留替代文字及重试。
   引擎不代替浏览器请求这些 URL。URL 规则不是 DNS 或重定向防火墙。图片描述必须有实际看图或用户提供的依据。
 
@@ -86,7 +99,8 @@ ChatGPT 的整条回答是一棵组件树(正文段落、标题、清单、表�
 
 ## 内容、状态与流式
 
-文档含 `inputs`、`resources`、`blocks`；完整格式和示例见 `skills/intelligent-ui/SKILL.md`。
+文档含 `inputs`、`resources`、`blocks`，v2 另有 `state`、`derived`（排在 inputs 之后、blocks 之前，流式时区块上屏前
+名字已齐）与 `stats` / `table` 两种区块、`kind:"set"` 按钮；完整格式和示例见 `skills/intelligent-ui/SKILL.md`。
 Chat 模式不开放技能工具，必需格式也包含在 `INTELLIGENT_UI_SECTION` 中。工具定义保持简短，
 通过既有 Chat GUI 12,000 B 预算；不是每次都让模型生成完整网页代码。
 
@@ -96,7 +110,9 @@ Chat 模式不开放技能工具，必需格式也包含在 `INTELLIGENT_UI_SECT
 模型默认值只初始化未编辑的输入；后续内容补齐不覆盖用户选择，不重新挂载已有控件。
 
 状态键为 `[session:message, callId, documentId, 1]`，不用内容哈希或流事件版本作为 React key。
-本机状态独立保存输入、已购数量与展开状态；派生量不保存、不自动发送给模型。状态损坏会恢复为空，
+本机状态独立保存输入、已购数量、展开状态与 v2 按钮改过的 state（`vars`，可存列表）；派生量不保存、不自动发送给模型。
+v2 的追问消息另带「卡片里改过的」state（列表只带条数和前 5 项），不带 derived。正文含插值的折叠块按算出来的内容记展开，
+内容一变就收回（背单词换词时释义收起）。状态损坏会恢复为空，
 下一次编辑重建存储；存储不可用时保持本轮内存交互。最多 48 份快照，每份 64 KiB；没有跨设备同步。
 
 采购清单先按语义 itemKey 和单位合并再缩放。不同单位不会混算。已购数量随菜单切换保留；
@@ -124,10 +140,13 @@ Chat 模式不开放技能工具，必需格式也包含在 `INTELLIGENT_UI_SECT
 
 ## 可重复验收
 
-1. `tangu-agent`: `npm run build`，相关 Vitest：`src/shared/intelligentUi.test.ts`、
+0. 画廊：`desktop/scripts/fixtures/intelligent-ui-gallery.json`（手写 v2 文档：房贷、AA、换算、预算、背单词、分步、
+   筛选列表、小测验、成绩、按人数缩放的清单、两百项边界）。`src/shared/intelligentUiExpr.test.ts` 要求每份过校验、
+   初值下零失败；技能里的 JSON 例子同样过校验，且 v2 例子必须就是画廊里的房贷卡（改了一边另一边会红）。
+1. `tangu-agent`: `npm run build`，相关 Vitest：`src/shared/intelligentUi.test.ts`、`src/shared/intelligentUiExpr.test.ts`、
    `src/tools/intelligentUi.test.ts`、`src/tools/sketch.test.ts`、`test/chatPreset.test.ts`。
 2. `desktop`: `npm run build`、`npm run typecheck`，相关 Vitest：`intelligentUiState.test.ts`、
-   `editorialSketch.test.ts`、`agentRunService.client.test.ts`、`i18nCoverage.test.ts`。
+   `editorialSketch.test.ts`、`agentRunService.client.test.ts`、`i18nCoverage.test.ts`、`intelligentUiV2.test.ts`。
 3. 真模型：仓根归档工具 `harness-runs/archive.mjs run --label "…" -- --only intelligentplan,intelligentmedia,intelligentplain --model codex/gpt-6-luna`。
    晚餐运行 Chat 预设，图库运行 Work 并实际查看图片，关闭偏好是负向行为回归。证据文件以 `-evidence.json` 归档。
 4. 真 Electron：遵循仓根 gui-verify 的 e2e 锁与独立数据目录流程，运行 `npm run check:intelligent-ui`。
