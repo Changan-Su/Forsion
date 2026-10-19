@@ -365,6 +365,8 @@ export class BackendManager {
       env.TANGU_BROWSER_COMMAND_TIMEOUT_MS = String(s.browserCommandTimeoutMs || 30000)
       // Tangu for Chrome 扩展桥的端口:dev 与正式版各用一个,两个同时开着也不抢(连接码按各自家目录分开存)
       env.TANGU_BROWSER_EXTENSION_PORT = app.isPackaged ? '47654' : '47655'
+      // 扩展本体是 Forsion Clip(npm @forsion/clip):安装包里在 tangu-server/browser-extension(引擎自己找得到),dev 指到依赖里那份
+      if (!app.isPackaged) env.TANGU_BROWSER_EXTENSION_DIR = join(__dirname, '..', '..', 'node_modules', '@forsion', 'clip', 'chrome-mv3')
       // 通道(微信/Telegram/QQ)配置改由引擎直接读 config.json channels/wechat 段,不再经 env 注入
       //(旧 TANGU_WECHAT_* env 会压过 config,新设置页写 /agent/channels 后热生效,无需重启后端)。
       // 让后端的微信远程会话落到桌面默认工作区(host 执行 cwd);兜底 ~/Tangu。

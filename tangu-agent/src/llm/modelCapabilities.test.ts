@@ -515,7 +515,7 @@ describe('modelSupportsVision — 黑名单制', () => {
   // 2026-08-04 实例:表里写 `deepseek-(chat|coder|reasoner|v3|r1)`,DeepSeek-V4-Pro 一出就漏网,
   // 被判成能看图 → 图原样发过去 → 整 run 以「The model is not a VLM」报废。同族规则不许钉版本号。
   it('⚠️DeepSeek 整族无视觉,不按型号枚举(新版本不许漏网)', () => {
-    for (const id of ['DeepSeek-V4-Pro', 'deepseek-v4-flash', 'deepseek-v5', 'deepseek-r2', 'deepseek-chat']) {
+    for (const id of ['DeepSeek-V4-Pro', 'deepseek-v4-pro', 'deepseek-v5', 'deepseek-r2', 'deepseek-chat']) {
       expect(modelSupportsVision(id)).toBe(false);
     }
     expect(modelSupportsVision('deepseek-vl2')).toBe(true); // 唯一的视觉分支不能被族规则吞掉
@@ -525,7 +525,16 @@ describe('modelSupportsVision — 黑名单制', () => {
   it('⚠️族规则要按能力反查排除:DeepSeek 视觉分支不能被整族吞掉', () => {
     expect(modelSupportsVision('deepseek-v4-flash-vision-exp')).toBe(true);
     expect(modelSupportsVision('deepseek-ai/DeepSeek-V4-Flash-Vision-Exp')).toBe(true);
-    expect(modelSupportsVision('deepseek-v4-flash')).toBe(false); // 非视觉分支不受影响
+    expect(modelSupportsVision('deepseek-v4-pro')).toBe(false); // 非视觉分支不受影响
+  });
+
+  // 2026-10-19 用户报:Forsion 云端 DeepSeek 那行 id 是 `deepseek-v4-flash`(官方别名,由 V4.1 Flash
+  // 回答、能看图),后台标 supportsVision=true 不算 override → 整族规则判纯文本 → 图被转给辅助模型。
+  it('⚠️DeepSeek V4.1 Flash 线能看图(新 id 与退役别名都算)', () => {
+    for (const id of ['deepseek-flash', 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp']) {
+      expect(modelSupportsVision(id)).toBe(true);
+    }
+    expect(modelSupportsVision('deepseek-v4-flash', false)).toBe(false); // admin 标 false 仍压得住
   });
 
   it('GLM-5.3 官方明写纯文本 → 走辅助识图;但 5.3-Flash 是原生多模态,不许一起吞', () => {
