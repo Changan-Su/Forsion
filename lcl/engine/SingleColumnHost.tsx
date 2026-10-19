@@ -35,6 +35,7 @@ import { onePageLanding } from './pinnedViews'
 import { Skeleton, ViewErrorBoundary, skeletonVariantOf } from './Skeleton'
 import './singleColumn.css'
 import { useEngineI18n } from './i18nSeam'
+import { ViewModeSwitch } from './viewModes'
 // ⚠️ 引擎 chrome 样式。移动端构建把 `Shell.tsx` 换成空壳(mobile/vite.config engineSwap),而
 // `import './engine.css'` 原本挂在 Shell 上 —— 外壳一换,`.cmd-overlay/.cmd-panel` 这套命令浮层
 // 样式在移动端就整个没了(CommandPalette 与 Amadeus 的 QuickSwitcher/TemplatePicker 三家共用)。
@@ -965,6 +966,7 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
   const leftVisible = useWorkspace((s) => s.leftVisible)
   const rightVisible = useWorkspace((s) => s.rightVisible)
   const tabCount = useWorkspace((s) => s.mainTabs.length)
+  const activeMainId = useWorkspace((s) => s.activeMainId)
   // 「⋯」里有亮红点的项(成就可领…)→「⋯」本身挂红点,同桌面 Ribbon 收进「…」的那条。
   // 原生顶栏(Android)的「⋯」同一份判据:随 shell 状态推 moreDot,label 给读屏(NativeChromeBar 画点;老 App 不认这个字段,靠半屏里那行的副标题)
   const ribbonItems = useRibbonStore((s) => s.items)
@@ -1098,7 +1100,10 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
           <button className="mb-icon-btn" onClick={() => useWorkspace.getState().toggleSidebar('left')} aria-label="left panel"><PanelLeft size={20} /></button>
         ) : <span className="mb-icon-btn mb-icon-btn--ghost" />}
       </div>
-      <div className="mb-topbar-spacer" />
+      {/* 看法胶囊(viewModes):活动视图登记了就画在两颗胶囊中间,随顶栏一起藏;抽屉盖住主区时不画(那会儿看的是列表)。 */}
+      <div className="mb-topbar-spacer">
+        {!rightVisible && !(leftVisible && !wide) ? <ViewModeSwitch leafId={activeMainId} inTopbar /> : null}
+      </div>
       <div className="mb-cap">
         {hasRight ? (
           <button className="mb-icon-btn" onClick={() => useWorkspace.getState().toggleSidebar('right')} aria-label="right panel"><PanelRight size={20} /></button>

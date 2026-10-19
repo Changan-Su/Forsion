@@ -3,6 +3,7 @@
 // themes) that the UI subscribes to. Built-in plugins are registered on init(); external
 // (Forsion) plugins are discovered from ~/.forsion/plugins/ and evaluated here.
 //
+import { setPluginViewModes } from './pluginViewModes'
 import { registerFont as registerHostFont } from '../../fontPresets'
 import { registerAppearance, clearPluginAppearance, useAppearance } from '../../appearance/store'
 
@@ -1586,6 +1587,11 @@ export const usePluginStore = create<PluginState>((set, get) => {
       },
       // 划线条:插件自己的视图用上宿主那一条(见 selectionBarSurface.tsx)。和 FloatingToc 一样不接管 root(只看它里面的
       // 选区,条浮在 body 上),所以不走 claimHostMount。句柄同步可用:装好之前的 show / update 攒着。
+      // 视图看法(视图模式标准):宿主画胶囊、管 ⌥⌘V / 命令面板 / 手机顶栏,插件只报几种、现在哪种(见 pluginViewModes)
+      setViewModes: (el, spec) => {
+        if (!ctxAlive()) return { set() {}, update() {}, actions: document.createElement('div'), dispose() {} }
+        return setPluginViewModes(el, spec, (d) => scope.own('mount', d, 'viewModes'), (e) => console.error(`[amadeus] plugin "${pluginId}" view mode onChange failed`, e))
+      },
       mountSelectionBar: (root, opts = {}) => {
         if (!ctxAlive()) return { show() {}, hide() {}, update() {}, dispose() {} }
         if (!(root instanceof HTMLElement)) throw new TypeError('mountSelectionBar needs an HTMLElement')

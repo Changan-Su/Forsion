@@ -128,7 +128,7 @@ export function installCalendarViews(): void {
     type: 'calendar', kind: 'collection', embeddable: true,
     intelligent: { description: 'Live Forsion calendar agenda for the next 31 days, including configured calendars. Does not create events.', render: () => <CalendarDashboardCard size="lg" /> },
     displayName: () => app().tr('view.calendar'), icon: CalendarDays,
-    factory: () => <Suspense fallback={<Skeleton variant="document" />}><CalendarView /></Suspense>, singleton: true,
+    factory: (props) => <Suspense fallback={<Skeleton variant="document" />}><CalendarView leafId={props.leaf.id} /></Suspense>, singleton: true,
     dashboard: { sizes: ['wide', 'lg', 'full'], defaultSize: 'lg', surface: 'summary', factory: (_props, ctx) => <CalendarDashboardCard size={ctx.size} /> },
   })
   // 日历右栏:待办 ↔ 选中事件的详情 ↔ 新建草稿(见 views/calendar/CalendarSide)。只在日历 Space 的右栏用,不进启动器。

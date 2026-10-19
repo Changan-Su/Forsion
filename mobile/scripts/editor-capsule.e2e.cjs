@@ -238,22 +238,21 @@ async function main() {
     // ⚠️ 顺带:UnifiedPage 那道「移动端忽略盘上 mode:canvas」的门原来判 UI_MODE,而 APK 里
     //    UI_MODE 恒 'desktop'(mobile/index.html 没有写 lcl.uiMode 的那段脚本),从来没生效过;
     //    已改判 isCoarsePointer() —— 与 1a「顶栏不渲染」同一个信号,1a 绿就说明这门在手机上真会关。
+    // 2026-10-19 视图模式标准:单列壳里「文档 / 画布」不在底栏胶囊,在顶栏两颗胶囊中间(看法胶囊);底栏少一颗键。
     const capsule = await page.evaluate(() => {
       const bar = document.querySelector('.amx-mbar')
       if (!bar) return null
       const r = bar.getBoundingClientRect()
+      const pill = document.querySelector('.mb-topbar .mb-topbar-spacer .lcl-vmode-pill')
       return {
         titles: [...bar.querySelectorAll('button')].map((b) => b.title || b.getAttribute('aria-label') || ''),
-        // 药丸不许被撑破:多加一颗键后仍须整条留在屏内(按钮已改可收缩,见 amadeus-host.css)。
         fits: r.left >= -1 && r.right <= window.innerWidth + 1,
+        tabs: pill ? [...pill.querySelectorAll('[role=tab]')].map((b) => `${b.textContent}${b.getAttribute('aria-selected') === 'true' ? '*' : ''}`) : null,
       }
     })
-    ok('4a 画布键常驻在底栏胶囊里、就排在上传后面(用户 2026-08-20 拍板)',
-      !!capsule && capsule.titles.indexOf('切换到画布') === capsule.titles.indexOf('上传文件到本页') + 1,
-      capsule ? capsule.titles.join(' | ') : '没有胶囊')
-    // ⚠️ 390pt 下七颗键(7×40 + 间隙 ≈ 298)本来就塞得进 ~315 的上限 —— 只在这一档量,
-    //    等于这条断言**加不加那道收缩兜底都绿**(= 恒真断言)。真正会顶穿的是窄机,所以临时
-    //    切到 360pt 再量一次,量完切回去(后面几段的点击几何是按 390 算的)。
+    ok('4a 底栏胶囊里没有画布键;顶栏中间是「文档* | 画布」看法胶囊',
+      !!capsule && !capsule.titles.includes('切换到画布') && (capsule.tabs || []).join('|') === '文档*|画布',
+      capsule ? JSON.stringify({ titles: capsule.titles, tabs: capsule.tabs }) : '没有胶囊')
     const fitsAt = async (w) => {
       await page.setViewportSize({ width: w, height: 844 })
       await page.waitForTimeout(400)
@@ -262,42 +261,40 @@ async function main() {
         if (!b) return null
         const r = b.getBoundingClientRect()
         const last = [...b.querySelectorAll('button')].pop()
-        // ⚠️ 量的是**最后一颗键有没有越出药丸**,不是药丸有没有越出屏:药丸有 max-width,
-        //    撑不撑得住都被裁在同一个盒子里 —— 只量盒子的话,去掉收缩兜底这条照样绿。
+        // ⚠️ 量的是**最后一颗键有没有越出药丸**,不是药丸有没有越出屏:药丸有 max-width,撑不撑得住都被裁在同一个盒子里。
+        const pill = document.querySelector('.mb-topbar-spacer .lcl-vmode')?.getBoundingClientRect()
+        const caps = [...document.querySelectorAll('.mb-topbar .mb-cap')].map((c) => c.getBoundingClientRect())
         return {
-          w: Math.round(r.width),
           vw: window.innerWidth,
           spill: last ? Math.round(last.getBoundingClientRect().right - r.right) : null,
+          // 看法胶囊夹在两颗顶栏胶囊之间,不压它们
+          pillBetween: !!pill && caps.length === 2 && pill.left >= caps[0].right - 1 && pill.right <= caps[1].left + 1,
         }
       })
     }
     const narrow = await fitsAt(360)
     await fitsAt(390)
-    ok('4a2 加了一颗之后药丸没被撑出屏(390 与窄机 360 各量一次)',
-      !!capsule && capsule.fits && !!narrow && narrow.spill !== null && narrow.spill <= 1,
+    ok('4a2 底栏药丸没被撑出屏,顶栏看法胶囊在 360 窄机上也夹在两颗胶囊之间',
+      !!capsule && capsule.fits && !!narrow && narrow.spill !== null && narrow.spill <= 1 && narrow.pillBetween,
       JSON.stringify({ at390: capsule && capsule.fits, at360: narrow }))
-    await tap(page.locator('.amx-mbar button[title="切换到画布"]'))
+    await tap(page.locator('.mb-topbar-spacer .lcl-vmode-pill [role=tab]', { hasText: '画布' }))
     await page.waitForTimeout(1000)
     const c1 = await page.evaluate(() => ({
       on: !!document.querySelector('.unified-body.amx-canvas'),
       full: !!document.querySelector('.unified-body.amx-canvas-full'),
       stage: !!document.querySelector('.amx-stage'),
-      // 底栏胶囊必须还在:满铺画布是 .amx-pane 内的 absolute inset:0,而胶囊是 pane 的兄弟 —— 盖掉就出不来了。
+      // 底栏胶囊必须还在:满铺画布是 .amx-pane 内的 absolute inset:0,而胶囊是 pane 的兄弟 —— 盖掉就编辑不了。
       barVisible: (() => { const b = document.querySelector('.amx-mbar'); if (!b) return false; const r = b.getBoundingClientRect(); return r.width > 0 && r.bottom <= window.innerHeight + 1 })(),
       sheetClosed: !document.querySelector('.mb-sheet'),
     }))
-    ok('4b 点了真进画布(满铺舞台在场;底栏胶囊没被盖掉 = 还回得来)',
+    ok('4b 点顶栏「画布」真进画布(满铺舞台在场;底栏胶囊没被盖掉)',
       c1.on && c1.full && c1.stage && c1.barVisible && c1.sheetClosed, JSON.stringify(c1))
     await page.screenshot({ path: path.join(shotDir, 'canvas-mode.png') })
     console.log('screenshot →', path.join(shotDir, 'canvas-mode.png'))
 
-    const seg = await page.evaluate(() => {
-      const b = document.querySelector('.amx-mbar button[title="切换到文档"]')
-      const sheetRows = [...document.querySelectorAll('.mb-sheet .mb-sheet-row')].map((e) => e.textContent.trim())
-      return { flipped: !!b, on: !!b && b.classList.contains('on'), sheetRows }
-    })
-    ok('4c 画布态下同一颗翻成「切换到文档」并点亮(不是两颗并列的死键)', seg.flipped && seg.on, JSON.stringify(seg))
-    await tap(page.locator('.amx-mbar button[title="切换到文档"]'))
+    const seg = await page.evaluate(() => [...document.querySelectorAll('.mb-topbar-spacer .lcl-vmode-pill [role=tab]')].map((b) => `${b.textContent}${b.getAttribute('aria-selected') === 'true' ? '*' : ''}`).join('|'))
+    ok('4c 画布态下顶栏胶囊的选中格换到「画布」', seg === '文档|画布*', seg)
+    await tap(page.locator('.mb-topbar-spacer .lcl-vmode-pill [role=tab]', { hasText: '文档' }))
     await page.waitForTimeout(900)
     const c2 = await page.evaluate(() => ({
       on: !!document.querySelector('.unified-body.amx-canvas'),
@@ -311,7 +308,7 @@ async function main() {
     killPreview()
   }
   if (fails.length) { console.error('❌ e2e:editorbar\n' + fails.map((f) => '  - ' + f).join('\n')); process.exit(1) }
-  console.log('✅ e2e:editorbar —— 顶栏已隐/上传仍在/胶囊底栏/⋯ 动作齐全/「+」双列面板真插块/画布模式进得去回得来')
+  console.log('✅ e2e:editorbar —— 顶栏已隐/上传仍在/胶囊底栏/⋯ 动作齐全/「+」双列面板真插块/顶栏看法胶囊进得去画布回得来')
 }
 
 main()

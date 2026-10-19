@@ -3542,18 +3542,16 @@ body.amx-marquee-active * {
 /* 模式切换胶囊:**复用** `.t2s-vaultseg`(云端/本地那颗,真源在 views/chat2/sidebar2.css)。
    画在**笔记顶栏** `.amx-toolbar` 里(用户 2026-08-17 拍板:跟路径/分享/置顶同一行),
    所以这里只需要把侧栏那套尺寸压到顶栏的高度上。
-   ⚠️ 宽度写死是因为组件本体的按钮是 `flex: 1 1 0`(侧栏里由父容器定宽),顶栏里没有父宽可继承。
+   宽度由零件自己定(lcl viewModes:每格 ≥57,两格 = 118,与原来写死的一样宽;英文按最长那格放宽)。
    ⚠️ 曾经浮在正文左上角 —— 那条留白是**空白处框选**的起手带(blockLayer.onMqDown 命中 button
       就不起框),控件压上去 = 从左上角起手的框选按不动(unified-page 的 M1 当场变红)。别搬回去。 */
 .am-app .amx-toolbar .amx-modeseg {
   height: 24px;
-  width: 118px;
   /* 顶栏是 justify-content: flex-end,`margin-right: auto` 把它顶到**最左**(用户 2026-08-17 拍板)。
      不会撞面包屑:`.amx-crumbs` 是 `position:absolute; left:50%` 的**居中**层,左侧本来是空的。 */
   margin: 0 auto 0 0;
   flex-shrink: 0;
 }
-.am-app .amx-toolbar .amx-modeseg button { font-size: var(--ui-font-caption, 11px); }
 
 /* ── 画布满铺(2026-08-17 用户拍板「像 AFFiNE 一样整个 view 显示」)──────────────────
    笔记体脱出 920px 纸面,绝对定位铺满滚动容器 `.amx-pane` 的 padding box。封面/标题/属性

@@ -5,3 +5,6 @@ export { mountHostReact, claimHostMount } from './mountHostReact'
 export type { HostReactMount } from './mountHostReact'
 export { SelectionBar, SelectionBarActions } from './SelectionBar'
 export type { SelectionBarAction, SelectionBarTool, SelectionBarOrder } from './SelectionBar'
+/** 看法胶囊 / 视图头行(真身在引擎:手机顶栏也要画它)。标准见 viewModes.tsx 顶注。 */
+export { ViewModeSwitch, ViewHead } from '../engine/viewModes'
+export type { ViewModeOption, ViewModesSpec } from '../engine/viewModes'

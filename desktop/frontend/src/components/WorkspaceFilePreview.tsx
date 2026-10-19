@@ -8,6 +8,7 @@
 import React, { Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { lazyRetry } from '../lazyRetry'
 import { motion } from 'framer-motion'
+import { ViewModeSwitch } from '@lcl/components'
 import {
   Download, X, Maximize2, Minimize2, FileWarning, Loader2, RefreshCw,
   ZoomIn, ZoomOut, Maximize, WrapText, Code2, Eye, Columns2, AlignJustify,
@@ -401,12 +402,12 @@ export const WorkspaceFilePreview: React.FC<{ target: PreviewTarget; onClose: ()
             {ext && <span className="wsfile-ext">{ext}</span>}
           </div>
 
+          {/* 预览 / 源码:同视图模式那颗看法胶囊(当普通零件用,浮窗不是 View,不进 ⌥⌘V) */}
           {ready && isDoc && (
-            <div className="wsfile-seg">
-              <button className={docView === 'preview' ? 'active' : ''} title={t('preview.htmlPreview')} onClick={() => setDocView('preview')}><Eye size={13} /></button>
-              <button className={docView === 'source' ? 'active' : ''} title={t('preview.htmlCode')} onClick={() => setDocView('source')}><Code2 size={13} /></button>
-              {kind === 'html' && docView === 'preview' && <button title={t('preview.reload')} onClick={() => setReloadNonce((n) => n + 1)}><RefreshCw size={12} /></button>}
-            </div>
+            <ViewModeSwitch spec={{ modes: [{ value: 'preview', label: t('preview.htmlPreview'), icon: Eye }, { value: 'source', label: t('preview.htmlCode'), icon: Code2 }], value: docView, onChange: (v) => setDocView(v as 'preview' | 'source') }} />
+          )}
+          {ready && isDoc && kind === 'html' && docView === 'preview' && (
+            <div className="wsfile-seg"><button title={t('preview.reload')} onClick={() => setReloadNonce((n) => n + 1)}><RefreshCw size={12} /></button></div>
           )}
           {ready && kind === 'diff' && (
             <div className="wsfile-seg">

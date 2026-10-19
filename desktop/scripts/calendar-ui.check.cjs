@@ -337,7 +337,8 @@ async function main() {
       })
       check('Astryx 重置只罩包裹层:日历开着时 body 下新 div 不受影响、包裹层里的新 div 受重置', leak.outside === 'none' && leak.inside === 'solid', JSON.stringify(leak))
     }
-    await win.locator('.amx-cal-modes').getByRole('button', { name: '周', exact: true }).click()
+    // 视图模式标准(10-19):日 / 周 / 3 日 / 月 进了栏最左的看法胶囊,原来那颗下拉剩密度与一周开始,改成「显示选项」⋯(插件版仍是旧下拉)
+    await win.locator('.amx-cal-modes').getByRole('button', { name: PLUGIN ? '周' : '显示选项', exact: true }).click()
     await win.waitForFunction(() => document.querySelectorAll(':popover-open').length > 0, null, { timeout: 5000 })
     if (PLUGIN) check('插件档:视图下拉菜单走原生 popover,打开着且挂在插件 DOM 里', await win.evaluate(() => [...document.querySelectorAll(':popover-open')].every((p) => !!p.closest('.fc-root'))))
     else {
@@ -657,7 +658,7 @@ async function main() {
         // 时间格是一条连续横向滚动的长带(几百天都在 DOM 里):数「完整落在可视区里的」列
         cols: (() => { const v = document.querySelector('.amx-cal-tscroll')?.getBoundingClientRect(); return v ? [...document.querySelectorAll('.amx-cal-daycol2')].filter((c) => { const r = c.getBoundingClientRect(); return r.left >= v.left - 1 && r.right <= v.right + 1 }).length : -1 })(),
         colW: Math.round(document.querySelector('.amx-cal-daycol2')?.getBoundingClientRect().width ?? 0),
-        modeBtn: [...document.querySelectorAll('.amx-cal-bar button')].map((b) => b.textContent?.trim() ?? '').find((x) => /^(周|3 日|日|月)$/.test(x)) ?? '',
+        modeBtn: (document.querySelector('.amx-cal-bar [role=tab][aria-selected=true]') ?? [...document.querySelectorAll('.amx-cal-bar button')].find((b) => /^(周|3 日|日|月)$/.test(b.textContent?.trim() ?? '')))?.textContent?.trim() ?? '',
         todoOverflow: todo ? todo.scrollWidth - todo.clientWidth : -1,
         dueOut: side ? dues.filter((r) => r > side.right - 4).length : -1,
       }

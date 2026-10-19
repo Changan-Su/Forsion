@@ -23,11 +23,10 @@ import {
   type RefObject,
   type MutableRefObject,
 } from 'react'
-import { Check, ChevronLeft, ChevronRight, RotateCcw, ZoomIn, ZoomOut } from 'lucide-react'
+import { Check, ChevronLeft, ChevronRight, MoreHorizontal, RotateCcw, ZoomIn, ZoomOut } from 'lucide-react'
 import { Button } from '@astryxdesign/core/Button'
 import { DropdownMenu, DropdownMenuItem } from '@astryxdesign/core/DropdownMenu'
-import { Kbd } from '@astryxdesign/core/Kbd'
-import { zoomOf, UI_MODE } from '@lcl/engine'
+import { zoomOf, UI_MODE, useViewModes, ViewModeSwitch } from '@lcl/engine'
 import { AstryxScope } from '../theme/astryxBridge'
 import { parseCalDate } from '@amadeus-shared/db/calDate'
 import { usePageStore } from '../amadeus/store/pageStore'
@@ -113,6 +112,7 @@ registerMessages({
   'calview.a11yDone': { zh: '标记完成：{title}', en: 'Mark done: {title}' },
   'calview.monthFirst': { zh: '{m}月1', en: '{m}/1' },
   'calview.moreItems': { zh: '还有 {n} 项', en: '{n} more' },
+  'calview.viewOptions': { zh: '显示选项', en: 'Display options' },
   'calview.a11yMoreEvents': { zh: '查看 {m} 月 {d} 日全部 {n} 个事件', en: 'View all {n} events on {m}/{d}' },
   'calview.a11yDayEvents': { zh: '{m} 月 {d} 日事件', en: 'Events on {m}/{d}' },
   'calview.dayHeading': { zh: '{m} 月 {d} 日', en: '{m}/{d}' },
@@ -217,7 +217,7 @@ function finishDraft(): void {
 const draftGeomKey = (s: { draft: CalDraft | null }): string =>
   s.draft ? `${s.draft.day}|${s.draft.endDay}|${s.draft.startMin}|${s.draft.endMin}` : ''
 
-export function CalendarView() {
+export function CalendarView({ leafId }: { leafId?: string } = {}) {
   const { t } = useI18n()
   // 周首日一变(语言 / 日历设置),月视图整块重挂:它的周行、居中滚动位都按周首日算过一遍。
   const firstDow = useWeekStart()
@@ -231,6 +231,8 @@ export function CalendarView() {
   const byVault = useCalendarConfig((s) => s.byVault)
   const mode = useCalendarNav((s) => s.mode)
   const setMode = useCalendarNav((s) => s.setMode)
+  // 日 / 周 / 3 日 / 月 = 视图模式(lcl viewModes,方案 A):胶囊在栏最左,⌥⌘V 切下一种;D / W / 3 / M 单键照旧(悬停提示里写着)。全局记(useCalendarNav)。
+  useViewModes(leafId, { modes: MODE_ITEMS.map((m) => ({ value: m.id, label: m.label, hotkey: m.key.toUpperCase() })), value: mode, onChange: (v) => setMode(v as typeof mode) })
   const hourPx = useCalendarNav((s) => s.hourPx)
   const setHourPx = useCalendarNav((s) => s.setHourPx)
   const jumpNonce = useCalendarNav((s) => s.jumpNonce)
@@ -495,25 +497,21 @@ export function CalendarView() {
     // tabIndex -1:点进日历时焦点落在这里,键盘快捷键据此判断「用户正在用日历」。
     <div className="amx-cal" ref={rootRef} tabIndex={-1}>
       <AstryxScope>
-        {/* 左:月份 + 周数;右:今天 ‹ › 周▾(密度、一周开始于收进周▾)。新建 = 单击格子 / 按 C。 */}
+        {/* 左:看法胶囊(日 / 周 / 3 日 / 月)+ 月份 + 周数;右:今天 ‹ › 「…」(密度、一周开始)。新建 = 单击格子 / 按 C。 */}
         <header className="amx-cal-bar">
           <div className="amx-cal-nav">
+            <ViewModeSwitch leafId={leafId} />
             <span className="amx-cal-title" ref={titleRef} />
           </div>
           <div className="amx-cal-modes">
             <Button size="sm" variant="secondary" label={t('calview.today')} onClick={() => api.current?.today()} />
             <Button size="sm" variant="ghost" isIconOnly icon={<ChevronLeft size={14} />} label={t('calview.prevPage')} onClick={() => api.current?.prev()} />
             <Button size="sm" variant="ghost" isIconOnly icon={<ChevronRight size={14} />} label={t('calview.nextPage')} onClick={() => api.current?.next()} />
-            {/* 窗口太窄、「周」退成 3 天 / 1 天时,按钮写实际显示的跨度(菜单里勾的仍是用户选的) */}
-            <DropdownMenu button={{ label: MODE_ITEMS.find((m) => m.id === (mode === 'month' ? 'month' : n === 7 ? 'week' : n === 3 ? '3day' : 'day'))?.label ?? '', variant: 'secondary', size: 'sm' }} menuWidth={208}>
-              {MODE_ITEMS.map((m) => (
-                <DropdownMenuItem key={m.id} icon={tick(mode === m.id)} label={m.label} endContent={<Kbd keys={m.key} />} onClick={() => setMode(m.id)} />
-              ))}
-              {mode !== 'month' && <div className="amx-cal-menusep" role="separator" />}
+            <DropdownMenu button={{ label: t('calview.viewOptions'), isIconOnly: true, icon: <MoreHorizontal size={14} />, variant: 'ghost', size: 'sm' }} menuWidth={208}>
               {mode !== 'month' && <DropdownMenuItem icon={<ZoomOut size={14} />} label={t('calview.zoomOut')} onClick={() => setHourPx(hourPx - 8)} />}
               {mode !== 'month' && <DropdownMenuItem icon={<ZoomIn size={14} />} label={t('calview.zoomIn')} onClick={() => setHourPx(hourPx + 8)} />}
               {mode !== 'month' && <DropdownMenuItem icon={<RotateCcw size={14} />} label={t('calview.densityReset')} endContent={`${hourPx}px`} onClick={() => setHourPx(HOUR_PX_DEFAULT)} />}
-              <div className="amx-cal-menusep" role="separator" />
+              {mode !== 'month' && <div className="amx-cal-menusep" role="separator" />}
               <div className="amx-cal-menulabel">{t('calview.weekStart')}</div>
               {weekStartItems.map((o) => (
                 <DropdownMenuItem key={String(o.value)} icon={tick(weekPref === o.value)} label={o.label} onClick={() => useWeekStartPref.getState().setPref(o.value)} />

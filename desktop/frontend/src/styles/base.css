@@ -4192,6 +4192,8 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
   gap: 8px;
   padding: 7px 8px 7px 12px;
   border-bottom: var(--border-width) solid var(--border);
+  /* 看法胶囊(lcl viewModes)按这一行的宽度退化:侧栏里 < 480 只留图标 */
+  container: lcl-viewhead / inline-size;
 }
 .wsfile-head-icon { color: var(--accent-ink); flex-shrink: 0; }
 .wsfile-title { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 8px; }

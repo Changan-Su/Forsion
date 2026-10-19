@@ -9,6 +9,7 @@ import {
   ZoomIn, ZoomOut, Maximize, ExternalLink, FolderSearch, Pencil, Clock, NotebookPen,
 } from 'lucide-react'
 import type { ViewProps } from '@lcl/engine'
+import { useViewModes, ViewModeSwitch } from '@lcl/engine'
 import { Markdown } from '../components/Markdown'
 import {
   ImageView, PdfView, DocxView, DiffView, Spinner, cm, loadOffice, HtmlPreview,
@@ -423,22 +424,22 @@ export function WsFileView({ leaf }: ViewProps) {
     || (kind === 'html' && docView === 'source')
     || (kind === 'markdown' && !mdEditable && (docView === 'source' || specialMd)))
 
+  useViewModes(leaf.id, ready && mdEditable
+    ? { modes: [{ value: 'edit', label: t('preview.mdEdit'), icon: Pencil }, { value: 'source', label: t('preview.htmlCode'), icon: Code2 }], value: mdMode, onChange: (v) => setMdMode(v as 'edit' | 'source') }
+    : ready && !specialMd && (kind === 'markdown' || kind === 'html')
+      ? { modes: [{ value: 'preview', label: t('preview.htmlPreview'), icon: Eye }, { value: 'source', label: t('preview.htmlCode'), icon: Code2 }], value: docView, onChange: (v) => setDocView(v as 'preview' | 'source') }
+      : null)
+
   // 视图专属控件:自带顶栏里摆一排;Agent Desk 展开态 portal 进悬浮胶囊(见 chat2/deskChrome)
   const controls = (
     <>
-        {ready && mdEditable && (
+        {/* 编辑 / 源码、预览 / 源码 = 视图模式(lcl 看法胶囊,⌥⌘V);刷新、浏览器打开是动作,留在旁边那组 */}
+        <ViewModeSwitch leafId={leaf.id} compact={!!desk?.slot} />
+        {ready && !mdEditable && !specialMd && kind === 'html' && docView === 'preview' && (
           <div className="wsfile-seg">
-            <button className={mdMode === 'edit' ? 'active' : ''} title={t('preview.mdEdit')} onClick={() => setMdMode('edit')}><Pencil size={13} /></button>
-            <button className={mdMode === 'source' ? 'active' : ''} title={t('preview.htmlCode')} onClick={() => setMdMode('source')}><Code2 size={13} /></button>
-          </div>
-        )}
-        {ready && !mdEditable && !specialMd && (kind === 'markdown' || kind === 'html') && (
-          <div className="wsfile-seg">
-            <button className={docView === 'preview' ? 'active' : ''} title={t('preview.htmlPreview')} onClick={() => setDocView('preview')}><Eye size={13} /></button>
-            <button className={docView === 'source' ? 'active' : ''} title={t('preview.htmlCode')} onClick={() => setDocView('source')}><Code2 size={13} /></button>
-            {kind === 'html' && docView === 'preview' && <button title={t('preview.reload')} onClick={() => setReloadNonce((n) => n + 1)}><RefreshCw size={12} /></button>}
+            <button title={t('preview.reload')} onClick={() => setReloadNonce((n) => n + 1)}><RefreshCw size={12} /></button>
             {/* 在系统浏览器里调试:令牌根按目录 memo,重复 servePath 返回同一 URL,无需从 HtmlPreview 里把它抬出来 */}
-            {kind === 'html' && docView === 'preview' && !!(path ?? target?.path) && !!window.tangu?.codePreviewServePath && !!window.tangu?.openExternal && (
+            {!!(path ?? target?.path) && !!window.tangu?.codePreviewServePath && !!window.tangu?.openExternal && (
               <button title={t('preview.openInBrowser')} onClick={() => void window.tangu!.codePreviewServePath!((path ?? target!.path)!).then((r) => window.tangu!.openExternal!(r.url)).catch(() => {})}><ExternalLink size={12} /></button>
             )}
           </div>

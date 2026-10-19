@@ -127,6 +127,9 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
  * 不给 min-height 会塌成 8px → 笔记面比普通笔记整体上移(实报「添加图标/封面按钮位置不齐」)。
  * 24 为 content-box 内容高,叠上自身 6/2 padding = 与真顶栏同高;按钮尺寸若改要跟着动。 */
 .plugin-note-surface .amx-toolbar { min-height: 24px; box-sizing: content-box; }
+/* 笔记顶栏 = 视图头行(lcl viewModes):看法胶囊按这一行的宽度退化(< 480 只留图标、< 320 下拉)。
+ * 只给笔记那条:Excalidraw 里也有叫 .amx-toolbar 的、按内容定宽的条,给它 inline-size 容器会塌成 0 宽。 */
+.amx-toolbar.amx-vhead { container: lcl-viewhead / inline-size; }
 /* 与 .amx-editor 的 padding: 0 0 40px 对位:正文尾部留同样的缓冲。 */
 .plugin-note-surface { padding: 0 0 40px; }
 /* 前进 / 后退导航(常驻左上角)。 */
@@ -1463,7 +1466,7 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 /* ── Calendar View ── */
 /* --amx-cal-line:日历格线专用(小时横线/列分隔/月格),比通用 --border 淡;工具条等 chrome 分隔线仍用 --border。 */
 .amx-cal { display: flex; flex-direction: column; height: 100%; background: var(--bg); color: var(--text); container-type: inline-size; --amx-cal-line: color-mix(in srgb, var(--border) 55%, transparent); }
-.amx-cal-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--border); flex: none; }
+.amx-cal-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--border); flex: none; container: lcl-viewhead / inline-size; }
 /* Notion Calendar 式工具条:左=标题独占;右=astryx 组(模式▾ 今天 ‹ ›)。翻页/今天按钮已换 astryx Button,
  * 旧 .amx-cal-btn/.amx-cal-today 无消费者已删。 */
 .amx-cal-nav { display: flex; align-items: center; gap: 6px; min-width: 0; }
