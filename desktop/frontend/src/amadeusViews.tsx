@@ -1685,7 +1685,7 @@ export function AmadeusPagesView() {
           ) : (
             <>
               {!phone && <div className="t2s-special-group">
-                <button className="t2s-special" onClick={() => void ps().createPage()}>
+                <button className="t2s-special" data-guide-anchor="note-new" onClick={() => void ps().createPage()}>
                   <span className="t2s-special-ic"><SquarePen /></span>
                   <span className="t2s-special-title">{t('amadeus.new.note')}</span>
                 </button>
