@@ -250,6 +250,7 @@ async function main() {
       console.log(`HOLD ready · kick=${kick} · 窗口关掉或退出就收场`)
       await new Promise((r) => { app.once('close', r); app.process().once('exit', r); setTimeout(r, 40 * 60_000) }) // 从菜单退出时子进程的 exit 不一定到,认 Playwright 的 close
       clearInterval(timer)
+      console.log('HOLD end') // 收不了场时看这行在不在:不在 = 退出没被认到,在 = 卡在下面的收尾
       return
     }
     const shot = async (name, page = win) => { await page.mouse.move(1000, 5).catch(() => {}); await page.waitForTimeout(500); await page.screenshot({ path: path.join(SHOTS, `${name}.png`) }); console.log('shot', name) }
@@ -471,7 +472,7 @@ async function main() {
     check('没有渲染层报错', errors.length === 0, errors.slice(0, 3).join(' || '))
   } finally {
     await Promise.race([app.close().catch(() => {}), new Promise((r) => setTimeout(r, 5000))]) // 走查里应用已经自己退了,close 会一直等
-    await stub.close?.()
+    await Promise.race([stub.close?.(), new Promise((r) => setTimeout(r, 3000))]) // 连接没断干净时 close 会一直等(10-19 走查两次挂在这附近)
     cloud.close()
   }
   const failed = results.filter((r) => !r.ok)
