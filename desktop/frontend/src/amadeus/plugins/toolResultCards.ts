@@ -13,7 +13,7 @@ import { readTangu } from './tanguSeam'
 import type { AmadeusPlugin, ToolResultRendererContribution } from './types'
 import type { ToolEvent } from '../../types'
 import { listPlugins } from '../../services/backendService'
-import { connectionTarget } from '../../services/engine/targets'
+import { homeTarget } from '../../services/engine/targets'
 
 interface OwnedRenderer { pluginId: string; item: ToolResultRendererContribution }
 export interface ToolCardClaim { pluginId: string; item: ToolResultRendererContribution }
@@ -46,7 +46,7 @@ export function refreshEngineTools(): Promise<void> {
     try {
       const cfg = await readTangu()?.waitBackend?.(15_000)
       if (cfg) {
-        const list = await listPlugins(connectionTarget(cfg))
+        const list = await listPlugins(homeTarget())
         byEngine = Object.fromEntries(list.filter((p) => p.enabled && p.active !== false && p.tools?.length).map((p) => [p.id, p.tools!]))
       }
     } catch (e) {
