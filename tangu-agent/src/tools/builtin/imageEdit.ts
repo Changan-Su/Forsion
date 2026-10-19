@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { deps } from '../../seams/runtime.js';
 import type { ToolProvider } from '../toolRegistry.js';
 import type { ToolContext } from '../toolTypes.js';
@@ -58,9 +58,12 @@ export async function previousOutputs(refs: unknown, ctx: Pick<ToolContext, 'lis
     if (!item.path) throw new Error(`${ref} has no stored bytes. Ask the user to attach it instead.`);
     let buf: Buffer;
     try { buf = await fs.readFile(path.resolve(ctx.cwd || '', item.path)); } catch { throw new Error(`${ref} no longer exists on disk. Ask the user to attach it instead.`); }
+    if (!item.sha256 || sha256(buf) !== item.sha256) throw new Error(`${ref} has changed on disk since it was generated. Ask the user to attach it instead.`);
     return { url: `data:${item.mime || 'image/png'};base64,${buf.toString('base64')}`, name: ref };
   }));
 }
+
+export const sha256 = (buf: Buffer) => createHash('sha256').update(buf).digest('hex');
 
 function minutesAgo(ts: number) {
   const m = Math.max(1, Math.round((Date.now() - ts) / 60_000));
@@ -78,7 +81,7 @@ export function makeImageEditTool(pickModel: PickModel): ReturnType<ToolProvider
       description: 'Edit images with an image model. Use this instead of generate_image when the user wants to modify an existing image or preserve a reference. Sources: (1) the images attached to the latest user message that carries images and that you can currently see (the current message if it has any), selected by image_indices from 1; (2) images generated earlier in this conversation by generate_image or edit_image, selected by file name in previous_outputs. Write a concrete English prompt describing changes and what to preserve. Transparent source margins can guide expansion. For background removal request transparent_background and preserve the subject. This is generative editing: exact pixel preservation, masks and automatic layer decomposition are not supported. Do not invent indices or file names, and do not pass paths, base64 or URLs. If neither source has the image you need, ask the user to attach it. Results are already displayed; do not call display_file again.',
       parameters: { type: 'object', properties: {
         prompt: { type: 'string', description: 'Desired edit and details to preserve.' },
-        image_indices: { type: 'array', items: { type: 'integer' }, description: '1-based indices into the visible attached images. Defaults to all of them when previous_outputs is omitted, and to none when it is given. At most 8 source images in total.' },
+        image_indices: { type: 'array', items: { type: 'integer' }, description: '1-based indices into the visible attached images. Defaults to all of them when previous_outputs is omitted or empty, and to none when it lists files. At most 8 source images in total.' },
         previous_outputs: { type: 'array', items: { type: 'string' }, description: 'File names of images generated earlier in this conversation (e.g. "edit-3f2a.png"), as reported by generate_image or edit_image.' },
         size: { type: 'string', enum: ['1:1', '2:3', '3:2', '16:9', '9:16'] },
         n: { type: 'integer', minimum: 1, maximum: 4 },
@@ -124,8 +127,9 @@ export function makeImageEditTool(pickModel: PickModel): ReturnType<ToolProvider
           if (ctx.execMode === 'host' && ctx.cwd) {
             const file = path.resolve(ctx.cwd, 'generated', name);
             await fs.mkdir(path.dirname(file), { recursive: true });
-            await fs.writeFile(file, Buffer.from(image.b64, 'base64'));
-            ctx.displayFile({ name, mime: image.mime, path: file, source: 'edit_image' });
+            const bytes = Buffer.from(image.b64, 'base64');
+            await fs.writeFile(file, bytes);
+            ctx.displayFile({ name, mime: image.mime, path: file, source: 'edit_image', sha256: sha256(bytes) });
           } else ctx.displayFile({ name, mime: image.mime, dataUrl: `data:${image.mime};base64,${image.b64}`, source: 'edit_image' });
           names.push(name);
         }

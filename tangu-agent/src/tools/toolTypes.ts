@@ -202,7 +202,8 @@ export interface ToolContext {
    */
   getWorkingMessages?: () => any[];
   /** Images the model can currently see: this run's attachments, else the originals of the latest image-bearing user message
-   *  that hydrate sends to the model (lost once compaction covers it). Never a model-supplied path or URL. */
+   *  that hydrate sends to the model (gone once a persisted compaction checkpoint covers it; like this run's own attachments,
+   *  it survives in-run compaction). Never a model-supplied path or URL. */
   getImageInputs?: () => ReadonlyArray<{ url: string }>;
   /** Timestamp (ms) of the earlier user message getImageInputs fell back to; undefined = this run's own attachments. */
   getImageInputsSentAt?: () => number | undefined;
@@ -236,6 +237,8 @@ export interface DisplayFileItem {
   dataUrl?: string;
   /** 生图工具自己产出的图才打;edit_image 的 previous_outputs 只认带这个标记的(display_file 展示的本机文件不算)。 */
   source?: 'generate_image' | 'edit_image';
+  /** path 型产出落盘时的 sha256:previous_outputs 读回来要对得上,防模型事后把文件换成别的图 / 软链。 */
+  sha256?: string;
 }
 
 export interface ToolResult {

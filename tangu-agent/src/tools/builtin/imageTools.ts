@@ -5,7 +5,7 @@
  * host 会话把图片写进 cwd/generated/ 并以路径展示(可在工作区找到、无 base64 膨胀);沙箱/无 cwd 时以 dataUrl 内联展示。
  */
 import fs from 'node:fs/promises';
-import { makeImageEditTool, imageQuality } from './imageEdit.js';
+import { makeImageEditTool, imageQuality, sha256 } from './imageEdit.js';
 import path from 'node:path';
 import { deps } from '../../seams/runtime.js';
 import type { ToolProvider } from '../toolRegistry.js';
@@ -138,7 +138,7 @@ export const imageGenProvider: ToolProvider = {
             try {
               await fs.mkdir(path.dirname(abs), { recursive: true });
               await fs.writeFile(abs, buf);
-              ctx.displayFile({ name, mime, path: abs, source: 'generate_image' });
+              ctx.displayFile({ name, mime, path: abs, source: 'generate_image', sha256: sha256(buf) });
               shown.push(rel);
               continue;
             } catch { /* 落盘失败 → 退化为 dataUrl 内联 */ }
