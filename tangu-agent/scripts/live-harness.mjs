@@ -4208,6 +4208,10 @@ Then reply with only the command output.`,
   await scenario('musedm', `musedm Muse 私聊 × 收件箱分工(${MUSE_MODE})`, async () => {
     const seeded = await until(() => existsSync(join(home, 'agents', 'muse', 'config.toml')), 30_000, 500);
     if (!seeded) return { ok: false, detail: '30s 内没播种出 Muse(agents/muse/config.toml)' };
+    const status = () => api('/agent/special/muse/status').then((x) => (x && typeof x.status === 'object' ? x.status : x));
+    // 同一次运行里排在 muse 场景后面时,它的周期可能还在跑:不等它收尾,下面的「起了没」会认错周期,
+    // 改配置又会把在跑的周期中止(10-19 一次 7 秒假红:私聊没建出来、run aborted)。
+    if (!(await until(async () => !(await status()).running, 600_000, 5000))) return { ok: false, detail: '前一个场景的 Muse 周期 600s 没收尾' };
     writeFileSync(join(workspace, 'sync-notes.md'), [
       '# 三家笔记软件的离线同步(调研素材)',
       '- Obsidian Sync:离线照常编辑;冲突时按行三方合并,合不了留两份(冲突副本)。',
@@ -4229,7 +4233,6 @@ Then reply with only the command output.`,
     }
     const t0 = Date.now();
     await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ muse: { enabled: true, modelId: MODEL, mode: MUSE_MODE, heartbeatMinutes: 60, supervisorPollMinutes: 1, maxIterationsPerCycle: 16, maxRestartsPerWindow: 3, allowedFolders: [workspace], notify: 'immediate' } }) });
-    const status = () => api('/agent/special/muse/status').then((x) => (x && typeof x.status === 'object' ? x.status : x));
     const started = await until(async () => { const x = await status(); return x.running || Number(x.lastCycleAt) >= t0 - 5000 ? x : null; }, 120_000, 3000);
     if (!started) return { ok: false, detail: `120s 未起周期;[muse] 日志:${museLogTail() || '(无)'}` };
     const done = await until(async () => { const x = await status(); return !x.running && Number(x.lastCycleAt) > 0 ? x : null; }, 600_000, 5000);

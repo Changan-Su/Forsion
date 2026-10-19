@@ -114,7 +114,8 @@ describe('C1a 预算口径:跨全部 Muse 会话', () => {
 // 10-13 放到 3700:加一句「简报末尾的 <computer_history> 怎么用」(实机 Muse 7 天 67 个周期只主动查了 2 次电脑历史)。
 // 10-18 放到 4000:加一句「要回话 / 拍板的进私聊(message_user)、成品进收件箱」(Muse 私聊方案 B),实测约 3880。
 // 同日 live 首跑后放到 4100:补半句「存进 Library 或 display_file 都送不到」(成品被存进 Library、没发信),实测约 4010。
-const MAX_KICKOFF = 4100;
+// 10-19 放到 4300:ask / agent 档补一句「看 / 读 / 搜文件用免审批的工具,run_bash 每条都要批」(Windows 上 dir / findstr 排成一串审批卡),实测约 4200。
+const MAX_KICKOFF = 4300;
 
 describe('C1b kickoff 拆分', () => {
   const cfg = { ...SPECIAL_AGENTS_DEFAULTS.muse, mode: 'ask' as const, escalateTo: '', notify: 'immediate' as const };
@@ -132,6 +133,15 @@ describe('C1b kickoff 拆分', () => {
     expect(message).toContain('Permission tier: ask');
     expect(message).toContain('Your Space:');
     expect(message).toContain('add_muse_todo');
+  });
+
+  it('ask / agent 档点明读文件用免审批的工具,别拿 run_bash 读(10-19 Windows 上 dir / findstr 排成一串审批卡);auto 档不需要', () => {
+    for (const mode of ['ask', 'agent'] as const) {
+      const { message } = buildCycleMessages({ ...cfg, mode }, {});
+      expect(message).toContain('use list_dir, read_file, glob_files, search_files or read_log — no approval needed');
+      expect(message).toContain('run_bash commands usually wait for approval');
+    }
+    expect(buildCycleMessages({ ...cfg, mode: 'auto' }, {}).message).not.toContain('run_bash commands usually');
   });
 
   it('点名电脑历史这个来源,但不点工具名(这段是落库的稳定前缀,电脑历史没开时工具不存在)', () => {
