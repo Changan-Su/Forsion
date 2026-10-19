@@ -25,7 +25,7 @@ import { resolveFileLink, resolveFileName, resolveVaultPath } from '../lib/vault
 import { makeUndoStack, type Snap } from '../lib/undoHistory'
 import { useUiStore } from './uiStore'
 import { awaitTypingQuiet, installTypingGuard, noteLocalEdit } from './typingGuard'
-import { flushUnifiedScopes, retireUnifiedPath, unifiedPatchFm } from '../unified/lifecycle'
+import { flushUnifiedScopes, holdUnifiedPath, pathHit, retireUnifiedPath, unifiedPatchFm } from '../unified/lifecycle'
 import { remapNotePageStylePrefix, remapNoteViewMemory } from '../unified/viewMemory'
 import { track } from '../../achievements/store'
 import { act } from '../../activity/log'
@@ -1153,8 +1153,13 @@ function makePageStore(opts: PageStoreOptions = {}) {
       }
       // 移动会触发全库引用重写:所有面板先落盘(不止本面板;理由同 renamePage,Codex 评审 P1)。
       await flushAllScopes()
+      // IPC 在途时旧路径随时会没、编辑器却还没改指:按住同篇的编辑器不写它,回来后交接到新路径再改指(2026-10-19)。
+      const release = await holdUnifiedPath(pagePath)
+      let held = true
       try {
         const newPath = await amadeus.movePage(pagePath, dst)
+        held = false
+        await release(newPath === pagePath ? null : newPath)
         if (newPath === pagePath) return
         remapScopePaths(pagePath, newPath, 'file')
         if (hasFd) {
@@ -1168,6 +1173,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
         await get().refreshStructure()
         await get().syncFdParentsOf([pagePath, newPath]) // 拖出/拖入 .fd 两端的父亲都同步
       } catch (e) {
+        if (held) await release(null)
         set({ error: String(e) })
         await get().refreshStructure()
       }
@@ -1186,10 +1192,13 @@ function makePageStore(opts: PageStoreOptions = {}) {
     async renameFolder(folderPath, newName) {
       // 文件夹改名触发树下全部页面的引用重写:所有面板先落盘(理由同 renamePage,Codex 评审 P1)。
       await flushAllScopes()
+      const release = await holdUnifiedPath(folderPath, 'prefix') // 同 movePage:IPC 在途时树下开着的笔记不写旧路径
       try {
         const newFolder = await amadeus.renameFolder(folderPath, newName)
+        await release(newFolder === folderPath ? null : newFolder)
         remapScopePaths(folderPath, newFolder, 'prefix')
       } catch (e) {
+        await release(null)
         set({ error: String(e) })
         return
       }
@@ -1741,7 +1750,7 @@ export function remapScopePaths(oldP: string, newP: string, kind: 'file' | 'pref
     if (kind === 'file') remapNoteViewMemory(root, oldP, newP)
     else remapNotePageStylePrefix(root, oldP, newP)
   }
-  const hit = (a: string): boolean => (kind === 'file' ? a === oldP : a === oldP || a.startsWith(`${oldP}/`))
+  const hit = (a: string): boolean => pathHit(a, oldP, kind)
   const to = (a: string): string => (kind === 'file' ? newP : newP + a.slice(oldP.length))
   for (const s of stores.values()) {
     const st = s.getState()

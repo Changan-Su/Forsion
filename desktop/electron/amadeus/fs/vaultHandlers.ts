@@ -580,19 +580,27 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
   })
 
   handle(IPC.movePage, async (_e, pagePath: string, destFolder: string) => {
+    const t0 = Date.now()
     const fileName = pageFileName(pagePath)
     const dstRel = destFolder.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
     const newPath = dstRel ? `${dstRel}/${fileName}` : fileName
     if (newPath === pagePath) return pagePath
     if (await vault.pathExists(newPath)) throw new Error('目标位置已存在同名文件')
     const pagesBefore = newPath.endsWith('.md') ? await vault.listPages() : []
+    const tl = Date.now()
     await withPathLocks([pagePath, newPath], () => vault.moveEntry(pagePath, newPath)) // 锁同改名(P0-3)
+    const t1 = Date.now()
     // 树里的附件(非 .md)也走本通道移动:不进索引(index.update 会把二进制按 utf8 读成巨串)、不记 lastPage。
     if (newPath.endsWith('.md')) {
       index.remove(pagePath)
       await index.update(newPath)
       await rememberPage(newPath)
+      const t2 = Date.now()
       await propagateRenames({ [pagePath]: newPath }, pagesBefore)
+      // 仪器(2026-10-19):这段期间渲染层按住着这篇的编辑器(holdUnifiedPath)。慢到人会在中途打字时记一笔各段耗时 ——
+      // Windows CI 上一个 4 篇的库挪了 >12s,原因没查明(e2e:notemove 会把这行转印到台架输出)。
+      const t3 = Date.now()
+      if (t3 - t0 > 1500) console.warn(`[amadeus] movePage slow: list ${tl - t0}ms, move+hook ${t1 - tl}ms, index ${t2 - t1}ms, propagate ${t3 - t2}ms`)
     }
     return newPath
   })
