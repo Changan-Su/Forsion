@@ -1,6 +1,7 @@
 // 白板手写笔输入的真 Excalidraw 契约(harness ?board 模式,CDP 发真的笔 / 触摸事件)。
 // 补丁原理见 frontend/src/amadeus/blocks/excalidraw/penInput.ts;补丁本体在 build/copy-excalidraw-assets.cjs。
 //
+//   P0 回归:从没见过笔时手指照常能画(补丁只管笔;这条原版补丁版都必须过,放最前 = 笔模式还没被打开)。
 //   P1 丢点:一帧里连发好几下笔移动,笔画要把每个采样都收下(引擎原样每帧只留最后一个)。
 //   P2 断笔:笔画到一半手掌按下、再抬起,这一笔不许被收掉 / 删掉,也不许被手掌带着缩放。
 //   P3 手掌先放:手掌按着时笔落下,照样要画出来(引擎原样会把两者当双指,笔画不开始)。
@@ -109,6 +110,27 @@ const near = (a, b, tol = 2.5) => Math.abs(a.x - b.x) <= tol && Math.abs(a.y - b
 
 async function scenarios(s) {
   const out = {}
+  // P0 手指画一笔(此时还没见过笔,笔模式关着)
+  {
+    const before = (await freedraws(s.p)).length
+    const f = { x: s.box.x + 120, y: s.box.y + 650, id: 3 }
+    await s.touch('touchStart', [f])
+    await s.frame()
+    for (let i = 1; i <= 10; i++) {
+      await s.touch('touchMove', [{ ...f, x: f.x + i * 10, y: f.y + i }])
+      await s.frame()
+    }
+    await s.touch('touchEnd', [])
+    await settle(s.p)
+    const els = await freedraws(s.p)
+    const el = els.length > before ? els[els.length - 1] : null
+    const span = el ? { x: el.points[el.points.length - 1][0] - el.points[0][0], y: el.points[el.points.length - 1][1] - el.points[0][1] } : null
+    out.P0 = {
+      always: true,
+      ok: !!el && el.points.length >= 10 && near(span, { x: 100, y: 10 }),
+      detail: el ? `手指画出 ${el.points.length} 个点,位移 (${span.x.toFixed(1)},${span.y.toFixed(1)}) 应为 (100,10)` : '手指没画出笔画',
+    }
+  }
   // P1 丢点:30 帧 × 每帧 4 下
   {
     const before = (await freedraws(s.p)).length
@@ -207,9 +229,9 @@ async function scenarios(s) {
     }
     runs[tag] = await scenarios(s)
     for (const [k, r] of Object.entries(runs[tag])) {
-      const pass = patched ? r.ok : !r.ok
+      const pass = patched || r.always ? r.ok : !r.ok
       if (!pass) failed++
-      console.log(`${pass ? 'PASS' : 'FAIL'}  [${tag}] ${k} ${patched ? '' : '应当红:'}${r.ok ? '过' : '没过'}  | ${r.detail}`)
+      console.log(`${pass ? 'PASS' : 'FAIL'}  [${tag}] ${k} ${patched || r.always ? '' : '应当红:'}${r.ok ? '过' : '没过'}  | ${r.detail}`)
     }
     if (s.errs.length) {
       failed++
