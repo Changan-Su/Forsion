@@ -196,6 +196,16 @@ Settings → Appearance → Startup and icons accepts custom brand icons and ani
 
 插件任务、只读外部引擎、隔离 Git 工作区、原生定时与 Desktop MCP 接缝见 [任务 SDK / Task SDK](./plugin-tasks.md)。
 
+## 工具结果卡片 / Tool result cards
+
+带引擎半身的插件,可以给自己注册的工具配一张结果卡片:Tangu 调用这个工具成功之后,对话里画的是插件的卡片,不再是一行通用的工具记录。卡片直接画在 Forsion 界面里,跟着主题、字号走。只有插件自己引擎半身注册的工具才能配卡片,内置工具和别的插件的工具都不行;工具还在跑、出错、等你批准,或者插件停用、重新加载时,照旧显示通用记录。重新打开旧对话,卡片照样在。
+
+卡片默认在对话里,右上角可以「在 Desk 打开」。插件也可以声明一出来就放进 Agent Desk(白板、看板这类要大地方的),这时对话里留一张占位卡,写着「正在 Desk 中显示」,点「收回到对话」挪回来;Desk 顶上的 ⋯ 里也有「放回对话」。来回挪的时候插件会记住缩放、滚动这类状态。手机上和关掉了 Agent Desk 时,一律显示在对话里。卡片里可以把一段内容「引用」到输入框上方,和在回答里划线引用一样,发不发由你决定;卡片不能写文件,也不能替你发消息。接口细节见插件开发技能「Tool result cards」一节。
+
+A plugin with an engine half can give the tools it registers a result card: after Tangu calls such a tool successfully, the chat shows the plugin's card instead of the generic one-line tool record. The card is drawn right in the Forsion interface and follows the theme and text size. Only tools the plugin's own engine half registered can get a card; built-in tools and other plugins' tools cannot. While the tool is still running, when it failed or is waiting for your approval, and while the plugin is disabled or reloading, the generic record shows. Cards come back when you reopen an old conversation.
+
+A card sits in the chat by default, with "Open in Desk" at its top right. A plugin can also ask for a card to go straight into the Agent Desk (for whiteboards and boards that need room); the chat then keeps a placeholder that says "Showing in Desk", and "Back to chat" moves it back. The ⋯ menu at the top of the Desk has "Move back to chat" too. The plugin keeps state such as zoom and scroll position across moves. On phones, and with the Agent Desk turned off, cards always show in the chat. A card can quote part of its content above the chat input, the same as selecting text in a reply and quoting it, and you decide whether to send it; cards cannot write files or send messages for you. For the API, see the "Tool result cards" section of the plugin development skill.
+
 ## Intelligent UI 卡片 / Intelligent UI cards
 
 插件可以把已有的列表源开放成对话里的原生卡片：在 `registerListSource` 上加一个 `intelligent` 声明即可。列表由宿主渲染，数据与跳转仍只有 `items` / `subscribe` / `open` 这一份实现（示例见下方代码）。
