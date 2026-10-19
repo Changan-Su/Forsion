@@ -17,7 +17,7 @@ import { stickyDefaults, useApp, withAmadeusWorkspace } from '../stores/appStore
 import { newSessionConfig, settleUltra } from '../stores/projectSettings'
 import { agentKnown, waitBackend } from '../tanguProbe'
 import type { AgentConfig } from '../types'
-import { ChatView } from './ChatView'
+import { ChatView } from '@tangu/ui/views/ChatView'
 
 registerMessages({
   'pluginChat.failed': { zh: '对话没接上：{error}', en: 'Could not open the chat: {error}' },

@@ -46,6 +46,7 @@ import { WidgetCard, localTimeZone } from '@amadeus/dashboard/widgets'
 import { EMBED_DENY, ViewCard, ensureChartView, pickSpecOf } from './dashboardViewCard'
 import '@amadeus/blocks'
 import './dashCanvas.css'
+import { useVaultRelParam } from './vaultRelParam'
 
 registerMessages({
   'dashcanvas.add.text': { zh: '文本块', en: 'Text block' },
@@ -226,7 +227,7 @@ export function DashboardCanvasView(props: ViewProps) {
 function CanvasInner({ leaf }: ViewProps) {
   const { t } = useI18n()
   const store = useScopedPageStore()
-  const dashPath = typeof leaf.params.dashPath === 'string' ? leaf.params.dashPath : ''
+  const dashPath = useVaultRelParam(leaf, 'dashPath')
   const locked = leaf.params.locked !== false // 缺席即锁(旧版同款):锁上=不能拖/加/删,双击看内容照旧
   const mode = useTheme((s) => s.mode)
   const manifest = usePageStore((s) => s.manifest)

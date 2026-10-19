@@ -18,6 +18,7 @@
       "@lcl/*": ["../lcl/*"],
       "@amadeus/*": ["../desktop/frontend/src/amadeus/*"],
       "@amadeus-shared/*": ["../desktop/shared/amadeus/*"],
+      "@tangu/ui/*": ["../desktop/frontend/src/*"],
       "@webamadeus/*": ["../web/src/amadeus/*"],
       "@mobile/*": ["src/*"],
       "react": ["./node_modules/@types/react"],

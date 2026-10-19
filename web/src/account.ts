@@ -1,4 +1,9 @@
 import type { AuthStatusInfo } from '../../desktop/frontend/src/types'
+import { APP_VERSION } from '../../desktop/frontend/src/changelog'
+
+/** Client tag (`web/2.13.4`) the server's activity stats group sign-ins by. Web ships on the desktop
+ *  version line; with no released version there is no tag (never guessed from the User-Agent). */
+export const WEB_CLIENT_TAG: string | undefined = APP_VERSION ? `web/${APP_VERSION}` : undefined
 
 export interface BrowserIdentity {
   userId: string
@@ -280,7 +285,8 @@ export function createBrowserAccount(options: BrowserAccountOptions) {
   function adoptToken(candidate: string): Promise<BrowserAuthStatus> { return enqueue(() => adoptVerified(candidate)) }
   function signIn(credentials: { username: string; password: string; captchaVerifyParam?: string }): Promise<BrowserAuthStatus> {
     return enqueue(async () => {
-      const response = await boundRequest(apiUrl('/auth/login'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(credentials) }, '')
+      const headers = { 'Content-Type': 'application/json', ...(WEB_CLIENT_TAG ? { 'X-Forsion-Client': WEB_CLIENT_TAG } : {}) }
+      const response = await boundRequest(apiUrl('/auth/login'), { method: 'POST', headers, body: JSON.stringify(credentials) }, '')
       if (!response.ok) { void response.body?.cancel(); throw new AccountHttpError(response.status, 'Account sign-in failed') }
       const result = await response.json()
       if (typeof result?.token !== 'string') throw new Error('Sign-in did not return an account token')

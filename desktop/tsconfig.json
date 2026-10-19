@@ -16,6 +16,7 @@
       "@/*": ["frontend/src/*"],
       "@amadeus/*": ["frontend/src/amadeus/*"],
       "@amadeus-shared/*": ["shared/amadeus/*"],
+      "@tangu/ui/*": ["frontend/src/*"],
       // 我们装的是 zsviczian fork(alias 成 @excalidraw/excalidraw,见 package.json)。
       // 它的 exports 把 types 指到 ./dist/types/**,而包里 .d.ts 实际躺在 ./types/** —— 上游包错，
       // moduleResolution:Bundler 认 exports 就全找不到。这几条按真实布局兜回来；运行时(. / index.css

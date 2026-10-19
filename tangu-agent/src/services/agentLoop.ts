@@ -3077,6 +3077,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           headHash: probe.headHash,
           segments: probe.segments,
           changedSegments: probe.changedSegments,
+          // 本次请求实际带的工具名(按 defs 顺序;探针双闸开着才发):台架判「哪几件在工具面里」,字节数相等证不了(Codex 10-19)。
+          toolNames: (lastIter ? [] : toolDefs || []).map((d: any) => String(d?.function?.name || '')),
           // 跨 run 比较:基准是本 run 开始前同一 (agent, model) 的上一条 head hash(priorRunHeadHash,
           // run 开始时取一次并固定)。每一帧都与它比 —— run 内 load_tools 造成的变化只在 changedSegments 里说。
           // 上一条不存在(冷启动 / map 被清)时发 null,消费端据此区分「没得比」与「比过了不一样」。

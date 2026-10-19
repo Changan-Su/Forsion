@@ -31,6 +31,8 @@ export interface ViewModeOption {
   icon?: ComponentType<{ size?: number; className?: string }>
   /** 这一种自己的快捷键(已格式化,如日历的「D」),写进悬停提示;没有就在「下一种」那格提示 ⌥⌘V。 */
   hotkey?: string
+  /** 使用指南现场圈注的锚点名(宿主 guideSpotlight.ts 的 GUIDE_ANCHORS 登记过的),挂到这一格的按钮上。 */
+  guideAnchor?: string
 }
 export interface ViewModesSpec {
   modes: ViewModeOption[]
@@ -213,7 +215,7 @@ export function ViewModeSwitch(props: SwitchProps): React.ReactElement | null {
         {spec.modes.map((m, k) => {
           const Icon = m.icon
           return (
-            <button key={m.value} type="button" role="tab" aria-selected={k === i} aria-label={m.label} title={tip(k)} className={k === i ? 'on' : ''}
+            <button key={m.value} type="button" role="tab" aria-selected={k === i} aria-label={m.label} title={tip(k)} className={k === i ? 'on' : ''} data-guide-anchor={m.guideAnchor}
               onMouseDown={(e) => e.preventDefault()} onClick={() => pick(m.value)}>
               {Icon ? <Icon size={14} className="lcl-vmode-ic" /> : null}
               <span className="lcl-vmode-tx">{m.label}</span>

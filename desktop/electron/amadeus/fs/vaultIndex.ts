@@ -15,6 +15,7 @@ import { assetKey, assetRefs } from '@amadeus-shared/assets'
 import type { BacklinkHit, BacklinkRef, SearchHit, TagCount, UnlinkedMention } from '@amadeus-shared/ipc'
 import { parseMdMarks, type MdMark } from '@amadeus-shared/mdMarks'
 import type { VaultManager } from './vaultManager'
+import { vaultRel } from './vaultRel'
 
 interface Entry {
   path: string
@@ -125,7 +126,9 @@ export class VaultIndex {
     }
   }
 
-  async update(pagePath: string): Promise<void> {
+  // 键一律 `/`(vaultRel):调用方递来的可能是渲染层老标签里的 `\` 写法,原样当键就是同一篇两条。
+  async update(pagePathIn: string): Promise<void> {
+    const pagePath = vaultRel(pagePathIn)
     const mine = this.bump(pagePath)
     const root = this.vault.getRoot()
     const e = await this.readEntry(pagePath)
@@ -136,7 +139,8 @@ export class VaultIndex {
     this.touched?.add(pagePath)
   }
 
-  remove(pagePath: string): void {
+  remove(pagePathIn: string): void {
+    const pagePath = vaultRel(pagePathIn)
     this.bump(pagePath)
     this.entries.delete(pagePath)
     this.touched?.add(pagePath)
@@ -276,7 +280,8 @@ export class VaultIndex {
   }
 
   /** Resolve a `![[note#id]]` embed to its content + owning note (note-scoped by id). */
-  resolveBlock(target: string, sourcePath?: string): { path: string; content: string; type: string } | null {
+  resolveBlock(target: string, sourcePathIn?: string): { path: string; content: string; type: string } | null {
+    const sourcePath = sourcePathIn && vaultRel(sourcePathIn)
     // `|别名` / `|宽度` 不参与解析(评审 L-15:`![[笔记|300]]` 原先整条拿去匹配 → 恒「嵌入丢失」)。
     const { note, subpath } = splitNoteEmbed(target)
     const bare = subpath ? `${note}#${subpath}` : note
@@ -378,7 +383,8 @@ export class VaultIndex {
     return hits.slice(0, 50)
   }
 
-  backlinks(targetPath: string): BacklinkRef[] {
+  backlinks(targetPathIn: string): BacklinkRef[] {
+    const targetPath = vaultRel(targetPathIn)
     if (!pageKey(targetPath)) return []
     // 逐条把原始链接按「源笔记上下文」重解析,只有真正解析到 targetPath 的才算反链
     // (重名笔记不再互相污染)。pages 排序 = 解析规则(4)的确定性并列序。
@@ -401,7 +407,8 @@ export class VaultIndex {
   }
 
   /** 提到目标页标题 / 别名、却没加 [[ ]] 的笔记(L-16 未链接提及)。代码、已有链接、URL 里的不算;fm 不参与。 */
-  unlinkedMentions(targetPath: string): UnlinkedMention[] {
+  unlinkedMentions(targetPathIn: string): UnlinkedMention[] {
+    const targetPath = vaultRel(targetPathIn)
     const target = this.entries.get(targetPath)
     if (!target) return []
     const names = [target.title, ...target.aliases]
@@ -423,7 +430,8 @@ export class VaultIndex {
    * `![](x)` 三种写法都还在,足够抽引用;.md(含画板/思维导图)一律不算附件,不参与删除。
    * ponytail: O(笔记数×引用数) 朴素扫,只在用户按删除时跑一次。
    */
-  async exclusiveAssets(pagePath: string): Promise<string[]> {
+  async exclusiveAssets(pagePathIn: string): Promise<string[]> {
+    const pagePath = vaultRel(pagePathIn)
     const self = this.entries.get(pagePath)
     const root = this.vault.getRoot()
     if (!self || !root) return []
@@ -442,7 +450,7 @@ export class VaultIndex {
       // 附件只认普通文件:引用解析到目录(`[子](x.fd)`)时整棵连带删是误删(Codex 评审 09-17)
       if (!(await fs.stat(abs).then((st) => st.isFile(), () => false))) continue
       const rel = path.relative(root, abs)
-      if (rel && !rel.startsWith('..') && !path.isAbsolute(rel) && !out.includes(rel)) out.push(rel)
+      if (rel && !rel.startsWith('..') && !path.isAbsolute(rel) && !out.includes(vaultRel(rel))) out.push(vaultRel(rel))
     }
     return out.sort()
   }

@@ -6,6 +6,7 @@ import { Skeleton } from '@lcl/engine'
 import type { ViewProps } from '@lcl/engine'
 import { lazyRetry } from '../lazyRetry'
 import { useVisualTheme as useTheme } from '../stores/themeStore'
+import { useVaultRelParam } from './vaultRelParam'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { isHostPath } from '@amadeus-shared/pdfLink'
 
@@ -14,7 +15,7 @@ const PdfAnnotator = lazyRetry(() => import('@amadeus/pdf/PdfAnnotator').then((m
 const pdfBase = (p: string): string => p.split(/[\\/]/).pop() || p
 
 export function AmadeusPdfView({ leaf }: ViewProps) {
-  const pdfPath = typeof leaf.params.pdfPath === 'string' ? leaf.params.pdfPath : ''
+  const pdfPath = useVaultRelParam(leaf, 'pdfPath')
   const page = typeof leaf.params.page === 'number' ? leaf.params.page : undefined
   const quote = typeof leaf.params.q === 'string' ? leaf.params.q : undefined // 引用条带的引语:临时高亮,不写盘
   const mode = useTheme((s) => s.mode)

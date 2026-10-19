@@ -5,11 +5,12 @@ import { useEffect } from 'react'
 import type { ViewProps } from '@lcl/engine'
 import { useVisualTheme as useTheme } from '../stores/themeStore'
 import { ExcalidrawEmbed } from '@amadeus/blocks/excalidraw/ExcalidrawEmbed'
+import { useVaultRelParam } from './vaultRelParam'
 
 const drawBase = (p: string): string => (p.split(/[\\/]/).pop() || p).replace(/\.excalidraw(\.md)?$/i, '')
 
 export function AmadeusDrawingView({ leaf }: ViewProps) {
-  const drawingPath = typeof leaf.params.drawingPath === 'string' ? leaf.params.drawingPath : ''
+  const drawingPath = useVaultRelParam(leaf, 'drawingPath')
   const mode = useTheme((s) => s.mode)
   // navigateLeaf 会把标题重置为 displayName,挂载/参数变化后设回文件名(AmadeusDbView 同款)。
   useEffect(() => {

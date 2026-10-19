@@ -25,7 +25,7 @@ import { rosterAvailable, runLocationsAvailable } from '../features/runtime'
 import { useApp } from '../stores/appStore'
 import { statusOfUnit, unitById, useDeviceSessions } from '../stores/deviceSessionsStore'
 import { setDraftLocation, useRunLocation } from '../stores/runLocationStore'
-import { clampText, deviceStatusText, useDeviceSessionsLive } from '../views/chat2/DeviceSessionSections'
+import { clampText, deviceStatusText, useDeviceSessionsLive } from '@tangu/ui/views/chat2/DeviceSessionSections'
 import type { UnitInfo } from '../types'
 import './runLocationPicker.css'
 

@@ -21,6 +21,7 @@ import { withDbLock } from './dbLock'
 import { writeVaultText } from './pageWrite'
 import { registerPageHistoryHandlers, type PageHistory } from './pageHistory'
 import { textFingerprint } from '@amadeus-shared/writeConflict'
+import { vaultRel } from './vaultRel'
 
 const nowIso = (): string => new Date().toISOString()
 function dbVersion(text: string): string {
@@ -286,7 +287,7 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
     if (!abs) return { status: 'missing' }
     const root = vault.getRoot()
     if (!root) return { status: 'missing' }
-    const rel = path.relative(root, abs)
+    const rel = vaultRel(path.relative(root, abs))
     let text: string
     try {
       text = await fs.readFile(abs, 'utf8')
@@ -342,7 +343,7 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
     const root = vault.getRoot()
     if (!abs || !root) return { status: 'missing' }
     try {
-      return { status: 'ok', path: path.relative(root, abs), source: await fs.readFile(abs, 'utf8') }
+      return { status: 'ok', path: vaultRel(path.relative(root, abs)), source: await fs.readFile(abs, 'utf8') }
     } catch {
       return { status: 'missing' }
     }
