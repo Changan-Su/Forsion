@@ -108,11 +108,13 @@ for (const [name, src] of Object.entries(SRC)) {
   if (!nonEmpty(src)) throw new Error(`[excalidraw-assets] 源文件缺失或为空:${src}(${name});fork 的产物布局变了?`)
 }
 if (!fs.existsSync(FONTS)) throw new Error(`[excalidraw-assets] 字体目录缺失:${FONTS}`)
+// 补丁也算「验源」:打不上就在删旧副本之前抛
+const engine = patchEngine(fs.readFileSync(SRC['excalidraw.js'], 'utf8'))
 
 fs.rmSync(outDir, { recursive: true, force: true })
 fs.mkdirSync(outDir, { recursive: true })
 fs.cpSync(FONTS, path.join(outDir, 'fonts'), { recursive: true })
 fs.copyFileSync(SRC['excalidraw.css'], path.join(outDir, 'excalidraw.css'))
-fs.writeFileSync(path.join(outDir, 'excalidraw.js'), patchEngine(fs.readFileSync(SRC['excalidraw.js'], 'utf8')))
+fs.writeFileSync(path.join(outDir, 'excalidraw.js'), engine)
 fs.writeFileSync(stamp, `${version}+pen${PEN_PATCH}`)
 console.log('[excalidraw-assets] engine + fonts', version, '->', outDir)
