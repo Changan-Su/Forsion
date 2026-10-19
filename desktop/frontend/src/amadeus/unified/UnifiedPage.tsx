@@ -49,7 +49,7 @@ import { unfoldCalloutsForInsert } from '../blocks/markdown/callout'
 import type { TextWriteResult } from '@amadeus-shared/ipc'
 import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { formatDateTime } from '../../format/time'
-import { SAVE_RETRY_MS, clearDraft, isElectronHost, readDraft, stashDraft, toastConflictCopy, toastGoneUnsaved, toastRenameCopy, toastRescued, toastSaveFailed, writeConflictCopy, type UnsavedDraft } from './writeSafety'
+import { SAVE_RETRY_MS, clearDraft, isElectronHost, mergeMovedText, readDraft, stashDraft, toastConflictCopy, toastGoneUnsaved, toastRenameCopy, toastRescued, toastSaveFailed, writeConflictCopy, type UnsavedDraft } from './writeSafety'
 import { docHeadings } from './outline'
 import { revealBlockAtTop } from './revealScroll'
 import { createStatsReader, createStatsTicker } from './noteStats'
@@ -304,6 +304,8 @@ interface Pipe {
   dead: boolean
   /** 改名/删除/移动后本实例退休:任何后续写盘都会把旧路径的文件写回来(复活幽灵文件),一律禁止。 */
   retired: boolean
+  /** 挪动 IPC 在途(lifecycle.holdUnifiedPath):不写盘,改动留在手里,放手时交接(见 handOver)。 */
+  held?: boolean
   /** 写的时候发现文件已经没了(CAS 回 current:null,Codex 复核 inst P0-2)而退休时,已另存进副本的那份全文;null = 没发生过。
    *  删除通知到之前用户还可能接着打字 —— 退休 / 卸载时比对它,多出来的再另存一份,不许静默丢。 */
   gone?: string | null
@@ -2186,6 +2188,45 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     }
   }
 
+  /** 挪动 IPC 落定后放手(lifecycle.holdUnifiedPath;按住期间 writeNow 一个字都不写)。没挪成 → 有待写就照旧写原路径。
+   *  挪成了 → 本实例退休,按住期间打的字交接到新路径:主进程已按新位置改写过这篇的图片 / 附件引用与 [[链接]],拿手里的
+   *  正文直接写 = 把改写盖回去(图又裂),所以与盘上那版按行三方合并(基线 = 挪之前落盘的那版)再比对交换写。合不拢 /
+   *  写被拒 → 新路径旁另存冲突副本并提示;副本也写不进 → 新路径草稿。调用方 await 完才改指(新路径的实例一挂载就读盘)。
+   *  卸载了的实例也走这里(句柄在按住时取好;卸载冲洗按住时只存了旧路径草稿,交接成了就清掉)。 */
+  const handOver = async (movedTo?: string): Promise<void> => {
+    pipe.held = false
+    if (pipe.readOnly || pipe.retired) return
+    if (!movedTo) {
+      if (pipe.pending) void writeNow()
+      return
+    }
+    pipe.retired = true // 旧路径已经没了:此后一个字都不写它;随后 remapScopePaths 的 retire(movedTo) 见已退休,不再存草稿
+    // ponytail: 从这里拉平到改指之间(两次 IPC 往返)打的字随旧实例卸载丢掉 —— 与 doRename 补写同一个窗口。
+    syncFromEditor()
+    const text = composeFm(pipe.fm, pipe.body)
+    const ours = toDisk(text, pipe.eol)
+    const base = toDisk(pipe.lastSaved, pipe.eol)
+    const settle = (): void => {
+      if (pipe.stashed != null) clearDraft(vaultRoot, path, pipe.stashed, pipe.slot)
+      pipe.stashed = null
+    }
+    if (ours === base) return settle()
+    try {
+      const theirs = await amadeus.readTextFile(movedTo)
+      const merged = theirs == null ? null : mergeMovedText(base, ours, theirs)
+      if (merged != null) {
+        const r = await amadeus.writeTextFile(movedTo, merged, { base: textFingerprint(theirs!) })
+        if (!r || r.ok !== false) return settle()
+      }
+      toastRenameCopy(movedTo, await writeConflictCopy(movedTo, ours), true)
+      settle()
+      void scoped.getState().refreshPages() // 副本是新文件:树 / 补全要看得见它
+    } catch (e) {
+      stashDraft(vaultRoot, movedTo, text, pipe.lastSaved, pipe.slot)
+      toastSaveFailed(movedTo, e)
+    }
+  }
+
   /** 写失败(D-04):首次即提示 + 「未保存」条;按退避补写;草稿同步存进本机(渲染层随时可能被关)。 */
   const noteWriteFailed = (error: unknown): void => {
     // 已退休(在途那发写在删除 / 移动之后才失败):路径已不归本实例,存草稿 = 旧路径上的孤儿(收口 N-5,同卸载冲洗)。
@@ -2242,6 +2283,12 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     const step = async (): Promise<void> => {
       let conflicts = 0
       while (!pipe.retired) {
+        // 挪动 IPC 在途:旧路径随时会没,写上去 = ENOENT → 原文件夹里生出冲突副本。不写,字留到放手时交接。
+        // 严格冲洗(切号屏障)要的是「全落盘」,按住时做不到就拒绝。
+        if (pipe.held) {
+          if (strict && composeFm(pipe.fm, pipe.body) !== pipe.lastSaved) throw new Error('The note is being moved')
+          return
+        }
         const text = composeFm(pipe.fm, pipe.body) // 执行时 compose:链上永远写「此刻」的状态
         if (text === pipe.lastSaved) {
           pipe.pending = false
@@ -2731,6 +2778,11 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         return writeNow(strict)
       },
       insertFiles: (files) => insertFilesHere(files),
+      hold: () => {
+        pipe.held = true
+        return pipe.chain // 已经发出的那发写先落定(在主进程动文件之前);链恒不 reject
+      },
+      release: (movedTo) => handOver(movedTo),
       // G1-05:外科写 fm 的实例写口 —— 与 chrome 改图标同一条路(setFm:patchFm → 立即写盘,CAS 带基线)。
       patchFm: (patch, follow = false) => {
         if (pipe.readOnly || pipe.retired || pipe.dead) return null
