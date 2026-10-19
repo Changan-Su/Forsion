@@ -4,8 +4,7 @@ import { useContext, useEffect } from 'react'
 import { MessageSquare, Puzzle } from 'lucide-react'
 import { useApp } from '../../stores/appStore'
 import { useI18n } from '../../i18n'
-import { CardMount, returnToolCardToChat } from '../../components/PluginToolCard'
-import { useToolCardOf } from '../../amadeus/plugins/toolResultCards'
+import { CardMount, returnToolCardToChat, useToolCardOf } from '../../components/PluginToolCard'
 import { DeskChromeContext } from './deskChrome'
 
 export function DeskToolCardPane({ sessionId, callId, onQuote }: { sessionId: string; callId: string; onQuote?: (text: string) => void }) {
