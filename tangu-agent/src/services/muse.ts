@@ -301,7 +301,7 @@ function tierKickoff(cfg: MuseConfig): string {
   const common = `Your workspace is your Library (${lib}): keep drafts, notes, plugin drafts and your daily journal (Journal/<date>.md) there — the user can browse it in the app. `;
   // 10-19:Windows 上 Muse 拿 run_bash 的 dir / findstr 读自己的 LOG 和 Library,ask 档每条都排成一张等用户的审批卡。
   // 看 / 读 / 搜文件的工具本来免审批,这句把它们点出来。
-  const reads = ' To look at files (your log, Library and Journal included) use list_dir, read_file, glob_files, search_files or read_log — no approval needed; every run_bash command has to be approved first.';
+  const reads = ' To look at files (your log, Library and Journal included) use list_dir, read_file, glob_files, search_files or read_log — no approval needed, while run_bash commands usually wait for approval.';
   // 「Space 目录免审」必须写进档位句本身:09-27 实机 Muse 只读到「Library 免审、别处排队」,把 Space 当成「Library 外」
   // 等批准(实际 extraRoots 三档都放行),于是只敢改文案。
   if (cfg.mode === 'auto') {

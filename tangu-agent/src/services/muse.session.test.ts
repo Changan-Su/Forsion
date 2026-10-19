@@ -139,9 +139,9 @@ describe('C1b kickoff 拆分', () => {
     for (const mode of ['ask', 'agent'] as const) {
       const { message } = buildCycleMessages({ ...cfg, mode }, {});
       expect(message).toContain('use list_dir, read_file, glob_files, search_files or read_log — no approval needed');
-      expect(message).toContain('every run_bash command has to be approved first');
+      expect(message).toContain('run_bash commands usually wait for approval');
     }
-    expect(buildCycleMessages({ ...cfg, mode: 'auto' }, {}).message).not.toContain('every run_bash command');
+    expect(buildCycleMessages({ ...cfg, mode: 'auto' }, {}).message).not.toContain('run_bash commands usually');
   });
 
   it('点名电脑历史这个来源,但不点工具名(这段是落库的稳定前缀,电脑历史没开时工具不存在)', () => {

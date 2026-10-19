@@ -1,7 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
-import os from 'node:os';
-import { mkdtempSync, writeFileSync } from 'node:fs';
 import { isKnownSafeBash, writeEscalationNeeded } from '../src/services/approvals.js';
 import { credentialPaths } from '../src/sandbox/hostSandboxProtection.js';
 
@@ -76,17 +74,24 @@ describe('isKnownSafeBash · Windows cmd 的 dir / type', () => {
   });
 });
 
-describe('isKnownSafeBash · Windows 上的外部程序', () => {
-  it('工作区里放了同名可执行文件(LS.BAT / git.cmd)就不免审批;date 带参数是改系统日期,不收', () => {
-    const dir = mkdtempSync(path.join(os.tmpdir(), 'win-planted-'));
-    expect(isKnownSafeBash('ls -la', dir, 'win32')).toBe(true);
-    writeFileSync(path.join(dir, 'LS.BAT'), '');
-    expect(isKnownSafeBash('ls -la', dir, 'win32')).toBe(false);
-    expect(isKnownSafeBash('ls -la', dir, 'darwin')).toBe(true); // 别的平台不在当前目录找程序
-    writeFileSync(path.join(dir, 'git.cmd'), '');
-    expect(isKnownSafeBash('git status', dir, 'win32')).toBe(false);
-    expect(isKnownSafeBash('date -u', dir, 'win32')).toBe(false);
-    expect(isKnownSafeBash('pwd', path.join(dir, 'missing'), 'win32')).toBe(false); // 读不了目录按「有」算
+describe('isKnownSafeBash · Windows 上别的命令一律要批', () => {
+  it('不落回 POSIX 名单:cmd 先在当前目录 / PATH 找外部程序、先展开 %变量% 再切命令(Codex 10-19)', () => {
+    for (const c of ['ls -la', 'git status', 'pwd', 'cat README.md', 'cat %USERPROFILE%/.forsion/auth.json', 'cat //server/share/x', 'echo %CD%', 'date -u']) {
+      expect(isKnownSafeBash(c, process.cwd(), 'win32'), c).toBe(false);
+    }
+    expect(isKnownSafeBash('ls -la', process.cwd(), 'darwin')).toBe(true); // 别的平台照旧
+  });
+
+  it('ComSpec 不是 cmd.exe(bash / PowerShell)时 dir 不是内部命令,不放行', () => {
+    const prev = process.env.comspec;
+    try {
+      process.env.comspec = 'C:\\Program Files\\Git\\bin\\bash.exe';
+      expect(isKnownSafeBash('dir /b', process.cwd(), 'win32')).toBe(false);
+      process.env.comspec = 'C:\\Windows\\System32\\CMD.EXE';
+      expect(isKnownSafeBash('dir /b', process.cwd(), 'win32')).toBe(true);
+    } finally {
+      if (prev === undefined) delete process.env.comspec; else process.env.comspec = prev;
+    }
   });
 });
 

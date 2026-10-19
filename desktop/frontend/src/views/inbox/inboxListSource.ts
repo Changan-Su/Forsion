@@ -71,9 +71,10 @@ export function inboxSnippet(body: string | null | undefined, title = ''): strin
     if (mark) { fence = mark; continue }
     if (/^\s*\|/.test(raw) || /^\s*(?:[-*_]\s*){3,}$/.test(raw)) continue
     // 反斜杠转义(引擎给审批信转义过 `run\_bash`、`C:\\Users`)先换成私用区占位,剥完语法再还原成字面字符 ——
-    // 不然被转义的 * _ 会被下面当成强调剥掉,反斜杠原样露在列表里。
-    const line = raw
-      .replace(/\\([!-/:-@[-`{-~])/g, (_m, c: string) => String.fromCharCode(0xe000 + c.charCodeAt(0)))
+    // 不然被转义的 * _ 会被下面当成强调剥掉,反斜杠原样露在列表里。行内代码里的反斜杠不是转义(CommonMark),原样留;
+    // 这一行本来就有占位区的字符就整行不还原,免得把它们也「还原」掉(Codex 10-19)。
+    const pua = /[\ue021-\ue07e]/.test(raw)
+    const line = (pua ? raw : raw.replace(/(`+)[^`]*?\1|\\([!-/:-@[-`{-~])/g, (m, _t, c?: string) => (c ? String.fromCharCode(0xe000 + c.charCodeAt(0)) : m)))
       .replace(/!\[[^\]]*\]\([^)]*\)|!\[\[[^\]]*\]\]/g, '')
       .replace(/^\s*(?:>\s*)*(?:\[![^\]]*\][+-]?\s*)?/, '')
       .replace(/^(?:#{1,6}\s+|[-*+]\s+(?:\[[ xX]\]\s+)?|\d+[.)]\s+)/, '')
@@ -81,8 +82,8 @@ export function inboxSnippet(body: string | null | undefined, title = ''): strin
       .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
       .replace(/\*+|`+|~~/g, '')
       .replace(/\s+/g, ' ').trim()
-      .replace(/[\ue021-\ue07e]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xe000))
-    if (line && line !== title.trim()) return Array.from(line).slice(0, 80).join('')
+    const text = pua ? line : line.replace(/[\ue021-\ue07e]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xe000))
+    if (text && text !== title.trim()) return Array.from(text).slice(0, 80).join('')
   }
   return ''
 }

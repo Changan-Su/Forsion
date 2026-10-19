@@ -12,7 +12,6 @@
  * 远程 host-exec（跨进程）需要的是 HTTP「租赁」端点（见架构 v2.0 §3.3 Lease），不在此文件范围。
  */
 import path from 'node:path';
-import { readdirSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { publish } from './eventBus.js';
 import { isOutsideWorkspace, writableRoots, protectedLocalWrite, protectedRemoteWrite } from '../tools/fsPolicy.js';
@@ -759,8 +758,9 @@ const SAFE_SEARCH_FLAGS = ['-n', '-i', '-l', '-c', '-v', '-w', '-F', '--files', 
 const SAFE_RG_FLAGS = new Set(SAFE_SEARCH_FLAGS);
 const SAFE_GREP_FLAGS = new Set([...SAFE_SEARCH_FLAGS, '-r', '-E', '-L']);
 
-/** Windows(run_bash 走 ComSpec,一般是 cmd.exe)只收 cmd 的**内部**命令。外部程序(findstr、where,以及下面通用名单里的
- *  ls / cat / git ……)cmd 会先在当前目录找同名的 .bat / .exe —— agent 往工作区写一个就能免审批跑任意代码。 */
+/** Windows(run_bash 经 Node `shell: true` 走 ComSpec)只收 cmd.exe 的**内部**命令 dir / type,别的一律要批:
+ *  外部程序(findstr、where、git、ls ……)cmd 先在当前目录、再在 PATH 里找同名的 .bat / .exe,agent 放一个就能免审批跑任意代码;
+ *  下面的 POSIX 名单又放行 `%`,cmd 先展开变量再切命令(`cat %USERPROFILE%\…\auth.json` 读到凭据)。Codex 10-19 评审。 */
 const CMD_READ_BUILTINS = new Set(['dir', 'type']);
 
 /** 按 cmd 的双引号切词(引号去掉);引号不成对 → null。 */
@@ -777,11 +777,12 @@ function cmdTokens(cmd: string): string[] | null {
   return out;
 }
 
-/** cmd 的 `dir` / `type`(10-19:Windows 上 Muse 用 `dir /b "C:\…"` 读自己的目录,每条都排成一张审批卡)。
- *  undefined = 不是这两个命令,交回通用判定。 */
-function cmdBuiltinSafe(cmd: string, cwd: string): boolean | undefined {
+/** cmd 的 `dir` / `type`(10-19:Windows 上 Muse 用 `dir /b "C:\…"` 读自己的目录,每条都排成一张审批卡)。 */
+function cmdBuiltinSafe(cmd: string, cwd: string): boolean {
   const program = cmd.split(' ', 1)[0].toLowerCase(); // 带引号的 "dir" 是外部程序查找,不在名单里
-  if (!CMD_READ_BUILTINS.has(program)) return undefined;
+  if (!CMD_READ_BUILTINS.has(program)) return false;
+  // ComSpec 换成了 bash / PowerShell,dir 就不是内部命令了(Node 取 process.env.comspec,缺省 cmd.exe)
+  if (path.win32.basename(process.env.comspec || 'cmd.exe').toLowerCase() !== 'cmd.exe') return false;
   // 只认字母数字、空格与路径常用标点。cmd 的 & | < > ^ ( ) % ! 与等同空格的分隔符 , ; =(`type a,b` 读两个文件)、
   // 8.3 短名的 ~、PowerShell 的 $ ` ' { } @ [ ] 一概不收。
   if (!/^[\p{L}\p{N}\p{M} _.\-\\/:"*?]+$/u.test(cmd)) return false;
@@ -790,6 +791,7 @@ function cmdBuiltinSafe(cmd: string, cwd: string): boolean | undefined {
   return tokens.slice(1).every((a) => {
     if (a.startsWith('/')) return program === 'dir' && /^\/-?[a-z0-9](?::?-?[a-z]*)$/i.test(a);
     // 开头的 \ 或 / 不收:\\server\share 会向外发 NTLM 凭据,\\?\、\??\ 绕开 Win32 路径规整。冒号只认盘符(file:stream 是备用数据流)。
+    // 已映射的网络盘、指向共享的软链照样会走网络 —— 与 read_file 读同一路径同口径,不在这里拦(Codex 10-19 #3,没修)。
     if (!a || a.startsWith('\\') || a.indexOf(':', 2) >= 0 || (a.includes(':') && !/^[a-z]:/i.test(a))) return false;
     // type 读内容:不收通配(可能扫到凭据文件),也不收以点或空格结尾的路径段(Win32 会去掉它们,`auth.json.` 就是 auth.json)。
     if (program === 'type' && (/[*?]/.test(a) || a.split(/[\\/]/).some((seg) => seg !== '.' && seg !== '..' && /[. ]$/.test(seg)))) return false;
@@ -797,28 +799,13 @@ function cmdBuiltinSafe(cmd: string, cwd: string): boolean | undefined {
   });
 }
 
-/** Windows:cmd 找外部程序先看当前目录,工作区里有同名的 git.bat / ls.exe 就会跑它。读不了目录按「有」算。 */
-function plantedInCwd(program: string, cwd: string): boolean {
-  const p = program.toLowerCase();
-  try {
-    return readdirSync(cwd).some((n) => { const l = n.toLowerCase(); return l === p || l.startsWith(`${p}.`); });
-  } catch {
-    return true;
-  }
-}
-
 /** Only simple unquoted word tokens are classified. Shell parsing remains the shell's job. */
 export function isKnownSafeBash(command: string, cwd: string = process.cwd(), platform: NodeJS.Platform = process.platform): boolean {
   const cmd = String(command || '').trim();
-  if (platform === 'win32') {
-    const builtin = cmdBuiltinSafe(cmd, cwd);
-    if (builtin !== undefined) return builtin;
-  }
+  if (platform === 'win32') return cmdBuiltinSafe(cmd, cwd);
   // Deny substitutions, expansions, quotes, shell operators, escapes and control characters.
   if (!cmd || /[^A-Za-z0-9_./:@%+=, \-]/.test(cmd)) return false;
   const [program, ...args] = cmd.split(/ +/);
-  // cmd 的 date 带参数是改系统日期;其余都是外部程序,先排除工作区里放了同名可执行文件的情况。
-  if (platform === 'win32' && (program === 'date' || plantedInCwd(program, cwd))) return false;
   if ((SAFE_BASH_PROGRAMS.has(program) || program === 'rg' || program === 'grep') && touchesCredentials(program, args, cwd)) return false;
   if (SAFE_BASH_PROGRAMS.has(program)) return true;
   if (program === 'date') return args.every((a) => a === '-u' || a === '--utc' || a.startsWith('+'));

@@ -122,6 +122,8 @@ describe('收件箱列表源(统一工作区)', () => {
     expect(inboxSnippet('run\\_bash · $ dir /b "C:\\\\Users\\\\Dream\\\\.forsion\\\\tangu"')).toBe('run_bash · $ dir /b "C:\\Users\\Dream\\.forsion\\tangu"')
     expect(inboxSnippet('a\\*b\\*c \\[x\\](y)')).toBe('a*b*c [x](y)') // 被转义的 * 不当强调剥掉,[x](y) 不当链接
     expect(inboxSnippet('\\> 不是引用 \\# 也不是标题')).toBe('> 不是引用 # 也不是标题')
+    expect(inboxSnippet('路径 `C:\\Users\\A\\.forsion\\x` 和 a\\_b')).toBe('路径 C:\\Users\\A\\.forsion\\x 和 a_b') // 行内代码里不是转义
+    expect(inboxSnippet('\ue041PPROVED a\\_b')).toBe('\ue041PPROVED a\\_b') // 正文自带占位区字符:整行不还原
     const t0 = performance.now()
     for (let i = 0; i < 200; i++) inboxSnippet('['.repeat(100_000))
     expect(performance.now() - t0).toBeLessThan(500) // 只看开头:恶意长行不拖慢列表
