@@ -67,7 +67,7 @@ import { fdDirOf, isNoteMd } from '@amadeus/lib/fd'
 import { useSectionOpen } from '@amadeus/lib/sectionOpen'
 import { folderPadLeft, rowPadLeft } from '@amadeus/lib/treeIndent'
 import { compile, parsePageSource } from '@amadeus-shared/compiler'
-import { recordNav, useWorkspace, activeMainPanel, Skeleton, zoomOf, UI_MODE, startOpenDrag } from '@lcl/engine'
+import { recordNav, useWorkspace, activeMainPanel, Skeleton, zoomOf, UI_MODE, startOpenDrag, inSingleColumnShell } from '@lcl/engine'
 import { useNoteOutline } from '@amadeus/lib/activeNote'
 import { isCoarsePointer } from './touch'
 import type { ViewProps } from '@lcl/engine'
@@ -1985,8 +1985,10 @@ export function AmxMobileBar({ actions, onUpload, undo, redo, indent, sourceMode
         )}
         {!sourceMode && <button onPointerDown={keep} onClick={onUpload} title={t('amxv.uploadToPage')}><Upload size={19} /></button>}
         {/* 画布模式。源码模式下跟其他键一起隐:fullCanvas 本来就要求 mode !== 'source',留着是颗死键。
-            v3 笔记(canvas === null)也不出 —— 那边压根没有画布这回事。 */}
-        {!sourceMode && canvas && (
+            v3 笔记(canvas === null)也不出 —— 那边压根没有画布这回事。
+            单列壳(手机 Web / Android App)不出(2026-10-19 视图模式标准):那里是顶栏两颗胶囊中间的看法胶囊,原生顶栏下进「⋯」的「看法」一节。
+            留给的是触屏桌面:那里笔记顶栏不渲染,这颗是除了 ⌥⌘V 之外唯一的入口。 */}
+        {!sourceMode && canvas && !inSingleColumnShell() && (
           <button onPointerDown={keep} onClick={canvas.toggle} className={canvas.on ? 'on' : undefined}
             title={canvas.on ? t('amxv.mbar.toDocument') : t('amxv.mbar.toCanvas')}><Frame size={19} /></button>
         )}
@@ -2768,7 +2770,8 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
           AmadeusDashboardView 用着,CSS 一刀切会连仪表盘的顶栏(含「解锁编辑」)一起藏掉。 */}
       {barPath && !isCoarsePointer() && !leaf.params.miniSurface && (
         // 顶栏与编辑器融为一体:实色纸面底(var(--bg)),滚动时正文从其后穿过被遮住(见 CSS)。
-        <div className="amx-toolbar">
+        // amx-vhead:这一行就是笔记的视图头行(lcl viewModes),窄时胶囊按它的宽度退化。
+        <div className="amx-toolbar amx-vhead">
           <Breadcrumb path={barPath} hideLoneLeaf={!!unifiedRoute} />
           {/* 「文档 | 画布」胶囊(用户 2026-08-17 拍板:跟路径/分享/置顶同一行)。状态在 UnifiedPage,
               经 uiOverlay 交出来 —— 与旁边那颗可视/源码的路子一致。标记在 CanvasModeSeg(harness 共用)。 */}

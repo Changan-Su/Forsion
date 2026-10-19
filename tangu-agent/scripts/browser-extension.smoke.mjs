@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * Tangu for Chrome 扩展冒烟(09-24):真 Chrome × 真扩展 × 真引擎桥 × dist 里的 browser_* 工具。
+ * Tangu 浏览器扩展冒烟(09-24;10-19 起扩展本体是 Forsion Clip):真 Chrome × 真扩展 × 真引擎桥 × dist 里的 browser_* 工具。
  *   npm run build && node scripts/browser-extension.smoke.mjs
  *
- * 起一个临时 headless Chrome(独立 user-data-dir,绝不碰用户的 Chrome),管道 CDP 装载 browser-extension/,
+ * 起一个临时 headless Chrome(独立 user-data-dir,绝不碰用户的 Chrome),管道 CDP 装载 Forsion Clip(并入了 Tangu 浏览器控制),
  * 附着到扩展的 service worker 写入连接码完成配对(等价于用户在弹窗里粘贴),然后断言用户提的三件事:
  *   ① 看得见用户开着的标签,并知道用户正在看哪个(focused);
  *   ② Tangu 自己打开的页进「Tangu」标签组、在后台 —— 用户正看着的标签始终保持激活;
@@ -30,6 +30,8 @@ process.env.TANGU_HOME = join(work, 'tangu');
 process.env.TANGU_BROWSER_EXTENSION_PORT = String(await freePort());
 process.env.TANGU_BROWSER_CDP = 'off'; // 只测扩展这一路
 process.env.TANGU_BROWSER_ALLOW_PRIVATE_URLS = '1';
+// 扩展本体是 Forsion Clip(@forsion/clip,桌面的依赖);要测本地构建就把 TANGU_BROWSER_EXTENSION_DIR 指到 Clip 的 .output/chrome-mv3
+process.env.TANGU_BROWSER_EXTENSION_DIR ||= join(root, '..', 'desktop', 'node_modules', '@forsion', 'clip', 'chrome-mv3');
 
 const MARKER = `EXT-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
 const BUTTON = `<button onclick="this.dataset.n=(+this.dataset.n||0)+1;document.title='CLICKED-'+this.dataset.n">推荐款</button><input id=q placeholder="搜索">`;

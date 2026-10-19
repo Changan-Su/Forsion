@@ -18,7 +18,7 @@ export const GUIDE_ANCHORS: Record<string, { side?: 'left' | 'right' }> = {
   'chat-composer': {}, // 对话输入卡(views/chat2/Composer2.tsx)
   'note-new': { side: 'left' }, // 笔记左栏「新建笔记」(amadeusViews.tsx)
   'note-body': {}, // 笔记正文(amadeus/unified/UnifiedPage.tsx;文档模式才有)
-  'note-canvas': {}, // 「文档 / 画布」胶囊里的「画布」(amadeus/unified/CanvasModeSeg.tsx)
+  'note-canvas': {}, // 「文档 / 画布」胶囊里的「画布」(amadeus/unified/CanvasModeSeg.tsx 的 canvasModesSpec,经 lcl ViewModeSwitch 挂上)
   'agent-new': { side: 'left' }, // Agents 左栏底部「创建 Agent」(views/AgentProfileView.tsx)
 }
 

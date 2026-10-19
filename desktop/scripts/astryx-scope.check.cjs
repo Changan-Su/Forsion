@@ -263,7 +263,7 @@ async function main() {
     await sweep('日历·周视图', { probe: true })
     await calParity('周视图 + 待办 + 右栏')
 
-    await win.locator('.amx-cal-modes').getByRole('button', { name: '周', exact: true }).click()
+    await win.locator('.amx-cal-modes').getByRole('button', { name: '显示选项', exact: true }).click() // 10-19 起日 / 周 / 月在看法胶囊里,这颗是 ⋯
     await win.waitForFunction(() => document.querySelectorAll(':popover-open').length > 0, null, { timeout: 5000 })
     await calParity('视图下拉菜单打开')
     await win.keyboard.press('Escape')

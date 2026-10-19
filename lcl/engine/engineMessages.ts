@@ -77,4 +77,9 @@ export const LCL_MESSAGES: Record<string, { zh: string; en: string }> = {
   'lcl.mobile.dock.editTitle': { zh: '固定在 Dock', en: 'Spaces in the dock' },
   'lcl.mobile.dock.editHint': { zh: '{first}常驻，另外最多固定 {max} 个。满了先取消一个再选。', en: '{first} is always there; pick up to {max} more. When the dock is full, take one out first.' },
   'lcl.mobile.dock.done': { zh: '完成', en: 'Done' },
+
+  // 视图模式(viewModes.tsx):头行左端的「看法」胶囊、⌥⌘V、命令面板里每种一条
+  'lcl.viewMode.aria': { zh: '看法', en: 'View mode' },
+  'lcl.viewMode.next': { zh: '切到下一种看法', en: 'Next view mode' },
+  'lcl.viewMode.pick': { zh: '看法：{label}', en: 'View: {label}' },
 }

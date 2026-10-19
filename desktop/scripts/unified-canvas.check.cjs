@@ -1427,8 +1427,8 @@ async function main() {
       pos: cs?.position ?? '',
       innerOk: !!inner && ics.display === 'contents' && ics.position === 'static' && inner.getClientRects().length === 0,
       hud: !!document.querySelector('.amx-stage-hud'),
-      seg: [...document.querySelectorAll('.amx-modeseg button')].map((b) => `${b.textContent}${b.classList.contains('on') ? '*' : ''}`).join('|'),
-      thumb: document.querySelector('.amx-modeseg .t2s-vaultseg-thumb')?.dataset.side ?? '',
+      seg: [...document.querySelectorAll('.amx-modeseg [role=tab]')].map((b) => `${b.textContent}${b.classList.contains('on') ? '*' : ''}`).join('|'),
+      thumb: document.querySelector('.amx-modeseg .lcl-vmode-thumb')?.dataset.value ?? '',
       writes: window.__upage.writes.length,
     }
   })
@@ -2286,7 +2286,7 @@ async function main() {
       label: !document.querySelector('.amx-stage-label'),
       // 胶囊住在**笔记顶栏**里(用户 2026-08-17 拍板:跟路径/分享/置顶同一行);
       // 笔记名浮在舞台左上、让开顶栏。
-      segOn: document.querySelector('.amx-modeseg .t2s-vaultseg-thumb')?.dataset.side ?? '',
+      segOn: document.querySelector('.amx-modeseg .lcl-vmode-thumb')?.dataset.value ?? '',
       segW: Math.round(btn.width),
       segInToolbar: !!document.querySelector('.amx-modeseg')?.closest('.amx-toolbar'),
       // 工具条(AFFiNE 同位:底部居中)必须在场且不被舞台边缘裁掉。
@@ -2334,7 +2334,7 @@ async function main() {
       inTb: !!s?.closest('.amx-toolbar'),
       w: Math.round(s?.getBoundingClientRect().width ?? 0),
       leftmost: !!s && !!tb && s.getBoundingClientRect().left - tb.getBoundingClientRect().left < 24,
-      side: document.querySelector('.amx-modeseg .t2s-vaultseg-thumb')?.dataset.side ?? '',
+      side: document.querySelector('.amx-modeseg .lcl-vmode-thumb')?.dataset.value ?? '',
     }
   })
   record('C26 顶栏插槽晚于编辑器到场(启动还原时序)→ 胶囊仍挂进顶栏、有宽度、顶到最左',
