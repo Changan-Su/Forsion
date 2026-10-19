@@ -14,11 +14,18 @@
  * 并在库里塞 NOTEMOVE_FILLER 篇填充笔记(缺省 1500)把全库重写拖到秒级,让这几个字稳稳落在 IPC 在途的那段里。
  * NOTEMOVE_FILLER=0 = 小库(快机上字多半落在挪完之后,走的是普通保存那条路)。
  *
+ * 旧格式笔记(v3 块编辑器,第 7–10 条;关掉「打开即升」的库、或升级器拒升的文件才走它):同一个窗口,防抖保存
+ * (pageStore 的 saveTimer → savePage)在 IPC 在途时照旧按旧路径写 —— 主进程 savePage 缺文件即建,原文件夹里复活出
+ * 一篇旧格式.md;挪过去的那篇既没有途中的字,编辑器手里的旧引用还会在下一次存盘时把主进程的改写盖回去(修法:
+ * pageStore 的 holdNotePath / _holdForMove,按住 scope store 的保存、放手时同一套三方合并交接到新路径并按合并结果重装)。
+ *
  * 判图靠尺寸:原图 1×1,新文件夹里同路径的那张是 2×2 —— naturalWidth 是 1 才算取对了(0 = 裂,2 = 取成了另一张)。
  * 负对照(实跑过):
  *  · 构建产物里摘掉主进程 propagateRenames 对 rebaseFileRefs 的调用 → 3 / 4 / 5 红,第 4 条量到的宽度是 2
  *    (编辑器里显示的是目标夹那张)。
  *  · 渲染层退回没有 holdUnifiedPath 的版本(3f2d761a)→ 3 / 3b / 6 红,原文件夹里多出冲突副本(见 docs/Log 10-19)。
+ *  · 渲染层退回没有 v3 按住的版本(e0789b46)→ 9 / 9b / 10 / 10b 红:原文件夹复活出一篇带着途中字的旧格式.md,挪过去的那篇
+ *    没有这些字,换到新路径后再打字把引用存回挪之前的写法;9c 的图地址停在「来源夹/」(编辑器手里还是挪之前的正文)。
  *
  * ⚠️ 库是临时夹具(预置 amadeus-config 的 lastVault),不碰本机真实库。
  * ⚠️ 先 npm run build:量的是 out/ 里的产物,源码改了没构建就是白测。
@@ -76,9 +83,9 @@ const DRAG_TO = ({ type, rowText }) => {
   el.dispatchEvent(new DragEvent(type, { dataTransfer: window.__dt, bubbles: true, cancelable: true }))
   return { ok: true, lit: document.querySelectorAll('.amx-drop-into').length }
 }
-/** 编辑器里那张图:取完了没、取到的是几像素宽、地址指着库里的哪个路径。 */
+/** 编辑器里那张图(只认看得见的:换笔记时上一个编辑器可能还挂着):取完了没、取到的是几像素宽、地址指着库里的哪个路径。 */
 const IMG = () => {
-  const img = document.querySelector('.ProseMirror img')
+  const img = Array.from(document.querySelectorAll('.ProseMirror img')).find((i) => i.offsetParent !== null)
   if (!img) return null
   let ref = img.getAttribute('src') || ''
   try { ref = decodeURIComponent(ref.replace('amadeus-asset://v/', '')) } catch { /* 原样 */ }
@@ -101,6 +108,11 @@ async function main() {
   put('来源夹/attachments/d.pdf', '%PDF-1.4\n')
   put('目标夹/占位.md', '# 占位\n')
   put('目标夹/.amadeus/p.png', png(2)) // 新位置同路径的另一张图:不许显示成它
+  // 旧格式(v3:amadeus_page + 块标记)同款内容。关掉「打开即升」它才进 v3 块编辑器(config.json 的 notes.upgradeV4)。
+  const V3_LAYOUT = '{"type":"stack","children":[{"type":"row","id":"r1","columns":[{"id":"c1","width":1,"children":[{"ref":"1"},{"ref":"2"},{"ref":"3"},{"ref":"4"}]}]}]}'
+  put('来源夹/旧格式.md', ['---', 'amadeus_page: pg_v3move', 'amadeus_schema: amadeus.page/3', `amadeus_layout: ${V3_LAYOUT}`, '---', '',
+    '<!-- a 1 -->', '', '# 旧格式', '', '<!-- a 2 -->', '', '正文一行', '', '<!-- a 3 -->', '', '![](.amadeus/p.png)', '', '<!-- a 4 -->', '', '[doc](attachments/d.pdf)', ''].join('\n'))
+  fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ notes: { upgradeV4: false } }), 'utf8')
   for (let i = 0; i < FILLER; i++) put(`填充/${String(i).padStart(5, '0')}.md`, `# 填充 ${i}\n\n见 [[占位]]\n`)
   const read = (rel) => (fs.existsSync(path.join(vault, rel)) ? fs.readFileSync(path.join(vault, rel), 'utf8') : null)
   /** 库里所有冲突副本(挪动途中的写撞上旧路径没了,就会在原文件夹生出一份)。 */
@@ -168,17 +180,17 @@ async function main() {
     const imgIn = (folder) => until(() => win.evaluate(IMG), (v) => !!v && v.done && v.ref.startsWith(`${folder}/`))
     /** 光标放到「正文一行…」那段的末尾(拖放是合成事件、不动焦点:之后打的字进的就是这里)。 */
     const caretAtLine = async () => {
-      await win.locator('.ProseMirror p', { hasText: '正文一行' }).first().click({ timeout: 10_000 })
+      await win.locator('.ProseMirror p:visible', { hasText: '正文一行' }).first().click({ timeout: 10_000 })
       await win.keyboard.press('End')
     }
-    /** 把「带图」从 from 拖进 folder,落下后**立刻**打 typed(挪动 IPC 在途),再等编辑器换到新路径。 */
-    const dragInto = async (folder, from, typed) => {
-      if (!(await rows()).includes('带图')) {
+    /** 把 note 从 from 拖进 folder,落下后**立刻**打 typed(挪动 IPC 在途),再等编辑器换到新路径。 */
+    const dragInto = async (folder, from, typed, note = '带图') => {
+      if (!(await rows()).includes(note)) {
         await win.locator('.t2s-folder-row', { hasText: from }).first().click({ timeout: 10_000 })
         await win.waitForTimeout(600)
       }
       await caretAtLine()
-      const s = await win.evaluate(DRAG_START, { rowText: '带图' })
+      const s = await win.evaluate(DRAG_START, { rowText: note })
       if (s.err) throw new Error(`拖不起来:${s.err}(树里:${JSON.stringify(await rows())})`)
       await win.waitForTimeout(300) // 「正在拖谁」是 React 状态,等它提交
       const o = await win.evaluate(DRAG_TO, { type: 'dragover', rowText: folder })
@@ -226,6 +238,31 @@ async function main() {
     // 换到了原文件夹才算(10-19 Windows:树里的 `\` 路径认不出按 `/` 登记的标签,编辑器一直停在目标夹,只看宽度照样过)
     check('6b 编辑器换回了原文件夹,图照样显示得出', dragBack.img && dragBack.img.w === 1 && dragBack.img.ref.startsWith('来源夹/'), JSON.stringify(dragBack.img))
     check('6c 库里没有冲突副本、目标夹里没留下这篇', conflicts().length === 0 && read('目标夹/带图.md') == null, JSON.stringify(conflicts()))
+
+    // ── 5 旧格式笔记(v3 块编辑器):同样拖进目标夹、途中打字 ──────────────────────
+    if (!(await rows()).includes('旧格式')) {
+      await win.locator('.t2s-folder-row', { hasText: '来源夹' }).first().click({ timeout: 10_000 })
+      await win.waitForTimeout(600)
+    }
+    await win.locator('.t2s-srow', { hasText: '旧格式' }).first().click({ timeout: 10_000 })
+    await win.waitForSelector('.page-view .ProseMirror img', { timeout: 20_000 })
+    const v3Before = await until(() => win.evaluate(IMG), (v) => !!v && v.done && v.ref.startsWith('来源夹/'), 10_000)
+    check('7 旧格式笔记走 v3 块编辑器,图显示得出', v3Before && v3Before.w === 1, JSON.stringify(v3Before))
+    const v3Drag = await dragInto('目标夹', '来源夹', '续写', '旧格式')
+    check('8 旧格式笔记挪进了目标夹', read('目标夹/旧格式.md') != null, JSON.stringify({ typedMs: v3Drag.typedMs, switchedMs: v3Drag.switchedMs }))
+    /** 块标记格式按子串判:途中的字恰好一份、两条引用都从新位置指回原文件夹。 */
+    const v3Ok = (v, typed) => v != null && v.includes(`正文一行${typed}\n`) && v.split('正文一行').length === 2
+      && v.includes('](../来源夹/.amadeus/p.png)') && v.includes('](../来源夹/attachments/d.pdf)')
+    const v3Disk1 = await until(() => read('目标夹/旧格式.md'), (v) => v3Ok(v, '续写'), 15_000)
+    check('9 ⚠️ v3:挪过去的那篇引用改写了、挪动途中打的字也在', v3Ok(v3Disk1, '续写'), JSON.stringify(v3Disk1))
+    check('9b ⚠️ v3:原路径没复活出一篇、库里没有冲突副本', read('来源夹/旧格式.md') == null && conflicts().length === 0,
+      JSON.stringify({ old: read('来源夹/旧格式.md'), conflicts: conflicts() }))
+    check('9c ⚠️ v3:编辑器换到了新路径,图还是原来那张(不是目标夹里同路径的 2×2)', v3Drag.img && v3Drag.img.w === 1 && v3Drag.img.ref.startsWith('目标夹/'), JSON.stringify(v3Drag.img))
+    await caretAtLine()
+    await win.keyboard.type('再写')
+    const v3Disk2 = await until(() => read('目标夹/旧格式.md'), (v) => v3Ok(v, '续写再写'), 15_000)
+    check('10 ⚠️ v3:换到新路径后接着打字,引用没被编辑器手里的旧正文盖回去', v3Ok(v3Disk2, '续写再写'), JSON.stringify(v3Disk2))
+    check('10b v3:原路径还是没有这篇、没有冲突副本', read('来源夹/旧格式.md') == null && conflicts().length === 0, JSON.stringify(conflicts()))
 
     await win.screenshot({ path: shot })
     console.log(`\n截图:${shot}`)
