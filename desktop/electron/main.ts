@@ -42,7 +42,8 @@ import { randomBytes } from 'node:crypto'
 import { loadTanguCreds, saveTanguCreds, forsionAccountId, loadAccountCloudSettings, saveAccountCloudSettings } from './forsionAuth'
 import { createAccountCore } from './accountCore'
 import { importMcp, importSkills, scanAll } from './discovery'
-import { checkForUpdates, downloadUpdate, installUpdate, canInstallUpdate, betaChannelOn, getUpdaterStatus } from './updater'
+import { checkForUpdates, downloadUpdate, installUpdate, canInstallUpdate, betaChannelOn, getUpdaterStatus, updateSourcePref, detectMainland, switchUpdateSource, openUpdateInstaller } from './updater'
+import { parseSourcePref } from '../shared/updateSource'
 import { fetchWebsiteReleases } from './websiteReleases'
 import { createRestartGuard, readRestartActivity } from './restartGuard'
 import { createTray, refreshTrayMenu, setTrayIndicator, trayLang } from './tray'
@@ -3629,6 +3630,15 @@ app.whenReady().then(async () => {
     await saveHomeSection('updater', (sec: any) => ({ ...sec, beta: !!on }))
     return { ok: true }
   })
+  // 下载来源:auto(按地区:大陆官网、其他地区 GitHub)/ website / github。同样落 updater 段、每次现读。
+  ipcMain.handle('updater:getSource', () => updateSourcePref())
+  ipcMain.handle('updater:setSource', async (_e, v: unknown) => {
+    await saveHomeSection('updater', (sec: any) => ({ ...sec, source: parseSourcePref(v) }))
+    return { ok: true }
+  })
+  ipcMain.handle('updater:region', () => detectMainland())
+  ipcMain.handle('updater:switchSource', () => switchUpdateSource())
+  ipcMain.handle('updater:openInstaller', () => openUpdateInstaller())
   // What's new 弹窗:官网更新动态的已发布快照(拿不到回 null,渲染层退回打包的 CHANGELOG)
   ipcMain.handle('updater:websiteReleases', () => fetchWebsiteReleases())
   // 设置是独立浮窗:里面点「What's new」要在主窗弹,不在设置窗里弹

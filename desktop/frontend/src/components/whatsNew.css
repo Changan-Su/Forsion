@@ -44,3 +44,7 @@
   .wn-group { width: 100%; padding: 4px 6px 0; }
   .wn-scroll { padding: 18px 16px 24px; }
 }
+
+/* 更新按钮旁的来源小字(弹窗底栏与设置 → 关于共用) */
+.upd-src { min-width: 0; overflow: hidden; color: var(--text-muted); font-size: var(--ui-font-meta); white-space: nowrap; text-overflow: ellipsis; }
+.upd-src-switch { margin-left: 8px; padding: 0; border: 0; background: none; color: var(--accent-ink, var(--accent)); font: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }

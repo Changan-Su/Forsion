@@ -362,6 +362,7 @@ describe('i18n 覆盖', () => {
     // 逐键登记:不是由术语拼成、但刻意保留拉丁文的值。
     const ALLOW: Record<string, string> = {
       'websearch.name.tavily': '搜索服务品牌名',
+      'about.update.sourceGithub': '下载来源里的 GitHub 是网站名,和「官网」并列',
       'websearch.name.duckduckgo': '搜索服务品牌名',
       'websearch.name.deepseek': '搜索服务产品名(DeepSeek 官方叫法)',
       'websearch.key': 'API Key 是服务商控制台里的原词,用户按它去找',

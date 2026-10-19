@@ -3,7 +3,7 @@
  * 从 panel props 造 Leaf 再调 def.factory)。onReady 恢复上次布局,否则调 buildDefault;
  * 布局变更持久化。主题叠 dockview-theme-light|dark + .dockview-theme-lcl(--dv-* → LCL token)。
  */
-import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
+import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import {
   DockviewReact,
   type DockviewReadyEvent,
@@ -302,6 +302,36 @@ function makeSuffixActions(): React.FC<IDockviewHeaderActionsProps> {
   }
 }
 
+/** 主区组标签栏右端给**当前视图**留的空位(Chat 的「对话 / 画布」胶囊)。视图用 `useViewChromeSlot(leaf.id)` 拿到它再 portal 进去:
+ *  一组只有一个空位、只登记活动那个标签的 id,同组没在前台的视图拿不到,不会各投一份。没有视图投东西时不占位。
+ *  ⚠️ 空位由挂载 / 卸载自己登记,不让视图去 DOM 里找:Dockview 会在标签数据不变时重画标签栏,找过一次就停的
+ *  写法会把零件留在脱离文档的旧节点里(Codex 评审实测)。 */
+export const VIEW_CHROME_ATTR = 'data-view-chrome'
+const chromeSlots = new Map<string, HTMLElement>()
+const chromeSubs = new Set<() => void>()
+const chromeChanged = (): void => { for (const f of chromeSubs) f() }
+export function useViewChromeSlot(leafId: string): HTMLElement | null {
+  return useSyncExternalStore(
+    (cb) => { chromeSubs.add(cb); return () => { chromeSubs.delete(cb) } },
+    () => chromeSlots.get(leafId) ?? null,
+  )
+}
+function makeViewChrome(): React.FC<IDockviewHeaderActionsProps> {
+  return function ViewChrome({ panels, activePanel }) {
+    const ref = useRef<HTMLDivElement>(null)
+    const id = isMainGroup(panels) ? activePanel?.id : undefined
+    useLayoutEffect(() => {
+      const el = ref.current
+      if (!id || !el) return
+      chromeSlots.set(id, el)
+      chromeChanged()
+      return () => { if (chromeSlots.get(id) === el) { chromeSlots.delete(id); chromeChanged() } }
+    }, [id])
+    if (!id) return null
+    return <div className="dv-view-chrome" ref={ref} {...{ [VIEW_CHROME_ATTR]: id }} />
+  }
+}
+
 // ── 受控自定义拖放层(Dockview disableDnd,自管发起/提示/提交)──
 // 唯一真源 computeDropTarget(dropModel.ts)同时驱动「提示」(竖线/半屏高亮)与「提交」(dropView 程序化 moveTo):
 // 提示显示在哪就落在哪(根治提示≠落点)。固定 3 面板:tab 栏=并标签页;正文半边=面板内分屏(侧栏仅上下,主区四向);违规=null 弹回。
@@ -506,6 +536,7 @@ export const WorkspaceHost: React.FC<{
   }, [version])
   const prefixActions = useMemo(() => makePrefixActions(), [])
   const suffixActions = useMemo(() => makeSuffixActions(), [])
+  const viewChrome = useMemo(() => makeViewChrome(), [])
 
   // 受控拖放全局监听(捕获阶段,仅当 draggingId 存在 = 是我们发起的视图拖拽,故不干扰聊天框的文件拖入):
   //  dragover → computeDropTarget 算落点 + 画提示 + preventDefault 放行;drop → 同一结果 dropView 程序化落子;dragend → 收尾。
@@ -680,6 +711,7 @@ export const WorkspaceHost: React.FC<{
         defaultTabComponent={WbTab}
         prefixHeaderActionsComponent={prefixActions}
         rightHeaderActionsComponent={suffixActions}
+        leftHeaderActionsComponent={viewChrome}
         components={components}
         disableDnd /* 关掉 Dockview 原生手势拖放:全部改走受控自定义层(WbTab draggable + 全局 dragover/drop + dropView 程序化 moveTo)。
                     * 程序化移动/分屏不受 disableDnd 影响,故落子照常;提示与落子同源 computeDropTarget → 天生一致。 */

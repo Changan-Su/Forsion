@@ -16,7 +16,7 @@ import { APP_VERSION, changelogFor } from '../changelog'
 import { registerMessages, useI18n } from '../i18n'
 import { windowKind } from '../windowKind'
 import { Markdown } from './Markdown'
-import { UpdateActions } from './UpdateActions'
+import { UpdateActions, UpdateSourceNote } from './UpdateActions'
 import type { UpdaterStatusInfo } from '../types'
 import './whatsNew.css'
 
@@ -145,9 +145,11 @@ function WhatsNewDialog({ onClose }: { onClose: () => void }) {
             <ArrowUpRight size={12} /> {t('whatsNew.onWebsite')}
           </button>}
           <span className="grow" />
-          {hasUpdate && upd.phase !== 'downloaded' && <button type="button" className="btn ghost sm" onClick={skip}>{t('whatsNew.skip')}</button>}
-          <button type="button" className="btn ghost sm" onClick={onClose}>{hasUpdate ? t('whatsNew.later') : t('whatsNew.close')}</button>
-          {hasUpdate && <UpdateActions upd={upd} />}
+          {hasUpdate && <UpdateSourceNote upd={upd} />}
+          {/* mac 点过「下载安装包」:下一步在浏览器和 Finder 里,这里只留关闭 */}
+          {hasUpdate && upd.phase !== 'downloaded' && !upd.opened && <button type="button" className="btn ghost sm" onClick={skip}>{t('whatsNew.skip')}</button>}
+          <button type="button" className="btn ghost sm" onClick={onClose}>{hasUpdate && !upd.opened ? t('whatsNew.later') : t('whatsNew.close')}</button>
+          {hasUpdate && !upd.opened && <UpdateActions upd={upd} />}
         </div>
       </div>
     </div>
