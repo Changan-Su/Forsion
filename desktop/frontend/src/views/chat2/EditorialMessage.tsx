@@ -8,7 +8,7 @@ import { SelfUpdateReceipt } from '../../components/SelfUpdateReceipt'
  * 接 UiMessage,故可直接喂真实 store 数据(集成期用);回调可选(预览传空)。
  */
 import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from 'react'
-import { Copy, RotateCcw, GitBranch, Pencil, Volume2, Square, Loader2, LogIn, Zap, History as HistoryIcon, FileCode2, MessageSquare, ShieldQuestion, CircleCheck, CircleX, CircleHelp } from 'lucide-react'
+import { Copy, RotateCcw, GitBranch, MessageCircleQuestion, CornerUpLeft, Pencil, Volume2, Square, Loader2, LogIn, Zap, History as HistoryIcon, FileCode2, MessageSquare, ShieldQuestion, CircleCheck, CircleX, CircleHelp } from 'lucide-react'
 import { FileInput, Quote } from 'lucide-react'
 import { useNoteInsertState } from './insertToNote'
 import * as api from '../../services/backendService'
@@ -64,7 +64,7 @@ import { formatDateTime, formatMessageTime } from '../../format/time'
 
 import { TaskCards, type TaskLanding } from './TaskCards'
 import { MuseApprovalLine, MuseTodoCards, ProactiveMark, isProactive } from './MuseDm'
-import { CHILD_UPDATE_OPEN, ChildSessionsBlock, ChildUpdateLine, childIdsOf } from './ChildSessions'
+import { CHILD_UPDATE_OPEN, ChildUpdateLine, ForkBlock, childIdsOf } from './ChildSessions'
 import { APPROVAL_UPDATE_OPEN, approvalForCall, parseApprovalUpdate, pickPlanInquiry, type ApprovalOutcome } from './approvalQueue'
 import { isRemoteApprover, wasDecidedHere } from '../../components/ApprovalCard'
 import { answeredByText } from '../../approvalReason'
@@ -218,7 +218,10 @@ export interface FileCtx {
 export interface MessageHandlers {
   onCopy?: (text: string) => void
   onRegenerate?: () => void
+  /** 接着问:从这条分出一支(主区就地换成新的那支)。 */
   onBranch?: () => void
+  /** 顺便问:挂在这条上问,开在右边那块面板,不进对话。 */
+  onAside?: () => void
   onEdit?: () => void
   /** 朗读本条(再次点击=停止);未配置 TTS 时不传 → 按钮不渲染。text = 摘掉建议围栏的正文。 */
   onSpeak?: (text: string) => void
@@ -370,7 +373,7 @@ function InsertNoteButton({ onInsert }: { onInsert: () => void }) {
  *  只有 props 稳住才挡得住:ChatView 的 handlers 按消息 id 缓存、fileCtx / voice 走 useMemo。 */
 export const EditorialMessage = memo(EditorialMessageView)
 
-function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, userAvatar, handlers, fileCtx, rootRef, speakState, voice, modelId, showWaitDetails = false, footer }: { /** 助手气泡正文末尾的附加行(ChatView 给最后一条助手消息挂 run 统计)。 */ footer?: React.ReactNode; msg: UiMessage; avatarUrl?: string; agentNameFallback?: string; userName?: string; userAvatar?: string; handlers?: MessageHandlers; fileCtx?: FileCtx; rootRef?: Ref<HTMLDivElement>; speakState?: 'loading' | 'playing'; voice?: { on: boolean; cfg: TanguDesktopConfig; stored: StoredDesktopConfig | null }; /** 这条消息实际用的模型(仅用于认出订阅直连过期 → 给重登按钮;缺省=不给)。 */ modelId?: string; /** 测试性功能:显示发送上下文 / 等待首帧 / 已等待时间。默认关。 */ showWaitDetails?: boolean }) {
+function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, userAvatar, handlers, fileCtx, rootRef, speakState, voice, modelId, showWaitDetails = false, footer, onBringBack }: { /** 助手气泡正文末尾的附加行(ChatView 给最后一条助手消息挂 run 统计)。 */ footer?: React.ReactNode; /** 分支里最后一条回答:「带回这里」把它作为引用挂进来源那支的输入框(ChatView 只给这一条传)。 */ onBringBack?: (text: string) => void; msg: UiMessage; avatarUrl?: string; agentNameFallback?: string; userName?: string; userAvatar?: string; handlers?: MessageHandlers; fileCtx?: FileCtx; rootRef?: Ref<HTMLDivElement>; speakState?: 'loading' | 'playing'; voice?: { on: boolean; cfg: TanguDesktopConfig; stored: StoredDesktopConfig | null }; /** 这条消息实际用的模型(仅用于认出订阅直连过期 → 给重登按钮;缺省=不给)。 */ modelId?: string; /** 测试性功能:显示发送上下文 / 等待首帧 / 已等待时间。默认关。 */ showWaitDetails?: boolean }) {
   // shell 代码块「运行」的回传:结果作为用户消息发回**这条消息所在**的会话(run 活着自动变 steer)。
   // cwd 跟会话走(agent 的工作目录),没有就家目录。对象按会话 memo,别每次渲染新造一个(Markdown 是 React.memo)。
   const runSid = fileCtx?.sessionId
@@ -673,8 +676,8 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
             ))}
           </div>
         )}
-        {/* 这条回答用 start_session 开出的子会话:标题 · 状态 · 最后一句,点开走右侧子会话面板(ChildSessions.tsx)。 */}
-        {runSid && childIds.length > 0 && <ChildSessionsBlock parentId={runSid} ids={childIds} onSuggest={handlers?.onSuggest} />}
+        {/* 从这条分出去的:分支 / 顺便问 / start_session 开出的子会话,一块「从这里分出」(ChildSessions.tsx ForkBlock)。 */}
+        {runSid && <ForkBlock sessionId={runSid} messageId={msg.id} childIds={childIds} onSuggest={handlers?.onSuggest} />}
         {/* 任务卡:顺手发现的、塞进当前对话会撑爆的活。track=true 的卡主按钮是「交给 Muse 追踪」。同样只在 done 上渲染。
             渲染与落点按钮在 TaskCards(与收件箱共用)。 */}
         {!!tasks.length && msg.status === 'done' && (museTodo
@@ -762,7 +765,9 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
             )}
             {handlers?.onInsertNote && !!body && <InsertNoteButton onInsert={() => handlers.onInsertNote?.(body)} />}
             <button className="t2-iconbtn" title={t('chat.action.regenerate')} onClick={() => handlers?.onRegenerate?.()}><RotateCcw size={14} /></button>
-            <button className="t2-iconbtn" title={t('chat.action.branch')} onClick={() => handlers?.onBranch?.()}><GitBranch size={14} /></button>
+            {handlers?.onBranch && <button className="t2-iconbtn" title={t('chat.action.branch')} aria-label={t('chat.action.branch')} data-testid="msg-branch" onClick={() => handlers.onBranch?.()}><GitBranch size={14} /></button>}
+            {handlers?.onAside && <button className="t2-iconbtn" title={t('chat.action.aside')} aria-label={t('chat.action.aside')} data-testid="msg-aside" onClick={() => handlers.onAside?.()}><MessageCircleQuestion size={14} /></button>}
+            {onBringBack && !!body && <button className="t2-iconbtn t2-textbtn" data-testid="msg-bring-back" onClick={() => onBringBack(body)}><CornerUpLeft size={13} /> {t('chat.action.bringBack')}</button>}
             <MsgTime at={msg.timestamp} />
           </div>
         )}

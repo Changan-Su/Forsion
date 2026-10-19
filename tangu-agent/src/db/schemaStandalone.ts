@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
   parent_session_id VARCHAR(36),
   awaiting_user BOOLEAN NOT NULL DEFAULT FALSE,
   report_run_id VARCHAR(36),
+  fork_message_id VARCHAR(36),
   proactive_at BIGINT,
   last_read_at BIGINT,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

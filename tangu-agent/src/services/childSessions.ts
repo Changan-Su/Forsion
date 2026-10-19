@@ -12,6 +12,7 @@
  *    live 10-17 GPT 6 Luna 三次都没调、一次误用,删了)。子会话在跑 / 结果没送回时不置;任何一轮开始时清掉(onRunStart)。
  *    阻塞的询问(ask_user)界面另按 attention 画等你;子会话那一轮里 ask_user 不阻塞(inquiries.INQUIRY_CHILD_ANSWER),问题收尾送回主会话。
  *  - 只一层:子会话不能再开子会话(列表的树只画一层)。
+ *  - 分支(/branch,fork_message_id 有值)也挂 parent_session_id,但不是子会话:下面认子会话的查询一律带 `fork_message_id IS NULL`。
  *
  * 唯一触发点 = agentLoop.startRun 的 finally(onRunSettled):子会话收尾试着送给主会话,主会话收尾试着收它名下积着的回报。
  */
@@ -53,14 +54,14 @@ export async function startChildSession(p: {
   inherit?: Record<string, unknown>;
 }): Promise<{ sessionId: string; runId: string; title: string }> {
   const [parent] = await query<any[]>(
-    `SELECT id, user_id, app_id, kind, parent_session_id, project_path, project_name, projectless, agent_config, model_id FROM chat_sessions WHERE id = ?`,
+    `SELECT id, user_id, app_id, kind, parent_session_id, fork_message_id, project_path, project_name, projectless, agent_config, model_id FROM chat_sessions WHERE id = ?`,
     [p.parentId],
   );
   if (!parent || parent.user_id !== p.userId || parent.kind !== 'user') throw new Error('This conversation cannot start child sessions.');
-  if (parent.parent_session_id) throw new Error('This is already a child session, and child sessions cannot start their own. Do the work here, or finish and let the main session decide.');
+  if (parent.parent_session_id && !parent.fork_message_id) throw new Error('This is already a child session, and child sessions cannot start their own. Do the work here, or finish and let the main session decide.');
   const { activeSessionIds } = await loop();
   const busy = activeSessionIds();
-  const kids = await query<any[]>(`SELECT id FROM chat_sessions WHERE parent_session_id = ? AND kind = 'user'`, [p.parentId]);
+  const kids = await query<any[]>(`SELECT id FROM chat_sessions WHERE parent_session_id = ? AND kind = 'user' AND fork_message_id IS NULL`, [p.parentId]);
   if (kids.filter((k) => busy.has(String(k.id))).length >= MAX_RUNNING_CHILDREN) {
     throw new Error(`${MAX_RUNNING_CHILDREN} child sessions are already running. Wait for them to report back before starting more.`);
   }
@@ -84,10 +85,10 @@ export async function startChildSession(p: {
 /** 主会话给自己的子会话再说一句(回答它的问题、补一个要求):子会话在跑就排在后面。 */
 export async function sendToChildSession(p: { parentId: string; userId: string; childId: string; message: string; remote?: RemoteInfo }): Promise<{ runId: string; queued: boolean; title: string }> {
   const [child] = await query<any[]>(
-    `SELECT id, user_id, app_id, kind, parent_session_id, agent_config, model_id, title FROM chat_sessions WHERE id = ?`,
+    `SELECT id, user_id, app_id, kind, parent_session_id, fork_message_id, agent_config, model_id, title FROM chat_sessions WHERE id = ?`,
     [p.childId],
   );
-  if (!child || child.user_id !== p.userId || child.kind !== 'user' || child.parent_session_id !== p.parentId) {
+  if (!child || child.user_id !== p.userId || child.kind !== 'user' || child.parent_session_id !== p.parentId || child.fork_message_id) {
     throw new Error('No such child session of this conversation. Only sessions you started with start_session can be messaged.');
   }
   const { activeSessionIds } = await loop();
@@ -114,7 +115,7 @@ export async function markAwaitingUser(sessionId: string, userId: string): Promi
   const { activeSessionIds } = await loop();
   const busy = activeSessionIds();
   const kids = await query<any[]>(
-    `SELECT id, report_run_id FROM chat_sessions WHERE parent_session_id = ? AND user_id = ? AND kind = 'user'`, [sessionId, userId]);
+    `SELECT id, report_run_id FROM chat_sessions WHERE parent_session_id = ? AND user_id = ? AND kind = 'user' AND fork_message_id IS NULL`, [sessionId, userId]);
   if (kids.some((k: any) => busy.has(k.id) || k.report_run_id)) return false;
   await query(`UPDATE chat_sessions SET awaiting_user = TRUE WHERE id = ? AND user_id = ?`, [sessionId, userId]);
   return true;
@@ -137,9 +138,9 @@ export async function onRunSettled(runId: string): Promise<void> {
   if (!run) return;
   const sid = String(run.session_id);
   const input = decode(run.input);
-  const [s] = await query<any[]>(`SELECT kind, parent_session_id FROM chat_sessions WHERE id = ?`, [sid]);
+  const [s] = await query<any[]>(`SELECT kind, parent_session_id, fork_message_id FROM chat_sessions WHERE id = ?`, [sid]);
   if (!s || s.kind !== 'user') return;
-  await deliverChildReports(s.parent_session_id ? String(s.parent_session_id) : sid);
+  await deliverChildReports(s.parent_session_id && !s.fork_message_id ? String(s.parent_session_id) : sid);
 }
 
 /** 最后一句以问号结尾(去掉收尾的空白 / 引号 / 括号 / markdown 记号)。 */
@@ -179,7 +180,7 @@ async function deliverNow(parentId: string, opts: { rowOnly?: boolean }): Promis
   const busy = activeSessionIds();
   if (busy.has(parentId)) return; // 主会话在跑:等它这一轮收尾再送
   const kids = await query<any[]>(
-    `SELECT id, title, awaiting_user, report_run_id FROM chat_sessions WHERE parent_session_id = ? AND kind = 'user'`,
+    `SELECT id, title, awaiting_user, report_run_id FROM chat_sessions WHERE parent_session_id = ? AND kind = 'user' AND fork_message_id IS NULL`,
     [parentId],
   );
   if (!kids.length || kids.some((k) => busy.has(String(k.id)))) return; // 还有子会话在跑:等最后一个

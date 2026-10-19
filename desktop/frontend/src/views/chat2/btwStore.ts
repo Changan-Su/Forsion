@@ -2,12 +2,14 @@
  * 旁聊(/btw):带着会话上下文问一句题外话。渲染层这半 = 按会话存线程 + 流式请求引擎
  * `POST /agent/sessions/:id/aside`(tangu-agent services/aside.ts:不落库、无工具、不排主 run 的队)。
  *
- * 形态(2026-09-22 定,对标 Claude Code / Claude Desktop 的 /btw):
- *  - 桌面 = 原生 Floating Panel,一个会话一扇(id `btw:<会话>`)。**会话级**:主窗切走就隐藏、切回再现
- *    (主进程 syncSessionPanels);线程住在那扇浮窗自己的渲染进程里,关窗即丢 —— 与 Claude 一样只在内存。
- *  - Web = 居中浮层(FloatingPanelFrame),手机 = 全屏二级页;线程按会话留在本页内存,关了再开还在。
- *  - 右侧栏 = 视图 `btw-panel`(划线「在侧栏提问」开的就是它,2026-10-11):跟着主窗当前会话走,线程同样按会话留在本页内存。
- *  - 不写回主对话。要带回去由用户点「引用到对话」:主窗输入框挂成引用,不动草稿(MainAction 'chat-quote')。
+ * 形态(2026-09-22 定,对标 Claude Code / Claude Desktop 的 /btw;10-18「挂点统一」改了打开位置与落库):
+ *  - 桌面 / Web 主窗 = 对话右边那块子会话面板(ChildChatPanel,一次只开一个:开着子会话再点顺便问就换成顺便问)。
+ *    卫星窗(独立窗 / Mini)里没有那块面板 → 仍开原生 Floating Panel(id `btw:<会话>`,会话级显隐见主进程 syncSessionPanels)。
+ *  - 手机 = 全屏二级页(BtwHost page)。
+ *  - 右侧栏视图 `btw-panel` 仍可手动放进侧栏,跟着主窗当前会话走。
+ *  - 落库(10-18 用户「顺便问留下来」):每答完一问引擎写进 chat_asides,挂在某条消息上(anchors 记本会话当前这段挂在哪、记录 id);
+ *    「从这里分出」里的那一行重开 = 把存下来的往返载回 threads。仍不进主对话的上下文、不进左栏、无工具。
+ *  - 不写回主对话。要带回去由用户点「带回这里」:主窗输入框挂成引用,不动草稿(MainAction 'chat-quote')。
  */
 import { create } from 'zustand'
 import { useWorkspace } from '@lcl/engine'
@@ -16,6 +18,8 @@ import { engineFetch, targetForSession } from '../../services/engine/targets'
 import { classify, classifyError, noteVerdict } from '../../services/engine/health'
 import { AGENT_APP_ID, currentClientId, noteExtra, unitFailureMessage } from '../../services/agentRunService'
 import { useApp } from '../../stores/appStore'
+import { useChildChat } from '../../stores/childChatStore'
+import { deleteAside, listAsides, type SavedAside } from '../../services/backendService'
 import { windowKind } from '../../windowKind'
 
 registerMessages({
@@ -32,8 +36,8 @@ registerMessages({
   'btw.clear': { zh: '清空旁聊', en: 'Clear side chat' },
   'btw.copy': { zh: '复制', en: 'Copy' },
   'btw.copied': { zh: '已复制', en: 'Copied' },
-  'btw.quoteToChat': { zh: '引用到对话', en: 'Quote in chat' },
-  'btw.quoted': { zh: '已引用到输入框', en: 'Quoted in the chat box' },
+  'btw.quoteToChat': { zh: '带回这里', en: 'Bring back' },
+  'btw.quoted': { zh: '已带回输入框', en: 'Brought back to the chat box' },
   'btw.removeQuote': { zh: '移除引用', en: 'Remove quote' },
   'btw.thinking': { zh: '思考中…', en: 'Thinking…' },
   'btw.stopped': { zh: '已停止', en: 'Stopped' },
@@ -59,12 +63,21 @@ export interface BtwTurn {
 /** 打开旁聊时递给面板的一次性指令:带 question 就直接问,只带 quote 就挂成引用等用户打字。
  *  nonce 唯一,面板据此只消费一次 —— Web 上切走会话再切回会重挂面板,不能把同一个问题再问一遍。
  *  sessionId = 上下文会话;scope = 开的时候主窗当前会话(团队成员子聊天里两者不同),会话级显隐按 scope 判。 */
-export interface BtwSeed { sessionId: string; scope?: string | null; title?: string; quote?: string; question?: string; modelId?: string; nonce: string }
+export interface BtwSeed {
+  sessionId: string; scope?: string | null; title?: string; quote?: string; question?: string; modelId?: string; nonce: string
+  /** 挂点:从哪条消息问的(消息操作条的「顺便问」带上;输入框 /btw 不带 → 引擎挂到最近一条回答)。和当前这段的挂点不同 → 另起一段。 */
+  messageId?: string
+  /** 重开存下来的那一段(「从这里分出」里点的)。 */
+  asideId?: string
+}
 
 /** 与引擎 ASIDE_MAX_TURNS 同值:更早的往返不再带给模型。 */
 const MAX_TURNS = 20
 const controllers = new Map<string, AbortController>()
+const savedLoads = new Set<string>()
 const consumedSeeds = new Set<string>()
+/** 上一问还在流时点了别的一段 / 别的挂点:记下,流完再切(Codex 10-18 #3)。每会话只留最后一次。 */
+const pendingSeeds = new Map<string, BtwSeed>()
 let seedSeq = 0
 
 /** 这条指令第一次见 → true(并记下);同一 nonce 再来 → false。 */
@@ -84,18 +97,23 @@ export function btwSeedOf(params: Record<string, unknown> | undefined): BtwSeed 
   const s = (k: string): string | undefined => (typeof params?.[k] === 'string' && (params[k] as string) ? params[k] as string : undefined)
   const sessionId = s('sessionId')
   const nonce = s('nonce')
-  return sessionId && nonce ? { sessionId, nonce, scope: s('scope'), title: s('title'), quote: s('quote'), question: s('question'), modelId: s('modelId') } : null
+  return sessionId && nonce ? { sessionId, nonce, scope: s('scope'), title: s('title'), quote: s('quote'), question: s('question'), modelId: s('modelId'), messageId: s('messageId'), asideId: s('asideId') } : null
 }
 
 interface BtwState {
   threads: Record<string, BtwTurn[]>
   /** Web / 手机当前开着的旁聊(桌面走原生浮窗,不用它)。只在它的会话仍是当前会话时显示。 */
   webOpen: BtwSeed | null
-  /** 右侧栏那扇旁聊收到的最近一次指令(「在侧栏提问」带来的引用);面板按 nonce 只消费一次,也可能先于面板挂载。 */
-  sideSeed: BtwSeed | null
   /** 各会话旁聊输入区里还没发出去的东西(草稿 + 挂着的引用)。放 store 不放组件:侧栏 / Web 的面板随会话切换重挂,放组件里切走就丢。 */
   compose: Record<string, { draft: string; quote?: string }>
+  /** 各会话当前这段旁聊挂在哪条消息上、存成了哪条记录(第一问答完引擎回 asideId)。 */
+  anchors: Record<string, { messageId?: string; asideId?: string }>
+  /** 各会话存下来的顺便问(「从这里分出」按 message_id 取)。 */
+  saved: Record<string, SavedAside[]>
   setCompose(sessionId: string, patch: { draft?: string; quote?: string | undefined }): void
+  loadSaved(sessionId: string, force?: boolean): void
+  /** 按指令切到对应的一段:asideId → 载回那条记录;换了挂点 → 另起一段;否则接着当前这段。 */
+  applySeed(seed: BtwSeed, refetched?: boolean): void
   ask(sessionId: string, question: string, quote?: string, modelId?: string): Promise<void>
   stop(sessionId: string): void
   clear(sessionId: string): void
@@ -105,9 +123,44 @@ interface BtwState {
 export const useBtw = create<BtwState>((set, get) => ({
   threads: {},
   webOpen: null,
-  sideSeed: null,
   compose: {},
+  anchors: {},
+  saved: {},
   setCompose: (sessionId, patch) => set((s) => ({ compose: { ...s.compose, [sessionId]: { ...(s.compose[sessionId] ?? { draft: '' }), ...patch } } })),
+
+  loadSaved: (sessionId, force) => {
+    if (!force && (savedLoads.has(sessionId) || get().saved[sessionId])) return
+    savedLoads.add(sessionId)
+    void listAsides(targetForSession(sessionId), sessionId)
+      .then((rows) => set((s) => ({ saved: { ...s.saved, [sessionId]: rows } })))
+      .catch(() => {}) // 老引擎没有这条路由 / 离线:就是没有存下来的
+      .finally(() => savedLoads.delete(sessionId))
+  },
+
+  applySeed: (seed, refetched?: boolean) => {
+    const sid = seed.sessionId
+    if (controllers.has(sid)) { pendingSeeds.set(sid, seed); return }
+    const cur = get().anchors[sid] || {}
+    if (seed.asideId) {
+      if (cur.asideId === seed.asideId) return
+      const rec = get().saved[sid]?.find((a) => a.id === seed.asideId)
+      if (!rec) {
+        // 新开的浮窗里 saved 还是空的:取一次再切(Codex 10-18 #4);取回来还没有 = 已删,照旧
+        if (!refetched) {
+          void listAsides(targetForSession(sid), sid)
+            .then((rows) => { set((s) => ({ saved: { ...s.saved, [sid]: rows } })); get().applySeed(seed, true) })
+            .catch(() => {})
+        }
+        return
+      }
+      const turns: BtwTurn[] = rec.turns.map((x, i) => ({ id: `${rec.id}-${i}`, question: x.question, quote: x.quote, answer: x.answer, status: 'done' }))
+      set((s) => ({ threads: { ...s.threads, [sid]: turns }, anchors: { ...s.anchors, [sid]: { asideId: rec.id, messageId: rec.message_id || undefined } } }))
+      return
+    }
+    if (seed.messageId && seed.messageId !== cur.messageId) {
+      set((s) => ({ threads: { ...s.threads, [sid]: [] }, anchors: { ...s.anchors, [sid]: { messageId: seed.messageId } } }))
+    }
+  },
 
   ask: async (sessionId, question, quote, modelId) => {
     if (!question.trim() || controllers.has(sessionId)) return // 一次一问:上一问还在流
@@ -121,10 +174,17 @@ export const useBtw = create<BtwState>((set, get) => ({
     controllers.set(sessionId, ac)
     const thread = prior.filter((t) => t.status === 'done' && t.answer).slice(-MAX_TURNS)
       .map((t) => ({ question: t.question, quote: t.quote, answer: t.answer }))
+    const anchor = get().anchors[sessionId] || {}
     try {
-      await streamAside(sessionId, { question, quote, thread, model_id: modelId || undefined }, (ev) => {
+      await streamAside(sessionId, { question, quote, thread, model_id: modelId || undefined, message_id: anchor.messageId, aside_id: anchor.asideId }, (ev) => {
         if (ev.type === 'delta') patch((t) => ({ answer: t.answer + String(ev.text ?? '') }))
-        else if (ev.type === 'done') patch((t) => ({ answer: String(ev.content || t.answer), status: 'done', toolCallText: !!ev.toolCallText }))
+        else if (ev.type === 'done') {
+          patch((t) => ({ answer: String(ev.content || t.answer), status: 'done', toolCallText: !!ev.toolCallText }))
+          if (ev.asideId) {
+            set((s) => ({ anchors: { ...s.anchors, [sessionId]: { messageId: ev.asideMessageId || s.anchors[sessionId]?.messageId, asideId: ev.asideId } } }))
+            get().loadSaved(sessionId, true)
+          }
+        }
         else if (ev.type === 'error') patch(() => ({ status: 'error', error: readableError(String(ev.error || '')) }))
       }, ac.signal)
       patch((t) => (t.status === 'streaming' ? { status: 'error', error: translate('btw.errCut') } : {}))
@@ -132,15 +192,23 @@ export const useBtw = create<BtwState>((set, get) => ({
       patch((t) => (t.status !== 'streaming' ? {} : ac.signal.aborted ? { status: 'stopped' } : { status: 'error', error: readableError(String(e?.message || e)) }))
     } finally {
       if (controllers.get(sessionId) === ac) controllers.delete(sessionId)
+      const next = pendingSeeds.get(sessionId)
+      if (next && !controllers.has(sessionId)) { pendingSeeds.delete(sessionId); get().applySeed(next) }
     }
   },
 
   stop: (sessionId) => controllers.get(sessionId)?.abort(),
 
+  /** 清空 = 删掉存下来的这一段(「从这里分出」里那一行也没了),下一问另起一段。 */
   clear: (sessionId) => {
     controllers.get(sessionId)?.abort()
     controllers.delete(sessionId)
-    set((s) => ({ threads: { ...s.threads, [sessionId]: [] } }))
+    const { asideId, messageId } = get().anchors[sessionId] || {}
+    set((s) => ({ threads: { ...s.threads, [sessionId]: [] }, anchors: { ...s.anchors, [sessionId]: { messageId } } }))
+    if (asideId) {
+      set((s) => ({ saved: { ...s.saved, [sessionId]: (s.saved[sessionId] || []).filter((a) => a.id !== asideId) } }))
+      void deleteAside(targetForSession(sessionId), sessionId, asideId).catch(() => {}) // 远端连着时引擎不许删:本端先不显示,重开会话后还在
+    }
   },
 
   closeWeb: () => set({ webOpen: null }),
@@ -149,7 +217,7 @@ export const useBtw = create<BtwState>((set, get) => ({
 /** 引擎的机器码 → 人话:额度用尽与主聊天同一句(chat.err.quota)。 */
 const readableError = (raw: string): string => (/token_quota_exceeded/i.test(raw) ? translate('chat.err.quota') : raw)
 
-type AsideEvent = { type: 'delta'; text?: string } | { type: 'done'; content?: string; toolCallText?: boolean } | { type: 'error'; error?: string }
+type AsideEvent = { type: 'delta'; text?: string } | { type: 'done'; content?: string; toolCallText?: boolean; asideId?: string; asideMessageId?: string } | { type: 'error'; error?: string }
 
 async function streamAside(sessionId: string, body: Record<string, unknown>, onEvent: (ev: AsideEvent) => void, signal: AbortSignal): Promise<void> {
   // P1-K6:旁聊按会话所在的目标发(那台是「我的电脑」时走 hub 隧道);经解析层,不再自拼 URL / 鉴权头。
@@ -201,14 +269,18 @@ async function streamAside(sessionId: string, body: Record<string, unknown>, onE
 }
 
 /**
- * 打开某会话的旁聊。桌面开原生浮窗,Web / 手机挂到本页的 BtwHost。
+ * 打开某会话的旁聊。主窗(桌面 / Web)开在对话右边的子会话面板;卫星窗开原生浮窗;手机挂到本页的 BtwHost(全屏二级页)。
  * 会话归属(浮窗的 sessionId,主进程据此显隐)取**主窗当前会话**而不是 opts.sessionId:在团队成员子聊天里问,
  * 上下文是子会话,但用户「在」的仍是父会话 —— 拿子会话当归属,浮窗一出生就会被判「不在当前会话」藏起来。
  * 卫星窗(独立窗 / Mini)里的 activeId 不可信,那里开的旁聊不绑会话,当普通浮窗。
  */
-export function openBtw(opts: { sessionId: string; title?: string | null; quote?: string; question?: string; modelId?: string }): void {
+export function openBtw(opts: { sessionId: string; title?: string | null; quote?: string; question?: string; modelId?: string; messageId?: string; asideId?: string }): void {
   const scope = windowKind() === 'main' ? useApp.getState().activeId : null
   const seed: BtwSeed = { ...opts, title: opts.title || undefined, scope, nonce: `${Date.now().toString(36)}-${++seedSeq}` }
+  if (scope && !window.tangu?.mobile) {
+    useChildChat.getState().open(scope, { id: `aside:${opts.sessionId}`, title: translate('btw.title'), aside: seed })
+    return
+  }
   const tangu = window.tangu
   if (tangu?.openFloatingPanel) {
     void tangu.openFloatingPanel({
@@ -221,14 +293,6 @@ export function openBtw(opts: { sessionId: string; title?: string | null; quote?
     return
   }
   useBtw.setState({ webOpen: seed })
-}
-
-/** 「在侧栏提问」:同一种旁聊,开在右侧栏的 `btw-panel` 视图里(不弹浮窗)。侧栏已经停在它上面时不反向收起。 */
-export function openBtwInSidebar(opts: { sessionId: string; title?: string | null; quote?: string; question?: string; modelId?: string }): void {
-  useBtw.setState({ sideSeed: { ...opts, title: opts.title || undefined, scope: useApp.getState().activeId, nonce: `${Date.now().toString(36)}-${++seedSeq}` } })
-  const ws = useWorkspace.getState()
-  const front = ws.rightVisible && ws.rightTabs.some((tab) => tab.type === 'btw-panel' && tab.active)
-  if (!front) ws.showSideView('right', 'btw-panel') // showSideView 对当前活动项是 toggle,这里只要 reveal
 }
 
 /** 把旁聊的回答带回主对话:挂成主窗聊天输入框的引用,不覆盖草稿。浮窗里调 = 请主窗代办(各窗一份 store)。

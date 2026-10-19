@@ -107,8 +107,8 @@ export function TaskCards({ tasks, ownerId, onTask, noHere = false, todoStatus, 
   const [taskBusy, setTaskBusy] = useState<string | null>(null)
   const [taskOpen, setTaskOpen] = useState<Record<string, boolean>>({})
   const withdrawn = useWithdrawn(sessionId)
-  // 能开子会话:本机引擎在场 + 这条会话自己不是子会话(子会话 / @项目派遣出的会话不能再开)。否则回落「新会话执行」(Codex 10-17 #8)。
-  const isChild = useApp((s) => !!sessionId && !!s.sessions.find((x) => x.id === sessionId)?.parent_session_id)
+  // 能开子会话:本机引擎在场 + 这条会话自己不是子会话(子会话 / @项目派遣出的会话不能再开;分支能开)。否则回落「新会话执行」(Codex 10-17 #8)。
+  const isChild = useApp((s) => { const x = sessionId ? s.sessions.find((y) => y.id === sessionId) : undefined; return !!x?.parent_session_id && !x.fork_message_id })
   const [, rerender] = useState(0)
   if (!tasks.some((c) => !c.withdraw)) return null
   const expired = !!createdAt && Date.now() - createdAt > TASK_CARD_TTL_MS

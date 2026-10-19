@@ -1,7 +1,7 @@
 /** 主区聊天 leaf：followActive 跟随侧栏；分屏 leaf 用 sessionId 固定会话。 */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from 'react'
 import { AnimatePresence } from 'framer-motion'
-import { ArrowDown, Folder, MessageCircleQuestion, MessageSquarePlus, Quote } from 'lucide-react'
+import { ArrowDown, Folder, MessageCircleQuestion, Quote } from 'lucide-react'
 import type { AgentConfig, UiMessage } from '../types'
 import { Composer2 } from './chat2/Composer2'
 import { AgentSelectStrip } from '../components/AgentSelectStrip'
@@ -45,7 +45,7 @@ import { AgentDesk, DeskCard, useDeskHome } from './chat2/AgentDesk'
 import { HistorianStatus } from './chat2/HistorianStatus'
 import { TeamStatus } from './chat2/TeamDesk'
 import { ChildChatPanel, SubChatStatus } from './chat2/ChildChatPanel'
-import { openBtw, openBtwInSidebar } from './chat2/btwStore'
+import { openBtw, quoteInMainChat } from './chat2/btwStore'
 import { useChildChat } from '../stores/childChatStore'
 import { TeamSummary } from './chat2/TeamSummary'
 import { useI18n } from '../i18n'
@@ -86,6 +86,14 @@ function JumpToBottom({ setter, title, onClick }: { setter: MutableRefObject<(sh
   const [show, setShow] = useState(false)
   setter.current = setShow
   return show ? <button className="jump-bottom t2-jump" title={title} onClick={onClick}><ArrowDown size={16} /></button> : null
+}
+
+/** 划线所在的那条回答(EditorialMessage 根节点 id = tocmsg-<消息 id>);不在某条回答里 → undefined(引擎挂到最近一条回答)。 */
+function selectedMessageId(): string | undefined {
+  const node = window.getSelection()?.anchorNode
+  const el = node instanceof Element ? node : node?.parentElement
+  const id = el?.closest('.t2-asst[id^="tocmsg-"]')?.id
+  return id ? id.slice('tocmsg-'.length) : undefined
 }
 
 export function ChatView({ leaf, params }: ViewProps) {
@@ -216,6 +224,17 @@ export function ChatView({ leaf, params }: ViewProps) {
   // 画到流里的那一段(长会话先是末尾几条、空闲时往上补,见 useTailFirst;桌面与网页 10-16 起也这样,原来只有手机);
   // 数据层的判断一律仍看 activeMessages。要跳到某条消息(搜索命中)时整段挂。
   const shownMessages = useTailFirst(activeMessages, activeId || null, s.jumpTarget?.sessionId !== activeId)
+  // 分支里最后一条做完的回答带「带回这里」:作为引用挂进来源那一支的输入框(由用户发,agent 不往别的支写)
+  const bringBackTo = activeSession?.fork_message_id ? (activeSession.fork_session_id || activeSession.parent_session_id || null) : null
+  const bringBackMsgId = bringBackTo && !params.childSurface ? [...activeMessages].reverse().find((m) => m.role === 'assistant' && m.status === 'done')?.id : undefined
+  const bringBack = (text: string): void => {
+    if (!bringBackTo) return
+    const st = useApp.getState()
+    const target = st.sessions.find((x) => x.id === bringBackTo) || st.archivedSessions.find((x) => x.id === bringBackTo)
+    openSession(bringBackTo)
+    quoteInMainChat(text)
+    s.toast(t('chat.bringBack.done', { title: displaySessionTitle(target?.title, t) }))
+  }
   const pendingApprovals = useMemo(() => pendingPromptsOf(activeMessages), [activeMessages])
   const running = s.running
   const execConfig = s.execConfig
@@ -462,8 +481,8 @@ export function ChatView({ leaf, params }: ViewProps) {
 
   // 传给每条消息的对象要稳住,EditorialMessage 的 memo 才挡得住「流式每来一段字,整段对话的消息都重渲一遍」。
   // handlers 按「会话 + 哪几个按钮在」整组缓存、组里按消息 id 各一份;函数体经 handlerEnv 取当下的值(提交后才会被点到),不会拿到旧闭包。
-  const handlerEnv = useRef({ s, activeId, activeMessages, copy, speak, startEdit })
-  useLayoutEffect(() => { handlerEnv.current = { s, activeId, activeMessages, copy, speak, startEdit } })
+  const handlerEnv = useRef({ s, activeId, activeMessages, copy, speak, startEdit, activeSession, mvModelId })
+  useLayoutEffect(() => { handlerEnv.current = { s, activeId, activeMessages, copy, speak, startEdit, activeSession, mvModelId } })
   const readOnly = !!params.readOnly
   const childSurface = !!params.childSurface
   const canInsertNote = amadeusAvailable()
@@ -476,6 +495,8 @@ export function ChatView({ leaf, params }: ViewProps) {
       onCopy: (text) => env().copy(text),
       onRegenerate: readOnly ? undefined : () => env().s.regenerate(id, env().activeId),
       onBranch: childSurface ? undefined : () => void env().s.branchFromMessage(id, env().activeId),
+      // 顺便问(挂在这条回答上):开在右边那块面板,不进对话
+      onAside: childSurface ? undefined : () => { const e = env(); if (e.activeId) openBtw({ sessionId: e.activeId, title: e.activeSession?.title, modelId: e.mvModelId || undefined, messageId: id }) },
       onEdit: readOnly ? undefined : () => env().startEdit(id, env().activeMessages.find((m) => m.id === id)?.content ?? ''),
       onRewind: readOnly ? undefined : (mode) => void env().s.rewindTo(id, mode, env().activeId),
       // 建议芯片 = 用户自己把这句话打进去按了回车(运行中则落进 steer 等待区)。
@@ -614,6 +635,7 @@ export function ChatView({ leaf, params }: ViewProps) {
                       return curEngineId ? undefined : chatAgentAvatar
                     })()}
                     agentNameFallback={chatAgentName}
+                    onBringBack={m.id === bringBackMsgId ? bringBack : undefined}
                     userName={userName}
                     userAvatar={userAvatar}
                     fileCtx={fileCtx}
@@ -646,7 +668,7 @@ export function ChatView({ leaf, params }: ViewProps) {
             </div>
           </div>
           <JumpToBottom setter={jumpSetter} title={t('chat.jumpToBottom')} onClick={() => scrollToBottom(true)} />
-          {/* 划线条(全应用同一条,components/selectionBar):这里接管「带去对话」那一格 —— 引用 / 在侧栏提问 / 顺便问,
+          {/* 划线条(全应用同一条,components/selectionBar):这里接管「带去对话」那一格 —— 引用 / 顺便问(10-18 起「在侧栏提问」并进顺便问,开在右边那块面板),
               行为与原来的胶囊菜单一字不差;翻译和插件动作(⋯)由共用的那一层给。条自己 portal 到 body。 */}
           <ViewSelectionBar
             view="chat"
@@ -656,10 +678,8 @@ export function ChatView({ leaf, params }: ViewProps) {
             source={() => ({ title: activeSession?.title || undefined, sessionId: activeId || undefined })}
             lead={(sel, done) => [
               { id: 'quote', label: t('chat.action.quote'), icon: <Quote size={14} />, lead: true, testId: 'selection-quote', onRun: () => { setQuoteDraft((prev) => quoteAdded(prev, quoteSid, sel.text)); done() } },
-              // 在侧栏提问 = 旁聊开在右侧栏:带着本会话上下文问,主对话里什么都不发(2026-10-11 起;此前是把引用丢给侧栏那个独立对话)
-              ...(leaf.type !== 'chat-panel' && activeId ? [{ id: 'ask-in-panel', label: t('chat.action.askInPanel'), icon: <MessageSquarePlus size={14} />, testId: 'selection-ask-in-panel', onRun: () => { openBtwInSidebar({ sessionId: activeId, title: activeSession?.title, quote: sel.text, modelId: mvModelId || undefined }); done() } }] : []),
-              // 划线旁聊:选中的那段作为引用开进本会话的旁聊浮窗,主对话里什么都不发
-              ...(activeId ? [{ id: 'btw', label: t('btw.selectionAction'), icon: <MessageCircleQuestion size={14} />, testId: 'selection-btw', onRun: () => { openBtw({ sessionId: activeId, title: activeSession?.title, quote: sel.text, modelId: mvModelId || undefined }); done() } }] : []),
+              // 划线顺便问:选中的那段作为引用,挂在它所在的那条回答上,主对话里什么都不发
+              ...(activeId ? [{ id: 'btw', label: t('btw.selectionAction'), icon: <MessageCircleQuestion size={14} />, testId: 'selection-btw', onRun: () => { openBtw({ sessionId: activeId, title: activeSession?.title, quote: sel.text, modelId: mvModelId || undefined, messageId: selectedMessageId() }); done() } }] : []),
             ]}
           />
         </div>

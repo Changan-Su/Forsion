@@ -168,6 +168,8 @@ export const ENGINE_ROUTES: readonly EngineRoute[] = [
   { method: 'DELETE', path: '/agent/sessions/:id', access: 'deny-remote', src: 'routes/sessions.ts', why: 'irreversible hard delete of a local session (runs, messages, code checkpoints); remote uses archive (PATCH archived)' },
   { method: 'PATCH', path: '/agent/sessions/:id', access: 'allow', src: 'routes/sessions.ts', why: 'rename / archive / model / project of a session (a remote project_path never widens /unit/host* reads: only locally confirmed project roots count)' },
   { method: 'POST', path: '/agent/sessions/:id/aside', access: 'allow', src: 'routes/sessions.ts', why: 'btw aside (taint propagates, C5)' },
+  { method: 'GET', path: '/agent/sessions/:id/asides', access: 'allow', src: 'routes/sessions.ts', why: 'saved btw asides of a session (read)' },
+  { method: 'DELETE', path: '/agent/sessions/:id/asides/:asideId', access: 'deny-remote', src: 'routes/sessions.ts', why: 'irreversible delete of a saved btw aside; local only like session hard delete' },
   { method: 'GET', path: '/agent/sessions/:id/background', access: 'allow', src: 'routes/sessions.ts', why: 'background child sessions' },
   { method: 'POST', path: '/agent/sessions/:id/branch', access: 'allow', src: 'routes/sessions.ts', why: 'branch a session (remote taint propagates, C5)' },
   { method: 'GET', path: '/agent/sessions/:id/checkpoints', access: 'allow', src: 'routes/sessions.ts', why: 'list code checkpoints' },
