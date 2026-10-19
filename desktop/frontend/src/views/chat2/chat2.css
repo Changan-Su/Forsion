@@ -1287,10 +1287,15 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
   color: var(--text-muted); font-size: var(--ui-font-meta, 12px); line-height: 1.6; text-align: center; pointer-events: none;
 }
 /* 「接在 · …」:输入框发出去接在哪张卡后面(当前这一支的最后一张)。盒子照抄 .t2c-inner(880 封顶 + 28 内边距),左缘对齐输入卡。 */
-.t2cv-attach-row { position: absolute; left: 0; right: 0; bottom: calc(var(--t2-composer-h, 96px) + 4px); pointer-events: none; z-index: 3; }
-.t2cv-attach {
+/* 卡会从这一行底下穿过(横排时尤其):给它一枚实底胶囊,字不和卡里的字叠在一起 */
+.t2cv-attach-row {
+  position: absolute; left: 0; right: 0; bottom: calc(var(--t2-composer-h, 96px) + 4px); pointer-events: none; z-index: 3;
   box-sizing: border-box; max-width: 880px; margin: 0 auto; padding: 0 28px;
-  display: flex; align-items: center; gap: 6px; font-size: var(--ui-font-caption, 11px); color: var(--text-muted); min-width: 0;
+}
+.t2cv-attach {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-width: 0; box-sizing: border-box;
+  padding: 2px 10px 2px 8px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg-card);
+  font-size: var(--ui-font-caption, 11px); color: var(--text-muted);
 }
 .t2cv-attach > svg { flex: none; color: var(--accent-ink); }
 .t2cv-attach > b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; color: var(--text); }

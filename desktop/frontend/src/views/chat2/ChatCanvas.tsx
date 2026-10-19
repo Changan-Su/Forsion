@@ -243,10 +243,16 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onOpenTurn }: {
   const followRef = useRef(true)
   const [follow, setFollow] = useState(true)
   const landed = useRef(!!recallViewport(memoKey))
+  // 落位后卡还会再长一点(卡里的内容晚一拍渲染完):1.5s 内、用户没碰过、还是同一张卡,就跟着再落一次
+  const settle = useRef<{ key: string; until: number } | null>(null)
+  // 刚写完的那张:写完后卡底还会长出一行操作条,跟着的话 1.5s 内接着把卡底贴在阅读线上
+  const afterglow = useRef<{ key: string; until: number } | null>(null)
   const flyRaf = useRef(0)
   // 用户自己挪了视口(滚轮 / 拖空白 / 捏合 / 缩略图 / 适应内容):停跟;正在往回飞的那一下也作废
   const release = useCallback((): void => {
     cancelAnimationFrame(flyRaf.current)
+    settle.current = null
+    afterglow.current = null
     if (followRef.current) { followRef.current = false; setFollow(false) }
   }, [])
   const view = useCanvasViewport(host, memoKey, release, { x: 0, y: 0, z: START_Z })
@@ -268,7 +274,7 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onOpenTurn }: {
 
   const composerInset = (): number => {
     const v = host.current ? parseFloat(getComputedStyle(host.current).getPropertyValue('--t2-composer-h')) : NaN
-    return (Number.isFinite(v) ? v : 96) + 28
+    return (Number.isFinite(v) ? v : 96) + 44 // 让开输入框上方「接在 · …」那一行
   }
   /** 舒服的阅读位置:卡底停在输入框上方(和 Chat View 贴底一样,新出来的字在最下面);卡在横向视野外就居中。 */
   const readingVp = (b: Box, vp: Viewport): Viewport => {
@@ -286,6 +292,7 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onOpenTurn }: {
     if (lastDir.current === dir) return
     lastDir.current = dir
     const r = recallViewport(memoKey)
+    settle.current = null
     if (r) { landed.current = true; view.setVp(r) } else landed.current = false
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dir])
@@ -298,28 +305,38 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onOpenTurn }: {
     if (streamKey && streamKey !== lastStream.current) { followRef.current = true; setFollow(true) }
     // 刚写完的那张不折起:正跟着读到它的末尾,一折视野就落到卡下面的空白里(Codex 评审实测卡跳出视口上方一千多像素)
     const done = lastStream.current
-    if (done && done !== streamKey) setExpanded((s) => (s.has(done) ? s : new Set(s).add(done)))
+    if (done && done !== streamKey) {
+      setExpanded((s) => (s.has(done) ? s : new Set(s).add(done)))
+      afterglow.current = followRef.current ? { key: done, until: performance.now() + 1500 } : null
+    }
     lastStream.current = streamKey
   }, [streamKey])
   useLayoutEffect(() => {
-    if (!streamKey || !followRef.current || !heights.has(streamKey)) return
-    const b = boxes.get(streamKey)
+    const g = afterglow.current
+    const k = streamKey ?? (g && performance.now() < g.until ? g.key : null)
+    if (!k || !followRef.current || !heights.has(k)) return
+    const b = boxes.get(k)
     if (!b) return
     const cur = view.vpRef.current
     const next = readingVp(b, cur)
     landed.current = true // 跟着生成落过位了,生成完不再跳回「最后一张卡顶」
+    settle.current = null
     if (Math.abs(next.x - cur.x) > 0.5 || Math.abs(next.y - cur.y) > 0.5) view.setVp(next)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [boxes, streamKey, follow])
-  // 第一次打开(这棵树、这个排法没记过视口):落在当前这一支的最后一张卡上,卡顶留一点边
+  // 第一次打开(这棵树、这个排法没记过视口):同 Chat View 打开在末尾 —— 这一支最后一张卡的卡底落在阅读线上,
+  // 上面露出前几轮;卡比视口高就卡顶留一点边
   useLayoutEffect(() => {
-    if (landed.current || !selected || streamKey) return
+    if (!selected || streamKey) return
+    const s = settle.current
+    if (landed.current && !(s && s.key === selected && performance.now() < s.until)) return
     for (let k: string | null = selected; k; k = tree.cards.get(k)?.parent ?? null) if (!heights.has(k)) return // 上面的卡还没量完,位置还会变
     const b = boxes.get(selected)
-    const { w } = hostSize(host.current)
+    const { w, h } = hostSize(host.current)
     if (!b || !w) return
+    if (!landed.current) settle.current = { key: selected, until: performance.now() + 1500 }
     landed.current = true
-    view.setVp({ z: START_Z, x: w / 2 - (b.x + b.w / 2) * START_Z, y: 32 - b.y * START_Z })
+    view.setVp({ z: START_Z, x: w / 2 - (b.x + b.w / 2) * START_Z, y: Math.max(32 - b.y * START_Z, h - composerInset() - (b.y + b.h) * START_Z) })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [boxes, selected])
 

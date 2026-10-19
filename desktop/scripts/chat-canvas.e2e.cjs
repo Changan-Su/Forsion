@@ -67,6 +67,17 @@ async function main() {
   projectDir = ctx.projectDir
   const { win } = ctx
   const card = (sid, mid) => win.locator(`.t2cv-card[data-cv-node="${sid}:${mid}"]`)
+  // 镜头落在这一支末尾,别的卡常在视口外(Playwright 平移不了画布;展开过的长卡让「适应内容」在最小缩放下也装不下):
+  // 用滚轮(= 平移)把那张卡的卡头挪到舞台中间再点
+  const show = async (sid, mid) => {
+    const d = await win.evaluate((sel) => {
+      const c = document.querySelector(sel).getBoundingClientRect(), s = document.querySelector('.t2cv-stage').getBoundingClientRect()
+      return { mx: s.left + s.width / 2, my: s.top + s.height / 2, dx: c.left + c.width / 2 - (s.left + s.width / 2), dy: c.top + 40 - (s.top + s.height / 2) }
+    }, `.t2cv-card[data-cv-node="${sid}:${mid}"]`)
+    await win.mouse.move(d.mx, d.my)
+    await win.mouse.wheel(d.dx, d.dy)
+    await win.waitForTimeout(300)
+  }
   const rect = (sid, mid) => card(sid, mid).evaluate((e) => { const b = e.getBoundingClientRect(); return { x: b.left, y: b.top, r: b.right, b: b.bottom, w: b.width, h: b.height } })
   // 生成中那张卡的底边离「阅读线」(输入框上沿再往上 28px)多远;正数 = 卡底在线上面
   const readGap = (sel) => win.evaluate((sel) => {
@@ -75,7 +86,7 @@ async function main() {
     if (!host || !el) return null
     const u = host.currentCSSZoom || 1
     const ch = parseFloat(getComputedStyle(host).getPropertyValue('--t2-composer-h')) || 96
-    return Math.round(host.getBoundingClientRect().bottom - (ch + 28) * u - el.getBoundingClientRect().bottom)
+    return Math.round(host.getBoundingClientRect().bottom - (ch + 44) * u - el.getBoundingClientRect().bottom)
   }, sel)
   try {
     await boot(ctx.app, win, { space: 'tangu', width: 1440, height: 900 })
@@ -115,7 +126,7 @@ async function main() {
       const s = document.querySelector('.t2cv-stage').getBoundingClientRect()
       return c && { sel: document.querySelector('.t2cv-card[data-sel]').dataset.cvNode, top: Math.round(c.top - s.top), bottom: Math.round(c.bottom - s.top), h: Math.round(s.height) }
     })
-    r.check('L1 一打开镜头落在当前这一支最后一张卡上(不落进空白)', !!land && land.sel === `${R}:u3` && land.top >= 0 && land.top < land.h - 40, JSON.stringify(land))
+    r.check('L1 一打开镜头落在这一支最后一张卡上:整张在视野里、贴着输入框上方(上面露出前几轮,不落进空白)', !!land && land.sel === `${R}:u3` && land.top > 200 && land.bottom <= land.h - 100, JSON.stringify(land))
 
     // ── 竖排(缺省):子卡在下、兄弟并排 ──
     const [u1, u2, c1, d1] = [await rect(R, 'u1'), await rect(R, 'u2'), await rect(B1, 'c1'), await rect(B2, 'd1')]
@@ -152,6 +163,7 @@ async function main() {
     const d0 = await dims()
     r.check('F1 只看这一支:不在当前这一支(主线)上的两支变淡', JSON.stringify(d0) === JSON.stringify([`${B1}:c1`, `${B2}:d1`].sort()), JSON.stringify(d0))
     await win.screenshot({ path: path.join(dir, 'canvas-focus.png') })
+    await show(B1, 'c1')
     await card(B1, 'c1').locator('.t2cv-q').click()
     await win.locator(`.t2s-srow.active[data-sel-id="${B1}"]`).waitFor({ timeout: 10_000 })
     await win.waitForTimeout(300)
@@ -202,6 +214,7 @@ async function main() {
     r.check('A5 刚写完的长回答不折起,视野还停在它末尾(不掉进空白)', doneH > 900 && (await win.locator(`${doneSel} .t2cv-body[data-folded]`).count()) === 0 && Math.abs(g6) < 60, JSON.stringify({ g6, doneH }))
 
     // ── 双击:回对话,滚到那一轮 ──
+    await show(B2, 'd1')
     await card(B2, 'd1').locator('.t2cv-q').dblclick()
     await win.locator(`.t2s-srow.active[data-sel-id="${B2}"]`).waitFor({ timeout: 10_000 })
     await win.waitForFunction(() => !document.querySelector('.t2cv'), null, { timeout: 5_000 })
