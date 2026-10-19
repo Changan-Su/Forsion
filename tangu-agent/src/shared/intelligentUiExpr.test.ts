@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { parseUIDraft, validateUIDocument, type UIDocument } from './intelligentUi.js'
-import { applyUISteps, compileExpr, documentEnv, escapeUIMarkdown, evaluate, uiDocumentIssues, uiTableRows, uiText, type UIValue } from './intelligentUiExpr.js'
+import { applyUISteps, compileExpr, documentEnv, evaluate, uiDocumentIssues, uiTableRows, uiText, type UIValue } from './intelligentUiExpr.js'
 // 画廊:手写的 v2 文档,一份三用 —— 这里当校验器单测,技能里的例子照它写,desktop 的回放台架拿它截图。
 const gallery: Record<string, UIDocument> = JSON.parse(readFileSync(new URL('../../../desktop/scripts/fixtures/intelligent-ui-gallery.json', import.meta.url), 'utf8'))
 const loan = () => structuredClone(gallery.loan) as unknown as Record<string, any>
@@ -32,7 +32,7 @@ describe('Intelligent UI v2 gallery', () => {
     expect(rows.map(r => r[1])).toEqual(['107.1 万', '91.9 万', '74.1 万', '53.2 万', '28.7 万', '0.0 万'])
     const b = env({ loan: 100, rate: 3, years: 25 })
     expect(b.text("format(pay, 'number', 0)")).toBe('4,742')
-    expect(b.interpolate('每月 {{format(pay, \'number\', 0)}} 元')).toBe('每月 4\\,742 元')
+    expect(b.slots('每月 {{format(pay, \'number\', 0)}} 元，{{ nope }}')).toEqual({ markdown: '每月 \uE0000\uE001 元，\uE0001\uE001', values: ['4,742', '—'] })
     expect(documentEnv(doc, { loan: 120, rate: 3.2, years: 30 }, new Map(), 'en').text("format(interest, 'wan', 1)")).toBe('668.3K')
   })
   it('runs the flashcard buttons as ordered, all-or-nothing state changes', () => {
@@ -141,10 +141,6 @@ describe('Intelligent UI v2 expressions', () => {
     expect(() => run("each(range(1, 200), 'a', each(range(1, 200), 'b', a * b))")).toThrow(/longer than 200|too much computation/)
     expect(() => run('1 / 0')).toThrow('not a finite number')
     expect(() => run('[1][3]')).toThrow('outside the list')
-  })
-  it('escapes computed text so it never becomes markdown', () => {
-    expect(escapeUIMarkdown('https://evil.example')).toBe('https\\:\\/\\/evil\\.example')
-    expect(escapeUIMarkdown('a | b\n[x](y)')).toBe('a \\| b \\[x\\]\\(y\\)')
   })
   it('reports values that fail at the initial values next to a successful render', () => {
     const doc = loan(); doc.derived[3].expr = 'payment(r, 0, p)'

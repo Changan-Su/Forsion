@@ -343,9 +343,10 @@ export function uiValueIssue(x: unknown, depth = 0): string {
 // ── interpolation ──
 const SLOT = /\{\{([\s\S]*?)\}\}/g
 export const interpolationSources = (markdown: string): string[] => [...markdown.matchAll(SLOT)].map(m => m[1].trim())
-/** A computed value enters markdown as plain text: every ASCII punctuation mark is escaped, so it cannot
- * open a link, image, emphasis, table cell or autolink, and line breaks fold to spaces. */
-export const escapeUIMarkdown = (text: string): string => text.replace(/\s*\n\s*/g, ' ').replace(/[!-/:-@[-`{-~]/g, '\\$&')
+/** Markers a renderer swaps for computed text after parsing the markdown: private-use characters, so
+ * no markdown construct (link, autolink, emphasis, table cell) can form from a computed value. Escaping
+ * is not enough: GFM autolink literals still fire through backslash escapes. */
+export const UI_SLOT = /\uE000(\d+)\uE001/g
 
 // ── a document's values ──
 export type UICell = { ok: true; value: UIValue } | { ok: false; error: string }
@@ -354,8 +355,8 @@ export type DocumentEnv = ExprEnv & {
   cell(src: string): UICell
   /** A cell as text; failures read as an em dash. */
   text(src: string): string
-  /** Markdown with every {{ }} replaced by its escaped text. */
-  interpolate(markdown: string): string
+  /** Markdown with every {{ }} replaced by a UI_SLOT marker, and the text for each marker. */
+  slots(markdown: string): { markdown: string; values: string[] }
 }
 export function documentScope(doc: Pick<UIDocument, 'inputs' | 'state' | 'derived'>): ExprScope {
   return { inputs: new Set(doc.inputs.map(i => i.id)), names: new Set([...(doc.state || []).map(s => s.id), ...(doc.derived || []).map(d => d.id)]) }
@@ -386,7 +387,10 @@ export function documentEnv(doc: Pick<UIDocument, 'inputs' | 'state' | 'derived'
       if (!c.ok) return '—'
       try { return uiText(c.value) } catch { return '—' }
     },
-    interpolate: markdown => markdown.replace(SLOT, (_, src: string) => escapeUIMarkdown(env.text(src.trim()))),
+    slots: markdown => {
+      const values: string[] = []
+      return { markdown: markdown.replace(SLOT, (_, src: string) => `\uE000${values.push(env.text(src.trim())) - 1}\uE001`), values }
+    },
   }
   return env
 }
