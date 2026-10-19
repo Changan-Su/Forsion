@@ -10,10 +10,15 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ToolEvent, UiMessage } from '../types'
 
+// 引擎插件名单:台架里由 listPlugins 的桩给(真实现走 HTTP)
+const engineList: { current: Array<Record<string, unknown>> } = { current: [] }
+vi.mock('../services/backendService', async (orig) => ({ ...(await orig<object>()), listPlugins: async () => engineList.current }))
+
 const { usePluginStore } = await import('../amadeus/plugins/pluginStore')
+const { setTanguProbe } = await import('../amadeus/plugins/tanguSeam')
 const { useEngineTools, cardStateHandle, __resetToolCards } = await import('../amadeus/plugins/toolResultCards')
 const { useApp } = await import('../stores/appStore')
-const { PluginToolCard, ToolCardDeskContext, placeLiveToolCard, returnToolCardToChat } = await import('./PluginToolCard')
+const { PluginToolCard, ToolCardDeskContext, placeLiveToolCard, returnToolCardToChat, __resetToolCardPlacement } = await import('./PluginToolCard')
 const { DeskToolCardPane } = await import('../views/chat2/DeskToolCardPane')
 type Contribution = import('../amadeus/plugins/types').ToolResultRendererContribution
 type Call = import('../amadeus/plugins/types').ToolResultCall
@@ -47,9 +52,14 @@ function install(over: Partial<Contribution> = {}): Contribution {
 
 let host: HTMLDivElement
 let root: Root
+const OWNED = [{ id: 'chart-engine', enabled: true, active: true, tools: ['make_chart'] }]
 beforeEach(() => {
   ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
   __resetToolCards()
+  __resetToolCardPlacement()
+  // 宿主刷名单时(渲染器一注册就刷)拿到的与 install() 塞进去的是同一份;拉不到会清空(fail closed)
+  engineList.current = OWNED
+  setTanguProbe({ activeModel: () => null, models: () => [], activeSpace: () => null, subscribe: () => () => {}, waitBackend: async () => ({ backendUrl: 'http://127.0.0.1:1', token: 't' }) as never })
   log.length = 0
   lastCall = null
   const msg = { id: 'm1', role: 'assistant', content: '', status: 'done', timestamp: 1, toolEvents: [ev] } as unknown as UiMessage
@@ -61,6 +71,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount())
   host.remove()
+  setTanguProbe(null)
 })
 
 /** 一块对话 + 它的 Desk(同 ChatView:context 给会话 id,Desk 条目里有这次调用才画 Desk 那格)。 */
@@ -91,6 +102,10 @@ describe('① 对话里挂载', () => {
     await render()
     expect(host.querySelector('[data-fallback]')).not.toBeNull()
     expect(host.querySelector('[data-plugin-tool-card-body]')).toBeNull()
+    // 插件重载、换上好的渲染器 → 自动挂回来(不能卡在 fallback 上)
+    await act(async () => { install() })
+    expect(host.querySelector('[data-fallback]')).toBeNull()
+    expect(host.querySelector('[data-plugin-tool-card-body="inline"]')?.textContent).toBe('chart for call-1')
     err.mockRestore()
   })
 
@@ -149,26 +164,35 @@ describe('③ 没有 Desk', () => {
 })
 
 describe('④ 落点 desk 的直播结果', () => {
-  it('自动进 Desk 一次;收回之后不再弹回去', () => {
+  it('自动进 Desk 一次;收回之后不再弹回去', async () => {
     install({ surface: 'desk' })
     useApp.setState({ desktopConfig: { agentDeskEnabled: true } as never })
-    placeLiveToolCard(SID, 'call-1')
+    await placeLiveToolCard(SID, 'call-1')
     expect(useApp.getState().deskBySession[SID]?.items[0]?.tool).toEqual({ callId: 'call-1' })
     returnToolCardToChat(SID, 'call-1')
-    placeLiveToolCard(SID, 'call-1') // SSE 重放 / 又来一次
+    await placeLiveToolCard(SID, 'call-1') // SSE 重放 / 又来一次
     expect(useApp.getState().deskBySession[SID].items).toEqual([])
   })
 
-  it('落点 inline、Desk 关着、或者没认领上的都不进', () => {
+  it('结果先到、名单后到(引擎半身晚激活):重拉一次名单再放进 Desk', async () => {
+    install({ surface: 'desk' })
+    useEngineTools.setState({ byEngine: {} })
+    useApp.setState({ desktopConfig: { agentDeskEnabled: true } as never })
+    await placeLiveToolCard(SID, 'call-1')
+    expect(useApp.getState().deskBySession[SID]?.items[0]?.tool).toEqual({ callId: 'call-1' })
+  })
+
+  it('落点 inline、Desk 关着、或者引擎不报这个工具的都不进', async () => {
     install()
     useApp.setState({ desktopConfig: { agentDeskEnabled: true } as never })
-    placeLiveToolCard(SID, 'call-1')
+    await placeLiveToolCard(SID, 'call-1')
     install({ surface: 'desk' })
     useApp.setState({ desktopConfig: { agentDeskEnabled: false } as never })
-    placeLiveToolCard(SID, 'call-1')
+    await placeLiveToolCard(SID, 'call-1')
     useApp.setState({ desktopConfig: { agentDeskEnabled: true } as never })
     useEngineTools.setState({ byEngine: {} })
-    placeLiveToolCard(SID, 'call-1')
+    engineList.current = [] // 重拉一次也拿不到
+    await placeLiveToolCard(SID, 'call-1')
     expect(useApp.getState().deskBySession[SID]).toBeUndefined()
     expect(cardStateHandle('call-1').get()).toBeUndefined()
   })

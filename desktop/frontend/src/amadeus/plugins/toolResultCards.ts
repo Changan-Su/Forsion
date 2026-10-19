@@ -29,8 +29,8 @@ export function claimToolCard(
     && (plugins.find((p) => p.id === r.pluginId)?.bundle?.enginePlugins ?? []).some((e) => engineTools[e]?.includes(toolName)))
 }
 
-/** 只有跑完且成功的调用画卡片;运行中、出错、挂起等审批的都留通用记录。 */
-export const cardEligible = (ev: ToolEvent): boolean => ev.done && !ev.isError && !ev.parked
+/** 只有跑完且成功的调用画卡片;运行中、出错、挂起等审批的都留通用记录。历史里中断的调用也是 done,但没有结果 —— 不画。 */
+export const cardEligible = (ev: ToolEvent): boolean => ev.done && !ev.isError && !ev.parked && ev.result !== undefined
 
 /** 引擎插件 id → 名下工具名。loaded 之前与拉失败时都是空表(不认领)。 */
 export const useEngineTools = create<{ byEngine: Record<string, string[]> }>(() => ({ byEngine: {} }))
@@ -41,16 +41,18 @@ let again = false
 export function refreshEngineTools(): Promise<void> {
   if (inflight) { again = true; return inflight }
   inflight = (async () => {
+    // 拉不到(后端没起、请求失败)就清空:引擎重载后工具可能换了主人,留着旧表 = 让旧插件接着认领(Codex 评审)
+    let byEngine: Record<string, string[]> = {}
     try {
       const cfg = await readTangu()?.waitBackend?.(15_000)
-      if (!cfg) return
-      const list = await listPlugins(connectionTarget(cfg))
-      useEngineTools.setState({
-        byEngine: Object.fromEntries(list.filter((p) => p.enabled && p.active !== false && p.tools?.length).map((p) => [p.id, p.tools!])),
-      })
+      if (cfg) {
+        const list = await listPlugins(connectionTarget(cfg))
+        byEngine = Object.fromEntries(list.filter((p) => p.enabled && p.active !== false && p.tools?.length).map((p) => [p.id, p.tools!]))
+      }
     } catch (e) {
       console.warn('[amadeus] 拉引擎插件名下工具失败', e)
     } finally {
+      useEngineTools.setState({ byEngine })
       inflight = null
       if (again) { again = false; void refreshEngineTools() }
     }

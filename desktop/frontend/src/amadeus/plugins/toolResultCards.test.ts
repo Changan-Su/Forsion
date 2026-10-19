@@ -95,9 +95,25 @@ describe('③ 分段:卡片代替通用记录', () => {
     const running: ToolEvent = { id: 'r', name: 'make_chart', done: false }
     const failed = done('f', 'make_chart', { isError: true, result: 'Error: boom' })
     const parked = done('p', 'make_chart', { parked: true })
-    for (const ev of [running, failed, parked]) expect(cardEligible(ev), ev.id).toBe(false)
+    const interrupted: ToolEvent = { id: 'i', name: 'make_chart', done: true } // 历史里中断的调用:done 但没有结果
+    for (const ev of [running, failed, parked, interrupted]) expect(cardEligible(ev), ev.id).toBe(false)
     const gated = (ev: ToolEvent) => (cardEligible(ev) ? cardOf(ev) : undefined)
     expect(partitionToolSegment([running, failed, parked], [], true, gated)).toEqual([{ t: 'tools', events: [running, failed, parked] }])
+  })
+})
+
+describe('⑤ 名单刷新', () => {
+  it('拉不到(后端没起)就清空,不留旧表继续认领', async () => {
+    const { setTanguProbe } = await import('./tanguSeam')
+    const { refreshEngineTools } = await import('./toolResultCards')
+    useEngineTools.setState({ byEngine: { 'chart-engine': ['make_chart'] } })
+    setTanguProbe({ activeModel: () => null, models: () => [], activeSpace: () => null, subscribe: () => () => {}, waitBackend: async () => null })
+    try {
+      await refreshEngineTools()
+      expect(useEngineTools.getState().byEngine).toEqual({})
+    } finally {
+      setTanguProbe(null)
+    }
   })
 })
 

@@ -46,6 +46,8 @@ interface PluginSpec {
   hangDeactivateOnce?: boolean;
   /** 工具 provider id(缺省 plugin:<id>)。 */
   providerId?: string;
+  /** 工具名(缺省 <id 下划线>_tool)。 */
+  toolName?: string;
   /** manifest 的 mcpServers。 */
   mcp?: Record<string, unknown>;
   /** manifest 的 hooks。 */
@@ -111,7 +113,7 @@ function writePlugin(id: string, spec: PluginSpec = {}): void {
   writeFileSync(path.join(dir, 'tangu-plugin.json'), JSON.stringify(manifest));
   writeFileSync(path.join(dir, 'package.json'), '{"type":"module"}');
   const tag = JSON.stringify(spec.tag ?? 'v1');
-  const tool = toolOf(id);
+  const tool = spec.toolName ?? toolOf(id);
   if (spec.relative) writeFileSync(path.join(dir, 'dist', 'helper.js'), `export const helperTag = ${tag};\n`);
   const provider = `{ id: '${spec.providerId ?? `plugin:${id}`}', tools: () => [{
         name: '${tool}',
@@ -329,6 +331,17 @@ describe('限时、隔离与归属(Codex 10-02)', () => {
     expect(await visibleTools(h)).toEqual(['lc_b_tool']);
     await h.boot.setPluginEnabledLive('lc-b', false);
     expect(await visibleTools(h)).toEqual([]);
+  });
+
+  it('不同 provider 注册同名工具:名下工具谁都不报(桌面不许任何一家给它挂结果卡片);一家停用后另一家才报', async () => {
+    writePlugin('lc-a', { toolName: 'same_tool' });
+    writePlugin('lc-b', { toolName: 'same_tool' });
+    const h = await host();
+    await h.boot.activateAllPlugins();
+    expect(h.boot.pluginStatus('lc-a').tools).toBeUndefined();
+    expect(h.boot.pluginStatus('lc-b').tools).toBeUndefined();
+    await h.boot.setPluginEnabledLive('lc-a', false);
+    expect(h.boot.pluginStatus('lc-b').tools).toEqual(['same_tool']);
   });
 
   it.skipIf(!GRAPH)('只改 helper(入口与版本都没动)也算换了代码:整图换代,工具读到新 helper', async () => {

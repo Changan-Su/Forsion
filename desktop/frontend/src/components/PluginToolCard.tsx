@@ -16,7 +16,7 @@ import { registerMessages, useI18n } from '../i18n'
 import { usePluginStore } from '../amadeus/plugins/pluginStore'
 import { pluginDisplayName } from '../amadeus/plugins/display'
 import type { ToolResultSurface } from '../amadeus/plugins/types'
-import { cardStateHandle, parseToolArgs, toolCardOf, toolCardTitle, type ToolCardClaim } from '../amadeus/plugins/toolResultCards'
+import { cardStateHandle, parseToolArgs, refreshEngineTools, toolCardOf, toolCardTitle, type ToolCardClaim } from '../amadeus/plugins/toolResultCards'
 import { quoteInMainChat } from '../views/chat2/btwStore'
 import { deskAcceptsFiles } from '../amadeus/plugins/deskCompanion'
 import { UI_MODE } from '@lcl/engine'
@@ -31,7 +31,8 @@ registerMessages({
   'toolCard.noRenderer': { zh: '插件没在运行，先显示原始结果', en: 'The plugin isn’t running. Showing the raw result.' },
 })
 
-/** 这块对话的 Desk 此刻收得下卡片 → 它所属的会话 id;收不下(手机、Desk 关着、画布 / 子会话占着侧边)→ null。ChatView 提供。 */
+/** 这块对话的 Desk 此刻看得见、收得下卡片 → 它所属的会话 id;否则(手机、Desk 关着、画布、窗口窄于 760px 被 CSS 藏掉、
+ *  子会话面板顶掉了展开的 Desk)→ null,一律画卡片。ChatView 提供。 */
 export const ToolCardDeskContext = createContext<string | null>(null)
 
 const QUOTE_CAP = 20_000 // 同 quoteInMainChat
@@ -55,15 +56,24 @@ export function returnToolCardToChat(sessionId: string, callId: string): void {
 
 // 落点 desk 的卡片只在结果**直播到达**那一刻自动进 Desk 一次(重载的历史不进);用户收回之后不再弹回去,SSE 重放也靠它去重。
 const autoPlaced = new Set<string>()
-/** appStore 收到成功的 tool_result 后调。 */
-export function placeLiveToolCard(sessionId: string, callId: string): void {
+/** appStore 收到成功的 tool_result 后调。名单还没拉到(引擎半身比桌面半身晚激活)而本插件确有 desk 渲染器时,重拉一次再判。 */
+export async function placeLiveToolCard(sessionId: string, callId: string): Promise<void> {
   if (autoPlaced.has(callId) || UI_MODE === 'mobile' || !deskAcceptsFiles(!!useApp.getState().desktopConfig?.agentDeskEnabled)) return
   const ev = findToolEvent(sessionId, callId)
-  const claim = ev && toolCardOf(ev)
+  if (!ev) return
+  let claim = toolCardOf(ev)
+  if (!claim && usePluginStore.getState().toolResultRenderers.some((r) => r.item.tool === ev.name && r.item.surface === 'desk')) {
+    await refreshEngineTools()
+    if (autoPlaced.has(callId)) return
+    claim = toolCardOf(ev)
+  }
   if (!claim || claim.item.surface !== 'desk') return
   autoPlaced.add(callId)
   showToolCardInDesk(sessionId, callId, toolCardTitle(claim.item))
 }
+
+/** 仅供单测复位。 */
+export const __resetToolCardPlacement = (): void => autoPlaced.clear()
 
 export function findToolEvent(sessionId: string, callId: string): ToolEvent | undefined {
   for (const m of useApp.getState().messagesBySession[sessionId] || []) {
@@ -85,14 +95,15 @@ export function CardMount({ event, claim, surface, onQuote, fallback }: {
   event: ToolEvent; claim: ToolCardClaim; surface: ToolResultSurface; onQuote?: (text: string) => void; fallback: React.ReactNode
 }) {
   const host = useRef<HTMLDivElement>(null)
-  const [failed, setFailed] = useState(false)
+  // 记的是「哪一个渲染器挂失败了」:插件重载换了新渲染器,自动回到挂载(只记布尔值的话 fallback 那支没有宿主元素,永远挂不回来)
+  const [failedItem, setFailedItem] = useState<unknown>(null)
   const quoteRef = useRef(onQuote)
   quoteRef.current = onQuote
   const { item } = claim
+  const failed = failedItem === item
   useEffect(() => {
     const el = host.current
     if (!el) return
-    setFailed(false)
     el.textContent = ''
     let cleanup: (() => void) | void
     try {
@@ -108,13 +119,13 @@ export function CardMount({ event, claim, surface, onQuote, fallback }: {
       })
     } catch (e) {
       console.error(`[plugin:${claim.pluginId}] 工具结果卡片挂载失败(${event.name})`, e)
-      setFailed(true)
+      setFailedItem(item)
     }
     return () => {
       try { cleanup?.() } catch (e) { console.warn(`[plugin:${claim.pluginId}] 工具结果卡片清理失败`, e) }
       el.textContent = ''
     }
-  }, [item, event.id, event.name, event.arguments, event.result, surface]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [item, failed, event.id, event.name, event.arguments, event.result, surface]) // eslint-disable-line react-hooks/exhaustive-deps
   return failed ? <>{fallback}</> : <div ref={host} className={`plugin-tool-card-body ${surface}`} data-plugin-tool-card-body={surface} />
 }
 

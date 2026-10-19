@@ -530,6 +530,19 @@ export function ChatView({ leaf, params }: ViewProps) {
   // Desk 收不收文件(与 store 写入口、引用条同一判据):always 伴随面生效时 Desk 只演伴随面,点开文件一律走新标签页。
   const deskTakesFiles = useDeskAcceptsFiles(deskEnabled)
   const deskQuote = useCallback((text: string) => setQuoteDraft((prev) => quoteAdded(prev, quoteSid, text)), [quoteSid])
+  // 插件结果卡片的 Desk 落点只在 Desk 真看得见时成立(不然对话里只剩一张占位卡、哪儿都看不到内容):
+  // 宽度对齐 chat2.css 末尾 `@container (max-width: 759.9px) { .agent-desk { display: none } }`;子会话面板开着时
+  // 展开的 Desk 不渲染、卡片态又退场了,这时也当没有 Desk。画布 / 手机 / Desk 关着已含在 deskTakesFiles 与 canvasOn 里。
+  const chatViewRef = useRef<HTMLDivElement>(null)
+  const [deskRoom, setDeskRoom] = useState(true)
+  useEffect(() => {
+    const el = chatViewRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(([entry]) => setDeskRoom(entry.contentRect.width >= 760))
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+  const deskOpenNow = useApp((state) => (activeId ? state.deskBySession[activeId]?.mode === 'open' : false))
   // 团队成员列表嵌入 Pin Summary 的运行状态,Agent Desk 保持独立。
   const teamDesk = !params.childSurface && !studioChat && UI_MODE !== 'mobile' && !!mvCfg.groupChat && (mvCfg.groupAgents?.length || 0) >= 2
   // 画布(方案「Chat 画布分支」第二步):同一棵会话树的另一种看法。偏好按树根记 —— 在画布里点到别的支,不会翻回对话。
@@ -539,6 +552,7 @@ export function ChatView({ leaf, params }: ViewProps) {
     && !mvCfg.groupChat && !mvCfg.teamSlug && !mvCfg.teamMember && !mvCfg.soloAgentSlug && !mvCfg.soloEngineId && !mvCfg.engineId
   const [canvasPref, setCanvasPref] = useChatCanvasPref(treeRoot)
   const canvasOn = canvasAllowed && canvasPref.on
+  const toolCardDesk = deskTakesFiles && activeId && !canvasOn && deskRoom && !(childSelections[activeId] && deskOpenNow) ? activeId : null
   // 「对话 / 画布」= 视图模式(lcl viewModes):胶囊在这一列的头行左端,⌥⌘V 切换;记忆照旧按树根
   useViewModes(leaf.id, canvasAllowed ? {
     modes: [
@@ -588,8 +602,9 @@ export function ChatView({ leaf, params }: ViewProps) {
   }
 
   return (
-    <ToolCardDeskContext.Provider value={deskTakesFiles && activeId && !childSelections[activeId] && !canvasOn ? activeId : null}>
+    <ToolCardDeskContext.Provider value={toolCardDesk}>
     <div
+      ref={chatViewRef}
       className={`t2-chat-view${refDrop ? ' refdrop' : ''}`}
       data-chat-surface={leaf.type}
       data-canvas={canvasOn ? '' : undefined}

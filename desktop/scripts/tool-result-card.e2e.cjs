@@ -6,6 +6,7 @@
  *  T2 卡片里调 call.quote → 输入框上方多一张引用卡(不发送)
  *  T3「在 Desk 打开」→ 对话里换成占位卡、Desk 里重新挂(surface=desk)并拿回 state;⋯「放回对话」→ 回到对话
  *  T4 落点 desk 的工具 → 结果一到就进 Desk,对话里留占位卡;占位卡「收回到对话」
+ *  T5 窗口窄到 Desk 被 CSS 藏掉(聊天视图 < 760px)→ Desk 里那张画回对话;拉宽回来再回 Desk
  *  负对照 --nc=noclaim:引擎不报名下工具(名单为空)→ 不认领、全是通用记录(fail closed)。期望除「核心工具认领不了」外全红
  *  (10-19 实跑 1 passed / 10 failed)。
  *
@@ -257,6 +258,25 @@ async function main() {
     }))
     check('T4 占位卡「收回到对话」→ 卡片画在对话里', t4b.inline.startsWith('BOARD') && !t4b.deskOpen, JSON.stringify(t4b))
     await shot(win, '4-back')
+
+    // ── T5:窗口窄到 Desk 被 CSS 藏掉(聊天视图 < 760px)→ 放在 Desk 里的那张也画回对话,不只剩占位卡
+    await win.locator('[data-plugin-tool-card="probe_board"] [data-act="tool-card-desk"]').click().catch(() => {})
+    await win.waitForTimeout(800)
+    const before = await win.evaluate(() => !!document.querySelector('[data-plugin-tool-stub="probe_board"]'))
+    await win.setViewportSize({ width: 860, height: 900 }).catch(() => {})
+    await win.waitForTimeout(1200)
+    const t5 = await win.evaluate(() => ({
+      viewW: Math.round(document.querySelector('.t2-chat-view')?.getBoundingClientRect().width || 0),
+      stub: !!document.querySelector('[data-plugin-tool-stub="probe_board"]'),
+      inline: document.querySelector('[data-plugin-tool-card="probe_board"] .probe-head')?.textContent || '',
+      deskBtn: !!document.querySelector('[data-plugin-tool-card="probe_board"] [data-act="tool-card-desk"]'),
+    }))
+    await shot(win, '5-narrow')
+    check('T5 窄窗口:Desk 藏掉时卡片画回对话、不给「在 Desk 打开」', before && t5.viewW < 760 && !t5.stub && t5.inline.startsWith('BOARD') && !t5.deskBtn, JSON.stringify({ before, ...t5 }))
+    await win.setViewportSize({ width: 1440, height: 900 }).catch(() => {})
+    await win.waitForTimeout(1000)
+    const t5b = await win.evaluate(() => !!document.querySelector('[data-plugin-tool-stub="probe_board"]') && !!document.querySelector('.agent-desk.open [data-plugin-tool-card-desk="probe_board"]'))
+    check('T5 窗口拉宽回来 → 又回到 Desk、对话里是占位卡', t5b)
   } finally {
     await app.close().catch(() => {})
     stub.close()

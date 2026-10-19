@@ -286,7 +286,7 @@ export interface PluginStatus {
   lastError?: string;
   /** 上一次 activate / deactivate 超时后还在后台跑(busy):落定后按开关自动收敛,这期间不会再激活它。 */
   settling?: boolean;
-  /** 此刻在跑的实例名下注册的工具名(模型看到的名字),不含和核心工具撞名的。桌面据此只让插件给自己引擎半身的工具挂结果卡片。 */
+  /** 此刻在跑的实例名下注册的工具名(模型看到的名字),不含和核心工具或别的插件撞名的。桌面据此只让插件给自己引擎半身的工具挂结果卡片。 */
   tools?: string[];
 }
 
@@ -706,9 +706,13 @@ export function pluginStatus(id: string): PluginStatus {
   if (e.lastError) out.lastError = e.lastError;
   if (e.busy && !e.inst) out.settling = true;
   if (e.inst) {
-    const all = listToolProviders();
-    const core = new Set(all.filter((p) => p.origin !== 'plugin').flatMap((p) => p.tools().map((t) => t.name)));
-    const tools = [...new Set(all.filter((p) => providerOwner.get(p.id) === e.d.manifest.id).flatMap((p) => p.tools().map((t) => t.name)))].filter((n) => !core.has(n));
+    // 一个名字只归一家:核心或别的插件也声明了同名工具(谁真正被执行取决于面与注册序)就谁都不报,桌面那边不认领、留通用记录
+    const owners = new Map<string, Set<string>>();
+    for (const p of listToolProviders()) {
+      const owner = p.origin === 'plugin' ? (providerOwner.get(p.id) ?? `provider:${p.id}`) : '#core';
+      for (const t of p.tools()) (owners.get(t.name) ?? owners.set(t.name, new Set()).get(t.name)!).add(owner);
+    }
+    const tools = [...owners].filter(([, o]) => o.size === 1 && o.has(e.d.manifest.id)).map(([name]) => name);
     if (tools.length) out.tools = tools;
   }
   return out;

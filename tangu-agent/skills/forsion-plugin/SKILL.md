@@ -1021,7 +1021,7 @@ ctx.registerToolResultRenderer?.({
 ```
 
 - **Ownership**: the host only hands you calls of a tool that one of your bundle's engine plugins
-  (`tangu-plugins/<id>/`) has registered right now. A core tool (`write_file`…), another plugin's tool, or any tool
+  (`tangu-plugins/<id>/`) has registered right now, and that no core tool or other plugin also registers. A core tool (`write_file`…), another plugin's tool, or any tool
   while the engine list is not known yet stays a generic record. A market install whose engine half gets a
   `market_…` alias name does not match its plain tool name: ship engine + desktop halves in one bundle.
 - **When the card shows**: only for finished, successful calls. While the call runs, when it failed (`isError`),
@@ -1037,7 +1037,7 @@ ctx.registerToolResultRenderer?.({
   placeholder in the chat (name, plugin name, "Showing in Desk", "Back to chat"); the Desk capsule's ⋯ has "Move back
   to chat". Every move remounts you in the new place after cleaning up the old one, with `call.surface` telling
   you which: keep view state (scroll, zoom, selection) in `call.state` (in memory, keyed by call id) and restore it
-  on mount. Where there is no Desk (phone, Desk turned off) everything is inline.
+  on mount. Where there is no Desk (phone, Desk turned off, a window too narrow to show it) everything is inline.
 - **Styling**: the host draws the frame and the header (`title · plugin name`); draw only the content, with theme
   tokens (`var(--text)`, `--text-muted`, `--border`, `--accent-ink`, `--ui-font-body`…). No fixed colors, no own
   frame or shadow. In the Desk you get the whole pane: size to the element, not to a fixed width.
