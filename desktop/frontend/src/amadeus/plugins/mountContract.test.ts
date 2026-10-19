@@ -36,6 +36,7 @@ const { mountPluginTable } = await import('./tableSurface')
 const { mountPluginDashboard } = await import('./dashboardSurface')
 const { mountPluginFloatingToc } = await import('./floatingTocSurface')
 const { mountPluginBoard } = await import('./boardSurface')
+const { mountPluginSettingsPage, mountPluginSettingsItem } = await import('./settingsPageSurface')
 const { useApp } = await import('../../stores/appStore')
 const { hasPageScope } = await import('../store/pageStore')
 
@@ -53,6 +54,8 @@ const cases: Array<[name: string, mount: Mount, selector: string]> = [
   ['ctx.dashboard.mount', (el) => mountPluginDashboard('contract', el, { recipe: { cards: [{ kind: 'stat', id: 'k', label: 'L', value: '1', w: 4, h: 2 }] } }).dispose, '[data-stub="dashboard"]'],
   ['ctx.ui.mountFloatingToc', (el) => mountPluginFloatingToc(el, { scrollContainer: el }).dispose, '.lcl-ftoc-mount-layer'],
   ['ctx.ui.mountBoard', (el) => mountPluginBoard(el, { scene: { elements: [] }, viewport: { scrollX: 0, scrollY: 0, zoom: 1 } }).dispose, '[data-stub="board"]'],
+  ['ctx.ui.mountSettingsPage', (el) => mountPluginSettingsPage(el, { groups: [{ id: 'g', title: 'G', items: [{ type: 'value', id: 'v', title: 'V', value: '1' }] }] }).dispose, '.settings-panel'],
+  ['ctx.ui.mountSettingsItem', (el) => mountPluginSettingsItem(el, { type: 'value', id: 'v', title: 'V', value: '1' }).dispose, '.settings-value'],
 ]
 
 let el: HTMLDivElement

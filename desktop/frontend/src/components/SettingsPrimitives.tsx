@@ -33,9 +33,12 @@ export function SettingsRow(props: {
   className?: string
   /** 设置搜索的落点(settingsSearchIndex.ts 的 anchor)。 */
   anchor?: string
+  /** 窄屏(≤820)排法:`inline` = 开关、数值、单个按钮这类紧凑控件留在右边(放不下才换行);`wrap` = 输入框、步进器、
+   *  两个以上的按钮换到下一行并占满。不给 = 旧行为(一律换到下一行),没换过来的旧页面保持原样。 */
+  fit?: 'inline' | 'wrap'
 }) {
   return (
-    <div className={`settings-control-row settings-setting-row${props.className ? ` ${props.className}` : ''}`} data-setting-anchor={props.anchor}>
+    <div className={`settings-control-row settings-setting-row${props.className ? ` ${props.className}` : ''}`} data-setting-anchor={props.anchor} data-fit={props.fit}>
       <div className="settings-control-copy">
         <span>
           <strong>{props.label}</strong>

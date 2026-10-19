@@ -3,7 +3,7 @@
  *  刻意不装 npm 依赖:渲染层三端共享(desktop/web/mobile),本地文件零外部解析。
  *  增补图标照原样从 @blocksuite/icons 摘录,保持 currentColor 不带死色。 */
 import type { ComponentType, ReactElement, ReactNode, SVGProps } from 'react'
-import { Archive, ArchiveRestore, AudioLines, Bot, Circle, CircleCheck, Cloud, Copy, HardDrive, Highlighter, ListChecks, Lock, Mail, MailOpen, NotebookPen, RefreshCw, StickyNote, Strikethrough, TextQuote, Trash2, Underline, Workflow, type LucideIcon, type LucideProps } from 'lucide-react'
+import { Activity, Archive, ArchiveRestore, AudioLines, Bell, Bot, Circle, CircleCheck, Clock, Cloud, Coins, Copy, Gauge, Gift, HardDrive, Highlighter, ListChecks, Lock, Mail, MailOpen, MessageSquare, NotebookPen, Package, Plug, RefreshCw, Shield, StickyNote, Strikethrough, TextQuote, Trash2, Underline, User, Workflow, type LucideIcon, type LucideProps } from 'lucide-react'
 
 const I = (children: ReactElement) => (props: SVGProps<SVGSVGElement>) => (
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="1em" height="1em" fill="none" aria-hidden {...props}>
@@ -161,6 +161,18 @@ export const PLUGIN_ICONS: Record<string, ComponentType<SVGProps<SVGSVGElement>>
   // 看法胶囊窄时只留图标(ctx.ui.setViewModes,2026-10-19;谛听的转写 / 笔记 / 纪要)
   'audio-lines': L(AudioLines),
   'notebook-pen': L(NotebookPen),
+  // 设置页的分组面板(ctx.ui.mountSettingsPage 的 group.icon,2026-10-17):账号、额度、积分、通知这类设置页要的那几枚
+  bell: L(Bell),
+  gauge: L(Gauge),
+  coins: L(Coins),
+  clock: L(Clock),
+  gift: L(Gift),
+  user: L(User),
+  shield: L(Shield),
+  package: L(Package),
+  activity: L(Activity),
+  message: L(MessageSquare),
+  plug: L(Plug),
   'list-checks': L(ListChecks),
 }
 
