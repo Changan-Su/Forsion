@@ -1157,7 +1157,20 @@ export interface UpdaterStatusInfo {
   /** 同一节的英文版(CHANGELOG.en.md);没有就只有 releaseNotes */
   releaseNotesEn?: string
   percent?: number
+  /** 'unreachable' = 官网和 GitHub 都没答上 */
   error?: string
+  /** 这次从哪儿下(官网 / GitHub) */
+  source?: 'website' | 'github'
+  /** 安装包字节数(知道才有) */
+  size?: number
+  transferred?: number
+  total?: number
+  /** 自动换过源:原来那边 */
+  fallbackFrom?: 'website' | 'github'
+  /** 下载中能手动换到另一边 */
+  canSwitch?: boolean
+  /** mac:已在浏览器里开了 .dmg 的下载链接 */
+  opened?: boolean
 }
 
 /** 主进程持久化的完整配置;getConfig 返回时 backendUrl/token 已折算为有效值(managed 就绪=托管子进程的)。 */
@@ -1427,7 +1440,7 @@ declare global {
       /** 提交反馈到 Forsion 反馈中心(会话日志 JSON 随附为附件;token 留主进程)。 */
       submitFeedback?(input: { description: string; sessionLogJson?: string; sessionLogName?: string }): Promise<{ ok: boolean; id?: string | null; error?: string; attachmentSkipped?: boolean }>
       appVersion?(): Promise<string>
-      /** 应用内自动更新:检查 / 下载 / 重启安装(mac 仅检测,download/install 为 no-op)。 */
+      /** 应用内自动更新:检查 / 下载 / 重启安装(mac 的 download/install 为 no-op,改用 openUpdateInstaller)。 */
       getCorePluginUpdates?(): Promise<CorePluginUpdates>
       onCorePluginUpdates?(cb: (status: CorePluginUpdates) => void): () => void
       checkForUpdates?(): Promise<UpdaterStatusInfo>
@@ -1439,6 +1452,15 @@ declare global {
        *  Win/Linux 读的是 latest.yml 而非 beta.yml,mac 打的是 /releases/latest(按定义排除 prerelease)。 */
       getUpdateBeta?(): Promise<boolean>
       setUpdateBeta?(on: boolean): Promise<{ ok: boolean }>
+      /** 下载来源:auto = 按地区(大陆官网、其他地区 GitHub);有没有新版始终看官网。 */
+      getUpdateSource?(): Promise<'auto' | 'website' | 'github'>
+      setUpdateSource?(v: 'auto' | 'website' | 'github'): Promise<{ ok: boolean }>
+      /** 这台电脑在不在中国大陆(null = 没探出来)。 */
+      getUpdateRegion?(): Promise<boolean | null>
+      /** 下载中换到另一边。 */
+      switchUpdateSource?(): Promise<boolean>
+      /** mac:在浏览器里开这一版 .dmg 的下载链接。 */
+      openUpdateInstaller?(): Promise<boolean>
       /** What's new 弹窗正文:官网更新动态的已发布快照;拿不到 = null(退回打包的 CHANGELOG)。 */
       getWebsiteReleases?(): Promise<WebsiteRelease[] | null>
       /** 请主窗弹出 What's new(设置是独立浮窗,在那里点也要弹在主窗)。 */
