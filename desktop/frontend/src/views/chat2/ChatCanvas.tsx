@@ -305,7 +305,8 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onOpenTurn }: {
     if (streamKey && streamKey !== lastStream.current) { followRef.current = true; setFollow(true) }
     // 刚写完的那张不折起:正跟着读到它的末尾,一折视野就落到卡下面的空白里(Codex 评审实测卡跳出视口上方一千多像素)
     const done = lastStream.current
-    if (done && done !== streamKey) {
+    // 只认真写完的:切到别的支时 streamKey 也会变空,那张其实还在写(Codex 复核)
+    if (done && done !== streamKey && !tree.cards.get(done)?.answers.some((m) => m.status === 'streaming')) {
       setExpanded((s) => (s.has(done) ? s : new Set(s).add(done)))
       afterglow.current = followRef.current ? { key: done, until: performance.now() + 1500 } : null
     }
@@ -313,7 +314,7 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onOpenTurn }: {
   }, [streamKey])
   useLayoutEffect(() => {
     const g = afterglow.current
-    const k = streamKey ?? (g && performance.now() < g.until ? g.key : null)
+    const k = streamKey ?? (g && performance.now() < g.until && activePath.includes(g.key) ? g.key : null)
     if (!k || !followRef.current || !heights.has(k)) return
     const b = boxes.get(k)
     if (!b) return
@@ -455,7 +456,7 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onOpenTurn }: {
         <div className="am-app t2cv-am">
           <CanvasChrome
             zoom={vp.z}
-            onZoomBy={(f) => { const { w, h } = hostSize(host.current); view.setVp(zoomAt(vp, vp.z * f, w / 2, h / 2)) }}
+            onZoomBy={(f) => { const { w, h } = hostSize(host.current); userView.setVp(zoomAt(vp, vp.z * f, w / 2, h / 2)) }}
             onFit={() => view.fitTo([...boxes.values()], 64)}
             mini={mini}
             onMini={(on) => { setMini(on); setCanvasMiniMapEnabled(on) }}
