@@ -911,6 +911,50 @@ export interface EmbedRendererContribution {
   ): (() => void) | void
 }
 
+/** Where a tool result card shows: `inline` = a card in the chat, under the reply; `desk` = straight into the Agent Desk
+ *  (half width), leaving a placeholder card in the chat. */
+export type ToolResultSurface = 'inline' | 'desk'
+
+/** What a tool result card gets for one finished call (second argument of ToolResultRendererContribution.mount).
+ *  Read-only data plus two narrow actions. There is no way to write files or send a message from here: changes go
+ *  through your own commands or engine tools. */
+export interface ToolResultCall {
+  /** Tool call id (stable across reloads; the host keys `state` by it). */
+  id: string
+  /** Tool name as the model called it. */
+  tool: string
+  /** Parsed JSON arguments (the raw string when they are not valid JSON). */
+  args: unknown
+  /** The tool's result text, as the model saw it. */
+  result: string
+  /** Where this mount lives. The same renderer is mounted again when the person moves the card (chat ↔ Desk). */
+  surface: ToolResultSurface
+  /** View state that should survive a move (scroll, zoom, selection): `set` it as it changes, `get` it on mount.
+   *  In memory only (gone after an app restart). */
+  state: { get(): unknown; set(value: unknown): void }
+  /** Attach `text` as a quote card above the chat input, the same as selecting text in a reply and pressing Quote.
+   *  It is not sent; the person decides. */
+  quote(text: string): void
+}
+
+/** A native result card for a tool **your own engine half registered** (ctx.registerToolResultRenderer, 2026-10-19+).
+ *  Finished, successful calls of that tool show your card instead of the generic one-line tool record; while the call
+ *  runs, when it fails, when `mount` throws, or while your plugin is disabled or reloading, the generic record shows.
+ *  A tool your bundle's engine plugins did not register (a core tool, another plugin's tool) is never handed to you. */
+export interface ToolResultRendererContribution {
+  /** The engine tool name, exactly as your engine half registered it. */
+  tool: string
+  /** Default `inline`. `desk` = straight into the Agent Desk; falls back to `inline` where there is no Desk (phone, Web
+   *  without Desk, Desk turned off). The person can move the card either way afterwards. */
+  surface?: ToolResultSurface
+  /** Card name in the chat, the placeholder and the Desk capsule. Default: the tool name. Pass a function to follow
+   *  the interface language. */
+  title?: string | (() => string)
+  /** Render into the host element (themed, no frame of its own needed); return a cleanup. Called again on every move
+   *  (the old mount is cleaned up first) — restore view state from `call.state`. */
+  mount(el: HTMLElement, call: ToolResultCall): (() => void) | void
+}
+
 /** A user-tunable setting a plugin declares. The host renders the form on the plugin's detail
  *  page and persists values to localStorage `plugin.<pluginId>.<key>` — the plugin reads the
  *  same key at use time (poll-loop reads pick changes up next round; no change notification). */
@@ -1267,6 +1311,9 @@ export interface PluginContext {
   registerFileType(def: FileTypeContribution): boolean | void
   /** Contribute an inline renderer for `![[…]]` embeds this plugin recognises (e.g. its own file type). */
   registerEmbedRenderer(def: EmbedRendererContribution): void
+  /** Contribute a native result card for one of your engine half's tools (2026-10-19+). Absent on older hosts: call as
+   *  `ctx.registerToolResultRenderer?.(…)`. See ToolResultRendererContribution. */
+  registerToolResultRenderer?(def: ToolResultRendererContribution): void
   /** Contribute a "新建 …" entry into the file tree's right-click menu (root + folder). See FileCreatorContribution. */
   registerFileCreator(def: FileCreatorContribution): void
   /** Open (or focus) one of this plugin's own registered views. Defaults to the main area;

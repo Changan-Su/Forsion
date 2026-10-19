@@ -82,6 +82,7 @@ import type {
   SelectionActionContribution,
   StatusItemContribution,
   ThemeContribution,
+  ToolResultRendererContribution,
   ViewContribution,
   ListSourceContribution,
   PluginAutomationRule,
@@ -176,6 +177,8 @@ interface PluginState {
   listSources: Owned<ListSourceContribution>[]
   fileTypes: Owned<FileTypeContribution>[]
   embedRenderers: Owned<EmbedRendererContribution>[]
+  /** 插件给自己引擎半身的工具挂的原生结果卡片(ctx.registerToolResultRenderer);认领校验在 toolResultCards.ts。 */
+  toolResultRenderers: Owned<ToolResultRendererContribution>[]
   fileCreators: Owned<FileCreatorContribution>[]
   /** 宿主注入的视图打开器(桌面壳=workspace.openView);无工作台的宿主保持 null,ctx.openView 即 no-op。 */
   viewOpener: ((type: string, loc?: PluginViewLocation) => void) | null
@@ -1005,7 +1008,7 @@ function afterReconcile(): void {
 type OwnedKey = { [K in keyof PluginState]: PluginState[K] extends Owned<unknown>[] ? K : never }[keyof PluginState]
 const SLICE_KEYS = Object.keys({
   slashItems: 1, selectionActions: 1, commands: 1, themes: 1, panels: 1, statusItems: 1, propertyTypes: 1, settings: 1,
-  settingsViews: 1, storeViews: 1, readiness: 1, views: 1, listSources: 1, fileTypes: 1, embedRenderers: 1, fileCreators: 1,
+  settingsViews: 1, storeViews: 1, readiness: 1, views: 1, listSources: 1, fileTypes: 1, embedRenderers: 1, toolResultRenderers: 1, fileCreators: 1,
 } satisfies Record<OwnedKey, 1>) as OwnedKey[]
 
 /** 摘掉 id 的全部切片贡献;没有它的切片保持原数组身份(订阅者不白白重渲)。 */
@@ -1375,6 +1378,17 @@ export const usePluginStore = create<PluginState>((set, get) => {
       set((s) => ({ embedRenderers: [...s.embedRenderers, { pluginId, item: def }] })),
     registerFileCreator: (def) =>
       set((s) => ({ fileCreators: [...s.fileCreators, { pluginId, item: def }] })),
+    // 只收形状对的;认不认领(工具是不是本插件引擎半身注册的)在画的时候按引擎报的名下工具现判(toolResultCards.claimToolCard)。
+    registerToolResultRenderer: (def) => {
+      if (!ctxAlive()) return
+      const tool = typeof def?.tool === 'string' ? def.tool.trim() : ''
+      if (!tool || typeof def.mount !== 'function') {
+        console.warn(`[plugin:${pluginId}] registerToolResultRenderer 被拒:要有 tool(引擎工具名)和 mount`)
+        return
+      }
+      const item: ToolResultRendererContribution = { ...def, tool, surface: def.surface === 'desk' ? 'desk' : 'inline' }
+      set((s) => ({ toolResultRenderers: [...s.toolResultRenderers, { pluginId, item }] }))
+    },
     // 打开自己的视图:类型名由宿主统一命名空间(plugin:<id>:<viewId>),防跨插件顶替。
     openView: (viewId, opts) => { if (ctxAlive()) get().viewOpener?.(`plugin:${pluginId}:${viewId}`, opts?.location) },
     get viewLocations() { return get().viewLocations ?? undefined },
@@ -2271,6 +2285,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     listSources: [],
     fileTypes: [],
     embedRenderers: [],
+    toolResultRenderers: [],
     fileCreators: [],
     viewOpener: null,
     viewLocations: null,

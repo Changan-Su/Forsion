@@ -21,6 +21,7 @@ import { askOriginOf, insertReplyToNote } from './chat2/insertToNote'
 import { amadeusAvailable } from '../features/runtime'
 import { resolveDeskPath } from '../stores/deskPlan'
 import { useDeskAcceptsFiles } from '../amadeus/plugins/deskCompanion'
+import { ToolCardDeskContext } from '../components/PluginToolCard'
 import { ErrorBoundary } from '../components/ErrorBoundary'
 import { EditorialMessage, type MessageHandlers } from './chat2/EditorialMessage'
 import { ApprovalTray } from './chat2/ApprovalTray'
@@ -505,6 +506,8 @@ export function ChatView({ leaf, params }: ViewProps) {
       onTask: (card, landing) => runTaskCard(card, landing, env().activeId),
       // 回答插回笔记(G3-08):由「问 Tangu」发起的对话优先插回出处那篇;宿主没有 Amadeus 编辑能力就不出按钮。
       onInsertNote: canInsertNote ? (text) => void insertReplyToNote(text, askOriginOf(env().activeMessages, id)) : undefined,
+      // 插件结果卡片的 call.quote:同划线「引用」,挂进这块输入框
+      onQuote: (text) => { const sid = env().activeId ?? null; setQuoteDraft((prev) => quoteAdded(prev, sid, text)) },
       ...(ttsEnabled ? { onSpeak: (text: string) => env().speak(id, text) } : {}),
     }
     handlerCache.set(id, h)
@@ -526,6 +529,7 @@ export function ChatView({ leaf, params }: ViewProps) {
   const deskEnabled = !!activeId && (hasMessages || !!deskHome) && !params.childSurface && !studioChat && UI_MODE !== 'mobile' && !!s.desktopConfig?.agentDeskEnabled
   // Desk 收不收文件(与 store 写入口、引用条同一判据):always 伴随面生效时 Desk 只演伴随面,点开文件一律走新标签页。
   const deskTakesFiles = useDeskAcceptsFiles(deskEnabled)
+  const deskQuote = useCallback((text: string) => setQuoteDraft((prev) => quoteAdded(prev, quoteSid, text)), [quoteSid])
   // 团队成员列表嵌入 Pin Summary 的运行状态,Agent Desk 保持独立。
   const teamDesk = !params.childSurface && !studioChat && UI_MODE !== 'mobile' && !!mvCfg.groupChat && (mvCfg.groupAgents?.length || 0) >= 2
   // 画布(方案「Chat 画布分支」第二步):同一棵会话树的另一种看法。偏好按树根记 —— 在画布里点到别的支,不会翻回对话。
@@ -584,6 +588,7 @@ export function ChatView({ leaf, params }: ViewProps) {
   }
 
   return (
+    <ToolCardDeskContext.Provider value={deskTakesFiles && activeId && !childSelections[activeId] && !canvasOn ? activeId : null}>
     <div
       className={`t2-chat-view${refDrop ? ' refdrop' : ''}`}
       data-chat-surface={leaf.type}
@@ -952,9 +957,10 @@ export function ChatView({ leaf, params }: ViewProps) {
         {deskEnabled && activeId ? <DeskCard sessionId={activeId} /> : null}
       </div>}
       </div>
-      {deskEnabled && activeId && !childSelections[activeId] && !canvasOn ? <AgentDesk sessionId={activeId} /> : null}
+      {deskEnabled && activeId && !childSelections[activeId] && !canvasOn ? <AgentDesk sessionId={activeId} onQuote={deskQuote} /> : null}
       {!params.childSurface && activeId ? <ChildChatPanel key={activeId} parentId={activeId} /> : null}
     </div>
+    </ToolCardDeskContext.Provider>
   )
 }
 

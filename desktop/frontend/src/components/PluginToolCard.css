@@ -1,0 +1,27 @@
+/* 插件工具结果卡片:外框沿用 Intelligent UI 卡(.sketch-card,base.css)的安静轮廓,卡头标题后跟插件名。
+ * 插件内容直接挂进 .plugin-tool-card-body,宿主不给内边距以外的样式 —— 主题 token 插件自己用。 */
+.plugin-tool-card-by { font-weight: 400; color: var(--text-faint, var(--text-muted)); }
+.plugin-tool-card-body.inline { padding: 0 12px 12px; min-width: 0; overflow-wrap: anywhere; }
+.plugin-tool-card .sketch-card-head .sketch-card-title { padding-left: 12px; padding-top: 7px; }
+
+/* 占位卡:这次调用正在 Desk 里显示 —— 一行:图标、名字 / 插件名 · 状态、「收回到对话」 */
+.plugin-tool-card.is-stub { display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 12px; }
+.plugin-tool-stub-ic { flex: none; color: var(--text-muted); }
+.plugin-tool-stub-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.plugin-tool-stub-name { font-size: var(--ui-font-body, 13px); font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plugin-tool-stub-meta { font-size: var(--ui-font-meta, 12px); color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plugin-tool-stub-back {
+  flex: none; display: inline-flex; align-items: center; gap: 5px;
+  border: 0; background: transparent; color: var(--text-muted); cursor: pointer;
+  font: inherit; font-size: var(--ui-font-meta, 12px);
+  padding: 5px 9px; border-radius: var(--radius-sm);
+  transition: background var(--duration-fast, .15s), color var(--duration-fast, .15s);
+}
+.plugin-tool-stub-back:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.1)); color: var(--text); }
+
+/* Desk 里的一格:整格交给插件,可滚 */
+.plugin-tool-card-desk { flex: 1; min-height: 0; overflow: auto; }
+.plugin-tool-card-body.desk { padding: 12px 16px; min-width: 0; overflow-wrap: anywhere; }
+.plugin-tool-card-raw { flex: 1; min-height: 0; overflow: auto; padding: 12px 16px; }
+.plugin-tool-card-raw-note { font-size: var(--ui-font-meta, 12px); color: var(--text-muted); margin-bottom: 8px; }
+.plugin-tool-card-raw pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-mono); font-size: var(--ui-font-meta, 12px); color: var(--text); }

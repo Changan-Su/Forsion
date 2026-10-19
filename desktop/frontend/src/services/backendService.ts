@@ -876,6 +876,8 @@ export type PluginInfo = {
   lastError?: string
   /** 上一次启动 / 停用超时、还在后台收尾:结束后引擎按开关自动收敛,这期间不会再启动它。 */
   settling?: boolean
+  /** 此刻名下注册的工具名(10-19 起的引擎才给;和核心工具撞名的已剔掉)。插件结果卡片只认这里列出的。 */
+  tools?: string[]
 }
 /** 重扫 / 安装的结果。reloadedIds 有 = 引擎会热插拔(10-02 起):原地升级即生效,needsRestart 只剩「没法热换」那几种(见 needsRestart);
  *  旧引擎不给 reloadedIds,只激活全新 id,原地更新一律得重启。 */

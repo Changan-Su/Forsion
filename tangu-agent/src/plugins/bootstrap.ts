@@ -286,6 +286,8 @@ export interface PluginStatus {
   lastError?: string;
   /** 上一次 activate / deactivate 超时后还在后台跑(busy):落定后按开关自动收敛,这期间不会再激活它。 */
   settling?: boolean;
+  /** 此刻在跑的实例名下注册的工具名(模型看到的名字),不含和核心工具撞名的。桌面据此只让插件给自己引擎半身的工具挂结果卡片。 */
+  tools?: string[];
 }
 
 /** 生命周期限时(测试改小)。超时只是不再等,对方仍在后台跑 —— 见 withDeadline。 */
@@ -703,5 +705,11 @@ export function pluginStatus(id: string): PluginStatus {
   }
   if (e.lastError) out.lastError = e.lastError;
   if (e.busy && !e.inst) out.settling = true;
+  if (e.inst) {
+    const all = listToolProviders();
+    const core = new Set(all.filter((p) => p.origin !== 'plugin').flatMap((p) => p.tools().map((t) => t.name)));
+    const tools = [...new Set(all.filter((p) => providerOwner.get(p.id) === e.d.manifest.id).flatMap((p) => p.tools().map((t) => t.name)))].filter((n) => !core.has(n));
+    if (tools.length) out.tools = tools;
+  }
   return out;
 }

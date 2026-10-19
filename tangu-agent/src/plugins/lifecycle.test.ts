@@ -322,6 +322,9 @@ describe('限时、隔离与归属(Codex 10-02)', () => {
     const h = await host();
     await h.boot.activateAllPlugins();
     expect(await visibleTools(h)).toEqual(['lc_b_tool']);
+    // 名下工具只报此刻真归它的:被覆盖的一方不报,桌面不许它给 lc_b_tool 挂结果卡片
+    expect(h.boot.pluginStatus('lc-a').tools).toBeUndefined();
+    expect(h.boot.pluginStatus('lc-b').tools).toEqual(['lc_b_tool']);
     await h.boot.setPluginEnabledLive('lc-a', false);
     expect(await visibleTools(h)).toEqual(['lc_b_tool']);
     await h.boot.setPluginEnabledLive('lc-b', false);
@@ -413,7 +416,7 @@ describe('requiresPlugins 依赖', () => {
     const st = h.boot.pluginStatus;
 
     expect(await visibleTools(h)).toEqual(['lc_base_tool', 'lc_dep_tool', 'lc_top_tool']);
-    expect(st('lc-dep')).toEqual({ active: true, version: '1.0.0', requiresPlugins: [{ id: 'lc-base' }] });
+    expect(st('lc-dep')).toEqual({ active: true, version: '1.0.0', requiresPlugins: [{ id: 'lc-base' }], tools: ['lc_dep_tool'] });
     expect(st('lc-ver').waitingFor).toEqual([{ id: 'lc-base', reason: 'version', minVersion: '2.0.0', have: '1.5.0' }]);
     expect(st('lc-miss').waitingFor).toEqual([{ id: 'lc-nope', reason: 'missing' }]);
     expect(st('lc-cy1').waitingFor).toEqual([{ id: 'lc-cy2', reason: 'cycle' }]);
@@ -642,12 +645,13 @@ describe('HTTP 面(routes/plugins.ts)', () => {
     try {
       const list = await call('GET', '/agent/plugins');
       const dep = list.plugins.find((p: any) => p.id === 'lc-dep');
-      expect(dep).toMatchObject({ enabled: true, needsRestart: false, active: true, version: '1.0.0', requiresPlugins: [{ id: 'lc-base', minVersion: '1.0.0' }], source: 'folder' });
+      expect(dep).toMatchObject({ enabled: true, needsRestart: false, active: true, version: '1.0.0', requiresPlugins: [{ id: 'lc-base', minVersion: '1.0.0' }], source: 'folder', tools: ['lc_dep_tool'] });
       expect(dep.waitingFor).toBeUndefined();
 
       const put = await call('PUT', '/agent/plugins/lc-base/enabled', { enabled: false });
       expect(put).toMatchObject({ ok: true, enabled: false, active: false });
       expect(put.plugins.find((p: any) => p.id === 'lc-dep')).toMatchObject({ active: false, waitingFor: [{ id: 'lc-base', reason: 'off' }] });
+      expect(put.plugins.find((p: any) => p.id === 'lc-dep').tools).toBeUndefined(); // 休眠了就不报名下工具
 
       const rescan = await call('POST', '/agent/plugins/rescan');
       expect(rescan).toMatchObject({ ok: true, addedIds: [], reloadedIds: [], removedIds: [], needsRestart: false });
