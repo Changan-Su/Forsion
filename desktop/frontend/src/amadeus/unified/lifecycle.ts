@@ -16,8 +16,9 @@ export interface UnifiedPipeHandle {
   retire: (movedTo?: string) => void
   /** 挪动 IPC 在途(holdUnifiedPath):此后不写盘、改动留在手里;已经发出的那发写落定后 resolve。 */
   hold?: () => Promise<void>
-  /** 放手。movedTo = 挪成了:按住期间打的字并进新路径的盘面(主进程已改写过引用),本实例退休;没给 = 没挪成,照旧写。 */
-  release?: (movedTo?: string) => Promise<void>
+  /** 放手。movedTo = 挪成了:按住期间打的字并进新路径的盘面(主进程已改写过引用),本实例退休;没给 = 没挪成,照旧写。
+   *  wholeFolder = 挪的是它所在的整个文件夹(原文件夹已不在)。 */
+  release?: (movedTo?: string, wholeFolder?: boolean) => Promise<void>
   /** OS 拖入/上传按钮的文件走这里进 unified(存附件 + 光标处插 `![[base]]`);可选。
    *  false = 本实例不接(只读 / 已退休 / 编辑器不在),路由接着问下一个同路径实例。 */
   insertFiles?: (files: File[]) => boolean | void
@@ -192,7 +193,7 @@ export async function holdUnifiedPath(path: string, kind: 'file' | 'prefix' = 'f
   const hs = [...handles].filter((h) => h.hold && h.release && (h.path === path || (kind === 'prefix' && h.path.startsWith(`${path}/`))))
   await Promise.all(hs.map((h) => h.hold!().catch(() => {})))
   return async (to) => {
-    for (const h of hs) await h.release!(to == null ? undefined : kind === 'file' ? to : to + h.path.slice(path.length)).catch(() => {})
+    for (const h of hs) await h.release!(to == null ? undefined : kind === 'file' ? to : to + h.path.slice(path.length), kind === 'prefix').catch(() => {})
   }
 }
 
