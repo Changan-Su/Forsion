@@ -52,6 +52,7 @@
     "e2e:chatevents": "node scripts/chat-events.e2e.cjs",
     "e2e:nested": "node scripts/nested-sessions.e2e.cjs",
     "e2e:anchors": "node scripts/branch-anchors.e2e.cjs",
+    "e2e:chatcanvas": "node scripts/chat-canvas.e2e.cjs",
     "e2e:musedm": "node scripts/muse-dm.e2e.cjs",
     "e2e:computerhistory": "node scripts/computer-history.e2e.cjs",
     "e2e:appdock": "node scripts/app-dock.e2e.cjs",
