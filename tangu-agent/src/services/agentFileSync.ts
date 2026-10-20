@@ -23,7 +23,8 @@ type Guard = () => void;
 type Category = 'DEF' | 'MEM';
 const categoryOf = (p: string): Category => p === 'MEMORY.md' || p === TOMBSTONES || p.startsWith('LOG/') ? 'MEM' : 'DEF';
 /** base:可合并的文件(human/ 那几份、USER.md)记下上次两边一致时的原文,两边都改了就拿它三方合并,不再整份出副本。 */
-interface PrevEntry { seq?: number; hash?: string; lastCloudMtimeMs?: number; base?: string }
+/** pending:可合并的文件推送 / 落盘之前先标上,确认了才换成新影子(见 reconcileFile 的 unsure)。push = 带 CAS 推的那份内容的哈希。 */
+interface PrevEntry { seq?: number; hash?: string; lastCloudMtimeMs?: number; base?: string; pending?: { push?: string } }
 interface PrevState { files: Record<string, PrevEntry> }
 const emptyResult = (): AgentFileSyncResult => ({ ok: true, agents: 0, pushed: 0, pulled: 0, deleted: 0, skipped: 0, conflicts: 0 });
 function fail(result: AgentFileSyncResult, e: unknown): void {
@@ -300,7 +301,13 @@ async function reconcileFile(cloud: AgentFilesBrain, uid: string, slug: string, 
   const initial = initialMemory ? Buffer.from(initialMemory.content) : readSyncBytes(root, abs);
   const hash = initial === null ? null : sha256(initial);
   const live = meta && !meta.deleted ? meta : undefined;
-  const pe = prev.files[p];
+  const stored = prev.files[p];
+  // 上次推送 / 落盘没等到确认:云端 seq 没动 = 没落成;带 CAS 推的,seq 正好 +1 却不是推的那份 = 那一位被别的设备占了、也没落成 ——
+  // 这两种旧影子照用。别的情况拿不准落没落成,当没有影子(第一次见面)
+  const missed = (pd: { push?: string }): boolean => live?.seq === stored!.seq
+    || (pd.push !== undefined && stored!.seq !== undefined && live?.seq === stored!.seq + 1 && live.hash != null && live.hash !== pd.push);
+  if (stored?.pending && missed(stored.pending)) delete stored.pending;
+  const pe = stored?.pending ? undefined : stored;
   const modern = !live || (typeof live.seq === 'number' && live.hash != null);
   let decision: Decision;
   if (modern) decision = decide(hash, pe?.seq != null && pe.hash ? { seq: pe.seq, hash: pe.hash } : null, live ? { seq: live.seq!, hash: live.hash ?? null } : null);
@@ -311,14 +318,15 @@ async function reconcileFile(cloud: AgentFilesBrain, uid: string, slug: string, 
   const record = (seq: number | undefined, cloudHash: string | undefined, mtime?: number, base?: Buffer): void => {
     prev.files[p] = { seq, hash: cloudHash, lastCloudMtimeMs: mtime, ...(opts.merge && base ? { base: base.toString('utf8') } : {}) };
   };
-  // 推送 / 落合并结果之前先把记下的原文撤掉并落盘:云端收下了却没等到回执(断网、崩溃)时,下次拿旧原文合并,
-  // 会把别的设备随后恢复的行当成「这边删了」(10-20 Codex 复核)。没原文就按第一次见面取并集:只会多出行,不会丢。
-  // 返回「放回去」:云端明确拒了(CAS 冲突)/ 没落成,旧原文照样是两边共同的祖先。
-  const unsure = (): (() => void) => {
+  // 推送 / 落盘之前先给这一份的影子标上 pending 并落盘(10-20 Codex 复核两轮):云端收下了却没等到回执(断网、崩溃),
+  // 或者本地落了盘、影子没来得及记就崩,旧影子都会出错 —— 旧原文当基线,会把别的设备随后恢复的行当成「这边删了」;
+  // 旧哈希还会让本机撤销回旧样子时被当成「没动」、被云端盖掉。下次见到 pending:云端 seq 没动就照用,动了按第一次见面取并集(只会多出行)。
+  // 返回「撤掉标记」:云端明确拒了(CAS 冲突)/ 本地没落成,旧影子照样作数。
+  const unsure = (pushing?: Buffer): (() => void) => {
     const entry = prev.files[p];
-    if (!opts.merge || !opts.persist || entry?.base === undefined) return () => {};
-    const kept = entry.base; delete entry.base; opts.persist();
-    return () => { if (prev.files[p] === entry) { entry.base = kept; opts.persist!(); } };
+    if (!opts.merge || !opts.persist || !entry || entry.pending) return () => {};
+    entry.pending = pushing ? { push: sha256(pushing) } : {}; opts.persist();
+    return () => { if (prev.files[p] === entry) { delete entry.pending; opts.persist!(); } };
   };
   // 记下的原文只在和影子哈希对得上时才当合并基线(老版本写的影子没有原文;对不上就当第一次见面,按并集合)
   const base = opts.merge && pe?.base !== undefined && pe.hash === sha256(Buffer.from(pe.base)) ? pe.base : null;
@@ -343,13 +351,16 @@ async function reconcileFile(cloud: AgentFilesBrain, uid: string, slug: string, 
   };
   const pull = async (conflict: boolean, fetched?: { file: AgentFileContent; bytes: Buffer }): Promise<void> => {
     const { file, bytes } = fetched ?? await fetchRemote();
-    withMemoryDirectoryLock(dir, () => {
-      assertUnchanged();
-      if (conflict) archive();
-      if (memory) memory.commit({ expectedVersion: initialMemory!.version, content: bytes.toString('utf8'), source: { kind: 'sync' }, signal });
-      else atomicSyncWrite(root, abs, bytes, guard);
-      record(file.seq, sha256(bytes), file.mtimeMs, bytes);
-    });
+    const keepOld = unsure();
+    try {
+      withMemoryDirectoryLock(dir, () => {
+        assertUnchanged();
+        if (conflict) archive();
+        if (memory) memory.commit({ expectedVersion: initialMemory!.version, content: bytes.toString('utf8'), source: { kind: 'sync' }, signal });
+        else atomicSyncWrite(root, abs, bytes, guard);
+        record(file.seq, sha256(bytes), file.mtimeMs, bytes);
+      });
+    } catch (e) { keepOld(); throw e; }
     result.pulled++;
     // 定义文件被云端覆盖必须留痕:别的设备/网页端存过 config.toml,本机就静默换了参数,09-13 排查时无从判断是谁写的。
     // Library 文件量大不记;config.toml 额外对比 max_iterations —— 最容易悄悄咬人的一个字段。
@@ -369,7 +380,7 @@ async function reconcileFile(cloud: AgentFilesBrain, uid: string, slug: string, 
     if (!merged) { await pull(true, fetched); return; }
     const out = Buffer.from(merged.content);
     verifyBytes({}, out);
-    const keepOld = unsure(); // 落了合并结果、影子还没落盘就崩:下次按并集合,不拿旧原文
+    const keepOld = unsure(); // 落了合并结果、影子还没落盘就崩:下次不拿旧原文合
     try {
       withMemoryDirectoryLock(dir, () => {
         assertUnchanged();
@@ -383,7 +394,7 @@ async function reconcileFile(cloud: AgentFilesBrain, uid: string, slug: string, 
     guard();
     const current = readSyncBytes(root, abs);
     if (!current || !current.equals(out)) return; // 又被改了:下次同步再推
-    const keepFetched = unsure();
+    const keepFetched = unsure(out);
     try {
       const res = await cloud.putFile(uid, slug, p, { content: merged.content, isBinary: false, size: out.length, mtimeMs: Date.now(), deviceId: getDeviceId(), baseSeq: fetched.file.seq! }, { signal });
       guard(); record(res.seq, sha256(out), res.mtimeMs, out); result.pushed++;
@@ -413,7 +424,7 @@ async function reconcileFile(cloud: AgentFilesBrain, uid: string, slug: string, 
   if (!initial) return;
   verifyBytes({}, initial); guard(); assertUnchanged();
   const isBinary = !opts.text && !TEXT_EXTS.has(extname(p).toLowerCase());
-  const keep = unsure();
+  const keep = unsure(initial);
   try {
     const res = await cloud.putFile(uid, slug, p, { ...(isBinary ? { contentBase64: initial.toString('base64') } : { content: initial.toString('utf8') }), isBinary, size: initial.length, mtimeMs: Date.now(), deviceId: getDeviceId(), ...(decision.kind === 'pushCreate' ? { baseSeq: 0 } : decision.baseSeq >= 0 ? { baseSeq: decision.baseSeq } : {}) }, { signal });
     guard(); record(res.seq, sha256(initial), res.mtimeMs, initial); result.pushed++;

@@ -88,6 +88,16 @@ function device(name: string) {
   return d;
 }
 const row = (id: string, name: string) => ({ id, cells: { n: name, d: '2026-10-22' } });
+/** 下一次推 __human__/CALENDAR.db 失败一次:landed = 云端已经收下、只是回执丢了;否则请求根本没到服务端。 */
+function failNextCalendarPut(cloud: ReturnType<typeof fakeCloud>, landed: boolean) {
+  const put = cloud.putFile.bind(cloud);
+  cloud.putFile = async (...args: Parameters<typeof put>) => {
+    if (args[1] !== '__human__' || args[2] !== 'CALENDAR.db') return put(...args);
+    cloud.putFile = put;
+    if (landed) await put(...args);
+    throw new Error('socket hang up');
+  };
+}
 
 let made: Array<ReturnType<typeof device>> = [];
 const prevHome = process.env.TANGU_HOME;
@@ -232,12 +242,7 @@ describe('human/ in the cloud — two devices', () => {
     await b.enroll(cloud); await b.sync(cloud);
     // A 删了 r2;推 CALENDAR.db 时云端收下了,回执在路上丢了(断网 / 进程被杀)
     a.use(); a.editCalendar((rows) => rows.filter((r) => r.id !== 'r2'));
-    const put = cloud.putFile.bind(cloud);
-    cloud.putFile = async (...args: Parameters<typeof put>) => {
-      const res = await put(...args);
-      if (args[1] === '__human__' && args[2] === 'CALENDAR.db') { cloud.putFile = put; throw new Error('socket hang up'); }
-      return res;
-    };
+    failNextCalendarPut(cloud, true);
     a.use(); expect((await runAgentFilesSync(cloud, 'u')).error).toMatch(/socket hang up/);
     expect(rowNames(cloudText(cloud, '__human__', 'CALENDAR.db')!)).toEqual(['r1:Dentist']);
     // B 收到删除,又把 r2 原样加回来(撤销删除),另加一条 r3
@@ -249,6 +254,38 @@ describe('human/ in the cloud — two devices', () => {
     await a.sync(cloud);
     for (const d of [a, b]) { await d.sync(cloud); d.use(); expect(rowNames(d.human('CALENDAR.db'))).toEqual(['r1:Dentist', 'r2:Review', 'r3:Gym']); }
     expect(rowNames(readFileSync(a.calendar, 'utf8'))).toEqual(['r1:Dentist', 'r2:Review', 'r3:Gym']);
+  });
+
+  it('after an unacknowledged upload, undoing the change locally is not mistaken for "untouched" and overwritten by the cloud', async () => {
+    const cloud = fakeCloud(['human', 'human-folder']);
+    const [a] = two();
+    const original = CAL([['r1', 'Dentist'], ['r2', 'Review']]);
+    writeFileSync(a.calendar, original);
+    await a.enroll(cloud); await a.sync(cloud);
+    a.use(); a.editCalendar((rows) => rows.filter((r) => r.id !== 'r2'));
+    failNextCalendarPut(cloud, true); // 删除上了云,回执丢了
+    a.use(); expect((await runAgentFilesSync(cloud, 'u')).error).toMatch(/socket hang up/);
+    writeFileSync(a.calendar, original); // 撤销删除:本机又回到上次同步一致时的样子(和旧影子哈希一样)
+    await a.sync(cloud);
+    a.use();
+    expect(rowNames(a.human('CALENDAR.db'))).toEqual(['r1:Dentist', 'r2:Review']);
+    expect(rowNames(readFileSync(a.calendar, 'utf8'))).toEqual(['r1:Dentist', 'r2:Review']);
+    expect(rowNames(cloudText(cloud, '__human__', 'CALENDAR.db')!)).toEqual(['r1:Dentist', 'r2:Review']);
+  });
+
+  it('an upload that never reached the server keeps the old baseline, so a deleted row does not come back', async () => {
+    const cloud = fakeCloud(['human', 'human-folder']);
+    const [a, b] = two();
+    writeFileSync(a.calendar, CAL([['r1', 'Dentist'], ['r2', 'Review']]));
+    writeFileSync(b.calendar, readFileSync(a.calendar, 'utf8'));
+    await a.enroll(cloud); await a.sync(cloud);
+    await b.enroll(cloud); await b.sync(cloud);
+    a.use(); a.editCalendar((rows) => rows.filter((r) => r.id !== 'r2'));
+    failNextCalendarPut(cloud, false); // 网络抖了一下,请求没到服务端
+    a.use(); expect((await runAgentFilesSync(cloud, 'u')).error).toMatch(/socket hang up/);
+    b.use(); b.editCalendar((rows) => [...rows, row('r3', 'Gym')]); await b.sync(cloud); // 期间 B 加了一条
+    for (const d of [a, b, a]) await d.sync(cloud);
+    for (const d of [a, b]) { d.use(); expect(rowNames(d.human('CALENDAR.db'))).toEqual(['r1:Dentist', 'r3:Gym']); }
   });
 
   it('waits for the desktop\'s write lock on the vault calendar instead of writing under it', async () => {
