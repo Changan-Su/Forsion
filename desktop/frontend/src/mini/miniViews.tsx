@@ -26,10 +26,10 @@ registerMessages({
 /** Under the Suspense boundary: acknowledge only once the actual Chat has mounted. */
 function MiniChat(props: ViewProps) {
   const sessionId = props.params.sessionId
-  useEffect(() => {
-    if (typeof sessionId === 'string') window.tangu?.miniSessionReady?.(sessionId)
-  }, [sessionId])
   const Chat = readTanguChatViews()?.Chat // 对话视图是 Tangu 交出来的(核心插件化 2e-7;原来这里 lazy import ChatView)
+  useEffect(() => {
+    if (Chat && typeof sessionId === 'string') window.tangu?.miniSessionReady?.(sessionId) // 没装 Tangu 画的是空白,不报「已就绪」
+  }, [Chat, sessionId])
   return Chat ? <Chat {...props} /> : null
 }
 

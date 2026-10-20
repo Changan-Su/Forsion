@@ -3,6 +3,7 @@ import type { Attachment } from '../types'
 import { newBoard, type ImageBoard } from '../views/imageStudio/model'
 import { generationBoxes, type GenerationPlaceholder, type GenerationRequest } from '../views/imageStudio/generation'
 import { loadBoards, saveBoard } from '../views/imageStudio/storage'
+import { notifyComposerPrefill, registerComposerPrefill } from '../amadeus/plugins/tanguSeam'
 
 interface ImageStudioState {
   boards: Record<string, ImageBoard>
@@ -166,3 +167,14 @@ export const useImageStudio = create<ImageStudioState>((set, get) => ({
   },
   removeGeneration: (boardId, id) => set(s => ({ placeholders: { ...s.placeholders, [boardId]: (s.placeholders[boardId] || []).filter(item => item.id !== id) } })),
 }))
+
+// 往工作室里那条对话的输入框预填(核心插件化 2e-8:原来是 Composer2 反读本 store):只给图像工作室面板里、看得见的那张输入卡
+registerComposerPrefill({
+  claim: ({ card, sessionId }) => {
+    const p = useImageStudio.getState().pending
+    if (!p || p.sessionId !== sessionId || !card.closest('[data-image-studio-chat]') || !card.getClientRects().length) return null
+    if (!useImageStudio.getState().consume(p.seq)) return null
+    return { texts: [p.text], attachments: p.attachments }
+  },
+})
+useImageStudio.subscribe((s, prev) => { if (s.pending !== prev.pending) notifyComposerPrefill() })
