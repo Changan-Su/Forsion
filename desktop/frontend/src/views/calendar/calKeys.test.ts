@@ -36,7 +36,9 @@ describe('classifyCalKey', () => {
 
   it('2026-10-16:撤销 / 复制选中 / 新建 / 今天 / 改标题 / Esc', () => {
     expect(classifyCalKey(k('z', { metaKey: true }))).toEqual({ kind: 'undo' })
-    expect(classifyCalKey(k('z', { metaKey: true, shiftKey: true }))).toBeNull() // ⇧⌘Z 不劫持(重做没做)
+    expect(classifyCalKey(k('z', { metaKey: true, shiftKey: true }))).toEqual({ kind: 'redo' })
+    expect(classifyCalKey(k('x', { ctrlKey: true }))).toEqual({ kind: 'cut' })
+    expect(classifyCalKey(k('F10', { shiftKey: true }))).toEqual({ kind: 'menu' })
     expect(classifyCalKey(k('d', { ctrlKey: true }))).toEqual({ kind: 'duplicate' })
     expect(classifyCalKey(k('d'))).toEqual({ kind: 'mode', mode: 'day' }) // 单独 d 仍是切模式
     expect(classifyCalKey(k('c'))).toEqual({ kind: 'new' })

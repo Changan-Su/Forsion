@@ -7,7 +7,7 @@
  *  · 桌面:单击空白 = 草稿(默认 1 小时),按住拖 = 拖出时长,全天行 / 月视图横拖 = 多天;草稿不落盘,标题在格子里打,
  *    Enter / 点别处保存,Esc / 没写标题就点走 = 丢弃。
  *  · 同日用户改口:编辑事件在事件旁的浮卡(EventCard),草稿的选日历 / 保存也是草稿块旁的浮卡(DraftCard),右栏只放待办。
- *  · 手机这一轮不动:双击空白当场建 30 分钟事件 + 浮卡。 */
+ *  · 2026-10-20 第二轮方案:桌面右键动作 + 非模态浮卡;手机贴底抽屉、错位起止圆点,轻点空白先建草稿。 */
 import {
   forwardRef,
   useEffect,
@@ -30,10 +30,10 @@ import { zoomOf, UI_MODE, useViewModes, ViewModeSwitch } from '@lcl/engine'
 import { AstryxScope } from '../theme/astryxBridge'
 import { parseCalDate } from '@amadeus-shared/db/calDate'
 import { usePageStore } from '../amadeus/store/pageStore'
+import { isStamped } from '../amadeus/blocks/database/propertyTypes'
 import {
   setAggCell,
   createAggEvent,
-  duplicateAggRow,
   firstDateCol,
   type AggDb,
   type AggRow,
@@ -48,10 +48,14 @@ import { useMdCalDbs } from '../amadeus/store/mdMarkStore'
 import { registerMessages, useI18n } from '../i18n'
 import { track } from '../achievements/store'
 import { EventCard, type Anchor } from './calendar/EventCard'
+import { EventMenu, type EventCommand } from './calendar/EventMenu'
+import './calendar/eventSurface.css'
+import { clearCalendarClipboard, cloneCalendarEvent, copyCalendarEvent, pasteCalendarEvent, useCalendarClipboard } from './calendar/eventClipboard'
+import { notifyApp } from '../stores/notificationStore'
 import { DraftCard } from './calendar/DraftCard'
 import { MODE_ITEMS, classifyCalKey } from './calendar/calKeys'
 import { layoutTimedEvents } from './calendar/eventLayout'
-import { deleteCalendarRow, rescheduleCalendarRow, undoLastCalendarEdit } from './calendar/eventActions'
+import { calendarScope, deleteCalendarRow, rescheduleCalendarRow, undoLastCalendarEdit, redoLastCalendarEdit } from './calendar/eventActions'
 import { TODO_DRAG_MIME, draftRange, draftValue, pickDraftDb } from './calendar/draft'
 import {
   HOURS,
@@ -117,15 +121,17 @@ registerMessages({
   'calview.a11yDayEvents': { zh: '{m} 月 {d} 日事件', en: 'Events on {m}/{d}' },
   'calview.dayHeading': { zh: '{m} 月 {d} 日', en: '{m}/{d}' },
   'calview.closeAgenda': { zh: '关闭日程列表', en: 'Close agenda list' },
+  'calview.resizeStart': { zh: '调整开始时间', en: 'Adjust start time' },
+  'calview.resizeEnd': { zh: '调整结束时间', en: 'Adjust end time' },
 })
 
 // 小时高度改为可缩放状态(calendarNavStore.hourPx);CSS 网格线经 --amx-hour-px 变量同步(TimeScroll 根注入)。
 const HEAD_H = 26
-const EDGE = 8.4 // 事件上下边缘「拉伸时长」命中带(px);比原 7 宽松约 20%,更好抓。与 CSS ::before/::after 高度同步
+const EDGE = 8.4 // Selected desktop event edge hit zone; short events reserve their middle for movement/taps.
 const SHORT_PX = 34 // 块高不够两行(约 45 分钟以内)→ 排成一行「标题 起始时间」
 const DAY_HALF = 150 // 横向日窗 ±150 天(≈10 个月,足够一次会话连续滚动)
 const WEEK_HALF = 40 // 纵向周窗 ±40 周
-/** 手机(单列壳)这一轮不动:双击当场建 + 浮卡。桌面才有单击 / 拖出草稿。 */
+/** Phone uses a bottom drawer and touch controls; desktop keeps the adjacent nonmodal card. */
 const DESK = !(UI_MODE === 'mobile' || (typeof window !== 'undefined' && !!window.tangu?.mobile))
 
 interface CalApi { prev(): void; next(): void; today(): void; goto(date: Date): void }
@@ -170,7 +176,7 @@ function buildEvents(entries: CalEntry[], vault: string, byVault: Parameters<typ
         end: cd.end ? toLocalDate(cd.end) : null,
         allDay: cd.allDay,
         // 可编辑投影(笔记 `@` 标记源)给了 writeCell → 允许拖拽/改期;删除仍由 db.readonly 关着。
-        readonly: db.readonly && !db.writeCell,
+        readonly: (!!db.readonly && !db.writeCell) || isStamped(db.columns.find((c) => c.id === dateCol)?.type ?? ''),
         check: checkboxCol,
         done: checkboxCol ? r.cells[checkboxCol] === true : undefined,
       })
@@ -237,8 +243,16 @@ export function CalendarView({ leafId }: { leafId?: string } = {}) {
   const setHourPx = useCalendarNav((s) => s.setHourPx)
   const jumpNonce = useCalendarNav((s) => s.jumpNonce)
   const selection = useCalendarNav((s) => s.selection)
+  const hasDraft = useCalendarNav((s) => !!s.draft)
   // 点开的事件:事件旁的浮卡(桌面、手机都是)。selection 只是高亮(刚建 / 刚复制的那条),Enter 再开卡。
   const [card, setCard] = useState<{ key: string; at: Anchor } | null>(null)
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
+  const [collapsed, setCollapsed] = useState(false)
+  const [preview, setPreview] = useState<CalEvent | null>(null)
+  const [gesture, setGesture] = useState(false)
+  const [focusTitle, setFocusTitle] = useState(false)
+  const clip = useCalendarClipboard((s) => s.clip)
+  const pasteAt = useRef<Date | undefined>(undefined)
   const titleRef = useRef<HTMLSpanElement>(null)
   const api = useRef<CalApi>(null)
   // 月视图当前看的是哪个月:周首日一变,月视图按新周首日整块重挂(key 带 firstDow),重挂后回到这个月而不是跳回今天
@@ -246,8 +260,8 @@ export function CalendarView({ leafId }: { leafId?: string } = {}) {
   const monthAnchor = useRef<MonthAnchor | null>(null)
   useEffect(() => { if (mode !== 'month') monthAnchor.current = null }, [mode])
   const selRef = useRef<CalEvent | null>(null) // 常驻键盘 effect 读当前选中(避免 [] 闭包读旧值)
-  const clipRef = useRef<{ db: AggDb; rowId: string } | null>(null) // 复制的事件(会话内内存剪贴板)
   const pendingKey = useRef<string | null>(null) // 刚建 / 刚复制的那行:出现在事件流里就选中它
+  const interactionEpoch = useRef(0)
 
   // mini 日历点某日 → 主区丝滑跳转(当前挂载的 month/time 子视图各自在自身坐标系里滚动)。
   useEffect(() => {
@@ -282,20 +296,39 @@ export function CalendarView({ leafId }: { leafId?: string } = {}) {
 
   /** 点开事件:在事件旁浮卡编辑(10-16 用户:「和之前一样在旁边的悬浮卡片,不要在 right panel」)。 */
   const pick = (key: string, at: Anchor): void => {
-    finishDraft()
+    ++interactionEpoch.current
+    if (DESK) finishDraft()
+    else {
+      if (useCalendarNav.getState().draft?.title.trim() && !window.confirm(t('calside.discard'))) return
+      useCalendarNav.getState().setDraft(null)
+    }
     pendingKey.current = null // 用户自己点了别的:等着的新行到了也别再把选中抢过去
-    useCalendarNav.getState().setSelection(null)
+    const ev = eventsRef.current.find((e) => e.key === key)
+    if (ev) useCalendarNav.getState().setSelection({ key, target: ev })
+    setMenu(null)
+    setCollapsed(false)
+    setFocusTitle(false)
+    pasteAt.current = undefined
     setCard({ key, at })
   }
   /** 刚建 / 刚复制的那条:只高亮(不弹卡),Delete / ⌘D 对它生效,Enter 开卡。 */
   const selectWhenReady = (key: string): void => {
     const ev = eventsRef.current.find((e) => e.key === key)
     if (!ev) { pendingKey.current = key; return }
-    if (DESK) useCalendarNav.getState().setSelection({ key, target: ev })
+    useCalendarNav.getState().setSelection({ key, target: ev })
+    if (!DESK) {
+      const node = rootRef.current?.querySelector<HTMLElement>(`[data-key="${CSS.escape(key)}"]`)
+      if (node) {
+        const r = node.getBoundingClientRect()
+        setCollapsed(false)
+        setCard({ key, at: { left: r.left, top: r.top, right: r.right, bottom: r.bottom, zoom: zoomOf(node) || 1 } })
+      }
+    }
   }
   // 事件流一变:等着的新行到了就高亮;高亮的那条换成最新对象,被删了就清掉。
   useEffect(() => {
     const nav = useCalendarNav.getState()
+    if (card && !events.some((e) => e.key === card.key)) { setCard(null); setMenu(null) }
     const p = pendingKey.current
     if (p && events.some((e) => e.key === p)) { pendingKey.current = null; selectWhenReady(p) }
     const sel = useCalendarNav.getState().selection
@@ -304,22 +337,36 @@ export function CalendarView({ leafId }: { leafId?: string } = {}) {
     if (!ev) nav.setSelection(null)
     else if (ev !== sel.target) nav.setSelection({ key: sel.key, target: ev })
   }, [events]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    setCard(null); setMenu(null); setPreview(null); clearCalendarClipboard()
+    useCalendarNav.getState().setSelection(null)
+    return () => { clearCalendarClipboard() }
+  }, [vault])
 
   /** 点网格空白:有草稿 / 选中 / 浮卡时第一下只退出,返回 true(这一下不再新建)。 */
   const dismiss = (): boolean => {
+    ++interactionEpoch.current
     const nav = useCalendarNav.getState()
     const had = !!nav.draft || !!nav.selection || !!card
-    finishDraft()
+    if (DESK) finishDraft()
+    else if (nav.draft) {
+      if (nav.draft.title.trim() && !window.confirm(t('calside.discard'))) return true
+      nav.setDraft(null)
+    }
     if (nav.selection) nav.setSelection(null)
     setCard(null)
+    setMenu(null)
+    pasteAt.current = undefined
     return had
   }
   const startDraft = (g: DraftGeom): void => {
+    ++interactionEpoch.current
     if (!target) return
     const nav = useCalendarNav.getState()
     nav.setSelection(null)
     setCard(null)
-    nav.setDraft({ ...g, title: '', dbPath: null })
+    pasteAt.current = addMinutes(toLocalDate(g.day), g.startMin ?? 0)
+    nav.setDraft({ ...g, title: '', dbPath: clip && members.some((m) => m.db.path === clip.event.db.path) ? clip.event.db.path : null })
   }
   // 草稿提交 / 取消挂进 store,右栏草稿面板的按钮和格子里的输入框走同一份。
   const commitRef = useRef<() => Promise<void>>(async () => {})
@@ -331,10 +378,11 @@ export function CalendarView({ leafId }: { leafId?: string } = {}) {
     const m = pickDraftDb(members, d.dbPath, defaultDbPath(vault, byVault))
     if (!m) return
     const before = nav.selection
+    const epoch = interactionEpoch.current, scope = calendarScope()
     const id = await createAggEvent(m.db, m.dateCol, draftValue(d), d.title.trim() || t('calview.newEventTitle'))
     track('calendar.event')
     // 存盘期间用户已经点了别的事件(常见:打完标题直接点别的块 = 失焦保存)→ 不抢它的选中。
-    if (useCalendarNav.getState().selection === before) selectWhenReady(`${m.db.path}::${id}`)
+    if (epoch === interactionEpoch.current && scope === calendarScope() && !useCalendarNav.getState().draft && useCalendarNav.getState().selection === before) selectWhenReady(`${m.db.path}::${id}`)
   }
   useEffect(() => {
     const nav = useCalendarNav.getState()
@@ -345,6 +393,11 @@ export function CalendarView({ leafId }: { leafId?: string } = {}) {
   // 手机:双击空白当场建一条 30 分钟的事件并开浮卡(这一轮不动)。
   const createNow = async (day: Date, min: number | null, at: Anchor): Promise<void> => {
     if (!target) return
+    if (!DESK) {
+      const dayKey = iso(day)
+      startDraft({ day: dayKey, endDay: dayKey, startMin: min, endMin: min === null ? 0 : min + 30 })
+      return
+    }
     const { db, dateCol } = target
     let value: string
     if (min === null) value = fmtStamp(day, true)
@@ -369,6 +422,59 @@ export function CalendarView({ leafId }: { leafId?: string } = {}) {
   newRef.current = newAtNextSlot
   const dismissRef = useRef(dismiss)
   dismissRef.current = dismiss
+  const runCommand = (action: EventCommand): void => {
+    const sel = selRef.current
+    setMenu(null)
+    rootRef.current?.focus({ preventScroll: true })
+    switch (action) {
+      case 'copy': if (sel) copyCalendarEvent(sel); break
+      case 'cut': if (sel) copyCalendarEvent(sel, true); break
+      case 'clone': {
+        const epoch = interactionEpoch.current, scope = calendarScope()
+        if (sel) void cloneCalendarEvent(sel).then((id) => {
+          if (id && epoch === interactionEpoch.current && scope === calendarScope()) { setCard(null); selectWhenReady(`${sel.db.path}::${id}`) }
+        })
+        break
+      }
+      case 'paste': {
+        const draft = useCalendarNav.getState().draft
+        if (draft?.title.trim() && !window.confirm(t('calside.discard'))) break
+        const epoch = interactionEpoch.current, scope = calendarScope()
+        const date = pasteAt.current ?? (draft ? addMinutes(toLocalDate(draft.day), draft.startMin ?? 0) : undefined)
+        void pasteCalendarEvent(date ? undefined : sel?.db, date).then((result) => {
+          if (!result || epoch !== interactionEpoch.current || calendarScope() !== scope || useCalendarNav.getState().draft !== draft) return
+          useCalendarNav.getState().setDraft(null)
+          setCard(null)
+          selectWhenReady(`${result.db.path}::${result.id}`)
+        })
+        break
+      }
+      case 'delete':
+        if (!sel || sel.db.readonly) break
+        deleteCalendarRow(sel.db, sel.row, sel.title)
+        useCalendarNav.getState().setSelection(null)
+        setCard(null)
+        if (clip?.cut && clip.event.row.rowId === sel.row.rowId && clip.event.db.path === sel.db.path) clearCalendarClipboard()
+        break
+      case 'undo': undoLastCalendarEdit(); break
+      case 'redo': redoLastCalendarEdit(); break
+      case 'summary':
+        if (sel) void navigator.clipboard?.writeText(`${sel.title}\n${sel.raw}\n${sel.db.name}`).catch(() => notifyApp({ level: 'warning', text: t('calclip.failed') }))
+        break
+    }
+  }
+  const commandRef = useRef(runCommand)
+  commandRef.current = runCommand
+  const closeSurface = (): void => { if (menu) setMenu(null); else dismissRef.current() }
+  useEffect(() => {
+    if (DESK || (!card && !menu)) return
+    const back = (e: Event): void => {
+      e.preventDefault()
+      if (!(e as CustomEvent).detail?.probe) closeSurface()
+    }
+    window.addEventListener('forsion:mobile-back', back)
+    return () => window.removeEventListener('forsion:mobile-back', back)
+  }, [card, menu])
 
   // 键盘:D/W/3/M 切模式、←/→ 翻页、T 回今天、C 新建、Enter 改标题、Esc 退出、⌘C/⌘V/⌘D 复制、Delete 删除、⌘Z 撤销。
   // 输入控件不劫持;日历不在前台(别的标签 / 别的 Space)或焦点在别的面板里也不劫持。
@@ -378,12 +484,13 @@ export function CalendarView({ leafId }: { leafId?: string } = {}) {
       const root = rootRef.current
       if (!root || !root.getClientRects().length) return
       const el = e.target as HTMLElement | null
+      if (e.isComposing || el?.closest('[role="menu"]')) return
       if (el && el.closest('input, textarea, select, [contenteditable]')) return
       const side = useCalendarNav.getState().sideEl
       const a = document.activeElement
       // 焦点在事件卡 / 当日日程里:卡片自己管 Esc / Tab / 删除,日历快捷键让开 ——
       // 右栏待办常驻后,待办卡开着时 Delete 会删掉主区高亮的另一条、C 会在卡下面起草稿(Codex 评审)
-      if (a?.closest('[role="dialog"]')) return
+      if (a?.closest('[role="dialog"]') && !a.closest('.amx-cal-cardcatch.calendar')) return
       const inCfg = !!a?.closest('.amx-calcfg') // 刚点过左栏小月历 / 日历列表:翻页类快捷键照样生效
       if (a && a !== document.body && !root.contains(a) && !side?.contains(a) && !inCfg && a.closest('.dv-react-part')) return
       const act = classifyCalKey(e)
@@ -393,26 +500,20 @@ export function CalendarView({ leafId }: { leafId?: string } = {}) {
       const nav = useCalendarNav.getState()
       switch (act.kind) {
         case 'copy':
-          if (!sel || sel.readonly) return
-          clipRef.current = { db: sel.db, rowId: sel.row.rowId }
-          break
+        case 'cut':
         case 'paste':
-          if (!clipRef.current) return
-          { const c = clipRef.current; void duplicateAggRow(c.db, c.rowId).then((id) => { if (id) selectWhenReady(`${c.db.path}::${id}`) }) }
-          break
         case 'duplicate':
-          if (!sel || sel.readonly) return
-          void duplicateAggRow(sel.db, sel.row.rowId).then((id) => { if (id) selectWhenReady(`${sel.db.path}::${id}`) })
-          break
         case 'delete':
-          if (!sel || sel.db.readonly) return
-          deleteCalendarRow(sel.db, sel.row, sel.title)
-          nav.setSelection(null)
-          setCard(null)
-          break
         case 'undo':
-          if (!undoLastCalendarEdit()) return
+        case 'redo':
+          commandRef.current(act.kind === 'duplicate' ? 'clone' : act.kind)
           break
+        case 'menu': {
+          if (!sel) return
+          const r = root.querySelector(`[data-key="${CSS.escape(sel.key)}"]`)?.getBoundingClientRect()
+          if (r) setMenu({ x: r.left, y: r.bottom })
+          break
+        }
         case 'new':
           if (!DESK) return
           newRef.current()
@@ -423,7 +524,10 @@ export function CalendarView({ leafId }: { leafId?: string } = {}) {
         case 'rename': {
           // 焦点在工具栏按钮上时 Enter 照旧按按钮;高亮着一条事件时 Enter = 在它旁边开卡(卡里标题框自动聚焦)。
           if (el?.closest('button') && !el.closest('.amx-cal-event, .amx-cal-chip-ev')) return
-          if (!nav.selection || card || !sel) return
+          if (!sel) return
+          setFocusTitle(true)
+          if (card) break
+          if (!nav.selection) return
           // 事件块不一定渲染出来(月视图一天超过三条会折进「还有 N 项」):找不到就贴在那一天的格子旁
           const node = root.querySelector<HTMLElement>(`[data-key="${CSS.escape(nav.selection.key)}"]`)
             ?? root.querySelector<HTMLElement>(`.amx-cal-mcell[data-date="${iso(sel.start)}"], .amx-cal-daycol2[data-date="${iso(sel.start)}"]`)
@@ -434,6 +538,8 @@ export function CalendarView({ leafId }: { leafId?: string } = {}) {
           break
         }
         case 'escape':
+          if (useCalendarClipboard.getState().clip?.cut) clearCalendarClipboard()
+          if (menu) { setMenu(null); break }
           if (nav.draft) nav.setDraft(null)
           else if (nav.selection || card) dismissRef.current()
           else return
@@ -452,7 +558,7 @@ export function CalendarView({ leafId }: { leafId?: string } = {}) {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [card]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [card, menu]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // 主区放不下 7 列(每列最窄 84,左轴 52;10-16 从 112 降下来:右栏常驻后 1200 宽的窗口也该看到整周)时,「周」按放得下的天数显示(3 天,再窄 1 天);「3 日」同理。
   // 标题、可见区与右栏高亮都跟着 n 走,不再只露两天半、标题却写一整周(W-13)。列宽下限与 TimeScroll 的 minCol 一致。
@@ -461,7 +567,7 @@ export function CalendarView({ leafId }: { leafId?: string } = {}) {
     const el = rootRef.current
     if (!el) return
     // 标签不显示时 Dockview 把 DOM 摘下,量到的是 0:别拿它改状态(否则挂回来按 1 列的列宽换算滚动位置,跳到 8 月;10-17)。下同。
-    const measure = (): void => { if (!el.clientWidth) return; const w = el.clientWidth - 52; setFit(w >= 7 * 84 ? 7 : w >= 3 * 132 ? 3 : 1) }
+    const measure = (): void => { if (!el.clientWidth) return; const w = el.clientWidth - 52; setFit(w >= 7 * 84 ? 7 : w >= 3 * 84 ? 3 : 1) }
     measure()
     const ro = new ResizeObserver(measure)
     ro.observe(el)
@@ -486,6 +592,7 @@ export function CalendarView({ leafId }: { leafId?: string } = {}) {
   const gridProps = {
     events: visible,
     selectedKey,
+    cutKey: clip?.cut ? `${clip.event.db.path}::${clip.event.row.rowId}` : null,
     onPick: pick,
     canCreate: !!target,
     onDismiss: dismiss,
@@ -493,10 +600,43 @@ export function CalendarView({ leafId }: { leafId?: string } = {}) {
     colorOf,
     onTodoDrop: todoDrop,
     titleRef,
+    onGesture: (ev: CalEvent | null): void => {
+      setGesture(!!ev)
+      setPreview((before) => before?.key === ev?.key && before?.raw === ev?.raw ? before : ev)
+      if (ev) {
+        if (useCalendarNav.getState().selection?.key !== ev.key) useCalendarNav.getState().setSelection({ key: ev.key, target: ev })
+        setCollapsed(true)
+      }
+    },
   }
   return (
     // tabIndex -1:点进日历时焦点落在这里,键盘快捷键据此判断「用户正在用日历」。
-    <div className="amx-cal" ref={rootRef} tabIndex={-1}>
+    <div className={`amx-cal${!DESK ? ' mobile' : ''}${!DESK && (card || hasDraft) ? ` drawer-open${collapsed && card ? ' drawer-small' : ''}` : ''}`} ref={rootRef} tabIndex={-1}
+      data-cut-key={clip?.cut ? `${clip.event.db.path}::${clip.event.row.rowId}` : undefined}
+      onContextMenu={(e) => {
+        if ((e.target as HTMLElement).closest('.amx-cal-cardwrap, input, textarea')) return
+        const node = (e.target as HTMLElement).closest<HTMLElement>('[data-key]')
+        const ev = eventsRef.current.find((x) => x.key === node?.dataset.key)
+        if (ev) {
+          e.preventDefault(); e.stopPropagation()
+          const r = node!.getBoundingClientRect()
+          if (DESK) {
+            useCalendarNav.getState().setSelection({ key: ev.key, target: ev })
+            setCard(null)
+            pasteAt.current = undefined
+          } else pick(ev.key, { left: r.left, top: r.top, right: r.right, bottom: r.bottom, zoom: zoomOf(node!) || 1 })
+          setMenu({ x: e.clientX, y: e.clientY })
+          return
+        }
+        const day = (e.target as HTMLElement).closest<HTMLElement>('[data-date]')
+        if (day?.dataset.date) {
+          e.preventDefault(); e.stopPropagation()
+          dismiss()
+          const mins = day.classList.contains('amx-cal-daycol2') ? Math.max(0, Math.min(1425, snap15((e.clientY - day.getBoundingClientRect().top) / (zoomOf(day) || 1) / hourPx * 60))) : 0
+          pasteAt.current = addMinutes(toLocalDate(day.dataset.date), mins)
+          setMenu({ x: e.clientX, y: e.clientY })
+        }
+      }}>
       <AstryxScope>
         {/* 左:看法胶囊(日 / 周 / 3 日 / 月)+ 月份 + 周数;右:今天 ‹ › 「…」(密度、一周开始)。新建 = 单击格子 / 按 C。 */}
         <header className="amx-cal-bar">
@@ -539,8 +679,12 @@ export function CalendarView({ leafId }: { leafId?: string } = {}) {
         <TimeScroll ref={api} n={n} weekStartDow={mode === 'week' && n === 7 ? firstDow : null} {...gridProps} onCreate={(d, min, at) => void createNow(d, min, at)} />
       )}
 
-      {selected && card && <EventCard ev={selected} at={card.at} maxRight={rootRef.current?.getBoundingClientRect().right} onClose={() => setCard(null)} />}
-      {DESK && <DraftCard rootRef={rootRef} />}
+      {selected && card && (!DESK || !gesture) && <EventCard key={selected.key} calendar focusTitle={focusTitle} ev={preview ?? selected} at={card.at} collapsed={!DESK && collapsed} onExpand={() => setCollapsed(false)}
+        maxRight={rootRef.current?.getBoundingClientRect().right} onClose={closeSurface}
+        onActions={(e) => { const r = e.currentTarget.getBoundingClientRect(); setMenu({ x: r.left, y: r.bottom }); setCollapsed(false) }}
+        actions={!DESK && menu ? <EventMenu at={menu} mobile canCut={!selected.readonly} writable={!selected.db.readonly} note={selected.db.isNoteView} hasClip={!!clip} onRun={runCommand} onClose={() => setMenu(null)} /> : undefined} />}
+      {menu && (DESK || !card) && <EventMenu at={menu} mobile={false} hasEvent={!!selected} canCut={!selected?.readonly} writable={!selected?.db.readonly} note={!!selected?.db.isNoteView} hasClip={!!clip} onRun={runCommand} onClose={() => setMenu(null)} />}
+      <DraftCard rootRef={rootRef} onPasted={selectWhenReady} />
     </div>
   )
 }
@@ -548,6 +692,7 @@ export function CalendarView({ leafId }: { leafId?: string } = {}) {
 interface GridProps {
   events: CalEvent[]
   selectedKey: string | null
+  cutKey?: string | null
   onPick: (key: string, at: Anchor) => void
   /** 有可写的日历(没有就点不出草稿)。 */
   canCreate: boolean
@@ -557,13 +702,14 @@ interface GridProps {
   colorOf: (dbPath: string | null) => string
   onTodoDrop?: (data: { dbPath: string; rowId: string }, value: string) => void
   titleRef: RefObject<HTMLSpanElement | null>
+  onGesture?: (ev: CalEvent | null) => void
 }
 
 /** 草稿的标题框:格子里直接打。Enter 保存(空标题 = 不建),Esc 丢弃;焦点去别处(草稿卡除外)= 写了就存、没写就丢。 */
 function DraftInput({ first = true }: { first?: boolean }) {
   const { t } = useI18n()
   const title = useCalendarNav((s) => s.draft?.title ?? '')
-  if (!first) return <span className="amx-cal-event-title">{title || t('calview.newEventTitle')}</span>
+  if (!first || !DESK) return <span className="amx-cal-event-title">{title || t('calview.newEventTitle')}</span>
   return (
     <input
       className="amx-cal-draft-input"
@@ -627,9 +773,9 @@ interface TimeProps extends GridProps {
   /** 「周」模式整周可见时 = 周首日(0/1):首列、「今天」与跳转都对齐到这一天(W-74);其余模式 null,按天滚动。 */
   weekStartDow: number | null
   /** 手机:双击当场建。 */
-  onCreate: (day: Date, min: number, at: Anchor) => void
+  onCreate: (day: Date, min: number | null, at: Anchor) => void
 }
-const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekStartDow, events, selectedKey, onPick, canCreate, onDismiss, onDraft, colorOf, onTodoDrop, onCreate, titleRef }, ref) {
+const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekStartDow, events, selectedKey, cutKey, onPick, canCreate, onDismiss, onDraft, colorOf, onTodoDrop, onCreate, titleRef, onGesture }, ref) {
   const { t } = useI18n()
   const wrap = useRef<HTMLDivElement>(null)
   const gutterHours = useRef<HTMLDivElement>(null) // 表头/全天常驻；仅小时轴随正文纵向滚动。
@@ -677,6 +823,7 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
     dyMin: number
     moved: boolean
     target: { iso: string; topMin: number } | null // move 落点:目标日 + 吸附后起始分钟
+    last?: ReactPointerEvent
   } | null>(null)
   const makeRef = useRef<{ pid: number; zone: 'time' | 'all'; col: number; min: number; cur: { col: number; min: number }; x0: number; y0: number; moved: boolean } | null>(null)
 
@@ -722,7 +869,7 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
     const el = wrap.current
     if (!el) return
     // 左轴已是独立 flex 项(52px),日区宽度不再含它 → colw 直接按日区宽均分。
-    const minCol = n === 7 ? 84 : n === 3 ? 132 : 180
+    const minCol = n >= 3 ? 84 : 180
     const measure = (): void => { if (el.clientWidth) { setColw(Math.max(minCol, el.clientWidth / n)); measureAllday() } }
     measure()
     const ro = new ResizeObserver(measure)
@@ -806,24 +953,24 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
   }
 
   // ── 已有事件:拖动(整格吸附)、拖上下边缘改时长、⌥ 拖复制 ──
-  const down = (ev: CalEvent, e: ReactPointerEvent): void => {
+  const down = (ev: CalEvent, e: ReactPointerEvent, edge?: 'start' | 'end'): void => {
     e.stopPropagation()
     cancelDrag() // 上一次拖动没收尾(松手丢了)就先撤掉它的预览,别留下两份
-    if (ev.readonly || e.button !== 0) return // 只读源:不设 dragRef 不 capture;up() 里补点击开卡
+    if (ev.readonly || e.button !== 0 || (!DESK && selectedKey !== ev.key)) return
     hideHover()
-    const el = e.currentTarget as HTMLElement
+    const el = (e.currentTarget as HTMLElement).closest<HTMLElement>('.amx-cal-event')!
     const rect = el.getBoundingClientRect()
     const zoom = zoomOf(el) || 1
     const offY = (e.clientY - rect.top) / zoom
-    const mode: 'move' | 'start' | 'end' = offY < EDGE ? 'start' : rect.height / zoom - offY < EDGE ? 'end' : 'move'
+    const hit = Math.min(EDGE, rect.height / zoom / 4)
+    const mode: 'move' | 'start' | 'end' = edge ?? (DESK && selectedKey === ev.key ? offY < hit ? 'start' : rect.height / zoom - offY < hit ? 'end' : 'move' : 'move')
     const box = eventBox(ev.start, ev.end, hourPx)
     const h0 = Math.max(14, box.height)
     const tEl = el.querySelector('.amx-cal-event-t') as HTMLElement | null
     el.setPointerCapture(e.pointerId)
-    el.classList.add('dragging')
     dragRef.current = {
       mode, ev, el, tEl, t0: tEl?.textContent ?? '', pid: e.pointerId, x0: e.clientX, y0: e.clientY, zoom, top0: box.top, h0, grabOffY: offY,
-      durMin: Math.round((h0 / hourPx) * 60), msDur: ev.end ? ev.end.getTime() - ev.start.getTime() : 0,
+      durMin: ev.end ? (ev.end.getTime() - ev.start.getTime()) / 60000 : 60, msDur: ev.end ? ev.end.getTime() - ev.start.getTime() : 0,
       col0: diffDays(startOfDay(ev.start), days[0]), min0: ev.start.getHours() * 60 + ev.start.getMinutes(),
       dup: DESK && mode === 'move' && e.altKey && !ev.db.readonly, shadow: null,
       dyMin: 0, moved: false, target: null,
@@ -831,7 +978,17 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
   }
   const move = (e: ReactPointerEvent): void => {
     const d = dragRef.current
-    if (!d || e.pointerId !== d.pid) return
+    if (!d || e.pointerId !== d.pid) {
+      if (DESK && (e.currentTarget as HTMLElement).classList.contains('selected')) {
+        const el = e.currentTarget as HTMLElement
+        const r = el.getBoundingClientRect()
+        const y = (e.clientY - r.top) / (zoomOf(el) || 1)
+        const hit = Math.min(EDGE, r.height / (zoomOf(el) || 1) / 4)
+        el.style.cursor = y < hit || r.height / (zoomOf(el) || 1) - y < hit ? 'ns-resize' : 'grab'
+      }
+      return
+    }
+    d.last = e
     // 松手那一下没送到(切走了 App、在窗外松开、输入注入丢了 up):鼠标已经没按着,就按松手收尾,别把预览晾在那里
     if (e.pointerType === 'mouse' && e.buttons === 0) { up(d.ev, e); return }
     // move:块本身按吸附后的落点整格平移(不再是「块自由飘 + 另一个落点框」两份),原位置留一个淡影。
@@ -840,6 +997,8 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
       if (!colw || !wrap.current) return
       if (!d.moved) {
         d.moved = true
+        d.el.classList.add('dragging')
+        onGesture?.(d.ev)
         const shadow = d.el.cloneNode(true) as HTMLElement
         shadow.classList.remove('dragging', 'selected')
         shadow.classList.add(d.dup ? 'dup-src' : 'drag-shadow')
@@ -854,12 +1013,18 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
       d.target = sameMin ? null : { iso: iso(days[p.col]), topMin }
       d.el.style.transform = `translate(${(p.col - d.col0) * colw}px, ${((top - d.min0) / 60) * hourPx}px)`
       const ns = addMinutes(days[p.col], top)
+      onGesture?.({ ...d.ev, raw: eventValue(ns, d.ev.end ? new Date(ns.getTime() + d.msDur) : null, false) })
       const range = d.msDur ? `${hhmm(ns)}–${hhmm(new Date(ns.getTime() + d.msDur))}` : hhmm(ns)
       if (d.tEl) d.tEl.textContent = sameMin ? d.t0 : p.col !== d.col0 ? `${dowLabel(days[p.col].getDay())} ${range}` : range
       return
     }
     // resize(start/end):竖向改时长;时间文本随预览实时反算(与 up() 的钳制一致)
-    const dyMin = snap15((((e.clientY - d.y0) / d.zoom) / hourPx) * 60)
+    const delta = snap15((((e.clientY - d.y0) / d.zoom) / hourPx) * 60)
+    const baseEndForClamp = d.ev.end ?? addMinutes(d.ev.start, 60)
+    const duration = (baseEndForClamp.getTime() - d.ev.start.getTime()) / 60000
+    const dyMin = d.mode === 'start' ? Math.max(-d.min0, Math.min(duration - 15, delta)) : Math.max(15 - duration, delta)
+    if (!d.moved && Math.abs(e.clientY - d.y0) < 5) return
+    if (!d.moved) { d.moved = true; d.el.classList.add('dragging') }
     d.dyMin = dyMin
     const dPx = (dyMin / 60) * hourPx
     if (d.mode === 'end') d.el.style.height = `${Math.max(14, d.h0 + dPx)}px`
@@ -873,10 +1038,12 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
         let ne = addMinutes(baseEnd, dyMin)
         if (ne.getTime() <= d.ev.start.getTime()) ne = addMinutes(d.ev.start, 15)
         d.tEl.textContent = `${hhmm(d.ev.start)}–${hhmm(ne)} · ${fmtDur(Math.round((ne.getTime() - d.ev.start.getTime()) / 60000))}`
+        onGesture?.({ ...d.ev, raw: eventValue(d.ev.start, ne, false) })
       } else {
         let ns = addMinutes(d.ev.start, dyMin)
         if (ns.getTime() >= baseEnd.getTime()) ns = addMinutes(baseEnd, -15)
         d.tEl.textContent = `${hhmm(ns)}–${hhmm(baseEnd)} · ${fmtDur(Math.round((baseEnd.getTime() - ns.getTime()) / 60000))}`
+        onGesture?.({ ...d.ev, raw: eventValue(ns, baseEnd, false) })
       }
     }
   }
@@ -885,9 +1052,9 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
     if (d && e.pointerId !== d.pid) return
     dragRef.current = null
     if (!d) {
-      if (ev.readonly) onPick(ev.key, rectOf(e)) // down() 对只读早退过 → 这里就是「点击开卡」
       return
     }
+    onGesture?.(null)
     d.el.classList.remove('dragging')
     if (d.mode === 'move') {
       d.el.style.transform = ''
@@ -901,16 +1068,18 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
       const newEnd = ev.end ? new Date(newStart.getTime() + d.msDur) : null
       if (d.tEl) d.tEl.textContent = d.t0
       if (d.dup) {
-        // ponytail: ⌥ 复制不进 ⌘Z(撤销只记删除 / 改时间);要撤就删掉那份。
         const value = eventValue(newStart, newEnd, ev.allDay)
-        void duplicateAggRow(ev.db, ev.row.rowId).then((id) => { if (id) setAggCell(ev.db, id, ev.colId, value) })
+        void cloneCalendarEvent(ev, value)
         return
       }
       commitTime(ev, newStart, newEnd) // 跨日+改时刻,保留时长
       return
     }
+    d.el.style.top = `${d.top0}px`
+    d.el.style.height = `${d.h0}px`
     if (d.dyMin === 0) {
       if (d.tEl) d.tEl.textContent = d.t0
+      if (!d.moved) onPick(ev.key, rectOf(e))
       return
     }
     const baseEnd = ev.end ?? addMinutes(ev.start, 60)
@@ -928,6 +1097,7 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
     const d = dragRef.current
     dragRef.current = null
     if (!d) return
+    onGesture?.(null)
     d.el.classList.remove('dragging')
     d.el.style.transform = ''
     d.el.style.top = `${d.top0}px` // 还原成渲染时的原位;清空的话 React 值没变不会补回,块就丢了定位和高度
@@ -935,14 +1105,51 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
     d.shadow?.remove()
     if (d.tEl) d.tEl.textContent = d.t0
   }
+  const moveRef = useRef(move)
+  moveRef.current = move
+  useEffect(() => {
+    const cancel = (e: Event): void => { if (e.type === 'blur' || (e as KeyboardEvent).key === 'Escape') cancelDrag() }
+    const timer = window.setInterval(() => {
+      const d = dragRef.current
+      const sc = wrap.current
+      if (!d?.moved || !d.last || !sc) return
+      const r = sc.getBoundingClientRect()
+      const x = d.last.clientX, y = d.last.clientY
+      const dx = x < r.left + 24 ? -12 : x > r.right - 24 ? 12 : 0
+      const dy = y < r.top + bodyTop + 24 ? -12 : y > r.bottom - 24 ? 12 : 0
+      if (dx || dy) { sc.scrollBy(dx, dy); moveRef.current(d.last) }
+    }, 32)
+    window.addEventListener('blur', cancel)
+    window.addEventListener('keydown', cancel)
+    return () => { clearInterval(timer); window.removeEventListener('blur', cancel); window.removeEventListener('keydown', cancel); cancelDrag() }
+  }, [])
 
   // 全天事件「拖出来」→ 拖进某天的时间格 = 转成该时刻起 30 分钟的定时事件;没拖进则视作点击开卡片。
-  const allDown = (e: ReactPointerEvent): void => {
+  const allDrag = useRef<{ x: number; y: number; mode: 'move' | 'start' | 'end' } | null>(null)
+  const allDown = (ev: CalEvent, e: ReactPointerEvent): void => {
     e.stopPropagation()
+    if (e.button !== 0 || ev.readonly || (!DESK && selectedKey !== ev.key)) return
+    const r = e.currentTarget.getBoundingClientRect()
+    const edge = Math.min(8, r.width / 4)
+    allDrag.current = { x: e.clientX, y: e.clientY, mode: selectedKey === ev.key && DESK ? e.clientX - r.left < edge ? 'start' : r.right - e.clientX < edge ? 'end' : 'move' : 'move' }
     ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
   }
   const allUp = (ev: CalEvent, e: ReactPointerEvent): void => {
-    if (ev.readonly) { onPick(ev.key, rectOf(e)); return } // 只读:不许「拖出来转定时」,只开卡
+    const drag = allDrag.current
+    allDrag.current = null
+    if (!drag) return
+    if (Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < 5) { onPick(ev.key, rectOf(e)); return }
+    const all = document.elementFromPoint(e.clientX, e.clientY)?.closest<HTMLElement>('.amx-cal-allday2')
+    if (all?.dataset.date) {
+      const day = toLocalDate(all.dataset.date)
+      if (drag.mode === 'start') commitTime(ev, day > (ev.end ?? ev.start) ? ev.end ?? ev.start : day, ev.end, true)
+      else if (drag.mode === 'end') commitTime(ev, ev.start, day < ev.start ? ev.start : day, true)
+      else {
+        const delta = diffDays(day, ev.start)
+        commitTime(ev, shiftDays(ev.start, delta), ev.end ? shiftDays(ev.end, delta) : null, true)
+      }
+      return
+    }
     const cell = (document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null)?.closest('.amx-cal-daycol2')
     const dayIso = cell?.getAttribute('data-date')
     if (cell && dayIso) {
@@ -1132,17 +1339,22 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
           const rows: Array<CalEvent | null> = []
           for (const e of here) rows[allDay.lane.get(e.key) ?? 0] = e
           return (
-            <div key={+d} className="amx-cal-allday2" data-date={iso(d)}>
+            <div key={+d} className="amx-cal-allday2" data-date={iso(d)} onClick={DESK ? undefined : (ce) => {
+              if ((ce.target as HTMLElement).closest('.amx-cal-chip-ev') || onDismiss()) return
+              onCreate(d, null, rectOf(ce))
+            }}>
               {Array.from(rows, (e, i) => e ? (
                 <button
                   key={e.key}
                   data-key={e.key}
-                  className={`amx-cal-chip-ev amx-cal-alldrag${e.readonly ? ' readonly' : ''}${selectedKey === e.key ? ' selected' : ''}${+startOfDay(e.end ?? e.start) < +today ? ' past' : ''}${daySpanClass(e.start, e.end, d)}`}
+                  className={`amx-cal-chip-ev amx-cal-alldrag${e.readonly ? ' readonly' : ''}${cutKey === e.key ? ' cut' : ''}${selectedKey === e.key ? ' selected' : ''}${+startOfDay(e.end ?? e.start) < +today ? ' past' : ''}${daySpanClass(e.start, e.end, d)}`}
                   style={eventColorStyle(e.color)}
                   aria-label={t('calview.a11yAllDayEvent', { title: e.title })}
                   title={e.readonly ? e.title : t('calview.allDayDragHint', { title: e.title })}
-                  onPointerDown={allDown}
+                  onPointerDown={(pe) => allDown(e, pe)}
                   onPointerUp={(pe) => allUp(e, pe)}
+                  onPointerCancel={() => { allDrag.current = null }}
+                  onClick={(ce) => { if (e.readonly || (!DESK && selectedKey !== e.key) || ce.detail === 0) onPick(e.key, rectOf(ce)) }}
                 >
                   {e.title}
                 </button>
@@ -1156,8 +1368,9 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
             key={+d}
             className="amx-cal-daycol2"
             data-date={iso(d)}
-            onDoubleClick={DESK ? undefined : (e) => {
+            onClick={DESK ? undefined : (e) => {
               if ((e.target as HTMLElement).closest('.amx-cal-event')) return
+              if (onDismiss()) return
               const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
               const zoom = zoomOf(e.currentTarget) || 1
               const min = Math.max(0, Math.min(24 * 60 - 30, snap15((((e.clientY - rect.top) / zoom) / hourPx) * 60)))
@@ -1176,7 +1389,7 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
                   <button
                     key={e.key}
                     data-key={e.key}
-                    className={`amx-cal-event${e.readonly ? ' readonly' : ''}${selectedKey === e.key ? ' selected' : ''}${short ? ' short' : ''}${past ? ' past' : ''}${e.check ? ' todo' : ''}${e.done ? ' done' : ''}`}
+                    className={`amx-cal-event${e.readonly ? ' readonly' : ''}${cutKey === e.key ? ' cut' : ''}${selectedKey === e.key ? ' selected' : ''}${short ? ' short' : ''}${past ? ' past' : ''}${e.check ? ' todo' : ''}${e.done ? ' done' : ''}`}
                     style={{
                       ...eventColorStyle(e.color),
                       top: box.top,
@@ -1193,6 +1406,7 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
                     onPointerUp={(pe) => up(e, pe)}
                     onPointerCancel={cancelDrag}
                     onLostPointerCapture={cancelDrag}
+                    onClick={(ce) => { if (e.readonly || (!DESK && selectedKey !== e.key) || ce.detail === 0) onPick(e.key, rectOf(ce)) }}
                   >
                     {e.check && (
                       <span
@@ -1206,6 +1420,10 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
                     )}
                     <span className="amx-cal-event-title">{e.title}</span>
                     <span className="amx-cal-event-t">{short || !e.end ? hhmm(e.start) : `${hhmm(e.start)}–${hhmm(e.end)}`}</span>
+                    {!DESK && selectedKey === e.key && !e.readonly && colw * layout.widthPct / 100 >= 88 && <>
+                      <span className="amx-cal-handle start" aria-label={t('calview.resizeStart')} onPointerDown={(pe) => down(e, pe, 'start')} />
+                      <span className="amx-cal-handle end" aria-label={t('calview.resizeEnd')} onPointerDown={(pe) => down(e, pe, 'end')} />
+                    </>}
                   </button>
                 )
               })
@@ -1234,7 +1452,7 @@ interface MonthProps extends GridProps {
   /** 手机:双击当场建。 */
   onCreate: (day: Date, at: Anchor) => void
 }
-export const MonthScroll = forwardRef<CalApi, MonthProps>(function MonthScroll({ anchorRef, events, selectedKey, onPick, canCreate, onDismiss, onDraft, colorOf, onCreate, titleRef }, ref) {
+export const MonthScroll = forwardRef<CalApi, MonthProps>(function MonthScroll({ anchorRef, events, selectedKey, cutKey, onPick, canCreate, onDismiss, onDraft, colorOf, onCreate, titleRef }, ref) {
   const { t } = useI18n()
   const wrap = useRef<HTMLDivElement>(null)
   const [rowH, setRowH] = useState(0)
@@ -1317,12 +1535,19 @@ export const MonthScroll = forwardRef<CalApi, MonthProps>(function MonthScroll({
     el.scrollTo({ top: Math.max(0, idxOfMonth(mid.getFullYear(), mid.getMonth() + delta)) * rowH, behavior: 'smooth' })
   }
 
-  const chipDown = (e: ReactPointerEvent): void => {
+  const chipDrag = useRef<{ x: number; y: number } | null>(null)
+  const chipDown = (ev: CalEvent, e: ReactPointerEvent): void => {
     e.stopPropagation()
+    if (e.button !== 0 || ev.readonly || (!DESK && selectedKey !== ev.key)) return
+    chipDrag.current = { x: e.clientX, y: e.clientY }
     ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
   }
   const chipUp = (ev: CalEvent, e: ReactPointerEvent): void => {
+    const drag = chipDrag.current
+    chipDrag.current = null
+    if (!drag) return
     const rect = rectOf(e)
+    if (Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < 5) { onPick(ev.key, rect); return }
     if (ev.readonly) { onPick(ev.key, rect); return } // 只读:月视图芯片不可跨日拖,只开卡
     const cell = (document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null)?.closest('.amx-cal-mcell')
     const dayIso = cell?.getAttribute('data-date')
@@ -1402,8 +1627,9 @@ export const MonthScroll = forwardRef<CalApi, MonthProps>(function MonthScroll({
                   key={+day}
                   className={`amx-cal-mcell${sameDay(day, today) ? ' today' : ''}`}
                   data-date={dayIso}
-                  onDoubleClick={DESK ? undefined : (e) => {
+                  onClick={DESK ? undefined : (e) => {
                     if ((e.target as HTMLElement).closest('.amx-cal-chip-ev')) return
+                    if (onDismiss()) return
                     onCreate(day, { left: e.clientX, top: e.clientY, right: e.clientX, bottom: e.clientY, zoom: zoomOf(e.currentTarget) || 1 })
                   }}
                 >
@@ -1419,8 +1645,10 @@ export const MonthScroll = forwardRef<CalApi, MonthProps>(function MonthScroll({
                       aria-label={!e.allDay && sameDay(e.start, day)
                         ? t('calview.a11yEvent', { title: e.title, time: hhmm(e.start) })
                         : e.title}
-                      onPointerDown={chipDown}
+                      onPointerDown={(pe) => chipDown(e, pe)}
                       onPointerUp={(pe) => chipUp(e, pe)}
+                      onPointerCancel={() => { chipDrag.current = null }}
+                      onClick={(ce) => { if (e.readonly || (!DESK && selectedKey !== e.key) || ce.detail === 0) onPick(e.key, rectOf(ce)) }}
                     >
                       {!e.allDay && sameDay(e.start, day) && <span className="amx-cal-chip-t">{hhmm(e.start)}</span>} {e.title}
                     </button>
