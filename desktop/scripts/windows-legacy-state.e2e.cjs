@@ -33,7 +33,12 @@ async function main() {
   const crashAfterFlush = async () => {
     await app.evaluate(({ session }) => session.defaultSession.flushStorageData())
     await win.waitForTimeout(200)
-    await Promise.all([app.waitForEvent('close'), app.evaluate(({ app }) => app.exit(0)).catch(() => {})])
+    // Playwright launches Electron through cmd.exe on Windows. Terminate the actual
+    // owned Electron PID, not that shell; app.exit() can wait on the attached CI debugger.
+    const pid = await app.evaluate(() => process.pid)
+    const closed = app.waitForEvent('close')
+    process.kill(pid, 'SIGKILL')
+    await closed
     app = null
   }
   const checks = []
