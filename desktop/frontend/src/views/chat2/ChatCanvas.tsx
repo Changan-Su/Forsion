@@ -355,7 +355,8 @@ export function ChatCanvas({ rootId, activeId, dir, onDir }: {
     hitKey: (el) => (handRef.current ? null : el.closest<HTMLElement>('[data-cv-node]')?.dataset.cvNode ?? null),
     isEditing: () => true, // 卡里的字照常选、按钮照常点:手势层对卡整个让路
     blankPan: true,
-    onDoubleClick: (key) => { if (key && key !== DRAFT) openReadingRef.current(key) },
+    // 在卡里的输入框(改名)里双击 = 选词,不算双击卡片
+    onDoubleClick: (key) => { if (key && key !== DRAFT && !document.activeElement?.closest('.t2cv input, .t2cv textarea')) openReadingRef.current(key) },
     onContextMenu: (key, at) => onMenuRef.current(key, at),
     minW: CARD_W,
     minH: 40,
@@ -565,7 +566,11 @@ export function ChatCanvas({ rootId, activeId, dir, onDir }: {
   const revealDraft = useRef(false)
   const openDraft = (parent: string, at: number, text = ''): void => {
     // 已经有一张写了字的:先飞过去,由你决定发还是放弃(同一时间只有一张)
-    if (draft && draft.text.trim()) { reveal(DRAFT); draftTa.current?.focus({ preventScroll: true }); return }
+    const raw = pref.draft
+    if (raw?.text.trim()) {
+      if (draft) { reveal(DRAFT); draftTa.current?.focus({ preventScroll: true }); return }
+      text = raw.text // 原来挂的那张卡没了(别处归档 / 删了那一支):字搬到这张新草稿上,不丢
+    }
     release()
     setPref({ draft: { parent, at, text }, ...(pref.fold.includes(parent) ? { fold: pref.fold.filter((x) => x !== parent) } : {}) })
     revealDraft.current = true
@@ -641,6 +646,9 @@ export function ChatCanvas({ rootId, activeId, dir, onDir }: {
     // 正看着这一支(或它下面):先回到它的上一支,别让对话区空掉
     const up = c.parent ? tree.cards.get(c.parent) : undefined
     if (up && activePath.includes(key)) useApp.getState().setActiveId(up.sid)
+    // 草稿挂在这一支的卡下面:挪到这一支的上一张卡下面(字留着;分支 id 作废,发的时候重建)
+    const d = pref.draft
+    if (d && c.parent && tree.cards.get(d.parent)?.sid === c.sid) setPref({ draft: { parent: c.parent, at: kidsOf(c.parent).filter((k) => k !== DRAFT).length, text: d.text } })
     void useApp.getState().archiveSession(c.sid, true)
   }
   const menuFor = (key: string | null, part: 'q' | 'a'): CtxItem[] => {
@@ -803,7 +811,7 @@ export function ChatCanvas({ rootId, activeId, dir, onDir }: {
                 data-streaming={streaming ? '' : undefined}
                 data-measured={heights.has(c.key) ? '' : undefined}
                 style={{ left: b.x, top: b.y, width: b.w }}
-                onMouseDown={(e) => { if (e.detail > 1) e.preventDefault() }} // 双击 = 打开阅读,别顺手选中一个词(拖选照旧)
+                onMouseDown={(e) => { if (e.detail > 1 && !(e.target as HTMLElement).closest('input, textarea')) e.preventDefault() }} // 双击 = 打开阅读,别顺手选中一个词(拖选照旧;输入框里照常选词)
                 onClick={(e) => {
                   const el = e.target as HTMLElement
                   if (el.closest('button, a[href], input, textarea, summary')) return
