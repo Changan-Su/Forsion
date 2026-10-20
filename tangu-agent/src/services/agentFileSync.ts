@@ -192,9 +192,7 @@ async function syncAccount(cloud: AgentFilesBrain, userId: string, scope: string
     // 旧位置(USER.md、默认笔记库的 Calendar.db)和 human/ 双向镜像:同步前一遍把旧设备的改动并进来再推,同步后一遍把拉下来的写回旧位置。
     // 服务端还不认 __human__ 时只镜像、不上云(方案页 ⑦:server 没部署时新版只做本地搬家)。
     // 服务端顺带回答「这个账号还有没有旧客户端在用 USER.md」:明确说没有才停 USER.md 那一对;没说(老服务端 / 查失败)照旧镜像
-    // 云端还没有 human/(没有搬家标记)就不停:这台可能是第一台新版,USER.md 得先搬进 human/ 推上去,停了画像就到不了新版
-    const humanInCloud = humanFolder && (bySlug.get(HUMAN_SLOT) ?? []).some((f) => f.relPath === HUMAN_LAYOUT && !f.deleted);
-    const legacy = humanInCloud && Array.isArray(manifest.legacy) ? { families: manifest.legacy, seenAt: manifest.legacySeenAt ?? null } : null;
+    const legacy = Array.isArray(manifest.legacy) ? { families: manifest.legacy, seenAt: manifest.legacySeenAt ?? null } : null;
     const mirror = async (): Promise<void> => { try { result.conflicts += (await mirrorLegacyHuman({ legacy })).conflicts; } catch (e) { fail(result, e); } };
     await mirror();
     if (humanFolder) {
@@ -226,13 +224,20 @@ async function syncBucket(cloud: AgentFilesBrain, uid: string, slug: string, sco
   paths.delete(TOMBSTONES);
   if (!families.human) paths.delete('HUMAN.md'); // 服务端还不认它:不推不拉不记影子,等它升级后照常首次同步
   if (!families.agentCalendar) paths.delete('CALENDAR.db'); // 同上(老服务端会 400)
+  // 日历是可合并的文件:影子要能立刻落盘(推送前标 pending、处理完就落),和 human/ 槽位同一套,推上去却没记下基线就崩不会拿旧基线合并
+  let saved = JSON.stringify(prev);
+  const persist = (): void => {
+    const next = JSON.stringify(prev);
+    if (next !== saved) { withMemoryDirectoryLock(dir, () => atomicSyncWrite(agentsDir(), join(dir, `.cloudsync-${scope}.json`), next, guard)); saved = next; }
+  };
   for (const p of paths) {
     guard();
     try {
       if (p.startsWith('LOG/')) await reconcileLog(cloud, uid, slug, dir, p, remote.get(p), signal, guard, result);
       // 日历按文本传、两台都改了按行 id 合并(和 human/CALENDAR.db 同一套),不整份出冲突副本
-      else await reconcileFile(cloud, uid, slug, dir, p, remote.get(p), prev, signal, guard, result, agentsDir(), p === 'CALENDAR.db' ? { merge: true, text: true } : {});
+      else await reconcileFile(cloud, uid, slug, dir, p, remote.get(p), prev, signal, guard, result, agentsDir(), p === 'CALENDAR.db' ? { merge: true, text: true, persist } : {});
     } catch (e) { fail(result, e); guard(); }
+    if (p === 'CALENDAR.db') { guard(); persist(); }
   }
   guard(); withMemoryDirectoryLock(dir, () => atomicSyncWrite(agentsDir(), join(dir, `.cloudsync-${scope}.json`), JSON.stringify(prev), guard));
 }

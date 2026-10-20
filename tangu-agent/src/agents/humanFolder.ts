@@ -39,8 +39,8 @@ interface MirrorPair { key: string; legacy: string; legacyRoot: string; human: s
  *  - 只有一边动了:照抄到另一边。两边都动了:.md 按行三方合并、.db 按行 id 合并;合不拢时 human/ 那份赢,旧位置那份存成 human/ 里的冲突副本。
  *    还没有基线(第一次)时取并集:.md 是 human/ 那份加上旧位置独有的行,.db 是两边的行都留下。
  *  什么时候停(方案页同目录「镜像何时停与Agent日历上云.md」):同步时把服务端的回答(opts.legacy)记进镜像状态,启动、改画像这些
- *  不经过同步的调用也读它。只有明确收到「没有旧客户端在用 USER.md」才跳过 USER.md 那一对 —— 不是永久停:旧客户端再出现,
- *  下一次同步就恢复,拿停之前的基线三方合并。日历那一对每次都镜像:新版桌面自己的日历视图、网页、手机都还读库里那份。
+ *  不经过同步的调用也读它。只有明确收到「没有旧客户端在用 USER.md」才停 USER.md 那一对,而且只停「human/ → 旧位置」:
+ *  旧位置自己变了照样并进来。不是永久停:旧客户端再出现,下一次同步就恢复,拿停之前的基线三方合并。日历那一对每次都镜像:新版桌面自己的日历视图、网页、手机都还读库里那份。
  *  返回出了几份冲突副本。 */
 export async function mirrorLegacyHuman(opts: { legacy?: LegacyClients | null } = {}): Promise<{ conflicts: number }> {
   ensureHumanFolder();
@@ -65,7 +65,9 @@ export async function mirrorLegacyHuman(opts: { legacy?: LegacyClients | null } 
     const known = legacyClientsOf(state);
     const userMdPaused = known !== null && !known.families.includes('user-md');
     for (const pair of pairs) {
-      if (userMdPaused && !pair.db) continue; // 停着:USER.md 是不再更新的快照,基线留着等恢复时三方合并
+      // 停着只是不再往旧位置写(USER.md 成了不再更新的快照,基线留着等恢复时三方合并);旧位置自己变了 —— 第一次从云端拉下来、
+      // 上次没拉成这次才拉到、旧客户端 / Echo / 账户中心刚改过 —— 照样并进 human/,不然画像就到不了新版
+      if (userMdPaused && !pair.db && state[pair.key] !== undefined && readSyncBytes(pair.legacyRoot, pair.legacy)?.toString('utf8') === state[pair.key]) continue;
       try { conflicts += mirrorPair(pair, state, home, dir); }
       catch (e) { console.warn(`[human mirror] ${pair.key}: ${e instanceof Error ? e.message : String(e)}`); } // 下次同步 / 启动再来
     }

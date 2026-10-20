@@ -182,6 +182,15 @@ describe('盘面读写(TANGU_HOME 重定向)', () => {
     expect(readFileSync(join(dir, left[0]), 'utf8')).toContain('old title');
   });
 
+  it('改名时同一行两份都在:跑过的那次 lastRun 不被另一份的空值盖掉', async () => {
+    const dir = join(home, 'agents', 'eps');
+    mkdirSync(dir, { recursive: true });
+    const file = (lastRun: string) => JSON.stringify({ version: 1, name: 'E', columns: [{ id: 'name', name: 'Name', type: 'text' }], rows: [{ id: 's-1', cells: { name: 'brief', lastRun } }] });
+    writeFileSync(join(dir, 'SCHEDULE.db'), file('2026-10-20T01:00:00.000Z'));
+    writeFileSync(join(dir, 'CALENDAR.db'), file(''));
+    expect(entriesOf((await loadSchedule('eps'))!)[0].lastRun).toBe('2026-10-20T01:00:00.000Z');
+  });
+
   it('损坏文件:load 回 null,ensure 拒绝覆盖(保数据);MAX_ENTRIES 帽', async () => {
     mkdirSync(join(home, 'agents', 'beta'), { recursive: true });
     writeFileSync(scheduleFile('beta'), '{broken');

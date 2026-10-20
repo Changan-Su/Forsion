@@ -18,7 +18,7 @@ import { mirrorLegacyHuman } from '../src/agents/humanFolder.js';
 import { withDbLock } from '../src/services/amadeusDb.js';
 import { humanDir, USER_MD_TEMPLATE, userMdFile } from '../src/core/tanguHome.js';
 import { AgentFileConflictError, type AgentFilesBrain } from '../src/seams/cloudBrain.js';
-import { dueHere, entriesOf, loadSchedule, markEntryFired, upsertEntry, validateEntryInput } from '../src/services/agentSchedule.js';
+import { dueHere, entriesOf, loadSchedule, markEntryFired, removeEntry, saveSchedule, upsertEntry, validateEntryInput } from '../src/services/agentSchedule.js';
 
 // 同一进程里轮流扮演两台:设备号跟着当前扮演的那台走(生产里一个进程只有一个家目录)
 vi.mock('../src/core/deviceId.js', () => ({ getDeviceId: () => process.env.TANGU_TEST_DEVICE ?? 'x' }));
@@ -501,5 +501,50 @@ describe('human/ in the cloud — two devices', () => {
     a.use(); const onA = entriesOf((await loadSchedule('shared'))!);
     expect(onA.find((e) => e.id === id)!.lastRun).toBe(nine.toISOString());
     expect(dueHere(onA, new Date(2026, 9, 22, 9, 35))).toEqual([]);
+  });
+
+  it('a USER.md download that failed on the first sync is still imported later, even with the mirror paused', async () => {
+    const cloud = fakeCloud(['human', 'human-folder']);
+    await cloud.putFile('u', '__user__', 'USER.md', { content: 'Name: Lin\nLikes: tea\n', isBinary: false, size: 0, mtimeMs: 1, baseSeq: 0 });
+    cloud.legacy = [];
+    const [a] = two();
+    await a.enroll(cloud);
+    const get = cloud.getFile.bind(cloud);
+    cloud.getFile = async (...args: Parameters<typeof get>) => { if (args[1] === '__user__') { cloud.getFile = get; throw new Error('socket hang up'); } return get(...args); };
+    a.use(); expect((await runAgentFilesSync(cloud, 'u')).error).toMatch(/socket hang up/); // 第一次没拉成:human/ 先带着空模板上云、写了搬家标记
+    expect(cloudText(cloud, '__human__', '.layout')).toBe('2\n');
+    await a.sync(cloud); // 这次拉到了:旧位置变了,停着也并进 human/
+    expect(a.human('MEMORY.md')).toBe('Name: Lin\nLikes: tea\n');
+    expect(cloudText(cloud, '__human__', 'MEMORY.md')).toBe('Name: Lin\nLikes: tea\n');
+  });
+
+  it('an agent calendar upload the cloud took but never acknowledged does not make the next merge delete a row another device restored', async () => {
+    const cloud = fakeCloud(['human', 'human-folder', 'agent-calendar']);
+    const [a, b] = two();
+    for (const d of [a, b]) {
+      await d.enroll(cloud);
+      await saveAgent({ slug: 'shared', name: 'Shared', systemPrompt: 'fixture', cloudSync: true });
+      setAgentSyncPermission('shared', agentSyncScope(cloud, 'u')!, true, false);
+    }
+    a.use();
+    for (const name of ['One', 'Two']) await upsertEntry('shared', (validateEntryInput({ name, date: '2026-10-21' }) as any).value);
+    await a.sync(cloud); await b.sync(cloud);
+    a.use(); const two_ = entriesOf((await loadSchedule('shared'))!).find((e) => e.name === 'Two')!;
+    await removeEntry('shared', two_.id);
+    // 推 CALENDAR.db 时云端收下了,回执在路上丢了
+    const put = cloud.putFile.bind(cloud);
+    cloud.putFile = async (...args: Parameters<typeof put>) => { if (args[1] === 'shared' && args[2] === 'CALENDAR.db') { cloud.putFile = put; await put(...args); throw new Error('socket hang up'); } return put(...args); };
+    a.use(); expect((await runAgentFilesSync(cloud, 'u')).error).toMatch(/socket hang up/);
+    // B 收到删除,又把那一行原样加回来,另加一条
+    await b.sync(cloud);
+    b.use();
+    expect(JSON.parse(cloudText(cloud, 'shared', 'CALENDAR.db')!).rows).toHaveLength(1);
+    const onB = (await loadSchedule('shared'))!;
+    const same = { id: two_.id, cells: { name: 'Two', date: '2026-10-21', repeat: '', auto: false, prompt: '', description: '', todo: false, lastRun: '', device: 'a' } };
+    await saveSchedule('shared', { ...onB, rows: [...onB.rows, same] });
+    await upsertEntry('shared', (validateEntryInput({ name: 'Three', date: '2026-10-22' }) as any).value);
+    await b.sync(cloud);
+    await a.sync(cloud); // 拿旧基线合并会把 B 加回来的那行当成「A 这边删了」再删一次
+    for (const d of [a, b]) { await d.sync(cloud); d.use(); expect(entriesOf((await loadSchedule('shared'))!).map((e) => e.name).sort()).toEqual(['One', 'Three', 'Two']); }
   });
 });

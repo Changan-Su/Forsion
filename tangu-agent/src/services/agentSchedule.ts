@@ -114,7 +114,7 @@ function migrateUnlocked(slug: string): void {
   const cur = readText(file);
   const merged = cur === null ? { content: stamped } : db ? mergeDbFile(stamped, null, cur) : null;
   if (!merged) { console.warn(`[schedule] ${slug}: SCHEDULE.db and CALENDAR.db cannot be merged; left both in place`); return; }
-  atomicSyncWrite(agentsDir(), file, merged.content);
+  atomicSyncWrite(agentsDir(), file, cur === null ? merged.content : keepLatestRuns(merged.content, stamped, cur)); // 同一行冲突:跑过的那次不能被另一份的空 lastRun 盖掉
   // 同一行两份写得不一样(合并取了 CALENDAR.db 那份):旧名那份留成冲突副本,不默默丢
   if ('conflict' in merged && merged.conflict) renameSync(legacy, join(agentsDir(), slug, conflictCopyName('SCHEDULE.db', new Date())));
   else unlinkSync(legacy);
