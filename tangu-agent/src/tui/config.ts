@@ -79,7 +79,7 @@ export const tuiHelp = (): string =>
   --approval <mode>     审批档：readonly（询问我批准）| auto-edit（替我批准）| full-auto（完全放行）
                         | custom（自定义：按 config.json 的 approval 规则），默认 auto-edit
   --think <level>       思考强度：off | minimal | low | medium | high | xhigh | max（默认 medium；
-                        模型不支持的档位自动降到最近可用档，开启后思考内容默认折叠）
+                        模型不支持的档位自动换到最近可用档，开启后思考内容默认折叠）
   --token-budget <n>    本回合软 token 预算（超出后收尾停止）
   --cloud-url <url>     Forsion 云端（brain API），env TANGU_CLOUD_URL  [登录后可省]
   --token <token>       forsion_token，env TANGU_TOKEN                  [登录后可省]

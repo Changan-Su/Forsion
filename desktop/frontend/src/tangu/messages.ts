@@ -223,7 +223,7 @@ registerMessages({
   'sidebar.unarchive': { zh: '取消归档', en: 'Unarchive' },
   'sidebar.archive': { zh: '归档', en: 'Archive' },
   'sidebar.delete': { zh: '删除', en: 'Delete' },
-  'input.slash.thinkSet': { zh: '思考档位已设为「{level}」（模型不支持时自动降档）', en: 'Thinking effort set to {level} (auto-clamped if the model can\'t do it)' },
+  'input.slash.thinkSet': { zh: '思考档位已设为「{level}」（模型不支持时自动换到相近档位）', en: 'Thinking effort set to {level} (auto-clamped if the model can\'t do it)' },
   'input.slash.thinkUsage': { zh: '用法：/think {levels}', en: 'Usage: /think {levels}' },
   'input.slash.status': { zh: '本会话', en: 'This session' },
   'input.slash.copied': { zh: '已复制上一条回复', en: 'Copied the last reply' },
