@@ -1604,23 +1604,33 @@ export const usePluginStore = create<PluginState>((set, get) => {
         return { update(patch) { if (!cancelled) { Object.assign(pending, patch); if (patch.onChange) pending.onChange = value => { if (ctxAlive()) patch.onChange!(value) }; mounted?.update(pending) } }, dispose }
       },
       // 宿主样式的右键菜单(10-18,主页插件化 S7)。动态 import 破环;形态错同步抛。插件停用后点菜单项不再调它的 run。
-      contextMenu: (x, y, items) => {
+      // keepOpen:点了不关(勾选清单连勾),插件用 update 换行;菜单限高自己滚,所以 200 项只是兜底上限。
+      contextMenu: (x, y, items, opts) => {
         if (!Number.isFinite(x) || !Number.isFinite(y) || !Array.isArray(items)) throw new TypeError('contextMenu needs x, y and an item list')
-        const clean = items.filter((it) => it && typeof it.run === 'function' && typeof it.label === 'string' && it.label.trim()).slice(0, 40).map((it) => ({
+        const tidy = (list: unknown) => (Array.isArray(list) ? list as typeof items : []).filter((it) => it && typeof it.run === 'function' && typeof it.label === 'string' && it.label.trim()).slice(0, 200).map((it) => ({
           label: it.label.trim().slice(0, 80), run: it.run,
           ...(typeof it.checked === 'boolean' ? { checked: it.checked } : {}), disabled: !!it.disabled, danger: !!it.danger,
         }))
-        if (!ctxAlive() || !clean.length) return () => {}
-        let close: (() => void) | null = null, cancelled = false
-        const dispose = scope.own('mount', () => { cancelled = true; close?.() }, 'contextMenu')
+        const clean = tidy(items)
+        if (!ctxAlive() || !clean.length) return Object.assign(() => {}, { update() {} })
+        let menu: import('./contextMenuSurface').PluginMenuHandle | null = null, cancelled = false, latest = clean
+        const dispose = scope.own('mount', () => { cancelled = true; menu?.() }, 'contextMenu')
         void import('./contextMenuSurface').then((m) => {
           if (cancelled) return
-          close = m.openPluginContextMenu(x, y, clean, (run) => {
+          menu = m.openPluginContextMenu(x, y, latest, (run) => {
             if (!ctxAlive()) return
             try { run() } catch (e) { console.error(`[amadeus] plugin "${pluginId}" menu item threw`, e) }
-          }, () => dispose.forget()) // 自己关掉的(Esc / 点外面 / 点了某项)从账上划掉,别攒到停用(Codex 评审)
+          }, () => dispose.forget(), { keepOpen: opts?.keepOpen === true }) // 自己关掉的(Esc / 点外面 / 点了某项)从账上划掉,别攒到停用(Codex 评审)
         }).catch((e) => console.error(`[amadeus] plugin "${pluginId}" context menu failed`, e))
-        return dispose
+        return Object.assign(() => dispose(), {
+          update: (next: unknown) => {
+            if (cancelled || !ctxAlive()) return
+            const c = tidy(next)
+            if (!c.length) { dispose(); return }
+            latest = c // 菜单还在路上(动态 import 没回来)时也算数
+            menu?.update(c)
+          },
+        })
       },
       mountChatBox: (el, opts) => {
         if (!ctxAlive()) return { update() {}, focus() {}, dispose() {} }

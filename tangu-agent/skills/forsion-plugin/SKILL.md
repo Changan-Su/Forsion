@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.58.0
+  version: 1.59.0
   author: Forsion
   category: Forsion
 ---
@@ -337,7 +337,7 @@ ctx.registerView({ id: 'home', title: 'Muse', mount(el) {
 | `ctx.ui.mountSelectionBar` | 自己的视图里选中文字后浮出宿主的划线条 | 宿主给「问 Tangu / 翻译 / ⋯」,你声明自己的工具(图标钮 / 颜色点);不接就什么都不出;老宿主没有 → 可选链,保留自己的菜单 |
 | `ctx.ui.mountSettingsPage` / `ctx.ui.mountSettingsItem` | 设置类页面(账号、额度、诊断、偏好…)用宿主的设置零件画 | 只给 groups / items 数据和回调,宿主按端排版(手机上紧凑控件留右、宽控件换行、选了就执行 → 半屏);**别再抄宿主的设置 CSS**;老宿主没有 → 可选链,保留自己画的那套 |
 | `ctx.ui.mountRecord` | 自己的卡片里挂宿主的「一行记录」编辑字段(标题 / 时间 / 属性,和内置日历的事件浮卡同一份) | 2026-10-17 起;⚠️**声明 `"databases"` 才有**;写口同 `ctx.databases.setCell`,外框 / 关闭 / 打开 / 删除归你;见下「日历 / 待办类插件的其余入口」 |
-| `ctx.ui.contextMenu(x, y, items)` | 宿主样式的右键菜单(和内置主页、Ribbon 的一样) | 2026-10-18 起;`items` = `{ label, run(), checked?, disabled?, danger? }`,视口坐标、放不下自己翻面;同一时刻只开一个,点外面 / Esc / 点了某项就关;返回关闭函数;老宿主没有 → `ctx.ui?.contextMenu?.(…)` |
+| `ctx.ui.contextMenu(x, y, items, opts?)` | 宿主样式的右键菜单(和内置主页、Ribbon 的一样) | 2026-10-18 起;`items` = `{ label, run(), checked?, disabled?, danger? }`,视口坐标、放不下自己翻面,限高、项多 / 窗口矮时自己滚(最多 200 项);同一时刻只开一个,点外面 / Esc / 点了某项就关;返回关闭函数;老宿主没有 → `ctx.ui?.contextMenu?.(…)`。**勾选清单连勾**:`opts.keepOpen: true` 点了不关,你改完状态调返回句柄的 `close.update(items)` 换一份行 —— ⚠️勾和 `run` 都要换成新的;连点两下可能赶在重画之前(用的还是旧那份行),所以 `run` 里读**当下**的状态(ref / store),别只靠闭包,不然第二下会把第一下吞掉;空列表 = 关。更早的宿主不认 `opts`、点了照关,也没有 `update`(拿 `typeof close.update === 'function'` 判) |
 | `ctx.ui.mountBoard` / `ctx.ui.boardToSvg` | 盖在自己内容上的透明白板层(手写 / 圈画) | 和 `.excalidraw.md` 白板同一个引擎、同样的七支笔;**视口归调用方**(自己推 `viewport`、自己接滚轮);元素原样存取;不在手写时用 `boardToSvg` 出静态图;老宿主没有 → 不出手写入口 |
 | `ctx.table.mount` | 面板里的原生多维表(只读) | 一份规格 → 真 DbTable(筛选/搜索/隐藏列/排序/统计全套),**不依赖笔记库**;老宿主没有 → 可选链 + 自己的表格降级(见下) |
 
@@ -1527,6 +1527,7 @@ const off = s.subscribe(draw)                        // Space 注册 / Ribbon �
 - `actions()`:商店、成就两格 `{ id, name, run() }`,图标同样用 `mountIcon(el, id)`。
 - `open(id)` 口径同 Ribbon 上点它;本窗口是锁在某个 Space 上的 Space 窗口时,开到那个 Space 自己的窗口。不认识的 id → `false`。
 - `mountIcon` / `mountStatus` 返回卸载函数,之后 `el` 立刻还给你;插件被停用 / 重载时宿主统一收掉,`subscribe` 也一并退订。
+- `mountIcon` 画的图标跟着 Space 走:同一个 id 重新注册换了图标(插件更新了 `iconFile`)宿主原地重画;挂的时候还没注册的 id 先空着,注册上了再画 —— 不用为换图标自己重挂。
 
 ## 全库多维表与笔记任务:ctx.databases / ctx.noteTasks(2026-10-16 起)
 

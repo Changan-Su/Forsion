@@ -917,6 +917,8 @@ a:hover { color: var(--accent-ink); }
   box-shadow: var(--card-shadow);
   animation: fade-up var(--duration-fast) var(--ease-out);
 }
+/* 项数不定的菜单(插件的 ctx.ui.contextMenu):限高自己滚,同内置主页的 .hp-cards-menu */
+.ctx-menu-scroll { max-height: min(70vh, 520px); overflow-y: auto; }
 .ctx-menu button {
   display: flex;
   align-items: center;

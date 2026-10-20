@@ -14,10 +14,16 @@ const ACTIONS = ['rb-market', 'rb-achievements'] as const
 
 type Api = NonNullable<PluginContext['spaces']>
 
+/** Space 的图标,不是 Space 就找 Ribbon 条目(商店 / 成就)。 */
+function SpaceIcon({ id, size }: { id: string; size: number }) {
+  const space = useSpaceStore((s) => s.spaces.find((x) => x.id === id)?.icon)
+  const item = useRibbonStore((s) => s.items.find((i) => i.id === id)?.icon)
+  const Icon = space ?? item
+  return Icon ? <Icon size={size} /> : null
+}
+
 export function createSpacesApi({ alive, own }: { alive: () => boolean; own: (off: () => void) => () => void }): Api {
   const str = (v: unknown): string => (typeof v === 'string' ? v : '')
-  const iconOf = (id: string) => useSpaceStore.getState().spaces.find((s) => s.id === id)?.icon
-    ?? useRibbonStore.getState().items.find((i) => i.id === id)?.icon
   return {
     list: () => useSpaceStore.getState().spaces.map((s) => ({ id: s.id, name: label(s.name) })),
     subscribe: (cb) => {
@@ -39,12 +45,12 @@ export function createSpacesApi({ alive, own }: { alive: () => boolean; own: (of
       }
       return true
     },
+    // 跟着 store 走:同 id 重注册换了图标(插件更新 iconFile)就原地重画,挂的时候还没注册的等它注册上;退订在树里,卸载一起走
     mountIcon: (el, id, opts) => {
       if (!(el instanceof HTMLElement)) throw new TypeError('mountIcon needs an HTMLElement')
-      const Icon = iconOf(str(id))
-      if (!alive() || !Icon) return () => {}
+      if (!alive()) return () => {}
       const size = typeof opts?.size === 'number' && opts.size > 0 ? Math.min(opts.size, 256) : 20
-      return own(mountHostReact(el, <Icon size={size} />).dispose)
+      return own(mountHostReact(el, <SpaceIcon id={str(id)} size={size} />).dispose)
     },
     // 近况那一行由宿主画进 el、跟着数据自己更新(日历那一行只在有人挂着时才去读日历库)
     mountStatus: (el, id) => {
