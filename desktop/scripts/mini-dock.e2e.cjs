@@ -105,6 +105,7 @@ async function main() {
     const alpha = await corner()
     check('theme changes preserve transparent rounded corners', alpha.alpha < 32 && alpha.center > 240, alpha)
     await mini.screenshot({ path: path.join(output, 'expanded-light.png'), omitBackground: true })
+    let settledSize
     for (const edge of ['left', 'right', 'top', 'bottom']) {
       await app.evaluate((_, edge) => {
         const p = globalThis.__miniProbe, a = globalThis.__miniProbeArea, b = p.w.getContentBounds()
@@ -119,7 +120,10 @@ async function main() {
       fs.writeFileSync(path.join(output, `${edge}-collapse-frames.json`), JSON.stringify(closing))
       const tucked = await app.evaluate(() => { const p = globalThis.__miniProbe; return { bounds: p.w.getContentBounds(), shape: p.shapes.at(-1) } })
       const a = meta.area, b = tucked.bounds
-      check(`${edge}: native moves do not accumulate DPI size rounding`, b.width === meta.cardSize.width && b.height === meta.cardSize.height, b)
+      // The first placement may align a fractional native client edge by up to 2 DIP.
+      // What regressed was growth on EVERY move: compare subsequent docks to that settled size.
+      settledSize ||= { width: b.width, height: b.height }
+      check(`${edge}: native moves do not accumulate DPI size rounding`, b.width === settledSize.width && b.height === settledSize.height && Math.abs(b.width - meta.cardSize.width) <= 2 && Math.abs(b.height - meta.cardSize.height) <= 2, b)
       check(`${edge}: native window stays on its owning monitor`, b.x >= a.x && b.y >= a.y && b.x + b.width <= a.x + a.width && b.y + b.height <= a.y + a.height, tucked)
       check(`${edge}: only the peek strip accepts OS input`, tucked.shape?.length === 1 && (['left', 'right'].includes(edge) ? tucked.shape[0].width === 14 : tucked.shape[0].height === 14), tucked.shape)
       if (edge === 'right' && process.platform === 'win32') {
