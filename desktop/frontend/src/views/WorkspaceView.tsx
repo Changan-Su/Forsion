@@ -21,8 +21,7 @@ import { initialFor } from '../components/agentInitial'
 import { useApp } from '../stores/appStore'
 import { registerMessages, useI18n } from '../i18n'
 import { useShallow } from 'zustand/react/shallow'
-import { readTanguSidebarModes } from '../amadeus/plugins/tanguSeam'
-import { TocView } from '@tangu/ui/views/RightViews'
+import { readTanguChatOutline, readTanguSidebarModes } from '../amadeus/plugins/tanguSeam'
 import { FilesPanel } from '@tangu/ui/views/chat2/FilesPanel'
 import { PATHS_MIME as DRAG_MIME } from '../components/chatDragRef'
 import type { PreviewTarget } from '../components/WorkspaceFilePreview'
@@ -775,7 +774,9 @@ export function OutlineView(props: Partial<ViewProps> = {}) {
   const mainType = useActiveMainType()
   const src = typeof props.params?.sourcePath === 'string' ? props.params.sourcePath : ''
   if (src && amadeusAvailable()) return <ScopedPageOutline path={src} scope={`${props.leaf?.id ?? 'outline'}::src`} />
-  if (mainType === 'chat') return <TocView />
+  // 对话的会话目录是 Tangu 交出来的(核心插件化 2e-6);没交 → 落到下面的空态
+  const ChatOutline = readTanguChatOutline()
+  if (mainType === 'chat' && ChatOutline) return <ChatOutline />
   if (mainType === 'amadeus-editor' && amadeusAvailable()) return <AmadeusOutlineView />
   return <div className="t2sw-empty">{t('outline.empty')}</div>
 }

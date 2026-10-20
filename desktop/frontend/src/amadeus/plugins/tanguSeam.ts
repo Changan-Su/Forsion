@@ -10,7 +10,8 @@
  * `capabilities` 白名单那道双闸)。
  */
 
-import type { ComponentType } from 'react'
+import { createContext, type ComponentType } from 'react'
+import type { CtxItem } from '../../components/RightPanel'
 import type { Attachment } from '../../../../../tangu-agent/src/contracts/clientTypes'
 
 export interface TanguModelInfo {
@@ -392,3 +393,26 @@ export function setTanguSidebarModes(p: TanguSidebarModes | null): void {
 export function readTanguSidebarModes(): TanguSidebarModes | null {
   return sidebarModes
 }
+
+/** 「大纲」视图在主区是对话时画的会话目录(核心插件化 2e-6,方案第 5 节 8 号接缝 `registerOutlineProvider` 的仓内版):
+ *  Tangu 在激活时交出,宿主的 OutlineView 只管放。**宿主内部接缝**。没交 → 落空态。 */
+let chatOutline: ComponentType | null = null
+
+export function setTanguChatOutline(p: ComponentType | null): void {
+  chatOutline = p
+}
+
+export function readTanguChatOutline(): ComponentType | null {
+  return chatOutline
+}
+
+/** 被 Agent Desk 托管的视图拿到的悬浮胶囊(10-17 用户选方案 B,方案页 docs/ToBeImproved/AgentDesk方案_2026-10-17/)。
+ *  格子里的视图不再画自己的顶栏:读到本 context 就把视图专属控件(编辑/源码、换行、缩放…)portal 进胶囊槽,
+ *  次要动作写进 more(⋯ 菜单打开那一刻才读,写 ref 不触发重渲染)。Desk(Tangu)提供,宿主的 WsFileView 读
+ *  (核心插件化 2e-6 从 chat2/deskChrome 挪来;放这里是因为两边本来都依赖本文件,也不必为一个 context 拉起文件视图)。 */
+export interface DeskChrome {
+  /** 胶囊里给视图留的槽;首帧为 null(ref 还没挂上),视图此时什么都不画,也不画自带顶栏。 */
+  slot: HTMLElement | null
+  more: { current: CtxItem[] }
+}
+export const DeskChromeContext = createContext<DeskChrome | null>(null)
