@@ -436,3 +436,42 @@ export function setTanguChatViews(p: TanguChatViews | null): void {
 export function readTanguChatViews(): TanguChatViews | null {
   return chatViews
 }
+
+/** 往输入框预填的来源(核心插件化 2e-8,方案第 5 节 10 号接缝「Composer2 扩展槽」的仓内版):造物、图像工作室、插件聊天
+ *  这些宿主功能往这里登记,Composer2 只在自己的输入卡上问一遍「有没有给我的」,不再反读它们的 store。
+ *  来源的待填变了就 notifyComposerPrefill();输入卡等这一轮渲染提交之后再认领(和原来按 store 订阅的 effect 同一时机)。 */
+export interface ComposerPrefillTarget {
+  /** 认领的那张输入卡;来源按它所在的 DOM(data-image-studio-chat / data-plugin-chat)和是否可见决定给不给。 */
+  card: HTMLElement
+  /** 卡上的会话;新对话草稿 = null。 */
+  sessionId: string | null
+}
+export interface ComposerPrefill { texts: string[]; attachments?: Attachment[] }
+export interface ComposerPrefillSource {
+  /** 有给这张卡的就当场取走(只取一次)并返回;没有 = null。 */
+  claim(t: ComposerPrefillTarget): ComposerPrefill | null
+}
+
+const prefillSources = new Set<ComposerPrefillSource>()
+const prefillListeners = new Set<() => void>()
+
+/** 来源登记(通常在它的 store 模块里);返回注销。登记本身也算一次「待填变了」。 */
+export function registerComposerPrefill(src: ComposerPrefillSource): () => void {
+  prefillSources.add(src)
+  notifyComposerPrefill()
+  return () => { prefillSources.delete(src) }
+}
+
+export function notifyComposerPrefill(): void {
+  for (const l of [...prefillListeners]) l()
+}
+
+export function subscribeComposerPrefill(l: () => void): () => void {
+  prefillListeners.add(l)
+  return () => { prefillListeners.delete(l) }
+}
+
+/** 按登记顺序问一遍,把给这张卡的都取走。 */
+export function claimComposerPrefill(t: ComposerPrefillTarget): ComposerPrefill[] {
+  return [...prefillSources].flatMap((src) => src.claim(t) ?? [])
+}
