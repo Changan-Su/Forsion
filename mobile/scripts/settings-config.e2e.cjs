@@ -38,8 +38,8 @@ const MODELS_BODY = JSON.stringify({
  *  2.10.2 起模型设置按用途分页:默认模型页是按用途的紧凑选择器(ModelSelect),不再平铺 ModelGroupList。 */
 const TAB_LABELS = ['模型', 'Models']
 const SUB_LABELS = ['默认模型', 'Default models']
-/** 默认模型页「对话与任务」选择器的 aria-label。 */
-const CHAT_LABELS = ['对话与任务', 'Conversations & tasks']
+/** 默认模型页「聊天与任务」选择器的 aria-label(= dm.chat;10-17 方案 C 前叫「对话与任务 / Conversations & tasks」)。 */
+const CHAT_LABELS = ['聊天与任务', 'Chats and tasks']
 const ABOUT_LABELS = ['关于', 'About']
 const ADVANCED_LABELS = ['高级', 'Advanced']
 const EXPERIMENTAL_LABELS = ['测试性功能', 'Experimental features']

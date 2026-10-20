@@ -7,7 +7,7 @@
  * check:parity 当时也扫不到(bootstrap.ts 不在门控台账里)、boot 冒烟更不会点更新。
  *
  * 断言:
- *   A. 网关报了更高版本 → checkForUpdates 出 available,并自动弹出「更新」页(.changelog-view)
+ *   A. 网关报了更高版本 → checkForUpdates 出 available,并自动弹出 What's new 弹窗(.wn-modal;2.13.5 前是「更新」标签页 .changelog-view)
  *   B. 「下载更新」落到网关的安卓下载端点(大陆可达;不是 github.com)
  *   C. 负对照:网关报的版本不比装机版本新 → not-available,且不弹页
  *
@@ -25,6 +25,8 @@ const { chromium } = (() => {
 let URL = '' // main() 里由 startPreview 给:系统分配的空闲端口,E2E_PORT 可指定(见 lib/preview.cjs)
 const NEWER = '99.0.0'
 const OLDER = '0.0.1'
+/** 自动弹出的 What's new 两栏弹窗(components/WhatsNewDialog.tsx,MobileRoot 挂了 WhatsNewHost)。 */
+const WHATS_NEW = '.wn-modal[role="dialog"]'
 
 function findChromium() {
   if (process.env.CHROMIUM_EXE) return process.env.CHROMIUM_EXE
@@ -99,13 +101,15 @@ async function main() {
     // ── A/B:网关报了更高版本 ──
     {
       const { ctx, page } = await open(NEWER)
+      // 先数弹窗、再手动查:手动 checkForUpdates 也会广播给 onUpdaterStatus,顺序反过来的话
+      // 「启动那次没弹、是手动这次弹的」也会绿。
+      const opened = await page.locator(WHATS_NEW).count()
+      if (opened > 0) pass('启动自动弹出 What\'s new 弹窗')
+      else fail('启动自动弹出 What\'s new 弹窗', `没找到 ${WHATS_NEW}`)
+
       const st = await page.evaluate(() => window.tangu.checkForUpdates())
       if (st && st.phase === 'available' && st.version === NEWER) pass('网关报新版本 → available', `${st.version}`)
       else fail('网关报新版本 → available', JSON.stringify(st))
-
-      const opened = await page.locator('.changelog-view').count()
-      if (opened > 0) pass('启动自动弹出「更新」页')
-      else fail('启动自动弹出「更新」页', '没找到 .changelog-view')
 
       await page.evaluate(() => window.tangu.downloadUpdate())
       const urls = await page.evaluate(() => window.__opened || [])
@@ -136,9 +140,9 @@ async function main() {
       const st = await page.evaluate(() => window.tangu.checkForUpdates())
       if (st && st.phase === 'not-available') pass('负对照:旧版本 → not-available')
       else fail('负对照:旧版本 → not-available', JSON.stringify(st))
-      const opened = await page.locator('.changelog-view').count()
-      if (opened === 0) pass('负对照:不弹「更新」页')
-      else fail('负对照:不弹「更新」页', '弹了')
+      const opened = await page.locator(WHATS_NEW).count()
+      if (opened === 0) pass('负对照:不弹 What\'s new 弹窗')
+      else fail('负对照:不弹 What\'s new 弹窗', '弹了')
       await ctx.close()
     }
   } catch (e) {
