@@ -3,7 +3,7 @@
  */
 import { Router } from 'express';
 import { authMiddleware, AuthRequest } from '../core/http.js';
-import { connectCode, extensionStatus, extensionToken } from '../services/browserExtension.js';
+import { connectCode, extensionStatus, extensionToken, reloadExtensionClients } from '../services/browserExtension.js';
 
 const router = Router();
 
@@ -15,6 +15,11 @@ router.get('/agent/browser-extension', authMiddleware, (_req: AuthRequest, res) 
 router.post('/agent/browser-extension/reset-code', authMiddleware, (_req: AuthRequest, res) => {
   extensionToken(true);
   res.json({ ...extensionStatus(), code: connectCode() });
+});
+
+/** 桌面换了扩展文件夹里的版本之后调:连着的扩展重新加载,读进新版本(本机专用:Unit 反代把 /agent/browser-extension* 整段挡在外面)。 */
+router.post('/agent/browser-extension/reload-clients', authMiddleware, (_req: AuthRequest, res) => {
+  res.json({ reloaded: reloadExtensionClients() });
 });
 
 export default router;

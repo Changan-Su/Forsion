@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { WebSocket } from 'ws';
 import {
   EXTENSION_ID, connectCode, currentExtensionClient, extensionCall, extensionClientAlive, extensionConnected, extensionStatus, extensionToken,
-  startBrowserExtensionBridge, stopBrowserExtensionBridge,
+  reloadExtensionClients, startBrowserExtensionBridge, stopBrowserExtensionBridge,
 } from './browserExtension.js';
 
 const freePort = (): Promise<number> => new Promise((r) => { const s = createServer(); s.listen(0, '127.0.0.1', () => { const p = (s.address() as any).port; s.close(() => r(p)); }); });
@@ -104,6 +104,22 @@ describe('Tangu for Chrome 扩展桥', () => {
     expect(extensionConnected()).toBe(true);
     await expect(extensionCall('tabs.list', { a: 1 })).resolves.toEqual({ echo: 'tabs.list', params: { a: 1 } });
     await expect(extensionCall('boom')).rejects.toThrow('page script failed');
+  });
+
+  it('记住最近连上来的扩展(未安装 / 未连接靠它分),换码不丢;Forsion 换了扩展版本后能叫连着的扩展重新加载', async () => {
+    expect(extensionStatus().lastClient).toBeNull();
+    const seen: string[] = [];
+    const { ws, welcomed } = await fakeExtension({ handler: (m) => { seen.push(m.method); return { ok: true }; } });
+    await welcomed;
+    expect(extensionStatus().lastClient?.version).toBe('test');
+    expect(reloadExtensionClients()).toBe(1);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(seen).toEqual(['extension.reload']);
+    const closed = new Promise((r) => ws.on('close', r));
+    extensionToken(true);
+    await closed;
+    expect(extensionStatus()).toMatchObject({ connected: false, lastClient: { version: 'test' } });
+    expect(reloadExtensionClients()).toBe(0);
   });
 
   it('扩展断线:挂起中的请求立刻失败,不会等满超时', async () => {

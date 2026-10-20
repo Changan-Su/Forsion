@@ -10,7 +10,7 @@ import http from 'node:http'
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { networkInterfaces, tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import type { AddressInfo } from 'node:net'
 import { IPC } from '@amadeus-shared/ipc'
@@ -61,7 +61,7 @@ interface Boot {
   close: () => void
 }
 
-async function boot(distDir: string | null = null, vaultRoot?: string, p2pAnswer?: (sdp: string) => Promise<string>, extra?: Partial<UnitWebDeps>): Promise<Boot> {
+async function boot(distDir: string | null = null, vaultRoot?: string, p2pAnswer?: (sdp: string) => Promise<string>, extra?: Partial<UnitWebDeps>, bindHost = '127.0.0.1'): Promise<Boot> {
   const engine = await fakeEngine()
   const paired: PairedDevice[] = []
   let approveFn: (ok: boolean) => void = () => {}
@@ -103,7 +103,7 @@ async function boot(distDir: string | null = null, vaultRoot?: string, p2pAnswer
     log: () => {},
     ...extra,
   }
-  const handle = await startUnitWeb(deps, { port: 0, bindHost: '127.0.0.1' })
+  const handle = await startUnitWeb(deps, { port: 0, bindHost })
   return {
     base: `http://127.0.0.1:${handle.port}`,
     handle,
@@ -116,12 +116,12 @@ async function boot(distDir: string | null = null, vaultRoot?: string, p2pAnswer
   }
 }
 
-/** 走完配对流拿一枚可用令牌。 */
-async function pairUp(b: Boot): Promise<string> {
-  const req = await (await fetch(`${b.base}/unit/pair/request`, { method: 'POST', body: '{}' })).json() as any
+/** 走完配对流拿一枚可用令牌。base 缺省走回环;传局域网地址 = 冒充另一台设备。 */
+async function pairUp(b: Boot, base = b.base): Promise<string> {
+  const req = await (await fetch(`${base}/unit/pair/request`, { method: 'POST', body: '{}' })).json() as any
   b.approve(true)
   await tick()
-  const { token } = await (await fetch(`${b.base}/unit/pair/poll?id=${req.requestId}`)).json() as any
+  const { token } = await (await fetch(`${base}/unit/pair/poll?id=${req.requestId}`)).json() as any
   return token as string
 }
 
@@ -198,6 +198,36 @@ describe('unitWeb', () => {
       await tick()
       const dp = await (await fetch(`${b.base}/unit/pair/poll?id=${d1.requestId}`)).json() as any
       expect(dp.status).toBe('denied')
+    } finally { b.close() }
+  })
+
+  it('/unit/browser-control(Clip 一次配对):只给本机直连的已配对设备;未配对 401、隧道 403、没有连接码 404', async () => {
+    const code = `tangu:47655:${'ab'.repeat(24)}`
+    let available = true
+    const b = await boot(null, undefined, undefined, { browserControlCode: async () => (available ? code : null) })
+    try {
+      expect((await fetch(`${b.base}/unit/browser-control`)).status).toBe(401)
+      const token = await pairUp(b)
+      const ok = await fetch(`${b.base}/unit/browser-control`, { headers: { Authorization: `Bearer ${token}` } })
+      expect(ok.status).toBe(200)
+      expect(await ok.json()).toEqual({ code })
+      // 隧道 / P2P 也是从回环进来的,但走的是内部密钥:不给(远端设备拿不到本机浏览器的控制权)
+      expect((await fetch(`${b.base}/unit/browser-control`, { headers: { 'x-unit-internal': b.handle.internalSecret } })).status).toBe(403)
+      expect((await fetch(`${b.base}/unit/browser-control`, { headers: { 'x-unit-p2p': b.handle.p2pSecret } })).status).toBe(403)
+      available = false
+      expect((await fetch(`${b.base}/unit/browser-control`, { headers: { Authorization: `Bearer ${token}` } })).status).toBe(404)
+    } finally { b.close() }
+  })
+
+  it('/unit/browser-control:局域网里另一台已配对的设备拿不到(403)', async () => {
+    const lan = Object.values(networkInterfaces()).flat().find((i) => i && i.family === 'IPv4' && !i.internal)?.address
+    if (!lan) return // 这台机器没有局域网地址:测不了「别的设备」,回环那条已覆盖放行面
+    const b = await boot(null, undefined, undefined, { browserControlCode: async () => `tangu:47655:${'ab'.repeat(24)}` }, '0.0.0.0')
+    try {
+      const base = `http://${lan}:${b.handle.port}`
+      const token = await pairUp(b, base)
+      expect((await fetch(`${base}/unit/whoami`, { headers: { Authorization: `Bearer ${token}` } })).status).toBe(200)
+      expect((await fetch(`${base}/unit/browser-control`, { headers: { Authorization: `Bearer ${token}` } })).status).toBe(403)
     } finally { b.close() }
   })
 

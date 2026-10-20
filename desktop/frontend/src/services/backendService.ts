@@ -696,6 +696,8 @@ export interface ChannelConfigPatch {
 export interface BrowserExtensionStatus {
   enabled: boolean; port: number; listening: boolean; error: string; connected: boolean
   clients: Array<{ version: string; connectedAt: number }>; extensionId: string; extensionDir: string; code: string
+  /** 最近一次连上来的扩展;从没连上过 = null(设置页据此显示「未安装」)。旧引擎没有这个字段。 */
+  lastClient?: { version: string; at: number } | null
 }
 // 都带超时:引擎挂住不回时,轮询不叠请求、换码按钮不会永远置灰
 export const getBrowserExtension = (t: EngineTarget) =>

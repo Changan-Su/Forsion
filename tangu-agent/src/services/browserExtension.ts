@@ -58,19 +58,26 @@ function allowedOrigins(): Set<string> {
 
 function tokenFile(): string { return path.join(tanguHome(), 'browser-extension.json'); }
 
+type TokenFile = { token?: string; lastClient?: { version: string; at: number } };
+const readTokenFile = (): TokenFile => { try { return JSON.parse(readFileSync(tokenFile(), 'utf8')) || {}; } catch { return {}; } };
+const writeTokenFile = (f: TokenFile): void => {
+  mkdirSync(tanguHome(), { recursive: true });
+  writeFileSync(tokenFile(), `${JSON.stringify(f, null, 2)}\n`, { mode: 0o600 });
+};
+
 /** 连接码里的令牌:首次用时生成并落盘(0600);reset=true 换一枚新的(旧配对随即失效)。 */
 export function extensionToken(reset = false): string {
-  if (!reset) {
-    try {
-      const t = JSON.parse(readFileSync(tokenFile(), 'utf8')).token;
-      if (typeof t === 'string' && /^[0-9a-f]{32,}$/.test(t)) return t;
-    } catch { /* 没有或坏了 → 重新生成 */ }
-  }
+  const f = readTokenFile();
+  if (!reset && typeof f.token === 'string' && /^[0-9a-f]{32,}$/.test(f.token)) return f.token;
   const token = randomBytes(24).toString('hex');
-  mkdirSync(tanguHome(), { recursive: true });
-  writeFileSync(tokenFile(), `${JSON.stringify({ token }, null, 2)}\n`, { mode: 0o600 });
+  writeTokenFile({ ...f, token }); // 换码不丢 lastClient:装过的扩展换码后是「未连接」,不是「未安装」
   if (reset) for (const c of clients) c.ws.close(4001, 'code reset');
   return token;
+}
+
+/** 最近一次连上来的扩展(版本 + 时刻):设置页据此分「未安装」(从没连上过)和「未连接」。 */
+function rememberClient(version: string): void {
+  try { writeTokenFile({ ...readTokenFile(), lastClient: { version, at: Date.now() } }); } catch { /* 记不下只影响状态文案 */ }
 }
 
 export function connectCode(): string { return `tangu:${extensionPort()}:${extensionToken()}`; }
@@ -158,6 +165,7 @@ function onConnection(ws: WebSocket, req: IncomingMessage): void {
         endHandshake();
         client = { id: ++nextClientId, ws, version, connectedAt: Date.now(), pending: new Map() };
         clients.push(client);
+        rememberClient(version);
         ws.send(JSON.stringify({ type: 'welcome', engine: engineLabel() }));
         return;
       }
@@ -205,9 +213,16 @@ export function extensionCall<T = any>(method: string, params: Record<string, un
   });
 }
 
+/** Forsion 换了扩展文件夹里的版本之后:让连着的扩展各自重新加载(已解压的扩展不会自己重读磁盘)。返回叫到了几个。 */
+export function reloadExtensionClients(): number {
+  for (const c of clients) extensionCall('extension.reload', {}, 5000, c.id).catch(() => { /* 旧版扩展不认这条:等它下次被重启 */ });
+  return clients.length;
+}
+
 export function extensionStatus(): {
   enabled: boolean; port: number; listening: boolean; error: string; connected: boolean;
   clients: Array<{ version: string; connectedAt: number }>; extensionId: string; extensionDir: string;
+  lastClient: { version: string; at: number } | null;
 } {
   return {
     enabled: enabled(),
@@ -218,6 +233,7 @@ export function extensionStatus(): {
     clients: clients.map((c) => ({ version: c.version, connectedAt: c.connectedAt })),
     extensionId: EXTENSION_ID,
     extensionDir: extensionDir(),
+    lastClient: readTokenFile().lastClient ?? null,
   };
 }
 

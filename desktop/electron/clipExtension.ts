@@ -75,6 +75,53 @@ export function openChromeExtensions(): Promise<OpenChromeResult> {
   })
 }
 
+type EngineRef = () => { url: string | null; token: string }
+
+async function engineJson(engine: EngineRef, path: string, method = 'GET'): Promise<any> {
+  const { url, token } = engine()
+  if (!url) return null
+  const res = await fetch(`${url.replace(/\/$/, '')}${path}`, { method, headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(5000) })
+  return res.ok ? res.json() : null
+}
+
+/** 一次配对(方案 C 第二步):同一台电脑上已配对的 Forsion Clip 来领 Tangu 浏览器控制的连接码(unitWeb /unit/browser-control)。
+ *  桥没在听(端口被占 / 关了)就不给,Clip 留着手动粘码那条路。 */
+export async function browserControlCode(engine: EngineRef): Promise<string | null> {
+  const s = await engineJson(engine, '/agent/browser-extension').catch(() => null)
+  return s?.listening && typeof s.code === 'string' ? s.code : null
+}
+
+const older = (a: string, b: string): boolean => {
+  const x = a.split('.').map(Number); const y = b.split('.').map(Number)
+  for (let i = 0; i < Math.max(x.length, y.length); i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) < (y[i] || 0)
+  return false
+}
+let syncedFor = ''
+
+/**
+ * Forsion 更新后:连着的 Clip 比随包的旧 → 副本换成随包版本,再叫它重新加载(已解压的扩展不会自己重读磁盘)。
+ * 只在有 Clip 连着时换、换完立刻重载:不留「Chrome 还在跑旧版、文件已是新版」的空档(Codex 10-20 的顾虑)。
+ * 每个随包版本只试一次:Chrome 若是从别处加载的(比如老用户选的 .app 里那份),重载后还是旧版也不会反复折腾。
+ */
+export async function syncClipVersion(engine: EngineRef, src = clipSourceDir(), dst = clipCopyDir()): Promise<'reloaded' | 'skip'> {
+  const bundled = versionOf(src)
+  if (!bundled || syncedFor === bundled) return 'skip'
+  const s = await engineJson(engine, '/agent/browser-extension').catch(() => null)
+  const running: string[] = Array.isArray(s?.clients) ? s.clients.map((c: { version?: unknown }) => String(c.version || '')) : []
+  if (!running.some((v) => v && older(v, bundled))) return 'skip'
+  syncedFor = bundled
+  if (existsSync(join(dst, 'manifest.json')) && 'error' in ensureClipCopy(src, dst, true)) return 'skip'
+  await engineJson(engine, '/agent/browser-extension/reload-clients', 'POST').catch(() => null)
+  return 'reloaded'
+}
+
+/** ponytail: 每 5 分钟问一次本机引擎(回环、很便宜)。Chrome 常常比 Forsion 晚开,只在启动时看会漏;真要省就改成引擎在扩展连上时推一声。 */
+export function startClipVersionSync(engine: EngineRef): void {
+  const tick = (): void => { void syncClipVersion(engine).catch(() => {}) }
+  setTimeout(tick, 60_000).unref?.()
+  setInterval(tick, 5 * 60_000).unref?.()
+}
+
 export function registerClipExtensionIpc(): void {
   ipcMain.handle('clipExt:prepare', (_e, update?: boolean) => ensureClipCopy(clipSourceDir(), clipCopyDir(), update === true))
   ipcMain.handle('clipExt:openChrome', () => openChromeExtensions())

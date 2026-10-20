@@ -159,6 +159,9 @@ export interface UnitWebDeps {
   getEngine: () => { url: string | null; token: string; remoteMark?: string }
   /** B 侧原生确认框:展示设备名+6 位码,用户点允许=true。 */
   confirmPair: (info: { name: string; code: string; ip: string }) => Promise<boolean>
+  /** Tangu 浏览器控制的连接码(本机引擎的 /agent/browser-extension;拿不到 = null)。只给同一台电脑上已配对的
+   *  Forsion Clip(/unit/browser-control):一次配对把剪藏和浏览器控制一起配好。缺省 = 这台不下发(404)。 */
+  browserControlCode?: () => Promise<string | null>
   pairedDevices: {
     list: () => PairedDevice[]
     add: (d: PairedDevice) => Promise<void>
@@ -625,6 +628,17 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
     }
 
     // ── 鉴权面 ──
+    // 一次配对(Clip 安装引导第二步):同一台电脑上已配对的 Forsion Clip 来领 Tangu 浏览器控制的连接码。
+    // 只认「局域网配对令牌 + 本机套接字」:隧道 / P2P 也是从本机回环进来的,但它们带的是内部密钥(via≠lan),一律不给。
+    if (path === '/unit/browser-control' && req.method === 'GET') {
+      const info = authInfo(req)
+      if (!info.ok) { json(res, 401, { detail: 'Not paired', code: 'UNPAIRED' }); return }
+      if (info.via !== 'lan' || !isLoopback(req.socket.remoteAddress)) { json(res, 403, LOCAL_ONLY_BODY); return }
+      const code = deps.browserControlCode ? await deps.browserControlCode() : null
+      if (!code) { json(res, 404, { detail: 'Browser control is not available on this computer', code: 'BROWSER_CONTROL_UNAVAILABLE' }); return }
+      json(res, 200, { code })
+      return
+    }
     if (path === '/unit/whoami' && req.method === 'GET') {
       if (!authed(req)) { json(res, 401, { detail: '未配对', code: 'UNPAIRED' }); return }
       json(res, 200, { ok: true })

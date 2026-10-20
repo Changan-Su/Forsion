@@ -33,7 +33,7 @@ import { execFile, execFileSync, spawn } from 'child_process'
 import { homedir, hostname, networkInterfaces } from 'os'
 import { randomUUID } from 'crypto'
 import { BackendManager, bundledPythonBin, resolveBundledGit, resolveBundledNode, type BackendStatus } from './backendManager'
-import { registerClipExtensionIpc } from './clipExtension'
+import { browserControlCode, registerClipExtensionIpc, startClipVersionSync } from './clipExtension'
 import { envWithFullPath, pathKeyOf, withBundledGit } from './envPath'
 import { findGit } from './gitHistory'
 import { downloadUrlFor, installCommandFor, requiredProgram } from './envInstall'
@@ -1180,6 +1180,11 @@ function refreshUnitHost(): Promise<void> {
     .catch((e) => { console.error('[unit] refresh failed:', e) })
   return unitRefreshChain
 }
+/** 本机 managed 引擎(Clip 一次配对 / 版本同步用;外部引擎模式下互联开着时引擎同样常驻本机)。 */
+const localEngineRef = (): { url: string | null; token: string } => {
+  const st = backend.getStatus()
+  return { url: st.state === 'ready' ? (st.url ?? null) : null, token: backend.getToken() }
+}
 async function doRefreshUnitHost(): Promise<void> {
   const stored = await loadConfig()
   unitHostCloudUrl = stored.cloudUrl
@@ -1223,7 +1228,7 @@ async function doRefreshUnitHost(): Promise<void> {
         type: 'question' as const,
         title: mt('main.pair.title'),
         message: mt('main.pair.message', { name: info.name, ip: info.ip }),
-        detail: mt('main.pair.detail', { code: info.code }),
+        detail: mt(/^(127\.0\.0\.1|::1|::ffff:127\.0\.0\.1)$/.test(info.ip) ? 'main.pair.detailLocal' : 'main.pair.detail', { code: info.code }),
         buttons: [mt('main.pair.allow'), mt('main.pair.deny')],
         defaultId: 1,
         cancelId: 1,
@@ -1232,6 +1237,7 @@ async function doRefreshUnitHost(): Promise<void> {
       const r = win ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts)
       return r.response === 0
     },
+    browserControlCode: () => browserControlCode(localEngineRef),
     pairedDevices: {
       list: (): PairedDevice[] => unitPairedCache,
       add: async (d: PairedDevice): Promise<void> => {
@@ -3199,6 +3205,7 @@ app.whenReady().then(async () => {
     e.sender.startDrag({ file: filePath, icon })
   })
   registerClipExtensionIpc() // Forsion Clip 手动安装:复制出包的扩展文件夹、打开 Chrome 扩展页(拖拽复用上面的 fs:startDrag)
+  startClipVersionSync(localEngineRef) // Forsion 更新后连着的 Clip 换成随包版本并重载
 
   ipcMain.handle('backend:getStatus', () => backend.getStatus())
   ipcMain.handle('backend:getLogs', () => backend.getLogs())

@@ -76,6 +76,7 @@ export const CLASSIFICATION = {
   // Pairing credentials and persistent collaboration policy are host-only.
   'GET /agent/browser-extension': [D, 'browser extension pairing credentials'],
   'POST /agent/browser-extension/reset-code': [D, 'rotates browser extension pairing credentials'],
+  'POST /agent/browser-extension/reload-clients': [D, 'reloads the browser extension on the local machine'],
   'GET /agent/agents/:slug/human': [D, 'host collaboration configuration'],
   'PUT /agent/agents/:slug/human': [D, 'host collaboration configuration write'],
   'POST /agent/agents/:slug/human/undo': [D, 'host collaboration configuration undo'],

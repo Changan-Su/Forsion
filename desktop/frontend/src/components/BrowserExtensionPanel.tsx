@@ -1,9 +1,10 @@
 import { homeTarget } from '../services/engine/targets'
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { Check, Copy, ExternalLink, FolderOpen, GripVertical, Puzzle, RefreshCw } from 'lucide-react'
+import { Check, ChevronDown, ChevronRight, Copy, ExternalLink, FolderOpen, GripVertical, Puzzle, RefreshCw } from 'lucide-react'
 import { registerMessages, useI18n } from '../i18n'
 import { getBrowserExtension, resetBrowserExtensionCode, type BrowserExtensionStatus } from '../services/backendService'
 import type { TanguDesktopConfig } from '../types'
+import { useApp } from '../stores/appStore'
 import { SettingsPanel, SettingsRow } from './SettingsPrimitives'
 
 registerMessages({
@@ -15,10 +16,16 @@ registerMessages({
   'settings.browserExt.status': { zh: '状态', en: 'Status' },
   'settings.browserExt.connected': { zh: '已连接', en: 'Connected' },
   'settings.browserExt.notConnected': { zh: '未连接', en: 'Not connected' },
+  'settings.browserExt.connectedVersion': { zh: '已连接 · Forsion Clip {version}', en: 'Connected · Forsion Clip {version}' },
+  'settings.browserExt.notInstalled': { zh: '未安装', en: 'Not installed' },
   'settings.browserExt.portBusy': { zh: '端口 {port} 不可用：{error}', en: 'Port {port} is unavailable: {error}' },
   'settings.browserExt.unavailable': { zh: '当前引擎不支持 Chrome 扩展（需要本机引擎）。', en: 'The current engine does not support the Chrome extension (a local engine is required).' },
   'settings.browserExt.code': { zh: '连接码', en: 'Connect code' },
-  'settings.browserExt.codeHint': { zh: '粘贴到 Forsion Clip 的设置里即可配对，只需要一次。', en: 'Paste it into Forsion Clip settings to pair. You only need to do this once.' },
+  'settings.browserExt.codeHint': { zh: '粘贴到 Forsion Clip 的设置 ›「桌面联动与 MCP」，只需要一次。', en: 'Paste it into Forsion Clip settings › Desktop & MCP. You only need to do this once.' },
+  'settings.browserExt.manual': { zh: '手动配对', en: 'Pair manually' },
+  'settings.browserExt.manualHint': { zh: '用连接码配对浏览器控制，外部引擎或连不上时用。', en: 'Pair browser control with a connect code, for an external engine or if it can’t connect.' },
+  'settings.browserExt.show': { zh: '展开', en: 'Show' },
+  'settings.browserExt.hide': { zh: '收起', en: 'Hide' },
   'settings.browserExt.copy': { zh: '复制', en: 'Copy' },
   'settings.browserExt.copied': { zh: '已复制', en: 'Copied' },
   'settings.browserExt.reset': { zh: '换一个', en: 'New code' },
@@ -29,8 +36,14 @@ registerMessages({
     zh: '把下面的「Forsion Clip」拖到扩展页上。拖不动就点「加载已解压的扩展程序」，选择扩展文件夹（mac 在选择框里按 ⌘⇧G 粘贴路径）。',
     en: 'Drag “Forsion Clip” below onto the extensions page. If that doesn’t work, click “Load unpacked” and choose the extension folder (on Mac, press ⌘⇧G in the dialog and paste the path).',
   },
-  'settings.browserExt.step3': { zh: '打开 Forsion Clip 的设置 ›「桌面联动与 MCP」，粘贴上面的连接码。', en: 'Open Forsion Clip settings › Desktop & MCP and paste the connect code above.' },
-  'settings.browserExt.step4': { zh: '要把剪藏存进本机智库：在同一页点「请求配对」，再在 Forsion 桌面确认这个配对请求。', en: 'To save clips to your local vault, click “Request pairing” on the same page, then approve the pairing request in Forsion Desktop.' },
+  'settings.browserExt.step3': {
+    zh: '装好后 Clip 会打开欢迎页并请求连接：在 Forsion 弹出的确认框里核对配对码，点「允许」。剪藏和浏览器控制一次配好。',
+    en: 'Once installed, Clip opens a welcome page and asks to connect. Check the pairing code in the Forsion prompt and click Allow. Clipping and browser control are set up in one go.',
+  },
+  'settings.browserExt.step3HostOff': {
+    zh: '要让 Clip 一次配好，先在「设置 › 设备」打开「允许其他设备连接本机」。不想打开也行：展开下面的「手动配对」，把连接码粘到 Clip 里（这样只有浏览器控制，剪藏存不进本机智库）。',
+    en: 'For one-step pairing, first turn on Settings › Devices › Allow other devices to connect. Or open “Pair manually” below and paste the connect code into Clip (browser control only; clips can’t go into your local vault).',
+  },
   'settings.browserExt.openFolder': { zh: '打开扩展文件夹', en: 'Open extension folder' },
   'settings.browserExt.openChrome': { zh: '在 Chrome 中打开扩展页', en: 'Open extensions in Chrome' },
   'settings.browserExt.addressCopied': { zh: '已复制扩展页地址，粘贴到 Chrome 地址栏打开。', en: 'Copied the address. Paste it into the Chrome address bar.' },
@@ -62,6 +75,9 @@ export function BrowserExtensionPanel({ cfg, managed = true }: { cfg: TanguDeskt
   const [clipCopy, setClipCopy] = useState<{ dir: string; version: string; bundled: string } | null>(null)
   const [clipError, setClipError] = useState('')
   const clipApi = managed ? window.tangu?.clipExtension : undefined
+  const hostOn = useApp((st) => !!st.desktopConfig?.unitHostEnabled) // 一次配对走设备配对(本机 Unit 口):「允许其他设备连接本机」关着时 Clip 连不上来
+  const [manualOpen, setManualOpen] = useState<boolean | null>(null) // null = 跟缺省:外部引擎或互联关着时展开
+  const showManual = manualOpen ?? (!managed || !hostOn)
   const [resetting, setResetting] = useState(false) // 换码不并发:两次换码乱序返回会留下已作废的码(Codex 09-24)
   // 请求代次:换码 / 换引擎之后才回来的旧轮询结果一律丢弃,免得把新码盖回旧码(Codex 09-24)
   const gen = useRef(0)
@@ -126,7 +142,9 @@ export function BrowserExtensionPanel({ cfg, managed = true }: { cfg: TanguDeskt
     ? t('settings.browserExt.unavailable')
     : info && !info.listening && info.error
       ? t('settings.browserExt.portBusy', { port: String(info.port), error: info.error })
-      : info?.connected ? t('settings.browserExt.connected') : t('settings.browserExt.notConnected')
+      : info?.connected
+        ? (info.clients.at(-1)?.version ? t('settings.browserExt.connectedVersion', { version: info.clients.at(-1)!.version }) : t('settings.browserExt.connected'))
+        : info && !info.lastClient ? t('settings.browserExt.notInstalled') : t('settings.browserExt.notConnected') // 从没连上过 = 还没装(或没配对)
 
   return (
     <SettingsPanel className="settings-browser-ext-panel" icon={<Puzzle size={16} />} title={t('settings.browserExt.title')} description={t('settings.browserExt.hint')}>
@@ -134,21 +152,8 @@ export function BrowserExtensionPanel({ cfg, managed = true }: { cfg: TanguDeskt
         <SettingsRow label={t('settings.browserExt.status')} control={<span className="hint" data-testid="browser-extension-status">{status}</span>} />
         {!unavailable && info && (
           <SettingsRow
-            label={t('settings.browserExt.code')}
-            description={t('settings.browserExt.codeHint')}
-            control={(
-              <div className="settings-inline-actions">
-                <code className="settings-code-chip" data-testid="browser-extension-code">{info.code}</code>
-                <button type="button" className="btn ghost sm" onClick={() => void copy()}>{copied ? <Check size={12} /> : <Copy size={12} />}{copied ? t('settings.browserExt.copied') : t('settings.browserExt.copy')}</button>
-                <button type="button" className="btn ghost sm" disabled={resetting} onClick={() => void reset()}><RefreshCw size={12} />{t('settings.browserExt.reset')}</button>
-              </div>
-            )}
-          />
-        )}
-        {!unavailable && info && (
-          <SettingsRow
             label={t('settings.browserExt.install')}
-            description={(['settings.browserExt.step1', 'settings.browserExt.step2', 'settings.browserExt.step3', 'settings.browserExt.step4'] as const).map((k, i) => (
+            description={(['settings.browserExt.step1', 'settings.browserExt.step2', hostOn ? 'settings.browserExt.step3' : 'settings.browserExt.step3HostOff'] as const).map((k, i) => (
               <React.Fragment key={k}>{i > 0 && <br />}{`${i + 1}. ${t(k)}`}</React.Fragment>
             )).concat(openNote ? [<React.Fragment key="note"><br /><span data-testid="browser-extension-open-note">{openNote}</span></React.Fragment>] : [])
               .concat(clipError ? [<React.Fragment key="err"><br /><span data-testid="browser-extension-copy-error">{t('settings.browserExt.copyFailed', { error: clipError })}</span></React.Fragment>] : [])}
@@ -197,6 +202,30 @@ export function BrowserExtensionPanel({ cfg, managed = true }: { cfg: TanguDeskt
                 </div>
                 <button type="button" className="btn ghost sm" onClick={() => void copyPath()}>{copiedPath ? <Check size={12} /> : <Copy size={12} />}{copiedPath ? t('settings.browserExt.copied') : t('settings.browserExt.copyPath')}</button>
                 <button type="button" className="btn ghost sm" onClick={() => { void freshClipDir().then((dir) => { if (dir) void window.tangu?.openHostPath?.(dir) }) }}><FolderOpen size={12} />{t('settings.browserExt.openFolder')}</button>
+              </div>
+            )}
+          />
+        )}
+        {!unavailable && info && (
+          <SettingsRow
+            label={t('settings.browserExt.manual')}
+            description={t('settings.browserExt.manualHint')}
+            control={(
+              <button type="button" className="btn ghost sm" aria-expanded={showManual} onClick={() => setManualOpen(!showManual)} data-testid="browser-extension-manual">
+                {showManual ? <ChevronDown size={12} /> : <ChevronRight size={12} />}{t(showManual ? 'settings.browserExt.hide' : 'settings.browserExt.show')}
+              </button>
+            )}
+          />
+        )}
+        {!unavailable && info && showManual && (
+          <SettingsRow
+            label={t('settings.browserExt.code')}
+            description={t('settings.browserExt.codeHint')}
+            control={(
+              <div className="settings-inline-actions">
+                <code className="settings-code-chip" data-testid="browser-extension-code">{info.code}</code>
+                <button type="button" className="btn ghost sm" onClick={() => void copy()}>{copied ? <Check size={12} /> : <Copy size={12} />}{copied ? t('settings.browserExt.copied') : t('settings.browserExt.copy')}</button>
+                <button type="button" className="btn ghost sm" disabled={resetting} onClick={() => void reset()}><RefreshCw size={12} />{t('settings.browserExt.reset')}</button>
               </div>
             )}
           />

@@ -56,6 +56,7 @@ export const ENGINE_ROUTES: readonly EngineRoute[] = [
   { method: 'DELETE', path: '/agent/skills/user/:id', access: 'deny-remote', src: 'routes/assets.ts', why: 'delete user skill' },
   { method: 'GET', path: '/agent/tools', access: 'allow', src: 'routes/assets.ts', why: 'tool list' },
   { method: 'GET', path: '/agent/browser-extension', access: 'deny-remote', src: 'routes/browserExtension.ts', why: 'browser extension pairing credentials' },
+  { method: 'POST', path: '/agent/browser-extension/reload-clients', access: 'deny-remote', src: 'routes/browserExtension.ts', why: 'reloads the browser extension on the local machine' },
   { method: 'POST', path: '/agent/browser-extension/reset-code', access: 'deny-remote', src: 'routes/browserExtension.ts', why: 'rotates browser extension pairing credentials' },
   { method: 'GET', path: '/agent/channels', access: 'deny-remote', src: 'routes/channels.ts', why: 'channel config is local-only' },
   { method: 'PUT', path: '/agent/channels/:kind/config', access: 'deny-remote', src: 'routes/channels.ts', why: 'channel config is local-only' },

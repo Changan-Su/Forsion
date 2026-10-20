@@ -42,10 +42,11 @@ async function main() {
   const open = async (query = '') => { await page.goto(base.toString() + query); await panel.waitFor() }
 
   await open()
-  check('未连接时状态写明', (await page.locator('[data-testid="browser-extension-status"]').textContent()) === '未连接')
+  check('从没连上过:状态是「未安装」', (await page.locator('[data-testid="browser-extension-status"]').textContent()) === '未安装')
   check('连接码整段显示', (await page.locator('[data-testid="browser-extension-code"]').textContent()).startsWith('tangu:47655:'))
   const text = await panel.textContent()
   check('三步安装说明齐全', text.includes('1. ') && text.includes('chrome://extensions') && text.includes('加载已解压的扩展程序') && text.includes('3. '))
+  check('「允许其他设备连接本机」关着:第 3 步写明要先打开它,「手动配对」缺省展开', text.includes('允许其他设备连接本机') && (await page.locator('[data-testid="browser-extension-manual"]').getAttribute('aria-expanded')) === 'true')
 
   // 手动安装底座:扩展复制出包(用户找得到)、替用户打开 Chrome 扩展页、拖拽把手走原生拖出
   await panel.getByRole('button', { name: '在 Chrome 中打开扩展页' }).click()
@@ -121,7 +122,20 @@ async function main() {
   if (shot) await page.locator('.settings-browser-ext-panel').screenshot({ path: path.join(out, 'ext-external.png') })
 
   await open('?connected')
-  check('连上后状态为已连接', (await page.locator('[data-testid="browser-extension-status"]').textContent()) === '已连接')
+  check('连上后状态写明版本', (await page.locator('[data-testid="browser-extension-status"]').textContent()) === '已连接 · Forsion Clip 2.1.0')
+  await open('?installed')
+  check('连上过、现在没连:状态是「未连接」', (await page.locator('[data-testid="browser-extension-status"]').textContent()) === '未连接')
+
+  // 一次配对能用(互联开着):第 3 步改说「点允许」,连接码收进「手动配对」,点开才出来
+  await open('?hoston')
+  const hostOnText = await panel.textContent()
+  check('互联开着:第 3 步说装好后点「允许」,不再让粘码', hostOnText.includes('点「允许」') && !hostOnText.includes('允许其他设备连接本机') && (await page.locator('[data-testid="browser-extension-code"]').count()) === 0)
+  await page.locator('[data-testid="browser-extension-manual"]').click()
+  await page.locator('[data-testid="browser-extension-code"]').waitFor()
+  check('展开「手动配对」后连接码与「换一个」都在', (await panel.getByRole('button', { name: '换一个' }).count()) === 1)
+  if (shot) await page.locator('.settings-browser-ext-panel').screenshot({ path: path.join(out, 'ext-hoston-manual.png') })
+  await open('?hoston&external')
+  check('外部引擎:「手动配对」缺省展开', (await page.locator('[data-testid="browser-extension-code"]').count()) === 1)
   await open('?busy')
   check('端口被占时直说原因', (await page.locator('[data-testid="browser-extension-status"]').textContent()).includes('47655') )
 

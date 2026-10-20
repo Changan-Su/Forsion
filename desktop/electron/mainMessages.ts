@@ -12,6 +12,10 @@ export const MAIN_MESSAGES = defineMainMessages({
     zh: '对方屏幕上显示同一组配对码，核对一致再允许：\n\n配对码：{code}\n\n允许后对方可远程使用这台设备的 Forsion（含执行任务、读写本机智库）。',
     en: 'The other device shows a pairing code. Allow only if it matches:\n\nPairing code: {code}\n\nOnce allowed, it can use Forsion on this computer remotely, including running tasks and reading and writing your local vault.',
   },
+  'main.pair.detailLocal': {
+    zh: '来自这台电脑上的程序（比如浏览器里的 Forsion Clip），它那边显示同一组配对码，核对一致再允许：\n\n配对码：{code}\n\n允许后它可以读写本机智库，Tangu 也会通过它控制浏览器（不用再粘连接码）。',
+    en: 'This comes from an app on this computer, such as Forsion Clip in your browser. It shows a pairing code. Allow only if it matches:\n\nPairing code: {code}\n\nOnce allowed, it can read and write your local vault, and Tangu can control the browser through it (no connect code to paste).',
+  },
   'main.pair.allow': { zh: '允许', en: 'Allow' },
   'main.pair.deny': { zh: '拒绝', en: 'Deny' },
   'main.crash.message': { zh: '界面多次崩溃', en: 'The window crashed repeatedly' },
