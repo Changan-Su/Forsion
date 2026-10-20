@@ -6,18 +6,20 @@
 import { useEffect, useMemo } from 'react'
 import { coerceForDisplay, dbId, type CellValue, type DbColumn } from '@amadeus-shared/db/schema'
 import { fmValueToCell } from '@amadeus-shared/db/pageFrontmatter'
+import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { isStamped, newRowCells, resolveBaseType } from '../blocks/database/propertyTypes'
 import { dropSelfRefs, type DroppedRef } from '../blocks/database/rowLink'
 import '../blocks/database/propertyTypes.builtins' // 确保内置 todo/calendarDate 在场
 import { useDbStore } from './dbStore'
 import { useNoteViewStore } from './noteViewStore'
-import { usePageStore } from './pageStore'
+import { flushAllScopes, usePageStore } from './pageStore'
 import { ensureAmadeusReady } from '../../amadeusPlugins'
 import { amadeus } from '../api'
 import { actDebounced, shortVal } from '../../activity/log'
 import { registerMessages, translate } from '../../i18n'
 
 registerMessages({
+  'dbagg.copyName': { zh: '{name} 副本', en: '{name} copy' },
   'dbagg.confirmDeleteNote': {
     zh: '删除此事件会一并删除对应的笔记文件，确定？',
     en: 'Deleting this event also deletes its note file. Continue?',
@@ -184,7 +186,7 @@ export function useDatabasesReady(): boolean {
 }
 
 /** 写回一格:经典表 → dbStore.mutate;笔记视图 → noteViewStore.setProp。自定义类型按 baseType 落盘。 */
-export function setAggCell(db: AggDb, rowId: string, colId: string, value: CellValue | undefined): void {
+export function setAggCell(db: AggDb, rowId: string, colId: string, value: CellValue | undefined, expected?: { value: CellValue | undefined }): void {
   const col = db.columns.find((c) => c.id === colId)
   if (isStamped(col?.type ?? '')) return // 盖章列(自动编号/创建时间)建行即定,与 DatabaseEmbed.setCell 同一道闸
   const base = resolveBaseType(col?.type ?? 'text')
@@ -206,6 +208,7 @@ export function setAggCell(db: AggDb, rowId: string, colId: string, value: CellV
     ...d,
     rows: d.rows.map((r) => {
       if (r.id !== rowId) return r
+      if (expected && !sameCell(r.cells[colId], expected.value)) return r // Recheck when a CAS replay sees later edits.
       const cells = { ...r.cells }
       if (value === undefined) delete cells[colId]
       else cells[colId] = value
@@ -258,7 +261,7 @@ export async function addAggRow(db: AggDb, init: Record<string, CellValue>, name
  *  返回本次从同文件自引用列里摘掉的引用清单(笔记视图 / 无人引用 = 空数组),交给 restoreAggRow 撤销时条件回填 ——
  *  否则撤销只回来一行孤儿,别的行指向它的关联已经丢了(Codex 评审抓的)。
  *  ⚠️ 清单在 mutate 回调**内**收集(CAS 冲突重放会再跑一次回调,以最后一次为准),返回的是同一个数组引用。 */
-export function deleteAggRow(db: AggDb, rowId: string): DroppedRef[] {
+export function deleteAggRow(db: AggDb, rowId: string, expected?: AggRow): DroppedRef[] {
   const removed: DroppedRef[] = []
   if (db.isNoteView && db.folder !== undefined) {
     if (window.confirm(translate('dbagg.confirmDeleteNote'))) void useNoteViewStore.getState().deleteNote(db.folder, rowId)
@@ -267,6 +270,13 @@ export function deleteAggRow(db: AggDb, rowId: string): DroppedRef[] {
   // 与 DatabaseEmbed.delRow 同一道清理:只摘同文件内的自引用,跨文件悬空刻意不级联(rowLink.dropSelfRefs)
   useDbStore.getState().mutate(db.path, (d) => {
     removed.length = 0 // 重放从头记
+    if (expected) {
+      const row = d.rows.find((r) => r.id === rowId)
+      const stamps = new Set(d.columns.filter((c) => c.type === 'updated').map((c) => c.id))
+      const cells = (v: Record<string, CellValue>): string => JSON.stringify(Object.keys(v).filter((k) => !stamps.has(k) && v[k] != null).sort().map((k) => [k, v[k]]))
+      // This predicate is part of the replayed operation, not just the optimistic UI check.
+      if (!row || row.body !== expected.body || cells(row.cells) !== cells(expected.cells)) return d
+    }
     return dropSelfRefs({ ...d, rows: d.rows.filter((r) => r.id !== rowId) }, rowId, [db.path], removed)
   })
   return removed
@@ -303,17 +313,31 @@ export function restoreAggRow(db: AggDb, row: AggRow, removed: DroppedRef[] = []
 
 /** 复制一行(键盘粘贴):经典表克隆全部单元格为新行(同日期/时间的原位副本);
  *  笔记视图新建笔记 + 逐列拷贝属性(page 身份列除外)。返回新 rowId / 笔记路径,失败返回 null。 */
-export async function duplicateAggRow(db: AggDb, rowId: string, ok?: () => boolean): Promise<string | null> {
+export async function duplicateAggRow(db: AggDb, rowId: string, ok?: () => boolean, noteText?: string): Promise<string | null> {
   if (db.readonly) return null
   const src = db.rows.find((r) => r.rowId === rowId)
   if (!src) return null
   if (db.isNoteView && db.folder !== undefined) {
     const still = stillHere(ok)
-    const notePath = await useNoteViewStore.getState().addNote(db.folder)
+    // Copy the complete note, including its body, instead of silently dropping document content.
+    if (noteText === undefined) {
+      await flushAllScopes(true)
+      still()
+      noteText = (await amadeus.readTextFile(src.rowId)) ?? undefined
+      still()
+    }
+    if (noteText === undefined) return null
+    const notePath = await useNoteViewStore.getState().addNote(db.folder, translate('dbagg.copyName', { name: src.name || translate('amadeus.default.note') }))
     still()
+    const written = await amadeus.writeTextFile(notePath, noteText, { base: textFingerprint('') })
+    still()
+    if (written && !written.ok) throw new Error('duplicate aborted: destination changed')
+    await useNoteViewStore.getState().refresh(db.folder)
+    still()
+    const stamps = newRowCells({ version: 1, name: db.name, columns: db.columns, rows: db.rows.map((r) => ({ id: r.rowId, cells: r.cells })) })
     for (const c of db.columns) {
       if (c.type === 'page') continue // 身份列 = 笔记标题,由 addNote 定,不覆盖
-      const v = src.cells[c.id]
+      const v = isStamped(c.type) ? stamps[c.id] : src.cells[c.id]
       if (v !== undefined) useNoteViewStore.getState().setProp(db.folder, notePath, c.id, v, resolveBaseType(c.type))
     }
     return notePath

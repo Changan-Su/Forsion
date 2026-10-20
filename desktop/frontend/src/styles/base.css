@@ -1798,7 +1798,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 }
 .composer-menu .menu-item:hover { background: var(--menu-hover); color: var(--text); }
 .composer-menu .menu-item.active { color: var(--accent-ink); }
-/* 当前模型不支持的思考档:标灰但可点(引擎自动降档,选了不出错) */
+/* 当前模型不支持的思考档:标灰但可点(引擎换到相近档位,选了不出错) */
 .composer-menu .menu-item.mi-dim { color: var(--text-faint); }
 .composer-menu .menu-item .grow { flex: 1; }
 .composer-menu .menu-item .menu-meta { font-size: var(--ui-font-caption, 11px); color: var(--text-faint); }

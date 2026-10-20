@@ -1,0 +1,33 @@
+name: calendar-actions
+on:
+  pull_request:
+    paths: ['desktop/frontend/src/views/CalendarView.tsx', 'desktop/frontend/src/views/calendar/**', 'desktop/frontend/src/amadeus/store/dbAggregateStore*', 'desktop/frontend/src/harness/calendarActions.tsx', 'desktop/frontend/calendar-actions.html', 'desktop/scripts/calendar-actions.check.cjs', 'mobile/scripts/calendar-phone.check.cjs', 'mobile/scripts/phone-stage.cjs', '.github/workflows/calendar-actions.yml']
+  push:
+    paths: ['desktop/frontend/src/views/CalendarView.tsx', 'desktop/frontend/src/views/calendar/**', 'desktop/frontend/src/amadeus/store/dbAggregateStore*', 'desktop/frontend/src/harness/calendarActions.tsx', 'desktop/frontend/calendar-actions.html', 'desktop/scripts/calendar-actions.check.cjs', 'mobile/scripts/calendar-phone.check.cjs', 'mobile/scripts/phone-stage.cjs', '.github/workflows/calendar-actions.yml']
+jobs:
+  calendar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TZ: Europe/London
+      CALENDAR_ACTIONS_OUT: ${{ github.workspace }}/calendar-artifacts/components
+      CALENDAR_PHONE_OUT: ${{ github.workspace }}/calendar-artifacts/mobile-shell
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: desktop/package-lock.json }
+      - run: npm ci --no-audit --no-fund
+        working-directory: desktop
+      - run: npx vitest run frontend/src/views/calendar frontend/src/amadeus/store/dbAggregateStore.test.ts
+        working-directory: desktop
+      - run: npx playwright-core install --with-deps chromium
+        working-directory: desktop
+      - run: node scripts/calendar-actions.check.cjs
+        working-directory: desktop
+      - run: npm ci --no-audit --no-fund
+        working-directory: mobile
+      - run: node scripts/calendar-phone.check.cjs
+        working-directory: mobile
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: calendar-actions, path: calendar-artifacts, if-no-files-found: ignore }

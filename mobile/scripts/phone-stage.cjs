@@ -194,7 +194,7 @@ async function stubApi(page, unknown) {
 const loaded = new Map() // pathname → full URL, filled from the page's requests
 const moduleUrl = (rel) => {
   const abs = path.resolve(ROOT, rel)
-  const p = abs.startsWith(ROOT + path.sep) ? `/${path.relative(ROOT, abs).split(path.sep).join('/')}` : `/@fs${abs.split(path.sep).join('/')}`
+  const p = abs.startsWith(ROOT + path.sep) ? `/${path.relative(ROOT, abs).split(path.sep).join('/')}` : `/@fs/${abs.split(path.sep).join('/').replace(/^\/+/, '')}`
   return loaded.get(p) || p
 }
 
@@ -982,4 +982,5 @@ async function main() {
   if (fails.length) console.error(`FAIL\n${fails.join('\n')}`); else console.log('ok')
   process.exit(fails.length ? 1 : 0) // a dev server left up (KEEP) would otherwise hold the process open
 }
-main()
+module.exports = { stubApi, installChrome, stage, moduleUrl, loaded, SCREEN, LAYOUT }
+if (require.main === module) main()

@@ -567,12 +567,6 @@ export function ChatView({ leaf, params }: ViewProps) {
     onChange: (v) => setCanvasPref({ on: v === 'canvas' }),
     ariaLabel: t('chatcanvas.seg.aria'),
   } : null)
-  // 画布里双击一张卡:切回对话、滚到那个会话里的那一轮(搜索跳转那条路,历史没到齐会等)
-  const openTurn = useCallback((sid: string, mid: string): void => {
-    setCanvasPref({ on: false })
-    if (sid !== useApp.getState().activeId) useApp.getState().setActiveId(sid)
-    useApp.getState().setJumpTarget(sid, mid)
-  }, [setCanvasPref])
 
   // 工作区(会话/笔记/文件)拖进来即引用:**整个聊天区**都是落区,不用瞄准输入框。
   // 只吃 chatDragRef 的两个 MIME —— OS 文件仍归输入框卡片那套(附件/路径插入),两条路不打架。
@@ -739,7 +733,7 @@ export function ChatView({ leaf, params }: ViewProps) {
           ⚠️ key 带前缀:和上面正文的 key={activeId} 是兄弟,在主线上两者同为会话 id → React 认重,
           画布开着换会话时旧正文删不掉,回到对话就上下叠两份(10-20 用户报) */}
       {canvasOn && activeId && treeRoot && (
-        <ChatCanvas key={`canvas:${treeRoot}`} rootId={treeRoot} activeId={activeId} dir={canvasPref.dir} onDir={(dir) => setCanvasPref({ dir })} onOpenTurn={openTurn} />
+        <ChatCanvas key={`canvas:${treeRoot}`} rootId={treeRoot} activeId={activeId} dir={canvasPref.dir} onDir={(dir) => setCanvasPref({ dir })} />
       )}
 
       {/* 空状态优先保持 view 居中;空间不足时按 composer 实高向上避让,小高度逐级精简。 */}

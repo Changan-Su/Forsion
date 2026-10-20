@@ -1,5 +1,7 @@
-import { deleteAggRow, restoreAggRow, setAggCell, type AggDb, type AggRow } from '../../amadeus/store/dbAggregateStore'
+import { deleteAggRow, restoreAggRow, setAggCell, getAggDb, type AggDb, type AggRow } from '../../amadeus/store/dbAggregateStore'
 import { usePageStore } from '../../amadeus/store/pageStore'
+import { useDbStore } from '../../amadeus/store/dbStore'
+import { isStamped } from '../../amadeus/blocks/database/propertyTypes'
 import { effectiveDue, patchMark, useMdMarkStore } from '../../amadeus/store/mdMarkStore'
 import { resolveMark, type MdMark } from '@amadeus-shared/mdMarks'
 import { notifyApp } from '../../stores/notificationStore'
@@ -10,33 +12,64 @@ registerMessages({
   'calevtact.moved': { zh: '已改时间「{title}」', en: 'Rescheduled “{title}”' },
   'calevtact.untitled': { zh: '未命名', en: 'Untitled' },
   'calevtact.undo': { zh: '撤销', en: 'Undo' },
+  'calevtact.conflict': { zh: '事件已发生变化，未覆盖后续编辑。', en: 'The event changed. Later edits were kept.' },
 })
 
-// ponytail: 只记最近一次(⌘Z 撤这一步);要多步撤销再换成栈。
-let lastUndo: (() => boolean) | null = null
+interface Edit { vault: string; undo: () => boolean; redo?: () => boolean }
+const past: Edit[] = []
+const future: Edit[] = []
+export const canUndoCalendarEdit = (): boolean => past.at(-1)?.vault === vaultKey()
+export const canRedoCalendarEdit = (): boolean => future.at(-1)?.vault === vaultKey()
 
 /** ⌘Z:撤销日历里最近一次删除 / 改时间;没有可撤的返回 false。 */
 export function undoLastCalendarEdit(): boolean {
-  const run = lastUndo
-  lastUndo = null
-  return run ? run() : false
+  const edit = past.at(-1)
+  if (!edit || edit.vault !== vaultKey()) return false
+  past.pop()
+  if (!edit.undo()) { conflict(); return false }
+  if (edit.redo) future.push(edit)
+  return true
+}
+export function redoLastCalendarEdit(): boolean {
+  const edit = future.at(-1)
+  if (!edit || edit.vault !== vaultKey()) return false
+  future.pop()
+  if (!edit.redo?.()) { conflict(); return false }
+  past.push(edit)
+  return true
+}
+const conflict = (): void => { notifyApp({ level: 'warning', text: translate('calevtact.conflict') }) }
+export function calendarScope(): string { return vaultKey() }
+export function currentCalendarRow(db: AggDb, id: string): AggRow | undefined {
+  if (db.isNoteView) return getAggDb(db.path)?.rows.find((r) => r.rowId === id)
+  if (db.readonly) {
+    const mark = useMdMarkStore.getState().marks.find((m) => `${m.path}:${m.line}` === id)
+    return mark ? { rowId: id, name: mark.text, cells: { name: mark.text, date: effectiveDue(mark), note: mark.title } } : undefined
+  }
+  const row = useDbStore.getState().entries[db.path]?.data?.rows.find((r) => r.id === id)
+  return row ? { rowId: row.id, cells: row.cells, body: row.body, name: String(row.cells[db.columns[0]?.id] ?? '') } : undefined
+}
+const same = (a: unknown, b: unknown): boolean => JSON.stringify(a ?? null) === JSON.stringify(b ?? null)
+// System updated stamps naturally change on undo; compare user data only.
+export function sameCalendarRow(db: AggDb, a: AggRow | undefined, b: AggRow): boolean {
+  const columns = useDbStore.getState().entries[db.path]?.data?.columns ?? db.columns
+  return !!a && a.body === b.body && columns.filter((c) => c.type !== 'updated').every((c) => same(a.cells[c.id], b.cells[c.id]))
 }
 
 const vaultKey = (): string => { const s = usePageStore.getState(); return `${s.vaultSide}:${s.vaultRoot}` }
 
 /** 撤销只生效一次(⌘Z 与通知条按钮共用),且只在记下它的那个库里生效:
  *  库路径是相对的,换了库再撤会把 A 库的行写进 B 库(Codex 评审 P1)。 */
-function offerUndo(text: string, run: () => void): void {
+export function offerCalendarUndo(text: string, run: () => boolean, redo?: () => boolean): void {
   const vault = vaultKey()
-  let used = false
+  const edit: Edit = { vault, undo: run, redo }
+  past.push(edit)
+  if (past.length > 20) past.shift()
+  future.length = 0
   const once = (): boolean => {
-    if (lastUndo === once) lastUndo = null
-    if (used || vaultKey() !== vault) return false
-    used = true
-    run()
-    return true
+    if (past.at(-1) !== edit || vaultKey() !== vault) return false
+    return undoLastCalendarEdit()
   }
-  lastUndo = once
   notifyApp({
     text,
     level: 'info',
@@ -48,16 +81,40 @@ function offerUndo(text: string, run: () => void): void {
 
 /** 删除日历/待办行；经典数据库提供通知条撤销，笔记视图保留文件删除确认。 */
 export function deleteCalendarRow(db: AggDb, row: AggRow, title: string): void {
-  const removed = deleteAggRow(db, row.rowId) // 同文件自引用清单:撤销时条件回填,不然关联随删行一起丢
+  if (db.readonly) return
+  const snapshot = structuredClone(currentCalendarRow(db, row.rowId) ?? row)
+  let removed = deleteAggRow(db, row.rowId) // Same-file references must follow each redo as well as the first deletion.
   if (db.isNoteView) return
-  offerUndo(translate('calevtact.deleted', { title: title || translate('calevtact.untitled') }), () => restoreAggRow(db, row, removed))
+  offerCalendarUndo(translate('calevtact.deleted', { title: title || translate('calevtact.untitled') }), () => {
+    if (currentCalendarRow(db, row.rowId)) return false
+    restoreAggRow(db, snapshot, removed)
+    return true
+  }, () => {
+    if (!sameCalendarRow(db, currentCalendarRow(db, row.rowId), snapshot)) return false
+    removed = deleteAggRow(db, row.rowId, snapshot)
+    return true
+  })
 }
 
 /** 拖动改时间 / 改时长:写新值,并给撤销(回到改之前的原值)。 */
 export function rescheduleCalendarRow(db: AggDb, row: AggRow, colId: string, before: string, after: string, title: string): void {
   if (before === after) return
+  if (isStamped(db.columns.find((c) => c.id === colId)?.type ?? '')) return
+  if (db.readonly && !db.writeCell) return
+  if (db.writeCell) {
+    const mark = useMdMarkStore.getState().marks.find((m) => `${m.path}:${m.line}` === row.rowId)
+    if (mark) rescheduleNoteTask(mark, before, after, title)
+    return
+  }
+  if (!currentCalendarRow(db, row.rowId)) return
   setAggCell(db, row.rowId, colId, after)
-  offerUndo(translate('calevtact.moved', { title: title || translate('calevtact.untitled') }), () => setAggCell(db, row.rowId, colId, before || undefined))
+  const change = (expected: string, next: string): boolean => {
+    const live = currentCalendarRow(db, row.rowId)
+    if (!live || !same(live.cells[colId], expected || undefined)) return false
+    setAggCell(db, row.rowId, colId, next || undefined, { value: expected || undefined })
+    return true
+  }
+  offerCalendarUndo(translate('calevtact.moved', { title: title || translate('calevtact.untitled') }), () => change(after, before), () => change(before, after))
 }
 
 /** 笔记正文任务改日期(待办视图拖到分组头):改那一行的 `@日期`,撤销 = 改回原值。
@@ -66,9 +123,9 @@ export function rescheduleCalendarRow(db: AggDb, row: AggRow, colId: string, bef
 export function rescheduleNoteTask(mark: MdMark, before: string, after: string, title: string): void {
   if (before === after || !after) return // 正文任务清掉 `@` 就不再是待办(列表里会消失),不收「未排期」
   if (!patchMark(mark, { due: after })) return
-  offerUndo(translate('calevtact.moved', { title: title || translate('calevtact.untitled') }), () => {
+  offerCalendarUndo(translate('calevtact.moved', { title: title || translate('calevtact.untitled') }), () => {
     const hit = resolveMark(useMdMarkStore.getState().marks, mark)
-    if (hit && effectiveDue(hit) === after) patchMark(hit, { due: before })
-    else notifyApp({ event: 'system.generic', level: 'warning', text: translate('mdmark.patchFailed', { name: mark.text }) })
+    if (hit && effectiveDue(hit) === after) return patchMark(hit, { due: before })
+    return false
   })
 }

@@ -137,7 +137,10 @@ export const ContextMenu: React.FC<{ menu: NonNullable<CtxMenu>; onClose: () => 
   useEffect(() => {
     // 原生菜单是独立窗口:WebView 失焦(blur)是它弹出的必然结果,不能当「点外面」把它关掉。
     if (!web) return
-    const close = () => onClose()
+    // 只认菜单出来之后的事件:右键是离散事件,React 可能在这次 contextmenu 还没冒泡到 window 时就把菜单挂上、跑到这里,
+    // 不比时间就被打开它的那一下当场关掉(canvasKit 的右键走原生监听,不 stopPropagation)
+    const armed = performance.now()
+    const close = (e: Event) => { if (e.timeStamp >= armed) onClose() }
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
     window.addEventListener('pointerdown', close)
     window.addEventListener('contextmenu', close)

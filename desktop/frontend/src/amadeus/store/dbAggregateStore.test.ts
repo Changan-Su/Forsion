@@ -11,6 +11,8 @@ import type { DbFile } from '@amadeus-shared/db/schema'
 
 let disk: DbFile
 let version = 'v0'
+const readTextFile = vi.fn(async () => '# Complete source body\nParagraph')
+const writeTextFile = vi.fn(async (..._args: unknown[]): Promise<unknown> => undefined)
 const bump = (): void => { version = `v${Number(version.slice(1)) + 1}` }
 const readDatabase = vi.fn(async () => ({ status: 'ok' as const, path: 'T.db', data: structuredClone(disk), version }))
 const writeDatabase = vi.fn(async (_p: string, d: DbFile) => { disk = structuredClone(d); bump() })
@@ -25,6 +27,8 @@ vi.mock('../api', () => ({
     get readDatabase() { return readDatabase },
     get writeDatabase() { return writeDatabase },
     get writeDatabaseCas() { return writeDatabaseCas },
+    get readTextFile() { return readTextFile },
+    get writeTextFile() { return writeTextFile },
     onDbExternalChange: undefined,
   },
 }))
@@ -34,7 +38,43 @@ vi.mock('../../amadeusPlugins', () => ({ ensureAmadeusReady: () => {} }))
 const { useDbStore } = await import('./dbStore')
 const { createAggEvent, deleteAggRow, duplicateAggRow, restoreAggRow, setAggCell, firstDateCol, isDateCol, useAllDatabases } = await import('./dbAggregateStore')
 const { usePageStore } = await import('./pageStore')
+const { useNoteViewStore } = await import('./noteViewStore')
 type AggDb = import('./dbAggregateStore').AggDb
+
+describe('note event copies keep their document', () => {
+  const note = (): AggDb => ({ path: 'Notes.db', name: 'Notes', folder: '', isNoteView: true,
+    columns: [{ id: 'page', name: 'Note', type: 'page' }, { id: 'date', name: 'Date', type: 'calendarDate' }],
+    rows: [{ rowId: 'Source.md', name: 'Source', cells: { page: 'Source', date: '2026-10-20' } }],
+  })
+  beforeEach(() => {
+    usePageStore.setState({ vaultRoot: '/note-copy-test' })
+    vi.clearAllMocks()
+    vi.spyOn(useNoteViewStore.getState(), 'addNote').mockResolvedValue('Copy.md')
+    vi.spyOn(useNoteViewStore.getState(), 'refresh').mockResolvedValue(undefined)
+    vi.spyOn(useNoteViewStore.getState(), 'setProp').mockImplementation(() => {})
+  })
+  afterEach(() => { vi.restoreAllMocks() })
+  it('uses the complete clipboard note snapshot and only replaces its own blank destination', async () => {
+    expect(await duplicateAggRow(note(), 'Source.md', undefined, '# Clipboard snapshot\nBody')).toBe('Copy.md')
+    expect(useNoteViewStore.getState().addNote).toHaveBeenCalledWith('', 'Source 副本')
+    expect(readTextFile).not.toHaveBeenCalled()
+    expect(writeTextFile).toHaveBeenCalledWith('Copy.md', '# Clipboard snapshot\nBody', expect.objectContaining({ base: expect.any(String) }))
+    expect(useNoteViewStore.getState().setProp).toHaveBeenCalledWith('', 'Copy.md', 'date', '2026-10-20', 'text')
+  })
+  it('fails closed on destination conflict and does not report a successful clone', async () => {
+    writeTextFile.mockResolvedValueOnce({ ok: false, current: 'User data' })
+    await expect(duplicateAggRow(note(), 'Source.md', undefined, 'Body')).rejects.toThrow('destination changed')
+    expect(useNoteViewStore.getState().setProp).not.toHaveBeenCalled()
+  })
+  it('vault switch after creating a file prevents writing its body into another vault', async () => {
+    vi.mocked(useNoteViewStore.getState().addNote).mockImplementationOnce(async () => {
+      usePageStore.setState({ vaultRoot: '/another-vault' })
+      return 'Copy.md'
+    })
+    await expect(duplicateAggRow(note(), 'Source.md', undefined, 'Body')).rejects.toThrow('vault switched')
+    expect(writeTextFile).not.toHaveBeenCalled()
+  })
+})
 
 const base = (): DbFile => ({
   version: 1,
@@ -64,6 +104,15 @@ describe('聚合层建行的盖章', () => {
   })
   // 每条用例末尾把防抖窗口里的 pendingOps 冲干净,否则会被重放进下一条用例(CAS 那条对此最敏感)
   afterEach(async () => { await useDbStore.getState().flushAll() })
+  it('conditional deletion rechecks a row snapshot during CAS replay, retaining remote body edits', async () => {
+    const snapshot = structuredClone(agg().rows[0])
+    deleteAggRow(agg(), snapshot.rowId, snapshot)
+    disk.rows[0].body = '# A later remote edit'
+    bump()
+    await useDbStore.getState().flushAll(true)
+    expect(disk.rows.find((r) => r.id === snapshot.rowId)?.body).toBe('# A later remote edit')
+    expect(rowsNow().find((r) => r.id === snapshot.rowId)?.body).toBe('# A later remote edit')
+  })
 
   it('createAggEvent:编号 max+1、创建时间盖章;日期/名称是用户给的值(压过盖章)', async () => {
     const id = await createAggEvent(agg(), 'd1', '2026-09-02T10:00', '新事件')
