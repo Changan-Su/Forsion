@@ -43,6 +43,7 @@ const ROOT = path.join(__dirname, '..')
 // Deterministic handover I/O barriers run against the real IPC handlers. The
 // plain stress test remains unchanged; the companion runner exercises both.
 const HANDOVER = process.env.NOTEMOVE_HANDOVER_PHASE
+const ROUNDTRIPS = Number(process.env.NOTEMOVE_ROUNDTRIPS || 0)
 const FILLER = Number(process.env.NOTEMOVE_FILLER ?? 1500)
 const results = []
 function check(name, ok, detail) {
@@ -321,6 +322,23 @@ async function main() {
       await win.keyboard.type('接续')
       const resumed = await until(() => read('来源夹/带图.md'), v => v === want3.replace('回来末尾', '回来末尾接续'), 15000)
       check('H4 next keystrokes continue at the moved caret', resumed === want3.replace('回来末尾', '回来末尾接续'), JSON.stringify(resumed))
+    }
+
+    // One session, repeated actual relocations; stop at the first failure and
+    // keep its IPC timeline. This is stress coverage, never a retry of a red run.
+    if (ROUNDTRIPS && HANDOVER) throw new Error('Stress round trips and handover barriers must run separately')
+    let line = '正文一行续写再写回来'
+    for (let i = 0; i < ROUNDTRIPS; i++) {
+      for (const [folder, from, extra] of [['目标夹', '来源夹', `去${i}`], ['来源夹', '目标夹', `回${i}`]]) {
+        const result = await dragInto(folder, from, extra)
+        line += extra
+        const original = BODY.replace('正文一行', line)
+        const expected = folder === '目标夹' ? AWAY(original) : original
+        const disk = await until(() => read(`${folder}/带图.md`), text => text === expected, 15000)
+        const ok = disk === expected && result.img?.ref.startsWith(`${folder}/`) && conflicts().length === 0 && read(`${from}/带图.md`) == null
+        check(`S${i} ${from} -> ${folder}: input, references, editor identity and zero copies`, ok, JSON.stringify({ disk, image: result.img, conflicts: conflicts() }))
+        if (!ok) throw new Error(`First stress failure at round ${i}: ${from} -> ${folder}`)
+      }
     }
 
     // ── 5 旧格式笔记(v3 块编辑器):同样拖进目标夹、途中打字 ──────────────────────

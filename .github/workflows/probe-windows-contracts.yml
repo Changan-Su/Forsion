@@ -14,6 +14,7 @@ on:
       - 'desktop/scripts/plugin-space-hidden.check.cjs'
       - 'desktop/scripts/note-move-assets.e2e.cjs'
       - 'desktop/scripts/note-move-handoff.e2e.cjs'
+      - 'desktop/scripts/note-move-stress.e2e.cjs'
       - 'desktop/scripts/lib/platform-keys.cjs'
       - 'desktop/scripts/project-details.check.cjs'
       - 'desktop/scripts/onboarding.check.cjs'
@@ -63,7 +64,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force outputs/windows-contracts | Out-Null
           $env:ONBOARDING_SHOTS = Join-Path $PWD 'outputs/windows-contracts/onboarding'
-          foreach ($script in @('mini-card.check.cjs', 'plugin-space-hidden.check.cjs', 'note-move-assets.e2e.cjs', 'note-move-handoff.e2e.cjs', 'project-details.check.cjs', 'onboarding.check.cjs')) {
+          foreach ($script in @('mini-card.check.cjs', 'plugin-space-hidden.check.cjs', 'note-move-assets.e2e.cjs', 'note-move-handoff.e2e.cjs', 'note-move-stress.e2e.cjs', 'project-details.check.cjs', 'onboarding.check.cjs')) {
             node "scripts/$script" 2>&1 | Tee-Object -FilePath "outputs/windows-contracts/$script.log"
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
