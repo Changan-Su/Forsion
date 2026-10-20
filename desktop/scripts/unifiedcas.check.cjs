@@ -43,6 +43,7 @@
 // 用法:npm run check:unifiedcas(= node scripts/e2e-editor.cjs --check=unifiedcas;worktree 里设 HARNESS_URL)
 const fs = require('fs'), os = require('os'), path = require('path')
 const { chromium } = require('playwright-core')
+const key = require('./lib/platform-keys.cjs')
 
 function findChromium() {
   if (process.env.CHROMIUM_EXE) return process.env.CHROMIUM_EXE
@@ -293,7 +294,7 @@ async function groupD(browser) {
     // 读回的正是自己改名前写下的那版(用户实际路径里最常见的假冲突触发点)。
     const p = await open(browser, MD)
     await p.click('.amx-title-input')
-    await p.keyboard.press('Meta+A')
+    await p.keyboard.press(key('Meta+A'))
     await p.keyboard.type('Meeting', { delay: 50 })
     await p.evaluate((s) => { window.__d7old = document.querySelector(s) }, PM)
     await p.keyboard.press('Enter')
@@ -494,7 +495,7 @@ async function groupF(browser) {
       window.amadeus.renamePageFile = (from, next) => new Promise((r) => setTimeout(() => r(orig(from, next)), 900)) // 改名 IPC 窗口
     })
     await p.click('.amx-title-input')
-    await p.keyboard.press('Meta+A')
+    await p.keyboard.press(key('Meta+A'))
     await p.keyboard.type('Meeting', { delay: 30 })
     await p.keyboard.press('Enter')
     await wait(150) // 进了 IPC 窗口:doRename 已过 writeNow / flushAllScopes,在等 renamePageFile

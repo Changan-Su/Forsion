@@ -8,7 +8,7 @@ import { fromDisk, toDisk } from './eol'
 import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { flushUnifiedScopes, registerUnifiedPipe } from './lifecycle'
 
-const source = readFileSync(new URL('./UnifiedPage.tsx', import.meta.url), 'utf8')
+const source = readFileSync(new URL('./UnifiedPage.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
 const writer = source.slice(source.indexOf('  const writeNow ='), source.indexOf('  /** 从编辑器 doc 派生'))
 const registration = source.slice(source.indexOf('    return registerUnifiedPipe({'))
 const flushStart = registration.indexOf('      flush: ')

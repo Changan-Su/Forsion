@@ -40,6 +40,9 @@ const zlib = require('zlib')
 const electron = require('./lib/launch-electron.cjs')
 
 const ROOT = path.join(__dirname, '..')
+// Deterministic handover I/O barriers run against the real IPC handlers. The
+// plain stress test remains unchanged; the companion runner exercises both.
+const HANDOVER = process.env.NOTEMOVE_HANDOVER_PHASE
 const FILLER = Number(process.env.NOTEMOVE_FILLER ?? 1500)
 const results = []
 function check(name, ok, detail) {
@@ -148,6 +151,25 @@ async function main() {
       s?.on('data', (b) => { for (const l of String(b).split('\n')) if (l.includes('[amadeus] movePage')) console.log(`      主进程:${l.trim()}`) })
     }
     const win = await app.firstWindow()
+    if (HANDOVER) await app.evaluate(({ ipcMain }, phase) => {
+      const channel = phase === 'write' ? 'file:write-text' : 'file:read-text'
+      const original = ipcMain._invokeHandlers.get(channel)
+      if (!original) throw new Error(`Missing real handler: ${channel}`)
+      const state = globalThis.__noteMoveHandoff = { arm: false, waiting: false, release: null }
+      ipcMain._invokeHandlers.set(channel, async (...args) => {
+        const stop = state.arm && args[1] === '来源夹/带图.md'
+        if (stop) state.arm = false
+        const result = phase === 'write' ? await original(...args) : undefined
+        if (stop) {
+          state.waiting = true
+          await new Promise((resolve, reject) => {
+            const timer = setTimeout(() => reject(new Error('Handover barrier was not released')), 20000)
+            state.release = () => { clearTimeout(timer); state.waiting = false; resolve() }
+          })
+        }
+        return phase === 'write' ? result : original(...args)
+      })
+    }, HANDOVER)
     await win.waitForSelector('#root', { timeout: 60_000 })
     await win.waitForTimeout(2500)
     for (const label of ['跳过引导', 'Skip']) {
@@ -198,6 +220,17 @@ async function main() {
       const t0 = Date.now()
       const d = await win.evaluate(DRAG_TO, { type: 'drop', rowText: folder })
       await win.keyboard.type(typed)
+      if (HANDOVER && folder === '来源夹') {
+        const end = Date.now() + 15000
+        while (!(await app.evaluate(() => globalThis.__noteMoveHandoff.waiting)) && Date.now() < end) await win.waitForTimeout(25)
+        const waiting = await app.evaluate(() => globalThis.__noteMoveHandoff.waiting)
+        check(`H1 ${HANDOVER}: stopped inside real destination I/O`, waiting)
+        if (!waiting) throw new Error('Did not reach handover barrier')
+        await win.keyboard.type('末尾')
+        check('H2 late input is visible before releasing destination I/O', (await win.locator('.ProseMirror:visible').first().innerText()).includes(`${typed}末尾`))
+        await win.screenshot({ path: shot.replace('.png', '-late-input.png') })
+        await app.evaluate(() => globalThis.__noteMoveHandoff.release())
+      }
       const typedMs = Date.now() - t0
       const img = await imgIn(folder) // 编辑器换到新路径 = 图片地址从新文件夹出发
       return { s, o, d, typedMs, switchedMs: Date.now() - t0, img }
@@ -230,14 +263,23 @@ async function main() {
     check('5b 没在原路径复活出一篇', read('来源夹/带图.md') == null, JSON.stringify(fs.readdirSync(path.join(vault, '来源夹'))))
 
     // ── 4 拖回去(途中照样打字):写法回到原样 ─────────────────────────────────
+    if (HANDOVER) await app.evaluate(() => { globalThis.__noteMoveHandoff.arm = true })
     const dragBack = await dragInto('来源夹', '目标夹', '回来')
-    const want3 = BODY.replace('正文一行', '正文一行续写再写回来')
+    const want3 = BODY.replace('正文一行', `正文一行续写再写回来${HANDOVER ? '末尾' : ''}`)
     const disk3 = await until(() => read('来源夹/带图.md'), (v) => v === want3, 15_000)
     check('6 拖回原文件夹:引用回到原来的写法,途中打的字也在', disk3 === want3,
       JSON.stringify({ disk3, typedMs: dragBack.typedMs, switchedMs: dragBack.switchedMs }))
     // 换到了原文件夹才算(10-19 Windows:树里的 `\` 路径认不出按 `/` 登记的标签,编辑器一直停在目标夹,只看宽度照样过)
     check('6b 编辑器换回了原文件夹,图照样显示得出', dragBack.img && dragBack.img.w === 1 && dragBack.img.ref.startsWith('来源夹/'), JSON.stringify(dragBack.img))
     check('6c 库里没有冲突副本、目标夹里没留下这篇', conflicts().length === 0 && read('目标夹/带图.md') == null, JSON.stringify(conflicts()))
+    if (HANDOVER) {
+      const drafts = await win.evaluate(() => Object.keys(localStorage).filter(k => k.startsWith('amadeus.unsavedDraft:')).map(k => ({ key: k, text: JSON.parse(localStorage.getItem(k)).text })))
+      check('H3 successful handoff leaves no stale recovery draft or restore prompt', drafts.length === 0 && await win.locator('[data-save="draft"]').count() === 0, JSON.stringify(drafts))
+      // Continue without clicking the editor: body focus and caret survive the move.
+      await win.keyboard.type('接续')
+      const resumed = await until(() => read('来源夹/带图.md'), v => v === want3.replace('回来末尾', '回来末尾接续'), 15000)
+      check('H4 next keystrokes continue at the moved caret', resumed === want3.replace('回来末尾', '回来末尾接续'), JSON.stringify(resumed))
+    }
 
     // ── 5 旧格式笔记(v3 块编辑器):同样拖进目标夹、途中打字 ──────────────────────
     if (!(await rows()).includes('旧格式')) {

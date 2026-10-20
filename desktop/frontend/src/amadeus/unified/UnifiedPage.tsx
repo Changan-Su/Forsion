@@ -112,6 +112,7 @@ import { createFoldMemory, remapFoldMemory } from './foldActions'
 import { registerMessages, translate, useI18n } from '../../i18n'
 import { registerFindProvider, textareaFindProvider } from '../../findInPage'
 import { pmFindProvider } from './findReplace'
+import { claimMoveHandoff, hasMoveHandoff, registerMoveHandoff, type MoveHandoff, type MoveSnapshot } from './moveHandoff'
 
 registerMessages({
   'unipage.upload.uploading': { zh: '上传中 {name}', en: 'Uploading {name}' },
@@ -307,6 +308,8 @@ interface Pipe {
   /** 挪动 IPC 在途(lifecycle.holdUnifiedPath)的**层数**:非零就不写盘,改动留在手里,放手时交接(见 handOver)。
    *  计数不是布尔(Codex 复核 P1):同一篇在慢挪动途中又被拖一次,后一次失败放手不许把前一次的按住清掉。 */
   held?: number
+  /** Own the final live source until the destination editor claims it. */
+  moveHandoff?: MoveHandoff
   /** 写的时候发现文件已经没了(CAS 回 current:null,Codex 复核 inst P0-2)而退休时,已另存进副本的那份全文;null = 没发生过。
    *  删除通知到之前用户还可能接着打字 —— 退休 / 卸载时比对它,多出来的再另存一份,不许静默丢。 */
   gone?: string | null
@@ -1227,7 +1230,33 @@ export interface UnifiedHistory {
   indent?: (dir: 1 | -1) => boolean
 }
 
-export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvasMode, historyRef, filesRef, mdRef, onUnlock, compact = false, readOnly = false, hardBreaks = false }: {
+/** Let the old editor finish its cleanup before reading the live move handoff.
+ * This also covers input during the destination file read / React replacement.
+ */
+export function UnifiedPage(props: Parameters<typeof UnifiedPageInner>[0]): ReactElement | null {
+  const root = useScopedPageStore().getState().vaultRoot
+  const scope = useContext(PageScopeCtx)
+  const [needsHandoff] = useState(() => !props.readOnly && hasMoveHandoff(root, scope, props.path))
+  const [prepared, setPrepared] = useState<{ initial: string; diskRaw: string; inheritedMove: boolean; moveCaret?: MoveSnapshot['caret'] } | null>(null)
+  const preparedRef = useRef<typeof prepared>(null)
+  useLayoutEffect(() => {
+    if (!needsHandoff || prepared) return
+    if (preparedRef.current) { setPrepared(preparedRef.current); return }
+    const diskRaw = props.diskRaw ?? props.initial
+    const claimed = claimMoveHandoff(root, scope, props.path, fromDisk(diskRaw).text)
+    const next = { initial: claimed?.text ?? props.initial, diskRaw,
+      inheritedMove: claimed?.text != null && claimed.text !== fromDisk(diskRaw).text,
+      moveCaret: claimed?.snapshot.caret }
+    preparedRef.current = next
+    setPrepared(next)
+  }, [needsHandoff, prepared, props, root, scope])
+  if (needsHandoff && !prepared) return null
+  return <UnifiedPageInner {...props} {...prepared} />
+}
+
+function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMode, historyRef, filesRef, mdRef, onUnlock, compact = false, readOnly = false, hardBreaks = false, inheritedMove = false, moveCaret }: {
+  inheritedMove?: boolean
+  moveCaret?: MoveSnapshot['caret']
   /** Mini Panel keeps a small editable title and body, without page decoration or metadata. */
   compact?: boolean
   path: string
@@ -1287,7 +1316,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     // D-19:纯 CRLF 的笔记进门归一成 LF、记下行尾,写盘时还原(见 ./eol;打开即升场景行尾以 diskRaw 为准)。
     const disk = fromDisk(diskRaw ?? initial)
     const { fmText, body } = splitFm(diskRaw == null ? disk.text : fromDisk(initial).text)
-    pipeRef.current = { fm: fmText, body, lastSaved: disk.text, eol: disk.eol, pending: false, timer: null, reconcileBusy: 0, unpreserved: null, preserved: new Set(), failed: false, retryTimer: null, retryN: 0, stashed: null, writing: 0, dead: false, retired: false, sawRows: false, ownedCards: new Set(), chain: Promise.resolve(), readOnly, slot: scope, peerPatch: null }
+    pipeRef.current = { fm: fmText, body, lastSaved: disk.text, eol: disk.eol, pending: inheritedMove, timer: null, reconcileBusy: 0, unpreserved: null, preserved: new Set(), failed: false, retryTimer: null, retryN: 0, stashed: inheritedMove ? fromDisk(initial).text : null, writing: 0, dead: false, retired: false, sawRows: false, ownedCards: new Set(), chain: Promise.resolve(), readOnly, slot: scope, peerPatch: null }
   }
   const pipe = pipeRef.current
   /** 最近一次被用户用到的时刻(评审 G1-02):焦点 / 指针进入本实例、或所属 leaf 成为活动面板时记一笔。
@@ -1561,6 +1590,10 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
 
   // 标题 → 正文的聚焦请求(consume-when-ready):挂载时吃掉跨重建的 pending(改名回车场景)。
   const [bodyFocus, setBodyFocus] = useState<BodyFocusReq | null>(() => {
+    const active = document.activeElement
+    if (moveCaret?.focused && (!active || active === document.body) && (scope == null || scope === activePageScope())) {
+      return { place: 'restore', body: '', doc: null, anchor: moveCaret.anchor, head: moveCaret.head }
+    }
     const p = pendingBodyFocus
     if (p?.path === path && p.scope === scope) {
       pendingBodyFocus = null
@@ -2204,9 +2237,24 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       return Promise.resolve()
     }
     pipe.retired = true // 旧路径已经没了:此后一个字都不写它;随后 remapScopePaths 的 retire(movedTo) 见已退休,不再存草稿
-    // ponytail: 从这里拉平到改指之间(两次 IPC 往返 + 一次重渲染)打的字随旧实例卸载丢掉 —— 与 doRename 补写同一个窗口。
     syncFromEditor()
     const text = composeFm(pipe.fm, pipe.body)
+    let draft: string | null = null
+    let caret: MoveSnapshot['caret']
+    pipe.moveHandoff = registerMoveHandoff(vaultRoot, scope, movedTo, pipe.lastSaved, () => {
+      syncFromEditor()
+      const v = layer.getView()
+      if (v && !v.isDestroyed) {
+        const active = document.activeElement
+        const focused = v.hasFocus() || (!!caret?.focused && (!active || active === document.body))
+        caret = { anchor: v.state.selection.anchor, head: v.state.selection.head, focused }
+      }
+      return { text: composeFm(pipe.fm, pipe.body), caret }
+    }, (latest, base) => {
+      if (latest == null && draft != null) clearDraft(vaultRoot, movedTo, draft, pipe.slot)
+      draft = latest
+      if (latest != null) stashDraft(vaultRoot, movedTo, latest, base, pipe.slot)
+    })
     const settle = (): void => { // 按住期间卸载冲洗存在旧路径上的那份草稿:交接落定就是孤儿
       if (pipe.stashed != null) clearDraft(vaultRoot, path, pipe.stashed, pipe.slot)
       pipe.stashed = null
@@ -2237,6 +2285,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
           if (!sameVault()) return
           const r = await amadeus.writeTextFile(movedTo, merged, { base: textFingerprint(theirs!) })
           if (!r || r.ok !== false) {
+            pipe.moveHandoff?.acknowledge(text, fromDisk(merged).text)
             clearDraft(vaultRoot, movedTo, text, pipe.slot)
             settle()
             return
@@ -2450,6 +2499,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   }
 
   const schedule = (): void => {
+    if (pipe.moveHandoff) { pipe.moveHandoff.capture(); return }
     if (pipe.dead || pipe.retired || readOnly) return
     // 有写盘在跑时 lastSaved 马上会变(见 Pipe.writing):撤回到旧基线的这一击照样排上,ack 后链上再判。
     if (!pipe.writing && composeFm(pipe.fm, pipe.body) === pipe.lastSaved) return
@@ -2619,6 +2669,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       // 就是一份永不删除的孤儿,之后同名位置出现新笔记会误弹「恢复草稿」。改名 IPC 窗口里打的字由 doRename 按新路径
       // 补写;本实例此前写失败存下的那份也一并清掉(只删自己存的,别的会话留的不碰)。
       if (pipe.retired) {
+        if (pipe.moveHandoff) pipe.moveHandoff.capture()
         if (pipe.gone != null) rescueMore() // 写时发现文件已没了(P0-2)之后又打的字:另存,不许随卸载丢掉
         if (pipe.stashed != null) clearDraft(vaultRoot, path, pipe.stashed, pipe.slot)
         pipe.stashed = null
@@ -2672,6 +2723,13 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path])
+
+  // The relay is local editing on top of the freshly read destination, so it
+  // uses the ordinary CAS writer with the destination's actual disk baseline.
+  useEffect(() => {
+    if (inheritedMove && !pipe.readOnly) void writeNow()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // D-04 补写:写失败后网络恢复 / 窗口回到前台 / 重新聚焦时立刻再试一次(不等退避到点,也不等下一次击键)。
   useEffect(() => {
@@ -2982,6 +3040,8 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     const slotLive = (s: string | null): boolean => (s == null ? unifiedScopeLive(path, null) : hasPageScope(s) || unifiedScopeLive(path, s))
     const d = readDraft(vaultRoot, path, pipe.slot, slotLive)
     if (!d) return null
+    // Already in this editor; retain the recovery copy until CAS succeeds.
+    if (inheritedMove && d.text === fromDisk(initial).text) return null
     if (d.text === pipe.lastSaved || d.text === (diskRaw ?? initial)) {
       clearDraft(vaultRoot, path, undefined, d.slot)
       return null
