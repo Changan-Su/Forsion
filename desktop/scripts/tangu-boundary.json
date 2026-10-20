@@ -61,6 +61,7 @@
   "baseline": {
     "hostImports": [
       "desktop/frontend/src/features/tangu.tsx",
+      "desktop/frontend/src/tangu/store/tanguSlice.ts",
       "desktop/frontend/src/views/ChatView.tsx",
       "desktop/frontend/src/views/RightViews.tsx",
       "desktop/frontend/src/views/SpecialViews.tsx",
@@ -80,7 +81,6 @@
       "desktop/frontend/src/views/chat2/chatPanelQuote.ts",
       "desktop/frontend/src/views/chat2/chatToNote.ts",
       "desktop/frontend/src/views/chat2/composer2.css",
-      "desktop/frontend/src/views/chat2/deskCapture.ts",
       "desktop/frontend/src/views/chat2/deskChrome.tsx",
       "desktop/frontend/src/views/chat2/orbitPins.ts",
       "desktop/frontend/src/views/chat2/orbits.css",
