@@ -294,8 +294,9 @@ async function main() {
     check('Generated output lands on the project canvas through native chat SSE', stub.seen.runs.length === 1 && stub.seen.runs[0].sessionId !== 'unrelated')
     await win.locator('.ims-image').first().dblclick()
     await win.locator('.ims-inspector').getByRole('button', { name: /^(添加到对话|Add to chat)$/ }).click()
-    await win.waitForSelector('[data-image-studio-chat] .attach-chip')
-    check('Selected image is attached to its own project composer', await win.locator('[data-image-studio-chat] .attach-chip').count() > 0)
+    // 输入卡里待发的附件 10-17 起是磁贴 .att-tile;限定在输入卡的附件行里数(已发消息气泡上方的附件也是磁贴)。
+    await win.waitForSelector('[data-image-studio-chat] .t2c-tilerow .att-tile')
+    check('Selected image is attached to its own project composer', await win.locator('[data-image-studio-chat] .t2c-tilerow .att-tile').count() > 0)
     const inspector = win.locator('.ims-inspector')
     // 对话与属性是右栏的两个标签:「添加到对话」把对话带到了前面,回属性要点一下。
     check('Adding to the chat brings the chat tab forward in the shared right side', await sideOf('[data-image-studio-chat]') === 'right' && !await inspector.isVisible())
@@ -317,8 +318,8 @@ async function main() {
 
     await first.click(); await win.locator('.ims-image').nth(1).click({ modifiers: ['Shift'] })
     await win.locator('.ims-toolbar').getByRole('button', { name: /^(添加到对话|Add to chat)$/ }).click()
-    await win.waitForFunction(() => document.querySelectorAll('[data-image-studio-chat] .attach-chip').length === 3)
-    check('Multiple references enter the existing project composer together', await win.locator('[data-image-studio-chat] .attach-chip').count() === 3)
+    await win.waitForFunction(() => document.querySelectorAll('[data-image-studio-chat] .t2c-tilerow .att-tile').length === 3)
+    check('Multiple references enter the existing project composer together', await win.locator('[data-image-studio-chat] .t2c-tilerow .att-tile').count() === 3)
 
     await win.getByRole('button', { name: /^(添加文字|Add text)$/ }).click()
     await inspector.getByRole('textbox', { name: /^(文字内容|Text content)$/ }).fill('AUTUMN / 2026\nRoom to imagine.')
