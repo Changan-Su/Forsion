@@ -88,15 +88,18 @@ function device(name: string) {
   return d;
 }
 const row = (id: string, name: string) => ({ id, cells: { n: name, d: '2026-10-22' } });
-/** 下一次推 __human__/CALENDAR.db 失败一次:landed = 云端已经收下、只是回执丢了;否则请求根本没到服务端。 */
-function failNextCalendarPut(cloud: ReturnType<typeof fakeCloud>, landed: boolean) {
+/** 下一次推 __human__/CALENDAR.db 失败一次:landed = 云端已经收下、只是回执丢了;否则请求根本没到服务端。
+ *  返回「迟到落下」:断掉的请求还在服务端排着,之后才按原样(同一个 baseSeq)执行。 */
+function failNextCalendarPut(cloud: ReturnType<typeof fakeCloud>, landed: boolean): () => Promise<unknown> {
   const put = cloud.putFile.bind(cloud);
+  let late: () => Promise<unknown> = async () => {};
   cloud.putFile = async (...args: Parameters<typeof put>) => {
     if (args[1] !== '__human__' || args[2] !== 'CALENDAR.db') return put(...args);
     cloud.putFile = put;
-    if (landed) await put(...args);
+    if (landed) await put(...args); else late = () => put(...args);
     throw new Error('socket hang up');
   };
+  return () => late();
 }
 
 let made: Array<ReturnType<typeof device>> = [];
@@ -286,6 +289,25 @@ describe('human/ in the cloud — two devices', () => {
     b.use(); b.editCalendar((rows) => [...rows, row('r3', 'Gym')]); await b.sync(cloud); // 期间 B 加了一条
     for (const d of [a, b, a]) await d.sync(cloud);
     for (const d of [a, b]) { d.use(); expect(rowNames(d.human('CALENDAR.db'))).toEqual(['r1:Dentist', 'r3:Gym']); }
+  });
+
+  it('an upload still queued on the server when the next sync runs cannot later overwrite a local undo', async () => {
+    const cloud = fakeCloud(['human', 'human-folder']);
+    const [a] = two();
+    const original = CAL([['r1', 'Dentist'], ['r2', 'Review']]);
+    writeFileSync(a.calendar, original);
+    await a.enroll(cloud); await a.sync(cloud);
+    a.use(); a.editCalendar((rows) => rows.filter((r) => r.id !== 'r2'));
+    const land = failNextCalendarPut(cloud, false); // 连接断了,请求还在服务端排着
+    a.use(); expect((await runAgentFilesSync(cloud, 'u')).error).toMatch(/socket hang up/);
+    writeFileSync(a.calendar, original); // 撤销删除
+    await a.sync(cloud); // 云端 seq 还没动
+    await land(); // 那次删除迟到落下
+    await a.sync(cloud); await a.sync(cloud);
+    a.use();
+    expect(rowNames(a.human('CALENDAR.db'))).toEqual(['r1:Dentist', 'r2:Review']);
+    expect(rowNames(readFileSync(a.calendar, 'utf8'))).toEqual(['r1:Dentist', 'r2:Review']);
+    expect(rowNames(cloudText(cloud, '__human__', 'CALENDAR.db')!)).toEqual(['r1:Dentist', 'r2:Review']);
   });
 
   it('waits for the desktop\'s write lock on the vault calendar instead of writing under it', async () => {
