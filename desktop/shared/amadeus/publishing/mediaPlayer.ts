@@ -122,7 +122,8 @@ export function mountPublishedMedia(
 }
 
 /** `![alt](clip.mp4)` demo loops: play only while on screen, never under reduced motion,
- * and fall back to native controls when the browser refuses autoplay (low-power mode etc.). */
+ * and fall back to native controls when the browser refuses autoplay (low-power mode etc.).
+ * Whoever started it, a loop pauses off screen or in a hidden tab; one the viewer started resumes when back. */
 function mountDemoVideos(
   root: HTMLElement,
   signal: AbortSignal,
@@ -137,52 +138,55 @@ function mountDemoVideos(
     v.pause()
     v.controls = true
   }
-  if (
+  const reduce =
     typeof window.matchMedia === 'function' &&
     window.matchMedia('(prefers-reduced-motion: reduce)').matches
-  ) {
-    videos.forEach(manual)
-    return { sync() {}, dispose: () => videos.forEach((v) => v.pause()) }
-  }
+  const watch = typeof IntersectionObserver !== 'undefined'
   // Without IntersectionObserver the autoplay attribute alone keeps the loops running.
-  if (typeof IntersectionObserver === 'undefined') return idle
-  const onScreen = new Set<HTMLVideoElement>(),
-    refused = new Set<HTMLVideoElement>()
+  if (!watch && !reduce) return idle
+  // auto = loops this player starts by itself; the rest (reduced motion, refused) only the viewer starts.
+  const auto = new Set<HTMLVideoElement>(reduce ? [] : videos),
+    onScreen = new Set<HTMLVideoElement>(watch ? [] : videos),
+    resume = new Set<HTMLVideoElement>()
+  if (reduce) videos.forEach(manual)
   const sync = (): void => {
     for (const v of videos) {
-      if (refused.has(v)) continue
       if (!onScreen.has(v) || document.hidden) {
-        v.pause()
+        if (!v.paused) {
+          v.pause()
+          if (!auto.has(v)) resume.add(v)
+        }
         continue
       }
-      if (!v.paused) continue
-      v.muted = true // autoplay is only allowed muted
+      if (!v.paused || !(auto.has(v) || resume.delete(v))) continue
+      if (auto.has(v)) v.muted = true // autoplay is only allowed muted
       v.play()?.catch((e: unknown) => {
         // AbortError = a pause() overtook this play() while scrolling past; not a refusal.
         if ((e as { name?: string })?.name === 'AbortError' || signal.aborted)
           return
-        refused.add(v)
-        manual(v)
+        if (auto.delete(v)) manual(v)
       })
     }
   }
-  const observer = new IntersectionObserver((entries) => {
-    for (const e of entries) {
-      const v = e.target as HTMLVideoElement
-      if (e.isIntersecting) onScreen.add(v)
-      else onScreen.delete(v)
-    }
-    sync()
-  })
+  const observer = watch
+    ? new IntersectionObserver((entries) => {
+        for (const e of entries) {
+          const v = e.target as HTMLVideoElement
+          if (e.isIntersecting) onScreen.add(v)
+          else onScreen.delete(v)
+        }
+        sync()
+      })
+    : null
   // Playback is driven from here: an off-screen loop must not keep decoding until the first callback.
   for (const v of videos) {
     v.removeAttribute('autoplay')
-    observer.observe(v)
+    observer?.observe(v)
   }
   return {
     sync,
     dispose() {
-      observer.disconnect()
+      observer?.disconnect()
       videos.forEach((v) => v.pause())
     },
   }
