@@ -18,7 +18,7 @@ import { mirrorLegacyHuman } from '../src/agents/humanFolder.js';
 import { withDbLock } from '../src/services/amadeusDb.js';
 import { humanDir, USER_MD_TEMPLATE, userMdFile } from '../src/core/tanguHome.js';
 import { AgentFileConflictError, type AgentFilesBrain } from '../src/seams/cloudBrain.js';
-import { dueHere, entriesOf, loadSchedule, upsertEntry, validateEntryInput } from '../src/services/agentSchedule.js';
+import { dueHere, entriesOf, loadSchedule, markEntryFired, upsertEntry, validateEntryInput } from '../src/services/agentSchedule.js';
 
 // 同一进程里轮流扮演两台:设备号跟着当前扮演的那台走(生产里一个进程只有一个家目录)
 vi.mock('../src/core/deviceId.js', () => ({ getDeviceId: () => process.env.TANGU_TEST_DEVICE ?? 'x' }));
@@ -463,5 +463,43 @@ describe('human/ in the cloud — two devices', () => {
     rmSync(lock);
     expect((await pending).ok).toBe(true);
     expect(entriesOf((await loadSchedule('agent-a'))!).map((e) => e.name)).toEqual(['Plan']);
+  });
+
+  it('a first new device on an account last used by an old desktop still imports USER.md before any pause', async () => {
+    const cloud = fakeCloud(['human', 'human-folder']);
+    // 旧版桌面 40 天前最后一次同步:云端只有 __user__/USER.md,没有 human/
+    await cloud.putFile('u', '__user__', 'USER.md', { content: 'Name: Lin\nLikes: tea\n', isBinary: false, size: 0, mtimeMs: 1, baseSeq: 0 });
+    cloud.legacy = []; // 服务端:30 天里没见过旧客户端
+    const [a] = two();
+    await a.enroll(cloud);
+    await a.sync(cloud);
+    expect(a.human('MEMORY.md')).toBe('Name: Lin\nLikes: tea\n'); // 云端还没有 human/ 时不停:先搬进来
+    expect(cloudText(cloud, '__human__', 'MEMORY.md')).toBe('Name: Lin\nLikes: tea\n');
+    expect(cloudText(cloud, '__human__', '.layout')).toBe('2\n');
+  });
+
+  it('an auto entry fired on its own device is not run again after another device edited the same row', async () => {
+    const cloud = fakeCloud(['human', 'human-folder', 'agent-calendar']);
+    const [a, b] = two();
+    for (const d of [a, b]) {
+      await d.enroll(cloud);
+      await saveAgent({ slug: 'shared', name: 'Shared', systemPrompt: 'fixture', cloudSync: true });
+      setAgentSyncPermission('shared', agentSyncScope(cloud, 'u')!, true, false);
+    }
+    a.use();
+    const v = validateEntryInput({ name: 'Brief', date: '2026-10-20T09:00', repeat: '1d', auto: true, prompt: 'brief' });
+    const created = await upsertEntry('shared', (v as any).value);
+    const id = (created as any).entry.id as string;
+    await a.sync(cloud); await b.sync(cloud);
+    const nine = new Date(2026, 9, 22, 9, 30);
+    a.use(); await markEntryFired('shared', id, nine); // A 到点跑了这一次
+    b.use(); // B 断网时拿旧的那份改了描述,先推上去
+    const edit = validateEntryInput({ name: 'Brief', date: '2026-10-20T09:00', repeat: '1d', auto: true, prompt: 'brief', description: 'from B' });
+    expect((await upsertEntry('shared', (edit as any).value, id)).ok).toBe(true);
+    await b.sync(cloud);
+    await a.sync(cloud); // 同一行两边都改了:整行取 B 的,lastRun 不能跟着回到空
+    a.use(); const onA = entriesOf((await loadSchedule('shared'))!);
+    expect(onA.find((e) => e.id === id)!.lastRun).toBe(nine.toISOString());
+    expect(dueHere(onA, new Date(2026, 9, 22, 9, 35))).toEqual([]);
   });
 });

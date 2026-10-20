@@ -119,6 +119,26 @@ function migrateUnlocked(slug: string): void {
   if ('conflict' in merged && merged.conflict) renameSync(legacy, join(agentsDir(), slug, conflictCopyName('SCHEDULE.db', new Date())));
   else unlinkSync(legacy);
 }
+/** 同步合并之后调(agentFileSync):同一行两台都改了(一台到点写了 lastRun、另一台改了描述),合并取了一边的整行;
+ *  lastRun 取各份里最晚的那个,免得排它的那台把同一次再跑一遍。ISO 串按字典序比就是按时间比。 */
+export function keepLatestRuns(merged: string, ...sides: string[]): string {
+  const db = parseDb(merged);
+  if (!db) return merged;
+  const latest = new Map<string, string>();
+  for (const side of sides) {
+    for (const r of parseDb(side)?.rows ?? []) {
+      const v = r.cells?.lastRun;
+      if (typeof v === 'string' && v > (latest.get(r.id) ?? '')) latest.set(r.id, v);
+    }
+  }
+  let changed = false;
+  for (const r of db.rows) {
+    const v = latest.get(r.id);
+    if (v && v > String(r.cells.lastRun ?? '')) { r.cells.lastRun = v; changed = true; }
+  }
+  return changed ? serialize(db) : merged;
+}
+
 /** 同步这个 Agent 之前调(agentFileSync):先改好名,清单里才有 CALENDAR.db。同步的,调用方已在锁外。 */
 export function migrateScheduleFile(slug: string): void {
   if (existsSync(legacyScheduleFile(slug))) withMemoryDirectoryLock(join(agentsDir(), slug), () => migrateUnlocked(slug));

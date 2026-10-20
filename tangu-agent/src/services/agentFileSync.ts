@@ -9,7 +9,7 @@ import { getDeviceId } from '../core/deviceId.js';
 import { getAgent, listAgents, parseAgentConfig, resolveMemorySlug, type NormalAgentDef } from '../agents/agentRegistry.js';
 import { splitLogBlocks, mergeBlocks, mergeLogHeaders, mergeText3 } from './memorySync.js';
 import { mergeDbFile } from './dbRowMerge.js';
-import { migrateScheduleFile } from './agentSchedule.js';
+import { keepLatestRuns, migrateScheduleFile } from './agentSchedule.js';
 import { AgentFileConflictError, type AgentFilesBrain, type AgentFileMeta, type AgentFileContent } from '../seams/cloudBrain.js';
 import { agentSyncPermission, agentSyncScope, setAgentSyncPermission, captureAgentSyncPermission, agentSyncOperationSignal, agentSyncConsentSignal } from './cloudSyncAccount.js';
 import { agentSyncDir, assertSyncPath, atomicSyncWrite, conflictCopyName, readSyncBytes, validSyncPath, validSyncSlug } from './agentSyncPaths.js';
@@ -192,7 +192,9 @@ async function syncAccount(cloud: AgentFilesBrain, userId: string, scope: string
     // 旧位置(USER.md、默认笔记库的 Calendar.db)和 human/ 双向镜像:同步前一遍把旧设备的改动并进来再推,同步后一遍把拉下来的写回旧位置。
     // 服务端还不认 __human__ 时只镜像、不上云(方案页 ⑦:server 没部署时新版只做本地搬家)。
     // 服务端顺带回答「这个账号还有没有旧客户端在用 USER.md」:明确说没有才停 USER.md 那一对;没说(老服务端 / 查失败)照旧镜像
-    const legacy = Array.isArray(manifest.legacy) ? { families: manifest.legacy, seenAt: manifest.legacySeenAt ?? null } : null;
+    // 云端还没有 human/(没有搬家标记)就不停:这台可能是第一台新版,USER.md 得先搬进 human/ 推上去,停了画像就到不了新版
+    const humanInCloud = humanFolder && (bySlug.get(HUMAN_SLOT) ?? []).some((f) => f.relPath === HUMAN_LAYOUT && !f.deleted);
+    const legacy = humanInCloud && Array.isArray(manifest.legacy) ? { families: manifest.legacy, seenAt: manifest.legacySeenAt ?? null } : null;
     const mirror = async (): Promise<void> => { try { result.conflicts += (await mirrorLegacyHuman({ legacy })).conflicts; } catch (e) { fail(result, e); } };
     await mirror();
     if (humanFolder) {
@@ -273,8 +275,12 @@ const HUMAN_LAYOUT = '.layout';
 interface ReconcileOptions { plain?: boolean; merge?: boolean; text?: boolean; /** 把影子立刻落盘:merge 文件在推送 / 落合并结果之前要用 */ persist?: () => void }
 /** 两边都改了:.db 按行(id)合并,.md 按行三方合并;还没有基线(第一次见面)时取并集,不整份二选一。
  *  合不了返回 null(退回整份冲突副本)。 */
-function mergeFile(p: string, ours: string, base: string | null, theirs: string): { content: string; conflict: boolean } | null {
-  if (p.endsWith('.db')) return mergeDbFile(ours, base, theirs);
+function mergeFile(p: string, ours: string, base: string | null, theirs: string, agentCalendar = false): { content: string; conflict: boolean } | null {
+  if (p.endsWith('.db')) {
+    const merged = mergeDbFile(ours, base, theirs);
+    // Agent 的日历:同一行冲突时整行取了一边,lastRun 不能跟着回滚(否则排它的那台会把同一次再跑一遍)
+    return merged && agentCalendar ? { ...merged, content: keepLatestRuns(merged.content, ours, theirs) } : merged;
+  }
   const text = base === null ? joinFirstContact(ours, theirs) : mergeText3(ours, base, theirs);
   return text === null ? null : { content: text, conflict: false };
 }
@@ -384,7 +390,7 @@ async function reconcileFile(cloud: AgentFilesBrain, uid: string, slug: string, 
   };
   if (decision.kind === 'conflict' && opts.merge && modern && initial) {
     const fetched = await fetchRemote();
-    const merged = fetched.file.isBinary ? null : mergeFile(p, initial.toString('utf8'), base, fetched.bytes.toString('utf8'));
+    const merged = fetched.file.isBinary ? null : mergeFile(p, initial.toString('utf8'), base, fetched.bytes.toString('utf8'), slug !== HUMAN_SLOT && p === 'CALENDAR.db');
     if (!merged) { await pull(true, fetched); return; }
     const out = Buffer.from(merged.content);
     verifyBytes({}, out);

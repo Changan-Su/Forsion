@@ -2,7 +2,7 @@
  * 每-agent 日程:到期判定(锚点算术)纯函数矩阵 + 校验 + 盘面读写(TANGU_HOME 重定向)。
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -165,6 +165,21 @@ describe('盘面读写(TANGU_HOME 重定向)', () => {
     expect(await removeEntry('alpha', 'nope')).toBe(false);
     expect(await removeEntry('alpha', id)).toBe(true);
     expect((await loadSchedule('alpha'))!.rows).toHaveLength(0);
+  });
+
+  it('SCHEDULE.db 改名 CALENDAR.db:没盖章的行盖本机;两份都在按行并集,同一行写得不一样旧名那份留成冲突副本', async () => {
+    const dir = join(home, 'agents', 'delta');
+    mkdirSync(dir, { recursive: true });
+    const file = (rows: Array<[string, string]>) => JSON.stringify({ version: 1, name: 'D', columns: [{ id: 'name', name: 'Name', type: 'text' }], rows: rows.map(([id, name]) => ({ id, cells: { name } })) });
+    writeFileSync(join(dir, 'SCHEDULE.db'), file([['s-1', 'mine'], ['s-2', 'old title']]));
+    writeFileSync(join(dir, 'CALENDAR.db'), file([['s-2', 'new title'], ['s-3', 'pulled']])); // 别的设备先推下来的
+    const db = (await loadSchedule('delta'))!;
+    expect(entriesOf(db).map((e) => `${e.id}:${e.name}`).sort()).toEqual(['s-1:mine', 's-2:new title', 's-3:pulled']);
+    expect(entriesOf(db).find((e) => e.id === 's-1')!.device).not.toBe('');
+    const left = readdirSync(dir).filter((f) => f.startsWith('SCHEDULE'));
+    expect(left).toHaveLength(1);
+    expect(left[0]).toMatch(/^SCHEDULE \(conflict .+\)\.db$/);
+    expect(readFileSync(join(dir, left[0]), 'utf8')).toContain('old title');
   });
 
   it('损坏文件:load 回 null,ensure 拒绝覆盖(保数据);MAX_ENTRIES 帽', async () => {
