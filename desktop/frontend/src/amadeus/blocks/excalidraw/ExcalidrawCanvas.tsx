@@ -17,7 +17,7 @@ import './viewIsland.css'
 import './excalidrawTheme.css' // 引擎 token → LCL 契约(见该文件),随画布 chunk 一起加载
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
-import { UI_ZOOM_EVENT } from '@lcl/engine'
+import { UI_ZOOM_EVENT, useNativeChromeExtras } from '@lcl/engine'
 import type { ObsidianResetCustomPenState } from '@excalidraw/excalidraw/obsidianTypes'
 import type { AppState, ExcalidrawInitialDataState, ExcalidrawImperativeAPI, BinaryFileData } from '@excalidraw/excalidraw/types'
 import type { OrderedExcalidrawElement } from '@excalidraw/excalidraw/element/types'
@@ -52,10 +52,19 @@ registerMessages({
   'excalicanvas.allBoards': { zh: '所有白板', en: 'All boards' },
   'excalicanvas.toolbar': { zh: '工具栏', en: 'Toolbar' },
   'excalicanvas.resetOrder': { zh: '恢复默认顺序', en: 'Reset to default order' },
+  // 引擎那句(hints.canvasPanning)教的是鼠标中键 / 空格拖动;触屏上换这句(见 data-touch-hint)
+  'excalicanvas.panHintTouch': { zh: '双指拖动或捏合，移动和缩放画布', en: 'Drag or pinch with two fingers to move and zoom' },
 })
 
 /** 线距小于这个屏幕像素就不画:再密就是一片糊(excalidraw 自带网格同款下限)。 */
 const MIN_VISIBLE_PX = 4
+/** Android 宽屏:标题胶囊被封顶到比这还窄(dp,左钮 + 三四个字)就不封了,菜单钮与工具岛整排退到胶囊下面。 */
+const CAP_FLOOR = 120
+/** 胶囊宽度探针(见 fit):--nc-capl-w / --nc-capr-w 由 mobile/src/nativeChrome.ts 写在 [data-nc-caps] 上,别处为 0。 */
+const CAP_PROBE: React.CSSProperties = {
+  position: 'absolute', top: 0, left: 0, visibility: 'hidden', pointerEvents: 'none',
+  width: 'calc(var(--nc-capl-w, 0) * 1px)', height: 'calc(var(--nc-capr-w, 0) * 1px)',
+}
 const V_GRAD = 'linear-gradient(90deg, var(--amx-grid-line) 0 1px, transparent 1px)'
 const H_GRAD = 'linear-gradient(180deg, var(--amx-grid-line) 0 1px, transparent 1px)'
 
@@ -224,6 +233,8 @@ export default function ExcalidrawCanvas({
   const toolRefs: ToolRefs = useMemo(() => ({ pen: penState, group: groupState }), [])
   // 我们自建的 UI 需要的那一小片 appState(为什么不是整份见 boardUi.ts)
   const [ui, setUi] = useState<BoardUi>(newBoardUi)
+  // 最近一次按下的是不是鼠标(Pad 接了鼠标照旧给引擎原句)。还没按过 = 看设备的主指针。
+  const [mouse, setMouse] = useState(() => !window.matchMedia('(pointer: coarse)').matches)
   const [hostZoom, setHostZoom] = useState('')
   const [root, setRoot] = useState<Element | null>(null)
   const toolbarAnchor = useEngineAnchor(root, '.App-toolbar', 'amx-toolbar-slot')
@@ -616,8 +627,58 @@ export default function ExcalidrawCanvas({
     return () => ro.disconnect()
   }, [api, layout, clampView, syncZoom, tryFit])
 
+  // Android 宽屏原生外壳下,菜单钮 + 工具岛挪进胶囊那一排(base.css ⑦,方案 A2)。三档全按几何算,不量溢出 ——
+  // 标题胶囊的宽要原生走一趟才回来,量到的总是上一拍的:
+  //   · capMax = 一排按最小间距排满时标题胶囊最多占多宽(12 + 胶囊 + 8 + 菜单钮 + 8 + 工具岛 + 8 + 右胶囊 + 12 = 白板宽),
+  //     报给原生封顶、长标题省略号截断。算式里没有胶囊此刻的宽,一趟就收敛。
+  //   · 'off':上限不到 CAP_FLOOR → 菜单钮与工具岛退回引擎自己那一排、挪到胶囊下面,不封顶。只看上限、不看胶囊报回来的宽:
+  //     原生还没报(0)或报的是被我们封过的宽,拿它比都会把 30dp 这种上限放过去,胶囊从此窄过左钮(Codex 评审 P2)。
+  //     ponytail: 标题本来就短于 CAP_FLOOR、上限又落在两者之间时也退到下面(放得下也退),这条窄带不值得多一层判断。
+  //   · 'gap':工具岛放主区正中会碰到菜单钮(或右胶囊)→ 改在菜单钮右缘与右胶囊左缘之间的空当里居中,不一点点地让。
+  //   · 都不是:主区正中。
+  // 看白板根(旋转 / 开合左栏)、工具岛(工具栏改了顺序 / 增删)、两颗胶囊的宽(capProbeRef)。
+  // 白板根里净缩放恒为 1(syncZoom 反向抵消了界面缩放):视口 px = 白板里的 px = dp。
+  const [capMax, setCapMax] = useState(0)
+  const capProbeRef = useRef<HTMLElement>(null)
+  useEffect(() => {
+    const el = hostRef.current
+    if (!el || !api || typeof ResizeObserver === 'undefined') return
+    const fit = (): void => {
+      el.removeAttribute('data-cap-row')
+      const top = el.closest(".mb-shell[data-native-chrome][data-wide] .mb-main > .mb-view[data-view='amadeus-drawing']") && el.querySelector<HTMLElement>('.App-menu_top')
+      const island = top && top.querySelector<HTMLElement>(':scope > .shapes-section')
+      const menu = top && top.querySelector<HTMLElement>('.main-menu-trigger')
+      const w = el.getBoundingClientRect().width
+      if (!top || !island || !menu || !w) { setCapMax(0); return }
+      const css = getComputedStyle(el)
+      const capL = Number(css.getPropertyValue('--nc-capl-w')) || 0
+      const capR = Number(css.getPropertyValue('--nc-capr-w')) || 0
+      const iw = island.getBoundingClientRect().width
+      const mw = menu.getBoundingClientRect().width
+      const max = Math.floor(w - capR - iw - mw - 48)
+      if (max < CAP_FLOOR) { el.dataset.capRow = 'off'; setCapMax(0); return }
+      setCapMax(max)
+      const menuEnd = 12 + Math.min(capL, max) + 8 + mw
+      if (menuEnd + 8 > (w - iw) / 2 || (w + iw) / 2 > w - 12 - capR - 16) el.dataset.capRow = 'gap'
+    }
+    const ro = new ResizeObserver(fit)
+    ro.observe(el)
+    const island = el.querySelector('.App-menu_top > .shapes-section')
+    if (island) ro.observe(island)
+    if (capProbeRef.current) ro.observe(capProbeRef.current)
+    return () => { ro.disconnect(); setCapMax(0) }
+  }, [api])
+  useNativeChromeExtras(capMax > 0 ? { where: 'main', capLeftMax: capMax } : null)
+
   return (
-    <div className="amx-boardhost" ref={hostRef} data-full={full || undefined}>
+    // data-nc-caps:Android 原生外壳往这里写两颗顶部胶囊的宽(mobile/src/nativeChrome.ts),宽屏时白板顶上那一排要绕开它们(base.css)。
+    // data-touch-hint:提示条此刻是「怎么平移画布」、而手上不是鼠标 → 换成触屏说法(amadeus-host.css)。
+    <div
+      className="amx-boardhost" ref={hostRef} data-full={full || undefined} data-nc-caps=""
+      data-touch-hint={ui.idle && !mouse ? '' : undefined}
+      style={{ '--amx-hint-pan': JSON.stringify(t('excalicanvas.panHintTouch')) } as React.CSSProperties}
+      onPointerDownCapture={(e) => { const m = e.pointerType === 'mouse'; if (m !== mouse) setMouse(m) }}
+    >
       <Excalidraw
         onExcalidrawAPI={setApi}
         initialData={initialData}
@@ -658,6 +719,9 @@ export default function ExcalidrawCanvas({
             zen: appState.zenModeEnabled,
             pen: appState.penMode,
             penDetected: appState.penDetected,
+            idle: appState.activeTool.type === 'selection' && !appState.selectionElement && !appState.editingTextElement
+              && !appState.croppingElementId && !appState.searchMatches?.matches.length
+              && !Object.values(appState.selectedElementIds).some(Boolean),
           }
           setUi((cur) => (sameBoardUi(cur, next) ? cur : next))
           onSceneChange(serializeAsJSON(elements, appState, files, 'local'))
@@ -709,6 +773,8 @@ export default function ExcalidrawCanvas({
           </Footer>
         )}
       </Excalidraw>
+      {/* 两颗胶囊的宽(宽 = 左、高 = 右)量成一个看不见的盒子,给下面 fit 的 ResizeObserver 盯:胶囊一变就重算(Codex 评审 P2) */}
+      <i ref={capProbeRef} aria-hidden style={CAP_PROBE} />
       {/* 挂进引擎的 .excalidraw 根:胶囊的底色 / 外圈 / 投影都是引擎 token,只在那棵子树里有值 */}
       {full && fullHint && root &&
         createPortal(

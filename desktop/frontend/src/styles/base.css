@@ -5084,7 +5084,8 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
 /* ⑤ 保留默认让位的四个,连同理由 —— 不是漏了,是 CSS 够不着:
       · activity-log   根与滚动器都没有 class,且内距是内联的(内联 padding 压过样式表);开发者模式视图。
       · changelog      根就是滚动器,但 `style={{padding:24}}` 是内联的,样式表改不动它的 padding-top。
-      · amadeus-drawing Excalidraw 在画布顶部自绘浮动 UI 岛,是第三方 DOM,压不住也不该压。
+      · amadeus-drawing Excalidraw 在画布顶部自绘浮动 UI 岛,是第三方 DOM —— 只有 Android 宽屏(竖条)那一档由 ⑦ 接管,
+                        其余照旧整块让位。
       · amadeus-plugin-file 内容整块由插件 mount() 画,宿主不知道里面是什么。 */
 
 /* ⑥ Android 悬浮 Dock 之下的底部留白(2026-10-09 用户选定「悬浮胶囊 + 毛玻璃」)—— 与上面顶部那套对称,
@@ -5093,6 +5094,38 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
       而是壁纸铺到屏幕底、内容留在 Dock 之上。 */
 .mb-shell[data-native-chrome] .mb-main > .mb-view[data-view='homepage'] { padding-bottom: 0; }
 .mb-shell[data-native-chrome] .mb-view[data-view='homepage'] .hp-root { --hp-chrome-bottom: var(--mb-bottom); }
+
+/* ⑦ 白板在 Android 宽屏(左侧竖条 + 并排左栏,2026-10-20 方案 A2):画布铺满整屏高,引擎顶上那一排(菜单钮 → 工具岛)
+      挪进两颗原生胶囊所在的那一行 —— 菜单钮排在标题胶囊右边 8dp,工具岛在主区正中,右边给右胶囊留够位置。
+      挤的时候(放正中会碰到菜单钮)ExcalidrawCanvas 给白板根挂 data-cap-row="gap",工具岛改在菜单钮右缘与右胶囊左缘之间的
+      空当里居中(不一点点地让);标题胶囊的宽也由它算好上限报给原生(capLeftMax),长标题省略号截断,这一排永远放得下。
+      · 胶囊的宽:mobile/src/nativeChrome.ts 写成只命中 [data-nc-caps] 的一条规则(白板根带这个属性);
+        状态栏高 --nc-status 在 <body> 上。左胶囊从主区左缘 12dp 起(原生按 leftInset 摆),右胶囊贴主区右缘 12dp。
+      · 只认引擎的平板 / 桌面档。.excalidraw--mobile 是手机档(工具条整条横在顶上),照旧走默认让位 ——
+        手机横屏也是宽屏,但引擎按屏幕短边把它判成手机档。
+      · 引擎三栏是 grid(1fr 2fr 1fr),这里换成 flex:左栏与 ::after 都 flex 1 1 0 平分剩余,工具岛就在正中;
+        哪边的最小宽(左 = 让位 + 菜单钮,右 = 右胶囊的让位)装不下,它才被挤开。右上角那颗侧栏钮是绝对定位的,不占这一排。
+      · 工具岛 52px 高、菜单钮 36px:都把中线对齐胶囊行的中线(状态栏 + 6 + 23dp)。
+      · dp 直接当 px 用、不除 --uiz:白板根(.amx-boardhost)自己反向抵消了界面缩放(ExcalidrawCanvas syncZoom),里面净缩放恒为 1。
+      · 标题封顶后连左钮 + 几个字都放不下(4:3 平板开着左栏)时挂 data-cap-row="off":菜单钮与工具岛退回
+        引擎自己那一排,整排挪到胶囊下面 —— 画布照样铺满整屏高。 */
+.mb-shell[data-native-chrome][data-wide] .mb-main > .mb-view[data-view='amadeus-drawing']:has(.excalidraw:not(.excalidraw--mobile)) { padding-top: 0; }
+.mb-shell[data-native-chrome][data-wide] .mb-view[data-view='amadeus-drawing'] .amx-boardhost {
+  --amx-cap-mid: calc((var(--nc-status, 0) + 29) * 1px);
+  --amx-cap-l: calc((12 + var(--nc-capl-w, 0)) * 1px + 8px);
+  --amx-cap-r: calc((12 + var(--nc-capr-w, 0)) * 1px + 8px);
+}
+.mb-shell[data-native-chrome][data-wide] .mb-view[data-view='amadeus-drawing'] .amx-boardhost[data-cap-row='off'] .excalidraw:not(.excalidraw--mobile) .FixedSideContainer_side_top { top: calc((var(--nc-status, 0) + 58) * 1px + 8px); }
+.mb-shell[data-native-chrome][data-wide] .mb-view[data-view='amadeus-drawing'] .amx-boardhost:not([data-cap-row='off']) .excalidraw:not(.excalidraw--mobile) .FixedSideContainer_side_top { top: calc(var(--amx-cap-mid) - 26px); }
+.mb-shell[data-native-chrome][data-wide] .mb-view[data-view='amadeus-drawing'] .amx-boardhost:not([data-cap-row='off']) .excalidraw:not(.excalidraw--mobile) .App-menu_top { display: flex; align-items: flex-start; gap: 8px; }
+.mb-shell[data-native-chrome][data-wide] .mb-view[data-view='amadeus-drawing'] .amx-boardhost:not([data-cap-row='off']) .excalidraw:not(.excalidraw--mobile) .App-menu_top > .App-menu_top__left { flex: 1 1 0; margin-top: 8px; }
+.mb-shell[data-native-chrome][data-wide] .mb-view[data-view='amadeus-drawing'] .amx-boardhost:not([data-cap-row='off']) .excalidraw:not(.excalidraw--mobile) .App-menu_top > .App-menu_top__left > :first-child { margin-left: max(0px, var(--amx-cap-l) - var(--editor-container-padding)); }
+.mb-shell[data-native-chrome][data-wide] .mb-view[data-view='amadeus-drawing'] .amx-boardhost:not([data-cap-row='off']) .excalidraw:not(.excalidraw--mobile) .App-menu_top > .shapes-section { flex: none; }
+.mb-shell[data-native-chrome][data-wide] .mb-view[data-view='amadeus-drawing'] .amx-boardhost:not([data-cap-row='off']) .excalidraw:not(.excalidraw--mobile) .App-menu_top::after { content: ''; flex: 1 1 0; min-width: max(0px, var(--amx-cap-r) - var(--editor-container-padding)); }
+/*    · gap 档:左栏与 ::after 以各自的最小宽为基准、再平分剩余 → 工具岛落在空当正中,离菜单钮与右胶囊各至少 8px(flex gap)。
+        与上面几条同特异性,必须排在它们后面。 */
+.mb-shell[data-native-chrome][data-wide] .mb-view[data-view='amadeus-drawing'] .amx-boardhost[data-cap-row='gap'] .excalidraw:not(.excalidraw--mobile) .App-menu_top > .App-menu_top__left { flex: 1 1 auto; }
+.mb-shell[data-native-chrome][data-wide] .mb-view[data-view='amadeus-drawing'] .amx-boardhost[data-cap-row='gap'] .excalidraw:not(.excalidraw--mobile) .App-menu_top::after { flex: 1 1 max(0px, (12 + var(--nc-capr-w, 0)) * 1px - var(--editor-container-padding)); min-width: 0; }
 
 /* chat / work 模式位:会话创建后只读(disabled),悬浮 title 解释「换模式请新建会话」。 */
 .composer-menu .menu-item:disabled { opacity: 0.55; cursor: default; }

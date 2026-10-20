@@ -13,7 +13,8 @@
  *  `dispatchNativeChromeSpace`. With such a host the shell navigates in two levels (SingleColumnHost,
  *  `listFirstNow`): the Space list is sent only on a Space's first level, so the bar is gone one level down.
  *  The bar holds a handful of Spaces (`pinned`, see spaceDock.ts); the rest are behind its "all" cell (`spacesAll`).
- *  A view on screen may add to the shell's bar (`useNativeChromeExtras`): a search button, a second title part. */
+ *  A view on screen may add to the shell's bar (`useNativeChromeExtras`): a search button, a second title part, a cap on
+ *  the left capsule's width. */
 import { useEffect, useRef, useSyncExternalStore } from 'react'
 
 export type NativeChromeAction = 'left' | 'right' | 'tabs' | 'more' | 'back' | 'close' | 'search' | 'title' | 'spacesAll'
@@ -47,6 +48,12 @@ export interface NativeChromeShellState {
   titleTap?: boolean
   /** Something behind "more" wants a look (a `RibbonItem.dot` is lit): hosts put a dot on the button. `label` = what a screen reader says. */
   moreDot?: { label: string }
+  /** dp the docked left column (wide layout) takes from the page's left edge: hosts start the left capsule after it, so
+   *  the column's own top is not under a capsule. Absent = no docked column. */
+  leftInset?: number
+  /** Most dp the left capsule may take: the view on screen lays something out in the capsule row right of it (the board's
+   *  menu button and tool island). A longer title is cut. Absent = no limit. */
+  capLeftMax?: number
 }
 /** `close` = label of an optional trailing × (e.g. a settings sub-page: back = settings home, × = leave settings). */
 export interface NativeChromePageState { mode: 'page'; title: string; back: string; close?: string }
@@ -208,6 +215,8 @@ export interface NativeChromeExtras {
   search?: { label: string; run: () => void }
   /** `sub` = second part of the title; `run` = the title is a button. */
   title?: { sub: string; run?: () => void }
+  /** See `NativeChromeShellState.capLeftMax`. */
+  capLeftMax?: number
 }
 const extras: Array<{ value: NativeChromeExtras }> = []
 const extrasSubscribers = new Set<() => void>()
@@ -223,14 +232,15 @@ export function subscribeNativeChromeExtras(fn: () => void): () => void {
 export function useNativeChromeExtras(value: NativeChromeExtras | null): void {
   const latest = useRef(value)
   latest.current = value
-  const key = value ? JSON.stringify({ w: value.where, s: value.search?.label ?? null, t: value.title?.sub ?? null, r: !!value.title?.run }) : ''
+  const key = value ? JSON.stringify({ w: value.where, s: value.search?.label ?? null, t: value.title?.sub ?? null, r: !!value.title?.run, c: value.capLeftMax ?? 0 }) : ''
   useEffect(() => {
     if (!key) return
-    const parsed = JSON.parse(key) as { w: NativeChromeExtras['where']; s: string | null; t: string | null; r: boolean }
+    const parsed = JSON.parse(key) as { w: NativeChromeExtras['where']; s: string | null; t: string | null; r: boolean; c: number }
     const entry = { value: {
       where: parsed.w,
       ...(parsed.s !== null ? { search: { label: parsed.s, run: () => latest.current?.search?.run() } } : {}),
       ...(parsed.t !== null ? { title: { sub: parsed.t, ...(parsed.r ? { run: () => latest.current?.title?.run?.() } : {}) } } : {}),
+      ...(parsed.c > 0 ? { capLeftMax: parsed.c } : {}),
     } satisfies NativeChromeExtras }
     extras.push(entry)
     extrasSubscribers.forEach((fn) => fn())

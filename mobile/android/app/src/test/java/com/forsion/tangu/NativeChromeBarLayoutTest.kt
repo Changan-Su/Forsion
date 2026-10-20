@@ -29,6 +29,7 @@ import androidx.core.graphics.Insets
 import androidx.test.core.app.ApplicationProvider
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.ExternalResource
@@ -207,5 +208,65 @@ class NativeChromeBarLayoutTest {
         assertEquals("running!", state("nativeChrome.space.s1"))
         assertEquals("attention!", state("nativeChrome.spacesAll"))
         assertEquals(null, state("nativeChrome.space.s2"))
+    }
+
+    // ── the rail (wide windows, 2026-10-20 mock-up A2) ──
+
+    private val account = ""","account":{"label":"Me","icon":{"kind":"text","text":"M"},"png":""}"""
+    private fun rail(height: Int, state: ChromeState, asked: MutableList<String> = mutableListOf()) = compose.setContent {
+        Box(Modifier.width(NATIVE_RAIL_WIDTH).height(height.dp)) {
+            NativeSpaceRail(state, Insets.NONE, onAll = { asked += "all" }, onAccount = { asked += "account" }) { id, _ -> asked += id }
+        }
+    }
+
+    @Test fun railHoldsEverySpaceItsHeightHasRoomForAndTheAvatarAtItsFoot() {
+        val asked = mutableListOf<String>()
+        // 800dp: 8 top + 10 bottom + a 40dp avatar leave 742dp = twelve 58dp cells with 4dp between them
+        rail(800, shell(spaces = spaces(9, 3), extra = account), asked)
+        for (i in 0..8) compose.onNodeWithTag("nativeChrome.space.s$i").assertWidthIsEqualTo(62.dp).assertHeightIsEqualTo(58.dp)
+        compose.onNodeWithTag("nativeChrome.spacesAll").assertDoesNotExist()
+        compose.onNodeWithTag("nativeChrome.space.s3").assertIsSelected()
+        val avatar = compose.onNodeWithTag("nativeChrome.account").getUnclippedBoundsInRoot()
+        assertEquals("the avatar sits at the rail's foot", 800f - 10f, avatar.bottom.value, pixel)
+        compose.onNodeWithTag("nativeChrome.space.s5").performClick()
+        compose.onNodeWithTag("nativeChrome.account").performClick()
+        assertEquals(listOf("s5", "account"), asked)
+    }
+
+    @Test fun shortRailHoldsThePinnedOnesFirstAndAnAllCell() {
+        // 360dp (a phone on its side): 360 − 18 − 40 = 302dp → four 58dp places (five would need 306): three Spaces and "all";
+        // the pinned ones first (s0, s6), then the rest in list order (s1) — on screen in list order
+        rail(360, shell(spaces = spaces(9, 7, pinned = setOf(0, 6)), extra = account))
+        for (i in listOf(0, 1, 6)) compose.onNodeWithTag("nativeChrome.space.s$i").assertExists()
+        for (i in listOf(2, 3, 4, 5, 7, 8)) compose.onNodeWithTag("nativeChrome.space.s$i").assertDoesNotExist()
+        compose.onNodeWithTag("nativeChrome.spacesAll").assertIsSelected() // you are in s7, behind "all"
+        assertEquals(listOf("s0", "s1", "s6"), shell(spaces = spaces(9, 7, pinned = setOf(0, 6))).railCells(4).first.map { it.id })
+        assertEquals(emptyList<String>(), shell(spaces = spaces(9, 7, pinned = setOf(0, 6))).railCells(1).first.map { it.id })
+    }
+
+    @Test fun withTheRailTheCapsulesStartAfterItAndTheDockedColumnAndTheAvatarLeavesTheRightOne() {
+        val state = shell(extra = """$account,"leftInset":320""")
+        compose.setContent { Box(Modifier.width(1200.dp).height(NATIVE_CHROME_HEIGHT)) { NativeChromeBar(state, Insets.NONE, { _, _ -> }, {}, rail = true) } }
+        assertEquals(76f + 320f + 12f, left("nativeChrome.capLeft").value, pixel)
+        compose.onNodeWithTag("nativeChrome.account").assertDoesNotExist()
+    }
+
+    @Test fun withoutTheRailTheAvatarStaysInTheRightCapsule() {
+        top(ChromeState.parse(JSONObject("""{"mode":"shell","title":"Chat","left":false,"right":false,"tabCount":1,"labels":{"left":"L","right":"R","tabs":"T","more":"M"},"theme":$theme$account}""")))
+        compose.onNodeWithTag("nativeChrome.account").assertExists()
+        assertEquals(12f, left("nativeChrome.capLeft").value, pixel)
+    }
+
+    @Test fun capLeftMaxCutsALongTitleAndLeavesAShortOneAsItIs() {
+        // the board on a wide window: the page caps the left capsule so its menu button and tool island keep their row
+        val long = "A board title far too long for the room left beside the board's menu button and tool island"
+        var state by mutableStateOf(shell(extra = ""","leftInset":320,"capLeftMax":200""").copy(title = long))
+        compose.setContent { Box(Modifier.width(1200.dp).height(NATIVE_CHROME_HEIGHT)) { NativeChromeBar(state, Insets.NONE, { _, _ -> }, {}, rail = true) } }
+        assertEquals(200f, widthOf("nativeChrome.capLeft").value, pixel)
+        compose.onNodeWithTag("nativeChrome.title").assertExists()
+        state = state.copy(title = "Chat")
+        compose.waitForIdle()
+        assertTrue("a short title keeps its own width", widthOf("nativeChrome.capLeft").value < 150f)
+        assertEquals("not a sane number: no cap", 0, shell(extra = ""","capLeftMax":-5""").capLeftMax)
     }
 }
