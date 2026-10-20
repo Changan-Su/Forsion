@@ -35,6 +35,8 @@ registerMessages({
   'caldate.dayLabel': { zh: '{y}年{m}{d}日', en: '{m} {d}, {y}' },
   'caldate.rangeSameMonth': { zh: '{y}年{m1}{d1}日 – {d2}日', en: '{m1} {d1} – {d2}, {y}' },
   'caldate.rangeCrossMonth': { zh: '{y}年{m1}{d1}日 – {m2}{d2}日', en: '{m1} {d1} – {m2} {d2}, {y}' },
+  'caldate.monthDay': { zh: '{m}月{d}日', en: '{m}/{d}' },
+  'caldate.allDay': { zh: '全天', en: 'All-day' },
 })
 
 /**
@@ -209,13 +211,13 @@ function sideMinutes(side: string): number {
 export function eventTimeSummary(raw: string): { head: string; date: string; badge: string } | null {
   const cd = parseCalDate(raw)
   if (!cd) return null
-  const md = (s: string): string => { const [, m, d] = s.split('-'); return `${Number(m)}月${Number(d)}日` }
+  const md = (s: string): string => { const [, m, d] = s.split('-'); return translate('caldate.monthDay', { m: Number(m), d: Number(d) }) }
   const dow = (s: string): string => { const [y, m, d] = s.split('-').map(Number); return dowLabel(new Date(Date.UTC(y, m - 1, d)).getUTCDay()) }
   const a = splitSide(cd.start)
   const b = cd.end ? splitSide(cd.end) : null
   if (cd.allDay) {
     const head = b && b.date !== a.date ? `${md(a.date)} → ${md(b.date)}` : `${md(a.date)} ${dow(a.date)}`
-    return { head, date: '', badge: '全天' }
+    return { head, date: '', badge: translate('caldate.allDay') }
   }
   if (!b) return { head: a.time, date: `${md(a.date)} ${dow(a.date)}`, badge: '' }
   const badge = fmtDur(sideMinutes(cd.end!) - sideMinutes(cd.start))
