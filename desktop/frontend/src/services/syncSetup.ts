@@ -103,7 +103,8 @@ async function load(): Promise<void> {
     notes: {
       on: !!cfg && cfg.backend !== 'off',
       backend: cfg?.backend ?? 'off',
-      vault: cfg?.backend === 'penzor' ? (cfg.penzor?.vault || DEFAULT_VAULT) : null,
+      // 关着 / 等你决定时也给「会用的那个」:同步页据此列出已经在往这个库同步的设备
+      vault: cfg && (cfg.backend === 'penzor' || cfg.backend === 'off') ? (cfg.penzor?.vault || DEFAULT_VAULT) : null,
       rootName: stats && 'name' in stats ? stats.name : null,
       pending,
       running: !!state?.running,
