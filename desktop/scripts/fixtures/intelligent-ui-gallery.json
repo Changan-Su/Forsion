@@ -1,0 +1,1230 @@
+{
+ "loan": {
+  "version": 2,
+  "id": "loan",
+  "title": "房贷月供估算",
+  "inputs": [
+   {
+    "id": "loan",
+    "kind": "number",
+    "label": "贷款金额（万元）",
+    "initial": 120,
+    "min": 50,
+    "max": 300,
+    "step": 5
+   },
+   {
+    "id": "rate",
+    "kind": "number",
+    "label": "年利率（%）",
+    "initial": 3.2,
+    "min": 2,
+    "max": 6,
+    "step": 0.05
+   },
+   {
+    "id": "years",
+    "kind": "number",
+    "label": "贷款年限（年）",
+    "initial": 30,
+    "min": 5,
+    "max": 30,
+    "step": 5
+   }
+  ],
+  "state": [],
+  "derived": [
+   {
+    "id": "p",
+    "expr": "$loan * 10000"
+   },
+   {
+    "id": "r",
+    "expr": "$rate / 1200"
+   },
+   {
+    "id": "n",
+    "expr": "$years * 12"
+   },
+   {
+    "id": "pay",
+    "expr": "payment(r, n, p)"
+   },
+   {
+    "id": "interest",
+    "expr": "pay * n - p"
+   }
+  ],
+  "resources": [],
+  "blocks": [
+   {
+    "id": "intro",
+    "kind": "text",
+    "markdown": "按**等额本息**：贷款 {{$loan}} 万、年利率 {{$rate}}%、{{$years}} 年，**每月还 {{format(pay, 'number', 0)}} 元**，一共付利息约 {{format(interest, 'wan', 1)}}。"
+   },
+   {
+    "id": "controls",
+    "kind": "controls",
+    "inputIds": [
+     "loan",
+     "rate",
+     "years"
+    ]
+   },
+   {
+    "id": "stats",
+    "kind": "stats",
+    "items": [
+     {
+      "label": "月供",
+      "value": "format(pay, 'number', 0) + ' 元'"
+     },
+     {
+      "label": "总利息",
+      "value": "format(interest, 'wan', 1)"
+     },
+     {
+      "label": "总还款",
+      "value": "format(pay * n, 'wan', 1)"
+     }
+    ]
+   },
+   {
+    "id": "balance",
+    "kind": "table",
+    "title": "每 5 年剩多少本金",
+    "columns": [
+     "年末",
+     "剩余本金"
+    ],
+    "rows": "each(range(5, $years, 5), 'y', ['第 ' + y + ' 年', format(pay * (1 - pow(1 + r, y * 12 - n)) / r, 'wan', 1)])"
+   },
+   {
+    "id": "how",
+    "kind": "disclosure",
+    "title": "怎么算的",
+    "markdown": "月利率 r = 年利率 ÷ 12，期数 n = 年限 × 12；月供 = 本金 × r ÷ (1 − (1 + r)^−n)。提前还款和利率调整不在这张表里。"
+   },
+   {
+    "id": "act",
+    "kind": "actions",
+    "items": [
+     {
+      "id": "more",
+      "kind": "model",
+      "label": "按这组取值算提前还款",
+      "prompt": "按这组取值，帮我算提前还 20 万能省多少利息"
+     }
+    ]
+   }
+  ]
+ },
+ "split": {
+  "version": 2,
+  "id": "split",
+  "title": "聚餐 AA",
+  "inputs": [
+   {
+    "id": "total",
+    "kind": "number",
+    "label": "账单（元）",
+    "initial": 860,
+    "min": 0,
+    "max": 10000,
+    "step": 10
+   },
+   {
+    "id": "people",
+    "kind": "number",
+    "label": "人数",
+    "initial": 5,
+    "min": 1,
+    "max": 20,
+    "step": 1
+   },
+   {
+    "id": "tip",
+    "kind": "choice",
+    "label": "服务费",
+    "initial": "none",
+    "options": [
+     {
+      "id": "none",
+      "label": "不加"
+     },
+     {
+      "id": "ten",
+      "label": "10%"
+     },
+     {
+      "id": "fifteen",
+      "label": "15%"
+     }
+    ]
+   }
+  ],
+  "state": [],
+  "derived": [
+   {
+    "id": "rate",
+    "expr": "$tip == 'ten' ? 0.1 : $tip == 'fifteen' ? 0.15 : 0"
+   },
+   {
+    "id": "grand",
+    "expr": "$total * (1 + rate)"
+   },
+   {
+    "id": "each_pay",
+    "expr": "ceil(grand / $people)"
+   }
+  ],
+  "resources": [],
+  "blocks": [
+   {
+    "id": "intro",
+    "kind": "text",
+    "markdown": "{{$people}} 人平摊，每人 **{{each_pay}} 元**（向上取整到元，多出的 {{round(each_pay * $people - grand, 2)}} 元可以抵下次）。"
+   },
+   {
+    "id": "controls",
+    "kind": "controls",
+    "inputIds": [
+     "total",
+     "people",
+     "tip"
+    ]
+   },
+   {
+    "id": "stats",
+    "kind": "stats",
+    "items": [
+     {
+      "label": "每人",
+      "value": "each_pay + ' 元'"
+     },
+     {
+      "label": "合计",
+      "value": "format(grand, 'number', 2) + ' 元'"
+     }
+    ]
+   }
+  ]
+ },
+ "convert": {
+  "version": 2,
+  "id": "convert",
+  "title": "单位换算",
+  "inputs": [
+   {
+    "id": "amount",
+    "kind": "number",
+    "label": "数值",
+    "initial": 100,
+    "min": 0,
+    "max": 1000,
+    "step": 1
+   },
+   {
+    "id": "pair",
+    "kind": "choice",
+    "label": "换算",
+    "initial": "kmmi",
+    "options": [
+     {
+      "id": "kmmi",
+      "label": "公里 → 英里"
+     },
+     {
+      "id": "kglb",
+      "label": "公斤 → 磅"
+     },
+     {
+      "id": "cf",
+      "label": "摄氏 → 华氏"
+     }
+    ]
+   }
+  ],
+  "state": [],
+  "derived": [
+   {
+    "id": "result",
+    "expr": "$pair == 'kmmi' ? $amount * 0.621371 : $pair == 'kglb' ? $amount * 2.20462 : $amount * 9 / 5 + 32"
+   },
+   {
+    "id": "unit",
+    "expr": "$pair == 'kmmi' ? '英里' : $pair == 'kglb' ? '磅' : '°F'"
+   }
+  ],
+  "resources": [],
+  "blocks": [
+   {
+    "id": "intro",
+    "kind": "text",
+    "markdown": "{{$amount}} 换算后是 **{{format(result, 'number', 2)}} {{unit}}**。"
+   },
+   {
+    "id": "controls",
+    "kind": "controls",
+    "inputIds": [
+     "amount",
+     "pair"
+    ]
+   },
+   {
+    "id": "near",
+    "kind": "table",
+    "title": "附近的整数",
+    "columns": [
+     "原值",
+     "换算后"
+    ],
+    "rows": "each(range(max(0, $amount - 20), $amount + 20, 10), 'v', [v, format($pair == 'kmmi' ? v * 0.621371 : $pair == 'kglb' ? v * 2.20462 : v * 9 / 5 + 32, 'number', 1)])"
+   }
+  ]
+ },
+ "budget": {
+  "version": 2,
+  "id": "budget",
+  "title": "月度预算 50/30/20",
+  "inputs": [
+   {
+    "id": "income",
+    "kind": "number",
+    "label": "到手月薪（元）",
+    "initial": 15000,
+    "min": 3000,
+    "max": 80000,
+    "step": 500
+   },
+   {
+    "id": "rent",
+    "kind": "number",
+    "label": "房租（元）",
+    "initial": 4000,
+    "min": 0,
+    "max": 30000,
+    "step": 100
+   }
+  ],
+  "state": [],
+  "derived": [
+   {
+    "id": "needs",
+    "expr": "$income * 0.5"
+   },
+   {
+    "id": "wants",
+    "expr": "$income * 0.3"
+   },
+   {
+    "id": "save",
+    "expr": "$income * 0.2"
+   },
+   {
+    "id": "rent_share",
+    "expr": "percent($rent, $income)"
+   }
+  ],
+  "resources": [],
+  "blocks": [
+   {
+    "id": "intro",
+    "kind": "text",
+    "markdown": "按 50/30/20：每月存 **{{format(save, 'number', 0)}} 元**，一年 {{format(save * 12, 'wan', 1)}}。房租占收入 {{round(rent_share, 1)}}%{{rent_share > 30 ? '，超过三成，必需开支会很紧' : ''}}。"
+   },
+   {
+    "id": "controls",
+    "kind": "controls",
+    "inputIds": [
+     "income",
+     "rent"
+    ]
+   },
+   {
+    "id": "stats",
+    "kind": "stats",
+    "items": [
+     {
+      "label": "必需",
+      "value": "format(needs, 'number', 0)"
+     },
+     {
+      "label": "想要",
+      "value": "format(wants, 'number', 0)"
+     },
+     {
+      "label": "储蓄",
+      "value": "format(save, 'number', 0)"
+     }
+    ]
+   },
+   {
+    "id": "left",
+    "kind": "table",
+    "columns": [
+     "类别",
+     "预算",
+     "扣房租后"
+    ],
+    "rows": "[['必需', format(needs, 'number', 0), format(needs - $rent, 'number', 0)], ['想要', format(wants, 'number', 0), '—'], ['储蓄', format(save, 'number', 0), '—']]"
+   }
+  ]
+ },
+ "vocab": {
+  "version": 2,
+  "id": "vocab",
+  "title": "GRE 高频词 · 第 1 组",
+  "inputs": [],
+  "state": [
+   {
+    "id": "words",
+    "initial": [
+     {
+      "word": "abate",
+      "meaning": "减弱；减轻",
+      "example": "The storm began to abate by evening."
+     },
+     {
+      "word": "aberrant",
+      "meaning": "异常的；偏离常规的",
+      "example": "His aberrant behavior worried his friends."
+     },
+     {
+      "word": "abscond",
+      "meaning": "潜逃",
+      "example": "The cashier absconded with the money."
+     },
+     {
+      "word": "accolade",
+      "meaning": "赞扬；荣誉",
+      "example": "The film won every accolade."
+     },
+     {
+      "word": "acerbic",
+      "meaning": "尖刻的",
+      "example": "Her acerbic review stung the author."
+     },
+     {
+      "word": "adamant",
+      "meaning": "坚定不移的",
+      "example": "He was adamant that he was right."
+     },
+     {
+      "word": "admonish",
+      "meaning": "告诫",
+      "example": "The teacher admonished the class for talking."
+     },
+     {
+      "word": "adulation",
+      "meaning": "奉承；过分赞扬",
+      "example": "The star enjoyed the adulation of fans."
+     },
+     {
+      "word": "aesthetic",
+      "meaning": "审美的",
+      "example": "The building has little aesthetic appeal."
+     },
+     {
+      "word": "affable",
+      "meaning": "和蔼可亲的",
+      "example": "Our affable host greeted everyone."
+     }
+    ]
+   },
+   {
+    "id": "i",
+    "initial": 0
+   },
+   {
+    "id": "known",
+    "initial": []
+   },
+   {
+    "id": "again",
+    "initial": []
+   }
+  ],
+  "derived": [
+   {
+    "id": "total",
+    "expr": "count(words)"
+   },
+   {
+    "id": "done",
+    "expr": "i >= total"
+   },
+   {
+    "id": "w",
+    "expr": "done ? null : words[i]"
+   }
+  ],
+  "resources": [],
+  "blocks": [
+   {
+    "id": "intro",
+    "kind": "text",
+    "markdown": "第 {{min(i + 1, total)}} / {{total}} 个词。先自己想意思，再展开核对。",
+    "when": {
+     "expr": "not done"
+    }
+   },
+   {
+    "id": "word",
+    "kind": "text",
+    "markdown": "### {{w.word}}\n\n*{{w.example}}*",
+    "when": {
+     "expr": "not done"
+    }
+   },
+   {
+    "id": "meaning",
+    "kind": "disclosure",
+    "title": "看释义",
+    "markdown": "{{w.meaning}}",
+    "when": {
+     "expr": "not done"
+    }
+   },
+   {
+    "id": "finished",
+    "kind": "text",
+    "markdown": "这一组背完了：认识 {{count(known)}} 个{{count(again) ? '，需要再看：' + join(again, '、') : ''}}。",
+    "when": {
+     "expr": "done"
+    }
+   },
+   {
+    "id": "stats",
+    "kind": "stats",
+    "items": [
+     {
+      "label": "已认识",
+      "value": "count(known)"
+     },
+     {
+      "label": "再看一次",
+      "value": "count(again)"
+     },
+     {
+      "label": "还剩",
+      "value": "total - i"
+     }
+    ]
+   },
+   {
+    "id": "mark",
+    "kind": "actions",
+    "items": [
+     {
+      "id": "again",
+      "kind": "set",
+      "label": "再看一次",
+      "steps": [
+       {
+        "append": "again",
+        "value": "w.word"
+       },
+       {
+        "set": "i",
+        "to": "i + 1"
+       }
+      ],
+      "disabled": "done"
+     },
+     {
+      "id": "know",
+      "kind": "set",
+      "label": "认识",
+      "steps": [
+       {
+        "append": "known",
+        "value": "w.word"
+       },
+       {
+        "set": "i",
+        "to": "i + 1"
+       }
+      ],
+      "disabled": "done"
+     },
+     {
+      "id": "restart",
+      "kind": "set",
+      "label": "从头再来",
+      "steps": [
+       {
+        "reset": "i"
+       },
+       {
+        "reset": "known"
+       },
+       {
+        "reset": "again"
+       }
+      ],
+      "disabled": "i == 0"
+     }
+    ]
+   },
+   {
+    "id": "act",
+    "kind": "actions",
+    "items": [
+     {
+      "id": "quiz",
+      "kind": "model",
+      "label": "用这 10 个词出一份小测验",
+      "prompt": "用这一组的 10 个词给我出一份小测验"
+     }
+    ]
+   }
+  ]
+ },
+ "steps": {
+  "version": 2,
+  "id": "steps",
+  "title": "换水龙头阀芯",
+  "inputs": [],
+  "state": [
+   {
+    "id": "steps",
+    "initial": [
+     "关掉总水阀，打开水龙头放掉余水",
+     "用扳手拧下龙头底部的压盖螺母",
+     "取出旧阀芯，带去五金店买同型号",
+     "装上新阀芯，按原样拧回压盖",
+     "打开总水阀，检查是否还滴水"
+    ]
+   },
+   {
+    "id": "at",
+    "initial": 0
+   }
+  ],
+  "derived": [
+   {
+    "id": "last",
+    "expr": "count(steps) - 1"
+   }
+  ],
+  "resources": [],
+  "blocks": [
+   {
+    "id": "intro",
+    "kind": "text",
+    "markdown": "第 **{{at + 1}}** 步，共 {{count(steps)}} 步：{{steps[at]}}"
+   },
+   {
+    "id": "all",
+    "kind": "table",
+    "columns": [
+     "步骤",
+     "做什么",
+     "状态"
+    ],
+    "rows": "each(range(0, last), 'k', [k + 1, steps[k], k < at ? '已完成' : k == at ? '进行中' : ''])"
+   },
+   {
+    "id": "nav",
+    "kind": "actions",
+    "items": [
+     {
+      "id": "prev",
+      "kind": "set",
+      "label": "上一步",
+      "steps": [
+       {
+        "set": "at",
+        "to": "at - 1"
+       }
+      ],
+      "disabled": "at == 0"
+     },
+     {
+      "id": "next",
+      "kind": "set",
+      "label": "下一步",
+      "steps": [
+       {
+        "set": "at",
+        "to": "at + 1"
+       }
+      ],
+      "disabled": "at == last"
+     }
+    ]
+   }
+  ]
+ },
+ "pick": {
+  "version": 2,
+  "id": "pick",
+  "title": "轻薄本怎么挑",
+  "inputs": [
+   {
+    "id": "kind",
+    "kind": "choice",
+    "label": "看哪类",
+    "initial": "all",
+    "options": [
+     {
+      "id": "all",
+      "label": "全部"
+     },
+     {
+      "id": "light",
+      "label": "轻薄"
+     },
+     {
+      "id": "pro",
+      "label": "性能"
+     }
+    ]
+   },
+   {
+    "id": "order",
+    "kind": "choice",
+    "label": "排序",
+    "initial": "price",
+    "options": [
+     {
+      "id": "price",
+      "label": "价格"
+     },
+     {
+      "id": "weight",
+      "label": "重量"
+     },
+     {
+      "id": "battery",
+      "label": "续航"
+     }
+    ]
+   },
+   {
+    "id": "budget",
+    "kind": "number",
+    "label": "预算上限（元）",
+    "initial": 12000,
+    "min": 6000,
+    "max": 15000,
+    "step": 500
+   }
+  ],
+  "state": [
+   {
+    "id": "items",
+    "initial": [
+     {
+      "name": "MacBook Air 13",
+      "kind": "light",
+      "price": 7999,
+      "weight": 1.24,
+      "battery": 18
+     },
+     {
+      "name": "MacBook Pro 14",
+      "kind": "pro",
+      "price": 12999,
+      "weight": 1.55,
+      "battery": 22
+     },
+     {
+      "name": "ThinkPad X1 Carbon",
+      "kind": "light",
+      "price": 9999,
+      "weight": 1.12,
+      "battery": 15
+     },
+     {
+      "name": "Dell XPS 14",
+      "kind": "pro",
+      "price": 10999,
+      "weight": 1.68,
+      "battery": 14
+     },
+     {
+      "name": "Surface Laptop 7",
+      "kind": "light",
+      "price": 8288,
+      "weight": 1.34,
+      "battery": 20
+     }
+    ]
+   }
+  ],
+  "derived": [
+   {
+    "id": "shown",
+    "expr": "filter(items, 'x', ($kind == 'all' or x.kind == $kind) and x.price <= $budget)"
+   },
+   {
+    "id": "sorted",
+    "expr": "sortBy(shown, 'x', $order == 'price' ? x.price : $order == 'weight' ? x.weight : 0 - x.battery)"
+   }
+  ],
+  "resources": [],
+  "blocks": [
+   {
+    "id": "intro",
+    "kind": "text",
+    "markdown": "符合条件的有 **{{count(sorted)}}** 台{{count(sorted) ? '，排第一的是 ' + sorted[0].name : '，放宽预算看看'}}。"
+   },
+   {
+    "id": "controls",
+    "kind": "controls",
+    "inputIds": [
+     "kind",
+     "order",
+     "budget"
+    ]
+   },
+   {
+    "id": "list",
+    "kind": "table",
+    "columns": [
+     "型号",
+     "价格",
+     "重量",
+     "续航"
+    ],
+    "rows": "each(sorted, 'x', [x.name, format(x.price, 'number', 0), x.weight + ' kg', x.battery + ' h'])"
+   }
+  ]
+ },
+ "quiz": {
+  "version": 2,
+  "id": "quiz",
+  "title": "常识小测",
+  "inputs": [],
+  "state": [
+   {
+    "id": "qs",
+    "initial": [
+     {
+      "q": "光年是什么的单位？",
+      "options": [
+       "时间",
+       "距离",
+       "亮度"
+      ],
+      "answer": 1
+     },
+     {
+      "q": "水在海平面沸腾的温度是？",
+      "options": [
+       "90 °C",
+       "100 °C",
+       "110 °C"
+      ],
+      "answer": 1
+     },
+     {
+      "q": "地球绕太阳一圈大约要？",
+      "options": [
+       "一个月",
+       "一年",
+       "十年"
+      ],
+      "answer": 1
+     }
+    ]
+   },
+   {
+    "id": "at",
+    "initial": 0
+   },
+   {
+    "id": "score",
+    "initial": 0
+   },
+   {
+    "id": "picked",
+    "initial": null
+   }
+  ],
+  "derived": [
+   {
+    "id": "total",
+    "expr": "count(qs)"
+   },
+   {
+    "id": "done",
+    "expr": "at >= total"
+   },
+   {
+    "id": "q",
+    "expr": "done ? null : qs[at]"
+   },
+   {
+    "id": "right",
+    "expr": "picked != null and picked == q.answer"
+   }
+  ],
+  "resources": [],
+  "blocks": [
+   {
+    "id": "question",
+    "kind": "text",
+    "markdown": "**第 {{at + 1}} 题**：{{q.q}}",
+    "when": {
+     "expr": "not done"
+    }
+   },
+   {
+    "id": "answers",
+    "kind": "actions",
+    "when": {
+     "expr": "not done and picked == null"
+    },
+    "items": [
+     {
+      "id": "a0",
+      "kind": "set",
+      "label": "A",
+      "steps": [
+       {
+        "set": "picked",
+        "to": "0"
+       },
+       {
+        "set": "score",
+        "to": "score + (q.answer == 0 ? 1 : 0)"
+       }
+      ]
+     },
+     {
+      "id": "a1",
+      "kind": "set",
+      "label": "B",
+      "steps": [
+       {
+        "set": "picked",
+        "to": "1"
+       },
+       {
+        "set": "score",
+        "to": "score + (q.answer == 1 ? 1 : 0)"
+       }
+      ]
+     },
+     {
+      "id": "a2",
+      "kind": "set",
+      "label": "C",
+      "steps": [
+       {
+        "set": "picked",
+        "to": "2"
+       },
+       {
+        "set": "score",
+        "to": "score + (q.answer == 2 ? 1 : 0)"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "id": "feedback",
+    "kind": "text",
+    "markdown": "{{right ? '答对了。' : '不对，正确答案是 ' + q.options[q.answer] + '。'}}",
+    "when": {
+     "expr": "picked != null and not done"
+    }
+   },
+   {
+    "id": "options",
+    "kind": "table",
+    "columns": [
+     "选项",
+     "内容"
+    ],
+    "when": {
+     "expr": "not done"
+    },
+    "rows": "each(range(0, count(q.options) - 1), 'k', [['A', 'B', 'C'][k], q.options[k]])"
+   },
+   {
+    "id": "next",
+    "kind": "actions",
+    "when": {
+     "expr": "picked != null and not done"
+    },
+    "items": [
+     {
+      "id": "go",
+      "kind": "set",
+      "label": "下一题",
+      "steps": [
+       {
+        "set": "at",
+        "to": "at + 1"
+       },
+       {
+        "set": "picked",
+        "to": "null"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "id": "result",
+    "kind": "text",
+    "markdown": "测完了：{{score}} / {{total}} 题答对。",
+    "when": {
+     "expr": "done"
+    }
+   },
+   {
+    "id": "stats",
+    "kind": "stats",
+    "items": [
+     {
+      "label": "得分",
+      "value": "score + ' / ' + total"
+     },
+     {
+      "label": "进度",
+      "value": "min(at, total) + ' / ' + total"
+     }
+    ]
+   },
+   {
+    "id": "again",
+    "kind": "actions",
+    "when": {
+     "expr": "done"
+    },
+    "items": [
+     {
+      "id": "restart",
+      "kind": "set",
+      "label": "再来一遍",
+      "steps": [
+       {
+        "reset": "at"
+       },
+       {
+        "reset": "score"
+       },
+       {
+        "reset": "picked"
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ "grades": {
+  "version": 2,
+  "id": "grades",
+  "title": "期末平均分",
+  "inputs": [],
+  "state": [
+   {
+    "id": "scores",
+    "initial": [
+     88,
+     92,
+     79
+    ]
+   }
+  ],
+  "derived": [
+   {
+    "id": "n",
+    "expr": "count(scores)"
+   },
+   {
+    "id": "mean",
+    "expr": "n ? avg(scores) : 0"
+   }
+  ],
+  "resources": [],
+  "blocks": [
+   {
+    "id": "intro",
+    "kind": "text",
+    "markdown": "{{n}} 门课，平均 **{{round(mean, 1)}}** 分{{n ? '，最高 ' + max(scores) + '，最低 ' + min(scores) : ''}}。"
+   },
+   {
+    "id": "stats",
+    "kind": "stats",
+    "items": [
+     {
+      "label": "平均",
+      "value": "round(mean, 1)"
+     },
+     {
+      "label": "门数",
+      "value": "n"
+     }
+    ]
+   },
+   {
+    "id": "add",
+    "kind": "actions",
+    "items": [
+     {
+      "id": "a95",
+      "kind": "set",
+      "label": "加一门 95",
+      "steps": [
+       {
+        "append": "scores",
+        "value": "95"
+       }
+      ],
+      "disabled": "n >= 12"
+     },
+     {
+      "id": "a75",
+      "kind": "set",
+      "label": "加一门 75",
+      "steps": [
+       {
+        "append": "scores",
+        "value": "75"
+       }
+      ],
+      "disabled": "n >= 12"
+     },
+     {
+      "id": "undo",
+      "kind": "set",
+      "label": "去掉最后一门",
+      "steps": [
+       {
+        "set": "scores",
+        "to": "each(range(0, n - 2), 'k', scores[k])"
+       }
+      ],
+      "disabled": "n == 0"
+     }
+    ]
+   }
+  ]
+ },
+ "recipe": {
+  "version": 2,
+  "id": "recipe",
+  "title": "番茄炒蛋",
+  "inputs": [
+   {
+    "id": "people",
+    "kind": "number",
+    "label": "人数",
+    "initial": 2,
+    "min": 1,
+    "max": 8,
+    "step": 1
+   }
+  ],
+  "state": [],
+  "derived": [
+   {
+    "id": "eggs",
+    "expr": "ceil($people * 1.5)"
+   }
+  ],
+  "resources": [],
+  "blocks": [
+   {
+    "id": "intro",
+    "kind": "text",
+    "markdown": "{{$people}} 人份需要 **{{eggs}} 个鸡蛋**，其余按比例。"
+   },
+   {
+    "id": "controls",
+    "kind": "controls",
+    "inputIds": [
+     "people"
+    ]
+   },
+   {
+    "id": "shop",
+    "kind": "checklist",
+    "title": "要准备的",
+    "items": [
+     {
+      "id": "tomato",
+      "label": "番茄",
+      "quantity": {
+       "value": 1,
+       "unit": "个",
+       "scaleBy": "people",
+       "base": 1
+      }
+     },
+     {
+      "id": "egg",
+      "label": "鸡蛋",
+      "quantity": {
+       "value": 1.5,
+       "unit": "个",
+       "scaleBy": "people",
+       "base": 1
+      }
+     },
+     {
+      "id": "sugar",
+      "label": "白糖",
+      "quantity": {
+       "value": 5,
+       "unit": "g",
+       "scaleBy": "people",
+       "base": 2
+      }
+     }
+    ]
+   }
+  ]
+ },
+ "edge_range": {
+  "version": 2,
+  "id": "edge_range",
+  "title": "边界：两百项",
+  "inputs": [],
+  "state": [],
+  "derived": [
+   {
+    "id": "big",
+    "expr": "range(1, 200)"
+   },
+   {
+    "id": "total",
+    "expr": "sum(big)"
+   }
+  ],
+  "resources": [],
+  "blocks": [
+   {
+    "id": "stats",
+    "kind": "stats",
+    "items": [
+     {
+      "label": "项数",
+      "value": "count(big)"
+     },
+     {
+      "label": "总和",
+      "value": "total"
+     }
+    ]
+   },
+   {
+    "id": "t",
+    "kind": "table",
+    "columns": [
+     "n",
+     "n²"
+    ],
+    "rows": "each(range(1, 50), 'k', [k, k * k])"
+   }
+  ]
+ }
+}

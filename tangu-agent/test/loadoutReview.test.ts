@@ -81,7 +81,7 @@ beforeAll(async () => {
   await run('s-default', '{broken', ['get_datetime']);
   // 不该算进来的:Muse 会话、窗口之外、别的用户
   await session('s-musebg', 'muse', { agentSlug: 'muse' });
-  await run('s-musebg', { agentConfig: W }, ['sketch', 'sketch']);
+  await run('s-musebg', { agentConfig: W }, ['intelligent_ui_html', 'intelligent_ui_html']);
   await run('s-worker', { agentConfig: W }, ['browser_task'], ago(60));
   await session('s-other', 'user', W, 'u2');
   await run('s-other', { agentConfig: W }, ['delegate'], ago(1), 'u2');
@@ -112,7 +112,7 @@ describe('collectLoadoutUsage', () => {
     expect(worker.tools.get('run_bash')?.calls).toBe(MIN_RUNS + 5);
     expect(worker.tools.get('list_dir')?.calls).toBe(1); // 靠会话存档归属的那次
     expect(worker.tools.get('web_fetch')?.calls).toBe(1);
-    for (const outside of ['sketch', 'browser_task', 'delegate']) expect(worker.tools.has(outside), outside).toBe(false);
+    for (const outside of ['intelligent_ui_html', 'browser_task', 'delegate']) expect(worker.tools.has(outside), outside).toBe(false);
     // 沙箱 / 团队 / chat / coding 的 run 不进分母也不进计数(worker.runs 上面已钉死没有多出来)
     for (const outside of ['x_sandbox', 'x_group_run', 'x_nomode', 'x_chat', 'x_chat_request', 'x_coding', 'x_group_session']) expect(worker.tools.has(outside), outside).toBe(false);
     expect(worker.tools.get('run_bash')?.last).toMatch(/^\d{4}-\d{2}-\d{2} /);
@@ -283,13 +283,13 @@ describe('Muse 代收:propose 带 tools / skills 直接生效', () => {
 
   it('不是 Muse 的 agent 转交同样的建议 → 只留一条由代码拼全的候选,对方的笔记不动', async () => {
     const before = await loadHarness('worker');
-    const args = { agent: 'worker', tools: ['sketch', 'browser_task'], skills: ['local:baz'], evidence: '28 runs in 30 days; none called' };
+    const args = { agent: 'worker', tools: ['intelligent_ui_html', 'browser_task'], skills: ['local:baz'], evidence: '28 runs in 30 days; none called' };
     expect(await propose({ ...args, evidence: '' }, 'rookie', { muse: false })).toMatch(/^Error: an equipment suggestion needs evidence/);
     expect(await propose(args, 'rookie', { muse: false })).toMatch(/^Left the equipment suggestion in "worker"'s candidate inbox/);
     expect(await loadHarness('worker')).toEqual(before);
     const inbox = await peekHarnessCandidates('worker');
     expect(inbox).toHaveLength(1);
-    expect(inbox[0].endsWith('(proposed by rookie) Equipment suggestion from a usage review: shelve tools sketch, browser_task and skills local:baz (evidence: 28 runs in 30 days; none called). To adopt: manage_harness upsert, kind "equip", with these tools / skills.')).toBe(true);
+    expect(inbox[0].endsWith('(proposed by rookie) Equipment suggestion from a usage review: shelve tools intelligent_ui_html, browser_task and skills local:baz (evidence: 28 runs in 30 days; none called). To adopt: manage_harness upsert, kind "equip", with these tools / skills.')).toBe(true);
     expect(await propose(args, 'rookie', { muse: false })).toBe('"worker" already has this suggestion waiting.');
   });
 
