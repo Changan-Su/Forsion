@@ -148,9 +148,30 @@ async function main() {
     })
     // 主进程「挪得慢」的分段耗时(vaultHandlers 的 movePage 仪器)转印到台架输出:下次红了直接看是哪一段慢。
     for (const s of [app.process().stdout, app.process().stderr]) {
-      s?.on('data', (b) => { for (const l of String(b).split('\n')) if (l.includes('[amadeus] movePage')) console.log(`      主进程:${l.trim()}`) })
+      s?.on('data', (b) => { for (const l of String(b).split('\n')) if (l.includes('[amadeus] movePage') || l.includes('[note-move-trace]')) console.log(`      主进程:${l.trim()}`) })
     }
     const win = await app.firstWindow()
+    win.on('pageerror', error => console.error(`[note-move-trace] renderer error ${error.stack || error.message}`))
+    // A relocation can fail after the file already moved. Keep the actual main
+    // IPC error and its stage; a conflict copy alone cannot explain the cause.
+    await app.evaluate(({ ipcMain }) => {
+      for (const channel of ['page:move', 'file:write-text']) {
+        const original = ipcMain._invokeHandlers.get(channel)
+        if (!original) continue
+        ipcMain._invokeHandlers.set(channel, async (...args) => {
+          const path = args[1], at = Date.now()
+          if (channel === 'page:move') console.error(`[note-move-trace] ${at} ${channel} begin ${JSON.stringify(args.slice(1))}`)
+          try {
+            const result = await original(...args)
+            if (channel === 'page:move' || result?.ok === false) console.error(`[note-move-trace] ${Date.now()} ${channel} result ${JSON.stringify({ path, result })}`)
+            return result
+          } catch (error) {
+            console.error(`[note-move-trace] ${Date.now()} ${channel} error ${JSON.stringify({ path, message: error.message, stack: error.stack })}`)
+            throw error
+          }
+        })
+      }
+    })
     if (HANDOVER) await app.evaluate(({ ipcMain }, phase) => {
       const channel = phase === 'write' ? 'file:write-text' : 'file:read-text'
       const original = ipcMain._invokeHandlers.get(channel)
