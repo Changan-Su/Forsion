@@ -69,6 +69,7 @@ export const UNIT_P2P_HEADER = 'x-unit-p2p'
 
 /** 引擎路由里远端不许用的回包(设备页据 code 出本地化提示,见 frontend services/localOnly.ts)。 */
 const LOCAL_ONLY_BODY = { code: 'LOCAL_ONLY', detail: 'This action is only available on the device itself' }
+const HOST_OFF_BODY = { code: 'HOST_OFF', detail: 'Device connection is turned off on this computer' }
 /** 隧道上的调用方断言验不过(R-08):403 不是 401(渲染层 401 = 重新登录),也不降级成「未识别」放行(INV-MONO)。 */
 const BAD_CALLER_BODY = { code: 'BAD_CALLER_ASSERTION', detail: 'Invalid caller assertion' }
 
@@ -221,6 +222,11 @@ export interface UnitWebHandle {
 }
 
 interface PendingPair { id: string; name: string; code: string; ip: string; expires: number; status: 'pending' | 'approved' | 'denied'; token?: string }
+/** 配对请求的在途表。主进程在门铃与正式服务之间传同一份:门铃收下的请求,打开互联后由正式服务把令牌交出去。 */
+export type PairStore = { pending: Map<string, PendingPair>; byIp: Map<string, string> }
+export const newPairStore = (): PairStore => ({ pending: new Map(), byIp: new Map() })
+/** 门铃(互联关着时)只开这几条:配对流 + 本机 Clip 领连接码。其余一律 503 HOST_OFF。 */
+const DOORBELL_PATHS = new Set(['/unit/meta', '/unit/pair/request', '/unit/pair/poll', '/unit/browser-control'])
 
 const sha256 = (s: string): string => createHash('sha256').update(s).digest('hex')
 const PAIR_TTL_MS = 2 * 60_000
@@ -279,7 +285,12 @@ const PLACEHOLDER = `<!doctype html><meta charset="utf-8"><title>Forsion Unit</t
 <pre style="background:#f4f4f4;padding:12px;border-radius:8px">cd Forsion-Genesis/desktop && node scripts/build-unit-web.mjs</pre>
 <p>或设置环境变量 <code>TANGU_UNIT_WEB_DIST</code> 指向已有的 web 构建目录后重启 Forsion。</p></body>`
 
-export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?: string }): Promise<UnitWebHandle> {
+/**
+ * opts.doorbell:「允许其他设备连接本机」关着时的本机门铃 —— 只听回环、只开 DOORBELL_PATHS,
+ * 且配对请求必须来自 origins 里的扩展(网页伪造不了 Origin;Clip 后台的 POST 实测带 chrome-extension://<id>)。
+ * 门铃的 confirmPair 由主进程换成「允许并打开」:打开互联、等正式服务起来再批准,令牌经共用的 opts.pairs 交出。
+ */
+export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?: string; pairs?: PairStore; doorbell?: { origins: string[] } }): Promise<UnitWebHandle> {
   if (deps.projection && !/^\/(?:[a-zA-Z0-9_-]+\/)*$/.test(deps.projection.basePath)) {
     throw new Error('Projection basePath must be an absolute path ending in /')
   }
@@ -292,8 +303,7 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
    *  不是「另一台设备」:/engine 维持直通、不盖远端标记,不可逆 vault 删除照常可用。桌面(main.ts)从不传 projection,
    *  所以桌面的三条远端通路恒走允许清单(unitWeb.test 两个方向都钉住)。 */
   const ownerProjection = deps.projection?.mode === 'local'
-  const pending = new Map<string, PendingPair>()
-  const pendingByIp = new Map<string, string>()
+  const { pending, byIp: pendingByIp } = opts.pairs ?? newPairStore()
   // 短时资源令牌(<img>/EventSource 带不了 Authorization → ?at= 查询串;照 amadeus-cloud 先例)。
   // 记发行者的配对 hash:配对被回收后,它签发过的资源令牌立即失效(Codex P2——否则被回收设备
   // 还能凭手里的 at 继续收 10 分钟的库活动)。internal(隧道)签发的 pairHash=null,不受回收影响。
@@ -542,6 +552,7 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
   }
 
   const handler = async (req: http.IncomingMessage, res: http.ServerResponse): Promise<void> => {
+    if (opts.doorbell && !DOORBELL_PATHS.has(plainPath(req))) { json(res, 503, HOST_OFF_BODY); return }
     // P1-K2 顶层锁定闸(routeRequest 之前,INTEGRATION §2.3):/engine 与 /vault/rpc 各在分支里按更细的表判,工作区主人不受影响。
     if (!ownerProjection && lockedNow()) {
       const p = plainPath(req)
@@ -584,6 +595,7 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
     }
     if (deps.projection?.mode === 'local' && path.startsWith('/unit/pair/')) { json(res, 403, { detail: 'Use the workspace owner access key' }); return }
     if (path === '/unit/pair/request' && req.method === 'POST') {
+      if (opts.doorbell && !opts.doorbell.origins.includes(String(req.headers.origin || ''))) { json(res, 403, HOST_OFF_BODY); return }
       const prevId = pendingByIp.get(ip)
       if (prevId && pending.get(prevId)?.status === 'pending') { json(res, 429, { detail: '已有待确认的配对请求', code: 'PAIR_PENDING' }); return }
       let name = '未命名设备'
@@ -863,13 +875,13 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
   server.requestTimeout = 60 * 60 * 1000
 
   return new Promise((resolve, reject) => {
-    if (deps.routeUpgrade) server.on('upgrade', (req, socket, head) => {
+    if (deps.routeUpgrade && !opts.doorbell) server.on('upgrade', (req, socket, head) => {
       if (!deps.routeUpgrade!(req, socket, head)) socket.destroy()
     })
     const sockets = new Set<Duplex>()
     server.on('connection', (socket) => { sockets.add(socket); socket.once('close', () => sockets.delete(socket)) })
     server.once('error', reject)
-    server.listen(opts.port, opts.bindHost ?? '0.0.0.0', () => {
+    server.listen(opts.port, opts.doorbell ? '127.0.0.1' : (opts.bindHost ?? '0.0.0.0'), () => {
       const { port } = server.address() as AddressInfo
       resolve({
         port,

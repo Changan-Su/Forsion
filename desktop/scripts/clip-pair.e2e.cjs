@@ -1,6 +1,7 @@
 /**
  * 端到端:Clip 一次配对(Clip 安装引导方案 C 第二步)—— 真 Clip 构建 × 隔离 Forsion(out/ 构建、临时家目录、真引擎)× Chrome for Testing。
- *  ① 装上 → 欢迎页自动向本机 Forsion 请求配对 →(台架后门 FORSION_UNIT_AUTO_PAIR 自动批准)→ Clip 领到 Tangu 连接码 → 浏览器控制连上;
+ *  ① 「允许其他设备连接本机」关着(真实缺省)→ 只有本机门铃 → 装上 → 欢迎页自动向本机 Forsion 请求配对 →(台架后门 FORSION_UNIT_AUTO_PAIR
+ *     自动点「允许并打开」)→ 互联打开、正式服务交出令牌 → Clip 领到 Tangu 连接码 → 浏览器控制连上;
  *  ② 改扩展文件夹里的版本号、叫引擎让连着的 Clip 重载 → 连回来报新版本,且不再弹欢迎页(reason=update)。
  * 跑:cd ../tangu-agent && npm run build;npm run build;Clip worktree 里 `FORSION_GENESIS_ROOT=<Genesis> npx wxt build`;
  *    CLIP_BUILD=<那份 .output/chrome-mv3> node scripts/clip-pair.e2e.cjs     (HEADED=1 看着跑)
@@ -60,7 +61,7 @@ async function main() {
     fs.mkdirSync(dir, { recursive: true })
     fs.writeFileSync(path.join(dir, 'tangu-desktop-config.json'), JSON.stringify({
       mode: 'managed', cloudUrl: 'http://127.0.0.1:9', sandbox: 'none', browserEnabled: false,
-      defaultWorkspaceDir: path.join(home, 'workspace'), unitHostEnabled: true, unitWebPort: UNIT_PORT,
+      defaultWorkspaceDir: path.join(home, 'workspace'), unitHostEnabled: false, unitWebPort: UNIT_PORT,
     }))
   }
   let app = null
@@ -71,7 +72,7 @@ async function main() {
       args: [`--user-data-dir=${userData}`, '--lang=zh-CN', ROOT], cwd: ROOT,
       env: {
         ...process.env, TANGU_HOME: home, TANGU_BROWSER_CDP: 'off', TANGU_HARNESS_QUIET: '1',
-        FORSION_UNIT_AUTO_PAIR: '1', FORSION_UNIT_BIND_LOOPBACK: '1', TANGU_BROWSER_EXTENSION_PORT: String(await freePort()),
+        FORSION_UNIT_AUTO_PAIR: '1', FORSION_UNIT_BIND_LOOPBACK: '1', FORSION_UNIT_DOORBELL: '1', TANGU_BROWSER_EXTENSION_PORT: String(await freePort()),
       },
     })
     const mainLog = []
@@ -83,7 +84,8 @@ async function main() {
     await win.waitForFunction(async () => (await window.tangu.getConfig()).backendState?.state === 'ready', null, { timeout: 90000 })
     const cfg = await win.evaluate(() => window.tangu.getConfig())
     const engine = (p, method = 'GET') => fetch(`${cfg.backendUrl}${p}`, { method, headers: { Authorization: `Bearer ${cfg.token}` } }).then((r) => r.json())
-    await waitFor(() => fetch(`http://127.0.0.1:${UNIT_PORT}/unit/meta`).then((r) => r.ok), 30000, 'Unit 口起来')
+    await waitFor(() => fetch(`http://127.0.0.1:${UNIT_PORT}/unit/meta`).then((r) => r.ok), 30000, '门铃起来')
+    check('互联关着:只有门铃,配对流以外一律 503', (await fetch(`http://127.0.0.1:${UNIT_PORT}/unit/whoami`)).status === 503)
     check('装之前:引擎没见过扩展(设置页显示「未安装」)', (await engine('/agent/browser-extension')).lastClient === null)
 
     ctx = await chromium.launchPersistentContext(fs.mkdtempSync(path.join(os.tmpdir(), 'clippair-chrome-')), {
@@ -112,6 +114,7 @@ async function main() {
     })
     check('一次配对:批准后 Clip 自己领到连接码、连上 Tangu 浏览器控制', live.clients.at(-1)?.version === version, live.clients)
     check('引擎记下了连上来的扩展(设置页据此分「未安装 / 未连接」)', live.lastClient?.version === version, live.lastClient)
+    check('门铃上点了允许 = 顺带打开了「允许其他设备连接本机」', (await win.evaluate(() => window.tangu.getConfig())).unitHostEnabled === true)
     const card = await waitFor(async () => {
       const text = await welcome.locator('[data-testid="clip-welcome"]').textContent()
       return /已连上本机的 Forsion|Connected to Forsion/.test(text || '') ? text : null

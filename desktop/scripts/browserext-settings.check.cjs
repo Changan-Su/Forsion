@@ -46,7 +46,7 @@ async function main() {
   check('连接码整段显示', (await page.locator('[data-testid="browser-extension-code"]').textContent()).startsWith('tangu:47655:'))
   const text = await panel.textContent()
   check('三步安装说明齐全', text.includes('1. ') && text.includes('chrome://extensions') && text.includes('加载已解压的扩展程序') && text.includes('3. '))
-  check('「允许其他设备连接本机」关着:第 3 步写明要先打开它,「手动配对」缺省展开', text.includes('允许其他设备连接本机') && (await page.locator('[data-testid="browser-extension-manual"]').getAttribute('aria-expanded')) === 'true')
+  check('「允许其他设备连接本机」关着:第 3 步说 Forsion 会弹「允许并打开」,「手动配对」缺省展开', text.includes('允许并打开') && text.includes('允许其他设备连接本机') && (await page.locator('[data-testid="browser-extension-manual"]').getAttribute('aria-expanded')) === 'true')
 
   // 手动安装底座:扩展复制出包(用户找得到)、替用户打开 Chrome 扩展页、拖拽把手走原生拖出
   await panel.getByRole('button', { name: '在 Chrome 中打开扩展页' }).click()

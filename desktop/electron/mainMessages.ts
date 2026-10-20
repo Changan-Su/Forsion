@@ -17,6 +17,12 @@ export const MAIN_MESSAGES = defineMainMessages({
     en: 'This comes from an app on this computer, such as Forsion Clip in your browser. It shows a pairing code. Allow only if it matches:\n\nPairing code: {code}\n\nOnce allowed, it can read and write your local vault, and Tangu can control the browser through it (no connect code to paste).',
   },
   'main.pair.allow': { zh: '允许', en: 'Allow' },
+  'main.pair.doorbellTitle': { zh: 'Forsion Clip 想连接这台电脑', en: 'Forsion Clip wants to connect' },
+  'main.pair.doorbellMessage': {
+    zh: '允许后会打开「设置 › 设备 › 允许其他设备连接本机」并配好 Forsion Clip。同一网络里的其他设备也能来请求连接，每次都要你批准。',
+    en: 'Allowing turns on Settings › Devices › Allow other devices to connect, and pairs Forsion Clip. Other devices on your network can then ask to connect too, and each one needs your approval.',
+  },
+  'main.pair.doorbellAllow': { zh: '允许并打开', en: 'Allow and turn on' },
   'main.pair.deny': { zh: '拒绝', en: 'Deny' },
   'main.crash.message': { zh: '界面多次崩溃', en: 'The window crashed repeatedly' },
   'main.crash.detail': { zh: '原因：{reason}\n可重新加载，或退出后重新打开 Forsion。', en: 'Reason: {reason}\nReload, or quit and reopen Forsion.' },

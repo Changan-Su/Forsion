@@ -75,6 +75,9 @@ export function openChromeExtensions(): Promise<OpenChromeResult> {
   })
 }
 
+/** Forsion Clip 的固定来源(manifest.key 钉死的 ID,与引擎扩展桥的 Origin 白名单同一个)。门铃只认它发来的配对请求。 */
+export const CLIP_ORIGIN = 'chrome-extension://gpajikakdmhjebadgcbmhidkkajclfoi'
+
 type EngineRef = () => { url: string | null; token: string }
 
 async function engineJson(engine: EngineRef, path: string, method = 'GET'): Promise<any> {

@@ -41,8 +41,8 @@ registerMessages({
     en: 'Once installed, Clip opens a welcome page and asks to connect. Check the pairing code in the Forsion prompt and click Allow. Clipping and browser control are set up in one go.',
   },
   'settings.browserExt.step3HostOff': {
-    zh: '要让 Clip 一次配好，先在「设置 › 设备」打开「允许其他设备连接本机」。不想打开也行：展开下面的「手动配对」，把连接码粘到 Clip 里（这样只有浏览器控制，剪藏存不进本机智库）。',
-    en: 'For one-step pairing, first turn on Settings › Devices › Allow other devices to connect. Or open “Pair manually” below and paste the connect code into Clip (browser control only; clips can’t go into your local vault).',
+    zh: '装好后 Clip 会打开欢迎页并请求连接，Forsion 会弹出提示：点「允许并打开」，会顺带打开「设置 › 设备 › 允许其他设备连接本机」，剪藏和浏览器控制一次配好。不想打开它也行：把下面的连接码粘到 Clip 里（这样只有浏览器控制，剪藏存不进本机智库）。',
+    en: 'Once installed, Clip opens a welcome page and asks to connect. In the Forsion prompt, click “Allow and turn on”. This also turns on Settings › Devices › Allow other devices to connect, and sets up clipping and browser control in one go. To keep it off, paste the connect code below into Clip instead (browser control only; clips can’t go into your local vault).',
   },
   'settings.browserExt.openFolder': { zh: '打开扩展文件夹', en: 'Open extension folder' },
   'settings.browserExt.openChrome': { zh: '在 Chrome 中打开扩展页', en: 'Open extensions in Chrome' },
@@ -75,7 +75,7 @@ export function BrowserExtensionPanel({ cfg, managed = true }: { cfg: TanguDeskt
   const [clipCopy, setClipCopy] = useState<{ dir: string; version: string; bundled: string } | null>(null)
   const [clipError, setClipError] = useState('')
   const clipApi = managed ? window.tangu?.clipExtension : undefined
-  const hostOn = useApp((st) => !!st.desktopConfig?.unitHostEnabled) // 一次配对走设备配对(本机 Unit 口):「允许其他设备连接本机」关着时 Clip 连不上来
+  const hostOn = useApp((st) => !!st.desktopConfig?.unitHostEnabled) // 一次配对走设备配对(本机 Unit 口):关着时只有门铃,Clip 请求后 Forsion 弹「允许并打开」
   const [manualOpen, setManualOpen] = useState<boolean | null>(null) // null = 跟缺省:外部引擎或互联关着时展开
   const showManual = manualOpen ?? (!managed || !hostOn)
   const [resetting, setResetting] = useState(false) // 换码不并发:两次换码乱序返回会留下已作废的码(Codex 09-24)

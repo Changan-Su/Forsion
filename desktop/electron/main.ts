@@ -33,7 +33,7 @@ import { execFile, execFileSync, spawn } from 'child_process'
 import { homedir, hostname, networkInterfaces } from 'os'
 import { randomUUID } from 'crypto'
 import { BackendManager, bundledPythonBin, resolveBundledGit, resolveBundledNode, type BackendStatus } from './backendManager'
-import { browserControlCode, registerClipExtensionIpc, startClipVersionSync } from './clipExtension'
+import { CLIP_ORIGIN, browserControlCode, registerClipExtensionIpc, startClipVersionSync } from './clipExtension'
 import { envWithFullPath, pathKeyOf, withBundledGit } from './envPath'
 import { findGit } from './gitHistory'
 import { downloadUrlFor, installCommandFor, requiredProgram } from './envInstall'
@@ -89,7 +89,7 @@ import { registerIpc as registerAmadeusIpc } from './amadeus/ipc'
 import type { AmadeusSyncFactory } from './amadeus/cloudSeam'
 import { engineCapsState, pairingWriters, type UnitHubFactory, type UnitHubInstance } from './unitHubSeam' // 设备互联云端通道的接缝(Forsion Extend 0.6 起)
 import { makeCallerHeaders } from './unitCaller'
-import { startUnitWeb, type UnitWebHandle, type PairedDevice } from './unitWeb'
+import { newPairStore, startUnitWeb, type UnitWebHandle, type PairedDevice } from './unitWeb'
 import { createRemoteSessions, lookupRosterUnit, registerRemoteSessionsIpc, REMOTE_SESSIONS_FILE, withRemoteCap } from './remoteSessions' // P1-K4
 import { normalizeCap } from '../shared/remoteSessions' // P1-K4
 import { createRemoteSafety } from './remoteSafety' // P1-K2
@@ -970,6 +970,10 @@ function forsionMcpStatus(): { running: boolean; url: string | null; token: stri
 let unitHub: UnitHubInstance | null = null
 let unitHubFactory: UnitHubFactory | null = null // Extend 装载时登记(setUnitHubFactory),doRefreshUnitHost 每次重建时调
 let unitWeb: UnitWebHandle | null = null
+/** 互联关着时的本机门铃(只听回环、只收 Forsion Clip 的配对请求,见 startUnitWeb 的 opts.doorbell);和 unitWeb 不会同时在。 */
+let unitDoorbell: UnitWebHandle | null = null
+/** 配对在途表:门铃收下的请求,打开互联后由正式服务交出令牌(两者共用这一份)。 */
+const unitPairStore = newPairStore()
 let amadeusReadPlugins: (() => Promise<ExternalPluginSource[]>) | null = null // registerAmadeusIpc 返回时赋上
 let amadeusVaultFace: import('./amadeus/ipc').VaultFace | null = null // 同上;unitWeb /vault/* 的本地库面
 // 登录成功后踢一次 Amadeus 云同步引擎(值由 registerAmadeusIpc 返回时赋上)。否则引擎状态卡在
@@ -1185,6 +1189,42 @@ const localEngineRef = (): { url: string | null; token: string } => {
   const st = backend.getStatus()
   return { url: st.state === 'ready' ? (st.url ?? null) : null, token: backend.getToken() }
 }
+/** 设备配对的确认框。doorbell = 互联关着、请求来自本机的 Forsion Clip:按钮是「允许并打开」,同意即顺带打开互联。 */
+async function askPair(info: { name: string; code: string; ip: string }, doorbell: boolean): Promise<boolean> {
+  // 开发测试后门:**双闸**——非打包(app.isPackaged=false)且显式 FORSION_UNIT_AUTO_PAIR=1,
+  // 才自动批准免手点。任一缺失都走下面的真弹框。⚠️ 这道闸绝不能变成无条件/进发布包:
+  // 少了它同网段任何设备都能无验证接管本机(引擎执行 + 读写库)。打包版 isPackaged 恒 true,
+  // 后门天然失效;env 需人显式设,不会误触。
+  if (!app.isPackaged && process.env.FORSION_UNIT_AUTO_PAIR === '1') {
+    console.log(`[unit-web] AUTO-PAIR(dev 后门):自动批准「${info.name}」(${info.ip}) 码=${info.code}`)
+    return true
+  }
+  showMainWindow()
+  // ⚠️ 弹框必须挂父窗:mac 上无父的 showMessageBox 是 app-modal,会**冻住主进程事件循环**——
+  // unitWeb/引擎代理/本机 IPC 全部悬死,对端的配对轮询整片超时(活体探针 2026-08-24 实测)。
+  // 挂父 = window-modal sheet,主循环照转;拿不到窗口的极端情形维持旧行为(短暂冻结好过弹不出)。
+  const local = /^(127\.0\.0\.1|::1|::ffff:127\.0\.0\.1)$/.test(info.ip)
+  const opts = {
+    type: 'question' as const,
+    title: mt(doorbell ? 'main.pair.doorbellTitle' : 'main.pair.title'),
+    message: doorbell ? mt('main.pair.doorbellMessage') : mt('main.pair.message', { name: info.name, ip: info.ip }),
+    detail: mt(local ? 'main.pair.detailLocal' : 'main.pair.detail', { code: info.code }),
+    buttons: [mt(doorbell ? 'main.pair.doorbellAllow' : 'main.pair.allow'), mt('main.pair.deny')],
+    defaultId: 1,
+    cancelId: 1,
+  }
+  const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
+  const r = win ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts)
+  return r.response === 0
+}
+/** 门铃上点了「允许并打开」:打开互联(落盘 + 引擎常驻 + 重建 Unit 口),等正式服务起来才返回。
+ *  和设置里拨开关不同:托管引擎已在跑就不重启(backend.start 恒先停再起 —— 会断掉在跑的会话,Clip 紧接着领连接码也会扑空);
+ *  外部引擎模式才把本机引擎拉起来常驻,并等它起来再批准。 */
+async function enableUnitHostFromDoorbell(): Promise<void> {
+  const before = await saveConfig({ unitHostEnabled: true })
+  if (before.mode !== 'managed') await ensureBackend()
+  await refreshUnitHost()
+}
 async function doRefreshUnitHost(): Promise<void> {
   const stored = await loadConfig()
   unitHostCloudUrl = stored.cloudUrl
@@ -1196,8 +1236,12 @@ async function doRefreshUnitHost(): Promise<void> {
   unitHostPairing = pairing.state === 'ok' ? pairing.value : null
   if (unitHub) { unitHub.stop(); unitHub = null } // stop() 也让 caps 上报器停报(onChannelDown)
   if (unitWeb) { const w = unitWeb; unitWeb = null; await w.close() } // 必须等旧服务真放掉端口,否则新起撞自己
+  if (unitDoorbell) { const d = unitDoorbell; unitDoorbell = null; await d.close() }
   remoteSessions.notifyChanged() // P1-K4:父开关 / 账号可能变了(换号收掉旧账号的确认框)
-  if (!stored.unitHostEnabled) return
+  // 互联关着 → 开门铃:Clip 发来配对请求时弹「允许并打开」,一键打开互联并配好(Clip 安装引导第二步)。
+  // dev 要显式 FORSION_UNIT_DOORBELL=1:开发版与安装版常同时开着,dev 的门铃会占住 8791,安装版再打开互联就被挤到随机端口
+  const doorbell = !stored.unitHostEnabled && (app.isPackaged || process.env.FORSION_UNIT_DOORBELL === '1')
+  if (!stored.unitHostEnabled && !doorbell) return
   // 实例 id:首次开启生成并回写(/unit/meta 自证身份,防 DHCP 换主誊错设备)。
   let instanceId = stored.unitInstanceId
   if (!instanceId) {
@@ -1205,37 +1249,18 @@ async function doRefreshUnitHost(): Promise<void> {
     await saveConfig({ unitInstanceId: instanceId })
   }
   // 本机项目根种子没做完之前,远端的 /engine 一律 503(seedGatedEngine):远端没有窗口抢在种子之前改 project_path。
-  void localProjectRegistry().ready().then(() => unitSessionRootsSource().ensureSeeded()).then(() => unitHub?.engineChanged()) // P1-K7a:种子做完 = starting → ready
+  if (!doorbell) void localProjectRegistry().ready().then(() => unitSessionRootsSource().ensureSeeded()).then(() => unitHub?.engineChanged()) // P1-K7a:种子做完 = starting → ready
   const webDeps = {
     getEngine: seedGatedEngine(() => {
       const st = backend.getStatus()
       return { url: st.state === 'ready' ? (st.url ?? null) : null, token: backend.getToken(), remoteMark: backend.remoteMarkSecret() }
     }, unitSessionRootsSource()),
     confirmPair: async (info: { name: string; code: string; ip: string }): Promise<boolean> => {
-      // 开发测试后门:**双闸**——非打包(app.isPackaged=false)且显式 FORSION_UNIT_AUTO_PAIR=1,
-      // 才自动批准免手点。任一缺失都走下面的真弹框。⚠️ 这道闸绝不能变成无条件/进发布包:
-      // 少了它同网段任何设备都能无验证接管本机(引擎执行 + 读写库)。打包版 isPackaged 恒 true,
-      // 后门天然失效;env 需人显式设,不会误触。
-      if (!app.isPackaged && process.env.FORSION_UNIT_AUTO_PAIR === '1') {
-        console.log(`[unit-web] AUTO-PAIR(dev 后门):自动批准「${info.name}」(${info.ip}) 码=${info.code}`)
-        return true
-      }
-      showMainWindow()
-      // ⚠️ 弹框必须挂父窗:mac 上无父的 showMessageBox 是 app-modal,会**冻住主进程事件循环**——
-      // unitWeb/引擎代理/本机 IPC 全部悬死,对端的配对轮询整片超时(活体探针 2026-08-24 实测)。
-      // 挂父 = window-modal sheet,主循环照转;拿不到窗口的极端情形维持旧行为(短暂冻结好过弹不出)。
-      const opts = {
-        type: 'question' as const,
-        title: mt('main.pair.title'),
-        message: mt('main.pair.message', { name: info.name, ip: info.ip }),
-        detail: mt(/^(127\.0\.0\.1|::1|::ffff:127\.0\.0\.1)$/.test(info.ip) ? 'main.pair.detailLocal' : 'main.pair.detail', { code: info.code }),
-        buttons: [mt('main.pair.allow'), mt('main.pair.deny')],
-        defaultId: 1,
-        cancelId: 1,
-      }
-      const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
-      const r = win ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts)
-      return r.response === 0
+      if (!(await askPair(info, doorbell))) return false
+      // 门铃上点了「允许并打开」:先照设置里拨开关那样打开互联、等正式服务起来,再放行批准 ——
+      // 令牌经共用的 unitPairStore 由正式服务交出,Clip 拿到令牌后紧接着的 /unit/meta、/unit/browser-control 不会撞上换服务的空档
+      if (doorbell) await enableUnitHostFromDoorbell()
+      return true
     },
     browserControlCode: () => browserControlCode(localEngineRef),
     pairedDevices: {
@@ -1344,15 +1369,20 @@ async function doRefreshUnitHost(): Promise<void> {
   // 配对名单在队列里现读,别用开头那份快照:上面几处 await 期间用户可能刚撤销了设备,旧快照会把它重新放行
   unitPairedCache = await configQueue(async () => (await loadConfig()).unitPairedDevices || [])
   await remoteSessions.ready // P1-K4:迁移读完再开门(之前闸本就 fail closed,这里只为首个请求拿到真状态)
+  if (doorbell) {
+    // 门铃不退到随机端口:Clip 只找 8791(或用户存过的端口);被占(另一个 Forsion 开着)就不开,Clip 那边照旧提示
+    try { unitDoorbell = await startUnitWeb(webDeps, { port: stored.unitWebPort || 8791, pairs: unitPairStore, doorbell: { origins: [CLIP_ORIGIN] } }) } catch (e: any) { console.log(`[unit-web] 门铃没开(端口被占?):${e?.message || e}`) }
+    return
+  }
   try {
     // 端口保持稳定(便于手输 IP 直连):首选已存端口/8791,被占则退化系统分配并回写。
     const want = stored.unitWebPort || 8791
     // 台架开关(同 FORSION_UNIT_AUTO_PAIR 的双闸:非打包 + 显式 env):只听回环。自动批准配对时绝不能把这台的引擎露到局域网
     const bindHost = !app.isPackaged && process.env.FORSION_UNIT_BIND_LOOPBACK === '1' ? '127.0.0.1' : undefined
     try {
-      unitWeb = await startUnitWeb(webDeps, { port: want, bindHost })
+      unitWeb = await startUnitWeb(webDeps, { port: want, bindHost, pairs: unitPairStore })
     } catch {
-      unitWeb = await startUnitWeb(webDeps, { port: 0, bindHost })
+      unitWeb = await startUnitWeb(webDeps, { port: 0, bindHost, pairs: unitPairStore })
     }
     if (unitWeb.port !== stored.unitWebPort) await saveConfig({ unitWebPort: unitWeb.port })
     console.log(`[unit-web] 已启动:${unitLanUrl() ?? `http://127.0.0.1:${unitWeb.port}`}`)
