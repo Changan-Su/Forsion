@@ -7,6 +7,7 @@
 .amx-publishing-editor .md-media-stage img{display:block;position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
 .amx-publishing-editor .md-media-stage video,.amx-publishing-editor .md-media-stage iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
 .amx-publishing-editor .md-media-stage audio{position:absolute;inset:auto 0 0;width:100%}
+.amx-publishing-editor video[data-amadeus-demo]{display:block;width:100%;height:auto;aspect-ratio:auto 16/10;object-fit:contain;border-radius:var(--radius-md);background:var(--bg)}
 .amx-publishing-editor .md-media-placeholder{display:grid;place-items:center;height:100%;min-height:120px}
 .amx-publishing-editor .md-media figcaption{display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:12px;font-size:var(--ui-font-meta)}
 .amx-publishing-editor .md-callout{padding:12px;margin:16px 0;border:1px solid var(--border);border-radius:var(--radius-sm)}

@@ -27,6 +27,8 @@
 .md-body.wn-article h2, .md-body.wn-article h3 { margin: 28px 0 6px; font-size: var(--ui-font-title); font-weight: 600; color: var(--text); }
 .md-body.wn-article .md-feature { margin: 0; }
 .md-body.wn-article img { display: block; max-width: 100%; height: auto; border-radius: var(--radius-lg); border: var(--border-width) solid var(--border); }
+/* ![alt](x.mp4) 演示短片:元数据到之前按 16:10 占位(录屏的常见比例),到了以片子自己的比例为准 */
+.md-body.wn-article video[data-amadeus-demo] { display: block; width: 100%; height: auto; aspect-ratio: auto 16 / 10; object-fit: contain; border-radius: var(--radius-lg); border: var(--border-width) solid var(--border); background: var(--bg-card); }
 .md-body.wn-article .md-image { margin: 12px 0 4px; }
 .md-body.wn-article .md-media { margin: 16px 0; border: var(--border-width) solid var(--border); border-radius: var(--radius-lg); overflow: hidden; }
 .md-body.wn-article .md-media-stage { position: relative; aspect-ratio: 16 / 9; background: var(--bg-card); }
