@@ -25,6 +25,14 @@ registerMessages({
     zh: '这个插件声明了「仅支持桌面端」，无法安装到手机上',
     en: 'This plugin is marked "Desktop only" and can’t be installed on a phone',
   },
+  'mobilemarket.unsupportedPlatform': {
+    zh: '这个插件不支持安卓手机，无法安装到手机上',
+    en: 'This plugin doesn’t support Android and can’t be installed on a phone',
+  },
+  'mobilemarket.incompatibleVersion': {
+    zh: '这个插件要求 Forsion 版本 {req}，当前是 {current}，无法安装',
+    en: 'This plugin requires Forsion {req} (this app is {current}) and can’t be installed',
+  },
   'mobilemarket.requiresDesktopApp': {
     zh: '这个插件要配合电脑上的应用「{app}」使用，无法安装到手机上',
     en: 'This plugin works with the desktop app "{app}" and can’t be installed on a phone',
