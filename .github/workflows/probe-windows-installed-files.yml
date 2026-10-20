@@ -36,3 +36,4 @@ jobs:
           path: |
             ${{ runner.temp }}/forsion-installed-file/evidence/*.json
             ${{ runner.temp }}/forsion-installed-file/evidence/*.png
+            ${{ runner.temp }}/forsion-installed-file/evidence/*.txt

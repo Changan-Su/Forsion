@@ -16,7 +16,7 @@ async function until(name, predicate, timeout = 30000) {
   throw new Error(name)
 }
 function pdf() {
-  const stream = 'BT /F1 18 Tf 40 100 Td (Installed PDF) Tj ET'
+  const stream = 'q 1 0 0 rg 30 20 60 20 re f 0 0 1 rg 150 20 90 20 re f Q BT /F1 18 Tf 40 100 Td (Installed PDF) Tj ET'
   const objects = ['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
     '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>',
     `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>']
@@ -46,13 +46,13 @@ async function main() {
     fs.writeFileSync(path.join(dir, 'amadeus-config.json'), JSON.stringify({ lastVault: vault, localVault: vault }))
   }
   const stub = await startStubEngine()
-  let app
+  let app, win, runtime
   const children = []
   try {
     app = await electron.launch({ executablePath: exe, args: ['--lang=zh-CN', md], env: { ...process.env, TANGU_HOME: home, FORSION_WORKSPACE_DIR: path.join(home, 'workspace'), TANGU_BACKEND_URL: stub.url }, timeout: 60000 })
-    const info = await app.evaluate(({ app }) => ({ packaged: app.isPackaged, version: app.getVersion(), exe: process.execPath, data: app.getPath('userData') }))
+    const info = runtime = await app.evaluate(({ app }) => ({ packaged: app.isPackaged, version: app.getVersion(), exe: process.execPath, data: app.getPath('userData') }))
     check('runtime is the real installed 2.13.5 executable', info.packaged && info.version === '2.13.5' && path.resolve(info.exe).toLowerCase() === path.resolve(exe).toLowerCase())
-    const win = await app.firstWindow()
+    win = await app.firstWindow()
     check('actual installed application leaves first-run onboarding', await skipOnboarding(win, 60000))
     const active = () => win.evaluate(() => [...document.querySelectorAll('.wsfile-tab .wsfile-name')].filter(el => el.offsetParent !== null).at(-1)?.textContent || null)
     const titles = () => win.locator('.dv-tab').allTextContents()
@@ -66,11 +66,23 @@ async function main() {
     const exited = new Promise(resolve => { second.once('exit', resolve); second.once('error', () => resolve(-1)) })
     check('second installed process exits into the existing application', await Promise.race([exited, sleep(20000).then(() => -1)]) === 0)
     await until('second installed process opens its PDF', async () => await active() === pdfFile)
-    const page = win.locator('.wsfile-tab:visible .pdfViewer .page[data-page-number="1"][data-loaded="true"]')
-    await page.waitFor({ timeout: 45000 })
-    await until('PDF contains expected rendered text', async () => (await page.innerText()).includes('Installed PDF'))
-    const ink = await page.locator('canvas').first().evaluate(canvas => { const data = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data; let n = 0; for (let i = 0; i < data.length; i += 4) if (data[i + 3] && data[i] < 200 && data[i + 1] < 200 && data[i + 2] < 200) n++; return n })
-    check('installed PDF renders a real page with text and ink', ink > 20)
+    // The external preview is PdfView, not the notebook PdfAnnotator. It paints
+    // canvas only. Check this file's two unique colors and black text region;
+    // a blank allocated canvas, other PDF, or an unloaded font must fail.
+    const canvas = win.locator('.wsfile-tab:visible canvas.wsfile-pdf-page').first()
+    await canvas.waitFor({ timeout: 45000 })
+    await until('installed PDF paints the fixture geometry and text', async () => canvas.evaluate(canvas => {
+      const width = canvas.width, height = canvas.height, data = canvas.getContext('2d').getImageData(0, 0, width, height).data
+      const pixel = (x, y) => [...data.slice(4 * (Math.floor(y * height) * width + Math.floor(x * width)), 4 * (Math.floor(y * height) * width + Math.floor(x * width)) + 4)]
+      const red = pixel(60 / 300, 170 / 200), blue = pixel(195 / 300, 170 / 200), white = pixel(120 / 300, 170 / 200)
+      let ink = 0
+      for (let y = Math.floor(height * 75 / 200); y < height * 110 / 200; y++) for (let x = Math.floor(width * 35 / 300); x < width * 210 / 300; x++) {
+        const i = 4 * (y * width + x); if (data[i + 3] > 240 && data[i] < 180 && data[i + 1] < 180 && data[i + 2] < 180) ink++
+      }
+      return red[0] > 240 && red[1] < 10 && red[2] < 10 && blue[0] < 10 && blue[1] < 10 && blue[2] > 240 && white.slice(0, 3).every(v => v > 240) && ink > 40
+    }), 45000)
+    check('installed PDF paints the unique color geometry and text ink', true)
+    await win.screenshot({ path: path.join(out, 'installed-pdf.png'), timeout: 10000 })
     // Start on another tab: ignoring ShellExecute must fail this check.
     // Use the untouched NSIS ProgID, never an emitted open-file event.
     ps(`Start-Process -FilePath ${quote(md)}`)
@@ -88,6 +100,11 @@ async function main() {
     await win.screenshot({ path: path.join(out, 'installed-note.png') })
     fs.writeFileSync(path.join(out, 'application-results.json'), JSON.stringify({ checks, runtime: info }, null, 2))
     console.log(`${checks.length}/${checks.length} application checks passed`)
+  } catch (error) {
+    const state = win && !win.isClosed() ? await win.locator('body').innerText().catch(() => '') : ''
+    if (win && !win.isClosed()) await win.screenshot({ path: path.join(out, 'failure.png'), timeout: 10000 }).catch(() => {})
+    fs.writeFileSync(path.join(out, 'application-results.json'), JSON.stringify({ checks, runtime, error: String(error), state: state.slice(-12000) }, null, 2))
+    throw error
   } finally {
     for (const child of children) if (child.exitCode === null) child.kill()
     try { if (app) { const process = app.process(); await Promise.race([app.close(), sleep(15000)]).catch(() => {}); if (process.exitCode === null) execFileSync('taskkill.exe', ['/PID', String(process.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }) } }

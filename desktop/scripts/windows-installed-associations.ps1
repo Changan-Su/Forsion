@@ -31,6 +31,9 @@ if ($Mode -eq 'install') {
   $null=$taskProcess.Handle
   if (!$taskProcess.WaitForExit(180000)) { Stop-Process -Id $taskProcess.Id; throw 'NSIS installation timed out' }
   Check ($taskProcess.ExitCode -eq 0 -and (Test-Path (Join-Path $taskInstall 'Forsion.exe'))) 'real per-user NSIS installation completes'
+  # Export cleanup eligibility before any post-install verification can fail.
+  "FORSION_INSTALLED_EXE=$(Join-Path $taskInstall 'Forsion.exe')" | Add-Content -LiteralPath $env:GITHUB_ENV
+  "FORSION_INSTALLED_OUTPUT=$taskOutput" | Add-Content -LiteralPath $env:GITHUB_ENV
   # Some installer variants start the app after installation. Stop only that
   # executable in this verified temporary installation before preparing data.
   foreach ($child in @(Get-CimInstance Win32_Process | Where-Object {$_.ExecutablePath -and $_.ExecutablePath.Equals((Join-Path $taskInstall 'Forsion.exe'),[StringComparison]::OrdinalIgnoreCase)})) {
@@ -39,15 +42,14 @@ if ($Mode -eq 'install') {
   foreach ($key in @($taskMarkdown,$taskPdf)) {
     Check (Test-Path "$key\shell\open\command") "NSIS registers $($key.Split('\')[-1])"
     $command=(Get-Item "$key\shell\open\command").GetValue('')
-    Check ($command.Contains((Join-Path $taskInstall 'Forsion.exe')) -and $command.Contains('%1')) 'registered open command targets this installed executable and its file argument'
+    $taskExpected='"'+(Join-Path $taskInstall 'Forsion.exe')+'" "%1"'
+    Check ($command.Equals($taskExpected,[StringComparison]::OrdinalIgnoreCase)) 'registered open command quotes this executable and the complete file argument'
   }
   $taskDefault=(Get-Item 'HKCU:\Software\Classes\.md').GetValue('')
   Check ($taskDefault -eq 'Forsion.forsion.markdown') 'NSIS claims unassigned Markdown extension'
   $taskAfter=Read-PdfChoice
   Check (($taskBefore | ConvertTo-Json -Compress) -eq ($taskAfter | ConvertTo-Json -Compress)) 'NSIS preserves existing PDF UserChoice state'
   if (!$taskBefore) { Write-Host 'UNVERIFIED genuine pre-existing PDF UserChoice is absent; preservation of a user-selected Edge/Acrobat default remains unverified' }
-  "FORSION_INSTALLED_EXE=$(Join-Path $taskInstall 'Forsion.exe')" | Add-Content -LiteralPath $env:GITHUB_ENV
-  "FORSION_INSTALLED_OUTPUT=$taskOutput" | Add-Content -LiteralPath $env:GITHUB_ENV
 } else {
   # NSIS's regular uninstall prompts whether to delete account/workspace data.
   # Dismiss only those two exact prompts of the owned uninstall process tree.
@@ -73,7 +75,14 @@ public static class ForsionUninstallPrompts {
 '@
   $taskUninstaller=@(Get-ChildItem -LiteralPath $taskInstall -Filter 'Uninstall*.exe')
   Check ($taskUninstaller.Count -eq 1) 'installed application has its real NSIS uninstaller'
-  $taskProcess=Start-Process -FilePath $taskUninstaller[0].FullName -ArgumentList '/S' -PassThru -WindowStyle Hidden
+  # NSIS's documented _?= worker entry avoids a short-lived parent handing off
+  # to an unobservable temporary copy. Copy the exact real uninstaller outside
+  # INSTDIR so it can remove all payload files, and retain the worker handle.
+  $taskWorker=Join-Path $taskRoot 'uninstall-worker.exe'
+  Copy-Item -LiteralPath $taskUninstaller[0].FullName -Destination $taskWorker
+  Check ((Get-FileHash -LiteralPath $taskWorker).Hash -eq (Get-FileHash -LiteralPath $taskUninstaller[0].FullName).Hash) 'worker is an unchanged copy of the actual NSIS uninstaller'
+  $taskProcess=Start-Process -FilePath $taskWorker -ArgumentList "/S _?=$taskInstall" -PassThru -WindowStyle Hidden
+  $null=$taskProcess.Handle
   $taskOwners=[Collections.Generic.HashSet[int]]::new(); $null=$taskOwners.Add($taskProcess.Id)
   $taskEnd=[DateTime]::UtcNow.AddSeconds(120)
   do {
@@ -83,7 +92,21 @@ public static class ForsionUninstallPrompts {
     Start-Sleep -Milliseconds 200
     $taskAlive=@($taskAll | Where-Object {$taskOwners.Contains([int]$_.ProcessId)})
   } while ($taskAlive.Count -and [DateTime]::UtcNow -lt $taskEnd)
+  if ($taskAlive.Count) {
+    if (!$taskProcess.HasExited) { & taskkill.exe /PID $taskProcess.Id /T /F | Out-Null }
+    throw 'NSIS uninstall worker did not finish before its deadline'
+  }
+  Check ($taskProcess.WaitForExit(1000) -and $taskProcess.ExitCode -eq 0) 'actual NSIS uninstall worker exits successfully'
   Check (!(Test-Path $taskMarkdown) -and !(Test-Path $taskPdf) -and !(Test-Path (Join-Path $taskInstall 'Forsion.exe'))) 'real uninstall removes both Forsion ProgIDs and executable'
+  if (Test-Path $taskInstall) {
+    Get-ChildItem -LiteralPath $taskInstall -Recurse | Select-Object -ExpandProperty FullName | Set-Content -LiteralPath (Join-Path $taskOutput 'uninstall-residuals.txt')
+  }
+  Check (!(Test-Path $taskInstall)) 'actual NSIS uninstall removes the complete installed payload directory'
+  foreach ($ext in @('.md','.markdown','.pdf')) {
+    $taskKey="HKCU:\Software\Classes\$ext"
+    if (Test-Path $taskKey) { Check ((Get-Item $taskKey).GetValue('') -notin @('Forsion.forsion.markdown','Forsion.forsion.pdf')) "uninstall removes Forsion default reference for $ext" }
+    if (Test-Path "$taskKey\OpenWithProgids") { Check (!@((Get-Item "$taskKey\OpenWithProgids").GetValueNames() | Where-Object {$_ -in @('Forsion.forsion.markdown','Forsion.forsion.pdf')}).Count) "uninstall removes Forsion OpenWith reference for $ext" }
+  }
   $taskBefore=Get-Content -LiteralPath (Join-Path $taskOutput 'before.json') -Raw | ConvertFrom-Json -AsHashtable
   Check (($taskBefore.pdfChoice | ConvertTo-Json -Compress) -eq ((Read-PdfChoice) | ConvertTo-Json -Compress)) 'uninstall preserves original PDF UserChoice state'
 }
