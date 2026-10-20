@@ -354,29 +354,29 @@ export async function runSync(opts: SyncOptions): Promise<SyncReport> {
 const insideDir = (root: string, p: string): boolean => { const rel = path.relative(root, p); return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel) }
 
 /**
- * 「用云端那份」的落地(云同步开启方案 2026-10-20):把这些 key 从同步根挪进 backupDir(同盘 rename,只挪不删),
- * 并把挪走的 key 从基线里删掉 —— 基线还在、本地没了,下一轮会判成 pushDelete,把用户要的云端那份删掉。
- * 挪一个算一个,出错就停;已挪的照样清基线。基线清不掉也算失败(调用方据此不开同步)。
+ * 「用云端那份」的落地(云同步开启方案 2026-10-20):把 keys 从同步根挪进 backupDir(同盘 rename,只挪不删)。
+ * 先把 keys 与 forget(这台删了、云端还在的 pushDelete)从基线里删掉并落盘,再挪:
+ * 基线还在、本地没了,下一轮会判成 pushDelete,把用户要的云端那份删掉;反过来先清基线,挪到一半出错 / 崩溃,
+ * 没挪的文件只是没了基线,下一轮按首次合流(join)走 —— 不一样就出冲突副本,哪边都不丢。
+ * 基线落不了盘就一个都不挪。挪一个算一个,出错就停。
  */
-export async function moveAsideFromSync(opts: { localRoot: string; keys: string[]; backupDir: string; statePath: string; fingerprint: string }): Promise<{ moved: number; error?: string }> {
-  const moved: string[] = []
-  let error: string | undefined
+export async function moveAsideFromSync(opts: { localRoot: string; keys: string[]; forget?: string[]; backupDir: string; statePath: string; fingerprint: string }): Promise<{ moved: number; error?: string }> {
+  for (const key of opts.keys) {
+    if (!insideDir(opts.localRoot, path.join(opts.localRoot, key)) || !insideDir(opts.backupDir, path.join(opts.backupDir, key))) return { moved: 0, error: 'unsafe-key' }
+  }
+  try {
+    const prev = await loadPrev(opts.statePath, opts.fingerprint)
+    for (const k of [...opts.keys, ...(opts.forget ?? [])]) delete prev.entries[k]
+    await savePrev(opts.statePath, prev)
+  } catch (e) { return { moved: 0, error: `baseline: ${String((e as Error)?.message || e)}` } }
+  let moved = 0
   try {
     for (const key of opts.keys) {
-      const from = path.join(opts.localRoot, key)
       const to = path.join(opts.backupDir, key)
-      if (!insideDir(opts.localRoot, from) || !insideDir(opts.backupDir, to)) throw new Error('unsafe-key')
       await fs.mkdir(path.dirname(to), { recursive: true })
-      await fs.rename(from, to)
-      moved.push(key)
+      await fs.rename(path.join(opts.localRoot, key), to)
+      moved++
     }
-  } catch (e) { error = String((e as Error)?.message || e) }
-  if (moved.length) {
-    try {
-      const prev = await loadPrev(opts.statePath, opts.fingerprint)
-      for (const k of moved) delete prev.entries[k]
-      await savePrev(opts.statePath, prev)
-    } catch (e) { error = `baseline: ${String((e as Error)?.message || e)}` }
-  }
-  return { moved: moved.length, error }
+  } catch (e) { return { moved, error: String((e as Error)?.message || e) } }
+  return { moved }
 }

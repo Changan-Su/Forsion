@@ -162,7 +162,14 @@ async function cloudVault(vault: string): Promise<{ files: number; bytes: number
   return v && (v.files ?? 0) > 0 ? { files: v.files ?? 0, bytes: v.bytes ?? 0, device: v.device ?? null } : null
 }
 
-async function notesOn(): Promise<SyncResult> {
+/** 这一串操作开始时的账号还是不是当前账号(who 不传 = 不查;引导 / 卡片那一串才传)。 */
+async function sameAccount(who: string | null | undefined): Promise<boolean> {
+  if (who === undefined) return true
+  const a = await window.tangu?.authStatus?.().catch(() => null)
+  return (a?.loggedIn ? (a.accountId ?? a.username ?? 'default') : null) === who
+}
+
+async function notesOn(who?: string | null): Promise<SyncResult> {
   const rs = window.remoteSync
   if (!rs) return { ok: false, error: 'unavailable' }
   const st = await rs.get()
@@ -180,6 +187,7 @@ async function notesOn(): Promise<SyncResult> {
       // 两边都有:conflict,或新电脑上的 join(内容一样的 same 不算;后端没给 hash 判不出 → 当不一样,宁可多问一次)
       const conflicts = dry.plan?.filter((i) => i.kind === 'conflict' || (i.kind === 'join' && !i.same)).length ?? 0
       if (!dry.ok) { await rs.set({ backend: 'off' }); return { ok: false, error: dry.errors[0] } }
+      if (!(await sameAccount(who))) { await rs.set({ backend: 'off' }); return { ok: false, error: 'account-changed' } }
       if (localOnly + conflicts > 0) {
         await rs.set({ backend: 'off' })
         setPending({ cloudFiles: cloud.files, cloudBytes: cloud.bytes, cloudDevice: cloud.device, localOnly, conflicts })
@@ -190,6 +198,8 @@ async function notesOn(): Promise<SyncResult> {
     await rs.set({ backend: 'off' })
     return { ok: false, error: e instanceof Error ? e.message : String(e) }
   }
+  // 等云端列表 / 演算时换了号:别用新账号的凭据把这台的智库传上去
+  if (!(await sameAccount(who))) { await rs.set({ backend: 'off' }); return { ok: false, error: 'account-changed' } }
   await rs.set(NOTES_ON)
   void rs.run().catch(() => {})
   return { ok: true }
@@ -216,7 +226,7 @@ export async function resolveNotes(choice: NotesChoice, backupLabel: string): Pr
   finally { await refreshSync() }
 }
 
-export async function setSync(kind: SyncKind, on: boolean): Promise<SyncResult> {
+export async function setSync(kind: SyncKind, on: boolean, who?: string | null): Promise<SyncResult> {
   try {
     if (kind === 'plugins') { ls.set(PLUGIN_SYNC_ALL_OFF_KEY, on ? null : '1'); return { ok: true } }
     if (kind === 'agents') {
@@ -225,7 +235,7 @@ export async function setSync(kind: SyncKind, on: boolean): Promise<SyncResult> 
       await window.tangu?.setConfig?.({ forsionSyncEnabled: on, ...(stored?.forsionSyncAccountId ? { forsionSyncAccountId: stored.forsionSyncAccountId } : {}) }).catch(() => {})
       return { ok: true }
     }
-    if (on) return await notesOn()
+    if (on) return await notesOn(who)
     setPending(null)
     await window.remoteSync?.set({ backend: 'off' })
     return { ok: true }
@@ -242,7 +252,7 @@ export async function applySyncChoices(choices: Record<SyncKind, boolean>): Prom
   for (const kind of ['agents', 'plugins', 'notes'] as const) {
     if (account !== who) { out.push({ ok: false, error: 'account-changed' }); return out }
     if (kind === 'notes' && !choices.notes && snap?.notes.backend !== 'penzor') continue
-    out.push(await setSync(kind, choices[kind]))
+    out.push(await setSync(kind, choices[kind], who))
   }
   if (account === who) markSyncDecided()
   return out

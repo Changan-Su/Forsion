@@ -199,6 +199,21 @@ describe('first sign-in card', () => {
     expect(localStorage.getItem('forsion.sync.decided.https://c::u2')).toBeNull()
   })
 
+  it('an account switch while the notes step waits on the cloud leaves sync off', async () => {
+    const s = await fresh()
+    await s.refreshSync()
+    const realFetch = (window as any).tangu.cloudFetch
+    ;(window as any).tangu.cloudFetch = async (o: { path: string }) => {
+      // 只在智库那步(已经配上 penzor、正等云端列表)时换号,前两步的刷新照常
+      if (cfg.backend === 'penzor') (window as any).tangu.authStatus = async () => ({ loggedIn: true, accountId: 'https://c::u2' })
+      return realFetch(o)
+    }
+    const out = await s.applySyncChoices({ notes: true, agents: false, plugins: true })
+    expect(out.at(-1)).toEqual({ ok: false, error: 'account-changed' })
+    expect(cfg.backend).toBe('off')
+    expect(rs.run).not.toHaveBeenCalledWith()
+  })
+
   it('shows only for a signed-in, undecided account after onboarding, unless everything is already on', async () => {
     const s = await fresh()
     const { wantsSyncCard } = s

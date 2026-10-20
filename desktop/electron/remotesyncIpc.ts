@@ -345,32 +345,36 @@ export const differsFromCloud = (i: { kind: string; same?: true }): boolean => i
  * 第二台电脑选「用云端那份」(云同步开启方案 2026-10-20):先演算一遍,把这台和云端不一样的文件挪到库外的
  * 「<库名> <label> <日期>」,之后正常同步拿到的就是云端那份。label 由渲染层按界面语言给(落盘的名字跟语言走)。
  * 只挪不删:同一个上级目录里 rename;挪一个算一个,中途出错就停 —— 已挪的在备份里,没挪的在原处,都不丢。
- * 挪的时候拿同步锁、核对库没换;挪走的 key 同时从基线里删掉 —— 否则「本地没了、基线还在」下一轮会判成 pushDelete,
- * 把用户要的云端那份删掉。
+ * 挪的时候拿同步锁、核对库和云端目标都没换;基线先清后挪(见 moveAsideFromSync),这台删掉的(pushDelete)也清,好拉回来。
  */
 async function adoptRemote(label: string): Promise<{ ok: boolean; moved: number; backupDir?: string; error?: string }> {
-  const before = await resolveLocalSyncRoot()
+  // 演算前后各认一次「哪个库 × 哪个云端目标」:中途在设置里换了任何一边,旧计划就不能套到新目标上
+  const target = async (): Promise<{ root: string; fingerprint: string } | { error: string }> => {
+    const built = await buildRemote(await loadConfig())
+    if ('error' in built) return built
+    const rooted = await resolveLocalSyncRoot()
+    return 'error' in rooted ? rooted : { root: rooted.root, fingerprint: built.fingerprint }
+  }
+  const before = await target()
   if ('error' in before) return { ok: false, moved: 0, error: before.error }
   const dry = await runNow({ dryRun: true })
   if (!dry.ok || !dry.plan) return { ok: false, moved: 0, error: dry.errors[0] ?? 'dry-run-failed' }
   const keys = dry.plan.filter(differsFromCloud).map((i) => i.key)
-  if (!keys.length) return { ok: true, moved: 0 }
+  const forget = dry.plan.filter((i) => i.kind === 'pushDelete').map((i) => i.key) // 这台删了、云端还在:用云端那份 = 拉回来
+  if (!keys.length && !forget.length) return { ok: true, moved: 0 }
   if (running) return { ok: false, moved: 0, error: 'already-running' }
   running = true
   try {
-    const cfg = await loadConfig()
-    const built = await buildRemote(cfg)
-    if ('error' in built) return { ok: false, moved: 0, error: built.error }
-    const rooted = await resolveLocalSyncRoot()
-    if ('error' in rooted) return { ok: false, moved: 0, error: rooted.error }
-    if (rooted.root !== before.root) return { ok: false, moved: 0, error: 'root-changed' }
+    const now = await target()
+    if ('error' in now) return { ok: false, moved: 0, error: now.error }
+    if (now.root !== before.root || now.fingerprint !== before.fingerprint) return { ok: false, moved: 0, error: 'target-changed' }
     const safe = (label || 'backup').replace(/[\\/:*?"<>|]/g, ' ').trim().slice(0, 40) || 'backup'
-    const base = path.join(path.dirname(rooted.root), `${path.basename(rooted.root)} ${safe} ${new Date().toISOString().slice(0, 10)}`)
+    const base = path.join(path.dirname(now.root), `${path.basename(now.root)} ${safe} ${new Date().toISOString().slice(0, 10)}`)
     let dir = base
     for (let n = 2; await fs.access(dir).then(() => true, () => false); n++) dir = `${base} (${n})`
-    const statePath = path.join(app.getPath('userData'), 'remotesync-state', `${hash8(`${rooted.root}|${built.fingerprint}`)}.json`)
-    const r = await moveAsideFromSync({ localRoot: rooted.root, keys, backupDir: dir, statePath, fingerprint: built.fingerprint })
-    return { ok: !r.error, moved: r.moved, backupDir: dir, error: r.error }
+    const statePath = path.join(app.getPath('userData'), 'remotesync-state', `${hash8(`${now.root}|${now.fingerprint}`)}.json`)
+    const r = await moveAsideFromSync({ localRoot: now.root, keys, forget, backupDir: dir, statePath, fingerprint: now.fingerprint })
+    return { ok: !r.error, moved: r.moved, backupDir: r.moved ? dir : undefined, error: r.error }
   } finally {
     running = false
     broadcast()

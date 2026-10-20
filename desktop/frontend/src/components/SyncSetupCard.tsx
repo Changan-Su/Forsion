@@ -58,16 +58,18 @@ export function SyncSetupHost(): JSX.Element | null {
   const main = windowKind() === 'main'
 
   useEffect(() => { if (main && window.remoteSync) startSyncSetup() }, [main])
+  let obDone = false
+  try { obDone = localStorage.getItem(ONBOARDING_DISMISS_KEY) === '1' } catch { /* 读不到当没走完:不弹 */ }
+  // 依赖只放这两个布尔:快照每次同步进度 / 插件变动都换新对象,拿它当依赖计时器会一直被重置、永远弹不出来
+  const want = main && !open && wantsSyncCard(s, obDone)
+  const allOn = main && !!s && s.signedIn && !s.decided && obDone && s.notes.available && !want && !open
+  useEffect(() => { if (allOn) markSyncDecided() }, [allOn])
   useEffect(() => {
-    if (!main || open) return
-    let done = false
-    try { done = localStorage.getItem(ONBOARDING_DISMISS_KEY) === '1' } catch { /* 读不到当没走完:不弹 */ }
-    if (!s || !s.signedIn || s.decided) return
-    if (!wantsSyncCard(s, done)) { if (done && s.notes.available) markSyncDecided(); return }
+    if (!want) return
     // 启动后先让主界面站稳,再弹(别和更新弹窗、引导收尾抢同一帧)
     const timer = setTimeout(() => setOpen(true), 2500)
     return () => clearTimeout(timer)
-  }, [main, open, s])
+  }, [want])
 
   // 第一次同步的底部进度:跑完(或没在跑)就收
   const prog = s?.notes.progress
