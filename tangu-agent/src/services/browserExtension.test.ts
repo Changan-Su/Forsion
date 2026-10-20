@@ -118,6 +118,8 @@ describe('Tangu for Chrome 扩展桥', () => {
     const closed = new Promise((r) => ws.on('close', r));
     extensionToken(true);
     await closed;
+    // 客户端先收到关闭,服务端的 close 回调稍后才把它移出连接表(全量跑、负载高时会撞上):等服务端也确认断开
+    for (let i = 0; i < 50 && extensionStatus().connected; i++) await new Promise((r) => setTimeout(r, 20));
     expect(extensionStatus()).toMatchObject({ connected: false, lastClient: { version: 'test' } });
     expect(reloadExtensionClients()).toBe(0);
     expect(readdirSync(process.env.TANGU_HOME!)).not.toContainEqual(expect.stringMatching(/\.tmp$/)); // 原子写:不留临时文件
