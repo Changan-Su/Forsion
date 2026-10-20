@@ -3,6 +3,7 @@
  */
 const assert = require('node:assert/strict')
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path')
+const { execFileSync } = require('node:child_process')
 const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 const { skipOnboarding } = require('./lib/skip-onboarding.cjs')
@@ -33,11 +34,20 @@ async function main() {
   const crashAfterFlush = async () => {
     await app.evaluate(({ session }) => session.defaultSession.flushStorageData())
     await win.waitForTimeout(200)
-    // Playwright launches Electron through cmd.exe on Windows. Terminate the actual
-    // owned Electron PID, not that shell; app.exit() can wait on the attached CI debugger.
+    // Playwright's Windows launcher is cmd.exe; renderers/utility processes can retain
+    // its stdio handles after the main PID dies. Kill this owned launch tree, including
+    // the shell and children, rather than waiting on a partially terminated transport.
     const pid = await app.evaluate(() => process.pid)
     const closed = app.waitForEvent('close')
-    process.kill(pid, 'SIGKILL')
+    const launcher = app.process().pid
+    assert.ok(Number.isInteger(launcher) && launcher > 0 && pid > 0)
+    execFileSync('taskkill.exe', ['/PID', String(launcher), '/T', '/F'], { windowsHide: true, timeout: 15000, stdio: 'pipe' })
+    let alive = true
+    for (let i = 0; i < 50; i++) {
+      try { process.kill(pid, 0) } catch { alive = false; break }
+      await new Promise(r => setTimeout(r, 100))
+    }
+    assert.ok(!alive, 'owned Electron main PID must actually exit')
     await closed
     app = null
   }
