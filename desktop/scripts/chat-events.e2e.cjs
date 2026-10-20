@@ -376,7 +376,8 @@ async function main() {
       { type: 'tool_result', payload: { id: 'sk1', result: 'Sketch card rendered in the conversation.' } },
       { type: 'token', payload: { delta: '第一张说明完成，接着看第二张。' } },
       // sk2 带一个原生部件 fs-compare(10-09 二轮:统一拼装部件,模型只给 JSON);F12 在真 Electron 里数它画出来的选项。
-      { type: 'tool_call', payload: { id: 'sk2', name: 'sketch', arguments: JSON.stringify({ html: '<p>SECOND-CARD</p>' +
+      // sk2 用 10-20 改名后的工具名(新引擎发给认 v2 的客户端);其余几张仍叫 sketch(旧会话 / 旧引擎),两种都得画。
+      { type: 'tool_call', payload: { id: 'sk2', name: 'intelligent_ui_html', arguments: JSON.stringify({ html: '<p>SECOND-CARD</p>' +
         '<fs-compare><script type="application/json">{"title":"COMPARE-DEMO","options":[{"label":"Alpha","points":["a1","a2"],"ask":{"text":"ASK-ALPHA"}},{"label":"Beta","summary":"b"}]}</script></fs-compare>' }) } },
       { type: 'tool_result', payload: { id: 'sk2', result: 'Sketch card rendered in the conversation.' } },
       { type: 'token', payload: { delta: '第二张之后是完整数据图。' } },
@@ -418,7 +419,8 @@ async function main() {
       { type: 'token', payload: { delta: '三张草图都画好了。' } },
       // 卡内按钮回头改答案(10-09):点了经 forsionSketch.ask 把这句话当用户消息发出去(F11 在场景末尾点它)。
       { type: 'tool_call', payload: { id: 'sk5', name: 'sketch', arguments: JSON.stringify({
-        html: '<button id="askbtn" class="fs-button" type="button" onclick="window.forsionSketch.ask(\'ASK-FOLLOWUP 请展开第二项\')">展开第二项</button>' +
+        // 展开钮用改名后的 forsionIntelligentUi,复制钮仍用旧名 forsionSketch(改名前的卡):两个名字同一个对象。
+        html: '<button id="askbtn" class="fs-button" type="button" onclick="window.forsionIntelligentUi.ask(\'ASK-FOLLOWUP 请展开第二项\')">展开第二项</button>' +
           '<button id="copybtn" class="fs-button" type="button" onclick="window.forsionSketch.copy(\'COPIED-LIST\')">复制</button>' +
           '<script>try{window.forsionSketch.ask("AUTO-ASK")}catch(e){document.body.setAttribute("data-autoask",e.message)}' +
           // 绕过卡内运行时直接 postMessage(Codex 10-09 指出的口子):宿主侧必须按「焦点 + 瞬时激活」拒掉

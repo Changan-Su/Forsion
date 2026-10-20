@@ -41,7 +41,7 @@ import { DocumentAgentBlock } from '../blocks/documentAgent/DocumentAgentBlock'
 import { parseDocAgentSpec, serializeDocAgentSpec, type DocAgentSpec, type DocumentAgentKind } from '../blocks/documentAgent/format'
 import { readTangu } from '../plugins/tanguSeam'
 import { instructionsOf, pageInstructionContext } from './pageInstructions'
-import { SKETCH_LANG } from '../blocks/sketch/format'
+import { isSketchLang } from '../blocks/sketch/format'
 import { SketchCards } from '../../components/SketchCard'
 import { parseButtonBlock, serializeButtonBlock, type ButtonSpec } from '../blocks/button/format'
 import { usePageStore } from '../store/pageStore'
@@ -117,7 +117,7 @@ export type EmbedKind =
   | { k: 'web'; url: string; w?: number }
   | { k: 'button'; src: string }
   | { k: 'document-agent'; type: DocumentAgentKind; src: string; activeInstructions?: boolean }
-  /** ```forsion-sketch 交互块:HTML 交给对话 sketch 卡同一沙箱(blocks/sketch/format.ts)。 */
+  /** ```forsion-intelligent-ui-html(旧名 forsion-sketch)交互块:HTML 交给对话 sketch 卡同一沙箱(blocks/sketch/format.ts)。 */
   | { k: 'sketch'; src: string }
 
 /** 段落/代码块 → 嵌入类别(不是嵌入 → null)。图片形态刻意返回 null(wikilink 行内层负责)。 */
@@ -126,7 +126,7 @@ export function classifyEmbed(node: ProseNode): EmbedKind | null {
     const type = ({ 'forsion-instructions': 'instructions', 'forsion-task': 'task', 'forsion-prompt': 'prompt' } as Record<string, DocumentAgentKind>)[node.attrs.language]
     if (type && (type === 'instructions' || parseDocAgentSpec(node.textContent))) return { k: 'document-agent', type, src: node.textContent }
     // 空的交互块不认领:源码还露着,才写得进去(和按钮块坏 JSON 回落同理)。
-    if (node.attrs.language === SKETCH_LANG) return node.textContent.trim() ? { k: 'sketch', src: node.textContent } : null
+    if (isSketchLang(node.attrs.language)) return node.textContent.trim() ? { k: 'sketch', src: node.textContent } : null
     if (node.attrs.language !== 'forsion-button') return null
     // JSON 写坏了 = 不归按钮(R-13):回落成普通代码块,源码原样露出、照常可改(button/format.ts 的契约)。
     // 此前照样认领,渲染期解析失败只给一个空 <span/> —— 整块高 0、源码被藏、`</>` 浮不出来,只剩撤销能救。

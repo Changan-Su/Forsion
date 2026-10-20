@@ -86,8 +86,11 @@ const GROUP_SPEAKER_RE = /^\*\*🗣\s*([^*\n]+?)\s*\*\*\n+([\s\S]*)$/
 /** sketch 工具事件 → 卡片载荷。只认**有结果**且非错的调用:引擎尺寸闸拒掉的不画;
  *  result 闸兼防重载分歧——recordToUi 对历史事件一律 done:true,run 中止在 tool_result 前的调用
  *  只有它能挡住(直播路径没画过的卡,重载也不该补画)。参数残缺=当没有。 */
+/** HTML 卡的工具名:10-20 改名为 intelligent_ui_html;旧会话、比本机旧的引擎(远程执行节点)发来的还叫 sketch。 */
+export const isHtmlCardTool = (name: string): boolean => name === 'intelligent_ui_html' || name === 'sketch'
+
 export function sketchFromToolEvent(ev: ToolEvent): SketchItem | undefined {
-  if (ev.name !== 'sketch' || !ev.done || ev.isError || ev.result === undefined || !ev.arguments) return undefined
+  if (!isHtmlCardTool(ev.name) || !ev.done || ev.isError || ev.result === undefined || !ev.arguments) return undefined
   try {
     const a = JSON.parse(ev.arguments)
     const html = typeof a.html === 'string' ? a.html.trim() : ''
