@@ -12,7 +12,7 @@ vi.mock('../amadeus/plugins/pluginStore', () => ({
 
 type Cfg = { backend: string; penzor?: { vault?: string }; intervalMin?: number; syncOnStart?: boolean; direction?: string }
 let cfg: Cfg
-let plan: Array<{ key: string; kind: string }>
+let plan: Array<{ key: string; kind: string; same?: true }>
 let cloudVaults: Array<{ vault: string; files: number; bytes: number; device: string }>
 const rs = {
   get: vi.fn(async () => ({ config: cfg, running: false, lastReport: null, progress: null, root: '/v/我的笔记', rootError: null, backends: ['penzor'] })),
@@ -66,6 +66,25 @@ describe('notes vault switch', () => {
     expect(s.getSync()?.notes.pending).toEqual({ cloudFiles: 4812, cloudBytes: 1_060_000_000, cloudDevice: 'MacBook Pro', localOnly: 1, conflicts: 1 })
   })
 
+  it('new computer: same-name files count as different unless the content hash matched', async () => {
+    cloudVaults = [{ vault: 'default', files: 3, bytes: 1, device: 'iMac' }]
+    plan = [{ key: '欢迎.md', kind: 'join', same: true }, { key: 'a.md', kind: 'join' }]
+    const s = await fresh()
+    await s.refreshSync()
+    await s.setSync('notes', true)
+    expect(cfg.backend).toBe('off')
+    expect(s.getSync()?.notes.pending).toMatchObject({ localOnly: 0, conflicts: 1 })
+  })
+
+  it('new computer whose only shared files are identical: just turns on', async () => {
+    cloudVaults = [{ vault: 'default', files: 3, bytes: 1, device: 'iMac' }]
+    plan = [{ key: '欢迎.md', kind: 'join', same: true }, { key: 'c.md', kind: 'pull' }]
+    const s = await fresh()
+    await s.refreshSync()
+    await s.setSync('notes', true)
+    expect(cfg.backend).toBe('penzor')
+  })
+
   it('second computer with nothing different: just turns on', async () => {
     cloudVaults = [{ vault: 'default', files: 10, bytes: 1, device: 'iMac' }]
     plan = [{ key: 'c.md', kind: 'pull' }]
@@ -111,6 +130,15 @@ describe('notes vault switch', () => {
     expect(s.getSync()?.notes.pending).toBeNull()
   })
 
+  it('cloud list unreachable: stays off instead of guessing it is the first computer', async () => {
+    ;(window as any).tangu.cloudFetch = async () => ({ status: 503 })
+    const s = await fresh()
+    await s.refreshSync()
+    expect((await s.setSync('notes', true)).ok).toBe(false)
+    expect(cfg.backend).toBe('off')
+    expect(rs.run).not.toHaveBeenCalled()
+  })
+
   it('without Forsion Extend the vault cannot be turned on', async () => {
     rs.get.mockResolvedValueOnce({ config: cfg, running: false, lastReport: null, progress: null, root: '/v', rootError: null, backends: [] } as never)
     const s = await fresh()
@@ -140,13 +168,35 @@ describe('agents and plugins', () => {
 })
 
 describe('first sign-in card', () => {
-  it('choices are applied and remembered per account', async () => {
+  it('choices are applied and remembered per account; an unchecked row is turned off', async () => {
     const s = await fresh()
     await s.applySyncChoices({ notes: true, agents: false, plugins: true })
     expect(cfg.backend).toBe('penzor')
-    expect(request).not.toHaveBeenCalledWith(expect.anything(), '/agent/sync/default', expect.objectContaining({ method: 'PUT' }))
+    expect(request).toHaveBeenCalledWith({ key: 'home' }, '/agent/sync/default', { method: 'PUT', body: JSON.stringify({ enabled: false }) })
     expect(localStorage.getItem('forsion.sync.decided.https://c::u1')).toBe('1')
     expect(s.getSync()?.decided).toBe(true)
+  })
+
+  it('unchecking notes turns Penzor sync off but leaves a self-configured backend alone', async () => {
+    cfg = { backend: 'penzor', penzor: { vault: 'default' }, intervalMin: 5 }
+    let s = await fresh()
+    await s.applySyncChoices({ notes: false, agents: true, plugins: true })
+    expect(cfg.backend).toBe('off')
+    cfg = { backend: 'webdav', intervalMin: 5 }
+    s = await fresh()
+    await s.applySyncChoices({ notes: false, agents: true, plugins: true })
+    expect(cfg.backend).toBe('webdav')
+  })
+
+  it('stops when the account changes partway and does not mark the new account decided', async () => {
+    const s = await fresh()
+    await s.refreshSync()
+    let n = 0
+    ;(window as any).tangu.authStatus = async () => (n++ ? { loggedIn: true, accountId: 'https://c::u2' } : { loggedIn: true, accountId: 'https://c::u1' })
+    const out = await s.applySyncChoices({ notes: true, agents: true, plugins: true })
+    expect(out.at(-1)).toEqual({ ok: false, error: 'account-changed' })
+    expect(cfg.backend).toBe('off')
+    expect(localStorage.getItem('forsion.sync.decided.https://c::u2')).toBeNull()
   })
 
   it('shows only for a signed-in, undecided account after onboarding, unless everything is already on', async () => {

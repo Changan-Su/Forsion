@@ -17,7 +17,7 @@ import { registerMessages } from '../i18n'
 
 registerMessages({
   // 第二台电脑「用云端那份」时,这台不一样的文件挪去的库外文件夹:「<库名> 同步前备份 <日期>」
-  'sync.backupFolder': { zh: '同步前备份', en: 'Before sync backup' },
+  'sync.backupFolder': { zh: '同步前备份', en: 'backup before sync' },
 })
 
 export type SyncKind = 'notes' | 'agents' | 'plugins'
@@ -154,8 +154,10 @@ function setPending(p: NotesPending | null): void {
 }
 
 /** 云端设备同步里这个库的情况(Extend 主进程盖令牌;没有 cloudFetch = 没装 Extend,当云端没有)。 */
+/** 云端这个库的概况;没有 / 空库 → null;查不到(断网、5xx)→ 抛错:不知道云端有没有,就不能当第一台电脑直接开。 */
 async function cloudVault(vault: string): Promise<{ files: number; bytes: number; device: string | null } | null> {
   const r = await window.tangu?.cloudFetch?.({ path: '/remotesync/vaults' }).catch(() => null)
+  if (!r || r.status !== 200) throw new Error('cloud-unreachable')
   const v = (r?.json?.vaults as Array<{ vault: string; files?: number; bytes?: number; device?: string | null }> | undefined)?.find((x) => x.vault === vault)
   return v && (v.files ?? 0) > 0 ? { files: v.files ?? 0, bytes: v.bytes ?? 0, device: v.device ?? null } : null
 }
@@ -170,17 +172,23 @@ async function notesOn(): Promise<SyncResult> {
   const vault = cur.penzor?.vault || DEFAULT_VAULT
   // 先只配后端不排定时(intervalMin 0、不开机同步),演算一遍:云端有这个库、这台又有和它不一样的文件 → 先关回去、等用户定
   await rs.set({ backend: 'penzor', penzor: { vault }, intervalMin: 0, syncOnStart: false, direction: 'both' })
-  const cloud = await cloudVault(vault)
-  if (cloud) {
-    const dry = await rs.run({ dryRun: true })
-    const localOnly = dry.plan?.filter((i) => i.kind === 'push').length ?? 0
-    const conflicts = dry.plan?.filter((i) => i.kind === 'conflict').length ?? 0
-    if (!dry.ok) { await rs.set({ backend: 'off' }); return { ok: false, error: dry.errors[0] } }
-    if (localOnly + conflicts > 0) {
-      await rs.set({ backend: 'off' })
-      setPending({ cloudFiles: cloud.files, cloudBytes: cloud.bytes, cloudDevice: cloud.device, localOnly, conflicts })
-      return { ok: true }
+  try {
+    const cloud = await cloudVault(vault)
+    if (cloud) {
+      const dry = await rs.run({ dryRun: true })
+      const localOnly = dry.plan?.filter((i) => i.kind === 'push').length ?? 0
+      // 两边都有:conflict,或新电脑上的 join(内容一样的 same 不算;后端没给 hash 判不出 → 当不一样,宁可多问一次)
+      const conflicts = dry.plan?.filter((i) => i.kind === 'conflict' || (i.kind === 'join' && !i.same)).length ?? 0
+      if (!dry.ok) { await rs.set({ backend: 'off' }); return { ok: false, error: dry.errors[0] } }
+      if (localOnly + conflicts > 0) {
+        await rs.set({ backend: 'off' })
+        setPending({ cloudFiles: cloud.files, cloudBytes: cloud.bytes, cloudDevice: cloud.device, localOnly, conflicts })
+        return { ok: true }
+      }
     }
+  } catch (e) {
+    await rs.set({ backend: 'off' })
+    return { ok: false, error: e instanceof Error ? e.message : String(e) }
   }
   await rs.set(NOTES_ON)
   void rs.run().catch(() => {})
@@ -225,15 +233,18 @@ export async function setSync(kind: SyncKind, on: boolean): Promise<SyncResult> 
   finally { await refreshSync() }
 }
 
-/** 首登卡片 / 引导那一步:按勾选的开,没勾的不动;不管成没成都记「点过了」。 */
+/** 首登卡片 / 引导那一步:勾着的开、没勾的关(智库只关蓬洲云这一种,自己配的 WebDAV 等不动);不管成没成都记「点过了」。
+ *  中途换了账号就停:剩下的步骤会落到另一个账号上。 */
 export async function applySyncChoices(choices: Record<SyncKind, boolean>): Promise<SyncResult[]> {
   if (!snap) await refreshSync() // 引导收尾时可能还没读过:不读就不知道是哪个账号,「点过了」记不上
+  const who = account
   const out: SyncResult[] = []
   for (const kind of ['agents', 'plugins', 'notes'] as const) {
-    if (choices[kind]) out.push(await setSync(kind, true))
-    else if (kind === 'plugins') out.push(await setSync('plugins', false))
+    if (account !== who) { out.push({ ok: false, error: 'account-changed' }); return out }
+    if (kind === 'notes' && !choices.notes && snap?.notes.backend !== 'penzor') continue
+    out.push(await setSync(kind, choices[kind]))
   }
-  markSyncDecided()
+  if (account === who) markSyncDecided()
   return out
 }
 

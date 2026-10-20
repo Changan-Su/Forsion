@@ -920,7 +920,7 @@ export interface RemoteSyncReport {
   pendingDeletions: number
   errors: string[]
   /** dryRun 时返回完整计划(不执行任何写)。 */
-  plan?: Array<{ key: string; kind: 'push' | 'pull' | 'pushDelete' | 'deleteLocal' | 'join' | 'conflict' }>
+  plan?: Array<{ key: string; kind: 'push' | 'pull' | 'pushDelete' | 'deleteLocal' | 'join' | 'conflict'; same?: true }>
 }
 
 export interface RemoteSyncState {

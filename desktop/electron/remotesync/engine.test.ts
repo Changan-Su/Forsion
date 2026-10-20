@@ -8,7 +8,7 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { runSync, shouldTripMassDelete, conflictCopyName } from './engine'
+import { runSync, shouldTripMassDelete, conflictCopyName, moveAsideFromSync } from './engine'
 import { createDirRemote } from './fsLocal'
 import type { RemoteFs } from './types'
 
@@ -284,6 +284,49 @@ describe('remotesync engine 双设备', () => {
     const copy = (await list(rootB)).find((f) => f.includes('(conflict '))
     expect(copy).toBeTruthy()
     expect(await read(rootB, copy!)).toBe('B')
+  })
+})
+
+describe('演算标出一样的 join', () => {
+  it('后端给了内容 hash:两边一样的 join 带 same,不一样的不带;不给 hash 一律不带', async () => {
+    await write(rootA, 'same.md', '一样')
+    await write(rootA, 'diff.md', '云端版')
+    await syncA()
+    await write(rootB, 'same.md', '一样')
+    await write(rootB, 'diff.md', '这台版')
+    const { createHash } = await import('node:crypto')
+    const hashed: RemoteFs = {
+      ...remote,
+      walk: async (signal) => Promise.all((await remote.walk(signal)).map(async (e) => ({ ...e, hash: createHash('sha256').update(await remote.readFile(e.key)).digest('hex') }))),
+    }
+    const withHash = await runSync({ localRoot: rootB, remote: hashed, statePath: stateB(), fingerprint: FP, dryRun: true })
+    expect(withHash.plan?.sort((a, b) => a.key.localeCompare(b.key))).toEqual([{ key: 'diff.md', kind: 'join' }, { key: 'same.md', kind: 'join', same: true }])
+    const plain = await syncB({ dryRun: true })
+    expect(plain.plan?.every((i) => !i.same)).toBe(true)
+  })
+})
+
+describe('用云端那份:挪走并清基线', () => {
+  it('有基线、本地改过的文件挪走后,下一轮拉回云端版,不会把云端删掉', async () => {
+    await write(rootA, 'a.md', '云端版')
+    await syncA()
+    await syncB()
+    await write(rootB, 'a.md', '这台改的') // 本地改、云端没动 → push
+    const dry = await syncB({ dryRun: true })
+    expect(dry.plan).toEqual([{ key: 'a.md', kind: 'push' }])
+    const backupDir = path.join(base, 'B 同步前备份')
+    const r = await moveAsideFromSync({ localRoot: rootB, keys: ['a.md'], backupDir, statePath: stateB(), fingerprint: FP })
+    expect(r).toEqual({ moved: 1, error: undefined })
+    const after = await syncB()
+    expect(after.deletedRemote).toBe(0)
+    expect(await read(rootB, 'a.md')).toBe('云端版')
+    expect(await read(backupDir, 'a.md')).toBe('这台改的')
+    expect(await read(remoteDir, 'a.md')).toBe('云端版')
+  })
+
+  it('越出同步根的 key 不挪', async () => {
+    const r = await moveAsideFromSync({ localRoot: rootB, keys: ['../x.md'], backupDir: path.join(base, 'bk'), statePath: stateB(), fingerprint: FP })
+    expect(r).toEqual({ moved: 0, error: 'unsafe-key' })
   })
 })
 

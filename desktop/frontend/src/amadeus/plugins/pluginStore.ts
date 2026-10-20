@@ -58,7 +58,7 @@ import { loadSyncedPluginData, notePluginDataEdit, pluginDataSyncOn, pushPluginD
 import { createCalendarApi } from './pluginCalendar'
 import { createSpacesApi } from './pluginSpaces'
 import { clearSpaceProgressOf, setSpaceDot, setSpaceProgress } from '../../stores/spaceProgress'
-import { getSync, refreshSync, resolveNotes, runSyncNow, setSync, startSyncSetup, subscribeSync } from '../../services/syncSetup'
+import { getSync, markSyncDecided, refreshSync, resolveNotes, runSyncNow, setSync, startSyncSetup, subscribeSync } from '../../services/syncSetup'
 import { closeSpotlight, showSpotlight } from './guideSpotlight'
 import { watchAccountName } from '../../services/accountName'
 import { fetchBingWallpapers } from '../../views/homepageWallpaper'
@@ -342,15 +342,18 @@ let resetCardCeremonyHandler: ((r: ResetCardCeremonyArg) => void) | null = null
 export function setResetCardCeremonyHandler(fn: ((r: ResetCardCeremonyArg) => void) | null): void { resetCardCeremonyHandler = fn }
 
 function syncSeam(pluginId: string, ok: () => boolean): NonNullable<PluginAppApi['sync']> {
-  const firstParty = (): boolean => !!usePluginStore.getState().plugins.find((p) => p.id === pluginId)?.locked
+  // 能开同步、挪文件:只给随包的 Forsion Extend(蓬洲云「同步」页),别的首方包也不给
+  const firstParty = (): boolean => pluginId === 'forsion-extend' && !!usePluginStore.getState().plugins.find((p) => p.id === pluginId)?.locked
   const deny = { ok: false, error: 'first-party only' }
   return {
     get: () => { if (!firstParty()) return null; startSyncSetup(); return getSync() },
-    subscribe: (cb) => { startSyncSetup(); return subscribeSync(cb) },
-    refresh: () => refreshSync(),
-    set: async (kind, on) => (ok() && firstParty() && (kind === 'notes' || kind === 'agents' || kind === 'plugins') ? setSync(kind, !!on) : deny),
+    subscribe: (cb) => { if (!firstParty()) return () => {}; startSyncSetup(); return subscribeSync(cb) },
+    refresh: async () => { if (firstParty()) await refreshSync() },
+    // 在同步页里动过开关 / 回答过合并问题 = 点过头了,首登卡片不再弹
+    set: async (kind, on) => (ok() && firstParty() && (kind === 'notes' || kind === 'agents' || kind === 'plugins')
+      ? setSync(kind, !!on).finally(markSyncDecided) : deny),
     resolveNotes: async (choice) => (ok() && firstParty() && (choice === 'merge' || choice === 'cloud' || choice === 'skip')
-      ? resolveNotes(choice, translate('sync.backupFolder')) : deny),
+      ? resolveNotes(choice, translate('sync.backupFolder')).finally(markSyncDecided) : deny),
     runNow: async () => { if (ok() && firstParty()) await runSyncNow() },
   }
 }

@@ -225,7 +225,7 @@ export async function runSync(opts: SyncOptions): Promise<SyncReport> {
       forgets.push(key)
       continue
     }
-    plan.push({ key, kind: d })
+    plan.push(d === 'join' && remote?.hash && local?.h === remote.hash ? { key, kind: d, same: true } : { key, kind: d })
   }
 
   // ── 方向过滤(remotely-save 式「同步方式」;单向 = 增量,绝不传播删除)──
@@ -349,4 +349,34 @@ export async function runSync(opts: SyncOptions): Promise<SyncReport> {
   report.ok = report.errors.length === 0
   report.finishedAt = Date.now()
   return report
+}
+
+const insideDir = (root: string, p: string): boolean => { const rel = path.relative(root, p); return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel) }
+
+/**
+ * 「用云端那份」的落地(云同步开启方案 2026-10-20):把这些 key 从同步根挪进 backupDir(同盘 rename,只挪不删),
+ * 并把挪走的 key 从基线里删掉 —— 基线还在、本地没了,下一轮会判成 pushDelete,把用户要的云端那份删掉。
+ * 挪一个算一个,出错就停;已挪的照样清基线。基线清不掉也算失败(调用方据此不开同步)。
+ */
+export async function moveAsideFromSync(opts: { localRoot: string; keys: string[]; backupDir: string; statePath: string; fingerprint: string }): Promise<{ moved: number; error?: string }> {
+  const moved: string[] = []
+  let error: string | undefined
+  try {
+    for (const key of opts.keys) {
+      const from = path.join(opts.localRoot, key)
+      const to = path.join(opts.backupDir, key)
+      if (!insideDir(opts.localRoot, from) || !insideDir(opts.backupDir, to)) throw new Error('unsafe-key')
+      await fs.mkdir(path.dirname(to), { recursive: true })
+      await fs.rename(from, to)
+      moved.push(key)
+    }
+  } catch (e) { error = String((e as Error)?.message || e) }
+  if (moved.length) {
+    try {
+      const prev = await loadPrev(opts.statePath, opts.fingerprint)
+      for (const k of moved) delete prev.entries[k]
+      await savePrev(opts.statePath, prev)
+    } catch (e) { error = `baseline: ${String((e as Error)?.message || e)}` }
+  }
+  return { moved: moved.length, error }
 }
