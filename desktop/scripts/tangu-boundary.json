@@ -78,7 +78,6 @@
       "desktop/frontend/src/views/chat2/FilesPanel.tsx",
       "desktop/frontend/src/views/chat2/RunStatsLine.tsx",
       "desktop/frontend/src/views/chat2/SidebarPane.tsx",
-      "desktop/frontend/src/views/chat2/appRefCommand.ts",
       "desktop/frontend/src/views/chat2/approvalQueue.ts",
       "desktop/frontend/src/views/chat2/btwStore.ts",
       "desktop/frontend/src/views/chat2/chatPanelQuote.ts",
