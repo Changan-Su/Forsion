@@ -8,7 +8,7 @@ import { getDeviceId } from '../core/deviceId.js';
 import { getAgent, listAgents, parseAgentConfig, resolveMemorySlug, type NormalAgentDef } from '../agents/agentRegistry.js';
 import { splitLogBlocks, mergeBlocks, mergeLogHeaders } from './memorySync.js';
 import { AgentFileConflictError, type AgentFilesBrain, type AgentFileMeta } from '../seams/cloudBrain.js';
-import { agentSyncPermission, agentSyncScope, setAgentSyncPermission, captureAgentSyncPermission, agentSyncOperationSignal, agentSyncConsentSignal } from './cloudSyncAccount.js';
+import { agentSyncDefault, agentSyncPermission, agentSyncScope, setAgentSyncPermission, captureAgentSyncPermission, agentSyncOperationSignal, agentSyncConsentSignal } from './cloudSyncAccount.js';
 import { agentSyncDir, assertSyncPath, atomicSyncWrite, readSyncBytes, validSyncPath, validSyncSlug } from './agentSyncPaths.js';
 import { createLocalMemoryStore } from '../adapters/standalone/localMemoryBrain.js';
 import { createMemoryRepository, withMemoryDirectoryLock, type MemoryTombstone } from './memoryRepository.js';
@@ -153,7 +153,8 @@ async function syncAccount(cloud: AgentFilesBrain, userId: string, scope: string
       if (!config || config.deleted || config.isBinary || !config.content) continue;
       verifyBytes(config, Buffer.from(config.content));
       const def = parseAgentConfig(slug, config.content, '');
-      if (!def.cloudSync) continue;
+      // 账号总闸开着(登录后缺省开)也算:另一台开总闸时上传的 config.toml 里多半没有 cloud_sync
+      if (!def.cloudSync && agentSyncDefault(scope) !== true) continue;
       // Cloud discovery authorizes only a new directory, never a pre-existing agent/account.
       assertSyncPath(agentsDir(), dir); mkdirSync(agentsDir(), { recursive: true });
       if (!owned) {

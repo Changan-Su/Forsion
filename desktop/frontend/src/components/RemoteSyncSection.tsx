@@ -13,17 +13,18 @@ import type { RemoteSyncConfig, RemoteSyncProgress, RemoteSyncReport, RemoteSync
 
 registerMessages({
   'settings.remotesync.penzorView': { zh: '在蓬洲云中查看 {name}', en: 'View {name} in Penzor Cloud' },
+  'settings.remotesync.movedHint': { zh: '同步的开关在蓬洲云 › 同步。这一页是高级设置：换成 Dropbox / S3 / WebDAV、改同步计划和方向。', en: 'Sync is turned on and off in Penzor Cloud › Sync. This page has advanced settings: switch to Dropbox / S3 / WebDAV, or change the schedule and direction.' },
+  'settings.remotesync.openPenzorSync': { zh: '打开蓬洲云 › 同步', en: 'Open Penzor Cloud › Sync' },
   'settings.remotesync.maxFilePenzor': { zh: '蓬洲云单个文件最多 {mb} MB，超过的不上传；实际按 {mb} MB 算', en: 'Penzor Cloud takes files up to {mb} MB; larger ones are skipped, so {mb} MB applies' },
 })
 
 /** 蓬洲云 Space(Forsion Extend 0.10)与这里的约定:Extend 在主窗口注册好 Space 后写 READY;这里写 FOCUS(要看哪个库),
  *  主窗口的 Extend 收到 storage 事件就切过去停在那个库。两个键与 Extend src/renderer/penzor/state.ts 同步改。 */
-const PENZOR_SPACE_ID = 'forsion-penzor'
-const PENZOR_READY = 'forsion-extend.penzor.ready'
-const PENZOR_FOCUS = 'forsion-extend.penzor.focus'
+import { PENZOR_FOCUS, PENZOR_SPACE_ID, openPenzorSync, penzorSyncReady } from '../services/syncSetup'
 /** 蓬洲云服务端的单文件上限(Extend penzor.ts PENZOR_MAX_FILE;同步时用户设得更大也会被夹到它)。 */
 const PENZOR_MAX_FILE_MB = 50
-const penzorSpaceReady = (): boolean => { try { return localStorage.getItem(PENZOR_READY) === '1' } catch { return false } }
+const penzorSpaceReady = penzorSyncReady
+export { openPenzorSync, penzorSyncReady }
 function viewInPenzor(vault: string): void {
   try { localStorage.setItem(PENZOR_FOCUS, JSON.stringify({ vault, at: Date.now() })) } catch { /* 存不了:只切 Space,不选库 */ }
   window.tangu?.requestMainAction?.('open-space', PENZOR_SPACE_ID)
@@ -180,6 +181,13 @@ export function RemoteSyncSection(): React.ReactElement | null {
   const penzorListed = backends.includes('penzor') || cfg.backend === 'penzor'
   return (
     <>
+      {/* 开关搬去蓬洲云「同步」页了(云同步开启方案 2026-10-20);这一页留给换存储、改计划和方向 */}
+      {penzorSpaceReady() && (
+        <div className="field remotesync-moved">
+          <div className="hint">{t('settings.remotesync.movedHint')}</div>
+          <button type="button" className="btn sm" onClick={openPenzorSync}>{t('settings.remotesync.openPenzorSync')}</button>
+        </div>
+      )}
       {/* ── 远程服务(remotely-save: Choose remote service + Check Connectivity)── */}
       <div className="field">
         <label>{t('settings.remotesync.service')}</label>

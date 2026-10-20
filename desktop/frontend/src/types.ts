@@ -866,6 +866,10 @@ declare global {
       set(patch: Partial<RemoteSyncConfig>): Promise<RemoteSyncConfig>
       run(opts?: { dryRun?: boolean; allowMassDelete?: boolean }): Promise<RemoteSyncReport>
       check(): Promise<{ ok: boolean; error?: string }>
+      /** 本机笔记库多大(只估量级)。旧主进程没有。 */
+      rootStats?(): Promise<{ files: number; bytes: number; name: string } | { error: string }>
+      /** 第二台电脑「用云端那份」:把和云端不一样的文件挪到库外备份(label = 按界面语言的「同步前备份」)。旧主进程没有。 */
+      adoptRemote?(label: string): Promise<{ ok: boolean; moved: number; backupDir?: string; error?: string }>
       /** mode:auto = 回环回调自动回填(结果走 onDropboxAuth);manual = 端口起不来,要用户手贴授权码。 */
       dropboxAuthStart(appKey: string): Promise<{ ok: boolean; error?: string; mode?: 'auto' | 'manual'; redirectUri?: string }>
       dropboxAuthFinish(appKey: string, code: string): Promise<{ ok: boolean; error?: string; email?: string; config?: RemoteSyncConfig }>
@@ -916,7 +920,7 @@ export interface RemoteSyncReport {
   pendingDeletions: number
   errors: string[]
   /** dryRun 时返回完整计划(不执行任何写)。 */
-  plan?: Array<{ key: string; kind: 'push' | 'pull' | 'pushDelete' | 'deleteLocal' | 'join' | 'conflict' }>
+  plan?: Array<{ key: string; kind: 'push' | 'pull' | 'pushDelete' | 'deleteLocal' | 'join' | 'conflict'; same?: true }>
 }
 
 export interface RemoteSyncState {

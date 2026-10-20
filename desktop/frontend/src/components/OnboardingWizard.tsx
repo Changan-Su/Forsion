@@ -33,6 +33,7 @@ import { EnvProbeSection } from './EnvProbeSection'
 import './onboardingMessages'
 import './onboarding.css'
 import { connectionTarget } from '../services/engine/targets'
+import { applySyncChoices, type SyncKind } from '../services/syncSetup'
 import { setActiveSpace, useSpaceStore } from '@lcl/engine'
 
 /** 使用指南 Space(Forsion Extend 0.9 起随包):引导最后一步给一个入口。 */
@@ -132,7 +133,10 @@ export const OnboardingWizard: React.FC<{
   const [cloudUrl, setCloudUrl] = useState('')
   const [loggingIn, setLoggingIn] = useState(false)
   const [loggedIn, setLoggedIn] = useState(false)
-  const [syncEnabled, setSyncEnabled] = useState(false) // 登录后:是否开启云同步(记忆 + 云端 agents 双向同步)
+  // 登录后「同步到蓬洲云」三个勾(云同步开启方案 2026-10-20):默认都勾上,走完引导时按勾的开;这一步就算点过头,之后不再弹首登卡片
+  const [syncPick, setSyncPick] = useState<Record<SyncKind, boolean>>({ notes: true, agents: true, plugins: true })
+  // 真看到过那三个勾才算点过头:「跳过引导」在哪一步都能按,没看到就别替用户按默认全开(留给之后的首登卡片问)
+  const syncSeen = useRef(false)
   const [device, setDevice] = useState<{ url: string; userCode: string } | null>(null)
   const [connectMsg, setConnectMsg] = useState('')
   // byok 表单
@@ -256,7 +260,6 @@ export const OnboardingWizard: React.FC<{
     void window.tangu?.getConfig?.().then((c) => {
       setWorkspaceDir((draft) => draft ?? c.defaultWorkspaceDir ?? '')
       setMirror(c.mirror === 'china' ? 'china' : 'default')
-      setSyncEnabled(!!c.forsionSyncEnabled)
     }).catch(() => {})
     void window.tangu?.listProviders?.().then((items) => setByokSaved(items.length > 0)).catch(() => {})
     return () => { modelRequest.current++ }
@@ -299,6 +302,8 @@ export const OnboardingWizard: React.FC<{
       localStorage.setItem(ONBOARDING_DISMISS_KEY, '1')
       localStorage.setItem(ONBOARDING_VERSION_KEY, appVer || APP_VERSION)
     } catch { /* Storage may be unavailable in private sessions. */ }
+    // 登录了才有那三个勾;后台去开,不挡引导收尾(第二台电脑要用户定的,蓬洲云「同步」页会挂着等)
+    if (loggedIn && syncSeen.current && window.remoteSync) void applySyncChoices(syncPick)
     onFinish()
   }
   const go = (next: Step, tab?: PermissionTab): void => {
@@ -467,14 +472,14 @@ export const OnboardingWizard: React.FC<{
                   {loggedIn && (
                     <>
                       <div className="hint" style={{ marginTop: 6 }}>{t('onboarding.connect.loggedIn')}</div>
-                      <label className="inline-check" style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 10 }}>
-                        <input
-                          type="checkbox"
-                          checked={syncEnabled}
-                          onChange={(e) => { setSyncEnabled(e.target.checked); void window.tangu?.setConfig?.({ forsionSyncEnabled: e.target.checked }) }}
-                        />
-                        {t('onboarding.connect.cloudSync')}
-                      </label>
+                      <div className="ob-sync-title" ref={() => { syncSeen.current = true }}>{t('onboarding.connect.syncTitle')}</div>
+                      {([['notes', t('onboarding.connect.sync.notes')], ['agents', t('onboarding.connect.sync.agents')], ['plugins', t('onboarding.connect.sync.plugins')]] as const)
+                        .filter(([k]) => k !== 'notes' || !!window.remoteSync).map(([k, label]) => (
+                        <label key={k} className="inline-check ob-sync-row">
+                          <input type="checkbox" checked={syncPick[k]} onChange={(e) => setSyncPick({ ...syncPick, [k]: e.target.checked })} />
+                          {label}
+                        </label>
+                      ))}
                       <div className="hint" style={{ marginTop: 4 }}>{t('onboarding.connect.cloudSyncHint')}</div>
                     </>
                   )}

@@ -13,6 +13,8 @@ export interface RemoteEntity {
   mtimeMs: number
   /** 变更身份:etag 优先,否则 `${mtimeMs}:${size}`。同 key 身份变 = 内容可能变了。 */
   id: string
+  /** 内容 sha256(hex),后端知道才给(蓬洲云的清单带)。演算时用来认出「两边都有、其实一样」的 join。 */
+  hash?: string
 }
 
 export interface RemoteFs {
@@ -54,6 +56,8 @@ export type PlanKind = 'push' | 'pull' | 'pushDelete' | 'deleteLocal' | 'join' |
 export interface PlanItem {
   key: string
   kind: PlanKind
+  /** join 且两边内容 hash 相同(后端给了 hash 才判得出):合流时只收敛基线,不出冲突副本。 */
+  same?: true
 }
 
 export interface SyncReport {
