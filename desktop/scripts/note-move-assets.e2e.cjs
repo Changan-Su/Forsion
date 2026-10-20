@@ -155,7 +155,22 @@ async function main() {
       const channel = phase === 'write' ? 'file:write-text' : 'file:read-text'
       const original = ipcMain._invokeHandlers.get(channel)
       if (!original) throw new Error(`Missing real handler: ${channel}`)
-      const state = globalThis.__noteMoveHandoff = { arm: false, waiting: false, release: null }
+      const state = globalThis.__noteMoveHandoff = { arm: false, waiting: false, release: null, moving: false, releaseMove: null }
+      // A fast CI runner can finish the move before keyboard.type dispatches.
+      // Hold the real move's acknowledgement so input is deterministically
+      // present in the source editor before its destination I/O starts.
+      const move = ipcMain._invokeHandlers.get('page:move')
+      ipcMain._invokeHandlers.set('page:move', async (...args) => {
+        const result = await move(...args)
+        if (state.arm && String(args[1]).replaceAll('\\', '/') === '目标夹/带图.md') {
+          state.moving = true
+          await new Promise((resolve, reject) => {
+            const timer = setTimeout(() => reject(new Error('Move acknowledgement was not released')), 20000)
+            state.releaseMove = () => { clearTimeout(timer); state.moving = false; resolve() }
+          })
+        }
+        return result
+      })
       ipcMain._invokeHandlers.set(channel, async (...args) => {
         const stop = state.arm && args[1] === '来源夹/带图.md'
         if (stop) state.arm = false
@@ -219,8 +234,14 @@ async function main() {
       await win.waitForTimeout(300)
       const t0 = Date.now()
       const d = await win.evaluate(DRAG_TO, { type: 'drop', rowText: folder })
+      if (HANDOVER && folder === '来源夹') {
+        const end = Date.now() + 15000
+        while (!(await app.evaluate(() => globalThis.__noteMoveHandoff.moving)) && Date.now() < end) await win.waitForTimeout(25)
+        if (!(await app.evaluate(() => globalThis.__noteMoveHandoff.moving))) throw new Error('Did not reach real move acknowledgement')
+      }
       await win.keyboard.type(typed)
       if (HANDOVER && folder === '来源夹') {
+        await app.evaluate(() => globalThis.__noteMoveHandoff.releaseMove())
         const end = Date.now() + 15000
         while (!(await app.evaluate(() => globalThis.__noteMoveHandoff.waiting)) && Date.now() < end) await win.waitForTimeout(25)
         const waiting = await app.evaluate(() => globalThis.__noteMoveHandoff.waiting)

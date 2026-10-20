@@ -34,7 +34,8 @@ async function main() {
     assert.equal((await prepare(true)).version, bundled.version)
     assert.ok(!fs.existsSync(path.join(copy.dir, 'probe-marker')) && !fs.existsSync(`${copy.dir}.old`) && !fs.existsSync(`${copy.dir}.tmp`))
     console.log('PASS explicit refresh replaces the copy and removes staging folders')
-    console.log('4/4 passed')
+    if (process.env.CLIP_BROWSER === '1') await require('./windows-clip-browser.check.cjs').verifyUnpacked(copy.dir, home)
+    console.log(process.env.CLIP_BROWSER === '1' ? '7/7 passed' : '4/4 passed')
   } finally { if (app) await app.close().catch(() => {}); await stub.close() }
 }
 main().catch(e => { console.error(e); process.exitCode = 1 })

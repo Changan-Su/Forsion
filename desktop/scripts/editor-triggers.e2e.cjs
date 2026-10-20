@@ -9,7 +9,7 @@ const fs = require('fs')
 const os = require('os')
 const path = require('path')
 const { chromium } = require('playwright-core')
-const key = require('./lib/platform-keys.cjs')
+const platformKey = require('./lib/platform-keys.cjs')
 
 function findChromium() {
   if (process.env.CHROMIUM_EXE) return process.env.CHROMIUM_EXE
@@ -86,13 +86,13 @@ async function main() {
   // T2: 标题重设级别(设级非叠加)
   await page.keyboard.type('Hello', { delay: 30 })
   await page.waitForTimeout(500)
-  await page.keyboard.press(key('Meta+ArrowLeft'))
+  await page.keyboard.press(platformKey('Meta+ArrowLeft'))
   await page.keyboard.type('# ', { delay: 60 })
   await page.waitForTimeout(500)
   k = await kinds(); t = await texts()
   check('T2 h2 上 "# " → H1', k[0] === 'H1', `kind=${k[0]}`)
   check('T2 文本不带 #', t[0] === 'Hello', `text=${JSON.stringify(t[0])}`)
-  await page.keyboard.press(key('Meta+ArrowLeft'))
+  await page.keyboard.press(platformKey('Meta+ArrowLeft'))
   await page.keyboard.type('### ', { delay: 60 })
   await page.waitForTimeout(500)
   k = await kinds(); t = await texts()
@@ -100,7 +100,7 @@ async function main() {
   check('T2 文本仍是 Hello', t[0] === 'Hello', `text=${JSON.stringify(t[0])}`)
 
   // T2a:标题正文允许以编号开头；只排除 ordered 自动触发，不能牵连下一条 bullet 既有语义。
-  await page.keyboard.press(key('Meta+ArrowLeft'))
+  await page.keyboard.press(platformKey('Meta+ArrowLeft'))
   await page.keyboard.type('1. ', { delay: 60 })
   await page.waitForTimeout(400)
   k = await kinds(); t = await texts()
@@ -118,7 +118,7 @@ async function main() {
   check('T2b 文本仍是 Hello', (t[0] || '').trim() === 'Hello', `text=${JSON.stringify(t[0])}`)
 
   // T3-T6: 段落上四种前缀
-  await page.keyboard.press(key('Meta+ArrowRight'))
+  await page.keyboard.press(platformKey('Meta+ArrowRight'))
   await page.keyboard.press('Shift+Enter')
   await page.waitForTimeout(400)
   await page.keyboard.type('- ', { delay: 60 })
@@ -170,7 +170,7 @@ async function main() {
   check('T7 无 "/" 残留', !(t[5] || '').includes('/'), `text=${JSON.stringify(t[5])}`)
 
   // T8: 嵌入类(数据库,无 bridge 创建必失败)也必须消费 '/'
-  await page.keyboard.press(key('Meta+ArrowRight'))
+  await page.keyboard.press(platformKey('Meta+ArrowRight'))
   await page.keyboard.press('Shift+Enter')
   await page.waitForTimeout(400)
   await page.keyboard.type('x /', { delay: 40 })
@@ -185,7 +185,7 @@ async function main() {
   const lastIdx = async () => (await texts()).length - 1
   const freshBlock = async () => {
     await page.locator('.md-block .ProseMirror').last().click()
-    await page.keyboard.press(key('Meta+ArrowRight'))
+    await page.keyboard.press(platformKey('Meta+ArrowRight'))
     await page.keyboard.press('Shift+Enter')
     await page.waitForTimeout(400)
     return lastIdx()
@@ -296,7 +296,7 @@ async function main() {
     const p = await freshPage()
     const turnLabel = async (prefix, want) => {
       await p.locator('.md-block .ProseMirror').first().click()
-      await p.keyboard.press(key('Meta+a'))
+      await p.keyboard.press(platformKey('Meta+a'))
       await p.keyboard.press('Backspace')
       if (prefix) await p.keyboard.type(prefix, { delay: 40 })
       await p.keyboard.type('hello world', { delay: 20 })
@@ -329,7 +329,7 @@ async function main() {
     const centerDom = await pm.locator('p[data-align="center"]').count()
     const centerMd = await mdOf(p)
     check('T14c 划选工具栏“居中”立即生效并落 Markdown 标记', centerDom === 1 && /data-amadeus-align="center"/.test(centerMd), `md=${JSON.stringify(centerMd)}`)
-    await p.keyboard.press(key('Meta+Shift+r'))
+    await p.keyboard.press(platformKey('Meta+Shift+r'))
     await p.waitForTimeout(350)
     const rightDom = await pm.locator('p[data-align="right"]').count()
     const rightMd = await mdOf(p)
@@ -346,7 +346,7 @@ async function main() {
       const s = getSelection(); s.removeAllRanges(); s.addRange(r)
     })
     await e.waitForTimeout(250)
-    await e.keyboard.press(key('Meta+e'))
+    await e.keyboard.press(platformKey('Meta+e'))
     await e.waitForTimeout(350)
     const codeMd = await mdOf(e)
     check('T14c ⌘E = 行内代码(不居中)', /调用 `fetchData` 函数/.test(codeMd) && !/data-amadeus-align/.test(codeMd), `md=${JSON.stringify(codeMd)}`)
@@ -355,7 +355,7 @@ async function main() {
     const q = await freshPage(rightMd)
     check('T14c 关闭重开后右对齐仍在', (await q.locator('.md-block .ProseMirror p[data-align="right"]').count()) === 1)
     await q.locator('.md-block .ProseMirror').first().click()
-    await q.keyboard.press(key('Meta+Shift+l'))
+    await q.keyboard.press(platformKey('Meta+Shift+l'))
     await q.waitForTimeout(350)
     const leftMd = await mdOf(q)
     check('T14c Mod-Shift-L 恢复左对齐并清除持久化标记', !/data-amadeus-align=/.test(leftMd), `md=${JSON.stringify(leftMd)}`)
@@ -728,7 +728,7 @@ async function main() {
     await r.locator('.md-block .ProseMirror').first().click()
     await r.keyboard.type('# abc ', { delay: 40 })
     await r.waitForTimeout(500)
-    await r.keyboard.press(key('Meta+ArrowRight'))
+    await r.keyboard.press(platformKey('Meta+ArrowRight'))
     await r.keyboard.press('Shift+Enter')
     await r.waitForTimeout(700)
     const b3 = await r.evaluate(() => window.__harness.blocks.map((b) => b.content))
@@ -835,7 +835,7 @@ async function main() {
       await p.waitForTimeout(400)
       await p.locator('.md-block .ProseMirror').first().click()
       for (const k of keys) { await p.keyboard.press(k); await p.waitForTimeout(120) }
-      await p.keyboard.press(key('Meta+c'))
+      await p.keyboard.press(platformKey('Meta+c'))
       await p.waitForTimeout(300)
       const t = await p.evaluate(() => navigator.clipboard.readText().catch(() => '(读不到)'))
       await p.close()
@@ -843,9 +843,9 @@ async function main() {
     }
     check('T30 整行待办复制带 checkbox', /^[-*] \[ \] 买牛奶$/.test((await copy('- [ ] 买牛奶', ['Home', 'Shift+End'])).trim()), `got=${JSON.stringify(await copy('- [ ] 买牛奶', ['Home', 'Shift+End']))}`)
     check('T30 只选几个字仍是纯文本(不带行前缀)', (await copy('- [ ] 买牛奶', ['End', 'Shift+ArrowLeft', 'Shift+ArrowLeft'])).trim() === '牛奶')
-    check('T30 普通段落全选是纯文本', (await copy('普通一行', [key('Meta+a')])).trim() === '普通一行')
+    check('T30 普通段落全选是纯文本', (await copy('普通一行', [platformKey('Meta+a')])).trim() === '普通一行')
     // 跨块选中(段落 + 待办):只看首块类型会退回纯文本、把后面那条的 `- [ ]` 丢掉(Codex 复审)
-    const multi = await copy('普通行\n\n- [ ] 待办', [key('Meta+a')])
+    const multi = await copy('普通行\n\n- [ ] 待办', [platformKey('Meta+a')])
     check('T30 段落+待办跨块复制不丢 checkbox', /\[ \] 待办/.test(multi), `got=${JSON.stringify(multi)}`)
     await ctx2.close()
   })
@@ -1412,7 +1412,7 @@ async function main() {
     // 「换行发生了没」= 全体段落数 +1(Enter 可能拆块也可能在块内新起一段,两种都算换行成功)
     const paras = () => p.locator('.md-block .ProseMirror p').count()
     await p.locator('.md-block .ProseMirror').first().click()
-    await p.keyboard.press(key('Meta+ArrowRight'))
+    await p.keyboard.press(platformKey('Meta+ArrowRight'))
     await p.keyboard.type('@笔记', { delay: 40 })
     await p.waitForTimeout(300)
     check('T43① "@笔记" → 提及面板弹出', (await p.locator('.wiki-suggest').count()) === 1)
@@ -1428,7 +1428,7 @@ async function main() {
 
     const q = await freshPage()
     await q.locator('.md-block .ProseMirror').first().click()
-    await q.keyboard.press(key('Meta+ArrowRight'))
+    await q.keyboard.press(platformKey('Meta+ArrowRight'))
     await q.keyboard.type('@zzz', { delay: 40 })
     await q.waitForTimeout(300)
     check('T43② 无候选 → 面板不显示', (await q.locator('.wiki-suggest').count()) === 0)
@@ -1443,7 +1443,7 @@ async function main() {
     //    被动 effect 的 cleanup 排在提交之后,那段窗口里旧监听器还挂在 window 上(Codex 评审)。
     const r = await freshPage()
     await r.locator('.md-block .ProseMirror').first().click()
-    await r.keyboard.press(key('Meta+ArrowRight'))
+    await r.keyboard.press(platformKey('Meta+ArrowRight'))
     await r.keyboard.type('@笔记', { delay: 40 })
     await r.waitForTimeout(300)
     const n4 = await r.locator('.md-block .ProseMirror p').count()
@@ -1467,7 +1467,7 @@ async function main() {
 
     const p = await freshPage()
     await p.locator('.md-block .ProseMirror').first().click()
-    await p.keyboard.press(key('Meta+ArrowRight'))
+    await p.keyboard.press(platformKey('Meta+ArrowRight'))
     await p.keyboard.type('周会 @2200', { delay: 40 })
     await p.waitForTimeout(350)
     // 观感自查:EDITOR_SHOT_DIR=/tmp/x npm run e2e:editor → 面板截图落在那里(DESIGN.md §8)。
@@ -1491,7 +1491,7 @@ async function main() {
     // 负对照:非日期查询串不许多出日期行(否则页面候选的索引会整体错位)。
     const q = await freshPage()
     await q.locator('.md-block .ProseMirror').first().click()
-    await q.keyboard.press(key('Meta+ArrowRight'))
+    await q.keyboard.press(platformKey('Meta+ArrowRight'))
     await q.keyboard.type('@zzz', { delay: 40 })
     await q.waitForTimeout(300)
     check('T44 负对照:非日期查询串不出日期行', (await q.locator('.wiki-suggest').count()) === 0)
@@ -1500,7 +1500,7 @@ async function main() {
     // `@remind:` 打头 → 只给提醒一条。
     const r = await freshPage()
     await r.locator('.md-block .ProseMirror').first().click()
-    await r.keyboard.press(key('Meta+ArrowRight'))
+    await r.keyboard.press(platformKey('Meta+ArrowRight'))
     await r.keyboard.type('吃药 @remind:2200', { delay: 40 })
     await r.waitForTimeout(350)
     const rrows = await r.locator('.wiki-suggest .wiki-item').allInnerTexts()
@@ -1522,7 +1522,7 @@ async function main() {
 
     const p = await freshPage()
     await p.locator('.md-block .ProseMirror').first().click()
-    await p.keyboard.press(key('Meta+ArrowRight'))
+    await p.keyboard.press(platformKey('Meta+ArrowRight'))
     await p.keyboard.type('吃药 @r', { delay: 40 })
     await p.waitForTimeout(350)
     const rows = await p.locator('.wiki-suggest .wiki-item').allInnerTexts()
@@ -1539,7 +1539,7 @@ async function main() {
 
     const q = await freshPage()
     await q.locator('.md-block .ProseMirror').first().click()
-    await q.keyboard.press(key('Meta+ArrowRight'))
+    await q.keyboard.press(platformKey('Meta+ArrowRight'))
     await q.keyboard.type('周会 @明', { delay: 40 })
     await q.waitForTimeout(350)
     const qrows = await q.locator('.wiki-suggest .wiki-item').allInnerTexts()
@@ -1553,7 +1553,7 @@ async function main() {
     // 密度:裸 `@` = 日期三条 + 页面候选;页面行没有目录副标题(不重名不给路径);行高与 slash 菜单同一正典。
     const r = await freshPage()
     await r.locator('.md-block .ProseMirror').first().click()
-    await r.keyboard.press(key('Meta+ArrowRight'))
+    await r.keyboard.press(platformKey('Meta+ArrowRight'))
     await r.keyboard.type('/', { delay: 40 })
     await r.waitForTimeout(350)
     const slashRow = await r.locator('.slash-item').first().boundingBox()
@@ -1589,7 +1589,7 @@ async function main() {
     // 负对照:不是关键词前缀、也不是页面 → 面板整个不出现(键盘陷阱那条契约不许倒退)。
     const z = await freshPage()
     await z.locator('.md-block .ProseMirror').first().click()
-    await z.keyboard.press(key('Meta+ArrowRight'))
+    await z.keyboard.press(platformKey('Meta+ArrowRight'))
     await z.keyboard.type('@z', { delay: 40 })
     await z.waitForTimeout(300)
     check('T45 负对照:"@z" 面板不出现', (await z.locator('.wiki-suggest').count()) === 0)
@@ -1599,7 +1599,7 @@ async function main() {
     // (评审实测:裸文本节点是匿名 flex item,min-width:auto 不可收缩 → panel scrollWidth 354 > clientWidth 318)。
     const w = await freshPage()
     await w.locator('.md-block .ProseMirror').first().click()
-    await w.keyboard.press(key('Meta+ArrowRight'))
+    await w.keyboard.press(platformKey('Meta+ArrowRight'))
     await w.keyboard.type('[[这是一个相当长的新页面标题用来测试溢出行为溢出行为', { delay: 20 })
     await w.waitForTimeout(350)
     const geo = await w.locator('.wiki-suggest').evaluate((el) => ({ panel: el.scrollWidth - el.clientWidth, create: (() => { const n = el.querySelector('.wiki-create .wiki-item-name'); return n ? n.scrollWidth - n.clientWidth : -1 })() }))
@@ -1617,7 +1617,7 @@ async function main() {
 
     const p = await freshPage()
     await p.locator('.md-block .ProseMirror').first().click()
-    await p.keyboard.press(key('Meta+ArrowRight'))
+    await p.keyboard.press(platformKey('Meta+ArrowRight'))
     await p.keyboard.type('@12/25', { delay: 40 })
     await p.waitForTimeout(350)
     const slashRows = await p.locator('.wiki-suggest .wiki-item').allInnerTexts()
@@ -1630,7 +1630,7 @@ async function main() {
 
     const q = await freshPage()
     await q.locator('.md-block .ProseMirror').first().click()
-    await q.keyboard.press(key('Meta+ArrowRight'))
+    await q.keyboard.press(platformKey('Meta+ArrowRight'))
     await q.keyboard.type('@12月25日', { delay: 40 })
     await q.waitForTimeout(350)
     const zhRows = await q.locator('.wiki-suggest .wiki-item').allInnerTexts()
@@ -1639,7 +1639,7 @@ async function main() {
 
     const r = await freshPage()
     await r.locator('.md-block .ProseMirror').first().click()
-    await r.keyboard.press(key('Meta+ArrowRight'))
+    await r.keyboard.press(platformKey('Meta+ArrowRight'))
     await r.keyboard.type(`@${now.getDate()}`, { delay: 40 })
     await r.waitForTimeout(350)
     await r.keyboard.press('Enter')
