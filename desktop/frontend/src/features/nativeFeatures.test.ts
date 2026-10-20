@@ -40,10 +40,21 @@ import { registerTanguViews } from './tangu'
 import { registerOperationsViews } from './operations'
 import { installCalendarViews } from '../builtins/calendar'
 import { amadeusAvailable, inboxAvailable, miniFeatureAvailable, museAvailable, sessionsAvailable } from './runtime'
+import * as seam from '../amadeus/plugins/tanguSeam'
 const register = () => { registerAmadeusViews(); registerTanguViews(); registerOperationsViews(); installCalendarViews() }
+
+// 核心插件化 2e:Tangu 激活时交给宿主的接缝槽(模块级,测试之间要清掉)
+const SLOTS = [
+  [seam.setTanguInboxTasks, seam.readTanguInboxTasks],
+  [seam.setTanguPrefs, seam.readTanguPrefs],
+  [seam.setTanguNewChat, seam.readTanguNewChat],
+  [seam.setTanguSidebarModes, seam.readTanguSidebarModes],
+  [seam.setTanguChatOutline, seam.readTanguChatOutline],
+] as const
 
 beforeEach(() => {
   state.views.clear()
+  for (const [set] of SLOTS) set(null)
   state.profile.nativeFeatures = []
   vi.stubGlobal('window', { amadeus: {} })
 })
@@ -67,6 +78,14 @@ describe('native package contribution boundary', () => {
     expect(state.views.has('automation-detail')).toBe(false)
     expect(state.views.has('public-view')).toBe(false)
     expect(sessionsAvailable()).toBe(true)
+  })
+
+  it('hands the host seams over only when Tangu activates', () => {
+    register()
+    expect(SLOTS.map(([, read]) => read())).toEqual(SLOTS.map(() => null))
+    state.profile.nativeFeatures = ['tangu']
+    register()
+    expect(SLOTS.filter(([, read]) => read() === null)).toEqual([])
   })
 
   it('adds and removes Calendar independently of Amadeus between page boots', () => {
