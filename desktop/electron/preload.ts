@@ -142,6 +142,10 @@ const api = {
       return () => ipcRenderer.removeListener('remoteSessions:changed', listener)
     },
   } satisfies RemoteSessionsApi,
+  /** 设置 → 快捷键录制 / 按键查找期间挂起主进程全局快捷键(Mini、急停);主进程 60s 兜底恢复、窗口关闭即恢复。 */
+  shortcuts: {
+    pauseGlobal: (on: boolean): Promise<void> => ipcRenderer.invoke('shortcuts:pauseGlobal', on === true),
+  },
   // P1-K2 ── 急停 / 远程锁定(只在本机;解锁在主进程弹系统认证;主进程校验发送方)──
   remoteSafety: {
     get: () => ipcRenderer.invoke('remoteSafety:get'),

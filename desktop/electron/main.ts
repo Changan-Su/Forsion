@@ -94,6 +94,7 @@ import { createRemoteSessions, lookupRosterUnit, registerRemoteSessionsIpc, REMO
 import { normalizeCap } from '../shared/remoteSessions' // P1-K4
 import { createRemoteSafety } from './remoteSafety' // P1-K2
 import { registerRemoteSafetyIpc } from './remoteSafetyIpc' // P1-K2
+import { createGlobalHotkeyPause } from './globalHotkeyPause'
 import { registerDocumentTaskIpc } from './documentTaskIpc'
 import { createSystemAuth } from './remoteSafetyAuth' // P1-K2
 import { REMOTE_LOCK_FILE } from '../shared/remoteSafety' // P1-K2
@@ -662,6 +663,8 @@ const remoteSessions = createRemoteSessions({
 
 // P1-K2 ── 急停 + 远程锁定 + 远程活动指示(electron/remoteSafety.ts)。锁状态独占 userData/remote-lock.json(引擎经
 // FORSION_REMOTE_LOCK_FILE 每次现读);unitWeb 读内存镜像。backend / mainWindow 在下方定义 → 这里一律惰性 thunk。
+// 设置 → 快捷键录制 / 按键查找期间挂起全局快捷键(主人:Mini、急停;见 globalHotkeyPause.ts)
+const globalHotkeyPause = createGlobalHotkeyPause({ log: (m) => console.log(m) })
 const remoteSafety = createRemoteSafety({
   file: () => join(app.getPath('userData'), REMOTE_LOCK_FILE),
   engine: () => { const st = backend.getStatus(); return { url: st.state === 'ready' ? st.url : null, token: backend.getToken() } },
@@ -2756,6 +2759,23 @@ app.whenReady().then(async () => {
   deviceSecrets.registerSecretsIpc(ipcMain, { isTrustedSender, refreshUnitHost }) // P1-K5:secrets:status / retry / resetUnitPairing / relaunch
   registerRemoteSessionsIpc(ipcMain, remoteSessions, isTrustedSender) // P1-K4:remoteSessions:get / setEnabled / setMaxApprovalMode / revoke
   registerRemoteSafetyIpc(ipcMain, remoteSafety, isTrustedSender) // P1-K2:remoteSafety:get / estop / unlock / setHotkey / setHotkeyRecording
+  // 急停自带 60s 兜底且重复 true 不续期:续期时收一下再挂起,把它的计时器也续上
+  globalHotkeyPause.add({
+    pause: () => remoteSafety.setHotkeyRecording(true),
+    resume: () => remoteSafety.setHotkeyRecording(false),
+    renew: () => { remoteSafety.setHotkeyRecording(false); remoteSafety.setHotkeyRecording(true) },
+  })
+  // 按窗口记租约;那扇窗口关了 / 崩了 = 释放它那一份(不等兜底计时器,也不动别的窗口的挂起)
+  const hotkeyPauseSenders = new WeakSet<Electron.WebContents>()
+  ipcMain.handle('shortcuts:pauseGlobal', (e, on: unknown) => {
+    if (!isTrustedSender(e)) throw new Error('forbidden')
+    const id = e.sender.id
+    globalHotkeyPause.set(id, on === true)
+    if (on === true && !hotkeyPauseSenders.has(e.sender)) {
+      hotkeyPauseSenders.add(e.sender)
+      e.sender.once('destroyed', () => globalHotkeyPause.set(id, false))
+    }
+  })
   ipcMain.handle('config:set', async (_e, patch: Partial<TanguStoredConfig>) => {
     const accountCreds = loadTanguCreds() // Capture before saveConfig's first await.
     // 渲染层直接改电脑历史的键(正路是 window.tangu.computerHistory.*,那条自己落盘):这次落盘与控制器的意愿操作 / 后台补落
@@ -4228,7 +4248,10 @@ app.whenReady().then(async () => {
     return { routed: true }
   })
   // mini 全局快捷键(默认 ⌘/Ctrl+⇧+M;register 返回 false=被占用,吞掉不阻塞启动)。
-  try { globalShortcut.register('CommandOrControl+Shift+M', () => toggleMiniWindow()) } catch { /* 快捷键冲突 */ }
+  const MINI_ACCEL = 'CommandOrControl+Shift+M'
+  const registerMiniShortcut = (): void => { try { globalShortcut.register(MINI_ACCEL, () => toggleMiniWindow()) } catch { /* 快捷键冲突 */ } }
+  registerMiniShortcut()
+  globalHotkeyPause.add({ pause: () => globalShortcut.unregister(MINI_ACCEL), resume: registerMiniShortcut })
   if (PRODUCT.agentBackend) approvalDelivery.start() // P1-K3:订阅本机引擎待批流(引擎未就绪时 idle,ready 后自连)
   if (PRODUCT.agentBackend) void remoteSafety.start() // P1-K2:读锁文件(跨重启)→ 注册急停热键 ⌃⌥⇧.(失败托盘 / 设置页可见)→ 订引擎活动流
 
