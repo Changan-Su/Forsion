@@ -72,7 +72,7 @@ async function main() {
     app = await electron.launch({
       ...(process.env.STAGE_ELECTRON ? { executablePath: process.env.STAGE_ELECTRON } : {}),
       args: [`--user-data-dir=${userData}`, '--lang=zh-CN', ROOT], cwd: ROOT,
-      env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url, TANGU_BROWSER_CDP: 'off', TANGU_HARNESS_QUIET: '1' },
+      env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url, TANGU_BROWSER_CDP: 'off', TANGU_HARNESS_QUIET: '0' }, // 摆给人拖的:静默会把窗口压到层级 -1,人看不见(10-20 用户)
     })
     const win = await app.firstWindow()
     await app.context().route('**/agent/**', async (route) => {

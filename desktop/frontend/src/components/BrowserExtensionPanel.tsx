@@ -36,7 +36,7 @@ registerMessages({
   'settings.browserExt.addressCopied': { zh: '已复制扩展页地址，粘贴到 Chrome 地址栏打开。', en: 'Copied the address. Paste it into the Chrome address bar.' },
   'settings.browserExt.noChrome': { zh: '没找到 Google Chrome。已复制扩展页地址，在 Chrome 地址栏粘贴打开。', en: 'Google Chrome was not found. The address is copied. Paste it into the Chrome address bar.' },
   'settings.browserExt.dragHint': { zh: '拖到 Chrome 扩展页上安装', en: 'Drag onto the Chrome extensions page to install' },
-  'settings.browserExt.dragSub': { zh: '扩展文件夹 · {version}', en: 'Extension folder · {version}' },
+  'settings.browserExt.dragSub': { zh: '拖到 Chrome 扩展页上安装 · {version}', en: 'Drag onto the Chrome extensions page · {version}' },
   'settings.browserExt.copyPath': { zh: '复制路径', en: 'Copy path' },
   'settings.browserExt.updateHint': { zh: '有新版本 {version}：再拖一次（或重新加载已解压的扩展程序）就会更新。', en: 'Version {version} is available. Drag it in again (or load it unpacked again) to update.' },
   'settings.browserExt.copyFailed': { zh: '扩展文件夹没准备好（{error}），请打开随包的扩展文件夹手动加载。', en: 'Couldn’t prepare the extension folder ({error}). Open the bundled extension folder and load it manually.' },
