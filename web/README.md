@@ -12,6 +12,18 @@
 
 ---
 
+## 移动布局 / Mobile layout
+
+触屏为主（`pointer: coarse`，不看宽度）或 `?ui=mobile` 使用 `mobile/src/MobileRoot.tsx`。浏览器的 `browserChrome` / `browserSheet` 消费 Android 同一份顶栏、Space 导航与半屏请求：竖屏是底部 Dock，宽屏（平板横屏，与壳的并排左栏同一条线）是左侧 76px 竖条（Space 格子、放不下时固定的优先、最后一格「全部」、头像在底），整个壳从竖条右边开始，与 Android Pad 方案 A2 一致；列表层、详情返回、搜索与智库标题入口、头像设置菜单、固定项偏好由共享壳与视图管理。浏览器返回先走应用内返回链，回主页后恢复正常离站。
+
+Browser mobile mode (a coarse primary pointer, any width) uses the same navigation and sheet contracts as Android: a bottom dock in portrait, and on wide layouts (a tablet on its side) the left Space rail with the avatar at its foot and the shell after it, as Android's Pad layout A2; also list/detail levels, view search and vault actions, account/settings access and dock preferences. Browser Back follows the app's back chain and can leave normally from Home. Platform capabilities still come from the actual host: launcher shortcuts, system sharing, live notifications and phone control require native support; Web's cloud vault and account bridges remain authoritative.
+
+验收 / Verification: `npm run build` 后运行 `npm run e2e:mobile`。真实 Chromium 在隔离存储与夹具 API 上检查中文浅色 390px、英文深色 320px、实际点击与返回链，以及平板视口（820×1180 竖屏 = 手机布局 + 底部 Dock；转到 1180×820 横屏 = 左侧竖条、没有 Dock、壳在竖条右边、并排左栏，标题胶囊排在左栏右边，白板顶排绕开胶囊；换 Space、刷新后保持）；截图与报告在 `web/outputs/mobile-parity/`。CI 为 `web mobile parity`。Pad 版式另有 `npm run e2e:pad`。
+
+浏览器移动 chrome 只在网页宿主(webShim / unitShim)里装；移动 App 自己的包（`mobile/`，mobileShim 带 `tangu.mobile`）在普通浏览器里跑时（mobile 的 `e2e:*`、phone-stage 出图台架）照旧是壳自带的 Web 顶栏回落。The browser mobile chrome is installed by the Web hosts only; the mobile app bundle in a plain browser (mobile `e2e:*`, phone-stage) keeps the shell's own web bar fallback.
+
+---
+
 ## 本地开发
 
 连一个本地在跑的 Forsion server(默认 `http://localhost:3001`)。

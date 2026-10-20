@@ -160,9 +160,11 @@ const PARK_SETTLE_MS = 450
 /** 读屏(触摸浏览:TalkBack 这类)开没开。宿主写在 `<html data-reader>` 上(Android:原生外壳随 `layout` 报上来,
  *  见 mobile/src/nativeChrome.ts `applyChromeLayout`);没有宿主报的地方(浏览器、iOS 网页)恒为没开。 */
 const readerOn = (): boolean => document.documentElement.hasAttribute('data-reader')
-/** 并排左栏(宽屏 docked)右缘离页面左缘多少 dp,没有并排左栏 = 0。随原生顶栏状态推出去(`leftInset`):Android 外壳把
+/** 并排左栏(宽屏 docked)右缘离壳(.mb-shell)左缘多少 dp,没有并排左栏 = 0。随原生顶栏状态推出去(`leftInset`):Android 外壳把
  *  标题胶囊摆在它右边,左栏顶上就不必给胶囊让位(2026-10-20 方案 A2)。视口 px = 屏幕 dp(WebView 自己不缩放,
- *  body 的 zoom 已在 getBoundingClientRect 里)。 */
+ *  body 的 zoom 已在 getBoundingClientRect 里)。量到壳的左缘而不是页面左缘:Android 的壳就在页面左缘(竖条在 WebView 外),
+ *  浏览器的竖条画在页面里、壳整个右移(mobile/src/browserChrome.tsx)—— 那一移只挪位置不改尺寸,ResizeObserver 不报,
+ *  按页面左缘量会留着移之前的值。两个宿主都是「竖条 + leftInset」摆胶囊。 */
 let sideInset = 0
 const sideInsetSubs = new Set<() => void>()
 const setSideInset = (v: number): void => { if (v !== sideInset) { sideInset = v; sideInsetSubs.forEach((fn) => fn()) } }
@@ -231,7 +233,7 @@ function Drawer({ side, docked, showFoot, page }: { side: 'left' | 'right'; dock
   useEffect(() => {
     const el = sideRef.current
     if (!docking || !el) return
-    const ro = new ResizeObserver(() => setSideInset(Math.round(el.getBoundingClientRect().right)))
+    const ro = new ResizeObserver(() => setSideInset(Math.round(el.getBoundingClientRect().right - (el.closest('.mb-shell')?.getBoundingClientRect().left ?? 0))))
     ro.observe(el)
     return () => { ro.disconnect(); setSideInset(0) }
   }, [docking])
@@ -964,6 +966,10 @@ function useWideAspect(enabled: boolean): boolean {
   }, [enabled])
   return enabled && wide
 }
+
+/** React: the shell's wide layout (docked left column; on Android the Space rail), the same line the shell itself follows —
+ *  for a chrome host drawn in the page (the browser's, mobile/src/browserChrome.tsx), which has no window of its own to judge. */
+export function useWideLayout(): boolean { return useWideAspect(true) }
 
 export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildDefault?: () => void }> = ({ buildDefault }) => {
   useEffect(() => {

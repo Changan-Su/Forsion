@@ -15,6 +15,15 @@ const wireToast = (): Promise<void> => import('@/stores/appStore').then(({ useAp
   setCloudNotify((text, isError) => useApp.getState().toast(text, isError))
 })
 
+// Keep two distinct import expressions: Vite attaches each branch's CSS preload to its own import.
+// `uiMobile ? import(mobile) : import(desktop)` is folded into ONE preload wrapper whose deps come from
+// the desktop branch: mobileEntry's exclusive CSS (browser chrome / UnitsSheet) silently never loads.
+const APP_ENTRIES = {
+  mobile: () => import('@mobile/mobileEntry'),
+  desktop: () => import('@/main'),
+}
+function loadApp(uiMobile: boolean): Promise<unknown> { return APP_ENTRIES[uiMobile ? 'mobile' : 'desktop']() }
+
 async function bootstrap(): Promise<void> {
   const path = location.pathname
 
@@ -50,7 +59,7 @@ async function bootstrap(): Promise<void> {
         try {
           uiMobile = (new URLSearchParams(location.search).get('ui') || localStorage.getItem('lcl.uiMode')) === 'mobile'
         } catch { /* private mode → 桌面布局 */ }
-        await (uiMobile ? import('@mobile/mobileEntry') : import('@/main'))
+        await loadApp(uiMobile)
         if (meta.capabilities?.amadeus) await wireToast()
       })
       .catch((e) => { console.error('[unit-page] bootstrap failed:', e); showUnitBootError() })
@@ -76,6 +85,11 @@ async function bootstrap(): Promise<void> {
     })
     // P2/P3 协同与分享面(web 专属;共享 UI 据 window.amadeusCollab 解闸)。
     installCloudCollab({ apiBase: getApiBase(), getToken })
+    // The Web bridge is always cloud-backed. Mobile's entry aligns this state itself, but the Web entry
+    // used to leave the store on its local default: the mobile vault title exposed the internal vault id.
+    // Load only after window.amadeus is ready (the module captures the bridge when it is evaluated).
+    const { usePageStore } = await import('@/amadeus/store/pageStore')
+    usePageStore.setState({ vaultSide: 'cloud' })
 
     // window.tangu / window.amadeus 就位后再加载启动模块。手机单列(lcl.uiMode=mobile,index.html
     // 内联脚本在模块求值前已写好键)装载 Mobile 壳(@mobile/mobileEntry,与移动 App 同源码 —— 显示
@@ -84,7 +98,7 @@ async function bootstrap(): Promise<void> {
     try {
       uiMobile = (new URLSearchParams(location.search).get('ui') || localStorage.getItem('lcl.uiMode')) === 'mobile'
     } catch { /* private mode → 桌面布局 */ }
-    void (uiMobile ? import('@mobile/mobileEntry') : import('@/main'))
+    void loadApp(uiMobile)
       .then(wireToast)
       .catch((e) => console.error('[tangu-web] bootstrap failed:', e))
   }

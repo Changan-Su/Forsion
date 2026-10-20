@@ -47,6 +47,9 @@ import { buildDefaultLayout } from '@/bootstrapEngine'
 import { MobileUnitsSheet, useUnitsSheet } from './UnitsSheet'
 import { exitHint, onBackGesture } from './nativeBack'
 import { homeTarget } from '@/services/engine/targets'
+import { BrowserChrome, browserChromeInstalled } from './browserChrome'
+import { installBrowserBack, type BrowserBackPlan } from './browserBack'
+import { subscribeBrowserSheet } from './browserSheet'
 
 /** 移动端本地 inbox 内容来自云端广播,但无服务端 inboxPull 调度器 → 客户端定时静默拉(绕开 inboxStore.pull 的 toast)。 */
 function useInboxAutoPull(): void {
@@ -92,7 +95,12 @@ function leaveOrHome(): void {
 /** 一下返回会做什么。`slide` = 它是把哪一侧的面板滑开 / 收起(手势进行中可以先画出来的那种);`run` = 真去做。
  *  ⚠️ 算这个不许有副作用:手势一开始就要问一遍(只为知道画不画预览),人可能中途放弃。
  *     壳和各浮层靠 `forsion:mobile-back` 接返回 —— 先派一个 `detail.probe` 的,监听方只答「我接」不动手。 */
-function planBack(): { slide?: 'left' | 'right'; run: () => void } {
+function rootBack(): BrowserBackPlan {
+  const { spaces, activeSpaceId } = useSpaceStore.getState()
+  return { run: leaveOrHome, boundary: !spaces[0] || activeSpaceId === spaces[0].id }
+}
+
+function planBack(): BrowserBackPlan & { slide?: 'left' | 'right' } {
   // 搜索面板开着时永远在最上面(下拉搜索 / 顶栏搜索钮 / 外接键盘的快捷键打开;z-index 高过设置、商店、旁聊那几张整页):
   // 返回先关它。排在后面的话,它盖着的那一层会先被关掉;不排的话,列表层上按返回直接把 app 退到后台。
   if (useQuickFind.getState().open) return { run: () => useQuickFind.getState().close() }
@@ -113,7 +121,7 @@ function planBack(): { slide?: 'left' | 'right'; run: () => void } {
   // 在主区按返回 = 先页内后退(只退这一趟进来之后走过的页,见 lcl 的 listTrips),退无可退就回列表
   // (不关视图,再点同一条目即回)。
   const listFirst = listFirstNow()
-  if (listFirst && ws.leftVisible) return { run: leaveOrHome }
+  if (listFirst && ws.leftVisible) return rootBack()
   if (ws.leftVisible) return { slide: 'left', run: () => ws.toggleSidebar('left') }
   if (ws.rightVisible) return { slide: 'right', run: () => ws.toggleSidebar('right') }
   const active = ws.mainTabs.find((t) => t.active)
@@ -134,7 +142,25 @@ function planBack(): { slide?: 'left' | 'right'; run: () => void } {
       } }
     }
   }
-  return { run: leaveOrHome } // 已在底
+  return rootBack() // 已在底
+}
+
+function useBrowserBack(): void {
+  useEffect(() => {
+    if (!browserChromeInstalled()) return
+    return installBrowserBack(planBack, (changed) => {
+      // Subscribe to navigation inputs, not streamed message content. Menu-local navigation asks the
+      // same cancellable back event as Android; its sheet presenter reports opening/closing here.
+      const offs = [
+        useWorkspace.subscribe(changed), useNav.subscribe(changed), useSpaceStore.subscribe(changed),
+        useQuickFind.subscribe(changed), useBtw.subscribe(changed), subscribeBrowserSheet(changed),
+        useApp.subscribe((s, prev) => {
+          if (s.settingsOpen !== prev.settingsOpen || s.marketOpen !== prev.marketOpen || s.onboarding !== prev.onboarding || s.activeId !== prev.activeId || s.achievementsOpen !== prev.achievementsOpen) changed()
+        }),
+      ]
+      return () => { offs.forEach((off) => off()) }
+    })
+  }, [])
 }
 
 /** Android 系统返回(实体键/全面屏侧滑手势)接管:壳内 sheet→浮层→抽屉→tab 内后退→关视图→回主页→提示→挂起。
@@ -189,6 +215,7 @@ export function MobileRoot() {
   useBootstrap()
   useInboxAutoPull()
   useAndroidBack()
+  useBrowserBack()
   // 通知事件接线(幂等)。三段里 A(amadeusSync)/B(remoteSync)在移动端是可选链 no-op,真正生效的是
   // C:后台会话跑完 → 右上角通知。此前只挂了 NotificationHost 外壳没接线,设置里的「通知」页
   // 一直在管一个永不触发的东西。desktop 在 Root 里装,移动端走本文件 → 必须自己装一份。
@@ -239,6 +266,7 @@ export function MobileRoot() {
         <SingleColumnHost dark={visualTheme.mode === 'dark'} buildDefault={buildDefaultLayout} />
       </div>
       {nativeSpaces && AccountC && <div hidden><AccountC expanded={false} /></div>}
+      {browserChromeInstalled() && <BrowserChrome />}
 
       {/* Amadeus 全局浮层。⚠️ 名字像「快速切换器」,实为**对话框宿主**:AskStringHost / DeleteAssetsHost /
           NewDrawingHost / ConfirmDialog / AutomationBuilderHost / TemplatePicker 都住在里面。

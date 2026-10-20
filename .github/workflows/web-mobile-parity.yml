@@ -1,0 +1,49 @@
+name: web mobile parity
+on:
+  push:
+    paths: &paths
+      - 'mobile/src/browser*'
+      - 'mobile/src/MobileRoot.tsx'
+      - 'mobile/src/mobileEntry.tsx'
+      - 'web/src/main.tsx'
+      - 'web/index.html'
+      - 'web/scripts/mobile-parity.e2e.cjs'
+      - 'lcl/engine/**'
+      - 'mobile/src/nativeChrome.ts'
+      - 'desktop/frontend/src/styles/base.css'
+      - 'desktop/frontend/src/amadeus/blocks/excalidraw/ExcalidrawCanvas.tsx'
+      - 'desktop/frontend/src/components/AccountCard.tsx'
+      - 'desktop/frontend/src/components/SettingsModal.tsx'
+      - 'desktop/frontend/src/views/chat2/SidebarPane.tsx'
+      - 'desktop/frontend/src/quickFind.tsx'
+      - '.github/workflows/web-mobile-parity.yml'
+  pull_request:
+    paths: *paths
+permissions:
+  contents: read
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: desktop
+      - run: node desktop/build/link-lcl.cjs
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: mobile
+      - run: npm ci --no-audit --no-fund
+        working-directory: web
+      - run: npm run typecheck && npm run build
+        working-directory: web
+      - run: npx playwright-core install --with-deps chromium
+        working-directory: desktop
+      - run: npm run e2e:mobile
+        working-directory: web
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: web-mobile-parity
+          path: web/outputs/mobile-parity
