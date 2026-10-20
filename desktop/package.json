@@ -115,6 +115,7 @@
     "check:spacerestart": "node scripts/space-restart.check.cjs",
     "check:spacemainpage": "node scripts/space-main-page.check.cjs",
     "check:rightrules": "node scripts/right-rules.check.cjs",
+    "check:sidetoggle": "node scripts/side-toggle-drift.check.cjs",
     "check:spacefallback": "node scripts/space-fallback-persist.check.cjs",
     "check:bluebirdspace": "node scripts/bluebird-space.check.cjs",
     "check:bluebirdtimestamps": "node scripts/bluebird-space.check.cjs --timestamps",
