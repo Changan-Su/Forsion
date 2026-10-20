@@ -23,6 +23,8 @@ import { PluginOnboardingHost } from '@/components/PluginOnboardingModal'
 import { OnboardingWizard } from '@/components/OnboardingWizard'
 import { NotificationHost } from '@/components/NotificationHost'
 import { WhatsNewHost } from '@/components/WhatsNewDialog'
+import { TermsUpdateHost } from '@/components/TermsUpdateDialog'
+import { setPopupsBlocked } from '@/stores/popupQueue'
 import { AmadeusOverlays } from '@/amadeusOverlays'
 import { AchievementToast } from '@/achievements/AchievementToast'
 import { AchievementsModal } from '@/achievements/AchievementsModal'
@@ -224,6 +226,8 @@ export function MobileRoot() {
   const callLayer = useSyncExternalStore(subscribeCallLayer, getCallLayer)
   const btwPage = useBtw((s) => btwWebVisible(s.webOpen, a.activeId))
   useNativeChromeClaim(a.onboarding || a.achievementsOpen || unitsOpen || btwPage ? CHROME_HIDDEN : null)
+  // 同 Root:全屏引导开着时,协议更新 / What's new / 插件公告先排着
+  useEffect(() => setPopupsBlocked(!!a.onboarding), [a.onboarding])
   // 原生外壳(Android)把账号入口画成顶栏右侧的头像,左栏底部那一排不再渲染 —— 账号卡在这儿隐身挂着:
   // 它自管登录态与菜单,头像显示什么、点了做什么由它发布(services/accountChip.ts → mobile/src/nativeChrome.ts)。
   const nativeSpaces = useNativeChromeSpaces()
@@ -371,6 +375,7 @@ export function MobileRoot() {
       {/* 旧 .toast-wrap 已随 appStore.toasts 一起下线;通知统一走 notificationStore + NotificationHost。 */}
       <NotificationHost />
       <WhatsNewHost />
+      <TermsUpdateHost />
     </>
   )
 }

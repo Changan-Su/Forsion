@@ -168,11 +168,11 @@ A calendar plugin also needs the read-only sources the host calendar layers in: 
 
 ### Space 与 Ribbon 收纳架 / Spaces and the Ribbon shelf
 
-启动台、主页一类插件可以列出你的 Space、点一下打开、显示图标和近况（继续某会话、最近的笔记、下一条日程、未读数），并在自己的界面里调整 Ribbon 上 Space 的顺序和收纳夹。插件必须声明 `spaces` 才拿得到；它改的就是 Ribbon 那一份顺序，在插件里拖一下，Ribbon 上跟着变，反过来也一样。插件详情页会多一项「打开 Space，调整 Ribbon 上 Space 的顺序和收纳夹」。接口细节见插件开发技能「Space 与 Ribbon 收纳架」一节。
+启动台、主页一类插件可以列出你的 Space、点一下打开、显示图标和近况（继续某会话、最近的笔记、下一条日程、未读数），并在自己的界面里调整 Ribbon 上 Space 的顺序和收纳夹。插件必须声明 `spaces` 才拿得到；它改的就是 Ribbon 那一份顺序，在插件里拖一下，Ribbon 上跟着变，反过来也一样。某个 Space 换了图标（比如它的插件更新了），插件里画的图标也跟着换。插件详情页会多一项「打开 Space，调整 Ribbon 上 Space 的顺序和收纳夹」。接口细节见插件开发技能「Space 与 Ribbon 收纳架」一节。
 
-Launcher and home-style plugins can list your Spaces, open them, show their icons and a status line (continue a chat, the latest note, the next event, unread count), and rearrange Spaces and folders on the Ribbon from their own view. A plugin gets this only if it declares `spaces`; it changes the Ribbon's own order, so a drag in the plugin moves the Ribbon too, and the other way round. The detail page lists "open Spaces and rearrange Spaces and folders on the Ribbon". API details are in the plugin development skill, section "Space 与 Ribbon 收纳架".
+Launcher and home-style plugins can list your Spaces, open them, show their icons and a status line (continue a chat, the latest note, the next event, unread count), and rearrange Spaces and folders on the Ribbon from their own view. A plugin gets this only if it declares `spaces`; it changes the Ribbon's own order, so a drag in the plugin moves the Ribbon too, and the other way round. When a Space's icon changes (say its plugin updates), the icon in the plugin changes with it. The detail page lists "open Spaces and rearrange Spaces and folders on the Ribbon". API details are in the plugin development skill, section "Space 与 Ribbon 收纳架".
 
-另外三件零碎的：插件可以拿到当前登录的名字（`ctx.app.watchAccountName`，有昵称用昵称，只给名字不给令牌）、必应每日壁纸（`ctx.wallpaper.bing`，由 Forsion 代拉），以及和 Forsion 自己一样样式的右键菜单（`ctx.ui.contextMenu`）。Three smaller pieces: plugins can read the signed-in name (`ctx.app.watchAccountName`, the nickname if there is one; the name only, never a token), get Bing's daily wallpapers (`ctx.wallpaper.bing`, fetched by Forsion), and open a right-click menu styled like Forsion's own (`ctx.ui.contextMenu`).
+另外三件零碎的：插件可以拿到当前登录的名字（`ctx.app.watchAccountName`，有昵称用昵称，只给名字不给令牌）、必应每日壁纸（`ctx.wallpaper.bing`，由 Forsion 代拉），以及和 Forsion 自己一样样式的右键菜单（`ctx.ui.contextMenu`）。菜单项多、窗口矮时自己滚动；做勾选清单时可以让它点了不关，一次勾好几项。Three smaller pieces: plugins can read the signed-in name (`ctx.app.watchAccountName`, the nickname if there is one; the name only, never a token), get Bing's daily wallpapers (`ctx.wallpaper.bing`, fetched by Forsion), and open a right-click menu styled like Forsion's own (`ctx.ui.contextMenu`). Long menus scroll when the window is short, and a checklist menu can stay open so you can tick several items in one go.
 
 ## 插件自带的 MCP、hooks 与文件事件 / Bundled MCP servers, hooks and file events
 
@@ -318,3 +318,23 @@ Since 2026-10-19 (added when Server Admin started flagging the feedback center):
 - `ctx.app.setSpaceDot?(spaceId, on)` puts an attention dot on the top-right of your own Space's icon in the Ribbon, in the same red as the inbox unread badge. Pass `true` to show it and `false` to remove it. It only accepts a Space bundled with your plugin; for anyone else's or a built-in Space it returns `false`. If the Space has both a dot and a progress ring, only the dot is drawn; an unread badge takes precedence over both. The host clears the dot when your plugin is disabled. While the dot is shown, the icon's accessible name says it has new activity.
 - Unread rows in a list still use `ListItem.unread`: the shared unread dot, drawn in the theme's indicator colour rather than red. Pair it with `setSpaceDot` so it can be noticed from other Spaces.
 - `ctx.app.sync?` (since 2026-10-20, **first-party built-in bundles only**; used by Penzor Cloud's Sync page) reads and changes this computer's three cloud sync switches. `get()` returns a snapshot (whether the notes vault, agents & memory, and plugin data are each on, first-sync progress, and the pending question when the cloud already holds a vault on a second computer); `subscribe(fn)` notifies on change; `refresh()` re-reads; `set(kind, on)` turns one on or off (`notes`, `agents` or `plugins`); `resolveNotes('merge' | 'cloud' | 'skip')` answers the pending question; `runNow()` syncs once now. The host owns the switches and the sync engines; the plugin only draws the page. Other plugins, phones and the web don't get the member at all.
+
+### 弹窗排队 / Popup queue
+
+2026-10-19 起（Extend 的公告和宿主的协议更新提示、What's new 叠在一起时加的）：
+
+- `ctx.app.queuePopup?()`：你的插件自己弹出来的弹窗（启动时的公告、提醒之类，不是用户点了才打开的面板）要先排队。应用里同一时间只露一个弹窗：协议更新、What's new 在前，插件的排在后面，同级按先来后到；全屏引导开着时谁都不出。
+- 返回 `{ ready, done }`。`await ready` 之后再把弹窗挂出来，关掉时调 `done()` 让给下一个。决定不弹了（换了账号、数据过期）也调 `done()`，算撤销，这时 `ready` 永远不会 resolve。
+- 不调 `done()` 会一直占着队列，后面的弹窗都出不来；插件停用时宿主替你收掉。旧宿主没有这个方法：直接弹，和以前一样。
+
+```js
+const turn = ctx.app.queuePopup?.()
+if (turn) await turn.ready
+showMyDialog({ onClose: () => turn?.done() })
+```
+
+Since 2026-10-19 (added when Extend's announcement, the host's terms update notice and What's new could pile up):
+
+- `ctx.app.queuePopup?()` queues a popup your plugin opens on its own (a startup announcement or reminder, not a panel the user just clicked open). Only one popup shows at a time: the terms update notice and What's new go first, plugin popups come after them, and popups at the same level show in arrival order. Nothing shows while the full-screen onboarding is open.
+- It returns `{ ready, done }`. Wait for `ready`, then show your popup, and call `done()` when it closes so the next one can show. If you decide not to show it after all (the account changed, the data is stale), call `done()` too: that withdraws it, and `ready` never resolves.
+- Until you call `done()` your popup holds the queue and nothing after it can show. The host clears it for you when your plugin is disabled. Older hosts don't have this method; show the popup straight away as before.

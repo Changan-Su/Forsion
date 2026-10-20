@@ -215,7 +215,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'imgtools', 'account', 'nested', 'branch', 'musedm'];
+const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'imgtools', 'account', 'nested', 'branch', 'musedm', 'humandims'];
 KEYS.push('signals');
 KEYS.push('musechat');
 KEYS.push('novision');
@@ -256,7 +256,7 @@ const GIT_PREFIX = 'livetest/'; const GIT_TAG = '[LIVE]';
 // opt-in:缺省全量跑里**不带**这几个 —— cache 7 个 run / churn 6 个 run(都慢),cache 与 recall-unprompted
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
-const OPT_IN = new Set(['nested', 'branch', 'musedm', 'realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'appsettings', 'control', 'phone']);
+const OPT_IN = new Set(['humandims', 'nested', 'branch', 'musedm', 'realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'appsettings', 'control', 'phone']);
 OPT_IN.add('signals');
 OPT_IN.add('musechat');
 OPT_IN.add('imgwindow');
@@ -1824,10 +1824,14 @@ try {
     const ev = await run(session.id, `我想更好地配合你。请把你希望我做到的这两点写入协作说明并保留具体名称。无论什么项目都适用的一条叫“${aMark}”：你给出两种可比较的方案时，我要当场选定一个方向再让你动手。仅这个项目适用的一条叫“${pMark}”：我每次验收都按你给的三步复现路径走一遍实际界面。之后直接告诉我保存结果，不要先征求采用同意。`, 180_000, cfg);
     const receipts = ev.toolResults.flatMap(r => { try { const v = JSON.parse(r.full); return v.kind === 'human_update' ? [v.change] : []; } catch { return []; } });
     const agent = await api(`/agent/agents/${slug}/human`);
+    const shared = await api('/agent/human/HUMAN.md').catch(() => ({ content: '', exists: false })) /* 旧引擎没有这条路由(基线对照) */;
     const pd = await api(`/agent/project-context/human?sessionId=${session.id}`);
-    const disk = readFileSync(agent.path, 'utf8') === agent.content && readFileSync(pd.path, 'utf8') === pd.content;
-    const scoped = agent.content.includes(aMark) && !agent.content.includes(pMark) && pd.content.includes(pMark) && !pd.content.includes(aMark);
-    const receiptOk = ['agent', 'project'].every(kind => receipts.some(c => c.scope.kind === kind));
+    const onDisk = (d) => !d.exists || readFileSync(d.path, 'utf8') === d.content; // 10-20 起不分项目那条可能只进共识,Agent 这份就没有文件
+    const disk = onDisk(agent) && onDisk(pd) && onDisk(shared);
+    // 10-20 起 HUMAN.md 三维:「无论什么项目都适用」的那条进 Agent 这份或和这个人的共识都对,只要不进项目那份、不两处都写
+    const wide = [agent.content.includes(aMark), shared.content.includes(aMark)].filter(Boolean).length === 1;
+    const scoped = wide && !agent.content.includes(pMark) && !shared.content.includes(pMark) && pd.content.includes(pMark) && !pd.content.includes(aMark);
+    const receiptOk = receipts.some(c => c.scope.kind === 'project') && receipts.some(c => c.scope.kind === 'agent' || c.scope.kind === 'human');
     const savedMessages = (await api(`/agent/sessions/${session.id}/messages`)).messages;
     const durable = receipts.length === 2 && receipts.every(c => JSON.stringify(savedMessages).includes(c.id));
     if (ev.error || !ev.done || !scoped || !disk || !receiptOk || !durable || ev.approvals) return { ok: false, detail: ev.error || JSON.stringify({ scoped, disk, receiptOk, durable, approvals: ev.approvals }), output: ev.content, toolCalls: ev.toolCalls };
@@ -1859,15 +1863,48 @@ try {
     // the model has to reach a real storage tool rather than an unrelated plugin tool.)
     // 基线取在这句纠正之前:带 --human-ui 时,上面那一步已经在真界面里改过 Agent 这份说明(保存 / 冲突合并),
     // 拿场景开头读的那份来比,模型做对了也恒红(10-10 两次都红在这里,第二次模型其实只记了记忆、没碰说明)。
-    const beforeFeedback = await api(`/agent/agents/${slug}/human`);
+    const beforeFeedback = await api(`/agent/agents/${slug}/human`), sharedBefore = await api('/agent/human/HUMAN.md').catch(() => ({ content: '', exists: false })) /* 旧引擎没有这条路由(基线对照) */;
     const feedback = await run(session.id, '你刚才给方案的方式我不太习惯。以后给我选方案，别只列技术优缺点，先说我必须做哪个决定、各需要投入多少时间；信息不足就明确写假设。', 120_000, cfg);
-    const revised = await api(`/agent/agents/${slug}/human`);
+    const revised = await api(`/agent/agents/${slug}/human`), sharedAfter = await api('/agent/human/HUMAN.md').catch(() => ({ content: '', exists: false })) /* 旧引擎没有这条路由(基线对照) */;
     const memoryAfter = await api(`/agent/memory?slug=${slug}`);
     const remembered = feedback.toolResults.some(r => r.name === 'remember' && !r.isError && /"ok":true/.test(r.full || ''));
     const humanTouched = feedback.toolResults.some(r => { try { return JSON.parse(r.full).kind === 'human_update'; } catch { return false; } });
-    const feedbackApplied = !feedback.error && feedback.done && remembered && !humanTouched && revised.content === beforeFeedback.content;
+    const feedbackApplied = !feedback.error && feedback.done && remembered && !humanTouched && revised.content === beforeFeedback.content && sharedAfter.content === sharedBefore.content;
     writeFileSync(join(OUT, 'human-feedback-evidence.json'), JSON.stringify({ feedbackApplied, remembered, humanTouched, humanUnchanged: revised.content === beforeFeedback.content, output: feedback.content, memory: memoryAfter, toolCalls: feedback.toolCalls }, null, 2));
     return { ok: recalled && isolated && reverted && feedbackApplied && !removed.error, detail: JSON.stringify({ scoped, disk, receiptOk, durable, approvals: ev.approvals, recalled, isolated, reverted, feedbackApplied, electron: argv.includes('--human-ui') }), output: `初次：${ev.content}\n新会话：${recall.content}\n异项目：${negative.content}\n撤销后：${removed.content}\n自然反馈：${feedback.content}`, toolCalls: [...ev.toolCalls, ...feedback.toolCalls], tokens: [ev, recall, negative, removed, feedback].reduce((n, e) => n + (tokensOf(e) || 0), 0) };
+  });
+
+  // HUMAN.md 三个维度(10-20 用户定:共识 / 这个 Agent 希望怎么和人协作 / 项目,互相补全不覆盖):一句话里三条,各归各的那份、
+  // 同一条只出现在一处;另一个 Agent 的新会话读得到共识、读不到别的 Agent 那份。和 human 场景一样点明「写入协作说明」、三条都是用户做的事
+  // (不点明时,用户对 Agent 的要求按 10-04 裁决进记忆也算对,测不出三维归位);只描述内容,不点名写到哪一份(别递答案)。
+  await scenario('humandims', 'humandims HUMAN.md 三维归位:共识 / Agent / 项目各一条,别的 Agent 读得到共识', async () => {
+    const slug = 'live-dims', other = 'live-dims-other';
+    for (const [s2, n] of [[slug, 'Coder'], [other, 'Writer']]) await api('/agent/agents', { method: 'POST', body: JSON.stringify({ slug: s2, name: n, systemPrompt: 'Be concise and respond in Chinese.' }) });
+    const project = join(workspace, 'dims-project'); mkdirSync(project, { recursive: true });
+    const mkSession = async (agentSlug, cwd, title) => (await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title, model_id: MODEL, project_path: cwd, agent_config: { agentSlug, execMode: 'host', cwd } }) })).session;
+    const tag = () => randomUUID().slice(0, 6);
+    const hMark = `先看计划-${tag()}`, aMark = `附复现步骤-${tag()}`, pMark = `真界面验收-${tag()}`;
+    const cfg = { agentSlug: slug, cwd: project, debugSystemPrompt: true, thinkingLevel: 'low' };
+    const session = await mkSession(slug, project, 'Human dims live');
+    // 一轮一条:一句话里列好几条时,模型(新旧引擎都)整份写进一个说明 —— 10-20 负对照里旧引擎读了项目那份照样全写进 Agent 那份,
+    // 那是另一件事(见日志);这里测的是「给一条,按内容选对那份」。
+    const ask = (mark, text) => `请把这条写入协作说明，保留名称“${mark}”：${text}直接保存，告诉我结果，不用征求同意。`;
+    const turns = [];
+    for (const [m, text] of [[hMark, '我这个人不管和哪个 Agent 合作，大改动前都先看计划，看完说“开始”。'], [aMark, '你是写代码的，不管谁和你合作，向你报问题时都先附上怎么复现。'], [pMark, '在这个项目里，我每次验收都在真实界面里走一遍。']]) {
+      const t = await run(session.id, ask(m, text), 180_000, cfg); turns.push(t);
+      if (t.error || !t.done) break;
+    }
+    const ev = { error: turns.find((t) => t.error)?.error, done: turns.length === 3 && turns.every((t) => t.done), approvals: turns.reduce((n, t) => n + (t.approvals || 0), 0), content: turns.map((t) => t.content).join('\n---\n'), toolCalls: turns.flatMap((t) => t.toolCalls) };
+    const shared = await api('/agent/human/HUMAN.md').catch(() => ({ content: '', exists: false })) /* 旧引擎没有这条路由(基线对照) */, agent = await api(`/agent/agents/${slug}/human`), pd = await api(`/agent/project-context/human?sessionId=${session.id}`);
+    const where = (m) => ({ human: shared.content.includes(m), agent: agent.content.includes(m), project: pd.content.includes(m) });
+    const placed = { [hMark]: where(hMark), [aMark]: where(aMark), [pMark]: where(pMark) };
+    const once = (m, want) => Object.entries(placed[m]).every(([k, v]) => v === (k === want));
+    const routed = once(hMark, 'human') && once(aMark, 'agent') && once(pMark, 'project');
+    const otherSession = await mkSession(other, project, 'Human dims other agent');
+    const seen = await run(otherSession.id, '用一句话说说和我合作要注意什么。不调用工具。', 120_000, { ...cfg, agentSlug: other });
+    const crossAgent = !seen.error && seen.systemPrompt?.includes(hMark) && !seen.systemPrompt?.includes(aMark);
+    writeFileSync(join(OUT, 'humandims-evidence.json'), JSON.stringify({ routed, crossAgent, placed, approvals: ev.approvals, shared: shared.content, agent: agent.content, project: pd.content, reply: ev.content, other: seen.content, toolCalls: ev.toolCalls }, null, 2));
+    return { ok: !ev.error && ev.done && routed && crossAgent && !ev.approvals, detail: JSON.stringify({ routed, crossAgent, placed, approvals: ev.approvals }), output: `写入：${ev.content}\n另一个 Agent：${seen.content}`, toolCalls: ev.toolCalls, tokens: [...turns, seen].reduce((n, e) => n + (tokensOf(e) || 0), 0) };
   });
 
   // ── 协作说明在一段真实任务之后写成什么样(10-10):消息不点名任何库 / 工具;判据与设计见 lib/human-real-live.mjs ──

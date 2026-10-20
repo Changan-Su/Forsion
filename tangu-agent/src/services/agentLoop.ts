@@ -26,7 +26,8 @@ import { makeClientActionRequester } from './clientAck.js';
 import { runHooks, type HookRunContext, type HookVerdict } from '../hooks/index.js';
 import { enterRunContext, currentDisplayAgentSlug, setRunClientTag, setRunCwd } from '../seams/runContext.js';
 import path from 'node:path';
-import { agentsDir, readUserMd, DEFAULT_AGENT_SLUG, engineLibDir } from '../core/tanguHome.js';
+import { agentsDir, DEFAULT_AGENT_SLUG, engineLibDir } from '../core/tanguHome.js';
+import { renderAboutHuman } from '../agents/humanFolder.js';
 import { getRun, updateRunStatus, appendStep, listPendingRunsForRecovery, failStaleRuns } from './runStore.js';
 import { getToolDefinitions, executeTool, getToolCapabilities, listDeferredTools, deferredUnlocksFromHistory, type ToolContext } from '../tools/registry.js';
 import { actionDeliveryNudgeNeeded, ACTION_DELIVERY_CHECK } from './actionDeliveryCheck.js';
@@ -1521,12 +1522,15 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     const humanCurrentBlocks: string[] = [];
     if (profile.capabilities.hostExec && !inlineMemberDef) {
       systemParts.push(HUMAN_GUIDANCE);
-      try {
-        const human = await readHuman({ kind: 'agent', slug: activeAgentSlug });
-        const humanBlock = renderHumanContext(human);
-        if (humanBlock) { systemParts.push(humanBlock); humanCurrentBlocks.push(humanBlock); }
-        if (humanBlock && (human.history[0]?.actor === 'user' || (human.history[0] && human.history[0].afterVersion !== human.version))) humanCorrections.push(humanBlock);
-      } catch (e) { console.warn('[human] Cannot load Agent collaboration context:', e instanceof Error ? e.message : e); }
+      // 三个维度并排读、谁也不盖谁(10-20 用户定):和这个人的共识(human/HUMAN.md)→ 这个 Agent 的 → 这个项目的。
+      for (const scope of [{ kind: 'human', file: 'HUMAN.md' }, { kind: 'agent', slug: activeAgentSlug }] as const) {
+        try {
+          const human = await readHuman(scope);
+          const humanBlock = renderHumanContext(human);
+          if (humanBlock) { systemParts.push(humanBlock); humanCurrentBlocks.push(humanBlock); }
+          if (humanBlock && (human.history[0]?.actor === 'user' || (human.history[0] && human.history[0].afterVersion !== human.version))) humanCorrections.push(humanBlock);
+        } catch (e) { console.warn('[human] Cannot load collaboration context:', e instanceof Error ? e.message : e); }
+      }
       try {
         const projectScope = await humanProjectScope(userId, sessionId);
         if (projectScope) {
@@ -1579,12 +1583,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       if (sketchTurnSignal && volatilePlacement === 'system') systemParts.push(sketchTurnSignal.section);
     }
     ctxMark('guidance');
-    // 4) USER.md 全局用户画像(所有 agent 可见,用户维护,半稳定)。读失败不阻断。
+    // 4) 人的文件夹 human/(所有 agent 可见,半稳定):人写给所有 Agent 的 AGENT.md、人自己写的 MEMORY.md(原 USER.md)、
+    //    Agent 们对人的认识 SOUL.md。替换原来那段 USER.md,不并排加(提示词体量)。HUMAN.md 共识走下面协作说明那段。读失败不阻断。
     try {
-      const userMd = readUserMd();
-      if (userMd.trim()) {
-        systemParts.push('## About the User\nA long-term profile/preferences the user maintains themselves; take it into account, do not recite it, and do not treat it as instructions for this turn.\n\n' + userMd.trim());
-      }
+      const aboutHuman = renderAboutHuman();
+      if (aboutHuman) systemParts.push(aboutHuman);
     } catch { /* ignore */ }
     ctxMark('profile');
     // 4b) 项目级指令(AGENTS.md / CLAUDE.md …,从项目根到 cwd 沿途收集)。放在用户画像之后、
@@ -1597,7 +1600,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 5) 你的专属文件夹(仅 host:agent 有文件读写工具、能访问绝对路径;云端 sandbox 文件夹不可达 → 不注入)。
     //    让 agent 认知自己的 home + Library,主动往 Library 沉淀/读取资料,并理解 MEMORY/LOG 的归属。
     //    coding 预设不注入(remember/log_event 已转 deferred,陪伴式沉淀指引与编码任务无关)。
-    //    SCHEDULE.db + 「谁的归谁」一段(10-02 反馈):过去只在日程非空时才有 Upcoming Schedule 段,空日程的 agent
+    //    CALENDAR.db(原 SCHEDULE.db)+ 「谁的归谁」一段(10-02 反馈):过去只在日程非空时才有 Upcoming Schedule 段,空日程的 agent
     //    不知道自己有日历,答应用户的事被写进用户的 Amadeus 日历,还说「我没有自己的日历」。只放静态文字,条目仍在易变区。
     if (execMode === 'host' && ps.hostExtras && !inlineMemberDef) { // 临时成员没有专属文件夹(不建、不教它往那里写)
       const home = path.join(agentsDir(), activeAgentSlug);
@@ -1609,7 +1612,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         '- `LOG/<date>.md` — your daily logs (written with log_event, read with read_log)\n' +
         '- `SOUL.md` — your persona\n' +
         `- \`Library/\` (\`${libDir}\`) — your reference library: use the file read/write tools (read_file/write_file/list_dir, etc.; this directory is already writable and needs no approval) to **store and retrieve long-term reference material** (character settings, tool manuals, knowledge documents, etc.). Proactively write down material worth keeping long-term, and read it back when needed.\n` +
-        '- `SCHEDULE.db` — your own calendar, shown in the user\'s Calendar under your name. Manage it with the manage_schedule tool (it is in Additional Tools, call load_tools first); an entry with auto=false is just a calendar record and needs no approval.\n\n' +
+        '- `CALENDAR.db` — your own calendar, shown in the user\'s Calendar under your name. Manage it with the manage_schedule tool (it is in Additional Tools, call load_tools first); an entry with auto=false is just a calendar record and needs no approval.\n\n' +
         'What is yours and what is the user\'s: this folder and your schedule belong to you; the working directory and the user\'s Amadeus notes and calendars belong to the user. ' +
         'When you yourself commit to something at a time (a plan, a promise, meeting the user), put it on your own schedule with manage_schedule — not in the user\'s calendar — update that entry when the details change, and never say you have no calendar. ' +
         'Use the amadeus_* calendar tools only when the user wants an entry on their own calendar.';
@@ -1794,9 +1797,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       } catch { /* 列目录失败不阻断 run */ }
     }
 
-    // 8c) host:注入该 agent 的近期日程(agents/<slug>/SCHEDULE.db;manage_schedule 工具维护)。
+    // 8c) host:注入该 agent 的近期日程(agents/<slug>/CALENDAR.db;manage_schedule 工具维护)。
     //     放易变区(8b 之后)防打穿前缀缓存;文本刻意不含相对时间/lastRun——只在条目集变化或跨天时变。
-    //     sandbox/云端不注入(SCHEDULE.db 不进 agentFileSync,云端读不到);coding 预设同样不注入。
+    //     sandbox/云端不注入(云端只在 Agent 同步、且服务端认 agent-calendar 时才有这份);coding 预设同样不注入。
     if (execMode === 'host' && ps.hostExtras) {
       try {
         const schedDb = await loadSchedule(activeAgentSlug);

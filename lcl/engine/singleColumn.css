@@ -448,6 +448,9 @@
    现在它们也铺到屏幕顶,内容让到胶囊之下,底色照样铺满(padding 在盒内)。 */
 .mb-shell[data-native-chrome] .mb-drawer,
 .mb-shell[data-native-chrome] .mb-sidecol { padding-top: var(--mb-top); }
+/* 宽屏(左侧竖条那一档,2026-10-20 方案 A2):原生层把标题胶囊摆在并排左栏的右边(SingleColumnHost 报 leftInset),左栏顶上
+   不再有胶囊 —— 表头(.mb-drawer-bar,48px)直接和胶囊排在同一行:中线对齐胶囊行的中线(状态栏 + 6 + 23dp)。 */
+.mb-shell[data-native-chrome][data-wide] .mb-sidecol { padding-top: max(0px, (var(--nc-status, 0) + 29) * 1px / var(--uiz, 1) - 24px); }
 /* Dock 之下的**安全默认**:主区视图与抽屉整块让到 Dock 之上,谁都不会被它盖住(失败方向是「多留一条」)。
    抽屉的让位加在 .mb-drawer 而不是 .mb-drawer-body:后者自带第二档 zoom,长度会再被放大一次。
    宽屏并排的侧栏(.mb-sidecol)同理:Space 一多,居中的 Dock 会伸到它底下。 */

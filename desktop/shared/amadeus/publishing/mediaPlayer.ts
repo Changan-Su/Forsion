@@ -99,6 +99,7 @@ export function mountPublishedMedia(
       { signal: controllers.signal },
     )
   }
+  const demos = mountDemoVideos(root, controllers.signal)
   const pause = (): void => {
     figures.forEach((f) =>
       f.querySelector<HTMLMediaElement>('video,audio')?.pause(),
@@ -108,12 +109,85 @@ export function mountPublishedMedia(
     'visibilitychange',
     () => {
       if (document.hidden) pause()
+      demos.sync()
     },
     { signal: controllers.signal },
   )
   return () => {
     controllers.abort()
     pause()
+    demos.dispose()
     figures.forEach((f) => f.querySelector('iframe')?.remove())
+  }
+}
+
+/** `![alt](clip.mp4)` demo loops: play only while on screen, never under reduced motion,
+ * and fall back to native controls when the browser refuses autoplay (low-power mode etc.).
+ * Whoever started it, a loop pauses off screen or in a hidden tab; one the viewer started resumes when back. */
+function mountDemoVideos(
+  root: HTMLElement,
+  signal: AbortSignal,
+): { sync(): void; dispose(): void } {
+  const videos = Array.from(
+    root.querySelectorAll<HTMLVideoElement>('video[data-amadeus-demo]'),
+  )
+  const idle = { sync() {}, dispose() {} }
+  if (!videos.length) return idle
+  const manual = (v: HTMLVideoElement): void => {
+    v.removeAttribute('autoplay')
+    v.pause()
+    v.controls = true
+  }
+  const reduce =
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  const watch = typeof IntersectionObserver !== 'undefined'
+  // Without IntersectionObserver the autoplay attribute alone keeps the loops running.
+  if (!watch && !reduce) return idle
+  // auto = loops this player starts by itself; the rest (reduced motion, refused) only the viewer starts.
+  const auto = new Set<HTMLVideoElement>(reduce ? [] : videos),
+    onScreen = new Set<HTMLVideoElement>(watch ? [] : videos),
+    resume = new Set<HTMLVideoElement>()
+  if (reduce) videos.forEach(manual)
+  const sync = (): void => {
+    for (const v of videos) {
+      if (!onScreen.has(v) || document.hidden) {
+        if (!v.paused) {
+          v.pause()
+          if (!auto.has(v)) resume.add(v)
+        }
+        continue
+      }
+      if (!v.paused || !(auto.has(v) || resume.delete(v))) continue
+      if (auto.has(v)) v.muted = true // autoplay is only allowed muted
+      v.play()?.catch((e: unknown) => {
+        // AbortError = a pause() overtook this play() while scrolling past; not a refusal.
+        if ((e as { name?: string })?.name === 'AbortError' || signal.aborted)
+          return
+        if (auto.delete(v)) manual(v)
+      })
+    }
+  }
+  const observer = watch
+    ? new IntersectionObserver((entries) => {
+        for (const e of entries) {
+          const v = e.target as HTMLVideoElement
+          if (e.isIntersecting) onScreen.add(v)
+          else onScreen.delete(v)
+        }
+        sync()
+      })
+    : null
+  // Playback is driven from here: an off-screen loop must not keep decoding until the first callback.
+  for (const v of videos) {
+    v.removeAttribute('autoplay')
+    observer?.observe(v)
+  }
+  return {
+    sync,
+    dispose() {
+      observer?.disconnect()
+      videos.forEach((v) => v.pause())
+    },
   }
 }

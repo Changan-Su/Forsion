@@ -808,6 +808,26 @@ if (new URLSearchParams(location.search).has('dock')) {
       <LocaleProvider><div className="am-app tangu-lovable" style={{ position: 'fixed', inset: 0 }}><AchievementsModal onClose={() => {}} /></div></LocaleProvider>,
     )
   })
+} else if (new URLSearchParams(location.search).has('terms')) {
+  // 协议更新提示 + 弹窗排队(TermsUpdateDialog / stores/popupQueue):window.tangu(cloudFetch / forsionLogout)由仪器预置,
+  // 登录 / 打开 What's new 经 window.__signIn / __openWhatsNew 触发。见 scripts/terms-update.check.cjs。
+  void Promise.all([import('./components/TermsUpdateDialog'), import('./components/WhatsNewDialog'), import('./stores/appStore')]).then(([{ TermsUpdateHost }, { WhatsNewHost, openWhatsNew }, { useApp }]) => {
+    applyRealTheme(resolveInitialLang(), resolveInitialSkin(), resolveInitialBg(), new URLSearchParams(location.search).has('dark') ? 'dark' : 'light')
+    const w = window as unknown as { __openWhatsNew: () => void; __signIn: () => void; __signOut: () => void }
+    w.__openWhatsNew = openWhatsNew
+    w.__signIn = () => useApp.setState({ authInfo: { loggedIn: true, accountId: 'u1', cloudUrl: '', username: 'alice', tokenSource: null } })
+    w.__signOut = () => useApp.setState({ authInfo: null })
+    createRoot(document.getElementById('root')!).render(
+      <LocaleProvider>
+        <div className="am-app tangu-lovable" style={{ position: 'fixed', inset: 0, padding: '40px 56px', color: 'var(--text)', background: 'var(--bg)', fontFamily: 'var(--font-body)' }}>
+          <h1 style={{ fontSize: 28, margin: '0 0 12px' }}>周会记录</h1>
+          {['讨论了下个版本的发布节奏，先把网页版的移动布局合进去。', '设计侧确认了色彩体系的第二轮调整，悬停一律用中性色。', '待办：整理 Android 外壳的返回链路，补一份真机录屏。'].map((l) => <p key={l} style={{ fontSize: 15, lineHeight: 1.8, margin: '0 0 8px' }}>{l}</p>)}
+        </div>
+        <WhatsNewHost />
+        <TermsUpdateHost />
+      </LocaleProvider>,
+    )
+  })
 } else if (new URLSearchParams(location.search).has('ribbon')) {
   // 点击记账:mod+1..9 的 slot 分发靠它断言(见 ribbon-dnd.e2e.cjs 的 L 组)。
   const hits: string[] = []

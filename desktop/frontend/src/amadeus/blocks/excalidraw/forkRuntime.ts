@@ -20,6 +20,7 @@ import * as ReactJSXRuntime from 'react/jsx-runtime'
 import type * as ExcalidrawLib from '@excalidraw/excalidraw'
 import { registerMessages, translate } from '../../../i18n'
 import { getBoardUiMode } from './boardUiMode'
+import { installPenInput } from './penInput'
 
 registerMessages({
   'boardengine.assetLoadFailed': {
@@ -129,5 +130,8 @@ await Promise.all([load(css, css.href), load(js, js.src)])
 
 const lib = g.ExcalidrawLib as typeof ExcalidrawLib | undefined
 if (!lib) throw new Error(translate('boardengine.libMissing'))
+// 手写笔补丁的钩子是拷副本时插进去的(见 penInput.ts);老副本没有它,白板照常能用、只是笔还是老手感。
+installPenInput()
+if (!g.__forsionPenPatch) console.warn('[board] 白板引擎副本没打手写笔补丁,重跑 node build/copy-excalidraw-assets.cjs')
 
 export const { Excalidraw, MainMenu, Footer, serializeAsJSON, restoreElements, newElementWith, CaptureUpdateAction, exportToSvg, getCommonBounds } = lib

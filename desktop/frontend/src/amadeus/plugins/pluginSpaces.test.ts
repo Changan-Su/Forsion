@@ -1,17 +1,21 @@
 // @vitest-environment happy-dom
+import { act } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useRibbonStore, useSpaceStore, type SpaceDefinition } from '@lcl/engine'
 import { createSpacesApi } from './pluginSpaces'
 
-const Glyph = () => null
-const sp = (id: string): SpaceDefinition => ({ id, name: () => `name:${id}`, icon: Glyph, build() {} } as unknown as SpaceDefinition)
+;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+let aRenders = 0
+const Glyph = () => { aRenders++; return 'A' }
+const GlyphB = () => 'B'
+const sp = (id: string, icon: unknown = Glyph): SpaceDefinition => ({ id, name: () => `name:${id}`, icon, build() {} } as unknown as SpaceDefinition)
 
 let alive = true
 const api = () => createSpacesApi({ alive: () => alive, own: (off) => off })
 
 beforeEach(() => {
   alive = true
-  useSpaceStore.setState({ spaces: ['home', 'tangu'].map(sp) })
+  useSpaceStore.setState({ spaces: ['home', 'tangu'].map((id) => sp(id)) })
   useRibbonStore.setState({ items: [{ id: 'rb-market', side: 'top', tooltip: '商店', onClick: vi.fn() } as never], order: ['space:home', 'space:tangu'], bottomOrder: [], folders: [], commandItems: [], commandIcons: {} })
 })
 
@@ -41,9 +45,27 @@ describe('ctx.spaces(主页插件化 S3 / S4)', () => {
     expect(useRibbonStore.getState().folders).toEqual([])
   })
 
-  it('图标:认识的 id 由宿主画进 el,不认识的给空的卸载函数', () => {
+  it('图标:认识的 id 由宿主画进 el;不认识的先空着', () => {
     const el = document.createElement('div')
-    expect(() => api().mountIcon(el, 'nope')()).not.toThrow()
+    act(() => { api().mountIcon(el, 'nope') })
+    expect(el.textContent).toBe('')
     expect(() => api().mountIcon(null as never, 'home')).toThrow(TypeError)
+  })
+
+  it('图标跟着 store 走:同 id 重注册换了图标就原地重画,晚注册的也补上;卸载后不再画', async () => {
+    const el = document.createElement('div'), late = document.createElement('div')
+    let off!: () => void
+    act(() => { off = api().mountIcon(el, 'home'); api().mountIcon(late, 'later') })
+    expect(el.textContent).toBe('A')
+    expect(late.textContent).toBe('')
+    act(() => useSpaceStore.setState({ spaces: [sp('home', GlyphB), sp('tangu'), sp('later', GlyphB)] }))
+    expect(el.textContent).toBe('B')
+    expect(late.textContent).toBe('B')
+    act(() => off())
+    await act(async () => { await Promise.resolve() }) // 卸载在下一个 microtask
+    const renders = aRenders
+    act(() => useSpaceStore.setState({ spaces: [sp('home'), sp('tangu')] })) // 换回 A:还挂着的话会再画一次
+    expect(el.textContent).toBe('')
+    expect(aRenders).toBe(renders)
   })
 })

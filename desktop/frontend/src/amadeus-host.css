@@ -972,6 +972,10 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
   margin-top: 0.5rem;
   padding-right: 0;
 }
+/* 「怎么平移画布」那句教的是鼠标中键 / 空格,触屏上换成双指的说法(data-touch-hint 由 ExcalidrawCanvas 按 appState + 最近一次
+   按下的指针类型给;句子在 --amx-hint-pan 里,跟界面语言走)。引擎的句子是它自己 i18n 拼的,改不动,只能整句盖掉。 */
+.amx-boardhost[data-touch-hint] .excalidraw .App-toolbar > .HintViewer > * { display: none; }
+.amx-boardhost[data-touch-hint] .excalidraw .App-toolbar > .HintViewer::after { content: var(--amx-hint-pan); padding: 0.25rem; }
 
 /* ── 自建工具胶囊(BoardToolbar)────────────────────────────────────────────────
    引擎那条工具栏在预编译 bundle 里改不动(见 BoardToolbar.tsx 顶部),所以:
@@ -1004,6 +1008,8 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .amx-boardhost .excalidraw .amx-tool-key {
   position: absolute; right: 3px; bottom: 1px; font-size: var(--ui-font-caption, 11px); line-height: 1; opacity: 0.45; pointer-events: none;
 }
+/* 触屏设备上不标(接了键盘照样能按数字切工具,只是不画角标;悬停提示里仍写着键位)。 */
+@media (pointer: coarse) { .amx-boardhost .excalidraw .amx-tool-key { display: none; } }
 
 /* ── 禅模式(Option+Z)────────────────────────────────────────────────────────
    ① 引擎在禅模式下只藏自己工具栏的键位角标,而这张岛里装的是我们的胶囊 → 整座岛连同数字角标一起淡出。
@@ -2237,3 +2243,12 @@ html.dark .amx-cal-chip-ev, html.dark .amx-cal-event {
   .amx-toolbar:not(.excalidraw *):not(.dash-viewcard *):hover .amx-mode-btn,
   .amx-toolbar:not(.excalidraw *):not(.dash-viewcard *) .amx-mode-btn:focus-visible { opacity: 1; }
 }
+
+/* Cloud 侧同步库分区头的来源设备标签(10-17 云同步分区方案 B)。分区名是大写小号字,标签恢复正常写法、退到 faint。 */
+.amx-sec-device {
+  display: inline-flex; align-items: center; gap: 3px; margin-left: 6px; min-width: 0;
+  font-size: var(--ui-font-caption, 11px); font-weight: 400; text-transform: none; letter-spacing: 0;
+  color: var(--text-faint, var(--text-muted));
+}
+.amx-sec-device > svg { flex: none; }
+.amx-sec-device-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 120px; }

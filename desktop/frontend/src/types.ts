@@ -7,7 +7,7 @@ import type { DesktopPermissionId, DesktopPermissionRequestOptions, DesktopPermi
 import type { ComputerHistoryApi } from '../../shared/computerHistory'
 export type { DesktopPermissionId, DesktopPermissionRequestOptions, DesktopPermissionsSnapshot, DesktopPermissionState } from '../../shared/desktopPermissions'
 // 核心插件化第 2b 步:与 Tangu 共用的数据形状搬进了契约(tangu-agent/src/contracts/clientTypes.ts),这里原样转出,宿主的 import 方不动。
-export type { ThinkingLevel, DefaultModelSlot, VisionMode, TanguDesktopConfig, AgentRunEvent, SubChatSeg, SubChat, SessionRecord, PendingApprovalInfo, HistorianActivityItem, AutomationActionSpec, AutomationWhere, MuseTriggerInfo, AgentScheduleEntry, TeamDef, NormalAgentDef, AgentConfig, ChannelKind, WorkspaceDescriptor, MessageRecord, ModelInfo, ModelsResponse, ProjectSettings, ProjectDocInfo, ProjectSkillInfo, ProjectPlanInfo, GitCommitInfo, GitChangeInfo, GitSummary, GitIdentity, ProjectContext, ProjectMemoryView, SkillInfo, SkillCatalogEntry, ToolsResponse, WorkspaceFileMeta, Attachment, DisplayFile, CtxInfo, ToolEvent, MsgSeg, ApprovalRequest, AnswerBy, ApprovalRemote, ApprovalReason, InquiryRequest, SketchItem, TodoItem, TeamWork, LiveWait, UiMessage, BackendStatusInfo, StoredDesktopConfig, UnitInfo } from '../../../tangu-agent/src/contracts/clientTypes'
+export type { ThinkingLevel, DefaultModelSlot, VisionMode, TanguDesktopConfig, AgentRunEvent, SubChatSeg, SubChat, SessionRecord, PendingApprovalInfo, HistorianActivityItem, AutomationActionSpec, AutomationWhere, MuseTriggerInfo, AgentScheduleEntry, TeamDef, NormalAgentDef, AgentConfig, ChannelKind, WorkspaceDescriptor, MessageRecord, ModelInfo, ModelsResponse, ProjectSettings, ProjectDocInfo, ProjectSkillInfo, ProjectPlanInfo, GitRemoteInfo, GitCommitInfo, GitChangeInfo, GitSummary, GitIdentity, ProjectContext, ProjectMemoryView, SkillInfo, SkillCatalogEntry, ToolsResponse, WorkspaceFileMeta, Attachment, DisplayFile, CtxInfo, ToolEvent, MsgSeg, ApprovalRequest, AnswerBy, ApprovalRemote, ApprovalReason, InquiryRequest, SketchItem, TodoItem, TeamWork, LiveWait, UiMessage, BackendStatusInfo, StoredDesktopConfig, UnitInfo } from '../../../tangu-agent/src/contracts/clientTypes'
 export { THINKING_LEVELS, isHomeSession, SHOW_SYSTEM_PROMPT_KEY, isTeamImageAvatar, isIndependentOrbitConfig, CLOUD_WORKSPACE_KEY, ROOTLESS_WORKSPACE_KEY, DEFAULT_LOCAL_WORKSPACE_KEY, DEFAULT_CLOUD_PROJECT, cloudProjectKey, sessionWorkspaceKey, isProjectIconFile } from '../../../tangu-agent/src/contracts/clientTypes'
 import type { AgentScheduleEntry, AutomationActionSpec, AutomationWhere, BackendStatusInfo, StoredDesktopConfig, UnitInfo } from '../../../tangu-agent/src/contracts/clientTypes'
 
@@ -416,6 +416,7 @@ declare global {
       backendLogs?(): Promise<string[]>
       backendRestart?(): Promise<BackendStatusInfo>
       onBackendStatus?(cb: (st: BackendStatusInfo) => void): () => void
+      onConfigChanged?(cb: () => void): () => void
       // ── 设备互联(Forsion Unit):名册 + 本机 host 状态(token 留主进程,渲染层只拿结果)──
       unitsList?(): Promise<{ status: number; json: { units?: UnitInfo[] } | null }>
       /** 系统浏览器开中转引导页:main 代拼 `#token=` 登录态递交(forsion_token 不下发渲染层)。 */
@@ -457,6 +458,8 @@ declare global {
       secretStorageRelaunch?(): Promise<import('../../shared/secretStorage').SecretStorageStatus>
       // P1-K4 ── 「允许远程会话」开关 / 信任列表 / 远程会话最高审批档(主进程 electron/remoteSessions.ts;设备页 / web / 手机没有)──
       remoteSessions?: import('../../shared/remoteSessions').RemoteSessionsApi
+      /** 设置 → 快捷键录制 / 按键查找期间挂起主进程全局快捷键(electron/globalHotkeyPause.ts);只有桌面端有。 */
+      shortcuts?: { pauseGlobal(on: boolean): Promise<void> }
       // P1-K2 ── 急停 / 远程锁定(主进程 electron/remoteSafety.ts;设备页 / web / 手机没有)──
       remoteSafety?: import('../../shared/remoteSafety').RemoteSafetyApi
       // P1-K6 ── unit 目标的调用方头接缝(INTEGRATION R-05;§2.2 把声明记在 K8 的块里,消费方 services/engine/targets.ts 先落地,
@@ -487,6 +490,10 @@ declare global {
       /** 以当前用户身份调 Forsion 云端 API(只收相对路径,主进程拼 cloudUrl 并盖 token;token 不下发渲染层)。
        *  返回 { status, json } 或 { status: 0, error }(0 = 没发出去:未登录 / 地址非法 / 网络断)。timeoutMs 缺省 15s,上限 120s。 */
       cloudFetch?(req: { path: string; method?: string; body?: unknown; timeoutMs?: number }): Promise<{ status: number; json?: any; error?: string }>
+      /** 网页版专用(webShim):协议更新状态 GET /api/auth/terms 与确认 POST /api/auth/terms/agree。
+       *  桌面 / Android 走 cloudFetch;网页版不给 cloudFetch(有它会顺带打开只给桌面的成就 / 插件数据同步)。见 components/TermsUpdateDialog。 */
+      termsStatus?(): Promise<{ status: number; json?: any }>
+      termsAgree?(version: string): Promise<{ status: number; json?: any }>
       /** Forsion Extend 渲染半身调它自己主进程半身注册的通道;宿主通道一律拒。没装载 Extend 就没有这个键。 */
       cloudInvoke?(channel: string, ...args: unknown[]): Promise<unknown>
       /** 提交反馈到 Forsion 反馈中心(会话日志 JSON 随附为附件;token 留主进程)。 */
@@ -575,6 +582,12 @@ declare global {
       readHostFile?(filePath: string): Promise<{ mimeType: string; content: string; size: number; mtimeMs?: number; tooLarge?: boolean }>
       /** 用系统默认应用打开(预览不支持的类型)。 */
       openHostPath?(p: string): Promise<{ ok: boolean; error?: string }>
+      /** Forsion Clip 手动安装(设置 › 浏览器):复制出包的扩展文件夹 / 打开 Chrome 扩展页;拖拽用 startHostDrag。 */
+      clipExtension?: {
+        /** update=false 只补缺不动已有副本;用户要(重新)装时传 true 换成随包版本(bundled)。 */
+        prepare(update?: boolean): Promise<{ dir: string; version: string; bundled: string } | { error: string }>
+        openChromeExtensions(): Promise<{ ok: true } | { ok: false; copied: true; reason: 'no-chrome' | 'unsupported' }>
+      }
       /** Coding Space:把工作区目录挂本地静态服务器,返回 origin(iframe 多文件预览)。 */
       codePreviewServe?(rootDir: string): Promise<{ origin: string }>
       /** 单文件 HTML 预览:挂其所在目录到不可猜的令牌根,返回可直接加载的 http URL。 */
@@ -854,6 +867,8 @@ declare global {
         merge?: boolean
       }): Promise<{ ok?: boolean; cloudName?: string; conflict?: string; error?: string }>
       entrySyncDisable?(path: string): Promise<{ ok: boolean }>
+      /** 手动设 / 取消 Cloud 侧根文件夹的「同步库分区」标记(Forsion Extend 0.9+)。 */
+      entrySyncMark?(name: string, on: boolean): Promise<{ ok?: boolean; error?: string }>
       /** 递归关联闭包(开启弹窗数据源):种子范围外的关联笔记+附件,外加种子页的子页面。 */
       entrySyncClosure?(rootRel: string, kind: 'page' | 'folder'): Promise<{ pages: string[]; files: string[]; subPages: string[] }>
       onEntrySyncChange?(cb: () => void): () => void
@@ -958,6 +973,10 @@ export interface AmadeusEntrySyncState {
   cloudRoot: string
   /** 云镜像里带 `.forsion-vault.md` 标记的根级文件夹名(换设备时注册表为空,分区名只能靠它)。 */
   mirrorVaults?: string[]
+  /** 标记里记的在同步各库的设备(库名 → 设备;旧的空标记、手动设的分区不在里面)。 */
+  mirrorVaultDevices?: Record<string, Array<{ id: string; name: string; since?: string }>>
+  /** 本机的 cloudSync.deviceId(据此把设备标签写成「本机」)。 */
+  deviceId?: string | null
 }
 
 /** 页面级同步共享(分享卡片数据源)。 */

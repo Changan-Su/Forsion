@@ -9,7 +9,7 @@
 import path from 'node:path';
 import os from 'node:os';
 import type { ToolContext } from './toolTypes.js';
-import { agentsDir, DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
+import { agentsDir, humanDir, DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
 import { currentAgentSlug, currentDisplayAgentSlug } from '../seams/runContext.js';
 import { protectedHostPaths, credentialPaths, forsionConfigPaths, matchProtected, credentialReadTarget, remoteForbiddenRoot, withinForsionDomains, remoteHomeStartupTarget, remoteCwdForbidden, foldCase, canonicalFuturePath, pathWithin } from '../sandbox/hostSandboxProtection.js';
 import { effectiveRemote } from '../services/remoteOrigin.js';
@@ -211,6 +211,12 @@ export function checkWritePath(ctx: ToolContext, abs: string): WritePathVerdict 
   )) {
     return { ok: false, hardDeny: true, reason: 'Update HUMAN.md through manage_human so the user receives version history and an undo card.' };
   }
+  // human/ 文件夹(10-20):每份都带修改历史和撤销,文件工具写进去就绕过了它们
+  try {
+    if (pathWithin(resolved, realResolve(humanDir()))) {
+      return { ok: false, hardDeny: true, reason: 'Files in the human folder keep version history and undo. Update the shared HUMAN.md with manage_human (scope shared); the other files there are changed by the human.' };
+    }
+  } catch { /* humanDir 解析失败 → 不加此判 */ }
   // **任一** Agent 的 config.toml(审批档 / 内置工具名单 / 模型都在里面)→ 硬拒,不只上面「自己的」。
   // 只拒自己的话,会话目录或额外工作文件夹盖住 agents/(比如会话开在 ~)时,auto-edit 下 write_file 就能无审批地把
   // 别的 Agent 的 approval_mode 改成 full-auto,绕过 manage_agent 不开放审批档的约束(Codex 09-25 P1)。

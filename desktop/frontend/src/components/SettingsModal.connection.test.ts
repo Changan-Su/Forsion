@@ -52,7 +52,7 @@ vi.mock('./AsrModelChoice', () => ({ AsrModelChoice: () => React.createElement('
 vi.mock('./EnvProbeSection', () => ({ EnvProbeSection: () => null }))
 vi.mock('./AccountSwitcher', () => ({ AccountSwitcher: () => null }))
 vi.mock('./ChannelsTab', () => ({ ChannelsTab: () => null }))
-vi.mock('./RemoteSyncSection', () => ({ RemoteSyncSection: () => null }))
+vi.mock('./RemoteSyncSection', () => ({ RemoteSyncSection: () => null, openPenzorSync: () => {}, penzorSyncReady: () => false }))
 vi.mock('./UpdateActions', () => ({ UpdateActions: () => null }))
 vi.mock('./ModelGroupList', () => ({ ModelGroupList: () => null }))
 vi.mock('./ModelSelect', () => ({ ModelSelect: () => null }))

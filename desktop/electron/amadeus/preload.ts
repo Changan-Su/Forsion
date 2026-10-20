@@ -144,6 +144,7 @@ if (syncPresent) contextBridge.exposeInMainWorld('amadeusSync', {
   otherSideCalDbs: () => ipcRenderer.invoke(SYNC_IPC.otherSideDbs),
   entrySyncEnable: (payload: unknown) => ipcRenderer.invoke(SYNC_IPC.entryEnable, payload),
   entrySyncDisable: (p: string) => ipcRenderer.invoke(SYNC_IPC.entryDisable, p),
+  entrySyncMark: (name: string, on: boolean) => ipcRenderer.invoke(SYNC_IPC.entryMark, name, on),
   entrySyncClosure: (rootRel: string, kind: 'page' | 'folder') => ipcRenderer.invoke(SYNC_IPC.entryClosure, rootRel, kind),
   onEntrySyncChange: (cb: () => void) => {
     const listener = (): void => cb()

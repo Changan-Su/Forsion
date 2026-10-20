@@ -1,0 +1,14 @@
+/* 协议更新提示卡。外框 = 应用自己的 .u-backdrop + .modal(同 What's new);只有按钮能关,所以不接点外面 / Esc。 */
+.terms-backdrop { z-index: 200; } /* 同 What's new:盖住 Dockview、右键菜单(100)和网页版的浮层(55) */
+.modal.terms-modal { --modal-w: 460px; height: auto; max-height: 88vh; }
+.terms-head { display: flex; flex-direction: column; gap: 2px; padding: 20px 22px 6px; }
+.terms-head b { font-size: var(--ui-font-heading); font-weight: 600; }
+.terms-head small { color: var(--text-muted); font-size: var(--ui-font-meta); }
+.terms-body { display: flex; flex-direction: column; gap: 10px; padding: 8px 22px 4px; overflow: auto; font-size: var(--ui-font-body); line-height: var(--ui-line-body); color: var(--text); }
+.terms-body p { margin: 0; }
+.terms-changes { color: var(--text); }
+.terms-links { display: flex; flex-wrap: wrap; gap: 8px; }
+.terms-hint { color: var(--text-muted); font-size: var(--ui-font-meta); }
+.terms-error { color: var(--danger); font-size: var(--ui-font-meta); }
+.terms-foot { display: flex; align-items: center; gap: 8px; padding: 14px 22px 18px; }
+.terms-foot .grow { flex: 1; }

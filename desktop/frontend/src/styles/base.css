@@ -917,6 +917,8 @@ a:hover { color: var(--accent-ink); }
   box-shadow: var(--card-shadow);
   animation: fade-up var(--duration-fast) var(--ease-out);
 }
+/* 项数不定的菜单(插件的 ctx.ui.contextMenu):限高自己滚,同内置主页的 .hp-cards-menu */
+.ctx-menu-scroll { max-height: min(70vh, 520px); overflow-y: auto; }
 .ctx-menu button {
   display: flex;
   align-items: center;
@@ -3133,6 +3135,15 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 /* 设置 → 浏览器 → Chrome 扩展:连接码(整段可选中)+ 行内按钮 */
 .settings-inline-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 6px; min-width: 0; }
 .settings-code-chip { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 2px 7px; border: var(--border-width) solid var(--border); border-radius: var(--radius-sm); color: var(--text-muted); font-family: var(--font-mono); font-size: var(--ui-font-caption, 11px); user-select: all; }
+.settings-path-text { font-family: var(--font-mono); font-size: var(--ui-font-caption, 11px); color: var(--text-muted); word-break: break-all; user-select: all; }
+/* Forsion Clip 扩展文件夹的拖拽把手(设置 › 浏览器):一张文件卡片,按下去走原生拖出(fs:startDrag) */
+.settings-drag-chip { display: inline-flex; align-items: center; gap: 8px; padding: 4px 12px 4px 4px; border: var(--border-width) solid var(--border); border-radius: var(--radius-md); background: var(--bg-card); box-shadow: var(--card-shadow); color: var(--text); cursor: grab; user-select: none; }
+.settings-drag-chip:hover { border-color: var(--hover-line); }
+.settings-drag-chip:active { cursor: grabbing; }
+.settings-drag-chip-grip { color: var(--text-faint); }
+.settings-drag-chip-icon { display: grid; place-items: center; width: 24px; height: 24px; border-radius: var(--radius-sm); background: var(--overlay-light); color: var(--text-muted); }
+.settings-drag-chip b { display: block; font-size: var(--ui-font-meta, 12px); line-height: var(--ui-line-meta, 18px); font-weight: 500; }
+.settings-drag-chip small { display: block; font-size: var(--ui-font-caption, 11px); line-height: var(--ui-line-caption, 14px); color: var(--text-muted); }
 .settings-switch {
   position: relative;
   flex: 0 0 auto;
@@ -4000,6 +4011,47 @@ html.dark .brand-logo--dark { display: inline-block; }
 .shortcut-key:hover { border-color: var(--accent-ink); }
 .shortcut-capture { outline: none; border-color: var(--accent-ink); color: var(--accent-ink); cursor: default; }
 .shortcut-unbound { color: var(--text-faint); font-family: var(--font-ui); }
+.shortcut-key.is-static { cursor: default; }
+.shortcut-key.is-static:hover { border-color: var(--border); }
+/* 录到但还没存的键:撞命令 = warning、撞系统 = danger;拆成一颗颗键帽 */
+.shortcut-capture--conflict, .shortcut-capture--system { display: inline-flex; align-items: center; justify-content: center; gap: 3px; padding: 3px 6px; }
+.shortcut-capture--conflict { border-color: var(--warning); }
+.shortcut-capture--system { border-color: var(--danger); }
+.shortcut-cap {
+  display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 5px;
+  border-radius: var(--radius-sm); border: var(--border-width) solid var(--border); background: var(--overlay-light);
+  font-family: var(--font-mono); font-size: var(--ui-font-meta, 12px); color: var(--text);
+}
+/* 行下展开的提示行(冲突 / 系统保留 / 编辑器提示) */
+.shortcut-pending {
+  display: flex; align-items: center; gap: 10px; padding: 8px 15px; border-bottom: var(--border-width) solid var(--border);
+  font-size: var(--ui-font-meta, 12px); color: var(--text-muted);
+}
+.shortcut-pending > svg { flex-shrink: 0; }
+.shortcut-pending > span:first-of-type { flex: 1; min-width: 0; }
+.shortcut-pending--conflict { background: var(--warning-light); }
+.shortcut-pending--conflict > svg { color: var(--warning); }
+.shortcut-pending--system { background: var(--danger-light); }
+.shortcut-pending--system > svg { color: var(--danger); }
+.shortcut-pending--info > svg { color: var(--text-faint); }
+.shortcut-pending-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.shortcut-conflict-badge, .shortcut-conflict-chip {
+  display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: var(--radius-pill);
+  font-size: var(--ui-font-caption, 11px); color: var(--warning); background: var(--warning-light); white-space: nowrap;
+}
+.shortcut-conflict-chip { margin-left: auto; border: var(--border-width) solid transparent; cursor: pointer; }
+.shortcut-conflict-chip.is-on { border-color: var(--warning); }
+.shortcut-conflict-chip + span { margin-left: 10px; }
+/* 搜索框里的「按键」开关与按键查询 */
+.settings-filter-input > .shortcut-keymode {
+  display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px; border-radius: var(--radius-sm);
+  font-size: var(--ui-font-caption, 11px); color: var(--text-faint); white-space: nowrap;
+}
+.settings-filter-input > .shortcut-keymode.is-on { color: var(--accent-ink); background: var(--accent-light); }
+.shortcut-keyquery { flex: 1; min-width: 0; display: flex; align-items: center; gap: 3px; outline: none; cursor: default; }
+.shortcut-keyquery-ph { color: var(--text-faint); }
+.shortcut-group { padding: 10px 15px 6px; font-size: var(--ui-font-caption, 11px); color: var(--text-faint); border-bottom: var(--border-width) solid var(--border); }
+.shortcut-layer { margin-left: 8px; font-size: var(--ui-font-caption, 11px); color: var(--text-faint); }
 
 .file-rename-input {
   flex: 1;
@@ -5084,7 +5136,8 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
 /* ⑤ 保留默认让位的四个,连同理由 —— 不是漏了,是 CSS 够不着:
       · activity-log   根与滚动器都没有 class,且内距是内联的(内联 padding 压过样式表);开发者模式视图。
       · changelog      根就是滚动器,但 `style={{padding:24}}` 是内联的,样式表改不动它的 padding-top。
-      · amadeus-drawing Excalidraw 在画布顶部自绘浮动 UI 岛,是第三方 DOM,压不住也不该压。
+      · amadeus-drawing Excalidraw 在画布顶部自绘浮动 UI 岛,是第三方 DOM —— 只有 Android 宽屏(竖条)那一档由 ⑦ 接管,
+                        其余照旧整块让位。
       · amadeus-plugin-file 内容整块由插件 mount() 画,宿主不知道里面是什么。 */
 
 /* ⑥ Android 悬浮 Dock 之下的底部留白(2026-10-09 用户选定「悬浮胶囊 + 毛玻璃」)—— 与上面顶部那套对称,
@@ -5093,6 +5146,38 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
       而是壁纸铺到屏幕底、内容留在 Dock 之上。 */
 .mb-shell[data-native-chrome] .mb-main > .mb-view[data-view='homepage'] { padding-bottom: 0; }
 .mb-shell[data-native-chrome] .mb-view[data-view='homepage'] .hp-root { --hp-chrome-bottom: var(--mb-bottom); }
+
+/* ⑦ 白板在 Android 宽屏(左侧竖条 + 并排左栏,2026-10-20 方案 A2):画布铺满整屏高,引擎顶上那一排(菜单钮 → 工具岛)
+      挪进两颗原生胶囊所在的那一行 —— 菜单钮排在标题胶囊右边 8dp,工具岛在主区正中,右边给右胶囊留够位置。
+      挤的时候(放正中会碰到菜单钮)ExcalidrawCanvas 给白板根挂 data-cap-row="gap",工具岛改在菜单钮右缘与右胶囊左缘之间的
+      空当里居中(不一点点地让);标题胶囊的宽也由它算好上限报给原生(capLeftMax),长标题省略号截断,这一排永远放得下。
+      · 胶囊的宽:mobile/src/nativeChrome.ts 写成只命中 [data-nc-caps] 的一条规则(白板根带这个属性);
+        状态栏高 --nc-status 在 <body> 上。左胶囊从主区左缘 12dp 起(原生按 leftInset 摆),右胶囊贴主区右缘 12dp。
+      · 只认引擎的平板 / 桌面档。.excalidraw--mobile 是手机档(工具条整条横在顶上),照旧走默认让位 ——
+        手机横屏也是宽屏,但引擎按屏幕短边把它判成手机档。
+      · 引擎三栏是 grid(1fr 2fr 1fr),这里换成 flex:左栏与 ::after 都 flex 1 1 0 平分剩余,工具岛就在正中;
+        哪边的最小宽(左 = 让位 + 菜单钮,右 = 右胶囊的让位)装不下,它才被挤开。右上角那颗侧栏钮是绝对定位的,不占这一排。
+      · 工具岛 52px 高、菜单钮 36px:都把中线对齐胶囊行的中线(状态栏 + 6 + 23dp)。
+      · dp 直接当 px 用、不除 --uiz:白板根(.amx-boardhost)自己反向抵消了界面缩放(ExcalidrawCanvas syncZoom),里面净缩放恒为 1。
+      · 标题封顶后连左钮 + 几个字都放不下(4:3 平板开着左栏)时挂 data-cap-row="off":菜单钮与工具岛退回
+        引擎自己那一排,整排挪到胶囊下面 —— 画布照样铺满整屏高。 */
+.mb-shell[data-native-chrome][data-wide] .mb-main > .mb-view[data-view='amadeus-drawing']:has(.excalidraw:not(.excalidraw--mobile)) { padding-top: 0; }
+.mb-shell[data-native-chrome][data-wide] .mb-view[data-view='amadeus-drawing'] .amx-boardhost {
+  --amx-cap-mid: calc((var(--nc-status, 0) + 29) * 1px);
+  --amx-cap-l: calc((12 + var(--nc-capl-w, 0)) * 1px + 8px);
+  --amx-cap-r: calc((12 + var(--nc-capr-w, 0)) * 1px + 8px);
+}
+.mb-shell[data-native-chrome][data-wide] .mb-view[data-view='amadeus-drawing'] .amx-boardhost[data-cap-row='off'] .excalidraw:not(.excalidraw--mobile) .FixedSideContainer_side_top { top: calc((var(--nc-status, 0) + 58) * 1px + 8px); }
+.mb-shell[data-native-chrome][data-wide] .mb-view[data-view='amadeus-drawing'] .amx-boardhost:not([data-cap-row='off']) .excalidraw:not(.excalidraw--mobile) .FixedSideContainer_side_top { top: calc(var(--amx-cap-mid) - 26px); }
+.mb-shell[data-native-chrome][data-wide] .mb-view[data-view='amadeus-drawing'] .amx-boardhost:not([data-cap-row='off']) .excalidraw:not(.excalidraw--mobile) .App-menu_top { display: flex; align-items: flex-start; gap: 8px; }
+.mb-shell[data-native-chrome][data-wide] .mb-view[data-view='amadeus-drawing'] .amx-boardhost:not([data-cap-row='off']) .excalidraw:not(.excalidraw--mobile) .App-menu_top > .App-menu_top__left { flex: 1 1 0; margin-top: 8px; }
+.mb-shell[data-native-chrome][data-wide] .mb-view[data-view='amadeus-drawing'] .amx-boardhost:not([data-cap-row='off']) .excalidraw:not(.excalidraw--mobile) .App-menu_top > .App-menu_top__left > :first-child { margin-left: max(0px, var(--amx-cap-l) - var(--editor-container-padding)); }
+.mb-shell[data-native-chrome][data-wide] .mb-view[data-view='amadeus-drawing'] .amx-boardhost:not([data-cap-row='off']) .excalidraw:not(.excalidraw--mobile) .App-menu_top > .shapes-section { flex: none; }
+.mb-shell[data-native-chrome][data-wide] .mb-view[data-view='amadeus-drawing'] .amx-boardhost:not([data-cap-row='off']) .excalidraw:not(.excalidraw--mobile) .App-menu_top::after { content: ''; flex: 1 1 0; min-width: max(0px, var(--amx-cap-r) - var(--editor-container-padding)); }
+/*    · gap 档:左栏与 ::after 以各自的最小宽为基准、再平分剩余 → 工具岛落在空当正中,离菜单钮与右胶囊各至少 8px(flex gap)。
+        与上面几条同特异性,必须排在它们后面。 */
+.mb-shell[data-native-chrome][data-wide] .mb-view[data-view='amadeus-drawing'] .amx-boardhost[data-cap-row='gap'] .excalidraw:not(.excalidraw--mobile) .App-menu_top > .App-menu_top__left { flex: 1 1 auto; }
+.mb-shell[data-native-chrome][data-wide] .mb-view[data-view='amadeus-drawing'] .amx-boardhost[data-cap-row='gap'] .excalidraw:not(.excalidraw--mobile) .App-menu_top::after { flex: 1 1 max(0px, (12 + var(--nc-capr-w, 0)) * 1px - var(--editor-container-padding)); min-width: 0; }
 
 /* chat / work 模式位:会话创建后只读(disabled),悬浮 title 解释「换模式请新建会话」。 */
 .composer-menu .menu-item:disabled { opacity: 0.55; cursor: default; }
@@ -5163,3 +5248,7 @@ html:root :is(.project-menu, .composer-menu, .engine-picker, .t2c-menu) { transf
  * `.settings-page:not(.settings-page--mobile) .settings-nav-top`(0,3,0)的 display:flex → 同为 (0,3,0),靠放文件末尾(DESIGN §7.2)。 */
 .mk-page[data-native-chrome] .settings-nav-top,
 .mk-page[data-native-chrome] .mk-detail-back { display: none; }
+
+/* 设置 → Git →「提交身份」:正在用的那一级的标签跟着主题色,其余照普通 settings-badge */
+.git-identity-panel .settings-badge[data-state="active"] { color: var(--accent-ink); border-color: currentColor; }
+.git-identity-panel [data-git-identity-level] .settings-badge { margin-right: 6px; }

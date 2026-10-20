@@ -26,6 +26,26 @@ describe('Amadeus publication dialect', () => {
     expect(html).not.toContain('<video')
     expect(html.match(/<img /g)).toHaveLength(1)
   })
+  it('renders image syntax pointing at a video as a muted autoplay loop, leaving embeds as click-to-play cards', () => {
+    const { html } = renderPublicMarkdown('![Demo](/releases/2.13.5/x.mp4)')
+    expect(html).toContain('<video src="/releases/2.13.5/x.mp4"')
+    for (const attr of [' autoplay', ' muted', ' loop', ' playsinline', ' preload="metadata"', ' aria-label="Demo"', ' data-amadeus-demo'])
+      expect(html).toContain(attr)
+    expect(html).not.toContain('loading=')
+    expect(html).not.toContain('data-amadeus-media')
+    for (const url of ['/a.webm', '/A.MP4', '/a.mp4?v=1', 'https://forsion.net/api/website/media/0f1e.mp4'])
+      expect(renderPublicMarkdown(`![x](${url})`).html).toContain('data-amadeus-demo')
+    expect(renderPublicMarkdown('![](/a.mp4)', { locale: 'zh' }).html).toContain('aria-label="视频演示"')
+    const embed = renderPublicMarkdown('![[/releases/film.mp4]]').html
+    expect(embed).toContain('data-amadeus-media="video"')
+    expect(embed).not.toContain('<video')
+    // a demo loop is never taken as the poster of the embed that follows it
+    const pair = renderPublicMarkdown('![Demo](/a.mp4)\n\n![[/b.mp4]]').html
+    expect(pair).toContain('data-amadeus-demo')
+    expect(pair).toContain('data-amadeus-media="video"')
+    expect(pair).not.toContain('has-poster')
+    expect(pair).not.toContain('<img')
+  })
   it('keeps plain links as links and supports official providers in explicit embeds only', () => {
     expect(
       renderPublicMarkdown('[YouTube](https://youtu.be/abc12345)').html,

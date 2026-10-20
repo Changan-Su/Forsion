@@ -11,12 +11,18 @@ import { useWeekStartPref } from './calendar/dateUtils'
 
 let host: HTMLDivElement
 let root: Root
+// happy-dom 不排版、尺寸全是 0;MonthScroll 把 0 尺寸当「摘下期间」不改行高(fix/calendar-tab-back),这里给容器一个排好版的尺寸
+const sizes = { clientHeight: 720, clientWidth: 960 }
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   if (!('ResizeObserver' in globalThis)) vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} unobserve() {} })
+  for (const [k, v] of Object.entries(sizes)) Object.defineProperty(HTMLElement.prototype, k, { configurable: true, get: () => v })
   host = document.createElement('div'); document.body.append(host); root = createRoot(host)
 })
-afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); useWeekStartPref.getState().setPref('auto') })
+afterEach(async () => {
+  await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); useWeekStartPref.getState().setPref('auto')
+  for (const k of Object.keys(sizes)) delete (HTMLElement.prototype as unknown as Record<string, unknown>)[k]
+})
 
 async function mount(anchorRef: { current: MonthAnchor | null }, key: string): Promise<HTMLSpanElement> {
   const titleRef = createRef<HTMLSpanElement>()

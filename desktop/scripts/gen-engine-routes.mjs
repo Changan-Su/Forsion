@@ -76,12 +76,16 @@ export const CLASSIFICATION = {
   // Pairing credentials and persistent collaboration policy are host-only.
   'GET /agent/browser-extension': [D, 'browser extension pairing credentials'],
   'POST /agent/browser-extension/reset-code': [D, 'rotates browser extension pairing credentials'],
+  'POST /agent/browser-extension/reload-clients': [D, 'reloads the browser extension on the local machine'],
   'GET /agent/agents/:slug/human': [D, 'host collaboration configuration'],
   'PUT /agent/agents/:slug/human': [D, 'host collaboration configuration write'],
   'POST /agent/agents/:slug/human/undo': [D, 'host collaboration configuration undo'],
   'GET /agent/project-context/human': [D, 'host collaboration configuration'],
   'PUT /agent/project-context/human': [D, 'host collaboration configuration write'],
   'POST /agent/project-context/human/undo': [D, 'host collaboration configuration undo'],
+  'GET /agent/human/:file': [D, 'host human folder (HUMAN / AGENT / SOUL / MEMORY)'],
+  'PUT /agent/human/:file': [D, 'host human folder write'],
+  'POST /agent/human/:file/undo': [D, 'host human folder undo'],
 
   // ── workspace.ts ──
   'GET /agent/workspace/list': [A, 'session workspace listing'],
@@ -239,6 +243,7 @@ export const CLASSIFICATION = {
   'POST /agent/project-context/git/commit': [D, 'git commit (runs repository hooks)'],
   'POST /agent/project-context/git/branch': [D, 'git repository write'],
   'POST /agent/project-context/git/push': [D, 'git push with local credentials'],
+  'POST /agent/project-context/git/push-target': [D, 'git repository config write (which remote the current branch pushes to)'],
   'POST /agent/project-context/git/pull': [D, 'git fetch + fast-forward with local credentials (runs repository hooks)'],
   'POST /agent/project-context/git/publish': [D, 'adds a remote and pushes with the signed-in account credentials'],
   'POST /agent/project-context/git/publish-github': [D, 'creates a GitHub repository with the linked account, adds a remote and pushes'],

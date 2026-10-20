@@ -22,6 +22,35 @@ export const CLOUD_VAULT_MARKER = '.forsion-vault.md'
 
 export const cloudVaultMarkerPath = (cloudName: string): string => `${cloudName}/${CLOUD_VAULT_MARKER}`
 
+/** 标记里记的「哪台设备在同步这个库」。id = 该设备 cloudSync.deviceId;since = 开始同步的日期(YYYY-MM-DD)。 */
+export interface CloudVaultDevice {
+  id: string
+  name: string
+  since?: string
+}
+
+/**
+ * 标记正文 = 一行 frontmatter `devices: [...]`(JSON 数组,同时是合法 YAML flow 序列,三端无需 YAML 库)。
+ * 返回 null = 空文件 / 看不懂的旧标记(08-03 起到 10-17 写的都是空文件,不知道是哪台设备);
+ * [] = 用户手动「设为同步库分区」的标记。
+ */
+export function parseCloudVaultMarker(text: string): CloudVaultDevice[] | null {
+  const m = /^devices:\s*(\[.*\])\s*$/m.exec(text ?? '')
+  if (!m) return null
+  try {
+    const arr: unknown = JSON.parse(m[1])
+    if (!Array.isArray(arr)) return null
+    return arr
+      .filter((d): d is CloudVaultDevice => !!d && typeof d.id === 'string' && typeof d.name === 'string')
+      .map((d) => ({ id: d.id, name: d.name, ...(typeof d.since === 'string' ? { since: d.since } : {}) }))
+  } catch {
+    return null
+  }
+}
+
+export const cloudVaultMarkerContent = (devices: CloudVaultDevice[]): string =>
+  `---\ndevices: ${JSON.stringify(devices.map((d) => ({ id: d.id, name: d.name, ...(d.since ? { since: d.since } : {}) })))}\n---\n`
+
 /** 从云端 tree 的路径清单推导「同步 Vault 文件夹」名(根级一段 + 标记)。 */
 export function cloudVaultNamesFrom(paths: string[]): string[] {
   const re = new RegExp(`^([^/]+)/${CLOUD_VAULT_MARKER.replace(/\./g, '\\.')}$`)

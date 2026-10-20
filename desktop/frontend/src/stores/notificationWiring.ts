@@ -107,7 +107,7 @@ export function installNotificationWiring(): void {
             event: 'sync.error', level: 'warning',
             text: tr('ntf.remoteSyncQuota', { n: quotaN }),
             dedupeKey: 'remotesync.quota',
-            ...(penzorSyncReady() ? { action: { label: tr('ntf.actionView'), run: openPenzorSync } } : {}),
+            ...(penzorSyncReady() ? { action: { label: tr('ntf.syncView'), run: openPenzorSync } } : {}),
           })
         }
       } else if (!r.ok || errs.length) {

@@ -17,7 +17,7 @@
  *   DELETE   /agent/special/muse/triggers/:id          删除一条盯任务规则
  *   GET      /agent/special/automation/sessions        agent 自动化的常驻会话列表(?triggerId= 过滤)
  *   GET      /agent/special/automation/runs?sessionId= 某会话的历次运行(muse 会话与自动化会话通用)
- *   GET      /agent/special/schedule                    全 agent 日程聚合(SCHEDULE.db;Calendar/自动化 Space)
+ *   GET      /agent/special/schedule                    全 agent 日程聚合(CALENDAR.db;Calendar/自动化 Space)
  *   POST     /agent/special/schedule/:slug/entries      upsert 日程条目(带 id 改/无 id 建;muse 的 auto 条目=自触发/Track)
  *   DELETE   /agent/special/schedule/:slug/entries/:id  删除一条日程条目
  *   GET      /agent/special/approvals?status=           无人值守 run 的待批/已批清单(pending_approvals)
@@ -566,7 +566,7 @@ router.get('/agent/special/automation/sessions', authMiddleware, async (req: Aut
   }
 });
 
-// ── Agent 日程(agents/<slug>/SCHEDULE.db;manage_schedule 工具同源) ──────────
+// ── Agent 日程(agents/<slug>/CALENDAR.db;manage_schedule 工具同源) ──────────
 
 // 全 agent 日程聚合(桌面 Calendar 合成只读源 + 自动化 Space「Agent 日程」组;只含有文件的 agent)。
 router.get('/agent/special/schedule', authMiddleware, async (_req: AuthRequest, res) => {

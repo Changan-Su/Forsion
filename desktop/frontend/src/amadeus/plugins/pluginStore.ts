@@ -59,6 +59,7 @@ import { createCalendarApi } from './pluginCalendar'
 import { createSpacesApi } from './pluginSpaces'
 import { clearSpaceProgressOf, setSpaceDot, setSpaceProgress } from '../../stores/spaceProgress'
 import { getSync, markSyncDecided, refreshSync, resolveNotes, runSyncNow, setSync, startSyncSetup, subscribeSync } from '../../services/syncSetup'
+import { POPUP_PRIORITY, queuePopup, releasePopupsOf } from '../../stores/popupQueue'
 import { closeSpotlight, showSpotlight } from './guideSpotlight'
 import { watchAccountName } from '../../services/accountName'
 import { fetchBingWallpapers } from '../../views/homepageWallpaper'
@@ -339,6 +340,7 @@ function watchVaultFile(rel: string, cb: () => void): () => void {
  *  公开事件谁都能派发,首方判断就被绕过了(Codex 评审 P1)。 */
 type ResetCardCeremonyArg = Parameters<NonNullable<PluginAppApi['showResetCardCeremony']>>[0]
 let resetCardCeremonyHandler: ((r: ResetCardCeremonyArg) => void) | null = null
+let popupSeq = 0 // ctx.app.queuePopup 的号:插件 id + 自增,停用时按前缀收
 export function setResetCardCeremonyHandler(fn: ((r: ResetCardCeremonyArg) => void) | null): void { resetCardCeremonyHandler = fn }
 
 function syncSeam(pluginId: string, ok: () => boolean): NonNullable<PluginAppApi['sync']> {
@@ -537,6 +539,8 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
     setSpaceDot: (spaceId, on) => (ok() && typeof spaceId === 'string' ? setSpaceDot(pluginId, spaceId, on) : false),
     // 同步总开关(2026-10-20,蓬洲云「同步」页):只给首方包(同 spotlight 认 locked)、只在有本地库远程同步的桌面
     ...(typeof window !== 'undefined' && window.remoteSync && !hostTangu()?.mobile ? { sync: syncSeam(pluginId, ok) } : {}),
+    // 自己弹出来的弹窗排队(2026-10-19,Extend 公告):同一时间只露一个,插件排在宿主的协议更新 / What's new 后面;停用时 teardown 收掉
+    queuePopup: () => (ok() ? queuePopup(`plugin:${pluginId}:${++popupSeq}`, POPUP_PRIORITY.plugin) : { ready: new Promise<void>(() => {}), done: () => {} }),
     openLink: async (url) => {
       if (!ok()) return false
       const [{ parseDeepLink }, { resolveDeepLink }] = await Promise.all([import('../../deepLinkPlan'), import('../../deepLinkInstall')])
@@ -1600,23 +1604,33 @@ export const usePluginStore = create<PluginState>((set, get) => {
         return { update(patch) { if (!cancelled) { Object.assign(pending, patch); if (patch.onChange) pending.onChange = value => { if (ctxAlive()) patch.onChange!(value) }; mounted?.update(pending) } }, dispose }
       },
       // 宿主样式的右键菜单(10-18,主页插件化 S7)。动态 import 破环;形态错同步抛。插件停用后点菜单项不再调它的 run。
-      contextMenu: (x, y, items) => {
+      // keepOpen:点了不关(勾选清单连勾),插件用 update 换行;菜单限高自己滚,所以 200 项只是兜底上限。
+      contextMenu: (x, y, items, opts) => {
         if (!Number.isFinite(x) || !Number.isFinite(y) || !Array.isArray(items)) throw new TypeError('contextMenu needs x, y and an item list')
-        const clean = items.filter((it) => it && typeof it.run === 'function' && typeof it.label === 'string' && it.label.trim()).slice(0, 40).map((it) => ({
+        const tidy = (list: unknown) => (Array.isArray(list) ? list as typeof items : []).filter((it) => it && typeof it.run === 'function' && typeof it.label === 'string' && it.label.trim()).slice(0, 200).map((it) => ({
           label: it.label.trim().slice(0, 80), run: it.run,
           ...(typeof it.checked === 'boolean' ? { checked: it.checked } : {}), disabled: !!it.disabled, danger: !!it.danger,
         }))
-        if (!ctxAlive() || !clean.length) return () => {}
-        let close: (() => void) | null = null, cancelled = false
-        const dispose = scope.own('mount', () => { cancelled = true; close?.() }, 'contextMenu')
+        const clean = tidy(items)
+        if (!ctxAlive() || !clean.length) return Object.assign(() => {}, { update() {} })
+        let menu: import('./contextMenuSurface').PluginMenuHandle | null = null, cancelled = false, latest = clean
+        const dispose = scope.own('mount', () => { cancelled = true; menu?.() }, 'contextMenu')
         void import('./contextMenuSurface').then((m) => {
           if (cancelled) return
-          close = m.openPluginContextMenu(x, y, clean, (run) => {
+          menu = m.openPluginContextMenu(x, y, latest, (run) => {
             if (!ctxAlive()) return
             try { run() } catch (e) { console.error(`[amadeus] plugin "${pluginId}" menu item threw`, e) }
-          }, () => dispose.forget()) // 自己关掉的(Esc / 点外面 / 点了某项)从账上划掉,别攒到停用(Codex 评审)
+          }, () => dispose.forget(), { keepOpen: opts?.keepOpen === true }) // 自己关掉的(Esc / 点外面 / 点了某项)从账上划掉,别攒到停用(Codex 评审)
         }).catch((e) => console.error(`[amadeus] plugin "${pluginId}" context menu failed`, e))
-        return dispose
+        return Object.assign(() => dispose(), {
+          update: (next: unknown) => {
+            if (cancelled || !ctxAlive()) return
+            const c = tidy(next)
+            if (!c.length) { dispose(); return }
+            latest = c // 菜单还在路上(动态 import 没回来)时也算数
+            menu?.update(c)
+          },
+        })
       },
       mountChatBox: (el, opts) => {
         if (!ctxAlive()) return { update() {}, focus() {}, dispose() {} }
@@ -2151,6 +2165,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     liveScopes.get(id)?.close()
     liveScopes.delete(id)
     clearSpaceProgressOf(id) // 停用 / 换代时 Ribbon 上别留着一个不再更新的进度环 / 红点
+    releasePopupsOf(`plugin:${id}:`) // 排着的 / 正在显示的弹窗号一并让出,别堵住队列
     closeSpotlight(id) // 圈注同理
     lastEnsure.delete(id) // 旧规则集不随重新启用被重放;再启用时插件自己 setup 里会重新 ensure
     set((s) => ({

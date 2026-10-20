@@ -160,6 +160,13 @@ const PARK_SETTLE_MS = 450
 /** 读屏(触摸浏览:TalkBack 这类)开没开。宿主写在 `<html data-reader>` 上(Android:原生外壳随 `layout` 报上来,
  *  见 mobile/src/nativeChrome.ts `applyChromeLayout`);没有宿主报的地方(浏览器、iOS 网页)恒为没开。 */
 const readerOn = (): boolean => document.documentElement.hasAttribute('data-reader')
+/** 并排左栏(宽屏 docked)右缘离页面左缘多少 dp,没有并排左栏 = 0。随原生顶栏状态推出去(`leftInset`):Android 外壳把
+ *  标题胶囊摆在它右边,左栏顶上就不必给胶囊让位(2026-10-20 方案 A2)。视口 px = 屏幕 dp(WebView 自己不缩放,
+ *  body 的 zoom 已在 getBoundingClientRect 里)。 */
+let sideInset = 0
+const sideInsetSubs = new Set<() => void>()
+const setSideInset = (v: number): void => { if (v !== sideInset) { sideInset = v; sideInsetSubs.forEach((fn) => fn()) } }
+const subscribeSideInset = (fn: () => void): (() => void) => { sideInsetSubs.add(fn); return () => { sideInsetSubs.delete(fn) } }
 const watchReader = (fn: () => void): (() => void) => {
   const mo = new MutationObserver(fn)
   mo.observe(document.documentElement, { attributes: true, attributeFilter: ['data-reader'] })
@@ -219,6 +226,15 @@ function Drawer({ side, docked, showFoot, page }: { side: 'left' | 'right'; dock
   const close = () => useWorkspace.getState().toggleSidebar(side)
   // 「这个抽屉有没有东西可给」:侧栏视图,或(仅左)底部常驻区。见 footAliveOf 上方的注释。
   const alive = leaves.length > 0 || withFoot
+  const sideRef = useRef<HTMLElement>(null)
+  const docking = !!docked && visible && alive
+  useEffect(() => {
+    const el = sideRef.current
+    if (!docking || !el) return
+    const ro = new ResizeObserver(() => setSideInset(Math.round(el.getBoundingClientRect().right)))
+    ro.observe(el)
+    return () => { ro.disconnect(); setSideInset(0) }
+  }, [docking])
   const inner = !alive ? null : (
     <>
       {/* page = 两级导航的列表层(见 listFirstNow):标题已在原生顶栏上,这里只在该侧有多个视图时留下切换下拉;
@@ -262,7 +278,7 @@ function Drawer({ side, docked, showFoot, page }: { side: 'left' | 'right'; dock
   )
   // 宽屏(>4:3)并排形态:与 main 同排的常驻列(仅左栏用;见 SingleColumnHost)。
   // docked 也要认 visible(顶栏钮/返回键关左栏后不能还杵在那,Codex 评审 P2)。
-  if (docked) return !visible || !alive ? null : <aside className="mb-sidecol">{inner}</aside>
+  if (docked) return !visible || !alive ? null : <aside className="mb-sidecol" ref={sideRef}>{inner}</aside>
   return (
     // 反向横滑关闭(左抽屉左滑/右抽屉右滑)已并进 Host 的 useDrawerDrag —— 三处 fling 判定
     // (main 呼出 / 抽屉内关 / dim 上关)本来就是同一件事的三个入口,合成一个控制器才有中间态。
@@ -927,15 +943,24 @@ function TabSheet({ onClose }: { onClose: () => void }) {
  *  ⚠️ 还要求宽度 ≥ 520px:竖屏手机弹出键盘后视口只剩一条矮横条(360×260 这种),单看长宽比会被判成「宽屏」,
  *     左栏当场并排弹出、收键盘后还留着(Codex 评审 2026-10-02)。竖屏手机宽 ≤ 480,横屏手机 ≥ 640,520 卡在中间。 */
 const WIDE_QUERY = '(min-aspect-ratio: 4/3) and (min-width: 520px)'
+/** 宿主替我们判过就用它的(`<html data-native-wide="1|0">`):Android 外壳宽屏时在左边立一条竖条(Space 切换),WebView 窄掉
+ *  76dp —— 按 WebView 自己的宽判,4:3 的平板会来回翻(竖条出现 → 不够宽 → 竖条收起 → 又够宽)。外壳按整个窗口判,
+ *  同一条线(NativeChromePlugin.wideWindow,数字与 WIDE_QUERY 一致),见 mobile/src/nativeChrome.ts。没有宿主照旧看视口。 */
+const wideNow = (): boolean => {
+  const host = document.documentElement.dataset.nativeWide
+  return host ? host === '1' : window.matchMedia(WIDE_QUERY).matches
+}
 function useWideAspect(enabled: boolean): boolean {
-  const [wide, setWide] = useState(() => enabled && window.matchMedia(WIDE_QUERY).matches)
+  const [wide, setWide] = useState(() => enabled && wideNow())
   useEffect(() => {
     if (!enabled) return
     const mq = window.matchMedia(WIDE_QUERY)
-    const on = (): void => setWide(mq.matches)
+    const on = (): void => setWide(wideNow())
     on() // 旋转/分屏即时跟随
     mq.addEventListener('change', on)
-    return () => mq.removeEventListener('change', on)
+    const mo = new MutationObserver(on)
+    mo.observe(document.documentElement, { attributes: true, attributeFilter: ['data-native-wide'] })
+    return () => { mq.removeEventListener('change', on); mo.disconnect() }
   }, [enabled])
   return enabled && wide
 }
@@ -944,7 +969,7 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
   useEffect(() => {
     const ws = useWorkspace.getState()
     // 宽窄先于还原同步:还原 / 建默认要据此展开并排左栏(dockLeftIfWide);下面 [wide] 那条 effect 排在这条之后才跑
-    ws.setWideMode(window.matchMedia(WIDE_QUERY).matches)
+    ws.setWideMode(wideNow())
     if (buildDefault) ws.setDefaultBuilder(buildDefault)
     // 冷启动先还原上次的标签 + 激活项(桌面是 WorkspaceHost.onReady 的 tryRestoreLayout,单列这边
     // 是三桶 leaf 的序列化);首启 / 整份不可用才构建当前 Space 的默认布局。挂载之前已经摆上了的由它自己认(照用,但发令枪要响)。
@@ -1026,10 +1051,12 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
         labels: toList ? { ...labels, left: back } : labels,
         // 底栏只在每个 Space 的第一层:列表层,或没有列表层的 Space(主页 / 日历…)的主区。
         ...(drawsSpaces && !toList ? { spaces: nativeSpaceList(), allLabel: trRef.current('lcl.mobile.allSpaces') } : {}),
-        // 当前这一层的视图给顶栏加的东西(搜索钮、标题的第二段),见 useNativeChromeExtras。
+        // 当前这一层的视图给顶栏加的东西(搜索钮、标题的第二段、左胶囊的宽度上限),见 useNativeChromeExtras。
         ...(extras?.search ? { search: extras.search.label } : {}),
         ...(extras?.title ? { titleSub: extras.title.sub, ...(extras.title.run ? { titleTap: true } : {}) } : {}),
         ...(moreDotLabel !== null ? { moreDot: { label: moreDotLabel } } : {}),
+        ...(sideInset ? { leftInset: sideInset } : {}),
+        ...(extras?.capLeftMax ? { capLeftMax: extras.capLeftMax } : {}),
       }, {
         left: () => useWorkspace.getState().toggleSidebar('left'),
         right: () => useWorkspace.getState().toggleSidebar('right'),
@@ -1044,7 +1071,7 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
       })
     }
     push()
-    const offs = [useWorkspace.subscribe(push), useSpaceStore.subscribe(push), useRibbonStore.subscribe(push), subscribeNativeChromeExtras(push), subscribeDockPicks(push)]
+    const offs = [useWorkspace.subscribe(push), useSpaceStore.subscribe(push), useRibbonStore.subscribe(push), subscribeNativeChromeExtras(push), subscribeDockPicks(push), subscribeSideInset(push)]
     // 只退订,不清状态:换语言重跑本 effect 时若先清成 null,原生栏会先收起再弹出(WebView 高度跳两下)。
     return () => { offs.forEach((off) => off()) }
   }, [nativeChrome, chromeLabelsKey, moreDotLabel]) // moreDotLabel:点亮 / 熄灭 / 换语言都重推一次
@@ -1126,7 +1153,7 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
     //   data-nav 的值每次进出主区都在变,挂在它下面的规则(哪怕只写 [data-nav] 不看值)每次都要重新匹配 ——
     //   其中带 `> :first-child` / `> svg` / `> button` 这类结尾的会把整页样式重算一遍(2026-10-11 实测 28–47ms,
     //   手机上再乘几倍)。只有真要看层级的规则才写 [data-nav='list']。仪器:mobile `npm run emu:perf`。
-    <div className="mb-shell" data-chrome={chromeOff ? 'off' : undefined} data-native-chrome={nativeChrome ? '' : undefined} data-space={activeSpaceId} data-nav={listFirst ? (leftVisible ? 'list' : 'detail') : undefined} data-list-first={listFirst ? '' : undefined} style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
+    <div className="mb-shell" data-chrome={chromeOff ? 'off' : undefined} data-native-chrome={nativeChrome ? '' : undefined} data-space={activeSpaceId} data-nav={listFirst ? (leftVisible ? 'list' : 'detail') : undefined} data-list-first={listFirst ? '' : undefined} data-wide={wide ? '' : undefined} style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
       {/* push 连贯式:左右抽屉都是 .mb-body 内的绝对定位面板,开侧把 main **原尺寸**推向另一边
           (translate 同一宽度,main 不缩放);dim 层盖在被推开的 main 上,点击/反向横滑收回。
           宽屏:左栏 docked 并排(sidecol),右栏滑入但不推 main。 */}

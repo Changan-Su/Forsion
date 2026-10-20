@@ -785,7 +785,8 @@ async function run() {
     await profile2.waitFor()
     assert.deepEqual(renamed, ['research-2'])
     assert.equal(await win.locator('.agents-roster-item.selected').filter({ hasText: 'Research' }).count(), 1, 'roster keeps the renamed agent selected')
-    assert.equal(await win.locator('.agents-roster-item').count(), 2, 'no duplicate roster row after rename')
+    // 只数 Agent 行:名册顶上「我」那一行(10-20)也是 .agents-roster-item,但在列表外面
+    assert.equal(await win.locator('.agents-roster-list .agents-roster-item').count(), 2, 'no duplicate roster row after rename')
     await profile2.locator('.agent-character-hero').screenshot({ path: path.join(home, 'hero-rename.png') })
     await profile2.getByLabel('文件夹名', { exact: true }).fill('research'); await profile2.getByLabel('文件夹名', { exact: true }).press('Enter')
     await profile.waitFor()

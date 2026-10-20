@@ -657,6 +657,99 @@ async function run(app, win, stub, seen, home, ctx) {
     && /github\.com\/dave-gh\/Demo-Project/.test(await gitCard.textContent()), JSON.stringify({ publishes: seen.gitGithubPublishes, notice: await saveNotice.textContent().catch(() => '') }))
   check('6m Git 写动作之后仍不横向溢出', await noOverflow(profile), await overflowReport(profile))
 
+  // ── 6u 有「远端」卡片的引擎(上下文带 remoteList / pushRemote,10-14 起):全部远端一张卡;推送键写去向;发布 / 连接 / 打开 GitHub 收进卡片 ──
+  const remotesCard = profile.locator('[data-project-git-remotes]')
+  const pushesBeforeRemotes = seen.gitPushes.length
+  const addDialog = win.locator('[data-git-add-remote-dialog]')
+  const remoteMenu = win.locator('.project-git-remote-menu')
+  const pushBtn = writeRow.locator('[data-git-action="push"]')
+  const ghRemote = { name: 'origin', url: 'https://github.com/dave-gh/Demo-Project.git', host: 'github', hostname: 'github.com', path: 'dave-gh/Demo-Project', web: 'https://github.com/dave-gh/Demo-Project', auth: 'github' }
+  ctx.git = { ...ctx.git, remote: ghRemote.url, remotes: 1, remoteList: [ghRemote], pushRemote: 'origin', upstream: `origin/${ctx.git.branch}`, ahead: 1, behind: 0 }
+  seen.hosting = { webUrl: 'https://git.forsion.example', name: 'Demo-Project' }
+  seen.github = { linked: true, login: 'dave-gh', remote: true, name: 'Demo-Project' }
+  await refreshGit()
+  await remotesCard.locator('[data-git-remote="origin"]').waitFor()
+  await until(async () => /@dave-gh/.test(await remotesCard.textContent()))
+  const oneText = await remotesCard.textContent()
+  check('6u 一个远端:一行(仓库路径 · GitHub · 用绑定的 @dave-gh · 推送到这里)+ 行尾「打开」;推送键「推送到 GitHub（1）」;摘要里没有远端 / 账号行,没有发布 / 连接 / 「打开 GitHub」',
+    /dave-gh\/Demo-Project/.test(oneText) && /GitHub · 用绑定的 @dave-gh/.test(oneText) && /推送到这里/.test(oneText) && await remotesCard.locator('[data-git-remote-open]').count() === 1
+    && /推送到 GitHub（1）/.test(await pushBtn.textContent()) && !(await gitCard.locator('.project-git-summary').textContent()).includes('github.com') && await accountRow.count() === 0
+    && await writeRow.locator('[data-git-action^="publish"], [data-git-action="connect-remote"]').count() === 0 && await gitCard.locator('[data-git-open="github"]').count() === 0,
+    JSON.stringify({ card: oneText, write: await writeRow.locator('button').allTextContents() }))
+  await remotesCard.scrollIntoViewIfNeeded()
+  await details.screenshot({ path: shots.gitRemotesOne = shot('project-git-remotes-one-zh-light') })
+  // 添加第二个:对话框三条去向,缺省 Forsion Git、预填仓库名、「以后推送到这里」缺省勾上;取消勾 → 只推这一次,去向不变
+  const publishesBefore = seen.gitPublishes.length
+  await remotesCard.locator('[data-git-action="add-remote"]').click()
+  await addDialog.waitFor()
+  await until(async () => (await addDialog.locator('[data-git-add-remote]').count()) === 3)
+  const targetBox = addDialog.locator('[data-git-add-remote-target] input')
+  check('6u2 「添加…」→ 对话框:Forsion Git / GitHub(@dave-gh)/ 已有地址;缺省选 Forsion Git、预填 Demo-Project;「以后推送到这里」缺省勾上',
+    await addDialog.locator('[data-git-add-remote="forsion"][aria-checked="true"]').count() === 1 && /@dave-gh/.test(await addDialog.locator('[data-git-add-remote="github"]').textContent())
+    && (await addDialog.locator('[data-git-add-remote-value]').inputValue()) === 'Demo-Project' && await targetBox.isChecked(), await addDialog.textContent())
+  await addDialog.screenshot({ path: shots.gitAddRemote = shot('project-git-add-remote-zh-light') })
+  await addDialog.locator('[data-git-add-remote-target]').click()
+  await addDialog.locator('[data-git-add-remote-confirm]').click()
+  await until(async () => (await remotesCard.locator('[data-git-remote]').count()) === 2)
+  const twoText = await remotesCard.textContent()
+  check('6u3 不勾 → POST git/publish { name, target:false };卡片两行,新的叫 forsion(Forsion Git · 你的 Forsion 账号),推送去向还是 origin',
+    seen.gitPublishes.length === publishesBefore + 1 && seen.gitPublishes.at(-1).name === 'Demo-Project' && seen.gitPublishes.at(-1).target === false
+    && /Forsion Git · 你的 Forsion 账号/.test(twoText) && await remotesCard.locator('[data-git-remote="origin"][data-git-remote-target]').count() === 1 && /推送到 GitHub/.test(await pushBtn.textContent()),
+    JSON.stringify({ publish: seen.gitPublishes.at(-1), card: twoText }))
+  // 几个远端:行尾是菜单 —— 以后推送到这里 / 只推送这一次 / 打开 / 复制地址
+  await remotesCard.locator('[data-git-remote-menu="forsion"]').click()
+  await remoteMenu.waitFor()
+  const menuActs = await remoteMenu.locator('button').evaluateAll((els) => els.map((el) => el.getAttribute('data-act')))
+  check('6u4 两个远端 → 行尾菜单:以后推送到这里 / 只推送这一次 / 在 Forsion Git 打开 / 复制地址', menuActs.join('|') === 'set-target|push-once|open|copy' && /在 Forsion Git 打开/.test(await remoteMenu.textContent()), JSON.stringify(menuActs))
+  await remoteMenu.locator('[data-act="set-target"]').click()
+  await until(async () => seen.gitPushTargets.length === 1)
+  await until(async () => /推送到 Forsion Git/.test(await pushBtn.textContent()))
+  check('6u5 「以后推送到这里」→ POST git/push-target { remote: forsion }(不推);标记挪到 forsion,推送键改成「推送到 Forsion Git」',
+    seen.gitPushTargets[0]?.remote === 'forsion' && seen.gitPushTargets[0]?.sessionId === 'pd-main' && await remotesCard.locator('[data-git-remote="forsion"][data-git-remote-target]').count() === 1
+    && /以后推送到 forsion/.test(await saveNotice.textContent()) && seen.gitPushes.length === pushesBeforeRemotes, JSON.stringify({ targets: seen.gitPushTargets, notice: await saveNotice.textContent().catch(() => '') }))
+  await remotesCard.scrollIntoViewIfNeeded()
+  await details.screenshot({ path: shots.gitRemotesTwo = shot('project-git-remotes-two-zh-light') })
+  await remotesCard.locator('[data-git-remote-menu="origin"]').click()
+  await remoteMenu.waitFor()
+  await remoteMenu.locator('[data-act="push-once"]').click()
+  await until(async () => seen.gitPushes.length === pushesBeforeRemotes + 1)
+  await until(async () => /已推送到 origin\//.test(await saveNotice.textContent()))
+  check('6u6 「只推送这一次」→ POST git/push { remote: origin };推送去向还是 forsion', seen.gitPushes.at(-1).remote === 'origin' && await remotesCard.locator('[data-git-remote="forsion"][data-git-remote-target]').count() === 1, JSON.stringify(seen.gitPushes.at(-1)))
+  // 一个远端都没有:卡片里一颗「添加远端…」,没有推送 / 拉取;贴地址 → POST git/remote { url, target },第一个就叫 origin
+  ctx.git = { ...ctx.git, remote: null, remotes: 0, remoteList: [], pushRemote: null, upstream: null, ahead: 0, behind: 0 }
+  await refreshGit()
+  await until(async () => (await remotesCard.locator('[data-git-remote]').count()) === 0)
+  check('6u9 没有远端 → 卡片说明 + 「添加远端…」;写动作行没有推送 / 拉取 / 发布 / 连接', /还没有远端/.test(await remotesCard.textContent()) && /添加远端/.test(await remotesCard.textContent())
+    && await writeRow.locator('[data-git-action="push"], [data-git-action="pull"], [data-git-action^="publish"], [data-git-action="connect-remote"]').count() === 0, JSON.stringify(await writeRow.locator('button').allTextContents()))
+  await remotesCard.scrollIntoViewIfNeeded()
+  await details.screenshot({ path: shots.gitRemotesNone = shot('project-git-remotes-none-zh-light') })
+  const remotesBefore = seen.gitRemotes.length
+  await remotesCard.locator('[data-git-action="add-remote"]').click()
+  await addDialog.waitFor()
+  await addDialog.locator('[data-git-add-remote="url"]').click()
+  await addDialog.locator('[data-git-add-remote-value]').fill('https://gitlab.com/dave/demo.git')
+  check('6u10 第一个远端:对话框里没有「以后推送到这里」(只有它一个,当然推到它)', await addDialog.locator('[data-git-add-remote-target]').count() === 0, await addDialog.textContent())
+  await addDialog.locator('[data-git-add-remote-confirm]').click()
+  await until(async () => (await remotesCard.locator('[data-git-remote]').count()) === 1)
+  check('6u11 连接 → POST git/remote { url, target:true };卡片一行 origin(gitlab.com · 用这台电脑自己的凭据),推送键「推送到 gitlab.com」',
+    seen.gitRemotes.length === remotesBefore + 1 && seen.gitRemotes.at(-1).url === 'https://gitlab.com/dave/demo.git' && seen.gitRemotes.at(-1).target === true
+    && /gitlab\.com · 用这台电脑自己的凭据/.test(await remotesCard.textContent()) && await remotesCard.locator('[data-git-remote="origin"][data-git-remote-target]').count() === 1 && /推送到 gitlab\.com/.test(await pushBtn.textContent()),
+    JSON.stringify({ remote: seen.gitRemotes.at(-1), card: await remotesCard.textContent() }))
+  // 凭据回退:带去的账号被拒、照这台电脑自己的凭据成了 → 结果里写明;两边都被拒 → 本地化说明(去向在 gitlab.com,不给「去绑定」)
+  seen.pushOwnOnce = true
+  await pushBtn.click()
+  await until(async () => /这台电脑自己的 git 凭据/.test(await saveNotice.textContent()))
+  check('6u7 推送照电脑自己的凭据成了(ownCredentials)→ 提示里写明「绑定的账号没有权限，这次用的是这台电脑自己的 git 凭据」', /已推送到 origin\//.test(await saveNotice.textContent()) && seen.gitPushes.at(-1).remote === undefined, await saveNotice.textContent())
+  seen.pushDeniedOnce = true
+  await pushBtn.click()
+  await until(async () => /Forsion 替你带的账号/.test((await gitError.textContent().catch(() => '')) || ''))
+  check('6u8 两边都被拒(credential_denied)→ 本地化说明 + git 原文;去向不在 GitHub,没有「去绑定」', /这台电脑自己的 git 凭据也不行/.test(await gitError.textContent()) && /Repository not found/.test(await gitError.locator('pre').textContent()) && await gitError.locator('[data-git-action="link-github"]').count() === 0, (await gitError.textContent().catch(() => '')) || '')
+  await pushBtn.click() // 再推一次(成功)把错误条收掉,后面的截图里不带它
+  await until(async () => (await gitError.count()) === 0)
+  check('6u12 远端卡片之后仍不横向溢出', await noOverflow(profile), await overflowReport(profile))
+  // 收尾:回到老引擎的样子(后面 8b2 看的是没有 remoteList 时的「打开 GitHub」)
+  { const { remoteList: _l, pushRemote: _p, ...legacy } = ctx.git; ctx.git = { ...legacy, remote: ghRemote.url, remotes: 1, upstream: `origin/${ctx.git.branch}` } }
+
   // ── 6n 设置 → Git:三项都落到 PUT /agent/git-settings(文本框失焦才写,开关立即写)──
   await win.evaluate(() => window.tangu.openFloatingPanel({ id: 'settings', title: 'Settings', builtin: 'settings', params: { tab: 'general/g-git' } }))
   let fl
@@ -678,20 +771,26 @@ async function run(app, win, stub, seen, home, ctx) {
   await fl.screenshot({ path: shots.gitSettings = shot('settings-git-zh-light') })
   // ── 6t 设置 → Git 的「账号」:Forsion Git(不用绑定)/ GitHub(绑没绑,去账户中心)/ 提交身份(可改,写进 git-settings)──
   const accounts = fl.locator('.git-accounts-panel')
+  const identityPanel = fl.locator('.git-identity-panel')
   const accountsText = await accounts.textContent()
-  check('6t 账号面板:Forsion Git 写明站点和「不用另外绑定」;GitHub 还没绑定 + 「去绑定」;提交身份来自 Forsion 账号、邮箱是不公开的地址', /git\.forsion\.example/.test(accountsText) && /不用另外绑定/.test(accountsText) && /还没绑定/.test(accountsText)
-    && await accounts.locator('[data-git-account="github-link"]').count() === 1 && /Dave <dave@noreply\.git\.forsion\.example>/.test(accountsText) && /不公开的地址/.test(accountsText), accountsText)
+  const levelStates = await identityPanel.locator('[data-git-identity-level]').evaluateAll((els) => els.map((el) => `${el.getAttribute('data-git-identity-level')}:${el.getAttribute('data-state')}`))
+  check('6t 账号面板:Forsion Git 写明站点、@dave 和「不用另外绑定」;GitHub 还没绑定 + 「去绑定」;其他站点 = 电脑自己的凭据;被拒时换电脑自己的再试一次',
+    /git\.forsion\.example · @dave/.test(accountsText) && /不用另外绑定/.test(accountsText) && /还没绑定/.test(accountsText) && await accounts.locator('[data-git-account="github-link"]').count() === 1
+    && /其他站点/.test(accountsText) && /这台电脑自己的 git 凭据/.test(accountsText) && /换成这台电脑自己的凭据再试一次/.test(accountsText), accountsText)
+  check('6t1 提交身份面板:四级链 git 配置 没有 / 这里填的 没有 / Forsion 账号 正在用(Dave <…>,邮箱是不公开的地址)/ git 猜的 用不到',
+    levelStates.join('|') === 'git:missing|custom:missing|forsion:active|auto:unused' && /Dave <dave@noreply\.git\.forsion\.example>/.test(await identityPanel.textContent()) && /不公开的地址/.test(await identityPanel.textContent())
+    && (await fl.locator('.git-settings-panel .settings-panel-head').textContent()).includes('提交与推送'), JSON.stringify({ levelStates, text: await identityPanel.textContent() }))
   const putsBeforeIdentity = seen.gitSettingsPuts.length
-  await accounts.locator('[data-git-account="identity-edit"]').click()
-  const identityForm = accounts.locator('[data-git-account="identity-form"]')
+  await identityPanel.locator('[data-git-account="identity-edit"]').click()
+  const identityForm = identityPanel.locator('[data-git-account="identity-form"]')
   await identityForm.locator('input[type="email"]').fill('not-an-email')
   check('6t2 邮箱写法不对 → 就地提示,保存键不可点', /邮箱的写法不对/.test(await identityForm.textContent()) && await identityForm.locator('[data-git-account="identity-save"]').isDisabled(), await identityForm.textContent())
   await identityForm.locator('input[type="text"]').fill('Dave Lee')
   await identityForm.locator('input[type="email"]').fill('dave@example.com')
   await identityForm.locator('[data-git-account="identity-save"]').click()
-  await until(async () => /你在这里填的/.test(await accounts.textContent()))
-  check('6t3 保存 → PUT git-settings { identityName, identityEmail };面板改成「你在这里填的」,表单收起', seen.gitSettingsPuts.length === putsBeforeIdentity + 1 && seen.gitSettingsPuts.at(-1).identityName === 'Dave Lee' && seen.gitSettingsPuts.at(-1).identityEmail === 'dave@example.com'
-    && /Dave Lee <dave@example\.com>/.test(await accounts.textContent()) && await identityForm.count() === 0, JSON.stringify(seen.gitSettingsPuts.at(-1)))
+  await until(async () => (await identityPanel.locator('[data-git-identity-level="custom"][data-state="active"]').count()) === 1)
+  check('6t3 保存 → PUT git-settings { identityName, identityEmail };「这里填的」那级变成正在用,Forsion 那级用不到,表单收起', seen.gitSettingsPuts.length === putsBeforeIdentity + 1 && seen.gitSettingsPuts.at(-1).identityName === 'Dave Lee' && seen.gitSettingsPuts.at(-1).identityEmail === 'dave@example.com'
+    && /Dave Lee <dave@example\.com>/.test(await identityPanel.textContent()) && await identityPanel.locator('[data-git-identity-level="forsion"][data-state="unused"]').count() === 1 && await identityForm.count() === 0, JSON.stringify(seen.gitSettingsPuts.at(-1)))
   // GitHub 在浏览器里的账户中心绑:窗口回到前台时自己重读
   seen.accounts = { ...seen.accounts, github: { linked: true, login: 'dave-gh' } }
   await fl.evaluate(() => window.dispatchEvent(new Event('focus')))
@@ -699,6 +798,8 @@ async function run(app, win, stub, seen, home, ctx) {
   check('6t4 绑好后窗口回到前台 → GitHub 一行变成「@dave-gh · 已绑定」+「在账户中心管理」', /@dave-gh/.test(await accounts.textContent()) && /已绑定/.test(await accounts.textContent()) && await accounts.locator('[data-git-account="github-link"]').count() === 0, await accounts.textContent())
   await accounts.scrollIntoViewIfNeeded()
   await accounts.screenshot({ path: shots.gitAccounts = shot('settings-git-accounts-zh-light') })
+  await identityPanel.scrollIntoViewIfNeeded()
+  await identityPanel.screenshot({ path: shots.gitIdentity = shot('settings-git-identity-zh-light') })
   await fl.close()
 
   // ── 7 用它开新会话:落成新对话草稿(activeId 空),右栏随之切成该 Agent 的详情 ────
@@ -976,10 +1077,22 @@ async function main() {
   for (const dir of [userData, `${userData}-dev`, vault, projectDir]) fs.mkdirSync(dir, { recursive: true })
   const ctx = contextFixture(projectDir)
   const seen = { memoryForgets: [], memoryConflictOnce: false, memoryCandidates: [], memoryCandidateGoneOnce: false, memoryCandidateBusyOnce: false, memoryRestores: [], memoryRestoreGoneOnce: false, compactedActivity: false, candidatesActivity: false, ctxGets: [], init: 0, docPuts: [], settingsPuts: [], skills: [], sessionsCreated: 0, iconPosts: [], iconGets: 0, iconDeletes: [], sessionDeletes: [], agentDeletes: [],
-    gitMessages: [], gitCommits: [], gitBranches: [], gitPushes: [], gitPulls: [], gitInits: [], gitSettingsPuts: [], gitPendings: [], gitTrusts: [], pushGate: false, hostingGets: [], hosting: null, gitPublishes: [], github: null, pushGithubUnlinkedOnce: false, gitRemotes: [], gitGithubPublishes: [], accountsGets: 0, gitClones: [], cloneExistsOnce: false,
+    gitMessages: [], gitCommits: [], gitBranches: [], gitPushes: [], gitPulls: [], gitInits: [], gitSettingsPuts: [], gitPendings: [], gitTrusts: [], pushGate: false, hostingGets: [], hosting: null, gitPublishes: [], github: null, pushGithubUnlinkedOnce: false, gitRemotes: [], gitGithubPublishes: [], accountsGets: 0, gitPushTargets: [], pushOwnOnce: false, pushDeniedOnce: false, gitClones: [], cloneExistsOnce: false,
     repos: { forsion: [{ fullName: 'dave/notes', private: true, cloneUrl: 'https://git.forsion.example/dave/notes.git', updatedAt: '2026-10-10T08:00:00Z' }, { fullName: 'dave/plugin-demo', private: false, cloneUrl: 'https://git.forsion.example/dave/plugin-demo.git', updatedAt: null }], github: 'unlinked' },
-    accounts: { forsionGit: { webUrl: 'https://git.forsion.example' }, github: { linked: false }, identity: { name: 'Dave', email: 'dave@noreply.git.forsion.example', source: 'forsion' } } }
+    accounts: { forsionGit: { webUrl: 'https://git.forsion.example', username: 'dave' }, github: { linked: false }, identity: { name: 'Dave', email: 'dave@noreply.git.forsion.example', source: 'forsion' } } }
   let gitSettings = { branchPrefix: 'tangu/', commitInstructions: '', forceWithLease: false }
+  // 有「远端」卡片的引擎(ctx.git.remoteList 在):照引擎 remoteNameFor 起名(第一个 origin,之后按站点),target 决定推送去向
+  const addListedRemote = (site, url, target) => {
+    if (!ctx.git.remoteList) return null
+    const u = new URL(url), names = ctx.git.remoteList.map((r) => r.name)
+    const host = u.hostname === 'github.com' ? 'github' : u.hostname === 'git.forsion.example' ? 'forsion' : 'other'
+    const name = !names.length ? 'origin' : names.includes(site) ? `${site}-2` : site
+    const repoPath = u.pathname.replace(/^\/+|\.git$/g, '')
+    const remoteList = [...ctx.git.remoteList, { name, url, host, hostname: u.hostname, path: repoPath, web: `https://${u.hostname}/${repoPath}`, auth: host === 'other' ? 'local' : host }].sort((a, b) => a.name.localeCompare(b.name))
+    const moves = target !== false || !names.length
+    ctx.git = { ...ctx.git, remoteList, remotes: remoteList.length, remote: ctx.git.remote ?? url, pushRemote: moves ? name : ctx.git.pushRemote, ...(moves ? { upstream: `${name}/${ctx.git.branch}`, ahead: 0, behind: 0 } : {}) }
+    return name
+  }
   const demoIds = new Set(['pd-main', 'pd-coder', 'pd-team']) // 默认项 / 图标只属于 Demo Project;别的项目组读到的是空
   // 真实磁盘上的项目 .tangu(移除工作区勾「删除相关文件」时要进废纸篓)
   fs.mkdirSync(path.join(projectDir, '.tangu', 'skills'), { recursive: true })
@@ -1043,8 +1156,19 @@ async function main() {
       // 远端在 GitHub、git 自己认证失败、Forsion 账号又没绑 GitHub(引擎 services/githubGit.ts 带的话)
       if (seen.pushGithubUnlinkedOnce) { seen.pushGithubUnlinkedOnce = false; return { __code: 400, body: { detail: 'No GitHub account is linked', error: 'github_not_linked' } } }
       if (seen.pushTimeoutOnce) { seen.pushTimeoutOnce = false; return { __code: 400, body: { detail: 'git push timed out', error: 'git_timeout', info: 'timed out' } } }
-      ctx.git = { ...ctx.git, upstream: `origin/${ctx.git.branch}`, ahead: 0 }
-      return { remote: 'origin', branch: ctx.git.branch, target: `origin/${ctx.git.branch}`, output: '', context: ctx }
+      // 凭据回退(引擎 runWithRemoteCredentials):带去的账号和电脑自己的凭据都被拒 → credential_denied;电脑自己的成了 → ownCredentials
+      if (seen.pushDeniedOnce) { seen.pushDeniedOnce = false; return { __code: 400, body: { detail: 'denied', error: 'credential_denied', info: 'remote: Repository not found.' } } }
+      const own = seen.pushOwnOnce; seen.pushOwnOnce = false
+      // 点名远端 = 只推这一次(不动上游);不点名 = 推到推送去向(老引擎没有去向 → origin)
+      const to = b.remote || ctx.git.pushRemote || 'origin'
+      if (!b.remote) ctx.git = { ...ctx.git, upstream: `${to}/${ctx.git.branch}`, ahead: 0 }
+      return { remote: to, branch: ctx.git.branch, target: `${to}/${ctx.git.branch}`, output: '', ...(own ? { ownCredentials: true } : {}), context: ctx }
+    }
+    // 以后推送到这里(引擎 gitSetPushRemote):只写当前分支的上游配置,不推
+    if (route === '/agent/project-context/git/push-target' && method === 'POST') {
+      const b = await body(); seen.gitPushTargets.push(b)
+      ctx.git = { ...ctx.git, pushRemote: b.remote }
+      return { pushTarget: { remote: b.remote, branch: ctx.git.branch }, context: ctx }
     }
     // 拉取(引擎 gitPull:fetch + 只快进)。pullNext 指定下一次的结局:分叉 / Forsion Git 还没开通;缺省 = 快进拿到落后的那几个
     if (route === '/agent/project-context/git/pull' && method === 'POST') {
@@ -1062,12 +1186,16 @@ async function main() {
     if (route === '/agent/project-context/git/remote' && method === 'POST') {
       const b = await body(); seen.gitRemotes.push(b)
       if (!/^(https:\/\/|git@)/.test(String(b.url || ''))) return { __code: 400, body: { detail: 'That is not a remote address this app can use', error: 'invalid_remote_url' } }
+      const listed = ctx.git.remoteList && addListedRemote(new URL(b.url).hostname.split('.').slice(-2)[0], b.url, b.target)
+      if (listed) return { remote: { remote: listed, upstream: null, target: b.target !== false }, context: ctx }
       ctx.git = { ...ctx.git, remote: b.url, remotes: 1, upstream: `origin/${ctx.git.branch}`, ahead: 0, behind: 0 }
       return { remote: { remote: 'origin', upstream: ctx.git.upstream }, context: ctx }
     }
     // 发布到 GitHub(引擎 publishToGithub):成功 = 建了私有仓库、origin 设好并推上去了
     if (route === '/agent/project-context/git/publish-github' && method === 'POST') {
       const b = await body(); seen.gitGithubPublishes.push(b)
+      const listed = addListedRemote('github', `https://github.com/dave-gh/${b.name}.git`, b.target)
+      if (listed) return { publish: { url: `https://github.com/dave-gh/${b.name}`, name: b.name, remote: listed, branch: ctx.git.branch, target: `${listed}/${ctx.git.branch}`, output: '' }, context: ctx }
       ctx.git = { ...ctx.git, remote: `https://github.com/dave-gh/${b.name}.git`, remotes: 1, upstream: `origin/${ctx.git.branch}`, ahead: 0, behind: 0 }
       return { publish: { url: `https://github.com/dave-gh/${b.name}`, name: b.name, remote: 'origin', branch: ctx.git.branch, target: ctx.git.upstream, output: '' }, context: ctx }
     }
@@ -1075,6 +1203,8 @@ async function main() {
     if (route === '/agent/project-context/git/publish' && method === 'POST') {
       const b = await body(); seen.gitPublishes.push(b)
       if (!/^[A-Za-z0-9._-]+$/.test(String(b.name || ''))) return { __code: 400, body: { detail: 'That is not a valid repository name', error: 'invalid_repo_name', info: String(b.name || '') } }
+      const listed = addListedRemote('forsion', `https://git.forsion.example/dave/${b.name}.git`, b.target)
+      if (listed) return { publish: { url: `https://git.forsion.example/dave/${b.name}`, name: b.name, remote: listed, branch: ctx.git.branch, target: `${listed}/${ctx.git.branch}`, output: '' }, context: ctx }
       ctx.git = { ...ctx.git, remote: `git.forsion.example/dave/${b.name}`, remotes: 1, upstream: `origin/${ctx.git.branch}`, ahead: 0, behind: 0 }
       return { publish: { url: `https://git.forsion.example/dave/${b.name}`, name: b.name, remote: 'origin', branch: ctx.git.branch, target: `origin/${ctx.git.branch}`, output: '' }, context: ctx }
     }

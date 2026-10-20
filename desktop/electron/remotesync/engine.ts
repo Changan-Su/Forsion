@@ -16,6 +16,7 @@ import { decide } from './decide'
 import { compileIgnore } from './ignore'
 import { walkLocalFiles, atomicWrite, sha256, type LocalFile } from './fsLocal'
 import { loadPrev, savePrev } from './prevSync'
+import { withDbLock } from '../amadeus/fs/dbLock'
 import type { PlanItem, PrevState, RemoteEntity, SyncOptions, SyncReport } from './types'
 
 const DEFAULT_MAX_FILE = 100 * 1024 * 1024
@@ -272,6 +273,9 @@ export async function runSync(opts: SyncOptions): Promise<SyncReport> {
   await runPool(ordered, concurrency, async (item) => {
     const { key, kind } = item
     const abs = absOf(key)
+    // 数据库文件(日历 Calendar.db 等)落盘「重读 → 比对 → 留副本 → 换文件」整段拿桌面比对交换写 / 引擎 mutateDb / human/ 镜像共用的那把锁:
+    // 不然别的写入方在「重读」和「换文件」之间写进来的行会被静默盖掉,镜像还会把它当成「库里删了」传到所有设备(10-20 Codex 复核)
+    const local = <T>(fn: () => Promise<T>): Promise<T> => (key.toLowerCase().endsWith('.db') ? withDbLock(abs, fn) : fn())
     try {
       if (kind === 'push') {
         const data = await fs.readFile(abs)
@@ -293,14 +297,16 @@ export async function runSync(opts: SyncOptions): Promise<SyncReport> {
         // stale-plan guard:scan 之后本地被改/新建(内容与计划所见不符)→ 本地版先存冲突副本;
         // scan 时本地不存在(scanned 为空)而现在有文件 = 执行窗口里新建的,同样必须让副本
         const scanned = localMap.get(key)
-        const cur = await readIfExists(abs)
-        if (cur && sha256(cur) !== (scanned?.h ?? null)) {
-          await materializeConflictCopy(opts.localRoot, key, cur)
-          report.conflicts++
-        }
-        await atomicWrite(abs, data, remote.mtimeMs)
-        const st = await fs.stat(abs)
-        prev.entries[key] = { h: sha256(data), r: remote.id, sz: data.byteLength, mt: Math.floor(st.mtimeMs) }
+        await local(async () => {
+          const cur = await readIfExists(abs)
+          if (cur && sha256(cur) !== (scanned?.h ?? null)) {
+            await materializeConflictCopy(opts.localRoot, key, cur)
+            report.conflicts++
+          }
+          await atomicWrite(abs, data, remote.mtimeMs)
+          const st = await fs.stat(abs)
+          prev.entries[key] = { h: sha256(data), r: remote.id, sz: data.byteLength, mt: Math.floor(st.mtimeMs) }
+        })
         report.pulled++
       } else if (kind === 'pushDelete') {
         await withTimeout((signal) => opts.remote.rm(key, signal, prev.entries[key]?.r ?? null), RM_TIMEOUT_MS, `rm ${key}`)
@@ -310,31 +316,35 @@ export async function runSync(opts: SyncOptions): Promise<SyncReport> {
         // stale-plan guard:重验本地仍与基线一致才删;被改过 → 留给下轮重derive(会变成 conflict/push);
         // 读失败(非 ENOENT)会 throw 记 errors,绝不把"读不了"当"可删"
         const pe = prev.entries[key]
-        const cur = await readIfExists(abs)
-        if (cur === null || (pe && sha256(cur) === pe.h)) {
-          await deleteLocalFile(abs)
-          await removeEmptyDirs(abs, opts.localRoot)
-          delete prev.entries[key]
-          report.deletedLocal++
-        }
+        await local(async () => {
+          const cur = await readIfExists(abs)
+          if (cur === null || (pe && sha256(cur) === pe.h)) {
+            await deleteLocalFile(abs)
+            await removeEmptyDirs(abs, opts.localRoot)
+            delete prev.entries[key]
+            report.deletedLocal++
+          }
+        })
       } else if (kind === 'join' || kind === 'conflict') {
         const remote = remoteMap.get(key)!
         const data = await withTimeout((signal) => opts.remote.readFile(key, signal), TRANSFER_TIMEOUT_MS, `pull ${key}`)
-        const cur = await readIfExists(abs)
-        if (cur && sha256(cur) === sha256(data)) {
-          // 内容其实一致 → 收敛基线即可
-          const st = await fs.stat(abs)
-          prev.entries[key] = { h: sha256(data), r: remote.id, sz: data.byteLength, mt: Math.floor(st.mtimeMs) }
-        } else {
-          if (cur) {
-            await materializeConflictCopy(opts.localRoot, key, cur)
-            report.conflicts++
+        await local(async () => {
+          const cur = await readIfExists(abs)
+          if (cur && sha256(cur) === sha256(data)) {
+            // 内容其实一致 → 收敛基线即可
+            const st = await fs.stat(abs)
+            prev.entries[key] = { h: sha256(data), r: remote.id, sz: data.byteLength, mt: Math.floor(st.mtimeMs) }
+          } else {
+            if (cur) {
+              await materializeConflictCopy(opts.localRoot, key, cur)
+              report.conflicts++
+            }
+            await atomicWrite(abs, data, remote.mtimeMs)
+            const st = await fs.stat(abs)
+            prev.entries[key] = { h: sha256(data), r: remote.id, sz: data.byteLength, mt: Math.floor(st.mtimeMs) }
+            report.pulled++
           }
-          await atomicWrite(abs, data, remote.mtimeMs)
-          const st = await fs.stat(abs)
-          prev.entries[key] = { h: sha256(data), r: remote.id, sz: data.byteLength, mt: Math.floor(st.mtimeMs) }
-          report.pulled++
-        }
+        })
       }
     } catch (e) {
       report.errors.push(`${kind} ${key}: ${String((e as Error)?.message || e)}`)

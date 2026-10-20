@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.57.0
+  version: 1.59.0
   author: Forsion
   category: Forsion
 ---
@@ -337,7 +337,7 @@ ctx.registerView({ id: 'home', title: 'Muse', mount(el) {
 | `ctx.ui.mountSelectionBar` | 自己的视图里选中文字后浮出宿主的划线条 | 宿主给「问 Tangu / 翻译 / ⋯」,你声明自己的工具(图标钮 / 颜色点);不接就什么都不出;老宿主没有 → 可选链,保留自己的菜单 |
 | `ctx.ui.mountSettingsPage` / `ctx.ui.mountSettingsItem` | 设置类页面(账号、额度、诊断、偏好…)用宿主的设置零件画 | 只给 groups / items 数据和回调,宿主按端排版(手机上紧凑控件留右、宽控件换行、选了就执行 → 半屏);**别再抄宿主的设置 CSS**;老宿主没有 → 可选链,保留自己画的那套 |
 | `ctx.ui.mountRecord` | 自己的卡片里挂宿主的「一行记录」编辑字段(标题 / 时间 / 属性,和内置日历的事件浮卡同一份) | 2026-10-17 起;⚠️**声明 `"databases"` 才有**;写口同 `ctx.databases.setCell`,外框 / 关闭 / 打开 / 删除归你;见下「日历 / 待办类插件的其余入口」 |
-| `ctx.ui.contextMenu(x, y, items)` | 宿主样式的右键菜单(和内置主页、Ribbon 的一样) | 2026-10-18 起;`items` = `{ label, run(), checked?, disabled?, danger? }`,视口坐标、放不下自己翻面;同一时刻只开一个,点外面 / Esc / 点了某项就关;返回关闭函数;老宿主没有 → `ctx.ui?.contextMenu?.(…)` |
+| `ctx.ui.contextMenu(x, y, items, opts?)` | 宿主样式的右键菜单(和内置主页、Ribbon 的一样) | 2026-10-18 起;`items` = `{ label, run(), checked?, disabled?, danger? }`,视口坐标、放不下自己翻面,限高、项多 / 窗口矮时自己滚(最多 200 项);同一时刻只开一个,点外面 / Esc / 点了某项就关;返回关闭函数;老宿主没有 → `ctx.ui?.contextMenu?.(…)`。**勾选清单连勾**:`opts.keepOpen: true` 点了不关,你改完状态调返回句柄的 `close.update(items)` 换一份行 —— ⚠️勾和 `run` 都要换成新的;连点两下可能赶在重画之前(用的还是旧那份行),所以 `run` 里读**当下**的状态(ref / store),别只靠闭包,不然第二下会把第一下吞掉;空列表 = 关。更早的宿主不认 `opts`、点了照关,也没有 `update`(拿 `typeof close.update === 'function'` 判) |
 | `ctx.ui.mountBoard` / `ctx.ui.boardToSvg` | 盖在自己内容上的透明白板层(手写 / 圈画) | 和 `.excalidraw.md` 白板同一个引擎、同样的七支笔;**视口归调用方**(自己推 `viewport`、自己接滚轮);元素原样存取;不在手写时用 `boardToSvg` 出静态图;老宿主没有 → 不出手写入口 |
 | `ctx.table.mount` | 面板里的原生多维表(只读) | 一份规格 → 真 DbTable(筛选/搜索/隐藏列/排序/统计全套),**不依赖笔记库**;老宿主没有 → 可选链 + 自己的表格降级(见下) |
 
@@ -474,6 +474,7 @@ ctx.registerCommand({
 | `ctx.app.openLink?(url)` | 在应用内打开一条 `forsion://` 链接(2026-10-17 起) | 口径同系统唤起的深链,只导航不执行;插件页 / 收件箱信 / 笔记正文里的 `<a href="forsion://…">` 宿主本来就在应用内接住,这条给按钮用 |
 | `ctx.app.setSpaceProgress?(spaceId, progress)` | 在 Ribbon 上自己 Space 的图标外画一圈进度环(2026-10-18 起) | 只认本插件随包带的 Space,别人的 / 内置的恒 `false`;`0–1`,`null` 收起;按整百分比画,每 0.5 秒报一次也不会重渲;那个 Space 有未读角标时让给角标;插件停用时宿主收掉;Space 收进 Ribbon 文件夹 / 「⋯」时看不到环;旧宿主没有 → `?.` |
 | `ctx.app.setSpaceDot?(spaceId, on)` | 在 Ribbon 上自己 Space 的图标右上角挂提示红点(2026-10-19 起;服务器管理插件给「反馈中心」挂提醒用) | 只认本插件随包带的 Space,别人的 / 内置的恒 `false`;`true` 挂、`false` 收,没变不重渲;红点和收件箱未读角标同一种红,有角标时让给角标,和进度环同时有时只画红点;插件停用时宿主收掉;挂着时图标读屏名带「有新提醒」;列表行的未读仍用 `ListItem.unread`(指示色,不是红),要在别的 Space 也看得到就配上它;旧宿主没有 → `?.` |
+| `ctx.app.queuePopup?()` | 自己弹出来的弹窗排队(2026-10-19 起;Extend 公告用) | 应用里同一时间只露一个弹窗:协议更新、What's new 在前,插件排在后面,同级先来后到;全屏引导开着时谁都不出。返回 `{ ready, done }`:`await ready` 之后再挂弹窗,关掉时 `done()`;决定不弹了(换账号、数据过期)也调 `done()` 撤销,这时 `ready` 永远不 resolve。不 `done()` 会一直堵着队列,插件停用时宿主替你收掉。用户点了才打开的面板不用排;旧宿主没有 → 直接弹 |
 | `ctx.app.runCommand?(id)` | 跑一条命令面板里的现成命令(2026-10-17 起) | **只对首方内置包生效**,别的插件恒 `false`(命令里有删除 / 改设置) |
 | `ctx.app.spotlight?({ anchor, title, body?, step? } \| null)` | 在真界面上圈出一处 + 一张小卡(2026-10-19 起,使用指南的「带我去」) | **只对首方内置包生效**,别的插件恒 resolve `'missing'`;锚点是宿主的一张表(`ribbon-spaces` / `chat-composer` / `note-new` / `note-body` / `note-canvas` / `agent-new`),在收着的侧栏里会先展开;不压暗、不拦点击、同一时刻一处;resolve `ok` / `mute`(用户点了不再提示,插件自己记下)/ `gone` / `missing`(等 2 秒仍不在屏幕上)/ `replaced` / `closed`(传 `null` 收起);旧宿主没有 → `?.`,没有就照老做法 |
 | `ctx.app.sync?` | 读写这台电脑的三项云同步(2026-10-20 起,蓬洲云「同步」页) | **只对首方内置包生效**,别的插件整个成员缺席;手机 / 网页、没有本地库远程同步的宿主上也缺席。`get()` 给快照(智库 / Agents 与记忆 / 插件数据各自开没开、进度、第二台电脑待定的合并问题)、`subscribe(fn)`、`refresh()`、`set(kind, on)`(`notes` / `agents` / `plugins`)、`resolveNotes('merge' \| 'cloud' \| 'skip')`、`runNow()`;开关与引擎都在宿主,插件只画界面 |
@@ -1526,6 +1527,7 @@ const off = s.subscribe(draw)                        // Space 注册 / Ribbon �
 - `actions()`:商店、成就两格 `{ id, name, run() }`,图标同样用 `mountIcon(el, id)`。
 - `open(id)` 口径同 Ribbon 上点它;本窗口是锁在某个 Space 上的 Space 窗口时,开到那个 Space 自己的窗口。不认识的 id → `false`。
 - `mountIcon` / `mountStatus` 返回卸载函数,之后 `el` 立刻还给你;插件被停用 / 重载时宿主统一收掉,`subscribe` 也一并退订。
+- `mountIcon` 画的图标跟着 Space 走:同一个 id 重新注册换了图标(插件更新了 `iconFile`)宿主原地重画;挂的时候还没注册的 id 先空着,注册上了再画 —— 不用为换图标自己重挂。
 
 ## 全库多维表与笔记任务:ctx.databases / ctx.noteTasks(2026-10-16 起)
 
