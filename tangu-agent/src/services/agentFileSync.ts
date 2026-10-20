@@ -24,8 +24,8 @@ type Guard = () => void;
 type Category = 'DEF' | 'MEM';
 const categoryOf = (p: string): Category => p === 'MEMORY.md' || p === TOMBSTONES || p.startsWith('LOG/') ? 'MEM' : 'DEF';
 /** base:可合并的文件(human/ 那几份、USER.md)记下上次两边一致时的原文,两边都改了就拿它三方合并,不再整份出副本。 */
-/** pending:可合并的文件推送 / 落盘之前先标上,确认了才换成新影子(见 reconcileFile 的 unsure)。push = 带 CAS 推的那份内容的哈希。 */
-interface PrevEntry { seq?: number; hash?: string; lastCloudMtimeMs?: number; base?: string; pending?: { push?: string } }
+/** pending:可合并的文件推送 / 落盘之前先标上,确认了才换成新影子(见 reconcileFile 的 unsure)。push = 从这条的 seq 带 CAS 推出去、还没确认的那几份内容的哈希。 */
+interface PrevEntry { seq?: number; hash?: string; lastCloudMtimeMs?: number; base?: string; pending?: { push?: string[] } }
 interface PrevState { files: Record<string, PrevEntry> }
 const emptyResult = (): AgentFileSyncResult => ({ ok: true, agents: 0, pushed: 0, pulled: 0, deleted: 0, skipped: 0, conflicts: 0 });
 function fail(result: AgentFileSyncResult, e: unknown): void {
@@ -322,12 +322,13 @@ async function reconcileFile(cloud: AgentFilesBrain, uid: string, slug: string, 
   const hash = initial === null ? null : sha256(initial);
   const live = meta && !meta.deleted ? meta : undefined;
   const stored = prev.files[p];
-  // 上次推送 / 落盘没等到确认:云端 seq 没动 = 没落成;带 CAS 推的,seq 正好 +1 却不是推的那份 = 那一位被别的设备占了、也没落成 ——
-  // 这两种旧影子照用。别的情况拿不准落没落成,当没有影子(第一次见面)
-  const missed = (pd: { push?: string }): boolean => live?.seq === stored!.seq
-    || (pd.push !== undefined && stored!.seq !== undefined && live?.seq === stored!.seq + 1 && live.hash != null && live.hash !== pd.push);
-  if (stored?.pending && missed(stored.pending)) delete stored.pending;
-  const pe = stored?.pending ? undefined : stored;
+  const pushes = stored?.pending?.push ?? [];
+  // 上次推送 / 落盘没等到确认(pending):
+  // - 云端 seq 没动 → 旧影子照用,但标记留着:断掉的请求可能还在服务端排着,晚些才落下(10-20 Codex 复核第三轮)
+  // - seq 正好 +1、却不是这边推的任何一份 → 那一位被别的设备占了,这边从旧 seq 带 CAS 的推送再也落不下:撤标记照用
+  // - 其余拿不准落没落成,当没有影子(第一次见面,取并集)
+  if (pushes.length && stored!.seq !== undefined && live?.seq === stored!.seq + 1 && live.hash != null && !pushes.includes(live.hash)) delete stored!.pending;
+  const pe = !stored?.pending || live?.seq === stored.seq ? stored : undefined;
   const modern = !live || (typeof live.seq === 'number' && live.hash != null);
   let decision: Decision;
   if (modern) decision = decide(hash, pe?.seq != null && pe.hash ? { seq: pe.seq, hash: pe.hash } : null, live ? { seq: live.seq!, hash: live.hash ?? null } : null);
@@ -344,9 +345,16 @@ async function reconcileFile(cloud: AgentFilesBrain, uid: string, slug: string, 
   // 返回「撤掉标记」:云端明确拒了(CAS 冲突)/ 本地没落成,旧影子照样作数。
   const unsure = (pushing?: Buffer): (() => void) => {
     const entry = prev.files[p];
-    if (!opts.merge || !opts.persist || !entry || entry.pending) return () => {};
-    entry.pending = pushing ? { push: sha256(pushing) } : {}; opts.persist();
-    return () => { if (prev.files[p] === entry) { delete entry.pending; opts.persist!(); } };
+    if (!opts.merge || !opts.persist || !entry) return () => {};
+    const fresh = !entry.pending, h = pushing ? sha256(pushing) : undefined;
+    entry.pending = { push: [...(entry.pending?.push ?? []), ...(h ? [h] : [])] }; opts.persist();
+    return () => {
+      if (prev.files[p] !== entry || !entry.pending) return;
+      const rest = [...(entry.pending.push ?? [])];
+      if (h) rest.splice(rest.indexOf(h), 1); // 只撤这一次的;更早那次可能还在路上
+      if (fresh && !rest.length) delete entry.pending; else entry.pending = { push: rest };
+      opts.persist!();
+    };
   };
   // 记下的原文只在和影子哈希对得上时才当合并基线(老版本写的影子没有原文;对不上就当第一次见面,按并集合)
   const base = opts.merge && pe?.base !== undefined && pe.hash === sha256(Buffer.from(pe.base)) ? pe.base : null;
