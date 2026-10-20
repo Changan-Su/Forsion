@@ -381,9 +381,9 @@ export function ChatView({ leaf, params }: ViewProps) {
       scrollToElement(root, el, 24) // 落地后再量再补:上面的消息带 content-visibility,进视口才量出真实高度
     }
     el.classList.add('t2-jump-flash')
-    const timer = window.setTimeout(() => el.classList.remove('t2-jump-flash'), 1600)
+    // 不随 effect 清理:下一行 clearJumpTarget 改了依赖、effect 立刻重跑,清理会把这个定时器掐掉 → 类永远摘不掉,再跳到同一条就不闪了
+    window.setTimeout(() => el.classList.remove('t2-jump-flash'), 1600)
     s.clearJumpTarget()
-    return () => window.clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [s.jumpTarget?.seq, activeId, historyLoading, activeMessages.length])
 
@@ -413,10 +413,14 @@ export function ChatView({ leaf, params }: ViewProps) {
     const update = (): void => {
       const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40
       const max = el.scrollHeight - el.clientHeight
-      if (atBottom) stickToBottom.current = true
+      const up = el.scrollTop < previousTop
+      // 在底部且不是自己往上走(往上但最大距离变小 = 内容变短把位置夹下来,照旧算在底部)才重新吸底:从底部起跳的平滑滚动
+      // (画布双击、目录、搜索跳转)第一帧只挪 1px、还在 40px 里,原来这一下就把吸底挂回去,follow 随即拽回底部、
+      // scrollToElement 的补正也被一帧帧抵掉(10-20 画布双击第 1 / 2 轮实测)
+      if (atBottom && (!up || max < previousMax)) stickToBottom.current = true
       // 往上挪了、可滚的最大距离却没变小(变小 = 布局把位置夹下来,不算):目录跳转这类程序滚动也松开。
       // 消息带 content-visibility,往上一滚,刚进视口的才量出真实高度 → 内容变高 → 不松开就被 follow 拽回底部(10-16 实测)
-      else if (el.scrollTop < previousTop && (pointerDown || max >= previousMax)) stickToBottom.current = false
+      else if (up && (pointerDown || max >= previousMax)) stickToBottom.current = false
       previousTop = el.scrollTop
       previousMax = max
       setShowJump(!atBottom && !stickToBottom.current)
@@ -430,7 +434,8 @@ export function ChatView({ leaf, params }: ViewProps) {
     const up = (): void => { pointerDown = false }
     const onKey = (e: KeyboardEvent): void => { if (['ArrowUp', 'PageUp', 'Home'].includes(e.key) && !(e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement)) release() }
     const follow = (): void => {
-      if (stickToBottom.current) { el.scrollTop = el.scrollHeight; previousTop = el.scrollTop; setShowJump(false) }
+      // previousMax 跟 previousTop 同一次采样:否则「长高被 follow 跟到底、下一次 scroll 前又变短被夹下来」会被 update 当成自己往上走而松开吸底
+      if (stickToBottom.current) { el.scrollTop = el.scrollHeight; previousTop = el.scrollTop; previousMax = el.scrollHeight - el.clientHeight; setShowJump(false) }
     }
     const ro = new ResizeObserver(() => { cancelAnimationFrame(raf); raf = requestAnimationFrame(follow) })
     ro.observe(content)
