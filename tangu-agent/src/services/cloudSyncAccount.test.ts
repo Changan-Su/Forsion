@@ -1,5 +1,9 @@
-import { describe, expect, it } from 'vitest';
-import { agentSyncScope, registerAgentSyncIdentity } from './cloudSyncAccount.js';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { agentSyncConsentSignal, agentSyncDefault, agentSyncPermission, agentSyncScope, captureAgentSyncPermission, registerAgentSyncIdentity, setAgentSyncDefault, setAgentSyncPermission } from './cloudSyncAccount.js';
+import { DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
 import type { AgentFilesBrain } from '../seams/cloudBrain.js';
 
 const token = (userId: string, jti: string): string => `header.${Buffer.from(JSON.stringify({ userId, jti })).toString('base64url')}.signature`;
@@ -29,5 +33,44 @@ describe('cloud sync account identity', () => {
 
   it('does not authorize cloud uploads with the local fallback bearer or an unknown identity', () => {
     expect(agentSyncScope(adapter('https://cloud.test', 'local-fallback'), 'local')).toBeNull();
+  });
+});
+
+describe('account-level agent sync switch', () => {
+  let home = ''; let prev: string | undefined;
+  const scope = 'a'.repeat(64); const other = 'b'.repeat(64);
+  beforeEach(() => { prev = process.env.TANGU_HOME; home = mkdtempSync(join(tmpdir(), 'tangu-sync-default-')); process.env.TANGU_HOME = home; });
+  afterEach(() => { if (prev === undefined) delete process.env.TANGU_HOME; else process.env.TANGU_HOME = prev; rmSync(home, { recursive: true, force: true }); });
+
+  it('is undecided by default and then lets agents without their own choice follow it', () => {
+    expect(agentSyncDefault(scope)).toBeNull();
+    expect(agentSyncPermission('coder', scope).enabled).toBe(false);
+    setAgentSyncDefault(scope, true);
+    expect(agentSyncDefault(scope)).toBe(true);
+    expect(agentSyncPermission('coder', scope)).toMatchObject({ enabled: true, shared: false });
+    // the default agent's memory is shared so Brain memory sync runs too
+    expect(agentSyncPermission(DEFAULT_AGENT_SLUG, scope)).toMatchObject({ enabled: true, shared: true });
+    // per account: another account on this computer is not affected
+    expect(agentSyncPermission('coder', other).enabled).toBe(false);
+  });
+
+  it('keeps an explicit per-agent choice, and off is a hard off that does not erase it', () => {
+    setAgentSyncPermission('quiet', scope, false);
+    setAgentSyncPermission('loud', scope, true);
+    setAgentSyncDefault(scope, true);
+    expect(agentSyncPermission('quiet', scope).enabled).toBe(false);
+    setAgentSyncDefault(scope, false);
+    expect(agentSyncPermission('loud', scope).enabled).toBe(false);
+    setAgentSyncDefault(scope, true);
+    expect(agentSyncPermission('loud', scope).enabled).toBe(true);
+  });
+
+  it('invalidates captured consent when the account switch changes', () => {
+    setAgentSyncDefault(scope, true);
+    const check = captureAgentSyncPermission('coder', scope);
+    const signal = agentSyncConsentSignal('coder', scope);
+    setAgentSyncDefault(scope, true);
+    expect(check).toThrow('agent sync consent changed');
+    expect(signal.aborted).toBe(true);
   });
 });

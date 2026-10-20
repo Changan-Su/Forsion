@@ -319,6 +319,60 @@ async function finishDropboxAuth(code: string): Promise<{ ok: boolean; error?: s
   }
 }
 
+/** 本机笔记库多大(蓬洲云「同步」页 / 首登卡片写「412 MB · 用掉 2 GB 里的 20%」)。
+ *  ponytail: 只跳过点开头的目录 / 文件,不套引擎的忽略规则 —— 估个量级;要精确再接 ignoreGlobs。 */
+async function rootStats(): Promise<{ files: number; bytes: number; name: string } | { error: string }> {
+  const rooted = await resolveLocalSyncRoot()
+  if ('error' in rooted) return rooted
+  let files = 0
+  let bytes = 0
+  const walk = async (dir: string): Promise<void> => {
+    for (const e of await fs.readdir(dir, { withFileTypes: true }).catch(() => [])) {
+      if (e.name.startsWith('.')) continue
+      const p = path.join(dir, e.name)
+      if (e.isDirectory()) await walk(p)
+      else if (e.isFile()) { files++; bytes += (await fs.stat(p).catch(() => null))?.size ?? 0 }
+    }
+  }
+  await walk(rooted.root)
+  return { files, bytes, name: path.basename(rooted.root) }
+}
+
+const inside = (root: string, p: string): boolean => { const rel = path.relative(root, p); return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel) }
+
+/**
+ * 第二台电脑选「用云端那份」(云同步开启方案 2026-10-20):先演算一遍,把这台和云端不一样的文件(只在这台的 push +
+ * 两边都有但内容不同的 conflict)挪到库外的「<库名> <label> <日期>」,之后正常同步拿到的就是云端那份。
+ * 只挪不删:同一个上级目录里 rename;挪一个算一个,中途出错就停 —— 已挪的在备份里,没挪的在原处,都不丢。
+ * label 由渲染层按界面语言给(落盘的名字跟语言走)。
+ */
+async function adoptRemote(label: string): Promise<{ ok: boolean; moved: number; backupDir?: string; error?: string }> {
+  const dry = await runNow({ dryRun: true })
+  if (!dry.ok || !dry.plan) return { ok: false, moved: 0, error: dry.errors[0] ?? 'dry-run-failed' }
+  const keys = dry.plan.filter((i) => i.kind === 'push' || i.kind === 'conflict').map((i) => i.key)
+  if (!keys.length) return { ok: true, moved: 0 }
+  const rooted = await resolveLocalSyncRoot()
+  if ('error' in rooted) return { ok: false, moved: 0, error: rooted.error }
+  const safe = (label || 'backup').replace(/[\\/:*?"<>|]/g, ' ').trim().slice(0, 40) || 'backup'
+  const base = path.join(path.dirname(rooted.root), `${path.basename(rooted.root)} ${safe} ${new Date().toISOString().slice(0, 10)}`)
+  let dir = base
+  for (let n = 2; await fs.access(dir).then(() => true, () => false); n++) dir = `${base} (${n})`
+  let moved = 0
+  try {
+    for (const key of keys) {
+      const from = path.join(rooted.root, key)
+      const to = path.join(dir, key)
+      if (!inside(rooted.root, from) || !inside(dir, to)) throw new Error('unsafe-key')
+      await fs.mkdir(path.dirname(to), { recursive: true })
+      await fs.rename(from, to)
+      moved++
+    }
+  } catch (e) {
+    return { ok: false, moved, backupDir: dir, error: String((e as Error)?.message || e) }
+  }
+  return { ok: true, moved, backupDir: dir }
+}
+
 export function registerRemoteSync(): void {
   ipcMain.handle('remotesync:get', async () => {
     const cfg = await loadConfig()
@@ -342,6 +396,8 @@ export function registerRemoteSync(): void {
     return next
   })
   ipcMain.handle('remotesync:run', async (_e, opts?: { dryRun?: boolean; allowMassDelete?: boolean }) => runNow(opts))
+  ipcMain.handle('remotesync:rootStats', async () => rootStats())
+  ipcMain.handle('remotesync:adoptRemote', async (_e, label: string) => adoptRemote(typeof label === 'string' ? label : ''))
   ipcMain.handle('remotesync:check', async () => {
     const cfg = await loadConfig()
     const built = await buildRemote(cfg)

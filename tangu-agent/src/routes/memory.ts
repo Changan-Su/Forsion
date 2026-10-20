@@ -11,8 +11,9 @@ import { authMiddleware, AuthRequest } from '../core/http.js';
 import { deps } from '../seams/runtime.js';
 import { syncNow, getSyncStatus } from '../services/memorySyncService.js';
 import { runWithAgentSlug } from '../seams/runContext.js';
-import { getAgent, resolveMemorySlug, isValidSlug } from '../agents/agentRegistry.js';
+import { getAgent, listAgents, resolveMemorySlug, isValidSlug } from '../agents/agentRegistry.js';
 import { MemoryRepositoryError } from '../services/memoryRepository.js';
+import { agentSyncDefault, agentSyncScope, setAgentSyncDefault } from '../services/cloudSyncAccount.js';
 
 const router = Router();
 
@@ -83,6 +84,23 @@ router.post('/agent/sync', authMiddleware, async (req: AuthRequest, res) => {
 
 router.get('/agent/sync/status', authMiddleware, (req: AuthRequest, res) => {
   res.json(getSyncStatus(req.user!.userId));
+});
+
+// 账号级「Agents 与记忆」总闸(蓬洲云「同步」页 / 首登卡片 / 引导):enabled = null 表示这个账号在这台电脑上还没点过。
+router.get('/agent/sync/default', authMiddleware, async (req: AuthRequest, res) => {
+  if (!deps().profile.capabilities.hostExec) return void res.json({ enabled: null, agents: 0, available: false });
+  const scope = agentSyncScope(deps().brain.agentFiles, req.user!.userId);
+  res.json({ enabled: agentSyncDefault(scope), agents: (await listAgents().catch(() => [])).length, available: !!scope });
+});
+router.put('/agent/sync/default', authMiddleware, (req: AuthRequest, res) => {
+  if (!deps().profile.capabilities.hostExec) return void res.status(404).json({ detail: 'Agent sync is only available on desktop.' });
+  if (typeof req.body?.enabled !== 'boolean') return void res.status(400).json({ detail: 'enabled must be a boolean' });
+  const uid = req.user!.userId;
+  const scope = agentSyncScope(deps().brain.agentFiles, uid);
+  if (!scope) return void res.status(409).json({ detail: 'Sign in to Forsion first.' });
+  setAgentSyncDefault(scope, req.body.enabled);
+  if (req.body.enabled) void syncNow(uid).catch(() => {}); // 打开就先同步一次,不等下次聊天
+  res.json({ enabled: req.body.enabled });
 });
 
 export default router;

@@ -50,7 +50,7 @@ import { formatDateTime } from '../format/time'
 import { LocaleToggle } from './LocaleToggle'
 import { BrandLogo } from './BrandLogo'
 import { ThemePreview } from './ThemePreview'
-import { RemoteSyncSection } from './RemoteSyncSection'
+import { RemoteSyncSection, openPenzorSync, penzorSyncReady } from './RemoteSyncSection'
 import { APP_VERSION } from '../changelog'
 import { Markdown } from './Markdown'
 import { UpdateActions, UpdateSourceNote } from './UpdateActions'
@@ -137,7 +137,11 @@ registerMessages({
   },
   // 不叫「同步」:下面就是一级页「同步」(远程同步),左栏会出现两个同名项
   'settingsmodal.forsionCloud.submissions': { zh: '插件投稿', en: 'Submissions' },
-  'settings.forsionCloud.sync': { zh: '云端同步', en: 'Cloud sync' },
+  'settings.forsionCloud.sync': { zh: '云端智库', en: 'Cloud vault' },
+  // 「Agents 与记忆」的开关搬进蓬洲云「同步」页(云同步开启方案 2026-10-20),这里只留一条指路 + 立即同步
+  'settings.forsion.syncManaged': { zh: '开关在蓬洲云 › 同步', en: 'Turn it on or off in Penzor Cloud › Sync' },
+  'settings.forsion.syncManagedHint': { zh: '登录后默认开着；智库、Agents 与记忆、插件数据都在那一页管。', en: 'On by default after you sign in. Notes, agents & memory, and plugin data are all managed on that page.' },
+  'settings.forsion.openPenzorSync': { zh: '打开', en: 'Open' },
   'settings.forsionCloud.connection': { zh: '连接', en: 'Connection' },
   'settingsmodal.cloudAccountDescription': { zh: 'Forsion 云端 · 管理个人主页、登录资料和账号安全。', en: 'Forsion Cloud · Your profile, sign-in details and account security.' },
   'settingsmodal.cloudMembershipDescription': { zh: 'Forsion 云端 · 查看会员、额度、积分与用量记录。', en: 'Forsion Cloud · Membership, quota, points and usage.' },
@@ -2188,15 +2192,11 @@ export const SettingsModal: React.FC<{
                       <SettingsPanel anchor="memory-sync" icon={<Brain size={16} />} title={t('settings.forsion.syncLabel')} description={t('settings.forsion.syncHint')}>
                         <div className="settings-control-list">
                           <SettingsRow
-                            label={t('settings.forsion.autoSync')}
-                            description={t('settings.forsion.autoSyncHint')}
-                            control={(
-                              <SettingsSwitch
-                                checked={!!stored.forsionSyncEnabled}
-                                label={t('settings.forsion.autoSync')}
-                                onChange={(on) => void window.tangu!.setConfig({ forsionSyncEnabled: on, forsionSyncAccountId: stored.forsionSyncAccountId }).then(setStored)}
-                              />
-                            )}
+                            label={t('settings.forsion.syncManaged')}
+                            description={t('settings.forsion.syncManagedHint')}
+                            control={penzorSyncReady() ? (
+                              <button className="btn sm" onClick={openPenzorSync}>{t('settings.forsion.openPenzorSync')}</button>
+                            ) : undefined}
                           />
                           <SettingsRow
                             label={t('settings.forsion.lastSynced', {

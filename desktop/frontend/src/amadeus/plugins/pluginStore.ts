@@ -58,6 +58,7 @@ import { loadSyncedPluginData, notePluginDataEdit, pluginDataSyncOn, pushPluginD
 import { createCalendarApi } from './pluginCalendar'
 import { createSpacesApi } from './pluginSpaces'
 import { clearSpaceProgressOf, setSpaceDot, setSpaceProgress } from '../../stores/spaceProgress'
+import { getSync, refreshSync, resolveNotes, runSyncNow, setSync, startSyncSetup, subscribeSync } from '../../services/syncSetup'
 import { closeSpotlight, showSpotlight } from './guideSpotlight'
 import { watchAccountName } from '../../services/accountName'
 import { fetchBingWallpapers } from '../../views/homepageWallpaper'
@@ -340,6 +341,20 @@ type ResetCardCeremonyArg = Parameters<NonNullable<PluginAppApi['showResetCardCe
 let resetCardCeremonyHandler: ((r: ResetCardCeremonyArg) => void) | null = null
 export function setResetCardCeremonyHandler(fn: ((r: ResetCardCeremonyArg) => void) | null): void { resetCardCeremonyHandler = fn }
 
+function syncSeam(pluginId: string, ok: () => boolean): NonNullable<PluginAppApi['sync']> {
+  const firstParty = (): boolean => !!usePluginStore.getState().plugins.find((p) => p.id === pluginId)?.locked
+  const deny = { ok: false, error: 'first-party only' }
+  return {
+    get: () => { if (!firstParty()) return null; startSyncSetup(); return getSync() },
+    subscribe: (cb) => { startSyncSetup(); return subscribeSync(cb) },
+    refresh: () => refreshSync(),
+    set: async (kind, on) => (ok() && firstParty() && (kind === 'notes' || kind === 'agents' || kind === 'plugins') ? setSync(kind, !!on) : deny),
+    resolveNotes: async (choice) => (ok() && firstParty() && (choice === 'merge' || choice === 'cloud' || choice === 'skip')
+      ? resolveNotes(choice, translate('sync.backupFolder')) : deny),
+    runNow: async () => { if (ok() && firstParty()) await runSyncNow() },
+  }
+}
+
 function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppApi; revokeSurface: () => void } {
   const surface = createBlockSurface(pluginId)
   // 块表面有 alive 闸,ctx.app 的**直通副作用面**(写盘/换页/开文件)此前没有 —— 插件禁用后残留的
@@ -517,6 +532,8 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
     // Ribbon 上自己那个 Space 图标的进度环(2026-10-18,蓬洲云传文件):只认这个插件自己带的 Space;拆插件时 teardown 收掉
     setSpaceProgress: (spaceId, progress) => (ok() && typeof spaceId === 'string' ? setSpaceProgress(pluginId, spaceId, progress) : false),
     setSpaceDot: (spaceId, on) => (ok() && typeof spaceId === 'string' ? setSpaceDot(pluginId, spaceId, on) : false),
+    // 同步总开关(2026-10-20,蓬洲云「同步」页):只给首方包(同 spotlight 认 locked)、只在有本地库远程同步的桌面
+    ...(typeof window !== 'undefined' && window.remoteSync && !hostTangu()?.mobile ? { sync: syncSeam(pluginId, ok) } : {}),
     openLink: async (url) => {
       if (!ok()) return false
       const [{ parseDeepLink }, { resolveDeepLink }] = await Promise.all([import('../../deepLinkPlan'), import('../../deepLinkInstall')])
