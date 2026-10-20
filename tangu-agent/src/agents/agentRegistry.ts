@@ -17,7 +17,7 @@ import { promises as fs } from 'node:fs';
 import { mkdirSync, existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
-import { agentsDir, memoryDir, userMdFile, DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
+import { agentsDir, memoryDir, userMdFile, ensureHumanFolder, DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
 import { credentialReadTarget } from '../sandbox/hostSandboxProtection.js';
 import { builtinAgentAvatar } from './builtinAvatars.js';
 import { LEGACY_PERSONAS, LEGACY_MUSE_PROMPTS, LEGACY_MUSE_DESCRIPTION } from './legacyPersonas.js';
@@ -657,6 +657,7 @@ async function ensureAgentsReady(): Promise<void> {
   await migrateFlatAgentsOnce().catch(() => { /* ignore */ });
   await seedDefaultAgentsOnce().catch(() => { /* ignore */ });
   await seedUserMdOnce().catch(() => { /* ignore */ });
+  try { ensureHumanFolder(); } catch { /* ignore */ } // 在 USER.md 播种之后:新装机的模板也一起进 MEMORY.md
   await migrateGlobalMemoryToXyra().catch(() => { /* ignore */ });
   cache = null;
 }

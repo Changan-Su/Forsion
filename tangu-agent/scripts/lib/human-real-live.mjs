@@ -133,7 +133,8 @@ ${doc}
 """`;
 
 const SAID = TURNS.map(([, m]) => m).join('\n');
-const docOf = (r) => [r.agentDoc, r.projectDoc].filter(Boolean).join('\n\n');
+// 10-20 起协作说明三维:和这个人的共识(human/HUMAN.md)也算这一轮写下的;旧证据没有 sharedDoc
+const docOf = (r) => [r.agentDoc, r.projectDoc, r.sharedDoc].filter(Boolean).join('\n\n');
 const tallyOf = (judge) => ({ items: judge.items.length, agentItems: judge.items.filter((i) => i.actor === 'agent').length, bothItems: judge.items.filter((i) => i.actor === 'both').length,
   hardItems: judge.items.filter((i) => i.terms.length).length, terms: [...new Set(judge.items.flatMap((i) => i.terms))] });
 const judgeLines = (judge) => judge.items.map((i) => `[${i.actor}${i.terms.length ? ` · 用户不会说的词:${i.terms.join('、')}` : ''}] ${i.text}(${i.why})`).join('\n');
@@ -156,7 +157,7 @@ function pickJudge(votes) {
   return { judge: { ...votes[Math.max(at, 0)], verdict, votes: tallies.map((t) => ({ agentItems: t.agentItems, hardItems: t.hardItems, terms: t.terms })) }, judgeError: null };
 }
 
-/** 一轮的判定:实跑和重判走同一份。round = { turns, agentDoc, projectDoc, error }(旧证据的 turns 里没有 humanChanges,退回用写入参数)。 */
+/** 一轮的判定:实跑和重判走同一份。round = { turns, agentDoc, projectDoc, sharedDoc, error }(旧证据的 turns 里没有 humanChanges,退回用写入参数)。 */
 async function grade(round, judgeDoc, title) {
   const { turns, error } = round;
   const doc = docOf(round);
@@ -229,6 +230,9 @@ export async function humanRealLive(h) {
     // 思考档用引擎缺省的 medium(桌面端不改设置时的档),基线与改后两臂一致
     const cfg = { ...AGENT_CONFIG, agentSlug: slug, cwd: dir, approvalMode: 'auto-edit', thinkingLevel: 'medium' };
     const sid = (await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title: `Human real ${r}`, model_id: MODEL, project_path: dir, agent_config: cfg }) })).session.id;
+    // 共识那份全引擎一份、所有 Agent 共读:每轮开头清空,上一轮 / 别的场景写的不算这一轮的(旧引擎没有这条路由,读不到就跳过)
+    const shared0 = await api('/agent/human/HUMAN.md').catch(() => null);
+    if (shared0?.content) await api('/agent/human/HUMAN.md', { method: 'PUT', body: JSON.stringify({ content: '', summary: 'Harness round reset', expectedVersion: shared0.version }) });
     const turns = []; let error = null;
     for (const [key, msg] of TURNS) {
       const ev = await run(sid, msg, 300_000, cfg);
@@ -239,7 +243,8 @@ export async function humanRealLive(h) {
     }
     const agentDoc = (await api(`/agent/agents/${slug}/human`).catch(() => ({ content: '' }))).content || '';
     const projectDoc = (await api(`/agent/project-context/human?sessionId=${sid}`).catch(() => ({ content: '' }))).content || '';
-    const x = await grade({ turns, agentDoc, projectDoc, error }, judgeDoc, `Human real judge ${r}`); graded.push(x);
+    const sharedDoc = (await api('/agent/human/HUMAN.md').catch(() => ({ content: '' }))).content || '';
+    const x = await grade({ turns, agentDoc, projectDoc, sharedDoc, error }, judgeDoc, `Human real judge ${r}`); graded.push(x);
     let legacy = null;
     if (seed && !error) {
       const ev = await run(sid, TIDY_TURNS[h.legacy], 300_000, cfg);
@@ -260,7 +265,7 @@ export async function humanRealLive(h) {
     }
     console.log(`  第 ${r}/${rounds} 轮(${slug}):${x.ok ? '✓' : '✗'} ${x.line}`);
     outs.push(`【第 ${r} 轮${x.ok ? ' ✓' : ' ✗'}】${x.line}\n${x.doc || '(协作说明为空)'}${x.judge ? `\n— 判官逐条 —\n${judgeLines(x.judge)}` : ''}${legacy ? `\n— 请它整理之后 —\n${legacy.after || '(协作说明为空)'}${legacy.judge ? `\n— 判官逐条 —\n${judgeLines(legacy.judge)}` : ''}` : ''}`);
-    evidence.push({ round: r, slug, ok: x.ok, gates: x.gates, error, jargon: x.jargon, midTask: x.midTask, saveFailed: x.saveFailed, addressed: x.addressed, office: x.office, agentDoc, projectDoc, writes: turns.flatMap((t) => t.humanArgs), judge: x.judge, judgeError: x.judgeError, turns, ...(legacy ? { legacy } : {}) });
+    evidence.push({ round: r, slug, ok: x.ok, gates: x.gates, error, jargon: x.jargon, midTask: x.midTask, saveFailed: x.saveFailed, addressed: x.addressed, office: x.office, agentDoc, projectDoc, sharedDoc, writes: turns.flatMap((t) => t.humanArgs), judge: x.judge, judgeError: x.judgeError, turns, ...(legacy ? { legacy } : {}) });
     // 每轮落一次盘:台架整体超时(缺省 15 分钟;慢的模型 4 轮就会撞上,跑时带 --timeout)也留得下已经跑完的几轮
     writeFileSync(join(OUT, 'humanreal-evidence.json'), JSON.stringify({ model: MODEL, judgeModel: JUDGE_MODEL, turns: TURNS, rounds: evidence }, null, 2));
   }

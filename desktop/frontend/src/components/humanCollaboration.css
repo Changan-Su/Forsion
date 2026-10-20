@@ -35,3 +35,7 @@
 .human-heading > div:first-child { min-width: 0; }
 .human-heading > .human-actions { flex-shrink: 0; flex-wrap: nowrap; gap: 10px; }
 .human-heading .human-more { display: grid; place-items: center; width: 24px; height: 28px; padding: 0; }
+/* 「我」资料页(HumanProfile):头部名字 / 简介只读 —— Agent 详情那边是原地编辑的输入框,悬停有底。
+   (0,3,0) 压过 agentProfile.css 的 :hover;两份样式表的加载先后随入口而变,不能靠顺序 */
+.agent-profile.human-profile .agent-character-name, .agent-profile.human-profile .agent-character-desc { background: transparent; cursor: default; }
+.agent-profile.human-profile .human-panel + .human-panel { margin-top: 36px; }

@@ -1,8 +1,10 @@
 import type { ToolEvent } from '../types'
 import { engineFetch, type EngineTarget } from './engine/targets'
 
-export type HumanScope = { kind: 'agent'; slug: string } | { kind: 'project'; cwd: string }
-export type HumanTarget = { kind: 'agent'; slug: string } | { kind: 'project'; sessionId: string }
+/** kind 'human' = human/ 文件夹里的一份(10-20):HUMAN.md 是和这个人协作的共识,所有 Agent 都读;另外三份 AGENT / SOUL / MEMORY 走同一套接口。 */
+export type HumanFile = 'HUMAN.md' | 'AGENT.md' | 'SOUL.md' | 'MEMORY.md'
+export type HumanScope = { kind: 'agent'; slug: string } | { kind: 'project'; cwd: string } | { kind: 'human'; file: HumanFile }
+export type HumanTarget = { kind: 'agent'; slug: string } | { kind: 'project'; sessionId: string } | { kind: 'human'; file: HumanFile }
 export interface HumanChange {
   id: string; scope: HumanScope; summary: string; evidence: string; at: string; actor: 'agent' | 'user';
   beforeVersion: string; afterVersion: string; undoOf?: string
@@ -24,8 +26,9 @@ export const humanRewritable = (c?: { execMode?: string; planMode?: boolean; gro
   !!c && c.execMode === 'host' && !c.planMode && !c.groupChat && !c.teamSlug && !c.engineId && !c.soloEngineId
 export interface HumanJump { at: number; edit?: boolean; changeId?: string }
 export const HUMAN_CHANGED_EVENT = 'forsion:human-changed'
-export const humanTargetKey = (target: HumanTarget) => target.kind === 'agent' ? `agent:${target.slug}` : `project:${target.sessionId}`
-const endpoint = (target: HumanTarget) => target.kind === 'agent' ? `/agent/agents/${encodeURIComponent(target.slug)}/human` : '/agent/project-context/human'
+export const humanTargetKey = (target: HumanTarget) => target.kind === 'agent' ? `agent:${target.slug}` : target.kind === 'human' ? `human:${target.file}` : `project:${target.sessionId}`
+const endpoint = (target: HumanTarget) => target.kind === 'agent' ? `/agent/agents/${encodeURIComponent(target.slug)}/human`
+  : target.kind === 'human' ? `/agent/human/${encodeURIComponent(target.file)}` : '/agent/project-context/human'
 async function request<T>(engine: EngineTarget, target: HumanTarget, method: string, suffix = '', input?: Record<string, unknown>): Promise<T> {
   const project = target.kind === 'project' ? { sessionId: target.sessionId } : {}
   const query = method === 'GET' && target.kind === 'project' ? `?sessionId=${encodeURIComponent(target.sessionId)}` : ''
@@ -56,7 +59,8 @@ export function humanChanges(events: ToolEvent[] = []): HumanChange[] {
         typeof c.summary !== 'string' || typeof c.evidence !== 'string' || typeof c.at !== 'string' || c.actor !== 'agent' ||
         !/^[a-f0-9]{64}$/.test(c.beforeVersion) || !/^[a-f0-9]{64}$/.test(c.afterVersion) ||
         !((c.scope?.kind === 'agent' && typeof c.scope.slug === 'string' && /^[a-z0-9][a-z0-9-]*$/.test(c.scope.slug)) ||
-          (c.scope?.kind === 'project' && typeof c.scope.cwd === 'string' && c.scope.cwd.length > 0))) continue
+          (c.scope?.kind === 'project' && typeof c.scope.cwd === 'string' && c.scope.cwd.length > 0) ||
+          (c.scope?.kind === 'human' && c.scope.file === 'HUMAN.md'))) continue
       changes.set(c.id, c)
     } catch { /* Plain error/read results do not create update cards. */ }
   }

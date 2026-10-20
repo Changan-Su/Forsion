@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from 'node:f
 import { dirname, extname, join } from 'node:path';
 import { deps } from '../seams/runtime.js';
 import { agentsDir, userMdFile } from '../core/tanguHome.js';
+import { syncUserMdIntoHumanMemory } from '../agents/humanFolder.js';
 import { getDeviceId } from '../core/deviceId.js';
 import { getAgent, listAgents, parseAgentConfig, resolveMemorySlug, type NormalAgentDef } from '../agents/agentRegistry.js';
 import { splitLogBlocks, mergeBlocks, mergeLogHeaders } from './memorySync.js';
@@ -192,6 +193,8 @@ async function syncAccount(cloud: AgentFilesBrain, userId: string, scope: string
     try { await reconcileFile(cloud, userId, '__user__', dir, 'USER.md', bySlug.get('__user__')?.find((f) => f.relPath === 'USER.md'), prev, signal, check, result, dir); }
     catch (e) { fail(result, e); }
     check(); atomicSyncWrite(dir, join(dir, `.cloudsync-${scope}.json`), JSON.stringify(prev), check);
+    // human/ 上云(第 2 步)之前,别的设备改的 USER.md 只从这里进来:拉下来更新的那份并进 human/MEMORY.md
+    try { await syncUserMdIntoHumanMemory(); } catch (e) { fail(result, e); }
   }
 }
 function verifyBytes(file: { hash?: string | null }, bytes: Buffer): void {

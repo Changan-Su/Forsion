@@ -50,8 +50,10 @@ function readDispositions(given: unknown, lines: number[]): { byLine: Map<number
   return { byLine, problems };
 }
 // 抛出来的(别处正占着记忆的锁之类)也收成一句 Error 回执:前面几句已经记了的要能照实说出来,不能让异常直接冒到外层
+// 一句话里带好几条时模型爱整份写进刚读的那一份(10-20 live:写明只在本项目的也进了共识),动笔前再说一遍按什么分
+const WHERE_IT_GOES = 'Before you update, sort the items: each goes in the one note it hangs on. On this person, whichever agent they work with: shared. On your role or way of working, whoever works with you: agent. On this project: project. Items for different notes take one update each.';
 const rememberFact = async (fact: string, scope: HumanScope, ctx: ToolContext): Promise<string> => {
-  try { return await memoryLogProvider.tools().find((x) => x.name === 'remember')!.execute({ action: 'add', fact, scope: scope.kind }, ctx); }
+  try { return await memoryLogProvider.tools().find((x) => x.name === 'remember')!.execute({ action: 'add', fact, scope: scope.kind === 'project' ? 'project' : 'agent' }, ctx); }
   catch (e) { return `Error: ${e instanceof Error ? e.message : String(e)}`; }
 };
 
@@ -65,9 +67,9 @@ export const manageHumanProvider: ToolProvider = {
     capabilities: { sideEffect: 'write', concurrencyKey: 'human-collaboration' },
     definition: { type: 'function', function: {
       name: 'manage_human',
-      description: 'Read or update HUMAN.md, the note you write to the human about what THEY can do so that working with you goes better (they see it as the collaboration handbook). First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Scope project is only for this project; scope agent is for advice that remains useful outside it. Preserve user edits. If an update takes existing lines out, the tool first lists them and saves nothing: resend with removed saying where each went. ' + HUMAN_WRITING + ' Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes. Never write this file using generic file or shell tools.',
+      description: 'Read or update HUMAN.md, the note you write to the human about what THEY can do so that working with you goes better (they see it as the collaboration handbook). First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Three complementary notes, none overriding another; pick the note for each item by what it is about. A read also returns the other two notes (others) so each point goes in one note only. Items that belong to different notes take one update per note. Preserve user edits. If an update takes existing lines out, the tool first lists them and saves nothing: resend with removed saying where each went. ' + HUMAN_WRITING + ' Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes within one note. Never write this file using generic file or shell tools.',
       parameters: { type: 'object', properties: {
-        action: { type: 'string', enum: ['read', 'update'] }, scope: { type: 'string', enum: ['agent', 'project'] },
+        action: { type: 'string', enum: ['read', 'update'] }, scope: { type: 'string', enum: ['agent', 'project', 'shared'], description: 'Every note holds things the human does. agent: hangs on your role or way of working, whoever works with you (anyone who works with you reads it; no names). project: hangs on this project. shared: hangs on this person, whichever agent they work with; every agent reads it.' },
         content: { type: 'string', description: 'The complete updated Markdown, written to the human in their language; at most 12000 characters. Preserve unrelated sections.' },
         expectedVersion: { type: 'string', description: 'Exact version from the most recent read.' },
         summary: { type: 'string', description: 'Shown to the user on the change card: what changed, in their language and everyday words (at most 240 characters).' },
@@ -78,12 +80,20 @@ export const manageHumanProvider: ToolProvider = {
     execute: async (args, ctx) => {
       if (!deps().profile.capabilities.hostExec || ctx.ephemeral || ctx.planMode || ctx.subAgentDepth || effectiveRemote(ctx)) return 'Error: Collaboration updates are unavailable in this execution context.';
       try {
-        if (!['agent', 'project'].includes(args.scope) || !['read', 'update'].includes(args.action)) return 'Error: Invalid action or scope.';
-        const scope: HumanScope | null = args.scope === 'project' ? await humanProjectScope(ctx.userId, ctx.sessionId)
-          : { kind: 'agent', slug: currentDisplayAgentSlug() || ctx.agentSlug || DEFAULT_AGENT_SLUG };
-        if (!scope) return 'Error: This session has no project. Use agent scope only for collaboration that is useful outside a project.';
+        if (!['agent', 'project', 'shared'].includes(args.scope) || !['read', 'update'].includes(args.action)) return 'Error: Invalid action or scope.';
+        // 项目那份只在要写 / 读它时才必须解析得出来;只是给另外两份查重时,解析不了就不带。
+        // 共识那份对模型叫 shared、不叫 human:叫 human 时模型把它当成「HUMAN.md 本体」,连写明只在本项目的也一股脑写进去(10-20 live 两次)
+        const project = args.scope === 'project' ? await humanProjectScope(ctx.userId, ctx.sessionId) : await humanProjectScope(ctx.userId, ctx.sessionId).catch(() => null);
+        const scopes: Record<string, HumanScope | null> = { shared: { kind: 'human', file: 'HUMAN.md' }, agent: { kind: 'agent', slug: currentDisplayAgentSlug() || ctx.agentSlug || DEFAULT_AGENT_SLUG }, project };
+        const scope = scopes[args.scope];
+        if (!scope) return 'Error: This session has no project. Use scope shared or agent for collaboration that is useful outside a project.';
         const current = await readHuman(scope);
-        if (args.action === 'read') return JSON.stringify({ ...current, version: current.version.slice(0, SHORT_VERSION), howToWrite: HUMAN_WRITING }); // 写法放在动笔前刚读到的地方
+        if (args.action === 'read') {
+          // 三维互补、同一件只放一处:读的时候把另外两份也带上,模型才查得了重(10-20)
+          const others: Record<string, string> = {};
+          for (const [k, sc] of Object.entries(scopes)) if (sc && k !== args.scope) { try { others[k] = (await readHuman(sc)).content; } catch { /* 读不到的那份不带 */ } }
+          return JSON.stringify({ ...current, version: current.version.slice(0, SHORT_VERSION), others, whereItGoes: WHERE_IT_GOES, howToWrite: HUMAN_WRITING }); // 归位与写法都放在动笔前刚读到的地方
+        }
         ctx.signal?.throwIfAborted();
         const given: unknown = args.expectedVersion;
         const expectedVersion = typeof given === 'string' && given.length === SHORT_VERSION && /^[a-f0-9]+$/.test(given) && current.version.startsWith(given) ? current.version : given;

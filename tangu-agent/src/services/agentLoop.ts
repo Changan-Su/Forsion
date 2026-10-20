@@ -26,7 +26,8 @@ import { makeClientActionRequester } from './clientAck.js';
 import { runHooks, type HookRunContext, type HookVerdict } from '../hooks/index.js';
 import { enterRunContext, currentDisplayAgentSlug, setRunClientTag, setRunCwd } from '../seams/runContext.js';
 import path from 'node:path';
-import { agentsDir, readUserMd, DEFAULT_AGENT_SLUG, engineLibDir } from '../core/tanguHome.js';
+import { agentsDir, DEFAULT_AGENT_SLUG, engineLibDir } from '../core/tanguHome.js';
+import { renderAboutHuman } from '../agents/humanFolder.js';
 import { getRun, updateRunStatus, appendStep, listPendingRunsForRecovery, failStaleRuns } from './runStore.js';
 import { getToolDefinitions, executeTool, getToolCapabilities, listDeferredTools, deferredUnlocksFromHistory, type ToolContext } from '../tools/registry.js';
 import { actionDeliveryNudgeNeeded, ACTION_DELIVERY_CHECK } from './actionDeliveryCheck.js';
@@ -1521,12 +1522,15 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     const humanCurrentBlocks: string[] = [];
     if (profile.capabilities.hostExec && !inlineMemberDef) {
       systemParts.push(HUMAN_GUIDANCE);
-      try {
-        const human = await readHuman({ kind: 'agent', slug: activeAgentSlug });
-        const humanBlock = renderHumanContext(human);
-        if (humanBlock) { systemParts.push(humanBlock); humanCurrentBlocks.push(humanBlock); }
-        if (humanBlock && (human.history[0]?.actor === 'user' || (human.history[0] && human.history[0].afterVersion !== human.version))) humanCorrections.push(humanBlock);
-      } catch (e) { console.warn('[human] Cannot load Agent collaboration context:', e instanceof Error ? e.message : e); }
+      // 三个维度并排读、谁也不盖谁(10-20 用户定):和这个人的共识(human/HUMAN.md)→ 这个 Agent 的 → 这个项目的。
+      for (const scope of [{ kind: 'human', file: 'HUMAN.md' }, { kind: 'agent', slug: activeAgentSlug }] as const) {
+        try {
+          const human = await readHuman(scope);
+          const humanBlock = renderHumanContext(human);
+          if (humanBlock) { systemParts.push(humanBlock); humanCurrentBlocks.push(humanBlock); }
+          if (humanBlock && (human.history[0]?.actor === 'user' || (human.history[0] && human.history[0].afterVersion !== human.version))) humanCorrections.push(humanBlock);
+        } catch (e) { console.warn('[human] Cannot load collaboration context:', e instanceof Error ? e.message : e); }
+      }
       try {
         const projectScope = await humanProjectScope(userId, sessionId);
         if (projectScope) {
@@ -1579,12 +1583,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       if (sketchTurnSignal && volatilePlacement === 'system') systemParts.push(sketchTurnSignal.section);
     }
     ctxMark('guidance');
-    // 4) USER.md 全局用户画像(所有 agent 可见,用户维护,半稳定)。读失败不阻断。
+    // 4) 人的文件夹 human/(所有 agent 可见,半稳定):人写给所有 Agent 的 AGENT.md、人自己写的 MEMORY.md(原 USER.md)、
+    //    Agent 们对人的认识 SOUL.md。替换原来那段 USER.md,不并排加(提示词体量)。HUMAN.md 共识走下面协作说明那段。读失败不阻断。
     try {
-      const userMd = readUserMd();
-      if (userMd.trim()) {
-        systemParts.push('## About the User\nA long-term profile/preferences the user maintains themselves; take it into account, do not recite it, and do not treat it as instructions for this turn.\n\n' + userMd.trim());
-      }
+      const aboutHuman = renderAboutHuman();
+      if (aboutHuman) systemParts.push(aboutHuman);
     } catch { /* ignore */ }
     ctxMark('profile');
     // 4b) 项目级指令(AGENTS.md / CLAUDE.md …,从项目根到 cwd 沿途收集)。放在用户画像之后、
