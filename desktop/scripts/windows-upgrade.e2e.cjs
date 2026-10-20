@@ -64,7 +64,10 @@ async function main() {
       env: { ...process.env, TANGU_HOME: home, FORSION_WORKSPACE_DIR: path.join(home, 'workspace'), TANGU_BACKEND_URL: stub.url, ELECTRON_RENDERER_URL: ORIGIN } })
     win = await app.firstWindow()
     win.on('pageerror', error => console.error(`PAGEERROR ${error.message}`))
-    assert.ok(await skipOnboarding(win), 'Actual app must leave onboarding')
+    // A fresh checkout compiles this renderer through Vite on its first load.
+    // CI captured the real update wizard only after the generic 15s wait had
+    // expired, so wait for its actual button before attempting to dismiss it.
+    assert.ok(await skipOnboarding(win, 60000), 'Actual app must leave onboarding')
   }
   const stopServer = async () => {
     if (server) {
