@@ -29,6 +29,7 @@ import { useRemoteCapability } from '../../services/engine/targets'
 import { sessionActivityAt } from './SidebarPane'
 import { AttentionDot, StatusMark } from './AttentionDot'
 import './deviceSessions.css'
+import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 registerMessages({
   'devstatus.checking': { zh: '正在连接…', en: 'Connecting…' },

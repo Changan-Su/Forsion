@@ -10,6 +10,7 @@ import { useApp } from '../stores/appStore'
 import { registerMessages, useI18n } from '../i18n'
 import { MuseView } from './MuseView'
 import { homeTarget } from '../services/engine/targets'
+import '../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 registerMessages({
   'special.action.icon_updated': { zh: '更新图标', en: 'icon updated' },

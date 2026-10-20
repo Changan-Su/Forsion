@@ -1,8 +1,2 @@
-/** Exact runtime identities win. A legacy package ID is an alias only while it is unambiguous. */
-export function pluginDependencyIndex<T extends { id: string; packageId?: string }>(nodes: readonly T[]): Map<string, T> {
-  const index = new Map(nodes.map(node => [node.id, node]));
-  const aliases = new Map<string, T[]>();
-  for (const node of nodes) if (node.packageId && node.packageId !== node.id) aliases.set(node.packageId, [...(aliases.get(node.packageId) || []), node]);
-  for (const [alias, values] of aliases) if (!index.has(alias) && values.length === 1) index.set(alias, values[0]);
-  return index;
-}
+// 核心插件化第 2d 步:本文件搬进了契约目录(引擎、Tangu 界面、宿主共用的纯 TS),这里转出,引擎内部的 import 不动。
+export * from '../contracts/pluginAliases.js'

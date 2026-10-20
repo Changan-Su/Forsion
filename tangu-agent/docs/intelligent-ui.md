@@ -24,11 +24,11 @@
   显示标题、第一段文字和「这张卡要新版 Forsion 才能显示」。
 - 复用 `tool_stream`、`tool_call`、`tool_result` 与现有历史 JSON 存储，不创建另一套 SSE 协议或数据库表。
   `document` 是 JSON 字符串，参数完整落库；工具结果只提供短确认或纠错信息。
-- 服务端及客户端使用同一纯 TypeScript 验证器：`src/shared/intelligentUi.ts`。渲染入口位于
+- 服务端及客户端使用同一纯 TypeScript 验证器：`src/contracts/intelligentUi.ts`。渲染入口位于
   `desktop/frontend/src/components/IntelligentUi.tsx`，消息顺序由 `EditorialMessage` 保持。
 - 声明式内容不接受 HTML、JavaScript、CSS 或任意 API 动作。富文本不执行代码，不内嵌图片。
   外部来源经现有链接路由打开，不是嵌入任意网页的 iframe。
-- v2 表达式（`src/shared/intelligentUiExpr.ts`，引擎与渲染层同一份）：纯函数、结果确定，只读本文档的输入、state 与
+- v2 表达式（`src/contracts/intelligentUiExpr.ts`，引擎与渲染层同一份）：纯函数、结果确定，只读本文档的输入、state 与
   derived，碰不到网络、时钟、随机数、DOM 或任何没递给它的对象。函数只有 20 个（白名单见技能），没有 random 与日期
   （历史回放必须算出同样的数）。取字段只认自有属性，`__proto__` / `constructor` / `prototype` 一律拒；每次产出的
   文字 ≤ 10,000 字、列表 ≤ 200 项、数字必须有限；单个表达式 ≤ 300 字、each/filter/sortBy 嵌套 ≤ 2 层；

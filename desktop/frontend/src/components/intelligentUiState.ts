@@ -1,5 +1,5 @@
-import { snapUIValue, type UIBlock, type UICondition, type UIDocument } from '../../../../tangu-agent/src/shared/intelligentUi'
-import { truthy, uiValueIssue, type DocumentEnv, type UIValue } from '../../../../tangu-agent/src/shared/intelligentUiExpr'
+import { snapUIValue, type UIBlock, type UICondition, type UIDocument } from '../../../../tangu-agent/src/contracts/intelligentUi'
+import { truthy, uiValueIssue, type DocumentEnv, type UIValue } from '../../../../tangu-agent/src/contracts/intelligentUiExpr'
 
 export type UIUserState = {
   values: Record<string, string | number>

@@ -18,6 +18,7 @@ import type { ChatRef } from '../../components/chatDragRef'
 import { isVaultRelative } from './mainReference'
 import type { AppRefList } from '../../../../shared/appRefs'
 import { AppRefIcon } from '../../components/appRefs'
+import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 registerMessages({
   'addMenu.label': { zh: '添加', en: 'Add' },

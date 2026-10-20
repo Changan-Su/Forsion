@@ -3,6 +3,7 @@ import { BrandLogo } from '../../components/BrandLogo'
 import { useLayoutEffect, useRef } from 'react'
 import { useI18n } from '../../i18n'
 import './chat2.css'
+import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 export function EmptyState2({ title, subtitle, compact = false }: { title?: string; subtitle?: string; compact?: boolean }) {
   const { t } = useI18n()

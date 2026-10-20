@@ -7,6 +7,7 @@ import { CircleHelp, Send, CheckSquare, Square, Loader2, Check, Pencil, Undo2, C
 import type { InquiryRequest, TodoItem } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { Markdown } from './Markdown'
 import { useI18n, registerMessages } from '../i18n'
+import '../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 registerMessages({
   'plan.approveGo': { zh: '批准并开始执行', en: 'Approve & start' },

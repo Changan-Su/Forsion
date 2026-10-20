@@ -33,6 +33,7 @@ import { homeTarget } from '../../services/engine/targets'
 import { canTurnChatIntoNote, turnChatIntoNote } from './chatToNote'
 import { formatRowTime } from '../../format/time'
 import { ListSection, PullHint, SwipeRow, closeOtherSwipes, dayBucket, usePullToSearch, withSections, type SwipeAction } from '../../components/phoneList'
+import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 const CHANNEL_ICONS: Record<ChannelKind, typeof Smartphone> = { wechat: Smartphone, telegram: Send, qq: MessagesSquare }
 

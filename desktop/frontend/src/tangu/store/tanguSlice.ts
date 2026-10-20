@@ -30,9 +30,10 @@ import { usePageStore } from '../../amadeus/store/pageStore'
 import { registerMessages, translate, translationValues } from '../../i18n'
 import { publishAccountQuota } from '../../services/accountQuota'
 import { sanitizeAnswerBy, sanitizeApprovalReason, sanitizeApprovalRemote } from '../../approvalReason'
-import { normalizeSessionEmoji } from '../../../../../tangu-agent/src/core/sessionEmoji'
+import { normalizeSessionEmoji } from '../../../../../tangu-agent/src/contracts/sessionEmoji'
 import type { StoreApi } from 'zustand'
 import type { AppState } from '../../stores/appStore'
+import '../messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 
 // 本文件自带的词条片段(命名空间 `appstore.*`,与其它文件不重叠)。

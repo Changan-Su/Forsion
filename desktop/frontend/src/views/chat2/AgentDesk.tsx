@@ -22,6 +22,7 @@ import { openDb, openNote } from '../../amadeusNav'
 import type { CtxItem } from '../../components/RightPanel'
 import { DeskChromeContext, DeskMenuButton, DeskMoreButton, type DeskChrome } from './deskChrome'
 import { DeskToolCardPane } from './DeskToolCardPane'
+import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 registerMessages({
   'desk.writing': { zh: '正在编辑 {name}', en: 'Editing {name}' },

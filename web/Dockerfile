@@ -38,18 +38,10 @@ COPY desktop/build/gen-fonts.cjs ./desktop/build/gen-fonts.cjs
 # web/vite.config.ts 顶层 import '../unit/releasePolicy.mjs'(Unit 发行时校验打包输入;镜像里不启用,但顶层 import 照样求值,
 # 缺了它 vite 连配置都加载不了 → 整个 build 红)。只拷这一个文件,别把 unit/ 整目录带进上下文。
 COPY unit/releasePolicy.mjs ./unit/releasePolicy.mjs
-# 会话图标校验与引擎共用一份:desktop 的 appStore / deviceSessionsStore 直接 import 引擎这个无依赖的纯函数文件。
-# 同上,只拷这一个文件,别把 tangu-agent/ 带进上下文。
-COPY tangu-agent/src/core/sessionEmoji.ts ./tangu-agent/src/core/sessionEmoji.ts
-# Tangu 的客户端契约(核心插件化第 2b 步从 types.ts 搬来;types.ts 转出、Tangu 界面直接 import):目录里只有无依赖的纯 TS。
+# Tangu 的契约目录:引擎、Tangu 界面、宿主共用的无依赖纯 TS(客户端数据形状、Intelligent UI 文档格式与应用卡片 id、
+# 会话图标校验、商店卡片与兼容判断、插件依赖别名)。渲染层只经这里用引擎的代码(check:tanguboundary 钉着),
+# 所以只拷这一个目录,别把 tangu-agent/ 整个带进上下文。
 COPY tangu-agent/src/contracts ./tangu-agent/src/contracts
-# Intelligent UI 的文档格式与应用卡片 id 校验也与引擎共用:渲染层(IntelligentUi.tsx / IntelligentAppCard.tsx)直接 import 这两个
-# 无依赖的纯函数文件(intelligentUi.ts 只引 ./intelligentCards.js 与 v2 表达式 ./intelligentUiExpr.js)。同上,只拷文件,别把 tangu-agent/ 带进上下文。
-COPY tangu-agent/src/shared/intelligentUi.ts ./tangu-agent/src/shared/intelligentUi.ts
-COPY tangu-agent/src/shared/intelligentUiExpr.ts ./tangu-agent/src/shared/intelligentUiExpr.ts
-COPY tangu-agent/src/shared/intelligentCards.ts ./tangu-agent/src/shared/intelligentCards.ts
-COPY tangu-agent/src/shared/marketplace.ts ./tangu-agent/src/shared/marketplace.ts
-COPY tangu-agent/src/shared/pluginAliases.ts ./tangu-agent/src/shared/pluginAliases.ts
 # desktop/shared/product.ts(Unit 分支起共享的产品档案)静态 import ../products/forsion.json;main 上旧的 frontend/product.ts
 # 是把回退档案写死在源码里的,所以以前不需要这一层。三个 json 都拷,products.test.ts 无害。
 COPY desktop/products ./desktop/products
