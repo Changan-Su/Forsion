@@ -21,18 +21,28 @@ async function main() {
     const refs = createWinAppRefs({ ownPid: process.pid,
       run: (file, args, opts) => new Promise((resolve, reject) => {
         calls++
+        const request = JSON.parse(Buffer.from(opts.env.FSN_APPREFS_IN, 'base64').toString('utf8'))
+        const started = Date.now()
         execFile(file, args, { windowsHide: true, timeout: opts.timeoutMs, maxBuffer: 4 << 20, env: { ...process.env, ...opts.env } }, (e, stdout) => {
-          if (e) { reject(e); return }
-          const request = JSON.parse(Buffer.from(opts.env.FSN_APPREFS_IN, 'base64').toString('utf8'))
+          if (e) { console.warn(`PowerShell ${request.op} failed after ${Date.now() - started}ms (${e.code || e.signal || 'unknown'})`); reject(e); return }
           if (request.op === 'installed') inventory = parseWinInstalled(stdout)
           resolve(stdout)
         }).stdin?.end()
       }),
       fileIcon: p => app.evaluate(async ({ app }, p) => { try { return (await app.getFileIcon(p)).toDataURL() } catch { return null } }, p),
     })
-    const list = await refs.list()
+    // The backend deliberately returns unavailable on a transient native snapshot failure.
+    // A fresh list() is a user action and retries it; retain failures in evidence rather
+    // than increasing or bypassing the production timeout on a cold CI desktop.
+    let list
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      list = await refs.list()
+      if (!list.error && list.windows.length) break
+      console.warn(`Window snapshot attempt ${attempt}: ${JSON.stringify({ error: list.error || null, apps: list.apps.length, windows: list.windows.length })}`)
+      await new Promise(r => setTimeout(r, 1200))
+    }
     assert.ok(inventory && inventory.start.length > 0 && inventory.links.length > 0 && inventory.paths.length > 0 && !inventory.errors.length, 'all three installed-app sources must return real, error-free inventory')
-    assert.ok(!list.error && list.apps.length > 0 && list.windows.length > 0)
+    assert.ok(!list.error && list.apps.length > 0 && list.windows.length > 0, JSON.stringify({ error: list.error || null, apps: list.apps.length, windows: list.windows.length }))
     console.log('PASS actual PowerShell lists installed applications and current windows')
     assert.ok(![...list.apps, ...list.windows].some(x => /applicationframehost/i.test(x.id)))
     console.log('PASS packaged app windows are not attributed to ApplicationFrameHost')
