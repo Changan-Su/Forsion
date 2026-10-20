@@ -52,7 +52,8 @@
          同一台 iPad 竖着首开进手机壳、横着首开(或横着刷新)进桌面壳。
          归属标记 `lcl.uiMode.auto`:有它 = 这个值是本脚本自动写的,可以继续自动改写;
          没有它而键又在 = 用户经命令面板「切换 UI 模式」显式选过(setUiMode 会清掉标记),一律尊重。
-         老版本只会自动写 'mobile' 且不带标记 —— 首次运行时认领为自动值(那时唯一的写入者就是自动)。
+         (原来这里每次启动都把「有值没标记」认领成自动值,本为接住不带标记的老版本值 —— 结果显式选择活不过一次刷新;
+         判定改成只看粗指针后,横着的平板选了桌面也会被拽回移动壳。老值早在那之后的第一次加载就认领过了,这行已删。)
 
          运行时也必须跟:DevTools 切设备工具栏、真机旋转都发生在页面存活期间,而 UI_MODE 已定格。
          ⚠️ 只挂 mq.change 是不够的(旧版就是这么写的,实测切设备模拟后键始终为 null、页面纹丝不动):
@@ -69,7 +70,6 @@
           var KEY = 'lcl.uiMode', MARK = KEY + '.auto';
           var hit = function (q) { return matchMedia(q).matches };
           var want = function () { return hit('(pointer: coarse)') ? 'mobile' : 'desktop' };
-          if (localStorage.getItem(KEY) != null && localStorage.getItem(MARK) == null) localStorage.setItem(MARK, '1');
           var owned = function () { return localStorage.getItem(KEY) == null || localStorage.getItem(MARK) === '1' };
           var put = function (m) {
             if (!owned() || localStorage.getItem(KEY) === m) return false;

@@ -387,6 +387,15 @@ async function main() {
         assert.equal(errors.length, 0, errors.join('\n'))
       })
       await shot('tablet-820x1180-board.png')
+      await check('an explicit Desktop choice (command palette) survives reload on a wide touch device', async () => {
+        await page.setViewportSize({ width: 1180, height: 820 })
+        // = setUiMode('desktop'): the value without the auto-detection's ownership mark.
+        await page.evaluate(() => { localStorage.setItem('lcl.uiMode', 'desktop'); localStorage.removeItem('lcl.uiMode.auto') })
+        await page.reload()
+        await page.waitForSelector('.shell', { timeout: 60_000 })
+        assert.equal(await page.locator('[data-browser-mobile-chrome]').count(), 0)
+        assert.equal(await page.evaluate(() => localStorage.getItem('lcl.uiMode')), 'desktop')
+      })
       await ctx.close()
     }
     const desktop = await browser.newContext({ viewport: { width: 1280, height: 900 } })
