@@ -94,6 +94,21 @@ async function main() {
   await page.locator('[data-testid="browser-extension-open-note"]').waitFor()
   check('没装 Chrome:提示已复制地址', (await page.locator('[data-testid="browser-extension-open-note"]').textContent()).includes('没找到 Google Chrome'))
 
+  // 副本是旧版:挂载时不换(Chrome 正从那里加载),写明有新版;拖的那一下先换成随包版本再拖
+  await open('?stale')
+  await page.locator('[data-testid="browser-extension-update-hint"]').waitFor()
+  check('副本旧版:挂载只补缺不换,写明有新版本', (await page.evaluate(() => window.__extHarness.prepares)).every((u) => u === false))
+  await page.locator('[data-testid="browser-extension-drag"]').dispatchEvent('dragstart')
+  await page.waitForFunction(() => window.__extHarness.dragged.length === 1)
+  check('副本旧版:拖之前先换成随包版本', (await page.evaluate(() => window.__extHarness.prepares)).includes(true) && (await page.locator('[data-testid="browser-extension-update-hint"]').count()) === 0)
+
+  // 副本准备失败:退回打开随包目录,写明原因(Codex 10-20)
+  await open('?copyfail')
+  await page.locator('[data-testid="browser-extension-copy-error"]').waitFor()
+  await panel.getByRole('button', { name: '打开扩展文件夹' }).click()
+  const openedFail = await page.evaluate(() => window.__extHarness.opened)
+  check('副本准备失败:退回打开随包目录,不给拖拽把手', openedFail[0]?.endsWith('/tangu-server/browser-extension') && (await page.locator('[data-testid="browser-extension-drag"]').count()) === 0, openedFail)
+
   await open('?noclip')
   await panel.getByRole('button', { name: '打开扩展文件夹' }).click()
   const openedOld = await page.evaluate(() => window.__extHarness.opened)

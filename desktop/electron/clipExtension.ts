@@ -1,6 +1,6 @@
 /**
  * Forsion Clip(Chrome 扩展)手动安装的底座(方案页 docs/ToBeImproved/Clip安装引导方案_2026-10-20,用户选 C):
- * - 随包那份在 .app 里,mac「加载已解压」的选择框进不去 → 复制到用户找得到的位置,版本号变了才覆盖;
+ * - 随包那份在 .app 里,mac「加载已解压」的选择框进不去 → 复制到用户找得到的位置;
  * - 替用户打开 Chrome 扩展页:mac 走 `open -b com.google.Chrome chrome://extensions`(LaunchServices 送 GURL,实测
  *   Chrome 已开 / 冷启动都能开)。shell.openExternal 不行(系统里没有 chrome: 的处理者),命令行参数里的 chrome://
  *   会被 Chrome 拦成新标签页 → 别的系统只能复制地址让用户粘贴。
@@ -8,7 +8,7 @@
  */
 import { app, clipboard, ipcMain } from 'electron'
 import { execFile } from 'child_process'
-import { cpSync, mkdirSync, readFileSync, renameSync, rmSync } from 'fs'
+import { cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync } from 'fs'
 import { dirname, join } from 'path'
 import { forsionHomeDir } from './forsionHome'
 
@@ -31,22 +31,30 @@ const versionOf = (dir: string): string | null => {
   try { return String(JSON.parse(readFileSync(join(dir, 'manifest.json'), 'utf8')).version || '') || null } catch { return null }
 }
 
+export type ClipCopy = { dir: string; version: string; bundled: string }
+
 /**
- * 版本号一样就不动(Chrome 正从这里加载);不一样整份换掉:先拷进旁边的临时目录再换名,拷到一半失败不会留下半个扩展。
- * ponytail: 换掉时 Chrome 若正开着旧版,要重启 Chrome 才整份用上新版(扩展页按需从磁盘读文件)。
+ * 保证副本存在。已有副本时只在 `update` 为真才换成随包版本:Chrome 正从副本加载,静默换掉会让还在跑的旧版读到新文件
+ * (Codex 10-20)。所以只在用户要(重新)装的那一下换 —— 拖进去 / 走「加载已解压」时 Chrome 会整份重新加载。
+ * 换的时候旧副本先改名留作备份,新副本就位后才删;中途失败放回原处,上次换到一半(只剩备份)开头先恢复。
  */
-export function ensureClipCopy(src: string, dst: string): { dir: string; version: string } | { error: string } {
-  const version = versionOf(src)
-  if (!version) return { error: 'bundled extension not found' }
-  if (versionOf(dst) === version) return { dir: dst, version }
-  const tmp = `${dst}.tmp-${process.pid}`
+export function ensureClipCopy(src: string, dst: string, update = false): ClipCopy | { error: string } {
+  const bundled = versionOf(src)
+  if (!bundled) return { error: 'bundled extension not found' }
+  const tmp = `${dst}.tmp`
+  const bak = `${dst}.old`
   try {
+    if (!existsSync(dst) && existsSync(bak)) renameSync(bak, dst)
+    const current = versionOf(dst)
+    if (current && (current === bundled || !update)) return { dir: dst, version: current, bundled }
     rmSync(tmp, { recursive: true, force: true })
     mkdirSync(dirname(dst), { recursive: true })
     cpSync(src, tmp, { recursive: true, dereference: true })
-    rmSync(dst, { recursive: true, force: true })
-    renameSync(tmp, dst)
-    return { dir: dst, version }
+    rmSync(bak, { recursive: true, force: true })
+    if (existsSync(dst)) renameSync(dst, bak)
+    try { renameSync(tmp, dst) } catch (e) { if (existsSync(bak)) renameSync(bak, dst); throw e }
+    rmSync(bak, { recursive: true, force: true })
+    return { dir: dst, version: bundled, bundled }
   } catch (e) {
     rmSync(tmp, { recursive: true, force: true })
     return { error: (e as Error).message }
@@ -68,6 +76,6 @@ export function openChromeExtensions(): Promise<OpenChromeResult> {
 }
 
 export function registerClipExtensionIpc(): void {
-  ipcMain.handle('clipExt:prepare', () => ensureClipCopy(clipSourceDir(), clipCopyDir()))
+  ipcMain.handle('clipExt:prepare', (_e, update?: boolean) => ensureClipCopy(clipSourceDir(), clipCopyDir(), update === true))
   ipcMain.handle('clipExt:openChrome', () => openChromeExtensions())
 }

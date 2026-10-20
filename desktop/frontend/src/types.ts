@@ -1529,7 +1529,8 @@ declare global {
       openHostPath?(p: string): Promise<{ ok: boolean; error?: string }>
       /** Forsion Clip 手动安装(设置 › 浏览器):复制出包的扩展文件夹 / 打开 Chrome 扩展页;拖拽用 startHostDrag。 */
       clipExtension?: {
-        prepare(): Promise<{ dir: string; version: string } | { error: string }>
+        /** update=false 只补缺不动已有副本;用户要(重新)装时传 true 换成随包版本(bundled)。 */
+        prepare(update?: boolean): Promise<{ dir: string; version: string; bundled: string } | { error: string }>
         openChromeExtensions(): Promise<{ ok: true } | { ok: false; copied: true; reason: 'no-chrome' | 'unsupported' }>
       }
       /** Coding Space:把工作区目录挂本地静态服务器,返回 origin(iframe 多文件预览)。 */

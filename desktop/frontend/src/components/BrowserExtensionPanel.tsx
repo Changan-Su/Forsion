@@ -38,6 +38,8 @@ registerMessages({
   'settings.browserExt.dragHint': { zh: '拖到 Chrome 扩展页上安装', en: 'Drag onto the Chrome extensions page to install' },
   'settings.browserExt.dragSub': { zh: '扩展文件夹 · {version}', en: 'Extension folder · {version}' },
   'settings.browserExt.copyPath': { zh: '复制路径', en: 'Copy path' },
+  'settings.browserExt.updateHint': { zh: '有新版本 {version}：再拖一次（或重新加载已解压的扩展程序）就会更新。', en: 'Version {version} is available. Drag it in again (or load it unpacked again) to update.' },
+  'settings.browserExt.copyFailed': { zh: '扩展文件夹没准备好（{error}），请打开随包的扩展文件夹手动加载。', en: 'Couldn’t prepare the extension folder ({error}). Open the bundled extension folder and load it manually.' },
   'settings.browserExt.folder': { zh: '扩展文件夹', en: 'Extension folder' },
   'settings.browserExt.remoteDir': {
     zh: '当前连接的是外部引擎：扩展要装在引擎所在的那台电脑上，从这个文件夹加载：{dir}',
@@ -56,8 +58,9 @@ export function BrowserExtensionPanel({ cfg, managed = true }: { cfg: TanguDeskt
   const [copied, setCopied] = useState(false)
   const [copiedPath, setCopiedPath] = useState(false)
   const [openNote, setOpenNote] = useState('')
-  // 随包扩展复制到用户找得到的位置(主进程,版本变了才覆盖);只有本机引擎 + 桌面壳才有
-  const [clipCopy, setClipCopy] = useState<{ dir: string; version: string } | null>(null)
+  // 随包扩展复制到用户找得到的位置(主进程);只有本机引擎 + 桌面壳才有。挂载时只补缺,换版本留到用户(重新)装的那一下
+  const [clipCopy, setClipCopy] = useState<{ dir: string; version: string; bundled: string } | null>(null)
+  const [clipError, setClipError] = useState('')
   const clipApi = managed ? window.tangu?.clipExtension : undefined
   const [resetting, setResetting] = useState(false) // 换码不并发:两次换码乱序返回会留下已作废的码(Codex 09-24)
   // 请求代次:换码 / 换引擎之后才回来的旧轮询结果一律丢弃,免得把新码盖回旧码(Codex 09-24)
@@ -80,17 +83,31 @@ export function BrowserExtensionPanel({ cfg, managed = true }: { cfg: TanguDeskt
     return () => window.clearInterval(timer)
   }, [load])
 
+  const applyClip = (r: { dir: string; version: string; bundled: string } | { error: string }): string | null => {
+    if ('dir' in r) { setClipCopy(r); setClipError(''); return r.dir }
+    setClipCopy(null); setClipError(r.error) // 准备失败:退回打开随包目录(Codex 10-20)
+    return null
+  }
   useEffect(() => {
+    setClipCopy(null); setClipError('')
     if (!clipApi) return
     let live = true
-    void clipApi.prepare().then((r) => { if (live && 'dir' in r) setClipCopy(r) }).catch(() => { /* 退回引擎报的随包目录 */ })
+    void clipApi.prepare().then((r) => { if (live) applyClip(r) }).catch((e: unknown) => { if (live) setClipError(String((e as Error)?.message || e)) })
     return () => { live = false }
   }, [clipApi])
+  /** 用户要(重新)装的那一下:副本换成随包版本(Chrome 拖进 / 加载已解压时会整份重新加载),返回能用的目录。 */
+  const freshClipDir = async (): Promise<string | null> => {
+    if (!clipApi || !clipCopy) return null
+    if (clipCopy.version === clipCopy.bundled) return clipCopy.dir
+    return applyClip(await clipApi.prepare(true).catch((e: unknown) => ({ error: String((e as Error)?.message || e) })))
+  }
   const openChrome = async (): Promise<void> => {
     const r = await clipApi?.openChromeExtensions().catch(() => null)
     setOpenNote(r && !r.ok ? t(r.reason === 'no-chrome' ? 'settings.browserExt.noChrome' : 'settings.browserExt.addressCopied') : '')
   }
-  const copyPath = async (dir: string): Promise<void> => {
+  const copyPath = async (): Promise<void> => {
+    const dir = await freshClipDir()
+    if (!dir) return
     try { await navigator.clipboard.writeText(dir); setCopiedPath(true); window.setTimeout(() => setCopiedPath(false), 1500) } catch { /* 剪贴板不可用时路径仍可手选 */ }
   }
   const copy = async (): Promise<void> => {
@@ -133,22 +150,33 @@ export function BrowserExtensionPanel({ cfg, managed = true }: { cfg: TanguDeskt
             label={t('settings.browserExt.install')}
             description={(['settings.browserExt.step1', 'settings.browserExt.step2', 'settings.browserExt.step3', 'settings.browserExt.step4'] as const).map((k, i) => (
               <React.Fragment key={k}>{i > 0 && <br />}{`${i + 1}. ${t(k)}`}</React.Fragment>
-            )).concat(openNote ? [<React.Fragment key="note"><br /><span data-testid="browser-extension-open-note">{openNote}</span></React.Fragment>] : [])}
-            control={clipApi ? (
-              <button type="button" className="btn ghost sm" onClick={() => void openChrome()} data-testid="browser-extension-open-chrome">
-                <ExternalLink size={12} />{t('settings.browserExt.openChrome')}
-              </button>
-            ) : managed ? (
-              <button type="button" className="btn ghost sm" onClick={() => { void window.tangu?.openHostPath?.(info.extensionDir) }}>
-                <FolderOpen size={12} />{t('settings.browserExt.openFolder')}
-              </button>
+            )).concat(openNote ? [<React.Fragment key="note"><br /><span data-testid="browser-extension-open-note">{openNote}</span></React.Fragment>] : [])
+              .concat(clipError ? [<React.Fragment key="err"><br /><span data-testid="browser-extension-copy-error">{t('settings.browserExt.copyFailed', { error: clipError })}</span></React.Fragment>] : [])}
+            control={managed ? (
+              <div className="settings-inline-actions">
+                {clipApi && (
+                  <button type="button" className="btn ghost sm" onClick={() => void openChrome()} data-testid="browser-extension-open-chrome">
+                    <ExternalLink size={12} />{t('settings.browserExt.openChrome')}
+                  </button>
+                )}
+                {!clipCopy && (
+                  <button type="button" className="btn ghost sm" onClick={() => { void window.tangu?.openHostPath?.(info.extensionDir) }}>
+                    <FolderOpen size={12} />{t('settings.browserExt.openFolder')}
+                  </button>
+                )}
+              </div>
             ) : undefined}
           />
         )}
-        {!unavailable && info && clipCopy && (
+        {!unavailable && info && clipApi && clipCopy && (
           <SettingsRow
             label={t('settings.browserExt.folder')}
-            description={<code className="settings-path-text">{clipCopy.dir}</code>}
+            description={(
+              <>
+                <code className="settings-path-text">{clipCopy.dir}</code>
+                {clipCopy.version !== clipCopy.bundled && <><br /><span data-testid="browser-extension-update-hint">{t('settings.browserExt.updateHint', { version: clipCopy.bundled })}</span></>}
+              </>
+            )}
             control={(
               <div className="settings-inline-actions">
                 {/* 原生拖出(fs:startDrag):拖进 Chrome 扩展页即「加载已解压」,只在 Chrome 开发者模式下生效 */}
@@ -157,14 +185,18 @@ export function BrowserExtensionPanel({ cfg, managed = true }: { cfg: TanguDeskt
                   draggable
                   title={t('settings.browserExt.dragHint')}
                   data-testid="browser-extension-drag"
-                  onDragStart={(e) => { e.preventDefault(); window.tangu?.startHostDrag?.(clipCopy.dir) }}
+                  onDragStart={(e) => {
+                    e.preventDefault()
+                    if (clipCopy.version === clipCopy.bundled) window.tangu?.startHostDrag?.(clipCopy.dir)
+                    else void freshClipDir().then((dir) => { if (dir) window.tangu?.startHostDrag?.(dir) }) // 先换成随包版本再拖(按键还按着,原生拖出照样接得上)
+                  }}
                 >
                   <GripVertical size={14} className="settings-drag-chip-grip" />
                   <span className="settings-drag-chip-icon"><Puzzle size={14} /></span>
                   <span><b>Forsion Clip</b><small>{t('settings.browserExt.dragSub', { version: clipCopy.version })}</small></span>
                 </div>
-                <button type="button" className="btn ghost sm" onClick={() => void copyPath(clipCopy.dir)}>{copiedPath ? <Check size={12} /> : <Copy size={12} />}{copiedPath ? t('settings.browserExt.copied') : t('settings.browserExt.copyPath')}</button>
-                <button type="button" className="btn ghost sm" onClick={() => { void window.tangu?.openHostPath?.(clipCopy.dir) }}><FolderOpen size={12} />{t('settings.browserExt.openFolder')}</button>
+                <button type="button" className="btn ghost sm" onClick={() => void copyPath()}>{copiedPath ? <Check size={12} /> : <Copy size={12} />}{copiedPath ? t('settings.browserExt.copied') : t('settings.browserExt.copyPath')}</button>
+                <button type="button" className="btn ghost sm" onClick={() => { void freshClipDir().then((dir) => { if (dir) void window.tangu?.openHostPath?.(dir) }) }}><FolderOpen size={12} />{t('settings.browserExt.openFolder')}</button>
               </div>
             )}
           />

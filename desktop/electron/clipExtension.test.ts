@@ -1,8 +1,14 @@
 import { describe, expect, it, vi } from 'vitest'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 vi.mock('electron', () => ({ app: {}, clipboard: {}, ipcMain: {} }))
+// 故障注入:新副本就位(临时目录改名成正式目录)那一下失败
+const inject = vi.hoisted(() => ({ failTmpRename: false }))
+vi.mock('fs', async (importOriginal) => {
+  const real = await importOriginal<typeof import('fs')>()
+  return { ...real, renameSync: (from: string, to: string) => { if (inject.failTmpRename && from.endsWith('.tmp')) throw new Error('EPERM (injected)'); return real.renameSync(from, to) } }
+})
 import { ensureClipCopy } from './clipExtension'
 
 const ext = (root: string, version: string): string => {
@@ -12,28 +18,43 @@ const ext = (root: string, version: string): string => {
   writeFileSync(join(dir, 'icon', '48.png'), version)
   return dir
 }
+const versionAt = (dir: string): string => JSON.parse(readFileSync(join(dir, 'manifest.json'), 'utf8')).version
 
 describe('ensureClipCopy', () => {
-  it('没有就复制;同版本不动(Chrome 正从这里加载);换版本整份换掉,不留临时目录', () => {
+  it('没有就复制;已有副本只在要求更新时才换(Chrome 正从这里加载),换完不留临时目录和备份', () => {
     const root = mkdtempSync(join(tmpdir(), 'clip-copy-'))
     const dst = join(root, 'Forsion', 'Forsion Clip')
-    expect(ensureClipCopy(ext(root, '2.1.0'), dst)).toEqual({ dir: dst, version: '2.1.0' })
+    expect(ensureClipCopy(ext(root, '2.1.0'), dst)).toEqual({ dir: dst, version: '2.1.0', bundled: '2.1.0' })
     expect(existsSync(join(dst, 'icon', '48.png'))).toBe(true)
 
     writeFileSync(join(dst, 'marker'), 'x')
-    expect(ensureClipCopy(ext(root, '2.1.0'), dst)).toEqual({ dir: dst, version: '2.1.0' })
+    expect(ensureClipCopy(ext(root, '2.2.0'), dst)).toEqual({ dir: dst, version: '2.1.0', bundled: '2.2.0' })
     expect(existsSync(join(dst, 'marker'))).toBe(true)
 
-    expect(ensureClipCopy(ext(root, '2.2.0'), dst)).toEqual({ dir: dst, version: '2.2.0' })
+    expect(ensureClipCopy(ext(root, '2.2.0'), dst, true)).toEqual({ dir: dst, version: '2.2.0', bundled: '2.2.0' })
     expect(existsSync(join(dst, 'marker'))).toBe(false)
     expect(readdirSync(join(root, 'Forsion'))).toEqual(['Forsion Clip'])
   })
 
-  it('随包那份缺了就报错,不碰已有的副本', () => {
+  it('新副本就位那一下失败:旧副本放回原处,不丢', () => {
     const root = mkdtempSync(join(tmpdir(), 'clip-copy-'))
     const dst = join(root, 'Forsion Clip')
     ensureClipCopy(ext(root, '2.1.0'), dst)
+    inject.failTmpRename = true
+    try {
+      expect(ensureClipCopy(ext(root, '2.2.0'), dst, true)).toEqual({ error: 'EPERM (injected)' })
+    } finally { inject.failTmpRename = false }
+    expect(versionAt(dst)).toBe('2.1.0')
+    expect(readdirSync(root).filter((n) => n.startsWith('Forsion Clip'))).toEqual(['Forsion Clip'])
+  })
+
+  it('上次换到一半(只剩备份)先恢复;随包那份缺了就报错,不碰已有的副本', () => {
+    const root = mkdtempSync(join(tmpdir(), 'clip-copy-'))
+    const dst = join(root, 'Forsion Clip')
+    ensureClipCopy(ext(root, '2.1.0'), dst)
+    renameSync(dst, `${dst}.old`)
+    expect(ensureClipCopy(ext(root, '2.2.0'), dst)).toEqual({ dir: dst, version: '2.1.0', bundled: '2.2.0' })
     expect(ensureClipCopy(join(root, 'nope'), dst)).toEqual({ error: 'bundled extension not found' })
-    expect(existsSync(join(dst, 'manifest.json'))).toBe(true)
+    expect(versionAt(dst)).toBe('2.1.0')
   })
 })
