@@ -365,7 +365,8 @@ export class BackendManager {
       env.TANGU_BROWSER_ALLOW_PRIVATE_URLS = s.browserAllowPrivateUrls ? '1' : '0'
       env.TANGU_BROWSER_COMMAND_TIMEOUT_MS = String(s.browserCommandTimeoutMs || 30000)
       // Tangu for Chrome 扩展桥的端口:dev 与正式版各用一个,两个同时开着也不抢(连接码按各自家目录分开存)
-      env.TANGU_BROWSER_EXTENSION_PORT = app.isPackaged ? '47654' : '47655'
+      // dev 认外面给的端口(台架:隔离实例不和开着的 dev 引擎抢 47655)
+      env.TANGU_BROWSER_EXTENSION_PORT = app.isPackaged ? '47654' : (process.env.TANGU_BROWSER_EXTENSION_PORT || '47655')
       // 扩展本体是 Forsion Clip(npm @forsion/clip):安装包里在 tangu-server/browser-extension(引擎自己找得到),dev 指到依赖里那份
       if (!app.isPackaged) env.TANGU_BROWSER_EXTENSION_DIR = clipSourceDir()
       // 通道(微信/Telegram/QQ)配置改由引擎直接读 config.json channels/wechat 段,不再经 env 注入

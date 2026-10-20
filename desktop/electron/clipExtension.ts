@@ -102,6 +102,8 @@ let syncedFor = ''
  * Forsion 更新后:连着的 Clip 比随包的旧 → 副本换成随包版本,再叫它重新加载(已解压的扩展不会自己重读磁盘)。
  * 只在有 Clip 连着时换、换完立刻重载:不留「Chrome 还在跑旧版、文件已是新版」的空档(Codex 10-20 的顾虑)。
  * 每个随包版本只试一次:Chrome 若是从别处加载的(比如老用户选的 .app 里那份),重载后还是旧版也不会反复折腾。
+ * 已知边界(实测):开发者模式关着时,Chrome 会以 unsupportedDeveloperExtension 停掉重载后的已解压扩展;
+ * 用户本来就是开着开发者模式拖进去的,事后关掉的再打开即自动恢复 —— 这是 Chrome 自己的闸,重载只是让它早一点生效。
  */
 export async function syncClipVersion(engine: EngineRef, src = clipSourceDir(), dst = clipCopyDir()): Promise<'reloaded' | 'skip'> {
   const bundled = versionOf(src)

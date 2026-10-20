@@ -119,6 +119,11 @@ async function main() {
     check('欢迎卡片写明已连上', !!card)
 
     // ② Forsion 换了扩展文件夹里的版本 → 引擎叫连着的 Clip 重载 → 读进新版本、连回来;重载是 update,不再弹欢迎页
+    // 真用户是开着开发者模式拖进去的;开发者模式关着时 Chrome 会以 unsupportedDeveloperExtension 停掉重载后的未打包扩展(实测)
+    const ext = await ctx.newPage()
+    await ext.goto('chrome://extensions')
+    await ext.evaluate(() => chrome.developerPrivate.updateProfileConfiguration({ inDeveloperMode: true }))
+    await ext.close()
     const bumped = version.replace(/(\d+)$/, (n) => String(Number(n) + 1))
     const mf = path.join(clipDir, 'manifest.json')
     fs.writeFileSync(mf, JSON.stringify({ ...JSON.parse(fs.readFileSync(mf, 'utf8')), version: bumped }))
@@ -126,7 +131,11 @@ async function main() {
     ctx.on('page', (p) => { p.waitForURL(/./, { timeout: 5000 }).catch(() => {}).then(() => { if (isWelcome(p)) welcomesAfter++ }) })
     const r = await engine('/agent/browser-extension/reload-clients', 'POST')
     check('引擎叫到了连着的 Clip', r.reloaded >= 1, r)
-    const back = await waitFor(async () => { const s = await engine('/agent/browser-extension'); return s.connected && s.clients.at(-1)?.version === bumped ? s : null }, 40000, `重载后以 ${bumped} 连回来`)
+    const back = await waitFor(async () => { const s = await engine('/agent/browser-extension'); return s.connected && s.clients.at(-1)?.version === bumped ? s : null }, 40000, `重载后以 ${bumped} 连回来`).catch(async (e) => {
+      console.log('AFTER', JSON.stringify(await engine('/agent/browser-extension').then((x) => ({ connected: x.connected, clients: x.clients, lastClient: x.lastClient }))))
+      console.log('WORKERS', JSON.stringify(ctx.serviceWorkers().map((w) => w.url())), 'PAGES', JSON.stringify(ctx.pages().map((p) => p.url())))
+      throw e
+    })
     check('重载后读进扩展文件夹里的新版本并连回来(不用重新拖)', !!back)
     await sleep(1500)
     check('重载不算新装:不再弹欢迎页', welcomesAfter === 0, { welcomesAfter })
