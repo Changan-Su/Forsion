@@ -23,7 +23,7 @@ export { startOpenDrag } from './WorkspaceHost'
 export { useViewModes, useViewModesOf, viewModesOf, viewModeTarget, nextViewMode, installViewModeCommands, inSingleColumnShell, ViewModeSwitch, ViewHead, VIEW_MODE_NEXT } from './viewModes'
 export type { ViewModeOption, ViewModesSpec } from './viewModes'
 export { openMainBesideThisTask, mainOpensBeside } from './openBeside'
-export { SingleColumnHost, accountMenuRows, drawerPreview } from './SingleColumnHost'
+export { SingleColumnHost, accountMenuRows, drawerPreview, useWideLayout } from './SingleColumnHost'
 export { listFirstNow, useListFirst } from './listFirst'
 export { MiniColumnHost } from './MiniColumnHost'
 export { useMiniChrome } from './miniChrome'
@@ -109,7 +109,7 @@ export {
   installNativeChromeHost, nativeChromeInstalled, useNativeChromeInstalled, setNativeChromeShell,
   claimNativeChrome, useNativeChromeClaim, dispatchNativeChromeAction, nativeChromeState,
   nativeChromeDrawsSpaces, useNativeChromeSpaces, dispatchNativeChromeSpace, nativeHaptic,
-  useNativeChromeExtras, nativeChromeExtras, subscribeNativeChromeExtras,
+  useNativeChromeExtras, nativeChromeExtras, subscribeNativeChromeExtras, nativeRailCells, NATIVE_RAIL_WIDTH,
 } from './nativeChrome'
 export type {
   NativeChromeAction, NativeChromeState, NativeChromeShellState, NativeChromePageState, NativeChromeHiddenState,

@@ -236,11 +236,12 @@ async function main() {
       })
       await ctx.close()
     }
-    // Tablet (Pad A2 × the browser chrome). Portrait = the phone layout: list level, bottom dock, no docked column.
-    // Landscape = the wide layout: docked left column beside the main view; the title capsule starts right of it
-    // (`leftInset`), so the column's own header — aligned with the capsule row by singleColumn.css — is not under it.
-    // A tablet turned on its side keeps the mobile shell (index.html leaves it only for a fine pointer).
-    // ⚠️ Web wide keeps the bottom dock for now; Android A2 shows a left rail there instead (pending decision).
+    // Tablet (Pad A2 × the browser chrome, same layout as Android). Portrait = the phone layout: list level, bottom dock, no
+    // rail, no docked column. Landscape (the shell's wide line) = the Space rail at the left edge (Home first, avatar at its
+    // foot) instead of the dock, the whole shell starts after it, docked left column beside the main view, and the title
+    // capsule starts after the column (rail + `leftInset`) so the column's header — aligned with the capsule row by
+    // singleColumn.css — is not under it. A tablet turned on its side keeps the mobile shell (index.html leaves it only for a
+    // fine pointer). Switching Space and reloading keep all of it.
     {
       const ctx = await browser.newContext({ viewport: { width: 820, height: 1180 }, hasTouch: true, isMobile: true, locale: 'zh-CN' })
       await ctx.addInitScript(() => {
@@ -267,13 +268,30 @@ async function main() {
         }
       }
       const shot = async (name) => { await page.waitForTimeout(650); await page.screenshot({ path: path.join(OUT, name) }) }
-      const rect = (sel) => page.locator(sel).first().evaluate((el) => { const r = el.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width } })
-      const wideGeometry = async () => {
+      const rect = (sel) => page.locator(sel).first().evaluate((el) => { const r = el.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width, height: r.height } })
+      const phoneGeometry = async () => {
+        assert.equal(await page.locator('.mb-shell').getAttribute('data-wide'), null)
+        assert.equal(await page.locator('.bmc-rail').count(), 0, 'no rail in portrait')
+        assert.equal(await page.locator('.mb-sidecol').count(), 0)
+        assert(await page.locator('.bmc-dock [data-space]').count() > 1, 'dock in portrait')
+        assert(Math.abs((await rect('.mb-shell')).left) < 1, 'shell at the page edge')
+      }
+      const wideGeometry = async (space) => {
         assert.equal(await page.locator('.mb-shell').getAttribute('data-wide'), '')
+        assert.equal(await page.locator('.bmc-dock').count(), 0, 'no dock beside the rail')
+        const rail = await rect('.bmc-rail')
+        assert(Math.abs(rail.left) < 1 && Math.abs(rail.width - 76) < 1 && rail.height >= 819, `rail: ${JSON.stringify(rail)}`)
+        const cells = await page.locator('.bmc-rail [data-space]').evaluateAll((els) => els.map((el) => ({ id: el.getAttribute('data-space'), on: el.getAttribute('aria-current') === 'page' })))
+        assert.equal(cells[0]?.id, 'home', `Home first: ${JSON.stringify(cells)}`)
+        assert.deepEqual(cells.filter((c) => c.on).map((c) => c.id), [space], `current Space marked: ${JSON.stringify(cells)}`)
+        assert.equal(await page.locator('.bmc-rail [data-chrome-action="account"]').count(), 1, 'avatar at the rail foot')
+        assert.equal(await page.locator('.bmc-actions [data-chrome-action="account"]').count(), 0, 'avatar not in the right capsule')
+        const shell = await rect('.mb-shell')
+        assert(Math.abs(shell.left - rail.right) < 1, `shell starts after the rail: ${JSON.stringify({ rail, shell })}`)
         const side = await rect('.mb-sidecol')
-        assert(side.width > 200, `docked column: ${JSON.stringify(side)}`)
+        assert(side.width > 200 && side.left >= rail.right - 1, `docked column after the rail: ${JSON.stringify(side)}`)
         const heading = await rect('.bmc-heading')
-        assert(heading.left >= side.right - 1, `title capsule starts after the docked column: ${JSON.stringify({ side, heading })}`)
+        assert(heading.left >= side.right - 1 && heading.left - side.right < 20, `title capsule right after the docked column: ${JSON.stringify({ side, heading })}`)
         // The column's header row is the column's own, not the capsule's.
         const bar = await page.locator('.mb-sidecol .mb-drawer-bar').count()
         if (bar) {
@@ -283,57 +301,92 @@ async function main() {
           })
           assert(own, 'docked column header is not covered')
         }
-        const dock = await rect('.bmc-dock')
-        assert(dock.bottom <= 820 && dock.top > 600, `dock: ${JSON.stringify(dock)}`)
       }
+      let pinnedIds = []
       await check('portrait 820×1180 keeps the phone layout', async () => {
         assert.equal(await page.locator('[data-error-boundary]').count(), 0)
         await page.locator('.bmc-dock [data-space="amadeus"]').click()
         await page.waitForSelector('.mb-shell[data-space="amadeus"][data-nav="list"]')
-        assert.equal(await page.locator('.mb-shell').getAttribute('data-wide'), null)
-        assert.equal(await page.locator('.mb-sidecol').count(), 0)
-        assert(await page.locator('.bmc-dock [data-space]').count() > 1)
+        await phoneGeometry()
+        pinnedIds = await page.locator('.bmc-dock [data-space]').evaluateAll((els) => els.map((el) => el.getAttribute('data-space')))
       })
       await shot('tablet-820x1180-notes.png')
-      await check('landscape 1180×820: docked column beside main, title capsule right of it', async () => {
+      await check('landscape 1180×820: rail instead of the dock, shell after it, capsule after the docked column', async () => {
         await page.setViewportSize({ width: 1180, height: 820 })
         await page.waitForSelector('.mb-shell[data-wide] .mb-sidecol')
+        await page.waitForSelector('.bmc-rail')
         await page.waitForTimeout(700)
-        await wideGeometry()
+        await wideGeometry('amadeus')
       })
       await shot('tablet-1180x820-notes.png')
-      await check('landscape board: menu button and tool island share the capsule row without touching the capsules', async () => {
+      await check('landscape board: menu button and tool island clear of both capsules', async () => {
         await page.locator('.mb-sidecol').getByText('新建白板', { exact: true }).first().click()
         await page.getByRole('button', { name: '创建', exact: true }).click()
         await page.waitForSelector('.mb-view[data-view="amadeus-drawing"] .excalidraw .App-menu_top > .shapes-section')
         await page.waitForTimeout(900)
         const g = await page.evaluate(() => {
           const r = (sel) => { const el = document.querySelector(sel); if (!el) return null; const b = el.getBoundingClientRect(); return { left: b.left, right: b.right, top: b.top, bottom: b.bottom } }
-          return { heading: r('.bmc-heading'), actions: r('.bmc-actions'), menu: r('.amx-boardhost .main-menu-trigger'), island: r('.amx-boardhost .App-menu_top > .shapes-section'), row: document.querySelector('.amx-boardhost')?.getAttribute('data-cap-row') ?? null }
+          return { heading: r('.bmc-heading'), actions: r('.bmc-actions'), rail: r('.bmc-rail'), menu: r('.amx-boardhost .main-menu-trigger'), island: r('.amx-boardhost .App-menu_top > .shapes-section'), row: document.querySelector('.amx-boardhost')?.getAttribute('data-cap-row') ?? null }
         })
         const apart = (a, b) => a.right <= b.left || b.right <= a.left || a.bottom <= b.top || b.bottom <= a.top
         assert(g.menu && g.island, JSON.stringify(g))
-        for (const cap of [g.heading, g.actions]) for (const el of [g.menu, g.island]) assert(apart(cap, el), `overlap: ${JSON.stringify(g)}`)
-        // In the row (not pushed below the capsules) at this width.
-        assert(g.row !== 'off' && g.island.top < g.heading.bottom, JSON.stringify(g))
+        for (const cap of [g.heading, g.actions, g.rail]) for (const el of [g.menu, g.island]) assert(apart(cap, el), `overlap: ${JSON.stringify(g)}`)
+        // In the capsule row unless the board judged it too tight ('off' = its own row below the capsules, as on Android).
+        if (g.row !== 'off') assert(g.island.top < g.heading.bottom, JSON.stringify(g))
+        else assert(g.island.top >= g.heading.bottom, JSON.stringify(g))
       })
       await shot('tablet-1180x820-board.png')
-      await check('landscape: switching Space keeps the docked column and the capsule after it', async () => {
-        await page.locator('.bmc-dock [data-space="tangu"]').click()
+      await check('landscape: switching Space from the rail keeps the layout', async () => {
+        await page.locator('.bmc-rail [data-space="tangu"]').click()
         await page.waitForSelector('.mb-shell[data-space="tangu"][data-wide] .mb-sidecol')
         await page.waitForTimeout(700)
-        await wideGeometry()
+        await wideGeometry('tangu')
       })
       await shot('tablet-1180x820-tangu.png')
+      await check('short rail (1180×420): as many cells as fit, the pinned ones first, the last cell "all"', async () => {
+        await page.setViewportSize({ width: 1180, height: 420 })
+        await page.waitForTimeout(700)
+        const fit = await page.locator('.bmc-rail-cells').evaluate((el) => Math.floor((el.clientHeight + 4) / 62))
+        const ids = await page.locator('.bmc-rail [data-space]').evaluateAll((els) => els.map((el) => el.getAttribute('data-space')))
+        assert(fit >= 2 && ids.length === fit - 1, JSON.stringify({ fit, ids }))
+        assert.equal(await page.locator('.bmc-rail [data-chrome-action="spacesAll"]').count(), 1)
+        // Pinned (= the portrait dock's Spaces) take the places first; on screen in list order, Home first.
+        const pinnedShown = pinnedIds.slice(0, ids.length)
+        assert.deepEqual(ids.filter((id) => pinnedIds.includes(id)).slice(0, pinnedShown.length), pinnedShown, JSON.stringify({ ids, pinnedIds }))
+        assert.equal(ids[0], 'home')
+        await page.setViewportSize({ width: 1180, height: 820 })
+        await page.waitForTimeout(700)
+        await wideGeometry('tangu')
+      })
+      await check('landscape: reload keeps the rail, the shell after it and the capsule after the column', async () => {
+        await page.reload()
+        await page.waitForSelector('.mb-shell[data-space="tangu"][data-wide] .mb-sidecol', { timeout: 60_000 })
+        await page.waitForSelector('.bmc-rail')
+        // The start-up splash (#tangu-splash, ~2.1s) still covers the page right after a reload.
+        await page.waitForFunction(() => { const el = document.getElementById('tangu-splash'); return !el || getComputedStyle(el).visibility === 'hidden' || getComputedStyle(el).display === 'none' }, null, { timeout: 15_000 })
+        await page.waitForTimeout(500)
+        await wideGeometry('tangu')
+      })
       await check('back to portrait: phone layout again, capsule at the edge', async () => {
         await page.setViewportSize({ width: 820, height: 1180 })
         await page.waitForSelector('.mb-shell:not([data-wide])')
         await page.waitForTimeout(700)
-        assert.equal(await page.locator('.mb-sidecol').count(), 0)
+        await phoneGeometry()
         const heading = await rect('.bmc-heading')
         assert(heading.left < 24, JSON.stringify(heading))
+      })
+      await shot('tablet-820x1180-tangu.png')
+      await check('portrait board opens at the detail level (no dock, no rail)', async () => {
+        await page.locator('.bmc-dock [data-space="amadeus"]').click()
+        await page.waitForSelector('.mb-shell[data-space="amadeus"][data-nav="list"]')
+        await page.locator('.mb-drawer--left').getByText('未命名白板', { exact: true }).first().click()
+        await page.waitForSelector('.mb-shell[data-nav="detail"] .mb-view[data-view="amadeus-drawing"] .excalidraw')
+        await page.waitForTimeout(900)
+        assert.equal(await page.locator('.bmc-dock').count(), 0)
+        assert.equal(await page.locator('.bmc-rail').count(), 0)
         assert.equal(errors.length, 0, errors.join('\n'))
       })
+      await shot('tablet-820x1180-board.png')
       await ctx.close()
     }
     const desktop = await browser.newContext({ viewport: { width: 1280, height: 900 } })

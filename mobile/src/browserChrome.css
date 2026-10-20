@@ -53,3 +53,12 @@ body:has([data-browser-mobile-chrome][data-mode='page']) .settings-page[data-nat
 .bmc-sheet-submit { display: block; min-height: 36px; padding: 6px 16px; margin: 8px 0; border: 0; border-radius: var(--radius-sm); background: var(--action-fill); color: var(--on-action); font: inherit; cursor: pointer; }
 .bmc-sheet form > input { width: 100%; margin-top: 8px; }
 @media (prefers-reduced-motion: reduce) { .bmc-sheet { animation: none; } }
+/* Wide layout (Pad A2, the same rail Android draws: NativeSpaceRail): the Spaces stand in a rail at the left edge instead of
+   the dock — opaque, the shell's colour, a hairline on its right, the avatar at its foot — and the whole shell starts after
+   it (the attribute is set by BrowserChrome while the rail is up). --bmc-rail-w = NATIVE_RAIL_WIDTH; cells 62×58, gap 4.
+   Taps only, as the dock: no swipe on the left edge. Kept at the end of the file (DESIGN §7.2). */
+:root { --bmc-rail-w: 76px; }
+html[data-browser-rail] .mb-shell { left: calc(var(--bmc-rail-w) + env(safe-area-inset-left) / var(--uiz, 1)); }
+.bmc-rail { position: absolute; top: 0; bottom: 0; left: 0; box-sizing: border-box; width: calc(var(--bmc-rail-w) + env(safe-area-inset-left) / var(--uiz, 1)); display: flex; flex-direction: column; align-items: center; gap: 4px; padding: calc(env(safe-area-inset-top) / var(--uiz, 1) + 8px) 0 calc(env(safe-area-inset-bottom) / var(--uiz, 1) + 10px) calc(env(safe-area-inset-left) / var(--uiz, 1)); background: var(--bg); border-right: 1px solid var(--border); pointer-events: auto; }
+.bmc-rail-cells { flex: 1 1 0; min-height: 0; align-self: stretch; overflow: hidden; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.bmc-rail .bmc-destination { flex: none; width: 62px; height: 58px; min-height: 0; border-radius: var(--radius-lg); }

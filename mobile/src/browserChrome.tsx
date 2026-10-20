@@ -1,10 +1,10 @@
 /** Browser implementation of the mobile chrome seam. The shell still owns navigation, titles and actions;
  * this host draws the same surfaces in the DOM when there is no native platform. */
-import { useLayoutEffect, useRef, useSyncExternalStore } from 'react'
+import { useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { ArrowLeft, ChevronDown, LayoutGrid, MoreHorizontal, PanelLeft, PanelRight, Search, UserRound, X } from 'lucide-react'
 import {
-  dispatchNativeChromeAction, dispatchNativeChromeSpace, installNativeChromeHost, useSpaceStore, UI_ZOOM_EVENT,
-  type NativeChromeAction, type NativeChromeState,
+  dispatchNativeChromeAction, dispatchNativeChromeSpace, installNativeChromeHost, nativeRailCells, useSpaceStore, useWideLayout,
+  UI_ZOOM_EVENT, type NativeChromeAction, type NativeChromeSpace, type NativeChromeState,
 } from '@lcl/engine'
 import { accountChip, subscribeAccountChip } from '@/services/accountChip'
 import { useApp } from '@/stores/appStore'
@@ -60,20 +60,41 @@ function Action({ action, label, children }: { action: NativeChromeAction; label
   return <button className="bmc-button" data-chrome-action={action} aria-label={label} onClick={() => dispatchNativeChromeAction(action)}>{children}</button>
 }
 
+/** One Space cell of the dock / the rail: icon over name (the same cell Android draws in both). */
+function Destination({ sp, badge }: { sp: NativeChromeSpace; badge?: string }) {
+  const Icon = useSpaceStore((s) => s.spaces.find((x) => x.id === sp.id)?.icon)
+  return <button className="bmc-destination" data-space={sp.id} aria-current={sp.active ? 'page' : undefined} onClick={() => dispatchNativeChromeSpace(sp.id)}>
+    <span className="bmc-destination-icon">{Icon && <Icon size={22} />}{badge && <i className="bmc-badge" data-kind={badge} aria-label={useApp.getState().tr(`nativebar.badge.${badge}`)} />}</span>
+    <span>{sp.label}</span>
+  </button>
+}
+
+/** The rail's cell box (px) and the gap between cells: = RAIL_CELL_HEIGHT / RAIL_CELL_GAP (Android NativeChromeBar.kt). */
+const RAIL_CELL_HEIGHT = 58
+const RAIL_CELL_GAP = 4
+
 export function BrowserChrome() {
   const chrome = useSyncExternalStore(subscribe, () => state)
   const account = useSyncExternalStore(subscribeAccountChip, accountChip)
-  const spaces = useSpaceStore((s) => s.spaces)
   const badges = JSON.parse(useSyncExternalStore(subscribeBadges, badgeSnapshot)) as ReturnType<typeof spaceBadges>
   const topRef = useRef<HTMLElement>(null)
   const dockRef = useRef<HTMLElement>(null)
   const headingRef = useRef<HTMLDivElement>(null)
   const actionsRef = useRef<HTMLDivElement>(null)
+  const railCellsRef = useRef<HTMLDivElement>(null)
   const destinations = chrome.mode === 'shell' ? chrome.spaces ?? [] : []
   const dock = destinations.filter((sp) => sp.pinned)
-  const showDock = destinations.length > 1
+  const spaceBar = destinations.length > 1
+  // Wide layout (Pad A2, same line as the shell's docked column): the Spaces stand in a rail at the left edge instead of the
+  // dock, the avatar at its foot, and the whole shell starts after it (browserChrome.css). Portrait stays the phone layout.
+  const wide = useWideLayout()
+  const showRail = wide && spaceBar
+  const showDock = !wide && spaceBar
   const showAll = destinations.some((sp) => !sp.pinned)
   const atDetail = chrome.mode === 'shell' && chrome.leftBack
+  // As many cells as the rail's height holds (measured), past that the pinned ones first and a last cell for "all".
+  const [railFit, setRailFit] = useState(Number.MAX_SAFE_INTEGER)
+  const rail = nativeRailCells(destinations, railFit)
   // Wide layout (Pad A2): the shell reports the docked left column's right edge (`leftInset`, viewport px) — the capsules
   // start after it, so the column's own header is not under the title capsule (singleColumn.css aligns that header with
   // the capsule row). `capLeftMax`: the view lays something out in this row right of the title (the board) → cut the title.
@@ -107,15 +128,29 @@ export function BrowserChrome() {
       window.removeEventListener(UI_ZOOM_EVENT, measure)
       window.visualViewport?.removeEventListener('resize', measure)
     }
-  }, [chrome.mode, showDock, atDetail, leftInset])
+  }, [chrome.mode, showDock, atDetail, leftInset, showRail])
+  useLayoutEffect(() => {
+    // The shell starts after the rail (browserChrome.css): one attribute, flipped on rotation only.
+    document.documentElement.toggleAttribute('data-browser-rail', showRail)
+    const el = railCellsRef.current
+    if (!showRail || !el) return
+    const fit = (): void => setRailFit(Math.max(0, Math.floor((el.clientHeight + RAIL_CELL_GAP) / (RAIL_CELL_HEIGHT + RAIL_CELL_GAP))))
+    fit()
+    const observer = new ResizeObserver(fit)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [showRail])
   useLayoutEffect(() => () => {
     document.body.style.removeProperty('--nc-top')
     document.body.style.removeProperty('--nc-bottom')
     document.getElementById('nc-caps')?.remove()
+    document.documentElement.removeAttribute('data-browser-rail')
   }, [])
 
-  // leftInset / capLeftMax are viewport px; the chrome sits under the body's UI zoom.
-  const topStyle = leftInset ? { left: `calc(${leftInset}px / var(--uiz, 1))` } : undefined
+  // leftInset (from the shell's left edge) / capLeftMax are viewport px; the chrome sits under the body's UI zoom.
+  // With the rail the capsules start after it and then after the docked column, as on Android (rail + leftInset).
+  const railLeft = showRail ? 'var(--bmc-rail-w) + env(safe-area-inset-left) / var(--uiz, 1)' : ''
+  const topStyle = leftInset || showRail ? { left: `calc(${[railLeft, leftInset ? `${leftInset}px / var(--uiz, 1)` : ''].filter(Boolean).join(' + ')})` } : undefined
   const headingStyle = capLeftMax ? { maxWidth: `min(65%, calc(${capLeftMax}px / var(--uiz, 1)))` } : undefined
   return <>
     {chrome.mode !== 'hidden' && <div className="bmc-chrome" data-browser-mobile-chrome data-mode={chrome.mode}>
@@ -136,22 +171,24 @@ export function BrowserChrome() {
               {chrome.right && <Action action="right" label={chrome.labels.right}><PanelRight size={20} /></Action>}
               {chrome.tabCount > 1 && <Action action="tabs" label={chrome.labels.tabs}><span className="mb-tabcount">{chrome.tabCount}</span></Action>}
               <Action action="more" label={chrome.labels.more}><MoreHorizontal size={20} /></Action>
-              {!atDetail && account && <button className="bmc-button bmc-account" aria-label={account.label} data-chrome-action="account" onClick={() => account.activate()}>
+              {!atDetail && !showRail && account && <button className="bmc-button bmc-account" aria-label={account.label} data-chrome-action="account" onClick={() => account.activate()}>
                 {account.avatar ? <img src={account.avatar} alt="" /> : account.loggedIn ? account.initial : <UserRound size={20} />}
               </button>}
             </>}
         </div>
       </header>
       {showDock && chrome.mode === 'shell' && <nav ref={dockRef} className="bmc-dock" aria-label={chrome.allLabel}>
-        {dock.map((sp) => {
-          const Icon = spaces.find((x) => x.id === sp.id)?.icon
-          const badge = badges[sp.id]
-          return <button key={sp.id} className="bmc-destination" data-space={sp.id} aria-current={sp.active ? 'page' : undefined} onClick={() => dispatchNativeChromeSpace(sp.id)}>
-            <span className="bmc-destination-icon">{Icon && <Icon size={22} />}{badge && <i className="bmc-badge" data-kind={badge} aria-label={useApp.getState().tr(`nativebar.badge.${badge}`)} />}</span>
-            <span>{sp.label}</span>
-          </button>
-        })}
+        {dock.map((sp) => <Destination key={sp.id} sp={sp} badge={badges[sp.id]} />)}
         {showAll && <button className="bmc-destination" data-chrome-action="spacesAll" onClick={() => dispatchNativeChromeAction('spacesAll')}><LayoutGrid size={22} /><span>{chrome.allLabel}</span></button>}
+      </nav>}
+      {showRail && chrome.mode === 'shell' && <nav className="bmc-rail" aria-label={chrome.allLabel}>
+        <div className="bmc-rail-cells" ref={railCellsRef}>
+          {rail.cells.map((sp) => <Destination key={sp.id} sp={sp} badge={badges[sp.id]} />)}
+          {rail.more.length > 0 && <button className="bmc-destination" data-chrome-action="spacesAll" aria-current={rail.more.some((sp) => sp.active) ? 'page' : undefined} onClick={() => dispatchNativeChromeAction('spacesAll')}><LayoutGrid size={22} /><span>{chrome.allLabel}</span></button>}
+        </div>
+        {account && <button className="bmc-button bmc-account" aria-label={account.label} data-chrome-action="account" onClick={() => account.activate()}>
+          {account.avatar ? <img src={account.avatar} alt="" /> : account.loggedIn ? account.initial : <UserRound size={20} />}
+        </button>}
       </nav>}
     </div>}
     <BrowserSheet />
