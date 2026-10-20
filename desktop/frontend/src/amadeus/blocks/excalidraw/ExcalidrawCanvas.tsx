@@ -60,6 +60,11 @@ registerMessages({
 const MIN_VISIBLE_PX = 4
 /** Android 宽屏:标题胶囊被封顶到比这还窄(dp,左钮 + 三四个字)就不封了,菜单钮与工具岛整排退到胶囊下面。 */
 const CAP_FLOOR = 120
+/** 胶囊宽度探针(见 fit):--nc-capl-w / --nc-capr-w 由 mobile/src/nativeChrome.ts 写在 [data-nc-caps] 上,别处为 0。 */
+const CAP_PROBE: React.CSSProperties = {
+  position: 'absolute', top: 0, left: 0, visibility: 'hidden', pointerEvents: 'none',
+  width: 'calc(var(--nc-capl-w, 0) * 1px)', height: 'calc(var(--nc-capr-w, 0) * 1px)',
+}
 const V_GRAD = 'linear-gradient(90deg, var(--amx-grid-line) 0 1px, transparent 1px)'
 const H_GRAD = 'linear-gradient(180deg, var(--amx-grid-line) 0 1px, transparent 1px)'
 
@@ -626,13 +631,15 @@ export default function ExcalidrawCanvas({
   // 标题胶囊的宽要原生走一趟才回来,量到的总是上一拍的:
   //   · capMax = 一排按最小间距排满时标题胶囊最多占多宽(12 + 胶囊 + 8 + 菜单钮 + 8 + 工具岛 + 8 + 右胶囊 + 12 = 白板宽),
   //     报给原生封顶、长标题省略号截断。算式里没有胶囊此刻的宽,一趟就收敛。
-  //   · 'off':封顶后标题连 CAP_FLOOR 都给不到(而它本来比这宽)→ 菜单钮与工具岛退回引擎自己那一排、挪到胶囊下面,不封顶。
+  //   · 'off':上限不到 CAP_FLOOR → 菜单钮与工具岛退回引擎自己那一排、挪到胶囊下面,不封顶。只看上限、不看胶囊报回来的宽:
+  //     原生还没报(0)或报的是被我们封过的宽,拿它比都会把 30dp 这种上限放过去,胶囊从此窄过左钮(Codex 评审 P2)。
+  //     ponytail: 标题本来就短于 CAP_FLOOR、上限又落在两者之间时也退到下面(放得下也退),这条窄带不值得多一层判断。
   //   · 'gap':工具岛放主区正中会碰到菜单钮(或右胶囊)→ 改在菜单钮右缘与右胶囊左缘之间的空当里居中,不一点点地让。
   //   · 都不是:主区正中。
-  // 看白板根(旋转 / 开合左栏)、左栏(标题胶囊变宽 → 菜单钮的让位跟着变)、工具岛(工具栏改了顺序 / 增删)。
+  // 看白板根(旋转 / 开合左栏)、工具岛(工具栏改了顺序 / 增删)、两颗胶囊的宽(capProbeRef)。
   // 白板根里净缩放恒为 1(syncZoom 反向抵消了界面缩放):视口 px = 白板里的 px = dp。
-  // ponytail: off 档下标题变短、或右胶囊变宽,都不会立刻重算(左栏的宽不随它们变),等下一次尺寸变化;要即时就再盯 #nc-caps 那条规则。
   const [capMax, setCapMax] = useState(0)
+  const capProbeRef = useRef<HTMLElement>(null)
   useEffect(() => {
     const el = hostRef.current
     if (!el || !api || typeof ResizeObserver === 'undefined') return
@@ -649,14 +656,16 @@ export default function ExcalidrawCanvas({
       const iw = island.getBoundingClientRect().width
       const mw = menu.getBoundingClientRect().width
       const max = Math.floor(w - capR - iw - mw - 48)
-      if (max < Math.max(0, Math.min(CAP_FLOOR, capL))) { el.dataset.capRow = 'off'; setCapMax(0); return }
+      if (max < CAP_FLOOR) { el.dataset.capRow = 'off'; setCapMax(0); return }
       setCapMax(max)
       const menuEnd = 12 + Math.min(capL, max) + 8 + mw
       if (menuEnd + 8 > (w - iw) / 2 || (w + iw) / 2 > w - 12 - capR - 16) el.dataset.capRow = 'gap'
     }
     const ro = new ResizeObserver(fit)
     ro.observe(el)
-    for (const q of ['.App-menu_top__left', '.App-menu_top > .shapes-section']) { const x = el.querySelector(q); if (x) ro.observe(x) }
+    const island = el.querySelector('.App-menu_top > .shapes-section')
+    if (island) ro.observe(island)
+    if (capProbeRef.current) ro.observe(capProbeRef.current)
     return () => { ro.disconnect(); setCapMax(0) }
   }, [api])
   useNativeChromeExtras(capMax > 0 ? { where: 'main', capLeftMax: capMax } : null)
@@ -764,6 +773,8 @@ export default function ExcalidrawCanvas({
           </Footer>
         )}
       </Excalidraw>
+      {/* 两颗胶囊的宽(宽 = 左、高 = 右)量成一个看不见的盒子,给下面 fit 的 ResizeObserver 盯:胶囊一变就重算(Codex 评审 P2) */}
+      <i ref={capProbeRef} aria-hidden style={CAP_PROBE} />
       {/* 挂进引擎的 .excalidraw 根:胶囊的底色 / 外圈 / 投影都是引擎 token,只在那棵子树里有值 */}
       {full && fullHint && root &&
         createPortal(
