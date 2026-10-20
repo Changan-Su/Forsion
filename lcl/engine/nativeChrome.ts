@@ -47,6 +47,9 @@ export interface NativeChromeShellState {
   titleTap?: boolean
   /** Something behind "more" wants a look (a `RibbonItem.dot` is lit): hosts put a dot on the button. `label` = what a screen reader says. */
   moreDot?: { label: string }
+  /** dp the docked left column (wide layout) takes from the page's left edge: hosts start the left capsule after it, so
+   *  the column's own top is not under a capsule. Absent = no docked column. */
+  leftInset?: number
 }
 /** `close` = label of an optional trailing × (e.g. a settings sub-page: back = settings home, × = leave settings). */
 export interface NativeChromePageState { mode: 'page'; title: string; back: string; close?: string }

@@ -52,6 +52,8 @@ registerMessages({
   'excalicanvas.allBoards': { zh: '所有白板', en: 'All boards' },
   'excalicanvas.toolbar': { zh: '工具栏', en: 'Toolbar' },
   'excalicanvas.resetOrder': { zh: '恢复默认顺序', en: 'Reset to default order' },
+  // 引擎那句(hints.canvasPanning)教的是鼠标中键 / 空格拖动;触屏上换这句(见 data-touch-hint)
+  'excalicanvas.panHintTouch': { zh: '双指拖动或捏合，移动和缩放画布', en: 'Drag or pinch with two fingers to move and zoom' },
 })
 
 /** 线距小于这个屏幕像素就不画:再密就是一片糊(excalidraw 自带网格同款下限)。 */
@@ -224,6 +226,8 @@ export default function ExcalidrawCanvas({
   const toolRefs: ToolRefs = useMemo(() => ({ pen: penState, group: groupState }), [])
   // 我们自建的 UI 需要的那一小片 appState(为什么不是整份见 boardUi.ts)
   const [ui, setUi] = useState<BoardUi>(newBoardUi)
+  // 最近一次按下的是不是鼠标(Pad 接了鼠标照旧给引擎原句)。还没按过 = 看设备的主指针。
+  const [mouse, setMouse] = useState(() => !window.matchMedia('(pointer: coarse)').matches)
   const [hostZoom, setHostZoom] = useState('')
   const [root, setRoot] = useState<Element | null>(null)
   const toolbarAnchor = useEngineAnchor(root, '.App-toolbar', 'amx-toolbar-slot')
@@ -617,7 +621,14 @@ export default function ExcalidrawCanvas({
   }, [api, layout, clampView, syncZoom, tryFit])
 
   return (
-    <div className="amx-boardhost" ref={hostRef} data-full={full || undefined}>
+    // data-nc-caps:Android 原生外壳往这里写两颗顶部胶囊的宽(mobile/src/nativeChrome.ts),宽屏时白板顶上那一排要绕开它们(base.css)。
+    // data-touch-hint:提示条此刻是「怎么平移画布」、而手上不是鼠标 → 换成触屏说法(amadeus-host.css)。
+    <div
+      className="amx-boardhost" ref={hostRef} data-full={full || undefined} data-nc-caps=""
+      data-touch-hint={ui.idle && !mouse ? '' : undefined}
+      style={{ '--amx-hint-pan': JSON.stringify(t('excalicanvas.panHintTouch')) } as React.CSSProperties}
+      onPointerDownCapture={(e) => { const m = e.pointerType === 'mouse'; if (m !== mouse) setMouse(m) }}
+    >
       <Excalidraw
         onExcalidrawAPI={setApi}
         initialData={initialData}
@@ -658,6 +669,9 @@ export default function ExcalidrawCanvas({
             zen: appState.zenModeEnabled,
             pen: appState.penMode,
             penDetected: appState.penDetected,
+            idle: appState.activeTool.type === 'selection' && !appState.selectionElement && !appState.editingTextElement
+              && !appState.croppingElementId && !appState.searchMatches?.matches.length
+              && !Object.values(appState.selectedElementIds).some(Boolean),
           }
           setUi((cur) => (sameBoardUi(cur, next) ? cur : next))
           onSceneChange(serializeAsJSON(elements, appState, files, 'local'))

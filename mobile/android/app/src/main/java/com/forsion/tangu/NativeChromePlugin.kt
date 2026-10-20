@@ -40,6 +40,10 @@ import kotlin.math.roundToInt
  * has arrived, and the page is told how far and how fast (`ime` event) so what stands at its bottom edge travels with
  * the keyboard instead of jumping to where it is going.
  * The dock holds a handful of Spaces; with more than fit, its last cell reports `spacesAll` and JS shows the rest.
+ * Wide windows (2026-10-20, mock-up A2; the page's own wide line, judged here on the whole window): the same view is a
+ * rail at the left edge instead (gravity START, full height, opaque), the WebView starts right of it, and it stays up
+ * while the keyboard is (it is beside the keyboard, not on it). The verdict goes to the page with every `layout` event
+ * (`wide`): judged on the WebView, the rail's own width would flip a 4:3 tablet back to narrow and the rail away again.
  *
  * Two arrangements (2026-10-09):
  *  - floating — shell pages that ask for it (`floating`): the WebView runs under both (top margin 0; bottom margin 0
@@ -99,6 +103,15 @@ class NativeChromePlugin : Plugin() {
     private var lastLayout = ""
     /** A screen reader (touch exploration: TalkBack and its kind) going on / off is reported with the layout, see reportLayout. */
     private var readerHooked = false
+    /** The last wide verdict (see wideWindow); kept while the window has no size yet. */
+    private var wide = false
+    private var parentHooked = false
+    /** The window changed size (rotation, split screen): the verdict and the margins follow. Posted: this runs inside a layout pass. */
+    private val parentListener = View.OnLayoutChangeListener { v, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
+        if (right - left != oldRight - oldLeft || bottom - top != oldBottom - oldTop) v.post { layout() }
+    }
+    /** The Spaces stand in the rail (wide windows) rather than the dock; read by the views' content. */
+    private val rail = mutableStateOf(false)
     private val readerListener = AccessibilityManager.TouchExplorationStateChangeListener { scheduleLayoutReport() }
     private fun accessibility() = activity.getSystemService(Context.ACCESSIBILITY_SERVICE) as? AccessibilityManager
     private val pageListener = object : WebViewListener() {
@@ -181,7 +194,7 @@ class NativeChromePlugin : Plugin() {
             view.setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
             view.setContent {
                 val current = state.value
-                if (current != null && current.visible) NativeChromeBar(current, insets.value, ::onPlate) { action -> emit(action) }
+                if (current != null && current.visible) NativeChromeBar(current, insets.value, ::onPlate, { action -> emit(action) }, rail = rail.value)
             }
             val params = CoordinatorLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0)
             params.gravity = Gravity.TOP
@@ -194,7 +207,10 @@ class NativeChromePlugin : Plugin() {
             view.setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
             view.setContent {
                 val current = state.value
-                if (current != null && current.spaceBar) NativeSpaceBar(current, insets.value, ::onPlate, onAll = { emit("spacesAll") }) { id, long -> emitSpace(id, long) }
+                if (current != null && current.spaceBar) {
+                    if (rail.value) NativeSpaceRail(current, insets.value, onAll = { emit("spacesAll") }, onAccount = { emit("account") }) { id, long -> emitSpace(id, long) }
+                    else NativeSpaceBar(current, insets.value, ::onPlate, onAll = { emit("spacesAll") }) { id, long -> emitSpace(id, long) }
+                }
             }
             // Own listener (the WebView's is only hooked where Capacitor adjusts margins): keyboard up → bar away,
             // and — edge-to-edge only, see layout() — the WebView ends at the keyboard's top edge.
@@ -209,6 +225,7 @@ class NativeChromePlugin : Plugin() {
             spaceBar = view
             ViewCompat.requestApplyInsets(view)
         }
+        if (!parentHooked) { parentHooked = true; (webView.parent as View).addOnLayoutChangeListener(parentListener) }
     }
 
     /** Records the keyboard's state; true when it changed. */
@@ -222,9 +239,28 @@ class NativeChromePlugin : Plugin() {
 
     private fun barPx(): Int = (NATIVE_CHROME_HEIGHT.value * activity.resources.displayMetrics.density).roundToInt()
     private fun spaceBarPx(): Int = (NATIVE_SPACE_BAR_HEIGHT.value * activity.resources.displayMetrics.density).roundToInt()
+    private fun railPx(): Int = (NATIVE_RAIL_WIDTH.value * activity.resources.displayMetrics.density).roundToInt()
+
+    /**
+     * The page's wide line (lcl SingleColumnHost WIDE_QUERY: aspect ≥ 4:3 and ≥ 520dp wide — keep the numbers equal),
+     * judged on the whole window (the WebView's parent) minus the side cutouts: the rail does not change it.
+     */
+    private fun wideWindow(): Boolean {
+        val parent = bridge.webView?.parent as? View ?: return wide
+        if (parent.width <= 0 || parent.height <= 0) return wide
+        val density = activity.resources.displayMetrics.density
+        val w = (parent.width - insets.value.left - insets.value.right) / density
+        val h = parent.height / density
+        wide = w >= 520f && w * 3f >= h * 4f
+        return wide
+    }
 
     private fun barVisible() = bar != null && state.value?.visible == true
-    private fun spacesVisible() = spaceBar != null && state.value?.spaceBar == true && !imeVisible
+    private fun spacesShown() = spaceBar != null && state.value?.spaceBar == true
+    /** The rail: wide windows, keyboard or not. */
+    private fun railVisible() = spacesShown() && wideWindow()
+    /** The dock: never while the keyboard is up (it would ride on it and eat the composer's room). */
+    private fun spacesVisible() = spacesShown() && !imeVisible && !wideWindow()
     /** The page runs under the chrome (see the class comment). Only a shell state can carry `floating`. */
     private fun floating() = barVisible() && state.value?.floating == true
 
@@ -236,6 +272,9 @@ class NativeChromePlugin : Plugin() {
         val floating = floating()
         val top = if (floating) 0 else i.top + if (visible) barPx() else 0
         val spacesVisible = spacesVisible()
+        val railOn = railVisible()
+        rail.value = railOn
+        val left = i.left + if (railOn) railPx() else 0
         // Edge-to-edge (Android 15+, where we own the margins): the window is no longer resized for the keyboard and
         // Capacitor's own handler ignores it too, so the page would keep its full height with the composer underneath
         // the keyboard. Elsewhere the system still resizes the window (adjustResize) — adding the inset would pad twice.
@@ -250,16 +289,20 @@ class NativeChromePlugin : Plugin() {
             else -> i.bottom + if (spacesVisible) spaceBarPx() else 0
         }
         (webView.layoutParams as? ViewGroup.MarginLayoutParams)?.let { mlp ->
-            if (mlp.leftMargin != i.left || mlp.topMargin != top || mlp.rightMargin != i.right || mlp.bottomMargin != bottom) {
-                mlp.setMargins(i.left, top, i.right, bottom)
+            if (mlp.leftMargin != left || mlp.topMargin != top || mlp.rightMargin != i.right || mlp.bottomMargin != bottom) {
+                mlp.setMargins(left, top, i.right, bottom)
                 webView.layoutParams = mlp
             }
         }
         spaceBar?.let { view ->
-            view.visibility = if (spacesVisible) View.VISIBLE else View.GONE
-            val height = i.bottom + spaceBarPx()
-            if (view.layoutParams.height != height) {
-                view.layoutParams = view.layoutParams.apply { this.height = height }
+            view.visibility = if (spacesVisible || railOn) View.VISIBLE else View.GONE
+            // the same view is the dock (a strip at the bottom) or the rail (a column at the left edge, past the side cutout)
+            val params = view.layoutParams as CoordinatorLayout.LayoutParams
+            val gravity = if (railOn) Gravity.START else Gravity.BOTTOM
+            val width = if (railOn) i.left + railPx() else ViewGroup.LayoutParams.MATCH_PARENT
+            val height = if (railOn) ViewGroup.LayoutParams.MATCH_PARENT else i.bottom + spaceBarPx()
+            if (params.gravity != gravity || params.width != width || params.height != height) {
+                view.layoutParams = params.apply { this.gravity = gravity; this.width = width; this.height = height }
             }
         }
         bar?.let { view ->
@@ -304,6 +347,7 @@ class NativeChromePlugin : Plugin() {
         // screen reader costs a rebuild of that part of the accessibility tree, which it only pays while one is listening.
         // Touch exploration, not AccessibilityManager.isEnabled: that one is also true for password fillers and auto-clickers.
         data.put("reader", accessibility()?.isTouchExplorationEnabled == true)
+        data.put("wide", wideWindow()) // the page lays itself out wide on this verdict, not on its own width (see wideWindow)
         data.put("status", if (floating) dp(i.top.toFloat()) else 0.0)
         data.put("top", if (floating) dp(i.top.toFloat()) + NATIVE_CHROME_HEIGHT.value else 0.0)
         data.put("bottom", if (floating && spacesVisible()) dp(i.bottom.toFloat()) + NATIVE_SPACE_BAR_HEIGHT.value else 0.0)
@@ -363,6 +407,8 @@ class NativeChromePlugin : Plugin() {
         spaceBar?.let { view -> (view.parent as? ViewGroup)?.removeView(view); view.disposeComposition() }
         spaceBar = null
         plates.clear()
+        rail.value = false
+        if (parentHooked) { parentHooked = false; (bridge.webView?.parent as? View)?.removeOnLayoutChangeListener(parentListener) }
         lastLayout = "" // the next page starts from nothing: whatever is reported next must reach it, also when it equals the last report
         layout()
     }

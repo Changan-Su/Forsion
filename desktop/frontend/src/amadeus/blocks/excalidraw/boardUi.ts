@@ -25,11 +25,14 @@ export type BoardUi = {
   zen: boolean
   pen: boolean
   penDetected: boolean
+  /** 选择工具、什么都没选、没在框选 / 编辑文字 / 裁图 —— 引擎此刻的提示条说的是「怎么平移画布」(hints.canvasPanning)。
+   *  那句话教的是鼠标中键 + 空格,触屏上换说法(见 ExcalidrawCanvas 的 data-touch-hint)。 */
+  idle: boolean
 }
 
 export const newBoardUi = (): BoardUi => ({
   tool: 'selection', locked: false, snapshot: null, capRound: null,
-  grid: false, gridSize: 20, gridStep: 5, snap: false, view: false, zen: false, pen: false, penDetected: false,
+  grid: false, gridSize: 20, gridStep: 5, snap: false, view: false, zen: false, pen: false, penDetected: false, idle: true,
 })
 
 const KEYS = Object.keys(newBoardUi()) as (keyof BoardUi)[]

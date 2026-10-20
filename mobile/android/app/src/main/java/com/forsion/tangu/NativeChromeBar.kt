@@ -17,10 +17,12 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -102,16 +104,18 @@ private class CapsuleLook(theme: SheetTheme, frosted: Boolean) {
  * Floating (shell pages that asked for it) the view is see-through around the capsules and the WebView runs under
  * it; otherwise the strip is painted and the WebView starts below.
  * "More" carries a dot while something behind it wants a look (`moreDot`; danger red like the web `.rb-dot`).
+ * [rail] = the Spaces stand in the rail at the left edge (wide windows, NativeSpaceRail): the capsules start after it, and
+ * after the page's docked left column (`leftInset`); the avatar is at the rail's foot instead of in the right capsule.
  * Test anchors: `nativeChrome.{bar,capLeft,capRight,left,right,tabs,more,moreDot,account,back,close,title,titleSub,titleButton,search}` (resource-ids).
  */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
-internal fun NativeChromeBar(state: ChromeState, insets: Insets, onPlate: PlateSink, onAction: (String) -> Unit) {
+internal fun NativeChromeBar(state: ChromeState, insets: Insets, onPlate: PlateSink, onAction: (String) -> Unit, rail: Boolean = false) {
     val theme = state.theme
     val fg = Color(theme.text)
     val density = LocalDensity.current
     val top: Dp = with(density) { insets.top.toDp() }
-    val start: Dp = with(density) { insets.left.toDp() }
+    val start: Dp = with(density) { insets.left.toDp() } + (if (rail) NATIVE_RAIL_WIDTH else 0.dp) + state.leftInset.dp
     val end: Dp = with(density) { insets.right.toDp() }
     val scheme = remember(theme) { theme.colorScheme() }
     val look = remember(theme, state.frosted) { CapsuleLook(theme, state.frosted) }
@@ -147,7 +151,7 @@ internal fun NativeChromeBar(state: ChromeState, insets: Insets, onPlate: PlateS
                             "more", state.labels.getValue("more"), state.icons.more, fg,
                             dot = state.moreDot, dotColor = Color(theme.danger), ring = Color(theme.surface),
                         ) { onAction("more") }
-                        state.account?.let { AvatarButton(it, Color(theme.accent)) { onAction("account") } }
+                        if (!rail) state.account?.let { AvatarButton(it, Color(theme.accent)) { onAction("account") } }
                     }
                 }
                 ChromeState.Mode.PAGE -> {
@@ -315,7 +319,6 @@ internal fun NativeSpaceBar(state: ChromeState, insets: Insets, onPlate: PlateSi
     val scheme = remember(theme) { theme.colorScheme() }
     val look = remember(theme, state.frosted) { CapsuleLook(theme, state.frosted) }
     val cell = CellColors(Color(theme.accent), Color(theme.muted), Color(theme.warning), Color(theme.surface))
-    val view = LocalView.current
     DisposableEffect(Unit) { onDispose { onPlate("dock", null) } }
     MaterialTheme(colorScheme = scheme) { Box(
         Modifier.fillMaxSize()
@@ -337,41 +340,96 @@ internal fun NativeSpaceBar(state: ChromeState, insets: Insets, onPlate: PlateSi
                 .padding(horizontal = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            for (space in state.dock) DockCell(
-                "space.${space.id}", space.label, space.active, cell, space.badge,
-                onClick = {
-                    // A light tick when the tap really switches Space. The system's own effect: the user's touch-feedback
-                    // setting applies and no VIBRATE permission is involved. (The long-press ticks by itself.)
-                    if (!space.active) view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
-                    onSpace(space.id, false)
-                },
-                onLongClick = { onSpace(space.id, true) },
-            ) { tint ->
-                // A Space with a picture of its own (a plugin's icon) shows it, in its own colours like the desktop ribbon:
-                // the tint and the name carry the selection. Otherwise — or while the picture is not there — its line icon.
-                val picture = rememberPng(space.png)
-                if (picture != null) {
-                    Image(
-                        picture, contentDescription = null, contentScale = ContentScale.Crop,
-                        modifier = Modifier.size(DOCK_ICON).clip(RoundedCornerShape(7.dp)).testTag("nativeChrome.spacePicture"),
-                    )
-                } else if (space.icon != null) NativeIconView(space.icon, tint, DOCK_ICON)
-            }
-            if (state.more.isNotEmpty()) DockCell(
-                "spacesAll", state.allLabel, state.more.any { it.active }, cell, state.moreBadge, onClick = onAll, onLongClick = null,
-            ) { tint -> state.icons.all?.let { NativeIconView(it, tint, DOCK_ICON) } }
+            SpaceCells(state, state.dock, state.more, cell, Modifier.weight(1f, fill = false).widthIn(max = DOCK_CELL_MAX).fillMaxWidth().height(DOCK_CELL_HEIGHT), onAll, onSpace)
         }
     } }
+}
+
+/** Width of the Space rail at the left edge of a wide window (2026-10-20, mock-up A2), where it stands instead of the dock. */
+internal val NATIVE_RAIL_WIDTH = 76.dp
+private val RAIL_CELL_WIDTH = 62.dp
+private val RAIL_CELL_HEIGHT = 58.dp
+private val RAIL_CELL_GAP = 4.dp
+
+/**
+ * Space rail (wide windows: a tablet on its side, a phone too — the same line as the page's wide layout): the dock's
+ * cells stood up along the left edge, like the desktop ribbon. Opaque, in the shell's own colour with a hairline on its
+ * right; the WebView starts after it, so it needs no plate. As many Spaces as its height holds (all of them on a
+ * tablet, as a rule); past that the pinned ones first and a last cell for all. The account avatar sits at its foot.
+ * Taps and long-presses only, as the dock: the left edge is the system's back gesture.
+ * Test anchors: `nativeChrome.rail`, the cells as in the dock (`nativeChrome.space.<id>`, `nativeChrome.spacesAll`), `nativeChrome.account`.
+ */
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+internal fun NativeSpaceRail(state: ChromeState, insets: Insets, onAll: () -> Unit, onAccount: () -> Unit, onSpace: (id: String, long: Boolean) -> Unit) {
+    val theme = state.theme
+    val density = LocalDensity.current
+    val scheme = remember(theme) { theme.colorScheme() }
+    val bg = Color(theme.background)
+    val cell = CellColors(Color(theme.accent), Color(theme.muted), Color(theme.warning), bg)
+    MaterialTheme(colorScheme = scheme) { Row(
+        Modifier.fillMaxSize().background(bg).semantics { testTagsAsResourceId = true }.testTag("nativeChrome.rail"),
+    ) {
+        Column(
+            Modifier.weight(1f).fillMaxHeight().padding(
+                start = with(density) { insets.left.toDp() }, top = with(density) { insets.top.toDp() } + 8.dp,
+                bottom = with(density) { insets.bottom.toDp() } + 10.dp,
+            ),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            BoxWithConstraints(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+                val fit = ((maxHeight + RAIL_CELL_GAP) / (RAIL_CELL_HEIGHT + RAIL_CELL_GAP)).toInt()
+                val (cells, more) = state.railCells(fit)
+                Column(verticalArrangement = Arrangement.spacedBy(RAIL_CELL_GAP)) {
+                    SpaceCells(state, cells, more, cell, Modifier.size(RAIL_CELL_WIDTH, RAIL_CELL_HEIGHT), onAll, onSpace)
+                }
+            }
+            state.account?.let { AvatarButton(it, Color(theme.accent), onAccount) }
+        }
+        Box(Modifier.width(1.dp).fillMaxHeight().background(Color(theme.border)))
+    } }
+}
+
+/** The Space cells of the dock and of the rail: [cells], then "all" while [more] is not empty. [cellModifier] sizes one cell. */
+@Composable
+private fun SpaceCells(
+    state: ChromeState, cells: List<ChromeSpace>, more: List<ChromeSpace>, colors: CellColors, cellModifier: Modifier,
+    onAll: () -> Unit, onSpace: (id: String, long: Boolean) -> Unit,
+) {
+    val view = LocalView.current
+    for (space in cells) SpaceCell(
+        cellModifier, "space.${space.id}", space.label, space.active, colors, space.badge,
+        onClick = {
+            // A light tick when the tap really switches Space. The system's own effect: the user's touch-feedback
+            // setting applies and no VIBRATE permission is involved. (The long-press ticks by itself.)
+            if (!space.active) view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+            onSpace(space.id, false)
+        },
+        onLongClick = { onSpace(space.id, true) },
+    ) { tint ->
+        // A Space with a picture of its own (a plugin's icon) shows it, in its own colours like the desktop ribbon:
+        // the tint and the name carry the selection. Otherwise — or while the picture is not there — its line icon.
+        val picture = rememberPng(space.png)
+        if (picture != null) {
+            Image(
+                picture, contentDescription = null, contentScale = ContentScale.Crop,
+                modifier = Modifier.size(DOCK_ICON).clip(RoundedCornerShape(7.dp)).testTag("nativeChrome.spacePicture"),
+            )
+        } else if (space.icon != null) NativeIconView(space.icon, tint, DOCK_ICON)
+    }
+    if (more.isNotEmpty()) SpaceCell(
+        cellModifier, "spacesAll", state.allLabel, more.any { it.active }, colors, ChromeState.pressing(more), onClick = onAll, onLongClick = null,
+    ) { tint -> state.icons.all?.let { NativeIconView(it, tint, DOCK_ICON) } }
 }
 
 /** `bar` = what the dock is filled with (the ring around a badge dot is that colour). */
 private class CellColors(val accent: Color, val muted: Color, val warning: Color, val bar: Color)
 
-/** One cell of the dock: [icon] over [label]. The name is on screen for every cell, so it is also what a screen reader says. */
+/** One cell of the dock / the rail: [icon] over [label]. The name is on screen for every cell, so it is also what a screen reader says. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun RowScope.DockCell(
-    tag: String, label: String, active: Boolean, colors: CellColors, badge: ChromeBadge?,
+private fun SpaceCell(
+    modifier: Modifier, tag: String, label: String, active: Boolean, colors: CellColors, badge: ChromeBadge?,
     onClick: () -> Unit, onLongClick: (() -> Unit)?, icon: @Composable (tint: Color) -> Unit,
 ) {
     // The pill and the colour move over to the new cell (spring, Compose's default) instead of jumping there: the
@@ -380,8 +438,7 @@ private fun RowScope.DockCell(
     val pill by animateColorAsState(if (active) colors.accent.copy(alpha = 0.15f) else colors.accent.copy(alpha = 0f), label = "cellPill")
     val badgeLabel = badge?.label.orEmpty()
     Column(
-        Modifier.weight(1f, fill = false).widthIn(max = DOCK_CELL_MAX).fillMaxWidth().height(DOCK_CELL_HEIGHT)
-            .clip(RoundedCornerShape(18.dp)).background(pill)
+        modifier.clip(RoundedCornerShape(18.dp)).background(pill)
             .combinedClickable(role = Role.Tab, onClick = onClick, onLongClick = onLongClick)
             .semantics {
                 selected = active
