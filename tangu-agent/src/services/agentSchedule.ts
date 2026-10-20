@@ -1,5 +1,6 @@
 /**
- * 每-agent 日程 —— `agents/<slug>/SCHEDULE.db`(Amadeus DbFile JSON,桌面 Calendar Space 直接渲染)。
+ * 每-agent 日程 —— `agents/<slug>/CALENDAR.db`(Amadeus DbFile JSON,桌面 Calendar Space 直接渲染;2026-10-20 前叫 SCHEDULE.db,
+ * 引擎第一次碰到就改名,见 migrateUnlocked)。
  *
  * 条目两类:auto=true 到点由 automation 管道无人值守执行 prompt;auto=false 纯规划条目
  * (agent 对自己的日程规划,只是日历记录)。与 muse_watch 盯任务并存:日程=时间承诺(归属
@@ -14,14 +15,21 @@
  * ⚠️日期解析绝不 Date.parse('YYYY-MM-DD')——那是 UTC 午夜(桌面 calDate.ts 同款结论),
  * 一律手工拆分量构造本地 Date。
  *
- * 该文件不进云同步(agentFileSync 白名单不含它)、不影响 agent 名册缓存(dirStamp 只看 config/SOUL)。
+ * 2026-10-20 起跟着 Agent 上云(agentFileSync,服务端认 agent-calendar 才同步;两台都改了按行 id 合并)。到点执行只在排它的那台:
+ * 每行一个看不见的 cells.device(不是列),新建时盖本机,到期评估只放行本机的(ranHere)—— 和上云前「每台各有一份」的行为一样。
+ * 读—改—写在 Agent 文件夹那把跨进程锁(同步落盘用的同一把)里一次做完、原子落盘:同步刚合并进来的别的设备的行,不会被手里的旧份盖掉。
+ * 不影响 agent 名册缓存(dirStamp 只看 config/SOUL)。
  * DbFile 类型镜像 desktop shared/amadeus/db/schema.ts(与 tools/builtin/amadeus.ts 同一先例,
  * 刻意不 import 工具层)。
  */
-import { promises as fs } from 'node:fs';
+import { promises as fs, existsSync, renameSync, unlinkSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { agentsDir } from '../core/tanguHome.js';
+import { getDeviceId } from '../core/deviceId.js';
+import { atomicSyncWrite, conflictCopyName, readSyncBytes } from './agentSyncPaths.js';
+import { MemoryRepositoryError, withMemoryDirectoryLock } from './memoryRepository.js';
+import { mergeDbFile } from './dbRowMerge.js';
 
 // ── DbFile 最小镜像(desktop schema.ts;zod 在桌面侧,这里结构性容错即可) ────────
 export type CellValue = string | number | boolean | string[] | null;
@@ -37,7 +45,9 @@ const DAY = 24 * HOUR;
 
 export const MAX_ENTRIES = 200;
 
-export const scheduleFile = (slug: string): string => join(agentsDir(), slug, 'SCHEDULE.db');
+export const scheduleFile = (slug: string): string => join(agentsDir(), slug, 'CALENDAR.db');
+/** 2.13.4 及以前的名字。降级回去的老引擎看不到改名后的文件,从空日程开始(数据还在 CALENDAR.db)。 */
+const legacyScheduleFile = (slug: string): string => join(agentsDir(), slug, 'SCHEDULE.db');
 
 const SCHEDULE_COLUMNS: DbColumn[] = [
   { id: 'name', name: 'Name', type: 'text' },
@@ -64,49 +74,121 @@ export interface ScheduleEntry {
   todo: boolean;
   /** 上次实际执行的 ISO 时刻;''=从未。引擎写回,数据自含(agent 可见)。 */
   lastRun: string;
+  /** 排它的那台设备(getDeviceId);''=上云前的老行,哪台都放行。 */
+  device: string;
 }
+
+/** auto 条目只在排它的那台到点执行。ponytail: 那台设备不用了,它排的自动条目就不再跑;要改派再做「改到这台执行」。 */
+export const ranHere = (e: ScheduleEntry): boolean => !e.device || e.device === getDeviceId();
+/** 本机该跑的到期条目(普通 Agent 的 automation 管道和 Muse 的周期共用):别的设备排的在那台跑。 */
+export const dueHere = (entries: ScheduleEntry[], now: Date = new Date()): ScheduleEntry[] => dueEntries(entries.filter(ranHere), now);
 
 // ── 落盘 ─────────────────────────────────────────────────────────────────────
 
-/** 读某 agent 的日程;无文件 → null;文件损坏 → null(不覆盖,写入方报错保数据)。 */
+const parseDb = (raw: string): DbFile | null => {
+  try { const db = JSON.parse(raw); return db && Array.isArray(db.columns) && Array.isArray(db.rows) ? db as DbFile : null; } catch { return null; }
+};
+const serialize = (db: DbFile): string => `${JSON.stringify(db, null, 2)}\n`;
+const readText = (file: string): string | null => readSyncBytes(agentsDir(), file)?.toString('utf8') ?? null;
+
+/** 在 Agent 文件夹那把跨进程锁里同步跑 fn(锁被同步 / 别的进程拿着就稍等重试,约 1 秒后放弃)。 */
+async function locked<T>(slug: string, fn: () => T): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try { return withMemoryDirectoryLock(join(agentsDir(), slug), fn); }
+    catch (e) {
+      if (!(e instanceof MemoryRepositoryError && e.code === 'MEMORY_BUSY') || attempt >= 40) throw e;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+  }
+}
+
+/** SCHEDULE.db → CALENDAR.db(须已拿着锁)。改名前每台只有自己的行,所以没盖章的行都盖本机;
+ *  CALENDAR.db 已经在了(别的设备先推了一份下来)就按行并集合进去再删旧名;合不了(哪份坏了)两份都不动,读侧回落旧名。 */
+function migrateUnlocked(slug: string): void {
+  const legacy = legacyScheduleFile(slug), file = scheduleFile(slug);
+  const old = readText(legacy);
+  if (old === null) return;
+  const db = parseDb(old);
+  if (db) for (const r of db.rows) if (!r.cells.device) r.cells.device = getDeviceId();
+  const stamped = db ? serialize(db) : old; // 坏文件原样改名:数据留着,ensure 照旧报「不是合法 JSON」
+  const cur = readText(file);
+  const merged = cur === null ? { content: stamped } : db ? mergeDbFile(stamped, null, cur) : null;
+  if (!merged) { console.warn(`[schedule] ${slug}: SCHEDULE.db and CALENDAR.db cannot be merged; left both in place`); return; }
+  atomicSyncWrite(agentsDir(), file, cur === null ? merged.content : keepLatestRuns(merged.content, stamped, cur)); // 同一行冲突:跑过的那次不能被另一份的空 lastRun 盖掉
+  // 同一行两份写得不一样(合并取了 CALENDAR.db 那份):旧名那份留成冲突副本,不默默丢
+  if ('conflict' in merged && merged.conflict) renameSync(legacy, join(agentsDir(), slug, conflictCopyName('SCHEDULE.db', new Date())));
+  else unlinkSync(legacy);
+}
+/** 同步合并之后调(agentFileSync):同一行两台都改了(一台到点写了 lastRun、另一台改了描述),合并取了一边的整行;
+ *  lastRun 取各份里最晚的那个,免得排它的那台把同一次再跑一遍。ISO 串按字典序比就是按时间比。 */
+export function keepLatestRuns(merged: string, ...sides: string[]): string {
+  const db = parseDb(merged);
+  if (!db) return merged;
+  const latest = new Map<string, string>();
+  for (const side of sides) {
+    for (const r of parseDb(side)?.rows ?? []) {
+      const v = r.cells?.lastRun;
+      if (typeof v === 'string' && v > (latest.get(r.id) ?? '')) latest.set(r.id, v);
+    }
+  }
+  let changed = false;
+  for (const r of db.rows) {
+    const v = latest.get(r.id);
+    if (v && v > String(r.cells.lastRun ?? '')) { r.cells.lastRun = v; changed = true; }
+  }
+  return changed ? serialize(db) : merged;
+}
+
+/** 同步这个 Agent 之前调(agentFileSync):先改好名,清单里才有 CALENDAR.db。同步的,调用方已在锁外。 */
+export function migrateScheduleFile(slug: string): void {
+  if (existsSync(legacyScheduleFile(slug))) withMemoryDirectoryLock(join(agentsDir(), slug), () => migrateUnlocked(slug));
+}
+
+/** 读某 agent 的日程;无文件 → null;文件损坏 → null(不覆盖,写入方报错保数据)。还没改名(锁被占着)就读旧名。 */
 export async function loadSchedule(slug: string): Promise<DbFile | null> {
+  if (existsSync(legacyScheduleFile(slug))) await locked(slug, () => migrateUnlocked(slug)).catch(() => {});
   let raw: string;
   try {
     raw = await fs.readFile(scheduleFile(slug), 'utf8');
   } catch {
-    return null; // 无文件是常态
+    try { raw = await fs.readFile(legacyScheduleFile(slug), 'utf8'); } catch { return null; } // 无文件是常态
   }
-  try {
-    const db = JSON.parse(raw);
-    if (!db || !Array.isArray(db.columns) || !Array.isArray(db.rows)) return null;
-    return db as DbFile;
-  } catch {
-    return null; // 损坏:读侧当不存在,ensure/upsert 侧区分处理
-  }
+  return parseDb(raw); // 损坏:读侧当不存在,ensure/upsert 侧区分处理
 }
 
-export async function saveSchedule(slug: string, db: DbFile): Promise<void> {
-  await fs.mkdir(join(agentsDir(), slug), { recursive: true });
-  await fs.writeFile(scheduleFile(slug), `${JSON.stringify(db, null, 2)}\n`, 'utf8');
+/** 锁里读出当前那份(没有 = null,坏了就抛),交给 fn 改;fn 返回要落的那份才写。 */
+function mutate<T>(slug: string, fn: (db: DbFile | null) => { write?: DbFile; value: T }): Promise<T> {
+  return locked(slug, () => {
+    migrateUnlocked(slug);
+    const raw = readText(scheduleFile(slug));
+    const db = raw === null ? null : parseDb(raw);
+    if (raw !== null && !db) throw new Error(`CALENDAR.db of "${slug}" exists but is not valid JSON; fix or remove it first`);
+    const out = fn(db);
+    if (out.write) atomicSyncWrite(agentsDir(), scheduleFile(slug), serialize(out.write));
+    return out.value;
+  });
 }
+
+export function saveSchedule(slug: string, db: DbFile): Promise<void> {
+  return mutate(slug, () => ({ write: db, value: undefined }));
+}
+
+const skeleton = (slug: string, agentName?: string): DbFile => ({
+  version: 1,
+  name: `${agentName || slug} Schedule`,
+  columns: SCHEDULE_COLUMNS.map((c) => ({ ...c })),
+  rows: [],
+});
 
 /**
  * 确保日程文件存在且可解析:无文件 → 建 8 列骨架;存在但损坏 → 报错(不覆盖用户数据)。
  */
-export async function ensureScheduleDb(slug: string, agentName?: string): Promise<DbFile> {
-  const existing = await loadSchedule(slug);
-  if (existing) return existing;
-  let broken = false;
-  try { await fs.access(scheduleFile(slug)); broken = true; } catch { /* 不存在 → 正常新建 */ }
-  if (broken) throw new Error(`SCHEDULE.db of "${slug}" exists but is not valid JSON; fix or remove it first`);
-  const db: DbFile = {
-    version: 1,
-    name: `${agentName || slug} Schedule`,
-    columns: SCHEDULE_COLUMNS.map((c) => ({ ...c })),
-    rows: [],
-  };
-  await saveSchedule(slug, db);
-  return db;
+export function ensureScheduleDb(slug: string, agentName?: string): Promise<DbFile> {
+  return mutate(slug, (db) => {
+    if (db) return { value: db };
+    const fresh = skeleton(slug, agentName);
+    return { write: fresh, value: fresh };
+  });
 }
 
 // ── 行 ↔ 结构化条目 ─────────────────────────────────────────────────────────
@@ -127,6 +209,7 @@ export function entriesOf(db: DbFile): ScheduleEntry[] {
     description: cellStr(r.cells.description),
     todo: r.cells.todo === true,
     lastRun: cellStr(r.cells.lastRun),
+    device: cellStr(r.cells.device),
   }));
 }
 
@@ -210,31 +293,24 @@ export function validateEntryInput(input: ScheduleEntryInput, opts: { slug?: str
 
 // ── 增删改 ───────────────────────────────────────────────────────────────────
 
-/** upsert:带 id=更新(保留 lastRun 与未知 cells);无 id=新建(MAX_ENTRIES 帽)。 */
-/** 同一 agent 的 SCHEDULE.db 读—改—写串行化:批准 TODO / manage_schedule / 到期写 lastRun 并发时,后写不再覆盖先写(Codex 09-11 P1)。
- *  ponytail: 只管本进程;桌面直接改这个文件的路不在锁里,跨进程锁等真撞上再加。 */
-const scheduleLocks = new Map<string, Promise<unknown>>();
-function withScheduleLock<T>(slug: string, fn: () => Promise<T>): Promise<T> {
-  const next = (scheduleLocks.get(slug) ?? Promise.resolve()).then(fn, fn);
-  scheduleLocks.set(slug, next.catch(() => {}));
-  return next;
-}
+type UpsertResult = { ok: true; entry: ScheduleEntry; created: boolean } | { ok: false; error: string };
 
-export function upsertEntry(slug: string, v: ValidatedEntry, id?: string, agentName?: string): ReturnType<typeof upsertUnlocked> {
-  return withScheduleLock(slug, () => upsertUnlocked(slug, v, id, agentName));
+/** upsert:带 id=更新(保留 lastRun、归属设备与未知 cells);无 id=新建(MAX_ENTRIES 帽),归属本机。 */
+export function upsertEntry(slug: string, v: ValidatedEntry, id?: string, agentName?: string): Promise<UpsertResult> {
+  return mutate(slug, (db) => upsertIn(db ?? skeleton(slug, agentName), v, id));
 }
 
 /** 已有匹配的条目就原样返回,没有才建;整段在锁里 = 并发两次只建一条(批准 TODO 的重试幂等靠它)。 */
-export function ensureEntry(slug: string, v: ValidatedEntry, match: (e: ScheduleEntry) => boolean, agentName?: string): ReturnType<typeof upsertUnlocked> {
-  return withScheduleLock(slug, async () => {
-    const hit = entriesOf(await ensureScheduleDb(slug, agentName)).find(match);
-    return hit ? { ok: true as const, entry: hit, created: false } : upsertUnlocked(slug, v, undefined, agentName);
+export function ensureEntry(slug: string, v: ValidatedEntry, match: (e: ScheduleEntry) => boolean, agentName?: string): Promise<UpsertResult> {
+  return mutate(slug, (cur) => {
+    const db = cur ?? skeleton(slug, agentName);
+    const hit = entriesOf(db).find(match);
+    if (hit) return { write: cur ? undefined : db, value: { ok: true as const, entry: hit, created: false } };
+    return upsertIn(db, v, undefined);
   });
 }
 
-async function upsertUnlocked(slug: string, v: ValidatedEntry, id?: string, agentName?: string):
-  Promise<{ ok: true; entry: ScheduleEntry; created: boolean } | { ok: false; error: string }> {
-  const db = await ensureScheduleDb(slug, agentName);
+function upsertIn(db: DbFile, v: ValidatedEntry, id?: string): { write?: DbFile; value: UpsertResult } {
   const patch: Record<string, CellValue> = {
     name: v.name,
     date: v.date,
@@ -246,38 +322,33 @@ async function upsertUnlocked(slug: string, v: ValidatedEntry, id?: string, agen
   };
   if (id) {
     const row = db.rows.find((r) => r.id === id);
-    if (!row) return { ok: false, error: `entry ${id} not found` };
+    if (!row) return { value: { ok: false, error: `entry ${id} not found` } };
     Object.assign(row.cells, patch);
-    await saveSchedule(slug, db);
-    return { ok: true, entry: entriesOf(db).find((e) => e.id === id)!, created: false };
+    return { write: db, value: { ok: true, entry: entriesOf(db).find((e) => e.id === id)!, created: false } };
   }
-  if (db.rows.length >= MAX_ENTRIES) return { ok: false, error: `schedule is full (${MAX_ENTRIES} entries); remove some first` };
-  const row: DbRow = { id: `s-${randomUUID().slice(0, 6)}`, cells: { ...patch, lastRun: '' } };
+  if (db.rows.length >= MAX_ENTRIES) return { value: { ok: false, error: `schedule is full (${MAX_ENTRIES} entries); remove some first` } };
+  const row: DbRow = { id: `s-${randomUUID().slice(0, 6)}`, cells: { ...patch, lastRun: '', device: getDeviceId() } };
   db.rows.push(row);
-  await saveSchedule(slug, db);
-  return { ok: true, entry: entriesOf(db).find((e) => e.id === row.id)!, created: true };
+  return { write: db, value: { ok: true, entry: entriesOf(db).find((e) => e.id === row.id)!, created: true } };
 }
 
 export function removeEntry(slug: string, id: string): Promise<boolean> {
-  return withScheduleLock(slug, async () => {
-    const db = await loadSchedule(slug);
-    if (!db) return false;
+  return mutate(slug, (db) => {
+    if (!db) return { value: false };
     const next = db.rows.filter((r) => r.id !== id);
-    if (next.length === db.rows.length) return false;
+    if (next.length === db.rows.length) return { value: false };
     db.rows = next;
-    await saveSchedule(slug, db);
-    return true;
+    return { write: db, value: true };
   });
 }
 
-/** 触发后写回 lastRun(重读最新再只改一格,收窄与工具/路由并发写的覆盖面)。 */
+/** 触发后写回 lastRun(锁里重读最新再只改一格)。 */
 export function markEntryFired(slug: string, rowId: string, at = new Date()): Promise<void> {
-  return withScheduleLock(slug, async () => {
-    const db = await loadSchedule(slug);
+  return mutate(slug, (db) => {
     const row = db?.rows.find((r) => r.id === rowId);
-    if (!db || !row) return;
+    if (!db || !row) return { value: undefined };
     row.cells.lastRun = at.toISOString();
-    await saveSchedule(slug, db);
+    return { write: db, value: undefined };
   });
 }
 

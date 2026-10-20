@@ -234,9 +234,10 @@ export interface AgentFilePutBody {
   /** CAS 票据:0=仅创建;>0=期望当前 seq。不符 → httpBrain 抛 AgentFileConflictError。缺省 = 旧 mtime-LWW。 */
   baseSeq?: number;
 }
-/** paths = 服务端回带的、它认识的可选路径族('human' = HUMAN.md)。老服务端不回带 → 那一族本次不同步(推上去只会 400)。
+/** paths = 服务端回带的、它认识的可选路径族('human' = agent 文件夹里的 HUMAN.md;'human-folder' = 人的文件夹 __human__ 整个槽位)。老服务端不回带 → 那一族本次不同步(推上去只会 400)。
  *  反方向同理:客户端请求清单时声明自己认识哪些族,服务端只对声明了的客户端列出那些文件(老客户端见到不认识的路径会判整次同步失败)。 */
-export type AgentManifest = Array<{ slug: string; files: AgentFileMeta[] }> & { paths?: string[] };
+/** legacy:这个账号还有谁在用人的资料的旧位置(目前只有 'user-md' = 云端 USER.md);服务端没说 = 不知道。legacySeenAt:最后一次见到旧客户端(毫秒)。 */
+export type AgentManifest = Array<{ slug: string; files: AgentFileMeta[] }> & { paths?: string[]; legacy?: string[]; legacySeenAt?: number | null };
 export interface AgentFilesBrain {
   getManifest(userId: string, opts?: { signal?: AbortSignal }): Promise<AgentManifest>;
   getFile(userId: string, slug: string, relPath: string, opts?: { signal?: AbortSignal }): Promise<AgentFileContent | null>;

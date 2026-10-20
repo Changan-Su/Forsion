@@ -2,7 +2,7 @@ import { Router, type Response, type RequestHandler } from 'express';
 import { authMiddleware, type AuthRequest } from '../core/http.js';
 import { deps } from '../seams/runtime.js';
 import { HumanError, isHumanFile, readHuman, writeHuman, type HumanScope } from '../agents/humanStore.js';
-import { readLegacyUserMd, writeUserMd } from '../core/tanguHome.js';
+import { mirrorLegacyHuman } from '../agents/humanFolder.js';
 import { humanProjectScope } from '../services/humanContext.js';
 import { parseRemoteOrigin } from '../services/remoteOrigin.js';
 import { scheduleAgentFilesSync } from '../services/agentFileSync.js';
@@ -31,16 +31,16 @@ async function scopeOf(req: AuthRequest, res: Response): Promise<HumanScope | nu
 const getHuman: RequestHandler = async (req: AuthRequest, res) => {
     try { const scope = await scopeOf(req, res); if (scope) res.json(await readHuman(scope)); } catch (e) { fail(res, e); }
 };
-// human/MEMORY.md 在第 2 步上云之前,旧位置 USER.md 跟着写(同步和旧版设备只认它)。
-const writeThrough = (scope: HumanScope, r: Awaited<ReturnType<typeof writeHuman>>) => {
-  // 比内容不看 r.change:上次写 USER.md 失败了,原样重存一遍(change 为 null)也要补上
-  if (scope.kind === 'human' && scope.file === 'MEMORY.md' && readLegacyUserMd() !== r.document.content) writeUserMd(r.document.content);
+// 改了 human/MEMORY.md:旧位置 USER.md(旧版设备、降级回去的还读它)当场镜像一遍。镜像失败不影响这次保存,下次同步 / 启动再补。
+const mirrorAfter = async (scope: HumanScope) => {
+  if (scope.kind !== 'human' || scope.file !== 'MEMORY.md') return;
+  try { await mirrorLegacyHuman(); } catch (e) { console.warn('[human mirror]', e instanceof Error ? e.message : e); }
 };
 const putHuman: RequestHandler = async (req: AuthRequest, res) => {
     try {
       const scope = await scopeOf(req, res); if (!scope) return;
       const result = await writeHuman(scope, { ...req.body, undoId: undefined }, 'user');
-      writeThrough(scope, result);
+      await mirrorAfter(scope);
       // 不带 slug 是空操作;HUMAN.md 跟着归属 agent 的定义文件一起同步。
       if (scope.kind === 'agent' && result.change) scheduleAgentFilesSync(req.user!.userId, scope.slug);
       res.json(result);
@@ -51,7 +51,7 @@ const undoHuman: RequestHandler = async (req: AuthRequest, res) => {
       const scope = await scopeOf(req, res); if (!scope) return;
       if (typeof req.body?.changeId !== 'string' || !req.body.changeId) throw new HumanError('HUMAN_CHANGE_REQUIRED', 'changeId is required.');
       const result = await writeHuman(scope, { expectedVersion: req.body.expectedVersion, undoId: req.body.changeId }, 'user');
-      writeThrough(scope, result);
+      await mirrorAfter(scope);
       if (scope.kind === 'agent' && result.change) scheduleAgentFilesSync(req.user!.userId, scope.slug);
       res.json(result);
     } catch (e) { fail(res, e); }

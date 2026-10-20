@@ -149,6 +149,27 @@ export async function writeHuman(scope: HumanScope, input: {
   return withMemoryDirectoryLock(loc.historyDir, () => loc.scope.kind !== 'project' ? withMemoryDirectoryLock(loc.base, commit) : commit());
 }
 
+/** 镜像把旧位置(USER.md)的改动写进 human/ 里的一份:和 writeHuman 一样先记修改记录、再换文件,界面里看得到、能撤销
+ *  (10-20 Codex 复核:直接落盘的话,旧设备清空 USER.md 会把画像清掉且找不回)。同步的,调用方可以已拿着 human/ 目录锁。
+ *  不校验长度、不脱敏:另一边的原文照搬;修改记录读不懂也照样落盘,同步不能卡在这里。 */
+export function commitHumanFromMirror(file: HumanFile, after: string, summary: string): void {
+  const base = humanDir(), target = safeMemoryPath(base, file);
+  const historyDir = path.join(tanguHome(), 'human-history', hash(target));
+  mkdirSync(historyDir, { recursive: true });
+  const loc: Location = { scope: { kind: 'human', file }, base, rel: file, file: target, historyDir };
+  withMemoryDirectoryLock(historyDir, () => withMemoryDirectoryLock(base, () => {
+    const before = readMemoryFile(base, file);
+    if (before === after) return;
+    let next: Revision[] | null = null;
+    const revision: Revision = { id: randomUUID(), scope: loc.scope, summary, evidence: '', at: new Date().toISOString(), actor: 'user',
+      beforeVersion: version(before), afterVersion: version(after), before, after, committed: false };
+    try { next = [...historyAt(loc).filter(r => r.committed || r.afterVersion === revision.beforeVersion).slice(-39), revision]; } catch { /* 记录坏了:只落文件 */ }
+    if (next) atomicWriteMemoryFile(historyDir, 'history.json', JSON.stringify(next));
+    atomicWriteMemoryFile(base, file, after);
+    if (next) { revision.committed = true; atomicWriteMemoryFile(historyDir, 'history.json', JSON.stringify(next)); }
+  }));
+}
+
 /** 改之前有、改之后没有了的那些行(原样;标题、分隔线、空行不算;重复的行算一行)。改写过的行也在里面 —— 程序分不出「换了说法」和「拿掉了」。
  *  行号按改之前那份文档里的顺序编,不随新内容变:模型第二次交上来的内容和第一次略有出入时,同一个号仍指同一行。
  *  under = 这一行原来所在小节的标题:没有主语的一句(「改完实际运行,并把结果贴出来」)是谁的事,得看它在「我这边会做」还是「需要你做的」下面。

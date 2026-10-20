@@ -186,7 +186,7 @@ registerToolProvider(browserUseProvider); // host-only:browser_task 委派整包
 registerToolProvider(amadeusProvider); // both:Amadeus 笔记库 + Calendar —— host 直连磁盘 vault,非 host 经 brain.amadeus 云 vault API(append 末尾,保前缀缓存)
 registerToolProvider(readActivityProvider); // 默认仅 Muse(ctx.muse/activityAccess 收口,普通 run 不暴露,快照不变):读用户活动日志
 registerToolProvider(manageAutomationProvider); // 本地限定:自动化规则 触发×动作链(原 muse_watch,改名属 schema 大改同批打穿缓存)
-registerToolProvider(manageScheduleProvider); // 本地限定:每-agent 日程 SCHEDULE.db(append 末尾,保前缀缓存)
+registerToolProvider(manageScheduleProvider); // 本地限定:每-agent 日程 CALENDAR.db(append 末尾,保前缀缓存)
 registerToolProvider(loadToolsProvider); // both:load_tools 解锁 deferred 工具定义(P0-2;仅有未解锁项且调用方支持时可见)
 registerToolProvider(deskPresentProvider); // host-only:desk_present 在桌面聊天旁的 Agent Desk 演出面板展示文件(实验;append 末尾,保前缀缓存)
 registerToolProvider(readSessionProvider); // both:read_session 按 id 读另一个会话的记录(工作区拖会话进聊天的 [[session:id]] 引用靠它落地;append 末尾,保前缀缓存)

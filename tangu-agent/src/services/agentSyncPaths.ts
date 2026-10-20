@@ -15,7 +15,7 @@ export function validSyncPath(p: unknown): p is string {
   if (p === '.memory-tombstones.json') return true;
   const parts = p.split('/');
   if (parts.some((s) => !s || s.startsWith('.') || s.endsWith('.') || s.endsWith(' '))) return false;
-  if (['config.toml', 'SOUL.md', 'HARNESS.md', 'HUMAN.md', 'MEMORY.md'].includes(p)) return true;
+  if (['config.toml', 'SOUL.md', 'HARNESS.md', 'HUMAN.md', 'MEMORY.md', 'CALENDAR.db'].includes(p)) return true; // CALENDAR.db:Agent 的日历(原 SCHEDULE.db)
   if (p.startsWith('LOG/')) return parts.length === 2 && p.endsWith('.md') && validLogDate(parts[1].slice(0, -3));
   return parts.length > 1 && parts[0] === 'Library';
 }
@@ -65,4 +65,17 @@ export function atomicSyncWrite(root: string, file: string, bytes: string | Buff
     guard(); assertSyncPath(root, file); assertSyncPath(root, temp);
     renameSync(temp, file);
   } finally { if (fd !== undefined) closeSync(fd); try { unlinkSync(temp); } catch (e) { if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e; } }
+}
+
+/** 冲突副本名:`notes (conflict 2026-07-19 1532).md`。同步出副本、human/ 镜像出副本共用。 */
+export function conflictCopyName(relPath: string, now: Date): string {
+  const slash = relPath.lastIndexOf('/');
+  const dir = slash < 0 ? '' : relPath.slice(0, slash + 1);
+  const base = slash < 0 ? relPath : relPath.slice(slash + 1);
+  const dot = base.lastIndexOf('.');
+  const stem = dot > 0 ? base.slice(0, dot) : base;
+  const ext = dot > 0 ? base.slice(dot) : '';
+  const p = (n: number): string => String(n).padStart(2, '0');
+  const stamp = `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())} ${p(now.getHours())}${p(now.getMinutes())}`;
+  return `${dir}${stem} (conflict ${stamp})${ext}`;
 }

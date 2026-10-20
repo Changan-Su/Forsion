@@ -1,5 +1,5 @@
 /**
- * manage_schedule —— agent 管理自己的日程(agents/<slug>/SCHEDULE.db;见 services/agentSchedule.ts)。
+ * manage_schedule —— agent 管理自己的日程(agents/<slug>/CALENDAR.db,原 SCHEDULE.db;见 services/agentSchedule.ts)。
  *
  * 条目两类:auto=true 到点走 automation 管道无人值守执行 prompt;auto=false 纯规划(只是日历
  * 记录——agent 对自己的日程规划)。日程会显示在桌面 Calendar Space(按 agent 标色,只读)。
@@ -17,6 +17,7 @@ import {
   validateEntryInput,
   upsertEntry,
   removeEntry,
+  ranHere,
   type ScheduleEntry,
 } from '../../services/agentSchedule.js';
 import { getAgent } from '../../agents/agentRegistry.js';
@@ -26,7 +27,7 @@ import { effectiveRemote, remoteManagementDenied } from '../../services/remoteOr
 function fmt(e: ScheduleEntry): string {
   const tags = [
     e.repeat ? `every ${e.repeat}` : 'once',
-    e.auto ? 'auto' : 'planning-only',
+    e.auto ? (ranHere(e) ? 'auto' : 'auto, runs on another device') : 'planning-only', // 日历上云后别的设备排的也列得出来:到点在那台跑
     e.todo ? 'todo' : '',
   ].filter(Boolean).join(', ');
   return `${e.id} — ${e.name} [${e.date || 'no date'}] (${tags})` +
@@ -103,7 +104,7 @@ export const manageScheduleProvider: ToolProvider = {
         const r = await upsertEntry(slug, v.value, id, def.name);
         if (!r.ok) return `Error: ${r.error}`;
         const note = v.value.auto
-          ? ' (will run unattended when due; evaluated every ~5 minutes)'
+          ? ranHere(r.entry) ? ' (will run unattended when due; evaluated every ~5 minutes)' : ' (will run unattended when due, on the device that scheduled it)'
           : ' (planning-only; shows on the calendar, never runs by itself)';
         return `${r.created ? 'Created' : 'Updated'} schedule entry ${r.entry.id}: ${fmt(r.entry)}${note}`;
       },

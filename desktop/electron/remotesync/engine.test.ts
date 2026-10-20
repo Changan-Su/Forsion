@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { runSync, shouldTripMassDelete, conflictCopyName, moveAsideFromSync } from './engine'
 import { createDirRemote } from './fsLocal'
 import type { RemoteFs } from './types'
+import { withDbLock } from '../amadeus/fs/dbLock'
 
 let base: string
 let rootA: string
@@ -180,6 +181,24 @@ describe('remotesync engine 双设备', () => {
     const copy = (await list(rootB)).find((f) => f.includes('(conflict '))
     expect(copy).toBeTruthy()
     expect(await read(rootB, copy!)).toBe('local-late')
+  })
+
+  it('数据库文件落盘等桌面 / 引擎 / human 镜像共用的锁,锁里写进来的行不被静默盖掉', async () => {
+    await write(rootA, 'Calendar.db', 'v1')
+    await syncA(); await syncB()
+    await write(rootA, 'Calendar.db', 'v2')
+    await syncA()
+    let pulling: Promise<unknown> | undefined
+    await withDbLock(path.join(rootB, 'Calendar.db'), async () => { // 别的写入方:读 → 比对 → 写,整段拿着锁
+      pulling = syncB()
+      await new Promise((r) => setTimeout(r, 300))
+      expect(await read(rootB, 'Calendar.db')).toBe('v1') // 持锁期间同步没动它
+      await write(rootB, 'Calendar.db', 'v1 + row typed meanwhile')
+    })
+    await pulling
+    expect(await read(rootB, 'Calendar.db')).toBe('v2')
+    const copy = (await list(rootB)).find((f) => f.startsWith('Calendar (conflict '))
+    expect(copy && (await read(rootB, copy))).toBe('v1 + row typed meanwhile') // 锁里写进来的那份留成副本,没丢
   })
 
   it('远端整空 + 基线足量(≥5)→ 硬中止,确认也不放行', async () => {

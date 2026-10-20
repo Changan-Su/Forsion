@@ -24,6 +24,8 @@ import { friendlyUpstreamError } from './upstreamError.js';
 import { parseAgentConfig } from '../../agents/agentRegistry.js';
 import { currentAgentSlug } from '../../seams/runContext.js';
 import { DEFAULT_AGENT_SLUG } from '../../core/tanguHome.js';
+import { getDeviceId } from '../../core/deviceId.js';
+import { engineVersion } from '../../core/version.js';
 import { registerAgentSyncIdentity } from '../../services/cloudSyncAccount.js';
 import { assertToolDefinitions } from '../../tools/toolDefinitionValidation.js';
 import { stringifyWellFormed } from '../../llm/wellFormedJson.js';
@@ -513,8 +515,11 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
     // put/delete 自带 fetch:CAS 409 需要结构化 body(postJson 只留 detail)→ 抛 AgentFileConflictError。
     agentFiles: {
       getManifest: async (_userId: string, opts?: { signal?: AbortSignal }) => {
-        const r = await getJson<{ agents: any[]; paths?: string[] }>('/api/brain/agents/manifest?paths=human', opts?.signal);
-        return Object.assign(r?.agents ?? [], Array.isArray(r?.paths) ? { paths: r.paths } : {});
+        // device / client:服务端按设备记版本,回答这个账号还有没有旧客户端在用 USER.md(新版据此停镜像)
+        const q = `paths=human,human-folder,agent-calendar&device=${encodeURIComponent(getDeviceId())}&client=${encodeURIComponent(`tangu/${engineVersion()}`)}`;
+        const r = await getJson<{ agents: any[]; paths?: string[]; legacy?: string[]; legacySeenAt?: number | null }>(`/api/brain/agents/manifest?${q}`, opts?.signal);
+        return Object.assign(r?.agents ?? [], Array.isArray(r?.paths) ? { paths: r.paths } : {},
+          Array.isArray(r?.legacy) ? { legacy: r.legacy.filter((x): x is string => typeof x === 'string'), legacySeenAt: typeof r?.legacySeenAt === 'number' ? r.legacySeenAt : null } : {});
       },
       getFile: async (_userId: string, slug: string, relPath: string, opts?: { signal?: AbortSignal }) => {
         const r = await postJson<any>('/api/brain/agents/file/get', { slug, relPath }, opts?.signal);
