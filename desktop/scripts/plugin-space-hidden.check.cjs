@@ -71,7 +71,16 @@ async function main() {
     await more.waitFor({ timeout: 15_000 }).catch(() => {})
     if (await more.count()) { await more.click(); await win.waitForTimeout(400) }
     const onRibbon = (id) => win.locator(`.rb-slot[data-id="space:${id}"]`).count()
-    check('好插件的 Space 在功能条上(负对照)', await until(() => onRibbon('good-desk')))
+    // 小屏展开后仍可能装不下全部 Space(Windows CI 1024×728 + Extend 0.9 的蓬洲云 / 使用指南);滑到那一格,不把屏外占位当成缺失。
+    const scrollTo = async (id) => {
+      for (let i = 0; i < 8 && !(await onRibbon(id)); i++) {
+        await win.locator('.rb-top').hover()
+        await win.mouse.wheel(0, 480)
+        await win.waitForTimeout(250)
+      }
+    }
+    // 滑动放进轮询里:插件晚于滑动注册时,新格子排在窗外末尾,下一轮接着滑
+    check('好插件的 Space 在功能条上(负对照)', await until(async () => { await scrollTo('good-desk'); return onRibbon('good-desk') }))
     check('坏插件的 Space 不在功能条上', (await onRibbon('cad-mesh')) === 0)
     await win.evaluate(() => document.querySelector('.rb-open-top .rb-more')?.click())
 
@@ -114,12 +123,7 @@ async function main() {
     await win.reload()
     await win.waitForSelector('.dv-groupview')
     await win.locator('.rb-top .rb-more').first().click()
-    // 小屏展开后仍可能装不下全部 Space;滑到新加入的那一格,不把屏外占位当成缺失。
-    for (let i = 0; i < 8 && !(await onRibbon('cad-mesh')); i++) {
-      await win.locator('.rb-top').hover()
-      await win.mouse.wheel(0, 480)
-      await win.waitForTimeout(250)
-    }
+    await scrollTo('cad-mesh')
     check('修复并重载后同一个插件的 Space 恢复', await until(() => onRibbon('cad-mesh')))
     await win.evaluate(() => document.querySelector('.rb-open-top .rb-more')?.click())
     await win.keyboard.press(process.platform === 'darwin' ? 'Meta+k' : 'Control+k')
