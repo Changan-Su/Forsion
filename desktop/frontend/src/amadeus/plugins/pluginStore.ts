@@ -59,6 +59,7 @@ import { createCalendarApi } from './pluginCalendar'
 import { createSpacesApi } from './pluginSpaces'
 import { clearSpaceProgressOf, setSpaceDot, setSpaceProgress } from '../../stores/spaceProgress'
 import { getSync, markSyncDecided, refreshSync, resolveNotes, runSyncNow, setSync, startSyncSetup, subscribeSync } from '../../services/syncSetup'
+import { POPUP_PRIORITY, queuePopup, releasePopupsOf } from '../../stores/popupQueue'
 import { closeSpotlight, showSpotlight } from './guideSpotlight'
 import { watchAccountName } from '../../services/accountName'
 import { fetchBingWallpapers } from '../../views/homepageWallpaper'
@@ -339,6 +340,7 @@ function watchVaultFile(rel: string, cb: () => void): () => void {
  *  公开事件谁都能派发,首方判断就被绕过了(Codex 评审 P1)。 */
 type ResetCardCeremonyArg = Parameters<NonNullable<PluginAppApi['showResetCardCeremony']>>[0]
 let resetCardCeremonyHandler: ((r: ResetCardCeremonyArg) => void) | null = null
+let popupSeq = 0 // ctx.app.queuePopup 的号:插件 id + 自增,停用时按前缀收
 export function setResetCardCeremonyHandler(fn: ((r: ResetCardCeremonyArg) => void) | null): void { resetCardCeremonyHandler = fn }
 
 function syncSeam(pluginId: string, ok: () => boolean): NonNullable<PluginAppApi['sync']> {
@@ -537,6 +539,8 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
     setSpaceDot: (spaceId, on) => (ok() && typeof spaceId === 'string' ? setSpaceDot(pluginId, spaceId, on) : false),
     // 同步总开关(2026-10-20,蓬洲云「同步」页):只给首方包(同 spotlight 认 locked)、只在有本地库远程同步的桌面
     ...(typeof window !== 'undefined' && window.remoteSync && !hostTangu()?.mobile ? { sync: syncSeam(pluginId, ok) } : {}),
+    // 自己弹出来的弹窗排队(2026-10-19,Extend 公告):同一时间只露一个,插件排在宿主的协议更新 / What's new 后面;停用时 teardown 收掉
+    queuePopup: () => (ok() ? queuePopup(`plugin:${pluginId}:${++popupSeq}`, POPUP_PRIORITY.plugin) : { ready: new Promise<void>(() => {}), done: () => {} }),
     openLink: async (url) => {
       if (!ok()) return false
       const [{ parseDeepLink }, { resolveDeepLink }] = await Promise.all([import('../../deepLinkPlan'), import('../../deepLinkInstall')])
@@ -2151,6 +2155,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     liveScopes.get(id)?.close()
     liveScopes.delete(id)
     clearSpaceProgressOf(id) // 停用 / 换代时 Ribbon 上别留着一个不再更新的进度环 / 红点
+    releasePopupsOf(`plugin:${id}:`) // 排着的 / 正在显示的弹窗号一并让出,别堵住队列
     closeSpotlight(id) // 圈注同理
     lastEnsure.delete(id) // 旧规则集不随重新启用被重放;再启用时插件自己 setup 里会重新 ensure
     set((s) => ({

@@ -12,6 +12,7 @@ import { windowKind } from '../windowKind'
 import { ONBOARDING_DISMISS_KEY } from './OnboardingWizard'
 import { applySyncChoices, getSync, markSyncDecided, openPenzorSync, startSyncSetup, subscribeSync, wantsSyncCard, type SyncKind, type SyncSnapshot } from '../services/syncSetup'
 import { notifyApp } from '../stores/notificationStore'
+import { POPUP_PRIORITY, usePopupTurn } from '../stores/popupQueue'
 import { watchAccountName } from '../services/accountName'
 import './syncSetup.css'
 
@@ -56,6 +57,8 @@ export function SyncSetupHost(): JSX.Element | null {
   const [picked, setPicked] = useState<Record<SyncKind, boolean>>({ notes: true, agents: true, plugins: true })
   const [watching, setWatching] = useState(false)
   const main = windowKind() === 'main'
+  // 自动弹出的卡片排进宿主的弹窗队列(协议更新、What's new 在前;引导开着时不出)
+  const turn = usePopupTurn('syncSetup', open, POPUP_PRIORITY.syncSetup)
 
   useEffect(() => { if (main && window.remoteSync) startSyncSetup() }, [main])
   let obDone = false
@@ -102,7 +105,7 @@ export function SyncSetupHost(): JSX.Element | null {
 
   return (
     <>
-      {open && (
+      {turn && (
         <div className="u-backdrop sync-setup-backdrop">
           <div className="modal modal-sm sync-setup" role="dialog" aria-modal="true" aria-label={t('syncSetup.title')}>
             <div className="modal-head"><Cloud size={16} /><span className="sync-setup-title">{t('syncSetup.title')}</span></div>

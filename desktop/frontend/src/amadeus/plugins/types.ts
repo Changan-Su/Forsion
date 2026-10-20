@@ -334,6 +334,12 @@ export interface PluginAppApi extends BlockSurfaceApi {
     resolveNotes(choice: 'merge' | 'cloud' | 'skip'): Promise<{ ok: boolean; error?: string }>
     runNow(): Promise<void>
   }
+  /** 自己弹出来的弹窗排队(2026-10-19+,Extend 的公告用):应用里同一时间只露一个弹窗 —— 协议更新、What's new 在前,
+   *  插件的排在后面,同级按先来后到;全屏引导开着时谁都不出。用户点了才打开的面板不用排。
+   *  用法:`const turn = ctx.app.queuePopup?.()`,`await turn.ready` 之后再把弹窗挂出来,关掉时 `turn.done()`;
+   *  决定不弹了(换账号、数据过期)也调 `done()` 撤销,这时 `ready` 永远不会 resolve。
+   *  不调 `done()` 会一直占着队列,后面的弹窗都出不来;插件停用时宿主会替你收掉。旧宿主没有:直接弹,照旧。 */
+  queuePopup?(): { ready: Promise<void>; done(): void }
 }
 
 /** 插件契约自己的检索结果 DTO(**刻意不复用宿主内部的 SearchHit**:内部结构以后要改,不该牵动插件 API)。 */

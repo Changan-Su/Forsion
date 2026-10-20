@@ -318,3 +318,23 @@ Since 2026-10-19 (added when Server Admin started flagging the feedback center):
 - `ctx.app.setSpaceDot?(spaceId, on)` puts an attention dot on the top-right of your own Space's icon in the Ribbon, in the same red as the inbox unread badge. Pass `true` to show it and `false` to remove it. It only accepts a Space bundled with your plugin; for anyone else's or a built-in Space it returns `false`. If the Space has both a dot and a progress ring, only the dot is drawn; an unread badge takes precedence over both. The host clears the dot when your plugin is disabled. While the dot is shown, the icon's accessible name says it has new activity.
 - Unread rows in a list still use `ListItem.unread`: the shared unread dot, drawn in the theme's indicator colour rather than red. Pair it with `setSpaceDot` so it can be noticed from other Spaces.
 - `ctx.app.sync?` (since 2026-10-20, **first-party built-in bundles only**; used by Penzor Cloud's Sync page) reads and changes this computer's three cloud sync switches. `get()` returns a snapshot (whether the notes vault, agents & memory, and plugin data are each on, first-sync progress, and the pending question when the cloud already holds a vault on a second computer); `subscribe(fn)` notifies on change; `refresh()` re-reads; `set(kind, on)` turns one on or off (`notes`, `agents` or `plugins`); `resolveNotes('merge' | 'cloud' | 'skip')` answers the pending question; `runNow()` syncs once now. The host owns the switches and the sync engines; the plugin only draws the page. Other plugins, phones and the web don't get the member at all.
+
+### 弹窗排队 / Popup queue
+
+2026-10-19 起（Extend 的公告和宿主的协议更新提示、What's new 叠在一起时加的）：
+
+- `ctx.app.queuePopup?()`：你的插件自己弹出来的弹窗（启动时的公告、提醒之类，不是用户点了才打开的面板）要先排队。应用里同一时间只露一个弹窗：协议更新、What's new 在前，插件的排在后面，同级按先来后到；全屏引导开着时谁都不出。
+- 返回 `{ ready, done }`。`await ready` 之后再把弹窗挂出来，关掉时调 `done()` 让给下一个。决定不弹了（换了账号、数据过期）也调 `done()`，算撤销，这时 `ready` 永远不会 resolve。
+- 不调 `done()` 会一直占着队列，后面的弹窗都出不来；插件停用时宿主替你收掉。旧宿主没有这个方法：直接弹，和以前一样。
+
+```js
+const turn = ctx.app.queuePopup?.()
+if (turn) await turn.ready
+showMyDialog({ onClose: () => turn?.done() })
+```
+
+Since 2026-10-19 (added when Extend's announcement, the host's terms update notice and What's new could pile up):
+
+- `ctx.app.queuePopup?()` queues a popup your plugin opens on its own (a startup announcement or reminder, not a panel the user just clicked open). Only one popup shows at a time: the terms update notice and What's new go first, plugin popups come after them, and popups at the same level show in arrival order. Nothing shows while the full-screen onboarding is open.
+- It returns `{ ready, done }`. Wait for `ready`, then show your popup, and call `done()` when it closes so the next one can show. If you decide not to show it after all (the account changed, the data is stale), call `done()` too: that withdraws it, and `ready` never resolves.
+- Until you call `done()` your popup holds the queue and nothing after it can show. The host clears it for you when your plugin is disabled. Older hosts don't have this method; show the popup straight away as before.
