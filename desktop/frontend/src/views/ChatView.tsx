@@ -434,7 +434,8 @@ export function ChatView({ leaf, params }: ViewProps) {
     const up = (): void => { pointerDown = false }
     const onKey = (e: KeyboardEvent): void => { if (['ArrowUp', 'PageUp', 'Home'].includes(e.key) && !(e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement)) release() }
     const follow = (): void => {
-      if (stickToBottom.current) { el.scrollTop = el.scrollHeight; previousTop = el.scrollTop; setShowJump(false) }
+      // previousMax 跟 previousTop 同一次采样:否则「长高被 follow 跟到底、下一次 scroll 前又变短被夹下来」会被 update 当成自己往上走而松开吸底
+      if (stickToBottom.current) { el.scrollTop = el.scrollHeight; previousTop = el.scrollTop; previousMax = el.scrollHeight - el.clientHeight; setShowJump(false) }
     }
     const ro = new ResizeObserver(() => { cancelAnimationFrame(raf); raf = requestAnimationFrame(follow) })
     ro.observe(content)

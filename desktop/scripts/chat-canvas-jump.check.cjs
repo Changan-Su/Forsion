@@ -50,9 +50,9 @@ const check = (name, ok, detail) => { ok ? pass++ : fail++; console.log(`${ok ? 
     const where = (mid) => win.evaluate((mid) => {
       const s = document.querySelector('.t2-stream'), el = document.getElementById(`tocmsg-${mid}`)
       if (!s || !el) return null
-      const top = Math.round(el.getBoundingClientRect().top - s.getBoundingClientRect().top)
+      const r = el.getBoundingClientRect(), top = Math.round(r.top - s.getBoundingClientRect().top), bottom = top + Math.round(r.height)
       const anim = el.getAnimations().some((a) => a.animationName === 't2JumpFlash' && a.playState === 'running')
-      return { top, gap: Math.round(s.scrollHeight - s.scrollTop - s.clientHeight), flash: anim, vh: s.clientHeight }
+      return { top, gap: Math.round(s.scrollHeight - s.scrollTop - s.clientHeight), flash: anim, bottom, vh: s.clientHeight }
     }, mid)
 
     for (const [i, mid] of ['u1', 'u2', 'u3', 'u1'].entries()) {
@@ -76,7 +76,7 @@ const check = (name, ok, detail) => { ok ? pass++ : fail++; console.log(`${ok ? 
       await win.waitForFunction(() => !document.querySelector('.t2cv'), null, { timeout: 5_000 })
       const samples = []
       for (const t of [100, 400, 900, 1400, 2500]) { await sleep(t - (samples.at(-1)?.t || 0)); samples.push({ t, ...(await where(mid)) }) }
-      const seen = samples.find((x) => x.flash && x.top >= 0 && x.top < x.vh - 60)
+      const seen = samples.find((x) => x.flash && x.bottom > 0 && x.top < x.vh - 60) // 闪着的时候它露在视口里(机器忙时平滑滚动慢,落地前就得看得见)
       const last = samples.at(-1)
       check(`${mid}${i === 3 ? '(再来一次)' : ''} 双击后那一轮落在视口顶部附近、闪的时候看得见`, !!seen && Math.abs(last.top - 24) <= 40, samples.map((x) => `${x.t}ms top=${x.top} gap=${x.gap}${x.flash ? ' ⚡' : ''}`).join(' · '))
       await win.mouse.move(700, 450)
