@@ -118,6 +118,8 @@ export async function startBasicUnit(config: UnitConfig, managementOptions: { ex
     product.agentBackend = product.nativeFeatures.includes('tangu')
     product.spaces = spaces.length ? [] : ['home']
     product.defaultSpace = spaces.includes(config.defaultSpace || '') ? config.defaultSpace! : spaces[0] || 'home'
+    // 网页主入口的商店只装首方包(Forsion Extend)提供的页:装了它才开商店入口,没装(如 /admin/)就没有空商店
+    product.market = visible.some((r) => !!r.package.ui?.locked)
   }
   let chain = Promise.resolve(), closing = false, started = false
   const syncRuntimes = async () => {

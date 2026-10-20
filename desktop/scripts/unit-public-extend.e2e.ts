@@ -7,7 +7,8 @@
  *     ③ 付款页在新标签页打开,带一次性票、不带 token;
  *     ④ 设置有「Forsion 云端」,只有 Extend 的子页,没有同步 / 连接 / 诊断;
  *     ⑤ 蓬洲云 Space 进得去,我的云盘能新建文件夹、没有上传;
- *     ⑥ 云端请求都盖着访客 token(页面账号代发),没有别的身份。
+ *     ⑥ 云端请求都盖着访客 token(页面账号代发),没有别的身份;
+ *     ⑦ 负对照:Unit 没装 Extend(同服务器的 /admin/)→ 没有商店入口、没有空的「Forsion 云端」。
  *
  * 前置:node scripts/build-unit-web.mjs(产物在 desktop/unit-web-dist);EXTEND_DIR = build 过的 Extend 检出(dist/main.js 在)。
  * 跑:EXTEND_DIR=… npx tsx scripts/unit-public-extend.e2e.ts   截图落 SHOT_DIR(缺省 /tmp)。CHROMIUM_EXE 可覆盖。
@@ -114,8 +115,8 @@ async function main(): Promise<void> {
   const pack = await readPackage(EXTEND_DIR)
   check('Unit 把 Forsion Extend 标成首方包(locked)', pack.ui?.locked === true, JSON.stringify({ id: pack.ui?.id, locked: pack.ui?.locked }))
 
-  const product = resolveProduct(undefined, { ...basic, market: false, onboarding: false, nativeFeatures: [] })
-  const handle = await startUnitWeb({
+  // 同 unit/host.ts:market 起始 false,refreshProduct 按「装没装首方包」改写
+  const startUnit = (plugins: unknown[], spaces: typeof pack.spaces) => startUnitWeb({
     account: {
       metadata: () => ({ apiBase: '/api', loginPath: '/auth' }),
       handle: async (p, req, res) => {
@@ -128,17 +129,19 @@ async function main(): Promise<void> {
     },
     routeRequest: fakeCloud,
     meta: { instanceId: INSTANCE, name: 'Forsion Genesis Web', version: '9.9.9' },
-    projection: { mode: 'public', basePath: '/web/', product, capabilities: () => ({}) },
+    projection: { mode: 'public', basePath: '/web/', product: resolveProduct(undefined, { ...basic, market: plugins.some((p) => (p as { locked?: boolean }).locked), onboarding: false, nativeFeatures: [] }), capabilities: () => ({}) },
     getEngine: () => ({ url: null, token: '' }),
     confirmPair: async () => false,
     pairedDevices: { list: () => [], add: async () => { throw new Error('Pairing is disabled') } },
-    readPlugins: async () => [pack.ui],
-    readSpaces: async () => pack.spaces,
+    readPlugins: async () => plugins,
+    readSpaces: async () => spaces,
     readConfig: async () => ({}), writeConfig: async () => { throw new Error('Host configuration is not published') },
     readProviders: async () => [],
     readHostFile: async () => null, readHostDir: async () => null, readHostStat: async () => null,
     webDistDir: () => DIST, vault: () => null, log: () => {},
   }, { port: 0, bindHost: '127.0.0.1' })
+  const handle = await startUnit([pack.ui], pack.spaces)
+  const bare = await startUnit([], [])
   const base = `http://unit-public.test:${handle.port}`
 
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true, args: ['--host-resolver-rules=MAP unit-public.test 127.0.0.1'] })
@@ -242,9 +245,24 @@ async function main(): Promise<void> {
     check('⑥ 云端请求都盖着访客 token', seen.length > 5 && others.length === 0, `${seen.length} 条,其它身份 ${others.length}:${JSON.stringify(others.slice(0, 3))}`)
     check('⑥ 蓬洲云的应用文件带 X-Project-Source', seen.some((r) => r.url.startsWith('/api/files') && r.source === 'penzor'))
     check('页面没有未捕获异常', errors.length === 0, errors.slice(0, 3).join(' · '))
+
+    // ⑦ 负对照:同一份页面,Unit 没装 Extend
+    const page2 = await context.newPage()
+    page2.setDefaultTimeout(15000)
+    await page2.goto(`http://unit-public.test:${bare.port}/web/?token=${TOKEN}&account_state=S1`)
+    await page2.locator('.rb').first().waitFor()
+    await page2.waitForTimeout(1500)
+    const bareIds = await page2.locator('.rb [data-id]').evaluateAll((els) => els.map((e) => (e as HTMLElement).dataset.id))
+    const bareMarket = await page2.evaluate(() => typeof (window as any).tangu?.marketList)
+    check('⑦ 没装 Extend:没有商店入口', !bareIds.includes('rb-market') && bareMarket === 'undefined', `${bareIds.join(', ')} marketList=${bareMarket}`)
+    await page2.locator('.rb [data-id="rb-settings"]').first().click()
+    await page2.locator('.settings-nav').first().waitFor()
+    const bareNav = await page2.locator('.settings-nav').first().innerText()
+    check('⑦ 没装 Extend:设置里没有空的「Forsion 云端」', !bareNav.includes('Forsion 云端'), bareNav.replace(/\n+/g, ' / ').slice(0, 200))
   } finally {
     await browser.close()
     await handle.close?.()
+    await bare.close?.()
   }
   const fails = results.filter((r) => !r.ok).length
   console.log(`\n${results.length - fails}/${results.length} passed${fails ? ` — ${fails} FAILED` : ''}  截图:${SHOT_DIR}/unit-public-extend-*.png`)

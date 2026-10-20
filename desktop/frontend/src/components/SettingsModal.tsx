@@ -531,6 +531,8 @@ export const SettingsModal: React.FC<{
   // 服务器 Unit 的网页主入口(/web/):页面账号就是来访者本人 →「Forsion 云端」一级页给 Extend 的账号子页;
   // 宿主自己的「同步 / 连接」两页仍只在桌面(网页版不跑同步引擎,云端地址也不归它改)。
   const publicEntry = unitPage && !!window.tangu?.unitPublicEntry
+  // 网页主入口上这一页的正文全是 Extend 的子页:它真注册了才列(服务器的 /admin/ 没装 Extend,列出来就是空页)
+  const extendPages = usePluginStore((s) => publicEntry && s.settingsViews.some((o) => o.pluginId === 'forsion-extend' && s.activeIds.includes(o.pluginId)))
   // 插件页(amadeus-plugins)与左栏 fplugin:<id> 直达项的**同一道闸**:桌面 / 设备页 / Android App(2026-10-02 起
   // 市场能装 Forsion 插件,插件宿主在 mobile/src/plugins)。三处(tabItems、tab 推导、forsionNavItems)必须一致,
   // 否则 fplugin: 深链在手机上被推导弹回首页。web 云壳没有插件宿主(listPlugins 恒空),照旧不列。
@@ -558,7 +560,7 @@ export const SettingsModal: React.FC<{
     // 插件页设备页也给(插件在 B 端真的装载运行,列表/启停是本页 runtime 行为,不碰对方设备)。
     ...(pluginsPage ? ([['amadeus-plugins', t('settings.tab.amadeusPlugins')]] as Array<[Tab, string]>) : []),
     // Forsion 云端(账号 / 云端地址 / 记忆同步 / 笔记在线同步)整页住在 Extend 的桥键后面:停用或没装 Extend 就没有这一页
-    ...((isDesktop || publicEntry) && cloudAccount ? ([['forsion', t('settings.tab.forsionCloud')]] as Array<[Tab, string]>) : []),
+    ...(cloudAccount && (isDesktop || extendPages) ? ([['forsion', t('settings.tab.forsionCloud')]] as Array<[Tab, string]>) : []),
     ...(isDesktop && !!window.amadeus ? ([['notes', t('settings.tab.notes')]] as Array<[Tab, string]>) : []),
     ...(isDesktop && !!window.amadeus && !!window.remoteSync ? ([['sync', t('settings.tab.sync')]] as Array<[Tab, string]>) : []),
     ['spaces', t('settings.tab.spaces')],
