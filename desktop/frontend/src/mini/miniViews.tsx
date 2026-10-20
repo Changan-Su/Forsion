@@ -8,9 +8,9 @@ import { usePageStore } from '../amadeus/store/pageStore'
 import { useI18n, registerMessages, translate } from '../i18n'
 import { AmadeusOverlays } from '../amadeusOverlays'
 import { VoiceCallView } from './VoiceCallView'
+import { readTanguChatViews } from '../amadeus/plugins/tanguSeam'
 import './miniViews.css'
 
-const Chat = lazy(() => import('@tangu/ui/views/ChatView').then((m) => ({ default: m.ChatView })))
 const Editor = lazy(() => import('../amadeusViews').then((m) => ({ default: m.AmadeusEditorView })))
 const Todos = lazy(() => import('../views/TodoListView').then((m) => ({ default: m.TodoListView })))
 registerMessages({
@@ -29,7 +29,8 @@ function MiniChat(props: ViewProps) {
   useEffect(() => {
     if (typeof sessionId === 'string') window.tangu?.miniSessionReady?.(sessionId)
   }, [sessionId])
-  return <Chat {...props} />
+  const Chat = readTanguChatViews()?.Chat // 对话视图是 Tangu 交出来的(核心插件化 2e-7;原来这里 lazy import ChatView)
+  return Chat ? <Chat {...props} /> : null
 }
 
 function MiniTangu({ leaf, params }: ViewProps) {

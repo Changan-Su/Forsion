@@ -18,7 +18,6 @@ const api = vi.hoisted(() => ({
   getSessionDetail: vi.fn(),
   seen: [] as Array<{ leaf: { id: string; type: string }; params: Record<string, unknown> }>,
 }))
-vi.mock('./ChatView', () => ({ ChatView: (props: (typeof api.seen)[number]) => { api.seen.push(props); return null } }))
 vi.mock('../services/backendService', async (original) => ({
   ...(await original<Record<string, unknown>>()),
   createSession: (...a: unknown[]) => api.createSession(...a),
@@ -27,7 +26,9 @@ vi.mock('../services/backendService', async (original) => ({
 
 const { ensurePluginChat, mountPluginChat } = await import('./pluginChat')
 const { installTanguProbe } = await import('../tanguProbe')
-const { readTangu, setTanguProbe } = await import('../amadeus/plugins/tanguSeam')
+const { readTangu, setTanguProbe, setTanguChatViews } = await import('../amadeus/plugins/tanguSeam')
+// 对话视图由 Tangu 激活时交出(核心插件化 2e-7);这里交一个只记下 props 的替身
+setTanguChatViews({ Chat: (props) => { api.seen.push(props as unknown as (typeof api.seen)[number]); return null }, Preview: () => null })
 const { usePluginStore } = await import('../amadeus/plugins/pluginStore')
 const { usePageStore } = await import('../amadeus/store/pageStore')
 const { useApp } = await import('../stores/appStore')

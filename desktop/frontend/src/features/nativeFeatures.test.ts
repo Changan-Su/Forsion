@@ -50,6 +50,7 @@ const SLOTS = [
   [seam.setTanguNewChat, seam.readTanguNewChat],
   [seam.setTanguSidebarModes, seam.readTanguSidebarModes],
   [seam.setTanguChatOutline, seam.readTanguChatOutline],
+  [seam.setTanguChatViews, seam.readTanguChatViews],
 ] as const
 
 beforeEach(() => {
