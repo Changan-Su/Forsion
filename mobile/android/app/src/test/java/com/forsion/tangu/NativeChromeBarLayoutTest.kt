@@ -240,6 +240,7 @@ class NativeChromeBarLayoutTest {
         for (i in listOf(2, 3, 4, 5, 7, 8)) compose.onNodeWithTag("nativeChrome.space.s$i").assertDoesNotExist()
         compose.onNodeWithTag("nativeChrome.spacesAll").assertIsSelected() // you are in s7, behind "all"
         assertEquals(listOf("s0", "s1", "s6"), shell(spaces = spaces(9, 7, pinned = setOf(0, 6))).railCells(4).first.map { it.id })
+        assertEquals(emptyList<String>(), shell(spaces = spaces(9, 7, pinned = setOf(0, 6))).railCells(1).first.map { it.id })
     }
 
     @Test fun withTheRailTheCapsulesStartAfterItAndTheDockedColumnAndTheAvatarLeavesTheRightOne() {

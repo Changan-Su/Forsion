@@ -620,6 +620,25 @@ export default function ExcalidrawCanvas({
     return () => ro.disconnect()
   }, [api, layout, clampView, syncZoom, tryFit])
 
+  // Android 宽屏原生外壳下,菜单钮 + 工具岛挪进胶囊那一排(base.css ⑦)。装不下(4:3 平板开着左栏、标题很长)→
+  // data-cap-row="off":退回引擎自己那一排、挪到胶囊下面。先按「一排」排一遍再量,溢出就退。
+  // 看白板根(旋转 / 开合左栏)和左栏(标题胶囊变宽把它撑开)。
+  // ponytail: 退回之后标题再变短不会自己回到一排,等下一次尺寸变化;要即时就再盯 #nc-caps 那条规则。
+  useEffect(() => {
+    const el = hostRef.current
+    if (!el || !api || typeof ResizeObserver === 'undefined') return
+    const fit = (): void => {
+      el.removeAttribute('data-cap-row')
+      const top = el.closest('.mb-shell[data-native-chrome][data-wide]') && el.querySelector<HTMLElement>('.App-menu_top')
+      if (top && top.scrollWidth > top.clientWidth + 1) el.dataset.capRow = 'off'
+    }
+    const ro = new ResizeObserver(fit)
+    ro.observe(el)
+    const left = el.querySelector('.App-menu_top__left')
+    if (left) ro.observe(left)
+    return () => ro.disconnect()
+  }, [api])
+
   return (
     // data-nc-caps:Android 原生外壳往这里写两颗顶部胶囊的宽(mobile/src/nativeChrome.ts),宽屏时白板顶上那一排要绕开它们(base.css)。
     // data-touch-hint:提示条此刻是「怎么平移画布」、而手上不是鼠标 → 换成触屏说法(amadeus-host.css)。

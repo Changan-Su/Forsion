@@ -104,11 +104,12 @@ internal data class ChromeState(
     /**
      * The rail's cells (wide windows) for [fit] places: every Space while they fit; past that the pinned ones (Home is
      * among them) and then the rest in list order, one place kept for "all". List order on screen either way.
-     * Returns (cells, the Spaces behind "all").
+     * Returns (cells, the Spaces behind "all"). Room for one place or none (a squat split-screen window): "all" alone.
      */
     fun railCells(fit: Int): Pair<List<ChromeSpace>, List<ChromeSpace>> {
         if (spaces.size <= fit) return spaces to emptyList()
-        val ids = (spaces.filter { it.pinned } + spaces.filterNot { it.pinned }).take((fit - 1).coerceAtLeast(1)).map { it.id }.toSet()
+        if (fit <= 1) return emptyList<ChromeSpace>() to spaces
+        val ids = (spaces.filter { it.pinned } + spaces.filterNot { it.pinned }).take(fit - 1).map { it.id }.toSet()
         return spaces.partition { it.id in ids }
     }
 

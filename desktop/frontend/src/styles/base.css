@@ -5104,19 +5104,23 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
         手机横屏也是宽屏,但引擎按屏幕短边把它判成手机档。
       · 引擎三栏是 grid(1fr 2fr 1fr),这里换成 flex:左栏与 ::after 都 flex 1 1 0 平分剩余,工具岛就在正中;
         哪边的最小宽(左 = 让位 + 菜单钮,右 = 右胶囊的让位)装不下,它才被挤开。右上角那颗侧栏钮是绝对定位的,不占这一排。
-      · 工具岛 52px 高、菜单钮 36px:都把中线对齐胶囊行的中线(状态栏 + 6 + 23dp)。 */
+      · 工具岛 52px 高、菜单钮 36px:都把中线对齐胶囊行的中线(状态栏 + 6 + 23dp)。
+      · dp 直接当 px 用、不除 --uiz:白板根(.amx-boardhost)自己反向抵消了界面缩放(ExcalidrawCanvas syncZoom),里面净缩放恒为 1。
+      · 一排放不下(4:3 平板开着左栏、标题很长)时 ExcalidrawCanvas 给白板根挂 data-cap-row="off":菜单钮与工具岛退回
+        引擎自己那一排,整排挪到胶囊下面 —— 画布照样铺满整屏高。 */
 .mb-shell[data-native-chrome][data-wide] .mb-main > .mb-view[data-view='amadeus-drawing']:has(.excalidraw:not(.excalidraw--mobile)) { padding-top: 0; }
 .mb-shell[data-native-chrome][data-wide] .mb-view[data-view='amadeus-drawing'] .amx-boardhost {
-  --amx-cap-mid: calc((var(--nc-status, 0) + 29) * 1px / var(--uiz, 1));
-  --amx-cap-l: calc((12 + var(--nc-capl-w, 0)) * 1px / var(--uiz, 1) + 8px);
-  --amx-cap-r: calc((12 + var(--nc-capr-w, 0)) * 1px / var(--uiz, 1) + 8px);
+  --amx-cap-mid: calc((var(--nc-status, 0) + 29) * 1px);
+  --amx-cap-l: calc((12 + var(--nc-capl-w, 0)) * 1px + 8px);
+  --amx-cap-r: calc((12 + var(--nc-capr-w, 0)) * 1px + 8px);
 }
-.mb-shell[data-native-chrome][data-wide] .mb-view[data-view='amadeus-drawing'] .excalidraw:not(.excalidraw--mobile) .FixedSideContainer_side_top { top: calc(var(--amx-cap-mid) - 26px); }
-.mb-shell[data-native-chrome][data-wide] .mb-view[data-view='amadeus-drawing'] .excalidraw:not(.excalidraw--mobile) .App-menu_top { display: flex; align-items: flex-start; gap: 8px; }
-.mb-shell[data-native-chrome][data-wide] .mb-view[data-view='amadeus-drawing'] .excalidraw:not(.excalidraw--mobile) .App-menu_top > .App-menu_top__left { flex: 1 1 0; margin-top: 8px; }
-.mb-shell[data-native-chrome][data-wide] .mb-view[data-view='amadeus-drawing'] .excalidraw:not(.excalidraw--mobile) .App-menu_top > .App-menu_top__left > :first-child { margin-left: max(0px, var(--amx-cap-l) - var(--editor-container-padding)); }
-.mb-shell[data-native-chrome][data-wide] .mb-view[data-view='amadeus-drawing'] .excalidraw:not(.excalidraw--mobile) .App-menu_top > .shapes-section { flex: none; }
-.mb-shell[data-native-chrome][data-wide] .mb-view[data-view='amadeus-drawing'] .excalidraw:not(.excalidraw--mobile) .App-menu_top::after { content: ''; flex: 1 1 0; min-width: max(0px, var(--amx-cap-r) - var(--editor-container-padding)); }
+.mb-shell[data-native-chrome][data-wide] .mb-view[data-view='amadeus-drawing'] .amx-boardhost[data-cap-row='off'] .excalidraw:not(.excalidraw--mobile) .FixedSideContainer_side_top { top: calc((var(--nc-status, 0) + 58) * 1px + 8px); }
+.mb-shell[data-native-chrome][data-wide] .mb-view[data-view='amadeus-drawing'] .amx-boardhost:not([data-cap-row='off']) .excalidraw:not(.excalidraw--mobile) .FixedSideContainer_side_top { top: calc(var(--amx-cap-mid) - 26px); }
+.mb-shell[data-native-chrome][data-wide] .mb-view[data-view='amadeus-drawing'] .amx-boardhost:not([data-cap-row='off']) .excalidraw:not(.excalidraw--mobile) .App-menu_top { display: flex; align-items: flex-start; gap: 8px; }
+.mb-shell[data-native-chrome][data-wide] .mb-view[data-view='amadeus-drawing'] .amx-boardhost:not([data-cap-row='off']) .excalidraw:not(.excalidraw--mobile) .App-menu_top > .App-menu_top__left { flex: 1 1 0; margin-top: 8px; }
+.mb-shell[data-native-chrome][data-wide] .mb-view[data-view='amadeus-drawing'] .amx-boardhost:not([data-cap-row='off']) .excalidraw:not(.excalidraw--mobile) .App-menu_top > .App-menu_top__left > :first-child { margin-left: max(0px, var(--amx-cap-l) - var(--editor-container-padding)); }
+.mb-shell[data-native-chrome][data-wide] .mb-view[data-view='amadeus-drawing'] .amx-boardhost:not([data-cap-row='off']) .excalidraw:not(.excalidraw--mobile) .App-menu_top > .shapes-section { flex: none; }
+.mb-shell[data-native-chrome][data-wide] .mb-view[data-view='amadeus-drawing'] .amx-boardhost:not([data-cap-row='off']) .excalidraw:not(.excalidraw--mobile) .App-menu_top::after { content: ''; flex: 1 1 0; min-width: max(0px, var(--amx-cap-r) - var(--editor-container-padding)); }
 
 /* chat / work 模式位:会话创建后只读(disabled),悬浮 title 解释「换模式请新建会话」。 */
 .composer-menu .menu-item:disabled { opacity: 0.55; cursor: default; }
