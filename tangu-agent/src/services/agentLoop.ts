@@ -35,9 +35,9 @@ import type { DisplayFileItem } from '../tools/toolTypes.js';
 import { loadSkillLoadout } from './skillLoadout.js';
 import { buildAgentRoster } from './agentRoster.js';
 import { APP_REF_SECTION, AUTONOMY_SECTION, PERSISTENCE_SECTION, TOOL_FAILURE_SECTION, ULTRA_SECTION, presetContractSection, responseStyleSection } from '../profiles/promptSections.js';
-import { resolveTools, isComputerUseTool, computerUseHiddenNames, computerUseUnavailableReason } from '../tools/toolRegistry.js';
+import { canonicalToolName, resolveTools, isComputerUseTool, computerUseHiddenNames, computerUseUnavailableReason } from '../tools/toolRegistry.js';
 import { parsePreset, presetOf, type Preset } from '../core/presetTable.js';
-import { SKETCH_LESS_NOTE, SKETCH_SECTION, sketchEnabledFor, sketchTurnSignalFor, visualsPrefOf } from '../tools/builtin/sketch.js';
+import { SKETCH_LESS_NOTE, SKETCH_SECTION, htmlCardNameFor, isHtmlCardTool, sketchEnabledFor, sketchTurnSignalFor, visualsPrefOf, withHtmlCardName } from '../tools/builtin/sketch.js';
 import { loadTodos as loadSessionTodos, renderTodos, type TodoItem } from '../tools/builtin/todo.js';
 import { collectGitState, formatRuntimeContext, renderTodoState, runVerifyCommand } from './runtimeContext.js';
 import { loadCustomTools, type LoadedCustomTool } from '../tools/customTools.js';
@@ -966,6 +966,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   const clientCapabilities: readonly string[] | undefined = Array.isArray(input.clientCapabilities)
     ? Object.freeze(input.clientCapabilities.filter((c: unknown): c is string => typeof c === 'string'))
     : undefined;
+  // HTML 卡往外发的名字:老客户端只画叫 sketch 的卡(见 sketch.ts HTML_CARD_TOOL)。模型那头一律是新名。
+  const clientToolName = (name: string): string => isHtmlCardTool(name) ? htmlCardNameFor(clientCapabilities) : name;
   setRunClientTag(clientTag);
   // Normal Agent 激活:会话 agent_config.agentSlug → 合并 agent 定义里「会话未显式覆盖」的字段。
   // 本地形态读 ~/.tangu/agents;云端 worker 本地目录为空 → applyAgentActivation 经 brain.agents 兜底水合。
@@ -1567,7 +1569,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 单个调用一完成就置位;纯续写分段(applySteering([]))保留,真用户转向开新段时清零、按新消息重算「点名要图」。
     let marketplaceCardsShown = false;
     let visualAsked = sketchTurnSignal?.kind === 'explicit';
-    if (clientCapabilities?.includes(MARKETPLACE_CARDS_CAPABILITY) && deps().brain.marketplace) systemParts.push('Forsion marketplace search and detail tools automatically render native plugin cards in Chat View. Those cards already satisfy visual delivery and include real details, compatibility and installation actions. After retrieving entries, explain them in brief prose; do not recreate them with sketch or intelligent_ui.');
+    if (clientCapabilities?.includes(MARKETPLACE_CARDS_CAPABILITY) && deps().brain.marketplace) systemParts.push('Forsion marketplace search and detail tools automatically render native plugin cards in Chat View. Those cards already satisfy visual delivery and include real details, compatibility and installation actions. After retrieving entries, explain them in brief prose; do not recreate them with intelligent_ui_html or intelligent_ui.');
     if (sketchEnabled) {
       systemParts.push(SKETCH_SECTION);
       if (nativeUiEnabled) systemParts.push(INTELLIGENT_UI_SECTION);
@@ -1696,7 +1698,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 系统驱动的 run(Muse/自动化)不吃这套:registry 全量可见,目录段也不注入。
     const toolsMode = agentConfig.toolsMode === 'allow' || agentConfig.toolsMode === 'deny' ? agentConfig.toolsMode : undefined;
     const toolsList = Array.isArray(agentConfig.toolsList)
-      ? (agentConfig.toolsList as unknown[]).filter((t): t is string => typeof t === 'string')
+      ? (agentConfig.toolsList as unknown[]).filter((t): t is string => typeof t === 'string').map(canonicalToolName)
       : undefined;
     const deferBypass = !!agentConfig.muse || !!agentConfig.automationOrigin;
     // 目录与工具面必须用**同一套门禁字段**:少传一个,目录就与真实工具面分叉 —— set_ui_setting 的
@@ -2426,7 +2428,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       };
       await publish(runId, 'tool_call', basePayload);
       // 商店卡片已经画出来了还要 sketch / intelligent_ui = 同一批插件画两遍(10-17 live 6 次里 2 次);标志见 marketplaceCardsShown。
-      if (['sketch', 'intelligent_ui'].includes(call.function.name) && !visualAsked
+      if ((isHtmlCardTool(call.function.name) || call.function.name === 'intelligent_ui') && !visualAsked
         && marketplaceCardsShown && clientCapabilities?.includes(MARKETPLACE_CARDS_CAPABILITY)) {
         return mkRejected(call, startedAt, parallelGroup, 'Not run: the store entries are already shown as plugin cards in this reply. Explain them in prose instead of drawing them again.');
       }
@@ -2496,7 +2498,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       const stored = (!result.isError && declaredPersistPlaceholder(result.name)) || capped;
       const payload = {
         id: call.id,
-        name: result.name,
+        name: clientToolName(result.name), // 执行层回正典名;往外发跟这次调用一样按客户端的叫法(老客户端的 HTML 卡叫 sketch)
         result: stored,
         isError: result.isError,
         startedAt,
@@ -2527,7 +2529,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       return {
         toolResult: {
           tool_call_id: call.id,
-          name: result.name,
+          name: clientToolName(result.name),
           content: stored,
           isError: result.isError,
           startedAt,
@@ -2810,7 +2812,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         model,
         apiModelId,
         // 末轮追加「本轮无工具」说明(副本,不落 workingMessages);首轮即末轮用短版。
-        messages: lastIter ? [...workingMessages, repeatedToolFailure ? TOOL_FAILURE_FINAL_NOTE : finalTurnNoteFor(iteration)] : workingMessages,
+        messages: withHtmlCardName(lastIter ? [...workingMessages, repeatedToolFailure ? TOOL_FAILURE_FINAL_NOTE : finalTurnNoteFor(iteration)] : workingMessages),
         projectSource: appId,
         client: clientTag,
         temperature: 0.7,
@@ -2901,7 +2903,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
               // Stream the raw arg delta so the client can render a live "writing
               // file" preview (it reassembles per tool-call id and extracts path/content).
               if (info.argsDelta) {
-                void publish(runId, 'tool_stream', { id: info.id, name: info.name, delta: info.argsDelta });
+                void publish(runId, 'tool_stream', { id: info.id, name: clientToolName(info.name), delta: info.argsDelta });
               }
               // Keep the throttled generic "生成中…(N 字符)" status for the status bar.
               if (info.argsLen - lastGenChars >= 600) {
@@ -3009,6 +3011,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       }
 
       if (resumedMidstream || retryIteration) continue; // 中流断线已段切分回灌 / 溢出已压缩:res 未产出,重进本迭代(steer 照常在迭代顶注入)
+      // 入口改名一次,下游(上屏事件、落库、结果)全跟着:老客户端的 HTML 卡叫 sketch。发给模型时 withHtmlCardName 再换回新名。
+      for (const c of res.toolCalls ?? []) c.function.name = clientToolName(c.function.name);
 
       // 供应商可能在取消之后才返回成功;不允许迟到的结果启动工具/续跑或发布 done。
       ac.signal.throwIfAborted();
@@ -3245,7 +3249,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         //    本轮启发式命中、工具确实在场、且整 run 没调过 sketch 时,在收尾前补催一次。
         //    只催一次:模型二次检查仍认为图是噪声时允许收尾;用户的「纯文字/不要画」在信号层已排除。——
         //    actionable(计划 / 清单 / 挑一个 / 做法)只给本轮那句提醒、不补催:这类说法宽,模型判断不该出卡时不值得再烧一轮。
-        if (sketchTurnSignal && (sketchTurnSignal.kind === 'explicit' || sketchTurnSignal.kind === 'implicit') && !sketchNudged && !lastIter && !(clientCapabilities?.includes(MARKETPLACE_CARDS_CAPABILITY) && hasMarketplaceCards(allToolResults)) && !allToolCalls.some((c) => ['sketch', 'intelligent_ui'].includes(c.function.name))) {
+        if (sketchTurnSignal && (sketchTurnSignal.kind === 'explicit' || sketchTurnSignal.kind === 'implicit') && !sketchNudged && !lastIter && !(clientCapabilities?.includes(MARKETPLACE_CARDS_CAPABILITY) && hasMarketplaceCards(allToolResults)) && !allToolCalls.some((c) => isHtmlCardTool(c.function.name) || c.function.name === 'intelligent_ui')) {
           sketchNudged = true;
           if (res.content || res.outputItems?.length) workingMessages.push(assistantTurnOf(res, res.content || ''));
           workingMessages.push({

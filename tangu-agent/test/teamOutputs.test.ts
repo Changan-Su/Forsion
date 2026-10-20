@@ -6,7 +6,7 @@ describe('public team deliverables', () => {
   it('requires a successful complete sketch, ignores private output, and preserves full HTML', () => {
     const collect = teamOutputCollector(source);
     const html = `<p>${'完整内容'.repeat(1000)}</p>`;
-    expect(collect({ seq: 1, type: 'tool_call', payload: { id: 's', name: 'sketch', arguments: JSON.stringify({ html }) } })).toBeUndefined();
+    expect(collect({ seq: 1, type: 'tool_call', payload: { id: 's', name: 'intelligent_ui_html', arguments: JSON.stringify({ html }) } })).toBeUndefined();
     expect(collect({ seq: 2, type: 'tool_result', payload: { id: 's', result: 'Error: rejected' } })).toBeUndefined();
     expect(collect({ seq: 3, type: 'reasoning', payload: { delta: 'private' } })).toBeUndefined();
     expect(collect({ seq: 4, type: 'tool_result', payload: { id: 'missing', result: 'ok' } })).toBeUndefined();
@@ -15,7 +15,7 @@ describe('public team deliverables', () => {
     expect(JSON.parse(output.toolCalls[0].function.arguments).html).toBe(html);
     expect(collect(event)).toBeUndefined();
     const replay = teamOutputCollector(source);
-    replay({ seq: 1, type: 'tool_call', payload: { id: 's', name: 'sketch', arguments: JSON.stringify({ html }) } });
+    replay({ seq: 1, type: 'tool_call', payload: { id: 's', name: 'intelligent_ui_html', arguments: JSON.stringify({ html }) } });
     expect(replay(event)?.messageId).toBe(output.messageId);
   });
   it('forwards image, audio and document files with their source, without conflating members or duplicate events', () => {

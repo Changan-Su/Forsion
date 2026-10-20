@@ -1,13 +1,13 @@
 ---
 name: visualize
-description: Create clear interactive explanations, charts, simulations and interface previews directly in Forsion chat using sketch. Use when changing inputs, exploring relationships or comparing options helps understanding. Not for standalone apps or files.
+description: Create clear interactive explanations, charts, simulations and interface previews directly in Forsion chat using intelligent_ui_html. Use when changing inputs, exploring relationships or comparing options helps understanding. Not for standalone apps or files.
 ---
 
 # Visualize in Forsion
 
 When `intelligent_ui` is available, use the `intelligent-ui` skill for interactive plans, images,
-linked sources and qualitative comparisons. Use this skill and `sketch` for custom charts,
-simulations and diagrams. Deliver those with `sketch`. The host supplies a transparent, theme-aware document with native controls,
+linked sources and qualitative comparisons. Use this skill and `intelligent_ui_html` for custom charts,
+simulations and diagrams. Deliver those with `intelligent_ui_html`. The host supplies a transparent, theme-aware document with native controls,
 automatic height and local interaction state. Supply a literal HTML fragment with scoped CSS and
 JavaScript. Do not emit an OpenAI visualization directive, `window.openai` calls or a file link.
 Do not send a conversational visualization to Agent Desk in place of the inline result.
@@ -22,7 +22,7 @@ Do not send a conversational visualization to Agent Desk in place of the inline 
 - Diagrams: one reading direction, aligned nodes and quiet connectors. Do not turn each sentence
   into a rounded box. A plain Markdown table stays a Markdown table when the user asks for one.
 - Interface previews: reflect Forsion's native density and real content. Make the few useful
-  interactions work. A requested project implementation belongs in project files, not `sketch`.
+  interactions work. A requested project implementation belongs in project files, not `intelligent_ui_html`.
 
 ## Built-in parts: compose cards from these
 
@@ -104,14 +104,14 @@ on the user's pick, instead of asking in prose.
 
 `fs-checklist` renders 1–40 tickable `items` (`label`, optional `detail`). Ticks persist on this
 device under the element's `id`; give each checklist a unique id and do not manage the ticks
-yourself. Pair it with a `.fs-button` that calls `window.forsionSketch.copy(text)` when the user
+yourself. Pair it with a `.fs-button` that calls `window.forsionIntelligentUi.copy(text)` when the user
 may want the list elsewhere.
 
 Give the element a unique ID when inputs need to update it. After registration use
 `customElements.whenDefined('fs-chart').then(() => document.getElementById('my-chart').setData(data))`
 or the equivalent call on any other part (a people slider that rescales an `fs-checklist`'s
 `detail` amounts, for example). `setData` replaces the whole configuration. Persist only the
-controlling choices using `forsionSketch.setState`; recompute figure data from those choices.
+controlling choices using `forsionIntelligentUi.setState`; recompute figure data from those choices.
 Escape a literal `<` in JSON string data as `\u003c` so labels cannot close the JSON script tag.
 
 ## Runtime contract
@@ -149,8 +149,8 @@ for accessible descriptions. Shared controls own their geometry, theme and focus
 
 ## State and interaction
 
-`window.forsionSketch.state` is a JSON snapshot or `null`. Validate it and use defaults before the
-first draw. On meaningful user input call `window.forsionSketch.setState({ ...choices })`.
+`window.forsionIntelligentUi.state` is a JSON snapshot or `null`. Validate it and use defaults before the
+first draw. On meaningful user input call `window.forsionIntelligentUi.setState({ ...choices })`.
 Each call replaces the snapshot, limited to 16 KiB. State restores when revisiting this card on
 this device. It is not synced to other devices and is not conversation context. Never imply that
 the Agent can see slider changes. Never save on initial render. Old cards may lack a snapshot.
@@ -159,25 +159,25 @@ Persist only choices; recompute paths, values and temporary hover state.
 Theme changes do not reload the card. CSS/SVG follows variables; canvas should listen for
 `forsion:themechange` and repaint with resolved computed colors.
 
-The card renders progressively while the `sketch` call is still being written: the host shows the
+The card renders progressively while the `intelligent_ui_html` call is still being written: the host shows the
 markup as it arrives and runs scripts only once the call completes. Put the headline and the
 structure first and every `<script>` last, so the first visible frame is already useful.
 
 ## Buttons that change the answer, and copy
 
-`window.forsionSketch.ask(text)` sends `text` as the user's next visible message in this
+`window.forsionIntelligentUi.ask(text)` sends `text` as the user's next visible message in this
 conversation. Call it only from a click handler (it refuses to run on load or from a timer), with
 the follow-up the user would type, e.g. `ask("Explain the hybrid option in detail")`. Use it for
 choices that need a new answer from you; keep recomputation that needs no new answer inside the
 card. One request per click; do not chain several. The card does not receive a reply itself.
 `fs-compare` and `fs-choice` already wire this for you; write a manual button only when neither fits.
 
-`window.forsionSketch.copy(text)` (click-only as well) puts `text` on the user's clipboard, e.g. a
+`window.forsionIntelligentUi.copy(text)` (click-only as well) puts `text` on the user's clipboard, e.g. a
 shopping list, an itinerary or a command. Label the button with what gets copied.
 
 ```html
 <button class="fs-button" type="button"
-  onclick="window.forsionSketch.ask('Show the pessimistic scenario with the same assumptions')">
+  onclick="window.forsionIntelligentUi.ask('Show the pessimistic scenario with the same assumptions')">
   Pessimistic scenario
 </button>
 ```

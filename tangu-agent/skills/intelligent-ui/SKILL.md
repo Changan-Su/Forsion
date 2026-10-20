@@ -1,6 +1,6 @@
 ---
 name: intelligent-ui
-description: Native interactive answers in Forsion chat using intelligent_ui. Use for interactive plans, real image galleries, linked web research, option comparisons, quantity-aware checklists and, on clients that render version 2, computed cards (calculators, budgets, step guides, flashcards, quizzes). Use sketch for charts, diagrams and animations.
+description: Native interactive answers in Forsion chat using intelligent_ui. Use for interactive plans, real image galleries, linked web research, option comparisons, quantity-aware checklists and, on clients that render version 2, computed cards (calculators, budgets, step guides, flashcards, quizzes). Use intelligent_ui_html for charts, diagrams and animations.
 ---
 
 # Forsion Intelligent UI
@@ -110,7 +110,7 @@ partly covered instead of pretending the old purchase is enough. No-quantity ite
 
 Only when your instructions include the "Computed Intelligent UI (version 2)" section; other clients
 render version 1 only and reject version 2. Calculators, budgets, conversions, step guides,
-flashcards, scored quizzes and filterable or sortable lists belong here, not in sketch: the card
+flashcards, scored quizzes and filterable or sortable lists belong here, not in intelligent_ui_html: the card
 recomputes on every input change or button press without another model turn.
 
 ```
@@ -175,5 +175,5 @@ The document stream commits complete blocks only. Put inputs and resources befor
 only existing IDs. Every input must appear exactly once in an unconditional controls block, before
 the data it affects. Do not print the document JSON in conversation. Keep block order stable.
 If validation fails, correct the exact reported field.
-If the requested content cannot be expressed, fall back to readable prose or sketch for a custom
+If the requested content cannot be expressed, fall back to readable prose or intelligent_ui_html for a custom
 simulation. Never provide a blank visual just to satisfy the tool requirement.

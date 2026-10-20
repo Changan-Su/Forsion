@@ -95,7 +95,8 @@ export function describeTool(ev: ToolEvent): Desc {
       return { kind: 'read', verbKey: 'tool.verb.read', target: baseName(path || String(a.name ?? a.file ?? '')), isFile: true }
     case 'intelligent_ui':
       return { kind: 'other', verbKey: 'tool.verb.sketched', target: 'Intelligent UI', isFile: false }
-    case 'sketch':
+    case 'intelligent_ui_html':
+    case 'sketch': // 10-20 之前的名字
       return { kind: 'other', verbKey: 'tool.verb.sketched', target: String(a.title ?? '') || 'Intelligent UI', isFile: false }
     case 'desk_present': {
       const views = Array.isArray(a.views) ? a.views : []

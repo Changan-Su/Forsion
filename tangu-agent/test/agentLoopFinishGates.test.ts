@@ -92,7 +92,7 @@ const sketchStep = () => () => ({
   content: '', reasoning: '',
   toolCalls: [{
     id: 'sk1', type: 'function',
-    function: { name: 'sketch', arguments: JSON.stringify({ html: '<h1 class="fs-title">三方对比</h1>' }) },
+    function: { name: 'intelligent_ui_html', arguments: JSON.stringify({ html: '<h1 class="fs-title">三方对比</h1>' }) },
   }],
   usage: { prompt_tokens: 10, completion_tokens: 20 }, finishReason: 'stop',
 });
@@ -130,12 +130,29 @@ describe('Sketch 主动触发交付闸', () => {
     // 2026-09-15 起本轮信号随 TANGU_MEMORY_VOLATILE(缺省 tail)落在最后一条 user 消息,不再进系统提示。
     expect(userTexts(llmPayloads[0])).toContain('Visual-first note for this turn');
     expect(userTexts(llmPayloads[1])).toContain('<visual_delivery_check>');
-    expect((llmPayloads[2].messages as any[]).some((m) => m.role === 'tool' && String(m.content).includes('Sketch card rendered'))).toBe(true);
+    expect((llmPayloads[2].messages as any[]).some((m) => m.role === 'tool' && String(m.content).includes('HTML card rendered'))).toBe(true);
     const rows = await query<any[]>(`SELECT content, tool_calls FROM chat_messages WHERE session_id = 'S'`);
     expect(rows.some((r) => String(r.content).includes('visual_delivery_check'))).toBe(false);
     const persisted = rows.find((r) => r.tool_calls);
     const calls = typeof persisted?.tool_calls === 'string' ? JSON.parse(persisted.tool_calls) : persisted?.tool_calls;
     expect(calls?.[0]?.ui_content_offset).toBe('三款产品各有优缺点。'.length);
+    // 10-20 改名的兼容层:这个客户端没带 intelligent-ui.v2(改名前的版本),它只会画叫 sketch 的卡 →
+    // 落库与上屏事件都叫旧名;发给模型时换回新名(工具表里只有新名)。
+    expect(calls?.[0]?.function?.name).toBe('sketch');
+    const events = await query<any[]>(`SELECT type, payload FROM agent_run_events WHERE run_id = 'R1' AND type IN ('tool_call', 'tool_result')`);
+    expect(events.map((e) => (typeof e.payload === 'string' ? JSON.parse(e.payload) : e.payload).name)).toEqual(['sketch', 'sketch']);
+    expect((llmPayloads[2].messages as any[]).flatMap((m) => m.tool_calls ?? []).map((c: any) => c.function.name)).toEqual(['intelligent_ui_html']);
+  }, 20_000);
+
+  it('认 intelligent-ui.v2 的客户端拿到新名;模型照着旧历史叫 sketch 也照样执行', async () => {
+    const legacy = () => { const r: any = sketchStep()(); r.toolCalls[0].function.name = 'sketch'; return r; };
+    script = [legacy, finalStep('看图。')];
+    const run = await runToSettled({}, '画一张 Notion、Obsidian 和 Logseq 的定位对比图', 'desktop/2.13.5', ['intelligent-ui.v1', 'intelligent-ui.v2']);
+    expect(run.status).toBe('done');
+    const [row] = await query<any[]>(`SELECT tool_calls FROM chat_messages WHERE session_id = 'S' AND tool_calls IS NOT NULL`);
+    const calls = typeof row.tool_calls === 'string' ? JSON.parse(row.tool_calls) : row.tool_calls;
+    expect(calls[0].function.name).toBe('intelligent_ui_html');
+    expect((llmPayloads[1].messages as any[]).some((m) => m.role === 'tool' && String(m.content).includes('HTML card rendered'))).toBe(true);
   }, 20_000);
 
   it('纯文字显式退订:不注入本轮信号、不拦收尾', async () => {
@@ -178,7 +195,7 @@ describe('商店卡片之后不再重画(10-17 live:6 次里 2 次 sketch 把插
     script = [searchStep(), sketchStep(), finalStep('图里是两个候选。')];
     const run = await runToSettled({}, '在商店找 PDF 笔记插件,画一张对比图给我', 'desktop/2.13.4', ['marketplace-cards.v1']);
     expect(run.status).toBe('done');
-    expect(toolText(llmPayloads[2], 'sk1')).toContain('Sketch card rendered');
+    expect(toolText(llmPayloads[2], 'sk1')).toContain('HTML card rendered');
   }, 20_000);
 });
 

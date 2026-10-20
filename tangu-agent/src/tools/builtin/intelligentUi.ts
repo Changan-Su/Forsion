@@ -39,7 +39,7 @@ export const INTELLIGENT_UI_SECTION = `## Intelligent UI
 Deliver a native view by making an actual intelligent_ui function call. A JSON object written in
 the assistant's text does not invoke the tool and is not a usable answer.
 For interactive plans, image selections, web research and qualitative comparisons, prefer
-\`intelligent_ui\` over HTML sketches. Native components own layout, theme, accessibility and
+\`intelligent_ui\` over HTML cards (\`intelligent_ui_html\`). Native components own layout, theme, accessibility and
 state. Put metadata, resources and inputs before blocks so complete blocks appear progressively.
 Choose the few controls that actually help; short explanations remain prose. Local choices,
 quantities, checklists, image expansion and disclosures NEVER need another model request.
@@ -74,7 +74,7 @@ in disclosures so the task list remains easy to scan.
 When revising a plan, retain completed work as history; new time constraints apply to remaining
 work, not time already spent. Do not invent elapsed time. New checklists start unchecked, so
 describe already completed work in a text block and put only remaining work in new checklists.
-Use sketch only for custom charts, diagrams and simulations that
+Use intelligent_ui_html only for custom charts, diagrams and simulations that
 this schema cannot express. A native document satisfies the visual-delivery requirement.
 When visuals are set to less, use either visual tool only on an explicit request.
 
@@ -130,8 +130,8 @@ in Chat mode where skills are unavailable.`
 export const INTELLIGENT_UI_V2_SECTION = `## Computed Intelligent UI (version 2)
 This client also renders computed documents. Calculators, budgets, conversions, step-by-step guides,
 flashcards, scored quizzes and filterable or sortable lists are intelligent_ui documents with
-version:2, not sketches: the card recomputes as the user changes inputs or presses buttons, without
-calling you. Keep sketch for charts, diagrams, animated simulations and games.
+version:2, not HTML cards: the card recomputes as the user changes inputs or presses buttons, without
+calling you. Keep intelligent_ui_html for charts, diagrams, animated simulations and games.
 Order: {version:2,id,title,inputs,state,derived,resources,blocks}. state (max 16): [{id,initial}],
 hidden values the card's buttons change (number, text, true/false, null, or lists/objects of them).
 derived (max 32): [{id,expr}], evaluated in order; reads inputs, state and earlier derived values
@@ -154,12 +154,12 @@ state ids and starts from the values the user sent back.`
 
 const INTELLIGENT_UI_DEFINITION: Tool = { type: 'function', function: {
   name: 'intelligent_ui',
-  description: 'Render a native interactive answer: plans, images, sources, comparisons, checklists. Follow the v1 schema in the Intelligent UI instructions. Each call creates one document; local interactions do not call the model. Pictures the user picks among go on the choice options as imageId (picture cards), not in a gallery. No HTML/JS/CSS. Use sketch for custom simulations, prose for simple answers.',
+  description: 'Render a native interactive answer: plans, images, sources, comparisons, checklists. Follow the v1 schema in the Intelligent UI instructions. Each call creates one document; local interactions do not call the model. Pictures the user picks among go on the choice options as imageId (picture cards), not in a gallery. No HTML/JS/CSS. Use intelligent_ui_html for custom simulations, prose for simple answers.',
   parameters: { type: 'object', properties: { document: { type: 'string', description: 'JSON-encoded v1 document. Order: version, id, title, inputs, resources, blocks. Max 64 KiB.' } }, required: ['document'] },
 } }
 const INTELLIGENT_UI_V2_DEFINITION: Tool = { type: 'function', function: {
   name: 'intelligent_ui',
-  description: 'Render a native interactive answer: plans, images, sources, comparisons, checklists, and computed cards (calculators, step guides, flashcards, quizzes) that recompute locally. Follow the schema in the Intelligent UI instructions. Each call creates one document; local interactions do not call the model. Pictures the user picks among go on the choice options as imageId, not in a gallery. No HTML/JS/CSS. Use sketch for charts, diagrams and animations, prose for simple answers.',
+  description: 'Render a native interactive answer: plans, images, sources, comparisons, checklists, and computed cards (calculators, step guides, flashcards, quizzes) that recompute locally. Follow the schema in the Intelligent UI instructions. Each call creates one document; local interactions do not call the model. Pictures the user picks among go on the choice options as imageId, not in a gallery. No HTML/JS/CSS. Use intelligent_ui_html for charts, diagrams and animations, prose for simple answers.',
   parameters: { type: 'object', properties: { document: { type: 'string', description: 'JSON-encoded document, version 1 or 2 (computed). Order: version, id, title, inputs, state, derived, resources, blocks. Max 64 KiB.' } }, required: ['document'] },
 } }
 

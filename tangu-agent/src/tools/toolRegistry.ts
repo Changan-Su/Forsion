@@ -108,7 +108,12 @@ export function isShelvable(name: string): boolean {
 /** 旧工具名静默别名(不进 defs/快照):只兜升级瞬间仍引用旧名的存量会话上下文。
  *  住这里(而非 registry.ts)的理由与 SUB_AGENT_DENY_TOOLS 同:共享策略层要先归一再判闸,
  *  放在门面层会让 toolRegistry → registry 成环。 */
-export const TOOL_NAME_ALIASES: Record<string, string> = { muse_watch: 'manage_automation' };
+export const TOOL_NAME_ALIASES: Record<string, string> = {
+  muse_watch: 'manage_automation',
+  // 10-20 HTML 卡改名(sketch → intelligent_ui_html):旧会话历史、用户配置里的工具名单、照着历史叫旧名的模型都还说 sketch。
+  // 老客户端只会画叫 sketch 的卡,发给它们的事件名在 agentLoop 入口换回旧名(htmlCardNameFor)。
+  sketch: 'intelligent_ui_html',
+};
 
 /** 工具名归一:旧别名 → 正典名;非别名原样返回。
  *  必须 Object.hasOwn:模型硬调一个叫 `constructor` / `toString` / `__proto__` 的工具名时,

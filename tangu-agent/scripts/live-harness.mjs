@@ -1404,6 +1404,9 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
           if (!line.startsWith('data:')) continue;
           let e; try { e = JSON.parse(line.slice(5).trim()); } catch { continue; }
           const p = e.payload || {};
+          // 10-20 HTML 卡改名:带 intelligent-ui.v2 的客户端收到的叫 intelligent_ui_html,不带的还叫 sketch(见引擎 htmlCardNameFor)。
+          // 台架判定一律按 sketch 记,各场景的判据不用跟着改;事件里真名是哪个由引擎单测钉着。
+          if (p.name === 'intelligent_ui_html') p.name = 'sketch';
           // firstTokenMs = 首个正文 token(语音能开口念的时刻);ttftMs 还含 reasoning/tool_stream
           if (e.type === 'token' || e.type === 'reasoning' || e.type === 'tool_stream') { if (ev.ttftMs == null) ev.ttftMs = Date.now() - t0; if (e.type === 'tool_stream' && p.name) (ev.streamAt ||= {})[p.name] ??= Date.now() - t0; if (e.type === 'token') { ev.tokens += 1; if (ev.firstTokenMs == null) ev.firstTokenMs = Date.now() - t0; } }
           // toolArgs:参数原文(control 场景要看 B 腿的 run_bash 到底跑了什么命令 —— 只记工具名的话事后只看得见「run_bash」)。
@@ -1519,6 +1522,7 @@ async function runParked(sessionId, message, { onBeforeApprove, awaitingMs = 150
           if (!line.startsWith('data:')) continue;
           let e; try { e = JSON.parse(line.slice(5).trim()); } catch { continue; }
           const p = e.payload || {};
+          if (p.name === 'intelligent_ui_html') p.name = 'sketch'; // 同上:HTML 卡两种名字一律按 sketch 记
           if (e.type === 'usage') turn += 1;
           else if (e.type === 'tool_call') ev.toolCalls.push({ id: p.id, name: p.name, args: String(p.arguments || '').slice(0, 400), atMs: Date.now() - t0, turn });
           else if (e.type === 'tool_result') ev.toolResults.push({ id: p.id, name: p.name, parked: !!p.parked, isError: !!p.isError, result: String(p.result || '').slice(0, 1500), atMs: Date.now() - t0 });
@@ -2502,7 +2506,7 @@ try {
     cards.forEach((card, index) => writeFileSync(join(OUT, `visualize-${index}.html`), card.html || ''));
     const html = cards.map((c) => c.html || '').join('\n');
     const success = ev.toolResults.some((r) => r.name === 'sketch' && !r.isError);
-    const contract = /type=["']range["']/.test(html) && html.includes('forsionSketch') && html.includes('setState') && /<svg|<canvas/.test(html);
+    const contract = /type=["']range["']/.test(html) && /forsion(?:IntelligentUi|Sketch)\b/.test(html) && html.includes('setState') && /<svg|<canvas/.test(html);
     return { ok: !ev.error && ev.done && success && contract, detail: ev.error || `cards=${cards.length};interactive/state=${contract}`, output: ev.content, toolCalls: ev.toolCalls, ttftMs: ttft(ev), tokens: tokensOf(ev) };
   });
 
@@ -2516,7 +2520,7 @@ try {
     const success = ev.toolResults.some((r) => r.name === 'sketch' && !r.isError);
     // 10-09 二轮起首选原生 fs-compare(选项自带 ask);手写 <button onclick=ask()> 仍算数
     const native = /<fs-compare\b/.test(html) && /"ask"\s*:/.test(html);
-    const contract = native || (/forsionSketch\.ask\(/.test(html) && /<button/i.test(html));
+    const contract = native || (/forsion(?:IntelligentUi|Sketch)\.ask\(/.test(html) && /<button/i.test(html));
     return { ok: !ev.error && ev.done && success && contract, detail: ev.error || `cards=${cards.length};ask button=${contract}(native=${native})`, output: ev.content, toolCalls: ev.toolCalls, ttftMs: ttft(ev), tokens: tokensOf(ev) };
   });
 
@@ -2531,7 +2535,7 @@ try {
     const success = ev.toolResults.some((r) => r.name === 'sketch' && !r.isError);
     const scale = /type=["']range["']|type=["']number["']/.test(html);
     const checklist = /<fs-checklist\b/.test(html);
-    const copy = /forsionSketch\.copy\(/.test(html);
+    const copy = /forsion(?:IntelligentUi|Sketch)\.copy\(/.test(html); // 10-20 改名:新名 forsionIntelligentUi,旧名照样能用
     return { ok: !ev.error && ev.done && success && scale && checklist && copy, detail: ev.error || `cards=${cards.length};scale=${scale};fs-checklist=${checklist};copy=${copy}`, output: ev.content, toolCalls: ev.toolCalls, ttftMs: ttft(ev), tokens: tokensOf(ev) };
   });
 
@@ -3950,7 +3954,7 @@ Then reply with only the command output.`,
     const sid = `live-output-${Date.now()}`;
     const ev = await run(sid, `Artist: draw the workflow and display this existing file: ${file}. Observer: just finish.`, 180_000, { groupChat: true, groupAgents: ['live-artist', 'live-observer'], groupSeedHistory: false, groupNoSummary: true, groupMaxRounds: 1 }, 'desktop/live-harness');
     const persisted = (await api(`/agent/sessions/${sid}/messages`)).messages || [];
-    const sketches = ev.group.outputs.filter((m) => m.tool_calls?.some((c) => c.function?.name === 'sketch' && c.function.arguments.includes('TEAM-SKETCH-CONTENT')));
+    const sketches = ev.group.outputs.filter((m) => m.tool_calls?.some((c) => ['sketch', 'intelligent_ui_html'].includes(c.function?.name) && c.function.arguments.includes('TEAM-SKETCH-CONTENT')));
     const files = ev.group.outputs.filter((m) => m.display_files?.some((f) => f.path === file && f.sourceSessionId !== sid));
     const durable = ev.group.outputs.every((m) => persisted.some((p) => p.id === m.id && JSON.stringify(p.tool_calls || []) === JSON.stringify(m.tool_calls || []) && JSON.stringify(p.display_files || []) === JSON.stringify(m.display_files || [])));
     return { ok: !ev.error && ev.done && sketches.length === 1 && files.length === 1 && durable,

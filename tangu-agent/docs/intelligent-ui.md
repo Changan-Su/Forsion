@@ -1,15 +1,23 @@
 # Forsion Intelligent UI v1 / v2
 
 普通交互计划、图片候选、网页来源与定性比较走受控原生组件；v2 起计算器、预算、换算、分步、闪卡、计分小测验、
-可筛可排的列表也走原生文档（白名单计算层）。图表、示意图、动画模拟与小游戏继续走 Sketch 沙箱（对用户叫 HTML 卡）。
+可筛可排的列表也走原生文档（白名单计算层）。图表、示意图、动画模拟与小游戏继续走 HTML 卡沙箱（工具 `intelligent_ui_html`，10-20 前叫 `sketch`）。
 这是一套 Forsion 实现，不是 ChatGPT 内部协议复刻。用户侧名称为 Intelligent UI。
 
 ## 边界
 
 - `client_capabilities: ["intelligent-ui.v1"]` 是渲染能力握手。没有握手的旧客户端不获得新工具。
-  初版仅 desktop/web 可生成；保留原有移动端 Sketch 禁用规则。原生文档本身没有脚本。
+  初版仅 desktop/web 可生成；保留原有移动端 HTML 卡禁用规则。原生文档本身没有脚本。
 - `"intelligent-ui.v2"` 与 v1 一起发：引擎据此多发一段 `INTELLIGENT_UI_V2_SECTION`、换两段工具描述（`definitionFor`），
   并接受 `version: 2`。没有 v2 握手的客户端照旧只收 v1，引擎对它们拒收 v2（报错回给模型）。
+- HTML 卡 10-20 改名：工具 `sketch` → `intelligent_ui_html`、卡内脚本接口 `window.forsionSketch` → `window.forsionIntelligentUi`、
+  笔记交互块 ```` ```forsion-sketch ```` → ```` ```forsion-intelligent-ui-html ````。模型那头只有新名，兼容层：
+  - 引擎：`TOOL_NAME_ALIASES` 把 `sketch` 归到新名（模型照着旧历史叫、HARNESS 收起名单、profile / toolsList 白名单、审批规则都认）；
+    发给模型的历史经 `withHtmlCardName` 统一成新名。
+  - 老客户端（没带 `intelligent-ui.v2`，即 10-20 之前的版本）只会画叫 `sketch` 的卡：`agentLoop` 在模型产出调用的入口按
+    `htmlCardNameFor` 把名字改回 `sketch`，上屏事件、落库、工具结果全跟着。
+  - 渲染层两种名字都画（`isHtmlCardTool`）；卡内运行时两个全局名指向同一个冻结对象；笔记里两种围栏都认，新插入的写新围栏。
+  - 文件名、CSS 类、内部变量（`SketchCard`、`.sketch-*`、`sketchTurnSignalFor`、`sketch-ask` 消息类型）没改。
   已发的客户端（≤ 2.13.4）遇到同步来的 v2 历史只显示「这部分界面未能生成」那行；从本版起，渲染层对比自己新的版本
   显示标题、第一段文字和「这张卡要新版 Forsion 才能显示」。
 - 复用 `tool_stream`、`tool_call`、`tool_result` 与现有历史 JSON 存储，不创建另一套 SSE 协议或数据库表。
@@ -45,7 +53,7 @@
   ChatGPT 出了组件的 13 条里引擎只出 5 条,其中 4 条跟进句(「那四次挥手呢」「预算一千五以内呢」)只出 1 条。词表只读得到最后一句话的字面,
   这几句里没有可抓的词;所以不再往词表里加词,而是每条普通消息都给模型同一句提醒,由看得见整段对话的模型按答案的形状定:
   一两句话、用户要的一段文字(邮件、翻译)、代码、要办的事 → 不出;有要勾的、要挑的(含「A 还是 B」)、要照着做的、随某个数变的量、
-  靠猜的偏好 → 一次 `intelligent_ui`;讲完整的机制 / 流程 / 结构(不是其中一个细节)→ 先读 `visualize` 技能再出一张 `sketch` 图。
+  靠猜的偏好 → 一次 `intelligent_ui`;讲完整的机制 / 流程 / 结构(不是其中一个细节)→ 先读 `visualize` 技能再出一张 `intelligent_ui_html` 图。
   跟进只改一处时只重出那一处。改后同题连跑 3 次:13/13、10/13、11/13(跟进 4/4、2/4、3/4),不该出的 0/5;对照表与逐条命中率在仓根
   `harness-runs/2026-10-13/Intelligent-UI-对标ChatGPT-触发与融入.md`。
 - shape 只在原生文档可用(`intelligent-ui.v1`)且档位是「自动」时发;三种消息不发:改 / 查 / 讲代码的、处理一段现成文字的(同 actionable 的两条),

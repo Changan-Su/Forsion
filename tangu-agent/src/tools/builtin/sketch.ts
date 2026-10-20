@@ -22,6 +22,21 @@ import { presetOf } from '../../core/presetTable.js';
 /** GUI 客户端面(routes/runs.ts CLIENT_TAG_RE 的子集;移动原生 App 见头注刻意排除)。 */
 const GUI_CLIENT_RE = /^(desktop|web)\//;
 
+/** 10-20 改名:模型读到的工具名、卡内脚本接口都换成 Intelligent UI 的说法(对用户本来就叫 Intelligent UI 卡)。
+ *  旧名 sketch 经 TOOL_NAME_ALIASES 照样能调;老客户端(不认 intelligent-ui.v2 的,即 10-20 之前发的版本)只会画叫
+ *  sketch 的卡,所以入口把它们的调用改回旧名再往外发(agentLoop);认 v2 的客户端两种名字都会画。 */
+export const HTML_CARD_TOOL = 'intelligent_ui_html';
+export const LEGACY_HTML_CARD_TOOL = 'sketch';
+export const isHtmlCardTool = (name: string): boolean => name === HTML_CARD_TOOL || name === LEGACY_HTML_CARD_TOOL;
+/** 这个客户端认得的 HTML 卡工具名。和计算层同一批客户端:认 intelligent-ui.v2 的渲染层两种名字都画。 */
+export const htmlCardNameFor = (caps?: readonly string[]): string => caps?.includes('intelligent-ui.v2') ? HTML_CARD_TOOL : LEGACY_HTML_CARD_TOOL;
+/** 发给模型的历史里 HTML 卡一律叫新名:旧会话和老客户端的调用落库时叫 sketch,工具表里只有新名。没有旧名时原样返回(不另造数组)。 */
+export function withHtmlCardName<M extends { tool_calls?: { function: { name: string } }[] }>(messages: M[]): M[] {
+  const old = (m: M): boolean => !!m.tool_calls?.some((c) => c.function?.name === LEGACY_HTML_CARD_TOOL);
+  if (!messages.some(old)) return messages;
+  return messages.map((m) => old(m) ? { ...m, tool_calls: m.tool_calls!.map((c) => c.function?.name === LEGACY_HTML_CARD_TOOL ? { ...c, function: { ...c.function, name: HTML_CARD_TOOL } } : c) } : m);
+}
+
 /** ponytail: 256K 字符上限(参数进上下文,模型自会节制;超了让它精简)。真需要大卡再谈外置存储。 */
 const MAX_SKETCH_HTML_CHARS = 262_144;
 
@@ -56,7 +71,7 @@ export function sketchEnabledFor(ctx: Pick<ToolContext, 'client' | 'subAgentDept
  */
 export const SKETCH_SECTION = `## Visual cards
 
-Use \`sketch\` when seeing or manipulating a relationship materially helps the answer: compare
+Use \`intelligent_ui_html\` when seeing or manipulating a relationship materially helps the answer: compare
 options, explore a trend, explain a process, inspect a proposed interface, or try a small simulator.
 Do not wait for the user to say "draw" when interaction would help. Use prose for a single fact,
 Markdown for a requested table, and normal project/file tools when the deliverable is an app or file.
@@ -98,8 +113,8 @@ Fit widths from 320px to about 700px: wrap controls, stack panels, keep supporti
 viewBox and its labels. Use role="img" and an accessible name on visual fields; use aria-live="polite"
 for changed results. Essential actions must work without hover. Honor prefers-reduced-motion.
 
-For stateful interactions, read \`window.forsionSketch.state\` at startup (null on first use), validate
-its shape, then render. After user input call \`window.forsionSketch.setState(jsonValue)\` to replace
+For stateful interactions, read \`window.forsionIntelligentUi.state\` at startup (null on first use), validate
+its shape, then render. After user input call \`window.forsionIntelligentUi.setState(jsonValue)\` to replace
 a snapshot up to 16 KiB. Store only choices needed to restore the view, not secrets or derived data.
 This state is local to this card on this device; it does not reach the model or start a conversation.
 Listen for \`forsion:themechange\` when canvas needs repainting; SVG CSS updates automatically.
@@ -107,18 +122,18 @@ Listen for \`forsion:themechange\` when canvas needs repainting; SVG CSS updates
 The card renders progressively while you write it: put the headline and the markup first and every
 \`<script>\` block last, so the structure is visible before the behavior arrives.
 
-Buttons that change the answer: in a click handler call \`window.forsionSketch.ask("...")\` with the
+Buttons that change the answer: in a click handler call \`window.forsionIntelligentUi.ask("...")\` with the
 follow-up the user would type ("explain the second stage", "show the pessimistic case"). It is sent as
 the user's next visible message in this conversation, one per click; never call it on load or from a
 timer. Use it for choices that need a new answer; keep recomputation that needs no new answer inside
-the card. \`window.forsionSketch.copy(text)\` (also click-only) copies text such as a shopping list.
+the card. \`window.forsionIntelligentUi.copy(text)\` (also click-only) copies text such as a shopping list.
 
-Before calling \`sketch\`, check that every control works, all queried elements exist, labels fit,
+Before calling \`intelligent_ui_html\`, check that every control works, all queried elements exist, labels fit,
 light/dark themes work, and the first render is useful. Afterwards give only the takeaway or caveat
 not already visible. For complex charts or interactions, use the bundled \`visualize\` skill.`;
 
 /** visuals=less 时追加在 SKETCH_SECTION 之后:常驻段仍在(用户点名要图时成品下限不变),但「不等用户说画」那条让位。 */
-export const SKETCH_LESS_NOTE = `The user has set interface visuals to "less": call \`sketch\` only when they explicitly ask for a
+export const SKETCH_LESS_NOTE = `The user has set interface visuals to "less": call \`intelligent_ui_html\` only when they explicitly ask for a
 chart, diagram, card, or interactive view in this turn; otherwise answer in prose.`;
 
 export type SketchTurnSignal = {
@@ -146,7 +161,7 @@ const SKETCH_CODE_FOCUS_RE = /(?:修复|改代码|重构|实现|写代码|编译
  * 不返回用户原文,不做 LLM 分类器,不因文中单个数字或代码里的 compare 误触发。
  */
 export function sketchTurnSignalFor(message: string, visuals: VisualsPref = 'auto', nativeUi = false, computed = false): SketchTurnSignal | undefined {
-  const tool = nativeUi ? '`intelligent_ui` or `sketch`' : '`sketch`';
+  const tool = nativeUi ? '`intelligent_ui` or `intelligent_ui_html`' : '`intelligent_ui_html`';
   const text = String(message || '')
     .replace(/```[\s\S]*?```/g, ' ')
     .replace(/`[^`\n]+`/g, ' ')
@@ -175,7 +190,7 @@ export function sketchTurnSignalFor(message: string, visuals: VisualsPref = 'aut
       section:
         '## Visual-first note for this turn\n' +
         `This request contains a comparison, sequence, structure, data shape, or interaction that is faster to understand visually even though the user may not have said "draw". Default to calling ${tool} as part of the answer. Skip only if closer inspection shows that the relationship is trivial or the actual deliverable is code/a file rather than an explanation.` +
-        (nativeUi && computed ? ' A calculator, converter, budget, step guide or quiz is a computed `intelligent_ui` document (version 2); keep `sketch` for charts, diagrams and animations.' : ''),
+        (nativeUi && computed ? ' A calculator, converter, budget, step guide or quiz is a computed `intelligent_ui` document (version 2); keep `intelligent_ui_html` for charts, diagrams and animations.' : ''),
     };
   }
   const skip = SKETCH_ACTIONABLE_SKIP_RE.test(text);
@@ -190,7 +205,7 @@ export function sketchTurnSignalFor(message: string, visuals: VisualsPref = 'aut
       'The answer to this request is something the user will follow, tick off or choose from (a plan or itinerary, things to prepare or buy, a pick among options, a procedure), even though they did not ask for a card. ' +
       (nativeUi
         ? 'Default to answering with `intelligent_ui`: inputs for what they can adjust (people, days, the option picked), a checklist for things to do, bring or buy, a comparison for the options, disclosures for longer explanations. ' + (computed ? COMPUTED_SHAPES + ' ' : '') + VIEW_IS_THE_ANSWER
-        : 'Default to answering with a `sketch` card built from `fs-checklist`, `fs-compare` or `fs-choice`. Keep the prose around it to a short takeaway.') +
+        : 'Default to answering with an `intelligent_ui_html` card built from `fs-checklist`, `fs-compare` or `fs-choice`. Keep the prose around it to a short takeaway.') +
       ' Skip the card only if the complete answer is a sentence or two, or the user wants something carried out (code or files changed, a task or calendar entry created) rather than an answer to read.',
   };
 }
@@ -205,7 +220,7 @@ const SHAPE_NOTE = `## Answer-shape note for this turn
 Choose the form of this answer from what the answer will contain, not from the wording of the request. A short follow-up ("what about the other one", "make day two lighter") continues the subject of the earlier turns and keeps their form.
 - The whole answer is a sentence or two, a piece of writing the user asked for (an email, a message, a translation), code, or something to carry out (change files, run a command, create a task or event): answer or act as usual, with no view.
 - Part of the answer is things to tick off, bring or buy, options to compare or pick among (an "A or B?" question included), a plan, schedule or procedure to follow, amounts that follow a number the user may change, or a recommendation that hinges on a preference you had to guess: answer with one \`intelligent_ui\` call that carries those parts as native blocks, with \`text\` blocks for the reasoning between them. ${VIEW_IS_THE_ANSWER}
-- The answer walks through a whole mechanism, sequence or structure, several stages or parts of it and not one detail, that is easier to see than to read: load the \`visualize\` skill if you have not, call \`sketch\` for one diagram built from its parts (\`<fs-flow>\` for a sequence or process), then explain in prose.
+- The answer walks through a whole mechanism, sequence or structure, several stages or parts of it and not one detail, that is easier to see than to read: load the \`visualize\` skill if you have not, call \`intelligent_ui_html\` for one diagram built from its parts (\`<fs-flow>\` for a sequence or process), then explain in prose.
 A follow-up that changes one part gets a view of that part only.`;
 // 10-20 计算层 live 第 3 跑:背单词、「一步一步来」被这两段的「a checklist for things to do」带成了 v1 清单。v2 客户端多一句。
 const COMPUTED_SHAPES = 'This client renders version 2: numbers that follow values the user may change are derived values shown in stats or a table, and anything gone through one item at a time (flashcards, one step after another, quiz questions) keeps its items and position in state and moves on with set buttons.';
@@ -214,7 +229,7 @@ const SHAPE_NOTE_COMPUTED = SHAPE_NOTE.replace('\nA follow-up that changes one p
 const SKETCH_DEFINITION: Tool = {
   type: 'function',
   function: {
-    name: 'sketch',
+    name: HTML_CARD_TOOL,
     // E1 三段式(§五):何时用 → 策略 → 何时别用。构图/视觉语法**不重复**在这里 ——
     // 它们是 SKETCH_SECTION 的正文,而段与工具同门禁(sketchEnabledFor),工具在场 ⟺ 段在场。
     // ponytail: 上限≈1.6KB(10-09 二轮加 PARTS / copy 后靠删 fs-eyebrow / fs-chip / fs-panel / 折叠那句抵回来)。`--fs-*` 变量表与
@@ -236,7 +251,7 @@ const SKETCH_DEFINITION: Tool = {
       'fs-label, fs-row, fs-grid, fs-actions, fs-callout, fs-bar-track; no inline style attributes.\n' +
       'SIZE: ~700px wide, auto height. It streams in while you write (markup first, scripts last). ' +
       'Each call appends a NEW card; the result is only a confirmation, the user sees the card.\n' +
-      'INTERACTION: click handlers may call window.forsionSketch.ask(text) (sends that follow-up as ' +
+      'INTERACTION: click handlers may call window.forsionIntelligentUi.ask(text) (sends that follow-up as ' +
       'the user\'s next message) or .copy(text).\n' +
       'Not for source code, files, or one-number answers — those stay in prose.',
     parameters: {
@@ -264,7 +279,7 @@ export const sketchProvider: ToolProvider = {
   id: 'builtin:sketch',
   tools: () => [
     {
-      name: 'sketch',
+      name: HTML_CARD_TOOL,
       mode: 'both',
       isEnabledFor: (_profile, ctx) => sketchEnabledFor(ctx),
       capabilities: { sideEffect: 'none', parallel: false, defaultTimeoutMs: 5_000 },
@@ -275,10 +290,10 @@ export const sketchProvider: ToolProvider = {
         const html = typeof args.html === 'string' ? args.html : '';
         if (!html.trim()) return 'Error: html is required';
         if (html.length > MAX_SKETCH_HTML_CHARS) {
-          return `Error: html too large (${html.length} chars, max ${MAX_SKETCH_HTML_CHARS}). Slim the card down or split it into multiple sketch calls.`;
+          return `Error: html too large (${html.length} chars, max ${MAX_SKETCH_HTML_CHARS}). Slim the card down or split it into multiple intelligent_ui_html calls.`;
         }
         // 渲染发生在前端:tool_result 事件(done 且非 Error)触发 SketchCard 从本调用的参数取 HTML 画卡。
-        return 'Sketch card rendered in the conversation.';
+        return 'HTML card rendered in the conversation.';
       },
     },
   ],
