@@ -132,12 +132,15 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
   const settingsViews = usePluginStore((s) => s.settingsViews)
   const plugins = usePluginStore((s) => s.plugins)
   const activeIds = usePluginStore((s) => s.activeIds)
-  const submissionView = !window.tangu?.unitPage && window.tangu?.cloudInvoke
+  // 账号类的页(投稿 / 会员 / 积分)属于本页登录的那个人:桌面与服务器 Unit 的网页主入口给,看别的设备的设备页不给。
+  const ownAccount = !window.tangu?.unitPage || !!window.tangu?.unitPublicEntry
+  // 网页主入口上 Extend 的通道在它自己的页内适配层里,不经 window.tangu.cloudInvoke。
+  const submissionView = ownAccount && (window.tangu?.unitPublicEntry || window.tangu?.cloudInvoke)
     ? settingsViews.find((o) => o.pluginId === 'forsion-extend' && o.item.id === 'submission' && activeIds.includes(o.pluginId) && isPlacedSettingsView(plugins.find((p) => p.id === o.pluginId), o.item))
     : undefined
   // 插件提供的页:只认已启用的首方内置包(locked),设备页不显示。按 group 分组,组与页都保持注册顺序。
   const allStoreViews = usePluginStore((s) => s.storeViews)
-  const storeViews = useMemo(() => (window.tangu?.unitPage ? [] : allStoreViews.filter((o) => activeIds.includes(o.pluginId) && !!plugins.find((p) => p.id === o.pluginId)?.locked)), [allStoreViews, activeIds, plugins])
+  const storeViews = useMemo(() => (!ownAccount ? [] : allStoreViews.filter((o) => activeIds.includes(o.pluginId) && !!plugins.find((p) => p.id === o.pluginId)?.locked)), [ownAccount, allStoreViews, activeIds, plugins])
   const [storeViewKey, setStoreViewKey] = useState<string | null>(null)
   const storeViewKeyOf = (o: { pluginId: string; item: { id: string } }): string => `${o.pluginId}:${o.item.id}`
   // 页面所属的插件被停用 / 卸载 → 找不到了,自然退回 tab 指着的那页
@@ -169,7 +172,15 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
   const contentTypes = useMemo(hostContentTypes, [])
   const categoryTabs = useMemo(() => categoryTabsFor(contentTypes), [contentTypes])
   const scopeLimited = contentTypes.length < CONTENT_TABS.length
+  // 本宿主一类都装不了(网页版):没有目录可逛,商店只剩插件提供的页和投稿。
+  const storeOnly = contentTypes.length === 0
   const [tab, setTab] = useState<Tab>('discover')
+  // 只剩插件页时落在第一张上(Extend 的页晚于商店挂载才注册,所以跟着 storeViews 再判);一张都没有、有投稿就落投稿。
+  const firstStoreView = storeOnly && tab === 'discover' && !storeViewKey ? storeViews[0] : undefined
+  useEffect(() => {
+    if (firstStoreView) setStoreViewKey(storeViewKeyOf(firstStoreView))
+    else if (storeOnly && tab === 'discover' && !storeViewKey && submissionView) setTab('submit')
+  }, [firstStoreView, storeOnly, tab, storeViewKey, submissionView])
   const [catalog, setCatalog] = useState<MarketCard[]>([])
   const [catalogError, setCatalogError] = useState('')
   const [installed, setInstalled] = useState<Record<string, InstalledItem[]>>({})
@@ -206,7 +217,7 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
     const lists = settled.map((result) => result.status === 'fulfilled' ? result.value : [])
     const all = lists.flat()
     setCatalog(all)
-    if (settled.every((result) => result.status === 'rejected')) setCatalogError(t('market.loadFailShort'))
+    if (settled.length && settled.every((result) => result.status === 'rejected')) setCatalogError(t('market.loadFailShort'))
     const ups = all.filter((c) => {
       const pools = (c.type === 'plugin' || c.type === 'amadeus-plugin')
         ? [...(inst[c.type] || []), ...(inst[c.type === 'plugin' ? 'amadeus-plugin' : 'plugin'] || [])]
@@ -538,8 +549,8 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
     return <div className="mk-grid">{cards.map((item) => card(item))}</div>
   }
 
-  const showSearch = !detail && !storeView && tab !== 'submit'
-  const showSort = !detail && !storeView && tab !== 'submit' && tab !== 'webapp'
+  const showSearch = !storeOnly && !detail && !storeView && tab !== 'submit'
+  const showSort = !storeOnly && !detail && !storeView && tab !== 'submit' && tab !== 'webapp'
   /** 左栏高亮:开着插件页时内置入口都不亮。 */
   const navTab: Tab | null = storeView ? null : tab
   const openStoreView = (key: string): void => { setStoreViewKey(key); setDetail(null); setQuery('') }
@@ -558,11 +569,13 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
           <div className="mk-nav-brand"><div className="mk-nav-mark"><Sparkles size={17} /></div><div><strong>{t('market.title')}</strong><span>{t('market.navSubtitle')}</span></div></div>
         </div>
         <div className="settings-nav-list">
+          {!storeOnly && <>
           <div className="settings-nav-group"><div className="settings-nav-grouphead">{t('market.group.discover')}</div><button className={navTab === 'discover' ? 'active' : ''} onClick={() => switchTab('discover')}><Compass size={15} />{navLabel.discover}</button></div>
           <div className="settings-nav-group">
             <div className="settings-nav-grouphead">{t('market.group.categories')}</div>
             {categoryTabs.map((id) => <button key={id} className={navTab === id ? 'active' : ''} onClick={() => switchTab(id)}><TypeGlyph type={id as MarketType | 'webapp'} size={15} />{navLabel[id]}</button>)}
           </div>
+          </>}
           {storeGroups.map((g) => (
             <div key={g.label} className="settings-nav-group" data-store-group>
               <div className="settings-nav-grouphead">{g.label}</div>
@@ -571,8 +584,8 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
           ))}
           <div className="settings-nav-group">
             <div className="settings-nav-grouphead">{t('market.group.manage')}</div>
-            <button className={navTab === 'installed' ? 'active' : ''} onClick={() => switchTab('installed')}><Library size={15} />{navLabel.installed}</button>
-            <button className={navTab === 'updates' ? 'active' : ''} onClick={() => switchTab('updates')}><RefreshCw size={15} />{navLabel.updates}{updatable.length > 0 && <span className="mk-nav-count">{updatable.length}</span>}</button>
+            {!storeOnly && <button className={navTab === 'installed' ? 'active' : ''} onClick={() => switchTab('installed')}><Library size={15} />{navLabel.installed}</button>}
+            {!storeOnly && <button className={navTab === 'updates' ? 'active' : ''} onClick={() => switchTab('updates')}><RefreshCw size={15} />{navLabel.updates}{updatable.length > 0 && <span className="mk-nav-count">{updatable.length}</span>}</button>}
             {/* Extend 的投稿页同时挂在市场与云端设置中;旧包仍可打开网页个人中心。 */}
             {(!!submissionView || !!window.tangu?.openAccountCenter) && <button className={navTab === 'submit' ? 'active' : ''} onClick={() => switchTab('submit')}><Send size={15} />{navLabel.submit}</button>}
           </div>
@@ -595,7 +608,7 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
           </div>
         )}
 
-        {!detail && !detailLoading && !storeView && <div className="mk-upgrade-filters"><select aria-label={t('market.tagAll')} value={tagFilter} onChange={e => setTagFilter(e.target.value)}><option value="">{t('market.tagAll')}</option>{[...new Set(catalog.flatMap(c => c.tags || []))].sort().map(tag => <option key={tag} value={tag}>{tag}</option>)}</select><label><input type="checkbox" checked={compatibleOnly} onChange={e => setCompatibleOnly(e.target.checked)} />{t('market.compatibleOnly')}</label><span>Forsion {appVersion}</span></div>}
+        {!storeOnly && !detail && !detailLoading && !storeView && <div className="mk-upgrade-filters"><select aria-label={t('market.tagAll')} value={tagFilter} onChange={e => setTagFilter(e.target.value)}><option value="">{t('market.tagAll')}</option>{[...new Set(catalog.flatMap(c => c.tags || []))].sort().map(tag => <option key={tag} value={tag}>{tag}</option>)}</select><label><input type="checkbox" checked={compatibleOnly} onChange={e => setCompatibleOnly(e.target.checked)} />{t('market.compatibleOnly')}</label><span>Forsion {appVersion}</span></div>}
         <div className="settings-body mk-body">
           {detail ? (
             <div className="mk-detail">

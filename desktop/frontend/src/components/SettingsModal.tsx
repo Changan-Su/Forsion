@@ -528,6 +528,11 @@ export const SettingsModal: React.FC<{
   // Unit 设备页(B 端渲染):插件真的在装(unit/plugins),插件页必须给 —— 只藏 shell 类操作;
   // 其余 host tab(MCP/Hooks/托管后端等)仍随 isDesktop 隐藏(shim 没有那些桥,列出来就是白板)。
   const unitPage = !!window.tangu?.unitPage
+  // 服务器 Unit 的网页主入口(/web/):页面账号就是来访者本人 →「Forsion 云端」一级页给 Extend 的账号子页;
+  // 宿主自己的「同步 / 连接」两页仍只在桌面(网页版不跑同步引擎,云端地址也不归它改)。
+  const publicEntry = unitPage && !!window.tangu?.unitPublicEntry
+  // 网页主入口上这一页的正文全是 Extend 的子页:它真注册了才列(服务器的 /admin/ 没装 Extend,列出来就是空页)
+  const extendPages = usePluginStore((s) => publicEntry && s.settingsViews.some((o) => o.pluginId === 'forsion-extend' && s.activeIds.includes(o.pluginId)))
   // 插件页(amadeus-plugins)与左栏 fplugin:<id> 直达项的**同一道闸**:桌面 / 设备页 / Android App(2026-10-02 起
   // 市场能装 Forsion 插件,插件宿主在 mobile/src/plugins)。三处(tabItems、tab 推导、forsionNavItems)必须一致,
   // 否则 fplugin: 深链在手机上被推导弹回首页。web 云壳没有插件宿主(listPlugins 恒空),照旧不列。
@@ -555,7 +560,7 @@ export const SettingsModal: React.FC<{
     // 插件页设备页也给(插件在 B 端真的装载运行,列表/启停是本页 runtime 行为,不碰对方设备)。
     ...(pluginsPage ? ([['amadeus-plugins', t('settings.tab.amadeusPlugins')]] as Array<[Tab, string]>) : []),
     // Forsion 云端(账号 / 云端地址 / 记忆同步 / 笔记在线同步)整页住在 Extend 的桥键后面:停用或没装 Extend 就没有这一页
-    ...(isDesktop && cloudAccount ? ([['forsion', t('settings.tab.forsionCloud')]] as Array<[Tab, string]>) : []),
+    ...(cloudAccount && (isDesktop || extendPages) ? ([['forsion', t('settings.tab.forsionCloud')]] as Array<[Tab, string]>) : []),
     ...(isDesktop && !!window.amadeus ? ([['notes', t('settings.tab.notes')]] as Array<[Tab, string]>) : []),
     ...(isDesktop && !!window.amadeus && !!window.remoteSync ? ([['sync', t('settings.tab.sync')]] as Array<[Tab, string]>) : []),
     ['spaces', t('settings.tab.spaces')],
@@ -802,7 +807,7 @@ export const SettingsModal: React.FC<{
     : pluginsWithSettingsPanel(amxPlugins, amxActiveIds, amxSettings, amxSettingsViews)
       .map((pl) => [`fplugin:${pl.id}`, pluginDisplayName(pl, locale)] as [Tab, string])
   // 首方内置包(Forsion Extend)挂进「Forsion 云端」的自绘子页:插件启用、面板声明了 category。设备页不挂(那边不是本机账号)。
-  const cloudViews = isDesktop && cloudAccount && !unitPage
+  const cloudViews = cloudAccount && ((isDesktop && !unitPage) || publicEntry)
     ? amxSettingsViews.filter((o) => amxActiveIds.includes(o.pluginId) && isPlacedSettingsView(amxPlugins.find((pl) => pl.id === o.pluginId), o.item))
     : []
   const groupedCloud = cloudViews.some((view) => cloudSettingsParent(cloudViews, cloudViewKey(view)) !== cloudViewKey(view))
@@ -1250,8 +1255,8 @@ export const SettingsModal: React.FC<{
       // Extend 渲染半身自绘的子页(账号 / 额度与积分 / 安全 / 用量记录 / 反馈),随 Extend 的 npm 版本更新
       ...cloudViews.filter((o) => !groupedCloud || o.item.id !== 'feedback').map((o) => [cloudViewKey(o), cloudViewTitle(o)] as [string, string]),
       // 宿主自己的两页:同步(笔记在线同步 + Brain 记忆同步)、连接(云端地址)。条目条件与正文块一致,免得点进去是白板。
-      ...(window.amadeusSync || stored ? [['f-sync', t('settings.forsionCloud.sync')] as [string, string]] : []),
-      ...(stored ? [['f-conn', t('settings.forsionCloud.connection')] as [string, string]] : []),
+      ...(isDesktop && (window.amadeusSync || stored) ? [['f-sync', t('settings.forsionCloud.sync')] as [string, string]] : []),
+      ...(isDesktop && stored ? [['f-conn', t('settings.forsionCloud.connection')] as [string, string]] : []),
       ...cloudViews.filter((o) => groupedCloud && o.item.id === 'feedback').map((o) => [cloudViewKey(o), cloudViewTitle(o)] as [string, string]),
     ],
     sync: [

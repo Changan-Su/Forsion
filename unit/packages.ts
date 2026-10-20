@@ -3,6 +3,7 @@ import { readFile, readdir, realpath, stat } from 'node:fs/promises'
 import { isAbsolute, resolve, sep } from 'node:path'
 import { isSafePluginExt } from '../desktop/shared/amadeus/pluginFiles'
 import { isNativeFeatureId, nativeFeatureSpaceIds, type NativeFeatureId } from '../desktop/shared/nativeFeatures'
+import { CORE_BUNDLE_IDS } from '../desktop/shared/corePlugins'
 
 export interface CloudServices {
   amadeus?: { adapter: 'forsion-cloud-v1'; apiBase: string; collaboration?: boolean }
@@ -83,7 +84,10 @@ export async function readPackage(dir: string, appVersion?: string): Promise<Ins
     // Only UI fields enter the public projection. Backend entries/config are private.
     result.ui = { id: manifest.id, name: manifest.name, nameEn: manifest.nameEn, version: manifest.version,
       apiVersion: manifest.apiVersion, minAppVersion: manifest.minAppVersion,
-      description: manifest.description, descriptionEn: manifest.descriptionEn, onboarding: manifest.onboarding, fileExtensions: Array.isArray(manifest.fileExtensions) ? manifest.fileExtensions.filter(isSafePluginExt).map((v) => v.trim().toLowerCase()).slice(0, 8) : [], code }
+      description: manifest.description, descriptionEn: manifest.descriptionEn, onboarding: manifest.onboarding, fileExtensions: Array.isArray(manifest.fileExtensions) ? manifest.fileExtensions.filter(isSafePluginExt).map((v) => v.trim().toLowerCase()).slice(0, 8) : [], code,
+      // 首方核心包(Forsion Extend):页面据 locked 才放出它的商店页、「Forsion 云端」子页与首方接缝(同桌面内置包)。
+      // ponytail: 只按 id 认 —— Unit 只装运营方用 CLI 拷进来的本地包(install.ts),没有商店安装;哪天 Unit 能从商店装插件,改成按桌面 builtinBundles 的固定公钥验 SIGNATURE 再标。
+      ...(CORE_BUNDLE_IDS.includes(manifest.id) ? { locked: true } : {}) }
   }
   if (manifest.runtime) {
     if (manifest.runtime.apiVersion !== 1) throw new Error('Unsupported local runtime API')
