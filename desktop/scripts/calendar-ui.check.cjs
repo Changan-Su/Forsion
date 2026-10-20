@@ -399,7 +399,7 @@ async function main() {
       return c && e && main ? { beside: Math.abs(c.left - e.right) < 24 || Math.abs(e.left - c.right) < 24, inMain: c.right <= main.right + 1, todo: !!document.querySelector('.amx-calside2 .amx-todo'), sidePanel: !!document.querySelector('.amx-calside2 .amx-cal-card-title') } : null
     })
     check('点开事件 → 事件旁浮卡,右栏照旧是待办(10-16 用户:不要在 right panel)', !!evCard && evCard.beside && evCard.inMain && evCard.todo && !evCard.sidePanel && (await card.locator('input.amx-cal-card-title').inputValue()) === '产品深度工作', JSON.stringify(evCard))
-    check('浮卡标题框自动聚焦,直接能改名', await win.evaluate(() => document.activeElement?.matches('.amx-cal-cardwrap input.amx-cal-card-title') === true))
+    check('单击浮卡不抢标题输入焦点，保留事件快捷键', await win.evaluate(() => document.activeElement?.matches('.amx-cal-cardwrap input.amx-cal-card-title') !== true))
     check('事件浮卡提供打开数据库入口', (await card.getByRole('button', { name: /打开多维表/ }).count()) === 1)
     await win.keyboard.press('Escape')
     await win.waitForTimeout(200)
@@ -408,7 +408,8 @@ async function main() {
     await event.click()
     await card.waitFor({ timeout: 5000 })
     const beforeDelete = await win.locator('.amx-cal-event').count()
-    await win.getByRole('button', { name: '删除', exact: true }).click()
+    if (!PLUGIN) await card.getByRole('button', { name: '事件操作', exact: true }).click()
+    await win.getByRole(PLUGIN ? 'button' : 'menuitem', { name: '删除', exact: true }).click()
     await win.getByRole('button', { name: '撤销', exact: true }).waitFor({ timeout: 5000 })
     await win.getByRole('button', { name: '撤销', exact: true }).click()
     await win.waitForSelector('.amx-cal-event[aria-label^="产品深度工作"]', { timeout: 5000 })
@@ -691,6 +692,13 @@ async function main() {
     // ② 1200 宽的窗口(两侧栏都开着):「周」仍是 7 列,按钮写「周」;右栏待办不横向溢出(日期没被截)
     await win.setViewportSize({ width: 1200, height: 820 })
     await win.waitForTimeout(900)
+    // Free scrolling may stop between days; count full columns from a day boundary, independently of that offset.
+    await win.evaluate(() => {
+      const sc = document.querySelector('.amx-cal-tscroll'), col = document.querySelector('.amx-cal-daycol2')
+      const w = col?.getBoundingClientRect().width / (col?.currentCSSZoom || 1)
+      if (sc && w) sc.scrollLeft = Math.round(sc.scrollLeft / w) * w
+    })
+    await win.waitForTimeout(100)
     const w1200 = await win.evaluate(() => {
       const todo = document.querySelector('.amx-calside2 .amx-todo')
       const side = document.querySelector('.amx-calside2')?.getBoundingClientRect()
@@ -699,6 +707,7 @@ async function main() {
         // 时间格是一条连续横向滚动的长带(几百天都在 DOM 里):数「完整落在可视区里的」列
         cols: (() => { const v = document.querySelector('.amx-cal-tscroll')?.getBoundingClientRect(); return v ? [...document.querySelectorAll('.amx-cal-daycol2')].filter((c) => { const r = c.getBoundingClientRect(); return r.left >= v.left - 1 && r.right <= v.right + 1 }).length : -1 })(),
         colW: Math.round(document.querySelector('.amx-cal-daycol2')?.getBoundingClientRect().width ?? 0),
+        scroll: (() => { const sc = document.querySelector('.amx-cal-tscroll'); return { left: sc?.scrollLeft, width: sc?.clientWidth, rect: sc?.getBoundingClientRect().width } })(),
         modeBtn: (document.querySelector('.amx-cal-bar [role=tab][aria-selected=true]') ?? [...document.querySelectorAll('.amx-cal-bar button')].find((b) => /^(周|3 日|日|月)$/.test(b.textContent?.trim() ?? '')))?.textContent?.trim() ?? '',
         todoOverflow: todo ? todo.scrollWidth - todo.clientWidth : -1,
         dueOut: side ? dues.filter((r) => r > side.right - 4).length : -1,

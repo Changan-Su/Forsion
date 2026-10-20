@@ -1,0 +1,39 @@
+/* Calendar business surface; menu/font/elevation use the shared theme roles. */
+.amx-cal-cardcatch.calendar { pointer-events: none; }
+.amx-cal-cardcatch.calendar > .amx-cal-cardwrap { pointer-events: auto; }
+.amx-cal-card-buttons { display: inline-flex; }
+.amx-cal-event::before, .amx-cal-event::after { display: none; }
+.amx-cal-eventmenu { color: var(--text); font-family: var(--font-ui); font-size: var(--menu-text-size); line-height: var(--menu-line-height); min-width: 0; padding: 3px; box-sizing: border-box; }
+.amx-cal-eventmenu > button { display: flex; align-items: center; gap: 9px; width: 100%; min-height: var(--menu-row-height, 30px); border: 0; background: transparent; color: inherit; font: inherit; text-align: left; padding: 5px 8px; border-radius: var(--radius-sm); cursor: pointer; }
+.amx-cal-eventmenu > button:hover, .amx-cal-eventmenu > button:focus-visible { background: var(--menu-hover); }
+.amx-cal-eventmenu > button:disabled { opacity: .4; cursor: default; }
+.amx-cal-eventmenu .danger { color: var(--danger, #d64b4b); }
+.amx-cal-eventmenu kbd { margin-left: auto; padding-left: 24px; font: inherit; font-size: var(--ui-font-caption); color: var(--text-muted); }
+.amx-cal-eventmenu p { max-width: 250px; margin: 6px 8px; color: var(--text-muted); font-size: var(--ui-font-meta); }
+.amx-cal-menu-position { z-index: 90; width: 240px; max-width: calc(100vw - 16px); }
+.amx-cal-event.cut, .amx-cal-chip-ev.cut { opacity: .4; }
+.amx-cal.mobile .amx-cal-event:not(.selected), .amx-cal.mobile .amx-cal-chip-ev:not(.selected) { touch-action: pan-x pan-y; }
+.amx-cal.mobile .amx-cal-event.selected { overflow: visible; touch-action: none; outline: 2px solid var(--amx-event-color); outline-offset: 1px; }
+.amx-cal.mobile .amx-cal-event-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.amx-cal-handle { position: absolute; width: 44px; height: 44px; touch-action: none; z-index: 5; display: grid; place-items: center; }
+.amx-cal-handle::after { content: ''; width: 13px; height: 13px; border: 2px solid var(--bg-card); border-radius: 50%; background: var(--amx-event-color); box-shadow: 0 0 0 1px var(--amx-event-color); }
+.amx-cal-handle.start { top: -22px; left: 0; }
+.amx-cal-handle.end { bottom: -22px; right: 0; }
+.amx-cal.mobile.drawer-open { padding-bottom: min(350px, 46dvh); box-sizing: border-box; }
+.amx-cal.mobile.drawer-open.drawer-small { padding-bottom: 116px; }
+.amx-cal-cardwrap.amx-cal-drawer { left: 0; right: 0; bottom: 0; top: auto; width: auto; height: min(350px, 46dvh); max-height: 72dvh; border-radius: var(--radius-lg) var(--radius-lg) 0 0; padding-bottom: env(safe-area-inset-bottom, 0px); box-sizing: border-box; background: var(--bg); transform-origin: bottom center; animation: ui-menu-enter var(--menu-enter-duration, 140ms) var(--menu-enter-easing, ease-out); }
+.amx-cal-cardwrap.amx-cal-drawer.collapsed { height: 116px; overflow: hidden; }
+.amx-cal-drawer-grab { display: grid; place-items: center; width: 100%; height: 22px; background: transparent; border: 0; padding: 0; touch-action: none; }
+.amx-cal-drawer-grab span { width: 34px; height: 4px; border-radius: var(--radius-pill); background: var(--text-faint); }
+.amx-cal-drawer .amx-cal-card-x { width: 44px; height: 44px; }
+.amx-cal-drawer .amx-cal-cardin { padding: 0 14px 16px; }
+.amx-cal-drawer-summary { display: flex; align-items: center; gap: 8px; padding: 2px 10px 12px; }
+.amx-cal-drawer-summary > div { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 6px; }
+.amx-cal-drawer-summary strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--ui-font-body); }
+.amx-cal-drawer-summary span { font-size: var(--ui-font-heading); font-variant-numeric: tabular-nums; }
+.amx-cal-eventmenu.phone { padding: 0 14px 16px; }
+.amx-cal-eventmenu.phone > button { min-height: 44px; }
+.amx-cal.mobile .amx-cal-chip-ev.selected { touch-action: none; }
+.amx-cal-draftcard.amx-cal-drawer { padding: 0 18px 16px; }
+.amx-cal-draftcard.amx-cal-drawer input { min-height: 36px; }
+@media (prefers-reduced-motion: reduce) { .amx-cal-cardwrap.amx-cal-drawer { animation: none; } }
