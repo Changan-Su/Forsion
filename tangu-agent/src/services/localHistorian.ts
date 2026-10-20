@@ -466,13 +466,13 @@ export function onUserRunStart(sessionId: string, userId: string, message: strin
       } as any);
       const res = await deps().brain.llm.streamProviderCompletion({ apiKey, baseUrl, payload, provider: (model as any)?.provider, signal });
       await recordJudgeUsage(userId, modelId, model, res);
-      let title = cleanTitle(res?.content);
       // 有空格的文字按词数卡(提示词给 5 词,英文 5 词常过 40 字),没空格的(中日)照旧按 40 字;超了 = 模型在说话,交 done 判官
-      const tooLong = /\s/.test(title) ? title.split(/\s+/).length > 8 : title.length > 40;
-      if (title.length < 2 || tooLong || title.toUpperCase() === 'NOTHING') return false;
+      const unusable = (t: string) => t.length < 2 || (/\s/.test(t) ? t.split(/\s+/).length > 8 : t.length > 40) || t.toUpperCase() === 'NOTHING';
+      let title = cleanTitle(res?.content);
+      if (unusable(title)) return false;
       if (title === current) return true; // 原样保留(含用户手改的标题)不核语言
       title = cleanTitle(await inConversationLanguage(userId, modelId, title, `${priorT.userText}\n${message.trim()}`));
-      if (!title) return false; // 交 done 判官兜底(它也过这道核对)
+      if (unusable(title)) return false; // 改写没成 / 改写出来的不像标题 → 交 done 判官兜底(它也过这道核对)
       // CAS:用户这期间手改过标题就不覆盖,也不报「已更新」(query 无 affectedRows,靠 RETURNING 判命中)。
       const hit = await query<any[]>(`UPDATE chat_sessions SET title = ? WHERE id = ? AND COALESCE(title, '') = ? RETURNING id`, [title, sessionId, current]);
       if (!hit.length) return true;

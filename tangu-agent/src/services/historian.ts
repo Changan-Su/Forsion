@@ -356,7 +356,8 @@ async function judgeAndWrite(
     // 标题 / LOG 也可能把对话里的令牌复述出来 → 同样脱敏(记忆候选另有整条丢的凭据闸)
     const title = redactSecrets(j.title.replace(/^["'《「]+|["'》」]+$/g, '')).slice(0, 60);
     // 写成了用户没用过的文字(英文对话出中文标题,见 core/scriptCheck.ts)→ 这次不改名;云端这路没有改写重试,等下一轮
-    const userSaid = transcript.split('\n').filter((l) => l.startsWith('User: ')).join('\n');
+    const userSaid = (await query<any[]>(`SELECT content FROM chat_messages WHERE session_id = ? AND role = 'user' ORDER BY timestamp DESC LIMIT 30`, [sessionId])
+      .catch(() => [])).map((m) => String(m.content || '')).join('\n'); // 用户原话(不带标签、不丢多行)
     if (title && title.length >= 2 && !offScript(title, userSaid)) {
       // CAS:扫描到写回之间用户手改过标题就不覆盖。
       await query(`UPDATE chat_sessions SET title = ? WHERE id = ? AND COALESCE(title, '') = ?`, [title, sessionId, String(row.title || '')])

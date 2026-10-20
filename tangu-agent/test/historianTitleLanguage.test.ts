@@ -105,6 +105,15 @@ describe('首帧标题', () => {
     expect(payloads).toHaveLength(2);
   });
 
+  it('改写出来的不像标题(NOTHING / 一大段话)→ 同样不落', async () => {
+    for (const junk of ['NOTHING', 'Sure! Here is the title rewritten in English for you as requested by the user today']) {
+      script = ['旅行照片编辑流程', junk];
+      payloads = [];
+      expect(await start(EN)).toBeNull();
+      expect((await row(sid)).title).toBe('New Chat');
+    }
+  });
+
   it('中文对话出中文标题:不改写', async () => {
     script = ['旅行照片修图流程'];
     expect(await start(ZH)).toBe('旅行照片修图流程');
