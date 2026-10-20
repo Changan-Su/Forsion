@@ -28,5 +28,10 @@ describe('蓬洲云额度满的提醒', () => {
     expect(calls()).toEqual([['warning', 'ntf.remoteSyncQuota'], ['warning', 'ntf.remoteSyncQuota']])
     round([Q, 'pull b.md: ECONNRESET'])
     expect(calls().at(-1)).toEqual(['error', 'ntf.remoteSyncFail'])
+    // 文件名里带 quota / 413 的别的错误照旧报错,不被当成额度满藏起来
+    round(['push quota.md: EACCES: permission denied'])
+    expect(calls().at(-1)).toEqual(['error', 'ntf.remoteSyncFail'])
+    round(['pull logs/413.md: penzor GET 401: unauthorized'])
+    expect((notifyApp as any).mock.calls.length).toBe(5)
   })
 })

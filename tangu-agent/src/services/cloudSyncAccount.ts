@@ -77,17 +77,19 @@ export function setAgentSyncDefault(scope: string, enabled: boolean): void {
     for (const e of dirs) {
       if (!e.isDirectory() || e.name.startsWith('.')) continue;
       const slug = e.name;
+      let dir: string;
+      try { dir = agentSyncDir(slug); } catch { continue; } // 名字不是合法 Agent 目录就跳过
       let changed = false;
-      try {
-        withMemoryDirectoryLock(agentSyncDir(slug), () => {
-          const data = readPermissions(slug);
-          const cur = data.accounts[scope];
-          if (!cur?.enabled || cur.follow) return;
-          data.accounts[scope] = { enabled: false, shared: false, follow: true, revision: (cur.revision ?? 0) + 1 };
-          atomicSyncWrite(agentsDir(), permissionFile(slug), JSON.stringify(data, null, 2));
-          changed = true;
-        });
-      } catch { continue; } // 名字不是合法 Agent 目录(agentSyncDir 拒绝)就跳过
+      // 锁 / 写失败照样抛:关不干净就不能报「关好了」(总闸也不落),让用户再点一次
+      withMemoryDirectoryLock(dir, () => {
+        const data = readPermissions(slug);
+        const cur = data.accounts[scope];
+        if (!cur?.enabled || cur.follow) return;
+        // 只把 enabled 交给总闸;shared 原样留着,总闸再开时不改变它共不共享记忆
+        data.accounts[scope] = { enabled: false, shared: cur.shared === true, follow: true, revision: (cur.revision ?? 0) + 1 };
+        atomicSyncWrite(agentsDir(), permissionFile(slug), JSON.stringify(data, null, 2));
+        changed = true;
+      });
       if (changed) { const key = consentKey(slug, scope); consentControllers.get(key)?.abort(new Error('agent sync consent changed')); consentControllers.delete(key); }
     }
   }
@@ -104,7 +106,8 @@ export function agentSyncPermission(slug: string, scope: string | null): Permiss
   const permission = readPermissions(slug).accounts[scope];
   const master = readDefaults()[scope];
   const revision = (permission?.revision ?? 0) + (master?.revision ?? 0);
-  if (permission && !permission.follow) return { enabled: permission.enabled === true, shared: permission.shared === true, revision };
+  if (permission?.follow) return master?.enabled === true ? { enabled: true, shared: permission.shared === true, revision } : { enabled: false, shared: false, revision };
+  if (permission) return { enabled: permission.enabled === true, shared: permission.shared === true, revision };
   if (master?.enabled === true) return { enabled: true, shared: slug === DEFAULT_AGENT_SLUG, revision };
   return { enabled: false, shared: false, revision };
 }

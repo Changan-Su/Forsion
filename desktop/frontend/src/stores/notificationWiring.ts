@@ -91,7 +91,8 @@ export function installNotificationWiring(): void {
   let remoteWas = false
   // 蓬洲云额度满:服务端对放不下的逐个回 413,文件留在本地。只在刚满的那一轮提醒一次(之后每 5 分钟一轮不再刷),
   // 换成人话 + 「查看」到蓬洲云「同步」页;额度回来(某轮没有额度错误)再重新武装。
-  const isQuota = (e: string): boolean => /\b413\b|quota|storage-full/i.test(e)
+  // 只认服务端的错误码(413 + {"code":"QUOTA"}):整条消息里有文件路径,quota.md 的权限错误不能当额度满藏起来
+  const isQuota = (e: string): boolean => /"code"\s*:\s*"QUOTA"/.test(e)
   let quotaWarned = false
   window.remoteSync?.onStatus?.((s) => {
     if (remoteWas && !s.running && s.lastReport) {

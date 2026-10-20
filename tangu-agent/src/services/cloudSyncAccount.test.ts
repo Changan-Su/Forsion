@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { agentSyncConsentSignal, agentSyncDefault, agentSyncPermission, agentSyncScope, captureAgentSyncPermission, registerAgentSyncIdentity, setAgentSyncDefault, setAgentSyncPermission } from './cloudSyncAccount.js';
@@ -70,6 +70,24 @@ describe('account-level agent sync switch', () => {
     setAgentSyncDefault(scope, true);
     expect(agentSyncPermission('loud', scope).enabled).toBe(true);
     expect(agentSyncPermission('quiet', scope).enabled).toBe(false);
+  });
+
+  it('off then on keeps whether each agent shares memory', () => {
+    setAgentSyncPermission(DEFAULT_AGENT_SLUG, scope, true, false);
+    setAgentSyncPermission('sharer', scope, true, true);
+    setAgentSyncDefault(scope, false);
+    setAgentSyncDefault(scope, true);
+    expect(agentSyncPermission(DEFAULT_AGENT_SLUG, scope)).toMatchObject({ enabled: true, shared: false });
+    expect(agentSyncPermission('sharer', scope)).toMatchObject({ enabled: true, shared: true });
+  });
+
+  it('a busy agent folder makes turning off fail instead of reporting off while it keeps uploading', () => {
+    setAgentSyncPermission('loud', scope, true);
+    setAgentSyncDefault(scope, true);
+    writeFileSync(join(home, 'agents', 'loud', '.memory.lock'), '{}');
+    expect(() => setAgentSyncDefault(scope, false)).toThrow();
+    expect(agentSyncDefault(scope)).toBe(true);
+    expect(agentSyncPermission('loud', scope).enabled).toBe(true);
   });
 
   it('off works before any agent folder exists', () => {
