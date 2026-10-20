@@ -1,0 +1,38 @@
+name: probe-windows-installed-files
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/probe-windows-installed-files.yml'
+      - 'desktop/scripts/windows-installed-file.e2e.cjs'
+      - 'desktop/scripts/windows-installed-associations.ps1'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  installed-files:
+    runs-on: windows-2022
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install the automation client only
+        run: |
+          npm install --prefix .probe --no-save --no-audit --no-fund playwright-core@1.61.1
+          "NODE_PATH=$PWD\.probe\node_modules" | Add-Content -LiteralPath $env:GITHUB_ENV
+          exit $LASTEXITCODE
+      - name: Install official NSIS package and inspect real associations
+        run: ./desktop/scripts/windows-installed-associations.ps1 -Mode install
+      - name: Open and edit through the installed runtime
+        run: node desktop/scripts/windows-installed-file.e2e.cjs
+      - name: Uninstall and inspect association cleanup
+        if: always() && env.FORSION_INSTALLED_EXE != ''
+        run: ./desktop/scripts/windows-installed-associations.ps1 -Mode uninstall
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: installed-file-evidence
+          path: |
+            ${{ runner.temp }}/forsion-installed-file/evidence/*.json
+            ${{ runner.temp }}/forsion-installed-file/evidence/*.png
