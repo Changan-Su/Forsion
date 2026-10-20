@@ -39,7 +39,13 @@ const toModel = <C extends Call>(c: C): C => c.function?.name === LEGACY_HTML_CA
 export function htmlCardToWire(call: Call): void {
   if (!isHtmlCardTool(call.function.name)) return;
   call.function.name = LEGACY_HTML_CARD_TOOL;
-  if (typeof call.function.arguments === 'string') call.function.arguments = call.function.arguments.replaceAll(CARD_API, LEGACY_CARD_API);
+  const raw = call.function.arguments;
+  if (typeof raw !== 'string') return;
+  // 按解码后的 html 换:模型可能把接口名写成 JSON 转义(forsion\u0049ntelligentUi),只换原文会漏(Codex 10-20)
+  try {
+    const args = JSON.parse(raw);
+    if (args && typeof args.html === 'string' && args.html.includes(CARD_API)) call.function.arguments = JSON.stringify({ ...args, html: args.html.replaceAll(CARD_API, LEGACY_CARD_API) });
+  } catch { call.function.arguments = raw.replaceAll(CARD_API, LEGACY_CARD_API); } // 截断的参数:原文照换,执行层会报错
 }
 /** 发给模型的历史反过来换成新名、新接口名(工具表里只有新名);Responses 原样回放的 providerItems 里的 function_call 一样。
  *  没有旧名时原样返回(不另造数组)。不改传入的对象。 */

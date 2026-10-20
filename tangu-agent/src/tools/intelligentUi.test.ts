@@ -65,6 +65,14 @@ describe('computed documents (intelligent-ui.v2)', () => {
     expect(await render.execute({ document: JSON.stringify(gallery.loan) }, v1)).toMatch(/^Error: .*version 1 only/)
     expect(await render.execute({ document: JSON.stringify(gallery.loan) }, v2)).toBe('Intelligent UI rendered: 房贷月供估算 (6 blocks).')
   })
+  it('points at the broken spot of malformed JSON, with the expression-quote hint for v2 clients', async () => {
+    const broken = JSON.stringify(gallery.loan).replace(`"format(pay, 'number', 0) + ' 元'"`, `"format(pay, 'number', 0) + ' 元'`)
+    expect(broken).not.toBe(JSON.stringify(gallery.loan))
+    const out = await render.execute({ document: broken }, v2) as string
+    expect(out).toMatch(/^Error: invalid Intelligent UI document\. .* Near: ".*元'/)
+    expect(out).toContain('still ends with a double quote')
+    expect(await render.execute({ document: broken }, v1)).not.toContain('double quote')
+  })
   it('lists values that fail at the initial values next to a successful render', async () => {
     const doc = structuredClone(gallery.loan); doc.derived[3].expr = 'payment(r, 0, p)'
     const out = await render.execute({ document: JSON.stringify(doc) }, v2) as string

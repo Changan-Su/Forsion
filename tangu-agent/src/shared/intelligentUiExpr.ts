@@ -470,7 +470,9 @@ export function uiDocumentIssues(doc: UIDocument, locale: 'zh' | 'en' = 'en'): s
       return false
     }
   }
-  const shown = (where: string, when: UIDocument['blocks'][number]['when']): boolean => !when || !('expr' in when) || probe(`${where}.when`, when.expr)
+  const initial = Object.fromEntries(doc.inputs.map(i => [i.id, i.initial]))
+  // 被条件藏起来的不报(input 条件按初值判,同渲染层 visible;Codex 10-20)
+  const shown = (where: string, when: UIDocument['blocks'][number]['when']): boolean => !when || ('expr' in when ? probe(`${where}.when`, when.expr) : initial[when.input] === when.equals)
   // Through the name, so the memo the shown values use is filled once (a heavy derived value is not computed twice).
   for (const d of doc.derived || []) {
     const c = env.cell(d.id)

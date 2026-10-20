@@ -284,6 +284,9 @@ describe('HTML card rename compatibility', () => {
     htmlCardToWire(call);
     expect(call.function.name).toBe('sketch');
     expect(call.function.arguments).toContain('window.forsionSketch.ask');
+    const escaped = { function: { name: 'intelligent_ui_html', arguments: '{"html":"<script>window.forsion\\u0049ntelligentUi.setState({})</script>"}' } };
+    htmlCardToWire(escaped);
+    expect(JSON.parse(escaped.function.arguments).html).toBe('<script>window.forsionSketch.setState({})</script>');
     const other = { function: { name: 'read_file', arguments: 'forsionIntelligentUi' } };
     htmlCardToWire(other);
     expect(other.function).toEqual({ name: 'read_file', arguments: 'forsionIntelligentUi' });

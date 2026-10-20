@@ -252,4 +252,9 @@ describe('checklist labels with {{ }}', () => {
     expect(() => validateUIDocument({ ...doc, blocks: [doc.blocks[0], { id: 'l', kind: 'checklist', items: [{ id: 'rice', label: '{{nope}}' }] }] }, { maxVersion: 2 })).toThrow(/items\[0\]\.label.*nope/)
     expect(uiDocumentIssues(validateUIDocument(doc, { maxVersion: 2 }), 'zh')).toEqual([])
   })
+  it('does not report a row an input condition hides at the initial values', () => {
+    const hidden = { ...doc, inputs: [doc.inputs[0], { id: 'n', kind: 'number', label: 'N', initial: 0, min: 0, max: 5, step: 1 }],
+      blocks: [{ id: 'c', kind: 'controls', inputIds: ['people', 'n'] }, { id: 'l', kind: 'checklist', items: [{ id: 'p', label: 'Per person {{10 / n}}', when: { input: 'n', equals: 1 } }] }] }
+    expect(uiDocumentIssues(validateUIDocument(hidden, { maxVersion: 2 }), 'zh')).toEqual([])
+  })
 })

@@ -181,7 +181,13 @@ export const intelligentUiProvider: ToolProvider = {
         }
         const issues = uiDocumentIssues(doc)
         return `Intelligent UI rendered: ${doc.title} (${doc.blocks.length} blocks).${issues.length ? `\nThese values show "—" at the initial values; fix them with a corrected call unless that is intended:\n- ${issues.join('\n- ')}` : ''}`
-      } catch (e) { return `Error: invalid Intelligent UI document. ${e instanceof Error ? e.message : String(e)}. Correct the document or answer in readable prose.` }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e)
+        // JSON 写坏时带上出错那几个字;v2 的表达式本身是 JSON 字符串,里面的文字用单引号,收尾的双引号常被漏(live 10-20 AA 分账连错两次)
+        const at = e instanceof SyntaxError && typeof args.document === 'string' ? Number(/position (\d+)/.exec(msg)?.[1]) : NaN
+        const near = Number.isFinite(at) ? ` Near: ${JSON.stringify((args.document as string).slice(Math.max(0, at - 40), at + 10))}.${computedUiEnabledFor(ctx) ? ' An expression is itself a JSON string: text inside it uses single quotes, and the expression still ends with a double quote.' : ''}` : ''
+        return `Error: invalid Intelligent UI document. ${msg}.${near} Correct the document or answer in readable prose.`
+      }
     },
   }, {
     name: 'list_intelligent_cards', mode: 'both',
