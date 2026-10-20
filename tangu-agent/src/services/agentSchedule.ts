@@ -22,12 +22,12 @@
  * DbFile 类型镜像 desktop shared/amadeus/db/schema.ts(与 tools/builtin/amadeus.ts 同一先例,
  * 刻意不 import 工具层)。
  */
-import { promises as fs, existsSync, unlinkSync } from 'node:fs';
+import { promises as fs, existsSync, renameSync, unlinkSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { agentsDir } from '../core/tanguHome.js';
 import { getDeviceId } from '../core/deviceId.js';
-import { atomicSyncWrite, readSyncBytes } from './agentSyncPaths.js';
+import { atomicSyncWrite, conflictCopyName, readSyncBytes } from './agentSyncPaths.js';
 import { MemoryRepositoryError, withMemoryDirectoryLock } from './memoryRepository.js';
 import { mergeDbFile } from './dbRowMerge.js';
 
@@ -115,7 +115,9 @@ function migrateUnlocked(slug: string): void {
   const merged = cur === null ? { content: stamped } : db ? mergeDbFile(stamped, null, cur) : null;
   if (!merged) { console.warn(`[schedule] ${slug}: SCHEDULE.db and CALENDAR.db cannot be merged; left both in place`); return; }
   atomicSyncWrite(agentsDir(), file, merged.content);
-  unlinkSync(legacy);
+  // 同一行两份写得不一样(合并取了 CALENDAR.db 那份):旧名那份留成冲突副本,不默默丢
+  if ('conflict' in merged && merged.conflict) renameSync(legacy, join(agentsDir(), slug, conflictCopyName('SCHEDULE.db', new Date())));
+  else unlinkSync(legacy);
 }
 /** 同步这个 Agent 之前调(agentFileSync):先改好名,清单里才有 CALENDAR.db。同步的,调用方已在锁外。 */
 export function migrateScheduleFile(slug: string): void {
