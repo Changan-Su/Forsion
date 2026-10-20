@@ -1,9 +1,10 @@
 /**
  * Chat 画布(方案 docs/ToBeImproved/Chat画布分支方案_2026-10-18 第二步)的真 Electron 台架:
  * 桩引擎回一棵会话树(主线三轮 + 从第一轮分出的两支,分支开头是复制出来的新 id、时间戳和主线对不上)。
- * 断言:标签栏右端「对话 / 画布」胶囊;一轮一张卡、复制段不重画;竖排(子卡在下、兄弟并排)/ 横排(子卡在右、兄弟上下叠);
- * 卡里是全文、超长的折起后原地展开;「只看这一支」(旁支淡、点了切过去);自动跟随(卡底停在输入框上方)、滚走停跟出箭头、
- * 点箭头飞回并恢复跟随;双击回对话滚到那一轮;偏好按树根记。最后拍亮 / 暗 / 柔青三张,自己看。
+ * 断言:对话列头行的「对话 / 画布」胶囊;一轮一个格子(提问卡 + 回答卡)、复制段不重画;竖排(子卡在下、兄弟并排)/ 横排(子卡在右、兄弟上下叠);
+ * 卡里是全文、超长的只露预览、「阅读」在右边开全文;「只看这一支」(旁支淡、点了切过去);自动跟随(卡底停在输入框上方)、滚走停跟出箭头、
+ * 点箭头飞回并恢复跟随;双击 = 右边阅读栏、卡让开它(方案 Chat画布第三轮);胶囊切回对话只有一份正文;偏好按树根记;
+ * ⊕:回答卡下 = 草稿提问卡(卡里写、Enter 建分支并发进去)/ 末尾那张 = 聚焦输入框,提问卡左右 = 换个问法。最后拍亮 / 暗 / 柔青三张,自己看。
  * 量的是 out/ 产物:改了源码先 `npm run build`。
  *   node ../.claude/hooks/devlock.cjs run --vehicle=e2e --what="Chat 画布台架" --eta=4 -- node scripts/chat-canvas.e2e.cjs
  *   SHOT_DIR=… 指定截图目录;LANG_EN=1 拍英文
@@ -16,6 +17,7 @@ const B1 = '5c1e0a52-0000-4000-8000-0000000000b1'
 const B2 = '5c1e0a52-0000-4000-8000-0000000000b2'
 const K = '5c1e0a52-0000-4000-8000-0000000000c1'
 const F1 = '5c1e0a52-0000-4000-8000-0000000000f1'
+const B3 = '5c1e0a52-0000-4000-8000-0000000000b3' // 草稿提问卡发出去时建的分支
 const T = Date.now() - 60 * 60_000
 const LONG = Array.from({ length: 70 }, (_, i) => `${i + 1}. 第 ${i + 1} 处要改的地方:同步基线、对账器、合并器之一。`).join('\n')
 
@@ -50,30 +52,52 @@ async function main() {
   const r = makeReporter()
   const dir = shotDir('chat-canvas')
   let projectDir = ''
+  const branchCalls = []
+  let b3 = null
   const ctx = await launch({
     tag: 'chat-canvas',
     fixtures: { agents: [], sessions: [] },
-    stubOverride: async ({ path: p, method }) => {
-      if (p === '/agent/sessions' && method === 'GET') return { sessions: sessions(projectDir) }
+    stubOverride: async ({ path: p, method, body }) => {
+      if (p === '/agent/sessions' && method === 'GET') return { sessions: [...(b3 ? [b3] : []), ...sessions(projectDir)] } // 真引擎建了分支就会列出来
       let m = /^\/agent\/sessions\/([^/]+)\/messages$/.exec(p)
       if (m && method === 'GET') return { messages: { [R]: rootMsgs, [B1]: b1Msgs, [B2]: b2Msgs, [F1]: fMsgs }[m[1]] || [] }
       m = /^\/agent\/sessions\/([^/]+)\/asides$/.exec(p)
       if (m && method === 'GET') return { asides: [] }
       m = /^\/agent\/sessions\/([^/]+)\/detail$/.exec(p)
       if (m) { const s = sessions(projectDir).find((x) => x.id === m[1]); if (s) return { session: { ...s, kind: 'user', delegate_running: false } } }
+      // 草稿提问卡发出去:从那张回答分出一支(真引擎会复制前面的历史;这里新分支的历史是空的,够画出挂点)
+      m = /^\/agent\/sessions\/([^/]+)\/branch$/.exec(p)
+      if (m && method === 'POST') {
+        const b = await body()
+        branchCalls.push({ from: m[1], body: b })
+        const at = new Date().toISOString().replace('T', ' ').slice(0, 19)
+        b3 = { id: B3, title: 'New Chat', summary: '', archived: false, model_id: 'm1', agent_config: null, project_path: projectDir, project_name: 'Forsion', projectless: false,
+          created_at: at, updated_at: at, parent_session_id: R, fork_message_id: b.message_id, fork_session_id: m[1], kind: 'user' }
+        return { session: b3, copied: 0 }
+      }
       return undefined
     },
   })
   projectDir = ctx.projectDir
   const { win } = ctx
-  const card = (sid, mid) => win.locator(`.t2cv-card[data-cv-node="${sid}:${mid}"]`)
+  const card = (sid, mid) => win.locator(`.t2cv-turn[data-cv-node="${sid}:${mid}"]`)
+  // 空白处的说明:左上角有卡压着就让开,空着就露出来(按 DOM 实测矩形核对,不信组件自己的算术)
+  const hintsCheck = async (tag) => {
+    await win.waitForTimeout(250)
+    const h = await win.evaluate(() => {
+      const el = document.querySelector('.t2cv-hints'), hr = el.getBoundingClientRect()
+      const hit = [...document.querySelectorAll('.t2cv-turn')].some((n) => { const r = n.getBoundingClientRect(); return r.left < hr.right && r.right > hr.left && r.top < hr.bottom && r.bottom > hr.top })
+      return { hit, hidden: getComputedStyle(el).opacity === '0' }
+    })
+    r.check(`${tag}·说明 左上角被卡压着就让开、空着就露出来`, h.hit === h.hidden, JSON.stringify(h))
+  }
   // 镜头落在这一支末尾,别的卡常在视口外(Playwright 平移不了画布;展开过的长卡让「适应内容」在最小缩放下也装不下):
   // 用滚轮(= 平移)把那张卡的卡头挪到舞台中间再点
   const show = async (sid, mid) => {
     const d = await win.evaluate((sel) => {
       const c = document.querySelector(sel).getBoundingClientRect(), s = document.querySelector('.t2cv-stage').getBoundingClientRect()
       return { mx: s.left + s.width / 2, my: s.top + s.height / 2, dx: c.left + c.width / 2 - (s.left + s.width / 2), dy: c.top + 40 - (s.top + s.height / 2) }
-    }, `.t2cv-card[data-cv-node="${sid}:${mid}"]`)
+    }, `.t2cv-turn[data-cv-node="${sid}:${mid}"]`)
     await win.mouse.move(d.mx, d.my)
     await win.mouse.wheel(d.dx, d.dy)
     await win.waitForTimeout(300)
@@ -111,9 +135,9 @@ async function main() {
     await seg.getByRole('tab').nth(1).click()
     await win.locator('.t2cv').waitFor({ timeout: 10_000 })
     await card(R, 'u1').waitFor({ timeout: 10_000 })
-    await win.waitForFunction(() => document.querySelectorAll('.t2cv-card[data-measured]').length >= 5, null, { timeout: 15_000 })
+    await win.waitForFunction(() => document.querySelectorAll('.t2cv-turn[data-measured]').length >= 5, null, { timeout: 15_000 })
     const shape = await win.evaluate(() => ({
-      cards: [...document.querySelectorAll('.t2cv-card')].map((e) => e.dataset.cvNode),
+      cards: [...document.querySelectorAll('.t2cv-turn')].map((e) => e.dataset.cvNode),
       bodyHidden: getComputedStyle(document.querySelector('.t2-chat-body')).visibility === 'hidden',
       rail: !!document.querySelector('.t2-rail'),
       edges: document.querySelectorAll('.t2cv-edges path').length,
@@ -123,12 +147,15 @@ async function main() {
     r.check('C1 一轮一张卡:主线三轮 + 两支各一轮,复制段不重画', shape.cards.length === 5 && [`${R}:u1`, `${R}:u2`, `${R}:u3`, `${B1}:c1`, `${B2}:d1`].every((k) => shape.cards.includes(k)), JSON.stringify(shape.cards))
     r.check('C2 四根线(每张非根卡一根)', shape.edges === 4, String(shape.edges))
     const q = await card(B1, 'c1').locator('.t2cv-q').textContent()
-    r.check('C3 卡头是问题,卡里是真消息渲染', q.includes('Yjs') && (await card(B1, 'c1').locator('.t2-content').count()) === 1, q)
+    r.check('C3 提问卡是问题,回答卡里是真消息渲染', q.includes('Yjs') && (await card(B1, 'c1').locator('.t2cv-acard .t2-content').count()) === 1 && (await card(B1, 'c1').locator('.t2cv-qcard .t2-content').count()) === 0, q)
+    const qa = await card(R, 'u3').evaluate((e) => { const q = e.querySelector('.t2cv-qcard').getBoundingClientRect(), a = e.querySelector('.t2cv-acard').getBoundingClientRect(); return { qb: q.bottom, at: a.top, qh: q.height } })
+    r.check('C4 一轮两张卡:提问卡在上、回答卡在下,中间留一小段', qa.at > qa.qb + 4 && qa.at < qa.qb + 20 && qa.qh < 90, JSON.stringify(qa))
     await win.waitForTimeout(600) // 长卡量完折起之后
     const land = await win.evaluate(() => {
-      const c = document.querySelector('.t2cv-card[data-sel]')?.getBoundingClientRect()
+      const t = document.querySelector('.t2cv-card[data-sel]')?.closest('.t2cv-turn')
+      const c = t?.getBoundingClientRect()
       const s = document.querySelector('.t2cv-stage').getBoundingClientRect()
-      return c && { sel: document.querySelector('.t2cv-card[data-sel]').dataset.cvNode, top: Math.round(c.top - s.top), bottom: Math.round(c.bottom - s.top), h: Math.round(s.height) }
+      return c && { sel: t.dataset.cvNode, top: Math.round(c.top - s.top), bottom: Math.round(c.bottom - s.top), h: Math.round(s.height) }
     })
     r.check('L1 一打开镜头落在这一支最后一张卡上:整张在视野里、贴着输入框上方(上面露出前几轮,不落进空白)', !!land && land.sel === `${R}:u3` && land.top > 200 && land.bottom <= land.h - 100, JSON.stringify(land))
 
@@ -141,15 +168,17 @@ async function main() {
     // ── 全文 / 折起 ──
     const a3 = await card(R, 'u3').locator('.t2-content').textContent()
     r.check('R1 卡里直接是全文', a3.includes('逐处比较、保留这边的'), a3.slice(0, 60))
-    const fold = card(R, 'u2').locator('.t2cv-more')
-    r.check('R2 超长回答在卡里折起,底部「展开全文」', (await fold.count()) === 1 && (await card(R, 'u2').locator('.t2cv-body[data-folded]').count()) === 1, '')
-    const hFolded = (await rect(R, 'u2')).h
-    await fold.evaluate((b) => b.click()) // 按钮常在视口外,Playwright 平移不了画布
-    await win.waitForFunction((k) => !document.querySelector(`.t2cv-card[data-cv-node="${k}"] .t2cv-body[data-folded]`), `${R}:u2`, { timeout: 5_000 })
-    await win.waitForTimeout(400)
-    const hFull = (await rect(R, 'u2')).h
-    const u3After = await rect(R, 'u3')
-    r.check('R3 原地展开:卡变高,下面那张跟着让位', hFull > hFolded + 200 && u3After.y > (await rect(R, 'u2')).b, JSON.stringify({ hFolded, hFull }))
+    const readBtn = card(R, 'u2').locator('[data-testid="cv-readbtn"]')
+    r.check('R2 超长回答在卡里只露预览,下面一个「阅读」(没有原地展开)', (await readBtn.count()) === 1 && (await card(R, 'u2').locator('.t2cv-body[data-folded]').count()) === 1 && (await win.locator('.t2cv-more').count()) === 0
+      && (await card(R, 'u2').locator('.t2cv-body').evaluate((e) => e.getBoundingClientRect().height)) < 300, '')
+    const hPrev = (await rect(R, 'u2')).h
+    await readBtn.evaluate((b) => b.click()) // 按钮常在视口外,Playwright 平移不了画布
+    await win.locator('[data-testid="cv-read"]').waitFor({ timeout: 5_000 })
+    await win.waitForTimeout(500)
+    const full = await win.locator('[data-testid="cv-read"]').textContent()
+    r.check('R3 「阅读」在右边阅读栏开全文,卡本身不变高', full.includes('最后一行:完。') && Math.abs((await rect(R, 'u2')).h - hPrev) < 2, JSON.stringify({ hPrev }))
+    await win.locator('[data-testid="cv-read-close"]').click()
+    await win.waitForTimeout(300)
 
     // ── 横排:子卡在右、兄弟上下叠 ──
     await win.locator('[data-testid="cv-dir-h"]').click()
@@ -163,7 +192,7 @@ async function main() {
 
     // ── 只看这一支 ──
     await win.locator('[data-testid="cv-focus"]').click()
-    const dims = () => win.evaluate(() => [...document.querySelectorAll('.t2cv-card[data-dim]')].map((e) => e.dataset.cvNode).sort())
+    const dims = () => win.evaluate(() => [...document.querySelectorAll('.t2cv-turn[data-dim]')].map((e) => e.dataset.cvNode).sort())
     const d0 = await dims()
     r.check('F1 只看这一支:不在当前这一支(主线)上的两支变淡', JSON.stringify(d0) === JSON.stringify([`${B1}:c1`, `${B2}:d1`].sort()), JSON.stringify(d0))
     await win.screenshot({ path: path.join(dir, 'canvas-focus.png') })
@@ -174,7 +203,7 @@ async function main() {
     const d1x = await dims()
     r.check('F2 点淡的那张 = 切到那一支(主区就地换),它亮、主线后两轮淡', JSON.stringify(d1x) === JSON.stringify([`${R}:u2`, `${R}:u3`, `${B2}:d1`].sort()) && !!(await win.locator('.t2cv').count()), JSON.stringify(d1x))
     const hot = await win.evaluate(() => document.querySelectorAll('.t2cv-edges path.hot').length)
-    r.check('F3 选中卡到树根那一路的线加深', hot === 1 && (await card(B1, 'c1').getAttribute('data-sel')) === '', String(hot))
+    r.check('F3 选中卡到树根那一路的线加深,点的是提问卡就亮提问卡', hot === 1 && (await card(B1, 'c1').locator('.t2cv-qcard[data-sel]').count()) === 1, String(hot))
     await win.locator('[data-testid="cv-focus"]').click()
     await row(R).click()
     await win.locator(`.t2s-srow.active[data-sel-id="${R}"]`).waitFor({ timeout: 10_000 })
@@ -186,7 +215,7 @@ async function main() {
     await ta.click()
     await ta.fill('提示条长什么样?')
     await win.keyboard.press('Enter')
-    const live = '.t2cv-card[data-streaming]'
+    const live = '.t2cv-turn[data-streaming]'
     await win.locator(live).waitFor({ timeout: 10_000 })
     await win.waitForTimeout(1500)
     const g1 = await readGap(live)
@@ -209,24 +238,41 @@ async function main() {
     await win.waitForTimeout(800)
     const g5 = await readGap(live)
     r.check('A3 点箭头飞回去、箭头收起,之后接着跟', (await jump.count()) === 0 && Math.abs(g4) < 40 && Math.abs(g5) < 40, JSON.stringify({ g4, g5 }))
-    await win.waitForFunction(() => !document.querySelector('.t2cv-card[data-streaming]'), null, { timeout: 20_000 })
-    r.check('A4 跑完:新的一轮长在主线最后一张卡下面', (await win.locator(`.t2cv-card[data-cv-node^="${R}:"]`).count()) === 4, '')
+    await win.waitForFunction(() => !document.querySelector('.t2cv-turn[data-streaming]'), null, { timeout: 20_000 })
+    r.check('A4 跑完:新的一轮长在主线最后一张卡下面', (await win.locator(`.t2cv-turn[data-cv-node^="${R}:"]`).count()) === 4, '')
     await win.waitForTimeout(500)
-    const doneSel = `.t2cv-card[data-cv-node="${R}:u-r1"]`
+    const doneSel = `.t2cv-turn[data-cv-node="${R}:u-r1"]`
     const g6 = await readGap(doneSel)
     const doneH = await win.locator(doneSel).evaluate((e) => e.offsetHeight)
     r.check('A5 刚写完的长回答不折起,视野还停在它末尾(不掉进空白)', doneH > 900 && (await win.locator(`${doneSel} .t2cv-body[data-folded]`).count()) === 0 && Math.abs(g6) < 60, JSON.stringify({ g6, doneH }))
 
-    // ── 双击:回对话,滚到那一轮 ──
+    // ── 双击 = 右边开阅读栏,镜头让开它;回对话走胶囊(方案 Chat画布第三轮)──
     await show(B2, 'd1')
     await card(B2, 'd1').locator('.t2cv-q').dblclick()
+    const pane = win.locator('[data-testid="cv-read"]')
+    await pane.waitFor({ timeout: 5_000 })
     await win.locator(`.t2s-srow.active[data-sel-id="${B2}"]`).waitFor({ timeout: 10_000 })
+    await win.waitForTimeout(500) // 让位那一下缓动
+    const rd = await win.evaluate((k) => {
+      const p = document.querySelector('[data-testid="cv-read"]'), pr = p.getBoundingClientRect()
+      const c = document.querySelector(`.t2cv-turn[data-cv-node="${k}"]`).getBoundingClientRect(), s = document.querySelector('.t2cv-stage').getBoundingClientRect()
+      return { key: p.dataset.cvRead, text: p.textContent.slice(0, 200), canvas: !!document.querySelector('.t2cv'), cardL: Math.round(c.left - s.left), cardR: Math.round(c.right), paneL: Math.round(pr.left),
+        hudR: Math.round(document.querySelector('.t2cv .amx-stage-hud').getBoundingClientRect().right), noSel: window.getSelection().isCollapsed }
+    }, `${B2}:d1`)
+    r.check('D1 双击 = 右边阅读栏读那一轮,画布还在,卡让到阅读栏左边,缩放胶囊也让开,没顺手选中字', rd.key === `${B2}:d1` && rd.text.includes('砍到三处') && rd.canvas && rd.cardR <= rd.paneL - 8 && rd.cardL >= 0 && rd.hudR <= rd.paneL && rd.noSel, JSON.stringify(rd))
+    await hintsCheck('D1')
+    await win.screenshot({ path: path.join(dir, 'canvas-read.png') })
+    await pane.getByRole('button', { name: /上一轮|Previous turn/ }).click()
+    await win.waitForTimeout(300)
+    const prevKey = await pane.getAttribute('data-cv-read')
+    await win.keyboard.press('Escape')
+    await win.waitForTimeout(200)
+    r.check('D3 阅读栏 ↑ 换到这一支的上一轮,Esc 关掉', prevKey === `${R}:u1` && (await pane.count()) === 0, String(prevKey))
+    await seg.getByRole('tab').nth(0).click()
     await win.waitForFunction(() => !document.querySelector('.t2cv'), null, { timeout: 5_000 })
-    const inView = await win.locator('#tocmsg-d1').evaluate((e) => { const b = e.getBoundingClientRect(); return b.top >= 0 && b.bottom <= window.innerHeight })
-    r.check('D1 双击 = 切回对话、换到那一支、滚到那一轮', inView && (await seg.locator('[aria-selected="true"]').textContent()) !== shape.segOn, '')
     // 画布开着换过会话(F2 点淡卡、D1 双击别的支)后对话列里只能有一份正文:卡和正文同 key 时旧会话那份留在 DOM 里,上下叠成两个对话窗口(10-20 用户报)
     const bodyCount = await win.locator('.t2-chat-col > .t2-chat-body').count()
-    r.check('D2 回到对话只有一份正文(画布开着换会话不留旧的)', bodyCount === 1, String(bodyCount))
+    r.check('D2 胶囊切回对话 = 正在看的这一支,只有一份正文(画布开着换会话不留旧的)', bodyCount === 1 && (await win.locator('#tocmsg-d1').count()) === 1, String(bodyCount))
 
     // ── 偏好按树根记:分支里切回画布 → 换到无关会话是对话 → 回到这棵树的主线还是画布 ──
     await seg.getByRole('tab').nth(1).click()
@@ -239,6 +285,54 @@ async function main() {
     await win.locator(`.t2s-srow.active[data-sel-id="${R}"]`).waitFor({ timeout: 10_000 })
     await win.waitForTimeout(300)
     r.check('P1 画布开关按树记:在分支里开的,主线也是画布;无关会话不受影响', offOther && (await win.locator('.t2cv').count()) === 1, '')
+    await win.waitForTimeout(600)
+
+    // ── ⊕:提问卡左右 = 换个问法;末尾回答卡下 = 聚焦输入框;不在末尾的回答卡下 = 草稿提问卡 → Enter 建分支并发进去 ──
+    await show(B1, 'c1')
+    await card(B1, 'c1').locator('.t2cv-qcard').hover()
+    const sideAdds = await card(B1, 'c1').locator('.t2cv-qcard > .t2cv-add').evaluateAll((bs) => bs.map((b) => ({ side: b.dataset.add, vis: getComputedStyle(b).display !== 'none', title: b.title })))
+    r.check('Q1 悬停提问卡:左右各一颗 ⊕「换个问法」', sideAdds.length === 2 && sideAdds.every((b) => b.vis && /换个问法|Ask it differently/.test(b.title)), JSON.stringify(sideAdds))
+    // 主线这时的最后一张是 A 段生成出来的那一轮(u-r1,很长:⊕ 在卡底,常在视口外 → 悬停后直接点)
+    await show(R, 'u-r1')
+    await card(R, 'u-r1').locator('.t2cv-acard').hover()
+    const tailAdd = card(R, 'u-r1').locator('.t2cv-acard > .t2cv-add')
+    const tailTitle = await tailAdd.getAttribute('title')
+    await tailAdd.evaluate((b) => b.click())
+    await win.waitForTimeout(200)
+    const fu = await win.evaluate(() => ({ focus: document.activeElement?.classList.contains('t2c-ta'), flash: !!document.querySelector('.t2cv-attach[data-flash]'), draft: !!document.querySelector('[data-testid="cv-draft"]') }))
+    r.check('Q2 末尾那张回答卡的 ⊕ =「接着问」:不建卡,输入框聚焦,「接在」闪一下', /接着问|Ask a follow-up/.test(tailTitle) && fu.focus && fu.flash && !fu.draft, JSON.stringify({ tailTitle, ...fu }))
+    await show(R, 'u1')
+    await card(R, 'u1').locator('.t2cv-acard').hover()
+    const plus = card(R, 'u1').locator('.t2cv-acard > .t2cv-add')
+    const plusTitle = await plus.getAttribute('title')
+    await plus.click()
+    const dta = win.locator('[data-testid="cv-draft"]')
+    await dta.waitFor({ timeout: 5_000 })
+    await win.waitForTimeout(500)
+    const dr = await win.evaluate(() => {
+      const t = document.querySelector('[data-testid="cv-draft"]'), b = t.closest('.t2cv-turn').getBoundingClientRect(), s = document.querySelector('.t2cv-stage').getBoundingClientRect()
+      return { focus: document.activeElement === t, inView: b.left >= s.left && b.right <= s.right && b.top >= s.top && b.bottom <= s.bottom, scrolled: document.querySelector('.t2cv-stage').scrollTop + document.querySelector('.t2cv-stage').scrollLeft }
+    })
+    r.check('Q3 不在末尾的回答卡 ⊕ =「从这里分出一支」:画布上出一张草稿提问卡,露在视野里、已聚焦', /从这里分出一支|Branch from here/.test(plusTitle) && dr.focus && dr.inView && dr.scrolled === 0, JSON.stringify({ plusTitle, ...dr }))
+    await hintsCheck('Q3')
+    await win.screenshot({ path: path.join(dir, 'canvas-draft.png') })
+    ctx.stub.script([{ type: 'token', delay: 40, payload: { delta: '直接删,不算冲突。' } }])
+    await dta.fill('两台都删了同一段呢?')
+    await win.keyboard.press('Enter')
+    await win.waitForFunction(() => !document.querySelector('[data-testid="cv-draft"]'), null, { timeout: 10_000 })
+    await win.locator(`.t2cv-turn[data-cv-node^="${B3}:"]`).waitFor({ timeout: 10_000 })
+    await win.waitForTimeout(800)
+    const run = ctx.stub.seen.runs.at(-1)
+    const geo = await win.evaluate(({ a, b }) => {
+      const pe = document.querySelector(`.t2cv-turn[data-cv-node="${a}"]`), n = document.querySelector(`.t2cv-turn[data-cv-node^="${b}:"]`)
+      if (!pe || !n) return { below: false, q: null, nodes: [...document.querySelectorAll('.t2cv-turn')].map((e) => e.dataset.cvNode), canvas: !!document.querySelector('.t2cv') }
+      return { below: n.getBoundingClientRect().top > pe.getBoundingClientRect().bottom, q: n.querySelector('.t2cv-q')?.textContent }
+    }, { a: `${R}:u1`, b: B3 })
+    r.check('Q4 Enter = 从第一轮回答建分支、这句发进新分支;草稿变成提问卡挂在第一轮下面',
+      branchCalls.length === 1 && branchCalls[0].from === R && branchCalls[0].body.message_id === 'a1' && run?.sessionId === B3 && String(run?.message).includes('两台都删了同一段') && geo.below && geo.q === '两台都删了同一段呢?',
+      JSON.stringify({ branchCalls, run: run && { s: run.sessionId, m: run.message }, geo }))
+    await hintsCheck('Q4')
+    await win.screenshot({ path: path.join(dir, 'canvas-sent.png') })
 
     // ── 观感:亮 / 暗 / 柔青 ──
     await win.waitForTimeout(500)

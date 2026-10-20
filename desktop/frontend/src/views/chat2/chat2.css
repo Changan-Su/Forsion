@@ -1247,40 +1247,104 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 .t2cv-edges { position: absolute; left: 0; top: 0; width: 1px; height: 1px; overflow: visible; pointer-events: none; }
 .t2cv-edges path { fill: none; stroke: color-mix(in srgb, var(--accent-ink) 55%, transparent); stroke-width: 2; }
 .t2cv-edges path.hot { stroke: var(--accent-ink); stroke-width: 2.5; }
+/* 一轮 = 一个格子(.t2cv-turn,排版和量高都认它)里上下两张卡:提问卡 + 回答卡,中间一小段线 */
+.t2cv-turn { position: absolute; box-sizing: border-box; display: flex; flex-direction: column; }
+/* 还没量到高的格子先不露面:它的位置是按估高排的,量到后才落定(否则第一帧会叠在别的卡上闪一下) */
+.t2cv-turn:not([data-measured]) { visibility: hidden; }
 .t2cv-card {
-  position: absolute; box-sizing: border-box; padding: 14px 16px 10px;
+  position: relative; box-sizing: border-box; padding: 14px 16px 10px;
   border: 1px solid var(--border); border-radius: 10px; background: var(--bg-card, var(--bg)); box-shadow: var(--card-shadow);
 }
-/* 还没量到高的卡先不露面:它的位置是按估高排的,量到后才落定(否则第一帧会叠在别的卡上闪一下) */
-.t2cv-card:not([data-measured]) { visibility: hidden; }
-/* 选中:DESIGN §5 强调带(1px 换强调色 + 0.5px 环,不加粗边框) */
-.t2cv-card[data-sel] { border-color: var(--accent-ink); box-shadow: var(--card-shadow), 0 0 0 0.5px var(--accent-ink); }
-/* 「只看这一支」:旁支只露问题和两行、淡一档,点一下就切过去 */
-.t2cv-card[data-dim] { opacity: 0.55; cursor: pointer; }
-.t2cv-card[data-dim] .t2cv-body { max-height: 3.6em; overflow: hidden; }
+/* 提问卡:对话里用户气泡的配方(强调色混进卡底),扁一些 */
+.t2cv-qcard { padding: 9px 14px 10px; background: color-mix(in srgb, var(--accent-ink) 9%, var(--bg-card, var(--bg))); }
+.t2cv-qlabel { margin-bottom: 2px; font-size: var(--ui-font-caption, 11px); line-height: 1.4; color: var(--text-muted); }
 .t2cv-q {
-  margin: 0 0 8px; font-size: var(--ui-font-body, 14px); font-weight: 600; line-height: 1.5; color: var(--text);
+  font-size: var(--ui-font-body, 14px); line-height: 1.55; color: var(--text);
   white-space: pre-wrap; overflow-wrap: anywhere;
   display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden;
 }
+.t2cv-link { flex: none; align-self: center; width: 2px; height: 10px; background: color-mix(in srgb, var(--accent-ink) 55%, transparent); }
+.t2cv-turn[data-hot] > .t2cv-link { background: var(--accent-ink); }
+/* 选中:DESIGN §5 强调带(1px 换强调色 + 0.5px 环,不加粗边框);点哪张亮哪张 */
+.t2cv-card[data-sel] { border-color: var(--accent-ink); box-shadow: var(--card-shadow), 0 0 0 0.5px var(--accent-ink); }
+/* 「只看这一支」:旁支只露问题和两行、淡一档,点一下就切过去 */
+.t2cv-turn[data-dim] { opacity: 0.55; cursor: pointer; }
+.t2cv-turn[data-dim] .t2cv-body { max-height: 3.6em; overflow: hidden; }
 .t2cv-body { position: relative; }
-/* 超长的回答(约 40 行)在卡里折起,底部原地「展开全文」 */
-.t2cv-body[data-clamp] { max-height: 880px; overflow: hidden; }
-.t2cv-body[data-folded] { -webkit-mask-image: linear-gradient(#000 calc(100% - 72px), transparent); mask-image: linear-gradient(#000 calc(100% - 72px), transparent); }
-.t2cv-more {
-  display: block; margin: 6px auto 2px; padding: 3px 12px; border: 1px solid var(--border); border-radius: var(--radius-pill, 999px);
-  background: transparent; color: var(--text-muted); font: inherit; font-size: var(--ui-font-meta, 12px); cursor: pointer;
+/* 长回答在卡里只露一段预览(约 8 行),全文点「阅读」/ 双击进右边的阅读栏 */
+.t2cv-body[data-clamp] { max-height: 260px; overflow: hidden; }
+.t2cv-body[data-folded] { -webkit-mask-image: linear-gradient(#000 calc(100% - 56px), transparent); mask-image: linear-gradient(#000 calc(100% - 56px), transparent); }
+.t2cv-readbtn {
+  display: inline-flex; align-items: center; gap: 5px; margin: 6px 0 2px; padding: 3px 11px 3px 9px;
+  border: 1px solid var(--border); border-radius: var(--radius-pill, 999px); background: transparent;
+  color: var(--text-sec); font: inherit; font-size: var(--ui-font-meta, 12px); cursor: pointer;
 }
-.t2cv-more:hover { color: var(--text); background: var(--overlay-light, rgba(127, 127, 127, 0.1)); }
+.t2cv-readbtn:hover { color: var(--accent-ink); border-color: var(--accent-ink); }
 /* 卡里的消息:不画头像 / 署名 / 时刻,也不画「从这里分出」块(分支在画布上已经是卡);操作条只留两个动词(接着问 / 顺便问) */
 .t2cv-card .t2-avatar, .t2cv-card .t2-name, .t2cv-card .t2-childs, .t2cv-card .t2-msgtime { display: none; }
 .t2cv-card .t2-asst { display: block; }
 .t2cv-card .t2-content { max-width: none; }
 .t2cv-card .t2-actions > :not([data-testid="msg-branch"]):not([data-testid="msg-aside"]) { display: none; }
 .t2cv-card .t2-actions { margin-top: 2px; }
+/* ⊕(照 Amadeus 卡边那颗 .amx-el-add):悬停 / 选中时出。回答卡下 = 接着问,提问卡左右 = 换个问法;横排转 90° */
+.t2cv-add {
+  position: absolute; z-index: 1; display: none; align-items: center; justify-content: center; box-sizing: border-box;
+  width: 20px; height: 20px; padding: 0; border: 1px solid var(--border); border-radius: var(--radius-sm, 6px);
+  background: var(--surface-2, var(--bg-card)); color: var(--text-sec); font: inherit; font-size: var(--ui-font-body, 13px); line-height: 1; cursor: pointer;
+}
+/* 卡边到 ⊕ 之间那几像素也算「还在这张卡上」,鼠标挪过去时它不会先消失 */
+.t2cv-add::before { content: ''; position: absolute; inset: -9px; }
+.t2cv-card:hover > .t2cv-add, .t2cv-card[data-sel] > .t2cv-add, .t2cv-add:focus-visible { display: flex; }
+.t2cv-add:hover { border-color: var(--accent-ink); color: var(--accent-ink); }
+.t2cv-add[data-add="next"] { left: 50%; bottom: -29px; transform: translateX(-50%); }
+.t2cv-add[data-add="before"] { left: -30px; top: 50%; transform: translateY(-50%); }
+.t2cv-add[data-add="after"] { right: -30px; top: 50%; transform: translateY(-50%); }
+.t2cv[data-dir="h"] .t2cv-add[data-add="next"] { left: auto; right: -30px; bottom: auto; top: 50%; transform: translateY(-50%); }
+.t2cv[data-dir="h"] .t2cv-add[data-add="before"] { left: 50%; top: -29px; transform: translateX(-50%); }
+.t2cv[data-dir="h"] .t2cv-add[data-add="after"] { left: 50%; right: auto; top: auto; bottom: -29px; transform: translateX(-50%); }
+/* 草稿提问卡:卡本身就是输入框;它头上那根线淡一档(还没发出去) */
+.t2cv-qcard.t2cv-draft { background: var(--bg-card, var(--bg)); border-color: var(--accent-ink); box-shadow: var(--card-shadow), 0 0 0 0.5px var(--accent-ink); }
+.t2cv-draft-ta {
+  display: block; box-sizing: border-box; width: 100%; min-height: 3.1em; max-height: 240px; margin: 2px 0 0; padding: 0;
+  border: 0; outline: 0; resize: none; background: transparent; color: var(--text);
+  font: inherit; font-size: var(--ui-font-body, 14px); line-height: 1.55; field-sizing: content;
+}
+.t2cv-draft-ta::placeholder { color: var(--text-faint); }
+.t2cv-draft-foot { display: flex; align-items: center; gap: 4px; margin-top: 6px; font-size: var(--ui-font-caption, 11px); color: var(--text-faint); }
+.t2cv-draft-foot > span { flex: 1; min-width: 0; }
+.t2cv-send {
+  display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; padding: 0;
+  border: 0; border-radius: 50%; background: var(--accent-ink); color: var(--bg-card, var(--bg)); cursor: pointer;
+}
+.t2cv-send:disabled { background: var(--overlay-medium, rgba(127, 127, 127, 0.16)); color: var(--text-faint); cursor: default; }
+.t2cv-edges path.draft { opacity: 0.45; }
 /* 抓手:拖到哪都是平移(卡里的字也不选了) */
 .t2cv[data-hand] .t2cv-stage { cursor: grab; }
-.t2cv[data-hand] .t2cv-card { user-select: none; cursor: grab; }
+.t2cv[data-hand] .t2cv-turn { user-select: none; cursor: grab; }
+/* 空白处的几句说明:头行下面,淡一档;有卡挪进来就让开 */
+.t2cv-hints {
+  position: absolute; left: 16px; top: 44px; display: flex; flex-direction: column; gap: 3px; pointer-events: none;
+  font-size: var(--ui-font-caption, 11px); line-height: 1.5; color: var(--text-faint); transition: opacity 160ms ease;
+}
+.t2cv-hints[data-covered] { opacity: 0; }
+/* 阅读栏:画布右边一栏,对话页那套排版;开着时缩放胶囊 / 缩略图挪到它左边 */
+.t2cv { --t2cv-read-w: min(480px, calc(100% - 64px)); }
+.t2cv-read {
+  position: absolute; z-index: 4; top: 40px; right: 12px; bottom: calc(var(--t2-composer-h, 96px) + 8px); width: var(--t2cv-read-w);
+  display: flex; flex-direction: column; box-sizing: border-box; overflow: hidden;
+  border: 1px solid var(--border); border-radius: 12px; background: var(--bg-card, var(--bg)); box-shadow: var(--card-shadow);
+}
+.t2cv-read-h { flex: none; display: flex; align-items: center; gap: 2px; padding: 9px 10px 8px 18px; border-bottom: 1px solid var(--border); }
+.t2cv-read-t { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.t2cv-read-t > b {
+  font-size: var(--ui-font-body, 13px); font-weight: 600; line-height: 1.45; color: var(--text);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere;
+}
+.t2cv-read-t > span { font-size: var(--ui-font-caption, 11px); color: var(--text-muted); }
+.t2cv-read-b { flex: 1; min-height: 0; overflow: auto; padding: 4px 22px 22px; }
+.t2cv-read-b .t2-avatar, .t2cv-read-b .t2-name, .t2cv-read-b .t2-childs, .t2cv-read-b .t2-msgtime { display: none; }
+.t2cv-read-b .t2-asst { display: block; }
+.t2cv-read-b .t2-content { max-width: none; }
 .t2cv-empty {
   position: absolute; left: 50%; top: 38%; transform: translate(-50%, -50%); max-width: 300px; padding: 22px 26px;
   border: 1px solid var(--border); border-radius: 10px; background: var(--bg-card, var(--bg)); box-shadow: var(--card-shadow);
@@ -1309,3 +1373,7 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 }
 /* 回到正在生成的那张卡:同「回到底部」那颗,摆在输入框正上方居中(右下角归缩放胶囊和缩略图) */
 .t2-jump.jump-bottom.t2cv-jump { right: auto; left: 50%; transform: translateX(-50%); bottom: calc(var(--t2-composer-h, 96px) + 26px); }
+/* 阅读栏开着:缩放胶囊 / 缩略图让到它左边(压过上面两档的定位) */
+.t2cv[data-reading] .t2cv-am.am-app .amx-stage-hud, .t2cv[data-reading] .t2cv-am.am-app .amx-stage-minimap { right: calc(var(--t2cv-read-w) + 24px); }
+/* 「接着问」点下去:输入框上面那条闪一下强调色,告诉你发出去接在哪 */
+.t2cv-attach[data-flash] { border-color: var(--accent-ink); color: var(--accent-ink); }

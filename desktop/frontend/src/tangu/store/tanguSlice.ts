@@ -1060,7 +1060,8 @@ export interface TanguState {
   retry(sessionId?: string | null, fromQueue?: boolean): Promise<boolean>
   editUserMessage(messageId: string, newText: string, sessionId?: string | null): void
   regenerate(messageId: string, sessionId?: string | null): void
-  branchFromMessage(messageId?: string, sessionId?: string | null): Promise<void>
+  /** 返回新分支的会话 id;没建成(没有可分的回答 / 引擎拒绝)= null,已 toast。 */
+  branchFromMessage(messageId?: string, sessionId?: string | null): Promise<string | null>
   /** 回退到某条消息的时刻(借 Claude Code rewind):'code'=只回滚 agent 写工具改过的文件,
    *  'conversation'=只截断该消息及之后的对话(原文回填输入框,不自动重发),'both'=两者。 */
   rewindTo(messageId: string, mode: 'code' | 'conversation' | 'both', sessionId?: string | null): Promise<void>
@@ -3161,11 +3162,11 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
   branchFromMessage: async (messageId, targetSessionId) => {
     const t = get().tr
     const sid = targetSessionId === undefined ? get().activeId : targetSessionId
-    if (!sid) return
+    if (!sid) return null
     const list = get().messagesBySession[sid] || []
     let id = messageId
     if (!id) { for (let i = list.length - 1; i >= 0; i--) { if (list[i].role === 'assistant') { id = list[i].id; break } } }
-    if (!id) { get().toast(t('chat.branchEmpty'), true); return }
+    if (!id) { get().toast(t('chat.branchEmpty'), true); return null }
     try {
       // 不带标题:引擎记成 New Chat,第一句新问题由 Historian 起名(兄弟分支同叫「X（分支）」在树里认不出来)
       const branched = await api.branchSession(targetForSession(sid), sid, id)
@@ -3175,7 +3176,8 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       set((st) => ({ sessions: [s, ...st.sessions] }))
       get().setActiveId(s.id)
       get().toast(t('chat.branched'))
-    } catch (e: any) { get().toast(t('app.branchFail', { e: e?.message || e }), true) }
+      return s.id
+    } catch (e: any) { get().toast(t('app.branchFail', { e: e?.message || e }), true); return null }
   },
 
   compact: async (targetSessionId, instructions, fromQueue) => {
