@@ -238,7 +238,7 @@ export const ModelPill: React.FC<{
   ultra?: boolean
   /** agent 正在跑:Ultra 胶囊的流星只在这时出现(开跑渐快、停下渐慢)。 */
   running?: boolean
-  /** 当前模型支持的思考档；不支持的档仍可选，由引擎自动降档。 */
+  /** 当前模型支持的思考档；不支持的档仍可选，由引擎换到相近档位（先往低、没有再往高）。 */
   supportedThinking?: string[]
   /** 本 run 实际生效档；与请求档不同则在推理强度摘要中显示降档。 */
   effectiveThinking?: string

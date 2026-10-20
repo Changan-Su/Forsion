@@ -78,7 +78,7 @@ export const COMMAND_CATALOG: CommandSpec[] = [
   { name: '/model', key: 'model', arg: '[名称|序号]', zh: '切换模型（不带参数列出可选模型）', en: 'Switch model (no argument lists the available models)', surfaces: ['tui', 'desktop', 'channel'] },
   {
     name: '/think', key: 'think', arg: '<档位>', aliases: ['/effort'],
-    zh: '思考强度：off|minimal|low|medium|high|xhigh|max（模型不支持的档自动降档）',
+    zh: '思考强度：off|minimal|low|medium|high|xhigh|max（模型不支持的档自动换到相近档位）',
     en: 'Thinking level: off|minimal|low|medium|high|xhigh|max (auto-clamped to what the model supports)',
     surfaces: ['tui', 'desktop', 'channel'],
   },

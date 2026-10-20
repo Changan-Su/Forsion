@@ -90,7 +90,10 @@ export interface ModelCapability {
   levels: LevelMap;
   /** max tokens 的字段名。OpenAI 推理模型只认 max_completion_tokens。 */
   maxTokensField: 'max_tokens' | 'max_completion_tokens';
-  /** 该端点拒收 temperature(OpenAI 推理模型:temperature≠1 报「insufficient permissions」)。 */
+  /**
+   * 不发 temperature:端点拒收(OpenAI 推理模型:temperature≠1 报「insufficient permissions」),
+   * 或官方已弃用 / 建议保持缺省(Gemini 3+:调低会循环)。
+   */
   dropTemperature?: boolean;
   /** 思考开时必须改道 /v1/responses(chat/completions + tools + effort 会被官方拒)。 */
   viaResponses?: boolean;
@@ -135,6 +138,11 @@ const EFFORT_CODEX: LevelMap = {
 /** 只认 low/medium/high 的 effort 端点(o 系、Gemini 兼容层、多数网关):关不掉 → off:null。 */
 const EFFORT_LMH: LevelMap = {
   off: null, minimal: 'low', low: 'low', medium: 'medium', high: 'high', xhigh: 'high', max: 'high',
+};
+
+/** 只认 low/high 两档(grok-3-mini、StepFun step-3.5-flash-2603):medium 往上折,关不掉。 */
+const EFFORT_LH: LevelMap = {
+  off: null, minimal: 'low', low: 'low', medium: 'high', high: 'high', xhigh: 'high', max: 'high',
 };
 
 /** 认 'none' 的 low/medium/high 端点(Gemini OpenAI 兼容层可关思考)。 */
@@ -207,8 +215,8 @@ const EFFORT_LHM: LevelMap = {
 };
 
 /**
- * DeepSeek V4:`thinking:{type}` 开关 + `reasoning_effort`,官方只认 low/high/max
- * (v4-flash 三档齐全;v4-pro 目前把 low 当 high、xhigh 当 max —— 发 low 安全,不会 400)。
+ * DeepSeek V4 / V4.1:`thinking:{type}` 开关 + `reasoning_effort`,官方只认 low/high/max
+ * (deepseek-flash 即 V4.1 Flash 三档齐全;v4-pro 目前把 low 当 high、xhigh 当 max —— 发 low 安全,不会 400)。
  */
 const DEEPSEEK_EFFORT: LevelMap = { ...EFFORT_LHM, off: false };
 
@@ -513,11 +521,14 @@ const RULES: Rule[] = [
   // 而托管面同时传 provider 与 baseUrl —— 若把 provider 规则放前面,配了兼容层地址的直连/托管
   // provider 会拿到原生 generationConfig 字段,兼容层根本不认(档位静默失效)。
   {
+    // 3.x 与 4(gemini-4-argon)思考都关不掉:兼容层的 'none' 只对 2.5 有效,故用不带 none 的 EFFORT_LMH。
+    // dropTemperature:官方建议 Gemini 3+ 保持缺省 1.0(调低会循环),07-21 起 temperature/top_p/top_k
+    // 标为弃用;引擎缺省发 0.7,正是官方让别做的事。2.5 不在此列,照旧发。
     id: 'gemini-openai-compat-3',
     host: /(^|\.)generativelanguage\.googleapis\.com$/,
     urlPath: /\/openai(\/|$)/,
-    model: /gemini-3/i,
-    cap: { format: 'openai-effort', levels: EFFORT_LMH, maxTokensField: 'max_tokens' },
+    model: /gemini-[34]/i,
+    cap: { format: 'openai-effort', levels: EFFORT_LMH, maxTokensField: 'max_tokens', dropTemperature: true },
   },
   {
     // 直连走 Google 的 OpenAI 兼容层,那边只认 reasoning_effort。
@@ -528,12 +539,20 @@ const RULES: Rule[] = [
   },
   {
     // 托管面走 Gemini 原生 REST(generationConfig)。关不掉思考的那几支 → off:null:
-    // 2.5-pro,以及整个 3.x 线(官方 thinking 文档:3.1 Pro 明确不能关,3 Flash / Flash-Lite
-    // 也不支持完全关闭)。thinkingBudget 本身在 3.x 上仍向后兼容(3 系开发指南),故只改 off 一格,
-    // 不迁 thinking_level —— 那套各型号档位还不一致(3.7-flash 不认 minimal),现在迁是净增风险。
+    // 整个 3.x 线与 4(官方 thinking 文档:3.1 Pro 明确不能关,3 Flash / Flash-Lite 也不支持完全关闭,
+    // 4-argon 同)。thinkingBudget 本身在 3.x 上仍向后兼容(3 系开发指南;4 上收不收官方没写),故只改
+    // off 一格,不迁 thinking_level —— 那套各型号档位还不一致(3.7-flash 不认 minimal),现在迁是净增风险。
+    // dropTemperature 同 gemini-openai-compat-3。
+    id: 'gemini-native-3',
+    provider: /^(gemini|google)/i,
+    model: /gemini-[34]/i,
+    cap: { format: 'gemini-budget', levels: { ...GEMINI_BUDGETS, off: null }, maxTokensField: 'max_tokens', dropTemperature: true },
+  },
+  {
+    // 2.5-pro 同样关不掉,但 temperature 照旧发(弃用说明只针对 3+)。
     id: 'gemini-native-nodisable',
     provider: /^(gemini|google)/i,
-    model: /2\.5-pro|gemini-3/i,
+    model: /2\.5-pro/i,
     cap: { format: 'gemini-budget', levels: { ...GEMINI_BUDGETS, off: null }, maxTokensField: 'max_tokens' },
   },
   {
@@ -544,15 +563,16 @@ const RULES: Rule[] = [
 
   // ── 中国厂商直连 ───────────────────────────────────────────────────────
   {
-    // DeepSeek V4(deepseek-v4-flash / deepseek-v4-pro):思考默认开,可用 thinking:{type} 关,
+    // DeepSeek V4 / V4.1(deepseek-flash = V4.1 Flash,09-10 起的现役 id;deepseek-v4-pro;
+    // 退役别名 deepseek-v4-flash 仍由 V4.1 Flash 回答):思考默认开,可用 thinking:{type} 关,
     // 深度用 reasoning_effort 调 —— 不再是「reasoner 系不可调 / chat 系只有开关」的老形态。
-    // 老 id deepseek-chat / deepseek-reasoner 仍指向 v4-flash 的非思考 / 思考模式(官方标注下线),
-    // 但它们**用模型名选模式**,故仍按下面两条老规则走,不套 effort。
-    // 锚定 `deepseek-v4` 前缀而非裸 /v4/:后者在本 host 上会误吞 `myv4legacy` 这类自定义 id
-    // (2026-08-03 Codex 评审)。留开放后缀是有意的——官方带日期/别名的 v4-* 变体应继续命中本规则。
+    // 老 id deepseek-chat / deepseek-reasoner 07-24 已停用,**用模型名选模式**,仍按下面两条老规则走。
+    // 锚定 `deepseek-v4` / `deepseek-flash` 前缀而非裸 /v4/:后者在本 host 上会误吞 `myv4legacy` 这类
+    // 自定义 id(2026-08-03 Codex 评审)。留开放后缀是有意的——官方带日期/别名的变体应继续命中本规则。
+    // 刻意不收裸 `deepseek-pro`:`^deepseek-pro` 会吞 deepseek-prover-* 数学模型族;Pro 现役 id 是 v4-pro。
     id: 'deepseek-v4',
     host: /(^|\.)deepseek\.com$/,
-    model: /^deepseek-v4/i,
+    model: /^deepseek-(v4|flash)/i,
     cap: { format: 'deepseek', levels: DEEPSEEK_EFFORT, maxTokensField: 'max_tokens' },
   },
   {
@@ -651,14 +671,39 @@ const RULES: Rule[] = [
     host: /(^|\.)moonshot\.(cn|ai)$/,
     cap: { format: 'prefix', levels: TOGGLE, maxTokensField: 'max_tokens' },
   },
+  {
+    // 阶跃 StepFun:step-3.5-flash-2603 只收 low/high(官方定价页),排在通用规则之前。
+    id: 'stepfun-35-flash-2603',
+    host: /(^|\.)stepfun\.com$/,
+    model: /^step-3\.5-flash-2603/i,
+    cap: { format: 'openai-effort', levels: EFFORT_LH, maxTokensField: 'max_tokens' },
+  },
+  {
+    // step-5-preview / step-3.7-flash / step-3.5-flash:reasoning_effort low/medium/high。能不能关思考
+    // 官方没写 → off:null(夹到 low,不发未知的 'none')。⚠️ 必须带 model:同 host 还挂
+    // step-1o-turbo-vision、step-tts-*、stepaudio-*,官方没说它们收不收 reasoning_effort(未知字段不发)。
+    // 推理内容回传官方也没写,先不进 compatWireMessages 的放行名单;流式 delta.reasoning 引擎已能读。
+    id: 'stepfun',
+    host: /(^|\.)stepfun\.com$/,
+    model: /^step-(3\.[5-9]|5)/i,
+    cap: { format: 'openai-effort', levels: EFFORT_LMH, maxTokensField: 'max_tokens' },
+  },
 
   // ── 聚合网关 ───────────────────────────────────────────────────────────
+  {
+    // OpenRouter 转发的 Gemini 3/4:同样关不掉思考,且同 gemini-openai-compat-3 不发 temperature
+    // (OpenRouter 把它原样转给 Google)。和下面那条共用档表,只多 dropTemperature。
+    id: 'openrouter-gemini-3',
+    host: /(^|\.)openrouter\.ai$/,
+    model: /gemini-[34]/i,
+    cap: { format: 'openrouter', levels: { ...EFFORT_OPENROUTER, off: null }, maxTokensField: 'max_tokens', dropTemperature: true },
+  },
   {
     // OpenRouter 归一层用 effort:'none' 表达关思考,但对模型元数据里 `mandatory: true`
     // (思考不可关)的型号会被上游拒。保持 openrouter 形态不变,只把 off 这一格关掉。
     id: 'openrouter-mandatory-reasoning',
     host: /(^|\.)openrouter\.ai$/,
-    model: /glm-5\.3|kimi-k3|gemini-3|grok-4\.[5-9]/i,
+    model: /glm-5\.3|kimi-k3|grok-4\.[5-9]/i,
     cap: { format: 'openrouter', levels: { ...EFFORT_OPENROUTER, off: null }, maxTokensField: 'max_tokens' },
   },
   {
@@ -671,11 +716,7 @@ const RULES: Rule[] = [
     id: 'xai-grok-mini',
     host: /(^|\.)x\.ai$/,
     model: /grok-3-mini/i,
-    cap: {
-      format: 'openai-effort',
-      levels: { off: null, minimal: 'low', low: 'low', medium: 'high', high: 'high', xhigh: 'high', max: 'high' },
-      maxTokensField: 'max_tokens',
-    },
+    cap: { format: 'openai-effort', levels: EFFORT_LH, maxTokensField: 'max_tokens' },
   },
   {
     // grok-4.5 / 4.6:reasoning_effort 又回来了(4.5 认 low/medium/high;4.6 起多一档 xhigh,
