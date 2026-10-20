@@ -314,6 +314,7 @@
     "fix:zhpunct": "node scripts/zh-punct.codemod.cjs",
     "shot:walk": "node scripts/uiux-walk.shot.cjs",
     "check:agentprofile": "node scripts/agent-profile.check.cjs",
+    "check:humanprofile": "node scripts/human-profile.check.cjs",
     "check:projectdetails": "node scripts/project-details.check.cjs",
     "check:creationcard": "node scripts/creation-card.check.cjs",
     "check:teamoutputs": "node scripts/team-outputs.check.cjs",

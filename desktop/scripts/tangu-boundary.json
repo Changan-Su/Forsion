@@ -42,6 +42,7 @@
       "desktop/frontend/src/views/AgentProfileView.tsx",
       "desktop/frontend/src/views/AgentSkillsPanel.tsx",
       "desktop/frontend/src/views/ChatView.tsx",
+      "desktop/frontend/src/views/HumanProfile.tsx",
       "desktop/frontend/src/views/ProjectProfile.tsx",
       "desktop/frontend/src/views/RightViews.tsx",
       "desktop/frontend/src/views/SpecialViews.tsx",
