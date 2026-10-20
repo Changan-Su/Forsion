@@ -13,6 +13,7 @@ import { openNoteAtHeading } from '../amadeusNav'
 import { toLocalDate } from '../views/calendar/dateUtils'
 import type { MdMark } from '@amadeus-shared/mdMarks'
 import type { AmadeusSyncStatus } from '../types'
+import { openPenzorSync, penzorSyncReady } from '../services/syncSetup'
 
 /** 已弹过的提醒(localStorage:key → 弹出时刻)。key **不含行号** —— 行号会随编辑上下漂,
  *  用「路径 + 提醒时刻 + 文本」才认得出是同一条。7 天前的条目每次启动顺手清掉。 */
@@ -88,13 +89,31 @@ export function installNotificationWiring(): void {
 
   // B. remotesync:running true→false 收一份报告。
   let remoteWas = false
+  // 蓬洲云额度满:服务端对放不下的逐个回 413,文件留在本地。只在刚满的那一轮提醒一次(之后每 5 分钟一轮不再刷),
+  // 换成人话 + 「查看」到蓬洲云「同步」页;额度回来(某轮没有额度错误)再重新武装。
+  // 只认服务端的错误码(413 + {"code":"QUOTA"}):整条消息里有文件路径,quota.md 的权限错误不能当额度满藏起来
+  const isQuota = (e: string): boolean => /"code"\s*:\s*"QUOTA"/.test(e)
+  let quotaWarned = false
   window.remoteSync?.onStatus?.((s) => {
     if (remoteWas && !s.running && s.lastReport) {
       const r = s.lastReport
-      if (!r.ok || r.errors?.length) {
+      const errs = r.errors ?? []
+      const quotaN = errs.filter(isQuota).length
+      if (!quotaN) quotaWarned = false
+      if (errs.length && quotaN === errs.length) {
+        if (!quotaWarned) {
+          quotaWarned = true
+          notifyApp({
+            event: 'sync.error', level: 'warning',
+            text: tr('ntf.remoteSyncQuota', { n: quotaN }),
+            dedupeKey: 'remotesync.quota',
+            ...(penzorSyncReady() ? { action: { label: tr('ntf.actionView'), run: openPenzorSync } } : {}),
+          })
+        }
+      } else if (!r.ok || errs.length) {
         notifyApp({
           event: 'sync.error', level: 'error',
-          text: tr('ntf.remoteSyncFail', { e: r.errors?.[0] || '' }),
+          text: tr('ntf.remoteSyncFail', { e: errs.find((e) => !isQuota(e)) || errs[0] || '' }),
           dedupeKey: 'remotesync.error',
         })
       } else {

@@ -476,6 +476,7 @@ ctx.registerCommand({
 | `ctx.app.setSpaceDot?(spaceId, on)` | 在 Ribbon 上自己 Space 的图标右上角挂提示红点(2026-10-19 起;服务器管理插件给「反馈中心」挂提醒用) | 只认本插件随包带的 Space,别人的 / 内置的恒 `false`;`true` 挂、`false` 收,没变不重渲;红点和收件箱未读角标同一种红,有角标时让给角标,和进度环同时有时只画红点;插件停用时宿主收掉;挂着时图标读屏名带「有新提醒」;列表行的未读仍用 `ListItem.unread`(指示色,不是红),要在别的 Space 也看得到就配上它;旧宿主没有 → `?.` |
 | `ctx.app.runCommand?(id)` | 跑一条命令面板里的现成命令(2026-10-17 起) | **只对首方内置包生效**,别的插件恒 `false`(命令里有删除 / 改设置) |
 | `ctx.app.spotlight?({ anchor, title, body?, step? } \| null)` | 在真界面上圈出一处 + 一张小卡(2026-10-19 起,使用指南的「带我去」) | **只对首方内置包生效**,别的插件恒 resolve `'missing'`;锚点是宿主的一张表(`ribbon-spaces` / `chat-composer` / `note-new` / `note-body` / `note-canvas` / `agent-new`),在收着的侧栏里会先展开;不压暗、不拦点击、同一时刻一处;resolve `ok` / `mute`(用户点了不再提示,插件自己记下)/ `gone` / `missing`(等 2 秒仍不在屏幕上)/ `replaced` / `closed`(传 `null` 收起);旧宿主没有 → `?.`,没有就照老做法 |
+| `ctx.app.sync?` | 读写这台电脑的三项云同步(2026-10-20 起,蓬洲云「同步」页) | **只对首方内置包生效**,别的插件整个成员缺席;手机 / 网页、没有本地库远程同步的宿主上也缺席。`get()` 给快照(智库 / Agents 与记忆 / 插件数据各自开没开、进度、第二台电脑待定的合并问题)、`subscribe(fn)`、`refresh()`、`set(kind, on)`(`notes` / `agents` / `plugins`)、`resolveNotes('merge' \| 'cloud' \| 'skip')`、`runNow()`;开关与引擎都在宿主,插件只画界面 |
 | `ctx.inbox` | 往收件箱发本机系统消息 + 信下挂自己画的卡(2026-10-17 起) | **只给首方内置包**,别的插件整个成员缺席;`post` / `archive` / `registerCard({ sender, mount })`,卡只认发件人 `plugin:<你的 id>` 的本机系统消息 |
 | `registerReadiness` | onboarding 检查卡上的一行 `check` | 2026-09-21 起;**必须 `ctx.registerReadiness?.(…)`**;拿不准回 `'unknown'`,见下「前置条件」 |
 | `registerEditorExtension` | 笔记编辑器的按键 / 装饰 | `'high'` 档不处理**必须 `return false`** |

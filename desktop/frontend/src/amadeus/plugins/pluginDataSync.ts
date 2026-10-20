@@ -13,6 +13,8 @@ const LOAD_WAIT_MS = 3000
 const INDEX_TTL_MS = 60_000
 const stateKey = (id: string) => `forsion.pluginSync.${id}`
 const offKey = (id: string) => `forsion.pluginSync.off.${id}`
+/** 蓬洲云「同步」页「插件数据」那一行:这台设备上所有插件一起关(每个插件自己的开关照旧,两个都开才同步)。 */
+export const PLUGIN_SYNC_ALL_OFF_KEY = 'forsion.pluginSync.off'
 
 /**
  * v = 本机这份对应的云端版本(0 = 没对上过);owner = 对上的是哪个账号;
@@ -35,7 +37,7 @@ function writeState(id: string, s: SyncState): void {
 
 export function pluginDataSyncOn(p: { id: string; syncData?: boolean } | undefined): boolean {
   if (!p?.syncData || typeof window === 'undefined' || !window.tangu?.cloudFetch) return false
-  try { return localStorage.getItem(offKey(p.id)) !== '1' } catch { return true }
+  try { return localStorage.getItem(PLUGIN_SYNC_ALL_OFF_KEY) !== '1' && localStorage.getItem(offKey(p.id)) !== '1' } catch { return true }
 }
 export function pluginDataSyncUserOff(id: string): boolean {
   try { return localStorage.getItem(offKey(id)) === '1' } catch { return false }

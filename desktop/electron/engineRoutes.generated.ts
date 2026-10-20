@@ -94,6 +94,8 @@ export const ENGINE_ROUTES: readonly EngineRoute[] = [
   { method: 'GET', path: '/agent/memory', access: 'allow', src: 'routes/memory.ts', why: 'read memory' },
   { method: 'POST', path: '/agent/memory', access: 'deny-remote', src: 'routes/memory.ts', why: 'memory write' },
   { method: 'POST', path: '/agent/sync', access: 'deny-remote', src: 'routes/memory.ts', why: 'memory sync (design appendix C)' },
+  { method: 'GET', path: '/agent/sync/default', access: 'allow', src: 'routes/memory.ts', why: 'account-level agent sync switch (read)' },
+  { method: 'PUT', path: '/agent/sync/default', access: 'deny-remote', src: 'routes/memory.ts', why: 'account-level agent sync switch: only this computer decides what it uploads' },
   { method: 'GET', path: '/agent/sync/status', access: 'allow', src: 'routes/memory.ts', why: 'memory sync status' },
   { method: 'DELETE', path: '/agent/agents/:slug/memory/dream', access: 'deny-remote', src: 'routes/memoryMaintenance.ts', why: 'memory maintenance control' },
   { method: 'GET', path: '/agent/agents/:slug/memory/dream', access: 'allow', src: 'routes/memoryMaintenance.ts', why: 'read memory maintenance state' },

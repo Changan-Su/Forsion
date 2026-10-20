@@ -62,6 +62,9 @@ function retirePlaceholder(api: DockviewApi, loc: ViewLocation): void {
 /** 侧栏开合补间动画期间,pinSides 跳过该侧 —— 让 tween 独占其宽度,免被钉宽 setSize 打断。
  *  bottom 同理(它的补间量的是高),另外还挡住 captureSideWidths 记下补间中间高。 */
 const sidebarAnimating: Record<DockSide, boolean> = { left: false, right: false, bottom: false }
+/** 每侧当前那一轮开合挂着的「对侧锁」释放函数。后一轮接管时先放掉前一轮的锁、再锁自己的;前一轮还排着的
+ *  setTimeout(release) 晚到时必须什么都不做 —— 锁的是同一个组的约束,它一放就拆掉了后一轮刚上的锁,补间中途对侧被挤,
+ *  captureSideWidths 再把挤出来的宽当成用户拖的记下,之后每次开合都按它钉、越漂越远(10-20 用户实报「开关左栏主区一直向右偏」)。 */
 const toggleReleases: Partial<Record<DockSide, () => void>> = {}
 const extensions: Partial<Record<DockSide, { dismiss(reason?: 'dismiss' | 'layout'): void; dispose(instant?: boolean): void | Promise<void>; id: string; previousId?: string; defaultWidth?: number }>> = {}
 const dismissExtensions = (): void => {
@@ -1459,7 +1462,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       // 只锁 close 那一下的话,对侧仍会在这 200ms 里一路鼓起来、收尾再被 pinSides 弹回 = 抽闪。
       toggleReleases[side]?.()
       const unlock = lockNeighbour()
-      const release = (): void => { unlock(); if (toggleReleases[side] === release) delete toggleReleases[side] }
+      const release = (): void => { if (toggleReleases[side] !== release) return; delete toggleReleases[side]; unlock() } // 只放一次,见 toggleReleases
       toggleReleases[side] = release
       const finish = (): void => {
         if (stale()) return // 已被后一次点击接管:那一轮会自己收尾,这里再动手就是去关别人的 panel
@@ -1502,7 +1505,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       // 都是按比例摊给所有组的 → 对侧先被顶宽,补间收尾 pinSides 再把它弹回,就是「左栏抽闪一下」。
       toggleReleases[side]?.()
       const unlock = lockNeighbour()
-      const release = (): void => { unlock(); if (toggleReleases[side] === release) delete toggleReleases[side] }
+      const release = (): void => { if (toggleReleases[side] !== release) return; delete toggleReleases[side]; unlock() } // 只放一次,见 toggleReleases
       toggleReleases[side] = release
       const restoreOpen = preserveAcrossRestructure() // 同收起:新增组一样会让主区被摘下重挂(底部有藏着的组时不新增)
       snapshotTaken = true
@@ -1761,7 +1764,7 @@ export const presentDockedExtension: ExtendViewPresenter = (options, dismiss) =>
   const holdNeighbour = (): (() => void) => {
     toggleReleases[side]?.()
     const unlock = vert ? lockSides(api, ['left', 'right'], true) : lockOtherSide(api, side)
-    const release = (): void => { unlock(); if (toggleReleases[side] === release) delete toggleReleases[side] }
+    const release = (): void => { if (toggleReleases[side] !== release) return; delete toggleReleases[side]; unlock() } // 只放一次,见 toggleReleases
     toggleReleases[side] = release
     return release
   }
