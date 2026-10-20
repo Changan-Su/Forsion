@@ -135,6 +135,8 @@ export const OnboardingWizard: React.FC<{
   const [loggedIn, setLoggedIn] = useState(false)
   // 登录后「同步到蓬洲云」三个勾(云同步开启方案 2026-10-20):默认都勾上,走完引导时按勾的开;这一步就算点过头,之后不再弹首登卡片
   const [syncPick, setSyncPick] = useState<Record<SyncKind, boolean>>({ notes: true, agents: true, plugins: true })
+  // 真看到过那三个勾才算点过头:「跳过引导」在哪一步都能按,没看到就别替用户按默认全开(留给之后的首登卡片问)
+  const syncSeen = useRef(false)
   const [device, setDevice] = useState<{ url: string; userCode: string } | null>(null)
   const [connectMsg, setConnectMsg] = useState('')
   // byok 表单
@@ -301,7 +303,7 @@ export const OnboardingWizard: React.FC<{
       localStorage.setItem(ONBOARDING_VERSION_KEY, appVer || APP_VERSION)
     } catch { /* Storage may be unavailable in private sessions. */ }
     // 登录了才有那三个勾;后台去开,不挡引导收尾(第二台电脑要用户定的,蓬洲云「同步」页会挂着等)
-    if (loggedIn && window.remoteSync) void applySyncChoices(syncPick)
+    if (loggedIn && syncSeen.current && window.remoteSync) void applySyncChoices(syncPick)
     onFinish()
   }
   const go = (next: Step, tab?: PermissionTab): void => {
@@ -470,7 +472,7 @@ export const OnboardingWizard: React.FC<{
                   {loggedIn && (
                     <>
                       <div className="hint" style={{ marginTop: 6 }}>{t('onboarding.connect.loggedIn')}</div>
-                      <div className="ob-sync-title">{t('onboarding.connect.syncTitle')}</div>
+                      <div className="ob-sync-title" ref={() => { syncSeen.current = true }}>{t('onboarding.connect.syncTitle')}</div>
                       {([['notes', t('onboarding.connect.sync.notes')], ['agents', t('onboarding.connect.sync.agents')], ['plugins', t('onboarding.connect.sync.plugins')]] as const)
                         .filter(([k]) => k !== 'notes' || !!window.remoteSync).map(([k, label]) => (
                         <label key={k} className="inline-check ob-sync-row">
