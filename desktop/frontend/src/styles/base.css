@@ -3133,6 +3133,15 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 /* 设置 → 浏览器 → Chrome 扩展:连接码(整段可选中)+ 行内按钮 */
 .settings-inline-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 6px; min-width: 0; }
 .settings-code-chip { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 2px 7px; border: var(--border-width) solid var(--border); border-radius: var(--radius-sm); color: var(--text-muted); font-family: var(--font-mono); font-size: var(--ui-font-caption, 11px); user-select: all; }
+.settings-path-text { font-family: var(--font-mono); font-size: var(--ui-font-caption, 11px); color: var(--text-muted); word-break: break-all; user-select: all; }
+/* Forsion Clip 扩展文件夹的拖拽把手(设置 › 浏览器):一张文件卡片,按下去走原生拖出(fs:startDrag) */
+.settings-drag-chip { display: inline-flex; align-items: center; gap: 8px; padding: 4px 12px 4px 4px; border: var(--border-width) solid var(--border); border-radius: var(--radius-md); background: var(--bg-card); box-shadow: var(--card-shadow); color: var(--text); cursor: grab; user-select: none; }
+.settings-drag-chip:hover { border-color: var(--hover-line); }
+.settings-drag-chip:active { cursor: grabbing; }
+.settings-drag-chip-grip { color: var(--text-faint); }
+.settings-drag-chip-icon { display: grid; place-items: center; width: 24px; height: 24px; border-radius: var(--radius-sm); background: var(--overlay-light); color: var(--text-muted); }
+.settings-drag-chip b { display: block; font-size: var(--ui-font-meta, 12px); line-height: var(--ui-line-meta, 18px); font-weight: 500; }
+.settings-drag-chip small { display: block; font-size: var(--ui-font-caption, 11px); line-height: var(--ui-line-caption, 14px); color: var(--text-muted); }
 .settings-switch {
   position: relative;
   flex: 0 0 auto;

@@ -1,6 +1,8 @@
 /**
  * Dev-only visual harness:设置 → 浏览器 →「Chrome 扩展」卡片 —— 真 BrowserExtensionPanel + 生产 CSS;
- * 引擎端点与 openHostPath 都是桩,不连后端。?connected / ?busy(端口被占)/ ?external(外部引擎)/ ?dark / ?lang=en;
+ * 引擎端点与 openHostPath / clipExtension / startHostDrag 都是桩,不连后端。?connected / ?busy(端口被占)/ ?external(外部引擎)/
+ * ?noclip(壳里没有 clipExtension,退回老的「打开扩展文件夹」)/ ?nochrome(没装 Chrome,复制地址)/ ?stale(副本是旧版)/
+ * ?copyfail(副本准备失败)/ ?installed(连上过、现在没连)/ ?hoston(「允许其他设备连接本机」开着)/ ?dark / ?lang=en;
  * __extHarness.holdPolls / holdResets = true 扣住之后的状态轮询(按发出时刻的状态作答)/ 换码请求,release() 放行 ——
  * 复现「旧轮询晚到」竞态、验证换码进行中不可再点。
  * 跑法:node scripts/e2e-editor.cjs --check=browserext-settings --shot
@@ -13,22 +15,25 @@ import { applyTheme } from './theme/loader'
 import { BrowserExtensionPanel } from './components/BrowserExtensionPanel'
 import type { TanguDesktopConfig } from './types'
 import { installEngineHost } from './services/engine/targets'
+import { useApp } from './stores/appStore'
 
 const params = new URLSearchParams(location.search)
 setLocaleGlobal(params.get('lang') === 'en' ? 'en' : 'zh')
 applyTheme('lovable', 'cream', 'cream', params.has('dark') ? 'dark' : 'light')
 
 const BACKEND = 'http://stub.local'
+useApp.setState({ desktopConfig: { unitHostEnabled: params.has('hoston') } as never }) // ?hoston = 「允许其他设备连接本机」开着(一次配对能用)
 installEngineHost({ cfg: () => ({ backendUrl: BACKEND, token: 'stub' } as TanguDesktopConfig), desktopConfig: () => ({ mode: params.has('external') ? 'external' : 'managed' }) })
 const harness = {
-  opened: [] as string[], resets: 0, code: 'tangu:47655:3f9c2a71d04b8e56a1c7f02d9e4b6a8c13e5f7092b4d6c8e',
+  opened: [] as string[], dragged: [] as string[], prepares: [] as boolean[], chromeOpened: 0, resets: 0, code: 'tangu:47655:3f9c2a71d04b8e56a1c7f02d9e4b6a8c13e5f7092b4d6c8e',
   holdPolls: false, holdResets: false, held: [] as Array<() => void>,
   release() { harness.holdPolls = harness.holdResets = false; for (const r of harness.held.splice(0)) r() },
 }
 ;(window as unknown as { __extHarness: typeof harness }).__extHarness = harness
 const status = () => ({
   enabled: true, port: 47655, listening: !params.has('busy'), error: params.has('busy') ? 'EADDRINUSE' : '',
-  connected: params.has('connected'), clients: params.has('connected') ? [{ version: '0.1.0', connectedAt: Date.now() }] : [],
+  connected: params.has('connected'), clients: params.has('connected') ? [{ version: '2.1.0', connectedAt: Date.now() }] : [],
+  lastClient: params.has('connected') || params.has('installed') ? { version: '2.1.0', at: Date.now() } : null, // ?installed = 连上过、现在没连
   extensionId: 'gpajikakdmhjebadgcbmhidkkajclfoi', extensionDir: '/Applications/Forsion.app/Contents/Resources/tangu-server/browser-extension', code: harness.code,
 })
 const json = (body: unknown): Response => new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })
@@ -48,8 +53,20 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
   }
   return json({})
 }
+const CLIP_DIR = '/Users/me/Library/Application Support/Forsion/Forsion Clip'
 window.tangu = {
   openHostPath: async (p: string) => { harness.opened.push(p); return { ok: true } },
+  startHostDrag: (p: string) => { harness.dragged.push(p) },
+  ...(params.has('noclip') ? {} : {
+    clipExtension: {
+      prepare: async (update?: boolean) => {
+        harness.prepares.push(!!update)
+        if (params.has('copyfail')) return { error: 'EACCES' }
+        return { dir: CLIP_DIR, version: params.has('stale') && !update ? '2.0.9' : '2.1.0', bundled: '2.1.0' }
+      },
+      openChromeExtensions: async () => { harness.chromeOpened++; return params.has('nochrome') ? { ok: false, copied: true, reason: 'no-chrome' } : { ok: true } },
+    },
+  }),
 } as unknown as NonNullable<Window['tangu']>
 
 createRoot(document.getElementById('root')!).render(

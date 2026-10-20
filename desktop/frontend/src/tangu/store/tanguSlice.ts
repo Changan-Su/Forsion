@@ -610,7 +610,7 @@ export function activeChatModelId(
 /** 重读主进程折算好的配置,刷新本地缓存(agent 改了 config.json 之后)。cfg 只动「设置里的值」那三项,连接信息不碰。
  *  只认最后发起的那次读取:连改两次时两次读取的先后回来的顺序不保证,先发的那份(旧值)晚到就会把新值盖回去。 */
 let desktopConfigReloadSeq = 0
-function reloadDesktopConfig(): void {
+export function reloadDesktopConfig(): void {
   const generation = host.authGen()
   const seq = ++desktopConfigReloadSeq
   void window.tangu?.getConfig?.().then((c) => {

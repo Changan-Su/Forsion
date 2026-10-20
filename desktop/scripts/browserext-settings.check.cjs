@@ -42,15 +42,24 @@ async function main() {
   const open = async (query = '') => { await page.goto(base.toString() + query); await panel.waitFor() }
 
   await open()
-  check('未连接时状态写明', (await page.locator('[data-testid="browser-extension-status"]').textContent()) === '未连接')
+  check('从没连上过:状态是「未安装」', (await page.locator('[data-testid="browser-extension-status"]').textContent()) === '未安装')
   check('连接码整段显示', (await page.locator('[data-testid="browser-extension-code"]').textContent()).startsWith('tangu:47655:'))
   const text = await panel.textContent()
   check('三步安装说明齐全', text.includes('1. ') && text.includes('chrome://extensions') && text.includes('加载已解压的扩展程序') && text.includes('3. '))
-  if (shot) await page.locator('.settings-browser-ext-panel').screenshot({ path: path.join(out, 'ext-light.png') })
+  check('「允许其他设备连接本机」关着:第 3 步说 Forsion 会弹「允许并打开」,「手动配对」缺省展开', text.includes('允许并打开') && text.includes('允许其他设备连接本机') && (await page.locator('[data-testid="browser-extension-manual"]').getAttribute('aria-expanded')) === 'true')
 
+  // 手动安装底座:扩展复制出包(用户找得到)、替用户打开 Chrome 扩展页、拖拽把手走原生拖出
+  await panel.getByRole('button', { name: '在 Chrome 中打开扩展页' }).click()
+  await page.waitForFunction(() => window.__extHarness.chromeOpened === 1)
+  check('「在 Chrome 中打开扩展页」交给主进程,打开成功不出提示', (await page.locator('[data-testid="browser-extension-open-note"]').count()) === 0)
+  await page.locator('[data-testid="browser-extension-drag"]').dispatchEvent('dragstart')
+  const dragged = await page.evaluate(() => window.__extHarness.dragged)
+  check('拖拽把手拖出的是复制出包的那份', dragged.length === 1 && dragged[0].endsWith('/Forsion/Forsion Clip'), dragged)
+  check('复制出包的路径写在卡片上', (await panel.textContent()).includes('Application Support/Forsion/Forsion Clip'))
   await panel.getByRole('button', { name: '打开扩展文件夹' }).click()
   const opened = await page.evaluate(() => window.__extHarness.opened)
-  check('「打开扩展文件夹」打开随包的扩展目录', opened.length === 1 && opened[0].endsWith('/tangu-server/browser-extension'), opened)
+  check('「打开扩展文件夹」打开复制出包的那份', opened.length === 1 && opened[0].endsWith('/Forsion/Forsion Clip'), opened)
+  if (shot) await page.locator('.settings-browser-ext-panel').screenshot({ path: path.join(out, 'ext-light.png') })
 
   await panel.getByRole('button', { name: '换一个' }).click()
   await page.waitForFunction(() => document.querySelector('[data-testid="browser-extension-code"]')?.textContent?.includes('abab'))
@@ -81,14 +90,52 @@ async function main() {
   await page.waitForFunction(() => document.querySelector('[data-testid="browser-extension-code"]')?.textContent?.includes('abab'))
   check('换码进行中「换一个」置灰,回来后恢复', busy && (await resetBtn.isEnabled()), { busy })
 
+  await open('?nochrome')
+  await panel.getByRole('button', { name: '在 Chrome 中打开扩展页' }).click()
+  await page.locator('[data-testid="browser-extension-open-note"]').waitFor()
+  check('没装 Chrome:提示已复制地址', (await page.locator('[data-testid="browser-extension-open-note"]').textContent()).includes('没找到 Google Chrome'))
+
+  // 副本是旧版:挂载时不换(Chrome 正从那里加载),写明有新版;拖的那一下先换成随包版本再拖
+  await open('?stale')
+  await page.locator('[data-testid="browser-extension-update-hint"]').waitFor()
+  check('副本旧版:挂载只补缺不换,写明有新版本', (await page.evaluate(() => window.__extHarness.prepares)).every((u) => u === false))
+  await page.locator('[data-testid="browser-extension-drag"]').dispatchEvent('dragstart')
+  await page.waitForFunction(() => window.__extHarness.dragged.length === 1)
+  check('副本旧版:拖之前先换成随包版本', (await page.evaluate(() => window.__extHarness.prepares)).includes(true) && (await page.locator('[data-testid="browser-extension-update-hint"]').count()) === 0)
+
+  // 副本准备失败:退回打开随包目录,写明原因(Codex 10-20)
+  await open('?copyfail')
+  await page.locator('[data-testid="browser-extension-copy-error"]').waitFor()
+  await panel.getByRole('button', { name: '打开扩展文件夹' }).click()
+  const openedFail = await page.evaluate(() => window.__extHarness.opened)
+  check('副本准备失败:退回打开随包目录,不给拖拽把手', openedFail[0]?.endsWith('/tangu-server/browser-extension') && (await page.locator('[data-testid="browser-extension-drag"]').count()) === 0, openedFail)
+
+  await open('?noclip')
+  await panel.getByRole('button', { name: '打开扩展文件夹' }).click()
+  const openedOld = await page.evaluate(() => window.__extHarness.opened)
+  check('壳里没有 clipExtension:退回打开随包目录,不给拖拽把手', openedOld.length === 1 && openedOld[0].endsWith('/tangu-server/browser-extension') && (await page.locator('[data-testid="browser-extension-drag"]').count()) === 0, openedOld)
+
   await open('?external')
   const extText = await panel.textContent()
   check('外部引擎:不给「打开扩展文件夹」(目录在引擎那台机器上),改为写明路径',
-    (await panel.getByRole('button', { name: '打开扩展文件夹' }).count()) === 0 && extText.includes('外部引擎') && extText.includes('/tangu-server/browser-extension'), extText.slice(-160))
+    (await panel.getByRole('button', { name: '打开扩展文件夹' }).count()) === 0 && (await panel.getByRole('button', { name: '在 Chrome 中打开扩展页' }).count()) === 0 && extText.includes('外部引擎') && extText.includes('/tangu-server/browser-extension'), extText.slice(-160))
   if (shot) await page.locator('.settings-browser-ext-panel').screenshot({ path: path.join(out, 'ext-external.png') })
 
   await open('?connected')
-  check('连上后状态为已连接', (await page.locator('[data-testid="browser-extension-status"]').textContent()) === '已连接')
+  check('连上后状态写明版本', (await page.locator('[data-testid="browser-extension-status"]').textContent()) === '已连接 · Forsion Clip 2.1.0')
+  await open('?installed')
+  check('连上过、现在没连:状态是「未连接」', (await page.locator('[data-testid="browser-extension-status"]').textContent()) === '未连接')
+
+  // 一次配对能用(互联开着):第 3 步改说「点允许」,连接码收进「手动配对」,点开才出来
+  await open('?hoston')
+  const hostOnText = await panel.textContent()
+  check('互联开着:第 3 步说装好后点「允许」,不再让粘码', hostOnText.includes('点「允许」') && !hostOnText.includes('允许其他设备连接本机') && (await page.locator('[data-testid="browser-extension-code"]').count()) === 0)
+  await page.locator('[data-testid="browser-extension-manual"]').click()
+  await page.locator('[data-testid="browser-extension-code"]').waitFor()
+  check('展开「手动配对」后连接码与「换一个」都在', (await panel.getByRole('button', { name: '换一个' }).count()) === 1)
+  if (shot) await page.locator('.settings-browser-ext-panel').screenshot({ path: path.join(out, 'ext-hoston-manual.png') })
+  await open('?hoston&external')
+  check('外部引擎:「手动配对」缺省展开', (await page.locator('[data-testid="browser-extension-code"]').count()) === 1)
   await open('?busy')
   check('端口被占时直说原因', (await page.locator('[data-testid="browser-extension-status"]').textContent()).includes('47655') )
 

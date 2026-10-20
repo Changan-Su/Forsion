@@ -416,6 +416,7 @@ declare global {
       backendLogs?(): Promise<string[]>
       backendRestart?(): Promise<BackendStatusInfo>
       onBackendStatus?(cb: (st: BackendStatusInfo) => void): () => void
+      onConfigChanged?(cb: () => void): () => void
       // ── 设备互联(Forsion Unit):名册 + 本机 host 状态(token 留主进程,渲染层只拿结果)──
       unitsList?(): Promise<{ status: number; json: { units?: UnitInfo[] } | null }>
       /** 系统浏览器开中转引导页:main 代拼 `#token=` 登录态递交(forsion_token 不下发渲染层)。 */
@@ -575,6 +576,12 @@ declare global {
       readHostFile?(filePath: string): Promise<{ mimeType: string; content: string; size: number; mtimeMs?: number; tooLarge?: boolean }>
       /** 用系统默认应用打开(预览不支持的类型)。 */
       openHostPath?(p: string): Promise<{ ok: boolean; error?: string }>
+      /** Forsion Clip 手动安装(设置 › 浏览器):复制出包的扩展文件夹 / 打开 Chrome 扩展页;拖拽用 startHostDrag。 */
+      clipExtension?: {
+        /** update=false 只补缺不动已有副本;用户要(重新)装时传 true 换成随包版本(bundled)。 */
+        prepare(update?: boolean): Promise<{ dir: string; version: string; bundled: string } | { error: string }>
+        openChromeExtensions(): Promise<{ ok: true } | { ok: false; copied: true; reason: 'no-chrome' | 'unsupported' }>
+      }
       /** Coding Space:把工作区目录挂本地静态服务器,返回 origin(iframe 多文件预览)。 */
       codePreviewServe?(rootDir: string): Promise<{ origin: string }>
       /** 单文件 HTML 预览:挂其所在目录到不可猜的令牌根,返回可直接加载的 http URL。 */
