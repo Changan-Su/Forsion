@@ -381,9 +381,9 @@ export function ChatView({ leaf, params }: ViewProps) {
       scrollToElement(root, el, 24) // 落地后再量再补:上面的消息带 content-visibility,进视口才量出真实高度
     }
     el.classList.add('t2-jump-flash')
-    const timer = window.setTimeout(() => el.classList.remove('t2-jump-flash'), 1600)
+    // 不随 effect 清理:下一行 clearJumpTarget 改了依赖、effect 立刻重跑,清理会把这个定时器掐掉 → 类永远摘不掉,再跳到同一条就不闪了
+    window.setTimeout(() => el.classList.remove('t2-jump-flash'), 1600)
     s.clearJumpTarget()
-    return () => window.clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [s.jumpTarget?.seq, activeId, historyLoading, activeMessages.length])
 
@@ -413,7 +413,9 @@ export function ChatView({ leaf, params }: ViewProps) {
     const update = (): void => {
       const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40
       const max = el.scrollHeight - el.clientHeight
-      if (atBottom) stickToBottom.current = true
+      // 在底部且没在往上走才重新吸底:从底部起跳的平滑滚动(画布双击、目录、搜索跳转)第一帧只挪 1px、还在 40px 里,
+      // 原来这一下就把吸底挂回去,follow 随即拽回底部、scrollToElement 的补正也被一帧帧抵掉(10-20 画布双击第 1 / 2 轮实测)
+      if (atBottom && el.scrollTop >= previousTop) stickToBottom.current = true
       // 往上挪了、可滚的最大距离却没变小(变小 = 布局把位置夹下来,不算):目录跳转这类程序滚动也松开。
       // 消息带 content-visibility,往上一滚,刚进视口的才量出真实高度 → 内容变高 → 不松开就被 follow 拽回底部(10-16 实测)
       else if (el.scrollTop < previousTop && (pointerDown || max >= previousMax)) stickToBottom.current = false
