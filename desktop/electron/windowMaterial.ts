@@ -41,8 +41,16 @@ export function applyWindowMaterial(
   win: MaterialWindow | null | undefined,
   request: WindowMaterialRequest,
   platform: NodeJS.Platform = process.platform,
+  transparentSurface = false,
 ): void {
   if (!win || win.isDestroyed()) return
+  // Mini draws its own rounded surface. An opaque native backing fills the cut-out
+  // corners and the transparent area exposed by docking, regardless of CSS radius.
+  if (transparentSurface) {
+    if (platform === 'darwin') win.setVibrancy(null)
+    win.setBackgroundColor('#00000000')
+    return
+  }
   const solid = request.backgroundColor ?? (request.mode === 'dark' ? '#252327' : '#fbf8f5')
   if (platform !== 'darwin') {
     // 非 macOS 没有同等原生 vibrancy：窗口底跟随当前 skin，不能永远透出 cream 奶油色。

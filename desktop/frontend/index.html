@@ -119,7 +119,10 @@
             lavender: ['#f1edf7', '#26252b'], zhi: ['#eaf3f9', '#21272c'], sage: ['#ecf3e9', '#232723'], ink: ['#f7f6f3', '#201f1d'], custom: ['#f6f6f7', '#1b1b1d']
           };
           // 自定义背景运行时会为当前模式做可读性收敛；首帧不可直接铺原始 seed，否则极端色会先闪一帧反相底。
-          root.style.background = (BG[bg] || BG.cream)[mode === 'dark' ? 1 : 0];
+          if (new URLSearchParams(location.search).get('window') === 'mini') {
+            root.dataset.window = 'mini';
+            root.style.background = 'transparent';
+          } else root.style.background = (BG[bg] || BG.cream)[mode === 'dark' ? 1 : 0];
         } catch (e) { /* private mode */ }
       })();
     </script>

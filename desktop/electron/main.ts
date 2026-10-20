@@ -113,6 +113,7 @@ import { registerPtyIpc } from './pty'
 import { registerAssetSchemes as registerAmadeusAssetSchemes, registerAssetProtocol as registerAmadeusAssetProtocol } from './amadeus/assetProtocol'
 import { nearestEdge, collapsedBounds, expandedBounds, visibleRect, pointInRect, growRect, resizeFromEdge, type Rect, type Edge } from './windowGeometry'
 import { applyWindowMaterial, parseWindowMaterialRequest } from './windowMaterial'
+import { createMiniDockMotion, miniDockFrame } from './miniDockMotion'
 import { isForsionUrl, pushDeepLink, drainDeepLinks, filesFromArgv, pushOpenFile, drainOpenFiles } from './deepLink'
 
 /** ~/.tangu(与包内 core/tanguHome.ts 同约定;TANGU_HOME 可整体重定向)。 */
@@ -1949,7 +1950,8 @@ let stopMiniPassThrough: (() => void) | null = null
 /** Mini 尚在载入时也保留最后一次定向,`did-finish-load` 后补发,避免快速连续打开丢第二个目标。 */
 let miniTarget: MiniOpenOptions | undefined
 /** 贴边吸附态:edge=贴哪条边,expanded=当前是否展开。null=未贴边(自由浮动)。 */
-let miniDock: { edge: Edge; expanded: boolean } | null = null
+let miniDock: { edge: Edge; expanded: boolean; displayId: number; workArea: Rect } | null = null
+let miniDockMotion: ReturnType<typeof createMiniDockMotion> | null = null
 let suppressMiniMoved = false // 抑制程序化 setBounds 触发的 moved(否则折叠/展开自激)
 let miniDragging = false // 用户正在拖窗(moved 连发中);其间不吸附/不轮询,避免和拖拽对打(修「拖不出来」)
 let miniSettleTimer: NodeJS.Timeout | null = null
@@ -2040,8 +2042,21 @@ function createMiniWindow(opts?: MiniOpenOptions): void {
     active: () => miniAutoPanel?.following() ?? false,
     cursor: () => screen.getCursorScreenPoint(),
   })
+  if (process.platform === 'win32') miniDockMotion = createMiniDockMotion(miniWindow)
+  miniWindow.webContents.on('did-start-navigation', (_e, _url, isInPlace, isMainFrame) => {
+    if (!isMainFrame || isInPlace) return // SketchCard/media iframe loads are not Mini reloads
+    if (miniDock && !miniDockMotion) setMiniBounds(expandedBounds(miniBounds(), miniDock.edge, miniDock.workArea), false)
+    miniDockMotion?.reset(false); miniDock = null; stopMiniPoll()
+  })
   miniWindow.on('move', onMiniMoved)
-  miniWindow.on('closed', () => { console.log('[win] mini closed'); stopMiniPassThrough?.(); stopMiniPassThrough = null; miniWindow = null; miniTarget = undefined; miniDock = null; miniResizeFrom = null; stopMiniPoll() })
+  miniWindow.on('closed', () => {
+    console.log('[win] mini closed'); stopMiniPassThrough?.(); stopMiniPassThrough = null
+    miniDockMotion?.stop(); miniDockMotion = null
+    if (miniSettleTimer) clearTimeout(miniSettleTimer)
+    if (miniMovedTimer) clearTimeout(miniMovedTimer)
+    suppressMiniMoved = false; miniDragging = false
+    miniWindow = null; miniTarget = undefined; miniDock = null; miniResizeFrom = null; stopMiniPoll()
+  })
   console.log('[win] mini open')
   loadRendererWith(miniWindow, { window: 'mini', ...(opts?.sessionId ? { sessionId: opts.sessionId } : {}) })
 }
@@ -2150,16 +2165,23 @@ function toggleMiniWindow(opts?: MiniOpenOptions): void {
   } else createMiniWindow(opts)
 }
 
-/** 设 bounds;mac 传 animate=true 走原生滑动动画(修「无动画」),win/linux 瞬时。程序化移动抑制 moved 自激。 */
+/** Windows getBounds encloses fractional-DPI rounding; content bounds match the painted card. */
+function miniBounds(): Rect {
+  return process.platform === 'win32' ? miniWindow!.getContentBounds() : miniWindow!.getBounds()
+}
+
+/** Native geometry changes only for snap/drag/resize. Windows docking animation stays in the renderer. */
 function setMiniBounds(r: Rect, animate = true): void {
   if (!miniWindow || miniWindow.isDestroyed()) return
-  const previous = miniWindow.getBounds()
+  const previous = miniBounds()
   const changed: Partial<Rect> = {}
   for (const key of ['x', 'y', 'width', 'height'] as const) if (r[key] !== previous[key]) changed[key] = r[key]
   if (Object.keys(changed).length === 0) return
   suppressMiniMoved = true
-  // Windows 的分数 DPI 下,把没变的尺寸反复设回去也可能每次多出 1px。
-  miniWindow.setBounds(changed, animate && process.platform === 'darwin')
+  // Partial setBounds reuses the rounded OUTER size on Windows, growing it on each move
+  // at 125% DPI. Write the complete CONTENT rect instead; its size remains stable.
+  if (process.platform === 'win32') miniWindow.setContentBounds(r)
+  else miniWindow.setBounds(changed, animate && process.platform === 'darwin')
   // 单个定时器:连发(拖缩放边)时后一次顺延,前一次的定时器不会提前放开抑制
   if (miniMovedTimer) clearTimeout(miniMovedTimer)
   miniMovedTimer = setTimeout(() => { suppressMiniMoved = false }, animate && process.platform === 'darwin' ? 320 : 60)
@@ -2168,6 +2190,7 @@ function setMiniBounds(r: Rect, animate = true): void {
 // moved 连发 = 用户在拖窗;只在**停稳 200ms 后**才判贴边(拖拽过程中绝不折叠 → 能自由拖出)。
 function onMiniMoved(): void {
   if (!miniWindow || suppressMiniMoved || miniResizeFrom) return // 程序化移动 / 拖缩放边不算用户拖窗
+  if (miniDock) { miniDockMotion?.reset(); miniDock = null; stopMiniPoll() }
   miniDragging = true
   if (miniSettleTimer) clearTimeout(miniSettleTimer)
   miniSettleTimer = setTimeout(onMiniSettled, 200)
@@ -2176,12 +2199,15 @@ function onMiniMoved(): void {
 function onMiniSettled(): void {
   miniDragging = false
   if (!miniWindow || miniWindow.isDestroyed()) return
-  const b = miniWindow.getBounds()
-  const wa = screen.getDisplayMatching(b).workArea
+  const b = miniBounds()
+  const display = screen.getDisplayMatching(b), wa = display.workArea
   const edge = nearestEdge(b, wa)
   if (edge) {
-    miniDock = { edge, expanded: false }
-    setMiniBounds(collapsedBounds(b, edge, wa, MINI_PEEK)) // 停在边上 → 折叠(动画)
+    miniDock = { edge, expanded: false, displayId: display.id, workArea: wa }
+    if (miniDockMotion) {
+      setMiniBounds(expandedBounds(b, edge, wa), false)
+      miniDockMotion.set(edge, true, MINI_PEEK)
+    } else setMiniBounds(collapsedBounds(b, edge, wa, MINI_PEEK))
     ensureMiniPoll()
   } else {
     miniDock = null // 拖离边 → 解除吸附
@@ -2198,21 +2224,33 @@ function stopMiniPoll(): void {
   if (miniPollTimer) { clearInterval(miniPollTimer); miniPollTimer = null }
 }
 function pollMiniCursor(): void {
-  if (!miniWindow || miniWindow.isDestroyed() || !miniDock || miniDragging || suppressMiniMoved || miniResizeFrom) return
+  if (!miniWindow || miniWindow.isDestroyed() || !miniWindow.isVisible() || !miniDock || miniDragging || suppressMiniMoved || miniResizeFrom || miniDockMotion?.pending()) return
   const pt = screen.getCursorScreenPoint()
-  const b = miniWindow.getBounds()
-  const wa = screen.getDisplayMatching(b).workArea
+  const b = miniBounds()
+  // Never infer ownership from a tucked window: most of it can overlap the next monitor.
+  const display = screen.getAllDisplays().find((d) => d.id === miniDock!.displayId)
+  if (!display || JSON.stringify(display.workArea) !== JSON.stringify(miniDock.workArea)) {
+    miniDockMotion?.reset(); miniDock = null; stopMiniPoll()
+    const area = screen.getDisplayNearestPoint(pt).workArea
+    setMiniBounds({ ...b, x: Math.max(area.x, Math.min(b.x, area.x + area.width - b.width)), y: Math.max(area.y, Math.min(b.y, area.y + area.height - b.height)) }, false)
+    return
+  }
+  const wa = miniDock.workArea
   if (!miniDock.expanded) {
     // 折叠:光标触到薄条(可见交集 + 容差)→ 展开
-    if (pointInRect(pt.x, pt.y, growRect(visibleRect(b, wa), MINI_TRIGGER_PAD))) {
+    const clip = miniDockMotion ? miniDockFrame(b, miniDock.edge, MINI_PEEK).clip : null
+    const visible = clip ? { ...clip, x: b.x + clip.x, y: b.y + clip.y } : visibleRect(b, wa)
+    if (pointInRect(pt.x, pt.y, growRect(visible, MINI_TRIGGER_PAD))) {
       miniDock.expanded = true
-      setMiniBounds(expandedBounds(b, miniDock.edge, wa))
+      if (miniDockMotion) miniDockMotion.set(miniDock.edge, false, MINI_PEEK)
+      else setMiniBounds(expandedBounds(b, miniDock.edge, wa))
     }
   } else {
     // 展开:光标离开窗口 + 迟滞边距 → 折叠(小幅移动不触发,修「一动就弹回」)
     if (!pointInRect(pt.x, pt.y, growRect(b, MINI_HYSTERESIS))) {
       miniDock.expanded = false
-      setMiniBounds(collapsedBounds(b, miniDock.edge, wa, MINI_PEEK))
+      if (miniDockMotion) miniDockMotion.set(miniDock.edge, true, MINI_PEEK)
+      else setMiniBounds(collapsedBounds(b, miniDock.edge, wa, MINI_PEEK))
     }
   }
 }
@@ -3379,7 +3417,8 @@ app.whenReady().then(async () => {
   ipcMain.handle('window:setMaterial', (e, input: unknown) => {
     const request = parseWindowMaterialRequest(input)
     if (!request) return { ok: false }
-    applyWindowMaterial(BrowserWindow.fromWebContents(e.sender), request)
+    const win = BrowserWindow.fromWebContents(e.sender)
+    applyWindowMaterial(win, request, process.platform, !!win && (win === miniWindow || win === autoMiniWindow || win === dockWindow))
     return { ok: true }
   })
 
@@ -4022,6 +4061,9 @@ app.whenReady().then(async () => {
     if (isTrustedSender(e) && e.sender === miniWindow?.webContents && miniTarget) e.sender.send('window:miniTarget', miniTarget)
     if (isTrustedSender(e) && e.sender === autoMiniWindow?.webContents && autoMiniSessionId) e.sender.send('window:miniTarget', { sessionId: autoMiniSessionId })
   })
+  ipcMain.on('window:miniDockMotionDone', (e, id: unknown) => {
+    if (isTrustedSender(e) && e.sender === miniWindow?.webContents && typeof id === 'number' && Number.isSafeInteger(id)) miniDockMotion?.finish(id)
+  })
   // 屏幕坐标不受界面缩放影响;保留读光标的兼容路径。edge 不合法 = 松手。
   ipcMain.on('window:miniResize', (e, edge: unknown, start: unknown, point: unknown) => {
     if (!isTrustedSender(e) || !miniWindow || miniWindow.isDestroyed() || e.sender !== miniWindow.webContents) return
@@ -4038,7 +4080,8 @@ app.whenReady().then(async () => {
       // 刚拖到边上、还没判贴边就开始拉:那次判定作废,免得拉到一半被折叠
       if (miniSettleTimer) { clearTimeout(miniSettleTimer); miniSettleTimer = null }
       miniDragging = false
-      miniResizeFrom = { bounds: miniWindow.getBounds(), cursor }
+      miniDockMotion?.reset(); miniDock = null; stopMiniPoll()
+      miniResizeFrom = { bounds: miniBounds(), cursor }
     }
     const from = miniResizeFrom
     const next = resizeFromEdge(from.bounds, edge, cursor.x - from.cursor.x, cursor.y - from.cursor.y, MINI_MIN, MINI_MAX,

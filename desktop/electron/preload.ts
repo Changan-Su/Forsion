@@ -522,6 +522,12 @@ const api = {
     return () => ipcRenderer.removeListener('window:miniTarget', listener)
   },
   miniReady: (): void => ipcRenderer.send('window:miniReady'),
+  onMiniDockMotion: (cb: (request: import('../shared/miniDock').MiniDockMotion) => void): (() => void) => {
+    const listener = (_e: unknown, request: import('../shared/miniDock').MiniDockMotion): void => cb(request)
+    ipcRenderer.on('window:miniDockMotion', listener)
+    return () => ipcRenderer.removeListener('window:miniDockMotion', listener)
+  },
+  miniDockMotionDone: (id: number): void => ipcRenderer.send('window:miniDockMotionDone', id),
   reportMiniSession: (context: import('../shared/miniPanel').MiniSessionContext): void => ipcRenderer.send('window:miniSession', context),
   miniSessionReady: (sessionId: string): void => ipcRenderer.send('window:miniSessionReady', sessionId),
   showMainPanel: (target: import('../shared/miniPanel').MainPanelTarget): void => ipcRenderer.send('window:showMainPanel', target),

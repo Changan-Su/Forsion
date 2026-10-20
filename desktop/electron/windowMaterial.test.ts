@@ -13,6 +13,16 @@ function fakeWindow(): MaterialWindow & {
 }
 
 describe('window material', () => {
+  it('Mini retains an alpha backing in every theme and on every platform', () => {
+    for (const platform of ['win32', 'darwin', 'linux'] as const) {
+      for (const material of ['opaque', 'system-glass'] as const) {
+        const win = fakeWindow()
+        applyWindowMaterial(win, { material, mode: 'dark', backgroundColor: '#141414' }, platform, true)
+        expect(win.setBackgroundColor).toHaveBeenLastCalledWith('#00000000')
+        expect(win.setVibrancy).not.toHaveBeenCalledWith('sidebar', expect.anything())
+      }
+    }
+  })
   it('只接受白名单材质与明暗值', () => {
     expect(parseWindowMaterialRequest({ material: 'system-glass', mode: 'dark' }))
       .toEqual({ material: 'system-glass', mode: 'dark' })
