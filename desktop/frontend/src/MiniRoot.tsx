@@ -10,6 +10,7 @@ import { isDockWindow, windowKind } from './windowKind'
 import type { MiniOpenOptions } from '../../shared/miniPanel'
 import { DockRoot } from './mini/DockRoot'
 import { track } from './achievements/store'
+import { installMiniDockMotion } from './mini/dockMotion'
 
 let directMini: MiniOpenOptions | null = null
 /** 侧边拼接面板(DockRoot)也是 direct 形态:它自己定目标,不经 onMiniTarget。 */
@@ -55,6 +56,7 @@ export function MiniRoot() {
 
 function MiniPanelRoot() {
   const { t } = useI18n()
+  useEffect(installMiniDockMotion, [])
   const [direct, setDirect] = useState<MiniOpenOptions | null>(null)
   useEffect(() => { useApp.getState().setTr((k, vars) => t(k, vars as Record<string, string | number> | undefined)) }, [t])
   useEffect(() => {

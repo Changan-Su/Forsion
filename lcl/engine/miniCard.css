@@ -2,6 +2,12 @@
  * 桌面悬浮窗专属外壳。颜色只消费 LCL skin token,结构只消费 language token。
  * 外壳层不使用 backdrop-filter:macOS system glass 在窗口层完成,且外壳模糊会改变 fixed 后代包含块。
  */
+/* The card owns the rounded paint; neither the page nor the native window may
+ * fill its transparent corners or the area it vacates while docking. */
+html[data-window='mini'], html[data-window='mini'] body, html[data-window='mini'] #root {
+  background: transparent !important;
+}
+
 .mini-card-shell {
   position: fixed;
   inset: 0 auto auto 0;

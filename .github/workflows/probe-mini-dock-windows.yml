@@ -1,0 +1,47 @@
+name: probe-mini-dock-windows
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/probe-mini-dock-windows.yml'
+      - 'desktop/electron/main.ts'
+      - 'desktop/electron/miniDockMotion*'
+      - 'desktop/electron/windowMaterial*'
+      - 'desktop/electron/preload.ts'
+      - 'desktop/shared/miniDock.ts'
+      - 'desktop/frontend/src/mini/dockMotion.ts'
+      - 'desktop/frontend/src/MiniRoot.tsx'
+      - 'desktop/frontend/index.html'
+      - 'desktop/scripts/mini-dock.e2e.cjs'
+      - 'lcl/engine/miniCard.css'
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build and verify Mini docking
+        working-directory: desktop
+        run: |
+          npm ci --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npx vitest run electron/miniDockMotion.test.ts electron/windowMaterial.test.ts electron/windowGeometry.test.ts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:MINI_DOCK_OUTPUT = 'outputs/mini-dock-125'
+          npm run check:minidock -- --scale=1.25
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:MINI_DOCK_OUTPUT = 'outputs/mini-dock-150'
+          npm run check:minidock -- --scale=1.5
+          exit $LASTEXITCODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mini-dock-windows
+          path: desktop/outputs/mini-dock-*/

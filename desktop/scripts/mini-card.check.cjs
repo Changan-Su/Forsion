@@ -218,7 +218,10 @@ async function main() {
     await mini.evaluate(() => window.tangu.miniResize('e', true)); await nudge(-60, 0)
     await mini.evaluate(() => window.tangu.miniResize('e')); await pause(100); await nudge(60, 0)
     await mini.evaluate(() => window.tangu.miniResize(null))
-    check('a card tucked against the screen edge is not resized', tucked.x < left && JSON.stringify(tucked) === JSON.stringify(await bounds()), JSON.stringify(tucked))
+    const isTucked = process.platform === 'win32'
+      ? await mini.evaluate(() => document.querySelector('.mini-card-shell').getBoundingClientRect().x < -100)
+      : tucked.x < left
+    check('a card tucked against the screen edge is not resized', isTucked && JSON.stringify(tucked) === JSON.stringify(await bounds()), JSON.stringify(tucked))
     await setX(left + 40); await pause(900)
     check('pulled back from the edge it is free again', (await bounds()).x === left + 40)
     const beforeMinimum = await bounds()
