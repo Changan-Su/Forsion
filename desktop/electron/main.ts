@@ -1347,10 +1347,12 @@ async function doRefreshUnitHost(): Promise<void> {
   try {
     // 端口保持稳定(便于手输 IP 直连):首选已存端口/8791,被占则退化系统分配并回写。
     const want = stored.unitWebPort || 8791
+    // 台架开关(同 FORSION_UNIT_AUTO_PAIR 的双闸:非打包 + 显式 env):只听回环。自动批准配对时绝不能把这台的引擎露到局域网
+    const bindHost = !app.isPackaged && process.env.FORSION_UNIT_BIND_LOOPBACK === '1' ? '127.0.0.1' : undefined
     try {
-      unitWeb = await startUnitWeb(webDeps, { port: want })
+      unitWeb = await startUnitWeb(webDeps, { port: want, bindHost })
     } catch {
-      unitWeb = await startUnitWeb(webDeps, { port: 0 })
+      unitWeb = await startUnitWeb(webDeps, { port: 0, bindHost })
     }
     if (unitWeb.port !== stored.unitWebPort) await saveConfig({ unitWebPort: unitWeb.port })
     console.log(`[unit-web] 已启动:${unitLanUrl() ?? `http://127.0.0.1:${unitWeb.port}`}`)
