@@ -6,6 +6,7 @@ import type { MarketCard, MarketDetail, MarketInstallProgress } from '../types'
 
 registerMessages({
   'marketsvc.desktopOnly': { zh: '商店仅在桌面端可用', en: 'The store is only available on desktop' },
+  'marketsvc.detailUnavailable': { zh: '这里看不了插件详情，请在 Forsion 桌面端的商店里打开', en: 'Plugin details aren’t available here. Open them in the store in Forsion for desktop.' },
   'marketsvc.resolveFailed': { zh: '没能从 Forsion 服务器拿到下载地址（{detail}）', en: 'Couldn’t get the download link from the Forsion server ({detail})' },
 })
 
@@ -25,7 +26,12 @@ function bridge(): NonNullable<typeof window.tangu> {
 export const listMarket = (type?: string): Promise<MarketCard[]> =>
   bridge().marketList!(type).then((r) => r.items || [])
 
-export const getMarketDetail = (id: string): Promise<MarketDetail> => bridge().marketDetail!(id)
+// 网页版的商店只有插件页与投稿(unitShim 不给 marketDetail):从对话里的商店卡片深链过来时说清楚,别抛 TypeError。
+export const getMarketDetail = async (id: string): Promise<MarketDetail> => {
+  const t = bridge()
+  if (!t.marketDetail) throw new Error(translate('marketsvc.detailUnavailable'))
+  return t.marketDetail(id)
+}
 
 // ipcRenderer.invoke 的拒绝会被 Electron 包成 "Error invoking remote method 'market:install': Error: …",原样上屏全是噪音。
 // 主进程只给语言中立的原因码(`resolve: HTTP 502`、`github.com: timeout · …`),这里套上中英文案。

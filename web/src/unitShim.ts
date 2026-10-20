@@ -172,6 +172,8 @@ export async function installUnitShim(): Promise<boolean> {
   w.tangu = {
     /** 设备页标志:共享层据此知道「这是别的设备曝出来的面」(插件清单走 unit/plugins)。 */
     unitPage: true,
+    /** 服务器 Unit 的网页主入口(不是看别的设备):页面账号 = 来访者本人,Extend 的账号 / 商店页据此放行。 */
+    ...(published ? { unitPublicEntry: true } : {}),
     /** 远端身份:unitWeb 给本页的 /engine 请求盖 x-forsion-remote(工作区主人的本地投影除外,那是直通)。
      *  审批卡据此不给改命令 / 总允许(引擎对远端不兑现这两样)。 */
     remoteCaller: !local,
@@ -180,6 +182,10 @@ export async function installUnitShim(): Promise<boolean> {
     ...(cloud ? { cloudWeb: true } : {}),
     initialConfig: mergedConfig(),
     ...(visitor ? {
+      // 商店:网页版装不了插件(marketTypes 空 → 不列目录、不给安装),只开插件提供的页(Extend 的会员 / 积分 / 道具)和投稿。
+      // marketList 在这里只当商店入口(rb-market / open-market)的门控键,恒空。
+      marketTypes: [],
+      marketList: async () => ({ items: [] }),
       account: visitor.capability,
       forsionLogin: visitor.login,
       forsionLogout: async () => { await visitor.account.logout(); return { ok: true } },

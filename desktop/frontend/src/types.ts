@@ -399,6 +399,9 @@ declare global {
       /** unit 设备页标志(B 端渲染,unitShim 注入):本页是另一台设备曝出来的 Forsion 面 ——
        *  插件清单走对方的 unit/plugins,无 vault 桥(本地 vault 面 = v2.1)。 */
       unitPage?: boolean
+      /** 服务器 Unit 自己的网页主入口(/web/ 这类 projection=public 的投射,unitShim 注入;与 unitPage 同在)。
+       *  页面账号就是来访者本人,所以 Forsion Extend 的账号 / 商店页在这里放行;看别的设备的设备页没有这个标志,照旧挡住。 */
+      unitPublicEntry?: boolean
       /** 设备页以**远端身份**驱动对方的引擎(unitShim 注入;便携 Unit 的工作区主人 projection=local 不算):
        *  引擎按远程钳制 —— 审批改参数被拒(REMOTE_ARGS_OVERRIDE_FORBIDDEN)、「总允许」降成单次,界面据此收起这两样。 */
       remoteCaller?: boolean
