@@ -97,6 +97,7 @@
   - With the calendar open in a tab, switching to another tab and back made the week view jump to August and the month view to a different month.
   - In the English interface, calendar event cards and the new-event card showed dates in Chinese.
   - Double-clicking an earlier turn's card on the chat canvas left the chat at the bottom instead of jumping to that turn.
+  - Switching chats while the canvas was open stacked two copies of the conversation once you went back to the chat view.
   - English chats were sometimes given Chinese titles and summaries.
   - In notes, pressing ← or Backspace at the start of a line inside a fold block split the text out of the block, so collapsing it only hid the paragraphs before.
 
