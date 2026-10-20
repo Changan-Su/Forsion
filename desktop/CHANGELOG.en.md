@@ -80,6 +80,7 @@
   - Standalone whiteboards and databases in subfolders no longer show "File missing" when opened.
 - **Windows**:
   - Quickly dragging a Mini card's edge or corner to resize it no longer sometimes does nothing.
+  - Mini cards now animate when they fold against the screen edge and when they expand, no longer show square corners after a theme change, and stay on their own monitor when folded against an edge shared with another monitor.
   - Note paths are now written one way, so the same note is no longer treated as two: tab following, unsaved drafts, pins and calendar settings all line up, and records from older versions convert automatically.
   - Approvals: in Ask mode, only read-only cmd forms such as `dir` and `type` skip approval, and every other command needs approval (`git status` too). Muse now reads its own logs and files with a file-reading tool that needs no approval, instead of queuing a string of approval cards.
 - **Web**: Opened in a phone or tablet browser, the web version now looks and works like the Android app: a bottom Dock in portrait and a bar on the left on tablets in landscape. An iPad opened or refreshed in landscape gets this layout too, instead of the desktop one. Takes effect once the web version is updated.
