@@ -143,6 +143,7 @@
     "check:editorai": "node scripts/e2e-editor.cjs --check=editor-ai",
     "check:menus": "node scripts/e2e-editor.cjs --check=editor-menus",
     "check:cloudgap": "node scripts/cloud-gap.check.cjs",
+    "check:cloudvaults": "node scripts/cloud-vault-sections.check.cjs",
     "check:amadeusinteractions": "node scripts/e2e-editor.cjs --check=amadeus-interactions",
     "check:dashboard": "node scripts/e2e-editor.cjs --check=dashboard",
     "check:embedinputs": "node scripts/e2e-editor.cjs --check=embed-inputs",

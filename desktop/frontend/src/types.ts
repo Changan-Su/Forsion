@@ -867,6 +867,8 @@ declare global {
         merge?: boolean
       }): Promise<{ ok?: boolean; cloudName?: string; conflict?: string; error?: string }>
       entrySyncDisable?(path: string): Promise<{ ok: boolean }>
+      /** 手动设 / 取消 Cloud 侧根文件夹的「同步库分区」标记(Forsion Extend 0.9+)。 */
+      entrySyncMark?(name: string, on: boolean): Promise<{ ok?: boolean; error?: string }>
       /** 递归关联闭包(开启弹窗数据源):种子范围外的关联笔记+附件,外加种子页的子页面。 */
       entrySyncClosure?(rootRel: string, kind: 'page' | 'folder'): Promise<{ pages: string[]; files: string[]; subPages: string[] }>
       onEntrySyncChange?(cb: () => void): () => void
@@ -971,6 +973,10 @@ export interface AmadeusEntrySyncState {
   cloudRoot: string
   /** 云镜像里带 `.forsion-vault.md` 标记的根级文件夹名(换设备时注册表为空,分区名只能靠它)。 */
   mirrorVaults?: string[]
+  /** 标记里记的在同步各库的设备(库名 → 设备;旧的空标记、手动设的分区不在里面)。 */
+  mirrorVaultDevices?: Record<string, Array<{ id: string; name: string; since?: string }>>
+  /** 本机的 cloudSync.deviceId(据此把设备标签写成「本机」)。 */
+  deviceId?: string | null
 }
 
 /** 页面级同步共享(分享卡片数据源)。 */
