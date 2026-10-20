@@ -26,7 +26,7 @@ vi.mock('../services/backendService', async (original) => ({
 
 const { ensurePluginChat, mountPluginChat } = await import('./pluginChat')
 const { installTanguProbe } = await import('../tanguProbe')
-const { readTangu, setTanguProbe, setTanguChatViews } = await import('../amadeus/plugins/tanguSeam')
+const { readTangu, setTanguProbe, setTanguChatViews, claimComposerPrefill } = await import('../amadeus/plugins/tanguSeam')
 // 对话视图由 Tangu 激活时交出(核心插件化 2e-7);这里交一个只记下 props 的替身
 setTanguChatViews({ Chat: (props) => { api.seen.push(props as unknown as (typeof api.seen)[number]); return null }, Preview: () => null })
 const { usePluginStore } = await import('../amadeus/plugins/pluginStore')
@@ -324,8 +324,13 @@ describe('探针(tanguProbe.mountChat)', () => {
     // 挨着投的两条都在,先投的在前(单槽的话后一条会把想法顶掉)
     expect(usePluginChat.getState().pending).toEqual([{ sessionId: 's1', text: '一支 10 秒的开场' }, { sessionId: 's1', text: '为这支视频写一段配乐' }])
     usePluginChat.getState().queue('other', '别的会话的')
-    expect(usePluginChat.getState().take('s1')).toEqual(['一支 10 秒的开场', '为这支视频写一段配乐'])
-    expect(usePluginChat.getState().take('s1')).toEqual([]) // 只取一次
+    // 输入框那侧走 tanguSeam 的预填登记表(2e-8):只认插件对话里那张卡、只认本会话,取一次就清
+    const card = document.createElement('div').appendChild(document.createElement('div'))
+    expect(claimComposerPrefill({ card, sessionId: 's1' })).toEqual([])
+    card.parentElement!.setAttribute('data-plugin-chat', '')
+    expect(claimComposerPrefill({ card, sessionId: 'nope' })).toEqual([])
+    expect(claimComposerPrefill({ card, sessionId: 's1' })).toEqual([{ texts: ['一支 10 秒的开场', '为这支视频写一段配乐'] }])
+    expect(claimComposerPrefill({ card, sessionId: 's1' })).toEqual([]) // 只取一次
     expect(usePluginChat.getState().pending).toEqual([{ sessionId: 'other', text: '别的会话的' }])
 
     chat.prefill('还没被输入框取走的')
