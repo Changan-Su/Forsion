@@ -454,7 +454,7 @@ export function CalendarView({ leafId }: { leafId?: string } = {}) {
         deleteCalendarRow(sel.db, sel.row, sel.title)
         useCalendarNav.getState().setSelection(null)
         setCard(null)
-        if (clip?.event.row.rowId === sel.row.rowId && clip.event.db.path === sel.db.path) clearCalendarClipboard()
+        if (clip?.cut && clip.event.row.rowId === sel.row.rowId && clip.event.db.path === sel.db.path) clearCalendarClipboard()
         break
       case 'undo': undoLastCalendarEdit(); break
       case 'redo': redoLastCalendarEdit(); break
@@ -538,7 +538,7 @@ export function CalendarView({ leafId }: { leafId?: string } = {}) {
           break
         }
         case 'escape':
-          clearCalendarClipboard()
+          if (useCalendarClipboard.getState().clip?.cut) clearCalendarClipboard()
           if (menu) { setMenu(null); break }
           if (nav.draft) nav.setDraft(null)
           else if (nav.selection || card) dismissRef.current()

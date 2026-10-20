@@ -93,6 +93,16 @@ async function main() {
     await page.mouse.move(r.x + r.width/2, r.y + r.height/2); await page.mouse.down(); await page.mouse.move(r.x + r.width/2, r.y + r.height/2 + 28, { steps: 5 })
     await page.keyboard.press('Escape'); await page.mouse.up()
     check('Escape cancels drag without writes or leftover ghosts', (await rows(page)).find((x) => x.id === 'long').cells.date === beforeCancel && await page.locator('.drag-shadow, .dragging').count() === 0)
+    await page.locator(key('long')).click()
+    const copyBody = (await rows(page)).find((x) => x.id === 'long').body
+    await page.keyboard.press('Control+c')
+    await page.keyboard.press('Escape')
+    await page.locator(key('long')).click()
+    await page.keyboard.press('Delete')
+    await page.keyboard.press('Control+v')
+    await page.waitForTimeout(100)
+    check('copied snapshot survives Escape and source deletion, then pastes its body', (await rows(page)).length === 4 && !(await rows(page)).some((x) => x.id === 'long') && (await rows(page)).some((x) => x.body === copyBody))
+    await page.keyboard.press('Control+z'); await page.keyboard.press('Control+z')
     await desktop.close()
 
     const phone = await browser.newContext({ viewport: { width: 393, height: 852 }, deviceScaleFactor: 1, isMobile: true, hasTouch: true, locale: 'zh-CN' })

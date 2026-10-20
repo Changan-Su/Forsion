@@ -60,6 +60,10 @@ export function shiftedCalendarValue(raw: string, target?: Date): string {
 export async function cloneCalendarEvent(event: ClipboardEvent, raw = event.raw): Promise<string | null> {
   const scope = calendarScope()
   if (event.db.readonly) return null
+  if (raw !== event.raw && isStamped(event.db.columns.find((c) => c.id === event.colId)?.type ?? '')) {
+    notifyApp({ level: 'warning', text: translate('calclip.failed') })
+    return null
+  }
   const live = getAggDb(event.db.path)
   if (!live || JSON.stringify(live.columns) !== JSON.stringify(event.db.columns)) {
     notifyApp({ level: 'warning', text: translate('calclip.failed') })

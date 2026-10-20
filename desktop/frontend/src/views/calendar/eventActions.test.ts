@@ -155,6 +155,7 @@ describe('calendar action safety', () => {
     const e = event(), ro = { ...e, db: { ...e.db, readonly: true } }
     expect(copyCalendarEvent(ro)).toBe(false)
     expect(copyCalendarEvent({ ...e, colId: 'created' }, true)).toBe(false)
+    expect(await cloneCalendarEvent({ ...e, colId: 'created' }, '2026-11-01')).toBeNull()
     expect(await cloneCalendarEvent(ro)).toBeNull()
     deleteCalendarRow(ro.db, ro.row, ro.title)
     expect(rows()).toHaveLength(1)
