@@ -365,8 +365,10 @@ export function createMobileMarket(deps: MobileMarketDeps): MobileMarket {
         manifest = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null
       } catch { /* 下面统一报 manifest 无效 */ }
       if (!manifest || !manifestFile) throw new MarketUserError(deps.t('mobilemarket.badManifest'))
-      if (deps.appVersion) assertMarketplaceRequirements(manifest as any, deps.appVersion(), 'android')
+      // isDesktopOnly 先判:assertMarketplaceRequirements 也会把它算作平台不符,但抛的是英文机器码
+      // 「install: unsupported platform」,用户就看不到本地化的原因了(e2e:plugins 第 4 步钉着这句)。
       if (manifest.isDesktopOnly === true) throw new MarketUserError(deps.t('mobilemarket.desktopOnlyPlugin'))
+      if (deps.appVersion) assertMarketplaceRequirements(manifest as any, deps.appVersion(), 'android')
       const needsApp = requiredDesktopApp(manifest)
       if (needsApp) throw new MarketUserError(deps.t('mobilemarket.requiresDesktopApp', { app: KNOWN_APPS[needsApp]?.name ?? needsApp }))
       const pluginId = effectivePluginId(slug, manifest.id)

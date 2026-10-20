@@ -393,11 +393,13 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
   const shownTags = (c: MarketCard): string[] => (c.tags || []).filter((tag) => tag !== DESKTOP_ONLY_TAG)
 
   const installBtn = (c: MarketCard, extraClass = '') => {
-    const compatibility = marketplaceCompatibility(c, appVersion, marketPlatform())
-    if (compatibility === 'version' || compatibility === 'platform') return <button className={`btn sm ${extraClass}`} disabled data-market-install={c.id}><MarketRequirements item={c} version={appVersion} /></button>
+    // 「仅桌面」先判:通用兼容性也把这枚保留标签算作 platform,排在前面的话手机上只剩一句「当前端不可用」,
+    // 说不出装不了的原因(手机 e2e:plugins 4b 钉着这枚按钮)。
     if (desktopOnlyHere(c)) {
       return <button className={`btn sm ${extraClass}`.trim()} disabled data-market-install={c.id} data-install-state="desktop-only" title={t('market.desktopOnlyHint')}><Monitor size={13} />{t('market.desktopOnlyInstall')}</button>
     }
+    const compatibility = marketplaceCompatibility(c, appVersion, marketPlatform())
+    if (compatibility === 'version' || compatibility === 'platform') return <button className={`btn sm ${extraClass}`} disabled data-market-install={c.id}><MarketRequirements item={c} version={appVersion} /></button>
     const state = pluginUpdates.items.find((x) => x.id === c.id)
     const busy = !!installing[c.id] || state?.phase === 'downloading'
     const pending = !!state?.pendingVersion
