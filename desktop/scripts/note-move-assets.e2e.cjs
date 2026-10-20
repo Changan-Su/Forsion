@@ -149,18 +149,31 @@ async function main() {
     })
     // 主进程「挪得慢」的分段耗时(vaultHandlers 的 movePage 仪器)转印到台架输出:下次红了直接看是哪一段慢。
     for (const s of [app.process().stdout, app.process().stderr]) {
-      s?.on('data', (b) => { for (const l of String(b).split('\n')) if (l.includes('[amadeus] movePage') || l.includes('[note-move-trace]')) console.log(`      主进程:${l.trim()}`) })
+      s?.on('data', (b) => { for (const l of String(b).split('\n')) if (l.includes('[amadeus] movePage') || l.includes('[amadeus] rememberPage') || l.includes('[note-move-trace]')) console.log(`      主进程:${l.trim()}`) })
     }
     const win = await app.firstWindow()
     win.on('pageerror', error => console.error(`[note-move-trace] renderer error ${error.stack || error.message}`))
     // A relocation can fail after the file already moved. Keep the actual main
     // IPC error and its stage; a conflict copy alone cannot explain the cause.
-    await app.evaluate(({ ipcMain }) => {
+    await app.evaluate(({ ipcMain }, fault) => {
+      let moving
+      globalThis.__noteMoveMetadataFault = false
+      if (fault) {
+        const fs = process.getBuiltinModule('fs').promises, rename = fs.rename.bind(fs)
+        fs.rename = async (...args) => {
+          if (!globalThis.__noteMoveMetadataFault && moving === '目标夹/带图.md' && /amadeus-config(?:\.dev)?\.json$/.test(String(args[1]))) {
+            globalThis.__noteMoveMetadataFault = true
+            throw Object.assign(new Error('EBUSY last-page preference (real move fault probe)'), { code: 'EBUSY' })
+          }
+          return rename(...args)
+        }
+      }
       for (const channel of ['page:move', 'file:write-text']) {
         const original = ipcMain._invokeHandlers.get(channel)
         if (!original) continue
         ipcMain._invokeHandlers.set(channel, async (...args) => {
           const path = args[1], at = Date.now()
+          if (channel === 'page:move') moving = String(path).replaceAll('\\', '/')
           if (channel === 'page:move') console.error(`[note-move-trace] ${at} ${channel} begin ${JSON.stringify(args.slice(1))}`)
           try {
             const result = await original(...args)
@@ -169,10 +182,10 @@ async function main() {
           } catch (error) {
             console.error(`[note-move-trace] ${Date.now()} ${channel} error ${JSON.stringify({ path, message: error.message, stack: error.stack })}`)
             throw error
-          }
+          } finally { if (channel === 'page:move') moving = null }
         })
       }
-    })
+    }, process.env.NOTEMOVE_CONFIG_RENAME_FAULT === '1')
     if (HANDOVER) await app.evaluate(({ ipcMain }, phase) => {
       const channel = phase === 'write' ? 'file:write-text' : 'file:read-text'
       const original = ipcMain._invokeHandlers.get(channel)
@@ -308,6 +321,7 @@ async function main() {
     // ── 4 拖回去(途中照样打字):写法回到原样 ─────────────────────────────────
     if (HANDOVER) await app.evaluate(() => { globalThis.__noteMoveHandoff.arm = true })
     const dragBack = await dragInto('来源夹', '目标夹', '回来')
+    if (process.env.NOTEMOVE_CONFIG_RENAME_FAULT === '1') check('M1 real last-page preference write failed after physical relocation', await app.evaluate(() => globalThis.__noteMoveMetadataFault))
     const want3 = BODY.replace('正文一行', `正文一行续写再写回来${HANDOVER ? '末尾' : ''}`)
     const disk3 = await until(() => read('来源夹/带图.md'), (v) => v === want3, 15_000)
     check('6 拖回原文件夹:引用回到原来的写法,途中打的字也在', disk3 === want3,

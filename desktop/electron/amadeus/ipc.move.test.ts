@@ -71,3 +71,20 @@ it('a cloud move hook that throws makes movePage reject and the file is put back
   expect(await fs.readFile(path.join(local, 'A.md'), 'utf8')).toBe('# A\n\nOriginal content\n')
   await expect(fs.access(path.join(local, 'Dest', 'A.md'))).rejects.toThrow()
 })
+
+it('a failed last-page preference write must not report a committed move as failed', async () => {
+  const { IPC } = await import('@amadeus-shared/ipc')
+  await fs.mkdir(path.join(local, '.assets'))
+  await fs.writeFile(path.join(local, '.assets', 'a.png'), 'fixture')
+  await fs.writeFile(path.join(local, 'A.md'), '# A\n\n![pic](.assets/a.png)\n')
+  const rename = fs.rename.bind(fs)
+  const blocked = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+    if (String(to).endsWith('amadeus-config.json')) throw Object.assign(new Error('EBUSY last-page preference'), { code: 'EBUSY' })
+    return rename(from, to)
+  })
+  try {
+    await expect(invoke(IPC.movePage, 'A.md', 'Dest')).resolves.toBe('Dest/A.md')
+    await expect(fs.access(path.join(local, 'A.md'))).rejects.toThrow()
+    expect(await fs.readFile(path.join(local, 'Dest/A.md'), 'utf8')).toBe('# A\n\n![pic](../.assets/a.png)\n')
+  } finally { blocked.mockRestore() }
+})

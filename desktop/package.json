@@ -35,6 +35,7 @@
     "e2e:sidebardrop": "node scripts/sidebar-drop.e2e.cjs",
     "e2e:notemove": "node scripts/note-move-assets.e2e.cjs",
     "e2e:notemove:stress": "node scripts/note-move-stress.e2e.cjs",
+    "e2e:notemove:metadata": "node scripts/note-move-metadata.e2e.cjs",
     "e2e:filelink": "node scripts/file-wikilink.e2e.cjs",
     "e2e:ribbon": "node scripts/ribbon-dnd.e2e.cjs",
     "e2e:spacewindow": "node scripts/space-window.e2e.cjs",
