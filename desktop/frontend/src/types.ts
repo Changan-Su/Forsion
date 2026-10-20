@@ -1527,6 +1527,11 @@ declare global {
       readHostFile?(filePath: string): Promise<{ mimeType: string; content: string; size: number; mtimeMs?: number; tooLarge?: boolean }>
       /** 用系统默认应用打开(预览不支持的类型)。 */
       openHostPath?(p: string): Promise<{ ok: boolean; error?: string }>
+      /** Forsion Clip 手动安装(设置 › 浏览器):复制出包的扩展文件夹 / 打开 Chrome 扩展页;拖拽用 startHostDrag。 */
+      clipExtension?: {
+        prepare(): Promise<{ dir: string; version: string } | { error: string }>
+        openChromeExtensions(): Promise<{ ok: true } | { ok: false; copied: true; reason: 'no-chrome' | 'unsupported' }>
+      }
       /** Coding Space:把工作区目录挂本地静态服务器,返回 origin(iframe 多文件预览)。 */
       codePreviewServe?(rootDir: string): Promise<{ origin: string }>
       /** 单文件 HTML 预览:挂其所在目录到不可猜的令牌根,返回可直接加载的 http URL。 */

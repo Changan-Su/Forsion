@@ -21,6 +21,7 @@ import { existsSync, readFileSync, statSync, writeFileSync, mkdirSync, chmodSync
 import { join, dirname } from 'node:path'
 import { randomBytes, randomUUID } from 'node:crypto'
 import { forsionHomeDir, tanguDataDir, defaultWorkspaceDir } from './forsionHome'
+import { clipSourceDir } from './clipExtension'
 import { amadeusConfigPath } from './amadeus/settings'
 import { COMPUTER_HISTORY_DESKTOP_CONFIG_ENV, COMPUTER_HISTORY_DESKTOP_CONFIG_FILE } from '../shared/computerHistory'
 import { REMOTE_LOCK_FILE, REMOTE_LOCK_FILE_ENV } from '../shared/remoteSafety' // P1-K2
@@ -366,7 +367,7 @@ export class BackendManager {
       // Tangu for Chrome 扩展桥的端口:dev 与正式版各用一个,两个同时开着也不抢(连接码按各自家目录分开存)
       env.TANGU_BROWSER_EXTENSION_PORT = app.isPackaged ? '47654' : '47655'
       // 扩展本体是 Forsion Clip(npm @forsion/clip):安装包里在 tangu-server/browser-extension(引擎自己找得到),dev 指到依赖里那份
-      if (!app.isPackaged) env.TANGU_BROWSER_EXTENSION_DIR = join(__dirname, '..', '..', 'node_modules', '@forsion', 'clip', 'chrome-mv3')
+      if (!app.isPackaged) env.TANGU_BROWSER_EXTENSION_DIR = clipSourceDir()
       // 通道(微信/Telegram/QQ)配置改由引擎直接读 config.json channels/wechat 段,不再经 env 注入
       //(旧 TANGU_WECHAT_* env 会压过 config,新设置页写 /agent/channels 后热生效,无需重启后端)。
       // 让后端的微信远程会话落到桌面默认工作区(host 执行 cwd);兜底 ~/Tangu。

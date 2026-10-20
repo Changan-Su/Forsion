@@ -33,6 +33,7 @@ import { execFile, execFileSync, spawn } from 'child_process'
 import { homedir, hostname, networkInterfaces } from 'os'
 import { randomUUID } from 'crypto'
 import { BackendManager, bundledPythonBin, resolveBundledGit, resolveBundledNode, type BackendStatus } from './backendManager'
+import { registerClipExtensionIpc } from './clipExtension'
 import { envWithFullPath, pathKeyOf, withBundledGit } from './envPath'
 import { findGit } from './gitHistory'
 import { downloadUrlFor, installCommandFor, requiredProgram } from './envInstall'
@@ -3197,6 +3198,7 @@ app.whenReady().then(async () => {
     if (!icon || icon.isEmpty()) icon = nativeImage.createFromDataURL(DRAG_FALLBACK_ICON)
     e.sender.startDrag({ file: filePath, icon })
   })
+  registerClipExtensionIpc() // Forsion Clip 手动安装:复制出包的扩展文件夹、打开 Chrome 扩展页(拖拽复用上面的 fs:startDrag)
 
   ipcMain.handle('backend:getStatus', () => backend.getStatus())
   ipcMain.handle('backend:getLogs', () => backend.getLogs())

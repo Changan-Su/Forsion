@@ -324,6 +324,11 @@ const api = {
     ipcRenderer.invoke('fs:mkdir', parentDir, name),
   trashHostPath: (p: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('fs:trash', p),
   revealHostPath: (p: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('fs:reveal', p),
+  /** Forsion Clip 手动安装:把随包的扩展复制到用户找得到的位置(版本变了才覆盖)/ 替用户打开 Chrome 扩展页(mac;别处复制地址)。拖拽走 startHostDrag。 */
+  clipExtension: {
+    prepare: (): Promise<{ dir: string; version: string } | { error: string }> => ipcRenderer.invoke('clipExt:prepare'),
+    openChromeExtensions: (): Promise<{ ok: true } | { ok: false; copied: true; reason: 'no-chrome' | 'unsupported' }> => ipcRenderer.invoke('clipExt:openChrome'),
+  },
   /** 原生拖出:在元素 onDragStart 里 e.preventDefault() 后调用,主进程接管系统级拖拽。 */
   startHostDrag: (filePath: string): void => ipcRenderer.send('fs:startDrag', filePath),
   /** 拖 OS 文件/文件夹进 host 工作区目录 → 原生复制(重名加序号)。 */
@@ -632,6 +637,7 @@ const api = {
 // 渲染端遍布 window.tangu?.X 能力门控:删掉键 = 对应功能(Inbox/市场/设置 agent tab/账号…)自动隐藏,UI 零改动。
 const AGENT_KEYS = [
   'documentTasks',
+  'clipExtension', // Chrome 扩展连的是本机引擎
   'backendStatus', 'backendLogs', 'backendRestart', 'onBackendStatus',
   'notifyInbox', 'notify', 'setInboxBadge', 'onInboxOpen',
   'authStatus', 'forsionLogin', 'forsionLogout', 'authProviders', 'providerLogin', 'openAccountCenter', 'onAuthDevice', 'onAuthChanged',
