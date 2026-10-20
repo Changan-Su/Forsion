@@ -30,9 +30,11 @@ export function HumanProfile({ jump }: { jump?: HumanJump }) {
   const cfg = useApp((s) => s.cfg)
   const me = useMeIdentity()
   const [section, setSection] = useState<Section>('collab')
+  // 离开「协作说明」就把跳转令牌放掉:面板随标签重挂,留着它回来会再开一次编辑框 / 修改记录
+  const [liveJump, setLiveJump] = useState(jump)
   const scrollRef = useRef<HTMLDivElement>(null)
-  const navigate = (next: Section) => { setSection(next); scrollRef.current?.scrollTo({ top: 0 }) }
-  useEffect(() => { if (jump?.at) navigate('collab') }, [jump?.at])
+  const navigate = (next: Section) => { if (next !== 'collab') setLiveJump(undefined); setSection(next); scrollRef.current?.scrollTo({ top: 0 }) }
+  useEffect(() => { if (jump?.at) { setLiveJump(jump); navigate('collab') } }, [jump?.at]) // eslint-disable-line react-hooks/exhaustive-deps
   const panel = (file: HumanFile, j?: HumanJump) => <HumanCollaborationPanel engine={homeTarget()} cfg={cfg} target={{ kind: 'human', file }} name={me.name} jump={j} />
   const index = SECTIONS.findIndex((x) => x.id === section)
   return <div className="agent-profile human-profile" data-human-profile>
@@ -49,7 +51,7 @@ export function HumanProfile({ jump }: { jump?: HumanJump }) {
     <div ref={scrollRef} className="agent-profile-content" id={`${id}-content`} role="tabpanel" aria-labelledby={`${id}-${section}`} tabIndex={0}>
       <div key={section} className="profile-section-enter">
         {/* 协作说明:上面是你写给 Agent 的(AGENT.md),下面是 Agent 们写的共识(HUMAN.md) */}
-        {section === 'collab' && <>{panel('AGENT.md')}{panel('HUMAN.md', jump)}</>}
+        {section === 'collab' && <>{panel('AGENT.md')}{panel('HUMAN.md', liveJump)}</>}
         {section === 'portrait' && panel('SOUL.md')}
         {section === 'memory' && panel('MEMORY.md')}
       </div>

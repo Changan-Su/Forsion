@@ -58,6 +58,7 @@ registerMessages({
   'human.me.portrait': { zh: '画像', en: 'Portrait' },
   'human.me.memory': { zh: '记忆', en: 'Memory' },
   'human.me.openFromAgent': { zh: '所有 Agent 共用的那份在「我」里', en: 'The copy every Agent shares is under Me' },
+  'human.editFile': { zh: '编辑「{name}」', en: 'Edit {name}' },
   'human.userEditFile': { zh: '你修改了 {file}', en: 'You edited {file}' },
   'human.file.agent.title': { zh: '你希望 Agent 怎么做', en: 'How you want Agents to work' },
   'human.file.agent.caption': { zh: '对所有 Agent 都成立 · 你写', en: 'Applies to every Agent · Written by you' },
