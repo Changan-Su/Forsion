@@ -11,6 +11,7 @@ import { useWorkspace } from '@lcl/engine'
 import { useShallow } from 'zustand/react/shallow'
 import { getBackgroundSessions } from '../services/backendService'
 import { targetForSession } from '../services/engine/targets'
+import '../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 type View = 'workspace' | 'toc' | 'memory' | 'subchats'
 const EMPTY_PANEL_PARAMS: Record<string, unknown> = {}

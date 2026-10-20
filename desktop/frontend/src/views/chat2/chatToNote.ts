@@ -7,7 +7,7 @@
  * - 落点:库根,文件名 = 模型给的一级标题(剥掉,标题由文件名承担),重名加 `-2`… ;建成即打开(navigateToNote)。
  * - 入口门控:宿主没有 Amadeus 或没有正文 AI(readTangu().complete)就不出菜单项,不画点了没反应的按钮。
  */
-import type { UiMessage } from '../../types'
+import type { UiMessage } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { useApp } from '../../stores/appStore'
 import { notifyApp } from '../../stores/notificationStore'
 import { registerMessages, translate } from '../../i18n'

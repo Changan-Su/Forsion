@@ -1,5 +1,5 @@
 /**
- * 自己弹出来的弹窗排队(2026-10-19):协议更新、What's new、插件的公告…… 同一时间只露一个。
+ * 自己弹出来的弹窗排队(2026-10-19):协议更新、首登同步卡、What's new、插件的公告…… 同一时间只露一个。
  * 原来各弹各的:Extend 公告(z 1600、自带焦点陷阱)会叠在 What's new / 升级引导上抢焦点,第一下 Esc 只关最上面那张。
  *
  * 规则:轮到谁谁才渲染;关掉(release)后按优先级(数字小先出)、同级按先来后到放下一个。
@@ -11,7 +11,7 @@ import { useEffect } from 'react'
 import { create } from 'zustand'
 
 /** 数字小的先出。插件统一排在宿主自己的后面。 */
-export const POPUP_PRIORITY = { terms: 0, whatsNew: 20, plugin: 30 } as const
+export const POPUP_PRIORITY = { terms: 0, syncSetup: 10, whatsNew: 20, plugin: 30 } as const
 
 interface Entry { id: string; priority: number; seq: number }
 interface QueueState { waiting: Entry[]; active: string | null; blocked: boolean }

@@ -8,12 +8,13 @@
  */
 import { Fragment, useEffect, useRef, useState } from 'react'
 import { ChevronRight } from 'lucide-react'
-import type { CtxInfo } from '../../types'
+import type { CtxInfo } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { registerMessages, useI18n } from '../../i18n'
 import { useApp } from '../../stores/appStore'
 import { TierBadge } from '../../components/TierBadge'
 import { formatDateTime } from '../../format/time'
 import { publishAccountQuota, remainingPercent, subscribeAccountQuota, type AccountQuotaView } from '../../services/accountQuota'
+import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 registerMessages({
   'ctx.pop.title': { zh: '上下文窗口', en: 'Context window' },

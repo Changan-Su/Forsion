@@ -27,8 +27,8 @@ import { usePageStore } from '@amadeus/store/pageStore'
 import { findFileType, usePluginStore } from '@amadeus/plugins/pluginStore'
 import { openNote } from '../amadeusNav'
 import { newTabOf } from './itemSelect'
-import { DeskChromeContext } from '@tangu/ui/views/chat2/deskChrome'
 import type { CtxItem } from '../components/RightPanel'
+import { DeskChromeContext } from '../amadeus/plugins/tanguSeam'
 
 /** 卸载冲刷失败/冲突时的兜底:把未保存内容另存为旁路文件(绝不静默丢),全局 toast 告知。 */
 async function salvageDraft(path: string, content: string): Promise<void> {

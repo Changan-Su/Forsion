@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.56.0
+  version: 1.58.0
   author: Forsion
   category: Forsion
 ---
@@ -310,6 +310,7 @@ ctx.registerView({ id: 'home', title: 'Muse', mount(el) {
 | `registerFileType` | 自定义 `.x.md` 文件类型;`override: true` 可接管内置的 `.pdf` | 撞内置后缀返回 **`false`** → 整体退让(判定写 `=== false`) |
 | `registerFileCreator` | 文件树右键 + 新建标签页启动器 | 与文件类型配套;**四条新建路径都要注册**,少一条用户就会问「为什么这儿没有」 |
 | `registerEmbedRenderer` | `![[x]]` 嵌入的自绘渲染 | |
+| `registerToolResultRenderer` | 对话里**你自己引擎半身注册的工具**跑完后的结果卡片(可直接进 Agent Desk) | 2026-10-19 起;别家插件的、核心的工具认领不了;老宿主没有 → `ctx.registerToolResultRenderer?.(…)`。见下「Tool result cards」 |
 | `registerSetting` | 详情页声明式表单(number/boolean/text) | 每键一个字符串,**没有原子性**;同 key 重注册即覆盖 |
 | `ctx.ui.mountMarkdownEditor` | 视图内原生 Amadeus Markdown 编辑器 | 正文归调用方(API 草稿等),**不碰笔记库**;保存前 `getValue()`;`modes: false` 不画「编辑 / 源码 / 预览」那一排;老宿主没有 → 可选链 |
 | `ctx.ui.mountFloatingToc` | 视图内原生悬浮目录 | 插件保有正文 DOM,宿主负责扫描 / 滚动高亮 / 跳转 / 主题;老宿主没有 → 可选链 |
@@ -457,6 +458,7 @@ ctx.registerCommand({
 | `ctx.app.queuePopup?()` | 自己弹出来的弹窗排队(2026-10-19 起;Extend 公告用) | 应用里同一时间只露一个弹窗:协议更新、What's new 在前,插件排在后面,同级先来后到;全屏引导开着时谁都不出。返回 `{ ready, done }`:`await ready` 之后再挂弹窗,关掉时 `done()`;决定不弹了(换账号、数据过期)也调 `done()` 撤销,这时 `ready` 永远不 resolve。不 `done()` 会一直堵着队列,插件停用时宿主替你收掉。用户点了才打开的面板不用排;旧宿主没有 → 直接弹 |
 | `ctx.app.runCommand?(id)` | 跑一条命令面板里的现成命令(2026-10-17 起) | **只对首方内置包生效**,别的插件恒 `false`(命令里有删除 / 改设置) |
 | `ctx.app.spotlight?({ anchor, title, body?, step? } \| null)` | 在真界面上圈出一处 + 一张小卡(2026-10-19 起,使用指南的「带我去」) | **只对首方内置包生效**,别的插件恒 resolve `'missing'`;锚点是宿主的一张表(`ribbon-spaces` / `chat-composer` / `note-new` / `note-body` / `note-canvas` / `agent-new`),在收着的侧栏里会先展开;不压暗、不拦点击、同一时刻一处;resolve `ok` / `mute`(用户点了不再提示,插件自己记下)/ `gone` / `missing`(等 2 秒仍不在屏幕上)/ `replaced` / `closed`(传 `null` 收起);旧宿主没有 → `?.`,没有就照老做法 |
+| `ctx.app.sync?` | 读写这台电脑的三项云同步(2026-10-20 起,蓬洲云「同步」页) | **只对首方内置包生效**,别的插件整个成员缺席;手机 / 网页、没有本地库远程同步的宿主上也缺席。`get()` 给快照(智库 / Agents 与记忆 / 插件数据各自开没开、进度、第二台电脑待定的合并问题)、`subscribe(fn)`、`refresh()`、`set(kind, on)`(`notes` / `agents` / `plugins`)、`resolveNotes('merge' \| 'cloud' \| 'skip')`、`runNow()`;开关与引擎都在宿主,插件只画界面 |
 | `ctx.inbox` | 往收件箱发本机系统消息 + 信下挂自己画的卡(2026-10-17 起) | **只给首方内置包**,别的插件整个成员缺席;`post` / `archive` / `registerCard({ sender, mount })`,卡只认发件人 `plugin:<你的 id>` 的本机系统消息 |
 | `registerReadiness` | onboarding 检查卡上的一行 `check` | 2026-09-21 起;**必须 `ctx.registerReadiness?.(…)`**;拿不准回 `'unknown'`,见下「前置条件」 |
 | `registerEditorExtension` | 笔记编辑器的按键 / 装饰 | `'high'` 档不处理**必须 `return false`** |
@@ -1000,6 +1002,50 @@ model is not shown. Rows show each item's `title` and `hint` with its `iconUrl`,
 Agents use `list_intelligent_cards` then an `app-card` block in `intelligent_ui`. Rendering does
 not read records into model context, save links, analyze videos, or create tasks. Keep those
 operations in existing domain tools/skills. Old hosts ignore the optional declaration.
+
+### Tool result cards: ctx.registerToolResultRenderer (2026-10-19+)
+
+A bundle whose engine half registers tools can give each tool a native result card in the chat, drawn by your
+desktop half in the host's DOM (not an iframe), instead of the generic one-line tool record:
+
+```js
+ctx.registerToolResultRenderer?.({
+  tool: 'make_chart',             // exactly the name your engine half registered
+  title: () => (ctx.getLocale?.() === 'en' ? 'Chart' : '图表'),   // card / placeholder / Desk capsule name; default = tool name
+  surface: 'inline',              // default; 'desk' = straight into the Agent Desk (see below)
+  mount(el, call) {
+    // call: { id, tool, args (parsed JSON), result (text the model saw), surface, state, quote }
+    const view = drawChart(el, call.args, call.state.get())
+    view.onZoom((z) => call.state.set({ zoom: z }))
+    view.onPick((label) => call.quote(label))
+    return () => view.destroy()
+  },
+})
+```
+
+- **Ownership**: the host only hands you calls of a tool that one of your bundle's engine plugins
+  (`tangu-plugins/<id>/`) has registered right now, and that no core tool or other plugin also registers. A core tool (`write_file`…), another plugin's tool, or any tool
+  while the engine list is not known yet stays a generic record. A market install whose engine half gets a
+  `market_…` alias name does not match its plain tool name: ship engine + desktop halves in one bundle.
+- **When the card shows**: only for finished, successful calls. While the call runs, when it failed (`isError`),
+  while it waits for approval, when your `mount` throws, and while your plugin is disabled or reloading, the generic
+  record shows. Disabling the plugin unmounts every card (your cleanup runs). History works: the host matches by
+  tool name, so reopened conversations get the cards too.
+- **What you get**: data plus two narrow actions. No file writes, no sending messages: changes go through your own
+  commands or engine tools. `call.quote(text)` attaches a quote card above the chat input (same as selecting reply
+  text and pressing Quote); the person decides whether to send it. `result` is what the model saw, so put the
+  structured data your card needs into the tool result itself.
+- **Surfaces and moving**: `inline` cards sit in the reply where the call happened, with an "Open in Desk" button.
+  `surface: 'desk'` cards go straight into the Agent Desk (half width) when the result arrives live, leaving a
+  placeholder in the chat (name, plugin name, "Showing in Desk", "Back to chat"); the Desk capsule's ⋯ has "Move back
+  to chat". Every move remounts you in the new place after cleaning up the old one, with `call.surface` telling
+  you which: keep view state (scroll, zoom, selection) in `call.state` (in memory, keyed by call id) and restore it
+  on mount. Where there is no Desk (phone, Desk turned off, a window too narrow to show it) everything is inline.
+- **Styling**: the host draws the frame and the header (`title · plugin name`); draw only the content, with theme
+  tokens (`var(--text)`, `--text-muted`, `--border`, `--accent-ink`, `--ui-font-body`…). No fixed colors, no own
+  frame or shadow. In the Desk you get the whole pane: size to the element, not to a fixed width.
+- **Not this**: pages from external MCP servers (`ui://` in a sandboxed iframe) are a later, separate step; an
+  Intelligent UI HTML card is drawn by the model's own built-in tool, not something you register.
 
 ### 前置条件:onboarding.requires(2026-09-21 起)
 

@@ -59,6 +59,7 @@ import { createCalendarApi } from './pluginCalendar'
 import { createSpacesApi } from './pluginSpaces'
 import { clearSpaceProgressOf, setSpaceDot, setSpaceProgress } from '../../stores/spaceProgress'
 import { POPUP_PRIORITY, queuePopup, releasePopupsOf } from '../../stores/popupQueue'
+import { getSync, markSyncDecided, refreshSync, resolveNotes, runSyncNow, setSync, startSyncSetup, subscribeSync } from '../../services/syncSetup'
 import { closeSpotlight, showSpotlight } from './guideSpotlight'
 import { watchAccountName } from '../../services/accountName'
 import { fetchBingWallpapers } from '../../views/homepageWallpaper'
@@ -84,6 +85,7 @@ import type {
   SelectionActionContribution,
   StatusItemContribution,
   ThemeContribution,
+  ToolResultRendererContribution,
   ViewContribution,
   ListSourceContribution,
   PluginAutomationRule,
@@ -178,6 +180,8 @@ interface PluginState {
   listSources: Owned<ListSourceContribution>[]
   fileTypes: Owned<FileTypeContribution>[]
   embedRenderers: Owned<EmbedRendererContribution>[]
+  /** 插件给自己引擎半身的工具挂的原生结果卡片(ctx.registerToolResultRenderer);认领校验在 toolResultCards.ts。 */
+  toolResultRenderers: Owned<ToolResultRendererContribution>[]
   fileCreators: Owned<FileCreatorContribution>[]
   /** 宿主注入的视图打开器(桌面壳=workspace.openView);无工作台的宿主保持 null,ctx.openView 即 no-op。 */
   viewOpener: ((type: string, loc?: PluginViewLocation) => void) | null
@@ -338,6 +342,23 @@ type ResetCardCeremonyArg = Parameters<NonNullable<PluginAppApi['showResetCardCe
 let resetCardCeremonyHandler: ((r: ResetCardCeremonyArg) => void) | null = null
 let popupSeq = 0 // ctx.app.queuePopup 的号:插件 id + 自增,停用时按前缀收
 export function setResetCardCeremonyHandler(fn: ((r: ResetCardCeremonyArg) => void) | null): void { resetCardCeremonyHandler = fn }
+
+function syncSeam(pluginId: string, ok: () => boolean): NonNullable<PluginAppApi['sync']> {
+  // 能开同步、挪文件:只给随包的 Forsion Extend(蓬洲云「同步」页),别的首方包也不给
+  const firstParty = (): boolean => pluginId === 'forsion-extend' && !!usePluginStore.getState().plugins.find((p) => p.id === pluginId)?.locked
+  const deny = { ok: false, error: 'first-party only' }
+  return {
+    get: () => { if (!firstParty()) return null; startSyncSetup(); return getSync() },
+    subscribe: (cb) => { if (!firstParty()) return () => {}; startSyncSetup(); return subscribeSync(cb) },
+    refresh: async () => { if (firstParty()) await refreshSync() },
+    // 在同步页里动过开关 / 回答过合并问题 = 点过头了,首登卡片不再弹
+    set: async (kind, on) => (ok() && firstParty() && (kind === 'notes' || kind === 'agents' || kind === 'plugins')
+      ? setSync(kind, !!on).finally(markSyncDecided) : deny),
+    resolveNotes: async (choice) => (ok() && firstParty() && (choice === 'merge' || choice === 'cloud' || choice === 'skip')
+      ? resolveNotes(choice, translate('sync.backupFolder')).finally(markSyncDecided) : deny),
+    runNow: async () => { if (ok() && firstParty()) await runSyncNow() },
+  }
+}
 
 function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppApi; revokeSurface: () => void } {
   const surface = createBlockSurface(pluginId)
@@ -518,6 +539,8 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
     setSpaceDot: (spaceId, on) => (ok() && typeof spaceId === 'string' ? setSpaceDot(pluginId, spaceId, on) : false),
     // 自己弹出来的弹窗排队(2026-10-19,Extend 公告):同一时间只露一个,插件排在宿主的协议更新 / What's new 后面;停用时 teardown 收掉
     queuePopup: () => (ok() ? queuePopup(`plugin:${pluginId}:${++popupSeq}`, POPUP_PRIORITY.plugin) : { ready: new Promise<void>(() => {}), done: () => {} }),
+    // 同步总开关(2026-10-20,蓬洲云「同步」页):只给首方包(同 spotlight 认 locked)、只在有本地库远程同步的桌面
+    ...(typeof window !== 'undefined' && window.remoteSync && !hostTangu()?.mobile ? { sync: syncSeam(pluginId, ok) } : {}),
     openLink: async (url) => {
       if (!ok()) return false
       const [{ parseDeepLink }, { resolveDeepLink }] = await Promise.all([import('../../deepLinkPlan'), import('../../deepLinkInstall')])
@@ -1017,7 +1040,7 @@ function afterReconcile(): void {
 type OwnedKey = { [K in keyof PluginState]: PluginState[K] extends Owned<unknown>[] ? K : never }[keyof PluginState]
 const SLICE_KEYS = Object.keys({
   slashItems: 1, selectionActions: 1, commands: 1, themes: 1, panels: 1, statusItems: 1, propertyTypes: 1, settings: 1,
-  settingsViews: 1, storeViews: 1, readiness: 1, views: 1, listSources: 1, fileTypes: 1, embedRenderers: 1, fileCreators: 1,
+  settingsViews: 1, storeViews: 1, readiness: 1, views: 1, listSources: 1, fileTypes: 1, embedRenderers: 1, toolResultRenderers: 1, fileCreators: 1,
 } satisfies Record<OwnedKey, 1>) as OwnedKey[]
 
 /** 摘掉 id 的全部切片贡献;没有它的切片保持原数组身份(订阅者不白白重渲)。 */
@@ -1387,6 +1410,17 @@ export const usePluginStore = create<PluginState>((set, get) => {
       set((s) => ({ embedRenderers: [...s.embedRenderers, { pluginId, item: def }] })),
     registerFileCreator: (def) =>
       set((s) => ({ fileCreators: [...s.fileCreators, { pluginId, item: def }] })),
+    // 只收形状对的;认不认领(工具是不是本插件引擎半身注册的)在画的时候按引擎报的名下工具现判(toolResultCards.claimToolCard)。
+    registerToolResultRenderer: (def) => {
+      if (!ctxAlive()) return
+      const tool = typeof def?.tool === 'string' ? def.tool.trim() : ''
+      if (!tool || typeof def.mount !== 'function') {
+        console.warn(`[plugin:${pluginId}] registerToolResultRenderer 被拒:要有 tool(引擎工具名)和 mount`)
+        return
+      }
+      const item: ToolResultRendererContribution = { ...def, tool, surface: def.surface === 'desk' ? 'desk' : 'inline' }
+      set((s) => ({ toolResultRenderers: [...s.toolResultRenderers, { pluginId, item }] }))
+    },
     // 打开自己的视图:类型名由宿主统一命名空间(plugin:<id>:<viewId>),防跨插件顶替。
     openView: (viewId, opts) => { if (ctxAlive()) get().viewOpener?.(`plugin:${pluginId}:${viewId}`, opts?.location) },
     get viewLocations() { return get().viewLocations ?? undefined },
@@ -2285,6 +2319,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     listSources: [],
     fileTypes: [],
     embedRenderers: [],
+    toolResultRenderers: [],
     fileCreators: [],
     viewOpener: null,
     viewLocations: null,

@@ -5,22 +5,19 @@ import { useModelPickerPreferences } from '../../modelPickerPreferences'
  * /skill chip / 引用 / 模型·Agent·引擎·思考·loop·计划·群聊 / 上下文占比·压缩 / 发送·停止。
  * props 与旧 MessageInput 完全一致 → ChatView 直接换组件即可。
  */
-import React, { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import React, { useEffect, useId, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from 'react'
 import {
   ArrowUp, Square, Mic, X, ClipboardList, Check, ChevronDown, Users, Sparkles,
   Hand, ShieldCheck, ShieldAlert, Settings2, SlidersHorizontal, MessageSquare, Loader2, Clock, Zap, AudioLines, Quote, type LucideIcon } from 'lucide-react'
 import { useVoiceInput } from '../../hooks/useVoiceInput'
 import { CALL_TEXT_MAX, getCallPresence, onCallEvent, openCallLayer, sendTextToCall, subscribeCallPresence, useRealtimeConfig } from '../../services/realtimeCall'
 import { resolveRealtimeCall } from '../../services/realtimeModel'
-import { useCodeStudio } from '../../stores/codeStudioStore'
-import { useImageStudio } from '../../stores/imageStudioStore'
-import { usePluginChat } from '../../stores/pluginChatStore'
-import { normPath } from '../coding/studioModel'
+import { claimComposerPrefill, subscribeComposerPrefill } from '../../amadeus/plugins/tanguSeam'
 import { VoiceRecordingBar } from './VoiceRecordingBar'
-import { THINKING_LEVELS } from '../../types'
+import { THINKING_LEVELS } from '../../../../../tangu-agent/src/contracts/clientTypes'
 
 // context 视图已知注入段 key(与引擎 agentLoop ctxMark 调用一一对应);未知 key 显示原样
-import type { AgentConfig, Attachment, CtxInfo, DefaultModelSlot, MessageRecord, ModelInfo, ModelsResponse, NormalAgentDef, SkillInfo } from '../../types'
+import type { AgentConfig, Attachment, CtxInfo, DefaultModelSlot, MessageRecord, ModelInfo, ModelsResponse, NormalAgentDef, SkillInfo } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { nativeHaptic, nativeSheetPresenter, openNativeSheetMenu, useEdgeNudge, useNativeChromeInstalled, useWorkspace, type SheetMenuItem, type SheetMenuSection } from '@lcl/engine'
 import { ModelPill, contextRingWindow, type ModelPillGroup } from '../../components/ModelPill'
 import { UltraConfirmDialog, ultraConfirmSkipped } from './UltraConfirmDialog'
@@ -59,6 +56,7 @@ import { ContextUsagePop } from './ContextUsagePop'
 import { usePromptSuggest } from './promptSuggest'
 import './composer2.css'
 import { homeTarget, targetForSession, targetKeyOf, useComposerRef } from '../../services/engine/targets'
+import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 registerMessages({
   'input.fileref.noteApps': { zh: '引用窗口 / 应用 / 笔记 / 文件 / 会话', en: 'Reference a window / app / note / file / session' },
@@ -1173,35 +1171,22 @@ export const Composer2: React.FC<{
   const vaultRoot = usePageStore((s) => s.vaultRoot)
   const pageIcons = usePageStore((s) => s.icons)
   const chatSessions = useApp((s) => s.sessions)
-  const studioPrompt = useCodeStudio(s => s.pendingPrompt)
-  const imagePrompt = useImageStudio(s => s.pending)
+  // 预填:造物 / 图像工作室 / 插件聊天往 tanguSeam 登记的来源(核心插件化 2e-8;原来这里反读那三个 store)。
+  // 哪张卡该接、接几条由来源自己判(所在面板、是否可见、工程对不对)。来源一变先让本卡重渲染一拍,认领放在提交之后的
+  // effect 里 —— 和原来按 store 订阅的 effect 同一时机(刚开出来的面板这时已在 DOM 里、量得到可见性)。
+  const [prefillTick, bumpPrefill] = useReducer((n: number) => n + 1, 0)
+  useEffect(() => subscribeComposerPrefill(bumpPrefill), [])
   useEffect(() => {
-    if (!imagePrompt || imagePrompt.sessionId !== activeSessionId || !cardRef.current?.closest('[data-image-studio-chat]') || !cardRef.current.getClientRects().length) return
-    if (!useImageStudio.getState().consume(imagePrompt.seq)) return
-    setDraft(previous => previous.trim() ? `${previous}\n\n${imagePrompt.text}` : imagePrompt.text)
-    setAttachments(previous => [...previous, ...imagePrompt.attachments])
-    requestAnimationFrame(() => { taRef.current?.focus(); autoGrow() })
-  }, [imagePrompt, activeSessionId]) // eslint-disable-line react-hooks/exhaustive-deps
-  // 插件视图里的对话(ctx.tangu.mountChat)的预填:只认本会话在插件挂载里的那个输入框,排着几条就接几条。
-  // 不看它此刻显不显示:标签在后台时投的,翻到前面就该已经在输入框里(这个 effect 不会因为「显示出来」再跑一次)。
-  const pluginPrompts = usePluginChat(s => s.pending)
-  useEffect(() => {
-    if (!activeSessionId || !pluginPrompts.some(p => p.sessionId === activeSessionId) || !cardRef.current?.closest('[data-plugin-chat]')) return
-    const texts = usePluginChat.getState().take(activeSessionId)
-    if (!texts.length) return
+    const card = cardRef.current
+    if (!card) return
+    const got = claimComposerPrefill({ card, sessionId: activeSessionId ?? null })
+    if (!got.length) return
+    const texts = got.flatMap((g) => g.texts)
+    const files = got.flatMap((g) => g.attachments ?? [])
     setDraft(previous => [...(previous.trim() ? [previous] : []), ...texts].join('\n\n'))
+    if (files.length) setAttachments(previous => [...previous, ...files])
     requestAnimationFrame(() => { taRef.current?.focus(); autoGrow() })
-  }, [pluginPrompts, activeSessionId]) // eslint-disable-line react-hooks/exhaustive-deps
-  // Studio references append to this project's visible composer. Claim once before updating:
-  // hidden / secondary chat views must not consume another project's request or erase its draft.
-  useEffect(() => {
-    if (!studioPrompt || !cardRef.current?.getClientRects().length) return
-    const app = useApp.getState()
-    const path = activeSessionId ? app.sessions.find(s => s.id === activeSessionId)?.project_path : app.newChatWs?.path
-    if (normPath(path || '') !== normPath(studioPrompt.project) || !useCodeStudio.getState().consumePrompt(studioPrompt.seq)) return
-    setDraft(previous => previous.trim() ? `${previous}\n\n${studioPrompt.text}` : studioPrompt.text)
-    requestAnimationFrame(() => { taRef.current?.focus(); autoGrow() })
-  }, [studioPrompt, activeSessionId]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [prefillTick, activeSessionId]) // eslint-disable-line react-hooks/exhaustive-deps
   const refCands = useMemo<RefCand[]>(() => {
     if (!fileRefCtx) return []
     // 窗口、应用在前(只在有这项能力的宿主上有);笔记、工作区文件次之,历史会话最后(与拖拽引用同契约,

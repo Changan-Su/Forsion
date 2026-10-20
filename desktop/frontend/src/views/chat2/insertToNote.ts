@@ -9,7 +9,7 @@
  * - 只在点击时写;写完一条带「撤销」的回执,点名落到了哪篇。
  */
 import { useSyncExternalStore } from 'react'
-import type { UiMessage } from '../../types'
+import type { UiMessage } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { normalizeMath } from '../../services/mathNormalize'
 import { subscribeUnified, unifiedHasAny, unifiedHasReplyTarget, unifiedInsertReply, type ReplyAnchor } from '../../amadeus/unified/lifecycle'
 import { notifyApp } from '../../stores/notificationStore'

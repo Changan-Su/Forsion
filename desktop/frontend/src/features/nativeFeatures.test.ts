@@ -16,7 +16,10 @@ vi.mock('../stores/appStore', () => ({ useApp: { getState: () => ({ tr: (key: st
 vi.mock('../components/SpaceButton', () => ({ SpaceButton: () => null }))
 vi.mock('../views/DashboardCompactViews', () => ({ CalendarDashboardCard: () => null, TodoDashboardCard: () => null }))
 vi.mock('../views/ChatView', () => ({ ChatView: () => null }))
-vi.mock('../views/RightViews', () => ({ MemoryPanelView: () => null, SubchatsView: () => null, SessionFilesView: () => null }))
+vi.mock('../views/OrbitsView', () => ({ OrbitsView: () => null }))
+vi.mock('../views/SessionsView', () => ({ SessionsView: () => null }))
+vi.mock('../views/newChatComposer', () => ({ NewChatComposer: () => null, mountNewChatComposer: vi.fn(), sendFromNewChat: vi.fn(), startNewChatCall: vi.fn() }))
+vi.mock('../views/RightViews', () => ({ MemoryPanelView: () => null, SubchatsView: () => null, SessionFilesView: () => null, TocView: () => null }))
 vi.mock('../views/SpecialViews', () => ({ AgentsDetailSpecialView: () => null, WorkspaceDetailSpecialView: () => null }))
 vi.mock('../amadeusViews', () => ({ AmadeusEditorView: () => null, AmadeusBacklinksView: () => null, NoteTabIcon: () => null }))
 vi.mock('../views/AmadeusDbView', () => ({ AmadeusDbView: () => null }))
@@ -37,10 +40,22 @@ import { registerTanguViews } from './tangu'
 import { registerOperationsViews } from './operations'
 import { installCalendarViews } from '../builtins/calendar'
 import { amadeusAvailable, inboxAvailable, miniFeatureAvailable, museAvailable, sessionsAvailable } from './runtime'
+import * as seam from '../amadeus/plugins/tanguSeam'
 const register = () => { registerAmadeusViews(); registerTanguViews(); registerOperationsViews(); installCalendarViews() }
+
+// 核心插件化 2e:Tangu 激活时交给宿主的接缝槽(模块级,测试之间要清掉)
+const SLOTS = [
+  [seam.setTanguInboxTasks, seam.readTanguInboxTasks],
+  [seam.setTanguPrefs, seam.readTanguPrefs],
+  [seam.setTanguNewChat, seam.readTanguNewChat],
+  [seam.setTanguSidebarModes, seam.readTanguSidebarModes],
+  [seam.setTanguChatOutline, seam.readTanguChatOutline],
+  [seam.setTanguChatViews, seam.readTanguChatViews],
+] as const
 
 beforeEach(() => {
   state.views.clear()
+  for (const [set] of SLOTS) set(null)
   state.profile.nativeFeatures = []
   vi.stubGlobal('window', { amadeus: {} })
 })
@@ -64,6 +79,14 @@ describe('native package contribution boundary', () => {
     expect(state.views.has('automation-detail')).toBe(false)
     expect(state.views.has('public-view')).toBe(false)
     expect(sessionsAvailable()).toBe(true)
+  })
+
+  it('hands the host seams over only when Tangu activates', () => {
+    register()
+    expect(SLOTS.map(([, read]) => read())).toEqual(SLOTS.map(() => null))
+    state.profile.nativeFeatures = ['tangu']
+    register()
+    expect(SLOTS.filter(([, read]) => read() === null)).toEqual([])
   })
 
   it('adds and removes Calendar independently of Amadeus between page boots', () => {

@@ -10,6 +10,11 @@
  * `capabilities` 白名单那道双闸)。
  */
 
+import { createContext, type ComponentType } from 'react'
+import type { CtxItem } from '../../components/RightPanel'
+import type { ViewProps } from '@lcl/engine'
+import type { Attachment } from '../../../../../tangu-agent/src/contracts/clientTypes'
+
 export interface TanguModelInfo {
   /** 模型 id(引擎侧标识,如 `claude-opus-5`)。 */
   id: string
@@ -294,4 +299,179 @@ export function setTanguProbe(p: TanguProbe | null): void {
 
 export function readTangu(): TanguProbe | null {
   return probe
+}
+
+/** 收件箱里 agent 信末尾的任务卡(核心插件化 2e,方案第 5 节 9 号接缝的仓内版):Tangu 在激活时交出来
+ *  (features/tangu.tsx),宿主的收件箱只管放。**宿主内部接缝,不进 `ctx.tangu`**。
+ *  没交(Tangu 没激活)→ 收件箱不切卡,正文原样显示。 */
+export interface TanguInboxTasks {
+  /** 切出正文与卡:只认 forsion-task / forsion-approval 两种围栏;todo = 这封是 Muse 自己的信(`todo:` 头才生效)。 */
+  split(body: string, opts: { todo: boolean }): { text: string; tasks: readonly unknown[]; approvals: string[] }
+  /** 画任务卡:落点新会话 / 交给 Muse / 忽略(收件箱没有当前会话),Muse 待办的真状态现拉回写。 */
+  Cards: ComponentType<{ tasks: readonly unknown[]; ownerId: string }>
+}
+
+let inboxTasks: TanguInboxTasks | null = null
+
+export function setTanguInboxTasks(p: TanguInboxTasks | null): void {
+  inboxTasks = p
+}
+
+export function readTanguInboxTasks(): TanguInboxTasks | null {
+  return inboxTasks
+}
+
+/** Tangu 自己的界面偏好(核心插件化 2e-2,方案第 4.5 节「聊天偏好」的仓内版):Tangu 在激活时交出读写口,
+ *  宿主的设置页照原位置摆开关。**宿主内部接缝,不进 `ctx.tangu`**。没交(Tangu 没激活)→ 两个开关连同搜索结果都不摆。 */
+export interface TanguPref { get(): boolean; set(on: boolean): void }
+export interface TanguPrefs {
+  /** 聊天消息头像(主题页)。 */
+  chatAvatars: TanguPref
+  /** 输入建议(高级 › 界面与会话);桌面宿主之外 get() 恒 false。 */
+  promptSuggest: TanguPref
+}
+
+let prefs: TanguPrefs | null = null
+
+export function setTanguPrefs(p: TanguPrefs | null): void {
+  prefs = p
+}
+
+export function readTanguPrefs(): TanguPrefs | null {
+  return prefs
+}
+
+/** 新对话输入区发出第一句(核心插件化 2e-3)。 */
+export type TanguNewChatDispatch = (
+  text: string,
+  attachments: Attachment[],
+  workspaceFiles?: Attachment[],
+  skillIds?: string[],
+  mentions?: { priorityAgent?: string; mentionAgents?: string[] },
+) => Promise<boolean>
+
+/** 新对话输入区(核心插件化 2e-3,方案第 5 节 9 号接缝 `mountComposer` 的仓内版):Tangu 在激活时交出来,
+ *  内置主页直接放 `Composer`,`ctx.tangu.mountComposer` 挂的是 `mount` —— 同一份。**宿主内部接缝**。
+ *  没交(Tangu 没激活)→ 主页不摆输入区、探针不给 mountComposer。 */
+export interface TanguNewChat {
+  Composer: ComponentType<{
+    onDispatch: TanguNewChatDispatch
+    onStartCall?: () => Promise<string | null>
+    onInputModeChange: (focused: boolean) => void
+    /** 通话按钮只在这个 Space 是当前 Space 时画;不给 = 不画。 */
+    liveSpaceId?: string
+  }>
+  /** 切到 Tangu 再按新对话发出去;没有 Tangu Space → false。 */
+  send: TanguNewChatDispatch
+  /** 切到 Tangu、建新会话,resolve 新会话 id;没建成 → null。 */
+  startCall(): Promise<string | null>
+  mount(el: HTMLElement, o: TanguComposerOptions): TanguComposerMount
+}
+
+let newChat: TanguNewChat | null = null
+
+export function setTanguNewChat(p: TanguNewChat | null): void {
+  newChat = p
+}
+
+export function readTanguNewChat(): TanguNewChat | null {
+  return newChat
+}
+
+/** 工作区侧栏的两种会话模式(核心插件化 2e-5,方案第 5 节 8 号接缝 `registerWorkspaceMode` 的仓内版):轨道(orbits)与
+ *  会话列表(sessions)由 Tangu 在激活时交出,宿主的 WorkspaceView 只管放。**宿主内部接缝**。没交 → 这两种模式是空的。 */
+export interface TanguSidebarModes {
+  Orbits: ComponentType<{ sideFilter?: 'local' | 'cloud' }>
+  Sessions: ComponentType<{ sideFilter?: 'local' | 'cloud' }>
+}
+
+let sidebarModes: TanguSidebarModes | null = null
+
+export function setTanguSidebarModes(p: TanguSidebarModes | null): void {
+  sidebarModes = p
+}
+
+export function readTanguSidebarModes(): TanguSidebarModes | null {
+  return sidebarModes
+}
+
+/** 「大纲」视图在主区是对话时画的会话目录(核心插件化 2e-6,方案第 5 节 8 号接缝 `registerOutlineProvider` 的仓内版):
+ *  Tangu 在激活时交出,宿主的 OutlineView 只管放。**宿主内部接缝**。没交 → 落空态。 */
+let chatOutline: ComponentType | null = null
+
+export function setTanguChatOutline(p: ComponentType | null): void {
+  chatOutline = p
+}
+
+export function readTanguChatOutline(): ComponentType | null {
+  return chatOutline
+}
+
+/** 被 Agent Desk 托管的视图拿到的悬浮胶囊(10-17 用户选方案 B,方案页 docs/ToBeImproved/AgentDesk方案_2026-10-17/)。
+ *  格子里的视图不再画自己的顶栏:读到本 context 就把视图专属控件(编辑/源码、换行、缩放…)portal 进胶囊槽,
+ *  次要动作写进 more(⋯ 菜单打开那一刻才读,写 ref 不触发重渲染)。Desk(Tangu)提供,宿主的 WsFileView 读
+ *  (核心插件化 2e-6 从 chat2/deskChrome 挪来;放这里是因为两边本来都依赖本文件,也不必为一个 context 拉起文件视图)。 */
+export interface DeskChrome {
+  /** 胶囊里给视图留的槽;首帧为 null(ref 还没挂上),视图此时什么都不画,也不画自带顶栏。 */
+  slot: HTMLElement | null
+  more: { current: CtxItem[] }
+}
+export const DeskChromeContext = createContext<DeskChrome | null>(null)
+
+/** Tangu 的对话视图(核心插件化 2e-7):宿主嵌固定会话的地方(图像工作室、插件聊天 pluginChat、mini 卡片)和
+ *  外观预览窗口(#preview)用。Tangu 在激活时交出,**宿主内部接缝**。没交 → 这几处不画对话。 */
+export interface TanguChatViews {
+  /** 就是注册成 `chat` 的那个视图;props 同注册视图(leaf + params,嵌固定会话传 followActive: false + sessionId)。 */
+  Chat: ComponentType<ViewProps>
+  /** 外观预览窗口里的样例对话。 */
+  Preview: ComponentType
+}
+
+let chatViews: TanguChatViews | null = null
+
+export function setTanguChatViews(p: TanguChatViews | null): void {
+  chatViews = p
+}
+
+export function readTanguChatViews(): TanguChatViews | null {
+  return chatViews
+}
+
+/** 往输入框预填的来源(核心插件化 2e-8,方案第 5 节 10 号接缝「Composer2 扩展槽」的仓内版):造物、图像工作室、插件聊天
+ *  这些宿主功能往这里登记,Composer2 只在自己的输入卡上问一遍「有没有给我的」,不再反读它们的 store。
+ *  来源的待填变了就 notifyComposerPrefill();输入卡等这一轮渲染提交之后再认领(和原来按 store 订阅的 effect 同一时机)。 */
+export interface ComposerPrefillTarget {
+  /** 认领的那张输入卡;来源按它所在的 DOM(data-image-studio-chat / data-plugin-chat)和是否可见决定给不给。 */
+  card: HTMLElement
+  /** 卡上的会话;新对话草稿 = null。 */
+  sessionId: string | null
+}
+export interface ComposerPrefill { texts: string[]; attachments?: Attachment[] }
+export interface ComposerPrefillSource {
+  /** 有给这张卡的就当场取走(只取一次)并返回;没有 = null。 */
+  claim(t: ComposerPrefillTarget): ComposerPrefill | null
+}
+
+const prefillSources = new Set<ComposerPrefillSource>()
+const prefillListeners = new Set<() => void>()
+
+/** 来源登记(通常在它的 store 模块里);返回注销。登记本身也算一次「待填变了」。 */
+export function registerComposerPrefill(src: ComposerPrefillSource): () => void {
+  prefillSources.add(src)
+  notifyComposerPrefill()
+  return () => { prefillSources.delete(src) }
+}
+
+export function notifyComposerPrefill(): void {
+  for (const l of [...prefillListeners]) l()
+}
+
+export function subscribeComposerPrefill(l: () => void): () => void {
+  prefillListeners.add(l)
+  return () => { prefillListeners.delete(l) }
+}
+
+/** 按登记顺序问一遍,把给这张卡的都取走。 */
+export function claimComposerPrefill(t: ComposerPrefillTarget): ComposerPrefill[] {
+  return [...prefillSources].flatMap((src) => src.claim(t) ?? [])
 }

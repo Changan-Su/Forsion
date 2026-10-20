@@ -14,7 +14,7 @@ import type {
   PromptSectionCtx,
   PromptSections,
 } from '../seams/appProfile.js';
-import { listToolProviders } from '../tools/toolRegistry.js';
+import { canonicalToolName, listToolProviders } from '../tools/toolRegistry.js';
 
 let _knownTools: Set<string> | null = null;
 
@@ -53,7 +53,7 @@ export function mergeProfile(
     builtins = 'all';
   } else if (Array.isArray(ov.toolBuiltins)) {
     // known 为空(provider 尚未注册)时不过滤,避免启动顺序导致误清空。
-    const ok = ov.toolBuiltins.filter((n) => knownSet.size === 0 || knownSet.has(n));
+    const ok = ov.toolBuiltins.map(canonicalToolName).filter((n) => knownSet.size === 0 || knownSet.has(n)); // 旧名(sketch)先归一,别被当未知名丢掉
     if (ok.length) builtins = ok;
   }
 

@@ -1,6 +1,7 @@
 /** Project-scoped Coding Studio state. Project data lives on disk; UI preferences and briefs stay local. */
 import { create } from 'zustand'
 import { useApp } from './appStore'
+import { notifyComposerPrefill, registerComposerPrefill } from '../amadeus/plugins/tanguSeam'
 import { isProjectRoot, joinProjectPath, normalizeDevUrl, normPath, projectRelative, type PreviewDevice } from '../views/coding/studioModel'
 import { STUDIO_CAPABILITIES, type StudioBrief } from '../views/coding/projectBrief'
 
@@ -172,3 +173,17 @@ export const useCodeStudio = create<CodeStudioState>((set, get) => ({
     set({ pendingPrompt: null }); return true
   },
 }))
+
+// 造物里的引用追加到这个工程那张看得见的输入卡(核心插件化 2e-8:原来是 Composer2 反读本 store)。先认领再改:
+// 藏着的 / 次要的对话视图不许吃掉别的工程的请求、也不许擦它的草稿。
+registerComposerPrefill({
+  claim: ({ card, sessionId }) => {
+    const p = useCodeStudio.getState().pendingPrompt
+    if (!p || !card.getClientRects().length) return null
+    const app = useApp.getState()
+    const path = sessionId ? app.sessions.find((s) => s.id === sessionId)?.project_path : app.newChatWs?.path
+    if (normPath(path || '') !== normPath(p.project) || !useCodeStudio.getState().consumePrompt(p.seq)) return null
+    return { texts: [p.text] }
+  },
+})
+useCodeStudio.subscribe((s, prev) => { if (s.pendingPrompt !== prev.pendingPrompt) notifyComposerPrefill() })

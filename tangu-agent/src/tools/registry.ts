@@ -126,7 +126,8 @@ function mergeCapabilities(name: string, impl?: ToolImpl): ToolCapabilities {
   return { ...defaults, ...(impl?.capabilities || {}) };
 }
 
-export function getToolCapabilities(name: string, ctx: ToolContext): ToolCapabilities {
+export function getToolCapabilities(raw: string, ctx: ToolContext): ToolCapabilities {
+  const name = canonicalToolName(raw); // 老客户端的 HTML 卡调用在 agentLoop 入口被改回旧名 sketch,能力照正典名查
   const impl = resolveTools(currentProfile(ctx), ctx).get(name);
   if (impl) return mergeCapabilities(name, impl);
   // custom/MCP 工具副作用不可知，默认不并发。

@@ -6,6 +6,8 @@ contextBridge.exposeInMainWorld('remoteSync', {
   set: (patch: Record<string, unknown>): Promise<unknown> => ipcRenderer.invoke('remotesync:set', patch),
   run: (opts?: { dryRun?: boolean; allowMassDelete?: boolean }): Promise<unknown> => ipcRenderer.invoke('remotesync:run', opts),
   check: (): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('remotesync:check'),
+  rootStats: (): Promise<unknown> => ipcRenderer.invoke('remotesync:rootStats'),
+  adoptRemote: (label: string): Promise<unknown> => ipcRenderer.invoke('remotesync:adoptRemote', label),
   dropboxAuthStart: (appKey: string): Promise<{ ok: boolean; error?: string; mode?: 'auto' | 'manual'; redirectUri?: string }> =>
     ipcRenderer.invoke('remotesync:dropboxAuthStart', appKey),
   dropboxAuthFinish: (appKey: string, code: string): Promise<{ ok: boolean; error?: string; email?: string; config?: unknown }> =>

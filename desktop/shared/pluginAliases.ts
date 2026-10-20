@@ -1,1 +1,1 @@
-export * from '../../tangu-agent/src/shared/pluginAliases'
+export * from '../../tangu-agent/src/contracts/pluginAliases'

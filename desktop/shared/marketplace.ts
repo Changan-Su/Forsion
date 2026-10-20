@@ -1,1 +1,1 @@
-export * from '../../tangu-agent/src/shared/marketplace'
+export * from '../../tangu-agent/src/contracts/marketplace'

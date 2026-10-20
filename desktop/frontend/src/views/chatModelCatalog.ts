@@ -1,4 +1,4 @@
-import type { ModelInfo } from '../types'
+import type { ModelInfo } from '../../../../tangu-agent/src/contracts/clientTypes'
 
 /**
  * 主对话可选模型以当前后端返回的目录为能力真源。

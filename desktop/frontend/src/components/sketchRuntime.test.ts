@@ -79,8 +79,12 @@ describe('sketch runtime live patching', () => {
     expect(() => el.querySelector('.fs-actions .fs-button').click()).not.toThrow()
   })
   it('ask/copy refuse without a user gesture', () => {
-    expect(() => w.forsionSketch.ask('x')).toThrow(/user gesture/)
-    expect(() => w.forsionSketch.copy('x')).toThrow(/user gesture/)
+    expect(() => w.forsionIntelligentUi.ask('x')).toThrow(/user gesture/)
+    expect(() => w.forsionIntelligentUi.copy('x')).toThrow(/user gesture/)
+  })
+  it('keeps the pre-rename name on the same object for cards written before 10-20', () => {
+    expect(w.forsionSketch).toBe(w.forsionIntelligentUi)
+    expect(Object.isFrozen(w.forsionIntelligentUi)).toBe(true)
   })
 })
 
@@ -99,7 +103,7 @@ describe('native parts', () => {
     expect(boxes.length).toBe(2)
     boxes[1].checked = true
     boxes[1].dispatchEvent(new Event('change'))
-    expect(w.forsionSketch.state).toEqual({ checklists: { shop: [1] } })
+    expect(w.forsionIntelligentUi.state).toEqual({ checklists: { shop: [1] } })
     // 重新接入(同一份状态)→ 勾选恢复
     const again = await mount('<fs-checklist id="shop"><script type="application/json">{"items":[{"label":"eggs"},{"label":"milk"}]}</script></fs-checklist>')
     expect(again.querySelectorAll<HTMLInputElement>('input[type=checkbox]')[1].checked).toBe(true)

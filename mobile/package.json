@@ -78,6 +78,7 @@
     "katex": "^0.16.27",
     "lucide-react": "^1.17.0",
     "nanoid": "^5.1.16",
+    "node-diff3": "^3.2.1",
     "path-browserify": "^1.0.1",
     "pdfjs-dist": "^5.7.284",
     "qrcode": "^1.5.4",

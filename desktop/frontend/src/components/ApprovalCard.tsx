@@ -10,7 +10,7 @@
  */
 import React, { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ShieldQuestion, Check, CheckCheck, X } from 'lucide-react'
-import type { ApprovalRequest } from '../types'
+import type { ApprovalRequest } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { DiffView } from './DiffView'
 import { toolDiffText } from './toolDiff'
 import { registerMessages, useI18n } from '../i18n'
@@ -56,6 +56,7 @@ export const wasDecidedHere = (approvalId: string): boolean => decidedHere.has(a
  *  不铸目标(refForSession + capsForRef),没装引擎宿主的单测里也能判。 */
 export const isRemoteApprover = (sessionId?: string): boolean => capsForRef(refForSession(sessionId)).remoteApprover
 import { SPOOF_RE, WIDE_BLANK_RE } from './approvalText'
+import '../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 const TA_MAX_PX = 480
 

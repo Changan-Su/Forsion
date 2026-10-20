@@ -167,7 +167,19 @@
 .iui-source summary > span { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 .iui-source details[open] > summary > span { display: block; }
 .iui-notice { display: flex; align-items: center; gap: 6px; margin-top: 12px; color: var(--text-muted); font-size: var(--ui-font-meta); }
-.intelligent-ui pre, .intelligent-ui table { display: block; max-width: 100%; overflow-x: auto; }
+.intelligent-ui pre { display: block; max-width: 100%; overflow-x: auto; }
+/* Tables, written in markdown or computed (v2), use the chat answer's table: narrow tables stay narrow,
+ * wide ones scroll, lighter rules, muted header without a fill; figures right-aligned in tabular digits. */
+.intelligent-ui table { border-collapse: collapse; font-size: .92em; margin: .2em 0 .85em; display: block; width: max-content; max-width: 100%; overflow-x: auto; }
+.intelligent-ui :is(th, td) { border: var(--border-width, 1px) solid color-mix(in srgb, var(--border) 55%, transparent); padding: 6px 10px; text-align: left; vertical-align: top; }
+.intelligent-ui th { font-weight: 500; color: var(--text-muted); }
+.intelligent-ui :is(th, td)[data-num] { text-align: right; font-variant-numeric: tabular-nums; }
+.iui-table { margin: 0; }
+/* Computed figures (v2 stats): label over value, a hairline above each, no card face (DESIGN: flat answer). */
+.iui-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 12px 20px; margin: 0; }
+.iui-stats > div { min-width: 0; padding-top: 8px; border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent); }
+.iui-stats dt { color: var(--text-muted); font-size: var(--ui-font-meta); line-height: var(--ui-line-meta); }
+.iui-stats dd { margin: 2px 0 0; font-size: var(--ui-font-display); line-height: 1.3; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 /* While the answer is arriving: a placeholder for what is still to come, and arriving blocks fade in. */
 .iui-skeleton { display: grid; gap: 10px; margin-top: 26px; }
 .iui-skeleton:first-child { margin-top: 0; }
@@ -184,6 +196,7 @@
   .iui-seg .iui-parallel { display: grid; }
   .iui-seg label + label { border-left-width: 0; border-top: var(--border-width, 1px) solid var(--overlay-medium); }
 }
+@container (max-width: 420px) { .iui-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @container (max-width: 400px) { .iui-check-rows { grid-template-columns: 1fr; } }
 /* Fingers need the larger targets the compact pointer layout gives up; the corner tool cannot rely on hover. */
 @media (pointer: coarse) {

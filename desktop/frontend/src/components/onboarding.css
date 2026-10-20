@@ -380,3 +380,7 @@ button.ob-progress-item:focus-visible { outline: var(--focus-ring) solid var(--s
 /* 完成页「之后在使用指南里慢慢学」:与上面几行同一排法,按钮靠右、与文字垂直居中。 */
 .ob-next-steps > .ob-next-guide { align-items: center; }
 .ob-next-guide .btn { margin-left: auto; flex: none; }
+
+/* 「连接」那步登录后的「同步到蓬洲云」三个勾(云同步开启方案 2026-10-20) */
+.ob-sync-title { margin-top: 12px; font-weight: 600; font-size: var(--ui-font-body); }
+.ob-sync-row { display: flex; gap: 8px; align-items: center; padding: 4px 0; }

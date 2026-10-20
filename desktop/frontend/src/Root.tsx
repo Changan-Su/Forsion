@@ -28,6 +28,7 @@ import { NotificationHost } from './components/NotificationHost'
 import { WhatsNewHost } from './components/WhatsNewDialog'
 import { TermsUpdateHost } from './components/TermsUpdateDialog'
 import { setPopupsBlocked } from './stores/popupQueue'
+import { SyncSetupHost } from './components/SyncSetupCard'
 import { DesktopStatusBar, installStatusBarItems } from './statusbar/items'
 import { UnitRemoteSurface, runUnitRoutePayload } from './components/UnitSwitcher'
 import { installNotificationWiring } from './stores/notificationWiring'
@@ -270,6 +271,9 @@ export function Root() {
 
       <WhatsNewHost />
       <TermsUpdateHost />
+
+      {/* 首登同步卡片:只在桌面主窗(要本地库远程同步);手机 / 网页没有,组件自己判 */}
+      <SyncSetupHost />
 
       <AnimatePresence>
         {pluginFloating?.view && <FloatingPanelFrame key={pluginFloating.id} title={pluginFloating.title} onClose={closeWebFloatingPanel}>

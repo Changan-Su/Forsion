@@ -1,6 +1,6 @@
 /** 仅 #preview：复用生产 SidebarPane / 消息 / Composer / TOC，无后端即可视觉回归。 */
 import { useMemo, useRef, useState } from 'react'
-import type { SessionRecord, UiMessage, WorkspaceDescriptor } from '../../types'
+import type { SessionRecord, UiMessage, WorkspaceDescriptor } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { EditorialMessage } from './EditorialMessage'
 import { Composer2 } from './Composer2'
 import { ApprovalTray } from './ApprovalTray'
@@ -10,6 +10,7 @@ import { EmptyState2 } from './EmptyState2'
 import { RightPanel } from '../../components/RightPanel'
 import { registerMessages, useI18n } from '../../i18n'
 import './chat2.css'
+import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 // ⚠️ 样例数据必须在渲染期用 t() 求值:模块作用域的字面量会在模块加载时冻结,切语言不再更新。
 registerMessages({

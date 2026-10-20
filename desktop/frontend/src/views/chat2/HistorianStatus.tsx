@@ -11,6 +11,7 @@ import { Markdown } from '../../components/Markdown'
 import { openAgentProfile } from '../agentProfileNav'
 import { showDetails } from '../../stores/detailsSubject'
 import { targetForSession } from '../../services/engine/targets'
+import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 registerMessages({
   'historian.status.ready': { zh: '待命', en: 'Ready' },

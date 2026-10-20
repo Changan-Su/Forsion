@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from 'react'
 import { AnimatePresence } from 'framer-motion'
 import { ArrowDown, Folder, MessageCircleQuestion, MessageSquare, Quote, Waypoints } from 'lucide-react'
-import type { AgentConfig, UiMessage } from '../types'
+import type { AgentConfig, UiMessage } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { Composer2 } from './chat2/Composer2'
 import { AgentSelectStrip } from '../components/AgentSelectStrip'
 import { displaySessionTitle } from '../sessionTitle'
@@ -21,6 +21,7 @@ import { askOriginOf, insertReplyToNote } from './chat2/insertToNote'
 import { amadeusAvailable } from '../features/runtime'
 import { resolveDeskPath } from '../stores/deskPlan'
 import { useDeskAcceptsFiles } from '../amadeus/plugins/deskCompanion'
+import { ToolCardDeskContext, toolCardDeskFor } from '../components/PluginToolCard'
 import { ErrorBoundary } from '../components/ErrorBoundary'
 import { EditorialMessage, type MessageHandlers } from './chat2/EditorialMessage'
 import { ApprovalTray } from './chat2/ApprovalTray'
@@ -64,6 +65,7 @@ import { selectableChatModels } from './chatModelCatalog'
 import { useChatWaitDetailsEnabled } from '../chatWaitDetails'
 import { QuotaAdvisoryBanner } from '../components/QuotaAdvisoryBanner'
 import { TargetHealthNotice, useComposerReady, useTargetComposerPlaceholder } from '../components/TargetHealthNotice'
+import '../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 const EMPTY_MESSAGES: UiMessage[] = []
 const EMPTY_CONFIG: AgentConfig = {}
@@ -505,6 +507,8 @@ export function ChatView({ leaf, params }: ViewProps) {
       onTask: (card, landing) => runTaskCard(card, landing, env().activeId),
       // 回答插回笔记(G3-08):由「问 Tangu」发起的对话优先插回出处那篇;宿主没有 Amadeus 编辑能力就不出按钮。
       onInsertNote: canInsertNote ? (text) => void insertReplyToNote(text, askOriginOf(env().activeMessages, id)) : undefined,
+      // 插件结果卡片的 call.quote:同划线「引用」,挂进这块输入框
+      onQuote: (text) => { const sid = env().activeId ?? null; setQuoteDraft((prev) => quoteAdded(prev, sid, text)) },
       ...(ttsEnabled ? { onSpeak: (text: string) => env().speak(id, text) } : {}),
     }
     handlerCache.set(id, h)
@@ -526,6 +530,18 @@ export function ChatView({ leaf, params }: ViewProps) {
   const deskEnabled = !!activeId && (hasMessages || !!deskHome) && !params.childSurface && !studioChat && UI_MODE !== 'mobile' && !!s.desktopConfig?.agentDeskEnabled
   // Desk 收不收文件(与 store 写入口、引用条同一判据):always 伴随面生效时 Desk 只演伴随面,点开文件一律走新标签页。
   const deskTakesFiles = useDeskAcceptsFiles(deskEnabled)
+  const deskQuote = useCallback((text: string) => setQuoteDraft((prev) => quoteAdded(prev, quoteSid, text)), [quoteSid])
+  // 插件结果卡片的 Desk 落点只在 Desk 真看得见时成立(判定在 toolCardDeskFor;这里量聊天视图宽度,对齐 CSS 容器查询)
+  const chatViewRef = useRef<HTMLDivElement>(null)
+  const [chatViewW, setChatViewW] = useState(Infinity)
+  useEffect(() => {
+    const el = chatViewRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(([entry]) => setChatViewW(Math.round(entry.contentRect.width)))
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+  const deskOpenNow = useApp((state) => (activeId ? state.deskBySession[activeId]?.mode === 'open' : false))
   // 团队成员列表嵌入 Pin Summary 的运行状态,Agent Desk 保持独立。
   const teamDesk = !params.childSurface && !studioChat && UI_MODE !== 'mobile' && !!mvCfg.groupChat && (mvCfg.groupAgents?.length || 0) >= 2
   // 画布(方案「Chat 画布分支」第二步):同一棵会话树的另一种看法。偏好按树根记 —— 在画布里点到别的支,不会翻回对话。
@@ -535,6 +551,7 @@ export function ChatView({ leaf, params }: ViewProps) {
     && !mvCfg.groupChat && !mvCfg.teamSlug && !mvCfg.teamMember && !mvCfg.soloAgentSlug && !mvCfg.soloEngineId && !mvCfg.engineId
   const [canvasPref, setCanvasPref] = useChatCanvasPref(treeRoot)
   const canvasOn = canvasAllowed && canvasPref.on
+  const toolCardDesk = toolCardDeskFor({ sessionId: activeId, takesFiles: deskTakesFiles, canvas: canvasOn, width: chatViewW, childOpen: !!(activeId && childSelections[activeId]), deskOpen: deskOpenNow })
   // 「对话 / 画布」= 视图模式(lcl viewModes):胶囊在这一列的头行左端,⌥⌘V 切换;记忆照旧按树根
   useViewModes(leaf.id, canvasAllowed ? {
     modes: [
@@ -584,7 +601,9 @@ export function ChatView({ leaf, params }: ViewProps) {
   }
 
   return (
+    <ToolCardDeskContext.Provider value={toolCardDesk}>
     <div
+      ref={chatViewRef}
       className={`t2-chat-view${refDrop ? ' refdrop' : ''}`}
       data-chat-surface={leaf.type}
       data-canvas={canvasOn ? '' : undefined}
@@ -952,9 +971,10 @@ export function ChatView({ leaf, params }: ViewProps) {
         {deskEnabled && activeId ? <DeskCard sessionId={activeId} /> : null}
       </div>}
       </div>
-      {deskEnabled && activeId && !childSelections[activeId] && !canvasOn ? <AgentDesk sessionId={activeId} /> : null}
+      {deskEnabled && activeId && !childSelections[activeId] && !canvasOn ? <AgentDesk sessionId={activeId} onQuote={deskQuote} /> : null}
       {!params.childSurface && activeId ? <ChildChatPanel key={activeId} parentId={activeId} /> : null}
     </div>
+    </ToolCardDeskContext.Provider>
   )
 }
 

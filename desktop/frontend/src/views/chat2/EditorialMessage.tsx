@@ -12,7 +12,7 @@ import { Copy, RotateCcw, GitBranch, MessageCircleQuestion, CornerUpLeft, Pencil
 import { FileInput, Quote } from 'lucide-react'
 import { useNoteInsertState } from './insertToNote'
 import * as api from '../../services/backendService'
-import type { UiMessage, TanguDesktopConfig, AgentConfig, StoredDesktopConfig, ToolEvent, InquiryRequest, SketchItem, LiveWait } from '../../types'
+import type { UiMessage, TanguDesktopConfig, AgentConfig, StoredDesktopConfig, ToolEvent, InquiryRequest, SketchItem, LiveWait } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import type { PreviewTarget } from '../../components/WorkspaceFilePreview'
 import { Markdown } from '../../components/Markdown'
 import { ChatWikiLink, WikiText } from '../../components/ChatWikiLink'
@@ -22,6 +22,7 @@ import { VoiceBubble } from '../../components/VoiceBubble'
 import { InlineFiles } from '../../components/InlineFiles'
 import { IntelligentUi } from '../../components/IntelligentUi'
 import { SketchCards } from '../../components/SketchCard'
+import { PluginToolCard, useToolCardOf, type ToolCardClaim } from '../../components/PluginToolCard'
 import { sketchFence } from '../../amadeus/blocks/sketch/format'
 import { streamingArgString } from '../streamingWrite'
 import { SystemPromptBlock } from '../../components/SystemPromptBlock'
@@ -54,7 +55,7 @@ import { useSpeechReveal } from './useSpeechReveal'
 import { playSendFlight } from './sendFlight'
 import { InquiryCard, PlanCard, TodoList } from '../../components/InquiryCard'
 import { registerMessages, useI18n } from '../../i18n'
-import { useApp } from '../../stores/appStore'
+import { isHtmlCardTool, useApp } from '../../stores/appStore'
 import { runResultText, type RunResult } from '../../builtins/runCommand'
 import { SUB_PROVIDER_LABELS } from '../../components/OnboardingWizard'
 import { UI_MODE, nativeSheetPresenter, runNativeCtxMenu, runNativeSheetMenu, useEdgeNudge, type SheetMenuItem } from '@lcl/engine'
@@ -73,6 +74,7 @@ import { AttachmentTile } from '../../components/AttachmentTile'
 import { UserFold } from './UserFold'
 export type { TaskLanding }
 import './chat2.css'
+import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 const isImageAtt = (a: { mimeType?: string; data?: string }): boolean => !!a.mimeType?.startsWith('image/') && !!a.data
 
@@ -81,11 +83,12 @@ export type OrderedToolPart =
   | { t: 'sketch'; item: SketchItem }
   | { t: 'intelligent'; event: ToolEvent }
   | { t: 'marketplace'; event: ToolEvent }
+  | { t: 'pluginCard'; event: ToolEvent; claim: ToolCardClaim }
 
 /** 直播中还没收口的 sketch 调用 → 草稿卡(10-09,对标 ChatGPT Intelligent UI 边生成边渲染):tool_stream 已把参数增量
  *  累进 ev.arguments,这里从半截 JSON 里把 html 解出来。只在**直播**里算(live):历史 / 中断的未完成调用照旧不画幻影卡。 */
 function draftSketchOf(ev: ToolEvent): SketchItem | undefined {
-  if (ev.name !== 'sketch' || ev.done || !ev.arguments) return undefined
+  if (!isHtmlCardTool(ev.name) || ev.done || !ev.arguments) return undefined
   const html = streamingArgString(ev.arguments, 'html')
   if (!html || !html.trim()) return undefined
   const title = streamingArgString(ev.arguments, 'title')
@@ -96,8 +99,10 @@ function draftSketchOf(ev: ToolEvent): SketchItem | undefined {
  * 把一个连续工具段按 Sketch 完成点切开。Sketch 的工具行仍留在前一组中,卡片紧跟其后(原生文档的工具行不留,见下)；
  * 后续工具另起一组,于是多个草图与正文都不会再被批量挪到消息末尾。
  * live=消息还在直播:没收口的 sketch 调用也出一张草稿卡(同 callId,终稿到达原地换成正式卡)。
+ * cardOf=插件结果卡片的认领(toolResultCards.useToolCardOf):认领了的调用画卡片**代替**通用记录(同原生文档),
+ * 前后的工具各成一组;没认领的(运行中、出错、插件停用 / 重载)照旧是通用记录。
  */
-export function partitionToolSegment(events: ToolEvent[], sketches?: SketchItem[], live = false): OrderedToolPart[] {
+export function partitionToolSegment(events: ToolEvent[], sketches?: SketchItem[], live = false, cardOf?: (ev: ToolEvent) => ToolCardClaim | undefined): OrderedToolPart[] {
   const sketchByCall = new Map((sketches || []).map((item) => [item.callId, item]))
   const parts: OrderedToolPart[] = []
   let tools: ToolEvent[] = []
@@ -118,6 +123,8 @@ export function partitionToolSegment(events: ToolEvent[], sketches?: SketchItem[
       if (!rewritten) parts.push({ t: 'intelligent', event: ev })
       continue
     }
+    const claim = cardOf?.(ev)
+    if (claim) { flushTools(); parts.push({ t: 'pluginCard', event: ev, claim }); continue }
     tools.push(ev)
     if (isMarketplaceTool(ev) && ev.done && !ev.isError) { flushTools(); parts.push({ t: 'marketplace', event: ev }); continue }
     const sketch = sketchByCall.get(ev.id) ?? (live ? draftSketchOf(ev) : undefined)
@@ -234,6 +241,8 @@ export interface MessageHandlers {
   onRewind?: (mode: 'code' | 'conversation' | 'both') => void
   /** 把这条回答插回笔记(评审 G3-08,见 insertToNote.ts);宿主没有 Amadeus 编辑能力时不传 → 按钮不渲染。text = 摘掉围栏的正文。 */
   onInsertNote?: (text: string) => void
+  /** 插件结果卡片的 call.quote:挂成这块输入框上方的引用卡(同划线「引用」)。不传 → 退回主对话的输入框。 */
+  onQuote?: (text: string) => void
 }
 
 type RewindMode = 'code' | 'conversation' | 'both'
@@ -388,6 +397,8 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
   const elsewhere = !!runSid && refForSession(runSid).kind === 'unit'
   const embeds = useMemo(() => (runSid && !elsewhere && UI_MODE !== 'mobile' && window.tangu?.readHostFile ? { execMode: embedExec } : undefined), [runSid, embedExec, elsewhere])
   const { t } = useI18n()
+  // 插件结果卡片的认领(订阅渲染器 / 名单:插件晚加载或被停用时这条消息跟着重渲)
+  const cardOf = useToolCardOf()
   msg = useSpeechReveal(msg)
   // 建议芯片是一次性的:点了就等于用户按了回车,整排随即失效 —— 不然双击会把同一句排两遍。
   const [suggestSent, setSuggestSent] = useState(false)
@@ -594,6 +605,10 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
   const inlineToolIds = new Set(!voiceMode ? (msg.segments || []).flatMap(seg => seg.t === 'tools' ? seg.ids : []) : [])
   const trailingIntelligent = (msg.toolEvents || []).filter(ev => ev.name === 'intelligent_ui' && !inlineToolIds.has(ev.id))
   const trailingSketches = (msg.sketches || []).filter((item) => !inlineSketchIds.has(item.callId))
+  const trailingCards = (msg.toolEvents || []).flatMap((ev) => {
+    const claim = inlineToolIds.has(ev.id) ? undefined : cardOf(ev)
+    return claim ? [{ ev, claim }] : []
+  })
 
   return (
     <div ref={rootRef} className="t2-asst" id={`tocmsg-${msg.id}`} data-streaming={msg.status === 'streaming' ? '' : undefined}>
@@ -620,7 +635,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
             const firstIdx = msg.segments.findIndex((s2) => s2.t === 'tools' || !!s2.text.trim())
             const evsOf = (ids: string[]) => ids.map((id) => msg.toolEvents?.find((e) => e.id === id)).filter(Boolean) as ToolEvent[]
             const first = msg.segments[firstIdx]
-            const firstParts = first?.t === 'tools' ? partitionToolSegment(evsOf(first.ids), msg.sketches, streaming) : []
+            const firstParts = first?.t === 'tools' ? partitionToolSegment(evsOf(first.ids), msg.sketches, streaming, cardOf) : []
             const headEvents = firstParts[0]?.t === 'tools' ? firstParts[0].events : undefined
             const nodes = msg.segments.map((seg, i) => {
               if (seg.t === 'text') {
@@ -632,13 +647,15 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
                   : null
               }
               const skip = i === firstIdx && headEvents ? 1 : 0
-              const parts = (i === firstIdx ? firstParts : partitionToolSegment(evsOf(seg.ids), msg.sketches, streaming)).slice(skip)
+              const parts = (i === firstIdx ? firstParts : partitionToolSegment(evsOf(seg.ids), msg.sketches, streaming, cardOf)).slice(skip)
               return parts.length ? (
                 <Fragment key={i}>
                   {parts.map((part, k) => part.t === 'tools'
                     ? <ToolGroup key={`tools-${part.events.map((ev) => ev.id).join('-')}-${k + skip}`} events={part.events} running={msg.status === 'streaming'} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} />
                     : part.t === 'marketplace'
                       ? <MarketPluginCards key={`market-${part.event.id}`} event={part.event} />
+                    : part.t === 'pluginCard'
+                      ? <PluginToolCard key={`ptc-${part.event.id}`} event={part.event} claim={part.claim} onQuote={handlers?.onQuote} fallback={<ToolGroup events={[part.event]} />} />
                     : part.t === 'intelligent'
                       ? <IntelligentUi key={`intelligent-${part.event.id}`} event={part.event} live={streaming} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} />
                     : <SketchCards key={`sketch-${part.item.callId}`} items={[part.item]} actions={sketchActions} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} />)}
@@ -648,7 +665,8 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
             const head = (!!msg.reasoning || !!headEvents) && <ToolGroup key="proc-head" events={headEvents || []} running={streaming} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} {...think(nodes.every((n) => n == null))} />
             return <>{head}{nodes}</>
           }
-          const head = (!!msg.reasoning || !!msg.toolEvents?.length) && <ToolGroup key="proc-head" events={msg.toolEvents || []} running={streaming} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} {...think(!body)} />
+          // 老序:插件卡片挪到尾部(trailingCards),不在这一行里再列一遍
+          const head = (!!msg.reasoning || !!msg.toolEvents?.length) && <ToolGroup key="proc-head" events={(msg.toolEvents || []).filter((ev) => !cardOf(ev))} running={streaming} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} {...think(!body)} />
           return (
             <>
               {head}
@@ -730,6 +748,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
         {(msg.toolEvents || []).filter(ev => isMarketplaceTool(ev) && !inlineToolIds.has(ev.id)).map(ev => <MarketPluginCards key={`market-${ev.id}`} event={ev} />)}
         {trailingIntelligent.map(ev => <IntelligentUi key={ev.id} event={ev} live={streaming} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} />)}
         {!!trailingSketches.length && <SketchCards items={trailingSketches} actions={sketchActions} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} />}
+        {trailingCards.map(({ ev, claim }) => <PluginToolCard key={`ptc-${ev.id}`} event={ev} claim={claim} onQuote={handlers?.onQuote} fallback={<ToolGroup events={[ev]} />} />)}
         {/* 审批卡在输入框上方的托盘里批(ApprovalTray);流里只留一行指路,已兑现的不留痕 —— 结局看工具卡。
             团队成员的占位气泡已有「等待你的审批」那行,不重复。 */}
         {!msg.work && pendingApv.length > 0 && (

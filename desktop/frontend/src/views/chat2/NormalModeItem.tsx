@@ -10,7 +10,7 @@ import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Bot, Check, ChevronRight } from 'lucide-react'
 import { nestedPanelPlacement, nestedPanelTop, UI_ZOOM_EVENT, useEdgeNudge, zoomOf, type NestedPanelPlacement, type SheetMenuItem } from '@lcl/engine'
 import { useI18n } from '../../i18n'
-import type { NormalAgentDef } from '../../types'
+import type { NormalAgentDef } from '../../../../../tangu-agent/src/contracts/clientTypes'
 
 interface NormalModeProps {
   active: boolean

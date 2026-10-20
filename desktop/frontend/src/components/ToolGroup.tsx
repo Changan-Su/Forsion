@@ -11,9 +11,10 @@ import { AnimatedCollapse } from './AnimatedUI'
 import { DiffView } from './DiffView'
 import { toolDiffText } from './toolDiff'
 import { registerMessages, useI18n } from '../i18n'
-import type { ApprovalRequest, ToolEvent } from '../types'
+import type { ApprovalRequest, ToolEvent } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { ImageGenerationLoader } from '../views/chat2/ImageGenerationLoader'
 import { isSelfWriteReceipt } from '../services/selfUpdates'
+import '../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 registerMessages({
   'tool.parked.waiting': { zh: '已挂起，等你在输入框上方批准。Agent 先做别的，拍板后结果会补在这里。', en: 'Parked until you approve it above the input box. The agent carries on meanwhile; the result lands here once you decide.' },
@@ -95,7 +96,8 @@ export function describeTool(ev: ToolEvent): Desc {
       return { kind: 'read', verbKey: 'tool.verb.read', target: baseName(path || String(a.name ?? a.file ?? '')), isFile: true }
     case 'intelligent_ui':
       return { kind: 'other', verbKey: 'tool.verb.sketched', target: 'Intelligent UI', isFile: false }
-    case 'sketch':
+    case 'intelligent_ui_html':
+    case 'sketch': // 10-20 之前的名字
       return { kind: 'other', verbKey: 'tool.verb.sketched', target: String(a.title ?? '') || 'Intelligent UI', isFile: false }
     case 'desk_present': {
       const views = Array.isArray(a.views) ? a.views : []

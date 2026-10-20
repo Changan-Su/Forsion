@@ -4,7 +4,7 @@
  *  通用预览。状态在 appStore.deskBySession(会话级快照落 localStorage)。宽度=size 档位或用户
  *  拖出的 fraction —— 一律比例制,对 body 端级 zoom 免疫(px 会被 zoom 缩放,% 不会)。 */
 import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
-import { ChevronDown, Copy, Eraser, Loader2, Maximize2, Minimize2, NotebookPen, Sparkles } from 'lucide-react'
+import { ChevronDown, Copy, Eraser, Loader2, Maximize2, Minimize2, NotebookPen, Puzzle, Sparkles } from 'lucide-react'
 import { getView, subscribeViews } from '@lcl/engine'
 import type { ViewProps } from '@lcl/engine'
 import { useApp, type DeskItem } from '../../stores/appStore'
@@ -21,6 +21,8 @@ import { iconForFile } from '../../services/fileKinds'
 import { openDb, openNote } from '../../amadeusNav'
 import type { CtxItem } from '../../components/RightPanel'
 import { DeskChromeContext, DeskMenuButton, DeskMoreButton, type DeskChrome } from './deskChrome'
+import { DeskToolCardPane } from './DeskToolCardPane'
+import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 registerMessages({
   'desk.writing': { zh: '正在编辑 {name}', en: 'Editing {name}' },
@@ -264,7 +266,7 @@ function DeskCaps({ sessionId, item, panel, switchable, className, children }: {
   )
   let name: React.ReactNode = null
   if (item) {
-    const Icon = item.live ? Loader2 : item.view ? Sparkles : iconForFile('', item.name || path)
+    const Icon = item.live ? Loader2 : item.tool ? Puzzle : item.view ? Sparkles : iconForFile('', item.name || path)
     const label = item.live ? (path ? t('desk.writing', { name: item.name }) : t('desk.drafting')) : (item.name || path.split(/[/\\]/).pop() || '')
     const tip = [path, !item.live && note].filter(Boolean).join('\n') || undefined
     const inner = <><Icon size={13} className={`desk-cap-ic${item.live ? ' spin' : ''}`} /><span className="desk-cap-label">{label}</span></>
@@ -298,7 +300,8 @@ function DeskCaps({ sessionId, item, panel, switchable, className, children }: {
   )
 }
 
-export function AgentDesk({ sessionId }: { sessionId: string }) {
+/** onQuote:Desk 里的插件结果卡片调 call.quote 时挂进哪个输入框(ChatView 传自己的;不传退回主对话)。 */
+export function AgentDesk({ sessionId, onQuote }: { sessionId: string; onQuote?: (text: string) => void }) {
   const { t } = useI18n()
   const desk = useApp((s) => s.deskBySession[sessionId])
   const claimKey = useClaimKey(desk?.items?.slice(0, 2) ?? [])
@@ -346,6 +349,7 @@ export function AgentDesk({ sessionId }: { sessionId: string }) {
               ) : items.map((it, i) => (
                 <DeskCaps key={it.key} sessionId={sessionId} item={it} panel={i === 0 ? panelBtns : null} switchable={i === 0}>
                   {it.live ? <DeskLivePane sessionId={sessionId} item={it} />
+                    : it.tool ? <DeskToolCardPane sessionId={sessionId} callId={it.tool.callId} onQuote={onQuote} />
                     : it.view ? <DeskShimView type={it.view.type} params={it.view.params ?? {}} k={`desk-view:${it.key}`} />
                       : <DeskFilePane item={it} allowNative={it.key === claimKey} />}
                 </DeskCaps>
@@ -432,6 +436,7 @@ export function DeskCard({ sessionId }: { sessionId: string }) {
           items.map((it) => (
             <div className="agent-desk-pane" key={it.key}>
               {it.live ? <DeskLivePane sessionId={sessionId} item={it} />
+                : it.tool ? <DeskToolCardPane sessionId={sessionId} callId={it.tool.callId} />
                 : it.view ? <DeskShimView type={it.view.type} params={it.view.params ?? {}} k={`desk-view:${it.key}`} />
                   : <DeskFilePane item={it} allowNative={it.key === claimKey} />}
             </div>

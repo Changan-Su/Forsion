@@ -79,6 +79,7 @@ const GATE_FILES = [
 
 /** 移动端**故意**不要的东西:名字 → 理由。理由留空 = 视为未声明,照样红灯。 */
 const SKIP = {
+  SyncSetupHost: '首登同步卡片管的是本地库远程同步(window.remoteSync,桌面专属);手机没有同步引擎、直接读云端(云同步开启方案 2026-10-20 第六节)',
   // —— 启动序列 ——
   installMultiWindow: '移动端无卫星窗;实现本身对非 electron 天然 no-op',
   installAccountTransition: 'Electron 多窗口切号前保存握手;web/mobile 通过登录跳转和整页重载清理账号缓存,没有 auth:will-change IPC',
@@ -88,7 +89,7 @@ const SKIP = {
   DetachedRoot: '同上:拖出来的独立窗',
   MiniRoot: '同上:悬浮 mini 卡片',
   FloatingRoot: '第六种 Panel 的 Electron 原生子窗口根;移动端按产品约定继续使用全屏二级页面,不模拟桌面窗口',
-  ChatPreview: '#preview 设计预览页,截图评审用',
+  readTanguChatViews: '#preview 设计预览页(样例对话,截图评审用;核心插件化 2e-7 起经 tanguSeam 从 Tangu 取 ChatPreview)',
   resolveInitialEffectiveMode: '移动端用 resolveInitialMode(无「跟随系统」的 electron 通道)',
   // —— 根组件 ——
   Root: '移动端的对位物就是 MobileRoot 自己',

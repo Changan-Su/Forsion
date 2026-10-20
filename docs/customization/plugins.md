@@ -196,6 +196,16 @@ Settings → Appearance → Startup and icons accepts custom brand icons and ani
 
 插件任务、只读外部引擎、隔离 Git 工作区、原生定时与 Desktop MCP 接缝见 [任务 SDK / Task SDK](./plugin-tasks.md)。
 
+## 工具结果卡片 / Tool result cards
+
+带引擎半身的插件,可以给自己注册的工具配一张结果卡片:Tangu 调用这个工具成功之后,对话里画的是插件的卡片,不再是一行通用的工具记录。卡片直接画在 Forsion 界面里,跟着主题、字号走。只有插件自己引擎半身注册的工具才能配卡片,内置工具和别的插件的工具都不行;工具还在跑、出错、等你批准,或者插件停用、重新加载时,照旧显示通用记录。重新打开旧对话,卡片照样在。
+
+卡片默认在对话里,右上角可以「在 Desk 打开」。插件也可以声明一出来就放进 Agent Desk(白板、看板这类要大地方的),这时对话里留一张占位卡,写着「正在 Desk 中显示」,点「收回到对话」挪回来;Desk 顶上的 ⋯ 里也有「放回对话」。来回挪的时候插件会记住缩放、滚动这类状态。手机上、关掉了 Agent Desk、或者窗口窄到放不下 Desk 时,一律显示在对话里。卡片里可以把一段内容「引用」到输入框上方,和在回答里划线引用一样,发不发由你决定;卡片不能写文件,也不能替你发消息。接口细节见插件开发技能「Tool result cards」一节。
+
+A plugin with an engine half can give the tools it registers a result card: after Tangu calls such a tool successfully, the chat shows the plugin's card instead of the generic one-line tool record. The card is drawn right in the Forsion interface and follows the theme and text size. Only tools the plugin's own engine half registered can get a card; built-in tools and other plugins' tools cannot. While the tool is still running, when it failed or is waiting for your approval, and while the plugin is disabled or reloading, the generic record shows. Cards come back when you reopen an old conversation.
+
+A card sits in the chat by default, with "Open in Desk" at its top right. A plugin can also ask for a card to go straight into the Agent Desk (for whiteboards and boards that need room); the chat then keeps a placeholder that says "Showing in Desk", and "Back to chat" moves it back. The ⋯ menu at the top of the Desk has "Move back to chat" too. The plugin keeps state such as zoom and scroll position across moves. On phones, with the Agent Desk turned off, or when the window is too narrow for the Desk, cards always show in the chat. A card can quote part of its content above the chat input, the same as selecting text in a reply and quoting it, and you decide whether to send it; cards cannot write files or send messages for you. For the API, see the "Tool result cards" section of the plugin development skill.
+
 ## Intelligent UI 卡片 / Intelligent UI cards
 
 插件可以把已有的列表源开放成对话里的原生卡片：在 `registerListSource` 上加一个 `intelligent` 声明即可。列表由宿主渲染，数据与跳转仍只有 `items` / `subscribe` / `open` 这一份实现（示例见下方代码）。
@@ -297,11 +307,13 @@ Since 2026-10-18 (added with the cloud drive in Forsion Extend's Penzor Cloud):
 
 - `ctx.app.setSpaceDot?(spaceId, on)`：在 Ribbon 上你自己 Space 的图标右上角挂一个提示红点，和收件箱未读角标同一种红。`true` 挂、`false` 收。只认本插件随包带的 Space，别人的或内置的一律返回 `false`。同一个 Space 既有红点又有进度环时只画红点；有未读角标时先显示角标。插件停用时宿主替你收掉。挂着红点时，图标的读屏名会带上「有新提醒」。
 - 列表行里的未读提示照旧用 `ListItem.unread`（共用的未读圆点，颜色跟着主题的指示色走，不是红色）。要从别的 Space 也看得到，就配上 `setSpaceDot`。
+- `ctx.app.sync?`（2026-10-20 起，**只对首方内置包生效**，蓬洲云的「同步」页用）：读写这台电脑的三项云同步。`get()` 给一份快照（智库、Agents 与记忆、插件数据各自开没开，第一次同步的进度，第二台电脑上云端已有一份时待定的合并问题），`subscribe(fn)` 在变化时通知，`refresh()` 重读，`set(kind, on)` 开关一项（`notes` / `agents` / `plugins`），`resolveNotes('merge' | 'cloud' | 'skip')` 回答合并问题，`runNow()` 立刻同步一次。开关和同步引擎都在宿主，插件只画界面。普通插件、手机和网页上整个成员缺席。
 
 Since 2026-10-19 (added when Server Admin started flagging the feedback center):
 
 - `ctx.app.setSpaceDot?(spaceId, on)` puts an attention dot on the top-right of your own Space's icon in the Ribbon, in the same red as the inbox unread badge. Pass `true` to show it and `false` to remove it. It only accepts a Space bundled with your plugin; for anyone else's or a built-in Space it returns `false`. If the Space has both a dot and a progress ring, only the dot is drawn; an unread badge takes precedence over both. The host clears the dot when your plugin is disabled. While the dot is shown, the icon's accessible name says it has new activity.
 - Unread rows in a list still use `ListItem.unread`: the shared unread dot, drawn in the theme's indicator colour rather than red. Pair it with `setSpaceDot` so it can be noticed from other Spaces.
+- `ctx.app.sync?` (since 2026-10-20, **first-party built-in bundles only**; used by Penzor Cloud's Sync page) reads and changes this computer's three cloud sync switches. `get()` returns a snapshot (whether the notes vault, agents & memory, and plugin data are each on, first-sync progress, and the pending question when the cloud already holds a vault on a second computer); `subscribe(fn)` notifies on change; `refresh()` re-reads; `set(kind, on)` turns one on or off (`notes`, `agents` or `plugins`); `resolveNotes('merge' | 'cloud' | 'skip')` answers the pending question; `runNow()` syncs once now. The host owns the switches and the sync engines; the plugin only draws the page. Other plugins, phones and the web don't get the member at all.
 
 ### 弹窗排队 / Popup queue
 

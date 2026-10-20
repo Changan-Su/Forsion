@@ -1,6 +1,6 @@
 import { useEffect, type ReactNode } from 'react'
 import { useApp } from '../stores/appStore'
-import { isProjectIconFile } from '../types'
+import { isProjectIconFile } from '../../../../tangu-agent/src/contracts/clientTypes'
 
 /** 项目图标:settings.icon 是 emoji → 文字;是导入的图片 → <img>(图没拉到前先显示 fallback);没设 → fallback。
  *  侧栏组头与 PROJECT 详情共用,默认项与图片都走 store 缓存(连上引擎后按需拉一次)。 */

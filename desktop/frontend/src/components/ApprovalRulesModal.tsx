@@ -14,9 +14,10 @@ import { X, Loader2 } from 'lucide-react'
 import { useI18n } from '../i18n'
 import * as api from '../services/backendService'
 import type { ApprovalRules } from '../services/backendService'
-import type { TanguDesktopConfig } from '../types'
+import type { TanguDesktopConfig } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { MODE_KEY } from './ApprovalCard'
 import { homeTarget } from '../services/engine/targets'
+import '../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 const BASES: ApprovalRules['base'][] = ['readonly', 'auto-edit', 'full-auto']
 const EMPTY: ApprovalRules = { base: 'auto-edit', allow: [], ask: [], deny: [] }

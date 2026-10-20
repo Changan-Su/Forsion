@@ -78,7 +78,7 @@ export const CODING_PRESET_DEFERRED: ReadonlySet<string> = new Set([
 export const CHAT_PRESET_RESIDENT: ReadonlySet<string> = new Set([
   'search_marketplace',
   'run_python', 'web_fetch', 'web_search', 'read_file', 'display_file', 'pip_install', 'write_file',
-  'load_tools', 'list_files', 'get_datetime', 'sketch', 'intelligent_ui', 'list_intelligent_cards', 'remember', 'read_computer_history', 'manage_human',
+  'load_tools', 'list_files', 'get_datetime', 'intelligent_ui_html', 'intelligent_ui', 'list_intelligent_cards', 'remember', 'read_computer_history', 'manage_human',
 ]);
 
 /** chat 按需面(方案 §3.3 B 档):目录一行,load_tools 可解锁。
