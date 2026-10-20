@@ -41,6 +41,32 @@ async function main() {
     },
   })
   const browser = await chromium.launch({ executablePath: executable(), headless: true })
+  const boards = new Map()
+  const fixtureApi = (ctx) => ctx.route('**/api/**', async (route) => {
+    const u = new URL(route.request().url())
+    const p = u.pathname.replace(/^\/api/, '')
+    const json = (body) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(body) })
+    if (p === '/auth/me') return json({ id: 'fixture-user', username: 'Fixture' })
+    if (p === '/auth/region') return json({ country: 'GB' })
+    if (p === '/amadeus/vaults') return json({ vaults: [{ id: 'default', name: 'Fixture vault', lastChangeSeq: 1, sizeBytes: 0, createdAt: new Date().toISOString() }] })
+    if (p.endsWith('/tree')) return json({ pages: ['Fixture note.md', ...[...boards.keys()]], folders: [], files: [], seq: 1 })
+    if (p.endsWith('/file')) {
+      // Boards round-trip through this in-memory store (the tablet board check creates one); everything else reads the note.
+      const file = route.request().method() === 'PUT' ? route.request().postDataJSON() : null
+      const at = file?.path ?? u.searchParams.get('path') ?? ''
+      if (/\.excalidraw\.md$/.test(at)) {
+        if (file) { const seq = (boards.get(at)?.seq ?? 1) + 1; boards.set(at, { content: file.content, seq }); return json({ seq, hash: `fixture-${seq}` }) }
+        const board = boards.get(at)
+        if (!board) return route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'not found' }) })
+        return json({ path: at, kind: 'page', content: board.content, seq: board.seq, hash: `fixture-${board.seq}`, updatedAt: new Date().toISOString() })
+      }
+      return json({ path: 'Fixture note.md', kind: 'page', content: '# Fixture note\n\nFixture body.\n', seq: 1, hash: 'fixture', updatedAt: new Date().toISOString() })
+    }
+    if (p.endsWith('/asset-token')) return json({ token: 'fixture-asset', ttlSec: 300 })
+    if (/\/events$|\/stream$/.test(p)) return route.fulfill({ contentType: 'text/event-stream', body: ': fixture\n\n' })
+    const response = await route.fetch({ url: stub.url + p + u.search })
+    return route.fulfill({ response })
+  })
   try {
     for (const config of [{ width: 390, locale: 'zh-CN', mode: 'light' }, { width: 320, locale: 'en-GB', mode: 'dark' }]) {
       const ctx = await browser.newContext({ viewport: { width: config.width, height: 844 }, hasTouch: true, isMobile: true, locale: config.locale })
@@ -52,20 +78,7 @@ async function main() {
         localStorage.setItem('forsion_theme', cfg.mode)
         localStorage.setItem('forsion_theme_lang', 'lovable')
       }, config)
-      await ctx.route('**/api/**', async (route) => {
-        const u = new URL(route.request().url())
-        const p = u.pathname.replace(/^\/api/, '')
-        const json = (body) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(body) })
-        if (p === '/auth/me') return json({ id: 'fixture-user', username: 'Fixture' })
-        if (p === '/auth/region') return json({ country: 'GB' })
-        if (p === '/amadeus/vaults') return json({ vaults: [{ id: 'default', name: 'Fixture vault', lastChangeSeq: 1, sizeBytes: 0, createdAt: new Date().toISOString() }] })
-        if (p.endsWith('/tree')) return json({ pages: ['Fixture note.md'], folders: [], files: [], seq: 1 })
-        if (p.endsWith('/file')) return json({ path: 'Fixture note.md', kind: 'page', content: '# Fixture note\n\nFixture body.\n', seq: 1, hash: 'fixture', updatedAt: new Date().toISOString() })
-        if (p.endsWith('/asset-token')) return json({ token: 'fixture-asset', ttlSec: 300 })
-        if (/\/events$|\/stream$/.test(p)) return route.fulfill({ contentType: 'text/event-stream', body: ': fixture\n\n' })
-        const response = await route.fetch({ url: stub.url + p + u.search })
-        return route.fulfill({ response })
-      })
+      await fixtureApi(ctx)
       const page = await ctx.newPage()
       page.on('pageerror', (error) => errors.push(error.message))
       await page.route('**/before-forsion', (route) => route.fulfill({ contentType: 'text/html', body: '<title>Before Forsion</title><p>Previous page</p>' }))
@@ -93,6 +106,9 @@ async function main() {
         assert(Math.abs(value.left) < 1 && Math.abs(value.width - value.viewport) < 1, JSON.stringify(value))
       }
       const closeSheet = () => page.locator('.bmc-sheet-head > button').last().click()
+      // installBrowserBack keeps one same-URL history entry while the app has somewhere to go back to (true) and prunes it at
+      // the boundary (false). Both happen a frame after the state change; a goBack / reload before that races the history.
+      const guardSettled = (guarded) => page.waitForFunction((g) => !!(history.state && history.state.forsionMobileBack) === g, guarded, { timeout: 5000 })
       const item = (id) => page.locator(`button.bmc-sheet-row[data-sheet-item="${id}"]`)
       await check('touch viewport automatically installs mobile dock', async () => {
         // Product default remains Tangu; explicitly visit Home for the home screenshot below.
@@ -119,6 +135,9 @@ async function main() {
         assert.equal(await sheet().getAttribute('data-stable'), 'same-sheet')
         await closeSheet()
         assert((await page.evaluate(() => JSON.parse(localStorage.getItem('lcl_dock_pins_v1')))).length === 1)
+        // Home is the back boundary: closing the sheet prunes the guard entry with history.back(). Reloading while that
+        // traversal is in flight aborts the reload (ERR_ABORTED). Wait for the guard to settle, as a person would.
+        await guardSettled(false)
         await page.reload()
         await page.waitForSelector('.bmc-dock')
         assert.equal(await page.locator('.bmc-dock [data-space]').count(), 2)
@@ -135,7 +154,7 @@ async function main() {
         await page.waitForSelector('.mb-shell[data-nav="list"]')
         await page.getByText('Fixture session one', { exact: true }).click()
         await page.waitForSelector('.mb-shell[data-nav="detail"]')
-        await page.waitForTimeout(150)
+        await guardSettled(true)
         await page.goBack()
         await page.waitForSelector('.mb-shell[data-nav="list"]')
         await listGeometry()
@@ -210,9 +229,105 @@ async function main() {
       await check('return Home then browser Back leaves the app; no empty-page trap', async () => {
         await page.locator('.bmc-dock [data-space="home"]').click()
         await page.waitForSelector('.mb-shell[data-space="home"]')
-        await page.waitForTimeout(250)
+        await guardSettled(false)
         await page.goBack()
         await page.waitForFunction(() => document.title === 'Before Forsion')
+        assert.equal(errors.length, 0, errors.join('\n'))
+      })
+      await ctx.close()
+    }
+    // Tablet (Pad A2 × the browser chrome). Portrait = the phone layout: list level, bottom dock, no docked column.
+    // Landscape = the wide layout: docked left column beside the main view; the title capsule starts right of it
+    // (`leftInset`), so the column's own header — aligned with the capsule row by singleColumn.css — is not under it.
+    // A tablet turned on its side keeps the mobile shell (index.html leaves it only for a fine pointer).
+    // ⚠️ Web wide keeps the bottom dock for now; Android A2 shows a left rail there instead (pending decision).
+    {
+      const ctx = await browser.newContext({ viewport: { width: 820, height: 1180 }, hasTouch: true, isMobile: true, locale: 'zh-CN' })
+      await ctx.addInitScript(() => {
+        localStorage.setItem('forsion_token', 'fixture-only')
+        localStorage.setItem('forsion_tangu_onboarding_done', '1')
+        localStorage.setItem('tangu_locale', 'zh')
+      })
+      await fixtureApi(ctx)
+      const page = await ctx.newPage()
+      const errors = []
+      page.on('pageerror', (error) => errors.push(error.message))
+      await page.goto(preview.url, { waitUntil: 'domcontentloaded' })
+      await page.waitForSelector('[data-browser-mobile-chrome]', { timeout: 60_000 })
+      await page.waitForTimeout(1200)
+      const check = async (name, fn) => {
+        try { await fn(); results.push({ name: `tablet/zh-CN: ${name}`, ok: true }); console.log('PASS', name) }
+        catch (error) {
+          results.push({ name: `tablet/zh-CN: ${name}`, ok: false, error: String(error) })
+          await page.screenshot({ path: path.join(OUT, `fail-${results.length}.png`) })
+          throw error
+        }
+      }
+      const shot = async (name) => { await page.waitForTimeout(650); await page.screenshot({ path: path.join(OUT, name) }) }
+      const rect = (sel) => page.locator(sel).first().evaluate((el) => { const r = el.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width } })
+      const wideGeometry = async () => {
+        assert.equal(await page.locator('.mb-shell').getAttribute('data-wide'), '')
+        const side = await rect('.mb-sidecol')
+        assert(side.width > 200, `docked column: ${JSON.stringify(side)}`)
+        const heading = await rect('.bmc-heading')
+        assert(heading.left >= side.right - 1, `title capsule starts after the docked column: ${JSON.stringify({ side, heading })}`)
+        // The column's header row is the column's own, not the capsule's.
+        const bar = await page.locator('.mb-sidecol .mb-drawer-bar').count()
+        if (bar) {
+          const own = await page.locator('.mb-sidecol .mb-drawer-bar').first().evaluate((el) => {
+            const r = el.getBoundingClientRect()
+            return [0.2, 0.5, 0.8].every((f) => el.contains(document.elementFromPoint(r.left + r.width * f, r.top + r.height / 2)))
+          })
+          assert(own, 'docked column header is not covered')
+        }
+        const dock = await rect('.bmc-dock')
+        assert(dock.bottom <= 820 && dock.top > 600, `dock: ${JSON.stringify(dock)}`)
+      }
+      await check('portrait 820×1180 keeps the phone layout', async () => {
+        await page.locator('.bmc-dock [data-space="amadeus"]').click()
+        await page.waitForSelector('.mb-shell[data-space="amadeus"][data-nav="list"]')
+        assert.equal(await page.locator('.mb-shell').getAttribute('data-wide'), null)
+        assert.equal(await page.locator('.mb-sidecol').count(), 0)
+        assert(await page.locator('.bmc-dock [data-space]').count() > 1)
+      })
+      await shot('tablet-820x1180-notes.png')
+      await check('landscape 1180×820: docked column beside main, title capsule right of it', async () => {
+        await page.setViewportSize({ width: 1180, height: 820 })
+        await page.waitForSelector('.mb-shell[data-wide] .mb-sidecol')
+        await page.waitForTimeout(700)
+        await wideGeometry()
+      })
+      await shot('tablet-1180x820-notes.png')
+      await check('landscape board: menu button and tool island share the capsule row without touching the capsules', async () => {
+        await page.locator('.mb-sidecol').getByText('新建白板', { exact: true }).first().click()
+        await page.getByRole('button', { name: '创建', exact: true }).click()
+        await page.waitForSelector('.mb-view[data-view="amadeus-drawing"] .excalidraw .App-menu_top > .shapes-section')
+        await page.waitForTimeout(900)
+        const g = await page.evaluate(() => {
+          const r = (sel) => { const el = document.querySelector(sel); if (!el) return null; const b = el.getBoundingClientRect(); return { left: b.left, right: b.right, top: b.top, bottom: b.bottom } }
+          return { heading: r('.bmc-heading'), actions: r('.bmc-actions'), menu: r('.amx-boardhost .main-menu-trigger'), island: r('.amx-boardhost .App-menu_top > .shapes-section'), row: document.querySelector('.amx-boardhost')?.getAttribute('data-cap-row') ?? null }
+        })
+        const apart = (a, b) => a.right <= b.left || b.right <= a.left || a.bottom <= b.top || b.bottom <= a.top
+        assert(g.menu && g.island, JSON.stringify(g))
+        for (const cap of [g.heading, g.actions]) for (const el of [g.menu, g.island]) assert(apart(cap, el), `overlap: ${JSON.stringify(g)}`)
+        // In the row (not pushed below the capsules) at this width.
+        assert(g.row !== 'off' && g.island.top < g.heading.bottom, JSON.stringify(g))
+      })
+      await shot('tablet-1180x820-board.png')
+      await check('landscape: switching Space keeps the docked column and the capsule after it', async () => {
+        await page.locator('.bmc-dock [data-space="tangu"]').click()
+        await page.waitForSelector('.mb-shell[data-space="tangu"][data-wide] .mb-sidecol')
+        await page.waitForTimeout(700)
+        await wideGeometry()
+      })
+      await shot('tablet-1180x820-tangu.png')
+      await check('back to portrait: phone layout again, capsule at the edge', async () => {
+        await page.setViewportSize({ width: 820, height: 1180 })
+        await page.waitForSelector('.mb-shell:not([data-wide])')
+        await page.waitForTimeout(700)
+        assert.equal(await page.locator('.mb-sidecol').count(), 0)
+        const heading = await rect('.bmc-heading')
+        assert(heading.left < 24, JSON.stringify(heading))
         assert.equal(errors.length, 0, errors.join('\n'))
       })
       await ctx.close()
