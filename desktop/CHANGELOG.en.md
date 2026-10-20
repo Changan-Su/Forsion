@@ -95,6 +95,7 @@
   - On macOS, shortcuts with ⌥ failed because ⌥ changed the character typed; they now go by key position, and modifier keys in shortcut hints follow the system menu order (⌥⇧⌘).
   - View on trace notes, evolution update cards and notifications only opened the top of Tangu's details; it now scrolls to the matching entry and highlights it briefly.
   - With the calendar open in a tab, switching to another tab and back made the week view jump to August and the month view to a different month.
+  - In the English interface, calendar event cards and the new-event card showed dates in Chinese.
 
 ## 2.13.4 (2026-10-14)
 
