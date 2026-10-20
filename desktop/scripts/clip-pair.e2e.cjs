@@ -86,6 +86,7 @@ async function main() {
     const engine = (p, method = 'GET') => fetch(`${cfg.backendUrl}${p}`, { method, headers: { Authorization: `Bearer ${cfg.token}` } }).then((r) => r.json())
     await waitFor(() => fetch(`http://127.0.0.1:${UNIT_PORT}/unit/meta`).then((r) => r.ok), 30000, '门铃起来')
     check('互联关着:只有门铃,配对流以外一律 503', (await fetch(`http://127.0.0.1:${UNIT_PORT}/unit/whoami`)).status === 503)
+    await win.evaluate(() => { window.tangu.onConfigChanged(() => { window.__cfgChanged = (window.__cfgChanged || 0) + 1 }) })
     check('装之前:引擎没见过扩展(设置页显示「未安装」)', (await engine('/agent/browser-extension')).lastClient === null)
 
     ctx = await chromium.launchPersistentContext(fs.mkdtempSync(path.join(os.tmpdir(), 'clippair-chrome-')), {
@@ -115,6 +116,7 @@ async function main() {
     check('一次配对:批准后 Clip 自己领到连接码、连上 Tangu 浏览器控制', live.clients.at(-1)?.version === version, live.clients)
     check('引擎记下了连上来的扩展(设置页据此分「未安装 / 未连接」)', live.lastClient?.version === version, live.lastClient)
     check('门铃上点了允许 = 顺带打开了「允许其他设备连接本机」', (await win.evaluate(() => window.tangu.getConfig())).unitHostEnabled === true)
+    check('打开互联后通知了各窗口重读配置(开着的设置页不显示旧的「关」)', (await win.evaluate(() => window.__cfgChanged || 0)) >= 1)
     const card = await waitFor(async () => {
       const text = await welcome.locator('[data-testid="clip-welcome"]').textContent()
       return /已连上本机的 Forsion|Connected to Forsion/.test(text || '') ? text : null

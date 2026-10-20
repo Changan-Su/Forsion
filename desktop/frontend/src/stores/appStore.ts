@@ -2410,6 +2410,7 @@ export const useApp = create<AppState>((set, get) => ({
         })()
       }, BOOT_RETRY_MS)
     }
+    window.tangu?.onConfigChanged?.(() => reloadDesktopConfig())
     window.tangu?.onBackendStatus?.((st) => {
       if (st.state === 'ready') {
         lastConnectAuthRejected = false // 重启后是新 token,重新给机会

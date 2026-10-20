@@ -1368,6 +1368,7 @@ declare global {
       backendLogs?(): Promise<string[]>
       backendRestart?(): Promise<BackendStatusInfo>
       onBackendStatus?(cb: (st: BackendStatusInfo) => void): () => void
+      onConfigChanged?(cb: () => void): () => void
       // ── 设备互联(Forsion Unit):名册 + 本机 host 状态(token 留主进程,渲染层只拿结果)──
       unitsList?(): Promise<{ status: number; json: { units?: UnitInfo[] } | null }>
       /** 系统浏览器开中转引导页:main 代拼 `#token=` 登录态递交(forsion_token 不下发渲染层)。 */

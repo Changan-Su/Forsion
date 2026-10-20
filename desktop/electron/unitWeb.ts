@@ -159,7 +159,7 @@ export interface UnitWebDeps {
    *  remoteMark = 远端来源标记密钥(TANGU_REMOTE_MARK_SECRET,契约 C1),缺省则只盖来源不盖标记。 */
   getEngine: () => { url: string | null; token: string; remoteMark?: string }
   /** B 侧原生确认框:展示设备名+6 位码,用户点允许=true。 */
-  confirmPair: (info: { name: string; code: string; ip: string }) => Promise<boolean>
+  confirmPair: (info: { name: string; code: string; ip: string; expires: number }) => Promise<boolean>
   /** Tangu 浏览器控制的连接码(本机引擎的 /agent/browser-extension;拿不到 = null)。只给同一台电脑上已配对的
    *  Forsion Clip(/unit/browser-control):一次配对把剪藏和浏览器控制一起配好。缺省 = 这台不下发(404)。 */
   browserControlCode?: () => Promise<string | null>
@@ -612,7 +612,7 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
       pendingByIp.set(ip, p.id)
       json(res, 200, { requestId: p.id, code: p.code, ttlMs: PAIR_TTL_MS })
       // 弹 B 侧原生确认框(异步;poll 端点回传结果)。
-      void deps.confirmPair({ name: p.name, code: p.code, ip }).then(async (ok) => {
+      void deps.confirmPair({ name: p.name, code: p.code, ip, expires: p.expires }).then(async (ok) => {
         const live = pending.get(p.id)
         if (!live || live.status !== 'pending' || live.expires < Date.now()) return
         if (!ok) { live.status = 'denied'; return }

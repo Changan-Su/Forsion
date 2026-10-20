@@ -81,6 +81,12 @@ const api = {
     ipcRenderer.invoke('backend:getStatus').then((st: BackendStatus) => { if (!off) cb(st) }).catch(() => { /* 主进程未就绪:等真广播 */ })
     return () => { off = true; ipcRenderer.removeListener('backend:status', listener) }
   },
+  /** 主进程替用户改了配置(如门铃上点了「允许并打开」打开互联):各窗口收到就重读一次,开着的设置页不显示旧值。 */
+  onConfigChanged: (cb: () => void): (() => void) => {
+    const listener = (): void => cb()
+    ipcRenderer.on('config:changed', listener)
+    return () => { ipcRenderer.removeListener('config:changed', listener) }
+  },
   // ── 收件箱:系统通知 + dock 角标(仅 mac)+ 通知点击回跳订阅 ──
   notifyInbox: (title: string, body: string): Promise<void> => ipcRenderer.invoke('inbox:notify', title, body),
   /** 通用系统通知(所有应用内通知同步发;点击仅聚焦窗口,不强制回跳 Inbox)。 */

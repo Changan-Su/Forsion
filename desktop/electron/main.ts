@@ -1217,13 +1217,16 @@ async function askPair(info: { name: string; code: string; ip: string }, doorbel
   const r = win ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts)
   return r.response === 0
 }
-/** 门铃上点了「允许并打开」:打开互联(落盘 + 引擎常驻 + 重建 Unit 口),等正式服务起来才返回。
- *  和设置里拨开关不同:托管引擎已在跑就不重启(backend.start 恒先停再起 —— 会断掉在跑的会话,Clip 紧接着领连接码也会扑空);
- *  外部引擎模式才把本机引擎拉起来常驻,并等它起来再批准。 */
-async function enableUnitHostFromDoorbell(): Promise<void> {
-  const before = await saveConfig({ unitHostEnabled: true })
-  if (before.mode !== 'managed') await ensureBackend()
+/** 门铃上点了「允许并打开」:打开互联(落盘 + 引擎常驻 + 重建 Unit 口),等正式服务起来才返回。返回 false = 不批准这次配对:
+ *  请求快过期了(先不开互联,Clip 会重新请求)/ 正式服务没在 Clip 找的那个口上起来(被挤到别的端口、期间又被关掉)。
+ *  和设置里拨开关不同:引擎已就绪就不重启(backend.start 恒先停再起 —— 会断掉在跑的会话,Clip 紧接着领连接码也会扑空)。 */
+async function enableUnitHostFromDoorbell(expires: number, port: number): Promise<boolean> {
+  if (Date.now() > expires - 10_000) return false
+  await saveConfig({ unitHostEnabled: true })
+  for (const w of BrowserWindow.getAllWindows()) w.webContents.send('config:changed') // 开着的设置页跟着翻成「开」
+  if (backend.getStatus().state !== 'ready') await ensureBackend() // 没起 / 崩了才拉起(外部引擎模式下本机引擎也要常驻)
   await refreshUnitHost()
+  return unitWeb?.port === port && Date.now() < expires
 }
 async function doRefreshUnitHost(): Promise<void> {
   const stored = await loadConfig()
@@ -1248,6 +1251,8 @@ async function doRefreshUnitHost(): Promise<void> {
     instanceId = randomUUID()
     await saveConfig({ unitInstanceId: instanceId })
   }
+  // 端口保持稳定(便于手输 IP 直连;Clip 也只找这个口):首选已存端口/8791
+  const want = stored.unitWebPort || 8791
   // 本机项目根种子没做完之前,远端的 /engine 一律 503(seedGatedEngine):远端没有窗口抢在种子之前改 project_path。
   if (!doorbell) void localProjectRegistry().ready().then(() => unitSessionRootsSource().ensureSeeded()).then(() => unitHub?.engineChanged()) // P1-K7a:种子做完 = starting → ready
   const webDeps = {
@@ -1255,12 +1260,11 @@ async function doRefreshUnitHost(): Promise<void> {
       const st = backend.getStatus()
       return { url: st.state === 'ready' ? (st.url ?? null) : null, token: backend.getToken(), remoteMark: backend.remoteMarkSecret() }
     }, unitSessionRootsSource()),
-    confirmPair: async (info: { name: string; code: string; ip: string }): Promise<boolean> => {
+    confirmPair: async (info: { name: string; code: string; ip: string; expires: number }): Promise<boolean> => {
       if (!(await askPair(info, doorbell))) return false
-      // 门铃上点了「允许并打开」:先照设置里拨开关那样打开互联、等正式服务起来,再放行批准 ——
+      // 门铃上点了「允许并打开」:先打开互联、等正式服务在同一个口上起来,再放行批准 ——
       // 令牌经共用的 unitPairStore 由正式服务交出,Clip 拿到令牌后紧接着的 /unit/meta、/unit/browser-control 不会撞上换服务的空档
-      if (doorbell) await enableUnitHostFromDoorbell()
-      return true
+      return doorbell ? enableUnitHostFromDoorbell(info.expires, want) : true
     },
     browserControlCode: () => browserControlCode(localEngineRef),
     pairedDevices: {
@@ -1371,12 +1375,11 @@ async function doRefreshUnitHost(): Promise<void> {
   await remoteSessions.ready // P1-K4:迁移读完再开门(之前闸本就 fail closed,这里只为首个请求拿到真状态)
   if (doorbell) {
     // 门铃不退到随机端口:Clip 只找 8791(或用户存过的端口);被占(另一个 Forsion 开着)就不开,Clip 那边照旧提示
-    try { unitDoorbell = await startUnitWeb(webDeps, { port: stored.unitWebPort || 8791, pairs: unitPairStore, doorbell: { origins: [CLIP_ORIGIN] } }) } catch (e: any) { console.log(`[unit-web] 门铃没开(端口被占?):${e?.message || e}`) }
+    try { unitDoorbell = await startUnitWeb(webDeps, { port: want, pairs: unitPairStore, doorbell: { origins: [CLIP_ORIGIN] } }) } catch (e: any) { console.log(`[unit-web] 门铃没开(端口被占?):${e?.message || e}`) }
     return
   }
   try {
-    // 端口保持稳定(便于手输 IP 直连):首选已存端口/8791,被占则退化系统分配并回写。
-    const want = stored.unitWebPort || 8791
+    // 被占则退化系统分配并回写。
     // 台架开关(同 FORSION_UNIT_AUTO_PAIR 的双闸:非打包 + 显式 env):只听回环。自动批准配对时绝不能把这台的引擎露到局域网
     const bindHost = !app.isPackaged && process.env.FORSION_UNIT_BIND_LOOPBACK === '1' ? '127.0.0.1' : undefined
     try {
