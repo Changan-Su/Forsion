@@ -589,7 +589,13 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     if (!r) return null
     if (r.includes('/')) {
       // 页面目录拼接 + '..' 归一化;越出 vault → null(桌面同款钳制)。
-      return normalizePosix(joinRel(dirnamePosix(pagePath), safeDecode(r)))
+      const rel = normalizePosix(joinRel(dirnamePosix(pagePath), safeDecode(r)))
+      // 页相对落空 → 回退按 vault 根解析(桌面 resolveAttachment 同款):独立白板 / db 视图传的是完整 vault 相对路径
+      // (pagePath = ref 时页相对会双拼目录,子文件夹里的白板 / db 因此一律「文件缺失」)。
+      const rootRel = normalizePosix(safeDecode(r))
+      if (!rel || !rootRel || rel === rootRel) return rel
+      const paths = new Set(allTreePaths(await fetchTree()).map((p) => p.normalize('NFC')))
+      return !paths.has(rel.normalize('NFC')) && paths.has(rootRel.normalize('NFC')) ? rootRel : rel
     }
     // 裸 basename → 全库大小写不敏感搜索(树缓存);未中 → 强刷树重试一次。
     const t1 = await fetchTree()
