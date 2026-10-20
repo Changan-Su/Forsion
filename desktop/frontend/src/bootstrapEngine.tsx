@@ -120,10 +120,10 @@ export function installEngine(): void {
   // 工作区文件预览标签页(多实例,params.path 随布局持久化;打开一律走 views/wsFileNav.openWsFile,
   // 替代原 chatbox 上方的浮层预览 —— 浮层暂时停用,见 appStore.setFilePreview)。无条件注册:
   // Tangu Web 恢复含 wsfile 的布局不被整份丢弃,视图内对缺失的 host 能力自兜底占位。
-  registerView({ type: 'wsfile', kind: 'entity', idParam: 'path', displayName: () => app().tr('view.wsfile'), icon: FileText, factory: (props) => <WsFileView {...props} /> })
+  registerView({ type: 'wsfile', kind: 'entity', rightCompanions: [{ type: 'chat-panel', params: { followActive: true } }], idParam: 'path', displayName: () => app().tr('view.wsfile'), icon: FileText, factory: (props) => <WsFileView {...props} /> })
   // Coding Space 主界面(Code | Preview 工作台);仅在产品档案点名 coding 时注册。
   if (PRODUCT.nativeFeatures === undefined && PRODUCT.spaces.includes('coding')) {
-    registerView({ type: 'code-studio', kind: 'page', displayName: () => app().tr('view.codeStudio'), icon: Code2, factory: (props) => <CodeStudioView {...props} />, singleton: true })
+    registerView({ type: 'code-studio', kind: 'page', rightCompanions: [{ type: 'workspace', params: { mode: 'files' } }], displayName: () => app().tr('view.codeStudio'), icon: Code2, factory: (props) => <CodeStudioView {...props} />, singleton: true })
     registerView({ type: 'coding-navigation', kind: 'collection', displayName: () => app().tr('space.coding'), icon: Code2, factory: () => <CodingNavigationView /> })
   }
   registerOperationsViews()

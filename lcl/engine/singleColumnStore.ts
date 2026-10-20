@@ -21,6 +21,7 @@ import { useNav } from './navStore'
 import type { PersistedPanel } from './layoutPersist'
 import { contentStorageKey } from './contentStorageScope'
 import { isLastPinned, isPinned, missingPinned, type PinnedViews } from './pinnedViews'
+import { arrangeRight, planRight, rightGroupFor, type RightRef } from './rightRules'
 
 /** 主区 leaf 快照(供顶栏/读者)。字段与桌面同名以兼容读者 —— ⚠️ 桌面 dockviewStore 那份加字段时
  *  这里必须同步:移动构建把整个 workspaceStore 换成本文件,漏一个字段就是静默少功能(typecheck 也不红,
@@ -29,7 +30,8 @@ export interface MainTab { id: string; type: string; title: string; active: bool
 /** 侧栏视图快照。 */
 export interface SideTab { type: string; title: string; active: boolean; closable: boolean }
 
-interface LeafRec { id: string; type: string; loc: ViewLocation; params: Record<string, unknown>; title: string }
+/** `by: 'rule'` = 右栏主视图规则开出来的(rightRules.ts;桌面那边记在面板参数 __by 里,这里单列一个字段,不混进视图的 params)。 */
+interface LeafRec { id: string; type: string; loc: ViewLocation; params: Record<string, unknown>; title: string; by?: 'rule' }
 
 function bucketOf(loc: ViewLocation): 'mainLeaves' | 'leftLeaves' | 'rightLeaves' {
   return loc === 'left' ? 'leftLeaves' : loc === 'right' ? 'rightLeaves' : 'mainLeaves'
@@ -74,6 +76,8 @@ interface SCBlob {
   activeMainId: string | null
   leftActiveId: string | null
   rightActiveId: string | null
+  /** 存它时右栏对到的组(同桌面信封的 sidebars.right.rule,可选、不升版本)。 */
+  rightRule?: string
 }
 
 /** 丢掉本窗的单列布局存档(当前布局 + 各 Space 的命名槽)。spaceRegistry.resetSpaceLayouts 的单列半身。
@@ -159,6 +163,14 @@ export function restoreSingleColumnLayout(): boolean {
  * 启动还原出来的那份自带归属时以它为准 —— 唯一不同的情形:点名的 Space 是异步就位的插件 / 用户 Space,还原时活动 id 还是回落值,
  * 屏上却是它的现场。三态:undefined = 不是启动还原的那份 → 归画像;string = 那份自带的;null = 老存档没记 → 不知道,存盘也不写。 */
 let profileKey: string | null = null
+/** 右栏主视图规则最近一次对账到的组(同桌面 dockviewStore 的 rightKey):null = 换了整份布局、还没对过。 */
+let rightKey: string | null = null
+let rightQueued = false
+const usableRight = (type: string): boolean => { const def = getView(type); return !!def && def.kind !== 'entity' }
+function rightGroupNow(s: { mainLeaves: LeafRec[]; activeMainId: string | null; sidebarDefaults: Record<'left' | 'right', PersistedPanel[]> }): ReturnType<typeof rightGroupFor> {
+  const main = s.mainLeaves.find((r) => r.id === s.activeMainId)
+  return rightGroupFor(main?.type, main ? getView(main.type)?.rightCompanions : undefined, s.sidebarDefaults.right, usableRight)
+}
 let restoredOwner: string | null | undefined
 /** 壳还没还原(发令枪没响)、店里也还是空的:这一程的现场只在在用的键里。挂载之前有人切 Space / 补定位时据此
  *  认归属、存槽,而不是拿一家空店说事(同桌面:Dockview 就绪之前 saveNamed / saveCurrent 不写空布局)。 */
@@ -211,6 +223,7 @@ function applySCBlob(raw: unknown): boolean {
   // 换布局:旧 leaf id 的历史全失效(还原出来的 id 与旧布局重合 = 安卓返回退进别的 Space 的内容)。
   // 须在下面 refreshTabs 之前,那一刷给前台文件视图记的栈底要留着。
   useNav.getState().reset()
+  rightKey = typeof raw.rightRule === 'string' ? raw.rightRule : null // 同组就不再对账(见桌面 applyLayout)
   useWorkspace.setState({
     mainLeaves: main, leftLeaves: left, rightLeaves: right,
     activeMainId: pick(raw.activeMainId, main),
@@ -248,6 +261,7 @@ function snapshot(): SCBlob {
     ...(space ? { space } : {}),
     main: s.mainLeaves, left: s.leftLeaves.filter((r) => r.type !== '__extend'), right: s.rightLeaves.filter((r) => r.type !== '__extend'),
     activeMainId: s.activeMainId, leftActiveId: active('left'), rightActiveId: active('right'),
+    ...(rightKey !== null ? { rightRule: rightKey } : {}),
   }
 }
 
@@ -314,6 +328,8 @@ interface WS {
   setPinned(pins: PinnedViews | undefined): void
   isPinnedLeaf(id: string): boolean
   ensurePinned(): void
+  /** 同桌面版:右栏主视图规则对账一次(rightRules.ts)。收着的抽屉只改桶里的内容,不替用户打开。 */
+  applyRightRules(): void
 
   setApi(api: unknown): void
   setDefaultBuilder(fn: () => void): void
@@ -464,6 +480,40 @@ export const useWorkspace = create<WS>((set, get) => {
       get().refreshTabs()
     },
 
+    applyRightRules: () => {
+      if (IS_MINI_PANEL) return
+      const s = get()
+      const g = rightGroupNow(s)
+      if (!g || g.key === rightKey) return
+      const changed = rightKey !== null
+      rightKey = g.key
+      const defaults = s.sidebarDefaults.right
+      const extras = s.rightLeaves.filter((r) => r.type === '__extend') // 抽屉里的临时 View 跟它的主人走,不归规则
+      const real = s.rightLeaves.filter((r) => r.type !== '__extend' && r.type !== 'sidebar-empty')
+      // 桶空 = 抽屉打开时按缺省填(toggleSidebar),按缺省对账;对完和缺省一样就不写,桶照旧空着。
+      const list: LeafRec[] = real.length ? real
+        : defaults.filter((v) => !!getView(v.type)).map((v, i) => ({ id: `\0default${i}`, type: v.type, loc: 'right', params: v.params ?? {}, title: '' }))
+      const refs: RightRef[] = list.map((r) => ({ id: r.id, type: r.type, tagged: r.by === 'rule', active: r.id === s.rightActiveId }))
+      const elsewhere = new Set([...s.mainLeaves, ...s.leftLeaves].map((r) => r.type).filter((t) => getView(t)?.singleton)) // 同桌面版:只认单例
+      const plan = planRight({ group: g.group, pinned: pins().right ?? [], spaceDefaults: defaults, current: refs, changed, elsewhere })
+      if (!plan.open.length && !plan.close.length && !plan.activate) return
+      const used = new Set(allRecs().map((r) => r.id))
+      const realRec = (type: string, params: Record<string, unknown>, by?: 'rule'): LeafRec => {
+        const def = getView(type)!
+        const id = def.singleton && !used.has(type) ? type : makeId(type, used)
+        used.add(id)
+        return { id, type, loc: 'right', params: { ...params }, title: label(def.displayName), ...(by ? { by } : {}) }
+      }
+      const kept = list.filter((r) => !plan.close.includes(r.id)).map((r) => (real.length ? r : realRec(r.type, r.params)))
+      const next = arrangeRight(g.group, kept, (t) => {
+        const o = plan.open.find((x) => x.type === t)
+        return o ? realRec(o.type, o.params ?? {}, 'rule') : undefined
+      })
+      const wantFront = plan.activate ? next.find((r) => r.type === plan.activate)?.id : undefined
+      const stillThere = next.some((r) => r.id === s.rightActiveId) || extras.some((r) => r.id === s.rightActiveId)
+      set({ rightLeaves: [...next, ...extras], rightActiveId: wantFront ?? (stillThere ? s.rightActiveId : next[0]?.id ?? null) })
+      get().refreshTabs()
+    },
     setApi: () => { /* 移动端无 Dockview api，恒 null */ },
     setWideMode: (v) => set({ wideMode: v }),
     setDefaultBuilder: (fn) => set({ defaultBuilder: fn }),
@@ -503,6 +553,15 @@ export const useWorkspace = create<WS>((set, get) => {
         leftTabs: side(s.leftLeaves, s.leftActiveId),
         rightTabs: side(s.rightLeaves, s.rightActiveId),
       })
+      // 主区前台视图的组变了 → 右栏按主视图规则对账(推一拍:这里常在开 / 换视图的半路上)
+      const rg = IS_MINI_PANEL ? null : rightGroupNow(get())
+      if (rg && rg.key !== rightKey && !rightQueued) {
+        rightQueued = true
+        queueMicrotask(() => {
+          rightQueued = false
+          try { get().applyRightRules() } catch (e) { console.error('[lcl] right panel rules', e) }
+        })
+      }
     },
 
     openView(type, params = {}, loc = 'main', opts) {
@@ -701,6 +760,7 @@ export const useWorkspace = create<WS>((set, get) => {
 
     resetLayout() {
       restoredOwner = undefined // 默认布局按当前画像的 Space 建,不再是启动时还原出来的那份
+      rightKey = null
       set({
         mainLeaves: [], leftLeaves: [], rightLeaves: [],
         activeMainId: null, leftActiveId: null, rightActiveId: null,

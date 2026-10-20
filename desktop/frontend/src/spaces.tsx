@@ -72,7 +72,8 @@ const WS_FILES: PersistedPanel = { type: 'workspace', params: { mode: 'files' } 
 const TANGU_MAIN: PersistedPanel = { type: 'chat', params: { followActive: true, reuseKey: 'primary' } }
 const TANGU_LEFT: PersistedPanel = { type: 'workspace', params: { mode: 'orbits' } }
 
-/** Tangu Space 的侧栏默认:左=工作区(会话);右=Tangu 详情/工作区(文件)/大纲 同组 tab。 */
+/** Tangu Space 的侧栏默认:左=工作区(会话);右=Tangu 详情/工作区(文件)/大纲 同组 tab。
+ *  右栏这组 = 主区视图没声明 rightCompanions 时用的缺省;对话自己声明的就是同一组(features/tangu.tsx 的 CHAT_RIGHT)。 */
 const TANGU_SIDE_VIEWS: SidebarDefaults = {
   left: [TANGU_LEFT],
   right: [
@@ -94,8 +95,9 @@ const tanguSpace: SpaceDefinition = {
   // workspaceSource 声明位管(features/tangu.tsx)。
   autoWorkspaceMode: 'orbits',
   sidebarDefaults: TANGU_SIDE_VIEWS,
-  // 固定:主区聊天、左栏会话、右栏 Tangu 详情(右栏的文件 / 大纲是辅助,不固定)。
-  pinned: { main: [TANGU_MAIN], left: [TANGU_LEFT], right: [{ type: 'tangu-details', params: {} }] },
+  // 固定:主区聊天、左栏会话。右栏不固定(2026-10-20 用户定):右栏跟主区前台视图走(lcl rightRules.ts),
+  // 回到对话 Tangu 详情自己就回来;固定着的话开笔记时右栏 5 个标签、详情还占在最前面。
+  pinned: { main: [TANGU_MAIN], left: [TANGU_LEFT] },
   /** 对话(主)→ 工作区(左,会话)→ 右栏(主体详情 + 文件/大纲,默认折叠)。 */
   build() {
     ws().setSidebarDefaults(TANGU_SIDE_VIEWS)

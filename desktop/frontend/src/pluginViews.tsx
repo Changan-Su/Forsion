@@ -279,6 +279,10 @@ export function syncPluginViews(): void {
         // P2 联动声明:插件内相对 id → 补全命名空间(type 形如 plugin:<pid>:<vid>,pid 取中段;
         // 只能指本插件自己的源 —— 前缀由宿主拼,插件写不了别家的)。
         workspaceSource: def.workspaceSource ? `plugin:${type.split(':')[1]}:${def.workspaceSource}` : undefined,
+        // 主视图规则的右栏组(lcl rightRules.ts):类型写全名,同 space.json;主区实体与没注册的由引擎在用的时候滤掉
+        rightCompanions: Array.isArray(def.rightCompanions)
+          ? def.rightCompanions.filter((t): t is string => typeof t === 'string' && !!t).map((t) => ({ type: t, params: {} }))
+          : undefined,
       })
     }
   }

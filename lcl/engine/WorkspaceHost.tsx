@@ -187,6 +187,7 @@ const WbTab: React.FC<IDockviewPanelHeaderProps> = ({ api, params }) => {
       ref={tabRef}
       className={`wb-tab${iconOnly ? ' wb-tab--icon' : ''}${loc === 'left' ? ' wb-tab--left' : ''}${type === 'sidebar-empty' || type === 'home' ? ' wb-tab--empty' : ''}`}
       title={api.title}
+      data-view-type={type} // 台架按类型认标签(标题会被视图自己改成会话名 / 笔记名)
       data-transient={type === '__extend' ? 'true' : undefined}
       draggable={type !== '__extend'}
       onContextMenu={closable ? (e) => { e.preventDefault(); e.stopPropagation(); setMenu({ x: e.clientX, y: e.clientY }) } : undefined}
