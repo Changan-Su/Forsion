@@ -375,3 +375,20 @@ export function setTanguNewChat(p: TanguNewChat | null): void {
 export function readTanguNewChat(): TanguNewChat | null {
   return newChat
 }
+
+/** 工作区侧栏的两种会话模式(核心插件化 2e-5,方案第 5 节 8 号接缝 `registerWorkspaceMode` 的仓内版):轨道(orbits)与
+ *  会话列表(sessions)由 Tangu 在激活时交出,宿主的 WorkspaceView 只管放。**宿主内部接缝**。没交 → 这两种模式是空的。 */
+export interface TanguSidebarModes {
+  Orbits: ComponentType<{ sideFilter?: 'local' | 'cloud' }>
+  Sessions: ComponentType<{ sideFilter?: 'local' | 'cloud' }>
+}
+
+let sidebarModes: TanguSidebarModes | null = null
+
+export function setTanguSidebarModes(p: TanguSidebarModes | null): void {
+  sidebarModes = p
+}
+
+export function readTanguSidebarModes(): TanguSidebarModes | null {
+  return sidebarModes
+}
