@@ -62,7 +62,10 @@ async function main() {
     check('Windows has no permission card', await settings.locator('.ch-permission').count() === 0)
     await settings.screenshot({ path: path.join(OUT, 'recording.png') })
     // Use actual displays when available: moving the owned test window changes its real OS scale.
-    const displays = await app.evaluate(({ screen }) => screen.getAllDisplays().map(d => ({ scale: d.scaleFactor, area: d.workArea })))
+    const displays = await app.evaluate(({ screen }) => {
+      const all = screen.getAllDisplays().sort((a, b) => a.bounds.x - b.bounds.x)
+      return (process.env.FORSION_TEST_DESKTOP === 'left' ? all.slice(0, 1) : all).map(d => ({ scale: d.scaleFactor, area: d.workArea }))
+    })
     const bw = await app.browserWindow(settings)
     for (const d of displays) {
       await bw.evaluate((w, area) => w.setBounds({ x: area.x + 25, y: area.y + 25, width: Math.min(1000, area.width - 50), height: Math.min(850, area.height - 50) }), d.area)

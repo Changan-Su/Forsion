@@ -1,0 +1,57 @@
+name: probe-windows-issues
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/probe-windows-issues.yml'
+      - 'desktop/frontend/src/amadeusPrefs*'
+      - 'desktop/electron/clipExtension*'
+      - 'desktop/scripts/windows-*'
+      - 'desktop/scripts/background-desktop.check.cjs'
+      - 'desktop/scripts/lib/background-desktop.cjs'
+      - 'desktop/scripts/lib/launch-electron.cjs'
+      - 'desktop/scripts/fixtures/windows-contracts-main.cjs'
+      - 'desktop/scripts/mini-card.check.cjs'
+      - 'tangu-agent/src/services/approvalSafety.test.ts'
+      - 'tangu-agent/test/approvals.test.ts'
+permissions:
+  contents: read
+jobs:
+  windows-issues:
+    runs-on: windows-2022
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: |
+          npm ci --prefix desktop --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm ci --prefix tangu-agent --no-audit --no-fund
+          exit $LASTEXITCODE
+      - name: Verify platform-specific approval contracts
+        working-directory: tangu-agent
+        run: node node_modules/vitest/vitest.mjs run src/services/approvalSafety.test.ts test/approvals.test.ts src/services/muse.session.test.ts src/services/museWake.test.ts --maxWorkers=1
+      - name: Verify desktop contracts and build
+        working-directory: desktop
+        run: |
+          node node_modules/vitest/vitest.mjs run frontend/src/amadeusPrefs.test.ts frontend/src/amadeus/lib/slashRel.test.ts electron/clipExtension.test.ts electron/systemIcon.test.ts electron/updater.test.ts electron/websiteUpdateProvider.test.ts shared/updateSource.test.ts electron/deepLink.test.ts electron/harnessLaunch.test.ts --maxWorkers=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run build
+          exit $LASTEXITCODE
+      - name: Verify real Windows shell, downloads, files and saved state
+        working-directory: desktop
+        run: |
+          New-Item -ItemType Directory -Force outputs/windows-issues | Out-Null
+          foreach ($script in @('windows-icons.check.cjs', 'windows-updater.check.cjs', 'windows-apprefs.check.cjs', 'windows-clip.e2e.cjs', 'windows-legacy-state.e2e.cjs', 'open-external-file.e2e.cjs', 'mini-card.check.cjs')) {
+            node "scripts/$script" 2>&1 | Tee-Object -FilePath "outputs/windows-issues/$script.log"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-issue-evidence
+          path: desktop/outputs/windows-issues/

@@ -46,4 +46,9 @@ const workspaceEnv = exports.workspaceEnv = (env) => {
   return { ...env, FORSION_WORKSPACE_DIR: `${root}-workspace` }
 }
 
-exports.launch = (opts = {}) => _electron.launch({ ...opts, env: workspaceEnv(opts.env), args: [...(opts.args ?? []), ...MAC_FLAGS] })
+exports.launch = (opts = {}) => {
+  const env = workspaceEnv(opts.env)
+  const desktop = env?.FORSION_TEST_DESKTOP === 'left' && process.platform === 'win32'
+    ? ['-r', path.join(__dirname, 'background-desktop.cjs')] : []
+  return _electron.launch({ ...opts, env, args: [...desktop, ...(opts.args ?? []), ...MAC_FLAGS] })
+}
