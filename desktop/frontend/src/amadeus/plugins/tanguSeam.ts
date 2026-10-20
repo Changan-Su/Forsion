@@ -317,3 +317,23 @@ export function setTanguInboxTasks(p: TanguInboxTasks | null): void {
 export function readTanguInboxTasks(): TanguInboxTasks | null {
   return inboxTasks
 }
+
+/** Tangu 自己的界面偏好(核心插件化 2e-2,方案第 4.5 节「聊天偏好」的仓内版):Tangu 在激活时交出读写口,
+ *  宿主的设置页照原位置摆开关。**宿主内部接缝,不进 `ctx.tangu`**。没交(Tangu 没激活)→ 两个开关连同搜索结果都不摆。 */
+export interface TanguPref { get(): boolean; set(on: boolean): void }
+export interface TanguPrefs {
+  /** 聊天消息头像(主题页)。 */
+  chatAvatars: TanguPref
+  /** 输入建议(高级 › 界面与会话);桌面宿主之外 get() 恒 false。 */
+  promptSuggest: TanguPref
+}
+
+let prefs: TanguPrefs | null = null
+
+export function setTanguPrefs(p: TanguPrefs | null): void {
+  prefs = p
+}
+
+export function readTanguPrefs(): TanguPrefs | null {
+  return prefs
+}

@@ -81,14 +81,12 @@
       "desktop/frontend/src/views/chat2/appRefCommand.ts",
       "desktop/frontend/src/views/chat2/approvalQueue.ts",
       "desktop/frontend/src/views/chat2/btwStore.ts",
-      "desktop/frontend/src/views/chat2/chatAvatars.ts",
       "desktop/frontend/src/views/chat2/chatPanelQuote.ts",
       "desktop/frontend/src/views/chat2/chatToNote.ts",
       "desktop/frontend/src/views/chat2/composer2.css",
       "desktop/frontend/src/views/chat2/deskChrome.tsx",
       "desktop/frontend/src/views/chat2/orbitPins.ts",
       "desktop/frontend/src/views/chat2/orbits.css",
-      "desktop/frontend/src/views/chat2/promptSuggest.ts",
       "desktop/frontend/src/views/chat2/sessionTree.ts"
     ],
     "tanguHostDeps": [
