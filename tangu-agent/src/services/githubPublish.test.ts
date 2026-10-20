@@ -4,9 +4,10 @@
  *   - 同名仓库已在:私有 → 照推;不是私有 → github_repo_exists,仓库不动、不推
  *   - 没推上去 → 刚加的 origin 撤掉;超时 → origin 留着
  *   - 没绑 GitHub → github_not_linked;GitHub 不认这枚令牌(401)→ github_relink_required;都不加远端
- *   - 已有远端 / 名字不合规 → 各自的 code,一次接口都不调
+ *   - 名字不合规 → invalid_repo_name,一次接口都不调;已有远端(2026-10-14 起)→ 新远端叫 github,原来的不动
  *   - 远端地址:只收 https 和 ssh;明文 http、file、本机命令式的写法、自带口令的、以 - 开头的都不收
- *   - 连接:加 origin 并当场列一次分支;远端有同名分支 → 记成上游;连不上 → origin 撤掉;已有远端 → has_remote
+ *   - 连接:加 origin 并当场列一次分支;远端有同名分支 → 记成上游;连不上 → origin 撤掉
+ *   - 已有远端时连接(2026-10-14 起):按主机名起名;target 缺省 → 不管远端有没有这条分支都把上游改过去;target=false → 上游不动
  *
  * 负对照(2026-10-13 各改一处实跑,对应的用例红):
  *   - 建仓请求里把 private 写成 false → 「建私有仓库」红
@@ -18,7 +19,10 @@
  *   - 失败时不撤 origin → 「没推上去 → origin 撤掉」红
  *   - remoteAddress 放过带口令的 https → 「远端地址」红
  *   - gitConnectRemote 连不上时不撤 origin → 「连不上 → origin 撤掉」红
- *   - gitConnectRemote 去掉 has_remote 判断 → 「已有远端」红
+ *   2026-10-14(加第二个远端,各改一处实跑):
+ *   - gitConnectRemote 远端没有这条分支时不写上游 → 「已有远端时连接」红(旧上游还在,推送去了老地方)
+ *   - gitConnectRemote 不管 target 一律写上游 → 「target=false」红
+ *   - 连不上时恒撤 remote.origin → 「已有远端时连不上」红
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
@@ -168,7 +172,7 @@ describe('发布到 GitHub', () => {
     const { doFetch } = api({ 'POST /user/repos': { status: 201, json: {} } });
     const rejected = project('rejected');
     answer = () => ({ code: 1, stderr: 'remote: Repository not found.' });
-    expect((await failure(publishToGithub(rejected, 'demo', undefined, { fetch: doFetch }))).code).toBe('git_failed');
+    expect((await failure(publishToGithub(rejected, 'demo', undefined, { fetch: doFetch }))).code).toBe('credential_denied');
     expect(remotesOf(rejected)).toBe('');
     const slow = project('slow');
     answer = () => ({ code: 1, reason: 'timeout' });
@@ -188,13 +192,11 @@ describe('发布到 GitHub', () => {
     expect(remotesOf(cwd)).toBe('');
   });
 
-  it('已有远端 / 名字不合规 → 各自的 code,一次接口都不调', async () => {
+  it('名字不合规 → invalid_repo_name,一次接口都不调', async () => {
     linked();
     const { doFetch, seen } = api({});
     const cwd = project('checks');
     expect((await failure(publishToGithub(cwd, '我的项目', undefined, { fetch: doFetch }))).code).toBe('invalid_repo_name');
-    git(cwd, 'remote', 'add', 'origin', 'https://example.com/x.git');
-    expect((await failure(publishToGithub(cwd, 'demo', undefined, { fetch: doFetch }))).code).toBe('has_remote');
     expect(seen).toHaveLength(0);
   });
 });
@@ -208,17 +210,17 @@ describe('连接已有远端', () => {
   it('加 origin 并当场列一次分支;远端有同名分支 → 记成上游;空的远端 → 没有上游', async () => {
     const cwd = project('connect');
     answer = () => ({ code: 0, stdout: 'abc123\trefs/heads/main\ndef456\trefs/heads/other\n' });
-    expect(await gitConnectRemote(cwd, 'https://git.example.com/dave/demo.git')).toEqual({ remote: 'origin', upstream: 'origin/main' });
+    expect(await gitConnectRemote(cwd, 'https://git.example.com/dave/demo.git')).toEqual({ remote: 'origin', upstream: 'origin/main', target: true });
     expect(calls.map((c) => c.args.join(' '))).toEqual(['ls-remote --heads origin']);
     expect(git(cwd, 'config', '--get', 'branch.main.remote')).toBe('origin');
     expect(git(cwd, 'config', '--get', 'branch.main.merge')).toBe('refs/heads/main');
     const empty = project('connect-empty');
     answer = () => ({ code: 0, stdout: '' });
-    expect(await gitConnectRemote(empty, 'git@github.com:dave/new.git')).toEqual({ remote: 'origin', upstream: null });
+    expect(await gitConnectRemote(empty, 'git@github.com:dave/new.git')).toEqual({ remote: 'origin', upstream: null, target: true });
     expect(git(empty, 'remote', 'get-url', 'origin')).toBe('git@github.com:dave/new.git');
   });
 
-  it('连不上 → origin 撤掉(可以改了地址再来);地址不收 → 不动仓库;已有远端 → has_remote', async () => {
+  it('连不上 → origin 撤掉(可以改了地址再来);地址不收 → 不动仓库', async () => {
     const cwd = project('unreachable');
     answer = () => ({ code: 128, stderr: 'fatal: repository not found' });
     const e = await failure(gitConnectRemote(cwd, 'https://git.example.com/dave/missing.git'));
@@ -227,8 +229,38 @@ describe('连接已有远端', () => {
     expect(remotesOf(cwd)).toBe('');
     expect((await failure(gitConnectRemote(cwd, 'http://insecure.example.com/x.git'))).code).toBe('invalid_remote_url');
     expect(calls).toHaveLength(1);
-    git(cwd, 'remote', 'add', 'upstream', 'https://example.com/x.git');
-    expect((await failure(gitConnectRemote(cwd, 'https://git.example.com/dave/demo.git'))).code).toBe('has_remote');
-    expect(remotesOf(cwd)).toBe('upstream');
+  });
+
+  it('已有远端时连接:按主机名起名、原来的不动;target 缺省 → 远端没有这条分支也把上游改过去;target=false → 上游不动', async () => {
+    const cwd = project('connect-second');
+    git(cwd, 'remote', 'add', 'origin', 'https://example.com/x.git');
+    git(cwd, 'config', 'branch.main.remote', 'origin'); git(cwd, 'config', 'branch.main.merge', 'refs/heads/main');
+    answer = () => ({ code: 0, stdout: '' });
+    expect(await gitConnectRemote(cwd, 'https://gitlab.com/dave/demo.git', undefined, false)).toEqual({ remote: 'gitlab', upstream: null, target: false });
+    expect(git(cwd, 'config', '--get', 'branch.main.remote')).toBe('origin');
+    expect(await gitConnectRemote(cwd, 'https://gitlab.com/dave/other.git')).toEqual({ remote: 'gitlab-2', upstream: null, target: true });
+    expect(git(cwd, 'config', '--get', 'branch.main.remote')).toBe('gitlab-2');
+    expect(git(cwd, 'remote', 'get-url', 'origin')).toBe('https://example.com/x.git');
+  });
+
+  it('已有远端时连不上 → 只撤刚加的那一个', async () => {
+    const cwd = project('connect-second-fail');
+    git(cwd, 'remote', 'add', 'origin', 'https://example.com/x.git');
+    answer = () => ({ code: 128, stderr: 'fatal: repository not found' });
+    expect((await failure(gitConnectRemote(cwd, 'https://gitlab.com/dave/missing.git'))).code).toBe('remote_unreachable');
+    expect(remotesOf(cwd)).toBe('origin');
+  });
+});
+
+describe('发布到 GitHub · 已有远端', () => {
+  it('新远端叫 github,原来的不动;缺省设成上游', async () => {
+    linked();
+    const { doFetch } = api({ 'POST /user/repos': { status: 201, json: { owner: { login: 'dave' } } } });
+    const cwd = project('publish-second');
+    git(cwd, 'remote', 'add', 'origin', 'https://git.example.com/dave/x.git');
+    const r = await publishToGithub(cwd, 'demo', undefined, { fetch: doFetch });
+    expect(r).toMatchObject({ remote: 'github', target: 'github/main' });
+    expect(git(cwd, 'remote', 'get-url', 'origin')).toBe('https://git.example.com/dave/x.git');
+    expect(calls.at(-1)?.args).toEqual(['push', '--no-recurse-submodules', '--set-upstream', 'github', 'HEAD:refs/heads/main']);
   });
 });

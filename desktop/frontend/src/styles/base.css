@@ -5246,3 +5246,7 @@ html:root :is(.project-menu, .composer-menu, .engine-picker, .t2c-menu) { transf
  * `.settings-page:not(.settings-page--mobile) .settings-nav-top`(0,3,0)的 display:flex → 同为 (0,3,0),靠放文件末尾(DESIGN §7.2)。 */
 .mk-page[data-native-chrome] .settings-nav-top,
 .mk-page[data-native-chrome] .mk-detail-back { display: none; }
+
+/* 设置 → Git →「提交身份」:正在用的那一级的标签跟着主题色,其余照普通 settings-badge */
+.git-identity-panel .settings-badge[data-state="active"] { color: var(--accent-ink); border-color: currentColor; }
+.git-identity-panel [data-git-identity-level] .settings-badge { margin-right: 6px; }

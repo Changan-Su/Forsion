@@ -18,9 +18,12 @@
  *   GET    /agent/project-context/git/hosting?sessionId=              → { forsionGit: { webUrl, name } | null(这里能不能「发布到 Forsion Git」),
  *                                                                       github: { linked, login?, remote, name } | null(云端开了 GitHub 绑定时:当前用户绑没绑;
  *                                                                       remote = origin 是会用绑定账号推拉的那种远端;name = 「发布到 GitHub」预填的仓库名) }
- *   POST   /agent/project-context/git/publish-github { sessionId, name, trust? } → 没有远端的仓库:在绑定的 GitHub 账号下建私有仓库并推送(services/githubPublish.ts)
- *   POST   /agent/project-context/git/remote  { sessionId, url, trust? }  → 没有远端的仓库:连接一个已有的远端(gitActions.gitConnectRemote)
- *   POST   /agent/project-context/git/publish  { sessionId, name, trust? } → 没有远端的仓库:origin 设到 Forsion Git 并推送(services/forsionGitPublish.ts)
+ *   POST   /agent/project-context/git/publish-github { sessionId, name, target?, trust? } → 加一个远端:在绑定的 GitHub 账号下建私有仓库并推送(services/githubPublish.ts)
+ *   POST   /agent/project-context/git/remote  { sessionId, url, target?, trust? }  → 加一个远端:连接一个已有的地址(gitActions.gitConnectRemote)
+ *   POST   /agent/project-context/git/publish  { sessionId, name, target?, trust? } → 加一个远端:设到 Forsion Git 并推送(services/forsionGitPublish.ts)
+ *          (这三条:没有远端时新远端叫 origin,有了按站点另起名;target = 以后推送到这里,缺省 true)
+ *   POST   /agent/project-context/git/push    { sessionId, remote?, trust? } → remote = 只推这一次到那个远端,不动推送去向
+ *   POST   /agent/project-context/git/push-target { sessionId, remote }    → 以后推送到这里:当前分支的上游改成这个远端(只写配置)
  *   POST   /agent/project-context/git/{pending,message}                { sessionId, trust? } → 待提交清单 / 生成的提交信息(只读)
  *          → 用户点的 git 动作(services/gitActions.ts);失败回 400 { detail, error: <code>, info },桌面按 error 出文案。
  *          trust=true = 用户在面板上点了「信任并继续」(仓库自带会执行程序的配置,见 services/gitTrust.ts)
@@ -39,7 +42,7 @@ import {
 } from '../services/projectContext.js';
 import { forgetProjectMemory, projectMemoryView, resolveProjectCandidate, restoreCompactedFact } from '../services/projectMemory.js';
 import { parseRemoteOrigin } from '../services/remoteOrigin.js';
-import { GitActionError, generateCommitMessage, gitCommit, gitCreateBranch, gitInit, gitPending, gitConnectRemote, gitPull, gitPush, gitTrustRepo, readGit, serialized } from '../services/gitActions.js';
+import { GitActionError, generateCommitMessage, gitCommit, gitCreateBranch, gitInit, gitPending, gitConnectRemote, gitPull, gitPush, gitSetPushRemote, gitTrustRepo, readGit, serialized } from '../services/gitActions.js';
 import { DEFAULT_GIT_SETTINGS, gitSettings, updateGitSettings } from '../services/gitSettings.js';
 import { forsionPublishInfo, publishToForsionGit } from '../services/forsionGitPublish.js';
 import { GITHUB_ORIGIN, githubLinkInfo } from '../services/githubGit.js';
@@ -265,13 +268,17 @@ router.post('/agent/project-context/git/commit', authMiddleware, gitWrite('commi
   return { commit: await gitCommit(cwd, body.message, trusted(body), body.expect, who.env) };
 }));
 router.post('/agent/project-context/git/branch', authMiddleware, gitWrite('branch', (cwd, body) => gitCreateBranch(cwd, body.name, trusted(body))));
-router.post('/agent/project-context/git/push', authMiddleware, gitWrite('push', (cwd, body) => gitPush(cwd, trusted(body))));
+// remote = 「只推送这一次」:推到这个远端的同名分支,不动推送去向;不给 = 推到去向(上游 → origin → 唯一那个)
+router.post('/agent/project-context/git/push', authMiddleware, gitWrite('push', (cwd, body) => (typeof body.remote === 'string' && body.remote
+  ? gitPush(cwd, trusted(body), body.remote, { once: true }) : gitPush(cwd, trusted(body)))));
+// 「以后推送到这里」:当前分支的上游改成这个远端的同名分支(只写配置,不连网)
+router.post('/agent/project-context/git/push-target', authMiddleware, gitWrite('push-target', async (cwd, body) => ({ pushTarget: await gitSetPushRemote(cwd, body.remote) })));
 router.post('/agent/project-context/git/pull', authMiddleware, gitWrite('pull', async (cwd, body) => ({ pull: await gitPull(cwd, trusted(body)) })));
 
-router.post('/agent/project-context/git/publish', authMiddleware, gitWrite('publish', async (cwd, body) => ({ publish: await publishToForsionGit(cwd, body.name, trusted(body)) })));
-// 没有远端的仓库的另外两条出路:发布到绑定的 GitHub 账号(先建私有仓库再推);连接一个已有的远端(贴地址,当场连一次验证)
-router.post('/agent/project-context/git/publish-github', authMiddleware, gitWrite('publish-github', async (cwd, body) => ({ publish: await publishToGithub(cwd, body.name, trusted(body)) })));
-router.post('/agent/project-context/git/remote', authMiddleware, gitWrite('remote', async (cwd, body) => ({ remote: await gitConnectRemote(cwd, body.url, trusted(body)) })));
+// 「添加远端」的三条路(没有远端时它就是 origin;已经有了就按站点另起名,不碰原来的)。target = 以后推送到这里,缺省 true
+router.post('/agent/project-context/git/publish', authMiddleware, gitWrite('publish', async (cwd, body) => ({ publish: await publishToForsionGit(cwd, body.name, trusted(body), body.target !== false) })));
+router.post('/agent/project-context/git/publish-github', authMiddleware, gitWrite('publish-github', async (cwd, body) => ({ publish: await publishToGithub(cwd, body.name, trusted(body), {}, body.target !== false) })));
+router.post('/agent/project-context/git/remote', authMiddleware, gitWrite('remote', async (cwd, body) => ({ remote: await gitConnectRemote(cwd, body.url, trusted(body), body.target !== false) })));
 
 /** 这里能不能「发布到 Forsion Git」(登录了 Forsion、云端有 Forsion Git 且发凭据),以及当前用户绑没绑 GitHub。只读状态,不取凭据;读不到就是 null。 */
 router.get('/agent/project-context/git/hosting', authMiddleware, async (req: AuthRequest, res) => {
@@ -359,7 +366,9 @@ router.get('/agent/git-accounts', authMiddleware, async (req: AuthRequest, res) 
       Promise.resolve(forsionGit()?.hosting()).catch(() => null), githubLinkInfo().catch(() => null),
       resolveGitIdentity(() => identityDefaults(req.user!.userId)).catch(() => null),
     ]);
-    res.json({ forsionGit: site ? { webUrl: site.webUrl } : null, github, identity: who?.identity ?? null });
+    // Forsion Git 上的用户名只取手里已有的那枚凭据(没推拉过就没有)—— 为了显示去发一枚设备令牌不值(服务端限次)
+    const username = site ? forsionGit()?.knownUsername() ?? null : null;
+    res.json({ forsionGit: site ? { webUrl: site.webUrl, ...(username ? { username } : {}) } : null, github, identity: who?.identity ?? null });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'git accounts lookup failed' });
   }

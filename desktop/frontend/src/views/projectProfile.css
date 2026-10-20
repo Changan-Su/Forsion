@@ -116,3 +116,18 @@
   .project-skill-form, .project-git-commit-form { animation: none; }
   .project-row, .project-inline-actions button, .project-profile-path > button { transition: none; }
 }
+
+/* 「远端」卡片(ProjectGitRemotes):每个远端一行 = 站点标 + 仓库 + 「站点 · 带谁的凭据」+ 远端名(推送去向打标) */
+.project-git-host { flex: 0 0 auto; display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 7px; background: var(--surface-2, var(--bg-card)); box-shadow: inset 0 0 0 1px var(--overlay-medium); color: var(--text); font-size: var(--ui-font-meta, 12px); font-weight: 700; }
+.project-git-remotes { display: grid; gap: 2px; }
+.project-git-remote { display: grid; grid-template-columns: 24px minmax(0, 1fr) 24px; align-items: start; gap: 8px; padding: 6px; margin: 0 -6px; border-radius: var(--radius-sm, 8px); }
+.project-git-remote-text { display: grid; gap: 1px; min-width: 0; }
+.project-git-remote-text strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--ui-font-meta, 12px); font-weight: 600; }
+.project-git-remote-text small { min-width: 0; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); line-height: 1.45; overflow-wrap: anywhere; }
+.project-git-remote-name { display: flex; align-items: center; gap: 6px; color: var(--text-faint) !important; }
+.project-git-remote-target { display: inline-flex; align-items: center; height: 16px; padding: 0 6px; border-radius: var(--radius-pill, 999px); background: var(--overlay-medium); color: var(--accent-ink); font-size: var(--ui-font-caption, 11px); font-weight: 500; }
+.project-git-remote-btn { display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: var(--radius-sm, 8px); background: transparent; color: var(--text-muted); cursor: pointer; }
+.project-git-remote-btn:hover, .project-git-remote-btn[aria-expanded="true"] { background: var(--overlay-medium); color: var(--text); }
+.project-card-head > .project-git-remotes-add { display: inline-flex; width: auto; height: auto; align-items: center; gap: 4px; flex: 0 0 auto; padding: 2px 6px; border: 0; border-radius: var(--radius-sm, 8px); background: transparent; color: var(--text-muted); font: inherit; font-size: var(--ui-font-meta, 12px); cursor: pointer; }
+.project-card-head > .project-git-remotes-add:hover { background: var(--overlay-medium); color: var(--text); }
+.project-git-remotes-empty { margin: 0; }

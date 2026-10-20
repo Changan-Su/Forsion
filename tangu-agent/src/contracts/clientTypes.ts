@@ -505,6 +505,18 @@ export interface ProjectSkillInfo { id: string; name: string; description: strin
 
 export interface ProjectPlanInfo { name: string; path: string; mtimeMs: number; size: number; title: string }
 
+export interface GitRemoteInfo {
+  name: string
+  /** 遮过凭据的地址。 */
+  url: string
+  host: 'forsion' | 'github' | 'other'
+  hostname: string | null
+  /** `owner/repo`。 */
+  path: string | null
+  /** 仓库网页。 */
+  web: string | null
+  auth: 'forsion' | 'github' | 'local'
+}
 export interface GitCommitInfo { sha: string; short: string; at: number; subject: string }
 
 export interface GitChangeInfo { code: string; path: string }
@@ -527,6 +539,10 @@ export interface GitSummary {
   remote?: string | null
   /** 远端个数(没有 origin、只有一个远端时也能推)。 */
   remotes?: number
+  /** 全部远端:哪个站、哪个仓库、推拉带谁的凭据(forsion / github = 引擎替他带那个账号;local = 这台电脑自己的 git 配置)。老引擎没有。 */
+  remoteList?: GitRemoteInfo[]
+  /** 不点名远端时「推送」推去哪个(当前分支的上游 → origin → 唯一那个);定不下来 → null。老引擎没有(undefined)。 */
+  pushRemote?: string | null
   /** 仓库自带会执行程序的配置项与钩子;空 = 没有。 */
   configRisks?: string[]
   /** 用户在面板上信任过这个仓的配置。 */

@@ -5,7 +5,9 @@
  *   - 没有提供方 / 提供方不认领 / 远端 URL 自带凭据:子进程环境与现在逐字一致(没有那三项,跟踪开关也不动)
  *   - 带凭据的子进程摘掉 GIT_TRACE* / GIT_CURL_VERBOSE、把 Trace2 显式关掉,对这个站点清空凭据助手、关掉 askpass、消息固定成英文,
  *     不递归进子模块(子模块是另一份没过信任闸的仓库配置)
- *   - 认证失败 → 作废重取 → 带新凭据再来一次;一直失败只重试这一次;403 不重试
+ *   - 认证失败 → 作废重取 → 带新凭据再来一次;一直失败只重试这一次;403 不重取
+ *   - 凭据回退(2026-10-14):带去的账号重取过还被拒(认证失败 / 403 / 404)→ 照电脑自己的 git 设置再跑一次(不带头、不清助手、
+ *     不关 askpass、不插 --no-recurse-submodules);成了带 ownCredentials;也被拒 → credential_denied;别的失败 → 那一次的原样
  *   - 失败原文里的凭据被遮掉(连同任何 Authorization 头)
  *   - 提供方说「暂时取不到」→ 不带凭据照跑:成功就成功,认证失败才报它的 code;说「到此为止」→ 一次 git 都不起,直接报
  *   - 拉取的 fetch 同样带;push 认 pushurl 的主机,fetch 认 url 的主机
@@ -30,6 +32,12 @@
  *   - runRemoteAction 带凭据时不插 `--no-recurse-submodules` → 「子进程环境里有那三项」红(命令行对不上)
  *   - stripGitTraceEnv 不把 GIT_TRACE2* 置 0 → 「带凭据的子进程摘掉 GIT_TRACE*」红
  *   - runRemoteAction 不带凭据时也插 → 「没有提供方 / 不认领…与现在一致」红
+ *   2026-10-14(凭据回退,各改一处实跑):
+ *   - 去掉回退那一段 → 「凭据回退」「一直失败…credential_denied」「拉取同样回退」红
+ *   - 回退那次照带凭据的样子跑(把 grant 传进去)→ 「凭据回退」红(环境里还有那三项)
+ *   - 回退条件改回 isGitAuthFailure → 「凭据回退」红(403 / 404 不回退)
+ *   - 非被拒的失败也回退 → 「凭据回退」红(非快进被拒跑了两次)
+ *   2026-10-17(Codex 评审):回退那次不带 quiet → 「回退那一次也摘掉跟踪」红(跟踪变量还在、Basic 头原样回到 detail)
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -212,18 +220,65 @@ describe('带凭据的推送', () => {
     expect({ asked, invalidated, attempts: remoteCalls.length }).toEqual({ asked: 2, invalidated: ['tok-stale'], attempts: 2 });
   });
 
-  it('一直失败只重试这一次;403(没有这个仓库的权限)不重试', async () => {
+  it('一直失败只重取这一次,再照电脑自己的凭据跑一次,都被拒 → credential_denied;403(没有这个仓库的权限)不重取', async () => {
     const cwd = project('push-once');
     let asked = 0;
     registerGitCredentialProvider('test', async () => ({ username: 'dave', password: `tok-${++asked}` }));
     answer = () => ({ code: 128, stderr: AUTH_FAILED });
-    expect((await failure(gitPush(cwd))).code).toBe('git_failed');
-    expect({ asked, attempts: remoteCalls.length }).toEqual({ asked: 2, attempts: 2 });
+    const denied = await failure(gitPush(cwd));
+    expect({ code: denied.code, detail: denied.detail }).toEqual({ code: 'credential_denied', detail: AUTH_FAILED });
+    expect({ asked, attempts: remoteCalls.length }).toEqual({ asked: 2, attempts: 3 });
+    expect(credentialKeys(remoteCalls[2].env)).toEqual([]);
 
     remoteCalls.length = 0; asked = 0;
     answer = () => ({ code: 128, stderr: "fatal: unable to access 'https://git.example.test/bob/private.git/': The requested URL returned error: 403" });
+    expect((await failure(gitPush(cwd))).code).toBe('credential_denied');
+    expect({ asked, attempts: remoteCalls.length }).toEqual({ asked: 1, attempts: 2 });
+  });
+
+  it('凭据回退:带去的账号没权限(403 / 404)→ 照电脑自己的 git 设置再跑一次,成了带 ownCredentials;别的失败不回退', async () => {
+    const cwd = project('push-own');
+    registerGitCredentialProvider('test', async () => ({ username: 'dave', password: 'tok-1' }));
+    const deniedWith = (stderr: string) => (call: RemoteCall) => (credentialKeys(call.env).length ? { code: 128, stderr } : { code: 0 });
+    answer = deniedWith("remote: Permission to bob/app.git denied to dave.\nfatal: unable to access 'https://git.example.test/bob/app.git/': The requested URL returned error: 403");
+    expect(await gitPush(cwd)).toMatchObject({ remote: 'origin', ownCredentials: true });
+    expect(remoteCalls).toHaveLength(2);
+    const own = remoteCalls[1];
+    expect(own.args).toEqual(['push', 'origin', 'HEAD:refs/heads/main']); // 不插 --no-recurse-submodules
+    expect(credentialKeys(own.env)).toEqual([]);
+    expect(own.argv.join(' ')).not.toContain('credential.'); // 不清凭据助手
+    expect(own.env.GIT_ASKPASS).not.toBe(''); // 不关 askpass
+    remoteCalls.length = 0;
+    answer = deniedWith("remote: Repository not found.\nfatal: repository 'https://git.example.test/bob/app.git/' not found");
+    expect((await gitPush(cwd)).ownCredentials).toBe(true);
+    // 成功的那一次没有这个标记
+    remoteCalls.length = 0; answer = () => ({ code: 0 });
+    expect((await gitPush(cwd)).ownCredentials).toBeUndefined();
+    // 不是被拒(非快进)→ 不回退
+    remoteCalls.length = 0;
+    answer = () => ({ code: 1, stderr: ' ! [rejected]        main -> main (non-fast-forward)' });
     expect((await failure(gitPush(cwd))).code).toBe('git_failed');
-    expect({ asked, attempts: remoteCalls.length }).toEqual({ asked: 1, attempts: 1 });
+    expect(remoteCalls).toHaveLength(1);
+    // 回退那一次断网 → 报那一次的原样
+    remoteCalls.length = 0;
+    answer = (call) => (credentialKeys(call.env).length ? { code: 128, stderr: 'The requested URL returned error: 403' } : { code: 128, stderr: 'fatal: unable to access: Could not resolve host: git.example.test' });
+    const offline = await failure(gitPush(cwd));
+    expect(offline.code).toBe('git_failed');
+    expect(offline.detail).toMatch(/Could not resolve host/);
+  });
+
+  it('凭据回退那一次也摘掉跟踪、遮 Authorization 头(Codex 10-17:用户自己的助手给的凭据不许经 stderr 回到界面)', async () => {
+    const cwd = project('push-own-trace');
+    Object.assign(process.env, { GIT_TRACE_CURL: '1', GIT_CURL_VERBOSE: '1' });
+    registerGitCredentialProvider('test', async () => ({ username: 'dave', password: 'tok-1' }));
+    answer = (call) => (credentialKeys(call.env).length
+      ? { code: 128, stderr: 'The requested URL returned error: 403' }
+      : { code: 128, stderr: '=> Send header: Authorization: Basic b3duOnNlY3JldA==\nfatal: unable to access: Could not resolve host: git.example.test' });
+    const offline = await failure(gitPush(cwd));
+    const own = remoteCalls[1];
+    expect([own.env.GIT_TRACE_CURL, own.env.GIT_CURL_VERBOSE, own.env.GIT_TRACE2]).toEqual([undefined, undefined, '0']);
+    expect(offline.detail).not.toContain('b3duOnNlY3JldA==');
+    expect(offline.detail).toMatch(/Authorization: Basic \*\*\*/);
   });
 
   it('失败原文里的凭据被遮掉(令牌原文、Basic 编码、任何 Authorization 头的值)', async () => {
@@ -317,6 +372,14 @@ describe('带凭据的拉取', () => {
       [['fetch', '--no-recurse-submodules', '--refmap=', 'origin', '+refs/heads/main:refs/remotes/origin/main'], 'http.https://git.example.test/.extraheader'],
       [['fetch', '--no-recurse-submodules', '--refmap=', 'origin', '+refs/heads/main:refs/remotes/origin/main'], 'http.https://git.example.test/.extraheader'],
     ]);
+  });
+
+  it('拉取同样回退:带去的账号没权限 → 照电脑自己的取到,结果带 ownCredentials', async () => {
+    const cwd = project('pull-own');
+    registerGitCredentialProvider('test', async () => ({ username: 'dave', password: 'tok-1' }));
+    answer = (call) => (credentialKeys(call.env).length ? { code: 128, stderr: 'The requested URL returned error: 403' } : { code: 0 });
+    expect(await gitPull(cwd)).toMatchObject({ upstream: 'origin/main', ownCredentials: true });
+    expect(remoteCalls.map((c) => credentialKeys(c.env).length > 0)).toEqual([true, false]);
   });
 
   it('push 认 pushurl 的主机,fetch 认 url 的主机', async () => {

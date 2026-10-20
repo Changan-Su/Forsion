@@ -240,6 +240,7 @@ export const CLASSIFICATION = {
   'POST /agent/project-context/git/commit': [D, 'git commit (runs repository hooks)'],
   'POST /agent/project-context/git/branch': [D, 'git repository write'],
   'POST /agent/project-context/git/push': [D, 'git push with local credentials'],
+  'POST /agent/project-context/git/push-target': [D, 'git repository config write (which remote the current branch pushes to)'],
   'POST /agent/project-context/git/pull': [D, 'git fetch + fast-forward with local credentials (runs repository hooks)'],
   'POST /agent/project-context/git/publish': [D, 'adds a remote and pushes with the signed-in account credentials'],
   'POST /agent/project-context/git/publish-github': [D, 'creates a GitHub repository with the linked account, adds a remote and pushes'],

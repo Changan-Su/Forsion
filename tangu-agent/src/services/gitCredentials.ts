@@ -130,6 +130,13 @@ export function isGitAuthFailure(stderr: string): boolean {
   return /Authentication failed|could not read Username|could not read Password|terminal prompts disabled|returned error: 401/i.test(stderr);
 }
 
+/** 带去的账号被远端拒了:认证失败之外,还有「凭据有效、没有这个仓库的权限」—— GitHub 对公开仓库回 403(`Permission to o/r.git denied to x`),
+ *  对看不见的私有仓库回 404(`repository '…' not found`);Gitea 同样两种。换一枚同账号的凭据救不了它,换成这台电脑自己的凭据可能行
+ *  (组织的仓库、别人拉你做协作者的仓库、绑的是另一个号)—— gitActions.runWithRemoteCredentials 的回退靠它判。 */
+export function isRemoteDenial(stderr: string): boolean {
+  return isGitAuthFailure(stderr) || /returned error: 40[34]|Permission to \S+ denied|repository '[^']*' not found|Repository not found/i.test(stderr);
+}
+
 /** 带着凭据跑的子进程不许开跟踪:`GIT_TRACE*` / `GIT_CURL_VERBOSE` 会把请求头(连同 Authorization)打进 stderr。原地删。
  *  Trace2 还得**显式关**:它的去向也能写在全局配置里(trace2.eventTarget 之类),再配上 trace2.envVars / trace2.configParams
  *  就会把注入的那一项原样记进文件 —— 环境变量压得过配置,置 0 = 这个子进程不记。 */
