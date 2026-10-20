@@ -182,9 +182,10 @@ async function syncAccount(cloud: AgentFilesBrain, userId: string, scope: string
     const check = (): void => { guard(); shared.forEach((g) => g()); };
     const dir = dirname(userMdFile());
     const prev = readPrev(dir, scope, dir);
-    try { await reconcileFile(cloud, userId, '__user__', dir, 'USER.md', bySlug.get('__user__')?.find((f) => f.relPath === 'USER.md'), prev, signal, check, result, dir, { merge: true }); }
+    const persist = (): void => atomicSyncWrite(dir, join(dir, `.cloudsync-${scope}.json`), JSON.stringify(prev), check);
+    try { await reconcileFile(cloud, userId, '__user__', dir, 'USER.md', bySlug.get('__user__')?.find((f) => f.relPath === 'USER.md'), prev, signal, check, result, dir, { merge: true, persist }); }
     catch (e) { fail(result, e); }
-    check(); atomicSyncWrite(dir, join(dir, `.cloudsync-${scope}.json`), JSON.stringify(prev), check);
+    check(); persist();
     // 旧位置(USER.md、默认笔记库的 Calendar.db)和 human/ 双向镜像:同步前一遍把旧设备的改动并进来再推,同步后一遍把拉下来的写回旧位置。
     // 服务端还不认 __human__ 时只镜像、不上云(方案页 ⑦:server 没部署时新版只做本地搬家)。
     const mirror = async (): Promise<void> => { try { result.conflicts += (await mirrorLegacyHuman()).conflicts; } catch (e) { fail(result, e); } };
@@ -260,7 +261,7 @@ const HUMAN_SLOT = '__human__';
 /** 云端搬家标记:第一台新版设备建好槽位时写一次(只建不改),值 = 布局版本。云端 / 网页据此知道该读 __human__ 还是 __user__。 */
 const HUMAN_LAYOUT = '.layout';
 /** plain:不走 agent 记忆仓库(human/MEMORY.md 是人的本子,不是 Agent 的记忆);merge:两边都改了先合并;text:.db 也按文本传。 */
-interface ReconcileOptions { plain?: boolean; merge?: boolean; text?: boolean }
+interface ReconcileOptions { plain?: boolean; merge?: boolean; text?: boolean; /** 把影子立刻落盘:merge 文件在推送 / 落合并结果之前要用 */ persist?: () => void }
 /** 两边都改了:.db 按行(id)合并,.md 按行三方合并;还没有基线(第一次见面)时取并集,不整份二选一。
  *  合不了返回 null(退回整份冲突副本)。 */
 function mergeFile(p: string, ours: string, base: string | null, theirs: string): { content: string; conflict: boolean } | null {
@@ -282,7 +283,7 @@ async function syncHumanSlot(cloud: AgentFilesBrain, uid: string, scope: string,
   };
   for (const p of HUMAN_SYNC_FILES) {
     guard();
-    try { await reconcileFile(cloud, uid, HUMAN_SLOT, dir, p, remote.get(p), prev, signal, guard, result, home, { plain: true, merge: true, text: true }); }
+    try { await reconcileFile(cloud, uid, HUMAN_SLOT, dir, p, remote.get(p), prev, signal, guard, result, home, { plain: true, merge: true, text: true, persist }); }
     catch (e) { fail(result, e); }
     guard(); persist();
   }
@@ -309,6 +310,15 @@ async function reconcileFile(cloud: AgentFilesBrain, uid: string, slug: string, 
   else decision = { kind: 'none' };
   const record = (seq: number | undefined, cloudHash: string | undefined, mtime?: number, base?: Buffer): void => {
     prev.files[p] = { seq, hash: cloudHash, lastCloudMtimeMs: mtime, ...(opts.merge && base ? { base: base.toString('utf8') } : {}) };
+  };
+  // 推送 / 落合并结果之前先把记下的原文撤掉并落盘:云端收下了却没等到回执(断网、崩溃)时,下次拿旧原文合并,
+  // 会把别的设备随后恢复的行当成「这边删了」(10-20 Codex 复核)。没原文就按第一次见面取并集:只会多出行,不会丢。
+  // 返回「放回去」:云端明确拒了(CAS 冲突)/ 没落成,旧原文照样是两边共同的祖先。
+  const unsure = (): (() => void) => {
+    const entry = prev.files[p];
+    if (!opts.merge || !opts.persist || entry?.base === undefined) return () => {};
+    const kept = entry.base; delete entry.base; opts.persist();
+    return () => { if (prev.files[p] === entry) { entry.base = kept; opts.persist!(); } };
   };
   // 记下的原文只在和影子哈希对得上时才当合并基线(老版本写的影子没有原文;对不上就当第一次见面,按并集合)
   const base = opts.merge && pe?.base !== undefined && pe.hash === sha256(Buffer.from(pe.base)) ? pe.base : null;
@@ -359,22 +369,26 @@ async function reconcileFile(cloud: AgentFilesBrain, uid: string, slug: string, 
     if (!merged) { await pull(true, fetched); return; }
     const out = Buffer.from(merged.content);
     verifyBytes({}, out);
-    withMemoryDirectoryLock(dir, () => {
-      assertUnchanged();
-      if (merged.conflict) archive(); // 同一行两边改得不一样:合并结果取云端那行,本机整份另存一份
-      atomicSyncWrite(root, abs, out, guard);
-      record(fetched.file.seq, sha256(fetched.bytes), fetched.file.mtimeMs, fetched.bytes); // 影子先记成云端那份:下面推失败,下次照常推合并结果
-    });
+    const keepOld = unsure(); // 落了合并结果、影子还没落盘就崩:下次按并集合,不拿旧原文
+    try {
+      withMemoryDirectoryLock(dir, () => {
+        assertUnchanged();
+        if (merged.conflict) archive(); // 同一行两边改得不一样:合并结果取云端那行,本机整份另存一份
+        atomicSyncWrite(root, abs, out, guard);
+        record(fetched.file.seq, sha256(fetched.bytes), fetched.file.mtimeMs, fetched.bytes); // 影子先记成云端那份:下面推失败,下次照常推合并结果
+      });
+    } catch (e) { keepOld(); throw e; }
     result.pulled++;
     if (out.equals(fetched.bytes)) return;
     guard();
     const current = readSyncBytes(root, abs);
     if (!current || !current.equals(out)) return; // 又被改了:下次同步再推
+    const keepFetched = unsure();
     try {
       const res = await cloud.putFile(uid, slug, p, { content: merged.content, isBinary: false, size: out.length, mtimeMs: Date.now(), deviceId: getDeviceId(), baseSeq: fetched.file.seq! }, { signal });
       guard(); record(res.seq, sha256(out), res.mtimeMs, out); result.pushed++;
     } catch (e) {
-      if (e instanceof AgentFileConflictError) throw new Error(`cloud file changed during sync: ${p}`);
+      if (e instanceof AgentFileConflictError) { keepFetched(); throw new Error(`cloud file changed during sync: ${p}`); }
       throw e;
     }
     return;
@@ -399,12 +413,13 @@ async function reconcileFile(cloud: AgentFilesBrain, uid: string, slug: string, 
   if (!initial) return;
   verifyBytes({}, initial); guard(); assertUnchanged();
   const isBinary = !opts.text && !TEXT_EXTS.has(extname(p).toLowerCase());
+  const keep = unsure();
   try {
     const res = await cloud.putFile(uid, slug, p, { ...(isBinary ? { contentBase64: initial.toString('base64') } : { content: initial.toString('utf8') }), isBinary, size: initial.length, mtimeMs: Date.now(), deviceId: getDeviceId(), ...(decision.kind === 'pushCreate' ? { baseSeq: 0 } : decision.baseSeq >= 0 ? { baseSeq: decision.baseSeq } : {}) }, { signal });
     guard(); record(res.seq, sha256(initial), res.mtimeMs, initial); result.pushed++;
   } catch (e) {
     // A CAS collision never overwrites either side. Next sync reconciles the fresh cloud revision.
-    if (e instanceof AgentFileConflictError) throw new Error(`cloud file changed during sync: ${p}`);
+    if (e instanceof AgentFileConflictError) { keep(); throw new Error(`cloud file changed during sync: ${p}`); }
     throw e;
   }
 }

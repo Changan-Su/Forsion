@@ -223,6 +223,34 @@ describe('human/ in the cloud — two devices', () => {
     expect(rowNames(cloudText(cloud, '__human__', 'CALENDAR.db')!)).toEqual(['r1:Dentist', 'r2:Review', 's1:Welcome', 't1:Again']);
   });
 
+  it('an upload the cloud took but never acknowledged does not make the next merge delete what another device restored', async () => {
+    const cloud = fakeCloud(['human', 'human-folder']);
+    const [a, b] = two();
+    writeFileSync(a.calendar, CAL([['r1', 'Dentist'], ['r2', 'Review']]));
+    writeFileSync(b.calendar, readFileSync(a.calendar, 'utf8'));
+    await a.enroll(cloud); await a.sync(cloud);
+    await b.enroll(cloud); await b.sync(cloud);
+    // A 删了 r2;推 CALENDAR.db 时云端收下了,回执在路上丢了(断网 / 进程被杀)
+    a.use(); a.editCalendar((rows) => rows.filter((r) => r.id !== 'r2'));
+    const put = cloud.putFile.bind(cloud);
+    cloud.putFile = async (...args: Parameters<typeof put>) => {
+      const res = await put(...args);
+      if (args[1] === '__human__' && args[2] === 'CALENDAR.db') { cloud.putFile = put; throw new Error('socket hang up'); }
+      return res;
+    };
+    a.use(); expect((await runAgentFilesSync(cloud, 'u')).error).toMatch(/socket hang up/);
+    expect(rowNames(cloudText(cloud, '__human__', 'CALENDAR.db')!)).toEqual(['r1:Dentist']);
+    // B 收到删除,又把 r2 原样加回来(撤销删除),另加一条 r3
+    const r2 = JSON.parse(readFileSync(b.calendar, 'utf8')).rows.find((r: any) => r.id === 'r2');
+    await b.sync(cloud);
+    b.use(); b.editCalendar((rows) => [...rows, r2, row('r3', 'Gym')]);
+    await b.sync(cloud);
+    // A 再同步:旧原文 {r1,r2} 当基线会把 B 加回来的 r2 当成「A 这边删了」再删一次
+    await a.sync(cloud);
+    for (const d of [a, b]) { await d.sync(cloud); d.use(); expect(rowNames(d.human('CALENDAR.db'))).toEqual(['r1:Dentist', 'r2:Review', 'r3:Gym']); }
+    expect(rowNames(readFileSync(a.calendar, 'utf8'))).toEqual(['r1:Dentist', 'r2:Review', 'r3:Gym']);
+  });
+
   it('waits for the desktop\'s write lock on the vault calendar instead of writing under it', async () => {
     const [a] = two();
     a.use();

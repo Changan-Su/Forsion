@@ -107,6 +107,13 @@ describe('human/ folder, step 1', () => {
     writeFileSync(userMdFile(), ''); // 旧设备在设置里清空了:这是一次编辑,照样过来(人的本子有修改记录,删错了能找回)
     await mirrorLegacyHuman();
     expect(readFileSync(memory(), 'utf8')).toBe('');
+    // 真能找回(Codex 复核:镜像直接落盘时没有修改记录,清空就找不回了):最新一条可撤销,撤销后原文回来,USER.md 跟着回来
+    const cleared = await readHuman({ kind: 'human', file: 'MEMORY.md' });
+    expect(cleared.history[0]).toMatchObject({ actor: 'user', canUndo: true });
+    await writeHuman({ kind: 'human', file: 'MEMORY.md' }, { expectedVersion: cleared.version, undoId: cleared.history[0].id }, 'user');
+    expect(readFileSync(memory(), 'utf8')).toBe('Name: Lin Xia\nLikes: tea\nGoal: ship the phone app');
+    await mirrorLegacyHuman();
+    expect(readFileSync(userMdFile(), 'utf8')).toBe('Name: Lin Xia\nLikes: tea\nGoal: ship the phone app');
   });
 
   it('keeps an old profile longer than the handbook limit editable, and does not migrate through a symlinked folder', async () => {

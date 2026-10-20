@@ -65,16 +65,23 @@ function replaced(X: Obj, B: Obj): boolean {
   return (br.size > 0 || bc.size > 0) && !overlap(ids(X.rows), br) && !overlap(ids(X.columns), bc);
 }
 /** 新装机首启播种、一点没动过的「我的日历」(desktop schema.ts seedCalendarDb):第一次见面时它就是「空的」,用另一边,
- *  不然每多一台设备,三条欢迎日程就在所有人的日历里多一份。日期相对播种当天,不比。 */
-const SEED_ROWS = ['欢迎使用 Calendar Space', '整理本周任务', '项目评审'];
+ *  不然每多一台设备,三条欢迎日程就在所有人的日历里多一份。日期相对播种当天(D、D+1、D+2),每一格都要和种子逐字一致:
+ *  改过时间、打过勾的种子日程是用户的数据,照常并(10-20 Codex 复核:只比标题会把改过期的种子整份丢掉)。 */
 function untouchedSeed(X: Obj): boolean {
   const cols = Array.isArray(X.columns) ? (X.columns as Obj[]) : [];
   const rows = X.rows as Obj[];
-  if (X.name !== '我的日历' || X.views !== undefined || cols.length !== 3 || rows.length !== SEED_ROWS.length) return false;
+  if (X.name !== '我的日历' || X.views !== undefined || cols.length !== 3 || rows.length !== 3) return false;
   if (cols.map((c) => `${c.type}:${c.name}`).join('|') !== 'text:名称|calendarDate:日期|checkbox:完成') return false;
-  const [n] = cols.map((c) => c.id as string);
-  const known = new Set(cols.map((c) => c.id));
-  return rows.every((r, i) => isObj(r.cells) && r.cells[n] === SEED_ROWS[i] && r.body === undefined && Object.keys(r.cells).every((k) => known.has(k)));
+  const [n, d, k] = cols.map((c) => c.id as string);
+  const first = isObj(rows[0].cells) && typeof rows[0].cells[d] === 'string' ? /^(\d{4})-(\d{2})-(\d{2})T10:00\//.exec(rows[0].cells[d] as string) : null;
+  if (!first) return false;
+  const day = (plus: number): string => new Date(Date.UTC(+first[1], +first[2] - 1, +first[3] + plus)).toISOString().slice(0, 10);
+  const seed = [
+    { [n]: '欢迎使用 Calendar Space', [d]: `${day(0)}T10:00/${day(0)}T11:00`, [k]: true },
+    { [n]: '整理本周任务', [d]: day(1) },
+    { [n]: '项目评审', [d]: `${day(2)}T14:00/${day(2)}T15:30` },
+  ];
+  return rows.every((r, i) => Object.keys(r).every((key) => key === 'id' || key === 'cells') && same(r.cells, seed[i]));
 }
 
 export function mergeDbFile(ours: string, base: string | null, theirs: string): DbMergeResult | null {

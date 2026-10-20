@@ -72,6 +72,14 @@ describe('mergeDbFile', () => {
     expect(mergeDbFile(base, null, seed)!.content).toBe(base);
     const touched = JSON.parse(seed); touched.rows[1].cells.x = '整理本周任务和周报';
     expect(names(mergeDbFile(JSON.stringify(touched), null, base)!.content)).toHaveLength(6); // 动过就不是种子:照常并
+    // 只改时间、只打勾也算动过(Codex 复核:只比标题会把改过期的种子日程整份丢掉)
+    const moved = JSON.parse(seed); moved.rows[2].cells.y = '2026-10-23T14:00/2026-10-23T15:30';
+    const ticked = JSON.parse(seed); ticked.rows[1].cells.z = true;
+    for (const edited of [moved, ticked]) expect(names(mergeDbFile(JSON.stringify(edited), null, base)!.content)).toHaveLength(6);
+    // 跨月播种(D+1、D+2 进了下个月)照样认得出是种子
+    const monthEnd = JSON.parse(seed);
+    monthEnd.rows[0].cells.y = '2026-10-31T10:00/2026-10-31T11:00'; monthEnd.rows[1].cells.y = '2026-11-01'; monthEnd.rows[2].cells.y = '2026-11-02T14:00/2026-11-02T15:30';
+    expect(mergeDbFile(JSON.stringify(monthEnd), null, base)!.content).toBe(base);
   });
   it('refuses to guess on unparsable files or duplicate ids', () => {
     expect(mergeDbFile('not json', base, base)).toBeNull();

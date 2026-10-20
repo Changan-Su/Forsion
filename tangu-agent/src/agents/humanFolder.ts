@@ -11,6 +11,7 @@ import { withMemoryDirectoryLock } from '../services/memoryRepository.js';
 import { mergeText3 } from '../services/memorySync.js';
 import { mergeDbFile, unionLines } from '../services/dbRowMerge.js';
 import { withDbLock } from '../services/amadeusDb.js';
+import { commitHumanFromMirror } from './humanStore.js';
 
 /** human/ 里上云的几份(云端 __human__ 槽位;服务端 tanguAgentFilePaths 的 HUMAN_SLOT_FILES 同一张表,外加搬家标记 .layout)。 */
 export const HUMAN_SYNC_FILES = ['HUMAN.md', 'AGENT.md', 'SOUL.md', 'MEMORY.md', 'CALENDAR.db'] as const;
@@ -88,7 +89,9 @@ function mirrorPair(p: MirrorPair, state: Record<string, string>, home: string, 
   const L = read(p.legacyRoot, p.legacy);
   const H = read(home, p.human);
   const B = typeof state[p.key] === 'string' ? state[p.key] : null;
-  const writeHuman = (text: string): void => atomicSyncWrite(home, p.human, text);
+  // MEMORY.md 走人的本子那套修改记录(能撤销);日历是数据库文件,直接落盘
+  const writeHuman = (text: string): void => p.db ? atomicSyncWrite(home, p.human, text)
+    : commitHumanFromMirror('MEMORY.md', text, 'Updated from USER.md (changed on another device or an older version)');
   // 库里的日历:已拿着桌面 / mutateDb 那把锁;笔记库同步不拿锁,落盘前再读一遍,和刚才读到的不一样就放弃这一轮。
   // 临时文件按桌面 atomicWrite 的 `.tmp-<pid>-<时间>-<序号>` 起名:库的 watcher 和笔记库同步都认这个后缀,不当成用户文件。
   const writeLegacy = (text: string): void => {
