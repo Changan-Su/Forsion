@@ -12,6 +12,7 @@
 
 import { createContext, type ComponentType } from 'react'
 import type { CtxItem } from '../../components/RightPanel'
+import type { ViewProps } from '@lcl/engine'
 import type { Attachment } from '../../../../../tangu-agent/src/contracts/clientTypes'
 
 export interface TanguModelInfo {
@@ -416,3 +417,22 @@ export interface DeskChrome {
   more: { current: CtxItem[] }
 }
 export const DeskChromeContext = createContext<DeskChrome | null>(null)
+
+/** Tangu 的对话视图(核心插件化 2e-7):宿主嵌固定会话的地方(图像工作室、插件聊天 pluginChat、mini 卡片)和
+ *  外观预览窗口(#preview)用。Tangu 在激活时交出,**宿主内部接缝**。没交 → 这几处不画对话。 */
+export interface TanguChatViews {
+  /** 就是注册成 `chat` 的那个视图;props 同注册视图(leaf + params,嵌固定会话传 followActive: false + sessionId)。 */
+  Chat: ComponentType<ViewProps>
+  /** 外观预览窗口里的样例对话。 */
+  Preview: ComponentType
+}
+
+let chatViews: TanguChatViews | null = null
+
+export function setTanguChatViews(p: TanguChatViews | null): void {
+  chatViews = p
+}
+
+export function readTanguChatViews(): TanguChatViews | null {
+  return chatViews
+}

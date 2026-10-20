@@ -3,6 +3,7 @@ import { addCommand, registerView, useWorkspace } from '@lcl/engine'
 import { activeChatModelId, useApp } from '../stores/appStore'
 import { translate } from '../i18n'
 import { ChatView } from '../views/ChatView'
+import { ChatPreview } from '../views/chat2/ChatPreview'
 import { BtwSideView } from '../views/chat2/BtwPanel'
 import { openBtw } from '../views/chat2/btwStore'
 import { ensureAppRefCommand } from '../views/chat2/appRefCommand'
@@ -11,7 +12,7 @@ import { AgentsDetailSpecialView, WorkspaceDetailSpecialView } from '../views/Sp
 import { AgentsSpaceView, AgentsRosterView, TanguDetailsView } from '../views/AgentProfileView'
 import { hasNativeFeature } from './runtime'
 import { SessionTabIcon } from '../components/SessionIcon'
-import { setTanguChatOutline, setTanguInboxTasks, setTanguNewChat, setTanguPrefs, setTanguSidebarModes } from '../amadeus/plugins/tanguSeam'
+import { setTanguChatOutline, setTanguChatViews, setTanguInboxTasks, setTanguNewChat, setTanguPrefs, setTanguSidebarModes } from '../amadeus/plugins/tanguSeam'
 import { inboxTasks } from '../views/chat2/inboxTasks'
 import { isChatAvatarsOn, setChatAvatarsOn } from '../views/chat2/chatAvatars'
 import { isPromptSuggestOn, setPromptSuggest } from '../views/chat2/promptSuggest'
@@ -79,6 +80,7 @@ export function registerTanguViews(): void {
   setTanguNewChat({ Composer: NewChatComposer, send: sendFromNewChat, startCall: startNewChatCall, mount: mountNewChatComposer })
   setTanguSidebarModes({ Orbits: OrbitsView, Sessions: SessionsView })
   setTanguChatOutline(TocView) // 「大纲」视图在主区是对话时画会话目录
+  setTanguChatViews({ Chat: ChatView, Preview: ChatPreview }) // 宿主嵌固定会话处(图像工作室 / 插件聊天 / mini)与外观预览窗口
   // chat 可关闭(浏览器式):关掉主区最后一个 view → 显示「新建标签页」启动器(见 workspaceStore.closeLeaf)。
   // workspaceSource: 'orbits' = 自动档翻转的**声明位**(方案 §3.7-7):主区是 chat 时左栏自动落新版会话侧栏,
   // 不动 workspaceMode.ts 的硬规则;右栏恒 files 不受它管。

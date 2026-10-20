@@ -5,7 +5,7 @@ import { ListFab } from '../../components/phoneList'
 import { useI18n } from '../../i18n'
 import { useImageStudio } from '../../stores/imageStudioStore'
 import { useApp } from '../../stores/appStore'
-import { ChatView } from '@tangu/ui/views/ChatView'
+import { readTanguChatViews } from '../../amadeus/plugins/tanguSeam'
 import { ensureImageSession } from './session'
 import { downloadBlob, renderImages } from './files'
 import { ImageThumbnail, LayerPreview } from './LayerPreview'
@@ -52,8 +52,10 @@ export function ImageStudioChat(props: ViewProps) {
   const [error, setError] = useState('')
   useEffect(() => { void useImageStudio.getState().hydrate() }, [])
   useEffect(() => { if (board?.sessionId) void useApp.getState().loadSessionHistory(board.sessionId) }, [board?.sessionId])
-  if (board?.sessionId) return <div className="ims-chat" data-image-studio-chat={board.id}>
-    <ChatView key={board.sessionId} {...props} params={{ ...props.params, followActive: false, sessionId: board.sessionId, childSurface: true }} />
+  // 对话视图是 Tangu 交出来的(核心插件化 2e-7)
+  const Chat = readTanguChatViews()?.Chat
+  if (board?.sessionId && Chat) return <div className="ims-chat" data-image-studio-chat={board.id}>
+    <Chat key={board.sessionId} {...props} params={{ ...props.params, followActive: false, sessionId: board.sessionId, childSurface: true }} />
   </div>
   return <div className="ims-panel ims-chat-empty"><MessageCircle size={26} strokeWidth={1.3} /><h3>{t('imageStudio.chat')}</h3><p>{t(board ? 'imageStudio.chatHint' : 'imageStudio.choose')}</p>
     {board && <button className="ims-primary" disabled={busy} onClick={async () => { setBusy(true); setError(''); try { await ensureImageSession(board.id) } catch (e) { setError(String(e)) } finally { setBusy(false) } }}>{busy ? <Loader2 size={15} className="ims-spin" /> : <Plus size={15} />}{t('imageStudio.connect')}</button>}

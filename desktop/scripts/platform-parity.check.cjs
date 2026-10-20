@@ -88,7 +88,7 @@ const SKIP = {
   DetachedRoot: '同上:拖出来的独立窗',
   MiniRoot: '同上:悬浮 mini 卡片',
   FloatingRoot: '第六种 Panel 的 Electron 原生子窗口根;移动端按产品约定继续使用全屏二级页面,不模拟桌面窗口',
-  ChatPreview: '#preview 设计预览页,截图评审用',
+  readTanguChatViews: '#preview 设计预览页(样例对话,截图评审用;核心插件化 2e-7 起经 tanguSeam 从 Tangu 取 ChatPreview)',
   resolveInitialEffectiveMode: '移动端用 resolveInitialMode(无「跟随系统」的 electron 通道)',
   // —— 根组件 ——
   Root: '移动端的对位物就是 MobileRoot 自己',
