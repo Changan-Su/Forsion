@@ -23,18 +23,35 @@ import { presetOf } from '../../core/presetTable.js';
 const GUI_CLIENT_RE = /^(desktop|web)\//;
 
 /** 10-20 改名:模型读到的工具名、卡内脚本接口都换成 Intelligent UI 的说法(对用户本来就叫 Intelligent UI 卡)。
- *  旧名 sketch 经 TOOL_NAME_ALIASES 照样能调;老客户端(不认 intelligent-ui.v2 的,即 10-20 之前发的版本)只会画叫
- *  sketch 的卡,所以入口把它们的调用改回旧名再往外发(agentLoop);认 v2 的客户端两种名字都会画。 */
+ *  引擎与客户端之间(上屏事件、落库的会话记录、卡里的 HTML)仍叫 sketch / forsionSketch:已发的客户端只认这套,而会话会在
+ *  新旧两版之间来回打开 —— 按客户端分名会让跨版本看历史丢卡、旧客户端跑不动新接口名(Codex 10-20 评审)。
+ *  所以只在两头换:模型产出 → 往外发(htmlCardToWire),历史 → 发给模型(withHtmlCardName)。旧名经 TOOL_NAME_ALIASES 照样能调。
+ *  ponytail: 线上协议留旧名;旧客户端都升级之后再把这一层换掉。 */
 export const HTML_CARD_TOOL = 'intelligent_ui_html';
 export const LEGACY_HTML_CARD_TOOL = 'sketch';
+const CARD_API = 'forsionIntelligentUi', LEGACY_CARD_API = 'forsionSketch';
 export const isHtmlCardTool = (name: string): boolean => name === HTML_CARD_TOOL || name === LEGACY_HTML_CARD_TOOL;
-/** 这个客户端认得的 HTML 卡工具名。和计算层同一批客户端:认 intelligent-ui.v2 的渲染层两种名字都画。 */
-export const htmlCardNameFor = (caps?: readonly string[]): string => caps?.includes('intelligent-ui.v2') ? HTML_CARD_TOOL : LEGACY_HTML_CARD_TOOL;
-/** 发给模型的历史里 HTML 卡一律叫新名:旧会话和老客户端的调用落库时叫 sketch,工具表里只有新名。没有旧名时原样返回(不另造数组)。 */
-export function withHtmlCardName<M extends { tool_calls?: { function: { name: string } }[] }>(messages: M[]): M[] {
-  const old = (m: M): boolean => !!m.tool_calls?.some((c) => c.function?.name === LEGACY_HTML_CARD_TOOL);
+type Call = { function: { name: string; arguments: string } };
+const toModel = <C extends Call>(c: C): C => c.function?.name === LEGACY_HTML_CARD_TOOL
+  ? { ...c, function: { ...c.function, name: HTML_CARD_TOOL, arguments: String(c.function.arguments ?? '').replaceAll(LEGACY_CARD_API, CARD_API) } } : c;
+/** 模型产出的一次 HTML 卡调用改成线上的样子(原地改):工具名回 sketch,HTML 里的新接口名换成旧名(新渲染层两个名字是同一个对象)。
+ *  ⚠️ tool_stream 的参数增量不换(接口名可能被切在两段之间):旧客户端的草稿卡里脚本可能报错,收口的那次 tool_call 是换过的。 */
+export function htmlCardToWire(call: Call): void {
+  if (!isHtmlCardTool(call.function.name)) return;
+  call.function.name = LEGACY_HTML_CARD_TOOL;
+  if (typeof call.function.arguments === 'string') call.function.arguments = call.function.arguments.replaceAll(CARD_API, LEGACY_CARD_API);
+}
+/** 发给模型的历史反过来换成新名、新接口名(工具表里只有新名);Responses 原样回放的 providerItems 里的 function_call 一样。
+ *  没有旧名时原样返回(不另造数组)。不改传入的对象。 */
+export function withHtmlCardName<M extends { tool_calls?: Call[]; providerItems?: any[] }>(messages: M[]): M[] {
+  const oldItem = (it: any): boolean => it?.type === 'function_call' && it.name === LEGACY_HTML_CARD_TOOL;
+  const old = (m: M): boolean => !!m.tool_calls?.some((c) => c.function?.name === LEGACY_HTML_CARD_TOOL) || !!m.providerItems?.some(oldItem);
   if (!messages.some(old)) return messages;
-  return messages.map((m) => old(m) ? { ...m, tool_calls: m.tool_calls!.map((c) => c.function?.name === LEGACY_HTML_CARD_TOOL ? { ...c, function: { ...c.function, name: HTML_CARD_TOOL } } : c) } : m);
+  return messages.map((m) => !old(m) ? m : {
+    ...m,
+    ...(m.tool_calls ? { tool_calls: m.tool_calls.map(toModel) } : {}),
+    ...(m.providerItems ? { providerItems: m.providerItems.map((it) => oldItem(it) ? { ...it, name: HTML_CARD_TOOL, arguments: String(it.arguments ?? '').replaceAll(LEGACY_CARD_API, CARD_API) } : it) } : {}),
+  });
 }
 
 /** ponytail: 256K 字符上限(参数进上下文,模型自会节制;超了让它精简)。真需要大卡再谈外置存储。 */

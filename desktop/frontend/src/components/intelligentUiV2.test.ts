@@ -40,6 +40,12 @@ describe('Intelligent UI v2 renderer', () => {
     expect(out).toContain('<td>3000 元</td>')
     expect(out).toContain('<td>a|b</td>')
   })
+  it('computes {{ }} inside checklist labels instead of showing the braces', () => {
+    const out = html({ version: 2, id: 'c', title: 'Shop', resources: [], state: [], derived: [{ id: 'scale', expr: '6 / 4' }],
+      inputs: [], blocks: [{ id: 'l', kind: 'checklist', items: [{ id: 'rice', label: '大米 {{format(300 * scale, \'number\', 0)}} 克' }] }] })
+    expect(out).toContain('大米 450 克')
+    expect(out).not.toContain('{{')
+  })
   it('shows the title, opening text and a notice for a document from a later version', () => {
     const out = html({ version: 3, id: 'n', title: 'From the future', inputs: [], blocks: [{ id: 'a', kind: 'text', markdown: 'Opening line.' }, { id: 'b', kind: 'hologram' }] })
     expect(out).toContain('From the future')

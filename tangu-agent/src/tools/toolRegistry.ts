@@ -111,7 +111,7 @@ export function isShelvable(name: string): boolean {
 export const TOOL_NAME_ALIASES: Record<string, string> = {
   muse_watch: 'manage_automation',
   // 10-20 HTML 卡改名(sketch → intelligent_ui_html):旧会话历史、用户配置里的工具名单、照着历史叫旧名的模型都还说 sketch。
-  // 老客户端只会画叫 sketch 的卡,发给它们的事件名在 agentLoop 入口换回旧名(htmlCardNameFor)。
+  // 线上协议(上屏事件、落库)仍叫 sketch,agentLoop 入口换回旧名(sketch.ts htmlCardToWire)。
   sketch: 'intelligent_ui_html',
 };
 
@@ -349,6 +349,7 @@ export function resolveTools(profile: AppProfile, ctx: ToolContext, origins?: Ma
   // 之后就能绕过 executeTool 的按工具收窄(bindClientActionToTool)直调。
   const enabledForCtx: ToolContext = ctx.requestClientAction ? { ...ctx, requestClientAction: undefined } : ctx;
   let builtins = profile.toolLoadout.builtins;
+  if (builtins !== 'all') builtins = builtins.map(canonicalToolName); // 代码里写死的白名单也可能还写着旧名(sketch)
   // 部署级白名单(TANGU_TOOL_BUILTINS 等)含 deferred 工具却漏列 load_tools → 自动补上:
   // 否则目录还在、唯一解锁入口没了,deferred 工具永久不可达(还可能被同名 custom 工具顶替)。
   if (builtins !== 'all' && !builtins.includes('load_tools')) {

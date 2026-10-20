@@ -76,7 +76,8 @@ export function deriveChecklist(block: Extract<UIBlock, { kind: 'checklist' }>, 
     const key = JSON.stringify([block.id, item.itemKey || item.id, q?.unit || null])
     const amount = q ? q.value * (q.scaleBy ? Number(values[q.scaleBy]) / q.base! : 1) : undefined
     const previous = rows.get(key)
-    rows.set(key, { key, label: previous?.label || item.label, amount: amount === undefined ? undefined : amount + (previous?.amount || 0), unit: q?.unit, checked: false })
+    const label = env && item.label.includes('{{') ? env.text(item.label) : item.label // v2:条目文字里的 {{ }} 按当前值算成纯文字
+    rows.set(key, { key, label: previous?.label || label, amount: amount === undefined ? undefined : amount + (previous?.amount || 0), unit: q?.unit, checked: false })
   }
   return [...rows.values()].map(row => {
     const bought = state.purchased[row.key]

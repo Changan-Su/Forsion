@@ -237,3 +237,19 @@ describe('written-out tables', () => {
     expect(() => validateUIDocument({ ...doc, blocks: [doc.blocks[0], { ...doc.blocks[1], rows: [['a', '{{nope}}']] }] }, { maxVersion: 2 })).toThrow(/rows\[0\]\[1\].*nope/)
   })
 })
+
+// live 10-20 intelligentplan:随人数变的量写进了清单条目文字,渲染层原样显示一串大括号。v2 的条目文字照算,坏表达式在校验时报。
+describe('checklist labels with {{ }}', () => {
+  const doc = {
+    version: 2, id: 'shop', title: 'Shop', resources: [],
+    inputs: [{ id: 'people', kind: 'number', label: 'People', initial: 4, min: 2, max: 8, step: 1 }],
+    derived: [{ id: 'scale', expr: 'people / 4' }],
+    blocks: [{ id: 'c', kind: 'controls', inputIds: ['people'] }, { id: 'l', kind: 'checklist', items: [{ id: 'rice', label: '大米 {{format(300 * scale, \'number\', 0)}} 克' }] }],
+  }
+  it('reads a v1 document that computes its labels as v2 and checks the expressions', () => {
+    const { version: _v, derived: _d, ...v1 } = doc
+    expect(validateUIDocument({ ...v1, version: 1, blocks: [doc.blocks[0], { id: 'l', kind: 'checklist', items: [{ id: 'rice', label: '{{1 + 1}} kg' }] }] }, { maxVersion: 2 }).version).toBe(2)
+    expect(() => validateUIDocument({ ...doc, blocks: [doc.blocks[0], { id: 'l', kind: 'checklist', items: [{ id: 'rice', label: '{{nope}}' }] }] }, { maxVersion: 2 })).toThrow(/items\[0\]\.label.*nope/)
+    expect(uiDocumentIssues(validateUIDocument(doc, { maxVersion: 2 }), 'zh')).toEqual([])
+  })
+})

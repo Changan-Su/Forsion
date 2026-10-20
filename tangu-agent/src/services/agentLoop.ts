@@ -37,7 +37,7 @@ import { buildAgentRoster } from './agentRoster.js';
 import { APP_REF_SECTION, AUTONOMY_SECTION, PERSISTENCE_SECTION, TOOL_FAILURE_SECTION, ULTRA_SECTION, presetContractSection, responseStyleSection } from '../profiles/promptSections.js';
 import { canonicalToolName, resolveTools, isComputerUseTool, computerUseHiddenNames, computerUseUnavailableReason } from '../tools/toolRegistry.js';
 import { parsePreset, presetOf, type Preset } from '../core/presetTable.js';
-import { SKETCH_LESS_NOTE, SKETCH_SECTION, htmlCardNameFor, isHtmlCardTool, sketchEnabledFor, sketchTurnSignalFor, visualsPrefOf, withHtmlCardName } from '../tools/builtin/sketch.js';
+import { LEGACY_HTML_CARD_TOOL, SKETCH_LESS_NOTE, SKETCH_SECTION, htmlCardToWire, isHtmlCardTool, sketchEnabledFor, sketchTurnSignalFor, visualsPrefOf, withHtmlCardName } from '../tools/builtin/sketch.js';
 import { loadTodos as loadSessionTodos, renderTodos, type TodoItem } from '../tools/builtin/todo.js';
 import { collectGitState, formatRuntimeContext, renderTodoState, runVerifyCommand } from './runtimeContext.js';
 import { loadCustomTools, type LoadedCustomTool } from '../tools/customTools.js';
@@ -966,8 +966,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   const clientCapabilities: readonly string[] | undefined = Array.isArray(input.clientCapabilities)
     ? Object.freeze(input.clientCapabilities.filter((c: unknown): c is string => typeof c === 'string'))
     : undefined;
-  // HTML 卡往外发的名字:老客户端只画叫 sketch 的卡(见 sketch.ts HTML_CARD_TOOL)。模型那头一律是新名。
-  const clientToolName = (name: string): string => isHtmlCardTool(name) ? htmlCardNameFor(clientCapabilities) : name;
+  // HTML 卡往外发、落库都叫 sketch(已发客户端只认这个名字,见 sketch.ts HTML_CARD_TOOL);模型那头一律是新名。
+  const wireToolName = (name: string): string => isHtmlCardTool(name) ? LEGACY_HTML_CARD_TOOL : name;
   setRunClientTag(clientTag);
   // Normal Agent 激活:会话 agent_config.agentSlug → 合并 agent 定义里「会话未显式覆盖」的字段。
   // 本地形态读 ~/.tangu/agents;云端 worker 本地目录为空 → applyAgentActivation 经 brain.agents 兜底水合。
@@ -2498,7 +2498,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       const stored = (!result.isError && declaredPersistPlaceholder(result.name)) || capped;
       const payload = {
         id: call.id,
-        name: clientToolName(result.name), // 执行层回正典名;往外发跟这次调用一样按客户端的叫法(老客户端的 HTML 卡叫 sketch)
+        name: wireToolName(result.name), // 执行层回正典名;往外发跟这次调用一样叫线上的名字(HTML 卡叫 sketch)
         result: stored,
         isError: result.isError,
         startedAt,
@@ -2529,7 +2529,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       return {
         toolResult: {
           tool_call_id: call.id,
-          name: clientToolName(result.name),
+          name: wireToolName(result.name),
           content: stored,
           isError: result.isError,
           startedAt,
@@ -2903,7 +2903,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
               // Stream the raw arg delta so the client can render a live "writing
               // file" preview (it reassembles per tool-call id and extracts path/content).
               if (info.argsDelta) {
-                void publish(runId, 'tool_stream', { id: info.id, name: clientToolName(info.name), delta: info.argsDelta });
+                void publish(runId, 'tool_stream', { id: info.id, name: wireToolName(info.name), delta: info.argsDelta });
               }
               // Keep the throttled generic "生成中…(N 字符)" status for the status bar.
               if (info.argsLen - lastGenChars >= 600) {
@@ -3011,8 +3011,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       }
 
       if (resumedMidstream || retryIteration) continue; // 中流断线已段切分回灌 / 溢出已压缩:res 未产出,重进本迭代(steer 照常在迭代顶注入)
-      // 入口改名一次,下游(上屏事件、落库、结果)全跟着:老客户端的 HTML 卡叫 sketch。发给模型时 withHtmlCardName 再换回新名。
-      for (const c of res.toolCalls ?? []) c.function.name = clientToolName(c.function.name);
+      // 入口换一次,下游(上屏事件、落库、结果)全跟着:HTML 卡在线上叫 sketch、卡里用 forsionSketch。发给模型时 withHtmlCardName 再换回新名。
+      for (const c of res.toolCalls ?? []) htmlCardToWire(c);
 
       // 供应商可能在取消之后才返回成功;不允许迟到的结果启动工具/续跑或发布 done。
       ac.signal.throwIfAborted();

@@ -84,7 +84,8 @@ function usesVersion2(d: Record<string, unknown>): boolean {
   const blocks = Array.isArray(d.blocks) ? d.blocks as Record<string, unknown>[] : []
   const exprWhen = (x: unknown): boolean => !!x && typeof x === 'object' && (x as Record<string, unknown>).expr !== undefined
   return blocks.some(b => !!b && (V2_BLOCKS.has(b.kind as string) || exprWhen(b.when)
-    || (Array.isArray(b.items) && b.items.some((a: Record<string, unknown>) => a?.kind === 'set' || exprWhen(a?.when)))))
+    || (Array.isArray(b.items) && b.items.some((a: Record<string, unknown>) => a?.kind === 'set' || exprWhen(a?.when)
+      || (b.kind === 'checklist' && typeof a?.label === 'string' && a.label.includes('{{'))))))
 }
 export function validateUIDocument(raw: unknown, options: { draft?: boolean; maxVersion?: number } = {}): UIDocument {
   if (uiDocumentTooLarge(JSON.stringify(raw) || '')) fail('document', 'too large')
@@ -230,7 +231,10 @@ export function validateUIDocument(raw: unknown, options: { draft?: boolean; max
             quantity.base = num(n.base, `${q}.quantity.base`, 0.001)
           }
         }
-        return { id: id(a.id, `${q}.id`), label: str(a.label, `${q}.label`, 300), ...(a.itemKey === undefined ? {} : { itemKey: id(a.itemKey, `${q}.itemKey`) }), quantity, when: condition(a.when, `${q}.when`) }
+        // v2:条目文字里的 {{ }} 照算(live 10-20:模型把随人数变的量直接写进清单文字,原样显示成一串大括号)
+        const label = str(a.label, `${q}.label`, 300)
+        if (v2) for (const src of interpolationSources(label)) expr(src, `${q}.label {{${src.slice(0, 40)}}}`, scope)
+        return { id: id(a.id, `${q}.id`), label, ...(a.itemKey === undefined ? {} : { itemKey: id(a.itemKey, `${q}.itemKey`) }), quantity, when: condition(a.when, `${q}.when`) }
       }), `${p}.items`) }
       case 'actions': return { ...common, kind: 'actions', items: unique(list(o.items, `${p}.items`, 6, (v, q) => {
         const a = obj(v, q), base = { id: id(a.id, `${q}.id`), label: str(a.label, `${q}.label`, 160) }

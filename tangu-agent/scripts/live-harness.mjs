@@ -2287,7 +2287,8 @@ try {
       const repeats = blocks.filter(b => (b.kind === 'gallery' && b.resourceIds.some(id => pickIds.has(id))) || (b.kind === 'comparison' && b.items.some(i => pickIds.has(i.imageId)))).length;
       const pickRow = !!picker;
       const contract = key === 'intelligentplan'
-        ? blocks.some(b => b.kind === 'checklist' && b.items.some(i => i.quantity?.scaleBy)) && documents.some(d => d.inputs.some(i => i.kind === 'choice')) && blocks.some(b => b.kind === 'disclosure')
+        // 随人数变的量:v1 用 quantity.scaleBy;v2 客户端也可以把算出来的量写进条目文字({{ }},live 10-20 两种都出现过)
+        ? blocks.some(b => b.kind === 'checklist' && b.items.some(i => i.quantity?.scaleBy || i.label.includes('{{'))) && documents.some(d => d.inputs.some(i => i.kind === 'choice')) && blocks.some(b => b.kind === 'disclosure')
         : pickRow && blocks.some(b => b.kind === 'sources');
       const groundedImages = key !== 'intelligentmedia' || (ev.toolArgs.some(c => c.name === 'view_image') && !/人像|人脸|面部|portrait/i.test(JSON.stringify(documents)));
       const noPayloadEcho = !ev.content.includes('\"document\":') && !ev.content.includes('\"blocks\":');

@@ -11,12 +11,14 @@
 - `"intelligent-ui.v2"` 与 v1 一起发：引擎据此多发一段 `INTELLIGENT_UI_V2_SECTION`、换两段工具描述（`definitionFor`），
   并接受 `version: 2`。没有 v2 握手的客户端照旧只收 v1，引擎对它们拒收 v2（报错回给模型）。
 - HTML 卡 10-20 改名：工具 `sketch` → `intelligent_ui_html`、卡内脚本接口 `window.forsionSketch` → `window.forsionIntelligentUi`、
-  笔记交互块 ```` ```forsion-sketch ```` → ```` ```forsion-intelligent-ui-html ````。模型那头只有新名，兼容层：
-  - 引擎：`TOOL_NAME_ALIASES` 把 `sketch` 归到新名（模型照着旧历史叫、HARNESS 收起名单、profile / toolsList 白名单、审批规则都认）；
-    发给模型的历史经 `withHtmlCardName` 统一成新名。
-  - 老客户端（没带 `intelligent-ui.v2`，即 10-20 之前的版本）只会画叫 `sketch` 的卡：`agentLoop` 在模型产出调用的入口按
-    `htmlCardNameFor` 把名字改回 `sketch`，上屏事件、落库、工具结果全跟着。
-  - 渲染层两种名字都画（`isHtmlCardTool`）；卡内运行时两个全局名指向同一个冻结对象；笔记里两种围栏都认，新插入的写新围栏。
+  笔记交互块 ```` ```forsion-sketch ```` → ```` ```forsion-intelligent-ui-html ````。兼容层（只在模型那头换名）：
+  - 引擎与客户端之间（上屏事件、落库的会话记录、卡里的 HTML）仍叫 `sketch` / `forsionSketch`：已发客户端只认这套，而会话会在
+    新旧两版之间来回打开。`agentLoop` 在模型产出调用的入口经 `htmlCardToWire` 换成旧名（HTML 里的 `forsionIntelligentUi` 一并换），
+    发给模型的历史经 `withHtmlCardName` 换回新名（含 Responses 的 `providerItems`）。旧客户端都升级之后再把这一层换掉。
+  - `TOOL_NAME_ALIASES` 把 `sketch` 归到新名：模型照着旧历史叫、HARNESS 收起名单、profile / toolsList / 代码里的白名单、审批规则、能力查询都认。
+  - 渲染层两种工具名都画（`isHtmlCardTool`）；卡内运行时两个全局名指向同一个冻结对象。
+  - 笔记里两种围栏都认，新插入的写新围栏。已知缺口：同一个库在 10-20 之前的旧版上打开，新围栏显示成普通代码块（内容不丢）。
+  - `tool_stream` 的参数增量不换接口名（可能被切在两段之间）：旧客户端的草稿卡里脚本可能报错，收口那次是换过的。
   - 文件名、CSS 类、内部变量（`SketchCard`、`.sketch-*`、`sketchTurnSignalFor`、`sketch-ask` 消息类型）没改。
   已发的客户端（≤ 2.13.4）遇到同步来的 v2 历史只显示「这部分界面未能生成」那行；从本版起，渲染层对比自己新的版本
   显示标题、第一段文字和「这张卡要新版 Forsion 才能显示」。

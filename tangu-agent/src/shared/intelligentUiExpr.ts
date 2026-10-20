@@ -488,7 +488,7 @@ export function uiDocumentIssues(doc: UIDocument, locale: 'zh' | 'en' = 'en'): s
       if (typeof b.rows === 'string') { const rows = b.rows; probe(`${b.id}.rows`, rows, v => uiTableRows(v, b.columns.length)) }
       else for (const src of b.rows.flat().flatMap(interpolationSources)) probe(`${b.id} {{${src}}}`, src, uiText)
     }
-    if (b.kind === 'checklist') for (const item of b.items) shown(`${b.id}.${item.id}`, item.when)
+    if (b.kind === 'checklist') for (const item of b.items) if (shown(`${b.id}.${item.id}`, item.when)) for (const src of interpolationSources(item.label)) probe(`${b.id}.${item.id} {{${src}}}`, src, uiText)
     if (b.kind === 'actions') for (const a of b.items) if (a.kind === 'set' && a.disabled) probe(`${b.id}.${a.id}.disabled`, a.disabled)
   }
   return [...new Set(out)].slice(0, 6)

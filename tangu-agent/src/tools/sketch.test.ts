@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createTanguProfile, createAiStudioProfile } from '../profiles/index.js';
 import { getToolDefinitions, getToolCapabilities, executeTool } from './registry.js';
 import type { ToolContext } from './toolTypes.js';
-import { SKETCH_LESS_NOTE, SKETCH_SECTION, htmlCardNameFor, sketchEnabledFor, sketchTurnSignalFor, visualsPrefOf, withHtmlCardName } from './builtin/sketch.js';
+import { SKETCH_LESS_NOTE, SKETCH_SECTION, htmlCardToWire, sketchEnabledFor, sketchTurnSignalFor, visualsPrefOf, withHtmlCardName } from './builtin/sketch.js';
 
 const toolNames = (ctx: ToolContext): string[] => getToolDefinitions(ctx).map((t) => t.function.name);
 
@@ -279,17 +279,23 @@ describe('HTML card rename compatibility', () => {
     expect(r).toMatchObject({ name: 'intelligent_ui_html', isError: false });
     expect(getToolCapabilities('sketch', ctx)).toEqual(getToolCapabilities('intelligent_ui_html', ctx));
   });
-  it('names the card the way the client renders it', () => {
-    expect(htmlCardNameFor(undefined)).toBe('sketch');
-    expect(htmlCardNameFor(['intelligent-ui.v1'])).toBe('sketch');
-    expect(htmlCardNameFor(['intelligent-ui.v1', 'intelligent-ui.v2'])).toBe('intelligent_ui_html');
+  it('keeps the wire name and card API every released client renders', () => {
+    const call = { function: { name: 'intelligent_ui_html', arguments: JSON.stringify({ html: '<button onclick="window.forsionIntelligentUi.ask(\'x\')">x</button>' }) } };
+    htmlCardToWire(call);
+    expect(call.function.name).toBe('sketch');
+    expect(call.function.arguments).toContain('window.forsionSketch.ask');
+    const other = { function: { name: 'read_file', arguments: 'forsionIntelligentUi' } };
+    htmlCardToWire(other);
+    expect(other.function).toEqual({ name: 'read_file', arguments: 'forsionIntelligentUi' });
   });
   it('sends the new name to the model, untouched when there is nothing old', () => {
     const fresh = [{ role: 'user', content: 'x' }, { role: 'assistant', tool_calls: [{ id: 'a', function: { name: 'read_file', arguments: '{}' } }] }];
     expect(withHtmlCardName(fresh as any)).toBe(fresh);
-    const old = [...fresh, { role: 'assistant', tool_calls: [{ id: 'b', function: { name: 'sketch', arguments: '{"html":"<b/>"}' } }] }];
+    const old = [...fresh, { role: 'assistant', tool_calls: [{ id: 'b', function: { name: 'sketch', arguments: '{"html":"<i onclick=\\"forsionSketch.copy(1)\\"/>"}' } }],
+      providerItems: [{ type: 'reasoning' }, { type: 'function_call', name: 'sketch', arguments: '{"html":"forsionSketch"}' }] }];
     const out = withHtmlCardName(old as any) as any[];
-    expect(out[2].tool_calls[0].function).toEqual({ name: 'intelligent_ui_html', arguments: '{"html":"<b/>"}' });
+    expect(out[2].tool_calls[0].function).toEqual({ name: 'intelligent_ui_html', arguments: '{"html":"<i onclick=\\"forsionIntelligentUi.copy(1)\\"/>"}' });
+    expect(out[2].providerItems).toEqual([{ type: 'reasoning' }, { type: 'function_call', name: 'intelligent_ui_html', arguments: '{"html":"forsionIntelligentUi"}' }]);
     expect(out[1]).toBe(old[1]);
     expect((old[2] as any).tool_calls[0].function.name).toBe('sketch'); // 不改原数组(workingMessages 原样)
   });
