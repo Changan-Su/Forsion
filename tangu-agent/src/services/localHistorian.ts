@@ -41,6 +41,7 @@ import { DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
 import { buildSharedPrefix } from './selfBrainstorm.js';
 import { effectiveContextWindowInfo, estimateMessageTokens } from './contextBudget.js';
 import { redactSecrets } from '../core/redact.js';
+import { offScript } from '../core/scriptCheck.js';
 import { appendHarnessCandidates, adoptHarnessNomination, autoAdoptable, noteAutoAdoptable, candidateNeedsUser } from '../agents/harnessStore.js';
 import { scheduleAgentFilesSync } from './agentFileSync.js';
 import { appendCandidates as appendRawCandidates, readCandidates as readRaw } from './memoryCandidates.js';
@@ -87,19 +88,26 @@ export function resetHistorianConsolidationState(): void {
   lastSignalReview.clear();
 }
 
+/** 标题的语言与长度口径(首帧标题与 done 判官共用)。 */
+const TITLE_LANGUAGE_RULE =
+  'write it in the language the conversation itself is written in — match the user\'s own messages, not the language of these instructions or the speaker labels, and never translate; ' +
+  'at most 16 characters for Chinese, Japanese or Korean, otherwise at most 5 words';
+
 /** judge JSON 的字段规格+示例(独立模式 system prompt 与 fork 判官指令共用同一契约)。 */
 function judgeFieldSpecs(wantTitle: boolean, wantLog: boolean, wantMemory: boolean, wantSummary: boolean, wantHarness: boolean, wantEmoji = false, wantProject = false): { fields: string[]; example: string } {
   const fields: string[] = [];
-  if (wantTitle) fields.push('"title": a phrase of ≤16 characters in the user\'s language summarizing this conversation\'s topic, used as the session title (always provide it)');
+  // 10-20:原来写「in the user's language」+ 中文说话人标签 → 英文对话被起成中文标题、中文摘要(判官输入全英文时模型仍会按自己的先验当用户是中文用户)。
+  // 所以判官里凡是写给人看的字段一律「对话本身的语言」,不留「用户的语言」;标题长度按文字分档。
+  if (wantTitle) fields.push(`"title": a short phrase summarizing this conversation's topic, used as the session title (always provide it); ${TITLE_LANGUAGE_RULE}`);
   if (wantEmoji) fields.push(HISTORIAN_EMOJI_FIELD);
   if (wantSummary) {
     fields.push(
-      '"summary": an updated summary of this session, 1-3 sentences in the user\'s language, written for a human skimming their session list: ' +
+      '"summary": an updated summary of this session, 1-3 sentences in the language the conversation itself is written in (match the user\'s own messages; never translate), written for a human skimming their session list: ' +
       'what it is about, key decisions/outcomes, current state. If a [Previous summary] is provided, revise it to cover the new content ' +
       '(keep still-true parts, drop obsolete ones); give "" if it still fits as-is.',
     );
   }
-  if (wantLog) fields.push('"log": if this conversation has an event/progress/output "worth noting for the day", write one short sentence in the user\'s language; otherwise give an empty string ""');
+  if (wantLog) fields.push('"log": if this conversation has an event/progress/output "worth noting for the day", write one short sentence in the language the conversation itself is written in; otherwise give an empty string ""');
   if (wantMemory) {
     fields.push(
       '"memory_candidates": an array of NEW long-term memory candidates observed in this conversation (usually empty). ' +
@@ -115,7 +123,7 @@ function judgeFieldSpecs(wantTitle: boolean, wantLog: boolean, wantMemory: boole
       // 10-13 分层:「只对这段对话有效的指示」单独点名 —— 原来只有 one-off requests 一句时,判官 08–09 月 4 次把「后续基于这份字幕回答」提成候选
       // (用户说的是「后续」,读起来不像一次性的请求)。现在时那句是记忆那一层的定义:候选会在以后任何一天被读到。
       'Never include: what happened or where a task stands (that is the log), instructions that hold for this conversation only (answer from this transcript, use this file), one-off requests, or restated common knowledge. ' +
-      'One short self-contained present-tense sentence per entry, in the user\'s language; replace any token/key/password with [REDACTED]. ' +
+      'One short self-contained present-tense sentence per entry, in the language the conversation itself is written in; replace any token/key/password with [REDACTED]. ' +
       'At most 5 entries — pick the highest-value ones. When in doubt, leave it out — an empty array is the normal outcome.',
     );
     if (wantProject) {
@@ -250,7 +258,7 @@ async function enoughNewSinceLastAction(sessionId: string): Promise<boolean> {
   }
 }
 
-async function recentTranscript(sessionId: string, limit = 30, excludeId = ''): Promise<{ text: string; anchorMessageId?: string }> {
+async function recentTranscript(sessionId: string, limit = 30, excludeId = ''): Promise<{ text: string; userText: string; anchorMessageId?: string }> {
   const rows = await query<any[]>(
     `SELECT id, role, content FROM chat_messages WHERE session_id = ? AND id <> ? ORDER BY timestamp DESC LIMIT ?`,
     [sessionId, excludeId, limit],
@@ -258,15 +266,45 @@ async function recentTranscript(sessionId: string, limit = 30, excludeId = ''): 
   const anchorMessageId = rows[0]?.id ? String(rows[0].id) : undefined;
   rows.reverse();
   const lines: string[] = [];
+  const said: string[] = []; // 用户自己的话:核对产出语言的参照(scriptCheck)
   for (const m of rows) {
     const role = m.role === 'model' ? 'assistant' : m.role;
     if (role !== 'user' && role !== 'assistant') continue;
     const content = String(m.content || '').trim();
-    if (content) lines.push(`${role === 'user' ? '用户' : 'AI'}：${content}`);
+    if (content) lines.push(`${role === 'user' ? 'User' : 'Assistant'}: ${content}`); // 标签别用中文:模型会拿它当「用户的语言」
+    if (content && role === 'user') said.push(content);
   }
   let s = lines.join('\n');
   if (s.length > MAX_TRANSCRIPT_CHARS) s = s.slice(-MAX_TRANSCRIPT_CHARS);
-  return { text: s, anchorMessageId };
+  return { text: s, userText: said.join('\n').slice(-MAX_TRANSCRIPT_CHARS), anchorMessageId };
+}
+
+/**
+ * 给人看的产出(标题 / 摘要)写成了用户没用过的文字 → 照用户原话的语言改写一次;改完还不对返回 '',调用方这次不写。绝不抛。
+ * 为什么要在代码里核:见 core/scriptCheck.ts(模型的先验压过提示词,10-20 台架实测)。
+ */
+async function inConversationLanguage(userId: string, modelId: string, text: string, userText: string): Promise<string> {
+  if (!text || !offScript(text, userText)) return text;
+  try {
+    const outer = historianSignal.getStore();
+    const signal = outer ? AbortSignal.any([outer, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000);
+    const { model, apiKey, baseUrl, apiModelId } = await deps().brain.llm.resolveModelAndKey(modelId);
+    const payload = await deps().brain.llm.buildProviderPayload({
+      model, apiModelId,
+      messages: [
+        { role: 'system', content: 'Rewrite the text so it is in the same language as the user\'s own words. Keep its meaning, length and form. Output the rewritten text only.' },
+        { role: 'user', content: `[User's own words]\n${userText.slice(-400)}\n\n[Text]\n${text}` },
+      ] as ChatMessage[],
+      projectSource: '', usageSource: 'tangu', temperature: 0.2, maxTokens: 600, stream: true, signal,
+      thinkingLevel: 'low', // 改写的小活,同首帧标题
+    } as any);
+    const res = await deps().brain.llm.streamProviderCompletion({ apiKey, baseUrl, payload, provider: (model as any)?.provider, signal });
+    await recordJudgeUsage(userId, modelId, model, res);
+    const out = String(res?.content || '').trim();
+    if (out && !offScript(out, userText)) { log(`产出不是对话的语言,已改写:「${text.slice(0, 40)}」→「${out.slice(0, 40)}」`); return out; }
+    log(`产出不是对话的语言,改写后仍不对,这次不写:「${text.slice(0, 40)}」`);
+  } catch (e: any) { log(`改写成对话的语言失败,这次不写: ${e?.message || e}`); }
+  return '';
 }
 
 /** Historian 侧模型调用统一记账(usage 归 tangu-historian,默认不扣配额)。绝不抛。 */
@@ -389,7 +427,7 @@ function isLocal(): boolean {
 // ponytail: 标题请求与主 run 首请求并发打同一 provider;单槽订阅端若拖慢首帧,改成等首 token 后再发。
 const earlyTitles = new Map<string, Promise<boolean>>();
 const TITLE_SYSTEM =
-  'Write a title for the chat session below: a phrase of at most 16 characters in the user\'s language capturing its topic. ' +
+  `Write a title for the chat session below: a short phrase capturing its topic; ${TITLE_LANGUAGE_RULE}. ` +
   'The latest user message has no reply yet — title from what the user is asking. ' +
   'If [Current title] already fits, repeat it unchanged. Output the title only: no quotes, no trailing punctuation, no explanation.';
 const cleanTitle = (s: unknown): string => String(s || '').trim().replace(/^["'《「]+|["'》」]+$/g, '').slice(0, 60);
@@ -412,8 +450,8 @@ export function onUserRunStart(sessionId: string, userId: string, message: strin
     const p = (async () => {
       const modelId = await resolveBackgroundModelId(cfg.modelId).catch(() => '');
       if (!modelId) return false;
-      const prior = (await recentTranscript(sessionId, 30, userMessageId)).text;
-      const transcript = `${prior}\n用户：${message.trim()}`.trim().slice(-MAX_TRANSCRIPT_CHARS);
+      const priorT = await recentTranscript(sessionId, 30, userMessageId);
+      const transcript = `${priorT.text}\nUser: ${message.trim()}`.trim().slice(-MAX_TRANSCRIPT_CHARS);
       const current = String(s.title || '');
       const signal = AbortSignal.timeout(30_000);
       const { model, apiKey, baseUrl, apiModelId } = await deps().brain.llm.resolveModelAndKey(modelId);
@@ -428,9 +466,13 @@ export function onUserRunStart(sessionId: string, userId: string, message: strin
       } as any);
       const res = await deps().brain.llm.streamProviderCompletion({ apiKey, baseUrl, payload, provider: (model as any)?.provider, signal });
       await recordJudgeUsage(userId, modelId, model, res);
-      const title = cleanTitle(res?.content);
-      if (title.length < 2 || title.length > 40 || title.toUpperCase() === 'NOTHING') return false;
-      if (title === current) return true;
+      let title = cleanTitle(res?.content);
+      // 有空格的文字按词数卡(提示词给 5 词,英文 5 词常过 40 字),没空格的(中日)照旧按 40 字;超了 = 模型在说话,交 done 判官
+      const tooLong = /\s/.test(title) ? title.split(/\s+/).length > 8 : title.length > 40;
+      if (title.length < 2 || tooLong || title.toUpperCase() === 'NOTHING') return false;
+      if (title === current) return true; // 原样保留(含用户手改的标题)不核语言
+      title = cleanTitle(await inConversationLanguage(userId, modelId, title, `${priorT.userText}\n${message.trim()}`));
+      if (!title) return false; // 交 done 判官兜底(它也过这道核对)
       // CAS:用户这期间手改过标题就不覆盖,也不报「已更新」(query 无 affectedRows,靠 RETURNING 判命中)。
       const hit = await query<any[]>(`UPDATE chat_sessions SET title = ? WHERE id = ? AND COALESCE(title, '') = ? RETURNING id`, [title, sessionId, current]);
       if (!hit.length) return true;
@@ -647,11 +689,13 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
       // 一次结构化判断:title / summary / log / memory_candidates 各自独立(到期才要、不需要则空)。
       // 采集刻意不看现有记忆(与 Codex Phase 1 同构:采集盲写、去重归整固),省下每轮 ~20K 字输入。
       const prevSummary = String((sk as any).summary || '').trim().replace(/\s+/g, ' ').slice(0, 600);
+      // 给模型一段用户原话当语言参照:抽象的「对话的语言」压不住它的先验(写错了还有 inConversationLanguage 兜)
+      const langRef = transcriptSnapshot.userText ? `\n\nLanguage reference — the user's own words: «${transcriptSnapshot.userText.slice(-200)}». Write the title, summary and log in exactly that language.` : '';
       // fork:先试尾部分叉判官(全上下文+缓存对齐,用会话模型);失败/超窗回落下面的 independent 路。
       let raw = forkMode
         ? await forkJudge(
             sessionId, userId, String(sk.app_id || deps().profile.appId), forkSeed!,
-            buildForkJudgeMessage(cfg.prompt, titleDue, judgeLog, judgeMemory, summaryDue, judgeHarness, prevSummary, emojiDue, !!projectRef, projectKnown, trigger),
+            buildForkJudgeMessage(cfg.prompt, titleDue, judgeLog, judgeMemory, summaryDue, judgeHarness, prevSummary, emojiDue, !!projectRef, projectKnown, trigger) + langRef,
           )
         : '';
       // fork 产出非空但解析不出 JSON(判官跑偏成长文)= 判官失败,同样回落 independent——
@@ -662,7 +706,7 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
       }
       if (!raw) {
         const sys = buildJudgeSystem(cfg.prompt, titleDue, judgeLog, judgeMemory, summaryDue, judgeHarness, emojiDue, !!projectRef, trigger);
-        const result = await completeHistorianTask({ sessionId, userId, modelId: cfg.modelId, task: 'judge', instructions: `${sys}${prevSummary ? `\n\n[Previous summary]\n${prevSummary}` : ''}${projectKnown ? `\n\n[Project memory]\n${projectKnown}` : ''}`, transcript, maxTokens: 1600, thinkingLevel: JUDGE_THINKING, signal: historianSignal.getStore() });
+        const result = await completeHistorianTask({ sessionId, userId, modelId: cfg.modelId, task: 'judge', instructions: `${sys}${prevSummary ? `\n\n[Previous summary]\n${prevSummary}` : ''}${projectKnown ? `\n\n[Project memory]\n${projectKnown}` : ''}${langRef}`, transcript, maxTokens: 1600, thinkingLevel: JUDGE_THINKING, signal: historianSignal.getStore() });
         await recordJudgeUsage(userId, cfg.modelId, result.model, result);
         raw = result.content;
       }
@@ -697,15 +741,18 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
         const okShort = (s: string) => !!s && s.toUpperCase() !== 'NOTHING' && s.length >= 2 && s.length <= 400;
         log(`判断: title="${title}" log="${logText.slice(0, 30)}" 候选=${candidates.length} 条`);
 
-        if (titleDue && okShort(title)) {
+        const fixedTitle = titleDue && okShort(title) && title !== String(sk.title || '')
+          ? cleanTitle(await inConversationLanguage(userId, cfg.modelId, title, transcriptSnapshot.userText)) : title;
+        if (titleDue && okShort(fixedTitle)) {
           historianSignal.getStore()?.throwIfAborted();
-          await query(`UPDATE chat_sessions SET title = ? WHERE id = ?`, [title, sessionId]).catch((e: any) => log(`更新标题失败: ${e?.message || e}`));
-          await logActivity(userId, 'title_updated', title, sessionId);
-          log(`已更新标题: ${title}`);
+          await query(`UPDATE chat_sessions SET title = ? WHERE id = ?`, [fixedTitle, sessionId]).catch((e: any) => log(`更新标题失败: ${e?.message || e}`));
+          await logActivity(userId, 'title_updated', fixedTitle, sessionId);
+          log(`已更新标题: ${fixedTitle}`);
         }
         // 会话摘要(人读,chat_sessions.summary):空串=模型裁定旧摘要仍适用,不动。
         // 活动日志只在 UPDATE 真成功后写,否则工作视图会报告不存在的更新(Codex 评审 08-03 Minor)。
-        const summaryText = String((j as any).summary || '').trim().replace(/\s+/g, ' ').slice(0, 500);
+        let summaryText = String((j as any).summary || '').trim().replace(/\s+/g, ' ').slice(0, 500);
+        if (summaryDue && summaryText.length >= 8) summaryText = (await inConversationLanguage(userId, cfg.modelId, summaryText, transcriptSnapshot.userText)).replace(/\s+/g, ' ').slice(0, 500);
         if (summaryDue && summaryText.length >= 8 && summaryText.toUpperCase() !== 'NOTHING') {
           historianSignal.getStore()?.throwIfAborted();
           const ok = await query(`UPDATE chat_sessions SET summary = ? WHERE id = ?`, [summaryText, sessionId])

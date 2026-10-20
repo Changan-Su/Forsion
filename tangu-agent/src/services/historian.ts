@@ -15,6 +15,7 @@ import type { ChatMessage } from '../core/types.js';
 import { historianConfig } from './historianConfig.js';
 import { runWithUserAgentScope } from '../seams/runContext.js';
 import { loadUserHistorianConfig } from './historianConfig.js';
+import { offScript } from '../core/scriptCheck.js';
 import { setRunDoneListener } from './stateStore/sqlStateStore.js';
 import { isRoundDue } from './localHistorian.js';
 import { cloudGetAgent } from '../agents/cloudAgentStore.js';
@@ -52,7 +53,7 @@ const MAX_CONCURRENT = 8;        // 全网关同时在跑的按轮维护上限;�
 const HISTORIAN_PROMPT =
   'You are a "historian". Below is a recent conversation between a user and an AI. ' +
   'If it contains facts, conclusions, or outputs worth recording long-term (e.g. a task was completed, a clear conclusion was reached, a file was generated, or the user expressed a clear long-term preference), ' +
-  "write a single concise log entry in the user's language (≤60 characters; no pleasantries, do not restate the whole text, no quotes). " +
+  "write a single concise log entry in the language the conversation itself is written in (≤60 characters; no pleasantries, do not restate the whole text, no quotes). " +
   'If there is nothing worth recording, reply with a single word: NOTHING. ' +
   'Do not output anything other than the log entry or NOTHING.';
 
@@ -135,7 +136,7 @@ async function buildTranscript(sessionId: string): Promise<string> {
     if (role !== 'user' && role !== 'assistant') continue;
     const content = String(m.content || '').trim();
     if (!content) continue;
-    lines.push(`${role === 'user' ? '用户' : 'AI'}：${content}`);
+    lines.push(`${role === 'user' ? 'User' : 'Assistant'}: ${content}`); // 标签别用中文:模型会拿它当「用户的语言」
   }
   let transcript = lines.join('\n').trim();
   if (transcript.length > MAX_TRANSCRIPT_CHARS) transcript = transcript.slice(-MAX_TRANSCRIPT_CHARS);
@@ -239,16 +240,17 @@ export async function onCloudRunDone(runId: string): Promise<void> {
 const TANGU_HISTORIAN_PROMPT =
   'You are a "historian" maintaining a chat session between a user and an AI assistant. ' +
   'Based on the recent conversation below, output STRICT JSON (no markdown fence): {"title": string, "log": string, "memory": string[]}\n' +
-  '- "title": a concise session title in the user\'s language (at most 20 characters, no quotes or decoration). ' +
+  '- "title": a concise session title (no quotes or decoration), in the language the conversation itself is written in — match the user\'s own messages, never translate; ' +
+  'at most 20 characters for Chinese, Japanese or Korean, otherwise at most 6 words. ' +
   'Output an empty string if the current title already fits the conversation.\n' +
   '- "log": if the conversation contains facts, conclusions, completed tasks, or clear long-term preferences worth recording, ' +
-  "write ONE concise log entry in the user's language (at most 60 characters, no pleasantries); otherwise an empty string.\n" +
+  "write ONE concise log entry in the language the conversation itself is written in (at most 60 characters, no pleasantries); otherwise an empty string.\n" +
   '- "memory": NEW long-term memory entries about the user (usually an empty array). ' +
   'Include an entry ONLY if a future conversation would plausibly go better because of it: stable facts or preferences the user stated or enforced, ' +
   'high-leverage procedural knowledge proven to work, landmines to avoid. ' +
   'Never include: one-off requests, temporary or task-status facts, summaries of what happened (that is the log), restated common knowledge, ' +
   'or anything already covered by [Existing memory]. ' +
-  "One short self-contained sentence per entry, in the user's language; replace any token/key/password with [REDACTED]. " +
+  "One short self-contained sentence per entry, in the language the conversation itself is written in; replace any token/key/password with [REDACTED]. " +
   `At most ${MEMORY_MAX_PER_PASS} entries. When in doubt, leave it out — an empty array is the normal outcome.\n` +
   'Output nothing other than the JSON object.';
 
@@ -353,7 +355,9 @@ async function judgeAndWrite(
     }
     // 标题 / LOG 也可能把对话里的令牌复述出来 → 同样脱敏(记忆候选另有整条丢的凭据闸)
     const title = redactSecrets(j.title.replace(/^["'《「]+|["'》」]+$/g, '')).slice(0, 60);
-    if (title && title.length >= 2) {
+    // 写成了用户没用过的文字(英文对话出中文标题,见 core/scriptCheck.ts)→ 这次不改名;云端这路没有改写重试,等下一轮
+    const userSaid = transcript.split('\n').filter((l) => l.startsWith('User: ')).join('\n');
+    if (title && title.length >= 2 && !offScript(title, userSaid)) {
       // CAS:扫描到写回之间用户手改过标题就不覆盖。
       await query(`UPDATE chat_sessions SET title = ? WHERE id = ? AND COALESCE(title, '') = ?`, [title, sessionId, String(row.title || '')])
         .catch((e: any) => console.warn('[historian] tangu 标题更新失败:', e?.message || e));

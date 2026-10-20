@@ -6,6 +6,7 @@
  * 模型原话进 report.md 供人读(「实际体验」只能靠这个感知,几何断言看不出来)。
  *
  *   npm run build && npm run live:harness                    # 全部场景(约 5-10 分钟,真烧订阅额度)
+ *   npm run live:harness -- --only titlelang                # 标题 / 摘要跟随对话本身的语言(10-20):3 条英文 + 1 条中文;英文的每一版标题和摘要只许拉丁字母,detail 里报引擎语言核对改写了几次(改 localHistorian 起标题 / 摘要、core/scriptCheck.ts 后跑)
  *   npm run live:harness -- --only personas                 # 三位音乐人格的同题实测(身份自动验,表达读原话)
  *   npm run live:harness -- --only human --human-ui        # HUMAN.md 双作用域、真模型写入/读取/撤销 + 真 Electron 卡片与编辑;先构建 desktop
  *   npm run live:harness -- --only humanreal --rounds 3 [--timeout 2400000]   # 协作说明写成什么样(10-10;慢的模型每轮 3–4 分钟,轮数多了带 --timeout):一段六条消息的真实任务(不点名任何库 / 工具)之后,写进去的是不是「用户这边怎么做」、普通人读不读得懂;
@@ -242,6 +243,7 @@ KEYS.push('projcompact');
 KEYS.push('forkcache');
 KEYS.push('appref');
 KEYS.push('imageedit');
+KEYS.push('titlelang');
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
 const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
 // P1-K9 · C3:--remote-cap <档> = 起引擎前经 K4 的新写入口写 remote.maxApprovalMode(缺省不写 = 引擎按 auto-edit)
@@ -263,6 +265,7 @@ OPT_IN.add('imgwindow');
 OPT_IN.add('viewimage');
 OPT_IN.add('imgtools'); // --only imgtools:历史里带图 → 改图 / 生图在 run 起点就在工具面里,不靠中途 load_tools(三个短 run)
 OPT_IN.add('imageedit'); // --only imageedit:edit_image 跨轮取图 + 改自己的产出(三个 run,同一会话;假生图后端)
+OPT_IN.add('titlelang'); // --only titlelang:标题跟随对话语言(10-20:英文对话被起成中文标题);4 个会话 5 个 run,改起标题 / 摘要的提示词、transcript、scriptCheck 后跑
 OPT_IN.add('novision'); // --only novision:主模型没有图像输入时的转写状态与送达(一个 run + 一次转写)
 OPT_IN.add('cuoff'); // --only cuoff:主模型看不到图 → Computer Use 不可用并告诉用户(一个 run)
 for (const k of CU_JEV_KEYS) OPT_IN.add(k); // --only cumusic,cusend,cuambig,cuscroll,cusearch:Jev 真实案例,自绘替身 + 真 Jev(会动真鼠标;要 --cu-plugin)
@@ -4003,6 +4006,59 @@ Then reply with only the command output.`,
     const early = ev.sessionTitle;
     const ok = !!early && early.title === stored && titled.length === 1 && act.some((x) => x.action === 'summary_updated');
     return { ok, detail: `${early ? `首帧标题「${early.title}」@${early.atMs}ms,done@${ev.wallMs}ms` : 'done 前没收到 session_title'};落库「${stored}」;活动 ${act.map((r) => r.action).join('/') || '无'}`, output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev) };
+  });
+
+  await scenario('titlelang', 'title 跟随对话本身的语言', async () => {
+    // 10-20 录 2.13.5 What's new 英文实录:3 个英文会话里 2 个被起成「旅行修图笔记本」「布局对比选择」。
+    // 判据:英文对话的标题(每次改名)与摘要只有拉丁字母,中文对话的含汉字;会话照桌面那样先建成占位标题 New Chat 再发消息。
+    await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ historian: { enabled: true, modelId: MODEL, everyRounds: 1, firstRoundTrigger: true, mode: 'independent' } }) });
+    const HAN = /\p{Script=Han}/u;
+    const NON_LATIN = /(?!\p{Script=Latin})\p{L}/u; // 英文那几条:出现任何非拉丁字母都算红(10-20 修后第 1 次摘要冒出过俄语)
+    const CASES = [
+      { lang: 'en', turns: ["I'm making a notebook for my travel photos and want them to look consistent. What's a simple editing workflow for a beginner?"] },
+      { lang: 'en', turns: ['I have two layout options for my landing page: one centered column, or a two-column grid with a sidebar. Which one should I pick for mobile readers?'] },
+      { lang: 'en', turns: ['Can you suggest three names for a small bakery that sells sourdough?', 'Make them sound a bit more playful, and keep each under three words.'] },
+      { lang: 'zh', turns: ['帮我列一个周末去杭州玩两天的行程,预算不高,喜欢走路和喝茶。'] },
+    ];
+    // 只认 Historian 自己写的记录:title_updated(首帧那一路;它失败了 done 判官兜底)与 summary_updated,别的改名不算。
+    const actOf = async (sid) => { const a = await api(`/agent/special/historian/activity?sessionId=${encodeURIComponent(sid)}&limit=100`); return { rows: (a.activity || []).slice().reverse(), running: !!a.running }; };
+    const pick = (rows, action) => rows.filter((r) => r.action === action).map((r) => String(r.detail || ''));
+    const EN_WORD = /\b(the|a|an|and|for|to|of|with|on|in|about|from)\b/i; // 拉丁字母 ≠ 英文:摘要是整句,至少得有个英文虚词
+    const logFrom = (() => { try { return readFileSync(engineLog, 'utf8').length; } catch { return 0; } })();
+    const rows = [];
+    const outs = [];
+    let tokens = 0;
+    for (const [i, c] of CASES.entries()) {
+      const sid = (await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title: 'New Chat', model_id: MODEL, agent_config: AGENT_CONFIG }) })).session.id;
+      let err = '';
+      for (const text of c.turns) {
+        const n0 = (await actOf(sid)).rows.filter((r) => r.action !== 'title_updated').length;
+        const ev = await run(sid, text, 180_000);
+        tokens += tokensOf(ev) || 0;
+        if (ev.error) { err = ev.error; break; }
+        outs.push(`【${i + 1}·${c.lang}】${text}\n→ ${ev.content.slice(0, 300)}`);
+        // 每轮都到点(everyRounds 1):等这一轮的 done 判官写完记录、不在跑了再往下(标题是首帧那一路在 run 起点写的,早落了);没新记录等满 60s
+        await until(async () => { const a = await actOf(sid); return a.rows.filter((r) => r.action !== 'title_updated').length > n0 && !a.running; }, 60_000, 2000);
+      }
+      const { rows: act } = await actOf(sid);
+      const seen = pick(act, 'title_updated');
+      const sums = pick(act, 'summary_updated'); // 摘要和标题一起显示在会话列表里,口径相同;每一版都要对
+      const stored = asList(await api('/agent/sessions?limit=100'), 'sessions').find((x) => x.id === sid)?.title || '';
+      const langOk = (t) => (c.lang === 'zh' ? HAN.test(t) : !NON_LATIN.test(t));
+      const ok = !err && seen.length > 0 && stored === seen.at(-1) && seen.every(langOk) && sums.length > 0 && sums.every(langOk) && (c.lang === 'zh' || sums.every((x) => EN_WORD.test(x)));
+      rows.push({ i: i + 1, lang: c.lang, ok, seen, summary: sums.at(-1) || '', err });
+    }
+    const en = rows.filter((r) => r.lang === 'en');
+    // 引擎侧的语言核对(core/scriptCheck.ts)触发了几次:模型先写错语言、靠改写救回来的 / 救不回来没写的。全绿也得看这个数
+    const engLines = (() => { try { return readFileSync(engineLog, 'utf8').slice(logFrom).split('\n'); } catch { return []; } })();
+    const fixed = engLines.filter((l) => l.includes('产出不是对话的语言,已改写')).length;
+    const dropped = engLines.filter((l) => l.includes('改写后仍不对') || l.includes('改写成对话的语言失败')).length;
+    return {
+      ok: rows.every((r) => r.ok),
+      detail: `英文 ${en.filter((r) => r.ok).length}/${en.length}、中文 ${rows.filter((r) => r.lang === 'zh' && r.ok).length}/${rows.filter((r) => r.lang === 'zh').length};语言核对改写 ${fixed} 次、没救回 ${dropped} 次;` +
+        rows.map((r) => `${r.i}·${r.lang}「${r.seen.join(' → ') || '没起标题'}」摘要「${r.summary.slice(0, 40) || '无'}」${r.err ? `(${r.err})` : ''}${r.ok ? '' : ' ← 红'}`).join(';'),
+      output: outs.join('\n\n'), tokens,
+    };
   });
 
   await scenario('emoji', 'Historian Emoji 默认选择、关闭与手动图标保护', async () => {
