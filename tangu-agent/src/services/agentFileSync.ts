@@ -9,6 +9,7 @@ import { getDeviceId } from '../core/deviceId.js';
 import { getAgent, listAgents, parseAgentConfig, resolveMemorySlug, type NormalAgentDef } from '../agents/agentRegistry.js';
 import { splitLogBlocks, mergeBlocks, mergeLogHeaders, mergeText3 } from './memorySync.js';
 import { mergeDbFile } from './dbRowMerge.js';
+import { migrateScheduleFile } from './agentSchedule.js';
 import { AgentFileConflictError, type AgentFilesBrain, type AgentFileMeta, type AgentFileContent } from '../seams/cloudBrain.js';
 import { agentSyncPermission, agentSyncScope, setAgentSyncPermission, captureAgentSyncPermission, agentSyncOperationSignal, agentSyncConsentSignal } from './cloudSyncAccount.js';
 import { agentSyncDir, assertSyncPath, atomicSyncWrite, conflictCopyName, readSyncBytes, validSyncPath, validSyncSlug } from './agentSyncPaths.js';
@@ -127,6 +128,7 @@ async function syncAccount(cloud: AgentFilesBrain, userId: string, scope: string
   const manifest = await cloud.getManifest(userId, { signal }); guard();
   const human = manifest.paths?.includes('human') === true;
   const humanFolder = manifest.paths?.includes('human-folder') === true;
+  const agentCalendar = manifest.paths?.includes('agent-calendar') === true;
   const bySlug = new Map<string, AgentFileMeta[]>();
   for (const item of manifest) {
     if (item.slug !== '__user__' && item.slug !== HUMAN_SLOT && !validSyncSlug(item.slug)) { fail(result, new Error('invalid cloud manifest slug')); continue; }
@@ -176,7 +178,7 @@ async function syncAccount(cloud: AgentFilesBrain, userId: string, scope: string
   for (const [slug, bucket] of buckets) {
     const check = (): void => { guard(); for (const consent of bucket.guards) consent(); agentSyncDir(slug); };
     check();
-    await syncBucket(cloud, userId, slug, scope, bucket.cats, bySlug.get(slug) ?? [], human, signal, check, result);
+    await syncBucket(cloud, userId, slug, scope, bucket.cats, bySlug.get(slug) ?? [], { human, agentCalendar }, signal, check, result);
   }
   // USER is an explicit shared-data opt-in, never an implicit private-agent pool.
   if (shared.length) {
@@ -189,7 +191,9 @@ async function syncAccount(cloud: AgentFilesBrain, userId: string, scope: string
     check(); persist();
     // 旧位置(USER.md、默认笔记库的 Calendar.db)和 human/ 双向镜像:同步前一遍把旧设备的改动并进来再推,同步后一遍把拉下来的写回旧位置。
     // 服务端还不认 __human__ 时只镜像、不上云(方案页 ⑦:server 没部署时新版只做本地搬家)。
-    const mirror = async (): Promise<void> => { try { result.conflicts += (await mirrorLegacyHuman()).conflicts; } catch (e) { fail(result, e); } };
+    // 服务端顺带回答「这个账号还有没有旧客户端在用 USER.md」:明确说没有才停 USER.md 那一对;没说(老服务端 / 查失败)照旧镜像
+    const legacy = Array.isArray(manifest.legacy) ? { families: manifest.legacy, seenAt: manifest.legacySeenAt ?? null } : null;
+    const mirror = async (): Promise<void> => { try { result.conflicts += (await mirrorLegacyHuman({ legacy })).conflicts; } catch (e) { fail(result, e); } };
     await mirror();
     if (humanFolder) {
       try { await syncHumanSlot(cloud, userId, scope, bySlug.get(HUMAN_SLOT) ?? [], signal, check, result); } catch (e) { fail(result, e); }
@@ -201,8 +205,10 @@ function verifyBytes(file: { hash?: string | null }, bytes: Buffer): void {
   if (bytes.length > MAX_FILE_BYTES) throw new Error('cloud file exceeds sync limit');
   if (file.hash != null && sha256(bytes) !== file.hash) throw new Error('cloud file hash mismatch');
 }
-async function syncBucket(cloud: AgentFilesBrain, uid: string, slug: string, scope: string, cats: Set<Category>, manifest: AgentFileMeta[], human: boolean, signal: AbortSignal, guard: Guard, result: AgentFileSyncResult): Promise<void> {
+async function syncBucket(cloud: AgentFilesBrain, uid: string, slug: string, scope: string, cats: Set<Category>, manifest: AgentFileMeta[], families: { human: boolean; agentCalendar: boolean }, signal: AbortSignal, guard: Guard, result: AgentFileSyncResult): Promise<void> {
   const dir = agentSyncDir(slug);
+  // 先把 SCHEDULE.db 改名成 CALENDAR.db(和引擎读写日程时同一处):清单里才看得到它,也不会拉下别的设备那份后把本机旧名那份晾在一边
+  if (cats.has('DEF')) { try { migrateScheduleFile(slug); } catch (e) { fail(result, e); return; } }
   const prev = readPrev(dir, scope);
   const remote = new Map<string, AgentFileMeta>();
   for (const entry of manifest) {
@@ -216,12 +222,14 @@ async function syncBucket(cloud: AgentFilesBrain, uid: string, slug: string, sco
   }
   const paths = new Set([...localFiles(dir, cats), ...remote.keys(), ...Object.keys(prev.files).filter((p) => validSyncPath(p) && cats.has(categoryOf(p)))]);
   paths.delete(TOMBSTONES);
-  if (!human) paths.delete('HUMAN.md'); // 服务端还不认它:不推不拉不记影子,等它升级后照常首次同步
+  if (!families.human) paths.delete('HUMAN.md'); // 服务端还不认它:不推不拉不记影子,等它升级后照常首次同步
+  if (!families.agentCalendar) paths.delete('CALENDAR.db'); // 同上(老服务端会 400)
   for (const p of paths) {
     guard();
     try {
       if (p.startsWith('LOG/')) await reconcileLog(cloud, uid, slug, dir, p, remote.get(p), signal, guard, result);
-      else await reconcileFile(cloud, uid, slug, dir, p, remote.get(p), prev, signal, guard, result);
+      // 日历按文本传、两台都改了按行 id 合并(和 human/CALENDAR.db 同一套),不整份出冲突副本
+      else await reconcileFile(cloud, uid, slug, dir, p, remote.get(p), prev, signal, guard, result, agentsDir(), p === 'CALENDAR.db' ? { merge: true, text: true } : {});
     } catch (e) { fail(result, e); guard(); }
   }
   guard(); withMemoryDirectoryLock(dir, () => atomicSyncWrite(agentsDir(), join(dir, `.cloudsync-${scope}.json`), JSON.stringify(prev), guard));

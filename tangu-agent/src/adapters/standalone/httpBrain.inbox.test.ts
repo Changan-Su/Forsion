@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createHttpBrain } from './httpBrain.js';
+import { getDeviceId } from '../../core/deviceId.js';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -34,10 +35,19 @@ describe('agent file manifest path negotiation', () => {
     const files = createHttpBrain({ cloudUrl: 'https://server.example', token: 'static-cloud-token' }).agentFiles!;
     const manifest = await files.getManifest('fixture-user');
     // 不声明 → 服务端不列 HUMAN.md(老客户端见到不认识的路径会判整次同步失败);声明了才列
-    expect((fetch.mock.calls[0] as any)[0]).toBe('https://server.example/api/brain/agents/manifest?paths=human,human-folder');
+    // 顺带报上设备号和引擎版本:服务端按设备记版本,回答这个账号还有没有旧客户端在用 USER.md
+    const url = new URL((fetch.mock.calls[0] as any)[0]);
+    expect(url.pathname).toBe('/api/brain/agents/manifest');
+    expect(url.searchParams.get('paths')).toBe('human,human-folder,agent-calendar');
+    expect(url.searchParams.get('device')).toBe(getDeviceId());
+    expect(url.searchParams.get('client')).toMatch(/^tangu\/[0-9]/);
     expect([...manifest]).toEqual([{ slug: 'fixture', files: [] }]);
     expect(manifest.paths).toEqual(['human']);
+    expect(manifest.legacy).toBeUndefined(); // 服务端没说 = 不知道(镜像照旧)
     fetch.mockResolvedValueOnce(json({ agents: [] })); // 老服务端:不回带 → 引擎本次不同步 HUMAN.md
     expect((await files.getManifest('fixture-user')).paths).toBeUndefined();
+    fetch.mockResolvedValueOnce(json({ agents: [], paths: ['human'], legacy: ['user-md', 7], legacySeenAt: 5 }));
+    const answered = await files.getManifest('fixture-user');
+    expect([answered.legacy, answered.legacySeenAt]).toEqual([['user-md'], 5]);
   });
 });

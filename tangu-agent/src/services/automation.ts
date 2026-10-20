@@ -1,7 +1,7 @@
 /**
  * Agent 自动化 launcher —— 两类到期任务共用一条无人值守管道:
  *   ① manage_automation 规则(动作链 runActions,或旧式 agentSlug 单 run;triggerKey=规则 id);
- *   ② agents/<slug>/SCHEDULE.db 的 auto 日程条目(triggerKey=`sched:<slug>:<rowId>`)。
+ *   ② agents/<slug>/CALENDAR.db 的 auto 日程条目(triggerKey=`sched:<slug>:<rowId>`)。
  * 每个 triggerKey 一条**常驻 kind='automation' 会话**(首次命中创建),到期 enqueue 一个 run。
  *
  * 每 key 一条常驻会话(而非每次命中新建):防重入=isRunning 一条 SQL;运行历史=该会话的
@@ -34,7 +34,7 @@ import { amadeusVaultPath } from '../tools/builtin/amadeus.js';
 import { loadCursors, setCursors, type DbCursor } from './dbCursors.js';
 import { expandTemplate } from './automationTemplate.js';
 import { applyDbAction, emptyTouch, mergeTouch, type DbTouch } from './automationDbAction.js';
-import { loadSchedule, entriesOf, dueEntries, markEntryFired, type ScheduleEntry } from './agentSchedule.js';
+import { loadSchedule, entriesOf, dueHere, markEntryFired, type ScheduleEntry } from './agentSchedule.js';
 import { executeTool } from '../tools/registry.js';
 import { declaredApproval, declaredAutomationSafe } from '../tools/toolRegistry.js';
 import { sendInboxMessage } from '../tools/builtin/inboxSend.js';
@@ -542,7 +542,7 @@ export async function launchDueSchedules(now: Date = new Date()): Promise<void> 
     try {
       const db = await loadSchedule(a.slug);
       if (!db) continue;
-      due = dueEntries(entriesOf(db), now);
+      due = dueHere(entriesOf(db), now); // 别的设备排的条目在那台跑(日历上云后两台都看得见)
     } catch { continue; }
     for (const e of due) {
       if (budget <= 0) break;

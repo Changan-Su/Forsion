@@ -15,8 +15,13 @@ import { commitHumanFromMirror } from './humanStore.js';
 
 /** human/ 里上云的几份(云端 __human__ 槽位;服务端 tanguAgentFilePaths 的 HUMAN_SLOT_FILES 同一张表,外加搬家标记 .layout)。 */
 export const HUMAN_SYNC_FILES = ['HUMAN.md', 'AGENT.md', 'SOUL.md', 'MEMORY.md', 'CALENDAR.db'] as const;
-/** 镜像基线:上次两边一致时的原文。只在本机,不上云。 */
+/** 镜像基线:上次两边一致时的原文。只在本机,不上云。另记一项 LEGACY_KEY:服务端上次说的「还有谁在用旧位置」。 */
 const MIRROR_STATE = '.legacy-mirror.json';
+/** 和镜像对的键(USER.md、Calendar.db@…)撞不上:点开头。值 = JSON `{ families, seenAt }`。 */
+const LEGACY_KEY = '.legacy';
+/** 服务端对「这个账号还有没有旧客户端在用旧位置」的回答:families 里有 'user-md' = 还有(旧版桌面、账户中心「AI 数据」页、Echo 碰过云端 USER.md);
+ *  null = 服务端没说(老服务端 / 查失败)。 */
+export interface LegacyClients { families: string[]; seenAt: number | null }
 
 /** 没有基线时两份文本怎么合:一边是空的或新装机的空模板就用另一边,否则按行取并集(一行都不丢)。同步和镜像共用。 */
 export function joinFirstContact(ours: string, theirs: string): string {
@@ -33,8 +38,11 @@ interface MirrorPair { key: string; legacy: string; legacyRoot: string; human: s
  *   (旧设备 / 账号中心删掉旧文件,不能把人的本子清空);笔记库里的 Calendar.db 被删了就让它删着,不重建。
  *  - 只有一边动了:照抄到另一边。两边都动了:.md 按行三方合并、.db 按行 id 合并;合不拢时 human/ 那份赢,旧位置那份存成 human/ 里的冲突副本。
  *    还没有基线(第一次)时取并集:.md 是 human/ 那份加上旧位置独有的行,.db 是两边的行都留下。
+ *  什么时候停(方案页同目录「镜像何时停与Agent日历上云.md」):同步时把服务端的回答(opts.legacy)记进镜像状态,启动、改画像这些
+ *  不经过同步的调用也读它。只有明确收到「没有旧客户端在用 USER.md」才跳过 USER.md 那一对 —— 不是永久停:旧客户端再出现,
+ *  下一次同步就恢复,拿停之前的基线三方合并。日历那一对每次都镜像:新版桌面自己的日历视图、网页、手机都还读库里那份。
  *  返回出了几份冲突副本。 */
-export async function mirrorLegacyHuman(): Promise<{ conflicts: number }> {
+export async function mirrorLegacyHuman(opts: { legacy?: LegacyClients | null } = {}): Promise<{ conflicts: number }> {
   ensureHumanFolder();
   const home = tanguHome(); const dir = humanDir();
   const pairs: MirrorPair[] = [{ key: 'USER.md', legacy: userMdFile(), legacyRoot: home, human: join(dir, 'MEMORY.md'), db: false }];
@@ -53,7 +61,11 @@ export async function mirrorLegacyHuman(): Promise<{ conflicts: number }> {
     const statePath = join(dir, MIRROR_STATE);
     let state: Record<string, string> = {};
     try { state = JSON.parse(readSyncBytes(home, statePath)?.toString('utf8') || '{}'); } catch { state = {}; }
+    if (opts.legacy !== undefined) { if (opts.legacy) state[LEGACY_KEY] = JSON.stringify(opts.legacy); else delete state[LEGACY_KEY]; }
+    const known = legacyClientsOf(state);
+    const userMdPaused = known !== null && !known.families.includes('user-md');
     for (const pair of pairs) {
+      if (userMdPaused && !pair.db) continue; // 停着:USER.md 是不再更新的快照,基线留着等恢复时三方合并
       try { conflicts += mirrorPair(pair, state, home, dir); }
       catch (e) { console.warn(`[human mirror] ${pair.key}: ${e instanceof Error ? e.message : String(e)}`); } // 下次同步 / 启动再来
     }
@@ -62,6 +74,13 @@ export async function mirrorLegacyHuman(): Promise<{ conflicts: number }> {
   const calendarPair = pairs.find((p) => p.db);
   if (calendarPair) await withDbLock(calendarPair.legacy, async () => run()); else run();
   return { conflicts };
+}
+
+function legacyClientsOf(state: Record<string, string>): LegacyClients | null {
+  try {
+    const v = JSON.parse(state[LEGACY_KEY] ?? 'null');
+    return v && Array.isArray(v.families) ? { families: v.families.filter((x: unknown) => typeof x === 'string'), seenAt: typeof v.seenAt === 'number' ? v.seenAt : null } : null;
+  } catch { return null; }
 }
 
 let tmpSeq = 0;

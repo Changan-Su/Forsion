@@ -2,8 +2,10 @@
  * human/ 整个上云(第 2 步,10-20)的双设备台架:两个 TANGU_HOME 共用一个内存云端(seq / hash / CAS 和服务端一致),
  * 各自「断网」改日历和 MEMORY.md,再轮流同步,看合并后有没有丢行、两边和旧位置(USER.md、笔记库 Calendar.db)是否收敛。
  * 日历照今天的界面走:改的是默认笔记库里的 Calendar.db,由镜像带进 human/CALENDAR.db。
+ * 第 3 步(10-20)加:服务端说「没有旧客户端在用 USER.md」时镜像停、旧客户端再出现就恢复;Agent 的日历(原 SCHEDULE.db)跟着 Agent 上云,
+ * 两台的行按 id 合并,到点执行只在排它的那台。
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -16,11 +18,15 @@ import { mirrorLegacyHuman } from '../src/agents/humanFolder.js';
 import { withDbLock } from '../src/services/amadeusDb.js';
 import { humanDir, USER_MD_TEMPLATE, userMdFile } from '../src/core/tanguHome.js';
 import { AgentFileConflictError, type AgentFilesBrain } from '../src/seams/cloudBrain.js';
+import { dueHere, entriesOf, loadSchedule, upsertEntry, validateEntryInput } from '../src/services/agentSchedule.js';
+
+// 同一进程里轮流扮演两台:设备号跟着当前扮演的那台走(生产里一个进程只有一个家目录)
+vi.mock('../src/core/deviceId.js', () => ({ getDeviceId: () => process.env.TANGU_TEST_DEVICE ?? 'x' }));
 
 function fakeCloud(paths?: string[]) {
   const rows = new Map<string, any>();
   const key = (s: string, p: string) => `${s}\0${p}`;
-  const brain: AgentFilesBrain & { _rows: typeof rows } = {
+  const brain: AgentFilesBrain & { _rows: typeof rows; legacy?: string[] } = {
     _rows: rows,
     async getManifest() {
       const bySlug = new Map<string, any[]>();
@@ -28,7 +34,8 @@ function fakeCloud(paths?: string[]) {
         const [slug, relPath] = k.split('\0');
         bySlug.set(slug, [...(bySlug.get(slug) ?? []), { relPath, mtimeMs: r.mtimeMs, size: 0, isBinary: !!r.isBinary, deleted: !!r.deleted, seq: r.seq, hash: r.hash }]);
       }
-      return Object.assign([...bySlug.entries()].map(([slug, files]) => ({ slug, files })), paths ? { paths } : {});
+      return Object.assign([...bySlug.entries()].map(([slug, files]) => ({ slug, files })), paths ? { paths } : {},
+        brain.legacy ? { legacy: brain.legacy, legacySeenAt: 1 } : {}); // 服务端对「还有没有旧客户端在用 USER.md」的回答
     },
     async getFile(_u, slug, relPath) {
       const r = rows.get(key(slug, relPath));
@@ -69,7 +76,7 @@ function device(name: string) {
   mkdirSync(home, { recursive: true }); mkdirSync(vault, { recursive: true });
   const d = {
     root, home, vault, calendar: join(vault, 'Calendar.db'),
-    use() { process.env.TANGU_HOME = home; process.env.FORSION_DEFAULT_CALENDAR = d.calendar; return d; },
+    use() { process.env.TANGU_HOME = home; process.env.FORSION_DEFAULT_CALENDAR = d.calendar; process.env.TANGU_TEST_DEVICE = name; return d; },
     async enroll(cloud: AgentFilesBrain) {
       d.use();
       await saveAgent({ slug: `agent-${name}`, name, systemPrompt: 'fixture', cloudSync: true });
@@ -105,6 +112,7 @@ beforeEach(() => { made = []; });
 afterEach(() => {
   if (prevHome === undefined) delete process.env.TANGU_HOME; else process.env.TANGU_HOME = prevHome;
   delete process.env.FORSION_DEFAULT_CALENDAR;
+  delete process.env.TANGU_TEST_DEVICE;
   for (const d of made) rmSync(d.root, { recursive: true, force: true });
 });
 const two = () => { const a = device('a'); const b = device('b'); made.push(a, b); return [a, b] as const; };
@@ -348,5 +356,112 @@ describe('human/ in the cloud — two devices', () => {
     a.use();
     expect(rowNames(a.human('CALENDAR.db'))).toEqual(['r1:Dentist']); // 默认日历照样搬进 human/(只复制,库里那份不动)
     expect(existsSync(a.calendar)).toBe(true);
+  });
+
+  it('stops mirroring USER.md only when the server says no old client uses it, and resumes with a three-way merge', async () => {
+    const cloud = fakeCloud(['human', 'human-folder']);
+    const [a] = two();
+    writeFileSync(join(a.home, 'USER.md'), 'Name: Lin\nLikes: tea\nCity: Hangzhou\n');
+    await a.enroll(cloud);
+    await a.sync(cloud); // 服务端没回答 = 不知道:照旧镜像
+    expect(a.human('MEMORY.md')).toBe('Name: Lin\nLikes: tea\nCity: Hangzhou\n');
+
+    cloud.legacy = []; // 30 天里没见过旧版桌面、账户中心、Echo
+    await a.editMemory((s) => `${s}Goal: ship\n`);
+    await a.sync(cloud);
+    expect(readFileSync(join(a.home, 'USER.md'), 'utf8')).toBe('Name: Lin\nLikes: tea\nCity: Hangzhou\n'); // 停着:旧位置是不再更新的快照
+    expect(cloudText(cloud, '__user__', 'USER.md')).toBe('Name: Lin\nLikes: tea\nCity: Hangzhou\n');
+    expect(cloudText(cloud, '__human__', 'MEMORY.md')).toBe('Name: Lin\nLikes: tea\nCity: Hangzhou\nGoal: ship\n');
+    a.use(); await mirrorLegacyHuman(); // 启动 / 改画像这些不经过同步的镜像也认上次的回答
+    expect(readFileSync(join(a.home, 'USER.md'), 'utf8')).toBe('Name: Lin\nLikes: tea\nCity: Hangzhou\n');
+
+    // 一台旧版设备又出现,改了云端 USER.md;服务端看到了它
+    const base = cloud._rows.get('__user__\0USER.md');
+    await cloud.putFile('u', '__user__', 'USER.md', { content: 'Name: Lin Xia\nLikes: tea\nCity: Hangzhou\n', isBinary: false, size: 0, mtimeMs: Date.now(), baseSeq: base.seq });
+    cloud.legacy = ['user-md'];
+    await a.sync(cloud); // 拉下旧设备的改动,镜像恢复:拿停之前的基线三方合并,两边的改动都在
+    const merged = 'Name: Lin Xia\nLikes: tea\nCity: Hangzhou\nGoal: ship\n';
+    expect(a.human('MEMORY.md')).toBe(merged);
+    expect(readFileSync(join(a.home, 'USER.md'), 'utf8')).toBe(merged);
+    await a.sync(cloud);
+    expect(cloudText(cloud, '__user__', 'USER.md')).toBe(merged); // 旧设备下次同步就拿到新的
+    expect(a.conflictCopies()).toEqual([]);
+
+    cloud.legacy = undefined; // 服务端不再回答(回滚到老版本 / 查失败):照旧镜像
+    await a.editMemory((s) => `${s}Tz: +8\n`);
+    await a.sync(cloud);
+    expect(readFileSync(join(a.home, 'USER.md'), 'utf8')).toBe(`${merged}Tz: +8\n`);
+  });
+
+  it('an agent\'s calendar travels with the agent: SCHEDULE.db is renamed, rows from two devices merge, auto entries run only where scheduled', async () => {
+    const cloud = fakeCloud(['human', 'human-folder', 'agent-calendar']);
+    const [a, b] = two();
+    const sched = (rows: Array<[string, string]>) => `${JSON.stringify({ version: 1, name: 'Shared Schedule', columns: [{ id: 'name', name: 'Name', type: 'text' }, { id: 'date', name: 'Date', type: 'calendarDate' }, { id: 'repeat', name: 'Repeat', type: 'text' }, { id: 'auto', name: 'Auto', type: 'checkbox' }, { id: 'prompt', name: 'Prompt', type: 'text' }], rows: rows.map(([id, name]) => ({ id, cells: { name, date: '2026-10-20T09:00', repeat: '1d', auto: true, prompt: name } })) }, null, 2)}\n`;
+    // 升级前两台都有这个 Agent,各自一份本机日程(2.13.4 不同步它)
+    for (const [d, rows] of [[a, [['s-a1', 'Brief A']]], [b, [['s-b1', 'Brief B']]]] as const) {
+      await d.enroll(cloud);
+      await saveAgent({ slug: 'shared', name: 'Shared', systemPrompt: 'fixture', cloudSync: true });
+      setAgentSyncPermission('shared', agentSyncScope(cloud, 'u')!, true, false);
+      writeFileSync(join(d.home, 'agents', 'shared', 'SCHEDULE.db'), sched(rows as any));
+    }
+    await a.sync(cloud);
+    await b.sync(cloud); // B 改名后第一次见到云端那份:按行并集,不整份二选一
+    await a.sync(cloud);
+    for (const d of [a, b]) {
+      d.use();
+      expect(existsSync(join(d.home, 'agents', 'shared', 'SCHEDULE.db'))).toBe(false);
+      expect(entriesOf((await loadSchedule('shared'))!).map((e) => `${e.id}@${e.device}`).sort()).toEqual(['s-a1@a', 's-b1@b']);
+      expect(readdirSync(join(d.home, 'agents', 'shared')).filter((f) => f.startsWith('CALENDAR (conflict'))).toEqual([]); // config 的副本是两台各自建 Agent 的夹具痕迹
+    }
+
+    // 断网各加一条,再同步:两条都在,归属各是新建它的那台
+    for (const d of [a, b]) {
+      d.use();
+      const v = validateEntryInput({ name: `Note ${d === a ? 'A' : 'B'}`, date: '2026-10-21' });
+      expect((await upsertEntry('shared', (v as any).value)).ok).toBe(true);
+    }
+    await a.sync(cloud); await b.sync(cloud); await a.sync(cloud);
+    a.use(); const onA = entriesOf((await loadSchedule('shared'))!);
+    b.use(); const onB = entriesOf((await loadSchedule('shared'))!);
+    expect(onA.map((e) => `${e.name}@${e.device}`).sort()).toEqual(['Brief A@a', 'Brief B@b', 'Note A@a', 'Note B@b']);
+    expect(onB.map((e) => e.id).sort()).toEqual(onA.map((e) => e.id).sort());
+    expect(JSON.parse(cloudText(cloud, 'shared', 'CALENDAR.db')!).rows).toHaveLength(4);
+
+    // 到点:两台都看得见两条自动条目,但各只跑自己排的那条(上云前就是这样)
+    const nine = new Date(2026, 9, 22, 9, 30);
+    a.use(); expect(dueHere(onA, nine).map((e) => e.name)).toEqual(['Brief A']);
+    b.use(); expect(dueHere(onB, nine).map((e) => e.name)).toEqual(['Brief B']);
+  });
+
+  it('against a server that does not know agent-calendar it neither pushes nor shadows the agent calendar, then catches up', async () => {
+    const cloud = fakeCloud(['human', 'human-folder']);
+    const [a] = two();
+    await a.enroll(cloud);
+    const v = validateEntryInput({ name: 'Plan', date: '2026-10-21' });
+    a.use(); expect((await upsertEntry('agent-a', (v as any).value)).ok).toBe(true);
+    await a.sync(cloud);
+    expect(cloud._rows.has('agent-a\0CALENDAR.db')).toBe(false);
+    const shadow = readdirSync(join(a.home, 'agents', 'agent-a')).find((f) => f.startsWith('.cloudsync-') && f !== '.cloudsync-accounts.json')!;
+    expect(Object.keys(JSON.parse(readFileSync(join(a.home, 'agents', 'agent-a', shadow), 'utf8')).files)).not.toContain('CALENDAR.db');
+    const upgraded = Object.assign(cloud, { getManifest: async () => Object.assign(await fakeCloud().getManifest.call(cloud), { paths: ['human', 'human-folder', 'agent-calendar'] }) });
+    await a.sync(upgraded);
+    expect(entriesOf(JSON.parse(cloudText(cloud, 'agent-a', 'CALENDAR.db')!)).map((e) => e.name)).toEqual(['Plan']);
+  });
+
+  it('a schedule write waits for the agent folder lock the sync commits under, instead of writing beside it', async () => {
+    const cloud = fakeCloud(['human', 'human-folder', 'agent-calendar']);
+    const [a] = two();
+    await a.enroll(cloud);
+    const lock = join(a.home, 'agents', 'agent-a', '.memory.lock');
+    writeFileSync(lock, JSON.stringify({ pid: 0, createdAt: Date.now() })); // 别的写入方(同步落盘)正拿着锁
+    let done = false;
+    const v = validateEntryInput({ name: 'Plan', date: '2026-10-21' });
+    a.use(); const pending = upsertEntry('agent-a', (v as any).value).then((r) => { done = true; return r; });
+    await new Promise((r) => setTimeout(r, 150));
+    expect(done).toBe(false);
+    expect(existsSync(join(a.home, 'agents', 'agent-a', 'CALENDAR.db'))).toBe(false);
+    rmSync(lock);
+    expect((await pending).ok).toBe(true);
+    expect(entriesOf((await loadSchedule('agent-a'))!).map((e) => e.name)).toEqual(['Plan']);
   });
 });

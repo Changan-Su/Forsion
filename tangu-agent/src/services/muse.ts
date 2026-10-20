@@ -20,7 +20,7 @@
  * 周期结束时**机械**追加到 Library/Journal/<date>.md(不靠模型自觉)。对用户的出口 = add_muse_todo(顺手进收件箱)
  * + 收件箱回执;用户对 TODO / 待批的处理以 [feedback] / [approval] 行进它的 LOG(下周期 read_log 即见)。
  *
- * 触发(全内置):心跳 heartbeatMinutes(缺省 120 分钟,到点必起、安静也记一笔;比巡检细时巡检跟着缩)+ 自己 SCHEDULE.db 的到期 auto 条目
+ * 触发(全内置):心跳 heartbeatMinutes(缺省 120 分钟,到点必起、安静也记一笔;比巡检细时巡检跟着缩)+ 自己 CALENDAR.db 的到期 auto 条目
  * (自触发 / Track,回灌本周期而非 automation 会话)+ 盯任务规则命中(museFired)。
  * 自重启=定时巡检拉起（每 supervisorPollMinutes 检测；没在跑且本窗口未超 maxRestartsPerWindow 即拉起）。
  * 受 activeHours（设备本地时）约束。仅本地形态（hostExec profile）；未启用/无模型/非本地 → 全 no-op。
@@ -39,7 +39,7 @@ import { DEFAULT_AGENT_SLUG, agentsDir, checkpointsDir, tanguHome } from '../cor
 import { backgroundClientTag } from '../core/version.js';
 import { displayText } from '../core/displayText.js';
 
-import { loadSchedule, entriesOf, dueEntries, markEntryFired, ensureEntry, validateEntryInput, type ScheduleEntry } from './agentSchedule.js';
+import { loadSchedule, entriesOf, dueHere, markEntryFired, ensureEntry, validateEntryInput, type ScheduleEntry } from './agentSchedule.js';
 import { L } from '../tui/i18n.js';
 import { countPendingApprovals } from './pendingApprovals.js';
 import { sendInboxMessage, stripTodoHeaders, MUSE_SENDER_ID } from '../tools/builtin/inboxSend.js';
@@ -238,10 +238,10 @@ async function sendDailyDigestIfDue(cfg: MuseConfig, userId: string): Promise<vo
   }
 }
 
-/** Muse 自己 SCHEDULE.db 的到期 auto 条目(自触发 / Track)。 */
+/** Muse 自己 CALENDAR.db 的到期 auto 条目(自触发 / Track)。 */
 export async function museDueSchedules(now = new Date()): Promise<ScheduleEntry[]> {
   const db = await loadSchedule(MUSE_AGENT_SLUG);
-  const due = db ? dueEntries(entriesOf(db), now) : [];
+  const due = db ? dueHere(entriesOf(db), now) : []; // 别的设备排的在那台跑
   // 批准 TODO 建的条目(description = `todo <id>`)只在那条 TODO 真是 injected 时放行:批准路由「先落条目、后改状态」,
   // 两步之间的孤儿条目要等重试把状态改成 injected 才生效;TODO 被忽略了也就不跑。查不到 = 一条都不放(Codex 09-11 P1)。
   const ids = due.map((e) => MUSE_TODO_ENTRY.exec(e.description)?.[1]).filter((x): x is string => !!x);
@@ -256,7 +256,7 @@ export async function museDueSchedules(now = new Date()): Promise<ScheduleEntry[
 const MUSE_TODO_ENTRY = /^todo ([A-Za-z0-9_-]{1,64})$/;
 
 // ── 每周装备巡检(10-04 用户定「让 Muse 检查最近的工具和技能调用,看能不能降本增效」)────────────────────────
-// 一条播种进 Muse 自己 SCHEDULE.db 的周期条目:到期时走既有的「自己的日程 → 本周期 kickoff」管道,没有新机制。
+// 一条播种进 Muse 自己 CALENDAR.db 的周期条目:到期时走既有的「自己的日程 → 本周期 kickoff」管道,没有新机制。
 // Muse 巡检完当场代收(10-04 用户定「有风险的才需要确认,没有风险的可以做」):收起随时可撤、定义仍可按需加载,不出卡片、不等用户点。
 // 能收什么不听模型的:manage_harness propose 那一支由代码重算名单、一周一批、对方拿回来过的不再收(见 manageHarness / loadoutUsage)。
 // 痕迹:各 agent「成长 › 进化」里标着「Muse 代为收起」的条目(可撤)+ Muse 自己日志里的一行。条目用户可在 Muse 的日程里改期或删掉 —— 删掉就不再巡检。
@@ -890,7 +890,7 @@ async function tick(): Promise<void> {
       log(`盯任务评估失败:${e?.message || e}`);
     }
 
-    // ── Agent 日程到期评估(agents/<slug>/SCHEDULE.db 的 auto 条目;同在 muse.enabled 闸之前)。
+    // ── Agent 日程到期评估(agents/<slug>/CALENDAR.db 的 auto 条目;同在 muse.enabled 闸之前)。
     try {
       await launchDueSchedules();
     } catch (e: any) {
@@ -923,7 +923,7 @@ async function tick(): Promise<void> {
     // 后台让位：用户有进行中的 run → 不与之抢模型账号/速率，本轮跳过（下次巡检再来）。
     if (await anyUserRunActive()) { lastRunning = false; log('用户有进行中的 run，本轮让位'); return; }
     // 起周期的三种理由(任一即可;都不豁免 anyMuseRunActive/token/restarts 预算闸——防失控烧穿额度):
-    //   ① 盯任务规则命中(museFired)② 自己 SCHEDULE.db 的到期条目(自触发/Track)③ 心跳到点(heartbeatHours,0=关)。
+    //   ① 盯任务规则命中(museFired)② 自己 CALENDAR.db 的到期条目(自触发/Track)③ 心跳到点(heartbeatHours,0=关)。
     // 2026-09-10 前的「无新用户消息就跳过」降为提示(quietSince 注入 kickoff):用户要的是「默认每 2 小时醒一次」,
     // 安静周期也要在 Journal 里留一笔,而不是静默消失。
     let dueMuse: ScheduleEntry[] = [];
