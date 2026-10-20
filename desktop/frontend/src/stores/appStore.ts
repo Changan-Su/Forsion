@@ -29,7 +29,7 @@ import { act } from '../activity/log'
 import { notifyApp } from './notificationStore'
 import { agentWriteKnown, noteAgentWriteEnd, noteAgentWriteLive, noteAgentWriteStart } from './agentWriteLedger'
 import { translate } from '../i18n'
-import { abortAllTanguRuns, abortTanguRun, createTanguSlice, readFocusModel, resetTanguAuthScope, type TanguState } from '@tangu/ui/tangu/store/tanguSlice'
+import { abortAllTanguRuns, abortTanguRun, createTanguSlice, readFocusModel, reloadDesktopConfig, resetTanguAuthScope, type TanguState } from '@tangu/ui/tangu/store/tanguSlice'
 // 转出垫片(第 2a 步):这些搬进了 Tangu 的 store 半身,import 方暂时照旧从这里取,之后逐个改到 Tangu 自己的出口。
 export { isHtmlCardTool, sketchFromToolEvent, recordToUi, splitDoneMark, pushTextSeg, pushToolSeg, segmentsFromHistory, settleSegments, DEFAULT_APPROVAL, DEFAULT_THINKING, stickyDefaults, applyPreset, rootlessWs, sessionReachable, composerReady, newSessionDirs, resolveNewSessionWorkspace, newChatProjectPath, newSessionPreset, withAmadeusWorkspace, amadeusLandingRoot, remoteSafeInit, newChatModelId, activeChatModelId, lockSessionMove, unlockSessionMove, AGENT_CONFIG_READ_RETRY_MS, AGENT_CONFIG_SYNC_WAIT_MS, steerAcceptPatch } from '@tangu/ui/tangu/store/tanguSlice'
 export type { SpecialKind, TeamWorkMember, DeskState, QueueItem } from '@tangu/ui/tangu/store/tanguSlice'
