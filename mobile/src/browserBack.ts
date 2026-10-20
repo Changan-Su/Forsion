@@ -2,11 +2,19 @@
  * home removes that entry; the browser's next Back can leave normally. No stored data or URL changes. */
 export interface BrowserBackPlan { run(): void; boundary?: boolean }
 
+/** `crypto.randomUUID` exists only in secure contexts: a Unit device page opened over plain HTTP on the LAN has none
+ *  (calling it threw during mount and the error boundary replaced the app). `getRandomValues` works everywhere. */
+function entryId(): string {
+  try { return crypto.randomUUID() } catch { /* insecure context */ }
+  const bytes = crypto.getRandomValues(new Uint8Array(16))
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+}
+
 export function installBrowserBack(plan: () => BrowserBackPlan, watch: (changed: () => void) => () => void): () => void {
   const key = 'forsionMobileBack'
   // A reload keeps history.state. Reclaim our current entry instead of stacking another identical page.
   const saved = history.state?.[key]
-  const id = typeof saved === 'string' ? saved : crypto.randomUUID()
+  const id = typeof saved === 'string' ? saved : entryId()
   let guarded = saved === id
   let pruning = false
   let handling = false

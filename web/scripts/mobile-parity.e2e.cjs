@@ -244,6 +244,9 @@ async function main() {
     {
       const ctx = await browser.newContext({ viewport: { width: 820, height: 1180 }, hasTouch: true, isMobile: true, locale: 'zh-CN' })
       await ctx.addInitScript(() => {
+        // Also stands in for an insecure context (a Unit device page over plain HTTP on the LAN): no crypto.randomUUID.
+        // browserBack used to call it on mount and the error boundary replaced the app.
+        try { Object.defineProperty(Crypto.prototype, 'randomUUID', { value: undefined, configurable: true }) } catch { /* ignore */ }
         localStorage.setItem('forsion_token', 'fixture-only')
         localStorage.setItem('forsion_tangu_onboarding_done', '1')
         localStorage.setItem('tangu_locale', 'zh')
@@ -284,6 +287,7 @@ async function main() {
         assert(dock.bottom <= 820 && dock.top > 600, `dock: ${JSON.stringify(dock)}`)
       }
       await check('portrait 820×1180 keeps the phone layout', async () => {
+        assert.equal(await page.locator('[data-error-boundary]').count(), 0)
         await page.locator('.bmc-dock [data-space="amadeus"]').click()
         await page.waitForSelector('.mb-shell[data-space="amadeus"][data-nav="list"]')
         assert.equal(await page.locator('.mb-shell').getAttribute('data-wide'), null)
