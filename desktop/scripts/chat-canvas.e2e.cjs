@@ -224,6 +224,9 @@ async function main() {
     await win.waitForFunction(() => !document.querySelector('.t2cv'), null, { timeout: 5_000 })
     const inView = await win.locator('#tocmsg-d1').evaluate((e) => { const b = e.getBoundingClientRect(); return b.top >= 0 && b.bottom <= window.innerHeight })
     r.check('D1 双击 = 切回对话、换到那一支、滚到那一轮', inView && (await seg.locator('[aria-selected="true"]').textContent()) !== shape.segOn, '')
+    // 画布开着换过会话(F2 点淡卡、D1 双击别的支)后对话列里只能有一份正文:卡和正文同 key 时旧会话那份留在 DOM 里,上下叠成两个对话窗口(10-20 用户报)
+    const bodyCount = await win.locator('.t2-chat-col > .t2-chat-body').count()
+    r.check('D2 回到对话只有一份正文(画布开着换会话不留旧的)', bodyCount === 1, String(bodyCount))
 
     // ── 偏好按树根记:分支里切回画布 → 换到无关会话是对话 → 回到这棵树的主线还是画布 ──
     await seg.getByRole('tab').nth(1).click()
