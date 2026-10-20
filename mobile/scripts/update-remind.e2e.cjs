@@ -102,7 +102,8 @@ async function main() {
     {
       const { ctx, page } = await open(NEWER)
       // 先数弹窗、再手动查:手动 checkForUpdates 也会广播给 onUpdaterStatus,顺序反过来的话
-      // 「启动那次没弹、是手动这次弹的」也会绿。
+      // 「启动那次没弹、是手动这次弹的」也会绿。CI 的 runner 冷启动慢,open() 那 5 秒之外再给启动检查最多 10 秒。
+      await page.locator(WHATS_NEW).first().waitFor({ state: 'attached', timeout: 10_000 }).catch(() => {})
       const opened = await page.locator(WHATS_NEW).count()
       if (opened > 0) pass('启动自动弹出 What\'s new 弹窗')
       else fail('启动自动弹出 What\'s new 弹窗', `没找到 ${WHATS_NEW}`)
