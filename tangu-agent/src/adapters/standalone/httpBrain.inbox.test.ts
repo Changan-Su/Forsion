@@ -34,7 +34,7 @@ describe('agent file manifest path negotiation', () => {
     const files = createHttpBrain({ cloudUrl: 'https://server.example', token: 'static-cloud-token' }).agentFiles!;
     const manifest = await files.getManifest('fixture-user');
     // 不声明 → 服务端不列 HUMAN.md(老客户端见到不认识的路径会判整次同步失败);声明了才列
-    expect((fetch.mock.calls[0] as any)[0]).toBe('https://server.example/api/brain/agents/manifest?paths=human');
+    expect((fetch.mock.calls[0] as any)[0]).toBe('https://server.example/api/brain/agents/manifest?paths=human,human-folder');
     expect([...manifest]).toEqual([{ slug: 'fixture', files: [] }]);
     expect(manifest.paths).toEqual(['human']);
     fetch.mockResolvedValueOnce(json({ agents: [] })); // 老服务端:不回带 → 引擎本次不同步 HUMAN.md

@@ -19,7 +19,8 @@ import {
   cloudSaveAgentAvatar, cloudReadAgentAvatar, cloudDeleteAgentAvatar, cloudReadAgentsMeta, cloudWriteAgentsMeta,
 } from '../agents/cloudAgentStore.js';
 import path from 'node:path';
-import { agentsDir, ensureHumanFolder, readUserMd, writeUserMd } from '../core/tanguHome.js';
+import { agentsDir, ensureHumanFolder, readUserMd } from '../core/tanguHome.js';
+import { mirrorLegacyHuman } from '../agents/humanFolder.js';
 import { readHuman, writeHuman } from '../agents/humanStore.js';
 import { listLoadoutTools } from '../tools/toolRegistry.js';
 import { createMemoryRepository, MemoryRepositoryError } from '../services/memoryRepository.js';
@@ -496,7 +497,7 @@ router.post('/agent/agents/:slug/harness/candidate', authMiddleware, async (req:
   }
 });
 
-// 全局用户画像:10-20 起真身是 human/MEMORY.md(设置 › Agents 里那块编辑器仍走这两条);USER.md 双写给同步和旧版设备。
+// 全局用户画像:10-20 起真身是 human/MEMORY.md(设置 › Agents 里那块编辑器仍走这两条);旧位置 USER.md 由镜像跟上,给旧版设备。
 router.get('/agent/user-profile', authMiddleware, async (_req: AuthRequest, res) => {
   if (!ensureLocal(res)) return;
   try {
@@ -513,7 +514,7 @@ router.put('/agent/user-profile', authMiddleware, async (req: AuthRequest, res) 
     ensureHumanFolder();
     const doc = await readHuman({ kind: 'human', file: 'MEMORY.md' });
     await writeHuman({ kind: 'human', file: 'MEMORY.md' }, { content, expectedVersion: doc.version, summary: 'Edited in Settings' }, 'user');
-    writeUserMd(content);
+    try { await mirrorLegacyHuman(); } catch (e) { console.warn('[human mirror]', e instanceof Error ? e.message : e); } // 旧位置 USER.md 跟上(旧版设备还读它)
     res.json({ ok: true });
   } catch (e: any) {
     res.status(400).json({ detail: e?.message || 'write user profile failed' });

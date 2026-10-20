@@ -1,6 +1,6 @@
-// human/ 文件夹第 1 步(10-20):USER.md → MEMORY.md 迁移与双写、human 范围的版本与撤销、路由、About the Human、manage_human 第三维、文件工具硬拒。
+// human/ 文件夹第 1 步(10-20):USER.md → MEMORY.md 迁移与镜像、human 范围的版本与撤销、路由、About the Human、manage_human 第三维、文件工具硬拒。
 import { beforeAll, afterAll, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, realpathSync, readFileSync, writeFileSync, rmSync, existsSync, utimesSync, renameSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, realpathSync, readFileSync, writeFileSync, rmSync, existsSync, renameSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { Server } from 'node:http';
@@ -18,7 +18,7 @@ import { query } from '../src/core/db.js';
 import { toSqliteDDL } from '../src/core/dialectDDL.js';
 import { STANDALONE_SCHEMA } from '../src/db/schemaStandalone.js';
 import { readHuman, writeHuman, renderHumanContext } from '../src/agents/humanStore.js';
-import { renderAboutHuman, syncUserMdIntoHumanMemory } from '../src/agents/humanFolder.js';
+import { mirrorLegacyHuman, renderAboutHuman } from '../src/agents/humanFolder.js';
 import { manageHumanProvider } from '../src/tools/builtin/manageHuman.js';
 import { checkWritePath } from '../src/tools/fsPolicy.js';
 import humanRouter from '../src/routes/human.js';
@@ -75,12 +75,13 @@ describe('human/ folder, step 1', () => {
     await expect(readHuman({ kind: 'human', file: 'CALENDAR.db' as any })).rejects.toMatchObject({ code: 'HUMAN_NOT_FOUND' });
   });
 
-  it('serves the folder over HTTP, writes MEMORY.md through to USER.md, and stays host-only', async () => {
+  it('serves the folder over HTTP, mirrors MEMORY.md to USER.md, and stays host-only', async () => {
+    await mirrorLegacyHuman(); // 启动时那一遍:上一条把 MEMORY.md 删了,从 USER.md 补回来并记下基线
     const got = await api('/agent/human/MEMORY.md');
     expect(got.status).toBe(200);
     const put = await api('/agent/human/MEMORY.md', 'PUT', { content: 'Runs on weekends.', summary: 'Edit', expectedVersion: got.body.version });
     expect(put.status).toBe(200);
-    expect(readFileSync(userMdFile(), 'utf8')).toBe('Runs on weekends.'); // 第 2 步之前同步只认 USER.md
+    expect(readFileSync(userMdFile(), 'utf8')).toBe('Runs on weekends.'); // 旧版设备还读 USER.md
     const undo = await api('/agent/human/MEMORY.md/undo', 'POST', { changeId: put.body.change.id, expectedVersion: put.body.document.version });
     expect(undo.status).toBe(200);
     expect(readFileSync(userMdFile(), 'utf8')).toBe(undo.body.document.content);
@@ -89,23 +90,22 @@ describe('human/ folder, step 1', () => {
     expect((await api('/agent/human/AGENT.md', 'GET', undefined, { 'x-forsion-remote': 'lan' })).status).toBe(403);
   });
 
-  it('folds a newer USER.md pulled from another device into MEMORY.md with an undoable record, but not an older one', async () => {
+  it('mirrors USER.md and MEMORY.md both ways, merges edits on both sides, and never lets a deleted USER.md empty the notebook', async () => {
     const doc = await readHuman({ kind: 'human', file: 'MEMORY.md' });
-    await writeHuman({ kind: 'human', file: 'MEMORY.md' }, { content: 'Local text.', summary: 'Edit', expectedVersion: doc.version }, 'user');
-    writeFileSync(userMdFile(), 'Older text from the cloud.');
-    utimesSync(userMdFile(), new Date(0), new Date(0));
-    expect(await syncUserMdIntoHumanMemory()).toBe(false);
-    expect(readFileSync(memory(), 'utf8')).toBe('Local text.');
-    writeFileSync(userMdFile(), 'Newer text from the phone.');
-    const future = new Date(Date.now() + 60_000); utimesSync(userMdFile(), future, future);
-    expect(await syncUserMdIntoHumanMemory()).toBe(true);
-    const after = await readHuman({ kind: 'human', file: 'MEMORY.md' });
-    expect(after.content).toBe('Newer text from the phone.');
-    expect(after.history[0]).toMatchObject({ actor: 'user', canUndo: true });
-    expect(await syncUserMdIntoHumanMemory()).toBe(false); // 同样内容不再记第二条
-    writeFileSync(userMdFile(), ''); // 旧设备在设置里清空了
-    const later = new Date(Date.now() + 120_000); utimesSync(userMdFile(), later, later);
-    expect(await syncUserMdIntoHumanMemory()).toBe(true);
+    await writeHuman({ kind: 'human', file: 'MEMORY.md' }, { content: 'Name: Lin\nLikes: tea\nGoal: ship', summary: 'Edit', expectedVersion: doc.version }, 'user');
+    await mirrorLegacyHuman();
+    expect(readFileSync(userMdFile(), 'utf8')).toBe('Name: Lin\nLikes: tea\nGoal: ship');
+    writeFileSync(userMdFile(), 'Name: Lin Xia\nLikes: tea\nGoal: ship'); // 旧版设备改了第一行(经 __user__ 同步下来)
+    writeFileSync(memory(), 'Name: Lin\nLikes: tea\nGoal: ship the phone app'); // 这台改了最后一行
+    expect((await mirrorLegacyHuman()).conflicts).toBe(0);
+    expect(readFileSync(memory(), 'utf8')).toBe('Name: Lin Xia\nLikes: tea\nGoal: ship the phone app');
+    expect(readFileSync(userMdFile(), 'utf8')).toBe(readFileSync(memory(), 'utf8'));
+    rmSync(userMdFile()); // 同步删掉了 USER.md(旧设备 / 账号中心)
+    await mirrorLegacyHuman();
+    expect(readFileSync(memory(), 'utf8')).toBe('Name: Lin Xia\nLikes: tea\nGoal: ship the phone app');
+    expect(readFileSync(userMdFile(), 'utf8')).toBe(readFileSync(memory(), 'utf8'));
+    writeFileSync(userMdFile(), ''); // 旧设备在设置里清空了:这是一次编辑,照样过来(人的本子有修改记录,删错了能找回)
+    await mirrorLegacyHuman();
     expect(readFileSync(memory(), 'utf8')).toBe('');
   });
 

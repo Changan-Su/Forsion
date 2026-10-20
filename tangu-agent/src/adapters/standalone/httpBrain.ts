@@ -513,7 +513,7 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
     // put/delete 自带 fetch:CAS 409 需要结构化 body(postJson 只留 detail)→ 抛 AgentFileConflictError。
     agentFiles: {
       getManifest: async (_userId: string, opts?: { signal?: AbortSignal }) => {
-        const r = await getJson<{ agents: any[]; paths?: string[] }>('/api/brain/agents/manifest?paths=human', opts?.signal);
+        const r = await getJson<{ agents: any[]; paths?: string[] }>('/api/brain/agents/manifest?paths=human,human-folder', opts?.signal);
         return Object.assign(r?.agents ?? [], Array.isArray(r?.paths) ? { paths: r.paths } : {});
       },
       getFile: async (_userId: string, slug: string, relPath: string, opts?: { signal?: AbortSignal }) => {

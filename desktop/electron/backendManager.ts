@@ -17,10 +17,11 @@
 import { app } from 'electron'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createServer } from 'node:net'
-import { existsSync, readFileSync, statSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync, statSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { randomBytes, randomUUID } from 'node:crypto'
-import { forsionHomeDir, tanguDataDir, defaultWorkspaceDir } from './forsionHome'
+import { forsionHomeDir, tanguDataDir, defaultWorkspaceDir, isDevMode } from './forsionHome'
 import { amadeusConfigPath } from './amadeus/settings'
 import { COMPUTER_HISTORY_DESKTOP_CONFIG_ENV, COMPUTER_HISTORY_DESKTOP_CONFIG_FILE } from '../shared/computerHistory'
 import { REMOTE_LOCK_FILE, REMOTE_LOCK_FILE_ENV } from '../shared/remoteSafety' // P1-K2
@@ -374,6 +375,13 @@ export class BackendManager {
       // agent 的 amadeus_* 工具直连磁盘读写。给它 amadeus-config.json 的路径,让它 **实时读** 桌面当前
       // 的 lastVault —— 不再瞎猜默认路径(用户的 vault 常是自定义路径,且运行时可切换 vault)。
       env.FORSION_AMADEUS_CONFIG = amadeusConfigPath()
+      // 默认日历 = 默认笔记库根上首启播种的 Calendar.db(和 amadeus/ipc.ts ensureDefaultVault 同一个路径);引擎把它和 human/CALENDAR.db 双向镜像。
+      // 引擎家目录被重定向(台架、多实例)时不给:打包版的 defaultWorkspaceDir 不认 FORSION_WORKSPACE_DIR,给了就会把台架的 human/ 合进真库。
+      // dev 台架带 FORSION_WORKSPACE_DIR 时工作区本来就在临时目录,照给。外面已经给了(含空串 = 关)就照用。
+      const real = (p: string): string => { try { return realpathSync(p) } catch { return p } }
+      const ownHome = real(forsionHomeDir()) === real(join(homedir(), isDevMode() ? '.forsion-dev' : '.forsion'))
+      if (env.FORSION_DEFAULT_CALENDAR === undefined && (ownHome || (!app.isPackaged && process.env.FORSION_WORKSPACE_DIR?.trim())))
+        env.FORSION_DEFAULT_CALENDAR = join(defaultWorkspaceDir(), 'Amadeus', 'Calendar.db')
       // 电脑历史的第二道闸:桌面壳配置(userData,随产品名 / dev 变,引擎猜不到)的绝对路径。引擎除了 state.json 还要求这份
       // 文件里 computerHistoryEnabled === true —— state.json 写不进也删不掉时,已落进这里的「关」照样让引擎按关(见 shared 契约)
       env[COMPUTER_HISTORY_DESKTOP_CONFIG_ENV] = join(app.getPath('userData'), COMPUTER_HISTORY_DESKTOP_CONFIG_FILE)

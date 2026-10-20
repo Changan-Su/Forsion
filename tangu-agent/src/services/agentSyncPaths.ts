@@ -66,3 +66,16 @@ export function atomicSyncWrite(root: string, file: string, bytes: string | Buff
     renameSync(temp, file);
   } finally { if (fd !== undefined) closeSync(fd); try { unlinkSync(temp); } catch (e) { if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e; } }
 }
+
+/** 冲突副本名:`notes (conflict 2026-07-19 1532).md`。同步出副本、human/ 镜像出副本共用。 */
+export function conflictCopyName(relPath: string, now: Date): string {
+  const slash = relPath.lastIndexOf('/');
+  const dir = slash < 0 ? '' : relPath.slice(0, slash + 1);
+  const base = slash < 0 ? relPath : relPath.slice(slash + 1);
+  const dot = base.lastIndexOf('.');
+  const stem = dot > 0 ? base.slice(0, dot) : base;
+  const ext = dot > 0 ? base.slice(dot) : '';
+  const p = (n: number): string => String(n).padStart(2, '0');
+  const stamp = `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())} ${p(now.getHours())}${p(now.getMinutes())}`;
+  return `${dir}${stem} (conflict ${stamp})${ext}`;
+}
