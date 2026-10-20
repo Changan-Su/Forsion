@@ -362,6 +362,8 @@ function checkQuotaExhausted(toast: (m: string, err?: boolean) => void, tr: (k: 
 // streaming。看门狗周期性查:该 run 已不在后端活跃集 → 重载消息收尾(有内容标 done,无则 error),解除卡死。
 const runWatchdogs = new Map<string, ReturnType<typeof setInterval>>()
 const loadedHistory = new Set<string>()
+/** 在途的历史加载:重复调用等同一份(建了分支马上发的,要等配置到了再发,不然拿空配置把继承来的 Agent 冲成缺省) */
+const historyInflight = new Map<string, Promise<void>>()
 /** 审批档缺省(全端统一「替我批准」);新会话没有记忆时的起步值。 */
 export const DEFAULT_APPROVAL = 'auto-edit' as const
 /** 思考档缺省(全端、两种模式统一「中」,09-19 用户拍板):与引擎的会话缺省(agentLoop `|| 'medium'`)、内置 Agent 预设同值。
@@ -2166,8 +2168,10 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       saveUnread(next)
       set({ unread: next })
     }
-    if (loadedHistory.has(sessionId)) return
+    if (loadedHistory.has(sessionId)) return historyInflight.get(sessionId)
     loadedHistory.add(sessionId)
+    let landed!: () => void
+    historyInflight.set(sessionId, new Promise<void>((r) => { landed = r }))
     set((s) => ({ historyLoading: { ...s.historyLoading, [sessionId]: true } }))
     try {
       const c = get().cfg
@@ -2219,6 +2223,8 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       loadedHistory.delete(sessionId)
       get().toast(t('app.historyLoadFail', { e: e?.message || e }), true)
     } finally {
+      historyInflight.delete(sessionId)
+      landed()
       if (generation !== host.authGen()) return
       set((s) => {
         const historyLoading = { ...s.historyLoading }

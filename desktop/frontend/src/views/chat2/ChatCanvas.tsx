@@ -66,7 +66,7 @@ registerMessages({
 // ── 每棵树的本机偏好(按树根记;切到分支不翻回对话) ──
 export type CanvasDir = 'v' | 'h'
 /** 没发出去的草稿提问卡:挂在 parent 那一轮下面,排在它(按 order 排好的)子卡里的第 at 个。 */
-export interface CanvasDraft { parent: string; at: number; text: string }
+export interface CanvasDraft { parent: string; at: number; text: string; /** 分支已建、这句还没发成:重试接着用它 */ sid?: string }
 export interface CanvasPref {
   on: boolean
   dir: CanvasDir
@@ -369,7 +369,15 @@ export function ChatCanvas({ rootId, activeId, dir, onDir }: {
   }
   openReadingRef.current = openReading
   // 阅读栏换了一张(或刚打开):等它画出来量到宽,再让那张卡让开它
-  useLayoutEffect(() => { if (reading) reveal(reading) }, [reading]) // eslint-disable-line react-hooks/exhaustive-deps
+  const wasReading = useRef(false)
+  useLayoutEffect(() => {
+    if (reading) {
+      reveal(reading)
+      // 焦点给阅读栏:↑↓ 翻轮、Esc 关都要焦点在画布里(双击后焦点常在 body);在输入框 / 草稿里打字时别抢
+      if (!document.activeElement?.closest('textarea, input, [contenteditable="true"]')) readRef.current?.focus({ preventScroll: true })
+    } else if (wasReading.current && (!document.activeElement || document.activeElement === document.body)) host.current?.focus({ preventScroll: true }) // 焦点跟着阅读栏没了:回舞台
+    wasReading.current = !!reading
+  }, [reading]) // eslint-disable-line react-hooks/exhaustive-deps
   const readPath = activePath
   const readIdx = reading ? readPath.indexOf(reading) : -1
   const stepRead = (d: number): void => {
@@ -499,14 +507,20 @@ export function ChatCanvas({ rootId, activeId, dir, onDir }: {
     setSending(true)
     try {
       // 草稿只在本机:到这一刻才在引擎里建分支(从那张回答的最后一条分出),再把这句发进新分支
-      const id = await useApp.getState().branchFromMessage(p.at[p.sid].last, p.sid)
+      const app = useApp.getState()
+      const id = d.sid && app.sessions.some((x) => x.id === d.sid) ? d.sid : await app.branchFromMessage(p.at[p.sid].last, p.sid)
       if (!id) return // 没建成:store 已 toast,草稿留着
-      const sids = kidsOf(d.parent).filter((k) => k !== DRAFT).map((k) => tree.cards.get(k)!.sid)
-      sids.splice(Math.min(d.at, sids.length), 0, id)
-      setPref({ order: { ...order, [d.parent]: sids }, draft: null })
-      await useApp.getState().loadSessionHistory(id) // 复制段先到,再接上这一句(别让历史回来盖掉刚发的)
-      await useApp.getState().send(text, [], undefined, undefined, undefined, id)
+      if (id !== d.sid) {
+        const sids = kidsOf(d.parent).filter((k) => k !== DRAFT).map((k) => tree.cards.get(k)!.sid)
+        sids.splice(Math.min(d.at, sids.length), 0, id)
+        setPref({ order: { ...order, [d.parent]: sids }, draft: { ...d, sid: id } })
+      }
+      // 等历史和配置都到了再发:复制段先到、继承来的 Agent / 模型不被空配置冲掉(建分支时 setActiveId 已经开始拉,这里等同一份)
+      await useApp.getState().loadSessionHistory(id)
+      // 发成了才清草稿;没发成(断网 / 引擎拒绝)字留着,分支 id 也记着,再按一次就接着发
+      if (await useApp.getState().send(text, [], undefined, undefined, undefined, id)) { setPref({ draft: null }); return }
     } finally { setSending(false) }
+    requestAnimationFrame(() => draftTa.current?.focus({ preventScroll: true })) // 没发成:发送时草稿灰掉丢了焦点,还给它
   }
 
   // ── 卡里消息的上下文与动作(按会话 / 消息缓存,EditorialMessage 的 memo 才挡得住流式重渲) ──
@@ -548,9 +562,9 @@ export function ChatCanvas({ rootId, activeId, dir, onDir }: {
     const el = e.target as HTMLElement
     if (el.closest('textarea, input, select, [contenteditable="true"]')) return
     if (e.key === 'Escape' && reading) { e.preventDefault(); setReading(null); return }
+    if (reading && (e.key === 'ArrowUp' || e.key === 'ArrowDown') && !e.altKey && !e.metaKey && !e.ctrlKey) { e.preventDefault(); stepRead(e.key === 'ArrowUp' ? -1 : 1); return }
     if (el.closest('button, a[href]')) return
-    if (e.key === ' ' && selected) { e.preventDefault(); if (reading) setReading(null); else openReading(selected); return }
-    if (reading && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); stepRead(e.key === 'ArrowUp' ? -1 : 1) }
+    if (e.key === ' ' && selected) { e.preventDefault(); if (reading) setReading(null); else openReading(selected) }
   }
 
   const tail = activePath.length ? tree.cards.get(activePath[activePath.length - 1]) : undefined
@@ -694,7 +708,7 @@ export function ChatCanvas({ rootId, activeId, dir, onDir }: {
       </div>
       {/* 阅读栏:舞台外面(手势层不吞它的滚动和点击),对话页那套排版 */}
       {readCard && (
-        <aside ref={readRef} className="t2cv-read" aria-label={t('chatcanvas.read.aria')} data-testid="cv-read" data-cv-read={readCard.key}>
+        <aside ref={readRef} tabIndex={-1} className="t2cv-read" aria-label={t('chatcanvas.read.aria')} data-testid="cv-read" data-cv-read={readCard.key}>
           <div className="t2cv-read-h">
             <div className="t2cv-read-t">
               <b title={readCard.user ? questionText(readCard.user) : undefined}>{readCard.user ? questionText(readCard.user) : t('chatcanvas.read')}</b>

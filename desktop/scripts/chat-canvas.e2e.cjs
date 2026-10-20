@@ -61,6 +61,8 @@ async function main() {
       if (p === '/agent/sessions' && method === 'GET') return { sessions: [...(b3 ? [b3] : []), ...sessions(projectDir)] } // 真引擎建了分支就会列出来
       let m = /^\/agent\/sessions\/([^/]+)\/messages$/.exec(p)
       if (m && method === 'GET') return { messages: { [R]: rootMsgs, [B1]: b1Msgs, [B2]: b2Msgs, [F1]: fMsgs }[m[1]] || [] }
+      m = /^\/agent\/sessions\/([^/]+)\/config$/.exec(p)
+      if (m && m[1] === B3 && method === 'GET') { await new Promise((res) => setTimeout(res, 900)); return { agent_config: { execMode: 'host', approvalMode: 'auto-edit', thinkingLevel: 'high' } } }
       m = /^\/agent\/sessions\/([^/]+)\/asides$/.exec(p)
       if (m && method === 'GET') return { asides: [] }
       m = /^\/agent\/sessions\/([^/]+)\/detail$/.exec(p)
@@ -262,12 +264,20 @@ async function main() {
     r.check('D1 双击 = 右边阅读栏读那一轮,画布还在,卡让到阅读栏左边,缩放胶囊也让开,没顺手选中字', rd.key === `${B2}:d1` && rd.text.includes('砍到三处') && rd.canvas && rd.cardR <= rd.paneL - 8 && rd.cardL >= 0 && rd.hudR <= rd.paneL && rd.noSel, JSON.stringify(rd))
     await hintsCheck('D1')
     await win.screenshot({ path: path.join(dir, 'canvas-read.png') })
-    await pane.getByRole('button', { name: /上一轮|Previous turn/ }).click()
+    await win.keyboard.press('ArrowUp')
     await win.waitForTimeout(300)
     const prevKey = await pane.getAttribute('data-cv-read')
+    await pane.getByRole('button', { name: /下一轮|Next turn/ }).click()
+    await win.waitForTimeout(300)
+    const nextKey = await pane.getAttribute('data-cv-read')
+    await win.keyboard.press('ArrowUp')
+    await win.waitForTimeout(300)
+    const prevKey2 = await pane.getAttribute('data-cv-read')
     await win.keyboard.press('Escape')
     await win.waitForTimeout(200)
-    r.check('D3 阅读栏 ↑ 换到这一支的上一轮,Esc 关掉', prevKey === `${R}:u1` && (await pane.count()) === 0, String(prevKey))
+    const backOnStage = await win.evaluate(() => document.activeElement?.classList.contains('t2cv-stage'))
+    r.check('D3 双击后直接 ↑ 换到上一轮、点「下一轮」后 ↑ 照样翻,Esc 关掉、焦点回舞台', prevKey === `${R}:u1` && nextKey === `${B2}:d1` && prevKey2 === `${R}:u1` && (await pane.count()) === 0 && backOnStage,
+      JSON.stringify({ prevKey, nextKey, prevKey2, backOnStage }))
     await seg.getByRole('tab').nth(0).click()
     await win.waitForFunction(() => !document.querySelector('.t2cv'), null, { timeout: 5_000 })
     // 画布开着换过会话(F2 点淡卡、D1 双击别的支)后对话列里只能有一份正文:卡和正文同 key 时旧会话那份留在 DOM 里,上下叠成两个对话窗口(10-20 用户报)
@@ -290,7 +300,7 @@ async function main() {
     // ── ⊕:提问卡左右 = 换个问法;末尾回答卡下 = 聚焦输入框;不在末尾的回答卡下 = 草稿提问卡 → Enter 建分支并发进去 ──
     await show(B1, 'c1')
     await card(B1, 'c1').locator('.t2cv-qcard').hover()
-    const sideAdds = await card(B1, 'c1').locator('.t2cv-qcard > .t2cv-add').evaluateAll((bs) => bs.map((b) => ({ side: b.dataset.add, vis: getComputedStyle(b).display !== 'none', title: b.title })))
+    const sideAdds = await card(B1, 'c1').locator('.t2cv-qcard > .t2cv-add').evaluateAll((bs) => bs.map((b) => ({ side: b.dataset.add, vis: getComputedStyle(b).opacity === '1', title: b.title })))
     r.check('Q1 悬停提问卡:左右各一颗 ⊕「换个问法」', sideAdds.length === 2 && sideAdds.every((b) => b.vis && /换个问法|Ask it differently/.test(b.title)), JSON.stringify(sideAdds))
     // 主线这时的最后一张是 A 段生成出来的那一轮(u-r1,很长:⊕ 在卡底,常在视口外 → 悬停后直接点)
     await show(R, 'u-r1')
@@ -318,6 +328,15 @@ async function main() {
     await win.screenshot({ path: path.join(dir, 'canvas-draft.png') })
     ctx.stub.script([{ type: 'token', delay: 40, payload: { delta: '直接删,不算冲突。' } }])
     await dta.fill('两台都删了同一段呢?')
+    ctx.stub.state.failRuns = true
+    await win.keyboard.press('Enter')
+    for (let i = 0; i < 100 && !ctx.stub.seen.runs.some((x) => x.sessionId === B3); i++) await win.waitForTimeout(100)
+    await win.waitForFunction(() => { const t = document.querySelector('[data-testid="cv-draft"]'); return t && !t.disabled }, null, { timeout: 10_000 })
+    await win.waitForTimeout(300)
+    const kept = await win.evaluate(() => { const t = document.querySelector('[data-testid="cv-draft"]'); return { text: t?.value, focus: document.activeElement === t } })
+    r.check('Q5 起 run 失败:草稿和字都留着(焦点回到草稿),分支只建了一次', kept.text === '两台都删了同一段呢?' && kept.focus && branchCalls.length === 1, JSON.stringify({ kept, branchCalls: branchCalls.length }))
+    ctx.stub.state.failRuns = false
+    ctx.stub.script([{ type: 'token', delay: 40, payload: { delta: '直接删,不算冲突。' } }])
     await win.keyboard.press('Enter')
     await win.waitForFunction(() => !document.querySelector('[data-testid="cv-draft"]'), null, { timeout: 10_000 })
     await win.locator(`.t2cv-turn[data-cv-node^="${B3}:"]`).waitFor({ timeout: 10_000 })
@@ -331,6 +350,8 @@ async function main() {
     r.check('Q4 Enter = 从第一轮回答建分支、这句发进新分支;草稿变成提问卡挂在第一轮下面',
       branchCalls.length === 1 && branchCalls[0].from === R && branchCalls[0].body.message_id === 'a1' && run?.sessionId === B3 && String(run?.message).includes('两台都删了同一段') && geo.below && geo.q === '两台都删了同一段呢?',
       JSON.stringify({ branchCalls, run: run && { s: run.sessionId, m: run.message }, geo }))
+    const firstB3 = ctx.stub.seen.runs.find((x) => x.sessionId === B3)
+    r.check('Q6 新分支的配置(慢一拍才到)等到了再发:头一次发出去的这句就带着分支继承来的配置', firstB3?.agentConfig?.thinkingLevel === 'high' && run?.agentConfig?.thinkingLevel === 'high', JSON.stringify(firstB3?.agentConfig))
     await hintsCheck('Q4')
     await win.screenshot({ path: path.join(dir, 'canvas-sent.png') })
 
