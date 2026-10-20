@@ -5,7 +5,7 @@
  *  · **标志性标题** 「Forsion is All You Need」,手写体(随包 Dancing Script 子集,见 assets/fonts/README)。
  *    旧版这句住在 CardZone 的 title 区(SloganCard),这里做成固定排版。
  *  · **标题区** 时钟 + 日期 + 问候(登录名来自 `window.tangu.authStatus`)。
- *  · **输入区** `newChatComposer.tsx` 的 NewChatComposer(插件经 ctx.tangu.mountComposer 挂的是同一份),里面就是 Tangu Chat View 的 `Composer2`:模型、模式、附件、引用、语音和命令
+ *  · **输入区** `newChatComposer.tsx` 的 NewChatComposer(Tangu 经 tanguSeam 交出;插件经 ctx.tangu.mountComposer 挂的是同一份),里面就是 Tangu Chat View 的 `Composer2`:模型、模式、附件、引用、语音和命令
  *    一条不少;提交后切到 Tangu Space 并强制建新会话,不再兼任浏览器搜索。
  *  · **Space 收纳架** 旧版底部 Dock 那排 app,在 Genesis 里对应的东西就是 Space;
  *    应用市场、成就和用户额外钉住的 Space 住在独立前置区,竖线后的普通区才与 Ribbon 排序同步。
@@ -39,7 +39,7 @@ import { CtxMenuButtons } from '../components/CtxMenuButtons'
 import { shelfAddFolder, shelfMove, shelfMoveIntoFolder, shelfMoveOut, shelfRemoveFolder, shelfRenameFolder, shelfReorderFolder, shelfTiles, type ShelfTile } from './homeShelf'
 import type { SpaceDefinition, RibbonItem, ViewProps } from '@lcl/engine'
 import { askString } from '@amadeus/components/askString'
-import { NewChatComposer, sendFromNewChat, startNewChatCall, type NewChatDispatch } from './newChatComposer'
+import { readTanguNewChat, type TanguNewChatDispatch } from '../amadeus/plugins/tanguSeam'
 import { registerMessages, useI18n, type Locale } from '../i18n'
 import { formatLongDate, formatTime } from '../format/time'
 import {
@@ -472,6 +472,8 @@ export function HomepageView(_props: ViewProps) {
   }
 
   const hasTangu = spaces.some((s) => s.id === 'tangu')
+  // 新对话输入区是 Tangu 交出来的(核心插件化 2e-3);没有 Tangu Space 或 Tangu 没激活 = 不摆
+  const newChat = hasTangu ? readTanguNewChat() : null
 
   const greet = clock.hour < 5 ? 'home.greet.night' : clock.hour < 11 ? 'home.greet.morning' : clock.hour < 18 ? 'home.greet.afternoon' : 'home.greet.evening'
   const greetText = name ? t(greet + '.named', { name }) : t(greet)
@@ -613,19 +615,19 @@ export function HomepageView(_props: ViewProps) {
   }
 
   /** 主页输入始终开**新**会话(切 Space、发送的顺序契约见 newChatComposer 的 sendFromNewChat);退场动效包在外面。 */
-  const dispatchChat: NewChatDispatch = (...args) => {
-    if (!hasTangu) return Promise.resolve(false)
+  const dispatchChat: TanguNewChatDispatch = (...args) => {
+    if (!newChat) return Promise.resolve(false)
     return new Promise<boolean>((resolve) => {
-      const queued = leaveThen(() => resolve(sendFromNewChat(...args)))
+      const queued = leaveThen(() => resolve(newChat.send(...args)))
       if (!queued) resolve(false) // 连点第二下被重入守卫挡掉:没发
     })
   }
 
   /** 主页开通话 = 与发第一句同一条路:切到 Tangu、保证有主聊天视图,再建新会话;通话条随之出现在那边的输入框。 */
   const startCallSession = (): Promise<string | null> => {
-    if (!hasTangu) return Promise.resolve(null)
+    if (!newChat) return Promise.resolve(null)
     return new Promise<string | null>((resolve) => {
-      const queued = leaveThen(() => resolve(startNewChatCall()))
+      const queued = leaveThen(() => resolve(newChat.startCall()))
       if (!queued) resolve(null)
     })
   }
@@ -763,7 +765,7 @@ export function HomepageView(_props: ViewProps) {
           ) : <div className="hp-meta">{greetText} · {clock.date}</div>}
         </div>
 
-        {hasTangu && <NewChatComposer onDispatch={dispatchChat} onStartCall={startCallSession} onInputModeChange={setComposerFocused} liveSpaceId={SELF_SPACE} />}
+        {newChat && <newChat.Composer onDispatch={dispatchChat} onStartCall={startCallSession} onInputModeChange={setComposerFocused} liveSpaceId={SELF_SPACE} />}
         {/* 手机:输入区平时收成这一条(完整的那块留在页面里、只是不显示,草稿不丢),点一下展开。 */}
         {phone && hasTangu && (
           <button type="button" className="hp-pill" data-act="home-pill" onClick={(event) => { event.stopPropagation(); openComposer(!!(event.target as Element).closest('.hp-pill-mic')) }}>

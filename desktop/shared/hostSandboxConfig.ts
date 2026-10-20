@@ -1,7 +1,5 @@
-export interface HostSandboxConfig {
-  mode: 'off' | 'workspace-write' | 'read-only'
-  network: 'deny' | 'allow'
-}
+import type { HostSandboxConfig } from '../../tangu-agent/src/contracts/clientTypes'
+export type { HostSandboxConfig }
 
 /** Keep invalid persisted security settings visible as errors, never silently disable isolation. */
 export function normalizeHostSandboxConfig(value: unknown): HostSandboxConfig {

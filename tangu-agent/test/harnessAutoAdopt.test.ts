@@ -79,7 +79,7 @@ describe('adoptHarnessNomination:后台提名直接写成条目', () => {
     expect(await adoptHarnessNomination('selfwriter', paraphrase, 's-own')).toBe('own');
     expect(await loadHarness('selfwriter')).toHaveLength(1);
     expect(await adoptHarnessNomination('selfwriter', paraphrase, 's-other')).toBe('adopted');
-    await applyHarnessEdit('selfwriter', { action: 'upsert', kind: 'equip', title: 'Shelve sketch', body: 'Unused.', evidence: 'review', tools: ['sketch'] }, { sessionId: 's-equip' });
+    await applyHarnessEdit('selfwriter', { action: 'upsert', kind: 'equip', title: 'Shelve sketch', body: 'Unused.', evidence: 'review', tools: ['intelligent_ui_html'] }, { sessionId: 's-equip' });
     expect(await adoptHarnessNomination('selfwriter', { title: 'Batch lookups', lesson: 'Batch independent reads in one step.', evidence: 'Three parallel reads were faster.' }, 's-equip')).toBe('adopted');
   });
 
@@ -104,16 +104,16 @@ describe('adoptHarnessNomination:后台提名直接写成条目', () => {
 
 describe('shelveForAgent / equipHistory:Muse 代收', () => {
   it('同一个 agent 只有一条代收条目:再收就并进去(一次修订 = 一次可撤),编辑史记 by:muse', async () => {
-    const first = await shelveForAgent('shelf', { tools: ['delegate', 'sketch'], skills: ['local:bar'], evidence: '30-day usage review: 25 runs, none of these was called' }, 's-muse');
+    const first = await shelveForAgent('shelf', { tools: ['delegate', 'intelligent_ui_html'], skills: ['local:bar'], evidence: '30-day usage review: 25 runs, none of these was called' }, 's-muse');
     expect(first.before).toBeNull();
-    expect(first.entry).toMatchObject({ kind: 'equip', title: MUSE_EQUIP_TITLE, tools: ['delegate', 'sketch'], skills: ['local:bar'], version: 1 });
-    const second = await shelveForAgent('shelf', { tools: ['sketch', 'web_fetch'], skills: [], evidence: '30-day usage review: 40 runs, none of these was called' });
-    expect(second.entry).toMatchObject({ id: first.entry!.id, tools: ['delegate', 'sketch', 'web_fetch'], skills: ['local:bar'], version: 2 });
+    expect(first.entry).toMatchObject({ kind: 'equip', title: MUSE_EQUIP_TITLE, tools: ['delegate', 'intelligent_ui_html'], skills: ['local:bar'], version: 1 });
+    const second = await shelveForAgent('shelf', { tools: ['intelligent_ui_html', 'web_fetch'], skills: [], evidence: '30-day usage review: 40 runs, none of these was called' });
+    expect(second.entry).toMatchObject({ id: first.entry!.id, tools: ['delegate', 'intelligent_ui_html', 'web_fetch'], skills: ['local:bar'], version: 2 });
     expect(await loadHarness('shelf')).toHaveLength(1);
     expect((await readJournal('shelf')).map((l) => l.by)).toEqual(['muse', 'muse']);
     // 撤掉第二次 → 回到第一次之后的样子
     const undone = await applyHarnessEdit('shelf', { action: 'rollback', id: first.entry!.id, expectRev: second.rev });
-    expect(undone.entry).toMatchObject({ tools: ['delegate', 'sketch'], version: 1 });
+    expect(undone.entry).toMatchObject({ tools: ['delegate', 'intelligent_ui_html'], version: 1 });
   });
 
   it('并进去会超过单条上限 → 另起一条,不报错', async () => {
@@ -141,7 +141,7 @@ describe('shelveForAgent / equipHistory:Muse 代收', () => {
     await applyHarnessEdit('shelf', { action: 'delete', id });
     h = await equipHistory('shelf', 6 * DAY);
     expect([...h.restored.skills]).toEqual(['local:bar']);
-    expect([...h.restored.tools].sort()).toEqual(['delegate', 'sketch', 'web_fetch']);
+    expect([...h.restored.tools].sort()).toEqual(['delegate', 'intelligent_ui_html', 'web_fetch']);
     expect(await equipHistory('nobody', 6 * DAY)).toEqual({ restored: { tools: new Set(), skills: new Set() }, museRecent: { tools: 0, skills: 0 } });
   });
 });

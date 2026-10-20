@@ -1,4 +1,4 @@
-import type { AgentConfig, NormalAgentDef, TeamDef } from '../types'
+import type { AgentConfig, NormalAgentDef, TeamDef } from '../../../../tangu-agent/src/contracts/clientTypes'
 
 export type MemberTuning = NonNullable<AgentConfig['teamMemberConfigs']>[string]
 

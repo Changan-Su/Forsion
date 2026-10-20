@@ -10,7 +10,7 @@ import {
   copySkillCatalogEntry, createSkillCatalogEntry, deleteSkillCatalogEntry, getSkillCatalogEntry,
   importSkillCatalogEntry, listSkillCatalog, listSkills, setSkillCatalogEntryDisabled, updateSkillCatalogEntry,
 } from '../services/backendService'
-import type { SkillCatalogEntry, SkillInfo, TanguDesktopConfig } from '../types'
+import type { SkillCatalogEntry, SkillInfo, TanguDesktopConfig } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { homeTarget } from '../services/engine/targets'
 import { nextExtraSelection } from './agentSkillSelection'
 

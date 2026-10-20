@@ -52,7 +52,7 @@ const HARD_REJECTED = [
 describe('registry 级:chat 正向工具面', () => {
   const base: ToolContext = { userId: 'u1', sessionId: 's1', appId: cloud.appId, profile: cloud, execMode: 'sandbox', unlockTools: () => {} };
 
-  it('云端 sandbox:常驻面恰为 A 档 + 显式记忆 + 商店搜索共 12 个(注册序不重排),≤ 9,750 B;GUI 端共 13 个,≤ 12,450 B', () => {
+  it('云端 sandbox:常驻面恰为 A 档 + 显式记忆 + 商店搜索共 12 个(注册序不重排),≤ 9,750 B;GUI 端共 13 个,≤ 12,500 B', () => {
     configureTangu({ host: stub, brain: stub, billing: stub, profile: cloud });
     const chat = names({ ...base, preset: 'chat' });
     expect(chat).toEqual(['get_datetime', 'remember', 'web_search', 'list_files', 'read_file', 'write_file', 'pip_install', 'run_python', 'web_fetch', 'display_file', 'load_tools', 'search_marketplace']);
@@ -66,11 +66,18 @@ describe('registry 级:chat 正向工具面', () => {
     expect(bytes({ ...base, preset: 'chat' })).toBeLessThanOrEqual(9_750);
     const gui = names({ ...base, preset: 'chat', client: 'web/1.0.0' });
     const core = chat.slice(0, -1); // search_marketplace 注册在 sketch 之后(append 末尾)
-    expect(gui).toEqual([...core, 'sketch', 'search_marketplace']);
+    expect(gui).toEqual([...core, 'intelligent_ui_html', 'search_marketplace']);
     expect(bytes({ ...base, preset: 'chat', client: 'web/1.0.0' })).toBeLessThanOrEqual(12_450);
     const native = { ...base, preset: 'chat' as const, client: 'web/2.13.1', clientCapabilities: ['intelligent-ui.v1'] };
-    expect(names(native)).toEqual([...core, 'sketch', 'search_marketplace', 'intelligent_ui']);
-    expect(bytes(native)).toBeLessThanOrEqual(12_450);
+    expect(names(native)).toEqual([...core, 'intelligent_ui_html', 'search_marketplace', 'intelligent_ui']);
+    // 10-20 HTML 卡改名 sketch → intelligent_ui_html(工具名 + 描述里的几处提名):GUI 端 11,753 → 11,773、带 intelligent_ui 的 12,427 → 12,460,
+    // 预算 12,450 → 12,500;带 v2 的 12,645 → 12,678,仍在 12,700 内。
+    expect(bytes(native)).toBeLessThanOrEqual(12_500);
+    // 10-20 计算层:带 intelligent-ui.v2 的客户端换两段描述(intelligent_ui 多「计算卡」、sketch 把计算器让出去),
+    // 实测 12,427 → 12,645(+218 B),预算 12,700;不带 v2 的客户端逐字不变(上一行)。
+    const computed = { ...native, clientCapabilities: ['intelligent-ui.v1', 'intelligent-ui.v2'] };
+    expect(names(computed)).toEqual(names(native));
+    expect(bytes(computed)).toBeLessThanOrEqual(12_700);
     // 对照:work 面(25 个),chat 是过滤出来的子集,不是重排
     // 28 → 23:E2(§五「延迟候选」)把 amadeus 日历 CRUD ×5 转成静态 deferred,云端 sandbox 面同受影响。
     // chat 面本身逐字未变(上面那条 toEqual 仍绿):两个日历读工具本就在 CHAT_PRESET_DEFERRED 里。
@@ -143,7 +150,7 @@ describe('registry 级:chat 正向工具面', () => {
     const gui = { client: 'web/1.0.0' };
     expect(presetOf('chat').sketch).toBe(true);
     expect(sketchEnabledFor({ ...gui, preset: 'chat' })).toBe(true);
-    expect(names({ ...base, preset: 'chat', client: 'web/1.0.0' }).includes('sketch')).toBe(sketchEnabledFor({ ...gui, preset: 'chat' }));
+    expect(names({ ...base, preset: 'chat', client: 'web/1.0.0' }).includes('intelligent_ui_html')).toBe(sketchEnabledFor({ ...gui, preset: 'chat' }));
     expect(sketchEnabledFor({ ...gui, preset: 'chat', planMode: true })).toBe(false);
   });
 

@@ -7,7 +7,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Loader2, MoreHorizontal } from 'lucide-react'
 import { useI18n } from '../i18n'
-import { EngineIcon } from './EngineIcon'
+import { EngineIcon } from '@tangu/ui/components/EngineIcon'
 import { isOverflowing, nextPageLeft } from './pillBar'
 import { CompactChatPicker } from './CompactChatPicker'
 

@@ -14,7 +14,7 @@ import { moveTo, startOpenDrag } from '@lcl/engine'
 import { ProjectIcon } from '../../components/ProjectIcon'
 import { RemoveDialog } from '../../components/RemoveDialog'
 import { isProjectWorkspace } from '../../stores/projectSettings'
-import { sessionWorkspaceKey, type ChannelKind, type SessionRecord, type TanguDesktopConfig, type WorkspaceDescriptor } from '../../types'
+import { sessionWorkspaceKey, type ChannelKind, type SessionRecord, type TanguDesktopConfig, type WorkspaceDescriptor } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { AnimatedCollapse } from '../../components/AnimatedUI'
 import { registerMessages, useI18n } from '../../i18n'
 import { useItemSelect } from '../itemSelect'
@@ -33,6 +33,7 @@ import { homeTarget } from '../../services/engine/targets'
 import { canTurnChatIntoNote, turnChatIntoNote } from './chatToNote'
 import { formatRowTime } from '../../format/time'
 import { ListSection, PullHint, SwipeRow, closeOtherSwipes, dayBucket, usePullToSearch, withSections, type SwipeAction } from '../../components/phoneList'
+import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 const CHANNEL_ICONS: Record<ChannelKind, typeof Smartphone> = { wechat: Smartphone, telegram: Send, qq: MessagesSquare }
 

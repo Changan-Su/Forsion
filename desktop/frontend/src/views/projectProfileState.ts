@@ -1,4 +1,4 @@
-import type { AgentConfig, SessionRecord } from '../types'
+import type { AgentConfig, SessionRecord } from '../../../../tangu-agent/src/contracts/clientTypes'
 
 export type ProjectExecutorKind = 'agent' | 'team' | 'party' | 'engine'
 export interface ProjectExecutor {

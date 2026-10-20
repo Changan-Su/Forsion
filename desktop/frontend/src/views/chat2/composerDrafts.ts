@@ -1,6 +1,6 @@
 import { useRef, type Dispatch, type SetStateAction } from 'react'
 import { create } from 'zustand'
-import type { Attachment, SkillInfo } from '../../types'
+import type { Attachment, SkillInfo } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import type { RefChip } from './Composer2'
 
 /** 一个会话里写了还没发出去的那份输入:输入框里的字,连同挂在它上面的附件 / 引用 / 技能和 @ 选出来的绑定。

@@ -14,13 +14,15 @@
  * 本文件是叶子模块:不 import 任何运行时依赖(types.ts 反过来 import type 它)。
  */
 
+import type { TargetRef } from '../../../../../tangu-agent/src/contracts/clientTypes'
+
 declare const ENGINE_TARGET: unique symbol
 
 /** 目标的稳定键:home = 本端的引擎(桌面 = 本机引擎,web / 手机 = 云端),unit:<id> = 经 hub 的「我的某台电脑」。 */
 export type TargetKey = 'home' | `unit:${string}`
 
-/** 运行位置(可持久化、可比较的纯数据)。K7 的 RunLocation ≡ 它(INTEGRATION R-14)。 */
-export type TargetRef = { kind: 'home' } | { kind: 'unit'; unitId: string }
+/** 运行位置(可持久化、可比较的纯数据)。K7 的 RunLocation ≡ 它(INTEGRATION R-14);定义在 Tangu 的客户端契约里。 */
+export type { TargetRef }
 
 /** 来路:local = 桌面本机引擎(managed / external);cloud = web / 手机的云网关;
  *  unitPage = 设备页里被投射过来的那台引擎;unit = 经 hub 隧道的「我的电脑」(S2 起)。 */

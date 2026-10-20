@@ -16,8 +16,8 @@ import { HumanCollaborationPanel } from '../components/HumanCollaborationPanel'
 import { humanRewritable, type HumanJump } from '../services/humanCollaboration'
 import { AgentHarnessPanel } from '../components/AgentHarnessPanel'
 import { AgentSchedulePanel } from '../components/AgentSchedulePanel'
-import type { AgentConfig, NormalAgentDef, SessionRecord, SkillInfo, ToolsResponse } from '../types'
-import { THINKING_LEVELS } from '../types'
+import type { AgentConfig, NormalAgentDef, SessionRecord, SkillInfo, ToolsResponse } from '../../../../tangu-agent/src/contracts/clientTypes'
+import { THINKING_LEVELS } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { ProfileGroup, ProfileModelField, ProfileTextEditor } from './profileControls'
 import { TeamProfile } from './TeamProfile'
 import { ProjectProfile, useProjectSubject, useProjectWorkspace } from './ProjectProfile'
@@ -32,6 +32,7 @@ import { AgentAvatar } from '../components/AgentAvatar'
 import { thinkingLabel } from '../components/thinkingLabel'
 import { homeTarget } from '../services/engine/targets'
 import { track } from '../achievements/store'
+import '../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 type Section = 'config' | 'skills' | 'mcp' | 'growth' | 'schedule' | 'human'
 // 成长 = Agent 随时间积累的两层:记忆(它知道什么)+ 进化(HARNESS 工作笔记:它怎么做事)。09-19 从两个一级标签并成一个,

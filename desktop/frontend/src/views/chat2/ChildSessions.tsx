@@ -9,7 +9,7 @@
  */
 import React, { useEffect, useState } from 'react'
 import { ChevronRight, CornerDownRight, CornerUpLeft, GitBranch, MessageCircleQuestion, MessageSquare, Sparkles } from 'lucide-react'
-import type { SessionRecord, ToolEvent } from '../../types'
+import type { SessionRecord, ToolEvent } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { useApp } from '../../stores/appStore'
 import { useSessionAttention } from '../../stores/attentionStore'
 import { useChildChat } from '../../stores/childChatStore'

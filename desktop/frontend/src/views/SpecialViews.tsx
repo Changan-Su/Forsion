@@ -7,7 +7,7 @@ import { WorkspaceDetailView } from '../components/WorkspaceDetailView'
 import { useApp, type SpecialKind } from '../stores/appStore'
 import { useWorkspace, recordNav } from '@lcl/engine'
 import { openSession } from '../sessionNav'
-import { sessionWorkspaceKey } from '../types'
+import { sessionWorkspaceKey } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { useShallow } from 'zustand/react/shallow'
 
 /** 特殊视图 kind → 引擎视图注册类型。 */

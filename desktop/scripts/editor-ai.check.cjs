@@ -1086,8 +1086,9 @@ async function groupG(browser) {
     await page.waitForTimeout(1500)
     const d = await vault(page)
     const frames = await page.evaluate(() => document.querySelectorAll('.unified-body .unified-embed .sketch-frame').length)
-    check('G2 对话 sketch 卡「插入笔记」→ ```forsion-sketch 围栏原样落盘,笔记里出卡',
-      d.includes('```forsion-sketch\n<i>\\(x\\)</i>\n```') && frames === 1, JSON.stringify({ d, frames }))
+    // 10-20 改名:新插入的写 ```forsion-intelligent-ui-html;G1 那份旧笔记里的 ```forsion-sketch 照样出卡、原样不动。
+    check('G2 对话 sketch 卡「插入笔记」→ ```forsion-intelligent-ui-html 围栏原样落盘,笔记里出卡',
+      d.includes('```forsion-intelligent-ui-html\n<i>\\(x\\)</i>\n```') && frames === 1, JSON.stringify({ d, frames }))
     await page.close()
   }
   // G3 整段对话整理成笔记:complete 收到 custom + 对话记录;新笔记以一级标题命名、标题剥出正文;再来一次重名 → -2

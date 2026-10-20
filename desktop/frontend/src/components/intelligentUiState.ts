@@ -1,11 +1,14 @@
-import { snapUIValue, type UIBlock, type UICondition, type UIDocument } from '../../../../tangu-agent/src/shared/intelligentUi'
+import { snapUIValue, type UIBlock, type UICondition, type UIDocument } from '../../../../tangu-agent/src/contracts/intelligentUi'
+import { truthy, uiValueIssue, type DocumentEnv, type UIValue } from '../../../../tangu-agent/src/contracts/intelligentUiExpr'
 
 export type UIUserState = {
   values: Record<string, string | number>
   purchased: Record<string, number | true>
   expanded: Record<string, boolean>
+  /** v2 state values the card's buttons changed. Derived values are never stored. */
+  vars: Record<string, UIValue>
 }
-export const emptyUIState = (): UIUserState => ({ values: {}, purchased: {}, expanded: {} })
+export const emptyUIState = (): UIUserState => ({ values: {}, purchased: {}, expanded: {}, vars: {} })
 const STORAGE = 'forsion_intelligent_ui_v1'
 const MAX_STATE = 65_536
 type Entry = { key: string; state: UIUserState }
@@ -14,7 +17,7 @@ export const uiExpansionKey = (kind: 'source' | 'disclosure' | 'image', blockId:
 function stateOf(raw: unknown): UIUserState {
   const out = emptyUIState()
   if (!raw || typeof raw !== 'object') return out
-  for (const field of ['values', 'purchased', 'expanded'] as const) {
+  for (const field of ['values', 'purchased', 'expanded', 'vars'] as const) {
     const v = (raw as Record<string, unknown>)[field]
     if (!v || typeof v !== 'object' || Array.isArray(v)) continue
     for (const [k, x] of Object.entries(v)) {
@@ -22,6 +25,7 @@ function stateOf(raw: unknown): UIUserState {
       if (field === 'values' && (typeof x === 'string' && x.length <= 80 || typeof x === 'number' && Number.isFinite(x))) out.values[k] = x as string | number
       if (field === 'purchased' && (x === true || typeof x === 'number' && Number.isFinite(x) && x >= 0)) out.purchased[k] = x
       if (field === 'expanded' && typeof x === 'boolean') out.expanded[k] = x
+      if (field === 'vars' && !uiValueIssue(x)) out.vars[k] = x as UIValue
     }
   }
   return out
@@ -53,17 +57,27 @@ export function inputValues(doc: UIDocument, state: UIUserState): Record<string,
         : input.initial]
   }))
 }
-export function visible(when: UICondition | undefined, values: Record<string, string | number>): boolean { return !when || values[when.input] === when.equals }
+/** State values for this render: what the buttons stored, else the document's initial values. */
+export function stateVars(doc: UIDocument, state: UIUserState): Map<string, UIValue> {
+  return new Map((doc.state || []).map(s => [s.id, Object.hasOwn(state.vars, s.id) ? state.vars[s.id] : s.initial]))
+}
+/** An expression condition that fails hides its block, like one that is false. */
+export function visible(when: UICondition | undefined, values: Record<string, string | number>, env?: DocumentEnv): boolean {
+  if (!when) return true
+  if ('expr' in when) { const c = env?.cell(when.expr); return !!c?.ok && truthy(c.value) }
+  return values[when.input] === when.equals
+}
 export type ShoppingRow = { key: string; label: string; amount?: number; unit?: string; checked: boolean; shortfall?: number }
-export function deriveChecklist(block: Extract<UIBlock, { kind: 'checklist' }>, values: Record<string, string | number>, state: UIUserState): ShoppingRow[] {
+export function deriveChecklist(block: Extract<UIBlock, { kind: 'checklist' }>, values: Record<string, string | number>, state: UIUserState, env?: DocumentEnv): ShoppingRow[] {
   const rows = new Map<string, ShoppingRow>()
   for (const item of block.items) {
-    if (!visible(item.when, values)) continue
+    if (!visible(item.when, values, env)) continue
     const q = item.quantity
     const key = JSON.stringify([block.id, item.itemKey || item.id, q?.unit || null])
     const amount = q ? q.value * (q.scaleBy ? Number(values[q.scaleBy]) / q.base! : 1) : undefined
     const previous = rows.get(key)
-    rows.set(key, { key, label: previous?.label || item.label, amount: amount === undefined ? undefined : amount + (previous?.amount || 0), unit: q?.unit, checked: false })
+    const label = env && item.label.includes('{{') ? env.text(item.label) : item.label // v2:条目文字里的 {{ }} 按当前值算成纯文字
+    rows.set(key, { key, label: previous?.label || label, amount: amount === undefined ? undefined : amount + (previous?.amount || 0), unit: q?.unit, checked: false })
   }
   return [...rows.values()].map(row => {
     const bought = state.purchased[row.key]

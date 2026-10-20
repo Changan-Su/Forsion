@@ -340,15 +340,15 @@ describe('装备层:kind equip 收起工具 / 技能(10-04)', () => {
   it('新建 → 盘面多两行 meta → 解析往返;shelvedOf 只认 equip 条目', async () => {
     const { applyHarnessEdit, loadHarness, harnessPath, shelvedOf, parseHarness, serializeHarness } = await import('./harnessStore.js');
     await applyHarnessEdit(slug, { action: 'upsert', title: 'plain', body: 'a note', evidence: 'e' });
-    const eq = await applyHarnessEdit(slug, { action: 'upsert', kind: 'equip', title: 'Shelve drawing tools', body: 'Never used in 30 days.', evidence: 'usage review', tools: ['sketch', 'sketch', ' display_file '], skills: ['local:pptx'] });
-    expect(eq.entry).toMatchObject({ kind: 'equip', tools: ['sketch', 'display_file'], skills: ['local:pptx'] });
+    const eq = await applyHarnessEdit(slug, { action: 'upsert', kind: 'equip', title: 'Shelve drawing tools', body: 'Never used in 30 days.', evidence: 'usage review', tools: ['intelligent_ui_html', 'intelligent_ui_html', ' display_file '], skills: ['local:pptx'] });
+    expect(eq.entry).toMatchObject({ kind: 'equip', tools: ['intelligent_ui_html', 'display_file'], skills: ['local:pptx'] });
     const raw = await fs.readFile(harnessPath(slug), 'utf-8');
-    expect(raw).toContain('- tools: sketch, display_file');
+    expect(raw).toContain('- tools: intelligent_ui_html, display_file');
     expect(raw).toContain('- skills: local:pptx');
     const entries = await loadHarness(slug);
     expect(parseHarness(serializeHarness(entries))).toEqual(entries);
     const shelved = shelvedOf(entries);
-    expect([...shelved.tools]).toEqual(['sketch', 'display_file']);
+    expect([...shelved.tools]).toEqual(['intelligent_ui_html', 'display_file']);
     expect([...shelved.skills]).toEqual(['local:pptx']);
     // 同样两行 meta 挂在非 equip 条目上(手改 / 对端同步来的)→ 不生效
     expect(shelvedOf(parseHarness('## [h-note] t (note)\n- tools: run_bash\n\nbody')).tools.size).toBe(0);
@@ -356,18 +356,18 @@ describe('装备层:kind equip 收起工具 / 技能(10-04)', () => {
 
   it('只有 equip 能带名字;equip 不能什么都不收;修订整组替换;改回别的 kind 就丢掉名字', async () => {
     const { applyHarnessEdit, loadHarness } = await import('./harnessStore.js');
-    await expect(applyHarnessEdit(slug, { action: 'upsert', title: 't', body: 'b', evidence: 'e', tools: ['sketch'] })).rejects.toThrow(/only for kind "equip"/);
+    await expect(applyHarnessEdit(slug, { action: 'upsert', title: 't', body: 'b', evidence: 'e', tools: ['intelligent_ui_html'] })).rejects.toThrow(/only for kind "equip"/);
     await expect(applyHarnessEdit(slug, { action: 'upsert', kind: 'equip', title: 't', body: 'b', evidence: 'e' })).rejects.toThrow(/at least one/);
     await expect(applyHarnessEdit(slug, { action: 'upsert', kind: 'equip', title: 't', body: 'b', evidence: 'e', tools: ['a, b'] })).rejects.toThrow(/invalid name/);
     const eq = (await loadHarness(slug)).find((e) => e.kind === 'equip')!;
     const count = (await loadHarness(slug)).length;
-    const revised = await applyHarnessEdit(slug, { action: 'upsert', id: eq.id, tools: ['sketch'] });
-    expect(revised.entry).toMatchObject({ tools: ['sketch'], skills: ['local:pptx'], version: 2 });
-    expect(revised.before).toMatchObject({ tools: ['sketch', 'display_file'] }); // 快照没被原地改掉:回滚靠它
+    const revised = await applyHarnessEdit(slug, { action: 'upsert', id: eq.id, tools: ['intelligent_ui_html'] });
+    expect(revised.entry).toMatchObject({ tools: ['intelligent_ui_html'], skills: ['local:pptx'], version: 2 });
+    expect(revised.before).toMatchObject({ tools: ['intelligent_ui_html', 'display_file'] }); // 快照没被原地改掉:回滚靠它
     await expect(applyHarnessEdit(slug, { action: 'upsert', id: eq.id, tools: [], skills: [] })).rejects.toThrow(/at least one/);
     expect((await loadHarness(slug)).length).toBe(count); // 报错的那几次都没落盘
     const back = await applyHarnessEdit(slug, { action: 'rollback', id: eq.id });
-    expect(back.entry).toMatchObject({ tools: ['sketch', 'display_file'] });
+    expect(back.entry).toMatchObject({ tools: ['intelligent_ui_html', 'display_file'] });
     const asNote = await applyHarnessEdit(slug, { action: 'upsert', id: eq.id, kind: 'note' });
     expect(asNote.entry!.tools).toBeUndefined();
     expect(asNote.entry!.skills).toBeUndefined();
@@ -388,10 +388,10 @@ describe('装备层:kind equip 收起工具 / 技能(10-04)', () => {
     const { renderHarnessSection } = await import('./harnessStore.js');
     const out = renderHarnessSection([
       { id: 'h-a', kind: 'note', title: 'N', body: 'note body', createdAt: '', updatedAt: '', version: 1 },
-      { id: 'h-e', kind: 'equip', title: 'Shelf', body: 'unused', evidence: 'review', tools: ['sketch'], skills: ['local:pptx'], createdAt: '', updatedAt: '', version: 1 },
+      { id: 'h-e', kind: 'equip', title: 'Shelf', body: 'unused', evidence: 'review', tools: ['intelligent_ui_html'], skills: ['local:pptx'], createdAt: '', updatedAt: '', version: 1 },
     ]);
     expect(out).toContain('Shelved equipment');
-    expect(out).toContain('- [h-e] Shelf — tools: sketch; skills: local:pptx — unused (evidence: review)');
+    expect(out).toContain('- [h-e] Shelf — tools: intelligent_ui_html; skills: local:pptx — unused (evidence: review)');
     expect(out).toMatch(/load_tools/);
     expect(out.split('Shelved equipment')[0]).not.toContain('[h-e]');
   });

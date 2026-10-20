@@ -21,9 +21,7 @@ import { initialFor } from '../components/agentInitial'
 import { useApp } from '../stores/appStore'
 import { registerMessages, useI18n } from '../i18n'
 import { useShallow } from 'zustand/react/shallow'
-import { SessionsView } from './SessionsView'
-import { OrbitsView } from './OrbitsView'
-import { TocView } from '@tangu/ui/views/RightViews'
+import { readTanguChatOutline, readTanguSidebarModes } from '../amadeus/plugins/tanguSeam'
 import { FilesPanel } from '@tangu/ui/views/chat2/FilesPanel'
 import { PATHS_MIME as DRAG_MIME } from '../components/chatDragRef'
 import type { PreviewTarget } from '../components/WorkspaceFilePreview'
@@ -142,7 +140,10 @@ function FilesBody({ vaultCtx, sideFilter }: { vaultCtx: { root: string; noteDir
 export function WorkspaceView({ leaf, defaultMode }: ViewProps & { defaultMode?: WorkspaceModeEx }) {
   const { t } = useI18n()
   const hasNotes = amadeusAvailable()
-  const hasSessions = sessionsAvailable()
+  // 轨道 / 会话列表两种模式是 Tangu 交出来的(核心插件化 2e-5)。老档案(products/amadeus.json)上 sessionsAvailable() 缺省为真、
+  // Tangu 却没激活:只看前者会落一片空白侧栏,所以两样都要有才算有会话模式,没有就改道到笔记 / 文件
+  const tangu = readTanguSidebarModes()
+  const hasSessions = sessionsAvailable() && !!tangu
   const mainType = useActiveMainType()
   const loc = leaf.loc
   // 插件列表源(P2):活着的源集合 —— 写死的档 / 回落档落到已死的源(插件被禁)时回退,
@@ -191,8 +192,8 @@ export function WorkspaceView({ leaf, defaultMode }: ViewProps & { defaultMode?:
 
   const body: ReactNode =
     pluginSrc ? <PluginListBody key={mode} src={pluginSrc} stateKey={mode} />
-    : mode === 'orbits' ? <OrbitsView sideFilter={sideFilter} />
-    : mode === 'sessions' ? <SessionsView sideFilter={sideFilter} />
+    : mode === 'orbits' ? (tangu && <tangu.Orbits sideFilter={sideFilter} />)
+    : mode === 'sessions' ? (tangu && <tangu.Sessions sideFilter={sideFilter} />)
     : mode === 'files' ? <FilesBody vaultCtx={vaultCtx} sideFilter={sideFilter} />
     : hasNotes ? <AmadeusPagesView />
     : <div className="t2sw-empty">{t('workspace.notesUnavailable')}</div>
@@ -773,7 +774,9 @@ export function OutlineView(props: Partial<ViewProps> = {}) {
   const mainType = useActiveMainType()
   const src = typeof props.params?.sourcePath === 'string' ? props.params.sourcePath : ''
   if (src && amadeusAvailable()) return <ScopedPageOutline path={src} scope={`${props.leaf?.id ?? 'outline'}::src`} />
-  if (mainType === 'chat') return <TocView />
+  // 对话的会话目录是 Tangu 交出来的(核心插件化 2e-6);没交 → 落到下面的空态
+  const ChatOutline = readTanguChatOutline()
+  if (mainType === 'chat' && ChatOutline) return <ChatOutline />
   if (mainType === 'amadeus-editor' && amadeusAvailable()) return <AmadeusOutlineView />
   return <div className="t2sw-empty">{t('outline.empty')}</div>
 }

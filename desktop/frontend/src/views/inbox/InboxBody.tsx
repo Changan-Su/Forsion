@@ -17,12 +17,9 @@ import { ShieldCheck, ShieldX } from 'lucide-react'
 import { lazyRetry } from '../../lazyRetry'
 import { useI18n } from '../../i18n'
 import { useApp } from '../../stores/appStore'
-import { setActiveSpace } from '@lcl/engine'
 import { getMuseApproval, decideMuseApproval, type InboxMessage } from '../../services/backendService'
 import type { PendingApprovalInfo } from '../../types'
-import { splitSuggestions } from '@tangu/ui/views/chat2/suggest'
-import { TaskCards, useMuseTodoStatus } from '@tangu/ui/views/chat2/TaskCards'
-import { runTaskCard } from '@tangu/ui/views/chat2/taskLanding'
+import { readTanguInboxTasks } from '@amadeus/plugins/tanguSeam'
 import { homeTarget } from '../../services/engine/targets'
 import { previewNeedsScrollHint } from '../../components/approvalText'
 import { inboxCardOf, useInboxCards, type PluginInboxCard } from '@amadeus/plugins/inboxCards'
@@ -58,8 +55,9 @@ export function InboxBody({ msg }: { msg: InboxMessage }) {
   const cardsOk = inboxCardsAllowed(msg)
   // `todo:` 头(TODO 状态回写 +「交给 Muse 执行」)只认 Muse 自己的信 —— 那是引擎 add_muse_todo 投影拼的;别的 agent 写了也只是普通任务卡(Codex 09-11 P1)。
   const museMail = msg.sender_id === 'muse'
-  const parsed = useMemo(() => (cardsOk ? splitSuggestions(body, { kinds: ['task', 'approval'], todo: museMail }) : null), [body, cardsOk, museMail])
-  const todo = useMuseTodoStatus(msg.id, parsed?.tasks || [])
+  // 任务卡由 Tangu 画(核心插件化 2e,经 tanguSeam);Tangu 没激活就不切卡,正文原样显示。
+  const tangu = readTanguInboxTasks()
+  const parsed = useMemo(() => (cardsOk && tangu ? tangu.split(body, { todo: museMail }) : null), [body, cardsOk, museMail, tangu])
   const text = parsed ? parsed.text : body
   const hasCards = !!parsed && (parsed.tasks.length > 0 || parsed.approvals.length > 0)
   const pluginCard = inboxCardOf(msg, useInboxCards())
@@ -78,20 +76,7 @@ export function InboxBody({ msg }: { msg: InboxMessage }) {
       {hasCards && (
         <div className="ibx-cards" data-inbox-cards>
           {parsed!.approvals.map((id) => <ApprovalCard key={id} id={id} />)}
-          <TaskCards
-            tasks={parsed!.tasks}
-            ownerId={msg.id}
-            noHere
-            todoStatus={todo.status}
-            onTodoRetry={todo.retry}
-            onTask={async (card, landing) => {
-              // 收件箱在自己的 Space 里:新会话必须先切到 Tangu Space,否则聊天开在收件箱布局里(同 InboxReaderView.chatWithSender)。
-              if (landing === 'new') setActiveSpace('tangu')
-              const ok = await runTaskCard(card, landing, null)
-              if (card.todo) todo.retry() // 以引擎真状态为准:409 / 失败后卡片随之定格
-              return ok
-            }}
-          />
+          {tangu && <tangu.Cards tasks={parsed!.tasks} ownerId={msg.id} />}
         </div>
       )}
     </>

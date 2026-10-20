@@ -18,7 +18,7 @@ import { AnimatedCollapse } from '../../components/AnimatedUI'
 import { registerMessages, useI18n } from '../../i18n'
 import { displaySessionTitle } from '../../sessionTitle'
 import { folderPadLeft } from '@amadeus/lib/treeIndent'
-import type { SessionRecord, UnitInfo } from '../../types'
+import type { SessionRecord, UnitInfo } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { useApp } from '../../stores/appStore'
 import { adoptRemoteSession, archiveRemote, renameRemote, setRemoteSessionEmoji, statusOfUnit, useDeviceSessions } from '../../stores/deviceSessionsStore'
 import { useDeviceMarks } from '../../services/deviceMarks'
@@ -29,6 +29,7 @@ import { useRemoteCapability } from '../../services/engine/targets'
 import { sessionActivityAt } from './SidebarPane'
 import { AttentionDot, StatusMark } from './AttentionDot'
 import './deviceSessions.css'
+import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 registerMessages({
   'devstatus.checking': { zh: '正在连接…', en: 'Connecting…' },
