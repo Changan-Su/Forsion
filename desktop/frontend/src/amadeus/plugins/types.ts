@@ -636,6 +636,14 @@ export interface ViewContribution {
   /** Id of one of THIS plugin's list sources (2026-08-25+): while this view is the active main
    *  view, the unified workspace sidebar auto-switches to that list. Old hosts ignore it. */
   workspaceSource?: string
+  /** Right-panel views this view brings along when it is the front main view (2026-10-20+; older hosts ignore it).
+   *  Full view types, as in space.json: your own views as `plugin:<pid>:<viewId>`, host side views by name
+   *  (`chat-panel`, `outline`, `tangu-details`, `workspace`…). First entry comes to the front when the person switches to
+   *  this view. The host keeps the right panel in step with the front main view: switching away retires these again,
+   *  views the person opened themselves stay, and so do the Space's pinned ones. Main-area views (`chat`, the note editor,
+   *  PDF…) are dropped; at most 4 are used, 3 or fewer recommended (side tabs are icon-only). Leave it out to use the
+   *  Space's `layout.right`. Details / forms opened from one row or event belong in `view.extendView`, not here. */
+  rightCompanions?: string[]
 }
 
 export interface PluginFloatingPanelOptions {

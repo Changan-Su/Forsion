@@ -112,8 +112,11 @@ function panelList(v: unknown, field: string): SpacePanelSpec[] | string {
     if (mainPage !== undefined && (typeof mainPage !== 'boolean' || (mainPage && (field !== 'main' || out.some((p) => p.mainPage))))) {
       return `layout.${field} 的 mainPage 必须是布尔值,只能写在 main 里,且至多一条`
     }
+    const raw = (it as { type: string }).type
     out.push({
-      type: (it as { type: string }).type,
+      // 右栏的对话是侧栏身份 chat-panel(2026-10-20):老配方把主区对话 `chat` 写进了右栏 —— 右栏主视图规则不让主区实体进右栏,
+      // 不改写的话它会被收走。chat-panel 同样跟随当前会话,只是侧栏版式(也不再和主区那个 chat 单例抢同一份)。
+      type: field === 'right' && raw === 'chat' ? 'chat-panel' : raw,
       ...(params ? { params: params as Record<string, unknown> } : {}),
       ...(split ? { split } : {}),
       ...(splitFrom !== undefined ? { splitFrom: splitFrom as number } : {}),

@@ -20,6 +20,9 @@ import { NewChatComposer, mountNewChatComposer, sendFromNewChat, startNewChatCal
 import { OrbitsView } from '../views/OrbitsView'
 import { SessionsView } from '../views/SessionsView'
 import '../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
+/** 对话的右栏组 = 今天 Tangu Space 的右栏那三个(spaces.tsx 的 TANGU_SIDE_VIEWS)。 */
+const CHAT_RIGHT = [{ type: 'tangu-details', params: {} }, { type: 'workspace', params: { mode: 'files' } }, { type: 'outline', params: {} }]
+
 const app = () => useApp.getState()
 const ws = () => useWorkspace.getState()
 
@@ -84,7 +87,8 @@ export function registerTanguViews(): void {
   // chat 可关闭(浏览器式):关掉主区最后一个 view → 显示「新建标签页」启动器(见 workspaceStore.closeLeaf)。
   // workspaceSource: 'orbits' = 自动档翻转的**声明位**(方案 §3.7-7):主区是 chat 时左栏自动落新版会话侧栏,
   // 不动 workspaceMode.ts 的硬规则;右栏恒 files 不受它管。
-  registerView({ type: 'chat', kind: 'entity', idParam: 'sessionId', displayName: () => app().tr('workbench.chat'), icon: MessageCircle, TabIcon: SessionTabIcon, factory: (props) => <ChatView {...props} />, singleton: true, workspaceSource: 'orbits' })
+  // 右栏主视图规则(lcl rightRules.ts):对话做主区前台时右栏 = Tangu 详情 / 文件 / 大纲(大纲对对话是会话目录),不分 Space。
+  registerView({ type: 'chat', kind: 'entity', rightCompanions: CHAT_RIGHT, idParam: 'sessionId', displayName: () => app().tr('workbench.chat'), icon: MessageCircle, TabIcon: SessionTabIcon, factory: (props) => <ChatView {...props} />, singleton: true, workspaceSource: 'orbits' })
   // 侧栏对话只是 ChatView 的另一个停靠身份:绕开 `chat` singleton 与主区实例冲突,但仍跟随同一
   // activeId / messagesBySession / runningBySession,不创建所谓「Side Chat」会话或第二套 runtime。
   registerView({ type: 'chat-panel', kind: 'aux', displayName: () => translate('bootengine.view.chatPanel'), icon: MessageCircle, TabIcon: SessionTabIcon, factory: (props) => <ChatView {...props} />, singleton: true })

@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.56.0
+  version: 1.57.0
   author: Forsion
   category: Forsion
 ---
@@ -113,7 +113,8 @@ mod+J、布局记忆和移动端抽屉,自造的一样都没有,还和别的 Spa
 |---|---|---|
 | 可打开项的列表(工程、收藏、会话) | 左栏统一工作区 | `registerListSource` + `layout.left: [{ "type": "workspace", "params": { "mode": "plugin:<id>:<列表源>" } }]` |
 | 主体(编辑器、播放器、详情) | 主区 | `layout.main`;要并排的另一份原生视图(笔记、聊天)用 `split: "right" / "down"` 分栏 |
-| 随选中对象变的属性 / 检查器 | 右栏 | 长驻内容写 `layout.right`;跟着主视图走的面板用 Extend View(`view.extendView.open({ side: 'right' })`) |
+| 这种主视图通常要的属性 / 检查器 / 对话 | 右栏 | 在 `registerView` 上写 `rightCompanions`(见下「右栏:主视图规则」);本 Space 的缺省组写 `layout.right` |
+| 点了某一行 / 某个事件才出来的详情、表单 | 右栏临时 | Extend View(`view.extendView.open({ side: 'right' })`) |
 | 横跨全片的时间线、日志、控制台、终端 | 底部面板 | `layout.bottom`(2026-10-02 起)或 `ctx.openView(id, { location: 'bottom' })` |
 
 - 范例:**青鸟收藏夹**(左 = 收藏夹列表源;主区 = 详情 + 原生笔记 `split: "right"` + 原生聊天 `split: "down"`)、
@@ -125,6 +126,24 @@ mod+J、布局记忆和移动端抽屉,自造的一样都没有,还和别的 Spa
 - **先 feature-detect 再依赖**:旧宿主静默忽略 `layout.bottom`;旧桌面宿主把 `openView(id, { location: 'bottom' })`
   当主区打开,会把当前主视图导航走。查 `ctx.viewLocations?.includes('bottom')`(移动端没有底部面板,不含它)。
   主视图让出内容的判据 = 配方传给它的参数(如 `{ "timeline": "bottom" }`)**且** `viewLocations` 含 bottom;任一不满足就在 view 内自绘。
+- **右栏:主视图规则**(2026-10-20 起)。右栏 = 本 Space 的 pinned ∪ 主视图的组 ∪ 用户自带。主视图(主区前台那个)在
+  `registerView` 上声明 `rightCompanions`,它到前台时右栏就换成这组;没声明就用本 Space 的 `layout.right`。
+  ```js
+  ctx.registerView({ id: 'session', title: 'Session', mount, rightCompanions: ['plugin:diting:chapters', 'chat-panel'] })
+  ```
+  - 类型写全名(同 space.json):自己的 `plugin:<pid>:<viewId>`,宿主的写名字。第一项 = 切过来时顶到前台的那个。
+  - 宿主怎么换:切到这个视图 → 带上这组(排在最前);切走 → 收回不在下一组里的;同一类视图换文件(笔记 A → 笔记 B)不动;
+    右栏收着只换暂存、不弹出来;新建标签页不算。用户自己开 / 拖进右栏的视图规则永远不关;配方里 `"pinned": true` 的右栏条目恒在。
+  - `layout.right` 收窄成「没声明组的主视图用这组」:你的 Space 里打开宿主的笔记 / 对话 / PDF(它们自带组)时它会让位,
+    回到你的主视图再回来。不想让位的条目写 `"pinned": true`。
+  - 只放侧栏身份的视图:宿主的 `chat-panel`(侧栏对话)/ `outline` / `tangu-details` / `workspace` / `amadeus-backlinks` /
+    `amadeus-graph` / `calendar-side`,或你自己的视图。主区实体(`chat`、`amadeus-editor`、`amadeus-pdf`…)会被滤掉;右栏要对话写
+    `chat-panel`(`layout.right` 里写 `chat` 的老配方,宿主按 `chat-panel` 开)。最多 4 项,建议 ≤ 3(侧栏标签只有图标,4 个就溢出)。
+  - 组只写「这种主视图通常需要什么」;点了某一行、某个事件才出来的详情 / 表单走 Extend View,别塞进组。
+  - 宿主内置的组:对话 → Tangu 详情 / 文件 / 大纲;笔记 → 对话面板 / 大纲 / 反链 / 关系图;PDF 等文件 → 对话面板;Coding → 文件;日历 → 待办。
+  - 旧宿主忽略 `rightCompanions`:要紧的右栏视图照旧写进 `layout.right`(新宿主上它是缺省组,旧宿主上照旧摆)。
+  - **左栏不跟主视图走**:左栏是 Space 的,第一项一般是本 Space 的工作区视图、写 `"pinned": true`。`workspaceSource`
+    只对没写 `mode` 的老配方生效,新插件别用。
 - 配方里写了 `layout.bottom` 就**默认展开**;用户收起后 mod+J 照配方开回来(关掉最后一个标签也一样)。
 - 底部横跨哪几列用 `layout.bottomSpan`:缺省 `right`(主区+右栏,左栏满高)/ `left`(左栏+主区,右栏满高)/ `full`(通栏)/ `main`(只在主区下方,左右栏都满高)。时间线要通栏就写 `full`;旧宿主忽略该字段、按缺省摆。
   改了 `layout` 要**抬 `version`**,否则用过这个 Space 的人永远停在旧布局。
@@ -303,7 +322,7 @@ ctx.registerView({ id: 'home', title: 'Muse', mount(el) {
 | `registerCommand` | 命令面板(+ 可选 agent 面) | `title` 可传 `() => string` 跟随界面语言(2026-10-02+,老宿主只认字符串);id 处于全局命名空间,裸名会互顶;默认只做导航,**动作性能力要么走引擎侧 agent/技能(通用纪律 5),要么给这条命令声明 `invoke`**(见下) |
 | `registerSlashItem` | 笔记里的 `/` | 静态 `scaffold`,或动态 `run()`(先建文件再返回嵌入语法);`label` / `group` 传函数则跟随界面语言 |
 | `registerSelectionAction` | 选中文字后浮出的那一条(划线条)里「⋯ → 插件」 | `run(cx)` 返回要给人看的 markdown,**只进宿主的结果卡**:笔记里用户点「替换 / 插入下方」才写,别处只读;`scope` 决定出现在哪些视图(缺省只在笔记),见下「Selection bar」。桌面 2.13.3 及更早在「AI ▾ → 插件」、只有笔记里有 |
-| `registerView` | 独立标签页(`ctx.openView(id)` 打开) | **DOM 挂载**(`mount(el, view?)` 返 disposer;可以是 async —— resolve 出的就是 disposer,reject 算挂载失败;`view.extendView` 可开临时扩展),外置插件的主力;加 `workspaceSource` 可让左栏跟着它切到自家列表。**样式不隔离**:选择器挂自家根类名,配色只用 `var(--bg)` / `--bg-card` / `--text` / `--text-muted` / `--border` / `--accent`(自造的变量名宿主没有,会落到你写死的兜底色) |
+| `registerView` | 独立标签页(`ctx.openView(id)` 打开) | **DOM 挂载**(`mount(el, view?)` 返 disposer;可以是 async —— resolve 出的就是 disposer,reject 算挂载失败;`view.extendView` 可开临时扩展),外置插件的主力;加 `rightCompanions` 声明它到前台时右栏要的那组(见「右栏:主视图规则」);`workspaceSource` 只对没写 `mode` 的老配方的左栏生效。**样式不隔离**:选择器挂自家根类名,配色只用 `var(--bg)` / `--bg-card` / `--text` / `--text-muted` / `--border` / `--accent`(自造的变量名宿主没有,会落到你写死的兜底色) |
 | `openFloatingPanel` | 第六种 Floating Panel | 先注册 view，再按相对 id 打开；桌面是真原生窗口，Web 是不可拖动居中面板；可选链兼容旧宿主 |
 | `openMiniPanel` | Mini Panel（默认 320×420，用户可改大小） | 不建 Space 也能直开紧凑 view；用 `mainViewId` 声明回主面板的目标；仅原生桌面宿主提供 |
 | `registerListSource` | **统一左栏**里的一条列表(收藏/任务/订阅…) | 宿主渲染,与会话/笔记行同一套 UI;⚠️`subscribe()` 里**必须重读一次数据**,见下 |

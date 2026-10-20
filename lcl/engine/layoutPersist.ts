@@ -15,6 +15,9 @@ export interface PersistedPanel {
 export interface PersistedSidebar {
   visible: boolean
   stash: PersistedPanel[]
+  /** 只在右栏:存这份布局时右栏对账到的那组(rightRules 的 key)。还原后同组就不再对账,用户关掉的缺省视图不会被补回来;
+   *  老布局没有它 = 还原后对一次账。可选、不升版本(老代码读到只多一个被忽略的键)。 */
+  rule?: string
 }
 
 /** v4 布局信封：Dockview 图 + 引擎自己的侧栏状态。
