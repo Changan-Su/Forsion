@@ -11,7 +11,7 @@ import { AnimatedCollapse } from './AnimatedUI'
 import { DiffView } from './DiffView'
 import { toolDiffText } from './toolDiff'
 import { registerMessages, useI18n } from '../i18n'
-import type { ApprovalRequest, ToolEvent } from '../types'
+import type { ApprovalRequest, ToolEvent } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { ImageGenerationLoader } from '../views/chat2/ImageGenerationLoader'
 import { isSelfWriteReceipt } from '../services/selfUpdates'
 

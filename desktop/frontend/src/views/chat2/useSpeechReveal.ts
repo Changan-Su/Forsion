@@ -1,5 +1,5 @@
 import { useLayoutEffect, useState } from 'react'
-import type { UiMessage } from '../../types'
+import type { UiMessage } from '../../../../../tangu-agent/src/contracts/clientTypes'
 
 /** Presentation only: the complete remark is already persisted before this short reveal starts. */
 export function useSpeechReveal(message: UiMessage): UiMessage {

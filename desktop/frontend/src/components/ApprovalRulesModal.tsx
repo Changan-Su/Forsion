@@ -14,7 +14,7 @@ import { X, Loader2 } from 'lucide-react'
 import { useI18n } from '../i18n'
 import * as api from '../services/backendService'
 import type { ApprovalRules } from '../services/backendService'
-import type { TanguDesktopConfig } from '../types'
+import type { TanguDesktopConfig } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { MODE_KEY } from './ApprovalCard'
 import { homeTarget } from '../services/engine/targets'
 

@@ -7,7 +7,7 @@ import remarkCjkFriendlyStrikethrough from 'remark-cjk-friendly-gfm-strikethroug
 import { Check, ChevronDown, Copy, ExternalLink, Maximize2, Minimize2, Minus, Plus, RotateCcw, Zap } from 'lucide-react'
 import { parseUIDraft, safeUIUrl, snapUIValue, UI_VERSION, validateUIDocument, type UIBlock, type UIDocument, type UIInput, type UIResource, type UISetStep } from '../../../../tangu-agent/src/shared/intelligentUi'
 import { applyUISteps, documentEnv, sameValue, truthy, UI_SLOT, uiTableRows, uiText, type DocumentEnv, type UIValue } from '../../../../tangu-agent/src/shared/intelligentUiExpr'
-import type { ToolEvent } from '../types'
+import type { ToolEvent } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { streamingArgString } from '../views/streamingWrite'
 import { registerMessages, useI18n } from '../i18n'
 import { ChatWebLink } from './ChatWikiLink'

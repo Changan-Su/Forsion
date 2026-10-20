@@ -6,7 +6,7 @@ import { forgetProjectMemory, getAgentMemorySnapshot, getProjectContext, mutateA
 import { harnessChanges, HARNESS_CHANGED_EVENT } from '../services/harnessUpdates'
 import { memoryChanges, type MemoryChange } from '../services/selfUpdates'
 import { targetForSession } from '../services/engine/targets'
-import type { ToolEvent } from '../types'
+import type { ToolEvent } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { HarnessUpdateRows } from './HarnessUpdateCard'
 import './selfUpdates.css'
 

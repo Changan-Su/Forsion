@@ -7,9 +7,9 @@
  * 不 import appStore 的值 —— 它是组装点,反过来引会成环。
  */
 import { useChildChat } from '../../stores/childChatStore'
-import type { ProjectSettings, AgentConfig, AgentRunEvent, Attachment, CtxInfo, ModelsResponse, NormalAgentDef, MsgSeg, SessionRecord, SketchItem, SubChat, TanguDesktopConfig, ToolEvent, UiMessage, WorkspaceDescriptor, StoredDesktopConfig, TeamDef, ThinkingLevel } from '../../types'
+import type { ProjectSettings, AgentConfig, AgentRunEvent, Attachment, CtxInfo, ModelsResponse, NormalAgentDef, MsgSeg, SessionRecord, SketchItem, SubChat, TanguDesktopConfig, ToolEvent, UiMessage, WorkspaceDescriptor, StoredDesktopConfig, TeamDef, ThinkingLevel } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { clearDeviceSticky, noteDeviceRefusal } from '../../services/deviceMarks' // P1-K7a
-import { DEFAULT_CLOUD_PROJECT, DEFAULT_LOCAL_WORKSPACE_KEY, ROOTLESS_WORKSPACE_KEY, cloudProjectKey, isHomeSession, isIndependentOrbitConfig, isTeamImageAvatar, sessionWorkspaceKey, SHOW_SYSTEM_PROMPT_KEY, THINKING_LEVELS } from '../../types'
+import { DEFAULT_CLOUD_PROJECT, DEFAULT_LOCAL_WORKSPACE_KEY, ROOTLESS_WORKSPACE_KEY, cloudProjectKey, isHomeSession, isIndependentOrbitConfig, isTeamImageAvatar, sessionWorkspaceKey, SHOW_SYSTEM_PROMPT_KEY, THINKING_LEVELS } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import * as api from '../../services/backendService'
 import { bindSession, focusRef, focusTarget, forgetSession, homeTarget, inheritBinding, inheritChildRows, refForSession, sameRef, setFocusTarget, targetForRef, targetForSession, targetKeyOf, withLocation, yieldToHomeListing, HOME_REF, type EngineTarget, type TargetKey, type TargetRef } from '../../services/engine/targets'
 import { capsForRef } from '../../services/engine/targetCaps'

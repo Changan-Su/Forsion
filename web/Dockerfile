@@ -41,6 +41,8 @@ COPY unit/releasePolicy.mjs ./unit/releasePolicy.mjs
 # 会话图标校验与引擎共用一份:desktop 的 appStore / deviceSessionsStore 直接 import 引擎这个无依赖的纯函数文件。
 # 同上,只拷这一个文件,别把 tangu-agent/ 带进上下文。
 COPY tangu-agent/src/core/sessionEmoji.ts ./tangu-agent/src/core/sessionEmoji.ts
+# Tangu 的客户端契约(核心插件化第 2b 步从 types.ts 搬来;types.ts 转出、Tangu 界面直接 import):目录里只有无依赖的纯 TS。
+COPY tangu-agent/src/contracts ./tangu-agent/src/contracts
 # Intelligent UI 的文档格式与应用卡片 id 校验也与引擎共用:渲染层(IntelligentUi.tsx / IntelligentAppCard.tsx)直接 import 这两个
 # 无依赖的纯函数文件(intelligentUi.ts 只引 ./intelligentCards.js 与 v2 表达式 ./intelligentUiExpr.js)。同上,只拷文件,别把 tangu-agent/ 带进上下文。
 COPY tangu-agent/src/shared/intelligentUi.ts ./tangu-agent/src/shared/intelligentUi.ts

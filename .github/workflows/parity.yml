@@ -18,6 +18,7 @@ on:
       - 'web/src/**'                # 以下三行同为 check:tanguboundary 的扫描范围
       - 'desktop/shared/**'
       - 'desktop/electron/**'
+      - 'tangu-agent/src/contracts/**' # 契约目录(第 2b 步起):check:tanguboundary 管它只许引自己
       - 'mobile/vite.config.ts'   # F 段读它的 engineSwap 替身表
       - 'desktop/scripts/platform-parity.check.cjs'
       - 'desktop/scripts/tangu-boundary.*'

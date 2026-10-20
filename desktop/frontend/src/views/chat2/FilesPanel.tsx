@@ -16,7 +16,7 @@ import {
   ChevronRight, Folder, FolderOpen, RefreshCw, Download,
   Eye, ExternalLink, FilePlus2, FolderPlus, Pencil, Copy, FolderSearch, Trash2,
 } from 'lucide-react'
-import type { WorkspaceDescriptor, WorkspaceFileMeta } from '../../types'
+import type { WorkspaceDescriptor, WorkspaceFileMeta } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import type { PreviewTarget } from '../../components/WorkspaceFilePreview'
 import { ContextMenu, menuPos, type CtxItem, type CtxMenu } from '../../components/RightPanel'
 import { registerMessages, useI18n } from '../../i18n'

@@ -1,6 +1,6 @@
 /** 仅 #preview：复用生产 SidebarPane / 消息 / Composer / TOC，无后端即可视觉回归。 */
 import { useMemo, useRef, useState } from 'react'
-import type { SessionRecord, UiMessage, WorkspaceDescriptor } from '../../types'
+import type { SessionRecord, UiMessage, WorkspaceDescriptor } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { EditorialMessage } from './EditorialMessage'
 import { Composer2 } from './Composer2'
 import { ApprovalTray } from './ApprovalTray'

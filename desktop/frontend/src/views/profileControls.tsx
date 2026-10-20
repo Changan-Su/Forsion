@@ -2,7 +2,7 @@ import { useId, useRef, useState, type ReactNode } from 'react'
 import { Check, ChevronDown, Search } from 'lucide-react'
 import { useI18n } from '../i18n'
 import { Markdown } from '../components/Markdown'
-import type { ModelInfo } from '../types'
+import type { ModelInfo } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { isCoarsePointer } from '../touch'
 import './profileControls.css'
 

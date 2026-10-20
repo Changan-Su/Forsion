@@ -9,7 +9,7 @@ import { AlertTriangle, CheckCircle2, ChevronRight, CircleStop, FileText, Folder
 import { describeTool } from '../../components/ToolGroup'
 import { humanizeRunError, ReloginChip } from './EditorialMessage'
 import { registerMessages, useI18n } from '../../i18n'
-import type { DisplayFile, UiMessage } from '../../types'
+import type { DisplayFile, UiMessage } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { findLiveEdit } from '../../stores/deskPlan'
 import { hasFacts, summarizeTask } from './taskFacts'
 import { ChatWebLink } from '../../components/ChatWikiLink'
