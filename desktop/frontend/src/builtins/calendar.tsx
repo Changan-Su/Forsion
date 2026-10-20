@@ -126,6 +126,8 @@ export function installCalendarViews(): void {
   })
   registerView({
     type: 'calendar', kind: 'collection', embeddable: true,
+    // 右栏主视图规则(lcl rightRules.ts):日历做主区前台时右栏 = 待办 / 事件详情(calendar-side),不分 Space。
+    rightCompanions: [{ type: 'calendar-side', params: {} }],
     intelligent: { description: 'Live Forsion calendar agenda for the next 31 days, including configured calendars. Does not create events.', render: () => <CalendarDashboardCard size="lg" /> },
     displayName: () => app().tr('view.calendar'), icon: CalendarDays,
     factory: (props) => <Suspense fallback={<Skeleton variant="document" />}><CalendarView leafId={props.leaf.id} /></Suspense>, singleton: true,

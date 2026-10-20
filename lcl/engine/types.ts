@@ -103,6 +103,11 @@ export interface ViewDefinition {
   /** 该 view 做活动主视图时,左栏统一工作区应自动切到的模式(如 'notes' 或 'plugin:<pid>:<srcId>')。
    *  autoWorkspaceMode 的声明式扩展位;内置硬规则仍在 workspaceMode.ts。 */
   workspaceSource?: string
+  /** 主视图规则(2026-10-20):这个 view 做主区前台视图时右栏该有的那组视图(按顺序,第一项 = 换过来时顶到前台的那个)。
+   *  没声明 / 空组 / 声明的都用不了 = 落本 Space 的右栏缺省(sidebarDefaults.right)。
+   *  只放能进侧栏的视图:主区实体(编辑器 / PDF / 主区对话)会被滤掉;最多 4 项。判定见 rightRules.ts。
+   *  只管右栏 —— 左栏是 Space 驱动的,不跟主视图走。 */
+  rightCompanions?: import('./layoutPersist').PersistedPanel[]
 }
 
 /**

@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest'
 import { parseSpaceJson, slugifyId, uniqueId, cmpVersion, planMainPanels, recipeBucketOf, type ParseOpts } from './userSpaces.core'
 
-const REGISTERED = new Set(['chat', 'workspace', 'outline'])
+const REGISTERED = new Set(['chat', 'chat-panel', 'workspace', 'outline'])
 const opts = (over?: Partial<ParseOpts>): ParseOpts => ({
   isViewRegistered: (t) => REGISTERED.has(t),
   appVersion: '2.3.0',
@@ -96,6 +96,16 @@ describe('parseSpaceJson', () => {
     }
     expect(parseSpaceJson(JSON.stringify({ ...VALID, layout: { main: [{ type: 'chat', pinned: 'yes' }] } }), opts()).ok).toBe(false)
     expect(parseSpaceJson(JSON.stringify({ ...VALID, layout: { ...VALID.layout, bottom: [{ type: 'outline', pinned: true }] } }), opts()).ok).toBe(false)
+  })
+  it('右栏写了主区对话 chat → 按侧栏身份 chat-panel 开(右栏主视图规则不让主区实体进右栏);主区、左栏的 chat 不动', () => {
+    const layout = { main: [{ type: 'chat' }], left: [{ type: 'chat' }], right: [{ type: 'chat', pinned: true }, { type: 'outline' }] }
+    const r = parseSpaceJson(JSON.stringify({ ...VALID, layout }), opts())
+    expect(r.ok).toBe(true)
+    if (r.ok) {
+      expect(r.spec.layout.right).toEqual([{ type: 'chat-panel', pinned: true }, { type: 'outline' }])
+      expect(r.spec.layout.main[0].type).toBe('chat')
+      expect(r.spec.layout.left[0].type).toBe('chat')
+    }
   })
   it('mainPage:true 标出默认主页:只认 main、至多一条;缺省不出现该键;非布尔报错', () => {
     const r = parseSpaceJson(JSON.stringify({ ...VALID, layout: { main: [{ type: 'chat', pinned: true, mainPage: true }, { type: 'outline', mainPage: false }] } }), opts())
