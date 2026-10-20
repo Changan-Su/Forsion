@@ -22,6 +22,7 @@ import { clearSuggestion, requestSuggestion } from '../../views/chat2/promptSugg
 import type { ChatRef } from '../../components/chatDragRef'
 import type { PreviewTarget } from '../../components/WorkspaceFilePreview'
 import { openWsFile } from '../../views/wsFileNav'
+import { effectiveSessionMode } from '../../views/sessionMode'
 import { track } from '../../achievements/store'
 import { finishRunStats, stepRunStats, type RunStats } from '../../stores/runStats'
 import { AGENT_WRITE_TOOLS, DESK_EDIT_TOOLS, DESK_PERSIST_KEY, agentWriteChecks, deskItemFor, extractStreamingString, isDuplicateShow, packDeskMap, replaceTop, resolveDeskPath, unpackDeskMap, type DeskItem } from '../../stores/deskPlan'
@@ -550,7 +551,7 @@ export function newSessionPreset(
 ): 'chat' | undefined {
   if (ws && ws.kind !== 'rootless') return undefined
   if (ws?.kind === 'rootless') return 'chat'
-  return host.effectiveSessionMode(choice, platform) === 'chat' ? 'chat' : undefined
+  return effectiveSessionMode(choice, platform) === 'chat' ? 'chat' : undefined
 }
 
 /** 活动 Amadeus Vault 是 Forsion 的系统工作区:本机会话默认把它并入额外可写根。
@@ -886,8 +887,6 @@ export interface TanguHost {
   catalogFor(key: TargetKey): { models: ModelsResponse | null } | null
   rememberCatalog(key: TargetKey, patch: { agents?: NormalAgentDef[]; defaultAgentSlug?: string }): void
   ensureCatalog(key: TargetKey, opts: { force?: boolean }): Promise<unknown>
-  /** 侧栏 Chat / Work 模式的生效值(views/sessionMode)。 */
-  effectiveSessionMode(mode: SessionMode | null | undefined, platform: 'desktop' | 'web' | 'mobile'): SessionMode
   /** 按账号区分的本地存储键、当前 Space、已注册视图的显示名(@lcl/engine)。 */
   contentStorageKey(base: string): string
   activeSpaceId(): string

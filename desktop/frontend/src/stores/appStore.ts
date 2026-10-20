@@ -20,7 +20,6 @@ import { catalogFor, ensureCatalog, forgetCatalog, rememberCatalog } from '../se
 import { unitHostProfile } from '../services/engine/hostFs'
 import '../services/engine/messages'
 import { currentPlatform, testConnection } from '../services/agentRunService'
-import { effectiveSessionMode } from '../views/sessionMode'
 import { recordUiAction } from '../diag'
 import { getClientSurface, notifyClientSurfaces } from '../services/clientSurfaces'
 import { windowKind } from '../windowKind'
@@ -232,7 +231,6 @@ export const useApp = create<AppState>((set, get) => ({
     catalogFor,
     rememberCatalog,
     ensureCatalog,
-    effectiveSessionMode,
     contentStorageKey,
     activeSpaceId: () => useSpaceStore.getState().activeSpaceId,
     viewDisplayName: (type) => getView(type)?.displayName,

@@ -21,8 +21,7 @@ import { initialFor } from '../components/agentInitial'
 import { useApp } from '../stores/appStore'
 import { registerMessages, useI18n } from '../i18n'
 import { useShallow } from 'zustand/react/shallow'
-import { SessionsView } from './SessionsView'
-import { OrbitsView } from './OrbitsView'
+import { readTanguSidebarModes } from '../amadeus/plugins/tanguSeam'
 import { TocView } from '@tangu/ui/views/RightViews'
 import { FilesPanel } from '@tangu/ui/views/chat2/FilesPanel'
 import { PATHS_MIME as DRAG_MIME } from '../components/chatDragRef'
@@ -189,10 +188,12 @@ export function WorkspaceView({ leaf, defaultMode }: ViewProps & { defaultMode?:
     ? liveSources.find((o) => `plugin:${o.pluginId}:${o.item.id}` === mode)?.item ?? null
     : null
 
+  // 轨道 / 会话列表两种模式是 Tangu 交出来的(核心插件化 2e-5);没交(Tangu 没激活)时 hasSessions 也是 false,落不到这两支
+  const tangu = readTanguSidebarModes()
   const body: ReactNode =
     pluginSrc ? <PluginListBody key={mode} src={pluginSrc} stateKey={mode} />
-    : mode === 'orbits' ? <OrbitsView sideFilter={sideFilter} />
-    : mode === 'sessions' ? <SessionsView sideFilter={sideFilter} />
+    : mode === 'orbits' ? (tangu && <tangu.Orbits sideFilter={sideFilter} />)
+    : mode === 'sessions' ? (tangu && <tangu.Sessions sideFilter={sideFilter} />)
     : mode === 'files' ? <FilesBody vaultCtx={vaultCtx} sideFilter={sideFilter} />
     : hasNotes ? <AmadeusPagesView />
     : <div className="t2sw-empty">{t('workspace.notesUnavailable')}</div>
