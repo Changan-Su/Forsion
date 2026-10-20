@@ -80,6 +80,7 @@
   - 快速拖动 Mini 卡片的边角调大小时，不再出现完全没变化的情况。
   - 笔记路径统一了写法，同一篇笔记不再被当成两篇：标签跟随、未保存的草稿、置顶和日历设置都能对上，老版本留下的记录会自动转过来。
   - 审批：「询问」档下只有 cmd 的 `dir` / `type` 这类只读写法免审批，其余命令一律要批（`git status` 也要批）；Muse 读自己的日志和资料改用不需要审批的读文件工具，不再排一串审批卡。
+- **网页版**：在手机和平板的浏览器里打开时，布局和交互跟 Android 一致：竖屏用底部 Dock，平板横屏用左侧竖条；iPad 横着打开或刷新也是这套布局，不再变成桌面版。网页版更新后生效。
 - **插件**（面向作者）：插件开发技能 forsion-plugin 更新到 1.59.0。
   - 视图与界面：插件视图可以用 `view.close()` 从自己的内容里关掉自己（桌面浮窗和网页浮层同一个接口）；`ctx.ui.mountSettingsPage` / `mountSettingsItem` 按数据画出和宿主一样的设置页，手机上按控件自动排版；`ctx.ui.setViewModes` 在插件视图顶行放看法切换；`ctx.registerToolResultRenderer` 给自己引擎半身的工具挂原生结果卡片，可以在对话和 Agent Desk 之间挪；`ctx.ui.contextMenu` 加了 `opts.keepOpen` 和句柄 `update(items)`，勾选清单可以连勾，菜单限高可滚、最多 200 项；另有 `ctx.ui.mountModelPicker` 和按次指定模型；设置项写 `secret: true` 显示成密码框（只遮挡、不加密）。
   - 布局与 Ribbon：`registerView` 写 `rightCompanions`，声明这个视图到前台时右栏要的那一组；`ctx.app.setSpaceDot` / `setSpaceProgress` 在 Ribbon 上给自己的 Space 挂红点或进度环；`ctx.spaces.mountIcon` 跟着 Space 走，同一个 id 重新注册换了图标会原地重画；`ctx.closeView(id, { collapse: true })` 收起整侧；`ctx.app.queuePopup` 让自己弹出的弹窗排进宿主的队列；Space 配方 `layout.main` 的一项可以写 `"mainPage": true`，作为进 Space 时的默认主页。
