@@ -214,10 +214,13 @@ describe('human/ in the cloud — two devices', () => {
     await a.enroll(cloud); await a.sync(cloud);
     rmSync(a.calendar); await a.sync(cloud); // 用户在笔记库里删了 Calendar.db:不传删除
     a.use(); expect(rowNames(a.human('CALENDAR.db'))).toEqual(['r1:Dentist', 'r2:Review']);
-    writeFileSync(a.calendar, CAL([['s1', 'Welcome']])); // 桌面重新播种(新的随机 id)
+    writeFileSync(a.calendar, CAL([['s1', 'Welcome']], 'n2', 'd2')); // 桌面重新播种(行 id、列 id 都是新的)
     await a.sync(cloud);
     a.use(); expect(rowNames(a.human('CALENDAR.db'))).toEqual(['r1:Dentist', 'r2:Review', 's1:Welcome']);
-    expect(rowNames(cloudText(cloud, '__human__', 'CALENDAR.db')!)).toEqual(['r1:Dentist', 'r2:Review', 's1:Welcome']);
+    rmSync(a.calendar); writeFileSync(a.calendar, CAL([['t1', 'Again']], 'n3', 'd3')); // 这次删了马上重播,中间没跑同步
+    await a.sync(cloud);
+    a.use(); expect(rowNames(a.human('CALENDAR.db'))).toEqual(['r1:Dentist', 'r2:Review', 's1:Welcome', 't1:Again']);
+    expect(rowNames(cloudText(cloud, '__human__', 'CALENDAR.db')!)).toEqual(['r1:Dentist', 'r2:Review', 's1:Welcome', 't1:Again']);
   });
 
   it('waits for the desktop\'s write lock on the vault calendar instead of writing under it', async () => {
@@ -236,6 +239,38 @@ describe('human/ in the cloud — two devices', () => {
     await mirrored;
     expect(rowNames(readFileSync(a.calendar, 'utf8'))).toEqual(['r1:Dentist', 'r2:From the cloud', 'r3:Typed in the calendar']);
     expect(rowNames(a.human('CALENDAR.db'))).toEqual(['r1:Dentist', 'r2:From the cloud', 'r3:Typed in the calendar']);
+  });
+
+  it('after upgrading, both devices editing USER.md before their first sync still merge line by line, not as a union', async () => {
+    const cloud = fakeCloud(['human']); // 老服务端:只有 USER.md 在同步,和升级前一样
+    const [a, b] = two();
+    writeFileSync(join(a.home, 'USER.md'), 'Name: Lin\nLikes: tea\nGoal: ship');
+    await a.enroll(cloud); await a.sync(cloud);
+    await b.enroll(cloud); await b.sync(cloud);
+    for (const d of [a, b]) { // 升级前的引擎写的影子只有哈希、没有原文
+      const f = readdirSync(d.home).find((n) => n.startsWith('.cloudsync-'))!;
+      const state = JSON.parse(readFileSync(join(d.home, f), 'utf8'));
+      delete state.files['USER.md'].base;
+      writeFileSync(join(d.home, f), JSON.stringify(state));
+    }
+    for (const d of [a, b]) { d.use(); await mirrorLegacyHuman(); } // 升级后第一次启动
+    // 在设置里改画像:保存路由写完 MEMORY.md 当场镜像一遍,第一次同步前 USER.md 就已经变了
+    await a.editMemory((s) => s.replace('Name: Lin', 'Name: Lin Xia')); await mirrorLegacyHuman();
+    await b.editMemory((s) => s.replace('Goal: ship', 'Goal: ship the app')); await mirrorLegacyHuman();
+    for (const d of [a, b, a, b, a]) await d.sync(cloud);
+    for (const d of [a, b]) { d.use(); expect(d.human('MEMORY.md')).toBe('Name: Lin Xia\nLikes: tea\nGoal: ship the app'); }
+  });
+
+  it('a corrupt human/CALENDAR.db never overwrites the vault calendar', async () => {
+    const [a] = two();
+    a.use();
+    writeFileSync(a.calendar, CAL([['r1', 'Dentist']]));
+    await mirrorLegacyHuman();
+    writeFileSync(join(humanDir(), 'CALENDAR.db'), '{ half written');
+    expect((await mirrorLegacyHuman()).conflicts).toBe(1);
+    expect(rowNames(readFileSync(a.calendar, 'utf8'))).toEqual(['r1:Dentist']);
+    expect(rowNames(a.human('CALENDAR.db'))).toEqual(['r1:Dentist']);
+    expect(a.conflictCopies()).toHaveLength(1); // 坏的那份留着
   });
 
   it('against a server without the human slot it only mirrors locally and never writes __human__', async () => {

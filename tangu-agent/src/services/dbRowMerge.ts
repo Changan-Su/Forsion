@@ -30,34 +30,64 @@ function byId(list: Obj[]): Map<string, Obj> | null {
 
 export interface DbMergeResult { content: string; conflict: boolean }
 
-/** ours 里 theirs 没有的列,能对上就改成 theirs 的 id(cells 的键、视图里的引用一起换)。按文本换 `"id"`:列 id 是 8 位随机串,撞上别的值的概率可以忽略。 */
-function alignColumns(ours: string, theirs: Obj): string {
-  const O = parse(ours);
-  const oc = O && Array.isArray(O.columns) ? (O.columns as Obj[]) : [];
-  const tc = Array.isArray(theirs.columns) ? (theirs.columns as Obj[]) : [];
+/** ours 里 theirs 没有的列,能对上就换成 theirs 的 id(cells 的键、视图里的引用一起换)。按「同类型同名」对;
+ *  没有基线(第一次见面)时再按「该类型两边各只剩一列」对 —— 有基线时不这么猜:两边各自新加的两列同类型不同名,是两列。
+ *  有基线也要对:第一次见面对齐之后,那段时间里用旧列 id 写进来的行(桌面重放挂起的改动)还会带着旧 id 回来。 */
+function columnMap(O: Obj, T: Obj, firstContact: boolean): Map<string, string> {
+  const oc = Array.isArray(O.columns) ? (O.columns as Obj[]) : [];
+  const tc = Array.isArray(T.columns) ? (T.columns as Obj[]) : [];
   const oIds = new Set(oc.map((c) => c.id)), tIds = new Set(tc.map((c) => c.id));
   const freeO = oc.filter((c) => !tIds.has(c.id)), freeT = tc.filter((c) => !oIds.has(c.id));
   const map = new Map<string, string>();
   const take = (match: (o: Obj, t: Obj) => boolean): void => {
     for (const o of freeO) {
       if (map.has(o.id as string)) continue;
-      const left = freeT.filter((t) => ![...map.values()].includes(t.id as string));
-      const hits = left.filter((t) => match(o, t));
+      const hits = freeT.filter((t) => ![...map.values()].includes(t.id as string) && match(o, t));
       const rivals = freeO.filter((x) => !map.has(x.id as string) && hits.length === 1 && match(x, hits[0]));
       if (hits.length === 1 && rivals.length === 1) map.set(o.id as string, hits[0].id as string);
     }
   };
   take((o, t) => o.type === t.type && o.name === t.name);
-  take((o, t) => o.type === t.type);
-  let out = ours;
+  if (firstContact) take((o, t) => o.type === t.type);
+  return map;
+}
+/** 按文本换 `"id"`:列 id 是 8 位随机串,撞上别的值的概率可以忽略。 */
+const remap = (text: string, map: Map<string, string>): string => {
+  let out = text;
   for (const [from, to] of map) out = out.split(JSON.stringify(from)).join(JSON.stringify(to));
   return out;
+};
+const ids = (v: unknown): Set<unknown> => new Set(isIdList(v) ? v.map((x) => x.id) : []);
+/** 和基线一个行 id、一个列 id 都对不上 = 整份换掉了(删了又重新播种、换了个库),不是「把原来的都删了」:按第一次见面合。 */
+function replaced(X: Obj, B: Obj): boolean {
+  const overlap = (a: Set<unknown>, b: Set<unknown>): boolean => [...a].some((x) => b.has(x));
+  const br = ids(B.rows), bc = ids(B.columns);
+  return (br.size > 0 || bc.size > 0) && !overlap(ids(X.rows), br) && !overlap(ids(X.columns), bc);
+}
+/** 新装机首启播种、一点没动过的「我的日历」(desktop schema.ts seedCalendarDb):第一次见面时它就是「空的」,用另一边,
+ *  不然每多一台设备,三条欢迎日程就在所有人的日历里多一份。日期相对播种当天,不比。 */
+const SEED_ROWS = ['欢迎使用 Calendar Space', '整理本周任务', '项目评审'];
+function untouchedSeed(X: Obj): boolean {
+  const cols = Array.isArray(X.columns) ? (X.columns as Obj[]) : [];
+  const rows = X.rows as Obj[];
+  if (X.name !== '我的日历' || X.views !== undefined || cols.length !== 3 || rows.length !== SEED_ROWS.length) return false;
+  if (cols.map((c) => `${c.type}:${c.name}`).join('|') !== 'text:名称|calendarDate:日期|checkbox:完成') return false;
+  const [n] = cols.map((c) => c.id as string);
+  const known = new Set(cols.map((c) => c.id));
+  return rows.every((r, i) => isObj(r.cells) && r.cells[n] === SEED_ROWS[i] && r.body === undefined && Object.keys(r.cells).every((k) => known.has(k)));
 }
 
 export function mergeDbFile(ours: string, base: string | null, theirs: string): DbMergeResult | null {
-  const T = parse(theirs), B = parse(base);
-  const O = parse(B || !T ? ours : alignColumns(ours, T));
-  if (!O || !T) return null;
+  const T = parse(theirs), O0 = parse(ours);
+  if (!O0 || !T) return null;
+  let B = parse(base);
+  if (B && (replaced(O0, B) || replaced(T, B))) B = null;
+  if (!B && untouchedSeed(O0)) return { content: theirs, conflict: false };
+  if (!B && untouchedSeed(T)) return { content: ours, conflict: false };
+  const map = columnMap(O0, T, !B);
+  const O = parse(remap(ours, map));
+  if (B) B = parse(remap(base!, map));
+  if (!O) return null;
   let conflict = false;
   const pick = (o: unknown, b: unknown, t: unknown, hasBase: boolean): unknown => {
     if (same(o, t)) return t;
@@ -76,8 +106,8 @@ export function mergeDbFile(ours: string, base: string | null, theirs: string): 
       return bv !== undefined && same(only, bv) ? undefined : only; // 对面删了、这边没动 → 删;这边改过 / 新加的 → 留
     };
     // ponytail: 顺序 = theirs 的顺序,ours 独有的接在末尾;要保留插入位置再按前驱插
-    const ids = [...tm.keys(), ...[...om.keys()].filter((id) => !tm.has(id))];
-    return ids.map(one).filter((x): x is Obj => x !== undefined);
+    const order = [...tm.keys(), ...[...om.keys()].filter((id) => !tm.has(id))];
+    return order.map(one).filter((x): x is Obj => x !== undefined);
   };
   const out: Obj = {};
   for (const k of [...Object.keys(T), ...Object.keys(O).filter((k) => !(k in T))]) {

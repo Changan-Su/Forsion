@@ -2,7 +2,8 @@
  *  第 2 步起 human/ 整个上云(agentFileSync 的 __human__ 槽位);旧版设备(2.13.4 桌面、手机、网页)仍只认旧位置 ——
  *  USER.md、默认笔记库根上的 Calendar.db。所以新版每次同步(和启动、在设置里改画像后)把两边三方合并一遍,直到所有设备都升级。
  *  方案页 docs/ToBeImproved/用户资料文件夹对称方案_2026-10-19 ⑦。 */
-import { existsSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { defaultCalendarFile, ensureHumanFolder, humanDir, readHumanFile, readUserMd, tanguHome, USER_MD_TEMPLATE, userMdFile } from '../core/tanguHome.js';
 import { atomicSyncWrite, conflictCopyName, readSyncBytes } from '../services/agentSyncPaths.js';
@@ -40,11 +41,14 @@ export async function mirrorLegacyHuman(): Promise<{ conflicts: number }> {
   // 没用过默认笔记库就没有默认日历可搬;库根是软链(放在网盘里)时按真实路径读写,库内照样不认软链
   if (calendar && existsSync(dirname(calendar))) {
     const root = realpathSync(dirname(calendar));
-    pairs.push({ key: 'Calendar.db', legacy: join(root, basename(calendar)), legacyRoot: root, human: join(dir, 'CALENDAR.db'), db: true });
+    // 基线按真实路径记:默认库换了地方(或台架指到别的库)= 另一份日历,按第一次见面合,不拿上一份的基线去比
+    const legacy = join(root, basename(calendar));
+    pairs.push({ key: `Calendar.db@${legacy}`, legacy, legacyRoot: root, human: join(dir, 'CALENDAR.db'), db: true });
   }
   let conflicts = 0;
   // USER.md 在家目录根上,同步落它时拿的是家目录那把锁;human/ 的同步落盘和 humanStore 拿的是 human/ 那把
   const run = (): void => withMemoryDirectoryLock(home, () => withMemoryDirectoryLock(dir, () => {
+    backfillUserMdShadowBase(home);
     const statePath = join(dir, MIRROR_STATE);
     let state: Record<string, string> = {};
     try { state = JSON.parse(readSyncBytes(home, statePath)?.toString('utf8') || '{}'); } catch { state = {}; }
@@ -61,6 +65,24 @@ export async function mirrorLegacyHuman(): Promise<{ conflicts: number }> {
 
 let tmpSeq = 0;
 
+/** 升级前写的 USER.md 同步影子(`.cloudsync-<账号>.json`)只记哈希不记原文,没原文就合不了、只能按第一次见面取并集。
+ *  启动时 USER.md 还没被改过,它就是上次同步一致的那份:哈希对得上就把原文补进影子,之后两台都改了也能三方合并。 */
+function backfillUserMdShadowBase(home: string): void {
+  const user = readSyncBytes(home, userMdFile());
+  if (!user) return;
+  const hash = createHash('sha256').update(user).digest('hex');
+  for (const name of readdirSync(home)) {
+    if (!/^\.cloudsync-[a-f0-9]{64}\.json$/.test(name)) continue;
+    try {
+      const state = JSON.parse(readSyncBytes(home, join(home, name))?.toString('utf8') ?? '');
+      const entry = state?.files?.['USER.md'];
+      if (!entry || entry.base !== undefined || entry.hash !== hash) continue;
+      entry.base = user.toString('utf8');
+      atomicSyncWrite(home, join(home, name), JSON.stringify(state));
+    } catch { /* 读不懂的影子不碰 */ }
+  }
+}
+
 function mirrorPair(p: MirrorPair, state: Record<string, string>, home: string, dir: string): number {
   const read = (root: string, file: string): string | null => readSyncBytes(root, file)?.toString('utf8') ?? null;
   const L = read(p.legacyRoot, p.legacy);
@@ -76,11 +98,12 @@ function mirrorPair(p: MirrorPair, state: Record<string, string>, home: string, 
     if (read(p.legacyRoot, p.legacy) !== L) { try { rmSync(tmp); } catch { /* ignore */ } throw new Error('legacy file changed during mirror'); }
     renameSync(tmp, p.legacy);
   };
-  const keepLegacyCopy = (): void => {
-    let name = conflictCopyName(basename(p.legacy), new Date());
-    for (let n = 2; existsSync(join(dir, name)); n++) name = `${conflictCopyName(basename(p.legacy), new Date())}.${n}`;
-    atomicSyncWrite(home, join(dir, name), L!);
+  const keepCopy = (text: string, name: string): void => {
+    let copy = conflictCopyName(name, new Date());
+    for (let n = 2; existsSync(join(dir, copy)); n++) copy = `${conflictCopyName(name, new Date())}.${n}`;
+    atomicSyncWrite(home, join(dir, copy), text);
   };
+  const keepLegacyCopy = (): void => keepCopy(L!, basename(p.legacy));
   const settle = (text: string): void => { state[p.key] = text; };
 
   if (L === null && H === null) { delete state[p.key]; return 0; }
@@ -91,13 +114,22 @@ function mirrorPair(p: MirrorPair, state: Record<string, string>, home: string, 
     delete state[p.key]; return 0;
   }
   if (L === H) { settle(H); return 0; }
-  if (B !== null && L === B) { writeLegacy(H); settle(H); return 0; }
-  if (B !== null && H === B) { writeHuman(L); settle(L); return 0; }
+  // 日历不走「只有一边动了就照抄」:库里那份被整份换掉(删了又重新播种)看起来也是「只有库里动了」,照抄会把 human/ 的行全删掉。
+  // 按行合并能认出整份换掉(和基线一个 id 都对不上)并按第一次见面合;真的只有一边动了,按行合并的结果也就是那一边。
+  if (!p.db && B !== null && L === B) { writeLegacy(H); settle(H); return 0; }
+  if (!p.db && B !== null && H === B) { writeHuman(L); settle(L); return 0; }
   const text = p.db ? null : B === null ? joinFirstContact(L, H) : mergeText3(L, B, H);
   const merged = p.db ? mergeDbFile(L, B, H) : text === null ? null : { content: text, conflict: false };
-  if (!merged) { keepLegacyCopy(); writeLegacy(H); settle(H); return 1; }
+  if (!merged) {
+    // 合不了:哪边坏了(解析不了)就把哪边存成副本、用好的那份;都能读(比如 id 重复)就 human/ 赢
+    const parses = (t: string): boolean => { try { JSON.parse(t); return true; } catch { return false; } };
+    if (p.db && parses(L) && !parses(H)) { keepCopy(H, basename(p.human)); writeHuman(L); settle(L); return 1; }
+    keepLegacyCopy(); writeLegacy(H); settle(H); return 1;
+  }
   if (merged.conflict) keepLegacyCopy();
-  writeHuman(merged.content); writeLegacy(merged.content); settle(merged.content);
+  if (merged.content !== H) writeHuman(merged.content);
+  if (merged.content !== L) writeLegacy(merged.content);
+  settle(merged.content);
   return merged.conflict ? 1 : 0;
 }
 
