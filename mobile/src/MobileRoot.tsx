@@ -47,8 +47,7 @@ import { buildDefaultLayout } from '@/bootstrapEngine'
 import { MobileUnitsSheet, useUnitsSheet } from './UnitsSheet'
 import { exitHint, onBackGesture } from './nativeBack'
 import { homeTarget } from '@/services/engine/targets'
-import { Capacitor } from '@capacitor/core'
-import { BrowserChrome } from './browserChrome'
+import { BrowserChrome, browserChromeInstalled } from './browserChrome'
 import { installBrowserBack, type BrowserBackPlan } from './browserBack'
 import { subscribeBrowserSheet } from './browserSheet'
 
@@ -148,7 +147,7 @@ function planBack(): BrowserBackPlan & { slide?: 'left' | 'right' } {
 
 function useBrowserBack(): void {
   useEffect(() => {
-    if (Capacitor.isNativePlatform()) return
+    if (!browserChromeInstalled()) return
     return installBrowserBack(planBack, (changed) => {
       // Subscribe to navigation inputs, not streamed message content. Menu-local navigation asks the
       // same cancellable back event as Android; its sheet presenter reports opening/closing here.
@@ -267,7 +266,7 @@ export function MobileRoot() {
         <SingleColumnHost dark={visualTheme.mode === 'dark'} buildDefault={buildDefaultLayout} />
       </div>
       {nativeSpaces && AccountC && <div hidden><AccountC expanded={false} /></div>}
-      {!Capacitor.isNativePlatform() && <BrowserChrome />}
+      {browserChromeInstalled() && <BrowserChrome />}
 
       {/* Amadeus 全局浮层。⚠️ 名字像「快速切换器」,实为**对话框宿主**:AskStringHost / DeleteAssetsHost /
           NewDrawingHost / ConfirmDialog / AutomationBuilderHost / TemplatePicker 都住在里面。

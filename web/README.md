@@ -18,7 +18,9 @@
 
 Browser mobile mode uses the same navigation and sheet contracts as Android, including list/detail levels, view search and vault actions, account/settings access and dock preferences. Browser Back follows the app's back chain and can leave normally from Home. Platform capabilities still come from the actual host: launcher shortcuts, system sharing, live notifications and phone control require native support; Web's cloud vault and account bridges remain authoritative.
 
-验收 / Verification: `npm run build` 后运行 `npm run e2e:mobile`。真实 Chromium 在隔离存储与夹具 API 上检查中文浅色 390px、英文深色 320px、实际点击与返回链；截图与报告在 `web/outputs/mobile-parity/`。CI 为 `web mobile parity`。
+验收 / Verification: `npm run build` 后运行 `npm run e2e:mobile`。真实 Chromium 在隔离存储与夹具 API 上检查中文浅色 390px、英文深色 320px、实际点击与返回链，以及平板视口（820×1180 竖屏 = 手机布局；转到 1180×820 横屏 = 宽屏并排左栏，标题胶囊排在左栏右边，白板顶排绕开两颗胶囊）；截图与报告在 `web/outputs/mobile-parity/`。CI 为 `web mobile parity`。Pad 版式另有 `npm run e2e:pad`。
+
+浏览器移动 chrome 只在网页宿主(webShim / unitShim)里装；移动 App 自己的包（`mobile/`，mobileShim 带 `tangu.mobile`）在普通浏览器里跑时（mobile 的 `e2e:*`、phone-stage 出图台架）照旧是壳自带的 Web 顶栏回落。The browser mobile chrome is installed by the Web hosts only; the mobile app bundle in a plain browser (mobile `e2e:*`, phone-stage) keeps the shell's own web bar fallback.
 
 ---
 
