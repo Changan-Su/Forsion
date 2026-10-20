@@ -1051,11 +1051,12 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
         labels: toList ? { ...labels, left: back } : labels,
         // 底栏只在每个 Space 的第一层:列表层,或没有列表层的 Space(主页 / 日历…)的主区。
         ...(drawsSpaces && !toList ? { spaces: nativeSpaceList(), allLabel: trRef.current('lcl.mobile.allSpaces') } : {}),
-        // 当前这一层的视图给顶栏加的东西(搜索钮、标题的第二段),见 useNativeChromeExtras。
+        // 当前这一层的视图给顶栏加的东西(搜索钮、标题的第二段、左胶囊的宽度上限),见 useNativeChromeExtras。
         ...(extras?.search ? { search: extras.search.label } : {}),
         ...(extras?.title ? { titleSub: extras.title.sub, ...(extras.title.run ? { titleTap: true } : {}) } : {}),
         ...(moreDotLabel !== null ? { moreDot: { label: moreDotLabel } } : {}),
         ...(sideInset ? { leftInset: sideInset } : {}),
+        ...(extras?.capLeftMax ? { capLeftMax: extras.capLeftMax } : {}),
       }, {
         left: () => useWorkspace.getState().toggleSidebar('left'),
         right: () => useWorkspace.getState().toggleSidebar('right'),

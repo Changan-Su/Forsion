@@ -106,6 +106,7 @@ private class CapsuleLook(theme: SheetTheme, frosted: Boolean) {
  * "More" carries a dot while something behind it wants a look (`moreDot`; danger red like the web `.rb-dot`).
  * [rail] = the Spaces stand in the rail at the left edge (wide windows, NativeSpaceRail): the capsules start after it, and
  * after the page's docked left column (`leftInset`); the avatar is at the rail's foot instead of in the right capsule.
+ * `capLeftMax` caps the left capsule (the page lays something out in this row right of it); the title is cut with an ellipsis.
  * Test anchors: `nativeChrome.{bar,capLeft,capRight,left,right,tabs,more,moreDot,account,back,close,title,titleSub,titleButton,search}` (resource-ids).
  */
 @OptIn(ExperimentalComposeUiApi::class)
@@ -135,7 +136,9 @@ internal fun NativeChromeBar(state: ChromeState, insets: Insets, onPlate: PlateS
             when (state.mode) {
                 ChromeState.Mode.SHELL -> {
                     // A first-level page (Space list, Home) has no left button: the capsule is just the title.
-                    if (state.left || state.title.isNotBlank()) Capsule("capLeft", look, onPlate, Modifier.weight(1f, fill = false)) {
+                    // capLeftMax: the page has something in this row right of it (the board on a wide window) → the title is cut.
+                    val capMax = if (state.capLeftMax > 0) Modifier.widthIn(max = state.capLeftMax.dp) else Modifier
+                    if (state.left || state.title.isNotBlank()) Capsule("capLeft", look, onPlate, Modifier.weight(1f, fill = false).then(capMax)) {
                         if (state.left) CapsuleIconButton("left", state.labels.getValue("left"), state.icons.left, fg) { onAction("left") }
                         CapsuleTitle(
                             state.title, fg, lead = !state.left, sub = state.titleSub, subColor = Color(theme.muted),

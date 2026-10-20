@@ -17,7 +17,7 @@ import './viewIsland.css'
 import './excalidrawTheme.css' // 引擎 token → LCL 契约(见该文件),随画布 chunk 一起加载
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
-import { UI_ZOOM_EVENT } from '@lcl/engine'
+import { UI_ZOOM_EVENT, useNativeChromeExtras } from '@lcl/engine'
 import type { ObsidianResetCustomPenState } from '@excalidraw/excalidraw/obsidianTypes'
 import type { AppState, ExcalidrawInitialDataState, ExcalidrawImperativeAPI, BinaryFileData } from '@excalidraw/excalidraw/types'
 import type { OrderedExcalidrawElement } from '@excalidraw/excalidraw/element/types'
@@ -58,6 +58,8 @@ registerMessages({
 
 /** 线距小于这个屏幕像素就不画:再密就是一片糊(excalidraw 自带网格同款下限)。 */
 const MIN_VISIBLE_PX = 4
+/** Android 宽屏:标题胶囊被封顶到比这还窄(dp,左钮 + 三四个字)就不封了,菜单钮与工具岛整排退到胶囊下面。 */
+const CAP_FLOOR = 120
 const V_GRAD = 'linear-gradient(90deg, var(--amx-grid-line) 0 1px, transparent 1px)'
 const H_GRAD = 'linear-gradient(180deg, var(--amx-grid-line) 0 1px, transparent 1px)'
 
@@ -620,24 +622,44 @@ export default function ExcalidrawCanvas({
     return () => ro.disconnect()
   }, [api, layout, clampView, syncZoom, tryFit])
 
-  // Android 宽屏原生外壳下,菜单钮 + 工具岛挪进胶囊那一排(base.css ⑦)。装不下(4:3 平板开着左栏、标题很长)→
-  // data-cap-row="off":退回引擎自己那一排、挪到胶囊下面。先按「一排」排一遍再量,溢出就退。
-  // 看白板根(旋转 / 开合左栏)和左栏(标题胶囊变宽把它撑开)。
-  // ponytail: 退回之后标题再变短不会自己回到一排,等下一次尺寸变化;要即时就再盯 #nc-caps 那条规则。
+  // Android 宽屏原生外壳下,菜单钮 + 工具岛挪进胶囊那一排(base.css ⑦,方案 A2)。三档全按几何算,不量溢出 ——
+  // 标题胶囊的宽要原生走一趟才回来,量到的总是上一拍的:
+  //   · capMax = 一排按最小间距排满时标题胶囊最多占多宽(12 + 胶囊 + 8 + 菜单钮 + 8 + 工具岛 + 8 + 右胶囊 + 12 = 白板宽),
+  //     报给原生封顶、长标题省略号截断。算式里没有胶囊此刻的宽,一趟就收敛。
+  //   · 'off':封顶后标题连 CAP_FLOOR 都给不到(而它本来比这宽)→ 菜单钮与工具岛退回引擎自己那一排、挪到胶囊下面,不封顶。
+  //   · 'gap':工具岛放主区正中会碰到菜单钮(或右胶囊)→ 改在菜单钮右缘与右胶囊左缘之间的空当里居中,不一点点地让。
+  //   · 都不是:主区正中。
+  // 看白板根(旋转 / 开合左栏)、左栏(标题胶囊变宽 → 菜单钮的让位跟着变)、工具岛(工具栏改了顺序 / 增删)。
+  // 白板根里净缩放恒为 1(syncZoom 反向抵消了界面缩放):视口 px = 白板里的 px = dp。
+  // ponytail: off 档下标题变短、或右胶囊变宽,都不会立刻重算(左栏的宽不随它们变),等下一次尺寸变化;要即时就再盯 #nc-caps 那条规则。
+  const [capMax, setCapMax] = useState(0)
   useEffect(() => {
     const el = hostRef.current
     if (!el || !api || typeof ResizeObserver === 'undefined') return
     const fit = (): void => {
       el.removeAttribute('data-cap-row')
-      const top = el.closest('.mb-shell[data-native-chrome][data-wide]') && el.querySelector<HTMLElement>('.App-menu_top')
-      if (top && top.scrollWidth > top.clientWidth + 1) el.dataset.capRow = 'off'
+      const top = el.closest(".mb-shell[data-native-chrome][data-wide] .mb-main > .mb-view[data-view='amadeus-drawing']") && el.querySelector<HTMLElement>('.App-menu_top')
+      const island = top && top.querySelector<HTMLElement>(':scope > .shapes-section')
+      const menu = top && top.querySelector<HTMLElement>('.main-menu-trigger')
+      const w = el.getBoundingClientRect().width
+      if (!top || !island || !menu || !w) { setCapMax(0); return }
+      const css = getComputedStyle(el)
+      const capL = Number(css.getPropertyValue('--nc-capl-w')) || 0
+      const capR = Number(css.getPropertyValue('--nc-capr-w')) || 0
+      const iw = island.getBoundingClientRect().width
+      const mw = menu.getBoundingClientRect().width
+      const max = Math.floor(w - capR - iw - mw - 48)
+      if (max < Math.max(0, Math.min(CAP_FLOOR, capL))) { el.dataset.capRow = 'off'; setCapMax(0); return }
+      setCapMax(max)
+      const menuEnd = 12 + Math.min(capL, max) + 8 + mw
+      if (menuEnd + 8 > (w - iw) / 2 || (w + iw) / 2 > w - 12 - capR - 16) el.dataset.capRow = 'gap'
     }
     const ro = new ResizeObserver(fit)
     ro.observe(el)
-    const left = el.querySelector('.App-menu_top__left')
-    if (left) ro.observe(left)
-    return () => ro.disconnect()
+    for (const q of ['.App-menu_top__left', '.App-menu_top > .shapes-section']) { const x = el.querySelector(q); if (x) ro.observe(x) }
+    return () => { ro.disconnect(); setCapMax(0) }
   }, [api])
+  useNativeChromeExtras(capMax > 0 ? { where: 'main', capLeftMax: capMax } : null)
 
   return (
     // data-nc-caps:Android 原生外壳往这里写两颗顶部胶囊的宽(mobile/src/nativeChrome.ts),宽屏时白板顶上那一排要绕开它们(base.css)。

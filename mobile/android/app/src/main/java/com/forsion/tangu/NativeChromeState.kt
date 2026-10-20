@@ -80,6 +80,12 @@ internal data class ChromeState(
      * value that is not a sane number is 0.
      */
     val leftInset: Int = 0,
+    /**
+     * Shell mode: most dp the left capsule may take (0 = no limit) — the view on screen lays something out in the capsule
+     * row right of it (wide windows: the board's menu button and tool island, mock-up A2). A longer title is cut.
+     * Cosmetic like [leftInset].
+     */
+    val capLeftMax: Int = 0,
 ) {
     enum class Mode { SHELL, PAGE, HIDDEN }
 
@@ -165,6 +171,10 @@ internal data class ChromeState(
             return (o.opt("label") as? String)?.takeIf { it.length <= 128 } ?: ""
         }
 
+        /** A dp length that only moves the capsules: not a sane number → 0 (none), never a refused bar. */
+        private fun dpField(json: JSONObject, key: String): Int =
+            (json.opt(key) as? Number)?.toDouble()?.takeIf { it in 0.0..4000.0 }?.toInt() ?: 0
+
         private fun spaces(json: JSONObject): List<ChromeSpace> {
             val array = json.optJSONArray("spaces") ?: return emptyList()
             require(array.length() <= MAX_SPACES) { "Too many spaces" }
@@ -206,7 +216,7 @@ internal data class ChromeState(
                         allLabel = NativeJson.optStr(json, "allLabel", 128), search = NativeJson.optStr(json, "search", 128),
                         titleSub = NativeJson.optStr(json, "titleSub", 128), titleTap = NativeJson.optBool(json, "titleTap"),
                         moreDot = moreDot(json),
-                        leftInset = (json.opt("leftInset") as? Number)?.toDouble()?.takeIf { it in 0.0..4000.0 }?.toInt() ?: 0,
+                        leftInset = dpField(json, "leftInset"), capLeftMax = dpField(json, "capLeftMax"),
                     )
                 }
                 Mode.PAGE -> ChromeState(

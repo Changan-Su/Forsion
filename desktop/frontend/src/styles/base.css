@@ -5096,8 +5096,9 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
 .mb-shell[data-native-chrome] .mb-view[data-view='homepage'] .hp-root { --hp-chrome-bottom: var(--mb-bottom); }
 
 /* ⑦ 白板在 Android 宽屏(左侧竖条 + 并排左栏,2026-10-20 方案 A2):画布铺满整屏高,引擎顶上那一排(菜单钮 → 工具岛)
-      挪进两颗原生胶囊所在的那一行 —— 菜单钮排在标题胶囊右边 8dp,工具岛在主区正中,左边挤到它时紧贴菜单钮(不跳到空当正中:
-      连续地让,标题变长时工具岛一点点右移),右边给右胶囊留够位置。
+      挪进两颗原生胶囊所在的那一行 —— 菜单钮排在标题胶囊右边 8dp,工具岛在主区正中,右边给右胶囊留够位置。
+      挤的时候(放正中会碰到菜单钮)ExcalidrawCanvas 给白板根挂 data-cap-row="gap",工具岛改在菜单钮右缘与右胶囊左缘之间的
+      空当里居中(不一点点地让);标题胶囊的宽也由它算好上限报给原生(capLeftMax),长标题省略号截断,这一排永远放得下。
       · 胶囊的宽:mobile/src/nativeChrome.ts 写成只命中 [data-nc-caps] 的一条规则(白板根带这个属性);
         状态栏高 --nc-status 在 <body> 上。左胶囊从主区左缘 12dp 起(原生按 leftInset 摆),右胶囊贴主区右缘 12dp。
       · 只认引擎的平板 / 桌面档。.excalidraw--mobile 是手机档(工具条整条横在顶上),照旧走默认让位 ——
@@ -5106,7 +5107,7 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
         哪边的最小宽(左 = 让位 + 菜单钮,右 = 右胶囊的让位)装不下,它才被挤开。右上角那颗侧栏钮是绝对定位的,不占这一排。
       · 工具岛 52px 高、菜单钮 36px:都把中线对齐胶囊行的中线(状态栏 + 6 + 23dp)。
       · dp 直接当 px 用、不除 --uiz:白板根(.amx-boardhost)自己反向抵消了界面缩放(ExcalidrawCanvas syncZoom),里面净缩放恒为 1。
-      · 一排放不下(4:3 平板开着左栏、标题很长)时 ExcalidrawCanvas 给白板根挂 data-cap-row="off":菜单钮与工具岛退回
+      · 标题封顶后连左钮 + 几个字都放不下(4:3 平板开着左栏)时挂 data-cap-row="off":菜单钮与工具岛退回
         引擎自己那一排,整排挪到胶囊下面 —— 画布照样铺满整屏高。 */
 .mb-shell[data-native-chrome][data-wide] .mb-main > .mb-view[data-view='amadeus-drawing']:has(.excalidraw:not(.excalidraw--mobile)) { padding-top: 0; }
 .mb-shell[data-native-chrome][data-wide] .mb-view[data-view='amadeus-drawing'] .amx-boardhost {
@@ -5121,6 +5122,10 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
 .mb-shell[data-native-chrome][data-wide] .mb-view[data-view='amadeus-drawing'] .amx-boardhost:not([data-cap-row='off']) .excalidraw:not(.excalidraw--mobile) .App-menu_top > .App-menu_top__left > :first-child { margin-left: max(0px, var(--amx-cap-l) - var(--editor-container-padding)); }
 .mb-shell[data-native-chrome][data-wide] .mb-view[data-view='amadeus-drawing'] .amx-boardhost:not([data-cap-row='off']) .excalidraw:not(.excalidraw--mobile) .App-menu_top > .shapes-section { flex: none; }
 .mb-shell[data-native-chrome][data-wide] .mb-view[data-view='amadeus-drawing'] .amx-boardhost:not([data-cap-row='off']) .excalidraw:not(.excalidraw--mobile) .App-menu_top::after { content: ''; flex: 1 1 0; min-width: max(0px, var(--amx-cap-r) - var(--editor-container-padding)); }
+/*    · gap 档:左栏与 ::after 以各自的最小宽为基准、再平分剩余 → 工具岛落在空当正中,离菜单钮与右胶囊各至少 8px(flex gap)。
+        与上面几条同特异性,必须排在它们后面。 */
+.mb-shell[data-native-chrome][data-wide] .mb-view[data-view='amadeus-drawing'] .amx-boardhost[data-cap-row='gap'] .excalidraw:not(.excalidraw--mobile) .App-menu_top > .App-menu_top__left { flex: 1 1 auto; }
+.mb-shell[data-native-chrome][data-wide] .mb-view[data-view='amadeus-drawing'] .amx-boardhost[data-cap-row='gap'] .excalidraw:not(.excalidraw--mobile) .App-menu_top::after { flex: 1 1 max(0px, (12 + var(--nc-capr-w, 0)) * 1px - var(--editor-container-padding)); min-width: 0; }
 
 /* chat / work 模式位:会话创建后只读(disabled),悬浮 title 解释「换模式请新建会话」。 */
 .composer-menu .menu-item:disabled { opacity: 0.55; cursor: default; }

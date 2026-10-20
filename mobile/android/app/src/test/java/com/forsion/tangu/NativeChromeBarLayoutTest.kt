@@ -29,6 +29,7 @@ import androidx.core.graphics.Insets
 import androidx.test.core.app.ApplicationProvider
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.ExternalResource
@@ -254,5 +255,18 @@ class NativeChromeBarLayoutTest {
         top(ChromeState.parse(JSONObject("""{"mode":"shell","title":"Chat","left":false,"right":false,"tabCount":1,"labels":{"left":"L","right":"R","tabs":"T","more":"M"},"theme":$theme$account}""")))
         compose.onNodeWithTag("nativeChrome.account").assertExists()
         assertEquals(12f, left("nativeChrome.capLeft").value, pixel)
+    }
+
+    @Test fun capLeftMaxCutsALongTitleAndLeavesAShortOneAsItIs() {
+        // the board on a wide window: the page caps the left capsule so its menu button and tool island keep their row
+        val long = "A board title far too long for the room left beside the board's menu button and tool island"
+        var state by mutableStateOf(shell(extra = ""","leftInset":320,"capLeftMax":200""").copy(title = long))
+        compose.setContent { Box(Modifier.width(1200.dp).height(NATIVE_CHROME_HEIGHT)) { NativeChromeBar(state, Insets.NONE, { _, _ -> }, {}, rail = true) } }
+        assertEquals(200f, widthOf("nativeChrome.capLeft").value, pixel)
+        compose.onNodeWithTag("nativeChrome.title").assertExists()
+        state = state.copy(title = "Chat")
+        compose.waitForIdle()
+        assertTrue("a short title keeps its own width", widthOf("nativeChrome.capLeft").value < 150f)
+        assertEquals("not a sane number: no cap", 0, shell(extra = ""","capLeftMax":-5""").capLeftMax)
     }
 }
