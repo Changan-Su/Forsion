@@ -4,7 +4,7 @@
  */
 import React, { useEffect, useRef, useState } from 'react'
 import { Play, Pause, Loader2, FileText } from 'lucide-react'
-import type { StoredDesktopConfig } from '../types'
+import type { StoredDesktopConfig } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { synthesizeToBlobUrl } from '../services/ttsService'
 import { homeTarget } from '../services/engine/targets'
 import { Markdown } from './Markdown'

@@ -9,7 +9,7 @@
  *  - 两边的历史都只拉最近 200 条(引擎 /messages 缺省 LIMIT),窗口可能错开:从分支里第一处对上的那一轮开始认。
  * 对不上的轮次一律算分支自己的,挂在分叉卡下面(分叉卡也认不出就各自成一棵)。
  */
-import type { SessionRecord, UiMessage } from '../../types'
+import type { SessionRecord, UiMessage } from '../../../../../tangu-agent/src/contracts/clientTypes'
 
 /** 列表里不画的(同 ChatView 的 isHiddenInList)和这一端自己插的系统行(投票 / 压缩 / 成本提示):不进卡。 */
 const unseen = (m: UiMessage): boolean =>

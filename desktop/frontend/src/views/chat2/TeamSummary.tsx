@@ -1,6 +1,6 @@
 import { Markdown } from '../../components/Markdown'
 import { registerMessages, useI18n } from '../../i18n'
-import type { UiMessage } from '../../types'
+import type { UiMessage } from '../../../../../tangu-agent/src/contracts/clientTypes'
 
 registerMessages({
   'team.summary': { zh: 'Historian · 团队总结', en: 'Historian · Team summary' },

@@ -5,7 +5,7 @@
 import React, { useEffect, useState } from 'react'
 import { History, Sparkles, RefreshCw, Settings } from 'lucide-react'
 import { getHistorianActivity } from '../services/backendService'
-import type { HistorianActivityItem, SessionRecord, TanguDesktopConfig } from '../types'
+import type { HistorianActivityItem, SessionRecord, TanguDesktopConfig } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { useApp } from '../stores/appStore'
 import { registerMessages, useI18n } from '../i18n'
 import { MuseView } from './MuseView'

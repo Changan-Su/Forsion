@@ -4,7 +4,7 @@
  * 也绝不回流进 agent 上下文 —— 依据《Forsion-Codex Claude 右侧卡片原型》§17.4 / §17.5。
  * 渲染在 TaskSummary.tsx。
  */
-import type { DisplayFile, TodoItem, ToolEvent, UiMessage } from '../../types'
+import type { DisplayFile, TodoItem, ToolEvent, UiMessage } from '../../../../../tangu-agent/src/contracts/clientTypes'
 
 /** 一条「用过的来源」:agent 实际读到/搜到/取到的东西。用户给的附件不算(§7.4 两者不能混)。 */
 export interface TaskSource {

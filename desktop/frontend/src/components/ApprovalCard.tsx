@@ -10,7 +10,7 @@
  */
 import React, { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ShieldQuestion, Check, CheckCheck, X } from 'lucide-react'
-import type { ApprovalRequest } from '../types'
+import type { ApprovalRequest } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { DiffView } from './DiffView'
 import { toolDiffText } from './toolDiff'
 import { registerMessages, useI18n } from '../i18n'

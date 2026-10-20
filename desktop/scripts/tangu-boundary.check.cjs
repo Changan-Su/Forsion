@@ -11,6 +11,8 @@
  *      用 `@/`、相对路径直连 Tangu 文件 = 红;`@tangu/ui/` 指到不是 Tangu 的文件 = 红。
  *   2. Tangu 文件之间用相对路径,不许写 `@tangu/ui/`(这个前缀只标宿主一侧的越界)。
  *   3. Tangu → 宿主:Tangu 文件用到的宿主模块集合 = 将来要补的 ctx 接缝面,只许减不许增(baseline.tanguHostDeps)。
+ *   4. 契约(`contracts.dirs`,第 2b 步起;方案里包的 contracts/ 子路径):引擎、Tangu 界面、宿主三方共用的纯 TS。
+ *      两边引它都不计数;契约文件自己只许用相对路径引契约目录里的文件(不许引宿主 / Tangu / 引擎内部,也不许引第三方包)。
  * 测试文件与 dev 台架页(*.test.* / harness.tsx / *Harness.tsx)不查:它们随被测对象走。
  *
  * 红了怎么办:
@@ -27,7 +29,7 @@ const path = require('path')
 const GENESIS = path.resolve(__dirname, '../..')
 const CONFIG = path.join(__dirname, 'tangu-boundary.json')
 const PREFIX = '@tangu/ui/'
-const SCAN = ['desktop/frontend/src', 'desktop/shared', 'desktop/electron', 'lcl', 'mobile/src', 'web/src']
+const SCAN = ['desktop/frontend/src', 'desktop/shared', 'desktop/electron', 'lcl', 'mobile/src', 'web/src', 'tangu-agent/src/contracts']
 const SRC = 'desktop/frontend/src'
 const ALIAS = [ // 与各 vite.config 的 alias 同表;长前缀在前
   ['@tangu/ui', SRC],
@@ -41,7 +43,7 @@ const ALIAS = [ // 与各 vite.config 的 alias 同表;长前缀在前
 ]
 const EXT = ['', '.ts', '.tsx', '.js', '.jsx', '.mjs', '.css', '/index.ts', '/index.tsx', '/index.js']
 const EXEMPT = /\.(test|spec)\.[cm]?[tj]sx?$|\/__tests__\/|(^|\/)harness\.tsx$|Harness\.tsx$|\.typecheck\.ts$|\.d\.ts$/
-const IMPORT_RE = /(?:import|export)\s[^'"`]*?from\s*['"]([^'"]+)['"]|import\s*\(\s*(['"`])([^'"`$]+)\2\s*\)|import\s+['"]([^'"]+)['"]|@import\s+(?:url\(\s*)?['"]?([^'")\s;]+)/g
+const IMPORT_RE = /(?:import|export)(?=[\s{*])[^'"`]*?from\s*['"]([^'"]+)['"]|import\s*\(\s*(['"`])([^'"`$]+)\2\s*[,)]|import\s*['"]([^'"]+)['"]|@import\s+(?:url\(\s*)?['"]?([^'")\s;]+)|\brequire\s*\(\s*['"]([^'"]+)['"]\s*\)/g
 
 /** 把注释换成空格,字符串原样留着(这样字符串里的 '/*'、'//' 不会被当成注释)。
  * ponytail: 不认正则字面量 —— /['"]/ 里的引号会被当成字符串开头;import 都在文件头,正文里的正则吞不到它们。 */
@@ -63,6 +65,8 @@ function stripComments(src) {
 /** files: Map<rel path, source>。返回 { errors, notes, current }。纯函数,--selftest 直接喂它。 */
 function analyze(files, cfg) {
   const isTangu = (f) => cfg.tangu.dirs.some((d) => f.startsWith(d)) || cfg.tangu.files.includes(f)
+  const contractDirs = cfg.contracts?.dirs || []
+  const isContract = (f) => contractDirs.some((d) => f.startsWith(d))
   const resolve = (from, spec) => {
     let base
     if (spec.startsWith('.')) base = path.posix.join(path.posix.dirname(from), spec)
@@ -80,13 +84,18 @@ function analyze(files, cfg) {
   const used = new Set(), hostDeps = new Set()
   const known = new Set(cfg.baseline.hostImports)
   for (const [f, src] of files) {
-    if (EXEMPT.test(f)) continue
+    if (isContract(f) ? /\.(test|spec)\.[cm]?[tj]sx?$/.test(f) : EXEMPT.test(f)) continue // 契约里的 .d.ts 也要查(Codex 2b 评审)
     const tangu = isTangu(f)
     for (const m of stripComments(src).matchAll(IMPORT_RE)) {
-      const spec = m[1] || m[3] || m[4] || m[5]
+      const spec = m[1] || m[3] || m[4] || m[5] || m[6]
+      if (isContract(f)) {
+        const base = spec.startsWith('.') ? path.posix.join(path.posix.dirname(f), spec) : null
+        if (!base || !isContract(base + '/') && !isContract(base)) errors.push(`契约文件只许用相对路径引契约目录:${f} import '${spec}'`)
+        continue
+      }
       const to = resolve(f, spec)
       if (!to && spec.startsWith(PREFIX)) { errors.push(`${f} import '${spec}' 解析不到文件`); continue }
-      if (!to || to === f) continue
+      if (!to || to === f || isContract(to)) continue
       if (!tangu && isTangu(to)) {
         used.add(to)
         if (!spec.startsWith(PREFIX)) errors.push(`宿主直连 Tangu 文件没走 @tangu/ui/ 前缀:${f} import '${spec}'(→ ${to})。写成 '${PREFIX}${to.slice(SRC.length + 1).replace(/\.(tsx?|jsx?)$/, '')}';它若其实是通用件,从 tangu-boundary.json 的 files 拿掉`)
@@ -154,7 +163,24 @@ function selftest() {
   assert.match(run({ [`${SRC}/Other.tsx`]: "import { B } from '@/views/x/../chat2/B'" }).errors.join(), /没走/, 'alias 路径里的 .. 要规范化')
   assert.match(run({ [`${SRC}/Other.tsx`]: "import { Z } from '@tangu/ui/views/chat2/Nope'" }).errors.join(), /解析不到/)
   assert.deepEqual(grownBy({ hostImports: ['a'], tanguHostDeps: ['b'] }, { hostImports: [], tanguHostDeps: ['b', 'c'] }), ['tanguHostDeps: c'])
-  console.log('tangu-boundary selftest: 15/15 PASS')
+  // 契约(第 2b 步):两边引都不计数;契约只许引契约
+  const K = 'tangu-agent/src/contracts/'
+  const cfgK = { ...cfg, contracts: { dirs: [K] } }
+  const runK = (extra) => analyze(new Map(Object.entries({ ...base, [`${K}a.ts`]: "import { b } from './b.js'\nexport const a = 1", [`${K}b.ts`]: 'export const b = 1', ...extra })), cfgK)
+  const k1 = runK({ [`${SRC}/Other.tsx`]: "import { a } from '../../../tangu-agent/src/contracts/a'", [`${SRC}/views/chat2/C.tsx`]: "import { a } from '../../../../../tangu-agent/src/contracts/a.js'" })
+  assert.deepEqual([k1.errors, k1.current.tanguHostDeps], [[], [`${SRC}/i18n.tsx`]], '宿主 / Tangu 引契约都不计数')
+  const k0 = analyze(new Map(Object.entries({ ...base, [`${K}a.ts`]: 'export const a = 1', [`${SRC}/views/chat2/C.tsx`]: "import { a } from '../../../../../tangu-agent/src/contracts/a'" })), cfg)
+  assert.match(k0.errors.join(), /新增了宿主依赖:tangu-agent\/src\/contracts\/a\.ts/, '负对照:不配契约时同一条引用要算宿主依赖(证明上面的路径真解析到了)')
+  assert.match(runK({ [`${K}c.ts`]: "import { x } from '../../../desktop/frontend/src/stores/x'" }).errors.join(), /契约文件只许/, '契约引宿主')
+  assert.match(runK({ [`${K}c.ts`]: "import { y } from '../core/y.js'" }).errors.join(), /契约文件只许/, '契约引引擎内部(不在扫描范围里也要拦)')
+  assert.match(runK({ [`${K}c.ts`]: "import { z } from 'zod'" }).errors.join(), /契约文件只许/, '契约引第三方包')
+  // Codex 2b 评审:这些写法也要进契约检查
+  for (const [code, why] of [["import{z}from'zod'", '无空格的静态 import'], ["import fs = require('node:fs')", 'import = require'], ["const m = import('node:fs', {})", '带第二个参数的动态 import'], ["import'node:fs'", '无空格的副作用 import']]) {
+    assert.match(runK({ [`${K}c.ts`]: code }).errors.join(), /契约文件只许/, why)
+  }
+  assert.match(runK({ [`${K}t.d.ts`]: "export type { Stats } from 'node:fs'" }).errors.join(), /契约文件只许/, '契约里的 .d.ts 不豁免')
+  assert.deepEqual(runK({ [`${K}c.test.ts`]: "import { x } from '../../../desktop/frontend/src/stores/x'" }).errors, [], '契约的测试文件照旧不查')
+  console.log('tangu-boundary selftest: 26/26 PASS')
 }
 
 if (process.argv.includes('--selftest')) { selftest(); process.exit(0) }

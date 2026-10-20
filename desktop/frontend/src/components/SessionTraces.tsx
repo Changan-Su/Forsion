@@ -7,7 +7,7 @@ import { getAgentHarness, getProjectContext, getSessionActivity, resolveHarnessC
 import { HARNESS_CHANGED_EVENT } from '../services/harnessUpdates'
 import { anchorTraces, sessionTraces, type PendingSources, type SessionTrace, type TraceCandidate } from '../services/selfUpdates'
 import { targetForSession } from '../services/engine/targets'
-import type { HistorianActivityItem } from '../types'
+import type { HistorianActivityItem } from '../../../../tangu-agent/src/contracts/clientTypes'
 import './HarnessUpdateCard' // 复用「本次更新已撤销 / 撤销冲突」等词条
 import '../views/projectProfileMessages' // 复用项目记忆候选的「已不在了 / 正在改 / 写满」
 import './selfUpdates.css'
