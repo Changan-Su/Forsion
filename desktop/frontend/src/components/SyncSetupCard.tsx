@@ -64,7 +64,8 @@ export function SyncSetupHost(): JSX.Element | null {
   let obDone = false
   try { obDone = localStorage.getItem(ONBOARDING_DISMISS_KEY) === '1' } catch { /* 读不到当没走完:不弹 */ }
   // 依赖只放这两个布尔:快照每次同步进度 / 插件变动都换新对象,拿它当依赖计时器会一直被重置、永远弹不出来
-  const want = main && !open && wantsSyncCard(s, obDone)
+  const eligible = main && wantsSyncCard(s, obDone)
+  const want = eligible && !open
   const allOn = main && !!s && s.signedIn && !s.decided && obDone && s.notes.available && !want && !open
   useEffect(() => { if (allOn) markSyncDecided() }, [allOn])
   useEffect(() => {
@@ -73,6 +74,8 @@ export function SyncSetupHost(): JSX.Element | null {
     const timer = setTimeout(() => setOpen(true), 2500)
     return () => clearTimeout(timer)
   }, [want])
+  // 排队等着时退出登录(条款卡「不同意并退出登录」)/ 别处已拍板:撤掉,别等轮到了再弹(Codex 评审 P2)。开始同步那几秒自己会把三项打开,不算
+  useEffect(() => { if (open && !eligible && !busy) setOpen(false) }, [open, eligible, busy])
 
   // 第一次同步的底部进度:跑完(或没在跑)就收
   const prog = s?.notes.progress
