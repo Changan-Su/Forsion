@@ -108,7 +108,15 @@ async function main() {
     const wa = await app.evaluate(({ screen }) => screen.getPrimaryDisplay().workArea)
     const leftW = Math.min(820, Math.round(wa.width * 0.5))
     await app.evaluate(({ BrowserWindow }, b) => {
-      BrowserWindow.fromId(b.id)?.setBounds(b.bounds)
+      // 主窗藏到设置窗后面(右边缘对齐),免得盖住右边的 Chrome(10-20 用户);设置窗是它的子窗,挪主窗会带着走,所以先挪主窗
+      const sp = BrowserWindow.fromId(b.id)
+      const main = sp?.getParentWindow()
+      if (main) {
+        const w = Math.max(main.getMinimumSize()[0], b.bounds.width)
+        main.setBounds({ ...b.bounds, x: b.bounds.x + b.bounds.width - w, width: w })
+      }
+      sp?.setBounds(b.bounds)
+      sp?.moveTop()
     }, { id: spId, bounds: { x: wa.x, y: wa.y, width: leftW, height: wa.height } })
     await chip.scrollIntoViewIfNeeded()
     await sleep(500)
