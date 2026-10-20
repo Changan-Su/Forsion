@@ -10,6 +10,7 @@ import { setActiveSpace, useSpaceStore, useWorkspace } from '@lcl/engine'
 import { claimHostMount } from '@lcl/components'
 import {
   pluginChatType,
+  readTanguNewChat,
   setTanguProbe,
   type TanguAgentSelf,
   type TanguAgentInfo,
@@ -399,16 +400,16 @@ function mountChat(el: HTMLElement, o: TanguChatMountOptions): TanguChatMount {
   }
 }
 
-/** 新对话输入区挂进插件的 DOM(主页插件化 S2)。界面那半在 views/newChatComposer(Composer2 很重,动态 import);
+/** 新对话输入区挂进插件的 DOM(主页插件化 S2)。界面那半是 Tangu 经 tanguSeam 交出的 `mount`(核心插件化 2e-3;原来在这里动态 import views/newChatComposer);
  *  同步返回句柄,界面落地之前 focus 记一笔、落地后补上,startVoice / draft 落地前是空操作。 */
 function mountComposer(el: HTMLElement, o: TanguComposerOptions): TanguComposerMount {
   let disposed = false, focusPending = false
   let mounted: TanguComposerMount | null = null
   const mine = claimHostMount(el)
-  void import('./views/newChatComposer').then((m) => {
+  void Promise.resolve(readTanguNewChat()).then((m) => {
     if (!disposed && !mine()) disposed = true
-    if (disposed) return
-    mounted = m.mountNewChatComposer(el, o)
+    if (disposed || !m) return
+    mounted = m.mount(el, o)
     if (focusPending) requestAnimationFrame(() => mounted?.focus())
   }, (e) => console.error('[composer] mount failed', e))
   return {

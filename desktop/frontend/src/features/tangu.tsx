@@ -9,19 +9,22 @@ import { AgentsDetailSpecialView, WorkspaceDetailSpecialView } from '../views/Sp
 import { AgentsSpaceView, AgentsRosterView, TanguDetailsView } from '../views/AgentProfileView'
 import { hasNativeFeature } from './runtime'
 import { SessionTabIcon } from '../components/SessionIcon'
-import { setTanguInboxTasks, setTanguPrefs } from '../amadeus/plugins/tanguSeam'
+import { setTanguInboxTasks, setTanguNewChat, setTanguPrefs } from '../amadeus/plugins/tanguSeam'
 import { inboxTasks } from '../views/chat2/inboxTasks'
 import { isChatAvatarsOn, setChatAvatarsOn } from '../views/chat2/chatAvatars'
 import { isPromptSuggestOn, setPromptSuggest } from '../views/chat2/promptSuggest'
+import { NewChatComposer, mountNewChatComposer, sendFromNewChat, startNewChatCall } from '../views/newChatComposer'
 import '../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 const app = () => useApp.getState()
 
 /** Activate only the Tangu package's native view contributions. */
 export function registerTanguViews(): void {
   if (!hasNativeFeature('tangu')) return
-  // 给宿主的接缝(核心插件化 2e):收件箱里的任务卡由 Tangu 画,宿主只管放;设置页的两个聊天开关读写走 Tangu。
+  // 给宿主的接缝(核心插件化 2e):收件箱里的任务卡由 Tangu 画,宿主只管放;设置页的两个聊天开关读写走 Tangu;
+  // 主页的新对话输入区(和 ctx.tangu.mountComposer)是 Tangu 交出的同一份。
   setTanguInboxTasks(inboxTasks)
   setTanguPrefs({ chatAvatars: { get: isChatAvatarsOn, set: setChatAvatarsOn }, promptSuggest: { get: isPromptSuggestOn, set: setPromptSuggest } })
+  setTanguNewChat({ Composer: NewChatComposer, send: sendFromNewChat, startCall: startNewChatCall, mount: mountNewChatComposer })
   // chat 可关闭(浏览器式):关掉主区最后一个 view → 显示「新建标签页」启动器(见 workspaceStore.closeLeaf)。
   // workspaceSource: 'orbits' = 自动档翻转的**声明位**(方案 §3.7-7):主区是 chat 时左栏自动落新版会话侧栏,
   // 不动 workspaceMode.ts 的硬规则;右栏恒 files 不受它管。

@@ -1,6 +1,6 @@
 /**
  * 新对话输入区 —— 主页那一整块,从 HomepageView 原样搬出(2026-10-18,主页插件化 S2):内置主页和插件
- * (`ctx.tangu.mountComposer`)挂的是同一份。DOM 一个类名都没改(`.hp-composer` / `data-kb-rise` /
+ * (`ctx.tangu.mountComposer`)挂的是同一份。2e-3 起归 Tangu,经 tanguSeam 的 setTanguNewChat 交给宿主(features/tangu.tsx)。DOM 一个类名都没改(`.hp-composer` / `data-kb-rise` /
  * `.newchat-pickers` / `.hp-projectbar`),主页的样式、手机键盘上抬、台架都还认它。
  * 建会话、切到 Tangu、发送、开通话一律由宿主做(sendFromNewChat / startNewChatCall),插件只决定放在哪。
  */
@@ -11,7 +11,6 @@ import { mountHostReact } from '@lcl/components'
 import { useApp, newChatModelId, stickyDefaults, withAmadeusWorkspace, applyPreset, newSessionPreset, resolveNewSessionWorkspace } from '../stores/appStore'
 import { settleModes } from '../stores/projectSettings'
 import { currentPlatform } from '../services/agentRunService'
-import type { Attachment } from '../types'
 import { usePageStore } from '../amadeus/store/pageStore'
 import { ProjectSelector } from '../components/ProjectSelector'
 import { ExtraFolders } from '../components/ExtraFolders'
@@ -20,16 +19,8 @@ import { RunLocationPicker } from '../components/RunLocationPicker'
 import { useRemoteNewChatWorkspaces } from '../stores/newChatWorkspaces'
 import { AgentSelectStrip } from '../components/AgentSelectStrip'
 import { HostLocaleProvider } from '../i18n'
-import { Composer2 } from '@tangu/ui/views/chat2/Composer2'
-import type { TanguComposerMount, TanguComposerOptions } from '../amadeus/plugins/tanguSeam'
-
-export type NewChatDispatch = (
-  text: string,
-  attachments: Attachment[],
-  workspaceFiles?: Attachment[],
-  skillIds?: string[],
-  mentions?: { priorityAgent?: string; mentionAgents?: string[] },
-) => Promise<boolean>
+import { Composer2 } from './chat2/Composer2'
+import type { TanguComposerMount, TanguComposerOptions, TanguNewChatDispatch as NewChatDispatch } from '../amadeus/plugins/tanguSeam'
 
 /**
  * 「新对话」输入区(主页那一整块:Agent 条、项目栏、运行位置、额外文件夹、Composer2)。主页只做「新对话」的宿主接线,输入 UI 和交互不复制:字面挂的就是 ChatView 里的 Composer2。
