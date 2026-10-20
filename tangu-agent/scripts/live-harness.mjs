@@ -853,6 +853,7 @@ if (argv.includes('--selftest')) {
   }
   for (const [name, got, want] of notebookSelftest()) check(name, got, want); // notebook 的文件判据 / 绕开工具的识别 / 审批守门
   for (const [name, got, want] of appRefSelftest()) check(name, got, want); // appref 的引用判据(原样 / 不进代码 / 不当笔记)
+  await import('./lib/windows-cmd-live.check.mjs');
   if (fails.length) { console.error(`--selftest 失败 ${fails.length} 条:\n  ${fails.join('\n  ')}`); process.exit(1); }
   console.log('--selftest 全过(anchorsOk / acceptsSnapshotText / findSubUnlock / run3Verdict / ttftVerdict / activationBuckets / activationsOverlap / claimsSent / claimsDone / mentionsFailure / registeredViews / judgeNotebook / bypasses / judgeAppRef,含负对照)');
   process.exit(0);

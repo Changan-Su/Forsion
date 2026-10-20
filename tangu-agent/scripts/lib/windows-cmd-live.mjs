@@ -1,6 +1,21 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+export function windowsCmdVerdict(ev, test) {
+  const calls = ev.toolArgs.filter(call => call.name === 'run_bash');
+  if (ev.error || !ev.done || ev.toolArgs.length !== 1 || calls.length !== 1 || ev.approvals !== test.approvals) return false;
+  try { if (JSON.parse(calls[0].arguments).command !== test.command) return false; } catch { return false; }
+  const results = ev.toolResults.filter(result => result.id === calls[0].id && result.name === 'run_bash');
+  if (results.length !== 1) return false;
+  const result = results[0], text = result.full ?? result.result;
+  if (!test.approvals) return !result.isError && text.includes(test.contains) && /exit_code: 0\b/.test(text);
+  let requested;
+  try { requested = JSON.parse(ev.approvalList[0]?.args).command; } catch { return false; }
+  return ev.approvalList.length === 1 && requested === test.command && result.isError
+    && text.includes('rejected this tool call, so it was NOT run')
+    && ev.approvalResults.length === 1 && ev.approvalResults[0].action === 'reject';
+}
+
 /** Real model -> real run_bash -> approval SSE. Deny every approval, so the
  * negative controls can never execute on the developer's computer. */
 export async function windowsCmdLive({ run, workspace, OUT }) {
@@ -15,18 +30,13 @@ export async function windowsCmdLive({ run, workspace, OUT }) {
   ];
   const evidence = [];
   for (const [index, test] of cases.entries()) {
-    const ev = await run(`windowscmd-${index}`, `Execute exactly this command once using run_bash: ${JSON.stringify(test.command)}. Do not change it, combine it with another command, or use another tool. If approval is denied, stop and report that.`,
+    const ev = await run('windowscmd', `Execute exactly this command once using run_bash: ${JSON.stringify(test.command)}. Do not change it, combine it with another command, or use another tool. If approval is denied, stop and report that.`,
       120_000, { approvalMode: 'auto-edit', maxIterations: 4 }, undefined, () => 'reject');
     const exact = ev.toolArgs.filter(call => {
       try { return call.name === 'run_bash' && JSON.parse(call.arguments).command === test.command; } catch { return false; }
     });
-    const output = ev.toolResults.map(result => JSON.stringify(result)).join('\n');
-    const approvedArgs = ev.approvalList.map(request => {
-      try { return JSON.parse(request.args).command; } catch { return ''; }
-    });
-    const ok = !ev.error && ev.done && exact.length === 1 && ev.approvals === test.approvals
-      && (test.approvals ? approvedArgs.length === 1 && approvedArgs[0] === test.command : output.includes(test.contains));
-    evidence.push({ ...test, ok, exactCalls: exact.length, approvals: ev.approvalList, results: ev.toolResults, error: ev.error, output: ev.content });
+    const ok = windowsCmdVerdict(ev, test);
+    evidence.push({ ...test, ok, exactCalls: exact.length, approvals: ev.approvalList, decisions: ev.approvalResults, results: ev.toolResults, error: ev.error, output: ev.content });
     console.log(`${ok ? 'PASS' : 'FAIL'} windowscmd ${test.command} approvals=${ev.approvals}`);
   }
   writeFileSync(join(OUT, 'windowscmd-evidence.json'), JSON.stringify(evidence, null, 2));

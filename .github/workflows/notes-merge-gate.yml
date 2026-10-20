@@ -1,0 +1,33 @@
+name: notes-merge-gate
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/notes-merge-gate.yml'
+      - 'desktop/frontend/src/amadeus/unified/UnifiedPage.tsx'
+      - 'desktop/frontend/src/amadeus/unified/moveHandoff.ts'
+      - 'desktop/frontend/src/amadeus/blocks/markdown/MarkdownBlock.tsx'
+permissions:
+  contents: read
+jobs:
+  full-unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install engine and desktop
+        run: |
+          npm ci --prefix tangu-agent --no-audit --no-fund
+          npm ci --prefix desktop --no-audit --no-fund
+      - name: Complete engine typecheck and unit gate
+        working-directory: tangu-agent
+        run: |
+          npm run typecheck
+          npm test
+      - name: Complete desktop typecheck and unit gate
+        working-directory: desktop
+        run: |
+          npm run typecheck
+          npm test

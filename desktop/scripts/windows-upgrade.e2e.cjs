@@ -54,9 +54,10 @@ async function main() {
     for (const name of ['amadeus-config.json', 'amadeus-config.dev.json']) fs.writeFileSync(path.join(dir, name), JSON.stringify({ lastVault: vault, localVault: vault }))
   }
   const stub = await startStubEngine()
-  let app, win, server
+  let app, win, server, serverExit
   const start = async root => {
     server = spawn(process.execPath, [path.join(root, 'node_modules/vite/bin/vite.js'), 'frontend', '--host', '127.0.0.1', '--port', String(PORT), '--strictPort'], { cwd: root, windowsHide: true, stdio: 'ignore' })
+    serverExit = new Promise(resolve => { server.once('exit', resolve); server.once('error', resolve) })
     for (let i = 0; i < 60 && !await responding(); i++) await sleep(500)
     assert.ok(await responding(), 'Renderer server must start')
     app = await electron.launch({ args: [`--user-data-dir=${ud}`, '--lang=zh-CN', root], cwd: root,
@@ -66,7 +67,12 @@ async function main() {
     assert.ok(await skipOnboarding(win), 'Actual app must leave onboarding')
   }
   const stopServer = async () => {
-    if (server) { const gone = new Promise(resolve => server.once('exit', resolve)); server.kill(); await gone; server = null }
+    if (server) {
+      const child = server; server = null
+      child.kill()
+      await Promise.race([serverExit, sleep(3000)])
+      if (child.exitCode === null && child.signalCode === null) { child.kill('SIGKILL'); await Promise.race([serverExit, sleep(1000)]) }
+    }
     for (let i = 0; i < 30 && await responding(); i++) await sleep(100)
   }
   const crash = async () => {
@@ -168,7 +174,15 @@ async function main() {
     await win.getByText('Retained dashboard content.', { exact: true }).waitFor()
     check(true, 'legacy dashboard restores real card content')
     await tab('升级文档').first().click()
-    await win.waitForFunction(() => [...document.querySelectorAll('canvas')].some(c => c.width > 0 && c.height > 0))
+    await win.waitForFunction(() => [...document.querySelectorAll('.pdfa-container .pdfViewer .page[data-page-number="1"][data-loaded="true"]')].some(page => {
+      if (!page.getBoundingClientRect().width || !page.querySelector('.textLayer')?.textContent.includes('Upgrade PDF')) return false
+      const canvas = page.querySelector('canvas')
+      if (!canvas?.width || !canvas.height) return false
+      const data = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data
+      let ink = 0
+      for (let i = 0; i < data.length; i += 4) if (data[i + 3] > 0 && data[i] < 120 && data[i + 1] < 120 && data[i + 2] < 120) ink++
+      return ink > 20
+    }))
     check(true, 'legacy PDF tab renders its page')
     await tab('草稿笔记').first().click()
     const draft = win.locator('[data-save="draft"]')
@@ -193,8 +207,10 @@ async function main() {
     await app.close(); app = null; await stopServer()
     await start(ROOT)
     await tab('升级笔记').first().click()
+    await win.locator('.ProseMirror[contenteditable="true"]:visible').filter({ hasText: 'Retained note content. UPGRADE MOVE' }).first().waitFor()
     check(await win.getByRole('button', { name: '解锁', exact: true }).count() === 0, 'unlock survives another complete restart')
     await tab('草稿笔记').first().click()
+    await win.locator('.ProseMirror[contenteditable="true"]:visible').filter({ hasText: 'UNSAVED FROM OLD VERSION' }).first().waitFor()
     check(await win.locator('[data-save="draft"]').count() === 0, 'restored old draft does not reappear after restart')
     console.log(`${results.length}/${results.length} passed\nEVIDENCE ${home}`)
   } catch (error) {
