@@ -265,7 +265,11 @@ export async function runSync(opts: SyncOptions): Promise<SyncReport> {
   }
 
   const concurrency = Math.min(16, Math.max(1, Math.floor(opts.concurrency ?? CONCURRENCY)))
-  await runPool(executable, concurrency, async (item) => {
+  // 小的先传(云同步开启方案 2026-10-20):云端额度不够时,服务端对放不下的逐个回 413,文件照旧留在本地;
+  // 先传小的,同样的额度能装下更多文件。只排顺序,不改哪些要传。
+  const sizeOf = (k: string): number => localMap.get(k)?.size ?? remoteMap.get(k)?.size ?? 0
+  const ordered = [...executable].sort((a, b) => sizeOf(a.key) - sizeOf(b.key))
+  await runPool(ordered, concurrency, async (item) => {
     const { key, kind } = item
     const abs = absOf(key)
     try {
@@ -358,7 +362,7 @@ const insideDir = (root: string, p: string): boolean => { const rel = path.relat
  * 先把 keys 与 forget(这台删了、云端还在的 pushDelete)从基线里删掉并落盘,再挪:
  * 基线还在、本地没了,下一轮会判成 pushDelete,把用户要的云端那份删掉;反过来先清基线,挪到一半出错 / 崩溃,
  * 没挪的文件只是没了基线,下一轮按首次合流(join)走 —— 不一样就出冲突副本,哪边都不丢。
- * 基线落不了盘就一个都不挪。挪一个算一个,出错就停。
+ * 基线落不了盘就一个都不挪。挪一个算一个,出错就停;挪空的文件夹顺手删掉(只删空的)。
  */
 export async function moveAsideFromSync(opts: { localRoot: string; keys: string[]; forget?: string[]; backupDir: string; statePath: string; fingerprint: string }): Promise<{ moved: number; error?: string }> {
   for (const key of opts.keys) {
@@ -375,6 +379,7 @@ export async function moveAsideFromSync(opts: { localRoot: string; keys: string[
       const to = path.join(opts.backupDir, key)
       await fs.mkdir(path.dirname(to), { recursive: true })
       await fs.rename(path.join(opts.localRoot, key), to)
+      await removeEmptyDirs(path.join(opts.localRoot, key), opts.localRoot) // 挪空的文件夹不留空壳(只删空的)
       moved++
     }
   } catch (e) { return { moved, error: String((e as Error)?.message || e) } }

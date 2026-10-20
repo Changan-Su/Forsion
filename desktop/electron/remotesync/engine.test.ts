@@ -306,6 +306,30 @@ describe('演算标出一样的 join', () => {
   })
 })
 
+describe('额度不够时小的先传', () => {
+  it('按文件大小从小到大传;放不下的留在本地、不删', async () => {
+    await write(rootA, 'big.md', 'x'.repeat(5000))
+    await write(rootA, 'mid.md', 'x'.repeat(500))
+    await write(rootA, 'small.md', 'x')
+    const order: string[] = []
+    let used = 0
+    const capped: RemoteFs = {
+      ...remote,
+      writeFile: async (key, data, mtimeMs, signal, expectedId) => {
+        order.push(key)
+        if (used + data.byteLength > 1000) throw new Error('penzor PUT 413: quota exceeded')
+        used += data.byteLength
+        return remote.writeFile(key, data, mtimeMs, signal, expectedId)
+      },
+    }
+    const r = await runSync({ localRoot: rootA, remote: capped, statePath: stateA(), fingerprint: FP, concurrency: 1 })
+    expect(order).toEqual(['small.md', 'mid.md', 'big.md'])
+    expect(r.pushed).toBe(2)
+    expect(r.errors.some((e) => e.includes('big.md'))).toBe(true)
+    expect(await exists(rootA, 'big.md')).toBe(true)
+  })
+})
+
 describe('用云端那份:挪走并清基线', () => {
   it('有基线、本地改过的文件挪走后,下一轮拉回云端版,不会把云端删掉', async () => {
     await write(rootA, 'a.md', '云端版')
@@ -352,6 +376,18 @@ describe('用云端那份:挪走并清基线', () => {
     expect(await read(remoteDir, 'b.md')).toBe('云端 b')
     expect(await read(rootB, 'b.md')).toBe('云端 b')
     expect((await list(rootB)).some((f) => f.startsWith('b (conflict'))).toBe(true)
+  })
+
+  it('挪空的文件夹不留空壳,还有别的东西的文件夹留着', async () => {
+    await write(rootB, '项目/a.md', 'a')
+    await write(rootB, '项目/深/b.md', 'b')
+    await write(rootB, '日记/c.md', 'c')
+    await write(rootB, '日记/keep.md', 'keep')
+    const r = await moveAsideFromSync({ localRoot: rootB, keys: ['项目/a.md', '项目/深/b.md', '日记/c.md'], backupDir: path.join(base, 'bk3'), statePath: stateB(), fingerprint: FP })
+    expect(r).toEqual({ moved: 3 })
+    expect(await exists(rootB, '项目')).toBe(false)
+    expect(await exists(rootB, '日记/keep.md')).toBe(true)
+    expect(await read(path.join(base, 'bk3'), '项目/深/b.md')).toBe('b')
   })
 
   it('越出同步根的 key 一个都不挪、基线不动', async () => {

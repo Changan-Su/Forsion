@@ -54,15 +54,34 @@ describe('account-level agent sync switch', () => {
     expect(agentSyncPermission('coder', other).enabled).toBe(false);
   });
 
-  it('keeps an explicit per-agent choice, and off is a hard off that does not erase it', () => {
+  it('off stops every agent; individual opt-outs survive; turning one on afterwards sticks', () => {
     setAgentSyncPermission('quiet', scope, false);
     setAgentSyncPermission('loud', scope, true);
     setAgentSyncDefault(scope, true);
     expect(agentSyncPermission('quiet', scope).enabled).toBe(false);
     setAgentSyncDefault(scope, false);
     expect(agentSyncPermission('loud', scope).enabled).toBe(false);
+    expect(agentSyncPermission('coder', scope).enabled).toBe(false);
+    // the per-agent switch in agent settings no longer snaps back while the account switch is off
+    setAgentSyncPermission('coder', scope, true);
+    expect(agentSyncPermission('coder', scope).enabled).toBe(true);
+    expect(agentSyncPermission('loud', scope).enabled).toBe(false);
+    // back on: loud follows the account switch again, quiet stays opted out
     setAgentSyncDefault(scope, true);
     expect(agentSyncPermission('loud', scope).enabled).toBe(true);
+    expect(agentSyncPermission('quiet', scope).enabled).toBe(false);
+  });
+
+  it('off works before any agent folder exists', () => {
+    expect(() => setAgentSyncDefault(scope, false)).not.toThrow();
+    expect(agentSyncDefault(scope)).toBe(false);
+  });
+
+  it('turning off aborts an in-flight capture of an individually enabled agent', () => {
+    setAgentSyncPermission('loud', scope, true);
+    const check = captureAgentSyncPermission('loud', scope);
+    setAgentSyncDefault(scope, false);
+    expect(check).toThrow('agent sync consent');
   });
 
   it('invalidates captured consent when the account switch changes', () => {

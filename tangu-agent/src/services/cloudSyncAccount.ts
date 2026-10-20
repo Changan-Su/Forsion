@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { agentSyncDir, atomicSyncWrite, assertSyncPath, readSyncBytes } from './agentSyncPaths.js';
 import { join } from 'node:path';
+import { readdirSync } from 'node:fs';
 import { withMemoryDirectoryLock } from './memoryRepository.js';
 import type { AgentFilesBrain } from '../seams/cloudBrain.js';
 import { agentsDir, DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
@@ -34,7 +35,8 @@ export function agentSyncScope(cloud: AgentFilesBrain | undefined, userId: strin
   return resolve ? resolve(userId) : userId ? cloudAccountScope('local-adapter', userId) : null;
 }
 
-interface Permission { enabled: boolean; shared: boolean; revision?: number }
+// follow = 「跟着账号总闸」:总闸关的时候,单独开过的 Agent 改记成这个(不抹 revision,只增)
+interface Permission { enabled: boolean; shared: boolean; revision?: number; follow?: boolean }
 interface PermissionFile { accounts: Record<string, Permission> }
 const permissionFile = (slug: string): string => assertSyncPath(agentsDir(), join(agentSyncDir(slug), '.cloudsync-accounts.json'));
 
@@ -49,7 +51,8 @@ function readPermissions(slug: string): PermissionFile {
  * 账号级总闸(2026-10-20 云同步开启方案 A + B 卡片):用户在首登卡片 / 引导 / 蓬洲云「同步」页对「Agents 与记忆」点的那一下,
  * 按云账号记在 agents/.cloudsync-default.json。没点过 = null(旧行为:只认每个 Agent 自己的同意)。
  * 开 = 没单独设过的 Agent 都算同意,默认 Agent 的记忆也共享(Brain 记忆同步要 enabled && shared);
- * 关 = 硬关,单独设过的也不传,但不抹掉它们,总闸再开时照旧。
+ * 关 = 全停:单独开过的改记成 follow(跟着总闸),单独关过的照旧关;之后在 Agent 设置里单独再开的照开(不会开了又弹回去),
+ *      总闸再开时 follow 的跟着回来。
  * ponytail: 读改写不加锁(只有用户点开关会写,一个引擎进程);要多进程同写再上 withMemoryDirectoryLock。
  */
 interface AccountDefault { enabled: boolean; revision: number }
@@ -67,6 +70,27 @@ export function agentSyncDefault(scope: string | null): boolean | null {
 }
 export function setAgentSyncDefault(scope: string, enabled: boolean): void {
   if (!/^[a-f0-9]{64}$/.test(scope)) throw new Error('invalid cloud account scope');
+  if (!enabled) {
+    // 先把单独开着的改成跟着总闸,再落总闸:中途崩了,重点一次「关」就补齐
+    let dirs: import('node:fs').Dirent[] = [];
+    try { dirs = readdirSync(agentsDir(), { withFileTypes: true }); } catch { /* 还没有 agents 目录 */ }
+    for (const e of dirs) {
+      if (!e.isDirectory() || e.name.startsWith('.')) continue;
+      const slug = e.name;
+      let changed = false;
+      try {
+        withMemoryDirectoryLock(agentSyncDir(slug), () => {
+          const data = readPermissions(slug);
+          const cur = data.accounts[scope];
+          if (!cur?.enabled || cur.follow) return;
+          data.accounts[scope] = { enabled: false, shared: false, follow: true, revision: (cur.revision ?? 0) + 1 };
+          atomicSyncWrite(agentsDir(), permissionFile(slug), JSON.stringify(data, null, 2));
+          changed = true;
+        });
+      } catch { continue; } // 名字不是合法 Agent 目录(agentSyncDir 拒绝)就跳过
+      if (changed) { const key = consentKey(slug, scope); consentControllers.get(key)?.abort(new Error('agent sync consent changed')); consentControllers.delete(key); }
+    }
+  }
   const accounts = readDefaults();
   accounts[scope] = { enabled, revision: (accounts[scope]?.revision ?? 0) + 1 };
   atomicSyncWrite(agentsDir(), defaultFile(), JSON.stringify({ accounts }, null, 2));
@@ -80,8 +104,7 @@ export function agentSyncPermission(slug: string, scope: string | null): Permiss
   const permission = readPermissions(slug).accounts[scope];
   const master = readDefaults()[scope];
   const revision = (permission?.revision ?? 0) + (master?.revision ?? 0);
-  if (master?.enabled === false) return { enabled: false, shared: false, revision };
-  if (permission) return { enabled: permission.enabled === true, shared: permission.shared === true, revision };
+  if (permission && !permission.follow) return { enabled: permission.enabled === true, shared: permission.shared === true, revision };
   if (master?.enabled === true) return { enabled: true, shared: slug === DEFAULT_AGENT_SLUG, revision };
   return { enabled: false, shared: false, revision };
 }
