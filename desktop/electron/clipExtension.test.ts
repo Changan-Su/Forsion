@@ -83,6 +83,22 @@ describe('Forsion 更新后同步连着的 Clip(方案 C 第二步)', () => {
     } finally { vi.unstubAllGlobals() }
   })
 
+  it('引擎没叫到 Clip(超时 / 503)不算试过:下一轮再试', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'clip-sync-'))
+    const dst = join(root, 'Forsion Clip')
+    ensureClipCopy(ext(root, '2.2.0'), dst)
+    const src = ext(root, '2.3.0')
+    let reloadOk = false
+    vi.stubGlobal('fetch', async (url: string) => url.endsWith('/agent/browser-extension')
+      ? new Response(JSON.stringify({ listening: true, clients: [{ version: '2.2.0' }] }))
+      : reloadOk ? new Response(JSON.stringify({ reloaded: 1 })) : new Response('{}', { status: 503 }))
+    try {
+      expect(await syncClipVersion(engine, src, dst)).toBe('skip')
+      reloadOk = true
+      expect(await syncClipVersion(engine, src, dst)).toBe('reloaded')
+    } finally { vi.unstubAllGlobals() }
+  })
+
   it('一次配对领的连接码:桥在听才给,引擎没就绪 / 端口被占都不给', async () => {
     let status: Record<string, unknown> = { listening: true, code: 'tangu:47655:ab' }
     vi.stubGlobal('fetch', async () => new Response(JSON.stringify(status)))

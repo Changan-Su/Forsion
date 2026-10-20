@@ -4,7 +4,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createHmac, randomBytes } from 'node:crypto';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readdirSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -120,6 +120,7 @@ describe('Tangu for Chrome 扩展桥', () => {
     await closed;
     expect(extensionStatus()).toMatchObject({ connected: false, lastClient: { version: 'test' } });
     expect(reloadExtensionClients()).toBe(0);
+    expect(readdirSync(process.env.TANGU_HOME!)).not.toContainEqual(expect.stringMatching(/\.tmp$/)); // 原子写:不留临时文件
   });
 
   it('扩展断线:挂起中的请求立刻失败,不会等满超时', async () => {

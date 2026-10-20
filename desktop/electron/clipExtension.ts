@@ -101,7 +101,8 @@ let syncedFor = ''
 /**
  * Forsion 更新后:连着的 Clip 比随包的旧 → 副本换成随包版本,再叫它重新加载(已解压的扩展不会自己重读磁盘)。
  * 只在有 Clip 连着时换、换完立刻重载:不留「Chrome 还在跑旧版、文件已是新版」的空档(Codex 10-20 的顾虑)。
- * 每个随包版本只试一次:Chrome 若是从别处加载的(比如老用户选的 .app 里那份),重载后还是旧版也不会反复折腾。
+ * 每个随包版本只在叫到了 Clip 之后记一次:Chrome 若是从别处加载的(比如老用户选的 .app 里那份),重载后还是旧版也不会反复折腾;
+ * 拷贝失败 / 引擎没叫到(超时、503)则不记,5 分钟后再试。
  * 已知边界(实测):开发者模式关着时,Chrome 会以 unsupportedDeveloperExtension 停掉重载后的已解压扩展;
  * 用户本来就是开着开发者模式拖进去的,事后关掉的再打开即自动恢复 —— 这是 Chrome 自己的闸,重载只是让它早一点生效。
  */
@@ -111,9 +112,10 @@ export async function syncClipVersion(engine: EngineRef, src = clipSourceDir(), 
   const s = await engineJson(engine, '/agent/browser-extension').catch(() => null)
   const running: string[] = Array.isArray(s?.clients) ? s.clients.map((c: { version?: unknown }) => String(c.version || '')) : []
   if (!running.some((v) => v && older(v, bundled))) return 'skip'
-  syncedFor = bundled
   if (existsSync(join(dst, 'manifest.json')) && 'error' in ensureClipCopy(src, dst, true)) return 'skip'
-  await engineJson(engine, '/agent/browser-extension/reload-clients', 'POST').catch(() => null)
+  const r = await engineJson(engine, '/agent/browser-extension/reload-clients', 'POST').catch(() => null)
+  if (!(Number(r?.reloaded) > 0)) return 'skip'
+  syncedFor = bundled
   return 'reloaded'
 }
 

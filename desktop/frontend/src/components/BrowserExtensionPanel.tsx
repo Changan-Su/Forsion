@@ -144,7 +144,7 @@ export function BrowserExtensionPanel({ cfg, managed = true }: { cfg: TanguDeskt
       ? t('settings.browserExt.portBusy', { port: String(info.port), error: info.error })
       : info?.connected
         ? (info.clients.at(-1)?.version ? t('settings.browserExt.connectedVersion', { version: info.clients.at(-1)!.version }) : t('settings.browserExt.connected'))
-        : info && !info.lastClient ? t('settings.browserExt.notInstalled') : t('settings.browserExt.notConnected') // 从没连上过 = 还没装(或没配对)
+        : info?.lastClient === null ? t('settings.browserExt.notInstalled') : t('settings.browserExt.notConnected') // 从没连上过 = 还没装(或没配对);旧引擎没这个字段 → 按「未连接」
 
   return (
     <SettingsPanel className="settings-browser-ext-panel" icon={<Puzzle size={16} />} title={t('settings.browserExt.title')} description={t('settings.browserExt.hint')}>

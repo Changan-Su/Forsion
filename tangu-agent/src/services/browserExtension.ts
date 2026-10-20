@@ -12,7 +12,7 @@
  * 连接码按引擎家目录各存一份 → dev / 正式版 / CLI 互不串(端口也各配各的,桌面经 env 注入)。
  */
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
@@ -62,7 +62,10 @@ type TokenFile = { token?: string; lastClient?: { version: string; at: number } 
 const readTokenFile = (): TokenFile => { try { return JSON.parse(readFileSync(tokenFile(), 'utf8')) || {}; } catch { return {}; } };
 const writeTokenFile = (f: TokenFile): void => {
   mkdirSync(tanguHome(), { recursive: true });
-  writeFileSync(tokenFile(), `${JSON.stringify(f, null, 2)}\n`, { mode: 0o600 });
+  // 先写临时文件再改名:每次连上都会记 lastClient,原地截断重写时磁盘一满就把令牌弄丢、配对全失效(Codex 10-20)
+  const tmp = `${tokenFile()}.${process.pid}.tmp`;
+  writeFileSync(tmp, `${JSON.stringify(f, null, 2)}\n`, { mode: 0o600 });
+  renameSync(tmp, tokenFile());
 };
 
 /** 连接码里的令牌:首次用时生成并落盘(0600);reset=true 换一枚新的(旧配对随即失效)。 */
