@@ -190,7 +190,7 @@ describe('legacy team output recovery', () => {
     await createRun({ id: 'legacy-parent', sessionId: 'team-1', userId: USER, appId: 'tangu', modelId: 'm', assistantMessageId: 'unused', input: { userMessageId: 'user-legacy' } });
     const makeChild = async (id: string) => {
       await createRun({ id, sessionId: childId, userId: USER, appId: 'tangu', modelId: 'm', assistantMessageId: id + '-msg', input: {} });
-      await publish(id, 'tool_call', { id: 'card', name: 'sketch', arguments: JSON.stringify({ html: '<h1>' + id + '</h1>' }) });
+      await publish(id, 'tool_call', { id: 'card', name: 'intelligent_ui_html', arguments: JSON.stringify({ html: '<h1>' + id + '</h1>' }) });
       await publish(id, 'tool_result', { id: 'card', result: 'Sketch card rendered.' });
       await publish(id, 'display_file', { name: 'report.pdf', path: '/tmp/report.pdf' });
     };

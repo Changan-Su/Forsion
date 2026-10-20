@@ -35,6 +35,7 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { agentsDir } from '../core/tanguHome.js';
 import { redactSecrets } from '../core/redact.js';
+import { canonicalToolName } from '../tools/toolRegistry.js';
 
 export const HARNESS_FILE = 'HARNESS.md';
 /** 快照史(dot-file → agentFileSync 自动排除,只留本机)。 */
@@ -299,7 +300,7 @@ export function shelvedOf(entries: HarnessEntry[]): { tools: Set<string>; skills
   const tools = new Set<string>(), skills = new Set<string>();
   for (const e of entries) {
     if (e.kind !== 'equip') continue;
-    for (const t of e.tools ?? []) tools.add(t);
+    for (const t of e.tools ?? []) tools.add(canonicalToolName(t)); // HARNESS.md 里收起的旧名(sketch)照样算数
     for (const k of e.skills ?? []) skills.add(k);
   }
   return { tools, skills };

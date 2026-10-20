@@ -11,6 +11,7 @@
  */
 
 import type { ComponentType } from 'react'
+import type { Attachment } from '../../../../../tangu-agent/src/contracts/clientTypes'
 
 export interface TanguModelInfo {
   /** 模型 id(引擎侧标识,如 `claude-opus-5`)。 */
@@ -336,4 +337,41 @@ export function setTanguPrefs(p: TanguPrefs | null): void {
 
 export function readTanguPrefs(): TanguPrefs | null {
   return prefs
+}
+
+/** 新对话输入区发出第一句(核心插件化 2e-3)。 */
+export type TanguNewChatDispatch = (
+  text: string,
+  attachments: Attachment[],
+  workspaceFiles?: Attachment[],
+  skillIds?: string[],
+  mentions?: { priorityAgent?: string; mentionAgents?: string[] },
+) => Promise<boolean>
+
+/** 新对话输入区(核心插件化 2e-3,方案第 5 节 9 号接缝 `mountComposer` 的仓内版):Tangu 在激活时交出来,
+ *  内置主页直接放 `Composer`,`ctx.tangu.mountComposer` 挂的是 `mount` —— 同一份。**宿主内部接缝**。
+ *  没交(Tangu 没激活)→ 主页不摆输入区、探针不给 mountComposer。 */
+export interface TanguNewChat {
+  Composer: ComponentType<{
+    onDispatch: TanguNewChatDispatch
+    onStartCall?: () => Promise<string | null>
+    onInputModeChange: (focused: boolean) => void
+    /** 通话按钮只在这个 Space 是当前 Space 时画;不给 = 不画。 */
+    liveSpaceId?: string
+  }>
+  /** 切到 Tangu 再按新对话发出去;没有 Tangu Space → false。 */
+  send: TanguNewChatDispatch
+  /** 切到 Tangu、建新会话,resolve 新会话 id;没建成 → null。 */
+  startCall(): Promise<string | null>
+  mount(el: HTMLElement, o: TanguComposerOptions): TanguComposerMount
+}
+
+let newChat: TanguNewChat | null = null
+
+export function setTanguNewChat(p: TanguNewChat | null): void {
+  newChat = p
+}
+
+export function readTanguNewChat(): TanguNewChat | null {
+  return newChat
 }

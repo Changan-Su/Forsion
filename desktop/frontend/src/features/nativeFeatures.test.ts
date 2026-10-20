@@ -16,6 +16,7 @@ vi.mock('../stores/appStore', () => ({ useApp: { getState: () => ({ tr: (key: st
 vi.mock('../components/SpaceButton', () => ({ SpaceButton: () => null }))
 vi.mock('../views/DashboardCompactViews', () => ({ CalendarDashboardCard: () => null, TodoDashboardCard: () => null }))
 vi.mock('../views/ChatView', () => ({ ChatView: () => null }))
+vi.mock('../views/newChatComposer', () => ({ NewChatComposer: () => null, mountNewChatComposer: vi.fn(), sendFromNewChat: vi.fn(), startNewChatCall: vi.fn() }))
 vi.mock('../views/RightViews', () => ({ MemoryPanelView: () => null, SubchatsView: () => null, SessionFilesView: () => null }))
 vi.mock('../views/SpecialViews', () => ({ AgentsDetailSpecialView: () => null, WorkspaceDetailSpecialView: () => null }))
 vi.mock('../amadeusViews', () => ({ AmadeusEditorView: () => null, AmadeusBacklinksView: () => null, NoteTabIcon: () => null }))

@@ -10,7 +10,7 @@
   const activeGet = typeof UserActivation !== 'undefined' ? Object.getOwnPropertyDescriptor(UserActivation.prototype, 'isActive')?.get : undefined
   const gestureActive = () => { try { const ua = uaGet && uaGet.call(navigator); return !!(ua && activeGet && activeGet.call(ua)) } catch { return false } }
   const send = (msg) => parent.postMessage({ ...msg, nonce: NONCE }, '*')
-  window.forsionSketch = Object.freeze({
+  const api = Object.freeze({
     get state() { return state },
     setState(value) {
       const json = JSON.stringify(value)
@@ -21,19 +21,22 @@
     // 卡内按钮回头改答案:把这句话当用户的下一条消息发出去(宿主侧再核 nonce + 焦点、限频、限长,只在对话里接)。
     // 手势检查在这里是**真闸**(见上):模型写的卡不能一加载 / 定时就替用户发话。
     ask(text) {
-      if (!gestureActive()) throw new Error('forsionSketch.ask() must be called from a user gesture')
+      if (!gestureActive()) throw new Error('forsionIntelligentUi.ask() must be called from a user gesture')
       const t = String(text ?? '').trim().slice(0, 400)
-      if (!t) throw new Error('forsionSketch.ask() needs a non-empty text')
+      if (!t) throw new Error('forsionIntelligentUi.ask() needs a non-empty text')
       send({ type: 'sketch-ask', text: t })
     },
     // 复制到剪贴板(沙箱帧自己没有剪贴板权限,由宿主代写;同样要用户手势)。
     copy(text) {
-      if (!gestureActive()) throw new Error('forsionSketch.copy() must be called from a user gesture')
+      if (!gestureActive()) throw new Error('forsionIntelligentUi.copy() must be called from a user gesture')
       const t = String(text ?? '')
       if (!t) return
       send({ type: 'sketch-copy', text: t.slice(0, 20000) })
     },
   })
+  // 10-20 改名:新卡用 forsionIntelligentUi;forsionSketch 是同一个对象,给改名前的卡(历史、笔记里的块)。
+  window.forsionIntelligentUi = api
+  window.forsionSketch = api
   document.currentScript?.remove()
 
   // An href must never turn a sandbox frame into an external navigation surface.
