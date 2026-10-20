@@ -20,18 +20,11 @@ registerMessages({
 
 /** 蓬洲云 Space(Forsion Extend 0.10)与这里的约定:Extend 在主窗口注册好 Space 后写 READY;这里写 FOCUS(要看哪个库),
  *  主窗口的 Extend 收到 storage 事件就切过去停在那个库。两个键与 Extend src/renderer/penzor/state.ts 同步改。 */
-const PENZOR_SPACE_ID = 'forsion-penzor'
-const PENZOR_READY = 'forsion-extend.penzor.ready'
-const PENZOR_FOCUS = 'forsion-extend.penzor.focus'
+import { PENZOR_FOCUS, PENZOR_SPACE_ID, openPenzorSync, penzorSyncReady } from '../services/syncSetup'
 /** 蓬洲云服务端的单文件上限(Extend penzor.ts PENZOR_MAX_FILE;同步时用户设得更大也会被夹到它)。 */
 const PENZOR_MAX_FILE_MB = 50
-const penzorSpaceReady = (): boolean => { try { return localStorage.getItem(PENZOR_READY) === '1' } catch { return false } }
-/** 蓬洲云「同步」页(云同步开启方案 2026-10-20):FOCUS 带 page = 'sync' 时 Extend 停在「同步」那一行。 */
-export function openPenzorSync(): void {
-  try { localStorage.setItem(PENZOR_FOCUS, JSON.stringify({ page: 'sync', at: Date.now() })) } catch { /* 存不了:只切 Space */ }
-  window.tangu?.requestMainAction?.('open-space', PENZOR_SPACE_ID)
-}
-export const penzorSyncReady = penzorSpaceReady
+const penzorSpaceReady = penzorSyncReady
+export { openPenzorSync, penzorSyncReady }
 function viewInPenzor(vault: string): void {
   try { localStorage.setItem(PENZOR_FOCUS, JSON.stringify({ vault, at: Date.now() })) } catch { /* 存不了:只切 Space,不选库 */ }
   window.tangu?.requestMainAction?.('open-space', PENZOR_SPACE_ID)

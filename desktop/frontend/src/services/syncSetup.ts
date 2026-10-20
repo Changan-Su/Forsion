@@ -14,6 +14,7 @@ import { PLUGIN_SYNC_ALL_OFF_KEY } from '../amadeus/plugins/pluginDataSync'
 import { usePluginStore, pluginWanted } from '../amadeus/plugins/pluginStore'
 import type { AuthStatusInfo, RemoteSyncConfig, RemoteSyncReport } from '../types'
 import { registerMessages } from '../i18n'
+import { windowKind } from '../windowKind'
 
 registerMessages({
   // 第二台电脑「用云端那份」时,这台不一样的文件挪去的库外文件夹:「<库名> 同步前备份 <日期>」
@@ -50,6 +51,20 @@ export interface SyncSnapshot {
 export interface SyncResult { ok: boolean; error?: string }
 
 /** 笔记库「开」的样子(方案页第六节:每 5 分钟 + 开机一次,双向,库名 default 不出现在界面上)。 */
+/** 蓬洲云 Space(Forsion Extend)与宿主的约定:Extend 在主窗口注册好 Space 后写 READY;宿主写 FOCUS(要看哪个库 / 哪一页),
+ *  主窗口的 Extend 收 storage 事件切过去。两个键与 Extend src/renderer/penzor/state.ts 同步改。 */
+export const PENZOR_SPACE_ID = 'forsion-penzor'
+export const PENZOR_FOCUS = 'forsion-extend.penzor.focus'
+export const penzorSyncReady = (): boolean => ls.get('forsion-extend.penzor.ready') === '1'
+/** 打开蓬洲云「同步」页。storage 事件只发给别的窗口:主窗自己调(提醒里的「查看」、底部进度)时就地派一个,
+ *  Extend 用同一个监听接住;设置窗调时走主窗动作把主窗切过去。 */
+export function openPenzorSync(): void {
+  const v = JSON.stringify({ page: 'sync', at: Date.now() })
+  ls.set(PENZOR_FOCUS, v)
+  if (windowKind() === 'main') window.dispatchEvent(new StorageEvent('storage', { key: PENZOR_FOCUS, newValue: v }))
+  else window.tangu?.requestMainAction?.('open-space', PENZOR_SPACE_ID)
+}
+
 export const NOTES_ON: Partial<RemoteSyncConfig> = { backend: 'penzor', intervalMin: 5, syncOnStart: true, direction: 'both' }
 const DEFAULT_VAULT = 'default'
 const decidedKey = (acct: string) => `forsion.sync.decided.${acct}`

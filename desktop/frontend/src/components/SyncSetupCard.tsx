@@ -10,7 +10,7 @@ import { setActiveSpace, useSpaceStore } from '@lcl/engine'
 import { registerMessages, useI18n } from '../i18n'
 import { windowKind } from '../windowKind'
 import { ONBOARDING_DISMISS_KEY } from './OnboardingWizard'
-import { applySyncChoices, getSync, markSyncDecided, startSyncSetup, subscribeSync, wantsSyncCard, type SyncKind, type SyncSnapshot } from '../services/syncSetup'
+import { applySyncChoices, getSync, markSyncDecided, openPenzorSync, startSyncSetup, subscribeSync, wantsSyncCard, type SyncKind, type SyncSnapshot } from '../services/syncSetup'
 import { notifyApp } from '../stores/notificationStore'
 import { watchAccountName } from '../services/accountName'
 import './syncSetup.css'
@@ -131,7 +131,7 @@ export function SyncSetupHost(): JSX.Element | null {
           <RefreshCw size={14} className="spin" />
           <span>{t('syncSetup.progress', { done: String(prog.done), total: String(prog.total) })}</span>
           <span className="sync-setup-bar"><i style={{ width: `${Math.round(prog.done / prog.total * 100)}%` }} /></span>
-          <button type="button" className="sync-setup-link" onClick={openPenzor}>{t('syncSetup.view')}</button>
+          <button type="button" className="sync-setup-link" onClick={openPenzorSync}>{t('syncSetup.view')}</button>
         </div>
       )}
     </>
