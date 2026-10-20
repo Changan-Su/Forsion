@@ -47,7 +47,7 @@ function openPenzor(): void {
   if (useSpaceStore.getState().spaces.some((x) => x.id === PENZOR_SPACE)) setActiveSpace(PENZOR_SPACE)
 }
 
-export function SyncSetupHost(): JSX.Element | null {
+export function SyncSetupHost(): React.JSX.Element | null {
   const { t } = useI18n()
   const [name, setName] = useState('')
   useEffect(() => watchAccountName(setName), [])
@@ -100,7 +100,7 @@ export function SyncSetupHost(): JSX.Element | null {
     if (size > max) return t('syncSetup.notesOver', { size: fmtBytes(size), max: fmtBytes(max) })
     return t('syncSetup.notesSize', { size: fmtBytes(size), max: fmtBytes(max), pct: String(Math.max(1, Math.round(size / max * 100))) })
   })()
-  const rows: Array<[SyncKind, JSX.Element, string, string]> = [
+  const rows: Array<[SyncKind, React.JSX.Element, string, string]> = [
     ['notes', <NotebookPen size={15} />, s.notes.rootName ? t('syncSetup.notes', { name: s.notes.rootName }) : t('syncSetup.notesAny'), notesSub],
     ['agents', <Bot size={15} />, t('syncSetup.agents'), t('syncSetup.agentsHint')],
     ['plugins', <Puzzle size={15} />, t('syncSetup.plugins'), t('syncSetup.pluginsHint')],
