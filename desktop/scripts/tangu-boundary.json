@@ -78,7 +78,6 @@
       "desktop/frontend/src/views/chat2/FilesPanel.tsx",
       "desktop/frontend/src/views/chat2/RunStatsLine.tsx",
       "desktop/frontend/src/views/chat2/SidebarPane.tsx",
-      "desktop/frontend/src/views/chat2/TaskCards.tsx",
       "desktop/frontend/src/views/chat2/appRefCommand.ts",
       "desktop/frontend/src/views/chat2/approvalQueue.ts",
       "desktop/frontend/src/views/chat2/btwStore.ts",
@@ -90,9 +89,7 @@
       "desktop/frontend/src/views/chat2/orbitPins.ts",
       "desktop/frontend/src/views/chat2/orbits.css",
       "desktop/frontend/src/views/chat2/promptSuggest.ts",
-      "desktop/frontend/src/views/chat2/sessionTree.ts",
-      "desktop/frontend/src/views/chat2/suggest.ts",
-      "desktop/frontend/src/views/chat2/taskLanding.ts"
+      "desktop/frontend/src/views/chat2/sessionTree.ts"
     ],
     "tanguHostDeps": [
       "desktop/frontend/src/achievements/store.ts",

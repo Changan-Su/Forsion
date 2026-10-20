@@ -10,6 +10,8 @@
  * `capabilities` 白名单那道双闸)。
  */
 
+import type { ComponentType } from 'react'
+
 export interface TanguModelInfo {
   /** 模型 id(引擎侧标识,如 `claude-opus-5`)。 */
   id: string
@@ -294,4 +296,24 @@ export function setTanguProbe(p: TanguProbe | null): void {
 
 export function readTangu(): TanguProbe | null {
   return probe
+}
+
+/** 收件箱里 agent 信末尾的任务卡(核心插件化 2e,方案第 5 节 9 号接缝的仓内版):Tangu 在激活时交出来
+ *  (features/tangu.tsx),宿主的收件箱只管放。**宿主内部接缝,不进 `ctx.tangu`**。
+ *  没交(Tangu 没激活)→ 收件箱不切卡,正文原样显示。 */
+export interface TanguInboxTasks {
+  /** 切出正文与卡:只认 forsion-task / forsion-approval 两种围栏;todo = 这封是 Muse 自己的信(`todo:` 头才生效)。 */
+  split(body: string, opts: { todo: boolean }): { text: string; tasks: readonly unknown[]; approvals: string[] }
+  /** 画任务卡:落点新会话 / 交给 Muse / 忽略(收件箱没有当前会话),Muse 待办的真状态现拉回写。 */
+  Cards: ComponentType<{ tasks: readonly unknown[]; ownerId: string }>
+}
+
+let inboxTasks: TanguInboxTasks | null = null
+
+export function setTanguInboxTasks(p: TanguInboxTasks | null): void {
+  inboxTasks = p
+}
+
+export function readTanguInboxTasks(): TanguInboxTasks | null {
+  return inboxTasks
 }
