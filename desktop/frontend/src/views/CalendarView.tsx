@@ -682,8 +682,8 @@ export function CalendarView({ leafId }: { leafId?: string } = {}) {
       {selected && card && (!DESK || !gesture) && <EventCard key={selected.key} calendar focusTitle={focusTitle} ev={preview ?? selected} at={card.at} collapsed={!DESK && collapsed} onExpand={() => setCollapsed(false)}
         maxRight={rootRef.current?.getBoundingClientRect().right} onClose={closeSurface}
         onActions={(e) => { const r = e.currentTarget.getBoundingClientRect(); setMenu({ x: r.left, y: r.bottom }); setCollapsed(false) }}
-        actions={!DESK && menu ? <EventMenu at={menu} mobile writable={!selected.db.readonly} note={selected.db.isNoteView} hasClip={!!clip} onRun={runCommand} onClose={() => setMenu(null)} /> : undefined} />}
-      {menu && (DESK || !card) && <EventMenu at={menu} mobile={false} hasEvent={!!selected} writable={!selected?.db.readonly} note={!!selected?.db.isNoteView} hasClip={!!clip} onRun={runCommand} onClose={() => setMenu(null)} />}
+        actions={!DESK && menu ? <EventMenu at={menu} mobile canCut={!selected.readonly} writable={!selected.db.readonly} note={selected.db.isNoteView} hasClip={!!clip} onRun={runCommand} onClose={() => setMenu(null)} /> : undefined} />}
+      {menu && (DESK || !card) && <EventMenu at={menu} mobile={false} hasEvent={!!selected} canCut={!selected?.readonly} writable={!selected?.db.readonly} note={!!selected?.db.isNoteView} hasClip={!!clip} onRun={runCommand} onClose={() => setMenu(null)} />}
       <DraftCard rootRef={rootRef} onPasted={selectWhenReady} />
     </div>
   )

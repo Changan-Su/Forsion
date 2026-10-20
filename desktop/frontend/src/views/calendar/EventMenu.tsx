@@ -16,15 +16,17 @@ registerMessages({
   'calevmenu.summary': { zh: '复制摘要', en: 'Copy summary' },
   'calevmenu.back': { zh: '返回详情', en: 'Back to details' },
   'calevmenu.readonly': { zh: '此来源只支持查看和复制摘要。', en: 'This source supports viewing and copying a summary.' },
+  'calevmenu.fixedTime': { zh: '系统时间属性不可移动。', en: 'System time properties cannot be moved.' },
   'calevmenu.note': { zh: '此事件关联笔记文件，删除时需确认。', en: 'This event is a note file. Deletion requires confirmation.' },
 })
 export type EventCommand = 'copy' | 'cut' | 'clone' | 'paste' | 'delete' | 'undo' | 'redo' | 'summary'
 const icons = { copy: Copy, cut: Scissors, clone: CopyPlus, paste: ClipboardPaste, delete: Trash2, undo: Undo2, redo: Redo2, summary: FileText }
 const keys: Partial<Record<EventCommand, string>> = { copy: 'C', cut: 'X', clone: 'D', paste: 'V', undo: 'Z', redo: '⇧Z', delete: 'Del' }
-export function EventMenu({ at, mobile, writable, note, hasClip, onRun, onClose, hasEvent = true }: {
+export function EventMenu({ at, mobile, writable, note, hasClip, onRun, onClose, hasEvent = true, canCut = true }: {
   at: { x: number; y: number }; mobile: boolean; writable: boolean; note: boolean; hasClip: boolean;
   onRun: (action: EventCommand) => void; onClose: () => void;
   hasEvent?: boolean;
+  canCut?: boolean;
 }) {
   const { t } = useI18n()
   const ref = useRef<HTMLDivElement>(null)
@@ -48,7 +50,8 @@ export function EventMenu({ at, mobile, writable, note, hasClip, onRun, onClose,
     {mobile && <button role="menuitem" onClick={onClose}><ArrowLeft size={16} />{t('calevmenu.back')}</button>}
     {hasEvent && (!writable || note) && <p>{t(note ? 'calevmenu.note' : 'calevmenu.readonly')}</p>}
     {actions.map((action) => { const Icon = icons[action]; return <button key={action} role="menuitem" aria-label={t(`calevmenu.${action}`)} className={action === 'delete' ? 'danger' : ''}
-      disabled={(action === 'paste' && !hasClip) || (action === 'undo' && !canUndoCalendarEdit()) || (action === 'redo' && !canRedoCalendarEdit())} onClick={() => onRun(action)}>
+      title={action === 'cut' && !canCut ? t('calevmenu.fixedTime') : undefined}
+      disabled={(action === 'cut' && !canCut) || (action === 'paste' && !hasClip) || (action === 'undo' && !canUndoCalendarEdit()) || (action === 'redo' && !canRedoCalendarEdit())} onClick={() => onRun(action)}>
       <Icon size={16} /><span>{t(`calevmenu.${action}`)}</span>{!mobile && keys[action] && <kbd aria-hidden="true">{action === 'delete' ? 'Del' : `${navigator.platform.includes('Mac') ? '⌘' : 'Ctrl+'}${keys[action]}`}</kbd>}
     </button> })}
   </div>

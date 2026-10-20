@@ -154,9 +154,18 @@ describe('calendar action safety', () => {
   it('readonly never mutates; all-day paste retains day count', async () => {
     const e = event(), ro = { ...e, db: { ...e.db, readonly: true } }
     expect(copyCalendarEvent(ro)).toBe(false)
+    expect(copyCalendarEvent({ ...e, colId: 'created' }, true)).toBe(false)
     expect(await cloneCalendarEvent(ro)).toBeNull()
     deleteCalendarRow(ro.db, ro.row, ro.title)
     expect(rows()).toHaveLength(1)
     expect(shiftedCalendarValue('2026-10-20/2026-10-22', new Date(2026, 9, 24, 13))).toBe('2026-10-24/2026-10-26')
+  })
+  it('cut paste fails safely if its date column becomes a system timestamp', async () => {
+    const e = event()
+    copyCalendarEvent(e, true)
+    useDbStore.getState().mutate('Events.db', (d) => ({ ...d, columns: d.columns.map((c) => c.id === 'date' ? { ...c, type: 'created' } : c) }))
+    expect(await pasteCalendarEvent(undefined, new Date(2026, 9, 21, 13))).toBeNull()
+    expect(rows()[0].cells.date).toBe(e.raw)
+    expect(useCalendarClipboard.getState().clip?.cut).toBe(true)
   })
 })

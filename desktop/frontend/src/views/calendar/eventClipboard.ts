@@ -5,6 +5,7 @@ import { deleteAggRow, duplicateAggRow, getAggDb, restoreAggRow, setAggCell, typ
 import { notifyApp } from '../../stores/notificationStore'
 import { amadeus } from '../../amadeus/api'
 import { flushAllScopes } from '../../amadeus/store/pageStore'
+import { isStamped } from '../../amadeus/blocks/database/propertyTypes'
 import { registerMessages, translate } from '../../i18n'
 import { calendarScope, currentCalendarRow, offerCalendarUndo, rescheduleCalendarRow, sameCalendarRow } from './eventActions'
 import { diffDays, fmtStamp, shiftDays, toLocalDate } from './dateUtils'
@@ -24,7 +25,7 @@ let clipboardGeneration = 0
 export function clearCalendarClipboard(): void { ++clipboardGeneration; useCalendarClipboard.setState({ clip: null }) }
 export function copyCalendarEvent(event: ClipboardEvent, cut = false): boolean | Promise<boolean> {
   const generation = ++clipboardGeneration
-  if (event.db.readonly) return false
+  if (event.db.readonly || (cut && isStamped(event.db.columns.find((c) => c.id === event.colId)?.type ?? ''))) return false
   const row = currentCalendarRow(event.db, event.row.rowId)
   if (!row) return false
   if (event.db.isNoteView && !cut) {
@@ -95,6 +96,11 @@ export async function pasteCalendarEvent(db?: AggDb, target?: Date): Promise<{ d
   const event = clip.event
   if (clip.scope !== calendarScope() || (db && db.path !== event.db.path) || db?.readonly) {
     notifyApp({ level: 'warning', text: translate('calclip.scope') })
+    return null
+  }
+  const live = getAggDb(event.db.path)
+  if (!live || JSON.stringify(live.columns) !== JSON.stringify(event.db.columns)) {
+    notifyApp({ level: 'warning', text: translate('calclip.failed') })
     return null
   }
   if (clip.cut) {
