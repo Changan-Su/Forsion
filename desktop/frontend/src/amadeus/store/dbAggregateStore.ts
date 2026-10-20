@@ -19,6 +19,7 @@ import { actDebounced, shortVal } from '../../activity/log'
 import { registerMessages, translate } from '../../i18n'
 
 registerMessages({
+  'dbagg.copyName': { zh: '{name} 副本', en: '{name} copy' },
   'dbagg.confirmDeleteNote': {
     zh: '删除此事件会一并删除对应的笔记文件，确定？',
     en: 'Deleting this event also deletes its note file. Continue?',
@@ -326,7 +327,7 @@ export async function duplicateAggRow(db: AggDb, rowId: string, ok?: () => boole
       still()
     }
     if (noteText === undefined) return null
-    const notePath = await useNoteViewStore.getState().addNote(db.folder)
+    const notePath = await useNoteViewStore.getState().addNote(db.folder, translate('dbagg.copyName', { name: src.name || translate('amadeus.default.note') }))
     still()
     const written = await amadeus.writeTextFile(notePath, noteText, { base: textFingerprint('') })
     still()

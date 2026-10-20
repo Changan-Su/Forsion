@@ -26,7 +26,7 @@ interface NoteViewState {
   /** 列改名 = 跨该文件夹所有笔记重写 frontmatter 键(旧键删、新键置)。 */
   renameProp(folder: string, oldKey: string, newKey: string): Promise<void>
   /** 新行 = 在文件夹里建一篇「未命名」笔记;返回其 vault 相对路径。 */
-  addNote(folder: string): Promise<string>
+  addNote(folder: string, preferredName?: string): Promise<string>
   /** 删行 = 删对应笔记文件(调用方负责二次确认)。 */
   deleteNote(folder: string, notePath: string): Promise<void>
   /** 改 Page Name = 重命名笔记文件。 */
@@ -96,11 +96,11 @@ export const useNoteViewStore = create<NoteViewState>((set, get) => ({
     await get().refresh(folder)
   },
 
-  async addNote(folder) {
+  async addNote(folder, preferredName) {
     const titles = new Set((get().folders[folder]?.props ?? []).map((p) => p.title.toLowerCase()))
     // 默认名会变成**真实文件名**,必须跟当前语言走(i18n.tsx「落盘产物的默认名」一节的规矩);
     // 编号名从同一个 base 派生,防两者词干漂移(第一行「未命名」第二行「Untitled 2」)。
-    const base = translate('amadeus.default.note')
+    const base = preferredName?.replace(/[\\/:*?"<>|]/g, ' ').trim() || translate('amadeus.default.note')
     let name = base
     let i = 1
     for (;;) {

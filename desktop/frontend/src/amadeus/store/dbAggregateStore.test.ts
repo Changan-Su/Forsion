@@ -56,6 +56,7 @@ describe('note event copies keep their document', () => {
   afterEach(() => { vi.restoreAllMocks() })
   it('uses the complete clipboard note snapshot and only replaces its own blank destination', async () => {
     expect(await duplicateAggRow(note(), 'Source.md', undefined, '# Clipboard snapshot\nBody')).toBe('Copy.md')
+    expect(useNoteViewStore.getState().addNote).toHaveBeenCalledWith('', 'Source 副本')
     expect(readTextFile).not.toHaveBeenCalled()
     expect(writeTextFile).toHaveBeenCalledWith('Copy.md', '# Clipboard snapshot\nBody', expect.objectContaining({ base: expect.any(String) }))
     expect(useNoteViewStore.getState().setProp).toHaveBeenCalledWith('', 'Copy.md', 'date', '2026-10-20', 'text')
