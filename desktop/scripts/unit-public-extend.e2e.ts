@@ -6,7 +6,7 @@
  *     ② 商店只有会员 / 积分 / 物品与投稿,没有插件目录、已安装、更新;落在第一张插件页上;
  *     ③ 付款页在新标签页打开,带一次性票、不带 token;
  *     ④ 设置有「Forsion 云端」,只有 Extend 的子页,没有同步 / 连接 / 诊断;
- *     ⑤ 蓬洲云 Space 进得去,我的云盘能新建文件夹、没有上传;
+ *     ⑤ 蓬洲云 Space 进得去,我的云盘能新建文件夹;选一个中文名文件上传,云端收到的名字和内容对得上;下载落成浏览器下载、名字内容对得上;
  *     ⑥ 云端请求都盖着访客 token(页面账号代发),没有别的身份;
  *     ⑦ 负对照:Unit 没装 Extend(同服务器的 /admin/)→ 没有商店入口、没有空的「Forsion 云端」。
  *
@@ -91,6 +91,9 @@ const API: Record<string, unknown> = {
   ],
 }
 const seen: Array<{ method: string; url: string; auth: string; source: string }> = []
+const PDF_BYTES = '%PDF-1.4 fake'
+/** 云端收到的上传(multipart 按 filename* 解名字,同服务端 busboy)。 */
+const uploads: Array<{ name: string | null; ascii: string | null; body: string; parentId: string | null }> = []
 
 function fakeCloud(req: http.IncomingMessage, res: http.ServerResponse): boolean {
   const url = req.url || '/'
@@ -100,6 +103,24 @@ function fakeCloud(req: http.IncomingMessage, res: http.ServerResponse): boolean
   const key = `${req.method} ${url}`
   const hit = key in API ? API[key] : API[`${req.method} ${url.split('?')[0]}`]
   if (String(req.headers.authorization || '') !== `Bearer ${TOKEN}`) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end('{"error":"unauthorized"}'); return true }
+  if (req.method === 'POST' && url === '/api/files/upload') {
+    const chunks: Buffer[] = []
+    req.on('data', (c: Buffer) => chunks.push(c))
+    req.on('end', () => {
+      const raw = Buffer.concat(chunks).toString('utf8')
+      const star = /filename\*=UTF-8''([^\r\n;]+)/.exec(raw)?.[1]
+      const file = /Content-Type: [^\r\n]+\r\n\r\n([\s\S]*)\r\n--[^\r\n]+--\r\n$/.exec(raw)?.[1] ?? ''
+      uploads.push({ name: star ? decodeURIComponent(star) : null, ascii: /filename="([^"]*)"/.exec(raw)?.[1] ?? null, body: file, parentId: /name="parentId"\r\n\r\n([^\r\n]*)/.exec(raw)?.[1] ?? null })
+      res.writeHead(201, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ id: 'up1' }))
+    })
+    return true
+  }
+  if (req.method === 'GET' && url === '/api/files/f1/content') {
+    res.writeHead(200, { 'Content-Type': 'application/pdf', 'Content-Length': String(Buffer.byteLength(PDF_BYTES)) })
+    res.end(PDF_BYTES)
+    return true
+  }
   res.writeHead(hit === undefined ? 404 : 200, { 'Content-Type': 'application/json' })
   res.end(JSON.stringify(hit ?? { detail: 'not in fake cloud' }))
   return true
@@ -230,8 +251,22 @@ async function main(): Promise<void> {
       await page.getByText('我的云盘').first().click()
       await page.getByText('方案.pdf').first().waitFor()
       const toolbar = await page.locator('.pz-btn, .pz-ibtn').evaluateAll((els) => els.map((e) => (e.textContent || '') + '|' + (e.getAttribute('title') || '')))
-      penzorOk = !toolbar.some((s) => s.includes('上传')) && toolbar.some((s) => s.includes('新建文件夹'))
-      check('⑤ 蓬洲云:我的云盘能看、能新建文件夹,没有上传', penzorOk, JSON.stringify(toolbar))
+      penzorOk = toolbar.some((s) => s.includes('上传')) && toolbar.some((s) => s.includes('新建文件夹'))
+      check('⑤ 蓬洲云:我的云盘能看,有上传、新建文件夹', penzorOk, JSON.stringify(toolbar))
+      // 上传:选文件框交 File(网页没有本机路径),中文名要原样到云端
+      await page.locator('input[type="file"]:not([webkitdirectory])').first().setInputFiles({ name: '报告 v2.txt', mimeType: 'text/plain', buffer: Buffer.from('你好 penzor') })
+      for (let i = 0; i < 100 && !uploads.length; i++) await page.waitForTimeout(50)
+      const up = uploads[0]
+      check('⑤ 上传:云端收到的名字(filename*)和内容对得上,落在最外层', up?.name === '报告 v2.txt' && up.ascii === '__ v2.txt' && up.body === '你好 penzor' && up.parentId === 'ROOT', JSON.stringify(up))
+      await page.getByText('全部传完').first().waitFor().catch(() => {})
+      await shot(page, 'penzor-uploaded')
+      // 下载:右键那一行 → 下载,落成浏览器下载
+      const download = page.waitForEvent('download', { timeout: 10000 }).catch(() => null)
+      await page.getByText('方案.pdf').first().click({ button: 'right' })
+      await page.locator('.pz-menu').getByText('下载', { exact: true }).click()
+      const dl = await download
+      const got = dl ? fs.readFileSync((await dl.path())!, 'utf8') : null
+      check('⑤ 下载:浏览器下载落成原名、内容对得上', dl?.suggestedFilename() === '方案.pdf' && got === PDF_BYTES, `${dl?.suggestedFilename()} ${JSON.stringify(got)}`)
       await shot(page, 'penzor-drive')
     } else check('⑤ 蓬洲云 Space 在 Ribbon 上', false, `spaces=${JSON.stringify(await page.locator('[data-space-id]').evaluateAll((els) => els.map((e) => (e as HTMLElement).dataset.spaceId)))} console=${consoleLines.slice(-6).join(' · ')}`)
 
