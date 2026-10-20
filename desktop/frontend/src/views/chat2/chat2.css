@@ -1380,3 +1380,22 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 .t2cv[data-reading] .t2cv-am.am-app .amx-stage-hud, .t2cv[data-reading] .t2cv-am.am-app .amx-stage-minimap { right: calc(var(--t2cv-read-w) + 24px); }
 /* 「接着问」点下去:输入框上面那条闪一下强调色,告诉你发出去接在哪 */
 .t2cv-attach[data-flash] { border-color: var(--accent-ink); color: var(--accent-ink); }
+/* 画布里的列表:对话页的序号 / 圆点挂在正文左边的留白里(padding 0);卡的正文区为了限高是 overflow:hidden,挂在外面的会被整个裁掉,
+   阅读栏左边也只有 22px → 卡和阅读栏都给它们留位置 */
+.t2cv .t2-content :is(ul, ol) { padding-inline-start: 2em; }
+/* 卡里的代码:画布把滚轮拿去平移了,代码块横向滚不了,长行就像被截断 → 卡里自动换行(右边阅读栏里照常横向滚) */
+.t2cv-card .t2-content pre, .t2cv-card .t2-content pre code { white-space: pre-wrap; overflow-wrap: anywhere; }
+/* 收起了下面的卡:卡下面一颗「+N」,点了展开 */
+.t2cv-foldpill {
+  align-self: center; margin-top: 8px; padding: 2px 10px; border: 1px solid var(--border); border-radius: var(--radius-pill, 999px);
+  background: var(--bg-card, var(--bg)); color: var(--text-sec); font: inherit; font-size: var(--ui-font-meta, 12px); line-height: 1.5; cursor: pointer;
+}
+.t2cv-foldpill:hover { color: var(--accent-ink); border-color: var(--accent-ink); }
+/* 一支开头那张提问卡上原地改名 */
+.t2cv-rename {
+  display: block; width: 100%; box-sizing: border-box; margin: -2px 0 4px; padding: 2px 6px; border: 1px solid var(--accent-ink); border-radius: var(--radius-sm, 6px);
+  background: var(--bg-card, var(--bg)); color: var(--text); font: inherit; font-size: var(--ui-font-meta, 12px); outline: none;
+}
+/* 阅读栏左边缘:拖动调宽度 */
+.t2cv-read-grip { position: absolute; z-index: 1; left: 0; top: 0; bottom: 0; width: 6px; cursor: col-resize; touch-action: none; }
+.t2cv-read-grip:hover, .t2cv-read-grip:active { background: color-mix(in srgb, var(--accent-ink) 25%, transparent); }

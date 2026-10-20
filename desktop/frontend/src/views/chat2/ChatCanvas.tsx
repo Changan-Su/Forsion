@@ -11,9 +11,14 @@
  *    镜头让开阅读栏;回对话走头行的「对话 / 画布」胶囊(停在当前这一支)。
  *  - 自动跟随:当前这一支有卡在生成时,像 Chat View 一样跟着往下走(卡底停在输入框上方);一滚走 / 拖走就停,
  *    那张卡出了可读区就出一颗箭头(同「回到底部」),点了飞回去并恢复跟随。
+ *  - 镜头只有一个写手:逐帧追目标(每帧走剩下的 18%,和帧率无关,单帧位移封顶)。跟随、箭头、阅读让位、草稿露出都走它。
+ *  - 右键:回答卡 / 提问卡 / 空白处各一份菜单(现成 ContextMenu);卡下面的子树能收起,收起后挂一颗「+N」。
  */
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, BookOpen, ChevronDown, ChevronUp, CornerDownRight, Hand, ListTree, MoveDown, MoveRight, X } from 'lucide-react'
+import {
+  Archive, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, BookOpen, ChevronDown, ChevronUp, ChevronsDownUp, ChevronsUpDown, Copy, CornerDownRight, GitBranch,
+  Hand, ListTree, Locate, Map as MapIcon, Maximize2, MessageCircleQuestion, MoveDown, MoveRight, Pencil, PenLine, X,
+} from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 import type { UiMessage } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { useApp } from '../../stores/appStore'
@@ -29,6 +34,7 @@ import { openBtw } from './btwStore'
 import { splitLeadingRefs } from './RefChipView'
 import { splitLeadingQuotes } from './quotes'
 import { buildTurnTree, type TurnTree } from './canvasTree'
+import { ContextMenu, type CtxItem, type CtxMenu } from '../../components/RightPanel'
 
 registerMessages({
   'chatcanvas.seg.aria': { zh: '对话的看法', en: 'Chat layout' },
@@ -61,6 +67,22 @@ registerMessages({
   'chatcanvas.hint.read': { zh: '双击卡片：在右边阅读', en: 'Double-click a card to read it on the right' },
   'chatcanvas.hint.add': { zh: '悬停卡片点 ⊕：接着问，或另起一支', en: 'Hover a card and click ⊕ to follow up or branch off' },
   'chatcanvas.hint.back': { zh: '左上角切到「对话」：回到正在看的这一支', en: 'Switch to Chat at the top left to go back to this branch' },
+  'chatcanvas.hint.menu': { zh: '右键：更多操作', en: 'Right-click for more' },
+  'chatcanvas.menu.copyAnswer': { zh: '复制回答', en: 'Copy answer' },
+  'chatcanvas.menu.aside': { zh: '顺便问', en: 'Ask on the side' },
+  'chatcanvas.menu.fold': { zh: '收起下面的卡', en: 'Collapse cards below' },
+  'chatcanvas.menu.unfold': { zh: '展开下面的 {n} 张', en: 'Expand {n} cards below' },
+  'chatcanvas.menu.rewrite': { zh: '改写这句再问', en: 'Rewrite and ask again' },
+  'chatcanvas.menu.copyQuestion': { zh: '复制问题', en: 'Copy question' },
+  'chatcanvas.menu.rename': { zh: '重命名这一支', en: 'Rename this branch' },
+  'chatcanvas.menu.archive': { zh: '归档这一支', en: 'Archive this branch' },
+  'chatcanvas.menu.latest': { zh: '回到最新', en: 'Go to latest' },
+  'chatcanvas.menu.fit': { zh: '看全部', en: 'Fit everything' },
+  'chatcanvas.menu.showAll': { zh: '看全部分支', en: 'Show all branches' },
+  'chatcanvas.menu.miniOn': { zh: '显示缩略图', en: 'Show minimap' },
+  'chatcanvas.menu.miniOff': { zh: '隐藏缩略图', en: 'Hide minimap' },
+  'chatcanvas.rename.aria': { zh: '这一支的名字', en: 'Branch name' },
+  'chatcanvas.read.resize': { zh: '拖动调整阅读栏宽度', en: 'Drag to resize the reader' },
 })
 
 // ── 每棵树的本机偏好(按树根记;切到分支不翻回对话) ──
@@ -73,9 +95,12 @@ export interface CanvasPref {
   /** 父卡 key → 子卡所在会话 id 的左右顺序(从草稿发出去时记下;没记的排在后面,照建的先后) */
   order: Record<string, string[]>
   draft: CanvasDraft | null
+  /** 收起了下面子树的卡 key */
+  fold: string[]
 }
 const PREF_KEY = 'tangu.chatCanvas'
 const NO_ORDER: Record<string, string[]> = Object.freeze({}) as Record<string, string[]>
+const NO_FOLD: string[] = Object.freeze([]) as unknown as string[]
 const PREF_CAP = 200 // ponytail: 只留最近 200 棵树,超出按写入先后丢
 type SavedPref = Partial<Omit<CanvasPref, 'draft'>> & { draft?: CanvasDraft | null }
 function readPrefs(): Record<string, SavedPref> {
@@ -98,7 +123,8 @@ export function useChatCanvasPref(rootId: string | null): [CanvasPref, (patch: P
   }, [rootId])
   const saved = rootId ? all[rootId] : undefined
   const order = saved?.order && typeof saved.order === 'object' ? saved.order : NO_ORDER // 同一个空对象:排版的 memo 认它,每次新建会死循环
-  return [{ on: !!saved?.on, dir: saved?.dir === 'h' ? 'h' : 'v', order, draft: isDraft(saved?.draft) ? saved.draft : null }, set]
+  const fold = Array.isArray(saved?.fold) ? saved.fold : NO_FOLD
+  return [{ on: !!saved?.on, dir: saved?.dir === 'h' ? 'h' : 'v', order, draft: isDraft(saved?.draft) ? saved.draft : null, fold }, set]
 }
 
 // ── 自动排版 ──
@@ -109,6 +135,11 @@ const PREVIEW_H = 260 // 约 8 行;更长的回答在卡里只露这一段,全�
 const START_Z = 0.9 // 竖排正好放下三张并排的卡
 const READ_GUTTER = 24 // 阅读栏和让开它的卡之间的空
 const DRAFT = 'draft' // 草稿提问卡在排版里的 key(真卡的 key 都带冒号,撞不上)
+const READ_W_KEY = 'tangu.chatCanvas.readW' // 阅读栏宽度(本机)
+const READ_W_MIN = 320, READ_W_MAX = 900
+const NARROW = 900 // 舞台窄于这个:阅读栏直接盖在画布上,不让位
+const CHASE = 0.18 // 每帧(16.7ms)走剩下距离的这一截
+const CHASE_CAP = 160 // 单帧位移封顶(px/16.7ms):飞很远也不会一闪而过
 
 /** 朴素的子树宽度排法:竖排 = 子卡在下、兄弟并排、父卡居中;横排 = 子卡在右、兄弟上下叠、父卡与第一张子卡齐顶。
  *  ponytail: 子树按包围盒占位(O(n)),宽树会比 Reingold-Tilford 松;兄弟多了再换紧凑排法。 */
@@ -234,11 +265,17 @@ export function ChatCanvas({ rootId, activeId, dir, onDir }: {
   }
   useEffect(() => () => roRef.current?.disconnect(), [])
   const track = useCallback((el: HTMLElement | null): void => { if (el) roRef.current?.observe(el) }, [])
+  // 收起的子树:正在看的这一支要穿过它时不算(只认这一支最后一张往下收),不然焦点那张卡没了
+  const folds = useMemo(() => {
+    const path = tree.paths[activeId] ?? []
+    return new Set(pref.fold.filter((k) => tree.cards.has(k) && !(path.includes(k) && k !== path[path.length - 1])))
+  }, [pref.fold, tree, activeId])
   // 子卡的左右顺序:记过的照记的排,没记的照建的先后排在后面;草稿插在它该在的位置
   const order = pref.order
   const kidsOf = useCallback((k: string): string[] => {
     const c = tree.cards.get(k)
     if (!c) return []
+    if (folds.has(k)) return draft?.parent === k ? [DRAFT] : []
     let ks = c.children
     const o = order[k]
     if (o?.length) {
@@ -247,7 +284,12 @@ export function ChatCanvas({ rootId, activeId, dir, onDir }: {
     }
     if (draft && draft.parent === k) { ks = [...ks]; ks.splice(Math.min(Math.max(0, draft.at), ks.length), 0, DRAFT) }
     return ks
-  }, [tree, order, draft?.parent, draft?.at]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [tree, order, folds, draft?.parent, draft?.at]) // eslint-disable-line react-hooks/exhaustive-deps
+  const countUnder = (k: string): number => (tree.cards.get(k)?.children ?? []).reduce((n, c) => n + 1 + countUnder(c), 0)
+  const setFold = (k: string, on: boolean): void => {
+    const rest = pref.fold.filter((x) => x !== k && tree.cards.has(x)) // 顺手清掉已经不在树里的
+    setPref({ fold: on ? [...rest, k] : rest })
+  }
   const boxes = useMemo(() => layoutTree(tree, heights, dir, kidsOf), [tree, heights, dir, kidsOf])
   const boxesRef = useRef(boxes)
   boxesRef.current = boxes
@@ -272,6 +314,7 @@ export function ChatCanvas({ rootId, activeId, dir, onDir }: {
     const c = tree.cards.get(key)
     if (!c) return
     setSel({ key, part })
+    setExpanded((s) => (s.size && !s.has(key) ? new Set() : s)) // 刚写完还展开着的那张:选了别的卡就收回预览
     if (!c.at[activeId]) useApp.getState().setActiveId(c.sid) // 不在当前这一支上:主区就地换成它那一支
     if (reading) setReading(key) // 阅读栏开着:跟着换成这一张
   }
@@ -287,9 +330,16 @@ export function ChatCanvas({ rootId, activeId, dir, onDir }: {
   // 刚写完的那张:写完后卡底还会长出一行操作条,跟着的话 1.5s 内接着把卡底贴在阅读线上
   const afterglow = useRef<{ key: string; until: number } | null>(null)
   const flyRaf = useRef(0)
-  // 用户自己挪了视口(滚轮 / 拖空白 / 捏合 / 缩略图 / 适应内容):停跟;正在往回飞的那一下也作废
+  const flyTo = useRef<Viewport | null>(null) // 正在追的目标(null = 没在飞)
+  const followed = useRef<string | null>(null) // 跟随上一次贴的是哪张卡:还是它 = 卡在长,刚性跟;换了 = 追过去
+  const flyDone = useRef<(() => void) | undefined>(undefined)
+  // 用户自己挪了视口(滚轮 / 拖空白 / 捏合 / 缩略图 / 适应内容):停跟;正在飞的那一下也作废;刚写完展开着的那张收回预览
   const release = useCallback((): void => {
     cancelAnimationFrame(flyRaf.current)
+    flyTo.current = null
+    flyDone.current = undefined
+    followed.current = null
+    setExpanded((s) => (s.size ? new Set() : s))
     settle.current = null
     afterglow.current = null
     if (followRef.current) { followRef.current = false; setFollow(false) }
@@ -298,6 +348,7 @@ export function ChatCanvas({ rootId, activeId, dir, onDir }: {
   // 手势层的平移 / 捏合也算「用户挪走了」:包一层 setVp。跟随自己用原版 setVp,不会把自己停掉。
   const userView: CanvasViewportApi = { ...view, setVp: (next: Viewport) => { release(); view.setVp(next) } }
   const openReadingRef = useRef<(key: string) => void>(() => {})
+  const onMenuRef = useRef<(key: string | null, at: { clientX: number; clientY: number }) => void>(() => {})
   const gesture = useCanvasGestures(host, userView, {
     boxes: () => boxesRef.current,
     commit: () => {}, // 位置不存(拖动摆位还没做)
@@ -305,6 +356,7 @@ export function ChatCanvas({ rootId, activeId, dir, onDir }: {
     isEditing: () => true, // 卡里的字照常选、按钮照常点:手势层对卡整个让路
     blankPan: true,
     onDoubleClick: (key) => { if (key && key !== DRAFT) openReadingRef.current(key) },
+    onContextMenu: (key, at) => onMenuRef.current(key, at),
     minW: CARD_W,
     minH: 40,
   }, false)
@@ -320,7 +372,8 @@ export function ChatCanvas({ rootId, activeId, dir, onDir }: {
   const paneSpace = (): number => {
     const el = readRef.current
     if (!el || !host.current) return 0
-    const u = hostSize(host.current).u
+    const { w, u } = hostSize(host.current)
+    if (w < NARROW) return 0 // 窄:阅读栏直接盖在画布上,不让位
     return el.getBoundingClientRect().width / u + READ_GUTTER
   }
   /** 舒服的阅读位置:卡底停在输入框上方(和 Chat View 贴底一样,新出来的字在最下面);卡在横向视野外就居中。 */
@@ -332,18 +385,39 @@ export function ChatCanvas({ rootId, activeId, dir, onDir }: {
     const x = left < 16 || left + b.w * z > w - 16 ? w / 2 - (b.x + b.w / 2) * z : vp.x
     return { z, x, y: h - composerInset() - (b.y + b.h) * z }
   }
-  /** 240ms 缓动到某个视口(用户一碰就作废,见 release);系统开了「减少动态效果」直接到。 */
-  const tweenTo = (to: Viewport, done?: () => void): void => {
-    cancelAnimationFrame(flyRaf.current)
-    if (reduceMotion()) { view.setVp(to); done?.(); return }
-    const from = view.vpRef.current
-    const t0 = performance.now()
+  /** 追到某个视口:每帧走剩下的 CHASE(和帧率无关),单帧位移封顶;飞的途中再叫就只换目标、不重起。
+   *  track = 同一张卡在长(目标一点点挪):没在飞就直接贴上;在飞就连当前位置一起平移,剩下那段照常追 —— 不然追法天生落后,
+   *  新长出来的字压在输入框底下(台架实测落后 20~50px)。用户一碰就作废(release);系统开了「减少动态效果」直接到。 */
+  const chase = (to: Viewport, done?: () => void, track = false): void => {
+    flyDone.current = done
+    if (reduceMotion()) { cancelAnimationFrame(flyRaf.current); flyTo.current = null; flyDone.current = undefined; view.setVp(to); done?.(); return }
+    const prev = flyTo.current
+    if (track && !prev) { view.setVp(to); flyDone.current = undefined; done?.(); return }
+    if (track && prev) { const cur = view.vpRef.current; view.setVp({ z: cur.z, x: cur.x + to.x - prev.x, y: cur.y + to.y - prev.y }) }
+    flyTo.current = to
+    if (prev) return
+    let last = performance.now()
     const step = (now: number): void => {
-      const p = Math.min(1, (now - t0) / 240)
-      const e = 1 - (1 - p) ** 3
-      view.setVp({ z: from.z + (to.z - from.z) * e, x: from.x + (to.x - from.x) * e, y: from.y + (to.y - from.y) * e })
-      if (p < 1) flyRaf.current = requestAnimationFrame(step)
-      else done?.()
+      const goal = flyTo.current
+      if (!goal) return
+      const dt = Math.min(64, Math.max(0, now - last)) // 切走标签页回来别一步跨完
+      last = now
+      const cur = view.vpRef.current
+      const k = 1 - (1 - CHASE) ** (dt / 16.7)
+      let dx = (goal.x - cur.x) * k, dy = (goal.y - cur.y) * k
+      const d = Math.hypot(dx, dy), cap = CHASE_CAP * (dt / 16.7)
+      if (d > cap) { dx *= cap / d; dy *= cap / d }
+      const z = cur.z + (goal.z - cur.z) * k
+      if (Math.hypot(goal.x - cur.x - dx, goal.y - cur.y - dy) < 0.5 && Math.abs(goal.z - z) < 1e-3) {
+        flyTo.current = null
+        view.setVp(goal)
+        const f = flyDone.current
+        flyDone.current = undefined
+        f?.()
+        return
+      }
+      view.setVp({ z, x: cur.x + dx, y: cur.y + dy })
+      flyRaf.current = requestAnimationFrame(step)
     }
     flyRaf.current = requestAnimationFrame(step)
   }
@@ -353,13 +427,13 @@ export function ChatCanvas({ rootId, activeId, dir, onDir }: {
     if (!b || !host.current) return
     const { w, h } = hostSize(host.current)
     const right = w - paneSpace()
-    const vp = view.vpRef.current
+    const vp = flyTo.current ?? view.vpRef.current
     const z = vp.z
     const left = b.x * z + vp.x, top = b.y * z + vp.y, cw = b.w * z
     let { x, y } = vp
     if (left < 16 || left + cw > right - 16) x = cw > right - 32 ? 16 - b.x * z : right / 2 - (b.x + b.w / 2) * z
     if (top < 48 || top > h - composerInset() - 60) y = 56 - b.y * z
-    if (Math.abs(x - vp.x) > 0.5 || Math.abs(y - vp.y) > 0.5) tweenTo({ z, x, y })
+    if (Math.abs(x - vp.x) > 0.5 || Math.abs(y - vp.y) > 0.5) chase({ z, x, y })
   }
   const openReading = (key: string): void => {
     if (!tree.cards.has(key)) return
@@ -395,6 +469,8 @@ export function ChatCanvas({ rootId, activeId, dir, onDir }: {
     lastDir.current = dir
     const r = recallViewport(memoKey)
     settle.current = null
+    cancelAnimationFrame(flyRaf.current) // 换排法:还在飞的那一下目标是旧排法的
+    flyTo.current = null
     if (r) { landed.current = true; view.setVp(r) } else landed.current = false
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dir])
@@ -420,11 +496,13 @@ export function ChatCanvas({ rootId, activeId, dir, onDir }: {
     if (!k || !followRef.current || !heights.has(k)) return
     const b = boxes.get(k)
     if (!b) return
-    const cur = view.vpRef.current
+    const cur = flyTo.current ?? view.vpRef.current // 正在飞:按目标算,半路的位置会让横向停在一半
     const next = readingVp(b, cur)
     landed.current = true // 跟着生成落过位了,生成完不再跳回「最后一张卡顶」
     settle.current = null
-    if (Math.abs(next.x - cur.x) > 0.5 || Math.abs(next.y - cur.y) > 0.5) view.setVp(next)
+    const same = followed.current === k
+    followed.current = k
+    if (Math.abs(next.x - cur.x) > 0.5 || Math.abs(next.y - cur.y) > 0.5 || Math.abs(next.z - cur.z) > 1e-3) chase(next, undefined, same)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [boxes, streamKey, follow])
   // 第一次打开(这棵树、这个排法没记过视口):同 Chat View 打开在末尾 —— 这一支最后一张卡的卡底落在阅读线上,
@@ -455,10 +533,12 @@ export function ChatCanvas({ rootId, activeId, dir, onDir }: {
     else if (bottom < 0) arrow = 'up'
     else if (bottom > h - composerInset() + 8) arrow = 'down'
   }
-  const flyBack = (): void => {
-    const b = streamKey ? boxesRef.current.get(streamKey) : undefined
-    if (!b) return
-    tweenTo(readingVp(b, view.vpRef.current), () => { followRef.current = true; setFollow(true) })
+  // 箭头 / 右键「回到最新」:在生成就恢复跟随(跟随那段自己追过去);没在生成就追到这一支最后一张
+  const toLatest = (): void => {
+    if (streamKey) { followRef.current = true; setFollow(true); return }
+    const k = activePath[activePath.length - 1]
+    const b = k ? boxesRef.current.get(k) : undefined
+    if (b) chase(readingVp(b, flyTo.current ?? view.vpRef.current))
   }
   useEffect(() => () => cancelAnimationFrame(flyRaf.current), [])
 
@@ -487,7 +567,7 @@ export function ChatCanvas({ rootId, activeId, dir, onDir }: {
     // 已经有一张写了字的:先飞过去,由你决定发还是放弃(同一时间只有一张)
     if (draft && draft.text.trim()) { reveal(DRAFT); draftTa.current?.focus({ preventScroll: true }); return }
     release()
-    setPref({ draft: { parent, at, text } })
+    setPref({ draft: { parent, at, text }, ...(pref.fold.includes(parent) ? { fold: pref.fold.filter((x) => x !== parent) } : {}) })
     revealDraft.current = true
   }
   // 新开的草稿量到位置以后再露出来、聚焦(聚焦不许滚:舞台 overflow:hidden,浏览器会自己去滚它)
@@ -549,6 +629,102 @@ export function ChatCanvas({ rootId, activeId, dir, onDir }: {
     return h
   }
 
+  // ── 右键:回答卡 / 提问卡 / 空白处 ──
+  const [menu, setMenu] = useState<CtxMenu>(null)
+  const [renaming, setRenaming] = useState<string | null>(null) // 正在改名的那一支(卡 key)
+  const copy = (text: string): void => { try { void navigator.clipboard.writeText(text) } catch { /* ignore */ } }
+  /** 这张卡是不是一支的开头(这一支自己的第一轮):重命名 / 归档挂在它上面 */
+  const isHead = (c: { sid: string; parent: string | null }): boolean => c.sid !== rootId && (!c.parent || tree.cards.get(c.parent)?.sid !== c.sid)
+  const archiveBranch = (key: string): void => {
+    const c = tree.cards.get(key)
+    if (!c) return
+    // 正看着这一支(或它下面):先回到它的上一支,别让对话区空掉
+    const up = c.parent ? tree.cards.get(c.parent) : undefined
+    if (up && activePath.includes(key)) useApp.getState().setActiveId(up.sid)
+    void useApp.getState().archiveSession(c.sid, true)
+  }
+  const menuFor = (key: string | null, part: 'q' | 'a'): CtxItem[] => {
+    const c = key && key !== DRAFT ? tree.cards.get(key) : undefined
+    if (!c) {
+      return [
+        { label: t('chatcanvas.menu.latest'), icon: <Locate size={14} />, disabled: !activePath.length, run: toLatest },
+        { label: t('chatcanvas.menu.fit'), icon: <Maximize2 size={14} />, run: () => { release(); view.fitTo([...boxesRef.current.values()], 64) } },
+        { label: t(dir === 'v' ? 'chatcanvas.horizontal' : 'chatcanvas.vertical'), icon: dir === 'v' ? <MoveRight size={14} /> : <MoveDown size={14} />, separatorBefore: true, run: () => onDir(dir === 'v' ? 'h' : 'v') },
+        { label: t(focus ? 'chatcanvas.menu.showAll' : 'chatcanvas.focus'), icon: <ListTree size={14} />, run: () => setFocus((v) => !v) },
+        { label: t(mini ? 'chatcanvas.menu.miniOff' : 'chatcanvas.menu.miniOn'), icon: <MapIcon size={14} />, run: () => { setMini(!mini); setCanvasMiniMapEnabled(!mini) } },
+      ]
+    }
+    const sibs = c.parent ? kidsOf(c.parent).filter((k) => k !== DRAFT) : []
+    const me = sibs.indexOf(c.key)
+    if (part === 'q' && c.user) {
+      const q = questionText(c.user)
+      const head = isHead(c)
+      return [
+        { label: t('chatcanvas.add.sibling'), icon: <GitBranch size={14} />, disabled: !c.parent || me < 0, run: () => openDraft(c.parent!, me + 1) },
+        { label: t('chatcanvas.menu.rewrite'), icon: <PenLine size={14} />, disabled: !c.parent || me < 0, run: () => openDraft(c.parent!, me + 1, q) },
+        { label: t('chatcanvas.menu.copyQuestion'), icon: <Copy size={14} />, run: () => copy(q) },
+        ...(head ? [
+          { label: t('chatcanvas.menu.rename'), icon: <Pencil size={14} />, separatorBefore: true, run: () => setRenaming(c.key) },
+          { label: t('chatcanvas.menu.archive'), icon: <Archive size={14} />, run: () => archiveBranch(c.key) },
+        ] : []),
+      ]
+    }
+    const tailSid = c.answers.length ? tailOf(c.key) : null
+    const last = c.answers[c.answers.length - 1]
+    const n = countUnder(c.key)
+    const folded = folds.has(c.key)
+    const onPath = activePath.includes(c.key) && activePath[activePath.length - 1] !== c.key
+    return [
+      { label: t(tailSid ? 'chatcanvas.add.follow' : 'chatcanvas.add.next'), icon: <GitBranch size={14} />, disabled: !c.answers.length,
+        run: () => { if (tailSid) followUp(c.key, tailSid); else openDraft(c.key, kidsOf(c.key).filter((k) => k !== DRAFT).length) } },
+      { label: t('chatcanvas.menu.copyAnswer'), icon: <Copy size={14} />, disabled: !c.answers.length, run: () => copy(c.answers.map((m) => m.content).join('\n\n')) },
+      { label: t('chatcanvas.menu.aside'), icon: <MessageCircleQuestion size={14} />, disabled: !last, run: () => { if (last) handlersFor(c.sid, last.id).onAside?.() } },
+      { label: t('chatcanvas.read'), icon: <BookOpen size={14} />, shortcut: 'Space', separatorBefore: true, run: () => openReading(c.key) },
+      { label: t('chatcanvas.focus'), icon: <ListTree size={14} />, run: () => { pick(c.key); setFocus(true) } },
+      ...(n ? [folded
+        ? { label: t('chatcanvas.menu.unfold', { n }), icon: <ChevronsUpDown size={14} />, run: () => setFold(c.key, false) }
+        : { label: t('chatcanvas.menu.fold'), icon: <ChevronsDownUp size={14} />, disabled: onPath, run: () => setFold(c.key, true) }] : []),
+    ]
+  }
+  onMenuRef.current = (key, at) => {
+    if (key === DRAFT) return // 草稿卡里是在打字
+    const part = document.elementFromPoint(at.clientX, at.clientY)?.closest('[data-cv-part="q"]') ? 'q' : 'a'
+    // 右键只弹菜单、不选中:选中别的支上的卡会把主区切过去,那张卡就落到当前这一支上,「收起」永远收不了
+    setMenu({ x: at.clientX, y: at.clientY, items: menuFor(key, part) })
+  }
+  const commitRename = (key: string, title: string): void => {
+    setRenaming(null)
+    const c = tree.cards.get(key)
+    const s = c && useApp.getState().sessions.find((x) => x.id === c.sid)
+    if (c && title.trim() && title.trim() !== s?.title) void useApp.getState().renameSession(c.sid, title.trim())
+  }
+
+  // 阅读栏宽度:左边缘拖,记在本机
+  const [readW, setReadW] = useState<number | null>(() => {
+    try { const v = Number(localStorage.getItem(READ_W_KEY)); return v >= READ_W_MIN && v <= READ_W_MAX ? v : null } catch { return null }
+  })
+  const onGrip = (e: React.PointerEvent): void => {
+    const el = readRef.current
+    if (!el || e.button !== 0) return
+    e.preventDefault()
+    const grip = e.currentTarget as HTMLElement
+    grip.setPointerCapture(e.pointerId)
+    const u = hostSize(host.current).u || 1
+    const x0 = e.clientX, w0 = el.getBoundingClientRect().width / u
+    let w = w0
+    const move = (ev: PointerEvent): void => { w = Math.round(Math.min(READ_W_MAX, Math.max(READ_W_MIN, w0 + (x0 - ev.clientX) / u))); setReadW(w) }
+    const up = (): void => {
+      grip.removeEventListener('pointermove', move)
+      grip.removeEventListener('pointerup', up)
+      grip.removeEventListener('pointercancel', up)
+      try { localStorage.setItem(READ_W_KEY, String(w)) } catch { /* ignore */ }
+      if (reading) requestAnimationFrame(() => reveal(reading))
+    }
+    grip.addEventListener('pointermove', move)
+    grip.addEventListener('pointerup', up)
+    grip.addEventListener('pointercancel', up)
+  }
+
   // 焦点掉回了 body(比如点「上一轮」到头,按钮变灰失焦):Esc 照样关阅读栏。画布里的按键由下面的 onKey 先处理(它 preventDefault)
   useEffect(() => {
     if (!reading) return
@@ -577,7 +753,10 @@ export function ChatCanvas({ rootId, activeId, dir, onDir }: {
   const hr = hintsEl.current, hw = 16 + (hr?.offsetWidth ?? 320), hh = 44 + (hr?.offsetHeight ?? 60)
   const hintsCovered = [...boxes.values()].some((b) => b.x * vp.z + vp.x < hw && (b.x + b.w) * vp.z + vp.x > 0 && b.y * vp.z + vp.y < hh && (b.y + b.h) * vp.z + vp.y > 0)
   return (
-    <div className="t2cv" data-dir={dir} data-hand={hand ? '' : undefined} data-follow={follow ? '' : undefined} data-reading={readCard ? '' : undefined} onKeyDown={onKey}>
+    <div
+      className="t2cv" data-dir={dir} data-hand={hand ? '' : undefined} data-follow={follow ? '' : undefined} data-reading={readCard ? '' : undefined} onKeyDown={onKey}
+      style={readW ? { ['--t2cv-read-w' as string]: `min(${readW}px, calc(100% - 64px))` } : undefined}
+    >
       <div className="t2cv-stage" ref={host} tabIndex={-1} aria-label={t('chatcanvas.aria')}>
         <div className="am-app t2cv-am"><div className="amx-stage-grid" style={gridLayerStyle(vp)} /></div>
         {/* 空白处的几句说明:不接事件 */}
@@ -586,6 +765,7 @@ export function ChatCanvas({ rootId, activeId, dir, onDir }: {
             <span>{t('chatcanvas.hint.read')}</span>
             <span>{t('chatcanvas.hint.add')}</span>
             <span>{t('chatcanvas.hint.back')}</span>
+            <span>{t('chatcanvas.hint.menu')}</span>
           </div>
         )}
         <div className="t2cv-world" style={{ transform: `translate(${vp.x}px, ${vp.y}px) scale(${vp.z})` }}>
@@ -599,7 +779,8 @@ export function ChatCanvas({ rootId, activeId, dir, onDir }: {
             })}
           </svg>
           {[...tree.cards.values()].map((c) => {
-            const b = boxes.get(c.key)!
+            const b = boxes.get(c.key)
+            if (!b) return null // 收在别的卡下面
             const dim = focus && !activePath.includes(c.key)
             const streaming = c.answers.some((m) => m.status === 'streaming')
             // 一上来就限高(短卡不受影响):等量出「长」再折,先量到的是展开高,镜头按它落位后卡一缩就落空了
@@ -607,6 +788,7 @@ export function ChatCanvas({ rootId, activeId, dir, onDir }: {
             const folded = clamp && tall.has(c.key)
             const isSel = c.key === selected
             const adds = !hand && !dim && !streaming
+            const foldN = folds.has(c.key) ? countUnder(c.key) : 0
             const sibs = c.parent ? kidsOf(c.parent).filter((k) => k !== DRAFT) : []
             const me = sibs.indexOf(c.key)
             const tailSid = c.answers.length ? tailOf(c.key) : null
@@ -631,7 +813,17 @@ export function ChatCanvas({ rootId, activeId, dir, onDir }: {
               >
                 {c.user && (
                   <div className="t2cv-card t2cv-qcard" data-cv-part="q" data-sel={isSel && selPart === 'q' ? '' : undefined}>
-                    <div className="t2cv-qlabel">{t('chatcanvas.you')}</div>
+                    {renaming === c.key ? (
+                      <input
+                        className="t2cv-rename" autoFocus aria-label={t('chatcanvas.rename.aria')} data-testid="cv-rename"
+                        defaultValue={sessions.find((x) => x.id === c.sid)?.title || ''}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); commitRename(c.key, e.currentTarget.value) }
+                          else if (e.key === 'Escape') { e.preventDefault(); setRenaming(null) }
+                        }}
+                        onBlur={(e) => commitRename(c.key, e.currentTarget.value)}
+                      />
+                    ) : <div className="t2cv-qlabel">{t('chatcanvas.you')}</div>}
                     <div className="t2cv-q" title={t('chatcanvas.readHint')}>{questionText(c.user)}</div>
                     {adds && c.parent && me >= 0 && (<>
                       <button type="button" className="t2cv-add" data-add="before" title={t('chatcanvas.add.sibling')} aria-label={t('chatcanvas.add.sibling')} onClick={() => openDraft(c.parent!, me)}>+</button>
@@ -652,7 +844,7 @@ export function ChatCanvas({ rootId, activeId, dir, onDir }: {
                     {folded && (
                       <button type="button" className="t2cv-readbtn" data-testid="cv-readbtn" onClick={() => openReading(c.key)}><BookOpen size={13} />{t('chatcanvas.read')}</button>
                     )}
-                    {adds && (
+                    {adds && !foldN && (
                       <button
                         type="button" className="t2cv-add" data-add="next"
                         title={t(tailSid ? 'chatcanvas.add.follow' : 'chatcanvas.add.next')} aria-label={t(tailSid ? 'chatcanvas.add.follow' : 'chatcanvas.add.next')}
@@ -660,6 +852,9 @@ export function ChatCanvas({ rootId, activeId, dir, onDir }: {
                       >+</button>
                     )}
                   </div>
+                )}
+                {foldN > 0 && (
+                  <button type="button" className="t2cv-foldpill" data-testid="cv-foldpill" title={t('chatcanvas.menu.unfold', { n: foldN })} aria-label={t('chatcanvas.menu.unfold', { n: foldN })} onClick={() => setFold(c.key, false)}>+{foldN}</button>
                 )}
               </div>
             )
@@ -708,6 +903,7 @@ export function ChatCanvas({ rootId, activeId, dir, onDir }: {
       {/* 阅读栏:舞台外面(手势层不吞它的滚动和点击),对话页那套排版 */}
       {readCard && (
         <aside ref={readRef} tabIndex={-1} className="t2cv-read" aria-label={t('chatcanvas.read.aria')} data-testid="cv-read" data-cv-read={readCard.key}>
+          <div className="t2cv-read-grip" role="separator" aria-orientation="vertical" aria-label={t('chatcanvas.read.resize')} title={t('chatcanvas.read.resize')} onPointerDown={onGrip} />
           <div className="t2cv-read-h">
             <div className="t2cv-read-t">
               <b title={readCard.user ? questionText(readCard.user) : undefined}>{readCard.user ? questionText(readCard.user) : t('chatcanvas.read')}</b>
@@ -726,11 +922,12 @@ export function ChatCanvas({ rootId, activeId, dir, onDir }: {
       )}
       {/* 舞台外面:手势层在舞台上拿指针捕获(空白拖 = 平移),放在里面这颗箭头就点不动 */}
       {arrow && (
-        <button type="button" className="jump-bottom t2-jump t2cv-jump" data-dir={arrow} title={t('chatcanvas.follow')} aria-label={t('chatcanvas.follow')} onClick={flyBack}>
+        <button type="button" className="jump-bottom t2-jump t2cv-jump" data-dir={arrow} title={t('chatcanvas.follow')} aria-label={t('chatcanvas.follow')} onClick={toLatest}>
           {arrow === 'up' ? <ArrowUp size={16} /> : arrow === 'left' ? <ArrowLeft size={16} /> : arrow === 'right' ? <ArrowRight size={16} /> : <ArrowDown size={16} />}
         </button>
       )}
       {!tree.cards.size && !loading && <div className="t2cv-empty">{t('chatcanvas.empty')}</div>}
+      {menu && <ContextMenu menu={menu} onClose={() => setMenu(null)} />}
       {tailText && (
         <div className="t2cv-attach-row"><div className="t2cv-attach" data-flash={flash ? '' : undefined}><CornerDownRight size={12} /><span>{t('chatcanvas.attach')}</span><b>{tailText}</b></div></div>
       )}
