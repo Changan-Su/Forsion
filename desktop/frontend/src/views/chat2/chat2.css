@@ -1310,6 +1310,7 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
   border: 0; outline: 0; resize: none; background: transparent; color: var(--text);
   font: inherit; font-size: var(--ui-font-body, 14px); line-height: 1.55; field-sizing: content;
 }
+.t2cv-draft-ta:read-only { opacity: 0.6; }
 .t2cv-draft-ta::placeholder { color: var(--text-faint); }
 .t2cv-draft-foot { display: flex; align-items: center; gap: 4px; margin-top: 6px; font-size: var(--ui-font-caption, 11px); color: var(--text-faint); }
 .t2cv-draft-foot > span { flex: 1; min-width: 0; }

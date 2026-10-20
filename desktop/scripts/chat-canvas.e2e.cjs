@@ -331,7 +331,7 @@ async function main() {
     ctx.stub.state.failRuns = true
     await win.keyboard.press('Enter')
     for (let i = 0; i < 100 && !ctx.stub.seen.runs.some((x) => x.sessionId === B3); i++) await win.waitForTimeout(100)
-    await win.waitForFunction(() => { const t = document.querySelector('[data-testid="cv-draft"]'); return t && !t.disabled }, null, { timeout: 10_000 })
+    await win.waitForFunction(() => { const t = document.querySelector('[data-testid="cv-draft"]'); return t && !t.readOnly }, null, { timeout: 10_000 })
     await win.waitForTimeout(300)
     const kept = await win.evaluate(() => { const t = document.querySelector('[data-testid="cv-draft"]'); return { text: t?.value, focus: document.activeElement === t } })
     r.check('Q5 起 run 失败:草稿和字都留着(焦点回到草稿),分支只建了一次', kept.text === '两台都删了同一段呢?' && kept.focus && branchCalls.length === 1, JSON.stringify({ kept, branchCalls: branchCalls.length }))

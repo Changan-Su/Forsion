@@ -518,9 +518,8 @@ export function ChatCanvas({ rootId, activeId, dir, onDir }: {
       // 等历史和配置都到了再发:复制段先到、继承来的 Agent / 模型不被空配置冲掉(建分支时 setActiveId 已经开始拉,这里等同一份)
       await useApp.getState().loadSessionHistory(id)
       // 发成了才清草稿;没发成(断网 / 引擎拒绝)字留着,分支 id 也记着,再按一次就接着发
-      if (await useApp.getState().send(text, [], undefined, undefined, undefined, id)) { setPref({ draft: null }); return }
+      if (await useApp.getState().send(text, [], undefined, undefined, undefined, id)) setPref({ draft: null })
     } finally { setSending(false) }
-    requestAnimationFrame(() => draftTa.current?.focus({ preventScroll: true })) // 没发成:发送时草稿灰掉丢了焦点,还给它
   }
 
   // ── 卡里消息的上下文与动作(按会话 / 消息缓存,EditorialMessage 的 memo 才挡得住流式重渲) ──
@@ -670,7 +669,7 @@ export function ChatCanvas({ rootId, activeId, dir, onDir }: {
               <div className="t2cv-card t2cv-qcard t2cv-draft" data-cv-part="q">
                 <div className="t2cv-qlabel">{t('chatcanvas.draft.from', { q: answerLead(draftParent) })}</div>
                 <textarea
-                  ref={draftTa} className="t2cv-draft-ta" rows={2} value={draft.text} placeholder={t('chatcanvas.draft.ph')} disabled={sending}
+                  ref={draftTa} className="t2cv-draft-ta" rows={2} value={draft.text} placeholder={t('chatcanvas.draft.ph')} readOnly={sending} // 发送中只读、不 disabled:没发成时焦点还在这里,直接再按 Enter
                   data-testid="cv-draft"
                   onChange={(e) => setPref({ draft: { ...draft, text: e.target.value } })}
                   onKeyDown={(e) => {
