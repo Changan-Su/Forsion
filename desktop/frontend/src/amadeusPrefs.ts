@@ -31,7 +31,9 @@ const load = (): Prefs => {
       const p = JSON.parse(v) as Partial<Prefs>
       // Windows 老版本存的是 `a\b.md`:读进来就换成 `/`,不然和 pages 对不上,收藏 / 置顶整列消失。
       const root = usePageStore.getState().vaultRoot
-      const rel = (a: unknown): string[] => (Array.isArray(a) ? a.map((x) => (typeof x === 'string' ? slashRel(x, root) : x)) : [])
+      const rel = (a: unknown): string[] => Array.isArray(a)
+        ? [...new Set(a.filter((x): x is string => typeof x === 'string').map((x) => slashRel(x, root)))]
+        : []
       return {
         starred: rel(p.starred),
         recents: rel(p.recents),
