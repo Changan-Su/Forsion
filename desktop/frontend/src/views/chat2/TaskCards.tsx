@@ -11,6 +11,7 @@ import type { UiMessage } from '../../../../../tangu-agent/src/contracts/clientT
 import { splitSuggestions, type TaskCard } from './suggest'
 import { ChildSessionsBlock } from './ChildSessions'
 import './chat2.css'
+import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 registerMessages({
   'chat.task.child': { zh: '开个子会话', en: 'Start child session' },

@@ -33,6 +33,7 @@ import { folderPadLeft, nameLeft, rowPadLeft } from '@amadeus/lib/treeIndent'
 import { useItemSelect, type ClickAct, type ItemSelect } from '../itemSelect'
 import { PATHS_MIME as DRAG_MIME, REF_MIME } from '../../components/chatDragRef' // 行拖载荷的单源(RightPanel 同值)
 import '../../styles/sidebar2.css'
+import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 registerMessages({
   'panel.files.showAllWs': { zh: '显示全部项目', en: 'Show all projects' },

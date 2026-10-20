@@ -14,6 +14,7 @@ import { useApp } from '../../stores/appStore'
 import { TierBadge } from '../../components/TierBadge'
 import { formatDateTime } from '../../format/time'
 import { publishAccountQuota, remainingPercent, subscribeAccountQuota, type AccountQuotaView } from '../../services/accountQuota'
+import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 registerMessages({
   'ctx.pop.title': { zh: '上下文窗口', en: 'Context window' },

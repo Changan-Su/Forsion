@@ -14,6 +14,7 @@ import { registerMessages, useI18n } from '../i18n'
 import type { ApprovalRequest, ToolEvent } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { ImageGenerationLoader } from '../views/chat2/ImageGenerationLoader'
 import { isSelfWriteReceipt } from '../services/selfUpdates'
+import '../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 registerMessages({
   'tool.parked.waiting': { zh: '已挂起，等你在输入框上方批准。Agent 先做别的，拍板后结果会补在这里。', en: 'Parked until you approve it above the input box. The agent carries on meanwhile; the result lands here once you decide.' },

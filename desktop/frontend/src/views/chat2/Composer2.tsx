@@ -59,6 +59,7 @@ import { ContextUsagePop } from './ContextUsagePop'
 import { usePromptSuggest } from './promptSuggest'
 import './composer2.css'
 import { homeTarget, targetForSession, targetKeyOf, useComposerRef } from '../../services/engine/targets'
+import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 registerMessages({
   'input.fileref.noteApps': { zh: '引用窗口 / 应用 / 笔记 / 文件 / 会话', en: 'Reference a window / app / note / file / session' },

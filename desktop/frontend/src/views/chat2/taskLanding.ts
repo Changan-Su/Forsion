@@ -15,6 +15,7 @@ import { useApp } from '../../stores/appStore'
 import type { TaskCard } from './suggest'
 import type { TaskLanding } from './TaskCards'
 import { homeTarget, targetForSession } from '../../services/engine/targets'
+import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 function localStamp(d: Date): string {
   const p = (x: number): string => String(x).padStart(2, '0')
