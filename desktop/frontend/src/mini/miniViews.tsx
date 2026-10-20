@@ -1,16 +1,16 @@
 import { miniFeatureAvailable } from '../features/runtime'
 /** Native adapters share domain data/editors; each owns its compact interactions. */
 import { lazy, Suspense, useEffect, useState } from 'react'
-import { Bot, ListTodo, NotebookText, Phone, Plus } from 'lucide-react'
-import { registerView, type ViewProps } from '@lcl/engine'
+import { Bot, ListTodo, NotebookText, Phone } from 'lucide-react'
+import { registerView, useMiniChrome, type ViewProps } from '@lcl/engine'
 import { useApp } from '../stores/appStore'
 import { usePageStore } from '../amadeus/store/pageStore'
 import { useI18n, registerMessages, translate } from '../i18n'
 import { AmadeusOverlays } from '../amadeusOverlays'
 import { VoiceCallView } from './VoiceCallView'
+import { readTanguChatViews } from '../amadeus/plugins/tanguSeam'
 import './miniViews.css'
 
-const Chat = lazy(() => import('../views/ChatView').then((m) => ({ default: m.ChatView })))
 const Editor = lazy(() => import('../amadeusViews').then((m) => ({ default: m.AmadeusEditorView })))
 const Todos = lazy(() => import('../views/TodoListView').then((m) => ({ default: m.TodoListView })))
 registerMessages({
@@ -26,10 +26,11 @@ registerMessages({
 /** Under the Suspense boundary: acknowledge only once the actual Chat has mounted. */
 function MiniChat(props: ViewProps) {
   const sessionId = props.params.sessionId
+  const Chat = readTanguChatViews()?.Chat // 对话视图是 Tangu 交出来的(核心插件化 2e-7;原来这里 lazy import ChatView)
   useEffect(() => {
-    if (typeof sessionId === 'string') window.tangu?.miniSessionReady?.(sessionId)
-  }, [sessionId])
-  return <Chat {...props} />
+    if (Chat && typeof sessionId === 'string') window.tangu?.miniSessionReady?.(sessionId) // 没装 Tangu 画的是空白,不报「已就绪」
+  }, [Chat, sessionId])
+  return Chat ? <Chat {...props} /> : null
 }
 
 function MiniTangu({ leaf, params }: ViewProps) {
@@ -41,15 +42,12 @@ function MiniTangu({ leaf, params }: ViewProps) {
     useApp.getState().setActiveId(id || null)
     leaf.setParams({ sessionId: id || undefined, followActive: !id })
   }
+  // 会话下拉 + 新会话登记进宿主的胶囊顶栏(lcl/engine/miniChrome.ts),不再自己画一条栏
+  useMiniChrome({ label: t('mini.chat'), placeholder: t('mini.newChat'), value: sessionId ?? '', onSelect: select,
+    items: [...(sessionId && !sessions.some((s) => s.id === sessionId) ? [{ id: sessionId, label: t('mini.chat') }] : []),
+      ...sessions.map((s) => ({ id: s.id, label: s.title || t('mini.chat') }))],
+    create: { label: t('mini.newChat'), onCreate: () => select('') } })
   return <div className="mini-native mini-tangu">
-    <div className="mini-native-bar">
-      <select aria-label={t('mini.chat')} value={sessionId ?? ''} onChange={(e) => select(e.target.value)}>
-        <option value="">{t('mini.newChat')}</option>
-        {sessionId && !sessions.some((s) => s.id === sessionId) && <option value={sessionId}>{t('mini.chat')}</option>}
-        {sessions.map((s) => <option key={s.id} value={s.id}>{s.title || t('mini.chat')}</option>)}
-      </select>
-      <button aria-label={t('mini.newChat')} title={t('mini.newChat')} onClick={() => select('')}><Plus size={15} /></button>
-    </div>
     <Suspense fallback={null}><MiniChat leaf={{ ...leaf, type: 'chat' }} params={{ ...params, miniSurface: true }} /></Suspense>
   </div>
 }
@@ -67,16 +65,12 @@ function MiniAmadeus({ leaf, params }: ViewProps) {
     try { await usePageStore.getState().createPage() } catch (e) { setError(String(e)) }
     finally { setCreating(false) }
   }
+  useMiniChrome({ label: t('mini.chooseNote'), placeholder: t('mini.chooseNote'), value: notePath, onSelect: select,
+    items: pages.map((path) => ({ id: path, label: path.replace(/\.md$/i, '') })),
+    create: { label: t('mini.newNote'), disabled: !vault || creating, onCreate: () => void create() } })
   return <div className="mini-native mini-amadeus">
     {/* Editing event routes/dialogs are independent of workspace navigation chrome. */}
     <AmadeusOverlays />
-    <div className="mini-native-bar">
-      <select aria-label={t('mini.chooseNote')} value={notePath} onChange={(e) => select(e.target.value)}>
-        <option value="">{t('mini.chooseNote')}</option>
-        {pages.map((path) => <option key={path} value={path}>{path.replace(/\.md$/i, '')}</option>)}
-      </select>
-      <button disabled={!vault || creating} aria-label={t('mini.newNote')} title={t('mini.newNote')} onClick={() => void create()}><Plus size={15} /></button>
-    </div>
     {error && <div role="alert" className="mini-native-error">{error}</div>}
     {notePath ? <Suspense fallback={null}><Editor leaf={{ ...leaf, type: 'amadeus-editor', params: { ...params, miniSurface: true } }} params={params} /></Suspense>
       : <div className="mini-panel-empty">{t('mini.noteHint')}</div>}
@@ -89,5 +83,5 @@ export function registerMiniViews(): void {
   // 语音通话只开在 Mini 里(输入框电话键 → openMini 直达);桌面独有,靠 openMini 判在不在 Electron。
   if (miniFeatureAvailable('tangu') && window.tangu?.openMini) registerView({ type: 'voice-call', kind: 'aux', displayName: () => translate('livecall.title'), icon: Phone, factory: (p) => <VoiceCallView {...p} /> })
   if (miniFeatureAvailable('calendar')) registerView({ type: 'mini-todo', kind: 'aux', displayName: 'ToDo List', icon: ListTodo,
-    factory: ({ params }) => <div className="mini-native mini-todo"><Suspense fallback={null}><Todos params={{ ...params, miniSurface: true }} /></Suspense></div> })
+    factory: ({ params, leaf }) => <div className="mini-native mini-todo"><Suspense fallback={null}><Todos params={{ ...params, miniSurface: true }} leaf={leaf} /></Suspense></div> })
 }

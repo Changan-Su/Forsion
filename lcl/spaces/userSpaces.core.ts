@@ -13,6 +13,9 @@ export interface SpacePanelSpec {
   /** 固定 View(main / left / right):该区内始终至少留一个这种视图 —— 关不掉、拖不出本区、不被别的类型顶掉
    *  (见 engine/pinnedViews.ts)。底部面板不支持。老宿主不认这个键,照旧当普通条目。 */
   pinned?: boolean
+  /** 默认主页(仅 main,至多一条):进这个 Space 先看到它,而不是上次离开时的前台视图(SpaceDefinition.mainPage)。
+   *  通常和 pinned 一起写,否则切进来后的就地打开会把它换走。老宿主不认这个键。 */
+  mainPage?: boolean
 }
 
 export type MainPanelOpenStep =
@@ -105,12 +108,20 @@ function panelList(v: unknown, field: string): SpacePanelSpec[] | string {
     if (pinned !== undefined && (typeof pinned !== 'boolean' || (pinned && field === 'bottom'))) {
       return `layout.${field} 的 pinned 必须是布尔值,且底部面板不支持固定`
     }
+    const mainPage = (it as { mainPage?: unknown }).mainPage
+    if (mainPage !== undefined && (typeof mainPage !== 'boolean' || (mainPage && (field !== 'main' || out.some((p) => p.mainPage))))) {
+      return `layout.${field} 的 mainPage 必须是布尔值,只能写在 main 里,且至多一条`
+    }
+    const raw = (it as { type: string }).type
     out.push({
-      type: (it as { type: string }).type,
+      // 右栏的对话是侧栏身份 chat-panel(2026-10-20):老配方把主区对话 `chat` 写进了右栏 —— 右栏主视图规则不让主区实体进右栏,
+      // 不改写的话它会被收走。chat-panel 同样跟随当前会话,只是侧栏版式(也不再和主区那个 chat 单例抢同一份)。
+      type: field === 'right' && raw === 'chat' ? 'chat-panel' : raw,
       ...(params ? { params: params as Record<string, unknown> } : {}),
       ...(split ? { split } : {}),
       ...(splitFrom !== undefined ? { splitFrom: splitFrom as number } : {}),
       ...(pinned ? { pinned: true } : {}),
+      ...(mainPage ? { mainPage: true } : {}),
     })
   }
   return out

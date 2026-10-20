@@ -8,7 +8,7 @@
  * 插件把 activate/deactivate 记进 globalThis.__lc,测试直接读。
  */
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, symlinkSync, cpSync, readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import os from 'node:os';
 import path from 'node:path';
@@ -46,6 +46,12 @@ interface PluginSpec {
   hangDeactivateOnce?: boolean;
   /** 工具 provider id(缺省 plugin:<id>)。 */
   providerId?: string;
+  /** 工具名(缺省 <id 下划线>_tool)。 */
+  toolName?: string;
+  /** manifest 的 mcpServers。 */
+  mcp?: Record<string, unknown>;
+  /** manifest 的 hooks。 */
+  hooks?: Record<string, unknown>;
 }
 
 const ENV_KEYS = ['TANGU_HOME', 'TANGU_PLUGINS', 'TANGU_PLUGINS_DIR', 'TANGU_BUNDLE_DIRS', 'TANGU_PLUGIN_GRAPH_SWAP'];
@@ -102,10 +108,12 @@ function writePlugin(id: string, spec: PluginSpec = {}): void {
   mkdirSync(path.join(dir, 'dist'), { recursive: true });
   const manifest: Record<string, unknown> = { id, name: id, version: spec.version ?? '1.0.0', apiVersion: 1, entry: 'dist/index.js' };
   if (spec.requires !== undefined) manifest.requiresPlugins = spec.requires;
+  if (spec.mcp !== undefined) manifest.mcpServers = spec.mcp;
+  if (spec.hooks !== undefined) manifest.hooks = spec.hooks;
   writeFileSync(path.join(dir, 'tangu-plugin.json'), JSON.stringify(manifest));
   writeFileSync(path.join(dir, 'package.json'), '{"type":"module"}');
   const tag = JSON.stringify(spec.tag ?? 'v1');
-  const tool = toolOf(id);
+  const tool = spec.toolName ?? toolOf(id);
   if (spec.relative) writeFileSync(path.join(dir, 'dist', 'helper.js'), `export const helperTag = ${tag};\n`);
   const provider = `{ id: '${spec.providerId ?? `plugin:${id}`}', tools: () => [{
         name: '${tool}',
@@ -156,6 +164,65 @@ async function listen(app: any): Promise<{ base: string; server: Server }> {
   await new Promise((r) => server.once('listening', r));
   return { base: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, server };
 }
+
+describe('UUID marketplace engine identity', () => {
+  it('keeps same-manifest metadata and tools separate, while SDK calls accept their declared names', async () => {
+    writePlugin('lc-shared');
+    const source = path.join(pluginsRoot, 'lc-shared');
+    const file = path.join(source, 'dist', 'index.js');
+    writeFileSync(file, readFileSync(file, 'utf8').replace('activate(ctx) {', 'activate(ctx) { globalThis.__marketContexts ||= {}; globalThis.__marketContexts[ctx.paths.pluginDir] = ctx;').replace("name: 'lc_shared_tool',", "name: 'lc_shared_tool', capabilities: { automationSafe: true },"));
+    const ids = ['market-11111111-1111-4111-8111-111111111111', 'market-22222222-2222-4222-8222-222222222222'];
+    for (const id of ids) cpSync(source, path.join(pluginsRoot, id), { recursive: true });
+    rmSync(source, { recursive: true });
+    const h = await host(); await h.boot.activateAllPlugins();
+    for (const id of ids) expect(h.registry.getPluginMeta(id)?.id).toBe(id);
+    const providers = h.tools.listToolProviders().filter(p => p.id.includes('market-'));
+    expect(providers.length).toBe(2);
+    const tools = providers.flatMap(p => p.tools());
+    expect(new Set(tools.map(t => t.name)).size).toBe(2);
+    expect(tools.every(t => t.definition.function.name === t.name && t.name.length <= 64)).toBe(true);
+    const { configureTangu } = await import('../seams/runtime.js');
+    const { createTanguProfile } = await import('../profiles/index.js');
+    configureTangu({ host: {} as any, brain: {} as any, billing: {} as any, profile: createTanguProfile({ sandboxMode: 'none' }) });
+    for (const id of ids) {
+      const ctx = (globalThis as any).__marketContexts[path.join(pluginsRoot, id)];
+      await expect(ctx.sdk.runs.start({ userId: 'u1', prompt: 'Test', cwd: tmp, requestId: 'bad', toolNames: ['lc_shared_tool'] })).rejects.toThrow('Invalid task session');
+      await expect(ctx.sdk.runs.start({ userId: 'u1', prompt: 'Test', cwd: tmp, toolNames: ['foreign_tool'] })).rejects.toThrow('Only this plugin');
+      await expect(ctx.sdk.automation.save('../bad', { description: 'Test', type: 'every', interval: '1h', tool: 'lc_shared_tool', args: {}, enabled: true })).rejects.toThrow('Invalid schedule key');
+    }
+    await h.boot.setPluginEnabledLive(ids[0], false);
+    expect(h.tools.listToolProviders().filter(p => p.id.includes('market-') && p.tools().length).length).toBe(1);
+    delete (globalThis as any).__marketContexts;
+  });
+});
+
+describe('manifest mcpServers', () => {
+  it('只给收敛后在跑的插件起(启动期随即休眠的不拉子进程);停用撤下,再启用重新加', async () => {
+    const stopHook = { Stop: [{ hooks: [{ type: 'command', command: 'true' }] }] };
+    writePlugin('lc-m', { mcp: { srv: { command: 'node', args: ['${pluginDir}/s.js'] } }, hooks: stopHook });
+    writePlugin('lc-moff', { defaultEnabled: false, mcp: { srv2: { command: 'node' } }, hooks: stopHook });
+    const h = await host();
+    const pm = await import('../mcp/pluginServers.js');
+    const hk = await import('../hooks/config.js');
+    const hookOwners = () => hk.discoverHooks({ events: {}, state: {} }, 'Stop').map((x) => x.plugin?.id);
+    const calls: string[] = [];
+    pm.bindPluginMcp({
+      addServers: (o: { id: string }, s: Record<string, { args?: string[]; cwd?: string }>) => calls.push(`add:${o.id}:${Object.keys(s)}:${s.srv?.args?.[0] === path.join(pluginsRoot, 'lc-m', 's.js')}:${s.srv?.cwd === path.join(pluginsRoot, 'lc-m')}`),
+      removeServers: async (id: string) => { calls.push(`remove:${id}`); },
+    } as any);
+    await h.boot.activateAllPlugins();
+    expect(calls).toEqual(['add:lc-m:srv:true:true']);
+    expect(hookOwners()).toEqual(['lc-m']); // 随即休眠的 lc-moff 没挂上
+    await h.boot.setPluginEnabledLive('lc-m', false);
+    expect(calls.at(-1)).toBe('remove:lc-m');
+    expect(hookOwners()).toEqual([]);
+    await h.boot.setPluginEnabledLive('lc-moff', true);
+    expect(calls.at(-1)).toBe('add:lc-moff:srv2:false:false');
+    await h.boot.setPluginEnabledLive('lc-m', true);
+    expect(calls.at(-1)).toBe('add:lc-m:srv:true:true');
+    pm.bindPluginMcp(null);
+  });
+});
 
 describe('启停', () => {
   it('停用 → 调 deactivate、工具撤下(槽位保留);再启用 → 同一模块再 activate、工具回到原位', async () => {
@@ -257,10 +324,24 @@ describe('限时、隔离与归属(Codex 10-02)', () => {
     const h = await host();
     await h.boot.activateAllPlugins();
     expect(await visibleTools(h)).toEqual(['lc_b_tool']);
+    // 名下工具只报此刻真归它的:被覆盖的一方不报,桌面不许它给 lc_b_tool 挂结果卡片
+    expect(h.boot.pluginStatus('lc-a').tools).toBeUndefined();
+    expect(h.boot.pluginStatus('lc-b').tools).toEqual(['lc_b_tool']);
     await h.boot.setPluginEnabledLive('lc-a', false);
     expect(await visibleTools(h)).toEqual(['lc_b_tool']);
     await h.boot.setPluginEnabledLive('lc-b', false);
     expect(await visibleTools(h)).toEqual([]);
+  });
+
+  it('不同 provider 注册同名工具:名下工具谁都不报(桌面不许任何一家给它挂结果卡片);一家停用后另一家才报', async () => {
+    writePlugin('lc-a', { toolName: 'same_tool' });
+    writePlugin('lc-b', { toolName: 'same_tool' });
+    const h = await host();
+    await h.boot.activateAllPlugins();
+    expect(h.boot.pluginStatus('lc-a').tools).toBeUndefined();
+    expect(h.boot.pluginStatus('lc-b').tools).toBeUndefined();
+    await h.boot.setPluginEnabledLive('lc-a', false);
+    expect(h.boot.pluginStatus('lc-b').tools).toEqual(['same_tool']);
   });
 
   it.skipIf(!GRAPH)('只改 helper(入口与版本都没动)也算换了代码:整图换代,工具读到新 helper', async () => {
@@ -348,7 +429,7 @@ describe('requiresPlugins 依赖', () => {
     const st = h.boot.pluginStatus;
 
     expect(await visibleTools(h)).toEqual(['lc_base_tool', 'lc_dep_tool', 'lc_top_tool']);
-    expect(st('lc-dep')).toEqual({ active: true, version: '1.0.0', requiresPlugins: [{ id: 'lc-base' }] });
+    expect(st('lc-dep')).toEqual({ active: true, version: '1.0.0', requiresPlugins: [{ id: 'lc-base' }], tools: ['lc_dep_tool'] });
     expect(st('lc-ver').waitingFor).toEqual([{ id: 'lc-base', reason: 'version', minVersion: '2.0.0', have: '1.5.0' }]);
     expect(st('lc-miss').waitingFor).toEqual([{ id: 'lc-nope', reason: 'missing' }]);
     expect(st('lc-cy1').waitingFor).toEqual([{ id: 'lc-cy2', reason: 'cycle' }]);
@@ -577,12 +658,13 @@ describe('HTTP 面(routes/plugins.ts)', () => {
     try {
       const list = await call('GET', '/agent/plugins');
       const dep = list.plugins.find((p: any) => p.id === 'lc-dep');
-      expect(dep).toMatchObject({ enabled: true, needsRestart: false, active: true, version: '1.0.0', requiresPlugins: [{ id: 'lc-base', minVersion: '1.0.0' }], source: 'folder' });
+      expect(dep).toMatchObject({ enabled: true, needsRestart: false, active: true, version: '1.0.0', requiresPlugins: [{ id: 'lc-base', minVersion: '1.0.0' }], source: 'folder', tools: ['lc_dep_tool'] });
       expect(dep.waitingFor).toBeUndefined();
 
       const put = await call('PUT', '/agent/plugins/lc-base/enabled', { enabled: false });
       expect(put).toMatchObject({ ok: true, enabled: false, active: false });
       expect(put.plugins.find((p: any) => p.id === 'lc-dep')).toMatchObject({ active: false, waitingFor: [{ id: 'lc-base', reason: 'off' }] });
+      expect(put.plugins.find((p: any) => p.id === 'lc-dep').tools).toBeUndefined(); // 休眠了就不报名下工具
 
       const rescan = await call('POST', '/agent/plugins/rescan');
       expect(rescan).toMatchObject({ ok: true, addedIds: [], reloadedIds: [], removedIds: [], needsRestart: false });

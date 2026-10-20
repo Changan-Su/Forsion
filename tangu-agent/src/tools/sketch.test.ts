@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createTanguProfile, createAiStudioProfile } from '../profiles/index.js';
 import { getToolDefinitions, getToolCapabilities, executeTool } from './registry.js';
 import type { ToolContext } from './toolTypes.js';
-import { SKETCH_LESS_NOTE, SKETCH_SECTION, sketchEnabledFor, sketchTurnSignalFor, visualsPrefOf } from './builtin/sketch.js';
+import { SKETCH_LESS_NOTE, SKETCH_SECTION, htmlCardToWire, sketchEnabledFor, sketchTurnSignalFor, visualsPrefOf, withHtmlCardName } from './builtin/sketch.js';
 
 const toolNames = (ctx: ToolContext): string[] => getToolDefinitions(ctx).map((t) => t.function.name);
 
@@ -12,33 +12,33 @@ const base = { userId: 'u1', sessionId: 's1' };
 
 describe('sketch visibility gating (GUI client tag)', () => {
   it('is visible for a desktop client on the local tangu profile', () => {
-    expect(toolNames({ ...base, appId: tangu.appId, profile: tangu, execMode: 'host', client: 'desktop/2.8.0' })).toContain('sketch');
+    expect(toolNames({ ...base, appId: tangu.appId, profile: tangu, execMode: 'host', client: 'desktop/2.8.0' })).toContain('intelligent_ui_html');
   });
 
   it('is visible for web clients on the cloud ai-studio profile (sandbox mode)', () => {
-    expect(toolNames({ ...base, appId: aiStudio.appId, profile: aiStudio, execMode: 'sandbox', client: 'web/1.2.3' })).toContain('sketch');
+    expect(toolNames({ ...base, appId: aiStudio.appId, profile: aiStudio, execMode: 'sandbox', client: 'web/1.2.3' })).toContain('intelligent_ui_html');
   });
 
   it('is hidden on the Capacitor-native mobile app (addJavascriptInterface bridge reaches sandboxed frames)', () => {
-    expect(toolNames({ ...base, appId: aiStudio.appId, profile: aiStudio, execMode: 'sandbox', client: 'mobile/2.7.9' })).not.toContain('sketch');
+    expect(toolNames({ ...base, appId: aiStudio.appId, profile: aiStudio, execMode: 'sandbox', client: 'mobile/2.7.9' })).not.toContain('intelligent_ui_html');
   });
 
   it('is hidden without a client tag (TUI / automation / non-Desktop channel host)', () => {
-    expect(toolNames({ ...base, appId: tangu.appId, profile: tangu, execMode: 'host' })).not.toContain('sketch');
+    expect(toolNames({ ...base, appId: tangu.appId, profile: tangu, execMode: 'host' })).not.toContain('intelligent_ui_html');
   });
 
   it('is hidden in a channel-bound desktop session (the remote surface is plain text)', () => {
-    expect(toolNames({ ...base, appId: tangu.appId, profile: tangu, execMode: 'host', client: 'desktop/2.8.0', channelSession: true })).not.toContain('sketch');
+    expect(toolNames({ ...base, appId: tangu.appId, profile: tangu, execMode: 'host', client: 'desktop/2.8.0', channelSession: true })).not.toContain('intelligent_ui_html');
     expect(sketchEnabledFor({ client: 'desktop/2.8.0', channelSession: true })).toBe(false);
   });
 
   it('is hidden for cli/tui client tags', () => {
-    expect(toolNames({ ...base, appId: tangu.appId, profile: tangu, execMode: 'host', client: 'cli/1.0.0' })).not.toContain('sketch');
-    expect(toolNames({ ...base, appId: tangu.appId, profile: tangu, execMode: 'host', client: 'tui/1.0.0' })).not.toContain('sketch');
+    expect(toolNames({ ...base, appId: tangu.appId, profile: tangu, execMode: 'host', client: 'cli/1.0.0' })).not.toContain('intelligent_ui_html');
+    expect(toolNames({ ...base, appId: tangu.appId, profile: tangu, execMode: 'host', client: 'tui/1.0.0' })).not.toContain('intelligent_ui_html');
   });
 
   it('is hidden inside delegated subagents even under a GUI client (client leaks via ctx spread)', () => {
-    expect(toolNames({ ...base, appId: tangu.appId, profile: tangu, execMode: 'host', client: 'desktop/2.8.0', subAgentDepth: 1 })).not.toContain('sketch');
+    expect(toolNames({ ...base, appId: tangu.appId, profile: tangu, execMode: 'host', client: 'desktop/2.8.0', subAgentDepth: 1 })).not.toContain('intelligent_ui_html');
   });
 
   it('is hidden when the user set interface visuals to off (ui_settings snapshot), visible for less/auto/unknown', () => {
@@ -50,7 +50,7 @@ describe('sketch visibility gating (GUI client tag)', () => {
     expect(sketchEnabledFor(gui)).toBe(true);
     // 同一判定也管工具表:off 的 run 里模型拿不到 sketch。
     const ctx = { ...base, appId: tangu.appId, profile: tangu, execMode: 'host' as const, client: 'desktop/2.13.0', uiSettings: { visuals: { value: 'off' } } };
-    expect(toolNames(ctx)).not.toContain('sketch');
+    expect(toolNames(ctx)).not.toContain('intelligent_ui_html');
     expect(visualsPrefOf({ visuals: { value: 'off' } })).toBe('off');
     expect(visualsPrefOf(undefined)).toBe('auto');
   });
@@ -65,7 +65,7 @@ describe('sketch visibility gating (GUI client tag)', () => {
 
   it('is appended after existing tools (append-only prefix discipline)', () => {
     const names = toolNames({ ...base, appId: tangu.appId, profile: tangu, execMode: 'host', client: 'desktop/2.8.0' });
-    expect(names.indexOf('sketch')).toBeGreaterThan(names.indexOf('search_sessions'));
+    expect(names.indexOf('intelligent_ui_html')).toBeGreaterThan(names.indexOf('search_sessions'));
   });
 });
 
@@ -77,24 +77,24 @@ describe('sketch prompt section (trigger)', () => {
     expect(sketchEnabledFor({})).toBe(false);
     expect(sketchEnabledFor({ ...gui, subAgentDepth: 1 })).toBe(false);
     // 判定源真的是同一个:门开着时工具在场,门关着时不在场
-    expect(toolNames({ ...base, appId: tangu.appId, profile: tangu, execMode: 'host', ...gui })).toContain('sketch');
+    expect(toolNames({ ...base, appId: tangu.appId, profile: tangu, execMode: 'host', ...gui })).toContain('intelligent_ui_html');
   });
 
   it('stays out of plan mode, where a central read-only filter already drops the tool', () => {
     // 提示段在场 ⟺ 工具在场。计划模式的只读白名单里没有 sketch,提示段也必须一起缺席,
     // 否则模型照着段落去调一个不存在的工具,白烧一轮。
     const plan = { ...base, appId: tangu.appId, profile: tangu, execMode: 'host' as const, client: 'desktop/2.8.0', planMode: true };
-    expect(toolNames(plan)).not.toContain('sketch');
+    expect(toolNames(plan)).not.toContain('intelligent_ui_html');
     expect(sketchEnabledFor({ client: 'desktop/2.8.0', planMode: true })).toBe(false);
   });
 
   it('tells the model when to draw and gives it a composition floor', () => {
-    expect(SKETCH_SECTION).toContain('sketch');
+    expect(SKETCH_SECTION).toContain('intelligent_ui_html');
     expect(SKETCH_SECTION.toLowerCase()).toContain('compare');
     expect(SKETCH_SECTION.toLowerCase()).toContain('timeline');
     expect(SKETCH_SECTION).toContain('Do not wait for the user');
     expect(SKETCH_SECTION).toContain('Do not force every card');
-    expect(SKETCH_SECTION).toContain('window.forsionSketch.setState');
+    expect(SKETCH_SECTION).toContain('window.forsionIntelligentUi.setState');
     expect(SKETCH_SECTION).toContain('320px');
     expect(SKETCH_SECTION).toContain('comparison/ranking');
     expect(SKETCH_SECTION).toContain('hierarchy/architecture');
@@ -102,23 +102,23 @@ describe('sketch prompt section (trigger)', () => {
 
   it('teaches progressive ordering and the ask() channel (card -> next user message), with a less-visuals note', () => {
     expect(SKETCH_SECTION).toContain('renders progressively');
-    expect(SKETCH_SECTION).toContain('window.forsionSketch.ask(');
+    expect(SKETCH_SECTION).toContain('window.forsionIntelligentUi.ask(');
     expect(SKETCH_SECTION).toContain('never call it on load');
     expect(SKETCH_LESS_NOTE).toContain('only when they explicitly ask');
     const def = getToolDefinitions({ ...base, appId: tangu.appId, profile: tangu, execMode: 'host', client: 'desktop/2.13.0' })
-      .find((t) => t.function.name === 'sketch');
-    expect(def?.function.description).toContain('forsionSketch.ask(');
+      .find((t) => t.function.name === 'intelligent_ui_html');
+    expect(def?.function.description).toContain('forsionIntelligentUi.ask(');
     expect(def?.function.description).toContain('.copy(');
     expect(def?.function.description).toContain('fs-compare');
     expect(SKETCH_SECTION).toContain('fs-choice');
     expect(SKETCH_SECTION).toContain('fs-checklist');
     expect(SKETCH_SECTION).toContain('never add inline `style` attributes');
-    expect(SKETCH_SECTION).toContain('window.forsionSketch.copy(');
+    expect(SKETCH_SECTION).toContain('window.forsionIntelligentUi.copy(');
   });
 
   it('description carries the theme contract (the model can only use vars it is told about)', () => {
     const def = getToolDefinitions({ ...base, appId: tangu.appId, profile: tangu, execMode: 'host', client: 'desktop/2.8.0' })
-      .find((t) => t.function.name === 'sketch');
+      .find((t) => t.function.name === 'intelligent_ui_html');
     const d = def?.function.description || '';
     for (const v of ['--fs-bg', '--fs-text', '--fs-muted', '--fs-border', '--fs-rule', '--fs-accent', '--fs-s1']) {
       expect(d).toContain(v);
@@ -135,7 +135,7 @@ describe('sketch proactive turn signal', () => {
   it('treats an explicit visual request as mandatory delivery', () => {
     const s = sketchTurnSignalFor('请画一张从注册到支付的用户旅程图');
     expect(s?.kind).toBe('explicit');
-    expect(s?.section).toContain('Call `sketch` before finishing');
+    expect(s?.section).toContain('Call `intelligent_ui_html` before finishing');
   });
 
   it.each([
@@ -233,8 +233,8 @@ describe('sketch proactive turn signal', () => {
   it('names the native tool only when the client can render it', () => {
     const q = '下周要搬家，我需要提前准备些什么？';
     expect(sketchTurnSignalFor(q, 'auto', true)?.section).toContain('`intelligent_ui`');
-    expect(sketchTurnSignalFor(q, 'auto', false)?.section).not.toContain('intelligent_ui');
-    expect(sketchTurnSignalFor('请画一张从注册到支付的用户旅程图', 'auto', true)?.section).toContain('Call `intelligent_ui` or `sketch` before finishing');
+    expect(sketchTurnSignalFor(q, 'auto', false)?.section).not.toContain('`intelligent_ui`');
+    expect(sketchTurnSignalFor('请画一张从注册到支付的用户旅程图', 'auto', true)?.section).toContain('Call `intelligent_ui` or `intelligent_ui_html` before finishing');
   });
 
   it('ignores visual words that only occur inside a code fence', () => {
@@ -246,17 +246,17 @@ describe('sketch execution', () => {
   const ctx: ToolContext = { ...base, appId: tangu.appId, profile: tangu, execMode: 'host', client: 'desktop/2.8.0' };
   const call = (args: Record<string, unknown>) => ({
     id: 'c1', type: 'function' as const,
-    function: { name: 'sketch', arguments: JSON.stringify(args) },
+    function: { name: 'intelligent_ui_html', arguments: JSON.stringify(args) },
   });
 
   it('declares itself side-effect free', () => {
-    expect(getToolCapabilities('sketch', ctx)).toMatchObject({ sideEffect: 'none', parallel: false });
+    expect(getToolCapabilities('intelligent_ui_html', ctx)).toMatchObject({ sideEffect: 'none', parallel: false });
   });
 
   it('returns a short confirmation for valid html', async () => {
     const r = await executeTool(call({ html: '<b>hi</b>' }) as any, ctx);
     expect(r.isError).toBe(false);
-    expect(r.result).toContain('Sketch card rendered');
+    expect(r.result).toContain('HTML card rendered');
   });
 
   it('rejects empty html', async () => {
@@ -268,5 +268,44 @@ describe('sketch execution', () => {
     const r = await executeTool(call({ html: 'x'.repeat(262_145) }) as any, ctx);
     expect(r.isError).toBe(true);
     expect(r.result).toContain('too large');
+  });
+});
+
+// 10-20 改名 sketch → intelligent_ui_html 的兼容层:旧名照样能调、老客户端拿旧名、发给模型的历史统一成新名、存下来的工具名单照样认。
+describe('HTML card rename compatibility', () => {
+  const ctx = { ...base, profile: tangu, client: 'desktop/2.13.5' } as unknown as ToolContext;
+  it('runs the card when the model calls the old name', async () => {
+    const r = await executeTool({ id: 'c1', type: 'function', function: { name: 'sketch', arguments: JSON.stringify({ html: '<b>hi</b>' }) } } as any, ctx);
+    expect(r).toMatchObject({ name: 'intelligent_ui_html', isError: false });
+    expect(getToolCapabilities('sketch', ctx)).toEqual(getToolCapabilities('intelligent_ui_html', ctx));
+  });
+  it('keeps the wire name and card API every released client renders', () => {
+    const call = { function: { name: 'intelligent_ui_html', arguments: JSON.stringify({ html: '<button onclick="window.forsionIntelligentUi.ask(\'x\')">x</button>' }) } };
+    htmlCardToWire(call);
+    expect(call.function.name).toBe('sketch');
+    expect(call.function.arguments).toContain('window.forsionSketch.ask');
+    const escaped = { function: { name: 'intelligent_ui_html', arguments: '{"html":"<script>window.forsion\\u0049ntelligentUi.setState({})</script>"}' } };
+    htmlCardToWire(escaped);
+    expect(JSON.parse(escaped.function.arguments).html).toBe('<script>window.forsionSketch.setState({})</script>');
+    const other = { function: { name: 'read_file', arguments: 'forsionIntelligentUi' } };
+    htmlCardToWire(other);
+    expect(other.function).toEqual({ name: 'read_file', arguments: 'forsionIntelligentUi' });
+  });
+  it('sends the new name to the model, untouched when there is nothing old', () => {
+    const fresh = [{ role: 'user', content: 'x' }, { role: 'assistant', tool_calls: [{ id: 'a', function: { name: 'read_file', arguments: '{}' } }] }];
+    expect(withHtmlCardName(fresh as any)).toBe(fresh);
+    const old = [...fresh, { role: 'assistant', tool_calls: [{ id: 'b', function: { name: 'sketch', arguments: '{"html":"<i onclick=\\"forsionSketch.copy(1)\\"/>"}' } }],
+      providerItems: [{ type: 'reasoning' }, { type: 'function_call', name: 'sketch', arguments: '{"html":"forsionSketch"}' }] }];
+    const out = withHtmlCardName(old as any) as any[];
+    expect(out[2].tool_calls[0].function).toEqual({ name: 'intelligent_ui_html', arguments: '{"html":"<i onclick=\\"forsionIntelligentUi.copy(1)\\"/>"}' });
+    expect(out[2].providerItems).toEqual([{ type: 'reasoning' }, { type: 'function_call', name: 'intelligent_ui_html', arguments: '{"html":"forsionIntelligentUi"}' }]);
+    expect(out[1]).toBe(old[1]);
+    expect((old[2] as any).tool_calls[0].function.name).toBe('sketch'); // 不改原数组(workingMessages 原样)
+  });
+  it('reads the old name in saved tool lists', async () => {
+    const { shelvedOf } = await import('../agents/harnessStore.js');
+    expect([...shelvedOf([{ id: 'e', kind: 'equip', title: 't', body: 'b', tools: ['sketch'] }] as any).tools]).toEqual(['intelligent_ui_html']);
+    const strict = { ...ctx, toolsStrict: true, toolsList: ['intelligent_ui_html'] } as unknown as ToolContext;
+    expect(toolNames(strict)).toContain('intelligent_ui_html');
   });
 });

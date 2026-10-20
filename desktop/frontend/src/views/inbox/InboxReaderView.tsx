@@ -1,3 +1,4 @@
+import { MarketCommentNotice } from '../../components/MarketCommentNotice'
 /**
  * 收件箱阅读面板(Inbox Space 主区 main view):订阅 store 的 selectedId 从缓存取消息渲染——
  * 不读 view params(params 会随 space:inbox 命名布局持久化成陈腐消息 id)。
@@ -178,6 +179,7 @@ export function InboxReaderView({ leaf }: { leaf?: Leaf }) {
             <button type="button" className="btn primary sm" data-action="approval-open" onClick={() => { void openApprovalSession() }}>{t('inbox.approvalOpen')}</button>
           </div>
         )}
+        <MarketCommentNotice message={msg} />
         {thread && <FeedbackThread key={thread.ticketId} ticketId={thread.ticketId} event={thread.event} />}
       </div>
     </div>

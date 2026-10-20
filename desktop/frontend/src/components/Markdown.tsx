@@ -2,7 +2,7 @@
  * Markdown 渲染(react-markdown + GFM + highlight.js;代码块带复制按钮)。
  * 高亮配色在 base.css 用主题 token 写(.hljs-*),不引第三方主题 CSS。
  */
-import React, { useContext, useState } from 'react'
+import React, { useContext, useEffect, useMemo, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 // 模型最爱写 `**注意：**后面`(CJK 标点贴闭合定界符),CommonMark 判不成立、显示字面 `**`。
@@ -11,7 +11,9 @@ import remarkGfm from 'remark-gfm'
 import remarkCjkFriendly from 'remark-cjk-friendly/parseOnly'
 import remarkCjkFriendlyStrikethrough from 'remark-cjk-friendly-gfm-strikethrough/parseOnly'
 import remarkMath from 'remark-math'
-import rehypeHighlight from 'rehype-highlight'
+import { common, createLowlight } from 'lowlight'
+import { toJsxRuntime } from 'hast-util-to-jsx-runtime'
+import { Fragment, jsx, jsxs } from 'react/jsx-runtime'
 import rehypeKatex from 'rehype-katex'
 import 'katex/dist/katex.min.css'
 import { Copy, Check, Play } from 'lucide-react'
@@ -21,6 +23,7 @@ import { normalizeMath } from '../services/mathNormalize'
 import { remarkWiki } from './wikiChat'
 import { ChatWebLink, ChatWikiLink } from './ChatWikiLink'
 import { ChatEmbed, type EmbedCtx } from './ChatEmbed'
+import { whenNear } from '../lib/nearViewport'
 
 // [[双链]] 经 remarkWiki 变成 #wiki= 链接,在这里拦下渲染;http(s) 走网页引用条(Desk 内置浏览器
 // + 链接文字当引语定位);其余(mailto/相对/锚点)维持默认 <a>。
@@ -53,7 +56,7 @@ const Para = ({ node, children, 'data-embeds': _embeds, ...rest }: any) => {
   )
 }
 
-/** fence 语言来自 rehype-highlight 落在 <code> 上的 `language-xxx` 类(detect:false,所以只可能是 info string)。 */
+/** fence 语言来自 <code> 上的 `language-xxx` 类(remark-rehype 照 info string 写的;不猜语言)。 */
 function fenceLang(node: unknown): string | undefined {
   const code = (node as { children?: Array<{ tagName?: string; properties?: { className?: unknown } }> } | undefined)
     ?.children?.find((n) => n.tagName === 'code')
@@ -62,10 +65,31 @@ function fenceLang(node: unknown): string | undefined {
   return list.find((c) => c.startsWith('language-'))?.slice(9)
 }
 
+const lowlight = createLowlight(common)
+type HastText = { type: 'text'; value: string }
+type HastNode = { type: string; tagName?: string; value?: string; children?: HastNode[] }
+const hastText = (n: HastNode | undefined): string => n?.type === 'text' ? (n as HastText).value : (n?.children ?? []).map(hastText).join('')
+
+/** 语法高亮等到代码块离视口一屏以内才做(长会话一打开不用把每个代码块都高亮一遍,高亮出的几十个 span 也晚点进 DOM)。
+ *  高亮前是同字体同行高的原文,高亮只换颜色、不改排版,所以不会跳;做过一次就不撤。认不得的语言 / 没写语言照旧不高亮。 */
+function useHighlighted(preRef: React.RefObject<HTMLPreElement | null>, node: unknown): React.ReactNode | null {
+  const [near, setNear] = useState(false)
+  useEffect(() => {
+    const el = preRef.current
+    if (near || !el) return
+    return whenNear(el, () => setNear(true))
+  }, [near, preRef])
+  const lang = fenceLang(node)
+  const text = near && lang && lowlight.registered(lang) ? hastText((node as HastNode | undefined)?.children?.find((n) => n.tagName === 'code')) : null
+  return useMemo(() => (text == null || !lang ? null
+    : <code className={`hljs language-${lang}`}>{toJsxRuntime(lowlight.highlight(lang, text) as never, { Fragment, jsx, jsxs })}</code>), [lang, text])
+}
+
 const CodeBlock: React.FC<React.HTMLAttributes<HTMLPreElement> & { node?: unknown }> = ({ children, node, ...props }) => {
   const { t } = useI18n()
   const [copied, setCopied] = useState(false)
   const preRef = React.useRef<HTMLPreElement>(null)
+  const highlighted = useHighlighted(preRef, node)
   const runCtx = useContext(RunContext)
   // Run 键靠 window.tangu.pty 门控:web/移动端没有 PTY,自然不露。
   const runnable = runCtx?.allowRun !== false && isShellLang(fenceLang(node)) && !!window.tangu?.pty
@@ -82,7 +106,7 @@ const CodeBlock: React.FC<React.HTMLAttributes<HTMLPreElement> & { node?: unknow
   }
   return (
     <div style={{ position: 'relative' }}>
-      <pre ref={preRef} {...props}>{children}</pre>
+      <pre ref={preRef} {...props}>{highlighted ?? children}</pre>
       {runnable && (
         <button
           className="icon-btn"
@@ -141,7 +165,7 @@ export const Markdown: React.FC<{ content: string; anchorPrefix?: string; /** sh
         <EmbedContext.Provider value={embeds}>
           <ReactMarkdown
             remarkPlugins={[remarkMath, remarkGfm, remarkCjkFriendly, remarkCjkFriendlyStrikethrough, remarkWiki]}
-            rehypePlugins={[[rehypeKatex, { throwOnError: false }], [rehypeHighlight, { ignoreMissing: true, detect: false }]]}
+            rehypePlugins={[[rehypeKatex, { throwOnError: false }]]}
             components={components}
           >
             {normalizeMath(content)}

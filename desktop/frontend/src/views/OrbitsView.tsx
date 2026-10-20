@@ -16,15 +16,16 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { Info, MoreHorizontal, Pencil, Pin, PinOff, Plus, SquarePen, Trash2, UserPlus, Users, UsersRound, FolderPlus, MessageSquarePlus } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
-import { OverlayAt, setActiveSpace, useListFirst, useNativeChromeExtras, useNativeSheetMenu, useSpaceStore, type SheetMenuItem } from '@lcl/engine'
+import { OverlayAt, setActiveSpace, useCommandStore, useListFirst, useNativeChromeExtras, useNativeSheetMenu, useSpaceStore, type SheetMenuItem } from '@lcl/engine'
 import { CtxMenuButtons } from '../components/CtxMenuButtons'
 import { SidebarPane, sessionActivityAt } from './chat2/SidebarPane'
 import { SidebarRow } from '../components/SidebarRow'
 import { ListChips, ListFab, ListHint } from '../components/phoneList'
-import { useQuickFind } from '../quickFind'
 import { EngineIcon } from '../components/EngineIcon'
 import { useApp } from '../stores/appStore'
-import { useSessionAttention } from '../stores/attentionStore' // P1-K3
+import { useSessionAttention, useSoloStatus } from '../stores/attentionStore' // P1-K3
+import { StatusMark } from './chat2/AttentionDot'
+import type { RowStatus } from './chat2/sessionTree'
 import { openSpecial } from './SpecialViews'
 import { openNewChat, openSession, openSolo, openTeam, rotateSolo } from '../sessionNav'
 import { AvatarStack } from '../components/AvatarStack'
@@ -38,7 +39,7 @@ import * as api from '../services/backendService'
 import { usePageStore } from '../amadeus/store/pageStore'
 import { sessionsInMode, workspacesInMode } from './sessionMode'
 import { registerMessages, useI18n } from '../i18n'
-import { isHomeSession, isIndependentOrbitConfig, isTeamImageAvatar, sessionWorkspaceKey, type NormalAgentDef, type SessionRecord, type TeamDef } from '../types'
+import { isHomeSession, isIndependentOrbitConfig, isTeamImageAvatar, sessionWorkspaceKey, type NormalAgentDef, type SessionRecord, type TeamDef } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { runLocationsAvailable } from '../features/runtime'
 import { DeviceSessionSections, attentionBadge } from './chat2/DeviceSessionSections' // P1-K7a
 import { isOrbitPinned, readOrbitPins, toggleOrbitPin, touchOrbitPin, writeOrbitPins, type OrbitPinTimes } from './chat2/orbitPins'
@@ -77,6 +78,7 @@ registerMessages({
   'orbits.row.deleteAgent': { zh: '删除 Agent', en: 'Delete agent' },
   'orbits.badge.running': { zh: '运行中', en: 'Running' },
   'orbits.badge.proactive': { zh: '主动式', en: 'Proactive' },
+  'orbits.st.new': { zh: '有新消息', en: 'New messages' },
   'orbits.engine.needsSignin': { zh: '待登录', en: 'Needs sign-in' },
   'orbits.muse.unavailable': { zh: 'Muse Space 尚未启用', en: 'The Muse Space is not enabled' },
   // 一级行悬停提示的类型词(评审 U-19 轻量版:不改 40px 单行,只在 hoverTip 里补「类型 · 相对时间」)。
@@ -103,7 +105,8 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
   const { t, locale } = useI18n()
   // 手机的整屏列表(两级导航的列表层):一颗悬浮主按钮 + 分类胶囊 + 按时间排的两行列表,搜索在原生顶栏上。
   const phone = useListFirst()
-  const openSearch = (): void => useQuickFind.getState().openPalette()
+  // 快速查找走宿主注册的命令(核心插件化 2e-5:不直连宿主的 quickFind 模块)
+  const openSearch = (): void => useCommandStore.getState().run('quick-find')
   useNativeChromeExtras(phone ? { where: 'list', search: { label: t('orbits.phone.search'), run: openSearch } } : null)
   // ⚠️ 这段 store 映射照抄 SessionsView(同一批 props 要原样喂给 SidebarPane);只多取 Agent 轨道那几项。
   const s0 = useApp(useShallow((state) => ({
@@ -240,6 +243,21 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
     }
     return [...out.values()]
   }, [s.sessions, s.configBySession, agents, installedEngines, teams])
+  /** 私聊行尾状态(10-18 Muse 私聊方案 B):身份 → 它最新那条私聊的状态(等你 / 有新消息);在跑仍是图标角那颗转圈点。 */
+  const soloStatus = useSoloStatus()
+  const soloSession = useMemo(() => {
+    const out = new Map<string, string>()
+    for (const x of s.sessions) {
+      const c = s.configBySession[x.id]
+      const key = c?.soloAgentSlug ? `agent:${c.soloAgentSlug}` : c?.soloEngineId ? `engine:${c.soloEngineId}` : null
+      if (key && !out.has(key)) out.set(key, x.id) // s.sessions 按 updated_at 降序 → 第一条即最新
+    }
+    return out
+  }, [s.sessions, s.configBySession])
+  const soloMark = (ident: string): RowStatus => {
+    const v = soloStatus.get(soloSession.get(ident) || '') || ''
+    return v === 'run' ? '' : v
+  }
   /** 有活跃 run 的私聊 agent(按运行中的 run 反查,O(running) 不是 O(会话×agent))。 */
   const runningSolo = useMemo(() => {
     const out = new Set<string>()
@@ -298,14 +316,16 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
   const orbitRow = (o: {
     rowKey: string; entryKey: string; kind: RowMenu['kind']; slug: string; active: boolean; gone?: boolean
     tip: Record<string, unknown>; leadClass?: string; lead: React.ReactNode; name: string; badge?: string; sub: string; at: number; onOpen: () => void
+    status?: RowStatus
   }): React.ReactElement => {
+    const mark = o.status ? <StatusMark status={o.status} title={o.status === 'done' ? t('orbits.st.new') : undefined} /> : null
     const pinned = isOrbitPinned(pinnedEntries, o.entryKey)
     const open = (): void => { activatePinned(o.entryKey); o.onOpen() }
     if (phone) {
       return (
         <SidebarRow
           key={o.rowKey} as="button" className={o.active ? 'active' : undefined} style={{ paddingLeft: undefined }}
-          lead={o.lead} trailing={o.at ? <span className="t2s-srow-time">{formatRowTime(o.at)}</span> : undefined}
+          lead={o.lead} trailing={o.at || mark ? <>{o.at ? <span className="t2s-srow-time">{formatRowTime(o.at)}</span> : null}{mark}</> : undefined}
           onClick={open} onContextMenu={(e) => openRowMenuAtPointer(e, o.kind, o.slug, o.entryKey)}
         >
           <span className="t2s-srow-text">
@@ -329,6 +349,7 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
         <span className="t2o-name">{o.name}</span>
         {o.badge && <span className="t2o-badge">{o.badge}</span>}
         {pinned && <Pin className="t2o-pin-mark" aria-hidden="true" />}
+        {mark}
         <span
           className="t2o-tail"
           role="button"
@@ -358,6 +379,7 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
       rowKey: `agent:${slug}`, entryKey, kind: 'agent', slug, active,
       tip: rowTip(name || slug, isMuse ? 'orbits.badge.proactive' : 'agentSelect.direct', `agent:${slug}`),
       name: name || slug, sub: t(isMuse ? 'orbits.badge.proactive' : 'agentSelect.direct'), at: activityByIdent.get(`agent:${slug}`) || 0,
+      status: soloMark(`agent:${slug}`),
       onOpen: () => {
         if (museSpaceOnly) openMuse()
         else if (cloud) { openNewChat(); useApp.getState().selectNewChatAgent(slug) }
@@ -367,7 +389,6 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
         {/* 首字一律中性底色(09-25 用户拍板,不按 slug 上彩色);同姓撞字靠 initialFor 取不同的字。 */}
         <AgentAvatar name={name || slug} url={url} siblings={agentNames} size={avatarSize} className="t2o-avatar" initialClassName="t2o-avatar-text" />
         {runningSolo.has(slug) && <span className="t2s-dot running" title={t('orbits.badge.running')} />}
-        {isMuse && <span className="t2s-dot proactive" title={t('orbits.badge.proactive')} />}
       </>,
     })
   }
@@ -382,7 +403,7 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
         rowKey: `engine:${e.id}`, entryKey: `row:engine:${e.id}`, kind: 'engine', slug: e.id, active: activeCfg?.soloEngineId === e.id,
         tip: rowTip(e.name || e.id, 'agentSelect.direct', `engine:${e.id}`),
         name: e.name || e.id, badge: e.status === 'needs-signin' ? t('orbits.engine.needsSignin') : undefined,
-        sub: t('agentSelect.direct'), at: at(`engine:${e.id}`), onOpen: () => openSolo('engine', e.id),
+        sub: t('agentSelect.direct'), at: at(`engine:${e.id}`), onOpen: () => openSolo('engine', e.id), status: soloMark(`engine:${e.id}`),
         leadClass: 't2o-lead-box',
         lead: <><EngineIcon engineId={e.id} size={16} />{runningSolo.has(`engine:${e.id}`) && <span className="t2s-dot running" title={t('orbits.badge.running')} />}</>,
       }) })

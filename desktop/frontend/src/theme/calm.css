@@ -55,9 +55,16 @@ html:not([data-calm-motion='off']) {
   html:not([data-calm-dim='off']) .t2-rail {
     transition: opacity var(--frame-reveal-duration, var(--duration-fast, 0.15s));
   }
-  /* 淡的是按钮里的图标与名字,不是按钮本身:.rb-plus 自己还有一层 0 / 0.4,按钮的悬停底色也不该被压淡。 */
-  html:not([data-calm-dim='off']) .rb:not(:hover, :has(:focus-visible)) .rb-btn:not(.on, .is-on, :has(.rb-badge), .rb-pinned *) > * {
-    opacity: 0.42;
+  /* 淡的是按钮里的图标与名字,不是按钮本身:.rb-plus 自己还有一层 0 / 0.4,按钮的悬停底色也不该被压淡。
+     「淡不淡」先在 .rb 与保持全亮的按钮上写成继承的 --calm-rb-dim(:has 只在各条的最后一段),子元素按父按钮的值用样式查询取。
+     别改回一条 `.rb:not(:hover, :has(:focus-visible)) .rb-btn:not(:has(.rb-badge)) > *`::has 后面接 `> *` 让页面上任何地方插入 / 移除
+     一个元素都整页重算样式,与 .rb 有多小无关(10-16 真 Electron 实测:60 条消息的对话每插入 + 移除一次 18–27ms,现在 0.7–1.2ms)。
+     也别把查询换成 `opacity: var(…, 1)` 一律写上:不淡时也写了 opacity,会压掉 .unitsw-chev 自己的 0.55;
+     焦点 / 角标改由 JS 写属性也试过:点过再按键时 :focus-visible 翻转不发事件、聚焦元素被移除不发 blur,对不齐。 */
+  html:not([data-calm-dim='off']) .rb:not(:hover, :has(:focus-visible)) { --calm-rb-dim: 1; }
+  html:not([data-calm-dim='off']) .rb :is(.rb-btn.on, .rb-btn.is-on, .rb-btn:has(.rb-badge), .rb-pinned) { --calm-rb-dim: 0; }
+  @container style(--calm-rb-dim: 1) {
+    html:not([data-calm-dim='off']) .rb .rb-btn > * { opacity: 0.42; }
   }
   html:not([data-calm-dim='off']) .dockview-theme-lcl .dv-tabs-and-actions-container:not(:hover, :has(:focus-visible)) .dv-tab:not(.dv-active-tab) .wb-tab {
     opacity: 0.45;

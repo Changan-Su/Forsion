@@ -1,3 +1,4 @@
+import { MarketPluginCards, isMarketplaceTool } from '../../components/MarketPluginCards'
 import { HumanUpdateCard } from '../../components/HumanUpdateCard'
 import { humanChanges } from '../../services/humanCollaboration'
 import { SelfUpdateReceipt } from '../../components/SelfUpdateReceipt'
@@ -6,14 +7,13 @@ import { SelfUpdateReceipt } from '../../components/SelfUpdateReceipt'
  * 用户为暖色带尾气泡。子件(思考/工具/待办/审批/反问)以新 t2 风格内联呈现。
  * 接 UiMessage,故可直接喂真实 store 数据(集成期用);回调可选(预览传空)。
  */
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from 'react'
-import { Copy, RotateCcw, GitBranch, Pencil, ChevronRight, ChevronDown, Volume2, Square, Loader2, LogIn, Zap, History as HistoryIcon, FileCode2, MessageSquare, ShieldQuestion, CircleCheck, CircleX, CircleHelp } from 'lucide-react'
+import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from 'react'
+import { Copy, RotateCcw, GitBranch, MessageCircleQuestion, CornerUpLeft, Pencil, Volume2, Square, Loader2, LogIn, Zap, History as HistoryIcon, FileCode2, MessageSquare, ShieldQuestion, CircleCheck, CircleX, CircleHelp } from 'lucide-react'
 import { FileInput, Quote } from 'lucide-react'
 import { useNoteInsertState } from './insertToNote'
 import * as api from '../../services/backendService'
-import type { UiMessage, TanguDesktopConfig, AgentConfig, StoredDesktopConfig, ToolEvent, InquiryRequest, SketchItem, LiveWait } from '../../types'
+import type { UiMessage, TanguDesktopConfig, AgentConfig, StoredDesktopConfig, ToolEvent, InquiryRequest, SketchItem, LiveWait } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import type { PreviewTarget } from '../../components/WorkspaceFilePreview'
-import { AnimatedCollapse } from '../../components/AnimatedUI'
 import { Markdown } from '../../components/Markdown'
 import { ChatWikiLink, WikiText } from '../../components/ChatWikiLink'
 import { RefChipView, splitLeadingRefs } from './RefChipView'
@@ -22,6 +22,7 @@ import { VoiceBubble } from '../../components/VoiceBubble'
 import { InlineFiles } from '../../components/InlineFiles'
 import { IntelligentUi } from '../../components/IntelligentUi'
 import { SketchCards } from '../../components/SketchCard'
+import { PluginToolCard, useToolCardOf, type ToolCardClaim } from '../../components/PluginToolCard'
 import { sketchFence } from '../../amadeus/blocks/sketch/format'
 import { streamingArgString } from '../streamingWrite'
 import { SystemPromptBlock } from '../../components/SystemPromptBlock'
@@ -51,9 +52,10 @@ const UPDATE_KEY = {
 } as const
 import { ToolGroup } from '../../components/ToolGroup'
 import { useSpeechReveal } from './useSpeechReveal'
+import { playSendFlight } from './sendFlight'
 import { InquiryCard, PlanCard, TodoList } from '../../components/InquiryCard'
 import { registerMessages, useI18n } from '../../i18n'
-import { useApp } from '../../stores/appStore'
+import { isHtmlCardTool, useApp } from '../../stores/appStore'
 import { runResultText, type RunResult } from '../../builtins/runCommand'
 import { SUB_PROVIDER_LABELS } from '../../components/OnboardingWizard'
 import { UI_MODE, nativeSheetPresenter, runNativeCtxMenu, runNativeSheetMenu, useEdgeNudge, type SheetMenuItem } from '@lcl/engine'
@@ -62,22 +64,31 @@ import { CreationCards } from './CreationCards'
 import { formatDateTime, formatMessageTime } from '../../format/time'
 
 import { TaskCards, type TaskLanding } from './TaskCards'
+import { MuseApprovalLine, MuseTodoCards, ProactiveMark, isProactive } from './MuseDm'
+import { CHILD_UPDATE_OPEN, ChildUpdateLine, ForkBlock, childIdsOf } from './ChildSessions'
 import { APPROVAL_UPDATE_OPEN, approvalForCall, parseApprovalUpdate, pickPlanInquiry, type ApprovalOutcome } from './approvalQueue'
 import { isRemoteApprover, wasDecidedHere } from '../../components/ApprovalCard'
 import { answeredByText } from '../../approvalReason'
 import { refForSession, targetForSession, useSessionHostName } from '../../services/engine/targets'
+import { AttachmentTile } from '../../components/AttachmentTile'
+import { UserFold } from './UserFold'
 export type { TaskLanding }
 import './chat2.css'
+import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
+
+const isImageAtt = (a: { mimeType?: string; data?: string }): boolean => !!a.mimeType?.startsWith('image/') && !!a.data
 
 export type OrderedToolPart =
   | { t: 'tools'; events: ToolEvent[] }
   | { t: 'sketch'; item: SketchItem }
   | { t: 'intelligent'; event: ToolEvent }
+  | { t: 'marketplace'; event: ToolEvent }
+  | { t: 'pluginCard'; event: ToolEvent; claim: ToolCardClaim }
 
 /** 直播中还没收口的 sketch 调用 → 草稿卡(10-09,对标 ChatGPT Intelligent UI 边生成边渲染):tool_stream 已把参数增量
  *  累进 ev.arguments,这里从半截 JSON 里把 html 解出来。只在**直播**里算(live):历史 / 中断的未完成调用照旧不画幻影卡。 */
 function draftSketchOf(ev: ToolEvent): SketchItem | undefined {
-  if (ev.name !== 'sketch' || ev.done || !ev.arguments) return undefined
+  if (!isHtmlCardTool(ev.name) || ev.done || !ev.arguments) return undefined
   const html = streamingArgString(ev.arguments, 'html')
   if (!html || !html.trim()) return undefined
   const title = streamingArgString(ev.arguments, 'title')
@@ -88,8 +99,10 @@ function draftSketchOf(ev: ToolEvent): SketchItem | undefined {
  * 把一个连续工具段按 Sketch 完成点切开。Sketch 的工具行仍留在前一组中,卡片紧跟其后(原生文档的工具行不留,见下)；
  * 后续工具另起一组,于是多个草图与正文都不会再被批量挪到消息末尾。
  * live=消息还在直播:没收口的 sketch 调用也出一张草稿卡(同 callId,终稿到达原地换成正式卡)。
+ * cardOf=插件结果卡片的认领(toolResultCards.useToolCardOf):认领了的调用画卡片**代替**通用记录(同原生文档),
+ * 前后的工具各成一组;没认领的(运行中、出错、插件停用 / 重载)照旧是通用记录。
  */
-export function partitionToolSegment(events: ToolEvent[], sketches?: SketchItem[], live = false): OrderedToolPart[] {
+export function partitionToolSegment(events: ToolEvent[], sketches?: SketchItem[], live = false, cardOf?: (ev: ToolEvent) => ToolCardClaim | undefined): OrderedToolPart[] {
   const sketchByCall = new Map((sketches || []).map((item) => [item.callId, item]))
   const parts: OrderedToolPart[] = []
   let tools: ToolEvent[] = []
@@ -110,7 +123,10 @@ export function partitionToolSegment(events: ToolEvent[], sketches?: SketchItem[
       if (!rewritten) parts.push({ t: 'intelligent', event: ev })
       continue
     }
+    const claim = cardOf?.(ev)
+    if (claim) { flushTools(); parts.push({ t: 'pluginCard', event: ev, claim }); continue }
     tools.push(ev)
+    if (isMarketplaceTool(ev) && ev.done && !ev.isError) { flushTools(); parts.push({ t: 'marketplace', event: ev }); continue }
     const sketch = sketchByCall.get(ev.id) ?? (live ? draftSketchOf(ev) : undefined)
     if (!sketch) continue
     flushTools()
@@ -206,25 +222,13 @@ export interface FileCtx {
   onOpenPreview?: (t: PreviewTarget) => void
 }
 
-export function Thinking2({ reasoning }: { reasoning: string }) {
-  const { t } = useI18n()
-  const [open, setOpen] = useState(false)
-  return (
-    <div className="t2-think">
-      <button className="t2-think-head" onClick={() => setOpen((o) => !o)}>
-        {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />} ✦ {t('thinking.process')}{' '}
-        <span className="t2-dim">· {t('thinking.charCount', { count: reasoning.length })}</span>
-      </button>
-      <AnimatedCollapse open={open}><div className="t2-think-body">{reasoning}</div></AnimatedCollapse>
-    </div>
-  )
-}
-
-
 export interface MessageHandlers {
   onCopy?: (text: string) => void
   onRegenerate?: () => void
+  /** 接着问:从这条分出一支(主区就地换成新的那支)。 */
   onBranch?: () => void
+  /** 顺便问:挂在这条上问,开在右边那块面板,不进对话。 */
+  onAside?: () => void
   onEdit?: () => void
   /** 朗读本条(再次点击=停止);未配置 TTS 时不传 → 按钮不渲染。text = 摘掉建议围栏的正文。 */
   onSpeak?: (text: string) => void
@@ -232,11 +236,13 @@ export interface MessageHandlers {
   onSuggest?: (text: string) => void
   /** 任务卡(```forsion-task)的落点点击:卡片本身什么也不做,点了才发消息 / 建 Muse 日程。
    *  返回 false = 没做成(卡片保留按钮);其余(true / void)= 做成,卡片定格。 */
-  onTask?: (card: TaskCard, landing: TaskLanding) => boolean | void | Promise<boolean | void>
+  onTask?: (card: TaskCard, landing: TaskLanding) => boolean | void | { childId: string } | Promise<boolean | void | { childId: string }>
   /** 回退到本条消息的时刻(B1):仅代码 / 仅对话 / 两者。 */
   onRewind?: (mode: 'code' | 'conversation' | 'both') => void
   /** 把这条回答插回笔记(评审 G3-08,见 insertToNote.ts);宿主没有 Amadeus 编辑能力时不传 → 按钮不渲染。text = 摘掉围栏的正文。 */
   onInsertNote?: (text: string) => void
+  /** 插件结果卡片的 call.quote:挂成这块输入框上方的引用卡(同划线「引用」)。不传 → 退回主对话的输入框。 */
+  onQuote?: (text: string) => void
 }
 
 type RewindMode = 'code' | 'conversation' | 'both'
@@ -372,7 +378,11 @@ function InsertNoteButton({ onInsert }: { onInsert: () => void }) {
   )
 }
 
-export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, userAvatar, handlers, fileCtx, rootRef, speakState, voice, modelId, showWaitDetails = false, footer }: { /** 助手气泡正文末尾的附加行(ChatView 给最后一条助手消息挂 run 统计)。 */ footer?: React.ReactNode; msg: UiMessage; avatarUrl?: string; agentNameFallback?: string; userName?: string; userAvatar?: string; handlers?: MessageHandlers; fileCtx?: FileCtx; rootRef?: Ref<HTMLDivElement>; speakState?: 'loading' | 'playing'; voice?: { on: boolean; cfg: TanguDesktopConfig; stored: StoredDesktopConfig | null }; /** 这条消息实际用的模型(仅用于认出订阅直连过期 → 给重登按钮;缺省=不给)。 */ modelId?: string; /** 测试性功能:显示发送上下文 / 等待首帧 / 已等待时间。默认关。 */ showWaitDetails?: boolean }) {
+/** memo:流式时 ChatView 每来一段字就重渲一次,没变的消息在这里挡住 —— 不然长会话里每段字都把整段对话的消息外壳重跑一遍。
+ *  只有 props 稳住才挡得住:ChatView 的 handlers 按消息 id 缓存、fileCtx / voice 走 useMemo。 */
+export const EditorialMessage = memo(EditorialMessageView)
+
+function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, userAvatar, handlers, fileCtx, rootRef, speakState, voice, modelId, showWaitDetails = false, footer, onBringBack }: { /** 助手气泡正文末尾的附加行(ChatView 给最后一条助手消息挂 run 统计)。 */ footer?: React.ReactNode; /** 分支里最后一条回答:「带回这里」把它作为引用挂进来源那支的输入框(ChatView 只给这一条传)。 */ onBringBack?: (text: string) => void; msg: UiMessage; avatarUrl?: string; agentNameFallback?: string; userName?: string; userAvatar?: string; handlers?: MessageHandlers; fileCtx?: FileCtx; rootRef?: Ref<HTMLDivElement>; speakState?: 'loading' | 'playing'; voice?: { on: boolean; cfg: TanguDesktopConfig; stored: StoredDesktopConfig | null }; /** 这条消息实际用的模型(仅用于认出订阅直连过期 → 给重登按钮;缺省=不给)。 */ modelId?: string; /** 测试性功能:显示发送上下文 / 等待首帧 / 已等待时间。默认关。 */ showWaitDetails?: boolean }) {
   // shell 代码块「运行」的回传:结果作为用户消息发回**这条消息所在**的会话(run 活着自动变 steer)。
   // cwd 跟会话走(agent 的工作目录),没有就家目录。对象按会话 memo,别每次渲染新造一个(Markdown 是 React.memo)。
   const runSid = fileCtx?.sessionId
@@ -387,6 +397,8 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
   const elsewhere = !!runSid && refForSession(runSid).kind === 'unit'
   const embeds = useMemo(() => (runSid && !elsewhere && UI_MODE !== 'mobile' && window.tangu?.readHostFile ? { execMode: embedExec } : undefined), [runSid, embedExec, elsewhere])
   const { t } = useI18n()
+  // 插件结果卡片的认领(订阅渲染器 / 名单:插件晚加载或被停用时这条消息跟着重渲)
+  const cardOf = useToolCardOf()
   msg = useSpeechReveal(msg)
   // 建议芯片是一次性的:点了就等于用户按了回车,整排随即失效 —— 不然双击会把同一句排两遍。
   const [suggestSent, setSuggestSent] = useState(false)
@@ -396,6 +408,17 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
   // 原生回退半屏的在途请求(Android):消息卸载、或它所属的会话 / 消息换了 → 作废(见 openNativeRewind)。
   const rewindReq = useRef<AbortController | null>(null)
   useEffect(() => () => { rewindReq.current?.abort(); rewindReq.current = null }, [msg.id, runSid])
+  // 发送动效:刚发出的那条从输入框升上来(只在挂载时认一次,见 sendFlight.ts)
+  const userWrapRef = useRef<HTMLDivElement | null>(null)
+  const setUserWrap = (el: HTMLDivElement | null): void => {
+    userWrapRef.current = el
+    if (typeof rootRef === 'function') rootRef(el)
+    else if (rootRef) (rootRef as React.MutableRefObject<HTMLDivElement | null>).current = el
+  }
+  useLayoutEffect(() => {
+    if (msg.role === 'user' && userWrapRef.current) playSendFlight(userWrapRef.current, msg.content)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
   // 点外面/Esc 关回退菜单(同 Composer2 的 [data-cmenu] 约定)。
   useEffect(() => {
     if (!rewindOpen) return
@@ -430,6 +453,8 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
     }
     // 挂起审批的结局回灌(引擎落库的 <approval_update> user 行):同理不是用户说的话 —— 每张一行结局。
     // 输出不在这里(引擎把真结果放回了原工具卡),这一行只说谁批了什么。
+    // 子会话结果送回主会话(引擎落库的 <child_sessions_update> user 行):同理画成一行系统行。
+    if (msg.content.startsWith(CHILD_UPDATE_OPEN)) return <div ref={rootRef}><ChildUpdateLine content={msg.content} /></div>
     if (msg.content.startsWith(APPROVAL_UPDATE_OPEN)) {
       const rows = parseApprovalUpdate(msg.content)
       return (
@@ -455,6 +480,9 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
     const quoted = splitLeadingQuotes(lead ? lead.body : msg.content)
     const body = quoted ? quoted.body : lead ? lead.body : msg.content
     const tocTitle = lead || quoted ? (body.trim() || lead?.refs.map((r) => r.name).join(' ') || quoted?.quotes[0] || '') : msg.content
+    const atts = msg.attachments || []
+    // 只发了附件、没写字:不摆一个空气泡
+    const hasBubble = !!(lead || quoted || msg.content.trim())
     const toggleRewind = (): void => {
       // Android:三档改由原生半屏呈现;没有原生宿主时照旧切换 Web 菜单。
       if (!rewindOpen) {
@@ -487,17 +515,22 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
         .then((shown) => { if (!shown) restore() }, restore)
     }
     return (
-      <div ref={rootRef} className={`t2-userwrap${inlineActions ? ' t2-userwrap--inline' : ''}`} id={`tocmsg-${msg.id}`} data-toc-msg-role="user" data-toc-title={tocTitle}>
+      <div ref={setUserWrap} className={`t2-userwrap${inlineActions ? ' t2-userwrap--inline' : ''}`} id={`tocmsg-${msg.id}`} data-toc-msg-role="user" data-toc-title={tocTitle}>
         <div className="t2-user-col">
           <div className="t2-username">{name}</div>
+          {atts.length > 0 && (
+            // 附件磁贴(B2)挪到气泡上方、右对齐:图片一行在前,文件一行在后;不参与长提问折叠
+            <div className="t2-user-atts" onContextMenu={onBubbleMenu}>
+              {[atts.filter(isImageAtt), atts.filter((a) => !isImageAtt(a))].map((row, r) => row.length > 0 && (
+                <div key={r} className="t2-user-atts-row">
+                  {row.map((a, i) => <AttachmentTile key={`${a.name}-${i}`} file={a} view />)}
+                </div>
+              ))}
+            </div>
+          )}
+          {hasBubble && (
           <div className="t2-user" onContextMenu={onBubbleMenu}>
-            {!!msg.attachments?.length && (
-              <div className="msg-attach-grid">
-                {msg.attachments.map((a, i) => a.mimeType?.startsWith('image/') && a.data
-                  ? <img key={`${a.name}-${i}`} className="msg-attach-img" src={`data:${a.mimeType};base64,${a.data}`} alt={a.name} title={a.name} />
-                  : <span key={`${a.name}-${i}`} className="msg-attach-file" title={a.name}>📎 {a.name}</span>)}
-              </div>
-            )}
+            <UserFold lines={body.split('\n').length}>
             {lead && (
               <div className="t2-user-refs">
                 {lead.refs.map((r, i) => (
@@ -518,7 +551,9 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
               </div>
             )}
             {lead || quoted ? (body && <WikiText text={body} />) : <WikiText text={msg.content} />}
+            </UserFold>
           </div>
+          )}
           <div className="t2-actions">
             <MsgTime at={msg.timestamp} />
             <button className="t2-iconbtn" title={t('chat.action.copy')} onClick={() => handlers?.onCopy?.(msg.content)}><Copy size={14} /></button>
@@ -543,8 +578,12 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
   // 自动化建议围栏不属于正文:渲染/复制/朗读都用摘干净的 body,芯片单独摆一排。
   const streaming = msg.status === 'streaming'
   // 作品卡的按钮要宿主 IPC:只有桌面端认这种围栏,网页 / 手机端原样留在正文(不吞字)
-  const fenceKinds: FenceKind[] = window.tangu?.productsRegister ? ['suggest', 'task', 'creation'] : ['suggest', 'task']
-  const { text: body, items: suggestions, tasks, creations } = splitSuggestions(msg.content, { streaming, kinds: fenceKinds })
+  // Muse 私聊里它自己开口的那条(origin 只有引擎写得出,10-18 方案 B):待办卡的 `todo:` 头生效、审批围栏收成一行(MuseDm.tsx)。
+  const museTodo = msg.origin === 'proactive:todo'
+  const museApproval = msg.origin === 'proactive:approval'
+  const fenceKinds: FenceKind[] = [...(window.tangu?.productsRegister ? ['suggest', 'task', 'creation'] as FenceKind[] : ['suggest', 'task'] as FenceKind[]), ...(museApproval ? ['approval'] as FenceKind[] : [])]
+  const { text: body, items: suggestions, tasks, creations, approvals: museApprovals } = splitSuggestions(msg.content, { streaming, kinds: fenceKinds, todo: museTodo })
+  const childIds = childIdsOf(msg.toolEvents) // 不用 hook:上面 system / user 两支提前 return 了
   // sketch 卡 → 笔记里的交互块(```forsion-sketch 围栏,嵌入层按同一沙箱渲染);与回答的「插入笔记」同一条写口。
   const sketchActions = handlers?.onInsertNote
     ? (it: SketchItem) => <InsertNoteButton onInsert={() => handlers.onInsertNote?.(sketchFence(it.html))} />
@@ -566,15 +605,24 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
   const inlineToolIds = new Set(!voiceMode ? (msg.segments || []).flatMap(seg => seg.t === 'tools' ? seg.ids : []) : [])
   const trailingIntelligent = (msg.toolEvents || []).filter(ev => ev.name === 'intelligent_ui' && !inlineToolIds.has(ev.id))
   const trailingSketches = (msg.sketches || []).filter((item) => !inlineSketchIds.has(item.callId))
+  const trailingCards = (msg.toolEvents || []).flatMap((ev) => {
+    const claim = inlineToolIds.has(ev.id) ? undefined : cardOf(ev)
+    return claim ? [{ ev, claim }] : []
+  })
 
   return (
-    <div ref={rootRef} className="t2-asst" id={`tocmsg-${msg.id}`}>
+    <div ref={rootRef} className="t2-asst" id={`tocmsg-${msg.id}`} data-streaming={msg.status === 'streaming' ? '' : undefined}>
       <div className="t2-avatar" style={!avatarUrl && msg.agentColor ? { background: msg.agentColor, color: '#fff' } : undefined}>{avatarUrl ? <img src={avatarUrl} alt="" /> : firstChar(msg.agentName || agentNameFallback || 'Tangu')}</div>
       <div className="t2-asst-col">
         <div className="t2-name" style={msg.agentColor ? { color: msg.agentColor } : undefined}>{msg.agentName || agentNameFallback || 'Tangu'}{msg.status === 'streaming' && <span className="t2-dot" />}</div>
+        {isProactive(msg) && <ProactiveMark at={msg.timestamp} />}
         {msg.systemPrompt && <SystemPromptBlock content={msg.systemPrompt} />}
-        {msg.reasoning && <Thinking2 reasoning={msg.reasoning} />}
         {(() => {
+          // 思考原文整条消息只有一份:挂在第一条过程行上(前面还没有正文时);否则单独一行过程行放最前(只剩思考那一步)。
+          // 这条「打头的过程行」两条渲染分支都放在同一个位置、同一个 key —— 思考中途第一个工具到达、或之后再追加工具,
+          // 它都不重挂,用户展开着的思考不会被收起、焦点也不丢。
+          // 「思考中」只在它是消息最后一块时亮,后面已经有东西了就不在上头闪。
+          const think = (last: boolean) => msg.reasoning ? { reasoning: msg.reasoning, reasoningMs: msg.reasoningMs, thinking: last && msg.reasoningSince != null } : {}
           // 直播与带锚点的历史:按发生顺序渲染文字/工具,并把 Sketch 插在对应工具完成点。
           // 无段(旧历史 / 语音整条朗读)→ 回退老序:所有工具一块 + 全文。
           if (msg.segments?.length && !voiceMode) {
@@ -584,7 +632,12 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
             // 只有**最后一个文本段**才能把未收口的围栏还回正文:靠前的段后面还有段,围栏可能在那里收口
             // (工具块把一道围栏切成两截),提前还回 = 原文泄漏进正文 + 后半段永远拼不成卡。
             const lastTextIdx = msg.segments.reduce((acc, s2, j) => (s2.t === 'text' ? j : acc), -1)
-            return msg.segments.map((seg, i) => {
+            const firstIdx = msg.segments.findIndex((s2) => s2.t === 'tools' || !!s2.text.trim())
+            const evsOf = (ids: string[]) => ids.map((id) => msg.toolEvents?.find((e) => e.id === id)).filter(Boolean) as ToolEvent[]
+            const first = msg.segments[firstIdx]
+            const firstParts = first?.t === 'tools' ? partitionToolSegment(evsOf(first.ids), msg.sketches, streaming, cardOf) : []
+            const headEvents = firstParts[0]?.t === 'tools' ? firstParts[0].events : undefined
+            const nodes = msg.segments.map((seg, i) => {
               if (seg.t === 'text') {
                 const parsed = splitSuggestions(seg.text, { streaming: streaming || i !== lastTextIdx, state: fenceState, kinds: fenceKinds })
                 fenceState = parsed.state
@@ -593,22 +646,30 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
                   ? <div key={i} className="t2-content"><Markdown content={segBody} anchorPrefix={`toc-${msg.id}`} run={runCtx} allowRun={!elsewhere} embeds={embeds} /></div>
                   : null
               }
-              const evs = seg.ids.map((id) => msg.toolEvents?.find((e) => e.id === id)).filter(Boolean) as ToolEvent[]
-              const parts = partitionToolSegment(evs, msg.sketches, streaming)
+              const skip = i === firstIdx && headEvents ? 1 : 0
+              const parts = (i === firstIdx ? firstParts : partitionToolSegment(evsOf(seg.ids), msg.sketches, streaming, cardOf)).slice(skip)
               return parts.length ? (
                 <Fragment key={i}>
-                  {parts.map((part, j) => part.t === 'tools'
-                    ? <ToolGroup key={`tools-${part.events.map((ev) => ev.id).join('-')}-${j}`} events={part.events} running={msg.status === 'streaming'} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} />
+                  {parts.map((part, k) => part.t === 'tools'
+                    ? <ToolGroup key={`tools-${part.events.map((ev) => ev.id).join('-')}-${k + skip}`} events={part.events} running={msg.status === 'streaming'} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} />
+                    : part.t === 'marketplace'
+                      ? <MarketPluginCards key={`market-${part.event.id}`} event={part.event} />
+                    : part.t === 'pluginCard'
+                      ? <PluginToolCard key={`ptc-${part.event.id}`} event={part.event} claim={part.claim} onQuote={handlers?.onQuote} fallback={<ToolGroup events={[part.event]} />} />
                     : part.t === 'intelligent'
                       ? <IntelligentUi key={`intelligent-${part.event.id}`} event={part.event} live={streaming} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} />
                     : <SketchCards key={`sketch-${part.item.callId}`} items={[part.item]} actions={sketchActions} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} />)}
                 </Fragment>
               ) : null
             })
+            const head = (!!msg.reasoning || !!headEvents) && <ToolGroup key="proc-head" events={headEvents || []} running={streaming} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} {...think(nodes.every((n) => n == null))} />
+            return <>{head}{nodes}</>
           }
+          // 老序:插件卡片挪到尾部(trailingCards),不在这一行里再列一遍
+          const head = (!!msg.reasoning || !!msg.toolEvents?.length) && <ToolGroup key="proc-head" events={(msg.toolEvents || []).filter((ev) => !cardOf(ev))} running={streaming} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} {...think(!body)} />
           return (
             <>
-              {!!msg.toolEvents?.length && <ToolGroup events={msg.toolEvents} running={msg.status === 'streaming'} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} />}
+              {head}
               {body && (
                 voiceMode
                   ? <VoiceBubble text={body} stored={voice!.stored} anchorPrefix={`toc-${msg.id}`} />
@@ -633,9 +694,14 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
             ))}
           </div>
         )}
+        {/* 从这条分出去的:分支 / 顺便问 / start_session 开出的子会话,一块「从这里分出」(ChildSessions.tsx ForkBlock)。 */}
+        {runSid && <ForkBlock sessionId={runSid} messageId={msg.id} childIds={childIds} onSuggest={handlers?.onSuggest} />}
         {/* 任务卡:顺手发现的、塞进当前对话会撑爆的活。track=true 的卡主按钮是「交给 Muse 追踪」。同样只在 done 上渲染。
             渲染与落点按钮在 TaskCards(与收件箱共用)。 */}
-        {!!tasks.length && msg.status === 'done' && <TaskCards tasks={tasks} ownerId={msg.id} onTask={handlers?.onTask} />}
+        {!!tasks.length && msg.status === 'done' && (museTodo
+          ? <MuseTodoCards tasks={tasks} ownerId={msg.id} onTask={handlers?.onTask} sessionId={runSid || undefined} createdAt={msg.timestamp || undefined} />
+          : <TaskCards tasks={tasks} ownerId={msg.id} onTask={handlers?.onTask} sessionId={runSid || undefined} createdAt={msg.timestamp || undefined} />)}
+        {museApprovals.map((id) => <MuseApprovalLine key={id} id={id} />)}
         {/* 作品卡:把这条对话里做的东西变成「造物」(点了宿主才建文件夹 / 复制)。同样只在 done 上渲染。 */}
         {!!creations.length && msg.status === 'done' && <CreationCards cards={creations} sessionId={runSid} />}
 
@@ -679,8 +745,10 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
         {!!msg.displayFiles?.length && fileCtx && (
           <InlineFiles files={msg.displayFiles} cfg={fileCtx.cfg} sessionId={fileCtx.sessionId} execMode={fileCtx.execMode} onOpenPreview={fileCtx.onOpenPreview} />
         )}
+        {(msg.toolEvents || []).filter(ev => isMarketplaceTool(ev) && !inlineToolIds.has(ev.id)).map(ev => <MarketPluginCards key={`market-${ev.id}`} event={ev} />)}
         {trailingIntelligent.map(ev => <IntelligentUi key={ev.id} event={ev} live={streaming} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} />)}
         {!!trailingSketches.length && <SketchCards items={trailingSketches} actions={sketchActions} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} />}
+        {trailingCards.map(({ ev, claim }) => <PluginToolCard key={`ptc-${ev.id}`} event={ev} claim={claim} onQuote={handlers?.onQuote} fallback={<ToolGroup events={[ev]} />} />)}
         {/* 审批卡在输入框上方的托盘里批(ApprovalTray);流里只留一行指路,已兑现的不留痕 —— 结局看工具卡。
             团队成员的占位气泡已有「等待你的审批」那行,不重复。 */}
         {!msg.work && pendingApv.length > 0 && (
@@ -716,7 +784,9 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
             )}
             {handlers?.onInsertNote && !!body && <InsertNoteButton onInsert={() => handlers.onInsertNote?.(body)} />}
             <button className="t2-iconbtn" title={t('chat.action.regenerate')} onClick={() => handlers?.onRegenerate?.()}><RotateCcw size={14} /></button>
-            <button className="t2-iconbtn" title={t('chat.action.branch')} onClick={() => handlers?.onBranch?.()}><GitBranch size={14} /></button>
+            {handlers?.onBranch && <button className="t2-iconbtn" title={t('chat.action.branch')} aria-label={t('chat.action.branch')} data-testid="msg-branch" onClick={() => handlers.onBranch?.()}><GitBranch size={14} /></button>}
+            {handlers?.onAside && <button className="t2-iconbtn" title={t('chat.action.aside')} aria-label={t('chat.action.aside')} data-testid="msg-aside" onClick={() => handlers.onAside?.()}><MessageCircleQuestion size={14} /></button>}
+            {onBringBack && !!body && <button className="t2-iconbtn t2-textbtn" data-testid="msg-bring-back" onClick={() => onBringBack(body)}><CornerUpLeft size={13} /> {t('chat.action.bringBack')}</button>}
             <MsgTime at={msg.timestamp} />
           </div>
         )}

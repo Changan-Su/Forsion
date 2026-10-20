@@ -2,7 +2,8 @@
  * 消息末尾的两种围栏 —— 助手在回复里写:
  *   ```forsion-suggest  一行一条「用户原话」建议 → 渲染成一排可点芯片(点了=用户把这句话发出去);
  *   ```forsion-task     一张自包含任务卡(title/tldr/track 头部 + `---` + prompt 任务书)→ 渲染成卡片,
- *                        落点三档:在此执行 / 新会话执行 / 交给 Muse 追踪(2026-09-10,对标 Claude Code 的 spawn_task)。
+ *                        落点:开个子会话 / 在这里做 / 交给 Muse / 忽略(2026-09-10 对标 Claude Code 的 spawn_task;10-17 起 7 天有效、
+ *                        `id:` + 后续 `withdraw: <id>` 撤回、`ask: true` 先问卡)。
  *   ```forsion-approval 一条待审批引用(`{"id":"…"}`,引擎在 ask 档排队时写进收件箱消息,2026-09-11)→ 渲染成审批卡;
  *                        卡上的工具/预览/理由按 id 从 pending_approvals 读,**正文里的字一个不信**(见 InboxBody)。
  *   ```forsion-creation 把这条对话里做的东西变成「造物」(`name:` + 可选 `path:`,2026-09-27;写法教在内置技能 forsion-creations)→
@@ -58,6 +59,13 @@ export interface TaskCard {
   /** Muse TODO 的行 id(引擎在 add_muse_todo 的收件箱投影里写 `todo: <id>`):落点回写这条 TODO,「交给 Muse」= 批准它去做(见 taskLanding)。
    *  只有调用方显式开 `todo` 才解析(收件箱里 Muse 自己的信);别处的 `todo:` 按未知键忽略 —— 别的 agent 不能冒充 Muse 的待办。 */
   todo?: string
+  /** 卡的短标识(模型写 `id:`):之后能用 `withdraw: <id>` 撤回。 */
+  id?: string
+  /** 先问卡(`ask: true`):用户点名的事、但该另开会话 —— 按钮只有「新会话 / 在这里做」,选之前什么都不开始。 */
+  ask?: boolean
+  /** 撤回标记(只有 `withdraw: <id>` + 可选 `reason:` 的围栏):不画卡,让同会话里那张 id 的卡变成「已撤回」。 */
+  withdraw?: string
+  reason?: string
   prompt: string
 }
 
@@ -118,6 +126,10 @@ export function parseTaskCard(lines: string[], opts?: { todo?: boolean }): TaskC
   let tldr = ''
   let track = false
   let todo = ''
+  let id = ''
+  let ask = false
+  let withdraw = ''
+  let reason = ''
   for (const h of header) {
     const m = HEADER.exec(h)
     if (!m) continue
@@ -126,14 +138,24 @@ export function parseTaskCard(lines: string[], opts?: { todo?: boolean }): TaskC
     else if (k === 'tldr') tldr = m[2]
     else if (k === 'track') track = /^(true|yes|1)$/i.test(m[2])
     else if (k === 'todo') todo = m[2]
+    else if (k === 'id') id = m[2]
+    else if (k === 'ask') ask = /^(true|yes|1)$/i.test(m[2])
+    else if (k === 'withdraw') withdraw = m[2]
+    else if (k === 'reason') reason = m[2]
     // 未知键忽略:将来加字段不破旧客户端
+  }
+  // 撤回标记:没有任务书也成立(没 --- 时头部只认 title/tldr/track 开头,故撤回行单独认)
+  const w = withdraw || (/^\s*withdraw\s*:\s*(\S+)/i.exec(lines.find((l) => l.trim()) || '')?.[1] ?? '')
+  if (w && APPROVAL_ID_RE.test(w)) {
+    const r = reason || (/^\s*reason\s*:\s*(.*?)\s*$/i.exec(lines.find((l) => /^\s*reason\s*:/i.test(l)) || '')?.[1] ?? '')
+    return { title: '', prompt: '', withdraw: w, ...(r ? { reason: r.slice(0, TLDR_MAX) } : {}) }
   }
   const prompt = body.join('\n').trim().slice(0, PROMPT_MAX)
   if (!title) title = (body.find((l) => l.trim()) || '').trim()
   title = title.trim().slice(0, TITLE_MAX)
   if (!title || !prompt) return null
   // todo id 与审批 id 同一形态约束;不合法只丢这个键(卡照出,只是不回写 TODO)。
-  return { title, ...(tldr ? { tldr: tldr.slice(0, TLDR_MAX) } : {}), ...(track ? { track: true } : {}), ...(opts?.todo && APPROVAL_ID_RE.test(todo) ? { todo } : {}), prompt }
+  return { title, ...(tldr ? { tldr: tldr.slice(0, TLDR_MAX) } : {}), ...(track ? { track: true } : {}), ...(opts?.todo && APPROVAL_ID_RE.test(todo) ? { todo } : {}), ...(APPROVAL_ID_RE.test(id) ? { id } : {}), ...(ask ? { ask: true } : {}), prompt }
 }
 
 /** 围栏正文 → 作品卡:只认 `key: value` 行(name 必填,path 可选,未知键忽略);写坏的 → null(整块还回正文)。 */
@@ -199,7 +221,7 @@ export function splitSuggestions(
     if (st.kind === 'suggest') for (const l of st.pending.slice(1)) take(l)
     else if (st.kind === 'task') {
       const card = parseTaskCard(st.pending.slice(1), { todo: opts?.todo })
-      if (card && taken.tasks < MAX_TASKS) { tasks.push(card); taken.tasks += 1 }
+      if (card && (card.withdraw || taken.tasks < MAX_TASKS)) { tasks.push(card); if (!card.withdraw) taken.tasks += 1 } // 撤回标记不占卡数
       else body.push(...st.pending, closingLine) // 写坏的、或超过上限的:原样还回正文(Codex 09-11 P2:第三张不能凭空消失)
     } else if (st.kind === 'approval') {
       const id = parseApprovalId(st.pending.slice(1))

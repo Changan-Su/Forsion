@@ -1,5 +1,6 @@
 import { PRODUCT } from '../product'
 import { ModelPickerSettings } from './ModelPickerSettings'
+import { WebSearchSettings } from './WebSearchSettings'
 import { AutoCompactSetting } from './AutoCompactSetting'
 import { GitSettingsSection } from './GitSettingsSection'
 import { GitAccountsSection } from './GitAccountsSection'
@@ -11,11 +12,12 @@ import { BrowserExtensionPanel } from './BrowserExtensionPanel'
  * 在 Desktop 主界面内替换 Chat/Inspector 区域，而不是覆盖式弹窗。
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { X, Droplets, Shapes, ArrowLeft, Undo2, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2, CircleUserRound, Scaling, Coffee, MonitorCheck, History, MonitorSmartphone, Cloud, SunDim, AlignLeft, Wind, TextSelect } from 'lucide-react'
+import { X, Droplets, Shapes, ArrowLeft, Undo2, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2, CircleUserRound, Scaling, Coffee, MonitorCheck, History, MonitorSmartphone, Laptop, Cloud, SunDim, AlignLeft, Wind, TextSelect, MousePointerClick } from 'lucide-react'
 import { ThemeCard } from './ThemeCard'
 import { ThemeSettingsPanel } from './ThemeSettingsPanel'
 import { StartupAppearanceSettings } from './StartupAppearanceSettings'
-import { backgroundSwatch, listLanguages, listSkins, skinSwatch, forcedSchemeForLanguage } from '../theme/registry'
+import { backgroundSwatch, listLanguages, listSkins, skinSwatch, forcedSchemeForLanguage, SIGNALS } from '../theme/registry'
+import { customAccentVars } from '../theme/lcl/lovableData'
 import { UI_MODE, UI_ZOOM_EVENT, useNativeChromeClaim, useNativeChromeInstalled, useWorkspace } from '@lcl/engine' // 工作区引擎:恢复默认布局 + 移动预览模式;原生顶栏(Android 可选宿主)
 import { useApp } from '../stores/appStore' // Agent Desk 开关改动即时回流(desktopConfig 平时只在 boot/后端就绪时刷新)
 import { testConnection } from '../services/agentRunService'
@@ -25,7 +27,7 @@ import {
   listModels, listTools, setModelContextWindow,
   testProviderConnection, syncNow as backendSyncNow, getSyncStatus as backendGetSyncStatus,
   listPlugins, listAgents, type PluginInfo, type SyncStatusResult,
-  getLocalWebSearch, saveLocalWebSearch, testLocalWebSearch, type LocalWebSearchRedacted,
+  getLocalWebSearch, type LocalWebSearchRedacted,
 } from '../services/backendService'
 import { ChannelsTab } from './ChannelsTab'
 import { buildSessionLogPayload, sessionLogFilename } from '../services/sessionLog'
@@ -36,8 +38,8 @@ import type {
 import { SHOW_SYSTEM_PROMPT_KEY } from '../types'
 // 本组件已有同名的 useState setter,故取个别名。persist* = 写盘 + 应用 + 跨窗广播。
 import { isSmoothCaretOn, setSmoothCaret as persistSmoothCaret } from '../smoothCaret'
+import { loadHomepageWallpaperPrefs, onHomepageWallpaperPrefsChange, setHomepageWallpaperMotion } from '../views/homepageWallpaper'
 import { selectionBarOrder, setSelectionBarOrder } from '../selectionActions'
-import { isPromptSuggestOn, setPromptSuggest as persistPromptSuggest } from '../views/chat2/promptSuggest'
 import { getVisualsPref, setVisualsPref, VISUALS_VALUES, type VisualsPref } from '../visualsPref'
 import { isRibbonAutoHome, setRibbonAutoHome, useRibbonStore, RIBBON_RECENT_MAX } from '@lcl/engine/ribbonRegistry'
 import { applyUiFonts, readFont, writeFont, type FontSlot } from '../uiFont'
@@ -48,14 +50,16 @@ import { formatDateTime } from '../format/time'
 import { LocaleToggle } from './LocaleToggle'
 import { BrandLogo } from './BrandLogo'
 import { ThemePreview } from './ThemePreview'
-import { RemoteSyncSection } from './RemoteSyncSection'
+import { RemoteSyncSection, openPenzorSync, penzorSyncReady } from './RemoteSyncSection'
 import { APP_VERSION } from '../changelog'
 import { Markdown } from './Markdown'
-import { UpdateActions } from './UpdateActions'
-import { ChangelogEntries, openChangelogTab, releaseNotesFor } from '../views/ChangelogView'
-import { ModelSelect } from './ModelSelect'
+import { UpdateActions, UpdateSourceNote } from './UpdateActions'
+import { ChangelogEntries, releaseNotesFor } from '../views/ChangelogView'
+import { openWhatsNew } from './WhatsNewDialog'
 import { AsrModelChoice } from './AsrModelChoice'
-import { AuxModelChoice } from './AuxModelChoice'
+import { DefaultModelsPage } from './DefaultModelsPage'
+import { catalogByKind, FETCH_ENABLE_LIMIT, guessProviderModelKind, mergeFetched, providerFieldsFromRows, rowsFromProvider, type ModelKind, type ProviderModelKind, type ProviderModelRow } from './modelKinds'
+import { realtimeCandidates } from './RealtimeVoiceSettings'
 import { AgentSettingsOverview } from './AgentSettingsOverview'
 import { GlobalSkillsLibrary } from './GlobalSkillsLibrary'
 import { openAgentProfile } from '../views/agentProfileNav'
@@ -66,11 +70,14 @@ import { ShortcutsTab } from './ShortcutsTab'
 import { PluginsTab } from './PluginsTab'
 import { CorePluginUpdates } from './CorePluginUpdates'
 import { AmadeusPluginsTab, PluginSettingsView, pluginListDetailBack } from './AmadeusPluginsTab'
+import { cloudViewKey, cloudViewTitle, cloudTabTitle, resolveCloudSettingsKey, cloudSettingsParent, cloudSettingsTabs, cloudAccountSearchKey } from './settingsCloudNavigation'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
 import { isPlacedSettingsView, pluginDisplayName, pluginsWithSettingsPanel } from '../amadeus/plugins/display'
+import { readTanguPrefs } from '../amadeus/plugins/tanguSeam'
 import { SpacesTab } from './SpacesTab'
 import { PanelNotice } from './PanelNotice'
 import { NotificationsTab, StatusBarTab } from './NotificationsTab'
+import { isPhoneSettings } from './SettingsPage'
 import { HooksTab } from './HooksTab'
 import { PluginSettingsPage } from './PluginSettingsPage'
 import { AgentClisTab } from './AgentClisTab'
@@ -79,6 +86,7 @@ import { EnvProbeSection } from './EnvProbeSection'
 import { DesktopPermissions, hasDesktopPermissions } from './DesktopPermissions'
 import { ComputerHistorySettings, computerHistoryApi } from './ComputerHistorySettings'
 import { RemoteSessionsSettings, remoteSessionsApi } from './RemoteSessionsSettings' // P1-K4
+import { UnitSettings } from './UnitSwitcher'
 import { debugFireToast } from '../achievements/store'
 import { useTheme } from '../stores/themeStore'
 import { setMobileUiCommand, MOBILE_UI_KEY } from '../mobileUiCommand'
@@ -101,7 +109,6 @@ import { canvasDoubleClickFocusEnabled, canvasOverviewZoom, setCanvasDoubleClick
 import { aiSpaceTriggerEnabled, setAiSpaceTriggerEnabled } from '@amadeus/lib/aiSpaceTrigger'
 import { SettingsPanel, SettingsRow, SettingsSwitch } from './SettingsPrimitives'
 import { setChatWaitDetailsEnabled, useChatWaitDetailsEnabled } from '../chatWaitDetails'
-import { isChatAvatarsOn, setChatAvatarsOn } from '../views/chat2/chatAvatars'
 import { isCalmOn, setCalmOn, type CalmKey } from '../theme/calm'
 import { ipcErrorText } from '../ipcError'
 import { newReservedMcpNames } from '../../../shared/mcpNames'
@@ -116,6 +123,8 @@ import { connectionTarget, homeTarget } from '../services/engine/targets'
 
 // 本文件自带的文案片段(命名空间 `settingsmodal.*`,不与 i18n.generated.ts 的 `settings.*` 相交)。
 registerMessages({
+  'settingsmodal.mcp.fromPlugin': { zh: '来自插件「{name}」', en: 'From plugin "{name}"' },
+  'settingsmodal.mcp.fromPluginHint': { zh: '这个 server 随插件启用和停用；要关掉它，请在插件设置里停用这个插件。', en: 'This server starts and stops with its plugin. To turn it off, disable the plugin in plugin settings.' },
   'settingsmodal.selectionBar': { zh: '划线菜单', en: 'Selection menu' },
   'settingsmodal.selectionBarHint': { zh: '选中文字后浮出的那一条：先排当前视图自己的工具，还是先排「问 Tangu」「翻译」这些每个视图都有的动作。', en: 'The bar that appears over selected text: put the current view\'s own tools first, or the actions every view shares, such as Ask Tangu and Translate.' },
   'settingsmodal.selectionBar.tools': { zh: '视图工具在前', en: 'View tools first' },
@@ -128,8 +137,16 @@ registerMessages({
   },
   // 不叫「同步」:下面就是一级页「同步」(远程同步),左栏会出现两个同名项
   'settingsmodal.forsionCloud.submissions': { zh: '插件投稿', en: 'Submissions' },
-  'settings.forsionCloud.sync': { zh: '云端同步', en: 'Cloud sync' },
+  'settings.forsionCloud.sync': { zh: '云端智库', en: 'Cloud vault' },
+  // 「Agents 与记忆」的开关搬进蓬洲云「同步」页(云同步开启方案 2026-10-20),这里只留一条指路 + 立即同步
+  'settings.forsion.syncManaged': { zh: '开关在蓬洲云 › 同步', en: 'Turn it on or off in Penzor Cloud › Sync' },
+  'settings.forsion.syncManagedHint': { zh: '登录后默认开着；智库、Agents 与记忆、插件数据都在那一页管。', en: 'On by default after you sign in. Notes, agents & memory, and plugin data are all managed on that page.' },
+  'settings.forsion.openPenzorSync': { zh: '打开', en: 'Open' },
   'settings.forsionCloud.connection': { zh: '连接', en: 'Connection' },
+  'settingsmodal.cloudAccountDescription': { zh: 'Forsion 云端 · 管理个人主页、登录资料和账号安全。', en: 'Forsion Cloud · Your profile, sign-in details and account security.' },
+  'settingsmodal.cloudMembershipDescription': { zh: 'Forsion 云端 · 查看会员、额度、积分与用量记录。', en: 'Forsion Cloud · Membership, quota, points and usage.' },
+  'settingsmodal.cloudHelpDescription': { zh: 'Forsion 云端 · 提交反馈、查看回复与管理诊断数据。', en: 'Forsion Cloud · Feedback, replies and diagnostic data.' },
+  'settingsmodal.cloudAdvancedConnection': { zh: '高级连接', en: 'Advanced connection' },
   'settings.forsionCloud.noteSyncOn': { zh: '与云端智库同步', en: 'Sync with the cloud vault' },
   'settings.forsionCloud.address': { zh: '地址', en: 'Address' },
   'settings.tools.title': { zh: '开发工具', en: 'Developer tools' },
@@ -151,27 +168,51 @@ registerMessages({
   },
   'modelsettings.title': { zh: '模型', en: 'Models' },
   'modelsettings.defaults': { zh: '默认模型', en: 'Default models' },
-  'modelsettings.display': { zh: '分组与显示', en: 'Groups & visibility' },
+  'modelsettings.display': { zh: '模型库', en: 'Model library' },
   'modelsettings.providers': { zh: '提供方', en: 'Providers' },
-  'modelsettings.defaultsHint': { zh: '按用途选择默认模型，修改后自动保存。', en: 'Choose default models for each purpose. Changes save automatically.' },
-  'modelsettings.displayHint': { zh: '整理模型选择器中的分组，选择本地模型的显示范围。', en: 'Organize picker groups and choose which local models appear.' },
-  'modelsettings.providersHint': { zh: '管理提供方登录、API 连接与模型拉取。', en: 'Manage provider sign-ins, API connections and model discovery.' },
+  'modelsettings.defaultsHint': { zh: '每个用途调用哪个模型。不选就跟随 Forsion 云端默认；自选的随时可以恢复跟随。', en: 'Which model each purpose uses. Unset ones follow the Forsion Cloud defaults, and any custom choice can go back to the default.' },
+  'modelsettings.displayHint': { zh: '你能用的全部模型，分类和后台一致。关掉的不出现在选择菜单里。', en: 'Every model you can use, sorted the same way as the admin console. Models you turn off stay out of the pickers.' },
+  'modelsettings.providersHint': { zh: '模型从哪里来：Forsion 云端、订阅账号，或你自己的 API key。', en: 'Where models come from: Forsion Cloud, subscription accounts or your own API keys.' },
   'modelsettings.searchHint': { zh: '配置联网搜索的服务与凭据。', en: 'Configure web search services and credentials.' },
-  'modelsettings.voiceHint': { zh: '语音通话、语音输入和朗读分开设置，音色互不通用。', en: 'Voice calls, voice input and read-aloud are set up separately; their voices are not shared.' },
+  'modelsettings.voiceHint': { zh: '音色、语速和本地语音识别。用哪个模型在「默认模型」里选。', en: 'Voices, speed and on-device speech recognition. Choose the models under Default models.' },
+  'settings.tts.off': { zh: '朗读没开。在「默认模型 → 朗读」里选一个模型就开了。', en: 'Read-aloud is off. Pick a model under Default models → Read aloud to turn it on.' },
   'settings.voice.secCall': { zh: '语音通话', en: 'Voice call' },
   'settings.voice.secInput': { zh: '语音输入', en: 'Voice input' },
   'settings.voice.secRead': { zh: '朗读', en: 'Read aloud' },
-  'modelsettings.defaultUses': { zh: '按用途选择', en: 'Models by purpose' },
   'modelsettings.answerForm': { zh: '回答形式', en: 'Answer format' },
-  'modelsettings.refresh': { zh: '刷新模型', en: 'Refresh models' },
-  'modelsettings.chat': { zh: '对话与任务', en: 'Conversations & tasks' },
-  'modelsettings.chatHint': { zh: '新会话默认使用的主模型。', en: 'The main model for new conversations.' },
-  'modelsettings.image': { zh: '图像生成', en: 'Image generation' },
-  'modelsettings.imageHint': { zh: '用于生成和编辑图片。', en: 'For generating and editing images.' },
-  'modelsettings.followDefault': { zh: '跟随服务默认', en: 'Follow service default' },
   'modelsettings.noModels': { zh: '暂无可用模型。可在提供方中配置连接，然后刷新模型。', en: 'No models available. Configure a provider connection, then refresh models.' },
-  'modelsettings.manageDisplay': { zh: '管理分组与显示', en: 'Manage groups & visibility' },
-  'modelsettings.manageProviders': { zh: '管理提供方', en: 'Manage providers' },
+  'prov.cloud': { zh: 'Forsion 云端', en: 'Forsion Cloud' },
+  'prov.cloudIn': { zh: '已登录 · {count} 个模型由后台统一配置', en: 'Signed in · {count} models set up by your administrator' },
+  'prov.cloudOut': { zh: '未登录', en: 'Not signed in' },
+  'prov.cloudOutHint': { zh: '登录后可以直接用云端的模型，按额度计费。', en: 'Sign in to use cloud models, charged to your quota.' },
+  'prov.manageAccount': { zh: '管理账号', en: 'Manage account' },
+  'prov.subs': { zh: '订阅账号', en: 'Subscription accounts' },
+  'prov.subIn': { zh: '已登录 · 用订阅额度，不计 Forsion 积分', en: 'Signed in · uses your subscription, not Forsion credits' },
+  'prov.signIn': { zh: '登录', en: 'Sign in' },
+  'prov.signInAgain': { zh: '重新登录', en: 'Sign in again' },
+  'prov.add': { zh: '添加连接', en: 'Add connection' },
+  'prov.editing': { zh: '{host} · 编辑中', en: '{host} · editing' },
+  'prov.collapse': { zh: '收起', en: 'Close' },
+  'prov.name': { zh: '名称', en: 'Name' },
+  'prov.nameHint': { zh: '也是模型前缀，如 bailian/qwen3.8-max', en: 'Also the model prefix, e.g. bailian/qwen3.8-max' },
+  'prov.baseUrlHint': { zh: 'OpenAI 兼容端点，含 /v1', en: 'OpenAI-compatible endpoint, including /v1' },
+  'prov.keyHint': { zh: '只存在本机；本地端点可以留空', en: 'Stored on this device only; can be empty for local endpoints' },
+  'prov.models': { zh: '模型', en: 'Models' },
+  'prov.fetched': { zh: '{count} 个模型', en: '{count} models' },
+  'prov.modelsHint': { zh: '类型按模型名自动识别，可改；选「不使用」的不会保存。', en: 'Types are guessed from model names; change them if needed. Models set to Not used are not saved.' },
+  'prov.noRows': { zh: '还没有模型。点「拉取模型」；不拉也行，这条连接任意模型名都能按前缀调用。', en: 'No models yet. Fetch them, or skip it: any model name works on this connection through its prefix.' },
+  'prov.many': { zh: '模型较多，新的对话模型先没启用，在下面选要用的。', en: 'Lots of models found. New chat models start as Not used; pick the ones you want below.' },
+  'prov.changed': { zh: '已手动改过类型', en: 'Type changed by hand' },
+  'prov.kindFor': { zh: '{id} 的类型', en: 'Type of {id}' },
+  'prov.addModel': { zh: '添加模型', en: 'Add model' },
+  'prov.addModelPlaceholder': { zh: '手动填模型名，如 qwen3-tts-flash', en: 'Model name, e.g. qwen3-tts-flash' },
+  'prov.kind.llm': { zh: '对话', en: 'Chat' },
+  'prov.kind.image': { zh: '图像生成', en: 'Image generation' },
+  'prov.kind.tts': { zh: '朗读', en: 'Read aloud' },
+  'prov.kind.asr': { zh: '语音识别', en: 'Speech recognition' },
+  'prov.kind.off': { zh: '不使用', en: 'Not used' },
+  'prov.textOnly': { zh: '纯文本', en: 'Text only' },
+  'prov.textOnlyHint': { zh: '打开 = 这个模型看不了图，遇到图片交给「图像识别」', en: 'On = this model cannot see images; images go to Image recognition' },
   'modelsettings.apiProviders': { zh: 'API 连接', en: 'API connections' },
   'modelsettings.providerHint': { zh: '添加服务地址和 API Key，拉取并保存该连接可用的模型。', en: 'Add a service URL and API key, then fetch and save the models available through that connection.' },
   'modelsettings.loginHint': { zh: '使用提供方账号登录，完成后自动刷新可用模型。', en: 'Sign in with a provider account. Available models refresh after sign-in.' },
@@ -255,6 +296,8 @@ export type SettingsTarget = Tab | 'wechat' | `${StaticTab}/${string}`
 const DEV_MODE_KEY = 'forsion_tangu_dev_mode'
 /** 「Forsion 云端 → 账号」:Extend 渲染半身自绘的子页(registerSettingsView category 'forsion',id 'account')。 */
 const ACCOUNT_SUB = 'fx:forsion-extend:account'
+/** 引擎插件「电脑操作」的 id:它的设置页是固定的一级页 'computer-use'。 */
+const COMPUTER_USE_PLUGIN = 'computer-use'
 
 
 // 侧栏项图标(固定 tab 全配;外置 agent 插件的动态 plugin:<id> 项刻意无图标)。
@@ -271,6 +314,7 @@ const TAB_ICONS: Partial<Record<Tab, React.ReactNode>> = {
   'amadeus-plugins': <Puzzle size={14} />,
   advanced: <Wrench size={14} />,
   permissions: <MonitorCog size={14} />,
+  units: <Laptop size={14} />,
   'remote-sessions': <MonitorSmartphone size={14} />, // P1-K4
   'computer-history': <History size={14} />,
   developer: <Bug size={14} />,
@@ -282,6 +326,7 @@ const TAB_ICONS: Partial<Record<Tab, React.ReactNode>> = {
   hooks: <Webhook size={14} />,
   channels: <MessageCircle size={14} />,
   browser: <Globe2 size={14} />,
+  'computer-use': <MousePointerClick size={14} />,
   plugins: <Blocks size={14} />,
 }
 
@@ -369,18 +414,21 @@ export const SettingsModal: React.FC<{
   const showWaitDetails = useChatWaitDetailsEnabled()
   // 真机、开发者移动预览、手机浏览器统一走两层设置 IA。不能只靠窄屏 media query:
   // 桌面里的手机框宽 390px,但物理 viewport 仍是宽屏,而真机又不经过 Root 的预览框。
-  const mobileSettings = !!window.tangu?.mobile || UI_MODE === 'mobile' || (() => {
-    try { return window.matchMedia('(pointer: coarse) and (max-width: 820px)').matches } catch { return false }
-  })()
+  const mobileSettings = isPhoneSettings()
   // 深链解析(一级页 + 子页)只在 resolveSettingsTarget 一处:连接/Forsion → 常规(general)的对应子页;
   // Agent CLI → agents/ag-clis;微信 → 通道;`${tab}/${sub}` 直达二级页。旧 normalizeTab 丢 sub = 登录入口全落错页(U-02)。
   const [initialTarget] = useState(() => resolveSettingsTarget(p.initialTab))
-  const [rawTab, setTab] = useState<Tab>(initialTarget.tab as Tab)
+  const [requestedTab, setTab] = useState<Tab>(initialTarget.tab as Tab)
+  // 「电脑操作」引擎插件有固定的一级页(AI 组,挨着浏览器):旧的 plugin:computer-use 深链 / 插件列表里的「打开设置」都落到它。
+  const rawTab: Tab = requestedTab === `plugin:${COMPUTER_USE_PLUGIN}` ? 'computer-use' : requestedTab
   // 中分类(标题下那排横向栏目)。只存 key,**有效值在渲染时推导**(见下方 activeSub):
   // 这样换一级页 / 某个中分类因条件消失时自动落回第一项,不需要 effect 复位,也就没有复位竞态。
   const [sub, setSub] = useState(initialTarget.sub ?? '')
+  /** 模型库当前的类型标签(默认模型页的「在模型库里管理」带着类型跳过来)。 */
+  const [libKind, setLibKind] = useState<ModelKind>('llm')
   // 滑入方向:+1 点了右边的栏目,-1 左边,0 换了一级页(纯淡入)。喂给 .settings-sub[data-dir]。
   const [subDir, setSubDir] = useState(0)
+  const [cloudAdvancedOpen, setCloudAdvancedOpen] = useState(false)
   /** 换一级页统一入口:方向清零(换页无左右语义,纯淡入)。裸 setTab 会让上次点分类的方向漏过来。 */
   const goTab = (x: Tab): void => { setSubDir(0); setTab(x) }
   const [navQuery, setNavQuery] = useState('')
@@ -392,12 +440,21 @@ export const SettingsModal: React.FC<{
   const setBg = useTheme((s) => s.setBg)
   const themeBgSeed = useTheme((s) => s.bgSeed)
   const setBgSeedValue = useTheme((s) => s.setBgSeedValue)
+  const themeSignal = useTheme((s) => s.signal)
+  const setSignal = useTheme((s) => s.setSignal)
   const ambientOn = useTheme((s) => s.ambient)
   // 应用内自动更新状态(经 window.tangu.onUpdaterStatus 广播驱动;mac 仅检测引导手动下载)。
   const [upd, setUpd] = useState<UpdaterStatusInfo>({ phase: 'idle' })
   // 测试版通道(真源在主进程 config.json 的 updater.beta,这里只是它的镜像;开面板时拉一次)。
   const [betaChannel, setBetaChannel] = useState(false)
   useEffect(() => { void window.tangu?.getUpdateBeta?.().then((v) => setBetaChannel(!!v)) }, [])
+  // 下载来源(updater.source 的镜像)+ 这台电脑探出来的地区(只用来在说明里告诉用户「自动」会走哪边)。
+  const [updateSource, setUpdateSource] = useState<'auto' | 'website' | 'github'>('auto')
+  const [updateRegion, setUpdateRegion] = useState<boolean | null>(null)
+  useEffect(() => {
+    void window.tangu?.getUpdateSource?.().then((v) => setUpdateSource(v || 'auto'))
+    void window.tangu?.getUpdateRegion?.().then((v) => setUpdateRegion(v ?? null)).catch(() => {})
+  }, [])
   // 开发者模式:关于页连点版本号 10 次解锁(持久化);解锁后多出「开发者选项」tab。
   const [devMode, setDevMode] = useState<boolean>(() => {
     try { return localStorage.getItem(DEV_MODE_KEY) === '1' } catch { return false }
@@ -409,13 +466,18 @@ export const SettingsModal: React.FC<{
   })
   // 丝滑光标(默认关;localStorage,smoothCaret.ts 全局模块即时生效)。
   const [smoothCaret, setSmoothCaret] = useState<boolean>(isSmoothCaretOn)
+  // 主页壁纸动效:和主页壁纸面板里的开关是同一个值(主页那边听同一份偏好)。
+  const [homeMotion, setHomeMotion] = useState(() => loadHomepageWallpaperPrefs().motion)
+  useEffect(() => onHomepageWallpaperPrefsChange(() => setHomeMotion(loadHomepageWallpaperPrefs().motion)), [])
   // 划线菜单的排法(缺省视图工具在前;localStorage,条每次出现时现读)。
   const [selBarOrder, setSelBarOrder] = useState(selectionBarOrder)
-  // 输入建议(默认关;localStorage,promptSuggest.ts 每次现读)。
-  const [promptSuggest, setPromptSuggest] = useState<boolean>(isPromptSuggestOn)
+  // 聊天头像 / 输入建议是 Tangu 的偏好(核心插件化 2e-2):读写走 Tangu 交出的接缝,没装 Tangu 就不摆这两个开关。
+  const tanguPrefs = readTanguPrefs()
+  // 输入建议(缺省开;localStorage,promptSuggest.ts 每次现读)。
+  const [promptSuggest, setPromptSuggest] = useState<boolean>(() => tanguPrefs?.promptSuggest.get() ?? false)
   // 对话里的可视化卡多少(auto / less / off;localStorage,随下一次 run 的 ui_settings 快照进引擎)。
   const [visualsPref, setVisualsPrefState] = useState<VisualsPref>(getVisualsPref)
-  const [chatAvatars, setChatAvatars] = useState<boolean>(isChatAvatarsOn)
+  const [chatAvatars, setChatAvatars] = useState<boolean>(() => tanguPrefs?.chatAvatars.get() ?? true)
   const [ribbonAutoHome, setRibbonAutoHomeOn] = useState<boolean>(isRibbonAutoHome)
   // 「外围淡出」靠悬停恢复(calm.css 整段关在 hover: hover 里):没有悬停的设备上那一行与它的搜索结果都不出。
   const hoverCapable = !!window.matchMedia?.('(hover: hover)').matches
@@ -474,6 +536,9 @@ export const SettingsModal: React.FC<{
   const pluginCascade = isDesktop && !unitPage
   // 单列壳(真机 / 开发者移动预览):没有键盘快捷键可录,也没有底部状态栏、ribbon。判据与 bootstrapEngine 的 singleColumn 同一条。
   const phoneShell = !!window.tangu?.mobile || UI_MODE === 'mobile'
+  // 引擎插件清单(异步到);「电脑操作」的一级页跟着它在不在。
+  const [plugins, setPlugins] = useState<PluginInfo[] | null>(null)
+  const computerUse = (plugins || []).find((pl) => pl.id === COMPUTER_USE_PLUGIN && pl.enabled && pl.settings)
   const tabItems = [
     // = 连接 + Forsion 合并。⚠️ 云端 Web / 移动端(webShim、mobileShim 都是 cloudWeb:true 且不给
     // backendStatus)下这一页**每个块都是 false**——连接项全是桌面/自建后端专属——列出来点进去是白板,
@@ -485,6 +550,8 @@ export const SettingsModal: React.FC<{
     ...((isDesktop || cloudWeb) ? ([['skills', t('settings.tab.skills')]] as Array<[Tab, string]>) : []),
     // 统一插件页(amadeus-plugins):Forsion 插件(含捆绑包)+ Tangu 引擎插件两区一页;旧 'plugins' 入口已并入(settingsTarget 的别名表)。
     ...(isDesktop ? ([['mcp', t('settingsmodal.tab.mcp')], ['hooks', t('settingsmodal.tab.hooks')], ['channels', t('settings.tab.channels')], ['browser', t('settings.tab.browser')]] as Array<[Tab, string]>) : []),
+    // 电脑操作(引擎插件 computer-use)启用且有设置时才有这一页;原先只排在「扩展」组最末尾、和几十个插件混在一起(反馈 0c0cd24f)。
+    ...(isDesktop && computerUse ? ([['computer-use', t('settings.tab.computerUse')]] as Array<[Tab, string]>) : []),
     // 插件页设备页也给(插件在 B 端真的装载运行,列表/启停是本页 runtime 行为,不碰对方设备)。
     ...(pluginsPage ? ([['amadeus-plugins', t('settings.tab.amadeusPlugins')]] as Array<[Tab, string]>) : []),
     // Forsion 云端(账号 / 云端地址 / 记忆同步 / 笔记在线同步)整页住在 Extend 的桥键后面:停用或没装 Extend 就没有这一页
@@ -498,6 +565,8 @@ export const SettingsModal: React.FC<{
     ...(phoneShell ? [] : ([['statusbar', t('settings.tab.statusbar')]] as Array<[Tab, string]>)),
     ['advanced', t('settings.tab.advanced')],
     ...(hasDesktopPermissions() ? ([['permissions', t('desktopPermissions.title')]] as Array<[Tab, string]>) : []),
+    // 设置 › 设备(原 Ribbon 胶囊菜单,10-17 搬进来):只在有 Unit 主进程桥的真桌面列。
+    ...(window.tangu?.unitHostStatus || window.tangu?.unitsList ? ([['units', t('unit.tab')]] as Array<[Tab, string]>) : []),
     // P1-K4:只在执行设备本机(有主进程 API)列;设备页 / web / 手机没有 —— 开关只能在本机改。
     ...(remoteSessionsApi() ? ([['remote-sessions', t('remoteSessions.tab')]] as Array<[Tab, string]>) : []),
     // 不按 darwin 门控:非 mac 也列出来,页内说明「目前仅支持 macOS」,免得用户找不到入口。
@@ -510,6 +579,7 @@ export const SettingsModal: React.FC<{
   // 落到第一个可用页,免得停在白板上。plugin:<id> 动态页不在 tabItems 里,单独放行。
   const tab: Tab = tabItems.some(([id]) => id === rawTab) || rawTab.startsWith('plugin:')
     || (rawTab.startsWith('fplugin:') && pluginsPage && !!window.amadeus)
+    || (rawTab === 'computer-use' && isDesktop && plugins === null)
     ? rawTab
     : (tabItems[0]?.[0] ?? rawTab)
   const isPluginTab = tab.startsWith('plugin:') || tab.startsWith('fplugin:')
@@ -615,7 +685,13 @@ export const SettingsModal: React.FC<{
   const [providerBusy, setProviderBusy] = useState<string | null>(null)
   // 直连 provider 配置(~/.tangu/providers.json)
   const [customProviders, setCustomProviders] = useState<DirectProviderConfig[]>([])
-  const [editProvider, setEditProvider] = useState<(DirectProviderConfig & { modelsCsv: string; imageModelsCsv: string; ttsModelsCsv: string; asrModelsCsv: string; noVisionCsv: string }) | null>(null)
+  /** 装了 Extend 且登录有效:语音通话的云端模型此时才可选(默认模型页、模型库、语音页三处同一口径)。 */
+  const realtimeSignedIn = cloudAccount && !!authSt?.loggedIn && authSt.tokenValid !== false
+  /** 正在编辑的直连连接:rows = 每个模型一行(类型 + 纯文本),保存时再拆回 modelIds / imageModelIds / ttsModelIds / asrModelIds / noVisionModelIds。
+   *  isNew = 「添加连接」(编辑区画在列表下面);否则画在被编辑的那一行下面。base = 打开时的原配置(保存时留住行表示不了的旧归属);
+   *  editId 区分每次打开:拉取回包时编辑区已经换了一条连接,就不往里并。 */
+  const [editProvider, setEditProvider] = useState<(DirectProviderConfig & { rows: ProviderModelRow[]; isNew?: boolean; original?: string; base: Partial<DirectProviderConfig>; editId: number }) | null>(null)
+  const [manualModel, setManualModel] = useState('')
   // 语速输入的编辑态缓冲(null=未在编辑,显示已存值):清空/打半截时不反弹,blur 时非法则恢复旧值。
   const [ttsSpeedText, setTtsSpeedText] = useState<string | null>(null)
   const [ttsTesting, setTtsTesting] = useState(false)
@@ -626,17 +702,10 @@ export const SettingsModal: React.FC<{
   const [providerSaveMsg, setProviderSaveMsg] = useState('')
   // 本地联网搜索(BYO-key;engine /agent/websearch)。wsRed=null 表示端点不可用(云端/旧后端)→ 整段隐藏。
   const [wsRed, setWsRed] = useState<LocalWebSearchRedacted | null>(null)
-  const [wsProvider, setWsProvider] = useState('auto')
-  const [wsZhipuEngine, setWsZhipuEngine] = useState('search_pro_quark')
-  const [wsKeys, setWsKeys] = useState({ bocha: '', tavily: '', zhipu: '' }) // 输入草稿:'' 且未点清除 = 不变
-  const [wsClear, setWsClear] = useState({ bocha: false, tavily: false, zhipu: false })
-  const [wsMsg, setWsMsg] = useState('')
-  const [wsBusy, setWsBusy] = useState(false)
   // 镜像连通性测试(设置页管理后端)
   const [mirrorTesting, setMirrorTesting] = useState(false)
   const [mirrorTest, setMirrorTest] = useState<MirrorTestResult | null>(null)
-  // 「拉取模型」:后端代拉 baseUrl/models → 可搜索多选 → 勾选写回 modelsCsv。
-  const [fetchedModels, setFetchedModels] = useState<string[] | null>(null)
+  // 「拉取模型」:后端代拉 baseUrl/models → 并进 editProvider.rows(按模型名猜类型)。
   const [modelSearch, setModelSearch] = useState('')
   const [fetchingModels, setFetchingModels] = useState(false)
   const [fetchModelsMsg, setFetchModelsMsg] = useState('')
@@ -691,7 +760,6 @@ export const SettingsModal: React.FC<{
   const [mcpMsg, setMcpMsg] = useState('')
 
   // Obsidian 式插件:清单 + 每插件设置页(已启用且有 settings 的插件在「扩展」组下成一级 nav 项)。
-  const [plugins, setPlugins] = useState<PluginInfo[] | null>(null)
   const [pluginAgents, setPluginAgents] = useState<NormalAgentDef[]>([])
   const reloadPlugins = useCallback(() => {
     if (!isDesktop) return
@@ -705,8 +773,8 @@ export const SettingsModal: React.FC<{
   // `plugin:<id>` 只有「启用且声明了设置项」的引擎插件才有页(与引擎插件列表里那颗「打开设置」同一道闸)。
   // 商店的「打开设置」、agent 的 open-settings 都可能带来别的 id:清单到了再判,落到引擎插件列表(那一行上有它的开关)。
   useEffect(() => {
-    if (!rawTab.startsWith('plugin:') || !plugins) return
-    const pl = plugins.find((x) => x.id === rawTab.slice('plugin:'.length))
+    if (!(rawTab.startsWith('plugin:') || rawTab === 'computer-use') || !plugins) return
+    const pl = plugins.find((x) => x.id === (rawTab === 'computer-use' ? COMPUTER_USE_PLUGIN : rawTab.slice('plugin:'.length)))
     if (!(pl?.enabled && pl.settings)) { goTab('amadeus-plugins'); setSub('pl-engine') }
   }, [rawTab, plugins])
 
@@ -714,19 +782,12 @@ export const SettingsModal: React.FC<{
   useEffect(() => {
     if (!p.open || tab !== 'model' || !isDesktop) return
     void getLocalWebSearch(homeTarget())
-      .then((r) => {
-        setWsRed(r)
-        setWsProvider(r.provider)
-        setWsZhipuEngine(r.zhipuEngine || 'search_pro_quark')
-        setWsKeys({ bocha: '', tavily: '', zhipu: '' })
-        setWsClear({ bocha: false, tavily: false, zhipu: false })
-        setWsMsg('')
-      })
+      .then(setWsRed)
       .catch(() => setWsRed(null))
   }, [p.open, tab, isDesktop, p.cfg])
   const pluginNm = (pl: PluginInfo): string => (locale === 'en' && pl.nameEn ? pl.nameEn : pl.name)
   const pluginNavItems = (plugins || [])
-    .filter((pl) => pl.enabled && pl.settings)
+    .filter((pl) => pl.enabled && pl.settings && pl.id !== COMPUTER_USE_PLUGIN)
     .map((pl) => [`plugin:${pl.id}`, pluginNm(pl)] as [Tab, string])
 
   // Forsion 插件同款待遇:有真设置的各成左栏一级项,免得几十个插件全靠进插件页逐张卡点开找。
@@ -744,7 +805,7 @@ export const SettingsModal: React.FC<{
   const cloudViews = isDesktop && cloudAccount && !unitPage
     ? amxSettingsViews.filter((o) => amxActiveIds.includes(o.pluginId) && isPlacedSettingsView(amxPlugins.find((pl) => pl.id === o.pluginId), o.item))
     : []
-  const cloudViewKey = (o: { pluginId: string; item: { id: string } }): string => `fx:${o.pluginId}:${o.item.id}`
+  const groupedCloud = cloudViews.some((view) => cloudSettingsParent(cloudViews, cloudViewKey(view)) !== cloudViewKey(view))
 
   // 旧「Tangu → 插件」独立入口已并入统一插件页:旧深链/持久化 tab 一律重定向。
 
@@ -1099,7 +1160,7 @@ export const SettingsModal: React.FC<{
 
   const activeTabLabel = isPluginTab
     ? ([...forsionNavItems, ...pluginNavItems].find(([id]) => id === tab)?.[1] || t('settings.tab.plugins'))
-    : (tabItems.find(([id]) => id === tab)?.[1] || t('settings.title'))
+    : (tabItems.find(([id]) => id === tab)?.[1] || (tab === 'computer-use' ? t('settings.tab.computerUse') : t('settings.title')))
   const pageDescriptionKey: Partial<Record<StaticTab, string>> = {
     forsion: 'settings.page.forsionCloudDescription',
     general: 'settings.page.generalDescription',
@@ -1117,9 +1178,11 @@ export const SettingsModal: React.FC<{
     hooks: 'settings.page.hooksDescription',
     channels: 'settings.page.channelsDescription',
     browser: 'settings.page.browserDescription',
+    'computer-use': 'settings.page.computerUseDescription',
     'amadeus-plugins': PRODUCT.nativeFeatures !== undefined ? 'settings.amadeusPlugins.unitIntro' : 'settings.page.pluginsDescription',
     advanced: 'settings.page.advancedDescription',
     permissions: 'desktopPermissions.description',
+    units: 'unit.page',
     'remote-sessions': 'remoteSessions.page', // P1-K4
     'computer-history': 'settingsmodal.page.computerHistory',
     developer: 'settings.page.developerDescription',
@@ -1185,10 +1248,11 @@ export const SettingsModal: React.FC<{
     ],
     forsion: [
       // Extend 渲染半身自绘的子页(账号 / 额度与积分 / 安全 / 用量记录 / 反馈),随 Extend 的 npm 版本更新
-      ...cloudViews.map((o) => [cloudViewKey(o), (typeof o.item.title === 'function' ? o.item.title() : o.item.title) || o.item.id] as [string, string]),
+      ...cloudViews.filter((o) => !groupedCloud || o.item.id !== 'feedback').map((o) => [cloudViewKey(o), cloudViewTitle(o)] as [string, string]),
       // 宿主自己的两页:同步(笔记在线同步 + Brain 记忆同步)、连接(云端地址)。条目条件与正文块一致,免得点进去是白板。
       ...(window.amadeusSync || stored ? [['f-sync', t('settings.forsionCloud.sync')] as [string, string]] : []),
       ...(stored ? [['f-conn', t('settings.forsionCloud.connection')] as [string, string]] : []),
+      ...cloudViews.filter((o) => groupedCloud && o.item.id === 'feedback').map((o) => [cloudViewKey(o), cloudViewTitle(o)] as [string, string]),
     ],
     sync: [
       // RemoteSyncSection 在 window.remoteSync 缺位时直接 return null → 同样是白板,栏目得跟着走(一级页也按它门控)。
@@ -1197,7 +1261,17 @@ export const SettingsModal: React.FC<{
   } as Record<string, Array<[string, string]>>)
   const subItemsForTab = (id: Tab): Array<[string, string]> => subItemsByTab[id] ?? []
   const subItems = subItemsForTab(tab)
-  const activeSub = subItems.some(([k]) => k === sub) ? sub : (subItems[0]?.[0] ?? '')
+  const resolvedSub = tab === 'forsion' ? resolveCloudSettingsKey(cloudViews, sub) : sub
+  const activeSub = subItems.some(([k]) => k === resolvedSub) ? resolvedSub : (subItems[0]?.[0] ?? '')
+  const cloudParentKey = cloudSettingsParent(cloudViews, activeSub)
+  const cloudNavKey = groupedCloud && activeSub === 'f-conn' ? 'f-sync' : cloudParentKey
+  const cloudTabs = tab === 'forsion' ? cloudSettingsTabs(cloudViews, activeSub) : []
+  const cloudPageLabel = subItems.find(([key]) => key === cloudNavKey)?.[1] ?? ''
+  const navSubItemsForTab = (id: Tab): Array<[string, string]> => id !== 'forsion' ? subItemsForTab(id)
+    : subItemsForTab(id).filter(([key]) => cloudSettingsParent(cloudViews, key) === key && (!groupedCloud || key !== 'f-conn'))
+  const cloudDescription = cloudNavKey === ACCOUNT_SUB ? 'settingsmodal.cloudAccountDescription'
+    : cloudNavKey === 'fx:forsion-extend:quota' ? 'settingsmodal.cloudMembershipDescription'
+      : cloudNavKey === 'fx:forsion-extend:feedback' ? 'settingsmodal.cloudHelpDescription' : ''
   const activeSubLabel = subItems.find(([k]) => k === activeSub)?.[1] ?? ''
   const modelSubDescriptions: Record<string, string> = { 'm-models': 'modelsettings.defaultsHint', 'm-display': 'modelsettings.displayHint', 'm-providers': 'modelsettings.providersHint', 'm-websearch': 'modelsettings.searchHint', 'm-voice': 'modelsettings.voiceHint' }
   // 换页/换子页面后:①选中项滚到可见；②正文回到顶部 —— ⚠️ 滚动容器是**外层**
@@ -1216,6 +1290,7 @@ export const SettingsModal: React.FC<{
     setSub(k)
   }
   const openSubPage = (id: Tab, key: string): void => {
+    if (id === 'forsion' && key === 'f-sync') setCloudAdvancedOpen(false)
     if (id === tab) pickSub(key)
     else {
       goTab(id)
@@ -1229,9 +1304,9 @@ export const SettingsModal: React.FC<{
     { key: 'settings', label: '', groups: [
       { key: 'workspace', label: t('settings.group.workspace'), tabs: ['forsion', 'general', 'spaces', 'notes', 'sync'] },
       { key: 'appearance', label: t('settings.group.appearance'), tabs: ['theme', 'shortcuts', 'notifications', 'statusbar'] },
-      { key: 'ai', label: t('settings.group.ai'), tabs: ['model', 'agents', 'skills', 'mcp', 'hooks', 'channels', 'browser'] },
+      { key: 'ai', label: t('settings.group.ai'), tabs: ['model', 'agents', 'skills', 'mcp', 'hooks', 'channels', 'browser', 'computer-use'] },
       { key: 'extensions', label: t('settings.group.extensions'), tabs: ['amadeus-plugins'] },
-      { key: 'system', label: t('settings.group.system'), tabs: ['permissions', 'remote-sessions', 'computer-history', 'advanced', 'developer', 'about'] },
+      { key: 'system', label: t('settings.group.system'), tabs: ['permissions', 'units', 'remote-sessions', 'computer-history', 'advanced', 'developer', 'about'] },
     ] },
   ]
   const navItemsForGroup = (grp: { key: string; tabs: Tab[] }): Array<[Tab, string]> => {
@@ -1289,13 +1364,17 @@ export const SettingsModal: React.FC<{
       : need === 'desktop' ? isDesktop
       : need === 'host' ? isDesktop && !unitPage
       : need === 'hover' ? hoverCapable
+      : need === 'tangu' ? !!tanguPrefs
       : need === 'wide' ? !mobileSettings
       : need === 'cloud' ? isDesktop && cloudAccount // Forsion 账号面随 Extend 出现(forsion 一级页)
       : need === 'managed' ? isDesktop && mode === 'managed' // 托管参数只在已落盘为托管时渲染(g-runtime)
         : (!isDesktop || viewMode === 'external') && !cloudWeb)
   }
   const searchResults = navQl
-    ? SETTINGS_SEARCH_INDEX.filter((e) => searchEntryVisible(e) && matchesSettingsQuery(e, t(e.labelKey), navQl))
+    ? [
+      ...SETTINGS_SEARCH_INDEX.map((e) => ({ ...e, ...(e.id === 'forsion-account' && e.sub ? { sub: cloudAccountSearchKey(cloudViews, e.sub) } : {}), label: t(e.labelKey) })),
+      ...cloudViews.map((view) => ({ id: `cloud-${view.pluginId}-${view.item.id}`, tab: 'forsion', sub: cloudViewKey(view), labelKey: '', label: cloudTabTitle(view), keywords: view.item.keywords || cloudViewTitle(view) })),
+    ].filter((e) => searchEntryVisible(e) && matchesSettingsQuery(e, e.label, navQl))
     : []
   const navFiltered = navSections.map((sec) => {
     // 搜索:命中大类名保留整大类,命中小类名保留整组,否则按项名过滤。
@@ -1315,7 +1394,9 @@ export const SettingsModal: React.FC<{
   const searchPathLabel = (e: SettingsSearchEntry): string => {
     const tabLabel = tabItems.find(([id]) => id === e.tab)?.[1] ?? ''
     const subLabel = e.sub ? subItemsForTab(e.tab as Tab).find(([k]) => k === e.sub)?.[1] : ''
-    return subLabel ? `${tabLabel} › ${subLabel}` : tabLabel
+    const parent = e.tab === 'forsion' && e.sub ? cloudSettingsParent(cloudViews, e.sub) : ''
+    const parentLabel = parent !== e.sub ? subItemsForTab('forsion').find(([key]) => key === parent)?.[1] : ''
+    return subLabel ? `${tabLabel} › ${parentLabel ? `${parentLabel} › ` : ''}${subLabel}` : tabLabel
   }
   const [flashAnchor, setFlashAnchor] = useState<{ id: string; seq: number } | null>(null)
   const jumpToSearchEntry = (e: SettingsSearchEntry): void => {
@@ -1402,7 +1483,7 @@ export const SettingsModal: React.FC<{
                 <h2>{grp.label}</h2>
                 <div className="settings-mobile-group-card">
                   {items.map(([id, label]) => {
-                    const children = subItemsForTab(id)
+                    const children = navSubItemsForTab(id)
                     const expandable = children.length > 0
                     const expanded = expandable && expandedTabs.has(id)
                     const childrenId = `settings-mobile-subitems-${id.replace(':', '-')}`
@@ -1491,7 +1572,7 @@ export const SettingsModal: React.FC<{
                 >
                   <span className="settings-nav-subitem-mark" aria-hidden="true" />
                   <span className="settings-nav-result-copy">
-                    <span>{t(e.labelKey)}</span>
+                    <span>{e.label}</span>
                     <small>{searchPathLabel(e)}</small>
                   </span>
                 </button>
@@ -1511,7 +1592,7 @@ export const SettingsModal: React.FC<{
                   <div key={grp.key} className="settings-nav-group">
                     <div className="settings-nav-grouphead">{grp.label}</div>
                     {grp.items.map(([id, label]) => {
-                      const children = subItemsForTab(id)
+                      const children = navSubItemsForTab(id)
                       const expandable = children.length > 0
                       // 搜索临时展开命中总项，但不篡改用户原本的折叠选择。
                       const expanded = expandable && (!!ql || expandedTabs.has(id))
@@ -1534,8 +1615,8 @@ export const SettingsModal: React.FC<{
                               {children.map(([key, childLabel]) => (
                                 <button
                                   type="button"
-                                  className={`settings-nav-subitem${tab === id && activeSub === key ? ' active' : ''}`}
-                                  aria-current={tab === id && activeSub === key ? 'page' : undefined}
+                                  className={`settings-nav-subitem${tab === id && (id === 'forsion' ? cloudNavKey : activeSub) === key ? ' active' : ''}`}
+                                  aria-current={tab === id && (id === 'forsion' ? cloudNavKey : activeSub) === key ? 'page' : undefined}
                                   key={key}
                                   onClick={() => openSubPage(id, key)}
                                 >
@@ -1567,19 +1648,35 @@ export const SettingsModal: React.FC<{
         </div>
         <div className="settings-main-head">
           <div className="settings-main-copy">
-            <div className="settings-main-title">{tab === 'model' || (tab === 'skills' && activeSub === 'k-library') ? activeSubLabel || activeTabLabel : activeTabLabel}</div>
-            {tab === 'model' ? <p>{t(modelSubDescriptions[activeSub] || 'settings.page.modelDescription')}</p> : activeTabDescription && <p>{activeTabDescription}</p>}
+            <div className="settings-main-title">{tab === 'forsion' ? cloudPageLabel || activeTabLabel : tab === 'model' || (tab === 'skills' && activeSub === 'k-library') ? activeSubLabel || activeTabLabel : activeTabLabel}</div>
+            {tab === 'forsion' ? <p>{cloudDescription ? t(cloudDescription) : t('settings.tab.forsionCloud')}</p> : tab === 'model' ? <p>{t(modelSubDescriptions[activeSub] || 'settings.page.modelDescription')}</p> : activeTabDescription && <p>{activeTabDescription}</p>}
           </div>
         </div>
         {/* 设置住在独立浮窗(桌面)/ 覆盖层(web)里,全局通知两处都看不见 —— 插件装卸、重扫、Space 卸载等结果画在这条上。 */}
         <PanelNotice />
         <div className="settings-body">
+          {cloudTabs.length > 0 && <div className="settings-cloud-tabs" role="tablist" aria-label={cloudPageLabel}>
+            {cloudTabs.map((view, index) => {
+              const key = cloudViewKey(view)
+              return <button type="button" key={key} id={`settings-cloud-tab-${key}`} role="tab" aria-selected={activeSub === key}
+                aria-controls="settings-cloud-panel" tabIndex={activeSub === key ? 0 : -1}
+                onClick={() => pickSub(key)} onKeyDown={(e) => {
+                  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return
+                  e.preventDefault()
+                  const next = e.key === 'Home' ? 0 : e.key === 'End' ? cloudTabs.length - 1 : (index + (e.key === 'ArrowRight' ? 1 : -1) + cloudTabs.length) % cloudTabs.length
+                  const target = cloudViewKey(cloudTabs[next])
+                  pickSub(target)
+                  document.getElementById(`settings-cloud-tab-${target}`)?.focus()
+                }}>{cloudTabTitle(view)}</button>
+            })}
+          </div>}
           {/* key 变 → 重挂 → CSS 入场动画重跑(方向由 data-dir 给);正文块自己按 activeSub 取舍。 */}
           {/* 每个子页一个崩溃兜底:一页渲染抛错只占正文区,左侧导航照常能切走(原先只有整窗那一层,一页崩了整个设置窗就废了)。 */}
           <ErrorBoundary key={`${tab}:${activeSub}`}>
-          <div key={`${tab}:${activeSub}`} className={`settings-sub settings-sub--${tab}`} data-dir={subDir} data-settings-sub={activeSub || undefined}>
+          <div key={`${tab}:${activeSub}`} className={`settings-sub settings-sub--${tab}`} id={cloudTabs.length ? 'settings-cloud-panel' : undefined} role={cloudTabs.length ? 'tabpanel' : undefined} aria-labelledby={cloudTabs.length ? `settings-cloud-tab-${activeSub}` : undefined} data-dir={subDir} data-settings-sub={activeSub || undefined}>
                 {tab === 'permissions' && hasDesktopPermissions() && <DesktopPermissions mode={p.themeMode} />}
                 {tab === 'computer-history' && <ComputerHistorySettings mode={p.themeMode} anchor="computer-history" />}
+                {tab === 'units' && <UnitSettings />}
                 {tab === 'remote-sessions' && <RemoteSessionsSettings />}
                 {/* 小节标题不在正文重复；当前子页面由左侧/移动首页的折叠子项标明。 */}
                 {/* 基本(U-14):用户常改的两项放第一屏;后端技术项挪到「连接」。 */}
@@ -2008,7 +2105,7 @@ export const SettingsModal: React.FC<{
                 )}
 
                 {/* Forsion 云端 → 同步:与 Extend 画的五页同一套卡片(SettingsPanel / SettingsRow),同一分类里别一半新一半旧 */}
-                {tab === 'forsion' && activeSub === 'f-sync' && (
+                {tab === 'forsion' && (activeSub === 'f-sync' || (groupedCloud && activeSub === 'f-conn')) && (
                   <>
                     {window.amadeusSync && noteSync && (
                       <SettingsPanel icon={<NotebookPen size={16} />} title={t('settings.notes.cloudSyncLabel')} description={t('settings.notes.cloudSyncHint')}>
@@ -2095,15 +2192,11 @@ export const SettingsModal: React.FC<{
                       <SettingsPanel anchor="memory-sync" icon={<Brain size={16} />} title={t('settings.forsion.syncLabel')} description={t('settings.forsion.syncHint')}>
                         <div className="settings-control-list">
                           <SettingsRow
-                            label={t('settings.forsion.autoSync')}
-                            description={t('settings.forsion.autoSyncHint')}
-                            control={(
-                              <SettingsSwitch
-                                checked={!!stored.forsionSyncEnabled}
-                                label={t('settings.forsion.autoSync')}
-                                onChange={(on) => void window.tangu!.setConfig({ forsionSyncEnabled: on, forsionSyncAccountId: stored.forsionSyncAccountId }).then(setStored)}
-                              />
-                            )}
+                            label={t('settings.forsion.syncManaged')}
+                            description={t('settings.forsion.syncManagedHint')}
+                            control={penzorSyncReady() ? (
+                              <button className="btn sm" onClick={openPenzorSync}>{t('settings.forsion.openPenzorSync')}</button>
+                            ) : undefined}
                           />
                           <SettingsRow
                             label={t('settings.forsion.lastSynced', {
@@ -2126,8 +2219,13 @@ export const SettingsModal: React.FC<{
                 )}
 
                 {/* Forsion 云端 → 连接:云端地址(自建服务才用;cloudUrl 是 managedKey —— 写 = 重启后端 + 重建 unit host,保留显式保存,不做失焦提交) */}
-                {tab === 'forsion' && activeSub === 'f-conn' && stored && (
-                  <SettingsPanel anchor="cloud-url" icon={<Globe2 size={16} />} title={t('settings.forsion.cloudUrlLabel')} description={t(cloudUrlLocked ? 'settingsmodal.cloudUrl.lockedHint' : 'settings.forsion.cloudUrlHint')}>
+                {tab === 'forsion' && stored && (activeSub === 'f-conn' || (groupedCloud && activeSub === 'f-sync')) && (
+                  <>
+                  {groupedCloud && <button type="button" className="settings-cloud-advanced-toggle" aria-expanded={activeSub === 'f-conn' || cloudAdvancedOpen} aria-controls="settings-cloud-connection"
+                    onClick={() => { setCloudAdvancedOpen(!(activeSub === 'f-conn' || cloudAdvancedOpen)); if (activeSub === 'f-conn') pickSub('f-sync') }}>
+                    <ChevronRight size={14} aria-hidden="true" />{t('settingsmodal.cloudAdvancedConnection')}
+                  </button>}
+                  {(!groupedCloud || activeSub === 'f-conn' || cloudAdvancedOpen) && <div id="settings-cloud-connection"><SettingsPanel anchor="cloud-url" icon={<Globe2 size={16} />} title={t('settings.forsion.cloudUrlLabel')} description={t(cloudUrlLocked ? 'settingsmodal.cloudUrl.lockedHint' : 'settings.forsion.cloudUrlHint')}>
                     <div className="settings-control-list">
                       <SettingsRow label={t('settings.forsionCloud.address')}>
                         <div className="settings-inline-row settings-row-wide-control">
@@ -2151,7 +2249,8 @@ export const SettingsModal: React.FC<{
                         {commitErrorHint('cloudUrl')}
                       </SettingsRow>
                     </div>
-                  </SettingsPanel>
+                  </SettingsPanel></div>}
+                  </>
                 )}
 
                 {tab === 'forsion' && activeSub.startsWith('fx:') && cloudViews.filter((o) => cloudViewKey(o) === activeSub).map((o) => (
@@ -2161,37 +2260,16 @@ export const SettingsModal: React.FC<{
                 {tab === 'sync' && activeSub === 's-remote' && <RemoteSyncSection />}
 
                 {tab === 'model' && activeSub === 'm-models' && (
-                  <>
-                    <SettingsPanel className="model-defaults-panel" title={t('modelsettings.defaultUses')} actions={
-                      <button className="btn ghost sm" disabled={modelsLoading} onClick={() => void loadModels()}>
-                        <RefreshCw size={12} className={modelsLoading ? 'spin' : ''} />{t('modelsettings.refresh')}
-                      </button>
-                    }>
-                      <SettingsRow label={t('modelsettings.chat')} description={t('modelsettings.chatHint')} control={
-                        <ModelSelect
-                          models={(models?.models || []).filter((m) => (m.modelType || 'llm') === 'llm')}
-                          value={draft.modelId || ''}
-                          cloudDefaultId={models?.defaultModelId}
-                          defaultLabel={t('modelsettings.followDefault')}
-                          ariaLabel={t('modelsettings.chat')}
-                          icon={<MessageCircle size={13} />}
-                          disabled={modelsLoading}
-                          onChange={(modelId) => { setDraft({ ...draft, modelId }); p.onConfigChange({ modelId }) }}
-                        />
-                      } />
-                      <SettingsRow label={t('modelsettings.image')} description={t('modelsettings.imageHint')} control={
-                        <ModelSelect
-                          models={(models?.models || []).filter((m) => m.modelType === 'image_gen')}
-                          value={draft.imageModelId || ''}
-                          cloudDefaultId={models?.imageModelId}
-                          ariaLabel={t('modelsettings.image')}
-                          icon={<ImageIcon size={13} />}
-                          disabled={modelsLoading}
-                          onChange={(imageModelId) => { setDraft({ ...draft, imageModelId }); p.onConfigChange({ imageModelId }) }}
-                        />
-                      } />
-                      {isDesktop && <AuxModelChoice models={models} compact />}
-                    </SettingsPanel>
+                  <DefaultModelsPage
+                    models={models} loading={modelsLoading} onRefresh={() => void loadModels()}
+                    chatModelId={draft.modelId || ''} imageModelId={draft.imageModelId || ''}
+                    onChat={(modelId) => { setDraft((d) => ({ ...d, modelId })); p.onConfigChange({ modelId }) }}
+                    onImage={(imageModelId) => { setDraft((d) => ({ ...d, imageModelId })); p.onConfigChange({ imageModelId }) }}
+                    stored={isDesktop ? stored : null} onStored={setStored} providers={customProviders}
+                    subscriptionIds={(providers || []).map((pr) => pr.id)}
+                    realtimeSignedIn={realtimeSignedIn}
+                    onOpen={(target, kind) => { if (kind) setLibKind(kind); setSub(target) }}
+                  >
                     {/* Intelligent UI 的档位是模型怎么作答的事,不是外观:和默认模型放一页(2026-10-14 用户定)。 */}
                     <SettingsPanel icon={<Shapes size={14} />} title={t('modelsettings.answerForm')}>
                       <SettingsRow anchor="visuals" label={t('settings.theme.visuals')} description={t(`settings.theme.visuals.${visualsPref}`)} control={
@@ -2210,16 +2288,16 @@ export const SettingsModal: React.FC<{
                       </div>
                     )}
                     {!modelsLoading && !models?.models.length && <div className="hint">{t('modelsettings.noModels')}</div>}
-                    <div className="model-settings-links">
-                      <button className="btn ghost sm" onClick={() => setSub('m-display')}>{t('modelsettings.manageDisplay')}<ChevronRight size={12} /></button>
-                      {isDesktop && <button className="btn ghost sm" onClick={() => setSub('m-providers')}>{t('modelsettings.manageProviders')}<ChevronRight size={12} /></button>}
-                    </div>
-                  </>
+                  </DefaultModelsPage>
                 )}
 
-                {/* 自动压缩阈值挨着每个模型的窗口输入框(同一套「窗口」心智);写的是本机引擎的 config.json,与 onContextWindow 同门。 */}
-                {tab === 'model' && activeSub === 'm-display' && isDesktop && <AutoCompactSetting cfg={p.cfg} />}
-                {tab === 'model' && activeSub === 'm-display' && <ModelPickerSettings models={models?.models || []} onContextWindow={isDesktop ? async (modelId, tokens) => {
+                {/* 模型库:六类与后台同名同序。自动压缩阈值挨着每个模型的窗口输入框(同一套「窗口」心智),写的是本机引擎的 config.json,与 onContextWindow 同门。 */}
+                {tab === 'model' && activeSub === 'm-display' && <ModelPickerSettings
+                  catalog={catalogByKind(models, isDesktop && stored ? realtimeCandidates(stored, customProviders, models?.realtimeModel, realtimeSignedIn).filter((c) => c.source === 'direct') : [])}
+                  kind={libKind} onKind={setLibKind} subscriptionIds={(providers || []).map((pr) => pr.id)}
+                  onRefresh={() => void loadModels()} loading={modelsLoading}
+                  autoCompact={isDesktop ? <AutoCompactSetting cfg={p.cfg} /> : undefined}
+                  onContextWindow={isDesktop ? async (modelId, tokens) => {
                   // 只在本机引擎下露出(与「提供方」同门):写的是引擎进程的 config.json,云端 worker 是多用户共用的,引擎侧也 404。
                   await setModelContextWindow(homeTarget(), modelId, tokens)
                   const next = await listModels(homeTarget())
@@ -2229,425 +2307,169 @@ export const SettingsModal: React.FC<{
                   useApp.setState((s) => ({ modelsResp: next, ctxInfoBySession: Object.fromEntries(Object.entries(s.ctxInfoBySession).filter(([, v]) => v.modelId !== modelId)) }))
                 } : undefined} />}
 
-                {tab === 'model' && activeSub === 'm-providers' && (
-                  <>
-                    {isDesktop && <>
-                    {providers && providers.length > 0 && (
-                      <div className="field">
-                        <label>{t('settings.provider.loginLabel')}</label>
-                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                          {providers.map((pr) => (
-                            <button
-                              key={pr.id}
-                              className="btn ghost sm"
-                              disabled={providerBusy === pr.id}
-                              onClick={() => void doProviderLogin(pr.id)}
-                            >
-                              {providerBusy === pr.id ? <Loader2 size={12} className="spin" /> : <LogIn size={12} />}
-                              {pr.id}
-                              {pr.loggedIn ? t('settings.provider.loggedInSuffix') : ''}
-                            </button>
+                {tab === 'model' && activeSub === 'm-providers' && isDesktop && (() => {
+                  const hostOf = (url: string) => { try { return new URL(url).host } catch { return url } }
+                  const KINDS: ProviderModelKind[] = ['llm', 'image', 'tts', 'asr', 'off']
+                  const startEdit = (cp: DirectProviderConfig | null) => {
+                    setEditProvider(cp ? { ...cp, rows: rowsFromProvider(cp), original: cp.providerId, base: cp, editId: Date.now() } : { providerId: '', baseUrl: '', apiKey: '', rows: [], isNew: true, base: {}, editId: Date.now() })
+                    setProviderTestMsg(''); setProviderSaveMsg(''); setModelSearch(''); setFetchModelsMsg(''); setManualModel('')
+                  }
+                  const closeEdit = () => { setEditProvider(null); setModelSearch(''); setFetchModelsMsg('') }
+                  const editor = editProvider && (() => {
+                    const ep = editProvider
+                    const mq = modelSearch.trim().toLowerCase()
+                    const rows = mq ? ep.rows.filter((r) => r.id.toLowerCase().includes(mq)) : ep.rows
+                    const setRow = (id: string, patch: Partial<ProviderModelRow>) => setEditProvider({ ...ep, rows: ep.rows.map((r) => (r.id === id ? { ...r, ...patch } : r)) })
+                    // 手填模型名(端点没有 /models、或拉取结果里没有):并成一行,类型照样按名字猜
+                    const addManual = () => {
+                      const id = manualModel.trim()
+                      if (id) setEditProvider({ ...ep, rows: mergeFetched(ep.rows, [id], ep.base.noVisionModelIds) })
+                      setManualModel('')
+                    }
+                    return (
+                      <div className="provider-editor">
+                        <SettingsRow label={t('prov.name')} description={t('prov.nameHint')} control={
+                          <input type="text" value={ep.providerId} placeholder={t('settings.customProvider.idPlaceholder')} onChange={(e) => setEditProvider({ ...ep, providerId: e.target.value.trim() })} />
+                        } />
+                        <SettingsRow label="Base URL" description={t('prov.baseUrlHint')} control={
+                          <input type="text" value={ep.baseUrl} placeholder={t('settings.customProvider.baseUrlPlaceholder')} onChange={(e) => setEditProvider({ ...ep, baseUrl: e.target.value.trim() })} />
+                        } />
+                        <SettingsRow label="API Key" description={t('prov.keyHint')} control={
+                          <input type="password" value={ep.apiKey || ''} placeholder="sk-…" onChange={(e) => setEditProvider({ ...ep, apiKey: e.target.value })} />
+                        } />
+                        <div className="provider-editor-models-head">
+                          <strong>{ep.rows.length ? t('prov.fetched', { count: ep.rows.length }) : t('prov.models')}</strong>
+                          <span className="grow" />
+                          <button className="btn ghost sm" disabled={fetchingModels || !ep.baseUrl} onClick={() => {
+                            setFetchingModels(true); setFetchModelsMsg('')
+                            void fetchProviderModels(homeTarget(), { baseUrl: ep.baseUrl, apiKey: ep.apiKey || undefined })
+                              .then((ms) => {
+                                setEditProvider((cur) => (cur?.editId === ep.editId ? { ...cur, rows: mergeFetched(cur.rows, ms.map((m) => m.id), cur.base.noVisionModelIds) } : cur))
+                                setModelSearch('')
+                                setFetchModelsMsg(!ms.length ? t('settings.customProvider.fetchEmpty') : ms.length > FETCH_ENABLE_LIMIT ? t('prov.many') : '')
+                              })
+                              .catch((e) => setFetchModelsMsg(`✗ ${e?.message || e}`))
+                              .finally(() => setFetchingModels(false))
+                          }}>
+                            {fetchingModels ? <Loader2 size={12} className="spin" /> : <Download size={12} />} {t('settings.customProvider.fetchModels')}
+                          </button>
+                        </div>
+                        <div className="hint provider-editor-hint">{fetchModelsMsg || (ep.rows.length ? t('prov.modelsHint') : t('prov.noRows'))}</div>
+                        <form className="provider-editor-add" onSubmit={(e) => { e.preventDefault(); addManual() }}>
+                          <input value={manualModel} placeholder={t('prov.addModelPlaceholder')} aria-label={t('prov.addModel')} onChange={(e) => setManualModel(e.target.value)} />
+                          <button className="btn ghost sm" disabled={!manualModel.trim()}><Plus size={12} /> {t('prov.addModel')}</button>
+                        </form>
+                        {ep.rows.length > 8 && <span className="model-search provider-editor-search"><Search size={12} /><input value={modelSearch} placeholder={t('model.searchPlaceholder')} onChange={(e) => setModelSearch(e.target.value)} /></span>}
+                        <div className="provider-editor-rows">
+                          {rows.map((r) => (
+                            <SettingsRow key={r.id} className={r.kind === 'off' ? 'model-lib-row is-hidden' : 'model-lib-row'} label={<span title={r.id}>{r.id}</span>}
+                              description={r.kind !== 'off' && r.kind !== guessProviderModelKind(r.id) ? t('prov.changed') : undefined}
+                              control={<div className="model-lib-controls">
+                                {r.kind === 'llm' && <label className="provider-editor-textonly" title={t('prov.textOnlyHint')}>{t('prov.textOnly')}<SettingsSwitch checked={r.textOnly} label={`${t('prov.textOnly')} · ${r.id}`} onChange={(on) => setRow(r.id, { textOnly: on })} /></label>}
+                                <select aria-label={t('prov.kindFor', { id: r.id })} value={r.kind} onChange={(e) => setRow(r.id, { kind: e.target.value as ProviderModelKind })}>
+                                  {KINDS.map((k) => <option key={k} value={k}>{t(`prov.kind.${k}`)}</option>)}
+                                </select>
+                              </div>} />
                           ))}
                         </div>
-                        {providerBusy && <div className="hint" style={{ marginTop: 6 }}>{t('settings.provider.loginBusy')}</div>}
-                        <div className="hint">
-                          {t('modelsettings.loginHint')}
+                        <div className="provider-editor-actions">
+                          <button className="btn primary sm" disabled={!ep.providerId || !ep.baseUrl} onClick={() => {
+                            void window.tangu!.saveProvider!({
+                              providerId: ep.providerId,
+                              baseUrl: ep.baseUrl.replace(/\/+$/, ''),
+                              apiKey: ep.apiKey || undefined,
+                              ...providerFieldsFromRows(ep.rows, ep.base),
+                            }).then((list) => {
+                              // 改了名字 = 另存一条,旧的留着(与旧表单一致):各处存着的「旧名/模型」引用不会一下子全失效
+                              setCustomProviders(list)
+                              closeEdit()
+                              void loadModels() // Provider 保存/后端重启完成后立即刷新显示筛选目录
+                              setProviderSaveMsg(t('settings.customProvider.savedReloading'))
+                            }).catch((e) => setProviderTestMsg(`${t('settings.toast.saveFailed')}${e?.message || e}`))
+                          }}>{t('settings.btn.save')}</button>
+                          <button className="btn ghost sm" disabled={!ep.baseUrl} onClick={() => {
+                            // 已在测试中 → 这个按钮变成「取消」:abort 掉挂起的请求(错误 URL/密钥时不再无限转圈)。
+                            if (providerTesting) { providerTestAbort.current?.abort(); return }
+                            const ac = new AbortController()
+                            providerTestAbort.current = ac
+                            setProviderTesting(true); setProviderTestMsg('')
+                            void testProviderConnection(homeTarget(), { baseUrl: ep.baseUrl, apiKey: ep.apiKey || undefined, modelId: ep.rows.find((r) => r.kind === 'llm')?.id }, ac.signal)
+                              .then((r) => setProviderTestMsg(`${r.success ? '✓' : '✗'} ${r.message}`))
+                              .catch((e) => setProviderTestMsg(
+                                e?.name === 'AbortError' ? t('settings.test.canceled')
+                                  : e?.name === 'TimeoutError' ? t('settings.test.timeout')
+                                  : `✗ ${e?.message || e}`))
+                              .finally(() => { setProviderTesting(false); providerTestAbort.current = null })
+                          }}>
+                            {providerTesting ? <Loader2 size={12} className="spin" /> : <Plug size={12} />} {providerTesting ? t('settings.btn.cancel') : t('settings.btn.testConnection')}
+                          </button>
+                          <button className="btn ghost sm" onClick={closeEdit}>{t('settings.btn.cancel')}</button>
+                          <span className="provider-editor-msg">{providerTestMsg}</span>
                         </div>
                       </div>
-                    )}
-                    <div className="field">
-                      <label>{t('modelsettings.apiProviders')}</label>
-                      <div className="hint" style={{ marginBottom: 8 }}>
-                        {t('modelsettings.providerHint')}
-                      </div>
-                      {customProviders.length > 0 && (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 10 }}>
-                          {customProviders.map((cp) => (
-                            <div key={cp.providerId} className="file-row" style={{ cursor: 'default' }}>
-                              <span className="file-name">
-                                <b>{cp.providerId}</b>
-                                <span style={{ color: 'var(--text-muted)', marginLeft: 8, fontSize: 'var(--ui-font-meta, 12px)' }}>{cp.baseUrl}</span>
-                              </span>
-                              <span className="file-size">
-                                {cp.modelIds?.length ? t('settings.customProvider.modelCount', { count: cp.modelIds.length }) : t('settings.customProvider.anyModel')}
-                                {cp.apiKey ? ' · key✓' : ''}
-                              </span>
-                              <button
-                                className="icon-btn"
-                                title={t('settings.btn.edit')}
-                                onClick={() => {
-                                  setEditProvider({ ...cp, modelsCsv: (cp.modelIds || []).join(', '), imageModelsCsv: (cp.imageModelIds || []).join(', '), ttsModelsCsv: (cp.ttsModelIds || []).join(', '), asrModelsCsv: (cp.asrModelIds || []).join(', '), noVisionCsv: (cp.noVisionModelIds || []).join(', ') })
-                                  setProviderTestMsg('')
-                                  setProviderSaveMsg('')
-                                  setFetchedModels(null); setModelSearch(''); setFetchModelsMsg('')
-                                }}
-                              >
-                                <KeyRound size={13} />
+                    )
+                  })()
+                  const cloudCount = (models?.models || []).filter((m) => m.source === 'forsion').length
+                  return (
+                    <>
+                      {cloudAccount && (
+                        <SettingsPanel icon={<Cloud size={14} />} title={t('prov.cloud')}>
+                          <SettingsRow label={authSt?.loggedIn ? (authSt.nickname || authSt.username || t('prov.cloud')) : t('prov.cloudOut')}
+                            description={authSt?.loggedIn ? t('prov.cloudIn', { count: cloudCount }) : t('prov.cloudOutHint')}
+                            control={<button className="btn ghost sm" onClick={() => goTab('forsion')}>{t('prov.manageAccount')}</button>} />
+                        </SettingsPanel>
+                      )}
+                      {providers && providers.length > 0 && (
+                        <SettingsPanel icon={<KeyRound size={14} />} title={t('prov.subs')} description={t('modelsettings.loginHint')}>
+                          {providers.map((pr) => (
+                            <SettingsRow key={pr.id} label={pr.id} description={pr.loggedIn ? t('prov.subIn') : t('prov.cloudOut')} control={
+                              <button className="btn ghost sm" disabled={providerBusy === pr.id} onClick={() => void doProviderLogin(pr.id)}>
+                                {providerBusy === pr.id ? <Loader2 size={12} className="spin" /> : <LogIn size={12} />}{t(pr.loggedIn ? 'prov.signInAgain' : 'prov.signIn')}
                               </button>
-                              <button
-                                className="icon-btn"
-                                title={t('settings.btn.delete')}
-                                onClick={() => {
+                            } />
+                          ))}
+                          {providerBusy && <div className="hint provider-editor-hint">{t('settings.provider.loginBusy')}</div>}
+                        </SettingsPanel>
+                      )}
+                      <SettingsPanel icon={<Plug size={14} />} title={t('modelsettings.apiProviders')} description={t('modelsettings.providerHint')}>
+                        {customProviders.map((cp) => {
+                          const editing = editProvider && !editProvider.isNew && editProvider.original === cp.providerId
+                          const n = (cp.modelIds?.length || 0) + (cp.imageModelIds?.length || 0) + (cp.ttsModelIds?.length || 0) + (cp.asrModelIds?.length || 0)
+                          return <React.Fragment key={cp.providerId}>
+                            <SettingsRow label={cp.providerId}
+                              description={editing ? t('prov.editing', { host: hostOf(cp.baseUrl) }) : `${hostOf(cp.baseUrl)} · ${n ? t('settings.customProvider.modelCount', { count: n }) : t('settings.customProvider.anyModel')}`}
+                              control={<div className="model-lib-controls">
+                                <button className="btn ghost sm" onClick={() => (editing ? closeEdit() : startEdit(cp))}>{t(editing ? 'prov.collapse' : 'settings.btn.edit')}</button>
+                                <button className="icon-btn" title={t('settings.btn.delete')} aria-label={`${t('settings.btn.delete')} · ${cp.providerId}`} onClick={() => {
                                   if (!window.confirm(t('settings.customProvider.deleteConfirm', { id: cp.providerId }))) return
                                   void window.tangu!.deleteProvider!(cp.providerId).then((list) => {
                                     setCustomProviders(list)
+                                    if (editing) closeEdit()
                                     void loadModels()
                                     setProviderSaveMsg(t('settings.customProvider.deletedReloading'))
                                   })
-                                }}
-                              >
-                                <Trash2 size={13} />
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                      {!editProvider && (
-                        <button
-                          className="btn ghost sm"
-                          onClick={() => {
-                            setEditProvider({ providerId: '', baseUrl: '', apiKey: '', modelIds: [], modelsCsv: '', imageModelsCsv: '', ttsModelsCsv: '', asrModelsCsv: '', noVisionCsv: '' })
-                            setProviderTestMsg('')
-                            setProviderSaveMsg('')
-                            setFetchedModels(null); setModelSearch(''); setFetchModelsMsg('')
-                          }}
-                        >
-                          <Plus size={13} /> {t('settings.customProvider.add')}
-                        </button>
-                      )}
-                      {providerSaveMsg && !editProvider && (
-                        <div className="hint" style={{ marginTop: 6 }}>{providerSaveMsg}</div>
-                      )}
-                    </div>
-
-                    {editProvider && (
-                      <>
-                        <div className="field-row">
-                          <div className="field">
-                            <label>{t('settings.customProvider.idLabel')}</label>
-                            <input
-                              type="text"
-                              value={editProvider.providerId}
-                              onChange={(e) => setEditProvider({ ...editProvider, providerId: e.target.value.trim() })}
-                              placeholder={t('settings.customProvider.idPlaceholder')}
-                            />
-                          </div>
-                        </div>
-                        <div className="field">
-                          <label>{t('settings.customProvider.baseUrlLabel')}</label>
-                          <input
-                            type="text"
-                            value={editProvider.baseUrl}
-                            onChange={(e) => setEditProvider({ ...editProvider, baseUrl: e.target.value.trim() })}
-                            placeholder={t('settings.customProvider.baseUrlPlaceholder')}
-                          />
-                        </div>
-                        <div className="field-row">
-                          <div className="field">
-                            <label>{t('settings.customProvider.apiKeyLabel')}</label>
-                            <input
-                              type="password"
-                              value={editProvider.apiKey || ''}
-                              onChange={(e) => setEditProvider({ ...editProvider, apiKey: e.target.value })}
-                              placeholder="sk-…"
-                            />
-                          </div>
-                          <div className="field">
-                            <label>{t('settings.customProvider.modelsLabel')}</label>
-                            <input
-                              type="text"
-                              value={editProvider.modelsCsv}
-                              onChange={(e) => setEditProvider({ ...editProvider, modelsCsv: e.target.value })}
-                              placeholder={t('settings.customProvider.modelsPlaceholder')}
-                            />
-                          </div>
-                          <div className="field">
-                            <label>{t('settings.customProvider.imageModelsLabel')}</label>
-                            <input
-                              type="text"
-                              value={editProvider.imageModelsCsv}
-                              onChange={(e) => setEditProvider({ ...editProvider, imageModelsCsv: e.target.value })}
-                              placeholder={t('settings.customProvider.imageModelsPlaceholder')}
-                            />
-                          </div>
-                          <div className="field">
-                            <label>{t('settings.customProvider.ttsModelsLabel')}</label>
-                            <input
-                              type="text"
-                              value={editProvider.ttsModelsCsv}
-                              onChange={(e) => setEditProvider({ ...editProvider, ttsModelsCsv: e.target.value })}
-                              placeholder={t('settings.customProvider.ttsModelsPlaceholder')}
-                            />
-                          </div>
-                          <div className="field">
-                            <label>{t('settings.customProvider.asrModelsLabel')}</label>
-                            <input
-                              type="text"
-                              value={editProvider.asrModelsCsv}
-                              onChange={(e) => setEditProvider({ ...editProvider, asrModelsCsv: e.target.value })}
-                              placeholder={t('settings.customProvider.asrModelsPlaceholder')}
-                            />
-                          </div>
-                          {/* 无多模态黑名单:默认认为都能看图,只需登记已知的纯文本模型。 */}
-                          <div className="field">
-                            <label>{t('settings.customProvider.noVisionLabel')}</label>
-                            <input
-                              type="text"
-                              value={editProvider.noVisionCsv}
-                              onChange={(e) => setEditProvider({ ...editProvider, noVisionCsv: e.target.value })}
-                              placeholder="deepseek-chat, qwq-32b"
-                            />
-                            <div className="hint">{t('settings.customProvider.noVisionHint')}</div>
-                          </div>
-                        </div>
-                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                          <button
-                            className="btn ghost sm"
-                            disabled={!editProvider.baseUrl}
-                            onClick={() => {
-                              // 已在测试中 → 这个按钮变成「取消」:abort 掉挂起的请求(错误 URL/密钥时不再无限转圈)。
-                              if (providerTesting) { providerTestAbort.current?.abort(); return }
-                              const ac = new AbortController()
-                              providerTestAbort.current = ac
-                              setProviderTesting(true)
-                              setProviderTestMsg('')
-                              const firstModel = editProvider.modelsCsv.split(',').map((s) => s.trim()).filter(Boolean)[0]
-                              void testProviderConnection(homeTarget(), {
-                                baseUrl: editProvider.baseUrl,
-                                apiKey: editProvider.apiKey || undefined,
-                                modelId: firstModel,
-                              }, ac.signal)
-                                .then((r) => setProviderTestMsg(`${r.success ? '✓' : '✗'} ${r.message}`))
-                                .catch((e) => setProviderTestMsg(
-                                  e?.name === 'AbortError' ? t('settings.test.canceled')
-                                    : e?.name === 'TimeoutError' ? t('settings.test.timeout')
-                                    : `✗ ${e?.message || e}`))
-                                .finally(() => { setProviderTesting(false); providerTestAbort.current = null })
-                            }}
-                          >
-                            {providerTesting ? <Loader2 size={12} className="spin" /> : <Plug size={12} />} {providerTesting ? t('settings.btn.cancel') : t('settings.btn.testConnection')}
-                          </button>
-                          <button
-                            className="btn ghost sm"
-                            disabled={fetchingModels || !editProvider.baseUrl}
-                            onClick={() => {
-                              setFetchingModels(true)
-                              setFetchModelsMsg('')
-                              void fetchProviderModels(homeTarget(), {
-                                baseUrl: editProvider.baseUrl,
-                                apiKey: editProvider.apiKey || undefined,
-                              })
-                                .then((ms) => {
-                                  setFetchedModels(ms.map((m) => m.id))
-                                  setModelSearch('')
-                                  if (!ms.length) setFetchModelsMsg(t('settings.customProvider.fetchEmpty'))
-                                })
-                                .catch((e) => { setFetchedModels([]); setFetchModelsMsg(`✗ ${e?.message || e}`) })
-                                .finally(() => setFetchingModels(false))
-                            }}
-                          >
-                            {fetchingModels ? <Loader2 size={12} className="spin" /> : <Download size={12} />} {t('settings.customProvider.fetchModels')}
-                          </button>
-                          <button
-                            className="btn primary sm"
-                            disabled={!editProvider.providerId || !editProvider.baseUrl}
-                            onClick={() => {
-                              const modelIds = editProvider.modelsCsv.split(',').map((s) => s.trim()).filter(Boolean)
-                              const imageModelIds = editProvider.imageModelsCsv.split(',').map((s) => s.trim()).filter(Boolean)
-                              const ttsModelIds = editProvider.ttsModelsCsv.split(',').map((s) => s.trim()).filter(Boolean)
-                              const asrModelIds = editProvider.asrModelsCsv.split(',').map((s) => s.trim()).filter(Boolean)
-                              const noVisionModelIds = editProvider.noVisionCsv.split(',').map((s) => s.trim()).filter(Boolean)
-                              void window.tangu!.saveProvider!({
-                                providerId: editProvider.providerId,
-                                baseUrl: editProvider.baseUrl.replace(/\/+$/, ''),
-                                apiKey: editProvider.apiKey || undefined,
-                                modelIds: modelIds.length ? modelIds : undefined,
-                                imageModelIds: imageModelIds.length ? imageModelIds : undefined,
-                                ttsModelIds: ttsModelIds.length ? ttsModelIds : undefined,
-                                asrModelIds: asrModelIds.length ? asrModelIds : undefined,
-                                noVisionModelIds: noVisionModelIds.length ? noVisionModelIds : undefined,
-                              }).then((list) => {
-                                setCustomProviders(list)
-                                setEditProvider(null)
-                                void loadModels() // Provider 保存/后端重启完成后立即刷新显示筛选目录
-                                setProviderSaveMsg(t('settings.customProvider.savedReloading'))
-                              }).catch((e) => setProviderTestMsg(`${t('settings.toast.saveFailed')}${e?.message || e}`))
-                            }}
-                          >
-                            {t('settings.btn.save')}
-                          </button>
-                          <button className="btn ghost sm" onClick={() => { setEditProvider(null); setFetchedModels(null); setModelSearch(''); setFetchModelsMsg('') }}>{t('settings.btn.cancel')}</button>
-                          <span style={{ fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-muted)' }}>{providerTestMsg}</span>
-                        </div>
-
-                        {/* 「拉取模型」结果:可搜索多选,勾选写回 modelsCsv(让用户无需手记模型名)。 */}
-                        {fetchedModels && (() => {
-                          const selected = new Set(editProvider.modelsCsv.split(',').map((s) => s.trim()).filter(Boolean))
-                          const mq = modelSearch.trim().toLowerCase()
-                          const shown = mq ? fetchedModels.filter((id) => id.toLowerCase().includes(mq)) : fetchedModels
-                          const toggle = (id: string) => {
-                            const next = new Set(selected)
-                            next.has(id) ? next.delete(id) : next.add(id)
-                            setEditProvider({ ...editProvider, modelsCsv: [...next].join(', ') })
-                          }
-                          return (
-                            <div className="field" style={{ marginTop: 8 }}>
-                              {fetchedModels.length > 0 ? (
-                                <>
-                                  <span className="model-search" style={{ marginBottom: 6 }}>
-                                    <Search size={12} />
-                                    <input value={modelSearch} placeholder={t('model.searchPlaceholder')} onChange={(e) => setModelSearch(e.target.value)} />
-                                  </span>
-                                  <div style={{ maxHeight: 220, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
-                                    {shown.map((id) => (
-                                      <button
-                                        key={id}
-                                        className={`file-row${selected.has(id) ? ' active' : ''}`}
-                                        onClick={() => toggle(id)}
-                                      >
-                                        <span className="file-name" style={{ color: selected.has(id) ? 'var(--accent-ink)' : undefined }}>{id}</span>
-                                        {selected.has(id) && <Check size={12} style={{ color: 'var(--accent-ink)' }} />}
-                                      </button>
-                                    ))}
-                                  </div>
-                                </>
-                              ) : (
-                                <div className="hint">{fetchModelsMsg || t('settings.customProvider.fetchEmpty')}</div>
-                              )}
-                            </div>
-                          )
-                        })()}
-                        {fetchModelsMsg && fetchedModels && fetchedModels.length > 0 && (
-                          <div className="hint" style={{ marginTop: 4 }}>{fetchModelsMsg}</div>
-                        )}
-                      </>
-                    )}
-
+                                }}><Trash2 size={13} /></button>
+                              </div>} />
+                            {editing && editor}
+                          </React.Fragment>
+                        })}
+                        {editProvider?.isNew && editor}
+                        {!editProvider?.isNew && <div className="provider-add"><button className="btn ghost sm" onClick={() => startEdit(null)}><Plus size={13} /> {t('prov.add')}</button></div>}
+                        {providerSaveMsg && !editProvider && <div className="hint provider-editor-hint">{providerSaveMsg}</div>}
+                      </SettingsPanel>
                     {stored?.mode === 'external' && !(stored?.backendUrl || '').includes('localhost') && !(stored?.backendUrl || '').includes('127.0.0.1') && (
                       <div className="hint" style={{ marginTop: 10 }}>
                         {t('settings.customProvider.externalWarning')}
                       </div>
                     )}
 
-                    </>}
-                  </>
-                )}
+                    </>
+                  )
+                })()}
 
                 {/* 本地联网搜索(BYO-key):engine /agent/websearch,写 config.json webSearch 段,搜索时即时生效。 */}
-                {tab === 'model' && isDesktop && activeSub === 'm-websearch' && (
-                  <>
-                    {wsRed && (
-                      <>
-                        <div className="field">
-                          <div className="hint" style={{ marginBottom: 8 }}>{t('settings.websearch.intro')}</div>
-                          <div className="field-row">
-                            <div className="field">
-                              <label>{t('settings.websearch.providerLabel')}</label>
-                              <select value={wsProvider} onChange={(e) => setWsProvider(e.target.value)}>
-                                <option value="auto">{t('settings.websearch.provider.auto')}</option>
-                                <option value="bocha">{t('settings.websearch.provider.bocha')}</option>
-                                <option value="tavily">{t('settings.websearch.provider.tavily')}</option>
-                                <option value="zhipu">{t('settings.websearch.provider.zhipu')}</option>
-                                <option value="duckduckgo">{t('settings.websearch.provider.duckduckgo')}</option>
-                              </select>
-                            </div>
-                            <div className="field">
-                              <label>{t('settings.websearch.zhipuEngineLabel')}</label>
-                              <select value={wsZhipuEngine} onChange={(e) => setWsZhipuEngine(e.target.value)} title={t('settings.websearch.zhipuEngineHint')}>
-                                <option value="search_pro_quark">{t('settings.websearch.zhipuEngine.quark')}</option>
-                                <option value="search_pro_sogou">{t('settings.websearch.zhipuEngine.sogou')}</option>
-                                <option value="search_pro">{t('settings.websearch.zhipuEngine.pro')}</option>
-                                <option value="search_std">{t('settings.websearch.zhipuEngine.std')}</option>
-                              </select>
-                            </div>
-                            <div className="field">
-                              <label>{t('settings.websearch.effectiveLabel')}</label>
-                              <div className="hint" style={{ paddingTop: 8 }}>
-                                {wsRed.configured
-                                  ? t('settings.websearch.effectiveLocal', { provider: wsRed.effectiveProvider })
-                                  : t('settings.websearch.effectiveCloud')}
-                              </div>
-                            </div>
-                          </div>
-                          {([['bocha', 'Bocha API Key', wsRed.bochaHasKey], ['tavily', 'Tavily API Key', wsRed.tavilyHasKey], ['zhipu', 'Zhipu API Key', wsRed.zhipuHasKey]] as const).map(([k, label, hasKey]) => (
-                            <div className="field" key={k} style={{ marginTop: 6 }}>
-                              <label>
-                                {label}
-                                {hasKey && !wsClear[k] && (
-                                  <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}> · {t('settings.websearch.keyStored')}</span>
-                                )}
-                                {wsClear[k] && (
-                                  <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}> · {t('settings.websearch.keyCleared')}</span>
-                                )}
-                              </label>
-                              <div style={{ display: 'flex', gap: 6 }}>
-                                <input
-                                  type="password"
-                                  autoComplete="off"
-                                  style={{ flex: 1 }}
-                                  value={wsKeys[k]}
-                                  placeholder={hasKey && !wsClear[k] ? t('settings.websearch.keyKeepPlaceholder') : t('settings.websearch.keyEmptyPlaceholder')}
-                                  onChange={(e) => {
-                                    setWsKeys({ ...wsKeys, [k]: e.target.value })
-                                    if (e.target.value) setWsClear({ ...wsClear, [k]: false })
-                                  }}
-                                />
-                                {hasKey && !wsClear[k] && (
-                                  <button className="btn ghost sm" onClick={() => { setWsClear({ ...wsClear, [k]: true }); setWsKeys({ ...wsKeys, [k]: '' }) }}>
-                                    {t('settings.websearch.clearKey')}
-                                  </button>
-                                )}
-                              </div>
-                            </div>
-                          ))}
-                          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 10, flexWrap: 'wrap' }}>
-                            <button
-                              className="btn primary sm"
-                              disabled={wsBusy}
-                              onClick={() => {
-                                const keyOut = (k: 'bocha' | 'tavily' | 'zhipu'): string => (wsClear[k] ? '' : (wsKeys[k] || '__keep__'))
-                                setWsBusy(true); setWsMsg('')
-                                void saveLocalWebSearch(homeTarget(), {
-                                  provider: wsProvider,
-                                  bochaApiKey: keyOut('bocha'),
-                                  tavilyApiKey: keyOut('tavily'),
-                                  zhipuApiKey: keyOut('zhipu'),
-                                  zhipuEngine: wsZhipuEngine,
-                                }).then((r) => {
-                                  setWsRed(r.config)
-                                  setWsKeys({ bocha: '', tavily: '', zhipu: '' })
-                                  setWsClear({ bocha: false, tavily: false, zhipu: false })
-                                  setWsMsg(t('settings.websearch.saved'))
-                                }).catch((e) => setWsMsg(`✗ ${e?.message || e}`))
-                                  .finally(() => setWsBusy(false))
-                              }}
-                            >
-                              {t('settings.btn.save')}
-                            </button>
-                            <button
-                              className="btn ghost sm"
-                              disabled={wsBusy}
-                              onClick={() => {
-                                const k = wsProvider as 'bocha' | 'tavily' | 'zhipu'
-                                const draft = (wsProvider === 'bocha' || wsProvider === 'tavily' || wsProvider === 'zhipu') ? wsKeys[k] : ''
-                                setWsBusy(true); setWsMsg(t('settings.websearch.testing'))
-                                void testLocalWebSearch(homeTarget(), { provider: wsProvider, apiKey: draft || '__keep__', zhipuEngine: wsZhipuEngine })
-                                  .then((r) => setWsMsg(r.ok
-                                    ? `✓ ${r.provider} · ${r.latencyMs}ms · ${r.resultCount ?? 0}${r.sampleTitle ? ` · ${String(r.sampleTitle).slice(0, 30)}` : ''}`
-                                    : `✗ ${r.provider}: ${r.error || 'failed'}`))
-                                  .catch((e) => setWsMsg(`✗ ${e?.message || e}`))
-                                  .finally(() => setWsBusy(false))
-                              }}
-                            >
-                              {wsBusy ? <Loader2 size={12} className="spin" /> : null} {t('settings.websearch.test')}
-                            </button>
-                            {wsMsg && <span style={{ fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-muted)' }}>{wsMsg}</span>}
-                          </div>
-                        </div>
-                      </>
-                    )}
-
-                  </>
+                {tab === 'model' && isDesktop && activeSub === 'm-websearch' && wsRed && (
+                  <WebSearchSettings target={homeTarget()} cfg={wsRed} setCfg={setWsRed} />
                 )}
 
                 {/* 语音页分三节,各管输入框上的一个键(10-02 用户报「通话音色和朗读混在一起、很误导」):
@@ -2658,31 +2480,15 @@ export const SettingsModal: React.FC<{
                       <>
                         <div className="settings-sec">{t('settings.voice.secCall')}</div>
                         <RealtimeVoiceSettings stored={stored} providers={customProviders} onSaved={setStored}
-                          cloudModel={models?.realtimeModel} cloudAccount={cloudAccount} signedIn={cloudAccount && !!authSt?.loggedIn && authSt.tokenValid !== false} />
+                          cloudModel={models?.realtimeModel} cloudAccount={cloudAccount} signedIn={realtimeSignedIn} />
                       </>
                     )}
                     <div className={`settings-sec${stored ? ' settings-sec--gap' : ''}`}>{t('settings.voice.secInput')}</div>
-                    <AsrModelChoice models={models} />
+                    <AsrModelChoice onSaved={setStored} />
                     {stored && (
                       <>
                         <div className="settings-sec settings-sec--gap">{t('settings.voice.secRead')}</div>
-                        <div className="field">
-                          <label>{t('settings.tts.model')}</label>
-                          <div className="hint" style={{ marginBottom: 8 }}>{t('settings.tts.intro')}</div>
-                          <input
-                            type="text"
-                            list="tts-model-options"
-                            value={stored.ttsModelId ?? ''}
-                            onChange={(e) => edit({ ttsModelId: e.target.value })}
-                            onBlur={() => void commitEdits(['ttsModelId'], (v) => ({ ttsModelId: (v.ttsModelId || '').trim() }))}
-                            placeholder={t('settings.tts.modelPlaceholder')}
-                          />
-                          {commitErrorHint('ttsModelId')}
-                          {/* Forsion 云端的朗读模型(可输可选;直连提供方的照旧手填 <providerId>/<模型>) */}
-                          <datalist id="tts-model-options">
-                            {(models?.ttsModels || []).map((m) => <option key={m.id} value={m.id} label={m.name} />)}
-                          </datalist>
-                        </div>
+                        {!(stored.ttsModelId || '').trim() && <div className="hint">{t('settings.tts.off')}</div>}
                         <div className="field">
                           <label>{t('settings.tts.voice')}</label>
                           <input
@@ -2828,6 +2634,28 @@ export const SettingsModal: React.FC<{
                           })}
                         </div>
                       )}
+                      {(() => {
+                        // 插件自带的 server:不在 mcp.json 里(编辑 / 删除会改写用户文件),只读列出,开关在插件设置里
+                        const fromPlugins = (mcpStatus || []).filter((s) => s.origin && !(s.server in mcpServers))
+                        if (!fromPlugins.length) return null
+                        return (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 10 }}>
+                            {fromPlugins.map((st) => (
+                              <div key={`${st.origin!.pluginId}:${st.server}`} className="file-row" style={{ cursor: 'default' }} title={t('settingsmodal.mcp.fromPluginHint')}>
+                                <span className="file-name">
+                                  <b>{st.server}</b>
+                                  <span style={{ color: 'var(--text-muted)', marginLeft: 8, fontSize: 'var(--ui-font-meta, 12px)' }}>
+                                    {t('settingsmodal.mcp.fromPlugin', { name: st.origin!.pluginName })}
+                                  </span>
+                                </span>
+                                <span className="file-size" title={st.error || undefined}>
+                                  {st.status === 'connected' ? t('settings.mcp.statusConnected', { count: st.tools.length }) : st.status === 'error' ? t('settings.mcp.statusError') : st.status}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        )
+                      })()}
                       {!editMcp && (
                         <button
                           className="btn ghost sm"
@@ -2973,6 +2801,13 @@ export const SettingsModal: React.FC<{
                     {...(pluginCascade ? { cfg: p.cfg, onEngineReload: reloadPlugins, enginePlugins: plugins } : {})}
                     controlledDetail={{ id: tab.slice('fplugin:'.length), onBack: () => goTab('amadeus-plugins') }}
                   />
+                )}
+                {tab === 'computer-use' && (
+                  <div data-setting-anchor="computer-use">
+                    {computerUse
+                      ? <PluginSettingsPage cfg={p.cfg} plugin={computerUse} agents={pluginAgents} />
+                      : <div className="hint">{t('common.loading')}</div>}
+                  </div>
                 )}
                 {tab.startsWith('plugin:') && (() => {
                   const pid = tab.slice('plugin:'.length)
@@ -3167,6 +3002,54 @@ export const SettingsModal: React.FC<{
                           </>
                         )}
                       </div>
+                      {/* 强调色(--signal):指示类元素(落点线 / 开关 / 勾选 / 选中框 / 双链…)的那支色。'' = 跟随主题色,
+                          内置 id 取 SIGNALS,'#hex' 自定义(loader 按明暗收敛可读性)。全局一份,不进 Space 外观。 */}
+                      {(() => {
+                        const dark = p.themeMode === 'dark'
+                        const custom = /^#/.test(themeSignal)
+                        const pair = (id: string) => SIGNALS.find((x) => x.id === id)
+                        const tone = (id: string) => { const x = pair(id); return x ? (dark ? x.dark : x.light) : '' }
+                        const skinInfo = listSkins().find((sk) => sk.id === p.themeSkin)
+                        const accent = p.themeSkin === 'custom' || !skinInfo ? p.themeSeed : skinSwatch(skinInfo, dark, 'accent')
+                        // 「跟随」圆点:左上主题色、右下它带的强调色(单色配色带柔蓝;自定义取 loader 同一个 --signal-skin,近灰也是柔蓝)
+                        const follows = p.themeSkin === 'custom' ? customAccentVars(p.themeSeed, dark)['--signal-skin']
+                          : tone(p.themeSkin === 'cream' || p.themeSkin === 'ink' ? 'blue' : p.themeSkin) || accent
+                        const chips = [
+                          { id: '', label: t('settings.theme.signalFollow'), dot: `linear-gradient(135deg, ${accent} 0 50%, ${follows} 50% 100%)` },
+                          ...SIGNALS.map((x) => ({ id: x.id, label: x.id === 'blue' ? t('settings.theme.signalBlue') : t(`settings.theme.skin.${x.id}`), dot: dark ? x.dark : x.light })),
+                        ]
+                        return (
+                          <div className="settings-palette-axis">
+                            <strong>{t('settings.theme.signalLabel')}</strong>
+                            <div className="skin-row">
+                              {chips.map((c) => (
+                                <button key={c.id || 'follow'} type="button" className={`skin-chip${c.id === themeSignal ? ' active' : ''}`} title={c.label} onClick={() => setSignal(c.id)}>
+                                  <i className="skin-dot" style={{ background: c.dot }} />
+                                  <span>{c.label}</span>
+                                </button>
+                              ))}
+                              <button type="button" className={`skin-chip${custom ? ' active' : ''}`} title={t('settings.theme.skin.custom')} onClick={() => { if (!custom) setSignal('#b4532a') }}>
+                                <i className="skin-dot" style={{ background: custom ? themeSignal : 'conic-gradient(#d9774a, #c9b04a, #5f9a6a, #4f7fb0, #8a6fb0, #d9774a)' }} />
+                                <span>{t('settings.theme.skin.custom')}</span>
+                              </button>
+                            </div>
+                            {custom && (
+                              <div className="field-row" style={{ alignItems: 'center', gap: 10, marginTop: 11 }}>
+                                <input
+                                  type="color"
+                                  value={themeSignal}
+                                  onChange={(e) => setSignal(e.target.value)}
+                                  aria-label={t('settings.theme.customSignalLabel')}
+                                  style={{ width: 48, height: 32, padding: 0, border: 'none', background: 'none', cursor: 'pointer' }}
+                                />
+                                <span className="hint" style={{ fontFamily: 'var(--font-mono)' }}>{themeSignal}</span>
+                                <button className="btn ghost sm" onClick={() => setSignal('')}>{t('settings.theme.customBgClear')}</button>
+                              </div>
+                            )}
+                            <div className="hint" style={{ marginTop: 9 }}>{t('settings.theme.signalHint')}</div>
+                          </div>
+                        )
+                      })()}
                     </section>
                     <section className="settings-panel settings-theme-behavior">
                       <div className="settings-panel-head">
@@ -3239,6 +3122,17 @@ export const SettingsModal: React.FC<{
                             <button type="button" aria-pressed={!p.glassOn} className={!p.glassOn ? 'active' : ''} onClick={() => p.onGlassChange(false)}>{t('settings.theme.glassOff')}</button>
                           </div>
                         </div>
+                        <div className="settings-control-row" data-setting-anchor="home-motion">
+                          <div className="settings-control-copy"><ImageIcon size={14} /><span><strong>{t('settings.theme.homeMotion')}</strong><small>{t('settings.theme.homeMotionHint')}</small></span></div>
+                          <button
+                            type="button"
+                            role="switch"
+                            aria-checked={homeMotion}
+                            aria-label={t('settings.theme.homeMotion')}
+                            className={`switch${homeMotion ? ' on' : ''}`}
+                            onClick={() => { setHomeMotion(!homeMotion); setHomepageWallpaperMotion(!homeMotion) }}
+                          />
+                        </div>
                         {/* 直接读写 themeStore(同背景轴,不走 props 链 → 三端自动到位)。毛玻璃关着时这行照样在:
                             设置搜索的落点不能时有时无,开关本身只是记下偏好。 */}
                         <div className="settings-control-row" data-setting-anchor="ambient">
@@ -3278,7 +3172,7 @@ export const SettingsModal: React.FC<{
                             <option value="actions">{t('settingsmodal.selectionBar.actions')}</option>
                           </select>
                         </div>
-                        <div className="settings-control-row" data-setting-anchor="chat-avatars">
+                        {tanguPrefs && <div className="settings-control-row" data-setting-anchor="chat-avatars">
                           <div className="settings-control-copy"><CircleUserRound size={14} /><span><strong>{t('settings.theme.chatAvatars')}</strong><small>{t('settings.theme.chatAvatarsHint')}</small></span></div>
                           <button
                             type="button"
@@ -3289,10 +3183,10 @@ export const SettingsModal: React.FC<{
                             onClick={() => {
                               const on = !chatAvatars
                               setChatAvatars(on)
-                              setChatAvatarsOn(on)
+                              tanguPrefs.chatAvatars.set(on)
                             }}
                           />
-                        </div>
+                        </div>}
                         {/* 「呼吸感」三项(theme/calm.ts)。「外围淡出」靠悬停恢复:没有悬停的设备上样式本来就不生效,开关也不摆出来。 */}
                         {hoverCapable && (
                           <CalmRow k="dim" anchor="calm-dim" icon={<SunDim size={14} />} label={t('settings.theme.calmDim')} hint={t('settings.theme.calmDimHint')} />
@@ -3600,7 +3494,7 @@ export const SettingsModal: React.FC<{
 
                     {/* 输入建议(缺省开):要 Tab 键采用,也要本机引擎(云端执行节点没有这条路由)→ 只在桌面宿主(不含设备页)、
                         有悬停的设备上摆出来;与 promptSuggest.ts 的 supported() 同一道闸。 */}
-                    {isDesktop && !unitPage && hoverCapable && !mobileSettings && (
+                    {tanguPrefs && isDesktop && !unitPage && hoverCapable && !mobileSettings && (
                       <div className="field" style={{ marginTop: 14 }} data-setting-anchor="prompt-suggest">
                         <label>{t('settings.promptSuggest')}</label>
                         <div className="hint" style={{ marginBottom: 8 }}>{t('settings.promptSuggestHint')}</div>
@@ -3608,7 +3502,7 @@ export const SettingsModal: React.FC<{
                           <input
                             type="checkbox"
                             checked={promptSuggest}
-                            onChange={(e) => { setPromptSuggest(e.target.checked); persistPromptSuggest(e.target.checked) }}
+                            onChange={(e) => { setPromptSuggest(e.target.checked); tanguPrefs.promptSuggest.set(e.target.checked) }}
                           />
                           {t('settings.promptSuggestEnable')}
                         </label>
@@ -3768,7 +3662,7 @@ export const SettingsModal: React.FC<{
                     <div className="field">
                       <label>{t('settings.developer.testUpdateLabel')}</label>
                       <div>
-                        <button className="btn ghost sm" onClick={() => { openChangelogTab(); p.onClose() }}>
+                        <button className="btn ghost sm" onClick={() => { openWhatsNew(); p.onClose() }}>
                           <RefreshCw size={12} /> {t('settings.developer.testUpdate')}
                         </button>
                       </div>
@@ -3910,6 +3804,10 @@ export const SettingsModal: React.FC<{
                         ) : null}
                       </div>
                       <span className="grow" />
+                      <button className="btn ghost sm" data-testid="about-whats-new" onClick={() => openWhatsNew()}>
+                        <Sparkles size={12} /> {t('whatsNew.open')}
+                      </button>
+                      <UpdateSourceNote upd={upd} />
                       <UpdateActions upd={upd} />
                     </div>
                     <CorePluginUpdates />
@@ -3926,7 +3824,7 @@ export const SettingsModal: React.FC<{
                       </div>
                     )}
                     {upd.phase === 'error' && upd.error ? (
-                      <div className="field"><div className="hint" style={{ color: 'var(--danger)' }}>{t('about.update.error', { error: upd.error })}</div></div>
+                      <div className="field"><div className="hint" style={{ color: 'var(--danger)' }}>{t('about.update.error', { error: upd.error === 'unreachable' ? t('about.update.unreachable') : upd.error })}</div></div>
                     ) : null}
                     {window.tangu?.setUpdateBeta ? (
                       <div className="field">
@@ -3943,6 +3841,32 @@ export const SettingsModal: React.FC<{
                           {t('about.update.beta')}
                         </label>
                         <div className="hint" style={{ marginTop: 4 }}>{t('about.update.betaHint')}</div>
+                      </div>
+                    ) : null}
+                    {window.tangu?.setUpdateSource ? (
+                      <div className="field" data-testid="about-update-source">
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                          <div style={{ fontWeight: 600 }}>{t('about.update.source')}</div>
+                          <span style={{ flex: 1 }} />
+                          <div className="seg" role="group" aria-label={t('about.update.source')}>
+                            {(['auto', 'website', 'github'] as const).map((v) => (
+                              <button
+                                key={v}
+                                type="button"
+                                aria-pressed={updateSource === v}
+                                className={updateSource === v ? 'active' : ''}
+                                onClick={() => {
+                                  setUpdateSource(v) // 先动 UI:落盘是异步的
+                                  void window.tangu?.setUpdateSource?.(v)
+                                }}
+                              >
+                                {t(v === 'auto' ? 'about.update.sourceAuto' : v === 'website' ? 'about.update.sourceWebsite' : 'about.update.sourceGithub')}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="hint" style={{ marginTop: 4 }}>{t('about.update.sourceHint')}</div>
+                        {updateRegion !== null && <div className="hint" style={{ marginTop: 2 }}>{t(updateRegion ? 'about.update.regionMainland' : 'about.update.regionAbroad')}</div>}
                       </div>
                     ) : null}
                     {window.tangu?.mobile ? (

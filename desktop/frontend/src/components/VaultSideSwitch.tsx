@@ -3,7 +3,7 @@
  * 2026-08-23:桌面端胶囊本体迁入 Ribbon 的 Unit 切换器(components/UnitSwitcher.tsx 的
  * 本地/云端两行,同一 switchVaultSide 语义)——本组件在桌面只剩「云端侧未登录」的登录引导条。
  * 2026-10-05:手机(amadeusVaultMode 桥)同样让位 —— 两行住进「Forsion Unit 切换」弹层的「智库」一段
- * (mobile/src/UnitsSheet.tsx);那张弹层没上架(无 unitsList 桥)时才留原胶囊。样式在 views/chat2/sidebar2.css。
+ * (mobile/src/UnitsSheet.tsx);那张弹层没上架(无 unitsList 桥)时才留原胶囊。样式在 styles/sidebar2.css。
  */
 import React, { useEffect, useState } from 'react'
 import { usePageStore } from '../amadeus/store/pageStore'

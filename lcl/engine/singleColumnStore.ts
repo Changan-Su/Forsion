@@ -21,6 +21,7 @@ import { useNav } from './navStore'
 import type { PersistedPanel } from './layoutPersist'
 import { contentStorageKey } from './contentStorageScope'
 import { isLastPinned, isPinned, missingPinned, type PinnedViews } from './pinnedViews'
+import { arrangeRight, planRight, rightGroupFor, type RightRef } from './rightRules'
 
 /** 主区 leaf 快照(供顶栏/读者)。字段与桌面同名以兼容读者 —— ⚠️ 桌面 dockviewStore 那份加字段时
  *  这里必须同步:移动构建把整个 workspaceStore 换成本文件,漏一个字段就是静默少功能(typecheck 也不红,
@@ -29,7 +30,8 @@ export interface MainTab { id: string; type: string; title: string; active: bool
 /** 侧栏视图快照。 */
 export interface SideTab { type: string; title: string; active: boolean; closable: boolean }
 
-interface LeafRec { id: string; type: string; loc: ViewLocation; params: Record<string, unknown>; title: string }
+/** `by: 'rule'` = 右栏主视图规则开出来的(rightRules.ts;桌面那边记在面板参数 __by 里,这里单列一个字段,不混进视图的 params)。 */
+interface LeafRec { id: string; type: string; loc: ViewLocation; params: Record<string, unknown>; title: string; by?: 'rule' }
 
 function bucketOf(loc: ViewLocation): 'mainLeaves' | 'leftLeaves' | 'rightLeaves' {
   return loc === 'left' ? 'leftLeaves' : loc === 'right' ? 'rightLeaves' : 'mainLeaves'
@@ -65,21 +67,29 @@ const SC_NAMED_KEY = contentStorageKey(scKey('lcl_sc_named_layouts_v1'))
 
 interface SCBlob {
   v: 1
+  /** 这份布局是给哪个 Space 摆的(与布局同一次写盘;同桌面信封的 space,可选、不升版本)。冷启动交接按它认主
+   *  (adoptSingleColumnLayoutCold)。老存档没有 = 不知道,照旧信「上次退出在哪」。 */
+  space?: string
   main: LeafRec[]
   left: LeafRec[]
   right: LeafRec[]
   activeMainId: string | null
   leftActiveId: string | null
   rightActiveId: string | null
+  /** 存它时右栏对到的组(同桌面信封的 sidebars.right.rule,可选、不升版本)。 */
+  rightRule?: string
 }
 
 /** 丢掉本窗的单列布局存档(当前布局 + 各 Space 的命名槽)。spaceRegistry.resetSpaceLayouts 的单列半身。
- *  给了 `only` 就只丢那一个 Space 的:命名槽按名字丢;当前布局不记归属,只有主区里摆着 `mainTypes`(那个 Space 的
- *  固定主视图)之一才认作它的现场,认不出就留着。 */
+ *  给了 `only` 就只丢那一个 Space 的:命名槽按名字丢;当前布局认它自己记的归属,老存档没记才看主区里摆没摆着
+ *  `mainTypes`(那个 Space 的固定主视图)之一,认不出就留着。 */
 export function clearSingleColumnLayouts(only?: { space: string; mainTypes: readonly string[] }): void {
   try {
-    const main = only ? readJSON<{ main?: unknown }>(SC_LAYOUT_KEY)?.main : null
-    const mine = !only || (Array.isArray(main) && main.some((leaf) => only.mainTypes.includes((leaf as { type?: string } | null)?.type ?? '')))
+    const cur = only ? readJSON<SCBlob>(SC_LAYOUT_KEY) : null
+    const main = cur?.main
+    const stamp = stampOf(cur)
+    const mine = !only || (stamp ? stamp === only.space
+      : Array.isArray(main) && main.some((leaf) => only.mainTypes.includes((leaf as { type?: string } | null)?.type ?? '')))
     if (mine) localStorage.removeItem(SC_LAYOUT_KEY)
     const all = readJSON<Record<string, unknown>>(SC_NAMED_KEY)
     if (!all) return
@@ -105,6 +115,8 @@ function isBlob(v: unknown): v is SCBlob {
   const b = v as Partial<SCBlob> | null
   return !!b && b.v === 1 && Array.isArray(b.main) && Array.isArray(b.left) && Array.isArray(b.right)
 }
+/** blob 自己记的归属(没记 / 手改坏了 = null)。 */
+const stampOf = (b: SCBlob | null): string | null => (typeof b?.space === 'string' && b.space ? b.space : null)
 
 /** 逐个剔除不能用的 leaf:①结构坏的(手改 localStorage、旧版本残留 —— `isBlob` 只查三个桶是不是
  *  数组,桶里塞了 `null` 就会在这炸,而这里没有 catch,壳会进错误边界而不是回落默认布局);
@@ -133,11 +145,68 @@ export function setBeforeMainOpenHook(fn: ((type: string) => boolean) | null): v
 
 /** 冷启动还原上次的三桶 leaf + 各自激活项。成功 true;首启/整份不可用返回 false,调用方 build 默认布局。
  *  同时是自动存盘的**发令枪** —— 还原之前 bootstrap 的那些 setSidebarDefaults 之类的 set() 不该
- *  把一份空布局先写回去,把真正要还原的东西冲掉。 */
+ *  把一份空布局先写回去,把真正要还原的东西冲掉。
+ *  壳挂上之前已经摆上了布局(异步 Space 的补定位 / 桌面快捷方式抢先换了 Space):照用、返回 true,不拿在用的那份盖它;
+ *  发令枪照样要响 —— 以前是壳自己跳过这一步,那一程的改动一个都不落盘(Codex 评审抓的 High)。 */
 export function restoreSingleColumnLayout(): boolean {
-  const ok = applySCBlob(readJSON<unknown>(SC_LAYOUT_KEY))
+  if (useWorkspace.getState().mainLeaves.length) { autoSaveArmed = true; saveSoon(); return true }
+  restoredOwner = undefined
+  const raw = readJSON<unknown>(SC_LAYOUT_KEY)
+  const ok = applySCBlob(raw)
+  if (ok) restoredOwner = stampOf(raw as SCBlob)
   autoSaveArmed = true
   return ok
+}
+
+/* ── 归属(同桌面 dockviewStore 的 restoredOwner / sideProfileKey,语义逐条照它)────────────────────────
+ * 屏上这份布局是给哪个 Space 摆的:平时 = 最近一次 setSideProfile 的 Space(切 Space / 启动 / 补定位都先设它,再还原或重建);
+ * 启动还原出来的那份自带归属时以它为准 —— 唯一不同的情形:点名的 Space 是异步就位的插件 / 用户 Space,还原时活动 id 还是回落值,
+ * 屏上却是它的现场。三态:undefined = 不是启动还原的那份 → 归画像;string = 那份自带的;null = 老存档没记 → 不知道,存盘也不写。 */
+let profileKey: string | null = null
+/** 右栏主视图规则最近一次对账到的组(同桌面 dockviewStore 的 rightKey):null = 换了整份布局、还没对过。 */
+let rightKey: string | null = null
+let rightQueued = false
+const usableRight = (type: string): boolean => { const def = getView(type); return !!def && def.kind !== 'entity' }
+function rightGroupNow(s: { mainLeaves: LeafRec[]; activeMainId: string | null; sidebarDefaults: Record<'left' | 'right', PersistedPanel[]> }): ReturnType<typeof rightGroupFor> {
+  const main = s.mainLeaves.find((r) => r.id === s.activeMainId)
+  return rightGroupFor(main?.type, main ? getView(main.type)?.rightCompanions : undefined, s.sidebarDefaults.right, usableRight)
+}
+let restoredOwner: string | null | undefined
+/** 壳还没还原(发令枪没响)、店里也还是空的:这一程的现场只在在用的键里。挂载之前有人切 Space / 补定位时据此
+ *  认归属、存槽,而不是拿一家空店说事(同桌面:Dockview 就绪之前 saveNamed / saveCurrent 不写空布局)。 */
+const notLaidOut = (): boolean => !autoSaveArmed && !useWorkspace.getState().mainLeaves.length
+/** 屏上这份布局是给哪个 Space 摆的(= 存盘时写进 blob 的 space)。null = 不知道。
+ *  还没摆(notLaidOut)时认在用那份自己记的归属:拿画像键去比,补定位抢在挂载之前跑时会把「在用的正是它的现场」
+ *  误判成对不上(Codex 评审)。 */
+export const liveLayoutOwner = (): string | null => {
+  if (notLaidOut()) { const b = readJSON<unknown>(SC_LAYOUT_KEY); return isBlob(b) ? stampOf(b) : null }
+  return restoredOwner === undefined ? profileKey : restoredOwner
+}
+
+/** spaceRegistry.adoptSpaceLayoutCold 的单列半身:手机 App 的冷启动交接,纯 Storage 搬运(须在 SingleColumnHost 还原之前)。
+ *  口径逐条照桌面那份(那边的注释讲了每条的来历):
+ *  ① 在用的布局先归档进它主人的槽(主人 = blob 自己记的,老存档没记才信 fromId)—— 会话中只有切走才写槽,
+ *     不补这一手,上次退出的那个 Space(比如 Tangu)每次启动都丢一次现场;
+ *  ② 再把目标 Space 的槽搬进在用的键,没有就清掉 → SingleColumnHost 还原落空,按它的默认建。不搬的话启动 Space 穿着
+ *     上次退出那个 Space 的布局(主区标签 + 两侧面板)。
+ *  from === to 只归档。归属对不上(上一程点名的 Space 没就位,屏上一直是回落 Space)只在主人的槽空着时归档,且布局正是
+ *  此刻活动 Space(activeId)自己的就原样留着。归档读回来**逐字**对上之前不动在用的键:那是仅存的一份。
+ *  只查形状、不滤视图:插件在这之后才装,滤了就把插件视图丢了。 */
+export function adoptSingleColumnLayoutCold(fromId: string, toId: string, activeId: string): void {
+  const raw = readJSON<unknown>(SC_LAYOUT_KEY)
+  const cur = isBlob(raw) ? raw : null
+  const owner = stampOf(cur) ?? fromId
+  const slot = `space:${owner}`
+  const named = (): Record<string, unknown> => readJSON<Record<string, unknown>>(SC_NAMED_KEY) ?? {}
+  const mismatch = owner !== fromId
+  const archive = !!cur && (!mismatch || !isBlob(named()[slot]))
+  if (archive) writeJSON(SC_NAMED_KEY, { ...named(), [slot]: cur })
+  if (owner === toId) return
+  if (mismatch && owner === activeId) return
+  if (archive && JSON.stringify(named()[slot]) !== JSON.stringify(cur)) return
+  const next = named()[`space:${toId}`]
+  if (isBlob(next)) writeJSON(SC_LAYOUT_KEY, { ...next, space: toId })
+  else try { localStorage.removeItem(SC_LAYOUT_KEY) } catch { /* 私密模式 */ }
 }
 
 function applySCBlob(raw: unknown): boolean {
@@ -154,19 +223,29 @@ function applySCBlob(raw: unknown): boolean {
   // 换布局:旧 leaf id 的历史全失效(还原出来的 id 与旧布局重合 = 安卓返回退进别的 Space 的内容)。
   // 须在下面 refreshTabs 之前,那一刷给前台文件视图记的栈底要留着。
   useNav.getState().reset()
+  rightKey = typeof raw.rightRule === 'string' ? raw.rightRule : null // 同组就不再对账(见桌面 applyLayout)
   useWorkspace.setState({
     mainLeaves: main, leftLeaves: left, rightLeaves: right,
     activeMainId: pick(raw.activeMainId, main),
     leftActiveId: pick(raw.leftActiveId, left),
     rightActiveId: pick(raw.rightActiveId, right),
     // ponytail: 抽屉开合不还原,冷启动一律收起 —— 单列的侧栏是全屏浮层不是版面的一部分,
-    // 「上次退出时抽屉开着」还原成开着 = 一进 app 先看到侧栏。
+    // 「上次退出时抽屉开着」还原成开着 = 一进 app 先看到侧栏。宽屏并排的左栏除外,见 dockLeftIfWide。
     leftVisible: false, rightVisible: false,
     focusedChatLeafId: main.find((r) => r.type === 'chat')?.id ?? null,
   })
+  dockLeftIfWide()
   useWorkspace.getState().refreshTabs()
   afterLayout?.()
   return true
+}
+
+/** 宽屏(横屏平板 / 手机)的左栏是与主区并排的版面,不是抽屉:布局整份换新(切 Space / 冷启动还原 / 重置)之后
+ *  这个 Space 有左栏视图就展开 —— Host 里「进宽屏左栏默认展开」那条 effect 只在宽窄变化时跑,换 Space 不跑。
+ *  走 toggleSidebar:桶空时按 sidebarDefaults 填。须在 afterLayout 之前:一页式 Space(主页)的落点随后会把面板关掉、左栏收回。 */
+function dockLeftIfWide(): void {
+  const s = useWorkspace.getState()
+  if (s.wideMode && !s.leftVisible && (s.leftLeaves.length > 0 || s.sidebarDefaults.left.length > 0)) s.toggleSidebar('left')
 }
 
 function snapshot(): SCBlob {
@@ -176,10 +255,13 @@ function snapshot(): SCBlob {
     return leaves.find((r) => r.id === s[activeKeyOf(side)])?.id
       ?? leaves.find((r) => r.id === drawerExtensions[side]?.previousId)?.id ?? leaves[0]?.id ?? null
   }
+  const space = liveLayoutOwner()
   return {
     v: 1,
+    ...(space ? { space } : {}),
     main: s.mainLeaves, left: s.leftLeaves.filter((r) => r.type !== '__extend'), right: s.rightLeaves.filter((r) => r.type !== '__extend'),
     activeMainId: s.activeMainId, leftActiveId: active('left'), rightActiveId: active('right'),
+    ...(rightKey !== null ? { rightRule: rightKey } : {}),
   }
 }
 
@@ -207,11 +289,20 @@ if (typeof window !== 'undefined') {
  *  `api ?` 守卫故从不真正调用。保留导出以满足 barrel / bootstrapEngine 的 import。 */
 export function activeMainPanel(): null { return null }
 
-/** bootLayoutFellThrough / namedLayoutRestorable / liveLayoutOwner:桌面冷启动补定位(settleAsyncStartupSpace)用,
- *  移动端不走那条路。保留导出以满足 barrel。 */
+/** bootLayoutFellThrough / namedLayoutRestorable:冷启动补定位(userSpaces.settleAsyncStartupSpace)用,手机 App 也走那条路
+ *  (UI_MODE 在那里是 'desktop')。单列的还原逐个剔除认不出的视图、剩下的照用,不报桌面那种「整份落空」:还原不了(在用的键
+ *  空着,或主区的视图一个都还没注册)屏上就是活动 Space 的默认布局,归属随之是它(liveLayoutOwner)—— 补定位按「归属对不上」
+ *  那条路把目标 Space 的归档接回来。
+ *  ponytail: 剔掉了一部分(插件视图比还原晚注册)的那份照用、照存,目标 Space 的插件标签这一程就没了;要保住得把
+ *  「剔过」也报成落空,让补定位从归档还原。 */
 export function bootLayoutFellThrough(): boolean { return false }
-export function namedLayoutRestorable(_name: string): boolean { return false }
-export function liveLayoutOwner(): string | null { return null }
+/** 命名槽此刻还原得了吗:存在、成形,引用的视图都已注册(口径同桌面版)。 */
+export function namedLayoutRestorable(name: string): boolean {
+  const b = (readJSON<Record<string, unknown>>(SC_NAMED_KEY) ?? {})[name]
+  if (!isBlob(b)) return false
+  const all = [...b.main, ...b.left, ...b.right]
+  return knownLeaves(all).length === all.length
+}
 /** 桌面 Space 窗口挂 Dockview 前用;单列壳没有这种窗口。保留导出以满足 barrel。 */
 export function savedLayoutRestorable(): boolean { return true }
 
@@ -237,6 +328,8 @@ interface WS {
   setPinned(pins: PinnedViews | undefined): void
   isPinnedLeaf(id: string): boolean
   ensurePinned(): void
+  /** 同桌面版:右栏主视图规则对账一次(rightRules.ts)。收着的抽屉只改桶里的内容,不替用户打开。 */
+  applyRightRules(): void
 
   setApi(api: unknown): void
   setDefaultBuilder(fn: () => void): void
@@ -387,12 +480,47 @@ export const useWorkspace = create<WS>((set, get) => {
       get().refreshTabs()
     },
 
+    applyRightRules: () => {
+      if (IS_MINI_PANEL) return
+      const s = get()
+      const g = rightGroupNow(s)
+      if (!g || g.key === rightKey) return
+      const changed = rightKey !== null
+      rightKey = g.key
+      const defaults = s.sidebarDefaults.right
+      const extras = s.rightLeaves.filter((r) => r.type === '__extend') // 抽屉里的临时 View 跟它的主人走,不归规则
+      const real = s.rightLeaves.filter((r) => r.type !== '__extend' && r.type !== 'sidebar-empty')
+      // 桶空 = 抽屉打开时按缺省填(toggleSidebar),按缺省对账;对完和缺省一样就不写,桶照旧空着。
+      const list: LeafRec[] = real.length ? real
+        : defaults.filter((v) => !!getView(v.type)).map((v, i) => ({ id: `\0default${i}`, type: v.type, loc: 'right', params: v.params ?? {}, title: '' }))
+      const refs: RightRef[] = list.map((r) => ({ id: r.id, type: r.type, tagged: r.by === 'rule', active: r.id === s.rightActiveId }))
+      const elsewhere = new Set([...s.mainLeaves, ...s.leftLeaves].map((r) => r.type).filter((t) => getView(t)?.singleton)) // 同桌面版:只认单例
+      const plan = planRight({ group: g.group, pinned: pins().right ?? [], spaceDefaults: defaults, current: refs, changed, elsewhere })
+      if (!plan.open.length && !plan.close.length && !plan.activate) return
+      const used = new Set(allRecs().map((r) => r.id))
+      const realRec = (type: string, params: Record<string, unknown>, by?: 'rule'): LeafRec => {
+        const def = getView(type)!
+        const id = def.singleton && !used.has(type) ? type : makeId(type, used)
+        used.add(id)
+        return { id, type, loc: 'right', params: { ...params }, title: label(def.displayName), ...(by ? { by } : {}) }
+      }
+      const kept = list.filter((r) => !plan.close.includes(r.id)).map((r) => (real.length ? r : realRec(r.type, r.params)))
+      const next = arrangeRight(g.group, kept, (t) => {
+        const o = plan.open.find((x) => x.type === t)
+        return o ? realRec(o.type, o.params ?? {}, 'rule') : undefined
+      })
+      const wantFront = plan.activate ? next.find((r) => r.type === plan.activate)?.id : undefined
+      const stillThere = next.some((r) => r.id === s.rightActiveId) || extras.some((r) => r.id === s.rightActiveId)
+      set({ rightLeaves: [...next, ...extras], rightActiveId: wantFront ?? (stillThere ? s.rightActiveId : next[0]?.id ?? null) })
+      get().refreshTabs()
+    },
     setApi: () => { /* 移动端无 Dockview api，恒 null */ },
     setWideMode: (v) => set({ wideMode: v }),
     setDefaultBuilder: (fn) => set({ defaultBuilder: fn }),
     setSidebarDefaults: (d) => set({ sidebarDefaults: d }),
-    // Dockview「可拖宽侧栏画像」;单列无侧栏宽度概念 → no-op(补齐 store 契约,否则 spaceRegistry/bootstrap 调用即崩)。
-    setSideProfile: () => { /* no-op */ },
+    // Dockview「可拖宽侧栏画像」:单列无侧栏宽度,只认 key —— 它就是屏上布局的归属(同桌面版:画像重设 = 布局从此归这个 Space,
+    // 调用方紧接着还原 / 重建 / 认领它)。模块变量不进 store:不触发重渲与自动存盘。
+    setSideProfile: (key) => { profileKey = key; restoredOwner = undefined },
     initializeSidebar: (side, visible) => set({ [side === 'left' ? 'leftVisible' : 'rightVisible']: visible } as Partial<WS>),
     registerChatSurface: (id, el) => set((s) => {
       const next = { ...s.chatSurfaces }
@@ -425,6 +553,15 @@ export const useWorkspace = create<WS>((set, get) => {
         leftTabs: side(s.leftLeaves, s.leftActiveId),
         rightTabs: side(s.rightLeaves, s.rightActiveId),
       })
+      // 主区前台视图的组变了 → 右栏按主视图规则对账(推一拍:这里常在开 / 换视图的半路上)
+      const rg = IS_MINI_PANEL ? null : rightGroupNow(get())
+      if (rg && rg.key !== rightKey && !rightQueued) {
+        rightQueued = true
+        queueMicrotask(() => {
+          rightQueued = false
+          try { get().applyRightRules() } catch (e) { console.error('[lcl] right panel rules', e) }
+        })
+      }
     },
 
     openView(type, params = {}, loc = 'main', opts) {
@@ -622,6 +759,8 @@ export const useWorkspace = create<WS>((set, get) => {
     },
 
     resetLayout() {
+      restoredOwner = undefined // 默认布局按当前画像的 Space 建,不再是启动时还原出来的那份
+      rightKey = null
       set({
         mainLeaves: [], leftLeaves: [], rightLeaves: [],
         activeMainId: null, leftActiveId: null, rightActiveId: null,
@@ -629,15 +768,27 @@ export const useWorkspace = create<WS>((set, get) => {
       })
       useNav.getState().reset() // 同桌面版:布局重建,旧 leaf id 的历史全失效;须在重建之前,重建时记下的栈底要留着
       get().defaultBuilder?.() // = getActiveSpace().build()（切 Space 时 spaceRegistry 已先切 id）
+      dockLeftIfWide()
+      // 壳挂上之前(还没有构建器)要的是默认布局:在用的那份是上一个 Space 的(切走时已原样存进它的槽),留着就会被壳还原到
+      // 这个 Space 头上。清掉,挂载时落空 → 按它的默认建。只在它确实原样躺在某个槽里时清:存槽失败(配额满)时清掉就是丢了
+      // 仅存的一份,宁可让它这一次穿错 Space(Codex 评审)。
+      if (notLaidOut() && !IS_MINI_PANEL) try {
+        const raw = localStorage.getItem(SC_LAYOUT_KEY)
+        if (raw && Object.values(readJSON<Record<string, unknown>>(SC_NAMED_KEY) ?? {}).some((b) => JSON.stringify(b) === raw)) localStorage.removeItem(SC_LAYOUT_KEY)
+      } catch { /* 私密模式 */ }
       get().refreshTabs()
       afterLayout?.()
     },
 
-    saveCurrent() { writeJSON(SC_LAYOUT_KEY, snapshot()) },
+    saveCurrent() { if (!notLaidOut()) writeJSON(SC_LAYOUT_KEY, snapshot()) }, // 还没摆就存 = 拿空布局盖掉要还原的那份
     // 命名布局 = spaceRegistry 的每-Space 布局槽(`space:<id>`):切走时存、切回来时还原。
     saveNamed(name) {
+      // 壳还没还原就切 Space(桌面快捷方式 / 补定位抢在挂载之前):这一程的现场还在在用的键里 ——
+      // 存它原样,不存空快照(空快照会把冷启动刚归档的现场盖掉)。
+      const blob = notLaidOut() ? readJSON<unknown>(SC_LAYOUT_KEY) : snapshot()
+      if (!isBlob(blob)) return
       const all = readJSON<Record<string, SCBlob>>(SC_NAMED_KEY) ?? {}
-      all[name] = snapshot()
+      all[name] = blob
       writeJSON(SC_NAMED_KEY, all)
     },
     applyNamed(name) {

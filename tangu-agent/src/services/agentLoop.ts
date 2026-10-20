@@ -1,5 +1,6 @@
+import { hasMarketplaceCards, MARKETPLACE_CARDS_CAPABILITY } from '../shared/marketplace.js';
 import { normalizeUIAppCards } from '../shared/intelligentCards.js';
-import { intelligentUiEnabledFor, INTELLIGENT_UI_SECTION, looksLikeLeakedUiDocument, UI_DOCUMENT_LEAK_CHECK } from '../tools/builtin/intelligentUi.js';
+import { computedUiEnabledFor, intelligentUiEnabledFor, INTELLIGENT_UI_SECTION, INTELLIGENT_UI_V2_SECTION, looksLikeLeakedUiDocument, UI_DOCUMENT_LEAK_CHECK } from '../tools/builtin/intelligentUi.js';
 import { withTaskProjectQueue } from './taskProjectQueue.js';
 import { HUMAN_GUIDANCE, readHuman, renderHumanContext } from '../agents/humanStore.js';
 import { humanProjectScope } from './humanContext.js';
@@ -25,7 +26,8 @@ import { makeClientActionRequester } from './clientAck.js';
 import { runHooks, type HookRunContext, type HookVerdict } from '../hooks/index.js';
 import { enterRunContext, currentDisplayAgentSlug, setRunClientTag, setRunCwd } from '../seams/runContext.js';
 import path from 'node:path';
-import { agentsDir, readUserMd, DEFAULT_AGENT_SLUG, engineLibDir } from '../core/tanguHome.js';
+import { agentsDir, DEFAULT_AGENT_SLUG, engineLibDir } from '../core/tanguHome.js';
+import { renderAboutHuman } from '../agents/humanFolder.js';
 import { getRun, updateRunStatus, appendStep, listPendingRunsForRecovery, failStaleRuns } from './runStore.js';
 import { getToolDefinitions, executeTool, getToolCapabilities, listDeferredTools, deferredUnlocksFromHistory, type ToolContext } from '../tools/registry.js';
 import { actionDeliveryNudgeNeeded, ACTION_DELIVERY_CHECK } from './actionDeliveryCheck.js';
@@ -34,9 +36,9 @@ import type { DisplayFileItem } from '../tools/toolTypes.js';
 import { loadSkillLoadout } from './skillLoadout.js';
 import { buildAgentRoster } from './agentRoster.js';
 import { APP_REF_SECTION, AUTONOMY_SECTION, PERSISTENCE_SECTION, TOOL_FAILURE_SECTION, ULTRA_SECTION, presetContractSection, responseStyleSection } from '../profiles/promptSections.js';
-import { resolveTools, isComputerUseTool, computerUseHiddenNames, computerUseUnavailableReason } from '../tools/toolRegistry.js';
+import { canonicalToolName, resolveTools, isComputerUseTool, computerUseHiddenNames, computerUseUnavailableReason } from '../tools/toolRegistry.js';
 import { parsePreset, presetOf, type Preset } from '../core/presetTable.js';
-import { SKETCH_LESS_NOTE, SKETCH_SECTION, sketchEnabledFor, sketchTurnSignalFor, visualsPrefOf } from '../tools/builtin/sketch.js';
+import { LEGACY_HTML_CARD_TOOL, SKETCH_LESS_NOTE, SKETCH_SECTION, htmlCardToWire, isHtmlCardTool, sketchEnabledFor, sketchTurnSignalFor, visualsPrefOf, withHtmlCardName } from '../tools/builtin/sketch.js';
 import { loadTodos as loadSessionTodos, renderTodos, type TodoItem } from '../tools/builtin/todo.js';
 import { collectGitState, formatRuntimeContext, renderTodoState, runVerifyCommand } from './runtimeContext.js';
 import { loadCustomTools, type LoadedCustomTool } from '../tools/customTools.js';
@@ -64,6 +66,7 @@ import { remoteLocked, remoteLockedBody } from './remoteLock.js'; // P1-K2
 import { registerRun, runCategory, unregisterRun, type RunCategory } from './remoteActivity.js'; // P1-K2
 import { loadProjectDocSafe, wrapProjectDoc } from './projectDoc.js';
 import { onUserRunDone, onUserRunStart, type HistorianForkSeed } from './localHistorian.js';
+import { branchesSection } from './branchContext.js';
 import { stashSuggestionSeed } from './promptSuggestion.js';
 import { fitUserImages, normalizeImageAttachments, toImageParts } from './imageAttachments.js';
 import { describeImages, NO_VISION_NOTE, resolveVisionModelId, shouldDescribeImages, whyNoImages, type NoImagesReason } from './visionService.js';
@@ -90,6 +93,7 @@ import { takeWorkspaceUploads, withUploadRefs } from './workspaceUploads.js';
 import './remoteTaint.js'; // 首次远程染色 → 落进 run 行(input.remoteTainted),会话级污点判据据此跨重启认得(P1 · M1A)
 import { buildProbe, formatCwdListing, type ProbeSegment } from './promptHead.js';
 import { channelHub } from '../channels/hub.js';
+import { markIfAsked, onRunSettled as onChildRunSettled, onRunStart as onChildRunStart } from './childSessions.js';
 
 // ── 注入依赖的 lazy 别名:保持下方调用点不变(接缝装配后才会真正取到 deps)──
 const resolveModelAndKey = (modelId: string) => deps().brain.llm.resolveModelAndKey(modelId);
@@ -304,7 +308,11 @@ export function startRun(runId: string): void {
     }
   // 远端 steer 染的色在**所有**收尾路径清掉(准备阶段失败 / 外部引擎分支不经 runLoop 的 finally —— Codex 二轮)。
   // P1-K2:活动登记与中止原因同样在所有收尾路径清掉(dispatchRun 登记,这里是唯一一定会跑到的出口)。
-  }).finally(() => { runTasks.delete(runId); clearRunRemoteTaint(runId); unregisterRun(runId); abortReasons.delete(runId); });
+  }).finally(() => {
+    runTasks.delete(runId); clearRunRemoteTaint(runId); unregisterRun(runId); abortReasons.delete(runId);
+    // 父子会话:子会话这一轮的结果送回主会话 / 主会话收它名下积着的回报(终态已落库、队列已推进)。
+    if (!exiting) void onChildRunSettled(runId).catch((e) => console.error('[agent-core] child session report failed:', e?.message || e));
+  });
   runTasks.set(runId, task);
 }
 
@@ -429,6 +437,7 @@ async function dispatchRun(runId: string, ac: AbortController): Promise<void> {
       // P1-K2 单一扼流点(方案 §6.5):锁定时非本机 run 一律不起 —— 覆盖新起的远程 / 通道 / 无人值守 run、锁定前已排队的、
       // 引擎重启后 recoverQueuedRuns 捡回的,以及以后新加的任何生产者。先登记(活动快照 / 急停看得见),收尾在 startRun 的 finally。
       registerRun(runId, run.session_id, input);
+      await onChildRunStart(run.session_id, input, runId).catch(() => {}); // 清「等你」;记下待送的回报;用户自己发的一轮归零自动接着做的计数
       if (lockedOut(input, runId)) {
         abortReasons.set(runId, 'remote_locked');
         await publish(runId, 'error', { error: 'remote_locked', aborted: true, reason: 'remote_locked', detail: remoteLockedBody.detail }).catch(() => {});
@@ -750,11 +759,18 @@ export function activeRunCount(): number {
 
 const HYDRATE_MAX = 50;
 const HYDRATE_BLOCK = 10; // 窗口起点按块对齐:跨 run 前缀仅每 ~5 个 run 移动一次,而非逐 run 滑动(缓存友好)
+// ponytail: edit_image 找自己产出的图只翻最近这么多条带展示文件的消息;更早的图要用户重新附。
+const DISPLAY_FILE_LOOKUP_ROWS = 100;
 const HYDRATE_EXTEND_MAX = 100; // 有检查点但没覆盖到窗口起点时,窗口最多再往前扩这么多行(宁可多回放,不静默丢)
 const LAZY_CHECKPOINT_WAIT_MS = 45_000; // 下个 run 等上一个 run 在飞的惰性检查点的上限
 /** 每会话在飞的惰性检查点(run 收尾后起的 fire-and-forget 摘要);下个 run hydrate 前等它落库。 */
 const lazyCheckpoints = new Map<string, Promise<void>>();
 const sleepMs = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/** 本进程有在飞 / 排队 run 的会话(会话列表的「在跑」、子会话回报的「主会话空闲」判定用;services/childSessions.ts)。 */
+export function activeSessionIds(): Set<string> {
+  return new Set([...runSession.values(), ...sessionActive.keys()]);
+}
 
 /** 该会话是否有在飞的 run(路由层用:手动 /compact 与在途落库不许并发)。 */
 export function sessionHasActiveRun(sessionId: string): boolean {
@@ -810,7 +826,11 @@ export async function hydrateHistory(
   replayFor?: { apiModelId?: string; protocol?: string },
   /** false = 不等在飞的惰性检查点(旁聊 /btw:一句题外话不值得最多 45s 的等待,窗口外老行少一截可接受)。 */
   waitCheckpoint = true,
-): Promise<{ messages: ChatMessage[]; currentUserIndex: number; checkpointThrough: { ts: number; rowId?: string; partial: boolean } }> {
+): Promise<{
+  messages: ChatMessage[]; currentUserIndex: number; checkpointThrough: { ts: number; rowId?: string; partial: boolean };
+  /** 发给模型的那条带图消息的**原图**(缩图之前):本轮没附件时 edit_image 用它 —— 模型看得见什么就能改什么。 */
+  contextImages?: { images: ReturnType<typeof normalizeImageAttachments>; rowId: string; ts: number };
+}> {
   // 上一个 run 收尾后起的惰性检查点还在跑 → 等它(有界):否则这一轮的窗口起点已经越过那批老行,
   // 而检查点还没落,老行既没摘要也没回放(Codex 09-15 评审 #2)。等的是已经在飞的任务,不是新起摘要。
   const inflight = waitCheckpoint ? lazyCheckpoints.get(sessionId) : undefined;
@@ -841,6 +861,7 @@ export async function hydrateHistory(
   let lastUserWithImages = -1; // out 中最新带图 user 消息的下标
   let currentUserIndex = -1; // out 中「本轮那条 user 消息」的下标(按行 id 认,不靠倒扫猜)
   let lastUserImages: ReturnType<typeof normalizeImageAttachments> = [];
+  let lastUserImagesRow = { id: '', ts: 0 };
   for (const r of rows) {
     if (r.id === excludeMessageId) continue;
     const coverage = rowCoverage(r, checkpoint);
@@ -865,9 +886,11 @@ export async function hydrateHistory(
       if (imgs.length) {
         lastUserWithImages = out.length - 1;
         lastUserImages = imgs;
+        lastUserImagesRow = { id: r.id, ts: src.ts };
       }
     }
   }
+  const contextImages = lastUserWithImages >= 0 ? { images: lastUserImages, rowId: lastUserImagesRow.id, ts: lastUserImagesRow.ts } : undefined;
   if (lastUserWithImages >= 0) {
     const m = out[lastUserWithImages] as any;
     // 这条消息的图此后每一轮请求都带着:大图先缩(imageShrink.ts)。只缩上 wire 的这份,库里的附件原样留着。
@@ -884,7 +907,7 @@ export async function hydrateHistory(
     if (currentUserIndex >= 0) currentUserIndex += 1; // unshift 把所有下标推后一位
   }
   return {
-    messages: out, currentUserIndex,
+    messages: out, currentUserIndex, contextImages,
     checkpointThrough: { ts: through, rowId: checkpoint?.throughMessageId, partial: !!(checkpoint?.throughMessageId && checkpoint.throughToolCallId) },
   };
 }
@@ -944,6 +967,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   const clientCapabilities: readonly string[] | undefined = Array.isArray(input.clientCapabilities)
     ? Object.freeze(input.clientCapabilities.filter((c: unknown): c is string => typeof c === 'string'))
     : undefined;
+  // HTML 卡往外发、落库都叫 sketch(已发客户端只认这个名字,见 sketch.ts HTML_CARD_TOOL);模型那头一律是新名。
+  const wireToolName = (name: string): string => isHtmlCardTool(name) ? LEGACY_HTML_CARD_TOOL : name;
   setRunClientTag(clientTag);
   // Normal Agent 激活:会话 agent_config.agentSlug → 合并 agent 定义里「会话未显式覆盖」的字段。
   // 本地形态读 ~/.tangu/agents;云端 worker 本地目录为空 → applyAgentActivation 经 brain.agents 兜底水合。
@@ -1116,6 +1141,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   let thinkingLevel: ThinkingLevel = ultraRequested ? 'max' : (agentConfig.thinkingLevel || 'medium');
   const attachments = input.attachments || [];
   let imageInputs = normalizeImageAttachments(attachments);
+  let imageInputsSentAt: number | undefined; // 回退到之前那条消息的图时记它的时刻,edit_image 据此告诉用户用的是哪条
   // host-exec（TUI/桌面本机模式）注入：execMode/cwd/approvalMode 只经 per-run agentConfig 传入。
   // 缺省 sandbox + full-auto → microserver/standalone-server/worker 行为零变化（审批仅 host 激活）。
   // 能力闸门(红线②/④):未声明 hostExec 的 profile(云端形态)一律强制回 sandbox,杜绝云端拿到真实 FS/shell。
@@ -1159,7 +1185,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     } catch { /* 查不到就不认成员身份 */ }
   }
   const modeSessionId = profile.capabilities.hostExec
-    ? approvalModeSessionId({ fromClient: input.origin === 'client', sessionId, teamSessionId: verifiedTeamSessionId, followSessionMode: teamMember.followSessionMode === true })
+    // 父子会话的派生轮(start_session / send_to_session 起的子会话轮、回报后自动接着做的主会话轮)也跟本会话现档:中途收紧当场生效(Codex 10-17 #6)。
+    // 这两个字段只由引擎内部 createRun 写,POST /agent/runs 按字段名组装 input、客户端塞不进来。
+    ? approvalModeSessionId({ fromClient: input.origin === 'client' || input.fromParent === true || input.childReport === true, sessionId, teamSessionId: verifiedTeamSessionId, followSessionMode: teamMember.followSessionMode === true })
     : undefined;
   // 无人值守的异步审批(Muse ask/agent 档):**只信引擎内部起的 run** —— input.background 由 muse.ts 直接写进
   // createRun 的 input,/agent/runs 路由按字段名组装 input、客户端塞不进来;agentConfig 是请求体可控的,
@@ -1257,7 +1285,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     await updateRunStatus(runId, 'running');
     await publish(runId, 'status', { state: 'running' });
     // Historian 首帧标题:只看用户消息,与模型回复并行;放在群聊分支前,两条路都覆盖。落库后推事件让侧栏立刻刷新。
-    onUserRunStart(sessionId, userId, String(input.message || ''), input.userMessageId,
+    // 子会话回报那一轮(childReport)的「用户消息」是机器写的 <child_sessions_update>,不拿它起标题
+    if (!input.childReport) onUserRunStart(sessionId, userId, String(input.message || ''), input.userMessageId,
       (title) => { void publish(runId, 'session_title', { sessionId, title }).catch(() => {}); });
     // 经工作区上传进来的附件(手机 / 桌面原生选择器读成工作区附件的文件)落在会话沙箱目录,host 工具的 cwd 是工作区 —— 按桌面本机附件
     // 同一格式(正文第一行的路径 token)把它们的绝对路径拼进**落库**的这条用户消息:模型这一轮与之后每一轮回放都看得见。
@@ -1400,11 +1429,16 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         return null;
       }
     };
-    const { messages: history, currentUserIndex, checkpointThrough } = await hydrateHistory(
+    const { messages: history, currentUserIndex, checkpointThrough, contextImages } = await hydrateHistory(
       sessionId, run.assistant_message_id || '', describeUserImages,
       typeof input.userMessageId === 'string' ? input.userMessageId : undefined,
       { apiModelId: replayModelKey, protocol: stepItemBinding.protocol },
     );
+    // 本轮没附件(「坚持合成」这类跟进):edit_image 用模型此刻看得见的那批图 —— hydrate 每轮都把它发给对话模型。
+    if (!imageInputs.length && contextImages?.images.length) {
+      imageInputs = contextImages.images;
+      if (contextImages.rowId !== input.userMessageId) imageInputsSentAt = contextImages.ts;
+    }
 
     // 工作笔记(HARNESS.md)在这里读一次:技能目录、工具面(agent 自己收起的装备,kind 'equip')与下面 2b) 的笔记段共用这一份。
     // 笔记段不注入的 run(云端无 agent 目录 / coding 预设下的默认 agent / 临时成员)里收起也不生效 ——
@@ -1488,12 +1522,15 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     const humanCurrentBlocks: string[] = [];
     if (profile.capabilities.hostExec && !inlineMemberDef) {
       systemParts.push(HUMAN_GUIDANCE);
-      try {
-        const human = await readHuman({ kind: 'agent', slug: activeAgentSlug });
-        const humanBlock = renderHumanContext(human);
-        if (humanBlock) { systemParts.push(humanBlock); humanCurrentBlocks.push(humanBlock); }
-        if (humanBlock && (human.history[0]?.actor === 'user' || (human.history[0] && human.history[0].afterVersion !== human.version))) humanCorrections.push(humanBlock);
-      } catch (e) { console.warn('[human] Cannot load Agent collaboration context:', e instanceof Error ? e.message : e); }
+      // 三个维度并排读、谁也不盖谁(10-20 用户定):和这个人的共识(human/HUMAN.md)→ 这个 Agent 的 → 这个项目的。
+      for (const scope of [{ kind: 'human', file: 'HUMAN.md' }, { kind: 'agent', slug: activeAgentSlug }] as const) {
+        try {
+          const human = await readHuman(scope);
+          const humanBlock = renderHumanContext(human);
+          if (humanBlock) { systemParts.push(humanBlock); humanCurrentBlocks.push(humanBlock); }
+          if (humanBlock && (human.history[0]?.actor === 'user' || (human.history[0] && human.history[0].afterVersion !== human.version))) humanCorrections.push(humanBlock);
+        } catch (e) { console.warn('[human] Cannot load collaboration context:', e instanceof Error ? e.message : e); }
+      }
       try {
         const projectScope = await humanProjectScope(userId, sessionId);
         if (projectScope) {
@@ -1529,21 +1566,28 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     const sketchEnabled = sketchEnabledFor(visualGate);
     const visualsPref = visualsPrefOf(uiSettings);
     const nativeUiEnabled = intelligentUiEnabledFor({ ...visualGate, clientCapabilities });
-    const sketchTurnSignal = sketchEnabled ? sketchTurnSignalFor(String(input.message || ''), visualsPref, nativeUiEnabled) : undefined;
+    // intelligent-ui.v2:客户端能渲染带计算层的文档(state / derived / 表达式)→ 多一段说明,计算器类从 sketch 改道过来。
+    const computedUiEnabled = computedUiEnabledFor({ ...visualGate, clientCapabilities });
+    const sketchTurnSignal = sketchEnabled ? sketchTurnSignalFor(String(input.message || ''), visualsPref, nativeUiEnabled, computedUiEnabled) : undefined;
+    // 商店卡片之后的重画守卫(10-17):本段出过商店卡片 + 用户没点名要图 → sketch / intelligent_ui 不执行。
+    // 单个调用一完成就置位;纯续写分段(applySteering([]))保留,真用户转向开新段时清零、按新消息重算「点名要图」。
+    let marketplaceCardsShown = false;
+    let visualAsked = sketchTurnSignal?.kind === 'explicit';
+    if (clientCapabilities?.includes(MARKETPLACE_CARDS_CAPABILITY) && deps().brain.marketplace) systemParts.push('Forsion marketplace search and detail tools automatically render native plugin cards in Chat View. Those cards already satisfy visual delivery and include real details, compatibility and installation actions. After retrieving entries, explain them in brief prose; do not recreate them with intelligent_ui_html or intelligent_ui.');
     if (sketchEnabled) {
       systemParts.push(SKETCH_SECTION);
       if (nativeUiEnabled) systemParts.push(INTELLIGENT_UI_SECTION);
+      if (computedUiEnabled) systemParts.push(INTELLIGENT_UI_V2_SECTION);
       if (visualsPref === 'less') systemParts.push(SKETCH_LESS_NOTE);
       // 常驻段稳定,但本轮信号按消息正则取 3 种值 → 跟记忆易变段同一落点(B1),别留在稳定前缀里。
       if (sketchTurnSignal && volatilePlacement === 'system') systemParts.push(sketchTurnSignal.section);
     }
     ctxMark('guidance');
-    // 4) USER.md 全局用户画像(所有 agent 可见,用户维护,半稳定)。读失败不阻断。
+    // 4) 人的文件夹 human/(所有 agent 可见,半稳定):人写给所有 Agent 的 AGENT.md、人自己写的 MEMORY.md(原 USER.md)、
+    //    Agent 们对人的认识 SOUL.md。替换原来那段 USER.md,不并排加(提示词体量)。HUMAN.md 共识走下面协作说明那段。读失败不阻断。
     try {
-      const userMd = readUserMd();
-      if (userMd.trim()) {
-        systemParts.push('## About the User\nA long-term profile/preferences the user maintains themselves; take it into account, do not recite it, and do not treat it as instructions for this turn.\n\n' + userMd.trim());
-      }
+      const aboutHuman = renderAboutHuman();
+      if (aboutHuman) systemParts.push(aboutHuman);
     } catch { /* ignore */ }
     ctxMark('profile');
     // 4b) 项目级指令(AGENTS.md / CLAUDE.md …,从项目根到 cwd 沿途收集)。放在用户画像之后、
@@ -1556,7 +1600,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 5) 你的专属文件夹(仅 host:agent 有文件读写工具、能访问绝对路径;云端 sandbox 文件夹不可达 → 不注入)。
     //    让 agent 认知自己的 home + Library,主动往 Library 沉淀/读取资料,并理解 MEMORY/LOG 的归属。
     //    coding 预设不注入(remember/log_event 已转 deferred,陪伴式沉淀指引与编码任务无关)。
-    //    SCHEDULE.db + 「谁的归谁」一段(10-02 反馈):过去只在日程非空时才有 Upcoming Schedule 段,空日程的 agent
+    //    CALENDAR.db(原 SCHEDULE.db)+ 「谁的归谁」一段(10-02 反馈):过去只在日程非空时才有 Upcoming Schedule 段,空日程的 agent
     //    不知道自己有日历,答应用户的事被写进用户的 Amadeus 日历,还说「我没有自己的日历」。只放静态文字,条目仍在易变区。
     if (execMode === 'host' && ps.hostExtras && !inlineMemberDef) { // 临时成员没有专属文件夹(不建、不教它往那里写)
       const home = path.join(agentsDir(), activeAgentSlug);
@@ -1568,7 +1612,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         '- `LOG/<date>.md` — your daily logs (written with log_event, read with read_log)\n' +
         '- `SOUL.md` — your persona\n' +
         `- \`Library/\` (\`${libDir}\`) — your reference library: use the file read/write tools (read_file/write_file/list_dir, etc.; this directory is already writable and needs no approval) to **store and retrieve long-term reference material** (character settings, tool manuals, knowledge documents, etc.). Proactively write down material worth keeping long-term, and read it back when needed.\n` +
-        '- `SCHEDULE.db` — your own calendar, shown in the user\'s Calendar under your name. Manage it with the manage_schedule tool (it is in Additional Tools, call load_tools first); an entry with auto=false is just a calendar record and needs no approval.\n\n' +
+        '- `CALENDAR.db` — your own calendar, shown in the user\'s Calendar under your name. Manage it with the manage_schedule tool (it is in Additional Tools, call load_tools first); an entry with auto=false is just a calendar record and needs no approval.\n\n' +
         'What is yours and what is the user\'s: this folder and your schedule belong to you; the working directory and the user\'s Amadeus notes and calendars belong to the user. ' +
         'When you yourself commit to something at a time (a plan, a promise, meeting the user), put it on your own schedule with manage_schedule — not in the user\'s calendar — update that entry when the details change, and never say you have no calendar. ' +
         'Use the amadeus_* calendar tools only when the user wants an entry on their own calendar.';
@@ -1657,7 +1701,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 系统驱动的 run(Muse/自动化)不吃这套:registry 全量可见,目录段也不注入。
     const toolsMode = agentConfig.toolsMode === 'allow' || agentConfig.toolsMode === 'deny' ? agentConfig.toolsMode : undefined;
     const toolsList = Array.isArray(agentConfig.toolsList)
-      ? (agentConfig.toolsList as unknown[]).filter((t): t is string => typeof t === 'string')
+      ? (agentConfig.toolsList as unknown[]).filter((t): t is string => typeof t === 'string').map(canonicalToolName)
       : undefined;
     const deferBypass = !!agentConfig.muse || !!agentConfig.automationOrigin;
     // 目录与工具面必须用**同一套门禁字段**:少传一个,目录就与真实工具面分叉 —— set_ui_setting 的
@@ -1753,9 +1797,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       } catch { /* 列目录失败不阻断 run */ }
     }
 
-    // 8c) host:注入该 agent 的近期日程(agents/<slug>/SCHEDULE.db;manage_schedule 工具维护)。
+    // 8c) host:注入该 agent 的近期日程(agents/<slug>/CALENDAR.db;manage_schedule 工具维护)。
     //     放易变区(8b 之后)防打穿前缀缓存;文本刻意不含相对时间/lastRun——只在条目集变化或跨天时变。
-    //     sandbox/云端不注入(SCHEDULE.db 不进 agentFileSync,云端读不到);coding 预设同样不注入。
+    //     sandbox/云端不注入(云端只在 Agent 同步、且服务端认 agent-calendar 时才有这份);coding 预设同样不注入。
     if (execMode === 'host' && ps.hostExtras) {
       try {
         const schedDb = await loadSchedule(activeAgentSlug);
@@ -1767,6 +1811,15 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           );
         }
       } catch { /* 日程读取失败不阻断 run */ }
+    }
+
+    // 8d) 分支段(方案「Chat 画布分支」10-18):分过叉的对话里列出别的支(标题 / 分叉后几条 / 最后一句),细看走 read_session。
+    //     易变区:任何一支多一条消息它就变。只本机引擎(直连库;云端 thin worker 不注入)。
+    if (profile.capabilities.hostExec) {
+      try {
+        const sec = await branchesSection(sessionId, userId, { hideRemote: !effectiveRemote({ remote, runId }) });
+        if (sec) systemParts.push(sec);
+      } catch (e) { console.warn('[agent-core] branches section failed:', e); }
     }
 
     // 9) 插件:已启用且带 promptSection 的插件注入各自系统提示片段(如表情包清单)。放在环境段后,
@@ -2135,6 +2188,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 即「一个 loop 结束即注入」。A 无正文且无工具调用(刚开跑就转向)则不落库,空段交前端丢弃。
     const applySteering = async (msgs: SteerMsg[]): Promise<void> => {
       actionAskText += msgs.map((m) => `\n${String(m.content || '')}`).join('');
+      if (msgs.length) { marketplaceCardsShown = false; visualAsked = msgs.some((m) => sketchTurnSignalFor(String(m.content || ''), visualsPref, nativeUiEnabled, computedUiEnabled)?.kind === 'explicit'); }
       toolFailureGuard.reset(); repeatedToolFailure = false;
       const finalizedId = currentAssistantId;
       const finalizedContent = finalContent;
@@ -2156,7 +2210,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           attachments: Array.isArray(m.attachments) && m.attachments.length ? m.attachments : null,
         });
         const originals = normalizeImageAttachments(m.attachments);
-        if (originals.length) imageInputs = originals; // 改图工具要原图,不缩
+        if (originals.length) { imageInputs = originals; imageInputsSentAt = undefined; } // 改图工具要原图,不缩
         const images = fitUserImages(originals);
         const described = images.length ? await describeUserImages(images) : null;
         const pushed = { role: 'user', content: described
@@ -2305,6 +2359,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       // self_brainstorm 的共享前缀真源:执行时取 workingMessages 当刻浅拷贝(逐消息拷,防分身侧误改)。
       getWorkingMessages: () => workingMessages.map((m) => ({ ...m })),
       getImageInputs: () => imageInputs,
+      getImageInputsSentAt: () => imageInputsSentAt,
+      // 本 run 还没落库的在前(最新),再接库里本会话的;edit_image 的 previous_outputs 在这里按名字找自己的产出。
+      listDisplayFiles: async () => [...pendingDisplayFiles].reverse().concat(await deps().state.listSessionDisplayFiles?.(sessionId, DISPLAY_FILE_LOOKUP_ROWS) ?? []),
       thinkingLevel,
       contextWindow: ctxWindowTokens,
       getRunStatus,
@@ -2373,6 +2430,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         parallelGroup,
       };
       await publish(runId, 'tool_call', basePayload);
+      // 商店卡片已经画出来了还要 sketch / intelligent_ui = 同一批插件画两遍(10-17 live 6 次里 2 次);标志见 marketplaceCardsShown。
+      if ((isHtmlCardTool(call.function.name) || call.function.name === 'intelligent_ui') && !visualAsked
+        && marketplaceCardsShown && clientCapabilities?.includes(MARKETPLACE_CARDS_CAPABILITY)) {
+        return mkRejected(call, startedAt, parallelGroup, 'Not run: the store entries are already shown as plugin cards in this reply. Explain them in prose instead of drawing them again.');
+      }
 
       // —— PreToolUse hook：拦截 / 改写参数 / 注入上下文（host-only；云端在 runHooks 顶部即空判定）——
       const preV = await runHooks('PreToolUse', {
@@ -2439,7 +2501,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       const stored = (!result.isError && declaredPersistPlaceholder(result.name)) || capped;
       const payload = {
         id: call.id,
-        name: result.name,
+        name: wireToolName(result.name), // 执行层回正典名;往外发跟这次调用一样叫线上的名字(HTML 卡叫 sketch)
         result: stored,
         isError: result.isError,
         startedAt,
@@ -2470,7 +2532,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       return {
         toolResult: {
           tool_call_id: call.id,
-          name: result.name,
+          name: wireToolName(result.name),
           content: stored,
           isError: result.isError,
           startedAt,
@@ -2489,6 +2551,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         if (!canRunToolInParallel(calls[i])) {
           const single = await executeOneToolCall(calls[i]);
           toolResults.push(single.toolResult);
+          if (hasMarketplaceCards([single.toolResult])) marketplaceCardsShown = true;
           workingMessages.push(single.toolMessage);
           i += 1;
           continue;
@@ -2503,6 +2566,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           : [await executeOneToolCall(batch[0])];
         for (const item of executed) {
           toolResults.push(item.toolResult);
+          if (hasMarketplaceCards([item.toolResult])) marketplaceCardsShown = true;
           workingMessages.push(item.toolMessage);
         }
         i += batch.length;
@@ -2751,7 +2815,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         model,
         apiModelId,
         // 末轮追加「本轮无工具」说明(副本,不落 workingMessages);首轮即末轮用短版。
-        messages: lastIter ? [...workingMessages, repeatedToolFailure ? TOOL_FAILURE_FINAL_NOTE : finalTurnNoteFor(iteration)] : workingMessages,
+        messages: withHtmlCardName(lastIter ? [...workingMessages, repeatedToolFailure ? TOOL_FAILURE_FINAL_NOTE : finalTurnNoteFor(iteration)] : workingMessages),
         projectSource: appId,
         client: clientTag,
         temperature: 0.7,
@@ -2842,7 +2906,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
               // Stream the raw arg delta so the client can render a live "writing
               // file" preview (it reassembles per tool-call id and extracts path/content).
               if (info.argsDelta) {
-                void publish(runId, 'tool_stream', { id: info.id, name: info.name, delta: info.argsDelta });
+                void publish(runId, 'tool_stream', { id: info.id, name: wireToolName(info.name), delta: info.argsDelta });
               }
               // Keep the throttled generic "生成中…(N 字符)" status for the status bar.
               if (info.argsLen - lastGenChars >= 600) {
@@ -2950,6 +3014,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       }
 
       if (resumedMidstream || retryIteration) continue; // 中流断线已段切分回灌 / 溢出已压缩:res 未产出,重进本迭代(steer 照常在迭代顶注入)
+      // 入口换一次,下游(上屏事件、落库、结果)全跟着:HTML 卡在线上叫 sketch、卡里用 forsionSketch。发给模型时 withHtmlCardName 再换回新名。
+      for (const c of res.toolCalls ?? []) htmlCardToWire(c);
 
       // 供应商可能在取消之后才返回成功;不允许迟到的结果启动工具/续跑或发布 done。
       ac.signal.throwIfAborted();
@@ -3021,6 +3087,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           headHash: probe.headHash,
           segments: probe.segments,
           changedSegments: probe.changedSegments,
+          // 本次请求实际带的工具名(按 defs 顺序;探针双闸开着才发):台架判「哪几件在工具面里」,字节数相等证不了(Codex 10-19)。
+          toolNames: (lastIter ? [] : toolDefs || []).map((d: any) => String(d?.function?.name || '')),
           // 跨 run 比较:基准是本 run 开始前同一 (agent, model) 的上一条 head hash(priorRunHeadHash,
           // run 开始时取一次并固定)。每一帧都与它比 —— run 内 load_tools 造成的变化只在 changedSegments 里说。
           // 上一条不存在(冷启动 / map 被清)时发 null,消费端据此区分「没得比」与「比过了不一样」。
@@ -3184,7 +3252,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         //    本轮启发式命中、工具确实在场、且整 run 没调过 sketch 时,在收尾前补催一次。
         //    只催一次:模型二次检查仍认为图是噪声时允许收尾;用户的「纯文字/不要画」在信号层已排除。——
         //    actionable(计划 / 清单 / 挑一个 / 做法)只给本轮那句提醒、不补催:这类说法宽,模型判断不该出卡时不值得再烧一轮。
-        if (sketchTurnSignal && (sketchTurnSignal.kind === 'explicit' || sketchTurnSignal.kind === 'implicit') && !sketchNudged && !lastIter && !allToolCalls.some((c) => ['sketch', 'intelligent_ui'].includes(c.function.name))) {
+        if (sketchTurnSignal && (sketchTurnSignal.kind === 'explicit' || sketchTurnSignal.kind === 'implicit') && !sketchNudged && !lastIter && !(clientCapabilities?.includes(MARKETPLACE_CARDS_CAPABILITY) && hasMarketplaceCards(allToolResults)) && !allToolCalls.some((c) => isHtmlCardTool(c.function.name) || c.function.name === 'intelligent_ui')) {
           sketchNudged = true;
           if (res.content || res.outputItems?.length) workingMessages.push(assistantTurnOf(res, res.content || ''));
           workingMessages.push({
@@ -3414,6 +3482,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // toolOffsets = 本条落库消息的工具锚点(同 ui_content_offset)。客户端在 done 时据此按终稿重排直播段,
     // 与重开会话一致:否则引擎丢掉的流式正文(末轮手写成 DSML 的工具调用)一直挂在屏上,
     // 收尾才追加的停止说明/耗尽提示反而看不见(09-15 用户截图)。
+    await markIfAsked(sessionId, userId, input, finalContent).catch(() => {}); // 父子会话:收尾问句 → 列表「等你」(要在 done 之前)
     await publish(runId, 'done', {
       content: finalContent,
       toolOffsets: allToolCalls.map((c) => ({ id: c.id, offset: c.ui_content_offset })),

@@ -54,7 +54,7 @@ export function entityParamsSafe(def: ViewDefinition, params: Record<string, str
 }
 
 /** 冷启动 drain 到的 URL 会先于 Dockview 就绪到达 → 等 api 上线再落地(封顶 8s,超时按当前状态硬试)。 */
-function whenWorkspaceReady(timeoutMs = 8000): Promise<void> {
+export function whenWorkspaceReady(timeoutMs = 8000): Promise<void> {
   if (useWorkspace.getState().api) return Promise.resolve()
   return new Promise((resolve) => {
     const off = useWorkspace.subscribe((s) => {
@@ -126,23 +126,34 @@ export async function resolveDeepLink(intent: DeepLinkIntent): Promise<boolean> 
   }
 }
 
-/** 装载(bootstrapEngine 调,仅桌面主窗):订阅热推 + 拉冷启动积压。 */
+/** 装载(bootstrapEngine 调,只认主窗):页内 forsion:// 点击三端都接;系统热推 + 冷启动积压只有桌面有。 */
 export function installDeepLinks(): void {
   if (windowKind() !== 'main') return
   const w = window as unknown as {
     tangu?: { onDeepLink?: (cb: (u: string) => void) => () => void; drainDeepLinks?: () => Promise<string[]> }
   }
+  // 应用内点到的 `forsion://` 链接(收件箱信、使用指南、笔记正文):就地走同一条 resolver,不绕系统 ——
+  // 系统 handler 只有打包版注册,dev / 网页 / 手机上点了没反应;绕一圈系统也会把窗口抢到前台再回来。
+  document.addEventListener('click', (e) => {
+    const a = (e.target as Element | null)?.closest?.('a[href^="forsion:"]')
+    if (!a || e.button !== 0) return
+    // 正在编辑的正文里,单击是放光标:⌘/Ctrl+点击才跳(与编辑器里别的链接同一习惯)
+    if (a.closest('[contenteditable="true"]') && !(e.metaKey || e.ctrlKey)) return
+    e.preventDefault()
+    handle(a.getAttribute('href') || '', false) // 点得到链接 = 界面早就起来了,不等 Dockview(手机单列壳的 api 恒 null,等就是白等 8s)
+  }, true)
   if (!w.tangu?.onDeepLink || !w.tangu?.drainDeepLinks) return // web/mobile 有各自通道(https /open、tangu://)
-  const handle = (url: string): void => {
-    void (async () => {
-      const toast = useApp.getState().toast
-      const intent = parseDeepLink(url)
-      if (!intent) { toast(translate('deeplink.unrecognized')); return }
-      await whenWorkspaceReady()
-      const ok = await resolveDeepLink(intent).catch(() => false)
-      if (!ok) toast(translate('deeplink.unavailable'))
-    })()
-  }
-  w.tangu.onDeepLink(handle)
+  w.tangu.onDeepLink((u) => handle(u))
   void w.tangu.drainDeepLinks().then((urls) => { for (const u of urls) handle(u) })
+}
+
+function handle(url: string, coldStart = true): void {
+  void (async () => {
+    const toast = useApp.getState().toast
+    const intent = parseDeepLink(url)
+    if (!intent) { toast(translate('deeplink.unrecognized')); return }
+    if (coldStart) await whenWorkspaceReady()
+    const ok = await resolveDeepLink(intent).catch(() => false)
+    if (!ok) toast(translate('deeplink.unavailable'))
+  })()
 }

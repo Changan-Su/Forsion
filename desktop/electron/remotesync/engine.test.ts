@@ -8,9 +8,10 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { runSync, shouldTripMassDelete, conflictCopyName } from './engine'
+import { runSync, shouldTripMassDelete, conflictCopyName, moveAsideFromSync } from './engine'
 import { createDirRemote } from './fsLocal'
 import type { RemoteFs } from './types'
+import { withDbLock } from '../amadeus/fs/dbLock'
 
 let base: string
 let rootA: string
@@ -182,6 +183,24 @@ describe('remotesync engine 双设备', () => {
     expect(await read(rootB, copy!)).toBe('local-late')
   })
 
+  it('数据库文件落盘等桌面 / 引擎 / human 镜像共用的锁,锁里写进来的行不被静默盖掉', async () => {
+    await write(rootA, 'Calendar.db', 'v1')
+    await syncA(); await syncB()
+    await write(rootA, 'Calendar.db', 'v2')
+    await syncA()
+    let pulling: Promise<unknown> | undefined
+    await withDbLock(path.join(rootB, 'Calendar.db'), async () => { // 别的写入方:读 → 比对 → 写,整段拿着锁
+      pulling = syncB()
+      await new Promise((r) => setTimeout(r, 300))
+      expect(await read(rootB, 'Calendar.db')).toBe('v1') // 持锁期间同步没动它
+      await write(rootB, 'Calendar.db', 'v1 + row typed meanwhile')
+    })
+    await pulling
+    expect(await read(rootB, 'Calendar.db')).toBe('v2')
+    const copy = (await list(rootB)).find((f) => f.startsWith('Calendar (conflict '))
+    expect(copy && (await read(rootB, copy))).toBe('v1 + row typed meanwhile') // 锁里写进来的那份留成副本,没丢
+  })
+
   it('远端整空 + 基线足量(≥5)→ 硬中止,确认也不放行', async () => {
     for (let i = 0; i < 6; i++) await write(rootA, `n${i}.md`, `${i}`)
     await syncA()
@@ -284,6 +303,115 @@ describe('remotesync engine 双设备', () => {
     const copy = (await list(rootB)).find((f) => f.includes('(conflict '))
     expect(copy).toBeTruthy()
     expect(await read(rootB, copy!)).toBe('B')
+  })
+})
+
+describe('演算标出一样的 join', () => {
+  it('后端给了内容 hash:两边一样的 join 带 same,不一样的不带;不给 hash 一律不带', async () => {
+    await write(rootA, 'same.md', '一样')
+    await write(rootA, 'diff.md', '云端版')
+    await syncA()
+    await write(rootB, 'same.md', '一样')
+    await write(rootB, 'diff.md', '这台版')
+    const { createHash } = await import('node:crypto')
+    const hashed: RemoteFs = {
+      ...remote,
+      walk: async (signal) => Promise.all((await remote.walk(signal)).map(async (e) => ({ ...e, hash: createHash('sha256').update(await remote.readFile(e.key)).digest('hex') }))),
+    }
+    const withHash = await runSync({ localRoot: rootB, remote: hashed, statePath: stateB(), fingerprint: FP, dryRun: true })
+    expect(withHash.plan?.sort((a, b) => a.key.localeCompare(b.key))).toEqual([{ key: 'diff.md', kind: 'join' }, { key: 'same.md', kind: 'join', same: true }])
+    const plain = await syncB({ dryRun: true })
+    expect(plain.plan?.every((i) => !i.same)).toBe(true)
+  })
+})
+
+describe('额度不够时小的先传', () => {
+  it('按文件大小从小到大传;放不下的留在本地、不删', async () => {
+    await write(rootA, 'big.md', 'x'.repeat(5000))
+    await write(rootA, 'mid.md', 'x'.repeat(500))
+    await write(rootA, 'small.md', 'x')
+    const order: string[] = []
+    let used = 0
+    const capped: RemoteFs = {
+      ...remote,
+      writeFile: async (key, data, mtimeMs, signal, expectedId) => {
+        order.push(key)
+        if (used + data.byteLength > 1000) throw new Error('penzor PUT 413: quota exceeded')
+        used += data.byteLength
+        return remote.writeFile(key, data, mtimeMs, signal, expectedId)
+      },
+    }
+    const r = await runSync({ localRoot: rootA, remote: capped, statePath: stateA(), fingerprint: FP, concurrency: 1 })
+    expect(order).toEqual(['small.md', 'mid.md', 'big.md'])
+    expect(r.pushed).toBe(2)
+    expect(r.errors.some((e) => e.includes('big.md'))).toBe(true)
+    expect(await exists(rootA, 'big.md')).toBe(true)
+  })
+})
+
+describe('用云端那份:挪走并清基线', () => {
+  it('有基线、本地改过的文件挪走后,下一轮拉回云端版,不会把云端删掉', async () => {
+    await write(rootA, 'a.md', '云端版')
+    await syncA()
+    await syncB()
+    await write(rootB, 'a.md', '这台改的') // 本地改、云端没动 → push
+    const dry = await syncB({ dryRun: true })
+    expect(dry.plan).toEqual([{ key: 'a.md', kind: 'push' }])
+    const backupDir = path.join(base, 'B 同步前备份')
+    const r = await moveAsideFromSync({ localRoot: rootB, keys: ['a.md'], backupDir, statePath: stateB(), fingerprint: FP })
+    expect(r).toEqual({ moved: 1 })
+    const after = await syncB()
+    expect(after.deletedRemote).toBe(0)
+    expect(await read(rootB, 'a.md')).toBe('云端版')
+    expect(await read(backupDir, 'a.md')).toBe('这台改的')
+    expect(await read(remoteDir, 'a.md')).toBe('云端版')
+  })
+
+  it('这台删掉的(pushDelete)清基线后拉回云端版,不删云端', async () => {
+    await write(rootA, 'gone.md', '云端还在')
+    await syncA()
+    await syncB()
+    await fs.rm(path.join(rootB, 'gone.md'))
+    const dry = await syncB({ dryRun: true })
+    expect(dry.plan).toEqual([{ key: 'gone.md', kind: 'pushDelete' }])
+    expect(await moveAsideFromSync({ localRoot: rootB, keys: [], forget: ['gone.md'], backupDir: path.join(base, 'bk'), statePath: stateB(), fingerprint: FP })).toEqual({ moved: 0 })
+    const after = await syncB()
+    expect(after.deletedRemote).toBe(0)
+    expect(await read(rootB, 'gone.md')).toBe('云端还在')
+  })
+
+  it('挪到一半失败:没挪的只是没了基线,下一轮出冲突副本,云端不删', async () => {
+    await write(rootA, 'a.md', '云端 a')
+    await write(rootA, 'b.md', '云端 b')
+    await syncA()
+    await syncB()
+    await write(rootB, 'a.md', '这台 a')
+    await write(rootB, 'b.md', '这台 b')
+    const r = await moveAsideFromSync({ localRoot: rootB, keys: ['a.md', 'missing.md', 'b.md'], backupDir: path.join(base, 'bk2'), statePath: stateB(), fingerprint: FP })
+    expect(r.moved).toBe(1)
+    expect(r.error).toBeTruthy()
+    const after = await syncB()
+    expect(after.deletedRemote).toBe(0)
+    expect(await read(remoteDir, 'b.md')).toBe('云端 b')
+    expect(await read(rootB, 'b.md')).toBe('云端 b')
+    expect((await list(rootB)).some((f) => f.startsWith('b (conflict'))).toBe(true)
+  })
+
+  it('挪空的文件夹不留空壳,还有别的东西的文件夹留着', async () => {
+    await write(rootB, '项目/a.md', 'a')
+    await write(rootB, '项目/深/b.md', 'b')
+    await write(rootB, '日记/c.md', 'c')
+    await write(rootB, '日记/keep.md', 'keep')
+    const r = await moveAsideFromSync({ localRoot: rootB, keys: ['项目/a.md', '项目/深/b.md', '日记/c.md'], backupDir: path.join(base, 'bk3'), statePath: stateB(), fingerprint: FP })
+    expect(r).toEqual({ moved: 3 })
+    expect(await exists(rootB, '项目')).toBe(false)
+    expect(await exists(rootB, '日记/keep.md')).toBe(true)
+    expect(await read(path.join(base, 'bk3'), '项目/深/b.md')).toBe('b')
+  })
+
+  it('越出同步根的 key 一个都不挪、基线不动', async () => {
+    const r = await moveAsideFromSync({ localRoot: rootB, keys: ['ok.md', '../x.md'], backupDir: path.join(base, 'bk'), statePath: stateB(), fingerprint: FP })
+    expect(r).toEqual({ moved: 0, error: 'unsafe-key' })
   })
 })
 

@@ -162,7 +162,7 @@ export async function startRun(
       approval_tray: true,
       // Native UI is declarative; this capability advertises a renderer, not a client command surface.
       // 引擎据此 default-deny `clientCapability` 工具;请求时现算(移动端开关随时会变)。
-      client_capabilities: [...collectClientCapabilities(), ...(currentPlatform() !== 'mobile' ? ['intelligent-ui.v1'] : [])],
+      client_capabilities: [...collectClientCapabilities(), 'marketplace-cards.v1', ...(currentPlatform() !== 'mobile' ? ['intelligent-ui.v1', 'intelligent-ui.v2'] : [])],
       message: params.message,
       attachments: params.attachments || [],
       agent_config: params.agentConfig || {},
@@ -303,7 +303,7 @@ export async function sendUiAck(
   t: EngineTarget,
   runId: string,
   ackId: string,
-  body: { ok: boolean; error?: string; state?: string; settings?: Record<string, string> },
+  body: { ok: boolean; error?: string; state?: string; result?: string; settings?: Record<string, string> },
 ): Promise<string> {
   const path = `/agent/runs/${encodeURIComponent(runId)}/inquiries/${encodeURIComponent(ackId)}`
   // ⚠️ 界面已经改完了才发这条回执,所以「发丢了」= 用户看见变化、模型被告知失败(Codex 评审 P1-5)。

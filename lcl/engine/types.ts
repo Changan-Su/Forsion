@@ -103,6 +103,11 @@ export interface ViewDefinition {
   /** 该 view 做活动主视图时,左栏统一工作区应自动切到的模式(如 'notes' 或 'plugin:<pid>:<srcId>')。
    *  autoWorkspaceMode 的声明式扩展位;内置硬规则仍在 workspaceMode.ts。 */
   workspaceSource?: string
+  /** 主视图规则(2026-10-20):这个 view 做主区前台视图时右栏该有的那组视图(按顺序,第一项 = 换过来时顶到前台的那个)。
+   *  没声明 / 空组 / 声明的都用不了 = 落本 Space 的右栏缺省(sidebarDefaults.right)。
+   *  只放能进侧栏的视图:主区实体(编辑器 / PDF / 主区对话)会被滤掉;最多 4 项。判定见 rightRules.ts。
+   *  只管右栏 —— 左栏是 Space 驱动的,不跟主视图走。 */
+  rightCompanions?: import('./layoutPersist').PersistedPanel[]
 }
 
 /**
@@ -118,6 +123,12 @@ export interface ViewDefinition {
  *    的意图去调 toggle,界面本来就是英文时会翻成中文;再叠加 run 事件的 SSE 重放,
  *    一次 cycle 会被放成两次翻转。agent 面**必须**是接显式值的 setter。
  */
+/** `CommandInvoke.run` 的结构化回执:`state` = 一句确认(≤200 字),`result` = 交给模型的数据(≤约 8000 字)。 */
+export interface CommandReceipt {
+  state?: string
+  result?: unknown
+}
+
 export interface CommandInvoke {
   /** 英文,给模型看。存在与否 = 是否 opt-in。 */
   description: string
@@ -125,8 +136,10 @@ export interface CommandInvoke {
   params?: Record<string, unknown>
   /** 接显式值的处理函数;缺省时回落 `Command.run()`(仅适用于真正无参且幂等的命令)。
    *  返回字符串 = **这一次调用**的回执(如「opened model/m-voice」),随结果回给模型,优先于 `state()`;
-   *  并发的两次调用各拿各的,不会串。 */
-  run?(args: Record<string, unknown>): void | string | Promise<void | string>
+   *  并发的两次调用各拿各的,不会串。回执最多 200 字,只做确认。
+   *  要把**查询结果**交给模型(「白板上有哪些框」)就返回 `{ state?, result }`:`result` 是字符串或可 JSON 序列化的值,
+   *  最多约 8000 字,引擎把它圈成不可信数据交给模型(模型不会把里面的话当指令)。 */
+  run?(args: Record<string, unknown>): void | string | CommandReceipt | Promise<void | string | CommandReceipt>
   /** 当前值探针,随目录一起回给模型,省得它靠猜(如当前语言 / 当前明暗档)。 */
   state?(): string
 }
@@ -177,6 +190,9 @@ export interface RibbonItem {
   /** 这个图标自己的右键菜单项(弹的时候现取)。Ribbon 会把通用项排在前面(Space 图标的「在新窗口中打开」)。
    *  组件自己接了右键(preventDefault)的,Ribbon 不再弹。 */
   menu?: () => { label: string; onClick(): void }[]
+  /** 图标上的提示红点(无数字):get 现判、subscribe 在它可能变的时候回调。收进「…」/ 收纳夹时红点挂到「…」/ 收纳夹上。
+   *  只给 icon 项用(component 项自己画)。label = 红点的意思(读屏;手机原生「⋯」半屏画不了点,用它当行的副标题)。 */
+  dot?: { get(): boolean; subscribe(cb: () => void): () => void; label?: () => string }
 }
 
 /** 底部状态栏的一项(≈ Obsidian addStatusBarItem)。 */
@@ -247,6 +263,11 @@ export interface SpaceDefinition {
    *   · 人在它里面时要开别的 Space 的视图(对话、笔记、日历……)→ 先切到那个视图的主人(pinned.main / launcherViews
    *     里列着它的第一个 Space)再开。认不出主人的(浏览器、没带 Space 的插件视图)照旧开在这儿,下次进来时关掉。 */
   onePage?: boolean
+  /** 默认主页:进这个 Space(切进来、冷启动、人已在里面时再点一次它的图标)先看到的视图 —— 主区里有这种视图就把它顶到前台,
+   *  没有就开一个新标签(params 是开它的参数)。别的标签照旧留着,只是退到后台。**缺省 = 还原上次离开时的前台视图**。
+   *  2026-10-18 用户定:「home page 就应该默认打开 home page view,如果之前在 home page 打开了其他 view 再切回来,应该还是 home page」。
+   *  没固定(pinned.main)的默认主页会被「切进来再就地 openView」顶掉,通常两样一起声明。判定见 pinnedViews.mainPageLanding。 */
+  mainPage?: PersistedPanel
   /** 新建标签页(启动器)里这个 Space 那一格能开的视图:第一项 = 点格子开的,其余进展开菜单。**缺省 = pinned.main**。
    *  只有「主区默认视图不等于固定视图」的 Space 才写(配方 Space 的 layout.main;日历多带一个待办)。
    *  没带身份参数的 entity 视图(聊天 / 编辑器)和 aux 视图由启动器滤掉 —— 滤完没剩的 Space 不出格子。 */

@@ -12,12 +12,13 @@
  * 历史实证:installSmoothCaret 漏装过一轮(用户实报「移动端没生效」);2026-07-30 的
  * applyUiFonts / installScrollFade 落地当天就只进了 desktop。
  *
- * 本脚本做五件事(纯正则,不引 TS parser):
+ * 本脚本做六件事(纯正则,不引 TS parser):
  *   A. 启动序列对齐  desktop/frontend/src/main.tsx  ↔ mobile/src/mobileEntry.tsx
  *   B. 根组件对齐    desktop/frontend/src/Root.tsx  ↔ mobile/src/MobileRoot.tsx
  *   C. 外壳替换边界  lcl/engine/Shell.tsx ↔ (MobileRoot.tsx ∪ SingleColumnHost.tsx)
  *   D. 门控台账      bootstrapEngine.tsx 里的 host 门控名单必须与 KNOWN_GATES 一致
  *   E. MainTab 字段  lcl/engine/dockviewStore.ts ↔ lcl/engine/singleColumnStore.ts(两份接口同字段)
+ *   F. 替身 export   lcl/engine/index.ts 经被换模块 re-export 的名字 ↔ mobile 替身(emptyHost 等)的同名 export
  *
  * C 是 2026-07-30 Codex 评审补的:移动端 vite.config 把 `Shell.tsx` 整个换成空壳,于是 Shell 承载的
  * 东西(命令面板、热键、engine.css)一起消失,而 A/B 两对都看不见这条边界。实证:ribbon 的 `rb-cmd`
@@ -78,6 +79,7 @@ const GATE_FILES = [
 
 /** 移动端**故意**不要的东西:名字 → 理由。理由留空 = 视为未声明,照样红灯。 */
 const SKIP = {
+  SyncSetupHost: '首登同步卡片管的是本地库远程同步(window.remoteSync,桌面专属);手机没有同步引擎、直接读云端(云同步开启方案 2026-10-20 第六节)',
   // —— 启动序列 ——
   installMultiWindow: '移动端无卫星窗;实现本身对非 electron 天然 no-op',
   installAccountTransition: 'Electron 多窗口切号前保存握手;web/mobile 通过登录跳转和整页重载清理账号缓存,没有 auth:will-change IPC',
@@ -87,7 +89,7 @@ const SKIP = {
   DetachedRoot: '同上:拖出来的独立窗',
   MiniRoot: '同上:悬浮 mini 卡片',
   FloatingRoot: '第六种 Panel 的 Electron 原生子窗口根;移动端按产品约定继续使用全屏二级页面,不模拟桌面窗口',
-  ChatPreview: '#preview 设计预览页,截图评审用',
+  readTanguChatViews: '#preview 设计预览页(样例对话,截图评审用;核心插件化 2e-7 起经 tanguSeam 从 Tangu 取 ChatPreview)',
   resolveInitialEffectiveMode: '移动端用 resolveInitialMode(无「跟随系统」的 electron 通道)',
   // —— 根组件 ——
   Root: '移动端的对位物就是 MobileRoot 自己',
@@ -102,6 +104,7 @@ const SKIP = {
   getLanguage: 'soft 主题的 panelGap 只喂给 Dockview Shell;单列壳不消费',
   FeedbackModal: '同上:入口(rb-feedback 图标 + open-feedback 命令;图标 2026-08-31 撤下、09-17 放回)门控在 window.tangu?.submitFeedback,移动 shim 无 → 不注册。(组件本身有可选桥检查并显示 unavailable,不会崩;此前这条理由写的「点了就崩」是错的)',
   UnitRemoteSurface: '设备远程面(整个主区切过去)是 <webview>+Electron 分区注入,纯 host 概念;移动端拍板不做被连方/内嵌面,App 互联入口 = UnitsSheet 开外部浏览器引导页(2026-08-25)',
+  runUnitRoutePayload: 'Root 里只接设置浮窗(设置 › 设备)发来的 unit-route 去处,在主窗开远程面 / 切 vaultSide;移动端没有卫星窗也没有远程面(见上一条)',
   Shell: '单列壳 SingleColumnHost 取而代之(mobile/vite.config engineSwap)',
   TopBar: 'Dockview tab 栏专属;单列壳自带导航',
   DesktopStatusBar: '单列壳无 footer 槽',
@@ -286,6 +289,53 @@ function checkMainTab(problems) {
 }
 const e = checkMainTab(problems)
 
+/** F. 移动端把几个引擎模块整份换成替身(mobile/vite.config.ts 的 engineSwap MAP):barrel 从它们 re-export 的
+ *  每个名字,替身里都得有同名 export。少一个,mobile `vite build` 就 rollup 报 "X is not exported by …",
+ *  而 desktop 的 tsc/vitest 碰不到这条路径,只有推 tag 才跑的 build-android 会红 —— v2.7.0 缺 startOpenDrag、
+ *  10-19 PR #55 缺 useViewChromeSlot / VIEW_CHROME_ATTR 都是这么挂的。这一段没有 SKIP:缺了就是构建坏。
+ *  ponytail: 只看 barrel 的 `export { … } from`(lcl/engine/index.ts);`export * from` 被换模块、以及少数
+ *  直接 import 这几个模块的文件没扫,哪天从那条路挂了再扩。 */
+function checkSwapStubs(problems) {
+  const vite = fs.readFileSync(path.join(GENESIS, 'mobile/vite.config.ts'), 'utf8')
+  const roots = { __dirname: path.join(GENESIS, 'mobile'), HERE: path.join(GENESIS, 'mobile/src') }
+  const swaps = [...vite.matchAll(/\[['"]\/engine\/(\w+)\.tsx?['"],\s*resolve\((__dirname|HERE),\s*['"]([^'"]+)['"]\)\]/g)]
+    .map(([, mod, root, rel]) => ({ mod, file: path.resolve(roots[root], rel) }))
+  /** 替身真正导出的运行期名字:声明式 export + `export { a, b as c }` 的对外名(c),不算 type-only。 */
+  const exportedNames = (src) => {
+    const out = new Set()
+    for (const m of src.matchAll(/export\s+(?:async\s+)?(?:const|let|var|function\*?|class)\s+([A-Za-z_$][\w$]*)/g)) out.add(m[1])
+    for (const m of src.matchAll(/export\s*\{([^}]*)\}/g))
+      for (const s of m[1].split(',')) {
+        const t = s.trim()
+        if (t && !t.startsWith('type ')) out.add(t.split(/\s+as\s+/).pop())
+      }
+    return out
+  }
+  const barrelFile = path.join(GENESIS, 'lcl/engine/index.ts')
+  const barrel = read(barrelFile)
+  let names = 0
+  for (const { mod, file } of swaps) {
+    const wanted = []
+    // `export type { … }` 不进 bundle,正则要求 `export {` 紧挨,天然跳过;`X as Y` 要的是源名 X
+    for (const m of barrel.matchAll(new RegExp(`export\\s*\\{([^}]*)\\}\\s*from\\s*['"]\\./${mod}['"]`, 'g')))
+      for (const s of m[1].split(',')) {
+        const n = s.trim().split(/\s+as\s+/)[0]
+        if (n && !n.startsWith('type ')) wanted.push(n)
+      }
+    const exported = exportedNames(read(file))
+    const missing = wanted.filter((n) => !exported.has(n))
+    names += wanted.length
+    if (missing.length) problems.push({ label: `F. 移动替身缺同名 export(barrel 从 ./${mod} re-export,替身里要补 stub)`, deskFile: barrelFile, mobFile: file, missing })
+  }
+  if (!swaps.some((s) => s.mod === 'WorkspaceHost') || !swaps.some((s) => s.mod === 'Shell') || names < 3) {
+    console.error('❌ F 解析失效:抽不到 mobile/vite.config.ts 的 engineSwap 映射或 barrel 的 re-export —— 先修本脚本,别当绿灯。')
+    console.error(`   swaps=${swaps.map((s) => s.mod).join(',')} names=${names}`)
+    process.exit(2)
+  }
+  return { swaps: swaps.length, names }
+}
+const f = checkSwapStubs(problems)
+
 const rel = (p) => path.relative(GENESIS, p)
 console.log('=== 三端功能同步检查 (check:parity) ===')
 console.log(`A. 启动序列  desktop ${a.deskCount} 项 / mobile ${a.mobCount} 项`)
@@ -293,6 +343,7 @@ console.log(`B. 根组件    desktop ${b.deskCount} 项 / mobile ${b.mobCount} �
 console.log(`C. 外壳边界  desktop ${c.deskCount} 项 / mobile ${c.mobCount} 项`)
 console.log(`D. host 门控 ${d.found.size} 处,已登记 ${Object.keys(KNOWN_GATES).length} 条`)
 console.log(`E. MainTab 字段 desktop ${e.desk} 个 / mobile ${e.mob} 个`)
+console.log(`F. 替身 export ${f.swaps} 个替身模块,barrel 经它们 re-export ${f.names} 个名字`)
 if (d.stale.length) console.log(`   ⚠ KNOWN_GATES 里有 ${d.stale.length} 条已在代码中消失(可删):${d.stale.join(', ')}`)
 
 if (!problems.length) {
@@ -310,8 +361,10 @@ for (const p of problems) {
 console.log('修法二选一:')
 console.log('  1) 在移动端补上(mobileEntry.tsx / MobileRoot.tsx),或在 bootstrapEngine 里登记门控;')
 console.log('  2) 确认是故意不要 → 加进 scripts/platform-parity.check.cjs 的 SKIP / KNOWN_GATES,并写清理由。')
-console.log('\n可直接粘贴的骨架:')
-for (const p of problems) {
+console.log('  F 段没有豁免:去替身文件(如 mobile/src/engine/emptyHost.tsx)补同名 stub。')
+const skippable = problems.filter((p) => !p.label.startsWith('F'))
+if (skippable.length) console.log('\n可直接粘贴的骨架:')
+for (const p of skippable) {
   const target = p.label.startsWith('D') ? 'KNOWN_GATES' : 'SKIP'
   for (const n of p.missing) console.log(`  ${target}: ${JSON.stringify(n)}: '',   // ← 填理由`)
 }

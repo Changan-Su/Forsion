@@ -42,6 +42,9 @@ export interface ChromeLayout {
   plates: Array<{ id: string; x: number; y: number; w: number; h: number }>
   /** A screen reader (touch exploration) is on. Reported whether or not the chrome floats. */
   reader?: boolean
+  /** The window is wide (same line as the shell's WIDE_QUERY, judged on the whole window): the Spaces are a rail at the
+   *  left edge instead of the dock, and the WebView starts right of it. Reported whether or not the chrome floats. */
+  wide?: boolean
 }
 interface NativeChromePlugin {
   setState(state: Omit<NativeChromeState, 'spaces'> & {
@@ -86,10 +89,13 @@ const BADGE_LABEL: Record<SpaceBadgeKind, () => string> = {
 export function spaceBadges(): Record<string, SpaceBadgeKind> {
   const app = useApp.getState()
   const out: Record<string, SpaceBadgeKind> = {}
-  const waiting = mergeAttention(attentionIndex(useAttention.getState().byTarget), app.messagesBySession, app.runningBySession).size > 0
+  // dm = 引擎 attention 端点(10-18 Muse 私聊方案 B):Muse 主动发来没看的、它在等回答 / 后台有待批的,与桌面 Tangu 角标同一份。
+  const dm = useAttention.getState().dm
+  const dmHas = (k: 'awaiting' | 'unread'): boolean => app.sessions.some((x) => !!dm[x.id]?.[k])
+  const waiting = mergeAttention(attentionIndex(useAttention.getState().byTarget), app.messagesBySession, app.runningBySession).size > 0 || dmHas('awaiting')
   if (waiting) out.tangu = 'attention'
   else if (Object.keys(app.runningBySession).length) out.tangu = 'running'
-  else if (app.unread.size && app.sessions.some((x) => app.unread.has(x.id))) out.tangu = 'unread'
+  else if ((app.unread.size && app.sessions.some((x) => app.unread.has(x.id))) || dmHas('unread')) out.tangu = 'unread'
   if (useInbox.getState().unreadCount > 0) out.inbox = 'unread'
   return out
 }
@@ -134,6 +140,10 @@ export function applyChromeLayout(e: ChromeLayout | null | undefined, doc: Docum
   if (!body) return
   // lcl reads this (SingleColumnHost `readerOn`): what is only there for a screen reader is only done while one is on.
   doc.documentElement.toggleAttribute('data-reader', e?.reader === true)
+  // lcl reads this (SingleColumnHost `wideNow`): judged on the whole window, so the rail taking its width off the page
+  // does not flip the page back to narrow. No report (fallback to the web bar) = the page judges by itself again.
+  if (typeof e?.wide === 'boolean') doc.documentElement.dataset.nativeWide = e.wide ? '1' : '0'
+  else delete doc.documentElement.dataset.nativeWide
   const floating = !!e && e.floating === true
   const vars: Array<[string, number]> = [['--nc-top', floating ? dpNumber(e?.top) : 0], ['--nc-bottom', floating ? dpNumber(e?.bottom) : 0], ['--nc-status', floating ? dpNumber(e?.status) : 0]]
   // The main view of a list-first Space: the dock is away, so the report says bottom = 0. The dock's room is left
@@ -148,6 +158,7 @@ export function applyChromeLayout(e: ChromeLayout | null | undefined, doc: Docum
   }
   const plates = (floating && Array.isArray(e?.plates) ? e.plates : [])
     .filter((p) => p && /^[A-Za-z]{1,24}$/.test(String(p.id)) && dpNumber(p.w) > 0 && dpNumber(p.h) > 0)
+  capsuleWidths(plates, doc)
   let box = doc.getElementById('nc-plates')
   if (!plates.length) { box?.remove(); return }
   if (!box) {
@@ -166,6 +177,17 @@ export function applyChromeLayout(e: ChromeLayout | null | undefined, doc: Docum
     const y = typeof p.y === 'number' && Number.isFinite(p.y) ? p.y : 0
     el.style.cssText = `left:${dpLength(x)};top:${dpLength(y)};width:${dpLength(p.w)};height:${dpLength(p.h)}`
   }
+}
+
+/** The two top capsules' widths (dp) for what lays itself out in their row (the board's top islands, base.css). Not on
+ *  <body> like the --nc-* above: they change on every navigation (the title), and an inherited custom property on <body>
+ *  restyles the whole page — a rule that only matches `[data-nc-caps]` restyles only the elements that asked. */
+function capsuleWidths(plates: ChromeLayout['plates'], doc: Document): void {
+  const w = (id: string): number => dpNumber(plates.find((p) => p.id === id)?.w)
+  const css = `[data-nc-caps]{--nc-capl-w:${w('capLeft')};--nc-capr-w:${w('capRight')}}`
+  let el = doc.getElementById('nc-caps')
+  if (!el) { el = doc.createElement('style'); el.id = 'nc-caps'; doc.head.appendChild(el) }
+  if (el.textContent !== css) el.textContent = css
 }
 
 let installed = false

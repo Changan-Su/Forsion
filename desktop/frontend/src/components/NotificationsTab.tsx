@@ -5,7 +5,7 @@
  * 状态栏行 = 内置元数据 ∪ 当前已注册项(插件项动态出现;禁用插件即消失,偏好键保留无妨)。
  */
 import { useMemo, useState } from 'react'
-import { Bell, GripVertical, ListChecks, MonitorUp, PanelBottom, Plug } from 'lucide-react'
+import { GripVertical, MonitorUp, PanelBottom } from 'lucide-react'
 import { useStatusStore } from '@lcl/engine'
 import { translate, useI18n } from '../i18n'
 import { NOTIFY_EVENTS, eventDefaultOn, notifyApp, useNotifications } from '../stores/notificationStore'
@@ -13,6 +13,8 @@ import { BUILTIN_STATUS_ITEMS } from '../statusbar/items'
 import { useSbPrefs } from '../statusbar/prefs'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
 import { SettingsPanel, SettingsRow, SettingsSwitch } from './SettingsPrimitives'
+import { SettingsPage } from './SettingsPage'
+import type { PluginSettingsGroup, PluginSettingsItem } from '../../../shared/settingsPage'
 
 const switchRow = (checked: boolean, onChange: (on: boolean) => void, name: string, desc?: string, disabled?: boolean) => (
   <SettingsRow
@@ -30,6 +32,7 @@ export function sendTestNotification(): void {
   notifyApp({ text: translate('ntf.testBody'), level: 'info', force: true })
 }
 
+/** 第一页换成设置零件的整页描述(2026-10-17):和插件的 ctx.ui.mountSettingsPage 同一份画法,手机上开关留在右边。 */
 export function NotificationsTab() {
   const { t } = useI18n()
   const prefs = useNotifications((s) => s.prefs)
@@ -39,46 +42,31 @@ export function NotificationsTab() {
   const plugins = usePluginStore((s) => s.plugins)
   const activeIds = usePluginStore((s) => s.activeIds)
   const activePlugins = plugins.filter((p) => activeIds.includes(p.id))
+  const off = !prefs.enabled
+  const eventSwitch = (id: string, title: string, on: boolean): PluginSettingsItem =>
+    ({ type: 'switch', id, title, value: on, disabled: off, onChange: (next: boolean) => setEventOn(id, next) })
 
-  return (
-    <>
-      <SettingsPanel
-        icon={<Bell size={16} />}
-        title={t('ntf.delivery')}
-        description={t('ntf.enableHint')}
-        actions={<button className="btn ghost sm" onClick={() => window.tangu?.requestMainAction ? window.tangu.requestMainAction('test-notification') : sendTestNotification()}>{t('ntf.sendTest')}</button>}
-      >
-        <div className="settings-control-list">
-          {switchRow(prefs.enabled, setEnabled, t('ntf.enable'))}
-          {switchRow(prefs.osEnabled, setOsEnabled, t('ntf.osEnable'), t('ntf.osEnableHint'), !prefs.enabled)}
-        </div>
-      </SettingsPanel>
-
-      <SettingsPanel icon={<ListChecks size={16} />} title={t('ntf.events')} description={t('ntf.eventsHint')}>
-        <div className="settings-control-list">
-        {NOTIFY_EVENTS.map((ev) =>
-            switchRow(prefs.events[ev.id] ?? ev.defaultOn, (on) => setEventOn(ev.id, on), t(ev.labelKey), undefined, !prefs.enabled),
-        )}
-        </div>
-      </SettingsPanel>
-
-      {activePlugins.length > 0 && (
-        <SettingsPanel icon={<Plug size={16} />} title={t('ntf.pluginEvents')} description={t('ntf.pluginEventsHint')}>
-          <div className="settings-control-list">
-            {activePlugins.map((p) =>
-              switchRow(
-                prefs.events[`plugin:${p.id}`] ?? eventDefaultOn(`plugin:${p.id}`),
-                (on) => setEventOn(`plugin:${p.id}`, on),
-                p.name,
-                undefined,
-                !prefs.enabled,
-              ),
-            )}
-          </div>
-        </SettingsPanel>
-      )}
-    </>
-  )
+  const groups: PluginSettingsGroup[] = [
+    {
+      id: 'delivery', icon: 'bell', title: t('ntf.delivery'), desc: t('ntf.enableHint'),
+      actions: [{ label: t('ntf.sendTest'), onClick: () => { window.tangu?.requestMainAction ? window.tangu.requestMainAction('test-notification') : sendTestNotification() } }],
+      items: [
+        { type: 'switch', id: 'enabled', title: t('ntf.enable'), value: prefs.enabled, onChange: setEnabled },
+        { type: 'switch', id: 'os', title: t('ntf.osEnable'), desc: t('ntf.osEnableHint'), value: prefs.osEnabled, disabled: off, onChange: setOsEnabled },
+      ],
+    },
+    {
+      id: 'events', icon: 'list-checks', title: t('ntf.events'), desc: t('ntf.eventsHint'),
+      items: NOTIFY_EVENTS.map((ev) => eventSwitch(ev.id, t(ev.labelKey), prefs.events[ev.id] ?? ev.defaultOn)),
+    },
+  ]
+  if (activePlugins.length > 0) {
+    groups.push({
+      id: 'plugins', icon: 'plug', title: t('ntf.pluginEvents'), desc: t('ntf.pluginEventsHint'),
+      items: activePlugins.map((p) => eventSwitch(`plugin:${p.id}`, p.name, prefs.events[`plugin:${p.id}`] ?? eventDefaultOn(`plugin:${p.id}`))),
+    })
+  }
+  return <SettingsPage schema={{ groups }} />
 }
 
 interface SbRow {

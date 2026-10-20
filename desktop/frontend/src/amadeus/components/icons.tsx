@@ -3,7 +3,7 @@
  *  刻意不装 npm 依赖:渲染层三端共享(desktop/web/mobile),本地文件零外部解析。
  *  增补图标照原样从 @blocksuite/icons 摘录,保持 currentColor 不带死色。 */
 import type { ComponentType, ReactElement, ReactNode, SVGProps } from 'react'
-import { Archive, ArchiveRestore, Bot, Cloud, Copy, Highlighter, Mail, MailOpen, RefreshCw, StickyNote, Strikethrough, TextQuote, Trash2, Underline, Workflow, type LucideIcon, type LucideProps } from 'lucide-react'
+import { Activity, Archive, ArchiveRestore, AudioLines, Bell, Bot, Circle, CircleCheck, Clock, Cloud, Coins, Copy, Gauge, Gift, HardDrive, Highlighter, ListChecks, Lock, Mail, MailOpen, MessageSquare, NotebookPen, Package, Plug, RefreshCw, Shield, StickyNote, Strikethrough, TextQuote, Trash2, Underline, User, Workflow, type LucideIcon, type LucideProps } from 'lucide-react'
 
 const I = (children: ReactElement) => (props: SVGProps<SVGSVGElement>) => (
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="1em" height="1em" fill="none" aria-hidden {...props}>
@@ -152,6 +152,28 @@ export const PLUGIN_ICONS: Record<string, ComponentType<SVGProps<SVGSVGElement>>
   annotate: L(StickyNote),
   copy: L(Copy),
   cite: L(TextQuote),
+  // 进度类列表的状态(使用指南的章节树,2026-10-17):没做完 / 做完 / 锁住。todo 是块菜单的「待办」图标(自带勾),当不了「没做完」
+  circle: L(Circle),
+  'circle-check': L(CircleCheck),
+  lock: L(Lock),
+  // 网盘一类的位置(蓬洲云「我的云盘」,2026-10-18)
+  'hard-drive': L(HardDrive),
+  // 看法胶囊窄时只留图标(ctx.ui.setViewModes,2026-10-19;谛听的转写 / 笔记 / 纪要)
+  'audio-lines': L(AudioLines),
+  'notebook-pen': L(NotebookPen),
+  // 设置页的分组面板(ctx.ui.mountSettingsPage 的 group.icon,2026-10-17):账号、额度、积分、通知这类设置页要的那几枚
+  bell: L(Bell),
+  gauge: L(Gauge),
+  coins: L(Coins),
+  clock: L(Clock),
+  gift: L(Gift),
+  user: L(User),
+  shield: L(Shield),
+  package: L(Package),
+  activity: L(Activity),
+  message: L(MessageSquare),
+  plug: L(Plug),
+  'list-checks': L(ListChecks),
 }
 
 /** 词表键的形状。**未命中词表但长成这样**的字符串 = 插件在叫一个本宿主还不认识的名字。 */

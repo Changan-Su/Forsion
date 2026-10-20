@@ -7,7 +7,7 @@ import { getAgentHarness, getProjectContext, getSessionActivity, resolveHarnessC
 import { HARNESS_CHANGED_EVENT } from '../services/harnessUpdates'
 import { anchorTraces, sessionTraces, type PendingSources, type SessionTrace, type TraceCandidate } from '../services/selfUpdates'
 import { targetForSession } from '../services/engine/targets'
-import type { HistorianActivityItem } from '../types'
+import type { HistorianActivityItem } from '../../../../tangu-agent/src/contracts/clientTypes'
 import './HarnessUpdateCard' // 复用「本次更新已撤销 / 撤销冲突」等词条
 import '../views/projectProfileMessages' // 复用项目记忆候选的「已不在了 / 正在改 / 写满」
 import './selfUpdates.css'
@@ -108,8 +108,9 @@ export function SessionTraceLines({ traces, sessionId }: { traces: SessionTrace[
       window.dispatchEvent(new CustomEvent(c.target.kind === 'harness' ? HARNESS_CHANGED_EVENT : SESSION_TRACES_EVENT))
     }
   }
-  const openAgent = () => showDetails({ kind: 'agent', slug, evolution: Date.now() })
-  const openProject = projectPath ? () => showDetails({ kind: 'project', path: projectPath }) : undefined
+  // 「查看」落到这一行说的那几条:进化记录 → 「成长 › 进化」里同名的条目 / 候选;项目记忆 → 「设置 › 项目记忆」里同一句
+  const openAgent = (trace: SessionTrace) => { const at = Date.now(); showDetails({ kind: 'agent', slug, evolution: at, records: { at, texts: trace.items } }) }
+  const openProject = projectPath ? (trace: SessionTrace) => showDetails({ kind: 'project', path: projectPath, records: { at: Date.now(), texts: trace.items, ...(trace.kind === 'project_memory_compacted' ? { part: 'compacted' as const } : {}) } }) : undefined
   const sep = locale === 'zh' ? '；' : '; '
   return <>
     {traces.map((trace) => {
@@ -131,7 +132,7 @@ export function SessionTraceLines({ traces, sessionId }: { traces: SessionTrace[
             {trace.kind === 'project_memory_compacted' && t('selfTrace.projectCompacted')}
           </span>
           <span className="self-trace-ops">
-            {open && <button type="button" className="self-act" onClick={open}>{t('selfTrace.view')}</button>}
+            {open && <button type="button" className="self-act" onClick={() => open(trace)}>{t('selfTrace.view')}</button>}
             {trace.undo?.state === 'current' && <button type="button" className="self-act" disabled={!!busy} onClick={() => void undo(trace)}><Undo2 size={12} />{t('selfTrace.undo')}</button>}
           </span>
         </div>

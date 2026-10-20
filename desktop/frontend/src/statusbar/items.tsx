@@ -6,7 +6,7 @@ import { useEffect, useState } from 'react'
 import { AlertCircle, Check, CloudOff, Inbox, Link2, RefreshCw } from 'lucide-react'
 import {
   StatusBar, activeMainPanel, addStatusItem, useStatusStore, getActiveSpace, label,
-  openCommandPalette, setActiveSpace, useSpaceStore, useWorkspace,
+  openCommandPalette, switchSpace, useSpaceStore, useWorkspace,
   effectiveHotkey, formatHotkey, isMacPlatform, useShortcuts,
 } from '@lcl/engine'
 import type { StatusItem } from '@lcl/engine'
@@ -195,7 +195,7 @@ function InboxItem() {
   if (!n) return null
   const desc = t('ribbon.spaceUnread', { name: inbox ? label(inbox.name) : t('sb.item.inbox'), n })
   return (
-    <button type="button" className="sb-click" title={desc} aria-label={desc} onClick={() => setActiveSpace('inbox')}>
+    <button type="button" className="sb-click" title={desc} aria-label={desc} onClick={() => switchSpace('inbox')}>
       <Inbox size={11} />
       {n}
     </button>

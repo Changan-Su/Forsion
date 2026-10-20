@@ -17,10 +17,12 @@
 import { app } from 'electron'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createServer } from 'node:net'
-import { existsSync, readFileSync, statSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync, statSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { randomBytes, randomUUID } from 'node:crypto'
-import { forsionHomeDir, tanguDataDir, defaultWorkspaceDir } from './forsionHome'
+import { forsionHomeDir, tanguDataDir, defaultWorkspaceDir, isDevMode } from './forsionHome'
+import { clipSourceDir } from './clipExtension'
 import { amadeusConfigPath } from './amadeus/settings'
 import { COMPUTER_HISTORY_DESKTOP_CONFIG_ENV, COMPUTER_HISTORY_DESKTOP_CONFIG_FILE } from '../shared/computerHistory'
 import { REMOTE_LOCK_FILE, REMOTE_LOCK_FILE_ENV } from '../shared/remoteSafety' // P1-K2
@@ -364,7 +366,10 @@ export class BackendManager {
       env.TANGU_BROWSER_ALLOW_PRIVATE_URLS = s.browserAllowPrivateUrls ? '1' : '0'
       env.TANGU_BROWSER_COMMAND_TIMEOUT_MS = String(s.browserCommandTimeoutMs || 30000)
       // Tangu for Chrome 扩展桥的端口:dev 与正式版各用一个,两个同时开着也不抢(连接码按各自家目录分开存)
-      env.TANGU_BROWSER_EXTENSION_PORT = app.isPackaged ? '47654' : '47655'
+      // dev 认外面给的端口(台架:隔离实例不和开着的 dev 引擎抢 47655)
+      env.TANGU_BROWSER_EXTENSION_PORT = app.isPackaged ? '47654' : (process.env.TANGU_BROWSER_EXTENSION_PORT || '47655')
+      // 扩展本体是 Forsion Clip(npm @forsion/clip):安装包里在 tangu-server/browser-extension(引擎自己找得到),dev 指到依赖里那份
+      if (!app.isPackaged) env.TANGU_BROWSER_EXTENSION_DIR = clipSourceDir()
       // 通道(微信/Telegram/QQ)配置改由引擎直接读 config.json channels/wechat 段,不再经 env 注入
       //(旧 TANGU_WECHAT_* env 会压过 config,新设置页写 /agent/channels 后热生效,无需重启后端)。
       // 让后端的微信远程会话落到桌面默认工作区(host 执行 cwd);兜底 ~/Tangu。
@@ -372,6 +377,14 @@ export class BackendManager {
       // agent 的 amadeus_* 工具直连磁盘读写。给它 amadeus-config.json 的路径,让它 **实时读** 桌面当前
       // 的 lastVault —— 不再瞎猜默认路径(用户的 vault 常是自定义路径,且运行时可切换 vault)。
       env.FORSION_AMADEUS_CONFIG = amadeusConfigPath()
+      // 默认日历 = 默认笔记库根上首启播种的 Calendar.db(和 amadeus/ipc.ts ensureDefaultVault 同一个路径);引擎把它和 human/CALENDAR.db 双向镜像。
+      // 家目录和工作区要么都是默认的、要么都被台架重定向了才给:一边真一边假就会把台架的日历合进真的 human/ 和账号云端,
+      // 或者把台架的 human/ 合进真库(打包版的 defaultWorkspaceDir 不认 FORSION_WORKSPACE_DIR)。外面已经给了(含空串 = 关)就照用。
+      const real = (p: string): string => { try { return realpathSync(p) } catch { return p } }
+      const ownHome = real(forsionHomeDir()) === real(join(homedir(), isDevMode() ? '.forsion-dev' : '.forsion'))
+      const ownWorkspace = app.isPackaged || !process.env.FORSION_WORKSPACE_DIR?.trim()
+      if (env.FORSION_DEFAULT_CALENDAR === undefined && ownHome === ownWorkspace)
+        env.FORSION_DEFAULT_CALENDAR = join(defaultWorkspaceDir(), 'Amadeus', 'Calendar.db')
       // 电脑历史的第二道闸:桌面壳配置(userData,随产品名 / dev 变,引擎猜不到)的绝对路径。引擎除了 state.json 还要求这份
       // 文件里 computerHistoryEnabled === true —— state.json 写不进也删不掉时,已落进这里的「关」照样让引擎按关(见 shared 契约)
       env[COMPUTER_HISTORY_DESKTOP_CONFIG_ENV] = join(app.getPath('userData'), COMPUTER_HISTORY_DESKTOP_CONFIG_FILE)

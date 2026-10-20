@@ -11,6 +11,7 @@ import { Markdown } from '../../components/Markdown'
 import { openAgentProfile } from '../agentProfileNav'
 import { showDetails } from '../../stores/detailsSubject'
 import { targetForSession } from '../../services/engine/targets'
+import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 registerMessages({
   'historian.status.ready': { zh: '待命', en: 'Ready' },
@@ -79,13 +80,13 @@ function notifyConfirm(sessionId: string, activityId: string): void {
 }
 
 /** 同上,项目记忆那一份:候选在项目详情 › 配置 › 项目记忆里等用户点头。会话不在项目里(理论上不会)就只提醒、不给按钮。 */
-function notifyProjectCandidates(sessionId: string, activityId: string): void {
+function notifyProjectCandidates(sessionId: string, activityId: string, detail: string): void {
   const st = useApp.getState()
   const path = st.sessions.find((x) => x.id === sessionId)?.project_path || ''
   notifyApp({
     event: 'memory.projectCandidates', level: 'info', sticky: true, dedupeKey: `memory.projectCandidates:${activityId}`,
     text: st.tr('ntf.projectCandidates', { name: path.split(/[\\/]/).filter(Boolean).pop() || '' }),
-    ...(path ? { action: { label: st.tr('ntf.actionView'), run: () => showDetails({ kind: 'project', path }) } } : {}),
+    ...(path ? { action: { label: st.tr('ntf.actionView'), run: () => showDetails({ kind: 'project', path, records: { at: Date.now(), texts: detail.split(' | ') } }) } } : {}),
   })
 }
 
@@ -96,7 +97,7 @@ function notifyProjectCompacted(sessionId: string, activityId: string): void {
   notifyApp({
     event: 'memory.projectCompacted', level: 'info', dedupeKey: `memory.projectCompacted:${activityId}`,
     text: st.tr('ntf.projectCompacted', { name: path.split(/[\\/]/).filter(Boolean).pop() || '' }),
-    ...(path ? { action: { label: st.tr('ntf.actionView'), run: () => showDetails({ kind: 'project', path }) } } : {}),
+    ...(path ? { action: { label: st.tr('ntf.actionView'), run: () => showDetails({ kind: 'project', path, records: { at: Date.now(), texts: [], part: 'compacted' } }) } } : {}),
   })
 }
 
@@ -149,7 +150,7 @@ export function HistorianStatus({ sessionId }: { sessionId: string }) {
           for (const item of fresh) {
             if (item.action === 'harness_adopted') notifyAdopted(sessionId, item.id, item.detail || '')
             else if (item.action === 'harness_confirm') notifyConfirm(sessionId, item.id)
-            else if (item.action === 'project_memory_candidates') notifyProjectCandidates(sessionId, item.id)
+            else if (item.action === 'project_memory_candidates') notifyProjectCandidates(sessionId, item.id, item.detail || '')
             else if (item.action === 'project_memory_compacted') notifyProjectCompacted(sessionId, item.id)
             else nudgeRefine(sessionId, item.id)
           }

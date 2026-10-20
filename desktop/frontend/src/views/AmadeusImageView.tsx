@@ -6,11 +6,12 @@ import type { ViewProps } from '@lcl/engine'
 import { useVisualTheme as useTheme } from '../stores/themeStore'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { toAssetUrl } from '@amadeus-shared/assets'
+import { useVaultRelParam } from './vaultRelParam'
 
 const imgBase = (p: string): string => p.split(/[\\/]/).pop() || p
 
 export function AmadeusImageView({ leaf }: ViewProps) {
-  const imagePath = typeof leaf.params.imagePath === 'string' ? leaf.params.imagePath : ''
+  const imagePath = useVaultRelParam(leaf, 'imagePath')
   const mode = useTheme((s) => s.mode)
   // 同 PDF:asset:// 协议按「当前打开的 vault」解析,启动恢复 tab 时 vault 可能还没 open →
   // 先不挂 <img>(否则碎图,且 vault 就绪后 src 不变不会自愈)。vaultRoot 落地即重渲挂载。

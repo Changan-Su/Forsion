@@ -1,14 +1,13 @@
 import { registerAmadeusViews } from './features/amadeus'
-import { ensureAppRefCommand } from './views/chat2/appRefCommand'
 import { inboxAvailable } from './features/runtime'
-import { registerTanguViews } from './features/tangu'
+import { registerTanguCommands, registerTanguViews } from '@tangu/ui/features/tangu'
 import { registerOperationsViews } from './features/operations'
 import { hasNativeFeature, amadeusAvailable } from './features/runtime'
 import { registerMiniViews } from './mini/miniViews'
 /** 真实引擎装配:注册视图(会话/对话)+ ribbon + 命令 + 默认布局。替代 demoBootstrap。 */
-import { MessageCircle, Folder, Plus, Command as CommandIcon, Moon, Languages, MessageSquare, Store, Settings, FileText, ListTree, Search, Inbox, Mail, PanelLeft, PanelRight, PanelBottom, Code2, Trophy, Activity, AppWindow, Sun, TextCursorInput } from 'lucide-react'
+import { Folder, Plus, Command as CommandIcon, Moon, Languages, MessageSquare, Store, Settings, FileText, ListTree, Search, Inbox, Mail, PanelLeft, PanelRight, PanelBottom, Code2, Trophy, Activity, AppWindow, Sun, TextCursorInput } from 'lucide-react'
 import type { LucideIcon, LucideProps } from 'lucide-react'
-import { registerView, addCommand, addRibbonIcon, useRibbonStore, moveTo, openCommandPalette, useWorkspace, useSpaceStore, getActiveSpace, setActiveSpaceCold, setActiveSpace, openRedirectType, adoptSpaceLayoutCold, seedSpaceWindowLayout, BOOT_ACTIVE_SPACE_ID, getView, label, recordNav, useNav, activeMainPanel, setEngineI18n, setRibbonActions, UI_MODE, WINDOW_SPACE_ID, supportsMiniPanel, LCL_MESSAGES } from '@lcl/engine'
+import { registerView, addCommand, addRibbonIcon, useRibbonStore, moveTo, openCommandPalette, useWorkspace, useSpaceStore, getActiveSpace, setActiveSpaceCold, setActiveSpace, openRedirectType, adoptSpaceLayoutCold, seedSpaceWindowLayout, BOOT_ACTIVE_SPACE_ID, getView, label, recordNav, useNav, activeMainPanel, setEngineI18n, setRibbonActions, UI_MODE, WINDOW_SPACE_ID, supportsMiniPanel, LCL_MESSAGES, installViewModeCommands } from '@lcl/engine'
 import type { ViewProps } from '@lcl/engine'
 import { useEffect } from 'react'
 import { windowKind } from './windowKind'
@@ -27,8 +26,7 @@ import { installBuiltins } from './builtins'
 import { AccountCard } from './components/AccountCard'
 import { RestartUpdateButton } from './components/RestartUpdateButton'
 import { UnitSwitcher } from './components/UnitSwitcher'
-import { useApp, activeChatModelId } from './stores/appStore'
-import { openBtw } from './views/chat2/btwStore'
+import { useApp } from './stores/appStore'
 import { PRODUCT } from './product'
 import { useTheme, useVisualTheme, toggleVisibleMode } from './stores/themeStore'
 import { notifyApp, useNotifications } from './stores/notificationStore'
@@ -50,7 +48,9 @@ import { matchFileType, fileTypeBaseName, setResetCardCeremonyHandler } from './
 import { ActivityLogView } from './views/ActivityLogView'
 import { ActiveWindowView } from './views/ActiveWindowView'
 import { ActivityDashboardCard, InboxDashboardCard } from './views/DashboardCompactViews'
+import { hasClaimable, initCloudAchievements, track, useAchievements } from './achievements/store'
 import { installDeepLinks } from './deepLinkInstall'
+import { installOpenFiles } from './openFileInstall'
 import { FILE_VIEW_PARAM } from './viewFileMatch'
 import { presentResetCardCeremony } from './components/ResetCardCeremony'
 import type { AccountQuotaView } from './services/accountQuota'
@@ -73,14 +73,8 @@ registerMessages({
 
 const ws = () => useWorkspace.getState()
 const app = () => useApp.getState()
-export const blankNewChat = (): void => {
-  const s = app()
-  s.setActiveId(null)
-  s.setNewChatWs(null)
-  s.setNewChatCfg(() => ({}))
-  s.setNewChatModel(null)
-  ws().openView('chat', { followActive: true, reuseKey: 'primary' }, 'main')
-}
+// 「新对话」随 Tangu 的命令挪进了 features/tangu.tsx(核心插件化 2e-4);手机分享入口(mobile/src/shareInbox)仍从这里取
+export { blankNewChat } from '@tangu/ui/features/tangu'
 /** 空占位内容(订阅 i18n,语言切换即时生效)。同一个视图服务左右侧栏与**底部面板**,
  *  故文案按所在区取:底部说「面板」不说「侧栏」。tab 标题在 displayName 里拿不到 leaf,
  *  只能在这儿按区改写(WbTab 订阅了 onDidTitleChange,改完即刷)。 */
@@ -89,12 +83,6 @@ function SidebarEmptyView({ leaf }: ViewProps) {
   const bottom = leaf.loc === 'bottom'
   useEffect(() => { if (bottom) leaf.setTitle(t('panel.emptyTitle')) }, [bottom, leaf, t])
   return <div className="wb-sidebar-empty">{t(bottom ? 'panel.empty' : 'sidebar.empty')}</div>
-}
-const splitChat = (): void => {
-  const active = ws().getActiveLeaf()
-  if (active?.type !== 'chat') { ws().splitActive('right'); return }
-  const pinned = typeof active.params.sessionId === 'string' ? active.params.sessionId : app().activeId
-  ws().splitActive('right', { followActive: false, sessionId: pinned, reuseKey: `session:${pinned || 'new'}` })
 }
 /** Ribbon 明暗钮的图标跟随当前明暗:暗色显示 Sun(点了变亮),亮色显示 Moon(点了变暗)。
  *  做成读 store 的组件而不是换注册:RibbonItem.icon 是静态字段,主页坞 / 移动单列壳也直接拿它渲染。 */
@@ -132,10 +120,10 @@ export function installEngine(): void {
   // 工作区文件预览标签页(多实例,params.path 随布局持久化;打开一律走 views/wsFileNav.openWsFile,
   // 替代原 chatbox 上方的浮层预览 —— 浮层暂时停用,见 appStore.setFilePreview)。无条件注册:
   // Tangu Web 恢复含 wsfile 的布局不被整份丢弃,视图内对缺失的 host 能力自兜底占位。
-  registerView({ type: 'wsfile', kind: 'entity', idParam: 'path', displayName: () => app().tr('view.wsfile'), icon: FileText, factory: (props) => <WsFileView {...props} /> })
+  registerView({ type: 'wsfile', kind: 'entity', rightCompanions: [{ type: 'chat-panel', params: { followActive: true } }], idParam: 'path', displayName: () => app().tr('view.wsfile'), icon: FileText, factory: (props) => <WsFileView {...props} /> })
   // Coding Space 主界面(Code | Preview 工作台);仅在产品档案点名 coding 时注册。
   if (PRODUCT.nativeFeatures === undefined && PRODUCT.spaces.includes('coding')) {
-    registerView({ type: 'code-studio', kind: 'page', displayName: () => app().tr('view.codeStudio'), icon: Code2, factory: (props) => <CodeStudioView {...props} />, singleton: true })
+    registerView({ type: 'code-studio', kind: 'page', rightCompanions: [{ type: 'workspace', params: { mode: 'files' } }], displayName: () => app().tr('view.codeStudio'), icon: Code2, factory: (props) => <CodeStudioView {...props} />, singleton: true })
     registerView({ type: 'coding-navigation', kind: 'collection', displayName: () => app().tr('space.coding'), icon: Code2, factory: () => <CodingNavigationView /> })
   }
   registerOperationsViews()
@@ -185,8 +173,10 @@ export function installEngine(): void {
   //  · 固定某 Space:冷启动进**那个 Space 自己上次的布局**(不是上次退出那个 Space 的布局 ——
   //    那是原来的 bug;也不是每次都推倒重建 —— 那是修那个 bug 时的过头做法,表现为
   //    「每次重启都丢上次打开的文件」)。
-  // 卫星窗(detached/mini)有各自隔离的布局键 → 跳过,各恢复自身布局;
-  // 移动端是另一套 SingleColumnHost(自带 restoreSingleColumnLayout,本就恢复上次)→ 不介入。
+  // 卫星窗(detached/mini)有各自隔离的布局键 → 跳过,各恢复自身布局。
+  // 手机 App 也走这里(UI_MODE 在那里是 'desktop'):它的单列存档由 adoptSpaceLayoutCold 一并交接(singleColumnStore 同名导出),
+  // 赶在 SingleColumnHost 还原之前。UI_MODE === 'mobile'(网页版的单列壳)不介入:那里不认「启动时进入」,
+  // 一律回上次退出的 Space,在用的那份本来就是它的。
   if (windowKind() === 'main' && UI_MODE !== 'mobile') {
     // 上次退出在哪:用模块装载时的快照,**不是**此刻的 activeSpaceId —— 上面的 registerSpaces()
     // 已经把「尚未注册」的用户 Space id 归一成了产品默认(见 BOOT_ACTIVE_SPACE_ID 的注释)。
@@ -248,6 +238,14 @@ export function installEngine(): void {
   // 那份陪伴聊天里,且双向互拖(用户实报)。判定见 planSpaceSwitch;Space **内部**的跟随语义原样不动。
   // 只留内存:多窗口按 URL 参数隔离(勿写 localStorage),重启后照旧走 appStore 的启动兜底。
   const spaceSessions = new Map<string, string | null>()
+  // 使用指南「换一个 Space」那条任务的计数。启动后 3s 内的切换不算:冷启动恢复上次的 Space 也会改 activeSpaceId。
+  // ponytail: 3s 是估的;真被冷启动误计,改成只在 Ribbon 点击 / 快捷键那几处 track。
+  const spaceSwitchFrom = Date.now() + 3000
+  useSpaceStore.subscribe((s, p) => {
+    if (s.activeSpaceId === p.activeSpaceId || Date.now() <= spaceSwitchFrom) return
+    track('space.switch')
+    if (s.activeSpaceId === 'muse') track('muse.open') // 指南「Muse」那章:Muse / Historian 缺省就开着,任务是去看一眼
+  })
   useSpaceStore.subscribe((s, p) => {
     if (s.activeSpaceId === p.activeSpaceId) return
     // 手机主页(一页式 Space)里点开的会话是被带到 Tangu 去开的(引擎的 redirectOpenFromOnePage):此刻的 activeId 就是正要开的
@@ -349,7 +347,9 @@ export function installEngine(): void {
   // Ribbon：主位 + 5 个 Space；命令区常驻后 5 项，头像与 pinned 控件另计。
   // 默认命令顺序：成就 → 设备互联 → 反馈 → 商店 → 明暗 → 命令面板 → 设置。
   // 无持久顺序时注册序即上下序；已有自定义排序不覆盖。移动端设备入口仍在 head。
-  addRibbonIcon({ id: 'rb-achievements', side: 'bottom', icon: Trophy, tooltip: () => app().tr('achievements.title'), onClick: () => app().openAchievements() })
+  // 红点 = 有「已达成未领取」的成就(本机 + 已登录时的云端;收进「更多」时红点挂到「更多」上,见 RibbonItem.dot)。
+  initCloudAchievements() // 云端成就:有 cloudFetch 桥(桌面装了 Extend / Android)才启动,首拉延后几秒,登录状态变化重拉
+  addRibbonIcon({ id: 'rb-achievements', side: 'bottom', icon: Trophy, tooltip: () => app().tr('achievements.title'), onClick: () => app().openAchievements(), dot: { get: () => hasClaimable(), subscribe: (cb) => useAchievements.subscribe(cb), label: () => translate('achievements.claimable') } }) // label 在渲染期求值(读屏):app().tr 要等父组件 effect 才换语言,会晚一拍
   // Unit 切换器(设备互联):吸收原「本地|云端」胶囊,列表式切换 本地/云端/其他设备。
   // 默认顺序为成就 → 设备互联 → 反馈；用户保存的自定义顺序仍优先。
   // 桌面 = preload 的 unitsList IPC;mobile 垫片也有 unitsList(UnitsSheet 数据面)→ 移动端照旧挂 head:
@@ -421,19 +421,8 @@ export function installEngine(): void {
   })
 
   // commands
-  // 应用 / 窗口引用的快捷键(双 ⌘):开机就注册,别等第一张输入卡 —— 停在没有输入卡的 Space 上启动时全局那条订阅会一直没人要
-  ensureAppRefCommand()
-  if (hasNativeFeature('tangu')) addCommand({ id: 'new-chat', title: () => app().tr('sidebar.newChat'), keywords: 'new chat 新对话', hotkey: 'mod+n', run: blankNewChat , invoke: {
-    description: 'Start a new, empty chat in the window the user is talking to you from. Use it when the user asks to start over or open a fresh conversation.',
-  } })
-  // 旁聊(/btw;⌘; 同 Claude Desktop):带当前会话上下文问一句题外话,开在会话级 Floating Panel 里。
-  // 新对话草稿(activeId=null)没有上下文可带 → 不开。不给 invoke:这是用户自己的旁路,不是 agent 能替用户点的动作。
-  if (hasNativeFeature('tangu')) addCommand({ id: 'chat-btw', title: () => translate('btw.cmd'), keywords: 'btw by the way side question aside 顺便问 旁聊', hotkey: 'mod+;', run: () => {
-    const s = app()
-    if (!s.activeId) return
-    const activeSession = s.sessions.find((x) => x.id === s.activeId) || s.archivedSessions.find((x) => x.id === s.activeId) || null
-    openBtw({ sessionId: s.activeId, title: activeSession?.title, modelId: activeChatModelId({ ...s, activeSession }) || undefined })
-  } })
+  // Tangu 的命令(新对话、旁聊、分屏、对话面板、停止 / 压缩 / 分支)和应用 / 窗口引用的双 ⌘ 由 Tangu 自己注册(核心插件化 2e-4)
+  registerTanguCommands()
   // hotkey 从 mod+b 改到 mod+/:mod+b 与 Amadeus 编辑器的加粗(commonmark Mod-b)冲突,编辑时会同时切侧栏。
   // 换 mod+/ 是因为 mod+shift+b 也被编辑器占(blockquote),mod+\ 被 split-right 占;mod+/ app 命令表与编辑器 keymap 皆空闲。
   addCommand({ id: 'toggle-left', icon: PanelLeft, checked: () => ws().leftVisible, title: () => app().tr('command.toggleLeft'), keywords: 'sidebar 左栏', hotkey: 'mod+/', run: () => ws().toggleSidebar('left') })
@@ -471,7 +460,7 @@ export function installEngine(): void {
   addCommand({ id: 'toggle-smooth-caret', icon: TextCursorInput, checked: isSmoothCaretOn, title: () => app().tr('command.toggleSmoothCaret'), keywords: 'smooth caret cursor 光标 丝滑 word', run: () => {
     setSmoothCaret(!isSmoothCaretOn())
   } })
-  if (hasNativeFeature('tangu')) addCommand({ id: 'split-right', title: () => app().tr('command.splitRight'), keywords: 'split 分屏', hotkey: 'mod+\\', run: splitChat })
+  installViewModeCommands() // ⌥⌘V 切活动视图的下一种看法 + 命令面板「看法：X」(lcl/engine/viewModes)
   // per-tab 前进/后退(Ctrl/⌘+{ 与 }):只走当前活动主 leaf 的历史栈;与主区左上角箭头同源。
   const navGo = (dir: 'back' | 'forward'): void => {
     const api = ws().api
@@ -481,13 +470,6 @@ export function installEngine(): void {
   addCommand({ id: 'nav-back', title: () => app().tr('command.navBack'), keywords: 'back history 后退 历史', hotkey: 'mod+shift+[', run: () => navGo('back') })
   addCommand({ id: 'nav-forward', title: () => app().tr('command.navForward'), keywords: 'forward history 前进 历史', hotkey: 'mod+shift+]', run: () => navGo('forward') })
   addCommand({ id: 'reset-layout', title: () => app().tr('command.resetLayout'), keywords: 'layout reset default 布局 默认 黄金分割', run: () => ws().resetLayout({ undoable: true }) })
-  if (hasNativeFeature('tangu')) addCommand({
-    id: 'show-chat-panel',
-    icon: MessageCircle,
-    title: () => translate('bootengine.cmd.showChatPanel'),
-    keywords: 'chat panel side conversation 侧栏 对话 面板',
-    run: () => ws().showSideView('right', 'chat-panel'),
-  })
   // Mini 悬浮卡片(全局快捷键 ⌘/Ctrl+⇧+M 亦可):仅桌面(openMini 存在)。
   if (window.tangu?.openMini) addCommand({ id: 'open-mini', title: () => translate('bootengine.cmd.openMini'), keywords: 'mini card floating 悬浮 卡片 迷你 mini', run: () => {
     const space = getActiveSpace(), leaf = ws().getActiveLeaf()
@@ -510,9 +492,6 @@ export function installEngine(): void {
     // 用户起名存的布局可能是在别的 Space / 固定 View 之前存的:应用后把本 Space 缺的固定项补回
     if (name && names.includes(name) && ws().applyNamed(name)) ws().ensurePinned()
   } })
-  if (hasNativeFeature('tangu')) addCommand({ id: 'stop-run', title: () => app().tr('command.stop'), keywords: 'stop 停止', run: async () => { await app().stop() } })
-  if (hasNativeFeature('tangu')) addCommand({ id: 'compact', title: () => app().tr('command.compact'), keywords: 'compact 压缩', run: () => void app().compact() })
-  if (hasNativeFeature('tangu')) addCommand({ id: 'branch', title: () => app().tr('command.branch'), keywords: 'branch 分支', run: () => void app().branchFromMessage() })
   // 商店/成就此前**只有 ribbon 图标一个入口**,⌘K 搜不到 —— 这是「用户发现不了」的一半根因。
   if (window.tangu?.marketList) addCommand({ id: 'open-market', icon: Store, title: () => app().tr('market.title'), keywords: 'store market marketplace plugin theme skill agent space 商店 应用市场 应用商店 市场 商店 插件 主题 技能 扩展', run: () => app().openMarket() })
   addCommand({ id: 'open-achievements', icon: Trophy, title: () => app().tr('achievements.title'), keywords: 'achievement trophy badge medal 成就 勋章 徽章', run: () => app().openAchievements() })
@@ -628,6 +607,8 @@ export function installEngine(): void {
 
   // forsion:// deep link(仅桌面主窗;内部自门控 window.tangu?.onDeepLink,web/mobile 各有通道)。
   installDeepLinks()
+  // 外部文件打开(Finder 打开方式 / 拖到 Dock / 命令行参数;同上仅桌面主窗,内部自门控 window.tangu?.onOpenFile)。
+  installOpenFiles()
 }
 
 /** 默认布局 = 当前活动 Space 的 build()(WorkspaceHost 无保存布局时调用,经 buildDefault prop)。 */

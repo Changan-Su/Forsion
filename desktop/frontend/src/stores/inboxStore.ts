@@ -3,6 +3,7 @@
  * 与 appStore 单向解耦——只经 getState() 读 cfg/connState/agentDefs/agentAvatars/desktopConfig/tr,零反向依赖。
  * 失败纪律:轮询/列表静默(external 老后端无 /agent/inbox 时 404 不弹错);用户主动操作失败 toast + 刷新回收。
  */
+import { inboxCardOf } from '@amadeus/plugins/inboxCards'
 import { create } from 'zustand'
 import { setActiveSpace } from '@lcl/engine'
 import { translate } from '../i18n'
@@ -37,7 +38,7 @@ export function isAutomationSender(m: Pick<InboxMessage, 'sender_kind' | 'sender
  *  这是非 React 出口,直接读模块级 translate 快照,冷启动 / 测试期也不会回显裸 key。 */
 export function senderOf(m: Pick<InboxMessage, 'sender_kind' | 'sender_id'>): string {
   if (m.sender_kind === 'server') return 'Forsion'
-  if (m.sender_kind === 'system') return translate('inbox.sender.system')
+  if (m.sender_kind === 'system') return inboxCardOf(m)?.sender?.() || translate('inbox.sender.system')
   if (isAutomationSender(m)) return translate('inbox.sender.automation')
   const a = homeAgentDefs().find((x) => x.slug === m.sender_id) // 收件箱是本端的:焦点在我的电脑时也按本端的 Agent 认发件人
   return a?.name || m.sender_id || 'agent'
@@ -83,6 +84,11 @@ const findAny = (s: Pick<InboxState, 'messages' | 'archived'>, id: string): Inbo
 const mapBoth = (s: Pick<InboxState, 'messages' | 'archived'>, fn: (m: InboxMessage) => InboxMessage) =>
   ({ messages: s.messages.map(fn), archived: s.archived.map(fn) })
 
+/** 收件箱来信要不要弹通知:等你拍板的审批信(别的 Agent 后台排队的;Muse 的进私聊)、用户自己定的自动化提醒。 */
+export function inboxLetterPops(m: Pick<InboxMessage, 'sender_id' | 'body'>): boolean {
+  return !!m.sender_id?.startsWith('automation:') || /```forsion-approval\b/.test(m.body || '')
+}
+
 export const useInbox = create<InboxState>((set, get) => ({
   messages: [],
   archived: [],
@@ -121,7 +127,8 @@ export const useInbox = create<InboxState>((set, get) => ({
           const m = latestChanged && r.count > had ? msgs.find((x) => x.id === r.latestId) : undefined
           // 收件箱新消息 → 统一通知入口(应用内卡片 + 系统通知由 notifyApp 一并发,受通知设置门控;
           // 不再单发 notifyInbox,避免与统一系统通知重复)。
-          if (m && !m.read_at) {
+          // 10-18 Muse 私聊方案 B:收件箱是「慢慢看」的,新信只亮角标;只有等你拍板的审批信与你自己定的自动化提醒还弹。
+          if (m && !m.read_at && inboxLetterPops(m)) {
             notifyApp({
               event: 'inbox.message', level: 'info',
               title: senderOf(m), text: m.title,

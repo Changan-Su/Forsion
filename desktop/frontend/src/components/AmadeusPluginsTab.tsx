@@ -15,6 +15,7 @@ import { pluginFootprint, pluginWanted, runningDependents, unmetPluginDeps, useP
 import { amadeus } from '@amadeus/api'
 import { installAmadeusPlugins, reloadPluginsAndAnnounce } from '../amadeusPlugins'
 import { usePluginOnboarding, needsOnboarding, promptIfPending, isGate } from '../stores/pluginOnboardingStore'
+import { pluginDataSyncUserOff, setPluginDataSyncUserOff } from '../amadeus/plugins/pluginDataSync'
 import { registerMessages, useI18n } from '../i18n'
 import { PRODUCT } from '../product'
 import { pluginDisplayName, pluginDisplayDescription, resolvePluginDetail, localizedOnboarding, isPlacedSettingsView } from '../amadeus/plugins/display'
@@ -25,12 +26,13 @@ import { loadUserSpaces } from '../userSpaces'
 import { hiddenSpaceName, hiddenSpaceReason, useHiddenSpacesOf } from '../pluginSpaceHealth'
 import { BuiltinPluginsSection } from '../builtins'
 import { useApp } from '../stores/appStore'
+import { track } from '../achievements/store'
 import { panelToast } from './PanelNotice'
 import { ipcErrorText } from '../ipcError'
 import { windowKind } from '../windowKind'
 import type { TanguDesktopConfig } from '../types'
 import type { AmadeusPlugin, SettingContribution, SettingsViewContribution } from '@amadeus/plugins/types'
-import type { PluginDependency } from '@amadeus-shared/ipc'
+import type { PluginCapability, PluginDependency } from '@amadeus-shared/ipc'
 import { PluginLogo } from './PluginLogo'
 import { canOpenPluginsFolder } from '../amadeus/lib/hostCaps'
 import { FileOpenersPanel } from './FileOpenersPanel'
@@ -44,6 +46,12 @@ registerMessages({
   },
   'settings.amadeusPlugins.restartPending': { zh: '重启 Forsion 后生效。', en: 'Takes effect after Forsion restarts.' },
   'settings.amadeusPlugins.restartNow': { zh: '立即重启', en: 'Restart now' },
+  // manifest syncData:插件数据随账号同步,每台设备各自的开关
+  'settings.amadeusPlugins.syncData': { zh: '跨设备同步插件数据', en: 'Sync plugin data across devices' },
+  'settings.amadeusPlugins.syncDataHint': {
+    zh: '登录 Forsion 账号后，这个插件保存的数据会同步到你的其他设备。关掉后只存在这台设备上。',
+    en: 'When you are signed in to Forsion, the data this plugin saves syncs to your other devices. Turn it off to keep it on this device only.',
+  },
   'settings.amadeusPlugins.unitIntro': { zh: '查看已安装的功能和编辑器扩展。', en: 'View installed features and editor extensions.' },
   'settings.amadeusPlugins.unitBuiltinTitle': { zh: '编辑器扩展', en: 'Editor extensions' },
   'settings.amadeusPlugins.unitBuiltinHint': { zh: '此处开关仅控制编辑器扩展。Unit 已安装功能由部署配置管理。', en: 'These toggles control editor extensions. Installed Unit features are managed through deployment configuration.' },
@@ -57,6 +65,16 @@ registerMessages({
     en: 'Development load: runs in this app on your real vault, with the same privileges as an installed plugin.',
   },
   'settings.amadeusPlugins.devProject': { zh: '项目：{path}', en: 'Project: {path}' },
+  // manifest capabilities:插件声明了要用的用户数据 / 敏感能力,详情页如实告诉用户(没声明的宿主不注入)
+  'settings.amadeusPlugins.caps': { zh: '这个插件可以：{list}', en: 'This plugin can: {list}' },
+  'settings.amadeusPlugins.capDatabases': { zh: '读写你的多维表', en: 'read and edit your databases' },
+  'settings.amadeusPlugins.capNoteTasks': { zh: '读写笔记里的 @ 任务', en: 'read and edit @ tasks in your notes' },
+  'settings.amadeusPlugins.capSpaces': { zh: '打开 Space，调整 Ribbon 上 Space 的顺序和收纳夹', en: 'open Spaces and rearrange Spaces and folders on the Ribbon' },
+  'settings.amadeusPlugins.capCalendar': {
+    zh: '读取 Agent 日程、.ics 订阅和另一侧库里的日历，管理 .ics 订阅并改日历设置',
+    en: 'read Agent schedules, .ics subscriptions and calendars in your other vault, manage .ics subscriptions and change calendar settings',
+  },
+  'settings.amadeusPlugins.capActiveWindow': { zh: '读取前台窗口', en: 'see which window is in front' },
   'settings.amadeusPlugins.devShadows': {
     zh: '正遮蔽同名的已安装插件；撤下开发副本后，安装版会回来。',
     en: 'Shadowing the installed plugin with the same id; unload this dev copy and the installed one comes back.',
@@ -346,6 +364,22 @@ export const SettingRow: React.FC<{ pluginId: string; def: SettingContribution }
   )
 }
 
+/** manifest `syncData: true` 的插件:这台设备上同不同步它的数据(pluginDataSync.ts;没有 cloudFetch 的宿主不画)。 */
+const PluginSyncRow: React.FC<{ p: AmadeusPlugin }> = ({ p }) => {
+  const { t } = useI18n()
+  const [on, setOn] = useState(() => !pluginDataSyncUserOff(p.id))
+  if (!p.syncData || !window.tangu?.cloudFetch) return null
+  return (
+    <div className="plugin-card" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 'var(--ui-font-meta, 12px)' }}>{t('settings.amadeusPlugins.syncData')}</div>
+        <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)' }}>{t('settings.amadeusPlugins.syncDataHint')}</div>
+      </div>
+      <input type="checkbox" data-plugin-sync checked={on} onChange={(e) => { setPluginDataSyncUserOff(p.id, !e.target.checked); setOn(e.target.checked) }} />
+    </div>
+  )
+}
+
 /** 插件自绘设置面板(registerSettingsView)的挂载点。宿主只负责给一个干净的容器、
  *  在正确的时机 mount/dispose,里面画什么完全归插件。
  *
@@ -565,6 +599,15 @@ const RestartPending: React.FC<{ p: AmadeusPlugin }> = ({ p }) => {
  *  受控详情(左栏 `fplugin:<id>` 直达)不登记:它不是从列表进来的,返回照旧回设置首页。 */
 export const pluginListDetailBack: { current: (() => void) | null } = { current: null }
 
+/** 详情页「这个插件可以：…」那一行,按这个顺序列(用户数据在前,敏感的前台窗口在后)。 */
+const CAP_LABELS: Array<[PluginCapability, string]> = [
+  ['databases', 'settings.amadeusPlugins.capDatabases'],
+  ['noteTasks', 'settings.amadeusPlugins.capNoteTasks'],
+  ['calendar', 'settings.amadeusPlugins.capCalendar'],
+  ['spaces', 'settings.amadeusPlugins.capSpaces'],
+  ['activeWindow', 'settings.amadeusPlugins.capActiveWindow'],
+]
+
 const PluginDetail: React.FC<{
   plugin: AmadeusPlugin
   onBack: () => void
@@ -695,6 +738,11 @@ const PluginDetail: React.FC<{
           <RestartPending p={p} />
         </div>
       )}
+      {!!p.capabilities?.length && (
+        <div data-plugin-caps style={{ fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-light)' }}>
+          {t('settings.amadeusPlugins.caps', { list: CAP_LABELS.filter(([c]) => p.capabilities!.includes(c)).map(([, k]) => t(k)).join(t('common.listSep')) })}
+        </div>
+      )}
       {/* 开发态说明:它**不是**隔离沙箱,用户有权在启用它之前知道这件事 */}
       {p.dev && (
         <div className="plugin-card" style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 'var(--ui-font-meta, 12px)' }}>
@@ -745,6 +793,7 @@ const PluginDetail: React.FC<{
           </div>
         </>
       )}
+      <PluginSyncRow p={p} />
       {/* 自绘设置面板:排在声明式旋钮之后 —— 旋钮是宿主统一样式的小项,复杂面往下放才不打断阅读节奏。
           只在插件启用时挂:停用的插件其 setup 没跑过,面板里的按钮点了也没有后端。 */}
       {on && settingsViews.map((o) => <PluginSettingsView key={o.item.id} pluginId={p.id} def={o.item} />)}
@@ -906,7 +955,7 @@ export const AmadeusPluginsTab: React.FC<{
           {/* 设备页(unitPage):插件目录/脚手架都是对方机器上的 shell 行为 —— 藏。Android App(hostCaps.pluginsFolder=false):
               插件住在应用私有目录、只经市场装 —— 文件夹与脚手架两个按钮同样不给。 */}
           {!window.tangu?.unitPage && canOpenPluginsFolder() && <button className="btn ghost sm" onClick={() => openFolder()}>{t('settings.amadeusPlugins.openFolder')}</button>}
-          <button className="btn ghost sm" onClick={() => void reloadPluginsAndAnnounce({ all: true }).then(() => loadUserSpaces())}>{t('settings.amadeusPlugins.reload')}</button>
+          <button className="btn ghost sm" onClick={() => void reloadPluginsAndAnnounce({ all: true }).then(({ fresh }) => { if (fresh.length) track('plugin.local'); return loadUserSpaces() })}>{t('settings.amadeusPlugins.reload')}</button>
           {!window.tangu?.unitPage && canOpenPluginsFolder() && <button className="btn ghost sm" onClick={() => void scaffold()}>{t('settings.amadeusPlugins.scaffold')}</button>}
         </div>
       </details>

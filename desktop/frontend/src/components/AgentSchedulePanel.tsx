@@ -12,7 +12,7 @@ import { useApp } from '../stores/appStore'
 import { useI18n } from '../i18n'
 import { condText, fmtTime, isFinishedTrigger } from '../views/automation/lib'
 import { nextOccurrence, triggerWakes } from './agentScheduleLib'
-import type { AgentScheduleEntry, MuseTriggerInfo, TanguDesktopConfig } from '../types'
+import type { AgentScheduleEntry, MuseTriggerInfo, TanguDesktopConfig } from '../../../../tangu-agent/src/contracts/clientTypes'
 import '../views/agentProfile.css'
 import { homeTarget, connectionKey } from '../services/engine/targets'
 

@@ -318,12 +318,13 @@ export interface PluginBundleInfo {
 }
 
 /** 需要插件在 manifest 里显式声明才注入的宿主敏感能力(default-deny 白名单)。 */
-export type PluginCapability = 'activeWindow'
-export const PLUGIN_CAPABILITIES: readonly PluginCapability[] = ['activeWindow']
+export type PluginCapability = 'activeWindow' | 'databases' | 'noteTasks' | 'calendar' | 'spaces'
+export const PLUGIN_CAPABILITIES: readonly PluginCapability[] = ['activeWindow', 'databases', 'noteTasks', 'calendar', 'spaces']
 
 /** A user (Forsion) plugin discovered under ~/.forsion/plugins/. */
 export interface ExternalPluginSource {
   id: string
+  packageId?: string
   /** Canonical (Chinese) display name. **Identity-adjacent**: the default work folder is derived from it,
    *  so it must never change with the UI language — English goes in `nameEn`. */
   name: string
@@ -371,6 +372,8 @@ export interface ExternalPluginSource {
    *  APIs (Electron bridges, local engine, OS shell). Desktop lists and runs it as usual (informational only);
    *  mobile hosts list it as `blocked: 'desktopOnly'`, never evaluate its code and refuse to install it. */
   isDesktopOnly?: boolean
+  /** Manifest `syncData: true` (2026-10-17): the plugin's ctx.saveData blob syncs across devices with the Forsion account. */
+  syncData?: boolean
   /** 捆绑包内嵌内容清单(缺省 = 纯 UI 插件)。 */
   bundle?: PluginBundleInfo
   /** 随 App 内置(主进程 builtinPlugins.ts 播种的捆绑包):设置页标「内置」、不给卸载按钮(只能停用)。

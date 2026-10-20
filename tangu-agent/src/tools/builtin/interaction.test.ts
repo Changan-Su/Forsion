@@ -30,7 +30,7 @@ import {
   INQUIRY_CHANNEL_STOPPED_ANSWER,
   isSystemAnswer,
 } from './interaction.js';
-import { resolveInquiry, INQUIRY_UNATTENDED_ANSWER } from '../../services/inquiries.js';
+import { resolveInquiry, INQUIRY_CHILD_ANSWER, INQUIRY_UNATTENDED_ANSWER } from '../../services/inquiries.js';
 import { registerRun, unregisterRun } from '../../services/remoteActivity.js';
 // 先经 hub 进入 channels 模块环(生产里也是 hub 先载入):直接从 service.js 进会在环里撞上未定义的 ChannelService。
 import '../../channels/hub.js';
@@ -299,6 +299,29 @@ describe('无人值守 run 的询问', () => {
       Promise.resolve(tool('ask_user').execute({ question: 'Which one?' }, { runId: 'run-unattended', sessionId: 's' } as any)));
     expect(r).toBe(INQUIRY_UNATTENDED_ANSWER);
     expect(state.events.filter((e) => e.type === 'inquiry_request')).toHaveLength(0);
+  });
+
+  it('子会话那一轮(fromParent)的 ask_user → 当场返回系统说明(问题收尾送回主会话),不发 inquiry_request', async () => {
+    const r = await unattended('run-child-brief', { fromParent: true, agentConfig: {} }, () =>
+      Promise.resolve(tool('ask_user').execute({ question: 'Which one?' }, { runId: 'run-child-brief', sessionId: 's' } as any)));
+    expect(r).toBe(INQUIRY_CHILD_ANSWER);
+    expect(isSystemAnswer(INQUIRY_CHILD_ANSWER)).toBe(true);
+    expect(state.events.filter((e) => e.type === 'inquiry_request')).toHaveLength(0);
+  });
+
+  it('子会话那一轮的 exit_plan_mode 不短路:照常发计划卡等用户批', async () => {
+    const r = await unattended('run-child-plan', { fromParent: true, agentConfig: {} }, async () => {
+      const p = Promise.resolve(tool('exit_plan_mode').execute({ plan: '# p' }, { runId: 'run-child-plan', sessionId: 's' } as any));
+      let inq: any;
+      for (let i = 0; i < 50 && !inq; i++) {
+        await new Promise((res) => setTimeout(res, 0));
+        inq = state.events.find((e) => e.runId === 'run-child-plan' && e.type === 'inquiry_request');
+      }
+      expect(inq?.payload.kind).toBe('plan');
+      resolveInquiry(inq.payload.inquiryId, 'no');
+      return p;
+    });
+    expect(r).not.toContain(INQUIRY_CHILD_ANSWER);
   });
 
   it('exit_plan_mode 同理:不算批准,计划模式不动', async () => {

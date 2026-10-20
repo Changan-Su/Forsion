@@ -42,6 +42,7 @@ async function fresh(opts: { hostNavigates?: boolean } = {}) {
         if (hostMode === 'throw') throw new Error('EACCES: permission denied')
         if (hostMode === 'failed') return { ok: false, current: null }
         if (hostMode === 'raced') { disk.set(p, '# 别处刚建的\n'); return { ok: false, current: '# 别处刚建的\n' } }
+        if (o?.create && disk.has(p)) return { ok: false, current: disk.get(p) } // 仅新建:已有就交回现文,不覆盖
         disk.set(p, text)
         return o?.create ? { ok: true } : undefined
       },
@@ -116,6 +117,18 @@ describe('G4-12 新建入口素文件出生', () => {
     const p = await useNoteViewStore.getState().addNote('Folder')
     bornPlain(p)
     expect(newPage).not.toHaveBeenCalled()
+  })
+
+  it('笔记视图并发加行 / 列表落后:撞上已有同名就换下一个名字,绝不认领已有笔记', async () => {
+    await fresh()
+    const { useNoteViewStore } = await import('./noteViewStore')
+    const [a, b] = await Promise.all([useNoteViewStore.getState().addNote('Folder'), useNoteViewStore.getState().addNote('Folder')])
+    expect(a).not.toBe(b)
+    const third = `${a.replace(/\.md$/, '')} 3.md` // 文件夹列表(listPageProps)还没刷新到的用户笔记
+    disk.set(third, '# 用户的笔记\n')
+    const c = await useNoteViewStore.getState().addNote('Folder')
+    expect([a, b, third]).not.toContain(c)
+    expect(disk.get(third)).toBe('# 用户的笔记\n')
   })
 
   it('磁盘上已有同名(pages[] 落后)→ 不写不覆盖,只打开、不抢标题焦点', async () => {

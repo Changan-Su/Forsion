@@ -37,6 +37,7 @@ function pluginView(m: ReturnType<typeof listPluginMetas>[number], st: PluginSta
     ...(st.waitingFor ? { waitingFor: st.waitingFor } : {}),
     ...(st.lastError ? { lastError: st.lastError } : {}),
     ...(st.settling ? { settling: true } : {}),
+    ...(st.tools ? { tools: st.tools } : {}),
   };
 }
 

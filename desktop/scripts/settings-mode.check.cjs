@@ -225,7 +225,8 @@ async function main() {
     // 本端此刻应可见的索引项(Codex 第一轮 A-4):桌面 + 已读回落盘配置(外部)+ 运行方式草稿=托管 →
     // needs 含 'external'(外部连接面板随草稿收起)或 'managed'(托管参数只认落盘)的项按门控该藏;本包没有的 Extend 子页(见 fxPresent)同理。
     // 逐项要求**必须**搜得到,不再「搜不到就跳过、够 15 个就绿」—— 否则某个本该可见的项消失 / 门控写错,只要其余凑够门槛照样全绿。
-    const expectHidden = (e) => (e.needs || []).some((n) => n === 'external' || n === 'managed') || (!!e.sub?.startsWith('fx:') && !fxPresent.has(e.sub))
+    // 电脑操作页(tab computer-use)只在装了并启用那个引擎插件时才有;本台架的隔离 home 里没装,它的结果该藏。
+    const expectHidden = (e) => e.tab === 'computer-use' || (e.needs || []).some((n) => n === 'external' || n === 'managed') || (!!e.sub?.startsWith('fx:') && !fxPresent.has(e.sub))
     let reached = 0
     const missing = [], leaked = [], rawLabels = []
     for (const entry of SETTINGS_SEARCH_INDEX) {

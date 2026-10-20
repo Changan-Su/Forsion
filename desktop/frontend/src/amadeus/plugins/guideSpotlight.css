@@ -1,0 +1,32 @@
+/* 现场圈注(guideSpotlight.ts):圈 = 强调色描边 + 浅外晕,不拦点击;卡 = 共用 .ui-popover 材质 + 一个小尖角。 */
+.guide-spot-ring {
+  position: fixed;
+  z-index: 140; /* 在 Dockview 分隔条(99)和普通菜单(100)之上,低于模态 */
+  border: 2px solid var(--accent);
+  border-radius: var(--radius-md);
+  box-shadow: 0 0 0 4px var(--accent-wash);
+  pointer-events: none;
+}
+.guide-spot-card {
+  z-index: 141;
+  width: 268px;
+  padding: 12px 14px 10px;
+}
+.guide-spot-card::before {
+  content: '';
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  background: var(--bg-card);
+  border: var(--border-width) solid var(--border);
+  transform: rotate(45deg);
+}
+.guide-spot-card[data-side='below']::before { top: -6px; left: calc(var(--guide-spot-arrow, 22px) - 5px); border-right: 0; border-bottom: 0; }
+.guide-spot-card[data-side='above']::before { bottom: -6px; left: calc(var(--guide-spot-arrow, 22px) - 5px); border-left: 0; border-top: 0; }
+.guide-spot-card[data-side='right']::before { left: -6px; top: calc(var(--guide-spot-arrow, 22px) - 5px); border-right: 0; border-top: 0; }
+.guide-spot-step { color: var(--text-faint); font-size: var(--ui-font-caption); line-height: var(--ui-line-caption); }
+.guide-spot-title { margin-top: 2px; font-weight: 600; }
+.guide-spot-body { margin-top: 2px; color: var(--text-muted); font-size: var(--ui-font-meta); line-height: var(--ui-line-meta); }
+.guide-spot-act { margin-top: 10px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.guide-spot-mute { padding: 0; border: 0; background: transparent; color: var(--text-faint); font: inherit; font-size: var(--ui-font-meta); cursor: pointer; }
+.guide-spot-mute:hover { color: var(--text-muted); }

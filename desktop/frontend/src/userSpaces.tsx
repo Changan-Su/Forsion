@@ -16,7 +16,7 @@ import {
   registerSpace, unregisterSpace, addRibbonIcon, removeRibbonIcon, setActiveSpace, useSpaceStore,
   useWorkspace, deleteNamedLayout, clearLayout, getActiveSpace, getView, label, spaceLayoutName,
   setActiveSpaceCold, BOOT_ACTIVE_SPACE_ID, UI_MODE, WINDOW_SPACE_ID,
-  spaceLayoutsWereReset, bootLayoutFellThrough, namedLayoutRestorable, liveLayoutOwner,
+  spaceLayoutsWereReset, bootLayoutFellThrough, namedLayoutRestorable, liveLayoutOwner, landOnMainPage,
 } from '@lcl/engine'
 import type { Leaf, SpaceDefinition, SpaceIcon, PersistedPanel } from '@lcl/engine'
 import { SpaceButton } from './components/SpaceButton'
@@ -35,11 +35,13 @@ import { readDisabledPluginIds, usePluginStore } from '@amadeus/plugins/pluginSt
 import { setHiddenPluginSpaces, type HiddenSpace } from './pluginSpaceHealth'
 import { hasBottomPanel } from './pluginViews'
 import { PRODUCT } from './product'
+import { pluginSpaceOwner } from './stores/spaceProgress'
 import { LAST_EXIT_SPACE, awaitedStartupSpace, resolveStartupTarget, startupSpacePref } from './spaces'
 
 // 保留 id:用户/市场的 space.json 不许占用宿主 Space 的 id。calendar 现在是内置插件(关掉即不注册),
 // 更要留着 —— 否则关掉期间被别人占了 id,重新启用时两份 Space 撞车。
-const BUILTIN_IDS = ['tangu', 'inbox', 'amadeus', 'calendar', 'muse'] as const
+// home 同理(10-18):内置主页关着时别人占了它,连 Ribbon 主位槽一起被占。
+const BUILTIN_IDS = ['tangu', 'inbox', 'amadeus', 'calendar', 'muse', 'home'] as const
 
 /** 精选图标表(space.json 的 icon 字段按名取):刻意不做 lucide 全量动态查找(bundle 爆炸)。 */
 const SPACE_ICONS: Record<string, LucideIcon> = {
@@ -73,8 +75,8 @@ const app = () => useApp.getState()
 /** 本进程内经此文件注册的用户 Space:id → 磁盘目录名。market 安装目录名来自上架名称的 slug,
  *  可与 space.json 的 id 不一致,删除必须按映射删目录,否则残留目录重启后复活。 */
 const userIds = new Map<string, string>()
-/** 插件捆绑包内嵌的 Space:spec id → 所属插件 id。随插件启停显隐,不落 userIds(不可单独删,卸载随插件走)。 */
-const pluginSpaceOwner = new Map<string, string>()
+/** 插件捆绑包内嵌的 Space:spec id → 所属插件 id。随插件启停显隐,不落 userIds(不可单独删,卸载随插件走)。
+ *  表本身在 stores/spaceProgress(插件改自己 Space 的进度环要按它认归属,放这里会和 pluginStore 互引)。 */
 /** 已注册插件 Space 的原始 space.json:配方变了(插件更新)才注销重注册,不变则不动(防 ribbon 无谓抖动)。 */
 const pluginSpaceJson = new Map<string, string>()
 /** 已注册插件 Space 的自绘图标:只换了图就原地重注册(不走注销那条 —— 它会把正在用的 Space 打回 tangu)。 */
@@ -154,6 +156,7 @@ function specToDefinition(spec: SpaceSpec, iconUrl?: string): SpaceDefinition {
     // 配方条目上的 pinned:true → 固定 View(引擎按 Space 声明现判,不进布局存档)
     pinned: { main: toPanels(spec.layout.main.filter((p) => p.pinned)), left: toPanels(spec.layout.left.filter((p) => p.pinned)), right: toPanels(spec.layout.right.filter((p) => p.pinned)) },
     launcherViews: toPanels(spec.layout.main),
+    mainPage: toPanels(spec.layout.main.filter((p) => p.mainPage))[0], // 配方条目上的 mainPage:true → 默认主页
     bottomSpan: spec.layout.bottomSpan,
     build() {
       ws().setSidebarDefaults(sides)
@@ -293,6 +296,7 @@ export function settleAsyncStartupSpace(): void {
     if (state.activeSpaceId !== want) setActiveSpaceCold(want)
     configure()
     ws().resetLayout()
+    landOnMainPage() // onReady 那次落点时它还没注册,在这儿补(setActiveSpace 那条路自己会落)
     if (final) asyncStartupSpaceResolved = true
     return
   }
@@ -318,6 +322,7 @@ export function settleAsyncStartupSpace(): void {
         // onReady 已按回落 Space 的 bottomSpan 摆过还原出来的布局 → 按本 Space 重摆(Dockview 未就绪则 no-op)
         ws().realignRegions?.()
       }
+      landOnMainPage()
     } else setActiveSpace(want)
   } else if (ws().sideProfileKey !== want) {
     // 纯插件产品(PRODUCT.spaces 为空):bootstrap 时一个 Space 都没有,画像(含 bottomSpan)从没按它设过(Codex 评审)
@@ -349,6 +354,7 @@ async function loadUserSpacesOnce(): Promise<void> {
       }
       continue
     }
+    if (!plugin && /^market-[0-9a-f-]{36}$/.test(slug)) r.spec.id = slug
     if (!wanted.has(r.spec.id)) wanted.set(r.spec.id, { spec: r.spec, dirSlug: slug, plugin, raw: json, iconUrl })
   }
   setHiddenPluginSpaces(hidden) // 非主窗是空操作:它们跟主窗的记录(见 pluginSpaceHealth)

@@ -209,7 +209,7 @@ async function main() {
     await win.evaluate(toggle(true))
     await win.waitForTimeout(1000)
 
-    // 6 侧栏面板那半:把引擎刚存下的 space:calendar 布局(左 todo-list / 右 calendar-config)
+    // 6 侧栏面板那半:把引擎刚存下的 space:calendar 布局(10-16 起左 calendar-config / 右 calendar-side)
     //   搬进 space:tangu 的命名槽 —— 真实 blob,不手搓;再关插件、切回 Tangu 让 applyNamed 吃它。
     await enterCalendar(win)
     await enterSpace(win, ['笔记', 'Note'], 'amadeus') // 切走 = saveNamed('space:calendar')
@@ -245,15 +245,15 @@ async function main() {
     await win.waitForTimeout(1000)
 
     // 7 stash 那半:造一份「活体面板全已注册、但 stash 里是日历视图」的布局 ——
-    //   进日历 → 收起两侧(todo-list/calendar-config 入 stash)→ 切走存档 → 搬进 space:tangu 的槽
+    //   进日历 → 收起两侧(calendar-config / calendar-side 入 stash)→ 切走存档 → 搬进 space:tangu 的槽
     //   → 进 Tangu 关掉主区那张日历 tab → 再切走存档。
     await enterCalendar(win)
     // ⚠️两侧收起钮的类名不对称:左 = `.dv-edge-toggle`(**没有** .dv-edge-left 这个类,别照抄
     // newtab-open.check 里那句 `.dv-edge-left` —— 它被 .catch 吞掉了,实际一直是空转)。
     // 不吞错:选择器变了要当场红,不能悄悄跳过让夹具半成品混过断言。
-    await win.click('.dv-edge-toggle:not(.dv-edge-right)') // 收左栏 → todo-list 入 stash
+    await win.click('.dv-edge-toggle:not(.dv-edge-right)') // 收左栏 → calendar-config 入 stash
     await win.waitForTimeout(1200)
-    await win.click('.dv-edge-right') // 收右栏 → calendar-config 入 stash
+    await win.click('.dv-edge-right') // 收右栏 → calendar-side 入 stash
     await win.waitForTimeout(1200)
     await enterSpace(win, ['笔记', 'Note'], 'amadeus') // 切走 = saveNamed('space:calendar')
     await win.evaluate(`(() => {
@@ -281,7 +281,7 @@ async function main() {
       const sideTypes = ['left', 'right'].flatMap((s) => (cal.sidebars?.[s]?.stash || []).map((v) => v.type))
       return { ok: true, panelTypes, sideTypes }
     })()`)
-    const CAL_TYPES = ['calendar', 'todo-list', 'calendar-config']
+    const CAL_TYPES = ['calendar', 'todo-list', 'calendar-config', 'calendar-side']
     const fixtureOk = stashFix.ok
       && !(stashFix.panelTypes || []).some((t) => CAL_TYPES.includes(t)) // 活体全已注册
       && (stashFix.sideTypes || []).some((t) => CAL_TYPES.includes(t))   // stash 里有日历视图

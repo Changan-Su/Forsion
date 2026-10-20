@@ -26,7 +26,7 @@ import {
 } from '@amadeus-shared/compiler'
 import { joinRel } from '@amadeus-shared/assets'
 import { contentStorageKey } from '@lcl/engine/contentStorageScope'
-import { cloudVaultNamesFrom } from '@amadeus-shared/entrySync'
+import { cloudVaultMarkerPath, cloudVaultNamesFrom, parseCloudVaultMarker, type CloudVaultDevice } from '@amadeus-shared/entrySync'
 import { dbFileSchema, parseDb, serializeDb, type DbFile } from '@amadeus-shared/db/schema'
 import { parseDrawing, withSceneJson } from '@amadeus-shared/excalidraw/format'
 import { mergeScenes, type SceneLike } from '@amadeus-shared/excalidraw/reconcile'
@@ -444,6 +444,19 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     const t = await fetchTree()
     return cloudVaultNamesFrom([...t.pages, ...t.files.map((f) => f.path)])
   }
+  // 标记正文记着在同步各库的设备(与桌面镜像读法同一个 parseCloudVaultMarker);逐个 GET,库一般只有几个。
+  ;(window as unknown as { amadeusCloudVaultDevices?: (names: string[]) => Promise<Record<string, CloudVaultDevice[]>> }).amadeusCloudVaultDevices = async (names) => {
+    const v = await ensureVault()
+    const out: Record<string, CloudVaultDevice[]> = Object.create(null) // 库名可以叫 __proto__ / constructor
+    await Promise.all(names.map(async (name) => {
+      try {
+        const f = await http.get<FileDto>(`/amadeus/vaults/${encodeURIComponent(v)}/file`, { path: cloudVaultMarkerPath(name) })
+        const devs = parseCloudVaultMarker(f.content)
+        if (devs?.length) out[name] = devs
+      } catch { /* 读不到就不画设备标签 */ }
+    }))
+    return out
+  }
 
   // ---- SSE ------------------------------------------------------------------
   let stopEvents: (() => void) | null = null
@@ -584,19 +597,23 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
   }
 
   // ---- ref 解析(镜像 vaultManager.resolveAttachment,树缓存替代磁盘走查) --------
-  async function resolveRef(pagePath: string, ref: string): Promise<string | null> {
+  /** 候选路径,按优先级排:调用方逐个 GET,404 再试下一个。 */
+  async function resolveRef(pagePath: string, ref: string): Promise<string[]> {
     const r = stripRefWrappers(ref)
-    if (!r) return null
+    if (!r) return []
     if (r.includes('/')) {
-      // 页面目录拼接 + '..' 归一化;越出 vault → null(桌面同款钳制)。
-      return normalizePosix(joinRel(dirnamePosix(pagePath), safeDecode(r)))
+      // 页面目录拼接 + '..' 归一化;越出 vault → 无候选(桌面同款钳制)。
+      // 页相对落空 → 再按 vault 根解析(桌面 resolveAttachment 同款):独立白板 / db 视图传的是完整 vault 相对路径,
+      // pagePath = ref 时页相对会双拼目录。存在与否交给真 GET 判,别用树缓存 —— 缓存陈旧时会把页相对的新文件
+      // 判成不在、改读写库根那份(Codex 评审)。
+      const rel = normalizePosix(joinRel(dirnamePosix(pagePath), safeDecode(r)))
+      const rootRel = normalizePosix(safeDecode(r))
+      return [...new Set([rel, rootRel])].filter((p): p is string => !!p)
     }
     // 裸 basename → 全库大小写不敏感搜索(树缓存);未中 → 强刷树重试一次。
     const t1 = await fetchTree()
-    const hit = findByBasenameIn(allTreePaths(t1), r)
-    if (hit) return hit
-    const t2 = await fetchTree(true)
-    return findByBasenameIn(allTreePaths(t2), r)
+    const hit = findByBasenameIn(allTreePaths(t1), r) ?? findByBasenameIn(allTreePaths(await fetchTree(true)), r)
+    return hit ? [hit] : []
   }
 
   // ---- binary 上传 -------------------------------------------------------------
@@ -1424,20 +1441,21 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     // ---- Database(.db) ---------------------------------------------------------
     readDatabase: async (pagePath, ref): Promise<DbReadResult> => {
       await ensureVault()
-      const resolved = await resolveRef(pagePath, ref)
-      if (!resolved) return { status: 'missing' }
-      let f: FileDto
-      try {
-        f = await getFile(resolved)
-      } catch (e) {
-        if (is404(e)) return { status: 'missing' }
-        if (e instanceof HttpError && e.status === 400) return { status: 'corrupt', path: resolved, message: translate('amxbridge.notText') }
-        throw e
+      for (const resolved of await resolveRef(pagePath, ref)) {
+        let f: FileDto
+        try {
+          f = await getFile(resolved)
+        } catch (e) {
+          if (is404(e)) continue
+          if (e instanceof HttpError && e.status === 400) return { status: 'corrupt', path: resolved, message: translate('amxbridge.notText') }
+          throw e
+        }
+        const r = parseDb(f.content)
+        return r.ok
+          ? { status: 'ok', path: resolved, data: r.data } // path = 解析后的 vault 相对路径(写回锚点)
+          : { status: 'corrupt', path: resolved, message: r.error }
       }
-      const r = parseDb(f.content)
-      return r.ok
-        ? { status: 'ok', path: resolved, data: r.data } // path = 解析后的 vault 相对路径(写回锚点)
-        : { status: 'corrupt', path: resolved, message: r.error }
+      return { status: 'missing' }
     },
 
     writeDatabase: (dbPath, data: DbFile) =>
@@ -1463,9 +1481,10 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     readDrawing: async (pagePath, ref): Promise<DrawingReadResult> => {
       await ensureVault()
       // Obsidian 链接省略 .md:`![[Foo.excalidraw]]` 实指 Foo.excalidraw.md → 原样先试,落空补 .md(桌面同款)。
-      const resolved = (await resolveRef(pagePath, ref)) ?? (await resolveRef(pagePath, `${ref}.md`))
-      if (!resolved) return { status: 'missing' }
-      for (const candidate of resolved.endsWith('.md') ? [resolved] : [resolved, `${resolved}.md`]) {
+      // 每个候选先补 .md 再轮下一个:页相对的 `x.excalidraw.md` 要排在库根同名之前。
+      const bases = await resolveRef(pagePath, ref)
+      const resolved = bases.length ? bases : await resolveRef(pagePath, `${ref}.md`)
+      for (const candidate of resolved.flatMap((p) => (p.endsWith('.md') ? [p] : [p, `${p}.md`]))) {
         try {
           const f = await getFile(candidate)
           return { status: 'ok', path: candidate, source: f.content }

@@ -5,10 +5,14 @@
  *  - 上下文 = 主 agent 此刻看得到的那份(hydrateHistory:压缩检查点摘要 + 最近窗口,含工具调用与结果),
  *    渲染成转写放进系统提示。**正在生成的那条回复还没落库,旁聊看不到** —— 与 Claude Code 同口径;
  *    提示词里专门交代「最后那条用户消息可能还在处理中,别去答它」(Claude Code 2.1.79 栽过:拿主线的问题当旁问答)。
- *  - 旁聊自己的往返由客户端每次带上(thread,最近 ASIDE_MAX_TURNS 轮),服务端一个字节都不落。
+ *  - 旁聊自己的往返由客户端每次带上(thread,最近 ASIDE_MAX_TURNS 轮)当模型上下文。
+ *  - 落库(10-18 用户定「顺便问留下来」):每答完一问,整段线程写进 chat_asides,挂在 (会话, 消息) 上 ——
+ *    「从这里分出」里能重开。仍**不进主会话历史**(不在 chat_messages,主 agent / 会话搜索 / Historian 都看不到)。
  *  - 无工具:payload 不带 tools。模型仍把工具调用写成文本时,done 带 toolCallText 让客户端补一句「什么都没执行」
  *    (Claude Code 2.1.269 的坑)。
  */
+import { v4 as uuidv4 } from 'uuid';
+import { query } from '../core/db.js';
 import { deps } from '../seams/runtime.js';
 import type { ChatMessage } from '../core/types.js';
 import { hydrateHistory } from './agentLoop.js';
@@ -116,4 +120,47 @@ export async function answerAside(opts: {
   ).catch(() => {});
   const content = String(res?.content || '').trim();
   return { content, toolCallText: looksLikeToolCallText(content) };
+}
+
+/** 一条记录最多存的往返(更早的丢掉;模型上下文另由 ASIDE_MAX_TURNS 封顶)。 */
+const SAVED_MAX_TURNS = 50;
+
+const parseTurns = (v: unknown): AsideTurn[] => {
+  try { const a = typeof v === 'string' ? JSON.parse(v) : v; return Array.isArray(a) ? a : []; } catch { return []; }
+};
+
+/** 答完一问 → 写回记录,返回它的 id 和实际挂上的消息。asideId 不是本人本会话的(删掉了 / 伪造)→ 另开一条;
+ *  messageId 没给 / 不属于本会话 → 挂在本会话最近一条回答上(输入框 /btw、浮窗里问的不知道挂哪);一条回答都没有 → 不存(null)。
+ *  已有记录以库里的往返为准(客户端只带最近 20 轮),只追加这一问。 */
+export async function saveAside(p: { asideId?: string; sessionId: string; userId: string; messageId?: string; turn: AsideTurn; thread: AsideTurn[] }): Promise<{ id: string; messageId: string | null } | null> {
+  // 续写:比对旧值再写(两扇窗同时续同一段,读到同一份 turns 各自覆盖会丢一问 —— Codex 10-18 #2);被抢了就重读再追加。
+  for (let attempt = 0; p.asideId && attempt < 5; attempt++) {
+    const [row] = await query<any[]>(`SELECT id, message_id, turns FROM chat_asides WHERE id = ? AND session_id = ? AND user_id = ? LIMIT 1`, [p.asideId, p.sessionId, p.userId]);
+    if (!row) break;
+    const turns = [...parseTurns(row.turns), p.turn].slice(-SAVED_MAX_TURNS);
+    const hit = await query<any[]>(`UPDATE chat_asides SET turns = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND turns = ? RETURNING id`, [JSON.stringify(turns), row.id, row.turns]);
+    if (hit.length) return { id: String(row.id), messageId: row.message_id ? String(row.message_id) : null };
+  }
+  // ponytail: 5 次都被抢就落到下面另开一条;真撞上再改成抛错 / 串行写
+  const [m] = p.messageId ? await query<any[]>(`SELECT id FROM chat_messages WHERE id = ? AND session_id = ? LIMIT 1`, [p.messageId, p.sessionId]) : [];
+  const [latest] = m ? [m] : await query<any[]>(
+    `SELECT id FROM chat_messages WHERE session_id = ? AND role = 'model' ORDER BY timestamp DESC LIMIT 1`, [p.sessionId]);
+  // 还没有回答可挂(空会话里问的):不存 —— 存了也没有地方重开(Codex 10-18 #5),照旧只在本次面板里
+  if (!latest) return null;
+  const id = uuidv4();
+  await query(`INSERT INTO chat_asides (id, session_id, user_id, message_id, turns) VALUES (?, ?, ?, ?, ?)`,
+    [id, p.sessionId, p.userId, String(latest.id), JSON.stringify([...p.thread, p.turn].slice(-SAVED_MAX_TURNS))]);
+  return { id, messageId: String(latest.id) };
+}
+
+export async function listAsides(sessionId: string, userId: string): Promise<Array<{ id: string; message_id: string | null; turns: AsideTurn[]; created_at: string; updated_at: string }>> {
+  const rows = await query<any[]>(
+    `SELECT id, message_id, turns, created_at, updated_at FROM chat_asides WHERE session_id = ? AND user_id = ? ORDER BY created_at ASC LIMIT 200`,
+    [sessionId, userId],
+  );
+  return rows.map((r) => ({ id: String(r.id), message_id: r.message_id ? String(r.message_id) : null, turns: parseTurns(r.turns), created_at: r.created_at, updated_at: r.updated_at }));
+}
+
+export async function deleteAside(id: string, sessionId: string, userId: string): Promise<void> {
+  await query(`DELETE FROM chat_asides WHERE id = ? AND session_id = ? AND user_id = ?`, [id, sessionId, userId]);
 }

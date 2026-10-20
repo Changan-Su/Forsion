@@ -87,8 +87,8 @@ describe('DeviceSessionSections', () => {
     const ids = new Map([['a1', { n: 2, localOnly: false }]])
     await act(async () => { root.render(React.createElement(DeviceSessionSections, { activeId: null, runningIds: new Set<string>(['a1']), unreadIds: new Set<string>(), rowBadge: (x: SessionRecord) => attentionBadge(ids, x.id) })) })
     const row = host.querySelector(`[data-device-section="${A}"] .t2s-srow`)!
-    expect(row.querySelector('.t2s-dot.attention')).not.toBeNull()
-    expect(row.querySelector('.t2s-dot.running')).toBeNull()
+    expect(row.querySelector('.t2s-st.wait')).not.toBeNull() // 10-17 起状态在行尾
+    expect(row.querySelector('.t2s-st.run')).toBeNull()
   })
 
   // 设置图标走与改名同一条 PATCH /agent/sessions/:id(远端放行),只动 emoji 字段。

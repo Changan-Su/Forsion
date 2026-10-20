@@ -3,7 +3,7 @@ import { amadeusAvailable } from './features/runtime'
 /** App 根:启动副作用(连接/轮询/更新)+ 主题桥接给纯引擎 Shell + 设置/引导/更新横幅浮层。 */
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { Shell, UI_MODE, useWorkspace } from '@lcl/engine'
+import { Shell, UI_MODE, setActiveSpace, useSpaceStore, useWorkspace } from '@lcl/engine'
 import { useApp } from './stores/appStore'
 import { useTheme, useVisualTheme } from './stores/themeStore'
 import { getLanguage } from './theme/registry'
@@ -25,8 +25,12 @@ import { AchievementToast } from './achievements/AchievementToast'
 import { debugFireToast } from './achievements/store'
 import { forgetUserSpace } from './userSpaces'
 import { NotificationHost } from './components/NotificationHost'
+import { WhatsNewHost } from './components/WhatsNewDialog'
+import { SyncSetupHost } from './components/SyncSetupCard'
+import { TermsUpdateHost } from './components/TermsUpdateDialog'
+import { setPopupsBlocked } from './stores/popupQueue'
 import { DesktopStatusBar, installStatusBarItems } from './statusbar/items'
-import { UnitRemoteSurface } from './components/UnitSwitcher'
+import { UnitRemoteSurface, runUnitRoutePayload } from './components/UnitSwitcher'
 import { installNotificationWiring } from './stores/notificationWiring'
 import { useShallow } from 'zustand/react/shallow'
 import { installFileDropGuard } from './fileDropGuard'
@@ -34,8 +38,8 @@ import { syncDevCommands } from './devCommands'
 import { openAgentProfile } from './views/agentProfileNav'
 import { listSkills } from './services/backendService'
 import { FloatingPanelFrame } from './components/FloatingPanelFrame'
-import { BtwHost } from './views/chat2/BtwPanel'
-import { quoteInMainChat } from './views/chat2/btwStore'
+import { BtwHost } from '@tangu/ui/views/chat2/BtwPanel'
+import { quoteInMainChat } from '@tangu/ui/views/chat2/btwStore'
 import { FloatingViewSurface } from './components/FloatingViewSurface'
 import { closeWebFloatingPanel, getWebFloatingPanel, subscribeWebFloatingPanel } from './pluginPanelSeam'
 import { homeTarget } from './services/engine/targets'
@@ -89,6 +93,10 @@ export function Root() {
     }
     if (action === 'open-agents') openAgentProfile(useApp.getState().defaultAgentSlug || '')
     if (action === 'open-agent' && payload && /^[a-z0-9][a-z0-9-]{0,63}$/.test(payload)) openAgentProfile(payload)
+    // 设置 › 设备(浮窗)里选了去处:远程面 / vaultSide 在主窗,由主窗执行。
+    if (action === 'unit-route' && payload) runUnitRoutePayload(payload)
+    // 设置浮窗里「在蓬洲云中查看」:切到那个 Space(只认已注册的;选中哪个库由 Extend 自己接,见 RemoteSyncSection)
+    if (action === 'open-space' && payload && useSpaceStore.getState().spaces.some((x) => x.id === payload)) setActiveSpace(payload)
   }), [])
   const theme = useTheme()
   const visualTheme = useVisualTheme()
@@ -104,6 +112,7 @@ export function Root() {
     onboarding: s.onboarding,
     feedbackOpen: s.feedbackOpen,
     marketOpen: s.marketOpen,
+    marketTarget: s.marketTarget,
     closeMarket: s.closeMarket,
     achievementsOpen: s.achievementsOpen,
     cfg: s.cfg,
@@ -130,6 +139,8 @@ export function Root() {
       return () => clearTimeout(id)
     }
   }, [a.onboarding])
+  // 全屏引导开着时,自己弹出来的弹窗(协议更新 / What's new / 插件公告)先排着,引导结束再按顺序出
+  useEffect(() => setPopupsBlocked(!!a.onboarding), [a.onboarding])
 
   // 只有首启引导仍是全屏任务空间。设置/市场/成就/反馈改为 Floating Panel 后主工作台保持可见。
   const overlayOpen = a.settingsOpen || a.marketOpen || a.achievementsOpen || a.feedbackOpen || !!pluginFloating || a.onboarding
@@ -236,7 +247,7 @@ export function Root() {
       <AnimatePresence>
         {a.marketOpen && (
         <FloatingPanelFrame key="market" title={a.tr('market.title')} onClose={() => a.closeMarket()}>
-          <MarketModal onClose={() => a.closeMarket()} />
+          <MarketModal key={a.marketTarget?.nonce} initialQuery={a.marketTarget?.q} initialItemId={a.marketTarget?.itemId} initialDetailTab={a.marketTarget?.detailTab} onClose={() => a.closeMarket()} />
         </FloatingPanelFrame>
         )}
       </AnimatePresence>
@@ -257,6 +268,12 @@ export function Root() {
 
       {/* 旁聊(/btw)在 Web 上的居中窄浮层;桌面走原生 Floating Panel,这里恒为空 */}
       <BtwHost />
+
+      <WhatsNewHost />
+      <TermsUpdateHost />
+
+      {/* 首登同步卡片:只在桌面主窗(要本地库远程同步);手机 / 网页没有,组件自己判 */}
+      <SyncSetupHost />
 
       <AnimatePresence>
         {pluginFloating?.view && <FloatingPanelFrame key={pluginFloating.id} title={pluginFloating.title} onClose={closeWebFloatingPanel}>

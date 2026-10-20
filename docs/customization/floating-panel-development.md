@@ -62,3 +62,10 @@ ctx.registerCommand({
 ## English contract
 
 Register a normal plugin view first, then call `ctx.openFloatingPanel?.(viewId, options)`. The host namespaces the id, owns native-window/Web-overlay chrome, and supplies `surface: 'floating'`. Reopening the same panel id focuses and retargets it. Floating views have live params and `showInMainPanel()`, but no `extendView`. Clean up all subscriptions from the disposer returned by `mount`.
+
+
+### Close from view content / 从内容里关闭
+
+`view.close?.()` closes the mounted view through its owner, including native Floating Panels and Web overlays. The callback is revoked after unmount. Use it for Close, Back and successful confirmation actions; do not call `window.close()` or reach into another window.
+
+插件内容的关闭、返回和确认成功使用 `view.close?.()`，由所属宿主关闭桌面浮窗或网页浮层。卸载后回调失效，不直接调用 `window.close()`。

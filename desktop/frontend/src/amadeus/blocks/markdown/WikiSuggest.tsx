@@ -30,7 +30,7 @@ import { registerMessages, useI18n } from '../../../i18n'
 import type { AppRefList } from '../../../../../shared/appRefs'
 import { AppRefIcon, appRefsSupported } from '../../../components/appRefs'
 import { useCapsuleSlide } from '../../../components/capsuleTabs'
-import { ALL_APPS, ALL_WINDOWS, appRefInner, isAppRefQuery, moveWikiCat, pickAppRefs, wikiCats, type AppRefCand, type WikiCat } from './wikiAppRefs'
+import { ALL_APPS, ALL_WINDOWS, appRefInner, isAppRefQuery, mentionCats, moveWikiCat, pickAppRefs, wikiCats, type AppRefCand, type WikiCat } from './wikiAppRefs'
 import './slashCategories.css'
 
 registerMessages({
@@ -47,6 +47,8 @@ registerMessages({
   'wiki.tab.window': { zh: '窗口', en: 'Windows' },
   'wiki.tab.app': { zh: '应用', en: 'Apps' },
   'wiki.tab.note': { zh: '笔记', en: 'Notes' },
+  'wiki.tab.agent': { zh: 'Agent', en: 'Agents' },
+  'wiki.tab.date': { zh: '日期', en: 'Dates' },
   'wiki.tab.empty': { zh: '这一类里没有匹配的', en: 'Nothing matches in this category' },
 })
 
@@ -235,7 +237,8 @@ export function WikiSuggest({ query, left, top, anchorTop, getPageNames, getFile
     void window.tangu?.appRefs?.list().then((l) => { if (live) setAppList(l) }, () => {})
     return () => { live = false }
   }, [hostApps])
-  const cats = wikiCats(hostApps && !sub, cands.length > 0)
+  const offerApps = hostApps && !sub // @ 提及的分类条不含窗口 / 应用
+  const cats = dates ? mentionCats(!!onPickAgent && roster.length > 0, cands.length > 0) : wikiCats(offerApps, cands.length > 0)
   const tabbed = cats.length > 0
   const [catChoice, setCatChoice] = useState<WikiCat>('all')
   const cat = cats.includes(catChoice) ? catChoice : 'all'
@@ -246,11 +249,12 @@ export function WikiSuggest({ query, left, top, anchorTop, getPageNames, getFile
     section: c.ref.kind,
     pick: () => onPick(appRefInner(c.ref)),
   })
-  const winRows = tabbed ? pickAppRefs(appList, query, 'window').map(appRow) : []
-  const appRows = tabbed ? pickAppRefs(appList, query, 'app').map(appRow) : []
+  const winRows = offerApps ? pickAppRefs(appList, query, 'window').map(appRow) : []
+  const appRows = offerApps ? pickAppRefs(appList, query, 'app').map(appRow) : []
   // 「全部」= 从前那一列原样在前(第一行、回车选中的还是它),窗口 / 应用各露几条跟在后面。
-  const allRows = tabbed ? [...rows, ...winRows.slice(0, ALL_WINDOWS), ...appRows.slice(0, ALL_APPS)] : rows
-  const shown = cat === 'window' ? winRows : cat === 'app' ? appRows : cat === 'note' ? rows : allRows
+  const allRows = [...rows, ...winRows.slice(0, ALL_WINDOWS), ...appRows.slice(0, ALL_APPS)]
+  const shown = cat === 'all' ? allRows : cat === 'window' ? winRows : cat === 'app' ? appRows
+    : dates ? rows.filter((r) => r.section === (cat === 'note' ? 'page' : cat)) : rows // @:Agent / 日期 / 笔记按行的分区筛
   const total = shown.length
   // 哪一类都没有东西 → 面板整体不出现(同从前);只是当前这一类空着 → 留着分类条,好切回去。
   const visible = allRows.length > 0
@@ -325,7 +329,7 @@ export function WikiSuggest({ query, left, top, anchorTop, getPageNames, getFile
     <RowButton key={r.key} r={r} i={i} active={active} setActive={setActive} reveal={reveal}
       // 分组标签只在 @ 提及场景(Notion 的 Date / Link to page)与带分类条的「全部」(笔记、窗口、应用混在一列);
       // 只有页面的 [[ 面板里标签是噪音。
-      label={(dates || (tabbed && cat === 'all')) && r.section && r.section !== shown[i - 1]?.section ? t(`wiki.sec.${r.section}`) : undefined}
+      label={(dates || tabbed) && cat === 'all' && r.section && r.section !== shown[i - 1]?.section ? t(`wiki.sec.${r.section}`) : undefined}
     />
   ))
 

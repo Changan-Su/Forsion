@@ -8,7 +8,7 @@
  */
 import { useEffect, useMemo } from 'react'
 import { create } from 'zustand'
-import { withChecked, withDue, type MdMark } from '@amadeus-shared/mdMarks'
+import { resolveMark, withChecked, withDue, type MdMark } from '@amadeus-shared/mdMarks'
 import type { CellValue, DbColumn } from '@amadeus-shared/db/schema'
 import { amadeus } from '../api'
 import { usePageStore } from './pageStore'
@@ -46,6 +46,10 @@ const markKey = (m: Pick<MdMark, 'path' | 'line'>): string => `${m.path}:${m.lin
 
 const timers = new Map<string, number>()
 let inflight = 0
+let loadedVault: string | null = null
+/** 最近一次落定(成功或失败)的 load 拉的是哪个库 —— 插件订阅的 ready 看它(watchMdMarks)。
+ *  不复用 loadedVault:那个还管着换库时清乐观覆盖,失败分支里动它会把上一个库的覆盖套到新库上。 */
+let settledVault: string | null | undefined
 
 let seq = 0
 export const useMdMarkStore = create<State>((set, get) => ({
@@ -64,9 +68,15 @@ export const useMdMarkStore = create<State>((set, get) => ({
       await usePageStore.getState().flushSave().catch(() => {})
       const marks = await amadeus.listMarks()
       // 迟到的结果不许污染新库(换 vault 后旧请求可能才回来)。
-      if (id === seq && usePageStore.getState().vaultRoot === vault) set({ marks, ready: true })
+      if (id === seq && usePageStore.getState().vaultRoot === vault) {
+        // 换了库:上一个库排着的乐观覆盖与回写一并作废(key 是「路径:行号」,会套到新库同位置的另一条上)
+        if (vault !== loadedVault) { for (const t of timers.values()) clearTimeout(t); timers.clear(); set({ overlay: {} }) }
+        loadedVault = vault
+        settledVault = vault
+        set({ marks, ready: true })
+      }
     } catch {
-      if (id === seq) set({ marks: [], ready: true })
+      if (id === seq) { settledVault = vault; set({ marks: [], ready: true }) }
     }
   },
 
@@ -75,18 +85,30 @@ export const useMdMarkStore = create<State>((set, get) => ({
     set((s) => ({ overlay: { ...s.overlay, [key]: { ...s.overlay[key], ...p } } }))
     const prev = timers.get(key)
     if (prev) clearTimeout(prev)
+    const vault = usePageStore.getState().vaultRoot
     // 防抖:日历拖动每帧都会调进来,不能每帧写一次盘。
-    timers.set(key, window.setTimeout(() => { timers.delete(key); void flush(key, m) }, 400))
+    timers.set(key, window.setTimeout(() => { timers.delete(key); void flush(key, m, vault) }, 400))
   },
 }))
 
 /** 把覆盖表里那条改动真正写回 markdown。失败**只报不猜** —— 退回「去笔记里改」。 */
-async function flush(key: string, fallback: MdMark): Promise<void> {
+async function flush(key: string, fallback: MdMark, vault: string | null): Promise<void> {
   const st = useMdMarkStore.getState()
   const o = st.overlay[key]
   if (!o || !amadeus?.patchMark) return
+  // 改动是在别的库里排的队:key 只是「路径:行号」,换库后同一个 key 指向另一条任务 —— 丢掉,别写过去。
+  if (usePageStore.getState().vaultRoot !== vault) {
+    useMdMarkStore.setState((s) => { const rest = { ...s.overlay }; delete rest[key]; return { overlay: rest } })
+    return
+  }
   // 用**最近一次 load 的**那一行原文当基准:它才是磁盘上此刻的样子。
   const cur = st.marks.find((x) => markKey(x) === key) ?? fallback
+  // 排队期间笔记重排过(插 / 删 / 换了行):这个「路径:行号」上已经是别的任务了 → 丢掉这笔,别写到别人头上。
+  if (resolveMark([cur], fallback) !== cur) {
+    useMdMarkStore.setState((s) => { const rest = { ...s.overlay }; delete rest[key]; return { overlay: rest } })
+    notifyApp({ event: 'system.generic', level: 'warning', text: translate('mdmark.patchFailed', { name: fallback.text }) })
+    return
+  }
   let next = cur.raw
   if (o.checked !== undefined) next = withChecked(next, o.checked) ?? next
   if (o.due !== undefined) next = withDue(next, o.due) ?? next
@@ -133,15 +155,49 @@ export function useMdMarks(): MdMark[] {
     const t = setTimeout(() => { void useMdMarkStore.getState().load() }, 250)
     return () => clearTimeout(t)
   }, [vaultRoot, activePage])
-  return useMemo(() => {
-    const keys = Object.keys(overlay)
-    if (!keys.length) return marks
-    return marks.map((m) => {
-      const o = overlay[markKey(m)]
-      return o ? { ...m, due: o.due ?? m.due, checked: o.checked ?? m.checked } : m
-    })
-  }, [marks, overlay])
+  return useMemo(() => withOverlay(marks, overlay), [marks, overlay])
 }
+
+function withOverlay(marks: MdMark[], overlay: Record<string, MarkPatch>): MdMark[] {
+  if (!Object.keys(overlay).length) return marks
+  return marks.map((m) => {
+    const o = overlay[markKey(m)]
+    return o ? { ...m, due: o.due ?? m.due, checked: o.checked ?? m.checked } : m
+  })
+}
+
+/** 非 React 版 useMdMarks(插件 ctx.noteTasks):立刻回调一次,之后标记 / 乐观覆盖一变就回调;
+ *  换库 / 换页时同样隔 250ms 重拉。ready = 拉过当前这个库(库没恢复 / 刚换库为假;宿主没有这条接缝时拉一次就 ready + 空)。 */
+export function watchMdMarks(cb: (marks: MdMark[], ready: boolean) => void): () => void {
+  let timer = 0
+  const reload = (): void => { clearTimeout(timer); timer = window.setTimeout(() => { void useMdMarkStore.getState().load() }, 250) }
+  let last: { st: State; ready: boolean } | null = null
+  const emit = (): void => {
+    const st = useMdMarkStore.getState()
+    const root = usePageStore.getState().vaultRoot
+    // ready 同 ctx.databases:拉过**当前这个库**才算。库还没恢复(null)/ 刚换库还没重拉时的空列表 ≠ 笔记里没有任务。
+    // 宿主没有这条接缝(web/mobile)照旧:拉一次就 ready + 空。
+    const ready = amadeus?.listMarks ? !!root && settledVault === root : st.ready
+    if (last && st.marks === last.st.marks && st.overlay === last.st.overlay && ready === last.ready) return
+    last = { st, ready }
+    cb(withOverlay(st.marks, st.overlay), ready)
+  }
+  let page = usePageStore.getState()
+  const offPage = usePageStore.subscribe((st) => {
+    if (st.vaultRoot === page.vaultRoot && st.activePage === page.activePage) return
+    page = st
+    emit() // 换库那一刻就翻回 ready:false,别让插件拿上一个库的任务当这个库的
+    reload()
+  })
+  const offMarks = useMdMarkStore.subscribe(emit)
+  emit()
+  reload()
+  return () => { clearTimeout(timer); offPage(); offMarks() }
+}
+
+/** 按 `路径:行号` 找当前一条标记(插件写口用)。 */
+export const findMdMark = (key: string): MdMark | undefined => useMdMarkStore.getState().marks.find((m) => markKey(m) === key)
+export { markKey }
 
 /** 就地改一条标记(待办勾选 / 日历改期)。宿主没有回写接缝(web/mobile)时返回 false,调用方退回跳转。 */
 export function patchMark(m: MdMark, p: { due?: string; checked?: boolean }): boolean {
@@ -151,6 +207,8 @@ export function patchMark(m: MdMark, p: { due?: string; checked?: boolean }): bo
 }
 
 export const useMdMarksReady = (): boolean => useMdMarkStore((s) => s.ready)
+/** 这一条此刻在界面上的日期(乐观覆盖优先,还没落盘的改动也算)。 */
+export const effectiveDue = (m: MdMark): string => useMdMarkStore.getState().overlay[markKey(m)]?.due ?? m.due
 
 // 结构变更(新建/删除/改名笔记)→ 重拉。模块级订阅一次,与 dbAggregateStore 同款。
 // ⚠️ 别再弄丢这一行:只靠 hook 的 vaultRoot/activePage 依赖,改的是**别的**笔记时投影不会更新,

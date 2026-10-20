@@ -17,7 +17,8 @@ import { promises as fs } from 'node:fs';
 import { mkdirSync, existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
-import { agentsDir, memoryDir, userMdFile, DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
+import { agentsDir, memoryDir, userMdFile, ensureHumanFolder, humanDir, DEFAULT_AGENT_SLUG, USER_MD_TEMPLATE } from '../core/tanguHome.js';
+import { mirrorLegacyHuman } from './humanFolder.js';
 import { credentialReadTarget } from '../sandbox/hostSandboxProtection.js';
 import { builtinAgentAvatar } from './builtinAvatars.js';
 import { LEGACY_PERSONAS, LEGACY_MUSE_PROMPTS, LEGACY_MUSE_DESCRIPTION } from './legacyPersonas.js';
@@ -633,18 +634,11 @@ export async function migrateGlobalMemoryToXyra(): Promise<void> {
   if (existsSync(oldMeta)) await fs.copyFile(oldMeta, path.join(xyraDir, '.sync.json')).catch(() => { /* ignore */ });
 }
 
-const USER_MD_TEMPLATE =
-  '# User Profile (USER.md)\n\n' +
-  '> Every Agent reads this profile. Record long-term information about yourself here; Agents may also add to it based on conversations.\n\n' +
-  '## Name / What to call you\n\n' +
-  '## Preferences\n- \n\n' +
-  '## Level / Background\n\n' +
-  '## Long-term needs / Goals\n';
-
 /** 首次缺失时播种 USER.md 模板(全局用户画像,供用户发现并填写)。 */
 async function seedUserMdOnce(): Promise<void> {
   const f = userMdFile();
-  if (existsSync(f)) return;
+  // human/MEMORY.md 在了就不再播种:同步删掉了 USER.md 时补回模板,镜像会把模板当成「旧位置改过」并进人的本子
+  if (existsSync(f) || existsSync(path.join(humanDir(), 'MEMORY.md'))) return;
   await fs.writeFile(f, USER_MD_TEMPLATE, 'utf-8');
 }
 
@@ -657,6 +651,8 @@ async function ensureAgentsReady(): Promise<void> {
   await migrateFlatAgentsOnce().catch(() => { /* ignore */ });
   await seedDefaultAgentsOnce().catch(() => { /* ignore */ });
   await seedUserMdOnce().catch(() => { /* ignore */ });
+  try { ensureHumanFolder(); } catch { /* ignore */ } // 在 USER.md 播种之后:新装机的模板也一起进 MEMORY.md
+  try { await mirrorLegacyHuman(); } catch (e) { console.warn('[human mirror]', e instanceof Error ? e.message : e); } // 默认日历首次搬进 human/;离线时旧版改过的 USER.md 并进来
   await migrateGlobalMemoryToXyra().catch(() => { /* ignore */ });
   cache = null;
 }

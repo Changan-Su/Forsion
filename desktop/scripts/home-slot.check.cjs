@@ -18,6 +18,10 @@
  *   6 启动档「指定 Space」:重启后落在指定那个
  *   7 主位指向的 Space 被停用(关掉主页内置插件):主位回落到别的 Space,不空槽、不炸
  *
+ * 插件档(2026-10-18,主页插件化 B):HOME_PLUGIN_DIR=<Forsion-Home 检出,先 npm run build> 时主页视图芯由插件 forsion-home
+ * 接管(scripts/lib/home-plugin.cjs),同一套检查对插件版跑;另加 H0 / H0b:主页露面的两次(启动、种顺序后重载)正文都真的是插件画的
+ * (挂不上会悄悄退回内置主页 —— 不核这一条,插件坏了整套照样绿)。
+ *
  * ⚠️ 量的是 out/ 里的产物,源码改了没 `npm run build` 就是白测。
  * 跑:npm run check:homeslot        截图自查:npm run check:homeslot -- --shot
  */
@@ -25,11 +29,13 @@ const fs = require('fs')
 const os = require('os')
 const path = require('path')
 const electron = require('./lib/launch-electron.cjs')
+const { HOME_PLUGIN_DIR, installHomePlugin, claimHomeView, homeBody } = require('./lib/home-plugin.cjs')
 
 const ROOT = path.join(__dirname, '..')
 const SHOT = process.argv.includes('--shot')
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-homeslot-'))
 const UD = path.join(home, 'userdata') // 同一份 user-data-dir = 同一份 localStorage,才谈得上「重启」
+installHomePlugin(home)
 
 const results = []
 function check(name, ok, detail) {
@@ -70,6 +76,10 @@ async function boot() {
   }
   await win.waitForSelector('.dv-groupview', { timeout: 30_000 })
   await win.waitForTimeout(1800)
+  if (await claimHomeView(win)) { // 插件档:写 coreTrial 后重载一次(同一份 user-data-dir 只做一次,重启那几程照样认)
+    await win.waitForSelector('.dv-groupview', { timeout: 30_000 })
+    await win.waitForTimeout(1800)
+  }
   return { app, win }
 }
 
@@ -109,6 +119,9 @@ async function main() {
   win.on('pageerror', (e) => errs.push(String(e && e.message ? e.message : e)))
   try {
     const s0 = await win.evaluate(SNAP)
+    // 插件档:主页只在启动(s0)和下面种顺序后的重载时露面;第 4 步起活动 Space 都不是主页,不在那儿判
+    const bodies = HOME_PLUGIN_DIR ? [await homeBody(win)] : []
+    if (HOME_PLUGIN_DIR) check('H0 插件档:启动落在的主页正文来自插件 forsion-home(没挂上会悄悄退回内置)', bodies[0] === 'plugin', JSON.stringify({ body: bodies[0], dir: HOME_PLUGIN_DIR }))
     if (SHOT) {
       // 观感自查(DESIGN.md §8):ribbon 竖条本身 + 右键换主位的菜单(唯一一块新画的界面)。
       const bar = path.join(os.tmpdir(), 'forsion-homeslot.png')
@@ -148,6 +161,10 @@ async function main() {
     await win.evaluate(`localStorage.setItem('forsion_tangu_ribbon_order', ${JSON.stringify(JSON.stringify(SEED))})`)
     await reload(win)
     const seeded = await win.evaluate(SNAP)
+    if (HOME_PLUGIN_DIR) {
+      bodies.push(await homeBody(win))
+      check('H0b 插件档:重载后主页仍是插件画的', seeded.active === 'home' && bodies.length === 2 && bodies.every((b) => b === 'plugin'), JSON.stringify({ active: seeded.active, bodies }))
+    }
     const order0 = JSON.stringify(seeded.order)
     const tanguName = nameOf(seeded, 'space:tangu')
     const homeName = seeded.slot[0]

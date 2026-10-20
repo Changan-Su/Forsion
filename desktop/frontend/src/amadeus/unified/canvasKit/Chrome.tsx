@@ -21,8 +21,9 @@ export function CanvasChrome({ zoom, onZoomBy, onFit, snap, onSnap, mini, onMini
   zoom: number
   onZoomBy: (factor: number) => void
   onFit: () => void
-  snap: boolean
-  onSnap: (on: boolean) => void
+  /** 不传 onSnap = 这块画布没有可拖的卡(Chat 画布),不出吸附开关。 */
+  snap?: boolean
+  onSnap?: (on: boolean) => void
   mini: boolean
   onMini: (on: boolean) => void
   /** 各家自己的按钮(画布的「低倍率简略」之类)。 */
@@ -38,16 +39,18 @@ export function CanvasChrome({ zoom, onZoomBy, onFit, snap, onSnap, mini, onMini
       <button type="button" onClick={() => onZoomBy(1.2)} title={t('ckchrome.zoomIn')}><Plus size={12} /></button>
       <button type="button" onClick={onFit} title={t('ckchrome.fit')}><Maximize2 size={12} /></button>
       {extra}
-      <button
-        type="button"
-        className={`amx-snap-toggle${snap ? ' is-on' : ''}`}
-        aria-pressed={snap}
-        aria-label={t('ckchrome.snap')}
-        title={snap ? t('ckchrome.snapOff') : t('ckchrome.snapOn')}
-        onClick={() => onSnap(!snap)}
-      >
-        <Magnet size={12} />
-      </button>
+      {onSnap && (
+        <button
+          type="button"
+          className={`amx-snap-toggle${snap ? ' is-on' : ''}`}
+          aria-pressed={!!snap}
+          aria-label={t('ckchrome.snap')}
+          title={snap ? t('ckchrome.snapOff') : t('ckchrome.snapOn')}
+          onClick={() => onSnap(!snap)}
+        >
+          <Magnet size={12} />
+        </button>
+      )}
       <button
         type="button"
         className={mini ? 'is-on' : ''}

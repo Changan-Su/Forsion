@@ -65,7 +65,7 @@ const HELPER = `window.__axs = (() => {
   const shown = (el) => el.getClientRects().length > 0 || getComputedStyle(el).display === 'contents'
   const outside = () => [html, document.body, ...document.body.querySelectorAll('*')].filter((el) => !el.closest(WRAP) && !el.closest('[data-axs-probe]') && shown(el))
   const calendar = () => {
-    const roots = [...document.querySelectorAll('.amx-cal, .amx-todo, .amx-calside, .amx-calcfg, [popover], [role="dialog"], .amx-cal-cardwrap, .amx-cal-agenda')]
+    const roots = [...document.querySelectorAll('.amx-cal, .amx-todo, .amx-calside, .amx-calside2, .amx-calcfg, [popover], [role="dialog"], .amx-cal-cardwrap, .amx-cal-agenda')]
     return [...new Set(roots.flatMap((x) => [x, ...x.querySelectorAll('*')]))].filter(shown)
   }
   const snap = (els) => els.map((el) => {
@@ -263,14 +263,14 @@ async function main() {
     await sweep('日历·周视图', { probe: true })
     await calParity('周视图 + 待办 + 右栏')
 
-    await win.locator('.amx-cal-modes').getByRole('button', { name: '周', exact: true }).click()
+    await win.locator('.amx-cal-modes').getByRole('button', { name: '显示选项', exact: true }).click() // 10-19 起日 / 周 / 月在看法胶囊里,这颗是 ⋯
     await win.waitForFunction(() => document.querySelectorAll(':popover-open').length > 0, null, { timeout: 5000 })
     await calParity('视图下拉菜单打开')
     await win.keyboard.press('Escape')
     await win.waitForFunction(() => document.querySelectorAll(':popover-open').length === 0, null, { timeout: 5000 })
 
     await win.locator('.amx-cal-event[aria-label^="产品深度工作"]').first().click()
-    await win.getByRole('dialog', { name: /编辑事件/ }).waitFor({ timeout: 5000 })
+    await win.locator('.amx-cal-cardwrap[role="dialog"]').waitFor({ timeout: 5000 }) // 10-16 用户改口:编辑事件在事件旁的浮卡,右栏只放待办
     await calParity('事件详情')
     await sweep('日历·事件详情')
     await win.keyboard.press('Escape')
@@ -289,6 +289,22 @@ async function main() {
     await win.keyboard.press('w')
     await win.waitForSelector('.amx-cal-tscroll', { timeout: 5000 })
     await captureWindow(app, path.join(SHOTS, 'calendar.png'))
+
+    // G 「祖先 :has」那 6 条改写后行为不变(10-16:frontend/astryxHasPlugin.ts;改前改后各跑一次,结果应一样)。
+    //   CheckboxInput 是真组件(待办栏):键盘聚焦 → 方框 2px 实线描边、偏移 2px;失焦 → 无。
+    //   本应用没用到的 Switch / Layout 见 scripts/astryx-has.check.cjs(裸 Chromium 里原 / 改写逐项比)。
+    const cb = win.locator('.amx-todo .astryx-checkbox').first()
+    await cb.evaluate((b) => b.previousElementSibling.focus())
+    await win.keyboard.press('Shift+Tab')
+    await win.keyboard.press('Tab')
+    const ring = (sel) => win.evaluate((s) => { const b = document.querySelector(s); const cs = getComputedStyle(b); return { fv: b.previousElementSibling.matches(':focus-visible'), ring: `${cs.outlineStyle} ${cs.outlineWidth} ${cs.outlineOffset}` } }, sel)
+    const on = await ring('.amx-todo .astryx-checkbox')
+    check('G 待办勾选框键盘聚焦:方框 solid 2px、偏移 2px', on.fv && on.ring === 'solid 2px 2px', JSON.stringify(on))
+    const bb = await cb.boundingBox() // 焦点环在方框外(偏移 2px),截图要留边;带上右边的待办名好认
+    await win.screenshot({ path: path.join(SHOTS, 'checkbox-focus.png'), clip: { x: bb.x - 12, y: bb.y - 12, width: bb.width + 160, height: bb.height + 24 } })
+    await win.evaluate(() => document.activeElement?.blur())
+    const off = await ring('.amx-todo .astryx-checkbox')
+    check('G 待办勾选框失焦:无描边', off.ring.startsWith('none'), JSON.stringify(off))
 
     // ② 设置浮窗:独立文档,不该有运行时样式;顺便借它的 broadcastUi 走真跨窗通道切明暗 / 主题语言(syncFromWindow → AstryxScope 重跑)。
     await win.evaluate(() => window.tangu.openFloatingPanel({ id: 'settings', title: 'Settings', builtin: 'settings', params: { tab: 'appearance', n: Date.now() } }))
@@ -343,6 +359,7 @@ async function main() {
 
     // ④ 真实外溢场景:日历的视图跟别的内容同窗 —— 待办清单停在 Tangu / 笔记 Space 的右栏(用户能拖出来的布局)。
     //   在日历里改两个 Space 的命名布局槽(不在日历里改,切走时 saveNamed 会盖掉),右栏 stash = [todo-list],进去再展开右栏。
+    //   Tangu 那边右栏还会被补回固定的「Tangu 详情」(排第一),展开后要再点一下待办的标签,见 openTodoRight。
     check('进日历(准备布局)', await enterSpace(win, 'calendar'))
     await win.waitForSelector('.amx-cal-event', { timeout: 15_000 })
     const planted = await win.evaluate(() => {
@@ -356,8 +373,23 @@ async function main() {
     })
     check('右栏布局已写入 Tangu / 笔记两个 Space 的命名槽', planted.ok, JSON.stringify(planted))
     const openTodoRight = async () => {
-      if (!(await win.locator('.amx-todo').count())) await win.click('.dv-edge-right')
-      await win.waitForSelector('.amx-todo', { timeout: 10_000 })
+      if (!(await win.locator('.amx-todo').count()) && !(await win.locator('.dv-edge-right.is-on').count())) await win.click('.dv-edge-right')
+      // Tangu 的右栏固定留着「Tangu 详情」(10-03 起的固定 View,排第一、默认激活),种进去的待办成了同栏第二个标签 → 点它的标签切过去。
+      const todoTab = win.locator('.wb-tab--icon[title*="待办"], .wb-tab[title="待办清单"], .wb-tab[title="To-do list"]')
+      await win.waitForFunction(() => !!document.querySelector('.amx-todo, .wb-tab--icon[title*="待办"], .wb-tab[title="待办清单"], .wb-tab[title="To-do list"]'), null, { timeout: 10_000 }).catch(() => {})
+      if (!(await win.locator('.amx-todo').count()) && await todoTab.count()) await todoTab.first().click()
+      try { await win.waitForSelector('.amx-todo', { timeout: 10_000 }) } catch (e) {
+        // 失败现场:命名槽 / 当前布局里右栏存了什么、边缘按钮状态、右栏里实际挂着什么
+        note('openTodoRight 失败现场', JSON.stringify(await win.evaluate(() => {
+          const named = JSON.parse(localStorage.getItem('tangu2_named_layouts') || '{}')
+          const cur = JSON.parse(localStorage.getItem('tangu2_layout_v4') || 'null')
+          const btn = document.querySelector('.dv-edge-right')
+          return { active: localStorage.getItem('forsion_tangu_active_space'), namedRight: Object.fromEntries(Object.entries(named).map(([k, v]) => [k, v?.sidebars?.right])),
+            curRight: cur?.sidebars?.right, btn: btn && btn.className, tabs: [...document.querySelectorAll('.wb-tab')].map((t) => t.title || t.textContent.trim()).slice(0, 20) }
+        })))
+        await captureWindow(app, path.join(SHOTS, 'open-todo-right-fail.png'))
+        throw e
+      }
       await sleep(1200)
     }
 
@@ -418,18 +450,17 @@ async function main() {
       check(`F ${label}:还挂着的包裹层里裸标签探针计算样式不变(prose 表内容仍生效)`, kept.probe.total > 0 && kept.probe.changed === 0, fmt(kept.probe))
     }
     const leftToggle = () => win.evaluate(() => { const b = document.querySelector('.dv-edge-toggle:not(.dv-edge-right)'); if (b) b.click(); return !!b })
-    await unmountStep('关掉主区日历', '.amx-todo, .amx-calside', 2, () => win.evaluate(() => {
-      const btn = [...document.querySelectorAll('.dv-tab')].find((t) => t.textContent.trim() === '日历')?.querySelector('.wb-tab-close')
-      if (btn) btn.click()
-      return !!btn
-    }), () => !document.querySelector('.amx-cal'))
-    await captureWindow(app, path.join(SHOTS, 'calendar-main-closed.png'))
-    await unmountStep('再收起左栏待办', '.amx-calside', 1, leftToggle, () => !document.querySelector('.amx-todo'))
-    check('重新展开左栏待办', await leftToggle())
-    await win.waitForSelector('.amx-todo .astryx-checkbox', { timeout: 10_000 })
+    // 10-03 起主区日历是固定 View(日历 Space 里没有关闭钮),「关掉主区日历」做不了,记一条 note;
+    // 10-16 起两侧对调(左 = 日历设置,右 = 待办 / 详情):轮流收起两侧,每一步主区日历和另一侧仍挂着。
+    // 幸存者只盯另一侧:主区头部的包裹层会随侧栏收起变宽,探针的 right 跟着变,那是几何不是主题外溢。
+    note('F 关掉主区日历', '跳过:主区日历是固定 View(10-03),没有关闭钮')
+    const rightToggle = () => win.evaluate(() => { const b = document.querySelector('.dv-edge-right'); if (b) b.click(); return !!b })
+    await unmountStep('收起左栏日历设置', '.amx-todo', 2, leftToggle, () => !document.querySelector('.amx-calside'))
+    check('重新展开左栏日历设置', await leftToggle())
+    await win.waitForSelector('.amx-calside .amx-mini', { timeout: 10_000 })
     await sleep(800)
-    await unmountStep('再收起右栏日历设置', '.amx-todo', 1, () => win.evaluate(() => { const b = document.querySelector('.dv-edge-right'); if (b) b.click(); return !!b }), () => !document.querySelector('.amx-calside'))
-    await captureWindow(app, path.join(SHOTS, 'calendar-only-todo.png'))
+    await unmountStep('再收起右栏待办', '.amx-calside', 2, rightToggle, () => !document.querySelector('.amx-todo'))
+    await captureWindow(app, path.join(SHOTS, 'calendar-no-todo.png'))
     note('截图', SHOTS)
   } finally {
     await close()

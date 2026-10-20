@@ -8,7 +8,7 @@ import { openSession } from '@/sessionNav'
 import { displaySessionTitle } from '@/sessionTitle'
 import { amadeusAvailable } from '@/features/runtime'
 import { navigateToNote } from '@/amadeus/store/pageStore'
-import { splitNoteTitle, writeFresh } from '@/views/chat2/chatToNote'
+import { splitNoteTitle, writeFresh } from '@tangu/ui/views/chat2/chatToNote'
 import { loadPickedFiles } from './pickedFiles'
 import { whenShellReady } from './liveIsland'
 

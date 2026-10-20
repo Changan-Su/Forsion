@@ -361,6 +361,11 @@ describe('i18n 覆盖', () => {
     ])
     // 逐键登记:不是由术语拼成、但刻意保留拉丁文的值。
     const ALLOW: Record<string, string> = {
+      'websearch.name.tavily': '搜索服务品牌名',
+      'about.update.sourceGithub': '下载来源里的 GitHub 是网站名,和「官网」并列',
+      'websearch.name.duckduckgo': '搜索服务品牌名',
+      'websearch.name.deepseek': '搜索服务产品名(DeepSeek 官方叫法)',
+      'websearch.key': 'API Key 是服务商控制台里的原词,用户按它去找',
       'settings.theme.visuals': '用户 2026-10-09 指定功能专名 Intelligent UI，中文界面不译',
       'achievements.a.first-login.title': '成就标题,化用论文名的英文梗',
       'achievements.a.first-message.title': '成就标题,英文梗',
@@ -432,9 +437,9 @@ describe('i18n 覆盖', () => {
     // 每项还记**次数**:只按「文件 + 接收者」放行时,同文件再来一个同名接收者(如 DatabaseEmbed 里另一个 `v` 是日期)
     // 会被已有登记顺手放过;次数对不上即红,新增的那处得自己来登记。
     const NUMBER_OK: Record<string, [count: number, reason: string]> = {
-      'stores/appStore.ts  Math.round(runCost)': [1, '单次运行费用(数字千分位)'],
-      'stores/appStore.ts  costLimit': [1, '费用上限(数字)'],
-      'stores/appStore.ts  (Number(pl.savedChars) || 0)': [1, '压缩省下的字数(数字)'],
+      'tangu/store/tanguSlice.ts  Math.round(runCost)': [1, '单次运行费用(数字千分位)'],
+      'tangu/store/tanguSlice.ts  costLimit': [1, '费用上限(数字)'],
+      'tangu/store/tanguSlice.ts  (Number(pl.savedChars) || 0)': [1, '压缩省下的字数(数字)'],
       'components/FeedbackModal.tsx  text.trim().length': [1, '反馈字数(数字)'],
       'components/FeedbackModal.tsx  FEEDBACK_TEXT_LIMIT': [1, '字数上限常量(数字)'],
       'components/ModelPickerSettings.tsx  model.maxContextWindow!': [1, '上下文窗口上限(token 数)'],

@@ -1,11 +1,18 @@
 import type { ToolProvider } from '../toolRegistry.js'
 import type { ToolContext } from '../toolTypes.js'
+import type { Tool } from '../../core/types.js'
 import { sketchEnabledFor } from './sketch.js'
 import { uiDocumentTooLarge, validateUIDocument } from '../../shared/intelligentUi.js'
+import { uiDocumentIssues } from '../../shared/intelligentUiExpr.js'
 
 export const INTELLIGENT_UI_CAPABILITY = 'intelligent-ui.v1'
+/** The client also renders version 2 (state, derived values, expressions). Sent alongside v1. */
+export const INTELLIGENT_UI_V2_CAPABILITY = 'intelligent-ui.v2'
 export function intelligentUiEnabledFor(ctx: Parameters<typeof sketchEnabledFor>[0] & Pick<ToolContext, 'clientCapabilities'>): boolean {
   return sketchEnabledFor(ctx) && !!ctx.clientCapabilities?.includes(INTELLIGENT_UI_CAPABILITY)
+}
+export function computedUiEnabledFor(ctx: Parameters<typeof intelligentUiEnabledFor>[0]): boolean {
+  return intelligentUiEnabledFor(ctx) && !!ctx.clientCapabilities?.includes(INTELLIGENT_UI_V2_CAPABILITY)
 }
 /** 模型把文档 JSON 当正文写了出来、没调用工具(真模型 visualauto 的 42 条里见过 1 次):正文里有一段不在代码围栏里的
  *  `{"version":1,…"blocks":[…`。围栏里的不算 —— 用户要看 JSON 时模型会放进代码块。只做识别,不解析。 */
@@ -14,7 +21,7 @@ export function looksLikeLeakedUiDocument(content: string): boolean {
   let lastBlocks = -1;
   for (const m of content.matchAll(/"blocks"\s*:\s*\[/g)) lastBlocks = m.index;
   let fenced = false; // 一遍扫完:围栏开合与文档开头按出现顺序看,前面有一份放在围栏里的不挡后面裸写的
-  for (const m of content.matchAll(/```|~~~|\{\s*"version"\s*:\s*1\s*,/g)) {
+  for (const m of content.matchAll(/```|~~~|\{\s*"version"\s*:\s*[12]\s*,/g)) {
     if (m[0].length === 3) fenced = !fenced;
     else if (!fenced && m.index < lastBlocks) return true;
   }
@@ -32,7 +39,7 @@ export const INTELLIGENT_UI_SECTION = `## Intelligent UI
 Deliver a native view by making an actual intelligent_ui function call. A JSON object written in
 the assistant's text does not invoke the tool and is not a usable answer.
 For interactive plans, image selections, web research and qualitative comparisons, prefer
-\`intelligent_ui\` over HTML sketches. Native components own layout, theme, accessibility and
+\`intelligent_ui\` over HTML cards (\`intelligent_ui_html\`). Native components own layout, theme, accessibility and
 state. Put metadata, resources and inputs before blocks so complete blocks appear progressively.
 Choose the few controls that actually help; short explanations remain prose. Local choices,
 quantities, checklists, image expansion and disclosures NEVER need another model request.
@@ -67,7 +74,7 @@ in disclosures so the task list remains easy to scan.
 When revising a plan, retain completed work as history; new time constraints apply to remaining
 work, not time already spent. Do not invent elapsed time. New checklists start unchecked, so
 describe already completed work in a text block and put only remaining work in new checklists.
-Use sketch only for custom charts, diagrams and simulations that
+Use intelligent_ui_html only for custom charts, diagrams and simulations that
 this schema cannot express. A native document satisfies the visual-delivery requirement.
 When visuals are set to less, use either visual tool only on an explicit request.
 
@@ -119,27 +126,68 @@ stop, adding one short line only for a caveat the view does not contain (never a
 The intelligent-ui skill has worked examples when skills are available; this schema is sufficient
 in Chat mode where skills are unavailable.`
 
+/** Only for clients that announce intelligent-ui.v2; pushed right after INTELLIGENT_UI_SECTION. */
+export const INTELLIGENT_UI_V2_SECTION = `## Computed Intelligent UI (version 2)
+This client also renders computed documents. Calculators, budgets, conversions, step-by-step guides,
+flashcards, scored quizzes and filterable or sortable lists are intelligent_ui documents with
+version:2, not HTML cards: the card recomputes as the user changes inputs or presses buttons, without
+calling you. Keep intelligent_ui_html for charts, diagrams, animated simulations and games.
+Order: {version:2,id,title,inputs,state,derived,resources,blocks}. state (max 16): [{id,initial}],
+hidden values the card's buttons change (number, text, true/false, null, or lists/objects of them).
+derived (max 32): [{id,expr}], evaluated in order; reads inputs, state and earlier derived values
+by name ($ prefix optional). Names: letters, digits, underscore, unique. Data the card walks through
+(word lists, steps, rows) goes in a state initial; expressions compute from it.
+Expressions (max 300 chars): numbers, 'text', [lists], {key:value}, + - * / %, == != < <= > >=,
+and or not, c ? a : b, x.field, x[i]; + joins text. Functions: round(x,digits?) floor ceil abs min
+max clamp(x,lo,hi) pow sum avg count percent(part,whole) payment(ratePerPeriod,periods,principal)
+format(x,'number'|'percent'|'wan'|'compact',digits?) join(list,sep?) range(from,to,step?)
+(inclusive, max 200) each(list,'x',expr) filter(list,'x',cond) sortBy(list,'x',key)
+includes(list,value). Nothing else: no random numbers, dates or other functions.
+Show results with {{expr}} inside text/disclosure markdown and checklist labels (inserted as plain text), a stats block
+{items:[{label,value:expr}]} for 1-4 headline figures, or a table block {columns:[...],rows} where
+rows is an expression giving one list of cells per row, or the rows written out (max 50). Any block but controls may have when:{expr}.
+Buttons that change state without calling you: actions item {id,label,kind:"set",steps,disabled?:expr};
+steps run in order: {set:id,to:expr} {toggle:id,value?:expr} {append:id,value:expr}
+{remove:id,value:expr} {reset:id}. A value that cannot be computed shows "—"; the tool result lists
+those at the initial values, so fix them unless expected. A follow-up card keeps the same input and
+state ids and starts from the values the user sent back.`
+
+const INTELLIGENT_UI_DEFINITION: Tool = { type: 'function', function: {
+  name: 'intelligent_ui',
+  description: 'Render a native interactive answer: plans, images, sources, comparisons, checklists. Follow the v1 schema in the Intelligent UI instructions. Each call creates one document; local interactions do not call the model. Pictures the user picks among go on the choice options as imageId (picture cards), not in a gallery. No HTML/JS/CSS. Use intelligent_ui_html for custom simulations, prose for simple answers.',
+  parameters: { type: 'object', properties: { document: { type: 'string', description: 'JSON-encoded v1 document. Order: version, id, title, inputs, resources, blocks. Max 64 KiB.' } }, required: ['document'] },
+} }
+const INTELLIGENT_UI_V2_DEFINITION: Tool = { type: 'function', function: {
+  name: 'intelligent_ui',
+  description: 'Render a native interactive answer: plans, images, sources, comparisons, checklists, and computed cards (calculators, step guides, flashcards, quizzes) that recompute locally. Follow the schema in the Intelligent UI instructions. Each call creates one document; local interactions do not call the model. Pictures the user picks among go on the choice options as imageId, not in a gallery. No HTML/JS/CSS. Use intelligent_ui_html for charts, diagrams and animations, prose for simple answers.',
+  parameters: { type: 'object', properties: { document: { type: 'string', description: 'JSON-encoded document, version 1 or 2 (computed). Order: version, id, title, inputs, state, derived, resources, blocks. Max 64 KiB.' } }, required: ['document'] },
+} }
+
 export const intelligentUiProvider: ToolProvider = {
   id: 'builtin:intelligent-ui',
   tools: () => [{
     name: 'intelligent_ui', mode: 'both',
     isEnabledFor: (_profile, ctx) => intelligentUiEnabledFor(ctx),
     capabilities: { sideEffect: 'none', parallel: false, defaultTimeoutMs: 5000 },
-    definition: { type: 'function', function: {
-      name: 'intelligent_ui',
-      description: 'Render a native interactive answer: plans, images, sources, comparisons, checklists. Follow the v1 schema in the Intelligent UI instructions. Each call creates one document; local interactions do not call the model. Pictures the user picks among go on the choice options as imageId (picture cards), not in a gallery. No HTML/JS/CSS. Use sketch for custom simulations, prose for simple answers.',
-      parameters: { type: 'object', properties: { document: { type: 'string', description: 'JSON-encoded v1 document. Order: version, id, title, inputs, resources, blocks. Max 64 KiB.' } }, required: ['document'] },
-    } },
+    definitionFor: (ctx) => computedUiEnabledFor(ctx) ? INTELLIGENT_UI_V2_DEFINITION : INTELLIGENT_UI_DEFINITION,
+    definition: INTELLIGENT_UI_DEFINITION,
     execute: (args, ctx): string => {
       try {
         if (typeof args.document !== 'string' || uiDocumentTooLarge(args.document)) return 'Error: document must be a JSON string up to 64 KiB.'
-        const doc = validateUIDocument(JSON.parse(args.document))
+        const doc = validateUIDocument(JSON.parse(args.document), { maxVersion: computedUiEnabledFor(ctx) ? 2 : 1 })
         for (const block of doc.blocks) if (block.kind === 'app-card') {
           const card = ctx.uiCards?.find(c => c.id === block.cardId)
           if (!card || (block.query !== undefined && !card.acceptsQuery)) return 'Error: unavailable app card or unsupported query. Call list_intelligent_cards and use its catalog.'
         }
-        return `Intelligent UI rendered: ${doc.title} (${doc.blocks.length} blocks).`
-      } catch (e) { return `Error: invalid Intelligent UI document. ${e instanceof Error ? e.message : String(e)}. Correct the document or answer in readable prose.` }
+        const issues = uiDocumentIssues(doc)
+        return `Intelligent UI rendered: ${doc.title} (${doc.blocks.length} blocks).${issues.length ? `\nThese values show "—" at the initial values; fix them with a corrected call unless that is intended:\n- ${issues.join('\n- ')}` : ''}`
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e)
+        // JSON 写坏时带上出错那几个字;v2 的表达式本身是 JSON 字符串,里面的文字用单引号,收尾的双引号常被漏(live 10-20 AA 分账连错两次)
+        const at = e instanceof SyntaxError && typeof args.document === 'string' ? Number(/position (\d+)/.exec(msg)?.[1]) : NaN
+        const near = Number.isFinite(at) ? ` Near: ${JSON.stringify((args.document as string).slice(Math.max(0, at - 40), at + 10))}.${computedUiEnabledFor(ctx) ? ' An expression is itself a JSON string: text inside it uses single quotes, and the expression still ends with a double quote.' : ''}` : ''
+        return `Error: invalid Intelligent UI document. ${msg}.${near} Correct the document or answer in readable prose.`
+      }
     },
   }, {
     name: 'list_intelligent_cards', mode: 'both',

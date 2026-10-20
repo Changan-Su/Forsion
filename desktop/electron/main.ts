@@ -1,3 +1,4 @@
+import { assertMarketplaceRequirements } from '../shared/marketplace'
 import { asrBackendFor } from './asrSelection'
 import { installAmbientPalette } from './ambientPalette'
 import { unitConfigFace } from './unitConfigFace'
@@ -32,6 +33,7 @@ import { execFile, execFileSync, spawn } from 'child_process'
 import { homedir, hostname, networkInterfaces } from 'os'
 import { randomUUID } from 'crypto'
 import { BackendManager, bundledPythonBin, resolveBundledGit, resolveBundledNode, type BackendStatus } from './backendManager'
+import { CLIP_ORIGIN, browserControlCode, registerClipExtensionIpc, startClipVersionSync } from './clipExtension'
 import { envWithFullPath, pathKeyOf, withBundledGit } from './envPath'
 import { findGit } from './gitHistory'
 import { downloadUrlFor, installCommandFor, requiredProgram } from './envInstall'
@@ -41,10 +43,13 @@ import { randomBytes } from 'node:crypto'
 import { loadTanguCreds, saveTanguCreds, forsionAccountId, loadAccountCloudSettings, saveAccountCloudSettings } from './forsionAuth'
 import { createAccountCore } from './accountCore'
 import { importMcp, importSkills, scanAll } from './discovery'
-import { checkForUpdates, downloadUpdate, installUpdate, canInstallUpdate, betaChannelOn, getUpdaterStatus } from './updater'
+import { checkForUpdates, downloadUpdate, installUpdate, canInstallUpdate, betaChannelOn, getUpdaterStatus, updateSourcePref, detectMainland, switchUpdateSource, openUpdateInstaller } from './updater'
+import { parseSourcePref } from '../shared/updateSource'
+import { fetchWebsiteReleases } from './websiteReleases'
 import { createRestartGuard, readRestartActivity } from './restartGuard'
 import { createTray, refreshTrayMenu, setTrayIndicator, trayLang } from './tray'
 import { initMainLocale, mainLocale, mt } from './mainI18n'
+import { createQuitGuards } from './quitGuard'
 import { createUiLocaleSync, UI_LOCALE_FILE } from './uiLocaleSync' // P1-KF:主进程文案跟渲染层的生效语言
 import { createApprovalDelivery, engineFromBackend } from './approvalDelivery' // P1-K3
 import { APPROVAL_OPEN_CHANNEL } from '../shared/approvalOpen' // P1-K3
@@ -61,7 +66,7 @@ import { checkBuiltinUpdates, NPM_OFFICIAL, registryOrder } from './builtinUpdat
 import { checkEngineUpdate, setupEngineOverlay, ENGINE_PACKAGE, ENGINE_UPDATE_ID, type EngineOverlayHandle } from './engineUpdates'
 import { loadBuiltinDesktopEntries, type CloudHost } from './cloudHost'
 import { npmDownloadCandidates, npmTarballToZip, type NpmInstallSnapshot } from './npmMarketInstall'
-import { extractZipToDir, detectMarketType, MARKET_SUBDIR, MARKET_MANIFEST, isSafeSlug, readInstalledVersion, readInstalledPluginId, readUserPluginDirs, marketItemDir, downloadCandidates, downloadZip, GZIP_MAGIC, ZIP_MAGIC, type DownloadProgress } from './marketInstall'
+import { extractZipToDir, checkMarketPackage, detectMarketType, MARKET_SUBDIR, MARKET_MANIFEST, isSafeSlug, readInstalledVersion, readInstalledPluginId, readUserPluginDirs, marketItemDir, downloadCandidates, downloadZip, GZIP_MAGIC, ZIP_MAGIC, type DownloadProgress } from './marketInstall'
 import { servePathRoot, serveInlineHtml, stopCodePreview, setForsionPreviewHooks, transpileForServe, MIME } from './codePreview'
 import { createCodeStudioProjectWatcher, createCodeStudioSnapshot, listCodeStudioSnapshots, restoreCodeStudioSnapshot } from './codeStudioProjects'
 import { installPreviewPersistence, previewOriginFor, registerProductsIpc } from './productsIpc'
@@ -84,11 +89,12 @@ import { registerIpc as registerAmadeusIpc } from './amadeus/ipc'
 import type { AmadeusSyncFactory } from './amadeus/cloudSeam'
 import { engineCapsState, pairingWriters, type UnitHubFactory, type UnitHubInstance } from './unitHubSeam' // 设备互联云端通道的接缝(Forsion Extend 0.6 起)
 import { makeCallerHeaders } from './unitCaller'
-import { startUnitWeb, type UnitWebHandle, type PairedDevice } from './unitWeb'
+import { newPairStore, startUnitWeb, type UnitWebHandle, type PairedDevice } from './unitWeb'
 import { createRemoteSessions, lookupRosterUnit, registerRemoteSessionsIpc, REMOTE_SESSIONS_FILE, withRemoteCap } from './remoteSessions' // P1-K4
 import { normalizeCap } from '../shared/remoteSessions' // P1-K4
 import { createRemoteSafety } from './remoteSafety' // P1-K2
 import { registerRemoteSafetyIpc } from './remoteSafetyIpc' // P1-K2
+import { createGlobalHotkeyPause } from './globalHotkeyPause'
 import { registerDocumentTaskIpc } from './documentTaskIpc'
 import { createSystemAuth } from './remoteSafetyAuth' // P1-K2
 import { REMOTE_LOCK_FILE } from '../shared/remoteSafety' // P1-K2
@@ -107,7 +113,7 @@ import { registerPtyIpc } from './pty'
 import { registerAssetSchemes as registerAmadeusAssetSchemes, registerAssetProtocol as registerAmadeusAssetProtocol } from './amadeus/assetProtocol'
 import { nearestEdge, collapsedBounds, expandedBounds, visibleRect, pointInRect, growRect, resizeFromEdge, type Rect, type Edge } from './windowGeometry'
 import { applyWindowMaterial, parseWindowMaterialRequest } from './windowMaterial'
-import { isForsionUrl, pushDeepLink, drainDeepLinks } from './deepLink'
+import { isForsionUrl, pushDeepLink, drainDeepLinks, filesFromArgv, pushOpenFile, drainOpenFiles } from './deepLink'
 
 /** ~/.tangu(与包内 core/tanguHome.ts 同约定;TANGU_HOME 可整体重定向)。 */
 setDevMode(!app.isPackaged) // dev 数据目录 ~/.forsion-dev,与正式版隔离(模块装载即定,先于一切路径解析)
@@ -124,9 +130,10 @@ const themesDir = (): string => join(tanguHomeDir(), 'themes')
 
 // 单实例锁:托盘常驻语义下,再次启动只唤起已开的窗口后立即退出(app.exit 同步,不再往下建二号窗)。
 if (!app.requestSingleInstanceLock()) app.exit(0)
-app.on('second-instance', (_e, argv) => {
+app.on('second-instance', (_e, argv, cwd) => {
   showMainWindow()
   for (const a of argv) if (isForsionUrl(a)) deliverDeepLink(a) // win/linux:二启的 forsion:// 在 argv 里
+  for (const f of filesFromArgv(argv.slice(1), cwd)) deliverOpenFile(f) // win/linux:已开着时双击文件
 })
 
 // ── forsion:// deep link(入站;与出站外链回投的 app:open-url 无关)────────────────────────
@@ -147,6 +154,22 @@ function deliverDeepLink(url: string): void {
 app.on('open-url', (e, url) => { e.preventDefault(); if (isForsionUrl(url)) deliverDeepLink(url) })
 // win/linux 首启:URL 直接躺在 process.argv(mac 走 open-url,不经 argv)。
 for (const a of process.argv.slice(1)) if (isForsionUrl(a)) pushDeepLink(a)
+
+// ── 外部文件打开(文件关联见 electron-builder.config.cjs 的 fileAssociations)──────────────────
+// 渲染层落点:库外 → wsfile 临时标签页(预览 / .md 就地编辑写回,不导入笔记库);本地库内 → Amadeus 原生视图。
+// 只推一声「有文件」,文件本身一律留在队列里等渲染层来拉:不像 deep link 那样记「渲染层已就绪」——
+// did-start-loading 对页内 iframe 的加载也会触发(Codex 评审),靠它翻回未就绪会让之后的打开全卡在队列里;
+// 推给还没装监听 / 正在重载的页,丢的只是这一声,新页装载时自己 drain。
+function deliverOpenFile(p: string): void {
+  pushOpenFile(p)
+  if (!app.isReady()) return // 冷启动:渲染层起来后自会 drain
+  showMainWindow()
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('app:open-file')
+}
+// mac:Finder 双击 / 打开方式 / 拖到 Dock 图标。同 open-url,必须在 whenReady 之前挂上,冷启动才接得到。
+app.on('open-file', (e, p) => { e.preventDefault(); deliverOpenFile(p) })
+// win/linux 首启:文件路径在 argv 里(argv[0] 是可执行文件本身,切掉)。
+for (const f of filesFromArgv(process.argv.slice(1), process.cwd())) pushOpenFile(f)
 
 /**
  * 加载 ~/.tangu/.env 进 process.env(不覆盖真实环境;与包内 tanguHome.loadTanguEnv 同语义)。
@@ -640,6 +663,8 @@ const remoteSessions = createRemoteSessions({
 
 // P1-K2 ── 急停 + 远程锁定 + 远程活动指示(electron/remoteSafety.ts)。锁状态独占 userData/remote-lock.json(引擎经
 // FORSION_REMOTE_LOCK_FILE 每次现读);unitWeb 读内存镜像。backend / mainWindow 在下方定义 → 这里一律惰性 thunk。
+// 设置 → 快捷键录制 / 按键查找期间挂起全局快捷键(主人:Mini、急停;见 globalHotkeyPause.ts)
+const globalHotkeyPause = createGlobalHotkeyPause({ log: (m) => console.log(m) })
 const remoteSafety = createRemoteSafety({
   file: () => join(app.getPath('userData'), REMOTE_LOCK_FILE),
   engine: () => { const st = backend.getStatus(); return { url: st.state === 'ready' ? st.url : null, token: backend.getToken() } },
@@ -883,6 +908,24 @@ const backend = new BackendManager()
 let mainWindow: BrowserWindow | null = null
 // 托盘常驻:关窗默认只隐藏;仅托盘「退出」/before-quit 置 true 后才放行真正关闭。
 let isQuitting = false
+// 退出前问一次(electron/quitGuard.ts):内置包的主进程半身经 CloudHost.addQuitGuard 登记「还有事没做完」
+const quitGuards = createQuitGuards({
+  locale: mainLocale,
+  ask: async (b) => {
+    showMainWindow()
+    // ⚠️ 必须挂父窗(同 K4 confirm):无父的 showMessageBox 在 mac 上冻住主循环;拿不到窗就不拦(照常退)
+    const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
+    if (!win) return true
+    const r = await dialog.showMessageBox(win, {
+      type: 'warning', message: b.message, detail: b.detail,
+      buttons: [mt('main.quitGuard.quit'), mt('main.quitGuard.cancel')], defaultId: 1, cancelId: 1, noLink: true,
+    })
+    return r.response === 0
+  },
+  quit: () => app.quit(),
+  log: (m) => console.warn(m),
+})
+
 
 // MCP 端点(electron/mcpServer.ts):**常驻**(08-24 引擎原生路 P1)——App 启动即起,给引擎当
 // ASR 桥(transcribe_audio,凭每次启动随机的 bridgeSecret)。设置「高级」开关只管**外部 agent 面**:
@@ -930,6 +973,10 @@ function forsionMcpStatus(): { running: boolean; url: string | null; token: stri
 let unitHub: UnitHubInstance | null = null
 let unitHubFactory: UnitHubFactory | null = null // Extend 装载时登记(setUnitHubFactory),doRefreshUnitHost 每次重建时调
 let unitWeb: UnitWebHandle | null = null
+/** 互联关着时的本机门铃(只听回环、只收 Forsion Clip 的配对请求,见 startUnitWeb 的 opts.doorbell);和 unitWeb 不会同时在。 */
+let unitDoorbell: UnitWebHandle | null = null
+/** 配对在途表:门铃收下的请求,打开互联后由正式服务交出令牌(两者共用这一份)。 */
+const unitPairStore = newPairStore()
 let amadeusReadPlugins: (() => Promise<ExternalPluginSource[]>) | null = null // registerAmadeusIpc 返回时赋上
 let amadeusVaultFace: import('./amadeus/ipc').VaultFace | null = null // 同上;unitWeb /vault/* 的本地库面
 // 登录成功后踢一次 Amadeus 云同步引擎(值由 registerAmadeusIpc 返回时赋上)。否则引擎状态卡在
@@ -1140,6 +1187,50 @@ function refreshUnitHost(): Promise<void> {
     .catch((e) => { console.error('[unit] refresh failed:', e) })
   return unitRefreshChain
 }
+/** 本机 managed 引擎(Clip 一次配对 / 版本同步用;外部引擎模式下互联开着时引擎同样常驻本机)。 */
+const localEngineRef = (): { url: string | null; token: string } => {
+  const st = backend.getStatus()
+  return { url: st.state === 'ready' ? (st.url ?? null) : null, token: backend.getToken() }
+}
+/** 设备配对的确认框。doorbell = 互联关着、请求来自本机的 Forsion Clip:按钮是「允许并打开」,同意即顺带打开互联。 */
+async function askPair(info: { name: string; code: string; ip: string }, doorbell: boolean): Promise<boolean> {
+  // 开发测试后门:**双闸**——非打包(app.isPackaged=false)且显式 FORSION_UNIT_AUTO_PAIR=1,
+  // 才自动批准免手点。任一缺失都走下面的真弹框。⚠️ 这道闸绝不能变成无条件/进发布包:
+  // 少了它同网段任何设备都能无验证接管本机(引擎执行 + 读写库)。打包版 isPackaged 恒 true,
+  // 后门天然失效;env 需人显式设,不会误触。
+  if (!app.isPackaged && process.env.FORSION_UNIT_AUTO_PAIR === '1') {
+    console.log(`[unit-web] AUTO-PAIR(dev 后门):自动批准「${info.name}」(${info.ip}) 码=${info.code}`)
+    return true
+  }
+  showMainWindow()
+  // ⚠️ 弹框必须挂父窗:mac 上无父的 showMessageBox 是 app-modal,会**冻住主进程事件循环**——
+  // unitWeb/引擎代理/本机 IPC 全部悬死,对端的配对轮询整片超时(活体探针 2026-08-24 实测)。
+  // 挂父 = window-modal sheet,主循环照转;拿不到窗口的极端情形维持旧行为(短暂冻结好过弹不出)。
+  const local = /^(127\.0\.0\.1|::1|::ffff:127\.0\.0\.1)$/.test(info.ip)
+  const opts = {
+    type: 'question' as const,
+    title: mt(doorbell ? 'main.pair.doorbellTitle' : 'main.pair.title'),
+    message: doorbell ? mt('main.pair.doorbellMessage') : mt('main.pair.message', { name: info.name, ip: info.ip }),
+    detail: mt(local ? 'main.pair.detailLocal' : 'main.pair.detail', { code: info.code }),
+    buttons: [mt(doorbell ? 'main.pair.doorbellAllow' : 'main.pair.allow'), mt('main.pair.deny')],
+    defaultId: 1,
+    cancelId: 1,
+  }
+  const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
+  const r = win ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts)
+  return r.response === 0
+}
+/** 门铃上点了「允许并打开」:打开互联(落盘 + 引擎常驻 + 重建 Unit 口),等正式服务起来才返回。返回 false = 不批准这次配对:
+ *  请求快过期了(先不开互联,Clip 会重新请求)/ 正式服务没在 Clip 找的那个口上起来(被挤到别的端口、期间又被关掉)。
+ *  和设置里拨开关不同:引擎已就绪就不重启(backend.start 恒先停再起 —— 会断掉在跑的会话,Clip 紧接着领连接码也会扑空)。 */
+async function enableUnitHostFromDoorbell(expires: number, port: number): Promise<boolean> {
+  if (Date.now() > expires - 10_000) return false
+  await saveConfig({ unitHostEnabled: true })
+  for (const w of BrowserWindow.getAllWindows()) w.webContents.send('config:changed') // 开着的设置页跟着翻成「开」
+  if (backend.getStatus().state !== 'ready') await ensureBackend() // 没起 / 崩了才拉起(外部引擎模式下本机引擎也要常驻)
+  await refreshUnitHost()
+  return unitWeb?.port === port && Date.now() < expires
+}
 async function doRefreshUnitHost(): Promise<void> {
   const stored = await loadConfig()
   unitHostCloudUrl = stored.cloudUrl
@@ -1151,47 +1242,34 @@ async function doRefreshUnitHost(): Promise<void> {
   unitHostPairing = pairing.state === 'ok' ? pairing.value : null
   if (unitHub) { unitHub.stop(); unitHub = null } // stop() 也让 caps 上报器停报(onChannelDown)
   if (unitWeb) { const w = unitWeb; unitWeb = null; await w.close() } // 必须等旧服务真放掉端口,否则新起撞自己
+  if (unitDoorbell) { const d = unitDoorbell; unitDoorbell = null; await d.close() }
   remoteSessions.notifyChanged() // P1-K4:父开关 / 账号可能变了(换号收掉旧账号的确认框)
-  if (!stored.unitHostEnabled) return
+  // 互联关着 → 开门铃:Clip 发来配对请求时弹「允许并打开」,一键打开互联并配好(Clip 安装引导第二步)。
+  // dev 要显式 FORSION_UNIT_DOORBELL=1:开发版与安装版常同时开着,dev 的门铃会占住 8791,安装版再打开互联就被挤到随机端口
+  const doorbell = !stored.unitHostEnabled && (app.isPackaged || process.env.FORSION_UNIT_DOORBELL === '1')
+  if (!stored.unitHostEnabled && !doorbell) return
   // 实例 id:首次开启生成并回写(/unit/meta 自证身份,防 DHCP 换主誊错设备)。
   let instanceId = stored.unitInstanceId
   if (!instanceId) {
     instanceId = randomUUID()
     await saveConfig({ unitInstanceId: instanceId })
   }
+  // 端口保持稳定(便于手输 IP 直连;Clip 也只找这个口):首选已存端口/8791
+  const want = stored.unitWebPort || 8791
   // 本机项目根种子没做完之前,远端的 /engine 一律 503(seedGatedEngine):远端没有窗口抢在种子之前改 project_path。
-  void localProjectRegistry().ready().then(() => unitSessionRootsSource().ensureSeeded()).then(() => unitHub?.engineChanged()) // P1-K7a:种子做完 = starting → ready
+  if (!doorbell) void localProjectRegistry().ready().then(() => unitSessionRootsSource().ensureSeeded()).then(() => unitHub?.engineChanged()) // P1-K7a:种子做完 = starting → ready
   const webDeps = {
     getEngine: seedGatedEngine(() => {
       const st = backend.getStatus()
       return { url: st.state === 'ready' ? (st.url ?? null) : null, token: backend.getToken(), remoteMark: backend.remoteMarkSecret() }
     }, unitSessionRootsSource()),
-    confirmPair: async (info: { name: string; code: string; ip: string }): Promise<boolean> => {
-      // 开发测试后门:**双闸**——非打包(app.isPackaged=false)且显式 FORSION_UNIT_AUTO_PAIR=1,
-      // 才自动批准免手点。任一缺失都走下面的真弹框。⚠️ 这道闸绝不能变成无条件/进发布包:
-      // 少了它同网段任何设备都能无验证接管本机(引擎执行 + 读写库)。打包版 isPackaged 恒 true,
-      // 后门天然失效;env 需人显式设,不会误触。
-      if (!app.isPackaged && process.env.FORSION_UNIT_AUTO_PAIR === '1') {
-        console.log(`[unit-web] AUTO-PAIR(dev 后门):自动批准「${info.name}」(${info.ip}) 码=${info.code}`)
-        return true
-      }
-      showMainWindow()
-      // ⚠️ 弹框必须挂父窗:mac 上无父的 showMessageBox 是 app-modal,会**冻住主进程事件循环**——
-      // unitWeb/引擎代理/本机 IPC 全部悬死,对端的配对轮询整片超时(活体探针 2026-08-24 实测)。
-      // 挂父 = window-modal sheet,主循环照转;拿不到窗口的极端情形维持旧行为(短暂冻结好过弹不出)。
-      const opts = {
-        type: 'question' as const,
-        title: mt('main.pair.title'),
-        message: mt('main.pair.message', { name: info.name, ip: info.ip }),
-        detail: mt('main.pair.detail', { code: info.code }),
-        buttons: [mt('main.pair.allow'), mt('main.pair.deny')],
-        defaultId: 1,
-        cancelId: 1,
-      }
-      const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
-      const r = win ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts)
-      return r.response === 0
+    confirmPair: async (info: { name: string; code: string; ip: string; expires: number }): Promise<boolean> => {
+      if (!(await askPair(info, doorbell))) return false
+      // 门铃上点了「允许并打开」:先打开互联、等正式服务在同一个口上起来,再放行批准 ——
+      // 令牌经共用的 unitPairStore 由正式服务交出,Clip 拿到令牌后紧接着的 /unit/meta、/unit/browser-control 不会撞上换服务的空档
+      return doorbell ? enableUnitHostFromDoorbell(info.expires, want) : true
     },
+    browserControlCode: () => browserControlCode(localEngineRef),
     pairedDevices: {
       list: (): PairedDevice[] => unitPairedCache,
       add: async (d: PairedDevice): Promise<void> => {
@@ -1298,13 +1376,19 @@ async function doRefreshUnitHost(): Promise<void> {
   // 配对名单在队列里现读,别用开头那份快照:上面几处 await 期间用户可能刚撤销了设备,旧快照会把它重新放行
   unitPairedCache = await configQueue(async () => (await loadConfig()).unitPairedDevices || [])
   await remoteSessions.ready // P1-K4:迁移读完再开门(之前闸本就 fail closed,这里只为首个请求拿到真状态)
+  if (doorbell) {
+    // 门铃不退到随机端口:Clip 只找 8791(或用户存过的端口);被占(另一个 Forsion 开着)就不开,Clip 那边照旧提示
+    try { unitDoorbell = await startUnitWeb(webDeps, { port: want, pairs: unitPairStore, doorbell: { origins: [CLIP_ORIGIN] } }) } catch (e: any) { console.log(`[unit-web] 门铃没开(端口被占?):${e?.message || e}`) }
+    return
+  }
   try {
-    // 端口保持稳定(便于手输 IP 直连):首选已存端口/8791,被占则退化系统分配并回写。
-    const want = stored.unitWebPort || 8791
+    // 被占则退化系统分配并回写。
+    // 台架开关(同 FORSION_UNIT_AUTO_PAIR 的双闸:非打包 + 显式 env):只听回环。自动批准配对时绝不能把这台的引擎露到局域网
+    const bindHost = !app.isPackaged && process.env.FORSION_UNIT_BIND_LOOPBACK === '1' ? '127.0.0.1' : undefined
     try {
-      unitWeb = await startUnitWeb(webDeps, { port: want })
+      unitWeb = await startUnitWeb(webDeps, { port: want, bindHost, pairs: unitPairStore })
     } catch {
-      unitWeb = await startUnitWeb(webDeps, { port: 0 })
+      unitWeb = await startUnitWeb(webDeps, { port: 0, bindHost, pairs: unitPairStore })
     }
     if (unitWeb.port !== stored.unitWebPort) await saveConfig({ unitWebPort: unitWeb.port })
     console.log(`[unit-web] 已启动:${unitLanUrl() ?? `http://127.0.0.1:${unitWeb.port}`}`)
@@ -1467,7 +1551,7 @@ function openUrlHandler(wc: Electron.WebContents, fromGuest = false) {
     if (isHttpUrl(url)) {
       if (!wc.isDestroyed()) wc.send('app:open-url', url, fromGuest)
       else shell.openExternal(url)
-    }
+    } else if (!fromGuest && isForsionUrl(url)) deliverDeepLink(url) // 应用自己页里 window.open 的 forsion://(链接卡的「打开」);网页里的不认
     return { action: 'deny' }
   }
 }
@@ -2069,8 +2153,13 @@ function toggleMiniWindow(opts?: MiniOpenOptions): void {
 /** 设 bounds;mac 传 animate=true 走原生滑动动画(修「无动画」),win/linux 瞬时。程序化移动抑制 moved 自激。 */
 function setMiniBounds(r: Rect, animate = true): void {
   if (!miniWindow || miniWindow.isDestroyed()) return
+  const previous = miniWindow.getBounds()
+  const changed: Partial<Rect> = {}
+  for (const key of ['x', 'y', 'width', 'height'] as const) if (r[key] !== previous[key]) changed[key] = r[key]
+  if (Object.keys(changed).length === 0) return
   suppressMiniMoved = true
-  miniWindow.setBounds(r, animate && process.platform === 'darwin')
+  // Windows 的分数 DPI 下,把没变的尺寸反复设回去也可能每次多出 1px。
+  miniWindow.setBounds(changed, animate && process.platform === 'darwin')
   // 单个定时器:连发(拖缩放边)时后一次顺延,前一次的定时器不会提前放开抑制
   if (miniMovedTimer) clearTimeout(miniMovedTimer)
   miniMovedTimer = setTimeout(() => { suppressMiniMoved = false }, animate && process.platform === 'darwin' ? 320 : 60)
@@ -2211,15 +2300,16 @@ const marketBase = async (): Promise<string> => {
   return base
 }
 const MARKET_UA = 'Forsion-Tangu'
+const marketPlatform = () => process.platform === 'darwin' ? 'macos' : process.platform === 'win32' ? 'windows' : 'linux'
 
-async function downloadMarketPackage(id: string, report: (phase: 'resolve' | 'download' | 'install', progress?: DownloadProgress) => void = () => {}): Promise<{ info: { type: string; installSlug: string; downloadUrl: string; source: string } & NpmInstallSnapshot; buf: Buffer }> {
+async function downloadMarketPackage(id: string, report: (phase: 'resolve' | 'download' | 'install', progress?: DownloadProgress) => void = () => {}, version?: string): Promise<{ info: { type: string; installSlug: string; downloadUrl: string; source: string; minAppVersion?: string; maxAppVersion?: string; platforms?: string[]; tags?: string[] } & NpmInstallSnapshot; buf: Buffer }> {
   const base = await marketBase()
   // 服务端解析 github 源时要问 api.github.com(服务端在大陆,也会慢);没有超时 = 按钮一直转。
   // 错误消息只放语言中立的原因码(`resolve: …`),界面层自己套中英文案(frontend/src/services/marketService.ts 的 unwrapIpcError)。
-  const infoRes = await fetch(`${base}/api/market/items/${encodeURIComponent(id)}/install`, { headers: { 'User-Agent': MARKET_UA }, signal: AbortSignal.timeout(30_000) })
+  const infoRes = await fetch(`${base}/api/market/items/${encodeURIComponent(id)}/install?identity=uuid-v1&appVersion=${encodeURIComponent(app.getVersion())}&platform=${marketPlatform()}${version ? `&version=${encodeURIComponent(version)}` : ''}`, { headers: { 'User-Agent': MARKET_UA }, signal: AbortSignal.timeout(30_000) })
     .catch((err: any) => { throw new Error(`resolve: ${err?.name === 'TimeoutError' ? 'timeout' : err?.cause?.code || err?.message || err}`) })
   if (!infoRes.ok) throw new Error(`resolve: HTTP ${infoRes.status}`)
-  const info = (await infoRes.json()) as { type: string; installSlug: string; downloadUrl: string; source: string } & NpmInstallSnapshot
+  const info = (await infoRes.json()) as { type: string; installSlug: string; downloadUrl: string; source: string; minAppVersion?: string; maxAppVersion?: string; platforms?: string[]; tags?: string[] } & NpmInstallSnapshot
   if (!MARKET_SUBDIR[info.type] || !isSafeSlug(info.installSlug)) throw new Error('resolve: invalid target')
   // github 源走 net.fetch(认系统代理);开了「中国大陆镜像」才加第三方代理站(见 downloadCandidates 的 ⚠️)。
   // zip 源(Forsion 对象存储)一直能通,照旧 Node fetch 单发 —— 不让一个失效的系统代理设置拖累它。
@@ -2229,6 +2319,8 @@ async function downloadMarketPackage(id: string, report: (phase: 'resolve' | 'do
   const candidates = npm ? npmDownloadCandidates(info, stored.mirror) : github ? downloadCandidates(info.downloadUrl, stored.mirror, process.env.TANGU_GITHUB_PROXY || '') : [info.downloadUrl]
   const archive = await downloadZip(candidates, (u, init) => github || u.startsWith(NPM_OFFICIAL) ? net.fetch(u, init) : fetch(u, init), (p) => report('download', p), npm ? GZIP_MAGIC : ZIP_MAGIC)
   const buf = npm ? await npmTarballToZip(archive, info, info.type) : archive
+  assertMarketplaceRequirements(info, app.getVersion(), marketPlatform())
+  await checkMarketPackage(buf, await detectMarketType(buf, info.type), app.getVersion(), marketPlatform(), builtinPluginIds())
   return { info, buf }
 }
 
@@ -2487,6 +2579,8 @@ app.whenReady().then(async () => {
         const st = PRODUCT.agentBackend ? backend.getStatus() : null
         return { engine: { state: st?.state ?? null, lastError: st?.lastError ?? null, lines: st ? backend.getLogs() : [] } }
       },
+      // ── 0.10 起:退出前问一次(蓬洲云还有文件在传)──
+      addQuitGuard: (fn) => quitGuards.add(fn),
     }
     // 插件页停用了的:不装主进程半身 —— 与没装 Extend 同一个形态(cloud:present 空,云端界面整套隐藏)。
     const off = (await loadConfig()).disabledBundles
@@ -2524,6 +2618,8 @@ app.whenReady().then(async () => {
       return (await dialog.showMessageBox(mainWindow, options)).response === 1
     },
     restart: async (install) => {
+      // 还有文件在传(蓬洲云):重启 / 装更新前先问一次;点了退出,后面的 before-quit 就不再问
+      if (!(await quitGuards.confirmFirst())) return
       isQuitting = true
       // Stop before relaunch/quitAndInstall so before-quit cannot bypass either with app.exit.
       try {
@@ -2532,6 +2628,7 @@ app.whenReady().then(async () => {
         else { app.relaunch(); app.quit() }
       } catch (error) {
         isQuitting = false
+        quitGuards.reset()
         throw error
       }
     },
@@ -2577,6 +2674,8 @@ app.whenReady().then(async () => {
       ])
     },
   })
+  // 定时 / 唤醒触发的检查:下载中别插一脚(下载完 checkForUpdates 自己会原样返回)。
+  const checkAppUpdateQuietly = (): void => { if (getUpdaterStatus().phase !== 'downloading') void checkForUpdates() }
   const checkAllUpdates = () => {
     void corePluginUpdater.check()
     if (PRODUCT.market) void marketPluginUpdater.check().catch((e) => console.warn('[market-updates]', e))
@@ -2586,7 +2685,8 @@ app.whenReady().then(async () => {
   if (app.isPackaged) {
     setTimeout(() => {
       void corePluginUpdater.check()
-      setInterval(() => void corePluginUpdater.check(), 6 * 3600_000).unref()
+      // 应用本体也跟着每 6 小时查一次:原来只在渲染层启动时查,一直开着不退的人永远收不到新版本(What's new 弹窗靠这个广播)
+      setInterval(() => { void corePluginUpdater.check(); checkAppUpdateQuietly() }, 6 * 3600_000).unref()
     }, 60_000).unref()
   }
   // tangu CLI 自动安装/自愈:shim 指向 App 内部资源(App 自动更新 → CLI 同步),幂等注入 PATH;吞错不阻塞。
@@ -2651,6 +2751,7 @@ app.whenReady().then(async () => {
     keepAwake.rearm()
     computerHistory?.recheck()
     unitHub?.reconnect('resume')
+    if (app.isPackaged) checkAppUpdateQuietly() // 合盖一夜回来,新版本在这时候提示
   })
 
   ipcMain.handle('config:get', () => effectiveConfig())
@@ -2658,6 +2759,23 @@ app.whenReady().then(async () => {
   deviceSecrets.registerSecretsIpc(ipcMain, { isTrustedSender, refreshUnitHost }) // P1-K5:secrets:status / retry / resetUnitPairing / relaunch
   registerRemoteSessionsIpc(ipcMain, remoteSessions, isTrustedSender) // P1-K4:remoteSessions:get / setEnabled / setMaxApprovalMode / revoke
   registerRemoteSafetyIpc(ipcMain, remoteSafety, isTrustedSender) // P1-K2:remoteSafety:get / estop / unlock / setHotkey / setHotkeyRecording
+  // 急停自带 60s 兜底且重复 true 不续期:续期时收一下再挂起,把它的计时器也续上
+  globalHotkeyPause.add({
+    pause: () => remoteSafety.setHotkeyRecording(true),
+    resume: () => remoteSafety.setHotkeyRecording(false),
+    renew: () => { remoteSafety.setHotkeyRecording(false); remoteSafety.setHotkeyRecording(true) },
+  })
+  // 按窗口记租约;那扇窗口关了 / 崩了 = 释放它那一份(不等兜底计时器,也不动别的窗口的挂起)
+  const hotkeyPauseSenders = new WeakSet<Electron.WebContents>()
+  ipcMain.handle('shortcuts:pauseGlobal', (e, on: unknown) => {
+    if (!isTrustedSender(e)) throw new Error('forbidden')
+    const id = e.sender.id
+    globalHotkeyPause.set(id, on === true)
+    if (on === true && !hotkeyPauseSenders.has(e.sender)) {
+      hotkeyPauseSenders.add(e.sender)
+      e.sender.once('destroyed', () => globalHotkeyPause.set(id, false))
+    }
+  })
   ipcMain.handle('config:set', async (_e, patch: Partial<TanguStoredConfig>) => {
     const accountCreds = loadTanguCreds() // Capture before saveConfig's first await.
     // 渲染层直接改电脑历史的键(正路是 window.tangu.computerHistory.*,那条自己落盘):这次落盘与控制器的意愿操作 / 后台补落
@@ -3141,6 +3259,8 @@ app.whenReady().then(async () => {
     if (!icon || icon.isEmpty()) icon = nativeImage.createFromDataURL(DRAG_FALLBACK_ICON)
     e.sender.startDrag({ file: filePath, icon })
   })
+  registerClipExtensionIpc() // Forsion Clip 手动安装:复制出包的扩展文件夹、打开 Chrome 扩展页(拖拽复用上面的 fs:startDrag)
+  startClipVersionSync(localEngineRef) // Forsion 更新后连着的 Clip 换成随包版本并重载
 
   ipcMain.handle('backend:getStatus', () => backend.getStatus())
   ipcMain.handle('backend:getLogs', () => backend.getLogs())
@@ -3560,6 +3680,10 @@ app.whenReady().then(async () => {
     deepLinkReady = true
     return drainDeepLinks()
   })
+  ipcMain.handle('openfile:drain', (e) => {
+    if (!isTrustedSender(e) || e.sender !== mainWindow?.webContents) return []
+    return drainOpenFiles()
+  })
 
   // ── 应用内自动更新(electron-updater;检查 → 下载 → 重启安装。mac 仅检测,UI 引导手动下载)──
   ipcMain.handle('updater:check', () => checkAllUpdates())
@@ -3569,6 +3693,23 @@ app.whenReady().then(async () => {
   ipcMain.handle('updater:setBeta', async (_e, on: boolean) => {
     await saveHomeSection('updater', (sec: any) => ({ ...sec, beta: !!on }))
     return { ok: true }
+  })
+  // 下载来源:auto(按地区:大陆官网、其他地区 GitHub)/ website / github。同样落 updater 段、每次现读。
+  ipcMain.handle('updater:getSource', () => updateSourcePref())
+  ipcMain.handle('updater:setSource', async (_e, v: unknown) => {
+    await saveHomeSection('updater', (sec: any) => ({ ...sec, source: parseSourcePref(v) }))
+    return { ok: true }
+  })
+  ipcMain.handle('updater:region', () => detectMainland())
+  ipcMain.handle('updater:switchSource', () => switchUpdateSource())
+  ipcMain.handle('updater:openInstaller', () => openUpdateInstaller())
+  // What's new 弹窗:官网更新动态的已发布快照(拿不到回 null,渲染层退回打包的 CHANGELOG)
+  ipcMain.handle('updater:websiteReleases', () => fetchWebsiteReleases())
+  // 设置是独立浮窗:里面点「What's new」要在主窗弹,不在设置窗里弹
+  ipcMain.on('whatsNew:open', (e) => {
+    if (!isTrustedSender(e)) return
+    showMainWindow()
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('whatsNew:open')
   })
   ipcMain.handle('updater:download', () => downloadUpdate())
   ipcMain.handle('updater:install', async (e) => {
@@ -3632,6 +3773,14 @@ app.whenReady().then(async () => {
     return data // { items }
   })
 
+  ipcMain.handle('market:read', async (e, id: string, resource: string, offset = 0) => {
+    if (!isTrustedSender(e) || !/^[a-zA-Z0-9_-]{1,128}$/.test(id) || (!['comments', 'versions'].includes(resource) && !/^comments\/[a-zA-Z0-9_-]{1,128}\/replies$/.test(resource))) throw new Error('Invalid market request')
+    const base = await marketBase()
+    const r = await fetch(`${base}/api/market/items/${encodeURIComponent(id)}/${resource}?offset=${Math.max(0, Math.min(100000, Number(offset) || 0))}`, { signal: AbortSignal.timeout(15000) })
+    if (!r.ok) throw new Error(`HTTP ${r.status}`)
+    return r.json()
+  })
+
   ipcMain.handle('market:detail', async (_e, id: string) => {
     const base = await marketBase()
     const r = await fetch(`${base}/api/market/items/${encodeURIComponent(id)}`, { headers: { 'User-Agent': MARKET_UA } })
@@ -3641,7 +3790,7 @@ app.whenReady().then(async () => {
 
   // 安装进度推回发起窗口('market:installProgress',同 asr:localProgress 口径):市场住在独立浮窗里,
   // 全局通知在那里不渲染,按钮上的阶段/字节 + 市场自己的提示条是用户唯一看得见的反馈。
-  ipcMain.handle('market:install', async (e, id: string) => marketPluginUpdater.exclusive(async () => {
+  ipcMain.handle('market:install', async (e, id: string, version?: string) => marketPluginUpdater.exclusive(async () => {
     if (!isTrustedSender(e)) throw new Error('Untrusted sender')
     let lastSent = 0
     const report = (phase: 'resolve' | 'download' | 'install', p?: DownloadProgress): void => {
@@ -3651,7 +3800,7 @@ app.whenReady().then(async () => {
       if (!e.sender.isDestroyed()) e.sender.send('market:installProgress', { id, phase, ...p })
     }
     report('resolve')
-    const { info, buf } = await downloadMarketPackage(id, report)
+    const { info, buf } = await downloadMarketPackage(id, report, version)
     report('install')
     // 后端 category 对插件家族可能误标(Forsion 插件标成引擎 'plugin')→ 按包内 manifest 实测重定,
     // 否则装进错误目录后两边加载器都不认。返回 effType 让渲染层走对应的装后流程(引擎重扫 / amadeus 重载)。
@@ -3738,7 +3887,7 @@ app.whenReady().then(async () => {
     if (!dir) throw new Error('非法的卸载目标')
     if (!existsSync(dir)) throw new Error('该项不在已安装目录中')
     // Space 带回配方 id(目录名可 ≠ id):各窗 ribbon 按它撤 —— loadUserSpaces 只增不撤用户 Space,删除一律走 space-removed。
-    const spaceId = type === 'space' ? await readFile(join(dir, 'space.json'), 'utf8').then((s) => JSON.parse(s)?.id, () => undefined) : undefined
+    const spaceId = type === 'space' && /^market-[0-9a-f-]{36}$/.test(slug) ? slug : type === 'space' ? await readFile(join(dir, 'space.json'), 'utf8').then((s) => JSON.parse(s)?.id, () => undefined) : undefined
     await rm(dir, { recursive: true, force: true })
     await marketPluginUpdater.forget(type, slug)
     return { ok: true, path: dir, type, ...(typeof spaceId === 'string' && spaceId ? { id: spaceId } : {}) }
@@ -3873,8 +4022,8 @@ app.whenReady().then(async () => {
     if (isTrustedSender(e) && e.sender === miniWindow?.webContents && miniTarget) e.sender.send('window:miniTarget', miniTarget)
     if (isTrustedSender(e) && e.sender === autoMiniWindow?.webContents && autoMiniSessionId) e.sender.send('window:miniTarget', { sessionId: autoMiniSessionId })
   })
-  // Mini 卡片的自绘缩放边:渲染层只报「哪条边、是不是起手」,位移由这里读光标算(不受界面缩放 / DPI 影响);edge 不合法 = 松手。
-  ipcMain.on('window:miniResize', (e, edge: unknown, start: unknown) => {
+  // 屏幕坐标不受界面缩放影响;保留读光标的兼容路径。edge 不合法 = 松手。
+  ipcMain.on('window:miniResize', (e, edge: unknown, start: unknown, point: unknown) => {
     if (!isTrustedSender(e) || !miniWindow || miniWindow.isDestroyed() || e.sender !== miniWindow.webContents) return
     if (typeof edge !== 'string' || !/^(?=.)[ns]?[ew]?$/.test(edge)) {
       miniResizeFrom = null
@@ -3882,7 +4031,9 @@ app.whenReady().then(async () => {
       return
     }
     if (miniDock && !miniDock.expanded) return // 折叠在屏幕边上时不改大小:缩窄会把露在屏内的那条把手也带出去
-    const cursor = screen.getCursorScreenPoint()
+    const p = point as Partial<Electron.Point> | null
+    const cursor = p && Number.isFinite(p.x) && Number.isFinite(p.y)
+      ? { x: Math.round(p.x!), y: Math.round(p.y!) } : screen.getCursorScreenPoint()
     if (start === true || !miniResizeFrom) {
       // 刚拖到边上、还没判贴边就开始拉:那次判定作废,免得拉到一半被折叠
       if (miniSettleTimer) { clearTimeout(miniSettleTimer); miniSettleTimer = null }
@@ -3927,9 +4078,9 @@ app.whenReady().then(async () => {
   ipcMain.on('window:mainAction', (e, rawAction: unknown, rawPayload: unknown) => {
     const req = isTrustedSender(e) ? normalizeMainAction(rawAction, rawPayload) : undefined
     if (!req) return
-    // 只有要用户回主窗看结果的才把主窗抢到前面:重开引导、带着草稿 / 引用去聊天、打开 Agent。其余(⌘K 重算、测试通知卡、恢复布局、
+    // 只有要用户回主窗看结果的才把主窗抢到前面:重开引导、带着草稿 / 引用去聊天、打开 Agent、设置 › 设备里选了去处、设置里点「在蓬洲云中查看」(open-space)。其余(⌘K 重算、测试通知卡、恢复布局、
     // 成就弹窗、撤 Space)用户还在设置浮窗里,别打断。
-    if (req.action === 'onboarding' || req.action === 'chat-draft' || req.action === 'chat-quote' || req.action === 'open-agents' || req.action === 'open-agent') showMainWindow()
+    if (req.action === 'onboarding' || req.action === 'chat-draft' || req.action === 'chat-quote' || req.action === 'open-agents' || req.action === 'open-agent' || req.action === 'unit-route' || req.action === 'open-space') showMainWindow()
     const deliver = (): void => {
       // extensions-changed 也要到两扇 mini(手开的 / 自动弹的):它们和分离窗一样各握一份插件实例(见 amadeusPlugins.ts)。
       const recipients = req.action === 'skills-changed' || req.action === 'agents-changed' || req.action === 'extensions-changed'
@@ -4097,7 +4248,10 @@ app.whenReady().then(async () => {
     return { routed: true }
   })
   // mini 全局快捷键(默认 ⌘/Ctrl+⇧+M;register 返回 false=被占用,吞掉不阻塞启动)。
-  try { globalShortcut.register('CommandOrControl+Shift+M', () => toggleMiniWindow()) } catch { /* 快捷键冲突 */ }
+  const MINI_ACCEL = 'CommandOrControl+Shift+M'
+  const registerMiniShortcut = (): void => { try { globalShortcut.register(MINI_ACCEL, () => toggleMiniWindow()) } catch { /* 快捷键冲突 */ } }
+  registerMiniShortcut()
+  globalHotkeyPause.add({ pause: () => globalShortcut.unregister(MINI_ACCEL), resume: registerMiniShortcut })
   if (PRODUCT.agentBackend) approvalDelivery.start() // P1-K3:订阅本机引擎待批流(引擎未就绪时 idle,ready 后自连)
   if (PRODUCT.agentBackend) void remoteSafety.start() // P1-K2:读锁文件(跨重启)→ 注册急停热键 ⌃⌥⇧.(失败托盘 / 设置页可见)→ 订引擎活动流
 
@@ -4157,6 +4311,9 @@ app.whenReady().then(async () => {
 })
 
 app.on('before-quit', (e) => {
+  // 第一件事:有插件说还没做完就拦下问(别先做下面那些收尾 —— 取消的话应用还要接着用)。
+  // 托盘「退出」在 app.quit() 之前就把 isQuitting 置了 true:拦下时还原,否则取消后关窗就真关了
+  if (quitGuards.intercept()) { e.preventDefault(); isQuitting = false; return }
   isQuitting = true // 放行 window close 拦截(否则 hide 会吞掉退出)
   for (const state of persistedDetached) {
     const win = detachedWindows.get(state.id)

@@ -11,6 +11,8 @@ export interface DeskItem {
   at: number
   live?: { msgId: string; toolId: string; tool: string }
   view?: { type: string; params?: Record<string, unknown> }
+  /** 插件工具结果卡片(落点 desk):按调用 id 回到这条会话的消息里找那次调用(components/PluginToolCard.tsx)。 */
+  tool?: { callId: string }
 }
 
 /** 编辑类工具:自动上台(tool_result)与流式直播(tool_stream)共用一份名单。 */
@@ -145,7 +147,7 @@ const snapAt = (s: DeskSnapshot): number => Math.max(0, ...s.items.map((it) => i
 
 export function packDeskMap(map: Record<string, DeskSnapshot>, cap = DESK_PERSIST_CAP): string {
   const entries = Object.entries(map)
-    .map(([sid, s]) => [sid, { ...s, items: (s.items || []).filter((it) => !it.live && (it.path || it.view)) }] as const)
+    .map(([sid, s]) => [sid, { ...s, items: (s.items || []).filter((it) => !it.live && (it.path || it.view || it.tool)) }] as const)
     .filter(([sid, s]) => sid !== DESK_DRAFT_KEY && (s.items.length || s.fraction !== undefined || s.userResized || s.mode || s.note))
     .sort((a, b) => snapAt(b[1]) - snapAt(a[1]))
     .slice(0, cap)
@@ -162,13 +164,15 @@ export function unpackDeskMap(raw: string | null | undefined): Record<string, De
     if (!v || typeof v !== 'object') continue
     const items: DeskItem[] = (Array.isArray(v.items) ? v.items : [])
       .filter((it: any) => it && !it.live
-        && ((typeof it.path === 'string' && it.path) || (it.view && typeof it.view.type === 'string' && it.view.type)))
+        && ((typeof it.path === 'string' && it.path) || (it.view && typeof it.view.type === 'string' && it.view.type)
+          || (it.tool && typeof it.tool.callId === 'string' && it.tool.callId)))
       .slice(0, 2)
       .map((it: any) => ({
-        key: typeof it.key === 'string' ? it.key : `${it.path || it.view.type}@0`,
+        key: typeof it.key === 'string' ? it.key : `${it.path || it.view?.type || it.tool.callId}@0`,
         path: typeof it.path === 'string' ? it.path : '',
-        name: typeof it.name === 'string' && it.name ? it.name : (it.path || it.view.type).split(/[\\/]/).pop() || it.path || it.view.type,
+        name: typeof it.name === 'string' && it.name ? it.name : (it.path || it.view?.type || it.tool.callId).split(/[\\/]/).pop() || it.path || it.view?.type || it.tool.callId,
         at: typeof it.at === 'number' ? it.at : 0,
+        ...(it.tool && typeof it.tool.callId === 'string' && it.tool.callId ? { tool: { callId: it.tool.callId } } : {}),
         ...(it.view && typeof it.view.type === 'string' && it.view.type
           ? { view: { type: it.view.type, ...(it.view.params && typeof it.view.params === 'object' && !Array.isArray(it.view.params) ? { params: it.view.params } : {}) } }
           : {}),

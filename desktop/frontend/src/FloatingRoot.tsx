@@ -15,11 +15,12 @@ import type { FloatingPanelOpenOptions } from '../../shared/floatingPanel'
 import type { SessionRecord } from './types'
 import { FloatingViewSurface } from './components/FloatingViewSurface'
 import { PluginOnboardingHost } from './components/PluginOnboardingModal'
-import { BtwPanel } from './views/chat2/BtwPanel'
-import { btwSeedOf } from './views/chat2/btwStore'
+import { BtwPanel } from '@tangu/ui/views/chat2/BtwPanel'
+import { btwSeedOf } from '@tangu/ui/views/chat2/btwStore'
 import { listSkills } from './services/backendService'
 import { floatingPanelTitle } from './floatingPanelTitle'
 import { homeTarget } from './services/engine/targets'
+import { AskStringHost } from './amadeus/components/askString'
 
 export function FloatingRoot() {
   const { t } = useI18n()
@@ -91,7 +92,7 @@ export function FloatingRoot() {
           window.tangu?.requestMainAction?.('onboarding'); close()
         }}
       />}
-      {target.builtin === 'market' && <MarketModal key={String(target.params?.q ?? '')} initialQuery={typeof target.params?.q === 'string' ? target.params.q : undefined} onClose={onMarketClose} />}
+      {target.builtin === 'market' && <MarketModal key={String(target.params?.nonce ?? target.params?.itemId ?? target.params?.q ?? '')} initialItemId={typeof target.params?.itemId === 'string' ? target.params.itemId : undefined} initialDetailTab={typeof target.params?.detailTab === 'string' ? target.params.detailTab : undefined} initialQuery={typeof target.params?.q === 'string' ? target.params.q : undefined} onClose={onMarketClose} />}
       {target.builtin === 'achievements' && <AchievementsModal onClose={onAchievementsClose} />}
       {target.builtin === 'feedback' && app.cfgLoaded && <FeedbackModal key={panelSession?.id || ''} surface="panel" cfg={app.cfg} activeSession={panelSession} onClose={onFeedbackClose} />}
       {/* 旁聊:不按 params 挂 key —— 同一扇窗再收到定向(新的引用 / 问题)只是往线程里追加,重挂会把线程丢了 */}
@@ -101,5 +102,7 @@ export function FloatingRoot() {
     {/* 插件检查卡:设置 / 市场自 2026-09-20 住在这个独立窗口里,「运行引导」、手动启用、市场装完都在这里
         触发 —— 检查卡的 store 每个渲染进程一份,只挂在主窗 Root 里的话,这边点了什么都不会出现。 */}
     {(target.builtin === 'settings' || target.builtin === 'market') && <PluginOnboardingHost />}
+    {/* 设置 › 设备的「通过地址连接」「自定义图标」走 askString:prompt store 每个渲染进程一份,浮窗得自己挂宿主 */}
+    {target.builtin === 'settings' && <AskStringHost />}
   </div>
 }

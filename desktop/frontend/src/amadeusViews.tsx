@@ -12,12 +12,12 @@ import {
   SquarePen, FolderOpen, Folder, FolderPlus, Plus, MoreHorizontal, Pencil, Trash2, BookOpen, BookMarked,
   ChevronRight, Search, Code2, Eye, Star, StarOff, Paperclip, FileDown, FileImage,
   Database, ExternalLink, FileText, Share2, Cloud, CloudOff, Pin, PenTool, Upload, LayoutDashboard,
-  Undo2, Redo2, ChevronsDown, Frame, ListIndentDecrease, ListIndentIncrease, Copy,
+  Undo2, Redo2, ChevronsDown, Frame, ListIndentDecrease, ListIndentIncrease, Copy, Monitor, FolderSync, FolderMinus,
 } from 'lucide-react'
 import { useApp } from './stores/appStore'
 import { useVisualTheme as useTheme } from './stores/themeStore'
 import { activePageScope, cascadeFdAfterRename, claimTitleFocus, disposePageScope, flushAllScopes, MAIN_SCOPE, onNotePathGone, pageStoreFor, PageScopeCtx, remapScopePaths, setActivePageScope, trashVaultFiles, useActivePageScope, usePageScope, usePageStore, useScopedPageStore } from '@amadeus/store/pageStore'
-import { retireUnifiedPath, insertFilesForPath, unifiedInsertMarkdown } from '@amadeus/unified/lifecycle'
+import { retireUnifiedPath, insertFilesForPath, pathHit, unifiedInsertMarkdown } from '@amadeus/unified/lifecycle'
 import { treeRefBlocks } from '@amadeus/unified/treeRefDrop'
 import { canExportPdf, canRevealInFileManager } from '@amadeus/lib/hostCaps'
 import { noteOwnership } from '@amadeus/lib/noteOwnership'
@@ -54,7 +54,7 @@ import { printClone } from '@amadeus/lib/printClone'
 import { openManual } from './amadeusManual'
 import { isDrawingPath } from '@amadeus-shared/excalidraw/format'
 import { isDashboardPath } from '@amadeus-shared/dashboard'
-import { REF_MIME, PATHS_MIME, setChatRefDrag } from './views/chat2/chatDragRef'
+import { REF_MIME, PATHS_MIME, setChatRefDrag } from './components/chatDragRef'
 import { newTabOf, useItemSelect } from './views/itemSelect'
 import { useSearchSeed } from './amadeusPanels'
 import { askString } from '@amadeus/components/askString'
@@ -67,7 +67,7 @@ import { fdDirOf, isNoteMd } from '@amadeus/lib/fd'
 import { useSectionOpen } from '@amadeus/lib/sectionOpen'
 import { folderPadLeft, rowPadLeft } from '@amadeus/lib/treeIndent'
 import { compile, parsePageSource } from '@amadeus-shared/compiler'
-import { recordNav, useWorkspace, activeMainPanel, Skeleton, zoomOf, UI_MODE, startOpenDrag } from '@lcl/engine'
+import { recordNav, useWorkspace, activeMainPanel, Skeleton, zoomOf, UI_MODE, startOpenDrag, inSingleColumnShell } from '@lcl/engine'
 import { useNoteOutline } from '@amadeus/lib/activeNote'
 import { isCoarsePointer } from './touch'
 import type { ViewProps } from '@lcl/engine'
@@ -85,7 +85,7 @@ import { openCloudSyncDialog } from './components/CloudSyncDialog'
 import { track } from './achievements/store'
 import { act } from './activity/log'
 import '@amadeus/blocks' // 注册内置块类型(markdown→Milkdown);缺此 side-effect 导入则块显示「未知块类型」
-import './views/chat2/sidebar2.css' // t2s- 侧栏样式(通常已随 SessionsView 全局加载;显式引入以防独立挂载)
+import './styles/sidebar2.css' // t2s- 侧栏样式(通常已随 SessionsView 全局加载;显式引入以防独立挂载)
 import { OverlayAt, useListFirst, useNativeChromeExtras, useNativeSheetMenu, useRibbonStore, type SheetMenuItem } from '@lcl/engine'
 import { CtxMenuButtons } from './components/CtxMenuButtons'
 import { SidebarRow } from './components/SidebarRow'
@@ -96,6 +96,7 @@ import { parentOf, rowDropTarget, dropKeyOf, takesHostPaths } from './views/tree
 import { FILE_VIEW_PARAM } from './viewFileMatch'
 import { windowKind } from './windowKind'
 import { registerMessages, translate, useI18n } from './i18n'
+import { useVaultRelParam } from './views/vaultRelParam'
 
 registerMessages({
   'amxv.renameFailed': { zh: '重命名失败：{e}', en: 'Rename failed: {e}' },
@@ -147,6 +148,12 @@ registerMessages({
 
   'amxv.empty': { zh: '空', en: 'Empty' },
   'amxv.syncNotArrived': { zh: '同步内容尚未到达', en: 'Synced content has not arrived yet' },
+  'amxv.vault.thisDevice': { zh: '本机', en: 'This device' },
+  'amxv.vault.devicesTitle': { zh: '在同步这个库的设备：{list}', en: 'Devices syncing this vault: {list}' },
+  'amxv.vault.deviceSince': { zh: '{name}（{since} 起）', en: '{name} (since {since})' },
+  'amxv.menu.vaultSectionOn': { zh: '设为同步库分区', en: 'Show as synced vault' },
+  'amxv.menu.vaultSectionOff': { zh: '不再作为同步库分区', en: 'Stop showing as synced vault' },
+  'amxv.vaultSection.failed': { zh: '没能更新同步库分区：{e}', en: 'Could not update the synced vault section: {e}' },
   'amxv.searchNotes': { zh: '搜索笔记', en: 'Search notes' },
   // 手机的整屏列表(布局「二」)
   'amxv.phone.tabs': { zh: '笔记分类', en: 'Note lists' },
@@ -413,7 +420,7 @@ export function Breadcrumb({ path, hideLoneLeaf }: { path?: string; hideLoneLeaf
 // ─────────────────────────────── 左:笔记库(原生 t2s 外壳) ───────────────────────────────
 
 /** 右键菜单目标;kind='multi' = 作用于整批选中(paths)。 */
-interface Ctx { kind: 'page' | 'folder' | 'asset' | 'root' | 'multi'; path: string; paths?: string[]; x: number; y: number }
+interface Ctx { kind: 'page' | 'folder' | 'asset' | 'root' | 'multi' | 'vaultsec'; path: string; paths?: string[]; x: number; y: number }
 
 const isNotePath = (p: string): boolean => /\.md$/i.test(p)
 const isDbPath = (p: string): boolean => /\.db$/i.test(p)
@@ -611,7 +618,23 @@ function SharedWithMeSection() {
 /** 可折叠分区头(置顶/云同步/Vault名/Cloud工作区共用;PrefsSections 的 section 同款视觉)。
  *  纯文字标题(无图标),折叠箭头紧跟文字之后(amx-sec-head 布局),计数/状态点靠行尾。
  *  dropProps 挂在分区根上(头+体都是落点),dropActive 时整区描边(amx-drop-into 同款)。 */
-function SideSection({ id, defaultOpen, label, count, extra, dropProps, dropActive, children }: {
+type VaultDevice = { id: string; name: string; since?: string }
+
+/** 同步库分区头的来源设备标签:第一台的名字(本机写「本机」)+ 其余台数;悬停列出全部。没有设备信息(旧标记 / 手动设的)不画。 */
+function vaultDeviceChip(devices: VaultDevice[], myDeviceId: string | null): ReactNode {
+  if (!devices.length) return undefined
+  const label = (d: VaultDevice): string => (d.id === myDeviceId ? translate('amxv.vault.thisDevice') : d.name)
+  const list = devices.map((d) => (d.since ? translate('amxv.vault.deviceSince', { name: label(d), since: d.since }) : label(d))).join(', ')
+  return (
+    <span className="amx-sec-device" title={translate('amxv.vault.devicesTitle', { list })}>
+      <Monitor size={11} />
+      <span className="amx-sec-device-name">{label(devices[0])}</span>
+      {devices.length > 1 && <span>+{devices.length - 1}</span>}
+    </span>
+  )
+}
+
+function SideSection({ id, defaultOpen, label, count, extra, dropProps, dropActive, onContextMenu, children }: {
   /** 折叠态的记忆键(要稳定;vault 分区用库名 → 每库各记各的)。 */
   id: string
   /** 缺省 false = 默认折叠(用户拍板);只有「树所在的那个分区」才给 true。 */
@@ -621,12 +644,13 @@ function SideSection({ id, defaultOpen, label, count, extra, dropProps, dropActi
   extra?: ReactNode
   dropProps?: { onDragOver: (e: RDragEvent<HTMLDivElement>) => void; onDragLeave: () => void; onDrop: (e: RDragEvent<HTMLDivElement>) => void }
   dropActive?: boolean
+  onContextMenu?: (e: RMouseEvent<HTMLButtonElement>) => void
   children: ReactNode
 }) {
   const [open, toggle] = useSectionOpen(id, defaultOpen)
   return (
     <div className={`amx-prefs-group${dropActive ? ' amx-drop-into' : ''}`} {...dropProps}>
-      <button className="t2s-group-toggle amx-sec-grab" onClick={toggle}>
+      <button className="t2s-group-toggle amx-sec-grab" onClick={toggle} onContextMenu={onContextMenu}>
         <span className="t2s-group-name amx-sec-head">
           <span className="t2s-group-label">{label}</span>
           <span className={`t2s-chev${open ? ' open' : ''}`}><ChevronRight size={12} /></span>
@@ -957,6 +981,16 @@ export function AmadeusPagesView() {
   }, [vaultRoot, pages, folders])
   const entryVaults = useEntrySync((s) => s.vaults)
   const mirrorVaults = useEntrySync((s) => s.mirrorVaults)
+  const mirrorVaultDevices = useEntrySync((s) => s.mirrorVaultDevices)
+  const myDeviceId = useEntrySync((s) => s.deviceId)
+  // 手动设 / 取消同步库分区要 Forsion Extend 0.9+ 的 entry-sync:mark 通道;preload 总是带着这个键,旧 Extend 上点了只会报
+  // 「No handler registered」—— 以 entryGet 带回新字段为准。
+  const markSupported = useEntrySync((s) => s.markSupported) && !!window.amadeusSync?.entrySyncMark
+  const markVaultSection = (name: string, on: boolean): void => {
+    void window.amadeusSync!.entrySyncMark!(name, on)
+      .then((r) => { if (r?.error) throw new Error(r.error) })
+      .catch((e: unknown) => useApp.getState().toast(t('amxv.vaultSection.failed', { e: e instanceof Error ? e.message : String(e) }), true))
+  }
   useEffect(() => { if (renaming) renameRef.current?.select() }, [renaming])
   useEffect(() => {
     if (!menu) return
@@ -987,11 +1021,16 @@ export function AmadeusPagesView() {
   // web(无 amadeusSync,库本身就在云端):同步 Vault 分区按 .forsion-vault 标记文件推导
   // (桌面 entryEnable 时写入云端 vault 根;详见 cloudBridge 的 amadeusCloudVaults)。
   const [webVaultNames, setWebVaultNames] = useState<string[]>([])
+  const [webVaultDevices, setWebVaultDevices] = useState<Record<string, VaultDevice[]>>({})
   useEffect(() => {
-    const fn = (window as { amadeusCloudVaults?: () => Promise<string[]> }).amadeusCloudVaults
-    if (!fn || window.amadeusSync) return
+    const w = window as { amadeusCloudVaults?: () => Promise<string[]>; amadeusCloudVaultDevices?: (names: string[]) => Promise<Record<string, VaultDevice[]>> }
+    if (!w.amadeusCloudVaults || window.amadeusSync) return
     let alive = true
-    void fn().then((names) => { if (alive) setWebVaultNames(names) }).catch(() => {})
+    void w.amadeusCloudVaults().then((names) => {
+      if (!alive) return
+      setWebVaultNames(names)
+      void w.amadeusCloudVaultDevices?.(names).then((d) => { if (alive) setWebVaultDevices(d) }).catch(() => {})
+    }).catch(() => {})
     return () => { alive = false }
   }, [pages, folders]) // 树刷新时重推导(标记文件出现/消失)
   // 云端侧:根节点按「同步 Vault 文件夹」切分——桌面=注册表云名(恒显,镜像未拉到时 node=null
@@ -1002,15 +1041,23 @@ export function AmadeusPagesView() {
     // web(库本身在云端)恒走云端样式——落进下面的本地分支会把 vault UUID 当 <Vault名> 显示。
     const isWebCloud = !window.amadeusSync && !!(window as { amadeusCloudVaults?: unknown }).amadeusCloudVaults
     if (!isDesktopCloud && !isWebCloud) return null
-    const names = isDesktopCloud
-      ? [...new Set([...entryVaults.map((v) => v.cloudName), ...mirrorVaults])].sort()
-      : webVaultNames
+    // 本机注册表里条目全关掉的记录不算在同步(关闭时标记也删了),不再占一个分区。
+    const mine = new Set(isDesktopCloud ? entryVaults.filter((v) => v.entries.length).map((v) => v.cloudName) : [])
+    const names = isDesktopCloud ? [...new Set([...mine, ...mirrorVaults])].sort() : webVaultNames
+    const devicesOf = isDesktopCloud ? mirrorVaultDevices : webVaultDevices
     const nodeOf = new Map(tree.children.filter((n) => n.kind === 'folder').map((n) => [n.path, n]))
-    const vaultSecs = names.map((name) => ({ name, node: nodeOf.get(name) ?? null }))
+    const vaultSecs = names.map((name) => {
+      // 只认自有属性:库名可以叫 constructor / toString,普通对象上会取到继承来的函数。
+      const own = Object.prototype.hasOwnProperty.call(devicesOf, name) ? devicesOf[name] : undefined
+      const devs = Array.isArray(own) ? own : []
+      // 本机刚开的同步,标记还没拉回镜像:先把「本机」算上。
+      const self = mine.has(name) && myDeviceId && !devs.some((d) => d.id === myDeviceId) ? [{ id: myDeviceId, name: '' }] : []
+      return { name, node: nodeOf.get(name) ?? null, devices: [...self, ...devs], mine: mine.has(name) }
+    })
     const nameSet = new Set(names)
     const rest = tree.children.filter((n) => !(n.kind === 'folder' && nameSet.has(n.path)))
-    return { vaultSecs, rest }
-  }, [tree, entryVaults, mirrorVaults, vaultSide, webVaultNames])
+    return { vaultSecs, rest, mine }
+  }, [tree, entryVaults, mirrorVaults, mirrorVaultDevices, myDeviceId, vaultSide, webVaultNames, webVaultDevices])
 
   // 白板/PDF/.db/仪表盘/图片 开在各自的独立视图、activePage 不归树管 → 聚焦主 tab 是这类视图时
   // 按其文件参数点亮对应行(编辑器/其他视图聚焦时回落 activePage,原行为)。mainTabs 随激活变化刷新。
@@ -1563,16 +1610,26 @@ export function AmadeusPagesView() {
       {/* 云端侧:Cloud工作区(非同步Vault部分)+ 每个同步 Vault 一个分区(镜像内容,双向可编辑;
           注册表有名字但镜像还没拉到时也占位显示)。 */}
       <CloudSkipWarn />
-      <SideSection id="cloud-ws" defaultOpen label={t('amxv.sec.cloudWorkspace')}>
-        {cloudSections.rest.length ? cloudSections.rest.map((n) => renderNode(n, 0)) : <div className="t2s-hint amx-sec-hint">{t('amxv.empty')}</div>}
-      </SideSection>
-      {cloudSections.vaultSecs.map(({ name, node }) => (
-        <SideSection key={name} id={`vault:${name}`} defaultOpen label={name}>
+      {cloudSections.vaultSecs.map(({ name, node, devices, mine }) => (
+        <SideSection
+          key={name}
+          id={`vault:${name}`}
+          defaultOpen
+          label={name}
+          extra={vaultDeviceChip(devices, myDeviceId)}
+          // 分区头右键只给「不再作为同步库分区」,不弹整份文件夹菜单(那里有删除:删掉别的设备在同步的库会同步删回那台设备)。
+          // 有设备在同步的库取消了也会被它们下次启动补回来,所以只给旧标记 / 手动设的分区。
+          onContextMenu={markSupported && !mine && !devices.length ? (e) => { e.preventDefault(); e.stopPropagation(); setMenu({ kind: 'vaultsec', path: name, x: e.clientX, y: e.clientY }) } : undefined}
+        >
           {node && node.children.length
             ? node.children.map((c) => renderNode(c, 0))
             : <div className="t2s-hint amx-sec-hint">{node ? t('amxv.empty') : t('amxv.syncNotArrived')}</div>}
         </SideSection>
       ))}
+      {/* 同步库在前、Cloud工作区 在最后:它只放不属于任何同步库的东西(10-17 用户选 B)。 */}
+      <SideSection id="cloud-ws" defaultOpen label={t('amxv.sec.cloudWorkspace')}>
+        {cloudSections.rest.length ? cloudSections.rest.map((n) => renderNode(n, 0)) : <div className="t2s-hint amx-sec-hint">{t('amxv.empty')}</div>}
+      </SideSection>
     </>
   ) : vaultRoot ? (
     // 本地侧:<Vault名> 分区,现有树整体挂其下;分区内空白区保留「拖回根目录」落点。
@@ -1685,7 +1742,7 @@ export function AmadeusPagesView() {
           ) : (
             <>
               {!phone && <div className="t2s-special-group">
-                <button className="t2s-special" onClick={() => void ps().createPage()}>
+                <button className="t2s-special" data-guide-anchor="note-new" onClick={() => void ps().createPage()}>
                   <span className="t2s-special-ic"><SquarePen /></span>
                   <span className="t2s-special-title">{t('amadeus.new.note')}</span>
                 </button>
@@ -1824,6 +1881,9 @@ export function AmadeusPagesView() {
               <button onClick={() => { const f = menu.path; setMenu(null); openCloudSyncDialog(f, 'folder') }}><Cloud size={13} /> {t('amxv.menu.cloudSyncOn')}</button>
             )
           )}
+          {markSupported && vaultSide === 'cloud' && !menu.path.includes('/') && !cloudSections?.vaultSecs.some((v) => v.name === menu.path) && (
+            <button onClick={() => { const f = menu.path; setMenu(null); markVaultSection(f, true) }}><FolderSync size={13} /> {t('amxv.menu.vaultSectionOn')}</button>
+          )}
           {window.amadeusCollab && (
             <button onClick={() => {
               const f = menu.path
@@ -1836,6 +1896,11 @@ export function AmadeusPagesView() {
             }}><Share2 size={13} /> {t('amxv.menu.publishFolder')}</button>
           )}
           <button className="danger" onClick={() => { const f = menu.path; setMenu(null); if (confirmedDelete('folder', f)) void ps().deleteFolder(f) }}><Trash2 size={13} /> {t('amxv.menu.delete')}</button>
+        </OverlayAt>
+      )}
+      {menu?.kind === 'vaultsec' && (
+        <OverlayAt className="ctx-menu" x={menu.x} y={menu.y} onClick={(e) => e.stopPropagation()}>
+          <button onClick={() => { const f = menu.path; setMenu(null); markVaultSection(f, false) }}><FolderMinus size={13} /> {t('amxv.menu.vaultSectionOff')}</button>
         </OverlayAt>
       )}
       {rootMenu && webRootMenu && (
@@ -1985,8 +2050,10 @@ export function AmxMobileBar({ actions, onUpload, undo, redo, indent, sourceMode
         )}
         {!sourceMode && <button onPointerDown={keep} onClick={onUpload} title={t('amxv.uploadToPage')}><Upload size={19} /></button>}
         {/* 画布模式。源码模式下跟其他键一起隐:fullCanvas 本来就要求 mode !== 'source',留着是颗死键。
-            v3 笔记(canvas === null)也不出 —— 那边压根没有画布这回事。 */}
-        {!sourceMode && canvas && (
+            v3 笔记(canvas === null)也不出 —— 那边压根没有画布这回事。
+            单列壳(手机 Web / Android App)不出(2026-10-19 视图模式标准):那里是顶栏两颗胶囊中间的看法胶囊,原生顶栏下进「⋯」的「看法」一节。
+            留给的是触屏桌面:那里笔记顶栏不渲染,这颗是除了 ⌥⌘V 之外唯一的入口。 */}
+        {!sourceMode && canvas && !inSingleColumnShell() && (
           <button onPointerDown={keep} onClick={canvas.toggle} className={canvas.on ? 'on' : undefined}
             title={canvas.on ? t('amxv.mbar.toDocument') : t('amxv.mbar.toCanvas')}><Frame size={19} /></button>
         )}
@@ -2396,7 +2463,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
     return (eds.find((t) => t.id === am?.id) ?? eds.find((t) => t.front) ?? eds[0])?.id === leaf.id
   })
   const facadeScope = useActivePageScope()
-  const notePath = typeof leaf.params.notePath === 'string' ? leaf.params.notePath : null
+  const notePath = useVaultRelParam(leaf, 'notePath') || null
   const prevActiveRef = useRef(false)
   // ── v4 绞杀者路由(spec §9 step 3 Phase A):先读原文按 fm 分类,素文件/外来 md/v4 →
   // UnifiedPage(统一实例),v3 标记文件 → 下面的 PageView 老路。分类必须**先于** effect ①:
@@ -2610,7 +2677,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
   useEffect(() => {
     if (!notePath) return
     return onNotePathGone((from, kind, to) => {
-      const dead = (x: string): boolean => (kind === 'file' ? x === from : x === from || x.startsWith(`${from}/`))
+      const dead = (x: string): boolean => pathHit(x, from, kind)
       if (!dead(notePath)) return
       if (to) { // 挪走/改名:同 remap 规则算出本篇的新路径
         leaf.setParams({ ...leaf.params, notePath: kind === 'file' ? to : to + notePath.slice(from.length) })
@@ -2768,7 +2835,8 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
           AmadeusDashboardView 用着,CSS 一刀切会连仪表盘的顶栏(含「解锁编辑」)一起藏掉。 */}
       {barPath && !isCoarsePointer() && !leaf.params.miniSurface && (
         // 顶栏与编辑器融为一体:实色纸面底(var(--bg)),滚动时正文从其后穿过被遮住(见 CSS)。
-        <div className="amx-toolbar">
+        // amx-vhead:这一行就是笔记的视图头行(lcl viewModes),窄时胶囊按它的宽度退化。
+        <div className="amx-toolbar amx-vhead">
           <Breadcrumb path={barPath} hideLoneLeaf={!!unifiedRoute} />
           {/* 「文档 | 画布」胶囊(用户 2026-08-17 拍板:跟路径/分享/置顶同一行)。状态在 UnifiedPage,
               经 uiOverlay 交出来 —— 与旁边那颗可视/源码的路子一致。标记在 CanvasModeSeg(harness 共用)。 */}

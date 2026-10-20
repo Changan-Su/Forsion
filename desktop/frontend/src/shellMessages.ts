@@ -5,6 +5,9 @@ import { registerMessages } from './i18n'
 registerMessages({
   // Ribbon 上 Space 钮的可访问名(有未读时):唯一的文本子节点是角标数字,读屏会只念「1」。
   'ribbon.spaceUnread': { zh: '{name}，{n} 条未读', en: '{name}, {n} unread' },
+  'ribbon.spaceProgress': { zh: '{name}，进行中 {pct}%', en: '{name}, {pct}% in progress' },
+  'ribbon.spaceDot': { zh: '{name}，有新提醒', en: '{name}, new activity' },
+  'ribbon.spaceWaiting': { zh: '{name}，{n} 条私聊有新消息，有人在等你', en: '{name}, {n} direct chats with news, someone is waiting for you' },
   // 状态栏:可点项的悬停说明(点了会发生什么)
   'sb.switchSpace': { zh: '切换 Space', en: 'Switch Space' },
   'sb.clickToSync': { zh: '点击立即同步', en: 'Click to sync now' },

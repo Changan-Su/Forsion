@@ -5,22 +5,19 @@ import { useModelPickerPreferences } from '../../modelPickerPreferences'
  * /skill chip / 引用 / 模型·Agent·引擎·思考·loop·计划·群聊 / 上下文占比·压缩 / 发送·停止。
  * props 与旧 MessageInput 完全一致 → ChatView 直接换组件即可。
  */
-import React, { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import React, { useEffect, useId, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from 'react'
 import {
-  ArrowUp, Square, Mic, X, ClipboardList, Check, ChevronDown, FileText, Users, Sparkles,
+  ArrowUp, Square, Mic, X, ClipboardList, Check, ChevronDown, Users, Sparkles,
   Hand, ShieldCheck, ShieldAlert, Settings2, SlidersHorizontal, MessageSquare, Loader2, Clock, Zap, AudioLines, Quote, type LucideIcon } from 'lucide-react'
 import { useVoiceInput } from '../../hooks/useVoiceInput'
 import { CALL_TEXT_MAX, getCallPresence, onCallEvent, openCallLayer, sendTextToCall, subscribeCallPresence, useRealtimeConfig } from '../../services/realtimeCall'
 import { resolveRealtimeCall } from '../../services/realtimeModel'
-import { useCodeStudio } from '../../stores/codeStudioStore'
-import { useImageStudio } from '../../stores/imageStudioStore'
-import { usePluginChat } from '../../stores/pluginChatStore'
-import { normPath } from '../coding/studioModel'
+import { claimComposerPrefill, subscribeComposerPrefill } from '../../amadeus/plugins/tanguSeam'
 import { VoiceRecordingBar } from './VoiceRecordingBar'
-import { THINKING_LEVELS } from '../../types'
+import { THINKING_LEVELS } from '../../../../../tangu-agent/src/contracts/clientTypes'
 
 // context 视图已知注入段 key(与引擎 agentLoop ctxMark 调用一一对应);未知 key 显示原样
-import type { AgentConfig, Attachment, CtxInfo, DefaultModelSlot, MessageRecord, ModelInfo, ModelsResponse, NormalAgentDef, SkillInfo } from '../../types'
+import type { AgentConfig, Attachment, CtxInfo, DefaultModelSlot, MessageRecord, ModelInfo, ModelsResponse, NormalAgentDef, SkillInfo } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { nativeHaptic, nativeSheetPresenter, openNativeSheetMenu, useEdgeNudge, useNativeChromeInstalled, useWorkspace, type SheetMenuItem, type SheetMenuSection } from '@lcl/engine'
 import { ModelPill, contextRingWindow, type ModelPillGroup } from '../../components/ModelPill'
 import { UltraConfirmDialog, ultraConfirmSkipped } from './UltraConfirmDialog'
@@ -32,10 +29,11 @@ import { track } from '../../achievements/store'
 import { usePageStore } from '../../amadeus/store/pageStore'
 import { ensureAmadeusReady } from '../../amadeusPlugins'
 import { noteRefInsert } from '../../components/wikiChat'
-import { refToText, type ChatRef } from './chatDragRef'
+import { refToText, type ChatRef } from '../../components/chatDragRef'
 import { useApp } from '../../stores/appStore'
 import { ApprovalRulesModal } from '../../components/ApprovalRulesModal'
 import { thinkingLabel } from '../../components/thinkingLabel'
+import { AttachmentTile, isLeaving, tileKey } from '../../components/AttachmentTile'
 import { commandsFor } from '../../commandCatalog'
 import { getCustomCommands, expandCustomCommand, listAllMessages, type CustomCommandInfo } from '../../services/backendService'
 import { AddContentMenu, type AddContentReference } from './AddContentMenu'
@@ -53,10 +51,12 @@ import { AppRefIcon } from '../../components/appRefs'
 import { useCapsuleSlide } from '../../components/capsuleTabs'
 import { composeQuotes } from './quotes'
 import { NEW_CHAT_DRAFT, clearDraft, moveDraft, setDraftField, useComposerDrafts, useDraftField } from './composerDrafts'
+import { dropSend, fadeOutDraft, noteSend } from './sendFlight'
 import { ContextUsagePop } from './ContextUsagePop'
 import { usePromptSuggest } from './promptSuggest'
 import './composer2.css'
 import { homeTarget, targetForSession, targetKeyOf, useComposerRef } from '../../services/engine/targets'
+import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 registerMessages({
   'input.fileref.noteApps': { zh: '引用窗口 / 应用 / 笔记 / 文件 / 会话', en: 'Reference a window / app / note / file / session' },
@@ -225,6 +225,13 @@ export const fileChip = (path: string): RefChip => ({
   name: chipBaseName(path),
   kind: 'file',
 })
+
+/** 拖进来的 OS 文件分两路:放得进附件的图片(与粘贴一致)+ 其余。图片若只给路径芯片,模型只拿到一串路径,
+ *  edit_image 只认附件 → 改图 / 合成必失败(2026-10-19 反馈:把脸合成到裙子上连失败 5 次)。 */
+export const splitDroppedFiles = <F extends { type: string; size: number }>(files: F[]): { images: F[]; rest: F[] } => {
+  const images = files.filter((f) => f.type.startsWith('image/') && f.size <= MAX_ATTACH_BYTES)
+  return { images, rest: files.filter((f) => !images.includes(f)) }
+}
 
 export const folderChip = (path: string): RefChip => ({
   token: /\s/.test(path) ? `"${path}"` : path,
@@ -1164,35 +1171,22 @@ export const Composer2: React.FC<{
   const vaultRoot = usePageStore((s) => s.vaultRoot)
   const pageIcons = usePageStore((s) => s.icons)
   const chatSessions = useApp((s) => s.sessions)
-  const studioPrompt = useCodeStudio(s => s.pendingPrompt)
-  const imagePrompt = useImageStudio(s => s.pending)
+  // 预填:造物 / 图像工作室 / 插件聊天往 tanguSeam 登记的来源(核心插件化 2e-8;原来这里反读那三个 store)。
+  // 哪张卡该接、接几条由来源自己判(所在面板、是否可见、工程对不对)。来源一变先让本卡重渲染一拍,认领放在提交之后的
+  // effect 里 —— 和原来按 store 订阅的 effect 同一时机(刚开出来的面板这时已在 DOM 里、量得到可见性)。
+  const [prefillTick, bumpPrefill] = useReducer((n: number) => n + 1, 0)
+  useEffect(() => subscribeComposerPrefill(bumpPrefill), [])
   useEffect(() => {
-    if (!imagePrompt || imagePrompt.sessionId !== activeSessionId || !cardRef.current?.closest('[data-image-studio-chat]') || !cardRef.current.getClientRects().length) return
-    if (!useImageStudio.getState().consume(imagePrompt.seq)) return
-    setDraft(previous => previous.trim() ? `${previous}\n\n${imagePrompt.text}` : imagePrompt.text)
-    setAttachments(previous => [...previous, ...imagePrompt.attachments])
-    requestAnimationFrame(() => { taRef.current?.focus(); autoGrow() })
-  }, [imagePrompt, activeSessionId]) // eslint-disable-line react-hooks/exhaustive-deps
-  // 插件视图里的对话(ctx.tangu.mountChat)的预填:只认本会话在插件挂载里的那个输入框,排着几条就接几条。
-  // 不看它此刻显不显示:标签在后台时投的,翻到前面就该已经在输入框里(这个 effect 不会因为「显示出来」再跑一次)。
-  const pluginPrompts = usePluginChat(s => s.pending)
-  useEffect(() => {
-    if (!activeSessionId || !pluginPrompts.some(p => p.sessionId === activeSessionId) || !cardRef.current?.closest('[data-plugin-chat]')) return
-    const texts = usePluginChat.getState().take(activeSessionId)
-    if (!texts.length) return
+    const card = cardRef.current
+    if (!card) return
+    const got = claimComposerPrefill({ card, sessionId: activeSessionId ?? null })
+    if (!got.length) return
+    const texts = got.flatMap((g) => g.texts)
+    const files = got.flatMap((g) => g.attachments ?? [])
     setDraft(previous => [...(previous.trim() ? [previous] : []), ...texts].join('\n\n'))
+    if (files.length) setAttachments(previous => [...previous, ...files])
     requestAnimationFrame(() => { taRef.current?.focus(); autoGrow() })
-  }, [pluginPrompts, activeSessionId]) // eslint-disable-line react-hooks/exhaustive-deps
-  // Studio references append to this project's visible composer. Claim once before updating:
-  // hidden / secondary chat views must not consume another project's request or erase its draft.
-  useEffect(() => {
-    if (!studioPrompt || !cardRef.current?.getClientRects().length) return
-    const app = useApp.getState()
-    const path = activeSessionId ? app.sessions.find(s => s.id === activeSessionId)?.project_path : app.newChatWs?.path
-    if (normPath(path || '') !== normPath(studioPrompt.project) || !useCodeStudio.getState().consumePrompt(studioPrompt.seq)) return
-    setDraft(previous => previous.trim() ? `${previous}\n\n${studioPrompt.text}` : studioPrompt.text)
-    requestAnimationFrame(() => { taRef.current?.focus(); autoGrow() })
-  }, [studioPrompt, activeSessionId]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [prefillTick, activeSessionId]) // eslint-disable-line react-hooks/exhaustive-deps
   const refCands = useMemo<RefCand[]>(() => {
     if (!fileRefCtx) return []
     // 窗口、应用在前(只在有这项能力的宿主上有);笔记、工作区文件次之,历史会话最后(与拖拽引用同契约,
@@ -1430,14 +1424,17 @@ export const Composer2: React.FC<{
     // 清的是**发出时**那个会话的草稿:新对话的第一句发到一半会话才建出来,输入框那时已经换到新会话上了。
     const sentKey = draftKey
     const known = sentKey === NEW_CHAT_DRAFT ? new Set(useApp.getState().sessions.map((x) => x.id)) : null
-    return onSend(outgoing, attachments, wsFiles, pinnedSkills.map((s) => s.id), mentions).then((accepted) => {
+    noteSend(outgoing, taRef.current) // 发送动效:气泡从这一行升上去(sendFlight.ts)
+    return onSend(outgoing, attachments.filter((a) => !isLeaving(a)), wsFiles.filter((a) => !isLeaving(a)), pinnedSkills.map((s) => s.id), mentions).then((accepted) => {
       if (!accepted) {
+        dropSend(outgoing)
         // 新对话的第一句没发出去,而输入框已经换到刚建的会话上:那份输入跟过去,留在眼前可以重发(那边有草稿就不动)。
         // 只认发送前还不存在的会话 —— 用户途中自己切去了别的会话,就不往那里塞,那份留在新对话里。
         const shown = draftKeyRef.current
         if (known && shown !== sentKey && !known.has(shown)) moveDraft(sentKey, shown)
         return false
       }
+      if (!override && draftKeyRef.current === sentKey) fadeOutDraft(taRef.current) // 输入框里的字上移淡出,再清空
       clearDraft(sentKey, !!override) // 引用里自动那条不在草稿里 —— 它是 activePage 的派生量,下一条消息照旧自动挂上
       if (!override) { setHistPos(0); nativeHaptic('tick') } // 手机:自己发出去的那一下给个轻震(桌面 / 网页无宿主,空操作)
       onClearQuote?.()
@@ -1447,8 +1444,9 @@ export const Composer2: React.FC<{
   }
   const send = () => { void sendMessage() }
 
-  const pickFiles = async (files: FileList | null) => {
+  const pickFiles = async (files: ArrayLike<File> | null) => {
     if (!files) return
+    const key = draftKey // 读盘是异步的:途中切了会话,图仍归发起时那份草稿
     const next: Attachment[] = []
     const skipped: string[] = []
     for (const f of Array.from(files)) {
@@ -1461,10 +1459,10 @@ export const Composer2: React.FC<{
       next.push({ name: f.name, mimeType: f.type, data: btoa(bin), size: f.size })
     }
     setHint(skipped.length ? t('input.skip.imageHint', { items: skipped.join(t('composer2.listSep')) }) : null)
-    setAttachments((prev) => [...prev, ...next])
+    setDraftField(key, 'attachments', (prev) => [...prev, ...next])
   }
 
-  const pickWsFiles = async (files: FileList | null) => {
+  const pickWsFiles = async (files: ArrayLike<File> | null) => {
     if (!files) return
     const next: Attachment[] = []
     const skipped: string[] = []
@@ -1480,11 +1478,14 @@ export const Composer2: React.FC<{
     setWsFiles((prev) => [...prev, ...next])
   }
 
-  /** OS 文件落下:host 走本机路径芯片,其余上传成工作区附件。 */
-  const onFilesDrop = (files: FileList): void => {
-    if (!files.length) return
+  /** OS 文件落下:图片另进图片附件(edit_image 只认附件)。host 照旧给每个文件出路径芯片 —— 只拖不打字也能发,
+   *  附件超过 8 张时多出来的图也还有路径;非 host 其余文件上传成工作区附件。 */
+  const onFilesDrop = (fileList: FileList): void => {
+    const files = Array.from(fileList)
+    const { images, rest } = splitDroppedFiles(files)
+    if (images.length) void pickFiles(images)
     if (localFs && window.tangu?.getPathForFile) {
-      const paths = Array.from(files)
+      const paths = files
         .map((f) => { try { return window.tangu!.getPathForFile!(f) } catch { return '' } })
         .filter(Boolean)
       if (paths.length) {
@@ -1493,7 +1494,7 @@ export const Composer2: React.FC<{
         return
       }
     }
-    void pickWsFiles(files)
+    if (rest.length) void pickWsFiles(rest)
   }
   const filesDropRef = useRef(onFilesDrop)
   filesDropRef.current = onFilesDrop
@@ -1749,7 +1750,7 @@ export const Composer2: React.FC<{
           </div>
         )}
         {approvalTray}
-        <ChatBoxSurface ref={cardRef} className={`${phoneCard ? 't2c-card--phone' : ''}${dragOver ? ' dragover' : ''}`}>
+        <ChatBoxSurface ref={cardRef} data-guide-anchor="chat-composer" className={`${phoneCard ? 't2c-card--phone' : ''}${dragOver ? ' dragover' : ''}`}>
           {advisory}
           {hint && <div className="t2c-hint">{hint}</div>}
           {quotes.length > 0 && (
@@ -1784,28 +1785,15 @@ export const Composer2: React.FC<{
               ))}
             </div>
           )}
-          {attachments.length > 0 && (
-            <div className="t2c-chiprow">
-              {attachments.map((a, i) => (
-                <span className="attach-chip" key={`${a.name}-${i}`}>
-                  {a.mimeType.startsWith('image/') && <img src={`data:${a.mimeType};base64,${a.data}`} alt={a.name} />}
-                  <span>{a.name}</span>
-                  <button title={t('input.remove')} onClick={() => setAttachments(attachments.filter((_, j) => j !== i))}><X size={12} /></button>
-                </span>
+          {(attachments.length > 0 || wsFiles.length > 0) && (
+            // 附件磁贴(B2):随消息发的与「到工作区」的排在同一行。删按对象认、写回点删那一刻的草稿(draftKey 闭包),
+            // 淡出那 130ms 里删了别的、切了会话都不会删错;发送时跳过正在淡出的(isLeaving)。
+            <div className="t2c-chiprow t2c-tilerow">
+              {attachments.map((a) => (
+                <AttachmentTile key={tileKey(a)} file={a} removeTitle={t('input.remove')} onRemove={() => setDraftField(draftKey, 'attachments', (prev) => prev.filter((x) => x !== a))} />
               ))}
-            </div>
-          )}
-          {wsFiles.length > 0 && (
-            <div className="t2c-chiprow">
-              {wsFiles.map((a, i) => (
-                <span className="attach-chip" key={`ws-${a.name}-${i}`} title={t('input.wsUploadTitle', { name: a.name })}>
-                  {a.mimeType.startsWith('image/')
-                    ? <img src={`data:${a.mimeType};base64,${a.data}`} alt={a.name} />
-                    : <FileText size={14} style={{ color: 'var(--accent-ink)', flexShrink: 0 }} />}
-                  <span>{a.name}</span>
-                  <span style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)', flexShrink: 0 }}>{t('input.toWorkspace')}</span>
-                  <button title={t('input.remove')} onClick={() => setWsFiles(wsFiles.filter((_, j) => j !== i))}><X size={12} /></button>
-                </span>
+              {wsFiles.map((a) => (
+                <AttachmentTile key={tileKey(a)} file={a} note={t('input.toWorkspace')} removeTitle={t('input.remove')} onRemove={() => setDraftField(draftKey, 'wsFiles', (prev) => prev.filter((x) => x !== a))} />
               ))}
             </div>
           )}

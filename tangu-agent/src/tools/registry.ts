@@ -15,6 +15,7 @@ import { effectiveRemote } from '../services/remoteOrigin.js';
 import { datetimeProvider, calculatorProvider } from './builtin/coreUtils.js';
 import { memoryLogProvider } from './builtin/memoryLog.js';
 import { webSearchProvider } from './builtin/webSearch.js';
+import { marketplaceProvider } from './builtin/marketplace.js';
 import { workspaceFilesProvider } from './builtin/workspaceFiles.js';
 import { skillsProvider } from './builtin/skills.js';
 import { sandboxPythonProvider } from './builtin/sandboxPython.js';
@@ -34,9 +35,11 @@ import { channelToolsProvider } from './builtin/channelTools.js';
 import { applyPatchProvider } from './builtin/applyPatch.js';
 import { discussProvider } from './builtin/discuss.js';
 import { dispatchProvider } from './builtin/startProjectSession.js';
+import { childSessionsProvider } from './builtin/childSessions.js';
 import { displayFileProvider } from './builtin/displayTools.js';
 import { teamSayProvider } from './builtin/teamSay.js';
 import { museWakeProvider } from './builtin/museWake.js';
+import { museMessageProvider } from './builtin/museMessage.js';
 import { deskPresentProvider } from './builtin/deskPresent.js';
 import { imageGenProvider } from './builtin/imageTools.js';
 import { inboxSendProvider } from './builtin/inboxSend.js';
@@ -76,6 +79,8 @@ export type { ToolContext, ToolResult, ToolImpl } from './toolTypes.js';
 const DEFAULT_TOOL_CAPABILITIES: Record<string, ToolCapabilities> = {
   get_datetime: { sideEffect: 'none', parallel: true, defaultTimeoutMs: 5_000 },
   calculator: { sideEffect: 'none', parallel: true, defaultTimeoutMs: 5_000 },
+  search_marketplace: { sideEffect: 'network', parallel: true, defaultTimeoutMs: 30_000 },
+  get_marketplace_plugin: { sideEffect: 'network', parallel: true, defaultTimeoutMs: 30_000 },
   web_search: { sideEffect: 'network', parallel: true, defaultTimeoutMs: 30_000 },
   web_fetch: { sideEffect: 'network', parallel: true, defaultTimeoutMs: 25_000 },
   browser_search: { sideEffect: 'browser', parallel: false, concurrencyKey: 'browser', defaultTimeoutMs: 60_000 },
@@ -121,7 +126,8 @@ function mergeCapabilities(name: string, impl?: ToolImpl): ToolCapabilities {
   return { ...defaults, ...(impl?.capabilities || {}) };
 }
 
-export function getToolCapabilities(name: string, ctx: ToolContext): ToolCapabilities {
+export function getToolCapabilities(raw: string, ctx: ToolContext): ToolCapabilities {
+  const name = canonicalToolName(raw); // 老客户端的 HTML 卡调用在 agentLoop 入口被改回旧名 sketch,能力照正典名查
   const impl = resolveTools(currentProfile(ctx), ctx).get(name);
   if (impl) return mergeCapabilities(name, impl);
   // custom/MCP 工具副作用不可知，默认不并发。
@@ -180,7 +186,7 @@ registerToolProvider(browserUseProvider); // host-only:browser_task 委派整包
 registerToolProvider(amadeusProvider); // both:Amadeus 笔记库 + Calendar —— host 直连磁盘 vault,非 host 经 brain.amadeus 云 vault API(append 末尾,保前缀缓存)
 registerToolProvider(readActivityProvider); // 默认仅 Muse(ctx.muse/activityAccess 收口,普通 run 不暴露,快照不变):读用户活动日志
 registerToolProvider(manageAutomationProvider); // 本地限定:自动化规则 触发×动作链(原 muse_watch,改名属 schema 大改同批打穿缓存)
-registerToolProvider(manageScheduleProvider); // 本地限定:每-agent 日程 SCHEDULE.db(append 末尾,保前缀缓存)
+registerToolProvider(manageScheduleProvider); // 本地限定:每-agent 日程 CALENDAR.db(append 末尾,保前缀缓存)
 registerToolProvider(loadToolsProvider); // both:load_tools 解锁 deferred 工具定义(P0-2;仅有未解锁项且调用方支持时可见)
 registerToolProvider(deskPresentProvider); // host-only:desk_present 在桌面聊天旁的 Agent Desk 演出面板展示文件(实验;append 末尾,保前缀缓存)
 registerToolProvider(readSessionProvider); // both:read_session 按 id 读另一个会话的记录(工作区拖会话进聊天的 [[session:id]] 引用靠它落地;append 末尾,保前缀缓存)
@@ -202,6 +208,8 @@ registerToolProvider(reviewLoadoutProvider); // 仅 Muse(周期或手聊):review
 registerToolProvider(appSettingsProvider); // host-only 前台 run:app_settings 读 / update_app_settings 改本机 config.json 里开放的那几段(写走控制面审批;全 deferred,append 末尾)
 registerToolProvider(sessionStatusProvider); // both 前台 run:session_status 读本会话的上下文占用 / 已花 token / 步数 / 用时(只读;deferred,append 末尾,快照不变)
 registerToolProvider(forsionAccountProvider); // both 前台 run、且 brain 有账号面(cloud)时:forsion_account 读额度 / 积分 / 套餐 / 用量,forsion_account_action 代办三件(每次都问;全 deferred,append 末尾,快照不变)
+registerToolProvider(marketplaceProvider); // both 前台 run、且 brain 有商店面时:search_marketplace 查商店条目(chat 常驻)、get_marketplace_plugin 按 ID 取详情(chat 按需;append 末尾,保前缀缓存)
+registerToolProvider(museMessageProvider); // 仅 Muse 周期(ctx.muse,子代理除外):message_user 往 Muse 私聊发一条(要用户回话 / 拍板的;append 末尾,普通 run 不可见,快照不变)
 // 插件(表情包/分段等)现为文件夹插件(plugins/),经 activateAllPlugins→ctx.registerPlugin 注册其工具,不在此处。
 
 /** ctx 自带 profile(loop 按 run.app_id 解析)优先;缺省回退本进程装配的 profile。 */
@@ -319,13 +327,21 @@ export function listDeferredTools(ctx: ToolContext): { name: string; hint: strin
 /** 跨 run 延续解锁(10-02):本 run 喂给模型的历史里调用过的 deferred 工具(连同其 deferGroup 整组)在 run 起点预解锁。
  *  不延续时,上一轮 load_tools 装过的工具下一轮不在 defs 里,模型照着历史直接调同名工具,只能落到最近的常驻名
  *  (实测 manage_schedule → manage_human 空刷 5–9 次,有一次放弃后还说「记好了」)。只看传进来的这份历史:
- *  被压缩摘要吃掉的调用模型看不见,不延续。起点 defs 因此与上一 run 末尾一致,前缀缓存反而更连续。 */
+ *  被压缩摘要吃掉的调用模型看不见,不延续。起点 defs 因此与上一 run 末尾一致,前缀缓存反而更连续。
+ *
+ *  历史里带图(最新带图的那条 user 消息被重建成 image_url parts)→ 改图 / 生图两件也在起点预解锁(10-19,
+ *  反馈 ebe554d0):工具定义被厂商渲染在提示最前面,run 中途 load_tools 一次 = 系统提示 + 整段历史全按未命中价
+ *  重算(9.5 万上下文的 Auto 上一次约 45 点),外加 load_tools 本身那次调用。图还在窗口里就一直带着,defs 跨 run 不变。
+ *  ponytail: 只认原生 image_url parts —— 转写成文字的(主模型看不了图)不预载,照旧走 load_tools。 */
+const IMAGE_CONTEXT_PRELOADS = ['edit_image', 'generate_image'];
 export function deferredUnlocksFromHistory(
-  history: ReadonlyArray<{ tool_calls?: ToolCall[] }>,
+  history: ReadonlyArray<{ tool_calls?: ToolCall[]; content?: unknown }>,
   catalog: ReadonlyArray<{ name: string; group?: string }>,
 ): Set<string> {
   const used = new Set<string>();
   for (const m of history) for (const c of m.tool_calls || []) used.add(canonicalToolName(String(c?.function?.name || '')));
+  const hasImage = history.some((m) => Array.isArray(m.content) && m.content.some((p: any) => p?.type === 'image_url'));
+  if (hasImage) for (const n of IMAGE_CONTEXT_PRELOADS) used.add(n);
   const groups = new Set(catalog.filter((d) => used.has(d.name) && d.group).map((d) => d.group));
   return new Set(catalog.filter((d) => used.has(d.name) || (d.group && groups.has(d.group))).map((d) => d.name));
 }
@@ -504,3 +520,4 @@ function editDistance(a: string, b: string): number {
 }
 
 registerToolProvider(intelligentUiProvider); // Native document renderer, explicit client capability.
+registerToolProvider(childSessionsProvider); // host-only:start_session + send_to_session(deferred)(父子会话;append 末尾,保前缀缓存)

@@ -84,32 +84,79 @@ export function useAllDatabases(): AggDb[] {
     }
   }, [paths, entries])
 
-  return useMemo(() => {
-    const out: AggDb[] = []
-    for (const p of paths) {
-      const e = entries[p]
-      const db = e?.status === 'ok' ? e.data : null
-      if (!db) continue
-      const folder = db.source?.folder
-      if (folder !== undefined) {
-        const props = folders[folder]?.props ?? []
-        const rows: AggRow[] = props.map((pr) => ({
-          rowId: pr.path,
-          name: pr.title,
-          cells: Object.fromEntries(
-            db.columns.map((c) => [c.id, c.type === 'page' ? pr.title : fmValueToCell(pr.fm[c.id], resolveBaseType(c.type))]),
-          ),
-        }))
-        out.push({ path: p, name: db.name, isNoteView: true, folder, columns: db.columns, rows })
-      } else {
-        const nameId = db.columns[0]?.id ?? ''
-        // 名称空就是空:不回落 r.id(随机编码曾漏进日历/待办显示),消费方自己决定兜底文案或隐藏。
-        const rows: AggRow[] = db.rows.map((r) => ({ rowId: r.id, name: cellText(r.cells[nameId]), cells: r.cells, ...(r.body !== undefined ? { body: r.body } : {}) }))
-        out.push({ path: p, name: db.name, isNoteView: false, columns: db.columns, rows })
-      }
+  return useMemo(() => aggregateDatabases(paths, entries, folders), [paths, entries, folders])
+}
+
+type DbEntries = ReturnType<typeof useDbStore.getState>['entries']
+type NoteFolders = ReturnType<typeof useNoteViewStore.getState>['folders']
+
+/** 一张表摊平成 AggDb;没加载好 / 读坏了 = null。 */
+function aggOne(p: string, entries: DbEntries, folders: NoteFolders): AggDb | null {
+  const e = entries[p]
+  const db = e?.status === 'ok' ? e.data : null
+  if (!db) return null
+  const folder = db.source?.folder
+  if (folder !== undefined) {
+    const props = folders[folder]?.props ?? []
+    const rows: AggRow[] = props.map((pr) => ({
+      rowId: pr.path,
+      name: pr.title,
+      cells: Object.fromEntries(
+        db.columns.map((c) => [c.id, c.type === 'page' ? pr.title : fmValueToCell(pr.fm[c.id], resolveBaseType(c.type))]),
+      ),
+    }))
+    return { path: p, name: db.name, isNoteView: true, folder, columns: db.columns, rows }
+  }
+  const nameId = db.columns[0]?.id ?? ''
+  // 名称空就是空:不回落 r.id(随机编码曾漏进日历/待办显示),消费方自己决定兜底文案或隐藏。
+  const rows: AggRow[] = db.rows.map((r) => ({ rowId: r.id, name: cellText(r.cells[nameId]), cells: r.cells, ...(r.body !== undefined ? { body: r.body } : {}) }))
+  return { path: p, name: db.name, isNoteView: false, columns: db.columns, rows }
+}
+
+/** useAllDatabases 的纯函数本体(插件 ctx.databases 也走它)。 */
+export function aggregateDatabases(paths: string[], entries: DbEntries, folders: NoteFolders): AggDb[] {
+  return paths.map((p) => aggOne(p, entries, folders)).filter((x): x is AggDb => !!x)
+}
+
+/** 按路径取当前一张表(写口用,不全量重算)。 */
+export function getAggDb(path: string): AggDb | null {
+  if (!DB_RE.test(path) || !usePageStore.getState().files.includes(path)) return null
+  return aggOne(path, useDbStore.getState().entries, useNoteViewStore.getState().folders)
+}
+
+/** 非 React 版 useAllDatabases(插件 ctx.databases):立刻回调一次,之后底层 store 一变就回调。
+ *  ready = 库已打开、文件清单已到、每张 .db 与笔记视图文件夹都落定(读坏 / 不存在也算落定)——
+ *  用来区分「还在加载」与「库里真没有表」。
+ *  ⚠️加载只在路径集合变化时发(笔记视图文件夹:路径或条目变化时),**不能**跟着每次 store 变化发:
+ *  dbStore.load 会重读 missing 的条目、noteViewStore.load 会重刷没 ok 的文件夹,跟着变化发 = 一张坏表引发重读风暴。 */
+export function watchAllDatabases(cb: (dbs: AggDb[], ready: boolean) => void): () => void {
+  ensureAmadeusReady()
+  let files: string[] | null = null
+  let entries: DbEntries | null = null
+  let folders: NoteFolders | null = null
+  let paths: string[] = []
+  const run = (): void => {
+    const pg = usePageStore.getState()
+    const en = useDbStore.getState().entries
+    const fo = useNoteViewStore.getState().folders
+    if (pg.files === files && en === entries && fo === folders) return
+    const filesChanged = pg.files !== files
+    const entriesChanged = en !== entries
+    files = pg.files; entries = en; folders = fo
+    if (filesChanged) {
+      paths = pg.files.filter((f) => DB_RE.test(f))
+      for (const p of paths) void useDbStore.getState().load(p, p)
     }
-    return out
-  }, [paths, entries, folders])
+    const noteFolders = paths.map((p) => en[p]?.data?.source?.folder).filter((f): f is string => f !== undefined)
+    if (filesChanged || entriesChanged) for (const f of noteFolders) void useNoteViewStore.getState().load(f)
+    const ready = !!pg.vaultRoot && pg.filesPendingFor === null
+      && paths.every((p) => { const st = en[p]?.status; return !!st && st !== 'loading' })
+      && noteFolders.every((f) => { const st = fo[f]?.status; return !!st && st !== 'loading' })
+    cb(aggregateDatabases(paths, en, fo), ready)
+  }
+  const offs = [usePageStore.subscribe(run), useDbStore.subscribe(run), useNoteViewStore.subscribe(run)]
+  run()
+  return () => { for (const off of offs) off() }
 }
 
 /** 「含某属性类型列」的子集(旧接口保留;新日历/待办改走成员制)。 */
@@ -169,17 +216,37 @@ export function setAggCell(db: AggDb, rowId: string, colId: string, value: CellV
 
 /** 新建一个事件行(双击创建):经典表 push 新行;笔记视图新建笔记 + 写日期 frontmatter。
  *  返回新行的 rowId(经典)/ 笔记路径(笔记视图),供旁弹卡片定位。 */
-export async function createAggEvent(db: AggDb, calColId: string, value: string, name: string): Promise<string> {
+export function createAggEvent(db: AggDb, calColId: string, value: string, name: string): Promise<string> {
+  return addAggRow(db, { [calColId]: value }, name)
+}
+
+/** 笔记视图建行要跨几次 await:之后再写属性前确认还在原来的库(路径是库相对的,换了库就写进别的笔记),
+ *  且调用方(插件)没喊停;不满足就抛。 */
+function stillHere(ok?: () => boolean): () => void {
+  const vault = usePageStore.getState().vaultRoot
+  return () => { if (usePageStore.getState().vaultRoot !== vault || (ok && !ok())) throw new Error('aborted: vault switched or caller gone') }
+}
+
+/** 新建一行(带初值):经典表 push 新行(name 写首列,cells 里已给首列就不覆盖);笔记视图新建笔记、
+ *  有 name 就改名、再逐列写属性(page 身份列 = 笔记标题,跳过)。返回 rowId / 笔记路径。 */
+export async function addAggRow(db: AggDb, init: Record<string, CellValue>, name = '', ok?: () => boolean): Promise<string> {
   const nameCol = db.columns[0]
   if (db.isNoteView && db.folder !== undefined) {
-    const notePath = await useNoteViewStore.getState().addNote(db.folder)
-    const col = db.columns.find((c) => c.id === calColId)
-    useNoteViewStore.getState().setProp(db.folder, notePath, calColId, value, resolveBaseType(col?.type ?? 'text'))
+    const still = stillHere(ok)
+    let notePath = await useNoteViewStore.getState().addNote(db.folder)
+    still()
+    // 先改名再写属性:setProp 的防抖写按路径落,反过来会在旧路径上把文件写活。
+    if (name.trim()) notePath = await useNoteViewStore.getState().renameNote(db.folder, notePath, name)
+    still()
+    for (const [colId, v] of Object.entries(init)) {
+      const col = db.columns.find((c) => c.id === colId)
+      if (col && col.type !== 'page') useNoteViewStore.getState().setProp(db.folder, notePath, colId, v, resolveBaseType(col.type))
+    }
     return notePath
   }
   const rowId = dbId()
-  const cells: Record<string, CellValue> = { [calColId]: value }
-  if (nameCol && nameCol.id !== calColId && name) cells[nameCol.id] = name
+  const cells: Record<string, CellValue> = { ...init }
+  if (nameCol && !(nameCol.id in cells) && name) cells[nameCol.id] = name
   // 盖章(自动编号/创建时间)在回调**内**按 d.rows 算(CAS 重放拿最新行,见 propertyTypes.newRowCells)。
   // 盖章压在**最后**:created 也算日期列(兜底),日历若以它为锚建事件,点击日不得伪造成创建时间
   // (codex 抓的)—— 这种表上新事件落在「现在」,与该列只读语义一致;真日期列不受影响(盖章键与它不重叠)。
@@ -236,12 +303,14 @@ export function restoreAggRow(db: AggDb, row: AggRow, removed: DroppedRef[] = []
 
 /** 复制一行(键盘粘贴):经典表克隆全部单元格为新行(同日期/时间的原位副本);
  *  笔记视图新建笔记 + 逐列拷贝属性(page 身份列除外)。返回新 rowId / 笔记路径,失败返回 null。 */
-export async function duplicateAggRow(db: AggDb, rowId: string): Promise<string | null> {
+export async function duplicateAggRow(db: AggDb, rowId: string, ok?: () => boolean): Promise<string | null> {
   if (db.readonly) return null
   const src = db.rows.find((r) => r.rowId === rowId)
   if (!src) return null
   if (db.isNoteView && db.folder !== undefined) {
+    const still = stillHere(ok)
     const notePath = await useNoteViewStore.getState().addNote(db.folder)
+    still()
     for (const c of db.columns) {
       if (c.type === 'page') continue // 身份列 = 笔记标题,由 addNote 定,不覆盖
       const v = src.cells[c.id]

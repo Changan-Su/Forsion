@@ -19,6 +19,7 @@ import { resolveSandboxMode, setupHost, buildBrain, fixLegacyAppIds } from '../s
 import { loginFlow } from '../cli/login.js';
 import { OAUTH_PROVIDERS, providerOAuthLogin, loadOAuthDirectProviders } from '../llm/providerOAuth.js';
 import { createMcpManager } from '../mcp/manager.js';
+import { bindPluginMcp } from '../mcp/pluginServers.js';
 import { loadTanguEnv } from '../core/tanguHome.js';
 import { parseTuiConfig, tuiHelp } from './config.js';
 import { L } from './i18n.js';
@@ -143,6 +144,7 @@ async function main(): Promise<void> {
   // MCP(~/.tangu/mcp.json):启动连一次,进程级冻结;与 standalone server 同语义。
   const mcp = createMcpManager();
   await mcp.start();
+  bindPluginMcp(mcp); // 插件 manifest 声明的 MCP 要在激活插件之前就有地方挂
 
   // 插件:进入交互 TUI 才激活全部插件（注册其工具 provider）;login/--help/worker 等路径不付此开销。
   // TUI 无 express，忽略返回的路由挂载器（仅 standalone 用）。

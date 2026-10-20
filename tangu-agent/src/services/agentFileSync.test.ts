@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { conflictCopyName, decide, runAgentFilesSync } from './agentFileSync.js';
 import type { AgentFileContent, AgentFileMeta, AgentFilesBrain } from '../seams/cloudBrain.js';
-import { agentSyncPermission, agentSyncScope, setAgentSyncPermission } from './cloudSyncAccount.js';
+import { agentSyncPermission, agentSyncScope, setAgentSyncDefault, setAgentSyncPermission } from './cloudSyncAccount.js';
 
 const slug = 'cloud-only';
 const config = 'name = "Cloud Only"\ncloud_sync = true\nlibrary_order = ["reference.md"]\n';
@@ -52,6 +52,22 @@ describe('runAgentFilesSync cloud-only bootstrap', () => {
     expect(result.pulled).toBe(3);
     expect(readFileSync(path.join(home, 'agents', slug, 'config.toml'), 'utf8')).toBe(config);
     expect(readFileSync(path.join(home, 'agents', slug, 'Library', 'reference.md'), 'utf8')).toContain('已同步');
+  });
+
+  it('discovers an agent without cloud_sync only while the account switch is on', async () => {
+    const plain = 'name = "Cloud Only"\nlibrary_order = ["reference.md"]\n';
+    const files = { ...contents, 'config.toml': { ...contents['config.toml'], content: plain } };
+    const cloud: AgentFilesBrain = {
+      getManifest: async () => [{ slug, files: metas }],
+      getFile: async (_userId, gotSlug, relPath) => gotSlug === slug ? files[relPath] || null : null,
+      putFile: async (_userId, _slug, _relPath, body) => ({ mtimeMs: body.mtimeMs }),
+      deleteFile: async () => {},
+    };
+    expect((await runAgentFilesSync(cloud, 'user-1', { onlySlug: slug })).agents).toBe(0);
+    setAgentSyncDefault(agentSyncScope(cloud, 'user-1')!, true);
+    const result = await runAgentFilesSync(cloud, 'user-1', { onlySlug: slug });
+    expect(result.agents).toBe(1);
+    expect(readFileSync(path.join(home, 'agents', slug, 'SOUL.md'), 'utf8')).toBe('云端人格');
   });
 
   it('does not upload the previous account’s agent after switching accounts', async () => {

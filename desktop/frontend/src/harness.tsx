@@ -506,11 +506,19 @@ function BoardHarness() {
   const [settings, setSettings] = useState<BoardSettings>({ ...DEFAULT_BOARD })
   // 深色档要能切:网格层在深色下换的是 mix-blend-mode(multiply → screen),而混合的结果只有截图看得见。
   const [theme, setTheme] = useState<'light' | 'dark'>('light')
+  // 真 App 里写设置是异步的(drawingStore 先 flush、预读盘面再写):lag > 0 模拟那段「props 还是旧值」的窗口
+  const lag = useRef(0)
+  const patches = useRef<Partial<BoardSettings>[]>([])
+  const cur = useRef(settings)
+  cur.current = settings
   useEffect(() => {
     // 合并式:仪器只传改动的字段,别因为漏写新字段把设置打成 undefined
     ;(window as unknown as { __board: unknown }).__board = {
       setSettings: (patch: Partial<BoardSettings>) => setSettings((s) => ({ ...s, ...patch })),
       setTheme,
+      setLag: (ms: number) => { lag.current = ms },
+      patches: patches.current,
+      get: () => cur.current,
     }
   }, [])
   return (
@@ -521,7 +529,12 @@ function BoardHarness() {
           theme={theme}
           langCode="en"
           settings={settings}
-          onSettings={(patch) => setSettings((s) => ({ ...s, ...patch }))}
+          onSettings={(patch) => {
+            patches.current.push(patch)
+            const apply = (): void => setSettings((s) => ({ ...s, ...patch }))
+            if (lag.current) setTimeout(apply, lag.current)
+            else apply()
+          }}
           onSceneChange={(json: string) => {
             ;(window as unknown as { __scene: unknown }).__scene = JSON.parse(json)
           }}
@@ -786,6 +799,35 @@ if (new URLSearchParams(location.search).has('dock')) {
       </div>,
     )
   })
+} else if (new URLSearchParams(location.search).has('ach')) {
+  // 成就面板(云端 + 本机两组):localStorage 里的计数 / 云端缓存和 window.tangu.cloudFetch 由仪器在加载前预置,
+  // 见 scripts/achievements-cloud.check.cjs。
+  void import('./achievements/AchievementsModal').then(({ AchievementsModal }) => {
+    applyRealTheme(resolveInitialLang(), resolveInitialSkin(), resolveInitialBg(), new URLSearchParams(location.search).has('dark') ? 'dark' : 'light')
+    createRoot(document.getElementById('root')!).render(
+      <LocaleProvider><div className="am-app tangu-lovable" style={{ position: 'fixed', inset: 0 }}><AchievementsModal onClose={() => {}} /></div></LocaleProvider>,
+    )
+  })
+} else if (new URLSearchParams(location.search).has('terms')) {
+  // 协议更新提示 + 弹窗排队(TermsUpdateDialog / stores/popupQueue):window.tangu(cloudFetch / forsionLogout)由仪器预置,
+  // 登录 / 打开 What's new 经 window.__signIn / __openWhatsNew 触发。见 scripts/terms-update.check.cjs。
+  void Promise.all([import('./components/TermsUpdateDialog'), import('./components/WhatsNewDialog'), import('./stores/appStore')]).then(([{ TermsUpdateHost }, { WhatsNewHost, openWhatsNew }, { useApp }]) => {
+    applyRealTheme(resolveInitialLang(), resolveInitialSkin(), resolveInitialBg(), new URLSearchParams(location.search).has('dark') ? 'dark' : 'light')
+    const w = window as unknown as { __openWhatsNew: () => void; __signIn: () => void; __signOut: () => void }
+    w.__openWhatsNew = openWhatsNew
+    w.__signIn = () => useApp.setState({ authInfo: { loggedIn: true, accountId: 'u1', cloudUrl: '', username: 'alice', tokenSource: null } })
+    w.__signOut = () => useApp.setState({ authInfo: null })
+    createRoot(document.getElementById('root')!).render(
+      <LocaleProvider>
+        <div className="am-app tangu-lovable" style={{ position: 'fixed', inset: 0, padding: '40px 56px', color: 'var(--text)', background: 'var(--bg)', fontFamily: 'var(--font-body)' }}>
+          <h1 style={{ fontSize: 28, margin: '0 0 12px' }}>周会记录</h1>
+          {['讨论了下个版本的发布节奏，先把网页版的移动布局合进去。', '设计侧确认了色彩体系的第二轮调整，悬停一律用中性色。', '待办：整理 Android 外壳的返回链路，补一份真机录屏。'].map((l) => <p key={l} style={{ fontSize: 15, lineHeight: 1.8, margin: '0 0 8px' }}>{l}</p>)}
+        </div>
+        <WhatsNewHost />
+        <TermsUpdateHost />
+      </LocaleProvider>,
+    )
+  })
 } else if (new URLSearchParams(location.search).has('ribbon')) {
   // 点击记账:mod+1..9 的 slot 分发靠它断言(见 ribbon-dnd.e2e.cjs 的 L 组)。
   const hits: string[] = []
@@ -886,13 +928,18 @@ if (new URLSearchParams(location.search).has('dock')) {
       })(),
     }
     w.amadeusSync = { get: async () => ({ state: 'idle', side: 'local' }), onStatus: () => () => {} }
-    void Promise.all([import('./components/UnitSwitcher'), import('./stores/appStore')]).then(([{ UnitSwitcher, UnitRemoteSurface }, { useApp }]) => {
+    void Promise.all([import('./components/UnitSwitcher'), import('./stores/appStore')]).then(([{ UnitSwitcher, UnitRemoteSurface, UnitSettings }, { useApp }]) => {
       useApp.setState({ desktopConfig: { ...cfg } as never })
       addRibbonIcon({ id: 'rb-unit', side: 'bottom', component: UnitSwitcher })
       // 远程面(设备行「整个主区切过去」)也挂上:裸 harness 无 .shell-work → 组件原地渲染,CSS 退化 fixed 覆盖
       const rsHost = document.createElement('div')
       document.body.appendChild(rsHost)
-      createRoot(rsHost).render(<UnitRemoteSurface />)
+      // 设置 › 设备:胶囊点开走 openSettings('units')(harness 无浮窗 = 窗内设置),这里只挂那一页(真 SettingsModal 太重)。
+      const UnitSettingsHost = (): React.ReactElement | null => {
+        const open = useApp((s) => s.settingsOpen && s.settingsTab === 'units')
+        return open ? <div className="unitset-harness" style={{ position: 'fixed', left: 260, top: 24, width: 560, maxHeight: 'calc(100vh - 48px)', overflow: 'auto', zIndex: 500 }}><UnitSettings /></div> : null
+      }
+      createRoot(rsHost).render(<><UnitRemoteSurface /><UnitSettingsHost /></>)
     })
   }
   installHotkeys() // 裸挂 Ribbon 没有 Shell,热键分发得自己装
@@ -1561,7 +1608,8 @@ if (new URLSearchParams(location.search).has('dock')) {
   ;(window as unknown as { __pageStoreFor?: typeof pageStoreFor }).__pageStoreFor = pageStoreFor
   createRoot(document.getElementById('root')!).render(<DashHarness />)
 } else if (new URLSearchParams(location.search).has('board')) {
-  createRoot(document.getElementById('root')!).render(<BoardHarness />)
+  // 真 LocaleProvider:没有它 useI18n 恒回中文,英文界面的排版量不到(check:boardlive L31)
+  createRoot(document.getElementById('root')!).render(<LocaleProvider><BoardHarness /></LocaleProvider>)
 } else if (new URLSearchParams(location.search).has('mindmap')) {
   const iso = new Date().toISOString()
   const mm = JSON.stringify({ b2: { p: 'b1' }, b3: { p: 'b1' } }) // b2/b3 是 b1 的子节点

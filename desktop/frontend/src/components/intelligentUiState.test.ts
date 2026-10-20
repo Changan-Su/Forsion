@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, it, expect } from 'vitest'
-import { validateUIDocument, type UIBlock } from '../../../../tangu-agent/src/shared/intelligentUi'
+import { validateUIDocument, type UIBlock } from '../../../../tangu-agent/src/contracts/intelligentUi'
 import { deriveChecklist, emptyUIState, inputValues, readUIState, uiExpansionKey, uiStateKey, writeUIState } from './intelligentUiState'
 const fixture = JSON.parse(readFileSync(new URL('../../../scripts/fixtures/intelligent-ui.json', import.meta.url), 'utf8')).dinner
 const doc = validateUIDocument(fixture)

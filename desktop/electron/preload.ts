@@ -81,6 +81,12 @@ const api = {
     ipcRenderer.invoke('backend:getStatus').then((st: BackendStatus) => { if (!off) cb(st) }).catch(() => { /* 主进程未就绪:等真广播 */ })
     return () => { off = true; ipcRenderer.removeListener('backend:status', listener) }
   },
+  /** 主进程替用户改了配置(如门铃上点了「允许并打开」打开互联):各窗口收到就重读一次,开着的设置页不显示旧值。 */
+  onConfigChanged: (cb: () => void): (() => void) => {
+    const listener = (): void => cb()
+    ipcRenderer.on('config:changed', listener)
+    return () => { ipcRenderer.removeListener('config:changed', listener) }
+  },
   // ── 收件箱:系统通知 + dock 角标(仅 mac)+ 通知点击回跳订阅 ──
   notifyInbox: (title: string, body: string): Promise<void> => ipcRenderer.invoke('inbox:notify', title, body),
   /** 通用系统通知(所有应用内通知同步发;点击仅聚焦窗口,不强制回跳 Inbox)。 */
@@ -136,6 +142,10 @@ const api = {
       return () => ipcRenderer.removeListener('remoteSessions:changed', listener)
     },
   } satisfies RemoteSessionsApi,
+  /** 设置 → 快捷键录制 / 按键查找期间挂起主进程全局快捷键(Mini、急停);主进程 60s 兜底恢复、窗口关闭即恢复。 */
+  shortcuts: {
+    pauseGlobal: (on: boolean): Promise<void> => ipcRenderer.invoke('shortcuts:pauseGlobal', on === true),
+  },
   // P1-K2 ── 急停 / 远程锁定(只在本机;解锁在主进程弹系统认证;主进程校验发送方)──
   remoteSafety: {
     get: () => ipcRenderer.invoke('remoteSafety:get'),
@@ -182,6 +192,22 @@ const api = {
   /** 测试版通道:开了才会收到 x.y.z-beta.N;关着连看都看不到(feed/端点两层都隔离)。 */
   getUpdateBeta: (): Promise<boolean> => ipcRenderer.invoke('updater:getBeta'),
   setUpdateBeta: (on: boolean): Promise<{ ok: boolean }> => ipcRenderer.invoke('updater:setBeta', on),
+  /** 下载来源:auto(按地区)/ website / github;region = 这台电脑在不在中国大陆(null = 没探出来)。 */
+  getUpdateSource: (): Promise<'auto' | 'website' | 'github'> => ipcRenderer.invoke('updater:getSource'),
+  setUpdateSource: (v: 'auto' | 'website' | 'github'): Promise<{ ok: boolean }> => ipcRenderer.invoke('updater:setSource', v),
+  getUpdateRegion: (): Promise<boolean | null> => ipcRenderer.invoke('updater:region'),
+  /** 下载中换到另一边;mac 在浏览器里开这一版 .dmg 的下载链接。 */
+  switchUpdateSource: (): Promise<boolean> => ipcRenderer.invoke('updater:switchSource'),
+  openUpdateInstaller: (): Promise<boolean> => ipcRenderer.invoke('updater:openInstaller'),
+  /** What's new 弹窗正文:官网更新动态快照(拿不到 = null)。 */
+  getWebsiteReleases: (): Promise<any> => ipcRenderer.invoke('updater:websiteReleases'),
+  /** 从任意窗口(设置浮窗)请主窗弹出 What's new;主窗经 onOpenWhatsNew 收到。 */
+  openWhatsNew: (): void => ipcRenderer.send('whatsNew:open'),
+  onOpenWhatsNew: (cb: () => void): (() => void) => {
+    const listener = (): void => cb()
+    ipcRenderer.on('whatsNew:open', listener)
+    return () => { ipcRenderer.removeListener('whatsNew:open', listener) }
+  },
   /** 应用内清空数据(卸载/重置);清完主进程会 relaunch。 */
   clearAppData: (opts: { desktop?: boolean; tangu?: boolean }): Promise<{ ok: boolean }> =>
     ipcRenderer.invoke('app:clearData', opts),
@@ -308,6 +334,12 @@ const api = {
     ipcRenderer.invoke('fs:mkdir', parentDir, name),
   trashHostPath: (p: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('fs:trash', p),
   revealHostPath: (p: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('fs:reveal', p),
+  /** Forsion Clip 手动安装:把随包的扩展复制到用户找得到的位置(版本变了才覆盖)/ 替用户打开 Chrome 扩展页(mac;别处复制地址)。拖拽走 startHostDrag。 */
+  clipExtension: {
+    /** update=false:只补缺,不动已有副本(Chrome 正从那里加载);用户要(重新)装的那一下才传 true 换成随包版本。 */
+    prepare: (update?: boolean): Promise<{ dir: string; version: string; bundled: string } | { error: string }> => ipcRenderer.invoke('clipExt:prepare', update === true),
+    openChromeExtensions: (): Promise<{ ok: true } | { ok: false; copied: true; reason: 'no-chrome' | 'unsupported' }> => ipcRenderer.invoke('clipExt:openChrome'),
+  },
   /** 原生拖出:在元素 onDragStart 里 e.preventDefault() 后调用,主进程接管系统级拖拽。 */
   startHostDrag: (filePath: string): void => ipcRenderer.send('fs:startDrag', filePath),
   /** 拖 OS 文件/文件夹进 host 工作区目录 → 原生复制(重名加序号)。 */
@@ -360,6 +392,7 @@ const api = {
   openPluginsDir: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('plugins:openDir'),
   // ── Forsion Market(浏览/详情/安装全走主进程:公开浏览 + 本地解压安装)──
   marketList: (type?: string): Promise<{ items: any[] }> => ipcRenderer.invoke('market:list', type),
+  marketRead: (id: string, resource: string, offset?: number): Promise<any> => ipcRenderer.invoke('market:read', id, resource, offset),
   marketDetail: (id: string): Promise<any> => ipcRenderer.invoke('market:detail', id),
   marketUpdateStatus: () => ipcRenderer.invoke('market:updateStatus'),
   marketSetAutoUpdate: (id: string, on: boolean) => ipcRenderer.invoke('market:setAutoUpdate', id, on),
@@ -371,8 +404,8 @@ const api = {
     void ipcRenderer.invoke('market:updateStatus').then((state) => { if (!off && !received) cb(state) }).catch(() => {})
     return () => { off = true; ipcRenderer.removeListener('market:updateStatus', listener) }
   },
-  marketInstall: (id: string): Promise<{ ok: boolean; path: string; files: number; type: string; slug: string }> =>
-    ipcRenderer.invoke('market:install', id),
+  marketInstall: (id: string, version?: string): Promise<{ ok: boolean; path: string; files: number; type: string; slug: string }> =>
+    ipcRenderer.invoke('market:install', id, version),
   // 安装进度(阶段 + 当前在试第几个下载地址 + 字节):主进程只推给发起窗口,渲染层按 id 过滤。
   onMarketInstallProgress: (cb: (ev: MarketInstallProgress) => void): (() => void) => {
     const listener = (_e: unknown, ev: MarketInstallProgress): void => cb(ev)
@@ -515,7 +548,7 @@ const api = {
   reportUiLocale: (locale: 'zh' | 'en'): void => ipcRenderer.send(UI_LOCALE_CHANNEL, locale),
   closeSelf: (): void => ipcRenderer.send('window:closeSelf'),
   /** Mini 卡片自绘缩放边:edge = n / s / e / w 的组合;start = 起手;null = 松手。位移由主进程读光标算。 */
-  miniResize: (edge: string | null, start?: boolean): void => ipcRenderer.send('window:miniResize', edge, start === true),
+  miniResize: (edge: string | null, start?: boolean, cursor?: { x: number; y: number }): void => ipcRenderer.send('window:miniResize', edge, start === true, cursor),
   cursorScreenPoint: (): { screenX: number; screenY: number } => ipcRenderer.sendSync('window:cursorScreenPoint'),
   // 跨窗撕拽:实时坐标(节流 send)+ 最终落点路由(invoke)+ 目标窗接收订阅(on)。
   dragUpdate: (screenX: number, screenY: number, view: { type: string; params?: Record<string, unknown> }): void =>
@@ -583,6 +616,14 @@ const api = {
   },
   /** 冷启动:拉走渲染层就绪前积压的 deep link(拿走即清;也把主进程翻到「可直推」态)。 */
   drainDeepLinks: (): Promise<string[]> => ipcRenderer.invoke('deeplink:drain'),
+  // ── 外部文件打开(Finder 打开方式 / 拖到 Dock / 命令行参数;落点在渲染层 deepLinkInstall.installOpenFiles)──
+  /** 主进程只推一声「有文件待打开」,收到后调 drainOpenFiles 拉(文件本身不随推送走,见 main.ts deliverOpenFile)。 */
+  onOpenFile: (cb: () => void): (() => void) => {
+    const listener = (): void => cb()
+    ipcRenderer.on('app:open-file', listener)
+    return () => ipcRenderer.removeListener('app:open-file', listener)
+  },
+  drainOpenFiles: (): Promise<string[]> => ipcRenderer.invoke('openfile:drain'),
   /** 内置终端的 PTY:spawn 失败(原生模块未就绪)返回 {error},不抛。 */
   pty: {
     spawn: (opts: { cols?: number; rows?: number; cwd?: string; cmd?: string }): Promise<{ id?: string; shell?: string; error?: string }> =>
@@ -607,6 +648,7 @@ const api = {
 // 渲染端遍布 window.tangu?.X 能力门控:删掉键 = 对应功能(Inbox/市场/设置 agent tab/账号…)自动隐藏,UI 零改动。
 const AGENT_KEYS = [
   'documentTasks',
+  'clipExtension', // Chrome 扩展连的是本机引擎
   'backendStatus', 'backendLogs', 'backendRestart', 'onBackendStatus',
   'notifyInbox', 'notify', 'setInboxBadge', 'onInboxOpen',
   'authStatus', 'forsionLogin', 'forsionLogout', 'authProviders', 'providerLogin', 'openAccountCenter', 'onAuthDevice', 'onAuthChanged',
@@ -634,7 +676,7 @@ const AGENT_KEYS = [
   'remoteSafety', // 急停 / 远程锁定管的是本机引擎上的远程 / 通道 / 无人值守 run
 ] as const
 if (!PRODUCT.agentBackend) for (const k of AGENT_KEYS) delete (api as Record<string, unknown>)[k]
-if (!PRODUCT.market) for (const k of ['marketList', 'marketDetail', 'marketInstall', 'onMarketInstallProgress', 'marketInstalled', 'marketUninstall', 'marketUpdateStatus', 'marketSetAutoUpdate', 'marketCheckUpdates', 'onMarketUpdateStatus'] as const) delete (api as Record<string, unknown>)[k]
+if (!PRODUCT.market) for (const k of ['marketList', 'marketRead', 'marketDetail', 'marketInstall', 'onMarketInstallProgress', 'marketInstalled', 'marketUninstall', 'marketUpdateStatus', 'marketSetAutoUpdate', 'marketCheckUpdates', 'onMarketUpdateStatus'] as const) delete (api as Record<string, unknown>)[k]
 // 云端账号面(个人中心 / 会员页 / 额度与重置卡 / 反馈 / cloud:fetch)由内置包 Forsion Extend 的主进程半身提供
 // (electron/cloudHost.ts);没装载(验签失败 / 单品变体 / 没捆)就删键 —— 调了会 reject "No handler registered",
 // 删掉键渲染层按同一套 window.tangu?.X 门控自动隐藏。主进程在开窗前就答好 cloud:present(Extend 实际注册的通道名),

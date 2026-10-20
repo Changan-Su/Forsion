@@ -4,14 +4,14 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createHmac, randomBytes } from 'node:crypto';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readdirSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WebSocket } from 'ws';
 import {
   EXTENSION_ID, connectCode, currentExtensionClient, extensionCall, extensionClientAlive, extensionConnected, extensionStatus, extensionToken,
-  startBrowserExtensionBridge, stopBrowserExtensionBridge,
+  reloadExtensionClients, startBrowserExtensionBridge, stopBrowserExtensionBridge,
 } from './browserExtension.js';
 
 const freePort = (): Promise<number> => new Promise((r) => { const s = createServer(); s.listen(0, '127.0.0.1', () => { const p = (s.address() as any).port; s.close(() => r(p)); }); });
@@ -104,6 +104,25 @@ describe('Tangu for Chrome 扩展桥', () => {
     expect(extensionConnected()).toBe(true);
     await expect(extensionCall('tabs.list', { a: 1 })).resolves.toEqual({ echo: 'tabs.list', params: { a: 1 } });
     await expect(extensionCall('boom')).rejects.toThrow('page script failed');
+  });
+
+  it('记住最近连上来的扩展(未安装 / 未连接靠它分),换码不丢;Forsion 换了扩展版本后能叫连着的扩展重新加载', async () => {
+    expect(extensionStatus().lastClient).toBeNull();
+    const seen: string[] = [];
+    const { ws, welcomed } = await fakeExtension({ handler: (m) => { seen.push(m.method); return { ok: true }; } });
+    await welcomed;
+    expect(extensionStatus().lastClient?.version).toBe('test');
+    expect(reloadExtensionClients()).toBe(1);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(seen).toEqual(['extension.reload']);
+    const closed = new Promise((r) => ws.on('close', r));
+    extensionToken(true);
+    await closed;
+    // 客户端先收到关闭,服务端的 close 回调稍后才把它移出连接表(全量跑、负载高时会撞上):等服务端也确认断开
+    for (let i = 0; i < 50 && extensionStatus().connected; i++) await new Promise((r) => setTimeout(r, 20));
+    expect(extensionStatus()).toMatchObject({ connected: false, lastClient: { version: 'test' } });
+    expect(reloadExtensionClients()).toBe(0);
+    expect(readdirSync(process.env.TANGU_HOME!)).not.toContainEqual(expect.stringMatching(/\.tmp$/)); // 原子写:不留临时文件
   });
 
   it('扩展断线:挂起中的请求立刻失败,不会等满超时', async () => {

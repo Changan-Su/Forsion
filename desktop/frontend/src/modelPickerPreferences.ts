@@ -36,8 +36,9 @@ export function saveModelPickerPreferences(value: ModelPickerPreferences): void 
   snapshot = next
   listeners.forEach((fn) => fn())
 }
+/** 本机偏好里隐藏的不进选择菜单。云端模型也能藏(10-17 方案 C:只影响本机菜单),但分组仍归管理员(见 groupPickerModels)。 */
 export function isPickerModelVisible(model: ModelInfo, prefs: ModelPickerPreferences): boolean {
-  return model.source === 'forsion' || !prefs.hidden.includes(model.id)
+  return !prefs.hidden.includes(model.id)
 }
 
 export interface PickerGroup {

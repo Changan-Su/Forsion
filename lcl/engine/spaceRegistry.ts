@@ -6,10 +6,11 @@ import { create } from 'zustand'
 import { IS_MINI_PANEL, IS_TRANSIENT_MINI_PANEL, IS_MAIN_WINDOW, WINDOW_SPACE_ID } from './uiMode'
 import { supportsMiniPanel } from './miniPanel'
 import type { SpaceDefinition } from './types'
-import { useWorkspace, liveLayoutOwner, bootLayoutFellThrough } from './workspaceStore'
+import { useWorkspace, liveLayoutOwner, bootLayoutFellThrough, adoptSingleColumnLayoutCold } from './workspaceStore'
 import { loadLayout, saveLayout, clearLayout, loadNamedLayout, saveNamedLayout, listNamedLayouts, deleteNamedLayout } from './layoutPersist'
 import { clearSingleColumnLayouts } from './singleColumnStore'
-import { onePageRedirect } from './pinnedViews'
+import { onePageRedirect, mainPageLanding } from './pinnedViews'
+import { getView } from './viewRegistry'
 import { mainOpensBeside } from './openBeside'
 
 const ACTIVE_KEY = IS_MINI_PANEL ? 'forsion_mini_active_space' : 'forsion_tangu_active_space'
@@ -107,6 +108,7 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
     // 已存布局里缺了固定 View(插件停用时被清场、Space 后来新增了固定项…)→ 补回来;resetLayout 那一路由 build() 负责。
     if (saved && ws.applyNamed(spaceLayoutName(toId))) { ws.ensurePinned(); ws.saveCurrent() }
     else ws.resetLayout()
+    landOnMainPage() // 5. 声明了默认主页的 Space:进来先看到那一页,而不是上次离开时的前台
   },
 }))
 
@@ -125,6 +127,25 @@ export function redirectOpenFromOnePage(type: string): boolean {
   openRedirect = type
   try { useSpaceStore.getState().setActiveSpace(owner) } finally { openRedirect = null }
   return useSpaceStore.getState().activeSpaceId === owner
+}
+
+/** 进 Space 的落点:当前 Space 声明了默认主页(types.ts 的 mainPage)就把它顶到前台,没开着就开出来。别的 Space 是空操作。
+ *  入口:setActiveSpace 末尾、两种宿主的冷启动、手机进 Space 后的落点钩子、人已在里面时再点一次它的图标(SpaceButton / 手机底栏)。
+ *  幂等(手机上一次切换会跑两遍):已在前台什么都不做。东西正被带去这个 Space 开(redirectOpenFromOnePage)时不落 ——
+ *  调用方接着就地 openView,会把刚顶上来的那一页换走。Mini 没有标签,不落。视图还没注册(插件 Space 冷启动)也不落。
+ *  普通分离窗口(拖出去的标签,URL 带 window 但不是 Space 窗口)不落:它不属于任何 Space,活动 Space 是从共用的键读的主窗那个,
+ *  重载时会在它里面多开一份主页并盖住它自己的标签(Codex 评审)。主区一个标签都没有 = 还没摆上布局(单列壳挂载前的补定位),
+ *  不落:先开出一个 leaf,随后的冷启动还原见主区非空就跳过存档,存着的标签全丢(Codex 评审 High)。 */
+export function landOnMainPage(): void {
+  const page = getActiveSpace()?.mainPage
+  if (!page || IS_MINI_PANEL || (!IS_MAIN_WINDOW && !WINDOW_SPACE_ID) || openRedirect !== null || !getView(page.type)) return
+  const ws = useWorkspace.getState()
+  ws.refreshTabs() // 桌面冷启动时 mainTabs 要到 onReady 末尾才第一次刷,先刷一次免得「找不到 → 再开一份」
+  const tabs = useWorkspace.getState().mainTabs
+  if (!tabs.length) return
+  const { activate, open } = mainPageLanding(getActiveSpace(), tabs)
+  if (activate) ws.activateLeaf(activate)
+  else if (open) ws.openView(open.type, open.params, 'main', open.newTab ? { newTab: true } : undefined)
 }
 
 /** 当前活动 Space(找不到回退首个;无 Space 时 undefined)。 */
@@ -169,6 +190,9 @@ export function seedSpaceWindowLayout(): void {
  *  从它的默认布局起步:fromId 仍是目标 Space,布局键却是回落 Space 的。只信 fromId 就会把它归档进目标 Space 的槽。
  *  少数是真现场:上一程换 Space 时归档没落盘,布局键被下面那道闸保住了,活动 id 却已写成目标。 */
 export function adoptSpaceLayoutCold(fromId: string, toId: string): void {
+  // 手机 App(单列壳)的那一份存档另有键,同一套口径搬一遍(singleColumnStore 同名导出;桌面构建里是 no-op)。
+  // 放在最前:下面几处 return 是桌面存档自己的事,不该拦住它。
+  adoptSingleColumnLayoutCold(fromId, toId, useSpaceStore.getState().activeSpaceId)
   const cur = loadLayout()
   const owner = cur?.space || fromId
   const slot = spaceLayoutName(owner)
@@ -203,8 +227,8 @@ export const spaceLayoutsWereReset = (): boolean => layoutsResetThisBoot
 export function resetSpaceLayouts(only?: string): void {
   if (only) {
     // 只丢一个 Space 的(它的固定 View 换了边:单例复用不看位置,旧布局还原回来,新位置上那个就开不出来)。命名槽按名字丢。
-    // 当前布局要先认清是谁的:桌面的认信封自己记的归属,老存档没记才看「上次退出在哪」。单列存档不记归属,而「上次退出
-    // 在哪」那把键两种壳共用,证明不了它是谁的(在单列壳里停在 Tangu、回桌面壳后在这个 Space 退出 → 那份是 Tangu 的现场):
+    // 当前布局要先认清是谁的:两种存档都认自己记的归属,老存档没记时桌面的看「上次退出在哪」;单列的不看那把键 ——
+    // 它两种壳共用,证明不了单列存档是谁的(在单列壳里停在 Tangu、回桌面壳后在这个 Space 退出 → 那份是 Tangu 的现场):
     // 只有主区里摆着这个 Space 的固定主视图才算它的,认不出就留着 —— 留错了只是那台设备上旧排布多活一阵,删错了丢的是别人的现场。
     // ⚠️不置 layoutsResetThisBoot:那面旗说的是「全部 Space 都重置了」,置了会让无关的异步启动 Space 被当成要重建,
     // 它刚还原的现场被清掉、切走时再把默认布局存进它的槽(Codex 评审)。`only` 自己若是异步注册的 Space,调用方另行处理。

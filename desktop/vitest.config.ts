@@ -8,6 +8,7 @@ export default defineConfig({
       '@': resolve(__dirname, 'frontend/src'),
       '@amadeus-shared': resolve(__dirname, 'shared/amadeus'),
       '@amadeus': resolve(__dirname, 'frontend/src/amadeus'),
+      '@tangu/ui': resolve(__dirname, 'frontend/src'),
     },
   },
   test: {

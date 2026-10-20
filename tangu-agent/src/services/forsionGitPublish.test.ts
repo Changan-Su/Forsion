@@ -3,14 +3,17 @@
  *   - 仓库名:文件夹名整理成 Gitea 收的样子;整理不出来(中文名)→ 空串,由用户自己填
  *   - 能不能发布:装了 Forsion Git 提供方且站点发凭据 → 站点 + 预填的名字,**不取凭据**;没登录 / 站点不发凭据 → null
  *   - 发布:origin 设成 <站点>/<用户名>/<仓库名>.git,带凭据推当前分支,回仓库的网页地址
- *   - 只在一个远端都没有时做(has_remote);游离 HEAD / 还没有提交 / 名字不合规 / 子目录 / 未信任的钩子 → 各自的 code,仓库不动
+ *   - 已有远端(2026-10-14 起):新远端叫 forsion、原来的一个字不动;target=false 只推这一次、不动上游,target 缺省 = 设成上游
+ *   - 游离 HEAD / 还没有提交 / 名字不合规 / 子目录 / 未信任的钩子 → 各自的 code,仓库不动
  *   - 没推上去 → 刚加的 origin 撤掉;超时(可能已经推上去)→ origin 留着
  *   - 站上还没有账号 → forsion_git_needs_setup(带站点地址),不加远端;没登录 → forsion_git_unavailable
  *
  * 负对照(2026-10-10 各改一处实跑,对应的用例红):
  *   - forsionRepoName 不去保留后缀 / 不收紧连着的点 → 「仓库名」红
  *   - forsionPublishInfo 改成调 account()(会取凭据)→ 「能不能发布…不取凭据」红
- *   - publishToForsionGit 去掉 has_remote 判断 → 「已有远端」红(origin 被加到别人定好的仓库上 / remote add 报错)
+ *   - 新远端恒叫 origin(不经 remoteNameFor)→ 「已有远端」红(撞上已有的 origin,remote add 报错)
+ *   - target=false 时也带 --set-upstream → 「已有远端」红(上游被改到新远端)
+ *   - 失败时恒撤 remote.origin → 「已有远端…没推上去」红(撤错了那一节、新远端留着)
  *   - 去掉名字校验 → 「名字不合规」红
  *   - 去掉 requireTrust → 「未信任的钩子」红(推送那一步照样会拦、origin 也会撤掉,但凭据已经先取了)
  *   - 去掉「还没有提交」的判断 → 「名字不合规…」那条红
@@ -133,15 +136,32 @@ describe('publishToForsionGit', () => {
     expect(JSON.stringify(r)).not.toContain('tok-1');
   });
 
-  it('已有远端 → has_remote,原来的远端一个字不动,也不取凭据', async () => {
+  it('已有远端:新远端叫 forsion,原来的一个字不动;target=false 只推这一次(不动上游),缺省设成上游', async () => {
     const cwd = project('publish-has-remote');
-    git(cwd, 'remote', 'add', 'upstream', 'https://github.com/someone/else.git');
-    const brain = signedIn();
-    const err = await failure(publishToForsionGit(cwd, 'hello'));
-    expect({ code: err.code, detail: err.detail }).toEqual({ code: 'has_remote', detail: 'upstream' });
-    expect(git(cwd, 'remote', '-v')).toBe('upstream\thttps://github.com/someone/else.git (fetch)\nupstream\thttps://github.com/someone/else.git (push)');
-    expect(brain.credential).not.toHaveBeenCalled();
-    expect(pushes).toHaveLength(0);
+    git(cwd, 'remote', 'add', 'origin', 'https://github.com/someone/else.git');
+    git(cwd, 'config', 'branch.main.remote', 'origin'); git(cwd, 'config', 'branch.main.merge', 'refs/heads/main');
+    signedIn();
+    const once = await publishToForsionGit(cwd, 'hello', undefined, false);
+    expect(once).toMatchObject({ remote: 'forsion', target: 'forsion/main' });
+    expect(git(cwd, 'remote', 'get-url', 'origin')).toBe('https://github.com/someone/else.git');
+    expect(git(cwd, 'remote', 'get-url', 'forsion')).toBe(`${WEB}/dave/hello.git`);
+    expect(pushes[0].args).toEqual(['push', '--no-recurse-submodules', 'forsion', 'HEAD:refs/heads/main']);
+    expect(git(cwd, 'config', 'branch.main.remote')).toBe('origin');
+    // 再发布一次(撞名 → forsion-2),缺省 target = 以后推送到这里
+    await publishToForsionGit(cwd, 'hello2');
+    expect(pushes[1].args).toEqual(['push', '--no-recurse-submodules', '--set-upstream', 'forsion-2', 'HEAD:refs/heads/main']);
+    expect(git(cwd, 'remote')).toBe('forsion\nforsion-2\norigin');
+  });
+
+  it('已有远端、没推上去 → 只撤刚加的那一个,原来的 origin 和它的上游设置都在', async () => {
+    const cwd = project('publish-has-remote-fail');
+    git(cwd, 'remote', 'add', 'origin', 'https://github.com/someone/else.git');
+    git(cwd, 'config', 'branch.main.remote', 'origin'); git(cwd, 'config', 'branch.main.merge', 'refs/heads/main');
+    signedIn();
+    answer = () => ({ code: 1, stderr: ' ! [rejected]        main -> main (fetch first)' });
+    expect((await failure(publishToForsionGit(cwd, 'hello'))).code).toBe('git_failed');
+    expect(git(cwd, 'remote')).toBe('origin');
+    expect(git(cwd, 'config', 'branch.main.remote')).toBe('origin');
   });
 
   it('名字不合规 → invalid_repo_name(不悄悄改成别的);游离 HEAD → detached;还没有提交 → no_commits;子目录 → nested_repo —— 都不加远端', async () => {

@@ -9,15 +9,17 @@ import { amadeusAvailable } from './features/runtime'
  *    ——Dockview 的 components map 收缩时不能留活面板;
  *  - ctx.openView 经 pluginStore.viewOpener 钩子指到 workspace.openView(主区 / 侧栏 / 底部面板;移动端无底部)。
  */
-import React, { useEffect, useLayoutEffect, useRef } from 'react'
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { Puzzle, type LucideIcon } from 'lucide-react'
-import { registerView, unregisterView, useWorkspace, getActiveSpace, getView, showInMainPanel, type ViewProps } from '@lcl/engine'
+import { registerView, unregisterView, useWorkspace, getActiveSpace, getView, showInMainPanel, useViewModes, ViewHead, type ViewProps, type ViewModeOption } from '@lcl/engine'
 import { notePluginGesture, usePluginStore } from '@amadeus/plugins/pluginStore'
 import { recordDevMountError } from '@amadeus/plugins/devRecords'
 import { setDevViewBridge } from '@amadeus/plugins/devSandbox'
 import type { ViewContribution } from '@amadeus/plugins/types'
+import { isClaimingHostView } from '../../shared/corePlugins'
 import { PLUGIN_ICONS } from '@amadeus/components/icons'
-import { registerMessages, translate } from './i18n'
+import { registerMessages, translate, useI18n } from './i18n'
+import { PLUGIN_VIEW_HOST_ATTR, clearPluginViewModes, pluginViewModesOf, subscribePluginViewModes } from '@amadeus/plugins/pluginViewModes'
 
 registerMessages({
   'pluginview.mountFailed': { zh: '插件视图加载失败（见控制台）', en: 'Plugin view failed to load (see console)' },
@@ -30,6 +32,18 @@ registerMessages({
  *  `onMountError`:挂载抛错时额外通知调用方(Muse Space 主槽拿它回写给 Muse);走 ref,换了回调身份不重挂。 */
 export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; pluginId?: string; onMountError?: (e: unknown) => void }> = ({ def, pluginId, onMountError, extendView, leaf, params }) => {
   const ref = useRef<HTMLDivElement>(null)
+  // ctx.ui.setViewModes:插件报的看法 → 头行(胶囊在左、插件的按钮在右)+ 同原生视图的 ⌥⌘V / 命令面板 / 手机顶栏
+  const [hostEl, setHostEl] = useState<HTMLDivElement | null>(null)
+  const hostRef = useCallback((el: HTMLDivElement | null) => { ref.current = el; setHostEl(el) }, [])
+  // 快照取 spec(插件 set / update 都换新对象),登记那份本身换人时也跟着变
+  useSyncExternalStore(subscribePluginViewModes, () => pluginViewModesOf(hostEl)?.spec ?? null)
+  const modes = pluginViewModesOf(hostEl)
+  const { locale } = useI18n()
+  useViewModes(leaf.id, modes ? {
+    modes: modes.spec.modes.map((m): ViewModeOption => ({ value: m.id, label: locale === 'en' && m.labelEn ? m.labelEn : m.label, icon: modeIcon(m.icon) })),
+    value: modes.spec.value,
+    onChange: (v) => modes.select(v),
+  } : null)
   const onError = useRef(onMountError)
   onError.current = onMountError
   const disposeBeforePaint = useRef<(() => void) | null>(null)
@@ -74,6 +88,7 @@ export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; plugi
         extendView, surface: isMini ? 'mini' : isFloating ? 'floating' : 'main',
         getParams: () => { check(); return { ...(useWorkspace.getState().leafById(current.current.leaf.id)?.params ?? current.current.params) } },
         setParams: (patch) => { check(); current.current.leaf.setParams({ ...(useWorkspace.getState().leafById(current.current.leaf.id)?.params ?? current.current.params), ...patch }) },
+        close: () => { check(); current.current.leaf.close() },
         onParamsChanged: (listener) => { check(); listeners.current.add(listener); return () => { listeners.current.delete(listener) } },
         showInMainPanel: isMini ? () => {
           check()
@@ -110,9 +125,28 @@ export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; plugi
       el.replaceChildren()
     }
     disposeBeforePaint.current = dispose
-    return () => { dispose(); if (disposeBeforePaint.current === dispose) disposeBeforePaint.current = null }
+    return () => { dispose(); clearPluginViewModes(el); if (disposeBeforePaint.current === dispose) disposeBeforePaint.current = null }
   }, [def, pluginId, extendView])
-  return <div ref={ref} style={{ height: '100%', overflow: 'auto' }} />
+  return (
+    <>
+      {/* 有头行时挂载点要 position: relative:插件根常是 absolute inset:0(谛听),不然会盖到头行上 */}
+      {modes && <ViewHead leafId={leaf.id}><HostSlot el={modes.actions} /></ViewHead>}
+      <div ref={hostRef} {...{ [PLUGIN_VIEW_HOST_ATTR]: '' }} style={modes ? { height: 'calc(100% - 32px)', overflow: 'auto', position: 'relative' } : { height: '100%', overflow: 'auto' }} />
+    </>
+  )
+}
+
+/** 把宿主建的那块 DOM(插件往里放按钮)挂进头行右边。 */
+function HostSlot({ el }: { el: HTMLElement }): React.ReactElement {
+  const ref = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => { ref.current?.appendChild(el); return () => { el.remove() } }, [el])
+  return <div ref={ref} className="plugin-viewhead-slot" style={{ display: 'contents' }} />
+}
+
+/** 看法胶囊的图标:同标签图标的词表;认不得就不给(窄时退成只留图标要每种都有)。 */
+function modeIcon(name: string | undefined): ViewModeOption['icon'] {
+  const Glyph = name ? PLUGIN_ICONS[name] : undefined
+  return Glyph ? ({ size, className }) => <Glyph width={size} height={size} className={className} /> : undefined
 }
 
 /** 关闭工作台里该类型的全部实例,为反注册清场。
@@ -155,7 +189,21 @@ export function syncPluginViews(): void {
   }, !main ? ['main'] : hasBottom ? ['main', 'left', 'right', 'bottom'] : ['main', 'left', 'right'])
   // 关 / 换自己的视图(ctx.closeView / ctx.replaceView):两种 store 都有这两个方法,卫星窗只有一个主区,同样照办。
   usePluginStore.getState().setViewControls({
-    close: (type) => useWorkspace.getState().closeViewsOfType(type),
+    close: (type, opts) => {
+      const ws = useWorkspace.getState()
+      // collapse:整侧只剩这一个视图 → 收起该侧(视图进 stash,展开时回来),不留空占位。侧栏里还有别的视图就照常关。
+      const side = opts?.collapse ? (['left', 'right'] as const).find((s) => {
+        const tabs = s === 'left' ? ws.leftTabs : ws.rightTabs
+        return (s === 'left' ? ws.leftVisible : ws.rightVisible) && tabs.length > 0 && tabs.every((t) => t.type === type)
+      }) : undefined
+      if (!side) { ws.closeViewsOfType(type); return }
+      // 别处的同类实例(主区标签、另一侧 / 底部)照常关,只有这一侧收起(Codex 评审 #4)
+      for (const p of [...(ws.api?.panels ?? [])]) { // 先拍下名单:closeLeaf 会就地改 api.panels
+        const m = (p.params ?? {}) as { __type?: string; __loc?: string }
+        if ((m.__type || (p as { component?: string }).component) === type && m.__loc !== side) ws.closeLeaf(p.id)
+      }
+      ws.toggleSidebar(side)
+    },
     replace: (from, to, params) => useWorkspace.getState().replaceViewsOfType(from, to, params),
   })
 
@@ -204,7 +252,10 @@ export function syncPluginViews(): void {
   const registered = new Map<string, ViewContribution>()
   const sync = (): void => {
     const next = new Map<string, ViewContribution>()
-    for (const o of usePluginStore.getState().views) {
+    const st = usePluginStore.getState()
+    for (const o of st.views) {
+      // 接管宿主视图芯的那一项(主页插件的 home)只经宿主那张 `homepage` 画,不另外注册:否则能开出第二份主页
+      if (isClaimingHostView(st, o)) continue
       next.set(`plugin:${o.pluginId}:${o.item.id}`, o.item)
     }
     for (const [type] of registered) {
@@ -228,6 +279,10 @@ export function syncPluginViews(): void {
         // P2 联动声明:插件内相对 id → 补全命名空间(type 形如 plugin:<pid>:<vid>,pid 取中段;
         // 只能指本插件自己的源 —— 前缀由宿主拼,插件写不了别家的)。
         workspaceSource: def.workspaceSource ? `plugin:${type.split(':')[1]}:${def.workspaceSource}` : undefined,
+        // 主视图规则的右栏组(lcl rightRules.ts):类型写全名,同 space.json;主区实体与没注册的由引擎在用的时候滤掉
+        rightCompanions: Array.isArray(def.rightCompanions)
+          ? def.rightCompanions.filter((t): t is string => typeof t === 'string' && !!t).map((t) => ({ type: t, params: {} }))
+          : undefined,
       })
     }
   }

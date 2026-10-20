@@ -15,6 +15,9 @@ function tmp(): string {
   return dir
 }
 const sha = (s: string): string => createHash('sha256').update(s).digest('hex')
+// 清理按 birthtime 判新旧,刚建的文件 age 可能为负:Windows CI 实测 birthtime 比 Date.now() 超前最多约 10ms(两个时钟源),
+// 各平台同一毫秒内也会因 Date.now() 取整差出零点几毫秒 —— staleMs 传 0 仍会把「旧副本」当成刚建的跳过。测清理就去掉年龄门槛。
+const NO_AGE_GATE = -Infinity
 
 describe('computerHistoryWin', () => {
   it('管道名:用户名哈希前 8 位 + 内容哈希前 12 位;换用户 / 换 exe 都换管道', () => {
@@ -39,7 +42,7 @@ describe('computerHistoryWin', () => {
     expect(readFileSync(exe, 'utf8')).toBe('v2')
     await cleanupRecorderCopies(bin, exe) // 都是刚建的(可能是另一个 Forsion 正要拉起的):不动
     expect(readdirSync(bin)).toHaveLength(4)
-    await cleanupRecorderCopies(bin, exe, 0)
+    await cleanupRecorderCopies(bin, exe, NO_AGE_GATE)
     expect(readdirSync(bin).sort()).toEqual(['keep.txt', `windows-bridge-${h12}.exe`])
     // 已在 = 不动,也不留临时文件
     expect((await stageRecorderExe(src, bin)).exe).toBe(exe)
@@ -58,7 +61,7 @@ describe('computerHistoryWin', () => {
       return 13
     })
     let source: string | null = null
-    const resolve = createWindowsRecorderResolver({ binDir: bin, source: async () => source, username: () => 'alice', probe, staleMs: 0 })
+    const resolve = createWindowsRecorderResolver({ binDir: bin, source: async () => source, username: () => 'alice', probe, staleMs: NO_AGE_GATE })
     expect(await resolve()).toBeNull() // 没有源 = helper_missing
     source = src
     await expect(resolve()).rejects.toThrow('EBUSY') // 一时失败:不缓存

@@ -6,6 +6,7 @@ import path from 'node:path'
 import chokidar, { type FSWatcher } from 'chokidar'
 import type { SelfWrite, VaultManager } from './vaultManager'
 import { isOverridableBuiltinType } from '@amadeus-shared/builtinTypes'
+import { vaultRel } from './vaultRel'
 
 /** `ctx.app.watchFile` 能监听的文件类型白名单:只有文本配置类。见 handle() 里的说明。 */
 const WATCHABLE_TEXT = /\.(js|mjs|cjs|json|jsonc|ya?ml|toml|txt|csv|tsv|css|html?|xml|ini|conf)$/i
@@ -61,7 +62,7 @@ export class VaultWatcher {
     // 各自重读。不读就没有上面那笔开销;也就没法按内容滤掉自写的回声,而宿主自己不写这类文件
     // (saveVaultBytes 本来就不记自写账本),没有要压掉的回声。
     if (isOverridableBuiltinType(abs)) {
-      this.onExternalFileChange?.(path.relative(root, abs))
+      this.onExternalFileChange?.(vaultRel(path.relative(root, abs)))
       return
     }
     const isWatchable = !isMd && !isDb && !!this.onExternalFileChange && WATCHABLE_TEXT.test(abs)
@@ -81,9 +82,10 @@ export class VaultWatcher {
     }
     // Ignore the echo of our own atomic writes.
     if (this.vault.wasSelfWrite(abs, content, seen)) return
-    if (isDb) this.onExternalDbChange?.(path.relative(root, abs))
-    else if (isMd) this.onExternalPageChange(path.relative(root, abs))
-    else this.onExternalFileChange?.(path.relative(root, abs))
+    const rel = vaultRel(path.relative(root, abs))
+    if (isDb) this.onExternalDbChange?.(rel)
+    else if (isMd) this.onExternalPageChange(rel)
+    else this.onExternalFileChange?.(rel)
   }
 
   stop(): void {

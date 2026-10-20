@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Bot, ChevronRight, Loader2, X } from 'lucide-react'
+import { Bot, ChevronRight, Loader2, MessageCircleQuestion, X } from 'lucide-react'
 import type { Leaf } from '@lcl/engine/types'
 import { listActiveRuns } from '../../services/agentRunService'
 import { recordToUi, useApp } from '../../stores/appStore'
@@ -10,7 +10,9 @@ import { registerMessages, useI18n } from '../../i18n'
 import { ChatView } from '../ChatView'
 import { useDeskGrip } from './AgentDesk'
 import { subChatRows } from './subChatRows'
+import { BtwPanel } from './BtwPanel'
 import './childChat.css'
+import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 registerMessages({
   'childchat.title': { zh: '子会话', en: 'Child conversation' },
@@ -66,6 +68,8 @@ export function ChildChatPanel({ parentId }: { parentId: string }) {
   const [error, setError] = useState('')
   const [retry, setRetry] = useState(0)
   const [persistedBusy, setPersistedBusy] = useState(false)
+  // 父子会话(start_session)不带 runId:面板开着时子会话又起一轮(send_to_session)也要跟上 —— 列表报 busy 就订它在飞的那一轮(Codex 10-17 #10)
+  const listBusy = useApp((s) => !runId && !!sessionId && !!s.sessions.find((x) => x.id === sessionId)?.busy)
   useEffect(() => {
     if (!target?.slug || sessionId) return
     let disposed = false
@@ -112,26 +116,36 @@ export function ChildChatPanel({ parentId }: { parentId: string }) {
   }, [cfg, sessionId, persistedBusy])
   // Team members can activate again while their panel remains open. Subscribe to that new run too.
   useEffect(() => {
-    if (!sessionId || !runId || ready !== sessionId) return
+    if (!sessionId || !(runId || listBusy) || ready !== sessionId) return
     let disposed = false
     void listActiveRuns(targetForSession(sessionId), sessionId).then((runs) => {
       if (disposed) return
-      const run = runs.find((r) => r.id === runId && (r.status === 'running' || r.status === 'queued'))
+      const run = runs.find((r) => (!runId || r.id === runId) && (r.status === 'running' || r.status === 'queued'))
       if (!run?.assistant_message_id) return
       const mid = run.assistant_message_id
       useApp.setState((s) => {
         const messages = s.messagesBySession[sessionId] || []
         return messages.some((m) => m.id === mid) ? {} : { messagesBySession: { ...s.messagesBySession, [sessionId]: [...messages, { id: mid, role: 'assistant', content: '', status: 'streaming', timestamp: Date.now() }] } }
       })
-      useApp.getState().subscribeRun(sessionId, runId, mid)
+      useApp.getState().subscribeRun(sessionId, run.id, mid)
     }).catch(() => {})
     return () => { disposed = true }
-  }, [cfg, sessionId, runId, ready])
+  }, [cfg, sessionId, runId, ready, listBusy])
   const leaf = useMemo<Leaf>(() => ({
     id: `child-chat:${parentId}:${sessionId}`, type: 'child-chat', loc: 'right', params: {},
     setTitle: () => {}, setParams: () => {}, close: () => useChildChat.getState().close(parentId),
   }), [parentId, sessionId])
   if (!target) return null
+  // 顺便问开在同一块面板里(10-18 挂点统一):一次只开一个,开着子会话再点顺便问就换成顺便问
+  if (target.aside) {
+    return <div ref={root} className="agent-desk open child-chat-panel" data-team-desk="panel" data-aside-panel="" style={{ '--desk-w': `${fraction * 100}%` } as React.CSSProperties}>
+      <div className="agent-desk-grip" onPointerDown={grip} />
+      <div className="agent-desk-inner">
+        <div className="agent-desk-head"><MessageCircleQuestion size={15} /><strong className="agent-desk-title">{t('btw.title')}</strong><button className="icon-btn" aria-label={t('teamdesk.collapse')} onClick={leaf.close}><X size={16} /></button></div>
+        <BtwPanel key={target.aside.nonce} seed={target.aside} onClose={leaf.close} />
+      </div>
+    </div>
+  }
   return <div ref={root} className="agent-desk open child-chat-panel" data-team-desk="panel" style={{ '--desk-w': `${fraction * 100}%` } as React.CSSProperties}>
     <div className="agent-desk-grip" onPointerDown={grip} />
     <div className="agent-desk-inner">

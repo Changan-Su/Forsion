@@ -11,6 +11,7 @@ export const SYNC_IPC = {
   presence: 'amadeus:collab:presence', // main → renderer 在线名册推送
   // 按条目云同步(本地 vault 子集 ↔ 云端 <Vault名>/ 前缀)
   entryGet: 'amadeus:entry-sync:get',
+  entryMark: 'amadeus:entry-sync:mark', // 手动设 / 取消「同步库分区」标记(Forsion Extend 0.9+ 才有)
   entryEnable: 'amadeus:entry-sync:enable',
   entryDisable: 'amadeus:entry-sync:disable',
   entryClosure: 'amadeus:entry-sync:closure',

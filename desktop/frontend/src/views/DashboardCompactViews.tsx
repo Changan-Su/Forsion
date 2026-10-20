@@ -85,19 +85,19 @@ export function TodoDashboardCard({ size }: { size: DashboardCardSize }) {
   )
 }
 
-interface AgendaItem { key: string; title: string; start: Date; color: string; source: string }
+export interface AgendaItem { key: string; title: string; start: Date; end: number; allDay: boolean; color: string; source: string }
 
-export function CalendarDashboardCard({ size }: { size: DashboardCardSize }) {
-  const { t } = useI18n()
+/** 未来 31 天(含正在进行的)日程,按开始时间排。主页的日历近况卡也读它 —— 那边不开 Agent 日程轮询、只用已经拉到的,
+ *  所以 useAgentSchedulePolling 留在下面的卡片里,不放进这里。 */
+export function useAgendaItems(): AgendaItem[] {
   const vault = usePageStore((s) => s.vaultRoot) ?? ''
   const members = useCalendarMembers()
   const agent = useAgentCalDbs()
-  useAgentSchedulePolling()
   const md = useMdCalDbs()
   const other = useOtherVaultCalDbs()
   const ics = useIcsCalDbs()
   const byVault = useCalendarConfig((s) => s.byVault)
-  const items = useMemo(() => {
+  return useMemo(() => {
     const sources = [
       ...members.map((member) => ({ db: member.db, dateCol: member.dateCol })),
       ...[...agent, ...other, ...ics, ...md]
@@ -117,11 +117,17 @@ export function CalendarDashboardCard({ size }: { size: DashboardCardSize }) {
         const eventEnd = parsed.end ? toLocalDate(parsed.end).getTime() : start.getTime() + 86400_000
         if (eventEnd < now || start.getTime() > end) continue
         // title 留空串,占位文案在渲染期用 t() 补 —— 写进 memo 会被 deps 冻住,切语言不跟。
-        out.push({ key: `${db.path}:${row.rowId}`, title: row.name, start, source: db.name, color: colorForDb(vault, byVault, db.path, index) })
+        out.push({ key: `${db.path}:${row.rowId}`, title: row.name, start, end: eventEnd, allDay: parsed.allDay, source: db.name, color: colorForDb(vault, byVault, db.path, index) })
       }
     })
     return out.sort((a, b) => a.start.getTime() - b.start.getTime())
   }, [members, agent, other, ics, md, vault, byVault])
+}
+
+export function CalendarDashboardCard({ size }: { size: DashboardCardSize }) {
+  const { t } = useI18n()
+  useAgentSchedulePolling()
+  const items = useAgendaItems()
   const shown = items.slice(0, limitFor(size, 4))
   return (
     <div className="dash-compact dash-agenda">

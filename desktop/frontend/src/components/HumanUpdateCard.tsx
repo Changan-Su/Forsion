@@ -3,8 +3,9 @@ import { BookOpen, ChevronRight, Undo2 } from 'lucide-react'
 import { registerMessages, useI18n } from '../i18n'
 import { useApp } from '../stores/appStore'
 import { showDetails } from '../stores/detailsSubject'
+import { openHumanProfile } from '../views/agentProfileNav'
 import { getHumanDocument, undoHumanChange, HUMAN_CHANGED_EVENT, type HumanChange, type HumanDocument, type HumanTarget } from '../services/humanCollaboration'
-import type { TanguDesktopConfig } from '../types'
+import type { TanguDesktopConfig } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { targetForSession, type EngineTarget } from '../services/engine/targets'
 import './humanMessages'
 import './humanCollaboration.css'
@@ -49,11 +50,12 @@ export function HumanUpdateCard({ changes, cfg, sessionId, agentName }: { change
 function HumanUpdate({ change, engine, cfg, sessionId }: { change: HumanChange; engine: EngineTarget; cfg: TanguDesktopConfig; sessionId: string }) {
   const { t } = useI18n()
   const scope = change.scope
-  const name = useApp(s => scope.kind === 'agent' ? s.agentDefs.find(a => a.slug === scope.slug)?.name || scope.slug : scope.cwd.split(/[\\/]/).filter(Boolean).at(-1))
+  const name = useApp(s => scope.kind === 'agent' ? s.agentDefs.find(a => a.slug === scope.slug)?.name || scope.slug : scope.kind === 'project' ? scope.cwd.split(/[\\/]/).filter(Boolean).at(-1) : '')
   const projectPath = useApp(s => [...s.sessions, ...s.archivedSessions].find(x => x.id === sessionId)?.project_path)
   const [doc, setDoc] = useState<HumanDocument | null>(null), [error, setError] = useState(''), [busy, setBusy] = useState(false)
-  const target: HumanTarget = change.scope.kind === 'agent' ? change.scope : { kind: 'project', sessionId }
-  const validScope = (d: HumanDocument) => d.scope.kind === scope.kind && (d.scope.kind === 'agent' && scope.kind === 'agent' ? d.scope.slug === scope.slug : d.scope.kind === 'project' && scope.kind === 'project' && d.scope.cwd === scope.cwd)
+  const target: HumanTarget = change.scope.kind === 'project' ? { kind: 'project', sessionId } : change.scope
+  const validScope = (d: HumanDocument) => d.scope.kind === scope.kind && (d.scope.kind === 'agent' && scope.kind === 'agent' ? d.scope.slug === scope.slug
+    : d.scope.kind === 'human' && scope.kind === 'human' ? d.scope.file === scope.file : d.scope.kind === 'project' && scope.kind === 'project' && d.scope.cwd === scope.cwd)
   useEffect(() => {
     let alive = true
     const refresh = () => { void getHumanDocument(engine, target).then(d => { if (alive && validScope(d)) setDoc(d) }).catch(() => {}) }
@@ -62,7 +64,12 @@ function HumanUpdate({ change, engine, cfg, sessionId }: { change: HumanChange; 
   }, [engine.key, engine.base, cfg.token, change.id, sessionId])
   const undone = !!doc?.history.some(h => h.undoOf === change.id)
   const canUndo = !!doc?.history.some(h => h.id === change.id && h.canUndo)
-  const open = (edit = false) => showDetails({ ...(change.scope.kind === 'agent' ? { kind: 'agent' as const, slug: change.scope.slug } : { kind: 'project' as const, path: projectPath || change.scope.cwd }), human: { at: Date.now(), edit, changeId: change.id } })
+  // 共识那份不属于哪个 Agent / 项目:去 Agents Space 的「我」资料页(主区),另外两份照旧开右栏详情
+  const open = (edit = false) => {
+    const human = { at: Date.now(), edit, changeId: change.id }
+    if (change.scope.kind === 'human') openHumanProfile(human)
+    else showDetails({ ...(change.scope.kind === 'agent' ? { kind: 'agent' as const, slug: change.scope.slug } : { kind: 'project' as const, path: projectPath || change.scope.cwd }), human })
+  }
   const undo = async () => {
     if (busy) return
     setBusy(true); setError('')
@@ -71,7 +78,7 @@ function HumanUpdate({ change, engine, cfg, sessionId }: { change: HumanChange; 
     finally { setBusy(false) }
   }
   return <article data-human-update={change.id}>
-    <div className="human-scope">{name} · {t(change.scope.kind === 'agent' ? 'human.agent' : 'human.project')} · <span className="human-applied">{t(undone ? 'human.undone' : 'human.applied')}</span></div>
+    <div className="human-scope">{name ? `${name} · ` : ''}{t(change.scope.kind === 'agent' ? 'human.agent' : change.scope.kind === 'human' ? 'human.shared' : 'human.project')} · <span className="human-applied">{t(undone ? 'human.undone' : 'human.applied')}</span></div>
     <p className="human-say">{change.summary}</p>
     {change.evidence && <p className="human-why">{t('human.ask.why', { text: change.evidence })}</p>}
     <div className="human-actions"><button type="button" className="profile-text-action" onClick={() => open()}>{t('human.view')}</button><button type="button" className="profile-text-action" onClick={() => open(true)}>{t('human.revise')}</button>

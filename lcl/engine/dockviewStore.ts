@@ -21,6 +21,8 @@ import { computeSideWidth, computeBottomHeight, computeTransientSideWidth } from
 import { shouldRecordSideWidth } from './sideCapture'
 import { locOf, type DropTarget } from './dropModel'
 import { isLastPinned, isPinned, missingPinned, type PanelRef, type PinnedViews } from './pinnedViews'
+import { arrangeRight, planRight, rightGroupFor, RULE_PARAM, RULE_TAG, type RightRef } from './rightRules'
+import { IS_MAIN_WINDOW, IS_MINI_PANEL, WINDOW_SPACE_ID } from './uiMode'
 import { mainOpensBeside, noteBesideTarget } from './openBeside'
 import { useNav } from './navStore'
 import { ribbonActions } from './ribbonRegistry'
@@ -34,6 +36,8 @@ import {
 interface PanelMeta {
   __loc?: ViewLocation
   __type?: string
+  /** 右栏主视图规则开出来的面板(rightRules.RULE_TAG);视图拿到的 params 里没有它。 */
+  __by?: string
 }
 
 /** 恢复布局后也必须扫描现有 id；模块级 seq 会在重启后回零并撞上 chat#1。 */
@@ -58,12 +62,27 @@ function retirePlaceholder(api: DockviewApi, loc: ViewLocation): void {
 /** 侧栏开合补间动画期间,pinSides 跳过该侧 —— 让 tween 独占其宽度,免被钉宽 setSize 打断。
  *  bottom 同理(它的补间量的是高),另外还挡住 captureSideWidths 记下补间中间高。 */
 const sidebarAnimating: Record<DockSide, boolean> = { left: false, right: false, bottom: false }
+/** 每侧当前那一轮开合挂着的「对侧锁」释放函数。后一轮接管时先放掉前一轮的锁、再锁自己的;前一轮还排着的
+ *  setTimeout(release) 晚到时必须什么都不做 —— 锁的是同一个组的约束,它一放就拆掉了后一轮刚上的锁,补间中途对侧被挤,
+ *  captureSideWidths 再把挤出来的宽当成用户拖的记下,之后每次开合都按它钉、越漂越远(10-20 用户实报「开关左栏主区一直向右偏」)。 */
 const toggleReleases: Partial<Record<DockSide, () => void>> = {}
 const extensions: Partial<Record<DockSide, { dismiss(reason?: 'dismiss' | 'layout'): void; dispose(instant?: boolean): void | Promise<void>; id: string; previousId?: string; defaultWidth?: number }>> = {}
 const dismissExtensions = (): void => {
   for (const side of ['left', 'right', 'bottom'] as const) { extensions[side]?.dismiss('layout'); extensions[side]?.dispose(true) } // layout is being rebuilt: no tween
 }
 
+
+/** content-visibility:auto 正跳过内容的元素(长会话里离视口远的消息)。读这种元素里任何后代的 scrollTop,都会逼浏览器单独给那棵子树
+ *  补算样式和布局:3000 块的长页展开左栏一帧 5 秒(10-16 实测)。浏览器开始 / 停止跳过时发 contentvisibilityautostatechange,在这里记账,
+ *  遍历时不往里找,零额外开销。ponytail: 代价是屏外块内部的横向滚动(宽表格、长代码行)重挂后归零;要留就让这类容器自己登记。 */
+const cvSkipped = new WeakSet<Element>()
+if (typeof document !== 'undefined') {
+  document.addEventListener('contentvisibilityautostatechange', (e) => {
+    const el = e.target as Element
+    if ((e as Event & { skipped: boolean }).skipped) cvSkipped.add(el)
+    else cvSkipped.delete(el)
+  }, true)
+}
 
 /** 布局结构一变(加/减一个组),Dockview 会把幸存的那一支**摘下来重新挂**到新的父节点上 ——
  *  DOM 节点、React 树都不变,但**元素重新入 DOM 会让其中所有 CSS 动画从头重播**。于是各视图自己的
@@ -87,10 +106,13 @@ function preserveAcrossRestructure(): () => void {
   if (!root) return () => { /* 无 DOM(测试) */ }
   // 只记真的滚过的容器(绝大多数元素 scrollTop 为 0,不必留档)。toggle 才走这条,遍历成本可接受。
   const scrolls: Array<{ el: Element; top: number; left: number }> = []
-  for (const el of Array.from(root.querySelectorAll('*'))) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, { acceptNode: (node) => {
+    const el = node as Element
     const top = el.scrollTop, left = el.scrollLeft
     if (top || left) scrolls.push({ el, top, left })
-  }
+    return cvSkipped.has(el) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT
+  } })
+  while (walker.nextNode()) { /* acceptNode 里记 */ }
   const restoreScroll = (): void => {
     for (const s of scrolls) {
       // 节点在重挂后依然是同一个对象(实测),故直接写回即可;内容还没铺好时写不进去,靠下面再补一帧。
@@ -111,6 +133,11 @@ function preserveAcrossRestructure(): () => void {
  *  收尾回调必须先比代号,不是自己那一轮的就整段放弃。否则旧那轮的 finish() 会去 close 新那轮刚开出来的
  *  panel:实测抛 dockview 的 'invalid operation'(未捕获),还会把 pinSides / 释放约束 / 存布局一起带跑偏。 */
 const toggleGen: Record<DockSide, number> = { left: 0, right: 0, bottom: 0 }
+
+/** toggleSidebar 展开时已经在动手之前拍过滚动快照(restoreOpen):它循环里调的 openView 再拍一遍是同一份,
+ *  3.4 万元素的长笔记里白走一遍 ~85ms(10-16 实测;展开一次本来走三遍)。alignRegions 那一遍不省:它在新视图挂上之后拍,
+ *  新视图挂载时同步还原的滚动位置只有它看得见。 */
+let snapshotTaken = false
 
 /** Dockview 组的默认最小尺寸(dockviewGroupPanel.ts 的 MINIMUM_DOCKVIEW_GROUP_PANEL_WIDTH/HEIGHT)。
  *  展开补间必须先把它放开到 0,否则起步的 setSize(1) 被钳在这里 —— 见 toggleSidebar 展开分支。 */
@@ -288,8 +315,9 @@ export function retitleDefaultPanels(api: DockviewApi | null = useWorkspace.getS
 /** 把一个 Dockview panel 包装为引擎 Leaf。 */
 function makeLeaf(panel: IDockviewPanel): Leaf {
   const raw = (panel.params ?? {}) as Record<string, unknown>
-  const { __loc, __type, ...userParams } = raw as PanelMeta & Record<string, unknown>
+  const { __loc, __type, __by, ...userParams } = raw as PanelMeta & Record<string, unknown>
   void __type
+  void __by
   return {
     id: panel.id,
     type: panelType(panel),
@@ -419,6 +447,29 @@ export function activeMainPanel(api: DockviewApi): IDockviewPanel | null {
   return fronts.find((p) => groupOf(p)?.id === lastMainGroupId) ?? fronts[0] ?? mains[0] ?? null
 }
 
+/** 右栏主视图规则(rightRules.ts)最近一次对账到的组。null = 换了一整份布局、还没对过(那一次不抢前台)。
+ *  随布局信封存盘(sidebars.right.rule),还原时同组就不再对账。 */
+let rightKey: string | null = null
+let rightQueued = false
+/** Mini 只有一个内容面;拖出去的普通分离窗口不属于任何 Space。主窗与 Space 窗口才吃规则。 */
+const rightRulesOn = (): boolean => !IS_MINI_PANEL && (IS_MAIN_WINDOW || !!WINDOW_SPACE_ID)
+/** 能进右栏组的视图:已注册,且不是主区实体(编辑器 / PDF / 主区对话)。 */
+const usableRight = (type: string): boolean => { const def = getView(type); return !!def && def.kind !== 'entity' }
+function rightGroupNow(api: DockviewApi, defaults: readonly Stashed[]): ReturnType<typeof rightGroupFor> {
+  const main = activeMainPanel(api)
+  const type = main ? panelType(main) : null
+  return rightGroupFor(type, type ? getView(type)?.rightCompanions : undefined, defaults, usableRight)
+}
+/** refreshTabs 里发现组变了:推一拍再对账 —— 它本身就在开 / 关 / 激活的半路上,当场再开关面板会重入。 */
+function queueRightRules(): void {
+  if (rightQueued) return
+  rightQueued = true
+  queueMicrotask(() => {
+    rightQueued = false
+    try { useWorkspace.getState().applyRightRules() } catch (e) { console.error('[lcl] right panel rules', e) }
+  })
+}
+
 /** New shell groups start at the outer edge, then alignRegions places them around the entire
  * Main subtree. Referencing a Main leaf here would cut a sidebar into that one split. */
 function positionFor(api: DockviewApi, loc: ViewLocation): Record<string, unknown> | undefined {
@@ -507,7 +558,7 @@ function envelope(api: DockviewApi, state: Pick<WorkspaceState, 'leftVisible' | 
     sidebars: {
       // 真实 panel 是唯一真源；状态事件可能落后于 Dockview 的异步布局沉降。
       left: { visible: panelsAt(api, 'left').some((p) => panelType(p) !== '__extend'), stash: state.stash.left },
-      right: { visible: panelsAt(api, 'right').some((p) => panelType(p) !== '__extend'), stash: state.stash.right },
+      right: { visible: panelsAt(api, 'right').some((p) => panelType(p) !== '__extend'), stash: state.stash.right, ...(rightKey !== null ? { rule: rightKey } : {}) },
       bottom: { visible: panelsAt(api, 'bottom').some((p) => panelType(p) !== '__extend'), stash: state.stash.bottom },
     },
   }
@@ -624,6 +675,8 @@ interface WorkspaceState {
   isPinnedLeaf(id: string): boolean
   /** 当前 Space 的固定 View 缺了就补(切 Space 还原出已存布局之后调)。收起的侧栏只补进暂存,不替用户展开。 */
   ensurePinned(): void
+  /** 右栏主视图规则对账一次(rightRules.ts):主区前台视图的组变了才动。refreshTabs 发现组变了会推一拍自己调,外面一般不用调。 */
+  applyRightRules(): void
   setApi(api: DockviewApi | null): void
   setDefaultBuilder(fn: () => void): void
   setSidebarDefaults(defaults: SidebarDefaults): void
@@ -830,6 +883,71 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     get().refreshTabs()
     scheduleWorkspaceSave()
   },
+  applyRightRules: () => {
+    const api = get().api
+    if (!api || !rightRulesOn()) return
+    const defaults = get().sidebarDefaults.right
+    const g = rightGroupNow(api, defaults)
+    if (!g || g.key === rightKey) return
+    const changed = rightKey !== null
+    rightKey = g.key
+    const pinned = get().pinned.right ?? []
+    // 单例开在了别的区(用户把侧栏对话拖进主区):不在右栏再开一份。非单例(工作区:左栏会话、右栏文件)两边各一份是常态,不算。
+    const elsewhere = new Set(api.panels.filter((p) => locOfPanel(p) !== 'right').map(panelType).filter((t) => getView(t)?.singleton))
+    const live = panelsAt(api, 'right').filter((p) => !['sidebar-empty', '__extend'].includes(panelType(p)))
+    const frontOf = (p: IDockviewPanel): boolean => (p as { group?: { activePanel?: { id?: string } } }).group?.activePanel?.id === p.id
+    if (!get().rightVisible) {
+      // 收着:只改暂存与「展开后的前台」,不替用户把右栏弹出来。暂存空 = 展开时回落缺省,按缺省对账。
+      // ⚠️ 按 rightVisible 判,不按「还剩没剩视图」:展开着、只剩「侧栏是空的」占位时也要开新组(10-20 台架负对照抓到)。
+      const { stash, stashActive } = get()
+      // 暂存里没注册的(插件停用着)照样留:规则不认它就不关它,丢了参数就回不来了(Codex 10-20)。开出来时宿主会再滤。
+      const list = stash.right.length ? stash.right : defaults.filter((v) => !!getView(v.type))
+      const refs: RightRef[] = list.map((v, i) => ({ id: String(i), type: v.type, tagged: v.params?.[RULE_PARAM] === RULE_TAG, active: v.type === stashActive.right }))
+      const plan = planRight({ group: g.group, pinned, spaceDefaults: defaults, current: refs, changed, elsewhere })
+      const kept = list.filter((_, i) => !plan.close.includes(String(i)))
+      const added = new Map(plan.open.map((o) => [o.type, { type: o.type, params: { ...o.params, [RULE_PARAM]: RULE_TAG } }]))
+      const next = arrangeRight(g.group, kept, (t) => added.get(t))
+      const front = plan.activate ?? (next.some((v) => v.type === stashActive.right) ? stashActive.right : null)
+      if (next.map((v) => v.type).join('|') === list.map((v) => v.type).join('|') && front === stashActive.right) { scheduleWorkspaceSave(); return } // 组记账要落盘
+      set({ stash: { ...stash, right: next }, stashActive: { ...stashActive, right: front } })
+      get().refreshTabs()
+      scheduleWorkspaceSave()
+      return
+    }
+    const refs: RightRef[] = live.map((p) => ({ id: p.id, type: panelType(p), tagged: ((p.params ?? {}) as PanelMeta).__by === RULE_TAG, active: frontOf(p) }))
+    const plan = planRight({ group: g.group, pinned, spaceDefaults: defaults, current: refs, changed, elsewhere })
+    if (!plan.open.length && !plan.close.length && !plan.activate) { scheduleWorkspaceSave(); return } // 组记账要落盘
+    const giveBack = api.activePanel
+    // 先开后关:关到一个不剩会先补占位、删组,网格收支会把主区整列重挂(见 preserveAcrossRestructure)。
+    for (const o of plan.open) {
+      const def = getView(o.type)!
+      const here = panelsAt(api, 'right')
+      const after = o.after ? here.find((p) => panelType(p) === o.after) : undefined
+      const ref = after ?? here[0]
+      const index = after ? ((after.group as { panels?: IDockviewPanel[] }).panels?.indexOf(after) ?? -1) + 1 : 0
+      api.addPanel({
+        id: def.singleton && !api.getPanel(o.type) ? o.type : nextId(api, o.type),
+        component: o.type,
+        title: label(def.displayName),
+        params: { ...o.params, __loc: 'right', __type: o.type, [RULE_PARAM]: RULE_TAG },
+        position: (ref ? { referencePanel: ref.id, index } : positionFor(api, 'right')) as never, // 展开着却一块都没有(连占位都没补上)
+        inactive: true,
+      })
+    }
+    retirePlaceholder(api, 'right')
+    for (const id of plan.close) get().closeLeaf(id)
+    const target = plan.activate ? panelsAt(api, 'right').find((p) => panelType(p) === plan.activate) : undefined
+    if (target && !frontOf(target)) target.api.setActive()
+    // 只换右栏的前台,活动 panel 还给原主人(人刚在主区换了视图,焦点不该被拽到侧栏)。同 replaceViewsOfType 的还法。
+    // 不只在上面激活过才还:关掉右栏的前台时 Dockview 自己会激活剩下那个(Codex 10-20)。焦点本来就在右栏的不还。
+    const back = giveBack ? api.getPanel(giveBack.id) : undefined
+    if (back && locOfPanel(back) !== 'right' && api.activePanel?.id !== back.id) {
+      if ((back.group as { activePanel?: IDockviewPanel } | undefined)?.activePanel === back) back.group.api.setActive()
+      else back.api.setActive()
+    }
+    get().refreshTabs()
+    scheduleWorkspaceSave()
+  },
   refreshTabs: () => {
     const api = get().api
     if (!api) { if (get().mainTabs.length) set({ mainTabs: [] }); return }
@@ -887,6 +1005,9 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const right = sideTabsFor('right')
     if (!sideEq(get().leftTabs, left)) set({ leftTabs: left })
     if (!sideEq(get().rightTabs, right)) set({ rightTabs: right })
+    // 主区前台视图的组变了 → 右栏按主视图规则对账(推一拍,见 queueRightRules)
+    const rg = rightRulesOn() ? rightGroupNow(api, get().sidebarDefaults.right) : null
+    if (rg && rg.key !== rightKey) queueRightRules()
   },
   activateLeaf: (id) => {
     const panel = get().api?.getPanel(id)
@@ -1130,6 +1251,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     restoredOwner = undefined // 默认布局是按当前画像的 Space 建的,不再是启动时还原出来的那份
     useNav.getState().reset() // 布局重建,旧 leaf id 全失效
     lastMainGroupId = null // 组 id 同样会被新布局复用
+    rightKey = null // 新布局还没按主视图规则对过账(默认布局本来就是缺省组,通常是空操作)
     set({ stash: { left: [], right: [], bottom: [] }, stashActive: { left: null, right: null, bottom: null }, leftVisible: true, rightVisible: true, bottomVisible: false, focusedChatLeafId: null })
     get().defaultBuilder?.() // 重建默认;openView 的 firstOfSide → sizeSide 按黄金分割钉宽
     scheduleWorkspaceSave()
@@ -1222,7 +1344,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const title = def ? label(def.displayName) : type
     const firstOfSide = loc !== 'main' && panelsAt(api, loc).length === 0
     const before = firstOfSide ? captureRegionTree(api) : null
-    const restore = firstOfSide ? preserveAcrossRestructure() : () => {}
+    const restore = firstOfSide && !snapshotTaken ? preserveAcrossRestructure() : () => {}
     const panel = api.addPanel({
       id,
       // 主区 panel 一律挂 __frame 宿主(就地切视图靠 updateParameters 换 __type);侧栏保持 per-type 组件。
@@ -1340,7 +1462,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       // 只锁 close 那一下的话,对侧仍会在这 200ms 里一路鼓起来、收尾再被 pinSides 弹回 = 抽闪。
       toggleReleases[side]?.()
       const unlock = lockNeighbour()
-      const release = (): void => { unlock(); if (toggleReleases[side] === release) delete toggleReleases[side] }
+      const release = (): void => { if (toggleReleases[side] !== release) return; delete toggleReleases[side]; unlock() } // 只放一次,见 toggleReleases
       toggleReleases[side] = release
       const finish = (): void => {
         if (stale()) return // 已被后一次点击接管:那一轮会自己收尾,这里再动手就是去关别人的 panel
@@ -1383,10 +1505,11 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       // 都是按比例摊给所有组的 → 对侧先被顶宽,补间收尾 pinSides 再把它弹回,就是「左栏抽闪一下」。
       toggleReleases[side]?.()
       const unlock = lockNeighbour()
-      const release = (): void => { unlock(); if (toggleReleases[side] === release) delete toggleReleases[side] }
+      const release = (): void => { if (toggleReleases[side] !== release) return; delete toggleReleases[side]; unlock() } // 只放一次,见 toggleReleases
       toggleReleases[side] = release
       const restoreOpen = preserveAcrossRestructure() // 同收起:新增组一样会让主区被摘下重挂(底部有藏着的组时不新增)
-      stashed.forEach((v) => get().openView(v.type, v.params, side))
+      snapshotTaken = true
+      try { stashed.forEach((v) => get().openView(v.type, v.params, side)) } finally { snapshotTaken = false }
       restoreOpen()
       // 还原折叠前的活动 tab(openView 会把最后打开的设为活动,故此处显式拉回用户上次所在的视图)。
       // 无记忆(从没展开过 / 默认折叠的 Space 首次展开)→ 取**首项**:openView 顺序落到最后一个纯属副作用,
@@ -1453,6 +1576,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       // 挪到前面的话,途中记下的条目会留在新布局复用的 leaf id(如 launcher#1)上。
       useNav.getState().reset()
       lastMainGroupId = null // 组 id 也会被新布局复用;下面的 refreshTabs 按新布局的全局 activePanel 重记
+      rightKey = blob.sidebars.right.rule ?? null // 存它时对到的组:同组就不再对账(用户关掉的缺省视图不补回来)
       set({
         leftVisible: blob.sidebars.left.visible,
         rightVisible: blob.sidebars.right.visible,
@@ -1544,6 +1668,9 @@ let bootRestored: boolean | null = null
 /** 启动还原落空了:此刻屏上是「当时的活动 Space」的默认布局,不是布局键里原来那份现场。
  *  异步就位的 Space(插件比 Dockview 就绪得晚)据此补还原自己的现场,而不是只换个活动 id。 */
 export const bootLayoutFellThrough = (): boolean => bootRestored === false
+/** 单列 store 的冷启动交接(singleColumnStore 同名导出,手机 App 经 workspaceStore 换到那一份)。桌面的交接就是
+ *  spaceRegistry.adoptSpaceLayoutCold 自己那段(layoutPersist),这里什么都不做。 */
+export function adoptSingleColumnLayoutCold(_fromId: string, _toId: string, _activeId: string): void { /* 桌面:no-op */ }
 
 export function tryRestoreLayout(api: DockviewApi): boolean {
   bootRestored = restoreLayout(api)
@@ -1576,6 +1703,7 @@ function restoreLayout(api: DockviewApi): boolean {
   const known = (v: PersistedPanel): boolean => !!getView(v.type) // 收起态 stash 也剔除未注册视图,防展开时重开死视图
   try {
     selfTitled.clear()
+    rightKey = layout.sidebars.right.rule ?? null // 同 applyLayout
     api.fromJSON(layout.dockview as never)
     alignRegions(api)
     retitleDefaultPanels(api) // 恢复发生在 onReady 里,store 里的 api 可能还没挂上 → 直接传
@@ -1636,7 +1764,7 @@ export const presentDockedExtension: ExtendViewPresenter = (options, dismiss) =>
   const holdNeighbour = (): (() => void) => {
     toggleReleases[side]?.()
     const unlock = vert ? lockSides(api, ['left', 'right'], true) : lockOtherSide(api, side)
-    const release = (): void => { unlock(); if (toggleReleases[side] === release) delete toggleReleases[side] }
+    const release = (): void => { if (toggleReleases[side] !== release) return; delete toggleReleases[side]; unlock() } // 只放一次,见 toggleReleases
     toggleReleases[side] = release
     return release
   }

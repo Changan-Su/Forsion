@@ -59,4 +59,4 @@
 .art-card-main:hover:not(:disabled), .art-card-main:focus-visible { background: var(--overlay-light); }
 .art-card-main:hover:not(:disabled) .art-card-name { color: var(--accent-ink); }
 .art-card-main:hover:not(:disabled) .art-card-go, .art-card-main:focus-visible .art-card-go { opacity: 1; }
-.art-card-main:focus-visible { outline: var(--focus-ring, 1px) solid var(--accent-ink); outline-offset: 0; }
+.art-card-main:focus-visible { outline: var(--focus-ring, 1px) solid var(--signal-line); outline-offset: 0; }

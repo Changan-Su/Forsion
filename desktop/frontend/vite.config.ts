@@ -1,4 +1,5 @@
 import { startupAppearanceHtml } from '../frontend/startupAppearancePlugin'
+import { astryxHasFix } from '../frontend/astryxHasPlugin'
 /**
  * 浏览器内调试用的独立 vite 配置(`npx vite frontend`):渲染层不依赖 Electron,
  * window.tangu 缺省时配置走内存/localStorage,便于无显示器环境冒烟与 UI 开发。
@@ -9,7 +10,7 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
 export default defineConfig({
-  plugins: [startupAppearanceHtml(), react()],
+  plugins: [startupAppearanceHtml(), astryxHasFix(), react()],
   // 依赖预构建缓存放本检出自己的目录,不用 vite 缺省的 node_modules/.vite:worktree 的 node_modules 是指向
   // 主检出的软链,缺省目录等于所有检出共用;配置哈希(含 root)不同的 vite 一启动就把它整份删掉重建,那边正开着
   // 的 dev 之后懒加载的依赖 504(Outdated Optimize Dep)或加载到第二份 React,只能重启。electron-vite dev 的
@@ -28,6 +29,7 @@ export default defineConfig({
       '@': resolve(__dirname, 'src'),
       '@amadeus': resolve(__dirname, 'src/amadeus'),
       '@amadeus-shared': resolve(__dirname, '../shared/amadeus'),
+      '@tangu/ui': resolve(__dirname, 'src'),
     },
   },
   server: { port: 5173, strictPort: true, fs: { allow: [resolve(__dirname, '..'), resolve(__dirname, '../../lcl')] } },

@@ -16,7 +16,7 @@
 button.ob-progress-item { width: 100%; border: 0; background: transparent; font: inherit; text-align: left; cursor: pointer; }
 button.ob-progress-item:hover:not(:disabled) { color: var(--text); }
 button.ob-progress-item:disabled { cursor: default; }
-button.ob-progress-item:focus-visible { outline: var(--focus-ring) solid var(--accent-ink); outline-offset: -2px; }
+button.ob-progress-item:focus-visible { outline: var(--focus-ring) solid var(--signal-line); outline-offset: -2px; }
 .ob-progress-item.active { color: var(--accent-ink); }
 /* 当前项的底是单独一块(framer-motion 的 layoutId),换步时从上一项滑过来。 */
 .ob-progress-pill { position: absolute; inset: 0; border-radius: inherit; background: var(--accent-light); }
@@ -34,7 +34,7 @@ button.ob-progress-item:focus-visible { outline: var(--focus-ring) solid var(--a
 /* 「跳过引导」:右上角的小字,不和右下角的主按钮抢。 */
 .ob-skip { flex: none; margin: -4px -6px 0 0; padding: 4px 6px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-faint); font: inherit; font-size: var(--ui-font-meta, 12px); cursor: pointer; }
 .ob-skip:hover:not(:disabled) { color: var(--text); }
-.ob-skip:focus-visible { outline: var(--focus-ring) solid var(--accent-ink); outline-offset: 1px; }
+.ob-skip:focus-visible { outline: var(--focus-ring) solid var(--signal-line); outline-offset: 1px; }
 .ob-skip:disabled { cursor: default; opacity: .5; }
 /* 横向不滚:入场时内容从侧边滑进来,不能闪出一条横向滚动条。 */
 .ob-flow .ob-content { min-width: 0; min-height: 0; overflow: hidden auto; }
@@ -160,7 +160,7 @@ button.ob-progress-item:focus-visible { outline: var(--focus-ring) solid var(--a
 .ob-flow .ob-history-note { margin: 0; padding: 10px 16px 14px; border-top: var(--border-width) solid var(--border); font-size: var(--ui-font-meta, 12px); }
 .ob-history-about .ch-about-row { grid-template-columns: 5em minmax(0, 1fr); padding: 11px 16px; }
 .ob-history-more { display: flex; align-items: center; gap: 4px; width: 100%; padding: 10px 16px 12px; border: 0; border-top: var(--border-width) solid var(--border); border-radius: 0 0 var(--radius-lg) var(--radius-lg); background: transparent; color: var(--accent-ink); font: inherit; font-size: var(--ui-font-meta, 12px); text-align: left; cursor: pointer; }
-.ob-history-more:focus-visible { outline: var(--focus-ring) solid var(--accent-ink); outline-offset: -2px; }
+.ob-history-more:focus-visible { outline: var(--focus-ring) solid var(--signal-line); outline-offset: -2px; }
 .ob-history-more:hover > svg { translate: 2px 0; }
 .ob-history-state { display: flex; align-items: center; gap: 8px; }
 .ob-history-dialog-body { min-height: 0; overflow: auto; }
@@ -182,7 +182,7 @@ button.ob-progress-item:focus-visible { outline: var(--focus-ring) solid var(--a
 .ob-summary { list-style: none; margin: 0; padding: 0; }
 .ob-summary button { display: grid; grid-template-columns: 6.5em minmax(0, 1fr) auto; gap: 14px; align-items: baseline; width: calc(100% + 20px); margin-inline: -10px; padding: 8px 10px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
 .ob-summary button:hover:not(:disabled), .ob-summary button:focus-visible { background: var(--overlay-subtle); }
-.ob-summary button:focus-visible { outline: var(--focus-ring) solid var(--accent-ink); outline-offset: -2px; }
+.ob-summary button:focus-visible { outline: var(--focus-ring) solid var(--signal-line); outline-offset: -2px; }
 .ob-summary button > span { color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
 .ob-summary b { font-weight: 500; overflow-wrap: anywhere; }
 /* 「修改 ›」一直淡淡地在:只在悬停时才出现的话,这几行看着就是只读的结果(10-14 体验走查实测没人知道能点)。 */
@@ -377,3 +377,10 @@ button.ob-progress-item:focus-visible { outline: var(--focus-ring) solid var(--a
   .ob-done-mark::after { content: ''; position: absolute; inset: 0; border-radius: inherit; animation: ob-ring .9s ease-out .55s both; }
   .ob-done-mark .ob-draw path, .ob-done-mark .ob-draw polyline { animation-duration: .45s; animation-delay: .5s; }
 }
+/* 完成页「之后在使用指南里慢慢学」:与上面几行同一排法,按钮靠右、与文字垂直居中。 */
+.ob-next-steps > .ob-next-guide { align-items: center; }
+.ob-next-guide .btn { margin-left: auto; flex: none; }
+
+/* 「连接」那步登录后的「同步到蓬洲云」三个勾(云同步开启方案 2026-10-20) */
+.ob-sync-title { margin-top: 12px; font-weight: 600; font-size: var(--ui-font-body); }
+.ob-sync-row { display: flex; gap: 8px; align-items: center; padding: 4px 0; }

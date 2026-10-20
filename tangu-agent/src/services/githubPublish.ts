@@ -1,6 +1,7 @@
 /**
  * 「发布到 GitHub」:项目是一个还没有远端的 git 仓库、Forsion 账号绑了 GitHub 时,在那个 GitHub 账号下建一个**私有**仓库,
- * 把 origin 设成 `https://github.com/<登录名>/<仓库名>.git` 再推当前分支。推送本身照走 gitPush(凭据由 services/githubGit.ts 的提供方给)。
+ * 把一个远端设成 `https://github.com/<登录名>/<仓库名>.git` 再推当前分支。推送本身照走 gitPush(凭据由 services/githubGit.ts 的提供方给)。
+ * 远端名与 target(以后推送到这里)的口径同 forsionGitPublish.ts:已经有远端时这个叫 github,不碰原来的。
  *
  * GitHub 不会「推到不存在的仓库即建」,所以先调它的建仓接口(绑定时拿到的令牌带 repo 权限)。由引擎直接调 GitHub:
  * 云端在大陆机房,到 GitHub 的线路时好时坏,而这台电脑反正要连得上 github.com 才推得了。
@@ -9,7 +10,7 @@
  * - 同名仓库已经在了:它是**私有**的而且还是**空**的 → 照推(上一次建好了但没推上去,再点一次就是这种情况);
  *   别的(公开的,或者里面已经有东西)→ github_repo_exists,不往里推 —— 推进公开仓库收不回来,推进另一个项目的仓库等于把这个项目
  *   交给它的协作者。真要推进去走「连接已有远端」。
- * - 仓库建了但没推上去 → 撤掉刚加的 origin;GitHub 上那个空的私有仓库留着(令牌没有删仓库的权限)。
+ * - 仓库建了但没推上去 → 撤掉刚加的远端;GitHub 上那个空的私有仓库留着(令牌没有删仓库的权限)。
  * - 没绑 GitHub / 绑定失效 → github_not_linked / github_relink_required(界面给「去绑定」)。
  *
  * ponytail: 只发到个人账号下,不选组织;只认 github.com(理由同 githubGit.ts)。
@@ -19,6 +20,7 @@ import { GitActionError, gitPush, readGit, requireRepoRoot, requireTrust, runAct
 import { GitCredentialError } from './gitCredentials.js';
 import { forsionRepoName } from './forsionGitPublish.js';
 import { GITHUB_ORIGIN, githubGit } from './githubGit.js';
+import { remoteNameFor } from './gitRemotes.js';
 
 const API = 'https://api.github.com';
 const API_TIMEOUT_MS = 15_000;
@@ -63,7 +65,7 @@ async function ensurePrivateRepo(doFetch: typeof fetch, token: string, login: st
 
 export interface GithubPublishResult { /** 仓库的网页地址。 */ url: string; name: string; remote: string; branch: string; target: string; output: string }
 
-export async function publishToGithub(cwd: string, name: unknown, trust?: boolean, opts: GithubPublishOptions = {}): Promise<GithubPublishResult> {
+export async function publishToGithub(cwd: string, name: unknown, trust?: boolean, opts: GithubPublishOptions = {}, target = true): Promise<GithubPublishResult> {
   await requireRepoRoot(cwd);
   const head = await readGit(cwd, ['symbolic-ref', '--short', '-q', 'HEAD'], { timeoutMs: 5000 });
   if (head.code !== 0 || !head.stdout.trim()) throw new GitActionError('detached', 'HEAD is detached; switch to a branch before publishing');
@@ -72,7 +74,7 @@ export async function publishToGithub(cwd: string, name: unknown, trust?: boolea
   }
   await requireTrust(cwd, 'write', trust);
   const remotes = (await readGit(cwd, ['remote'], { timeoutMs: 5000 })).stdout.split('\n').map((r) => r.trim()).filter(Boolean);
-  if (remotes.length) throw new GitActionError('has_remote', 'This repository already has a remote', remotes.join('\n'));
+  const remote = remoteNameFor('github', remotes);
   const repo = typeof name === 'string' ? name.trim() : '';
   if (!repo || forsionRepoName(repo) !== repo) throw new GitActionError('invalid_repo_name', 'That is not a valid repository name', repo);
   const credential = await Promise.resolve(githubGit()?.credential()).catch((e: unknown) => {
@@ -86,14 +88,15 @@ export async function publishToGithub(cwd: string, name: unknown, trust?: boolea
     throw e;
   });
   const page = `${GITHUB_ORIGIN}/${owner}/${encodeURIComponent(repo)}`;
-  const added = await runAction(cwd, ['remote', 'add', 'origin', `${page}.git`]);
+  const added = await runAction(cwd, ['remote', 'add', remote, `${page}.git`]);
   if (added.code !== 0) throw new GitActionError('git_failed', 'git remote add failed', added.stderr.trim().slice(-600));
   try {
-    const pushed = await gitPush(cwd, trust, 'origin'); // 明说推到刚加的 origin:分支上要是留着以前的上游设置,不跟它走
+    // 明说推到刚加的远端:分支上要是留着以前的上游设置,不跟它走;不改去向时只推这一次
+    const pushed = await gitPush(cwd, trust, remote, { once: !(target || !remotes.length) });
     return { url: page, name: repo, ...pushed };
   } catch (e) {
-    // 超时 = 推送可能已经做完:origin 留着。其余都是确定没推上去:撤掉刚加的 origin(只删这一节配置,理由见 forsionGitPublish)
-    if (!(e instanceof GitActionError && e.code === 'git_timeout')) await runAction(cwd, ['config', '--remove-section', 'remote.origin']).catch(() => {});
+    // 超时 = 推送可能已经做完:远端留着。其余都是确定没推上去:撤掉刚加的远端(只删这一节配置,理由见 forsionGitPublish)
+    if (!(e instanceof GitActionError && e.code === 'git_timeout')) await runAction(cwd, ['config', '--remove-section', `remote.${remote}`]).catch(() => {});
     throw e;
   }
 }

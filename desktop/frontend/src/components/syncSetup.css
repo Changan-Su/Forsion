@@ -1,0 +1,22 @@
+/* 首登同步卡片(SyncSetupCard.tsx)。外框 = 应用自己的 .u-backdrop + .modal.modal-sm;高度跟内容走,正文用实底(毛玻璃透出主页的大时钟会读不清)。 */
+.sync-setup-backdrop { z-index: 200; } /* 同 What's new:盖住 Dockview 与右键菜单(100),低于全局提示 */
+.modal.sync-setup { height: auto; background: var(--bg-card); }
+.sync-setup .modal-head { gap: 8px; }
+.sync-setup-body { padding: 2px 18px 6px; }
+.sync-setup-lead { margin: 0 0 10px; color: var(--text-muted); font-size: var(--ui-font-meta); line-height: var(--ui-line-meta); }
+.sync-setup-row { display: grid; grid-template-columns: 16px 26px minmax(0, 1fr); gap: 10px; align-items: center; padding: 9px 0; border-top: var(--border-width) solid var(--border); cursor: pointer; }
+.sync-setup-row:first-of-type { border-top: 0; }
+.sync-setup-row input { width: 15px; height: 15px; margin: 0; }
+.sync-setup-tile { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: var(--radius-md); background: var(--overlay-light); color: var(--text-muted); }
+.sync-setup-copy b { display: block; font-weight: 600; font-size: var(--ui-font-body); }
+.sync-setup-copy small { display: block; color: var(--text-muted); font-size: var(--ui-font-meta); }
+.sync-setup-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 18px 16px; }
+.sync-setup-hint { color: var(--text-faint); font-size: var(--ui-font-meta); }
+.sync-setup-acts { display: flex; gap: 8px; }
+
+/* 第一次同步的底部进度条(点了「开始同步」之后,传完自己收走) */
+.sync-setup-progress { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 150; display: inline-flex; align-items: center; gap: 10px;
+  padding: 8px 14px; border-radius: var(--radius-pill); background: var(--bg-card); box-shadow: var(--card-shadow); border: var(--border-width) solid var(--border); font-size: var(--ui-font-body); }
+.sync-setup-bar { width: 120px; height: 4px; border-radius: 2px; background: var(--overlay-light); overflow: hidden; }
+.sync-setup-bar i { display: block; height: 100%; background: var(--signal-mark, var(--accent)); transition: width 0.3s ease; }
+.sync-setup-link { border: 0; background: none; padding: 0; color: var(--text-muted); text-decoration: underline; text-underline-offset: 3px; font-size: var(--ui-font-meta); cursor: pointer; }

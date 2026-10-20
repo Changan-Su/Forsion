@@ -23,6 +23,8 @@ export interface ThemeAxes {
   flat?: boolean
   /** Optional for older windows that do not yet expose the content-tinted chrome preference. */
   ambient?: boolean
+  /** 强调色:'' 跟随主题色 / 内置 id / #hex。Optional for older windows. */
+  signal?: string
 }
 
 export interface UiSyncPayload {
@@ -57,6 +59,7 @@ function theme(raw: unknown): ThemeAxes | undefined {
     seed: color(v.seed), bgSeed: color(v.bgSeed), glass: v.glass,
     ...(typeof v.flat === 'boolean' ? { flat: v.flat } : {}),
     ...(typeof v.ambient === 'boolean' ? { ambient: v.ambient } : {}),
+    ...(typeof v.signal === 'string' && (v.signal === '' || HEX.test(v.signal) || AXIS.test(v.signal)) ? { signal: v.signal } : {}),
   }
 }
 

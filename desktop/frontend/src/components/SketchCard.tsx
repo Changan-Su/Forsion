@@ -194,7 +194,7 @@ const SketchFrame: React.FC<{ item: SketchItem; actions?: SketchActions; stateSc
       <div ref={clipRef} className={`sketch-clip${open ? ' open' : ''}${over && !open ? ' faded' : ''}`}>
         {/* webhost-ok: sketch 卡的能力包络就是规格本身(JS 可跑、无网络无宿主 API,内层 CSP default-src 'none' 收口,
             见 sketchWrapper.ts 实证注);webview 反而错配:Electron-only(web/mobile 没有)且每卡一个 OS 进程。 */}
-        {vars && <iframe ref={frameRef} className="sketch-frame" sandbox={SKETCH_SANDBOX} srcDoc={doc} style={{ height: h }} title={item.title || 'sketch'} onLoad={onFrameLoad} />}
+        {vars && <iframe ref={frameRef} className="sketch-frame" sandbox={SKETCH_SANDBOX} srcDoc={doc} style={{ height: h }} title={item.title || 'Intelligent UI'} onLoad={onFrameLoad} />}
       </div>
       {over && (
         <button type="button" className="sketch-card-toggle" onClick={() => setOpen((v) => !v)}>

@@ -53,7 +53,7 @@ const CSS = [
   read('theme/skins.css'),
   ...LANGS.map((id) => id === 'soft' ? SOFT_CSS : read(`theme/themes/${id}/theme.css`)),
 ].join('\n')
-const SKINS = ['cream', 'coral', 'teal', 'lavender', 'zhi', 'ink']
+const SKINS = ['cream', 'coral', 'teal', 'lavender', 'zhi', 'sage', 'ink']
 // custom 配色没有 CSS 块 —— 它的 accent/bg 族由 customSkinVars(seed) 运行时内联到 :root。
 // 必须一起扫:seed 直接改写 --accent-ink,而 --sel-line 就建在它上面。极端 seed(纯白/纯黑)专门
 // 用来验 customSkinVars 里那两条可读性守卫(暗底提亮过深 seed、亮底压深过浅 seed)确实兜住了。
@@ -129,6 +129,8 @@ const COLOR_UTILS = `
 // 不是 rgba() 的 0–255。当年按 0–255 读会把近白读成近黑,两边算出来的对比度全是废数。
 function parse(c) {
   const s = String(c)
+  // 10-17 色彩体系的色阶在 oklab 里混色,computed 值序列化成 oklab(L a b):通道不是 RGB,交给 canvas 换算成 sRGB 字节。
+  if (/^okl/.test(s)) { const x = document.createElement('canvas').getContext('2d'); x.fillStyle = s; x.fillRect(0, 0, 1, 1); const d = x.getImageData(0, 0, 1, 1).data; return { r: d[0], g: d[1], b: d[2], a: d[3] / 255 } }
   const m = s.match(/-?[\\d.]+/g) || []
   const k = /^color\\(/.test(s) ? 255 : 1 // color() 走 0–1 通道,rgb()/rgba() 已是 0–255
   return { r: (+m[0] || 0) * k, g: (+m[1] || 0) * k, b: (+m[2] || 0) * k, a: m.length > 3 ? +m[3] : 1 }
@@ -462,8 +464,9 @@ function surfaceUnder(el) {
   //    浏览器里模拟不了「不支持 color-mix」,只能静态钉:少了这层兜底,老浏览器(npm run web 面)
   //    下 border-color 会 IACVT → currentColor = 正文色,比没修之前还刺眼(理由见 base.css 长注释)。 ══
   const BASE = read('styles/base.css')
-  const plainAt = BASE.indexOf('--sel-line: var(')
-  const mixAt = BASE.indexOf('--sel-line: color-mix(')
+  // 10-17 起 --sel-line 是 --signal-line 的别名,混色那一刀落在 --signal-line 上;钉它的兜底 / 升级顺序。
+  const plainAt = BASE.indexOf('--signal-line: var(')
+  const mixAt = BASE.indexOf('--signal-line: color-mix(')
   const supAt = BASE.indexOf('@supports (color: color-mix(')
   check('H color-mix 之前有非 color-mix 兜底,且升级版包在 @supports 里',
     plainAt > -1 && supAt > -1 && plainAt < supAt && supAt < mixAt && BASE.includes('--sel-fill: var('),
@@ -485,7 +488,7 @@ function surfaceUnder(el) {
   const compactWiring = [
     PRIMITIVES.includes('role="switch"'),
     SHORTCUTS.includes('settings-filter-input') && SHORTCUTS.includes('visibleRows'),
-    NOTIFICATIONS.includes('SettingsSwitch') && NOTIFICATIONS.includes('settings-drag-list'),
+    NOTIFICATIONS.includes('SettingsSwitch') && NOTIFICATIONS.includes('settings-drag-list') && NOTIFICATIONS.includes('<SettingsPage schema='),
     SPACES.includes('settings-collection-list') && !SPACES.includes('const zh ='),
     TSX.includes("settings.page.notesDescription") && TSX.includes("settings.page.browserDescription"),
   ]

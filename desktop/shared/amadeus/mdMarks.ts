@@ -123,6 +123,14 @@ export function withChecked(raw: string, checked: boolean): string | null {
  * 只有「多行注释把两行合并成一行」这种极端形态会让解析器多数一条)。所以最坏结果是**找不到**
  * (回写失败 → 退回「跳到笔记里改」),**永远不会**落到另一行上。
  */
+/** 一条标记在新一轮投影里还是不是「当初那一条」:同篇、同一句文字,且同篇里只有这一条(行号挪了也认)。
+ *  找不到、或同名不止一条 → undefined —— 同名多条时连原行号也不可信(两段互换后原行号上是另一条同名任务),
+ *  宁可不写,也别写到别的任务上(撤销 / 迟到的回写都按这个找;10-17 Codex 评审 P1 两轮)。 */
+export function resolveMark<M extends Pick<MdMark, 'path' | 'line' | 'text'>>(marks: M[], m: Pick<MdMark, 'path' | 'line' | 'text'>): M | undefined {
+  const same = marks.filter((x) => x.path === m.path && x.text === m.text)
+  return same.length === 1 ? same[0] : undefined
+}
+
 export function findMarkLine(fileText: string, raw: string, occ: number): number {
   const lines = fileText.split(/\r?\n/)
   let i = 0

@@ -20,10 +20,14 @@ export { label } from './types'
 
 export { Shell } from './Shell'
 export { startOpenDrag } from './WorkspaceHost'
+export { useViewModes, useViewModesOf, viewModesOf, viewModeTarget, nextViewMode, installViewModeCommands, inSingleColumnShell, ViewModeSwitch, ViewHead, VIEW_MODE_NEXT } from './viewModes'
+export type { ViewModeOption, ViewModesSpec } from './viewModes'
 export { openMainBesideThisTask, mainOpensBeside } from './openBeside'
 export { SingleColumnHost, accountMenuRows, drawerPreview } from './SingleColumnHost'
 export { listFirstNow, useListFirst } from './listFirst'
 export { MiniColumnHost } from './MiniColumnHost'
+export { useMiniChrome } from './miniChrome'
+export type { MiniChromePicker } from './miniChrome'
 export { supportsMiniPanel, setMiniMainHandler, showInMainPanel, setMiniViewRouter } from './miniPanel'
 export type { MiniPanelDefinition, MiniViewTarget, MainPanelTarget } from './miniPanel'
 export { UI_MODE, setUiMode, WINDOW_SPACE_ID } from './uiMode'
@@ -37,7 +41,7 @@ export { useRibbonStore, addRibbonIcon, removeRibbonIcon, setRibbonActions, RIBB
 /** 拖拽重排的公共语义(悬停谁就顶掉谁);侧栏等 app 层的可排序列表复用同一个,别再各写一份 splice。 */
 export { moveTo, rankIds } from './ribbonRegistry'
 export type { RibbonFolder, RibbonZone } from './ribbonRegistry'
-export { useSpaceStore, registerSpace, unregisterSpace, setActiveSpace, setActiveSpaceCold, adoptSpaceLayoutCold, seedSpaceWindowLayout, resetSpaceLayouts, spaceLayoutsWereReset, BOOT_ACTIVE_SPACE_ID, getActiveSpace, spaceLayoutName, setSpacePinHandler, pinSpaceToHome, openRedirectType } from './spaceRegistry'
+export { useSpaceStore, registerSpace, unregisterSpace, setActiveSpace, setActiveSpaceCold, adoptSpaceLayoutCold, seedSpaceWindowLayout, resetSpaceLayouts, spaceLayoutsWereReset, BOOT_ACTIVE_SPACE_ID, getActiveSpace, spaceLayoutName, setSpacePinHandler, pinSpaceToHome, openRedirectType, landOnMainPage } from './spaceRegistry'
 export { isPinned } from './pinnedViews'
 export type { PinnedViews } from './pinnedViews'
 export { useNav, recordNav } from './navStore'
@@ -66,7 +70,7 @@ export { LCL_MESSAGES } from './engineMessages'
 export { Skeleton, ViewErrorBoundary, skeletonVariantOf } from './Skeleton'
 export type { SkeletonVariant } from './Skeleton'
 /** Shared collapsed-rail / expanded-list table of contents for scrollable feature surfaces. */
-export { FloatingToc, defaultFloatingTocItem } from './FloatingToc'
+export { FloatingToc, defaultFloatingTocItem, scrollToElement, cancelScrollToElement } from './FloatingToc'
 export type {
   FloatingTocElementSource,
   FloatingTocItemDescriptor,
@@ -82,6 +86,7 @@ export { ExtendViewHost } from './ExtendViewHost'
 
 export { contentStorageKey } from './contentStorageScope'
 
+export { switchSpace, setSpaceBarOrder, spaceSwitchDirection, type SpaceSwitchMotion } from './spaceTransition'
 export { SPRING_PAGE, SPRING_ROW, reducedMotion, springAt, springEasing, springMotion, type Spring } from './spring'
 
 /** Optional native presentation hosts (Android Compose). Absent host ⇒ callers keep their web UI. */

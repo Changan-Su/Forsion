@@ -69,6 +69,23 @@ internal data class ChromeState(
     /** Shell mode: a second, quieter part of the title (which vault, which account); with [titleTap] the title is a button. */
     val titleSub: String = "",
     val titleTap: Boolean = false,
+    /**
+     * Shell mode: something behind "more" wants a look (an achievement to claim…): the button carries a dot. The text is
+     * what a screen reader says (may be blank); null = no dot — and what an older page, which never sends it, gets.
+     */
+    val moreDot: String? = null,
+    /**
+     * Shell mode, wide layout: dp the page's docked left column takes from the WebView's left edge (0 = none). The left
+     * capsule starts after it, so the column's own top is not under a capsule (2026-10-20, mock-up A2). Cosmetic: a
+     * value that is not a sane number is 0.
+     */
+    val leftInset: Int = 0,
+    /**
+     * Shell mode: most dp the left capsule may take (0 = no limit) — the view on screen lays something out in the capsule
+     * row right of it (wide windows: the board's menu button and tool island, mock-up A2). A longer title is cut.
+     * Cosmetic like [leftInset].
+     */
+    val capLeftMax: Int = 0,
 ) {
     enum class Mode { SHELL, PAGE, HIDDEN }
 
@@ -87,15 +104,29 @@ internal data class ChromeState(
     }
     /** The Spaces behind the "all" cell. */
     val more: List<ChromeSpace> by lazy { val shown = dock.map { it.id }.toSet(); spaces.filterNot { it.id in shown } }
-    /** What the "all" cell shows for them: the most pressing dot of any (waiting for the user > running > unread). */
-    val moreBadge: ChromeBadge? by lazy {
-        more.mapNotNull { it.badge }.minByOrNull { listOf(ChromeBadge.Kind.ATTENTION, ChromeBadge.Kind.RUNNING, ChromeBadge.Kind.UNREAD).indexOf(it.kind) }
+    /** What the "all" cell shows for them (see [pressing]). */
+    val moreBadge: ChromeBadge? by lazy { pressing(more) }
+
+    /**
+     * The rail's cells (wide windows) for [fit] places: every Space while they fit; past that the pinned ones (Home is
+     * among them) and then the rest in list order, one place kept for "all". List order on screen either way.
+     * Returns (cells, the Spaces behind "all"). Room for one place or none (a squat split-screen window): "all" alone.
+     */
+    fun railCells(fit: Int): Pair<List<ChromeSpace>, List<ChromeSpace>> {
+        if (spaces.size <= fit) return spaces to emptyList()
+        if (fit <= 1) return emptyList<ChromeSpace>() to spaces
+        val ids = (spaces.filter { it.pinned } + spaces.filterNot { it.pinned }).take(fit - 1).map { it.id }.toSet()
+        return spaces.partition { it.id in ids }
     }
 
     companion object {
         val ACTIONS = setOf("left", "right", "tabs", "more", "back", "close", "account", "search", "title", "spacesAll")
         /** How many cells the dock has room for; with more Spaces than that the last one is "all". */
         const val DOCK_CELLS = 5
+
+        /** What an "all" cell shows for the Spaces behind it: the most pressing dot of any (waiting for the user > running > unread). */
+        fun pressing(spaces: List<ChromeSpace>): ChromeBadge? =
+            spaces.mapNotNull { it.badge }.minByOrNull { listOf(ChromeBadge.Kind.ATTENTION, ChromeBadge.Kind.RUNNING, ChromeBadge.Kind.UNREAD).indexOf(it.kind) }
         const val MAX_SPACES = 64 // = MAX_SPACES in mobile/src/nativeChrome.ts, which trims the list before sending
         const val MAX_AVATAR_CHARS = 131_072 // = MAX_AVATAR_CHARS in mobile/src/nativeChrome.ts (a 96px PNG stays far below)
         /** Largest picture side the bar decodes (JS sends 96px). A few KB of PNG can declare a canvas of gigabytes. */
@@ -133,6 +164,16 @@ internal data class ChromeState(
             }
             return ChromeBadge(kind, NativeJson.optStr(o, "label", 128))
         }
+
+        /** Cosmetic, never a reason to refuse the bar: a label that is not a short string still draws the dot, only unannounced. */
+        private fun moreDot(json: JSONObject): String? {
+            val o = json.optJSONObject("moreDot") ?: return null
+            return (o.opt("label") as? String)?.takeIf { it.length <= 128 } ?: ""
+        }
+
+        /** A dp length that only moves the capsules: not a sane number → 0 (none), never a refused bar. */
+        private fun dpField(json: JSONObject, key: String): Int =
+            (json.opt(key) as? Number)?.toDouble()?.takeIf { it in 0.0..4000.0 }?.toInt() ?: 0
 
         private fun spaces(json: JSONObject): List<ChromeSpace> {
             val array = json.optJSONArray("spaces") ?: return emptyList()
@@ -174,6 +215,8 @@ internal data class ChromeState(
                         frosted = NativeJson.optBool(json, "floating") && NativeJson.optBool(json, "frosted"),
                         allLabel = NativeJson.optStr(json, "allLabel", 128), search = NativeJson.optStr(json, "search", 128),
                         titleSub = NativeJson.optStr(json, "titleSub", 128), titleTap = NativeJson.optBool(json, "titleTap"),
+                        moreDot = moreDot(json),
+                        leftInset = dpField(json, "leftInset"), capLeftMax = dpField(json, "capLeftMax"),
                     )
                 }
                 Mode.PAGE -> ChromeState(

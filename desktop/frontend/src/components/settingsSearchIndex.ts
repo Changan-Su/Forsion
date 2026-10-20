@@ -17,7 +17,7 @@
 /** cloud = Forsion 账号面在(内置包 Forsion Extend 装载了,桥键 forsionLogin 在)。 */
 /** hover = 设备有悬停(「外围淡出」靠悬停恢复,没有悬停时那一行不渲染);wide = 非窄版设置页(Ribbon 那一行窄版不渲染)。 */
 /** host = 桌面宿主本机,不含设备页(设备页本机投射时 shim 也给 backendStatus,isDesktop 为真)。 */
-export type SettingsSearchNeed = 'stored' | 'desktop' | 'host' | 'managed' | 'external' | 'cloud' | 'hover' | 'wide'
+export type SettingsSearchNeed = 'stored' | 'desktop' | 'host' | 'managed' | 'external' | 'cloud' | 'hover' | 'wide' | 'tangu'
 
 export interface SettingsSearchEntry {
   /** 结果行的稳定 id(台架按它点)。 */
@@ -47,7 +47,7 @@ export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchEntry[] = [
   { id: 'cloud-url', tab: 'forsion', sub: 'f-conn', anchor: 'cloud-url', labelKey: 'settings.forsion.cloudUrlLabel', keywords: '云端 服务器 cloud server', needs: ['stored', 'cloud'] },
   { id: 'memory-sync', tab: 'forsion', sub: 'f-sync', anchor: 'memory-sync', labelKey: 'settings.forsion.syncLabel', keywords: '记忆 同步 memory brain sync', needs: ['stored', 'cloud'] },
   { id: 'inbox-notify', tab: 'general', sub: 'g-inbox', anchor: 'inbox-notify', labelKey: 'settings.inbox.notifyLabel', keywords: '收件箱 inbox notification', needs: ['stored'] },
-  { id: 'default-models', tab: 'model', sub: 'm-models', labelKey: 'modelsettings.defaults', keywords: '默认模型 default model' },
+  { id: 'default-models', tab: 'model', sub: 'm-models', labelKey: 'modelsettings.defaults', keywords: '默认模型 后台任务 图像识别 图像生成 翻译 跟随 default model background vision image translate' },
   { id: 'model-providers', tab: 'model', sub: 'm-providers', labelKey: 'modelsettings.providers', keywords: '提供方 服务商 apikey provider' },
   { id: 'web-search', tab: 'model', sub: 'm-websearch', labelKey: 'settings.sub.webSearch', keywords: '联网 搜索 search web' },
   { id: 'voice', tab: 'model', sub: 'm-voice', labelKey: 'settings.sub.voice', keywords: '语音 朗读 音色 通话 打电话 听写 voice tts speech call realtime dictation' },
@@ -57,13 +57,14 @@ export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchEntry[] = [
   { id: 'color-mode', tab: 'theme', anchor: 'color-mode', labelKey: 'settings.theme.modeLabel', keywords: '深色 浅色 暗色 明暗 dark light' },
   { id: 'ui-zoom', tab: 'theme', anchor: 'ui-zoom', labelKey: 'settings.theme.zoomLabel', keywords: '缩放 界面大小 zoom scale' },
   { id: 'glass', tab: 'theme', anchor: 'glass', labelKey: 'settings.theme.glassLabel', keywords: '毛玻璃 透明 glass blur' },
+  { id: 'home-motion', tab: 'theme', anchor: 'home-motion', labelKey: 'settings.theme.homeMotion', keywords: '主页 壁纸 动效 动画 星轨 日行 home wallpaper motion animation orbit' },
   { id: 'ambient', tab: 'theme', anchor: 'ambient', labelKey: 'settings.theme.ambient', keywords: '取色 染色 外壳 内容 颜色 ambient tint chrome color' },
   { id: 'visuals', tab: 'model', sub: 'm-models', anchor: 'visuals', labelKey: 'settings.theme.visuals', keywords: 'Intelligent UI 智能界面 可视化 图文 图片 来源 图表 Sketch visuals interactive display' },
   { id: 'smooth-caret', tab: 'theme', anchor: 'smooth-caret', labelKey: 'settings.theme.smoothCaret', keywords: '光标 caret cursor' },
   { id: 'selection-bar', tab: 'theme', anchor: 'selection-bar', labelKey: 'settingsmodal.selectionBar', keywords: '划线 选中 划词 工具栏 引用 翻译 selection toolbar highlight quote translate' },
   // 2026-10-14 从「外观」搬到 高级 → 界面与会话。行的位置不动:这份表的顺序原样进给模型看的落点清单(settingsTarget.ts agentSettingsTargets)。
-  { id: 'prompt-suggest', tab: 'advanced', sub: 'a-ui', anchor: 'prompt-suggest', labelKey: 'settings.promptSuggest', keywords: '输入建议 下一句 预测 补全 灰字 Tab suggestion autocomplete predict next prompt', needs: ['host', 'hover', 'wide'] },
-  { id: 'chat-avatars', tab: 'theme', anchor: 'chat-avatars', labelKey: 'settings.theme.chatAvatars', keywords: '头像 聊天 avatar chat' },
+  { id: 'prompt-suggest', tab: 'advanced', sub: 'a-ui', anchor: 'prompt-suggest', labelKey: 'settings.promptSuggest', keywords: '输入建议 下一句 预测 补全 灰字 Tab suggestion autocomplete predict next prompt', needs: ['tangu', 'host', 'hover', 'wide'] },
+  { id: 'chat-avatars', tab: 'theme', anchor: 'chat-avatars', labelKey: 'settings.theme.chatAvatars', keywords: '头像 聊天 avatar chat', needs: ['tangu'] },
   { id: 'calm-dim', tab: 'theme', anchor: 'calm-dim', labelKey: 'settings.theme.calmDim', keywords: '外围淡出 呼吸感 变淡 退后 侧栏 标签 dim fade quiet calm surroundings sidebar ribbon', needs: ['hover'] },
   { id: 'calm-reading', tab: 'theme', anchor: 'calm-reading', labelKey: 'settings.theme.calmReading', keywords: '宽松正文 呼吸感 行距 段距 行高 阅读宽度 line height spacing reading relaxed calm' },
   { id: 'calm-motion', tab: 'theme', anchor: 'calm-motion', labelKey: 'settings.theme.calmMotion', keywords: '舒缓过渡 呼吸感 动画 节奏 慢 transition animation motion gentle calm' },
@@ -72,6 +73,12 @@ export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchEntry[] = [
   { id: 'notes-attachments', tab: 'notes', anchor: 'notes-attachments', labelKey: 'settings.notes.modeLabel', keywords: '附件 图片 attachment image', needs: ['stored'] },
   { id: 'daily-notes', tab: 'notes', anchor: 'daily-notes', labelKey: 'settings.notes.dailyLabel', keywords: '日记 每日 daily journal', needs: ['stored'] },
   { id: 'agent-browser', tab: 'browser', anchor: 'agent-browser', labelKey: 'settings.browser.agentBrowser', keywords: '浏览器 browser chrome', needs: ['stored'] },
+  // 电脑操作(引擎插件 computer-use)的表单由插件 schema 渲染,锚点落在整页;插件没启用时这一页不在,结果也不出。
+  { id: 'strict-background', tab: 'computer-use', anchor: 'computer-use', labelKey: 'settings.search.strictBackground', keywords: '严格后台 后台 前台 抢焦点 抢前台 mini 电脑操作 strict background foreground focus computer use' },
+  { id: 'jev', tab: 'computer-use', anchor: 'computer-use', labelKey: 'settings.search.jev', keywords: 'jev 加速 置信度 视觉 定位 typesafe 电脑操作 acceleration confidence vision computer use' },
+  // 设置 › 设备(原 Ribbon 胶囊菜单)
+  { id: 'units-switch', tab: 'units', anchor: 'units-switch', labelKey: 'unit.switchTitle', keywords: '设备 切换 本地 云端 直连 中转 P2P 通过地址连接 devices switch local cloud lan relay address unit' },
+  { id: 'units-host', tab: 'units', anchor: 'units-host', labelKey: 'unit.hostToggle', keywords: '允许其他设备连接 互联 直连地址 来访设备 配对 回收 allow connect host lan address visiting paired revoke' },
   // P1-K4:设置 › 远程会话(只在有主进程 API 的本机列,tab 门控即可)
   { id: 'remote-sessions-switch', tab: 'remote-sessions', anchor: 'remote-sessions-switch', labelKey: 'remoteSessions.switch', keywords: '远程会话 手机 远程 允许 remote session phone allow' },
   { id: 'remote-approval-cap', tab: 'remote-sessions', anchor: 'remote-approval-cap', labelKey: 'remoteSessions.cap', keywords: '远程审批档 全自动 审批 remote approval full auto' },

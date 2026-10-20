@@ -3,7 +3,7 @@
  * Chat 会话全部住在「不在项目中工作」这一个无根项目里;Work 模式列出全部项目(含无根组),Chat 模式只列它)。
  * 这里只放纯函数;状态与持久化在 appStore(sessionMode / setSessionMode)。
  */
-import type { WorkspaceDescriptor } from '../types'
+import type { WorkspaceDescriptor } from '../../../../tangu-agent/src/contracts/clientTypes'
 
 export type SessionMode = 'chat' | 'work'
 

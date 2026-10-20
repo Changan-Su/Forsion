@@ -1560,6 +1560,30 @@ const tabCountText = (list) => {
     assert.ok(r.hit, `the dot stayed after the session was answered (index requests: ${polled()})`)
   })
 
+  // RibbonItem.dot behind ⋯ (2026-10-18): the web capsule's ⋯ had the dot, the native one only the sheet row's subtitle.
+  // The achievements store is seeded on disk and the page reloaded (it reads the disk once at boot).
+  await check('more dot: nothing to claim → no dot; an achievement to claim → a red dot on the native ⋯', async () => {
+    const KEY = 'forsion_tangu_achievements'
+    const kept = await cdp.eval(`localStorage.getItem('${KEY}')`)
+    const put = async (data) => { await cdp.eval(`(localStorage.setItem('${KEY}', ${JSON.stringify(JSON.stringify(data))}), true)`); await reload() }
+    const dotOf = (l) => h.byId(l, 'nativeChrome.moreDot')
+    try {
+      await put({ v: 1, counters: {}, claimed: [] })
+      assert.ok(h.byId(ui(), 'nativeChrome.more') && !dotOf(ui()), 'no ⋯, or a dot with nothing to claim')
+      await put({ v: 1, counters: { 'theme.change': 1 }, claimed: [] })
+      const r = await h.waitNodes((l) => (dotOf(l) ? l : null), { timeout: 10000 })
+      assert.ok(r.hit, 'no dot on ⋯ with an achievement to claim')
+      const [dot, more] = [dotOf(r.hit), h.byId(r.hit, 'nativeChrome.more')]
+      assert.ok(more && within(more, dot), `the dot is not on ⋯ (${dot.bounds} vs ${more?.bounds})`)
+      const c = pixelAt(dot.rect.cx, dot.rect.cy) // --danger, red in every theme
+      assert.ok(c.r > c.g + 60 && c.r > c.b + 60, `the dot is not the danger colour: ${JSON.stringify(c)}`)
+      shot('03g-more-dot')
+    } finally {
+      await cdp.eval(`(${JSON.stringify(kept)} === null ? localStorage.removeItem('${KEY}') : localStorage.setItem('${KEY}', ${JSON.stringify(kept)}), true)`)
+      await reload()
+    }
+  })
+
   await check('haptics: switching Space ticks once (not on the Space you are on); the page-side seam ticks; an unknown kind is silent', async () => {
     const call = (kind) => cdp.eval(`Capacitor.Plugins.NativeChrome.haptic({ kind: ${JSON.stringify(kind)} }).then(() => 'ok', (e) => 'rejected: ' + (e && e.message))`)
     const onTangu = "document.querySelector('.mb-shell')?.dataset.space === 'tangu'"
@@ -2352,13 +2376,39 @@ const tabCountText = (list) => {
   // the next and a boot never restores anything — the one place this bug lives. Sign in as an account for this check.
   // The phone keeps ONE layout "in use" and restores it at boot; the startup Space (Home by default) is decided
   // separately. Leave the app in Tangu and the next launch is Home wearing Tangu's layout (reported 2026-10-11/12).
-  await check('launch: left in another Space, the app opens on Home with the homepage on screen — not that Space\'s list or conversation', async () => {
+  // The launch hands the layouts over like the desktop does (2026-10-16, singleColumnStore.adoptSingleColumnLayoutCold):
+  // the one in use goes into the slot of the Space it belongs to, and the startup Space's own slot comes in. Without
+  // that, Tangu lost the tabs it was left with on every launch, and a startup Space other than Home wore Tangu's layout.
+  await check('launch: left in another Space, the app opens on Home with the homepage on screen — not that Space\'s list or conversation; that Space keeps the tabs it was left with; a startup Space set to Agents wears its own layout', async () => {
     const ID_TOKEN = `e2e.${Buffer.from(JSON.stringify({ userId: 'e2e-layout' })).toString('base64url')}.sig`
     const setToken = (v) => cdp.eval(`Capacitor.Plugins.Preferences.set({ key: 'forsion_token', value: ${JSON.stringify(v)} }).then(() => true)`)
     const st = async () => JSON.parse(await cdp.eval(`JSON.stringify((() => { const sh = document.querySelector('.mb-shell'), at = document.elementFromPoint(innerWidth / 2, innerHeight / 2)
       return { space: sh?.dataset.space, nav: sh?.dataset.nav || '', view: ${dom.view}, onScreen: at?.closest('.hp-root') ? 'homepage' : at?.closest('.mb-drawer--left') ? 'left panel' : (at?.closest('[class]')?.className || '').toString().slice(0, 40),
         slots: Object.keys(localStorage).filter((k) => k.includes('e2e-layout') && k.startsWith('lcl_sc_')).length } })())`))
     const bad = []
+    /** The layout in use for this account, as the app keeps it (written 200 ms after a change). */
+    const layout = async () => JSON.parse(await cdp.eval(`JSON.stringify((() => { const k = Object.keys(localStorage).find((k) => k.startsWith('lcl_sc_layout_v1:') && k.includes('e2e-layout')); const b = k && JSON.parse(localStorage.getItem(k))
+      return b ? { space: b.space || null, main: b.main.map((r) => r.type), front: b.main.find((r) => r.id === b.activeMainId)?.type || null, left: b.left.map((r) => r.type) } : null })())`))
+    /** How a person leaves Tangu after working there: a conversation in front, a second tab behind it. */
+    async function leaveTanguWithTabs() {
+      await openChat('E2E Session One')
+      if (Number(tabCountText(ui()) || '1') < 2) {
+        await tapId('nativeChrome.more')
+        await tapId('nativeSheet.item.tab:new', await waitSheet(true))
+        await waitSheet(false)
+        assert.ok((await h.waitNodes((l) => (Number(tabCountText(l)) === 2 ? l : null), { timeout: 6000 })).hit, 'control: a second tab did not open in Tangu')
+        await openChat('E2E Session One') // the conversation back in front
+      }
+      await h.pause(1200)
+      const l = await layout()
+      assert.ok(l && l.main.length === 2 && l.front === 'chat', `control: Tangu as it is left: ${JSON.stringify(l)}`)
+    }
+    const judgeTangu = async (how) => {
+      await toSpace('tangu'); await h.pause(900)
+      const l = await layout()
+      console.log(`  Tangu after the ${how}: ${JSON.stringify(l)}`)
+      if (!l || l.main.length !== 2 || l.front !== 'chat') bad.push(`${how}: Tangu lost the tabs it was left with (the conversation in front of a second tab): ${JSON.stringify(l)}`)
+    }
     const judge = (how, got) => {
       if (got.space !== 'home') bad.push(`${how}: not on Home: ${JSON.stringify(got)}`)
       if (got.nav) bad.push(`${how}: Home came up as a list Space (nav "${got.nav}")`)
@@ -2374,8 +2424,7 @@ const tabCountText = (list) => {
       const first = await st()
       console.log(`  first launch: ${JSON.stringify(first)}`)
       assert.equal(first.space, 'home', 'control: the default startup Space is Home')
-      await openChat('E2E Session One') // Tangu, a conversation on screen: where the user leaves the app
-      await h.pause(1200)
+      await leaveTanguWithTabs() // Tangu, a conversation on screen: where the user leaves the app
       assert.ok((await st()).slots >= 1, `control: this account's layout is kept (${JSON.stringify(await st())})`)
       await reload() // the next launch
       await h.pause(1200)
@@ -2383,11 +2432,8 @@ const tabCountText = (list) => {
       console.log(`  launch after leaving the app in a Tangu conversation: ${JSON.stringify(next)}`)
       shot('05d-launch-after-tangu')
       judge('page reload', next)
-      // … and Tangu is still a Space of its own
-      await toSpace('tangu'); await h.pause(900)
-      const tangu = await st()
-      console.log(`  Tangu after that launch: ${JSON.stringify(tangu)}`)
-      if (tangu.nav !== 'list' && tangu.view !== 'chat') bad.push(`Tangu lost its own layout: ${JSON.stringify(tangu)}`)
+      // … and Tangu is still a Space of its own, with what it was left with
+      await judgeTangu('page reload')
       // the same through a real launch: the process is killed with a Tangu conversation on screen and started again
       // (a page reload runs the same boot code; this is the path a person takes)
       await openChat('E2E Session One')
@@ -2407,6 +2453,18 @@ const tabCountText = (list) => {
       console.log(`  cold start (process killed in a Tangu conversation): ${JSON.stringify(cold)}`)
       shot('05e-cold-start-after-tangu')
       judge('cold start', cold)
+      await judgeTangu('cold start')
+      // a startup Space other than Home (Settings → Spaces → "启动时进入"): it comes up in its own layout, not in Tangu's
+      await cdp.eval("(localStorage.setItem('forsion_default_space', 'agents'), true)")
+      await leaveTanguWithTabs()
+      await reload()
+      await h.pause(1200)
+      const pinned = await st(), pl = await layout()
+      console.log(`  launch with the startup Space set to Agents, left in Tangu: ${JSON.stringify(pinned)} ${JSON.stringify(pl)}`)
+      shot('05f-launch-into-agents-after-tangu')
+      if (pinned.space !== 'agents') bad.push(`startup Space Agents: not on Agents: ${JSON.stringify(pinned)}`)
+      if (!pl || pl.space !== 'agents' || pl.main.includes('chat') || pl.left.includes('workspace')) bad.push(`startup Space Agents wears Tangu's layout: ${JSON.stringify(pl)}`)
+      await judgeTangu('launch into Agents')
     } finally {
       await cdp.eval(`(Object.keys(localStorage).filter((k) => k.includes('e2e-layout')).forEach((k) => localStorage.removeItem(k)), ${startPref === null ? "localStorage.removeItem('forsion_default_space')" : `localStorage.setItem('forsion_default_space', ${JSON.stringify(startPref)})`}, true)`)
       await setToken('e2e-native-shell.fake.token')
@@ -3802,7 +3860,12 @@ const tabCountText = (list) => {
     for (let i = 0; i < 20 && !imeShown(); i++) await h.pause(300)
     if (imeShown()) { h.key(4); await h.pause(700) } // long-pressed with the keyboard out of the way
     await cdp.eval("(window.__e2eCtx = 0, window.addEventListener('contextmenu', () => window.__e2eCtx++, true), true)")
-    const node = (await h.waitNodes((l) => l.find((n) => n.text === 'E2E Agent' || n['content-desc'] === 'E2E Agent'), { timeout: 4000 })).hit
+    const findAgent = (l) => l.find((n) => n.text === 'E2E Agent' || n['content-desc'] === 'E2E Agent')
+    let node = (await h.waitNodes(findAgent, { timeout: 4000 })).hit
+    // 收键盘后输入区还在重排:位置连续两次读到一样才按,否则按到旧坐标、长按落在主页空白处(弹「主页卡片」或什么都不弹)
+    const settleFrom = Date.now(), firstBounds = node?.bounds
+    for (let i = 0; node && i < 20; i++) { await h.pause(150); const again = findAgent(h.nodes()); if (again?.bounds === node.bounds) break; node = again }
+    console.log('  settle:', Date.now() - settleFrom, 'ms', firstBounds, '→', node?.bounds)
     console.log('  long-press target:', node ? `${node.class} ${node.bounds}` : 'not in a11y tree → synthetic contextmenu')
     if (node) h.longPress(node)
     else await cdp.eval(`(() => { const el = document.querySelector('[data-agent-slug="e2e-agent"]'); const r = el.getBoundingClientRect()

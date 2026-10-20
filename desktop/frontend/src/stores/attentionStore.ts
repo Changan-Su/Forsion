@@ -14,9 +14,12 @@
  */
 import { useMemo } from 'react'
 import { create } from 'zustand'
-import { engineFetch, knownTargets } from '../services/engine/targets'
+import { engineFetch, homeTarget, knownTargets } from '../services/engine/targets'
 import type { UiMessage } from '../types'
+import { rowStatus, type RowStatus } from '@tangu/ui/views/chat2/sessionTree'
+import { setActiveSpace } from '@lcl/engine'
 import { useApp } from './appStore'
+import { notifyApp } from './notificationStore'
 
 export interface SessionAttention {
   sessionId: string
@@ -35,8 +38,15 @@ export interface TargetAttention {
   at: number
 }
 
+/** 私聊的「有新消息 / 等你」(引擎 GET /agent/sessions/attention,只拉本端):Muse 主动发来的未读、它问了一句在等回答、
+ *  它后台有待批(pending_approvals,不在上面那份 run 内存索引里)。run 跑完的未读照旧在 appStore.unread。 */
+export interface DmAttention { unread: boolean; awaiting: boolean }
+
 interface AttentionState {
   byTarget: Record<string, TargetAttention>
+  dm: Record<string, DmAttention>
+  /** 读过:本地先熄、再告诉引擎(proactive_at ≤ last_read_at)。 */
+  markRead(sessionId: string): void
   /** 装轮询(幂等,可重复调用 —— StrictMode 双 effect 只装一份);返回卸载。 */
   install(): () => void
   refresh(targetKey?: string): Promise<void>
@@ -62,17 +72,62 @@ function sanitizeSessions(raw: unknown): SessionAttention[] {
   return out
 }
 
+function sanitizeDm(raw: unknown): Record<string, DmAttention> {
+  const out: Record<string, DmAttention> = {}
+  if (!Array.isArray(raw)) return out
+  for (const r of raw.slice(0, MAX_SESSIONS)) {
+    if (!r || typeof r.id !== 'string' || !r.id || r.id.length > 64) continue
+    out[r.id] = { unread: r.unread === true, awaiting: r.awaiting === true }
+  }
+  return out
+}
+
 const inflight = new Set<string>()
+let dmDisabled = false // 老引擎没有这个端点(404):本次启动不再拉
+let dmLoaded = false
+const listTried = new Set<string>() // 为它补拉过会话列表的私聊 id(见 refresh)
 let installs = 0
 let teardown: (() => void) | null = null
 
 export const useAttention = create<AttentionState>((set, get) => ({
   byTarget: {},
+  dm: {},
+
+  markRead(sessionId) {
+    const cur = get().dm[sessionId]
+    if (!cur?.unread) return
+    set((s) => ({ dm: { ...s.dm, [sessionId]: { ...cur, unread: false } } }))
+    void engineFetch(homeTarget(), `/agent/sessions/${encodeURIComponent(sessionId)}/read`, { method: 'POST' }, { timeoutMs: REQUEST_TIMEOUT_MS }).catch(() => {})
+  },
 
   async refresh(targetKey) {
     if (useApp.getState().connState !== 'ok') return
     let targets
     try { targets = knownTargets() } catch { return } // 宿主还没装(启动极早期)
+    if (!dmDisabled && (!targetKey || targetKey === 'home') && !inflight.has('dm')) {
+      inflight.add('dm')
+      void engineFetch(homeTarget(), '/agent/sessions/attention', {}, { timeoutMs: REQUEST_TIMEOUT_MS })
+        .then(async (r) => {
+          if (r.status === 404) { dmDisabled = true; return }
+          if (!r.ok) return
+          const j = await r.json().catch(() => null) as { sessions?: unknown } | null
+          if (!j) return
+          const dm = sanitizeDm(j.sessions)
+          const prev = get().dm
+          const first = !dmLoaded
+          dmLoaded = true
+          set({ dm })
+          // 后台第一次建出的私聊(用户从没点开过 Muse 那一行)不在本地会话列表里:角标与通知都按列表找会话,
+          // 先拉一遍列表再弹(Codex 10-18 #2)。每个 id 只补拉一次 —— 列表分页没带上它时不至于每 20s 重拉。
+          const st = useApp.getState()
+          const unknown = Object.keys(dm).filter((id) => !st.sessions.some((x) => x.id === id) && !listTried.has(id))
+          if (unknown.length) { unknown.forEach((id) => listTried.add(id)); await st.refreshSessions(st.cfg).catch(() => {}) }
+          readActiveDm()
+          if (!first) notifyNewWaits(prev, dm) // 启动那一拉不弹:那些是之前就在等的
+        })
+        .catch(() => {})
+        .finally(() => inflight.delete('dm'))
+    }
     await Promise.all(targets.filter((t) => !targetKey || t.key === targetKey).map(async (t) => {
       const prev = get().byTarget[t.key]
       if (prev?.disabled || inflight.has(t.key)) return
@@ -108,9 +163,14 @@ export const useAttention = create<AttentionState>((set, get) => ({
       const timer = window.setInterval(tick, ATTENTION_POLL_MS)
       const onVis = (): void => { if (typeof document !== 'undefined' && !document.hidden) void get().refresh() }
       if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVis)
-      // 连上的那一刻拉一次(启动 / 断线重连 / 引擎重启):别等 20s。
+      // 连上的那一刻拉一次(启动 / 断线重连 / 引擎重启):别等 20s。打开一条私聊 = 读过。
       let prevConn = useApp.getState().connState
-      const unsub = useApp.subscribe((s) => { if (s.connState === 'ok' && prevConn !== 'ok') void get().refresh(); prevConn = s.connState })
+      let prevActive = useApp.getState().activeId
+      const unsub = useApp.subscribe((s) => {
+        if (s.connState === 'ok' && prevConn !== 'ok') void get().refresh()
+        prevConn = s.connState
+        if (s.activeId !== prevActive) { prevActive = s.activeId; readActiveDm() }
+      })
       tick()
       teardown = () => {
         window.clearInterval(timer)
@@ -128,6 +188,28 @@ export const useAttention = create<AttentionState>((set, get) => ({
     }
   },
 }))
+
+/** 私聊新进入「等你」→ 系统通知(只这一种弹;提醒只亮角标)。用户正看着那条就不弹。 */
+function notifyNewWaits(prev: Record<string, DmAttention>, next: Record<string, DmAttention>): void {
+  const st = useApp.getState()
+  const visible = typeof document === 'undefined' || !document.hidden
+  for (const [id, d] of Object.entries(next)) {
+    if (!d.awaiting || prev[id]?.awaiting || (id === st.activeId && visible)) continue
+    const x = st.sessions.find((s) => s.id === id)
+    if (!x || !soloOf(st.configBySession[id] ?? x.agent_config)) continue
+    notifyApp({
+      event: 'dm.waiting', level: 'info', dedupeKey: `dm.waiting:${id}`,
+      title: x.title || '', text: st.tr('ntf.dmWaiting'),
+      action: { label: st.tr('ntf.view'), run: () => { setActiveSpace('tangu'); void import('../sessionNav').then((m) => m.openSession(id)) } },
+    })
+  }
+}
+
+/** 正开着(窗口可见)的那条私聊有新消息 → 就地算读过(用户就在看它)。 */
+function readActiveDm(): void {
+  const id = useApp.getState().activeId
+  if (id && (typeof document === 'undefined' || !document.hidden)) useAttention.getState().markRead(id)
+}
 
 /**
  * 纯函数:合并索引与本地派生 → 会话 id → { n, localOnly }(n = 等你处理的审批 + 询问数)。
@@ -208,5 +290,51 @@ export function __resetAttentionForTests(): void {
   teardown = null
   installs = 0
   inflight.clear()
-  useAttention.setState({ byTarget: {} })
+  dmDisabled = false
+  dmLoaded = false
+  listTried.clear()
+  useAttention.setState({ byTarget: {}, dm: {} })
+}
+
+const soloOf = (c: { soloAgentSlug?: string; soloEngineId?: string } | null | undefined): boolean => !!(c?.soloAgentSlug || c?.soloEngineId)
+
+/**
+ * 私聊(Agent / 引擎的单人会话)→ 行尾状态:run 待批 / Muse 后台待批 / 它问了一句 = 等你;在跑;Muse 主动发来没看 / run 跑完没看 = 有新消息。
+ * 侧栏 Agent 轨道行与 Tangu Space 角标共用这一份(方案 B:角标数 = 有新消息或在等你的私聊个数)。
+ * enabled=false 时选择器直接回空串,不为每颗 Space 按钮扫一遍会话。
+ */
+export function useSoloStatus(enabled = true): Map<string, RowStatus> {
+  const dm = useAttention((s) => s.dm)
+  const attention = useSessionAttention()
+  const sig = useApp((s) => {
+    if (!enabled) return ''
+    const parts: string[] = []
+    for (const x of s.sessions) {
+      if (!soloOf(s.configBySession[x.id] ?? x.agent_config)) continue
+      parts.push(`${x.id}:${x.busy ? 1 : 0}${x.awaiting_user ? 1 : 0}${s.unread.has(x.id) ? 1 : 0}${s.runningBySession[x.id] ? 1 : 0}`)
+    }
+    return parts.join('|')
+  })
+  return useMemo(() => {
+    const out = new Map<string, RowStatus>()
+    if (!sig) return out
+    const st = useApp.getState()
+    for (const x of st.sessions) {
+      if (!soloOf(st.configBySession[x.id] ?? x.agent_config)) continue
+      const d = dm[x.id]
+      const v = rowStatus({ busy: x.busy, awaiting_user: x.awaiting_user || d?.awaiting }, !!attention.get(x.id), !!st.runningBySession[x.id], st.unread.has(x.id) || !!d?.unread)
+      if (v) out.set(x.id, v)
+    }
+    return out
+  }, [sig, dm, attention])
+}
+
+/** Tangu 角标:有新消息或在等你的私聊个数;有一条在等你就用警示色。 */
+export function soloBadge(status: Map<string, RowStatus>): { n: number; wait: boolean } {
+  let n = 0
+  let wait = false
+  for (const v of status.values()) {
+    if (v === 'wait') { n++; wait = true } else if (v === 'done') n++
+  }
+  return { n, wait }
 }

@@ -8,7 +8,7 @@
  *    刻意不套 astryx Card/Scope —— 那会把整卡盖成 astryx 中性灰、与 app 暖色主题不搭。
  *  ponytail: 时间仍用原生 date/time 输入编辑(点击展开),未做参考图那种内联时间胶囊编辑器;
  *  select 值显示为中性胶囊,无每选项配色(schema 的 options 是纯字符串,无色)。 */
-import { useEffect, useRef, useState, type ReactElement, type SVGProps } from 'react'
+import { useEffect, useRef, useState, type ReactElement, type RefObject, type SVGProps } from 'react'
 import { ExternalLink } from 'lucide-react'
 import { coerceForDisplay, type CellValue, type DbColumn } from '@amadeus-shared/db/schema'
 import { CalDateFields } from '../../amadeus/blocks/database/propertyTypes.builtins'
@@ -53,16 +53,19 @@ export interface CardTarget {
   color?: string
 }
 
-function cardPos(at: Anchor): { left: number; top: number } {
+/** 卡片落点:默认贴锚点右侧,放不下就翻到左侧。maxRight = 右边界(视口像素;缺省窗口右缘)——
+ *  日历传主区右缘,卡片翻到事件左边,而不是盖住右栏的待办。 */
+export function cardPos(at: Anchor, { w = 360, h = 380, maxRight }: { w?: number; h?: number; maxRight?: number } = {}): { left: number; top: number; width?: number } {
   const zoom = at.zoom || 1
-  const W = 360
-  const H = 380
+  // 窗口比卡片还窄(Mini 窗 320px):卡片收窄到窗口宽减两侧边距,不越出窗口。
+  const W = Math.min(w, window.innerWidth / zoom - 16)
+  const H = h
   const margin = 8 * zoom
   let left = at.right + margin
-  if (left + W * zoom > window.innerWidth) left = Math.max(margin, at.left - W * zoom - margin)
+  if (left + W * zoom > (maxRight ?? window.innerWidth)) left = Math.max(margin, at.left - W * zoom - margin)
   const top = Math.max(margin, Math.min(at.top, window.innerHeight - H * zoom - margin))
   // body 使用 CSS zoom 时，fixed 的 left/top 仍是元素自身的 CSS 像素；锚点则来自视口像素。
-  return { left: left / zoom, top: top / zoom }
+  return { left: left / zoom, top: top / zoom, ...(W < w ? { width: W } : {}) }
 }
 
 /** 属性行的类型图标:自定义类型用注册表已声明的图标,primitive 按 baseType 取。 */
@@ -78,30 +81,13 @@ function PropIcon({ col }: { col: DbColumn }) {
   return <Ic />
 }
 
-export function EventCard({ ev, at, onClose }: { ev: CardTarget; at: Anchor; onClose: () => void }) {
+export function EventCard({ ev, at, onClose, maxRight }: { ev: CardTarget; at: Anchor; onClose: () => void; maxRight?: number }) {
   const { t } = useI18n()
-  const { db, row, colId, title } = ev
-  // 只读源(agent 日程 / ICS / 另一侧 Vault):全字段展示,底部无删除。
-  // 可编辑投影(笔记 `@` 标记源)有 writeCell:时间可改(回写那行 markdown),但删除仍关着 ——
-  // 「删掉一个日历事件」对一行笔记来说是删整行还是只删 `@`,语义不明,不做。
-  // `readonly` 只管**时间那一行**:可编辑投影把它放开。
-  const readonly = !!db.readonly && !db.writeCell
-  // 其余一律看严格的 db.readonly —— 投影只支持改时间,标题/属性放开就是「看着能改、改了没反应」。
-  const deletable = !db.readonly
-  const fullyEditable = !db.readonly
-  const nameCol = db.columns[0]
-  const titleEditable = fullyEditable && !(db.isNoteView && nameCol?.type === 'page')
-  const others = db.columns.filter((c) => c.id !== nameCol?.id && c.id !== colId)
-  const pos = cardPos(at)
-  const summary = colId ? eventTimeSummary(ev.raw) : null
-  const [editTime, setEditTime] = useState(false)
-  const accent = ev.color ?? 'var(--accent, #6c5ce7)'
+  const pos = cardPos(at, { maxRight })
   const dialogRef = useRef<HTMLDivElement>(null)
   const closeRef = useRef<HTMLButtonElement>(null)
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
-  // 只读聚合源可能来自 Agent / ICS / 另一侧 Vault，路径不是活动 Vault 可打开的数据库路径。
-  const canOpenSource = !db.readonly || !!db.openRow
 
   useEffect(() => {
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
@@ -138,101 +124,138 @@ export function EventCard({ ev, at, onClose }: { ev: CardTarget; at: Anchor; onC
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
-        aria-label={t('evcard.editEvent', { title: title || t('evcard.untitled') })}
+        aria-label={t('evcard.editEvent', { title: ev.title || t('evcard.untitled') })}
         style={pos}
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <div className="amx-cal-cardin">
-          {/* 顶栏:来源库(色点)+ 关闭 */}
-          <div className="amx-cal-card-top">
-            <span className="amx-cal-card-src">
-              <span className="amx-cal-card-dot" style={{ background: accent }} />
-              {db.name}
-            </span>
-            <button className="amx-cal-card-x" ref={closeRef} onClick={onClose} aria-label={t('evcard.close')}>×</button>
-          </div>
-
-          {/* 标题 */}
-          <div className="amx-cal-card-head">
-            <span className="amx-cal-card-ico amx-cal-card-headico"><PageIcon /></span>
-            {titleEditable ? (
-              <input
-                className="amx-cal-card-title"
-                aria-label={t('evcard.name')}
-                value={title}
-                placeholder={t('evcard.untitled')}
-                onChange={(e) => setAggName(db, row.rowId, e.target.value)}
-              />
-            ) : (
-              <div className="amx-cal-card-title amx-cal-card-title-ro">{title || t('evcard.untitled')}</div>
-            )}
-          </div>
-
-          {/* 时间:摘要主行 +(点击展开)原生编辑器;只读源仅展示 */}
-          {colId && (
-            <div className="amx-cal-card-row amx-cal-card-timerow">
-              <span className="amx-cal-card-ico"><DateTimeIcon /></span>
-              <div className="amx-cal-card-timebody">
-                {summary && !(editTime && !readonly) && (
-                  <button
-                    type="button"
-                    className="amx-cal-card-timebtn"
-                    disabled={readonly}
-                    onClick={() => setEditTime(true)}
-                  >
-                    <span className="amx-cal-card-timehead">
-                      {summary.head}
-                      {summary.badge && <span className="amx-cal-card-badge">{summary.badge}</span>}
-                    </span>
-                    {summary.date && <span className="amx-cal-card-timesub">{summary.date}</span>}
-                  </button>
-                )}
-                {!readonly && (editTime || !summary) && (
-                  <div className="amx-cal-card-timeedit">
-                    <CalDateFields value={ev.raw} onChange={(v) => setAggCell(db, row.rowId, colId, v)} autoFocus={editTime} />
-                    {summary && (
-                      <button type="button" className="amx-cal-card-timedone" onClick={() => setEditTime(false)}>{t('evcard.done')}</button>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* 属性 */}
-          {others.length > 0 && (
-            <div className="amx-cal-card-props">
-              {others.map((c) => (
-                <div key={c.id} className="amx-cal-card-row amx-cal-card-prop">
-                  <span className="amx-cal-card-key">
-                    <span className="amx-cal-card-ico"><PropIcon col={c} /></span>
-                    <span className="amx-cal-card-keyt">{c.name}</span>
-                  </span>
-                  <div className="amx-cal-card-ctl">
-                    {fullyEditable
-                      ? <CardPropField db={db} row={row} col={c} />
-                      : <span className="amx-cal-card-val">{cellText(row.cells[c.id]) || '—'}</span>}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {(canOpenSource || deletable) && (
-            <div className="amx-cal-card-foot">
-              {canOpenSource && (
-                <button className="amx-cal-card-open" onClick={() => { db.openRow ? db.openRow(row.rowId) : openDb(db.path); onClose() }}>
-                  <ExternalLink size={13} /> {db.openRow ? t('evcard.openNote') : t('evcard.openDb')}
-                </button>
-              )}
-              {deletable && (
-                <button className="amx-cal-card-del" onClick={() => { deleteCalendarRow(db, row, title); onClose() }}>{t('evcard.delete')}</button>
-              )}
-            </div>
-          )}
-        </div>
+        <EventCardBody ev={ev} onClose={onClose} closeRef={closeRef} />
       </div>
     </div>
+  )
+}
+
+function EventCardBody({ ev, onClose, closeRef }: { ev: CardTarget; onClose: () => void; closeRef?: RefObject<HTMLButtonElement | null> }) {
+  const { t } = useI18n()
+  const { db, row, title } = ev
+  const deletable = !db.readonly
+  const accent = ev.color ?? 'var(--accent, #6c5ce7)'
+  // 只读聚合源可能来自 Agent / ICS / 另一侧 Vault，路径不是活动 Vault 可打开的数据库路径。
+  const canOpenSource = !db.readonly || !!db.openRow
+
+  return (
+    <div className="amx-cal-cardin">
+      {/* 顶栏:来源库(色点)+ 关闭 */}
+      <div className="amx-cal-card-top">
+        <span className="amx-cal-card-src">
+          <span className="amx-cal-card-dot" style={{ background: accent }} />
+          {db.name}
+        </span>
+        <button className="amx-cal-card-x" ref={closeRef} onClick={onClose} aria-label={t('evcard.close')}>×</button>
+      </div>
+
+      <RecordFields db={db} row={row} colId={ev.colId ?? undefined} title={title} raw={ev.raw} />
+
+      {(canOpenSource || deletable) && (
+        <div className="amx-cal-card-foot">
+          {canOpenSource && (
+            <button className="amx-cal-card-open" onClick={() => { db.openRow ? db.openRow(row.rowId) : openDb(db.path); onClose() }}>
+              <ExternalLink size={13} /> {db.openRow ? t('evcard.openNote') : t('evcard.openDb')}
+            </button>
+          )}
+          {deletable && (
+            <button className="amx-cal-card-del" onClick={() => { deleteCalendarRow(db, row, title); onClose() }}>{t('evcard.delete')}</button>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** 一行记录的字段:标题、时间(`colId` 那一列)、其余属性。事件浮卡与插件的 ctx.ui.mountRecord(recordSurface)共用 ——
+ *  外框、关闭、打开 / 删除归调用方。`title` / `raw` 缺省取这一行自己的(浮卡传事件流里算好的那份);`lock` = 一律只读。 */
+export function RecordFields({ db, row, colId, title = row.name, raw, lock = false }: {
+  db: AggDb; row: AggRow; colId?: string; title?: string; raw?: string; lock?: boolean
+}) {
+  const { t } = useI18n()
+  // 只读源(agent 日程 / ICS / 另一侧 Vault):全字段展示。
+  // 可编辑投影(笔记 `@` 标记源)有 writeCell:时间可改(回写那行 markdown)。`readonly` 只管**时间那一行**:可编辑投影把它放开。
+  const readonly = lock || (!!db.readonly && !db.writeCell)
+  // 其余一律看严格的 db.readonly —— 投影只支持改时间,标题/属性放开就是「看着能改、改了没反应」。
+  const fullyEditable = !lock && !db.readonly
+  const nameCol = db.columns[0]
+  const titleEditable = fullyEditable && !(db.isNoteView && nameCol?.type === 'page')
+  const others = db.columns.filter((c) => c.id !== nameCol?.id && c.id !== colId)
+  const timeRaw = raw ?? (colId && typeof row.cells[colId] === 'string' ? (row.cells[colId] as string) : '')
+  const summary = colId ? eventTimeSummary(timeRaw) : null
+  const [editTime, setEditTime] = useState(false)
+
+  return (
+    <>
+      {/* 标题 */}
+      <div className="amx-cal-card-head">
+        {titleEditable ? (
+          <input
+            className="amx-cal-card-title"
+            aria-label={t('evcard.name')}
+            value={title}
+            placeholder={t('evcard.untitled')}
+            onChange={(e) => setAggName(db, row.rowId, e.target.value)}
+          />
+        ) : (
+          <div className="amx-cal-card-title amx-cal-card-title-ro">{title || t('evcard.untitled')}</div>
+        )}
+      </div>
+
+      {/* 时间:摘要主行 +(点击展开)原生编辑器;只读源仅展示 */}
+      {colId && (
+        <div className="amx-cal-card-row amx-cal-card-timerow">
+          <span className="amx-cal-card-ico"><DateTimeIcon /></span>
+          <div className="amx-cal-card-timebody">
+            {summary && !(editTime && !readonly) && (
+              <button
+                type="button"
+                className="amx-cal-card-timebtn"
+                disabled={readonly}
+                onClick={() => setEditTime(true)}
+              >
+                <span className="amx-cal-card-timehead">
+                  {summary.head}
+                  {summary.badge && <span className="amx-cal-card-badge">{summary.badge}</span>}
+                </span>
+                {summary.date && <span className="amx-cal-card-timesub">{summary.date}</span>}
+              </button>
+            )}
+            {!readonly && (editTime || !summary) && (
+              <div className="amx-cal-card-timeedit">
+                <CalDateFields value={timeRaw} onChange={(v) => setAggCell(db, row.rowId, colId, v)} autoFocus={editTime} />
+                {summary && (
+                  <button type="button" className="amx-cal-card-timedone" onClick={() => setEditTime(false)}>{t('evcard.done')}</button>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* 属性 */}
+      {others.length > 0 && (
+        <div className="amx-cal-card-props">
+          {others.map((c) => (
+            <div key={c.id} className="amx-cal-card-row amx-cal-card-prop">
+              <span className="amx-cal-card-key">
+                <span className="amx-cal-card-ico"><PropIcon col={c} /></span>
+                <span className="amx-cal-card-keyt">{c.name}</span>
+              </span>
+              <div className="amx-cal-card-ctl">
+                {fullyEditable
+                  ? <CardPropField db={db} row={row} col={c} />
+                  : <span className="amx-cal-card-val">{cellText(row.cells[c.id]) || '—'}</span>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </>
   )
 }
 

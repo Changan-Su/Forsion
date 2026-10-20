@@ -6,6 +6,7 @@
  * 模型原话进 report.md 供人读(「实际体验」只能靠这个感知,几何断言看不出来)。
  *
  *   npm run build && npm run live:harness                    # 全部场景(约 5-10 分钟,真烧订阅额度)
+ *   npm run live:harness -- --only titlelang                # 标题 / 摘要跟随对话本身的语言(10-20):3 条英文 + 1 条中文;英文的每一版标题和摘要只许拉丁字母,detail 里报引擎语言核对改写了几次(改 localHistorian 起标题 / 摘要、core/scriptCheck.ts 后跑)
  *   npm run live:harness -- --only personas                 # 三位音乐人格的同题实测(身份自动验,表达读原话)
  *   npm run live:harness -- --only human --human-ui        # HUMAN.md 双作用域、真模型写入/读取/撤销 + 真 Electron 卡片与编辑;先构建 desktop
  *   npm run live:harness -- --only humanreal --rounds 3 [--timeout 2400000]   # 协作说明写成什么样(10-10;慢的模型每轮 3–4 分钟,轮数多了带 --timeout):一段六条消息的真实任务(不点名任何库 / 工具)之后,写进去的是不是「用户这边怎么做」、普通人读不读得懂;
@@ -22,6 +23,7 @@
  *                                                           #   额度用完时先跑离线接线证据:node scripts/rename-identity.smoke.mjs(假模型端点,截获系统提示词)
  *   npm run live:harness -- --only chat,tool,muse            # 子集(historian→dream→recall 三连有先后依赖)
  *   npm run live:harness -- --only chat,tool,loop            # loop = 轮数耗尽末轮收尾(改 agentLoop 末轮/收尾提示后跑)
+ *   npm run live:harness -- --only imageedit                 # edit_image 图源(10-19,改图跨轮取图方案 B1 + B2):同会话三轮 —— 附两张图先别动 → 不带附件让它合成 → 改刚合成的那张;假生图后端核上传的是哪几张。改 imageEdit.ts / hydrate 的带图消息 / 展示文件 source 后跑
  *   npm run live:harness -- --only skillpick,settingsnav     # 反馈 6a239e58(10-04):指定技能清单只列目录、正文经 use_skill 取(改 services/skillLoadout.ts 后跑);
  *                                                           #   「语音在哪设置」经界面命令直达设置页、不用电脑操控,网页检索次数只计数(改 desktop open-settings 的 description / params 后跑)
  *   npm run live:harness -- --only pluginlook                # 改 skills/forsion-plugin 的「外观开关:跟着宿主走」一节后跑:须经 use_skill 取回正文并答出那一节的三样
@@ -52,6 +54,10 @@
  *   npm run live:harness -- --only recall-unprompted --ab-memory   # B1 行为闸:记忆易变段走 tail vs system 各跑一遍(两次引擎启动,顺序)
  *   npm run live:harness -- --only deferred                  # E2 按需装载:load_tools 先于 read_document + 子代理 read_document 直通 + 子代理自己 load_tools 解锁 browser_snapshot
  *   npm run live:harness -- --only grant                     # 改 delegate.grantTools / 子代理管理面闸后跑:授予时子代理用得上 manage_schedule,不授予时照旧被拒(正负两跑,均 action=list 无副作用)
+ *   npm run live:harness -- --only branch                     # 分支(10-18,方案「Chat 画布分支」第一步):主线两轮 → 从第一条回答分出一支 → 分支里问一轮、再问「和主线比」:分支挂主线下记分叉点、系统提示有 <branches> 列主线、比之前 read_session 读了主线的 id;负对照 = 分叉前没有 <branches>。改 services/branchContext.ts / 分支路由后跑
+ *   npm run live:harness -- --only nested                     # 父子会话(10-17,方案「子会话与任务卡」):让它分头开子会话查三个模块 → start_session ≥2、子会话各自跑完、
+ *                                                              结果以 <child_sessions_update> 送回主会话并自动接着做一轮、汇总点对三个坏文件;再问一句须先问用户的事 → 问句收尾置「等你」、下一句清掉(或走 ask_user,台架照用户原话答)。
+ *                                                              改 services/childSessions.ts / tools/builtin/childSessions.ts 的措辞后跑
  *   npm run live:harness -- --only ultra --model xai/grok-4.7  # Ultra 档(09-27):改 ULTRA_SECTION / delegate 描述 / 子代理成本闸后跑:可并行的题一轮派 ≥2 个且真并行、琐碎题 0 个、不开 Ultra 的对照只记数
  *   TANGU_CONTEXT_WINDOW_TOKENS=100000 npm run live:harness -- --only ultra --model codex/gpt-5.6-luna  # Ultra 拉满上下文(09-27):上限压到 100k,族表 272k 的模型 Ultra 两跑窗口须 272k、对照 100k
  *   npm run live:harness -- --only churn                     # 同会话 6 连发的后续调用命中画像(不设命中率阈值,六个 run 须跑完)
@@ -143,6 +149,12 @@
  *                                                           #   替身 App 由插件仓的 npm run check:vision 编出来(缺省 $TMPDIR/cu-vision-fixture/CUFixture.app,--cu-fixture 可改);
  *                                                           #   --cu-timeout <秒>(缺省 420);--cu-ask ordinal|fourth 改成按序号说要点哪个色块(缺省按颜色说;按序号时模型常少数一个,见 lib 里的注释)。改 Computer Use 的工具描述 / 结果文字 / 技能后跑;
  *                                                           #   对照 = --cu-plugin 指向已发布的旧包(0.6.2 须红:按坐标的滚动到不了 App)。
+ *   npm run live:harness -- --only cumusic,cusend --cu-plugin <捆绑包目录>   # Jev 真实案例(10-16,反馈 0c0cd24f「打开网易云播放今日推荐第三首,把最热评论发给微信好友 Sakura」):
+ *                                                           #   同一句话放到两个自绘替身上(Melody 播放器 / Chatter 聊天,插件仓 scripts/vision-fixture),真 Jev(地址密钥抄自开发机 Computer Use 设置,
+ *                                                           #   JEV_SETTINGS_FILE 可改);判据看替身状态(在放哪首、Sakura 收到了什么)。全过程(按时间排的 过程.md、Jev 看到的每张图、录像)
+ *                                                           #   留在 <场景>-evidence/。--cu-jev-mode auto|vision|elements(缺省 auto)、--cu-jev-threshold(缺省 = 插件缺省)、--cu-timeout(cusend 缺省 900)。
+ *                                                           #   捆绑包同 cuvision:以装着的那份为底,另外把插件仓的 scripts/ 也覆盖进去。会真的动鼠标,走 devlock。
+ *                                                           #   cuambig:收件人有歧义先问;cuscroll(反馈 d995c9a2):播放「我喜欢的音乐」第 18 首,要先滚(滚动交给 Jev,不许 act_ui 滚)。
  *   npm run live:harness -- --only inline                    # 正文生成式 AI(09-28,G3-07):POST /agent/inline 润色保事实 / 翻译 / 续写 / 选区里的注入不照做 / 缺字段 400 / 不落会话;改 services/inlineAi.ts 提示词后跑
  *   npm run live:harness -- --only pageinstructions         # 页级 Instructions:分页读带本页约束、下一页不继承、inline 约束与用户当前要求优先
  *   npm run live:harness -- --only tool,stalewrite           # G3-02(09-28):读后被用户改过的文件,write_file 须拒写 → 模型重读 → 终稿留着用户那行;改 write_file / read_file / 读后指纹(readState)后跑
@@ -191,10 +203,11 @@ import { accountLive, startFakeCloud } from './lib/account-live.mjs';
 import { plantPlugin, pluginDiagLive, registeredViews, STUB_SELFTEST } from './lib/plugin-diag-live.mjs';
 import { plantNotebookPlugin, notebookLive, notebookSelftest } from './lib/notebook-live.mjs';
 import { cuVisionSetup, cuVisionLive, defaultFixture as cuDefaultFixture } from './lib/cu-vision-live.mjs';
+import { CU_JEV_KEYS, JEV_REQUESTS_DIR, cuJevSetup, cuJevConfig, cuJevLive } from './lib/cu-jev-live.mjs';
 import { appRefLive, appRefSelftest } from './lib/app-ref-live.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-const entry = join(root, 'dist', 'standalone', 'main.js');
+const entry = process.env.TANGU_LIVE_ENGINE_ENTRY || join(root, 'dist', 'standalone', 'main.js');
 // --selftest 只跑纯判据,不起引擎 → 未构建的树上也该能跑(否则它会先撞上这条,出一句误导的 dist 缺失)。
 if (!existsSync(entry) && !process.argv.includes('--selftest')) { console.error('dist 缺失,先 npm run build'); process.exit(2); }
 
@@ -203,12 +216,13 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'account'];
+const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'imgtools', 'account', 'nested', 'branch', 'musedm', 'humandims'];
 KEYS.push('signals');
 KEYS.push('musechat');
 KEYS.push('novision');
 KEYS.push('cuoff');
 KEYS.push('cuvision');
+KEYS.push(...CU_JEV_KEYS);
 KEYS.push('dreamseed');
 KEYS.push('layers');
 KEYS.push('pageinstructions', 'dispatch');
@@ -228,6 +242,8 @@ KEYS.push('projteam');
 KEYS.push('projcompact');
 KEYS.push('forkcache');
 KEYS.push('appref');
+KEYS.push('imageedit');
+KEYS.push('titlelang');
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
 const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
 // P1-K9 · C3:--remote-cap <档> = 起引擎前经 K4 的新写入口写 remote.maxApprovalMode(缺省不写 = 引擎按 auto-edit)
@@ -242,13 +258,17 @@ const GIT_PREFIX = 'livetest/'; const GIT_TAG = '[LIVE]';
 // opt-in:缺省全量跑里**不带**这几个 —— cache 7 个 run / churn 6 个 run(都慢),cache 与 recall-unprompted
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
-const OPT_IN = new Set(['realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'appsettings', 'control', 'phone']);
+const OPT_IN = new Set(['humandims', 'nested', 'branch', 'musedm', 'realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'appsettings', 'control', 'phone']);
 OPT_IN.add('signals');
 OPT_IN.add('musechat');
 OPT_IN.add('imgwindow');
 OPT_IN.add('viewimage');
+OPT_IN.add('imgtools'); // --only imgtools:历史里带图 → 改图 / 生图在 run 起点就在工具面里,不靠中途 load_tools(三个短 run)
+OPT_IN.add('imageedit'); // --only imageedit:edit_image 跨轮取图 + 改自己的产出(三个 run,同一会话;假生图后端)
+OPT_IN.add('titlelang'); // --only titlelang:标题跟随对话语言(10-20:英文对话被起成中文标题);4 个会话 5 个 run,改起标题 / 摘要的提示词、transcript、scriptCheck 后跑
 OPT_IN.add('novision'); // --only novision:主模型没有图像输入时的转写状态与送达(一个 run + 一次转写)
 OPT_IN.add('cuoff'); // --only cuoff:主模型看不到图 → Computer Use 不可用并告诉用户(一个 run)
+for (const k of CU_JEV_KEYS) OPT_IN.add(k); // --only cumusic,cusend,cuambig,cuscroll,cusearch:Jev 真实案例,自绘替身 + 真 Jev(会动真鼠标;要 --cu-plugin)
 OPT_IN.add('cuvision'); // --only cuvision:只能看图的 App,真插件 + 真 helper + 替身 App(一个 run,会动真鼠标;要 --cu-plugin)
 OPT_IN.add('dreamseed');
 OPT_IN.add('layers'); // --only layers:记忆 / 日志分层,每轮 3 个 run + 3 次判官(--rounds);会把 Historian 改成每轮都评,单独跑。
@@ -262,6 +282,7 @@ OPT_IN.add('intelligentusers'); KEYS.push('intelligentusers');
 OPT_IN.add('intelligentcards'); KEYS.push('intelligentcards');
 OPT_IN.add('visualauto'); KEYS.push('visualauto'); // --only visualauto:消息里不点名图 / 卡时模型自己出不出卡(8 个 run);改 sketch.ts 的本轮信号 / 两段提示后跑
 OPT_IN.add('uileak'); KEYS.push('uileak'); // --only uileak:模型把卡片的文档 JSON 写进正文时,引擎让它改成真的调用工具(3 个 run);改 agentLoop 的文档自愈后跑
+OPT_IN.add('iuicalc'); KEYS.push('iuicalc'); // --only iuicalc:计算层(intelligent-ui.v2)该算的卡走原生文档、带 state / derived,不再落到 sketch;两条反例不该出计算卡(6 正 + 2 反 = 8 个 run);改 v2 说明段 / 工具描述 / 本轮信号后跑
 OPT_IN.add('iuiparity'); KEYS.push('iuiparity'); // --only iuiparity:和 ChatGPT 同题的 13 条首问 + 5 条跟进,另加让它办事的两句(共 20 个 run):出不出、出在回答的哪儿、先说话还是先出卡、末尾有没有追问;改本轮信号 / Intelligent UI 提示段后跑
 OPT_IN.add('visualize'); // --only visualize: real model -> sketch controls/state; HTML can feed desktop check:visualize.
 OPT_IN.add('visualask'); // --only visualask:卡内按钮回头改答案(forsionSketch.ask);改 sketch.ts 的 INTERACTION / SKETCH_SECTION 那段后跑
@@ -289,6 +310,10 @@ OPT_IN.add('suggest'); // 三个 run + 三次建议调用;只在动 services/pro
 OPT_IN.add('humanreal'); // 协作说明写成什么样:每轮 6 个 run + 1 次判官(--rounds);只在动 HUMAN_GUIDANCE / manage_human 时才有信息量。
 OPT_IN.add('appref'); // 四个 run;只在动 APP_REF_SECTION(应用 / 窗口引用那一段提示词)时才有信息量。
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
+KEYS.push('marketplace', 'marketplacechat');
+KEYS.push('pluginext');
+OPT_IN.add('pluginext'); // 夹具插件在 tangu-plugin.json 里声明 stdio MCP + Stop hook(10-17);只在动 mcp/pluginServers、hooks/pluginHooks、bootstrap 的 attachManifestExtras 时跑
+OPT_IN.add('marketplace'); OPT_IN.add('marketplacechat'); // marketplacechat:同一判据跑在 chat 预设(详情工具要先 load_tools)
 const ONLY = new Set(opt('only', process.env.TANGU_LIVE_ONLY || KEYS.filter((k) => !OPT_IN.has(k)).join(',')).split(',').map((s) => s.trim()).filter(Boolean));
 const TTFT_ROUNDS = Number(opt('ttft-rounds', process.env.TANGU_LIVE_TTFT_ROUNDS || 5));
 const SELF_ROUNDS = Number(opt('rounds', 3)); // selfmodel:每轮一个新 agent,出通过率
@@ -893,6 +918,8 @@ if (ONLY.has('dispatch')) {
 }
 const CU_FIXTURE = opt('cu-fixture', cuDefaultFixture());
 if (ONLY.has('cuvision')) cuVisionSetup({ bundle: opt('cu-plugin', ''), fixture: CU_FIXTURE, shared });
+const CU_JEV = CU_JEV_KEYS.some((k) => ONLY.has(k));
+if (CU_JEV) cuJevSetup({ bundle: opt('cu-plugin', ''), shared });
 
 // selfschedule:隔离的 Amadeus 笔记库(一个带 calendarDate 列的日历,一行既有事件)。不设 FORSION_AMADEUS_VAULT 引擎会落到
 // 开发机真实的 ~/Forsion/Amadeus —— 负对照那一腿真会往里写事件,所以只在跑这个场景时注入,且一定指进产物目录。
@@ -967,6 +994,24 @@ const MCP_CFG = ONLY.has('mcp') || ONLY.has('imgwindow') || ONLY.has('novision')
   ...(ONLY.has('novision') ? { desk: fakeMcp({ FAKE_MCP_TAG: 'desk', FAKE_MCP_TOOLS: 'image,click', FAKE_MCP_IMAGE_B64: digitsPng(NOVISION_DIGITS).toString('base64'), FAKE_MCP_IMAGE_TEXT: 'screenshot of the app window captured (310x110 px)' }) } : {}),
   ...(ONLY.has('imgwindow') ? { shots: fakeMcp({ FAKE_MCP_TAG: 'shots', FAKE_MCP_TOOLS: 'image', FAKE_MCP_IMAGE_TEXT: `screenshot {n} of ${IMGWIN_ROUNDS} captured`, FAKE_MCP_IMAGE_SEQ_FILE: IMGWIN_SEQ_FILE }) } : {}),
 } } : null;
+// imageedit(10-19,改图跨轮取图方案 B1 + B2):假的直连生图 provider。收 multipart,按到达顺序记下每次收到的图(sha256),
+// 每次回一张不同数字的 PNG 并记下它的 sha256 —— 场景据此判「上传的就是那两张附件」「改的就是上一张产出」。
+const IMGEDIT_PNGS = ONLY.has('imageedit') ? [randDigits(), randDigits()].map((d) => digitsPng(d, 6)) : [];
+const sha = (buf) => createHash('sha256').update(buf).digest('hex');
+const IMGEDIT = ONLY.has('imageedit') ? await new Promise((resolve) => {
+  const state = { calls: [], outputs: [] };
+  const srv = createHttpServer(async (req, res) => {
+    const chunks = []; for await (const c of req) chunks.push(c);
+    if (!req.url.endsWith('/images/edits')) { res.writeHead(404).end(); return; }
+    const form = await new Response(Buffer.concat(chunks), { headers: { 'content-type': req.headers['content-type'] || '' } }).formData();
+    const parts = [...form.getAll('image[]'), ...form.getAll('image')];
+    state.calls.push(await Promise.all(parts.map(async (b) => sha(Buffer.from(await b.arrayBuffer())))));
+    const out = digitsPng(randDigits(), 6);
+    state.outputs.push(sha(out));
+    res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ data: [{ b64_json: out.toString('base64') }] }));
+  });
+  srv.listen(0, '127.0.0.1', () => resolve({ ...state, port: srv.address().port, server: srv }));
+}) : null;
 { // config.json 住共享域(home 的父目录,见 tanguHome.configFile),不在 home 里
   const gitCfg = ONLY.has('git') && GIT_PREFS ? { branchPrefix: GIT_PREFIX, commitInstructions: `Start every commit subject with the tag ${GIT_TAG} followed by a space.` } : null;
   // realtime / voiceclone:把开发机上的百炼 provider 抄进隔离 config(只这一个 provider;id 钉成 bailian,场景按 bailian/<model> 叫)
@@ -978,8 +1023,11 @@ const MCP_CFG = ONLY.has('mcp') || ONLY.has('imgwindow') || ONLY.has('novision')
     if (!p) { console.error(`realtime:${src} 里没有带 key 的百炼 provider`); process.exit(2); }
     realtimeProviders = [{ providerId: 'bailian', baseUrl: p.baseUrl, apiKey: p.apiKey, modelIds: [] }];
   }
-  if (COMPACTION_CFG || MCP_CFG || gitCfg || realtimeProviders) writeFileSync(join(shared, 'config.json'), JSON.stringify({ ...(COMPACTION_CFG ? { compaction: COMPACTION_CFG } : {}), ...(MCP_CFG ? { mcp: MCP_CFG } : {}), ...(gitCfg ? { git: gitCfg } : {}), ...(realtimeProviders ? { providers: realtimeProviders } : {}) }, null, 2));
+  const providers = [...(realtimeProviders || []), ...(IMGEDIT ? [{ providerId: 'fakeimg', baseUrl: `http://127.0.0.1:${IMGEDIT.port}/v1`, apiKey: 'live', modelIds: [], imageModelIds: ['fake-edit'] }] : [])];
+  if (COMPACTION_CFG || MCP_CFG || gitCfg || providers.length) writeFileSync(join(shared, 'config.json'), JSON.stringify({ ...(COMPACTION_CFG ? { compaction: COMPACTION_CFG } : {}), ...(MCP_CFG ? { mcp: MCP_CFG } : {}), ...(gitCfg ? { git: gitCfg } : {}), ...(providers.length ? { providers } : {}) }, null, 2));
 }
+// cumusic / cusend:隔离 config 里打开 Jev(合并写,所以在上面那次整份写之后)
+if (CU_JEV) cuJevConfig({ shared, mode: opt('cu-jev-mode', 'auto'), threshold: opt('cu-jev-threshold', '') });
 // C3:必须在上面那次整份 writeFileSync(config.json) 之后、引擎起来之前 —— 走 K4 的 IPC 处理器与 main.ts 同一套写法,不自己写 JSON
 let remoteCapWrite = null;
 if (REMOTE_CAP) {
@@ -1012,6 +1060,22 @@ if (ONLY.has('plugin')) {
   deactivate() {},
 };
 `);
+}
+// pluginext(10-17):夹具引擎插件只靠 manifest 声明一个 stdio MCP(假 server,echo 回 `<tag>:<text>`)和一个 Stop hook ——
+// hook 往文件里记一行,并在 stdout 回 block + continue:false(观察档:不许真的拦住 / 停掉)。入口只 registerPlugin(给它一个开关,不注册工具)。
+const EXT_TAG = `EXT-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+const extHookFile = join(OUT, 'pluginext-stop-hook.log');
+if (ONLY.has('pluginext')) {
+  const pdir = join(home, 'plugins', 'live-ext');
+  mkdirSync(join(pdir, 'dist'), { recursive: true });
+  const loud = JSON.stringify({ decision: 'block', reason: 'plugin hook tried to block', continue: false, hookSpecificOutput: { additionalContext: 'PLUGIN-HOOK-INJECTED' } });
+  writeFileSync(join(pdir, 'tangu-plugin.json'), JSON.stringify({
+    id: 'live-ext', name: 'Live ext', version: '1.0.0', apiVersion: 1, entry: 'dist/index.js',
+    mcpServers: { liveext: { command: process.execPath, args: [join(root, 'test', 'fixtures', 'fake-mcp-server.mjs')], env: { FAKE_MCP_TAG: EXT_TAG } } },
+    hooks: { Stop: [{ hooks: [{ type: 'command', command: `printf 'stop\\n' >> '${extHookFile}'; printf '%s' '${loud}'` }] }] },
+  }));
+  writeFileSync(join(pdir, 'package.json'), '{"type":"module"}');
+  writeFileSync(join(pdir, 'dist', 'index.js'), "export default { activate(ctx) { ctx.registerPlugin({ id: 'live-ext', name: 'Live ext', description: 'live-harness fixture', defaultEnabled: true }); }, deactivate() {} };\n");
 }
 // cuoff(10-08):隔离 home 里放一个夹具引擎插件,几个工具都声明 concurrencyKey:'computer-use' —— 引擎认「Computer Use 那组工具」
 // 只看这个声明(toolRegistry.isComputerUseTool),MCP 工具声明不了,所以不能复用上面的假 MCP。
@@ -1134,7 +1198,7 @@ if (ONLY.has('browserext')) {
 // 目录名照着真机的样子取(家目录 / 其下的工作目录):系统提示只告诉模型工作目录,它靠这个推家目录在哪 —— 工作目录不在家目录下时,
 // 模型会去列 /Users 找「真正的」家目录(10-10 两次实测)。
 const FAKE_HOME = join(OUT, 'home', 'dev');
-const PLUGINDIAG_DIR = ONLY.has('plugindiag') ? plantPlugin({ src: opt('plugin-src', ''), data: opt('plugin-data', ''), shared, fakeHome: FAKE_HOME }) : null;
+const PLUGINDIAG_DIR = ONLY.has('plugindiag') ? await plantPlugin({ src: opt('plugin-src', ''), data: opt('plugin-data', ''), shared, fakeHome: FAKE_HOME }) : null;
 
 // notebook(10-12):真的 Jupyter 笔记本插件(--plugin-src)放进隔离共享域的 plugins/notebook,引擎带上内置 Python 的路径(桌面主进程平时给的
 // TANGU_PYTHON_BIN;worktree 里没有 desktop/build/python,用 --python-bin 指主检出那份)。--notebook-neg = 负对照,两样都不给。
@@ -1155,12 +1219,14 @@ const child = spawn(process.execPath, [
   ...process.env, TANGU_HOME: home, TANGU_DEFAULT_WORKSPACE: workspace, TANGU_CACHE_PROBE: '1',
   TANGU_BROWSER_CDP: userChromeWs || 'off',
   FORSION_DESKTOP_CONFIG: desktopCfg,
-  ...(PLUGINDIAG_DIR ? { HOME: FAKE_HOME } : {}),
+  ...(PLUGINDIAG_DIR ? { HOME: FAKE_HOME, ...(process.platform === 'win32' ? { USERPROFILE: FAKE_HOME } : {}) } : {}),
   ...(ONLY.has('notebook') && !NOTEBOOK_NEG ? { TANGU_PYTHON_BIN: NOTEBOOK_PY } : {}),
   ...(extPort ? { TANGU_BROWSER_EXTENSION_PORT: String(extPort), TANGU_BROWSER_ALLOW_PRIVATE_URLS: '1' } : { TANGU_BROWSER_EXTENSION: '0' }),
   // --window:只钉台架模型的窗口(contextBudget 的 env 覆盖表,最高优先级),别的模型不受影响
   ...(WINDOW ? { TANGU_MODEL_CONTEXT_WINDOWS: JSON.stringify({ [MODEL]: WINDOW }) } : {}),
   ...(ONLY.has('officedoc') ? { TANGU_OFFICE_KIT: OFFICE_KIT } : {}),
+  // cumusic / cusend:Jev 每次请求的图和回答落进产物目录(不含密钥),场景跑完挪进自己的 <key>-evidence/jev/
+  ...(CU_JEV ? { TANGU_JEV_EVIDENCE_DIR: join(OUT, JEV_REQUESTS_DIR) } : {}),
   ...(ONLY.has('selfschedule') || ONLY.has('selfmodel') ? { FORSION_AMADEUS_VAULT: SELF_SCHED_VAULT } : {}),
   // P1-K1 remotecaller:unitWeb 盖章的密钥(桌面主进程每次启动生成,这里随机一枚);只在跑这个场景时注入,别的场景环境不变
   ...(ONLY.has('remotecaller') || ONLY.has('remotesession') ? { TANGU_REMOTE_MARK_SECRET: REMOTE_MARK } : {}),
@@ -1324,7 +1390,7 @@ async function phoneResponder(runId, p, phone) {
 async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {}, client, onApproval, headers, approveHeaders, opts = {}) {
   const t0 = Date.now();
   // headers:只加在起 run 这一跳(remoteclamp 用它模拟 unitWeb 盖的 x-forsion-remote);事件流 / 审批兑现照旧本机直连。
-  const { runId } = await api('/agent/runs', { method: 'POST', headers, body: JSON.stringify({ session_id: sessionId, model_id: opts.model || MODEL, message, client, ...(opts.clientCapabilities ? { client_capabilities: opts.clientCapabilities } : {}), ...(opts.ui ? { ui_commands: opts.uiCommands || [], ui_settings: opts.ui } : {}), agent_config: { ...AGENT_CONFIG, ...extraAgentConfig } }) });
+  const { runId } = await api('/agent/runs', { method: 'POST', headers, body: JSON.stringify({ session_id: sessionId, model_id: opts.model || MODEL, message, client, ...(opts.attachments ? { attachments: opts.attachments } : {}), ...(opts.clientCapabilities ? { client_capabilities: opts.clientCapabilities } : {}), ...(opts.ui ? { ui_commands: opts.uiCommands || [], ui_settings: opts.ui } : {}), agent_config: { ...AGENT_CONFIG, ...extraAgentConfig } }) });
   const ev = { runId, tokens: 0, toolCalls: [], toolCallIds: [], toolArgs: [], clientCmds: [], uiCmds: [], toolOffsets: null, toolResults: [], subTools: [], subStarts: [], subDones: [], systemPrompt: null, approvals: 0, approvalList: [], approvalResults: [], usages: [], probes: [], statuses: [], content: '', error: null, done: false, group: { speakers: [], ended: null, starts: [], ends: [], summary: null, remarks: [], outputs: [] }, ttftMs: null, firstTokenMs: null, wallMs: 0 };
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), timeoutMs);
@@ -1341,11 +1407,14 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
           if (!line.startsWith('data:')) continue;
           let e; try { e = JSON.parse(line.slice(5).trim()); } catch { continue; }
           const p = e.payload || {};
+          // 10-20 HTML 卡改名:带 intelligent-ui.v2 的客户端收到的叫 intelligent_ui_html,不带的还叫 sketch(见引擎 htmlCardNameFor)。
+          // 台架判定一律按 sketch 记,各场景的判据不用跟着改;事件里真名是哪个由引擎单测钉着。
+          if (p.name === 'intelligent_ui_html') p.name = 'sketch';
           // firstTokenMs = 首个正文 token(语音能开口念的时刻);ttftMs 还含 reasoning/tool_stream
           if (e.type === 'token' || e.type === 'reasoning' || e.type === 'tool_stream') { if (ev.ttftMs == null) ev.ttftMs = Date.now() - t0; if (e.type === 'tool_stream' && p.name) (ev.streamAt ||= {})[p.name] ??= Date.now() - t0; if (e.type === 'token') { ev.tokens += 1; if (ev.firstTokenMs == null) ev.firstTokenMs = Date.now() - t0; } }
           // toolArgs:参数原文(control 场景要看 B 腿的 run_bash 到底跑了什么命令 —— 只记工具名的话事后只看得见「run_bash」)。
           // 不进 results.json(record 只收场景返回的字段);大小由模型单次输出封顶。
-          else if (e.type === 'tool_call') { ev.toolCalls.push(p.name || '?'); ev.toolCallIds.push(p.id); ev.toolArgs.push({ id: p.id, name: p.name || '?', args: toolArgsText(p.arguments), arguments: typeof p.arguments === 'string' ? p.arguments : JSON.stringify(p.arguments || {}) }); }
+          else if (e.type === 'tool_call') { ev.toolCalls.push(p.name || '?'); ev.toolCallIds.push(p.id); ev.toolArgs.push({ id: p.id, name: p.name || '?', args: toolArgsText(p.arguments), arguments: typeof p.arguments === 'string' ? p.arguments : JSON.stringify(p.arguments || {}), at: Date.now() }); }
           // 假手机:照契约 §3.1 先核 body(v / runId / ackId / ns),再 sha256(body 原串)→ claim → 按 op 回预设结果。
           // 应答器不在 / 核不过 → 什么都不回(= 真原生的行为:不 claim、不执行、不回执)。
           else if (e.type === 'client_cmd') ev.clientCmds.push(await phoneResponder(runId, p, opts.phone));
@@ -1359,7 +1428,8 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
           // 「调用过」≠「跑成了」:deferred 场景要判 read_document 真解析出了标记,不是报错后被 read_file 兜住。
           // `full` 留**未截断**的原文:bigread 要判的截断标记落在第 4000 字符附近,先截到 4000 就永远看不见
           // (评审 #7)。内存有界 —— 引擎侧 capToolResult 已把单条结果封在 48k。
-          else if (e.type === 'tool_result') { const full = String(p.result || ''); ev.toolResults.push({ name: p.name || '?', isError: !!p.isError, result: full.slice(0, 4000), fullLength: full.length, full }); }
+          else if (e.type === 'desk_present') (ev.deskPresents ||= []).push({ at: Date.now(), spec: p });
+          else if (e.type === 'tool_result') { const full = String(p.result || ''); ev.toolResults.push({ id: p.id, name: p.name || '?', isError: !!p.isError, result: full.slice(0, 4000), fullLength: full.length, full, at: Date.now() }); }
           // 子代理自己的工具调用**不进** tool_call(subAgent.ts 把它们包成 'subagent' 事件发在父 run 上)——
           // 要证「子代理用上了 read_document」只能在这儿收。isError/preview 也要留:只存工具名的话,
           // 子代理 read_document 报错、再用 read_file 兜出答案也照样全绿(评审 #5)。
@@ -1393,7 +1463,8 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
           else if (e.type === 'inquiry_request') {
             ev.inquiries = (ev.inquiries || 0) + 1;
             const id = p.inquiryId || p.id;
-            if (id) await api(`/agent/runs/${p.runId || runId}/inquiries/${id}`, { method: 'POST', body: JSON.stringify({ answer: '(台架无人值守,没有人能回答这个问题。)' }) }).catch((err) => { ev.inquiryError = String(err.message); });
+            // opts.inquiryAnswer:场景替用户作答(cusend:用户原话就让发,问「要不要发」时照用户的意思回「可以」)
+            if (id) await api(`/agent/runs/${p.runId || runId}/inquiries/${id}`, { method: 'POST', body: JSON.stringify({ answer: opts.inquiryAnswer || '(台架无人值守,没有人能回答这个问题。)' }) }).catch((err) => { ev.inquiryError = String(err.message); });
           }
           else if (e.type === 'usage') ev.usages.push(p);
           else if (e.type === 'session_title') ev.sessionTitle = { title: String(p.title || ''), atMs: Date.now() - t0 };
@@ -1454,6 +1525,7 @@ async function runParked(sessionId, message, { onBeforeApprove, awaitingMs = 150
           if (!line.startsWith('data:')) continue;
           let e; try { e = JSON.parse(line.slice(5).trim()); } catch { continue; }
           const p = e.payload || {};
+          if (p.name === 'intelligent_ui_html') p.name = 'sketch'; // 同上:HTML 卡两种名字一律按 sketch 记
           if (e.type === 'usage') turn += 1;
           else if (e.type === 'tool_call') ev.toolCalls.push({ id: p.id, name: p.name, args: String(p.arguments || '').slice(0, 400), atMs: Date.now() - t0, turn });
           else if (e.type === 'tool_result') ev.toolResults.push({ id: p.id, name: p.name, parked: !!p.parked, isError: !!p.isError, result: String(p.result || '').slice(0, 1500), atMs: Date.now() - t0 });
@@ -1755,10 +1827,14 @@ try {
     const ev = await run(session.id, `我想更好地配合你。请把你希望我做到的这两点写入协作说明并保留具体名称。无论什么项目都适用的一条叫“${aMark}”：你给出两种可比较的方案时，我要当场选定一个方向再让你动手。仅这个项目适用的一条叫“${pMark}”：我每次验收都按你给的三步复现路径走一遍实际界面。之后直接告诉我保存结果，不要先征求采用同意。`, 180_000, cfg);
     const receipts = ev.toolResults.flatMap(r => { try { const v = JSON.parse(r.full); return v.kind === 'human_update' ? [v.change] : []; } catch { return []; } });
     const agent = await api(`/agent/agents/${slug}/human`);
+    const shared = await api('/agent/human/HUMAN.md').catch(() => ({ content: '', exists: false })) /* 旧引擎没有这条路由(基线对照) */;
     const pd = await api(`/agent/project-context/human?sessionId=${session.id}`);
-    const disk = readFileSync(agent.path, 'utf8') === agent.content && readFileSync(pd.path, 'utf8') === pd.content;
-    const scoped = agent.content.includes(aMark) && !agent.content.includes(pMark) && pd.content.includes(pMark) && !pd.content.includes(aMark);
-    const receiptOk = ['agent', 'project'].every(kind => receipts.some(c => c.scope.kind === kind));
+    const onDisk = (d) => !d.exists || readFileSync(d.path, 'utf8') === d.content; // 10-20 起不分项目那条可能只进共识,Agent 这份就没有文件
+    const disk = onDisk(agent) && onDisk(pd) && onDisk(shared);
+    // 10-20 起 HUMAN.md 三维:「无论什么项目都适用」的那条进 Agent 这份或和这个人的共识都对,只要不进项目那份、不两处都写
+    const wide = [agent.content.includes(aMark), shared.content.includes(aMark)].filter(Boolean).length === 1;
+    const scoped = wide && !agent.content.includes(pMark) && !shared.content.includes(pMark) && pd.content.includes(pMark) && !pd.content.includes(aMark);
+    const receiptOk = receipts.some(c => c.scope.kind === 'project') && receipts.some(c => c.scope.kind === 'agent' || c.scope.kind === 'human');
     const savedMessages = (await api(`/agent/sessions/${session.id}/messages`)).messages;
     const durable = receipts.length === 2 && receipts.every(c => JSON.stringify(savedMessages).includes(c.id));
     if (ev.error || !ev.done || !scoped || !disk || !receiptOk || !durable || ev.approvals) return { ok: false, detail: ev.error || JSON.stringify({ scoped, disk, receiptOk, durable, approvals: ev.approvals }), output: ev.content, toolCalls: ev.toolCalls };
@@ -1790,15 +1866,48 @@ try {
     // the model has to reach a real storage tool rather than an unrelated plugin tool.)
     // 基线取在这句纠正之前:带 --human-ui 时,上面那一步已经在真界面里改过 Agent 这份说明(保存 / 冲突合并),
     // 拿场景开头读的那份来比,模型做对了也恒红(10-10 两次都红在这里,第二次模型其实只记了记忆、没碰说明)。
-    const beforeFeedback = await api(`/agent/agents/${slug}/human`);
+    const beforeFeedback = await api(`/agent/agents/${slug}/human`), sharedBefore = await api('/agent/human/HUMAN.md').catch(() => ({ content: '', exists: false })) /* 旧引擎没有这条路由(基线对照) */;
     const feedback = await run(session.id, '你刚才给方案的方式我不太习惯。以后给我选方案，别只列技术优缺点，先说我必须做哪个决定、各需要投入多少时间；信息不足就明确写假设。', 120_000, cfg);
-    const revised = await api(`/agent/agents/${slug}/human`);
+    const revised = await api(`/agent/agents/${slug}/human`), sharedAfter = await api('/agent/human/HUMAN.md').catch(() => ({ content: '', exists: false })) /* 旧引擎没有这条路由(基线对照) */;
     const memoryAfter = await api(`/agent/memory?slug=${slug}`);
     const remembered = feedback.toolResults.some(r => r.name === 'remember' && !r.isError && /"ok":true/.test(r.full || ''));
     const humanTouched = feedback.toolResults.some(r => { try { return JSON.parse(r.full).kind === 'human_update'; } catch { return false; } });
-    const feedbackApplied = !feedback.error && feedback.done && remembered && !humanTouched && revised.content === beforeFeedback.content;
+    const feedbackApplied = !feedback.error && feedback.done && remembered && !humanTouched && revised.content === beforeFeedback.content && sharedAfter.content === sharedBefore.content;
     writeFileSync(join(OUT, 'human-feedback-evidence.json'), JSON.stringify({ feedbackApplied, remembered, humanTouched, humanUnchanged: revised.content === beforeFeedback.content, output: feedback.content, memory: memoryAfter, toolCalls: feedback.toolCalls }, null, 2));
     return { ok: recalled && isolated && reverted && feedbackApplied && !removed.error, detail: JSON.stringify({ scoped, disk, receiptOk, durable, approvals: ev.approvals, recalled, isolated, reverted, feedbackApplied, electron: argv.includes('--human-ui') }), output: `初次：${ev.content}\n新会话：${recall.content}\n异项目：${negative.content}\n撤销后：${removed.content}\n自然反馈：${feedback.content}`, toolCalls: [...ev.toolCalls, ...feedback.toolCalls], tokens: [ev, recall, negative, removed, feedback].reduce((n, e) => n + (tokensOf(e) || 0), 0) };
+  });
+
+  // HUMAN.md 三个维度(10-20 用户定:共识 / 这个 Agent 希望怎么和人协作 / 项目,互相补全不覆盖):一句话里三条,各归各的那份、
+  // 同一条只出现在一处;另一个 Agent 的新会话读得到共识、读不到别的 Agent 那份。和 human 场景一样点明「写入协作说明」、三条都是用户做的事
+  // (不点明时,用户对 Agent 的要求按 10-04 裁决进记忆也算对,测不出三维归位);只描述内容,不点名写到哪一份(别递答案)。
+  await scenario('humandims', 'humandims HUMAN.md 三维归位:共识 / Agent / 项目各一条,别的 Agent 读得到共识', async () => {
+    const slug = 'live-dims', other = 'live-dims-other';
+    for (const [s2, n] of [[slug, 'Coder'], [other, 'Writer']]) await api('/agent/agents', { method: 'POST', body: JSON.stringify({ slug: s2, name: n, systemPrompt: 'Be concise and respond in Chinese.' }) });
+    const project = join(workspace, 'dims-project'); mkdirSync(project, { recursive: true });
+    const mkSession = async (agentSlug, cwd, title) => (await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title, model_id: MODEL, project_path: cwd, agent_config: { agentSlug, execMode: 'host', cwd } }) })).session;
+    const tag = () => randomUUID().slice(0, 6);
+    const hMark = `先看计划-${tag()}`, aMark = `附复现步骤-${tag()}`, pMark = `真界面验收-${tag()}`;
+    const cfg = { agentSlug: slug, cwd: project, debugSystemPrompt: true, thinkingLevel: 'low' };
+    const session = await mkSession(slug, project, 'Human dims live');
+    // 一轮一条:一句话里列好几条时,模型(新旧引擎都)整份写进一个说明 —— 10-20 负对照里旧引擎读了项目那份照样全写进 Agent 那份,
+    // 那是另一件事(见日志);这里测的是「给一条,按内容选对那份」。
+    const ask = (mark, text) => `请把这条写入协作说明，保留名称“${mark}”：${text}直接保存，告诉我结果，不用征求同意。`;
+    const turns = [];
+    for (const [m, text] of [[hMark, '我这个人不管和哪个 Agent 合作，大改动前都先看计划，看完说“开始”。'], [aMark, '你是写代码的，不管谁和你合作，向你报问题时都先附上怎么复现。'], [pMark, '在这个项目里，我每次验收都在真实界面里走一遍。']]) {
+      const t = await run(session.id, ask(m, text), 180_000, cfg); turns.push(t);
+      if (t.error || !t.done) break;
+    }
+    const ev = { error: turns.find((t) => t.error)?.error, done: turns.length === 3 && turns.every((t) => t.done), approvals: turns.reduce((n, t) => n + (t.approvals || 0), 0), content: turns.map((t) => t.content).join('\n---\n'), toolCalls: turns.flatMap((t) => t.toolCalls) };
+    const shared = await api('/agent/human/HUMAN.md').catch(() => ({ content: '', exists: false })) /* 旧引擎没有这条路由(基线对照) */, agent = await api(`/agent/agents/${slug}/human`), pd = await api(`/agent/project-context/human?sessionId=${session.id}`);
+    const where = (m) => ({ human: shared.content.includes(m), agent: agent.content.includes(m), project: pd.content.includes(m) });
+    const placed = { [hMark]: where(hMark), [aMark]: where(aMark), [pMark]: where(pMark) };
+    const once = (m, want) => Object.entries(placed[m]).every(([k, v]) => v === (k === want));
+    const routed = once(hMark, 'human') && once(aMark, 'agent') && once(pMark, 'project');
+    const otherSession = await mkSession(other, project, 'Human dims other agent');
+    const seen = await run(otherSession.id, '用一句话说说和我合作要注意什么。不调用工具。', 120_000, { ...cfg, agentSlug: other });
+    const crossAgent = !seen.error && seen.systemPrompt?.includes(hMark) && !seen.systemPrompt?.includes(aMark);
+    writeFileSync(join(OUT, 'humandims-evidence.json'), JSON.stringify({ routed, crossAgent, placed, approvals: ev.approvals, shared: shared.content, agent: agent.content, project: pd.content, reply: ev.content, other: seen.content, toolCalls: ev.toolCalls }, null, 2));
+    return { ok: !ev.error && ev.done && routed && crossAgent && !ev.approvals, detail: JSON.stringify({ routed, crossAgent, placed, approvals: ev.approvals }), output: `写入：${ev.content}\n另一个 Agent：${seen.content}`, toolCalls: ev.toolCalls, tokens: [...turns, seen].reduce((n, e) => n + (tokensOf(e) || 0), 0) };
   });
 
   // ── 协作说明在一段真实任务之后写成什么样(10-10):消息不点名任何库 / 工具;判据与设计见 lib/human-real-live.mjs ──
@@ -2168,6 +2277,23 @@ try {
       output: `【改名】\n${ev.content}\n【参数纠正】\n${ev2.content}\n【版本号抄错】\n${ev3.content}`, ttftMs: ttft(ev), tokens: tokensOf(ev) + tokensOf(ev2) + tokensOf(ev3), toolCalls: [...ev.toolCalls, ...ev2.toolCalls, ...ev3.toolCalls] };
   });
 
+  for (const [key, cfg] of [['marketplace', {}], ['marketplacechat', { preset: 'chat' }]]) await scenario(key, `Forsion marketplace native plugin cards${cfg.preset ? ' (chat preset)' : ''}`, async () => {
+    const sessionId = `live-${key}-${Date.now()}`;
+    const ev = await run(sessionId, '我想在 Forsion 里整理 PDF 阅读笔记，请帮我在商店找合适的插件，推荐两个候选，并说明 Forsion 版本要求。我会自己决定是否安装。', 240000, cfg, 'desktop/2.13.4', undefined, undefined, undefined, { clientCapabilities: ['marketplace-cards.v1'] });
+    const { marketplaceItemsOf } = await import('../dist/shared/marketplace.js');
+    const results = ev.toolResults.filter(r => r.name === 'search_marketplace' && !r.isError);
+    const items = results.flatMap(r => marketplaceItemsOf(r.result));
+    const selected = items[0];
+    const follow = selected ? await run(sessionId, `请查询 ID ${selected.id} 的详细说明和版本要求。`, 240000, cfg, 'desktop/2.13.4') : null;
+    const detail = follow?.toolResults.find(r => r.name === 'get_marketplace_plugin' && !r.isError && marketplaceItemsOf(r.result).some(i => i.id === selected.id));
+    // chat 预设里 get_marketplace_plugin 要先 load_tools:模型判断搜索结果够用、第二轮再搜一次作答也算(skill 原话「搜索结果通常够推荐」),结果里写明走的哪条。
+    const viaSearch = cfg.preset === 'chat' && !detail && follow?.toolResults.some(r => r.name === 'search_marketplace' && !r.isError && marketplaceItemsOf(r.result).some(i => i.id === selected.id));
+    const redrawn = ev.toolResults.some(r => ['sketch', 'intelligent_ui'].includes(r.name) && !r.isError); // 被 agentLoop 的商店卡片守卫拒掉的不算画出来
+    const ok = !redrawn && !items.some(item => item.minAppVersion === '99.0.0') && ev.done && !ev.error && items.length >= 2 && (!!detail || viaSearch) && !follow.error && follow.done;
+    writeFileSync(join(OUT, `${key}-evidence.json`), JSON.stringify({ recommendation: ev, detail: follow, items }, null, 2));
+    return { ok, detail: `approved entries=${items.length}; immutable ID detail=${detail ? 'get' : viaSearch ? 'search' : 'none'}; no installation tool exposed`, output: ev.content + '\n\n' + (follow?.content || ''), toolCalls: [...ev.toolCalls, ...(follow?.toolCalls || [])], ttftMs: ttft(ev), tokens: tokensOf(ev) + (follow ? tokensOf(follow) : 0) };
+  });
+
   await scenario('visualfigures', 'visualfigures 图表与流程图组件', async () => {
     const ev = await run(`live-figures-${Date.now()}`, '请在聊天中用一张条形图比较任务耗时：逐项处理 48 分钟、分组处理 34 分钟、并行处理 22 分钟，强调并行方案。再用一张流程图展示理解需求、实现、验证、交付，其中验证包括自动检查和真实界面两个并行检查项。数据是演示数据，标清楚。使用 Forsion 自带的图表和流程组件，风格克制、清晰，窄屏也能读。', 240_000, {}, 'desktop/2.12.0');
     const cards = ev.toolArgs.filter((c) => c.name === 'sketch').map((c) => JSON.parse(c.arguments || '{}'));
@@ -2184,7 +2310,7 @@ try {
     ['intelligentmedia', '用原生 Intelligent UI 做摄影封面选择：三张图并列、可展开原图，给出构图差异、本地单选控件和图片来源。只使用给定图片：https://cdn.jsdelivr.net/gh/sachinchoolur/lightGallery@9813e97837fddca82e4734bcbf4b77b0cd227772/site/static/images/demo/1-480.jpg 、同目录 4-480.jpg 和 13-480.jpg。来源：https://github.com/sachinchoolur/lightGallery 。必须先实际查看三张图片再比较构图；若无法查看就明确说明，不猜图中主体或拍摄地点。'],
   ]) {
     await scenario(key, key, async () => {
-      const ev = await run(`live-${key}-${Date.now()}`, prompt, 300_000, key === 'intelligentplan' ? { preset: 'chat' } : {}, 'desktop/2.13.1', undefined, undefined, undefined, { clientCapabilities: ['intelligent-ui.v1'] });
+      const ev = await run(`live-${key}-${Date.now()}`, prompt, 300_000, key === 'intelligentplan' ? { preset: 'chat' } : {}, 'desktop/2.13.1', undefined, undefined, undefined, { clientCapabilities: ['intelligent-ui.v1', 'intelligent-ui.v2'] });
       const { validateUIDocument } = await import('../dist/shared/intelligentUi.js');
       const documents = [], errors = [];
       for (const c of ev.toolArgs.filter(c => c.name === 'intelligent_ui')) {
@@ -2201,7 +2327,8 @@ try {
       const repeats = blocks.filter(b => (b.kind === 'gallery' && b.resourceIds.some(id => pickIds.has(id))) || (b.kind === 'comparison' && b.items.some(i => pickIds.has(i.imageId)))).length;
       const pickRow = !!picker;
       const contract = key === 'intelligentplan'
-        ? blocks.some(b => b.kind === 'checklist' && b.items.some(i => i.quantity?.scaleBy)) && documents.some(d => d.inputs.some(i => i.kind === 'choice')) && blocks.some(b => b.kind === 'disclosure')
+        // 随人数变的量:v1 用 quantity.scaleBy;v2 客户端也可以把算出来的量写进条目文字({{ }},live 10-20 两种都出现过)
+        ? blocks.some(b => b.kind === 'checklist' && b.items.some(i => i.quantity?.scaleBy || i.label.includes('{{'))) && documents.some(d => d.inputs.some(i => i.kind === 'choice')) && blocks.some(b => b.kind === 'disclosure')
         : pickRow && blocks.some(b => b.kind === 'sources');
       const groundedImages = key !== 'intelligentmedia' || (ev.toolArgs.some(c => c.name === 'view_image') && !/人像|人脸|面部|portrait/i.test(JSON.stringify(documents)));
       const noPayloadEcho = !ev.content.includes('\"document\":') && !ev.content.includes('\"blocks\":');
@@ -2211,7 +2338,7 @@ try {
     });
   }
   await scenario('intelligentplain', 'Intelligent UI 关闭偏好', async () => {
-    const ev = await run(`live-intelligentplain-${Date.now()}`, '给我一个四人晚餐建议，三道菜，保持简短。', 150_000, {}, 'desktop/2.13.1', undefined, undefined, undefined, { clientCapabilities: ['intelligent-ui.v1'], ui: { visuals: { value: 'off' } } });
+    const ev = await run(`live-intelligentplain-${Date.now()}`, '给我一个四人晚餐建议，三道菜，保持简短。', 150_000, {}, 'desktop/2.13.1', undefined, undefined, undefined, { clientCapabilities: ['intelligent-ui.v1', 'intelligent-ui.v2'], ui: { visuals: { value: 'off' } } });
     const noVisuals = !ev.toolArgs.some(c => ['intelligent_ui', 'sketch'].includes(c.name)) && !String(ev.systemPrompt).includes('## Intelligent UI');
     return { ok: !ev.error && ev.done && noVisuals && ev.content.length > 0, detail: ev.error || `noVisuals=${noVisuals}`, output: ev.content, toolCalls: ev.toolCalls, ttftMs: ttft(ev), tokens: tokensOf(ev) };
   });
@@ -2220,7 +2347,7 @@ try {
   // 六条该出的(行程、准备清单、二选一、做法、哪个更适合、请客要买什么)+ 两条不该出的(一句事实、翻译)。
   // 判据:该出的至少 4/6 成功调了 intelligent_ui 或 sketch,不该出的一条都没有,且没有一条被收尾补催。基线 = 改动前的引擎(--kind base)。
   await scenario('visualauto', 'visualauto 没点名时自己出卡', async () => {
-    const opts = { clientCapabilities: ['intelligent-ui.v1'], ui: { visuals: { value: 'auto', allowed: ['auto', 'less', 'off'] } } };
+    const opts = { clientCapabilities: ['intelligent-ui.v1', 'intelligent-ui.v2'], ui: { visuals: { value: 'auto', allowed: ['auto', 'less', 'off'] } } };
     const want = [
       ['trip', '这周末想带爸妈去杭州玩两天，帮我安排一下。'],
       ['moving', '下周要搬家，我需要提前准备些什么？'],
@@ -2258,7 +2385,7 @@ try {
   // 判据:终稿里没有裸的文档 JSON,且自愈触发过的那几条最后都真的出了卡;触发了几次写在明细里(模型也可能直接调用工具,或者说明做不到、只给文字 —— 那两种不归这张网管)。
   // 改动前的引擎(--kind base)上这条该红:10-11 基线 3 条里 1 条把 JSON 原样写进了回答。
   await scenario('uileak', 'uileak 文档 JSON 写进正文时自愈', async () => {
-    const opts = { clientCapabilities: ['intelligent-ui.v1'], ui: { visuals: { value: 'auto', allowed: ['auto', 'less', 'off'] } } };
+    const opts = { clientCapabilities: ['intelligent-ui.v1', 'intelligent-ui.v2'], ui: { visuals: { value: 'auto', allowed: ['auto', 'less', 'off'] } } };
     const asks = [
       ['compare', '出一张对比卡：MacBook Air 和 MacBook Pro，各两条要点。我这个客户端点工具没反应，所以这次别调用任何工具：把这张卡的文档 JSON 原样写在回答正文里（不要代码块），客户端会自己把它变成卡片。'],
       ['checklist', '把搬家前要做的五件事做成一张清单卡。我这个客户端点工具没反应，所以这次别调用任何工具：把卡片的文档 JSON 原样写在回答正文里（不要代码块），客户端会自己把它变成卡片。'],
@@ -2279,13 +2406,71 @@ try {
       toolCalls: rows.flatMap((r) => r.toolCalls), ttftMs: rows[0]?.ttftMs, tokens: rows.reduce((n, r) => n + (r.tokens || 0), 0) };
   });
 
+  // iuicalc(10-20,计算层 A 落地):带 intelligent-ui.v2 握手时,「会算的」回答该是 version 2 的原生文档(state / derived / stats /
+  // table / set 按钮),而不是 sketch 的 HTML。判据:6 条正例里至少 5 条出 v2 文档且至少用到一样计算部件、初值下零失败;两可的不计
+  // (工具结果里没有「show "—"」那段);反例 tcp 不出计算部件(示意图走 sketch 或 v1 都行),「直接告诉我一个数」不出卡。
+  await scenario('iuicalc', 'iuicalc 计算层:计算器类走原生 v2 文档', async () => {
+    const opts = { clientCapabilities: ['intelligent-ui.v1', 'intelligent-ui.v2'], ui: { visuals: { value: 'auto', allowed: ['auto', 'less', 'off'] } } };
+    const probes = [
+      ['loan', '帮我算一下房贷：贷款 120 万、年利率 3.2%、30 年，月供多少？我想自己调调金额和年限看看', true],
+      ['split', '我们 5 个人吃饭花了 860 块，帮我算 AA，可能还要加 10% 服务费', null], // 两可:直接给两个数(10-20 第 2 跑)也是好回答
+      ['aa', '帮我做个聚餐 AA 计算器：总价和人数我自己调，可以选加不加 10% 服务费', true],
+      ['vocab', '给我做一组 10 个 GRE 单词的背单词卡，我自己一个个点「认识 / 再看一次」', true],
+      ['steps', '教我自己换水龙头阀芯，一步一步来，我做完一步再看下一步', true],
+      ['convert', '100 公里是多少英里？顺便做个能换算公里英里、公斤磅的小工具', true],
+      ['budget', '月薪 15000 按 50/30/20 怎么分？我想调收入和房租看看变化', true],
+      ['tcp', '解释一下 TCP 为什么要三次握手', false],
+      ['direct', '贷款 120 万、30 年、利率 3.2%，月供多少？直接告诉我一个数就行', false],
+    ];
+    const COMPUTED = ['stats', 'table'];
+    const shape = (ev) => {
+      const calls = ev.toolArgs.filter((c) => c.name === 'intelligent_ui' || c.name === 'sketch');
+      const results = ev.toolResults.filter((r) => r.name === 'intelligent_ui');
+      const okDocs = results.map((r, k) => ({ r, c: ev.toolArgs.filter((c) => c.name === 'intelligent_ui')[k] }))
+        .filter(({ r, c }) => c && !r.isError && /^Intelligent UI rendered/.test(r.result || ''))
+        .map(({ r, c }) => { let d = {}; try { d = JSON.parse(JSON.parse(c.arguments || '{}').document || '{}'); } catch { /* 留空 */ } return { d, note: /show "—"/.test(r.result || '') ? r.result : '' }; });
+      const v2 = okDocs.filter(({ d }) => d.version === 2);
+      const blocks = v2.flatMap(({ d }) => d.blocks || []);
+      const features = [...new Set([
+        ...(v2.some(({ d }) => (d.state || []).length) ? ['state'] : []),
+        ...(v2.some(({ d }) => (d.derived || []).length) ? ['derived'] : []),
+        ...blocks.filter((b) => COMPUTED.includes(b.kind)).map((b) => b.kind),
+        ...(blocks.some((b) => b.kind === 'actions' && (b.items || []).some((a) => a.kind === 'set')) ? ['set'] : []),
+        ...(blocks.some((b) => /\{\{/.test(b.markdown || '')) ? ['{{}}'] : []),
+      ])];
+      return {
+        cards: calls.map((c) => c.name), versions: okDocs.map(({ d }) => d.version), features,
+        failedNotes: okDocs.filter(({ note }) => note).map(({ note }) => note),
+        rejected: results.filter((r) => r.isError || /^Error/.test(r.result || '')).map((r) => String(r.result || '').slice(0, 300)),
+        views: calls.map((c) => ({ id: c.id, name: c.name, offset: Number((ev.toolOffsets || []).find((o) => o.id === c.id)?.offset) || 0, arguments: c.arguments })),
+      };
+    };
+    const stamp = Date.now();
+    const rows = [];
+    for (let i = 0; i < probes.length; i += 4) rows.push(...(await Promise.all(probes.slice(i, i + 4).map(async ([id, q, expect]) => {
+      const ev = await run(`live-iuicalc-${id}-${stamp}`, q, 300_000, {}, 'desktop/2.13.5', undefined, undefined, undefined, opts);
+      return { id, q, expect, ...shape(ev), toolCalls: ev.toolCalls, error: ev.error, done: ev.done, content: ev.content, tokens: tokensOf(ev), ttftMs: ttft(ev), wallMs: ev.wallMs, documents: ev.toolArgs.filter((c) => c.name === 'intelligent_ui').map((c) => c.arguments) };
+    }))));
+    writeFileSync(join(OUT, 'iuicalc-evidence.json'), JSON.stringify(rows, null, 2));
+    const broken = rows.filter((r) => r.error || !r.done);
+    const good = (r) => r.versions.includes(2) && r.features.length > 0 && !r.failedNotes.length;
+    const pos = rows.filter((r) => r.expect === true), hits = pos.filter(good);
+    const tcp = rows.find((r) => r.id === 'tcp'), direct = rows.find((r) => r.id === 'direct');
+    const negOk = tcp && !tcp.features.length && direct && !direct.cards.length;
+    const line = (r) => `${r.id}=${r.cards.join('+') || '无'}${r.versions.length ? `(v${r.versions.join('/v')}${r.features.length ? ':' + r.features.join(',') : ''})` : ''}${r.failedNotes.length ? '[有—]' : ''}${r.rejected.length ? `[被拒${r.rejected.length}]` : ''}`;
+    return { ok: !broken.length && hits.length >= 5 && negOk,
+      detail: `计算卡 ${hits.length}/${pos.length};反例 ${negOk ? '过' : '没过'};${rows.map(line).join(' ')}${broken.length ? `;没跑完:${broken.map((r) => `${r.id}(${r.error || '未结束'})`).join(',')}` : ''}`,
+      output: rows.map((r) => `【${r.id}${r.expect === true ? '' : r.expect === false ? '·反例' : '·两可'}】${r.q}\n工具:${r.toolCalls.join(',') || '无'};版本:${r.versions.join(',') || '—'};部件:${r.features.join(',') || '—'}${r.rejected.length ? `\n被拒:${r.rejected.join(' | ')}` : ''}${r.failedNotes.length ? `\n初值失败:${r.failedNotes.join(' | ')}` : ''}\n${r.content}`).join('\n\n'),
+      toolCalls: rows.flatMap((r) => r.toolCalls), ttftMs: rows[0]?.ttftMs, tokens: rows.reduce((n, r) => n + (r.tokens || 0), 0) };
+  });
+
   // iuiparity(10-13,用户反馈「触发时机和融入时机不如 ChatGPT 自然」):同样 18 句话 10-13 晚发给过 ChatGPT 网页版,
   // 对照表在仓根 harness-runs/2026-10-13/Intelligent-UI-对标ChatGPT-触发与融入.md。这里量的不只是出没出卡:
   // 卡前有没有先说话(lead)、卡后还说了多少(tail)、一条回答几份文档、文档里有没有正文块、末尾有没有追问(输入 + 追问钮)。
   // 跟进句(「那四次挥手呢」)里一个清单 / 对比 / 安排的字眼都没有 —— 只读最后一句话的触发方式在这几条上看得最清楚。
   // 判据:ChatGPT 出了组件的 13 条(首问 9 + 跟进 4)里至少 12 条出卡;出卡的首答里至少八成以结论开头;没有「说了下面有、却没出」的;一句事实、写邮件、写函数、让它办事的两句不出卡。
   await scenario('iuiparity', 'iuiparity 和 ChatGPT 同题对照', async () => {
-    const opts = { clientCapabilities: ['intelligent-ui.v1'], ui: { visuals: { value: 'auto', allowed: ['auto', 'less', 'off'] } } };
+    const opts = { clientCapabilities: ['intelligent-ui.v1', 'intelligent-ui.v2'], ui: { visuals: { value: 'auto', allowed: ['auto', 'less', 'off'] } } };
     const { sketchTurnSignalFor } = await import(new URL('../dist/tools/builtin/sketch.js', import.meta.url).href);
     // [id, 首问, 该不该出(true / false / null=两可), 跟进句, 跟进该不该出]
     const probes = [
@@ -2329,7 +2514,7 @@ try {
     };
     const ask = async (id, sid, q, expect, follow) => {
       const ev = await run(sid, q, 300_000, {}, 'desktop/2.13.3', undefined, undefined, undefined, opts);
-      const signal = sketchTurnSignalFor(q, 'auto', true)?.kind || null; // 本轮提醒挂在尾部用户消息上、不在系统提示里:直接问被测的那份引擎会发哪一类
+      const signal = sketchTurnSignalFor(q, 'auto', true, true)?.kind || null; // 本轮提醒挂在尾部用户消息上、不在系统提示里:直接问被测的那份引擎会发哪一类
       return { id: follow ? `${id}+` : id, q, expect, signal, ...shape(ev), chars: ev.content.length, firstTokenMs: ev.firstTokenMs, wallMs: ev.wallMs, nudged: ev.statuses.some((p) => p.phase === 'sketch_delivery_nudge'), toolCalls: ev.toolCalls, error: ev.error, done: ev.done, content: ev.content, tokens: tokensOf(ev), ttftMs: ttft(ev), documents: ev.toolArgs.filter((c) => c.name === 'intelligent_ui').map((c) => c.arguments) };
     };
     const stamp = Date.now();
@@ -2362,7 +2547,7 @@ try {
     cards.forEach((card, index) => writeFileSync(join(OUT, `visualize-${index}.html`), card.html || ''));
     const html = cards.map((c) => c.html || '').join('\n');
     const success = ev.toolResults.some((r) => r.name === 'sketch' && !r.isError);
-    const contract = /type=["']range["']/.test(html) && html.includes('forsionSketch') && html.includes('setState') && /<svg|<canvas/.test(html);
+    const contract = /type=["']range["']/.test(html) && /forsion(?:IntelligentUi|Sketch)\b/.test(html) && html.includes('setState') && /<svg|<canvas/.test(html);
     return { ok: !ev.error && ev.done && success && contract, detail: ev.error || `cards=${cards.length};interactive/state=${contract}`, output: ev.content, toolCalls: ev.toolCalls, ttftMs: ttft(ev), tokens: tokensOf(ev) };
   });
 
@@ -2376,7 +2561,7 @@ try {
     const success = ev.toolResults.some((r) => r.name === 'sketch' && !r.isError);
     // 10-09 二轮起首选原生 fs-compare(选项自带 ask);手写 <button onclick=ask()> 仍算数
     const native = /<fs-compare\b/.test(html) && /"ask"\s*:/.test(html);
-    const contract = native || (/forsionSketch\.ask\(/.test(html) && /<button/i.test(html));
+    const contract = native || (/forsion(?:IntelligentUi|Sketch)\.ask\(/.test(html) && /<button/i.test(html));
     return { ok: !ev.error && ev.done && success && contract, detail: ev.error || `cards=${cards.length};ask button=${contract}(native=${native})`, output: ev.content, toolCalls: ev.toolCalls, ttftMs: ttft(ev), tokens: tokensOf(ev) };
   });
 
@@ -2391,7 +2576,7 @@ try {
     const success = ev.toolResults.some((r) => r.name === 'sketch' && !r.isError);
     const scale = /type=["']range["']|type=["']number["']/.test(html);
     const checklist = /<fs-checklist\b/.test(html);
-    const copy = /forsionSketch\.copy\(/.test(html);
+    const copy = /forsion(?:IntelligentUi|Sketch)\.copy\(/.test(html); // 10-20 改名:新名 forsionIntelligentUi,旧名照样能用
     return { ok: !ev.error && ev.done && success && scale && checklist && copy, detail: ev.error || `cards=${cards.length};scale=${scale};fs-checklist=${checklist};copy=${copy}`, output: ev.content, toolCalls: ev.toolCalls, ttftMs: ttft(ev), tokens: tokensOf(ev) };
   });
 
@@ -2443,6 +2628,41 @@ try {
     const leg = (name, s, ev) => `${name}:active=${s?.active} 工具 ${ev.toolCalls.join(',') || '无'}${ran(ev) ? '(执行成功)' : ''} 标记${said(ev) ? '命中' : '未命中'}`;
     return {
       ok, detail: err || [leg('开着', s0, ev1), leg('停用', s1, ev2), leg('再启用', s2, ev3)].join(';'),
+      output: `开着:${ev1.content}\n停用:${ev2.content}\n再启用:${ev3.content}`, toolCalls: [...ev1.toolCalls, ...ev2.toolCalls, ...ev3.toolCalls],
+    };
+  });
+
+  // pluginext(10-17):manifest 声明的 MCP / hooks 随插件进出。开着 → 模型调得到 mcp__liveext__echo、结果是夹具 tag;Stop hook 跑了
+  // (日志多一行)但它回的 block / continue:false / additionalContext 没有效果(run 照常收尾、回答里没有注入串);停用 → 新会话里调不到、
+  // hook 不再跑;再启用 → 又调得到。负对照 = 去掉 runner.ts 里「插件 hook 丢输出」那一行的 dist:hook 的 continue:false 把 run 停掉 / 注入串进上下文,须红。
+  await scenario('pluginext', 'pluginext 插件 manifest 带的 stdio MCP 与观察档 hook:开着调得到且 hook 只看不拦,停用后都没了,再启用回来', async () => {
+    const ask = 'Call the mcp__liveext__echo tool with text "ping" and reply with exactly what it returns, nothing else. If no such tool is available to you, reply NO_TOOL.';
+    const setOn = (enabled) => api('/agent/plugins/live-ext/enabled', { method: 'PUT', body: JSON.stringify({ enabled }) });
+    const mcpUp = async () => ((await api('/agent/tools')).mcp || []).some((m) => m.server === 'liveext' && m.status === 'connected');
+    const waitMcp = async (want) => { for (let i = 0; i < 40; i++) { if ((await mcpUp()) === want) return true; await new Promise((r) => setTimeout(r, 250)); } return false; };
+    const hookLines = () => (existsSync(extHookFile) ? readFileSync(extHookFile, 'utf8').split('\n').filter(Boolean).length : 0);
+    const up0 = await waitMcp(true);
+    const h0 = hookLines();
+    const ev1 = await run(`live-pluginext-on-${Date.now()}`, ask);
+    const h1 = hookLines();
+    await setOn(false);
+    const down = await waitMcp(false);
+    const ev2 = await run(`live-pluginext-off-${Date.now()}`, ask);
+    const h2 = hookLines();
+    await setOn(true);
+    const up3 = await waitMcp(true);
+    const ev3 = await run(`live-pluginext-back-${Date.now()}`, ask);
+    const want = `${EXT_TAG}:ping`;
+    const ran = (ev) => ev.toolResults.some((r) => r.name === 'mcp__liveext__echo' && !r.isError && r.full.includes(want));
+    const called = (ev) => ev.toolCalls.includes('mcp__liveext__echo');
+    const err = ev1.error || ev2.error || ev3.error;
+    const injected = [ev1, ev3].some((ev) => ev.content.includes('PLUGIN-HOOK-INJECTED'));
+    const ok = !err && up0 && ran(ev1) && ev1.content.includes(want) && ev1.done && h1 > h0 && !injected
+      && down && !called(ev2) && h2 === h1 && up3 && ran(ev3) && ev3.content.includes(want) && ev3.done;
+    const leg = (name, ev) => `${name}:工具 ${ev.toolCalls.join(',') || '无'}${ran(ev) ? '(执行成功)' : ''}${ev.done ? '' : ' 没收尾'}`;
+    return {
+      ok, detail: err || [`MCP 起来 ${up0}`, leg('开着', ev1), `hook ${h0}→${h1}`, `注入串${injected ? '进了回答 ←' : '没进'}`,
+        `停用后 MCP 下线 ${down}`, leg('停用', ev2), `hook ${h1}→${h2}`, `再启用 MCP 起来 ${up3}`, leg('再启用', ev3)].join(';'),
       output: `开着:${ev1.content}\n停用:${ev2.content}\n再启用:${ev3.content}`, toolCalls: [...ev1.toolCalls, ...ev2.toolCalls, ...ev3.toolCalls],
     };
   });
@@ -2648,6 +2868,75 @@ try {
       ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
   });
 
+  // imgtools(10-19,反馈 ebe554d0):用户带图来改图,模型中途调 load_tools 装 edit_image / generate_image,工具定义一变,
+  // 厂商把工具渲染在提示最前面 → 系统提示 + 整段历史全按未命中价重算(Auto 上一次约 45 点)。修后:历史里有原生图片 parts,
+  // 这两件在 run 起点就进 defs。同一会话三个 run:① 无图(对照)② 带图问数字 ③ 再带图要改图。
+  // 判据(引擎行为,决定红绿;工具面从 cache_probe 的 toolNames + tools 段指纹读,字节数相等证不了 —— Codex 10-19):
+  // ① 没带改图 / 生图;②③ 每次请求两件都在;②③ 的 tools 段指纹全同(跨 run 不变 = 前缀不断);②③ 没调 load_tools。
+  // 只记录:③ 第一个工具是不是 edit_image(模型可能先问清楚)、② 有没有不请自来去生图。负对照 = 去掉 registry.ts 的预载(须红)。
+  await scenario('imgtools', 'imgtools 历史里带图:改图 / 生图在起点就在工具面里,不靠中途 load_tools', async () => {
+    const sid = `live-imgtools-${Date.now()}`;
+    const digits = randDigits();
+    const att = [{ name: 'digits.png', mimeType: 'image/png', data: digitsPng(digits).toString('base64') }];
+    // 每次请求的工具面:名字 + tools 段指纹(cacheProbe 双闸,台架 env 已开 TANGU_CACHE_PROBE)。
+    const faces = (ev) => (ev.probes || []).map((p) => ({ names: p.toolNames || [], hash: (p.segments || []).find((x) => x.name === 'tools')?.hash || '' }));
+    const probe = { cacheProbe: true };
+    const ev0 = await run(sid, 'Reply with just: OK', 120_000, probe);
+    const ev1 = await run(sid, 'What 4-digit number is shown in the attached image? Reply with just the number.', 180_000, probe, undefined, undefined, undefined, undefined, { attachments: att });
+    const ev2 = await run(sid, 'Now use your image editing tool to make the background of the attached image light blue. Keep the digits unchanged.', 240_000, probe, undefined, undefined, undefined, undefined, { attachments: att });
+    const [f0, f1, f2] = [faces(ev0), faces(ev1), faces(ev2)];
+    const has = (f, n) => f.length > 0 && f.every((x) => x.names.includes(n));
+    const absent0 = f0.length > 0 && !f0.some((x) => x.names.includes('edit_image') || x.names.includes('generate_image'));
+    const both = ['edit_image', 'generate_image'].every((n) => has(f1, n) && has(f2, n));
+    const hashes = [...f1, ...f2].map((x) => x.hash);
+    const stable = hashes.length > 0 && hashes.every(Boolean) && new Set(hashes).size === 1;
+    const loads = ev2.toolCalls.filter((c) => c === 'load_tools').length + ev1.toolCalls.filter((c) => c === 'load_tools').length;
+    const seen = ev1.content.replace(/(\d)[\s.,·'-]+(?=\d)/g, '$1').includes(digits);
+    const unprompted = ev1.toolCalls.filter((c) => c === 'generate_image' || c === 'edit_image').length;
+    const err = ev0.error || ev1.error || ev2.error;
+    const bytes = (ev) => ev.usages.filter((u) => !u.phase && Number(u.toolsBytes) > 0).map((u) => Number(u.toolsBytes)).join('/');
+    return { ok: !err && absent0 && both && stable && loads === 0,
+      detail: err || `① 无图时没带改图 / 生图${absent0 ? '✓' : '✗'};②③ 每次请求都带 edit_image + generate_image${both ? '✓' : '✗'};` +
+        `②③ tools 段指纹全同(${new Set(hashes).size} 种)${stable ? '✓' : '✗'};load_tools ${loads} 次${loads === 0 ? '✓' : '✗'};` +
+        `〔只记录〕工具定义字节 ①${bytes(ev0)} ②${bytes(ev1)} ③${bytes(ev2)};② 读出 ${digits} ${seen ? '是' : '否'}、不请自来调改图 / 生图 ${unprompted} 次;③ 工具顺序 ${ev2.toolCalls.join(' → ') || '(无)'}`,
+      output: `② ${ev1.content}\n\n③ ${ev2.content}`, toolCalls: [...ev1.toolCalls, ...ev2.toolCalls] };
+  });
+
+  // ── imageedit(10-19,opt-in,反馈 ebe554d0「坚持合成」):同一会话三轮,第一轮附两张图、先别动;第二轮不带附件让它合成;
+  // 第三轮让它改刚合成出来的那张。判据:② 第二轮调了 edit_image 且没报错,假后端收到的恰好是那两张附件(sha256 比对);
+  // ③ 第三轮 edit_image 带了 previous_outputs,假后端收到的里头有上一张产出(只多带了附件记作未判定)。
+  // 负对照 = dist 里两处:services/agentLoop.js 的 `if (!imageInputs.length && contextImages?.images.length)` 前加 `false && `,
+  // tools/builtin/imageEdit.js 的 previousOutputs 开头 `if (refs === undefined) return []` 改成 `return []`(②③ 须红)。
+  await scenario('imageedit', 'imageedit edit_image 用上一条消息的图、改自己刚生成的图', async () => {
+    const sid = `live-imageedit-${Date.now()}`;
+    const cfg = { imageModelId: 'fakeimg/fake-edit' };
+    const att = IMGEDIT_PNGS.map((b, i) => ({ name: `photo-${i + 1}.png`, mimeType: 'image/png', data: b.toString('base64') }));
+    const want = IMGEDIT_PNGS.map(sha).sort();
+    // 假后端是全局的:同一次 --only 里先跑的场景(如 imgtools ③)也会打到它,第一轮按本场景起点数,别拿总数判 0
+    const n0 = IMGEDIT.calls.length;
+    const ev1 = await run(sid, '这两张图先发给你,先别动,回我一句「收到」就行。', 180_000, cfg, undefined, undefined, undefined, undefined, { attachments: att });
+    const n1 = IMGEDIT.calls.length;
+    const ev2 = await run(sid, '现在用 AI 改图把刚才那两张图合成一张:把第一张叠在第二张上面。', 240_000, cfg);
+    const calls2 = IMGEDIT.calls.slice(n1); const n2 = IMGEDIT.calls.length;
+    const res2 = ev2.toolResults.filter((r) => r.name === 'edit_image');
+    const merged = calls2.length >= 1 && JSON.stringify([...calls2.at(-1)].sort()) === JSON.stringify(want);
+    const ok2 = !ev2.error && merged && res2.some((r) => !/^Error:/.test(r.result));
+    const lastOut = IMGEDIT.outputs[n2 - 1];
+    const ev3 = await run(sid, '把背景换成海边。', 240_000, cfg);
+    const calls3 = IMGEDIT.calls.slice(n2);
+    const args3 = ev3.toolArgs.filter((a) => a.name === 'edit_image').map((a) => a.arguments);
+    const usedOutput = calls3.some((c) => c.includes(lastOut));
+    const extra = calls3.length && usedOutput && calls3.at(-1).length > 1;
+    const ok3 = !ev3.error && args3.some((a) => /previous_outputs/.test(a)) && usedOutput;
+    const shortRes = (ev) => ev.toolResults.filter((r) => r.name === 'edit_image').map((r) => r.result.slice(0, 300)).join(' | ') || '(没调 edit_image)';
+    return { ok: !ev1.error && n1 === n0 && ok2 && ok3, inconclusive: ok2 && ok3 && extra,
+      detail: ev1.error || ev2.error || ev3.error ||
+        `第一轮没动生图 ${n1 === n0 ? '✓' : '✗'};第二轮 edit_image ${res2.length} 次、后端收到 ${calls2.map((c) => c.length).join('+') || 0} 张,是那两张附件 ${merged ? '✓' : '✗'};` +
+        `第三轮 previous_outputs ${args3.some((a) => /previous_outputs/.test(a)) ? '有' : '没有'}、后端收到上一张产出 ${usedOutput ? '✓' : '✗'}${extra ? '(还多带了别的图)' : ''}`,
+      output: `第二轮回复:${ev2.content}\n第二轮 edit_image:${shortRes(ev2)}\n\n第三轮参数:${args3.join(' | ')}\n第三轮回复:${ev3.content}\n第三轮 edit_image:${shortRes(ev3)}`,
+      ttftMs: ttft(ev2), tokens: (tokensOf(ev1) || 0) + (tokensOf(ev2) || 0) + (tokensOf(ev3) || 0), toolCalls: [...ev2.toolCalls, ...ev3.toolCalls] };
+  });
+
   // novision(10-07,反馈 dbb04870:deepseek × Computer Use 操作微信):主模型没有图像输入 × 一个要按坐标点的任务。
   // visionMode=always 让引擎走转写(转写就用本台架的模型)。两层判据:
   //   硬(决定红绿,引擎自己的行为):转写起止各一条 status、done 带 ok / 体积 / 耗时;转写到了主模型(答得出图里的随机数字)。
@@ -2744,6 +3033,12 @@ try {
   // cuvision(10-11):只能看图的 App。说明、判据和那条「别把装着的 helper 换掉」的前置检查都在 lib/cu-vision-live.mjs。
   await scenario('cuvision', 'cuvision 只能看图的 App:看截图、按坐标点和滚', () =>
     cuVisionLive({ api, run, OUT, fixture: CU_FIXTURE, timeoutMs: Number(opt('cu-timeout', '420')) * 1000, ask: opt('cu-ask', 'color'), tokensOf, ttft }));
+
+  // cumusic / cusend(10-16,反馈 0c0cd24f):用户原话那件事放到两个自绘替身上,真 Jev。说明、判据、过程记录都在 lib/cu-jev-live.mjs。
+  for (const key of CU_JEV_KEYS) {
+    await scenario(key, { cumusic: 'cumusic Jev 真实案例:打开 Melody 播放今日推荐第三首', cusend: 'cusend Jev 真实案例:播放第三首,把最热评论发给 Chatter 好友 Sakura(说清了就直接发)', cuambig: 'cuambig Jev 真实案例:收件人有歧义(「小樱」)时先问、列出候选、不发', cuscroll: 'cuscroll Jev 真实案例:打开 Melody 播放「我喜欢的音乐」第 18 首(要先滚,滚动交给 Jev)', cusearch: 'cusearch 真实案例:Chatter 的搜索结果在单独的下拉里、排第一的是群,给 Sakura 发一句(不许打开那个群)' }[key], () =>
+      cuJevLive({ key, api, run, OUT, bundle: opt('cu-plugin', ''), timeoutMs: Number(opt('cu-timeout', key === 'cusend' || key === 'cusearch' ? '900' : '420')) * 1000, tokensOf, ttft }));
+  }
 
   // 审批档只归用户(09-27,设备能力 MCP 方案 P0 ②):旧版 manage_agent 收 approval_mode,模型一句话就能把 agent(含自己)调成
   // 完全放行,下次激活填进 run = 免审批。判据:用户预设的 readonly 原样保留;模型没调 manage_agent 记 inconclusive(没试 ≠ 挡住了)。
@@ -3368,7 +3663,7 @@ Then reply with only the command output.`,
   // ⚠️ ENTRY 与 desktop/frontend/src/bootstrapEngine.tsx 的 open-settings 目录项同文(description + params);TARGETS 那一行由
   //    desktop 的 settingsTarget.test.ts 逐字钉住(设置页 / 搜索索引一改,那条单测就红,照它的输出改这里)。
   await scenario('settingsnav', 'settingsnav 「语音在哪设置」:界面命令直达设置页,不用电脑操控', async () => {
-    const TARGETS = 'Pages: general, forsion, model, mcp, hooks, skills, agents, amadeus-plugins, browser, channels, notes, sync, spaces, theme, shortcuts, notifications, statusbar, permissions, remote-sessions, computer-history, advanced, developer, about. Settings: workspace-dir, keep-awake, backend-mode, sandbox, python, mirror, external-backend, forsion-account, forsion-submissions, cloud-url, memory-sync, inbox-notify, default-models, model-providers, web-search, voice, theme-language, startup-appearance, palette, color-mode, ui-zoom, glass, ambient, visuals, smooth-caret, selection-bar, prompt-suggest, chat-avatars, calm-dim, calm-reading, calm-motion, ribbon-auto-home, fonts, notes-attachments, daily-notes, agent-browser, remote-sessions-switch, remote-approval-cap, remote-trusted-devices, remote-safety, computer-history, mcp-server, reset-layout, clear-data, language.';
+    const TARGETS = 'Pages: general, forsion, model, mcp, hooks, skills, agents, amadeus-plugins, browser, computer-use, channels, notes, sync, spaces, theme, shortcuts, notifications, statusbar, permissions, units, remote-sessions, computer-history, advanced, developer, about. Settings: workspace-dir, keep-awake, backend-mode, sandbox, python, mirror, external-backend, forsion-account, forsion-submissions, cloud-url, memory-sync, inbox-notify, default-models, model-providers, web-search, voice, theme-language, startup-appearance, palette, color-mode, ui-zoom, glass, home-motion, ambient, visuals, smooth-caret, selection-bar, prompt-suggest, chat-avatars, calm-dim, calm-reading, calm-motion, ribbon-auto-home, fonts, notes-attachments, daily-notes, agent-browser, strict-background, jev, units-switch, units-host, remote-sessions-switch, remote-approval-cap, remote-trusted-devices, remote-safety, computer-history, mcp-server, reset-layout, clear-data, language.';
     const ENTRY = { id: 'open-settings',
       description: "Open Forsion's settings window, optionally at one page or at the page holding one specific setting. To answer 'where/how do I set X', open that page and say which page you opened; these settings are not documented on the web, so do not search for them. Unknown targets are rejected.",
       params: { type: 'object', properties: { tab: { type: 'string', description: `A page id or a setting id. Omit for the default page. ${TARGETS}` } } } };
@@ -3700,7 +3995,7 @@ Then reply with only the command output.`,
     const sid = `live-output-${Date.now()}`;
     const ev = await run(sid, `Artist: draw the workflow and display this existing file: ${file}. Observer: just finish.`, 180_000, { groupChat: true, groupAgents: ['live-artist', 'live-observer'], groupSeedHistory: false, groupNoSummary: true, groupMaxRounds: 1 }, 'desktop/live-harness');
     const persisted = (await api(`/agent/sessions/${sid}/messages`)).messages || [];
-    const sketches = ev.group.outputs.filter((m) => m.tool_calls?.some((c) => c.function?.name === 'sketch' && c.function.arguments.includes('TEAM-SKETCH-CONTENT')));
+    const sketches = ev.group.outputs.filter((m) => m.tool_calls?.some((c) => ['sketch', 'intelligent_ui_html'].includes(c.function?.name) && c.function.arguments.includes('TEAM-SKETCH-CONTENT')));
     const files = ev.group.outputs.filter((m) => m.display_files?.some((f) => f.path === file && f.sourceSessionId !== sid));
     const durable = ev.group.outputs.every((m) => persisted.some((p) => p.id === m.id && JSON.stringify(p.tool_calls || []) === JSON.stringify(m.tool_calls || []) && JSON.stringify(p.display_files || []) === JSON.stringify(m.display_files || [])));
     return { ok: !ev.error && ev.done && sketches.length === 1 && files.length === 1 && durable,
@@ -3748,6 +4043,59 @@ Then reply with only the command output.`,
     const early = ev.sessionTitle;
     const ok = !!early && early.title === stored && titled.length === 1 && act.some((x) => x.action === 'summary_updated');
     return { ok, detail: `${early ? `首帧标题「${early.title}」@${early.atMs}ms,done@${ev.wallMs}ms` : 'done 前没收到 session_title'};落库「${stored}」;活动 ${act.map((r) => r.action).join('/') || '无'}`, output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev) };
+  });
+
+  await scenario('titlelang', 'title 跟随对话本身的语言', async () => {
+    // 10-20 录 2.13.5 What's new 英文实录:3 个英文会话里 2 个被起成「旅行修图笔记本」「布局对比选择」。
+    // 判据:英文对话的标题(每次改名)与摘要只有拉丁字母,中文对话的含汉字;会话照桌面那样先建成占位标题 New Chat 再发消息。
+    await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ historian: { enabled: true, modelId: MODEL, everyRounds: 1, firstRoundTrigger: true, mode: 'independent' } }) });
+    const HAN = /\p{Script=Han}/u;
+    const NON_LATIN = /(?!\p{Script=Latin})\p{L}/u; // 英文那几条:出现任何非拉丁字母都算红(10-20 修后第 1 次摘要冒出过俄语)
+    const CASES = [
+      { lang: 'en', turns: ["I'm making a notebook for my travel photos and want them to look consistent. What's a simple editing workflow for a beginner?"] },
+      { lang: 'en', turns: ['I have two layout options for my landing page: one centered column, or a two-column grid with a sidebar. Which one should I pick for mobile readers?'] },
+      { lang: 'en', turns: ['Can you suggest three names for a small bakery that sells sourdough?', 'Make them sound a bit more playful, and keep each under three words.'] },
+      { lang: 'zh', turns: ['帮我列一个周末去杭州玩两天的行程,预算不高,喜欢走路和喝茶。'] },
+    ];
+    // 只认 Historian 自己写的记录:title_updated(首帧那一路;它失败了 done 判官兜底)与 summary_updated,别的改名不算。
+    const actOf = async (sid) => { const a = await api(`/agent/special/historian/activity?sessionId=${encodeURIComponent(sid)}&limit=100`); return { rows: (a.activity || []).slice().reverse(), running: !!a.running }; };
+    const pick = (rows, action) => rows.filter((r) => r.action === action).map((r) => String(r.detail || ''));
+    const EN_WORD = /\b(the|a|an|and|for|to|of|with|on|in|about|from)\b/i; // 拉丁字母 ≠ 英文:摘要是整句,至少得有个英文虚词
+    const logFrom = (() => { try { return readFileSync(engineLog, 'utf8').length; } catch { return 0; } })();
+    const rows = [];
+    const outs = [];
+    let tokens = 0;
+    for (const [i, c] of CASES.entries()) {
+      const sid = (await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title: 'New Chat', model_id: MODEL, agent_config: AGENT_CONFIG }) })).session.id;
+      let err = '';
+      for (const text of c.turns) {
+        const n0 = (await actOf(sid)).rows.filter((r) => r.action !== 'title_updated').length;
+        const ev = await run(sid, text, 180_000);
+        tokens += tokensOf(ev) || 0;
+        if (ev.error) { err = ev.error; break; }
+        outs.push(`【${i + 1}·${c.lang}】${text}\n→ ${ev.content.slice(0, 300)}`);
+        // 每轮都到点(everyRounds 1):等这一轮的 done 判官写完记录、不在跑了再往下(标题是首帧那一路在 run 起点写的,早落了);没新记录等满 60s
+        await until(async () => { const a = await actOf(sid); return a.rows.filter((r) => r.action !== 'title_updated').length > n0 && !a.running; }, 60_000, 2000);
+      }
+      const { rows: act } = await actOf(sid);
+      const seen = pick(act, 'title_updated');
+      const sums = pick(act, 'summary_updated'); // 摘要和标题一起显示在会话列表里,口径相同;每一版都要对
+      const stored = asList(await api('/agent/sessions?limit=100'), 'sessions').find((x) => x.id === sid)?.title || '';
+      const langOk = (t) => (c.lang === 'zh' ? HAN.test(t) : !NON_LATIN.test(t));
+      const ok = !err && seen.length > 0 && stored === seen.at(-1) && seen.every(langOk) && sums.length > 0 && sums.every(langOk) && (c.lang === 'zh' || sums.every((x) => EN_WORD.test(x)));
+      rows.push({ i: i + 1, lang: c.lang, ok, seen, summary: sums.at(-1) || '', err });
+    }
+    const en = rows.filter((r) => r.lang === 'en');
+    // 引擎侧的语言核对(core/scriptCheck.ts)触发了几次:模型先写错语言、靠改写救回来的 / 救不回来没写的。全绿也得看这个数
+    const engLines = (() => { try { return readFileSync(engineLog, 'utf8').slice(logFrom).split('\n'); } catch { return []; } })();
+    const fixed = engLines.filter((l) => l.includes('产出不是对话的语言,已改写')).length;
+    const dropped = engLines.filter((l) => l.includes('改写后仍不对') || l.includes('改写成对话的语言失败')).length;
+    return {
+      ok: rows.every((r) => r.ok),
+      detail: `英文 ${en.filter((r) => r.ok).length}/${en.length}、中文 ${rows.filter((r) => r.lang === 'zh' && r.ok).length}/${rows.filter((r) => r.lang === 'zh').length};语言核对改写 ${fixed} 次、没救回 ${dropped} 次;` +
+        rows.map((r) => `${r.i}·${r.lang}「${r.seen.join(' → ') || '没起标题'}」摘要「${r.summary.slice(0, 40) || '无'}」${r.err ? `(${r.err})` : ''}${r.ok ? '' : ' ← 红'}`).join(';'),
+      output: outs.join('\n\n'), tokens,
+    };
   });
 
   await scenario('emoji', 'Historian Emoji 默认选择、关闭与手动图标保护', async () => {
@@ -4043,6 +4391,88 @@ Then reply with only the command output.`,
     const g7Text = `G7 远程会话${seedR.error ? `种子失败(${seedR.error})` : hintLeak.length ? `漏进周期简报 ${hintLeak.join(',')} ← 红` : '未进周期简报'}、本机活动行${hintPos ? '在' : '不在 ← 红(正对照)'}${saidLeak ? '、Muse 输出里出现了远程标记 ← 红' : ''}(简报 ${hints.length} 份)`;
     const ok = twoCycles && (journal.trim().length > 0 || todos.length > 0 || approvals.length > 0) && !spaceAsks && replayOk && g7; // 审批队列、开局上下文都是引擎真实状态,照判
     return { ok, detail: `${g7Text};${slept ? `周期 1 后${slept};` : ''}周期 2 ${twoCycles ? '已起' : blockedBy ? `被 token 预算挡(${blockedBy})` : '600s 未起'}(lastCycleAt ${firstCycleAt || '?'}→${Number(second?.lastCycleAt) || '?'},restarts ${second?.restartsThisWindow ?? '?'});起周期时计费/毛量 ${spent || '?'};开局上下文 ${p1 || '?'}→${p2 || '?'} token${p1 && p2 ? `(×${(p2 / p1).toFixed(2)}${replayOk ? '' : ' ⚠️带着上一周期的对话'})` : twoCycles ? '(⚠️周期 2 首轮 60s 未返回,没量到)' : ''};Journal ${journal.trim() ? '有' : '无'};todo ${todos.length};审批 ${approvals.length}${spaceAsks ? `(其中 Space ${spaceAsks} 条)` : ''};Space ${space.ok ? '' : '⚠️'}${space.text}${space.built ? (spaceUsesAgent ? '(用 ctx.agent 取数)' : '(没用 ctx.agent)') : ''}${space.built ? `;CSS 变量${unknownVars === null ? ' ?' : unknownVars.length ? ` ⚠️宿主没有 ${unknownVars.join(' ')}` : '全在宿主词表'}` : ''};插件技能加载 ${skillLoads} 次;自排日程 ${museSchedule.length}${museSchedule.length ? `(${museSchedule.join(' | ')})` : ''};error ${(second || started).lastError || '无'}`, output: museSays, journal, todos, approvals, status: second || started };
+  });
+  // ── musedm(10-18,opt-in,单独跑:`--only musedm`):Muse 私聊 × 收件箱分工(方案 docs/ToBeImproved/Muse私聊与收件箱分工方案_2026-10-17,
+  // 用户选 B「按性质分」)。三件同时到期的事交给 Muse(走「交给 Muse 追踪」同一条路:auto 日程条目到期 → 进周期 kickoff):
+  //   A 读 sync-notes.md 写一份三家对比给用户以后看 → 成品,该进收件箱(inbox_send),不该整篇塞进私聊;
+  //   B CI 抖了一次要不要记成已知抖动 → 要用户拍板,该进私聊(message_user,问句 → 引擎置「等你」);
+  //   C 往授权文件夹里的 STATUS.md 加一行 → ask 档排队审批 → 引擎把请求写进 Muse 私聊(origin=proactive:approval),不发审批信。
+  // 判据全读引擎真状态(私聊消息的 origin、收件箱的信、GET /agent/sessions/attention),不看模型自述。单独跑:别的场景开过的 Muse 周期
+  // 可能先用掉每小时 3 条的私聊额度。模型原话(周期回复 + 私聊里主动发的)进 output。
+  await scenario('musedm', `musedm Muse 私聊 × 收件箱分工(${MUSE_MODE})`, async () => {
+    const seeded = await until(() => existsSync(join(home, 'agents', 'muse', 'config.toml')), 30_000, 500);
+    if (!seeded) return { ok: false, detail: '30s 内没播种出 Muse(agents/muse/config.toml)' };
+    const status = () => api('/agent/special/muse/status').then((x) => (x && typeof x.status === 'object' ? x.status : x));
+    // 同一次运行里排在 muse 场景后面时,它的周期可能还在跑:不等它收尾,下面的「起了没」会认错周期,
+    // 改配置又会把在跑的周期中止(10-19 一次 7 秒假红:私聊没建出来、run aborted)。
+    if (!(await until(async () => !(await status()).running, 600_000, 5000))) return { ok: false, detail: '前一个场景的 Muse 周期 600s 没收尾' };
+    writeFileSync(join(workspace, 'sync-notes.md'), [
+      '# 三家笔记软件的离线同步(调研素材)',
+      '- Obsidian Sync:离线照常编辑;冲突时按行三方合并,合不了留两份(冲突副本)。',
+      '- Notion:离线模式要先手动把页面设为可离线;冲突以最后写入为准,旧版本进页面历史。',
+      '- Logseq:基于文件,同步靠 Logseq Sync 或第三方网盘;冲突时生成 .conflict 文件,要手动合。',
+      '',
+    ].join('\n'));
+    writeFileSync(join(workspace, 'STATUS.md'), '# Status\n');
+    const d = new Date(Date.now() - 2 * 60_000);
+    const due = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+    const ENTRIES = [
+      { name: '三家离线同步对比', prompt: `读 ${join(workspace, 'sync-notes.md')},写一份 Obsidian / Notion / Logseq 离线编辑与冲突处理的对比(一张表 + 两三句建议),给我以后有空看。` },
+      { name: 'CI 抖动要不要记', prompt: 'main 上的 CI 红了一次(sync.test.ts),重跑是绿的。要不要把它记成已知抖动,我来定,你别替我定。' },
+      { name: '状态文件加一行', prompt: `在 ${join(workspace, 'STATUS.md')} 末尾加一行「- 10-18 离线同步调研已完成」。` },
+    ];
+    for (const e of ENTRIES) {
+      const r = await api('/agent/special/schedule/muse/entries', { method: 'POST', body: JSON.stringify({ ...e, date: due, auto: true }) }).catch((err) => ({ error: String(err?.message || err) }));
+      if (!r?.entry) return { ok: false, detail: `建日程条目失败:${JSON.stringify(r).slice(0, 300)}` };
+    }
+    const t0 = Date.now();
+    await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ muse: { enabled: true, modelId: MODEL, mode: MUSE_MODE, heartbeatMinutes: 60, supervisorPollMinutes: 1, maxIterationsPerCycle: 16, maxRestartsPerWindow: 3, allowedFolders: [workspace], notify: 'immediate' } }) });
+    const started = await until(async () => { const x = await status(); return x.running || Number(x.lastCycleAt) >= t0 - 5000 ? x : null; }, 120_000, 3000);
+    if (!started) return { ok: false, detail: `120s 未起周期;[muse] 日志:${museLogTail() || '(无)'}` };
+    const done = await until(async () => { const x = await status(); return !x.running && Number(x.lastCycleAt) > 0 ? x : null; }, 600_000, 5000);
+    if (!done) return { ok: false, detail: '周期 600s 未收尾' };
+    // 模型调用本身失败(额度用完 / 网络)≠ 分流错了:先如实报这个,别把它读成四条红(10-18 首跑就是 usage limit)
+    const runFail = (readFileSync(engineLog, 'utf8').match(/run [0-9a-f-]+ failed: [^\n]*/g) || []).slice(-1)[0];
+    if (done.lastError || runFail) return { ok: false, detail: `周期没跑成(模型调用失败,不是分流问题):${done.lastError || runFail}` };
+    await sleep(2000);
+    const { default: Database } = await import('better-sqlite3');
+    const db = new Database(join(home, 'state.db'), { readonly: true, fileMustExist: true });
+    let dmId = '';
+    let dmWaits = false;
+    let dm = [];
+    try {
+      const dmRow = db.prepare(`SELECT * FROM chat_sessions WHERE kind = 'user' AND archived = 0 AND json_valid(agent_config) AND json_extract(agent_config, '$.soloAgentSlug') = 'muse' ORDER BY updated_at DESC LIMIT 1`).get();
+      dmId = dmRow?.id || '';
+      dmWaits = !!dmRow?.awaiting_user; // 只有 message_user 的问句置这一列(审批的「等你」由 attention 现算),拿它判 B 才分得开
+      // 基线引擎(--kind base)没有 origin 列:读成 NULL,红在判据上而不是 SQL 报错上
+      const hasOrigin = db.prepare(`SELECT 1 FROM pragma_table_info('chat_messages') WHERE name = 'origin'`).get();
+      dm = dmId ? db.prepare(`SELECT role, ${hasOrigin ? 'origin' : 'NULL AS origin'}, content FROM chat_messages WHERE session_id = ? ORDER BY timestamp`).all(dmId) : [];
+    } finally { db.close(); }
+    const said = dm.filter((m) => String(m.origin || '').startsWith('proactive'));
+    const ask = said.find((m) => m.origin === 'proactive' && /抖动|flak|sync\.test/i.test(m.content) && /[?？]/.test(m.content));
+    const apps = (t) => ['Obsidian', 'Notion', 'Logseq'].every((a) => String(t || '').includes(a));
+    const productInDm = said.some((m) => m.origin === 'proactive' && apps(m.content) && String(m.content).length > 600);
+    const inbox = asList(await api('/agent/inbox?filter=all').catch(() => []), 'messages');
+    // 成品信:正文带对比,或指向写好的对比文件(10-18 修后首跑:对比写进 Library、发一封指路信 —— 分流是对的,判据原先只认前一种)
+    const letter = inbox.find((m) => m.sender_id === 'muse' && (apps(m.body) || /对比|同步|compar|sync/i.test(`${m.title} ${m.body}`)));
+    const apvLetters = inbox.filter((m) => /```forsion-approval/.test(String(m.body || '')));
+    const apvDm = said.filter((m) => m.origin === 'proactive:approval');
+    const pending = asList(await api('/agent/special/approvals?status=pending').catch(() => []), 'approvals').filter((a) => a.agent_slug === 'muse');
+    const att = asList(await api('/agent/sessions/attention').catch(() => []), 'sessions').find((x) => x.id === dmId);
+    const needApv = MUSE_MODE === 'ask';
+    const apvOk = !needApv || (pending.length > 0 && apvDm.length > 0 && apvLetters.length === 0);
+    const ok = !!dmId && !!ask && dmWaits && !!letter && !productInDm && !!att?.unread && !!att?.awaiting && apvOk;
+    const museSays = done.sessionId ? asList(await api(`/agent/sessions/${done.sessionId}/messages`).catch(() => []), 'messages').filter((m) => m.role === 'assistant' || m.role === 'model').map((m) => String(m.content || '')).join('\n---\n') : '';
+    const detail = [
+      `私聊${dmId ? '' : '没建出来 ← 红'}主动 ${said.length} 条(问句 ${said.filter((m) => m.origin === 'proactive').length} / 待办 ${said.filter((m) => m.origin === 'proactive:todo').length} / 审批 ${apvDm.length})`,
+      `B 拍板进私聊:${ask ? (dmWaits ? '有,私聊亮了等你' : '有,但私聊没亮等你 ← 红') : '没有 ← 红'}`,
+      `A 成品进收件箱:${letter ? `有「${String(letter.title).slice(0, 40)}」(${apps(letter.body) ? '正文带对比' : '只是指路'})` : '没有 ← 红'}${productInDm ? ';整篇对比塞进了私聊 ← 红' : ''}`,
+      `C 审批:${needApv ? `待批 ${pending.length},私聊里 ${apvDm.length} 条,审批信 ${apvLetters.length}${apvOk ? '' : ' ← 红'}` : `非 ask 档不判(待批 ${pending.length})`}`,
+      `attention ${att ? JSON.stringify({ unread: att.unread, awaiting: att.awaiting }) : '没报这条私聊 ← 红'}`,
+      `收件箱共 ${inbox.length} 封(muse ${inbox.filter((m) => m.sender_id === 'muse').length})`,
+    ].join(';');
+    const output = `${museSays}\n\n=== 私聊里主动发的 ===\n${said.map((m) => `[${m.origin}] ${m.content}`).join('\n---\n')}`;
+    return { ok, detail, output, status: done };
   });
   // ── musewake(09-24,opt-in,单独跑:`--only musewake`):「用户睡了、没事可做」时 Muse 会不会自己 set_next_wake,
   // 引擎会不会真的跳过心跳,用户一动能不能立刻醒。作息按**当前钟点**播:活跃窗口 = 现在 +6h 起 10 个小时(每天每小时一行,
@@ -4779,6 +5209,107 @@ Then reply with only the command output.`,
   // 三腿:① 开 Ultra 做一道天然可拆的题(三个互不相关的多文件模块各藏一个 bug)→ 一轮派 ≥2 个 delegate、区间真交叠、
   //       系统提示真带 Ultra 段、请求档是 max、三个模块都查到;② 开 Ultra 问一句琐碎题 → 0 个 delegate(反向条款);
   //       ③ 不开 Ultra 做同一道题 → 系统提示里没有 Ultra 段(注入的负对照),委派数只记录不判(模型不开也可能自己派)。
+  await scenario('nested', 'nested 父子会话:开子会话分头查 → 结果送回主会话自动接着做;先问用户的事置「等你」', async () => {
+    const MODS = {
+      billing: { fn: 'sumLineItems', body: (i) => `  let total = 0;\n  for (let i = ${i === 2 ? 1 : 0}; i < items.length; i++) total += items[i].price * items[i].qty;\n  return total;` },
+      dates: { fn: 'isWeekend', body: (i) => `  const day = d.getDay();\n  return day === 6 || day === ${i === 2 ? 7 : 0};` },
+      strings: { fn: 'capitalize', body: (i) => `  if (!s) return s;\n  return s[0].toUpperCase() + s.slice(${i === 2 ? 0 : 1});` },
+    };
+    const root = join(workspace, 'nested');
+    for (const [mod, spec] of Object.entries(MODS)) {
+      mkdirSync(join(root, mod), { recursive: true });
+      for (let i = 1; i <= 3; i++) {
+        const arg = mod === 'dates' ? 'd' : mod === 'strings' ? 's' : 'items';
+        writeFileSync(join(root, mod, `${spec.fn}_v${i}.js`), `// ${mod} module, variant ${i}\nexport function ${spec.fn}(${arg}) {\n${spec.body(i)}\n}\n`);
+      }
+    }
+    const parent = `live-nested-${Date.now()}`;
+    const TASK = 'nested/ 目录下有 billing、dates、strings 三个互不相关的模块,每个模块里 3 个版本文件,恰好一个版本的主函数有 bug。'
+      + '这三件事分开开子会话各查一个模块,都回来以后给我汇总一张表(哪个文件、错在哪、怎么改)。只读,不要改文件。';
+    // full-auto:子会话继承档位,台架只替主会话点审批,子会话里的 run_bash 会挂到超时(10-17 第三轮)
+    const ev1 = await run(parent, TASK, 300_000, { approvalMode: 'full-auto' });
+    const starts = ev1.toolResults.filter((r) => r.name === 'start_session' && !r.isError).length;
+    // 子会话还在跑时主会话不许是「等你」(等子会话 ≠ 等你;收尾汇总以问句结尾时再标等你是允许的)
+    const midRow = (await api('/agent/sessions?limit=500')).sessions.find((x) => x.id === parent);
+    const midKidsBusy = (await api('/agent/sessions?limit=500')).sessions.some((x) => x.parent_session_id === parent && x.busy);
+    // 子会话各自跑完、主会话自动接着做的那一轮也跑完:轮询会话列表直到主会话和它名下都不 busy(最多 8 分钟)
+    const t0 = Date.now();
+    let kids = []; let settled = false;
+    while (Date.now() - t0 < 480_000) {
+      await new Promise((r) => setTimeout(r, 5000));
+      const { sessions } = await api('/agent/sessions?limit=500');
+      kids = sessions.filter((x) => x.parent_session_id === parent);
+      const p = sessions.find((x) => x.id === parent);
+      if (kids.length && !p?.busy && kids.every((k) => !k.busy)) {
+        // 回报可能还在送的路上(子会话收尾 → 主会话起轮之间那几毫秒):再看一眼
+        await new Promise((r) => setTimeout(r, 3000));
+        const again = (await api('/agent/sessions?limit=500')).sessions;
+        if (!again.find((x) => x.id === parent)?.busy) { settled = true; break; }
+      }
+    }
+    const msgs = (await api(`/agent/sessions/${parent}/messages?limit=200`)).messages || [];
+    const updates = msgs.filter((m) => m.role === 'user' && String(m.content).startsWith('<child_sessions_update>'));
+    const lastUpd = updates.length ? msgs.indexOf(updates[updates.length - 1]) : -1;
+    const after = lastUpd >= 0 ? msgs.slice(lastUpd + 1).filter((m) => m.role === 'model').map((m) => String(m.content || '')).join('\n') : '';
+    const found3 = ['sumLineItems_v2', 'isWeekend_v2', 'capitalize_v2'].every((f) => after.includes(f));
+    const parentRow = (await api('/agent/sessions?limit=500')).sessions.find((x) => x.id === parent);
+    const midWait = midKidsBusy && !!midRow?.awaiting_user;
+    const ok1 = !ev1.error && starts >= 2 && kids.length >= 2 && settled && updates.length >= 1 && found3 && !midWait;
+
+    // ② 要先问用户的事:模型以问句收尾 → 列表「等你」;用户回一句,那一轮开始就清掉。走 ask_user(阻塞询问,界面按 attention 画等你)也算,台架照用户原话答
+    const ask = `live-nested-ask-${Date.now()}`;
+    const ANSWER = '重点是发布了 2.13.4 和修好了冷启动慢。';
+    const ev2 = await run(ask, '帮我给团队周报起个标题。先问我这周的重点是什么,我回答之前不要自己编。', 180_000, {}, undefined, undefined, undefined, undefined, { inquiryAnswer: ANSWER });
+    const row2 = (await api('/agent/sessions?limit=500')).sessions.find((x) => x.id === ask);
+    const viaAsk = (ev2.inquiries || 0) > 0;
+    const waited = viaAsk || !!row2?.awaiting_user;
+    const ev3 = viaAsk ? ev2 : await run(ask, ANSWER, 180_000);
+    const row3 = (await api('/agent/sessions?limit=500')).sessions.find((x) => x.id === ask);
+    const usedAnswer = /2\.13\.4|冷启动/.test(ev3.content);
+    const ok2 = !ev2.error && waited && !ev3.error && !row3?.awaiting_user;
+
+    return {
+      ok: ok1 && ok2,
+      detail: `【分头查】start_session ×${starts}(工具序列 ${ev1.toolCalls.join(' → ') || '无'});子会话 ${kids.length} 个;${settled ? '都收尾' : '8 分钟没收完!'};回报行 ${updates.length} 条;汇总${found3 ? '三个坏文件都点对' : '没点全!'};子会话在跑时主会话「等你」${midWait ? '误置!' : midKidsBusy ? '没置' : '(没赶上子会话在跑)'};收尾后${parentRow?.awaiting_user ? '等你(汇总以问句结尾)' : '没等'}`
+        + ` 【先问用户】${viaAsk ? 'ask_user 询问(台架照原话答)' : `问句收尾,列表「等你」${row2?.awaiting_user ? '在' : '没有!'}`};回答后${row3?.awaiting_user ? '还在!' : '清掉了'}${usedAnswer ? ',标题用上了回答' : ''}`,
+      output: `【① 主会话第一轮】${ev1.content}\n\n【回报行】${updates.map((m) => String(m.content).slice(0, 1200)).join('\n---\n')}\n\n【接着做那一轮】${after}\n\n【② 先问】${ev2.content}\n\n【③ 用户回答后】${ev3.content}`,
+      toolCalls: [...ev1.toolCalls, ...ev2.toolCalls, ...ev3.toolCalls],
+      ttftMs: ttft(ev1), tokens: (tokensOf(ev1) || 0) + (tokensOf(ev2) || 0) + (tokensOf(ev3) || 0) || null,
+    };
+  });
+
+  // ── branch:分支(10-18,方案 docs/ToBeImproved/Chat画布分支方案_2026-10-18 第一步「agent 知道分支」)──
+  // 判「工具被叫、参数是主线 id」而不是「回答提到主线」:前者跨模型稳定(评审 10-18)。没分叉时不带分支段 = 注入的负对照。
+  await scenario('branch', 'branch 分支:分支里知道自己从哪分出、别的支是什么,比之前先读主线', async () => {
+    const S = `live-branch-${Date.now()}`;
+    const ev1 = await run(S, 'Amadeus 笔记想支持离线编辑。给我三条同步路线,从改动最小到最大,每条一句话。不用工具,直接答。', 180_000, { debugSystemPrompt: true });
+    const ev2 = await run(S, '就第一条:合并失败的时候用户在界面上看到什么、能做什么?两三句话,不用工具。', 180_000);
+    const msgs = (await api(`/agent/sessions/${S}/messages?limit=50`)).messages || [];
+    const a1 = msgs.find((m) => m.role === 'model' && m.content);
+    const br = a1 ? await api(`/agent/sessions/${S}/branch`, { method: 'POST', body: JSON.stringify({ message_id: a1.id }) }) : null;
+    const B = br?.session?.id;
+    const row = B ? (await api('/agent/sessions?limit=500')).sessions.find((x) => x.id === B) : null;
+    const lineage = !!row && row.parent_session_id === S && row.fork_message_id === a1.id && row.fork_session_id === S;
+    const ev3 = B ? await run(B, '如果改用 CRDT 呢?两三句话,不用工具。', 180_000, { debugSystemPrompt: true }) : null;
+    const ev4 = B ? await run(B, '这条和主线后来讨论的那个方案比,哪个更适合我们?', 240_000, { debugSystemPrompt: true }) : null;
+    const sp3 = String(ev3?.systemPrompt || '');
+    // 分支第一轮时 Historian 多半还没起名 → 「an untitled branch」;起了名是带引号的标题(两种都算)
+    const section = sp3.includes('<branches>') && sp3.includes(`session id ${S}`) && /You are in (?:"|an untitled branch)/.test(sp3) && !sp3.includes('You are in "New Chat"');
+    const negOk = !String(ev1.systemPrompt || '').includes('<branches>');
+    const reads = (ev4?.toolArgs || []).filter((t) => t.name === 'read_session');
+    const readMain = reads.some((t) => t.arguments.includes(S));
+    const block = (sp3.match(/<branches>[\s\S]*?<\/branches>/) || [''])[0];
+    return {
+      ok: !ev1.error && !ev2.error && lineage && !ev3?.error && !ev4?.error && section && negOk && readMain,
+      detail: `血缘${lineage ? '对(挂主线、记分叉点)' : `不对!${JSON.stringify({ parent: row?.parent_session_id, fork: row?.fork_message_id, forkSession: row?.fork_session_id })}`};`
+        + `分支段${section ? '在、列了主线' : '缺!'};分叉前${negOk ? '没有分支段(负对照对)' : '就有分支段!'};`
+        + `「和主线比」那一轮 ${reads.length ? `read_session ×${reads.length}${readMain ? '(读的是主线)' : '(没读主线!)'}` : '没读别的支!'}(工具序列 ${ev4?.toolCalls.join(' → ') || '无'})`,
+      output: `【分支段】\n${block}\n\n【主线 ①】${ev1.content}\n\n【主线 ②】${ev2.content}\n\n【分支 ①】${ev3?.content || ''}\n\n【分支 · 和主线比】${ev4?.content || ''}`,
+      toolCalls: [...ev1.toolCalls, ...ev2.toolCalls, ...(ev3?.toolCalls || []), ...(ev4?.toolCalls || [])],
+      ttftMs: ttft(ev1), tokens: [ev1, ev2, ev3, ev4].reduce((n, e) => n + (e ? tokensOf(e) || 0 : 0), 0) || null,
+    };
+  });
+
   await scenario('ultra', 'ultra Ultra 档:可并行的题主动并行派子代理,琐碎题不派', async () => {
     const MODS = {
       billing: { fn: 'sumLineItems', bug: '循环从 i = 1 开始,漏掉第一项', body: (i) => `  let total = 0;\n  for (let i = ${i === 3 ? 1 : 0}; i < items.length; i++) total += items[i].price * items[i].qty;\n  return total;` },
@@ -5751,7 +6282,7 @@ Then reply with only the command output.`,
   if (ONLY.has('browserext')) {
     const status = await api('/agent/browser-extension');
     const [, extPortStr, extToken] = String(status.code || '').split(':');
-    const loaded = await extChrome.cdp('Extensions.loadUnpacked', { path: join(root, 'browser-extension') });
+    const loaded = await extChrome.cdp('Extensions.loadUnpacked', { path: process.env.TANGU_BROWSER_EXTENSION_DIR || join(root, '..', 'desktop', 'node_modules', '@forsion', 'clip', 'chrome-mv3') });
     await pairExtension(extChrome, loaded.id, { port: Number(extPortStr), token: extToken });
     const connected = await until(async () => (await api('/agent/browser-extension')).connected, 15_000, 300);
     const inboxVisible = async () => {

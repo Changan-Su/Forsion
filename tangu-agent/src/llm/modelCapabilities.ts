@@ -973,10 +973,13 @@ const NO_VISION_PATTERNS: readonly RegExp[] = [
   /^gpt-3\.5/i,
   /^o1-(mini|preview)/i,
   /^(text|davinci|babbage|curie|ada)-/i,
-  // DeepSeek 官方线整族纯文本,除两支视觉分支:deepseek-vl*(不在官方 API)与 2026-08 上线的
-  // `deepseek-v4-flash-vision-exp`(官方 API 现役,支持图像输入)。后者被族规则吞掉 = 静默劣化
-  // (白跑辅助模型 + 丢原图),正是本表最不愿意的误判方向,故按能力反查排除而非按型号枚举。
-  /^deepseek-(?!vl|.*vision)/i,
+  // DeepSeek 官方线整族纯文本,除视觉分支:deepseek-vl*(不在官方 API)、`*vision*`,以及 2026-09-10
+  // 起的 Flash 线 —— V4.1 Flash(`deepseek-flash`)原生收图,退役别名 `deepseek-v4-flash` /
+  // `deepseek-v4-flash-vision-exp` 也由它回答。Forsion 云端那行的 id 至今是 `deepseek-v4-flash`,
+  // 而后台的 supportsVision=true 不算标注(见 visionOverrideOf),判错 = 图被转给辅助模型、主模型
+  // 看不到原图(2026-10-19 用户报)。`deepseek-v4-pro` 仍纯文本。网关上纯文本的开放权重 V4-Flash
+  // 判错是「图发过去报错」那个看得见的方向,由 admin 标 false / noVisionModelIds 兜。
+  /^deepseek-(?!vl|.*vision|(v4-)?flash)/i,
   // GLM-5.3 官方文档明写「目前仅支持处理文本模态信息」。**但 5.3-Flash 是原生多模态**
   // (GLM-5 系首个原生多模态模型,收图片/视频)—— 同族里一支纯文本一支能看图,必须反查排除,
   // 否则把 Flash 判成无视觉 = 白跑辅助模型 + 丢原图(静默劣化,本表最不愿意的方向)。

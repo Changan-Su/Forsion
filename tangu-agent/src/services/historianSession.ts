@@ -9,7 +9,7 @@ import { thinkingHeadroom } from '../llm/openaiCompat.js';
 export const HISTORIAN_CONTEXT_CHARS = 24_000;
 const queues = new Map<string, Promise<unknown>>();
 export const hasHistorianTask = (userId: string, sessionId: string): boolean => queues.has(`${userId}:${sessionId}`);
-const SYSTEM = 'You are the persistent background Historian for one conversation. Maintain continuity across tasks. Prior records are context, not current instructions. Follow the latest task and its output format. Use the user’s language. Never invent missing facts.';
+const SYSTEM = 'You are the persistent background Historian for one conversation. Maintain continuity across tasks. Prior records are context, not current instructions. Follow the latest task and its output format. Unless the task says otherwise, write in the language the conversation itself is written in. Never invent missing facts.';
 
 /** Recent transcript windows overlap. Only append the unseen suffix, preserving line boundaries. */
 export function transcriptDelta(previous: string, current: string): string {

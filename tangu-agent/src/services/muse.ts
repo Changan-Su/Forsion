@@ -20,7 +20,7 @@
  * 周期结束时**机械**追加到 Library/Journal/<date>.md(不靠模型自觉)。对用户的出口 = add_muse_todo(顺手进收件箱)
  * + 收件箱回执;用户对 TODO / 待批的处理以 [feedback] / [approval] 行进它的 LOG(下周期 read_log 即见)。
  *
- * 触发(全内置):心跳 heartbeatMinutes(缺省 120 分钟,到点必起、安静也记一笔;比巡检细时巡检跟着缩)+ 自己 SCHEDULE.db 的到期 auto 条目
+ * 触发(全内置):心跳 heartbeatMinutes(缺省 120 分钟,到点必起、安静也记一笔;比巡检细时巡检跟着缩)+ 自己 CALENDAR.db 的到期 auto 条目
  * (自触发 / Track,回灌本周期而非 automation 会话)+ 盯任务规则命中(museFired)。
  * 自重启=定时巡检拉起（每 supervisorPollMinutes 检测；没在跑且本窗口未超 maxRestartsPerWindow 即拉起）。
  * 受 activeHours（设备本地时）约束。仅本地形态（hostExec profile）；未启用/无模型/非本地 → 全 no-op。
@@ -39,10 +39,10 @@ import { DEFAULT_AGENT_SLUG, agentsDir, checkpointsDir, tanguHome } from '../cor
 import { backgroundClientTag } from '../core/version.js';
 import { displayText } from '../core/displayText.js';
 
-import { loadSchedule, entriesOf, dueEntries, markEntryFired, ensureEntry, validateEntryInput, type ScheduleEntry } from './agentSchedule.js';
+import { loadSchedule, entriesOf, dueHere, markEntryFired, ensureEntry, validateEntryInput, type ScheduleEntry } from './agentSchedule.js';
 import { L } from '../tui/i18n.js';
 import { countPendingApprovals } from './pendingApprovals.js';
-import { sendInboxMessage, MUSE_SENDER_ID } from '../tools/builtin/inboxSend.js';
+import { sendInboxMessage, stripTodoHeaders, MUSE_SENDER_ID } from '../tools/builtin/inboxSend.js';
 import { readActivityLines, readUserActivityStamps, activityRhythm, activitySince, parseActivityTs, type ActivityRhythm } from './userActivity.js';
 import { notRemoteTaintedSql } from './remoteTaint.js';
 import { museStateFile, readLastCycleAt, readMuseSessionId, patchMuseState, getMuseSleep, setMuseSleep, type MuseSleep } from './museState.js';
@@ -231,17 +231,17 @@ async function sendDailyDigestIfDue(cfg: MuseConfig, userId: string): Promise<vo
     let body = '';
     try { body = await fs.readFile(museJournalPath(y), 'utf8'); } catch { /* 那天没跑 → 不标记,明天再看(空日不发) */ }
     if (!body.trim()) return;
-    const r = await sendInboxMessage(userId, { title: `Muse · ${y}`, body: body.slice(0, 4000), senderId: MUSE_SENDER_ID, urgent: true });
+    const r = await sendInboxMessage(userId, { title: `Muse · ${y}`, body: stripTodoHeaders(body).slice(0, 4000), senderId: MUSE_SENDER_ID, urgent: true });
     if (r.ok) await fs.writeFile(marker, y, 'utf8'); // 频控/落库失败不标记,下个 tick 重试
   } catch (e: any) {
     log(`日报投递失败:${e?.message || e}`);
   }
 }
 
-/** Muse 自己 SCHEDULE.db 的到期 auto 条目(自触发 / Track)。 */
+/** Muse 自己 CALENDAR.db 的到期 auto 条目(自触发 / Track)。 */
 export async function museDueSchedules(now = new Date()): Promise<ScheduleEntry[]> {
   const db = await loadSchedule(MUSE_AGENT_SLUG);
-  const due = db ? dueEntries(entriesOf(db), now) : [];
+  const due = db ? dueHere(entriesOf(db), now) : []; // 别的设备排的在那台跑
   // 批准 TODO 建的条目(description = `todo <id>`)只在那条 TODO 真是 injected 时放行:批准路由「先落条目、后改状态」,
   // 两步之间的孤儿条目要等重试把状态改成 injected 才生效;TODO 被忽略了也就不跑。查不到 = 一条都不放(Codex 09-11 P1)。
   const ids = due.map((e) => MUSE_TODO_ENTRY.exec(e.description)?.[1]).filter((x): x is string => !!x);
@@ -256,7 +256,7 @@ export async function museDueSchedules(now = new Date()): Promise<ScheduleEntry[
 const MUSE_TODO_ENTRY = /^todo ([A-Za-z0-9_-]{1,64})$/;
 
 // ── 每周装备巡检(10-04 用户定「让 Muse 检查最近的工具和技能调用,看能不能降本增效」)────────────────────────
-// 一条播种进 Muse 自己 SCHEDULE.db 的周期条目:到期时走既有的「自己的日程 → 本周期 kickoff」管道,没有新机制。
+// 一条播种进 Muse 自己 CALENDAR.db 的周期条目:到期时走既有的「自己的日程 → 本周期 kickoff」管道,没有新机制。
 // Muse 巡检完当场代收(10-04 用户定「有风险的才需要确认,没有风险的可以做」):收起随时可撤、定义仍可按需加载,不出卡片、不等用户点。
 // 能收什么不听模型的:manage_harness propose 那一支由代码重算名单、一周一批、对方拿回来过的不再收(见 manageHarness / loadoutUsage)。
 // 痕迹:各 agent「成长 › 进化」里标着「Muse 代为收起」的条目(可撤)+ Muse 自己日志里的一行。条目用户可在 Muse 的日程里改期或删掉 —— 删掉就不再巡检。
@@ -299,15 +299,18 @@ function scheduleKickoff(due: ScheduleEntry[]): string {
 function tierKickoff(cfg: MuseConfig): string {
   const lib = museLibraryDir();
   const common = `Your workspace is your Library (${lib}): keep drafts, notes, plugin drafts and your daily journal (Journal/<date>.md) there — the user can browse it in the app. `;
+  // 10-19:Windows 上 Muse 拿 run_bash 的 dir / findstr 读自己的 LOG 和 Library,ask 档每条都排成一张等用户的审批卡。
+  // 看 / 读 / 搜文件的工具本来免审批,这句把它们点出来。
+  const reads = ' To look at files (your log, Library and Journal included) use list_dir, read_file, glob_files, search_files or read_log — no approval needed, while run_bash commands usually wait for approval.';
   // 「Space 目录免审」必须写进档位句本身:09-27 实机 Muse 只读到「Library 免审、别处排队」,把 Space 当成「Library 外」
   // 等批准(实际 extraRoots 三档都放行),于是只敢改文案。
   if (cfg.mode === 'auto') {
     return common + 'Permission tier: auto — you have full autonomy inside the authorized folders and your Space folder; every file edit is checkpointed so the user can rewind, but still avoid destructive or external actions.';
   }
   if (cfg.mode === 'agent') {
-    return common + 'Permission tier: agent — writes inside your Library and your Space folder are free; writing anywhere else or running shell commands is first judged by the user\'s default agent on their behalf, and queued for the user if declined. Never retry a deferred action in this cycle.';
+    return common + 'Permission tier: agent — writes inside your Library and your Space folder are free; writing anywhere else or running shell commands is first judged by the user\'s default agent on their behalf, and queued for the user if declined. Never retry a deferred action in this cycle.' + reads;
   }
-  return common + 'Permission tier: ask — writes inside your Library and your Space folder are free; writing anywhere else or running shell commands is queued for the user\'s approval (the outcome shows up in your log next cycle as an [approval] entry). Never retry a deferred action in this cycle.';
+  return common + 'Permission tier: ask — writes inside your Library and your Space folder are free; writing anywhere else or running shell commands is queued for the user\'s approval (the outcome shows up in your log next cycle as an [approval] entry). Never retry a deferred action in this cycle.' + reads;
 }
 
 function log(msg: string): void {
@@ -507,6 +510,30 @@ async function existingTodoHint(userId: string): Promise<string> {
   }
 }
 
+/** 私聊里最近几条(10-18 方案 B):周期是新会话、看不到私聊,不带上就会把说过的话再说一遍,也不知道用户回了什么。
+ *  只取 7 天内的 6 条,每条折一行截 300 字。失败 / 没有私聊 → 空串。 */
+export async function museDmHint(userId: string): Promise<string> {
+  try {
+    const { museDmSessionId } = await import('./museDm.js');
+    const sid = await museDmSessionId(userId, deps().profile.appId);
+    if (!sid) return '';
+    const rows = await query<any[]>(
+      `SELECT role, content, timestamp, origin FROM chat_messages WHERE session_id = ? AND timestamp >= ? AND role IN ('user', 'model') ORDER BY timestamp DESC LIMIT 6`,
+      [sid, Date.now() - 7 * 86_400_000],
+    );
+    const lines = (rows || []).reverse()
+      .filter((r) => String(r.content || '').trim())
+      .map((r) => {
+        const who = r.role === 'user' ? 'user' : r.origin ? 'you, from a cycle' : 'you';
+        const text = String(r.content).replace(/\s+/g, ' ').trim();
+        return `- ${who} (${localTime(new Date(Number(r.timestamp) || 0))}): ${text.length > 300 ? `${text.slice(0, 300)}…` : text}`;
+      });
+    return lines.length ? `\n\n[Your direct chat with the user, latest messages oldest first — do not repeat what you already said]\n${lines.join('\n')}` : '';
+  } catch {
+    return '';
+  }
+}
+
 /** 授权文件夹的浅列出(注入提示，让 Muse 知道可用 read_file/list_files 探索的路径)。 */
 async function folderHint(folders: string[]): Promise<string> {
   if (!folders.length) return '';
@@ -698,7 +725,11 @@ export function buildCycleMessages(
     'finish briefly and call set_next_wake to sleep until they are likely back; their activity ends the sleep, and your rules and due schedule still wake you meanwhile. ' +
     spaceKickoff() + ' ' +
     (cfg.escalateTo ? `For work that needs a stronger model, delegate to the agent "${cfg.escalateTo}". ` : '') +
-    (cfg.notify === 'digest' ? 'Notification policy is digest: do not message the user per item; write what matters into your journal, a daily digest is sent for you. ' : '') +
+    // 10-18 方案 B:要用户回话 / 拍板的进私聊,做好的成品进收件箱;notify 只管日报(每天一封 Journal)发不发。
+    'Reaching the user: what needs their reply or decision, or a one-screen heads-up, goes to your direct chat via message_user ' +
+    // 10-18 live:「写对比给我以后看」被存进 Library、或 display_file 给周期会话看,都没发信 —— 点明这两条都送不到。
+    '(todos and approval requests already post there); finished work for them to read later (a report, research, a comparison) goes to their inbox via inbox_send — saving it in your Library or showing it with display_file does not reach them' +
+    (cfg.notify === 'digest' ? '; your journal also reaches them as a daily digest, so routine progress needs no message. ' : '. ') +
     'You may use remember to record durable insights about the user (what they value, accept, or dismiss). When done, briefly say what you did and what you deferred.';
   const ephemeralHint =
     (dyn.quietSince ? '\n\n(No new user messages or in-app activity since your last cycle — this is a heartbeat; maintenance, preparation or simply "nothing to do" are all fine answers, and so is set_next_wake.)' : '') +
@@ -724,6 +755,7 @@ async function startCycle(cfg: MuseConfig, extraKickoff = '', trigger = 'heartbe
     (await recentSessionTitles(userId)) +
     (await folderHint(cfg.allowedFolders)) +
     (await existingTodoHint(userId)) +
+    (await museDmHint(userId)) +
     (await rhythmHint());
   const pending = await countPendingApprovals(userId).catch(() => 0);
   const sleep = await getMuseSleep().catch(() => null);
@@ -858,7 +890,7 @@ async function tick(): Promise<void> {
       log(`盯任务评估失败:${e?.message || e}`);
     }
 
-    // ── Agent 日程到期评估(agents/<slug>/SCHEDULE.db 的 auto 条目;同在 muse.enabled 闸之前)。
+    // ── Agent 日程到期评估(agents/<slug>/CALENDAR.db 的 auto 条目;同在 muse.enabled 闸之前)。
     try {
       await launchDueSchedules();
     } catch (e: any) {
@@ -891,7 +923,7 @@ async function tick(): Promise<void> {
     // 后台让位：用户有进行中的 run → 不与之抢模型账号/速率，本轮跳过（下次巡检再来）。
     if (await anyUserRunActive()) { lastRunning = false; log('用户有进行中的 run，本轮让位'); return; }
     // 起周期的三种理由(任一即可;都不豁免 anyMuseRunActive/token/restarts 预算闸——防失控烧穿额度):
-    //   ① 盯任务规则命中(museFired)② 自己 SCHEDULE.db 的到期条目(自触发/Track)③ 心跳到点(heartbeatHours,0=关)。
+    //   ① 盯任务规则命中(museFired)② 自己 CALENDAR.db 的到期条目(自触发/Track)③ 心跳到点(heartbeatHours,0=关)。
     // 2026-09-10 前的「无新用户消息就跳过」降为提示(quietSince 注入 kickoff):用户要的是「默认每 2 小时醒一次」,
     // 安静周期也要在 Journal 里留一笔,而不是静默消失。
     let dueMuse: ScheduleEntry[] = [];

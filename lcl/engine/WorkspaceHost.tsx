@@ -26,7 +26,7 @@ import { useNav } from './navStore'
 import { useCommandStore, commandHotkeyText } from './commandRegistry'
 import { useEngineI18n } from './i18nSeam'
 import { useShortcuts, formatHotkey, isMacPlatform } from './shortcutStore'
-import { getActiveSpace } from './spaceRegistry'
+import { getActiveSpace, landOnMainPage } from './spaceRegistry'
 import { computeDropTarget, locOf, type DropTarget } from './dropModel'
 import { getDetachApi, type ViewRef } from './detachSeam'
 import { OverlayAt, zoomOf } from './menuAnchor'
@@ -187,6 +187,7 @@ const WbTab: React.FC<IDockviewPanelHeaderProps> = ({ api, params }) => {
       ref={tabRef}
       className={`wb-tab${iconOnly ? ' wb-tab--icon' : ''}${loc === 'left' ? ' wb-tab--left' : ''}${type === 'sidebar-empty' || type === 'home' ? ' wb-tab--empty' : ''}`}
       title={api.title}
+      data-view-type={type} // 台架按类型认标签(标题会被视图自己改成会话名 / 笔记名)
       data-transient={type === '__extend' ? 'true' : undefined}
       draggable={type !== '__extend'}
       onContextMenu={closable ? (e) => { e.preventDefault(); e.stopPropagation(); setMenu({ x: e.clientX, y: e.clientY }) } : undefined}
@@ -654,6 +655,7 @@ export const WorkspaceHost: React.FC<{
       }
       buildDefault?.()
     }
+    landOnMainPage() // 冷启动进的是有默认主页的 Space(主页):先看到那一页,不是上次退出时的前台
     // 布局变更:只同步侧栏可见态 + 存盘。跨组变形已由 dropView 显式写 __loc(不再位置反查 reconcile)。
     const syncLayout = (): void => {
       ws.syncPanelState()

@@ -54,6 +54,7 @@ import { EMBED_DENY, ViewCard, ensureChartView, pickSpecOf, viewCardTitle } from
 import { DashFilterBar } from './dashFilterBar'
 import '@amadeus/blocks'
 import './dashGrid.css'
+import { useVaultRelParam } from './vaultRelParam'
 
 registerMessages({
   // 加卡菜单
@@ -274,7 +275,7 @@ export function DashboardGridView(props: ViewProps) {
 function GridInner({ leaf }: ViewProps) {
   const { t } = useI18n()
   const store = useScopedPageStore()
-  const dashPath = typeof leaf.params.dashPath === 'string' ? leaf.params.dashPath : ''
+  const dashPath = useVaultRelParam(leaf, 'dashPath')
   const locked = leaf.params.locked !== false
   const mode = useTheme((s) => s.mode)
   const manifest = usePageStore((s) => s.manifest)

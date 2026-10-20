@@ -231,7 +231,7 @@
   }
 
   // 10-09(对标 ChatGPT Intelligent UI「只能拼固定组件库」):统一的拼装部件,模型只给 JSON,外观由宿主定。
-  const askOf = (text) => { try { window.forsionSketch.ask(String(text)) } catch (e) { console.warn(e) } }
+  const askOf = (text) => { try { window.forsionIntelligentUi.ask(String(text)) } catch (e) { console.warn(e) } }
   const button = (label, onClick) => { const b = node('button', 'fs-button', label); b.type = 'button'; b.addEventListener('click', onClick); return b }
 
   /** <fs-compare>:并排选项 {title?, caption?, options:[{label, summary?, points?:string[], ask?:{label?, text}}]}(2–6 项)。 */
@@ -294,7 +294,7 @@
     }
   }
 
-  /** <fs-checklist>:勾选清单 {title?, caption?, items:[{label, detail?}]}(1–40 项);勾选状态经 forsionSketch.setState 存在本机
+  /** <fs-checklist>:勾选清单 {title?, caption?, items:[{label, detail?}]}(1–40 项);勾选状态经 forsionIntelligentUi.setState 存在本机
    *  (键 checklists[<元素 id 或 'checklist'>]),重开这张卡还在。 */
   class Checklist extends Figure {
     render() {
@@ -303,7 +303,7 @@
         d.items.every((it) => it && typeof it.label === 'string' && (it.detail === undefined || typeof it.detail === 'string'))
       if (!ok) { this.error(); return }
       const key = this.id || 'checklist'
-      const st = window.forsionSketch?.state
+      const st = window.forsionIntelligentUi?.state
       const saved = st && typeof st === 'object' && st.checklists ? st.checklists[key] : undefined
       const done = new Set(Array.isArray(saved) ? saved.filter((i) => Number.isInteger(i)) : [])
       this.replaceChildren()
@@ -314,9 +314,9 @@
         const li = node('li'); const l = node('label', 'fs-check'); const c = node('input'); c.type = 'checkbox'; c.checked = done.has(i)
         c.addEventListener('change', () => {
           if (c.checked) done.add(i); else done.delete(i)
-          const cur = window.forsionSketch.state
+          const cur = window.forsionIntelligentUi.state
           const base = cur && typeof cur === 'object' && !Array.isArray(cur) ? cur : {}
-          try { window.forsionSketch.setState({ ...base, checklists: { ...(base.checklists || {}), [key]: [...done].sort((x, y) => x - y) } }) } catch (e) { console.warn(e) }
+          try { window.forsionIntelligentUi.setState({ ...base, checklists: { ...(base.checklists || {}), [key]: [...done].sort((x, y) => x - y) } }) } catch (e) { console.warn(e) }
         })
         const text = node('span', '', it.label)
         if (it.detail) text.append(node('small', 'fs-muted', ' ' + it.detail))

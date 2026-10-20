@@ -1,7 +1,8 @@
 /** Calendar 视图键盘映射(纯函数,便于单测):
  *  - D/W/3/M 切模式(Notion Calendar 式,原有);
  *  - ←/→ 翻上/下一周期(任务3,复用工具条 prev/next);
- *  - Cmd/Ctrl+C/V 复制/粘贴选中事件、Delete/Backspace 删除(任务2)。
+ *  - Cmd/Ctrl+C/V 复制/粘贴选中事件、Delete/Backspace 删除(任务2);
+ *  - 2026-10-16:Cmd/Ctrl+Z 撤销最近一次删除/改时间,Cmd/Ctrl+D 复制选中,C 新建,T 回今天,Enter 改标题,Esc 取消选中/草稿。
  *  输入控件劫持排除留在调用方(依赖 DOM,这里只认键)。 */
 import type { CalMode } from '../../amadeus/store/calendarNavStore'
 import { registerMessages, translate } from '../../i18n'
@@ -30,16 +31,28 @@ export type CalKeyAction =
   | { kind: 'prev' }
   | { kind: 'next' }
   | { kind: 'mode'; mode: CalMode }
+  | { kind: 'undo' }
+  | { kind: 'duplicate' }
+  | { kind: 'new' }
+  | { kind: 'today' }
+  | { kind: 'rename' }
+  | { kind: 'escape' }
 
 /** 只看按键 + 修饰键定动作;不认识的返回 null(调用方不 preventDefault)。 */
-export function classifyCalKey(e: { key: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean }): CalKeyAction | null {
+export function classifyCalKey(e: { key: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean; shiftKey?: boolean }): CalKeyAction | null {
   const mod = (e.metaKey || e.ctrlKey) && !e.altKey
+  if (mod && !e.shiftKey && (e.key === 'z' || e.key === 'Z')) return { kind: 'undo' }
+  if (mod && (e.key === 'd' || e.key === 'D')) return { kind: 'duplicate' }
   if (mod && (e.key === 'c' || e.key === 'C')) return { kind: 'copy' }
   if (mod && (e.key === 'v' || e.key === 'V')) return { kind: 'paste' }
   if (e.metaKey || e.ctrlKey || e.altKey) return null // 其它修饰组合不劫持(留给浏览器/系统)
   if (e.key === 'Delete' || e.key === 'Backspace') return { kind: 'delete' }
   if (e.key === 'ArrowLeft') return { kind: 'prev' }
   if (e.key === 'ArrowRight') return { kind: 'next' }
+  if (e.key === 'Escape') return { kind: 'escape' }
+  if (e.key === 'Enter') return { kind: 'rename' }
+  if (e.key === 'c' || e.key === 'C') return { kind: 'new' }
+  if (e.key === 't' || e.key === 'T') return { kind: 'today' }
   const hit = MODE_ITEMS.find((m) => m.key === e.key.toLowerCase())
   return hit ? { kind: 'mode', mode: hit.id } : null
 }

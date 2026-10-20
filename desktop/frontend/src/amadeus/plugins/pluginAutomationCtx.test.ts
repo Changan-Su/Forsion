@@ -461,3 +461,57 @@ describe('禁用规则的墓碑 / 就绪边沿重放 / 与 ensure 串行', () =>
     expect(getPluginDisableState('pc-erp')).toBeNull()
   })
 })
+
+describe('ctx.databases / ctx.noteTasks 的能力闸(default-deny)', () => {
+  it('manifest 没声明 → 整个不存在;声明了哪个就只有哪个', () => {
+    const plain = ctxOf('plain')
+    expect(plain.databases).toBeUndefined()
+    expect(plain.noteTasks).toBeUndefined()
+    let ref: Ctx | null = null
+    usePluginStore.setState({ initialized: false, plugins: [], activeIds: [], disabledIds: [], disposers: {} })
+    usePluginStore.getState().init([{ id: 'cap', name: 'cap', version: '0', capabilities: ['databases'], setup: (c) => { ref = c } }])
+    expect(typeof ref!.databases?.subscribe).toBe('function')
+    expect(ref!.noteTasks).toBeUndefined()
+  })
+
+  // 负对照(10-17 实跑红):pluginStore 里 calendar 档改成恒注入 → 第一段红。
+  it("ctx.calendar:ensureMember 人人有;subscribe / 写口只有声明了 'calendar' 才有(不是空壳)", () => {
+    const plain = ctxOf('plain-cal')
+    expect(typeof plain.calendar?.ensureMember).toBe('function')
+    for (const k of ['subscribe', 'setColor', 'setHidden', 'setDefault', 'setMember', 'removeMember'] as const) expect(plain.calendar?.[k], k).toBeUndefined()
+    let ref: Ctx | null = null
+    usePluginStore.setState({ initialized: false, plugins: [], activeIds: [], disabledIds: [], disposers: {} })
+    usePluginStore.getState().init([{ id: 'cal', name: 'cal', version: '0', capabilities: ['calendar'], setup: (c) => { ref = c } }])
+    expect(typeof ref!.calendar?.subscribe).toBe('function')
+    expect(typeof ref!.calendar?.ensureMember).toBe('function')
+    expect(ref!.databases).toBeUndefined()
+  })
+})
+
+describe('ctx.notify 的 action / key(10-17)', () => {
+  // 负对照(10-17 实跑红):动作不看 ctxAlive → 「停用后」红;key 不加插件前缀 → dedupeKey 那条红;
+  // 带 key 时不显式给 action / store 合并仍用 ?? 沿用 → 「旧按钮要清掉」红。
+  it('带动作的卡停 8 秒、key 按插件加前缀;动作在插件停用后不调;坏动作不挂按钮', async () => {
+    const { useNotifications } = await import('../../stores/notificationStore')
+    useNotifications.setState({ items: [], queue: [] })
+    const run = vi.fn()
+    const ctx = ctxOf('ntf')
+    ctx.notify?.('已删除', { action: { label: ' 撤销 ', run }, key: 'undo' })
+    const item = useNotifications.getState().items.at(-1)!
+    expect(item).toMatchObject({ dedupeKey: 'plugin:ntf:undo', durationMs: 8000 })
+    expect(item.action?.label).toBe('撤销')
+    item.action!.run()
+    expect(run).toHaveBeenCalledTimes(1)
+    ctx.notify?.('坏的', { action: { label: '', run } })
+    ctx.notify?.('也坏', { action: { label: 'x' } as unknown as { label: string; run(): void } })
+    expect(useNotifications.getState().items.slice(-2).every((i) => !i.action)).toBe(true)
+    // 同 key 的下一条没带动作:合并后旧按钮要清掉(Codex P2:不然「已删除 B」上点撤销撤的是 A)
+    ctx.notify?.('已删除 B', { key: 'undo' })
+    const merged = useNotifications.getState().items.find((i) => i.dedupeKey === 'plugin:ntf:undo')!
+    expect(merged.text).toBe('已删除 B')
+    expect(merged.action).toBeUndefined()
+    usePluginStore.getState().disable('ntf')
+    item.action!.run()
+    expect(run).toHaveBeenCalledTimes(1)
+  })
+})

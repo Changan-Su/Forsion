@@ -30,10 +30,10 @@ export const useAgentSchedules = create<AgentScheduleState>((set, get) => ({
   },
 }))
 
-/** 合成只读日历源:path=`agent://<slug>/SCHEDULE.db`(colorForDb/isHidden 按 path 字符串键,天然可用)。 */
-export function useAgentCalDbs(): AggDb[] {
-  const schedules = useAgentSchedules((s) => (Array.isArray(s.schedules) ? s.schedules : []))
-  return useMemo(() => schedules.map((s): AggDb => {
+/** 合成只读日历源:path=`agent://<slug>/SCHEDULE.db`(colorForDb/isHidden 按 path 字符串键,天然可用)。
+ *  纯函数:日历视图(useAgentCalDbs)与插件接缝 ctx.calendar(pluginCalendar.ts)共用。 */
+export function agentScheduleDbs(schedules: AgentScheduleInfo[]): AggDb[] {
+  return schedules.map((s): AggDb => {
     const nameId = s.db.columns[0]?.id ?? ''
     return {
       path: `agent://${s.slug}/SCHEDULE.db`,
@@ -46,23 +46,33 @@ export function useAgentCalDbs(): AggDb[] {
         return { rowId: r.id, name: cellText(cells[nameId]), cells }
       }),
     }
-  }), [schedules])
+  })
 }
 
-/** Shared mount/poll lifecycle: multiple cards and the full Calendar share one timer. */
+export function useAgentCalDbs(): AggDb[] {
+  const schedules = useAgentSchedules((s) => (Array.isArray(s.schedules) ? s.schedules : []))
+  return useMemo(() => agentScheduleDbs(schedules), [schedules])
+}
+
+/** Shared mount/poll lifecycle: multiple cards, the full Calendar and plugin subscriptions (ctx.calendar) share one timer.
+ *  返回释放函数(只生效一次);最后一个使用者释放时停表。 */
 let pollingUsers = 0
 let pollingTimer: ReturnType<typeof setInterval> | undefined
 let stopConfig: (() => void) | undefined
+export function acquireAgentSchedulePolling(): () => void {
+  if (++pollingUsers === 1) {
+    const pull = (): void => { void useAgentSchedules.getState().refresh(useApp.getState().cfg) }
+    pull()
+    pollingTimer = setInterval(pull, 60_000)
+    stopConfig = useApp.subscribe((s, p) => { if (s.cfg !== p.cfg) pull() })
+  }
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    if (--pollingUsers === 0) { clearInterval(pollingTimer); pollingTimer = undefined; stopConfig?.(); stopConfig = undefined }
+  }
+}
 export function useAgentSchedulePolling(): void {
-  useEffect(() => {
-    if (++pollingUsers === 1) {
-      const pull = (): void => { void useAgentSchedules.getState().refresh(useApp.getState().cfg) }
-      pull()
-      pollingTimer = setInterval(pull, 60_000)
-      stopConfig = useApp.subscribe((s, p) => { if (s.cfg !== p.cfg) pull() })
-    }
-    return () => {
-      if (--pollingUsers === 0) { clearInterval(pollingTimer); pollingTimer = undefined; stopConfig?.(); stopConfig = undefined }
-    }
-  }, [])
+  useEffect(() => acquireAgentSchedulePolling(), [])
 }

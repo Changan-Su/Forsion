@@ -4,7 +4,7 @@
  */
 import { create } from 'zustand'
 import type { Command } from './types'
-import { useShortcuts, effectiveHotkey, formatHotkey, isMacPlatform, isPairHotkey, pairHotkeyOf } from './shortcutStore'
+import { useShortcuts, effectiveHotkey, formatHotkey, hotkeyKeyOf, isMacPlatform, isPairHotkey, pairHotkeyOf } from './shortcutStore'
 
 interface CommandState {
   commands: Command[]
@@ -54,7 +54,7 @@ export function commandHotkeyText(id: string): string {
 const KEY_ALIAS: Record<string, string> = { '{': '[', '}': ']' }
 
 /** 把 'mod+shift+k' 规范化为与事件比较的 token。 */
-function hotkeyMatches(hotkey: string, e: KeyboardEvent): boolean {
+export function hotkeyMatches(hotkey: string, e: KeyboardEvent): boolean {
   if (isPairHotkey(hotkey)) return pairHotkeyOf(e) === hotkey // 「左右修饰键同按」没有主键,单独认(走通用那条 'shift+shift' 会对上每一次单按 Shift)
   const parts = hotkey.toLowerCase().split('+').map((p) => p.trim())
   const key = parts[parts.length - 1]
@@ -65,8 +65,11 @@ function hotkeyMatches(hotkey: string, e: KeyboardEvent): boolean {
   if (wantMod !== mod) return false
   if (wantShift !== e.shiftKey) return false
   if (wantAlt !== e.altKey) return false
-  const k = e.key.toLowerCase()
-  return (KEY_ALIAS[k] ?? k) === key
+  const k = hotkeyKeyOf(e)
+  if ((KEY_ALIAS[k] ?? k) === key) return true
+  // 旧版在 mac 上录 ⌥ 组合存的是变体字符('mod+alt+√'):照旧认,别让用户已有的自定义键升级后失灵
+  const raw = e.key.toLowerCase()
+  return raw !== k && raw === key
 }
 
 /**

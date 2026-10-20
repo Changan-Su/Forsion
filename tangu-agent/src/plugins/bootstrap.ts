@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { deps } from '../seams/runtime.js';
 import { tanguHome } from '../core/tanguHome.js';
 import { createPluginRuns, pluginEngines } from './runs.js';
@@ -47,6 +48,8 @@ import {
 } from './loader.js';
 import { appendActivityLine } from '../services/userActivity.js';
 import { seedBundleAgents } from './bundles.js';
+import { attachPluginMcp } from '../mcp/pluginServers.js';
+import { attachPluginHooks } from '../hooks/pluginHooks.js';
 import type {
   PluginCommand,
   PluginRouters,
@@ -95,6 +98,8 @@ interface Instance {
   hostAdapters: Map<string, (o: any) => { host: HostServices }>;
   brainAdapters: Map<string, (o: any) => CloudBrainServices>;
   billingAdapters: Map<string, (o: any) => BillingServices>;
+  /** manifest 的 mcpServers / hooks 已登记(见 attachManifestExtras)。 */
+  extrasAttached?: boolean;
 }
 
 function newInstance(metaIds: Set<string> = new Set()): Instance {
@@ -116,6 +121,18 @@ function newInstance(metaIds: Set<string> = new Set()): Instance {
 
 function makeContext(d: DiscoveredPlugin, inst: Instance): TanguPluginContext {
   const id = d.manifest.id;
+  const toolAliases = new Map<string, string>();
+  const metaAliases = new Map<string, string>();
+  const namespace = (raw: string) => d.packageId ? `${id}:${raw}` : raw;
+  const scopedProvider = (provider: import('../tools/toolRegistry.js').ToolProvider): import('../tools/toolRegistry.js').ToolProvider => !d.packageId ? provider : ({ ...provider, id: namespace(provider.id), tools: (...args) => provider.tools(...args).map(tool => {
+    const name = `market_${tool.name.slice(0, 16)}_${createHash('sha256').update(id + ':' + tool.name).digest('hex').slice(0, 32)}`;
+    toolAliases.set(tool.name, name);
+    return { ...tool, name, definition: { ...tool.definition, function: { ...tool.definition.function, name } } };
+  }) });
+  const ownedToolNames = () => listToolProviders().filter(p => providerOwner.get(p.id) === id).flatMap(p => p.tools().map(t => t.name));
+  const translateTool = (name: string) => { ownedToolNames(); return toolAliases.get(name) || name; };
+  const runs = createPluginRuns(id, () => !inst.disposed, off => inst.runtimeDisposers.push(off), ownedToolNames);
+  const automation = createPluginAutomation(id, () => !inst.disposed, () => listToolProviders().filter(p => providerOwner.get(p.id) === id).flatMap(p => p.tools().filter(t => t.capabilities?.automationSafe).map(t => t.name)));
   const live = (what: string): boolean => {
     if (!inst.disposed) return true;
     console.warn(`[tangu] 插件 ${id} 已停用,忽略迟到的${what}注册`);
@@ -127,6 +144,7 @@ function makeContext(d: DiscoveredPlugin, inst: Instance): TanguPluginContext {
     },
     registerToolProvider: (p) => {
       if (!live('工具')) return;
+      p = scopedProvider(p);
       inst.providerIds.add(p.id);
       providerOwner.set(p.id, id);
       registerToolProvider({ ...p, origin: 'plugin' }); // 全局注册表,append 在核心 builtin 之后;打 plugin 标(chat 正向面只认核心 provider)
@@ -137,6 +155,10 @@ function makeContext(d: DiscoveredPlugin, inst: Instance): TanguPluginContext {
     // 随 App 播种的电脑操作在新装机器上就是这样(09-25 Windows 实测)。显式开关(__enabled)照旧优先。
     registerPlugin: (meta) => {
       if (!live(' meta ')) return;
+      if (d.packageId) {
+        if (!metaAliases.has(meta.id)) metaAliases.set(meta.id, metaAliases.size === 0 || meta.id === d.packageId ? id : `market-${createHash('sha256').update(id + ':' + meta.id).digest('hex').slice(0, 48)}`);
+        meta = { ...meta, id: metaAliases.get(meta.id)!, ...(meta.toolProvider ? { toolProvider: scopedProvider(meta.toolProvider) } : {}) };
+      }
       inst.metaIds.add(meta.id);
       if (meta.toolProvider) { // registry 顺带注册的 provider 也进台账
         inst.providerIds.add(meta.toolProvider.id);
@@ -178,8 +200,8 @@ function makeContext(d: DiscoveredPlugin, inst: Instance): TanguPluginContext {
       });
       if (inst.activated) mountRoutes(id, inst);
     },
-    sdk: { ...sdk, runs: createPluginRuns(id, () => !inst.disposed, off => inst.runtimeDisposers.push(off), () => listToolProviders().filter(p => providerOwner.get(p.id) === id).flatMap(p => p.tools().map(t => t.name))), engines: pluginEngines,
-      automation: createPluginAutomation(id, () => !inst.disposed, () => listToolProviders().filter(p => providerOwner.get(p.id) === id).flatMap(p => p.tools().filter(t=>t.capabilities?.automationSafe).map(t => t.name))),
+    sdk: { ...sdk, runs: { ...runs, start: p => runs.start({ ...p, ...(p.toolNames ? { toolNames: p.toolNames.map(translateTool) } : {}) }) }, engines: pluginEngines,
+      automation: { ...automation, save: (key, input) => automation.save(key, { ...input, tool: translateTool(input.tool) }) },
       workspaces: createPluginWorkspaces(id, path.join(tanguHome(), 'plugin-data', id), () => !inst.disposed) },
     log: (msg) => console.log(`[plugin:${id}] ${msg}`),
     paths: { pluginDir: d.dir, dataDir: path.join(tanguHome(), 'plugin-data', id) },
@@ -264,6 +286,8 @@ export interface PluginStatus {
   lastError?: string;
   /** 上一次 activate / deactivate 超时后还在后台跑(busy):落定后按开关自动收敛,这期间不会再激活它。 */
   settling?: boolean;
+  /** 此刻在跑的实例名下注册的工具名(模型看到的名字),不含和核心工具或别的插件撞名的。桌面据此只让插件给自己引擎半身的工具挂结果卡片。 */
+  tools?: string[];
 }
 
 /** 生命周期限时(测试改小)。超时只是不再等,对方仍在后台跑 —— 见 withDeadline。 */
@@ -463,9 +487,27 @@ async function reconcile(): Promise<void> {
         changed = true;
       }
     }
-    if (!changed) return;
+    if (!changed) return attachManifestExtras();
   }
   console.warn('[tangu] 插件收敛未在上限轮数内到达不动点(忽略)');
+  attachManifestExtras();
+}
+
+/**
+ * 收敛落定后才给在跑的实例登记 manifest 里声明式的部分(mcpServers / hooks)—— 启动期「先全部激活一次再收敛」里
+ * 随即休眠的插件不拉起子进程、不挂 hook。撤销函数进实例台账:停用 / 卸载 / 原地升级时 stopEntry 跑 runtimeDisposers 摘掉。
+ */
+function attachManifestExtras(): void {
+  for (const e of entries.values()) {
+    const inst = e.inst;
+    if (!inst?.activated || inst.disposed || inst.extrasAttached) continue;
+    inst.extrasAttached = true;
+    const { id, name, mcpServers, hooks } = e.d.manifest;
+    for (const off of [
+      attachPluginMcp(id, String(name || id), e.d.dir, mcpServers),
+      attachPluginHooks(id, String(name || id), e.d.dir, hooks),
+    ]) if (off) inst.runtimeDisposers.push(off);
+  }
 }
 
 /** 彻底注销一个已停的条目(meta 也不再列出)。 */
@@ -663,5 +705,15 @@ export function pluginStatus(id: string): PluginStatus {
   }
   if (e.lastError) out.lastError = e.lastError;
   if (e.busy && !e.inst) out.settling = true;
+  if (e.inst) {
+    // 一个名字只归一家:核心或别的插件也声明了同名工具(谁真正被执行取决于面与注册序)就谁都不报,桌面那边不认领、留通用记录
+    const owners = new Map<string, Set<string>>();
+    for (const p of listToolProviders()) {
+      const owner = p.origin === 'plugin' ? (providerOwner.get(p.id) ?? `provider:${p.id}`) : '#core';
+      for (const t of p.tools()) (owners.get(t.name) ?? owners.set(t.name, new Set()).get(t.name)!).add(owner);
+    }
+    const tools = [...owners].filter(([, o]) => o.size === 1 && o.has(e.d.manifest.id)).map(([name]) => name);
+    if (tools.length) out.tools = tools;
+  }
   return out;
 }

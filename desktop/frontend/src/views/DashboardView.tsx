@@ -20,6 +20,7 @@ import { registerMessages, useI18n } from '../i18n'
 import { DashboardCanvasView } from './DashboardCanvasView'
 import { DashboardGridView } from './DashboardGridView'
 import { useFollowPathGone } from './followPathGone'
+import { useVaultRelParam } from './vaultRelParam'
 
 registerMessages({
   'dashview.loadFailed': { zh: '打不开仪表盘', en: 'Could not open dashboard' },
@@ -35,7 +36,7 @@ export function DashboardView(props: ViewProps) {
 
 function DashboardRouter(props: ViewProps) {
   const { t } = useI18n()
-  const dashPath = typeof props.leaf.params.dashPath === 'string' ? props.leaf.params.dashPath : ''
+  const dashPath = useVaultRelParam(props.leaf, 'dashPath')
   const store = useScopedPageStore()
   const activePage = usePageStore((s) => s.activePage)
   const loadError = usePageStore((s) => s.error)

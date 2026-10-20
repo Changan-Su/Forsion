@@ -76,12 +76,16 @@ export const CLASSIFICATION = {
   // Pairing credentials and persistent collaboration policy are host-only.
   'GET /agent/browser-extension': [D, 'browser extension pairing credentials'],
   'POST /agent/browser-extension/reset-code': [D, 'rotates browser extension pairing credentials'],
+  'POST /agent/browser-extension/reload-clients': [D, 'reloads the browser extension on the local machine'],
   'GET /agent/agents/:slug/human': [D, 'host collaboration configuration'],
   'PUT /agent/agents/:slug/human': [D, 'host collaboration configuration write'],
   'POST /agent/agents/:slug/human/undo': [D, 'host collaboration configuration undo'],
   'GET /agent/project-context/human': [D, 'host collaboration configuration'],
   'PUT /agent/project-context/human': [D, 'host collaboration configuration write'],
   'POST /agent/project-context/human/undo': [D, 'host collaboration configuration undo'],
+  'GET /agent/human/:file': [D, 'host human folder (HUMAN / AGENT / SOUL / MEMORY)'],
+  'PUT /agent/human/:file': [D, 'host human folder write'],
+  'POST /agent/human/:file/undo': [D, 'host human folder undo'],
 
   // ── workspace.ts ──
   'GET /agent/workspace/list': [A, 'session workspace listing'],
@@ -94,11 +98,14 @@ export const CLASSIFICATION = {
 
   // ── sessions.ts ──
   'GET /agent/sessions': [A, 'session list'],
+  'GET /agent/sessions/attention': [A, 'per-session unread / waiting flags for row status and the Tangu badge (ids and booleans only)'],
+  'POST /agent/sessions/:id/read': [A, 'mark a session read (only moves last_read_at)'],
   'POST /agent/sessions': [A, 'create a session'],
   'GET /agent/sessions/search': [A, 'session search'],
   'POST /agent/sessions/:id/branch': [A, 'branch a session (remote taint propagates, C5)'],
   'GET /agent/sessions/:id/background': [A, 'background child sessions'],
   'POST /agent/sessions/:id/team-members/:slug': [A, 'open a team member child session (taint propagates, C5)'],
+  'POST /agent/sessions/:id/children': [A, 'task card starts a visible child session; remote taint is copied onto its first run and stored marker (C5)'],
   'GET /agent/sessions/:id/detail': [A, 'session detail'],
   'PATCH /agent/sessions/:id': [A, 'rename / archive / model / project of a session (a remote project_path never widens /unit/host* reads: only locally confirmed project roots count)'],
   'DELETE /agent/sessions/:id': [D, 'irreversible hard delete of a local session (runs, messages, code checkpoints); remote uses archive (PATCH archived)'],
@@ -112,6 +119,8 @@ export const CLASSIFICATION = {
   'GET /agent/sessions/:id/timeline': [A, 'session timeline'],
   'POST /agent/sessions/:id/compact': [A, 'compact a session'],
   'POST /agent/sessions/:id/aside': [A, 'btw aside (taint propagates, C5)'],
+  'GET /agent/sessions/:id/asides': [A, 'saved btw asides of a session (read)'],
+  'DELETE /agent/sessions/:id/asides/:asideId': [D, 'irreversible delete of a saved btw aside; local only like session hard delete'],
   'POST /agent/sessions/:id/suggest': [A, 'next-message suggestion for the input box (reads a one-shot in-memory snapshot of the run that just ended; writes nothing)'],
   // ── inline.ts:正文生成式 AI(G3-07)──
   'POST /agent/inline': [A, 'inline writing completion for the note editor (no tools, nothing persisted; same shape as aside)'],
@@ -149,6 +158,8 @@ export const CLASSIFICATION = {
   'POST /agent/log': [D, 'memory log write'],
   'POST /agent/sync': [D, 'memory sync (design appendix C)'],
   'GET /agent/sync/status': [A, 'memory sync status'],
+  'GET /agent/sync/default': [A, 'account-level agent sync switch (read)'],
+  'PUT /agent/sync/default': [D, 'account-level agent sync switch: only this computer decides what it uploads'],
   'GET /agent/agents/:slug/memory/dream': [A, 'read memory maintenance state'],
   'PUT /agent/agents/:slug/memory/dream': [D, 'memory maintenance config'],
   'POST /agent/agents/:slug/memory/dream': [D, 'starts a memory rewrite'],
@@ -232,6 +243,7 @@ export const CLASSIFICATION = {
   'POST /agent/project-context/git/commit': [D, 'git commit (runs repository hooks)'],
   'POST /agent/project-context/git/branch': [D, 'git repository write'],
   'POST /agent/project-context/git/push': [D, 'git push with local credentials'],
+  'POST /agent/project-context/git/push-target': [D, 'git repository config write (which remote the current branch pushes to)'],
   'POST /agent/project-context/git/pull': [D, 'git fetch + fast-forward with local credentials (runs repository hooks)'],
   'POST /agent/project-context/git/publish': [D, 'adds a remote and pushes with the signed-in account credentials'],
   'POST /agent/project-context/git/publish-github': [D, 'creates a GitHub repository with the linked account, adds a remote and pushes'],

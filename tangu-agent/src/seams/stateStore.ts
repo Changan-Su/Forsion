@@ -124,6 +124,8 @@ export interface StateStore {
   // ── messages（会话历史）──
   countSessionMessages(sessionId: string): Promise<number>;
   listSessionMessagesWindow(sessionId: string, limit: number, offset: number): Promise<RawMessageRow[]>;
+  /** 本会话最近 limit 条带展示文件的消息里的展示文件,新的在前。可选:没实现(worker 的 http 状态)= edit_image 找不到之前的产出图。 */
+  listSessionDisplayFiles?(sessionId: string, limit: number): Promise<any[]>;
   insertUserMessage(m: {
     timestamp?: number;
     id: string;

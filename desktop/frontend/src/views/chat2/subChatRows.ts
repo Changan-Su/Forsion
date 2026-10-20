@@ -9,7 +9,7 @@
  *   被藏掉的 Historian 会从 live 那头原样漏回来。
  */
 import type { BackgroundSessionInfo } from '../../services/backendService'
-import type { SubChat } from '../../types'
+import type { SubChat } from '../../../../../tangu-agent/src/contracts/clientTypes'
 
 export interface SubChatRow { id: string; title: string; sessionId: string; runId?: string; streaming: boolean }
 

@@ -36,6 +36,8 @@ export interface ForsionGit {
   hosting(): Promise<ForsionGitHosting | null>;
   /** 当前用户在站上的账号(「发布到 Forsion Git」要用它拼远端地址)。这里不发凭据 → null;取不到 → 抛 GitCredentialError。 */
   account(): Promise<ForsionGitAccount | null>;
+  /** 手里那枚凭据对应的站上用户名(没取过 / 作废了 → null)。只读缓存,不去取。 */
+  knownUsername(): string | null;
 }
 
 export interface ForsionGitOptions { device?: string; now?: () => number; infoTtlMs?: number; infoRetryMs?: number }
@@ -109,6 +111,7 @@ export function createForsionGit(brain: GitHostingBrain, opts: ForsionGitOptions
       const issued = site ? await credential(site) : null;
       return site && issued ? { ...site, username: issued.username } : null;
     },
+    knownUsername: () => cached?.username ?? null,
   };
 }
 

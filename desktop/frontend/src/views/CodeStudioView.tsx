@@ -2,7 +2,7 @@
 import { createPortal } from 'react-dom'
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Code2, Eye, Columns2, Folder, Globe, Loader2, ExternalLink, RotateCw, Monitor, Tablet, Smartphone, MousePointer2, Puzzle, TerminalSquare, FileText, History, CheckSquare, AlertCircle, Settings2, Square, X, ArrowLeft, PanelLeft, PanelRight, PanelBottom, FolderTree } from 'lucide-react'
-import { getView, useSpaceStore, useWorkspace, type ViewProps, type ExtendViewController } from '@lcl/engine'
+import { getView, useSpaceStore, useWorkspace, useViewModes, ViewModeSwitch, type ViewProps, type ExtendViewController } from '@lcl/engine'
 import { lazyRetry } from '../lazyRetry'
 import { ConnectPublishDialog } from '../components/ConnectPublishDialog'
 import { useApp } from '../stores/appStore'
@@ -107,7 +107,7 @@ export function CodeStudioView({ extendView, leaf }: ViewProps) {
     useCodeStudio.getState().updateProject({ brief })
     void saveCreatedBrief(path, brief)
   }
-  if (root) return <ProjectStudio key={root} root={root} extendView={extendView} onActivate={activate} briefSaveError={briefSaveError?.root === root ? briefSaveError.message : ''} retryBrief={() => {
+  if (root) return <ProjectStudio leafId={leaf.id} key={root} root={root} extendView={extendView} onActivate={activate} briefSaveError={briefSaveError?.root === root ? briefSaveError.message : ''} retryBrief={() => {
     const brief = useCodeStudio.getState().projects[root]?.brief
     if (brief) void saveCreatedBrief(root, brief)
   }} />
@@ -124,13 +124,23 @@ function showCodingChat(): void {
   if (leftChat) ws.activateLeaf(leftChat.id)
   else ws.openView('chat', CODING_CHAT, 'left', { newTab: true })
 }
-function ProjectStudio({ root, extendView, onActivate, briefSaveError, retryBrief }: { root: string; extendView?: ExtendViewController; onActivate(): void; briefSaveError: string; retryBrief(): void }) {
+function ProjectStudio({ root, extendView, onActivate, briefSaveError, retryBrief, leafId }: { root: string; leafId: string; extendView?: ExtendViewController; onActivate(): void; briefSaveError: string; retryBrief(): void }) {
   const { t } = useI18n()
   const activeId = useApp(s => s.activeId)
   const session = useApp(s => s.sessions.find(item => item.id === s.activeId))
   const messages = useApp(s => activeId && normPath(session?.project_path || '') === normPath(root) ? s.messagesBySession[activeId] || EMPTY_MESSAGES : EMPTY_MESSAGES)
   const running = useApp(s => s.sessions.some(item => normPath(item.project_path || '') === normPath(root) && !!s.runningBySession[item.id]))
   const mode = useCodeStudio(s => s.mode)
+  // 预览 / 代码 / 并排 = 视图模式(lcl viewModes):⌥⌘V 切下一种;按项目记照旧(useCodeStudio)
+  useViewModes(leafId, {
+    modes: [
+      { value: 'preview', label: t('coding.preview'), icon: Eye },
+      { value: 'code', label: t('coding.code'), icon: Code2 },
+      { value: 'split', label: t('studio.split'), icon: Columns2 },
+    ],
+    value: mode,
+    onChange: (v) => { useCodeStudio.getState().setMode(v as StudioMode); if (v === 'code') setInspecting(false) },
+  })
   const entry = useCodeStudio(s => s.entry)
   const activeFile = useCodeStudio(s => s.activeFile)
   const prefs = useCodeStudio(s => s.projects[root])
@@ -335,9 +345,7 @@ function ProjectStudio({ root, extendView, onActivate, briefSaveError, retryBrie
   return <div className="csx csu" data-mode={mode}>
     <header className="csx-head csu-head">
       <button className="csu-project" title={t('coding.switchProject')} onClick={() => useCodeStudio.getState().closeProject()}><ArrowLeft size={15} /><span>{projectName(root)}</span></button>
-      <div className="csu-modes" role="group" aria-label={t('coding.preview')}>
-        {([['preview', Eye, 'coding.preview'], ['code', Code2, 'coding.code'], ['split', Columns2, 'studio.split']] as const).map(([value, Icon, key]) => <button key={value} aria-pressed={mode === value} onClick={() => { useCodeStudio.getState().setMode(value as StudioMode); if (value === 'code') setInspecting(false) }}><Icon size={14} /><span>{t(key)}</span></button>)}
-      </div>
+      <ViewModeSwitch leafId={leafId} className="csu-modes" />
       <div className="csu-head-actions">
         {/* 插件不是网页:发布(Forsion Connect 托管静态页)对它没有意义,整颗按钮不出现。 */}
         {!!window.tangu?.connectPublish && !isPlugin && <button className="csu-primary" disabled={running || !entry || !!prefs.devUrl} onClick={() => void publish()}><Globe size={14} /><span>{t('coding.publish')}</span></button>}

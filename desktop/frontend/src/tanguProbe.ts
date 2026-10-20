@@ -10,6 +10,7 @@ import { setActiveSpace, useSpaceStore, useWorkspace } from '@lcl/engine'
 import { claimHostMount } from '@lcl/components'
 import {
   pluginChatType,
+  readTanguNewChat,
   setTanguProbe,
   type TanguAgentSelf,
   type TanguAgentInfo,
@@ -17,6 +18,8 @@ import {
   type TanguChatMount,
   type TanguChatMountOptions,
   type TanguCompleteOptions,
+  type TanguComposerMount,
+  type TanguComposerOptions,
   type TanguCompleteRequest,
   type TanguCompleteResult,
   type TanguModelInfo,
@@ -30,7 +33,7 @@ import { usePluginChat } from './stores/pluginChatStore'
 import type { TanguDesktopConfig } from './types'
 import { getSessionDetail, getAgentSchedules, getMuseLibrary, getMuseLibraryFile, getMuseStatus, getMuseTodos, patchMuseTodo } from './services/backendService'
 import { hasNativeFeature } from './features/runtime'
-import { quoteInChatPanel } from './views/chat2/chatPanelQuote'
+import { quoteInChatPanel } from '@tangu/ui/views/chat2/chatPanelQuote'
 import { completeInline } from './services/inlineAi'
 import { submitDocumentTask } from './services/documentTasks'
 import { openSession } from './sessionNav'
@@ -397,6 +400,26 @@ function mountChat(el: HTMLElement, o: TanguChatMountOptions): TanguChatMount {
   }
 }
 
+/** 新对话输入区挂进插件的 DOM(主页插件化 S2)。界面那半是 Tangu 经 tanguSeam 交出的 `mount`(核心插件化 2e-3;原来在这里动态 import views/newChatComposer);
+ *  同步返回句柄,界面落地之前 focus 记一笔、落地后补上,startVoice / draft 落地前是空操作。 */
+function mountComposer(el: HTMLElement, o: TanguComposerOptions): TanguComposerMount {
+  let disposed = false, focusPending = false
+  let mounted: TanguComposerMount | null = null
+  const mine = claimHostMount(el)
+  void Promise.resolve(readTanguNewChat()).then((m) => {
+    if (!disposed && !mine()) disposed = true
+    if (disposed || !m) return
+    mounted = m.mount(el, o)
+    if (focusPending) requestAnimationFrame(() => mounted?.focus())
+  }, (e) => console.error('[composer] mount failed', e))
+  return {
+    focus: () => { if (disposed) return; focusPending = true; mounted?.focus() },
+    startVoice: () => { if (!disposed) mounted?.startVoice() },
+    draft: () => (disposed ? '' : mounted?.draft() ?? ''),
+    dispose: () => { if (disposed) return; disposed = true; mounted?.dispose(); mounted = null },
+  }
+}
+
 /** Muse 自建 Space 的数据源(ctx.agent,2026-09-27):都是 Muse 面板已经在用的引擎接口,只做字段收窄 ——
  *  插件拿到的是契约里的那几个字段(不带 libraryDir / spaceDir 这类绝对路径)。后端没就绪 → reject,插件自己兜。 */
 function museSelf(): TanguAgentSelf {
@@ -478,6 +501,8 @@ export function installTanguProbe(): void {
     ...(hasNativeFeature('tangu') ? { askInChat: quoteInChatPanel } : {}),
     // 插件视图里的原生对话(ctx.tangu.mountChat):同一门控 —— 没有对话能力的档案里 ChatView 没有数据源。
     ...(hasNativeFeature('tangu') ? { mountChat } : {}),
+    // 新对话输入区(ctx.tangu.mountComposer,主页插件化 S2):同一门控。
+    ...(hasNativeFeature('tangu') ? { mountComposer } : {}),
     // 正文生成式 AI(G3-07):引擎 /agent/inline;模型缺省 = 主区聊天此刻用的那个(与 activeModel 同口径)。
     // 例外:translate 动作先看「翻译」模型槽(编辑器的翻译与插件 ctx.tangu.translate 同一个口子)。
     // 与「问 Tangu」同一门控:没有 Tangu 产品能力的档案(automation-only)不出 AI 入口、插件也拿不到 complete。

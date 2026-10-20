@@ -1,3 +1,4 @@
+import { assertMarketplaceRequirements, type MarketplaceRequirements } from '../shared/marketplace'
 /** Opt-in marketplace updates. Download off the live plugin roots; activate before any host starts. */
 import { lstat, mkdir, readFile, readdir, rename, rm } from 'node:fs/promises'
 import { join, isAbsolute } from 'node:path'
@@ -48,13 +49,13 @@ export function createMarketPluginUpdater(o: {
       if (!bundle) throw new Error('install: plugin entry missing')
     }
     if (type === 'plugin' && m.apiVersion !== 1) throw new Error('install: incompatible plugin API')
-    return m as { id: string; version: string; apiVersion?: unknown; minAppVersion?: unknown }
+    return m as { id: string; version: string; apiVersion?: unknown } & MarketplaceRequirements
   }
   const validate = (x: MarketPluginUpdate, old: Awaited<ReturnType<typeof manifest>>, next: Awaited<ReturnType<typeof manifest>>) => {
     if (o.protectedIds().has(x.slug) || next.id !== old.id) throw new Error('install: plugin identity changed')
     if ((compareMarketVersions(next.version, old.version) ?? 0) <= 0) throw new Error('install: version is not newer')
     if (x.type === 'amadeus-plugin' && gatePluginManifest(next, o.appVersion)) throw new Error('install: incompatible plugin')
-    if (x.type === 'plugin' && typeof next.minAppVersion === 'string' && (compareMarketVersions(next.minAppVersion, o.appVersion) ?? 1) > 0) throw new Error('install: incompatible plugin')
+    assertMarketplaceRequirements(next, o.appVersion, process.platform === 'darwin' ? 'macos' : process.platform === 'win32' ? 'windows' : 'linux')
   }
   const patch = (id: string, value: Partial<MarketPluginUpdate>) => disk(async () => {
     const next = items.map((x) => x.id === id ? { ...x, ...value } : x)

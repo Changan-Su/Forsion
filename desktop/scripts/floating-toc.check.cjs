@@ -288,6 +288,12 @@ async function checkAmadeus() {
     await win.waitForTimeout(300)
     await win.screenshot({ path: path.join(SHOTS, 'amadeus-light.png') })
     await win.getByRole('button', { name: '架构' }).click()
+    // 落不准时把现场打出来(scrollTop / 标题离顶 / 当前项),别只剩一行超时
+    const landing = () => win.evaluate(() => {
+      const toc = document.querySelector('.lcl-ftoc'); const pane = toc?.closest('.amx-pane')
+      const heading = [...document.querySelectorAll('.page-view h2')].find((el) => el.textContent?.trim() === '架构')
+      return { top: pane && Math.round(pane.scrollTop), offset: pane && heading && Math.round(heading.getBoundingClientRect().top - pane.getBoundingClientRect().top), active: document.querySelector('.lcl-ftoc-item[aria-current="location"]')?.title }
+    })
     await win.waitForFunction(() => {
       const toc = document.querySelector('.lcl-ftoc')
       const pane = toc?.closest('.amx-pane')
@@ -295,8 +301,11 @@ async function checkAmadeus() {
       if (!pane || !heading) return false
       const offset = heading.getBoundingClientRect().top - pane.getBoundingClientRect().top
       const active = document.querySelector('.lcl-ftoc-item[aria-current="location"]')?.title
-      return pane.scrollTop > 300 && Math.abs(offset - 24) <= 14 && active === '架构'
-    })
+      // 笔记目录停在 sticky 顶栏下 12px(NoteFloatingToc:READING_GAP + stickyTopInset),不是 LCL 缺省的 24
+      const bar = pane.querySelector(':scope > .amx-toolbar')
+      const inset = bar && getComputedStyle(bar).position === 'sticky' ? bar.getBoundingClientRect().height : 0
+      return pane.scrollTop > 300 && Math.abs(offset - inset - 12) <= 14 && active === '架构'
+    }, null, { timeout: 8000 }).catch(async (e) => { console.log('落点现场', JSON.stringify(await landing())); throw e })
     const after = await geometry()
     const active = await win.locator('.lcl-ftoc-item[aria-current="location"]').getAttribute('title')
     check('Amadeus：点击目录滚到标题并高亮当前节', after && after.top > 300 && active === '架构', JSON.stringify({ after, active }))

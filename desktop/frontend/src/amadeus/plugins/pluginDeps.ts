@@ -1,3 +1,4 @@
+import { pluginDependencyIndex } from '../../../../shared/pluginAliases'
 /**
  * 插件之间的前置依赖(manifest `requiresPlugins`,2026-10-02;对标 Cordis 的「空间维」:依赖靠声明,不靠装载顺序)。
  * 纯函数,不碰 store / React:宿主 pluginStore 用它决定「能不能跑」,设置页用它画原因与操作入口。
@@ -21,6 +22,7 @@ export interface UnmetDependency {
 
 export interface DepNode {
   id: string
+  packageId?: string
   version: string
   blocked?: unknown
   requiresPlugins?: PluginDependency[]
@@ -31,7 +33,8 @@ function reaches(from: string, target: string, byId: Map<string, DepNode>): bool
   const seen = new Set<string>()
   const stack = [from]
   while (stack.length) {
-    const id = stack.pop()!
+    const raw = stack.pop()!
+    const id = byId.get(raw)?.id || raw
     if (id === target) return true
     if (seen.has(id)) continue
     seen.add(id)
@@ -49,7 +52,7 @@ export function unmetDependencies(
 ): UnmetDependency[] {
   const deps = p.requiresPlugins ?? []
   if (!deps.length) return []
-  const byId = new Map(all.map((x) => [x.id, x]))
+  const byId = pluginDependencyIndex(all)
   const out: UnmetDependency[] = []
   for (const dep of deps) {
     const d = byId.get(dep.id)
@@ -65,7 +68,7 @@ export function unmetDependencies(
 /** 前置在前、依赖方在后的顺序;除此之外**保持传入顺序**(来源顺序决定注册顺序 → 功能区 / 命令的排列,不许因为
  *  引入依赖就整体洗牌)。环上的按原顺序排到最后。启动按它,停按它倒过来。 */
 export function topoOrder<T extends DepNode>(all: readonly T[]): T[] {
-  const byId = new Map(all.map((x) => [x.id, x]))
+  const byId = pluginDependencyIndex(all)
   const out: T[] = []
   // 'stuck' = 在环上或走得到环:这次排不进,以后也排不进 —— 记死,别从每条路径重新展开(否则成环的分层图是指数级,Codex 10-02)。
   const state = new Map<string, 'visiting' | 'done' | 'stuck'>()
@@ -91,6 +94,6 @@ export function topoOrder<T extends DepNode>(all: readonly T[]): T[] {
 
 /** 直接或间接声明了要 id 的那些插件(不含 id 自己)。 */
 export function dependentsOf<T extends DepNode>(id: string, all: readonly T[]): T[] {
-  const byId = new Map(all.map((x) => [x.id, x]))
+  const byId = pluginDependencyIndex(all)
   return all.filter((x) => x.id !== id && (x.requiresPlugins ?? []).some((d) => reaches(d.id, id, byId)))
 }

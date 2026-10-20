@@ -13,6 +13,7 @@ import { isBuiltinFileType, isOverridableBuiltinType } from '@amadeus-shared/bui
 import { openFile } from '../amadeusNav'
 import { FILE_VIEW_PARAM, fileMatchViewType } from '../viewFileMatch'
 import { registerMessages, useI18n } from '../i18n'
+import { useVaultRelParam } from './vaultRelParam'
 
 /** 视图参数 / amadeus:pdf-goto 事件里的落点 → 交给插件的形状(没有合法页码 = 没有落点)。 */
 const gotoTarget = (page: unknown, q: unknown): FileGotoTarget | null =>
@@ -26,7 +27,7 @@ registerMessages({
 
 export function AmadeusPluginFileView({ leaf }: ViewProps) {
   const { t } = useI18n()
-  const filePath = typeof leaf.params.filePath === 'string' ? leaf.params.filePath : ''
+  const filePath = useVaultRelParam(leaf, 'filePath')
   const mode = useTheme((s) => s.mode)
   // 订阅 fileTypes:插件加载后新注册的类型会触发重渲染 → 从「无人能开」变为正常挂载。
   const fileTypes = usePluginStore((s) => s.fileTypes)

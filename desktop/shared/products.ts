@@ -18,6 +18,9 @@ export const PRODUCT_SIDECAR_PATHS = [PRODUCT_SIDECAR, PRODUCT_SIDECAR_NEW, `.fo
  *  Sandbox 面板永远看不到它(Codex 评审)。 */
 const SAFE_PLUGIN_ID = /^[a-z0-9][a-z0-9-]{0,63}$/
 export function effectivePluginId(dirName: string, manifestId: unknown): string | null {
+  // New marketplace directories are immutable item identities. Names and manifest IDs
+  // may coincide across publishers; settings, routes and storage must remain separate.
+  if (/^market-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(dirName)) return dirName
   if (typeof manifestId === 'string' && SAFE_PLUGIN_ID.test(manifestId)) return manifestId
   return SAFE_PLUGIN_ID.test(dirName) ? dirName : null
 }

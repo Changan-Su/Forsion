@@ -9,7 +9,8 @@
 import { useSyncExternalStore } from 'react'
 import { $prose } from '@milkdown/kit/utils'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
-import { Plugin, PluginKey } from '@milkdown/kit/prose/state'
+import { Plugin, PluginKey, type Transaction } from '@milkdown/kit/prose/state'
+import { AddMarkStep, RemoveMarkStep, ReplaceStep } from '@milkdown/kit/prose/transform'
 import { Decoration, DecorationSet } from '@milkdown/kit/prose/view'
 import { buildBlockString, scanMath } from './mathLivePreview'
 import { registerMessages } from '../../../i18n'
@@ -55,9 +56,9 @@ const OFF = { spellcheck: 'false' }
 
 /** 行内代码与公式源码的「不查」装饰。代码块整块跳过(它的 `<pre>` 已关,里面的 `$` 也不是公式)。
  *  公式跨度与实况预览同一份认法(buildBlockString + scanMath:代码文本已抹成空格,不会把代码里的 `$` 认成公式)。 */
-function codeRanges(doc: ProseNode): DecorationSet {
+function codeDecosIn(doc: ProseNode, from: number, to: number): Decoration[] {
   const decos: Decoration[] = []
-  doc.descendants((node, pos) => {
+  doc.nodesBetween(from, to, (node, pos) => {
     if (!node.isTextblock) return true
     if (node.type.spec.code) return false
     const start = pos + 1
@@ -71,7 +72,38 @@ function codeRanges(doc: ProseNode): DecorationSet {
     }
     return false
   })
+  return decos
+}
+
+export function codeRanges(doc: ProseNode): DecorationSet {
+  const decos = codeDecosIn(doc, 0, doc.content.size)
   return decos.length ? DecorationSet.create(doc, decos) : DecorationSet.empty
+}
+
+/** 文档改了:旧装饰按 mapping 挪过来,只重扫改动落在的顶层块。整篇重扫 + 重建装饰集在 3000 块的笔记里每打一个字约 6ms(10-16 实测)。
+ *  只认打字 / 删改文字(ReplaceStep)和加 / 去标记(不挪位置、StepMap 是空的,范围取步骤自己的 from/to),别的步骤整篇重建。 */
+export function updateCodeRanges(tr: Transaction, old: DecorationSet): DecorationSet {
+  const doc = tr.doc
+  // 包进 / 移出引用、列表这类结构性步骤(ReplaceAroundStep 等)整篇重建:映射过去的装饰会叠出重复、删不干净
+  if (!tr.steps.every((st) => st instanceof ReplaceStep || st instanceof AddMarkStep || st instanceof RemoveMarkStep)) return codeRanges(doc)
+  const dirty: Array<[number, number]> = []
+  for (let i = 0; i < tr.steps.length; i++) {
+    const rest = tr.mapping.slice(i + 1)
+    const before = dirty.length
+    tr.mapping.maps[i].forEach((_oldFrom, _oldTo, from, to) => { dirty.push([rest.map(from, -1), rest.map(to, 1)]) })
+    if (dirty.length > before) continue
+    const st = tr.steps[i] as unknown as { from: number; to: number } // 加 / 去标记不挪位置,StepMap 是空的
+    dirty.push([rest.map(st.from, -1), rest.map(st.to, 1)])
+  }
+  let set = old.map(tr.mapping, doc)
+  for (const [from, to] of dirty) {
+    const $a = doc.resolve(Math.min(from, doc.content.size))
+    const $b = doc.resolve(Math.min(to, doc.content.size))
+    const a = $a.depth ? $a.before(1) : $a.pos
+    const b = $b.depth ? $b.after(1) : $b.pos
+    set = set.remove(set.find(a, b)).add(doc, codeDecosIn(doc, a, b))
+  }
+  return set
 }
 
 const spellKey = new PluginKey<DecorationSet>('amadeus-spellcheck')
@@ -81,7 +113,7 @@ export const spellcheckPlugin = $prose(() => new Plugin<DecorationSet>({
   state: {
     init: (_, state) => codeRanges(state.doc),
     // 只在文档变了时重扫(纯选区事务零成本,perf:codeblock 那条护栏不受影响)。
-    apply: (tr, old) => (tr.docChanged ? codeRanges(tr.doc) : old),
+    apply: (tr, old) => (tr.docChanged ? updateCodeRanges(tr, old) : old),
   },
   props: {
     decorations: (state) => spellKey.getState(state),

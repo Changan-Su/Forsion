@@ -4,6 +4,7 @@ import React, { useState } from 'react'
 import { ChevronRight, ChevronDown, ScrollText } from 'lucide-react'
 import { AnimatedCollapse } from './AnimatedUI'
 import { useI18n } from '../i18n'
+import '../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 export const SystemPromptBlock: React.FC<{ content: string }> = ({ content }) => {
   const { t } = useI18n()

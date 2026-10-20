@@ -1,9 +1,12 @@
-/** Homepage 前置 Space 区：固定入口 + 独立副本持久化 + Ribbon 排序隔离。先 npm run build。 */
+/** Homepage 前置 Space 区：固定入口 + 独立副本持久化 + Ribbon 排序隔离。先 npm run build。
+ *  插件档(2026-10-18):HOME_PLUGIN_DIR=<Forsion-Home 检出,先 npm run build> 时主页由插件 forsion-home 画(scripts/lib/home-plugin.cjs),
+ *  另加 P0 / P0b:进主页、刷新后、量完一整轮,正文都真的来自插件(挂不上、或挂上后异步出错都会悄悄退回内置主页,不核就是假绿)。 */
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
 const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
+const { HOME_PLUGIN_DIR, installHomePlugin, homeBody } = require('./lib/home-plugin.cjs')
 
 const ROOT = path.join(__dirname, '..')
 const SHOT = process.argv.includes('--shot')
@@ -46,6 +49,7 @@ async function drag(win, from, to, out = false) {
 async function main() {
   if (!fs.existsSync(path.join(ROOT, 'out/main/main.js'))) throw new Error('先 npm run build')
   const testHome = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-home-pinned-'))
+  installHomePlugin(testHome)
   const stub = await startStubEngine()
   let app, win
   const errors = []
@@ -64,9 +68,15 @@ async function main() {
       if (await button.count()) { await button.click(); break }
     }
     await win.waitForSelector('.dv-groupview')
-    await win.evaluate(() => localStorage.setItem('forsion_tangu_active_space', 'home'))
+    await win.evaluate((trial) => {
+      localStorage.setItem('forsion_tangu_active_space', 'home')
+      if (trial) localStorage.setItem('forsion.dev.coreTrial', 'forsion-home') // 插件档:同这次 reload 一起接管主页视图芯
+    }, !!HOME_PLUGIN_DIR)
     await win.reload()
     await win.waitForSelector('.hp-spaces')
+    // 插件异步装上之前先露出的是内置那份:等它换过来再往下量
+    const bodies = HOME_PLUGIN_DIR ? [await homeBody(win)] : []
+    if (HOME_PLUGIN_DIR) check('P0 插件档:主页正文来自插件 forsion-home(没挂上会悄悄退回内置)', bodies[0] === 'plugin', { body: bodies[0], dir: HOME_PLUGIN_DIR })
     await win.waitForSelector('#tangu-splash', { state: 'hidden', timeout: 5000 }).catch(() => {})
 
     const initial = await win.evaluate(() => {
@@ -91,7 +101,8 @@ async function main() {
     check('前置区与 Ribbon 同步区由竖线分隔且没有重叠', !!initial.geometry
       && initial.geometry.zoneRight <= initial.geometry.dividerLeft + 1
       && initial.geometry.dividerRight <= initial.geometry.dockLeft + 1
-      && initial.geometry.dividerHeight >= 40, initial.geometry)
+      // 10-17 摆法 C:格子 60px 高、竖线上下各让 12 / 20px,竖线约 30px(旧 78px 格子时是 ≥40)
+      && initial.geometry.dividerHeight >= 24, initial.geometry)
 
     // 市场/成就都开在独立浮窗里(Floating Panel 化 2026-09-20):点之前先 arm window 事件,面板断言打在浮窗上;
     // 「返回应用」= closeSelf(),窗口真关掉,所以下一个面板要重新等一次 window 事件。
@@ -130,6 +141,7 @@ async function main() {
 
     await win.reload()
     await win.waitForSelector('.hp-spaces')
+    if (HOME_PLUGIN_DIR) bodies.push(await homeBody(win))
     await win.waitForSelector('#tangu-splash', { state: 'hidden', timeout: 5000 }).catch(() => {})
     const restored = normalId ? await win.locator(`.hp-pinned-space[data-space-id="${normalId.replace(/^space:/, '')}"]`).count() : 0
     check('前置 Space 副本刷新后恢复', restored === 1, { normalId, restored })
@@ -184,6 +196,10 @@ async function main() {
       }, mode)
       await win.waitForTimeout(400)
       await win.screenshot({ path: path.join(os.tmpdir(), `forsion-homepage.pinned-${mode}.png`) })
+    }
+    if (HOME_PLUGIN_DIR) {
+      bodies.push(await homeBody(win))
+      check('P0b 插件档:刷新后、量完一整轮主页仍是插件画的', bodies.length === 3 && bodies.every((b) => b === 'plugin'), bodies)
     }
     check('没有未捕获渲染异常', errors.length === 0, errors)
   } finally {

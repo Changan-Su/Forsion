@@ -76,6 +76,8 @@ const INTERACTION_EXCEPTIONS = new Map([
   ['frontend/src/amadeus/styles.css|.am-app .amx-stage.amx-dropzone:not(.amx-stage-off)::after|box-shadow', '画布投放目标反馈'],
   ['frontend/src/amadeus/styles.css|.am-app .amx-el-selbox.is-editing|box-shadow', '画布编辑中卡片抬起反馈'],
   ['frontend/src/amadeus-host.css|.amx-cal-event.dragging|box-shadow', '日历事件拖拽反馈'],
+  ['frontend/src/amadeus-host.css|.amx-cal-chip-ev.selected, .amx-cal-event.selected|box-shadow', '日历选中事件:实心事件色 + 同色淡投影(2026-10-16 用户选定的方向 1,DESIGN §6 记了例外)'],
+  ['frontend/src/amadeus-host.css|.amx-cal-making|box-shadow', '日历按住拖出新建 / 待办拖入时的落点预览(只在交互期间出现)'],
   ['frontend/src/amadeus-host.css|.dash-card[data-dragging]|box-shadow', '旧仪表盘拖拽反馈'],
   ['frontend/src/views/dashCanvas.css|.dash2-card[data-interact]|box-shadow', '仪表盘交互期间抬起反馈'],
   ['frontend/src/views/dashCanvas.css|.dash2-card[data-dragging]|box-shadow', '仪表盘拖拽反馈'],

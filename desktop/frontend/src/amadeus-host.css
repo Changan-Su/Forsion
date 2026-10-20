@@ -127,6 +127,9 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
  * 不给 min-height 会塌成 8px → 笔记面比普通笔记整体上移(实报「添加图标/封面按钮位置不齐」)。
  * 24 为 content-box 内容高,叠上自身 6/2 padding = 与真顶栏同高;按钮尺寸若改要跟着动。 */
 .plugin-note-surface .amx-toolbar { min-height: 24px; box-sizing: content-box; }
+/* 笔记顶栏 = 视图头行(lcl viewModes):看法胶囊按这一行的宽度退化(< 480 只留图标、< 320 下拉)。
+ * 只给笔记那条:Excalidraw 里也有叫 .amx-toolbar 的、按内容定宽的条,给它 inline-size 容器会塌成 0 宽。 */
+.amx-toolbar.amx-vhead { container: lcl-viewhead / inline-size; }
 /* 与 .amx-editor 的 padding: 0 0 40px 对位:正文尾部留同样的缓冲。 */
 .plugin-note-surface { padding: 0 0 40px; }
 /* 前进 / 后退导航(常驻左上角)。 */
@@ -295,9 +298,9 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .amx-editor.amx-dragover:has(.amx-stage:not(.amx-stage-off)) { background-image: none; }
 
 /* 双链 [[wikilink]]:彩色配色跟主题色;经典 / 墨色这类单色配色的主题色就是正文色,双链会和正文一个样(10-13 用户实报),
- * 所以它们在 skins.css 另给一支 --wikilink-ink(2026-10-14 用户选方案 A,柔蓝)。曾是固定紫 #6c5ce7。
+ * 所以它们在 skins.css 另给一支 --signal-skin(2026-10-14 用户选方案 A 柔蓝;10-17 升级为强调色缺省,双链改读 --signal)。曾是固定紫 #6c5ce7。
  * 比 styles.css 的选择器多一层 .am-app → 特异性更高,覆盖其 color。 */
-.am-app .milkdown .ProseMirror .wikilink { color: var(--wikilink-ink, var(--accent-ink)); }
+.am-app .milkdown .ProseMirror .wikilink { color: var(--signal); }
 /* 未解析双链:压过上面的颜色覆盖(同层选择器,声明在后),黯淡。 */
 .am-app .milkdown .ProseMirror .wikilink.wikilink-unresolved {
   color: var(--text-muted);
@@ -591,8 +594,10 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .am-app .milkdown .ProseMirror blockquote.callout-fold.callout-collapsed[data-fold-animating] > *:not(:first-child) {
   display: block;
 }
+/* 只在点了展开的那一下(data-fold-animating)生效:不加限定的话,正文里任何一段被重新插入 DOM
+   (删除合并段落、回车、撤销、写盘回灌…)都会从高度 0 长回来,下方整页跟着上下抽(10-17 用户报)。 */
 @starting-style {
-  .am-app .milkdown .ProseMirror blockquote.callout-fold:not(.callout-collapsed) > *:not(:first-child) {
+  .am-app .milkdown .ProseMirror blockquote.callout-fold[data-fold-animating]:not(.callout-collapsed) > *:not(:first-child) {
     height: 0;
     opacity: 0;
     margin-block: 0;
@@ -686,7 +691,7 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .amx-prop-input:hover, .amx-prop-input:focus { background: var(--overlay-light, rgba(127, 127, 127, 0.07)); }
 /* 多行字符串值(`desc: |`,D-20):多行框,观感同单行值框;高度随内容(field-sizing,故不给拖拽把手),rows 兜底。 */
 .amx-prop-multiline { display: block; resize: none; line-height: 1.5; white-space: pre-wrap; field-sizing: content; }
-.amx-prop-check { align-self: center; accent-color: var(--accent, #6c5ce7); }
+.amx-prop-check { align-self: center; accent-color: var(--signal-mark); }
 .amx-prop-nested { flex: 1; white-space: pre-wrap; color: var(--text-muted); font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--ui-font-caption, 11px); padding: 3px 6px; }
 .amx-prop-del { flex: 0 0 auto; align-self: center; border: none; background: transparent; color: var(--text-faint); cursor: pointer; padding: 3px; border-radius: var(--radius-sm, 6px); opacity: 0; }
 .amx-prop-row:hover .amx-prop-del { opacity: 1; }
@@ -843,9 +848,9 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
   background: color-mix(in srgb, var(--primary, var(--accent, #6c5ce7)) 10%, transparent);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary, var(--accent, #6c5ce7)) 38%, transparent);
 }
-.amx-db-checkbox { margin: 6px; accent-color: var(--accent, #6c5ce7); }
+.amx-db-checkbox { margin: 6px; accent-color: var(--signal-mark); }
 /* 事件卡里的完成勾选:裸原生 checkbox 曾不随主题 → 用 accent-color 上色(勾随主题变量,深浅一致可见) */
-.amx-cal-card-check { width: 15px; height: 15px; accent-color: var(--accent, #6c5ce7); cursor: pointer; }
+.amx-cal-card-check { width: 15px; height: 15px; accent-color: var(--signal-mark); cursor: pointer; }
 .amx-db-cellbtn { width: 100%; min-height: 30px; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; border: none; background: transparent; font: inherit; line-height: 22px; cursor: pointer; padding: 6px; text-align: left; }
 .amx-db-cellbtn:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.05)); }
 .amx-db-chip { display: inline-flex; align-items: center; height: 22px; font-size: var(--ui-font-meta, 12px); line-height: 1; color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 0 8px; }
@@ -967,6 +972,10 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
   margin-top: 0.5rem;
   padding-right: 0;
 }
+/* 「怎么平移画布」那句教的是鼠标中键 / 空格,触屏上换成双指的说法(data-touch-hint 由 ExcalidrawCanvas 按 appState + 最近一次
+   按下的指针类型给;句子在 --amx-hint-pan 里,跟界面语言走)。引擎的句子是它自己 i18n 拼的,改不动,只能整句盖掉。 */
+.amx-boardhost[data-touch-hint] .excalidraw .App-toolbar > .HintViewer > * { display: none; }
+.amx-boardhost[data-touch-hint] .excalidraw .App-toolbar > .HintViewer::after { content: var(--amx-hint-pan); padding: 0.25rem; }
 
 /* ── 自建工具胶囊(BoardToolbar)────────────────────────────────────────────────
    引擎那条工具栏在预编译 bundle 里改不动(见 BoardToolbar.tsx 顶部),所以:
@@ -998,6 +1007,30 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 /* 数字键角标。中段才有 —— 拖动改顺序就是改快捷键,所以它必须画出来。 */
 .amx-boardhost .excalidraw .amx-tool-key {
   position: absolute; right: 3px; bottom: 1px; font-size: var(--ui-font-caption, 11px); line-height: 1; opacity: 0.45; pointer-events: none;
+}
+/* 触屏设备上不标(接了键盘照样能按数字切工具,只是不画角标;悬停提示里仍写着键位)。 */
+@media (pointer: coarse) { .amx-boardhost .excalidraw .amx-tool-key { display: none; } }
+
+/* ── 禅模式(Option+Z)────────────────────────────────────────────────────────
+   ① 引擎在禅模式下只藏自己工具栏的键位角标,而这张岛里装的是我们的胶囊 → 整座岛连同数字角标一起淡出。
+      visibility 晚 0.5s 再翻:淡出播得完,藏好之后也点不到、Tab 不进去;退出时立刻可见再淡入。
+   ② 「退出禅模式」引擎给的是 `[dir=ltr] … { right: 1rem }`,本 App 的 <html> 不带 dir → 掉回静态位,
+      正好压在左下缩放条的「100%」上。挪到底部正中、做成胶囊。footer 本身 absolute、宽 100%,
+      所以 left:50% 就是画布正中。⚠️ 特异性要压过那条 0,4,0(引擎样式在我们后面 link,打平会输)。 */
+.amx-boardhost .excalidraw .App-toolbar { transition: opacity 0.5s, visibility 0s; }
+.amx-boardhost .excalidraw .App-toolbar.zen-mode { opacity: 0; visibility: hidden; transition: opacity 0.5s, visibility 0s linear 0.5s; }
+.amx-boardhost .excalidraw .layer-ui__wrapper button.disable-zen-mode {
+  left: 50%; right: auto; transform: translateX(-50%);
+  padding: 10px 16px; border: 0; border-radius: var(--radius-pill, 999px);
+  /* 皮同缩放 / 撤销岛的按钮(surface-low + 1px 外圈):岛底色在亮色白画布上几乎看不见(走查 P3-9)。
+     投影只走统一高程 token(DESIGN §7-6,扁平模式清零),外圈用 outline,不拼进 box-shadow */
+  background-color: var(--color-surface-low);
+  outline: 1px solid var(--color-surface-lowest);
+  box-shadow: var(--card-shadow);
+}
+/* 引擎的悬停底是半透明的 --button-hover-bg,直接换上去胶囊会透出画布 → 叠在按钮底色上 */
+.amx-boardhost .excalidraw .layer-ui__wrapper button.disable-zen-mode:hover {
+  background: linear-gradient(var(--button-hover-bg), var(--button-hover-bg)), var(--color-surface-low);
 }
 
 /* ── 属性面板里的加料(PanelExtras:笔预设 / 形状 / 线)────────────────────────
@@ -1046,6 +1079,8 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .amx-bs-lbl { flex: 1; }
 .amx-bs-num { width: 3.5rem; font: inherit; font-size: var(--ui-font-caption, 11px); padding: 1px 4px; border-radius: var(--radius-sm, 6px); border: 1px solid var(--input-border-color, rgba(127, 127, 127, 0.35)); background: transparent; color: inherit; }
 .amx-bs-num:disabled { opacity: 0.4; }
+/* 焦点跟主题色:系统缺省是一圈不跟主题走的橙色,叠在 1px 边框外面(走查 P3-6) */
+.amx-bs-num:focus-visible { outline: none; border-color: var(--color-primary, var(--primary, #635bff)); box-shadow: 0 0 0 1px var(--color-primary, var(--primary, #635bff)); }
 .amx-bs-range { flex: 1; min-width: 0; max-width: 6rem; accent-color: var(--color-primary, var(--primary, #635bff)); }
 .amx-bs-range:disabled { opacity: 0.4; }
 .amx-bs-note { font-size: var(--ui-font-caption, 11px); opacity: 0.55; }
@@ -1344,7 +1379,7 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .amx-db-opt:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.08)); }
 .amx-db-opt:disabled { opacity: 0.4; cursor: default; }
 .amx-db-opt:disabled:hover { background: transparent; }
-.amx-db-opt input[type='checkbox'] { accent-color: var(--accent, #6c5ce7); }
+.amx-db-opt input[type='checkbox'] { accent-color: var(--signal-mark); }
 .amx-db-opt-check { margin-left: auto; color: var(--accent-ink, var(--accent, #6c5ce7)); }
 .amx-db-opt-clear { color: var(--text-muted); }
 .amx-db-opt-danger { color: var(--danger, #e5484d); }
@@ -1437,14 +1472,19 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 /* ── Calendar View ── */
 /* --amx-cal-line:日历格线专用(小时横线/列分隔/月格),比通用 --border 淡;工具条等 chrome 分隔线仍用 --border。 */
 .amx-cal { display: flex; flex-direction: column; height: 100%; background: var(--bg); color: var(--text); container-type: inline-size; --amx-cal-line: color-mix(in srgb, var(--border) 55%, transparent); }
-.amx-cal-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--border); flex: none; }
+.amx-cal-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--border); flex: none; container: lcl-viewhead / inline-size; }
 /* Notion Calendar 式工具条:左=标题独占;右=astryx 组(模式▾ 今天 ‹ ›)。翻页/今天按钮已换 astryx Button,
  * 旧 .amx-cal-btn/.amx-cal-today 无消费者已删。 */
 .amx-cal-nav { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.amx-cal-title { font-size: var(--ui-font-heading, 14px); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.amx-cal-title { font-size: var(--ui-font-title, 16px); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 「2026年10月 第 42 周」:周数由 TimeScroll 写进 data-week(月视图不写),淡一档。 */
+.amx-cal-title[data-week]::after { content: attr(data-week); margin-left: 8px; font-weight: 400; color: var(--text-faint, var(--text-muted)); }
+.amx-cal:focus { outline: none; } /* tabIndex -1 只为让快捷键知道「焦点在日历里」 */
+.amx-cal-menusep { height: 1px; margin: 4px 6px; background: var(--border); }
+.amx-cal-menulabel { padding: 6px 10px 2px; font-size: var(--ui-font-caption, 11px); color: var(--text-muted); }
 /* 模式组已换 astryx SegmentedControl(自带描边/选中态):容器只管排布,旧边框+overflow 裁剪会把它挤瘪。 */
 .amx-cal-modes { display: inline-flex; align-items: center; gap: 6px; }
-.amx-cal-empty { padding: 18px; color: var(--text-faint, var(--text-muted)); font-size: var(--ui-font-body, 13px); text-align: center; }
+.amx-cal-empty { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 10px; padding: 14px 18px; color: var(--text-faint, var(--text-muted)); font-size: var(--ui-font-body, 13px); text-align: center; }
 
 /* 月视图(纵向连续周行,原生滚动跟手) */
 .amx-cal-mscroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }
@@ -1455,12 +1495,37 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .amx-cal-mcell { border-right: 1px solid var(--amx-cal-line, var(--border)); border-bottom: 1px solid var(--amx-cal-line, var(--border)); padding: 4px; display: flex; flex-direction: column; gap: 2px; min-width: 0; overflow: hidden; }
 .amx-cal-mnum { font-size: var(--ui-font-meta, 12px); color: var(--text-muted); align-self: flex-start; padding: 1px 5px; }
 .amx-cal-mcell.today .amx-cal-mnum { background: var(--action-fill, var(--accent-ink, #6c5ce7)); color: var(--on-action, var(--on-accent-ink, #fff)); border-radius: var(--radius-pill, 999px); }
-.amx-cal-chip-ev { display: block; width: 100%; text-align: left; border: 1px solid color-mix(in srgb, var(--amx-event-color) 30%, transparent); border-radius: 4px; background: color-mix(in srgb, var(--amx-event-color) 18%, var(--bg)); box-shadow: inset 3px 0 0 var(--amx-event-color); color: var(--text); font: inherit; font-size: var(--ui-font-caption, 11px); line-height: 1.3; padding: 2px 6px 2px 8px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.amx-cal-chip-t { color: var(--text-muted); font-variant-numeric: tabular-nums; }
-.amx-cal-chip-ev.selected { border-color: var(--accent-ink, var(--accent, #6c5ce7)); box-shadow: inset 3px 0 0 var(--amx-event-color), 0 0 0 1px color-mix(in srgb, var(--accent-ink, var(--accent, #6c5ce7)) 55%, transparent); }
-.amx-cal-mcell .amx-cal-chip-ev.continues-left, .amx-cal-allday2 .amx-cal-chip-ev.continues-left { margin-left: -5px; width: calc(100% + 5px); border-left-color: transparent; border-radius: 0 4px 4px 0; }
-.amx-cal-mcell .amx-cal-chip-ev.continues-right, .amx-cal-allday2 .amx-cal-chip-ev.continues-right { width: calc(100% + 5px); border-right-color: transparent; border-radius: 4px 0 0 4px; }
+/* 事件块与芯片(2026-10-16 方向 1「浅色块」,Notion Calendar 那种):不描边、不加阴影;底 = 事件色 15%(暗 24%)混卡片底,
+ * 左边 3px 色条上下各缩 3px(画在背景层上 —— ::before/::after 是拉伸时长的热区),字 = 事件色 48%(暗 40%)混正文色。
+ * 选中 = 实心事件色 + 白字 + 同色投影 —— 这里与 DESIGN「选中用 1.5px 主色带」不同,是用户选定的例外(DESIGN §6 有记)。
+ * 过去的(结束早于现在)整块淡下去。--amx-ev-bar = 色条颜色,跨天条接续的那一段设成透明。 */
+.amx-cal-chip-ev, .amx-cal-event {
+  --amx-ev-bar: var(--amx-event-color);
+  --amx-ev-fill: color-mix(in srgb, var(--amx-event-color) 15%, var(--bg-card, var(--bg)));
+  border: none;
+  background: linear-gradient(var(--amx-ev-bar), var(--amx-ev-bar)) 3px 3px / 3px calc(100% - 6px) no-repeat, var(--amx-ev-fill);
+  color: color-mix(in srgb, var(--amx-event-color) 48%, var(--text));
+}
+html.dark .amx-cal-chip-ev, html.dark .amx-cal-event {
+  --amx-ev-fill: color-mix(in srgb, var(--amx-event-color) 24%, var(--bg-card, var(--bg)));
+  color: color-mix(in srgb, var(--amx-event-color) 40%, var(--text));
+}
+.amx-cal-chip-ev { display: block; width: 100%; text-align: left; border-radius: 4px; font: inherit; font-size: var(--ui-font-caption, 11px); line-height: 1.3; padding: 2px 6px 2px 10px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.amx-cal-chip-t { opacity: 0.72; font-variant-numeric: tabular-nums; }
+.amx-cal-chip-ev.past:not(.selected), .amx-cal-event.past:not(.selected) {
+  /* 10-16 走查:原先 8% 底 + faint 字太淡,回看 / 拖动过去的事件时认不清 —— 提到 10% 底 + muted 字 */
+  --amx-ev-bar: color-mix(in srgb, var(--amx-event-color) 55%, var(--bg-card, var(--bg)));
+  --amx-ev-fill: color-mix(in srgb, var(--amx-event-color) 10%, var(--bg-card, var(--bg)));
+  color: color-mix(in srgb, var(--amx-event-color) 35%, var(--text-muted));
+}
+.amx-cal-chip-ev.selected, .amx-cal-event.selected { --amx-ev-bar: transparent; --amx-ev-fill: var(--amx-event-color); color: #fff; box-shadow: 0 2px 8px color-mix(in srgb, var(--amx-event-color) 35%, transparent); }
+/* 全天行按道排:某天这道上没有事件就放一个等高的空位,跨天条才能几天里占同一行。 */
+.amx-cal-chip-gap { display: block; height: calc(var(--ui-font-caption, 11px) * 1.3 + 4px); }
+.amx-cal-mcell .amx-cal-chip-ev.continues-left, .amx-cal-allday2 .amx-cal-chip-ev.continues-left { --amx-ev-bar: transparent; margin-left: -5px; width: calc(100% + 5px); border-radius: 0 4px 4px 0; }
+.amx-cal-mcell .amx-cal-chip-ev.continues-right, .amx-cal-allday2 .amx-cal-chip-ev.continues-right { width: calc(100% + 5px); border-radius: 4px 0 0 4px; }
+.amx-cal-allday2:not(.lead) > .amx-cal-chip-ev.continues-left { color: transparent; } /* 跨天条画成一条:接续的那几段不再重复标题 */
 .amx-cal-mcell .amx-cal-chip-ev.continues-left.continues-right, .amx-cal-allday2 .amx-cal-chip-ev.continues-left.continues-right { width: calc(100% + 10px); border-radius: 0; }
+.amx-cal-mcell.making { background: var(--overlay-medium, var(--bg-hover)); }
 .amx-cal-more { display: block; width: 100%; border: none; background: transparent; text-align: left; font: inherit; font-size: var(--ui-font-caption, 11px); color: var(--text-muted); padding: 1px 4px; border-radius: 4px; cursor: pointer; }
 .amx-cal-more:hover { background: var(--bg-hover, var(--overlay-light)); color: var(--text); }
 
@@ -1473,8 +1538,9 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .amx-cal-ghours { position: relative; will-change: transform; }
 .amx-cal-tscroll { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: auto; }
 .amx-cal-tgrid2 { display: grid; position: relative; }
-/* 落点吸附提示(拖动事件时的虚线幽灵块;跟随吸附后的目标列+时刻,内文 = 实时时间区间)。 */
-.amx-cal-dropghost { position: absolute; display: none; z-index: 3; box-sizing: border-box; border: 1px solid color-mix(in srgb, var(--accent-ink, var(--accent, #6c5ce7)) 55%, transparent); background: color-mix(in srgb, var(--accent, #6c5ce7) 15%, transparent); border-radius: var(--radius-sm, 6px); pointer-events: none; padding: 2px 6px; font-size: var(--ui-font-caption, 11px); font-weight: 600; font-variant-numeric: tabular-nums; color: var(--accent-ink, var(--accent, #6c5ce7)); overflow: hidden; }
+/* 悬停时「点下去会建在哪」(默认 1 小时)与按住拖出时的预览块:命令式定位,默认隐藏,不挡指针。 */
+.amx-cal-hoverslot { position: absolute; display: none; z-index: 3; box-sizing: border-box; border-radius: var(--radius-sm, 6px); background: var(--overlay-medium, var(--bg-hover)); pointer-events: none; }
+.amx-cal-making { position: absolute; display: none; z-index: 6; box-sizing: border-box; border-radius: var(--radius-sm, 6px); background: var(--amx-event-color); color: #fff; box-shadow: 0 2px 8px color-mix(in srgb, var(--amx-event-color) 35%, transparent); padding: 3px 8px; font-size: var(--ui-font-caption, 11px); line-height: 1.3; font-weight: 600; font-variant-numeric: tabular-nums; overflow: hidden; pointer-events: none; }
 .amx-cal-thead2 { position: sticky; top: 0; z-index: 8; background: var(--bg); border-left: 1px solid var(--amx-cal-line, var(--border)); border-bottom: 1px solid var(--amx-cal-line, var(--border)); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; }
 .amx-cal-thead2.today .amx-cal-tdate { color: var(--accent-ink, var(--accent, #6c5ce7)); }
 .amx-cal-tdow { font-size: var(--ui-font-caption, 11px); color: var(--text-muted); }
@@ -1483,9 +1549,28 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .amx-cal-hour { font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted)); text-align: right; padding-right: 6px; box-sizing: border-box; transform: translateY(-6px); }
 /* 网格线周期 = --amx-hour-px(TimeScroll 注入,随时间轴缩放同步;缺省 44 兜底)。 */
 .amx-cal-daycol2 { position: relative; border-left: 1px solid var(--amx-cal-line, var(--border)); background-image: repeating-linear-gradient(to bottom, var(--amx-cal-line, var(--border)) 0, var(--amx-cal-line, var(--border)) 1px, transparent 1px, transparent var(--amx-hour-px, 44px)); }
-.amx-cal-event { position: absolute; box-sizing: border-box; right: auto; border: 1px solid color-mix(in srgb, var(--amx-event-color) 32%, transparent); border-radius: var(--radius-sm, 6px); background: color-mix(in srgb, var(--amx-event-color) 20%, var(--bg)); box-shadow: inset 3px 0 0 var(--amx-event-color); color: var(--text); font: inherit; font-size: var(--ui-font-caption, 11px); line-height: 1.25; padding: 3px 5px 2px 8px; text-align: left; cursor: grab; overflow: hidden; display: flex; flex-direction: column; touch-action: none; }
-.amx-cal-event.selected { border-color: var(--accent-ink, var(--accent, #6c5ce7)); box-shadow: inset 3px 0 0 var(--amx-event-color), 0 0 0 1px color-mix(in srgb, var(--accent-ink, var(--accent, #6c5ce7)) 55%, transparent); z-index: 4; }
-.amx-cal-event.dragging { cursor: grabbing; opacity: 0.82; box-shadow: 0 4px 14px var(--shadow, rgba(0,0,0,0.24)); z-index: 50; }
+.amx-cal-event { position: absolute; box-sizing: border-box; right: auto; border-radius: var(--radius-sm, 6px); font: inherit; font-size: var(--ui-font-caption, 11px); line-height: 1.25; padding: 3px 5px 2px 10px; text-align: left; cursor: grab; overflow: hidden; display: flex; flex-direction: column; gap: 1px; touch-action: none; }
+.amx-cal-event.selected { z-index: 4; }
+/* 拖动:块本身吸附着走(JS 按整格 translate),原位置留一个淡影;⌥ 拖复制时原件照常显示。 */
+.amx-cal-event.dragging { cursor: grabbing; box-shadow: 0 4px 14px color-mix(in srgb, var(--amx-event-color) 30%, transparent); z-index: 50; }
+.amx-cal-event.drag-shadow { opacity: 0.35; pointer-events: none; }
+.amx-cal-event.dup-src { pointer-events: none; }
+/* 块高不够两行(约 45 分钟以内)→ 一行「标题 起始时间」。 */
+.amx-cal-event.short { flex-direction: row; align-items: center; gap: 6px; padding-top: 0; padding-bottom: 0; }
+.amx-cal-event.short .amx-cal-event-title { flex: 0 1 auto; min-width: 0; }
+.amx-cal-event.short .amx-cal-event-t { flex: none; }
+/* 排了时段的待办:块里带方框,在日历里就能勾。 */
+.amx-cal-event.todo { padding-left: 25px; }
+.amx-cal-event-check { position: absolute; z-index: 2; left: 9px; top: 5px; box-sizing: border-box; width: 11px; height: 11px; border-radius: 3px; border: 1.5px solid currentColor; cursor: pointer; }
+.amx-cal-event.short .amx-cal-event-check { top: 50%; transform: translateY(-50%); }
+.amx-cal-event.done .amx-cal-event-check { background: currentColor; }
+.amx-cal-event.done .amx-cal-event-title { text-decoration: line-through; opacity: 0.7; }
+/* 草稿(还没写进多维表):标题直接在格子里打。 */
+.amx-cal-draft { cursor: default; z-index: 6; }
+.amx-cal-chip-ev.amx-cal-draft { display: flex; align-items: center; gap: 4px; }
+.amx-cal-draft-input { flex: 1 1 auto; min-width: 0; width: 100%; box-sizing: border-box; border: none; outline: none; background: transparent; color: inherit; font: inherit; font-weight: 600; padding: 0; }
+.amx-cal-event .amx-cal-draft-input { font-size: var(--ui-font-meta, 12px); line-height: 16px; }
+.amx-cal-draft-input::placeholder { color: inherit; opacity: 0.7; }
 /* 上下 7px 边缘 = 拉伸时长(ns-resize 光标提示;命中判定在 JS 的 offY < EDGE) */
 .amx-cal-event::before, .amx-cal-event::after { content: ''; position: absolute; left: 0; right: 0; height: 8.4px; cursor: ns-resize; }
 .amx-cal-event::before { top: 0; }
@@ -1494,8 +1579,8 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 /* 只读源事件(agent 日程):点击开卡但不可拖拽/拉伸,光标与边缘热区一并收掉。 */
 .amx-cal-event.readonly, .amx-cal-chip-ev.readonly, .amx-cal-alldrag.readonly { cursor: pointer; }
 .amx-cal-event.readonly::before, .amx-cal-event.readonly::after { cursor: pointer; }
-.amx-cal-event-t { opacity: 0.9; font-variant-numeric: tabular-nums; font-size: var(--ui-font-caption, 11px); }
-.amx-cal-event-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.amx-cal-event-t { opacity: 0.72; font-variant-numeric: tabular-nums; font-size: var(--ui-font-caption, 11px); white-space: nowrap; }
+.amx-cal-event-title { font-weight: 600; font-size: var(--ui-font-meta, 12px); line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* 月格溢出事件列表：保留格内密度，又让“还有 N 项”可操作。 */
 .amx-cal-agenda-overlay { position: fixed; inset: 0; z-index: 70; background: transparent; }
@@ -1530,7 +1615,7 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 /* 标题 */
 .amx-cal-card-head { display: flex; align-items: center; gap: 8px; padding: 2px 6px 6px; }
 .amx-cal-card-headico { font-size: var(--ui-font-title, 16px); }
-.amx-cal-card-title { flex: 1; min-width: 0; border: none; background: transparent; color: var(--text); font: inherit; font-size: var(--ui-font-heading, 14px); font-weight: 600; outline: none; padding: 2px; border-radius: 4px; }
+.amx-cal-card-title { flex: 1; min-width: 0; border: none; background: transparent; color: var(--text); font: inherit; font-size: var(--ui-font-title, 16px); line-height: 22px; font-weight: 600; outline: none; padding: 2px; border-radius: 4px; }
 .amx-cal-card-title::placeholder { color: var(--text-faint, var(--text-muted)); font-weight: 500; }
 .amx-cal-card-title:focus { background: var(--bg-hover, var(--overlay-light)); }
 
@@ -1567,41 +1652,66 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .amx-cal-card-chip.on { background: var(--action-fill, var(--accent-ink, #6c5ce7)); color: var(--on-action, var(--on-accent-ink, #fff)); border-color: transparent; }
 
 /* 底部:仅删除(关闭已移到顶栏);原生 danger 文字钮,随主题 */
-.amx-cal-card-foot { margin-top: 6px; padding: 8px 4px 2px; display: flex; align-items: center; justify-content: space-between; gap: 8px; border-top: 1px solid var(--border); }
+.amx-cal-card-foot { margin-top: 6px; padding: 8px 4px 2px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .amx-cal-card-open { display: inline-flex; align-items: center; gap: 5px; min-height: 28px; border: 1px solid transparent; border-radius: var(--radius-sm, 6px); background: transparent; color: var(--text-muted); font: inherit; font-size: var(--ui-font-meta, 12px); padding: 5px 8px; cursor: pointer; }
 .amx-cal-card-open:hover { background: var(--bg-hover, var(--overlay-light)); color: var(--text); }
 .amx-cal-card-del { border: 1px solid transparent; border-radius: var(--radius-sm, 6px); background: transparent; color: var(--danger, #d4604f); font: inherit; font-size: var(--ui-font-meta, 12px); padding: 5px 12px; cursor: pointer; }
 .amx-cal-card-del:hover { background: var(--danger-light, rgba(212, 96, 79, 0.12)); }
+
+/* 日历右栏(calendar-side):只放待办。编辑事件在事件旁的浮卡(.amx-cal-cardwrap),新建草稿的选日历 / 保存在草稿块旁的 .amx-cal-draftcard(10-16 用户改口,不再换右栏)。 */
+.amx-calside2 { height: 100%; display: flex; flex-direction: column; min-height: 0; }
+.amx-calside2 > * { flex: 1; min-height: 0; }
+/* 草稿卡:沿用事件卡的承载面,不盖捕获层(标题还在格子里打,点网格别处照常收草稿)。 */
+.amx-cal-draftcard { z-index: 60; width: 300px; color: var(--text); padding-top: 4px; }
+/* 右栏待办「快速添加」旁的 N 快捷键提示(原是右栏详情的 Esc 提示,同一个样子) */
+.amx-cal-panel-kbd { margin-left: auto; font-family: var(--font-ui); font-size: var(--ui-font-caption, 11px); line-height: 14px; padding: 1px 5px; border-radius: 4px; outline: 0.5px solid var(--border); color: var(--text-faint, var(--text-muted)); }
+.amx-cal-draft-title { padding: 6px 12px 2px; font-size: var(--ui-font-title, 16px); line-height: 22px; font-weight: 600; overflow-wrap: anywhere; }
+.amx-cal-draft-title .ph { color: var(--text-faint, var(--text-muted)); }
+.amx-cal-draft-time { display: flex; flex-direction: column; gap: 3px; padding: 6px 12px; }
+.amx-cal-draft-label { padding: 10px 12px 4px; font-size: var(--ui-font-caption, 11px); font-weight: 600; color: var(--text-muted); }
+.amx-cal-draft-cals { display: flex; flex-direction: column; padding: 0 6px; }
+.amx-cal-draft-cal { display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 2px 6px; border: none; border-radius: var(--radius-sm, 6px); background: transparent; color: var(--text); font: inherit; font-size: var(--ui-font-body, 13px); text-align: left; cursor: pointer; }
+.amx-cal-draft-cal:hover { background: var(--bg-hover, var(--overlay-light)); }
+.amx-cal-draft-cal i { flex: none; width: 10px; height: 10px; border-radius: 3px; }
+.amx-cal-draft-cal span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.amx-cal-draft-cal svg { flex: none; color: var(--accent-ink, var(--accent, #6c5ce7)); }
+.amx-cal-draft-hint { margin: 10px 12px 0; font-size: var(--ui-font-caption, 11px); line-height: 1.5; color: var(--text-faint, var(--text-muted)); }
+.amx-cal-draft-actions { display: flex; justify-content: flex-end; gap: 6px; padding: 12px; }
+.amx-cal-draft-cancel, .amx-cal-draft-save { border: none; border-radius: var(--radius-sm, 6px); font: inherit; font-size: var(--ui-font-meta, 12px); padding: 5px 14px; cursor: pointer; }
+.amx-cal-draft-cancel { background: transparent; color: var(--text-muted); }
+.amx-cal-draft-cancel:hover { background: var(--bg-hover, var(--overlay-light)); color: var(--text); }
+.amx-cal-draft-save { background: var(--action-fill, var(--accent-ink, #6c5ce7)); color: var(--on-action, var(--on-accent-ink, #fff)); }
+.amx-cal-draft-save:hover { background: var(--action-fill-hover, var(--action-fill, #6c5ce7)); }
 
 /* 月视图 chip 拖拽光标(拖到别的日格改日期) */
 .amx-cal-chip-ev { touch-action: none; }
 .amx-cal-mcell .amx-cal-chip-ev { cursor: grab; }
 
 /* Calendar 侧栏配置视图 */
-.amx-calcfg { height: 100%; overflow-y: auto; background: transparent; color: var(--text); padding: 10px 12px; } /* 透明融入侧栏底 */
-.amx-calcfg-head { font-size: var(--ui-font-body, 13px); font-weight: 600; margin-bottom: 8px; }
-.amx-calcfg-empty { font-size: var(--ui-font-meta, 12px); color: var(--text-faint, var(--text-muted)); padding: 8px 2px; }
-.amx-calcfg-list { display: flex; flex-direction: column; gap: 2px; }
-.amx-calcfg-row { display: flex; align-items: center; gap: 7px; min-height: 36px; padding: 4px; border-radius: var(--radius-sm, 6px); }
+.amx-calcfg { height: 100%; overflow-y: auto; background: transparent; color: var(--text); padding: 6px 12px; } /* 透明融入侧栏底 */
+.amx-calcfg-head { display: flex; align-items: center; justify-content: space-between; margin: 4px 0 2px; padding: 0 4px; font-size: var(--ui-font-meta, 12px); line-height: 18px; font-weight: 600; color: var(--text-muted); }
+.amx-calcfg-addbtn { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border: none; border-radius: var(--radius-sm, 6px); background: transparent; color: var(--text-muted); cursor: pointer; padding: 0; }
+.amx-calcfg-addbtn:hover { background: var(--bg-hover, var(--overlay-light)); color: var(--text); }
+.amx-calcfg-empty { font-size: var(--ui-font-meta, 12px); color: var(--text-faint, var(--text-muted)); padding: 8px 4px; }
+.amx-calcfg-list { display: flex; flex-direction: column; gap: 1px; }
+/* 一行 = 颜色方块(就是显隐开关:勾上 = 实心带对勾,没勾 = 空心)+ 名字 + 淡字「默认」+ 悬停才出的 ⋯。 */
+.amx-calcfg-row { display: flex; align-items: center; gap: 9px; min-height: 30px; padding: 2px 4px; border-radius: var(--radius-sm, 6px); }
 .amx-calcfg-row:hover { background: var(--bg-hover, var(--overlay-light)); }
-.amx-calcfg-type { display: inline-flex; align-items: center; justify-content: center; width: 20px; color: var(--text-faint, var(--text-muted)); flex: none; }
-.amx-calcfg-swatch { position: relative; width: 16px; height: 16px; flex: none; border-radius: var(--radius-sm, 6px); border: 2px solid; overflow: hidden; cursor: pointer; }
-.amx-calcfg-swatch input { position: absolute; inset: 0; opacity: 0; cursor: pointer; padding: 0; border: none; }
+.amx-calcfg-swatch { flex: none; box-sizing: border-box; width: 14px; height: 14px; padding: 0; border: 1.5px solid var(--amx-swatch); border-radius: 4px; background: transparent; cursor: pointer; }
+.amx-calcfg-swatch.on { background: center / 10px no-repeat url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12.5l4.5 4.5L19 7.5'/%3E%3C/svg%3E"), var(--amx-swatch); }
 .amx-calcfg-name { flex: 1; min-width: 0; font-size: var(--ui-font-body, 13px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .amx-calcfg-name.off { color: var(--text-faint, var(--text-muted)); }
-.amx-cal-vault { opacity: .5; font-weight: 400; } /* Vault 后缀淡显,主名不喧宾夺主 */
-.amx-calcfg-def { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: none; background: transparent; color: var(--text-faint, var(--text-muted)); cursor: pointer; line-height: 1; padding: 0; border-radius: var(--radius-sm, 6px); }
-.amx-calcfg-def.on { color: var(--accent-ink, var(--accent, #6c5ce7)); }
-.amx-calcfg-def:hover { background: var(--bg-hover, var(--overlay-light)); color: var(--text); }
-.amx-calcfg-vis { flex: none; cursor: pointer; }
+.amx-calcfg-err { color: var(--danger, #d4604f); font-weight: 400; }
+.amx-calcfg-default { flex: none; font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted)); }
 .amx-calcfg-hint { margin-top: 10px; font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted)); line-height: 1.5; }
-.amx-calcfg-more { flex: none; width: 28px; height: 28px; border: none; background: transparent; color: var(--text-muted); font-size: var(--ui-font-heading, 14px); line-height: 1; cursor: pointer; padding: 0; border-radius: var(--radius-sm, 6px); }
-.amx-calcfg-more:hover { background: var(--bg-hover, var(--overlay-light)); color: var(--text); }
-.amx-calcfg-menu { min-width: 168px; padding: 4px; }
-.amx-calcfg-add { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; margin-top: 8px; padding: 7px 8px; border: 1px solid transparent; border-radius: var(--radius-sm, 6px); background: transparent; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); cursor: pointer; }
-.amx-calcfg-add:hover { background: var(--bg-hover, var(--overlay-light)); color: var(--text); border-color: var(--accent-ink, var(--accent, #6c5ce7)); }
-.amx-calcfg-add-main { min-height: 34px; border-color: var(--border); color: var(--text); background: var(--bg-hover, var(--overlay-light)); }
-.amx-calcfg-add-main svg:last-child { margin-left: auto; }
+.amx-calcfg-more { flex: none; width: 24px; height: 24px; border: none; background: transparent; color: var(--text-muted); font-size: var(--ui-font-heading, 14px); line-height: 1; cursor: pointer; padding: 0; border-radius: var(--radius-sm, 6px); opacity: 0; }
+.amx-calcfg-row:hover .amx-calcfg-more, .amx-calcfg-more:focus-visible { opacity: 1; }
+.amx-calcfg-more:hover { background: var(--overlay-medium, var(--bg-hover)); color: var(--text); }
+.amx-calcfg-menu { min-width: 188px; padding: 4px; }
+.amx-calcfg-menusrc { padding: 6px 8px 4px; font-size: var(--ui-font-caption, 11px); color: var(--text-muted); }
+.amx-calcfg-colorrow { position: relative; display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.amx-calcfg-colorrow input { position: absolute; inset: 0; opacity: 0; cursor: pointer; padding: 0; border: none; }
+.amx-calcfg-colordot { flex: none; width: 12px; height: 12px; border-radius: 4px; }
 .amx-calcfg-addmenu { min-width: 188px; padding: 4px; }
 .amx-calcfg-addmenu .amx-db-opt { display: flex; align-items: center; gap: 8px; }
 /* 加入日历 / 改列映射选择器 */
@@ -1621,26 +1731,27 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .amx-db-newbtn { flex: none; display: inline-flex; align-items: center; gap: 3px; padding: 3px 10px; border: none; border-radius: var(--radius-sm, 6px); background: var(--action-fill, var(--accent-ink, #6c5ce7)); color: var(--on-action, var(--on-accent-ink, #fff)); font-size: var(--ui-font-meta, 12px); cursor: pointer; }
 .amx-db-newbtn:hover { filter: brightness(1.08); }
 
-/* Calendar 右栏竖向分屏:mini 月历(auto)在上,配置列表(可滚)在下。 */
+/* Calendar 左栏(桌面;手机仍在右抽屉)竖向分屏:mini 月历(auto)在上,配置列表(可滚)在下。 */
 .amx-calside { display: flex; flex-direction: column; height: 100%; background: transparent; color: var(--text); } /* 透明融入侧栏底 */
 .amx-calside .amx-calcfg { flex: 1; min-height: 0; height: auto; }
 
-/* mini 月历 */
-.amx-mini { flex: none; padding: 10px 12px 8px; border-bottom: 1px solid var(--border); user-select: none; }
-.amx-mini-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
-.amx-mini-title { font-size: var(--ui-font-meta, 12px); font-weight: 600; }
-.amx-mini-nav { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: none; background: transparent; color: var(--text-muted); font-size: var(--ui-font-heading, 14px); line-height: 1; cursor: pointer; padding: 0; border-radius: var(--radius-sm, 6px); }
+/* mini 月历(2026-10-16 方向 1):月份靠左、箭头靠右;格子不留缝,行高 28px;可见区间是一整条带子(两头圆);
+ * 今天 = --action-fill 实心圆;别的月份的日子用 --text-ghost;下面不再压一条分隔线。 */
+.amx-mini { flex: none; padding: 8px 12px 6px; user-select: none; }
+.amx-mini-head { display: flex; align-items: center; gap: 2px; margin-bottom: 2px; padding-left: 4px; }
+.amx-mini-title { margin-right: auto; font-size: var(--ui-font-body, 13px); font-weight: 600; }
+.amx-mini-nav { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border: none; background: transparent; color: var(--text-muted); cursor: pointer; padding: 0; border-radius: var(--radius-sm, 6px); }
 .amx-mini-nav:hover { background: var(--bg-hover, var(--overlay-light)); color: var(--text); }
 .amx-mini-dow { display: grid; grid-template-columns: repeat(7, 1fr); text-align: center; font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted)); margin-bottom: 2px; }
-.amx-mini-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 1px; }
-.amx-mini-day { position: relative; aspect-ratio: 1; border: none; background: transparent; color: var(--text); font-size: var(--ui-font-caption, 11px); cursor: pointer; border-radius: var(--radius-sm, 6px); padding: 0; display: flex; align-items: center; justify-content: center; }
-.amx-mini-day:hover { background: var(--bg-hover, var(--overlay-light)); }
-.amx-mini-day.out { color: var(--text-faint, var(--text-muted)); opacity: 0.55; }
-.amx-mini-day.band { background: color-mix(in srgb, var(--accent, #6c5ce7) 16%, transparent); }
-.amx-mini-day.band:hover { background: color-mix(in srgb, var(--accent, #6c5ce7) 26%, transparent); }
-.amx-mini-day.today { color: var(--on-action, var(--on-accent-ink, #fff)); font-weight: 600; background: var(--action-fill, var(--accent-ink, #6c5ce7)); }
-.amx-mini-day.today.band { background: var(--action-fill, var(--accent-ink, #6c5ce7)); }
-.amx-mini-day.today:hover { background: var(--action-fill-hover, var(--action-fill, #6c5ce7)); }
+.amx-mini-grid { display: grid; grid-template-columns: repeat(7, 1fr); row-gap: 2px; }
+.amx-mini-day { --amx-mini-dot: transparent; --amx-mini-band: transparent; height: 28px; border: none; border-radius: 0; padding: 0; color: var(--text); font-size: var(--ui-font-caption, 11px); font-variant-numeric: tabular-nums; cursor: pointer; display: flex; align-items: center; justify-content: center; background: radial-gradient(circle, var(--amx-mini-dot) 10.5px, transparent 11px), var(--amx-mini-band); }
+.amx-mini-day:hover { --amx-mini-dot: var(--overlay-medium, var(--bg-hover)); }
+.amx-mini-day.out { color: var(--text-ghost, var(--text-faint)); }
+.amx-mini-day.band { --amx-mini-band: var(--overlay-medium, var(--bg-hover)); }
+.amx-mini-day.band-start { border-radius: 99px 0 0 99px; }
+.amx-mini-day.band-end { border-radius: 0 99px 99px 0; }
+.amx-mini-day.band-start.band-end { border-radius: 99px; }
+.amx-mini-day.today, .amx-mini-day.today:hover { --amx-mini-dot: var(--action-fill, var(--accent-ink, #6c5ce7)); color: var(--on-action, var(--on-accent-ink, #fff)); font-weight: 600; }
 
 /* Calendar 当前时间线(任务2):主题色横线在每个 daycol(已 position:relative)各画一段,
  * 相邻列拼成横跨整个日历的一条线;圆点只在「今天」列。时刻标签钉在左栏时间轴 gutter(sticky,横滚不走)。 */
@@ -1678,14 +1789,18 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .amx-todo-ghead.is-open .amx-todo-caret { transform: rotate(90deg); }
 .amx-todo-reveal { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
 .amx-todo-reveal.is-open { grid-template-rows: 1fr; }
-.amx-todo-reveal-in { overflow: clip; min-height: 0; }
+.amx-todo-reveal-in { overflow: clip; min-height: 0; min-width: 0; } /* clip 不算滚动容器:不写 min-width 0,网格列会被最长那条待办的标题撑宽,整列日期出界(10-16 走查) */
 .amx-todo-gname { font-weight: 600; font-size: var(--ui-font-caption, 11px); flex: 1; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .amx-todo-gcount { font-size: var(--ui-font-caption, 11px); color: var(--text-muted); font-variant-numeric: tabular-nums; }
 
-/* 未排期桶内的来源小标题(`笔记 › 标题`) */
-.amx-todo-src { display: flex; align-items: center; gap: 6px; padding: 5px 12px 2px 22px; font-size: var(--ui-font-caption, 11px); color: var(--text-muted); }
-.amx-todo-src { white-space: nowrap; overflow: hidden; }
-.amx-todo-srcn { margin-left: auto; flex: none; font-variant-numeric: tabular-nums; }
+/* 来源(不止一个来源时才有):宽档 = 色点 + 表名 / 文件图标 + 笔记名,单独一列;窄档 = 日期前一个色点。
+   色点用日历列表里那张表的颜色(colorForDb),正文任务画文件图标不用色。 */
+.amx-todo-srctag { flex: none; max-width: 140px; display: inline-flex; align-items: center; gap: 5px; color: var(--text-faint, var(--text-muted)); font-size: var(--ui-font-caption, 11px); white-space: nowrap; overflow: hidden; }
+.amx-todo-srcname { overflow: hidden; text-overflow: ellipsis; }
+.amx-todo-srcic { flex: none; color: var(--text-faint, var(--text-muted)); }
+.amx-todo-dot { display: inline-block; flex: none; width: 7px; height: 7px; border-radius: 50%; }
+.amx-todo-menudot { margin: 0 3.5px; }
+.amx-todo-menun { color: var(--text-muted); font-size: var(--ui-font-meta, 12px); font-variant-numeric: tabular-nums; }
 
 .amx-todo-list { list-style: none; margin: 0; padding: 0; }
 .amx-todo-item { display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 2px 12px 2px 22px; }
@@ -1697,8 +1812,13 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .amx-todo-box { flex: none; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; }
 .amx-todo-box::before { content: ''; width: 14px; height: 14px; border: 1px solid var(--border-strong, var(--border)); border-radius: 4px; }
 .amx-todo-box.on::before { background: var(--text-faint, var(--text-muted)); border-color: transparent; }
-.amx-todo-main { flex: 1; min-width: 0; display: flex; flex-direction: row; align-items: center; gap: 8px; border: none; background: transparent; color: inherit; font: inherit; text-align: left; padding: 0; cursor: pointer; }
-.amx-todo-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--ui-font-meta, 12px); }
+/* 按钮占满行里剩下的宽度(整行好点),标题只有文字那么宽:浮卡贴着标题文字出现,不按整行算(10-17)。
+   焦点不画横贯整行的描边框,改成整行一档底色(↑↓ 在行间移的就是它;选中或输入只留一层反馈)。 */
+.amx-todo-main { flex: 1; min-width: 0; display: flex; flex-direction: row; align-items: center; gap: 6px; border: none; background: transparent; color: inherit; font: inherit; text-align: left; padding: 0; cursor: pointer; }
+.amx-todo-main:focus-visible { outline: none; }
+.amx-todo-item:has(.amx-todo-main:focus-visible) { background: var(--overlay-medium, var(--bg-hover)); }
+.amx-todo-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--ui-font-meta, 12px); }
+.amx-todo-duecell { flex: none; display: inline-flex; align-items: center; justify-content: flex-end; gap: 6px; }
 .amx-todo-name.done { color: var(--text-faint, var(--text-muted)); text-decoration: line-through; }
 /* 日期语义色:只有异常态着色 —— 逾期 danger、今天 accent、其余一律 muted。
    靠「绝大多数行不着色」让少数红色真的跳出来;只上文字色,不铺底色不加描边。 */
@@ -1713,17 +1833,51 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
   .amx-todo-caret, .amx-todo-reveal { transition: none; }
 }
 
-/* 底部常驻新建行(空态时也在:没有待办时它就是唯一的下一步动作) */
-.amx-todo-add { display: flex; align-items: center; gap: 7px; margin-top: 4px; padding: 5px 12px; color: var(--text-muted); }
+/* 顶部常驻快速添加(2026-10-16 从底部挪上来;空态时也在:没有待办时它就是唯一的下一步动作)。
+ * 打字时浮成一张卡,下面一行写认出来的日期和会加到哪张表。 */
+.amx-todo-add { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; margin: 2px 10px 8px; padding: 5px 8px; border-radius: var(--radius-sm, 6px); background: var(--overlay-light, var(--bg-hover)); color: var(--text-faint, var(--text-muted)); }
+.amx-todo-add:focus-within { background: var(--bg-card, var(--bg)); outline: 0.5px solid var(--border); box-shadow: var(--card-shadow); color: var(--text-muted); }
 .amx-todo-addicon { flex: none; }
 .amx-todo-addinput { flex: 1; min-width: 0; border: none; background: transparent; color: var(--text); font: inherit; font-size: var(--ui-font-meta, 12px); padding: 2px 0; outline: none; }
+.amx-todo-addprev { flex-basis: 100%; display: flex; align-items: center; gap: 8px; padding: 0 0 1px 20px; font-size: var(--ui-font-caption, 11px); color: var(--text-muted); }
+.amx-todo-due { display: inline-flex; align-items: center; gap: 3px; }
+.amx-todo-item[draggable="true"] { cursor: grab; }
+.amx-todo-item.dragging { opacity: 0.35; }
 .amx-todo-addinput::placeholder { color: var(--text-faint, var(--text-muted)); }
+
+/* 2026-10-17 待办视图方案 A(docs/ToBeImproved/待办视图方案_2026-10-17/):宽窄两档按视图自身宽度切(≥ 480px = 宽,
+   TodoListView 的 useWide 挂 .is-wide)。宽档 = 主区标签 / 宽的侧栏:列表最宽 720px 居中(DESIGN「宽主区保留阅读宽度上限」),
+   顶栏分段 + 清单菜单,来源一列、日期定宽右对齐。窄档维持侧栏那套密度(日历右栏、Mini 窗、手机抽屉)。 */
+.amx-todo-grow { flex: 1; }
+.amx-todo-seg em { font-style: normal; margin-left: 5px; opacity: 0.6; font-variant-numeric: tabular-nums; }
+.amx-todo-target { flex: none; display: inline-flex; }
+.amx-todo-addhint { margin: 2px 10px 8px; padding: 6px 8px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
+.amx-todo-addhint code { padding: 1px 4px; border-radius: 4px; background: var(--bg-hover, var(--overlay-light)); font-size: var(--ui-font-caption, 11px); white-space: nowrap; }
+.amx-todo-rest { padding: 8px 12px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
+.amx-todo-link { border: none; background: none; padding: 0; font: inherit; color: var(--text); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; text-decoration-color: var(--border-strong, var(--border)); }
+/* 拖到组头改日期:能放的组头整块换一档底色,不画虚线框(DESIGN §6) */
+.amx-todo-ghead.is-drop { background: var(--accent-light, var(--bg-hover)); color: var(--text); }
+.amx-todo.is-wide .amx-todo-col { max-width: 720px; margin: 0 auto; padding: 22px 24px 40px; }
+.amx-todo.is-wide .amx-todo-bar { gap: 8px; padding: 0 10px 12px; }
+.amx-todo.is-wide .amx-todo-title { font-size: var(--ui-font-title, 16px); }
+.amx-todo.is-wide .amx-todo-total { font-size: var(--ui-font-meta, 12px); }
+.amx-todo.is-wide .amx-todo-add { margin: 0 0 14px; padding: 7px 10px; }
+.amx-todo.is-wide .amx-todo-addinput { font-size: var(--ui-font-body, 13px); }
+.amx-todo.is-wide .amx-todo-addhint { margin: 0 0 14px; padding: 7px 10px; }
+.amx-todo.is-wide .amx-todo-group + .amx-todo-group { margin-top: 6px; }
+.amx-todo.is-wide .amx-todo-ghead { padding: 6px 10px; border-radius: var(--radius-sm, 6px); }
+.amx-todo.is-wide .amx-todo-gname, .amx-todo.is-wide .amx-todo-gcount { font-size: var(--ui-font-meta, 12px); }
+.amx-todo.is-wide .amx-todo-item { min-height: 34px; gap: 10px; padding: 0 10px 0 14px; border-radius: var(--radius-sm, 6px); }
+.amx-todo.is-wide .amx-todo-name { font-size: var(--ui-font-body, 13px); }
+.amx-todo.is-wide .amx-todo-duecell { width: 92px; }
+.amx-todo.is-wide .amx-todo-rest { padding: 10px 14px; }
+/* 悬停一行:日期变成小胶囊(能点、能拖) */
+.amx-todo.is-wide .amx-todo-item:hover .amx-todo-due { padding: 2px 7px; margin-right: -7px; border-radius: var(--radius-pill, 999px); background: var(--bg-card, var(--bg)); outline: 0.5px solid var(--border); }
 
 @container (max-width: 650px) {
   .amx-cal-bar { gap: 6px; padding-inline: 8px; }
   .amx-cal-title { font-size: var(--ui-font-body, 13px); }
   .amx-cal-modes { gap: 3px; }
-  .amx-cal-density { display: none; }
 }
 
 /* uiux-d: 日历规则组末尾的覆盖块(DESIGN §7:同特异性覆盖放组尾)。
@@ -1733,10 +1887,6 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 /* W-58(U-12 残留):没有全天事件时全天行只剩 ~5px,「全天」两字压在上下两条格线上。给日区全天格一个最小高度,
  * 左轴 gallday 的高度是从它量出来的,两边一起变高、刻度照样对齐。 */
 .amx-cal-allday2 { min-height: 22px; }
-/* U-33:「一周开始于」设置行(日历设置右栏底部)。 */
-.amx-calcfg-weekstart { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 12px; font-size: var(--ui-font-meta, 12px); color: var(--text-muted); }
-.amx-calcfg-weekstart-label { flex: none; }
-.amx-calcfg-weekstart .amx-calcfg-weekstart-btn { min-width: 0; min-height: 28px; padding: 4px 8px; border-color: transparent; background: var(--bg-hover, var(--overlay-light)); font-size: var(--ui-font-meta, 12px); }
 /* uiux-d: end */
 
 /* ── 云端库面板 + presence(web 专属,window.amadeusCollab 解闸;桌面永不渲染) ── */
@@ -1838,7 +1988,7 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 
 /* ── 按条目云同步 + 置顶(侧边栏分区/曲别针/开启弹窗) ─────────────────────────── */
 /* 编辑器 toolbar 图钉:默认空心线稿;置顶态强调色 + 实心填充。 */
-.amx-pin-btn.amx-pin-on { color: var(--accent-ink, var(--accent)); }
+.amx-pin-btn.amx-pin-on { color: var(--signal-mark); }
 .amx-pin-btn.amx-pin-on svg { fill: currentColor; }
 
 /* 云同步分区头状态点 */
@@ -2017,15 +2167,17 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .dash-banner button:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.12)); }
 
 /* ── 只读实例(公开分享页 /share/<token>,UnifiedPage readOnly,2026-09-07)──
- * 静态标题 / 只读属性行沿用编辑态的类名取字号与间距,只去掉交互态;只读舞台的指针语义 = 抓手。 */
+ * 静态标题 / 只读属性行沿用编辑态的类名取字号与间距,只去掉交互态;只读舞台的指针语义 = 抓手。
+ * 抓手只给画布开着的舞台:没开画布(.amx-stage-off,收件箱的信 / 锁定笔记 / 分享页的普通文档)时正文照常 I 型光标、能选字
+ * —— 原先不分开不开都给 grab,收件箱整片正文显示成抓手(10-17 用户实报)。 */
 .amx-title-ro .amx-title-bigicon { cursor: default; }
 .amx-title-ro .amx-title-bigicon:hover { background: transparent; }
 .amx-title-static { display: block; white-space: pre-wrap; overflow-wrap: anywhere; }
 .amx-prop-row-ro .amx-prop-key { cursor: default; }
 .amx-prop-row-ro .amx-prop-key:hover, .amx-prop-row-ro .amx-prop-input:hover { background: transparent; }
 .amx-prop-row-ro .amx-prop-input { display: inline-flex; align-items: center; min-height: 24px; }
-.amx-stage-ro .amx-stage-inner { cursor: grab; }
-.amx-stage-ro .amx-stage-inner:active { cursor: grabbing; }
+.amx-stage-ro:not(.amx-stage-off) .amx-stage-inner { cursor: grab; }
+.amx-stage-ro:not(.amx-stage-off) .amx-stage-inner:active { cursor: grabbing; }
 
 /* ── 写盘状态条(UnifiedPage,评审 D-04 2026-09-27):写失败「未保存」/ 上次没写成的草稿。
  * 外观就是全局 `.mk-notice` 提示条(base.css);这里只把设置页那套宽度(calc(100% - 76px) 居中)
@@ -2091,3 +2243,12 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
   .amx-toolbar:not(.excalidraw *):not(.dash-viewcard *):hover .amx-mode-btn,
   .amx-toolbar:not(.excalidraw *):not(.dash-viewcard *) .amx-mode-btn:focus-visible { opacity: 1; }
 }
+
+/* Cloud 侧同步库分区头的来源设备标签(10-17 云同步分区方案 B)。分区名是大写小号字,标签恢复正常写法、退到 faint。 */
+.amx-sec-device {
+  display: inline-flex; align-items: center; gap: 3px; margin-left: 6px; min-width: 0;
+  font-size: var(--ui-font-caption, 11px); font-weight: 400; text-transform: none; letter-spacing: 0;
+  color: var(--text-faint, var(--text-muted));
+}
+.amx-sec-device > svg { flex: none; }
+.amx-sec-device-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 120px; }

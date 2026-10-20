@@ -14,6 +14,7 @@ import { formatDate, formatDateTime, formatRelative } from '../format/time'
 import '../views/agentProfile.css'
 import { homeTarget, connectionKey } from '../services/engine/targets'
 import { HARNESS_CHANGED_EVENT } from '../services/harnessUpdates'
+import { freshJump, revealRecords, type RecordJump } from '../services/recordJump'
 
 const MAX_ENTRIES = 30 // 与引擎 harnessStore.MAX_ENTRIES 同值(写入时封顶)
 const HISTORY_PREVIEW = 8
@@ -33,12 +34,14 @@ type Props = {
   onRefine?: () => Promise<boolean>
   /** 每次读到数据就把待复盘候选数报上去(详情视图的标签角标用):面板挂着时由它一个人读,免得角标再发一次同样的请求。 */
   onCandidates?: (count: number) => void
+  /** 对话里的留痕 / 更新卡点「查看」:读回来之后落到同名的条目 / 候选上。 */
+  jump?: RecordJump
 }
 
 /** 换后端 / 账号 / Agent 整体重挂,旧请求画不进新身份。 */
 export const AgentHarnessPanel: React.FC<Props> = (props) => <AgentHarnessBody key={JSON.stringify([connectionKey(props.cfg), props.slug])} {...props} />
 
-const AgentHarnessBody: React.FC<Props> = ({ cfg, slug, running, onRefine, onCandidates }) => {
+const AgentHarnessBody: React.FC<Props> = ({ cfg, slug, running, onRefine, onCandidates, jump }) => {
   const { t, locale } = useI18n()
   const [entries, setEntries] = useState<HarnessEntry[] | null>(null)
   const [journal, setJournal] = useState<HarnessJournalLine[]>([])
@@ -67,6 +70,15 @@ const AgentHarnessBody: React.FC<Props> = ({ cfg, slug, running, onRefine, onCan
   useEffect(() => { void load() }, [running]) // eslint-disable-line react-hooks/exhaustive-deps
   // 对话里的更新卡撤销了一笔(或 Agent 运行中又写了一条)→ 面板跟着重读
   useEffect(() => { const again = () => { void load() }; window.addEventListener(HARNESS_CHANGED_EVENT, again); return () => window.removeEventListener(HARNESS_CHANGED_EVENT, again) }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  // 已经开着时手里的条目可能是旧的(后台刚写的那条还没读到):令牌一变先重读,读回来的那份才拿来落;令牌只用一次,之后的重读不再拽滚动条
+  const rootRef = useRef<HTMLDivElement>(null)
+  const staleEntries = useRef<HarnessEntry[] | null>(null)
+  useEffect(() => { if (freshJump(jump)) { staleEntries.current = entries; if (entries) void load() } }, [jump?.at]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const root = rootRef.current
+    if (!freshJump(jump) || entries === null || entries === staleEntries.current || !root) return
+    revealRecords(jump, root.querySelectorAll<HTMLElement>('[data-harness-entry], [data-harness-candidate]'), null)
+  }, [jump, entries])
 
   const rollback = async (id: string, title: string): Promise<void> => {
     if (busy || !window.confirm(t('settings.agents.harnessRollbackConfirm', { title }))) return
@@ -118,7 +130,7 @@ const AgentHarnessBody: React.FC<Props> = ({ cfg, slug, running, onRefine, onCan
   const refineButton = (primary: boolean) => onRefine && <button type="button" className={primary ? 'btn primary sm' : 'profile-text-action'} disabled={busy || running} onClick={() => void refine()}>
     {busy ? <Loader2 size={12} className="spin" /> : <NotebookPen size={12} />}{t('settings.agents.harnessRefine')}</button>
 
-  return <div className="agent-harness" data-agent-harness={slug}>
+  return <div ref={rootRef} className="agent-harness" data-agent-harness={slug}>
     {error && <p className="agent-profile-error" role="alert">{error}</p>}
     {notice && <p className="profile-save-notice" role="status">{notice}</p>}
     {entries === null ? !error && <p className="agent-profile-muted" role="status"><Loader2 size={14} className="spin" /> {t('settings.agents.harnessLoading')}</p>

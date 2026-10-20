@@ -1,0 +1,36 @@
+.mk-compat { display: inline-flex; align-items: center; padding: 3px 7px; border-radius: var(--radius-sm); color: var(--text-muted); background: var(--bg-hover); font-size: var(--ui-font-meta); white-space: nowrap; }
+.mk-compat.is-compatible { color: var(--ok, var(--accent)); }
+.mk-compat.is-version, .mk-compat.is-platform { color: var(--warning); }
+.mk-upgrade-filters { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 0 24px 12px; font-size: var(--ui-font-meta); color: var(--text-muted); }
+.mk-upgrade-filters label, .mk-notification-settings label { display: flex; align-items: center; gap: 6px; }
+.mk-upgrade-filters select { color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 5px 8px; }
+.mk-detail-tabs { display: flex; gap: 4px; margin-bottom: 20px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+.mk-detail-tabs .btn[aria-pressed="true"] { color: var(--text); font-weight: 600; border-color: var(--signal-line); background: var(--accent-wash, var(--bg-hover)); }
+.mk-notification-settings { padding: 12px; background: var(--bg-hover); border-radius: var(--radius-md); display: grid; gap: 10px; margin-bottom: 16px; font-size: var(--ui-font-meta); }
+.mk-notification-settings p { margin: 0; line-height: 1.6; }
+.mk-comment-thread { border-bottom: 1px solid var(--border); padding: 14px 0; }
+.mk-comment-meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: var(--ui-font-meta); color: var(--text-muted); }
+.mk-comment-meta strong { color: var(--text); }
+.mk-comment p { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; margin: 8px 0; }
+.mk-comment-actions { display: flex; gap: 4px; }
+.mk-comment-replies { margin-left: 20px; padding-left: 16px; border-left: 2px solid var(--border); }
+.mk-comment-replies .mk-comment { padding-top: 12px; }
+.mk-comment-compose { display: grid; gap: 8px; padding-top: 18px; }
+.mk-comment-compose textarea { width: 100%; resize: vertical; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-md); font: inherit; padding: 10px; box-sizing: border-box; }
+.mk-comment-compose > div:last-child { display: flex; align-items: center; justify-content: space-between; }
+.mk-version-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 0; border-bottom: 1px solid var(--border); }
+.mk-version-row p { color: var(--text-muted); font-size: var(--ui-font-meta); }
+.mk-id-value { overflow-wrap: anywhere; font-size: var(--ui-font-meta); }
+.mk-chat-results { display: grid; gap: 12px; margin: 16px 0; max-width: 720px; width: 100%; }
+.mk-chat-card { border: 1px solid var(--border); background: var(--bg-card); border-radius: var(--radius-md); box-shadow: var(--card-shadow); padding: 16px; }
+[data-theme="genesis"] .mk-chat-card { border-color: transparent; }
+.mk-chat-card-top { display: flex; align-items: center; gap: 10px; }
+.mk-chat-card-top > div:nth-child(2) { flex: 1; min-width: 0; display: grid; gap: 4px; }
+.mk-chat-card-top strong { font-size: var(--ui-font-heading); overflow-wrap: anywhere; }
+.mk-chat-card-top span:not(.mk-compat) { color: var(--text-muted); font-size: var(--ui-font-meta); }
+.mk-chat-icon { display: grid; place-items: center; flex-shrink: 0; color: var(--accent-ink); background: var(--bg-hover); width: 38px; height: 38px; border-radius: var(--radius-md); }
+.mk-chat-card > p { margin: 12px 0; color: var(--text-muted); font-size: var(--ui-font-body); line-height: 1.6; overflow-wrap: anywhere; }
+.mk-chat-card-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+.mk-chat-search { display: flex; align-items: center; gap: 8px; color: var(--text-muted); padding: 12px 0; }
+.mk-chat-error { color: var(--danger); overflow-wrap: anywhere; }
+@media (max-width: 600px) { .mk-chat-card-top { flex-wrap: wrap; } .mk-chat-card-top > .mk-compat { margin-left: 48px; } .mk-comment-replies { margin-left: 6px; padding-left: 10px; } .mk-upgrade-filters { padding-left: 12px; padding-right: 12px; } .mk-version-row { align-items: flex-start; flex-direction: column; } }

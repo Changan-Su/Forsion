@@ -4,6 +4,7 @@
 // This is the seam that lets the markdown block, themes, slash menu, command palette,
 // sidebar, and status bar all be extended uniformly.
 
+import type { SyncSnapshot } from '../../services/syncSetup'
 import type { ComponentType } from 'react'
 import type { PropertyTypeDef } from '../blocks/database/propertyTypes'
 import type { PluginOnboardingSpec } from '@amadeus-shared/ipc'
@@ -141,6 +142,12 @@ export interface ResetCardQuota {
   weeklyRemaining?: number
 }
 
+/** One library file event (see `PluginAppApi.onVaultEvent`). */
+export type PluginVaultEvent =
+  | { kind: 'create' | 'delete' | 'modify'; path: string }
+  | { kind: 'rename'; path: string; from: string; folder?: boolean }
+  | { kind: 'vault' }
+
 export interface PluginAppApi extends BlockSurfaceApi {
   /** Vault-relative path of the note the active panel is showing (both carriers), or null. */
   getActivePage(): string | null
@@ -206,6 +213,19 @@ export interface PluginAppApi extends BlockSurfaceApi {
    *  ⚠️路径必须与 `readFile` 用的是同一个字符串(vault 相对、`/` 分隔);大小写按平台。
    *  旧宿主 / 非桌面宿主没有:`const off = ctx.app.watchFile?.(p, cb)`,缺位时自己退化成轮询。 */
   watchFile?(path: string, cb: () => void): () => void
+  /** Library-wide file events (2026-10-17+): files created, deleted, renamed or changed outside the editor, delivered in
+   *  batches (about 200 ms). Returns an unsubscribe; the host also drops it when the plugin is disabled or reloaded.
+   *  - `create` / `delete`: any note or file appearing in / leaving the library listing, whoever did it (the user in
+   *    Forsion, another program, sync). Folders alone are not reported.
+   *  - `rename`: a rename or move done in Forsion (any window): `{ path: new, from: old }`; a whole folder moved =
+   *    one event with `folder: true`. That same move does **not** also arrive as a delete + create. A rename done by
+   *    another program cannot be told apart from a delete + create, so it arrives as those two.
+   *  - `modify`: content changed outside this window's editor (another program, Tangu, another window, sync). Typing in
+   *    the open note is not reported here; use `subscribePage` for the active note.
+   *  - `vault`: the open library was switched or closed. Re-read whatever you cached (`listFiles` etc.).
+   *  Paths are vault-relative with `/`, the same strings `readFile` takes. With no library open nothing arrives.
+   *  Older hosts lack it: `ctx.app.onVaultEvent?.(cb)`, and fall back to `listFiles` polling. */
+  onVaultEvent?(cb: (events: PluginVaultEvent[]) => void): () => void
   /** The plugin's work folder for file output, vault-relative without leading/trailing slash.
    *  Every plugin automatically gets a "工作文件夹" setting (key `workFolder`) on its detail page;
    *  this returns that value, defaulting to `Plugins/<display name>` (since 2026-10-14; before that the default was
@@ -221,8 +241,12 @@ export interface PluginAppApi extends BlockSurfaceApi {
    *  declared by a Space (for example a document companion beside a plugin view); `activate:false`
    *  updates that pane without stealing focus from the source view. Older hosts lack this seam.
    *  A path that is not a `.md` note (PDF, image, whiteboard) never reaches the note editor: it is
-   *  handed to `openFile` instead (2026-10-05+). */
-  openNote?(path: string, options?: { reuseKey?: string; activate?: boolean; newTab?: boolean }): void
+   *  handed to `openFile` instead (2026-10-05+).
+   *  `heading` (2026-10-17+): after opening, scroll to the first heading with that text and focus it (the same jump
+   *  as `[[note#heading]]` and chat citations; `PluginNoteTask.heading` fits as is). No such heading: the note just
+   *  opens. Ignored with `activate: false` (the jump would take focus). Older hosts ignore it and only open the note. To open a database in its table view, pass the `.db`
+   *  path to `openFile`. */
+  openNote?(path: string, options?: { reuseKey?: string; activate?: boolean; newTab?: boolean; heading?: string }): void
 
   // ── 只读 vault 查询面(2026-08-14+)。纯透传主进程既有能力,**没有任何写口**。
   //    定位(codex 2026-08-14 评审的措辞,别写成「读写自然包含枚举」):这是把外置插件**本来就有的**
@@ -271,6 +295,51 @@ export interface PluginAppApi extends BlockSurfaceApi {
    *  ⚠️**切库竞态**:本值来自渲染进程 store,而 list/search 来自主进程 —— 切换本地/云端库的那一瞬间
    *  主进程先换根、渲染进程后更新,两边可能短暂不同源。拿它拼绝对路径前后都要复核,别缓存过夜。 */
   vaultRoot?(): string | null
+  /** 切到某个 Space(2026-10-17+),口径同 Ribbon 上点它:id 是 Space 的 id(内置的 `tangu` / `amadeus` / `calendar` …,
+   *  或插件 / 用户 Space 的 `space.json` id)。resolve 在新 Space 的布局建好之后 —— 接着 `ctx.openView(…, { location: 'right' })`
+   *  就落在新 Space 里。不认识的 id → false,不切。没有工作台的宿主 / 旧宿主没有:`ctx.app.openSpace?.(…)`。 */
+  openSpace?(id: string): Promise<boolean>
+  /** 当前登录的名字(有昵称用昵称;2026-10-18+,主页的问候用它):先回调一次当前值,换账号 / 登出时再回调;没登录 = 空串。
+   *  只给名字,不给令牌和账号 id。返回退订;插件停用时宿主也会退订。旧宿主没有:`ctx.app.watchAccountName?.(…)`。 */
+  watchAccountName?(cb: (name: string) => void): () => void
+  /** 跑一条命令面板里现成的命令(2026-10-17+),按 id(如 `amadeus-new-note`、`open-market`)。只对首方内置包生效,
+   *  别的插件调了恒为 false —— 命令里有删除、改设置这类动作,不能让任意插件替用户按。命令不存在 / 停用 → false。 */
+  runCommand?(id: string): boolean
+  /** 在应用内打开一条 `forsion://` 链接(2026-10-17+):笔记 / 会话 / Space / `open?view=…`,口径同系统唤起的深链 ——
+   *  只导航不执行,白名单外的一律 false。插件页里画的 `<a href="forsion://…">` 宿主本来就会在应用内接住,这条给按钮用。 */
+  openLink?(url: string): Promise<boolean>
+  /** Ribbon 上**你自己带的** Space(包里的 `spaces/<x>/space.json`)图标挂一个进度环(2026-10-18+,蓬洲云传文件用):
+   *  `progress` 0–1,`null` = 收起。只按整百分比画,高频调用没关系;别的插件的 Space / 内置 Space → false。
+   *  插件停用时宿主自己收掉。旧宿主没有:`ctx.app.setSpaceProgress?.(…)`。 */
+  setSpaceProgress?(spaceId: string, progress: number | null): boolean
+  /** 在真界面上圈出一处(2026-10-19+,使用指南的「带我去」):宿主在 `[data-guide-anchor="<anchor>"]` 上画圈 + 一张小卡
+   *  (`step` 小字 / `title` / `body` / 「不再提示」「知道了」),不压暗、不拦点击,同一时刻只有一处。只对首方内置包生效。
+   *  锚点名是宿主定的一张表(ribbon-spaces / chat-composer / note-new / note-body / note-canvas / agent-new);目标在收着的
+   *  侧栏里会先替用户展开那一栏。resolve:`ok`(知道了 / Esc)、`mute`(不再提示 —— 插件自己记下别再圈)、`gone`(目标消失,
+   *  多半是用户点它走了)、`missing`(不认识的锚点 / 等 2 秒仍不在屏幕上 / 非首方)、`replaced`(被下一次圈注顶掉)、
+   *  `closed`(传 `null` 收起)。旧宿主没有:`ctx.app.spotlight?.(…)`,没有就照老做法。 */
+  spotlight?(opts: { anchor: string; title: string; body?: string; step?: string } | null): Promise<'ok' | 'mute' | 'gone' | 'missing' | 'replaced' | 'closed'>
+  /** Ribbon 上**你自己带的** Space 图标挂一个提示红点(2026-10-19+,服务器管理:有没看过的反馈):`true` 挂、`false` 收。
+   *  和收件箱未读角标同一种红;和进度环同时有时只画红点。别的插件的 Space / 内置 Space → false。
+   *  插件停用时宿主自己收掉。旧宿主没有:`ctx.app.setSpaceDot?.(…)`。 */
+  setSpaceDot?(spaceId: string, on: boolean): boolean
+  /** 同步总开关(2026-10-20+,蓬洲云「同步」页):笔记库 / Agents 与记忆 / 插件数据三样的开关与状态,宿主
+   *  services/syncSetup.ts 是真身。只给首方内置包、只在有本地库远程同步的桌面挂;别的插件 get() 恒 null、set 恒失败。
+   *  旧宿主没有:`ctx.app.sync?.get()`。 */
+  sync?: {
+    get(): SyncSnapshot | null
+    subscribe(cb: () => void): () => void
+    refresh(): Promise<void>
+    set(kind: 'notes' | 'agents' | 'plugins', on: boolean): Promise<{ ok: boolean; error?: string }>
+    resolveNotes(choice: 'merge' | 'cloud' | 'skip'): Promise<{ ok: boolean; error?: string }>
+    runNow(): Promise<void>
+  }
+  /** 自己弹出来的弹窗排队(2026-10-19+,Extend 的公告用):应用里同一时间只露一个弹窗 —— 协议更新、What's new 在前,
+   *  插件的排在后面,同级按先来后到;全屏引导开着时谁都不出。用户点了才打开的面板不用排。
+   *  用法:`const turn = ctx.app.queuePopup?.()`,`await turn.ready` 之后再把弹窗挂出来,关掉时 `turn.done()`;
+   *  决定不弹了(换账号、数据过期)也调 `done()` 撤销,这时 `ready` 永远不会 resolve。
+   *  不调 `done()` 会一直占着队列,后面的弹窗都出不来;插件停用时宿主会替你收掉。旧宿主没有:直接弹,照旧。 */
+  queuePopup?(): { ready: Promise<void>; done(): void }
 }
 
 /** 插件契约自己的检索结果 DTO(**刻意不复用宿主内部的 SearchHit**:内部结构以后要改,不该牵动插件 API)。 */
@@ -284,6 +353,76 @@ export interface PluginSearchHit {
   line: number
   /** 不透明排序值,只用来比大小,别当分数显示。 */
   score: number
+}
+
+type PluginCellValue = import('../../../../shared/amadeus/db/schema').CellValue
+
+/** ctx.databases 的一列。`type` = 原样的列类型(含插件注册的自定义类型);`base` = 它落盘的基础类型
+ *  (`text` / `number` / `checkbox` / `date` / `select` …)—— 找日期列看 `base === 'date' || type === 'calendarDate'`,
+ *  找勾选列看 `base === 'checkbox'`。 */
+export interface PluginDbColumn { id: string; name: string; type: string; base: string }
+/** ctx.databases 的一行。`kind: 'notes'` 的表里 `id` 就是那篇笔记的库相对路径。`name` = 首列文本(空就是空)。 */
+export interface PluginDbRow { id: string; name: string; cells: Record<string, PluginCellValue> }
+/** 库里的一张多维表。`table` = 经典 .db(行在文件里);`notes` = 笔记视图(一行 = 文件夹里的一篇笔记,属性在 frontmatter)。 */
+export interface PluginDatabase {
+  /** 库相对路径(那张 .db,笔记视图也有一张描述它的 .db) */
+  path: string
+  name: string
+  kind: 'table' | 'notes'
+  columns: PluginDbColumn[]
+  rows: PluginDbRow[]
+}
+/** ctx.ui.mountRecord 的参数。 */
+export interface PluginRecordOptions {
+  /** 库相对路径(ctx.databases 快照里那张表的 path) */
+  path: string
+  rowId: string
+  /** 当作时间显示的日期列(给日历成员的 dateCol);不给 = 日期列和别的属性一样列在下面 */
+  dateCol?: string
+  readOnly?: boolean
+}
+/** ctx.calendar 的一个只读叠加源(2026-10-17+):不在库里、改不了的日历 —— Agent 日程、.ics 订阅、
+ *  Local↔Cloud 另一侧库里的表。行和列的形状同 ctx.databases(`kind` 恒 `'table'`);**没有写口**,
+ *  拿它的 path 去调 ctx.databases 的写口一律 false。 */
+export interface PluginCalendarOverlay extends PluginDatabase {
+  /** `agent` = 某个 Agent 的日程表;`ics` = 用户加的 .ics 订阅 / 导入;`otherVault` = 另一侧库里带日期列的经典表 */
+  origin: 'agent' | 'ics' | 'otherVault'
+  /** otherVault:另一侧那个库的名字(图例里淡显) */
+  vaultLabel?: string
+}
+/** ctx.calendar.subscribe 的一份快照。成员只给路径和列映射,行去 ctx.databases 拿(两份订阅,各管各的)。 */
+export interface PluginCalendarSnapshot {
+  /** 同 ctx.databases:false = 库里的表还没读完,这时 members 可能不全。叠加源各自尽力而为,不计入 ready */
+  ready: boolean
+  /** 当前库里「在日历中」的表:日期列与(可选的)完成勾选列已按宿主日历的规则解析好 */
+  members: Array<{ path: string; dateCol: string; checkboxCol?: string }>
+  overlays: PluginCalendarOverlay[]
+  /** 每个成员与叠加源的颜色(`#rrggbb`),与宿主日历图例一致(用户改过的优先,否则按图例顺序取调色板) */
+  colors: Record<string, string>
+  /** 用户在日历里藏起来的源(路径) */
+  hidden: string[]
+  /** 新建事件默认落进的表;null = 没设过(宿主日历这时用第一个可写成员) */
+  defaultPath: string | null
+  /** 用户的 .ics 订阅(含导入的文件):`path` = 它在 overlays 里那张表的路径;`url` 为空 = 导入的快照(刷不了);
+   *  `error` = 上次拉取失败的原因(给用户看的文案)。 */
+  icsSubscriptions: Array<{ id: string; path: string; name: string; url: string; error?: string }>
+}
+/** 笔记正文里一条带 `@` 时间标记的行(`- [ ] 交周报 @2026-10-20T15:00`)。 */
+export interface PluginNoteTask {
+  /** `路径:行号`。同一份文本两次加载之间稳定;笔记里行挪动了就会变 —— 别长期保存,每次以最新回调为准。 */
+  id: string
+  /** 所在笔记的库相对路径 / 笔记名 / 最近的上级标题(`''` = 在任何标题之前) */
+  path: string
+  title: string
+  heading: string
+  /** 行文本,已去掉 `@` 标记与行首的 `-` / `>` / `#` */
+  text: string
+  /** 是不是勾选项(`- [ ]`);false = 普通行,`checked` 恒 false 且不能勾 */
+  isTask: boolean
+  checked: boolean
+  /** 日期,与多维表日期列同一种写法:`YYYY-MM-DD` / `YYYY-MM-DDTHH:mm` / 区间 `a/b` */
+  due: string
+  remind?: string
 }
 
 /** A read-only view of the ACTIVE NOTE. Amadeus is single-active-page (one page per panel, shared by
@@ -490,6 +629,8 @@ export interface PluginViewContext {
   onParamsChanged?(listener: (params: Readonly<Record<string, unknown>>) => void): () => void
   /** Mini/Floating: opens the corresponding full view in the main panel. Revoked after unmount. */
   showInMainPanel?(): void
+  /** Close this mounted view (including Web/native Floating Panels). Revoked after unmount. */
+  close?(): void
   extendView?: ExtendViewController
 }
 
@@ -513,6 +654,14 @@ export interface ViewContribution {
   /** Id of one of THIS plugin's list sources (2026-08-25+): while this view is the active main
    *  view, the unified workspace sidebar auto-switches to that list. Old hosts ignore it. */
   workspaceSource?: string
+  /** Right-panel views this view brings along when it is the front main view (2026-10-20+; older hosts ignore it).
+   *  Full view types, as in space.json: your own views as `plugin:<pid>:<viewId>`, host side views by name
+   *  (`chat-panel`, `outline`, `tangu-details`, `workspace`…). First entry comes to the front when the person switches to
+   *  this view. The host keeps the right panel in step with the front main view: switching away retires these again,
+   *  views the person opened themselves stay, and so do the Space's pinned ones. Main-area views (`chat`, the note editor,
+   *  PDF…) are dropped; at most 4 are used, 3 or fewer recommended (side tabs are icon-only). Leave it out to use the
+   *  Space's `layout.right`. Details / forms opened from one row or event belong in `view.extendView`, not here. */
+  rightCompanions?: string[]
 }
 
 export interface PluginFloatingPanelOptions {
@@ -795,6 +944,50 @@ export interface EmbedRendererContribution {
   ): (() => void) | void
 }
 
+/** Where a tool result card shows: `inline` = a card in the chat, under the reply; `desk` = straight into the Agent Desk
+ *  (half width), leaving a placeholder card in the chat. */
+export type ToolResultSurface = 'inline' | 'desk'
+
+/** What a tool result card gets for one finished call (second argument of ToolResultRendererContribution.mount).
+ *  Read-only data plus two narrow actions. There is no way to write files or send a message from here: changes go
+ *  through your own commands or engine tools. */
+export interface ToolResultCall {
+  /** Tool call id (stable across reloads; the host keys `state` by it). */
+  id: string
+  /** Tool name as the model called it. */
+  tool: string
+  /** Parsed JSON arguments (the raw string when they are not valid JSON). */
+  args: unknown
+  /** The tool's result text, as the model saw it. */
+  result: string
+  /** Where this mount lives. The same renderer is mounted again when the person moves the card (chat ↔ Desk). */
+  surface: ToolResultSurface
+  /** View state that should survive a move (scroll, zoom, selection): `set` it as it changes, `get` it on mount.
+   *  In memory only (gone after an app restart). */
+  state: { get(): unknown; set(value: unknown): void }
+  /** Attach `text` as a quote card above the chat input, the same as selecting text in a reply and pressing Quote.
+   *  It is not sent; the person decides. */
+  quote(text: string): void
+}
+
+/** A native result card for a tool **your own engine half registered** (ctx.registerToolResultRenderer, 2026-10-19+).
+ *  Finished, successful calls of that tool show your card instead of the generic one-line tool record; while the call
+ *  runs, when it fails, when `mount` throws, or while your plugin is disabled or reloading, the generic record shows.
+ *  A tool your bundle's engine plugins did not register (a core tool, another plugin's tool) is never handed to you. */
+export interface ToolResultRendererContribution {
+  /** The engine tool name, exactly as your engine half registered it. */
+  tool: string
+  /** Default `inline`. `desk` = straight into the Agent Desk; falls back to `inline` where there is no Desk (phone, Web
+   *  without Desk, Desk turned off). The person can move the card either way afterwards. */
+  surface?: ToolResultSurface
+  /** Card name in the chat, the placeholder and the Desk capsule. Default: the tool name. Pass a function to follow
+   *  the interface language. */
+  title?: string | (() => string)
+  /** Render into the host element (themed, no frame of its own needed); return a cleanup. Called again on every move
+   *  (the old mount is cleaned up first) — restore view state from `call.state`. */
+  mount(el: HTMLElement, call: ToolResultCall): (() => void) | void
+}
+
 /** A user-tunable setting a plugin declares. The host renders the form on the plugin's detail
  *  page and persists values to localStorage `plugin.<pluginId>.<key>` — the plugin reads the
  *  same key at use time (poll-loop reads pick changes up next round; no change notification). */
@@ -844,6 +1037,14 @@ export interface SettingsViewContribution {
    *  目前只有 'forsion'(「Forsion 云端」,随 Forsion Extend 的主进程半身出现)。只认带主进程半身的首方内置包(locked),
    *  别的插件写了照旧画在详情页;给了 category 就要给 title(左栏子项的文字)。多个子页按注册顺序排,宿主自己的子页在前。 */
   category?: 'forsion'
+  /** Optional one-level grouping within the same plugin/category. The parent is the default tab. */
+  parent?: string
+  /** Parent page's own tab label; defaults to title. Evaluated again after a locale change. */
+  tabTitle?: string | (() => string)
+  /** Old page IDs that should open this page. Exact registered IDs take priority. */
+  aliases?: readonly string[]
+  /** Search aliases, in either language. */
+  keywords?: string
   /** 详情页打开时调用。返回的函数在面板关闭 / 插件禁用时执行(定时器、订阅、第三方编辑器实例在此收)。
    *  ⚠️同一插件的面板可能被反复挂载卸载(用户来回进出详情页),别把状态放在闭包外的模块级单例里。 */
   mount(el: HTMLElement): void | (() => void)
@@ -1024,12 +1225,21 @@ export interface PluginSelectionBarHandle {
 }
 
 export interface PluginFloatingTocHandle {
-  /** Force a rescan after a DOM change that MutationObserver cannot see. */
+  /** Force a rescan after a DOM change that MutationObserver cannot see. Observed changes rescan on their own: the first
+   *  after a quiet spell on the next frame, then at most every 500 ms while content keeps changing (2026-10-16+);
+   *  changes inside `[data-lcl-toc-ignore]` subtrees (lazily mounted code highlighting, embeds) never trigger one. */
   refresh(): void
   /** Idempotent. Takes the host's overlay layer out of `shell` synchronously; your content is untouched.
    *  The host also disposes every mount when the plugin is disabled/reloaded. */
   dispose(): void
 }
+
+export interface PluginBingWallpaper { id: string; url: string; thumbnailUrl: string; title?: string; copyright?: string; startDate?: string }
+export interface PluginSpaceInfo { id: string; name: string }
+export interface PluginSpaceAction { id: string; name: string; run(): void }
+export type PluginShelfItem =
+  | { kind: 'space'; id: string; spaceId: string; name: string }
+  | { kind: 'folder'; id: string; name: string; spaceIds: string[] }
 
 export interface PluginAccountStatus {
   loggedIn: boolean
@@ -1100,6 +1310,9 @@ export interface SelectionActionContribution {
   }): string | void | Promise<string | void>
 }
 
+/** `ctx.ui.contextMenu` 的一行。 */
+export interface PluginContextMenuItem { label: string; run(): void; checked?: boolean; disabled?: boolean; danger?: boolean }
+
 export interface PluginContext {
   account?: PluginAccount
   app: PluginAppApi
@@ -1134,6 +1347,9 @@ export interface PluginContext {
   registerFileType(def: FileTypeContribution): boolean | void
   /** Contribute an inline renderer for `![[…]]` embeds this plugin recognises (e.g. its own file type). */
   registerEmbedRenderer(def: EmbedRendererContribution): void
+  /** Contribute a native result card for one of your engine half's tools (2026-10-19+). Absent on older hosts: call as
+   *  `ctx.registerToolResultRenderer?.(…)`. See ToolResultRendererContribution. */
+  registerToolResultRenderer?(def: ToolResultRendererContribution): void
   /** Contribute a "新建 …" entry into the file tree's right-click menu (root + folder). See FileCreatorContribution. */
   registerFileCreator(def: FileCreatorContribution): void
   /** Open (or focus) one of this plugin's own registered views. Defaults to the main area;
@@ -1149,8 +1365,11 @@ export interface PluginContext {
   /** Close every open instance of one of this plugin's own views, wherever it is docked (2026-10-02+). A side
    *  panel that loses its last view shows the host's empty placeholder; the bottom panel collapses — as when the
    *  person closes the tab. A collapsed panel keeps its stash. No-op without a workbench; absent on older hosts.
-   *  A view the Space pins (`"pinned": true` in the recipe) keeps its last instance in that panel. */
-  closeView?(viewId: string): void
+   *  A view the Space pins (`"pinned": true` in the recipe) keeps its last instance in that panel.
+   *  `{ collapse: true }` (2026-10-18+): when a side panel holds nothing but this view, fold the panel away instead
+   *  (the view waits in the stash and comes back when the person reopens the panel, or on your next `openView`);
+   *  otherwise it closes as usual. Older hosts ignore the option and leave the placeholder. */
+  closeView?(viewId: string, opts?: { collapse?: boolean }): void
   /** Swap this plugin's view `fromViewId` for `toViewId` where it stands (2026-10-02+): open tabs change in place
    *  (same panel and size, the layout is not rebuilt, the active tab stays where it was), a collapsed panel keeps the
    *  new view in its stash and stays collapsed, and the Space's panel defaults follow. This is the "launch layout →
@@ -1161,8 +1380,8 @@ export interface PluginContext {
    *  beside it (in the stash for a collapsed panel) and comes to the front if `fromViewId` was in front; the count is
    *  then the tabs newly opened, 0 if `toViewId` was already there. Swapping back removes only `toViewId`. */
   replaceView?(fromViewId: string, toViewId: string, opts?: { params?: Record<string, unknown> }): number
-  /** Open one of this plugin's registered views in the native Floating Panel window.
-   *  Desktop-only; feature-detect because Web intentionally has no plugin window bridge. */
+  /** Open one of this plugin's registered views in a host-owned Floating Panel.
+   *  Desktop uses a native window; Web uses an overlay. Feature-detect on older hosts/mobile. */
   openFloatingPanel?(viewId: string, opts?: PluginFloatingPanelOptions): void
   /** Open one of this plugin's registered views in the compact native Mini Panel.
    *  Desktop-only; feature-detect on older hosts and Web/mobile. */
@@ -1178,8 +1397,11 @@ export interface PluginContext {
   /** Show a top-right notification card (2026-07-23+). Source is auto-labelled with the plugin
    *  name and users can mute per plugin in 设置 → 通知与状态栏 — treat it as a mutable hint, not a
    *  data channel. error level is sticky (manual close) by default. Old hosts lack this API:
-   *  always call as `ctx.notify?.(…)`. For persistent state prefer registerStatusItem. */
-  notify?(message: string, opts?: { level?: 'info' | 'success' | 'warning' | 'error'; title?: string; sticky?: boolean }): void
+   *  always call as `ctx.notify?.(…)`. For persistent state prefer registerStatusItem.
+   *  `action` (2026-10-17+): one button on the card, e.g. Undo after a delete — the card then stays about 8 seconds;
+   *  `run` is not called once the plugin is disabled. `key` (2026-10-17+): a later card with the same key replaces the
+   *  earlier one instead of stacking (keys are per plugin). Older hosts ignore both: keep the action reachable elsewhere. */
+  notify?(message: string, opts?: { level?: 'info' | 'success' | 'warning' | 'error'; title?: string; sticky?: boolean; action?: { label: string; run(): void }; key?: string }): void
   /** The host UI's current language (2026-08-14+). Plugins ship bilingual strings and pick with this.
    *  Optional in the type only because API v1 hosts predate it — every current host injects it, so
    *  always call as `ctx.getLocale?.() ?? 'zh'` (Chinese is the canonical fallback). */
@@ -1217,7 +1439,8 @@ export interface PluginContext {
    *  registerSetting 是「一键一个字符串」,存不下片段库这类大块数据,也没有原子性。
    *  旧宿主没有:`await ctx.loadData?.() ?? 默认值`。 */
   loadData?<T = unknown>(): Promise<T | null>
-  /** 原子写本插件的私有 JSON blob(整体覆盖)。宿主缺位时静默 no-op。 */
+  /** 原子写本插件的私有 JSON blob(整体覆盖)。宿主缺位时静默 no-op。
+   *  manifest 写 `"syncData": true` → 登录后这份随账号跨设备同步(本地优先,整份取较新的;单份 ≤512KB)。 */
   saveData?(value: unknown): Promise<void>
   /** Host-native UI primitives (2026-09-07+). A plugin keeps ownership of its content DOM and gives
    *  the host a shell to overlay plus its scroll/content roots. Old hosts omit the whole member.
@@ -1243,6 +1466,13 @@ export interface PluginContext {
     ): import('../../../../shared/markdownEditor').PluginMarkdownEditorHandle
     /** Shared prompt input + live model catalog. Local draft; the plugin owns submission.
      *  Feature-detect on older hosts. The host disposes mounts on disable/reload/setup failure. */
+    /** 在视口坐标 (x, y) 开一个宿主样式的右键菜单(2026-10-18+),和内置主页、Ribbon 的右键菜单一个样子;放不下自己翻面。
+     *  `items`:`{ label, run(), checked?, disabled?, danger? }`(给了 `checked` 的那一组前面画勾)。同一时刻只开一个,
+     *  点菜单外 / Esc / 窗口失焦 / 点了某一项都会关;返回关闭函数。旧宿主没有:`ctx.ui?.contextMenu?.(…)`。
+     *  菜单限高,项多 / 窗口矮时自己滚(最多 200 项)。`opts.keepOpen`:点了某一项不关(勾选清单连勾);插件改完状态调
+     *  返回句柄的 `update(items)` 换一份行(勾和 run 都换成新的;空列表 = 关)。早于这一版的宿主不认 opts、点了照关,
+     *  返回的也没有 `update` —— 拿 `typeof close.update === 'function'` 判。 */
+    contextMenu?(x: number, y: number, items: PluginContextMenuItem[], opts?: { keepOpen?: boolean }): (() => void) & { update?(items: PluginContextMenuItem[]): void }
     mountChatBox?(
       el: HTMLElement,
       opts: import('../../../../shared/chatBox').PluginChatBoxOptions,
@@ -1258,6 +1488,33 @@ export interface PluginContext {
      *  A view that never calls this gets no bar. Feature-detect on older hosts (`ctx.ui?.mountSelectionBar`) and
      *  keep drawing your own menu there. The host disposes it on disable / reload. */
     mountSelectionBar?(root: HTMLElement, opts?: PluginSelectionBarOptions): PluginSelectionBarHandle
+    /** The host's settings parts as one page description (2026-10-17+): groups of rows (switch, value, buttons,
+     *  input, segmented, select, pick-to-run choice, stepper, code + copy), usage meters, empty / loading / error
+     *  states, and `custom` blocks for anything else. You give data and callbacks; the host draws them with its own
+     *  panels and lays them out per device (compact controls stay at the right on phones, wide ones wrap; a choice
+     *  becomes one button + a half sheet). All text comes from you. `update(schema)` replaces the whole description;
+     *  rows are keyed by `id`. Feature-detect on older hosts (`ctx.ui?.mountSettingsPage`) and keep your own page there.
+     *  The host disposes it on disable / reload. See `shared/settingsPage.ts`. */
+    mountSettingsPage?(
+      el: HTMLElement,
+      schema: import('../../../../shared/settingsPage').PluginSettingsPageSchema,
+    ): import('../../../../shared/settingsPage').PluginSettingsPageHandle
+    /** One settings part on its own (2026-10-17+): the same item shapes as in `mountSettingsPage`, placed wherever you
+     *  want — e.g. inside a `custom` block. Feature-detect: `ctx.ui?.mountSettingsItem`. */
+    mountSettingsItem?(
+      el: HTMLElement,
+      item: import('../../../../shared/settingsPage').PluginSettingsItem,
+    ): import('../../../../shared/settingsPage').PluginSettingsItemHandle
+    /** Your view's view modes (2026-10-19+): two to four ways to look at the same thing ("Transcript / Notes / Summary").
+     *  The host draws the switch at the left end of the view's 32px head row and owns everything around it: ⌥⌘V
+     *  (Ctrl+Alt+V) to the next mode, one "View: X" entry per mode in the command palette, icons only under 480px of view
+     *  width and a "Current ▾" menu under 320px, the phone top bar. `el` is the element `mount()` received (or one
+     *  inside it). `onChange` runs when the user switches; your own `set()` doesn't call it. Put the buttons of your own
+     *  toolbar into `handle.actions` (the right end of the same row) so the view keeps a single head row. Calling it
+     *  again on the same view replaces the previous one; the host removes it on disable / reload / view close.
+     *  Remember the mode per thing you show (a record, a file) yourself — the host stores nothing. Throws for fewer
+     *  than 2 or more than 4 modes. Feature-detect on older hosts (`ctx.ui?.setViewModes`) and keep your own tabs there. */
+    setViewModes?(el: HTMLElement, spec: import('./pluginViewModes').PluginViewModesSpec): import('./pluginViewModes').PluginViewModesHandle
     /** A transparent layer of the host whiteboard over your own content (2026-10-10+): the same engine,
      *  pens and stroke feel as a `.excalidraw.md` board, without its chrome. See PluginBoardOptions.
      *  Feature-detect on older hosts: `ctx.ui?.mountBoard`. */
@@ -1267,6 +1524,15 @@ export interface PluginContext {
      *  bounds in scene units, padding included: place the SVG at `(x + scrollX) * zoom`, sized
      *  `width * zoom`. Feature-detect: `ctx.ui?.boardToSvg`. */
     boardToSvg?(scene: PluginBoardScene, opts?: { theme?: 'light' | 'dark'; padding?: number }): Promise<PluginBoardSvg | null>
+    /** The host's record editor for one row of a vault database (2026-10-17+): the fields the built-in calendar's event
+     *  card shows — the title, `dateCol` as a time summary that opens the native date / time picker, and every other
+     *  property with the editor its column type gets in the database (read-only for relations, lookups, formulas and
+     *  files). Edits go the same way as `ctx.databases.setCell`, so open tables update at once. Your card owns the frame,
+     *  close button and actions (delete with `ctx.databases.deleteRow`, open with `ctx.app.openFile`).
+     *  **Only with the `databases` capability** (absent otherwise). `path` must be a table in the vault right now, else it
+     *  throws synchronously; a row deleted while mounted renders nothing. `readOnly` shows values without editors.
+     *  Same handle contract as the other mounts (`update` in place, `dispose` hands `el` back); feature-detect older hosts. */
+    mountRecord?(el: HTMLElement, opts: PluginRecordOptions): { update(patch: Partial<PluginRecordOptions>): void; dispose(): void }
   }
   /** Dashboard 配方编译(2026-09-01+):声明式配方 → 一份真 `.dashboard.md` 字节。
    *  插件自己经 `ctx.app.writeFile` 落进 workFolder、`ctx.app.openFile` 打开 —— 宿主的
@@ -1304,6 +1570,14 @@ export interface PluginContext {
   achievements: {
     registerSeries(def: AchievementSeriesContribution): void
     track(event: string, n?: number): void
+    /** 读计数(2026-10-17+):缺省读**官方**事件(`chat.send`、`note.create` …,只读、伪造不了);`{ own: true }` 读你自己
+     *  `track()` 过的那个名字。从没发生过 = 0。旧宿主没有:`ctx.achievements.count?.(…)`。 */
+    count?(event: string, opts?: { own?: boolean }): number
+    /** 计数或领取状态变了就回调(本窗口与别的窗口写的都算),返回退订;停用时宿主统一收掉。 */
+    subscribe?(cb: () => void): () => void
+    /** 你自己系列里的某条成就:已领取?/ 替用户领取(达成了才领得了,同成就面板的「领取」)。id 不带前缀。 */
+    isClaimed?(id: string): boolean
+    claim?(id: string): void
   }
   /** Tangu 侧的只读探针(2026-08-29+):**当前主区聊天要用的模型** + **模型目录** + **当前 Space id**。
    *  聊天状态住在 Tangu 的 store 里,`ctx.app` 是 Amadeus 的页面/库面 —— 两者不通,所以单开这一截。
@@ -1371,6 +1645,15 @@ export interface PluginContext {
      *    禁用 / 重载时宿主统一收掉。`el` 要有确定的高度(对话撑满它)。
      *  旧宿主 / 没有对话能力的宿主没有:`ctx.tangu?.mountChat`,缺席时退回 `startChat`。 */
     mountChat?(el: HTMLElement, o?: { agent?: string; folder?: string; title?: string }): import('./tanguSeam').TanguChatMount
+    /** 把「新对话」输入区整块挂进 `el`(2026-10-18+):就是主页那一套 —— Agent 条、项目栏、运行位置、额外文件夹、
+     *  模型 / 模式 / 附件 / 引用 / 语音 / 技能。用户按发送 → 宿主建新会话、切到 Tangu、发出去;插件改不了要发的内容(`draft()` 只读)。
+     *  和 `ui.mountChatBox` 的分工:那个是插件自己的草稿、提交归插件;这个提交归宿主。
+     *  - `onFocusChange(focused)`:输入区(连同它的菜单)获得 / 失去焦点。
+     *  - `beforeSend()`:宿主发送前先等它(放退场动效,最多 2 秒);明确回 `false` = 这次不发,抛错 / 超时 / 视图被卸照样发。发送和开通话共用一把锁。
+     *  - `call: true`:要通话按钮;只在挂载时所在的 Space 是当前 Space 时画。
+     *  - 句柄:`focus()`、`startVoice()`(在点击处理里同步调)、`draft()`(只读)、`dispose()`(之后 `el` 立刻还给你)。
+     *  没有 Tangu 对话能力的宿主 / 旧宿主没有:`ctx.tangu?.mountComposer`;没有 Tangu Space 时发送不出去(按钮按了不动)。 */
+    mountComposer?(el: HTMLElement, o?: import('./tanguSeam').TanguComposerOptions): import('./tanguSeam').TanguComposerMount
     /** 一次性文本补全(2026-09-28+,评审 G3-07):引擎 `POST /agent/inline`,无工具、不落库、不进任何会话。
      *  **收编插件直连 `/agent/runs` 的做法** —— 那条是 Agent 的 run(带工具、落会话、8192 字符上限),拿来做
      *  「改写这段」既重又危险。`prompt` 是给模型的指令;`selection` / `before` / `after` 是正文上下文(按数据对待,
@@ -1445,9 +1728,78 @@ export interface PluginContext {
   /** 日历成员登记(2026-09-02+)。Calendar Space 是显式成员制 —— 插件种下的任务表不会自动进日历,
    *  用这条把 `dbPath`(库相对路径)以 `dateColId` 为日期锚(可选 `checkboxColId` 为完成勾选)登记进去。
    *  已是成员 → no-op(不覆盖用户改过的列映射);库还没恢复 → 等库恢复后再登记(最多 60s),
-   *  同步返回 void。旧宿主没有:`ctx.calendar?.ensureMember(…)`。 */
+   *  同步返回 void。旧宿主没有:`ctx.calendar?.ensureMember(…)`。
+   *
+   *  ⚠️**两档**:`ensureMember` 每个插件都有(09-02 起就这样,不变);其余成员(2026-10-17+)**只有 manifest
+   *  `capabilities` 里声明了 `'calendar'` 才有** —— 没声明时它们不存在(不是空壳),`ctx.calendar` 只剩 `ensureMember`。
+   *  一律 `if (ctx.calendar?.subscribe) …`。这一档读到的是日历自己的东西:叠加源(Agent 日程、.ics 订阅、另一侧库)
+   *  和日历设置(成员、颜色、显隐、默认表);库里表的行在 ctx.databases(另一个能力,一起声明)。
+   *
+   *  · `subscribe(cb)`:立刻回调一次,之后成员 / 设置 / 叠加源 / 库里的表有变化就再回调;返回退订,插件停用时宿主统一退订。
+   *    **订阅期间宿主替你刷新叠加源**:Agent 日程每分钟拉一次、.ics 订阅每半小时联网拉一次、换库时重读另一侧 ——
+   *    和打开着的日历共用同一个计时器(不会多拉),最后一个订阅者退订就停。用不着叠加源就别订阅。
+   *  · 写口改的是用户的日历设置(和日历左栏「日历」列表里改是同一处,当前库生效),都返回是否改了:
+   *    `setColor(path, '#rrggbb' | null)`(null = 回到调色板色)、`setHidden(path, bool)` 只认当前的成员或叠加源;
+   *    `setDefault(path)` 只认可写的成员表;`setMember(path, dateCol, checkboxCol?)` 把库里一张表加进日历或改它的列映射
+   *    (日期列必须是日期类列、勾选列必须是勾选类列;**会覆盖**用户改过的映射 —— 只想「没有就加」用 `ensureMember`);
+   *    `removeMember(path)` 只撤成员,不删表;日历还没做过首次整理时(从没打开过日历、也没订阅到 ready)返回 false ——
+   *    订阅会在库读完后替你做这一步(和打开宿主日历一样,成员不变)。叠加源不能当成员、不能设默认。
+   *  · `ics`:管理 .ics 订阅(和宿主日历设置里「添加订阅 / 导入」同一处,全局、不分库)。`add(url)` 只收 http(s) / webcal
+   *    地址,返回订阅 id(同一个地址已订过就返回那一个);拉取在宿主主进程做(订阅地址都不发 CORS 头),回环 / 私网地址
+   *    一律被拒,结果看快照里的 `icsSubscriptions[].error`。`importText(name, text)` 导入一份 .ics 文件内容(≤ 8MB、
+   *    得像日历),返回 id 或 null。`rename` / `remove` 返回是否改了;`refresh(id)` 立刻拉一次,成功 true(导入的快照没地址 → false)。 */
   calendar?: {
     ensureMember(dbPath: string, dateColId: string, checkboxColId?: string): void
+    subscribe?(cb: (snapshot: PluginCalendarSnapshot) => void): () => void
+    setColor?(path: string, color: string | null): boolean
+    setHidden?(path: string, hidden: boolean): boolean
+    setDefault?(path: string): boolean
+    setMember?(path: string, dateCol: string, checkboxCol?: string): boolean
+    removeMember?(path: string): boolean
+    ics?: {
+      add(url: string): string | null
+      importText(name: string, text: string): string | null
+      rename(id: string, name: string): boolean
+      remove(id: string): boolean
+      refresh(id: string): Promise<boolean>
+    }
+  }
+  /** 全库多维表的实时聚合 + 行级读写(2026-10-16+;日历 / 待办 / 习惯这类插件的数据来源)。
+   *  **只有 manifest `capabilities` 里声明了 `'databases'` 才注入**(没声明 → `ctx.databases` 整个不存在)。
+   *
+   *  · `subscribe(cb)`:立刻回调一次,之后库里任何一张表变了(含用户在表格里改、切库)就再回调;返回退订,
+   *    插件停用时宿主也会统一退订。`ready: false` = 还在加载(库没打开 / 表没读完),这时的空列表不代表库里没有表;
+   *    `ready: true` 且空 = 真没有表。每次回调给的是整份新快照,别原地改它。
+   *  · 写口按「表格里改一格」的同一条路走:经典表与编辑器 / 表格视图实时一致,笔记视图写进那篇笔记的 frontmatter
+   *    (防抖落盘)。与 `ctx.app.mutateDb` 的分工:mutateDb 是**单张 .db 的整文件比对交换**(升级列结构、批量改);
+   *    这里是**按行按格**、和打开着的界面一致的路径,而且覆盖笔记视图。
+   *  · `setCell`:返回是否写了(表 / 行 / 列不存在,或那列是自动编号、创建时间这种建行即定的列 → false)。
+   *    `undefined` = 清空该格。笔记视图的标题列(`type: 'page'`)= 笔记名:改它就是给笔记改名(只收非空字符串)。
+   *  · `addRow(path, cells?, name?)`:新建一行,返回新行 id(笔记视图 = 新笔记路径;`name` 当笔记标题),表不存在 → null。
+   *  · `duplicateRow`:复制一行(自动编号 / 创建时间重新盖),返回新行 id。
+   *  · `deleteRow`:只删经典表的行,返回一个**撤销函数**(只生效一次;换了库再调不做事)。笔记视图的行是一篇笔记,
+   *    这里不删(返回 null)——要删就 `ctx.app.trash(rowId)`(行 id 就是笔记路径,进回收站可恢复)。
+   *  ⚠️日期值的写法:`YYYY-MM-DD`、`YYYY-MM-DDTHH:mm`,区间用 `/` 连两头。
+   *  旧宿主没有:`if (ctx.databases) …`。 */
+  databases?: {
+    subscribe(cb: (snapshot: { ready: boolean; databases: PluginDatabase[] }) => void): () => void
+    setCell(path: string, rowId: string, colId: string, value: PluginCellValue | undefined): boolean
+    addRow(path: string, cells?: Record<string, PluginCellValue>, name?: string): Promise<string | null>
+    duplicateRow(path: string, rowId: string): Promise<string | null>
+    deleteRow(path: string, rowId: string): (() => void) | null
+  }
+  /** 笔记正文里的 `@` 时间任务(2026-10-16+;待办视图里「笔记」那一组的来源)。
+   *  **只有 manifest `capabilities` 里声明了 `'noteTasks'` 才注入**。
+   *  · `subscribe(cb)`:同 ctx.databases —— 立刻回调、之后有变化再回调;`ready: false` = 还没拉过**当前这个库**
+   *    (库还没恢复、或刚换库)—— 这时的空列表 ≠ 笔记里没有任务。
+   *    笔记里刚打的标记要等编辑器落盘后才出现(宿主拉取前会先落盘)。
+   *  · `update(id, { checked?, due? })`:就地改笔记里那一行(勾选 / 改日期),先立即反映在下一次回调里,稍后写回
+   *    markdown;那一行已经被改得对不上时宿主提示用户去笔记里改。返回 false = 宿主不能回写(网页 / 手机)、
+   *    `id` 找不到、给普通行勾选、或日期写法不对 —— 这时让用户去笔记里改(`ctx.app.openNote(task.path)`)。
+   *  旧宿主没有:`if (ctx.noteTasks) …`。 */
+  noteTasks?: {
+    subscribe(cb: (snapshot: { ready: boolean; tasks: PluginNoteTask[] }) => void): () => void
+    update(id: string, patch: { checked?: boolean; due?: string }): boolean
   }
   /** 在插件自己的容器里渲染一张**原生多维表**(只读、内存行,2026-09-05 起)。**不依赖笔记库** ——
    *  与 `ctx.dashboard.mount` 同一路线:远程系统面板(服务器管理台之流)的表格终于能拿到筛选 / 搜索 /
@@ -1468,6 +1820,47 @@ export interface PluginContext {
     /** 本宿主的原生表认得的**可选**规格能力(2026-09-21 起;更老的宿主整个成员缺席)。规格里不认识的字段宿主一律静默忽略,
      *  所以「不折叠就没法看」的表先查 `ctx.table.caps?.fold`,没有就走自己的降级(panel-lib 的 `L.table` 已内置这条)。 */
     caps?: { fold?: boolean }
+  }
+  /** 收件箱(2026-10-17+,只给首方内置包;别的插件整个成员缺席)。信是本机的系统消息,发件人记成 `plugin:<id>`。
+   *  - `post` 返回新信的 id(后端不在 → null,不抛)。不排队、不去重:同类信只留一封由插件自己 `archive` 上一封。
+   *  - `registerCard`:你发的信在阅读面板里正文下面挂一块你自己画的卡(`mount(el, { id })`,返回清理函数),
+   *    `sender` 是发件人显示名(列表与阅读面板头部)。重复调用 = 替换;停用时宿主收掉。 */
+  /** Space 列表、打开、图标、近况、Ribbon 收纳架(2026-10-18+,主页插件化)。manifest 声明 `spaces` 才有(收纳架改的是用户的 Ribbon)。
+   *  - `list()` 全部已注册的 Space(`{ id, name }`,名字按当前语言求值,含主页自己);`subscribe(cb)` Space / Ribbon 变了就回调,返回退订。
+   *  - `open(id)` 口径同 Ribbon 上点它(本窗口是 Space 窗口时开到它自己的窗口);不认识的 id → false。
+   *  - `mountIcon(el, id, { size })` / `mountStatus(el, id)`:宿主把 Space(或 `actions()` 里那两格)的图标、近况那一行画进 `el`,
+   *    跟着数据自己更新;返回卸载函数,之后 `el` 立刻还给你。近况拿不到就是空的(别靠它判断 Space 在不在)。
+   *  - `actions()` 商店、成就两格:`{ id, name, run() }`。
+   *  - `shelf`:Ribbon 上区的顶层顺序与收纳夹 —— 写的就是 Ribbon 那一份,拖一下 Ribbon 上跟着变。`items()` 按用户的顺序给
+   *    `{ kind: 'space', id, spaceId, name }` / `{ kind: 'folder', id, name, spaceIds }`;`move(id, targetId)` 落到 target 那一格,
+   *    `moveIntoFolder` / `moveOutOfFolder` / `reorderFolder(folderId, id, targetId)` / `addFolder` / `renameFolder` / `removeFolder`。 */
+  spaces?: {
+    list(): PluginSpaceInfo[]
+    subscribe(cb: () => void): () => void
+    open(id: string): Promise<boolean>
+    mountIcon(el: HTMLElement, id: string, opts?: { size?: number }): () => void
+    mountStatus(el: HTMLElement, id: string): () => void
+    actions(): PluginSpaceAction[]
+    shelf: {
+      items(): PluginShelfItem[]
+      move(id: string, targetId: string): void
+      moveIntoFolder(folderId: string, id: string): void
+      moveOutOfFolder(id: string): void
+      reorderFolder(folderId: string, id: string, targetId: string): void
+      addFolder(name: string): void
+      renameFolder(id: string, name: string): void
+      removeFolder(id: string): void
+    }
+  }
+  /** 必应每日壁纸(2026-10-18+):最近 8 张,`{ id, url, thumbnailUrl, title?, copyright?, startDate? }`。宿主代拉(桌面经主进程,
+   *  插件直连必应会被 CSP 拦)。拿不到 → reject;插件停用后给空数组。 */
+  wallpaper?: {
+    bing(locale?: 'zh' | 'en'): Promise<PluginBingWallpaper[]>
+  }
+  inbox?: {
+    post(msg: { title: string; body?: string }): Promise<string | null>
+    archive(id: string): Promise<void>
+    registerCard(card: { sender?: () => string; mount?(el: HTMLElement, msg: { id: string }): (() => void) | void }): void
   }
 }
 
@@ -1599,6 +1992,7 @@ export interface PluginAutomationRule {
 
 export interface AmadeusPlugin {
   id: string
+  packageId?: string
   /** Canonical (Chinese) name — also the source of the default work folder, so it never changes with
    *  the UI language. For display, go through `pluginDisplayName(p, locale)`. */
   name: string
@@ -1646,6 +2040,9 @@ export interface AmadeusPlugin {
   /** Manifest `isDesktopOnly` (Obsidian-style): the plugin needs desktop-only host APIs. Informational on desktop;
    *  mobile hosts list it as `blocked: 'desktopOnly'` and never evaluate it. External plugins only. */
   isDesktopOnly?: boolean
+  /** Manifest `syncData: true`: ctx.saveData syncs across devices with the Forsion account (desktop / mobile; each
+   *  device can turn it off per plugin in Settings). Local-first; whole-blob newest wins. External plugins only. */
+  syncData?: boolean
   /** Agent 自建 Space 插件的 agent slug(external only;设置页标「<slug> 的 Space」、不给卸载)。 */
   agent?: string
   /** 捆绑包内嵌内容清单(引擎插件 id / agent / 技能 / Space;缺省 = 纯 UI 插件)。External plugins only. */

@@ -7,9 +7,11 @@
  *  - D-04 写失败:首次即提示 + 页面「未保存」条 + 退避重试 + 恢复信号补写;卸载冲洗前先把草稿存进本机。
  * 这里只放**与组件状态无关**的件(命名 / 提示 / 草稿存取);状态机本身在 UnifiedPage(pipe)里。
  */
+import { diff3Merge } from 'node-diff3'
 import { amadeus } from '../api'
 import { conflictCopyPath, conflictCopyVariant, textFingerprint } from '@amadeus-shared/writeConflict'
 import { registerMessages, translate } from '../../i18n'
+import { legacyWinRel } from '../lib/vaultFiles'
 
 registerMessages({
   'unisave.conflict.toast': {
@@ -39,6 +41,10 @@ registerMessages({
   'unisave.renameCopy.toast': {
     zh: '「{name}」改名时已被别处改过，没有覆盖它。你改名期间打的字另存为「{copy}」。',
     en: '"{name}" was changed elsewhere while it was being renamed, so it wasn’t overwritten. What you typed during the rename was saved as "{copy}".',
+  },
+  'unisave.moveCopy.toast': {
+    zh: '「{name}」移动期间你打的字没能并进挪过去的那篇，另存为「{copy}」。',
+    en: 'What you typed while "{name}" was being moved couldn’t be merged into the moved note, so it was saved as "{copy}".',
   },
   'unisave.rescued.toast': {
     zh: '「{name}」已在别处被删除或移走。你还没保存的内容另存为「{copy}」。',
@@ -145,16 +151,28 @@ export function toastRescued(path: string, copy: string): void {
 }
 
 /** 改名后补写撞上 CAS(Codex 复核返修 P0-4):新路径已被别处改过 / 没了,本实例改名期间打的字进了副本。 */
-export function toastRenameCopy(path: string, copy: string): void {
+export function toastRenameCopy(path: string, copy: string, moved = false): void {
   emitAmadeusToast({
     level: 'error',
     dedupeKey: `amx-renamecopy:${copy}`,
-    text: translate('unisave.renameCopy.toast', { name: noteName(path), copy: noteName(copy) }),
+    text: translate(moved ? 'unisave.moveCopy.toast' : 'unisave.renameCopy.toast', { name: noteName(path), copy: noteName(copy) }),
     action: {
       label: translate('unisave.conflict.open'),
       run: () => { window.dispatchEvent(new CustomEvent('amadeus:navigate-note', { detail: { path: copy }, cancelable: true })) },
     },
   })
+}
+
+/** 挪动期间打的字(ours)并进挪过去的那篇(theirs:主进程按新位置改写过图片 / 附件引用与 [[链接]]),base = 挪之前
+ *  落盘的那版(holdUnifiedPath 的交接用)。按行三方合并:改写只动地址、不增删行。同一行两边都改了(就在被改写的那行
+ *  上打字)合不拢 → null,调用方落冲突副本。 */
+export function mergeMovedText(base: string, ours: string, theirs: string): string | null {
+  const out: string[] = []
+  for (const r of diff3Merge(ours.split('\n'), base.split('\n'), theirs.split('\n'), { excludeFalseConflicts: true })) {
+    if (!r.ok) return null
+    out.push(...r.ok)
+  }
+  return out.join('\n')
 }
 
 /** 兜底(评审 G1-08):另存副本也写不进去时,最后的入口是剪贴板。复制在点按钮时发生(用户手势,剪贴板写得进)。
@@ -214,6 +232,21 @@ function parseDraft(raw: string | null, slot: string | null): UnsavedDraft | nul
  *  否则没有本槽草稿的 A 会读到仍属于 B 的草稿,点「丢弃」删掉 B 的、点「恢复」把 B 的正文放进 A。
  *  不给 isLive = 一律当活着(只认自己那格)。 */
 export function readDraft(vaultRoot: string | null | undefined, path: string, slot?: string | null, isLive: (slot: string | null) => boolean = () => true): UnsavedDraft | null {
+  const own = readDraftAt(vaultRoot, path, slot, isLive)
+  const legacy = own ? null : legacyWinRel(path, vaultRoot)
+  const old = legacy ? readDraftAt(vaultRoot, legacy, slot, isLive) : null
+  if (!old || !legacy) return own
+  // 老版本 Windows 按 `a\b.md` 存下的草稿:挪到 `/` 的键上(那格已有东西就不动),不然 clearDraft 删不掉,每次打开都再提示一遍。
+  try {
+    const from = draftKey(vaultRoot, legacy, old.slot)
+    const to = draftKey(vaultRoot, path, old.slot)
+    const raw = localStorage.getItem(from)
+    if (raw != null && localStorage.getItem(to) == null) { localStorage.setItem(to, raw); localStorage.removeItem(from) }
+  } catch { /* 同 stashDraft */ }
+  return old
+}
+
+function readDraftAt(vaultRoot: string | null | undefined, path: string, slot: string | null | undefined, isLive: (slot: string | null) => boolean): UnsavedDraft | null {
   try {
     const plainKey = draftKey(vaultRoot, path)
     if (!slot) {
@@ -244,12 +277,16 @@ export function readDraft(vaultRoot: string | null | undefined, path: string, sl
 /** 删草稿(slot 那一格)。给了 `onlyIfText` 时只在存着的正是这份内容时才删 —— 别把上一次会话留下、用户还没决定的那份顺手删了。 */
 export function clearDraft(vaultRoot: string | null | undefined, path: string, onlyIfText?: string, slot?: string | null): void {
   try {
-    const key = draftKey(vaultRoot, path, slot)
-    if (onlyIfText != null) {
-      const d = parseDraft(localStorage.getItem(key), slot ?? null)
-      if (!d || d.text !== onlyIfText) return
+    // 老版本 Windows 那种写法的键也删:readDraft 读到时挪不动(配额满)就还在那里。
+    for (const p of [path, legacyWinRel(path, vaultRoot)]) {
+      if (!p) continue
+      const key = draftKey(vaultRoot, p, slot)
+      if (onlyIfText != null) {
+        const d = parseDraft(localStorage.getItem(key), slot ?? null)
+        if (!d || d.text !== onlyIfText) continue
+      }
+      localStorage.removeItem(key)
     }
-    localStorage.removeItem(key)
   } catch { /* 同 stashDraft */ }
 }
 

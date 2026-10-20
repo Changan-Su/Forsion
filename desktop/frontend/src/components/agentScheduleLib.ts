@@ -4,7 +4,7 @@
  * 不参与触发 —— 算偏了只是列表排序不准,不会多跑少跑。
  */
 import { parseLocalDatetime } from '../views/automation/lib'
-import type { AgentScheduleEntry, MuseTriggerInfo } from '../types'
+import type { AgentScheduleEntry, MuseTriggerInfo } from '../../../../tangu-agent/src/contracts/clientTypes'
 
 const UNIT_MS = { h: 3_600_000, d: 86_400_000 } as const
 

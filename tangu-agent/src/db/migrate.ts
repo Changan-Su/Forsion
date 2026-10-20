@@ -253,6 +253,21 @@ export async function runMigration(): Promise<void> {
   `));
   await query(`CREATE INDEX IF NOT EXISTS idx_automation_exec_trigger ON automation_executions(trigger_id, created_at)`);
 
+  // 顺便问(/btw,services/aside.ts)落库:挂在某会话某条消息上的一段旁聊。turns = JSON 数组 [{question,quote?,answer}](TEXT,方言无关)。
+  // 不进 chat_messages:不进主对话上下文、不被会话搜索 / Historian / 记忆扫到。
+  await query(ddl(`
+    CREATE TABLE IF NOT EXISTS chat_asides (
+      id VARCHAR(36) PRIMARY KEY,
+      session_id VARCHAR(36) NOT NULL,
+      user_id VARCHAR(36) NOT NULL,
+      message_id VARCHAR(36),
+      turns TEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `));
+  await query(`CREATE INDEX IF NOT EXISTS idx_chat_asides_session ON chat_asides(session_id, created_at)`);
+
   // ── 存量库补列(两方言公共段)────────────────────────────────────────────
   // CREATE TABLE IF NOT EXISTS 只管新库;老库(建库时 base schema 还没有这些列)必须显式
   // ALTER 补齐。本清单与 schemaStandalone.ts 同步演进:往 base schema 加列时这里同加一条
@@ -265,6 +280,15 @@ export async function runMigration(): Promise<void> {
     // Background Session 父链接:@讨论 / Historian 辅助讨论等隐藏子会话指回其来源会话,
     // 供 GET /agent/sessions/:id/background(右栏「子聊天」)持久列出。
     ['chat_sessions', 'parent_session_id VARCHAR(36)'],
+    // 父子会话(services/childSessions.ts):「等你」标记(收尾问句置、下一轮开始清)+ 子会话待送回主会话的那一轮。
+    ['chat_sessions', 'awaiting_user BOOLEAN NOT NULL DEFAULT FALSE'],
+    ['chat_sessions', 'report_run_id VARCHAR(36)'],
+    // 会话分支(/branch,方案「Chat 画布分支」10-18):分叉点 = 来源会话里那条消息的 id。有值 = 分支(parent_session_id 指树根),
+    // 没值而有 parent_session_id = 子会话 / 后台会话。
+    ['chat_sessions', 'fork_message_id VARCHAR(36)'],
+    // Muse 主动发私聊(services/museDm.ts):最近一条主动消息的时刻 + 用户读到哪(毫秒)。未读 = proactive_at > last_read_at。
+    ['chat_sessions', 'proactive_at BIGINT'],
+    ['chat_sessions', 'last_read_at BIGINT'],
     // Historian 复盘标记:配合扫描谓词「last IS NULL OR last < updated_at」只复盘有新活动的会话。
     ['chat_sessions', 'historian_last_summary_at TIMESTAMP'],
     // 会话级 agent 配置 + emoji(桌面端会话设置)。
@@ -283,6 +307,8 @@ export async function runMigration(): Promise<void> {
     ['chat_messages', 'display_files JSONB'],
     // 产出该消息的 agent slug(客户端据此还原头像/昵称;旧消息 NULL → 回退会话 agent)。
     ['chat_messages', 'agent_slug VARCHAR(64)'],
+    // 消息来源:NULL = 一轮对话里产出的;'proactive' / 'proactive:todo' / 'proactive:approval' = Agent 在后台主动发来的(客户端头上标「主动发来」)。
+    ['chat_messages', 'origin VARCHAR(24)'],
     // 多通道:账号/绑定表补 channel 列(存量行默认 wechat;telegram/qq 复用同两张表)。
     ['tangu_wechat_accounts', `channel VARCHAR(16) NOT NULL DEFAULT 'wechat'`],
     ['tangu_wechat_bindings', `channel VARCHAR(16) NOT NULL DEFAULT 'wechat'`],

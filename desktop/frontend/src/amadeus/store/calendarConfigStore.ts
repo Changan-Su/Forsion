@@ -2,6 +2,7 @@
  *  每个源多维表的事件颜色、是否可见、新建事件落入的默认库,以及「日历成员」列映射。
  *  成员制(显式):有 members[dbPath] 才算「在日历中」;旧「有 calendarDate 列即入历」经 migrate 一次性收编。 */
 import { create } from 'zustand'
+import { isWinRoot, slashRel } from '@amadeus/lib/vaultFiles'
 
 export const EVENT_PALETTE = ['#6d8fd6', '#e0925f', '#5aa98b', '#b57bd0', '#d76d8a', '#8a9a5b', '#c99a3f', '#5c9bd1']
 
@@ -35,9 +36,23 @@ interface CalCfgState {
 
 const KEY = 'amadeus.calendar.cfg'
 const emptyVc = (): VaultCfg => ({ colors: {}, hidden: [], defaultDbPath: null, members: {} })
+// Windows 老版本按 `a\b.db` 记的配置:读进来换成 `/`(库根就是键),不然这些库从日历里掉出去,颜色 / 默认库全丢。
+const slashCfg = (vault: string, v: VaultCfg): VaultCfg => {
+  const rel = (p: string): string => slashRel(p, vault)
+  const keys = <T>(o: Record<string, T> | undefined): Record<string, T> | undefined =>
+    o && Object.fromEntries(Object.entries(o).map(([k, x]) => [rel(k), x]))
+  return {
+    ...v,
+    colors: keys(v.colors) ?? {},
+    hidden: Array.isArray(v.hidden) ? v.hidden.map(rel) : [],
+    defaultDbPath: typeof v.defaultDbPath === 'string' ? rel(v.defaultDbPath) : v.defaultDbPath ?? null,
+    members: keys(v.members) as VaultCfg['members'],
+  }
+}
 const loadAll = (): Record<string, VaultCfg> => {
   try {
-    return JSON.parse(localStorage.getItem(KEY) || '{}') as Record<string, VaultCfg>
+    const all = JSON.parse(localStorage.getItem(KEY) || '{}') as Record<string, VaultCfg>
+    return Object.fromEntries(Object.entries(all).map(([vault, v]) => [vault, isWinRoot(vault) && v ? slashCfg(vault, v) : v]))
   } catch {
     return {}
   }

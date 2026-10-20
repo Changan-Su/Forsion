@@ -44,7 +44,7 @@ export async function launchChromePipe({ url = 'about:blank', headless = true, u
   return { child, cdp, userDataDir: udd, kill: () => { try { child.kill('SIGKILL'); } catch { /* ignore */ } } };
 }
 
-/** 给装好的扩展写配对(等价于用户在弹窗里粘贴连接码):附着到扩展的 service worker,在里面 chrome.storage.local.set。 */
+/** 给装好的扩展写配对(等价于用户在 Forsion Clip 设置里粘贴连接码):附着到扩展的 service worker,在里面 chrome.storage.local.set。 */
 export async function pairExtension(chrome, extensionId, pairing) {
   let sw = null;
   for (let i = 0; i < 50 && !sw; i++) {
@@ -54,7 +54,7 @@ export async function pairExtension(chrome, extensionId, pairing) {
   }
   if (!sw) throw new Error('扩展的 service worker 没起来');
   const { sessionId } = await chrome.cdp('Target.attachToTarget', { targetId: sw.targetId, flatten: true });
-  const r = await chrome.cdp('Runtime.evaluate', { expression: `chrome.storage.local.set(${JSON.stringify({ pairing })}).then(() => 'ok')`, awaitPromise: true, returnByValue: true }, sessionId);
+  const r = await chrome.cdp('Runtime.evaluate', { expression: `chrome.storage.local.set(${JSON.stringify({ tanguPairing: pairing })}).then(() => 'ok')`, awaitPromise: true, returnByValue: true }, sessionId);
   if (r?.result?.value !== 'ok') throw new Error(`写配对失败:${JSON.stringify(r).slice(0, 200)}`);
   await chrome.cdp('Target.detachFromTarget', { sessionId });
 }

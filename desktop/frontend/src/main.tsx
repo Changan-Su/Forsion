@@ -10,7 +10,7 @@ import { useApp } from './stores/appStore'
 import { LocaleProvider, resolveInitialLocale, translate } from './i18n'
 import './i18n.generated' // 注册全量翻译字典(渲染前)
 import { installEngine } from './bootstrapEngine'
-import { ChatPreview } from './views/chat2/ChatPreview'
+import { readTanguChatViews } from './amadeus/plugins/tanguSeam'
 import { windowKind } from './windowKind'
 import { DetachedRoot } from './DetachedRoot'
 import { MiniRoot } from './MiniRoot'
@@ -83,11 +83,17 @@ try {
   recordError('init', err) // 被 catch 吞掉的启动错误不派发 window 'error',手动记进导出日志
 }
 
+// 外观预览窗口(#preview)的样例对话是 Tangu 交出来的(核心插件化 2e-7);installEngine() 已在上面跑过,槽已注册
+function PreviewChat() {
+  const Preview = readTanguChatViews()?.Preview
+  return Preview ? <Preview /> : null
+}
+
 // 不用 React.StrictMode:其开发期 double-invoke 会重复初始化 Amadeus Space 的 Milkdown 编辑器。
 createRoot(document.getElementById('root')!).render(
   <LocaleProvider>
     <ErrorBoundary>
-      {isPreview ? <ChatPreview /> : kind === 'mini' ? <MiniRoot /> : kind === 'floating' ? <FloatingRoot /> : kind === 'detached' ? <DetachedRoot /> : <Root />}
+      {isPreview ? <PreviewChat /> : kind === 'mini' ? <MiniRoot /> : kind === 'floating' ? <FloatingRoot /> : kind === 'detached' ? <DetachedRoot /> : <Root />}
     </ErrorBoundary>
   </LocaleProvider>,
 )

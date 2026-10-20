@@ -11,7 +11,7 @@ import { currentPlatform } from '../services/agentRunService'
 import { effectiveSessionMode, sessionsInMode, workspacesInMode } from './sessionMode'
 import { showDetails } from '../stores/detailsSubject'
 import { useSessionAttention } from '../stores/attentionStore' // P1-K3
-import { isHomeSession } from '../types'
+import { isHomeSession } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { runLocationsAvailable } from '../features/runtime'
 import { useRemoteCapability } from '../services/engine/targets'
 import { DeviceSessionSections, attentionBadge } from './chat2/DeviceSessionSections' // P1-K7a

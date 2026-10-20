@@ -16,6 +16,7 @@ import { decide } from './decide'
 import { compileIgnore } from './ignore'
 import { walkLocalFiles, atomicWrite, sha256, type LocalFile } from './fsLocal'
 import { loadPrev, savePrev } from './prevSync'
+import { withDbLock } from '../amadeus/fs/dbLock'
 import type { PlanItem, PrevState, RemoteEntity, SyncOptions, SyncReport } from './types'
 
 const DEFAULT_MAX_FILE = 100 * 1024 * 1024
@@ -225,7 +226,7 @@ export async function runSync(opts: SyncOptions): Promise<SyncReport> {
       forgets.push(key)
       continue
     }
-    plan.push({ key, kind: d })
+    plan.push(d === 'join' && remote?.hash && local?.h === remote.hash ? { key, kind: d, same: true } : { key, kind: d })
   }
 
   // ── 方向过滤(remotely-save 式「同步方式」;单向 = 增量,绝不传播删除)──
@@ -265,9 +266,16 @@ export async function runSync(opts: SyncOptions): Promise<SyncReport> {
   }
 
   const concurrency = Math.min(16, Math.max(1, Math.floor(opts.concurrency ?? CONCURRENCY)))
-  await runPool(executable, concurrency, async (item) => {
+  // 小的先传(云同步开启方案 2026-10-20):云端额度不够时,服务端对放不下的逐个回 413,文件照旧留在本地;
+  // 先传小的,同样的额度能装下更多文件。只排顺序,不改哪些要传。
+  const sizeOf = (k: string): number => localMap.get(k)?.size ?? remoteMap.get(k)?.size ?? 0
+  const ordered = [...executable].sort((a, b) => sizeOf(a.key) - sizeOf(b.key))
+  await runPool(ordered, concurrency, async (item) => {
     const { key, kind } = item
     const abs = absOf(key)
+    // 数据库文件(日历 Calendar.db 等)落盘「重读 → 比对 → 留副本 → 换文件」整段拿桌面比对交换写 / 引擎 mutateDb / human/ 镜像共用的那把锁:
+    // 不然别的写入方在「重读」和「换文件」之间写进来的行会被静默盖掉,镜像还会把它当成「库里删了」传到所有设备(10-20 Codex 复核)
+    const local = <T>(fn: () => Promise<T>): Promise<T> => (key.toLowerCase().endsWith('.db') ? withDbLock(abs, fn) : fn())
     try {
       if (kind === 'push') {
         const data = await fs.readFile(abs)
@@ -289,14 +297,16 @@ export async function runSync(opts: SyncOptions): Promise<SyncReport> {
         // stale-plan guard:scan 之后本地被改/新建(内容与计划所见不符)→ 本地版先存冲突副本;
         // scan 时本地不存在(scanned 为空)而现在有文件 = 执行窗口里新建的,同样必须让副本
         const scanned = localMap.get(key)
-        const cur = await readIfExists(abs)
-        if (cur && sha256(cur) !== (scanned?.h ?? null)) {
-          await materializeConflictCopy(opts.localRoot, key, cur)
-          report.conflicts++
-        }
-        await atomicWrite(abs, data, remote.mtimeMs)
-        const st = await fs.stat(abs)
-        prev.entries[key] = { h: sha256(data), r: remote.id, sz: data.byteLength, mt: Math.floor(st.mtimeMs) }
+        await local(async () => {
+          const cur = await readIfExists(abs)
+          if (cur && sha256(cur) !== (scanned?.h ?? null)) {
+            await materializeConflictCopy(opts.localRoot, key, cur)
+            report.conflicts++
+          }
+          await atomicWrite(abs, data, remote.mtimeMs)
+          const st = await fs.stat(abs)
+          prev.entries[key] = { h: sha256(data), r: remote.id, sz: data.byteLength, mt: Math.floor(st.mtimeMs) }
+        })
         report.pulled++
       } else if (kind === 'pushDelete') {
         await withTimeout((signal) => opts.remote.rm(key, signal, prev.entries[key]?.r ?? null), RM_TIMEOUT_MS, `rm ${key}`)
@@ -306,31 +316,35 @@ export async function runSync(opts: SyncOptions): Promise<SyncReport> {
         // stale-plan guard:重验本地仍与基线一致才删;被改过 → 留给下轮重derive(会变成 conflict/push);
         // 读失败(非 ENOENT)会 throw 记 errors,绝不把"读不了"当"可删"
         const pe = prev.entries[key]
-        const cur = await readIfExists(abs)
-        if (cur === null || (pe && sha256(cur) === pe.h)) {
-          await deleteLocalFile(abs)
-          await removeEmptyDirs(abs, opts.localRoot)
-          delete prev.entries[key]
-          report.deletedLocal++
-        }
+        await local(async () => {
+          const cur = await readIfExists(abs)
+          if (cur === null || (pe && sha256(cur) === pe.h)) {
+            await deleteLocalFile(abs)
+            await removeEmptyDirs(abs, opts.localRoot)
+            delete prev.entries[key]
+            report.deletedLocal++
+          }
+        })
       } else if (kind === 'join' || kind === 'conflict') {
         const remote = remoteMap.get(key)!
         const data = await withTimeout((signal) => opts.remote.readFile(key, signal), TRANSFER_TIMEOUT_MS, `pull ${key}`)
-        const cur = await readIfExists(abs)
-        if (cur && sha256(cur) === sha256(data)) {
-          // 内容其实一致 → 收敛基线即可
-          const st = await fs.stat(abs)
-          prev.entries[key] = { h: sha256(data), r: remote.id, sz: data.byteLength, mt: Math.floor(st.mtimeMs) }
-        } else {
-          if (cur) {
-            await materializeConflictCopy(opts.localRoot, key, cur)
-            report.conflicts++
+        await local(async () => {
+          const cur = await readIfExists(abs)
+          if (cur && sha256(cur) === sha256(data)) {
+            // 内容其实一致 → 收敛基线即可
+            const st = await fs.stat(abs)
+            prev.entries[key] = { h: sha256(data), r: remote.id, sz: data.byteLength, mt: Math.floor(st.mtimeMs) }
+          } else {
+            if (cur) {
+              await materializeConflictCopy(opts.localRoot, key, cur)
+              report.conflicts++
+            }
+            await atomicWrite(abs, data, remote.mtimeMs)
+            const st = await fs.stat(abs)
+            prev.entries[key] = { h: sha256(data), r: remote.id, sz: data.byteLength, mt: Math.floor(st.mtimeMs) }
+            report.pulled++
           }
-          await atomicWrite(abs, data, remote.mtimeMs)
-          const st = await fs.stat(abs)
-          prev.entries[key] = { h: sha256(data), r: remote.id, sz: data.byteLength, mt: Math.floor(st.mtimeMs) }
-          report.pulled++
-        }
+        })
       }
     } catch (e) {
       report.errors.push(`${kind} ${key}: ${String((e as Error)?.message || e)}`)
@@ -349,4 +363,35 @@ export async function runSync(opts: SyncOptions): Promise<SyncReport> {
   report.ok = report.errors.length === 0
   report.finishedAt = Date.now()
   return report
+}
+
+const insideDir = (root: string, p: string): boolean => { const rel = path.relative(root, p); return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel) }
+
+/**
+ * 「用云端那份」的落地(云同步开启方案 2026-10-20):把 keys 从同步根挪进 backupDir(同盘 rename,只挪不删)。
+ * 先把 keys 与 forget(这台删了、云端还在的 pushDelete)从基线里删掉并落盘,再挪:
+ * 基线还在、本地没了,下一轮会判成 pushDelete,把用户要的云端那份删掉;反过来先清基线,挪到一半出错 / 崩溃,
+ * 没挪的文件只是没了基线,下一轮按首次合流(join)走 —— 不一样就出冲突副本,哪边都不丢。
+ * 基线落不了盘就一个都不挪。挪一个算一个,出错就停;挪空的文件夹顺手删掉(只删空的)。
+ */
+export async function moveAsideFromSync(opts: { localRoot: string; keys: string[]; forget?: string[]; backupDir: string; statePath: string; fingerprint: string }): Promise<{ moved: number; error?: string }> {
+  for (const key of opts.keys) {
+    if (!insideDir(opts.localRoot, path.join(opts.localRoot, key)) || !insideDir(opts.backupDir, path.join(opts.backupDir, key))) return { moved: 0, error: 'unsafe-key' }
+  }
+  try {
+    const prev = await loadPrev(opts.statePath, opts.fingerprint)
+    for (const k of [...opts.keys, ...(opts.forget ?? [])]) delete prev.entries[k]
+    await savePrev(opts.statePath, prev)
+  } catch (e) { return { moved: 0, error: `baseline: ${String((e as Error)?.message || e)}` } }
+  let moved = 0
+  try {
+    for (const key of opts.keys) {
+      const to = path.join(opts.backupDir, key)
+      await fs.mkdir(path.dirname(to), { recursive: true })
+      await fs.rename(path.join(opts.localRoot, key), to)
+      await removeEmptyDirs(path.join(opts.localRoot, key), opts.localRoot) // 挪空的文件夹不留空壳(只删空的)
+      moved++
+    }
+  } catch (e) { return { moved, error: String((e as Error)?.message || e) } }
+  return { moved }
 }

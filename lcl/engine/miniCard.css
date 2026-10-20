@@ -54,7 +54,7 @@
 }
 .mini-card-space:active:not(:disabled), .mini-card-action:active { transform: scale(0.94); }
 .mini-card-space:focus-visible, .mini-card-action:focus-visible, .mini-card-row:focus-visible {
-  outline: var(--focus-ring, 1px) solid var(--accent-ink, var(--accent));
+  outline: var(--focus-ring, 1px) solid var(--signal-line, var(--accent-ink));
   outline-offset: -1px;
 }
 
@@ -97,6 +97,72 @@
   overflow: hidden;
   background: var(--bg, #fff);
 }
+
+/* 浮动胶囊顶栏(10-17 方案 A,手机 singleColumn.css 的 .mb-cap 同款):顶栏不占行,浮在内容之上;
+ * 透明条整条是拖拽区,胶囊 no-drag。内容让位:默认整块视图往下让 --mini-top;对话这种能滚的视图改成
+ * 滚动容器内部的 padding,内容从胶囊底下滚过(同手机 --mb-top)。侧边拼接的选窗口页(DockPicker)不带
+ * .mini-card-floating,仍是老顶栏。 */
+.mini-card-floating {
+  --mini-top: 50px;
+  grid-template-rows: minmax(0, 1fr);
+}
+.mini-card-floating .mini-card-chrome {
+  position: absolute;
+  inset: 0 0 auto;
+  z-index: 36; /* 压过菜单打开时的透明遮罩(z35),两颗胶囊之间照样能直接切 */
+  height: auto;
+  gap: 6px;
+  padding: 7px 7px 0;
+  border-bottom: none;
+  background: transparent;
+}
+.mini-card-cap {
+  -webkit-app-region: no-drag;
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 1px;
+  min-width: 0;
+  padding: 2px;
+  border: var(--border-width, 1px) solid var(--border, rgba(0, 0, 0, 0.08));
+  border-radius: var(--radius-pill, 999px);
+  background: var(--bg-card, var(--bg, #fff));
+  box-shadow: var(--card-shadow);
+}
+.mini-card-cap:last-child { flex-shrink: 0; }
+.mini-card-floating .mini-card-space,
+.mini-card-floating .mini-card-action,
+.mini-card-picker { border-radius: var(--radius-pill, 999px); }
+.mini-card-floating .mini-card-space { padding: 0 6px 0 8px; }
+.mini-card-floating .mini-card-drag-title { padding: 0; }
+.mini-card-cap-div { flex: 0 0 auto; width: 1px; height: 14px; background: var(--border, rgba(0, 0, 0, 0.08)); }
+.mini-card-picker {
+  -webkit-app-region: no-drag;
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  height: 30px;
+  padding: 0 8px 0 9px;
+  border: var(--border-width, 1px) solid transparent;
+  background: transparent;
+  color: var(--text, #111);
+  font: 500 var(--ui-font-caption, 11px)/1 var(--font-ui, sans-serif);
+  cursor: pointer;
+  transition: background var(--duration-fast, 0.15s);
+}
+.mini-card-picker > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mini-card-picker > svg { flex: 0 0 auto; color: var(--text-faint, var(--text-muted)); }
+.mini-card-picker:hover, .mini-card-picker[aria-expanded='true'] { background: var(--overlay-light, rgba(127, 127, 127, 0.1)); }
+.mini-card-picker:focus-visible { outline: var(--focus-ring, 1px) solid var(--signal-line, var(--accent-ink)); outline-offset: -1px; }
+.mini-card-action:disabled { opacity: 0.45; cursor: default; }
+.mini-card-floating .mini-card-dismiss { inset: 0; }
+.mini-card-popover.mini-card-popover--picker { right: auto; width: min(240px, calc(100% - 14px)); }
+.mini-card-row:disabled { opacity: 0.45; cursor: default; }
+.mini-card-floating .mini-panel-view { padding-top: var(--mini-top); }
+.mini-card-floating .mini-panel-view:is([data-view='mini-tangu'], [data-view='chat']) { padding-top: 0; }
+.mini-card-floating .mini-panel-empty { padding-top: calc(var(--mini-top) + 20px); }
 
 /* 自绘缩放边:八个热区贴在卡片四周,压在顶栏拖拽区之上。角 10px 见方,边 4px 厚。
  * 热区跟着卡片的圆角一起被裁:角上只有看得见的那部分按得到。 */
@@ -183,11 +249,11 @@
 /* Chat 是 mini 的主路径:保留完整发送能力,但把“开新对话配置台”收成快速输入卡。 */
 .mini-card-shell .t2-toolbar { display: none; }
 .mini-card-shell .t2-stream-inner {
-  padding: 16px 12px calc(var(--t2-composer-h, 88px) + 6px);
+  padding: calc(var(--mini-top, 0px) + 6px) 12px calc(var(--t2-composer-h, 88px) + 6px);
   gap: 18px;
 }
 .mini-card-shell .t2-chat-col > .t2-empty {
-  inset: 0 0 var(--t2-composer-h, 88px);
+  inset: var(--mini-top, 0px) 0 var(--t2-composer-h, 88px);
   gap: 8px;
   padding: 14px 18px;
 }

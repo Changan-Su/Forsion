@@ -31,6 +31,9 @@ export interface BranchSessionInput {
   /** 并进新会话 agent_config 的键(远端发起的分支传 { remoteOrigin }):随建会话的同一条 INSERT 落库 ——
    *  先插无标记的行、复制完消息再补标记,中间(以及复制失败时)就有一条无标记的活动会话(桌面 D1 会把它的目录当本机会话根)。 */
   configOverlay?: Record<string, unknown>;
+  /** 用户从这条消息分出的分支(只有 /branch 路由传):记进 fork_message_id,「从这里分出」块和 agent 的分支段靠它认。
+   *  Historian 讨论 / TUI 不传 —— 它们不是用户眼里的分支。 */
+  forkMessageId?: string;
 }
 
 /**
@@ -38,7 +41,7 @@ export interface BranchSessionInput {
  * 返回 { id, copied } 或 null(源会话不存在/非本人本 app,或 messageId 不属于该会话)。
  */
 export async function branchSession(input: BranchSessionInput): Promise<{ id: string; copied: number } | null> {
-  const { sourceSessionId, userId, appId, messageId, title, kind, lastN, parentSessionId, configOverlay } = input;
+  const { sourceSessionId, userId, appId, messageId, title, kind, lastN, parentSessionId, configOverlay, forkMessageId } = input;
 
   // 1) 源会话 + owner/app 校验
   const srcRows = await query<any[]>(
@@ -67,10 +70,10 @@ export async function branchSession(input: BranchSessionInput): Promise<{ id: st
     cfgText = JSON.stringify({ ...(base && typeof base === 'object' && !Array.isArray(base) ? base : {}), ...configOverlay });
   }
   await query(
-    `INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, emoji, agent_config, project_path, project_name, projectless, kind, parent_session_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, emoji, agent_config, project_path, project_name, projectless, kind, parent_session_id, fork_message_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [newId, userId, appId, newTitle, src.model_id, src.emoji,
-     cfgText, src.project_path, src.project_name, !!src.projectless, kind || 'user', parentSessionId || null],
+     cfgText, src.project_path, src.project_name, !!src.projectless, kind || 'user', parentSessionId || null, forkMessageId || null],
   );
 
   // 4) 复制 timestamp <= 分支点 的消息:新 uuid,保留原 timestamp 与全部字段(lastN → 只取最近 N 条)

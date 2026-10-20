@@ -86,14 +86,15 @@
 .reset-ceremony p { margin: 0; color: var(--text-muted); font-size: var(--ui-font-body); line-height: var(--ui-line-body); animation: reset-ceremony-reveal 450ms 1550ms ease-out both; }
 .reset-ceremony-quotas { display: grid; gap: 16px; margin-top: 26px; text-align: left; }
 .reset-ceremony-quota { animation: reset-ceremony-reveal 400ms 1750ms ease-out both; }
-.reset-ceremony-quota:nth-child(2) { animation-delay: 1950ms; }
+/* 第二行整体晚 200ms:错开量用变量传给里面的数字和进度条。别写回 `.reset-ceremony-quota:nth-child(2) … strong / span`——
+   :nth-child() 不在最右一节时,Chromium 把右边的标签并进一份公共失效集合,任何地方兄弟结构一变(开合左栏),
+   兄弟底下所有 strong / span 都重算(长笔记里一次 1.5 万个元素,10-16 实测,见 DESIGN §7)。 */
+.reset-ceremony-quota:nth-child(2) { animation-delay: 1950ms; --reset-stagger: 200ms; }
 .reset-ceremony-quota-copy { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 7px; font-size: var(--ui-font-meta); }
 .reset-ceremony-values { display: flex; gap: 8px; align-items: baseline; color: var(--text-muted); font-variant-numeric: tabular-nums; }
-.reset-ceremony-values strong { color: var(--accent-ink); font-size: var(--ui-font-body); font-weight: 700; animation: reset-ceremony-reveal 350ms 2650ms ease-out both; }
-.reset-ceremony-quota:nth-child(2) .reset-ceremony-values strong { animation-delay: 2850ms; }
+.reset-ceremony-values strong { color: var(--accent-ink); font-size: var(--ui-font-body); font-weight: 700; animation: reset-ceremony-reveal 350ms 2650ms ease-out both; animation-delay: calc(2650ms + var(--reset-stagger, 0ms)); }
 .reset-ceremony-track { height: 6px; overflow: hidden; border-radius: var(--radius-pill); background: var(--overlay-medium); }
-.reset-ceremony-track span { display: block; height: 100%; border-radius: inherit; background: var(--accent); animation: reset-ceremony-fill 1000ms 2050ms cubic-bezier(.18,.78,.2,1) both; }
-.reset-ceremony-quota:nth-child(2) .reset-ceremony-track span { animation-delay: 2250ms; }
+.reset-ceremony-track span { display: block; height: 100%; border-radius: inherit; background: var(--accent); animation: reset-ceremony-fill 1000ms 2050ms cubic-bezier(.18,.78,.2,1) both; animation-delay: calc(2050ms + var(--reset-stagger, 0ms)); }
 .reset-ceremony-footer { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 27px; color: var(--text-muted); font-size: var(--ui-font-meta); }
 .reset-ceremony-footer > span { animation: reset-ceremony-reveal 350ms 2850ms ease-out both; }
 .reset-ceremony-continue { min-height: 34px; padding: 0 15px; border-radius: var(--radius-sm); background: var(--action-fill); color: var(--on-action); font-size: var(--ui-font-meta); font-weight: 650; animation: reset-ceremony-finish 350ms 2800ms ease-out both; }

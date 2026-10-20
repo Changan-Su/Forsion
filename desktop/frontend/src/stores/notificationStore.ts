@@ -65,6 +65,8 @@ export const NOTIFY_EVENTS: Array<{ id: string; labelKey: string; defaultOn: boo
   { id: 'sync.doneOnline', labelKey: 'ntf.event.syncDoneOnline', defaultOn: false },
   { id: 'agent.done', labelKey: 'ntf.event.agentDone', defaultOn: true },
   { id: 'inbox.message', labelKey: 'ntf.event.inbox', defaultOn: true },
+  // 私聊里有人等你(Muse 问了一句 / 它后台有待批,10-18 方案 B):只这一种弹;它发来的提醒只亮角标。
+  { id: 'dm.waiting', labelKey: 'ntf.event.dmWaiting', defaultOn: true },
   // 笔记正文 `@remind:2026-09-01T09:00` 到点提醒(见 notificationWiring 的 E 段)。
   { id: 'note.reminder', labelKey: 'ntf.event.noteReminder', defaultOn: true },
   // Historian 自动档提名了工作笔记候选(chat2/HistorianStatus 轮询处接线):点「复盘」就地发 /refine。自动档 09-18 起默认开,在设置 → 特殊 Agent 里可关。
@@ -180,7 +182,7 @@ export const useNotifications = create<NtfState>((set, get) => {
           const visible = st.items.some((n) => n.id === found.id)
           const upd: AppNotification = {
             ...found, text, title: title ?? found.title, level, count: found.count + 1,
-            createdAt: Date.now(), sticky: sticky || found.sticky, action: input.action ?? found.action,
+            createdAt: Date.now(), sticky: sticky || found.sticky, action: 'action' in input ? input.action : found.action, // 显式给了(含 undefined)就换,没给才沿用
             durationMs: durationMs ?? found.durationMs, onClose: input.onClose ?? found.onClose,
           }
           set((s) => ({

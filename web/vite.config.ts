@@ -1,4 +1,5 @@
 import { startupAppearanceHtml } from '../desktop/frontend/startupAppearancePlugin'
+import { astryxHasFix } from '../desktop/frontend/astryxHasPlugin'
 /**
  * Tangu Web — 独立 app(自己的容器/nginx,连 Forsion server /api → tangu worker)。
  * 经别名复用 desktop/frontend/src(不复制源码);自带 webShim 入口。
@@ -74,7 +75,7 @@ export default defineConfig(({ mode }) => {
   const DEV_PROXY = env.TANGU_DEV_PROXY || 'http://localhost:3001'
 
   return {
-    plugins: [startupAppearanceHtml(), react(), capacitorStubGate(), resolveBareFromWebRoot(), ...(process.env.FORSION_UNIT_RELEASE === '1' ? [{
+    plugins: [startupAppearanceHtml(), astryxHasFix(), react(), capacitorStubGate(), resolveBareFromWebRoot(), ...(process.env.FORSION_UNIT_RELEASE === '1' ? [{
       name: 'forsion:unit-release-inputs',
       generateBundle() { checkBundleInputs([...this.getModuleIds()], resolve(__dirname, '..')) },
     }] : [])],
@@ -94,6 +95,7 @@ export default defineConfig(({ mode }) => {
         '@lcl': resolve(__dirname, '../lcl'),
         '@amadeus-shared': resolve(__dirname, '../desktop/shared/amadeus'),
         '@amadeus': resolve(DESKTOP_SRC, 'amadeus'),
+        '@tangu/ui': DESKTOP_SRC,
         '@': DESKTOP_SRC,
         '@web': resolve(__dirname, 'src'),
         // 手机视口装载 Mobile 壳(mobileEntry/MobileRoot),与移动 App 同一套源码(镜像 mobile 侧

@@ -48,13 +48,14 @@ describe('ctx.viewLocations / openView 停靠位', () => {
   it('⑤ closeView / replaceView 只碰自己的视图:宿主拿到的是加了命名空间的类型名,返回值原样给插件', () => {
     const calls: unknown[][] = []
     usePluginStore.getState().setViewControls({
-      close: (type) => { calls.push(['close', type]) },
+      close: (type, opts) => { calls.push(['close', type, opts]) },
       replace: (from, to, params) => { calls.push(['replace', from, to, params]); return 2 },
     })
     const ctx = ctxOf('p-swap')
     ctx.closeView?.('timeline')
+    ctx.closeView?.('detail', { collapse: true })
     expect(ctx.replaceView?.('nav', 'media', { params: { a: 1 } })).toBe(2)
-    expect(calls).toEqual([['close', 'plugin:p-swap:timeline'], ['replace', 'plugin:p-swap:nav', 'plugin:p-swap:media', { a: 1 }]])
+    expect(calls).toEqual([['close', 'plugin:p-swap:timeline', undefined], ['close', 'plugin:p-swap:detail', { collapse: true }], ['replace', 'plugin:p-swap:nav', 'plugin:p-swap:media', { a: 1 }]])
   })
 
   it('⑥ 没有工作台(没注入)→ closeView 是 no-op,replaceView 返回 0(插件据此不去 openView 之外的事)', () => {

@@ -2,12 +2,14 @@
  *  params: {path,name}(本机,随布局持久化,重启恢复)或 {tkey,name}(瞬态:云沙箱/对话内联)。
  *  渲染复用 WorkspaceFilePreview 的导出渲染器;markdown(本机)默认 Amadeus Milkdown 编辑、
  *  debounce 原子写回 + mtime 冲突保护;不支持的类型询问是否用系统默认应用打开。 */
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
   Download, FileWarning, RefreshCw, WrapText, Code2, Eye, Columns2, AlignJustify,
   ZoomIn, ZoomOut, Maximize, ExternalLink, FolderSearch, Pencil, Clock, NotebookPen,
 } from 'lucide-react'
 import type { ViewProps } from '@lcl/engine'
+import { useViewModes, ViewModeSwitch } from '@lcl/engine'
 import { Markdown } from '../components/Markdown'
 import {
   ImageView, PdfView, DocxView, DiffView, Spinner, cm, loadOffice, HtmlPreview,
@@ -20,11 +22,13 @@ import { useVisualTheme as useTheme } from '../stores/themeStore'
 import { PlainMarkdownEditor } from '../amadeus/blocks/markdown/MarkdownBlock'
 import { getTransientTarget, hostTargetFor, pendingWrites } from './wsFileNav'
 import { useApp } from '../stores/appStore'
-import { bumpDir } from './chat2/FilesPanel'
+import { bumpDir } from '@tangu/ui/views/chat2/FilesPanel'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { findFileType, usePluginStore } from '@amadeus/plugins/pluginStore'
 import { openNote } from '../amadeusNav'
 import { newTabOf } from './itemSelect'
+import type { CtxItem } from '../components/RightPanel'
+import { DeskChromeContext } from '../amadeus/plugins/tanguSeam'
 
 /** 卸载冲刷失败/冲突时的兜底:把未保存内容另存为旁路文件(绝不静默丢),全局 toast 告知。 */
 async function salvageDraft(path: string, content: string): Promise<void> {
@@ -149,6 +153,7 @@ const MdFileEditor: React.FC<{ path: string; text: string; mtimeMs?: number; vie
 
 export function WsFileView({ leaf }: ViewProps) {
   const { t } = useI18n()
+  const desk = useContext(DeskChromeContext)
   const path = typeof leaf.params.path === 'string' ? leaf.params.path : null
   const tkey = typeof leaf.params.tkey === 'string' ? leaf.params.tkey : null
   const name = typeof leaf.params.name === 'string' && leaf.params.name
@@ -419,28 +424,22 @@ export function WsFileView({ leaf }: ViewProps) {
     || (kind === 'html' && docView === 'source')
     || (kind === 'markdown' && !mdEditable && (docView === 'source' || specialMd)))
 
-  return (
-    <div className="wsfile-tab">
-      <div className="wsfile-head">
-        <Icon size={14} className="wsfile-head-icon" />
-        <div className="wsfile-title" title={path ?? name}>
-          <span className="wsfile-name">{path ?? name}</span>
-          {ext && <span className="wsfile-ext">{ext}</span>}
-        </div>
+  useViewModes(leaf.id, ready && mdEditable
+    ? { modes: [{ value: 'edit', label: t('preview.mdEdit'), icon: Pencil }, { value: 'source', label: t('preview.htmlCode'), icon: Code2 }], value: mdMode, onChange: (v) => setMdMode(v as 'edit' | 'source') }
+    : ready && !specialMd && (kind === 'markdown' || kind === 'html')
+      ? { modes: [{ value: 'preview', label: t('preview.htmlPreview'), icon: Eye }, { value: 'source', label: t('preview.htmlCode'), icon: Code2 }], value: docView, onChange: (v) => setDocView(v as 'preview' | 'source') }
+      : null)
 
-        {ready && mdEditable && (
+  // 视图专属控件:自带顶栏里摆一排;Agent Desk 展开态 portal 进悬浮胶囊(见 chat2/deskChrome)
+  const controls = (
+    <>
+        {/* 编辑 / 源码、预览 / 源码 = 视图模式(lcl 看法胶囊,⌥⌘V);刷新、浏览器打开是动作,留在旁边那组 */}
+        <ViewModeSwitch leafId={leaf.id} compact={!!desk?.slot} />
+        {ready && !mdEditable && !specialMd && kind === 'html' && docView === 'preview' && (
           <div className="wsfile-seg">
-            <button className={mdMode === 'edit' ? 'active' : ''} title={t('preview.mdEdit')} onClick={() => setMdMode('edit')}><Pencil size={13} /></button>
-            <button className={mdMode === 'source' ? 'active' : ''} title={t('preview.htmlCode')} onClick={() => setMdMode('source')}><Code2 size={13} /></button>
-          </div>
-        )}
-        {ready && !mdEditable && !specialMd && (kind === 'markdown' || kind === 'html') && (
-          <div className="wsfile-seg">
-            <button className={docView === 'preview' ? 'active' : ''} title={t('preview.htmlPreview')} onClick={() => setDocView('preview')}><Eye size={13} /></button>
-            <button className={docView === 'source' ? 'active' : ''} title={t('preview.htmlCode')} onClick={() => setDocView('source')}><Code2 size={13} /></button>
-            {kind === 'html' && docView === 'preview' && <button title={t('preview.reload')} onClick={() => setReloadNonce((n) => n + 1)}><RefreshCw size={12} /></button>}
+            <button title={t('preview.reload')} onClick={() => setReloadNonce((n) => n + 1)}><RefreshCw size={12} /></button>
             {/* 在系统浏览器里调试:令牌根按目录 memo,重复 servePath 返回同一 URL,无需从 HtmlPreview 里把它抬出来 */}
-            {kind === 'html' && docView === 'preview' && !!(path ?? target?.path) && !!window.tangu?.codePreviewServePath && !!window.tangu?.openExternal && (
+            {!!(path ?? target?.path) && !!window.tangu?.codePreviewServePath && !!window.tangu?.openExternal && (
               <button title={t('preview.openInBrowser')} onClick={() => void window.tangu!.codePreviewServePath!((path ?? target!.path)!).then((r) => window.tangu!.openExternal!(r.url)).catch(() => {})}><ExternalLink size={12} /></button>
             )}
           </div>
@@ -461,6 +460,33 @@ export function WsFileView({ leaf }: ViewProps) {
             <button className="icon-btn" title={t('preview.fit')} onClick={() => setImgView({ s: 1, x: 0, y: 0 })}><Maximize size={14} /></button>
           </>
         )}
+    </>
+  )
+  // Desk 胶囊里只放视图控件;其余动作进 ⋯(「在 Amadeus 中打开」「复制路径」由 Desk 按条目统一给)
+  const deskMore: CtxItem[] = []
+  if (path && window.tangu?.openHostPath) deskMore.push({ label: t('preview.openWithDefault'), icon: <ExternalLink size={14} />, run: openWithDefault })
+  if (target?.download) deskMore.push({ label: path ? t('panel.action.revealInFileManager') : t('preview.download'), icon: <Download size={14} />, run: target.download })
+  deskMore.push({ label: t('preview.reload'), icon: <RefreshCw size={14} />, run: () => setReloadNonce((n) => n + 1) })
+  useEffect(() => { if (desk) desk.more.current = deskMore })
+  useEffect(() => () => { if (desk) desk.more.current = [] }, [desk])
+  if (desk) {
+    return (
+      <div className="wsfile-tab in-desk">
+        {desk.slot && createPortal(controls, desk.slot)}
+        <div className="wsfile-body">{body}</div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="wsfile-tab">
+      <div className="wsfile-head">
+        <Icon size={14} className="wsfile-head-icon" />
+        <div className="wsfile-title" title={path ?? name}>
+          <span className="wsfile-name">{path ?? name}</span>
+          {ext && <span className="wsfile-ext">{ext}</span>}
+        </div>
+        {controls}
 
         {amadeusOpen && <button className="icon-btn" title={t('preview.openInAmadeus')} onClick={amadeusOpen}><NotebookPen size={14} /></button>}
         {path && <button className="icon-btn" title={t('preview.openWithDefault')} onClick={openWithDefault}><ExternalLink size={14} /></button>}

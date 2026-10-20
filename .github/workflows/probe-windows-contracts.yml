@@ -14,9 +14,15 @@ on:
       - 'desktop/scripts/plugin-space-hidden.check.cjs'
       - 'desktop/scripts/note-move-assets.e2e.cjs'
       - 'desktop/scripts/project-details.check.cjs'
+      - 'desktop/scripts/onboarding.check.cjs'
+      - 'desktop/scripts/onboarding-history.check.cjs'
+      - 'lcl/engine/MiniColumnHost.tsx'
       - 'tangu-agent/src/services/git*.ts'
       - 'tangu-agent/src/services/forsionGit*.ts'
       - 'tangu-agent/test/forsionPluginCheck.test.ts'
+      - 'tangu-agent/scripts/git-credentials.gitea.mjs'
+      - 'tangu-agent/scripts/live-harness.mjs'
+      - 'tangu-agent/scripts/lib/plugin-diag-live.mjs'
 permissions:
   contents: read
 jobs:
@@ -38,13 +44,15 @@ jobs:
         working-directory: tangu-agent
         run: |
           npx vitest run src/services/gitActions.test.ts src/services/gitActions.credentials.test.ts src/services/gitCredentials.test.ts src/services/forsionGit.test.ts src/services/forsionGitPublish.test.ts src/services/gitTrust.test.ts test/forsionPluginCheck.test.ts --maxWorkers=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/live-harness.mjs --selftest
           exit $LASTEXITCODE
       - name: Build and verify desktop contracts
         working-directory: desktop
         run: |
           npx tsc --noEmit
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          npx vitest run electron/amadeus/ipc.moveFileRefs.test.ts shared/amadeus/assets.test.ts shared/amadeus/propagateNoteRenames.test.ts electron/startupAppearance.test.ts electron/systemIcon.test.ts shared/miniPanel.test.ts
+          npx vitest run electron/amadeus/fs/vaultRel.test.ts frontend/src/amadeus/lib/slashRel.test.ts electron/amadeus/ipc.moveFileRefs.test.ts shared/amadeus/assets.test.ts shared/amadeus/propagateNoteRenames.test.ts electron/startupAppearance.test.ts electron/systemIcon.test.ts shared/miniPanel.test.ts
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run build
           exit $LASTEXITCODE
@@ -52,10 +60,15 @@ jobs:
         working-directory: desktop
         run: |
           New-Item -ItemType Directory -Force outputs/windows-contracts | Out-Null
-          foreach ($script in @('mini-card.check.cjs', 'plugin-space-hidden.check.cjs', 'note-move-assets.e2e.cjs', 'project-details.check.cjs')) {
+          $env:ONBOARDING_SHOTS = Join-Path $PWD 'outputs/windows-contracts/onboarding'
+          foreach ($script in @('mini-card.check.cjs', 'plugin-space-hidden.check.cjs', 'note-move-assets.e2e.cjs', 'project-details.check.cjs', 'onboarding.check.cjs')) {
             node "scripts/$script" 2>&1 | Tee-Object -FilePath "outputs/windows-contracts/$script.log"
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
+          $env:HARNESS_URL = 'http://localhost:5197/harness.html'
+          $env:SHOT_DIR = Join-Path $PWD 'outputs/windows-contracts/onboarding-history'
+          node scripts/e2e-editor.cjs --check=onboarding-history
+          exit $LASTEXITCODE
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -40,7 +40,7 @@ import { wikiFilesEnabled } from '../lib/wikiFiles'
 import { usePageStore, useScopedPageStore, flushAllScopes, remapScopePaths, cascadeFdAfterRename, claimTitleFocus, PageScopeCtx, useActivePageScope, hasPageScope, activePageScope } from '../store/pageStore'
 // 模式胶囊复用 `.t2s-vaultseg`(见渲染处):样式真源是侧栏那张表。App 里 amadeusViews 已显式引过,
 // 这里再引是给**独立挂载**兜底(harness / 只挂 UnifiedPage 的场景,不引就是一排裸按钮)。
-import '../../views/chat2/sidebar2.css'
+import '../../styles/sidebar2.css'
 import { announceUnifiedWrite, registerUnifiedPipe, retireUnifiedPath, unifiedScopeLive } from './lifecycle'
 import { AlertCircle, History } from 'lucide-react'
 import { Lock as LockIcon } from 'lucide-react'
@@ -49,7 +49,7 @@ import { unfoldCalloutsForInsert } from '../blocks/markdown/callout'
 import type { TextWriteResult } from '@amadeus-shared/ipc'
 import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { formatDateTime } from '../../format/time'
-import { SAVE_RETRY_MS, clearDraft, isElectronHost, readDraft, stashDraft, toastConflictCopy, toastGoneUnsaved, toastRenameCopy, toastRescued, toastSaveFailed, writeConflictCopy, type UnsavedDraft } from './writeSafety'
+import { SAVE_RETRY_MS, clearDraft, isElectronHost, mergeMovedText, readDraft, stashDraft, toastConflictCopy, toastGoneUnsaved, toastRenameCopy, toastRescued, toastSaveFailed, writeConflictCopy, type UnsavedDraft } from './writeSafety'
 import { docHeadings } from './outline'
 import { revealBlockAtTop } from './revealScroll'
 import { createStatsReader, createStatsTicker } from './noteStats'
@@ -58,8 +58,10 @@ import { createCaretMemory } from './caretMemory'
 import { findTextHit, unfoldToReveal } from './revealText'
 import { isLoneBlockId, trailingBlockId } from '@amadeus-shared/pdfLink'
 import { editorModeOf, useUiOverlay } from '../../amadeusOverlayStore'
-import { CanvasSegPortal } from './CanvasModeSeg'
+import { CanvasSegPortal, canvasModesSpec } from './CanvasModeSeg'
+import { useViewModes } from '@lcl/engine'
 import { claimCanvasToggle, releaseCanvasToggle } from './canvasToggleCommand'
+import { track } from '../../achievements/store'
 import { AmadeusPropertiesPanel, PropsDraftFlushContext } from '../../amadeusProperties'
 import { NoteCover, CoverPicker, IconPicker, randomEmoji, UNTITLED_RE } from '../chrome/pageChrome'
 import { OverlayPortal } from '../lib/overlayPortal'
@@ -302,6 +304,9 @@ interface Pipe {
   dead: boolean
   /** 改名/删除/移动后本实例退休:任何后续写盘都会把旧路径的文件写回来(复活幽灵文件),一律禁止。 */
   retired: boolean
+  /** 挪动 IPC 在途(lifecycle.holdUnifiedPath)的**层数**:非零就不写盘,改动留在手里,放手时交接(见 handOver)。
+   *  计数不是布尔(Codex 复核 P1):同一篇在慢挪动途中又被拖一次,后一次失败放手不许把前一次的按住清掉。 */
+  held?: number
   /** 写的时候发现文件已经没了(CAS 回 current:null,Codex 复核 inst P0-2)而退休时,已另存进副本的那份全文;null = 没发生过。
    *  删除通知到之前用户还可能接着打字 —— 退休 / 卸载时比对它,多出来的再另存一份,不许静默丢。 */
   gone?: string | null
@@ -771,13 +776,16 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
   }
 
   /** 新建 .fd 子文件(数据库/画板/笔记视图)→ 插 `![[base]]` 嵌入块。三处只差文件名与内容;锚由调用方在消费 '/query' 时钉好。 */
-  const createFdFile = async (name: string, bytes: Uint8Array, a: PendingAnchor | null, stripMd = false): Promise<void> => {
+  /** 返回是否真建成了(调用方据此记成就之类;失败已静默撤锚)。 */
+  const createFdFile = async (name: string, bytes: Uint8Array, a: PendingAnchor | null, stripMd = false): Promise<boolean> => {
     try {
       const { base } = await amadeus.saveAttachment(path, name, bytes, { mode: 'vault', folder: fdDirOf(path) })
       insertAsync(`![[${stripMd ? base.replace(/\.md$/i, '') : base}]]`, a) // Obsidian 惯例:嵌入链接省掉 .md
       void store.getState().syncFdChildren(path)
+      return true
     } catch {
       dropPending(a) // 保存失败静默跳过(v3 同款),锚撤掉
+      return false
     }
   }
 
@@ -906,7 +914,8 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
     }
     if (item.scaffold === S.database) {
       const dbName = translate('amadeus.default.database')
-      void createFdFile(`${dbName}.db`, new TextEncoder().encode(serializeDb(emptyDb(dbName))), pinPending(item.label))
+      // 斜杠菜单「多维表」也算建了一个数据库(笔记树右键那条在 amadeusViews);写盘失败不算
+      void createFdFile(`${dbName}.db`, new TextEncoder().encode(serializeDb(emptyDb(dbName))), pinPending(item.label)).then((ok) => { if (ok) track('base.create') })
       return
     }
     if (item.scaffold === S.drawing) {
@@ -1372,6 +1381,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     modeTouched.current = true
     writeNoteSurfaceMode(vaultRoot, path, next ? 'canvas' : 'doc')
     setCanvasOn(next)
+    if (next) track('note.canvas') // 只计切进画布(命令与胶囊都走这里)
     // 切模式本身**不算用过画布**(方案 §4):没物化过就只是换个视角,一个字节都不写。
     // 已物化的才把 mode 跟着落盘 —— 走的仍是同一条防抖单写者,不另开写路径。
     if (canvasLineOf(pipe.fm) != null) {
@@ -1383,6 +1393,8 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   toggleCanvasRef.current = toggleCanvas
   // 源码模式没有胶囊(见下方 CanvasSegPortal 的门),命令同口径空操作。
   canvasToggleImpl.current = mode === 'source' ? null : () => toggleCanvasRef.current()
+  // 视图模式标准(lcl viewModes):同一份「文档 / 画布」登记给 ⌥⌘V、命令面板「看法：X」与手机顶栏;源码模式没有胶囊,同口径不登记。
+  useViewModes(scope, mode === 'source' ? null : canvasModesSpec(canvasOn, () => toggleCanvasRef.current()))
   useEffect(() => {
     claimCanvasToggle(canvasToggleCmd) // 新开一篇不点正文也能用(同 setFocusedBlockApply 的挂载登记)
     return () => releaseCanvasToggle(canvasToggleCmd)
@@ -2177,6 +2189,74 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     }
   }
 
+  /** 挪动 IPC 落定后放手(lifecycle.holdUnifiedPath;按住期间 writeNow 一个字都不写)。没挪成 → 有待写就照旧写原路径。
+   *  挪成了 → 本实例退休,按住期间打的字交接到新路径:主进程已按新位置改写过这篇的图片 / 附件引用与 [[链接]],拿手里的
+   *  正文直接写 = 把改写盖回去(图又裂),所以与盘上那版按行三方合并(基线 = 挪之前落盘的那版)再比对交换写。
+   *  交接排在 pipe.chain 上、动 I/O 之前先同步存一份新路径草稿(Codex 复核 P0:严格冲洗 / 卸载 / 重载都得等得到它、
+   *  丢不了字)。按住期间回灌登记的待保全外部版本(unpreserved)照 writeNow 的规矩先另存。合不拢 / 一直被抢写 → 全文
+   *  另存冲突副本:它的引用按原文件夹写,单篇挪动落在原路径旁(那里图打得开,Codex 复核 P1),文件夹改名(原夹已没了)
+   *  落在新路径旁。调用方 await 完才改指(新路径的实例一挂载就读盘)。卸载了的实例也走这里(句柄在按住时取好)。 */
+  const handOver = (movedTo?: string, wholeFolder = false): Promise<void> => {
+    pipe.held = Math.max(0, (pipe.held ?? 0) - 1)
+    if (pipe.readOnly || pipe.retired) return Promise.resolve()
+    if (!movedTo) {
+      if (!pipe.held && pipe.pending) void writeNow() // 别的挪动还按着(同一篇连拖两次)就接着等它
+      return Promise.resolve()
+    }
+    pipe.retired = true // 旧路径已经没了:此后一个字都不写它;随后 remapScopePaths 的 retire(movedTo) 见已退休,不再存草稿
+    // ponytail: 从这里拉平到改指之间(两次 IPC 往返 + 一次重渲染)打的字随旧实例卸载丢掉 —— 与 doRename 补写同一个窗口。
+    syncFromEditor()
+    const text = composeFm(pipe.fm, pipe.body)
+    const settle = (): void => { // 按住期间卸载冲洗存在旧路径上的那份草稿:交接落定就是孤儿
+      if (pipe.stashed != null) clearDraft(vaultRoot, path, pipe.stashed, pipe.slot)
+      pipe.stashed = null
+    }
+    if (text === pipe.lastSaved) {
+      settle()
+      return Promise.resolve()
+    }
+    stashDraft(vaultRoot, movedTo, text, pipe.lastSaved, pipe.slot)
+    // ponytail: 文件夹改名时合不拢的副本落在新路径旁,指向夹外再绕回原夹的写法(`../A/x.png`)在副本里会断(字不丢);要堵得给副本也跑一遍引用改写。
+    const copyBeside = wholeFolder ? movedTo : path
+    // 每次落笔前核库根(Codex 复核 P0):标签在交接途中关掉,实例就出了登记处,换库屏障等不到它 —— 库根换了就不写,
+    // 草稿记在旧库的新路径上(同 retire 的换库分支)。
+    const sameVault = (): boolean => (scoped.getState().vaultRoot ?? null) === (vaultRoot ?? null)
+    const io = async (): Promise<void> => {
+      try {
+        if (!sameVault()) return
+        if (pipe.unpreserved != null && pipe.unpreserved !== text) {
+          toastConflictCopy(movedTo, await writeConflictCopy(copyBeside, toDisk(pipe.unpreserved, pipe.eol)))
+        }
+        pipe.unpreserved = null
+        const ours = toDisk(text, pipe.eol)
+        const base = toDisk(pipe.lastSaved, pipe.eol)
+        for (let i = 0; i < 3; i++) {
+          const theirs = await amadeus.readTextFile(movedTo)
+          const merged = theirs == null ? null : mergeMovedText(base, ours, theirs)
+          if (merged == null) break
+          if (!sameVault()) return
+          const r = await amadeus.writeTextFile(movedTo, merged, { base: textFingerprint(theirs!) })
+          if (!r || r.ok !== false) {
+            clearDraft(vaultRoot, movedTo, text, pipe.slot)
+            settle()
+            return
+          }
+          if (r.current == null) break // 新路径也没了
+        }
+        if (!sameVault()) return
+        toastRenameCopy(movedTo, await writeConflictCopy(copyBeside, ours), true)
+        clearDraft(vaultRoot, movedTo, text, pipe.slot)
+        settle()
+        void scoped.getState().refreshPages() // 副本是新文件:树 / 补全要看得见它
+      } catch (e) {
+        toastSaveFailed(movedTo, e) // 新路径草稿已在(上面先存的):打开它时提示恢复
+      }
+    }
+    const task = pipe.chain.then(io, io)
+    pipe.chain = task.catch(() => {})
+    return task
+  }
+
   /** 写失败(D-04):首次即提示 + 「未保存」条;按退避补写;草稿同步存进本机(渲染层随时可能被关)。 */
   const noteWriteFailed = (error: unknown): void => {
     // 已退休(在途那发写在删除 / 移动之后才失败):路径已不归本实例,存草稿 = 旧路径上的孤儿(收口 N-5,同卸载冲洗)。
@@ -2233,6 +2313,12 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     const step = async (): Promise<void> => {
       let conflicts = 0
       while (!pipe.retired) {
+        // 挪动 IPC 在途:旧路径随时会没,写上去 = ENOENT → 原文件夹里生出冲突副本。不写,字留到放手时交接。
+        // 严格冲洗(切号屏障)要的是「全落盘」,按住时做不到就拒绝。
+        if (pipe.held) {
+          if (strict && composeFm(pipe.fm, pipe.body) !== pipe.lastSaved) throw new Error('The note is being moved')
+          return
+        }
         const text = composeFm(pipe.fm, pipe.body) // 执行时 compose:链上永远写「此刻」的状态
         if (text === pipe.lastSaved) {
           pipe.pending = false
@@ -2722,6 +2808,11 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         return writeNow(strict)
       },
       insertFiles: (files) => insertFilesHere(files),
+      hold: () => {
+        pipe.held = (pipe.held ?? 0) + 1
+        return pipe.chain // 已经发出的那发写先落定(在主进程动文件之前);链恒不 reject
+      },
+      release: (movedTo, wholeFolder) => handOver(movedTo, wholeFolder),
       // G1-05:外科写 fm 的实例写口 —— 与 chrome 改图标同一条路(setFm:patchFm → 立即写盘,CAS 带基线)。
       patchFm: (patch, follow = false) => {
         if (pipe.readOnly || pipe.retired || pipe.dead) return null
@@ -3231,7 +3322,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
           零尺寸、不吃指针 —— 它不参与任何布局。 */}
       <span ref={segAnchorRef} className="amx-seg-anchor" aria-hidden />
       {mode === 'source' ? null : (
-        <CanvasSegPortal anchor={segAnchor} on={canvasOn} toggle={() => toggleCanvasRef.current()} />
+        <CanvasSegPortal anchor={segAnchor} on={canvasOn} toggle={() => toggleCanvasRef.current()} leafId={scope} />
       )}
       {/* 画布模式满铺(用户 2026-08-17 拍板「像 AFFiNE 一样整个 view 显示」):封面/标题/属性整层
           不渲染,笔记体脱出 920px 纸面铺满面板。⚠️ 这几个槽位用 `x ? <A/> : null` 而不是把它们
@@ -3337,6 +3428,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         <div
           ref={bodyRef}
           className={`page-view unified-body${canvasOn ? ' amx-canvas' : ''}${fullCanvas ? ' amx-canvas-full' : ''}`}
+          data-guide-anchor={canvasOn || readOnly ? undefined : 'note-body'}
           style={mode === 'source' ? { display: 'none' } : undefined}
           aria-hidden={mode === 'source' || undefined}
           data-bare

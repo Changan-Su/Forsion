@@ -163,6 +163,15 @@ describe('registry 级:deferredUnlocksFromHistory 跨 run 延续解锁', () => {
     expect(deferredUnlocksFromHistory([], catalog).size).toBe(0);
     expect(deferredUnlocksFromHistory([{}, { tool_calls: [] }], catalog).size).toBe(0);
   });
+
+  it('历史里有原生图片 parts:改图 / 生图在起点预解锁(只限 catalog 里有的);文字或没图不预载', () => {
+    const withImg = [...catalog, { name: 'edit_image' }, { name: 'generate_image' }];
+    const img = { role: 'user', content: [{ type: 'text', text: 'hi' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,AA' } }] };
+    expect([...deferredUnlocksFromHistory([img], withImg)].sort()).toEqual(['edit_image', 'generate_image']);
+    expect([...deferredUnlocksFromHistory([img], [...catalog, { name: 'edit_image' }])]).toEqual(['edit_image']); // 生图不可见就不出现
+    expect(deferredUnlocksFromHistory([img], catalog).size).toBe(0);
+    expect(deferredUnlocksFromHistory([{ role: 'user', content: '[图片转写] 一张体检报告' }, { content: [{ type: 'text', text: 'x' }] }], withImg).size).toBe(0);
+  });
 });
 
 describe('registry 级:preset=coding 产品面工具转 deferred(WB-Bench 收敛)', () => {

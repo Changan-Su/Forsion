@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type { SessionRecord } from '../types'
+import type { BtwSeed } from '@tangu/ui/views/chat2/btwStore'
 import { inheritChildRows } from '../services/engine/targets'
 
 export interface ChildChatTarget {
@@ -9,6 +10,8 @@ export interface ChildChatTarget {
   runId?: string
   slug?: string
   task?: string
+  /** 顺便问(10-18 挂点统一:和子会话开在同一块面板里,一次只开一个)。 */
+  aside?: BtwSeed
 }
 
 /** Child selection belongs to its parent. Opening it never changes the main session. */

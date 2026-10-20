@@ -14,7 +14,8 @@
     "preview": "vite preview",
     "prepare-fonts": "node ../desktop/build/gen-fonts.cjs --out public/fonts",
     "prepare-assets": "npm run prepare-board && npm run prepare-fonts",
-    "check:dockerctx": "node scripts/docker-context-build.mjs"
+    "check:dockerctx": "node scripts/docker-context-build.mjs",
+    "e2e:pad": "node scripts/pad-layout.e2e.cjs"
   },
   "dependencies": {
     "@excalidraw/excalidraw": "npm:@zsviczian/excalidraw@0.18.122",
@@ -43,6 +44,7 @@
     "lucide-react": "^1.17.0",
     "lz-string": "^1.5.0",
     "nanoid": "^5.1.11",
+    "node-diff3": "^3.2.1",
     "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^5.7.284",
     "qrcode": "^1.5.4",

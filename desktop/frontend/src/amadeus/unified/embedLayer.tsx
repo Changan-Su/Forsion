@@ -19,6 +19,7 @@ import { NodeSelection, Plugin, PluginKey, TextSelection, type Transaction } fro
 import { Decoration, DecorationSet } from '@milkdown/kit/prose/view'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
+import { AddMarkStep, RemoveMarkStep } from '@milkdown/kit/prose/transform'
 import type { MilkdownPlugin } from '@milkdown/kit/ctx'
 import { lazyRetry } from '../../lazyRetry'
 import { stripPageBasename } from '@amadeus-shared/compiler/names'
@@ -40,7 +41,7 @@ import { DocumentAgentBlock } from '../blocks/documentAgent/DocumentAgentBlock'
 import { parseDocAgentSpec, serializeDocAgentSpec, type DocAgentSpec, type DocumentAgentKind } from '../blocks/documentAgent/format'
 import { readTangu } from '../plugins/tanguSeam'
 import { instructionsOf, pageInstructionContext } from './pageInstructions'
-import { SKETCH_LANG } from '../blocks/sketch/format'
+import { isSketchLang } from '../blocks/sketch/format'
 import { SketchCards } from '../../components/SketchCard'
 import { parseButtonBlock, serializeButtonBlock, type ButtonSpec } from '../blocks/button/format'
 import { usePageStore } from '../store/pageStore'
@@ -116,7 +117,7 @@ export type EmbedKind =
   | { k: 'web'; url: string; w?: number }
   | { k: 'button'; src: string }
   | { k: 'document-agent'; type: DocumentAgentKind; src: string; activeInstructions?: boolean }
-  /** ```forsion-sketch 交互块:HTML 交给对话 sketch 卡同一沙箱(blocks/sketch/format.ts)。 */
+  /** ```forsion-intelligent-ui-html(旧名 forsion-sketch)交互块:HTML 交给对话 sketch 卡同一沙箱(blocks/sketch/format.ts)。 */
   | { k: 'sketch'; src: string }
 
 /** 段落/代码块 → 嵌入类别(不是嵌入 → null)。图片形态刻意返回 null(wikilink 行内层负责)。 */
@@ -125,7 +126,7 @@ export function classifyEmbed(node: ProseNode): EmbedKind | null {
     const type = ({ 'forsion-instructions': 'instructions', 'forsion-task': 'task', 'forsion-prompt': 'prompt' } as Record<string, DocumentAgentKind>)[node.attrs.language]
     if (type && (type === 'instructions' || parseDocAgentSpec(node.textContent))) return { k: 'document-agent', type, src: node.textContent }
     // 空的交互块不认领:源码还露着,才写得进去(和按钮块坏 JSON 回落同理)。
-    if (node.attrs.language === SKETCH_LANG) return node.textContent.trim() ? { k: 'sketch', src: node.textContent } : null
+    if (isSketchLang(node.attrs.language)) return node.textContent.trim() ? { k: 'sketch', src: node.textContent } : null
     if (node.attrs.language !== 'forsion-button') return null
     // JSON 写坏了 = 不归按钮(R-13):回落成普通代码块,源码原样露出、照常可改(button/format.ts 的契约)。
     // 此前照样认领,渲染期解析失败只给一个空 <span/> —— 整块高 0、源码被藏、`</>` 浮不出来,只剩撤销能救。
@@ -460,6 +461,30 @@ function changedOnlyWithin(tr: Transaction, from: number, to: number): boolean {
   return ok
 }
 
+/** 这次事务动没动到嵌入(长笔记打字快路径):每一步改动都落在单个文本块里、且这个块改前改后都不是嵌入 → 没动到。
+ *  这时整篇重建装饰得到的是同一份结果(嵌入的类别、全文、同文序号、所在层级都没变),沿用旧装饰 map 过去即可;
+ *  拿不准的(跨块、拆段 / 合段、包进列表、改到嵌入段自己)一律算动到了,照旧整篇重建。只加标记的步骤没有改动区间,不改全文。 */
+export function embedsUntouched(tr: Transaction): boolean {
+  let ok = true
+  tr.steps.forEach((step, i) => {
+    if (!ok) return
+    const before = tr.docs[i]
+    const after = tr.docs[i + 1] ?? tr.doc
+    let ranges = 0
+    step.getMap().forEach((oldFrom, oldTo, newFrom, newTo) => {
+      ranges++
+      if (ok && !(inPlainTextblock(before, oldFrom, oldTo) && inPlainTextblock(after, newFrom, newTo))) ok = false
+    })
+    // 不挪位置的步骤 StepMap 是空的:加 / 去标记不影响认嵌入(只看文本),改节点属性(代码块语言)会,整篇重建
+    if (!ranges && !(step instanceof AddMarkStep || step instanceof RemoveMarkStep)) ok = false
+  })
+  return ok
+}
+function inPlainTextblock(doc: ProseNode, from: number, to: number): boolean {
+  const $from = doc.resolve(from)
+  return $from.parent.isTextblock && $from.depth > 0 && $from.sameParent(doc.resolve(to)) && !classifyEmbed($from.parent)
+}
+
 export function createEmbedLayer(opts: { path: string; readOnly?: boolean; flush?: () => Promise<void>; alive?: () => boolean }): MilkdownPlugin[] {
   const plugin = $prose(() => {
     const key = new PluginKey('UNIFIED_EMBED_LAYER')
@@ -467,7 +492,10 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean; flush
     // Async tasks follow the original node, never a later copy with the same persisted ID.
     const taskSources = new Set<{ from: number; to: number; deleted: boolean }>()
 
+    // 插件后注册的嵌入渲染器只在下一次整篇重建时生效;快路径看到表换了就不走捷径。
+    let builtWith = usePluginStore.getState().embedRenderers
     const buildDecos = (doc: ProseNode, selFrom: number, selTo: number, sourcePos: number | null, pendingPos: number | null = null, revealPos: number | null = null): DecorationSet => {
+      builtWith = usePluginStore.getState().embedRenderers
       const decos: Decoration[] = []
       const seen = new Map<string, number>() // 同文嵌入按出现序号区分身份(Codex 终审 P1:同 key 共享 DOM 会互相拆台)
       const visit = (node: ProseNode, pos: number): void => {
@@ -775,6 +803,13 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean; flush
             if (editorFocused(newState) || was === at) revealPos = at
           }
           if (!tr.docChanged && !tr.selectionSet && !meta && pendingPos === old.pendingPos && revealPos === old.revealPos) return { sourcePos, pendingPos, revealPos, decos: old.decos.map(tr.mapping, tr.doc) }
+          // 长笔记快路径:在普通段落里打字、只挪光标,嵌入和三处位置标记都没变 → 整篇重建(doc.descendants 全树 + 每段取全文跑正则)
+          // 得到的是同一份装饰,沿用旧的。露着源码(sourcePos)时选区会决定藏不藏,不走捷径。
+          const mapped = (pos: number | null, assoc = 1): number | null => (pos == null ? null : tr.mapping.map(pos, assoc))
+          if (!meta && sourcePos == null && old.sourcePos == null && pendingPos === mapped(old.pendingPos, -1) && revealPos === mapped(old.revealPos) &&
+              builtWith === usePluginStore.getState().embedRenderers && embedsUntouched(tr)) {
+            return { sourcePos, pendingPos, revealPos, decos: old.decos.map(tr.mapping, tr.doc) }
+          }
           return {
             sourcePos,
             pendingPos,

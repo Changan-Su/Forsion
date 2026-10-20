@@ -13,6 +13,8 @@ Chat Box 的卡面、输入、操作栏和提交按钮由 `@lcl/components` 维�
 
 `ctx.ui?.mountChatBox` 可挂到插件自己的 View 中，不需要 React。当前支持文本输入、模型选择、思考档、键盘提交；附件、命令、审批和运行控制属于会话编排器，未接线的行为不显示。
 
+要整块「新对话」输入区（主页那一套：附件、模式、项目栏、运行位置、语音、通话）时用 `ctx.tangu?.mountComposer`：宿主组件是 `desktop/frontend/src/views/newChatComposer.tsx` 的 `NewChatComposer`，内置主页和插件挂的是同一份，发送一律由宿主建会话、切到 Tangu。Use `ctx.tangu?.mountComposer` for the full new-chat composer from Home; the host owns sending.
+
 ```js
 ctx.registerView({
   id: 'prompt', title: 'Prompt',
@@ -204,6 +206,56 @@ A plugin view opts in with `ctx.ui?.mountSelectionBar?.(root, opts)`. A view tha
 
 Add actions with `ctx.registerSelectionAction`; they are listed behind "⋯" under "Plugins". Without `scope` an action appears in notes only, as before. `scope: 'all'` lists it in every view that shows the bar, `'own'` only in the plugin's own views, and an array names views (`'note'`, `'chat'`, `'<pluginId>:<viewId>'`). `when({ view, editable, length })` must return true for the action to be listed; it never receives the selected text, which only reaches the plugin through `run(cx)` after the user picks the action. The markdown `run` returns goes to the host's result card: Replace / Insert below / Copy / Discard in an editable note, where nothing is written until the user confirms, and read-only (Copy / Close) everywhere else. `output: 'none'` means the plugin handles the result and the host shows no card. `cx.pagePath` is only set in notes. Hosts up to 2.13.3 ignore the new fields: the action stays note-only under "AI ▾ → Plugins".
 
+### 设置零件 / Settings parts (2026-10-17)
+
+设置页、商店页用的那批小零件（分组面板、设置行、开关、按钮、输入框、分段、下拉，以及新加的数值、额度条、步进器、代码 + 复制、半屏选择 / 确认、空 / 加载 / 出错）对插件开放。主接法是 `ctx.ui.mountSettingsPage(el, schema)`：插件交一份整页描述（有哪些组、每组有哪些项、值和回调），宿主按端去画；`ctx.ui.mountSettingsItem(el, item)` 一次挂一件，用来补位（例如放进 `custom` 块里）。宿主自己的「设置 → 通知」用的是同一份画法。类型真源：`desktop/shared/settingsPage.ts`；渲染在应用层的 `components/SettingsPage`。
+
+```js
+const zh = ctx.getLocale?.() === 'zh'
+const page = ctx.ui?.mountSettingsPage?.(el, { groups: [
+  { id: 'quota', icon: 'gauge', title: zh ? 'AI 额度' : 'AI quota', items: [
+    { type: 'meters', id: 'm', meters: [{ label: zh ? '今日' : 'Today', value: 0.69 }] },
+    { type: 'button', id: 'reset', title: zh ? '额度重置卡' : 'Reset card', buttons: [{ label: zh ? '使用一张' : 'Use one', onClick: useCard }] },
+  ] },
+  { id: 'bg', icon: 'clock', title: zh ? '后台额度' : 'Background quota', items: [
+    { type: 'switch', id: 'fallback', title: zh ? '用完后改用 AI 额度继续' : 'Fall back to AI quota', value: true, onChange: save },
+    { type: 'choice', id: 'convert', title: zh ? '从 AI 额度转入' : 'Convert from AI quota', button: zh ? '转入…' : 'Convert…',
+      options: [{ value: '5', label: '5%' }, { value: '10', label: '10%' }, { value: '20', label: '20%' }], onPick: convert },
+  ] },
+] })
+if (!page) drawOwnPage(el)
+```
+
+| 项 `type` | 画成 | 手机上（≤820 px） |
+| --- | --- | --- |
+| `switch` | 开关；回调返回的 promise 失败会弹回去 | 留在标题右边 |
+| `value` | 只读数值（插件格式化好的字符串） | 留在右边 |
+| `button` | `buttons: [...]`，`kind` 为 `primary` / `ghost`（缺省）/ `danger`，可带 `confirm` | 一枚留右；两枚以上换到下一行并占满 |
+| `input` | 输入框，可带一枚按钮（`onClick(text)`） | 换到下一行并占满 |
+| `segmented` | 切换设置的分段选择 | 放得下就照画分段 |
+| `select` | 下拉 | 换到下一行并占满 |
+| `choice` | 「选了就执行」：桌面一排按钮 | 一枚按钮（文字 = `button`）+ 半屏；Android 走原生半屏，网页手机壳走宿主半屏 |
+| `stepper` | − 数值 +，可带一枚按钮（`onClick(n)`） | 换到下一行 |
+| `code` | 代码 + 复制按钮 | 留在右边 |
+| `meters` | 额度条，桌面两列、手机一列；填充用宿主的 `--action-fill` | — |
+| `state` | `empty` / `loading` / `error`，可带重试 `action`；页面级 `{ state }` 整页只画它 | — |
+| `custom` | 宿主给一块空元素，`mount(el)` 每个 id 只调一次，块没了 / 整页卸载时调它返回的收尾 | — |
+
+- **文字和颜色**：零件不带文字，全部由插件传入（中英文跟插件自己的词条）；宿主只提供读屏名（步进器 ± ）和确认框的「取消」。零件只用宿主变量，跟明暗与配色走，插件不传颜色。分组 `icon` 取图标词表的名字，这次加了 `bell`、`gauge`、`coins`、`clock`、`gift`、`user`、`shield`、`package`、`activity`、`message`、`plug`、`list-checks`。
+- **触屏**：按钮、输入框、步进器高 36。
+- **身份与更新**：每个组和项都要稳定的 `id`，宿主按它认行。`update(schema)` 整份替换。给了的 `value` 每次 update 都以它为准；输入框 / 步进器不给 `value` 就保留用户已经输入的，要清空就传 `value: ''`。按钮回调返回 promise 时按钮禁用到它结束。
+- **生命周期**：与其他 `ctx.ui.mount*` 同一套（挂在宿主加进 `el` 的一层里；`dispose()` 后 `el` 立刻归还；同一个 `el` 后调用的挂载收掉前一份）。插件停用、重载时宿主统一收，之后回调不再调用；形态不对（`el` 不是元素、`groups` 不是数组、两样都没给）同步抛 `TypeError`。
+- **旧宿主**：2026-10-17 之前的宿主没有这两个方法。先 `ctx.ui?.mountSettingsPage` 探测，没有就继续用自己画的那套，别抄宿主的设置 CSS 冒充。
+- **不在这一批**：卡片网格、表格（背包、商店、用量记录要用）放第二批；平板两栏等平板档定稿，零件本身不变。
+
+The small parts used by settings and store pages are open to plugins: group panels, setting rows, switches, buttons, inputs, segmented controls and selects, plus new values, usage meters, steppers, code with copy, half-sheet choices and confirmations, and empty / loading / error states. The main entry is `ctx.ui.mountSettingsPage(el, schema)`: the plugin describes the page (groups, items, values and callbacks) and the host draws it per device. `ctx.ui.mountSettingsItem(el, item)` mounts one part at a time for anything the description does not cover, for example inside a `custom` block. The host's own Settings → Notifications page uses the same renderer. Types live in `desktop/shared/settingsPage.ts`; the renderer is the application-level `components/SettingsPage`.
+
+- On phones (≤820 px) switches, values, codes and single buttons stay to the right of the title; inputs, selects, steppers and two or more buttons move under it and fill the row; a segmented control stays one while it fits; a `choice` (picking runs something) becomes one button labelled `button` that opens a half sheet — native on Android, the host's sheet on the mobile web. Touch targets are 36 px tall.
+- Parts carry no text and no colors: every label comes from the plugin, and colors follow the host theme. Group icons use vocabulary names; this release adds `bell`, `gauge`, `coins`, `clock`, `gift`, `user`, `shield`, `package`, `activity`, `message`, `plug` and `list-checks`.
+- Every group and item needs a stable `id`. `update(schema)` replaces the whole description. A `value` you pass is applied on every update; leave an input's or stepper's `value` out to keep what the user typed, or pass `''` to clear it. A rejected switch / segmented / select callback flips the control back; a button whose callback returns a promise stays disabled until it settles. `confirm` on a button asks first (a native half sheet on Android).
+- The same mount protocol as the other `ctx.ui.mount*` applies: the element is yours again after `dispose()`, one host mount per element, and the host disposes mounts on disable or reload, after which no callback runs. Malformed calls throw `TypeError` synchronously. Hosts before 2026-10-17 lack both methods: feature-detect and keep your own page; do not imitate the host by copying its CSS.
+- Card grids and tables come in a later batch; a two-column tablet layout waits for the tablet design. The parts themselves will not change.
+
 ### Recording model choices / 记录中的模型选择（2026-10-14）
 
 `ctx.ui?.mountModelPicker?.(el, { kind, value, label, followLabel, scopeKey, onChange })` mounts the existing native ModelPill menu without a prompt input. `kind` is `asr` or `translation`; `value: ''` follows that global slot, while ASR `value: 'local'` selects on-device SenseVoice. It reads the home engine catalog, includes dedicated translation models, and follows native model sorting and grouping preferences. Selection is a local draft delivered through `onChange`; the host never changes global settings or starts a model call. Use `{ update(patch), dispose() }`, change `scopeKey` when switching recordings, and feature-detect together with `ctx.tangu.modelCatalog`. Unready on-device models are explained and cannot become selected; download them through Settings → Voice. The host disposes the picker and aborts an open menu when the plugin is disabled or reloaded.
@@ -211,3 +263,38 @@ Add actions with `ctx.registerSelectionAction`; they are listed behind "⋯" und
 `ctx.tangu?.modelCatalog?.(kind)` returns `{ models, defaultModelId }` from the same home target used by desktop ASR and inline AI. Each model has `id`, `name`, `provider`, `source`, `available`, and `supportsCorrection`; dedicated machine-translation models set `supportsCorrection: false`. No credentials are returned. `ctx.tangu.complete` and `ctx.tangu.translate` accept optional `modelId` overrides and return optional `model: { id, name, mt? }` provenance. An explicit override never writes the global model slot. When it is omitted, the existing global-slot behavior remains available. Desktop `window.tangu.transcribeAudio` accepts per-call `backend: 'local' | 'cloud'` as well as `modelId`; explicit offline ASR never falls through to a cloud Provider when the local model is unavailable.
 
 这组接口复用原生模型选择器，选择保持为插件的局部草稿；模型调用和记录级持久化仍由插件负责。空值跟随全局设置，ASR 的 `local` 代表本机 SenseVoice。目录来自实际执行调用的 home 引擎；专用翻译模型通过 `supportsCorrection` 标明只支持翻译。切换记录更新 `scopeKey`，通过 `dispose()` 收回宿主挂载；插件禁用或重载也会自动清理。旧宿主没有这些可选方法时，保留跟随全局设置的界面，不显示无法兑现的记录级覆盖。
+
+### 一行记录的编辑字段 / Record fields (2026-10-17)
+
+`ctx.ui?.mountRecord?.(el, { path, rowId, dateCol, readOnly })` 把宿主日历事件浮卡里那排字段（标题、时间摘要和展开编辑、其余属性）画进插件自己的卡片。组件是应用层的 `views/calendar/EventCard` 里的 `RecordFields`，内置日历的浮卡用的是同一个。改动直接写那张表，与 `ctx.databases.setCell` 同一条写口，和打开着的表格是同一份数据。外框、关闭、「打开 / 删除」、定位都归插件。只有声明了 `databases` 的插件才有；`path` 不是库里的表或缺 `rowId` 时同步抛 `TypeError`。`dateCol` 必须是日期类列，否则忽略。行被删或换了库就什么都不画；叠加源（只读表）和 `readOnly: true` 只显示值。句柄是 `update(patch)` 和 `dispose()`，`dispose()` 后 `el` 归还，插件禁用或重载时宿主统一卸载。
+
+`ctx.ui?.mountRecord?.(el, { path, rowId, dateCol, readOnly })` mounts the field list from the host calendar's event card (title, time summary with its editor, other properties) into the plugin's own card. The component is `RecordFields` in the app-level `views/calendar/EventCard`, the same one the built-in calendar card uses. Edits write to the table through the same path as `ctx.databases.setCell`, sharing data with any open table view. The plugin owns the frame, close button, Open / Delete actions and positioning. Only plugins that declare `databases` get it; a `path` that is not a table in the vault or a missing `rowId` throws `TypeError` synchronously. `dateCol` must be a date column and is ignored otherwise. A deleted row or a vault switch renders nothing; overlays (read-only tables) and `readOnly: true` show values only. The handle has `update(patch)` and `dispose()`; after `dispose()` the element is yours again, and the host unmounts on plugin disable or reload.
+
+### 视图模式 / View modes (2026-10-19)
+
+同一份东西换一种看法（对话 / 画布、文档 / 画布、转写 / 笔记 / 纪要、日 / 周 / 3 日 / 月）全应用一个摆法：胶囊在**视图头行的最左**，头行 32px、在纸卡里、不随正文滚；视图自己的标题排在胶囊后面。一个视图最多一颗，2–4 种；超过 4 种的用标签（数据库视图）。筛选、换来源的胶囊长相一样，但不放进这个位置。方案与取舍见仓根 `docs/ToBeImproved/视图模式切换标准方案_2026-10-19`。
+
+- 原生视图：`useViewModes(leaf.id, { modes, value, onChange })`（`@lcl/engine`）登记，再在头行最左放 `<ViewModeSwitch leafId={leaf.id} />`；没有自己顶栏的视图整行用 `<ViewHead leafId>{按钮}</ViewHead>`。已有顶栏的（Amadeus `.amx-toolbar`、日历 `.amx-cal-bar`）给那一行加 `container: lcl-viewhead / inline-size`，窄时的退化才认得这一行的宽度。
+- 宿主统一管：⌥⌘V（Windows / Linux：Ctrl+Alt+V）切到下一种；命令面板里每种一条「看法：X」；悬停提示「X（⌥⌘V）」（选项自带键的如日历「D」写自己的）；视图宽度 < 480 只留图标（每种都给了图标时），< 320 收成「当前 ▾」下拉；手机单列壳里视图自己不画，胶囊在顶栏两颗胶囊中间，原生顶栏下进「⋯」的「看法」一节。
+- 记忆归视图：笔记按篇、对话按树根、谛听按记录、日历全局、Code Studio 按项目；宿主不替它存。
+- 当普通零件用（不进 ⌥⌘V，比如浮窗里的预览 / 源码）：`<ViewModeSwitch spec={{ modes, value, onChange }} />`（`@lcl/components`）；`compact` 恒只留图标。
+
+插件视图用 `ctx.ui?.setViewModes?.(el, spec)`：`el` 是 `mount()` 收到的那个元素，`spec = { modes: [{ id, label, labelEn?, icon? }], value, onChange(id) }`，`icon` 用插件图标词表里的名字（新增 `audio-lines` / `notebook-pen` / `list-checks`）。句柄 `{ set(id), update(patch), actions, dispose() }`：`set` 只改胶囊、不回调 `onChange`；`actions` 是同一行右边的空位，把自己栏里的按钮放进去，整个视图只剩一条头行。同一视图再调一次 = 覆盖；插件禁用 / 重载 / 视图关闭时宿主收回。少于 2 或多于 4 种同步抛错。旧宿主没有这个方法：保留自己的标签。
+
+```js
+mount(el) {
+  const modes = ctx.ui?.setViewModes?.(el, {
+    modes: [{ id: 'transcript', label: '转写', labelEn: 'Transcript', icon: 'audio-lines' }, { id: 'summary', label: '纪要', labelEn: 'Summary', icon: 'list-checks' }],
+    value: memo[recordId] || 'transcript',
+    onChange: (id) => { memo[recordId] = id; show(id) },
+  })
+  if (modes) modes.actions.append(myMoreButton)
+  else drawOwnTabs(el)
+  return () => modes?.dispose()
+}
+```
+
+The same thing seen another way (Chat / Canvas, Document / Canvas, Transcript / Notes / Summary, Day / Week / 3 days / Month) has one place everywhere: a switch at the **left end of the view's head row**, a 32px row inside the paper that does not scroll; the view's own title follows the switch. One switch per view with 2–4 modes; more than four stays as tabs (database views). Filter and source pills look the same but never sit in that slot. Native views register with `useViewModes(leaf.id, { modes, value, onChange })` from `@lcl/engine` and render `<ViewModeSwitch leafId />` (or `<ViewHead leafId>` for a whole row). The host owns ⌥⌘V (Ctrl+Alt+V) to the next mode, one "View: X" command per mode, the hover hint, icons only under 480px of view width, a "Current ▾" menu under 320px, and the phone top bar (the view draws nothing in the single-column shell; under the native Android top bar the modes are a "View mode" section of "⋯"). The view remembers the mode per thing it shows; the host stores nothing. `<ViewModeSwitch spec />` from `@lcl/components` is the plain part for places outside a view.
+
+Plugin views call `ctx.ui?.setViewModes?.(el, spec)` with the element `mount()` received. `spec` is `{ modes: [{ id, label, labelEn?, icon? }], value, onChange(id) }` with icon names from the plugin icon vocabulary. The handle has `set(id)` (moves the switch without calling `onChange`), `update(patch)`, `actions` (the right end of the same row — move your toolbar buttons there so the view keeps one head row) and `dispose()`. Calling it again on the same view replaces the previous one; the host removes it on disable, reload or view close. Fewer than 2 or more than 4 modes throws. Older hosts lack the method: keep your own tabs there.
+

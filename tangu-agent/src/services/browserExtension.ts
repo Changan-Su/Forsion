@@ -12,7 +12,7 @@
  * 连接码按引擎家目录各存一份 → dev / 正式版 / CLI 互不串(端口也各配各的,桌面经 env 注入)。
  */
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
@@ -58,19 +58,29 @@ function allowedOrigins(): Set<string> {
 
 function tokenFile(): string { return path.join(tanguHome(), 'browser-extension.json'); }
 
+type TokenFile = { token?: string; lastClient?: { version: string; at: number } };
+const readTokenFile = (): TokenFile => { try { return JSON.parse(readFileSync(tokenFile(), 'utf8')) || {}; } catch { return {}; } };
+const writeTokenFile = (f: TokenFile): void => {
+  mkdirSync(tanguHome(), { recursive: true });
+  // 先写临时文件再改名:每次连上都会记 lastClient,原地截断重写时磁盘一满就把令牌弄丢、配对全失效(Codex 10-20)
+  const tmp = `${tokenFile()}.${process.pid}.tmp`;
+  writeFileSync(tmp, `${JSON.stringify(f, null, 2)}\n`, { mode: 0o600 });
+  renameSync(tmp, tokenFile());
+};
+
 /** 连接码里的令牌:首次用时生成并落盘(0600);reset=true 换一枚新的(旧配对随即失效)。 */
 export function extensionToken(reset = false): string {
-  if (!reset) {
-    try {
-      const t = JSON.parse(readFileSync(tokenFile(), 'utf8')).token;
-      if (typeof t === 'string' && /^[0-9a-f]{32,}$/.test(t)) return t;
-    } catch { /* 没有或坏了 → 重新生成 */ }
-  }
+  const f = readTokenFile();
+  if (!reset && typeof f.token === 'string' && /^[0-9a-f]{32,}$/.test(f.token)) return f.token;
   const token = randomBytes(24).toString('hex');
-  mkdirSync(tanguHome(), { recursive: true });
-  writeFileSync(tokenFile(), `${JSON.stringify({ token }, null, 2)}\n`, { mode: 0o600 });
+  writeTokenFile({ ...f, token }); // 换码不丢 lastClient:装过的扩展换码后是「未连接」,不是「未安装」
   if (reset) for (const c of clients) c.ws.close(4001, 'code reset');
   return token;
+}
+
+/** 最近一次连上来的扩展(版本 + 时刻):设置页据此分「未安装」(从没连上过)和「未连接」。 */
+function rememberClient(version: string): void {
+  try { writeTokenFile({ ...readTokenFile(), lastClient: { version, at: Date.now() } }); } catch { /* 记不下只影响状态文案 */ }
 }
 
 export function connectCode(): string { return `tangu:${extensionPort()}:${extensionToken()}`; }
@@ -83,10 +93,12 @@ function proofOk(got: unknown, message: string): boolean {
   return have.length === want.length && timingSafeEqual(have, want);
 }
 
-/** 随包的扩展目录(用户「加载已解压的扩展程序」时选它):dist/services → ../../browser-extension。
+/** 随包的扩展目录(用户「加载已解压的扩展程序」时选它)。扩展本体 10-19 起是 Forsion Clip(私有仓,发 npm @forsion/clip),
+ *  桌面安装包把它放在 resources/tangu-server/browser-extension;dev / 台架由 TANGU_BROWSER_EXTENSION_DIR 指过去。
  *  跑的是热更新下来的引擎时(启动器设了 TANGU_BUNDLED_ROOT)仍指安装包那份:用户在 Chrome 里加载的是一个固定路径,
  *  跟着引擎版本目录走的话,旧版本目录一清,装好的扩展就没了。 */
 export function extensionDir(): string {
+  if (process.env.TANGU_BROWSER_EXTENSION_DIR) return path.resolve(process.env.TANGU_BROWSER_EXTENSION_DIR);
   const root = process.env.TANGU_BUNDLED_ROOT || path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
   return path.resolve(root, 'browser-extension');
 }
@@ -156,6 +168,7 @@ function onConnection(ws: WebSocket, req: IncomingMessage): void {
         endHandshake();
         client = { id: ++nextClientId, ws, version, connectedAt: Date.now(), pending: new Map() };
         clients.push(client);
+        rememberClient(version);
         ws.send(JSON.stringify({ type: 'welcome', engine: engineLabel() }));
         return;
       }
@@ -203,9 +216,16 @@ export function extensionCall<T = any>(method: string, params: Record<string, un
   });
 }
 
+/** Forsion 换了扩展文件夹里的版本之后:让连着的扩展各自重新加载(已解压的扩展不会自己重读磁盘)。返回叫到了几个。 */
+export function reloadExtensionClients(): number {
+  for (const c of clients) extensionCall('extension.reload', {}, 5000, c.id).catch(() => { /* 旧版扩展不认这条:等它下次被重启 */ });
+  return clients.length;
+}
+
 export function extensionStatus(): {
   enabled: boolean; port: number; listening: boolean; error: string; connected: boolean;
   clients: Array<{ version: string; connectedAt: number }>; extensionId: string; extensionDir: string;
+  lastClient: { version: string; at: number } | null;
 } {
   return {
     enabled: enabled(),
@@ -216,6 +236,7 @@ export function extensionStatus(): {
     clients: clients.map((c) => ({ version: c.version, connectedAt: c.connectedAt })),
     extensionId: EXTENSION_ID,
     extensionDir: extensionDir(),
+    lastClient: readTokenFile().lastClient ?? null,
   };
 }
 

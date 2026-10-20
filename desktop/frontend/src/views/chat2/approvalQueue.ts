@@ -1,4 +1,4 @@
-import type { ApprovalRequest, InquiryRequest, UiMessage } from '../../types'
+import type { ApprovalRequest, InquiryRequest, UiMessage } from '../../../../../tangu-agent/src/contracts/clientTypes'
 
 /** 输入框上方托盘里的一项 —— 等你拍板的东西:权限审批、Agent 的提问、计划审阅。
  *  都仍挂在各自的消息上(持久化回放 / 兑现 / turn_boundary 的 keep 都钉在那),托盘只是视图。

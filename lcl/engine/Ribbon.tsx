@@ -10,10 +10,11 @@ import { useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronDown, ChevronUp, ChevronsLeft, ChevronsRight, Folder as FolderIcon, MoreHorizontal, Plus, Zap } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
-import { useRibbonStore, rankIds, reorderBase, unionOrder, moveTo, slotIndexAt, ribbonActions, isRibbonAutoHome, recentRoom, type RibbonZone, type RibbonFolder } from './ribbonRegistry'
+import { useRibbonStore, useDotted, rankIds, reorderBase, unionOrder, moveTo, slotIndexAt, ribbonActions, isRibbonAutoHome, recentRoom, type RibbonZone, type RibbonFolder } from './ribbonRegistry'
 import { RIBBON_ICON_NAMES, iconByName } from './ribbonIcons'
 import { useCommandStore, openCommandPicker, addCommand, removeCommand } from './commandRegistry'
-import { setActiveSpace, useSpaceStore } from './spaceRegistry'
+import { useSpaceStore } from './spaceRegistry'
+import { setSpaceBarOrder, switchSpace } from './spaceTransition'
 import { openMainBesideThisTask } from './openBeside'
 import { getDetachApi } from './detachSeam'
 import { beginRibbonPointerDrag } from './ribbonPointerDrag'
@@ -56,7 +57,7 @@ function slotHint(i: number): string {
   return hk ? formatHotkey(hk, isMacPlatform()) : ''
 }
 
-function RibbonItemView({ item, expanded }: { item: RibbonItem; expanded: boolean }) {
+function RibbonItemView({ item, expanded, dot }: { item: RibbonItem; expanded: boolean; dot?: boolean }) {
   if (item.component) {
     const C = item.component
     return <C expanded={expanded} />
@@ -67,6 +68,7 @@ function RibbonItemView({ item, expanded }: { item: RibbonItem; expanded: boolea
   return (
     <button className="rb-btn" aria-label={name || undefined} data-rb-tip={expanded ? undefined : name || undefined} onClick={item.onClick}>
       {Icon && <Icon size={18} />}
+      {dot && <span className="rb-badge rb-dot" aria-hidden="true" />}
       {expanded && <span className="rb-label">{name}</span>}
     </button>
   )
@@ -110,6 +112,7 @@ const HOME_DELAY = 600
 
 export function Ribbon() {
   const items = useRibbonStore((s) => s.items)
+  const dotted = useDotted(items)
   const expanded = useRibbonStore((s) => s.expanded)
   const order = useRibbonStore((s) => s.order)
   const bottomOrder = useRibbonStore((s) => s.bottomOrder)
@@ -360,6 +363,11 @@ export function Ribbon() {
   // home 区:Space 区的**第一格**(2026-08-28 用户要的「主位」槽;10-02 用户改判:从两区之间的正中挪到上区最前)。
   // 同 head,不进拖拽/溢出/持久化。
   const homeItems = items.filter((i) => i.side === 'home')
+  // 换 Space 的过渡按条上的先后定方向(spaceTransition):主位 → 上区 → 下区,收纳夹按成员顺序展开
+  useEffect(() => {
+    const ids = [...homeItems.map((i) => i.id), ...[...topE, ...botE].flatMap((e) => e.kind === 'folder' ? e.folder.items : [e.id])]
+    setSpaceBarOrder(ids.filter((id) => id.startsWith('space:')).map((id) => id.slice('space:'.length)))
+  })
 
   // ---- 溢出测算:两区弹性分配,总量不够时各保一半;超配区尾部收进「…」 ----
   const slotH = (expanded ? 34 : 32) + GAP
@@ -587,7 +595,7 @@ export function Ribbon() {
       }
       setFly(null) // 上一次按开的收纳夹浮层
       if (e.kind === 'cmd') e.cmd.run()
-      else if (e.id.startsWith('space:')) setActiveSpace(e.id.slice('space:'.length))
+      else if (e.id.startsWith('space:')) switchSpace(e.id.slice('space:'.length))
       else e.item.onClick?.()
     }
   })
@@ -888,6 +896,7 @@ export function Ribbon() {
         onDrop={(e) => { if (!drag || drag.id.startsWith('folder:')) return; e.preventDefault(); e.stopPropagation(); dropIntoFolder(f) }}
       >
         <Icon size={18} />
+        {f.items.some((id) => dotted.has(id)) && <span className="rb-badge rb-dot" aria-hidden="true" />}
         {expanded && <span className="rb-label">{f.name}</span>}
       </button>
     )
@@ -911,13 +920,14 @@ export function Ribbon() {
         onDrop={(e) => { e.preventDefault(); e.stopPropagation(); dropOnBar(zone, zone === 'bottom' ? (botE[0]?.id ?? null) : null) }}
       >
         <Icon size={18} />
+        {!open && (zone === 'top' ? top : bot).tail.some((e) => e.kind === 'item' ? dotted.has(e.id) : e.kind === 'folder' && e.folder.items.some((id) => dotted.has(id))) && <span className="rb-badge rb-dot" aria-hidden="true" />}
         {expanded && <span className="rb-label">{name}</span>}
       </button>
     )
   }
   const renderEntry = (e: Entry, forceExpanded?: boolean): React.ReactNode => {
     const ex = forceExpanded ?? expanded
-    if (e.kind === 'item') return <RibbonItemView item={e.item} expanded={ex} />
+    if (e.kind === 'item') return <RibbonItemView item={e.item} expanded={ex} dot={dotted.has(e.id)} />
     if (e.kind === 'cmd') return <CmdItemView cmd={e.cmd} expanded={ex} overrideIcon={iconByName(commandIcons[e.cmd.id])} />
     return renderFolderBtn(e.folder)
   }
@@ -986,7 +996,7 @@ export function Ribbon() {
         {/* 滑动框(滚轮翻看的平滑动画):整区条目排成一列,框只露 n 格高,列按窗口起点 translateY,过渡 0.2s。
             窗外的是等高空占位 .rb-cell(不是 .rb-slot:拖拽量槽、台架按 .rb-slot 认「露出的格子」都不受影响),
             只在滑动中(手势 + 吸附)临时画出图标(inert:滑动中也别让 Tab 落进去,Codex 评审)。 */}
-        <div className="rb-strip" style={{ height: Math.max(0, part.shown.length * slotH - GAP) }}>
+        <div className="rb-strip" data-guide-anchor={zone === 'top' ? 'ribbon-spaces' : undefined} style={{ height: Math.max(0, part.shown.length * slotH - GAP) }}>
           <div ref={(el) => { stripRefs.current[zone] = el }} className="rb-strip-in" style={part.start ? { transform: `translateY(${-part.start * slotH}px)` } : undefined}>
             {(zone === 'top' ? topE : botE).map((en, k) => {
               const i = k - part.start
@@ -1119,7 +1129,7 @@ export function Ribbon() {
           // 条目自己的 onClick 随后照常触发,期间引擎按 openBeside.ts 改道。当前 Space 自己的卡照常(= 点真左栏)。
           // ponytail: 只认 click(含键盘回车触发的 click),靠 mousedown 起作用的操作照常就地开。
           onBeforeClick={() => { if (peek.spaceId !== useSpaceStore.getState().activeSpaceId) openMainBesideThisTask() }}
-          onEnter={peek.spaceId === useSpaceStore.getState().activeSpaceId ? undefined : () => { closePeek(); setActiveSpace(peek.spaceId) }}
+          onEnter={peek.spaceId === useSpaceStore.getState().activeSpaceId ? undefined : () => { closePeek(); switchSpace(peek.spaceId) }}
         />,
         rootRef.current.parentElement,
       )}

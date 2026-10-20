@@ -17,7 +17,7 @@ import { stickyDefaults, useApp, withAmadeusWorkspace } from '../stores/appStore
 import { newSessionConfig, settleUltra } from '../stores/projectSettings'
 import { agentKnown, waitBackend } from '../tanguProbe'
 import type { AgentConfig } from '../types'
-import { ChatView } from './ChatView'
+import { readTanguChatViews } from '../amadeus/plugins/tanguSeam'
 
 registerMessages({
   'pluginChat.failed': { zh: '对话没接上：{error}', en: 'Could not open the chat: {error}' },
@@ -109,9 +109,10 @@ const failureText = (error: string, t: (key: string, vars?: Record<string, strin
 
 function PluginChat({ leaf, state, retry }: { leaf: Leaf; state: TanguStartChatResult | null; retry(): void }) {
   const { t } = useI18n()
-  if (state?.ok && state.sessionId) return (
+  const Chat = readTanguChatViews()?.Chat // 对话视图是 Tangu 交出来的(核心插件化 2e-7)
+  if (state?.ok && state.sessionId && Chat) return (
     <div data-plugin-chat={leaf.type} style={{ height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-      <ChatView key={state.sessionId} leaf={leaf} params={{ followActive: false, sessionId: state.sessionId, childSurface: true }} />
+      <Chat key={state.sessionId} leaf={leaf} params={{ followActive: false, sessionId: state.sessionId, childSurface: true }} />
     </div>
   )
   return (

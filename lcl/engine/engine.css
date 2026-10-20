@@ -131,6 +131,18 @@
    两者摞在一起就是用户报的「红点和 ⌘1 重合」。图标位置在展开态是定死的(左内边距 10px + 18px 见方),
    故落点直接写常量;右侧留给 .rb-key。 */
 .rb-expanded .rb-space .rb-badge { top: 2px; left: 21px; right: auto; transform: none; }
+/* 提示红点(RibbonItem.dot:成就有可领;收进「…」/ 收纳夹时挂在它们上):无数字的小圆点,压在图标右上角。
+   宿主钮默认不是定位容器(.rb-space 才是)—— 只给带红点的那颗钮补上,别动所有 .rb-btn 的定位上下文。 */
+.rb-btn:has(> .rb-dot) { position: relative; }
+.rb-badge.rb-dot { top: 4px; right: 4px; min-width: 0; width: 8px; height: 8px; padding: 0; }
+.rb-expanded .rb-btn > .rb-dot { top: 5px; left: 22px; right: auto; }
+/* 进度环(插件 Space 经 ctx.app.setSpaceProgress 挂的,如蓬洲云在传文件):和角标同一个角,展开态跟着上面那条落在图标右上;
+   颜色是「指示」那一档(--signal-mark,DESIGN §1),外圈仍用侧栏底色描一圈和图标分开 */
+.rb-badge.rb-ring { top: 1px; right: 1px; min-width: 0; width: 13px; height: 13px; padding: 0;
+  background: conic-gradient(var(--signal-mark, var(--accent-ink)) calc(var(--p) * 1%), var(--overlay-medium) 0);
+  -webkit-mask: radial-gradient(circle, transparent 2.5px, #000 3px); mask: radial-gradient(circle, transparent 2.5px, #000 3px); }
+/* Tangu 角标:私聊里有人在等你回复 / 拍板时换警示色;字用侧栏底色,深浅两套都压得住。 */
+.rb-badge.dm-wait { background: var(--warning, #d97706); color: var(--sidebar-bg); }
 .rb-btn {
   -webkit-app-region: no-drag;
   width: 32px;
@@ -164,7 +176,7 @@ html.rb-pointer-dragging, html.rb-pointer-dragging * { cursor: grabbing !importa
 /* 被拖项不在本条上(从收纳夹/「…」浮层拖回来)→ 没得让位,画插入线标落点。 */
 .rb-slot.drag-over::before {
   content: ''; position: absolute; left: 4px; right: 4px; top: -3px;
-  height: 3px; border-radius: var(--radius-pill, 999px); background: var(--accent-ink); z-index: 3;
+  height: 3px; border-radius: var(--radius-pill, 999px); background: var(--signal-line, var(--accent-ink)); z-index: 3;
 }
 .rb-label { font-size: var(--ui-font-body, 13px); line-height: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rb { transition: width var(--duration-fast, 0.15s) ease; }
@@ -221,7 +233,7 @@ html.rb-pointer-dragging, html.rb-pointer-dragging * { cursor: grabbing !importa
 .rb-fly-row.dragging { opacity: 0.4; }
 .rb-fly-row.drag-over::before {
   content: ''; position: absolute; left: 4px; right: 4px; top: -3px;
-  height: 3px; border-radius: var(--radius-pill, 999px); background: var(--accent-ink); z-index: 3;
+  height: 3px; border-radius: var(--radius-pill, 999px); background: var(--signal-line, var(--accent-ink)); z-index: 3;
 }
 /* 下移:落点在该行之下,线画下沿(悬停谁就顶掉谁 → 线必须画在真正的落点上)。 */
 .rb-fly-row.drag-over.below::before { top: auto; bottom: -3px; }
@@ -276,7 +288,7 @@ html.rb-pointer-dragging, html.rb-pointer-dragging * { cursor: grabbing !importa
   background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer;
 }
 .rb-peek-enter:hover { background: var(--menu-hover, var(--overlay-light, rgba(127, 127, 127, 0.14))); color: var(--text); }
-.rb-peek-enter:focus-visible { outline: var(--focus-ring, 1px) solid var(--accent-ink, var(--accent)); outline-offset: 1px; }
+.rb-peek-enter:focus-visible { outline: var(--focus-ring, 1px) solid var(--signal-line, var(--accent-ink)); outline-offset: 1px; }
 .rb-peek-enter-go { flex: none; opacity: 0; }
 .rb-peek-enter:hover .rb-peek-enter-go, .rb-peek-enter:focus-visible .rb-peek-enter-go { opacity: 1; }
 .rb-peek-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -287,7 +299,7 @@ html.rb-pointer-dragging, html.rb-pointer-dragging * { cursor: grabbing !importa
 }
 .rb-peek-tab:hover { background: var(--menu-hover, var(--overlay-light, rgba(127, 127, 127, 0.14))); color: var(--text); }
 .rb-peek-tab.is-on { color: var(--accent-ink, var(--accent, var(--text))); }
-.rb-peek-tab:focus-visible { outline: var(--focus-ring, 1px) solid var(--accent-ink, var(--accent)); outline-offset: 1px; }
+.rb-peek-tab:focus-visible { outline: var(--focus-ring, 1px) solid var(--signal-line, var(--accent-ink)); outline-offset: 1px; }
 .rb-peek-body { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
 
 .rb-menu-backdrop { position: fixed; inset: 0; z-index: 1100; -webkit-app-region: no-drag; }
@@ -490,12 +502,12 @@ html.rb-pointer-dragging, html.rb-pointer-dragging * { cursor: grabbing !importa
   --dv-tab-divider-color: transparent;
   --dv-separator-border: transparent; /* 组间分割线去掉 → 改为间隙 + 圆角浮卡(见 .dv-groupview) */
   --dv-active-sash-color: transparent; /* 满铺高亮弃用 → 换 1px 中线渐显(见下方「Resize divider」段) */
-  --dv-paneview-active-outline-color: var(--accent-ink);
+  --dv-paneview-active-outline-color: var(--signal-line, var(--accent-ink));
   --dv-icon-hover-background-color: var(--overlay-light, rgba(127, 127, 127, 0.1));
   --dv-floating-box-shadow: var(--card-shadow, 0 8px 24px rgba(0, 0, 0, 0.2));
   --dv-tabs-container-scrollbar-color: var(--overlay-medium, rgba(127, 127, 127, 0.3));
   --dv-drag-over-background-color: var(--accent-light, rgba(127, 127, 127, 0.12));
-  --dv-drag-over-border: 1px solid var(--accent-ink); /* Dockview 用的是 border 简写(非 -color),落点框描边 */
+  --dv-drag-over-border: 1px solid var(--signal-line, var(--accent-ink)); /* Dockview 用的是 border 简写(非 -color),落点框描边 */
   --dv-tab-close-icon-color: var(--text-faint, var(--text-muted));
   --dv-border-radius: var(--radius-md, 12px);
 }
@@ -669,7 +681,7 @@ html.rb-pointer-dragging, html.rb-pointer-dragging * { cursor: grabbing !importa
  * 故由 WorkspaceHost 按指针在 tab 条里算插入位置、画这根 accent 竖线(tab / 侧栏图标 任意 view 都适用)。 */
 .wb-drop-line {
   position: fixed; width: 2px; border-radius: 1px;
-  background: var(--accent-ink); opacity: 0.55; /* 低调:去掉发光晕(高亮感来源),用主题色 + 半透明收成一根安静的插入光标 */
+  background: var(--signal-line, var(--accent-ink)); /* 低调:强调色的线色(已是混入底色的淡一档),不再叠半透明 */
   pointer-events: none; z-index: 9999; display: none;
 }
 /* 面板内分屏落点:半屏 accent 磨砂高亮(低调),盖在目标组正文对应半边。pointer-events:none 免挡 computeDropTarget 的 elementFromPoint。
@@ -677,7 +689,7 @@ html.rb-pointer-dragging, html.rb-pointer-dragging * { cursor: grabbing !importa
 .wb-drop-zone {
   position: fixed; border-radius: var(--radius-md, 10px);
   background: var(--accent-ink); opacity: 0.14;
-  outline: 1.5px solid var(--accent-ink); outline-offset: -1.5px;
+  outline: 1.5px solid var(--signal-line, var(--accent-ink)); outline-offset: -1.5px;
   pointer-events: none; z-index: 9998; display: none;
   transition: left 0.12s ease, top 0.12s ease, width 0.12s ease, height 0.12s ease;
 }
@@ -882,7 +894,7 @@ html[data-dv-dragging] .t2s-side { -webkit-app-region: no-drag; }
 .dv-edge-toggle:focus-visible,
 .dv-new-tab:focus-visible,
 .sb .sb-click:focus-visible {
-  outline: var(--focus-ring, 1px) solid var(--accent-ink, var(--accent));
+  outline: var(--focus-ring, 1px) solid var(--signal-line, var(--accent-ink));
   outline-offset: 1px;
 }
 /* ===== uiux-c 追加块 end ===== */
@@ -928,3 +940,56 @@ html[data-dv-dragging] .t2s-side { -webkit-app-region: no-drag; }
  * 空左栏不画标签条(见「空侧栏占位」),那时交通灯浮在空白侧栏的左上角。 */
 [data-platform='mac'] .shell--noribbon .dockview-theme-lcl .dv-tabs-and-actions-container.dv-under-lights { padding-left: calc(70px / var(--uiz, 1)); }
 [data-platform='mac'] .shell--noribbon .dv-prefix--edge { padding-left: 4px; }
+
+/* ===== 换 Space 的过渡(spaceTransition.ts;2026-10-16 用户选 C「沿 ribbon 方向推移」) =====
+ * 只在 <html data-space-switch> 挂着时起名,平时不带 view-transition-name —— 明暗切换(themeStore 的整页淡入)不受影响。
+ * 桌面:工作区(.shell-work)整块竖着推 28px;手机:内容区(.mb-body)横着推 24px,底栏 / 顶栏不动。
+ * 手机的横推 10-16 起先不播(用户定「等真机量过再开」,开关在 spaceTransition.ts),下面 axis='x' 那几条留着待开。
+ * next = 目标在切换条上靠后:新的从下 / 右进,旧的往上 / 左走。新旧同一条曲线 + plus-lighter 合成,交叉时不会中途变暗。
+ * ribbon(手机是抽屉底部的 Space 条)单独成组且不动画:当前 Space 的高亮点下去立刻跳。其余(外壳底色,独立外观换色时)随 root 200ms 淡过去。
+ * fade = 系统「减少动态效果」:不起名,只有 120ms 整页淡入。 */
+html:is([data-space-switch='next'], [data-space-switch='prev']) .shell-work,
+html:is([data-space-switch='next'], [data-space-switch='prev']) .mb-body { view-transition-name: space-work; }
+html:is([data-space-switch='next'], [data-space-switch='prev']) .rb { view-transition-name: space-ribbon; }
+/* 手机抽屉底部的 Space 条 + 账号行:同 ribbon,手指底下那排不跟着推 */
+html:is([data-space-switch='next'], [data-space-switch='prev']) .mb-drawer-foot { view-transition-name: space-bar; }
+/* 快照层不接指针:过渡那 0.28 秒里点 ribbon / 页面直接落到底下已经换好的真界面上(不加时点击被整层吃掉,台架实测) */
+html[data-space-switch]::view-transition { pointer-events: none; }
+html[data-space-switch]::view-transition-old(root),
+html[data-space-switch]::view-transition-new(root) { animation-duration: 200ms; }
+html[data-space-switch='fade']::view-transition-old(root),
+html[data-space-switch='fade']::view-transition-new(root) { animation-duration: 120ms; }
+html[data-space-switch]::view-transition-group(space-ribbon),
+html[data-space-switch]::view-transition-new(space-ribbon),
+html[data-space-switch]::view-transition-group(space-bar),
+html[data-space-switch]::view-transition-new(space-bar) { animation: none; }
+html[data-space-switch]::view-transition-old(space-ribbon),
+html[data-space-switch]::view-transition-old(space-bar) { display: none; }
+html[data-space-switch]::view-transition-group(space-work) { animation: none; }
+html[data-space-switch]::view-transition-image-pair(space-work) { isolation: isolate; }
+html[data-space-switch]::view-transition-old(space-work),
+html[data-space-switch]::view-transition-new(space-work) {
+  mix-blend-mode: plus-lighter;
+  --space-push: 28px;
+  --space-ease: cubic-bezier(.2, 0, 0, 1);
+}
+html[data-space-switch]::view-transition-old(space-work) { animation: 220ms ease both lcl-space-fade-out, 280ms var(--space-ease) both lcl-space-push-out; }
+html[data-space-switch]::view-transition-new(space-work) { animation: 220ms ease both lcl-space-fade-in, 280ms var(--space-ease) both lcl-space-push-in; }
+/* 方向写在快照自己身上,别写回 <html>:挂在根上的自定义属性会继承,每切一次挂一次、摘一次 = 整页样式重算两遍
+ * (10-16 安卓模拟器实测:长对话开着时 4870 个元素、4× 降速 168~402ms;spaceTransition.test.ts 钉着) */
+html[data-space-switch='next']::view-transition-old(space-work),
+html[data-space-switch='next']::view-transition-new(space-work) { --space-dir: 1; }
+html[data-space-switch='prev']::view-transition-old(space-work),
+html[data-space-switch='prev']::view-transition-new(space-work) { --space-dir: -1; }
+@keyframes lcl-space-fade-out { to { opacity: 0; } }
+@keyframes lcl-space-fade-in { from { opacity: 0; } }
+@keyframes lcl-space-push-out { to { transform: translateY(calc(var(--space-dir, 1) * -1 * var(--space-push))); } }
+@keyframes lcl-space-push-in { from { transform: translateY(calc(var(--space-dir, 1) * var(--space-push))); } }
+@keyframes lcl-space-push-out-x { to { transform: translateX(calc(var(--space-dir, 1) * -1 * var(--space-push))); } }
+@keyframes lcl-space-push-in-x { from { transform: translateX(calc(var(--space-dir, 1) * var(--space-push))); } }
+/* 手机:底栏的 Space 是横排的 → 横着推(SingleColumnHost 调 switchSpace 时传 axis 'x') */
+html[data-space-switch-axis='x'][data-space-switch]::view-transition-old(space-work),
+html[data-space-switch-axis='x'][data-space-switch]::view-transition-new(space-work) { --space-push: 24px; }
+html[data-space-switch-axis='x'][data-space-switch]::view-transition-old(space-work) { animation-name: lcl-space-fade-out, lcl-space-push-out-x; }
+html[data-space-switch-axis='x'][data-space-switch]::view-transition-new(space-work) { animation-name: lcl-space-fade-in, lcl-space-push-in-x; }
+

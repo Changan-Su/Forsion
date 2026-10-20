@@ -18,13 +18,17 @@
  * 视图走 lazyRetry:本模块被 builtins/index 静态引,而 index 要能在 node 单测里导入
  * (HomepageView 里的 useApp / engine store 在 node 里活不下来)。
  */
-import { Suspense } from 'react'
+import { Suspense, useState } from 'react'
 import { House } from 'lucide-react'
 import {
   registerView, registerSpace, unregisterSpace, addRibbonIcon, removeRibbonIcon,
   setActiveSpace, useSpaceStore, useWorkspace, Skeleton,
 } from '@lcl/engine'
-import type { SpaceDefinition, PersistedPanel } from '@lcl/engine'
+import type { SpaceDefinition, PersistedPanel, ViewProps } from '@lcl/engine'
+import { usePluginStore } from '@amadeus/plugins/pluginStore'
+import type { ViewContribution } from '@amadeus/plugins/types'
+import { claimedHostView } from '../../../shared/corePlugins'
+import { PluginViewHost } from '../pluginViews'
 import { lazyRetry } from '../lazyRetry'
 import { registerMessages } from '../i18n'
 import { useApp } from '../stores/appStore'
@@ -50,6 +54,7 @@ registerMessages({
   'home.spaceCount': { zh: '{n} 个 Space', en: '{n} Spaces' },
   'home.newFolder': { zh: '新建收纳夹', en: 'New folder' },
   'home.showAll': { zh: '全部 Spaces', en: 'All Spaces' },
+  'home.showAllCount': { zh: '全部 · {n}', en: 'All · {n}' },
   'home.organizer.title': { zh: 'Space 收纳', en: 'Space organizer' },
   'home.organizer.hint': { zh: '拖动调整顺序，拖到收纳夹上即可归类；右键空白处也能打开这里', en: 'Drag to reorder or drop onto a folder. Right-click blank space to return here.' },
   'home.noSpaces': { zh: '还没有可打开的 Space', en: 'No Spaces are available yet' },
@@ -61,18 +66,23 @@ registerMessages({
   'home.wallpaper.subtitle': { zh: '选择舞台，玻璃和聚焦效果会随之响应', en: 'Choose the stage for glass and focus effects' },
   'home.wallpaper.source': { zh: '壁纸来源', en: 'Wallpaper source' },
   'home.wallpaper.theme': { zh: '主题背景', en: 'Theme' },
-  'home.wallpaper.bing': { zh: '必应壁纸', en: 'Bing' },
-  'home.wallpaper.custom': { zh: '自定义', en: 'Custom' },
+  'home.wallpaper.bing': { zh: '必应', en: 'Bing' },
+  'home.wallpaper.image': { zh: '图片', en: 'Images' },
   'home.wallpaper.themeHint': { zh: '随深浅模式与主题色变化的 Forsion 图形背景', en: 'Forsion graphic backgrounds that follow appearance and accent colors' },
+  'home.wallpaper.preset.orbit': { zh: '星轨', en: 'Orbit' },
+  'home.wallpaper.preset.path': { zh: '日行', en: 'Sun path' },
+  'home.wallpaper.preset.paper': { zh: '素笺', en: 'Paper' },
   'home.wallpaper.preset.rings': { zh: '扶桑环', en: 'Forsion rings' },
-  'home.wallpaper.preset.topography': { zh: '山海线', en: 'Contours' },
-  'home.wallpaper.preset.weave': { zh: '经纬', en: 'Weave' },
-  'home.wallpaper.preset.hack2gate': { zh: 'Hack2Gate', en: 'Hack2Gate' },
+  'home.wallpaper.preset.glyph': { zh: '字阵', en: 'Glyphs' },
+  'home.wallpaper.mine': { zh: '我的图片', en: 'My image' },
+  'home.wallpaper.upload': { zh: '上传图片', en: 'Upload image' },
+  'home.wallpaper.motion': { zh: '动态效果', en: 'Motion' },
+  'home.wallpaper.motionHint': { zh: '星轨的行星慢慢公转，日行的日月光晕呼吸，字阵在打字、点空白处时漾开涟漪；素笺、扶桑环不动', en: 'The Orbit planet slowly circles, the Sun path glow breathes, and Glyphs ripple as you type or click empty space; Paper and Forsion rings stay still' },
+  'home.wallpaper.motionReduced': { zh: '系统已打开「减弱动态效果」，这里跟着系统', en: 'Reduce motion is on in your system, so this follows it' },
   'home.wallpaper.daily': { zh: '每日自动更新', en: 'Update daily' },
   'home.wallpaper.refresh': { zh: '刷新', en: 'Refresh' },
   'home.wallpaper.loading': { zh: '正在获取必应壁纸…', en: 'Loading Bing wallpapers…' },
   'home.wallpaper.bingError': { zh: '暂时无法获取必应壁纸，可以稍后重试', en: 'Bing wallpapers are unavailable right now. Try again later.' },
-  'home.wallpaper.customReady': { zh: '你的自定义壁纸', en: 'Your custom wallpaper' },
   'home.wallpaper.customHint': { zh: '原图仅保存在这台设备上，最大 32 MB', en: 'The original stays on this device, up to 32 MB' },
   'home.wallpaper.replace': { zh: '更换图片', en: 'Replace image' },
   'home.wallpaper.remove': { zh: '移除并恢复主题', en: 'Remove and use theme' },
@@ -82,7 +92,27 @@ registerMessages({
   'home.wallpaper.focusBlurHint': { zh: '操作输入框、模型或模式等控件时柔化背景', en: 'Soften the stage while using the chat input, model, mode, or related controls' },
   'home.wallpaper.vignette': { zh: '压暗背景', en: 'Dim background' },
   'home.wallpaper.vignetteHint': { zh: '让文字和控件在明亮壁纸上保持清晰', en: 'Keep text and controls legible on bright images' },
+  'home.claimed': { zh: '主页内容现在来自「主页」插件；关掉那个插件就换回内置的。', en: 'Home content now comes from the Home plugin. Turn that plugin off to switch back to the built-in one.' },
 })
+
+/** 主页视图芯(主页插件化 S1,2026-10-18):核心插件 forsion-home 开着且注册了 `home` 视图 → 画它;
+ *  没装、关着、或这一版挂载抛错 → 画内置那份。Space、`homepage` 视图类型、Ribbon 槽位一律不动(见 shared/corePlugins 的 HOST_VIEW_CLAIMS)。 */
+function HomepageSlot(props: ViewProps) {
+  const claim = usePluginStore((s) => claimedHostView(s, 'homepage'))
+  // 只记「这一版」挂失败:插件重载出新的 item 就再试一次
+  const [failed, setFailed] = useState<ViewContribution | null>(null)
+  if (claim && claim.item !== failed) {
+    return (
+      <div data-home-body="plugin" style={{ height: '100%', minHeight: 0 }}>
+        <PluginViewHost def={claim.item} pluginId={claim.pluginId} onMountError={() => setFailed(claim.item)} {...props} />
+      </div>
+    )
+  }
+  return <Suspense fallback={<Skeleton variant="document" />}><HomepageView {...props} /></Suspense>
+}
+
+/** 设置 → 插件里内置主页那张卡下面的一行(和日历的 `calendar.yielded` 同一位置)。 */
+export const useHomepageClaimed = (): boolean => usePluginStore((s) => !!claimedHostView(s, 'homepage'))
 
 const ws = () => useWorkspace.getState()
 const app = () => useApp.getState()
@@ -96,6 +126,8 @@ export const homepageSpace: SpaceDefinition = {
   icon: House,
   sidebarDefaults: HOME_SIDE_VIEWS,
   pinned: { main: [{ type: 'homepage', params: {} }] },
+  // 进主页先看到主页本体:在主页里开了别的视图、切走再切回来,前台仍是主页(2026-10-18 用户定)。桌面也认,手机另有 onePage。
+  mainPage: { type: 'homepage', params: {} },
   // 手机上主页就是主页这一页:不开标签,在它里面点开的对话 / 笔记去它们自己的 Space 开(2026-10-11 用户定:
   // 「主页就主页维持的好好地」「主页不让开标签」)。别去掉。
   onePage: true,
@@ -119,7 +151,7 @@ export function installHomepageViews(): void {
     kind: 'page',
     displayName: () => app().tr('space.home'),
     icon: House,
-    factory: (props) => <Suspense fallback={<Skeleton variant="document" />}><HomepageView {...props} /></Suspense>,
+    factory: (props) => <HomepageSlot {...props} />,
     closable: true,
     singleton: true,
   })

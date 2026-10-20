@@ -9,6 +9,7 @@ import { usePageStore } from '../amadeus/store/pageStore'
 import { b64ToBytes, mimeForExt } from '../services/fileKinds'
 import { registerMessages, useI18n } from '../i18n'
 import { ChatWikiLink, openFileCitation } from './ChatWikiLink'
+import { viewableProps } from './ImageViewer'
 
 registerMessages({
   'chatembed.badAnchor': { zh: '时刻锚点无效，从头播放', en: 'Invalid time anchor — playing from the start' },
@@ -84,8 +85,9 @@ export function ChatEmbed({ inner, ctx }: { inner: string; ctx: EmbedCtx }) {
   if (hit.kind === 'image') {
     return (
       <img
-        className="t2-embed t2-embed-image" src={src} alt={hit.name} title={hit.abs} style={style} draggable={false}
-        onClick={() => { void openFileCitation(hit.abs, hit.name, null) }} onError={fail}
+        className="t2-embed t2-embed-image" src={src} alt={hit.name} title={hit.abs} style={style} draggable={false} onError={fail}
+        // 点开 = 就地看图(A2);原来的去处(Agent Desk / 文件标签页)挪到看图顶栏的「打开文件」
+        {...viewableProps({ name: hit.name, alt: { label: t('viewer.openFile'), run: () => { void openFileCitation(hit.abs, hit.name, null) } } })}
       />
     )
   }

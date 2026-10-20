@@ -79,6 +79,15 @@ function image(n: MdNode): MdNode | null {
     ? n.children[0]
     : null
 }
+/** Standard image syntax pointing at a video file = a short muted demo loop (GIF replacement).
+ * `![[clip.mp4]]` stays the click-to-play card. Judged by pathname, so `?v=1` and `/api/…/<id>.mp4` qualify. */
+function isDemoVideo(url: string): boolean {
+  try {
+    return /\.(?:mp4|webm)$/i.test(new URL(url, 'https://forsion.example').pathname)
+  } catch {
+    return false
+  }
+}
 export function renderPublicMarkdown(
   markdown: string,
   options: PublishingOptions = {},
@@ -184,6 +193,9 @@ export function renderPublicMarkdown(
       case 'imageReference': {
         const def = defs.get(n.identifier),
           url = safeUrl(n.url ?? def?.url ?? '', true)
+        // src stays the first attribute: the website sizes `<img|video src="…">` from its media table.
+        if (url && isDemoVideo(url))
+          return `<video src="${escapeHtml(url)}" autoplay muted loop playsinline preload="metadata" aria-label="${escapeHtml(n.alt || (zh ? '视频演示' : 'Video demo'))}" data-amadeus-demo></video>`
         return url
           ? `<img src="${escapeHtml(url)}" alt="${escapeHtml(n.alt || '')}" ${imageLoading()} decoding="async">`
           : escapeHtml(n.alt || '')
@@ -235,7 +247,9 @@ export function renderPublicMarkdown(
       html += '<section class="md-feature">'
       section = true
     }
-    const poster = image(node),
+    const still = image(node),
+      // a demo video is content of its own, never the poster of the next embed
+      poster = still && !isDemoVideo(still.url ?? '') ? still : null,
       next = nodes[i + 1] && embed(nodes[i + 1])
     const pair = poster && next ? media(next, poster) : null
     if (pair) {

@@ -758,9 +758,51 @@ const SAFE_SEARCH_FLAGS = ['-n', '-i', '-l', '-c', '-v', '-w', '-F', '--files', 
 const SAFE_RG_FLAGS = new Set(SAFE_SEARCH_FLAGS);
 const SAFE_GREP_FLAGS = new Set([...SAFE_SEARCH_FLAGS, '-r', '-E', '-L']);
 
+/** Windows(run_bash 经 Node `shell: true` 走 ComSpec)只收 cmd.exe 的**内部**命令 dir / type,别的一律要批:
+ *  外部程序(findstr、where、git、ls ……)cmd 先在当前目录、再在 PATH 里找同名的 .bat / .exe,agent 放一个就能免审批跑任意代码;
+ *  下面的 POSIX 名单又放行 `%`,cmd 先展开变量再切命令(`cat %USERPROFILE%\…\auth.json` 读到凭据)。Codex 10-19 评审。 */
+const CMD_READ_BUILTINS = new Set(['dir', 'type']);
+
+/** 按 cmd 的双引号切词(引号去掉);引号不成对 → null。 */
+function cmdTokens(cmd: string): string[] | null {
+  const out: string[] = [];
+  let cur = '', quoted = false, has = false;
+  for (const ch of cmd) {
+    if (ch === '"') { quoted = !quoted; has = true; continue; }
+    if (ch === ' ' && !quoted) { if (has) out.push(cur); cur = ''; has = false; continue; }
+    cur += ch; has = true;
+  }
+  if (quoted) return null;
+  if (has) out.push(cur);
+  return out;
+}
+
+/** cmd 的 `dir` / `type`(10-19:Windows 上 Muse 用 `dir /b "C:\…"` 读自己的目录,每条都排成一张审批卡)。 */
+function cmdBuiltinSafe(cmd: string, cwd: string): boolean {
+  const program = cmd.split(' ', 1)[0].toLowerCase(); // 带引号的 "dir" 是外部程序查找,不在名单里
+  if (!CMD_READ_BUILTINS.has(program)) return false;
+  // ComSpec 换成了 bash / PowerShell,dir 就不是内部命令了(Node 取 process.env.comspec,缺省 cmd.exe)
+  if (path.win32.basename(process.env.comspec || 'cmd.exe').toLowerCase() !== 'cmd.exe') return false;
+  // 只认字母数字、空格与路径常用标点。cmd 的 & | < > ^ ( ) % ! 与等同空格的分隔符 , ; =(`type a,b` 读两个文件)、
+  // 8.3 短名的 ~、PowerShell 的 $ ` ' { } @ [ ] 一概不收。
+  if (!/^[\p{L}\p{N}\p{M} _.\-\\/:"*?]+$/u.test(cmd)) return false;
+  const tokens = cmdTokens(cmd);
+  if (!tokens) return false;
+  return tokens.slice(1).every((a) => {
+    if (a.startsWith('/')) return program === 'dir' && /^\/-?[a-z0-9](?::?-?[a-z]*)$/i.test(a);
+    // 开头的 \ 或 / 不收:\\server\share 会向外发 NTLM 凭据,\\?\、\??\ 绕开 Win32 路径规整。冒号只认盘符(file:stream 是备用数据流)。
+    // 已映射的网络盘、指向共享的软链照样会走网络 —— 与 read_file 读同一路径同口径,不在这里拦(Codex 10-19 #3,没修)。
+    if (!a || a.startsWith('\\') || a.indexOf(':', 2) >= 0 || (a.includes(':') && !/^[a-z]:/i.test(a))) return false;
+    // type 读内容:不收通配(可能扫到凭据文件),也不收以点或空格结尾的路径段(Win32 会去掉它们,`auth.json.` 就是 auth.json)。
+    if (program === 'type' && (/[*?]/.test(a) || a.split(/[\\/]/).some((seg) => seg !== '.' && seg !== '..' && /[. ]$/.test(seg)))) return false;
+    return !credentialReadTarget(path.resolve(cwd, a));
+  });
+}
+
 /** Only simple unquoted word tokens are classified. Shell parsing remains the shell's job. */
-export function isKnownSafeBash(command: string, cwd: string = process.cwd()): boolean {
+export function isKnownSafeBash(command: string, cwd: string = process.cwd(), platform: NodeJS.Platform = process.platform): boolean {
   const cmd = String(command || '').trim();
+  if (platform === 'win32') return cmdBuiltinSafe(cmd, cwd);
   // Deny substitutions, expansions, quotes, shell operators, escapes and control characters.
   if (!cmd || /[^A-Za-z0-9_./:@%+=, \-]/.test(cmd)) return false;
   const [program, ...args] = cmd.split(/ +/);
