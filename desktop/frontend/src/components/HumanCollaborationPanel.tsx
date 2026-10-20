@@ -21,6 +21,9 @@ export function HumanCollaborationPanel(props: Props) {
 }
 function HumanBody({ engine, target, name, running, jump, onRewrite, draftKey }: Props & { draftKey: string }) {
   const { t, locale } = useI18n()
+  // human/ 的四份各有自己的标题和空态;起手模板是 Agent 口吻的协作说明,只给 Agent / 项目那两份
+  const file = target.kind === 'human' ? target.file.slice(0, -3).toLowerCase() : null
+  const template = file ? '' : t('human.template')
   const [doc, setDoc] = useState<HumanDocument | null>(null)
   const [draft, setDraft] = useState<Draft | null>(() => drafts.get(draftKey) || null)
   const draftRef = useRef(draft); draftRef.current = draft
@@ -40,14 +43,14 @@ function HumanBody({ engine, target, name, running, jump, onRewrite, draftKey }:
   useEffect(() => {
     if (!doc || !jump?.at || processedJump.current === jump.at) return
     processedJump.current = jump.at
-    if (jump.edit && !draftRef.current) changeDraft({ content: doc.content || t('human.template'), version: doc.version })
+    if (jump.edit && !draftRef.current) changeDraft({ content: doc.content || template, version: doc.version })
     if (jump.changeId) setHistory(true)
   }, [jump, doc])
   const save = async (version = draft?.version) => {
     if (!draft || !version || busy) return
     const submitted = draft
     setBusy(true); setError(''); setNotice(''); ++seq.current
-    try { const r = await saveHumanDocument(engine, target, draft.content, version, t('human.userEdit')); if (drafts.get(draftKey) === submitted) drafts.delete(draftKey); if (alive.current) { setDoc(r.document); changeDraft(null); setConflict(false); setLatest(null); setNotice(t('human.saved')) } }
+    try { const r = await saveHumanDocument(engine, target, draft.content, version, target.kind === 'human' ? t('human.userEditFile', { file: target.file }) : t('human.userEdit')); if (drafts.get(draftKey) === submitted) drafts.delete(draftKey); if (alive.current) { setDoc(r.document); changeDraft(null); setConflict(false); setLatest(null); setNotice(t('human.saved')) } }
     catch (e: any) { if (alive.current) { setConflict(e?.status === 409); setError(e?.status === 409 ? t('human.conflict') : errorText(e)) } }
     finally { if (alive.current) setBusy(false) }
   }
@@ -61,8 +64,8 @@ function HumanBody({ engine, target, name, running, jump, onRewrite, draftKey }:
   const rewrite = () => { if (!onRewrite || running || draft) return; setError(''); onRewrite(); setNotice(t('human.rewrite.sent')) }
   const reviewLatest = async () => { try { const d = await getHumanDocument(engine, target); if (alive.current) setLatest(d) } catch (e) { if (alive.current) setError(errorText(e)) } }
   return <section className="human-panel" data-human-scope={target.kind} onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === 's' && draft) { e.preventDefault(); e.stopPropagation(); void save() } }}>
-    <header className="human-heading"><div><h3>{t('human.title')}</h3><p>{target.kind === 'agent' ? t('human.agentScope', { name }) : t('human.projectScope')}</p></div><div className="human-actions">
-      {!draft && <button type="button" className="profile-text-action" disabled={!doc || busy} onClick={() => doc && changeDraft({ content: doc.content || t('human.template'), version: doc.version })}><Pencil size={13} />{t('human.edit')}</button>}
+    <header className="human-heading"><div><h3>{t(file ? `human.file.${file}.title` : 'human.title')}</h3><p>{file ? t(`human.file.${file}.caption`) : target.kind === 'agent' ? t('human.agentScope', { name }) : t('human.projectScope')}</p></div><div className="human-actions">
+      {!draft && <button type="button" className="profile-text-action" disabled={!doc || busy} onClick={() => doc && changeDraft({ content: doc.content || template, version: doc.version })}><Pencil size={13} />{t('human.edit')}</button>}
       <CapabilityMenu className="profile-text-action human-more" label={t('human.more')} disabled={!doc} items={[
         { id: 'source', label: t(source ? 'human.preview' : 'human.source'), icon: <FileCode2 size={14} />, onSelect: () => setSource(!source) },
         { id: 'history', label: t('human.history'), icon: <History size={14} />, onSelect: () => setHistory(!history) },
@@ -71,14 +74,14 @@ function HumanBody({ engine, target, name, running, jump, onRewrite, draftKey }:
     </div></header>
     {error && <p className="agent-profile-error" role="alert">{error} {!doc && <button type="button" className="profile-text-action" onClick={() => void load()}>{t('human.retry')}</button>}</p>}
     {notice && <p className="human-notice" role="status">{notice}</p>}
-    {doc && !draft && humanLegacy(doc) && <p className="human-notice" data-human-legacy>{t('human.legacy')} {onRewrite && <button type="button" className="profile-text-action" disabled={!!running} onClick={rewrite}><RefreshCw size={12} />{t('human.rewrite')}</button>}</p>}
+    {doc && !draft && !file && humanLegacy(doc) && <p className="human-notice" data-human-legacy>{t('human.legacy')} {onRewrite && <button type="button" className="profile-text-action" disabled={!!running} onClick={rewrite}><RefreshCw size={12} />{t('human.rewrite')}</button>}</p>}
     {!doc && !error && <p className="agent-profile-muted" role="status"><Loader2 size={14} className="spin" /> {t('human.loading')}</p>}
     {doc?.updatedAt && <p className="human-date">{t('human.updatedAt', { time: formatRelative(doc.updatedAt, { locale }) })}</p>}
     {draft ? <div className="human-editor"><textarea aria-label={t('human.editLabel')} value={draft.content} maxLength={doc?.maxLength || 12000} rows={15} onChange={e => changeDraft({ ...draft, content: e.target.value })} disabled={busy} />
       <div className="human-actions"><button type="button" className="btn primary sm" disabled={busy || conflict} onClick={() => void save()}>{busy && <Loader2 size={13} className="spin" />}{t('human.save')}</button><button type="button" className="btn sm" disabled={busy} onClick={() => { changeDraft(null); setConflict(false); setLatest(null); setError('') }}>{t('human.cancel')}</button></div>
       {conflict && <button type="button" className="profile-text-action" onClick={() => void reviewLatest()}>{t('human.latest')}</button>}
       {latest && <section className="human-latest"><div className="md-body"><Markdown content={latest.content} allowRun={false} /></div><button type="button" className="btn sm" disabled={busy} onClick={() => void save(latest.version)}>{t('human.merge')}</button></section>}
-    </div> : doc && (doc.content ? source ? <pre className="human-source">{doc.content}</pre> : <div className="md-body"><Markdown content={doc.content} allowRun={false} /></div> : <p className="human-empty">{t('human.empty')}</p>)}
+    </div> : doc && (doc.content ? source ? <pre className="human-source">{doc.content}</pre> : <div className="md-body"><Markdown content={doc.content} allowRun={false} /></div> : <p className="human-empty">{t(file ? `human.file.${file}.empty` : 'human.empty')}</p>)}
     {source && doc && <div className="human-path"><span>{t('human.path')}</span><code>{doc.path}</code></div>}
     {history && doc && <section className="human-history"><h4>{t('human.history')}</h4>{!doc.history.length && <p>{t('human.noHistory')}</p>}
       {doc.history.map(change => <article key={change.id} data-human-change={change.id} className={change.id === jump?.changeId ? 'human-highlight' : undefined}>

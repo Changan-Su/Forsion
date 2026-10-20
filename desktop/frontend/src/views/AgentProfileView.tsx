@@ -8,7 +8,8 @@ import type { ViewProps } from '@lcl/engine/types'
 import { useApp } from '../stores/appStore'
 import { useI18n } from '../i18n'
 import { deleteAgentAvatar, fetchAgentAvatar, getAgentHarness, listAgents, listSkills, listTools, putAgentsMeta, renameAgentDef, saveAgentDef, uploadAgentAvatar } from '../services/backendService'
-import { openAgentProfile } from './agentProfileNav'
+import { openAgentProfile, openHumanProfile } from './agentProfileNav'
+import { HumanProfile, useMeIdentity } from './HumanProfile'
 import { AgentMemoryPanel } from '../components/AgentMemoryPanel'
 import { AgentLogPanel } from '../components/AgentLogPanel'
 import { AgentMemoryModal } from '../components/AgentMemoryModal'
@@ -95,7 +96,11 @@ export function AgentsSpaceView({ leaf, params, extendView }: ViewProps) {
   const { t } = useI18n()
   const agents = useApp((s) => s.agentDefs)
   const creating = params.creating === true
+  const me = params.me === true
   const setCreating = (value: boolean) => leaf.setParams({ creating: value })
+  // 共识那份更新卡的深链(openHumanProfile 带进来的 human):收进 state 再清掉参数,免得布局存盘后每次启动都再跳一次
+  const [humanJump, setHumanJump] = useState<HumanJump | undefined>()
+  useEffect(() => { if (params.human) { setHumanJump(params.human as HumanJump); leaf.setParams({ human: undefined }) } }, [params.human, leaf])
   const [newName, setNewName] = useState('')
   const [newPurpose, setNewPurpose] = useState('')
   const [newInstructions, setNewInstructions] = useState('')
@@ -142,7 +147,7 @@ export function AgentsSpaceView({ leaf, params, extendView }: ViewProps) {
       <label className="agent-field">{t('agentProfile.prompt')}<textarea rows={6} required value={newInstructions} onChange={(e) => setNewInstructions(e.target.value)} placeholder={t('agentProfile.createInstructionsPlaceholder')} /></label>
       {rosterError && <p className="agent-profile-error" role="alert">{rosterError}</p>}
       <div><button type="button" className="btn" disabled={rosterBusy} onClick={() => setCreating(false)}>{t('agentProfile.cancel')}</button><button type="submit" className="btn primary" disabled={rosterBusy || !newName.trim() || !newInstructions.trim()}>{rosterBusy && <Loader2 size={13} className="spin" />}{t('agentProfile.create')}</button></div>
-    </form> : agent ? <AgentProfile key={agent.slug} agent={agent} evolutionJumpAt={jumpAt} extendView={extendView} /> : <p className="agent-profile-muted">{t('agentProfile.noAgent')}</p>}</main>
+    </form> : me ? <HumanProfile jump={humanJump} /> : agent ? <AgentProfile key={agent.slug} agent={agent} evolutionJumpAt={jumpAt} extendView={extendView} /> : <p className="agent-profile-muted">{t('agentProfile.noAgent')}</p>}</main>
   </div>
 }
 
@@ -153,8 +158,9 @@ export function AgentsRosterView() {
   const defaultSlug = useApp((s) => s.defaultAgentSlug)
   const selected = useWorkspace(useShallow((s) => {
     const profile = s.api?.panels.find((panel) => panel.params?.__type === 'agent-profile')
-    return { slug: profile?.params?.agentSlug, creating: profile?.params?.creating === true }
+    return { slug: profile?.params?.agentSlug, creating: profile?.params?.creating === true, me: profile?.params?.me === true }
   }))
+  const meIdentity = useMeIdentity()
   const [query, setQuery] = useState('')
   const [rosterBusy, setRosterBusy] = useState(false)
   const [rosterError, setRosterError] = useState('')
@@ -162,7 +168,8 @@ export function AgentsRosterView() {
   const phone = useListFirst() // 手机的整屏列表:创建入口是右下角的主按钮(布局「二」)
   const agent = agents.find((a) => a.slug === selected.slug) || agents[0]
   const creating = selected.creating
-  const setCreating = () => useWorkspace.getState().openView('agent-profile', { reuseKey: 'primary', creating: true }, 'main')
+  const viewing = (slug: string) => !creating && !selected.me && agent?.slug === slug
+  const setCreating = () => useWorkspace.getState().openView('agent-profile', { reuseKey: 'primary', creating: true, me: false }, 'main')
   const selectAgent = (slug: string) => { setRosterError(''); openAgentProfile(slug) }
   const emitAgentsChange = () => { window.dispatchEvent(new Event('forsion:agents-changed')); window.tangu?.requestMainAction?.('agents-changed') }
   const filtered = useMemo(() => agents.filter((a) => `${a.name} ${agentDescription(a, t)} ${a.slug}`.toLowerCase().includes(query.toLowerCase())), [agents, query, t])
@@ -193,11 +200,15 @@ export function AgentsRosterView() {
   return <aside className="agents-roster">
       {/* 创建入口只留底部那一个(评审 U-25:标题行的 ＋ 与底部链接重复)。 */}
       <div className="agents-roster-heading"><span>{t('agentProfile.roster')} <small>{agents.length}</small></span></div>
+      {/* 「我」置顶(human/ 文件夹),不进搜索、不能拖排序 */}
+      <div className="agents-roster-row" data-roster-me><button type="button" className={`agents-roster-item${!creating && selected.me ? ' selected' : ''}`} aria-pressed={!creating && selected.me} onClick={() => { setRosterError(''); openHumanProfile() }}>
+        <span className="agent-portrait small"><AgentAvatar name={meIdentity.name} url={meIdentity.avatar} fill /></span><span><strong>{meIdentity.name}</strong><small>{t('human.me.rowHint')}</small></span>
+      </button></div>
       <label className="agents-search"><Search size={14} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('agentProfile.search')} aria-label={t('agentProfile.search')} /></label>
       <div className={`agents-roster-list${phone ? ' pl-fab-room' : ''}`}>{filtered.map((a) => <div key={a.slug} className={`agents-roster-row${dragSlug === a.slug ? ' dragging' : ''}`} draggable={!rosterBusy && !query}
         onDragStart={(e) => { setDragSlug(a.slug); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', a.slug); startOpenDrag(e.dataTransfer, { open: () => selectAgent(a.slug) }) }} onDragEnd={() => setDragSlug(null)}
         onDragOver={(e) => { if (dragSlug && dragSlug !== a.slug) e.preventDefault() }} onDrop={(e) => { e.preventDefault(); if (dragSlug) void reorder(dragSlug, a.slug) }}>
-        <button type="button" className={`agents-roster-item${!creating && agent?.slug === a.slug ? ' selected' : ''}`} onClick={() => selectAgent(a.slug)} aria-pressed={!creating && agent?.slug === a.slug}>
+        <button type="button" className={`agents-roster-item${viewing(a.slug) ? ' selected' : ''}`} onClick={() => selectAgent(a.slug)} aria-pressed={viewing(a.slug)}>
           <span className="agent-portrait small"><AgentAvatar name={a.name || a.slug} url={avatars[a.slug]} siblings={rosterNames} fill /></span><span><strong>{a.name}{a.slug === defaultSlug && <Star size={12} aria-label={t('agentProfile.isDefault')} fill="currentColor" />}</strong><small>{agentDescription(a, t) || a.slug}</small></span>
         </button>
         <CapabilityMenu label={t('agentProfile.actionsFor', { name: a.name })} className="agents-roster-more" items={[
@@ -545,7 +556,8 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
       </>}
       {section === 'skills' && <AgentSkillsPanel cfg={s.cfg} agentSlug={agent.slug} surface={compact ? 'details' : 'space'} selectedIds={draft.enabledSkillIds} onSelectedIds={(enabledSkillIds) => patch({ enabledSkillIds })} extendView={extendView} />}
       {section === 'mcp' && equipment('mcp')}
-      {section === 'human' && <HumanCollaborationPanel engine={homeTarget()} cfg={s.cfg} target={{ kind: 'agent', slug: agent.slug }} name={agent.name} running={s.running || s.rewriteRunning} jump={humanJump} onRewrite={rewriteHuman} />}
+      {section === 'human' && <><HumanCollaborationPanel engine={homeTarget()} cfg={s.cfg} target={{ kind: 'agent', slug: agent.slug }} name={agent.name} running={s.running || s.rewriteRunning} jump={humanJump} onRewrite={rewriteHuman} />
+        <button type="button" className="agent-profile-link" data-act="open-me" onClick={() => openHumanProfile()}>{t('human.me.openFromAgent')}<ChevronRight size={13} /></button></>}
       {section === 'growth' && <>
         {/* 三层各一张分段卡:标题 + 一句话说清它是什么(记忆 = 现在成立的事,日志 = 发生过的事,进化 = 做法)。待复盘候选的角标跟着「进化」走。 */}
         <div className="profile-segment" role="group" aria-label={t('agentProfile.growth')}>{(['memory', 'log', 'evolution'] as const).map((g) => { const Icon = GROWTH_ICON[g]; return (

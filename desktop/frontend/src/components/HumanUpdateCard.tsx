@@ -3,6 +3,7 @@ import { BookOpen, ChevronRight, Undo2 } from 'lucide-react'
 import { registerMessages, useI18n } from '../i18n'
 import { useApp } from '../stores/appStore'
 import { showDetails } from '../stores/detailsSubject'
+import { openHumanProfile } from '../views/agentProfileNav'
 import { getHumanDocument, undoHumanChange, HUMAN_CHANGED_EVENT, type HumanChange, type HumanDocument, type HumanTarget } from '../services/humanCollaboration'
 import type { TanguDesktopConfig } from '../types'
 import { targetForSession, type EngineTarget } from '../services/engine/targets'
@@ -63,8 +64,12 @@ function HumanUpdate({ change, engine, cfg, sessionId }: { change: HumanChange; 
   }, [engine.key, engine.base, cfg.token, change.id, sessionId])
   const undone = !!doc?.history.some(h => h.undoOf === change.id)
   const canUndo = !!doc?.history.some(h => h.id === change.id && h.canUndo)
-  // 共识那份的去处(「我」资料页)第 3 步才有:在那之前卡片上只给撤销,不给查看 / 修改
-  const open = (edit = false) => change.scope.kind !== 'human' && showDetails({ ...(change.scope.kind === 'agent' ? { kind: 'agent' as const, slug: change.scope.slug } : { kind: 'project' as const, path: projectPath || change.scope.cwd }), human: { at: Date.now(), edit, changeId: change.id } })
+  // 共识那份不属于哪个 Agent / 项目:去 Agents Space 的「我」资料页(主区),另外两份照旧开右栏详情
+  const open = (edit = false) => {
+    const human = { at: Date.now(), edit, changeId: change.id }
+    if (change.scope.kind === 'human') openHumanProfile(human)
+    else showDetails({ ...(change.scope.kind === 'agent' ? { kind: 'agent' as const, slug: change.scope.slug } : { kind: 'project' as const, path: projectPath || change.scope.cwd }), human })
+  }
   const undo = async () => {
     if (busy) return
     setBusy(true); setError('')
@@ -76,7 +81,7 @@ function HumanUpdate({ change, engine, cfg, sessionId }: { change: HumanChange; 
     <div className="human-scope">{name ? `${name} · ` : ''}{t(change.scope.kind === 'agent' ? 'human.agent' : change.scope.kind === 'human' ? 'human.shared' : 'human.project')} · <span className="human-applied">{t(undone ? 'human.undone' : 'human.applied')}</span></div>
     <p className="human-say">{change.summary}</p>
     {change.evidence && <p className="human-why">{t('human.ask.why', { text: change.evidence })}</p>}
-    <div className="human-actions">{change.scope.kind !== 'human' && <><button type="button" className="profile-text-action" onClick={() => open()}>{t('human.view')}</button><button type="button" className="profile-text-action" onClick={() => open(true)}>{t('human.revise')}</button></>}
+    <div className="human-actions"><button type="button" className="profile-text-action" onClick={() => open()}>{t('human.view')}</button><button type="button" className="profile-text-action" onClick={() => open(true)}>{t('human.revise')}</button>
       {!undone && <button type="button" className="profile-text-action" disabled={busy || !canUndo} title={!canUndo && doc ? t('human.undoConflict') : undefined} onClick={() => void undo()}><Undo2 size={12} />{t('human.undo')}</button>}
     </div>
     {error && <p className="agent-profile-error" role="alert">{error}</p>}
