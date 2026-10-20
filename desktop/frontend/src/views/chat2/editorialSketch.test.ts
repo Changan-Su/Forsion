@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { SketchItem, ToolEvent } from '../../types'
 import { partitionToolSegment } from './EditorialMessage'
+import { sketchFromToolEvent } from '../../stores/appStore'
 
 const done = (id: string, name: string): ToolEvent => ({ id, name, done: true, result: 'ok' })
 
@@ -62,6 +63,13 @@ describe('EditorialMessage inline Sketch ordering', () => {
   it('keeps rejected or unfinished Sketch calls in the tool group without drawing a phantom card', () => {
     const events = [done('sk-bad', 'sketch'), done('read1', 'read_file')]
     expect(partitionToolSegment(events, [])).toEqual([{ t: 'tools', events }])
+  })
+
+  it('draws the card under its 10-20 name too (intelligent_ui_html); sketch stays for older history and engines', () => {
+    const streaming: ToolEvent = { id: 'h1', name: 'intelligent_ui_html', done: false, arguments: '{"html":"<h1>NEW</h1>' }
+    expect(partitionToolSegment([streaming], [], true)[1]).toEqual({ t: 'sketch', item: { callId: 'h1', html: '<h1>NEW</h1>', draft: true } })
+    const finished: ToolEvent = { ...streaming, done: true, isError: false, result: 'HTML card rendered in the conversation.', arguments: '{"html":"<h1>NEW</h1>"}' }
+    expect(sketchFromToolEvent(finished)).toEqual({ callId: 'h1', html: '<h1>NEW</h1>' })
   })
 
   it('draws a draft card for a streaming (unfinished) Sketch only while the message is live', () => {

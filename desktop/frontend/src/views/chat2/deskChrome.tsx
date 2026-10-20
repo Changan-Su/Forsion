@@ -1,17 +1,10 @@
 /** Agent Desk 展开态的悬浮胶囊(10-17 用户选方案 B,方案页 docs/ToBeImproved/AgentDesk方案_2026-10-17/)。
- *  格子里的视图不再画自己的顶栏:WsFileView 读到本 context 就把视图专属控件(编辑/源码、换行、缩放…)
- *  portal 进胶囊槽,次要动作写进 more(⋯ 菜单打开那一刻才读,写 ref 不触发重渲染)。 */
-import React, { createContext, useRef, useState } from 'react'
+ *  胶囊上的菜单钮在这里;给被托管视图的契约(DeskChromeContext)住在宿主的 tanguSeam(核心插件化 2e-6:文件视图是宿主的),这里转出。 */
+import React, { useRef, useState } from 'react'
 import { MoreHorizontal } from 'lucide-react'
 import { ContextMenu, type CtxItem, type CtxMenu } from '../../components/RightPanel'
 import { useI18n } from '../../i18n'
-
-export interface DeskChrome {
-  /** 胶囊里给视图留的槽;首帧为 null(ref 还没挂上),视图此时什么都不画,也不画自带顶栏。 */
-  slot: HTMLElement | null
-  more: { current: CtxItem[] }
-}
-export const DeskChromeContext = createContext<DeskChrome | null>(null)
+export { DeskChromeContext, type DeskChrome } from '../../amadeus/plugins/tanguSeam'
 
 /** 菜单从按钮下沿弹出;items 是函数 —— 点开那一刻才求值(视图的 more 写在 ref 里)。 */
 export function DeskMenuButton({ items, title, className, children }: {

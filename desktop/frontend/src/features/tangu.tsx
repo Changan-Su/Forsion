@@ -1,24 +1,86 @@
 import { MessageCircle, MessageCircleQuestion, BookOpen, FolderOpen, Bot, Users } from 'lucide-react'
-import { registerView } from '@lcl/engine'
-import { useApp } from '../stores/appStore'
+import { addCommand, registerView, useWorkspace } from '@lcl/engine'
+import { activeChatModelId, useApp } from '../stores/appStore'
 import { translate } from '../i18n'
 import { ChatView } from '../views/ChatView'
+import { ChatPreview } from '../views/chat2/ChatPreview'
 import { BtwSideView } from '../views/chat2/BtwPanel'
-import { MemoryPanelView, SubchatsView, SessionFilesView } from '../views/RightViews'
+import { openBtw } from '../views/chat2/btwStore'
+import { ensureAppRefCommand } from '../views/chat2/appRefCommand'
+import { MemoryPanelView, SubchatsView, SessionFilesView, TocView } from '../views/RightViews'
 import { AgentsDetailSpecialView, WorkspaceDetailSpecialView } from '../views/SpecialViews'
 import { AgentsSpaceView, AgentsRosterView, TanguDetailsView } from '../views/AgentProfileView'
 import { hasNativeFeature } from './runtime'
 import { SessionTabIcon } from '../components/SessionIcon'
-import { setTanguInboxTasks } from '../amadeus/plugins/tanguSeam'
+import { setTanguChatOutline, setTanguChatViews, setTanguInboxTasks, setTanguNewChat, setTanguPrefs, setTanguSidebarModes } from '../amadeus/plugins/tanguSeam'
 import { inboxTasks } from '../views/chat2/inboxTasks'
+import { isChatAvatarsOn, setChatAvatarsOn } from '../views/chat2/chatAvatars'
+import { isPromptSuggestOn, setPromptSuggest } from '../views/chat2/promptSuggest'
+import { NewChatComposer, mountNewChatComposer, sendFromNewChat, startNewChatCall } from '../views/newChatComposer'
+import { OrbitsView } from '../views/OrbitsView'
+import { SessionsView } from '../views/SessionsView'
 import '../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 const app = () => useApp.getState()
+const ws = () => useWorkspace.getState()
+
+export const blankNewChat = (): void => {
+  const s = app()
+  s.setActiveId(null)
+  s.setNewChatWs(null)
+  s.setNewChatCfg(() => ({}))
+  s.setNewChatModel(null)
+  ws().openView('chat', { followActive: true, reuseKey: 'primary' }, 'main')
+}
+
+const splitChat = (): void => {
+  const active = ws().getActiveLeaf()
+  if (active?.type !== 'chat') { ws().splitActive('right'); return }
+  const pinned = typeof active.params.sessionId === 'string' ? active.params.sessionId : app().activeId
+  ws().splitActive('right', { followActive: false, sessionId: pinned, reuseKey: `session:${pinned || 'new'}` })
+}
+
+/** Tangu 的命令(核心插件化 2e-4,原在 bootstrapEngine;第 3 步进包的 setup)。bootstrapEngine 在原来那一处调,
+ *  命令面板 / 快捷键表里这几条从此挨在一起。 */
+export function registerTanguCommands(): void {
+  // 应用 / 窗口引用的快捷键(双 ⌘):开机就注册,别等第一张输入卡 —— 停在没有输入卡的 Space 上启动时全局那条订阅会一直没人要。
+  // 写进笔记那条路不要对话,所以照旧不随 tangu 门控(没装 Tangu 时它还该不该在,第 3 步定)。
+  ensureAppRefCommand()
+  if (!hasNativeFeature('tangu')) return
+  addCommand({ id: 'new-chat', title: () => app().tr('sidebar.newChat'), keywords: 'new chat 新对话', hotkey: 'mod+n', run: blankNewChat , invoke: {
+    description: 'Start a new, empty chat in the window the user is talking to you from. Use it when the user asks to start over or open a fresh conversation.',
+  } })
+  // 旁聊(/btw;⌘; 同 Claude Desktop):带当前会话上下文问一句题外话,开在会话级 Floating Panel 里。
+  // 新对话草稿(activeId=null)没有上下文可带 → 不开。不给 invoke:这是用户自己的旁路,不是 agent 能替用户点的动作。
+  addCommand({ id: 'chat-btw', title: () => translate('btw.cmd'), keywords: 'btw by the way side question aside 顺便问 旁聊', hotkey: 'mod+;', run: () => {
+    const s = app()
+    if (!s.activeId) return
+    const activeSession = s.sessions.find((x) => x.id === s.activeId) || s.archivedSessions.find((x) => x.id === s.activeId) || null
+    openBtw({ sessionId: s.activeId, title: activeSession?.title, modelId: activeChatModelId({ ...s, activeSession }) || undefined })
+  } })
+  addCommand({ id: 'split-right', title: () => app().tr('command.splitRight'), keywords: 'split 分屏', hotkey: 'mod+\\', run: splitChat })
+  addCommand({
+    id: 'show-chat-panel',
+    icon: MessageCircle,
+    title: () => translate('bootengine.cmd.showChatPanel'),
+    keywords: 'chat panel side conversation 侧栏 对话 面板',
+    run: () => ws().showSideView('right', 'chat-panel'),
+  })
+  addCommand({ id: 'stop-run', title: () => app().tr('command.stop'), keywords: 'stop 停止', run: async () => { await app().stop() } })
+  addCommand({ id: 'compact', title: () => app().tr('command.compact'), keywords: 'compact 压缩', run: () => void app().compact() })
+  addCommand({ id: 'branch', title: () => app().tr('command.branch'), keywords: 'branch 分支', run: () => void app().branchFromMessage() })
+}
 
 /** Activate only the Tangu package's native view contributions. */
 export function registerTanguViews(): void {
   if (!hasNativeFeature('tangu')) return
-  // 给宿主的接缝(核心插件化 2e):收件箱里的任务卡由 Tangu 画,宿主只管放。
+  // 给宿主的接缝(核心插件化 2e):收件箱里的任务卡由 Tangu 画,宿主只管放;设置页的两个聊天开关读写走 Tangu;
+  // 主页的新对话输入区(和 ctx.tangu.mountComposer)是 Tangu 交出的同一份;工作区侧栏的轨道 / 会话列表两种模式也由 Tangu 交出。
   setTanguInboxTasks(inboxTasks)
+  setTanguPrefs({ chatAvatars: { get: isChatAvatarsOn, set: setChatAvatarsOn }, promptSuggest: { get: isPromptSuggestOn, set: setPromptSuggest } })
+  setTanguNewChat({ Composer: NewChatComposer, send: sendFromNewChat, startCall: startNewChatCall, mount: mountNewChatComposer })
+  setTanguSidebarModes({ Orbits: OrbitsView, Sessions: SessionsView })
+  setTanguChatOutline(TocView) // 「大纲」视图在主区是对话时画会话目录
+  setTanguChatViews({ Chat: ChatView, Preview: ChatPreview }) // 宿主嵌固定会话处(图像工作室 / 插件聊天 / mini)与外观预览窗口
   // chat 可关闭(浏览器式):关掉主区最后一个 view → 显示「新建标签页」启动器(见 workspaceStore.closeLeaf)。
   // workspaceSource: 'orbits' = 自动档翻转的**声明位**(方案 §3.7-7):主区是 chat 时左栏自动落新版会话侧栏,
   // 不动 workspaceMode.ts 的硬规则;右栏恒 files 不受它管。

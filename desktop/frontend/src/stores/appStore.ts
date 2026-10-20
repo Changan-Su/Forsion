@@ -20,7 +20,6 @@ import { catalogFor, ensureCatalog, forgetCatalog, rememberCatalog } from '../se
 import { unitHostProfile } from '../services/engine/hostFs'
 import '../services/engine/messages'
 import { currentPlatform, testConnection } from '../services/agentRunService'
-import { effectiveSessionMode } from '../views/sessionMode'
 import { recordUiAction } from '../diag'
 import { getClientSurface, notifyClientSurfaces } from '../services/clientSurfaces'
 import { windowKind } from '../windowKind'
@@ -32,7 +31,7 @@ import { agentWriteKnown, noteAgentWriteEnd, noteAgentWriteLive, noteAgentWriteS
 import { translate } from '../i18n'
 import { abortAllTanguRuns, abortTanguRun, createTanguSlice, readFocusModel, resetTanguAuthScope, type TanguState } from '@tangu/ui/tangu/store/tanguSlice'
 // 转出垫片(第 2a 步):这些搬进了 Tangu 的 store 半身,import 方暂时照旧从这里取,之后逐个改到 Tangu 自己的出口。
-export { sketchFromToolEvent, recordToUi, splitDoneMark, pushTextSeg, pushToolSeg, segmentsFromHistory, settleSegments, DEFAULT_APPROVAL, DEFAULT_THINKING, stickyDefaults, applyPreset, rootlessWs, sessionReachable, composerReady, newSessionDirs, resolveNewSessionWorkspace, newChatProjectPath, newSessionPreset, withAmadeusWorkspace, amadeusLandingRoot, remoteSafeInit, newChatModelId, activeChatModelId, lockSessionMove, unlockSessionMove, AGENT_CONFIG_READ_RETRY_MS, AGENT_CONFIG_SYNC_WAIT_MS, steerAcceptPatch } from '@tangu/ui/tangu/store/tanguSlice'
+export { isHtmlCardTool, sketchFromToolEvent, recordToUi, splitDoneMark, pushTextSeg, pushToolSeg, segmentsFromHistory, settleSegments, DEFAULT_APPROVAL, DEFAULT_THINKING, stickyDefaults, applyPreset, rootlessWs, sessionReachable, composerReady, newSessionDirs, resolveNewSessionWorkspace, newChatProjectPath, newSessionPreset, withAmadeusWorkspace, amadeusLandingRoot, remoteSafeInit, newChatModelId, activeChatModelId, lockSessionMove, unlockSessionMove, AGENT_CONFIG_READ_RETRY_MS, AGENT_CONFIG_SYNC_WAIT_MS, steerAcceptPatch } from '@tangu/ui/tangu/store/tanguSlice'
 export type { SpecialKind, TeamWorkMember, DeskState, QueueItem } from '@tangu/ui/tangu/store/tanguSlice'
 
 
@@ -232,7 +231,6 @@ export const useApp = create<AppState>((set, get) => ({
     catalogFor,
     rememberCatalog,
     ensureCatalog,
-    effectiveSessionMode,
     contentStorageKey,
     activeSpaceId: () => useSpaceStore.getState().activeSpaceId,
     viewDisplayName: (type) => getView(type)?.displayName,

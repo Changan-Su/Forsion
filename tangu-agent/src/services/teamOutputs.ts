@@ -4,6 +4,7 @@ import { v5 as uuidv5 } from 'uuid';
 import type { AgentEvent } from './eventBus.js';
 import type { FinalizeMessageInput } from '../seams/stateStore.js';
 import { query } from '../core/db.js';
+import { isHtmlCardTool } from '../tools/builtin/sketch.js';
 
 export const TEAM_OUTPUT_MODE = 'team_output_mode';
 type Source = { runId: string; sessionId: string; slug: string; name: string; modelId: string };
@@ -14,7 +15,7 @@ export function teamOutputCollector(source: Source): (ev: AgentEvent) => TeamOut
   const seen = new Set<string>();
   return (ev) => {
     const p = ev.payload || {};
-    if (ev.type === 'tool_call' && p.name === 'sketch' && p.id) {
+    if (ev.type === 'tool_call' && isHtmlCardTool(p.name) && p.id) {
       calls.set(p.id, { id: p.id, type: 'function', function: { name: p.name, arguments: p.arguments }, ui_content_offset: 0 });
       return;
     }
@@ -29,7 +30,7 @@ export function teamOutputCollector(source: Source): (ev: AgentEvent) => TeamOut
       try { if (!JSON.parse(call.function.arguments).html?.trim()) return; } catch { return; }
       key = `sketch:${p.id}`;
       out.toolCalls = [call];
-      out.toolResults = [{ tool_call_id: p.id, name: 'sketch', content: p.result, isError: false }];
+      out.toolResults = [{ tool_call_id: p.id, name: call.function.name, content: p.result, isError: false }];
     } else if (ev.type === 'display_file') {
       if (typeof p.name !== 'string' || !p.name || !(typeof p.path === 'string' && p.path || typeof p.dataUrl === 'string' && p.dataUrl)) return;
       key = `file:${ev.seq}`;

@@ -25,6 +25,12 @@ import { registerPlugin } from '@capacitor/core'
 import { registerClientSurface } from '@/services/clientSurfaces'
 import { SettingsPage } from '@/components/SettingsPage'
 import type { PluginSettingsPageSchema } from '../../desktop/shared/settingsPage'
+import { setTanguPrefs } from '@/amadeus/plugins/tanguSeam'
+import { isChatAvatarsOn, setChatAvatarsOn } from '@tangu/ui/views/chat2/chatAvatars'
+import { isPromptSuggestOn, setPromptSuggest } from '@tangu/ui/views/chat2/promptSuggest'
+
+// 裸挂绕过了 installEngine:Tangu 交给设置页的偏好槽(核心插件化 2e-2)照 features/tangu.tsx 注入一份,聊天头像 / 输入建议开关才摆得出来
+setTanguPrefs({ chatAvatars: { get: isChatAvatarsOn, set: setChatAvatarsOn }, promptSuggest: { get: isPromptSuggestOn, set: setPromptSuggest } })
 
 const dark = new URLSearchParams(location.search).has('dark')
 const desktop = new URLSearchParams(location.search).has('desktop')

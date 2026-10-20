@@ -22,6 +22,7 @@ import { clearSuggestion, requestSuggestion } from '../../views/chat2/promptSugg
 import type { ChatRef } from '../../components/chatDragRef'
 import type { PreviewTarget } from '../../components/WorkspaceFilePreview'
 import { openWsFile } from '../../views/wsFileNav'
+import { effectiveSessionMode } from '../../views/sessionMode'
 import { track } from '../../achievements/store'
 import { finishRunStats, stepRunStats, type RunStats } from '../../stores/runStats'
 import { AGENT_WRITE_TOOLS, DESK_EDIT_TOOLS, DESK_PERSIST_KEY, agentWriteChecks, deskItemFor, extractStreamingString, isDuplicateShow, packDeskMap, replaceTop, resolveDeskPath, unpackDeskMap, type DeskItem } from '../../stores/deskPlan'
@@ -86,8 +87,11 @@ const GROUP_SPEAKER_RE = /^\*\*🗣\s*([^*\n]+?)\s*\*\*\n+([\s\S]*)$/
 /** sketch 工具事件 → 卡片载荷。只认**有结果**且非错的调用:引擎尺寸闸拒掉的不画;
  *  result 闸兼防重载分歧——recordToUi 对历史事件一律 done:true,run 中止在 tool_result 前的调用
  *  只有它能挡住(直播路径没画过的卡,重载也不该补画)。参数残缺=当没有。 */
+/** HTML 卡的工具名:10-20 改名为 intelligent_ui_html;旧会话、比本机旧的引擎(远程执行节点)发来的还叫 sketch。 */
+export const isHtmlCardTool = (name: string): boolean => name === 'intelligent_ui_html' || name === 'sketch'
+
 export function sketchFromToolEvent(ev: ToolEvent): SketchItem | undefined {
-  if (ev.name !== 'sketch' || !ev.done || ev.isError || ev.result === undefined || !ev.arguments) return undefined
+  if (!isHtmlCardTool(ev.name) || !ev.done || ev.isError || ev.result === undefined || !ev.arguments) return undefined
   try {
     const a = JSON.parse(ev.arguments)
     const html = typeof a.html === 'string' ? a.html.trim() : ''
@@ -550,7 +554,7 @@ export function newSessionPreset(
 ): 'chat' | undefined {
   if (ws && ws.kind !== 'rootless') return undefined
   if (ws?.kind === 'rootless') return 'chat'
-  return host.effectiveSessionMode(choice, platform) === 'chat' ? 'chat' : undefined
+  return effectiveSessionMode(choice, platform) === 'chat' ? 'chat' : undefined
 }
 
 /** 活动 Amadeus Vault 是 Forsion 的系统工作区:本机会话默认把它并入额外可写根。
@@ -886,8 +890,6 @@ export interface TanguHost {
   catalogFor(key: TargetKey): { models: ModelsResponse | null } | null
   rememberCatalog(key: TargetKey, patch: { agents?: NormalAgentDef[]; defaultAgentSlug?: string }): void
   ensureCatalog(key: TargetKey, opts: { force?: boolean }): Promise<unknown>
-  /** 侧栏 Chat / Work 模式的生效值(views/sessionMode)。 */
-  effectiveSessionMode(mode: SessionMode | null | undefined, platform: 'desktop' | 'web' | 'mobile'): SessionMode
   /** 按账号区分的本地存储键、当前 Space、已注册视图的显示名(@lcl/engine)。 */
   contentStorageKey(base: string): string
   activeSpaceId(): string

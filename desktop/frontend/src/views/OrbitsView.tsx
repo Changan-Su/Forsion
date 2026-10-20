@@ -16,18 +16,17 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { Info, MoreHorizontal, Pencil, Pin, PinOff, Plus, SquarePen, Trash2, UserPlus, Users, UsersRound, FolderPlus, MessageSquarePlus } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
-import { OverlayAt, setActiveSpace, useListFirst, useNativeChromeExtras, useNativeSheetMenu, useSpaceStore, type SheetMenuItem } from '@lcl/engine'
+import { OverlayAt, setActiveSpace, useCommandStore, useListFirst, useNativeChromeExtras, useNativeSheetMenu, useSpaceStore, type SheetMenuItem } from '@lcl/engine'
 import { CtxMenuButtons } from '../components/CtxMenuButtons'
-import { SidebarPane, sessionActivityAt } from '@tangu/ui/views/chat2/SidebarPane'
+import { SidebarPane, sessionActivityAt } from './chat2/SidebarPane'
 import { SidebarRow } from '../components/SidebarRow'
 import { ListChips, ListFab, ListHint } from '../components/phoneList'
-import { useQuickFind } from '../quickFind'
 import { EngineIcon } from '../components/EngineIcon'
 import { useApp } from '../stores/appStore'
 import { useSessionAttention, useSoloStatus } from '../stores/attentionStore' // P1-K3
-import { StatusMark } from '@tangu/ui/views/chat2/AttentionDot'
-import type { RowStatus } from '@tangu/ui/views/chat2/sessionTree'
-import { openSpecial } from '@tangu/ui/views/SpecialViews'
+import { StatusMark } from './chat2/AttentionDot'
+import type { RowStatus } from './chat2/sessionTree'
+import { openSpecial } from './SpecialViews'
 import { openNewChat, openSession, openSolo, openTeam, rotateSolo } from '../sessionNav'
 import { AvatarStack } from '../components/AvatarStack'
 import { AgentAvatar } from '../components/AgentAvatar'
@@ -40,11 +39,11 @@ import * as api from '../services/backendService'
 import { usePageStore } from '../amadeus/store/pageStore'
 import { sessionsInMode, workspacesInMode } from './sessionMode'
 import { registerMessages, useI18n } from '../i18n'
-import { isHomeSession, isIndependentOrbitConfig, isTeamImageAvatar, sessionWorkspaceKey, type NormalAgentDef, type SessionRecord, type TeamDef } from '../types'
+import { isHomeSession, isIndependentOrbitConfig, isTeamImageAvatar, sessionWorkspaceKey, type NormalAgentDef, type SessionRecord, type TeamDef } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { runLocationsAvailable } from '../features/runtime'
-import { DeviceSessionSections, attentionBadge } from '@tangu/ui/views/chat2/DeviceSessionSections' // P1-K7a
-import { isOrbitPinned, readOrbitPins, toggleOrbitPin, touchOrbitPin, writeOrbitPins, type OrbitPinTimes } from '@tangu/ui/views/chat2/orbitPins'
-import '@tangu/ui/views/chat2/orbits.css'
+import { DeviceSessionSections, attentionBadge } from './chat2/DeviceSessionSections' // P1-K7a
+import { isOrbitPinned, readOrbitPins, toggleOrbitPin, touchOrbitPin, writeOrbitPins, type OrbitPinTimes } from './chat2/orbitPins'
+import './chat2/orbits.css'
 import { homeTarget, useRemoteCapability } from '../services/engine/targets'
 
 registerMessages({
@@ -106,7 +105,8 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
   const { t, locale } = useI18n()
   // 手机的整屏列表(两级导航的列表层):一颗悬浮主按钮 + 分类胶囊 + 按时间排的两行列表,搜索在原生顶栏上。
   const phone = useListFirst()
-  const openSearch = (): void => useQuickFind.getState().openPalette()
+  // 快速查找走宿主注册的命令(核心插件化 2e-5:不直连宿主的 quickFind 模块)
+  const openSearch = (): void => useCommandStore.getState().run('quick-find')
   useNativeChromeExtras(phone ? { where: 'list', search: { label: t('orbits.phone.search'), run: openSearch } } : null)
   // ⚠️ 这段 store 映射照抄 SessionsView(同一批 props 要原样喂给 SidebarPane);只多取 Agent 轨道那几项。
   const s0 = useApp(useShallow((state) => ({

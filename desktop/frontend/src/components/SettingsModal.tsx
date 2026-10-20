@@ -40,7 +40,6 @@ import { SHOW_SYSTEM_PROMPT_KEY } from '../types'
 import { isSmoothCaretOn, setSmoothCaret as persistSmoothCaret } from '../smoothCaret'
 import { loadHomepageWallpaperPrefs, onHomepageWallpaperPrefsChange, setHomepageWallpaperMotion } from '../views/homepageWallpaper'
 import { selectionBarOrder, setSelectionBarOrder } from '../selectionActions'
-import { isPromptSuggestOn, setPromptSuggest as persistPromptSuggest } from '@tangu/ui/views/chat2/promptSuggest'
 import { getVisualsPref, setVisualsPref, VISUALS_VALUES, type VisualsPref } from '../visualsPref'
 import { isRibbonAutoHome, setRibbonAutoHome, useRibbonStore, RIBBON_RECENT_MAX } from '@lcl/engine/ribbonRegistry'
 import { applyUiFonts, readFont, writeFont, type FontSlot } from '../uiFont'
@@ -74,6 +73,7 @@ import { AmadeusPluginsTab, PluginSettingsView, pluginListDetailBack } from './A
 import { cloudViewKey, cloudViewTitle, cloudTabTitle, resolveCloudSettingsKey, cloudSettingsParent, cloudSettingsTabs, cloudAccountSearchKey } from './settingsCloudNavigation'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
 import { isPlacedSettingsView, pluginDisplayName, pluginsWithSettingsPanel } from '../amadeus/plugins/display'
+import { readTanguPrefs } from '../amadeus/plugins/tanguSeam'
 import { SpacesTab } from './SpacesTab'
 import { PanelNotice } from './PanelNotice'
 import { NotificationsTab, StatusBarTab } from './NotificationsTab'
@@ -109,7 +109,6 @@ import { canvasDoubleClickFocusEnabled, canvasOverviewZoom, setCanvasDoubleClick
 import { aiSpaceTriggerEnabled, setAiSpaceTriggerEnabled } from '@amadeus/lib/aiSpaceTrigger'
 import { SettingsPanel, SettingsRow, SettingsSwitch } from './SettingsPrimitives'
 import { setChatWaitDetailsEnabled, useChatWaitDetailsEnabled } from '../chatWaitDetails'
-import { isChatAvatarsOn, setChatAvatarsOn } from '@tangu/ui/views/chat2/chatAvatars'
 import { isCalmOn, setCalmOn, type CalmKey } from '../theme/calm'
 import { ipcErrorText } from '../ipcError'
 import { newReservedMcpNames } from '../../../shared/mcpNames'
@@ -468,11 +467,13 @@ export const SettingsModal: React.FC<{
   useEffect(() => onHomepageWallpaperPrefsChange(() => setHomeMotion(loadHomepageWallpaperPrefs().motion)), [])
   // 划线菜单的排法(缺省视图工具在前;localStorage,条每次出现时现读)。
   const [selBarOrder, setSelBarOrder] = useState(selectionBarOrder)
-  // 输入建议(默认关;localStorage,promptSuggest.ts 每次现读)。
-  const [promptSuggest, setPromptSuggest] = useState<boolean>(isPromptSuggestOn)
+  // 聊天头像 / 输入建议是 Tangu 的偏好(核心插件化 2e-2):读写走 Tangu 交出的接缝,没装 Tangu 就不摆这两个开关。
+  const tanguPrefs = readTanguPrefs()
+  // 输入建议(缺省开;localStorage,promptSuggest.ts 每次现读)。
+  const [promptSuggest, setPromptSuggest] = useState<boolean>(() => tanguPrefs?.promptSuggest.get() ?? false)
   // 对话里的可视化卡多少(auto / less / off;localStorage,随下一次 run 的 ui_settings 快照进引擎)。
   const [visualsPref, setVisualsPrefState] = useState<VisualsPref>(getVisualsPref)
-  const [chatAvatars, setChatAvatars] = useState<boolean>(isChatAvatarsOn)
+  const [chatAvatars, setChatAvatars] = useState<boolean>(() => tanguPrefs?.chatAvatars.get() ?? true)
   const [ribbonAutoHome, setRibbonAutoHomeOn] = useState<boolean>(isRibbonAutoHome)
   // 「外围淡出」靠悬停恢复(calm.css 整段关在 hover: hover 里):没有悬停的设备上那一行与它的搜索结果都不出。
   const hoverCapable = !!window.matchMedia?.('(hover: hover)').matches
@@ -1359,6 +1360,7 @@ export const SettingsModal: React.FC<{
       : need === 'desktop' ? isDesktop
       : need === 'host' ? isDesktop && !unitPage
       : need === 'hover' ? hoverCapable
+      : need === 'tangu' ? !!tanguPrefs
       : need === 'wide' ? !mobileSettings
       : need === 'cloud' ? isDesktop && cloudAccount // Forsion 账号面随 Extend 出现(forsion 一级页)
       : need === 'managed' ? isDesktop && mode === 'managed' // 托管参数只在已落盘为托管时渲染(g-runtime)
@@ -3170,7 +3172,7 @@ export const SettingsModal: React.FC<{
                             <option value="actions">{t('settingsmodal.selectionBar.actions')}</option>
                           </select>
                         </div>
-                        <div className="settings-control-row" data-setting-anchor="chat-avatars">
+                        {tanguPrefs && <div className="settings-control-row" data-setting-anchor="chat-avatars">
                           <div className="settings-control-copy"><CircleUserRound size={14} /><span><strong>{t('settings.theme.chatAvatars')}</strong><small>{t('settings.theme.chatAvatarsHint')}</small></span></div>
                           <button
                             type="button"
@@ -3181,10 +3183,10 @@ export const SettingsModal: React.FC<{
                             onClick={() => {
                               const on = !chatAvatars
                               setChatAvatars(on)
-                              setChatAvatarsOn(on)
+                              tanguPrefs.chatAvatars.set(on)
                             }}
                           />
-                        </div>
+                        </div>}
                         {/* 「呼吸感」三项(theme/calm.ts)。「外围淡出」靠悬停恢复:没有悬停的设备上样式本来就不生效,开关也不摆出来。 */}
                         {hoverCapable && (
                           <CalmRow k="dim" anchor="calm-dim" icon={<SunDim size={14} />} label={t('settings.theme.calmDim')} hint={t('settings.theme.calmDimHint')} />
@@ -3492,7 +3494,7 @@ export const SettingsModal: React.FC<{
 
                     {/* 输入建议(缺省开):要 Tab 键采用,也要本机引擎(云端执行节点没有这条路由)→ 只在桌面宿主(不含设备页)、
                         有悬停的设备上摆出来;与 promptSuggest.ts 的 supported() 同一道闸。 */}
-                    {isDesktop && !unitPage && hoverCapable && !mobileSettings && (
+                    {tanguPrefs && isDesktop && !unitPage && hoverCapable && !mobileSettings && (
                       <div className="field" style={{ marginTop: 14 }} data-setting-anchor="prompt-suggest">
                         <label>{t('settings.promptSuggest')}</label>
                         <div className="hint" style={{ marginBottom: 8 }}>{t('settings.promptSuggestHint')}</div>
@@ -3500,7 +3502,7 @@ export const SettingsModal: React.FC<{
                           <input
                             type="checkbox"
                             checked={promptSuggest}
-                            onChange={(e) => { setPromptSuggest(e.target.checked); persistPromptSuggest(e.target.checked) }}
+                            onChange={(e) => { setPromptSuggest(e.target.checked); tanguPrefs.promptSuggest.set(e.target.checked) }}
                           />
                           {t('settings.promptSuggestEnable')}
                         </label>

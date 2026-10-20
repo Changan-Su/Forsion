@@ -91,7 +91,7 @@ describe('E2:低频工具转 deferred(work 缺省档)', () => {
 
   it('入口与高频面留在常驻:browser 三入口 / desk_present / sketch / load_tools 本身', () => {
     const face = faceNames();
-    for (const n of ['browser_search', 'browser_navigate', 'browser_task', 'desk_present', 'sketch', 'load_tools',
+    for (const n of ['browser_search', 'browser_navigate', 'browser_task', 'desk_present', 'intelligent_ui_html', 'load_tools',
       'amadeus_list_notes', 'read_file', 'run_bash', 'delegate', 'list_ui_commands']) {
       expect(face, `${n} 必须留在常驻面`).toContain(n);
     }
