@@ -20,6 +20,7 @@ vi.mock('./forsionHome', () => ({
   forsionHomeDir: () => H.dir,
   tanguDataDir: () => H.dir,
   defaultWorkspaceDir: () => H.dir,
+  isDevMode: () => false,
 }))
 vi.mock('./amadeus/settings', () => ({ amadeusConfigPath: () => join(H.dir, 'amadeus-config.json') }))
 

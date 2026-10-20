@@ -2,7 +2,7 @@
 
 <!-- English edition of CHANGELOG.md: same "## <version> (<date>)" headings, one bullet per Chinese bullet. Add both when releasing. -->
 
-## Unreleased
+## 2.13.5 (2026-10-20)
 
 - **Branch a chat, or lay it out as a canvas**:
   - Answers have a new Continue from here action that starts a branch from that message; everything before the fork stays the same as in the original chat. Branches sit under the main thread in the left panel, and Tangu knows how many branches the chat has and where each one got to. From the last answer in a branch, Bring back returns you to the original thread with that answer attached to the input as a quote.
