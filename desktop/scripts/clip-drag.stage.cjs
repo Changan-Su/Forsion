@@ -64,7 +64,8 @@ async function main() {
   const cleanup = async () => {
     if (process.env.HIDE_OTHERS && app) await app.evaluate(({ Menu }) => Menu.sendActionToFirstResponder('unhideAllApplications:')).catch(() => {})
     try { chrome?.kill('SIGKILL') } catch { /* ignore */ }
-    await app?.close().catch(() => {})
+    // 退出守卫可能拦住 close(实测进程会留着)→ 等 5 秒,再按本实例的 PID 收掉
+    if (app) { await Promise.race([app.close().catch(() => {}), sleep(5000)]); try { app.process().kill('SIGKILL') } catch { /* ignore */ } }
     try { stub.close() } catch { /* ignore */ }
   }
   try {
