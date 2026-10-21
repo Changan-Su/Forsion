@@ -7,6 +7,7 @@ import type { DbFile } from '@amadeus-shared/db/schema'
 import { stampUpdatedRows } from '@amadeus-shared/db/stamp'
 import { amadeus } from '../api'
 import { kickAutomation } from './automationKick'
+import { HUMAN_CAL, readHumanCal, writeHumanCalCas } from './humanCalendarIo'
 import { onNotePathGone, usePageStore } from './pageStore'
 
 export interface DbEntry {
@@ -88,14 +89,15 @@ async function persistInner(ref: string, attempt: number, gen = useDbStore.getSt
   if (!e || e.status !== 'ok' || !e.path || !e.data) return
   const ops = [...(pendingOps.get(ref) ?? [])] // 快照:CAS 等待期间用户可能又 mutate,那些不属于本批
   try {
-    // 宿主没有比对交换写(云端 / 移动端桥),或这份数据没有票据 → 老路无条件写。
-    if (!amadeus.writeDatabaseCas || !e.version) {
+    // 宿主没有比对交换写(云端 / 移动端桥),或这份数据没有票据 → 老路无条件写。默认日历(human/)一律走引擎的比对交换写。
+    const human = ref === HUMAN_CAL
+    if (!human && (!amadeus.writeDatabaseCas || !e.version)) {
       await amadeus.writeDatabase(e.path, e.data)
       if (gen !== useDbStore.getState().gen) return
       ackOps(ref, ops)
       return
     }
-    const r = await amadeus.writeDatabaseCas(e.path, e.data, e.version)
+    const r = human ? await writeHumanCalCas(e.data, e.version ?? '') : await amadeus.writeDatabaseCas!(e.path, e.data, e.version!)
     if (gen !== useDbStore.getState().gen) return
     if (r.ok) {
       ackOps(ref, ops)
@@ -150,7 +152,7 @@ export const useDbStore = create<DbStoreState>((set, get) => ({
     const gen = get().gen
     set((s) => ({ entries: { ...s.entries, [ref]: { status: 'loading', path: null, data: null } } }))
     try {
-      const r = await amadeus.readDatabase(pagePath, ref)
+      const r = ref === HUMAN_CAL ? await readHumanCal() : await amadeus.readDatabase(pagePath, ref)
       if (gen !== get().gen) return
       const entry: DbEntry =
         r.status === 'ok'

@@ -11,6 +11,7 @@ import { isStamped, newRowCells, resolveBaseType } from '../blocks/database/prop
 import { dropSelfRefs, type DroppedRef } from '../blocks/database/rowLink'
 import '../blocks/database/propertyTypes.builtins' // 确保内置 todo/calendarDate 在场
 import { useDbStore } from './dbStore'
+import { HUMAN_CAL } from './humanCalendarIo'
 import { useNoteViewStore } from './noteViewStore'
 import { flushAllScopes, usePageStore } from './pageStore'
 import { ensureAmadeusReady } from '../../amadeusPlugins'
@@ -122,7 +123,7 @@ export function aggregateDatabases(paths: string[], entries: DbEntries, folders:
 
 /** 按路径取当前一张表(写口用,不全量重算)。 */
 export function getAggDb(path: string): AggDb | null {
-  if (!DB_RE.test(path) || !usePageStore.getState().files.includes(path)) return null
+  if (path !== HUMAN_CAL && (!DB_RE.test(path) || !usePageStore.getState().files.includes(path))) return null
   return aggOne(path, useDbStore.getState().entries, useNoteViewStore.getState().folders)
 }
 
