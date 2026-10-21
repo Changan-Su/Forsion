@@ -248,3 +248,23 @@ describe('HUMAN.md collaboration lifecycle', () => {
     expect(checkWritePath({ userId: 'owner', sessionId: 'project', appId: 'tangu', cwd: project, execMode: 'host' }, join(project, '.tangu/HUMAN.md'))).toMatchObject({ ok: false, hardDeny: true });
   });
 });
+
+describe('human/CALENDAR.db — the default calendar the calendar view edits', () => {
+  const cal = (rows: string[]) => ({ version: 2, name: 'My calendar', columns: [{ id: 'n', name: 'Name', type: 'text' }, { id: 'd', name: 'Date', type: 'calendarDate' }], rows: rows.map((id) => ({ id, cells: { n: id, d: '2026-10-21' } })) });
+  it('reads, writes against the version it read, rejects stale writes and remote callers', async () => {
+    rmSync(join(home, 'human', 'CALENDAR.db'), { force: true });
+    expect((await api('/agent/human/CALENDAR.db')).body.status).toBe('missing');
+    const created = await api('/agent/human/CALENDAR.db', 'PUT', { data: cal(['a']), version: null });
+    expect(created.status).toBe(200);
+    const read = await api('/agent/human/CALENDAR.db');
+    expect(read.body).toMatchObject({ status: 'ok', version: created.body.version });
+    expect(read.body.data.rows.map((r: any) => r.id)).toEqual(['a']);
+    expect((await api('/agent/human/CALENDAR.db', 'PUT', { data: cal(['a', 'b']), version: null })).status).toBe(409); // 文件已经在了:不能当新建盖掉
+    const next = await api('/agent/human/CALENDAR.db', 'PUT', { data: cal(['a', 'b']), version: read.body.version });
+    expect(next.status).toBe(200);
+    expect((await api('/agent/human/CALENDAR.db', 'PUT', { data: cal(['x']), version: read.body.version })).status).toBe(409); // 拿旧版本写
+    expect(JSON.parse(readFileSync(join(home, 'human', 'CALENDAR.db'), 'utf8')).rows.map((r: any) => r.id)).toEqual(['a', 'b']);
+    expect((await api('/agent/human/CALENDAR.db', 'PUT', { data: { ...cal([]), source: { folder: 'x' } }, version: next.body.version })).status).toBe(400);
+    expect((await api('/agent/human/CALENDAR.db', 'GET', undefined, { 'x-forsion-remote': 'lan' })).status).toBe(403);
+  });
+});
