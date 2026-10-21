@@ -48,6 +48,13 @@ async function main() {
   const stub = await startStubEngine()
   let app, win, runtime
   const children = []
+  const closeApp = async () => {
+    if (!app) return
+    const process = app.process()
+    await Promise.race([app.close(), sleep(15000)]).catch(() => {})
+    if (process.exitCode === null) execFileSync('taskkill.exe', ['/PID', String(process.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
+    app = undefined
+  }
   try {
     app = await electron.launch({ executablePath: exe, args: ['--lang=zh-CN', md], env: { ...process.env, TANGU_HOME: home, FORSION_WORKSPACE_DIR: path.join(home, 'workspace'), TANGU_BACKEND_URL: stub.url }, timeout: 60000 })
     const info = runtime = await app.evaluate(({ app }) => ({ packaged: app.isPackaged, version: app.getVersion(), exe: process.execPath, data: app.getPath('userData') }))
@@ -98,6 +105,16 @@ async function main() {
     await win.locator('.ProseMirror:visible').filter({ hasText: 'Inside packaged note.' }).first().waitFor({ timeout: 30000 })
     check('lowercase vault path reuses the native note', (await titles()).filter(title => title.trim().toLowerCase() === 'inside').length === 1 && !await win.locator('.wsfile-name').filter({ hasText: inside.toLowerCase() }).count())
     await win.screenshot({ path: path.join(out, 'installed-note.png') })
+    await closeApp()
+    // Exercise the actual cold ShellExecute path after all installed processes
+    // exit, inspecting its rendered content through native UIA without attaching
+    // a debugger or changing the official registry handler.
+    const cold = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-File', path.join(__dirname, 'windows-installed-cold-shell.ps1'), '-Executable', exe, '-File', md, '-Output', path.join(out, 'cold-shell.json')], {
+      windowsHide: true, stdio: ['ignore', 'inherit', 'inherit'],
+      env: { ...process.env, TANGU_HOME: home, FORSION_WORKSPACE_DIR: path.join(home, 'workspace'), TANGU_BACKEND_URL: stub.url },
+    })
+    const coldCode = await new Promise((resolve, reject) => { cold.once('exit', resolve); cold.once('error', reject) })
+    check('actual cold shell open renders the original file in the installed app', coldCode === 0 && JSON.parse(fs.readFileSync(path.join(out, 'cold-shell.json'), 'utf8').replace(/^\uFEFF/, '')).passed)
     fs.writeFileSync(path.join(out, 'application-results.json'), JSON.stringify({ checks, runtime: info }, null, 2))
     console.log(`${checks.length}/${checks.length} application checks passed`)
   } catch (error) {
@@ -107,7 +124,7 @@ async function main() {
     throw error
   } finally {
     for (const child of children) if (child.exitCode === null) child.kill()
-    try { if (app) { const process = app.process(); await Promise.race([app.close(), sleep(15000)]).catch(() => {}); if (process.exitCode === null) execFileSync('taskkill.exe', ['/PID', String(process.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }) } }
+    try { await closeApp() }
     finally { await stub.close() }
   }
 }

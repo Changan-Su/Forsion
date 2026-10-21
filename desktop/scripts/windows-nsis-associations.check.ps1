@@ -71,9 +71,10 @@ try {
     Check ((Default $ext) -eq $expected) "published baseline left its real $ext orphan for migration"
   }
   $taskMachineMd=Default 'md' 'HKLM:'
+  $taskMachinePdf=Default 'pdf' 'HKLM:'
   Check ((Default 'markdown' 'HKLM:') -eq '') 'machine Markdown extension is unassigned before source migration'
   Install 'allusers'
-  Check ((Default 'pdf') -eq '') 'source migrates its former PDF default to Alternate'
+  Check ((Default 'pdf') -eq $taskMachinePdf) 'source preserves the machine PDF owner while migrating the retired per-user default'
   $taskExpectedMd=if ($taskMachineMd) {$taskMachineMd} else {'Forsion.forsion.markdown'}
   Check ((Default 'md') -eq $taskExpectedMd) 'source keeps an existing machine Markdown owner or claims an unassigned one'
   foreach ($ext in @('pdf','md','markdown')) { Check ((Default $ext 'HKCU:') -eq '') "scope migration clears only the retired product's real orphan for $ext" }
