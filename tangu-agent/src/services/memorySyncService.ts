@@ -18,6 +18,8 @@ export function setSyncSources(s: { brain: CloudBrainServices }): void {
 }
 export interface SyncRunResult {
   ok: boolean; agents: number; pushed: number; pulled: number; deleted: number; skipped: number;
+  /** 这一轮新出的冲突副本(Agent 文件夹和 human/ 里的 `… (conflict …)`),蓬洲云同步页据此提示 */
+  conflicts: number;
   memory: SyncResult['memory']; logs: SyncResult['logs']; error?: string;
 }
 export interface SyncStatus { available: boolean; running: boolean; lastAt: number | null; lastResult: SyncRunResult | null }
@@ -25,7 +27,7 @@ export function getSyncStatus(userId = 'local'): SyncStatus {
   const scope = agentSyncScope(brain?.agentFiles, userId);
   return { available: !!scope, running: !!scope && running.has(`${generation}:${scope}`), lastAt: lastScope === scope ? lastAt : null, lastResult: lastScope === scope ? lastResult : null };
 }
-const failed = (error: string): SyncRunResult => ({ ok: false, agents: 0, pushed: 0, pulled: 0, deleted: 0, skipped: 0, memory: 'skipped', logs: [], error });
+const failed = (error: string): SyncRunResult => ({ ok: false, agents: 0, pushed: 0, pulled: 0, deleted: 0, skipped: 0, conflicts: 0, memory: 'skipped', logs: [], error });
 /** Duplicate callers await the same actual operation instead of receiving a stale "success". */
 export function syncNow(userId: string, opts: { signal?: AbortSignal } = {}): Promise<SyncRunResult> {
   const active = brain;
@@ -40,8 +42,8 @@ export function syncNow(userId: string, opts: { signal?: AbortSignal } = {}): Pr
     let result = failed('sync did not complete');
     try {
       guard();
-      const af = active.agentFiles ? await runAgentFilesSync(active.agentFiles, userId, { signal, assertActive: guard }) : { ok: true, agents: 0, pushed: 0, pulled: 0, deleted: 0, skipped: 0, error: undefined };
-      result = { ok: af.ok, agents: af.agents, pushed: af.pushed, pulled: af.pulled, deleted: af.deleted, skipped: af.skipped, memory: 'skipped', logs: [], error: af.error };
+      const af = active.agentFiles ? await runAgentFilesSync(active.agentFiles, userId, { signal, assertActive: guard }) : { ok: true, agents: 0, pushed: 0, pulled: 0, deleted: 0, skipped: 0, conflicts: 0, error: undefined };
+      result = { ok: af.ok, agents: af.agents, pushed: af.pushed, pulled: af.pulled, deleted: af.deleted, skipped: af.skipped, conflicts: af.conflicts, memory: 'skipped', logs: [], error: af.error };
       guard();
       const permission = agentSyncPermission(DEFAULT_AGENT_SLUG, scope);
       if (permission.enabled && permission.shared) {

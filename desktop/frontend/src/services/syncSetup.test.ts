@@ -161,7 +161,7 @@ describe('agents and plugins', () => {
     const s = await fresh()
     await s.setSync('plugins', false)
     expect(localStorage.getItem('forsion.pluginSync.off')).toBe('1')
-    expect(s.getSync()?.plugins).toEqual({ on: false, count: 1 })
+    expect(s.getSync()?.plugins).toMatchObject({ on: false, count: 1 })
     await s.setSync('plugins', true)
     expect(localStorage.getItem('forsion.pluginSync.off')).toBeNull()
   })
@@ -223,7 +223,28 @@ describe('first sign-in card', () => {
     expect(wantsSyncCard(snap, false)).toBe(false)
     expect(wantsSyncCard({ ...snap, decided: true }, true)).toBe(false)
     expect(wantsSyncCard({ ...snap, signedIn: false }, true)).toBe(false)
-    expect(wantsSyncCard({ ...snap, notes: { ...snap.notes, on: true }, agents: { on: true, count: 2 }, plugins: { on: true, count: 1 } }, true)).toBe(false)
+    expect(wantsSyncCard({ ...snap, notes: { ...snap.notes, on: true }, agents: { ...snap.agents, on: true, count: 2 }, plugins: { ...snap.plugins, on: true, count: 1 } }, true)).toBe(false)
+  })
+})
+
+describe('sync feedback for agents and plugin data', () => {
+  it('carries the last agent sync (with its conflict copies) and how many plugins still have unsent changes', async () => {
+    request.mockImplementation(async (_t: unknown, path: string) => path === '/agent/sync/status'
+      ? { available: true, running: false, lastAt: 1000, lastResult: { ok: false, pushed: 3, pulled: 1, conflicts: 2, error: 'cloud file hash mismatch', memory: 'skipped', logs: [] } }
+      : { enabled: true, agents: 2 })
+    localStorage.setItem('forsion.pluginSync.a', JSON.stringify({ v: 4, gen: 2, dirty: 5 }))
+    localStorage.setItem('forsion.pluginSync.lastOk', '900')
+    const s = await fresh()
+    await s.refreshSync()
+    expect(s.getSync()?.agents).toEqual({ on: true, count: 2, running: false, last: { at: 1000, ok: false, pushed: 3, pulled: 1, conflicts: 2, error: 'cloud file hash mismatch' } })
+    expect(s.getSync()?.plugins).toEqual({ on: true, count: 1, pending: 1, lastAt: 900 })
+  })
+
+  it('an engine that never synced yet (or an old one without the status route) shows no last result', async () => {
+    request.mockImplementation(async (_t: unknown, path: string) => { if (path === '/agent/sync/status') throw new Error('404'); return { enabled: true, agents: 1 } })
+    const s = await fresh()
+    await s.refreshSync()
+    expect(s.getSync()?.agents).toMatchObject({ on: true, last: null })
   })
 })
 

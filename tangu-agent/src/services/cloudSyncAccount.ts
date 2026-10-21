@@ -100,6 +100,16 @@ export function setAgentSyncDefault(scope: string, enabled: boolean): void {
   for (const [key, c] of consentControllers) if (key.endsWith(`:${scope}`)) { c.abort(new Error('agent sync consent changed')); consentControllers.delete(key); }
 }
 
+/** 总闸开着这一刻的同意(human/ 上云用):总闸再被点一下(关或重开)就作废,和 captureAgentSyncPermission 同一个口径。 */
+export function captureAgentSyncDefault(scope: string): () => void {
+  const initial = readDefaults()[scope];
+  if (initial?.enabled !== true) throw new Error('agent sync consent required');
+  return () => {
+    const current = readDefaults()[scope];
+    if (current?.enabled !== true || current.revision !== initial.revision) throw new Error('agent sync consent changed');
+  };
+}
+
 /** Legacy cloud_sync=true has no owner and cannot authorize a newly selected cloud account. */
 export function agentSyncPermission(slug: string, scope: string | null): Permission {
   if (!scope) return { enabled: false, shared: false };
@@ -114,6 +124,13 @@ export function agentSyncPermission(slug: string, scope: string | null): Permiss
 
 const consentControllers = new Map<string, AbortController>();
 const consentKey = (slug: string, scope: string): string => `${agentSyncDir(slug)}:${scope}`;
+/** 只凭总闸同意的在途同步(human/)用:总闸一动(setAgentSyncDefault 中止所有 `…:<scope>` 键)就取消请求,不只是回包后判失败。 */
+export function agentSyncDefaultSignal(scope: string): AbortSignal {
+  const key = `default:${scope}`;
+  let controller = consentControllers.get(key);
+  if (!controller) { controller = new AbortController(); consentControllers.set(key, controller); }
+  return controller.signal;
+}
 export function agentSyncConsentSignal(slug: string, scope: string): AbortSignal {
   const key = consentKey(slug, scope);
   let controller = consentControllers.get(key);

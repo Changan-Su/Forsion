@@ -8,9 +8,9 @@
  *  - 插件数据 = 本机所有插件一起关的 localStorage 键(PLUGIN_SYNC_ALL_OFF_KEY)。
  * 「点过了」按账号记在本机(decided):登录了但没点过的,主窗弹一次卡片;点「稍后」也算点过,左栏挂点不再弹。
  */
-import { request } from './backendService'
+import { request, type SyncStatusResult } from './backendService'
 import { homeTarget } from './engine/targets'
-import { PLUGIN_SYNC_ALL_OFF_KEY } from '../amadeus/plugins/pluginDataSync'
+import { PLUGIN_SYNC_ALL_OFF_KEY, pluginSyncSummary } from '../amadeus/plugins/pluginDataSync'
 import { usePluginStore, pluginWanted } from '../amadeus/plugins/pluginStore'
 import type { AuthStatusInfo, RemoteSyncConfig, RemoteSyncReport } from '../types'
 import { registerMessages } from '../i18n'
@@ -47,8 +47,10 @@ export interface SyncSnapshot {
     /** 这台装了带 penzor 后端的 Forsion Extend(没有就开不了笔记库同步)。 */
     available: boolean
   }
-  agents: { on: boolean; count: number }
-  plugins: { on: boolean; count: number }
+  /** last = 引擎上一轮 Agent / human/ 文件同步的结果(引擎重启后第一轮跑完前为 null);conflicts = 那一轮新出的冲突副本数 */
+  agents: { on: boolean; count: number; running: boolean; last: { at: number; ok: boolean; pushed: number; pulled: number; conflicts: number; error?: string } | null }
+  /** pending = 改了还没传上去的插件数;lastAt = 上次和云端对上的时刻 */
+  plugins: { on: boolean; count: number; pending: number; lastAt: number | null }
 }
 export interface SyncResult { ok: boolean; error?: string }
 
@@ -98,16 +100,25 @@ const toLast = (r: RemoteSyncReport | null): SyncSnapshot['notes']['last'] => r
   ? { at: r.finishedAt, ok: r.ok, pushed: r.pushed, pulled: r.pulled, conflicts: r.conflicts, skippedLarge: r.skippedLarge?.length ?? 0, errors: r.errors ?? [] }
   : null
 
+const AGENTS_OFF: SyncSnapshot['agents'] = { on: false, count: 0, running: false, last: null }
 async function readAgents(): Promise<SyncSnapshot['agents']> {
   try {
-    const r = await request<{ enabled: boolean | null; agents: number }>(homeTarget(), '/agent/sync/default')
-    return { on: r.enabled === true, count: r.agents ?? 0 }
-  } catch { return { on: false, count: 0 } } // 老引擎没有这条路由 / 引擎没起:当关着
+    const [r, st] = await Promise.all([
+      request<{ enabled: boolean | null; agents: number }>(homeTarget(), '/agent/sync/default'),
+      request<SyncStatusResult>(homeTarget(), '/agent/sync/status').catch(() => null),
+    ])
+    const l = st?.lastResult
+    return {
+      on: r.enabled === true, count: r.agents ?? 0, running: !!st?.running,
+      last: st?.lastAt && l ? { at: st.lastAt, ok: l.ok, pushed: l.pushed ?? 0, pulled: l.pulled ?? 0, conflicts: l.conflicts ?? 0, ...(l.ok ? {} : { error: l.error }) } : null,
+    }
+  } catch { return AGENTS_OFF } // 老引擎没有这条路由 / 引擎没起:当关着
 }
 
 function readPlugins(): SyncSnapshot['plugins'] {
   const st = usePluginStore.getState()
-  return { on: ls.get(PLUGIN_SYNC_ALL_OFF_KEY) !== '1', count: st.plugins.filter((p) => p.syncData && pluginWanted(p, st.disabledIds)).length }
+  const ids = st.plugins.filter((p) => p.syncData && pluginWanted(p, st.disabledIds)).map((p) => p.id)
+  return { on: ls.get(PLUGIN_SYNC_ALL_OFF_KEY) !== '1', count: ids.length, ...pluginSyncSummary(ids) }
 }
 
 async function load(): Promise<void> {
@@ -118,7 +129,7 @@ async function load(): Promise<void> {
   const [state, stats, agents, quota, storage] = await Promise.all([
     rs?.get().catch(() => null) ?? null,
     rs?.rootStats?.().catch(() => null) ?? null,
-    signedIn ? readAgents() : Promise.resolve({ on: false, count: 0 }),
+    signedIn ? readAgents() : Promise.resolve(AGENTS_OFF),
     signedIn ? window.tangu?.cloudFetch?.({ path: '/remotesync/vaults' }).catch(() => null) ?? null : null,
     readStorage(account),
   ])
@@ -172,7 +183,8 @@ export function startSyncSetup(): void {
   // 分离窗 / 浮窗里也有插件实例会来拿状态,只有主窗口(没有 ?window=)替用户发这一次同步
   const isMain = (() => { try { return !new URLSearchParams(location.search).get('window') } catch { return false } })()
   void refreshSync().then(() => {
-    if (isMain && snap?.signedIn && snap.agents.on) void request(homeTarget(), '/agent/sync', { method: 'POST' }).catch(() => {})
+    // 跑完再读一遍:同步页上的「上次同步 / 冲突」跟着这一轮走
+    if (isMain && snap?.signedIn && snap.agents.on) void request(homeTarget(), '/agent/sync', { method: 'POST' }).catch(() => {}).then(() => refreshSync())
   })
 }
 

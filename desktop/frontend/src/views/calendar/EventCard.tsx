@@ -9,6 +9,7 @@
  *  ponytail: 时间仍用原生 date/time 输入编辑(点击展开),未做参考图那种内联时间胶囊编辑器;
  *  select 值显示为中性胶囊,无每选项配色(schema 的 options 是纯字符串,无色)。 */
 import { useEffect, useRef, useState, type ReactElement, type RefObject, type SVGProps, type ReactNode, type MouseEvent } from 'react'
+import { HUMAN_CAL } from '../../amadeus/store/humanCalendarIo'
 import { ExternalLink, MoreHorizontal, ChevronUp } from 'lucide-react'
 import { UI_MODE, useNativeChromeClaim } from '@lcl/engine'
 import { coerceForDisplay, type CellValue, type DbColumn } from '@amadeus-shared/db/schema'
@@ -160,7 +161,8 @@ function EventCardBody({ ev, onClose, closeRef, onActions }: { ev: CardTarget; o
   const deletable = !db.readonly
   const accent = ev.color ?? 'var(--accent, #6c5ce7)'
   // 只读聚合源可能来自 Agent / ICS / 另一侧 Vault，路径不是活动 Vault 可打开的数据库路径。
-  const canOpenSource = !db.readonly || !!db.openRow
+  // 默认日历在引擎家目录里(human/),没有能打开的库文件
+  const canOpenSource = (!db.readonly && db.path !== HUMAN_CAL) || !!db.openRow
 
   return (
     <div className="amx-cal-cardin">

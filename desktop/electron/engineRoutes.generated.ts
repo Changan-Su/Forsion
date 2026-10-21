@@ -81,6 +81,8 @@ export const ENGINE_ROUTES: readonly EngineRoute[] = [
   { method: 'GET', path: '/agent/human/:file', access: 'deny-remote', src: 'routes/human.ts', why: 'host human folder (HUMAN / AGENT / SOUL / MEMORY)' },
   { method: 'PUT', path: '/agent/human/:file', access: 'deny-remote', src: 'routes/human.ts', why: 'host human folder write' },
   { method: 'POST', path: '/agent/human/:file/undo', access: 'deny-remote', src: 'routes/human.ts', why: 'host human folder undo' },
+  { method: 'GET', path: '/agent/human/CALENDAR.db', access: 'deny-remote', src: 'routes/human.ts', why: 'host default calendar (human/CALENDAR.db)' },
+  { method: 'PUT', path: '/agent/human/CALENDAR.db', access: 'deny-remote', src: 'routes/human.ts', why: 'host default calendar write' },
   { method: 'GET', path: '/agent/project-context/human', access: 'deny-remote', src: 'routes/human.ts', why: 'host collaboration configuration' },
   { method: 'PUT', path: '/agent/project-context/human', access: 'deny-remote', src: 'routes/human.ts', why: 'host collaboration configuration write' },
   { method: 'POST', path: '/agent/project-context/human/undo', access: 'deny-remote', src: 'routes/human.ts', why: 'host collaboration configuration undo' },

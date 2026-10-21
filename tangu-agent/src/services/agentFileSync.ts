@@ -11,7 +11,7 @@ import { splitLogBlocks, mergeBlocks, mergeLogHeaders, mergeText3 } from './memo
 import { mergeDbFile } from './dbRowMerge.js';
 import { keepLatestRuns, migrateScheduleFile } from './agentSchedule.js';
 import { AgentFileConflictError, type AgentFilesBrain, type AgentFileMeta, type AgentFileContent } from '../seams/cloudBrain.js';
-import { agentSyncDefault, agentSyncPermission, agentSyncScope, setAgentSyncPermission, captureAgentSyncPermission, agentSyncOperationSignal, agentSyncConsentSignal } from './cloudSyncAccount.js';
+import { agentSyncDefault, agentSyncPermission, agentSyncScope, setAgentSyncPermission, captureAgentSyncDefault, captureAgentSyncPermission, agentSyncOperationSignal, agentSyncConsentSignal, agentSyncDefaultSignal } from './cloudSyncAccount.js';
 import { agentSyncDir, assertSyncPath, atomicSyncWrite, conflictCopyName, readSyncBytes, validSyncPath, validSyncSlug } from './agentSyncPaths.js';
 import { createLocalMemoryStore } from '../adapters/standalone/localMemoryBrain.js';
 import { createMemoryRepository, withMemoryDirectoryLock, type MemoryTombstone } from './memoryRepository.js';
@@ -96,8 +96,9 @@ export async function runAgentFilesSync(cloud: AgentFilesBrain, userId: string, 
   const controller = new AbortController();
   const cleanups: Array<() => void> = [];
   const signal = AbortSignal.any([agentSyncOperationSignal(opts.signal), controller.signal]);
-  const watch = (slug: string): void => {
-    const consent = agentSyncConsentSignal(slug, scope);
+  // slug null = 账号总闸那份同意
+  const watch = (slug: string | null): void => {
+    const consent = slug === null ? agentSyncDefaultSignal(scope) : agentSyncConsentSignal(slug, scope);
     const abort = (): void => controller.abort(consent.reason);
     consent.addEventListener('abort', abort, { once: true });
     cleanups.push(() => consent.removeEventListener('abort', abort));
@@ -117,7 +118,7 @@ export async function runAgentFilesSync(cloud: AgentFilesBrain, userId: string, 
   return result;
 }
 
-async function syncAccount(cloud: AgentFilesBrain, userId: string, scope: string, onlySlug: string | undefined, signal: AbortSignal, guard: Guard, result: AgentFileSyncResult, watch: (slug: string) => void): Promise<void> {
+async function syncAccount(cloud: AgentFilesBrain, userId: string, scope: string, onlySlug: string | undefined, signal: AbortSignal, guard: Guard, result: AgentFileSyncResult, watch: (slug: string | null) => void): Promise<void> {
   const selected = onlySlug ? await getAgent(onlySlug) : null;
   const locals = onlySlug ? (selected ? [selected] : []) : await listAgents(); guard();
   const agents = locals.filter((a) => (!onlySlug || a.slug === onlySlug) && agentSyncPermission(a.slug, scope).enabled);
@@ -182,6 +183,8 @@ async function syncAccount(cloud: AgentFilesBrain, userId: string, scope: string
     await syncBucket(cloud, userId, slug, scope, bucket.cats, bySlug.get(slug) ?? [], { human, agentCalendar }, signal, check, result);
   }
   // USER is an explicit shared-data opt-in, never an implicit private-agent pool.
+  // 账号总闸(「Agents 与记忆」)开着也算:human/ 是用户自己的资料,不该因为默认 Agent 早先单独关过同步就一直不上云
+  if (agentSyncDefault(scope) === true) { shared.push(captureAgentSyncDefault(scope)); watch(null); }
   if (shared.length) {
     const check = (): void => { guard(); shared.forEach((g) => g()); };
     const dir = dirname(userMdFile());
