@@ -20,8 +20,10 @@ try {
     $taskEvidence | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $Output -Encoding utf8
     $taskNames=[Collections.Generic.List[string]]::new()
     foreach ($taskProc in $taskProcesses) {
-      $taskHandle=(Get-Process -Id $taskProc.ProcessId -ErrorAction SilentlyContinue).MainWindowHandle
-      if (!$taskHandle) { continue }
+      [IntPtr]$taskHandle=(Get-Process -Id $taskProc.ProcessId -ErrorAction SilentlyContinue).MainWindowHandle
+      # IntPtr.Zero is truthy in Windows PowerShell; renderer processes have no
+      # top-level window. Compare the native handle explicitly before UIA.
+      if ($taskHandle -eq [IntPtr]::Zero) { continue }
       try {
         $taskRoot=[System.Windows.Automation.AutomationElement]::FromHandle($taskHandle)
         $taskNodes=$taskRoot.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)

@@ -4,6 +4,7 @@ on:
     paths:
       - '.github/workflows/probe-windows-installed-files.yml'
       - 'desktop/scripts/windows-installed-file.e2e.cjs'
+      - 'desktop/scripts/windows-installed-cold-shell.ps1'
       - 'desktop/scripts/windows-installed-associations.ps1'
       - 'desktop/scripts/windows-nsis-associations.check.ps1'
       - 'desktop/scripts/lib/windows-uninstall-owned.ps1'
