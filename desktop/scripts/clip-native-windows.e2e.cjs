@@ -28,10 +28,12 @@ async function main() {
     fs.mkdirSync(dir, { recursive: true })
     fs.writeFileSync(path.join(dir, 'tangu-desktop-config.json'), JSON.stringify({ mode: 'managed', backendUrl: stub.url, token: 'e2e', cloudUrl: 'http://127.0.0.1:9', browserEnabled: false, unitHostEnabled: false }))
   }
-  let app, browser, settings, copyDir
+  let app, browser, settings, copyDir, deadline, phase='launch'
+  const stage=name=>{phase=name;console.log('STAGE '+name);fs.writeFileSync(path.join(output,'stage.json'),JSON.stringify({phase,time:new Date().toISOString()},null,2))}
   const checks = []
   const check = (name, value, details) => { checks.push({ name, ok: !!value, details }); assert.ok(value, name + ': ' + JSON.stringify(details)); console.log('PASS ' + name) }
   try {
+    await Promise.race([(async()=>{
     app = await electron.launch({ ...(packagedExe?{executablePath:packagedExe}:{}),args: [`--user-data-dir=${userData}`, '--lang=en-US',...(packagedExe?[]:[ROOT])], cwd: ROOT,
       env: { ...process.env, FORSION_TEST_DESKTOP: '', TANGU_HARNESS_QUIET: '0', TANGU_HOME: home, TANGU_BACKEND_URL: stub.url } })
     const runtime=await app.evaluate(({app})=>({packaged:app.isPackaged,appData:app.getPath('appData'),resources:process.resourcesPath,electron:process.versions.electron,version:app.getVersion(),appPath:app.getAppPath()}))
@@ -108,6 +110,7 @@ async function main() {
       if(parent) parent.hide()
       window.setMinimumSize(500,400); window.setBounds({x:work.x,y:work.y,width:leftWidth,height:work.height}); window.show(); window.focus()
     }, {id,work,leftWidth})
+    stage('launch Chrome')
     browser = await chromium.launchPersistentContext(path.join(home, 'chrome'), { headless: false, viewport: null, locale: 'en-US', ignoreDefaultArgs: ['--disable-extensions'],
       args: ['--lang=en-US', '--no-first-run', '--no-default-browser-check', '--proxy-server=http://127.0.0.1:9', '--proxy-bypass-list=<-loopback>', `--window-position=${work.x+work.width-chromeWidth},${work.y}`, `--window-size=${chromeWidth},${work.height}`] })
     let page = browser.pages()[0]; await page.goto('chrome://extensions')
@@ -168,6 +171,7 @@ async function main() {
         for(const tab of directoryTabs) await tab.close()
       }
     }
+    stage('developer mode off native drag')
     await dev(false); await drag(false)
     check('native folder drag with developer mode off does not install Clip', !(await info()).some(e=>e.id===ID))
     await page.screenshot({path:path.join(output,'developer-off.png')})
@@ -176,35 +180,43 @@ async function main() {
     // Keep the rejected-case event trace rather than mutating Chrome's handler.
     fs.writeFileSync(path.join(output,'developer-off-final-events.json'),JSON.stringify(await page.evaluate(()=>window.__clipNativeDrops),null,2))
     const rejectedPage=page
+    stage('create independent positive Chrome page')
     page=await browser.newPage(); await page.goto('chrome://extensions'); await observeDrops(); await rejectedPage.close()
+    stage('developer mode on native drag')
     await dev(true); await drag(true)
     let installed
     for(let i=0;i<30;i++){ installed=(await info()).find(e=>e.id===ID);if(installed)break;await sleep(300) }
     await desktop('capture',['-Path',path.join(output,'native-drop.png')])
     check('real Electron native folder drag installs Clip as unpacked in Chrome', installed?.location==='UNPACKED' && installed?.state==='ENABLED' && sameCopy(installed?.path), installed)
+    stage('uninstall before native picker')
     await page.evaluate(id=>chrome.management.uninstall(id,{showConfirmDialog:false}),ID)
     for(let i=0;i<30 && (await info()).some(e=>e.id===ID);i++) await sleep(200)
     check('Clip is removed before independent native picker verification',!(await info()).some(e=>e.id===ID))
+    stage('open native folder picker')
     await page.getByRole('button',{name:'Load unpacked',exact:true}).click()
+    stage('select the actual directory in native picker')
     await desktop('picker',['-Path',copyDir])
     for(let i=0;i<30;i++){ installed=(await info()).find(e=>e.id===ID);if(installed)break;await sleep(300) }
     check('native Load unpacked folder picker independently installs the copy',installed?.location==='UNPACKED' && installed?.state==='ENABLED' && sameCopy(installed?.path),installed)
     await page.screenshot({path:path.join(output,'native-picker-installed.png')})
+    stage('completed native checks')
+    })(),new Promise((_,reject)=>{deadline=setTimeout(()=>reject(new Error('Native Clip deadline exceeded at '+phase)),180000)})])
   } catch(error) {
     console.error('Native Clip acceptance failed:',error)
     await desktop('capture',['-Path',path.join(output,'failure-desktop.png')]).catch(()=>{})
     throw error
   } finally {
+    clearTimeout(deadline)
     fs.writeFileSync(path.join(output,'results.json'),JSON.stringify({checks,home,copyDir},null,2))
     if(settings&&!settings.isClosed()) await settings.screenshot({path:path.join(output,'settings.png')}).catch(()=>{})
-    if(browser)await browser.close().catch(()=>{})
+    if(browser)await Promise.race([browser.close().catch(()=>{}),sleep(10000)])
     if(app) {
       const child=app.process()
       await app.context().unrouteAll({behavior:'ignoreErrors'}).catch(()=>{})
       await Promise.race([app.close().catch(()=>{}),sleep(8000)])
       if(child.exitCode===null) await run('taskkill.exe',['/PID',String(child.pid),'/T','/F'],{windowsHide:true,timeout:10000}).catch(()=>{})
     }
-    await stub.close()
+    await Promise.race([stub.close(),sleep(5000)])
   }
 }
 main().catch(error=>{console.error(error);process.exitCode=1})
