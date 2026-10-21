@@ -51,7 +51,7 @@ const now = Date.now()
 const ago = (min) => now - min * 60_000
 const day = (d, h = 12) => { const x = new Date(now); x.setDate(x.getDate() - d); x.setHours(h, 0, 0, 0); return x.getTime() }
 function startFakeCloud() {
-  const st = { unified: 'ok', signedOut: false, hits: [], quota: 10240 * MB, throttle: false, uploads: [], badLength: 0 }
+  const st = { rollout: null, noticeRevision: null, unified: 'ok', signedOut: false, hits: [], quota: 10240 * MB, throttle: false, uploads: [], badLength: 0 }
   let seq = 0
   const appFiles = {
     'ai-studio': [
@@ -125,12 +125,19 @@ function startFakeCloud() {
       { path: '读书笔记 · 原则.md', kind: 'page', size: 22 * 1024, updatedAt: new Date(day(4)).toISOString() },
     ] })
     if (p === '/api/amadeus/attachments') return json(200, { attachments: [{ vaultId: 'a1', vaultName: '我的云端笔记', path: '课题组/附件/课题组合影.heic', size: 22.4 * MB }], totalBytes: 22.4 * MB })
+    if (p === '/api/storage/notice/ack' && req.method === 'POST') {
+      const b = JSON.parse(String(await body()) || '{}')
+      st.noticeRevision = b.revision
+      if (b.revision !== 7) return json(409,{detail:'Notice changed'})
+      st.rollout = 'grace'
+      return json(200,{revision:7})
+    }
     if (p === '/api/storage/ledger') {
       if (st.unified === 'unavailable') return json(503, { detail: 'Unavailable' })
       const amounts = [driveBytes(), 718*MB, 1594*MB, 20*MB, MB, 1916*MB, 2*MB, 46*MB]
       const ids = ['uploads','ama','sync','agents','profile','apps','plugins','exports']
       const used = amounts.reduce((a,b)=>a+b,0)
-      return json(200, { schemaVersion: 1, phase: 'notice', enforcement: false, complete: true, asOf: new Date().toISOString(), state: st.unified,
+      return json(200, { schemaVersion: 1, phase: st.rollout || 'notice', enforcement: st.rollout === 'enforced', rollout: st.rollout ? { revision:7, acknowledgedAt:st.rollout === 'notice'?null:new Date().toISOString(), graceUntil:new Date(Date.now()+30*86400000).toISOString(), compatibilityUntil:null } : null, complete: true, asOf: new Date().toISOString(), state: st.unified,
         quota: { limitBytes: st.unified === 'over' ? MB : 10240*MB, origin: 'default' }, usage: { usedBytes: used, measuredBytes: used, liveBytes: used, trashBytes: 0, historyBytesExcluded: MB },
         sources: ids.map((id,i)=>({ id, status:'ready', liveBytes:amounts[i], trashBytes:0, historyBytesExcluded:0, fileCount:1 })) })
     }
@@ -301,6 +308,22 @@ async function main() {
     check('① 概览时右栏收起(不是空占位)', (await sideWidth()) < 40 && !(await win.locator('.dv-groupview .sidebar-empty, [data-view-type="sidebar-empty"]').count()), `side=${await sideWidth()}`)
     await setMode('light'); await shot('overview')
     await setMode('dark'); await shot('overview-dark'); await setMode('light')
+
+    const refreshRollout = async () => {
+      await win.getByRole('button', {name:'刷新',exact:true}).click()
+      await win.waitForTimeout(600)
+    }
+    cloud.st.rollout = 'notice'; await refreshRollout()
+    await win.getByRole('button',{name:'已阅读容量与历史保留通知',exact:true}).waitFor()
+    await shot('rollout-notice')
+    await win.getByRole('button',{name:'已阅读容量与历史保留通知',exact:true}).click()
+    await win.waitForFunction(()=>/通知宽限期/.test(document.querySelector('.pz-unified-quota')?.textContent||''))
+    check('T2 实际确认当前版本后进入至少 30 天过渡期', cloud.st.noticeRevision === 7 && !(await win.getByRole('button',{name:'已阅读容量与历史保留通知',exact:true}).count()))
+    await shot('rollout-grace')
+    cloud.st.rollout='enforced'; cloud.st.unified='over'; await refreshRollout()
+    check('T2 启用后的额度文案不再声称只提醒', /暂停新增内容/.test(await win.locator('.pz-unified-quota').textContent()) && !/仅提醒/.test(await win.locator('.pz-unified-quota').textContent()))
+    await shot('rollout-enforced')
+    cloud.st.rollout=null; cloud.st.unified='ok'; await refreshRollout()
 
     if (!process.env.PENZOR_VISUAL_ONLY) {
     // Native root folder contains every source.

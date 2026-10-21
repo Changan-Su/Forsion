@@ -26,7 +26,7 @@ export type NotesChoice = 'merge' | 'cloud' | 'skip'
 export interface NotesPending { cloudFiles: number; cloudBytes: number; cloudDevice: string | null; localOnly: number; conflicts: number }
 export interface SyncSnapshot {
   /** Informational unified quota; never gates sync choices. */
-  storage?: { usedBytes: number | null; limitBytes: number; complete: boolean; asOf: string } | null
+  storage?: { usedBytes: number | null; limitBytes: number; complete: boolean; asOf: string; enforcement?: boolean } | null
   signedIn: boolean
   decided: boolean
   notes: {
@@ -82,7 +82,7 @@ async function readStorage(acct: string | null): Promise<SyncSnapshot['storage']
   if (storageCache?.account === acct && Date.now() - storageCache.at < 60_000) return storageCache.value
   const r = await window.tangu?.cloudFetch?.({ path: '/storage/ledger' }).catch(() => null)
   const l = r?.status === 200 && r.json?.schemaVersion === 1 ? r.json : null
-  const value = l ? { usedBytes: l.complete ? l.usage.usedBytes : null, limitBytes: l.quota.limitBytes, complete: l.complete, asOf: l.asOf } : null
+  const value = l ? { usedBytes: l.complete ? l.usage.usedBytes : null, limitBytes: l.quota.limitBytes, complete: l.complete, asOf: l.asOf, enforcement: l.enforcement === true } : null
   storageCache = { account: acct, at: Date.now(), value }
   return value
 }
