@@ -108,8 +108,8 @@ import { connectionTarget, homeTarget } from '../../services/engine/targets'
 registerMessages({
   'pluginhost.workFolder.label': { zh: '工作文件夹', en: 'Working folder' },
   'pluginhost.workFolder.desc': {
-    zh: '本插件在智库内读写文件的文件夹（相对库根；留空恢复默认 = Plugins/插件名）',
-    en: 'Folder inside the vault where this plugin reads and writes files (relative to the vault root; leave empty to fall back to Plugins/<plugin name>)',
+    zh: '本插件在智库内读写文件的文件夹（相对库根；留空恢复默认 = Plugins/<英文插件 ID>）',
+    en: 'Folder inside the vault where this plugin reads and writes files (relative to the vault root; leave empty to fall back to Plugins/<plugin ID>)',
   },
   'pluginhost.setupFailed': { zh: '插件「{name}」加载失败', en: 'Plugin "{name}" failed to load' },
   'pluginhost.sampleCreated': { zh: '已创建示例插件 hello-amadeus', en: 'Created the sample plugin hello-amadeus' },
@@ -215,9 +215,7 @@ interface PluginState {
   scaffoldSample(): Promise<void>
 }
 
-/** 文件夹名消毒:插件显示名可能含路径非法字符;清完为空则退回 fallback(插件 id)。
- *  ⚠️全是点的名字(`.` / `..`)也当空:缺省落在 `Plugins/<名>` 之后,`Plugins/..` 就是库根,
- *  库根里的同名文件会被插件覆盖 —— 库的越界钳只拦出库,拦不住这个(codex)。id 也不可信,最后兜一个固定名。 */
+/** Recover the historical display-name folder only. New folders always use stable IDs. */
 function sanitizeFolderName(name: string, fallback: string): string {
   const clean = (v: string): string => { const s = String(v ?? '').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '').trim(); return /^\.+$/.test(s) ? '' : s }
   return clean(name) || clean(fallback) || 'plugin'
@@ -225,20 +223,26 @@ function sanitizeFolderName(name: string, fallback: string): string {
 
 /** 所有插件产物的总文件夹(2026-10-14 用户定:插件不再各自在库根建一个文件夹,库根只多这一项)。
  *  ⚠️名字固定、不跟界面语言:按语言取名的话切一次语言,数据就裂成「插件/」和「Plugins/」两处。
- *  只管缺省值;之前在库根 `<插件名>/` 里的老数据宿主不迁移(用户:「之前有的就算了」),把老文件夹拖进 Plugins/ 即可接上。 */
+ *  只管缺省值;旧版数据由插件通过 migrateWorkFolder 校验 schema 后执行一次升级迁移(2026-10-21 用户定)。 */
 const PLUGINS_ROOT = 'Plugins'
-const defaultWorkFolder = (pluginName: string, pluginId: string): string => `${PLUGINS_ROOT}/${sanitizeFolderName(pluginName, pluginId)}`
+// Identity is already validated by the external loader. Encode invalid internal/test IDs
+// rather than stripping characters and making two plugins share a directory.
+const defaultWorkFolder = (pluginId: string): string => {
+  const id = /^[a-z0-9][a-z0-9-]{0,63}$/.test(pluginId) ? pluginId
+    : `_plugin-${Array.from(pluginId).map(c => c.codePointAt(0)!.toString(16)).join('-') || 'unknown'}`
+  return `${PLUGINS_ROOT}/${id}`
+}
 
 /** 宿主自动塞进每个启用插件的「工作文件夹」设置行(见 enable())。文案在 enable() 那一刻求值,
  *  切语言后由文件末尾的订阅就地重刷 —— 认的是**对象身份**(下面这个 WeakSet)而不是 key:
  *  插件可以用同 key registerSetting 顶掉这一行(见 registerSetting 的去重),按 key 重刷会把
  *  插件自己写的文案抹成宿主的。 */
 const autoWorkFolderRows = new WeakSet<SettingContribution>()
-function workFolderSetting(pluginName: string, pluginId: string): SettingContribution {
+function workFolderSetting(pluginId: string): SettingContribution {
   return relabelWorkFolder({
     key: AUTO_WORK_FOLDER_KEY,
     type: 'text',
-    default: defaultWorkFolder(pluginName, pluginId),
+    default: defaultWorkFolder(pluginId),
     label: '',
   })
 }
@@ -361,6 +365,7 @@ function syncSeam(pluginId: string, ok: () => boolean): NonNullable<PluginAppApi
 }
 
 function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppApi; revokeSurface: () => void } {
+  const compatibleFolders = new Map<string, string>()
   const surface = createBlockSurface(pluginId)
   // 块表面有 alive 闸,ctx.app 的**直通副作用面**(写盘/换页/开文件)此前没有 —— 插件禁用后残留的
   // setTimeout / 在飞 promise 照样能 writeFile 落盘,与 teardown 注释「收完 API 整体变哑」直接矛盾
@@ -410,6 +415,17 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
         if (!ok() || usePageStore.getState().vaultRoot !== expectedRoot) throw new Error('Vault changed before plugin save')
         const result = await amadeus.writeTextFile(p, text, { ...options, expectedRoot }).finally(dropListCache)
         return result?.ok !== false
+      },
+    } : {}),
+    ...(amadeus?.migrateWorkFolder ? {
+      migrateWorkFolder: async (request: import('@amadeus-shared/ipc').WorkFolderMigration) => {
+        if (!ok() || usePageStore.getState().vaultRoot !== request.expectedRoot) throw new Error('Vault changed before migration')
+        let custom = ''
+        try { custom = localStorage.getItem(`plugin.${pluginId}.workFolder`) || '' } catch { /* unavailable settings must not authorize migration */ throw new Error('Working folder settings unavailable') }
+        const previousDefault = `${PLUGINS_ROOT}/${sanitizeFolderName(getName(), pluginId)}`
+        const predecessorQuery = !request.plan && request.target === previousDefault
+        if (custom || (request.target !== defaultWorkFolder(pluginId) && !predecessorQuery)) throw new Error('Automatic migration requires the default working folder')
+        return amadeus.migrateWorkFolder!({ ...request, id: `${pluginId}-${request.id}` }).finally(dropListCache)
       },
     } : {}),
     // 二进制读写(2026-09-19):路径口径与 writeFile 相同 —— 原样透传,越界由主进程 resolveInVault 钳死。
@@ -478,13 +494,20 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
       fileUnsubs.add(wrapped)
       return wrapped
     },
-    // 工作文件夹(相对 vault 根):读标准设置 plugin.<id>.workFolder;没设或非法(空段/./..)→ Plugins/<插件显示名>。
-    workFolder: () => {
+    // New defaults use stable ASCII identity; existing display-name folders stay readable
+    // until the plugin opts into schema-aware migration. Never persist this as a user override.
+    workFolder: (options) => {
       let v = ''
       try { v = localStorage.getItem(`plugin.${pluginId}.workFolder`) || '' } catch { /* ignore */ }
       v = v.trim().replace(/^\/+|\/+$/g, '')
       const bad = !v || v.split('/').some((seg) => !seg.trim() || seg === '.' || seg === '..')
-      return bad ? defaultWorkFolder(getName(), pluginId) : v
+      if (!bad) return v
+      const legacy = `${PLUGINS_ROOT}/${sanitizeFolderName(getName(), pluginId)}`
+      const canonical = defaultWorkFolder(pluginId)
+      const { vaultRoot, folders } = usePageStore.getState()
+      if (options?.preferId || !vaultRoot) return canonical
+      if (!compatibleFolders.has(vaultRoot)) compatibleFolders.set(vaultRoot, folders.includes(legacy) ? legacy : canonical)
+      return compatibleFolders.get(vaultRoot)!
     },
     // 打开文件类型视图在 amadeusNav(它引 pluginStore 的 matchFileType)→ 动态 import 破静态环。
     openFile: (p) => { if (ok()) void import('../../amadeusNav').then((m) => m.openFile(p)) },
@@ -2197,7 +2220,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     const id = plugin.id
     // 标准设置行:每个插件自动获得「工作文件夹」(ctx.app.workFolder() 的数据源;
     // 插件在 setup 里自注册同 key 会覆盖本行,见 registerSetting 的去重)。拆 / 失败按 pluginId 一并收走。
-    set((s) => ({ settings: [...s.settings, { pluginId: id, item: workFolderSetting(plugin.name, id) }] }))
+    set((s) => ({ settings: [...s.settings, { pluginId: id, item: workFolderSetting(id) }] }))
     const ctx = makeContext(id)
     const scope = liveScopes.get(id)!
     const fail = (e: unknown): void => {

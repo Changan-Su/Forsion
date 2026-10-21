@@ -187,6 +187,9 @@ export interface PluginAppApi extends BlockSurfaceApi {
   writeFile(path: string, text: string): Promise<void>
   /** Local hosts supporting scopedTextWrites: reject a stale vault at the filesystem lock.
    *  create:true never overwrites an existing file (returns false). Older hosts lack this method. */
+  /** One-time local upgrade: original folder is retained as backup; never overwrites
+   * copied files, rejects index conflicts, and resumes an interrupted copy. */
+  migrateWorkFolder?(request: import('@amadeus-shared/ipc').WorkFolderMigration): Promise<import('@amadeus-shared/ipc').WorkFolderMigrationResult>
   writeFileScoped?(path: string, text: string, expectedRoot: string, options?: { create?: boolean }): Promise<boolean>
   /** 二进制版 writeFile(2026-09-19+):把字节原子写进库内路径(自动建父目录,已存在即覆盖)。
    *  用途:导入用户从磁盘选来的模型 / 图片 / 音频(`<input type=file>` 的 `File.arrayBuffer()`),
@@ -231,12 +234,14 @@ export interface PluginAppApi extends BlockSurfaceApi {
   onVaultEvent?(cb: (events: PluginVaultEvent[]) => void): () => void
   /** The plugin's work folder for file output, vault-relative without leading/trailing slash.
    *  Every plugin automatically gets a "工作文件夹" setting (key `workFolder`) on its detail page;
-   *  this returns that value, defaulting to `Plugins/<display name>` (since 2026-10-14; before that the default was
-   *  `<display name>` at the vault root). Never write to the vault root or invent other top-level folders: the root
+   *  this returns that value, defaulting to `Plugins/<plugin ID>` (stable ASCII, independent of display name or locale).
+   *  Existing `Plugins/<display name>` folders remain in use for compatibility. A plugin implementing
+   *  schema-aware migration can request `{ preferId: true }` to obtain the new default before migrating.
+   *  This option still respects a manual folder preference; await migration before any read or write. Never write to the vault root or invent other top-level folders: the root
    *  belongs to the user's notes. Use it as the base for
    *  readFile/writeFile paths (`${ctx.app.workFolder()}/note.md`) — folders spring into existence
    *  on first write. Older hosts lack this method: feature-check `ctx.app.workFolder` first. */
-  workFolder(): string
+  workFolder(options?: { preferId?: boolean }): string
   /** Open a file into the view registered for its file type (post-create / cross-navigation). Refreshes
    *  the tree first if the path is newly created; falls back to the OS default app for non-plugin files. */
   openFile(path: string): void
@@ -2004,8 +2009,8 @@ export interface PluginAutomationRule {
 export interface AmadeusPlugin {
   id: string
   packageId?: string
-  /** Canonical (Chinese) name — also the source of the default work folder, so it never changes with
-   *  the UI language. For display, go through `pluginDisplayName(p, locale)`. */
+  /** Canonical display name, retained to recognize historical folders. New default folders use the ID.
+   *  For display, go through `pluginDisplayName(p, locale)`. */
   name: string
   version: string
   description?: string

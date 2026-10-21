@@ -71,6 +71,7 @@ export const IPC = {
   // 通用 vault 文本文件读写(供插件文件类型 ctx.app.readFile/writeFile;写走自写账本防 watcher 回弹)。
   readTextFile: 'file:read-text',
   writeTextFile: 'file:write-text',
+  migrateWorkFolder: 'file:migrate-work-folder',
   /** 外部改动了 vault 里的**非 .md / 非 .db** 文件(附件、片段 .js…)→ ctx.app.watchFile 的数据源。 */
   fileChange: 'file:external-change',
   /** 每插件一份 JSON blob(~/.forsion/plugins-data/<id>.json);ctx.loadData/saveData 的落点。 */
@@ -325,8 +326,8 @@ export const PLUGIN_CAPABILITIES: readonly PluginCapability[] = ['activeWindow',
 export interface ExternalPluginSource {
   id: string
   packageId?: string
-  /** Canonical (Chinese) display name. **Identity-adjacent**: the default work folder is derived from it,
-   *  so it must never change with the UI language — English goes in `nameEn`. */
+  /** Canonical display name. Used to reconnect historical display-name folders only;
+   *  new default folders use the effective ASCII plugin ID. English display text goes in `nameEn`. */
   name: string
   version: string
   description?: string
@@ -581,6 +582,22 @@ export interface AmadeusHostCaps {
   pluginsFolder?: boolean
 }
 
+/** A local, non-destructive upgrade. Paths in edits are relative to source/target.
+ * The plugin validates its schema; the host verifies snapshots, exclusive copies and index CAS.
+ * Omit plan to query/recover the durable per-vault completion journal. */
+export interface WorkFolderMigration {
+  id: string
+  expectedRoot: string
+  source: string
+  target: string
+  plan?: {
+    index: { path: string; before: string | null; after: string }
+    requiredFiles?: string[]
+    edits: Array<{ path: string; before: string; after: string }>
+  }
+}
+export interface WorkFolderMigrationResult { status: 'needed' | 'complete'; backup?: string }
+
 export interface AmadeusApi {
   openVault(): Promise<VaultInfo | null>
   /** Re-open the last vault (persisted across launches), or null if none/unavailable. */
@@ -771,6 +788,7 @@ export interface AmadeusApi {
    *  不传 `base` 时所有宿主行为与从前逐字一致。 */
   /** create:true = **仅新建**(原子;优先于 base):已存在 → 不写,{ ok:false, current:<现文> };现文取不到 → current:null
    *  (调用方按「没建成」处理,绝不当成已存在)。建成 → ok:true。桌面 / Unit 主进程 `wx`,移动桥锁内判存在,云桥 seq 0 的 PUT。 */
+  migrateWorkFolder?(request: WorkFolderMigration): Promise<WorkFolderMigrationResult>
   scopedTextWrites?: true
   writeTextFile(path: string, text: string, opts?: { create?: boolean; base?: string; expectedRoot?: string }): Promise<void | TextWriteResult>
   /** 「笔记视图」:列出 folder 直属子级笔记的 path/title/frontmatter(行的实时数据源)。 */

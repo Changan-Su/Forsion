@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.59.0
+  version: 1.60.0
   author: Forsion
   category: Forsion
 ---
@@ -52,7 +52,7 @@ Plugin authors: run the same checker before every release. It is the generic hal
 
 1. **先有动机再做**:每个扩展要能指回一条真实痛点,说不出就别做。
 2. **注入模型的文本一律英文**:工具 `description`、参数说明、promptSection —— 给模型读的全英文;用户可见字段用 `name`/`nameEn`、`description`/`descriptionEn` 双语镜像。
-3. **id 全局唯一、kebab-case**:命令/斜杠/工具 id 处于全局命名空间,裸名会互相顶掉;主题 id **就是** `data-theme` 值,更要独一无二。
+3. **Stable English IDs**: external plugin manifest IDs must match `^[a-z0-9][a-z0-9-]{0,63}$` (lowercase ASCII letters, digits and hyphens, 1–64 characters). Use an English name for new IDs; keep existing published IDs stable. Localized `name` / `nameEn` are display labels, never storage identities. Namespace command/slash/tool IDs because they share global registries; a theme ID is its `data-theme` value. Store installs use the host's immutable `market-<UUID>` effective ID; do not replace it with the manifest ID or rename historical install-folder aliases.
 4. **交付=能跑+能回归**:非平凡逻辑留一个 `check.mjs`(`node check.mjs` 一条命令),范式见 `forsion-plugin-mindmap` / activitywatch 的 check 模式。
 5. **动作性能力住引擎侧,渲染端命令只做导航**(2026-08-24 拍板):注册任何入口前先问一句——这是**导航**(开视图/切面板)还是**动作**(带参数、可 headless 完成的活,比如「分析这条链接」)?动作**不要**做成命令面板命令:`Command.run(): void` 类型上就没有参数位,而且命令表活在渲染进程,聊天 agent 与自动化都够不着。正确做法=把能力做成捆绑包的**引擎侧资产**,零通道基建。**先选对形态**:靠引擎已有工具就能复现的动作 → 包根 `skills/<slug>/SKILL.md`(**全局技能,默认选它**,进所有 agent 的技能目录,`use_skill` 直接用);要专属人设 / 独立上下文预算 / 稳定的自动化入口 → 才建 `agents/<slug>/` 具名 agent(+ 它自己的 `skills/`),聊天 agent 经 `delegate(agentSlug)`、自动化经 `agent_run` 调用(⚠️`agent_run` **必须指名 agentSlug**,只发全局技能的 bundle 靠被指名的那个 agent 身上带着这份技能来够到)。需要桌面主进程能力时引擎侧已有桥工具(如 `transcribe_audio` 语音转写)。范式=青鸟收藏夹:工作台 UI 归渲染端插件,分析管线归 bundle 内嵌的 `bluebird` agent+技能,两个入口(人点工作台 / agent 委派)共用同一条引擎管线。
 
@@ -117,7 +117,8 @@ mod+J、布局记忆和移动端抽屉,自造的一样都没有,还和别的 Spa
 | 点了某一行 / 某个事件才出来的详情、表单 | 右栏临时 | Extend View(`view.extendView.open({ side: 'right' })`) |
 | 横跨全片的时间线、日志、控制台、终端 | 底部面板 | `layout.bottom`(2026-10-02 起)或 `ctx.openView(id, { location: 'bottom' })` |
 
-- 范例:**青鸟收藏夹**(左 = 收藏夹列表源;主区 = 详情 + 原生笔记 `split: "right"` + 原生聊天 `split: "down"`)、
+- **On-demand native main companions**: declare up to three `mainCompanions: [{ type: 'amadeus-editor', key: 'my-plugin-document', split: 'right' }]` on `registerView`. Types are `amadeus-editor` / `chat-panel`, splits `right` / `down`, and each stable key starts with this plugin's effective ID plus `-`; optional `params` follow native view parameters. Call the mounted `view.setCompanionsVisible?.(true)` to expand; `false` folds those keyed native views into the source tab group, preserving editor state, chat drafts and split sizes. Narrow/mobile hosts keep native tabs; unrelated views are untouched. Feature-detect on older hosts and keep an essential fallback in the Space recipe. Do not rebuild the Space or imitate native editors/chats to implement this toggle.
+- 范例:**青鸟收藏夹**(左 = 收藏夹列表源;主区 = 详情 + 按需展开的原生笔记 / 聊天，旧宿主可用 `split: "right" / "down"` 配方)、
   **视频工作室**(左 = 工程列表;主区 = 舞台与走带;右 = 属性 Extend View;底部 = 时间线)。
 - **一份状态,多个 view**:主区和底部是两个 `registerView`,同一窗口里共用插件模块里的那份状态,别各存一份。
   拆不开的 DOM 可以整块搬进另一个 view 的 `el`(事件监听跟着走),样式随之注入。
@@ -1670,22 +1671,23 @@ CSP 是 `default-src 'self'`(没有 CDN),依赖一律 esbuild `bundle: true` 打
 globalName: 'myPlugin', footer: { js: 'return myPlugin.dispose;' }
 ```
 
-## 插件文件读写与「工作文件夹」(2026-08-03 起)
+## Vault files and the working folder (updated 2026-10-21)
 
-桌面插件的文件面 = 活动笔记库(vault):`ctx.app.readFile/writeFile` 走 vault 相对路径,**整库可读写**,宿主钳死越界(路径逃逸抛错);写入原子落盘、父目录自动创建。落盘位置约定:**每个插件在设置详情页自动获得一条「工作文件夹」**(key `workFolder`,默认 = `Plugins/<插件显示名>`,2026-10-14 起;此前默认是库根下的 `<插件显示名>`),产出一律写 `${ctx.app.workFolder()}/…`,别自造存储夹设置。⚠️**不许往库根写、不许硬编码别的顶层文件夹**:库根是用户自己的笔记,所有插件的产物都收在 `Plugins/` 这一个文件夹下;给用户的产物存 **markdown**(可引用可检索),机器数据放点开头隐藏 sidecar。旧宿主没有 `workFolder`,兼容写法同 `ctx.notify`:
+`ctx.app.readFile/writeFile` use vault-relative paths, can access the whole active vault, reject traversal, and create parent folders on write. Every plugin gets the built-in `workFolder` setting. **New default: `Plugins/<effective-plugin-id>`**, for example `Plugins/bluebird` or `Plugins/diting`; Store IDs remain `market-<UUID>`. Display names and interface language never determine a new storage path. Always use `ctx.app.workFolder()` rather than constructing a path from the manifest, install-folder alias or translated label. A valid manual preference wins, including a Chinese or custom path outside `Plugins/`.
 
-```js
-const folder = ctx.app.workFolder ? ctx.app.workFolder() : 'Plugins/<插件名>'
-// ⚠️workFolder() 照常返值 ≠ 写得进去:没有活动库时 writeFile 会 reject('No vault is open')。
-//    启动期的写一律 try/catch(见上「没有活动库时的统一行为」表)。
-try {
-  await ctx.app.writeFile(`${folder}/笔记.md`, markdown)
-} catch (e) {
-  ctx.notify?.(`没写成:${e?.message || e}(先打开一个笔记库)`, { level: 'warn' })
-}
-```
+Use Markdown for user-facing notes and hidden sidecars for machine data. Keep default output under `Plugins/`; do not invent other top-level folders or write into the vault root. Re-register the built-in setting key to customize its label/description rather than creating a second storage setting. Changing the user's preference does not move existing data.
 
-要自定义这条设置的 label/描述,setup 里自注册同 key 的 setting(同 key 重注册即覆盖标准行);用户改文件夹不迁移旧文件,读端自己做旧夹兜底。缺省值从库根 `<插件名>` 改成 `Plugins/<插件名>` 那次(2026-10-14)宿主同样不迁移:老数据要接上,插件自己在新位置为空时读一下库根的旧夹,或让用户把旧文件夹拖进 `Plugins/`。范例:`bluebird` 1.3.0(分析完自动保存 + 旧夹兜底 + check.mjs 迁移断言)。Session 同款约定:Tangu 会话默认工作区在笔记库 `Sessions/`——插件产物与会话产物同库,都能被笔记引用。
+Local hosts may expose `ctx.app.writeFileScoped?(path, text, expectedRoot, { create: true })`. Capture `expectedRoot = ctx.app.vaultRoot()` before starting an asynchronous task. The host validates it under the filesystem lock and rejects a stale-vault write; create-only writes return `false` when the destination exists, successful writes return `true`. Feature-detect: an older host's renderer-side scope checks across awaits do not provide the same main-process guarantee. Keep that weaker fallback explicit and never silently overwrite an export/log name after a create-only conflict.
+
+For hosts without `workFolder`, either ask for an upgrade or preserve the plugin's established legacy path until a schema-aware recovery can run. Do not silently switch an existing installation to a hard-coded new ID path: that would hide its old data again. `workFolder()` is not a readiness probe; wait for `ctx.app.vaultRoot?.()` and catch write errors when no vault is open.
+
+### Automatic upgrade of old data
+
+The earlier root-level `<display name>` and `Plugins/<display name>` defaults are **legacy sources**, not the rule for new output. Hosts keep an existing display-name folder readable for plugins without migration support. For a plugin implementing migration, feature-detect **both** `workFolder` and `migrateWorkFolder` before requesting `workFolder({ preferId: true })`. That option still honors manual preferences. Await migration/recovery before normal index reads, writes or a task starts; a failed migration must not look like an empty successful collection.
+
+`ctx.app.migrateWorkFolder?(request)` is available on local desktop hosts implementing the contract; unsupported mobile/web/cloud hosts omit it. The plugin validates its own schema and record paths; the host validates the vault and snapshots, copies without overwriting, and commits the index last. **Keep originals as backups.** Never rename/delete user folders, recursively move arbitrary JSON or use a global completion flag. A completed per-vault journal prevents deleted items being imported again. Preserve manual folders and resolve two populated data sets through explicit recovery rather than merging blindly.
+
+Read [the migration contract and acceptance cases](references/work-folder-migration.md) before implementing or changing storage. It defines plan-relative paths, predecessor-journal recovery, interruption handling and media-link preservation. Reference consumers: Bluebird and Diting. Sessions continue using the separate vault `Sessions/` convention.
 
 ## 块表面:当前这篇笔记的读写(2026-07-26 起;2026-08-20 改口径)
 

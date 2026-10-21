@@ -50,7 +50,7 @@ const newHostCtx = {
   registerSetting: (s) => settings.push(s),
   notify: (m) => newNotes.push(m),
   getLocale: () => 'zh',
-  app: { notify: () => {}, workFolder: () => '示例捆绑包', writeFile: async (p, t) => writes.push({ p, t }), openFile: () => {} },
+  app: { notify: () => {}, workFolder: () => 'Plugins/sample-bundle', writeFile: async (p, t) => writes.push({ p, t }), openFile: () => {} },
 }
 new Function('ctx', src)(newHostCtx)
 const reqKeys = (manifest.onboarding?.requires ?? []).filter((r) => r.kind === 'setting').map((r) => r.key)
@@ -73,7 +73,7 @@ if (newNotes.length !== 1 || !newNotes[0].includes('称呼')) fail(`未填称呼
 // ── 4. 新宿主、填了称呼:文件面示范落 <工作文件夹>/你好.md,正文带称呼
 store.set(NICK, '  阿青  ')
 await newCommands[0].run()
-if (writes.length !== 1 || writes[0].p !== '示例捆绑包/你好.md' || !writes[0].t.includes('你好,阿青\n')) fail(`文件面示范未按 workFolder 落盘或称呼未 trim:${JSON.stringify(writes)}`)
+if (writes.length !== 1 || writes[0].p !== 'Plugins/sample-bundle/你好.md' || !writes[0].t.includes('你好,阿青\n')) fail(`文件面示范未按 workFolder 落盘或称呼未 trim:${JSON.stringify(writes)}`)
 
 // ── 5. 英文界面:命令标题与提示跟 getLocale 走
 const enCommands = []

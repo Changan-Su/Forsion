@@ -22,6 +22,8 @@ import { writeVaultText } from './pageWrite'
 import { registerPageHistoryHandlers, type PageHistory } from './pageHistory'
 import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { vaultRel } from './vaultRel'
+import { migrateWorkFolder } from './workFolderMigration'
+import type { WorkFolderMigration } from '@amadeus-shared/ipc'
 
 const nowIso = (): string => new Date().toISOString()
 function dbVersion(text: string): string {
@@ -137,6 +139,14 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
     const keys = [...new Set(rels.flatMap((r) => { try { return [vault.absPath(r)] } catch { return [] } }))].sort()
     return keys.reduceRight<() => Promise<T>>((inner, key) => () => withTextWriteLock(key, inner), fn)()
   }
+  handle(IPC.migrateWorkFolder, async (_e, request: WorkFolderMigration) => {
+    const result = await migrateWorkFolder(vault, request, withPathLocks)
+    if (vault.getRoot() === request.expectedRoot && result.status === 'complete') {
+      try { await index.build(); notifyAll(IPC.structureChange) }
+      catch (error) { console.warn('[migration] committed; index refresh failed', error) }
+    }
+    return result
+  })
   handle(IPC.listPages, () => vault.listPages())
   handle(IPC.listFiles, () => vault.listFiles())
 

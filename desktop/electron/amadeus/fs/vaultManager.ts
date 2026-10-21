@@ -33,6 +33,28 @@ export class VaultManager {
   private onMutate: ((rel: string, kind: 'write' | 'remove') => void) | null = null
   private onBeforeMove: ((from: string, to: string) => (() => void) | undefined) | null = null
   private moveQueue: Promise<void> = Promise.resolve()
+  private migrationQueue: Promise<unknown> = Promise.resolve()
+  private migrationActive = false
+  private structuralJobs = new Set<Promise<unknown>>()
+
+  /** Structural operations reject during the short upgrade window rather than
+   * waiting while holding a file lock (which would deadlock migration publication). */
+  private structural<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.migrationActive) return Promise.reject(new Error('A work-folder migration is in progress; retry the file operation shortly'))
+    const job = fn()
+    this.structuralJobs.add(job)
+    void job.then(() => this.structuralJobs.delete(job), () => this.structuralJobs.delete(job))
+    return job
+  }
+  withMigrationGuard<T>(fn: () => Promise<T>): Promise<T> {
+    const job = this.migrationQueue.catch(() => {}).then(async () => {
+      this.migrationActive = true
+      try { await Promise.allSettled([...this.structuralJobs]); return await fn() }
+      finally { this.migrationActive = false }
+    })
+    this.migrationQueue = job
+    return job
+  }
   private onMove: ((fromRel: string, toRel: string, kind?: 'file' | 'folder') => void | Promise<void>) | null = null
 
   setMutationHooks(
@@ -50,6 +72,9 @@ export class VaultManager {
     const rel = path.relative(this.root, abs)
     if (rel && !rel.startsWith('..')) this.onMutate(rel, kind)
   }
+
+  /** Notify sync after verified exclusive migration copies. */
+  reportCopiedFiles(rels: string[]): void { for (const rel of rels) this.emitMutate(this.resolveInVault(rel), 'write') }
 
   getRoot(): string | null {
     return this.root
@@ -407,9 +432,11 @@ export class VaultManager {
 
   /** Move/rename a file or folder within the vault (both ends clamped). */
   moveEntry(srcRel: string, dstRel: string): Promise<void> {
-    const work = this.moveQueue.then(() => this.performMove(srcRel, dstRel))
-    this.moveQueue = work.catch(() => {})
-    return work
+    return this.structural(() => {
+      const work = this.moveQueue.then(() => this.performMove(srcRel, dstRel))
+      this.moveQueue = work.catch(() => {})
+      return work
+    })
   }
 
   private async performMove(srcRel: string, dstRel: string): Promise<void> {
@@ -438,7 +465,9 @@ export class VaultManager {
   }
 
   /** Recursively remove a file or folder within the vault (never the root). */
-  async removeEntry(rel: string): Promise<void> {
+  removeEntry(rel: string): Promise<void> { return this.structural(() => this.performRemoveEntry(rel)) }
+
+  private async performRemoveEntry(rel: string): Promise<void> {
     const abs = this.resolveInVault(rel)
     if (abs === this.requireRoot()) throw new Error('Refusing to remove the vault root')
     await fs.rm(abs, { recursive: true, force: true })
@@ -486,7 +515,9 @@ export class VaultManager {
   }
 
   /** 移入回收站(文件或文件夹)。 */
-  async trashEntry(rel: string): Promise<void> {
+  trashEntry(rel: string): Promise<void> { return this.structural(() => this.performTrashEntry(rel)) }
+
+  private async performTrashEntry(rel: string): Promise<void> {
     const srcAbs = this.resolveInVault(rel)
     if (srcAbs === this.requireRoot()) throw new Error('Refusing to trash the vault root')
     await fs.mkdir(this.trashDir(), { recursive: true })
@@ -526,7 +557,9 @@ export class VaultManager {
   }
 
   /** 恢复:回 meta 记录的原位(父目录补建);原位被占在文件名后加 " (N)"。返回恢复后的相对路径。 */
-  async restoreTrash(name: string): Promise<string> {
+  restoreTrash(name: string): Promise<string> { return this.structural(() => this.performRestoreTrash(name)) }
+
+  private async performRestoreTrash(name: string): Promise<string> {
     const root = this.requireRoot()
     const srcAbs = this.trashItemAbs(name)
     const meta = await this.readTrashMeta()
