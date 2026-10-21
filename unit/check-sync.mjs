@@ -22,8 +22,8 @@ const byVersion = (a, b) => {
 export async function readReleaseBaseline() {
   const versions = {}
   for (const pkg of ['desktop', 'tangu-agent']) versions[pkg] = JSON.parse(await readFile(resolve(root, pkg, 'package.json'), 'utf8')).version
-  if (!/^\d+\.\d+\.\d+$/.test(versions.desktop) || versions.desktop !== versions['tangu-agent']) {
-    throw new Error(`desktop ${versions.desktop} and tangu-agent ${versions['tangu-agent']} must ship the same version`)
+  for (const [component, version] of Object.entries(versions)) {
+    if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error(`Invalid ${component} release version ${version}`)
   }
   if (git('rev-parse', '--is-shallow-repository') === 'true') throw new Error('Shallow clone cannot resolve the Desktop baseline; run `git fetch --unshallow --tags` first')
   const tags = git('tag', '--list', 'v*').split('\n').filter((tag) => /^v\d+\.\d+\.\d+$/.test(tag)).sort(byVersion).reverse()
@@ -37,7 +37,7 @@ export async function readReleaseBaseline() {
   const unitRevision = Number(git('rev-list', '--count', `${desktopCommit}..HEAD`))
   checkSourcePaths(git('ls-files', '-z').split('\0').filter(Boolean))
   return {
-    desktopVersion: versions.desktop, desktopTag, desktopCommit, unitRevision, prerelease: sourceCommit !== desktopCommit || `v${versions.desktop}` !== desktopTag,
+    desktopVersion: versions.desktop, engineVersion: versions['tangu-agent'], desktopTag, desktopCommit, unitRevision, prerelease: sourceCommit !== desktopCommit || `v${versions.desktop}` !== desktopTag,
     sourceCommit, sourceDirty: !!git('status', '--porcelain', '--untracked-files=normal'),
   }
 }

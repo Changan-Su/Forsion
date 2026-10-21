@@ -80,3 +80,21 @@ test('installer prereleases retain independent versions and proper version order
   assert.equal(cmp('3.0.0-beta.1', '3.0.0'), -1)
   assert.equal(cmp('3.0.0', '3.0.0-beta.1'), 1)
 })
+
+test('new desktop releases ignore old tags from before the engine directory existed', () => {
+  const f = fixture('2.13.5', '2.13.5')
+  f.git('rm', '-r', 'tangu-agent'); f.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'legacy layout'); f.git('tag', 'v2.2.4')
+  f.git('checkout', 'v2.13.5', '--', 'tangu-agent')
+  f.write('desktop/package.json', JSON.stringify({ version: '2.13.6' }))
+  f.write('tangu-agent/package.json', f.pkg('2.13.7'))
+  runGate(f.root, ['--desktop-release', 'v2.13.6'], {}, { readPublishedVersion: () => '2.13.6' })
+})
+test('hotfix from an older desktop cannot reuse a newer installer-only engine identity', () => {
+  const f = fixture(), registry = { readPublishedVersion: () => '2.0.1' }
+  f.write('desktop/package.json', JSON.stringify({ version: '8.1.0' }))
+  f.write('tangu-agent/package.json', f.pkg('3.0.0'))
+  f.git('add', '.'); f.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'new desktop'); f.git('tag', 'v8.1.0')
+  f.git('checkout', '--detach', 'v8.0.0')
+  f.write('tangu-agent/package.json', f.pkg('3.0.0'))
+  assert.throws(() => runGate(f.root, ['tangu-v3.0.0', 'push'], {}, registry), /already shipped in a desktop installer/)
+})

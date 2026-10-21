@@ -41,13 +41,14 @@ export function desktopProblems({ desktop, engine, ref, newestPublished, previou
   return problems
 }
 
-export function hotUpdateProblems({ version, baseEngine, baseDesktop, ref, publish, dependenciesMatch, schemaChanges, newestPublished }) {
+export function hotUpdateProblems({ version, baseEngine, baseDesktop, ref, publish, dependenciesMatch, schemaChanges, newestPublished, newestBundled }) {
   const problems = []
   if (!dependenciesMatch) problems.push(`dependencies differ from desktop ${baseDesktop}; ship these changes in an installer.`)
   if (schemaChanges.length) problems.push(`schema / migration files changed since desktop ${baseDesktop} (${schemaChanges.join(', ')}); ship these changes in an installer.`)
   if (publish) {
     if (ref !== `tangu-v${version}`) problems.push(`Tag ${ref} does not match engine ${version}.`)
     if (cmp(version, baseEngine) <= 0) problems.push(`Engine ${version} is not newer than bundled engine ${baseEngine} in desktop ${baseDesktop}.`)
+    if (newestBundled && cmp(version, newestBundled) <= 0) problems.push(`Engine ${version} is not newer than engine ${newestBundled} already shipped in a desktop installer.`)
     if (newestPublished && cmp(version, newestPublished) <= 0) problems.push(`${PACKAGE}@${newestPublished} is already published; ${version} is not newer.`)
   }
   return problems
@@ -73,13 +74,16 @@ export function runGate(root, args, env = process.env, { readPublishedVersion } 
   const changed = (ref, paths) => git('diff', '--name-only', ref, '--', ...paths).split('\n').filter(Boolean)
   const failOn = (problems) => { if (problems.length) throw new Error(problems.join('\n')) }
 
+  // Some historical desktop tags predate the tangu-agent/ layout. Ignore only missing paths, not Git failures.
+  const desktopEngines = git('tag', '--list', 'v*').split('\n')
+    .filter(t => VERSION.test(t.slice(1)) && (args[0] !== '--desktop-release' || t !== `v${desktop}`))
+    .filter(t => git('ls-tree', t, '--', 'package.json'))
+    .map(tag => ({ tag, pkg: manifestAt(tag) }))
+    .sort((a, b) => cmp(b.tag.slice(1), a.tag.slice(1)))
   if (args[0] === '--desktop-release') {
-    // Checkout must include tags. Exclude the candidate desktop tag itself: it is not a previous release.
-    const tags = git('tag', '--list', 'v*', '--merged', 'HEAD').split('\n')
-      .filter(t => VERSION.test(t.slice(1)) && t !== `v${desktop}` && cmp(t.slice(1), desktop) < 0)
-      .sort((a, b) => cmp(b.slice(1), a.slice(1)))
-    const previous = tags[0] ? manifestAt(tags[0]) : null
-    let baseline = tags.find(tag => manifestAt(tag).version === version)
+    const prior = desktopEngines.filter(item => cmp(item.tag.slice(1), desktop) < 0)
+    const previous = prior[0]?.pkg
+    let baseline = desktopEngines.find(item => item.pkg.version === version)?.tag
     // Only the ENGINE version is looked up in the hot-update namespace; the desktop number is unrelated.
     const engineTag = `tangu-v${version}`
     if (git('ls-remote', '--tags', 'origin', `refs/tags/${engineTag}`)) {
@@ -103,7 +107,9 @@ export function runGate(root, args, env = process.env, { readPublishedVersion } 
   if (!RELEASE.test(basePkg.version)) throw new Error(`Invalid bundled engine version at ${baseTag}`)
   const problems = hotUpdateProblems({ version, baseEngine: basePkg.version, baseDesktop, ref, publish,
     dependenciesMatch: sortedJson(pkg.dependencies) === sortedJson(basePkg.dependencies),
-    schemaChanges: changed(baseTag, SCHEMA_SOURCES), newestPublished: publish ? (readPublishedVersion ?? npmVersions)() : undefined })
+    schemaChanges: changed(baseTag, SCHEMA_SOURCES),
+    newestBundled: desktopEngines.map(item => item.pkg.version).filter(v => VERSION.test(v)).sort(cmp).at(-1),
+    newestPublished: publish ? (readPublishedVersion ?? npmVersions)() : undefined })
   if (publish) failOn(problems)
   else for (const problem of problems) console.log(`::warning::${problem}`)
   // A manual preview uses the baseline ENGINE number, not the independent desktop number.
