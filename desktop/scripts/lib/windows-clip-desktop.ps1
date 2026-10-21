@@ -4,7 +4,7 @@ $ErrorActionPreference = 'Stop'
 if ($env:GITHUB_ACTIONS -ne 'true') { throw 'Native Clip probe requires a dedicated GitHub Actions desktop' }
 $OutputEncoding=[System.Text.UTF8Encoding]::new($false)
 [Console]::OutputEncoding=$OutputEncoding
-Add-Type -AssemblyName System.Windows.Forms, System.Drawing, UIAutomationClient, UIAutomationTypes
+Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
@@ -24,6 +24,10 @@ public static class ClipDesktopInput {
   [DllImport("user32.dll")] static extern bool ClientToScreen(IntPtr hwnd,ref Point point);
   [DllImport("user32.dll")] static extern uint GetDpiForWindow(IntPtr hwnd);
   [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr hwnd,out Rect rect);
+  [DllImport("user32.dll")] static extern IntPtr GetDlgItem(IntPtr dialog,int id);
+  [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern int GetWindowText(IntPtr hwnd,System.Text.StringBuilder text,int length);
+  [DllImport("user32.dll")] static extern bool IsWindowEnabled(IntPtr hwnd);
+  [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hwnd);
   [DllImport("kernel32.dll",CharSet=CharSet.Unicode)] static extern uint GetLongPathName(string path,System.Text.StringBuilder result,uint length);
   public static string LongPath(string path) {
     var result=new System.Text.StringBuilder(32768);
@@ -61,6 +65,16 @@ public static class ClipDesktopInput {
     System.Threading.Thread.Sleep(200);
     if(GetForegroundWindow()!=hwnd) throw new Exception("Owned settings caption did not activate its window");
   }
+  public static string SelectFolder(long window) {
+    var dialog=new IntPtr(window);var button=GetDlgItem(dialog,1);
+    var title=new System.Text.StringBuilder(256);GetWindowText(button,title,title.Capacity);
+    string label=title.ToString().Replace("&","").Trim();Rect rect;
+    if(button==IntPtr.Zero||label!="Select Folder"||!IsWindowVisible(button)||!IsWindowEnabled(button)||!GetWindowRect(button,out rect))
+      throw new Exception("Owned native IDOK is not a visible enabled Select Folder button: "+title);
+    if(GetForegroundWindow()!=dialog) throw new Exception("Owned folder picker lost foreground before Select Folder");
+    Click((rect.left+rect.right)/2,(rect.top+rect.bottom)/2);
+    return label;
+  }
 }
 '@
 if ($Action -eq 'activate') { [ClipDesktopInput]::ActivateCaption([long]::Parse($FromWindow)); exit }
@@ -91,13 +105,9 @@ if ($Action -eq 'picker') {
   [System.Windows.Forms.SendKeys]::SendWait('^v')
   [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
   Start-Sleep -Milliseconds 600
-  $root=[System.Windows.Automation.AutomationElement]::FromHandle($dialog)
-  $buttons=$root.FindAll([System.Windows.Automation.TreeScope]::Descendants,
-    [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Button))
-  $select=$buttons | Where-Object { $_.Current.Name -match '^Select [Ff]older$' } | Select-Object -First 1
-  if (-not $select) { throw ('Native Select Folder button not found: '+(($buttons | ForEach-Object {$_.Current.Name}) -join ', ')) }
-  $select.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-  'Native folder picker accepted the selected directory'
+  # UIA's control view omits the classic IDOK/Cancel controls on this dialog.
+  # Read the real HWND/button label, then physically click its screen rectangle.
+  [ClipDesktopInput]::SelectFolder($dialog.ToInt64())
   exit
 }
 if ($Action -eq 'explorer') {
