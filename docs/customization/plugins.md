@@ -358,3 +358,7 @@ Local hosts may expose `ctx.app.writeFileScoped(path, text, expectedRoot, { crea
 Default work-folder paths use the effective plugin ID, never the localized display name. External IDs already use lowercase ASCII letters, digits and hyphens (1–64 characters). Existing display-name folders remain readable for plugins without migration support. To migrate one, call `workFolder({ preferId: true })`, validate your schema and await `migrateWorkFolder` before using that target. Manual preferences always take precedence.
 
 默认目录使用稳定的英文插件 ID，不随显示名称或语言变化。未接入迁移的插件继续读取已有的显示名目录；接入者通过 `workFolder({ preferId: true })` 取得新默认目录，校验自身数据后等待迁移完成。用户手动指定的目录优先。
+
+A status-only request may target the plugin's previous display-name default to reconcile an interrupted predecessor journal. Old-target plans remain rejected; manual preferences and vault/revocation checks still apply. Bare media wikilinks are resolved against the original vault before copying, preserving user-added attachments beside notes instead of assuming an `assets/` location.
+
+无 plan 的状态查询可核验上一版显示名目录的迁移日志；旧目标的写入计划仍被拒绝。迁移前按原智库实际解析裸媒体链接，保留用户自加附件的位置。

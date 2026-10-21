@@ -316,3 +316,14 @@ describe('ctx.app.migrateWorkFolder',()=>{
   expect(migration).toHaveBeenCalledTimes(1)
  })
 })
+
+it('allows only status reconciliation of a previous display-name default', async () => {
+ const migration=vi.fn(async()=>({status:'complete' as const}));bridge.current={migrateWorkFolder:migration}
+ vi.stubGlobal('localStorage',{getItem:()=>null})
+ const ctx=ctxOf('upgrade',{name:'升级'})
+ const request={id:'legacy-root-v1',expectedRoot:'/v',source:'Previous',target:'Plugins/升级'}
+ expect(await ctx.app.migrateWorkFolder!(request)).toEqual({status:'complete'})
+ await expect(ctx.app.migrateWorkFolder!({...request,plan:{index:{path:'.index',before:null,after:'[]'},edits:[]}})).rejects.toThrow('default working folder')
+ await expect(ctx.app.migrateWorkFolder!({...request,target:'Plugins/其他'})).rejects.toThrow('default working folder')
+ expect(migration).toHaveBeenCalledTimes(1)
+})

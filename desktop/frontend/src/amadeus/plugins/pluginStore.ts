@@ -422,7 +422,9 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
         if (!ok() || usePageStore.getState().vaultRoot !== request.expectedRoot) throw new Error('Vault changed before migration')
         let custom = ''
         try { custom = localStorage.getItem(`plugin.${pluginId}.workFolder`) || '' } catch { /* unavailable settings must not authorize migration */ throw new Error('Working folder settings unavailable') }
-        if (custom || request.target !== defaultWorkFolder(pluginId)) throw new Error('Automatic migration requires the default working folder')
+        const previousDefault = `${PLUGINS_ROOT}/${sanitizeFolderName(getName(), pluginId)}`
+        const predecessorQuery = !request.plan && request.target === previousDefault
+        if (custom || (request.target !== defaultWorkFolder(pluginId) && !predecessorQuery)) throw new Error('Automatic migration requires the default working folder')
         return amadeus.migrateWorkFolder!({ ...request, id: `${pluginId}-${request.id}` }).finally(dropListCache)
       },
     } : {}),

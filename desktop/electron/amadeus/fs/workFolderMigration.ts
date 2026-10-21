@@ -5,6 +5,7 @@ import type { WorkFolderMigration, WorkFolderMigrationResult } from '@amadeus-sh
 import type { VaultManager } from './vaultManager'
 import { rebaseFileRefs } from '@amadeus-shared/assets'
 import { renameAtomic } from './renameAtomic'
+import { mapOutsideFences, outsideCodeSpans } from '@amadeus-shared/links'
 
 type FileStamp = { path: string; hash: string }
 type Journal = { version: 1; complete: boolean; source: string; target: string; index: { path: string; before: string | null; after: string }; files: FileStamp[] }
@@ -116,12 +117,33 @@ export function migrateWorkFolder(vault: VaultManager, req: WorkFolderMigration,
     for (const [rel, edit] of edits) {
       if (typeof edit.before !== 'string' || typeof edit.after !== 'string' || !original.some(f => f.path === rel && f.hash === digest(edit.before))) throw Error('Migration source changed')
     }
+    // Resolve user-added bare media against the original vault. It may live beside
+    // the note, in assets/, or outside this plugin; never invent an assets/ location.
+    const scopeMedia = async (text: string, page: string): Promise<string> => {
+      const frontmatter = /^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/.exec(text)?.[0] ?? ''
+      const body = text.slice(frontmatter.length), refs = new Map<string, string>()
+      const transform = (collect: boolean): string => mapOutsideFences(body, line => {
+        if (line.includes('`')) return line // Preserve ambiguous/multiline inline code.
+        return outsideCodeSpans(line, seg => seg.replace(/(!?\[\[)([^\]|#\n]+)([^\]]*\]\])/g, (all, open, ref, tail, offset: number) => {
+          if (offset > 0 && seg[offset - 1] === '\\') return all
+          if (ref.includes('/') || ref.includes('\\') || !/\.(?:mp3|wav|ogg|m4a|flac|mp4|webm|mov|m4v)$/i.test(ref)) return all
+          if (collect) { refs.set(ref, ref); return all }
+          return open + (refs.get(ref) ?? ref) + tail
+        }))
+      }, true)
+      transform(true)
+      for (const ref of refs.keys()) {
+        check(); const abs = await vault.resolveAttachment(page, ref); check()
+        if (abs) refs.set(ref, moved(path.relative(root, abs).split(path.sep).join('/')))
+      }
+      return frontmatter + transform(false)
+    }
     // Reuse the host's ordinary file-move reference semantics for Markdown.
     const moved = (rel: string): string => rel.startsWith(req.source + '/') ? req.target + rel.slice(req.source.length) : rel
     for (const file of original.filter(f => f.path.endsWith('.md'))) {
       const before = await fs.readFile(await safePath(root, `${req.source}/${file.path}`), 'utf8')
       if (digest(before) !== file.hash) throw Error('Migration source changed')
-      const text = edits.get(file.path)?.after ?? before
+      const text = await scopeMedia(edits.get(file.path)?.after ?? before, `${req.source}/${file.path}`)
       const after = await rebaseFileRefs(text, `${req.source}/${file.path}`, `${req.target}/${file.path}`, moved, async rel => {
         const existing = rel.startsWith(req.target + '/') ? req.source + rel.slice(req.target.length) : rel
         try { return (await fs.stat(await safePath(root, existing))).isFile() }
