@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, it } from 'vitest'
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { execFileSync } from 'node:child_process'
@@ -10,8 +10,9 @@ const app = join(fixture, 'desktop')
 mkdirSync(join(app, 'build'), { recursive: true })
 mkdirSync(join(app, 'electron'))
 mkdirSync(join(app, 'unit-web-dist'))
+symlinkSync(join(desktop, 'node_modules'), join(app, 'node_modules'), 'junction')
 mkdirSync(join(fixture, 'tangu-agent'))
-for (const file of ['electron-builder.config.cjs', 'build/distribution.cjs', 'build/backend-dependencies.cjs', 'build/dmg-layout.cjs', 'electron/builtinBundles.json']) {
+for (const file of ['electron-builder.config.cjs', 'build/distribution.cjs', 'build/backend-dependencies.cjs', 'build/dmg-layout.cjs', 'build/file-associations.cjs', 'electron/builtinBundles.json']) {
   cpSync(join(desktop, file), join(app, file))
 }
 cpSync(join(desktop, 'products'), join(app, 'products'), { recursive: true })
@@ -34,7 +35,10 @@ describe('desktop distributions', () => {
     expect(c.publish.channel).toBe('latest')
     expect(c.extraMetadata.forsionBundleExtend).toBe(true)
     expect(c.extraResources.some((r: { to: string }) => r.to === 'bundled-plugins/extend')).toBe(true)
-    expect(config('1')).toEqual(c)
+    // Each subprocess produces its own NSIS include filename; only the PID is intentionally different.
+    const include = expect.stringMatching(/[/\\]\.installer-forsion-\d+\.generated\.nsh$/)
+    expect(c.nsis.include).toEqual(include)
+    expect(config('1')).toEqual({ ...c, nsis: { ...c.nsis, include } })
   })
 
   it('NoExtend excludes the plugin from resources and asar, keeps the backend/CU and isolates its feed', () => {

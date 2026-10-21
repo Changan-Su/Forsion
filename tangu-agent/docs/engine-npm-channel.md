@@ -30,26 +30,33 @@ npm  @forsion/tangu-agent@2.13.5          ~/.forsion/engine/2.13.5/        安�
 | 条件 | 为什么 |
 |---|---|
 | 包名对、正式版号、比安装包自带的新 | 永不降级;预发布不进这条通道 |
-| `forsion.minDesktop` 不高于壳的版本 | 新引擎可能依赖更新的壳。壳版本取自带引擎的版本号(两者同号发版是 build-desktop 的门禁) |
+| `forsion.minDesktop` 不高于壳的版本 | 新引擎可能依赖更新的壳。壳版本读安装包 `tangu-server/desktop-host.json`，由 afterPack 写入实际桌面版本；只有缺少该文件的旧同号安装包才回退到自带引擎版本。损坏的文件不回退 |
 | `dependencies` 与自带的完全相同 | 新版用的是安装包里那份 `node_modules` |
 | 建表 / 迁移文件与自带的逐字节相同 | 带迁移的版本只能随安装包发,这样退回自带引擎永远安全 |
 | `SIGNATURE` 对得上钉死的公钥,目录里的文件恰好是签过的那些 | npm 的 sha512 只证明「下的是 registry 上那份」,证不了「那份是我们发的」 |
 
-后三条在发版前就由 `scripts/engine-release-gate.mjs` 拦一遍:不满足就不发,免得发出一个没有桌面会收的版本(npm 版本号用掉就收不回)。
+依赖 / 源码迁移兼容性与引擎版本在发版前由 `scripts/engine-release-gate.mjs` 拦一遍:不满足就不发,免得发出一个没有桌面会收的版本(npm 版本号用掉就收不回)。
 
 ## 发一次引擎热更新
 
 一次热更新 = 从它所针对的那个桌面正式版拉出来的修复分支。**不要从 main 的最新提交发**:main 上有没随安装包发出去的功能、依赖和迁移。
 
 1. 从目标桌面 tag 开分支:`git switch -c hotfix/tangu-2.13.5 v2.13.4`,把修复放进去(只动引擎,不动依赖、不动迁移)。
-2. 把 `tangu-agent/package.json` 的版本号抬到下一个补丁号(`desktop/package.json` 不动)。版本号与桌面共用一条线:
-   这个号从此归这次热更新,下一个桌面正式版要再往后取 —— build-desktop 的门禁见到同号的 `tangu-v*` tag 就拒发。
+2. 把 `tangu-agent/package.json` 与 lock 的版本号抬到新的引擎版本（`desktop/package.json` 不动）。**桌面和引擎独立编号**：引擎须高于目标桌面自带的引擎，以及 npm 已发布的引擎版本；无需高于桌面版本号。桌面 `v2.13.6` 与引擎 `tangu-v2.13.6` 可同时存在。
 3. 本机验证:`npm run build && npm run e2e:overlay`,再跑这次修复相关的测试。发 npm 前的验证不能比发安装包松:npm 版本撤不回,坏版本只能向前修。
 4. 推分支,推 tag `tangu-v2.13.5`。`publish-engine.yml` 构建、过门禁、签名、端到端核对,然后发 npm。
 5. 把修复照常合进 main。
 
-`forsion.minDesktop` 缺省就是它所基于的那个桌面版本(CI 用最近的 `v*` tag 填),也就是只送给那一版的壳。
+`forsion.minDesktop` 缺省就是它所基于的那个桌面版本(CI 用最近的 `v*` tag 填),兼容该版本及更高版本的壳，仍须通过依赖、迁移和签名检查。
 确认更老的壳也能用时,才在 `package.json` 里写一个更低的值;老壳是否真的收下仍由依赖清单和建表文件两条把关。
+
+## 桌面独立发布
+
+桌面以 `desktop/package.json` / lock 和 `v*` tag 为准；引擎以 `tangu-agent/package.json` / lock 和 `tangu-v*` tag 为准。`/health` 继续报告真正运行的引擎版本，不能改成桌面版本。
+
+`engine-release-gate.mjs --desktop-release v<桌面版本>` 不再禁止桌面与热更新同号：它核对桌面 tag、前版随包引擎和 npm 引擎历史。源码不变的引擎可随多个桌面版本复用；已经发行的引擎来源若变化，必须单独提升引擎版本，不能借桌面升级重用旧引擎身份。源码基线包含引擎 src / skills / agent-skills / tsconfig / lock 与清单；registry 无法核验时不放行。CI checkout 必须取完整 tags。
+
+打包钩子在应用签名前写 `desktop-host.json`，不改引擎 package.json。桌面更新器与终端启动器共用 `checkOverlay` 读取它；热更新 npm 包不携带、也不覆盖此宿主身份。真实安装包检查分别验证桌面版本、随包引擎版本和宿主身份，不再比较两包是否同号。
 
 ## 首次发布(只做一次)
 
@@ -62,7 +69,7 @@ npm 规定包先存在才能登记自动发布,所以第一次要手动:
 1. 把签名私钥配进仓库:Settings → Secrets → Actions → `TANGU_ENGINE_SIGNING_KEY`,内容是
    `~/.forsion-dev/secrets/tangu-engine-signing/key.pem` 的全文。
 2. Actions 页手动运行 `publish-engine`(只打包不发布),下载产物 `forsion-tangu-agent-<版本>.tgz`。
-   手动运行打出来的包,版本号恒等于它所基于的那个桌面正式版 —— 一个已经发过的号,没有任何桌面会装它,只用来占位。
+   手动运行打出来的包使用目标桌面自带的引擎版本，`minDesktop` 单独使用目标桌面版本；只提供预览产物、不自动发布。首次占位流程已经完成，不再重发已存在的版本。
 3. `npm login` → `npm publish forsion-tangu-agent-<版本>.tgz --access public`。
 4. 登记自动发布:`npx -y npm@11 trust github @forsion/tangu-agent --repo Changan-Su/Forsion --file publish-engine.yml --allow-publish`。
 

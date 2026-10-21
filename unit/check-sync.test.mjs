@@ -50,6 +50,13 @@ test('derives the Desktop baseline from git and only refuses a checkout behind t
   const current = git('rev-parse', 'HEAD')
   assert.deepEqual(pick(check()), { desktopVersion: '2.11.0', desktopTag: 'v2.11.0', desktopCommit: current, unitRevision: 0, prerelease: false })
 
+  await packages('2.11.0', '3.0.0')
+  git('commit', '-am', 'Independent engine release')
+  assert.equal(check().desktopVersion, '2.11.0')
+  assert.equal(check().engineVersion, '3.0.0')
+  assert.equal(check().prerelease, true)
+  git('reset', '-q', '--hard', current)
+
   git('branch', 'hotfix', release)
   git('tag', 'v2.10.1', 'hotfix') // a lower release outside HEAD's history is not drift
   assert.equal(check().desktopTag, 'v2.11.0')
@@ -67,7 +74,7 @@ test('derives the Desktop baseline from git and only refuses a checkout behind t
   git('checkout', '-q', '-b', 'stale', release)
   assert.throws(check, /behind the latest Desktop release v2\.11\.0/)
 
-  await packages('2.10.0', '2.10.1')
+  await packages('2.10.0', 'invalid')
   git('commit', '-q', '-am', 'Engine drifted from Desktop')
-  assert.throws(check, /same version/)
+  assert.throws(check, /Invalid tangu-agent release version/)
 })

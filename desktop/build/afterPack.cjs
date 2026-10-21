@@ -26,6 +26,11 @@ exports.default = async function afterPack(context) {
       ? path.join(appOutDir, `${packager.appInfo.productFilename}.app`, 'Contents', 'Resources')
       : path.join(appOutDir, 'resources');
 
+  // Written before signing; both the desktop updater and the terminal launcher read this same host identity.
+  if (product.agentBackend) {
+    require('./engine-host.cjs').writeEngineHost(path.join(resourcesDir(), 'tangu-server'), packager.appInfo.version);
+  }
+
   // ① better-sqlite3 → Electron ABI 重建(仅捆 agent 后端的变体需要 —— 它随 tangu-server/node_modules 进包)
   if (!product.agentBackend) {
     console.log('[afterPack] 产品档案无 agent 后端 → 跳过 better-sqlite3 重建');

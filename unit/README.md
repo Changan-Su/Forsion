@@ -20,9 +20,9 @@ node unit/check-sync.mjs
 
 When a new stable release is available, merge its tag, resolve conflicts, and run type, plugin, account and local installation checks before building. Verify that fixes in extracted shared handlers are carried forward. The pre-build check refuses exactly one situation: a newer stable tag exists in the repository but not in HEAD's history (packaging from a stale checkout). Any build that is not exactly the tagged commit (later commits, or a package version already bumped past the tag) is recorded in `release.json` as a pre-release rather than refused; a package version behind the baseline tag is refused. It checks fetched tags and does not fetch or merge automatically.
 
-`.github/workflows/check-unit.yml` 提供分支检查和手动构建；发行包中的 `release.json` 记录 Desktop 基线标签与提交、Unit 修订号、是否预发布及源码提交。检查本身不发布版本。
+`.github/workflows/check-unit.yml` 提供分支检查和手动构建；发行包中的 `release.json` 记录 Desktop 基线标签与提交、独立的 `engineVersion`、Unit 修订号、是否预发布及源码提交。桌面与引擎不要求同号，Unit npm 版本仍跟随桌面。检查本身不发布版本。
 
-`.github/workflows/check-unit.yml` provides branch validation and manual builds. Each distribution contains `release.json` with its Desktop baseline tag and commit, Unit revision, pre-release flag and source commit. Validation does not publish a release.
+`.github/workflows/check-unit.yml` provides branch validation and manual builds. Each distribution contains `release.json` with its Desktop baseline tag and commit, independent `engineVersion`, Unit revision, pre-release flag and source commit. Desktop and engine need not share a version; the Unit npm version still follows Desktop. Validation does not publish a release.
 
 ## 构建与安装 / Build and install
 

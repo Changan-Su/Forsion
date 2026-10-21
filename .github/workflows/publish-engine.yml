@@ -4,13 +4,13 @@ name: publish-engine
 #
 # 触发:
 #   - 推送 tangu-v* tag:构建 → 门禁 → 签名打包 → 端到端核对 → 发 npm。
-#   - 手动(Actions 页 Run workflow):同样的步骤但不发布,产物在 Artifacts 里。包的版本号恒取它所基于的桌面版本 ——
+#   - 手动(Actions 页 Run workflow):同样的步骤但不发布,产物在 Artifacts 里。包的版本号恒取目标桌面自带的引擎版本 ——
 #     一个没有任何桌面会装的号,只用来给 npm 上的包名占位(首发那一次:npm 规定包先存在才能登记自动发布)。
 #
 # 一次引擎热更新 = 从它所针对的那个桌面正式版(v* tag)拉出来的修复分支:只改引擎、不带迁移、不动依赖。
 # 这三条下面都是机器判定,不满足就不发 —— 发出去也没有一台桌面会收,而 npm 版本号用掉就收不回来。
 #
-# 版本号与桌面共用一条线:热更新取「下一个补丁号」,下一个桌面正式版再往后取(build-desktop 的门禁看有没有同号的 tangu-v* tag)。
+# 桌面与引擎独立编号。引擎更新须高于目标桌面的随包引擎;minDesktop 单独记录目标桌面版本。
 #
 # 签名私钥 = 仓库 secret TANGU_ENGINE_SIGNING_KEY(ed25519,PEM 文本)。⚠️ 永不轮换:公钥编在每一份已发出去的安装包里。
 
@@ -40,6 +40,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24 # 与桌面安装包自带的 Node 同一大版本;trusted publishing 要 npm ≥ 11.5.1 + Node ≥ 22.14
+
+      - name: Independent release policy tests
+        run: node --test scripts/engine-release-gate.test.mjs
 
       - name: Release gate
         id: gate

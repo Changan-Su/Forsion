@@ -19,6 +19,7 @@ const CU_RELEASE_CERT_SHA1 = 'dab3a30e7568c7e2c021660b49398356a205a191'
 const builtinBundles = require('../electron/builtinBundles.json')
 const { bundleExtend } = require('../build/distribution.cjs')
 const expectedVersion = JSON.parse(fs.readFileSync(path.join(desktop, 'package.json'), 'utf8')).version
+const expectedEngineVersion = JSON.parse(fs.readFileSync(path.join(desktop, '..', 'tangu-agent', 'package.json'), 'utf8')).version
 const errors = []
 function check(ok, message) {
   if (!ok) errors.push(message)
@@ -81,7 +82,9 @@ for (const dir of resources) {
   check(fs.existsSync(path.join(extensionDir, 'background.js')), 'Bundled Chrome extension background script missing')
   // 扩展本体是 Forsion Clip(npm @forsion/clip):引擎只认 manifest.key 钉死的那个扩展 ID,丢了 key 就连不上
   check(!!readJson(path.join(extensionDir, 'manifest.json')).key, 'Bundled Chrome extension has no fixed key (Tangu engine only accepts its pinned ID)')
-  check(engine.version === expectedVersion, `Engine version ${engine.version} != ${expectedVersion}`)
+  check(engine.version === expectedEngineVersion, `Engine version ${engine.version} != ${expectedEngineVersion}`)
+  const host = readJson(path.join(dir, 'tangu-server', 'desktop-host.json'))
+  check(host.version === expectedVersion, `Engine host version ${host.version} != desktop ${expectedVersion}`)
   // 引擎的 npm 热更新:桌面与终端都经安装包里的启动器拉起引擎,由它在自带的 dist 与下载的新版之间挑。启动器或它的判定
   // 模块没进包 = 这条通道在这一版里静默不存在;验新版用的公钥编在 signingKey.js 里,必须是一把能解析的 ed25519 公钥。
   const boot = path.join(dir, 'tangu-server', 'dist', 'boot')
