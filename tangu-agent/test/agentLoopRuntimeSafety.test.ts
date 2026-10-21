@@ -12,6 +12,12 @@ vi.mock('../src/sandbox/hostSandboxPolicy.js', () => ({
   isHostSandboxRestricted: () => policy.restricted,
   isHostSandboxToolAllowed: () => true,
 }));
+// Activity logging is decorative fire-and-forget I/O, outside run settlement.
+// Its filesystem behavior is covered in userActivity.test.ts; this suite owns run lifecycle.
+vi.mock('../src/services/userActivity.js', async (original) => ({
+  ...(await original<typeof import('../src/services/userActivity.js')>()),
+  appendActivityLine: vi.fn(),
+}));
 import { configureTangu } from '../src/seams/runtime.js';
 import { createTanguProfile } from '../src/profiles/index.js';
 import { createSqliteHost } from '../src/adapters/standalone/sqliteHost.js';
@@ -19,7 +25,7 @@ import { toSqliteDDL } from '../src/core/dialectDDL.js';
 import { STANDALONE_SCHEMA } from '../src/db/schemaStandalone.js';
 import { runMigration } from '../src/db/migrate.js';
 import { query } from '../src/core/db.js';
-import { createRun, getRun } from '../src/services/runStore.js';
+import { createRun as createStoredRun, getRun } from '../src/services/runStore.js';
 import { enqueueRun, abortRun, abortAllRuns, waitForRunSettlement } from '../src/services/agentLoop.js';
 import * as loop from '../src/services/agentLoop.js';
 import { registerToolProvider } from '../src/tools/toolRegistry.js';
@@ -36,8 +42,15 @@ let stream: ReturnType<typeof vi.fn>;
 let engineRun: ReturnType<typeof vi.fn>;
 let agentFiles: AgentFilesBrain;
 let contextWindow: number;
+const fixtureRunIds = new Set<string>();
+async function createRun(input: Parameters<typeof createStoredRun>[0]) {
+  const run = await createStoredRun(input);
+  fixtureRunIds.add(input.id);
+  return run;
+}
 
 beforeEach(async () => {
+  fixtureRunIds.clear();
   policy.restricted = false;
   contextWindow = 128_000;
   previousHome = process.env.TANGU_HOME;
@@ -70,7 +83,7 @@ afterEach(async () => {
   abortAllRuns();
   // A persisted terminal status can precede the run task's filesystem cleanup.
   // Keep its home and mocks alive until the task actually finishes.
-  for (const id of ['runtime-r', 'runtime-resume']) expect(await waitForRunSettlement(id, 5000)).toBe(true);
+  for (const id of fixtureRunIds) expect(await waitForRunSettlement(id, 5000)).toBe(true);
   vi.restoreAllMocks();
   if (previousHome === undefined) delete process.env.TANGU_HOME;
   else process.env.TANGU_HOME = previousHome;

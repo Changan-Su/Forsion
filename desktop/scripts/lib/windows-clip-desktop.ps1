@@ -16,7 +16,7 @@ public static class ClipDesktopInput {
   [StructLayout(LayoutKind.Sequential)] struct Input { public uint type; public Union value; }
   [DllImport("user32.dll")] static extern uint SendInput(uint count, Input[] input, int size);
   [DllImport("user32.dll")] static extern int GetSystemMetrics(int index);
-  [DllImport("user32.dll")] public static extern IntPtr FindWindow(string cls, string title);
+  [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern IntPtr FindWindowEx(IntPtr parent, IntPtr after, string cls, string title);
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hwnd);
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
@@ -27,7 +27,7 @@ public static class ClipDesktopInput {
   [DllImport("user32.dll")] static extern IntPtr GetDlgItem(IntPtr dialog,int id);
   [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern int GetWindowText(IntPtr hwnd,System.Text.StringBuilder text,int length);
   [DllImport("user32.dll")] static extern bool IsWindowEnabled(IntPtr hwnd);
-  [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hwnd);
+  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hwnd);
   [DllImport("kernel32.dll",CharSet=CharSet.Unicode)] static extern uint GetLongPathName(string path,System.Text.StringBuilder result,uint length);
   public static string LongPath(string path) {
     var result=new System.Text.StringBuilder(32768);
@@ -86,17 +86,32 @@ if ($Action -eq 'click') { [ClipDesktopInput]::Click($FromX,$FromY); exit }
 if ($Action -eq 'drag') { [ClipDesktopInput]::Drag($FromX,$FromY,$ToX,$ToY); exit }
 if ($Action -eq 'picker') {
   $dialog = [IntPtr]::Zero
+  $candidates = @()
   for ($attempt=0;$attempt -lt 60;$attempt++) {
-    # PowerShell converts $null to an empty .NET string; FindWindow needs a
-    # genuine null title wildcard, otherwise a titled native dialog is missed.
-    $dialog = [ClipDesktopInput]::FindWindow('#32770',[System.Management.Automation.Language.NullString]::Value)
+    # Other runner processes can own #32770 windows. Select by Chrome ownership
+    # before committing to a candidate, rather than rejecting the first window.
+    $candidates = @()
+    $candidate = [IntPtr]::Zero
+    while ($true) {
+      # A genuine null title is required; PowerShell's $null becomes "".
+      $candidate = [ClipDesktopInput]::FindWindowEx([IntPtr]::Zero,$candidate,'#32770',[System.Management.Automation.Language.NullString]::Value)
+      if ($candidate -eq [IntPtr]::Zero) { break }
+      if (-not [ClipDesktopInput]::IsWindowVisible($candidate)) { continue }
+      [uint32]$candidatePid=0
+      [void][ClipDesktopInput]::GetWindowThreadProcessId($candidate,[ref]$candidatePid)
+      $owner = Get-Process -Id $candidatePid -ErrorAction SilentlyContinue
+      if ($owner -and $owner.ProcessName -ieq 'chrome') { $candidates += $candidate }
+    }
+    $foreground = [ClipDesktopInput]::GetForegroundWindow()
+    if ($candidates -contains $foreground) { $dialog = $foreground }
+    elseif ($candidates.Count -eq 1) { $dialog = $candidates[0] }
     if ($dialog -ne [IntPtr]::Zero) { break }
     Start-Sleep -Milliseconds 200
   }
-  if ($dialog -eq [IntPtr]::Zero) { throw 'Chrome native folder picker did not appear' }
+  if ($dialog -eq [IntPtr]::Zero) { throw "Chrome native folder picker was absent or ambiguous (visible Chrome dialogs: $($candidates.Count))" }
   [uint32]$dialogPid=0
   [void][ClipDesktopInput]::GetWindowThreadProcessId($dialog,[ref]$dialogPid)
-  if ((Get-Process -Id $dialogPid).ProcessName -notmatch 'chrome') { throw 'Folder dialog is not owned by Chrome' }
+  if ((Get-Process -Id $dialogPid).ProcessName -ine 'chrome') { throw 'Folder dialog is not owned by Chrome' }
   [void][ClipDesktopInput]::SetForegroundWindow($dialog)
   if ([ClipDesktopInput]::GetForegroundWindow() -ne $dialog) { throw 'Chrome folder picker did not own foreground; refusing global keys' }
   [System.Windows.Forms.Clipboard]::SetText($Path)

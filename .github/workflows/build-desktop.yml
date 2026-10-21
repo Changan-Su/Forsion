@@ -37,8 +37,13 @@ jobs:
 
       # Desktop and engine versions are independent; validate the bundled engine in its own release history.
       - name: Desktop and bundled engine release identities
-        if: github.event_name == 'push'
-        run: node scripts/engine-release-gate.mjs --desktop-release "$GITHUB_REF_NAME"
+        env:
+          DESKTOP_REF: ${{ github.ref_name }}
+          RELEASE_EVENT: ${{ github.event_name }}
+        run: |
+          candidate="v$(node -p "require('../desktop/package.json').version")"
+          if [ "$RELEASE_EVENT" = push ]; then candidate="$DESKTOP_REF"; fi
+          node scripts/engine-release-gate.mjs --desktop-release "$candidate"
 
       - run: npm install --no-audit --no-fund
       - run: npm run typecheck
@@ -64,6 +69,7 @@ jobs:
         working-directory: desktop
         run: |
           npm install --no-audit --no-fund
+          npm run typecheck
           npm test
 
   build:
@@ -224,6 +230,24 @@ jobs:
           test -f "$manifest" || { echo "::error::缺少 $manifest — 该发行版的更新 feed 未生成"; exit 1; }
           echo "$manifest"
 
+      - name: Packaged Extend upgrade and cloud UI acceptance
+        working-directory: desktop
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            xvfb-run -a node scripts/penzor-packaged.check.cjs
+          else
+            node scripts/penzor-packaged.check.cjs
+          fi
+
+      - name: Upload packaged cloud acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: penzor-acceptance-${{ matrix.os }}-${{ matrix.distribution }}
+          path: desktop/outputs/penzor-packaged/
+          if-no-files-found: warn
+
       - name: Upload installers
         uses: actions/upload-artifact@v4
         with:
@@ -366,6 +390,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+          pattern: forsion-*
           merge-multiple: true   # 六个桌面 artifact + APK;安装包和 feed 名均区分发行版,不互相覆盖
 
       - name: Create / update GitHub Release

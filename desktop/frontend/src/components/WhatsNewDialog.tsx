@@ -117,7 +117,7 @@ function WhatsNewDialog({ onClose }: { onClose: () => void }) {
   }
   const item = (e: WhatsNewEntry) => (
     <button key={e.version} type="button" className={`wn-ver${e === current ? ' on' : ''}`} onClick={() => setPicked(e.version)} aria-current={e === current}>
-      <span className="wn-ver-name">{e.version}{e.installed && <i>{t('whatsNew.installed')}</i>}</span>
+      <span className="wn-ver-name">{e.displayVersion || e.version}{e.installed && <i>{t('whatsNew.installed')}</i>}</span>
       {(e.date || e.scope) && <small>{[e.date.replace(/-/g, '/'), e.scope?.split('\n')[0]].filter(Boolean).join(' · ')}</small>}
     </button>
   )
@@ -181,7 +181,7 @@ function WhatsNewArticle({ entry }: { entry: WhatsNewEntry }) {
         {entry.date && <span>{entry.date.replace(/-/g, '/')}</span>}
         {entry.scope && <i>{entry.scope.split('\n')[0]}</i>}
       </div>
-      <h2 className="wn-title">{published?.title || `Forsion ${entry.version}`}</h2>
+      <h2 className="wn-title">{entry.displayVersion ? `Forsion ${entry.displayVersion}` : published?.title || `Forsion ${entry.version}`}</h2>
       {published ? <div ref={ref} className="amadeus-published" dangerouslySetInnerHTML={{ __html: published.html }} />
         : entry.lines ? <Markdown content={entry.lines.map((l) => `- ${l}`).join('\n')} />
         : entry.notes ? <Markdown content={entry.notes} />

@@ -40,6 +40,8 @@ export function compareVersions(a: string, b: string): number {
 
 export interface WhatsNewEntry {
   version: string
+  /** Editorial label only; updater identity and website anchors remain real versions. */
+  displayVersion?: string
   date: string
   /** 官网那一篇(当前语言,缺了用另一种语言) */
   markdown?: string
@@ -77,6 +79,14 @@ export function buildWhatsNewEntries(input: {
   }
   const u = input.update
   if (u?.version && VERSION.test(u.version) && !map.has(u.version)) map.set(u.version, { version: u.version, date: '', notes: u.notes, ...flags(u.version) })
+  // The 2.13.6 article/changelog is the consolidated 2.13.5 + 2.13.6 edition.
+  // Keep its numeric identity for sorting/update actions; a cached 2.13.5 post must not duplicate it.
+  const combined = map.get('2.13.6')
+  if (combined && (combined.markdown || combined.lines)) {
+    combined.displayVersion = '2.13.5&2.13.6'
+    combined.installed ||= installed === '2.13.5'
+    map.delete('2.13.5')
+  }
   return [...map.values()].sort((a, b) => compareVersions(b.version, a.version))
 }
 

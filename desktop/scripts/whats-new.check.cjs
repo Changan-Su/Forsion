@@ -5,13 +5,90 @@
 //   ③ 下载来源(10-19):底栏小字随状态变(从哪儿下 / 自动换源 / mac 点过下载安装包);设置 → 关于「下载来源」写进 config.json。
 //      dev 构建跑不了真的检查 / 下载(unsupported),主进程那半由 electron/updater.test.ts 管,这里只验渲染层接线。
 // 跑:node ../../.claude/hooks/devlock.cjs run --vehicle=e2e --what="whats-new" --eta=3 -- node scripts/whats-new.check.cjs
-// 截图写到 OUT(缺省 /tmp/whats-new-check)。需要能上 forsion.net(连不上时正文退回 CHANGELOG,第 ① 步会报出来)。
+// 截图写到 OUT(缺省 /tmp/whats-new-check)。默认模式需要能上 forsion.net。
+// WHATS_NEW_COMBINED=1:仅用本地 IPC release fixture,验合并版本/官网旧缓存/离线/skip真实版本;不请求官网。
+// WHATS_NEW_DESKTOP=/path/to/desktop 可对另一个已构建工作树验收。
 const fs = require('fs'); const os = require('os'); const path = require('path')
-const DESK = path.resolve(__dirname, '..')
+const DESK = path.resolve(process.env.WHATS_NEW_DESKTOP || path.join(__dirname, '..'))
 const electron = require('./lib/launch-electron.cjs')
 const OUT = process.env.OUT || path.join(os.tmpdir(), 'whats-new-check'); fs.mkdirSync(OUT, { recursive: true })
 const fails = []
 const ok = (cond, msg) => { console.log(`${cond ? '✓' : '✗'} ${msg}`); if (!cond) fails.push(msg) }
+
+/** Local service fixture only: the real dialog, grouping and update actions stay mounted. */
+async function checkCombined(app, win) {
+  const { skipOnboarding } = require('./lib/skip-onboarding.cjs')
+  const fixture = [
+    { version: '2.13.5', date: '2026-10-20', scope: { zh: '桌面', en: 'Desktop' }, markdown: { zh: '# 缓存旧版文章\n\nStale release fixture.', en: '# Cached previous release\n\nStale release fixture.' } },
+    { version: '2.13.6', date: '2026-10-21', scope: { zh: '桌面', en: 'Desktop' }, markdown: { zh: '# 已合并的新版文章\n\nPrevious release fixture.\n\nCurrent release fixture.', en: '# Edited combined release\n\nPrevious release fixture.\n\nCurrent release fixture.' } },
+  ]
+  const inject = (rows) => app.evaluate(({ ipcMain }, data) => {
+    ipcMain.removeHandler('updater:websiteReleases')
+    ipcMain.handle('updater:websiteReleases', () => data)
+  }, rows)
+  await inject(fixture)
+  const version = await app.evaluate(({ app }) => app.getVersion())
+  ok(version === '2.13.6', `应用运行时仍是独立版本 ${version}`)
+  for (const locale of ['zh', 'en']) {
+    await win.evaluate(l => localStorage.setItem('tangu_locale', l), locale)
+    await win.reload(); await win.waitForSelector('#root')
+    if (!await skipOnboarding(win, 15000)) {
+      const skip = win.getByRole('button', { name: /^(跳过引导|Skip onboarding)$/ })
+      if (await skip.count()) await skip.first().click()
+      await skipOnboarding(win, 1000)
+    }
+    await win.waitForTimeout(1200)
+    for (const label of ['稍后', 'Later', 'Not now']) {
+      const button = win.getByRole('button', { name: label, exact: true })
+      if (await button.count()) await button.first().click()
+    }
+    await win.evaluate(() => window.tangu.openWhatsNew())
+    await win.waitForSelector('.wn-modal')
+    await win.waitForSelector('.wn-article .amadeus-published')
+    const state = await win.evaluate(() => ({ versions: [...document.querySelectorAll('.wn-ver-name')].map(x => x.firstChild?.textContent), title: document.querySelector('.wn-title')?.textContent, body: document.querySelector('.wn-article')?.textContent }))
+    const combined = state.versions.filter(v => /^2\.13\.5\s*&\s*2\.13\.6$/.test(v || ''))
+    ok(combined.length === 1 && !state.versions.includes('2.13.5') && !state.versions.includes('2.13.6'), `${locale}: 左栏只列一个合并版本`)
+    ok(/2\.13\.5\s*&\s*2\.13\.6/.test(state.title || ''), `${locale}: 正文标题合并显示`)
+    ok(state.body.includes('Previous release fixture.') && state.body.includes('Current release fixture.') && !state.body.includes('Stale release fixture.'), `${locale}: 显示已编辑合并正文且不重复拼接缓存旧文`)
+    await win.screenshot({ path: path.join(OUT, `combined-${locale}.png`) })
+    await win.keyboard.press('Escape')
+    if (locale === 'zh') {
+      await inject(null); await win.evaluate(() => window.tangu.openWhatsNew())
+      await win.waitForSelector('.wn-note')
+      ok((await win.locator('.wn-article').innerText()).includes('画布'), '中文离线正文包含实际合并的画布说明')
+      await win.screenshot({ path: path.join(OUT, 'combined-offline-zh.png') })
+      await win.keyboard.press('Escape'); await inject(fixture)
+    }
+  }
+  await inject(fixture.slice(0, 1))
+  await win.evaluate(() => window.tangu.openWhatsNew())
+  await win.waitForSelector('.wn-modal'); await win.waitForTimeout(700)
+  const cached = await win.evaluate(() => ({ versions: [...document.querySelectorAll('.wn-ver-name')].map(x => x.firstChild?.textContent), body: document.querySelector('.wn-article')?.textContent, items: document.querySelectorAll('.wn-article li').length }))
+  ok(cached.versions.filter(v => /^2\.13\.5\s*&\s*2\.13\.6$/.test(v || '')).length === 1 && !cached.versions.includes('2.13.5') && !cached.body.includes('Stale release fixture.') && cached.items > 0, '官网缓存仅5时显示本地完整6，隐藏旧5且不拼接重复文章')
+  await win.screenshot({ path: path.join(OUT, 'combined-cached-website.png') })
+  await win.keyboard.press('Escape')
+  await inject(null)
+  await win.evaluate(() => window.tangu.openWhatsNew())
+  await win.waitForSelector('.wn-modal'); await win.waitForSelector('.wn-note')
+  const offline = await win.evaluate(() => ({ versions: [...document.querySelectorAll('.wn-ver-name')].map(x => x.firstChild?.textContent), body: document.querySelector('.wn-article')?.textContent, items: document.querySelectorAll('.wn-article li').length }))
+  ok(offline.versions.filter(v => /^2\.13\.5\s*&\s*2\.13\.6$/.test(v || '')).length === 1 && offline.items > 0, '断网时打包CHANGELOG仍按合并版本显示条目')
+  await win.screenshot({ path: path.join(OUT, 'combined-offline.png') })
+  await win.keyboard.press('Escape')
+  await inject(fixture)
+  const announce = () => app.evaluate(({ BrowserWindow }) => {
+    for (const window of BrowserWindow.getAllWindows()) window.webContents.send('updater:status', { phase: 'available', version: '2.13.6', releaseNotes: '- Current update fixture' })
+  })
+  await announce(); await win.waitForSelector('.wn-modal')
+  const auto = await win.evaluate(() => ({ version: document.querySelector('.wn-ver.on .wn-ver-name')?.firstChild?.textContent, head: document.querySelector('.wn-head b')?.textContent }))
+  ok(/^2\.13\.5\s*&\s*2\.13\.6$/.test(auto.version || '') && /2\.13\.6/.test(auto.head || ''), '更新通知选中合并说明，更新器标题保留真实版本')
+  await win.screenshot({ path: path.join(OUT, 'combined-auto-update.png') })
+  await win.getByRole('button', { name: 'Skip this version', exact: true }).click()
+  ok(await win.evaluate(() => localStorage.getItem('forsion_update_skipped_version')) === '2.13.6', '跳过保存真实2.13.6而非合并显示字符串')
+  await announce(); await win.waitForTimeout(500)
+  ok(await win.locator('.wn-modal').count() === 0, '再次广播真实2.13.6不重弹')
+  fs.writeFileSync(path.join(OUT, 'combined-results.json'), JSON.stringify({ ok: !fails.length, version, failures: fails, fixture: 'Local IPC release response; no production request', output: OUT }, null, 2))
+  console.log(fails.length ? `\n✗ ${fails.length} 项失败` : `\n✓ 合并版本真机验收通过;截图在 ${OUT}`)
+}
 
 async function main() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-whatsnew-'))
@@ -23,6 +100,7 @@ async function main() {
     const win = await app.firstWindow()
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1512, 950))
     await win.waitForSelector('#root', { timeout: 60_000 }); await win.waitForTimeout(2500)
+    if (process.env.WHATS_NEW_COMBINED === '1') { await checkCombined(app, win); process.exitCode = fails.length ? 1 : 0; return }
     const skipOb = win.locator('text=跳过引导').first(); if (await skipOb.count().catch(() => 0)) await skipOb.click().catch(() => {})
     await win.waitForSelector('.dv-groupview', { timeout: 60_000 }); await win.waitForTimeout(1200)
 
