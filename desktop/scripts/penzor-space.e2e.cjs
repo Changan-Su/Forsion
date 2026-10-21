@@ -302,6 +302,7 @@ async function main() {
     await setMode('light'); await shot('overview')
     await setMode('dark'); await shot('overview-dark'); await setMode('light')
 
+    if (!process.env.PENZOR_VISUAL_ONLY) {
     // Native root folder contains every source.
     const rootFolder = win.locator('.t2s-folder-row', { hasText: '我的云盘' }).first()
     if (!(await win.locator('.t2s-srow-title', { hasText: /^我上传的$/ }).first().isVisible().catch(()=>false))) await rootFolder.click()
@@ -509,6 +510,7 @@ async function main() {
       check('④ 点了 → 主窗停在 WMOSv11', /WMOSv11/.test(await win.locator('.pz-h1').textContent().catch(() => '')))
     }
 
+    }
     cloud.st.signedOut = false
     await win.evaluate(()=>localStorage.setItem('tangu_locale','en'))
     await win.reload(); await win.waitForSelector('#root'); await win.waitForTimeout(2000)
@@ -518,9 +520,11 @@ async function main() {
     await win.waitForSelector('.pz-unified-quota')
     check('⑧ English unified root and quota text', await win.locator('.pz-h1').textContent() === 'My drive' && /notice/.test(await win.locator('.pz-unified-quota').textContent()))
     await shot('overview-en')
-    await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0]?.setContentSize(1000,780))
+    const mainWindow = await app.browserWindow(win)
+    await mainWindow.evaluate(w => w.setContentSize(1000,780))
     await win.waitForTimeout(500)
-    check('⑧ 窄桌面主区无横向溢出', await win.locator('.pz-scroll').evaluate(el=>el.scrollWidth<=el.clientWidth+1))
+    const width = await win.evaluate(() => innerWidth)
+    check('⑧ 窄桌面主区无横向溢出', width <= 1000 && await win.locator('.pz-scroll').evaluate(el=>el.scrollWidth<=el.clientWidth+1), `viewport=${width}`)
     await shot('overview-narrow-en')
     // ⑤ 401 → 登录页
     cloud.st.signedOut = true
