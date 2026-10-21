@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import path from 'node:path'
 import type { WorkFolderMigration, WorkFolderMigrationResult } from '@amadeus-shared/ipc'
 import type { VaultManager } from './vaultManager'
+import { rebaseFileRefs } from '@amadeus-shared/assets'
 
 type FileStamp = { path: string; hash: string }
 type Journal = { version: 1; complete: boolean; source: string; target: string; index: { path: string; before: string | null; after: string }; files: FileStamp[] }
@@ -41,11 +42,30 @@ async function snapshot(root: string, folder: string): Promise<FileStamp[]> {
   await walk(folder)
   return result
 }
-async function atomic(abs: string, text: string): Promise<void> {
+async function syncFile(abs: string): Promise<void> {
+  const file = await fs.open(abs, 'r')
+  try { await file.sync() } finally { await file.close() }
+}
+async function syncParents(root: string, dir: string): Promise<void> {
+  // Node cannot open directory handles for FlushFileBuffers on Windows.
+  // File data is flushed there; POSIX also flushes each new directory entry.
+  if (process.platform === 'win32') return
+  for (let current = dir; ; current = path.dirname(current)) {
+    const handle = await fs.open(current, 'r')
+    try { await handle.sync() } finally { await handle.close() }
+    if (current === root) break
+    if (!current.startsWith(root + path.sep)) throw Error('Migration directory escapes vault')
+  }
+}
+async function atomic(root: string, abs: string, text: string): Promise<void> {
   await fs.mkdir(path.dirname(abs), { recursive: true })
   const temp = `${abs}.${randomUUID()}.tmp`
-  try { await fs.writeFile(temp, text, { flag: 'wx' }); await fs.rename(temp, abs) }
-  finally { await fs.rm(temp, { force: true }) }
+  try {
+    const file = await fs.open(temp, 'wx')
+    try { await file.writeFile(text); await file.sync() } finally { await file.close() }
+    await fs.rename(temp, abs)
+    await syncParents(root, path.dirname(abs))
+  } finally { await fs.rm(temp, { force: true }) }
 }
 
 /** Copy first, publish the index last. Originals are the retained backup.
@@ -72,7 +92,7 @@ export function migrateWorkFolder(vault: VaultManager, req: WorkFolderMigration,
       const current = await read(await safePath(root, indexRel))
       if (current === journal.index.after) {
         for (const file of journal.files) if (await hashFile(await safePath(root, `${req.target}/${relative(file.path)}`)) !== file.hash) throw Error('Interrupted migration needs recovery')
-        check(); await atomic(journalPath, JSON.stringify({ ...journal, complete: true }))
+        check(); await atomic(root, journalPath, JSON.stringify({ ...journal, complete: true }))
         return { status: 'complete', backup: journal.source }
       }
       if (current !== journal.index.before) throw Error('Migration index changed; original data retained')
@@ -90,12 +110,25 @@ export function migrateWorkFolder(vault: VaultManager, req: WorkFolderMigration,
     for (const [rel, edit] of edits) {
       if (typeof edit.before !== 'string' || typeof edit.after !== 'string' || !original.some(f => f.path === rel && f.hash === digest(edit.before))) throw Error('Migration source changed')
     }
+    // Reuse the host's ordinary file-move reference semantics for Markdown.
+    const moved = (rel: string): string => rel.startsWith(req.source + '/') ? req.target + rel.slice(req.source.length) : rel
+    for (const file of original.filter(f => f.path.endsWith('.md'))) {
+      const before = await fs.readFile(await safePath(root, `${req.source}/${file.path}`), 'utf8')
+      if (digest(before) !== file.hash) throw Error('Migration source changed')
+      const text = edits.get(file.path)?.after ?? before
+      const after = await rebaseFileRefs(text, `${req.source}/${file.path}`, `${req.target}/${file.path}`, moved, async rel => {
+        const existing = rel.startsWith(req.target + '/') ? req.source + rel.slice(req.target.length) : rel
+        try { return (await fs.stat(await safePath(root, existing))).isFile() }
+        catch (error: any) { if (error.code === 'ENOENT') return false; throw error }
+      })
+      if (after !== before) edits.set(file.path, { path: file.path, before, after })
+    }
     const indexRel = `${req.target}/${indexPath}`
     const files = original.filter(f => f.path !== indexPath).map(f => ({ path: f.path, hash: edits.has(f.path) ? digest(edits.get(f.path)!.after) : f.hash }))
     const journal: Journal = { version: 1, complete: false, source: req.source, target: req.target, index: plan.index, files }
     check()
     if (await read(await safePath(root, indexRel)) !== plan.index.before) throw Error('Migration target index changed')
-    await atomic(journalPath, JSON.stringify(journal))
+    await atomic(root, journalPath, JSON.stringify(journal))
     for (const file of files) {
       check()
       const src = await safePath(root, `${req.source}/${file.path}`), dst = await safePath(root, `${req.target}/${file.path}`)
@@ -105,9 +138,11 @@ export function migrateWorkFolder(vault: VaultManager, req: WorkFolderMigration,
         const edit = edits.get(file.path)
         if (edit) await fs.writeFile(temp, edit.after, { flag: 'wx' })
         else await fs.copyFile(src, temp, constants.COPYFILE_EXCL)
+        await syncFile(temp)
         try { await fs.link(temp, dst) } catch (error: any) { if (error.code !== 'EEXIST') throw error }
       } finally { await fs.rm(temp, { force: true }) }
       if (await hashFile(await safePath(root, `${req.target}/${file.path}`)) !== file.hash) throw Error(`Migration file conflict: ${file.path}`)
+      await syncFile(dst); await syncParents(root, path.dirname(dst))
     }
     if (JSON.stringify(await snapshot(root, req.source)) !== JSON.stringify(original)) throw Error('Migration source changed during copy')
     await lockPaths([...original.map(f => `${req.source}/${f.path}`), ...files.map(f => `${req.target}/${f.path}`), indexRel], async () => {
@@ -117,8 +152,8 @@ export function migrateWorkFolder(vault: VaultManager, req: WorkFolderMigration,
       if (JSON.stringify(await snapshot(root, req.source)) !== JSON.stringify(original)) throw Error('Migration source changed before publication')
       check()
       // Capture the destination before the await: a later vault switch cannot redirect this write.
-      await atomic(await safePath(root, indexRel), plan.index.after)
-      await atomic(journalPath, JSON.stringify({ ...journal, complete: true }))
+      await atomic(root, await safePath(root, indexRel), plan.index.after)
+      await atomic(root, journalPath, JSON.stringify({ ...journal, complete: true }))
     })
     if (vault.getRoot() === root) {
       try { vault.reportCopiedFiles([...files.map(f => `${req.target}/${f.path}`), indexRel]) }
@@ -126,7 +161,8 @@ export function migrateWorkFolder(vault: VaultManager, req: WorkFolderMigration,
     }
     return { status: 'complete', backup: req.source }
   }
-  const job = (chains.get(key) ?? Promise.resolve()).then(run, run)
+  const guarded = (): Promise<WorkFolderMigrationResult> => vault.withMigrationGuard(run)
+  const job = (chains.get(key) ?? Promise.resolve()).then(guarded, guarded)
   const tail = job.catch(() => {})
   chains.set(key, tail)
   void tail.then(() => { if (chains.get(key) === tail) chains.delete(key) })

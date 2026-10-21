@@ -83,3 +83,16 @@ it('status queries can resume a migration using a different legacy folder alias'
  await fs.rm(path.join(t.root,'Plugins/Previous/Record/audio.m4a'));await t.run()
  expect((await migrateWorkFolder(t.vault,{...t.request,source:'OtherAlias',plan:undefined},async(_p,f)=>f())).status).toBe('complete')
 })
+
+it('prevents folder move/delete/trash during publication, without deadlocking file locks',async()=>{
+ const t=await setup()
+ await migrateWorkFolder(t.vault,t.request,async(_paths,fn)=>{
+  await expect(t.vault.moveEntry('Plugins/Previous','Moved')).rejects.toThrow('migration is in progress')
+  await expect(t.vault.removeEntry('Plugins/Previous')).rejects.toThrow('migration is in progress')
+  await expect(t.vault.trashEntry('Previous')).rejects.toThrow('migration is in progress')
+  return fn()
+ })
+ expect(await fs.readFile(path.join(t.root,'Plugins/Previous/Record/transcript.md'),'utf8')).toBe('# My transcript')
+ await t.vault.moveEntry('Plugins/Previous','Moved')
+ expect(await fs.readFile(path.join(t.root,'Moved/Record/transcript.md'),'utf8')).toBe('# My transcript')
+})
