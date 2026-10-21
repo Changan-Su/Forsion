@@ -189,7 +189,7 @@ import { createServer as createHttpServer } from 'node:http';
 import { randomUUID, createHash } from 'node:crypto';
 import { tmpdir, homedir } from 'node:os';
 import { join, dirname, resolve, relative } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
 import { deflateSync } from 'node:zlib';
 import { fromDb, report as timelineReport } from './stall-timeline.mjs';
@@ -217,6 +217,7 @@ const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
 const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'imgtools', 'account', 'nested', 'branch', 'musedm', 'humandims'];
+KEYS.push('bluebird');
 KEYS.push('signals');
 KEYS.push('musechat');
 KEYS.push('novision');
@@ -260,6 +261,7 @@ const GIT_PREFIX = 'livetest/'; const GIT_TAG = '[LIVE]';
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
 const OPT_IN = new Set(['humandims', 'nested', 'branch', 'musedm', 'realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'appsettings', 'control', 'phone']);
+OPT_IN.add('bluebird'); // --only bluebird --plugin-src <bundle>: real instruction-following on supplied transcripts
 OPT_IN.add('signals');
 OPT_IN.add('musechat');
 OPT_IN.add('imgwindow');
@@ -914,6 +916,12 @@ const desktopCfg = join(OUT, 'userData', 'tangu-desktop-config.json');
 mkdirSync(dirname(OUT), { recursive: true });
 try { mkdirSync(OUT); } catch (e) { console.error(e?.code === 'EEXIST' ? `产物目录已存在:${OUT}(旧 state.db/旧 MEMORY 会污染结论,换一个或删掉)` : String(e?.message || e)); process.exit(2); }
 mkdirSync(home, { recursive: true }); mkdirSync(workspace, { recursive: true });
+const BLUEBIRD_SRC = ONLY.has('bluebird') ? resolve(opt('plugin-src', '')) : null;
+if (BLUEBIRD_SRC) {
+  if (!existsSync(join(BLUEBIRD_SRC, 'harness/live-check.mjs'))) throw new Error('--plugin-src must point to the Bluebird bundle');
+  cpSync(BLUEBIRD_SRC, join(shared, 'plugins/bluebird'), { recursive: true, filter: p => !p.split('/').some(x => ['.git','node_modules','outputs','__pycache__'].includes(x)) });
+}
+
 if (ONLY.has('dispatch')) {
   const bundle = opt('dispatch-plugin', '');
   if (!bundle || !existsSync(join(bundle, 'tangu-plugins/dispatch-core/dist/index.mjs'))) throw new Error('--dispatch-plugin must point to a built Dispatch bundle');
@@ -1628,6 +1636,12 @@ try {
   const models = asList(await api('/agent/models'), 'models');
   if (!models.some((m) => m.id === MODEL)) throw new Error(`模型目录无 ${MODEL};直连可用:${models.filter((m) => m.source === 'direct').map((m) => m.id).join(', ') || '(无 —— 凭证未装载或已失效)'}`);
   rmSync(authLink, { force: true }); // 凭证只在引擎启动时装载一次,之后不再读文件 → 立刻拆掉软链
+
+  if (BLUEBIRD_SRC) {
+    const { checkBluebirdLive } = await import(pathToFileURL(join(BLUEBIRD_SRC, 'harness/live-check.mjs')).href);
+    const t0 = Date.now(), result = await checkBluebirdLive({ run, out: OUT });
+    record('bluebird', 'Bluebird bilingual study instructions and explicit output language', result, Date.now()-t0);
+  }
 
   // Warm real engine first, then use the isolated compiled Electron path also used by HUMAN.md.
   // Prompts are typed into the composer; this never fabricates model events or replays documents.

@@ -7,6 +7,7 @@ import type { CompilerIO } from '@amadeus-shared/compiler'
 import { isDrawingPath } from '@amadeus-shared/excalidraw/format'
 import { attachmentPaths } from './attachmentPaths'
 import { vaultRel } from './vaultRel'
+import { renameAtomic } from './renameAtomic'
 
 export interface VaultManagerHost {
   openDirectory?: () => Promise<string | null>
@@ -187,7 +188,7 @@ export class VaultManager {
     await fs.mkdir(path.dirname(abs), { recursive: true })
     const tmp = `${abs}.tmp-${process.pid}-${Date.now()}-${this.counter++}`
     await fs.writeFile(tmp, data, 'utf8')
-    await fs.rename(tmp, abs)
+    await renameAtomic(tmp, abs)
     this.lastWritten.set(abs, { content: data })
     if (!existed && this.root) this.host.logActivity?.('file.create', { f: path.relative(this.root, abs), b: Buffer.byteLength(data) })
     this.emitMutate(abs, 'write')
@@ -217,7 +218,7 @@ export class VaultManager {
     await fs.mkdir(path.dirname(abs), { recursive: true })
     const tmp = `${abs}.tmp-${process.pid}-${Date.now()}-${this.counter++}`
     await fs.writeFile(tmp, bytes)
-    await fs.rename(tmp, abs)
+    await renameAtomic(tmp, abs)
     this.emitMutate(abs, 'write')
   }
 

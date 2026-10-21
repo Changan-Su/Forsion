@@ -20,6 +20,7 @@ import { isClaimingHostView } from '../../shared/corePlugins'
 import { PLUGIN_ICONS } from '@amadeus/components/icons'
 import { registerMessages, translate, useI18n } from './i18n'
 import { PLUGIN_VIEW_HOST_ATTR, clearPluginViewModes, pluginViewModesOf, subscribePluginViewModes } from '@amadeus/plugins/pluginViewModes'
+import { setPluginCompanions } from './pluginCompanions'
 
 registerMessages({
   'pluginview.mountFailed': { zh: '插件视图加载失败（见控制台）', en: 'Plugin view failed to load (see console)' },
@@ -88,6 +89,7 @@ export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; plugi
         extendView, surface: isMini ? 'mini' : isFloating ? 'floating' : 'main',
         getParams: () => { check(); return { ...(useWorkspace.getState().leafById(current.current.leaf.id)?.params ?? current.current.params) } },
         setParams: (patch) => { check(); current.current.leaf.setParams({ ...(useWorkspace.getState().leafById(current.current.leaf.id)?.params ?? current.current.params), ...patch }) },
+        setCompanionsVisible: (visible) => { check(); if (kind === 'main' && !isFloating) setPluginCompanions(pluginId, current.current.leaf.id, def, visible) },
         close: () => { check(); current.current.leaf.close() },
         onParamsChanged: (listener) => { check(); listeners.current.add(listener); return () => { listeners.current.delete(listener) } },
         showInMainPanel: isMini ? () => {
