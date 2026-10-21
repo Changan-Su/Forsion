@@ -19,7 +19,7 @@ describe('Windows read shortcut', () => {
       'dir /b "plugins" 2>nul & echo --- & dir /b "other plugins" 2>nul',
       'dir /b Journal && type "Journal\\today.md"',
       'cd /d "Space" && dir && type manifest.json',
-      'DIR /b 2 > NUL',
+      'DIR /b 2> NUL',
     ]) expect(prepareReadOnlyCmd(command, cwd), command).not.toBeNull();
   });
 
@@ -48,6 +48,7 @@ describe('Windows read shortcut', () => {
       'dir && node -e "code"', 'dir & del notes.md', 'dir && npm install',
       'dir || echo failed', 'dir | findstr text', 'dir > out.txt', 'dir 2>other',
       'dir 2>nul.txt', 'dir 1>nul', 'dir 2>>nul', 'dir < input', 'dir &',
+      'dir 2 >nul', 'findstr text notes.md 2\t>nul', 'findstr text notes.md 2>\tnul',
       'dir\necho text', 'dir %TEMP%', 'dir !x!', 'dir ^& echo x',
       'echo text > out.txt', 'cd Space & type notes.md', 'cd C:Space && type notes.md',
       'findstr /g:patterns text.md', 'findstr /f:files text', 'findstr /d:other text notes.md',

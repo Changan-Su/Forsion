@@ -6,7 +6,7 @@ import { canonicalFuturePath, credentialPaths, credentialReadTarget, pathWithin 
  * findstr must use the system executable: cmd otherwise searches the writable cwd before PATH. */
 export function prepareReadOnlyCmd(command: string, cwd: string): string | null {
   if (path.win32.basename(process.env.comspec || 'cmd.exe').toLowerCase() !== 'cmd.exe') return null;
-  if (!command.trim() || /[%!^\r\n]/.test(command)) return null;
+  if (!command.trim() || /[\u0000-\u001f%!^]/.test(command)) return null;
   const parts = splitCmd(command);
   if (!parts) return null;
   let current = cwd;
@@ -22,7 +22,7 @@ export function prepareReadOnlyCmd(command: string, cwd: string): string | null 
     for (let i = 0; i < part.text.length; i++) {
       const ch = part.text[i];
       if (ch === '"') inQuote = !inQuote;
-      const discard = !inQuote && (i === 0 || part.text[i - 1] === ' ') && /^2\s*>\s*nul(?= |$)/i.exec(part.text.slice(i));
+      const discard = !inQuote && (i === 0 || part.text[i - 1] === ' ') && /^2> *nul(?= |$)/i.exec(part.text.slice(i));
       if (discard) { i += discard[0].length - 1; bare += ' '; } else bare += ch;
     }
     // No pipes, substitutions, alternate separators, controls, short names or other shells' syntax.
