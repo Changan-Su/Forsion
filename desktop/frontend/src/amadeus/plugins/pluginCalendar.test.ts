@@ -10,6 +10,18 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type { DbFile } from '@amadeus-shared/db/schema'
 import type { AgentScheduleInfo } from '../../types'
 
+let human: DbFile | null = null
+let humanVersion = 'h0'
+const humanWrite = vi.fn(async (data: DbFile, version: string) => {
+  if (version !== humanVersion) return { ok: false as const }
+  human = structuredClone(data); humanVersion += '+'
+  return { ok: true as const, version: humanVersion }
+})
+const humanRead = vi.fn(async () => human ? { status: 'ok' as const, path: 'human://CALENDAR.db', data: structuredClone(human), version: humanVersion } : { status: 'missing' as const })
+vi.mock('../store/humanCalendarIo', () => ({
+  HUMAN_CAL: 'human://CALENDAR.db', humanCalLegacy: () => '/V/Calendar.db',
+  readHumanCal: (...args: []) => humanRead(...args), writeHumanCalCas: (...args: [DbFile, string]) => humanWrite(...args),
+}))
 const disk: Record<string, DbFile> = {}
 const readDatabase = vi.fn(async (p: string) => (disk[p]
   ? { status: 'ok' as const, path: p, data: structuredClone(disk[p]), version: 'v0' }
@@ -36,6 +48,7 @@ const { useIcsCalendars } = await import('../../stores/icsCalendarStore')
 const { useOtherSideCal } = await import('../../stores/otherVaultCalStore')
 const { createCalendarApi } = await import('./pluginCalendar')
 const { createDatabasesApi } = await import('./pluginData')
+const { mutateHumanCalendar } = await import('./pluginDb')
 const { setLocaleGlobal, currentLocale } = await import('../../i18n')
 type Snap = import('./types').PluginCalendarSnapshot
 
@@ -67,6 +80,8 @@ function fakeScope() {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  human = null; humanVersion = 'h0'
+  delete disk['Calendar.db']
   localStorage.clear()
   disk['T.db'] = table('T', [{ id: 'c1', name: '名称', type: 'text' }, { id: 'd1', name: '日期', type: 'calendarDate' }, { id: 'k1', name: '完成', type: 'checkbox' }])
   disk['Plain.db'] = table('Plain', [{ id: 'c1', name: '名称', type: 'text' }])
@@ -303,4 +318,67 @@ describe('ctx.calendar.ics:订阅管理的信任边界', () => {
     await expect(api.ics.refresh('s1')).resolves.toBe(false)
     expect(useIcsCalendars.getState().subs.map((x) => x.id)).toEqual(['s1'])
   })
+})
+
+
+describe('personal calendar through the npm calendar host contract', () => {
+  const H = 'human://CALENDAR.db'
+  it('lists the personal calendar first, hides its mirror, edits with CAS and refreshes after focus', async () => {
+    human = table('My calendar', [{ id: 'c1', name: 'Name', type: 'text' }, { id: 'd1', name: 'Date', type: 'calendarDate' }, { id: 'k1', name: 'Done', type: 'checkbox' }])
+    disk['Calendar.db'] = structuredClone(human)
+    usePageStore.setState({ files: ['T.db', 'Calendar.db'], filesPendingFor: null })
+    const scope = fakeScope(), cal = createCalendarApi(scope), data = createDatabasesApi(scope, true)
+    let calendar: Snap | null = null
+    let databases: import('./types').PluginDatabase[] = []
+    cal.subscribe((s) => { calendar = s }); data.subscribe((s) => { databases = s.databases })
+    await flush(); await flush()
+    expect(calendar!.ready).toBe(true)
+    expect(calendar!.members.map((m) => m.path)).toEqual([H, 'T.db'])
+    expect(calendar!.defaultPath).toBe(H)
+    expect(databases.find((d) => d.path === H)?.rows[0].name).toBe('甲')
+    expect(cal.setMember(H, 'd1', 'k1')).toBe(false)
+    expect(cal.removeMember(H)).toBe(false)
+    expect(cal.setDefault(H)).toBe(true)
+    expect(cal.setHidden(H, true)).toBe(true)
+    expect(cal.setColor(H, '#123456')).toBe(true)
+    expect(data.setCell(H, 'r1', 'c1', 'Edited', { value: '甲' })).toBe(true)
+    human!.rows.push({ id: 'sync', cells: { c1: 'Synced' } }); humanVersion += '+'
+    await useDbStore.getState().flushAll(true)
+    expect(human!.rows.map((r) => r.cells.c1)).toEqual(['Edited', 'Synced'])
+    human!.rows.push({ id: 'focus', cells: { c1: 'After focus' } }); humanVersion += '+'
+    window.dispatchEvent(new Event('focus')); await flush(); await flush()
+    expect(databases.find((d) => d.path === H)?.rows.map((r) => r.name)).toContain('After focus')
+    scope.dispose(); const calls = humanRead.mock.calls.length
+    window.dispatchEvent(new Event('focus')); await flush()
+    expect(humanRead).toHaveBeenCalledTimes(calls)
+    expect(data.setCell(H, 'r1', 'c1', 'Revoked')).toBe(false)
+  })
+  it('does not grant databases-only plugins access or accept other human paths', async () => {
+    human = table('My calendar', [{ id: 'c1', name: 'Name', type: 'text' }, { id: 'd1', name: 'Date', type: 'calendarDate' }])
+    await useDbStore.getState().reload(H, H)
+    const plain = createDatabasesApi(fakeScope()), calendar = createDatabasesApi(fakeScope(), true)
+    expect(plain.setCell(H, 'r1', 'c1', 'Denied')).toBe(false)
+    expect(calendar.setCell('human://OTHER.db', 'r1', 'c1', 'Denied')).toBe(false)
+    expect(calendar.setCell('human:/CALENDAR.db', 'r1', 'c1', 'Denied')).toBe(false)
+  })
+  it('renames the personal calendar through the same CAS bridge without replacing concurrent rows', async () => {
+    human = table('Original', [{ id: 'c1', name: 'Name', type: 'text' }])
+    let once = false
+    expect(await mutateHumanCalendar((db) => {
+      if (!once) { once = true; human!.rows.push({ id: 'remote', cells: { c1: 'Other device' } }); humanVersion += '+' }
+      return { ...db, name: 'Renamed' }
+    }, () => true)).toEqual({ ok: true })
+    expect(human!.name).toBe('Renamed')
+    expect(human!.rows.some((r) => r.id === 'remote')).toBe(true)
+    expect(await mutateHumanCalendar((db) => ({ ...db, name: 'Revoked' }), () => false)).toMatchObject({ ok: false })
+    expect(human!.name).toBe('Renamed')
+  })
+
+  it('uses a create-only ticket when renaming a calendar before its first disk write', async () => {
+    humanVersion = ''
+    humanRead.mockResolvedValueOnce({ status: 'ok', path: H, data: table('Empty', [{ id: 'c1', name: 'Name', type: 'text' }]), version: '' })
+    expect(await mutateHumanCalendar((db) => ({ ...db, name: 'First name' }), () => true)).toEqual({ ok: true })
+    expect(humanWrite).toHaveBeenCalledWith(expect.objectContaining({ name: 'First name' }), '')
+  })
+
 })

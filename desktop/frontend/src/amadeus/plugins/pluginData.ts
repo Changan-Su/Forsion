@@ -7,6 +7,9 @@ import type { MdMark } from '@amadeus-shared/mdMarks'
 import { isStamped, resolveBaseType } from '../blocks/database/propertyTypes'
 import { addAggRow, deleteAggRow, duplicateAggRow, getAggDb, restoreAggRow, setAggCell, setAggName, watchAllDatabases, type AggDb } from '../store/dbAggregateStore'
 import { findMdMark, markKey, patchMark, watchMdMarks } from '../store/mdMarkStore'
+import { HUMAN_CAL } from '../store/humanCalendarIo'
+import { watchHumanCal } from '../store/calendarMembers'
+import { useDbStore } from '../store/dbStore'
 import { usePageStore } from '../store/pageStore'
 import { normalizeVaultRel } from './pluginAutomation'
 import type { PluginContext, PluginDatabase, PluginNoteTask } from './types'
@@ -48,8 +51,12 @@ const isDue = (s: string): boolean => {
 
 const vaultKey = (): string => { const s = usePageStore.getState(); return `${s.vaultSide}:${s.vaultRoot}` }
 
-export function createDatabasesApi(scope: DataScope): NonNullable<PluginContext['databases']> {
-  const table = (path: unknown): AggDb | null => (typeof path === 'string' ? getAggDb(normalizeVaultRel(path)) : null)
+/** Only calendar-capable consumers may address the exact host-owned personal calendar. */
+export const pluginDatabasePath = (path: unknown, includeHumanCalendar = false): string =>
+  typeof path !== 'string' ? '' : path === HUMAN_CAL ? (includeHumanCalendar ? HUMAN_CAL : '') : normalizeVaultRel(path)
+
+export function createDatabasesApi(scope: DataScope, includeHumanCalendar = false): NonNullable<PluginContext['databases']> {
+  const table = (path: unknown): AggDb | null => getAggDb(pluginDatabasePath(path, includeHumanCalendar))
   const cellsOf = (db: AggDb, raw: unknown): Record<string, CellValue> => {
     const out: Record<string, CellValue> = {}
     if (raw && typeof raw === 'object') {
@@ -60,11 +67,14 @@ export function createDatabasesApi(scope: DataScope): NonNullable<PluginContext[
   return {
     subscribe: (cb) => {
       if (!scope.alive() || typeof cb !== 'function') return () => {}
+      const humanOff = includeHumanCalendar ? watchHumanCal() : () => {}
       const off = watchAllDatabases((dbs, ready) => {
         if (!scope.alive()) return
-        try { cb({ ready, databases: dbs.map(toDb) }) } catch (e) { console.error('[amadeus] ctx.databases 回调抛错', e) }
+        const human = includeHumanCalendar ? getAggDb(HUMAN_CAL) : null
+        const status = useDbStore.getState().entries[HUMAN_CAL]?.status
+        try { cb({ ready: ready && (!includeHumanCalendar || !!status && status !== 'loading'), databases: (human ? [human, ...dbs] : dbs).map(toDb) }) } catch (e) { console.error('[amadeus] ctx.databases 回调抛错', e) }
       })
-      return scope.own(off)
+      return scope.own(() => { off(); humanOff() })
     },
     setCell: (path, rowId, colId, value, expected) => {
       if (!scope.alive()) return false

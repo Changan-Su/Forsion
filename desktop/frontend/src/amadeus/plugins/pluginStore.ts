@@ -51,9 +51,10 @@ import { AUTO_WORK_FOLDER_KEY } from './display'
 // 可静态 import;cfg 必须经 tanguSeam 探针的 waitBackend 拿(appStore 与本模块有 import 环)。
 import { getMuseTriggers, listPlugins, patchInboxMessage, postInboxMessage, saveMuseTrigger, setPluginEnabled } from '../../services/backendService'
 import { buildPluginTriggerUpserts, isPluginOwnedRule, normalizeVaultRel } from './pluginAutomation'
-import { MUTATE_DB_RETRIES, mutateDbCas } from './pluginDb'
+import { MUTATE_DB_RETRIES, mutateDbCas, mutateHumanCalendar } from './pluginDb'
 import { useDbStore } from '../store/dbStore'
-import { createDatabasesApi, createNoteTasksApi } from './pluginData'
+import { HUMAN_CAL } from '../store/humanCalendarIo'
+import { createDatabasesApi, createNoteTasksApi, pluginDatabasePath } from './pluginData'
 import { loadSyncedPluginData, notePluginDataEdit, pluginDataSyncOn, pushPluginData, type LocalData } from './pluginDataSync'
 import { createCalendarApi } from './pluginCalendar'
 import { createCalendarEventsApi } from './pluginCalendarEvents'
@@ -459,9 +460,12 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
     // readDatabase / 冲突重读 / 等写各是一次 await,只判入口的话吊销后的插件照样能落盘(codex 二轮 high)。
     mutateDb: async (p, fn) => {
       if (!ok()) return { ok: false, error: 'plugin disabled' }
-      const r = await mutateDbCas(amadeus, p, fn, MUTATE_DB_RETRIES, () => alive)
+      const personal = p === HUMAN_CAL
+      const caps = usePluginStore.getState().plugins.find((plugin) => plugin.id === pluginId)?.capabilities
+      if (personal && !(caps?.includes('calendar') && caps.includes('databases'))) return { ok: false, error: 'personal calendar requires calendar and databases capabilities' }
+      const r = personal ? await mutateHumanCalendar(fn, () => alive) : await mutateDbCas(amadeus, p, fn, MUTATE_DB_RETRIES, () => alive)
       if (r.ok) {
-        void useDbStore.getState().reloadByPath(normalizeVaultRel(p)).catch(() => {})
+        void useDbStore.getState().reloadByPath(personal ? HUMAN_CAL : normalizeVaultRel(p)).catch(() => {})
         kickAutomation()
       }
       return r
@@ -511,7 +515,13 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
       return compatibleFolders.get(vaultRoot)!
     },
     // 打开文件类型视图在 amadeusNav(它引 pluginStore 的 matchFileType)→ 动态 import 破静态环。
-    openFile: (p) => { if (ok()) void import('../../amadeusNav').then((m) => m.openFile(p)) },
+    openFile: (p) => {
+      if (!ok()) return
+      const personal = p === HUMAN_CAL
+      const caps = usePluginStore.getState().plugins.find((plugin) => plugin.id === pluginId)?.capabilities
+      if (personal && !(caps?.includes('calendar') && caps.includes('databases'))) return
+      void import('../../amadeusNav').then((m) => { if (ok()) personal ? m.openDb(HUMAN_CAL) : m.openFile(p) })
+    },
     // 裸 Markdown 必须显式走 Amadeus editor,不能借 openFile(后者对未认领后缀会交给系统默认程序)。
     // reuseKey 让插件 Space 能稳定更新自己声明的文档伴随栏,activate:false 不抢回源视图焦点。
     // 非笔记路径(PDF / 图片 / 白板…)不进笔记编辑器:交给 openFile 按类型开对的视图(同 isPagePipelinePath)。
@@ -1563,12 +1573,13 @@ export const usePluginStore = create<PluginState>((set, get) => {
         ? {
             mountRecord: (el: HTMLElement, opts: import('./types').PluginRecordOptions) => {
               if (!ctxAlive()) return { update() {}, dispose() {} }
-              const path = typeof opts?.path === 'string' ? normalizeVaultRel(opts.path) : ''
+              const calendar = !!get().plugins.find((p) => p.id === pluginId)?.capabilities?.includes('calendar')
+              const path = pluginDatabasePath(opts?.path, calendar)
               if (!(el instanceof HTMLElement) || !path || !getAggDb(path) || typeof opts?.rowId !== 'string') {
                 throw new TypeError('mountRecord needs an HTMLElement, a database path in the vault and a rowId')
               }
               const clean = (o: Partial<import('./types').PluginRecordOptions>): Partial<import('./types').PluginRecordOptions> => ({
-                ...(typeof o.path === 'string' && getAggDb(normalizeVaultRel(o.path)) ? { path: normalizeVaultRel(o.path) } : {}),
+                ...(typeof o.path === 'string' && getAggDb(pluginDatabasePath(o.path, calendar)) ? { path: pluginDatabasePath(o.path, calendar) } : {}),
                 ...(typeof o.rowId === 'string' ? { rowId: o.rowId } : {}),
                 ...('dateCol' in o ? { dateCol: typeof o.dateCol === 'string' ? o.dateCol : undefined } : {}),
                 ...(typeof o.readOnly === 'boolean' ? { readOnly: o.readOnly } : {}),
@@ -2149,7 +2160,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       : {}),
     // 全库多维表 / 笔记 @ 任务:同样 **manifest 声明过才注入**(写的是用户的表和笔记,default-deny)。
     ...(get().plugins.find((p) => p.id === pluginId)?.capabilities?.includes('databases')
-      ? { databases: createDatabasesApi({ alive: ctxAlive, own: (off) => scope.own('subscription', off, 'databases') }) }
+      ? { databases: createDatabasesApi({ alive: ctxAlive, own: (off) => scope.own('subscription', off, 'databases') }, !!get().plugins.find((p) => p.id === pluginId)?.capabilities?.includes('calendar')) }
       : {}),
     // Space 与 Ribbon 收纳架(2026-10-18,主页插件化):改的是用户的 Ribbon → 和 databases 同一道闸,声明了 'spaces' 才有
     ...(get().plugins.find((p) => p.id === pluginId)?.capabilities?.includes('spaces')

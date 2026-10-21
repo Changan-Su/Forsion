@@ -373,7 +373,7 @@ export interface PluginDbColumn { id: string; name: string; type: string; base: 
 export interface PluginDbRow { id: string; name: string; cells: Record<string, PluginCellValue> }
 /** 库里的一张多维表。`table` = 经典 .db(行在文件里);`notes` = 笔记视图(一行 = 文件夹里的一篇笔记,属性在 frontmatter)。 */
 export interface PluginDatabase {
-  /** 库相对路径(那张 .db,笔记视图也有一张描述它的 .db) */
+  /** Vault-relative .db path; calendar-capable plugins also receive the exact human://CALENDAR.db reference on local hosts. */
   path: string
   name: string
   kind: 'table' | 'notes'
@@ -382,7 +382,7 @@ export interface PluginDatabase {
 }
 /** ctx.ui.mountRecord 的参数。 */
 export interface PluginRecordOptions {
-  /** 库相对路径(ctx.databases 快照里那张表的 path) */
+  /** Exact path from ctx.databases; human://CALENDAR.db additionally requires the calendar capability. */
   path: string
   rowId: string
   /** 当作时间显示的日期列(给日历成员的 dateCol);不给 = 日期列和别的属性一样列在下面 */

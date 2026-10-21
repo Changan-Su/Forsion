@@ -362,3 +362,9 @@ Default work-folder paths use the effective plugin ID, never the localized displ
 A status-only request may target the plugin's previous display-name default to reconcile an interrupted predecessor journal. Old-target plans remain rejected; manual preferences and vault/revocation checks still apply. Bare media wikilinks are resolved against the original vault before copying, preserving user-added attachments beside notes instead of assuming an `assets/` location.
 
 无 plan 的状态查询可核验上一版显示名目录的迁移日志；旧目标的写入计划仍被拒绝。迁移前按原智库实际解析裸媒体链接，保留用户自加附件的位置。
+
+### 个人日历（Desktop 2.13.6+）
+
+同时声明 `databases` 与 `calendar` 的插件，在本机引擎提供个人日历时，会收到 `human://CALENDAR.db`。日历成员把它排第一并隐藏旧智库镜像。把该不透明引用原样传给 `ctx.databases`、`ctx.ui.mountRecord` 和用于表结构/名称的 `ctx.app.mutateDb`，不要交给文件系统读写 API。成员与日期/完成列映射由宿主管理，`setMember` / `removeMember` 返回 false；隐藏用 `setHidden`。只有 `databases` 能力的插件不可访问；无此来源的远程或移动宿主不列出。写入复用宿主 CAS 与冲突重放。
+
+Plugins with both `databases` and `calendar` capabilities receive the exact `human://CALENDAR.db` reference when the local engine provides it. Calendar members put it first and hide its old vault mirror. Pass this opaque reference unchanged to `ctx.databases`, `ctx.ui.mountRecord`, and `ctx.app.mutateDb` for schema/name changes, never filesystem read/write APIs. Database-only plugins cannot access it; hosts without this source omit it. Writes retain host CAS and replay.
