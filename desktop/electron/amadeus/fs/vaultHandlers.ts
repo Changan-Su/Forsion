@@ -371,19 +371,23 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
       return null
     }
   })
-  handle(IPC.writeTextFile, async (e, filePath: string, text: string, opts?: { create?: boolean; base?: string }) => {
+  handle(IPC.writeTextFile, async (e, filePath: string, text: string, opts?: { create?: boolean; base?: string; expectedRoot?: string }) => {
     const base = typeof opts?.base === 'string' ? opts.base : null
     return withPathLock(filePath, async () => {
+      const expectedRoot = typeof opts?.expectedRoot === 'string' ? opts.expectedRoot : null
+      const checkRoot = (): void => { if (expectedRoot !== null && vault.getRoot() !== expectedRoot) throw new Error('Vault changed before text save') }
+      checkRoot()
       if (opts?.create === true) {
         // 仅新建(Codex 复核返修 P1-1,优先于 base):`wx` 独占创建,已存在 → 不写,交回现文(调用方据此打开它 / 换下一个名字);
         // 现文读不出来 → current:null,调用方按「没建成」提示,绝不当成已存在。
         try {
           await vault.createTextFile(filePath, text)
+          checkRoot()
         } catch (err) {
           if ((err as NodeJS.ErrnoException | null)?.code !== 'EEXIST') throw err
           return { ok: false as const, current: await fs.readFile(vault.absPath(filePath), 'utf8').catch(() => null) }
         }
-        if (vault.isPagePath(filePath)) await index.update(filePath)
+        if ((expectedRoot === null || vault.getRoot() === expectedRoot) && vault.isPagePath(filePath)) await index.update(filePath)
         if (e != null && vault.isPagePath(filePath)) deps.notifyPeers?.(e, IPC.externalChange, filePath)
         return { ok: true as const }
       }
@@ -407,7 +411,13 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
       }
       // ⚠️ 必须走 writeVaultText:这是 **v4/unified 笔记唯一的落盘通道**,只写盘不更索引的话
       //    图标/搜索/反链/tags 全部停在上次启动时的样子(见 pageWrite.ts 顶注)。
-      await writeVaultText(vault, index, filePath, text)
+      checkRoot()
+      if (expectedRoot !== null) {
+        // The vault resolves its absolute target synchronously before awaiting disk IO.
+        await vault.writeTextFile(filePath, text)
+        checkRoot()
+        if (vault.getRoot() === expectedRoot && vault.isPagePath(filePath)) await index.update(filePath)
+      } else await writeVaultText(vault, index, filePath, text)
       // 同篇开在别的窗口:自写账本把 watcher 的回声压掉了(整个进程一本账),不补这一声它们永远停在旧内容,
       // 下一次保存再把这次写的整篇盖掉。发起窗口不回发 —— 它自己的同窗实例由渲染层 lifecycle 通知。
       // Unit RPC 起源(e = null)不走这里:它的本机广播由 vaultFace.call 按 VAULT_WRITE_EVENTS 负责。

@@ -185,6 +185,9 @@ export interface PluginAppApi extends BlockSurfaceApi {
    *  ⚠️需要活动库。没有活动库时**reject**(主进程 `vaultManager` 抛 `Error('No vault is open')`)——
    *  与只读侧的静默 null 不同形,启动期的写一律 try/catch。 */
   writeFile(path: string, text: string): Promise<void>
+  /** Local hosts supporting scopedTextWrites: reject a stale vault at the filesystem lock.
+   *  create:true never overwrites an existing file (returns false). Older hosts lack this method. */
+  writeFileScoped?(path: string, text: string, expectedRoot: string, options?: { create?: boolean }): Promise<boolean>
   /** 二进制版 writeFile(2026-09-19+):把字节原子写进库内路径(自动建父目录,已存在即覆盖)。
    *  用途:导入用户从磁盘选来的模型 / 图片 / 音频(`<input type=file>` 的 `File.arrayBuffer()`),
    *  或把插件自己渲染的截图落盘给 Agent 看。
@@ -625,6 +628,10 @@ export interface PluginViewContext {
   getParams?(): Readonly<Record<string, unknown>>
   /** Merge entity/filter changes into this leaf; also updates the host's main-panel target. */
   setParams?(patch: Record<string, unknown>): void
+  /** Show/hide the declared main companions without destroying their native views. Desktop folds
+   *  them into this view's tab group and restores their split sizes; mobile keeps native tabs.
+   *  Only this contribution's keyed companions are affected. Revoked after unmount. */
+  setCompanionsVisible?(visible: boolean): void
   /** Subscribe without remounting the DOM or losing in-progress input. Returns unsubscribe. */
   onParamsChanged?(listener: (params: Readonly<Record<string, unknown>>) => void): () => void
   /** Mini/Floating: opens the corresponding full view in the main panel. Revoked after unmount. */
@@ -654,6 +661,10 @@ export interface ViewContribution {
   /** Id of one of THIS plugin's list sources (2026-08-25+): while this view is the active main
    *  view, the unified workspace sidebar auto-switches to that list. Old hosts ignore it. */
   workspaceSource?: string
+  /** Native main-area companions, created on demand by view.setCompanionsVisible(true).
+   *  Keys must start with this plugin id plus '-'; at most 3. Old hosts ignore this field.
+   *  Hiding keeps the native views as tabs, preserving unsent drafts and editor state. */
+  mainCompanions?: Array<{ type: 'amadeus-editor' | 'chat-panel'; key: string; split: 'right' | 'down'; params?: Record<string, unknown> }>
   /** Right-panel views this view brings along when it is the front main view (2026-10-20+; older hosts ignore it).
    *  Full view types, as in space.json: your own views as `plugin:<pid>:<viewId>`, host side views by name
    *  (`chat-panel`, `outline`, `tangu-details`, `workspace`…). First entry comes to the front when the person switches to

@@ -338,3 +338,14 @@ Since 2026-10-19 (added when Extend's announcement, the host's terms update noti
 - `ctx.app.queuePopup?()` queues a popup your plugin opens on its own (a startup announcement or reminder, not a panel the user just clicked open). Only one popup shows at a time: the terms update notice and What's new go first, plugin popups come after them, and popups at the same level show in arrival order. Nothing shows while the full-screen onboarding is open.
 - It returns `{ ready, done }`. Wait for `ready`, then show your popup, and call `done()` when it closes so the next one can show. If you decide not to show it after all (the account changed, the data is stale), call `done()` too: that withdraws it, and `ready` never resolves.
 - Until you call `done()` your popup holds the queue and nothing after it can show. The host clears it for you when your plugin is disabled. Older hosts don't have this method; show the popup straight away as before.
+
+
+## 按需展开原生主区伴随视图 / On-demand native main companions
+
+`registerView` 可声明 `mainCompanions: [{ type: 'amadeus-editor', key: 'my-plugin-document', split: 'right' }]`。支持 `amadeus-editor` / `chat-panel`，key 以插件 id 加 `-` 开头，最多三项。视图挂载上下文的 `view.setCompanionsVisible?.(true)` 按需展开，`false` 将这些原生视图收进本视图的标签组，保留正文、聊天草稿和分栏尺寸；窄窗与手机使用原生标签。不会关闭或改写其它视图，不重建整个 Space。旧宿主缺少此方法，所以重要的阅读布局仍可保留在 Space 配方中。
+
+Declare up to three `mainCompanions` on a plugin view, using native `amadeus-editor` or `chat-panel` types and keys prefixed with the plugin id plus `-`. `view.setCompanionsVisible?.(true)` expands them on demand; `false` folds them into the source tab group without destroying native content or chat drafts. Split sizes are restored, narrow hosts use tabs, and unrelated views are retained. Feature-detect on older hosts and keep essential fallback views in the Space recipe.
+
+本机宿主还可提供 `ctx.app.writeFileScoped?.(path, text, expectedRoot, {create:true})`：在主进程文件锁内校验活动智库，切库后拒绝旧任务的写入；`create:true` 已有文件时返回 false、不会覆盖。普通写入返回 true；方法缺席时插件需要在每次异步边界核对智库，不得宣称获得了主进程范围保护。
+
+Local hosts may expose `ctx.app.writeFileScoped(path, text, expectedRoot, { create: true })`. The main process validates the active vault under the file lock. Stale writes reject; create-only writes return false for an existing file. Feature-detect this API; a renderer-only scope check on an older host does not provide the same guarantee.

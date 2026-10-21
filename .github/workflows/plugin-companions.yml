@@ -1,0 +1,32 @@
+name: plugin companions and scoped writes
+on:
+  pull_request:
+    paths: &paths
+      - '.github/workflows/plugin-companions.yml'
+      - 'desktop/frontend/src/pluginCompanions*'
+      - 'desktop/frontend/src/pluginViews.tsx'
+      - 'desktop/frontend/src/amadeus/plugins/pluginStore.ts'
+      - 'desktop/frontend/src/amadeus/plugins/types.ts'
+      - 'desktop/electron/amadeus/fs/vaultHandlers.ts'
+      - 'desktop/electron/amadeus/fs/scopedTextWrite.test.ts'
+      - 'desktop/shared/amadeus/ipc.ts'
+  push:
+    paths: *paths
+permissions:
+  contents: read
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: node build/link-lcl.cjs
+      - run: npx vitest run frontend/src/pluginCompanions.test.ts frontend/src/amadeus/plugins/viewLocations.test.ts electron/amadeus/fs/scopedTextWrite.test.ts electron/amadeus/fs/pageHistory.test.ts
