@@ -49,11 +49,15 @@ async function inspectNsisPayload(installer, temp, output) {
     }
     const outer = inspect(['l', '-slt', installer])
     fs.writeFileSync(path.join(output, 'nsis-installer-list.txt'), outer)
-    const entry = [...outer.matchAll(/^Path = (.+)\r?$/gm)].map(m => m[1].trim()).find(file => /(^|[\\/])app-(64|32|arm64)\.7z$/.test(file))
-    assert.ok(entry && !entry.includes('..'), 'Embedded NSIS payload not found')
-    const dir = path.join(temp, 'payload')
-    inspect(['x', installer, entry, `-o${dir}`, '-y'])
-    const listing = inspect(['l', '-slt', path.join(dir, entry)])
+    let listing = outer, entry = null
+    // 7za may recognize the embedded 7z directly, exposing resource entries already.
+    if (!/^Type = 7z\r?$/m.test(outer)) {
+      entry = [...outer.matchAll(/^Path = (.+)\r?$/gm)].map(m => m[1].trim()).find(file => /(^|[\\/])app-(64|32|arm64)\.7z$/.test(file))
+      assert.ok(entry && !entry.includes('..'), 'Embedded NSIS payload not found')
+      const dir = path.join(temp, 'payload')
+      inspect(['x', installer, entry, `-o${dir}`, '-y'])
+      listing = inspect(['l', '-slt', path.join(dir, entry)])
+    }
     fs.writeFileSync(path.join(output, 'nsis-payload-methods.txt'), listing)
     fs.writeFileSync(path.join(output, 'nsis-archiver.json'), JSON.stringify({ builder: require('app-builder-lib/package.json').version, tool, entry }, null, 2))
   } catch (error) {
@@ -155,7 +159,8 @@ async function main() {
     const bytes = Buffer.from(await download.arrayBuffer())
     assert.equal('sha512-' + createHash('sha512').update(bytes).digest('base64'), meta.dist.integrity)
     const archive = path.join(old, 'extend.tgz'); fs.writeFileSync(archive, bytes)
-    const unpack = spawnSync('tar', ['-xzf', archive, '-C', old], { stdio: 'inherit' }); assert.equal(unpack.status, 0)
+    // GNU tar interprets a drive-letter -f argument as a remote host; cwd keeps it local on Windows too.
+    const unpack = spawnSync('tar', ['-xzf', path.basename(archive)], { cwd: old, stdio: 'inherit' }); assert.equal(unpack.status, 0)
     assert.equal(JSON.parse(fs.readFileSync(path.join(old, 'package', 'manifest.json'), 'utf8')).version, '0.9.1')
     assert.notEqual(digest(path.join(old, 'package', 'SIGNATURE')), digest(path.join(extend, 'SIGNATURE')), 'Previous signed package must differ from the candidate')
     const version = JSON.parse(fs.readFileSync(path.join(desktop, 'package.json'), 'utf8')).version

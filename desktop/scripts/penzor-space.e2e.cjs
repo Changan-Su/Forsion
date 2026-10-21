@@ -49,6 +49,22 @@ function installExtend(home, source = EXTEND) {
   return pkg.version
 }
 
+async function openCloud(page) {
+  // Ribbon overflow unmounts hidden slots; waiting for their labels cannot open it.
+  const cloud = page.locator('.rb-slot[data-id="space:forsion-penzor"] button.rb-btn').first()
+  const more = page.locator('.rb-more[data-rb-more="top"]').first()
+  if (!(await cloud.isVisible())) {
+    await more.waitFor({ state: 'visible', timeout: 20000 })
+    if (await more.getAttribute('aria-expanded') !== 'true') await more.click()
+  }
+  await cloud.waitFor({ state: 'visible', timeout: 20000 })
+  const label = await cloud.getAttribute('aria-label')
+  await cloud.click()
+  await page.evaluate(() => document.querySelector('.rb-more[data-rb-more="top"][aria-expanded="true"]')?.click())
+  await page.waitForSelector('.pz')
+  return label
+}
+
 // ── 本机假云端 ────────────────────────────────────────────────────────────────
 const MB = 1024 * 1024
 const now = Date.now()
@@ -325,13 +341,7 @@ async function main() {
     const later = win.getByRole('button', { name: '稍后', exact: true })
     if (await later.count()) await later.first().click()
     // ① Ribbon → 概览,右栏收起
-    const btn = win.locator('.rb [aria-label="蓬洲云"]').first()
-    await win.waitForTimeout(1500)
-    if (!(await btn.count())) await win.locator('.rb-more[data-rb-more="top"]').click().catch(() => {})
-    await btn.waitFor({ timeout: 20_000 }).catch(() => {})
-    check('① Ribbon 上有「蓬洲云」', await btn.count() > 0)
-    await btn.click().catch(() => {})
-    await win.evaluate(() => document.querySelector('.rb-open-top .rb-more')?.click())
+    check('① Ribbon 上有「蓬洲云」', await openCloud(win) === '蓬洲云')
     await win.locator('.t2s-srow-title', { hasText: /^概览$/ }).first().click()
     await win.waitForSelector('.pz-total', { timeout: 20_000 })
     const total = await win.locator('.pz-total b').textContent().catch(() => '')
@@ -416,7 +426,7 @@ async function main() {
     // Cold renderer reload against the pre-unified backend must keep legacy file operations usable.
     cloud.st.legacy = true
     await win.reload(); await win.waitForSelector('#root')
-    await win.locator('.rb [aria-label="蓬洲云"]').first().click()
+    await openCloud(win)
     await win.locator('.t2s-srow-title', { hasText: /^概览$/ }).first().click()
     await win.waitForSelector('.pz-unified-quota')
     check('旧服务端 404 不伪造统一统计或清除登录态', await win.locator('.pz-total b').textContent() === '—' && !(await win.getByText('登录后查看你的蓬洲云').count()))
@@ -586,9 +596,8 @@ async function main() {
     }
     cloud.st.signedOut = false
     await win.evaluate(()=>localStorage.setItem('tangu_locale','en'))
-    await win.reload(); await win.waitForSelector('#root'); await win.waitForTimeout(2000)
-    const enCloud = win.locator('.rb [aria-label="Penzor Cloud"]').first()
-    if (await enCloud.count()) await enCloud.click()
+    await win.reload(); await win.waitForSelector('#root')
+    await openCloud(win)
     await win.locator('.t2s-srow-title', {hasText:/^Overview$/}).first().click()
     await win.waitForSelector('.pz-unified-quota')
     check('⑧ English unified root and quota text', await win.locator('.pz-h1').textContent() === 'My drive' && /notice/.test(await win.locator('.pz-unified-quota').textContent()))
