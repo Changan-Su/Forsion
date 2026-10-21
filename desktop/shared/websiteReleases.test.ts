@@ -46,4 +46,33 @@ describe('websiteReleases', () => {
   it('links to the website anchor', () => {
     expect(websiteReleaseUrl('2.13.4')).toBe('https://forsion.net/releases/#release-2-13-4')
   })
+
+  it.each(['zh', 'en'] as const)('shows the consolidated edition once with %s website history or offline notes', (locale) => {
+    for (const website of [null, [{ version: '2.13.5', date: '2026-10-20', scope: {}, markdown: { en: '# Old article' } }]]) {
+      const entries = buildWhatsNewEntries({ website, locale, installed: '2.13.6', changelog: [
+        { version: '2.13.6', date: '2026-10-21', lines: ['Canvas', 'Unified drive', 'Tasks'] },
+        { version: '2.13.4', date: '', lines: ['History'] },
+      ] })
+      expect(entries.map(e => e.version)).toEqual(['2.13.6', '2.13.4'])
+      expect(entries[0]).toMatchObject({ displayVersion: '2.13.5&2.13.6', installed: true, isNew: false, lines: ['Canvas', 'Unified drive', 'Tasks'] })
+    }
+  })
+
+  it('keeps the numeric update identity when the combined website edition is newer', () => {
+    const entries = buildWhatsNewEntries({ locale: 'en', installed: '2.13.5', changelog: [], website: [
+      { version: '2.13.6', date: '2026-10-21', scope: {}, markdown: { en: '# Combined edition\nCanvas and drive' } },
+      { version: '2.13.5', date: '2026-10-20', scope: {}, markdown: { en: '# Previous edition' } },
+    ], update: { version: '2.13.6', notes: '- Update' } })
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).toMatchObject({ version: '2.13.6', displayVersion: '2.13.5&2.13.6', isNew: true, installed: true, markdown: '# Combined edition\nCanvas and drive' })
+    expect(websiteReleaseUrl(entries[0].version)).toContain('#release-2-13-6')
+  })
+
+  it('does not relabel the old edition before the combined content is available', () => {
+    const entries = buildWhatsNewEntries({ website: null, locale: 'en', installed: '2.13.5', changelog: [
+      { version: '2.13.5', date: '', lines: ['Existing article'] },
+    ], update: { version: '2.13.6', notes: '- Pending update' } })
+    expect(entries.map(e => e.version)).toEqual(['2.13.6', '2.13.5'])
+    expect(entries.every(e => !e.displayVersion)).toBe(true)
+  })
 })
