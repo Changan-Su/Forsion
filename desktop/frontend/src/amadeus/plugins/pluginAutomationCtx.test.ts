@@ -489,6 +489,32 @@ describe('ctx.databases / ctx.noteTasks 的能力闸(default-deny)', () => {
 })
 
 describe('ctx.notify 的 action / key(10-17)', () => {
+  it('通知展示名跟随发送时语言，缺英文时回退；插件身份和去重键不变', async () => {
+    const { useNotifications } = await import('../../stores/notificationStore')
+    const { currentLocale, setLocaleGlobal } = await import('../../i18n')
+    const previousLocale = currentLocale()
+    const ctx = ctxOf('calendar-label')
+    usePluginStore.setState((s) => ({ plugins: s.plugins.map((p) => ({ ...p, name: '日历与待办', nameEn: 'Calendar and tasks' })) }))
+    try {
+      for (const [locale, expected] of [['en', 'Calendar and tasks'], ['zh', '日历与待办']] as const) {
+        setLocaleGlobal(locale)
+        useNotifications.setState({ items: [], queue: [] })
+        ctx.notify?.('Added', { key: 'task-added' })
+        expect(useNotifications.getState().items.at(-1)).toMatchObject({
+          sourceLabel: expected, event: 'plugin:calendar-label', dedupeKey: 'plugin:calendar-label:task-added',
+        })
+      }
+      setLocaleGlobal('en')
+      usePluginStore.setState((s) => ({ plugins: s.plugins.map((p) => ({ ...p, nameEn: undefined })) }))
+      useNotifications.setState({ items: [], queue: [] })
+      ctx.notify?.('Added')
+      expect(useNotifications.getState().items.at(-1)?.sourceLabel).toBe('日历与待办')
+    } finally {
+      setLocaleGlobal(previousLocale)
+      useNotifications.setState({ items: [], queue: [] })
+    }
+  })
+
   // 负对照(10-17 实跑红):动作不看 ctxAlive → 「停用后」红;key 不加插件前缀 → dedupeKey 那条红;
   // 带 key 时不显式给 action / store 合并仍用 ?? 沿用 → 「旧按钮要清掉」红。
   it('带动作的卡停 8 秒、key 按插件加前缀;动作在插件停用后不调;坏动作不挂按钮', async () => {

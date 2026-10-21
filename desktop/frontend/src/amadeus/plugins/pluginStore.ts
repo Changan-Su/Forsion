@@ -46,7 +46,7 @@ import { registerDeskCompanion, revokeDeskCompanions, type DeskCompanionContribu
 import { currentPlatform } from '../../services/agentRunService'
 import { UI_MODE } from '@lcl/engine/uiMode'
 import { setActiveSpace, useCommandStore, useSpaceStore, nativeHaptic, nativeHapticAvailable, claimNativeChrome, nativeChromeInstalled } from '@lcl/engine'
-import { AUTO_WORK_FOLDER_KEY } from './display'
+import { AUTO_WORK_FOLDER_KEY, pluginDisplayName } from './display'
 // 自动化播种 / 禁用即关规则:backendService 依赖图干净(http / agentRunService / localInbox,均不引 appStore),
 // 可静态 import;cfg 必须经 tanguSeam 探针的 waitBackend 拿(appStore 与本模块有 import 环)。
 import { getMuseTriggers, listPlugins, patchInboxMessage, postInboxMessage, saveMuseTrigger, setPluginEnabled } from '../../services/backendService'
@@ -1395,13 +1395,14 @@ export const usePluginStore = create<PluginState>((set, get) => {
       const action = label && run
         ? { label, run: () => { if (!ctxAlive()) return; try { run() } catch (e) { console.error(`[amadeus] 插件 ${pluginId} 的通知动作抛错`, e) } } }
         : undefined
+      const plugin = get().plugins.find((p) => p.id === pluginId)
       notifyApp({
         text: String(message ?? ''),
         level: opts?.level,
         title: opts?.title ? String(opts.title) : undefined,
         sticky: typeof opts?.sticky === 'boolean' ? opts.sticky : undefined,
         event: `plugin:${pluginId}`,
-        sourceLabel: get().plugins.find((p) => p.id === pluginId)?.name || pluginId,
+        sourceLabel: plugin ? pluginDisplayName(plugin, currentLocale()) : pluginId,
         ...(action ? { action, durationMs: 8000 } : {}),
         // 带 key 时 action 一律显式给(可能是 undefined):同 key 合并时 store 才会清掉上一条的按钮,否则「已删除 B」上挂着撤 A 的按钮
         ...(typeof opts?.key === 'string' && opts.key ? { dedupeKey: `plugin:${pluginId}:${opts.key.slice(0, 100)}`, action } : {}),
