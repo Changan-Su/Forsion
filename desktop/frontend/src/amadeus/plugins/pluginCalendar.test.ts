@@ -374,4 +374,11 @@ describe('personal calendar through the npm calendar host contract', () => {
     expect(human!.name).toBe('Renamed')
   })
 
+  it('uses a create-only ticket when renaming a calendar before its first disk write', async () => {
+    humanVersion = ''
+    humanRead.mockResolvedValueOnce({ status: 'ok', path: H, data: table('Empty', [{ id: 'c1', name: 'Name', type: 'text' }]), version: '' })
+    expect(await mutateHumanCalendar((db) => ({ ...db, name: 'First name' }), () => true)).toEqual({ ok: true })
+    expect(humanWrite).toHaveBeenCalledWith(expect.objectContaining({ name: 'First name' }), '')
+  })
+
 })

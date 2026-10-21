@@ -134,4 +134,9 @@ describe('ctx.ui.mountRecord 的闸', () => {
     h.dispose()
   })
 
+  it('does not route a databases-only plugin mutation into the personal calendar', async () => {
+    const result = await ctxWith(['databases']).app.mutateDb!('human://CALENDAR.db', (db) => ({ ...db, name: 'Denied' }))
+    expect(result).toMatchObject({ ok: false, error: expect.stringContaining('calendar and databases') })
+  })
+
 })
