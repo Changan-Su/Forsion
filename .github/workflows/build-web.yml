@@ -24,6 +24,13 @@ on:
       - 'desktop/build/copy-excalidraw-assets.cjs' # web 的 prepare-board 调它
       - 'desktop/build/gen-fonts.cjs'              # web 的 prepare-fonts 调它
       - 'unit/releasePolicy.mjs'    # web/vite.config.ts 顶层 import
+      - 'unit/packages.ts'         # signed public-entry acceptance
+      - 'desktop/electron/unitWeb.ts'
+      - 'desktop/electron/bundleSignature.ts'
+      - 'desktop/electron/builtinBundles.json'
+      - 'desktop/scripts/unit-public-extend*'
+      - 'mobile/vendor/**'
+      - 'mobile/extend-bundle.json'
       - 'tangu-agent/src/contracts/**' # Tangu 的契约目录:渲染层只经这里用引擎的代码(check:tanguboundary 钉着)
       - 'lcl/**'                    # @lcl(Space-View 框架)
       - 'mobile/src/**'             # @mobile(手机端壳,web 按 UA 装载)

@@ -29,6 +29,7 @@ const digest = (bytes) => createHash('sha256').update(bytes).digest('hex')
   assert.equal((await fetch(new URL(`/api/files/${users[0].file.id}/content`, origin), { headers: users[1].auth })).status, 404, 'A second user cannot download the first user’s file')
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   const results = []
+  let activePage
   try {
     for (let index = 0; index < users.length; index++) {
       const user = users[index]
@@ -39,6 +40,14 @@ const digest = (bytes) => createHash('sha256').update(bytes).digest('hex')
         localStorage.setItem('forsion_tangu_onboarding_version', '2.13.6')
       }, { token: user.token })
       const page = await context.newPage(), errors = []
+      activePage = page
+      page.on('response', (r) => { if (r.request().method() === 'POST' && r.url().includes('/api/files/upload')) console.log('Browser upload status', r.status()) })
+      page.on('response', async (r) => {
+        if (new URL(r.url()).pathname === '/api/storage/ledger') {
+          const body = await r.json().catch(() => ({}))
+          console.log('Browser ledger', JSON.stringify({ status: r.status(), schemaVersion: body.schemaVersion }))
+        }
+      })
       page.on('pageerror', (e) => errors.push(e.message))
       const ribbon = async (id) => {
         const item = page.locator(`.rb [data-id="${id}"]`).first()
@@ -58,13 +67,13 @@ const digest = (bytes) => createHash('sha256').update(bytes).digest('hex')
       for (const id of ['points', 'items']) { await page.locator(`[data-store-view="forsion-extend:${id}"]`).click(); await page.locator('.mk-page').waitFor() }
       await page.screenshot({ path: path.join(shots, `real-store-${index}.png`) })
       await page.locator('.mk-page .settings-back').first().click()
-      await page.locator('[data-space-id="forsion-penzor"], [data-id="forsion-penzor"]').first().click()
+      await ribbon('space:forsion-penzor')
       const root = page.locator('[data-row-key="drive-root"]').first()
       await root.waitFor()
       if (await root.getAttribute('aria-expanded') !== 'true') await root.click()
       await page.locator('[data-row-key="app:penzor"]').first().click()
-      await page.getByText(user.name, { exact: true }).waitFor()
-      assert.equal(await page.getByText(users[1 - index].name, { exact: true }).count(), 0)
+      await page.locator('.pz tr').getByText(user.name, { exact: true }).waitFor()
+      assert.equal(await page.locator('.pz tr').getByText(users[1 - index].name, { exact: true }).count(), 0)
       const uploadName = `网页验收-${index}-${randomUUID()}.txt`, uploadBytes = Buffer.from(`真实浏览器上传 ${index}`)
       await page.locator('input[type="file"]:not([webkitdirectory])').first().setInputFiles({ name: uploadName, mimeType: 'text/plain', buffer: uploadBytes })
       await page.getByText(uploadName, { exact: true }).first().waitFor({ timeout: 30_000 })
@@ -73,6 +82,7 @@ const digest = (bytes) => createHash('sha256').update(bytes).digest('hex')
       assert(uploaded, 'The real service preserves the browser’s UTF-8 filename')
       const actual = Buffer.from(await fetch(new URL(`/api/files/${uploaded.id}/content`, origin), { headers: user.auth }).then((r) => r.arrayBuffer()))
       assert.equal(digest(actual), digest(uploadBytes))
+      await page.getByText('全部传完', { exact: true }).first().waitFor({ timeout: 30_000 })
       const nextDownload = page.waitForEvent('download')
       await page.locator('.pz tr', { hasText: user.name }).dblclick()
       const downloaded = await nextDownload
@@ -84,5 +94,11 @@ const digest = (bytes) => createHash('sha256').update(bytes).digest('hex')
     }
     fs.writeFileSync(path.join(shots, 'real-browser-report.json'), JSON.stringify({ ok: true, results }, null, 2))
     console.log('PASS real PostgreSQL/S3 browser: both accounts, store, UTF-8 upload, exact-byte download and isolation')
+  } catch (error) {
+    if (activePage) {
+      await activePage.screenshot({ path: path.join(shots, 'failure.png') }).catch(() => {})
+      fs.writeFileSync(path.join(shots, 'failure.txt'), await activePage.locator('body').innerText().catch(() => ''))
+    }
+    throw error
   } finally { await browser.close() }
 })().catch((e) => { console.error(e); process.exitCode = 1 })

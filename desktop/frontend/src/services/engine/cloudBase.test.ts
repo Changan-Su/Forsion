@@ -140,7 +140,8 @@ describe('宿主垫片的云端读者读 cloudApiBase(源码守卫)', () => {
     ['登录态 /auth/me', /origFetch\(`\$\{cloudApiBase\}\/auth\/me`/],
     ['额度 / 名册 / 重置卡(cloudJson)', /origFetch\(`\$\{cloudApiBase\}\$\{path\}`/],
     ['账号缓存身份键(装垫片时)', /syncCloudAccountCache\(cloudApiBase,\s*token\)/],
-    ['账号缓存身份键(别的标签页换号)', /syncCloudAccountCache\(cloudApiBase,\s*readWebToken\(\)\)/],
+    // A new account now gets a fresh document; old views must be revoked before reload.
+    ['别的标签页换号时清理旧账号缓存后重载', /window\.addEventListener\('storage',[\s\S]*?token = ''[\s\S]*?clearCloudAccountCache\(\)[\s\S]*?authListeners\.forEach[\s\S]*?location\.reload\(\)/],
     ['更新源 /website/config', /getJson\(`\$\{cloudApiBase\}\/website\/config`\)/],
     ['更新包 /website/download/android', /`\$\{cloudApiBase\}\/website\/download\/android`/],
     ['应用内浏览器地址栏', /showURL:\s*!url\.startsWith\(cloudApiBase\)/],
