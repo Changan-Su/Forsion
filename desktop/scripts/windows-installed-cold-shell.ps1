@@ -11,11 +11,18 @@ try {
   if ((Owned).Count) { throw 'Cold shell requires the installed app to be stopped first' }
   Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
   # No debug arguments, rewritten registry command or injected open-file event.
-  Start-Process -FilePath $File -WindowStyle Hidden
+  # Match Explorer's ordinary interactive launch on this owned CI desktop.
+  # SW_HIDE propagates into a cold process and prevents a native window handle
+  # from being discoverable via MainWindowHandle; that is not a double-click.
+  Start-Process -FilePath $File -WindowStyle Normal
   $taskEnd=[DateTime]::UtcNow.AddSeconds(60)
   do {
     $taskProcesses=Owned
     $taskEvidence.processes=@($taskProcesses | Select-Object ProcessId,ParentProcessId,ExecutablePath,CommandLine)
+    $taskEvidence.windows=@($taskProcesses | ForEach-Object {
+      $taskWindow=Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue
+      @{pid=$_.ProcessId; handle=if ($taskWindow) {$taskWindow.MainWindowHandle.ToInt64()} else {0}; title=$taskWindow.MainWindowTitle}
+    })
     $taskEvidence.phase='reading native accessibility'
     $taskEvidence | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $Output -Encoding utf8
     $taskNames=[Collections.Generic.List[string]]::new()
