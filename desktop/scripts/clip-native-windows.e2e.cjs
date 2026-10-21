@@ -71,6 +71,9 @@ async function main() {
       }
     }
     const copied = await settings.evaluate(() => window.tangu.clipExtension.prepare(false)); copyDir = copied.dir
+    const sameCopy = actual => {
+      try { return typeof actual==='string'&&fs.realpathSync.native(actual).toLowerCase()===fs.realpathSync.native(copyDir).toLowerCase() } catch { return false }
+    }
     check('settings prepares the actual bundled extension in the isolated profile', copyDir?.startsWith(home + path.sep) && fs.existsSync(path.join(copyDir, 'manifest.json')), copied)
     check('settings displays exactly the prepared copy path', (await settings.locator('.settings-browser-ext-panel').innerText()).includes(copyDir))
     await nativeClick(settings.getByTestId('browser-extension-open-chrome'))
@@ -134,14 +137,14 @@ async function main() {
     let installed
     for(let i=0;i<30;i++){ installed=(await info()).find(e=>e.id===ID);if(installed)break;await sleep(300) }
     await desktop('capture',['-Path',path.join(output,'native-drop.png')])
-    check('real Electron native folder drag installs Clip as unpacked in Chrome', installed?.location==='UNPACKED' && installed?.state==='ENABLED' && installed?.path?.toLowerCase()===copyDir.toLowerCase(), installed)
+    check('real Electron native folder drag installs Clip as unpacked in Chrome', installed?.location==='UNPACKED' && installed?.state==='ENABLED' && sameCopy(installed?.path), installed)
     await page.evaluate(id=>chrome.management.uninstall(id,{showConfirmDialog:false}),ID)
     for(let i=0;i<30 && (await info()).some(e=>e.id===ID);i++) await sleep(200)
     check('Clip is removed before independent native picker verification',!(await info()).some(e=>e.id===ID))
     await page.getByRole('button',{name:'Load unpacked',exact:true}).click()
     await desktop('picker',['-Path',copyDir])
     for(let i=0;i<30;i++){ installed=(await info()).find(e=>e.id===ID);if(installed)break;await sleep(300) }
-    check('native Load unpacked folder picker independently installs the copy',installed?.location==='UNPACKED' && installed?.path?.toLowerCase()===copyDir.toLowerCase(),installed)
+    check('native Load unpacked folder picker independently installs the copy',installed?.location==='UNPACKED' && installed?.state==='ENABLED' && sameCopy(installed?.path),installed)
     await page.screenshot({path:path.join(output,'native-picker-installed.png')})
   } catch(error) {
     console.error('Native Clip acceptance failed:',error)
