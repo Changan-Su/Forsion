@@ -1,3 +1,37 @@
+; Registry state belongs to this product and installation scope (SHELL_CONTEXT).
+; PDF is an alternate handler. Markdown is claimed only when unassigned.
+!macro ForsionAssociate EXT FILECLASS DESCRIPTION DEFAULT
+  Push $R0
+  ReadRegStr $R0 SHELL_CONTEXT "Software\Classes\.${EXT}" ""
+  ${If} "${DEFAULT}" == "1"
+    ${If} $R0 == ""
+      WriteRegStr SHELL_CONTEXT "Software\Classes\.${EXT}" "" "${FILECLASS}"
+    ${EndIf}
+  ${Else}
+    ; Migrate the stock installer's old unconditional PDF default. A genuine
+    ; Windows UserChoice is separate and remains untouched.
+    ${If} $R0 == "${FILECLASS}"
+      DeleteRegValue SHELL_CONTEXT "Software\Classes\.${EXT}" ""
+    ${EndIf}
+  ${EndIf}
+  WriteRegNone SHELL_CONTEXT "Software\Classes\.${EXT}\OpenWithProgids" "${FILECLASS}"
+  WriteRegStr SHELL_CONTEXT "Software\Classes\${FILECLASS}" "" "${DESCRIPTION}"
+  WriteRegStr SHELL_CONTEXT "Software\Classes\${FILECLASS}\DefaultIcon" "" '$\"$appExe$\",0'
+  WriteRegStr SHELL_CONTEXT "Software\Classes\${FILECLASS}\shell" "" "open"
+  WriteRegStr SHELL_CONTEXT "Software\Classes\${FILECLASS}\shell\open" "" "Open with ${PRODUCT_NAME}"
+  WriteRegStr SHELL_CONTEXT "Software\Classes\${FILECLASS}\shell\open\command" "" '$\"$appExe$\" $\"%1$\"'
+  Pop $R0
+!macroend
+
+!macro ForsionClearOwnedDefault EXT FILECLASS
+  Push $R0
+  ReadRegStr $R0 SHELL_CONTEXT "Software\Classes\.${EXT}" ""
+  ${If} $R0 == "${FILECLASS}"
+    DeleteRegValue SHELL_CONTEXT "Software\Classes\.${EXT}" ""
+  ${EndIf}
+  Pop $R0
+!macroend
+
 ; 安装进度由独立 NSIS 进程显示,应用退出/旧 exe 被移走时仍然可见。
 !macro customInit
   ; 兼容旧客户端 quitAndInstall(true, true) 传来的 --updated /S。
@@ -49,6 +83,9 @@ LangString forsionInstallWait 2052 "可能需要几分钟，期间快捷方式�
 ; 自动吞掉 MessageBox,所以必须显式绕开。
 !macro customUnInstall
   ${ifNot} ${isUpdated}
+    ; The stock APP_UNASSOCIATE removes the ProgID but leaves its default
+    ; reference behind. Clear only this product's pointers before that removal.
+    !insertmacro forsionUnregisterDefaults
     MessageBox MB_YESNO|MB_ICONQUESTION "同时删除 Forsion 的数据与工作区(账号/设置/Agent 数据/会话)?$\r$\n位置:$PROFILE\.forsion 与 $PROFILE\Forsion。此操作不可恢复。" IDNO skipTangu
       RMDir /r "$PROFILE\.forsion"
       RMDir /r "$PROFILE\Forsion"

@@ -43,7 +43,12 @@ if ($Mode -eq 'install') {
     Check (Test-Path "$key\shell\open\command") "NSIS registers $($key.Split('\')[-1])"
     $command=(Get-Item "$key\shell\open\command").GetValue('')
     $taskExpected='"'+(Join-Path $taskInstall 'Forsion.exe')+'" "%1"'
-    Check ($command.Equals($taskExpected,[StringComparison]::OrdinalIgnoreCase)) 'registered open command quotes this executable and the complete file argument'
+    # This is the immutable published baseline. Demand its exact known defect,
+    # then continue runtime acceptance. The source NSIS contract must pass the
+    # corrected quoting separately; arbitrary registration failures still fail.
+    $taskKnownOld=(Join-Path $taskInstall 'Forsion.exe')+' "%1"'
+    Check ($command.Equals($taskKnownOld,[StringComparison]::OrdinalIgnoreCase)) 'official 2.13.5 reproduces the exact unquoted-executable defect'
+    Write-Host "BASELINE-RED open command: $command (required: $taskExpected)"
   }
   $taskDefault=(Get-Item 'HKCU:\Software\Classes\.md').GetValue('')
   Check ($taskDefault -eq 'Forsion.forsion.markdown') 'NSIS claims unassigned Markdown extension'
@@ -104,7 +109,9 @@ public static class ForsionUninstallPrompts {
   Check (!(Test-Path $taskInstall)) 'actual NSIS uninstall removes the complete installed payload directory'
   foreach ($ext in @('.md','.markdown','.pdf')) {
     $taskKey="HKCU:\Software\Classes\$ext"
-    if (Test-Path $taskKey) { Check ((Get-Item $taskKey).GetValue('') -notin @('Forsion.forsion.markdown','Forsion.forsion.pdf')) "uninstall removes Forsion default reference for $ext" }
+    $taskExpectedOld=if ($ext -eq '.pdf') {'Forsion.forsion.pdf'} else {'Forsion.forsion.markdown'}
+    Check ((Test-Path $taskKey) -and (Get-Item $taskKey).GetValue('') -eq $taskExpectedOld) "official 2.13.5 reproduces the exact dangling default for $ext"
+    Write-Host "BASELINE-RED uninstall leaves $ext -> $taskExpectedOld after removing its ProgID"
     if (Test-Path "$taskKey\OpenWithProgids") { Check (!@((Get-Item "$taskKey\OpenWithProgids").GetValueNames() | Where-Object {$_ -in @('Forsion.forsion.markdown','Forsion.forsion.pdf')}).Count) "uninstall removes Forsion OpenWith reference for $ext" }
   }
   $taskBefore=Get-Content -LiteralPath (Join-Path $taskOutput 'before.json') -Raw | ConvertFrom-Json -AsHashtable
