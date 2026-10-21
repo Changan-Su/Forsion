@@ -1433,7 +1433,7 @@ ctx.calendar?.ensureMember(`${ctx.app.workFolder()}/任务表.db`, 'c-date' /* �
 
 ### 日历叠加源与设置:ctx.calendar 的 `"calendar"` 档(2026-10-17 起)
 
-Desktop 2.13.6+: plugins declaring both `databases` and `calendar` also receive the local personal calendar as the exact opaque path `human://CALENDAR.db`. Use `ctx.databases` writes and `ctx.ui.mountRecord` with that path unchanged; never pass it to filesystem APIs. It is first in calendar members and the fallback default; the host hides the old vault mirror. Hosts without a local human calendar omit it. Database-only plugins do not receive this source. Subscriptions own loading, focus refresh and teardown; writes retain the host CAS/replay protocol.
+Desktop 2.13.6+: plugins declaring both `databases` and `calendar` also receive the local personal calendar as the exact opaque path `human://CALENDAR.db`. Use `ctx.databases` writes, `ctx.ui.mountRecord`, and `ctx.app.mutateDb` (schema/name changes) with that path unchanged; never pass it to filesystem APIs. It is first in calendar members and the fallback default; the host hides the old vault mirror. Hosts without a local human calendar omit it. Database-only plugins do not receive this source. Its intrinsic date/done mapping and membership are managed: `setMember` and `removeMember` return false; use `setHidden` to hide it. Subscriptions own loading, focus refresh and teardown; writes retain the host CAS/replay protocol.
 
 做一个完整的日历插件,光有库里的表(`ctx.databases`)和笔记任务(`ctx.noteTasks`)不够:宿主日历还叠着三类**只读源**
 (Agent 日程、用户加的 .ics 订阅、Local↔Cloud 另一侧库里的表),以及用户的**日历设置**(哪些表在日历里、各用哪一列、颜色、

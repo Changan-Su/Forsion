@@ -48,6 +48,7 @@ const { useIcsCalendars } = await import('../../stores/icsCalendarStore')
 const { useOtherSideCal } = await import('../../stores/otherVaultCalStore')
 const { createCalendarApi } = await import('./pluginCalendar')
 const { createDatabasesApi } = await import('./pluginData')
+const { mutateHumanCalendar } = await import('./pluginDb')
 const { setLocaleGlobal, currentLocale } = await import('../../i18n')
 type Snap = import('./types').PluginCalendarSnapshot
 
@@ -335,6 +336,8 @@ describe('personal calendar through the npm calendar host contract', () => {
     expect(calendar!.members.map((m) => m.path)).toEqual([H, 'T.db'])
     expect(calendar!.defaultPath).toBe(H)
     expect(databases.find((d) => d.path === H)?.rows[0].name).toBe('甲')
+    expect(cal.setMember(H, 'd1', 'k1')).toBe(false)
+    expect(cal.removeMember(H)).toBe(false)
     expect(cal.setDefault(H)).toBe(true)
     expect(cal.setHidden(H, true)).toBe(true)
     expect(cal.setColor(H, '#123456')).toBe(true)
@@ -358,4 +361,17 @@ describe('personal calendar through the npm calendar host contract', () => {
     expect(calendar.setCell('human://OTHER.db', 'r1', 'c1', 'Denied')).toBe(false)
     expect(calendar.setCell('human:/CALENDAR.db', 'r1', 'c1', 'Denied')).toBe(false)
   })
+  it('renames the personal calendar through the same CAS bridge without replacing concurrent rows', async () => {
+    human = table('Original', [{ id: 'c1', name: 'Name', type: 'text' }])
+    let once = false
+    expect(await mutateHumanCalendar((db) => {
+      if (!once) { once = true; human!.rows.push({ id: 'remote', cells: { c1: 'Other device' } }); humanVersion += '+' }
+      return { ...db, name: 'Renamed' }
+    }, () => true)).toEqual({ ok: true })
+    expect(human!.name).toBe('Renamed')
+    expect(human!.rows.some((r) => r.id === 'remote')).toBe(true)
+    expect(await mutateHumanCalendar((db) => ({ ...db, name: 'Revoked' }), () => false)).toMatchObject({ ok: false })
+    expect(human!.name).toBe('Renamed')
+  })
+
 })

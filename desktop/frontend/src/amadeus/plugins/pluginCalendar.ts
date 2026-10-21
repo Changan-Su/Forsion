@@ -136,6 +136,7 @@ export function createCalendarApi(scope: DataScope): CalendarApi {
       return true
     },
     setMember: (raw, dateCol, checkboxCol) => {
+      if (raw === HUMAN_CAL) return false // This managed source always uses its intrinsic date/done columns.
       const v = vault()
       const db = v ? table(path(raw)) : null
       if (!v || !db || db.readonly) return false
@@ -149,6 +150,7 @@ export function createCalendarApi(scope: DataScope): CalendarApi {
       return true
     },
     removeMember: (raw) => {
+      if (raw === HUMAN_CAL) return false // Hide the managed calendar instead of claiming to remove it.
       const v = vault()
       const p = v ? path(raw) : ''
       // 首次迁移前(从没打开过日历、也没订阅到 ready)不收:撤了也会被旧行为补回来,返回 true 就是骗人
