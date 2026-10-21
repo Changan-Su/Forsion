@@ -107,3 +107,12 @@ try {
 } catch(Exception e) {
     logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
 }
+
+// Source-test renderer bundles are explicitly marked by Vite; never allow them into a release APK/AAB.
+tasks.matching { it.name == 'preReleaseBuild' }.configureEach {
+    doFirst {
+        if (file('src/main/assets/public/forsion-extend-test-only.json').exists()) {
+            throw new GradleException('Extend source-test bundle cannot ship in a release. Rebuild with the signed package pin.')
+        }
+    }
+}

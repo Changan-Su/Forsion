@@ -135,7 +135,7 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
   // 账号类的页(投稿 / 会员 / 积分)属于本页登录的那个人:桌面与服务器 Unit 的网页主入口给,看别的设备的设备页不给。
   const ownAccount = !window.tangu?.unitPage || !!window.tangu?.unitPublicEntry
   // 网页主入口上 Extend 的通道在它自己的页内适配层里,不经 window.tangu.cloudInvoke。
-  const submissionView = ownAccount && (window.tangu?.unitPublicEntry || window.tangu?.cloudInvoke)
+  const submissionView = ownAccount && (window.tangu?.unitPublicEntry || (window.tangu?.mobile && window.tangu?.extendMobile && window.tangu?.account) || window.tangu?.cloudInvoke)
     ? settingsViews.find((o) => o.pluginId === 'forsion-extend' && o.item.id === 'submission' && activeIds.includes(o.pluginId) && isPlacedSettingsView(plugins.find((p) => p.id === o.pluginId), o.item))
     : undefined
   // 插件提供的页:只认已启用的首方内置包(locked),设备页不显示。按 group 分组,组与页都保持注册顺序。

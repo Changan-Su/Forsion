@@ -3,6 +3,7 @@
 // themes) that the UI subscribes to. Built-in plugins are registered on init(); external
 // (Forsion) plugins are discovered from ~/.forsion/plugins/ and evaluated here.
 //
+import { leaseAccountResponse } from './accountResponse'
 import { setPluginViewModes } from './pluginViewModes'
 import { registerFont as registerHostFont } from '../../fontPresets'
 import { registerAppearance, clearPluginAppearance, useAppearance } from '../../appearance/store'
@@ -1308,12 +1309,34 @@ export const usePluginStore = create<PluginState>((set, get) => {
     const localData: LocalData | null = amadeus?.readPluginData && amadeus?.writePluginData
       ? { read: () => Promise.resolve(amadeus.readPluginData!(pluginId)).catch(() => null), write: (text) => amadeus.writePluginData!(pluginId, text) }
       : null
+    const hostAccount = hostTangu()?.account
+    const scopedAccount: PluginContext['account'] = hostAccount ? {
+      status: async () => { const value = ctxAlive() ? await hostAccount.status() : { loggedIn: false }; return ctxAlive() ? value : { loggedIn: false } },
+      login: () => ctxAlive() ? hostAccount.login() : Promise.reject(new Error('plugin disabled')),
+      logout: () => ctxAlive() ? hostAccount.logout() : Promise.reject(new Error('plugin disabled')),
+      async request(path, init = {}) {
+        if (!ctxAlive()) throw new Error('plugin disabled')
+        const ctl = new AbortController(), outer = init.signal
+        const abort = () => ctl.abort()
+        if (outer?.aborted) abort(); else outer?.addEventListener('abort', abort, { once: true })
+        const stop = scope.own('request', abort, 'account')
+        const cleanup = () => { stop.forget(); outer?.removeEventListener('abort', abort) }
+        try {
+          const response = await hostAccount.request(path, { ...init, signal: ctl.signal })
+          return leaseAccountResponse(response, () => {
+            if (!ctxAlive() || ctl.signal.aborted) throw new Error('plugin disabled or request aborted')
+          }, cleanup, ctl.signal)
+        } catch (e) { cleanup(); throw e }
+      },
+      ...(hostAccount.saveDownload ? { saveDownload: (blob: Blob, name: string) => ctxAlive()
+        ? hostAccount.saveDownload!(blob, name) : Promise.resolve({ ok: false, error: 'plugin disabled' }) } : {}),
+      subscribe: (listener) => ctxAlive() ? scope.own('subscription', hostAccount.subscribe((status) => {
+        if (ctxAlive()) listener(status)
+      }), 'account') : () => {},
+    } : undefined
     const ctx: PluginContext = {
     app: appApi,
-    account: hostTangu()?.account ? {
-      ...hostTangu()!.account!,
-      subscribe: (listener) => scope.own('subscription', hostTangu()!.account!.subscribe(listener), 'account'),
-    } : undefined,
+    account: scopedAccount,
     registerSlashItem: (item) => set((s) => ({ slashItems: [...s.slashItems, { pluginId, item }] })),
     registerSelectionAction: (action) => {
       if (!ctxAlive()) return

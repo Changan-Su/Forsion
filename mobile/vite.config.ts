@@ -9,6 +9,7 @@ import { resolve } from 'path'
 import { defineConfig, loadEnv, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import { nativeApiOrigin } from './src/nativeApiBase'
+import { mobileExtendBundle } from './build/extendBundle'
 
 const DESKTOP_SRC = resolve(__dirname, '../desktop/frontend/src')
 const HERE = resolve(__dirname, 'src')
@@ -63,7 +64,7 @@ export default defineConfig(({ mode }) => {
   const DEV_PORT = Number(env.PORT) || 5274
   const DEV_PROXY = env.BACKEND_URL || env.TANGU_DEV_PROXY || 'http://localhost:3001'
   return {
-  plugins: [startupAppearanceHtml(), astryxHasFix(), engineSwap(), react(), nativeConfig(env.VITE_API_ORIGIN)],
+  plugins: [startupAppearanceHtml(), astryxHasFix(), engineSwap(), react(), nativeConfig(env.VITE_API_ORIGIN), mobileExtendBundle(mode, env.FORSION_EXTEND_TEST_ROOT, env.FORSION_EXTEND_PACKAGE, env.FORSION_EXTEND_INTEGRITY)],
   // 依赖预构建缓存放本检出自己的目录,不用缺省的 node_modules/.vite(软链检出共用那一份,后起的 vite 会把别人的
   // deps 删掉重建;原因详见 desktop/frontend/vite.config.ts)。仪器:cd desktop && npm run check:vitecache。
   cacheDir: resolve(__dirname, '.vite-cache'),
