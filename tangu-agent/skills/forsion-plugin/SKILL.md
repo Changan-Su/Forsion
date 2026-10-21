@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.60.0
+  version: 1.60.1
   author: Forsion
   category: Forsion
 ---
@@ -1433,6 +1433,8 @@ ctx.calendar?.ensureMember(`${ctx.app.workFolder()}/任务表.db`, 'c-date' /* �
 
 ### 日历叠加源与设置:ctx.calendar 的 `"calendar"` 档(2026-10-17 起)
 
+Desktop 2.13.6+: plugins declaring both `databases` and `calendar` also receive the local personal calendar as the exact opaque path `human://CALENDAR.db`. Use `ctx.databases` writes and `ctx.ui.mountRecord` with that path unchanged; never pass it to filesystem APIs. It is first in calendar members and the fallback default; the host hides the old vault mirror. Hosts without a local human calendar omit it. Database-only plugins do not receive this source. Subscriptions own loading, focus refresh and teardown; writes retain the host CAS/replay protocol.
+
 做一个完整的日历插件,光有库里的表(`ctx.databases`)和笔记任务(`ctx.noteTasks`)不够:宿主日历还叠着三类**只读源**
 (Agent 日程、用户加的 .ics 订阅、Local↔Cloud 另一侧库里的表),以及用户的**日历设置**(哪些表在日历里、各用哪一列、颜色、
 藏起来的源、新建默认落哪张表)。这一档把它们给插件,**default-deny**:
@@ -1459,7 +1461,7 @@ ctx.calendar?.removeMember?.(db.path)           // 只撤成员,不删表
 
 - **订阅会让宿主替你刷新叠加源**:Agent 日程每分钟拉、.ics 订阅每半小时联网拉、换库时重读另一侧 —— 和打开着的宿主日历共用一个计时器,
   最后一个订阅者退订就停。只用设置不用叠加源也得订阅(设置在同一份快照里),用完退订;插件停用时宿主统一退订。
-- `ready` 只看库里的表读没读完(同 `ctx.databases`);叠加源各自尽力而为,Agent 引擎不在、.ics 拉不下来都只是少几个源,不报错。
+- `ready` waits for vault tables and the initial local personal-calendar read to settle (missing/unavailable also settles);叠加源各自尽力而为,Agent 引擎不在、.ics 拉不下来都只是少几个源,不报错。
 - **写口都返回 boolean**,false = 宿主不收:颜色只收 `#rrggbb`;`setColor` / `setHidden` 的路径只认库里的表或当前的叠加源;
   `setMember` 只认库里可写的表,日期列必须是日期类列(`base === 'date'` 或 `calendarDate`)、勾选列必须是勾选类列;
   `setDefault` 只认可写的成员;`removeMember` 只认显式登记过的成员,而且日历做过首次整理才收(从没打开过日历的库里,订阅会在 `ready` 后替你做这一步,成员不变 —— 先订阅、等 ready 再撤)。叠加源不能当成员、不能设默认,拿它的 path 调 `ctx.databases` 的写口也是 false。

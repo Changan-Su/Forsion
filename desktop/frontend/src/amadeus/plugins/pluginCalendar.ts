@@ -4,8 +4,10 @@
  *  写:与日历左栏同一组 store 动作(calendarConfigStore),按当前库生效。成员解析与日历视图同一个函数(resolveCalendarMembers)。
  *  .ics 订阅管理(ctx.calendar.ics)走 useIcsCalendars 同一组动作;联网仍是主进程的 fetchIcs(私网 / 回环 / 重定向那几道闸在那边)。 */
 import { colorForDb, defaultDbPath, isHidden, isMigrated, memberOf, useCalendarConfig } from '../store/calendarConfigStore'
-import { migrationSeeds, resolveCalendarMembers } from '../store/calendarMembers'
+import { migrationSeeds, resolveCalendarMembers, watchHumanCal, withHumanCal } from '../store/calendarMembers'
 import { getAggDb, isCheckboxCol, isDateCol, watchAllDatabases, type AggDb } from '../store/dbAggregateStore'
+import { HUMAN_CAL } from '../store/humanCalendarIo'
+import { useDbStore } from '../store/dbStore'
 import { usePageStore } from '../store/pageStore'
 import { acquireAgentSchedulePolling, agentScheduleDbs, useAgentSchedules } from '../../stores/agentScheduleStore'
 import { MAX_IMPORT_BYTES, displayName, icsCalDbsNow, startIcsRefresh, useIcsCalendars } from '../../stores/icsCalendarStore'
@@ -32,17 +34,18 @@ function overlaysNow(): Array<{ db: AggDb; origin: PluginCalendarOverlay['origin
 function snapshotOf(dbs: AggDb[], ready: boolean): PluginCalendarSnapshot {
   const vault = usePageStore.getState().vaultRoot ?? ''
   const byVault = useCalendarConfig.getState().byVault
-  const members = resolveCalendarMembers(dbs, vault, byVault)
+  const human = getAggDb(HUMAN_CAL)
+  const members = withHumanCal(human, resolveCalendarMembers(dbs, vault, byVault), vault)
   const overlays = overlaysNow()
   const colors: Record<string, string> = {}
   ;[...members.map((m) => m.db), ...overlays.map((o) => o.db)].forEach((db, i) => { colors[db.path] = colorForDb(vault, byVault, db.path, i) })
   return {
-    ready,
+    ready: ready && !!useDbStore.getState().entries[HUMAN_CAL]?.status && useDbStore.getState().entries[HUMAN_CAL]?.status !== 'loading',
     members: members.map((m) => ({ path: m.db.path, dateCol: m.dateCol, ...(m.checkboxCol ? { checkboxCol: m.checkboxCol } : {}) })),
     overlays: overlays.map(({ db, origin }) => ({ ...toDb(db), origin, ...(db.vaultLabel ? { vaultLabel: db.vaultLabel } : {}) })),
     colors,
     hidden: [...(byVault[vault]?.hidden ?? [])],
-    defaultPath: defaultDbPath(vault, byVault),
+    defaultPath: defaultDbPath(vault, byVault) ?? (human ? HUMAN_CAL : null),
     icsSubscriptions: icsSubsNow(),
   }
 }
@@ -63,7 +66,7 @@ const icsUrl = (raw: unknown): string => {
 export function createCalendarApi(scope: DataScope): CalendarApi {
   // 设置按 vaultRoot 存(calendarConfigStore 的键),不是 pluginData 的 `side:root` —— 键对不上,插件改的颜色宿主看不见。
   const vault = (): string | null => (scope.alive() ? usePageStore.getState().vaultRoot : null)
-  const path = (p: unknown): string => (typeof p === 'string' ? normalizeVaultRel(p) : '')
+  const path = (p: unknown): string => (typeof p === 'string' ? p === HUMAN_CAL ? HUMAN_CAL : normalizeVaultRel(p) : '')
   const table = (p: string): AggDb | null => (p ? getAggDb(p) : null)
   const isOverlay = (p: string): boolean => !!p && overlaysNow().some((o) => o.db.path === p)
   // 颜色 / 显隐:库里的表或当前的叠加源(叠加源的路径是 agent:// / ics:// / otherside:,不归一,原样比)
@@ -72,7 +75,7 @@ export function createCalendarApi(scope: DataScope): CalendarApi {
     if (table(p)) return p
     return typeof raw === 'string' && isOverlay(raw) ? raw : ''
   }
-  const member = (v: string, db: AggDb): boolean => resolveCalendarMembers([db], v, useCalendarConfig.getState().byVault).length > 0
+  const member = (v: string, db: AggDb): boolean => db.path === HUMAN_CAL || resolveCalendarMembers([db], v, useCalendarConfig.getState().byVault).length > 0
 
   return {
     subscribe: (cb) => {
@@ -93,6 +96,7 @@ export function createCalendarApi(scope: DataScope): CalendarApi {
         try { cb(snapshotOf(dbs, ready)) } catch (e) { console.error('[amadeus] ctx.calendar 回调抛错', e) }
       }
       const offs = [
+        watchHumanCal(),
         acquireAgentSchedulePolling(), startIcsRefresh(), watchOtherSideCal(),
         watchAllDatabases((d, r) => {
           dbs = d; ready = r
