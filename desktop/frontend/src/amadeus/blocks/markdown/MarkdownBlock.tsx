@@ -1052,13 +1052,24 @@ export function MilkdownInner({
             if (!ready.current || readOnly) return
             onChange(serializeUnified(lctx, doc))
           })
-        } else {
+        } else if (blockId == null) {
           ctx.get(listenerCtx).markdownUpdated((_ctx, markdown) => {
             if (!ready.current || readOnly) return
             onChange(normalizeSerializedMd(markdown))
           })
         }
       })
+      // A v3 block's store must contain the current document before a move can
+      // hydrate its replacement. Milkdown's listener waits 200ms and cancels
+      // that callback on destroy; a fast move otherwise silently drops input.
+      .use($prose((ctx) => new Plugin({
+        view: () => ({
+          update: (view, previous) => {
+            if (unified || blockId == null || readOnly || !ready.current || view.state.doc.eq(previous.doc)) return
+            onChange(normalizeSerializedMd(ctx.get(serializerCtx)(view.state.doc)))
+          },
+        }),
+      })))
       // 段落缩进档(Tab):preset 的**原位替换**版(paragraph schema 换扩展、位置不动)。
       // 追加 .use 会把 paragraph 挪到节点序尾部 → heading 成缺省块类型,新块全变 H1(栽过)。
       // 插件编辑器扩展的**高优先级**桶:排在宿主全部插件之前 —— 插件要接管 Tab 这类宿主已占用的键

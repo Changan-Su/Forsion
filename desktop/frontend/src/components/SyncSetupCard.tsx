@@ -17,11 +17,14 @@ import { watchAccountName } from '../services/accountName'
 import './syncSetup.css'
 
 registerMessages({
+  'syncSetup.storageEnforced': { zh: '我的云盘 {used} / {max} · 统一额度已启用，超额时暂停增长写入', en: 'My drive {used} / {max} · unified quota active; growing writes pause over quota' },
+  'syncSetup.storage': { zh: '我的云盘 {used} / {max} · 提醒阶段，不新增同步拦截', en: 'My drive {used} / {max} · notice phase, no new sync restrictions' },
+  'syncSetup.storageUnknown': { zh: '我的云盘统一用量暂不可用，请在蓬洲云查看容量状态', en: 'Unified drive usage is unavailable. Check storage status in Penzor Cloud' },
   'syncSetup.title': { zh: '把这台电脑同步到蓬洲云', en: 'Sync this computer to Penzor Cloud' },
   'syncSetup.lead': { zh: '已登录「{name}」。勾着的会和你的其他设备保持一致，以后随时可以在蓬洲云 › 同步里关。', en: 'Signed in as {name}. Checked items stay in sync with your other devices. You can turn them off anytime in Penzor Cloud › Sync.' },
   'syncSetup.notes': { zh: '智库「{name}」', en: 'Notes vault "{name}"' },
   'syncSetup.notesAny': { zh: '这台电脑的智库', en: 'Notes vault on this computer' },
-  'syncSetup.notesSize': { zh: '{size} · 用掉设备同步 {max} 里的 {pct}%', en: '{size} · {pct}% of your {max} device sync storage' },
+  'syncSetup.notesSize': { zh: '{size} · 占原设备同步限制 {max} 的 {pct}%', en: '{size} · {pct}% of the existing {max} device sync limit' },
   'syncSetup.notesOver': { zh: '{size}，超过设备同步的 {max}：放不下的先留在这台电脑，不会删除', en: "{size}, more than your {max} device sync storage. What doesn't fit stays on this computer. Nothing is deleted." },
   'syncSetup.notesHint': { zh: '整个本机智库，和你的其他电脑保持一致', en: 'Your whole local vault, kept the same on your other computers' },
   'syncSetup.agents': { zh: 'Agents 与记忆', en: 'Agents & memory' },
@@ -114,6 +117,7 @@ export function SyncSetupHost(): React.JSX.Element | null {
             <div className="modal-head"><Cloud size={16} /><span className="sync-setup-title">{t('syncSetup.title')}</span></div>
             <div className="sync-setup-body">
               <p className="sync-setup-lead">{t('syncSetup.lead', { name })}</p>
+              <p className="sync-setup-hint">{s.storage?.complete && s.storage.usedBytes != null ? t(s.storage.enforcement ? 'syncSetup.storageEnforced' : 'syncSetup.storage', { used: fmtBytes(s.storage.usedBytes), max: fmtBytes(s.storage.limitBytes) }) : t('syncSetup.storageUnknown')}</p>
               {rows.map(([k, icon, title, sub]) => (
                 <label key={k} className="sync-setup-row">
                   <input type="checkbox" checked={picked[k]} disabled={busy} onChange={(e) => setPicked({ ...picked, [k]: e.target.checked })} />

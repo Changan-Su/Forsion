@@ -15,9 +15,47 @@ on:
       - 'desktop/scripts/mini-card.check.cjs'
       - 'tangu-agent/src/services/approvalSafety.test.ts'
       - 'tangu-agent/test/approvals.test.ts'
+      - 'tangu-agent/scripts/lib/windows-cmd-live.mjs'
 permissions:
   contents: read
 jobs:
+  old-windows-profile:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: 60f78259bd7eab3f17963421c6490dc6e8fbfd4c
+          path: old-windows-profile
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install and build both actual versions
+        run: |
+          foreach ($root in @('.', 'old-windows-profile')) {
+            npm ci --prefix "$root/tangu-agent" --no-audit --no-fund
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            npm ci --prefix "$root/desktop" --no-audit --no-fund
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            npm run build --prefix "$root/desktop"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - name: Create a real old profile, crash, upgrade and restart
+        working-directory: desktop
+        run: |
+          $env:FORSION_UPGRADE_OLD_ROOT = Join-Path $env:GITHUB_WORKSPACE 'old-windows-profile/desktop'
+          $env:FORSION_UPGRADE_OUTPUT = Join-Path $PWD 'outputs/windows-upgrade'
+          New-Item -ItemType Directory -Force $env:FORSION_UPGRADE_OUTPUT | Out-Null
+          node scripts/windows-upgrade.e2e.cjs 2>&1 | Tee-Object -FilePath outputs/windows-upgrade/run.log
+          exit $LASTEXITCODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-upgrade-evidence
+          path: |
+            desktop/outputs/windows-upgrade/run.log
+            desktop/outputs/windows-upgrade/**/*.png
   windows-issues:
     runs-on: windows-2022
     timeout-minutes: 25
@@ -31,6 +69,8 @@ jobs:
           npm ci --prefix desktop --no-audit --no-fund
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm ci --prefix tangu-agent --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node desktop/node_modules/playwright-core/cli.js install chromium
           exit $LASTEXITCODE
       - name: Verify platform-specific approval contracts
         working-directory: tangu-agent
@@ -38,7 +78,7 @@ jobs:
       - name: Verify desktop contracts and build
         working-directory: desktop
         run: |
-          node node_modules/vitest/vitest.mjs run frontend/src/amadeusPrefs.test.ts frontend/src/amadeus/lib/slashRel.test.ts electron/clipExtension.test.ts electron/systemIcon.test.ts electron/updater.test.ts electron/websiteUpdateProvider.test.ts shared/updateSource.test.ts electron/deepLink.test.ts electron/harnessLaunch.test.ts --maxWorkers=1
+          node node_modules/vitest/vitest.mjs run frontend/src/amadeusPrefs.test.ts frontend/src/amadeus/lib/slashRel.test.ts frontend/src/views/inbox/inboxListSource.test.ts electron/clipExtension.test.ts electron/systemIcon.test.ts electron/updater.test.ts electron/websiteUpdateProvider.test.ts shared/updateSource.test.ts electron/deepLink.test.ts electron/harnessLaunch.test.ts --maxWorkers=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run build
           exit $LASTEXITCODE
@@ -46,7 +86,7 @@ jobs:
         working-directory: desktop
         run: |
           New-Item -ItemType Directory -Force outputs/windows-issues | Out-Null
-          foreach ($script in @('windows-icons.check.cjs', 'windows-updater.check.cjs', 'windows-apprefs.check.cjs', 'windows-clip.e2e.cjs', 'windows-legacy-state.e2e.cjs', 'open-external-file.e2e.cjs', 'mini-card.check.cjs')) {
+          foreach ($script in @('windows-icons.check.cjs', 'windows-updater.check.cjs', 'windows-apprefs.check.cjs', 'windows-clip-browser.check.cjs', 'windows-legacy-state.e2e.cjs', 'open-external-file.e2e.cjs', 'mini-card.check.cjs')) {
             node "scripts/$script" 2>&1 | Tee-Object -FilePath "outputs/windows-issues/$script.log"
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
