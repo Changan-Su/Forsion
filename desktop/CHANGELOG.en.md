@@ -1,5 +1,9 @@
 # Forsion changelog
 
+## Unreleased
+
+- **Tangu workspace**: offline devices now collapse into an “Offline devices” group with a count. Expand it to view them; devices return to the main list when they reconnect. The remote device you are viewing stays visible.
+
 <!-- English edition of CHANGELOG.md: same "## <version> (<date>)" headings, one bullet per Chinese bullet. Add both when releasing. -->
 
 ## 2.13.5 (2026-10-20)
