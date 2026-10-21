@@ -140,10 +140,10 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
     return keys.reduceRight<() => Promise<T>>((inner, key) => () => withTextWriteLock(key, inner), fn)()
   }
   handle(IPC.migrateWorkFolder, async (_e, request: WorkFolderMigration) => {
-    const result = await migrateWorkFolder(vault, request, withPathLock)
+    const result = await migrateWorkFolder(vault, request, withPathLocks)
     if (vault.getRoot() === request.expectedRoot && result.status === 'complete') {
-      await index.build()
-      notifyAll(IPC.structureChange)
+      try { await index.build(); notifyAll(IPC.structureChange) }
+      catch (error) { console.warn('[migration] committed; index refresh failed', error) }
     }
     return result
   })

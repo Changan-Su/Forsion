@@ -20,7 +20,7 @@ async function setup(){
  await write('Plugins/Previous/.index.json',before)
  await write('Plugins/Previous/new-audio.m4a','already here')
  const request:WorkFolderMigration={id:'previous-v1',expectedRoot:root,source,target,plan:{index:{path:'.index.json',before,after},edits:[{path:'.index.json',before:'[{"folder":"Previous/Record"}]',after},{path:'Record/.record.json',before:'{"folder":"Previous/Record"}',after:'{"folder":"Plugins/Previous/Record"}'}],requiredFiles:['Record/audio.m4a']}}
- const lock=async<T>(_rel:string,fn:()=>Promise<T>)=>fn()
+ const lock=async<T>(_rel:string[],fn:()=>Promise<T>)=>fn()
  return {root,vault,request,write,run:()=>migrateWorkFolder(vault,request,lock),status:()=>migrateWorkFolder(vault,{...request,plan:undefined},lock)}
 }
 it('copies hidden records, notes and exact media bytes, preserving originals and existing target assets',async()=>{
@@ -65,4 +65,21 @@ it('rejects index edits that occur while waiting for the shared write lock',asyn
  const t=await setup()
  await expect(migrateWorkFolder(t.vault,t.request,async(_rel,fn)=>{await t.write('Plugins/Previous/.index.json','concurrent edit');return fn()})).rejects.toThrow('target index')
  expect(await fs.readFile(path.join(t.root,'Plugins/Previous/.index.json'),'utf8')).toBe('concurrent edit')
+})
+
+it('rejects source edits made while waiting for all source/destination write locks',async()=>{
+ const t=await setup()
+ await expect(migrateWorkFolder(t.vault,t.request,async(paths,fn)=>{
+  expect(paths).toContain('Previous/Record/transcript.md')
+  expect(paths).toContain('Plugins/Previous/Record/transcript.md')
+  await t.write('Previous/Record/transcript.md','Latest user edit');return fn()
+ })).rejects.toThrow('source changed')
+ expect(await fs.readFile(path.join(t.root,'Plugins/Previous/.index.json'),'utf8')).toBe('[]')
+ expect(await fs.readFile(path.join(t.root,'Previous/Record/transcript.md'),'utf8')).toBe('Latest user edit')
+})
+it('status queries can resume a migration using a different legacy folder alias',async()=>{
+ const t=await setup();await t.write('Plugins/Previous/Record/audio.m4a','conflict');await expect(t.run()).rejects.toThrow('conflict')
+ expect((await migrateWorkFolder(t.vault,{...t.request,source:'OtherAlias',plan:undefined},async(_p,f)=>f())).status).toBe('needed')
+ await fs.rm(path.join(t.root,'Plugins/Previous/Record/audio.m4a'));await t.run()
+ expect((await migrateWorkFolder(t.vault,{...t.request,source:'OtherAlias',plan:undefined},async(_p,f)=>f())).status).toBe('complete')
 })

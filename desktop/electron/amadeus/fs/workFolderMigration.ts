@@ -51,7 +51,7 @@ async function atomic(abs: string, text: string): Promise<void> {
 /** Copy first, publish the index last. Originals are the retained backup.
  * Exclusive destination creates and a write-ahead journal make retries safe even
  * after a process crash. A completed journal never reimports deleted records. */
-export function migrateWorkFolder(vault: VaultManager, req: WorkFolderMigration, lockIndex: <T>(rel: string, fn: () => Promise<T>) => Promise<T>): Promise<WorkFolderMigrationResult> {
+export function migrateWorkFolder(vault: VaultManager, req: WorkFolderMigration, lockPaths: <T>(rels: string[], fn: () => Promise<T>) => Promise<T>): Promise<WorkFolderMigrationResult> {
   const root = req.expectedRoot
   const key = `${root}\0${req.target}`
   const run = async (): Promise<WorkFolderMigrationResult> => {
@@ -110,16 +110,20 @@ export function migrateWorkFolder(vault: VaultManager, req: WorkFolderMigration,
       if (await hashFile(await safePath(root, `${req.target}/${file.path}`)) !== file.hash) throw Error(`Migration file conflict: ${file.path}`)
     }
     if (JSON.stringify(await snapshot(root, req.source)) !== JSON.stringify(original)) throw Error('Migration source changed during copy')
-    await lockIndex(indexRel, async () => {
+    await lockPaths([...original.map(f => `${req.source}/${f.path}`), ...files.map(f => `${req.target}/${f.path}`), indexRel], async () => {
       check()
       if (await read(await safePath(root, indexRel)) !== plan.index.before) throw Error('Migration target index changed')
       for (const file of files) if (await hashFile(await safePath(root, `${req.target}/${file.path}`)) !== file.hash) throw Error('Migration target changed during copy')
+      if (JSON.stringify(await snapshot(root, req.source)) !== JSON.stringify(original)) throw Error('Migration source changed before publication')
       check()
       // Capture the destination before the await: a later vault switch cannot redirect this write.
       await atomic(await safePath(root, indexRel), plan.index.after)
       await atomic(journalPath, JSON.stringify({ ...journal, complete: true }))
     })
-    if (vault.getRoot() === root) vault.reportCopiedFiles([...files.map(f => `${req.target}/${f.path}`), indexRel])
+    if (vault.getRoot() === root) {
+      try { vault.reportCopiedFiles([...files.map(f => `${req.target}/${f.path}`), indexRel]) }
+      catch (error) { console.warn('[migration] committed; sync notification failed', error) }
+    }
     return { status: 'complete', backup: req.source }
   }
   const job = (chains.get(key) ?? Promise.resolve()).then(run, run)
