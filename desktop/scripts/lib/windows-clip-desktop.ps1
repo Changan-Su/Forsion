@@ -2,6 +2,8 @@ param([ValidateSet('activate','click','drag','picker','explorer','capture')] [st
   [string]$Path, [int]$FromX, [int]$FromY, [int]$ToX, [int]$ToY, [string]$FromWindow, [switch]$Close)
 $ErrorActionPreference = 'Stop'
 if ($env:GITHUB_ACTIONS -ne 'true') { throw 'Native Clip probe requires a dedicated GitHub Actions desktop' }
+$OutputEncoding=[System.Text.UTF8Encoding]::new($false)
+[Console]::OutputEncoding=$OutputEncoding
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing, UIAutomationClient, UIAutomationTypes
 Add-Type -TypeDefinition @'
 using System;

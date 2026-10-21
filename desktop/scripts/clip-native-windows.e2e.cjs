@@ -4,6 +4,7 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path')
 const { execFile } = require('node:child_process')
 const { promisify } = require('node:util')
+const { fileURLToPath } = require('node:url')
 const { chromium } = require('playwright-core')
 const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
@@ -113,6 +114,7 @@ async function main() {
     const info = () => page.evaluate(() => chrome.developerPrivate.getExtensionsInfo({includeDisabled:true,includeTerminated:true}))
     const dev = enabled => page.evaluate(enabled => chrome.developerPrivate.updateProfileConfiguration({inDeveloperMode:enabled}),enabled)
     const drag = async accepted => {
+      const pagesBefore=new Set(browser.pages())
       const requestsBefore=await app.evaluate(()=>globalThis.__clipNativeDragRequests.length)
       const dropsBefore=await page.evaluate(()=>window.__clipNativeDrops.length)
       await activateSettings(); await chip.evaluate(element=>element.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'})); await chip.click({trial:true}); await sleep(300)
@@ -129,11 +131,17 @@ async function main() {
       fs.writeFileSync(path.join(output,`drop-${dropsBefore}.json`),JSON.stringify({requests,drops},null,2))
       check('each attempt starts a real native Electron folder drag',requests.length===requestsBefore+1&&requests.at(-1)===copyDir,requests)
       const events=drops.slice(dropsBefore)
+      const directoryTabs=browser.pages().filter(tab=>!pagesBefore.has(tab)&&tab.url().startsWith('file:')&&sameCopy(fileURLToPath(tab.url())))
       // Chromium refuses dragover with developer mode off, so the OS cannot
       // deliver an accepted drop. Observe trusted Files input without changing
       // that decision; filenames become readable only on an accepted drop.
-      check('each native folder drag reaches Chrome with trusted Files input',events.some(event=>['dragenter','dragover'].includes(event.type)&&event.trusted&&event.types.includes('Files')),events)
+      check('each native folder drag is received by Chrome',events.some(event=>['dragenter','dragover'].includes(event.type)&&event.trusted&&event.types.includes('Files'))||(!accepted&&directoryTabs.length===1),{events,directoryTabs:directoryTabs.map(tab=>tab.url())})
       if(accepted) check('enabled developer mode accepts the actual folder drop',events.some(event=>event.type==='drop'&&event.trusted&&event.types.includes('Files')&&event.names.includes(path.basename(copyDir))),events)
+      if(!accepted&&directoryTabs.length) {
+        fs.writeFileSync(path.join(output,'developer-off-behavior.json'),JSON.stringify({installed:false,behavior:'Chrome opens the exact dropped directory as a file tab',urls:directoryTabs.map(tab=>tab.url())},null,2))
+        await directoryTabs[0].screenshot({path:path.join(output,'developer-off-directory.png')})
+        for(const tab of directoryTabs) await tab.close()
+      }
     }
     await dev(false); await drag(false)
     check('native folder drag with developer mode off does not install Clip', !(await info()).some(e=>e.id===ID))
