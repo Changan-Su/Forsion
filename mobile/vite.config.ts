@@ -77,6 +77,7 @@ export default defineConfig(({ mode }) => {
   publicDir: resolve(__dirname, '../desktop/frontend/public'),
   resolve: {
     alias: {
+      '@forsion/calendar': resolve(__dirname, '../desktop/node_modules/@forsion/calendar'),
       '@lcl': resolve(__dirname, '../lcl'),
       '@amadeus-shared': resolve(__dirname, '../desktop/shared/amadeus'),
       '@amadeus': resolve(DESKTOP_SRC, 'amadeus'),

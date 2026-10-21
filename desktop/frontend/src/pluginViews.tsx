@@ -184,10 +184,10 @@ export function syncPluginViews(): void {
   // 也不对插件宣称有 bottom;卫星窗只宣称主区。
   const main = windowKind() === 'main'
   const hasBottom = main && hasBottomPanel()
-  usePluginStore.getState().setViewOpener((type, loc) => {
+  usePluginStore.getState().setViewOpener((type, loc, params) => {
     // P2:放开停靠位(此前写死 'main',插件 view 进侧栏只能靠 space.json 声明)。2026-10-02 起含底部面板。
     const at = loc === 'left' || loc === 'right' ? loc : loc === 'bottom' ? (hasBottom ? 'bottom' : 'right') : 'main'
-    useWorkspace.getState().openView(type, {}, at)
+    useWorkspace.getState().openView(type, params ?? {}, at)
   }, !main ? ['main'] : hasBottom ? ['main', 'left', 'right', 'bottom'] : ['main', 'left', 'right'])
   // 关 / 换自己的视图(ctx.closeView / ctx.replaceView):两种 store 都有这两个方法,卫星窗只有一个主区,同样照办。
   usePluginStore.getState().setViewControls({

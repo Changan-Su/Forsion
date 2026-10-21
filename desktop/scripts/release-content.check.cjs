@@ -17,6 +17,7 @@ const CU_RELEASE_CERT_SHA1 = 'dab3a30e7568c7e2c021660b49398356a205a191'
 // and (for packages with a main-process half) signed with the key pinned in that list. A package missing from
 // extraResources used to ship silently; now it fails here.
 const builtinBundles = require('../electron/builtinBundles.json')
+const product = JSON.parse(fs.readFileSync(path.join(desktop, 'products', `${process.env.FORSION_PRODUCT || 'forsion'}.json`), 'utf8'))
 const { bundleExtend } = require('../build/distribution.cjs')
 const expectedVersion = JSON.parse(fs.readFileSync(path.join(desktop, 'package.json'), 'utf8')).version
 const errors = []
@@ -109,6 +110,7 @@ for (const dir of resources) {
   // 刻意不收预发布版:播种按 cmpVersion 比版本,它把 0.5.9-rc.1 排在 0.5.9 之上,内置过预发布版,正式版就永远换不上去),
   // 随包那份的 id / 版本对得上,带主进程半身的还要过清单里钉的公钥。
   for (const bundle of builtinBundles) {
+    if (bundle.requiresSpace && !product.spaces.includes(bundle.requiresSpace)) continue
     if (!bundleExtend && bundle.id === 'forsion-extend') continue
     const pinned = pkg.dependencies?.[bundle.pkg] ?? ''
     check(/^\d+\.\d+\.\d+$/.test(pinned), `${bundle.pkg} dependency must be an exact release version, got "${pinned}"`)

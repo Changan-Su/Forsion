@@ -10,5 +10,6 @@ updates:
     allow:
       - dependency-name: '@forsion/tangu-computer-use'
       - dependency-name: '@forsion/extend'
+      - dependency-name: '@forsion/calendar'
     commit-message:
       prefix: 'chore(desktop)'

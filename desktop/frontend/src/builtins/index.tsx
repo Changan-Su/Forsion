@@ -26,6 +26,8 @@ import { museAvailable, installMuseSpace, installMuseViews, removeMuseSpace } fr
 
 import { homepageAvailable, installHomepageSpace, installHomepageViews, removeHomepageSpace, useHomepageClaimed } from './homepage'
 import { imageStudioAvailable, installImageStudioSpace, installImageStudioViews, removeImageStudioSpace } from './imageStudio'
+import { usePluginStore } from '@amadeus/plugins/pluginStore'
+import { claimedHostView } from '../../../shared/corePlugins'
 import { artificialAvailable, installArtificialSpace, installArtificialViews, removeArtificialSpace } from './artificial'
 
 // 懒载:xterm(约 300KB)只在真开终端时才解析;顺带让这个模块能被 node 环境的单测导入
@@ -183,16 +185,8 @@ function applyBuiltin(def: BuiltinDef, on: boolean): void {
   removeCommand(`builtin-${def.id}-open`) // 无此命令时 no-op(日历不注册命令)
 }
 
-/** 日历核心插件(方案 B 并行双跑,10-17 用户定「按照B来，但是这算核心插件，不公开」):它启用期间内置日历让位 ——
- *  只撤下 Space(Ribbon 上不出现两个「日历」),不改用户的开关;插件停用 → 按开关回来。插件的 Space 另有 id
- *  (`calendar` 是宿主保留 id)。视图类型照旧注册:别的 Space 侧栏 / 仪表盘里摆着的 todo-list、calendar 不能跟着失效
- *  (Codex 评审);Agent 日程轮询 / .ics 刷新是按挂着的视图订的,没人挂就不跑。 */
-export const CALENDAR_PLUGIN_ID = 'forsion-calendar'
-
 interface BuiltinState {
   enabled: Record<string, boolean>
-  /** 日历让给了核心插件(见 CALENDAR_PLUGIN_ID) */
-  calendarYielded: boolean
   /** 应用内 http(s) 链接是否走内置浏览器(缺省关 = 交给系统浏览器,见 linksOn)。 */
   inAppLinks: boolean
   toggle(id: string, on: boolean): void
@@ -202,7 +196,6 @@ interface BuiltinState {
 export const useBuiltins = create<BuiltinState>((set, get) => ({
   enabled: Object.fromEntries(BUILTINS.map((b) => [b.id, builtinEnabled(b.id)])),
   inAppLinks: linksOn(),
-  calendarYielded: false,
   toggle: (id, on) => {
     if (id === 'calendar' && PRODUCT.nativeFeatures !== undefined) return
     const def = BUILTINS.find((b) => b.id === id)
@@ -214,22 +207,8 @@ export const useBuiltins = create<BuiltinState>((set, get) => ({
   setInAppLinks: (on) => { writeFlag(LINKS_KEY, on); set({ inAppLinks: on }) },
 }))
 
-/** 日历核心插件启用 / 停用时调(amadeusPlugins 订着插件 store)。幂等。 */
-export function setCalendarYield(yielded: boolean): void {
-  const s = useBuiltins.getState()
-  if (s.calendarYielded === yielded) return
-  useBuiltins.setState({ calendarYielded: yielded })
-  const def = BUILTINS.find((b) => b.id === 'calendar')
-  if (!def || !def.available() || !s.enabled.calendar) return
-  if (yielded) def.removeSpace?.()
-  else def.installSpace?.()
-}
-
-/** 开关落地(本窗切 / 别的窗切了经 storage 同步):日历让位期间视图跟开关走、Space 不装,插件停用时按开关回来。 */
 function applyToggle(def: BuiltinDef, on: boolean): void {
-  if (def.id !== 'calendar' || !useBuiltins.getState().calendarYielded) return applyBuiltin(def, on)
-  if (!on) applyBuiltin(def, false)
-  else if (!getView(def.types[0])) def.install()
+  applyBuiltin(def, on)
 }
 
 /** 外链去哪:遵「应用内链接」开关 —— 开着走内置浏览器标签,否则交给系统浏览器。
@@ -324,11 +303,11 @@ export const BuiltinPluginsSection: React.FC = () => {
   const { t } = useI18n()
   const enabled = useBuiltins((s) => s.enabled)
   const inAppLinks = useBuiltins((s) => s.inAppLinks)
-  const calendarYielded = useBuiltins((s) => s.calendarYielded)
+  const calendarClaimed = usePluginStore((s) => !!claimedHostView(s, 'calendar'))
   const homeClaimed = useHomepageClaimed()
   const toggle = useBuiltins((s) => s.toggle)
   const setInAppLinks = useBuiltins((s) => s.setInAppLinks)
-  const list = BUILTINS.filter((b) => b.available() && (b.id !== 'calendar' || PRODUCT.nativeFeatures === undefined))
+  const list = BUILTINS.filter((b) => b.available() && (b.id !== 'calendar' || PRODUCT.nativeFeatures === undefined && !calendarClaimed))
   if (!list.length) return null // web/移动端没有 webview/PTY,这几张卡整个不出现
 
   return (
@@ -343,9 +322,6 @@ export const BuiltinPluginsSection: React.FC = () => {
             </div>
             <input type="checkbox" checked={!!enabled[b.id]} onChange={(e) => toggle(b.id, e.target.checked)} style={{ cursor: 'pointer' }} />
           </div>
-          {b.id === 'calendar' && calendarYielded && (
-            <div style={{ marginTop: 8, fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-muted)' }}>{t('calendar.yielded')}</div>
-          )}
           {b.id === 'home' && enabled.home && homeClaimed && (
             <div style={{ marginTop: 8, fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-muted)' }}>{t('home.claimed')}</div>
           )}

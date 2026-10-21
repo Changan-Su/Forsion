@@ -107,7 +107,7 @@ export function rescheduleCalendarRow(db: AggDb, row: AggRow, colId: string, bef
     return
   }
   if (!currentCalendarRow(db, row.rowId)) return
-  setAggCell(db, row.rowId, colId, after)
+  setAggCell(db, row.rowId, colId, after || undefined)
   const change = (expected: string, next: string): boolean => {
     const live = currentCalendarRow(db, row.rowId)
     if (!live || !same(live.cells[colId], expected || undefined)) return false

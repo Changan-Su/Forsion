@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { claimedHostView, isClaimingHostView } from './corePlugins'
+import { claimedHostView, isClaimingHostView, isCorePlugin, replacesNativeSpaceRecipe } from './corePlugins'
 
 const home = { pluginId: 'forsion-home', item: { id: 'home' } }
 const other = { pluginId: 'forsion-home', item: { id: 'settings' } }
@@ -31,5 +31,17 @@ describe('宿主视图芯(主页插件化 S1)', () => {
   it('插件没注册那个视图(关着 / 还没装载完)= 用内置那份', () => {
     trial('forsion-home')
     expect(claimedHostView({ views: [other], plugins: [{ id: 'forsion-home' }] }, 'homepage')).toBeUndefined()
+  })
+
+  it('Calendar core renderer retains native views and skips only its redundant recipe', () => {
+    trial(null)
+    const view = { pluginId: 'forsion-calendar', item: { id: 'calendar' } }
+    const s = { views: [view], plugins: [{ id: 'forsion-calendar', preinstalled: true }] }
+    expect(isCorePlugin(s.plugins[0])).toBe(true)
+    expect(claimedHostView(s, 'calendar')).toBe(view)
+    expect(isClaimingHostView(s, view)).toBe(false) // aliases keep saved layouts usable
+    expect(replacesNativeSpaceRecipe(s, 'forsion-calendar', 'calendar')).toBe(true)
+    expect(replacesNativeSpaceRecipe(s, 'forsion-calendar', 'todo')).toBe(false)
+    expect(replacesNativeSpaceRecipe({ ...s, plugins: [{ id: 'forsion-calendar' }] }, 'forsion-calendar', 'calendar')).toBe(false)
   })
 })

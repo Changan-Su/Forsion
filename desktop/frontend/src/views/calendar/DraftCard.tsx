@@ -86,7 +86,7 @@ export function DraftCard({ rootRef, onPasted }: { rootRef: RefObject<HTMLElemen
           const d = parseCalDate(raw)
           if (!d) return
           const start = toLocalDate(d.start), end = d.end ? toLocalDate(d.end) : addMinutes(start, 30)
-          useCalendarNav.getState().setDraft({ ...draft, day: d.start.slice(0, 10), endDay: (d.end ?? d.start).slice(0, 10),
+          useCalendarNav.getState().setDraft({ ...draft, hasEnd: !!d.end, day: d.start.slice(0, 10), endDay: (d.end ?? d.start).slice(0, 10),
             startMin: d.allDay ? null : start.getHours() * 60 + start.getMinutes(), endMin: d.allDay ? 0 : (end.getTime() - toLocalDate(d.start.slice(0, 10)).getTime()) / 60000 })
         }} />
       </> : <div className="amx-cal-draft-title">{draft.title || <span className="ph">{t('calside.newEvent')}</span>}</div>}

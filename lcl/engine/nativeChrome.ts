@@ -124,6 +124,8 @@ export function installNativeChromeHost(next: NativeChromeHost): () => void {
   }
 }
 export function nativeChromeInstalled(): boolean { return !!host }
+/** Whether the installed platform host can supply native touch feedback. */
+export function nativeHapticAvailable(): boolean { return typeof host?.haptic === 'function' }
 /** Touch feedback, where a host offers it; a no-op everywhere else (desktop, web, a phone browser). Never throws. */
 export function nativeHaptic(kind: NativeHaptic): void {
   try { host?.haptic?.(kind) } catch { /* feedback is never worth an error */ }
