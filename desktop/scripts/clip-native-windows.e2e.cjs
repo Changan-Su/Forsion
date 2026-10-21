@@ -104,7 +104,7 @@ async function main() {
     const page = browser.pages()[0]; await page.goto('chrome://extensions')
     await page.evaluate(()=>{
       window.__clipNativeDrops=[]
-      document.addEventListener('drop',event=>window.__clipNativeDrops.push({trusted:event.isTrusted,types:Array.from(event.dataTransfer?.types||[]),names:Array.from(event.dataTransfer?.files||[],file=>file.name)}),{capture:true,passive:true})
+      for(const type of ['dragenter','dragover','drop']) document.addEventListener(type,event=>window.__clipNativeDrops.push({type,trusted:event.isTrusted,types:Array.from(event.dataTransfer?.types||[]),names:Array.from(event.dataTransfer?.files||[],file=>file.name)}),{capture:true,passive:true})
     })
     await app.evaluate(({ipcMain})=>{
       globalThis.__clipNativeDragRequests=[]
@@ -112,7 +112,7 @@ async function main() {
     })
     const info = () => page.evaluate(() => chrome.developerPrivate.getExtensionsInfo({includeDisabled:true,includeTerminated:true}))
     const dev = enabled => page.evaluate(enabled => chrome.developerPrivate.updateProfileConfiguration({inDeveloperMode:enabled}),enabled)
-    const drag = async () => {
+    const drag = async accepted => {
       const requestsBefore=await app.evaluate(()=>globalThis.__clipNativeDragRequests.length)
       const dropsBefore=await page.evaluate(()=>window.__clipNativeDrops.length)
       await activateSettings(); await chip.evaluate(element=>element.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'})); await chip.click({trial:true}); await sleep(300)
@@ -128,12 +128,17 @@ async function main() {
       const drops=await page.evaluate(()=>window.__clipNativeDrops)
       fs.writeFileSync(path.join(output,`drop-${dropsBefore}.json`),JSON.stringify({requests,drops},null,2))
       check('each attempt starts a real native Electron folder drag',requests.length===requestsBefore+1&&requests.at(-1)===copyDir,requests)
-      check('each native drag reaches the Chrome page as a trusted folder drop',drops.length===dropsBefore+1&&drops.at(-1).trusted&&drops.at(-1).types.includes('Files')&&drops.at(-1).names.includes(path.basename(copyDir)),drops)
+      const events=drops.slice(dropsBefore)
+      // Chromium refuses dragover with developer mode off, so the OS cannot
+      // deliver an accepted drop. Observe trusted Files input without changing
+      // that decision; filenames become readable only on an accepted drop.
+      check('each native folder drag reaches Chrome with trusted Files input',events.some(event=>['dragenter','dragover'].includes(event.type)&&event.trusted&&event.types.includes('Files')),events)
+      if(accepted) check('enabled developer mode accepts the actual folder drop',events.some(event=>event.type==='drop'&&event.trusted&&event.types.includes('Files')&&event.names.includes(path.basename(copyDir))),events)
     }
-    await dev(false); await drag()
+    await dev(false); await drag(false)
     check('native folder drag with developer mode off does not install Clip', !(await info()).some(e=>e.id===ID))
     await page.screenshot({path:path.join(output,'developer-off.png')})
-    await dev(true); await drag()
+    await dev(true); await drag(true)
     let installed
     for(let i=0;i<30;i++){ installed=(await info()).find(e=>e.id===ID);if(installed)break;await sleep(300) }
     await desktop('capture',['-Path',path.join(output,'native-drop.png')])
