@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { runAgentFilesSync } from '../src/services/agentFileSync.js';
 import { agentSyncScope, setAgentSyncDefault, setAgentSyncPermission } from '../src/services/cloudSyncAccount.js';
-import { saveAgent } from '../src/agents/agentRegistry.js';
+import { listAgents, saveAgent } from '../src/agents/agentRegistry.js';
 import { readHuman, writeHuman } from '../src/agents/humanStore.js';
 import { mirrorLegacyHuman } from '../src/agents/humanFolder.js';
 import { withDbLock } from '../src/services/amadeusDb.js';
@@ -385,6 +385,26 @@ describe('human/ in the cloud — two devices', () => {
     a.editCalendar((rows) => [...rows, row('r2', 'Gym')]);
     await a.sync(cloud);
     expect(rowNames(cloudText(cloud, '__human__', 'CALENDAR.db')!)).toEqual(['r1:Dentist']); // 总闸关了就不再推
+  });
+
+  it('turning the account switch off cancels an upload of human/ that only it allowed, not just marks it failed afterwards', async () => {
+    const cloud = fakeCloud(['human', 'human-folder']);
+    const [a] = two();
+    a.use();
+    writeFileSync(a.calendar, CAL([['r1', 'Dentist']]));
+    const scope = agentSyncScope(cloud, 'u')!;
+    await saveAgent({ slug: DEFAULT_AGENT_SLUG, name: 'Default', systemPrompt: 'fixture' });
+    // 每个 Agent 都单独关着 = 只有总闸同意:没有哪个 Agent 的同意信号能顺带取消这一轮
+    for (const ag of await listAgents()) setAgentSyncPermission(ag.slug, scope, false);
+    setAgentSyncDefault(scope, true);
+    const put = cloud.putFile.bind(cloud);
+    let seen: AbortSignal | undefined;
+    cloud.putFile = async (...args: Parameters<typeof put>) => {
+      if (args[1] === '__human__' && !seen) { seen = args[4]?.signal; setAgentSyncDefault(scope, false); } // 上传在途时用户关掉总闸
+      return put(...args);
+    };
+    await runAgentFilesSync(cloud, 'u');
+    expect(seen?.aborted).toBe(true);
   });
 
   it('against a server without the human slot it only mirrors locally and never writes __human__', async () => {

@@ -27,7 +27,7 @@ vi.mock('../api', () => ({ amadeus: { readDatabase: vi.fn(), writeDatabase: vaul
 vi.mock('./automationKick', () => ({ kickAutomation: () => {}, setAutomationKick: () => {} }))
 
 const { useDbStore } = await import('./dbStore')
-const { withHumanCal } = await import('./calendarMembers')
+const { withHumanCal, refreshHumanCal } = await import('./calendarMembers')
 
 const H = 'human://CALENDAR.db'
 const row = (id: string): DbFile['rows'][number] => ({ id, cells: { n: id, d: '2026-10-21' } })
@@ -57,6 +57,24 @@ describe('the default calendar in human/', () => {
     engine = base(['a', 'theirs']); bump() // 同步 / 镜像在防抖窗口里改了引擎那份
     await useDbStore.getState().flushAll(true)
     expect(engine!.rows.map((r) => r.id)).toEqual(['a', 'theirs', 'mine'])
+  })
+
+  it('coming back to the window while a write is pending does not replay it on top of itself (no duplicate row)', async () => {
+    engine = base(['a']); version = 'h1'
+    await useDbStore.getState().reload(H, H)
+    useDbStore.getState().mutate(H, add('mine'))
+    engine = base(['a', 'mine']); bump() // 写已经落到引擎,回执还没回来:引擎版本变了
+    await refreshHumanCal()
+    expect(useDbStore.getState().entries[H].data!.rows.map((r) => r.id)).toEqual(['a', 'mine'])
+  })
+
+  it('a calendar that could not be read at first (engine still starting) is read again later', async () => {
+    readHumanCal.mockResolvedValueOnce({ status: 'missing' } as never)
+    await useDbStore.getState().reload(H, H)
+    expect(useDbStore.getState().entries[H].status).toBe('missing')
+    engine = base(['a']); version = 'h1'
+    await refreshHumanCal()
+    expect(useDbStore.getState().entries[H].status).toBe('ok')
   })
 
   it('comes first among the calendars and hides the mirrored copy in the default vault', () => {

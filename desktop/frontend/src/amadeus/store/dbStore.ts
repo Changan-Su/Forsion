@@ -123,6 +123,9 @@ async function persistInner(ref: string, attempt: number, gen = useDbStore.getSt
   }
 }
 
+/** 这个 ref 还有没落盘 / 正在落盘的改动:外部刷新这时别重读 —— 重读会把已经写进磁盘、还没确认的改动再重放一遍(重复一行)。 */
+export const dbBusy = (ref: string): boolean => saveTimers.has(ref) || !!pendingOps.get(ref)?.length || inFlight.has(ref)
+
 /** 武装/重排防抖落盘。 */
 function arm(ref: string): void {
   const t = saveTimers.get(ref)

@@ -2,7 +2,7 @@
  *  避免各自散落 `type==='calendarDate'` 的隐式识别。agent:// 只读源不在此(调用方另并 useAgentCalDbs)。 */
 import { useEffect, useMemo } from 'react'
 import { usePageStore } from './pageStore'
-import { useDbStore } from './dbStore'
+import { dbBusy, useDbStore } from './dbStore'
 import { HUMAN_CAL, humanCalLegacy, readHumanCal } from './humanCalendarIo'
 import { useCalendarConfig, memberOf, isMigrated } from './calendarConfigStore'
 import {
@@ -38,23 +38,29 @@ export function useCalendarMembers(): CalMemberDb[] {
   return useMemo(() => withHumanCal(human, resolveCalendarMembers(all, vault, byVault), vault), [human, all, byVault, vault])
 }
 
+/** 回到窗口时调:别的设备同步下来 / 引擎镜像合进来的改动先悄悄比一下版本,变了才重读(重读那一下条目是「加载中」,每次都重读整本日历会闪);
+ *  有没落盘的改动时不重读(会把写进去还没确认的改动再重放一遍,Codex 评审);上次没读到(引擎还没起来)就重试。 */
+export async function refreshHumanCal(): Promise<void> {
+  const store = useDbStore.getState
+  const cur = store().entries[HUMAN_CAL]
+  if (cur?.status === 'missing') { await store().load(HUMAN_CAL, HUMAN_CAL); return }
+  if (cur?.status !== 'ok' || dbBusy(HUMAN_CAL)) return
+  const fresh = await readHumanCal()
+  if (fresh.status === 'ok' && !dbBusy(HUMAN_CAL) && fresh.version !== store().entries[HUMAN_CAL]?.version) await store().reloadByPath(HUMAN_CAL)
+}
+
 /** 默认日历 human/CALENDAR.db 的 AggDb;引擎不在本机 / 还没读到 = null。库一换(dbStore 整片作废)就重读。 */
 export function useHumanCalDb(): AggDb | null {
   const entry = useDbStore((s) => s.entries[HUMAN_CAL])
   const gen = useDbStore((s) => s.gen)
   useEffect(() => {
-    void useDbStore.getState().load(HUMAN_CAL, HUMAN_CAL)
-    // 别的设备同步下来 / 引擎镜像合进来的改动:回到窗口时重读一次(和库里 .db 的外部改动热重载同一条 reloadByPath,会重放没落盘的改动)
-    // 先悄悄比一下版本,变了才重读:重读那一下条目是「加载中」,每次切回窗口都重读会让整本日历闪一下
-    const again = async (): Promise<void> => {
-      const cur = useDbStore.getState().entries[HUMAN_CAL]
-      if (cur?.status !== 'ok') return
-      const fresh = await readHumanCal()
-      if (fresh.status === 'ok' && fresh.version !== useDbStore.getState().entries[HUMAN_CAL]?.version) void useDbStore.getState().reloadByPath(HUMAN_CAL)
-    }
-    const onFocus = (): void => { void again() }
+    const store = useDbStore.getState
+    void store().load(HUMAN_CAL, HUMAN_CAL)
+    const onFocus = (): void => { void refreshHumanCal() }
     window.addEventListener('focus', onFocus)
-    return () => window.removeEventListener('focus', onFocus)
+    // 挂上时引擎可能还在启动:读不到就隔一阵再试几次(网页 / 手机连远端引擎时一直读不到,所以有次数上限)
+    const retries = [3_000, 10_000, 30_000].map((ms) => setTimeout(() => { if (store().entries[HUMAN_CAL]?.status === 'missing') void store().load(HUMAN_CAL, HUMAN_CAL) }, ms))
+    return () => { window.removeEventListener('focus', onFocus); retries.forEach(clearTimeout) }
   }, [gen])
   return useMemo(() => (entry?.status === 'ok' ? getAggDb(HUMAN_CAL) : null), [entry])
 }
