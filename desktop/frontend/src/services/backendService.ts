@@ -83,6 +83,8 @@ export interface SyncRunResult {
   pulled?: number
   deleted?: number
   skipped?: number
+  /** 这一轮新出的冲突副本数(老引擎不给) */
+  conflicts?: number
   /** 旧全局 xyra 记忆/日志(AI Studio 网页共享)。 */
   memory: 'pushed' | 'pulled' | 'in-sync' | 'skipped'
   logs: Array<{ date: string; pushed: number; pulled: number }>
