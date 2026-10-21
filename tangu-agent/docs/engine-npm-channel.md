@@ -53,6 +53,10 @@ npm  @forsion/tangu-agent@2.13.5          ~/.forsion/engine/2.13.5/        安�
 
 ## 首次发布(只做一次)
 
+2026-10-21 已完成：`2.13.5` 首发、GitHub 签名 secret 和 npm trusted publisher；
+[`tangu-v2.13.6` 的 OIDC 自动发布](https://github.com/Changan-Su/Forsion/actions/runs/39602923526)成功，官方源与 npmmirror 的 `latest` 均为 `2.13.6`。
+macOS 安装版的公共 npm 下载、固定公钥验签、重启切换和「已是最新」11 项检查通过。后续直接按上面的热更新流程发版。
+
 npm 规定包先存在才能登记自动发布,所以第一次要手动:
 
 1. 把签名私钥配进仓库:Settings → Secrets → Actions → `TANGU_ENGINE_SIGNING_KEY`,内容是
