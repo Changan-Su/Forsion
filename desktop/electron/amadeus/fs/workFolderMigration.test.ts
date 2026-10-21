@@ -118,11 +118,11 @@ it('migrates a previous Plugins/<display name> folder and rejects overlapping/ca
 
 it('preserves resolved user media beside the note, archived media, and code examples', async () => {
  const t=await setup()
- await t.write('Previous/recording.wav','beside note');await t.write('Previous/assets/archive.wav','archived')
- await t.write('Previous/Record/transcript.md','![[recording.wav]]\n![[archive.wav#t=1|Audio]]\n`![[recording.wav]]`\n```md\n![[recording.wav]]\n```')
+ await t.write('Previous/recording.wav','beside note');await t.write('Previous/assets/archive.wav','archived');await t.write('Elsewhere/outside.wav','outside source')
+ await t.write('Previous/Record/transcript.md','![[recording.wav]]\n![[archive.wav#t=1|Audio]]\n`![[recording.wav]]`\n```md\n![[recording.wav]]\n```\n\n`example\n![[recording.wav]]\n`\n\n![[outside.wav]]')
  await t.run()
  const note=await fs.readFile(path.join(t.root,'Plugins/Previous/Record/transcript.md'),'utf8')
  expect(note).toContain('![[Plugins/Previous/recording.wav]]')
  expect(note).toContain('![[Plugins/Previous/assets/archive.wav#t=1|Audio]]')
- expect(note).toContain('`![[recording.wav]]`');expect(note).toContain('```md\n![[recording.wav]]\n```')
+ expect(note).toContain('`![[recording.wav]]`');expect(note).toContain('```md\n![[recording.wav]]\n```');expect(note).toContain('`example\n![[recording.wav]]\n`');expect(note).toContain('![[Elsewhere/outside.wav]]')
 })
