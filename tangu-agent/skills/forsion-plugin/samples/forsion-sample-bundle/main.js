@@ -42,8 +42,9 @@ ctx.registerCommand({
     say(zh
       ? `${name},内嵌的引擎工具 sample_bundle_echo、Agent「示例捆绑助手」与 Space 都已随包就位。`
       : `Hi ${name}. The bundled engine tool sample_bundle_echo, the bundled sample assistant and the Space are all in place.`)
-    // 文件面示范(2026-08-03 约定):产出写进插件「工作文件夹」(设置页每个插件自动有一条,
-    // 默认=插件显示名);整库可读写、越界被宿主拒绝;老宿主没有 workFolder(甚至没有 app)就整体跳过。
+    // Output follows the host's working-folder setting: new default Plugins/<effective plugin ID>,
+    // with manual preferences and legacy-folder compatibility preserved. Never derive it from the display name.
+    // Hosts without workFolder (or app) skip this example.
     if (ctx.app && ctx.app.workFolder && ctx.app.writeFile) {
       const p = `${ctx.app.workFolder()}/你好.md`
       await ctx.app.writeFile(p, `# 你好,${name}\n\n由「示例捆绑包」写入 —— 插件产出落在工作文件夹,存 markdown 供笔记引用。\n`)
