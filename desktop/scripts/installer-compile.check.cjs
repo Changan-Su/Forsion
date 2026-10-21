@@ -61,7 +61,9 @@ async function main() {
       APP_FILENAME: name, APP_DESCRIPTION: 'Compile fixture', VERSION: '1.0.0',
       APP_BUILD_DIR: payload, UNINSTALLER_OUT_FILE: uninstaller, SHORTCUT_NAME: name,
       UNINSTALL_DISPLAY_NAME: name, MULTIUSER_INSTALLMODE_ALLOW_ELEVATION: '',
-      ...(!runtime ? { INSTALL_MODE_PER_ALL_USERS_REQUIRED: '' } : {}),
+      // Assisted installers define this to support both scopes; it does not
+      // force /allusers (INSTALL_MODE_PER_ALL_USERS is the forcing define).
+      INSTALL_MODE_PER_ALL_USERS_REQUIRED: '',
       ...(mode === 'uninstaller' ? { BUILD_UNINSTALLER: '' } : {}),
     };
     const file = join(dir, `${mode}.nsi`);
