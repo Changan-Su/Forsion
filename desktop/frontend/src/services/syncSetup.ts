@@ -25,6 +25,8 @@ export type SyncKind = 'notes' | 'agents' | 'plugins'
 export type NotesChoice = 'merge' | 'cloud' | 'skip'
 export interface NotesPending { cloudFiles: number; cloudBytes: number; cloudDevice: string | null; localOnly: number; conflicts: number }
 export interface SyncSnapshot {
+  /** Informational unified quota; never gates sync choices. */
+  storage?: { usedBytes: number | null; limitBytes: number; complete: boolean; asOf: string } | null
   signedIn: boolean
   decided: boolean
   notes: {
@@ -40,7 +42,7 @@ export interface SyncSnapshot {
     syncOnStart: boolean
     direction: 'both' | 'push' | 'pull'
     localBytes: number | null
-    /** 设备同步额度(蓬洲云 2 GB 那本账);拿不到 = null。 */
+    /** 既有设备同步限制，T2 保留；统一额度在 storage，拿不到 = null。 */
     maxBytes: number | null
     /** 这台装了带 penzor 后端的 Forsion Extend(没有就开不了笔记库同步)。 */
     available: boolean
@@ -74,6 +76,16 @@ let snap: SyncSnapshot | null = null
 let account: string | null = null
 let started = false
 let loading: Promise<void> | null = null
+let storageCache: { account: string; at: number; value: SyncSnapshot['storage'] } | null = null
+async function readStorage(acct: string | null): Promise<SyncSnapshot['storage']> {
+  if (!acct) { storageCache = null; return null }
+  if (storageCache?.account === acct && Date.now() - storageCache.at < 60_000) return storageCache.value
+  const r = await window.tangu?.cloudFetch?.({ path: '/storage/ledger' }).catch(() => null)
+  const l = r?.status === 200 && r.json?.schemaVersion === 1 ? r.json : null
+  const value = l ? { usedBytes: l.complete ? l.usage.usedBytes : null, limitBytes: l.quota.limitBytes, complete: l.complete, asOf: l.asOf } : null
+  storageCache = { account: acct, at: Date.now(), value }
+  return value
+}
 const listeners = new Set<() => void>()
 const emit = (): void => { for (const cb of listeners) { try { cb() } catch { /* 一个订阅方坏了不拖别人 */ } } }
 
@@ -103,16 +115,18 @@ async function load(): Promise<void> {
   const auth: AuthStatusInfo | null = await window.tangu?.authStatus?.().catch(() => null) ?? null
   const signedIn = !!auth?.loggedIn
   account = signedIn ? (auth?.accountId ?? auth?.username ?? 'default') : null
-  const [state, stats, agents, quota] = await Promise.all([
+  const [state, stats, agents, quota, storage] = await Promise.all([
     rs?.get().catch(() => null) ?? null,
     rs?.rootStats?.().catch(() => null) ?? null,
     signedIn ? readAgents() : Promise.resolve({ on: false, count: 0 }),
     signedIn ? window.tangu?.cloudFetch?.({ path: '/remotesync/vaults' }).catch(() => null) ?? null : null,
+    readStorage(account),
   ])
   const cfg = state?.config
   let pending: NotesPending | null = null
   try { pending = account ? JSON.parse(ls.get(pendingKey(account)) || 'null') : null } catch { pending = null }
   snap = {
+    storage,
     signedIn,
     decided: !!account && ls.get(decidedKey(account)) === '1',
     notes: {
