@@ -45,7 +45,8 @@ async function snapshot(root: string, folder: string): Promise<FileStamp[]> {
   return result
 }
 async function syncFile(abs: string): Promise<void> {
-  const file = await fs.open(abs, 'r')
+  // Windows FlushFileBuffers requires a handle opened for writing. Never truncate.
+  const file = await fs.open(abs, process.platform === 'win32' ? 'r+' : 'r')
   try { await file.sync() } finally { await file.close() }
 }
 async function syncParents(root: string, dir: string): Promise<void> {
