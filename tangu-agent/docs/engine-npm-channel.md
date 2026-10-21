@@ -64,6 +64,18 @@ npm 规定包先存在才能登记自动发布,所以第一次要手动:
 
 之后推 `tangu-v*` tag 就自动发。
 
+发布流程上传隐藏的 `.engine-pack` 目录时必须设置 `include-hidden-files: true`；只上传签好的 `.tgz`。
+打包后的 `package.json` 必须保留与 GitHub 仓库匹配的 `repository.url`，否则 npm OIDC 无法确认发布来源。
+首发后核对匿名 registry 的 `latest` 和 tarball：`0.0.0-stage` 是 npm 暂存占位，尚不是可安装的正式引擎。
+
+### 用安装版验证真实更新链
+
+macOS：在 `desktop/` 运行 `npm run check:engine-update-live -- --app /Applications/Forsion.app/Contents/MacOS/Forsion --expect <已发布的新版>`。
+脚本克隆已安装应用，只加测试用的存储目录重定向和网络观测；不改安装版，不使用模拟 registry 或更新响应。
+它通过设置页真实 IPC 从公共 npm 下载，使用安装包原有公钥验签，确认正在跑的引擎没变，再重启隔离实例核对
+`/health` 的版本以及设置页「已是最新」。报告和截图在 `desktop/outputs/engine-update-live/`。
+默认要求目标比安装包新，避免把「没下载、没验签」当完整通过；只验证同版本查更时显式加 `--current-only`。
+
 ## 签名私钥
 
 ed25519。公钥编在 `src/boot/signingKey.ts`,随每一份安装包发出去。**这把钥匙永不轮换**:换了,所有已装机器都会拒绝之后的每一个引擎更新。
