@@ -6,6 +6,8 @@ on:
     paths:
       - '.github/workflows/probe-windows-issues.yml'
       - 'desktop/frontend/src/amadeusPrefs*'
+      - 'desktop/frontend/src/openFileInstall*'
+      - 'desktop/scripts/open-external-file.e2e.cjs'
       - 'desktop/electron/clipExtension*'
       - 'desktop/scripts/windows-*'
       - 'desktop/scripts/background-desktop.check.cjs'
@@ -78,7 +80,7 @@ jobs:
       - name: Verify desktop contracts and build
         working-directory: desktop
         run: |
-          node node_modules/vitest/vitest.mjs run frontend/src/amadeusPrefs.test.ts frontend/src/amadeus/lib/slashRel.test.ts frontend/src/views/inbox/inboxListSource.test.ts electron/clipExtension.test.ts electron/systemIcon.test.ts electron/updater.test.ts electron/websiteUpdateProvider.test.ts shared/updateSource.test.ts electron/deepLink.test.ts electron/harnessLaunch.test.ts --maxWorkers=1
+          node node_modules/vitest/vitest.mjs run frontend/src/openFileInstall.test.ts frontend/src/amadeusPrefs.test.ts frontend/src/amadeus/lib/slashRel.test.ts frontend/src/views/inbox/inboxListSource.test.ts electron/clipExtension.test.ts electron/systemIcon.test.ts electron/updater.test.ts electron/websiteUpdateProvider.test.ts shared/updateSource.test.ts electron/deepLink.test.ts electron/harnessLaunch.test.ts --maxWorkers=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run build
           exit $LASTEXITCODE

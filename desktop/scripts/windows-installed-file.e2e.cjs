@@ -103,7 +103,11 @@ async function main() {
     const lower = spawn(exe, [inside.toLowerCase()], { windowsHide: true, stdio: 'ignore' }); children.push(lower)
     check('lowercase installed argv process exits normally', await Promise.race([new Promise(resolve => { lower.once('exit', resolve); lower.once('error', () => resolve(-1)) }), sleep(20000).then(() => -1)]) === 0)
     await win.locator('.ProseMirror:visible').filter({ hasText: 'Inside packaged note.' }).first().waitFor({ timeout: 30000 })
-    check('lowercase vault path reuses the native note', (await titles()).filter(title => title.trim().toLowerCase() === 'inside').length === 1 && !await win.locator('.wsfile-name').filter({ hasText: inside.toLowerCase() }).count())
+    // The immutable official package has a third real defect: vault membership
+    // ignores case, but tab identity does not. Require the exact two native
+    // copies as a negative baseline; current-source O8 must instead stay at one.
+    check('official 2.13.5 reproduces the exact case-only duplicate native tabs', (await titles()).filter(title => title.trim().toLowerCase() === 'inside').length === 2 && !await win.locator('.wsfile-name').filter({ hasText: inside.toLowerCase() }).count())
+    console.log('BASELINE-RED official 2.13.5 creates Inside and inside native tabs for one Windows file; source O8 requires one')
     await win.screenshot({ path: path.join(out, 'installed-note.png') })
     await closeApp()
     // Exercise the actual cold ShellExecute path after all installed processes
