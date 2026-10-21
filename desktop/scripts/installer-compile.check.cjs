@@ -41,7 +41,6 @@ async function main() {
     generator.addIncludeDir(join(templates, 'include'));
     generator.addPluginDir('x86-unicode', join(plugins, 'x86-unicode'));
     generator.include(join(templates, 'include/StdUtils.nsh'));
-    generator.include(join(templates, 'include/FileAssociation.nsh'));
     generator.flags(['updated', 'force-run', 'keep-shortcuts', 'no-desktop-shortcut', 'delete-app-data', 'allusers', 'currentuser']);
     const langs = new LangConfigurator({ installerLanguages: ['en_US', 'zh_CN'] });
     createAddLangsMacro(generator, langs);
@@ -49,12 +48,15 @@ async function main() {
     const packager = { getTempFile: async () => join(dir, `${mode}-messages-${index++}.nsh`) };
     await addCustomMessageFileInclude('messages.yml', packager, generator, langs);
     await addCustomMessageFileInclude('assistedMessages.yml', packager, generator, langs);
-    // Match builder's generated macros so customHeader must really replace the
-    // registration body. Merely including the hooks can miss broken expansion.
-    generator.macro('registerFileAssociations', ['DetailPrint "stock registration must be replaced"']);
-    generator.macro('unregisterFileAssociations', fileAssociationsFor('forsion').flatMap(item =>
-      (Array.isArray(item.ext) ? item.ext : [item.ext]).map(ext => `!insertmacro APP_UNASSOCIATE "${ext}" "${item.name}"`)));
+    // Match computeCommonInstallerScriptHeader -> computeFinalScript order:
+    // custom include first, then precisely one generated association macro.
+    // Undefining an earlier macro from a later active macro corrupts NSIS 3's
+    // expansion cursor; the real builder defines these AFTER customHeader.
     generator.include(createNsisInclude('forsion', dir));
+    generator.include(join(templates, 'include/FileAssociation.nsh'));
+    if (mode === 'installer') generator.macro('registerFileAssociations', ['DetailPrint "stock registration must be replaced"']);
+    else generator.macro('unregisterFileAssociations', fileAssociationsFor('forsion').flatMap(item =>
+      (Array.isArray(item.ext) ? item.ext : [item.ext]).map(ext => `!insertmacro APP_UNASSOCIATE "${ext}" "${item.name}"`)));
     const defines = {
       APP_ID: 'com.forsion.installer-compile-fixture', APP_GUID: 'forsion-compile-fixture',
       UNINSTALL_APP_KEY: 'forsion-compile-fixture', PRODUCT_NAME: name, PRODUCT_FILENAME: name,
