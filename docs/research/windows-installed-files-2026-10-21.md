@@ -24,3 +24,5 @@
 GPT-6.1 Sol xhigh 首次评审指出：机器范围 Markdown 默认会被 HKCU 遮盖、退役个人范围指针、缺失注册表默认值返回 null。前两项补产品保护与真实范围测试，第三项修正观测的空值归一。最终聚焦复核（含路径身份与冷启动仪器）无 P1/P2；本地完整桌面 TypeScript 检查通过。
 
 [39605750064](https://github.com/Changan-Su/Forsion/actions/runs/39605750064) 的全用户 / 个人 / 覆盖安装与完整卸载门控均成功，真实 UserChoice 保留；安装版冷 Shell UIA 仪器误把 IntPtr.Zero 当布尔 false 而失败，已修为原生句柄零值比较，原失败保留。新源码 O8 与最终安装版验收仍在进行；#35 尚未关闭。当前官方 2.13.5 不含本 PR 修复。
+
+随后 [39608077004](https://github.com/Changan-Su/Forsion/actions/runs/39608077004) 全绿：真实安装版 11/11（含不改命令、不加调试参数的冷 ShellExecute；UIA 读到目标文件名和保存正文），NSIS 92 项。此前冷启动 SW_HIDE 导致无可见主窗，改为 Explorer 默认普通显示方式后通过。[39606776907](https://github.com/Changan-Su/Forsion/actions/runs/39606776907) 新源码 O1–O8 全绿，O8 两次真实第二进程大小写变体投递只保留 1 个 MixedCase 原生标签。最后补 Windows Shell 的 SHAssocEnumHandlers 原生 Open With 发现 / 移除校验，避免仅凭注册表存在就宣称系统菜单可发现；最终门禁结果见 PR #123 与 #35 的验收记录。

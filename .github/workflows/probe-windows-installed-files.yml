@@ -8,6 +8,7 @@ on:
       - 'desktop/scripts/windows-installed-associations.ps1'
       - 'desktop/scripts/windows-nsis-associations.check.ps1'
       - 'desktop/scripts/lib/windows-uninstall-owned.ps1'
+      - 'desktop/scripts/lib/windows-assoc-handlers.*'
       - 'desktop/scripts/installer-compile.check.cjs'
       - 'desktop/build/installer.nsh'
       - 'desktop/build/file-associations.cjs'

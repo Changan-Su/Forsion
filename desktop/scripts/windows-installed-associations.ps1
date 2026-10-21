@@ -7,6 +7,7 @@ if (!$taskRoot.StartsWith($taskTemp,[StringComparison]::OrdinalIgnoreCase)) { th
 $taskInstall=Join-Path $taskRoot 'application'
 $taskOutput=Join-Path $taskRoot 'evidence'
 New-Item -ItemType Directory -Force $taskOutput | Out-Null
+. "$PSScriptRoot/lib/windows-assoc-handlers.ps1"
 function Read-PdfChoice {
   $key='HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.pdf\UserChoice'
   if (Test-Path $key) { $value=Get-ItemProperty $key; return [ordered]@{ProgId=$value.ProgId; Hash=$value.Hash} }
@@ -55,6 +56,7 @@ if ($Mode -eq 'install') {
   $taskAfter=Read-PdfChoice
   Check (($taskBefore | ConvertTo-Json -Compress) -eq ($taskAfter | ConvertTo-Json -Compress)) 'NSIS preserves existing PDF UserChoice state'
   if (!$taskBefore) { Write-Host 'UNVERIFIED genuine pre-existing PDF UserChoice is absent; preservation of a user-selected Edge/Acrobat default remains unverified' }
+  Assert-ShellHandler (Join-Path $taskInstall 'Forsion.exe') $true $taskOutput 'official-install'
 } else {
   # NSIS's regular uninstall prompts whether to delete account/workspace data.
   # Dismiss only those two exact prompts of the owned uninstall process tree.
@@ -107,6 +109,7 @@ public static class ForsionUninstallPrompts {
     Get-ChildItem -LiteralPath $taskInstall -Recurse | Select-Object -ExpandProperty FullName | Set-Content -LiteralPath (Join-Path $taskOutput 'uninstall-residuals.txt')
   }
   Check (!(Test-Path $taskInstall)) 'actual NSIS uninstall removes the complete installed payload directory'
+  Assert-ShellHandler (Join-Path $taskInstall 'Forsion.exe') $false $taskOutput 'official-uninstall'
   foreach ($ext in @('.md','.markdown','.pdf')) {
     $taskKey="HKCU:\Software\Classes\$ext"
     $taskExpectedOld=if ($ext -eq '.pdf') {'Forsion.forsion.pdf'} else {'Forsion.forsion.markdown'}

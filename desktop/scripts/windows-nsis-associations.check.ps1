@@ -4,6 +4,7 @@ $taskRoot=[IO.Path]::GetFullPath($env:FORSION_NSIS_FIXTURE)
 $taskPrefix=[IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd('\')+'\'
 if (!$taskRoot.StartsWith($taskPrefix,[StringComparison]::OrdinalIgnoreCase)) { throw 'Fixture escaped RUNNER_TEMP' }
 . "$PSScriptRoot/lib/windows-uninstall-owned.ps1"
+. "$PSScriptRoot/lib/windows-assoc-handlers.ps1"
 $taskInstall=Join-Path $taskRoot 'NSIS Probe Application'
 $taskOutput=Join-Path $env:RUNNER_TEMP 'forsion-installed-file/evidence'
 New-Item -ItemType Directory -Force $taskOutput | Out-Null
@@ -42,6 +43,7 @@ function Install([string]$Scope='currentuser') {
     Check ((Get-Item "$taskHive\Software\Classes\.$ext\OpenWithProgids").GetValueNames() -contains $class) "source NSIS registers $ext in OpenWith"
   }
   Check ((PdfChoice) -eq $taskChoice) 'source install preserves genuine PDF UserChoice'
+  Assert-ShellHandler (Join-Path $taskInstall 'ForsionRegistryProbe.exe') $true $taskOutput "source-install-$taskScope"
   $env:FORSION_NSIS_ARGS=Join-Path $taskRoot 'shell-args.txt'
   if (Test-Path $env:FORSION_NSIS_ARGS) { Remove-Item -LiteralPath $env:FORSION_NSIS_ARGS }
   $file=Join-Path $taskRoot '中文 note with spaces.markdown'
@@ -54,6 +56,7 @@ function Install([string]$Scope='currentuser') {
 function Uninstall {
   Invoke-OwnedNsisUninstall $taskInstall (Join-Path $taskRoot 'source-uninstall-worker.exe') $taskScope
   Check (!(Test-Path $taskInstall)) 'source uninstall removes complete payload directory'
+  Assert-ShellHandler (Join-Path $taskInstall 'ForsionRegistryProbe.exe') $false $taskOutput "source-uninstall-$taskScope"
   foreach ($kind in @('markdown','pdf')) { Check (!(Test-Path "$taskHive\Software\Classes\Forsion.forsion.$kind")) "source uninstall removes its $kind ProgID" }
   foreach ($ext in @('pdf','md','markdown')) {
     Check ((Default $ext) -notin @('Forsion.forsion.pdf','Forsion.forsion.markdown')) "source uninstall clears its dangling $ext default"
