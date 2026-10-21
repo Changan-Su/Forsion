@@ -36,7 +36,9 @@ let host: HTMLDivElement
 let root: Root
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  localStorage.clear()
   resetDeviceMarks()
+  fakeApp.setState({ sessions: [] })
   useDeviceSessions.setState({
     refresh: async () => {},
     units: [unit(A, { name: EVIL }), unit(B, { online: false }), unit(C, { caps: { engine: 'stopped' } })],
@@ -55,20 +57,76 @@ const render = async (): Promise<void> => {
 }
 
 describe('DeviceSessionSections', () => {
-  it('one section per computer, statuses distinct (ready / offline / engine stopped)', async () => {
+  it('offline computers default to one collapsed group; online engine-stopped computers stay visible', async () => {
     await render()
+    const fold = host.querySelector<HTMLButtonElement>('[data-device-offline-toggle]')!
+    expect(fold).not.toBeNull()
+    expect(fold.textContent).toMatch(/离线设备\s*1/)
+    expect(fold.getAttribute('aria-expanded')).toBe('false')
+    expect(host.querySelector(`[data-device-section="${B}"]`)).toBeNull()
+    expect(host.querySelector(`[data-device-section="${C}"]`)).not.toBeNull()
+    await act(async () => { fold.click() })
     const secs = [...host.querySelectorAll('[data-device-section]')].map((e) => [e.getAttribute('data-device-section'), e.getAttribute('data-device-status'), e.querySelector('.t2d-status')?.textContent])
     expect(secs).toEqual([
       [A, 'ready', '在线'],
-      [B, 'offline', '离线'],
       [C, 'engineStopped', '引擎没有运行'],
+      [B, 'offline', '离线'],
     ])
   })
 
-  it('offline computer shows only its header (D6); ready computer lists its sessions', async () => {
+  it('expanded offline computer shows only its header (D6); ready computer lists its sessions', async () => {
     await render()
+    await act(async () => { host.querySelector<HTMLButtonElement>('[data-device-offline-toggle]')!.click() })
+    expect(host.querySelector(`[data-device-section="${B}"]`)).not.toBeNull()
     expect(host.querySelectorAll(`[data-device-section="${A}"] [data-remote-session]`).length).toBe(1)
     expect(host.querySelectorAll(`[data-device-section="${B}"] [data-remote-session]`).length).toBe(0)
+  })
+
+  it('many offline devices take one row, can be collapsed again, and expansion is not persisted', async () => {
+    const offline = Array.from({ length: 20 }, (_, i) => unit(`offline-${i}`, { online: false }))
+    useDeviceSessions.setState({ units: offline })
+    await render()
+    const fold = (): HTMLButtonElement => host.querySelector('[data-device-offline-toggle]')!
+    expect(fold().textContent).toMatch(/离线设备\s*20/)
+    expect(host.querySelectorAll('[data-device-section]')).toHaveLength(0)
+    await act(async () => { fold().click() })
+    expect(host.querySelectorAll('[data-device-section]')).toHaveLength(20)
+    await act(async () => { fold().click() })
+    expect(host.querySelectorAll('[data-device-section]')).toHaveLength(0)
+    await act(async () => { fold().click(); root.unmount() })
+    root = createRoot(host)
+    await render()
+    expect(fold().getAttribute('aria-expanded')).toBe('false')
+  })
+
+  it('reconnecting devices leave the group immediately; the empty group disappears', async () => {
+    await render()
+    const readyHead = host.querySelector(`[data-device-section="${A}"]`)!
+    await act(async () => { useDeviceSessions.setState({ units: [unit(A), unit(B), unit(C)] }) })
+    expect(host.querySelector('[data-device-offline-toggle]')).toBeNull()
+    expect(host.querySelector(`[data-device-section="${A}"]`)).toBe(readyHead)
+    expect(host.querySelector(`[data-device-section="${B}"]`)).not.toBeNull()
+    await act(async () => { useDeviceSessions.setState({ units: [unit(A), unit(B, { online: false })] }) })
+    expect(host.querySelector('[data-device-offline-toggle]')!.textContent).toMatch(/离线设备\s*1/)
+    expect(host.querySelector(`[data-device-section="${B}"]`)).toBeNull()
+  })
+
+  it('the device of the active remote session remains outside the fold when offline', async () => {
+    fakeApp.setState({ sessions: [{ ...sess('b1'), location: { kind: 'unit', unitId: B } }] })
+    await act(async () => { root.render(React.createElement(DeviceSessionSections, { activeId: 'b1', runningIds: new Set<string>(), unreadIds: new Set<string>() })) })
+    expect(host.querySelector('[data-device-offline-toggle]')).toBeNull()
+    expect(host.querySelector(`[data-device-section="${B}"]`)).not.toBeNull()
+    expect(host.querySelector('[data-remote-session="b1"]')).toBeNull()
+  })
+
+  it('an offline probe also folds the device and hides cached sessions', async () => {
+    await render()
+    expect(host.querySelector('[data-remote-session="a1"]')).not.toBeNull()
+    await act(async () => { noteDeviceProbe(A, { ok: false, status: 503, code: 'UNIT_OFFLINE' }) })
+    expect(host.querySelector('[data-device-offline-toggle]')!.textContent).toMatch(/离线设备\s*2/)
+    await act(async () => { host.querySelector<HTMLButtonElement>('[data-device-offline-toggle]')!.click() })
+    expect(host.querySelector(`[data-device-section="${A}"]`)!.getAttribute('data-device-status')).toBe('offline')
+    expect(host.querySelector('[data-remote-session="a1"]')).toBeNull()
   })
 
   it('S3: self-reported names and titles are text, clamped; no markup is created', async () => {

@@ -128,6 +128,41 @@ async function main() {
     check('离开折叠块自动收回源码', await tokenWidth(p) === 0)
     await p.close()
 
+    // 标题末两次回车：第二下不能把后面的正文拆成一只普通引用。
+    for (const marker of ['+', '-']) {
+      p = await fresh(`> [!fold]${marker} 标题\n>\n> 原有首段\n>\n> 原有末段\n\n后续段落`)
+      await clickText(p, HEAD, true)
+      await p.keyboard.press('End')
+      const beforeEnter = await p.evaluate(() => window.__upage.probe.view().state.doc.toJSON())
+      await p.keyboard.press('Enter')
+      const afterFirstEnter = await p.evaluate(() => window.__upage.probe.view().state.doc.toJSON())
+      await p.keyboard.press('Enter')
+      const afterEnter = await p.evaluate(() => window.__upage.probe.view().state.doc.toJSON())
+      await p.keyboard.press('Meta+z')
+      const undone = JSON.stringify(await p.evaluate(() => window.__upage.probe.view().state.doc.toJSON()))
+      // 历史可能把两次相邻回车合为一组；必须真退回某个输入前的完整结构，不能让无效热键假绿。
+      check(`${marker} 两次回车撤销恢复输入前结构`, undone !== JSON.stringify(afterEnter)
+        && [beforeEnter, afterFirstEnter].some(doc => JSON.stringify(doc) === undone))
+      await p.keyboard.press('Meta+Shift+z')
+      check(`${marker} 两次回车重做恢复完整结构`, JSON.stringify(await p.evaluate(() => window.__upage.probe.view().state.doc.toJSON())) === JSON.stringify(afterEnter))
+      await p.keyboard.type('新写正文')
+      check(`${marker} 标题两次回车保留正文归属`, await p.locator(`${PM} > blockquote`).count() === 1
+        && (await p.locator(FOLD).innerText()).includes('原有首段')
+        && (await p.locator(FOLD).innerText()).includes('原有末段')
+        && (await p.locator(FOLD).innerText()).includes('新写正文'), await p.locator(PM).innerText())
+      await p.locator(ARROW).click()
+      await p.waitForFunction(() => !document.querySelector('.callout-fold[data-fold-animating]'))
+      await p.locator(FOLD).getByText('原有末段', { exact: true }).waitFor({ state: 'hidden' })
+      check(`${marker} 两次回车后仍整体收起`, !/原有首段|原有末段|新写正文/.test(await p.locator(PM).innerText()))
+      const disk = await saved(p)
+      await p.close()
+      p = await fresh(disk)
+      check(`${marker} 两次回车保存重开保留完整折叠`, await p.locator(`${PM} > blockquote`).count() === 1
+        && (await p.locator(FOLD).textContent()).includes('原有末段')
+        && !/原有首段|原有末段|新写正文/.test(await p.locator(PM).innerText()), disk)
+      await p.close()
+    }
+
     p = await fresh('> [!fold]+ 标题\n\n后续段落')
     await p.locator('.callout-empty').click()
     await p.keyboard.press('Enter')

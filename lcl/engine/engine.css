@@ -939,6 +939,13 @@ html[data-dv-dragging] .t2s-side { -webkit-app-region: no-drag; }
  * 第二条:主窗那份「越过 ribbon 的 26px」在这里不再叠加。放文件末尾:第一条与上面左栏那条 26px 同特异性(DESIGN §7)。
  * 空左栏不画标签条(见「空侧栏占位」),那时交通灯浮在空白侧栏的左上角。 */
 [data-platform='mac'] .shell--noribbon .dockview-theme-lcl .dv-tabs-and-actions-container.dv-under-lights { padding-left: calc(70px / var(--uiz, 1)); }
+
+/* Native Windows caption buttons share the top tab row. Padding expands the
+ * toolbar's measured box so WorkspaceHost's existing overlap guard reserves
+ * both the toolbar and the OS buttons, including at fractional UI zoom. */
+[data-tab-titlebar] .dv-edge-actions {
+  padding-right: calc(var(--windows-caption-width, 138px) / var(--uiz, 1));
+}
 [data-platform='mac'] .shell--noribbon .dv-prefix--edge { padding-left: 4px; }
 
 /* ===== 换 Space 的过渡(spaceTransition.ts;2026-10-16 用户选 C「沿 ribbon 方向推移」) =====

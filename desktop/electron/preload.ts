@@ -385,6 +385,13 @@ const api = {
   /** 当前主题请求窗口级系统材质，并同步经白名单校验的实色降级底。 */
   setWindowMaterial: (input: { material: 'opaque' | 'system-glass'; mode: 'light' | 'dark'; backgroundColor?: string }): Promise<{ ok: boolean }> =>
     ipcRenderer.invoke('window:setMaterial', input),
+  setTabTitleBar: (input: { height: number; symbolColor: string }): Promise<{ ok: boolean; fullscreen?: boolean }> =>
+    ipcRenderer.invoke('window:setTabTitleBar', input),
+  onTabTitleBarFullscreen: (cb: (fullscreen: boolean) => void): (() => void) => {
+    const listener = (_e: unknown, fullscreen: boolean): void => cb(fullscreen)
+    ipcRenderer.on('window:tabTitleBarFullscreen', listener)
+    return () => ipcRenderer.removeListener('window:tabTitleBarFullscreen', listener)
+  },
   sampleAmbientPalette: (rect: import('../shared/ambientPalette').AmbientRect): Promise<import('../shared/ambientPalette').AmbientPalette | null> => ipcRenderer.invoke('ui:ambientPalette', rect),
   // 设置界面「打开文件夹」:agent(slug 缺省=agents 根)/ skills 目录。
   openAgentDir: (slug?: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('agents:openDir', slug),

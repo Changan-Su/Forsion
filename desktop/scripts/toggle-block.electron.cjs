@@ -66,6 +66,64 @@ async function main() {
       check(`${mode}/${locale} 使用真实主题`, await win.evaluate((mode) => document.documentElement.dataset.mode === mode, mode))
     }
     await open('light', 'zh', 1280)
+    if (process.argv.includes('--double-enter')) {
+      const errors = []
+      win.on('pageerror', (e) => errors.push(e.message))
+      const pm = '.unified-body .ProseMirror'
+      const first = win.locator(`${pm} > .callout-fold`).first()
+      const title = first.locator(':scope > p').first()
+      const arrow = title.locator('.callout-chevron')
+      const bodyTexts = ['点击标题直接编辑', '第二段正文', '第三段正文', '嵌套折叠保持独立状态']
+      const snapshots = []
+      const snapshot = async (key) => {
+        snapshots.push({ key, html: await win.locator(pm).innerHTML(), text: await win.locator(pm).innerText() })
+        fs.writeFileSync(path.join(SHOTS, 'double-enter-timeline.json'), JSON.stringify(snapshots, null, 2))
+        await win.screenshot({ path: path.join(SHOTS, `double-enter-${key}.png`) })
+      }
+      await title.click({ position: { x: 180, y: 12 } })
+      await win.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowRight' : 'End')
+      await snapshot('before')
+      await win.keyboard.press('Enter')
+      await snapshot('first')
+      await win.keyboard.press('Enter')
+      await snapshot('second')
+      const ownedText = await first.textContent()
+      check('两次回车没有拆出普通引用或空折叠块', await win.locator(`${pm} > blockquote:not(.callout-fold)`).count() === 0
+        && bodyTexts.every(text => ownedText.includes(text)) && await first.locator('.callout-empty').count() === 0)
+      await win.keyboard.type('New body text')
+      check('两次回车后输入仍属于原折叠块', (await first.innerText()).includes('New body text'))
+      await win.waitForTimeout(1400)
+      const edited = fs.readFileSync(file, 'utf8')
+      check('真实磁盘保存保留新增正文和后续内容', /^> New body text$/m.test(edited)
+        && /^> 第二段正文/m.test(edited) && /^> 第三段正文/m.test(edited))
+      await arrow.click()
+      await win.waitForTimeout(1400)
+      check('真实客户端编辑后仍整体收起', !/第二段正文|第三段正文|New body text/.test(await win.locator(pm).innerText()))
+      await snapshot('collapsed')
+      await app.close()
+      app = await electron.launch({
+        args: [`--user-data-dir=${userdata}`, '--lang=zh-CN', ROOT], cwd: ROOT,
+        env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url },
+      })
+      const reopened = await app.firstWindow()
+      reopened.on('pageerror', (e) => errors.push(e.message))
+      await reopened.waitForSelector('#root', { timeout: 40000 })
+      await skipOnboarding(reopened)
+      await reopened.locator('.t2s-srow', { hasText: NOTE }).first().click({ timeout: 30000 })
+      await reopened.waitForSelector(`${pm} > .callout-fold`, { timeout: 20000 })
+      const fold = reopened.locator(`${pm} > .callout-fold`).first()
+      check('关闭并重启客户端保留完整折叠及收起状态', await fold.locator('.callout-chevron').first().getAttribute('aria-expanded') === 'false'
+        && !(await reopened.locator(pm).innerText()).includes('New body text')
+        && bodyTexts.every(text => fs.readFileSync(file, 'utf8').includes(text)))
+      await fold.locator('.callout-chevron').first().click()
+      await reopened.waitForFunction(() => !document.querySelector('.callout-fold[data-fold-animating]'))
+      check('重启后展开找回全部正文', (await fold.innerText()).includes('New body text')
+        && (await fold.innerText()).includes('第三段正文'))
+      await reopened.screenshot({ path: path.join(SHOTS, 'double-enter-restarted.png') })
+      check('真实客户端无渲染异常', errors.length === 0)
+      console.log(`${checks} checks passed; screenshots: ${SHOTS}`)
+      return
+    }
     const arrow = win.locator('.unified-body .ProseMirror > .callout-fold > p > .callout-chevron').first()
     check('生产笔记显示四枚 SVG 折叠按钮', await win.locator('.unified-body .callout-chevron svg').count() === 4)
     check('只读打开不改文件', fs.readFileSync(file, 'utf8') === seed)
