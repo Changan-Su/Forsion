@@ -193,6 +193,8 @@ async function main() {
     // Chrome still prompts on management.uninstall(false), which is unrelated
     // to the installation paths under test and would leave a native modal open.
     stage('launch independent native picker profile')
+    await settings.screenshot({path:path.join(output,'settings.png')})
+    await app.evaluate(({BrowserWindow},id)=>BrowserWindow.fromId(id).hide(),id)
     await browser.close()
     browser = await launchChrome('chrome-picker')
     page=browser.pages()[0]; await page.goto('chrome://extensions'); await dev(true)
@@ -213,7 +215,7 @@ async function main() {
   } finally {
     clearTimeout(deadline)
     fs.writeFileSync(path.join(output,'results.json'),JSON.stringify({checks,home,copyDir},null,2))
-    if(settings&&!settings.isClosed()) await settings.screenshot({path:path.join(output,'settings.png')}).catch(()=>{})
+    if(settings&&!settings.isClosed()&&!fs.existsSync(path.join(output,'settings.png'))) await settings.screenshot({path:path.join(output,'settings.png')}).catch(()=>{})
     if(browser)await Promise.race([browser.close().catch(()=>{}),sleep(10000)])
     if(app) {
       const child=app.process()

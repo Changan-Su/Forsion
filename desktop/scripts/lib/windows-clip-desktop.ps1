@@ -73,7 +73,9 @@ if ($Action -eq 'drag') { [ClipDesktopInput]::Drag($FromX,$FromY,$ToX,$ToY); exi
 if ($Action -eq 'picker') {
   $dialog = [IntPtr]::Zero
   for ($attempt=0;$attempt -lt 60;$attempt++) {
-    $dialog = [ClipDesktopInput]::FindWindow('#32770',$null)
+    # PowerShell converts $null to an empty .NET string; FindWindow needs a
+    # genuine null title wildcard, otherwise a titled native dialog is missed.
+    $dialog = [ClipDesktopInput]::FindWindow('#32770',[System.Management.Automation.Language.NullString]::Value)
     if ($dialog -ne [IntPtr]::Zero) { break }
     Start-Sleep -Milliseconds 200
   }
