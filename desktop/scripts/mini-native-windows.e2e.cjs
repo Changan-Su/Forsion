@@ -88,6 +88,11 @@ async function main() {
     const large=await drag('se',450,500,'maximum')
     check('actual outward gesture reaches maximum width and work area bottom',large.after.width===640&&closeEnough(large.after.y+large.after.height,receipt.area.y+receipt.area.height)&&large.after.x===large.before.x&&large.after.y===large.before.y,large)
     await place()
+    const inward=await drag('s',0,-80,'bottom-inward')
+    check('actual upward bottom-edge drag shortens only the height',inward.after.x===inward.before.x&&inward.after.y===inward.before.y&&inward.after.width===inward.before.width&&closeEnough(inward.after.height,inward.before.height-80),inward)
+    await pause(300)
+    check('upward bottom-edge release keeps the chosen size',JSON.stringify(inward.after)===JSON.stringify((await geometry()).bounds))
+    await place()
     await mini.evaluate(()=>localStorage.setItem('forsion_ui_zoom','1.1'));await mini.reload()
     await mini.locator('.mini-todo .amx-todo').waitFor()
     // Reload resets the passive observer, so reinstall it for the independent zoom case.
@@ -96,6 +101,31 @@ async function main() {
     const zoomed=await drag('s',0,60,'zoom-110')
     check('110 percent native bottom drag tracks screen coordinates',closeEnough(zoomed.after.height,zoomed.before.height+60)&&zoomed.after.y===zoomed.before.y,zoomed)
     await mini.screenshot({path:path.join(output,'zoom-110.png')})
+    await mini.evaluate(()=>{window.__miniControlClicks=[];document.addEventListener('click',e=>window.__miniControlClicks.push({trusted:e.isTrusted,label:e.target.closest('button')?.getAttribute('aria-label')}),true)})
+    const nativeClick=async locator=>{
+      const geo=await geometry(),box=await locator.boundingBox()
+      assert.ok(box,'Native control must have actual bounds')
+      await native('click',['-Window',geo.hwnd,'-X',String(Math.round((box.x+box.width/2)*geo.zoom)),'-Y',String(Math.round((box.y+box.height/2)*geo.zoom))])
+    }
+    const showMain=mini.locator('.mini-card-action:not(.mini-card-close)')
+    const showLabel=await showMain.getAttribute('aria-label')
+    await nativeClick(showMain)
+    await win.waitForFunction(()=>!!document.querySelector('.amx-todo'))
+    check('native main-panel button receives a trusted click',await mini.evaluate(label=>window.__miniControlClicks.some(e=>e.trusted&&e.label===label),showLabel))
+    check('native main-panel button opens the exact ToDo surface',await win.locator('.amx-todo').count()>0)
+    const kept=(await geometry()).bounds
+    await nativeClick(mini.locator('.mini-card-close'))
+    for(let i=0;i<60&&!mini.isClosed();i++)await pause(50)
+    check('native close button closes Mini without resize interception',mini.isClosed())
+    await native('hotkey',['-Window',fixture.hwnd])
+    for(let i=0;i<200;i++){mini=app.windows().find(w=>w.url().includes('window=mini'));if(mini)break;await pause(50)}
+    assert.ok(mini,'Native global shortcut reopens Mini')
+    await mini.locator('.mini-todo .amx-todo').waitFor()
+    const reopened=(await geometry()).bounds
+    check('native Ctrl Shift M reopens the real Mini from another app',!!mini&&!mini.isClosed())
+    check('native close and shortcut reopen retain the exact resized dimensions',kept.width===reopened.width&&kept.height===reopened.height,{kept,reopened})
+    fs.writeFileSync(path.join(output,'native-reopen.json'),JSON.stringify({kept,reopened},null,2))
+    await mini.screenshot({path:path.join(output,'native-reopened.png')})
     await native('capture',['-Path',path.join(output,'desktop-final.png')])
   } catch(error) {
     await native('capture',['-Path',path.join(output,'failure-desktop.png')]).catch(()=>{})

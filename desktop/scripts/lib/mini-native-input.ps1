@@ -1,4 +1,4 @@
-param([ValidateSet('drag','activate','capture','fixture')] [string]$Action,
+param([ValidateSet('drag','activate','capture','fixture','click','hotkey')] [string]$Action,
   [string]$Window, [int]$X, [int]$Y, [int]$Dx, [int]$Dy, [string]$Path)
 $ErrorActionPreference='Stop'
 if ($env:GITHUB_ACTIONS -ne 'true') { throw 'Native Mini input is restricted to a dedicated GitHub runner' }
@@ -62,6 +62,10 @@ public static class MiniNativeInput {
       System.Threading.Thread.Sleep(150);
     } finally {Send(4);}
   }
+  public static void Click(long window,int x,int y) {
+    var p=Resolve(window,x,y);Move(p.x,p.y);System.Threading.Thread.Sleep(100);
+    Send(2);System.Threading.Thread.Sleep(40);Send(4);
+  }
 }
 '@
 if ($Action -eq 'fixture') {
@@ -78,6 +82,11 @@ if ($Action -eq 'fixture') {
 }
 if ($Action -eq 'activate') { [MiniNativeInput]::Activate([long]::Parse($Window)) }
 if ($Action -eq 'drag') { [MiniNativeInput]::Drag([long]::Parse($Window),$X,$Y,$Dx,$Dy) }
+if ($Action -eq 'click') { [MiniNativeInput]::Click([long]::Parse($Window),$X,$Y) }
+if ($Action -eq 'hotkey') {
+  [MiniNativeInput]::Activate([long]::Parse($Window))
+  [System.Windows.Forms.SendKeys]::SendWait('^+m')
+}
 if ($Action -eq 'capture') {
   $r=[System.Windows.Forms.SystemInformation]::VirtualScreen
   $b=[System.Drawing.Bitmap]::new($r.Width,$r.Height)
