@@ -22,12 +22,15 @@ const fs = require('fs')
 const os = require('os')
 const path = require('path')
 const http = require('http')
+const { createHash } = require('node:crypto')
 const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 const { skipOnboarding } = require('./lib/skip-onboarding.cjs')
 
 const ROOT = path.join(__dirname, '..')
 let EXTEND = process.env.EXTEND_PKG
+const PACKAGED_EXE = process.env.PENZOR_PACKAGED_EXE
+const PREVIOUS_EXTEND = process.env.PENZOR_PREVIOUS_EXTEND
 const SHOTS = process.env.SHOTS_DIR || path.join(os.tmpdir(), 'forsion-penzor-space-shots')
 const results = []
 function check(name, ok, detail) {
@@ -35,12 +38,12 @@ function check(name, ok, detail) {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? '  | ' + detail : ''}`)
 }
 
-function installExtend(home) {
-  const pkg = JSON.parse(fs.readFileSync(path.join(EXTEND, 'package.json'), 'utf8'))
+function installExtend(home, source = EXTEND) {
+  const pkg = JSON.parse(fs.readFileSync(path.join(source, 'package.json'), 'utf8'))
   const dest = path.join(home, 'plugins', 'forsion-extend')
   for (const f of ['package.json', ...pkg.files]) {
     fs.mkdirSync(path.dirname(path.join(dest, f)), { recursive: true })
-    fs.copyFileSync(path.join(EXTEND, f), path.join(dest, f))
+    fs.copyFileSync(path.join(source, f), path.join(dest, f))
   }
   return pkg.version
 }
@@ -105,6 +108,7 @@ function startFakeCloud() {
     const src = String(req.headers['x-project-source'] || '')
     st.hits.push(`${req.method} ${p}${u.search}${src ? ` [${src}]` : ''}`)
     const json = (status, body) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(body)) }
+    if (st.legacy && /^\/api\/storage\/(ledger|notice|source-)/.test(p)) return json(404, { detail: 'Not found' })
     if (st.signedOut) return json(401, { detail: 'Invalid or expired token' })
     if (p === '/api/brain/users/me') return json(200, { id: 'u1', username: 'demo', nickname: '演示' })
     if (p === '/api/remotesync/vaults') return json(200, {
@@ -227,7 +231,9 @@ function startFakeCloud() {
 }
 
 async function main() {
-  let launchRoot = ROOT
+  if (PACKAGED_EXE && process.env.GITHUB_ACTIONS !== 'true') throw Error('Packaged startup changes OS integrations; run only on a dedicated GitHub Actions runner')
+  let launchRoot = process.env.PENZOR_SOURCE_DESKTOP || ROOT
+  if (PACKAGED_EXE && process.env.PENZOR_FIXTURE_SIGNING === '1') throw Error('Packaged acceptance must retain the production trust key')
   if (process.env.PENZOR_FIXTURE_SIGNING === '1') {
     const fixture = await require('./lib/penzor-fixture.cjs').preparePenzorFixture(ROOT, EXTEND)
     launchRoot = fixture.app; EXTEND = fixture.extend
@@ -245,7 +251,10 @@ async function main() {
   fs.writeFileSync(path.join(vault, '欢迎.md'), '# 欢迎\n')
   fs.writeFileSync(path.join(home, 'auth.json'), JSON.stringify({ cloudUrl: cloud.url, token: 'fake-token' }))
   const userData = path.join(home, 'userdata')
-  installExtend(home)
+  installExtend(home, PREVIOUS_EXTEND || EXTEND)
+  const sentinel = Buffer.from('existing local note before upgrade\n')
+  const sentinelPath = path.join(vault, 'Keep after upgrade.md')
+  fs.writeFileSync(sentinelPath, sentinel)
   const stub = await startStubEngine({ models: [{ id: 'gpt-6-luna', name: 'GPT-6 Luna', provider: 'stub', source: 'forsion' }] })
   for (const d of [userData, `${userData}-dev`]) {
     fs.mkdirSync(d, { recursive: true })
@@ -254,20 +263,34 @@ async function main() {
     fs.writeFileSync(path.join(d, 'tangu-desktop-config.json'), JSON.stringify({ mode: 'external', backendUrl: stub.url, token: 'mock', cloudUrl: cloud.url }))
   }
   const app = await electron.launch({
-    args: [`--user-data-dir=${userData}`, '--lang=zh-CN', launchRoot], cwd: launchRoot,
-    ...(process.env.STAGE_ELECTRON ? { executablePath: process.env.STAGE_ELECTRON } : {}),
-    env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url, TANGU_HARNESS_QUIET: '1', PI_CU_SOCKET_PATH: path.join(home, 'bridge.sock') },
+    args: [`--user-data-dir=${userData}`, '--lang=zh-CN', ...(PACKAGED_EXE ? [] : [launchRoot])], cwd: launchRoot,
+    ...(PACKAGED_EXE || process.env.STAGE_ELECTRON ? { executablePath: PACKAGED_EXE || process.env.STAGE_ELECTRON } : {}),
+    env: { ...process.env, ...(PACKAGED_EXE ? { HOME: home, USERPROFILE: home, APPDATA: path.join(home, 'AppData', 'Roaming'), LOCALAPPDATA: path.join(home, 'AppData', 'Local') } : {}), TANGU_HOME: home, TANGU_BACKEND_URL: stub.url, TANGU_HARNESS_QUIET: '1', PI_CU_SOCKET_PATH: path.join(home, 'bridge.sock') },
     timeout: 90_000,
   })
   const errors = []
   try {
+    const runtime = await app.evaluate(({ app }) => ({ packaged: app.isPackaged, version: app.getVersion(), resources: process.resourcesPath, userData: app.getPath('userData') }))
+    check('运行的是指定的真实安装包或源码构建', runtime.packaged === !!PACKAGED_EXE, JSON.stringify(runtime))
+    if (process.env.PENZOR_EXPECT_VERSION) check('桌面版本与候选版本一致', runtime.version === process.env.PENZOR_EXPECT_VERSION)
+    fs.writeFileSync(path.join(SHOTS, 'runtime.json'), JSON.stringify(runtime, null, 2))
     const win = await app.firstWindow({ timeout: 120_000 })
     win.setDefaultTimeout(10_000)
     win.on('console', (m) => { if (m.type() === 'error' && /penzor|pz-/i.test(m.text())) errors.push(m.text()) })
     win.on('pageerror', (e) => errors.push(String(e)))
     await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.setContentSize(1512, 950) })
     await win.waitForSelector('#root', { timeout: 30_000 })
-    check('首启引导点掉', await skipOnboarding(win))
+    if (PACKAGED_EXE) await win.waitForFunction(() => typeof window.tangu?.cloudFetch === 'function')
+    if (PACKAGED_EXE) {
+      const installed = path.join(home, 'plugins', 'forsion-extend')
+      const signature = JSON.parse(fs.readFileSync(path.join(EXTEND, 'SIGNATURE'), 'utf8'))
+      const sameFiles = ['SIGNATURE', ...Object.keys(signature.files)].every(file => fs.existsSync(path.join(installed, file)) && createHash('sha256').update(fs.readFileSync(path.join(installed, file))).digest('hex') === createHash('sha256').update(fs.readFileSync(path.join(EXTEND, file))).digest('hex'))
+      check('旧 Extend 已被随包签名版本完整升级，所有发行文件字节一致', sameFiles)
+      check('升级保留已有笔记内容', fs.readFileSync(sentinelPath).equals(sentinel))
+    }
+    const skipped = await skipOnboarding(win)
+    if (!skipped) await win.getByRole('button', { name: /^(Skip onboarding|跳过引导)$/ }).first().click({ timeout: 5000 })
+    check('首启引导点掉', skipped || await skipOnboarding(win, 1000))
     if (process.env.PENZOR_HOLD) {
       cloud.st.throttle = true
       // 「踢一下」:往 <home>/kick 写几行本机路径 = 在「上传」里选了它们(computer use 在后台点不动系统的选文件框)
@@ -380,6 +403,19 @@ async function main() {
     await shot('quota-unavailable')
     cloud.st.unified = 'over'; await refresh() // following real upload must still succeed
 
+    // Cold renderer reload against the pre-unified backend must keep legacy file operations usable.
+    cloud.st.legacy = true
+    await win.reload(); await win.waitForSelector('#root')
+    await win.locator('.rb [aria-label="蓬洲云"]').first().click()
+    await win.locator('.t2s-srow-title', { hasText: /^概览$/ }).first().click()
+    await win.waitForSelector('.pz-unified-quota')
+    check('旧服务端 404 不伪造统一统计或清除登录态', await win.locator('.pz-total b').textContent() === '—' && !(await win.getByText('登录后查看你的蓬洲云').count()))
+    await shot('legacy-backend')
+    // Re-open the folder tree after reload; old APIs still supply its known vaults.
+    for (const [folder, child] of [['我的云盘', '我上传的'], ['Amadeus Cloud', '我的云端笔记']]) {
+      if (!(await win.locator('.t2s-srow-title', { hasText: new RegExp(`^${child}$`) }).first().isVisible().catch(() => false))) await win.locator('.t2s-folder-row', { hasText: folder }).first().click()
+    }
+
     // Amadeus Cloud:只看和下载
     await win.locator('.t2s-srow-title', { hasText: /^我的云端笔记$/ }).first().click()
     await win.waitForSelector('.pz-table tbody tr', { timeout: 10_000 }).catch(() => {})
@@ -470,7 +506,7 @@ async function main() {
     cloud.st.quota = okQuota
 
     await win.locator('.pz-table tbody tr', { hasText: '封面.png' }).first().click()
-    await win.locator('.pz-table tbody tr', { hasText: '数据.csv' }).first().click({ modifiers: ['Meta'] })
+    await win.locator('.pz-table tbody tr', { hasText: '数据.csv' }).first().click({ modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'] })
     await win.waitForTimeout(400)
     const selbar = await win.locator('.pz-selbar').textContent().catch(() => '')
     const sideTitle = await win.locator('.pz-side .pz-fname').textContent().catch(() => '')
@@ -480,11 +516,15 @@ async function main() {
     await win.waitForFunction(() => /已把 2 项移到回收站/.test(document.body.innerText), null, { timeout: 8000 }).catch(() => {})
     check('⑥ 批量移到回收站:一次 batch/delete,吐司说 2 项', cloud.st.hits.includes('POST /api/files/batch/delete [penzor]') && /已把 2 项移到回收站/.test(await win.evaluate(() => document.body.innerText)))
     await win.locator('.pz-scroll').click({ position: { x: 600, y: 600 } }).catch(() => {})
-    await win.keyboard.press('Meta+A')
+    await win.keyboard.press('ControlOrMeta+A')
     await win.waitForTimeout(300)
     const all = await win.locator('.pz-selbar').textContent().catch(() => '')
     check('⑥ ⌘A 全选', /^已选 \d+ 项/.test(all) && Number(all.match(/已选 (\d+)/)?.[1]) === (await win.locator('.pz-table tbody tr').count()), all)
     await win.keyboard.press('Escape')
+
+    check('旧服务端 404 下上传、新建、回收站仍走原有接口', cloud.st.uploads.length > 0 && cloud.st.hits.includes('POST /api/files/batch/delete [penzor]'))
+    cloud.st.legacy = false
+    await refresh()
 
     // Amadeus deleted current files are explained separately from ordinary app trash.
     await win.locator('.t2s-srow', { hasText: '回收站' }).first().click()
@@ -566,6 +606,7 @@ async function main() {
     await Promise.race([stub.close?.(), new Promise((r) => setTimeout(r, 3000))]) // 连接没断干净时 close 会一直等(10-19 走查两次挂在这附近)
     cloud.close()
   }
+  fs.writeFileSync(path.join(SHOTS, 'results.json'), JSON.stringify(results, null, 2))
   const failed = results.filter((r) => !r.ok)
   console.log(`\n${results.length - failed.length}/${results.length} passed · shots in ${SHOTS}`)
   process.exit(failed.length ? 1 : 0)

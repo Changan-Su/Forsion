@@ -230,6 +230,24 @@ jobs:
           test -f "$manifest" || { echo "::error::缺少 $manifest — 该发行版的更新 feed 未生成"; exit 1; }
           echo "$manifest"
 
+      - name: Packaged Extend upgrade and cloud UI acceptance
+        working-directory: desktop
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            xvfb-run -a node scripts/penzor-packaged.check.cjs
+          else
+            node scripts/penzor-packaged.check.cjs
+          fi
+
+      - name: Upload packaged cloud acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: penzor-acceptance-${{ matrix.os }}-${{ matrix.distribution }}
+          path: desktop/outputs/penzor-packaged/
+          if-no-files-found: warn
+
       - name: Upload installers
         uses: actions/upload-artifact@v4
         with:
@@ -372,6 +390,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+          pattern: forsion-*
           merge-multiple: true   # 六个桌面 artifact + APK;安装包和 feed 名均区分发行版,不互相覆盖
 
       - name: Create / update GitHub Release
