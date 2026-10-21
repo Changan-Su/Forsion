@@ -33,9 +33,9 @@ For developers: the Store gives every listing an ID that never changes. New list
 - **声明自动化事件** — 让[自动化](../spaces/automation.md)规则可以由插件的事件触发;
 - **自带 Space** — 打包一整套工作场景。
 
-每个插件自动带一个「工作文件夹」设置,指定它把产物放在哪。缺省是笔记库里的 `Plugins/<插件名>`:所有插件的产物都收在 `Plugins` 这一个文件夹下,库根目录留给你自己的笔记。带设置项的插件在**详情页**提供表单,改完即生效,不用改配置文件。
+每个插件自动带一个「工作文件夹」设置,指定它把产物放在哪。缺省是笔记库里的 `Plugins/<英文插件 ID>`:所有插件的产物都收在 `Plugins` 这一个文件夹下,库根目录留给你自己的笔记。带设置项的插件在**详情页**提供表单,改完即生效,不用改配置文件。
 
-Every plugin gets a *Working folder* setting that decides where its output goes. By default it is `Plugins/<plugin name>` inside your vault, so all plugin output sits under one `Plugins` folder and the vault root stays yours. Plugins with settings show a form on their **detail page**; changes apply immediately.
+Every plugin gets a *Working folder* setting that decides where its output goes. By default it is `Plugins/<plugin ID>` inside your vault, so all plugin output sits under one `Plugins` folder and the vault root stays yours. Plugins with settings show a form on their **detail page**; changes apply immediately.
 
 Engine plugin text settings can set `secret: true` to render a password input (including when the field type is `textarea`). This masks the UI only: values still use the existing local plugin settings store and authenticated settings API; it does not add encryption. Older hosts ignore this optional field.
 
@@ -351,6 +351,10 @@ Declare up to three `mainCompanions` on a plugin view, using native `amadeus-edi
 Local hosts may expose `ctx.app.writeFileScoped(path, text, expectedRoot, { create: true })`. The main process validates the active vault under the file lock. Stale writes reject; create-only writes return false for an existing file. Feature-detect this API; a renderer-only scope check on an older host does not provide the same guarantee.
 
 
-`ctx.app.migrateWorkFolder?(request)` performs a one-time **local** upgrade into the plugin's default `Plugins/<name>` folder. Feature-detect it. A manual work-folder preference rejects automatic migration. Supply an upgrade `id`, captured `expectedRoot`, legacy root-level `source`, default `target`, and optionally a `plan`: exact index `before`/`after` text, source text edits (`path`, `before`, `after`) and referenced nonempty `requiredFiles`. Without a plan it queries/reconciles the per-vault journal. The plugin validates its schema and refuses two populated data sets; the host validates snapshots, rejects symlinks/traversal, copies without overwriting, verifies hashes, then publishes the index under the shared text lock. Original files remain the backup. A completed journal never reimports deleted entries. Unsupported web/mobile/cloud hosts omit this API; retain an explicit recovery flow.
+`ctx.app.migrateWorkFolder?(request)` performs a one-time **local** upgrade into the plugin's default `Plugins/<plugin ID>` folder. Feature-detect it. A manual work-folder preference rejects automatic migration. Supply an upgrade `id`, captured `expectedRoot`, legacy root-level or `Plugins/<previous name>` `source`, default `target`, and optionally a `plan`: exact index `before`/`after` text, source text edits (`path`, `before`, `after`) and referenced nonempty `requiredFiles`. Without a plan it queries/reconciles the per-vault journal. The plugin validates its schema and refuses two populated data sets; the host validates snapshots, rejects symlinks/traversal, copies without overwriting, verifies hashes, then publishes the index under the shared text lock. Original files remain the backup. A completed journal never reimports deleted entries. Unsupported web/mobile/cloud hosts omit this API; retain an explicit recovery flow.
 
 `ctx.app.migrateWorkFolder?` 是本机一次升级迁移口。插件负责 schema 和路径改写，宿主负责校验、独占复制、索引比对后提交及中断恢复；原目录保留作备份。手动设置目录时拒绝自动迁移；不支持的宿主缺席此方法，插件须保留恢复入口。
+
+Default work-folder paths use the effective plugin ID, never the localized display name. External IDs already use lowercase ASCII letters, digits and hyphens (1–64 characters). Existing display-name folders remain readable for plugins without migration support. To migrate one, call `workFolder({ preferId: true })`, validate your schema and await `migrateWorkFolder` before using that target. Manual preferences always take precedence.
+
+默认目录使用稳定的英文插件 ID，不随显示名称或语言变化。未接入迁移的插件继续读取已有的显示名目录；接入者通过 `workFolder({ preferId: true })` 取得新默认目录，校验自身数据后等待迁移完成。用户手动指定的目录优先。

@@ -234,12 +234,14 @@ export interface PluginAppApi extends BlockSurfaceApi {
   onVaultEvent?(cb: (events: PluginVaultEvent[]) => void): () => void
   /** The plugin's work folder for file output, vault-relative without leading/trailing slash.
    *  Every plugin automatically gets a "工作文件夹" setting (key `workFolder`) on its detail page;
-   *  this returns that value, defaulting to `Plugins/<display name>` (since 2026-10-14; before that the default was
-   *  `<display name>` at the vault root). Never write to the vault root or invent other top-level folders: the root
+   *  this returns that value, defaulting to `Plugins/<plugin ID>` (stable ASCII, independent of display name or locale).
+   *  Existing `Plugins/<display name>` folders remain in use for compatibility. A plugin implementing
+   *  schema-aware migration can request `{ preferId: true }` to obtain the new default before migrating.
+   *  This option still respects a manual folder preference; await migration before any read or write. Never write to the vault root or invent other top-level folders: the root
    *  belongs to the user's notes. Use it as the base for
    *  readFile/writeFile paths (`${ctx.app.workFolder()}/note.md`) — folders spring into existence
    *  on first write. Older hosts lack this method: feature-check `ctx.app.workFolder` first. */
-  workFolder(): string
+  workFolder(options?: { preferId?: boolean }): string
   /** Open a file into the view registered for its file type (post-create / cross-navigation). Refreshes
    *  the tree first if the path is newly created; falls back to the OS default app for non-plugin files. */
   openFile(path: string): void

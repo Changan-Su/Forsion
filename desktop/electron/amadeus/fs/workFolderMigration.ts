@@ -80,7 +80,12 @@ export function migrateWorkFolder(vault: VaultManager, req: WorkFolderMigration,
     check()
     if (!/^[a-z0-9][a-z0-9-]{0,127}$/.test(req.id)) throw Error('Invalid migration id')
     relative(req.source); relative(req.target)
-    if (req.source.includes('/') || !req.target.startsWith('Plugins/') || req.target.split('/').length !== 2) throw Error('Invalid upgrade folders')
+    const validFolder = (folder: string): boolean => !folder.includes('/') || (folder.startsWith('Plugins/') && folder.split('/').length === 2)
+    // Windows aliases trailing dots/spaces as well as case. Reject overlap on every host.
+    const folderKey = (folder: string): string => folder.split('/').map(p => p.replace(/[ .]+$/g, '').toLowerCase()).join('/')
+    const sourceKey = folderKey(req.source), targetKey = folderKey(req.target)
+    if (!validFolder(req.source) || !req.target.startsWith('Plugins/') || req.target.split('/').length !== 2
+      || sourceKey === targetKey || sourceKey.startsWith(targetKey + '/') || targetKey.startsWith(sourceKey + '/')) throw Error('Invalid upgrade folders')
     const journalRel = `.forsion/plugin-migrations/${req.id}.json`
     const journalPath = await safePath(root, journalRel)
     const previous = await read(journalPath)

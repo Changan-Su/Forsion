@@ -103,3 +103,15 @@ it('rebases relative Markdown attachments at the new depth, preserving the origi
  expect(await fs.readFile(path.join(t.root,'Previous/Record/transcript.md'),'utf8')).toBe(note)
  expect(await fs.readFile(path.join(t.root,'Plugins/Previous/Record/transcript.md'),'utf8')).toBe('[Reference](../../../Outside.pdf)\n![Local](audio.m4a)')
 })
+
+it('migrates a previous Plugins/<display name> folder and rejects overlapping/case-only roots', async () => {
+ const t=await setup()
+ await fs.rename(path.join(t.root,'Previous'),path.join(t.root,'Plugins','旧目录'))
+ const request={...t.request,source:'Plugins/旧目录'}
+ expect((await migrateWorkFolder(t.vault,request,async(_r,f)=>f())).status).toBe('complete')
+ expect(await fs.readFile(path.join(t.root,'Plugins/Previous/Record/audio.m4a'))).toEqual(Buffer.from([0,255,1,42]))
+ expect(await fs.readFile(path.join(t.root,'Plugins/旧目录/Record/.record.json'),'utf8')).toBe('{"folder":"Previous/Record"}')
+ for(const source of ['Plugins','Plugins/Previous','Plugins/previous','Plugins/Previous.','Plugins/Previous ','Plugins/旧目录/nested']) {
+  await expect(migrateWorkFolder(t.vault,{...request,id:'overlap',source},async(_r,f)=>f())).rejects.toThrow('folders')
+ }
+})
