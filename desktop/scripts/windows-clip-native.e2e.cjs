@@ -10,6 +10,11 @@ const { startStubEngine } = require('./lib/stub-engine.cjs')
 const { skipOnboarding } = require('./lib/skip-onboarding.cjs')
 const run = promisify(execFile), sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 const ROOT = path.resolve(__dirname, '..'), ID = 'gpajikakdmhjebadgcbmhidkkajclfoi'
+async function until(name, condition, timeout=15000) {
+  const end=Date.now()+timeout
+  while(Date.now()<end){if(await condition())return;await sleep(100)}
+  throw new Error(name)
+}
 async function main() {
   if (process.platform !== 'win32' || process.env.GITHUB_ACTIONS !== 'true') throw new Error('Native Clip check requires a dedicated GitHub Actions Windows desktop')
   const output = path.join(ROOT, 'outputs/windows-clip-native'); fs.mkdirSync(output, { recursive: true })
@@ -41,20 +46,29 @@ async function main() {
     await settings.locator('.settings-main').waitFor()
     if (!await chip.isVisible()) await settings.locator('.settings-nav-parent > button', { hasText: /^(浏览器控制|Browser control)$/ }).click()
     await chip.waitFor({ timeout: 30000 })
+    const id = await app.evaluate(({ BrowserWindow }, url) => BrowserWindow.getAllWindows().find(w => w.webContents.getURL() === url)?.id, settings.url())
+    const nativeClick = async locator => {
+      await locator.scrollIntoViewIfNeeded(); await settings.bringToFront()
+      const box=await locator.boundingBox()
+      const geo=await app.evaluate(({BrowserWindow},id)=>{const w=BrowserWindow.fromId(id);return {bounds:w.getContentBounds(),zoom:w.webContents.getZoomFactor()}},id)
+      await desktop('click',['-FromX',String(Math.round(geo.bounds.x+(box.x+box.width/2)*geo.zoom)),'-FromY',String(Math.round(geo.bounds.y+(box.y+box.height/2)*geo.zoom))])
+    }
     const copied = await settings.evaluate(() => window.tangu.clipExtension.prepare(false)); copyDir = copied.dir
     check('settings prepares the actual bundled extension in the isolated profile', copyDir?.startsWith(home + path.sep) && fs.existsSync(path.join(copyDir, 'manifest.json')), copied)
     check('settings displays exactly the prepared copy path', (await settings.locator('.settings-browser-ext-panel').innerText()).includes(copyDir))
-    await settings.getByTestId('browser-extension-open-chrome').click()
+    await nativeClick(settings.getByTestId('browser-extension-open-chrome'))
+    await until('the fallback address reaches the clipboard',async()=>await app.evaluate(({clipboard})=>clipboard.readText())==='chrome://extensions')
     check('Windows fallback copies the real chrome extensions address', await app.evaluate(({ clipboard }) => clipboard.readText()) === 'chrome://extensions')
-    check('the fallback prompt is visible', /paste|粘贴/i.test(await settings.locator('.settings-browser-ext-panel').innerText()))
-    await settings.getByRole('button', { name: /^(Copy path|复制路径)$/ }).click()
+    await settings.getByTestId('browser-extension-open-note').waitFor()
+    check('the fallback prompt is visible', /Copied the address\. Paste it into the Chrome address bar\.|地址已复制/.test(await settings.getByTestId('browser-extension-open-note').innerText()))
+    await nativeClick(settings.getByRole('button', { name: /^(Copy path|复制路径)$/ }))
+    await until('Copy path reaches the real clipboard',async()=>await app.evaluate(({clipboard})=>clipboard.readText())===copyDir)
     check('Copy path writes the exact extension directory', await app.evaluate(({ clipboard }) => clipboard.readText()) === copyDir)
-    await settings.getByRole('button', { name: /^(Open extension folder|打开扩展文件夹)$/ }).click()
+    await nativeClick(settings.getByRole('button', { name: /^(Open extension folder|打开扩展文件夹)$/ }))
     let explorer
     for (let i=0;i<20;i++) { explorer = JSON.parse(await desktop('explorer', ['-Path', copyDir])); if(explorer.found) break; await sleep(300) }
     check('Open folder creates a real Explorer window at the copied directory', explorer?.found, explorer)
     await desktop('explorer', ['-Path', copyDir, '-Close'])
-    const id = await app.evaluate(({ BrowserWindow }, url) => BrowserWindow.getAllWindows().find(w => w.webContents.getURL() === url)?.id, settings.url())
     const work = await app.evaluate(({ screen }) => screen.getPrimaryDisplay().workArea)
     const leftWidth = Math.min(780, Math.round(work.width * 0.55))
     await app.evaluate(({ BrowserWindow }, { id, work, leftWidth }) => {
@@ -62,12 +76,22 @@ async function main() {
       if(parent) parent.hide()
       window.setMinimumSize(500,400); window.setBounds({x:work.x,y:work.y,width:leftWidth,height:work.height}); window.show(); window.focus()
     }, {id,work,leftWidth})
-    browser = await chromium.launchPersistentContext(path.join(home, 'chrome'), { headless: false, viewport: null, locale: 'en-US',
+    browser = await chromium.launchPersistentContext(path.join(home, 'chrome'), { headless: false, viewport: null, locale: 'en-US', ignoreDefaultArgs: ['--disable-extensions'],
       args: ['--lang=en-US', '--no-first-run', '--no-default-browser-check', '--proxy-server=http://127.0.0.1:9', '--proxy-bypass-list=<-loopback>', `--window-position=${work.x+leftWidth},${work.y}`, `--window-size=${work.width-leftWidth},${work.height}`] })
     const page = browser.pages()[0]; await page.goto('chrome://extensions')
+    await page.evaluate(()=>{
+      window.__clipNativeDrops=[]
+      document.addEventListener('drop',event=>window.__clipNativeDrops.push({trusted:event.isTrusted,types:Array.from(event.dataTransfer?.types||[]),names:Array.from(event.dataTransfer?.files||[],file=>file.name)}),{capture:true,passive:true})
+    })
+    await app.evaluate(({ipcMain})=>{
+      globalThis.__clipNativeDragRequests=[]
+      ipcMain.on('fs:startDrag',(_event,file)=>globalThis.__clipNativeDragRequests.push(file))
+    })
     const info = () => page.evaluate(() => chrome.developerPrivate.getExtensionsInfo({includeDisabled:true,includeTerminated:true}))
     const dev = enabled => page.evaluate(enabled => chrome.developerPrivate.updateProfileConfiguration({inDeveloperMode:enabled}),enabled)
     const drag = async () => {
+      const requestsBefore=await app.evaluate(()=>globalThis.__clipNativeDragRequests.length)
+      const dropsBefore=await page.evaluate(()=>window.__clipNativeDrops.length)
       await chip.scrollIntoViewIfNeeded(); await settings.bringToFront(); await sleep(400)
       const box=await chip.boundingBox()
       const geo=await app.evaluate(({BrowserWindow},id)=>{const w=BrowserWindow.fromId(id);return {bounds:w.getContentBounds(),zoom:w.webContents.getZoomFactor()}},id)
@@ -76,6 +100,11 @@ async function main() {
       fs.writeFileSync(path.join(output,'drag-points.json'),JSON.stringify({from,to,work,box,geo},null,2))
       await desktop('drag',['-FromX',String(from.x),'-FromY',String(from.y),'-ToX',String(to.x),'-ToY',String(to.y)])
       await sleep(1800)
+      const requests=await app.evaluate(()=>globalThis.__clipNativeDragRequests)
+      const drops=await page.evaluate(()=>window.__clipNativeDrops)
+      fs.writeFileSync(path.join(output,`drop-${dropsBefore}.json`),JSON.stringify({requests,drops},null,2))
+      check('each attempt starts a real native Electron folder drag',requests.length===requestsBefore+1&&requests.at(-1)===copyDir,requests)
+      check('each native drag reaches the Chrome page as a trusted folder drop',drops.length===dropsBefore+1&&drops.at(-1).trusted&&drops.at(-1).types.includes('Files')&&drops.at(-1).names.includes(path.basename(copyDir)),drops)
     }
     await dev(false); await drag()
     check('native folder drag with developer mode off does not install Clip', !(await info()).some(e=>e.id===ID))

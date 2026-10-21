@@ -1,4 +1,4 @@
-param([ValidateSet('drag','picker','explorer','capture')] [string]$Action,
+param([ValidateSet('click','drag','picker','explorer','capture')] [string]$Action,
   [string]$Path, [int]$FromX, [int]$FromY, [int]$ToX, [int]$ToY, [switch]$Close)
 $ErrorActionPreference = 'Stop'
 if ($env:GITHUB_ACTIONS -ne 'true') { throw 'Native Clip probe requires a dedicated GitHub Actions desktop' }
@@ -32,8 +32,10 @@ public static class ClipDesktopInput {
       System.Threading.Thread.Sleep(300);
     } finally { Send(4); }
   }
+  public static void Click(int x,int y) { Move(x,y); System.Threading.Thread.Sleep(80); Send(2); Send(4); }
 }
 '@
+if ($Action -eq 'click') { [ClipDesktopInput]::Click($FromX,$FromY); exit }
 if ($Action -eq 'drag') { [ClipDesktopInput]::Drag($FromX,$FromY,$ToX,$ToY); exit }
 if ($Action -eq 'picker') {
   $dialog = [IntPtr]::Zero
