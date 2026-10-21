@@ -367,12 +367,24 @@ type CalloutState = { srcAt: number | null; animations: { at: number; id: number
 type CalloutMeta = { srcAt?: number | null; foldStart?: { at: number; id: number }; foldEnd?: number }
 export const calloutKey = new PluginKey<CalloutState>('amadeus-callout-src')
 
-/** 在宿主的结构源码/通用引用键位之前处理折叠标题，避免退格删坏隐藏令牌。 */
+/** 在宿主的结构源码/通用引用键位之前处理折叠块，保护标题令牌与正文归属。 */
 export function handleFoldKeyDown(view: EditorView, event: KeyboardEvent): boolean {
   if (!view.editable || event.isComposing) return false
   const { state } = view
   const c = calloutAt(state.selection.$from)
-  if (!c || c.type !== 'fold' || !c.inHead || calloutKey.getState(state)?.srcAt === c.bqPos) return false
+  if (!c || c.type !== 'fold' || calloutKey.getState(state)?.srcAt === c.bqPos) return false
+  if (!c.inHead) {
+    const { $from, empty } = state.selection
+    // 标题回车产生的空正文后面还有原内容时，base liftEmptyBlock 会把 blockquote 拆成两只，
+    // 后半只剩普通引用。此处按正文换段；只有最后一个空段才交回原路退出折叠。
+    // 必须是折叠的直接子段落：列表、嵌套普通引用仍使用它们自己的退出语义。
+    if (event.key !== 'Enter' || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey
+      || !empty || $from.parent.type.name !== 'paragraph' || $from.parent.content.size !== 0
+      || $from.node($from.depth - 1) !== c.node
+      || $from.index($from.depth - 1) === c.node.childCount - 1) return false
+    view.dispatch(state.tr.split($from.pos).scrollIntoView())
+    return true
+  }
   const start = c.hidden[c.hidden.length - 1][1]
   if (event.key === 'Home' || (event.key === 'ArrowLeft' && event.metaKey)) {
     view.dispatch(state.tr.setSelection(TextSelection.create(state.doc, event.shiftKey ? Math.max(start, state.selection.anchor) : start, start)))
