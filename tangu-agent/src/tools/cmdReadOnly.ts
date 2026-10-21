@@ -67,8 +67,16 @@ export function pinSystemFindstr(command: string): string {
   const executable = systemFindstr();
   const parts = splitCmd(command);
   if (!executable || !parts || !parts.some((p) => /^findstr(?:\.exe)?(?= |$)/i.test(p.text))) return command;
-  return parts.map(({ text, separator }) => text.replace(/^findstr(?:\.exe)?(?= |$)/i, `"${executable}"`) +
-    (separator ? ` ${separator} ` : '')).join('');
+  let prepared = command;
+  // Replace only executable spans, from right to left. In cmd, even whitespace before & can be data
+  // (`set X=value&...`): rebuilding the whole command would change an explicitly approved script.
+  for (const part of [...parts].reverse()) {
+    const match = /^findstr(?:\.exe)?(?= |$)/i.exec(part.text);
+    if (!match) continue;
+    const at = part.start + command.slice(part.start).search(/\S/);
+    prepared = prepared.slice(0, at) + `"${executable}"` + prepared.slice(at + match[0].length);
+  }
+  return prepared;
 }
 
 function systemFindstr(): string | null {
@@ -77,19 +85,19 @@ function systemFindstr(): string | null {
   return path.win32.join(root, 'System32', 'findstr.exe');
 }
 
-function splitCmd(command: string): { text: string; separator: string }[] | null {
-  const parts: { text: string; separator: string }[] = [];
+function splitCmd(command: string): { text: string; separator: string; start: number }[] | null {
+  const parts: { text: string; separator: string; start: number }[] = [];
   let quoted = false, start = 0;
   for (let i = 0; i < command.length; i++) {
     if (command[i] === '"') quoted = !quoted;
     if (command[i] !== '&' || quoted) continue;
     const separator = command[i + 1] === '&' ? '&&' : '&';
-    parts.push({ text: command.slice(start, i).trim(), separator });
+    parts.push({ text: command.slice(start, i).trim(), separator, start });
     i += separator.length - 1;
     start = i + 1;
   }
   if (quoted || parts.length > 31) return null;
-  parts.push({ text: command.slice(start).trim(), separator: '' });
+  parts.push({ text: command.slice(start).trim(), separator: '', start });
   return parts;
 }
 

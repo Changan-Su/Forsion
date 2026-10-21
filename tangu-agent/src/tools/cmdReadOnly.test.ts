@@ -31,6 +31,10 @@ describe('Windows read shortcut', () => {
   });
 
   it('preserves approved scripts containing escaped operators or a different shell', () => {
+    expect(pinSystemFindstr('set X=value&findstr text notes.md'))
+      .toBe('set X=value&"C:\\Windows\\System32\\findstr.exe" text notes.md');
+    expect(pinSystemFindstr('  findstr text a.md&&findstr text b.md  '))
+      .toBe('  "C:\\Windows\\System32\\findstr.exe" text a.md&&"C:\\Windows\\System32\\findstr.exe" text b.md  ');
     for (const command of ['echo hi^&findstr text notes.md', 'echo literal^&del victim.txt & findstr text notes.md', 'echo ok && (findstr text notes.md)', 'dir | findstr text']) {
       expect(pinSystemFindstr(command)).toBe(command);
     }
@@ -89,6 +93,10 @@ describe.skipIf(process.platform !== 'win32')('Windows shell execution', () => {
       }, { cwd } as any);
       expect(result).toContain('[feedback] approved');
       expect(result).toContain('exit_code: 0');
+      const script = await HOST_TOOLS.run_bash.execute({
+        command: 'set MUSE_READ_VALUE=value&findstr /l /c:"[feedback]" Space\\notes.md&set MUSE_READ_VALUE',
+      }, { cwd } as any);
+      expect(script).toMatch(/MUSE_READ_VALUE=value\r?\n/);
       const { existsSync } = await import('node:fs');
       expect(existsSync(path.join(cwd, 'Space', 'hijacked.txt'))).toBe(false);
     } finally { rmSync(cwd, { recursive: true, force: true }); }
