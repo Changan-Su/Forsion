@@ -365,6 +365,6 @@ A status-only request may target the plugin's previous display-name default to r
 
 ### 个人日历（Desktop 2.13.6+）
 
-同时声明 `databases` 与 `calendar` 的插件，在本机引擎提供个人日历时，会收到 `human://CALENDAR.db`。日历成员把它排第一并隐藏旧智库镜像。把该不透明引用原样传给 `ctx.databases` 和 `ctx.ui.mountRecord`，不要交给文件系统 API。只有 `databases` 能力的插件不可访问；无此来源的远程或移动宿主不列出。写入复用宿主 CAS 与冲突重放。
+同时声明 `databases` 与 `calendar` 的插件，在本机引擎提供个人日历时，会收到 `human://CALENDAR.db`。日历成员把它排第一并隐藏旧智库镜像。把该不透明引用原样传给 `ctx.databases`、`ctx.ui.mountRecord` 和用于表结构/名称的 `ctx.app.mutateDb`，不要交给文件系统读写 API。成员与日期/完成列映射由宿主管理，`setMember` / `removeMember` 返回 false；隐藏用 `setHidden`。只有 `databases` 能力的插件不可访问；无此来源的远程或移动宿主不列出。写入复用宿主 CAS 与冲突重放。
 
-Plugins with both `databases` and `calendar` capabilities receive the exact `human://CALENDAR.db` reference when the local engine provides it. Calendar members put it first and hide its old vault mirror. Pass this opaque reference unchanged to `ctx.databases` and `ctx.ui.mountRecord`, never filesystem APIs. Database-only plugins cannot access it; hosts without this source omit it. Writes retain host CAS and replay.
+Plugins with both `databases` and `calendar` capabilities receive the exact `human://CALENDAR.db` reference when the local engine provides it. Calendar members put it first and hide its old vault mirror. Pass this opaque reference unchanged to `ctx.databases`, `ctx.ui.mountRecord`, and `ctx.app.mutateDb` for schema/name changes, never filesystem read/write APIs. Database-only plugins cannot access it; hosts without this source omit it. Writes retain host CAS and replay.
