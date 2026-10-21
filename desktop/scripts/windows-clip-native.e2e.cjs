@@ -19,7 +19,7 @@ async function main() {
   const stub = await startStubEngine({ handle: ({ path: p }) => p === '/agent/browser-extension' ? status : undefined })
   for (const dir of [userData, userData + '-dev']) {
     fs.mkdirSync(dir, { recursive: true })
-    fs.writeFileSync(path.join(dir, 'tangu-desktop-config.json'), JSON.stringify({ mode: 'external', backendUrl: stub.url, token: 'e2e', cloudUrl: 'http://127.0.0.1:9', browserEnabled: false, unitHostEnabled: false }))
+    fs.writeFileSync(path.join(dir, 'tangu-desktop-config.json'), JSON.stringify({ mode: 'managed', backendUrl: stub.url, token: 'e2e', cloudUrl: 'http://127.0.0.1:9', browserEnabled: false, unitHostEnabled: false }))
   }
   let app, browser, settings, copyDir
   const checks = []
@@ -27,7 +27,13 @@ async function main() {
   try {
     app = await electron.launch({ args: [`--user-data-dir=${userData}`, '--lang=en-US', ROOT], cwd: ROOT,
       env: { ...process.env, FORSION_TEST_DESKTOP: '', TANGU_HARNESS_QUIET: '0', TANGU_HOME: home, TANGU_BACKEND_URL: stub.url } })
-    const win = await app.firstWindow(); await skipOnboarding(win)
+    const win = await app.firstWindow()
+    await app.context().route('**/agent/**', route => {
+      const url = new URL(route.request().url())
+      return route.continue({ url: stub.url + url.pathname + url.search })
+    })
+    check('the real main window exits onboarding', await skipOnboarding(win))
+    await win.waitForFunction(async () => (await window.tangu.getConfig()).backendState?.state === 'ready', null, {timeout:60000})
     const opened = app.waitForEvent('window')
     await win.evaluate(() => window.tangu.openFloatingPanel({ id: 'settings', title: 'Settings', builtin: 'settings', params: { tab: 'browser', nonce: Date.now() } }))
     settings = await opened

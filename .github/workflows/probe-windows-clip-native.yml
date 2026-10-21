@@ -23,6 +23,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm ci --prefix desktop --no-audit --no-fund
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run build --prefix tangu-agent
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run build --prefix desktop
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node desktop/node_modules/playwright-core/cli.js install chromium
