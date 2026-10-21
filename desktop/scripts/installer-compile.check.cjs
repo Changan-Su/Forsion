@@ -16,7 +16,7 @@ async function main() {
   if (runtime && (process.platform !== 'win32' || process.env.GITHUB_ACTIONS !== 'true' || !process.env.RUNNER_TEMP)) {
     throw new Error('Running installers requires a disposable Windows Actions runner');
   }
-  const dir = mkdtempSync(join(tmpdir(), 'forsion-installer-check-'));
+  const dir = mkdtempSync(join(runtime ? process.env.RUNNER_TEMP : tmpdir(), 'forsion-installer-check-'));
   if (runtime && !resolve(dir).toLowerCase().startsWith(resolve(process.env.RUNNER_TEMP).toLowerCase() + require('node:path').sep)) throw new Error('Fixture escaped RUNNER_TEMP');
   const templates = resolve(require.resolve('app-builder-lib/package.json'), '..', 'templates/nsis');
   const [compiler, plugins] = await Promise.all([getMakeNsisPath(), getNsisPluginsPath()]);
