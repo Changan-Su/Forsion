@@ -11,7 +11,7 @@ permissions:
 jobs:
   native-clip:
     runs-on: windows-2022
-    timeout-minutes: 20
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -34,6 +34,22 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force outputs/windows-clip-native | Out-Null
           node scripts/clip-native-windows.e2e.cjs 2>&1 | Tee-Object -FilePath outputs/windows-clip-native/run.log
+          exit $LASTEXITCODE
+      - name: Package the genuine Windows application directory
+        working-directory: desktop
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          npm run build:unitweb
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npx electron-builder --config electron-builder.config.cjs --win --x64 --dir --publish never --config.directories.output=outputs/clip-package
+          exit $LASTEXITCODE
+      - name: Verify the packaged APPDATA copy and native installation
+        working-directory: desktop
+        run: |
+          $env:FORSION_CLIP_NATIVE_EXE = Join-Path $PWD 'outputs/clip-package/win-unpacked/Forsion.exe'
+          if (!(Test-Path -LiteralPath $env:FORSION_CLIP_NATIVE_EXE)) { throw 'Actual packaged executable is missing' }
+          node scripts/clip-native-windows.e2e.cjs 2>&1 | Tee-Object -FilePath outputs/windows-clip-native/packaged-run.log
           exit $LASTEXITCODE
       - uses: actions/upload-artifact@v4
         if: always()

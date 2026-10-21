@@ -110,12 +110,17 @@ async function main() {
     }, {id,work,leftWidth})
     browser = await chromium.launchPersistentContext(path.join(home, 'chrome'), { headless: false, viewport: null, locale: 'en-US', ignoreDefaultArgs: ['--disable-extensions'],
       args: ['--lang=en-US', '--no-first-run', '--no-default-browser-check', '--proxy-server=http://127.0.0.1:9', '--proxy-bypass-list=<-loopback>', `--window-position=${work.x+work.width-chromeWidth},${work.y}`, `--window-size=${chromeWidth},${work.height}`] })
-    const page = browser.pages()[0]; await page.goto('chrome://extensions')
+    let page = browser.pages()[0]; await page.goto('chrome://extensions')
     fs.writeFileSync(path.join(output,'chrome.json'),JSON.stringify({version:browser.browser().version()},null,2))
-    await page.evaluate(()=>{
+    const observeDrops = () => page.evaluate(()=>{
       window.__clipNativeDrops=[]
-      for(const type of ['dragenter','dragover','drop']) document.addEventListener(type,event=>window.__clipNativeDrops.push({type,trusted:event.isTrusted,types:Array.from(event.dataTransfer?.types||[]),names:Array.from(event.dataTransfer?.files||[],file=>file.name)}),{capture:true,passive:true})
+      for(const type of ['dragenter','dragover','dragleave','drop']) document.addEventListener(type,event=>{
+        const entry={type,trusted:event.isTrusted,types:Array.from(event.dataTransfer?.types||[]),names:Array.from(event.dataTransfer?.files||[],file=>file.name),target:event.target.tagName,time:performance.now()}
+        window.__clipNativeDrops.push(entry)
+        queueMicrotask(()=>{entry.defaultPrevented=event.defaultPrevented;entry.dragTarget=document.documentElement.classList.contains('drag-target')})
+      },{capture:true,passive:true})
     })
+    await observeDrops()
     await app.evaluate(({ipcMain})=>{
       globalThis.__clipNativeDragRequests=[]
       ipcMain.on('fs:startDrag',(_event,file)=>globalThis.__clipNativeDragRequests.push(file))
@@ -166,6 +171,12 @@ async function main() {
     await dev(false); await drag(false)
     check('native folder drag with developer mode off does not install Clip', !(await info()).some(e=>e.id===ID))
     await page.screenshot({path:path.join(output,'developer-off.png')})
+    // The rejected OS drop opens a separate file tab. Start the positive case
+    // with a fresh WebContents so its first dragenter is independently observed.
+    // Keep the rejected-case event trace rather than mutating Chrome's handler.
+    fs.writeFileSync(path.join(output,'developer-off-final-events.json'),JSON.stringify(await page.evaluate(()=>window.__clipNativeDrops),null,2))
+    const rejectedPage=page
+    page=await browser.newPage(); await page.goto('chrome://extensions'); await observeDrops(); await rejectedPage.close()
     await dev(true); await drag(true)
     let installed
     for(let i=0;i<30;i++){ installed=(await info()).find(e=>e.id===ID);if(installed)break;await sleep(300) }
@@ -189,6 +200,7 @@ async function main() {
     if(browser)await browser.close().catch(()=>{})
     if(app) {
       const child=app.process()
+      await app.context().unrouteAll({behavior:'ignoreErrors'}).catch(()=>{})
       await Promise.race([app.close().catch(()=>{}),sleep(8000)])
       if(child.exitCode===null) await run('taskkill.exe',['/PID',String(child.pid),'/T','/F'],{windowsHide:true,timeout:10000}).catch(()=>{})
     }
