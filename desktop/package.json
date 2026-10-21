@@ -307,6 +307,7 @@
     "check:streamrenew": "node scripts/stream-renew.check.cjs",
     "check:phonedist": "node scripts/lib/phone-dist-stamp.selftest.cjs",
     "check:unitswitcher": "node scripts/unit-switcher.check.cjs",
+    "check:device-sidebar": "node scripts/e2e-editor.cjs --check=device-sidebar",
     "e2e:unitsettings": "node scripts/unit-settings.e2e.cjs",
     "e2e:unitpublic": "npx tsx scripts/unit-public-extend.e2e.ts",
     "check:secrets": "node scripts/device-secrets.e2e.cjs",
