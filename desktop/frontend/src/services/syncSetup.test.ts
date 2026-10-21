@@ -226,3 +226,18 @@ describe('first sign-in card', () => {
     expect(wantsSyncCard({ ...snap, notes: { ...snap.notes, on: true }, agents: { on: true, count: 2 }, plugins: { on: true, count: 1 } }, true)).toBe(false)
   })
 })
+
+it('unified storage is notice-only, cached per account, and never blocks starting sync', async () => {
+  const fetch = (window as any).tangu.cloudFetch
+  const cloud = vi.fn(async (o: { path: string }) => o.path === '/storage/ledger' ? { status: 200, json: {
+    schemaVersion: 1, complete: true, usage: { usedBytes: 100 }, quota: { limitBytes: 1 }, asOf: '2026-10-21T00:00:00Z',
+  } } : fetch(o))
+  ;(window as any).tangu.cloudFetch = cloud
+  const s = await fresh(); await s.refreshSync(); await s.refreshSync()
+  expect(s.getSync()?.storage).toMatchObject({ usedBytes: 100, limitBytes: 1, complete: true })
+  expect(cloud.mock.calls.filter(c => c[0].path === '/storage/ledger')).toHaveLength(1)
+  expect((await s.setSync('notes', true)).ok).toBe(true)
+  ;(window as any).tangu.authStatus = async () => ({ loggedIn: true, accountId: 'other' })
+  await s.refreshSync()
+  expect(cloud.mock.calls.filter(c => c[0].path === '/storage/ledger')).toHaveLength(2)
+})
