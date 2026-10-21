@@ -1,4 +1,4 @@
-param([ValidateSet('drag','activate','capture','fixture','click','hotkey')] [string]$Action,
+param([ValidateSet('drag','activate','capture','fixture','click','hotkey','foreground')] [string]$Action,
   [string]$Window, [int]$X, [int]$Y, [int]$Dx, [int]$Dy, [string]$Path)
 $ErrorActionPreference='Stop'
 if ($env:GITHUB_ACTIONS -ne 'true') { throw 'Native Mini input is restricted to a dedicated GitHub runner' }
@@ -20,6 +20,7 @@ public static class MiniNativeInput {
   [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h,out Rect r);
   [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h,int command);
+  [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr h,IntPtr after,int x,int y,int width,int height,uint flags);
   delegate bool EnumWindow(IntPtr h,IntPtr parameter);
   [DllImport("user32.dll")] static extern bool EnumWindows(EnumWindow callback,IntPtr parameter);
   [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h,out uint pid);
@@ -47,6 +48,10 @@ public static class MiniNativeInput {
     return p;
   }
   public static void Activate(long window) {
+    ShowWindow(new IntPtr(window),9);
+    // Expose the owned fixture's caption before the physical click. Showing
+    // Forsion in the main panel may have covered Notepad since the last case.
+    if(!SetWindowPos(new IntPtr(window),IntPtr.Zero,0,0,0,0,0x13)) throw new Exception("Cannot expose owned fixture caption");
     var h=new IntPtr(window); Rect r; var origin=Resolve(window,0,0);
     if(!GetWindowRect(h,out r)||origin.y<=r.t) throw new Exception("Expected owned native caption");
     Move(r.l+40,r.t+(origin.y-r.t)/2); Send(2); Send(4);
@@ -66,6 +71,7 @@ public static class MiniNativeInput {
     var p=Resolve(window,x,y);Move(p.x,p.y);System.Threading.Thread.Sleep(100);
     Send(2);System.Threading.Thread.Sleep(40);Send(4);
   }
+  public static bool IsForeground(long window) {return GetForegroundWindow()==new IntPtr(window);}
 }
 '@
 if ($Action -eq 'fixture') {
@@ -83,6 +89,7 @@ if ($Action -eq 'fixture') {
 if ($Action -eq 'activate') { [MiniNativeInput]::Activate([long]::Parse($Window)) }
 if ($Action -eq 'drag') { [MiniNativeInput]::Drag([long]::Parse($Window),$X,$Y,$Dx,$Dy) }
 if ($Action -eq 'click') { [MiniNativeInput]::Click([long]::Parse($Window),$X,$Y) }
+if ($Action -eq 'foreground') { [MiniNativeInput]::IsForeground([long]::Parse($Window)) }
 if ($Action -eq 'hotkey') {
   [MiniNativeInput]::Activate([long]::Parse($Window))
   [System.Windows.Forms.SendKeys]::SendWait('^+m')

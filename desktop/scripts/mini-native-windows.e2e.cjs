@@ -38,7 +38,7 @@ async function main() {
     fs.writeFileSync(path.join(output,'foreground-fixture.json'),JSON.stringify(fixture,null,2))
     const geometry=()=>app.evaluate(({BrowserWindow})=>{
       const w=BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().includes('window=mini'))
-      return {bounds:w.getContentBounds(),hwnd:w.getNativeWindowHandle().readBigUInt64LE().toString(),zoom:w.webContents.getZoomFactor(),focused:w.isFocused()}
+      return {bounds:w.getContentBounds(),hwnd:w.getNativeWindowHandle().readBigUInt64LE().toString(),zoom:w.webContents.getZoomFactor(),focused:w.isFocused(),visible:w.isVisible()}
     })
     const place=async(width=340,height=340)=>{
       await app.evaluate(({BrowserWindow},b)=>{
@@ -112,7 +112,8 @@ async function main() {
     await nativeClick(showMain)
     await win.waitForFunction(()=>!!document.querySelector('.amx-todo'))
     check('native main-panel button receives a trusted click',await mini.evaluate(label=>window.__miniControlClicks.some(e=>e.trusted&&e.label===label),showLabel))
-    check('native main-panel button opens the exact ToDo surface',await win.locator('.amx-todo').count()>0)
+    const mainForeground=(await native('foreground',['-Window',receipt.main])).stdout.trim()==='True'
+    check('native main-panel button focuses the visible exact ToDo surface',mainForeground&&await win.locator('.amx-todo').first().isVisible())
     const kept=(await geometry()).bounds
     await nativeClick(mini.locator('.mini-card-close'))
     for(let i=0;i<60&&!mini.isClosed();i++)await pause(50)
@@ -121,8 +122,8 @@ async function main() {
     for(let i=0;i<200;i++){mini=app.windows().find(w=>w.url().includes('window=mini'));if(mini)break;await pause(50)}
     assert.ok(mini,'Native global shortcut reopens Mini')
     await mini.locator('.mini-todo .amx-todo').waitFor()
-    const reopened=(await geometry()).bounds
-    check('native Ctrl Shift M reopens the real Mini from another app',!!mini&&!mini.isClosed())
+    const reopenedGeometry=await geometry(),reopened=reopenedGeometry.bounds
+    check('native Ctrl Shift M visibly reopens the real Mini from another app',!!mini&&!mini.isClosed()&&reopenedGeometry.visible,reopenedGeometry)
     check('native close and shortcut reopen retain the exact resized dimensions',kept.width===reopened.width&&kept.height===reopened.height,{kept,reopened})
     fs.writeFileSync(path.join(output,'native-reopen.json'),JSON.stringify({kept,reopened},null,2))
     await mini.screenshot({path:path.join(output,'native-reopened.png')})
