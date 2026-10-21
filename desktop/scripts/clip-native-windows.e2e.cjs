@@ -199,10 +199,8 @@ async function main() {
     check('independent picker profile starts without Clip',!(await info()).some(e=>e.id===ID))
     stage('open native folder picker')
     await page.bringToFront()
-    const pickerClick=page.getByRole('button',{name:'Load unpacked',exact:true}).click()
     stage('select the actual directory in native picker')
-    await desktop('picker',['-Path',copyDir])
-    await pickerClick
+    await Promise.all([page.getByRole('button',{name:'Load unpacked',exact:true}).click(),desktop('picker',['-Path',copyDir])])
     for(let i=0;i<30;i++){ installed=(await info()).find(e=>e.id===ID);if(installed)break;await sleep(300) }
     check('native Load unpacked folder picker independently installs the copy',installed?.location==='UNPACKED' && installed?.state==='ENABLED' && sameCopy(installed?.path),installed)
     await page.screenshot({path:path.join(output,'native-picker-installed.png')})

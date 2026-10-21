@@ -6,6 +6,9 @@ on:
       - '.github/workflows/probe-windows-clip-native.yml'
       - 'desktop/scripts/clip-native-windows.e2e.cjs'
       - 'desktop/scripts/lib/windows-clip-desktop.ps1'
+      - 'desktop/electron/clipExtension*'
+      - 'desktop/frontend/src/components/BrowserExtensionPanel*'
+      - 'desktop/package*.json'
 permissions:
   contents: read
 jobs:
