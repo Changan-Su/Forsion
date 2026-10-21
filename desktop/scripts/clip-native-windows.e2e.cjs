@@ -111,8 +111,9 @@ async function main() {
       window.setMinimumSize(500,400); window.setBounds({x:work.x,y:work.y,width:leftWidth,height:work.height}); window.show(); window.focus()
     }, {id,work,leftWidth})
     stage('launch Chrome')
-    browser = await chromium.launchPersistentContext(path.join(home, 'chrome'), { headless: false, viewport: null, locale: 'en-US', ignoreDefaultArgs: ['--disable-extensions'],
+    const launchChrome = profile => chromium.launchPersistentContext(path.join(home, profile), { headless: false, viewport: null, locale: 'en-US', ignoreDefaultArgs: ['--disable-extensions'],
       args: ['--lang=en-US', '--no-first-run', '--no-default-browser-check', '--proxy-server=http://127.0.0.1:9', '--proxy-bypass-list=<-loopback>', `--window-position=${work.x+work.width-chromeWidth},${work.y}`, `--window-size=${chromeWidth},${work.height}`] })
+    browser = await launchChrome('chrome-drag')
     let page = browser.pages()[0]; await page.goto('chrome://extensions')
     fs.writeFileSync(path.join(output,'chrome.json'),JSON.stringify({version:browser.browser().version()},null,2))
     const observeDrops = () => page.evaluate(()=>{
@@ -188,14 +189,20 @@ async function main() {
     for(let i=0;i<30;i++){ installed=(await info()).find(e=>e.id===ID);if(installed)break;await sleep(300) }
     await desktop('capture',['-Path',path.join(output,'native-drop.png')])
     check('real Electron native folder drag installs Clip as unpacked in Chrome', installed?.location==='UNPACKED' && installed?.state==='ENABLED' && sameCopy(installed?.path), installed)
-    stage('uninstall before native picker')
-    await page.evaluate(id=>chrome.management.uninstall(id,{showConfirmDialog:false}),ID)
-    for(let i=0;i<30 && (await info()).some(e=>e.id===ID);i++) await sleep(200)
-    check('Clip is removed before independent native picker verification',!(await info()).some(e=>e.id===ID))
+    // A new browser profile makes the picker a genuinely independent install.
+    // Chrome still prompts on management.uninstall(false), which is unrelated
+    // to the installation paths under test and would leave a native modal open.
+    stage('launch independent native picker profile')
+    await browser.close()
+    browser = await launchChrome('chrome-picker')
+    page=browser.pages()[0]; await page.goto('chrome://extensions'); await dev(true)
+    check('independent picker profile starts without Clip',!(await info()).some(e=>e.id===ID))
     stage('open native folder picker')
-    await page.getByRole('button',{name:'Load unpacked',exact:true}).click()
+    await page.bringToFront()
+    const pickerClick=page.getByRole('button',{name:'Load unpacked',exact:true}).click()
     stage('select the actual directory in native picker')
     await desktop('picker',['-Path',copyDir])
+    await pickerClick
     for(let i=0;i<30;i++){ installed=(await info()).find(e=>e.id===ID);if(installed)break;await sleep(300) }
     check('native Load unpacked folder picker independently installs the copy',installed?.location==='UNPACKED' && installed?.state==='ENABLED' && sameCopy(installed?.path),installed)
     await page.screenshot({path:path.join(output,'native-picker-installed.png')})
