@@ -234,7 +234,9 @@ async function main() {
         await page.waitForFunction(() => document.title === 'Before Forsion')
         assert.equal(errors.length, 0, errors.join('\n'))
       })
-      await ctx.unrouteAll({ behavior: 'wait' })
+      // Assertions are complete. Pending polling responses can race context
+      // teardown and report "Route is already handled" after unrouting.
+      await ctx.unrouteAll({ behavior: 'ignoreErrors' })
       await ctx.close()
     }
     // Tablet (Pad A2 × the browser chrome, same layout as Android). Portrait = the phone layout: list level, bottom dock, no
@@ -397,7 +399,7 @@ async function main() {
         assert.equal(await page.locator('[data-browser-mobile-chrome]').count(), 0)
         assert.equal(await page.evaluate(() => localStorage.getItem('lcl.uiMode')), 'desktop')
       })
-      await ctx.unrouteAll({ behavior: 'wait' })
+      await ctx.unrouteAll({ behavior: 'ignoreErrors' })
       await ctx.close()
     }
     const desktop = await browser.newContext({ viewport: { width: 1280, height: 900 } })
@@ -408,10 +410,10 @@ async function main() {
     await desktopPage.waitForSelector('.shell', { timeout: 60_000 })
     assert.equal(await desktopPage.locator('[data-browser-mobile-chrome]').count(), 0)
     results.push({ name: 'Desktop browser retains desktop shell', ok: true })
-    await desktop.unrouteAll({ behavior: 'wait' })
+    await desktop.unrouteAll({ behavior: 'ignoreErrors' })
     await desktop.close()
   } finally {
-    await Promise.all(browser.contexts().map(ctx => ctx.unrouteAll({ behavior: 'wait' })))
+    await Promise.all(browser.contexts().map(ctx => ctx.unrouteAll({ behavior: 'ignoreErrors' })))
     await browser.close()
     preview.kill()
     await stub.close()

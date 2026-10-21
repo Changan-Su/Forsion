@@ -226,6 +226,7 @@
     "e2e:cusettings": "node scripts/computer-use-settings.e2e.cjs",
     "check:uifont": "node scripts/ui-font.check.cjs",
     "check:topchrome": "node scripts/top-chrome.check.cjs",
+    "check:tabtitlebar": "node scripts/tab-titlebar.e2e.cjs",
     "check:minicard": "node scripts/mini-card.check.cjs",
     "check:minidock": "node scripts/mini-dock.e2e.cjs",
     "check:floatingpanel": "node scripts/floating-panel.check.cjs",

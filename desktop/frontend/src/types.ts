@@ -546,6 +546,8 @@ declare global {
         subscribe(cb: (value: import('../../shared/startupAppearance').StartupAppearance) => void): () => void
       }
       setWindowMaterial?(input: { material: 'opaque' | 'system-glass'; mode: 'light' | 'dark'; backgroundColor?: string }): Promise<{ ok: boolean }>
+      setTabTitleBar?(input: { height: number; symbolColor: string }): Promise<{ ok: boolean; fullscreen?: boolean }>
+      onTabTitleBarFullscreen?(cb: (fullscreen: boolean) => void): () => void
       onAuthDevice?(cb: (info: { url: string; userCode: string }) => void): () => void
       /** 登录态变化(桌面登录/登出、CLI `tangu login` 等外部来源)→ 刷新账号卡/authInfo。 */
       onAuthChanged?(cb: (info: { loggedIn: boolean }) => void): () => void

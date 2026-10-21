@@ -82,6 +82,7 @@ const SKIP = {
   SyncSetupHost: '首登同步卡片管的是本地库远程同步(window.remoteSync,桌面专属);手机没有同步引擎、直接读云端(云同步开启方案 2026-10-20 第六节)',
   // —— 启动序列 ——
   installMultiWindow: '移动端无卫星窗;实现本身对非 electron 天然 no-op',
+  installTabTitleBar: 'Windows Electron 主窗与独立窗的原生窗口按钮叠加;手机无桌面标题栏,其余平台在模块入口 no-op',
   installAccountTransition: 'Electron 多窗口切号前保存握手;web/mobile 通过登录跳转和整页重载清理账号缓存,没有 auth:will-change IPC',
   installKeepAwakeReport: '「有会话运行时不休眠」靠主进程 powerSaveBlocker,手机 WebView 没有对应能力;实现本身缺 window.tangu.reportRunningSessions 即 no-op',
   installCreationAutoVersion: '造物的 git 版本由桌面主进程在托管根(~/Forsion/Project)上做,手机端既没有这个目录也没有 codeStudio git IPC;实现本身缺 window.tangu.codeStudioGitCommit 即 no-op',
