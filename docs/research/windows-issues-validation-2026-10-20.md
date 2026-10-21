@@ -54,3 +54,12 @@ npm run e2e:windows-legacy
 聚焦 GPT-6.1 Sol 评审发现一条 P2：安装枚举失败时仍可能从运行窗口拼出应用列表，探针会假绿。已独立解析安装查询原始帧，要求 AppsFolder、快捷方式、App Paths 三路都有返回且没有错误；本机重跑通过。
 
 未涉及 AI 行为生产代码改动，未修改审批策略；没有推 tag、发布 npm、部署、合入 main 或关闭尚缺证据的 Issue。
+
+## 续验：用户登录后与实际旧版升级
+
+- **#70**：真实 v2.13.4 创建 Windows profile，再用当前代码升级与重启，24/24。包括原清单的五类标签、恢复草稿、收藏置顶、只读 / 解锁、实际日历事件与颜色、移动后续写与标签复用。移动漏字的两条实际根因和新仪器见 [交接修复记录](note-move-handoff-2026-10-20.md)，PR #122。
+- **#77**：用户完成登录后，真实 GPT-6 Luna 的 Muse 私聊与心跳分别通过。Muse 心跳跑到两个周期，Journal 有内容，审批队列为 0；私聊场景的唯一审批是明确要求修改 STATUS.md，正常进入私聊，读自身文件没有审批卡。普通 Tangu auto-edit 会话通过真实 run_bash 与审批 SSE 验证 6/6：dir / type 实际读出文件而不审批；管道、逗号、环境变量与 git status 每条都出现一张审批并被台架拒绝，没有执行。Inbox 副标题相关 10 项 Windows 单测通过。原始产物保存在仓根 harness-runs/2026-10-20 的 233054-muse+musedm、233207-muse 和 233659-windowscmd；第一次 muse 被 AppData 工作目录保护拒绝，未计为模型通过。
+- **#89**：IPC 复制出的正式 Clip 2.1.1 在隔离、无界面的 Chromium 中真正加载，真实 MV3 worker 启动、扩展页登记为 enabled / UNPACKED 且目录相同、设置页面渲染；连同原复制检查共 7/7。死代理强制覆盖回环地址，测试扩展不会连接用户正在运行的 Forsion。原生跨应用目录拖放、系统剪贴板及资源管理器入口仍未据此勾选。
+- **#22**：上游当前 main 1d2950e 的源码版本为 0.7.2-jev.6；本机 Windows npm ci / build / check 全部通过，包含 actions 与 strict-background 离线检查。npm 正式最新仍为 0.7.1；Windows 原生前台输入仍需专用 runner 验证。
+
+本轮没有改 AI 生产行为或扩大免审批名单。新增 `windowscmd` 是 opt-in 真模型验收，负对照审批一律拒绝；未获命令原样工具调用或审批事件都判失败，不拿模型自述通过。

@@ -202,3 +202,13 @@ it('explicit re-remember survives a two-device cloud tombstone roundtrip', async
     expect(repoA.snapshot().content).toContain('same exact fact');
   } finally { home = root; process.env.TANGU_HOME = root; }
 });
+
+it('quota rejection keeps local Agent edits and cloud content for a later retry', async () => {
+ const f=cloudFixture();const dir=owned(f.cloud);
+ writeFileSync(join(dir,'SOUL.md'),'LOCAL edit');
+ f.cloud.putFile=async()=>{throw new Error('brain agents/file/put 413: STORAGE_QUOTA_EXCEEDED');};
+ const r=await runAgentFilesSync(f.cloud,'u',{onlySlug:'private-agent'});
+ expect(r.ok).toBe(false);expect(readFileSync(join(dir,'SOUL.md'),'utf8')).toBe('LOCAL edit');
+ expect(f.files.has('private-agent/SOUL.md')).toBe(false);
+ expect(r.error).toContain('STORAGE_QUOTA_EXCEEDED');
+});
