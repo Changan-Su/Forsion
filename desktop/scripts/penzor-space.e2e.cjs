@@ -26,6 +26,7 @@ const { createHash } = require('node:crypto')
 const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 const { skipOnboarding } = require('./lib/skip-onboarding.cjs')
+const startupDiagnostics = require('./lib/packaged-startup-diagnostics.cjs')
 
 const ROOT = path.join(__dirname, '..')
 let EXTEND = process.env.EXTEND_PKG
@@ -262,12 +263,21 @@ async function main() {
     for (const f of ['remotesync.json', 'remotesync.dev.json']) fs.writeFileSync(path.join(d, f), JSON.stringify({ backend: 'penzor', penzor: { vault: 'WMOSv11' } }, null, 2))
     fs.writeFileSync(path.join(d, 'tangu-desktop-config.json'), JSON.stringify({ mode: 'external', backendUrl: stub.url, token: 'mock', cloudUrl: cloud.url }))
   }
-  const app = await electron.launch({
-    args: [`--user-data-dir=${userData}`, '--lang=zh-CN', ...(PACKAGED_EXE ? [] : [launchRoot])], cwd: launchRoot,
-    ...(PACKAGED_EXE || process.env.STAGE_ELECTRON ? { executablePath: PACKAGED_EXE || process.env.STAGE_ELECTRON } : {}),
-    env: { ...process.env, ...(PACKAGED_EXE ? { HOME: home, USERPROFILE: home, APPDATA: path.join(home, 'AppData', 'Roaming'), LOCALAPPDATA: path.join(home, 'AppData', 'Local') } : {}), TANGU_HOME: home, TANGU_BACKEND_URL: stub.url, TANGU_HARNESS_QUIET: '1', PI_CU_SOCKET_PATH: path.join(home, 'bridge.sock') },
-    timeout: 90_000,
-  })
+  const nativeStartupDiagnostics = PACKAGED_EXE && ['darwin', 'win32'].includes(process.platform)
+  const stopStartupDiagnostics = nativeStartupDiagnostics ? startupDiagnostics.watch(SHOTS, 'app-startup', PACKAGED_EXE) : () => {}
+  let app
+  try {
+    app = await electron.launch({
+      // executablePath skips Playwright's Electron loader, including its mock-keychain switches.
+      args: [`--user-data-dir=${userData}`, '--lang=zh-CN', ...(PACKAGED_EXE && process.platform === 'darwin' ? ['--use-mock-keychain', '--password-store=basic'] : []), ...(PACKAGED_EXE ? [] : [launchRoot])], cwd: launchRoot,
+      ...(PACKAGED_EXE || process.env.STAGE_ELECTRON ? { executablePath: PACKAGED_EXE || process.env.STAGE_ELECTRON } : {}),
+      env: { ...process.env, ...(PACKAGED_EXE ? { HOME: home, USERPROFILE: home, APPDATA: path.join(home, 'AppData', 'Roaming'), LOCALAPPDATA: path.join(home, 'AppData', 'Local') } : {}), TANGU_HOME: home, TANGU_BACKEND_URL: stub.url, TANGU_HARNESS_QUIET: '1', PI_CU_SOCKET_PATH: path.join(home, 'bridge.sock') },
+      timeout: 90_000,
+    })
+  } catch (error) {
+    if (nativeStartupDiagnostics) startupDiagnostics.capture(SHOTS, 'app-launch-failure', PACKAGED_EXE)
+    throw error
+  } finally { stopStartupDiagnostics() }
   const errors = []
   try {
     const runtime = await app.evaluate(({ app }) => ({ packaged: app.isPackaged, version: app.getVersion(), resources: process.resourcesPath, userData: app.getPath('userData') }))

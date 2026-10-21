@@ -6,6 +6,10 @@ const { readFileSync } = require('fs')
 const { join } = require('path')
 const { backendDependencyFilter } = require('./build/backend-dependencies.cjs')
 const { fileAssociationsFor, createNsisInclude } = require('./build/file-associations.cjs')
+// builder 26.15.3's modern 7za auto-selects ARM64 for bundled ARM PE files, but
+// NSIS's install-time decoder cannot read that filter (#9983). Pin every build
+// entry (including cross-host --win) to the compatible lossless BCJ filter.
+process.env.ELECTRON_BUILDER_7Z_FILTER = 'BCJ'
 // 内置插件捆绑包清单(单一来源;electron/builtinPlugins.ts 播种、builtinUpdates 更新、release-content.check 核对都读它)。
 const builtinBundles = require('./electron/builtinBundles.json')
 const { bundleExtend, artifactSuffix, updateChannel } = require('./build/distribution.cjs')
