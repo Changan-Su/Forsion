@@ -28,6 +28,8 @@ import { createDirRemote } from './remotesync/fsLocal'
 import { createS3Remote, normPrefix, type S3Config } from './remotesync/fsS3'
 import { createWebdavRemote, type WebdavConfig } from './remotesync/fsWebdav'
 import type { RemoteFs, SyncReport } from './remotesync/types'
+import { contentSyncOwned } from './contentSyncHost'
+import { currentCloudAccountId } from './amadeus/settings'
 
 export interface RemoteSyncConfig {
   /** penzor = Forsion 云端:实现住在 Forsion Extend(remotesync/backends.ts 注册点),这里只保留配置形状。 */
@@ -200,6 +202,7 @@ async function runNow(opts?: { dryRun?: boolean; allowMassDelete?: boolean }): P
   let lastProgressAt = 0
   try {
     const cfg = await loadConfig()
+    if(cfg.backend==='penzor'&&contentSyncOwned(currentCloudAccountId()))return fail('content-sync-owned')
     if (cfg.backend === 'off') return fail('backend-off')
     const built = await buildRemote(cfg)
     if ('error' in built) return fail(built.error)

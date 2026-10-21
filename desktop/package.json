@@ -403,7 +403,8 @@
     "e2e:image-studio:live": "node scripts/image-studio.live.cjs",
     "check:permissions": "node scripts/permissions.check.cjs",
     "check:mininative": "node scripts/mini-auto.check.cjs --native-helper",
-    "e2e:notemove:handoff": "node scripts/note-move-handoff.e2e.cjs"
+    "e2e:notemove:handoff": "node scripts/note-move-handoff.e2e.cjs",
+    "e2e:contentsync": "GENESIS_DESKTOP=. node scripts/content-sync.e2e.cjs"
   },
   "dependencies": {
     "@astryxdesign/core": "^0.1.4",

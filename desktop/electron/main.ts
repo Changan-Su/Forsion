@@ -1,4 +1,5 @@
 import { assertMarketplaceRequirements } from '../shared/marketplace'
+import { mergeSyncContent,withContentWriteLock,setOfflineContentOwner } from './contentSyncHost'
 import { asrBackendFor } from './asrSelection'
 import { installAmbientPalette } from './ambientPalette'
 import { unitConfigFace } from './unitConfigFace'
@@ -2620,6 +2621,33 @@ app.whenReady().then(async () => {
       },
       // ── 0.10 起:退出前问一次(蓬洲云还有文件在传)──
       addQuitGuard: (fn) => quitGuards.add(fn),
+      contentSync: {
+        roots: async () => {
+          const cfg=await readAmadeusConfig()
+          return [{prefix:'',root:forsionWorkspaceDir()},{prefix:'agents',root:join(tanguDataDir(),'agents')},
+            {prefix:'human',root:join(tanguDataDir(),'human')},{prefix:'Amadeus',root:cfg.localVault??join(forsionWorkspaceDir(),'Amadeus')}]
+        },
+        claim: async (owned) => {
+          await ensureBackend()
+          const before=loadTanguCreds(),identity=forsionAccountId(before.cloudUrl||'',before.token||'')
+          const st=backend.getStatus();if(st.state!=='ready'||!st.url){
+            const cfg=await loadConfig();if(cfg.mode!=='external'||!identity)throw new Error('Local engine unavailable')
+            setOfflineContentOwner(tanguDataDir(),identity,owned);if(owned)await stopAmadeusSync?.();else await restartAmadeusSync?.();return
+          }
+          const r=await fetch(st.url.replace(/\/+$/,'')+'/agent/sync/content-owner',{method:'PUT',headers:{Authorization:`Bearer ${backend.getToken()}`,'Content-Type':'application/json'},body:JSON.stringify({enabled:owned}),signal:AbortSignal.timeout(15000)})
+          if(!r.ok)throw new Error(`Content sync ownership failed (${r.status})`)
+          const current=loadTanguCreds();if(forsionAccountId(current.cloudUrl||'',current.token||'')!==identity)throw new Error('account_changed')
+          if(owned)await stopAmadeusSync?.();else await restartAmadeusSync?.()
+        },
+        changed: async () => {
+          const st=backend.getStatus();if(st.state!=='ready'||!st.url)return
+          const r=await fetch(st.url.replace(/\/+$/,'')+'/agent/sync/content-owner',{method:'PUT',headers:{Authorization:`Bearer ${backend.getToken()}`,'Content-Type':'application/json'},body:JSON.stringify({enabled:true}),signal:AbortSignal.timeout(15000)})
+          if(!r.ok)throw new Error('Content sync refresh failed')
+        },
+        merge: mergeSyncContent,
+        withWriteLock:(path,commit)=>withContentWriteLock(path,tanguDataDir(),commit),
+        trash: (p) => shell.trashItem(p),
+      },
     }
     // 插件页停用了的:不装主进程半身 —— 与没装 Extend 同一个形态(cloud:present 空,云端界面整套隐藏)。
     const off = (await loadConfig()).disabledBundles

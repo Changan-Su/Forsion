@@ -55,7 +55,7 @@ function readPermissions(slug: string): PermissionFile {
  *      总闸再开时 follow 的跟着回来。
  * ponytail: 读改写不加锁(只有用户点开关会写,一个引擎进程);要多进程同写再上 withMemoryDirectoryLock。
  */
-interface AccountDefault { enabled: boolean; revision: number }
+interface AccountDefault { enabled: boolean; revision: number; owner?: 'content' }
 const defaultFile = (): string => assertSyncPath(agentsDir(), join(agentsDir(), '.cloudsync-default.json'));
 function readDefaults(): Record<string, AccountDefault> {
   try {
@@ -66,10 +66,19 @@ function readDefaults(): Record<string, AccountDefault> {
 export function agentSyncDefault(scope: string | null): boolean | null {
   if (!scope) return null;
   const d = readDefaults()[scope];
+  if(d?.owner==='content')return false;
   return typeof d?.enabled === 'boolean' ? d.enabled : null;
+}
+/** Exclusive ownership prevents legacy per-agent discovery from bypassing folder rules. */
+export function setContentSyncOwner(scope:string,enabled:boolean):void {
+  if(!/^[a-f0-9]{64}$/.test(scope))throw new Error('invalid cloud account scope');
+  const accounts=readDefaults(),cur=accounts[scope];
+  accounts[scope]={enabled:cur?.enabled??false,revision:(cur?.revision??0)+1,...(enabled?{owner:'content' as const}:{})};
+  atomicSyncWrite(agentsDir(),defaultFile(),JSON.stringify({accounts},null,2));invalidateAgentSyncOperations();
 }
 export function setAgentSyncDefault(scope: string, enabled: boolean): void {
   if (!/^[a-f0-9]{64}$/.test(scope)) throw new Error('invalid cloud account scope');
+  if(readDefaults()[scope]?.owner==='content')throw new Error('Folder rules own content sync; manage it in Penzor Cloud.');
   if (!enabled) {
     // 先把单独开着的改成跟着总闸,再落总闸:中途崩了,重点一次「关」就补齐
     let dirs: import('node:fs').Dirent[] = [];
@@ -115,6 +124,7 @@ export function agentSyncPermission(slug: string, scope: string | null): Permiss
   if (!scope) return { enabled: false, shared: false };
   const permission = readPermissions(slug).accounts[scope];
   const master = readDefaults()[scope];
+  if(master?.owner==='content')return {enabled:false,shared:false,revision:master.revision};
   const revision = (permission?.revision ?? 0) + (master?.revision ?? 0);
   if (permission?.follow) return master?.enabled === true ? { enabled: true, shared: permission.shared === true, revision } : { enabled: false, shared: false, revision };
   if (permission) return { enabled: permission.enabled === true, shared: permission.shared === true, revision };

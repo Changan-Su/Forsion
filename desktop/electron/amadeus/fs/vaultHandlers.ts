@@ -106,7 +106,7 @@ export interface VaultHandlerDependencies {
  *  随后旧正文连同补丁写回 → 编辑器刚落盘的新正文静默丢失。不可重入:只在最底层那段「读→改→写」上锁,
  *  别把一个会再去拿锁的 helper 整个包进来。 */
 const textWriteChains = new Map<string, Promise<unknown>>()
-function withTextWriteLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+export function withTextWriteLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
   const prev = textWriteChains.get(key) ?? Promise.resolve()
   const run = prev.then(fn, fn)
   const tail = run.catch(() => {})

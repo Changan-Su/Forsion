@@ -31,6 +31,14 @@ export const signedEssentials = (entry: string): string[] => [entry, 'manifest.j
 /** Genesis 主进程给内置包主进程半身的接缝。Forsion-Extend 仓 src/desktop/host.d.ts 是它的镜像,两边同改。
  *  入口是从一次性临时文件跑起来的(见下),所以它必须是自包含单文件:`import.meta.url` 相对的邻居文件不存在,设计如此。 */
 export interface CloudHost {
+  contentSync?: {
+    roots(): Promise<Array<{prefix:string;root:string}>>
+    claim(owned:boolean): Promise<void>
+    changed(): Promise<void>
+    merge(path:string,ours:string,base:string|null,theirs:string): {content:string;conflict:boolean}|null
+    withWriteLock(path:string|string[],commit:()=>void): Promise<void>
+    trash(path:string): Promise<void>
+  }
   /** 当前账号的云端基址(无尾斜杠)与 token(空串=未登录)。token 只在主进程流转,绝不下发渲染层。 */
   getCloud(): Promise<{ base: string; token: string }>
   /** 等价 ipcMain.handle;宿主记下通道名,preload 据此只保留有人接的桥键(cloud:present)。 */

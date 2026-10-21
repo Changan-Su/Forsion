@@ -33,6 +33,8 @@ registerMessages({
   'syncSetup.pluginsHint': { zh: '插件自己存的设置和数据', en: 'Settings and data your plugins save' },
   'syncSetup.footHint': { zh: '另一台电脑登录同一账号，就会自动出现', en: 'Sign in on another computer and it appears there too' },
   'syncSetup.later': { zh: '稍后', en: 'Later' },
+  'syncSetup.chooseScope': {zh:'选择同步范围',en:'Choose sync scope'},
+  'syncSetup.scopeLead': {zh:'先在蓬洲云选择目录与云端位置，再预览和确认。',en:'Choose folders and cloud destinations in Penzor Cloud, then preview and confirm.'},
   'syncSetup.start': { zh: '开始同步', en: 'Start syncing' },
   'syncSetup.progress': { zh: '正在同步到蓬洲云 · 智库 {done} / {total} 个文件', en: 'Syncing to Penzor Cloud · notes {done} / {total} files' },
   'syncSetup.view': { zh: '查看', en: 'View' },
@@ -93,7 +95,7 @@ export function SyncSetupHost(): React.JSX.Element | null {
     if (bad) notifyApp({ text: t('syncSetup.failed', { error: bad.error ?? '' }), level: 'warning' })
     const now = getSync()
     if (now?.notes.pending) { notifyApp({ text: t('syncSetup.decide'), level: 'info' }); openPenzor() }
-    else if (picked.notes) setWatching(true)
+    else if (picked.notes&&!s.contentRules) setWatching(true)
   }
   const later = (): void => { markSyncDecided(); setOpen(false) }
 
@@ -116,9 +118,9 @@ export function SyncSetupHost(): React.JSX.Element | null {
           <div className="modal modal-sm sync-setup" role="dialog" aria-modal="true" aria-label={t('syncSetup.title')}>
             <div className="modal-head"><Cloud size={16} /><span className="sync-setup-title">{t('syncSetup.title')}</span></div>
             <div className="sync-setup-body">
-              <p className="sync-setup-lead">{t('syncSetup.lead', { name })}</p>
+              <p className="sync-setup-lead">{s.contentRules?t('syncSetup.scopeLead'):t('syncSetup.lead', { name })}</p>
               <p className="sync-setup-hint">{s.storage?.complete && s.storage.usedBytes != null ? t(s.storage.enforcement ? 'syncSetup.storageEnforced' : 'syncSetup.storage', { used: fmtBytes(s.storage.usedBytes), max: fmtBytes(s.storage.limitBytes) }) : t('syncSetup.storageUnknown')}</p>
-              {rows.map(([k, icon, title, sub]) => (
+              {rows.filter(([k])=>!s.contentRules||k==='plugins').map(([k, icon, title, sub]) => (
                 <label key={k} className="sync-setup-row">
                   <input type="checkbox" checked={picked[k]} disabled={busy} onChange={(e) => setPicked({ ...picked, [k]: e.target.checked })} />
                   <span className="sync-setup-tile">{icon}</span>
@@ -130,7 +132,7 @@ export function SyncSetupHost(): React.JSX.Element | null {
               <span className="sync-setup-hint">{t('syncSetup.footHint')}</span>
               <span className="sync-setup-acts">
                 <button className="btn" disabled={busy} onClick={later}>{t('syncSetup.later')}</button>
-                <button className="btn primary" disabled={busy} onClick={() => void start()}>{t('syncSetup.start')}</button>
+                <button className="btn primary" disabled={busy} onClick={() => void start()}>{t(s.contentRules?'syncSetup.chooseScope':'syncSetup.start')}</button>
               </span>
             </div>
           </div>

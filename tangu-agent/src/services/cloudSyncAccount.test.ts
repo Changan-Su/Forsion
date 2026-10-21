@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { agentSyncConsentSignal, agentSyncDefault, agentSyncPermission, agentSyncScope, captureAgentSyncPermission, registerAgentSyncIdentity, setAgentSyncDefault, setAgentSyncPermission } from './cloudSyncAccount.js';
+import { agentSyncConsentSignal, setContentSyncOwner, agentSyncDefault, agentSyncPermission, agentSyncScope, captureAgentSyncPermission, registerAgentSyncIdentity, setAgentSyncDefault, setAgentSyncPermission } from './cloudSyncAccount.js';
 import { DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
 import type { AgentFilesBrain } from '../seams/cloudBrain.js';
 
@@ -41,6 +41,13 @@ describe('account-level agent sync switch', () => {
   const scope = 'a'.repeat(64); const other = 'b'.repeat(64);
   beforeEach(() => { prev = process.env.TANGU_HOME; home = mkdtempSync(join(tmpdir(), 'tangu-sync-default-')); process.env.TANGU_HOME = home; });
   afterEach(() => { if (prev === undefined) delete process.env.TANGU_HOME; else process.env.TANGU_HOME = prev; rmSync(home, { recursive: true, force: true }); });
+
+  it('hands legacy writers to folder rules and restores their previous switch on rollback',()=>{
+    setAgentSyncDefault(scope,true);setAgentSyncPermission('coder',scope,true);setContentSyncOwner(scope,true)
+    expect(agentSyncDefault(scope)).toBe(false);expect(agentSyncPermission('coder',scope).enabled).toBe(false)
+    expect(()=>setAgentSyncDefault(scope,true)).toThrow('Folder rules')
+    setContentSyncOwner(scope,false);expect(agentSyncDefault(scope)).toBe(true);expect(agentSyncPermission('coder',scope).enabled).toBe(true)
+  })
 
   it('is undecided by default and then lets agents without their own choice follow it', () => {
     expect(agentSyncDefault(scope)).toBeNull();
