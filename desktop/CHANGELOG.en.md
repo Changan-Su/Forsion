@@ -6,7 +6,7 @@
 
 <!-- English edition of CHANGELOG.md: same "## <version> (<date>)" headings, one bullet per Chinese bullet. Add both when releasing. -->
 
-## 2.13.7 (2026-10-21)
+## 2.13.6 (2026-10-21)
 
 - **Calendar and tasks**: a dedicated Tasks Space shares its task view with Calendar’s right panel. Capture tasks with Enter, choose an optional date, or create the first list directly. Completed tasks offer undo and native mobile touch feedback. Lists, toolbars and calendar display settings use a compact layout.
 - **Core plugin updates**: `@forsion/calendar` provides Calendar and tasks through the core plugin list, bundled installation and npm update checks. The existing Calendar Space and saved layouts stay in place.
