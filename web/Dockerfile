@@ -9,8 +9,8 @@
 # =====================================================
 
 # 基础镜像从哪个仓库拉。缺省 Docker Hub:本地 / 服务器现场 build 照旧,daemon 里配的 registry-mirrors 继续生效。
-# CI(build-web.yml)传 public.ecr.aws/docker/library —— Docker 官方镜像在 ECR Public 上的同一份(清单摘要逐字相同):
-# GitHub 公共 runner 匿名向 Docker Hub 要清单会被限流(429),2026-10-09 连着红了六次。
+# CI(build-web.yml)优先探测 public.ecr.aws/docker/library，再回退官方 Docker Hub。
+# 两边都可能对公共 runner 限流，先确认两个基础镜像可访问再开始构建。
 ARG BASE_REGISTRY=docker.io/library
 
 # ---- Build stage ----

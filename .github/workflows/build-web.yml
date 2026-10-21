@@ -104,17 +104,38 @@ jobs:
             echo '::error file=web/Dockerfile::上面这些 FROM 没走 ${BASE_REGISTRY},会回到 Docker Hub(公共 runner 上会被限流)'
             exit 1
           fi
+      # Both sources serve official Docker images. ECR can also throttle shared
+      # runners; resolve both base manifests before starting the expensive build.
+      - name: Select an available official base-image registry
+        id: base
+        shell: bash
+        run: |
+          for registry in public.ecr.aws/docker/library docker.io/library; do
+            available=true
+            for image in node:22-alpine nginx:alpine; do
+              if ! docker buildx imagetools inspect "$registry/$image" > /dev/null 2> "$RUNNER_TEMP/web-base-registry-error.log"; then
+                echo "::warning::Cannot resolve $registry/$image; trying the next official registry"
+                available=false
+                break
+              fi
+            done
+            if "$available"; then
+              echo "registry=$registry" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          echo '::error::Neither official base-image registry is available; no image was published'
+          exit 1
       # context 必须是仓根:web 复用 desktop/frontend + desktop/shared + lcl 源码(同 web/README 的坑 1)。
       - uses: docker/build-push-action@v6
         with:
           context: .
           file: web/Dockerfile
           platforms: linux/amd64 # ponytail: 服务器是 x86;要 arm 部署再加 linux/arm64(QEMU 构建时间翻倍)
-          # 基础镜像不从 Docker Hub 拉:公共 runner 匿名要清单会被限流(429 Too Many Requests),与代码无关却让镜像出不来
-          # (2026-10-09 实翻,重跑五次都红)。ECR Public 上是 Docker 官方镜像的同一份。⚠️ Dockerfile 里新增 FROM 时
-          # 必须写成 ${BASE_REGISTRY}/<名字>,否则那一张又回到 Docker Hub。
+          # Prefer ECR Public; fall back to Docker Hub when its official mirror
+          # is unavailable. Every Dockerfile FROM must use this same selector.
           build-args: |
-            BASE_REGISTRY=public.ecr.aws/docker/library
+            BASE_REGISTRY=${{ steps.base.outputs.registry }}
           push: true
           tags: |
             ${{ steps.img.outputs.name }}:latest
