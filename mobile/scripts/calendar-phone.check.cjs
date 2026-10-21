@@ -30,7 +30,7 @@ async function main() {
     await page.locator('.mb-shell').waitFor({ timeout: 180000 })
     await installChrome(page)
     // Seed through the real mobile filesystem bridge, then use the same stores all calendar sources consume.
-    await page.evaluate(async ({ pageUrl, dbUrl, configUrl, navUrl }) => {
+    await page.evaluate(async ({ pageUrl, dbUrl, configUrl, navUrl, pluginUrl }) => {
       const { usePageStore } = await import(pageUrl)
       const { useDbStore } = await import(dbUrl)
       const { useCalendarConfig } = await import(configUrl)
@@ -46,12 +46,16 @@ async function main() {
       await useDbStore.getState().reload('Phone.db', 'Phone.db')
       useCalendarConfig.getState().migrate(usePageStore.getState().vaultRoot, [{ dbPath: 'Phone.db', dateCol: 'date' }])
       useCalendarNav.getState().setMode('3day')
+      // The device installs native chrome before plugin startup; this browser installs its stand-in late.
+      const { usePluginStore } = await import(pluginUrl)
+      await usePluginStore.getState().reloadOne('forsion-calendar', { force: true })
       window.__phoneCal = { useDbStore, useCalendarNav, day }
     }, {
       pageUrl: moduleUrl('../desktop/frontend/src/amadeus/store/pageStore.ts'),
       dbUrl: moduleUrl('../desktop/frontend/src/amadeus/store/dbStore.ts'),
       configUrl: moduleUrl('../desktop/frontend/src/amadeus/store/calendarConfigStore.ts'),
       navUrl: moduleUrl('../desktop/frontend/src/amadeus/store/calendarNavStore.ts'),
+      pluginUrl: moduleUrl('../desktop/frontend/src/amadeus/plugins/pluginStore.ts'),
     })
     await stage.space(page, 'calendar')
     await page.locator('[data-key="Phone.db::short"]').waitFor({ timeout: 15000 })

@@ -71,6 +71,8 @@ export default defineConfig(({ mode }) => {
   // 也会因此被当成 dev 入口，继而扫描旧 bundle/可选 peer dependency。dev 只认正典入口。
   optimizeDeps: {
     entries: ['index.html'],
+    // The plugin is loaded as source text; prebundling main.js?raw produces a broken JS dependency entry.
+    exclude: ['@forsion/calendar'],
   },
   // 静态资产借 desktop 的 public(postinstall copy-excalidraw-assets 生成的自托管 excalidraw 字体 +
   // pdfjs-annot):CSP 同源、离线 APK 可用;否则 excalidraw 回落 esm.sh CDN 被 font-src 拒。
