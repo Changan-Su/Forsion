@@ -2,8 +2,25 @@
 ; PDF is an alternate handler. Markdown is claimed only when unassigned.
 !macro ForsionAssociate EXT FILECLASS DESCRIPTION DEFAULT
   Push $R0
+  Push $R1
+  ${If} $installMode == "all"
+    ; Old per-user builder uninstallers leave defaults behind when converting
+    ; scope. Remove only our orphan (the per-user ProgID is already gone).
+    ReadRegStr $R1 HKCU "Software\Classes\${FILECLASS}\shell\open\command" ""
+    ${If} $R1 == ""
+      ReadRegStr $R1 HKCU "Software\Classes\.${EXT}" ""
+      ${If} $R1 == "${FILECLASS}"
+        DeleteRegValue HKCU "Software\Classes\.${EXT}" ""
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
   ReadRegStr $R0 SHELL_CONTEXT "Software\Classes\.${EXT}" ""
   ${If} "${DEFAULT}" == "1"
+    ${If} $R0 == ""
+      ; HKCR includes a machine owner hidden behind an empty per-user value.
+      ; Do not replace that effective default with a new HKCU claim.
+      ReadRegStr $R0 HKCR ".${EXT}" ""
+    ${EndIf}
     ${If} $R0 == ""
       WriteRegStr SHELL_CONTEXT "Software\Classes\.${EXT}" "" "${FILECLASS}"
     ${EndIf}
@@ -20,6 +37,7 @@
   WriteRegStr SHELL_CONTEXT "Software\Classes\${FILECLASS}\shell" "" "open"
   WriteRegStr SHELL_CONTEXT "Software\Classes\${FILECLASS}\shell\open" "" "Open with ${PRODUCT_NAME}"
   WriteRegStr SHELL_CONTEXT "Software\Classes\${FILECLASS}\shell\open\command" "" '$\"$appExe$\" $\"%1$\"'
+  Pop $R1
   Pop $R0
 !macroend
 

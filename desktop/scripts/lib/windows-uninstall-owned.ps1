@@ -1,5 +1,5 @@
 # Dot-source only on a disposable CI runner. The caller supplies a checked path.
-function Invoke-OwnedNsisUninstall([string]$InstallPath,[string]$Worker) {
+function Invoke-OwnedNsisUninstall([string]$InstallPath,[string]$Worker,[string]$Scope='currentuser') {
   if ($env:GITHUB_ACTIONS -ne 'true' -or !$env:RUNNER_TEMP) { throw 'Disposable runner required' }
   $taskPrefix=[IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd('\')+'\'
   foreach ($taskPath in @($InstallPath,$Worker)) {
@@ -31,7 +31,8 @@ public static class ForsionOwnedUninstall {
   if ($taskUninstaller.Count -ne 1) { throw 'Expected exactly one real NSIS uninstaller' }
   Copy-Item -LiteralPath $taskUninstaller[0].FullName -Destination $Worker
   if ((Get-FileHash -LiteralPath $Worker).Hash -ne (Get-FileHash -LiteralPath $taskUninstaller[0].FullName).Hash) { throw 'Uninstaller copy changed' }
-  $taskProcess=Start-Process -FilePath $Worker -ArgumentList "/S _?=$InstallPath" -PassThru -WindowStyle Hidden
+  if ($Scope -notin @('currentuser','allusers')) { throw 'Invalid install scope' }
+  $taskProcess=Start-Process -FilePath $Worker -ArgumentList "/S /$Scope _?=$InstallPath" -PassThru -WindowStyle Hidden
   $null=$taskProcess.Handle
   $taskOwners=[Collections.Generic.HashSet[int]]::new(); $null=$taskOwners.Add($taskProcess.Id)
   $taskEnd=[DateTime]::UtcNow.AddSeconds(120)
