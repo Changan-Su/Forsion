@@ -1,15 +1,20 @@
 # Forsion changelog
 
-## Unreleased
-
-- **Tangu workspace**: offline devices now collapse into an “Offline devices” group with a count. Expand it to view them; devices return to the main list when they reconnect. The remote device you are viewing stays visible.
-
 <!-- English edition of CHANGELOG.md: same "## <version> (<date>)" headings, one bullet per Chinese bullet. Add both when releasing. -->
 
 ## 2.13.6 (2026-10-21)
 
 - **Calendar and tasks**: a dedicated Tasks Space shares its task view with Calendar’s right panel. Capture tasks with Enter, choose an optional date, or create the first list directly. Completed tasks offer undo and native mobile touch feedback. Lists, toolbars and calendar display settings use a compact layout.
 - **Core plugin updates**: `@forsion/calendar` provides Calendar and tasks through the core plugin list, bundled installation and npm update checks. The existing Calendar Space and saved layouts stay in place.
+
+- **Tangu workspace**: offline devices now collapse into an “Offline devices” group with a count. Expand it to view them; devices return to the main list when they reconnect. The remote device you are viewing stays visible.
+
+- **My drive**: includes Forsion Extend 0.9.2. Cloud files are grouped by source under one root. Organize your uploads directly; edit content maintained by vaults, Agents, your profile or apps in its owning feature. Unified usage and grace notices become available after the cloud service update. Existing files remain accessible before that update, and unknown usage is never shown as zero.
+- **Profile and sync**: enabling Agents and memory sync also includes your human profile folder. The default calendar uses human/CALENDAR.db. Sync reports the last run, failures, conflict copies and pending uploads.
+- **Plugin data folders**: migration-aware plugins use stable English ID folders while retaining the original data and migration records, so changing a display name does not hide existing files.
+- **Windows**: window buttons no longer overlap the tab bar. Notes reuse tabs for case-equivalent paths, and installation and removal preserve other apps' file associations. Bounded read-only directory and text searches can be combined without repeated approval; writes still require approval.
+- **Note editing**: preserve the last input while a note moves, and fix editing after consecutive Enter presses inside a folded block.
+- **Engine updates**: desktop and engine versions are independent. Desktop 2.13.6 includes engine 2.13.7, and hot updates check compatibility against the actual desktop version.
 
 ## 2.13.5 (2026-10-20)
 

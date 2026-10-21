@@ -37,8 +37,13 @@ jobs:
 
       # Desktop and engine versions are independent; validate the bundled engine in its own release history.
       - name: Desktop and bundled engine release identities
-        if: github.event_name == 'push'
-        run: node scripts/engine-release-gate.mjs --desktop-release "$GITHUB_REF_NAME"
+        env:
+          DESKTOP_REF: ${{ github.ref_name }}
+          RELEASE_EVENT: ${{ github.event_name }}
+        run: |
+          candidate="v$(node -p "require('../desktop/package.json').version")"
+          if [ "$RELEASE_EVENT" = push ]; then candidate="$DESKTOP_REF"; fi
+          node scripts/engine-release-gate.mjs --desktop-release "$candidate"
 
       - run: npm install --no-audit --no-fund
       - run: npm run typecheck
@@ -64,6 +69,7 @@ jobs:
         working-directory: desktop
         run: |
           npm install --no-audit --no-fund
+          npm run typecheck
           npm test
 
   build:
