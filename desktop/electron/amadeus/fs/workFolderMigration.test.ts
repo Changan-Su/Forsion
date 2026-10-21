@@ -96,3 +96,10 @@ it('prevents folder move/delete/trash during publication, without deadlocking fi
  await t.vault.moveEntry('Plugins/Previous','Moved')
  expect(await fs.readFile(path.join(t.root,'Moved/Record/transcript.md'),'utf8')).toBe('# My transcript')
 })
+
+it('rebases relative Markdown attachments at the new depth, preserving the original note',async()=>{
+ const t=await setup();await t.write('Outside.pdf','pdf bytes');const note='[Reference](../../Outside.pdf)\n![Local](audio.m4a)'
+ await t.write('Previous/Record/transcript.md',note);await t.run()
+ expect(await fs.readFile(path.join(t.root,'Previous/Record/transcript.md'),'utf8')).toBe(note)
+ expect(await fs.readFile(path.join(t.root,'Plugins/Previous/Record/transcript.md'),'utf8')).toBe('[Reference](../../../Outside.pdf)\n![Local](audio.m4a)')
+})

@@ -4,6 +4,7 @@ import path from 'node:path'
 import type { WorkFolderMigration, WorkFolderMigrationResult } from '@amadeus-shared/ipc'
 import type { VaultManager } from './vaultManager'
 import { rebaseFileRefs } from '@amadeus-shared/assets'
+import { renameAtomic } from './renameAtomic'
 
 type FileStamp = { path: string; hash: string }
 type Journal = { version: 1; complete: boolean; source: string; target: string; index: { path: string; before: string | null; after: string }; files: FileStamp[] }
@@ -63,7 +64,7 @@ async function atomic(root: string, abs: string, text: string): Promise<void> {
   try {
     const file = await fs.open(temp, 'wx')
     try { await file.writeFile(text); await file.sync() } finally { await file.close() }
-    await fs.rename(temp, abs)
+    await renameAtomic(temp, abs)
     await syncParents(root, path.dirname(abs))
   } finally { await fs.rm(temp, { force: true }) }
 }
