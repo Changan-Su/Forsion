@@ -113,6 +113,7 @@ import { registerPtyIpc } from './pty'
 import { registerAssetSchemes as registerAmadeusAssetSchemes, registerAssetProtocol as registerAmadeusAssetProtocol } from './amadeus/assetProtocol'
 import { nearestEdge, collapsedBounds, expandedBounds, visibleRect, pointInRect, growRect, resizeFromEdge, type Rect, type Edge } from './windowGeometry'
 import { applyWindowMaterial, parseWindowMaterialRequest } from './windowMaterial'
+import { tabTitleBarOptions, parseTabTitleBar, watchTabTitleBar } from './tabTitleBar'
 import { createMiniDockMotion, miniDockFrame } from './miniDockMotion'
 import { isForsionUrl, pushDeepLink, drainDeepLinks, filesFromArgv, pushOpenFile, drainOpenFiles } from './deepLink'
 
@@ -1645,9 +1646,7 @@ function createWindow(): void {
     height: 820,
     minWidth: 880,
     minHeight: 600,
-    // hiddenInset 是 macOS 专用(交通灯内嵌、无原生标题栏);Windows/Linux 用 default 保留原生
-    // 最小化/最大化/关闭按钮,否则该值被忽略可能导致无窗口控件。菜单条另由 setApplicationMenu(null) 去除。
-    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
+    ...tabTitleBarOptions(),
     autoHideMenuBar: true, // 即便保留了菜单也不在窗口内显示(Alt 不唤出);与置空菜单双保险
     // macOS 系统玻璃必须在建窗时具备透明能力;是否真的启用 vibrancy 由当前主题经 IPC 动态决定。
     // 其他平台保持原来的实色窗口,不改变稳定性/窗口行为。
@@ -1657,6 +1656,7 @@ function createWindow(): void {
     show: false,
     webPreferences: satelliteWebPreferences(),
   })
+  watchTabTitleBar(mainWindow)
   sinkForHarness(mainWindow)
   mainWindow.once('ready-to-show', () => { if (mainWindow && !mainWindow.isDestroyed()) present(mainWindow) })
 
@@ -1788,13 +1788,14 @@ function createDetachedWindow(opts: { id?: string; views?: ViewDesc[]; bounds?: 
     y: opts.bounds?.y,
     minWidth: 480,
     minHeight: 360,
-    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
+    ...tabTitleBarOptions(),
     autoHideMenuBar: true,
     transparent: process.platform === 'darwin',
     backgroundColor: process.platform === 'darwin' ? '#00000000' : '#fbf8f5',
     show: false,
     webPreferences: satelliteWebPreferences(),
   })
+  watchTabTitleBar(win)
   sinkForHarness(win)
   win.once('ready-to-show', () => {
     if (win.isDestroyed()) return
@@ -3420,6 +3421,15 @@ app.whenReady().then(async () => {
     const win = BrowserWindow.fromWebContents(e.sender)
     applyWindowMaterial(win, request, process.platform, !!win && (win === miniWindow || win === autoMiniWindow || win === dockWindow))
     return { ok: true }
+  })
+  ipcMain.handle('window:setTabTitleBar', (e, input: unknown) => {
+    const request = parseTabTitleBar(input)
+    const win = BrowserWindow.fromWebContents(e.sender)
+    if (process.platform !== 'win32' || !request || !win || win.isDestroyed()
+      || e.senderFrame !== e.sender.mainFrame
+      || (win !== mainWindow && ![...detachedWindows.values()].includes(win))) return { ok: false }
+    win.setTitleBarOverlay(request)
+    return { ok: true, fullscreen: win.isFullScreen() }
   })
 
   // ── 设置界面「打开文件夹」:在系统文件管理器打开 agent / skills 目录(~/.tangu/{agents,skills})──
