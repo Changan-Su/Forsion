@@ -1,0 +1,54 @@
+name: probe-windows-installed-files
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/probe-windows-installed-files.yml'
+      - 'desktop/scripts/windows-installed-file.e2e.cjs'
+      - 'desktop/scripts/windows-installed-cold-shell.ps1'
+      - 'desktop/scripts/windows-installed-associations.ps1'
+      - 'desktop/scripts/windows-nsis-associations.check.ps1'
+      - 'desktop/scripts/lib/windows-uninstall-owned.ps1'
+      - 'desktop/scripts/lib/windows-assoc-handlers.*'
+      - 'desktop/scripts/installer-compile.check.cjs'
+      - 'desktop/build/installer.nsh'
+      - 'desktop/build/file-associations.cjs'
+      - 'desktop/electron-builder.config.cjs'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  installed-files:
+    runs-on: windows-2022
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install the automation client only
+        run: |
+          npm install --prefix .probe --no-save --no-audit --no-fund playwright-core@1.61.1 app-builder-lib@26.15.3
+          "NODE_PATH=$PWD\.probe\node_modules" | Add-Content -LiteralPath $env:GITHUB_ENV
+          exit $LASTEXITCODE
+      - name: Compile real NSIS templates with source hooks and an argument recorder
+        id: compile
+        run: node desktop/scripts/installer-compile.check.cjs --runtime-fixture
+      - name: Install official NSIS package and inspect real associations
+        run: ./desktop/scripts/windows-installed-associations.ps1 -Mode install
+      - name: Open and edit through the installed runtime
+        run: node desktop/scripts/windows-installed-file.e2e.cjs
+      - name: Uninstall and inspect association cleanup
+        id: cleanup
+        if: always() && env.FORSION_INSTALLED_EXE != ''
+        run: ./desktop/scripts/windows-installed-associations.ps1 -Mode uninstall
+      - name: Verify corrected source NSIS install, overwrite and uninstall contracts
+        if: always() && steps.compile.outcome == 'success' && steps.cleanup.outcome == 'success'
+        run: ./desktop/scripts/windows-nsis-associations.check.ps1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: installed-file-evidence
+          path: |
+            ${{ runner.temp }}/forsion-installed-file/evidence/*.json
+            ${{ runner.temp }}/forsion-installed-file/evidence/*.png
+            ${{ runner.temp }}/forsion-installed-file/evidence/*.txt

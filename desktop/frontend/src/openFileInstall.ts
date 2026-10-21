@@ -12,6 +12,7 @@ import { ensureAmadeusReady } from './amadeusPlugins'
 import { windowKind } from './windowKind'
 
 const norm = (x: string): string => x.replace(/\\/g, '/').replace(/\/+$/, '')
+const windowsPath = (x: string): boolean => /^(?:[a-z]:\/|\/\/[^/]+\/[^/]+\/)/i.test(x)
 
 /** 绝对路径 → 本地库内的相对路径;不在库里(或当前是云端库)→ null。
  *  Windows 路径不分大小写(`c:\vault\a.md` 与库根 `C:\Vault` 是同一处),按盘符形态判。 */
@@ -20,7 +21,7 @@ function vaultRelOf(path: string): string | null {
   if (ps.vaultSide !== 'local' || !ps.vaultRoot) return null
   const root = norm(ps.vaultRoot) + '/'
   const q = norm(path)
-  const ci = /^[a-z]:\//i.test(root)
+  const ci = windowsPath(root)
   return (ci ? q.toLowerCase().startsWith(root.toLowerCase()) : q.startsWith(root)) ? q.slice(root.length) : null
 }
 
@@ -40,7 +41,9 @@ function whenVaultKnown(timeoutMs = 5000): Promise<void> {
  *  wsfile 的 params 里有裸文件名 `name`,按全部值比会把库根下的 `a.md` 认成已开着的库外 `~/Desktop/a.md`。 */
 function openTabOf(rel: string): string | undefined {
   const api = (useWorkspace.getState() as unknown as { api?: { panels: Array<{ id: string; params?: Record<string, unknown> }> } }).api
-  return api?.panels.find((p) => !!p.params && Object.entries(p.params).some(([k, v]) => /Path$/.test(k) && v === rel))?.id
+  const ci = windowsPath(norm(usePageStore.getState().vaultRoot || '') + '/')
+  const same = (v: unknown): boolean => typeof v === 'string' && (ci ? norm(v).toLowerCase() === norm(rel).toLowerCase() : v === rel)
+  return api?.panels.find((p) => !!p.params && Object.entries(p.params).some(([k, v]) => /Path$/.test(k) && same(v)))?.id
 }
 
 export function openExternalFile(path: string): void {

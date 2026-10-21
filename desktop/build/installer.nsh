@@ -1,3 +1,55 @@
+; Registry state belongs to this product and installation scope (SHELL_CONTEXT).
+; PDF is an alternate handler. Markdown is claimed only when unassigned.
+!macro ForsionAssociate EXT FILECLASS DESCRIPTION DEFAULT
+  Push $R0
+  Push $R1
+  ${If} $installMode == "all"
+    ; Old per-user builder uninstallers leave defaults behind when converting
+    ; scope. Remove only our orphan (the per-user ProgID is already gone).
+    ReadRegStr $R1 HKCU "Software\Classes\${FILECLASS}\shell\open\command" ""
+    ${If} $R1 == ""
+      ReadRegStr $R1 HKCU "Software\Classes\.${EXT}" ""
+      ${If} $R1 == "${FILECLASS}"
+        DeleteRegValue HKCU "Software\Classes\.${EXT}" ""
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
+  ReadRegStr $R0 SHELL_CONTEXT "Software\Classes\.${EXT}" ""
+  ${If} "${DEFAULT}" == "1"
+    ${If} $R0 == ""
+      ; HKCR includes a machine owner hidden behind an empty per-user value.
+      ; Do not replace that effective default with a new HKCU claim.
+      ReadRegStr $R0 HKCR ".${EXT}" ""
+    ${EndIf}
+    ${If} $R0 == ""
+      WriteRegStr SHELL_CONTEXT "Software\Classes\.${EXT}" "" "${FILECLASS}"
+    ${EndIf}
+  ${Else}
+    ; Migrate the stock installer's old unconditional PDF default. A genuine
+    ; Windows UserChoice is separate and remains untouched.
+    ${If} $R0 == "${FILECLASS}"
+      DeleteRegValue SHELL_CONTEXT "Software\Classes\.${EXT}" ""
+    ${EndIf}
+  ${EndIf}
+  WriteRegNone SHELL_CONTEXT "Software\Classes\.${EXT}\OpenWithProgids" "${FILECLASS}"
+  WriteRegStr SHELL_CONTEXT "Software\Classes\${FILECLASS}" "" "${DESCRIPTION}"
+  WriteRegStr SHELL_CONTEXT "Software\Classes\${FILECLASS}\DefaultIcon" "" '$\"$appExe$\",0'
+  WriteRegStr SHELL_CONTEXT "Software\Classes\${FILECLASS}\shell" "" "open"
+  WriteRegStr SHELL_CONTEXT "Software\Classes\${FILECLASS}\shell\open" "" "Open with ${PRODUCT_NAME}"
+  WriteRegStr SHELL_CONTEXT "Software\Classes\${FILECLASS}\shell\open\command" "" '$\"$appExe$\" $\"%1$\"'
+  Pop $R1
+  Pop $R0
+!macroend
+
+!macro ForsionClearOwnedDefault EXT FILECLASS
+  Push $R0
+  ReadRegStr $R0 SHELL_CONTEXT "Software\Classes\.${EXT}" ""
+  ${If} $R0 == "${FILECLASS}"
+    DeleteRegValue SHELL_CONTEXT "Software\Classes\.${EXT}" ""
+  ${EndIf}
+  Pop $R0
+!macroend
+
 ; 安装进度由独立 NSIS 进程显示,应用退出/旧 exe 被移走时仍然可见。
 !macro customInit
   ; 兼容旧客户端 quitAndInstall(true, true) 传来的 --updated /S。
