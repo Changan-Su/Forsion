@@ -140,7 +140,7 @@ async function load(): Promise<void> {
   try { pending = account ? JSON.parse(ls.get(pendingKey(account)) || 'null') : null } catch { pending = null }
   snap = {
     storage,
-    contentRules:content?.ok===true&&content.value?.available===true,
+    contentRules:!!content&&typeof content.ok==='boolean',
     signedIn,
     decided: !!account && ls.get(decidedKey(account)) === '1',
     notes: {
