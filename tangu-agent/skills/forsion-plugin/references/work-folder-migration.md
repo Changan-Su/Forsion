@@ -60,3 +60,7 @@ Run on isolated vault copies; never mutate personal originals to test an upgrade
 - Restart after completion, delete all entries, then restart again: no resurrection. A second vault gets its own upgrade.
 
 The host owns the durable protocol. Plugin tests must also exercise actual schema/path rewriting and media references; a stub returning `complete` proves neither migration nor recovery.
+
+## Ordinary writes after upgrade
+
+`ctx.app.writeFileScoped?(path, text, expectedRoot, options?)` is separate from migration. It takes an ordinary vault-relative file path and an expected vault root captured before the task; `{ create: true }` returns `false` for an existing file instead of overwriting it. A successful write returns `true`; stale vaults reject under the host's filesystem lock. Feature-detect it, recheck task scope across awaits, and retry an export collision with a new name. A renderer-only check followed by `writeFile` on an older host cannot claim the same atomic scope guarantee. Do not implement a multi-file upgrade as a sequence of scoped writes: use `migrateWorkFolder` so the durable journal and index-last publication remain intact.

@@ -117,7 +117,8 @@ mod+J、布局记忆和移动端抽屉,自造的一样都没有,还和别的 Spa
 | 点了某一行 / 某个事件才出来的详情、表单 | 右栏临时 | Extend View(`view.extendView.open({ side: 'right' })`) |
 | 横跨全片的时间线、日志、控制台、终端 | 底部面板 | `layout.bottom`(2026-10-02 起)或 `ctx.openView(id, { location: 'bottom' })` |
 
-- 范例:**青鸟收藏夹**(左 = 收藏夹列表源;主区 = 详情 + 原生笔记 `split: "right"` + 原生聊天 `split: "down"`)、
+- **On-demand native main companions**: declare up to three `mainCompanions: [{ type: 'amadeus-editor', key: 'my-plugin-document', split: 'right' }]` on `registerView`. Types are `amadeus-editor` / `chat-panel`, splits `right` / `down`, and each stable key starts with this plugin's effective ID plus `-`; optional `params` follow native view parameters. Call the mounted `view.setCompanionsVisible?.(true)` to expand; `false` folds those keyed native views into the source tab group, preserving editor state, chat drafts and split sizes. Narrow/mobile hosts keep native tabs; unrelated views are untouched. Feature-detect on older hosts and keep an essential fallback in the Space recipe. Do not rebuild the Space or imitate native editors/chats to implement this toggle.
+- 范例:**青鸟收藏夹**(左 = 收藏夹列表源;主区 = 详情 + 按需展开的原生笔记 / 聊天，旧宿主可用 `split: "right" / "down"` 配方)、
   **视频工作室**(左 = 工程列表;主区 = 舞台与走带;右 = 属性 Extend View;底部 = 时间线)。
 - **一份状态,多个 view**:主区和底部是两个 `registerView`,同一窗口里共用插件模块里的那份状态,别各存一份。
   拆不开的 DOM 可以整块搬进另一个 view 的 `el`(事件监听跟着走),样式随之注入。
@@ -1675,6 +1676,8 @@ globalName: 'myPlugin', footer: { js: 'return myPlugin.dispose;' }
 `ctx.app.readFile/writeFile` use vault-relative paths, can access the whole active vault, reject traversal, and create parent folders on write. Every plugin gets the built-in `workFolder` setting. **New default: `Plugins/<effective-plugin-id>`**, for example `Plugins/bluebird` or `Plugins/diting`; Store IDs remain `market-<UUID>`. Display names and interface language never determine a new storage path. Always use `ctx.app.workFolder()` rather than constructing a path from the manifest, install-folder alias or translated label. A valid manual preference wins, including a Chinese or custom path outside `Plugins/`.
 
 Use Markdown for user-facing notes and hidden sidecars for machine data. Keep default output under `Plugins/`; do not invent other top-level folders or write into the vault root. Re-register the built-in setting key to customize its label/description rather than creating a second storage setting. Changing the user's preference does not move existing data.
+
+Local hosts may expose `ctx.app.writeFileScoped?(path, text, expectedRoot, { create: true })`. Capture `expectedRoot = ctx.app.vaultRoot()` before starting an asynchronous task. The host validates it under the filesystem lock and rejects a stale-vault write; create-only writes return `false` when the destination exists, successful writes return `true`. Feature-detect: an older host's renderer-side scope checks across awaits do not provide the same main-process guarantee. Keep that weaker fallback explicit and never silently overwrite an export/log name after a create-only conflict.
 
 For hosts without `workFolder`, either ask for an upgrade or preserve the plugin's established legacy path until a schema-aware recovery can run. Do not silently switch an existing installation to a hard-coded new ID path: that would hide its old data again. `workFolder()` is not a readiness probe; wait for `ctx.app.vaultRoot?.()` and catch write errors when no vault is open.
 
