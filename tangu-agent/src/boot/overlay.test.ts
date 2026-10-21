@@ -70,6 +70,23 @@ describe('checkOverlay', () => {
     expect(checkOverlay(overlay('2.1.3', { files: { 'package.json': pkgJson('2.1.3', { forsion: { minDesktop: '2.1.0' } }) } }), bundled, pub)).toMatchObject({ ok: true });
   });
 
+  it('a newer desktop can accept an engine whose version is below the desktop version', () => {
+    write(bundled, { 'desktop-host.json': JSON.stringify({ version: '4.0.0' }) });
+    const dir = overlay('2.1.1', { files: { 'package.json': pkgJson('2.1.1', { forsion: { minDesktop: '3.0.0' } }) } });
+    expect(checkOverlay(dir, bundled, pub)).toEqual({ ok: true, version: '2.1.1' });
+    expect(selectOverlay(engineRoot, bundled, { publicKeyPem: pub })?.version).toBe('2.1.1');
+  });
+
+  it('a newer bundled engine cannot satisfy a higher minimum desktop version', () => {
+    write(bundled, { 'desktop-host.json': JSON.stringify({ version: '1.0.0' }) });
+    expect(checkOverlay(overlay('2.1.1'), bundled, pub)).toMatchObject({ ok: false, code: 'host' });
+  });
+
+  it.each(['{', '{}', '{"version":null}', '{"version":"garbage"}'])('does not fall back on malformed host identity: %s', (data) => {
+    write(bundled, { 'desktop-host.json': data });
+    expect(checkOverlay(overlay('2.1.1'), bundled, pub)).toMatchObject({ ok: false, code: 'host' });
+  });
+
   it('依赖清单有任何不同都不收', () => {
     const more = overlay('2.1.1', { files: { 'package.json': pkgJson('2.1.1', { dependencies: { ...DEPS, pg: '^8.18.0' } }) } });
     expect(checkOverlay(more, bundled, pub)).toMatchObject({ ok: false, code: 'deps' });

@@ -37,6 +37,7 @@ jobs:
         run: |
           node unit/check-sync.mjs
           node --test unit/*.test.mjs
+          node --test tangu-agent/scripts/engine-release-gate.test.mjs
       - name: Install shared dependencies
         run: |
           npm ci --prefix tangu-agent --no-audit --no-fund
@@ -47,11 +48,12 @@ jobs:
       - name: Check shared runtime and Unit lifecycle
         run: |
           npm run typecheck --prefix tangu-agent
+          cd tangu-agent && npx vitest run src/boot/overlay.test.ts && cd ..
           npm run typecheck --prefix desktop
           npm run typecheck --prefix web
           npm run check:parity --prefix desktop
           cd desktop
-          npx vitest run electron/unit*.test.ts electron/backendRunner.test.ts electron/basicUnit.test.ts electron/builtinBundles.test.ts frontend/src/services/unitAccount.test.ts frontend/src/services/unitCloudTransport.test.ts frontend/src/features/nativeFeatures.test.ts
+          npx vitest run electron/engineHost.test.ts electron/engineUpdates.test.ts electron/backendManager.test.ts electron/unit*.test.ts electron/backendRunner.test.ts electron/basicUnit.test.ts electron/builtinBundles.test.ts frontend/src/services/unitAccount.test.ts frontend/src/services/unitCloudTransport.test.ts frontend/src/features/nativeFeatures.test.ts
       - name: Build independent Unit distribution
         run: node unit/build.mjs --package --local-plugins
       - uses: actions/upload-artifact@v4

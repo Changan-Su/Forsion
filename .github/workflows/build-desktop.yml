@@ -26,27 +26,19 @@ jobs:
         working-directory: tangu-agent
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Release identity checks need previous desktop / engine tags.
       - uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      # 引擎版本=产品版本(07-29 定案)。v2.7.5-v2.7.7 曾三连漏 bump 引擎版本戳,
-      # /health 与 tangu-server -v 因此失真两个版本。纯 node 断言,不需要依赖。
-      - name: Engine/desktop version parity
-        working-directory: .
-        run: |
-          node -e '
-            const d = require("./desktop/package.json").version;
-            const e = require("./tangu-agent/package.json").version;
-            if (d !== e) { console.error(`desktop ${d} != tangu-agent ${e} — forsion-release skill 第 1 步要求两包同号 bump`); process.exit(1); }
-            console.log(`version parity OK: ${d}`);
-          '
+      - name: Independent release policy tests
+        run: node --test scripts/engine-release-gate.test.mjs
 
-      # 引擎的 npm 热更新(publish-engine.yml)与桌面共用一条版本线:这个版本号若已被一次引擎热更新用掉
-      # (= 有同号的 tangu-v* tag),安装包自带的引擎就会和 npm 上同号的那份内容不同。只在真发版(推 tag)时查。
-      - name: Version not taken by an engine hot update
+      # Desktop and engine versions are independent; validate the bundled engine in its own release history.
+      - name: Desktop and bundled engine release identities
         if: github.event_name == 'push'
-        run: node scripts/engine-release-gate.mjs --desktop-release
+        run: node scripts/engine-release-gate.mjs --desktop-release "$GITHUB_REF_NAME"
 
       - run: npm install --no-audit --no-fund
       - run: npm run typecheck
