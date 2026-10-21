@@ -54,7 +54,8 @@ public static class MiniNativeInput {
     if(!SetWindowPos(new IntPtr(window),IntPtr.Zero,0,0,0,0,0x13)) throw new Exception("Cannot expose owned fixture caption");
     var h=new IntPtr(window); Rect r; var origin=Resolve(window,0,0);
     if(!GetWindowRect(h,out r)||origin.y<=r.t) throw new Exception("Expected owned native caption");
-    Move(r.l+40,r.t+(origin.y-r.t)/2); Send(2); Send(4);
+    Move(r.l+40,r.t+(origin.y-r.t)/2);System.Threading.Thread.Sleep(100);
+    Send(2);System.Threading.Thread.Sleep(40);Send(4);
     System.Threading.Thread.Sleep(200);
     if(GetForegroundWindow()!=h) throw new Exception("Owned main window did not receive foreground");
   }

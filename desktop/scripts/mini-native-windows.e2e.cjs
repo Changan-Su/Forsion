@@ -118,6 +118,10 @@ async function main() {
     await nativeClick(mini.locator('.mini-card-close'))
     for(let i=0;i<60&&!mini.isClosed();i++)await pause(50)
     check('native close button closes Mini without resize interception',mini.isClosed())
+    // The hotkey is a separate other-app scenario. Minimize the main surface
+    // whose activation was just verified so it cannot cover Notepad's caption.
+    await app.evaluate(({BrowserWindow},handle)=>BrowserWindow.getAllWindows().find(w=>w.getNativeWindowHandle().readBigUInt64LE().toString()===handle).minimize(),receipt.main)
+    await pause(300)
     await native('hotkey',['-Window',fixture.hwnd])
     for(let i=0;i<200;i++){mini=app.windows().find(w=>w.url().includes('window=mini'));if(mini)break;await pause(50)}
     assert.ok(mini,'Native global shortcut reopens Mini')
