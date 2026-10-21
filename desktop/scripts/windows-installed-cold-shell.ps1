@@ -15,6 +15,9 @@ try {
   $taskEnd=[DateTime]::UtcNow.AddSeconds(60)
   do {
     $taskProcesses=Owned
+    $taskEvidence.processes=@($taskProcesses | Select-Object ProcessId,ParentProcessId,ExecutablePath,CommandLine)
+    $taskEvidence.phase='reading native accessibility'
+    $taskEvidence | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $Output -Encoding utf8
     $taskNames=[Collections.Generic.List[string]]::new()
     foreach ($taskProc in $taskProcesses) {
       $taskHandle=(Get-Process -Id $taskProc.ProcessId -ErrorAction SilentlyContinue).MainWindowHandle

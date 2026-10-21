@@ -117,7 +117,14 @@ async function main() {
       windowsHide: true, stdio: ['ignore', 'inherit', 'inherit'],
       env: { ...process.env, TANGU_HOME: home, FORSION_WORKSPACE_DIR: path.join(home, 'workspace'), TANGU_BACKEND_URL: stub.url },
     })
-    const coldCode = await new Promise((resolve, reject) => { cold.once('exit', resolve); cold.once('error', reject) })
+    const coldCode = await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        try { execFileSync('taskkill.exe', ['/PID', String(cold.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }) } catch {}
+        reject(new Error('Cold native accessibility probe exceeded 120 seconds'))
+      }, 120000)
+      cold.once('exit', code => { clearTimeout(timer); resolve(code) })
+      cold.once('error', error => { clearTimeout(timer); reject(error) })
+    })
     check('actual cold shell open renders the original file in the installed app', coldCode === 0 && JSON.parse(fs.readFileSync(path.join(out, 'cold-shell.json'), 'utf8').replace(/^\uFEFF/, '')).passed)
     fs.writeFileSync(path.join(out, 'application-results.json'), JSON.stringify({ checks, runtime: info }, null, 2))
     console.log(`${checks.length}/${checks.length} application checks passed`)
@@ -129,7 +136,12 @@ async function main() {
   } finally {
     for (const child of children) if (child.exitCode === null) child.kill()
     try { await closeApp() }
-    finally { await stub.close() }
+    finally {
+      // ShellExecute may launch via Explorer rather than as our child. Cleanup
+      // also covers a UIA provider hanging beyond the probe process deadline.
+      try { ps(`Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.Equals(${quote(exe)},[StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { & taskkill.exe /PID $_.ProcessId /T /F 2>$null | Out-Null }`) } catch {}
+      await stub.close()
+    }
   }
 }
 main().catch(error => { console.error(error); process.exitCode = 1 })
