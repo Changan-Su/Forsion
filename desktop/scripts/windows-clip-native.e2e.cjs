@@ -87,14 +87,16 @@ async function main() {
     check('Open folder creates a real Explorer window at the copied directory', explorer?.found, explorer)
     await desktop('explorer', ['-Path', copyDir, '-Close'])
     const work = await app.evaluate(({ screen }) => screen.getPrimaryDisplay().workArea)
-    const leftWidth = Math.min(780, Math.round(work.width * 0.55))
+    // The runner has a 1024px desktop. Keep the real settings layout readable,
+    // overlap Chrome behind it, and drop into Chrome's exposed right edge.
+    const leftWidth = Math.min(820, work.width-160), chromeWidth=Math.min(600,work.width-200)
     await app.evaluate(({ BrowserWindow }, { id, work, leftWidth }) => {
       const window=BrowserWindow.fromId(id), parent=window.getParentWindow()
       if(parent) parent.hide()
       window.setMinimumSize(500,400); window.setBounds({x:work.x,y:work.y,width:leftWidth,height:work.height}); window.show(); window.focus()
     }, {id,work,leftWidth})
     browser = await chromium.launchPersistentContext(path.join(home, 'chrome'), { headless: false, viewport: null, locale: 'en-US', ignoreDefaultArgs: ['--disable-extensions'],
-      args: ['--lang=en-US', '--no-first-run', '--no-default-browser-check', '--proxy-server=http://127.0.0.1:9', '--proxy-bypass-list=<-loopback>', `--window-position=${work.x+leftWidth},${work.y}`, `--window-size=${work.width-leftWidth},${work.height}`] })
+      args: ['--lang=en-US', '--no-first-run', '--no-default-browser-check', '--proxy-server=http://127.0.0.1:9', '--proxy-bypass-list=<-loopback>', `--window-position=${work.x+work.width-chromeWidth},${work.y}`, `--window-size=${chromeWidth},${work.height}`] })
     const page = browser.pages()[0]; await page.goto('chrome://extensions')
     await page.evaluate(()=>{
       window.__clipNativeDrops=[]
@@ -111,11 +113,12 @@ async function main() {
       const dropsBefore=await page.evaluate(()=>window.__clipNativeDrops.length)
       await activateSettings(); await chip.evaluate(element=>element.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'})); await chip.click({trial:true}); await sleep(300)
       const box=await chip.boundingBox()
-      const geo=await app.evaluate(({BrowserWindow},id)=>{const w=BrowserWindow.fromId(id);return {bounds:w.getContentBounds(),zoom:w.webContents.getZoomFactor()}},id)
-      const from={x:Math.round(geo.bounds.x+(box.x+box.width/2)*geo.zoom),y:Math.round(geo.bounds.y+(box.y+box.height/2)*geo.zoom)}
-      const to={x:Math.round(work.x+leftWidth+(work.width-leftWidth)/2),y:Math.round(work.y+work.height*0.65)}
+      const geo=await app.evaluate(({BrowserWindow},id)=>{const w=BrowserWindow.fromId(id);return {bounds:w.getContentBounds(),outer:w.getBounds(),zoom:w.webContents.getZoomFactor(),hwnd:w.getNativeWindowHandle().readBigUInt64LE().toString()}},id)
+      const from={x:Math.round((box.x+box.width/2)*geo.zoom),y:Math.round((box.y+box.height/2)*geo.zoom)}
+      const to={x:Math.round((geo.outer.x+geo.outer.width+work.x+work.width)/2),y:Math.round(work.y+work.height*0.65)}
+      assert.ok(from.x>=0&&from.y>=0&&from.x<geo.bounds.width&&from.y<geo.bounds.height&&to.x>geo.outer.x+geo.outer.width&&to.x<work.x+work.width,'Native drag endpoints must be visible on their real windows')
       fs.writeFileSync(path.join(output,'drag-points.json'),JSON.stringify({from,to,work,box,geo},null,2))
-      await desktop('drag',['-FromX',String(from.x),'-FromY',String(from.y),'-ToX',String(to.x),'-ToY',String(to.y)])
+      await desktop('drag',['-FromWindow',geo.hwnd,'-FromX',String(from.x),'-FromY',String(from.y),'-ToX',String(to.x),'-ToY',String(to.y)])
       await sleep(1800)
       const requests=await app.evaluate(()=>globalThis.__clipNativeDragRequests)
       const drops=await page.evaluate(()=>window.__clipNativeDrops)
