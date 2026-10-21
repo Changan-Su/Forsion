@@ -1275,6 +1275,8 @@ export type PluginShelfItem =
 
 export interface PluginAccountStatus {
   loggedIn: boolean
+  /** Account API base; no credentials. */
+  cloudUrl?: string
   userId?: string
   username?: string | null
   role?: string
@@ -1288,6 +1290,8 @@ export interface PluginAccount {
   login(): Promise<unknown>
   logout(): Promise<unknown>
   request(path: string, init?: RequestInit): Promise<Response>
+  /** Save through the native Downloads provider when available. */
+  saveDownload?(blob: Blob, name: string): Promise<{ ok: boolean; error?: string }>
   subscribe(listener: (status: PluginAccountStatus) => void): () => void
 }
 

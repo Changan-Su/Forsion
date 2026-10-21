@@ -24,7 +24,7 @@ try {
     license: 'SEE LICENSE IN LICENSE', repository: { type: 'git', url: 'git+https://github.com/Changan-Su/Forsion.git', directory: 'unit' },
     engines: { node: '>=20' }, publishConfig: { access: 'public' },
     files: ['main.mjs', 'backendWorker.mjs', 'release.json', 'README.md', 'LICENSE', 'web'] }, null, 2) + '\n')
-  await writeFile(resolve(stage, 'release.json'), JSON.stringify({ ...baseline, builtAt: new Date().toISOString(), commercialServerIncluded: false }, null, 2) + '\n')
+  await writeFile(resolve(stage, 'release.json'), JSON.stringify({ ...baseline, builtAt: new Date().toISOString(), commercialServerIncluded: false, runtimeFeatures: ['webEntries'] }, null, 2) + '\n')
   await cp(resolve(root, 'README.md'), resolve(stage, 'README.md'))
   await cp(resolve(root, '../LICENSE'), resolve(stage, 'LICENSE'))
   if (process.argv.includes('--package')) {

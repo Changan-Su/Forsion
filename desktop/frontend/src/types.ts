@@ -412,6 +412,8 @@ declare global {
       /** Verified account config installed synchronously before stores initialize. */
       initialConfig?: StoredDesktopConfig
       account?: import('./amadeus/plugins/types').PluginAccount
+      /** Verified Extend renderer is bundled with the mobile host. */
+      extendMobile?: boolean
       getConfig(): Promise<StoredDesktopConfig>
       documentTasks?: import('../../shared/documentTasks').DocumentTaskClaimsApi
       setConfig(patch: Partial<StoredDesktopConfig>): Promise<StoredDesktopConfig>

@@ -1,7 +1,7 @@
 /**
- * 使用指南(Forsion Extend 0.9)× 手机单列壳 —— `npm run build && EXTEND_PKG=<已 build 的 Extend 检出> npm run e2e:guide`。
+ * 使用指南(Forsion Extend 0.9)× 手机单列壳 —— `npm run build && npm run e2e:guide`。
  *
- * 手机 App 现在不随包带 Extend(只有桌面带),所以这里经手机自己的插件宿主(假市场,同 e2e:plugins)把 Extend 装进来,
+ * 手机 App 随包带经签名验证的 Extend,这里使用真实捆绑代码,
  * 看指南在手机布局下落在哪、宿主那几条接缝在手机上通不通:
  *   ① 冷启动(落主页)不算一次「换 Space」(bootstrapEngine 里启动后 3s 内不计);
  *   ② 有「已达成未领取」的成就 →「⋯」上挂红点、「⋯」里成就那行挂红点(读屏念「有可领取的成就」);
@@ -16,17 +16,14 @@
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
-const JSZip = require('jszip')
 const { startPreview } = require('./lib/preview.cjs')
 const { chromium } = (() => {
   try { return require('playwright-core') } catch { /* 落到 desktop */ }
   return require(path.resolve(__dirname, '../../desktop/node_modules/playwright-core'))
 })()
 
-const EXTEND = process.env.EXTEND_PKG
 const ROOT = process.env.E2E_ROOT ? path.resolve(process.env.E2E_ROOT) : path.resolve(__dirname, '..')
 const SHOTS = path.resolve(__dirname, '../outputs/guide-mobile')
-const CDN = 'https://market-cdn.e2e.test'
 const EXT_ID = 'forsion-extend'
 const GUIDE = 'forsion-guide'
 const ACH_KEY = 'forsion_tangu_achievements'
@@ -51,21 +48,9 @@ function findChromium() {
   throw new Error('找不到 chromium,设 CHROMIUM_EXE 环境变量')
 }
 
-/** 按 Extend 的 files 白名单打包(同 npm 包内容);desktop.mjs 手机用不上,不带。 */
-async function extendZip() {
-  const z = new JSZip()
-  const pkg = JSON.parse(fs.readFileSync(path.join(EXTEND, 'package.json'), 'utf8'))
-  for (const f of ['manifest.json', 'dist/main.js', 'spaces/guide/space.json']) z.file(f, fs.readFileSync(path.join(EXTEND, f)))
-  return { body: Buffer.from(await z.generateAsync({ type: 'uint8array' })), version: pkg.version }
-}
-
 async function main() {
-  if (!EXTEND || !fs.existsSync(path.join(EXTEND, 'dist/main.js'))) { console.error('✗ EXTEND_PKG 要指到已 build 的 Forsion-Extend 检出'); process.exit(1) }
   if (!fs.existsSync(path.join(ROOT, 'dist/index.html'))) { console.error(`✗ ${ROOT} 没有 dist/,先 npm run build`); process.exit(1) }
   fs.mkdirSync(SHOTS, { recursive: true })
-  const zip = await extendZip()
-  const card = { id: EXT_ID, type: 'amadeus-plugin', source: 'zip', name: 'Forsion Extend', summary: 'e2e', author: 'Forsion', installSlug: EXT_ID, downloads: 1, latestVersion: zip.version, tags: [], createdAt: '2026-10-01T00:00:00Z', updatedAt: '2026-10-01T00:00:00Z' }
-
   const preview = await startPreview(ROOT)
   const fails = []
   const check = (ok, name, extra) => { if (!ok) fails.push(name); console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${extra ? `  | ${extra}` : ''}`) }
@@ -84,15 +69,6 @@ async function main() {
       }, [ACH_KEY, seed])
       await ctx.route('**/auth/me', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: '{"username":"e2e"}' }))
       await ctx.route('**/api/**', (r) => r.abort())
-      await ctx.route('**/api/market/**', (r) => { // 后注册先匹配:写在 abort 之后
-        const u = new URL(r.request().url())
-        const json = (body, status = 200) => r.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
-        if (u.pathname === '/api/market/items') return json({ items: [card] })
-        if (u.pathname === `/api/market/items/${EXT_ID}/install`) return json({ type: 'amadeus-plugin', installSlug: EXT_ID, downloadUrl: `${CDN}/${EXT_ID}.zip`, source: 'zip' })
-        if (u.pathname === `/api/market/items/${EXT_ID}`) return json({ ...card, readme: '# Forsion Extend' })
-        return json({}, 404)
-      })
-      await ctx.route(`${CDN}/**`, (r) => r.fulfill({ status: 200, body: zip.body, headers: { 'content-type': 'application/zip', 'access-control-allow-origin': '*', 'content-length': String(zip.body.length) } }))
       // ⚠️ context 的第一张页有时没有触屏模拟(界面照桌面渲染):读 maxTouchPoints,没有就再开一张
       let page = await ctx.newPage()
       await page.goto('about:blank')
@@ -145,14 +121,10 @@ async function main() {
     const rowDot = await achRow.locator('.rb-dot').getAttribute('aria-label').catch(() => null)
     check(rowDot === '有可领取的成就', '② 「⋯」里成就那行挂红点(读屏念出意思)', String(rowDot))
     await shot('2-more-sheet')
-    // 装 Extend(⋯ → 市场 → 安装)
-    await tap(page.locator('.mb-sheet [data-ribbon-id="rb-market"]'), '市场')
-    await tap(page.locator(`[data-market-install="${EXT_ID}"]`), '安装 Forsion Extend')
-    await page.locator('[data-market-notice]').waitFor({ state: 'visible', timeout: 20_000 }).catch(() => {})
-    const notice = await page.locator('[data-market-notice]').getAttribute('data-market-notice').catch(() => null)
-    check(notice === 'ok', '手机插件宿主装得上 Extend', `${notice}: ${(await page.locator('[data-market-notice]').innerText().catch(() => '')).trim()}`)
-    await tap(page.locator('[data-mobile-market] .settings-back').first(), '关闭市场')
-    await page.waitForTimeout(1500)
+    // The official renderer is part of the app; test its real host listing rather than installing a duplicate identity.
+    const ext = await page.evaluate(async () => (await window.amadeus.listPlugins()).find((p) => p.id === 'forsion-extend'))
+    check(!!ext?.locked && !!ext?.preinstalled, '手机捆绑的 Extend 已装载')
+    await page.locator('.mb-sheet-scrim').click({ position: { x: 10, y: 10 } }).catch(() => page.keyboard.press('Escape'))
 
     // ③ forsion:// 链接
     const l1 = await followLink(`forsion://space/${GUIDE}`, GUIDE)

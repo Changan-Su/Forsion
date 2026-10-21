@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.60.1
+  version: 1.60.2
   author: Forsion
   category: Forsion
 ---
@@ -1866,7 +1866,11 @@ Forsion Android App 也跑 Forsion 插件(同一份 `pluginStore`、同一个 `c
 
 ### 共享账号 `ctx.account`（可选）
 
-发布到 Unit 网页且安装账号提供方时，宿主提供 `ctx.account`：`status()` 返回经过服务端验证的 `loggedIn/userId/username/role/tenantId/workspaceId`，`login()` 打开共享 Forsion 登录页，`logout()` 吊销当前会话后退出，`request(path, init)` 在账号 API 基址下发送请求（例如 `/admin/users`），`subscribe(listener)` 订阅账号变化并返回退订函数。宿主在插件禁用或重载时自动退订。账号变更会取消旧请求，并使尚未消费的响应体失败；调用方仍需释放自己的视图与任务。不要保存凭据或从其他页面的 localStorage 导入令牌。个人 workspace 由服务端身份提供方确定，不接受客户端指定；组织与成员关系不在当前契约内。旧宿主与远程独立管理模式应先判断能力存在性。
+发布到 Unit 网页且安装账号提供方时、或在移动端应用中，宿主可提供 `ctx.account`：`status()` 返回经过服务端验证的 `loggedIn/userId/username/role/tenantId/workspaceId`，`login()` 打开共享 Forsion 登录页，`logout()` 吊销当前会话后退出，`request(path, init)` 在账号 API 基址下发送请求（例如 `/admin/users`），`subscribe(listener)` 订阅账号变化并返回退订函数。宿主在插件禁用或重载时自动退订。账号变更会取消旧请求，并使尚未消费的响应体失败；调用方仍需释放自己的视图与任务。不要保存凭据或从其他页面的 localStorage 导入令牌。个人 workspace 由服务端身份提供方确定，不接受客户端指定；组织与成员关系不在当前契约内。旧宿主与远程独立管理模式应先判断能力存在性。
+
+移动端请求允许 `/files` 这样的 API 相对路径或同源 `/api/...` 绝对地址，拒绝其他源与重定向；宿主覆盖鉴权头并保留 FormData/Blob 上传。可选 `ctx.account.saveDownload(blob, name)` 返回 `{ ok, error? }`，Android 使用系统下载提供方。插件禁用/重载后账号请求与下载入口失效，不要保留旧 context 发起副作用。`status().cloudUrl` 是不含凭据的账号 API 基址。
+
+Mobile account requests accept API-relative paths such as `/files` or same-origin absolute `/api/...` URLs, reject other origins and redirects, supply host-owned authentication headers, and preserve FormData/Blob uploads. Optional `ctx.account.saveDownload(blob, name)` returns `{ ok, error? }` and uses Android system Downloads. Account request and download methods are revoked when the plugin is disabled or reloaded. `status().cloudUrl` is the credential-free account API base.
 
 ### Unit 与浏览器资源路径（2026-09-09）
 

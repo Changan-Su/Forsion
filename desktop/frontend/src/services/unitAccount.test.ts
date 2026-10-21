@@ -38,6 +38,82 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('Unit visitor Account adapter', () => {
+  it('inherits an existing Web login only for the configured official entry, after Unit verification', async () => {
+    const legacy = new Map([['forsion_token', 'token-b'], ['old-note-cache', 'keep']])
+    vi.stubGlobal('localStorage', { getItem: (key: string) => legacy.get(key) ?? null })
+    await installUnitAccount(meta, base)
+    expect(fetcher).not.toHaveBeenCalled()
+    const inherited = await installUnitAccount({ ...meta, inheritWebAccount: true }, base)
+    expect(inherited.account.getIdentity()?.userId).toBe('b')
+    expect(values.get(tokenKey)).toBe('token-b')
+    expect(legacy.get('old-note-cache')).toBe('keep')
+    expect(legacy.get('forsion_token')).toBe('token-b')
+    expect(fetcher.mock.calls[0][0]).toBe('https://forsion.test/admin/unit/account')
+  })
+
+  it('keeps an existing tab account instead of replacing it with another old Web login', async () => {
+    values.set(tokenKey, 'token-a')
+    vi.stubGlobal('localStorage', { getItem: () => 'token-b' })
+    const inherited = await installUnitAccount({ ...meta, inheritWebAccount: true }, base)
+    expect(inherited.account.getIdentity()?.userId).toBe('a')
+    expect(values.get(tokenKey)).toBe('token-a')
+  })
+
+  it.each(['owned', 'shared', 'unrelated'])('restores only a server-authorized old vault selection (%s)', async (kind) => {
+    const legacy = new Map([['forsion_token', 'token-b'], ['amadeus.cloudVaultId', 'previous-vault'], ['amadeus_tree_snap', 'private old cache']])
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => legacy.get(key) ?? null,
+      setItem: (key: string, value: string) => { legacy.set(key, value) },
+    })
+    const authority = fetcher.getMockImplementation()!
+    fetcher.mockImplementation(async (input, init) => {
+      const path = new URL(String(input)).pathname
+      if (path === '/api/amadeus/vaults') return json({ vaults: kind === 'owned' ? [{ id: 'previous-vault' }] : [] })
+      if (path === '/api/amadeus/shared-with-me') return json({ items: kind === 'shared' ? [{ vaultId: 'previous-vault' }] : [] })
+      return authority(input, init)
+    })
+    await installUnitAccount({ ...meta, inheritWebAccount: true }, base)
+    expect(legacy.get(contentStorageKey('amadeus.cloudVaultId'))).toBe(kind === 'unrelated' ? undefined : 'previous-vault')
+    expect(legacy.get(contentStorageKey('amadeus_tree_snap'))).toBeUndefined()
+    expect(legacy.get('amadeus_tree_snap')).toBe('private old cache')
+  })
+
+  it('does not adopt a rejected old credential or overwrite its storage', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'invalid-old-token' })
+    const inherited = await installUnitAccount({ ...meta, inheritWebAccount: true }, base)
+    expect(inherited.account.getIdentity()).toBeNull()
+    expect(values.has(tokenKey)).toBe(false)
+  })
+
+  it('preserves credentials and surfaces temporary authority failures during migration', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'token-b' })
+    fetcher.mockResolvedValueOnce(json({}, 503))
+    await expect(installUnitAccount({ ...meta, inheritWebAccount: true }, base)).rejects.toMatchObject({ status: 503 })
+    expect(values.has(tokenKey)).toBe(false)
+  })
+
+  it('retries an interrupted vault-pointer migration with the already adopted tab identity', async () => {
+    const legacy = new Map([['forsion_token', 'token-b'], ['amadeus.cloudVaultId', 'previous-vault']])
+    vi.stubGlobal('localStorage', { getItem: (k: string) => legacy.get(k) ?? null, setItem: (k: string, v: string) => { legacy.set(k, v) } })
+    const authority = fetcher.getMockImplementation()!
+    let available = false
+    fetcher.mockImplementation(async (input, init) => new URL(String(input)).pathname === '/api/amadeus/vaults'
+      ? json({ vaults: [{ id: 'previous-vault' }] }, available ? 200 : 503) : authority(input, init))
+    await expect(installUnitAccount({ ...meta, inheritWebAccount: true }, base)).rejects.toMatchObject({ status: 503 })
+    expect(values.get(tokenKey)).toBe('token-b')
+    available = true
+    await installUnitAccount({ ...meta, inheritWebAccount: true }, base)
+    expect(legacy.get(contentStorageKey('amadeus.cloudVaultId'))).toBe('previous-vault')
+  })
+
+  it('discards an old uncorrelated URL callback and inherits only the independently verified stored user', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'token-a' })
+    browserLocation.href = base.href + '?token=token-b'
+    const inherited = await installUnitAccount({ ...meta, inheritWebAccount: true }, base)
+    expect(inherited.account.getIdentity()?.userId).toBe('a')
+    expect(browserLocation.href).toBe(base.href)
+    expect(fetcher.mock.calls.some(([, init]) => new Headers(init?.headers).get('Authorization') === 'Bearer token-b')).toBe(false)
+  })
   it('uses a one-time login state and the existing auth page in a tab session', async () => {
     const unit = await installUnitAccount(meta, base)
     expect(fetcher).not.toHaveBeenCalled()

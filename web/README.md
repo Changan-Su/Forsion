@@ -1,16 +1,31 @@
 # Forsion Web
 
-浏览器端云客户端(内部代号 **Tangu Web**,镜像/容器名 `tangu-web`)。经 vite 别名**复用 `desktop/frontend/src` 渲染层**,打包成一个纯前端站点,由自带 nginx 托管;运行时把 `/api`、`/auth` 等反代到已部署的 **Forsion server**(→ tangu worker)。
-
-> **它不挂在 server 的路由下**,是独立部署的 app:自己的容器、自己的 nginx、自己的域名。server 只当后端网关用。
+官方浏览器入口使用 **Unit + 插件**。现有 `tangu_web` 容器保留为同源 Nginx 网关；`/` 跳到 `/web/`，界面、已签名 Extend、账号及商店由后端 Unit 发布。
+共享渲染层仍经 Vite 复用 desktop/mobile，但官方入口不再启动旧 `webShim` 空插件宿主。
 
 ```
 浏览器 ──▶ Forsion Web(nginx :80)
-             ├─ /            静态 SPA(dist/)
-             └─ /api /auth … 反代 ──▶ Forsion server(:3001) ──▶ tangu worker
+             ├─ / → /web/    Unit 公共界面及插件
+             └─ /api /auth … 同源反代 ──▶ 同一个 Forsion server(:3001) ──▶ worker
 ```
 
 ---
+
+## 官方入口升级
+
+先升级 Unit 宿主，再使用 Server 仓的 `unit:prepare -- --web`、公共 Web 镜像目标和显式 `enable-web` 步骤，将业务界面包装到**现有**实例。
+原 `/admin/`、实例 ID、后台配置和账号存储保持原位置。普通后台镜像不会自动装入 Web 包，也不会在启动时改旧实例的发布配置。
+Server 仓 `scripts/genesis-web-README.md` 给出具体命令。
+
+**在替换当前 Web 容器之前**，从能访问后端的位置执行：
+
+```sh
+node web/scripts/check-unit-upstream.mjs https://api.forsion.net
+```
+
+门禁必须同时看到活动账号与云服务、已验签的 Extend、蓬洲云 Space，且公共插件清单没有 server-admin；不通过就保留当前容器。
+之后才以固定镜像 SHA 执行既有 pull + Compose `--no-build` 切换。默认 `WEB_ENTRY_MODE=unit`；`legacy` 仅供显式回退旧静态入口。
+网关返回相对重定向，保留外层 HTTPS、端口和 UI 查询参数。下文旧 `webShim` 路径仅用于本地调试与该回退模式。
 
 ## 移动布局 / Mobile layout
 

@@ -17,11 +17,15 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type http from 'node:http'
+import { execFileSync } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { chromium, type Page } from 'playwright-core'
 import { startUnitWeb } from '../electron/unitWeb'
 import { resolveProduct } from '../shared/product'
 import basic from '../products/basic.json'
-import { readPackage } from '../../unit/packages'
+import * as unitPackages from '../../unit/packages'
+// Unit sources have no package.json; tsx may expose them through CommonJS on Node 22.
+const { readPackage } = (unitPackages as unknown as { default?: typeof unitPackages }).default ?? unitPackages
 
 const DIST = path.resolve(import.meta.dirname, '../unit-web-dist')
 const SHOT_DIR = process.env.SHOT_DIR || '/tmp'
@@ -150,7 +154,7 @@ async function main(): Promise<void> {
     },
     routeRequest: fakeCloud,
     meta: { instanceId: INSTANCE, name: 'Forsion Genesis Web', version: '9.9.9' },
-    projection: { mode: 'public', basePath: '/web/', product: resolveProduct(undefined, { ...basic, market: plugins.some((p) => (p as { locked?: boolean }).locked), onboarding: false, nativeFeatures: [] }), capabilities: () => ({}) },
+    projection: { mode: 'public', basePath: '/web/', inheritWebAccount: plugins.length > 0, product: resolveProduct(undefined, { ...basic, market: plugins.some((p) => (p as { locked?: boolean }).locked), onboarding: false, nativeFeatures: [] }), capabilities: () => ({}) },
     getEngine: () => ({ url: null, token: '' }),
     confirmPair: async () => false,
     pairedDevices: { list: () => [], add: async () => { throw new Error('Pairing is disabled') } },
@@ -163,15 +167,40 @@ async function main(): Promise<void> {
   }, { port: 0, bindHost: '127.0.0.1' })
   const handle = await startUnit([pack.ui], pack.spaces)
   const bare = await startUnit([], [])
-  const base = `http://unit-public.test:${handle.port}`
+  let base = `http://unit-public.test:${handle.port}`
+  let gateway = ''
+  if (process.env.UNIT_GATEWAY_IMAGE) {
+    gateway = `forsion-unit-gateway-${randomUUID()}`
+    execFileSync('docker', ['run', '--rm', '-d', '--name', gateway, '--add-host', 'host.docker.internal:host-gateway',
+      '-p', '127.0.0.1::80', '-e', `BACKEND_URL=http://host.docker.internal:${handle.port}`, process.env.UNIT_GATEWAY_IMAGE])
+    const port = execFileSync('docker', ['port', gateway, '80/tcp'], { encoding: 'utf8' }).trim().split(':').at(-1)
+    base = `http://unit-public.test:${port}`
+    let ready = false
+    for (let attempt = 0; attempt < 80; attempt++) {
+      ready = await fetch(`http://127.0.0.1:${port}/?ui=desktop`, { redirect: 'manual' }).then((r) => {
+        if (r.status !== 302) return false
+        check('网关重定向保留查询且不降级外部 HTTPS 或丢失端口', r.headers.get('location') === '/web/?ui=desktop', String(r.headers.get('location')))
+        return true
+      }).catch(() => false)
+      if (ready) break
+      await new Promise((resolve) => setTimeout(resolve, 250))
+    }
+    if (!ready) {
+      console.error(execFileSync('docker', ['logs', gateway], { encoding: 'utf8' }))
+      execFileSync('docker', ['rm', '-f', gateway], { stdio: 'ignore' })
+      throw new Error('Unit gateway did not become ready')
+    }
+  }
 
-  const browser = await chromium.launch({ executablePath: findChromium(), headless: true, args: ['--host-resolver-rules=MAP unit-public.test 127.0.0.1'] })
+  const browser = await chromium.launch({ executablePath: findChromium(), headless: true, args: ['--no-proxy-server', '--host-resolver-rules=MAP unit-public.test 127.0.0.1'] })
   try {
     const context = await browser.newContext({ viewport: { width: 1280, height: 820 }, locale: 'zh-CN' })
     await context.addInitScript(([instance]) => {
       try {
         localStorage.setItem('forsion_tangu_onboarding_done', '1')
         localStorage.setItem('forsion_tangu_onboarding_version', '9.9.9')
+        localStorage.setItem('forsion_token', 'tok-visitor')
+        localStorage.setItem('legacy-note-cache', 'old note stays intact')
         sessionStorage.setItem(`unit:${instance}:login-state`, 'S1') // 登录回跳的 state(unitAccount.ts)
       } catch { /* 私密模式 */ }
     }, [INSTANCE])
@@ -182,9 +211,12 @@ async function main(): Promise<void> {
     const consoleLines: string[] = []
     page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') consoleLines.push(m.text().slice(0, 200)) })
     // 登录回跳(= /auth 登完带 token 回来),页面自己核身份、存进标签页会话
-    await page.goto(`${base}/web/?token=${TOKEN}&account_state=S1`)
+    await page.goto(gateway ? `${base}/?ui=desktop` : `${base}/web/`)
     await page.locator('.rb').first().waitFor()
     await page.waitForTimeout(1500)
+    check('旧 Web 登录经 Unit 验证后继承，旧数据不清空，URL 无 token', await page.evaluate(([instance]) =>
+      sessionStorage.getItem(`unit:${instance}:account`) === 'tok-visitor' &&
+      localStorage.getItem('legacy-note-cache') === 'old note stays intact' && !new URL(location.href).searchParams.has('token'), [INSTANCE]))
     const bridge = await page.evaluate(() => { const t = (window as any).tangu; return { entry: t?.unitPublicEntry, unitPage: t?.unitPage, fetch: typeof t?.cloudFetch, invoke: typeof t?.cloudInvoke, market: typeof t?.marketList } })
     check('① 网页主入口标志在,cloudFetch / cloudInvoke 没挂到 window.tangu', bridge.entry === true && bridge.unitPage === true && bridge.fetch === 'undefined' && bridge.invoke === 'undefined' && bridge.market === 'function', JSON.stringify(bridge))
 
@@ -249,6 +281,9 @@ async function main(): Promise<void> {
     if (await penzor.count()) {
       await penzor.click()
       await page.getByText('我的云盘').first().click()
+      const driveRoot = page.locator('[data-row-key="drive-root"]').first()
+      if (await driveRoot.count() && await driveRoot.getAttribute('aria-expanded') !== 'true') await driveRoot.click()
+      await page.locator('[data-row-key="app:penzor"]').first().click()
       await page.getByText('方案.pdf').first().waitFor()
       const toolbar = await page.locator('.pz-btn, .pz-ibtn').evaluateAll((els) => els.map((e) => (e.textContent || '') + '|' + (e.getAttribute('title') || '')))
       penzorOk = toolbar.some((s) => s.includes('上传')) && toolbar.some((s) => s.includes('新建文件夹'))
@@ -298,6 +333,7 @@ async function main(): Promise<void> {
     await browser.close()
     await handle.close?.()
     await bare.close?.()
+    if (gateway) execFileSync('docker', ['rm', '-f', gateway], { stdio: 'ignore' })
   }
   const fails = results.filter((r) => !r.ok).length
   console.log(`\n${results.length - fails}/${results.length} passed${fails ? ` — ${fails} FAILED` : ''}  截图:${SHOT_DIR}/unit-public-extend-*.png`)

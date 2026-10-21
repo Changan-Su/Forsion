@@ -188,7 +188,7 @@ export interface UnitWebDeps {
   readHostStat: (p: string) => Promise<{ isDir: boolean; mtimeMs: number; birthtimeMs: number | null; files?: number; folders?: number } | null>
   meta: { instanceId: string; name: string; version: string }
   /** Explicit web publishing only exposes code/layout. Host data keeps the pairing boundary. */
-  projection?: { mode: 'public' | 'local'; basePath: string; product: ProductProfile; capabilities?: () => object; localCapabilities?: () => { vault: boolean; engine: boolean; host: boolean } }
+  projection?: { mode: 'public' | 'local'; basePath: string; product: ProductProfile; inheritWebAccount?: boolean; capabilities?: () => object; localCapabilities?: () => { vault: boolean; engine: boolean; host: boolean } }
   /** P2P 应答(方案 §12,可缺省):收 offer SDP 出 answer SDP,DataChannel 开门后由主进程把
    *  信道接到本机 unitWeb(attachHostChannel)。缺省 = 本端不支持 P2P,路由回 501。 */
   p2pAnswer?: (offerSdp: string) => Promise<string>
@@ -211,6 +211,8 @@ export interface UnitWebDeps {
 }
 
 export interface UnitWebHandle {
+  /** A renderer mounted by the owning Unit shares its listener and account authority. */
+  handleRequest: (req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>
   port: number
   /** 隧道(unitHost)豁免鉴权用的 per-boot 内部密钥;仅 loopback 来源有效。 */
   internalSecret: string
@@ -290,7 +292,8 @@ const PLACEHOLDER = `<!doctype html><meta charset="utf-8"><title>Forsion Unit</t
  * 且配对请求必须来自 origins 里的扩展(网页伪造不了 Origin;Clip 后台的 POST 实测带 chrome-extension://<id>)。
  * 门铃的 confirmPair 由主进程换成「允许并打开」:打开互联、等正式服务起来再批准,令牌经共用的 opts.pairs 交出。
  */
-export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?: string; pairs?: PairStore; doorbell?: { origins: string[] } }): Promise<UnitWebHandle> {
+export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?: string; mountOnly?: boolean; pairs?: PairStore; doorbell?: { origins: string[] } }): Promise<UnitWebHandle> {
+  if (opts.mountOnly && deps.projection?.mode !== 'public') throw new Error('Only public renderers can be mounted')
   if (deps.projection && !/^\/(?:[a-zA-Z0-9_-]+\/)*$/.test(deps.projection.basePath)) {
     throw new Error('Projection basePath must be an absolute path ending in /')
   }
@@ -465,7 +468,7 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
       if (norm === 'index.html') {
         // 注入 unit 标记 + 元数据:同一份 web 构建两用,web/src/main.tsx 据此在登录跳转之前改装 unitShim。
         const encode = (value: unknown): string => JSON.stringify(value).replace(/</g, '\\u003c')
-        const meta = { ...deps.meta, ...(deps.projection ? { projection: deps.projection.mode, browserStorage: deps.projection.mode === 'public', account: deps.account?.metadata(), capabilities: deps.projection.capabilities?.(), localCapabilities: deps.projection.mode === 'local' ? deps.projection.localCapabilities?.() : undefined } : {}) }
+        const meta = { ...deps.meta, ...(deps.projection ? { projection: deps.projection.mode, browserStorage: deps.projection.mode === 'public', inheritWebAccount: deps.projection.inheritWebAccount === true, account: deps.account?.metadata(), capabilities: deps.projection.capabilities?.(), localCapabilities: deps.projection.mode === 'local' ? deps.projection.localCapabilities?.() : undefined } : {}) }
         const baseTag = deps.projection ? `<base href="${deps.projection.basePath}">` : ''
         const inject = `${baseTag}<script>window.__FORSION_UNIT_PAGE__=${encode(meta)};window.__FORSION_PRODUCT_RUNTIME__=${encode(deps.projection?.product ?? PRODUCT)}</script>`
         let html = buf.toString('utf8').replace(/<head>/i, `<head>${inject}`)
@@ -863,12 +866,14 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
     await serveStatic(res, path)
   }
 
-  const server = http.createServer((req, res) => {
-    void handler(req, res).catch((e) => {
+  const handleRequest = async (req: http.IncomingMessage, res: http.ServerResponse): Promise<void> => {
+    await handler(req, res).catch((e) => {
       deps.log(`[unit-web] 请求处理失败: ${e?.message || e}`)
       if (!res.headersSent) json(res, 500, { detail: 'internal error' })
     })
-  })
+  }
+  if (opts.mountOnly) return Promise.resolve({ port: 0, internalSecret, p2pSecret, proxyCallerKey, handleRequest, close: async () => {} })
+  const server = http.createServer((req, res) => { void handleRequest(req, res) })
   // 整段请求时限:云同步单文件随会员档位可到 500MB,生产反代对 /api/ 关了请求体缓冲(server/DEPLOYMENT.md),
   // 慢速上传的全程都落在这一层;Node 缺省 requestTimeout 300s 会把它掐断(客户端按 ≈250KB/s 保底给到 ~37 分钟)。
   // ponytail: 全局放宽到 1h;慢速拖请求头仍由 headersTimeout(缺省 60s)挡。
@@ -885,6 +890,7 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
       const { port } = server.address() as AddressInfo
       resolve({
         port,
+        handleRequest,
         internalSecret,
         p2pSecret,
         proxyCallerKey,
