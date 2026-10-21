@@ -83,12 +83,14 @@ async function finalInstaller(dist, temp, output) {
     } finally { run('hdiutil', ['detach', mount]) }
   } else if (process.platform === 'win32') {
     await inspectNsisPayload(installer, temp, output)
+    const isolatedEnv = { HOME: temp, USERPROFILE: temp, APPDATA: path.join(temp, 'AppData', 'Roaming'), LOCALAPPDATA: path.join(temp, 'AppData', 'Local') }
+    for (const dir of Object.values(isolatedEnv)) fs.mkdirSync(dir, { recursive: true })
     // /D is NSIS's final unquoted argument. Avoid shell interpretation entirely.
     const stop = diagnostics.watch(output, 'installer-startup', installer)
     const started = Date.now()
     let outcome
     try {
-      run(installer, ['/S', `/D=${installed}`], { timeout: 600000, env: { ...process.env, HOME: temp, USERPROFILE: temp, APPDATA: path.join(temp, 'AppData', 'Roaming'), LOCALAPPDATA: path.join(temp, 'AppData', 'Local') } })
+      run(installer, ['/S', `/D=${installed}`], { timeout: 600000, env: { ...process.env, ...isolatedEnv } })
       outcome = { exitCode: 0, elapsedMs: Date.now() - started }
     } catch (error) {
       outcome = { error: String(error), code: error.code || null, elapsedMs: Date.now() - started }

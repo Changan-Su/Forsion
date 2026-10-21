@@ -49,19 +49,83 @@ function installExtend(home, source = EXTEND) {
   return pkg.version
 }
 
+async function withinDeadline(work, timeout, message) {
+  let timer
+  try { return await Promise.race([work(), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(message)), timeout) })]) }
+  finally { clearTimeout(timer) }
+}
+
+function readCloudState(page) {
+  return page.evaluate(() => ({
+    viewport: { width: innerWidth, height: innerHeight },
+    slots: [...document.querySelectorAll('.rb-top .rb-slot')].map(e => ({ id: e.dataset.id, label: e.querySelector('button')?.getAttribute('aria-label') })),
+    cells: document.querySelectorAll('.rb-top .rb-cell').length,
+    entries: document.querySelector('.rb-top .rb-strip-in')?.children.length,
+    more: document.querySelector('.rb-more[data-rb-more="top"]')?.getAttribute('aria-expanded'),
+    strip: document.querySelector('.rb-top .rb-strip-in')?.style.transform,
+    hiddenSpaces: localStorage.getItem('forsion_plugin_space_health'),
+    disabledPlugins: localStorage.getItem('amadeus.plugins.disabled'),
+  }))
+}
+
+function recordCloudState(stage, state) {
+  fs.appendFileSync(path.join(SHOTS, 'cloud-navigation.jsonl'), JSON.stringify({ at: new Date().toISOString(), stage, ...state }) + '\n')
+  return state
+}
+
+async function cloudSnapshot(page, stage) {
+  return withinDeadline(async () => recordCloudState(stage, await readCloudState(page)), 3000, 'Cloud diagnostic exceeded 3s')
+}
+
+async function pluginSnapshot(page, stage) {
+  try { await withinDeadline(async () => {
+    const state = await page.evaluate(async () => {
+      const sources = await window.amadeus?.listPlugins?.()
+      const spaces = await window.tangu?.spacesList?.()
+      return {
+        sources: sources?.map(({ id, version, blocked, blockedReason, code }) => ({ id, version, blocked, blockedReason, codeBytes: code?.length })),
+        spaces: spaces?.map(({ slug, plugin, json }) => { let id; try { id = JSON.parse(json).id } catch {} return { slug, plugin, id } }),
+      }
+    })
+    fs.appendFileSync(path.join(SHOTS, 'plugin-reload.jsonl'), JSON.stringify({ at: new Date().toISOString(), stage, ...state }) + '\n')
+    recordCloudState(stage, await readCloudState(page))
+  }, 3000, 'Plugin/DOM diagnostic exceeded 3s') }
+  catch (error) { fs.appendFileSync(path.join(SHOTS, 'plugin-reload.jsonl'), JSON.stringify({ at: new Date().toISOString(), stage, diagnosticError: error.message }) + '\n') }
+}
+
 async function openCloud(page) {
-  // Ribbon overflow unmounts hidden slots; waiting for their labels cannot open it.
+  // Expanded overflow is still a virtual window on short native desktops; use the real wheel to reveal later slots.
   const cloud = page.locator('.rb-slot[data-id="space:forsion-penzor"] button.rb-btn').first()
   const more = page.locator('.rb-more[data-rb-more="top"]').first()
+  const deadline = Date.now() + 20000
+  const remaining = () => Math.max(1, deadline - Date.now())
+  await cloudSnapshot(page, 'open-cloud')
   if (!(await cloud.isVisible())) {
-    await more.waitFor({ state: 'visible', timeout: 20000 })
-    if (await more.getAttribute('aria-expanded') !== 'true') await more.click()
+    await more.waitFor({ state: 'visible', timeout: remaining() })
+    if (await more.getAttribute('aria-expanded', { timeout: remaining() }) !== 'true') await more.click({ timeout: remaining() })
   }
-  await cloud.waitFor({ state: 'visible', timeout: 20000 })
-  const label = await cloud.getAttribute('aria-label')
-  await cloud.click()
+  for (let step = 0; !(await cloud.isVisible()) && step < 30 && Date.now() < deadline; step++) {
+    const before = await cloudSnapshot(page, `wheel-${step}-before`)
+    if (await cloud.isVisible()) break
+    const strip = await page.locator('.rb-top .rb-strip').boundingBox()
+    if (!strip) throw new Error('Cloud navigation has no visible Ribbon strip')
+    await page.mouse.move(strip.x + strip.width / 2, strip.y + strip.height / 2)
+    await page.mouse.wheel(0, 120)
+    // Accept late registration as well as scroll progress: at the current boundary the wheel can do nothing until a plugin appends its cell.
+    await page.waitForFunction(({ ids, entries }) => {
+      const target = document.querySelector('.rb-slot[data-id="space:forsion-penzor"] button.rb-btn')
+      return !!target?.getClientRects().length && getComputedStyle(target).visibility !== 'hidden'
+        || document.querySelector('.rb-top .rb-strip-in')?.children.length !== entries
+        || [...document.querySelectorAll('.rb-top .rb-slot')].map(e => e.dataset.id).join('\n') !== ids
+    }, { ids: before.slots.map(e => e.id).join('\n'), entries: before.entries }, { timeout: remaining() })
+  }
+  await cloud.waitFor({ state: 'visible', timeout: remaining() })
+  await cloudSnapshot(page, 'cloud-visible')
+  const label = await cloud.getAttribute('aria-label', { timeout: remaining() })
+  await cloud.click({ timeout: remaining() })
   await page.evaluate(() => document.querySelector('.rb-more[data-rb-more="top"][aria-expanded="true"]')?.click())
-  await page.waitForSelector('.pz')
+  await page.waitForSelector('.pz', { timeout: remaining() })
+  await cloudSnapshot(page, 'cloud-opened')
   return label
 }
 
@@ -279,6 +343,9 @@ async function main() {
     for (const f of ['remotesync.json', 'remotesync.dev.json']) fs.writeFileSync(path.join(d, f), JSON.stringify({ backend: 'penzor', penzor: { vault: 'WMOSv11' } }, null, 2))
     fs.writeFileSync(path.join(d, 'tangu-desktop-config.json'), JSON.stringify({ mode: 'external', backendUrl: stub.url, token: 'mock', cloudUrl: cloud.url }))
   }
+  const isolatedEnv = PACKAGED_EXE ? { HOME: home, USERPROFILE: home, APPDATA: path.join(home, 'AppData', 'Roaming'), LOCALAPPDATA: path.join(home, 'AppData', 'Local') } : {}
+  // Windows resolves app.getPath('appData') before ready; a redirected shell folder must already exist.
+  for (const dir of Object.values(isolatedEnv)) fs.mkdirSync(dir, { recursive: true })
   const nativeStartupDiagnostics = PACKAGED_EXE && ['darwin', 'win32'].includes(process.platform)
   const stopStartupDiagnostics = nativeStartupDiagnostics ? startupDiagnostics.watch(SHOTS, 'app-startup', PACKAGED_EXE) : () => {}
   let app
@@ -287,7 +354,7 @@ async function main() {
       // executablePath skips Playwright's Electron loader, including its mock-keychain switches.
       args: [`--user-data-dir=${userData}`, '--lang=zh-CN', ...(PACKAGED_EXE && process.platform === 'darwin' ? ['--use-mock-keychain', '--password-store=basic'] : []), ...(PACKAGED_EXE ? [] : [launchRoot])], cwd: launchRoot,
       ...(PACKAGED_EXE || process.env.STAGE_ELECTRON ? { executablePath: PACKAGED_EXE || process.env.STAGE_ELECTRON } : {}),
-      env: { ...process.env, ...(PACKAGED_EXE ? { HOME: home, USERPROFILE: home, APPDATA: path.join(home, 'AppData', 'Roaming'), LOCALAPPDATA: path.join(home, 'AppData', 'Local') } : {}), TANGU_HOME: home, TANGU_BACKEND_URL: stub.url, TANGU_HARNESS_QUIET: '1', PI_CU_SOCKET_PATH: path.join(home, 'bridge.sock') },
+      env: { ...process.env, ...isolatedEnv, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url, TANGU_HARNESS_QUIET: '1', PI_CU_SOCKET_PATH: path.join(home, 'bridge.sock') },
       timeout: 90_000,
     })
   } catch (error) {
@@ -302,8 +369,10 @@ async function main() {
     fs.writeFileSync(path.join(SHOTS, 'runtime.json'), JSON.stringify(runtime, null, 2))
     const win = await app.firstWindow({ timeout: 120_000 })
     win.setDefaultTimeout(10_000)
-    win.on('console', (m) => { if (m.type() === 'error' && /penzor|pz-/i.test(m.text())) errors.push(m.text()) })
-    win.on('pageerror', (e) => errors.push(String(e)))
+    const trace = (type, text) => fs.appendFileSync(path.join(SHOTS, 'renderer-console.jsonl'), JSON.stringify({ at: new Date().toISOString(), type, text }) + '\n')
+    win.on('console', (m) => { trace(m.type(), m.text()); if (m.type() === 'error' && /penzor|pz-/i.test(m.text())) errors.push(m.text()) })
+    win.on('pageerror', (e) => { trace('pageerror', String(e)); errors.push(String(e)) })
+    for (const channel of ['stdout', 'stderr']) app.process()[channel]?.on('data', bytes => fs.appendFileSync(path.join(SHOTS, `electron-${channel}.log`), bytes))
     await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.setContentSize(1512, 950) })
     await win.waitForSelector('#root', { timeout: 30_000 })
     if (PACKAGED_EXE) await win.waitForFunction(() => typeof window.tangu?.cloudFetch === 'function')
@@ -311,6 +380,9 @@ async function main() {
       const installed = path.join(home, 'plugins', 'forsion-extend')
       const signature = JSON.parse(fs.readFileSync(path.join(EXTEND, 'SIGNATURE'), 'utf8'))
       const sameFiles = ['SIGNATURE', ...Object.keys(signature.files)].every(file => fs.existsSync(path.join(installed, file)) && createHash('sha256').update(fs.readFileSync(path.join(installed, file))).digest('hex') === createHash('sha256').update(fs.readFileSync(path.join(EXTEND, file))).digest('hex'))
+      fs.writeFileSync(path.join(SHOTS, 'extend-signature.json'), JSON.stringify({ installedVersion: JSON.parse(fs.readFileSync(path.join(installed, 'package.json'), 'utf8')).version,
+        bundledSignatureSha256: createHash('sha256').update(fs.readFileSync(path.join(EXTEND, 'SIGNATURE'))).digest('hex'),
+        installedSignatureSha256: createHash('sha256').update(fs.readFileSync(path.join(installed, 'SIGNATURE'))).digest('hex'), sameFiles }, null, 2))
       check('旧 Extend 已被随包签名版本完整升级，所有发行文件字节一致', sameFiles)
       check('升级保留已有笔记内容', fs.readFileSync(sentinelPath).equals(sentinel))
     }
@@ -425,7 +497,9 @@ async function main() {
 
     // Cold renderer reload against the pre-unified backend must keep legacy file operations usable.
     cloud.st.legacy = true
+    await pluginSnapshot(win, 'before-legacy-reload')
     await win.reload(); await win.waitForSelector('#root')
+    await pluginSnapshot(win, 'after-legacy-reload')
     await openCloud(win)
     await win.locator('.t2s-srow-title', { hasText: /^概览$/ }).first().click()
     await win.waitForSelector('.pz-unified-quota')
@@ -595,8 +669,10 @@ async function main() {
 
     }
     cloud.st.signedOut = false
+    await pluginSnapshot(win, 'before-english-reload')
     await win.evaluate(()=>localStorage.setItem('tangu_locale','en'))
     await win.reload(); await win.waitForSelector('#root')
+    await pluginSnapshot(win, 'after-english-reload')
     await openCloud(win)
     await win.locator('.t2s-srow-title', {hasText:/^Overview$/}).first().click()
     await win.waitForSelector('.pz-unified-quota')
@@ -618,7 +694,11 @@ async function main() {
     check('没有渲染层报错', errors.length === 0, errors.slice(0, 3).join(' || '))
   } catch (e) {
     const page = app.windows()[0]
-    if (page) { await page.screenshot({ path: path.join(SHOTS, 'failure.png') }).catch(()=>{}); console.error((await page.locator('body').innerText().catch(()=>'' )).slice(-4000)) }
+    if (page) {
+      await pluginSnapshot(page, 'failure').catch(error => console.error('Plugin failure snapshot:', error.message))
+      await page.screenshot({ path: path.join(SHOTS, 'failure.png') }).catch(()=>{})
+      console.error((await page.locator('body').innerText().catch(()=>'' )).slice(-4000))
+    }
     throw e
   } finally {
     await Promise.race([app.close().catch(() => {}), new Promise((r) => setTimeout(r, 5000))]) // 走查里应用已经自己退了,close 会一直等
