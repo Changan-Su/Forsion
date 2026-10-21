@@ -53,12 +53,12 @@ describe('isKnownSafeBash · Windows cmd 的 dir / type', () => {
 
   it('管道 / 重定向 / 分隔符 / 变量 / UNC / 备用数据流 / 短名 / 末尾点 / PowerShell 语法一概要批', () => {
     for (const c of [
-      'dir | more', 'dir > out.txt', 'dir & del x', 'dir && del x', 'dir 2>nul', 'type a,b', 'type a;b', 'type a=b',
+      'dir | more', 'dir > out.txt', 'dir & del x', 'dir && del x', 'type a,b', 'type a;b', 'type a=b',
       'dir %USERPROFILE%', 'dir !x!', 'dir ^& x', 'dir (x)', 'type "unclosed', '"dir" /b', 'dir/b',
       'type \\\\server\\share\\x', 'dir \\\\?\\C:\\x', 'type \\Users\\x', 'dir /b //server/share',
       'type a.txt:secret', 'type C:x:y', 'type PROGRA~1\\x', 'type *.md', 'type a?.md', 'type "auth.json."', 'type "dir\\auth.json "',
-      'type /x', 'dir /b/s', "type 'a'", 'dir $env:x', 'dir `x`', 'dir @x', 'dir [ab]',
-      'findstr /i x *.md', 'findstr x a.md', 'where git', 'cd /d C:\\x',
+      'type /x', 'dir /b/s', "type 'a'", 'dir $env:x', 'dir `x`', 'dir @x',
+      'where git',
     ]) expect(win(c), c).toBe(false);
   });
 

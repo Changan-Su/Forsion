@@ -11,6 +11,7 @@
 import { spawnHostShell, hostSandboxEnabled, remoteShellSeatbeltApplies } from '../sandbox/hostSandbox.js';
 import { RemoteShellProtectionError, remoteShellNotes } from '../sandbox/remoteShellSeatbelt.js';
 import { hostShellName, hostShellQuoting } from './shellPrompt.js';
+import { pinSystemFindstr } from './cmdReadOnly.js';
 import { hostSandboxFs, parseHostDocument } from '../sandbox/hostSandboxFs.js';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
@@ -260,7 +261,8 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
       const timeout = Number.isFinite(Number(args.timeout_ms)) && Number(args.timeout_ms) > 0 ? Number(args.timeout_ms) : BASH_TIMEOUT_MS;
       const started = Date.now();
       const wrapped = remoteShellSeatbeltApplies(ctx); // 与 spawnHostShell 同一判定(同一时刻现查 steer 染色)
-      const r = await runBash(command, cwd, ctx.signal, timeout, ctx);
+      const prepared = process.platform === 'win32' ? pinSystemFindstr(command) : command;
+      const r = await runBash(prepared, cwd, ctx.signal, timeout, ctx);
       if (r.refused) return `Error: ${r.refused}`;
       let out = '';
       if (r.stdout) out += `stdout:\n${r.stdout}\n`;
