@@ -48,12 +48,21 @@ async function main() {
     await chip.waitFor({ timeout: 30000 })
     const id = await app.evaluate(({ BrowserWindow }, url) => BrowserWindow.getAllWindows().find(w => w.webContents.getURL() === url)?.id, settings.url())
     await settings.evaluate(()=>{window.__clipNativeClicks=[];document.addEventListener('click',event=>window.__clipNativeClicks.push({trusted:event.isTrusted,text:event.target.closest('button')?.textContent||event.target.textContent?.slice(0,100)}),{capture:true,passive:true})})
+    const activateSettings = async () => {
+      const hwnd=await app.evaluate(({BrowserWindow},id)=>BrowserWindow.fromId(id).getNativeWindowHandle().readBigUInt64LE().toString(),id)
+      await desktop('activate',['-FromWindow',hwnd])
+    }
     const nativeClick = async locator => {
-      await settings.bringToFront(); await locator.scrollIntoViewIfNeeded(); await sleep(300)
+      await activateSettings()
+      await locator.evaluate(element=>{element.focus({preventScroll:true});element.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'})})
+      await locator.click({trial:true,timeout:10000})
       const before=await settings.evaluate(()=>window.__clipNativeClicks.length), expected=await locator.innerText()
       const box=await locator.boundingBox()
       const geo=await app.evaluate(({BrowserWindow},id)=>{const w=BrowserWindow.fromId(id);return {bounds:w.getContentBounds(),zoom:w.webContents.getZoomFactor(),hwnd:w.getNativeWindowHandle().readBigUInt64LE().toString()}},id)
+      const viewport=await settings.evaluate(()=>({width:innerWidth,height:innerHeight,focused:document.hasFocus()}))
+      assert.ok(box&&box.x>=0&&box.y>=0&&box.x+box.width<=viewport.width&&box.y+box.height<=viewport.height&&viewport.focused,'Native click target must be inside the focused settings viewport: '+JSON.stringify({box,viewport}))
       await desktop('click',['-FromWindow',geo.hwnd,'-FromX',String(Math.round((box.x+box.width/2)*geo.zoom)),'-FromY',String(Math.round((box.y+box.height/2)*geo.zoom))])
+      await until('native button click is observed',()=>settings.evaluate(({before,expected})=>window.__clipNativeClicks.slice(before).some(click=>click.trusted&&click.text?.trim()===expected.trim()),{before,expected}),5000).catch(()=>{})
       const clicks=await settings.evaluate(()=>window.__clipNativeClicks)
       fs.writeFileSync(path.join(output,`click-${before}.json`),JSON.stringify({box,geo,clicks,expected},null,2))
       if(!clicks.slice(before).some(click=>click.trusted&&click.text?.trim()===expected.trim())) {
@@ -100,7 +109,7 @@ async function main() {
     const drag = async () => {
       const requestsBefore=await app.evaluate(()=>globalThis.__clipNativeDragRequests.length)
       const dropsBefore=await page.evaluate(()=>window.__clipNativeDrops.length)
-      await settings.bringToFront(); await chip.scrollIntoViewIfNeeded(); await sleep(400)
+      await activateSettings(); await chip.evaluate(element=>element.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'})); await chip.click({trial:true}); await sleep(300)
       const box=await chip.boundingBox()
       const geo=await app.evaluate(({BrowserWindow},id)=>{const w=BrowserWindow.fromId(id);return {bounds:w.getContentBounds(),zoom:w.webContents.getZoomFactor()}},id)
       const from={x:Math.round(geo.bounds.x+(box.x+box.width/2)*geo.zoom),y:Math.round(geo.bounds.y+(box.y+box.height/2)*geo.zoom)}

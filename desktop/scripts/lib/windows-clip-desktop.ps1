@@ -1,4 +1,4 @@
-param([ValidateSet('click','drag','picker','explorer','capture')] [string]$Action,
+param([ValidateSet('activate','click','drag','picker','explorer','capture')] [string]$Action,
   [string]$Path, [int]$FromX, [int]$FromY, [int]$ToX, [int]$ToY, [string]$FromWindow, [switch]$Close)
 $ErrorActionPreference = 'Stop'
 if ($env:GITHUB_ACTIONS -ne 'true') { throw 'Native Clip probe requires a dedicated GitHub Actions desktop' }
@@ -8,6 +8,7 @@ using System;
 using System.Runtime.InteropServices;
 public static class ClipDesktopInput {
   [StructLayout(LayoutKind.Sequential)] public struct Point { public int x,y; }
+  [StructLayout(LayoutKind.Sequential)] struct Rect { public int left,top,right,bottom; }
   [StructLayout(LayoutKind.Sequential)] struct Mouse { public int x,y; public uint data,flags,time; public UIntPtr extra; }
   [StructLayout(LayoutKind.Explicit)] struct Union { [FieldOffset(0)] public Mouse mouse; }
   [StructLayout(LayoutKind.Sequential)] struct Input { public uint type; public Union value; }
@@ -20,6 +21,7 @@ public static class ClipDesktopInput {
   [DllImport("user32.dll")] static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
   [DllImport("user32.dll")] static extern bool ClientToScreen(IntPtr hwnd,ref Point point);
   [DllImport("user32.dll")] static extern uint GetDpiForWindow(IntPtr hwnd);
+  [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr hwnd,out Rect rect);
   public static Point ClientPoint(long window,int x,int y) {
     SetThreadDpiAwarenessContext(new IntPtr(-4));
     var hwnd=new IntPtr(window); double scale=GetDpiForWindow(hwnd)/96.0;
@@ -44,8 +46,16 @@ public static class ClipDesktopInput {
     } finally { Send(4); }
   }
   public static void Click(int x,int y) { Move(x,y); System.Threading.Thread.Sleep(80); Send(2); Send(4); }
+  public static void ActivateCaption(long window) {
+    var point=ClientPoint(window,0,0); Rect rect; var hwnd=new IntPtr(window);
+    if(!GetWindowRect(hwnd,out rect)||point.y<=rect.top) throw new Exception("Owned settings window has no native caption");
+    Click((rect.left+rect.right)/2,rect.top+(point.y-rect.top)/2);
+    System.Threading.Thread.Sleep(200);
+    if(GetForegroundWindow()!=hwnd) throw new Exception("Owned settings caption did not activate its window");
+  }
 }
 '@
+if ($Action -eq 'activate') { [ClipDesktopInput]::ActivateCaption([long]::Parse($FromWindow)); exit }
 if ($FromWindow) {
   $point=[ClipDesktopInput]::ClientPoint([long]::Parse($FromWindow),$FromX,$FromY)
   $FromX=$point.x; $FromY=$point.y
