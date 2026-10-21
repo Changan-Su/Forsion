@@ -1,4 +1,4 @@
-param([ValidateSet('drag','activate','capture')] [string]$Action,
+param([ValidateSet('drag','activate','capture','fixture')] [string]$Action,
   [string]$Window, [int]$X, [int]$Y, [int]$Dx, [int]$Dy, [string]$Path)
 $ErrorActionPreference='Stop'
 if ($env:GITHUB_ACTIONS -ne 'true') { throw 'Native Mini input is restricted to a dedicated GitHub runner' }
@@ -19,6 +19,7 @@ public static class MiniNativeInput {
   [DllImport("user32.dll")] static extern bool ClientToScreen(IntPtr h,ref Point p);
   [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h,out Rect r);
   [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h,int command);
   static void Send(uint flags,int x=0,int y=0) {
     var input=new Input{value=new Union{mouse=new Mouse{x=x,y=y,flags=flags}}};
     if(SendInput(1,new[]{input},Marshal.SizeOf(typeof(Input)))!=1) throw new Exception("SendInput refused");
@@ -52,6 +53,18 @@ public static class MiniNativeInput {
   }
 }
 '@
+if ($Action -eq 'fixture') {
+  $fixture=Start-Process -FilePath (Join-Path $env:WINDIR 'System32/notepad.exe') -WindowStyle Hidden -PassThru
+  for($i=0;$i -lt 60;$i++) {
+    $fixture.Refresh()
+    if($fixture.MainWindowHandle -ne [IntPtr]::Zero) { break }
+    Start-Sleep -Milliseconds 100
+  }
+  if($fixture.MainWindowHandle -eq [IntPtr]::Zero) { throw 'Owned Notepad fixture window missing' }
+  [void][MiniNativeInput]::ShowWindow($fixture.MainWindowHandle,9)
+  @{pid=$fixture.Id;hwnd=$fixture.MainWindowHandle.ToInt64().ToString()} | ConvertTo-Json -Compress
+  exit
+}
 if ($Action -eq 'activate') { [MiniNativeInput]::Activate([long]::Parse($Window)) }
 if ($Action -eq 'drag') { [MiniNativeInput]::Drag([long]::Parse($Window),$X,$Y,$Dx,$Dy) }
 if ($Action -eq 'capture') {

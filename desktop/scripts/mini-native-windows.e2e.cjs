@@ -17,7 +17,7 @@ async function main() {
     fs.mkdirSync(dir,{recursive:true})
     fs.writeFileSync(path.join(dir,'tangu-desktop-config.json'),JSON.stringify({mode:'external',backendUrl:stub.url,token:'mini-native',cloudUrl:'http://127.0.0.1:9',browserEnabled:false,unitHostEnabled:false}))
   }
-  let app,mini
+  let app,mini,fixture
   try {
     app=await electron.launch({args:['--user-data-dir='+userData,'--lang=en-US',ROOT],cwd:ROOT,
       env:{...process.env,TANGU_HOME:home,TANGU_BACKEND_URL:stub.url,FORSION_TEST_DESKTOP:'',TANGU_HARNESS_QUIET:'0'}})
@@ -34,6 +34,8 @@ async function main() {
       return {windows:process.getSystemVersion(),electron:process.versions.electron,version:app.getVersion(),displays:screen.getAllDisplays(),main:main.getNativeWindowHandle().readBigUInt64LE().toString(),area}
     })
     fs.writeFileSync(path.join(output,'runtime.json'),JSON.stringify({commit:process.env.GITHUB_SHA,...receipt},null,2))
+    fixture=JSON.parse((await native('fixture')).stdout.trim())
+    fs.writeFileSync(path.join(output,'foreground-fixture.json'),JSON.stringify(fixture,null,2))
     const geometry=()=>app.evaluate(({BrowserWindow})=>{
       const w=BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().includes('window=mini'))
       return {bounds:w.getContentBounds(),hwnd:w.getNativeWindowHandle().readBigUInt64LE().toString(),zoom:w.webContents.getZoomFactor(),focused:w.isFocused()}
@@ -53,7 +55,7 @@ async function main() {
       },true)
     })
     const drag=async(edge,dx,dy,name)=>{
-      await native('activate',['-Window',receipt.main])
+      await native('activate',['-Window',fixture.hwnd])
       const before=await geometry()
       check(name+' starts with Mini inactive',!before.focused,before)
       const target=mini.locator('.mini-card-edge[data-edge="'+edge+'"]'), box=await target.boundingBox()
@@ -84,7 +86,7 @@ async function main() {
     check('actual inward gesture clamps at 260 by 160',small.after.width===260&&small.after.height===160,small)
     await place()
     const large=await drag('se',450,500,'maximum')
-    check('actual outward gesture stops at maximum width and work area bottom',large.after.width===640&&large.after.y+large.after.height<=receipt.area.y+receipt.area.height&&large.after.height>340,large)
+    check('actual outward gesture reaches maximum width and work area bottom',large.after.width===640&&closeEnough(large.after.y+large.after.height,receipt.area.y+receipt.area.height)&&large.after.x===large.before.x&&large.after.y===large.before.y,large)
     await place()
     await mini.evaluate(()=>localStorage.setItem('forsion_ui_zoom','1.1'));await mini.reload()
     await mini.locator('.mini-todo .amx-todo').waitFor()
@@ -100,6 +102,7 @@ async function main() {
     throw error
   } finally {
     fs.writeFileSync(path.join(output,'results.json'),JSON.stringify({checks},null,2))
+    if(fixture)await run('taskkill.exe',['/PID',String(fixture.pid),'/T','/F'],{windowsHide:true,timeout:10000}).catch(()=>{})
     if(app) {
       const child=app.process()
       await Promise.race([app.close().catch(()=>{}),pause(8000)])

@@ -26,6 +26,7 @@ jobs:
           npm run build --prefix desktop
           exit $LASTEXITCODE
       - name: Verify real native mouse resizing
+        timeout-minutes: 5
         working-directory: desktop
         run: |
           New-Item -ItemType Directory -Force outputs/mini-native-windows | Out-Null
