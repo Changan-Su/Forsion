@@ -20,6 +20,17 @@ public static class MiniNativeInput {
   [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h,out Rect r);
   [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h,int command);
+  delegate bool EnumWindow(IntPtr h,IntPtr parameter);
+  [DllImport("user32.dll")] static extern bool EnumWindows(EnumWindow callback,IntPtr parameter);
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h,out uint pid);
+  [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern int GetClassName(IntPtr h,System.Text.StringBuilder name,int size);
+  public static IntPtr FindOwnedNotepad(uint ownedPid) {
+    IntPtr result=IntPtr.Zero;
+    EnumWindows((h,p)=>{uint pid;GetWindowThreadProcessId(h,out pid);if(pid!=ownedPid)return true;
+      var name=new System.Text.StringBuilder(128);GetClassName(h,name,name.Capacity);
+      if(name.ToString()!="Notepad")return true;result=h;return false;},IntPtr.Zero);
+    return result;
+  }
   static void Send(uint flags,int x=0,int y=0) {
     var input=new Input{value=new Union{mouse=new Mouse{x=x,y=y,flags=flags}}};
     if(SendInput(1,new[]{input},Marshal.SizeOf(typeof(Input)))!=1) throw new Exception("SendInput refused");
@@ -56,13 +67,13 @@ public static class MiniNativeInput {
 if ($Action -eq 'fixture') {
   $fixture=Start-Process -FilePath (Join-Path $env:WINDIR 'System32/notepad.exe') -WindowStyle Hidden -PassThru
   for($i=0;$i -lt 60;$i++) {
-    $fixture.Refresh()
-    if($fixture.MainWindowHandle -ne [IntPtr]::Zero) { break }
+    $fixtureWindow=[MiniNativeInput]::FindOwnedNotepad($fixture.Id)
+    if($fixtureWindow -ne [IntPtr]::Zero) { break }
     Start-Sleep -Milliseconds 100
   }
-  if($fixture.MainWindowHandle -eq [IntPtr]::Zero) { throw 'Owned Notepad fixture window missing' }
-  [void][MiniNativeInput]::ShowWindow($fixture.MainWindowHandle,9)
-  @{pid=$fixture.Id;hwnd=$fixture.MainWindowHandle.ToInt64().ToString()} | ConvertTo-Json -Compress
+  if($fixtureWindow -eq [IntPtr]::Zero) { throw 'Owned Notepad fixture window missing' }
+  [void][MiniNativeInput]::ShowWindow($fixtureWindow,9)
+  @{pid=$fixture.Id;hwnd=$fixtureWindow.ToInt64().ToString()} | ConvertTo-Json -Compress
   exit
 }
 if ($Action -eq 'activate') { [MiniNativeInput]::Activate([long]::Parse($Window)) }
