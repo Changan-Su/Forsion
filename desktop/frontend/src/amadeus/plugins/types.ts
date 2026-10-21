@@ -187,6 +187,9 @@ export interface PluginAppApi extends BlockSurfaceApi {
   writeFile(path: string, text: string): Promise<void>
   /** Local hosts supporting scopedTextWrites: reject a stale vault at the filesystem lock.
    *  create:true never overwrites an existing file (returns false). Older hosts lack this method. */
+  /** One-time local upgrade: original folder is retained as backup; never overwrites
+   * copied files, rejects index conflicts, and resumes an interrupted copy. */
+  migrateWorkFolder?(request: import('@amadeus-shared/ipc').WorkFolderMigration): Promise<import('@amadeus-shared/ipc').WorkFolderMigrationResult>
   writeFileScoped?(path: string, text: string, expectedRoot: string, options?: { create?: boolean }): Promise<boolean>
   /** 二进制版 writeFile(2026-09-19+):把字节原子写进库内路径(自动建父目录,已存在即覆盖)。
    *  用途:导入用户从磁盘选来的模型 / 图片 / 音频(`<input type=file>` 的 `File.arrayBuffer()`),

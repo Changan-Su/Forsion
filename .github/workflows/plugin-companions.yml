@@ -9,6 +9,9 @@ on:
       - 'desktop/frontend/src/amadeus/plugins/types.ts'
       - 'desktop/electron/amadeus/fs/vaultHandlers.ts'
       - 'desktop/electron/amadeus/fs/scopedTextWrite.test.ts'
+      - 'desktop/electron/amadeus/fs/workFolderMigration*'
+      - 'desktop/electron/amadeus/fs/vaultManager.ts'
+      - 'desktop/electron/amadeus/preload.ts'
       - 'desktop/shared/amadeus/ipc.ts'
   push:
     paths: *paths
@@ -29,4 +32,4 @@ jobs:
           cache-dependency-path: desktop/package-lock.json
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - run: node build/link-lcl.cjs
-      - run: npx vitest run frontend/src/pluginCompanions.test.ts frontend/src/amadeus/plugins/viewLocations.test.ts electron/amadeus/fs/scopedTextWrite.test.ts electron/amadeus/fs/pageHistory.test.ts
+      - run: npx vitest run frontend/src/pluginCompanions.test.ts frontend/src/amadeus/plugins/viewLocations.test.ts electron/amadeus/fs/scopedTextWrite.test.ts electron/amadeus/fs/workFolderMigration.test.ts electron/amadeus/fs/pageHistory.test.ts

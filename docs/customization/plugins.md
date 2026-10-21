@@ -349,3 +349,8 @@ Declare up to three `mainCompanions` on a plugin view, using native `amadeus-edi
 本机宿主还可提供 `ctx.app.writeFileScoped?.(path, text, expectedRoot, {create:true})`：在主进程文件锁内校验活动智库，切库后拒绝旧任务的写入；`create:true` 已有文件时返回 false、不会覆盖。普通写入返回 true；方法缺席时插件需要在每次异步边界核对智库，不得宣称获得了主进程范围保护。
 
 Local hosts may expose `ctx.app.writeFileScoped(path, text, expectedRoot, { create: true })`. The main process validates the active vault under the file lock. Stale writes reject; create-only writes return false for an existing file. Feature-detect this API; a renderer-only scope check on an older host does not provide the same guarantee.
+
+
+`ctx.app.migrateWorkFolder?(request)` performs a one-time **local** upgrade into the plugin's default `Plugins/<name>` folder. Feature-detect it. A manual work-folder preference rejects automatic migration. Supply an upgrade `id`, captured `expectedRoot`, legacy root-level `source`, default `target`, and optionally a `plan`: exact index `before`/`after` text, source text edits (`path`, `before`, `after`) and referenced nonempty `requiredFiles`. Without a plan it queries/reconciles the per-vault journal. The plugin validates its schema and refuses two populated data sets; the host validates snapshots, rejects symlinks/traversal, copies without overwriting, verifies hashes, then publishes the index under the shared text lock. Original files remain the backup. A completed journal never reimports deleted entries. Unsupported web/mobile/cloud hosts omit this API; retain an explicit recovery flow.
+
+`ctx.app.migrateWorkFolder?` 是本机一次升级迁移口。插件负责 schema 和路径改写，宿主负责校验、独占复制、索引比对后提交及中断恢复；原目录保留作备份。手动设置目录时拒绝自动迁移；不支持的宿主缺席此方法，插件须保留恢复入口。

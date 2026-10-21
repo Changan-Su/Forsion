@@ -114,6 +114,7 @@ const api: AmadeusApi = {
   readTextFile: (filePath) => ipcRenderer.invoke(IPC.readTextFile, filePath),
   writeTextFile: (filePath, text, opts) => ipcRenderer.invoke(IPC.writeTextFile, filePath, text, opts),
   scopedTextWrites: true,
+  migrateWorkFolder: (request) => ipcRenderer.invoke(IPC.migrateWorkFolder, request),
   listPageProps: (folder) => ipcRenderer.invoke(IPC.listPageProps, folder),
   setPageFrontmatter: (pagePath, patch) => ipcRenderer.invoke(IPC.setPageFrontmatter, pagePath, patch),
   renamePageFile: (oldPath, newBaseName) => ipcRenderer.invoke(IPC.renamePageFile, oldPath, newBaseName),

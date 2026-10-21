@@ -225,7 +225,7 @@ function sanitizeFolderName(name: string, fallback: string): string {
 
 /** 所有插件产物的总文件夹(2026-10-14 用户定:插件不再各自在库根建一个文件夹,库根只多这一项)。
  *  ⚠️名字固定、不跟界面语言:按语言取名的话切一次语言,数据就裂成「插件/」和「Plugins/」两处。
- *  只管缺省值;之前在库根 `<插件名>/` 里的老数据宿主不迁移(用户:「之前有的就算了」),把老文件夹拖进 Plugins/ 即可接上。 */
+ *  只管缺省值;旧版数据由插件通过 migrateWorkFolder 校验 schema 后执行一次升级迁移(2026-10-21 用户定)。 */
 const PLUGINS_ROOT = 'Plugins'
 const defaultWorkFolder = (pluginName: string, pluginId: string): string => `${PLUGINS_ROOT}/${sanitizeFolderName(pluginName, pluginId)}`
 
@@ -410,6 +410,15 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
         if (!ok() || usePageStore.getState().vaultRoot !== expectedRoot) throw new Error('Vault changed before plugin save')
         const result = await amadeus.writeTextFile(p, text, { ...options, expectedRoot }).finally(dropListCache)
         return result?.ok !== false
+      },
+    } : {}),
+    ...(amadeus?.migrateWorkFolder ? {
+      migrateWorkFolder: async (request: import('@amadeus-shared/ipc').WorkFolderMigration) => {
+        if (!ok() || usePageStore.getState().vaultRoot !== request.expectedRoot) throw new Error('Vault changed before migration')
+        let custom = ''
+        try { custom = localStorage.getItem(`plugin.${pluginId}.workFolder`) || '' } catch { /* unavailable settings must not authorize migration */ throw new Error('Working folder settings unavailable') }
+        if (custom || request.target !== defaultWorkFolder(getName(), pluginId)) throw new Error('Automatic migration requires the default working folder')
+        return amadeus.migrateWorkFolder!({ ...request, id: `${pluginId}-${request.id}` }).finally(dropListCache)
       },
     } : {}),
     // 二进制读写(2026-09-19):路径口径与 writeFile 相同 —— 原样透传,越界由主进程 resolveInVault 钳死。

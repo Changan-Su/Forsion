@@ -297,3 +297,22 @@ describe('ctx.app.writeBytes / readBytes', () => {
     expect(await ctx.app.readBytes!('missing.bin')).toBeNull()
   })
 })
+
+
+describe('ctx.app.migrateWorkFolder',()=>{
+ it('is absent on older hosts and respects manual folder choices, scope and revocation',async()=>{
+  expect(ctxOf('upgrade').app.migrateWorkFolder).toBeUndefined()
+  const migration=vi.fn(async()=>({status:'needed' as const}));bridge.current={migrateWorkFolder:migration}
+  const settings=new Map<string,string>();vi.stubGlobal('localStorage',{getItem:(key:string)=>settings.get(key)??null})
+  const ctx=ctxOf('upgrade'),request={id:'legacy-v1',expectedRoot:'/v',source:'Previous',target:'Plugins/upgrade'}
+  expect(await ctx.app.migrateWorkFolder!(request)).toEqual({status:'needed'})
+  expect(migration).toHaveBeenCalledWith({...request,id:'upgrade-legacy-v1'})
+  settings.set('plugin.upgrade.workFolder','My records')
+  await expect(ctx.app.migrateWorkFolder!(request)).rejects.toThrow('default working folder')
+  settings.clear();usePageStore.setState({vaultRoot:'/other'})
+  await expect(ctx.app.migrateWorkFolder!(request)).rejects.toThrow('Vault changed')
+  usePageStore.setState({vaultRoot:'/v'});usePluginStore.getState().disable('upgrade')
+  await expect(ctx.app.migrateWorkFolder!(request)).rejects.toThrow('Vault changed')
+  expect(migration).toHaveBeenCalledTimes(1)
+ })
+})

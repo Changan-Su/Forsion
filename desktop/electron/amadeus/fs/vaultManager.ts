@@ -50,6 +50,9 @@ export class VaultManager {
     if (rel && !rel.startsWith('..')) this.onMutate(rel, kind)
   }
 
+  /** Notify sync after verified exclusive migration copies. */
+  reportCopiedFiles(rels: string[]): void { for (const rel of rels) this.emitMutate(this.resolveInVault(rel), 'write') }
+
   getRoot(): string | null {
     return this.root
   }
