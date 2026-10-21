@@ -47,11 +47,19 @@ async function main() {
     if (!await chip.isVisible()) await settings.locator('.settings-nav-parent > button', { hasText: /^(浏览器控制|Browser control)$/ }).click()
     await chip.waitFor({ timeout: 30000 })
     const id = await app.evaluate(({ BrowserWindow }, url) => BrowserWindow.getAllWindows().find(w => w.webContents.getURL() === url)?.id, settings.url())
+    await settings.evaluate(()=>{window.__clipNativeClicks=[];document.addEventListener('click',event=>window.__clipNativeClicks.push({trusted:event.isTrusted,text:event.target.closest('button')?.textContent||event.target.textContent?.slice(0,100)}),{capture:true,passive:true})})
     const nativeClick = async locator => {
-      await locator.scrollIntoViewIfNeeded(); await settings.bringToFront()
+      await settings.bringToFront(); await locator.scrollIntoViewIfNeeded(); await sleep(300)
+      const before=await settings.evaluate(()=>window.__clipNativeClicks.length), expected=await locator.innerText()
       const box=await locator.boundingBox()
-      const geo=await app.evaluate(({BrowserWindow},id)=>{const w=BrowserWindow.fromId(id);return {bounds:w.getContentBounds(),zoom:w.webContents.getZoomFactor()}},id)
-      await desktop('click',['-FromX',String(Math.round(geo.bounds.x+(box.x+box.width/2)*geo.zoom)),'-FromY',String(Math.round(geo.bounds.y+(box.y+box.height/2)*geo.zoom))])
+      const geo=await app.evaluate(({BrowserWindow},id)=>{const w=BrowserWindow.fromId(id);return {bounds:w.getContentBounds(),zoom:w.webContents.getZoomFactor(),hwnd:w.getNativeWindowHandle().readBigUInt64LE().toString()}},id)
+      await desktop('click',['-FromWindow',geo.hwnd,'-FromX',String(Math.round((box.x+box.width/2)*geo.zoom)),'-FromY',String(Math.round((box.y+box.height/2)*geo.zoom))])
+      const clicks=await settings.evaluate(()=>window.__clipNativeClicks)
+      fs.writeFileSync(path.join(output,`click-${before}.json`),JSON.stringify({box,geo,clicks,expected},null,2))
+      if(!clicks.slice(before).some(click=>click.trusted&&click.text?.trim()===expected.trim())) {
+        await desktop('capture',['-Path',path.join(output,`click-${before}.png`)])
+        throw new Error('Native click missed the intended settings button: '+JSON.stringify({expected,clicks}))
+      }
     }
     const copied = await settings.evaluate(() => window.tangu.clipExtension.prepare(false)); copyDir = copied.dir
     check('settings prepares the actual bundled extension in the isolated profile', copyDir?.startsWith(home + path.sep) && fs.existsSync(path.join(copyDir, 'manifest.json')), copied)
@@ -92,7 +100,7 @@ async function main() {
     const drag = async () => {
       const requestsBefore=await app.evaluate(()=>globalThis.__clipNativeDragRequests.length)
       const dropsBefore=await page.evaluate(()=>window.__clipNativeDrops.length)
-      await chip.scrollIntoViewIfNeeded(); await settings.bringToFront(); await sleep(400)
+      await settings.bringToFront(); await chip.scrollIntoViewIfNeeded(); await sleep(400)
       const box=await chip.boundingBox()
       const geo=await app.evaluate(({BrowserWindow},id)=>{const w=BrowserWindow.fromId(id);return {bounds:w.getContentBounds(),zoom:w.webContents.getZoomFactor()}},id)
       const from={x:Math.round(geo.bounds.x+(box.x+box.width/2)*geo.zoom),y:Math.round(geo.bounds.y+(box.y+box.height/2)*geo.zoom)}

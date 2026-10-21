@@ -1,5 +1,5 @@
 param([ValidateSet('click','drag','picker','explorer','capture')] [string]$Action,
-  [string]$Path, [int]$FromX, [int]$FromY, [int]$ToX, [int]$ToY, [switch]$Close)
+  [string]$Path, [int]$FromX, [int]$FromY, [int]$ToX, [int]$ToY, [string]$FromWindow, [switch]$Close)
 $ErrorActionPreference = 'Stop'
 if ($env:GITHUB_ACTIONS -ne 'true') { throw 'Native Clip probe requires a dedicated GitHub Actions desktop' }
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing, UIAutomationClient, UIAutomationTypes
@@ -7,6 +7,7 @@ Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
 public static class ClipDesktopInput {
+  [StructLayout(LayoutKind.Sequential)] public struct Point { public int x,y; }
   [StructLayout(LayoutKind.Sequential)] struct Mouse { public int x,y; public uint data,flags,time; public UIntPtr extra; }
   [StructLayout(LayoutKind.Explicit)] struct Union { [FieldOffset(0)] public Mouse mouse; }
   [StructLayout(LayoutKind.Sequential)] struct Input { public uint type; public Union value; }
@@ -16,6 +17,16 @@ public static class ClipDesktopInput {
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hwnd);
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
+  [DllImport("user32.dll")] static extern bool ClientToScreen(IntPtr hwnd,ref Point point);
+  [DllImport("user32.dll")] static extern uint GetDpiForWindow(IntPtr hwnd);
+  public static Point ClientPoint(long window,int x,int y) {
+    SetThreadDpiAwarenessContext(new IntPtr(-4));
+    var hwnd=new IntPtr(window); double scale=GetDpiForWindow(hwnd)/96.0;
+    var point=new Point{x=(int)Math.Round(x*scale),y=(int)Math.Round(y*scale)};
+    if(!ClientToScreen(hwnd,ref point)) throw new Exception("Cannot resolve owned window client origin");
+    return point;
+  }
   static void Send(uint flags, int x=0, int y=0) {
     var input = new Input { value = new Union { mouse = new Mouse { x=x,y=y,flags=flags } } };
     if(SendInput(1,new[]{input},Marshal.SizeOf(typeof(Input)))!=1) throw new Exception("Native mouse input refused");
@@ -35,6 +46,10 @@ public static class ClipDesktopInput {
   public static void Click(int x,int y) { Move(x,y); System.Threading.Thread.Sleep(80); Send(2); Send(4); }
 }
 '@
+if ($FromWindow) {
+  $point=[ClipDesktopInput]::ClientPoint([long]::Parse($FromWindow),$FromX,$FromY)
+  $FromX=$point.x; $FromY=$point.y
+}
 if ($Action -eq 'click') { [ClipDesktopInput]::Click($FromX,$FromY); exit }
 if ($Action -eq 'drag') { [ClipDesktopInput]::Drag($FromX,$FromY,$ToX,$ToY); exit }
 if ($Action -eq 'picker') {
