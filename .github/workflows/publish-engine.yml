@@ -69,6 +69,7 @@ jobs:
           name: forsion-tangu-agent-npm
           path: tangu-agent/.engine-pack/forsion-tangu-agent-*.tgz
           if-no-files-found: error
+          include-hidden-files: true # .engine-pack is intentionally hidden; only the signed tgz is uploaded.
 
       - name: Publish to npm
         if: steps.gate.outputs.publish == 'true'

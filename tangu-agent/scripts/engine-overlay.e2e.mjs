@@ -104,6 +104,8 @@ async function boot(extraEnv = {}) {
 try {
   console.log(`bundled ${bundled} → update ${next}   (home: ${tmp})`)
   const stage = pack(next, bundled)
+  const packedManifest = JSON.parse(readFileSync(path.join(stage, 'package.json'), 'utf8'))
+  check(packedManifest.repository?.url === 'git+https://github.com/Changan-Su/Forsion.git', 'npm package identifies the repository required by trusted publishing')
   // 干扰项:新版目录上层的野 node_modules。引擎的第一批 import 里就有 express,解析被它劫走的话直接起不来。
   mkdirSync(path.join(tmp, 'node_modules', 'express'), { recursive: true })
   writeFileSync(path.join(tmp, 'node_modules', 'express', 'package.json'), '{"name":"express","version":"0.0.0","main":"index.js"}')

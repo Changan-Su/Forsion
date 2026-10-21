@@ -69,6 +69,7 @@ writeFileSync(path.join(stage, 'package.json'), JSON.stringify({
   version,
   license: src.license,
   description: src.description,
+  repository: { type: 'git', url: 'git+https://github.com/Changan-Su/Forsion.git', directory: 'tangu-agent' },
   type: src.type,
   main: src.main,
   exports: { '.': './dist/index.js' },
