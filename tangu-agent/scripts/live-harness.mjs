@@ -220,6 +220,7 @@ const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 's
 KEYS.push('bluebird');
 KEYS.push('signals');
 KEYS.push('musechat');
+KEYS.push('cmdreads'); // Windows read-only shell shortcut, including the Muse approval screenshot.
 KEYS.push('novision');
 KEYS.push('cuoff');
 KEYS.push('cuvision');
@@ -264,6 +265,7 @@ const OPT_IN = new Set(['humandims', 'nested', 'branch', 'musedm', 'realtime', '
 OPT_IN.add('bluebird'); // --only bluebird --plugin-src <bundle>: real instruction-following on supplied transcripts
 OPT_IN.add('signals');
 OPT_IN.add('musechat');
+OPT_IN.add('cmdreads');
 OPT_IN.add('imgwindow');
 OPT_IN.add('viewimage');
 OPT_IN.add('imgtools'); // --only imgtools:历史里带图 → 改图 / 生图在 run 起点就在工具面里,不靠中途 load_tools(三个短 run)
@@ -2618,6 +2620,31 @@ try {
     const hit = ev.content.includes(MARKER);
     const anchors = anchorsOk(ev);
     return { ok: !ev.error && ev.toolCalls.length > 0 && hit && anchors, detail: ev.error || `工具 ${ev.toolCalls.join(',') || '无'};标记${hit ? '命中' : '未命中'};done 锚点${anchors ? '对齐' : `不对齐(${JSON.stringify(ev.toolOffsets)})`}${ev.approvals ? `;代批 ${ev.approvals}${ev.approveError ? '(失败:' + ev.approveError + ')' : ''}` : ''}`, output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
+  });
+
+  await scenario('cmdreads', 'cmdreads Windows 只读组合免审批,混入写入仍要批', async () => {
+    if (process.platform !== 'win32') return { skipped: true, detail: 'Windows-only cmd.exe execution' };
+    const dir = join(workspace, 'cmd-reads');
+    mkdirSync(join(dir, 'Space'), { recursive: true });
+    const marker = `CMDREAD-${randomUUID().slice(0, 8)}`;
+    writeFileSync(join(dir, 'Space', 'notes.md'), `[feedback] ${marker}\n`);
+    writeFileSync(join(dir, 'Space', 'findstr.cmd'), '@echo HIJACKED> hijacked.txt\r\n');
+    const command = 'dir /b "missing" 2>nul & echo --- & cd /d Space && findstr /l /c:"[feedback]" notes.md';
+    const read = await run(`live-cmdreads-${Date.now()}`, `Use run_bash to run exactly this command, then report the feedback line it returns:\n${command}`, 120_000,
+      { cwd: dir, approvalMode: 'auto-edit' }, undefined, () => 'reject');
+    const mutation = 'echo changed> changed.txt';
+    const blocked = await run(`live-cmdblocked-${Date.now()}`, `Use run_bash to run exactly this command once: ${mutation}. If approval is rejected, stop without using another tool.`, 120_000,
+      { cwd: dir, approvalMode: 'auto-edit' }, undefined, () => 'reject');
+    const exact = read.toolArgs.some((t) => t.name === 'run_bash' && JSON.parse(t.arguments || '{}').command === command);
+    const ran = read.toolResults.some((t) => t.name === 'run_bash' && !t.isError && t.full.includes(marker) && t.full.includes('exit_code: 0'));
+    const writeRequested = blocked.toolArgs.some((t) => t.name === 'run_bash' && JSON.parse(t.arguments || '{}').command === mutation);
+    const rejected = blocked.approvalResults.some((r) => r.action === 'reject') && blocked.toolResults.some((t) => t.name === 'run_bash' && t.isError);
+    const safe = !existsSync(join(dir, 'Space', 'hijacked.txt')) && !existsSync(join(dir, 'changed.txt'));
+    const evidence = { read, blocked, exact, ran, safe, writeRequested, rejected };
+    writeFileSync(join(OUT, 'cmdreads-evidence.json'), JSON.stringify(evidence, null, 2));
+    return { ok: !read.error && read.done && exact && ran && read.approvals === 0 && !blocked.error && blocked.done && writeRequested && rejected && blocked.approvals > 0 && safe,
+      detail: `exact=${exact};read executed=${ran};read approvals=${read.approvals};write approvals=${blocked.approvals};no writes or hijack=${safe}`,
+      output: `Read: ${read.content}\nBlocked: ${blocked.content}`, tokens: tokensOf(read) + tokensOf(blocked), toolCalls: [...read.toolCalls, ...blocked.toolCalls] };
   });
 
   // plugin(10-02 插件生命周期):引擎插件热插拔对**模型可见面**的真跑。开着 → 模型调得到夹具工具、答出它回的标记;

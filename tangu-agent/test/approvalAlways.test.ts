@@ -144,11 +144,12 @@ describe("capabilities.approval: 'always'", () => {
   });
 
   it('同名覆盖 run_bash 并声明 always:已知安全的只读命令也不走免批捷径', async () => {
+    const command = process.platform === 'win32' ? 'dir /b' : 'pwd';
     registerToolProvider({ id: 'test:bash-always', tools: () => [tool('run_bash', 'always')] } as any);
     try {
-      expect((await gate(call('run_bash', { command: 'pwd' }), { approvalMode: 'auto-edit', cwd: home })).asked).toBe(true);
+      expect((await gate(call('run_bash', { command }), { approvalMode: 'auto-edit', cwd: home })).asked).toBe(true);
     } finally { unregisterToolProvider('test:bash-always'); }
-    const plain = await gate(call('run_bash', { command: 'pwd' }), { approvalMode: 'auto-edit', cwd: home });
+    const plain = await gate(call('run_bash', { command }), { approvalMode: 'auto-edit', cwd: home });
     expect(plain.asked).toBe(false); // 对照:撤掉后照旧免批
     expect(plain.decision.action).toBe('approve');
   });
