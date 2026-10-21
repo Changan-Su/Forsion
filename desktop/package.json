@@ -256,6 +256,7 @@
     "check:callout": "node scripts/callout-fold.check.cjs",
     "check:typejitter": "node scripts/type-jitter.probe.cjs",
     "check:toggle": "node scripts/e2e-editor.cjs --check=toggle-block",
+    "check:toggleenter:electron": "node scripts/toggle-block.electron.cjs --double-enter",
     "check:togglecaret": "node scripts/e2e-editor.cjs --check=toggle-caret",
     "check:togglecontent": "node scripts/e2e-editor.cjs --check=toggle-content",
     "check:togglemotion": "node scripts/e2e-editor.cjs --check=toggle-motion",
