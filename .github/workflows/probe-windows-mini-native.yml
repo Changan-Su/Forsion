@@ -1,0 +1,38 @@
+name: probe-windows-mini-native
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/probe-windows-mini-native.yml'
+      - 'desktop/scripts/mini-native-windows.e2e.cjs'
+      - 'desktop/scripts/lib/mini-native-input.ps1'
+permissions:
+  contents: read
+jobs:
+  native-mini:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build the genuine desktop
+        run: |
+          npm ci --prefix desktop --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm ci --prefix tangu-agent --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run build --prefix desktop
+          exit $LASTEXITCODE
+      - name: Verify real native mouse resizing
+        working-directory: desktop
+        run: |
+          New-Item -ItemType Directory -Force outputs/mini-native-windows | Out-Null
+          node scripts/mini-native-windows.e2e.cjs 2>&1 | Tee-Object -FilePath outputs/mini-native-windows/run.log
+          exit $LASTEXITCODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-mini-native-evidence
+          path: desktop/outputs/mini-native-windows/
