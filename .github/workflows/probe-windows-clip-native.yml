@@ -1,0 +1,40 @@
+name: probe-windows-clip-native
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/probe-windows-clip-native.yml'
+      - 'desktop/scripts/windows-clip-native.e2e.cjs'
+      - 'desktop/scripts/lib/windows-clip-desktop.ps1'
+permissions:
+  contents: read
+jobs:
+  native-clip:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build the real application and install Chrome for Testing
+        run: |
+          npm ci --prefix tangu-agent --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm ci --prefix desktop --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run build --prefix desktop
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node desktop/node_modules/playwright-core/cli.js install chromium
+          exit $LASTEXITCODE
+      - name: Verify native folder drop, clipboard, Explorer and picker
+        working-directory: desktop
+        run: |
+          New-Item -ItemType Directory -Force outputs/windows-clip-native | Out-Null
+          node scripts/windows-clip-native.e2e.cjs 2>&1 | Tee-Object -FilePath outputs/windows-clip-native/run.log
+          exit $LASTEXITCODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-clip-native-evidence
+          path: desktop/outputs/windows-clip-native/
