@@ -326,8 +326,8 @@ export const PLUGIN_CAPABILITIES: readonly PluginCapability[] = ['activeWindow',
 export interface ExternalPluginSource {
   id: string
   packageId?: string
-  /** Canonical (Chinese) display name. **Identity-adjacent**: the default work folder is derived from it,
-   *  so it must never change with the UI language — English goes in `nameEn`. */
+  /** Canonical display name. Used to reconnect historical display-name folders only;
+   *  new default folders use the effective ASCII plugin ID. English display text goes in `nameEn`. */
   name: string
   version: string
   description?: string
