@@ -66,19 +66,26 @@ export function createDatabasesApi(scope: DataScope): NonNullable<PluginContext[
       })
       return scope.own(off)
     },
-    setCell: (path, rowId, colId, value) => {
+    setCell: (path, rowId, colId, value, expected) => {
       if (!scope.alive()) return false
       const db = table(path)
       const col = db?.columns.find((c) => c.id === colId)
       if (!db || !col || isStamped(col.type) || !db.rows.some((r) => r.rowId === rowId)) return false
       if (value !== undefined && !isCell(value)) return false
+      if (expected !== undefined) {
+        if (!expected || typeof expected !== 'object' || !Object.hasOwn(expected, 'value') || expected.value !== undefined && !isCell(expected.value)) return false
+        const row = db.rows.find((r) => r.rowId === rowId)!
+        if (JSON.stringify(row.cells[colId] ?? null) !== JSON.stringify(expected.value ?? null)) return false
+        // Note-view writes don't have the classic table's replayed CAS predicate.
+        if (db.isNoteView) return false
+      }
       // 笔记视图的标题列 = 笔记名:改它就是给笔记改名(同内置日历的 setAggName),不往 frontmatter 里写
       if (db.isNoteView && col.type === 'page') {
         if (typeof value !== 'string' || !value.trim()) return false
         setAggName(db, String(rowId), value)
         return true
       }
-      setAggCell(db, String(rowId), col.id, Array.isArray(value) ? [...value] : value)
+      setAggCell(db, String(rowId), col.id, Array.isArray(value) ? [...value] : value, expected ? { value: Array.isArray(expected.value) ? [...expected.value] : expected.value } : undefined)
       return true
     },
     addRow: async (path, cells, name) => {

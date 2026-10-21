@@ -106,6 +106,18 @@ describe('ctx.databases', () => {
     expect(rowsNow().some((r) => r.id === 'r1')).toBe(false)
   })
 
+  it('conditional cells reject a stale value without changing the snapshot or disk', async () => {
+    await useDbStore.getState().reload('T.db', 'T.db')
+    const api = createDatabasesApi(scope)
+    expect(api.setCell('T.db', 'r1', 'c1', '乙', { value: '旧值' })).toBe(false)
+    expect(rowsNow()[0].cells.c1).toBe('甲')
+    expect(api.setCell('T.db', 'r1', 'c1', '乙', { value: '甲' })).toBe(true)
+    await useDbStore.getState().flushAll()
+    expect(disk.rows[0].cells.c1).toBe('乙')
+    expect(api.setCell('T.db', 'r1', 'c1', '丙', { value: '甲' })).toBe(false)
+    expect(rowsNow()[0].cells.c1).toBe('乙')
+  })
+
   it('快照是拷贝:插件原地改它不动宿主的表;插件停用后旧撤销函数不再写', async () => {
     await useDbStore.getState().reload('T.db', 'T.db')
     let snap: { databases: Array<{ rows: Array<{ cells: Record<string, unknown> }> }> } | null = null

@@ -24,6 +24,8 @@ const loadHourPx = (): number => {
 /** 新建中的事件(草稿):**不落盘**,标题打完 Enter / 点走才写进多维表,Esc 或空标题点走 = 丢弃。
  *  day = 起始日 'YYYY-MM-DD';startMin = null 表示全天(此时 endDay = 末日,含);否则 [startMin, endMin) 分钟。 */
 export interface CalDraft {
+  scope?: string
+  hasEnd?: boolean
   day: string
   startMin: number | null
   endMin: number

@@ -50,6 +50,8 @@ export interface BuiltinBundle {
   minVersion?: string
   /** 只在带这个产品能力的档案里播种 / 更新 / 打包(电脑操作要 agent 后端);缺省 = 全产品(Forsion Extend:Amadeus 单品也是云产品)。 */
   requires?: 'agentBackend'
+  /** Only products that include this native Space bundle its replacement renderer. */
+  requiresSpace?: string
 }
 
 /** 随 App 内置的捆绑包清单(builtinBundles.json)。 */
@@ -66,6 +68,7 @@ export interface BuiltinSourceOpts {
   platform?: NodeJS.Platform
   /** 产品档案是否带 agent 后端(缺省 true):清单里 requires: 'agentBackend' 的包在单品变体里既不播种也不更新。 */
   agentBackend?: boolean
+  spaces?: readonly string[]
 }
 
 /** 清单项 + 随包来源目录。 */
@@ -77,7 +80,7 @@ export interface BuiltinSource extends BuiltinBundle {
 export function builtinBundleSources(o: BuiltinSourceOpts): BuiltinSource[] {
   const platform = o.platform ?? process.platform
   const agentBackend = o.agentBackend ?? true
-  return BUILTIN_BUNDLES.filter((b) => b.platforms.includes(platform) && (!b.requires || agentBackend)).map((b) => ({
+  return BUILTIN_BUNDLES.filter((b) => b.platforms.includes(platform) && (!b.requires || agentBackend) && (!b.requiresSpace || !o.spaces || o.spaces.includes(b.requiresSpace))).map((b) => ({
     ...b,
     dir: o.isPackaged
       ? path.join(o.resourcesPath, 'bundled-plugins', bundledDirName(b.pkg))

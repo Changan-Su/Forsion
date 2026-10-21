@@ -108,7 +108,7 @@ export type { NativeIcon, NativeIconSource, NativeVectorPath } from './nativeIco
 export {
   installNativeChromeHost, nativeChromeInstalled, useNativeChromeInstalled, setNativeChromeShell,
   claimNativeChrome, useNativeChromeClaim, dispatchNativeChromeAction, nativeChromeState,
-  nativeChromeDrawsSpaces, useNativeChromeSpaces, dispatchNativeChromeSpace, nativeHaptic,
+  nativeChromeDrawsSpaces, useNativeChromeSpaces, dispatchNativeChromeSpace, nativeHaptic, nativeHapticAvailable,
   useNativeChromeExtras, nativeChromeExtras, subscribeNativeChromeExtras, nativeRailCells, NATIVE_RAIL_WIDTH,
 } from './nativeChrome'
 export type {

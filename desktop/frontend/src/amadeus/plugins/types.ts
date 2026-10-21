@@ -399,6 +399,22 @@ export interface PluginCalendarOverlay extends PluginDatabase {
   vaultLabel?: string
 }
 /** ctx.calendar.subscribe 的一份快照。成员只给路径和列映射,行去 ctx.databases 拿(两份订阅,各管各的)。 */
+export interface PluginCalendarEvents {
+  scope(): string
+  clipboard(): { scope: string; cut: boolean; path: string; rowId: string; colId: string; raw: string; title: string } | null
+  subscribe(cb: () => void): () => void
+  clearClipboard(): void
+  copy(path: string, rowId: string, colId: string, before: string, cut?: boolean): boolean | Promise<boolean>
+  clone(path: string, rowId: string, colId: string, before: string, after?: string): Promise<string | null>
+  paste(path?: string, stamp?: string): Promise<{ path: string; rowId: string } | null>
+  remove(path: string, rowId: string, colId: string): boolean
+  reschedule(path: string, rowId: string, colId: string, before: string, after: string): boolean
+  rescheduleNote(id: string, before: string, after: string): boolean
+  canUndo(): boolean
+  canRedo(): boolean
+  undo(): boolean
+  redo(): boolean
+}
 export interface PluginCalendarSnapshot {
   /** 同 ctx.databases:false = 库里的表还没读完,这时 members 可能不全。叠加源各自尽力而为,不计入 ready */
   ready: boolean
@@ -1373,7 +1389,7 @@ export interface PluginContext {
    *  ignore the option and open in main), or 'bottom' for the native bottom panel (2026-10-02+).
    *  ⚠️ Older desktop hosts open an unknown location in main, which navigates the active main view away:
    *  check `viewLocations` before asking for 'bottom'. No-op on hosts without a workbench. */
-  openView(viewId: string, opts?: { location?: PluginViewLocation }): void
+  openView(viewId: string, opts?: { location?: PluginViewLocation; params?: Record<string, unknown> }): void
   /** Where `openView` (and a Space's `layout`) can dock this plugin's views on this host (2026-10-02+).
    *  Desktop/Web: main, left, right, bottom; mobile has no bottom panel. Undefined on older hosts and on hosts
    *  without a workbench: feature-detect with `ctx.viewLocations?.includes('bottom')`. */
@@ -1470,6 +1486,12 @@ export interface PluginContext {
    *  `mountFloatingToc` is the exception: it overlays `shell` without taking it over, so it neither retires nor
    *  is retired by other mounts on the same element. Don't select host nodes with `el > …`. */
   ui?: {
+    /** Temporary native mobile header for a view's overlay. Dispose when the overlay closes.
+     *  Present only with native chrome; callbacks stop on plugin disable. */
+    claimHeader?(opts: { title: string; back: string; onBack(): void }): { dispose(): void }
+    /** Native touch feedback. Present only on a capable platform host; system preferences apply.
+     *  Call once for an accepted user gesture. No-op after the plugin is disabled. */
+    haptic?(kind: 'tick'): void
     /** The native model menu. Selection stays local; never writes global defaults. Feature-detect on older hosts. */
     mountModelPicker?(el: HTMLElement, opts: import("../../../../shared/pluginModelPicker").PluginModelPickerOptions): import("../../../../shared/pluginModelPicker").PluginModelPickerHandle
     /** Native Amadeus editor for Markdown owned by the caller (API drafts, etc.). No active-vault access.
@@ -1765,6 +1787,11 @@ export interface PluginContext {
    *    一律被拒,结果看快照里的 `icsSubscriptions[].error`。`importText(name, text)` 导入一份 .ics 文件内容(≤ 8MB、
    *    得像日历),返回 id 或 null。`rename` / `remove` 返回是否改了;`refresh(id)` 立刻拉一次,成功 true(导入的快照没地址 → false)。 */
   calendar?: {
+    /** Shared record clipboard and conditional undo/redo (2026-10-21+). Requires calendar capability.
+     *  Paths refer to the current vault; copy/clone/reschedule reject a changed date value.
+     *  Records retain all cells/body/references; note copies retain the full document.
+     *  subscribe notifies clipboard changes; callbacks and async work stop on plugin disable. */
+    events?: PluginCalendarEvents
     ensureMember(dbPath: string, dateColId: string, checkboxColId?: string): void
     subscribe?(cb: (snapshot: PluginCalendarSnapshot) => void): () => void
     setColor?(path: string, color: string | null): boolean
@@ -1791,6 +1818,7 @@ export interface PluginContext {
    *    这里是**按行按格**、和打开着的界面一致的路径,而且覆盖笔记视图。
    *  · `setCell`:返回是否写了(表 / 行 / 列不存在,或那列是自动编号、创建时间这种建行即定的列 → false)。
    *    `undefined` = 清空该格。笔记视图的标题列(`type: 'page'`)= 笔记名:改它就是给笔记改名(只收非空字符串)。
+   *    可选 `expected: { value }` 仅支持经典表,在当前快照和落盘重放时比对原值;冲突或笔记视图返回 false。
    *  · `addRow(path, cells?, name?)`:新建一行,返回新行 id(笔记视图 = 新笔记路径;`name` 当笔记标题),表不存在 → null。
    *  · `duplicateRow`:复制一行(自动编号 / 创建时间重新盖),返回新行 id。
    *  · `deleteRow`:只删经典表的行,返回一个**撤销函数**(只生效一次;换了库再调不做事)。笔记视图的行是一篇笔记,
@@ -1799,7 +1827,7 @@ export interface PluginContext {
    *  旧宿主没有:`if (ctx.databases) …`。 */
   databases?: {
     subscribe(cb: (snapshot: { ready: boolean; databases: PluginDatabase[] }) => void): () => void
-    setCell(path: string, rowId: string, colId: string, value: PluginCellValue | undefined): boolean
+    setCell(path: string, rowId: string, colId: string, value: PluginCellValue | undefined, expected?: { value: PluginCellValue | undefined }): boolean
     addRow(path: string, cells?: Record<string, PluginCellValue>, name?: string): Promise<string | null>
     duplicateRow(path: string, rowId: string): Promise<string | null>
     deleteRow(path: string, rowId: string): (() => void) | null

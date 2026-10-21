@@ -9,7 +9,7 @@ import { windowKind } from './windowKind'
 import {
   Bot, Inbox, Mail, NotebookText, BookOpen, Briefcase, CalendarDays, MessageCircle, Folder, FolderOpen,
   FileText, Star, Heart, Home, Target, Zap, Globe, Music, Image, Video, Code, Terminal, LayoutGrid, Sparkles,
-  Boxes, ListTree, Server, ServerCog,
+  Boxes, ListTree, ListTodo, Server, ServerCog,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import {
@@ -32,6 +32,7 @@ registerMessages({
 import { track } from './achievements/store'
 import { act } from './activity/log'
 import { readDisabledPluginIds, usePluginStore } from '@amadeus/plugins/pluginStore'
+import { replacesNativeSpaceRecipe } from '../../shared/corePlugins'
 import { setHiddenPluginSpaces, type HiddenSpace } from './pluginSpaceHealth'
 import { hasBottomPanel } from './pluginViews'
 import { PRODUCT } from './product'
@@ -49,7 +50,7 @@ const SPACE_ICONS: Record<string, LucideIcon> = {
   'calendar-days': CalendarDays, 'message-circle': MessageCircle, folder: Folder, 'folder-open': FolderOpen,
   'file-text': FileText, star: Star, heart: Heart, home: Home, target: Target, zap: Zap, globe: Globe,
   music: Music, image: Image, video: Video, code: Code, terminal: Terminal, 'layout-grid': LayoutGrid,
-  sparkles: Sparkles, boxes: Boxes, 'list-tree': ListTree, server: Server, 'server-cog': ServerCog,
+  sparkles: Sparkles, boxes: Boxes, 'list-tree': ListTree, 'list-todo': ListTodo, server: Server, 'server-cog': ServerCog,
 }
 
 /** 自绘图标(space.json 的 `iconFile`;主进程验过并读成 data URL)→ 与 lucide 同签名的组件,渲染点零改动。
@@ -346,6 +347,7 @@ async function loadUserSpacesOnce(): Promise<void> {
   for (const { slug, json, plugin, iconUrl: rawIcon } of list) {
     const iconUrl = typeof rawIcon === 'string' && ICON_URL_RE.test(rawIcon) ? rawIcon : undefined
     if (plugin && disabled.has(plugin)) continue
+    if (replacesNativeSpaceRecipe(usePluginStore.getState(), plugin, slug)) continue
     const r = parseSpaceJson(json, { isViewRegistered: (t) => !!getView(t), appVersion, reservedIds: BUILTIN_IDS })
     if (!r.ok) {
       console.warn(`[spaces] 跳过 ${slug}: ${r.error}`)

@@ -8,6 +8,7 @@ export const DRAFT_MINUTES = 60
 export function draftValue(d: CalDraft): string {
   if (d.startMin === null) return d.endDay !== d.day ? `${d.day}/${d.endDay}` : d.day
   const base = toLocalDate(d.day)
+  if (d.hasEnd === false) return fmtStamp(addMinutes(base, d.startMin), false)
   return `${fmtStamp(addMinutes(base, d.startMin), false)}/${fmtStamp(addMinutes(base, d.endMin), false)}`
 }
 

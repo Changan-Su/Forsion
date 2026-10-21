@@ -15,7 +15,7 @@ import { normalizeVaultRel } from './pluginAutomation'
 import { toDb, type DataScope } from './pluginData'
 import type { PluginCalendarOverlay, PluginCalendarSnapshot, PluginContext } from './types'
 
-type CalendarApi = Omit<Required<NonNullable<PluginContext['calendar']>>, 'ensureMember'>
+type CalendarApi = Omit<Required<NonNullable<PluginContext['calendar']>>, 'ensureMember' | 'events'>
 
 const HEX = /^#[0-9a-f]{6}$/i
 

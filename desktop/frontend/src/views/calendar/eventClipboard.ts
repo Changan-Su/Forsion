@@ -23,7 +23,7 @@ interface Clip { scope: string; event: ClipboardEvent; cut: boolean }
 export const useCalendarClipboard = create<{ clip: Clip | null }>(() => ({ clip: null }))
 let clipboardGeneration = 0
 export function clearCalendarClipboard(): void { ++clipboardGeneration; useCalendarClipboard.setState({ clip: null }) }
-export function copyCalendarEvent(event: ClipboardEvent, cut = false): boolean | Promise<boolean> {
+export function copyCalendarEvent(event: ClipboardEvent, cut = false, alive: () => boolean = () => true): boolean | Promise<boolean> {
   const generation = ++clipboardGeneration
   if (event.db.readonly || (cut && isStamped(event.db.columns.find((c) => c.id === event.colId)?.type ?? ''))) return false
   const row = currentCalendarRow(event.db, event.row.rowId)
@@ -33,9 +33,9 @@ export function copyCalendarEvent(event: ClipboardEvent, cut = false): boolean |
     return (async () => {
       try {
         await flushAllScopes(true)
-        if (calendarScope() !== scope || generation !== clipboardGeneration) return false
+        if (!alive() || calendarScope() !== scope || generation !== clipboardGeneration) return false
         const noteText = await amadeus.readTextFile(row.rowId)
-        if (noteText == null || calendarScope() !== scope || generation !== clipboardGeneration) return false
+        if (!alive() || noteText == null || calendarScope() !== scope || generation !== clipboardGeneration) return false
         useCalendarClipboard.setState({ clip: { scope, event: { ...event, row: structuredClone(row), noteText }, cut } })
         notifyApp({ level: 'info', text: translate('calclip.copied') })
         return true
@@ -57,7 +57,7 @@ export function shiftedCalendarValue(raw: string, target?: Date): string {
     : new Date(next.getTime() + toLocalDate(parsed.end).getTime() - start.getTime()) : null
   return `${fmtStamp(next, parsed.allDay)}${end ? `/${fmtStamp(end, parsed.allDay)}` : ''}`
 }
-export async function cloneCalendarEvent(event: ClipboardEvent, raw = event.raw): Promise<string | null> {
+export async function cloneCalendarEvent(event: ClipboardEvent, raw = event.raw, alive: () => boolean = () => true): Promise<string | null> {
   const scope = calendarScope()
   if (event.db.readonly) return null
   if (raw !== event.raw && isStamped(event.db.columns.find((c) => c.id === event.colId)?.type ?? '')) {
@@ -70,8 +70,8 @@ export async function cloneCalendarEvent(event: ClipboardEvent, raw = event.raw)
     return null
   }
   try {
-    const id = await duplicateAggRow({ ...event.db, rows: [event.row] }, event.row.rowId, () => calendarScope() === scope, event.noteText)
-    if (!id || scope !== calendarScope()) return null
+    const id = await duplicateAggRow({ ...event.db, rows: [event.row] }, event.row.rowId, () => alive() && calendarScope() === scope, event.noteText)
+    if (!alive() || !id || scope !== calendarScope()) return null
     if (raw !== event.raw) setAggCell(event.db, id, event.colId, raw)
     if (event.db.isNoteView) {
       notifyApp({ level: 'info', text: translate('calclip.created') })
@@ -94,9 +94,9 @@ export async function cloneCalendarEvent(event: ClipboardEvent, raw = event.raw)
     return null
   }
 }
-export async function pasteCalendarEvent(db?: AggDb, target?: Date): Promise<{ db: AggDb; id: string } | null> {
+export async function pasteCalendarEvent(db?: AggDb, target?: Date, alive: () => boolean = () => true): Promise<{ db: AggDb; id: string } | null> {
   const clip = useCalendarClipboard.getState().clip
-  if (!clip) return null
+  if (!alive() || !clip) return null
   const event = clip.event
   if (clip.scope !== calendarScope() || (db && db.path !== event.db.path) || db?.readonly) {
     notifyApp({ level: 'warning', text: translate('calclip.scope') })
@@ -118,6 +118,6 @@ export async function pasteCalendarEvent(db?: AggDb, target?: Date): Promise<{ d
     clearCalendarClipboard()
     return { db: event.db, id: row.rowId }
   }
-  const id = await cloneCalendarEvent(event, shiftedCalendarValue(event.raw, target))
+  const id = await cloneCalendarEvent(event, shiftedCalendarValue(event.raw, target), alive)
   return id ? { db: event.db, id } : null
 }

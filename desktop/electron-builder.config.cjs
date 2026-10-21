@@ -104,7 +104,7 @@ module.exports = {
     // 落点目录名 = 包名去 scope(builtinPlugins.bundledDirName),两边同一约定;清单里每个包都要在,少了
     // release-content.check 会红(不再静默漏包)。清单 requires: 'agentBackend' 的(电脑操作)只进带 agent 后端的档案;
     // Forsion Extend 缺省全档案都带;FORSION_BUNDLE_EXTEND=0 另出不捆云插件的安装包。
-    ...builtinBundles.filter((b) => (!b.requires || product[b.requires]) && (bundleExtend || b.id !== 'forsion-extend')).map((b) => ({
+    ...builtinBundles.filter((b) => (!b.requires || product[b.requires]) && (!b.requiresSpace || product.spaces.includes(b.requiresSpace)) && (bundleExtend || b.id !== 'forsion-extend')).map((b) => ({
       from: `node_modules/${b.pkg}`,
       to: `bundled-plugins/${bundledDirName(b.pkg)}`,
       // 电脑操作的 CI 原生编译会留下数百 MB 的 Rust 中间文件;只交付 prebuilt 和源码。别的包没有这个目录,过滤器无副作用。

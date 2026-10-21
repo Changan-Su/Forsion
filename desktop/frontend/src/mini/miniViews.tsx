@@ -1,4 +1,5 @@
 import { miniFeatureAvailable } from '../features/runtime'
+import { CoreViewSlot } from '../builtins/CoreViewSlot'
 /** Native adapters share domain data/editors; each owns its compact interactions. */
 import { lazy, Suspense, useEffect, useState } from 'react'
 import { Bot, ListTodo, NotebookText, Phone } from 'lucide-react'
@@ -83,5 +84,5 @@ export function registerMiniViews(): void {
   // 语音通话只开在 Mini 里(输入框电话键 → openMini 直达);桌面独有,靠 openMini 判在不在 Electron。
   if (miniFeatureAvailable('tangu') && window.tangu?.openMini) registerView({ type: 'voice-call', kind: 'aux', displayName: () => translate('livecall.title'), icon: Phone, factory: (p) => <VoiceCallView {...p} /> })
   if (miniFeatureAvailable('calendar')) registerView({ type: 'mini-todo', kind: 'aux', displayName: 'ToDo List', icon: ListTodo,
-    factory: ({ params, leaf }) => <div className="mini-native mini-todo"><Suspense fallback={null}><Todos params={{ ...params, miniSurface: true }} leaf={leaf} /></Suspense></div> })
+    factory: (props) => <CoreViewSlot type="mini-todo" {...props} fallback={<div className="mini-native mini-todo"><Suspense fallback={null}><Todos params={{ ...props.params, miniSurface: true }} leaf={props.leaf} /></Suspense></div>} /> })
 }

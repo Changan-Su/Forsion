@@ -24,4 +24,7 @@ describe('calendar draft', () => {
     expect(pickDraftDb([m('notes', { isNoteView: true })], null, null)?.db.path).toBe('notes')
     expect(pickDraftDb([m('ro', { readonly: true })], null, null)).toBeNull()
   })
+  it('saves a point when the mobile end-time control is off', () => {
+    expect(draftValue({ day: '2026-10-21', startMin: 600, endMin: 630, endDay: '2026-10-21', title: 'Point', dbPath: null, hasEnd: false })).toBe('2026-10-21T10:00')
+  })
 })

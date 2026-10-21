@@ -337,9 +337,11 @@ export function CalendarView({ leafId }: { leafId?: string } = {}) {
     if (!ev) nav.setSelection(null)
     else if (ev !== sel.target) nav.setSelection({ key: sel.key, target: ev })
   }, [events]) // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => {
+  useLayoutEffect(() => {
     setCard(null); setMenu(null); setPreview(null); clearCalendarClipboard()
-    useCalendarNav.getState().setSelection(null)
+    interactionEpoch.current++; pendingKey.current = null; pasteAt.current = undefined; selRef.current = null
+    const nav = useCalendarNav.getState()
+    nav.setDraft(null); nav.setSelection(null)
     return () => { clearCalendarClipboard() }
   }, [vault])
 
@@ -366,7 +368,7 @@ export function CalendarView({ leafId }: { leafId?: string } = {}) {
     nav.setSelection(null)
     setCard(null)
     pasteAt.current = addMinutes(toLocalDate(g.day), g.startMin ?? 0)
-    nav.setDraft({ ...g, title: '', dbPath: clip && members.some((m) => m.db.path === clip.event.db.path) ? clip.event.db.path : null })
+    nav.setDraft({ ...g, scope: calendarScope(), title: '', dbPath: clip && members.some((m) => m.db.path === clip.event.db.path) ? clip.event.db.path : null })
   }
   // 草稿提交 / 取消挂进 store,右栏草稿面板的按钮和格子里的输入框走同一份。
   const commitRef = useRef<() => Promise<void>>(async () => {})
@@ -374,6 +376,7 @@ export function CalendarView({ leafId }: { leafId?: string } = {}) {
     const nav = useCalendarNav.getState()
     const d = nav.draft
     if (!d) return
+    if (d.scope !== calendarScope()) { nav.setDraft(null); return }
     nav.setDraft(null)
     const m = pickDraftDb(members, d.dbPath, defaultDbPath(vault, byVault))
     if (!m) return

@@ -1,5 +1,5 @@
 /** Host-owned classification. Third-party manifests cannot promote themselves to core plugins. */
-export const CORE_BUNDLE_IDS: readonly string[] = ['forsion-extend', 'tangu-computer-use']
+export const CORE_BUNDLE_IDS: readonly string[] = ['forsion-extend', 'tangu-computer-use', 'forsion-calendar']
 
 export function isCorePlugin(plugin: { id: string; builtin?: boolean; preinstalled?: boolean }): boolean {
   return !!(plugin.builtin || plugin.preinstalled) && CORE_BUNDLE_IDS.includes(plugin.id)
@@ -7,8 +7,14 @@ export function isCorePlugin(plugin: { id: string; builtin?: boolean; preinstall
 
 /** 宿主视图芯(2026-10-18,主页插件化 S1):宿主视图类型 → 能接管它的核心插件与该插件的视图 id。
  *  Space、视图类型、Ribbon 槽位都还是宿主的;只有视图里画什么换成插件的。只认这张表 —— 插件自己声明不算。 */
-export const HOST_VIEW_CLAIMS: Readonly<Record<string, { pluginId: string; viewId: string }>> = {
+export const HOST_VIEW_CLAIMS: Readonly<Record<string, { pluginId: string; viewId: string; retainAlias?: boolean }>> = {
   homepage: { pluginId: 'forsion-home', viewId: 'home' },
+  // Aliases retain older plugin layouts and the independent Tasks Space.
+  calendar: { pluginId: 'forsion-calendar', viewId: 'calendar', retainAlias: true },
+  'todo-list': { pluginId: 'forsion-calendar', viewId: 'todo', retainAlias: true },
+  'calendar-side': { pluginId: 'forsion-calendar', viewId: 'side', retainAlias: true },
+  'calendar-config': { pluginId: 'forsion-calendar', viewId: 'config', retainAlias: true },
+  'mini-todo': { pluginId: 'forsion-calendar', viewId: 'todo-mini', retainAlias: true },
 }
 
 /** 这个插件能不能接管宿主视图:核心插件(随包播种、在名单里)才行。
@@ -35,7 +41,12 @@ export function isClaimingHostView(
   state: Parameters<typeof claimedHostView>[0],
   entry: { pluginId: string; item: { id: string } },
 ): boolean {
-  return Object.keys(HOST_VIEW_CLAIMS).some((t) => claimedHostView(state, t) === entry)
+  return Object.keys(HOST_VIEW_CLAIMS).some((t) => !HOST_VIEW_CLAIMS[t].retainAlias && claimedHostView(state, t) === entry)
+}
+
+/** The renderer replaces Calendar's contents, preserving the native Space and saved layout. */
+export function replacesNativeSpaceRecipe(state: Parameters<typeof claimedHostView>[0], pluginId: string | undefined, slug: string): boolean {
+  return pluginId === 'forsion-calendar' && slug === 'calendar' && !!claimedHostView(state, 'calendar')
 }
 
 export interface CorePluginUpdate {

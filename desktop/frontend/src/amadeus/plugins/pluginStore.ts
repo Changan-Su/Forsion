@@ -45,7 +45,7 @@ import { registerDeskCompanion, revokeDeskCompanions, type DeskCompanionContribu
 // ctx.desk 的宿主闸:端判定单源(currentPlatform)+ UI 模式(叶子模块,不经 @lcl/engine barrel)。
 import { currentPlatform } from '../../services/agentRunService'
 import { UI_MODE } from '@lcl/engine/uiMode'
-import { setActiveSpace, useCommandStore, useSpaceStore } from '@lcl/engine'
+import { setActiveSpace, useCommandStore, useSpaceStore, nativeHaptic, nativeHapticAvailable, claimNativeChrome, nativeChromeInstalled } from '@lcl/engine'
 import { AUTO_WORK_FOLDER_KEY } from './display'
 // 自动化播种 / 禁用即关规则:backendService 依赖图干净(http / agentRunService / localInbox,均不引 appStore),
 // 可静态 import;cfg 必须经 tanguSeam 探针的 waitBackend 拿(appStore 与本模块有 import 环)。
@@ -56,6 +56,7 @@ import { useDbStore } from '../store/dbStore'
 import { createDatabasesApi, createNoteTasksApi } from './pluginData'
 import { loadSyncedPluginData, notePluginDataEdit, pluginDataSyncOn, pushPluginData, type LocalData } from './pluginDataSync'
 import { createCalendarApi } from './pluginCalendar'
+import { createCalendarEventsApi } from './pluginCalendarEvents'
 import { createSpacesApi } from './pluginSpaces'
 import { clearSpaceProgressOf, setSpaceDot, setSpaceProgress } from '../../stores/spaceProgress'
 import { getSync, markSyncDecided, refreshSync, resolveNotes, runSyncNow, setSync, startSyncSetup, subscribeSync } from '../../services/syncSetup'
@@ -184,10 +185,10 @@ interface PluginState {
   toolResultRenderers: Owned<ToolResultRendererContribution>[]
   fileCreators: Owned<FileCreatorContribution>[]
   /** 宿主注入的视图打开器(桌面壳=workspace.openView);无工作台的宿主保持 null,ctx.openView 即 no-op。 */
-  viewOpener: ((type: string, loc?: PluginViewLocation) => void) | null
+  viewOpener: ((type: string, loc?: PluginViewLocation, params?: Record<string, unknown>) => void) | null
   /** 打开器真能停靠的位置(经 ctx.viewLocations 给插件做 feature-detect);没有打开器 = null。 */
   viewLocations: readonly PluginViewLocation[] | null
-  setViewOpener(fn: ((type: string, loc?: PluginViewLocation) => void) | null, locations?: readonly PluginViewLocation[]): void
+  setViewOpener(fn: ((type: string, loc?: PluginViewLocation, params?: Record<string, unknown>) => void) | null, locations?: readonly PluginViewLocation[]): void
   /** 宿主注入的关 / 换视图(桌面壳 = 引擎的 closeViewsOfType / replaceViewsOfType);没有工作台的宿主保持 null。 */
   viewControls: { close(type: string, opts?: { collapse?: boolean }): void; replace(from: string, to: string, params?: Record<string, unknown>): number } | null
   setViewControls(controls: PluginState['viewControls']): void
@@ -1452,7 +1453,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       set((s) => ({ toolResultRenderers: [...s.toolResultRenderers, { pluginId, item }] }))
     },
     // 打开自己的视图:类型名由宿主统一命名空间(plugin:<id>:<viewId>),防跨插件顶替。
-    openView: (viewId, opts) => { if (ctxAlive()) get().viewOpener?.(`plugin:${pluginId}:${viewId}`, opts?.location) },
+    openView: (viewId, opts) => { if (ctxAlive()) get().viewOpener?.(`plugin:${pluginId}:${viewId}`, opts?.location, opts?.params) },
     get viewLocations() { return get().viewLocations ?? undefined },
     listCapabilities: LIST_CAPABILITIES,
     // 关 / 换同样按这一代判活:视图类型名按插件 id 命名空间、新旧两代共用,旧一代迟到的回调会关掉 / 换掉新一代开着的视图。
@@ -1551,6 +1552,12 @@ export const usePluginStore = create<PluginState>((set, get) => {
     // 通用宿主 UI 原语。Floating TOC 是非接管式挂载:插件继续拥有正文 DOM,宿主只在 shell 上叠一层。
     // 与 table/dashboard 一样动态 import 破环;形态错误同步抛,让插件能当场走自己的降级 UI。
     ...(typeof document !== 'undefined' ? { ui: {
+      ...(nativeHapticAvailable() ? { haptic: (kind: 'tick') => { if (ctxAlive() && kind === 'tick') nativeHaptic(kind) } } : {}),
+      ...(nativeChromeInstalled() ? { claimHeader: (opts: { title: string; back: string; onBack(): void }) => {
+        if (!ctxAlive()) return { dispose() {} }
+        const handle = claimNativeChrome({ mode: 'page', title: String(opts.title), back: String(opts.back), onBack: () => { if (ctxAlive()) opts.onBack() } })
+        return { dispose: scope.own('mount', () => handle.release(), 'nativeHeader') }
+      } } : {}),
       // 行编辑字段(10-17):写的是用户的表 → 和 ctx.databases 同一道闸,没声明 'databases' 就没有这个成员。
       ...(get().plugins.find((p) => p.id === pluginId)?.capabilities?.includes('databases')
         ? {
@@ -1913,7 +1920,8 @@ export const usePluginStore = create<PluginState>((set, get) => {
     // 'calendar' 能力档(叠加源 + 日历设置):**manifest 声明过才有**,ensureMember 这一档人人有(见 types 的两档说明)。
     calendar: {
       ...(get().plugins.find((p) => p.id === pluginId)?.capabilities?.includes('calendar')
-        ? createCalendarApi({ alive: ctxAlive, own: (off) => scope.own('subscription', off, 'calendar') })
+        ? { ...createCalendarApi({ alive: ctxAlive, own: (off) => scope.own('subscription', off, 'calendar') }),
+            events: createCalendarEventsApi({ alive: ctxAlive, own: (off) => scope.own('subscription', off, 'calendarEvents') }) }
         : {}),
       ensureMember: (dbPath: string, dateColId: string, checkboxColId?: string) => {
         const p = normalizeVaultRel(dbPath)

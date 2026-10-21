@@ -14,6 +14,8 @@ import { APP_VERSION } from '@/changelog'
 import { capacitorPluginFs, hasNativeMarketDownload, isDebuggableAndroid, nativeMarketDownload } from './capacitorPluginFs'
 import { createPluginHost, type MobilePluginHost } from './pluginHost'
 import { createFetchDownload, createMobileMarket, type MobileMarket } from './mobileMarket'
+import { withBundledCalendar } from './bundledCalendar'
+import { isCorePlugin } from '../../../desktop/shared/corePlugins'
 
 registerMessages({
   'mobilemarket.noCloud': { zh: '还没有连接 Forsion 云端，无法使用应用市场', en: 'Not connected to Forsion cloud, so the market is unavailable' },
@@ -59,7 +61,7 @@ export function installMobilePlugins(opts: { cloudApiBase: () => string }): Mobi
   const fs = capacitorPluginFs()
   // 门禁用的宿主版本 = 渲染层随包的 CHANGELOG 版本(移动端与桌面同一份渲染层源码,插件 API 能力按它算);
   // 顶节是 Unreleased 时 APP_VERSION 为空 → 传 null,不按 0.0.0 误杀声明了 minAppVersion 的插件。
-  const host = createPluginHost(fs, { appVersion: () => APP_VERSION || null })
+  const host = withBundledCalendar(createPluginHost(fs, { appVersion: () => APP_VERSION || null }), () => APP_VERSION || null)
   const market = createMobileMarket({
     fs,
     appVersion: () => APP_VERSION,
@@ -75,7 +77,7 @@ export function installMobilePlugins(opts: { cloudApiBase: () => string }): Mobi
     },
     reservedIds: async () => {
       const { usePluginStore } = await import('@/amadeus/plugins/pluginStore')
-      return usePluginStore.getState().plugins.filter((p) => p.builtin).map((p) => p.id)
+      return usePluginStore.getState().plugins.filter((p) => p.builtin || isCorePlugin(p)).map((p) => p.id)
     },
     t: (key, vars) => translate(key, vars),
   })
