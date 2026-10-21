@@ -18,7 +18,8 @@ async function until(name, condition, timeout=15000) {
 }
 async function main() {
   if (process.platform !== 'win32' || process.env.GITHUB_ACTIONS !== 'true') throw new Error('Native Clip check requires a dedicated GitHub Actions Windows desktop')
-  const output = path.join(ROOT, 'outputs/windows-clip-native'); fs.mkdirSync(output, { recursive: true })
+  const packagedExe=process.env.FORSION_CLIP_NATIVE_EXE
+  const output = path.join(ROOT, 'outputs/windows-clip-native',packagedExe?'packaged':'source'); fs.mkdirSync(output, { recursive: true })
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'Forsion Clip 中文 ')), userData = path.join(home, 'userdata')
   const desktop = async (action, args = []) => (await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-STA', '-File', path.join(__dirname, 'lib/windows-clip-desktop.ps1'), '-Action', action, ...args], { windowsHide: true, timeout: 30000 })).stdout.trim()
   const status = { enabled: true, port: 47655, listening: true, error: '', connected: false, clients: [], lastClient: null, extensionId: ID, extensionDir: '/unused/bundled', code: 'tangu:47655:' + 'ab'.repeat(24) }
@@ -31,8 +32,11 @@ async function main() {
   const checks = []
   const check = (name, value, details) => { checks.push({ name, ok: !!value, details }); assert.ok(value, name + ': ' + JSON.stringify(details)); console.log('PASS ' + name) }
   try {
-    app = await electron.launch({ args: [`--user-data-dir=${userData}`, '--lang=en-US', ROOT], cwd: ROOT,
+    app = await electron.launch({ ...(packagedExe?{executablePath:packagedExe}:{}),args: [`--user-data-dir=${userData}`, '--lang=en-US',...(packagedExe?[]:[ROOT])], cwd: ROOT,
       env: { ...process.env, FORSION_TEST_DESKTOP: '', TANGU_HARNESS_QUIET: '0', TANGU_HOME: home, TANGU_BACKEND_URL: stub.url } })
+    const runtime=await app.evaluate(({app})=>({packaged:app.isPackaged,appData:app.getPath('appData'),resources:process.resourcesPath,electron:process.versions.electron,version:app.getVersion(),appPath:app.getAppPath()}))
+    check('runtime uses the intended genuine source or packaged application',runtime.packaged===!!packagedExe,runtime)
+    fs.writeFileSync(path.join(output,'runtime.json'),JSON.stringify({runtime,commit:process.env.GITHUB_SHA,windows:os.release()},null,2))
     const win = await app.firstWindow()
     await app.context().route('**/agent/**', route => {
       const url = new URL(route.request().url())
@@ -75,7 +79,11 @@ async function main() {
     const sameCopy = actual => {
       try { return typeof actual==='string'&&fs.realpathSync.native(actual).toLowerCase()===fs.realpathSync.native(copyDir).toLowerCase() } catch { return false }
     }
-    check('settings prepares the actual bundled extension in the isolated profile', copyDir?.startsWith(home + path.sep) && fs.existsSync(path.join(copyDir, 'manifest.json')), copied)
+    const expectedCopy=packagedExe?path.join(runtime.appData,'Forsion','Forsion Clip'):path.join(home,'Forsion Clip')
+    const sourceManifest=path.join(packagedExe?path.join(runtime.resources,'tangu-server/browser-extension'):path.join(ROOT,'node_modules/@forsion/clip/chrome-mv3'),'manifest.json')
+    check('settings prepares the actual bundled extension at the correct runtime copy path',copyDir===expectedCopy&&fs.existsSync(path.join(copyDir,'manifest.json')),copied)
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(copyDir,'manifest.json'),'utf8')),JSON.parse(fs.readFileSync(sourceManifest,'utf8')))
+    check('the copied manifest matches the real runtime bundle',true)
     check('settings displays exactly the prepared copy path', (await settings.locator('.settings-browser-ext-panel').innerText()).includes(copyDir))
     await nativeClick(settings.getByTestId('browser-extension-open-chrome'))
     await until('the fallback address reaches the clipboard',async()=>await app.evaluate(({clipboard})=>clipboard.readText())==='chrome://extensions')
@@ -103,6 +111,7 @@ async function main() {
     browser = await chromium.launchPersistentContext(path.join(home, 'chrome'), { headless: false, viewport: null, locale: 'en-US', ignoreDefaultArgs: ['--disable-extensions'],
       args: ['--lang=en-US', '--no-first-run', '--no-default-browser-check', '--proxy-server=http://127.0.0.1:9', '--proxy-bypass-list=<-loopback>', `--window-position=${work.x+work.width-chromeWidth},${work.y}`, `--window-size=${chromeWidth},${work.height}`] })
     const page = browser.pages()[0]; await page.goto('chrome://extensions')
+    fs.writeFileSync(path.join(output,'chrome.json'),JSON.stringify({version:browser.browser().version()},null,2))
     await page.evaluate(()=>{
       window.__clipNativeDrops=[]
       for(const type of ['dragenter','dragover','drop']) document.addEventListener(type,event=>window.__clipNativeDrops.push({type,trusted:event.isTrusted,types:Array.from(event.dataTransfer?.types||[]),names:Array.from(event.dataTransfer?.files||[],file=>file.name)}),{capture:true,passive:true})
@@ -112,7 +121,18 @@ async function main() {
       ipcMain.on('fs:startDrag',(_event,file)=>globalThis.__clipNativeDragRequests.push(file))
     })
     const info = () => page.evaluate(() => chrome.developerPrivate.getExtensionsInfo({includeDisabled:true,includeTerminated:true}))
-    const dev = enabled => page.evaluate(enabled => chrome.developerPrivate.updateProfileConfiguration({inDeveloperMode:enabled}),enabled)
+    const dev = async enabled => {
+      await page.bringToFront()
+      const toggle=page.locator('extensions-toolbar').locator('#devMode')
+      await toggle.waitFor()
+      if(await toggle.evaluate(element=>element.checked)!==enabled) await toggle.click()
+      await until('Chrome UI applies developer mode',()=>page.evaluate(enabled=>{const manager=document.querySelector('extensions-manager');return manager?.inDevMode===enabled&&manager?.shadowRoot?.querySelector('extensions-drop-overlay')?.dragEnabled===enabled},enabled),5000).catch(()=>{})
+      const profile=await page.evaluate(()=>chrome.developerPrivate.getProfileConfiguration())
+      const ui=await page.evaluate(()=>{const manager=document.querySelector('extensions-manager');return {inDevMode:manager?.inDevMode,dragEnabled:manager?.shadowRoot?.querySelector('extensions-drop-overlay')?.dragEnabled}})
+      fs.writeFileSync(path.join(output,`developer-mode-${enabled}.json`),JSON.stringify({profile,ui},null,2))
+      check('Chrome developer mode matches the real UI and native profile',profile.inDeveloperMode===enabled&&ui.inDevMode===enabled&&ui.dragEnabled===enabled,{profile,ui})
+      await page.screenshot({path:path.join(output,`developer-mode-${enabled}.png`)})
+    }
     const drag = async accepted => {
       const pagesBefore=new Set(browser.pages())
       const requestsBefore=await app.evaluate(()=>globalThis.__clipNativeDragRequests.length)
@@ -138,7 +158,7 @@ async function main() {
       check('each native folder drag is received by Chrome',events.some(event=>['dragenter','dragover'].includes(event.type)&&event.trusted&&event.types.includes('Files'))||(!accepted&&directoryTabs.length===1),{events,directoryTabs:directoryTabs.map(tab=>tab.url())})
       if(accepted) check('enabled developer mode accepts the actual folder drop',events.some(event=>event.type==='drop'&&event.trusted&&event.types.includes('Files')&&event.names.includes(path.basename(copyDir))),events)
       if(!accepted&&directoryTabs.length) {
-        fs.writeFileSync(path.join(output,'developer-off-behavior.json'),JSON.stringify({installed:false,behavior:'Chrome opens the exact dropped directory as a file tab',urls:directoryTabs.map(tab=>tab.url())},null,2))
+        fs.writeFileSync(path.join(output,'developer-off-behavior.json'),JSON.stringify({installed:(await info()).some(extension=>extension.id===ID),behavior:'Chrome opens the exact dropped directory as a file tab',urls:directoryTabs.map(tab=>tab.url())},null,2))
         await directoryTabs[0].screenshot({path:path.join(output,'developer-off-directory.png')})
         for(const tab of directoryTabs) await tab.close()
       }
