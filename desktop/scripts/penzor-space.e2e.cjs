@@ -509,13 +509,6 @@ async function main() {
       check('④ 点了 → 主窗停在 WMOSv11', /WMOSv11/.test(await win.locator('.pz-h1').textContent().catch(() => '')))
     }
 
-    // ⑤ 401 → 登录页
-    cloud.st.signedOut = true
-    await win.locator('.t2s-srow-title', { hasText: /^概览$/ }).first().click().catch(() => {})
-    await win.evaluate(() => { const b = [...document.querySelectorAll('button')].find((x) => /^刷新$/.test(x.getAttribute('aria-label') || x.title || x.textContent || '')); b?.click() })
-    await win.waitForSelector('text=登录后查看你的蓬洲云', { timeout: 10_000 }).catch(() => {})
-    check('⑤ 云端 401 → 登录页', await win.getByText('登录后查看你的蓬洲云').count() > 0)
-    await shot('signed-out')
     cloud.st.signedOut = false
     await win.evaluate(()=>localStorage.setItem('tangu_locale','en'))
     await win.reload(); await win.waitForSelector('#root'); await win.waitForTimeout(2000)
@@ -529,6 +522,13 @@ async function main() {
     await win.waitForTimeout(500)
     check('⑧ 窄桌面主区无横向溢出', await win.locator('.pz-scroll').evaluate(el=>el.scrollWidth<=el.clientWidth+1))
     await shot('overview-narrow-en')
+    // ⑤ 401 → 登录页
+    cloud.st.signedOut = true
+    await win.locator('.t2s-srow-title', { hasText: /^Overview$/ }).first().click().catch(() => {})
+    await win.evaluate(() => { const b = [...document.querySelectorAll('button')].find((x) => /^Refresh$/.test(x.getAttribute('aria-label') || x.title || x.textContent || '')); b?.click() })
+    await win.waitForSelector('text=Sign in to see your Penzor Cloud', { timeout: 10_000 }).catch(() => {})
+    check('⑤ 云端 401 → 登录页', await win.getByText('Sign in to see your Penzor Cloud').count() > 0)
+    await shot('signed-out')
     check('没有渲染层报错', errors.length === 0, errors.slice(0, 3).join(' || '))
   } catch (e) {
     const page = app.windows()[0]
