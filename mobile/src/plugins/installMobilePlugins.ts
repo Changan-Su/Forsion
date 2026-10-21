@@ -15,6 +15,7 @@ import { capacitorPluginFs, hasNativeMarketDownload, isDebuggableAndroid, native
 import { createPluginHost, type MobilePluginHost } from './pluginHost'
 import { createFetchDownload, createMobileMarket, type MobileMarket } from './mobileMarket'
 import { withBundledCalendar } from './bundledCalendar'
+import { withBundledExtend } from './bundledExtend'
 import { isCorePlugin } from '../../../desktop/shared/corePlugins'
 
 registerMessages({
@@ -61,7 +62,8 @@ export function installMobilePlugins(opts: { cloudApiBase: () => string }): Mobi
   const fs = capacitorPluginFs()
   // 门禁用的宿主版本 = 渲染层随包的 CHANGELOG 版本(移动端与桌面同一份渲染层源码,插件 API 能力按它算);
   // 顶节是 Unreleased 时 APP_VERSION 为空 → 传 null,不按 0.0.0 误杀声明了 minAppVersion 的插件。
-  const host = withBundledCalendar(createPluginHost(fs, { appVersion: () => APP_VERSION || null }), () => APP_VERSION || null)
+  const version = () => APP_VERSION || null
+  const host = withBundledExtend(withBundledCalendar(createPluginHost(fs, { appVersion: version }), version), version)
   const market = createMobileMarket({
     fs,
     appVersion: () => APP_VERSION,
@@ -83,6 +85,8 @@ export function installMobilePlugins(opts: { cloudApiBase: () => string }): Mobi
   })
   const t = window.tangu as unknown as Record<string, unknown> | undefined
   if (t) {
+    // Only this app build has the verified bundled renderer and host account transport.
+    if (typeof window.tangu?.account?.request === 'function' && typeof window.tangu?.account?.status === 'function') t.extendMobile = true
     t.marketTypes = market.marketTypes
     t.marketList = market.marketList
     t.marketDetail = market.marketDetail

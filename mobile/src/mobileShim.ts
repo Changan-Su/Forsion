@@ -27,6 +27,7 @@ import { createUnitBridge, type ForsionUnitPlugin } from './unitBridge'
 import { NATIVE_DOWNLOAD_MAX_BYTES } from '@/services/nativeDownload'
 import { createSaveDownload, type ForsionDownloadsPlugin } from './saveDownload'
 import { createCloudFetch } from './cloudFetch'
+import { createMobileAccount } from './pluginAccount'
 
 // 语音转写失败时给用户看的话。服务端的 detail 只有中文(brain-api/routes.ts),不原样透出,按状态码换成这几句。
 registerMessages({
@@ -99,7 +100,7 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
   const logout = async (): Promise<void> => {
     token = ''
     clearCloudAccountCache()
-    authListeners.forEach((listener) => listener())
+    authListeners.forEach((listener) => { try { listener() } catch { /* isolated */ } })
     if (native) await clearStoredToken()
     else { try { localStorage.removeItem(TOKEN_KEY) } catch { /* ignore */ } }
     await login()
@@ -275,9 +276,27 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
     }
   }
 
+  const saveDownload = native ? createSaveDownload(registerPlugin<ForsionDownloadsPlugin>('ForsionDownloads'), { maxBytes: NATIVE_DOWNLOAD_MAX_BYTES }) : undefined
+  const account = createMobileAccount({
+    cloudApiBase: () => cloudApiBase, token: () => token, status: authStatus, login, logout,
+    onAuthChanged: (cb) => { authListeners.add(cb); return () => { authListeners.delete(cb) } },
+    fetch: (input, init) => origFetch(input, init),
+    async saveDownload(blob, name) {
+      try {
+        if (saveDownload) await saveDownload(name, blob.type, blob)
+        else {
+          const url = URL.createObjectURL(blob), a = document.createElement('a')
+          a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove()
+          setTimeout(() => URL.revokeObjectURL(url), 30_000)
+        }
+        return { ok: true }
+      } catch (e) { return { ok: false, error: String((e as Error)?.message || e) } }
+    },
+  })
   ;(window as unknown as { tangu: unknown }).tangu = {
     cloudWeb: true,
     mobile: true,
+    account,
     // 这台设备上没有本机引擎(聊天接的是云端,或隧道到「我的电脑」—— 那也不是本机)。共享渲染层据此不把
     // 只有本机引擎才有的接口挂给插件(ctx.automation:规则存在引擎的本机档案里,云端引擎答 404)。
     executionCapabilities: { host: false },
@@ -321,7 +340,7 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
     unitForgetSelf: unit.unitForgetSelf,
     // P1-DL 存到系统「下载」:Capacitor WebView 没有 DownloadListener,`<a download>` 在 App 里是哑弹。只装 native 路径 ——
     // web(dev / preview)是真浏览器,缺席 → 调用方回落 <a download>(见 services/nativeDownload.ts)。
-    saveDownload: native ? createSaveDownload(registerPlugin<ForsionDownloadsPlugin>('ForsionDownloads'), { maxBytes: NATIVE_DOWNLOAD_MAX_BYTES }) : undefined,
+    saveDownload,
     accountUseResetCard: (type?: string) => {
       if (type !== undefined && type !== 'both' && type !== 'weekly') {
         return Promise.resolve({ status: 400, json: { error: 'invalid_type', detail: `invalid reset card type: ${type}` } })
@@ -367,7 +386,9 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
   }
   if (!native) window.addEventListener('storage', (event) => {
     if (event.key !== TOKEN_KEY || event.oldValue === event.newValue) return
-    syncCloudAccountCache(cloudApiBase, readWebToken())
+    token = ''
+    clearCloudAccountCache()
+    authListeners.forEach((listener) => { try { listener() } catch { /* isolated */ } })
     location.reload()
   })
 }

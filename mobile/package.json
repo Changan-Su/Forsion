@@ -51,7 +51,11 @@
     "check:calendar-phone": "node scripts/calendar-phone.check.cjs",
     "emu:launchericon": "node scripts/launcher-icon-upgrade-emu.cjs",
     "emu:phone": "node scripts/phone-control-emu.cjs",
-    "emu:localasset": "node scripts/local-asset-emu.cjs"
+    "emu:localasset": "node scripts/local-asset-emu.cjs",
+    "test:account": "node scripts/plugin-account.test.cjs",
+    "test:extendbundle": "node scripts/extend-bundle.test.cjs",
+    "e2e:extend": "node scripts/extend-mobile.e2e.cjs",
+    "emu:extend": "FORSION_EXTEND_ACCEPTANCE=1 node scripts/save-download-emu.cjs"
   },
   "dependencies": {
     "@capacitor/android": "^7.6.7",

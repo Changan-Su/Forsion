@@ -368,3 +368,9 @@ A status-only request may target the plugin's previous display-name default to r
 同时声明 `databases` 与 `calendar` 的插件，在本机引擎提供个人日历时，会收到 `human://CALENDAR.db`。日历成员把它排第一并隐藏旧智库镜像。把该不透明引用原样传给 `ctx.databases`、`ctx.ui.mountRecord` 和用于表结构/名称的 `ctx.app.mutateDb`，不要交给文件系统读写 API。成员与日期/完成列映射由宿主管理，`setMember` / `removeMember` 返回 false；隐藏用 `setHidden`。只有 `databases` 能力的插件不可访问；无此来源的远程或移动宿主不列出。写入复用宿主 CAS 与冲突重放。
 
 Plugins with both `databases` and `calendar` capabilities receive the exact `human://CALENDAR.db` reference when the local engine provides it. Calendar members put it first and hide its old vault mirror. Pass this opaque reference unchanged to `ctx.databases`, `ctx.ui.mountRecord`, and `ctx.app.mutateDb` for schema/name changes, never filesystem read/write APIs. Database-only plugins cannot access it; hosts without this source omit it. Writes retain host CAS and replay.
+
+### 共享账号 / Shared account
+
+Unit 网页账号宿主与移动端可提供 `ctx.account`。先判断能力存在，再使用 `status()`、`login()`、`logout()`、`request(path, init)` 与 `subscribe(listener)`。`request` 只访问账号 API，不接受其他源；宿主代发凭据并保留 FormData/Blob 文件上传。账号切换会取消旧请求并使旧响应体读取失败；插件仍须取消自己的延迟任务并清空旧账号界面。可选的 `saveDownload(blob, name)` 返回 `{ ok, error? }`：Android 保存到系统下载，浏览器保存为下载文件。不要保存、导入或传递账号令牌。
+
+Unit account hosts and the mobile app may provide `ctx.account`. Feature-detect it before using `status()`, `login()`, `logout()`, `request(path, init)` and `subscribe(listener)`. Requests stay within the account API; the host supplies credentials and preserves FormData/Blob uploads. Account changes cancel old requests and reject reads from old response bodies. Plugins must also cancel their deferred tasks and clear the previous account's UI. Optional `saveDownload(blob, name)` returns `{ ok, error? }`: Android saves through system Downloads, while browsers save a download. Never store, import or forward account tokens.
