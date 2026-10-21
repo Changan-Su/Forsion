@@ -126,4 +126,12 @@ describe('ctx.ui.mountRecord 的闸', () => {
     const h = ui.mountRecord!(el, { path: 'T.db', rowId: 'r1' })
     h.dispose()
   })
+  it('the exact personal calendar requires both database and calendar capabilities', () => {
+    const old = useDbStore.getState().entries['T.db']
+    useDbStore.setState({ entries: { ...useDbStore.getState().entries, 'human://CALENDAR.db': { ...old, path: 'human://CALENDAR.db' } } })
+    expect(() => ctxWith(['databases']).ui!.mountRecord!(el, { path: 'human://CALENDAR.db', rowId: 'r1' })).toThrow(TypeError)
+    const h = ctxWith(['databases', 'calendar']).ui!.mountRecord!(el, { path: 'human://CALENDAR.db', rowId: 'r1' })
+    h.dispose()
+  })
+
 })

@@ -53,7 +53,7 @@ import { getMuseTriggers, listPlugins, patchInboxMessage, postInboxMessage, save
 import { buildPluginTriggerUpserts, isPluginOwnedRule, normalizeVaultRel } from './pluginAutomation'
 import { MUTATE_DB_RETRIES, mutateDbCas } from './pluginDb'
 import { useDbStore } from '../store/dbStore'
-import { createDatabasesApi, createNoteTasksApi } from './pluginData'
+import { createDatabasesApi, createNoteTasksApi, pluginDatabasePath } from './pluginData'
 import { loadSyncedPluginData, notePluginDataEdit, pluginDataSyncOn, pushPluginData, type LocalData } from './pluginDataSync'
 import { createCalendarApi } from './pluginCalendar'
 import { createCalendarEventsApi } from './pluginCalendarEvents'
@@ -1563,12 +1563,13 @@ export const usePluginStore = create<PluginState>((set, get) => {
         ? {
             mountRecord: (el: HTMLElement, opts: import('./types').PluginRecordOptions) => {
               if (!ctxAlive()) return { update() {}, dispose() {} }
-              const path = typeof opts?.path === 'string' ? normalizeVaultRel(opts.path) : ''
+              const calendar = !!get().plugins.find((p) => p.id === pluginId)?.capabilities?.includes('calendar')
+              const path = pluginDatabasePath(opts?.path, calendar)
               if (!(el instanceof HTMLElement) || !path || !getAggDb(path) || typeof opts?.rowId !== 'string') {
                 throw new TypeError('mountRecord needs an HTMLElement, a database path in the vault and a rowId')
               }
               const clean = (o: Partial<import('./types').PluginRecordOptions>): Partial<import('./types').PluginRecordOptions> => ({
-                ...(typeof o.path === 'string' && getAggDb(normalizeVaultRel(o.path)) ? { path: normalizeVaultRel(o.path) } : {}),
+                ...(typeof o.path === 'string' && getAggDb(pluginDatabasePath(o.path, calendar)) ? { path: pluginDatabasePath(o.path, calendar) } : {}),
                 ...(typeof o.rowId === 'string' ? { rowId: o.rowId } : {}),
                 ...('dateCol' in o ? { dateCol: typeof o.dateCol === 'string' ? o.dateCol : undefined } : {}),
                 ...(typeof o.readOnly === 'boolean' ? { readOnly: o.readOnly } : {}),
@@ -2149,7 +2150,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       : {}),
     // 全库多维表 / 笔记 @ 任务:同样 **manifest 声明过才注入**(写的是用户的表和笔记,default-deny)。
     ...(get().plugins.find((p) => p.id === pluginId)?.capabilities?.includes('databases')
-      ? { databases: createDatabasesApi({ alive: ctxAlive, own: (off) => scope.own('subscription', off, 'databases') }) }
+      ? { databases: createDatabasesApi({ alive: ctxAlive, own: (off) => scope.own('subscription', off, 'databases') }, !!get().plugins.find((p) => p.id === pluginId)?.capabilities?.includes('calendar')) }
       : {}),
     // Space 与 Ribbon 收纳架(2026-10-18,主页插件化):改的是用户的 Ribbon → 和 databases 同一道闸,声明了 'spaces' 才有
     ...(get().plugins.find((p) => p.id === pluginId)?.capabilities?.includes('spaces')

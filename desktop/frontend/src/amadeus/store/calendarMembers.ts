@@ -53,20 +53,25 @@ export async function refreshHumanCal(): Promise<void> {
 export function useHumanCalDb(): AggDb | null {
   const entry = useDbStore((s) => s.entries[HUMAN_CAL])
   const gen = useDbStore((s) => s.gen)
-  useEffect(() => {
-    const store = useDbStore.getState
-    void store().load(HUMAN_CAL, HUMAN_CAL)
-    const onFocus = (): void => { void refreshHumanCal() }
-    window.addEventListener('focus', onFocus)
-    // 挂上时引擎可能还在启动:读不到就隔一阵再试几次(网页 / 手机连远端引擎时一直读不到,所以有次数上限)
-    const retries = [3_000, 10_000, 30_000].map((ms) => setTimeout(() => { if (store().entries[HUMAN_CAL]?.status === 'missing') void store().load(HUMAN_CAL, HUMAN_CAL) }, ms))
-    return () => { window.removeEventListener('focus', onFocus); retries.forEach(clearTimeout) }
-  }, [gen])
+  useEffect(() => watchHumanCal(), [gen])
   return useMemo(() => (entry?.status === 'ok' ? getAggDb(HUMAN_CAL) : null), [entry])
 }
 
+/** Non-React consumers share the same bounded load/focus lifecycle as native views. */
+export function watchHumanCal(): () => void {
+  const store = useDbStore.getState
+  let generation = store().gen
+  const load = (): void => { void store().load(HUMAN_CAL, HUMAN_CAL) }
+  load()
+  const onFocus = (): void => { void refreshHumanCal() }
+  window.addEventListener('focus', onFocus)
+  const off = useDbStore.subscribe((s) => { if (s.gen !== generation) { generation = s.gen; load() } })
+  const retries = [3_000, 10_000, 30_000].map((ms) => setTimeout(() => { if (store().entries[HUMAN_CAL]?.status === 'missing') load() }, ms))
+  return () => { off(); window.removeEventListener('focus', onFocus); retries.forEach(clearTimeout) }
+}
+
 /** 默认日历排第一(没设过默认库时新建事件就落在这里);旧位置镜像的那份(默认笔记库根上的 Calendar.db)不再重复列出。
- *  ponytail: 插件的 ctx.calendar(pluginCalendar.ts)还只看库里的表;插件要读写默认日历时再接。 */
+ *  Native views and calendar-capable plugins use this same projection. */
 export function withHumanCal(human: AggDb | null, members: CalMemberDb[], vault: string): CalMemberDb[] {
   if (!human) return members
   const dateCol = firstDateCol(human)?.id
