@@ -1,13 +1,13 @@
-import { readFileSync,existsSync,mkdirSync,writeFileSync,renameSync } from 'node:fs'
+import { readFileSync,existsSync,mkdirSync,writeFileSync,renameSync,realpathSync,openSync,closeSync,unlinkSync,constants } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { join,relative,sep } from 'node:path'
-import { withMemoryDirectoryLock } from '../../tangu-agent/src/services/memoryRepository'
+import { diff3Merge } from 'node-diff3'
 import { withDbLock } from './amadeus/fs/dbLock'
 import { withTextWriteLock } from './amadeus/fs/vaultHandlers'
 import { forsionHomeDir } from './forsionHome'
-import { cloudAccountScope } from '../../tangu-agent/src/services/cloudSyncAccount'
-import { mergeDbFile } from '../../tangu-agent/src/services/dbRowMerge'
-import { mergeText3,splitLogBlocks,mergeBlocks,mergeLogHeaders } from '../../tangu-agent/src/services/memorySync'
+import { mergeDbFile } from '../../tangu-agent/src/contracts/dbRowMerge'
+import { mergeText3With,splitLogBlocks,mergeBlocks,mergeLogHeaders } from '../../tangu-agent/src/contracts/contentMerge'
+const mergeText3=(ours:string,base:string,theirs:string)=>mergeText3With(ours,base,theirs,diff3Merge)
 
 /** Same account key and private state file as Extend; no token is persisted here. */
 export function contentSyncOwned(account:string|null):boolean {
@@ -28,7 +28,7 @@ export function mergeSyncContent(path:string,ours:string,base:string|null,theirs
 export async function withContentWriteLock(abs:string|string[],memoryBase:string,commit:()=>void):Promise<void>{
   const paths=[...new Set(typeof abs==='string'?[abs]:abs)].sort()
   const bases=[...new Set(paths.flatMap(p=>{const rel=relative(memoryBase,p).split(sep),base=rel[0]==='human'?join(memoryBase,'human'):rel[0]==='agents'&&rel[1]?join(memoryBase,'agents',rel[1]):null;return base&&existsSync(base)?[base]:[]}))].sort()
-  const memory=()=>bases.reduceRight<()=>void>((next,base)=>()=>withMemoryDirectoryLock(base,next),commit)()
+  const memory=()=>bases.reduceRight<()=>void>((next,base)=>()=>withContentMemoryLock(base,next),commit)()
   const databases=paths.filter(p=>/\.db$/i.test(p)&&!bases.some(b=>p.startsWith(b+sep)))
   const db=()=>databases.reduceRight<()=>Promise<void>>((next,p)=>()=>withDbLock(p,next),async()=>memory())()
   await paths.reduceRight<()=>Promise<void>>((next,p)=>()=>withTextWriteLock(p,next),db)()
@@ -38,11 +38,21 @@ export async function withContentWriteLock(abs:string|string[],memoryBase:string
  * flag before it can later start; never send a local ownership command remotely. */
 export function setOfflineContentOwner(memoryBase:string,identity:string,owned:boolean):void{
   const split=identity.lastIndexOf('::');if(split<0)throw Error('Invalid cloud identity')
-  const scope=cloudAccountScope(identity.slice(0,split),identity.slice(split+2)),dir=join(memoryBase,'agents'),file=join(dir,'.cloudsync-default.json')
-  mkdirSync(dir,{recursive:true});withMemoryDirectoryLock(dir,()=>{
+  const scope=createHash('sha256').update(JSON.stringify([identity.slice(0,split),identity.slice(split+2)])).digest('hex'),dir=join(memoryBase,'agents'),file=join(dir,'.cloudsync-default.json')
+  mkdirSync(dir,{recursive:true});withContentMemoryLock(dir,()=>{
     let state:{accounts:Record<string,{enabled:boolean;revision:number;owner?:'content'}>}={accounts:{}}
     try{state=JSON.parse(readFileSync(file,'utf8'))}catch(e:any){if(e.code!=='ENOENT')throw e}
     const old=state.accounts[scope];state.accounts[scope]={enabled:old?.enabled??false,revision:(old?.revision??0)+1,...(owned?{owner:'content' as const}:{})}
     const temp=file+`.tmp-${process.pid}-${Date.now()}`;writeFileSync(temp,JSON.stringify(state),{mode:0o600});renameSync(temp,file)
   })
+}
+
+/** Mirrors the engine's .memory.lock protocol, like the existing dbLock host
+ * adapter. Keep filename, exclusive/no-follow flags and fail-on-busy semantics aligned. */
+function withContentMemoryLock<T>(base:string,fn:()=>T):T{
+  mkdirSync(base,{recursive:true});const root=realpathSync(base),lock=join(root,'.memory.lock');let fd:number
+  try{fd=openSync(lock,constants.O_CREAT|constants.O_EXCL|constants.O_WRONLY|constants.O_NOFOLLOW,0o600)}
+  catch(e:any){if(e.code==='EEXIST')throw Error('Memory directory is locked by another writer');throw e}
+  try{writeFileSync(fd,JSON.stringify({pid:process.pid,createdAt:Date.now()}));return fn()}
+  finally{closeSync(fd);unlinkSync(lock)}
 }
