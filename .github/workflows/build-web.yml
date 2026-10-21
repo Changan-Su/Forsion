@@ -64,6 +64,16 @@ jobs:
         run: |
           npm install --no-audit --no-fund
           npm run typecheck
+      - name: Check public Unit deployment gate
+        run: node --test web/scripts/check-unit-upstream.test.mjs
+      - name: Verify the real signed Extend on the public Unit entry
+        run: |
+          cd desktop
+          npx --no-install playwright-core install --with-deps chromium
+          node scripts/build-unit-web.mjs
+          mkdir -p "$RUNNER_TEMP/public-extend" "$RUNNER_TEMP/public-extend-shots"
+          tar -xzf ../mobile/vendor/extend-mobile.tgz -C "$RUNNER_TEMP/public-extend" --strip-components=1
+          EXTEND_DIR="$RUNNER_TEMP/public-extend" SHOT_DIR="$RUNNER_TEMP/public-extend-shots" npm run e2e:unitpublic
 
   build:
     needs: typecheck

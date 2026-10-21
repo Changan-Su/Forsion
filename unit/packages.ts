@@ -4,6 +4,9 @@ import { isAbsolute, resolve, sep } from 'node:path'
 import { isSafePluginExt } from '../desktop/shared/amadeus/pluginFiles'
 import { isNativeFeatureId, nativeFeatureSpaceIds, type NativeFeatureId } from '../desktop/shared/nativeFeatures'
 import { CORE_BUNDLE_IDS } from '../desktop/shared/corePlugins'
+import bundles from '../desktop/electron/builtinBundles.json'
+import { verifyBundleSignature } from '../desktop/electron/bundleSignature'
+import { createHash } from 'node:crypto'
 
 export interface CloudServices {
   amadeus?: { adapter: 'forsion-cloud-v1'; apiBase: string; collaboration?: boolean }
@@ -57,11 +60,20 @@ export async function packagePath(root: string, relative: string): Promise<strin
 }
 export async function readPackage(dir: string, appVersion?: string): Promise<InstalledPackage> {
   const root = await realpath(dir)
-  const manifest: PluginManifest = JSON.parse(await readFile(await packagePath(root, 'manifest.json'), 'utf8'))
+  const manifestText = await readFile(await packagePath(root, 'manifest.json'), 'utf8')
+  const manifest: PluginManifest = JSON.parse(manifestText)
   if (!validId(manifest.id) || manifest.apiVersion !== 1) throw new Error('Invalid plugin identity or unsupported plugin API')
   versionAtLeast(manifest.version, '0.0.0')
   if (manifest.minAppVersion && appVersion && !versionAtLeast(appVersion, manifest.minAppVersion)) throw new Error(`Plugin ${manifest.id} requires Unit ${manifest.minAppVersion}`)
   if (manifest.requires && (!Array.isArray(manifest.requires) || !manifest.requires.every(validId))) throw new Error('Invalid plugin dependencies')
+  const pinned = bundles.find((b) => b.id === manifest.id)?.desktop?.signingKey
+  let signed: Record<string, string> | undefined
+  if (pinned) {
+    const verdict = await verifyBundleSignature(root, pinned, ['manifest.json', ...(manifest.main ? [manifest.main] : [])])
+    if (!verdict.ok) throw new Error(`Untrusted official plugin ${manifest.id}: ${verdict.reason}`)
+    signed = verdict.digests
+    if (createHash('sha256').update(manifestText).digest('hex') !== signed['manifest.json']) throw new Error('Plugin manifest changed during verification')
+  }
   const result: InstalledPackage = { root, manifest, spaces: [], spaceIds: new Set() }
   if (manifest.frontend) {
     const { features, services = {} } = manifest.frontend
@@ -81,12 +93,13 @@ export async function readPackage(dir: string, appVersion?: string): Promise<Ins
 
   if (manifest.main) {
     const code = await readFile(await packagePath(root, manifest.main), 'utf8')
+    if (signed && createHash('sha256').update(code).digest('hex') !== signed[manifest.main]) throw new Error('Plugin code changed during verification')
     // Only UI fields enter the public projection. Backend entries/config are private.
     result.ui = { id: manifest.id, name: manifest.name, nameEn: manifest.nameEn, version: manifest.version,
       apiVersion: manifest.apiVersion, minAppVersion: manifest.minAppVersion,
       description: manifest.description, descriptionEn: manifest.descriptionEn, onboarding: manifest.onboarding, fileExtensions: Array.isArray(manifest.fileExtensions) ? manifest.fileExtensions.filter(isSafePluginExt).map((v) => v.trim().toLowerCase()).slice(0, 8) : [], code,
       // 首方核心包(Forsion Extend):页面据 locked 才放出它的商店页、「Forsion 云端」子页与首方接缝(同桌面内置包)。
-      // ponytail: 只按 id 认 —— Unit 只装运营方用 CLI 拷进来的本地包(install.ts),没有商店安装;哪天 Unit 能从商店装插件,改成按桌面 builtinBundles 的固定公钥验 SIGNATURE 再标。
+      // Official signed bundles must pass the host's pinned key above before receiving locked privileges.
       ...(CORE_BUNDLE_IDS.includes(manifest.id) ? { locked: true } : {}) }
   }
   if (manifest.runtime) {
@@ -114,7 +127,10 @@ export async function readPackage(dir: string, appVersion?: string): Promise<Ins
   })
   for (const entry of entries) {
     if (!entry.isDirectory()) continue
-    const json = await readFile(await packagePath(root, `spaces/${entry.name}/space.json`), 'utf8')
+    const relative = `spaces/${entry.name}/space.json`
+    if (signed && !(relative in signed)) continue
+    const json = await readFile(await packagePath(root, relative), 'utf8')
+    if (signed && createHash('sha256').update(json).digest('hex') !== signed[relative]) throw new Error('Plugin Space changed during verification')
     const spec = JSON.parse(json)
     if (!validId(spec.id) || result.spaceIds.has(spec.id)) throw new Error('Invalid or duplicate Space id')
     result.spaceIds.add(spec.id)

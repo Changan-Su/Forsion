@@ -1,0 +1,87 @@
+server {
+    listen ${PORT};
+    server_name localhost;
+    # Keep redirects relative: TLS and public ports belong to the outer proxy.
+    absolute_redirect off;
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # 变量式 proxy_pass 需 resolver;NGINX_RESOLVER 由入口取容器实际 nameserver(见 docker-entrypoint.sh)。
+    resolver ${NGINX_RESOLVER} valid=30s;
+    client_max_body_size 50m;
+
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1024;
+    gzip_proxied any;
+    gzip_types text/plain text/css text/javascript application/javascript application/json application/xml image/svg+xml;
+    gzip_comp_level 6;
+
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+
+    location /assets/ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+
+    # ── 后端代理:把 /api 转发到 Forsion server(→ tangu worker)。
+    #    多一个 /auth(+登录页依赖 /account /shared /oauth):webShim 无 token 时跳同源 /auth,
+    #    复用 Forsion 登录页;登录成功带 ?token 回跳本站。 ──
+    location /api/ {
+        set $backend ${BACKEND_URL};
+        proxy_pass $backend;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_cache_bypass $http_upgrade;
+        proxy_no_cache 1;
+        add_header Cache-Control "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0" always;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+        proxy_connect_timeout 60s;
+        client_max_body_size 50m;
+        # SSE(/api/agent/*/events):关缓冲、分块
+        proxy_buffering off;
+        chunked_transfer_encoding on;
+    }
+
+    # Forsion 登录页 + 账号中心 + 购买页 + 其静态依赖(都转发到后端);供 webShim 跳转用。
+    # ⚠️ 漏了 pay 的话它会掉进下面的 SPA fallback:点「升级会员」返回的是 Tangu Web 自己的外壳
+    # (实测 26KB 应用壳 vs 16KB 支付页),表现为「点了只是把应用重载一遍」。加了要重出 web 镜像才生效。
+    location ~ ^/(auth|account|shared|oauth|pay)(/|$) {
+        set $backend ${BACKEND_URL};
+        proxy_pass $backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # The official website is a Unit projection. Packages and identity come
+    # from that Unit; this gateway does not evaluate a second Web shim.
+    location = / { return 302 /web/$is_args$args; }
+    location = /web { return 308 /web/$is_args$args; }
+    location /web/ {
+        set $backend ${BACKEND_URL};
+        proxy_pass $backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
+        proxy_read_timeout 300s;
+        add_header Cache-Control "no-store" always;
+    }
+    location ~ ^/(share|invite)(/|$) { return 302 /web$request_uri; }
+    location / { return 404; }
+
+    error_page 500 502 503 504 /50x.html;
+    location = /50x.html { root /usr/share/nginx/html; }
+}

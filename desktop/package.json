@@ -311,7 +311,7 @@
     "check:unitswitcher": "node scripts/unit-switcher.check.cjs",
     "check:device-sidebar": "node scripts/e2e-editor.cjs --check=device-sidebar",
     "e2e:unitsettings": "node scripts/unit-settings.e2e.cjs",
-    "e2e:unitpublic": "npx tsx scripts/unit-public-extend.e2e.ts",
+    "e2e:unitpublic": "node scripts/unit-public-extend.cjs",
     "check:secrets": "node scripts/device-secrets.e2e.cjs",
     "gen:engineroutes": "node scripts/gen-engine-routes.mjs",
     "test:ics-tz": "for tz in Europe/London America/New_York Asia/Shanghai Australia/Lord_Howe UTC; do echo \"== $tz\"; TZ=$tz vitest run frontend/src/views/calendar/ics.test.ts || exit 1; done",

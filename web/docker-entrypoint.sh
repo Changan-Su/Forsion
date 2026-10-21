@@ -20,5 +20,10 @@ export NGINX_RESOLVER=${NGINX_RESOLVER:-$(awk '/^nameserver/{print $2; exit}' /e
 export NGINX_RESOLVER=${NGINX_RESOLVER:-127.0.0.11}
 # PORT:容器内 nginx 监听端口(默认 80)。改这个记得同步 docker 端口映射 -p <host>:<PORT>。
 export PORT=${PORT:-80}
-envsubst '$BACKEND_URL $NGINX_RESOLVER $PORT' < /etc/nginx/templates/default.conf.template > /etc/nginx/conf.d/default.conf
+case "${WEB_ENTRY_MODE:-unit}" in
+  unit) web_template=/etc/nginx/templates/unit.conf.template ;;
+  legacy) web_template=/etc/nginx/templates/default.conf.template ;;
+  *) echo '[entrypoint] WEB_ENTRY_MODE must be unit or legacy' >&2; exit 1 ;;
+esac
+envsubst '$BACKEND_URL $NGINX_RESOLVER $PORT' < "$web_template" > /etc/nginx/conf.d/default.conf
 exec nginx -g "daemon off;"

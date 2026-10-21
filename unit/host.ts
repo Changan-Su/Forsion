@@ -13,6 +13,7 @@ import { createAccountHttp } from './accountHttp'
 import { createLocalWorkspace } from './localWorkspace'
 import type { LocalRuntime, RuntimeFactory } from './runtimeTypes'
 import { createManagement, MANAGEMENT_PATH, type ManagementCommand } from './management'
+import { validateWebEntries, type WebEntry } from './webEntries'
 export { loadPackages } from './packages'
 
 export interface PluginInstallation { path: string; enabled?: boolean; publish?: boolean; config?: Record<string, unknown>; env?: Record<string, string> }
@@ -22,6 +23,7 @@ export interface UnitConfig {
   defaultSpace?: string; dataDir?: string; workerFile?: string
   workspace?: { mode: 'local'; path?: string }
   management?: { enabled: boolean }
+  webEntries?: WebEntry[]
 }
 type Backend = Awaited<ReturnType<typeof startBackend>>
 type State = 'disabled' | 'starting' | 'active' | 'stopping' | 'failed'
@@ -71,6 +73,8 @@ export async function startBasicUnit(config: UnitConfig, managementOptions: { ex
     return order
   }
   ordered.push(...dependencyOrder())
+  const webEntries = validateWebEntries(config.webEntries, config.basePath, !!local, new Map([...records].map(([id, r]) => [id, { requires: r.package.manifest.requires, spaces: r.package.spaceIds }])))
+  for (const entry of webEntries) for (const name of ['unit', 'vault', 'engine']) protectedPaths.push(entry.basePath + name)
   for (const record of records.values()) for (const id of record.package.spaceIds) {
     if (spaceOwners.has(id)) throw new Error('Duplicate Space id')
     spaceOwners.add(id)
@@ -98,10 +102,10 @@ export async function startBasicUnit(config: UnitConfig, managementOptions: { ex
     && (rec.package.manifest.requires || []).every((id) => !mustGet(id).package.manifest.frontend || visible(mustGet(id)))
   const published = () => [...records.values()].filter(visible)
   const product = resolveProduct(undefined, { ...basic, market: false, onboarding: false, nativeFeatures: [] })
-  const capabilities = (): CloudServices => {
+  const capabilities = (visible = published()): CloudServices => {
     const services: CloudServices = {}
     if (local) return services
-    for (const rec of published()) Object.assign(services, rec.package.manifest.frontend?.services)
+    for (const rec of visible) Object.assign(services, rec.package.manifest.frontend?.services)
     // A cloud adapter is only usable with an active authority on this Unit.
     const account = [...records.values()].find((r) => usable(r) && r.backend?.account)?.backend?.account
     if (!account?.metadata) return {}
@@ -111,15 +115,20 @@ export async function startBasicUnit(config: UnitConfig, managementOptions: { ex
     }
     return services
   }
-  const refreshProduct = () => {
-    const visible = published()
+  const entryRecords = (entry: WebEntry) => [...records.entries()].filter(([id, r]) => entry.plugins.includes(id) && usable(r)).map(([, r]) => r)
+  const entryProducts = new Map(webEntries.map((entry) => [entry, resolveProduct(undefined, { ...basic, market: false, onboarding: false, nativeFeatures: [] })]))
+  const refreshOneProduct = (product: ReturnType<typeof resolveProduct>, visible: RecordState[], defaultSpace?: string) => {
     const spaces = visible.flatMap((r) => [...r.package.spaceIds])
     product.nativeFeatures = visible.flatMap((r) => r.package.manifest.frontend?.features || [])
     product.agentBackend = product.nativeFeatures.includes('tangu')
     product.spaces = spaces.length ? [] : ['home']
-    product.defaultSpace = spaces.includes(config.defaultSpace || '') ? config.defaultSpace! : spaces[0] || 'home'
+    product.defaultSpace = spaces.includes(defaultSpace || '') ? defaultSpace! : spaces[0] || 'home'
     // 网页主入口的商店只装首方包(Forsion Extend)提供的页:装了它才开商店入口,没装(如 /admin/)就没有空商店
     product.market = visible.some((r) => !!r.package.ui?.locked)
+  }
+  const refreshProduct = () => {
+    refreshOneProduct(product, published(), config.defaultSpace)
+    for (const entry of webEntries) refreshOneProduct(entryProducts.get(entry)!, entryRecords(entry), entry.defaultSpace)
   }
   let chain = Promise.resolve(), closing = false, started = false
   const syncRuntimes = async () => {
@@ -219,12 +228,31 @@ export async function startBasicUnit(config: UnitConfig, managementOptions: { ex
     status: () => ({ instanceId: config.instanceId, version: config.version, pid: process.pid,
       plugins: [...records.values()].map((r) => ({ id: r.package.manifest.id, version: r.package.manifest.version, state: r.state,
         requires: r.package.manifest.requires || [] })) }) })
+  const mountedEntries = await Promise.all(webEntries.map(async (entry) => ({ entry, web: await startUnitWeb({
+    account: { metadata: () => accountProvider()?.account.metadata, handle: (path, req, res) => {
+      if (path.startsWith('/unit/plugin-data/') && !entry.plugins.includes(path.slice('/unit/plugin-data/'.length))) {
+        res.writeHead(404, { 'Content-Type': 'application/json' }); res.end('{"error":"Plugin is not published"}'); return Promise.resolve(true)
+      }
+      return accountHttp(path, req, res)
+    } },
+    meta: { instanceId: config.instanceId, name: config.name, version: config.version },
+    projection: { mode: 'public', basePath: entry.basePath, product: entryProducts.get(entry)!, inheritWebAccount: entry.inheritWebAccount, capabilities: () => capabilities(entryRecords(entry)) },
+    getEngine: () => ({ url: null, token: '' }), confirmPair: async () => false,
+    pairedDevices: { list: () => [], add: async () => { throw new Error('Pairing is disabled') } },
+    readPlugins: async () => entryRecords(entry).flatMap((r) => r.package.ui ? [r.package.ui] : []),
+    readSpaces: async () => entryRecords(entry).flatMap((r) => r.package.spaces),
+    readConfig: async () => ({}), writeConfig: async () => { throw new Error('Host configuration is not published') },
+    readProviders: async () => [], readHostFile: async () => null, readHostDir: async () => null, readHostStat: async () => null,
+    webDistDir: () => config.webDist, vault: () => null, log: (message) => console.log(message),
+  }, { port: 0, mountOnly: true }) })))
   const web = await startUnitWeb({
     account: local ? undefined : { metadata: () => accountProvider()?.account.metadata, handle: accountHttp },
     meta: { instanceId: config.instanceId, name: config.name, version: config.version },
-    projection: { mode: local ? 'local' : 'public', basePath: config.basePath, product, capabilities, localCapabilities: () => ({ vault: !!runtimeVault(), engine: !!runtimeEngine()?.endpoint().url, host: !!runtimeEngine()?.endpoint().url }) },
+    projection: { mode: local ? 'local' : 'public', basePath: config.basePath, product, capabilities: () => capabilities(), localCapabilities: () => ({ vault: !!runtimeVault(), engine: !!runtimeEngine()?.endpoint().url, host: !!runtimeEngine()?.endpoint().url }) },
     routeRequest: (req, res) => {
       if (management.route(req, res)) return true
+      const entry = mountedEntries.find(({ entry }) => matches(pathname(req.url), entry.basePath.slice(0, -1)))
+      if (entry) return entry.web.handleRequest(req, res).then(() => true)
       const path = pathname(req.url), backend = select(path)
       if (backend) { backend.handle(req, res); return true }
       // Preserve UI-only gateways. Composed Units project under their declared prefix.
@@ -265,6 +293,10 @@ export async function startBasicUnit(config: UnitConfig, managementOptions: { ex
       for (const other of records.values()) if (other !== rec) for (const space of next.spaceIds) if (other.package.spaceIds.has(space)) throw new Error('Duplicate Space id')
       const nextOrder = dependencyOrder({ id, package: next })
       validateFeatures({ id, package: next })
+      validateWebEntries(config.webEntries, config.basePath, !!local, new Map([...records].map(([candidate, r]) => {
+        const pack = candidate === id ? next : r.package
+        return [candidate, { requires: pack.manifest.requires, spaces: pack.spaceIds }]
+      })))
       if (config.defaultSpace && rec.package.spaceIds.has(config.defaultSpace) && !next.spaceIds.has(config.defaultSpace)) throw new Error('Update removes the Unit default Space')
       const previous = rec.package, active = activeTree(id)
       for (const candidate of [...active].reverse()) await deactivate(candidate, false, true)
@@ -290,6 +322,7 @@ export async function startBasicUnit(config: UnitConfig, managementOptions: { ex
       if (closing) return
       closing = true
       await web.close()
+      await Promise.all(mountedEntries.map(({ web }) => web.close()))
       const errors: unknown[] = []
       for (const id of [...ordered].reverse()) { try { await deactivate(id, true) } catch (error) { errors.push(error) } }
       if (errors.length) throw new AggregateError(errors, 'Some plugins failed to stop cleanly')

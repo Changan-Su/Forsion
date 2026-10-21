@@ -6,6 +6,17 @@ Unit is the independently runnable Forsion framework, sharing the Genesis Deskto
 
 ## Desktop 同步 / Desktop synchronization
 
+已有后台 Unit 可在同一个 listener 上增加 `webEntries`，每个入口声明自己的 `basePath`、`plugins` 和 `defaultSpace`。
+主入口仍按原 `publish` 设置发布；附加入口只能列出其显式插件及依赖，不能读取主机文件或公开后台插件。
+两者共用同一份后端生命周期和账号存储。更新插件时会重新校验所有入口，避免一次热更新留下无法重启的配置。
+`inheritWebAccount: true` 仅供同源官方 Web 迁移：先经 Unit 验证旧登录，再恢复经权限核对的智库选择，不复制无归属的内容缓存。
+官方 Extend 在装载及更新时必须通过桌面同一固定公钥验签；自建的普通插件仍由运营方安装并列入允许清单。
+
+An existing Unit can add explicit `webEntries` on the same listener while retaining its original Admin projection.
+Each surface publishes only its selected packages; the backend and per-account storage are shared.
+Hot updates validate every surface before committing. Official Extend packages must pass the pinned publisher signature.
+Legacy same-origin login inheritance is opt-in and never copies unattributed content caches.
+
 Desktop 基线不再手工维护：构建时由 git 推导，取检出历史里最新的 `v*` 稳定版标签作基线，距它的提交数作 Unit 修订号。同步方向为 Desktop → Unit；共享功能复用源码，Unit 维护宿主适配。本分支不向 Desktop 主线自动回合，也不从商业 Server 仓库同步代码。
 
 The Desktop baseline is no longer hand-maintained: the build derives it from git, taking the newest `v*` stable tag contained in the checkout as the baseline and the number of commits since it as the Unit revision. Synchronization flows from Desktop into Unit. Shared features reuse source code; Unit maintains its host adapters. This branch does not automatically merge back into Desktop or import the commercial Server repository.

@@ -6,7 +6,7 @@
 
 import type { UnitCloudCapabilities } from './unitCloudTransport'
 
-interface UnitMeta { instanceId: string; name: string; version: string; projection?: 'public' | 'local'; localCapabilities?: { vault: boolean; engine: boolean; host: boolean }; browserStorage?: boolean; account?: { apiBase: string; loginPath: string }; capabilities?: UnitCloudCapabilities }
+interface UnitMeta { instanceId: string; name: string; version: string; projection?: 'public' | 'local'; inheritWebAccount?: boolean; localCapabilities?: { vault: boolean; engine: boolean; host: boolean }; browserStorage?: boolean; account?: { apiBase: string; loginPath: string }; capabilities?: UnitCloudCapabilities }
 
 const base = (): URL => new URL('.', document.baseURI)
 

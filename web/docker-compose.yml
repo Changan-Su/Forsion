@@ -24,6 +24,9 @@ services:
       # Forsion server 地址(nginx 把 /api、/auth 等代理到这里)。
       # 例:http://host.docker.internal:3001 / http://192.168.1.100:3001 / https://api.yourdomain.com
       BACKEND_URL: ${BACKEND_URL:-http://host.docker.internal:3001}
+      # Default publication uses the signed plugins on the backend Unit /web/.
+      # legacy is an explicit rollback only, never the normal official entry.
+      WEB_ENTRY_MODE: ${WEB_ENTRY_MODE:-unit}
     healthcheck:
       # 127.0.0.1 而非 localhost:busybox wget 先解析 ::1,而 nginx listen 80 只绑 IPv4 → 恒 refused 假 unhealthy。
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:80/"]

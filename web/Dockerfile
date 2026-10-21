@@ -52,6 +52,7 @@ RUN cd web && npm run build   # vite 经 /app/node_modules 解析全部依赖 �
 FROM ${BASE_REGISTRY}/nginx:alpine AS production
 RUN apk add --no-cache gettext
 COPY web/nginx.conf.template /etc/nginx/templates/default.conf.template
+COPY web/nginx.unit.conf.template /etc/nginx/templates/unit.conf.template
 COPY web/docker-entrypoint.sh /docker-entrypoint.sh
 RUN chmod +x /docker-entrypoint.sh
 COPY --from=builder /app/web/dist /usr/share/nginx/html
