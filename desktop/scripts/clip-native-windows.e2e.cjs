@@ -77,13 +77,14 @@ async function main() {
     await until('the fallback address reaches the clipboard',async()=>await app.evaluate(({clipboard})=>clipboard.readText())==='chrome://extensions')
     check('Windows fallback copies the real chrome extensions address', await app.evaluate(({ clipboard }) => clipboard.readText()) === 'chrome://extensions')
     await settings.getByTestId('browser-extension-open-note').waitFor()
-    check('the fallback prompt is visible', /Copied the address\. Paste it into the Chrome address bar\.|地址已复制/.test(await settings.getByTestId('browser-extension-open-note').innerText()))
+    check('the fallback prompt is visible', /Copied the address\. Paste it into the Chrome address bar\.|已复制扩展页地址/.test(await settings.getByTestId('browser-extension-open-note').innerText()))
     await nativeClick(settings.getByRole('button', { name: /^(Copy path|复制路径)$/ }))
     await until('Copy path reaches the real clipboard',async()=>await app.evaluate(({clipboard})=>clipboard.readText())===copyDir)
     check('Copy path writes the exact extension directory', await app.evaluate(({ clipboard }) => clipboard.readText()) === copyDir)
     await nativeClick(settings.getByRole('button', { name: /^(Open extension folder|打开扩展文件夹)$/ }))
     let explorer
     for (let i=0;i<20;i++) { explorer = JSON.parse(await desktop('explorer', ['-Path', copyDir])); if(explorer.found) break; await sleep(300) }
+    fs.writeFileSync(path.join(output,'explorer-info.json'),JSON.stringify(explorer,null,2))
     check('Open folder creates a real Explorer window at the copied directory', explorer?.found, explorer)
     await desktop('explorer', ['-Path', copyDir, '-Close'])
     const work = await app.evaluate(({ screen }) => screen.getPrimaryDisplay().workArea)
@@ -142,11 +143,19 @@ async function main() {
     for(let i=0;i<30;i++){ installed=(await info()).find(e=>e.id===ID);if(installed)break;await sleep(300) }
     check('native Load unpacked folder picker independently installs the copy',installed?.location==='UNPACKED' && installed?.path?.toLowerCase()===copyDir.toLowerCase(),installed)
     await page.screenshot({path:path.join(output,'native-picker-installed.png')})
+  } catch(error) {
+    console.error('Native Clip acceptance failed:',error)
+    await desktop('capture',['-Path',path.join(output,'failure-desktop.png')]).catch(()=>{})
+    throw error
   } finally {
     fs.writeFileSync(path.join(output,'results.json'),JSON.stringify({checks,home,copyDir},null,2))
     if(settings&&!settings.isClosed()) await settings.screenshot({path:path.join(output,'settings.png')}).catch(()=>{})
     if(browser)await browser.close().catch(()=>{})
-    if(app)await app.close().catch(()=>{})
+    if(app) {
+      const child=app.process()
+      await Promise.race([app.close().catch(()=>{}),sleep(8000)])
+      if(child.exitCode===null) await run('taskkill.exe',['/PID',String(child.pid),'/T','/F'],{windowsHide:true,timeout:10000}).catch(()=>{})
+    }
     await stub.close()
   }
 }

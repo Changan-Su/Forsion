@@ -22,6 +22,12 @@ public static class ClipDesktopInput {
   [DllImport("user32.dll")] static extern bool ClientToScreen(IntPtr hwnd,ref Point point);
   [DllImport("user32.dll")] static extern uint GetDpiForWindow(IntPtr hwnd);
   [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr hwnd,out Rect rect);
+  [DllImport("kernel32.dll",CharSet=CharSet.Unicode)] static extern uint GetLongPathName(string path,System.Text.StringBuilder result,uint length);
+  public static string LongPath(string path) {
+    var result=new System.Text.StringBuilder(32768);
+    uint length=GetLongPathName(path,result,(uint)result.Capacity);
+    return (length>0&&length<result.Capacity?result.ToString():path).TrimEnd('\\');
+  }
   public static Point ClientPoint(long window,int x,int y) {
     SetThreadDpiAwarenessContext(new IntPtr(-4));
     var hwnd=new IntPtr(window); double scale=GetDpiForWindow(hwnd)/96.0;
@@ -92,11 +98,18 @@ if ($Action -eq 'picker') {
 }
 if ($Action -eq 'explorer') {
   $shell=New-Object -ComObject Shell.Application
-  $matched=@($shell.Windows() | Where-Object {
-    try { $_.Document.Folder.Self.Path.TrimEnd('\') -ieq $Path.TrimEnd('\') } catch { $false }
-  })
+  $expected=[ClipDesktopInput]::LongPath($Path)
+  $seen=@(); $matched=@()
+  foreach($window in $shell.Windows()) {
+    try {
+      $actual=[string]$window.Document.Folder.Self.Path
+      $canonical=[ClipDesktopInput]::LongPath($actual)
+      $seen+=@{path=$actual;canonical=$canonical;hwnd=$window.HWND}
+      if($canonical -ieq $expected) { $matched+= $window }
+    } catch { $seen+=@{error=$_.Exception.Message} }
+  }
   $matched | ForEach-Object { if ($Close) { $_.Quit() } }
-  @{found=($matched.Count -gt 0);count=$matched.Count} | ConvertTo-Json -Compress
+  @{found=($matched.Count -gt 0);count=$matched.Count;expected=$expected;windows=$seen} | ConvertTo-Json -Depth 4 -Compress
   exit
 }
 if ($Action -eq 'capture') {
