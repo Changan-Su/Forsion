@@ -66,8 +66,11 @@ beforeEach(async () => {
   await query(`INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, kind) VALUES ('runtime-s', 'u', 'tangu', 't', 'm', 'user')`);
 });
 
-afterEach(() => {
+afterEach(async () => {
   abortAllRuns();
+  // A persisted terminal status can precede the run task's filesystem cleanup.
+  // Keep its home and mocks alive until the task actually finishes.
+  for (const id of ['runtime-r', 'runtime-resume']) expect(await waitForRunSettlement(id, 5000)).toBe(true);
   vi.restoreAllMocks();
   if (previousHome === undefined) delete process.env.TANGU_HOME;
   else process.env.TANGU_HOME = previousHome;

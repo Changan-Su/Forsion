@@ -244,6 +244,7 @@ KEYS.push('forkcache');
 KEYS.push('appref');
 KEYS.push('imageedit');
 KEYS.push('titlelang');
+KEYS.push('windowscmd');
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
 const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
 // P1-K9 · C3:--remote-cap <档> = 起引擎前经 K4 的新写入口写 remote.maxApprovalMode(缺省不写 = 引擎按 auto-edit)
@@ -266,6 +267,7 @@ OPT_IN.add('viewimage');
 OPT_IN.add('imgtools'); // --only imgtools:历史里带图 → 改图 / 生图在 run 起点就在工具面里,不靠中途 load_tools(三个短 run)
 OPT_IN.add('imageedit'); // --only imageedit:edit_image 跨轮取图 + 改自己的产出(三个 run,同一会话;假生图后端)
 OPT_IN.add('titlelang'); // --only titlelang:标题跟随对话语言(10-20:英文对话被起成中文标题);4 个会话 5 个 run,改起标题 / 摘要的提示词、transcript、scriptCheck 后跑
+OPT_IN.add('windowscmd'); // Windows Issue #77: exact cmd reads and rejected negative controls through real model/tool/SSE.
 OPT_IN.add('novision'); // --only novision:主模型没有图像输入时的转写状态与送达(一个 run + 一次转写)
 OPT_IN.add('cuoff'); // --only cuoff:主模型看不到图 → Computer Use 不可用并告诉用户(一个 run)
 for (const k of CU_JEV_KEYS) OPT_IN.add(k); // --only cumusic,cusend,cuambig,cuscroll,cusearch:Jev 真实案例,自绘替身 + 真 Jev(会动真鼠标;要 --cu-plugin)
@@ -851,6 +853,7 @@ if (argv.includes('--selftest')) {
   }
   for (const [name, got, want] of notebookSelftest()) check(name, got, want); // notebook 的文件判据 / 绕开工具的识别 / 审批守门
   for (const [name, got, want] of appRefSelftest()) check(name, got, want); // appref 的引用判据(原样 / 不进代码 / 不当笔记)
+  await import('./lib/windows-cmd-live.check.mjs');
   if (fails.length) { console.error(`--selftest 失败 ${fails.length} 条:\n  ${fails.join('\n  ')}`); process.exit(1); }
   console.log('--selftest 全过(anchorsOk / acceptsSnapshotText / findSubUnlock / run3Verdict / ttftVerdict / activationBuckets / activationsOverlap / claimsSent / claimsDone / mentionsFailure / registeredViews / judgeNotebook / bypasses / judgeAppRef,含负对照)');
   process.exit(0);
@@ -4292,6 +4295,11 @@ Then reply with only the command output.`,
       output: `【合并】${ev.content}\n\n【Plan.md】\n${merged}\n\n【画布对】${ev2.content}\n\n【子集副本】${ev3.content}\n\n【近似非子集】${ev4.content}\n\n【Notes.md】\n${ntNow}`,
       ttftMs: ttft(ev), tokens: runs.reduce((a, r) => a + (tokensOf(r) || 0), 0) || null, toolCalls: runs.flatMap((r) => r.toolCalls),
     };
+  });
+
+  await scenario('windowscmd', 'Windows cmd 只读命令 × 真实审批', async () => {
+    const { windowsCmdLive } = await import('./lib/windows-cmd-live.mjs');
+    return windowsCmdLive({ run, workspace, OUT });
   });
 
   await scenario('muse', `muse 心跳周期(${MUSE_MODE})`, async () => {

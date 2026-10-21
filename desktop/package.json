@@ -34,6 +34,8 @@
     "e2e:dnd": "node scripts/block-dnd.e2e.cjs",
     "e2e:sidebardrop": "node scripts/sidebar-drop.e2e.cjs",
     "e2e:notemove": "node scripts/note-move-assets.e2e.cjs",
+    "e2e:notemove:stress": "node scripts/note-move-stress.e2e.cjs",
+    "e2e:notemove:metadata": "node scripts/note-move-metadata.e2e.cjs",
     "e2e:filelink": "node scripts/file-wikilink.e2e.cjs",
     "e2e:ribbon": "node scripts/ribbon-dnd.e2e.cjs",
     "e2e:spacewindow": "node scripts/space-window.e2e.cjs",
@@ -232,7 +234,9 @@
     "check:windows-updater": "node scripts/windows-updater.check.cjs",
     "check:windows-apprefs": "node scripts/windows-apprefs.check.cjs",
     "e2e:windows-clip": "node scripts/windows-clip.e2e.cjs",
+    "e2e:windows-clip-browser": "node scripts/windows-clip-browser.check.cjs",
     "e2e:windows-legacy": "node scripts/windows-legacy-state.e2e.cjs",
+    "e2e:windows-upgrade": "node scripts/windows-upgrade.e2e.cjs",
     "check:persistignore": "node scripts/persist-ignore.check.cjs",
     "check:spaceicon": "node scripts/space-icon.check.cjs",
     "check:spacehidden": "node scripts/plugin-space-hidden.check.cjs",
@@ -391,7 +395,8 @@
     "e2e:image-studio": "node scripts/image-studio.e2e.cjs",
     "e2e:image-studio:live": "node scripts/image-studio.live.cjs",
     "check:permissions": "node scripts/permissions.check.cjs",
-    "check:mininative": "node scripts/mini-auto.check.cjs --native-helper"
+    "check:mininative": "node scripts/mini-auto.check.cjs --native-helper",
+    "e2e:notemove:handoff": "node scripts/note-move-handoff.e2e.cjs"
   },
   "dependencies": {
     "@astryxdesign/core": "^0.1.4",

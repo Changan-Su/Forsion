@@ -114,7 +114,14 @@ function withTextWriteLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
 }
 
 export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
-  const { vault, index, handle, rememberPage, notifyAll } = deps
+  const { vault, index, handle, rememberPage: persistLastPage, notifyAll } = deps
+  // The file operation has already committed when most callers remember its
+  // location. A device preference failure must not masquerade as a failed move
+  // and make the renderer resume writing the now-missing source path.
+  const rememberPage = async (page: string): Promise<void> => {
+    try { await persistLastPage(page) }
+    catch (error) { console.warn('[amadeus] rememberPage failed; file operation is committed', page, error) }
+  }
   const logActivity = deps.logActivity ?? (() => {})
   const logNoteEdit = deps.logNoteEdit ?? (() => {})
   /** 按 vault 相对路径拿同篇写锁(键 = 绝对路径,各种写法归一)。越界 / 无库时 absPath 会抛:那就不上锁直接跑,
