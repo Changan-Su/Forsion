@@ -26,12 +26,17 @@ function createNsisInclude(productId, outputDirectory = __dirname) {
     '!macroundef registerFileAssociations',
     '!macro registerFileAssociations',
     ...entries.map(item => `!insertmacro ForsionAssociate ${quote(item.ext)} ${quote(item.name)} ${quote(item.description)} ${quote(item.rank === 'Default' ? '1' : '0')}`),
+    '!macroend', '!endif',
+    '!ifmacrodef unregisterFileAssociations',
+    '!macroundef unregisterFileAssociations',
+    '!macro unregisterFileAssociations',
+    // Run at the actual unregistration point after successful payload removal,
+    // including --updated. A replacement installer restores its own defaults.
+    ...entries.flatMap(item => ownClasses.map(name => `!insertmacro ForsionClearOwnedDefault ${quote(item.ext)} ${quote(name)}`)),
+    ...entries.map(item => `!insertmacro APP_UNASSOCIATE ${quote(item.ext)} ${quote(item.name)}`),
     '!macroend', '!endif', '',
   ].join('\n'))
   writeFileSync(wrapper, [
-    '!macro forsionUnregisterDefaults',
-    ...entries.flatMap(item => ownClasses.map(name => `!insertmacro ForsionClearOwnedDefault ${quote(item.ext)} ${quote(name)}`)),
-    '!macroend',
     include(join(__dirname, 'installer.nsh')),
     '!macro customHeader', include(registryFile), '!macroend', '',
   ].join('\n'))

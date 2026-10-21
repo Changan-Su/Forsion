@@ -14,7 +14,7 @@ function Check([bool]$Value,[string]$Name) {
 }
 function Default([string]$Ext) {
   $key="HKCU:\Software\Classes\.$Ext"
-  if (Test-Path $key) { return (Get-Item $key).GetValue('') }
+  if (Test-Path $key) { return [string](Get-Item $key).GetValue('') }
   return ''
 }
 function PdfChoice {

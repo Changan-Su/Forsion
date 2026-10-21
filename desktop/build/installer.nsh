@@ -83,9 +83,6 @@ LangString forsionInstallWait 2052 "可能需要几分钟，期间快捷方式�
 ; 自动吞掉 MessageBox,所以必须显式绕开。
 !macro customUnInstall
   ${ifNot} ${isUpdated}
-    ; The stock APP_UNASSOCIATE removes the ProgID but leaves its default
-    ; reference behind. Clear only this product's pointers before that removal.
-    !insertmacro forsionUnregisterDefaults
     MessageBox MB_YESNO|MB_ICONQUESTION "同时删除 Forsion 的数据与工作区(账号/设置/Agent 数据/会话)?$\r$\n位置:$PROFILE\.forsion 与 $PROFILE\Forsion。此操作不可恢复。" IDNO skipTangu
       RMDir /r "$PROFILE\.forsion"
       RMDir /r "$PROFILE\Forsion"
