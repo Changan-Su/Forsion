@@ -81,6 +81,18 @@ test('installer prereleases retain independent versions and proper version order
   assert.equal(cmp('3.0.0', '3.0.0-beta.1'), 1)
 })
 
+test('desktop revisions keep their own ordering and do not become engine npm identities', () => {
+  assert.deepEqual(desktopProblems({ ...desktop, desktop: '2.13.7+build.2', ref: 'v2.13.7+build.2' }), [])
+  assert.equal(cmp('2.13.7+build.10', '2.13.7+build.2'), 1)
+  assert.match(desktopProblems({ ...desktop, engine: '3.0.0+build.1' }).join(), /no build metadata/)
+  const f = fixture('8.0.0+build.2')
+  f.write('tangu-agent/package.json', f.pkg('2.0.1'))
+  runGate(f.root, ['tangu-v2.0.1', 'push'], {}, { readPublishedVersion: () => '2.0.0' })
+  const metadataHost = fixture('8.0.0+sha.a-b')
+  metadataHost.write('tangu-agent/package.json', metadataHost.pkg('2.0.1'))
+  runGate(metadataHost.root, ['tangu-v2.0.1', 'push'], {}, { readPublishedVersion: () => '2.0.0' })
+})
+
 test('new desktop releases ignore old tags from before the engine directory existed', () => {
   const f = fixture('2.13.5', '2.13.5')
   f.git('rm', '-r', 'tangu-agent'); f.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'legacy layout'); f.git('tag', 'v2.2.4')

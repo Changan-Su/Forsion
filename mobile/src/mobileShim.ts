@@ -19,8 +19,8 @@ import { Browser } from '@capacitor/browser'
 import { InAppBrowser, ToolbarPosition, iOSViewStyle, iOSAnimation } from '@capacitor/inappbrowser'
 import { registerMessages, translate } from '@/i18n'
 import { APP_VERSION } from '@/changelog'
-import { isNewer } from '../../desktop/shared/updateVersion'
-import { parseMainland, parseWebsiteInstallers, sourceOrder } from '../../desktop/shared/updateSource'
+import { isNewer, isPrerelease } from '../../desktop/shared/updateVersion'
+import { parseMainland, parseWebsiteInstallers, selectGitHubRelease, sourceOrder } from '../../desktop/shared/updateSource'
 import { clearCloudAccountCache, syncCloudAccountCache } from '@/services/cloudAccountCache'
 import { isNative, apiBase, forsionWebOrigin, getStoredToken, clearStoredToken, startNativeLogin, bindDeepLinkAuth, refreshStoredToken, clientTag } from './capacitorAuth'
 import { createUnitBridge, type ForsionUnitPlugin } from './unitBridge'
@@ -226,6 +226,7 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
     emitUpd({ phase: 'checking' })
     try {
       const current = await installedVersion()
+      const beta = (readPrefs().updater as { beta?: unknown } | undefined)?.beta === true
       const GH = 'https://api.github.com/repos/Changan-Su/Forsion/releases'
       // ⚠️ cloudApiBase 已含 /api,路径从 /api 之后写起(同 cloudJson 的坑)。
       const site = parseWebsiteInstallers(await getJson(`${cloudApiBase}/website/config`))
@@ -235,19 +236,27 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
       if (site) {
         // 官网答了:没挂安卓包 = 没有新版可提示(不是错)。
         version = site.android?.version || ''
+        if (!beta && isPrerelease(version)) version = ''
         url = `${cloudApiBase}/website/download/android`
-        if (version && isNewer(version, current) && sourceOrder('auto', parseMainland(await getJson(`${cloudApiBase}/auth/region`, 3000)))[0] === 'github') {
+        if (beta) {
+          const pre = selectGitHubRelease(await getJson(GH), true, true, rel => !!apkAsset(rel))
+          if (pre && (!version || isNewer(pre.version, version))) {
+            version = pre.version; url = apkAsset(pre.release); source = 'github'
+          }
+        }
+        if (source === 'website' && version && isNewer(version, current) && sourceOrder('auto', parseMainland(await getJson(`${cloudApiBase}/auth/region`, 3000)))[0] === 'github') {
           const gh = apkAsset(await getJson(`${GH}/tags/v${version}`))
           if (gh) { url = gh; source = 'github' }
         }
       } else {
-        const rel = await getJson(`${GH}/latest`)
+        const body = await getJson(beta ? GH : `${GH}/latest`)
         // **两个源都没答上**(离线 / 网关挂了 + GitHub 在大陆不可达)不能报「已是最新版」——
         // 那会把一次失败伪装成「检查过了,没新版」,用户永远等不到提醒(Codex 09-15)。
-        if (!rel) return emitUpd({ phase: 'error', error: translate('about.update.unreachable') })
+        if (!body) return emitUpd({ phase: 'error', error: translate('about.update.unreachable') })
         // 没有 APK 资产 = 这个 tag 的 build-android 挂了(它不阻断发版),别报一个下不到的新版本。
-        url = apkAsset(rel)
-        version = url ? String(rel?.tag_name || '').replace(/^v/i, '').trim() : ''
+        const rel = selectGitHubRelease(body, beta, false, item => !!apkAsset(item))
+        url = rel ? apkAsset(rel.release) : ''
+        version = rel?.version || ''
         source = 'github'
       }
       if (version && isNewer(version, current)) {

@@ -23,7 +23,7 @@
     "agent-skills"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node scripts/copy-release-version.mjs",
     "typecheck": "tsc --noEmit && node scripts/sync-plugin-api.mjs --check && node scripts/sync-command-catalog.mjs --check && node scripts/sync-db-shared.mjs --check",
     "sync:plugin-api": "node scripts/sync-plugin-api.mjs",
     "sync:db-shared": "node scripts/sync-db-shared.mjs",

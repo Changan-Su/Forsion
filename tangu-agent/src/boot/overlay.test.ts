@@ -82,6 +82,18 @@ describe('checkOverlay', () => {
     expect(checkOverlay(overlay('2.1.1'), bundled, pub)).toMatchObject({ ok: false, code: 'host' });
   });
 
+  it.each([
+    ['4.0.0+build.2', '4.0.0+build.1', true],
+    ['4.0.0+build.1', '4.0.0+build.2', false],
+    ['4.0.0-beta.2', '4.0.0-beta.1', true],
+    ['4.0.0-beta.2+build.1', '4.0.0', false],
+    ['4.0.0', '4.0.0-rc.1', true],
+  ])('checks host %s against minimum %s without changing stable engine identities', (host, minimum, accepted) => {
+    write(bundled, { 'desktop-host.json': JSON.stringify({ version: host }) });
+    const dir = overlay('2.1.1', { files: { 'package.json': pkgJson('2.1.1', { forsion: { minDesktop: minimum } }) } });
+    expect(checkOverlay(dir, bundled, pub)).toMatchObject(accepted ? { ok: true } : { ok: false, code: 'host' });
+  });
+
   it.each(['{', '{}', '{"version":null}', '{"version":"garbage"}'])('does not fall back on malformed host identity: %s', (data) => {
     write(bundled, { 'desktop-host.json': data });
     expect(checkOverlay(overlay('2.1.1'), bundled, pub)).toMatchObject({ ok: false, code: 'host' });

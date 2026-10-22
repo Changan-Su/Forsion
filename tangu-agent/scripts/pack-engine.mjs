@@ -21,6 +21,7 @@ import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, write
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { parseReleaseVersion } from '../src/contracts/releaseVersion.mjs'
 
 const arg = (name) => {
   const i = process.argv.indexOf(name)
@@ -48,18 +49,17 @@ const src = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'))
 const version = arg('--version') || src.version
 const minDesktop = arg('--min-desktop') || src.forsion?.minDesktop
 if (!minDesktop) fail('Pass --min-desktop <x.y.z>: the oldest Forsion Desktop this engine may run on (normally the desktop release it is based on).')
-for (const [name, v] of [['version', version], ['min-desktop', minDesktop]]) {
-  if (!/^\d+\.\d+\.\d+$/.test(v)) fail(`${name} ${JSON.stringify(v)} is not a release version (x.y.z).`)
-}
+if (!/^\d+\.\d+\.\d+$/.test(version)) fail(`version ${JSON.stringify(version)} is not a release version (x.y.z).`)
+if (!parseReleaseVersion(minDesktop)) fail(`min-desktop ${JSON.stringify(minDesktop)} is not a valid Desktop release version.`)
 const outDir = path.resolve(arg('--out') || path.join(root, '.engine-pack'))
 const stage = path.join(outDir, 'package')
 rmSync(stage, { recursive: true, force: true })
 mkdirSync(stage, { recursive: true })
 
-// dist 只带 .js:类型声明和 sourcemap 占了 dist 的大半,运行用不上。
+// Runtime .js/.mjs only; declarations and source maps are not needed.
 cpSync(path.join(root, 'dist'), path.join(stage, 'dist'), {
   recursive: true,
-  filter: (from) => !path.basename(from).includes('.') || from.endsWith('.js'),
+  filter: (from) => !path.basename(from).includes('.') || /\.(?:m?js)$/.test(from),
 })
 for (const dir of ['skills', 'agent-skills']) cpSync(path.join(root, dir), path.join(stage, dir), { recursive: true })
 if (existsSync(path.join(root, 'LICENSE'))) cpSync(path.join(root, 'LICENSE'), path.join(stage, 'LICENSE'))

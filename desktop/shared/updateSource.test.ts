@@ -1,5 +1,21 @@
 import { expect, it } from 'vitest'
-import { parseMainland, parseSourcePref, parseWebsiteInstallers, sourceOrder, websiteCarries, websiteHas, websitePlatformFor } from './updateSource'
+import { parseMainland, parseSourcePref, parseWebsiteInstallers, selectGitHubRelease, sourceOrder, websiteCarries, websiteHas, websitePlatformFor } from './updateSource'
+
+it('selects revisions numerically and keeps stable users away from prereleases, even with wrong GitHub flags', () => {
+  const releases = [
+    { tag_name: 'v2.13.8-beta.1', prerelease: false },
+    { tag_name: 'v2.13.9', prerelease: true },
+    { tag_name: 'v2.13.7+build.2', published_at: '2026-10-23' },
+    { tag_name: 'v2.13.7+build.10', published_at: '2026-10-22' },
+    { tag_name: 'v99.0.0', draft: true },
+    { tag_name: 'v100.0.0.1' },
+  ]
+  expect(selectGitHubRelease(releases, false)?.version).toBe('2.13.7+build.10')
+  expect(selectGitHubRelease(releases, true, true)?.version).toBe('2.13.9')
+  expect(selectGitHubRelease(releases.slice(0, 1), false)).toBeNull()
+  expect(selectGitHubRelease(releases, true, false, r => r.tag_name === 'v2.13.8-beta.1')?.version).toBe('2.13.8-beta.1')
+  expect(parseWebsiteInstallers({ platforms: { android: { version: '2.13.7+build.2', filename: 'update.apk' } } })?.android?.version).toBe('2.13.7+build.2')
+})
 
 it('auto source goes by region: mainland website first, elsewhere GitHub first, unknown website first', () => {
   expect(sourceOrder('auto', true)).toEqual(['website', 'github'])
