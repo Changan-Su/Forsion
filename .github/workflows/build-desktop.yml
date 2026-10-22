@@ -10,6 +10,12 @@ name: build-desktop
 
 on:
   workflow_dispatch:
+    inputs:
+      build_target:
+        description: Candidate platform scope (all release gates still run)
+        type: choice
+        default: all
+        options: [all, android]
   push:
     tags:
       - 'v*'
@@ -73,6 +79,7 @@ jobs:
           npm test
 
   build:
+    if: github.event_name != 'workflow_dispatch' || inputs.build_target != 'android'
     needs: test
     name: ${{ matrix.os }} (${{ matrix.distribution }})
     runs-on: ${{ matrix.os }}
