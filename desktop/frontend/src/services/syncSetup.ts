@@ -27,6 +27,7 @@ export interface NotesPending { cloudFiles: number; cloudBytes: number; cloudDev
 export interface SyncSnapshot {
   /** Informational unified quota; never gates sync choices. */
   storage?: { usedBytes: number | null; limitBytes: number; complete: boolean; asOf: string; enforcement?: boolean } | null
+  contentRules?: boolean
   signedIn: boolean
   decided: boolean
   notes: {
@@ -126,18 +127,20 @@ async function load(): Promise<void> {
   const auth: AuthStatusInfo | null = await window.tangu?.authStatus?.().catch(() => null) ?? null
   const signedIn = !!auth?.loggedIn
   account = signedIn ? (auth?.accountId ?? auth?.username ?? 'default') : null
-  const [state, stats, agents, quota, storage] = await Promise.all([
+  const [state, stats, agents, quota, storage, content] = await Promise.all([
     rs?.get().catch(() => null) ?? null,
     rs?.rootStats?.().catch(() => null) ?? null,
     signedIn ? readAgents() : Promise.resolve(AGENTS_OFF),
     signedIn ? window.tangu?.cloudFetch?.({ path: '/remotesync/vaults' }).catch(() => null) ?? null : null,
     readStorage(account),
+    signedIn ? window.tangu?.cloudInvoke?.('penzor:sync:get').catch(()=>null) as Promise<any> : null,
   ])
   const cfg = state?.config
   let pending: NotesPending | null = null
   try { pending = account ? JSON.parse(ls.get(pendingKey(account)) || 'null') : null } catch { pending = null }
   snap = {
     storage,
+    contentRules:!!content&&typeof content.ok==='boolean',
     signedIn,
     decided: !!account && ls.get(decidedKey(account)) === '1',
     notes: {
@@ -271,6 +274,7 @@ export async function resolveNotes(choice: NotesChoice, backupLabel: string): Pr
 export async function setSync(kind: SyncKind, on: boolean, who?: string | null): Promise<SyncResult> {
   try {
     if (kind === 'plugins') { ls.set(PLUGIN_SYNC_ALL_OFF_KEY, on ? null : '1'); return { ok: true } }
+    if (snap?.contentRules) {openPenzorSync();return {ok:true}}
     if (kind === 'agents') {
       await request(homeTarget(), '/agent/sync/default', { method: 'PUT', body: JSON.stringify({ enabled: on }) })
       const stored = await window.tangu?.getConfig?.().catch(() => null)
@@ -291,6 +295,10 @@ export async function applySyncChoices(choices: Record<SyncKind, boolean>): Prom
   if (!snap) await refreshSync() // 引导收尾时可能还没读过:不读就不知道是哪个账号,「点过了」记不上
   const who = account
   const out: SyncResult[] = []
+  if(snap?.contentRules){
+    if(!(await sameAccount(who)))return [{ok:false,error:'account-changed'}]
+    out.push(await setSync('plugins',choices.plugins,who));markSyncDecided();openPenzorSync();return out
+  }
   for (const kind of ['agents', 'plugins', 'notes'] as const) {
     if (account !== who) { out.push({ ok: false, error: 'account-changed' }); return out }
     if (kind === 'notes' && !choices.notes && snap?.notes.backend !== 'penzor') continue
@@ -312,6 +320,7 @@ export function markSyncDecided(): void {
 }
 
 export async function runSyncNow(): Promise<void> {
+  if(snap?.contentRules){await window.tangu?.cloudInvoke?.('penzor:sync:run');await refreshSync();return}
   if (snap?.notes.on) await window.remoteSync?.run().catch(() => null)
   if (snap?.agents.on) await request(homeTarget(), '/agent/sync', { method: 'POST' }).catch(() => null)
   await refreshSync()

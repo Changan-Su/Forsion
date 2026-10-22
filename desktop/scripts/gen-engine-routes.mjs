@@ -160,6 +160,7 @@ export const CLASSIFICATION = {
   'POST /agent/log': [D, 'memory log write'],
   'POST /agent/sync': [D, 'memory sync (design appendix C)'],
   'GET /agent/sync/status': [A, 'memory sync status'],
+  'PUT /agent/sync/content-owner': [D, 'local folder-sync ownership; remote devices cannot change upload consent'],
   'GET /agent/sync/default': [A, 'account-level agent sync switch (read)'],
   'PUT /agent/sync/default': [D, 'account-level agent sync switch: only this computer decides what it uploads'],
   'GET /agent/agents/:slug/memory/dream': [A, 'read memory maintenance state'],

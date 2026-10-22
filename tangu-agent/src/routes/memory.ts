@@ -13,9 +13,18 @@ import { syncNow, getSyncStatus } from '../services/memorySyncService.js';
 import { runWithAgentSlug } from '../seams/runContext.js';
 import { getAgent, listAgents, resolveMemorySlug, isValidSlug } from '../agents/agentRegistry.js';
 import { MemoryRepositoryError } from '../services/memoryRepository.js';
-import { agentSyncDefault, agentSyncScope, setAgentSyncDefault } from '../services/cloudSyncAccount.js';
+import { agentSyncDefault, agentSyncScope, setAgentSyncDefault, setContentSyncOwner } from '../services/cloudSyncAccount.js';
+import { parseRemoteOrigin } from '../services/remoteOrigin.js';
+import { mirrorLegacyHuman } from '../agents/humanFolder.js';
 
 const router = Router();
+router.put('/agent/sync/content-owner',authMiddleware,async(req:AuthRequest,res)=>{
+  if(!deps().profile.capabilities.hostExec||parseRemoteOrigin(req.headers))return void res.status(403).json({detail:'Local content sync only'});
+  const scope=agentSyncScope(deps().brain.agentFiles,req.user!.userId);
+  if(!scope||typeof req.body?.enabled!=='boolean')return void res.status(400).json({detail:'Account and enabled required'});
+  try{setContentSyncOwner(scope,req.body.enabled);await mirrorLegacyHuman();res.json({ok:true});}
+  catch(e){res.status(500).json({detail:'Content sync ownership failed'});}
+});
 
 async function inRequestedMemoryScope<T>(req: AuthRequest, fn: () => Promise<T>): Promise<T> {
   const requested = req.body?.slug ?? req.query.slug;

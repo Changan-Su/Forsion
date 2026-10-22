@@ -1,3 +1,4 @@
+import { contentSyncOwned } from '../contentSyncHost'
 import { promises as fs, readdirSync, readFileSync } from 'node:fs'
 import { execFile } from 'node:child_process'
 import path from 'node:path'
@@ -919,7 +920,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     workspaceDir: defaultWorkspaceDir,
     userDataDir: () => app.getPath('userData'),
     isDevMode,
-    readConfig, writeConfig, updateConfig, adoptLegacyCloudState,
+    readConfig: async () => { const cfg=await readConfig();return contentSyncOwned(currentCloudAccountId())?{...cfg,cloudSync:{...cfg.cloudSync,enabled:false},entrySync:[]}:cfg },
+    writeConfig, updateConfig, adoptLegacyCloudState,
     cloudVaultDir, isManagedCloudVault,
     vaultRoot: () => vault.getRoot(),
     setMutationHooks: (onMutate, onMove, onBeforeMove) => vault.setMutationHooks(onMutate, onMove, onBeforeMove),

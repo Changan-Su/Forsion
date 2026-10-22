@@ -1,6 +1,6 @@
 /** 默认日历 = 引擎家目录里的 human/CALENDAR.db(10-21 用户:「新的默认 Calendar 文件应该是 human 文件夹里面用户的 calendar」)。
  *  它不在笔记库里:dbStore 遇到 HUMAN_CAL 这个 ref 就改走这里的两条引擎接口,防抖、比对交换写、冲突重放、撤销都照原样复用。
- *  引擎不在本机(网页、手机连远端)时接口 404 / 403 → 当作没有这本日历,不播种、不显示。 */
+ *  桌面走本机引擎，网页和手机走云端的同名接口；两端使用相同的 human/ 文件。 */
 import type { DbFile } from '@amadeus-shared/db/schema'
 import { engineFetch, homeTarget } from '../../services/engine/targets'
 import { registerMessages, translate } from '../../i18n'

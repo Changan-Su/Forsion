@@ -65,9 +65,10 @@ export function watchHumanCal(): () => void {
   load()
   const onFocus = (): void => { void refreshHumanCal() }
   window.addEventListener('focus', onFocus)
+  const poll=setInterval(()=>{if(document.visibilityState!=='hidden')void refreshHumanCal()},5000)
   const off = useDbStore.subscribe((s) => { if (s.gen !== generation) { generation = s.gen; load() } })
   const retries = [3_000, 10_000, 30_000].map((ms) => setTimeout(() => { if (store().entries[HUMAN_CAL]?.status === 'missing') load() }, ms))
-  return () => { off(); window.removeEventListener('focus', onFocus); retries.forEach(clearTimeout) }
+  return () => { off(); window.removeEventListener('focus', onFocus); retries.forEach(clearTimeout); clearInterval(poll) }
 }
 
 /** 默认日历排第一(没设过默认库时新建事件就落在这里);旧位置镜像的那份(默认笔记库根上的 Calendar.db)不再重复列出。
@@ -78,7 +79,7 @@ export function withHumanCal(human: AggDb | null, members: CalMemberDb[], vault:
   if (!dateCol) return members
   const legacy = humanCalLegacy()
   const abs = (p: string): string => `${vault.replace(/[\\/]+$/, '')}/${p}`.replace(/\\/g, '/')
-  const rest = legacy ? members.filter((m) => abs(m.db.path) !== legacy.replace(/\\/g, '/')) : members
+  const rest = members.filter((m) => (!legacy || abs(m.db.path) !== legacy.replace(/\\/g, '/')))
   return [{ db: human, dateCol, checkboxCol: firstCheckboxCol(human)?.id }, ...rest]
 }
 

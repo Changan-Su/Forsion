@@ -269,3 +269,21 @@ it('enforced unified storage is displayed but does not turn off download-capable
  const s=await fresh();await s.refreshSync();expect(s.getSync()?.storage?.enforcement).toBe(true);
  expect((await s.setSync('notes',true)).ok).toBe(true);
 });
+
+
+describe('folder rules first',()=>{
+ it('an unavailable rules backend still prevents eager legacy uploads',async()=>{
+  ;(window as any).tangu.cloudInvoke=vi.fn(async()=>({ok:false,error:'content_http_503'}))
+  const s=await fresh();await s.refreshSync();request.mockClear();await s.applySyncChoices({notes:true,agents:true,plugins:true})
+  expect(s.getSync()?.contentRules).toBe(true);expect(rs.set).not.toHaveBeenCalled();expect(rs.run).not.toHaveBeenCalled()
+  expect(request.mock.calls.some(c=>c[1]==='/agent/sync/default'&&c[2]?.method==='PUT')).toBe(false)
+ })
+
+ it('opens folder rules without starting legacy uploads from first-login choices',async()=>{
+  ;(window as any).tangu.cloudInvoke=vi.fn(async()=>({ok:true,value:{available:true}}))
+  const s=await fresh();await s.refreshSync();request.mockClear();await s.applySyncChoices({notes:true,agents:true,plugins:true})
+  expect(s.getSync()?.contentRules).toBe(true);expect(rs.set).not.toHaveBeenCalled();expect(rs.run).not.toHaveBeenCalled()
+  expect(request.mock.calls.some(c=>c[1]==='/agent/sync/default'&&c[2]?.method==='PUT')).toBe(false)
+  expect(JSON.parse(localStorage.getItem(s.PENZOR_FOCUS)!)).toMatchObject({page:'sync'})
+ })
+})
