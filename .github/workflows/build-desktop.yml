@@ -33,7 +33,7 @@ jobs:
           node-version: 20
 
       - name: Independent release policy tests
-        run: node --test scripts/engine-release-gate.test.mjs
+        run: node --test scripts/engine-release-gate.test.mjs ../desktop/scripts/release-channel.test.mjs ../mobile/scripts/update-fixture.test.mjs
 
       # Desktop and engine versions are independent; validate the bundled engine in its own release history.
       - name: Desktop and bundled engine release identities
@@ -388,6 +388,9 @@ jobs:
     needs: [build, build-android]
     if: always() && startsWith(github.ref, 'refs/tags/v') && needs.build.result == 'success'
     runs-on: ubuntu-latest
+    concurrency:
+      group: desktop-github-release
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
       - name: Download all installers
@@ -403,8 +406,9 @@ jobs:
           GH_REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
         run: |
-          # Classify the SemVer prerelease field, never a hyphen inside build metadata.
-          PRE=$(node --input-type=module -e 'import {parseReleaseVersion} from "./desktop/shared/releaseVersion.mjs"; const v=parseReleaseVersion(process.env.TAG); if(!v) process.exit(1); console.log(v.prerelease.length ? "--prerelease" : "--latest")')
+          # Fail closed if the current latest cannot be read. Backfilled older versions must not replace it.
+          LATEST_TAG=$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)
+          RELEASE_FLAGS=$(node desktop/scripts/release-channel.mjs "$TAG" "$LATEST_TAG")
           # 已存在则补传并覆盖资产(支持重跑);不存在则新建(自动生成发布说明)。
-          gh release create "$TAG" artifacts/* --title "Forsion $TAG" --generate-notes $PRE \
+          gh release create "$TAG" artifacts/* --title "Forsion $TAG" --generate-notes $RELEASE_FLAGS \
             || gh release upload "$TAG" artifacts/* --clobber

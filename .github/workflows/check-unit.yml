@@ -39,6 +39,7 @@ jobs:
           node --test unit/*.test.mjs
           node --test tangu-agent/scripts/engine-release-gate.test.mjs
           node --test desktop/scripts/dev-version.test.cjs
+          node --test desktop/scripts/release-channel.test.mjs mobile/scripts/update-fixture.test.mjs
       - name: Install shared dependencies
         run: |
           npm ci --prefix tangu-agent --no-audit --no-fund

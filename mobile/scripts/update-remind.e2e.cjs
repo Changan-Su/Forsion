@@ -56,6 +56,8 @@ function findChromium() {
 }
 
 async function main() {
+  const { revisionFixture } = await import('./lib/update-fixture.mjs')
+  const revision = revisionFixture(INSTALLED)
   const root = path.resolve(__dirname, '..')
   if (!fs.existsSync(path.join(root, 'dist/index.html'))) {
     console.error('✗ 没有 dist/,先跑 npm run build')
@@ -124,7 +126,7 @@ async function main() {
 
     // Same-core revision / stable channel isolation / opted-in previews, through the actual mobile shim and UI.
     for (const scenario of [
-      { name: '同版本修订', website: `${INSTALLED}+build.1`, phase: 'available', expected: `${INSTALLED}+build.1` },
+      { name: '同版本修订', website: revision.version, beta: revision.beta, phase: 'available', expected: revision.version },
       { name: '稳定通道隔离预发布', website: '99.0.0-beta.1', phase: 'not-available' },
       { name: '测试通道仅选有 APK 的最高预发布', website: INSTALLED, beta: true, phase: 'available', expected: '99.0.0-beta.10+build.2', github: [
         { tag_name: 'v100.0.0-beta.1', assets: [] },
@@ -135,7 +137,7 @@ async function main() {
       const status = await page.evaluate(() => window.tangu.checkForUpdates())
       if (status.phase === scenario.phase && (!scenario.expected || status.version === scenario.expected)) pass(scenario.name, JSON.stringify(status))
       else fail(scenario.name, JSON.stringify(status))
-      if (scenario.beta) {
+      if (scenario.github) {
         await page.evaluate(() => window.tangu.downloadUpdate())
         const urls = await page.evaluate(() => window.__opened || [])
         if (urls.includes(`https://example.test/${scenario.expected}.apk`)) pass('预发布下载钉到同版 APK')
