@@ -362,7 +362,7 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           ANDROID_VERSION_CODE: ${{ github.run_number }}
         run: |
-          if [ "$GITHUB_REF_TYPE" = "tag" ]; then VN="${GITHUB_REF_NAME#v}"; else VN="0.0.0-ci.${GITHUB_RUN_NUMBER}"; fi
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then VN="${GITHUB_REF_NAME#v}"; else VN="$(node -p "require('../../desktop/package.json').version")"; fi
           export ANDROID_VERSION_NAME="$VN"
           chmod +x gradlew
           if [ -n "$ANDROID_KEYSTORE_B64" ]; then
