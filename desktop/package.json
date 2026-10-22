@@ -1,6 +1,6 @@
 {
   "name": "forsion-desktop",
-  "version": "2.13.6",
+  "version": "2.13.7",
   "description": "Forsion Desktop — AI 驱动的应用生态系统的桌面端(Electron):Tangu Agent 引擎 + LCL 可停靠工作区框架 + 可插拔功能空间(对话/笔记/日历/收件箱/编码),按产品档案裁出全家桶与单品发行版",
   "author": "Forsion",
   "private": true,
@@ -417,7 +417,7 @@
     "@dnd-kit/utilities": "^3.2.2",
     "@excalidraw/excalidraw": "npm:@zsviczian/excalidraw@0.18.122",
     "@forsion/calendar": "0.1.0",
-    "@forsion/extend": "0.9.2",
+    "@forsion/extend": "0.9.3",
     "@forsion/tangu-computer-use": "0.7.1",
     "@milkdown/kit": "^7.21.2",
     "@milkdown/plugin-math": "^7.5.9",
