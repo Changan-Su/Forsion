@@ -6,13 +6,18 @@ const updater = vi.hoisted(() => ({
   sent: [] as any[],
   download: [] as Array<() => Promise<void>>,
   reject: false,
+  beta: false,
+  current: '2.13.3',
 }))
 vi.mock('electron', () => ({
-  app: { isPackaged: true, getVersion: () => '2.13.3' },
+  app: { isPackaged: true, getVersion: () => updater.current },
   BrowserWindow: { getAllWindows: () => [{ isDestroyed: () => false, webContents: { send: (_c: string, s: any) => updater.sent.push(s) } }] },
   shell: { openExternal: vi.fn() },
 }))
 vi.mock('electron-updater', () => ({ default: { autoUpdater: {
+  isUpdateAvailable: async () => true,
+  isUpdateSupported: async () => !updater.reject,
+  isUserWithinRollout: async () => true,
   on: (name: string, cb: (...args: any[]) => void) => updater.events.set(name, cb),
   setFeedURL: (feed: any) => updater.feeds.push(feed),
   // 钉在哪个 tag / 官网记录上,就答哪个版本(和真的 generic / WebsiteUpdateProvider 一样)
@@ -28,6 +33,10 @@ vi.mock('electron-updater', () => ({ default: { autoUpdater: {
 vi.mock('./distribution', () => ({ BUNDLE_EXTEND: true }))
 vi.mock('./websiteUpdateProvider', () => ({ WebsiteUpdateProvider: class {} }))
 vi.mock('./forsionHome', () => ({ forsionHomeDir: () => '/nonexistent-forsion-updater-test' }))
+vi.mock('node:fs/promises', async importOriginal => ({
+  ...await importOriginal<typeof import('node:fs/promises')>(),
+  readFile: async () => JSON.stringify({ updater: { beta: updater.beta } }),
+}))
 
 const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
 const answers = new Map<string, unknown>()
@@ -36,6 +45,7 @@ const json = (body: unknown) => ({ ok: true, json: async () => body })
 beforeEach(() => {
   vi.resetModules()
   updater.events.clear(); updater.feeds.length = 0; updater.sent.length = 0; updater.download.length = 0; updater.reject = false; answers.clear()
+  updater.beta = false; updater.current = '2.13.3'
   Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
   vi.stubGlobal('fetch', vi.fn(async (url: string) => {
     for (const [k, v] of answers) if (url.includes(k)) return json(v)
@@ -115,4 +125,33 @@ it('shares one in-flight check between overlapping callers', async () => {
   expect(a).toBe(b)
   await a
   expect(updater.feeds).toHaveLength(1)
+})
+
+it('pins revision feed and UI identity without stripping its metadata', async () => {
+  updater.current = '2.13.7+build.2'
+  answers.set('/website/config', site({ version: '2.13.7+build.10' }))
+  const { checkForUpdates } = await import('./updater')
+  expect(await checkForUpdates()).toMatchObject({ phase: 'available', version: '2.13.7+build.10' })
+  expect(updater.feeds[0].url).toMatch(/v2\.13\.7\+build\.10$/)
+})
+
+it.each(['website', 'github'])('stable channel rejects prereleases from %s, including incorrectly unflagged GitHub tags', async source => {
+  if (source === 'website') answers.set('/website/config', site({ version: '2.14.0-beta.1' }))
+  else answers.set('/releases/latest', { tag_name: 'v2.14.0-beta.1', prerelease: false })
+  const { checkForUpdates } = await import('./updater')
+  expect(await checkForUpdates()).toMatchObject({ phase: 'not-available' })
+  expect(updater.feeds).toHaveLength(0)
+})
+
+it('beta opt-in selects highest eligible prerelease and can promote back to stable', async () => {
+  updater.beta = true; updater.current = '2.13.8-beta.1'
+  answers.set('/website/config', site({ version: '2.13.7+build.10' }))
+  answers.set('/releases?per_page=', [
+    { tag_name: 'v2.13.8-beta.2' }, { tag_name: 'v2.13.8-beta.10+build.2' },
+    { tag_name: 'v2.13.9-rc.1', draft: true },
+  ])
+  const { checkForUpdates } = await import('./updater')
+  expect(await checkForUpdates()).toMatchObject({ phase: 'available', version: '2.13.8-beta.10+build.2' })
+  answers.set('/website/config', site({ version: '2.13.8' }))
+  expect(await checkForUpdates()).toMatchObject({ phase: 'available', version: '2.13.8' })
 })

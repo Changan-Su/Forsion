@@ -21,9 +21,10 @@ import { forsionHomeDir } from './forsionHome'
 import { changelogSection, isNewer, isPrerelease, notesToString } from './updaterUtil'
 import { BUNDLE_EXTEND } from './distribution'
 import { WebsiteUpdateProvider } from './websiteUpdateProvider'
+import { checkRevisionUpdate } from './revisionUpdateCheck'
 import {
   WEBSITE_API, parseMainland, parseSourcePref, parseWebsiteInstallers, sourceOrder,
-  websiteCarries, websiteHas, websitePlatformFor,
+  websiteCarries, websiteHas, websitePlatformFor, selectGitHubRelease,
   type UpdateSource, type UpdateSourcePref, type WebsiteInstallers,
 } from '../shared/updateSource'
 
@@ -173,17 +174,8 @@ async function githubRelease(beta: boolean, onlyPre = false): Promise<{ tag: str
   const data: any = await getJson(beta ? `${GH_API}/releases?per_page=20` : `${GH_API}/releases/latest`, 10_000,
     { Accept: 'application/vnd.github+json' })
   if (data === undefined) return undefined
-  const one = (r: any) => {
-    const tag = String(r?.tag_name || '').replace(/^v/i, '')
-    return tag ? { tag, body: typeof r.body === 'string' ? r.body : undefined } : null
-  }
-  if (!Array.isArray(data)) return one(data)
-  let best: { tag: string; body?: string } | null = null
-  for (const r of data) {
-    const it = r?.draft ? null : one(r)
-    if (it && (!onlyPre || isPrerelease(it.tag)) && (!best || isNewer(it.tag, best.tag))) best = it
-  }
-  return best
+  const best = selectGitHubRelease(data, beta, onlyPre)
+  return best ? { tag: best.version, body: best.body } : null
 }
 
 /** 定下「最新版本」:官网答了以官网为准(测试版再看 GitHub 预发布);官网没答上才看 GitHub。两边都没答上抛 unreachable。 */
@@ -191,6 +183,7 @@ async function findLatest(beta: boolean): Promise<{ version: string; notes?: str
   const site = parseWebsiteInstallers(await getJson(`${WEBSITE_API}/website/config`, 10_000))
   if (site) {
     let version = site[websitePlatformFor(process.platform)]?.version || ''
+    if (!beta && isPrerelease(version)) version = ''
     let notes: string | undefined
     if (beta) {
       const pre = await githubRelease(true, true)
@@ -233,7 +226,7 @@ async function useSource(src: UpdateSource): Promise<'ok' | 'rejected' | 'fail'>
   feedSource = src
   busy = true
   try {
-    const r = await autoUpdater.checkForUpdates()
+    const r = await checkRevisionUpdate(autoUpdater, app.getVersion(), target.version)
     if (r?.updateInfo?.version !== target.version) return 'fail'
     return r.isUpdateAvailable === false ? 'rejected' : 'ok'
   } catch { return 'fail' } finally { busy = false }

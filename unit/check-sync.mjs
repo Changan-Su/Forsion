@@ -4,15 +4,13 @@ import { readFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { checkSourcePaths } from './releasePolicy.mjs'
+import { compareReleaseVersions, isPrerelease, parseReleaseVersion } from '../desktop/shared/releaseVersion.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim()
 // Exit code 1 means "not an ancestor"; anything else (shallow boundary, corrupt ref) must surface, not be read as drift.
 const isAncestor = (commit) => { try { git('merge-base', '--is-ancestor', commit, 'HEAD'); return true } catch (error) { if (error.status === 1) return false; throw error } }
-const byVersion = (a, b) => {
-  const left = a.slice(1).split('.').map(Number), right = b.slice(1).split('.').map(Number)
-  return left[0] - right[0] || left[1] - right[1] || left[2] - right[2]
-}
+const byVersion = compareReleaseVersions
 
 /** The Desktop baseline is the newest release tag contained in this checkout and the Unit revision counts
  * the commits since it. Nothing is hand-maintained: the Unit builds from the same commit as Desktop, so the
@@ -23,10 +21,16 @@ export async function readReleaseBaseline() {
   const versions = {}
   for (const pkg of ['desktop', 'tangu-agent']) versions[pkg] = JSON.parse(await readFile(resolve(root, pkg, 'package.json'), 'utf8')).version
   for (const [component, version] of Object.entries(versions)) {
-    if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error(`Invalid ${component} release version ${version}`)
+    const parsed = parseReleaseVersion(version)
+    if (!parsed || parsed.version !== version) throw new Error(`Invalid ${component} release version ${version}`)
   }
   if (git('rev-parse', '--is-shallow-repository') === 'true') throw new Error('Shallow clone cannot resolve the Desktop baseline; run `git fetch --unshallow --tags` first')
-  const tags = git('tag', '--list', 'v*').split('\n').filter((tag) => /^v\d+\.\d+\.\d+$/.test(tag)).sort(byVersion).reverse()
+  const candidate = parseReleaseVersion(versions.desktop)
+  const tags = git('tag', '--list', 'v*').split('\n').filter((tag) => {
+    const parsed = parseReleaseVersion(tag)
+    // A future beta must not block a stable release. Only the candidate's own prerelease line participates.
+    return parsed && (!isPrerelease(tag) || (candidate.prerelease.length && parsed.main.join('.') === candidate.main.join('.')))
+  }).sort(byVersion).reverse()
   if (!tags.length) throw new Error('No Desktop release tag found; fetch tags before building a Unit')
   const desktopTag = tags.find((tag) => isAncestor(`${tag}^{commit}`))
   if (!desktopTag) throw new Error('No Desktop release tag is contained in this checkout; pull the released history first')
@@ -36,8 +40,9 @@ export async function readReleaseBaseline() {
   const sourceCommit = git('rev-parse', 'HEAD')
   const unitRevision = Number(git('rev-list', '--count', `${desktopCommit}..HEAD`))
   checkSourcePaths(git('ls-files', '-z').split('\0').filter(Boolean))
+  const taggedRelease = sourceCommit === desktopCommit && `v${versions.desktop}` === desktopTag
   return {
-    desktopVersion: versions.desktop, engineVersion: versions['tangu-agent'], desktopTag, desktopCommit, unitRevision, prerelease: sourceCommit !== desktopCommit || `v${versions.desktop}` !== desktopTag,
+    desktopVersion: versions.desktop, engineVersion: versions['tangu-agent'], desktopTag, desktopCommit, unitRevision, taggedRelease, prerelease: !taggedRelease || isPrerelease(versions.desktop),
     sourceCommit, sourceDirty: !!git('status', '--porcelain', '--untracked-files=normal'),
   }
 }

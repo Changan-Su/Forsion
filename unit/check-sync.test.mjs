@@ -22,6 +22,10 @@ test('derives the Desktop baseline from git and only refuses a checkout behind t
   }
   await mkdir(join(dir, 'unit'))
   for (const name of ['check-sync.mjs', 'releasePolicy.mjs']) await cp(new URL(name, import.meta.url), join(dir, 'unit', name))
+  await mkdir(join(dir, 'desktop/shared'), { recursive: true })
+  await cp(new URL('../desktop/shared/releaseVersion.mjs', import.meta.url), join(dir, 'desktop/shared/releaseVersion.mjs'))
+  await mkdir(join(dir, 'tangu-agent/src/contracts'), { recursive: true })
+  await cp(new URL('../tangu-agent/src/contracts/releaseVersion.mjs', import.meta.url), join(dir, 'tangu-agent/src/contracts/releaseVersion.mjs'))
   await packages('2.10.0')
   git('add', '.')
   git('commit', '-m', 'Desktop 2.10.0')
@@ -49,6 +53,24 @@ test('derives the Desktop baseline from git and only refuses a checkout behind t
   git('tag', '-a', 'v2.11.0', '-m', 'Desktop 2.11.0') // annotated: ^{commit} must peel it
   const current = git('rev-parse', 'HEAD')
   assert.deepEqual(pick(check()), { desktopVersion: '2.11.0', desktopTag: 'v2.11.0', desktopCommit: current, unitRevision: 0, prerelease: false })
+
+  git('tag', 'v2.12.0-beta.1') // a future prerelease does not replace the stable baseline
+  assert.equal(check().desktopTag, 'v2.11.0')
+  await packages('2.11.0+build.10', '3.0.0')
+  git('commit', '-am', 'Revision installer')
+  git('tag', 'v2.11.0+build.2')
+  git('tag', 'v2.11.0+build.10')
+  assert.equal(check().desktopTag, 'v2.11.0+build.10')
+  assert.equal(check().taggedRelease, true)
+  assert.equal(check().prerelease, false)
+  await packages('2.12.0-beta.2', '3.0.0')
+  git('commit', '-am', 'Preview installer')
+  git('tag', 'v2.12.0-beta.2')
+  assert.equal(check().desktopTag, 'v2.12.0-beta.2')
+  assert.equal(check().taggedRelease, true)
+  assert.equal(check().prerelease, true)
+  git('tag', '-d', 'v2.11.0+build.2', 'v2.11.0+build.10', 'v2.12.0-beta.1', 'v2.12.0-beta.2')
+  git('reset', '-q', '--hard', current)
 
   await packages('2.11.0', '3.0.0')
   git('commit', '-am', 'Independent engine release')

@@ -2,6 +2,15 @@ import { describe, expect, it } from 'vitest'
 import { buildWhatsNewEntries, compareVersions, parseWebsiteReleases, websiteReleaseUrl } from './websiteReleases'
 
 describe('websiteReleases', () => {
+  it('keeps revisions, prereleases with metadata and old overview articles in their actual order', () => {
+    const versions = ['2.12', '2.13.7', '2.13.7+build.2', '2.13.7+build.10', '2.13.8-beta.1+build.1']
+    const website = parseWebsiteReleases({ releases: versions.map(version => ({ version, markdown: { en: 'Notes' } })) })
+    expect(website).toHaveLength(5)
+    const entries = buildWhatsNewEntries({ website, changelog: [], installed: '2.13.7+build.2', locale: 'en' })
+    expect(entries.map(e => [e.version, e.isNew, e.installed])).toEqual([
+      [versions[4], true, false], [versions[3], true, false], [versions[2], false, true], [versions[1], false, false], [versions[0], false, false],
+    ])
+  })
   it('keeps only well-formed releases', () => {
     const list = parseWebsiteReleases({ releases: [
       { version: '2.13.4', date: '2026-10-14', scope: { zh: '7 段' }, markdown: { zh: '# A', en: '# B' } },

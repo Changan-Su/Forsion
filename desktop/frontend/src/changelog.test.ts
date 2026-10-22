@@ -5,6 +5,10 @@ import { version } from '../../package.json'
 import { startupAppearanceHtml } from '../startupAppearancePlugin'
 
 describe('released app version', () => {
+  it('keeps full revision and prerelease identities, skipping malformed headings', () => {
+    const entries = parseChangelog('## 2.13.7.1\n- Invalid\n## Forsion v2.13.8-rc.1+build.2 (2026-10-22)\n- Preview')
+    expect(latestReleasedVersion(entries)).toBe('2.13.8-rc.1+build.2')
+  })
   it('keeps Unreleased in the changelog but selects the first released version', () => {
     const entries = parseChangelog([
       '## Unreleased (2026-09-11)',

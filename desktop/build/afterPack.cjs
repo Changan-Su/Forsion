@@ -28,7 +28,7 @@ exports.default = async function afterPack(context) {
 
   // Written before signing; both the desktop updater and the terminal launcher read this same host identity.
   if (product.agentBackend) {
-    require('./engine-host.cjs').writeEngineHost(path.join(resourcesDir(), 'tangu-server'), packager.appInfo.version);
+    await require('./engine-host.cjs').writeEngineHost(path.join(resourcesDir(), 'tangu-server'), packager.appInfo.version);
   }
 
   // ① better-sqlite3 → Electron ABI 重建(仅捆 agent 后端的变体需要 —— 它随 tangu-server/node_modules 进包)

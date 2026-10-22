@@ -25,6 +25,7 @@ const { chromium } = (() => {
 let URL = '' // main() 里由 startPreview 给:系统分配的空闲端口,E2E_PORT 可指定(见 lib/preview.cjs)
 const NEWER = '99.0.0'
 const OLDER = '0.0.1'
+const INSTALLED = require('../../desktop/package.json').version
 /** 自动弹出的 What's new 两栏弹窗(components/WhatsNewDialog.tsx,MobileRoot 挂了 WhatsNewHost)。 */
 const WHATS_NEW = '.wn-modal[role="dialog"]'
 
@@ -74,15 +75,17 @@ async function main() {
     browser = await chromium.launch({ executablePath: findChromium(), headless: true, args: ['--no-sandbox'] })
 
     /** 开一页:网关报 `version`,GitHub 一律断网(只验网关这条路,顺便证明 GitHub 不可达也不影响)。 */
-    const open = async (version) => {
+    const open = async (version, { beta = false, github = null } = {}) => {
       const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })
       await ctx.addInitScript(() => { try { localStorage.setItem('forsion_tangu_onboarding_done', '1') } catch { /* ignore */ } })
       await ctx.addInitScript(() => { try { localStorage.setItem('forsion_token', 'e2e-update') } catch { /* ignore */ } })
+      await ctx.addInitScript(beta => { localStorage.setItem('forsion_mobile_config', JSON.stringify({ updater: { beta } })) }, beta)
       // 自动弹页每个版本只弹一次(localStorage 记号),每个 ctx 都是新 profile,不会互相干扰。
       const ctxPage = await ctx.newPage()
       await ctxPage.route('**/auth/me', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: '{"username":"e2e"}' }))
       await ctxPage.route('**/api/**', (r) => r.abort())
       await ctxPage.route('**/api.github.com/**', (r) => r.abort())
+      if (github) await ctxPage.route('**/api.github.com/**', r => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(github) }))
       // ⚠️ 必须**后**注册:playwright 后注册的路由先匹配,写在 abort 前面会被整片 abort 吃掉。
       await ctxPage.route('**/website/config', (r) => r.fulfill({
         status: 200, contentType: 'application/json',
@@ -116,6 +119,33 @@ async function main() {
       const urls = await page.evaluate(() => window.__opened || [])
       if (urls.some((u) => /\/website\/download\/android$/.test(u))) pass('「下载更新」落到网关安卓下载端点', urls.join(' '))
       else fail('「下载更新」落到网关安卓下载端点', urls.join(' ') || '(没开任何链接)')
+      await ctx.close()
+    }
+
+    // Same-core revision / stable channel isolation / opted-in previews, through the actual mobile shim and UI.
+    for (const scenario of [
+      { name: '同版本修订', website: `${INSTALLED}+build.1`, phase: 'available', expected: `${INSTALLED}+build.1` },
+      { name: '稳定通道隔离预发布', website: '99.0.0-beta.1', phase: 'not-available' },
+      { name: '测试通道仅选有 APK 的最高预发布', website: INSTALLED, beta: true, phase: 'available', expected: '99.0.0-beta.10+build.2', github: [
+        { tag_name: 'v100.0.0-beta.1', assets: [] },
+        ...['99.0.0-beta.2', '99.0.0-beta.10+build.2'].map(version => ({ tag_name: `v${version}`, prerelease: true, assets: [{ name: `Forsion-Tangu-${version}-android.apk`, browser_download_url: `https://example.test/${version}.apk` }] })),
+      ] },
+    ]) {
+      const { ctx, page } = await open(scenario.website, scenario)
+      const status = await page.evaluate(() => window.tangu.checkForUpdates())
+      if (status.phase === scenario.phase && (!scenario.expected || status.version === scenario.expected)) pass(scenario.name, JSON.stringify(status))
+      else fail(scenario.name, JSON.stringify(status))
+      if (scenario.beta) {
+        await page.evaluate(() => window.tangu.downloadUpdate())
+        const urls = await page.evaluate(() => window.__opened || [])
+        if (urls.includes(`https://example.test/${scenario.expected}.apk`)) pass('预发布下载钉到同版 APK')
+        else fail('预发布下载钉到同版 APK', JSON.stringify(urls))
+      }
+      if (scenario.name === '同版本修订') {
+        const output = path.join(root, 'outputs/update-version')
+        fs.mkdirSync(output, { recursive: true })
+        await page.screenshot({ path: path.join(output, 'revision.png') })
+      }
       await ctx.close()
     }
 
