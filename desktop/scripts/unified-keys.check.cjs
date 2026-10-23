@@ -1314,14 +1314,14 @@ async function main() {
       check('K17c Mod-Alt-/ 打开块菜单、焦点在「转换为」首项,↓ 回车转成标题 1',
         c1.menu && c1.focused === '正文' && c2.includes('heading1:"丙段。"'), JSON.stringify({ c1, c2 }))
       await page.close()
-      // d:Mod-] / Mod-[ 在段落上 = 缩进档 +1 / −1
+      // d:Mod-] / Mod-[ 不归编辑器(留给页面前进 / 后退),段落缩进档不动
       page = await open(browser, MD)
       await caretAtText(page, '丙段。')
       await page.keyboard.press('Meta+BracketRight'); await page.waitForTimeout(150)
       const d1 = await page.evaluate(() => window.__upage.probe.view().state.selection.$from.parent.attrs.indent)
       await page.keyboard.press('Meta+BracketLeft'); await page.waitForTimeout(150)
       const d2 = await page.evaluate(() => window.__upage.probe.view().state.selection.$from.parent.attrs.indent)
-      check('K17d Mod-] / Mod-[ 在段落上接缩进档', d1 === 1 && d2 === 0, JSON.stringify({ d1, d2 }))
+      check('K17d Mod-] / Mod-[ 不改缩进(让给页面前进 / 后退)', !d1 && !d2, JSON.stringify({ d1, d2 }))
       // e:对照 —— 不在块模式时 Shift+↓ 仍是浏览器的文字扩选(不被块扩选劫持)
       await caretAtText(page, '甲段。', 1)
       await page.keyboard.press('Shift+ArrowDown'); await page.waitForTimeout(120)
