@@ -2,7 +2,8 @@ name: probe-windows-issues
 
 on:
   workflow_dispatch:
-  pull_request:
+  push:
+    branches: [main]
     paths:
       - '.github/workflows/probe-windows-issues.yml'
       - 'desktop/frontend/src/amadeusPrefs*'

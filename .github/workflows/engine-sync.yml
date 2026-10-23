@@ -2,6 +2,7 @@
 name: engine-sync
 on:
   push:
+    branches: [main]
     paths: &paths
       - 'tangu-agent/src/services/agentFileSync*'
       - 'tangu-agent/src/services/agentSyncPaths*'

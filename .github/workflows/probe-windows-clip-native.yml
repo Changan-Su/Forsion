@@ -1,7 +1,8 @@
 name: probe-windows-clip-native
 on:
   workflow_dispatch:
-  pull_request:
+  push:
+    branches: [main]
     paths:
       - '.github/workflows/probe-windows-clip-native.yml'
       - 'desktop/scripts/clip-native-windows.e2e.cjs'

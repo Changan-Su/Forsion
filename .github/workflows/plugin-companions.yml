@@ -15,6 +15,7 @@ on:
       - 'desktop/shared/amadeus/ipc.ts'
       - 'desktop/shared/products.pluginId.test.ts'
   push:
+    branches: [main]
     paths: *paths
 permissions:
   contents: read
