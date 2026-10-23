@@ -3,7 +3,8 @@
  * 只认**同一组里**列出来的主会话 —— 主会话在别的组 / 没列出来(归档、分页外)时子会话照普通行平铺,不级联。只一层:引擎不让子会话再开子会话,
  * 万一数据里有孙会话,它按普通行平铺(树线只画一层)。
  */
-export type RowStatus = 'wait' | 'run' | 'done' | ''
+import type { RowStatus } from '../../../../../tangu-agent/src/contracts/sessionStatus'
+export { mergeStatus, rowStatus, type RowStatus } from '../../../../../tangu-agent/src/contracts/sessionStatus'
 
 export interface TreeNode<T> { s: T; kids: T[] }
 
@@ -25,13 +26,3 @@ export function nestSessions<T extends { id: string; parent_session_id?: string 
   }))
 }
 
-/** 行尾状态:审批 / 询问在等 > 在跑(本端订阅的 run 或引擎报 busy)> 模型说在等回答 > 做完了没看。
- *  awaiting_user 是列表快照,新一轮起跑时引擎已清掉、本端要等下次刷新 —— 所以排在「在跑」后面。 */
-export function rowStatus(s: { busy?: boolean; awaiting_user?: boolean }, attention: boolean, running: boolean, unread: boolean): RowStatus {
-  return attention ? 'wait' : running || s.busy ? 'run' : s.awaiting_user ? 'wait' : unread ? 'done' : ''
-}
-
-/** 收起的主会话行尾冒上来的状态:等你 > 在跑 > 做完了没看。 */
-export function mergeStatus(list: RowStatus[]): RowStatus {
-  return list.includes('wait') ? 'wait' : list.includes('run') ? 'run' : list.includes('done') ? 'done' : ''
-}

@@ -99,7 +99,6 @@ const SKIP = {
   debugFireToast: '设置浮窗(开发者选项)「触发成就弹窗」经 onMainAction 转给主窗播(成就弹窗只有主窗挂,09-21)。移动端没有卫星窗 / onMainAction,按钮原地调',
   draftInMainChat: '反馈浮窗「让 Tangu 帮我诊断」经 onMainAction 把草稿交给主窗聊天(09-21)。移动端反馈与聊天同一渲染进程,按钮原地调',
   forgetUserSpace: '设置浮窗卸载用户 Space 后经 onMainAction 让主窗撤注册 / ribbon(09-21)。移动端没有用户自建 Space(spacesList 只给插件包里带的,生命周期随插件、不可单独删)、也没有卫星窗',
-  quoteInMainChat: '旁聊浮窗「引用到对话」经 onMainAction(chat-quote)把回答挂成主窗输入框的引用(09-22)。移动端旁聊是本页全屏页(<BtwHost page />),按钮原地调 quoteInMainChat,没有卫星窗通道',
   listSkills: 'Root 里仅用于接收设置浮窗的 skills-changed 广播后重读主窗技能清单；移动端设置与 Agent 档案共用一个渲染进程，改动后在原窗口刷新',
   openAgentProfile: 'Root 里仅用于接收设置浮窗的 open-agent 请求并切回主窗 Agent Space；移动端没有卫星窗，设置内直接导航到 Agent 档案',
   getLanguage: 'soft 主题的 panelGap 只喂给 Dockview Shell;单列壳不消费',
