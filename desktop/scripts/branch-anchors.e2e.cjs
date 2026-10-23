@@ -182,7 +182,7 @@ async function main() {
     await win.locator('#tocmsg-c2').hover()
     await bring.click()
     await win.locator(`.t2s-srow.active[data-sel-id="${R}"]`).waitFor({ timeout: 10_000 })
-    await win.locator('.t2c-quote-text', { hasText: 'Yjs 合适' }).first().waitFor({ timeout: 10_000 })
+    await win.locator('.t2c-tilerow .att-tile--quote .att-tile-head', { hasText: 'Yjs 合适' }).first().waitFor({ timeout: 10_000 })
     r.check('B4 带回 = 回到主线,输入框挂上那条回答的引用,没有自己发出去', ctx.stub.seen.runs.length === 0, '')
     await win.screenshot({ path: path.join(dir, 'brought-back.png') })
 

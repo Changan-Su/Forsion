@@ -22,6 +22,8 @@ const SESSIONS = [
   { id: 'sess-main', title: 'Parser 重构', model_id: 'm1', created_at: now, updated_at: now, projectless: true },
 ]
 const MESSAGES = [
+  // 引用磁贴跳回原文的来源(u0 的第二段引用出自这里;第一段哪都没有 → 点了看全文)
+  { id: 'a00', role: 'model', content: '先记一笔:第二段引用\n还有第二行,后面会用到。', timestamp: now - 800 },
   { id: 'u0', role: 'user', content: '> 第一段引用\n\n> 第二段引用\n> 还有第二行\n\n这两段是什么关系?', timestamp: now - 700 },
   { id: 'a0', role: 'model', content: '它们说的是同一件事。', timestamp: now - 600 },
   { id: 'u1', role: 'user', content: '记住:项目代号是 AZURE-FALCON。', timestamp: now - 500 },
@@ -71,6 +73,9 @@ async function main() {
     await win.evaluate(() => { localStorage.setItem('forsion_default_space', 'tangu'); localStorage.setItem('tangu_locale', 'zh') })
     await win.reload({ waitUntil: 'domcontentloaded' })
     check('主窗离开首启引导', await skipOnboarding(win))
+    // 登录后首次同步卡(SyncSetupCard)启动 2.5s 后才弹、会盖住划线条;桩环境里点「稍后」也会再弹(10-23 实测),和本台架无关:藏掉
+    const hideSyncCard = () => win.addStyleTag({ content: '.sync-setup-backdrop { display: none !important; }' })
+    await hideSyncCard()
     const input = win.locator('.t2c-ta').first()
     await input.waitFor({ timeout: 30000 })
     await win.locator('text=Parser 重构').first().click()
@@ -139,30 +144,42 @@ async function main() {
     const bringBack = btw.locator('.btw-turn').nth(1).locator('[data-testid="btw-quote-to-chat"]')
     check('回答下面的按钮叫「带回这里」', (await bringBack.textContent()).includes('带回这里'))
     await bringBack.click()
-    await win.locator('.t2c-quote-text', { hasText: 'NOCLAF-ERUZA' }).first().waitFor({ timeout: 10000 })
+    await win.locator('.t2c-tilerow .att-tile--quote .att-tile-head', { hasText: 'NOCLAF-ERUZA' }).first().waitFor({ timeout: 10000 })
     check('「带回这里」挂成主窗引用且草稿没被覆盖', (await input.inputValue()) === '我的草稿')
 
     // ── 引用卡:再划一段点「引用」→ 两张卡并排挂着(不顶掉上一段),可以单独移除 ──
-    const mainQuotes = win.locator('[data-chat-surface="chat"] .t2c-quote')
+    const mainQuotes = win.locator('[data-chat-surface="chat"] .t2c-tilerow .att-tile--quote')
     await win.waitForTimeout(800) // 引用卡挂上后输入区长高、对话区重排:选区会被冲掉,等它落定再划
     await pickReply()
     await win.locator('[data-testid="selection-quote"]').first().click()
     await until(async () => (await mainQuotes.count()) === 2, 5000)
-    const cardTexts = await mainQuotes.locator('.t2c-quote-text').allTextContents()
+    const cardTexts = await mainQuotes.locator('.att-tile-head').allTextContents()
     check('再引用一段 → 输入框上方两张引用卡,先挂的那张还在', cardTexts.length === 2 && cardTexts[0].includes('NOCLAF-ERUZA') && cardTexts[1].includes('AZURE-FALCON'), JSON.stringify(cardTexts))
     await win.screenshot({ path: path.join(shots, 'quote-cards.png') })
-    await mainQuotes.first().locator('.t2c-quote-x').click()
+    await mainQuotes.first().locator('.att-tile-x').click()
     await until(async () => (await mainQuotes.count()) === 1, 5000)
-    check('单独移除一张,另一张留着', (await mainQuotes.locator('.t2c-quote-text').allTextContents()).join('|').includes('AZURE-FALCON') && (await mainQuotes.count()) === 1)
+    check('单独移除一张,另一张留着', (await mainQuotes.locator('.att-tile-head').allTextContents()).join('|').includes('AZURE-FALCON') && (await mainQuotes.count()) === 1)
     const bubble = await win.evaluate(() => {
-      const wrap = [...document.querySelectorAll('[data-chat-surface="chat"] .t2-user')].find((el) => el.textContent.includes('这两段是什么关系'))
-      const cards = [...(wrap?.querySelectorAll('.t2-user-quote') || [])].map((el) => el.textContent)
-      // 正文在长提问折叠(UserFold)里面,不是气泡的直接文本节点:去掉引用卡后取剩下的字
-      const rest = wrap?.cloneNode(true)
-      rest?.querySelectorAll('.t2-user-quotes, button').forEach((el) => el.remove())
-      return { cards, body: (rest?.textContent || '').trim(), raw: wrap?.textContent.includes('> ') }
+      const wrap = [...document.querySelectorAll('[data-chat-surface="chat"] .t2-userwrap')].find((el) => el.textContent.includes('这两段是什么关系'))
+      const cards = [...(wrap?.querySelectorAll('.att-tile--quote .att-tile-head') || [])].map((el) => el.textContent)
+      // 引用磁贴在气泡上方;正文在长提问折叠(UserFold)里面,不是气泡的直接文本节点:去掉按钮后取剩下的字
+      const rest = wrap?.querySelector('.t2-user')?.cloneNode(true)
+      rest?.querySelectorAll('button').forEach((el) => el.remove())
+      return { cards, body: (rest?.textContent || '').trim(), raw: !!rest?.textContent.includes('> ') }
     })
     check('已发消息开头的两段引用是两张卡,正文不再带「> 」', bubble.cards.length === 2 && bubble.cards[1].includes('还有第二行') && bubble.body === '这两段是什么关系?' && !bubble.raw, JSON.stringify(bubble))
+    // 气泡里的引用磁贴:点得到原文的跳回去闪两下,点不到的看全文(QuoteTile)
+    const bubbleTiles = win.locator('[data-chat-surface="chat"] #tocmsg-u0 .att-tile--quote .att-tile-open')
+    await bubbleTiles.nth(1).click()
+    check('气泡里点引用磁贴 → 跳回出处那条回答并闪', await until(async () => win.evaluate(() => !!document.querySelector('[data-chat-surface="chat"] #tocmsg-a00.t2-jump-flash')), 5000))
+    await bubbleTiles.nth(0).click()
+    const preview = win.locator('.quote-preview')
+    await preview.waitFor({ timeout: 5000 })
+    check('找不到出处的引用 → 看全文', (await preview.textContent()).includes('第一段引用'))
+    await win.waitForTimeout(400) // 等入场动画放完再拍
+    await win.screenshot({ path: path.join(shots, 'quote-preview.png') })
+    await win.keyboard.press('Escape')
+    check('Esc 关掉全文窗', await until(async () => (await preview.count()) === 0, 5000))
     await win.locator('text=另一条会话').first().click()
     await until(async () => (await btw.count()) === 0)
     check('切到别的会话 → 主对话输入框上方没有上一个会话的引用卡', (await mainQuotes.count()) === 0)
@@ -197,6 +214,7 @@ async function main() {
     // ── 观感自查(DESIGN §8):英文界面 + 深色各截一张,人看 ──
     await win.evaluate(() => localStorage.setItem('tangu_locale', 'en'))
     await win.reload({ waitUntil: 'domcontentloaded' })
+    await hideSyncCard()
     await input.waitFor({ timeout: 30000 })
     await win.locator('text=Parser 重构').first().click()
     await win.locator('.t2-content', { hasText: 'AZURE-FALCON 已记下' }).first().waitFor({ timeout: 15000 })
@@ -211,6 +229,7 @@ async function main() {
     // 深色走真主题管线:写模式偏好(loader 的 forsion_theme)后重载;只改 <html data-mode> 不会重算 token(实测截出来仍是浅色)
     await win.evaluate(() => localStorage.setItem('forsion_theme', 'dark'))
     await win.reload({ waitUntil: 'domcontentloaded' })
+    await hideSyncCard()
     await input.waitFor({ timeout: 30000 })
     await win.locator('text=Parser 重构').first().click()
     await input.focus()
