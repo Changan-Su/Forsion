@@ -27,8 +27,8 @@ const SCENARIOS = {
   'native-human': { render: 'native', human: 'ok', vaultDb: false },
   'native-human+vault': { render: 'native', human: 'ok', vaultDb: true },
   'native-vault': { render: 'native', human: 'missing', vaultDb: true },
-  // 没有任何可写日历:点空白本来就建不出(只缺一句提示),缺省不跑,点名 ONLY=plugin-none 才跑
-  'plugin-none': { render: 'plugin', human: 'missing', vaultDb: false, optIn: true },
+  // 没有任何可写日历:点空白建不出,但要提示原因(@forsion/calendar 0.1.1 起),不能毫无反应
+  'plugin-none': { render: 'plugin', human: 'missing', vaultDb: false, expectHint: true },
   // 真 server(agent-core/humanCalendar.ts)对没有这份文件的新用户答 200 {status:'missing'},第一次 PUT 带 version:null
   'plugin-fresh': { render: 'plugin', human: 'fresh', vaultDb: false },
   'native-fresh': { render: 'native', human: 'fresh', vaultDb: false },
@@ -150,6 +150,13 @@ async function runScenario(browser, name, sc) {
     if (!check('今天那一列在', !!pt)) { await shot('no-col'); return results }
     console.log(`  info  点击点 ${Math.round(pt.x)},${Math.round(pt.y)} 命中 ${pt.hit}`)
     await page.touchscreen.tap(pt.x, pt.y)
+    if (sc.expectHint) {
+      const hint = await page.getByText('现在没有能写入的日历').first().waitFor({ timeout: 3000 }).then(() => true, () => false)
+      check('① 点空白 → 提示没有能写入的日历', hint)
+      check('① 没有冒出草稿', (await page.locator('.amx-cal-draftcard').count()) === 0)
+      if (!hint) await shot('no-hint')
+      return results
+    }
     const drawer = await page.locator('.amx-cal-draftcard').waitFor({ timeout: 3000 }).then(() => true, () => false)
     if (!check('① 点空白 → 新事件抽屉出现', drawer)) {
       await shot('no-draft')
