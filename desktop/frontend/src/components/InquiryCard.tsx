@@ -3,7 +3,7 @@
  * 视觉对齐 ApprovalCard(边框卡片,token CSS)。待答时在输入框上方的托盘里;对话流里只留已答 / 过期的记录。
  */
 import React, { useState } from 'react'
-import { CircleHelp, Send, CheckSquare, Square, Loader2, Check, Pencil, Undo2, ClipboardList } from 'lucide-react'
+import { CircleHelp, Send, CheckSquare, Square, SquareDot, Loader2, Check, Pencil, Undo2, ClipboardList } from 'lucide-react'
 import type { InquiryRequest, TodoItem } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { Markdown } from './Markdown'
 import { useI18n, registerMessages } from '../i18n'
@@ -215,7 +215,8 @@ export const PlanDecision: React.FC<{
 }
 
 /** 任务清单(todo 事件;对齐 Claude TodoWrite 的实时显示)。 */
-export const TodoList: React.FC<{ todos: TodoItem[] }> = ({ todos }) => {
+/** live = 这份清单所在的 run 还在跑:只有这时「进行中」才转圈;停了 / 出错 / 后面的轮次里,停在进行中的那项画成静态的点。 */
+export const TodoList: React.FC<{ todos: TodoItem[]; live?: boolean }> = ({ todos, live = false }) => {
   const { t: tr } = useI18n()
   const done = todos.filter((t) => t.status === 'completed').length
   return (
@@ -230,7 +231,7 @@ export const TodoList: React.FC<{ todos: TodoItem[] }> = ({ todos }) => {
               {t.status === 'completed' ? (
                 <CheckSquare size={14} />
               ) : t.status === 'in_progress' ? (
-                <Loader2 size={14} className="spin" />
+                live ? <Loader2 size={14} className="spin" /> : <SquareDot size={14} />
               ) : (
                 <Square size={14} />
               )}
