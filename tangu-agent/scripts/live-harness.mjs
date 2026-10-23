@@ -3211,7 +3211,7 @@ try {
     return {
       ok: !bad.length, inconclusive: !bad.length && (sameTurn || sideFirst),
       detail: ev.error || (bad.length ? `未过:${bad.join(',')}` : '全过') +
-        `${sameTurn ? ';⚠️notes.md 与 ask_user 同一轮发出(占位措辞未受检)' : sideFirst ? ';⚠️先写完 notes.md 才问(占位后接着干没受检)' : sideCall ? ';notes.md 在读到占位之后写' : ''};提问 ${ev.inquiries.length} 个 / ask_user ${askCalls.length} 次;答前现场 ${JSON.stringify(ev.beforeApprove)};` +
+        `${sameTurn ? ';⚠️notes.md 与 ask_user 同一轮发出(占位措辞未受检)' : sideFirst ? ';⚠️先写完 notes.md 才问(占位后接着干没受检)' : sideCall && checks.parkedPlaceholder ? ';notes.md 在读到占位之后写' : ''};提问 ${ev.inquiries.length} 个 / ask_user ${askCalls.length} 次;答前现场 ${JSON.stringify(ev.beforeApprove)};` +
         `${ev.approvedOnAwaiting ? '收尾闸门等答案时答' : '⚠️没等到 awaiting_approval(兜底答)'};choice=${choiceNow};回灌 ${updates.length} 条`,
       output: `${ev.content}\n\n[timeline]\n${[...ev.toolCalls.map((c) => `${c.atMs}ms call ${c.name} (turn ${c.turn})`), ...ev.toolResults.map((r) => `${r.atMs}ms result ${r.name}${r.parked ? ' (parked)' : ''}`), ev.approvedAtMs != null ? `${ev.approvedAtMs}ms answer` : ''].filter(Boolean).sort((a, b) => parseInt(a) - parseInt(b)).join('\n')}`,
       toolCalls: ev.toolCalls.map((c) => c.name),
