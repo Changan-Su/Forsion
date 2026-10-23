@@ -3,7 +3,7 @@
  * 文件走 bytea、不经蓬洲)。Extend 用 --extend-pkg 给的签好的包(装进临时 Forsion 目录)。
  * 只经 live-harness --only webpublishreal 跑。不造模型事件:提示词打进真输入框、审批卡在界面上点「批准」、「我的网页」里点按钮;
  * 上架审核那一步模拟后台,用 server 的管理员令牌调真路由 /api/admin/connect。证据与截图落 <OUT>/webpagesui-evidence*。 */
-const fs = require('node:fs'), path = require('node:path')
+const fs = require('node:fs'), os = require('node:os'), path = require('node:path')
 const electron = require('./lib/launch-electron.cjs')
 const { enterSpace } = require('./lib/uiux-electron.cjs')
 const ROOT = path.resolve(__dirname, '..')
@@ -20,6 +20,10 @@ async function api(route, method = 'GET', body) {
   return r.json()
 }
 const listed = () => fetch(`${cloud}/api/connect/apps`, { headers: { Authorization: `Bearer ${token}` } }).then((r) => r.json())
+/** 前置云端记下的「发布」请求数(含被拒的):判「批准前一个字节都没发」看这个,不看服务端存没存。 */
+const uploads = () => fetch(`${cloud}/__harness/connect-posts`, { headers: { Authorization: `Bearer ${token}` } }).then((r) => r.json()).then((j) => j.n)
+/** 商店公开列表的 slug;接口失败 / 不是数组 → null(不能当成「空」)。 */
+const storeSlugs = () => fetch(`${cloud}/api/connect/store`).then((r) => (r.ok ? r.json() : null)).then((j) => (Array.isArray(j?.items) ? j.items.map((i) => i.slug) : null)).catch(() => null)
 const adminCall = (route, method = 'GET', body) => fetch(`${sim}/api/admin/connect${route}`, { method, headers: { Authorization: `Bearer ${admin}`, 'Content-Type': 'application/json' }, body: body && JSON.stringify(body) }).then((r) => r.json())
 
 /** 真引擎的事件流:工具调用、结果、审批请求、最终回复(同 intelligent-ui.live.cjs 的 observeRun)。 */
@@ -54,20 +58,22 @@ async function observeRun(runId) {
 async function main() {
   if (!(base && token && cloud && sim && admin && OUT && MODEL && fs.existsSync(path.join(PKG, 'SIGNATURE')))) throw new Error('Use live-harness --only webpublishreal --extend-pkg <signed package dir>')
   fs.mkdirSync(SHOTS, { recursive: true })
-  const home = path.join(OUT, 'webpagesui-shell')
-  fs.cpSync(PKG, path.join(home, 'plugins', 'forsion-extend'), { recursive: true })
-  fs.writeFileSync(path.join(home, 'auth.json'), JSON.stringify({ cloudUrl: cloud, token }))
-  for (const dir of [path.join(home, 'userdata'), path.join(home, 'userdata-dev')]) {
-    fs.mkdirSync(dir, { recursive: true })
-    fs.writeFileSync(path.join(dir, 'tangu-desktop-config.json'), JSON.stringify({ mode: 'external', backendUrl: base, token, defaultWorkspaceDir: workspace }))
-  }
-  const sid = (await api('/agent/sessions', 'POST', { title: 'ZZ-网页发布真机', model_id: MODEL, project_path: workspace, project_name: '网页发布真机', agent_config: { preset: 'chat', execMode: 'sandbox' } })).session.id
+  // 带令牌的临时 Forsion 目录放在产物目录外(产物要归档),任何一步失败都在 finally 里删掉
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'webpagesui-'))
   const t0 = Date.now(), legs = [], pageErrors = []
   const leg = (name, ok, why) => { legs.push({ name, ok: !!ok, why }); console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}  | ${why}`) }
   const shot = (page, name) => page.screenshot({ path: path.join(SHOTS, `${name}.png`) }).catch(() => {})
   const url = `${cloud}/apps/livetester/${SLUG}/`
-  let app, ev = null, approvalText = '', step = '启动'
+  let app, ev = null, approvalText = '', step = '准备'
   try {
+    fs.cpSync(PKG, path.join(home, 'plugins', 'forsion-extend'), { recursive: true })
+    fs.writeFileSync(path.join(home, 'auth.json'), JSON.stringify({ cloudUrl: cloud, token }))
+    for (const dir of [path.join(home, 'userdata'), path.join(home, 'userdata-dev')]) {
+      fs.mkdirSync(dir, { recursive: true })
+      fs.writeFileSync(path.join(dir, 'tangu-desktop-config.json'), JSON.stringify({ mode: 'external', backendUrl: base, token, defaultWorkspaceDir: workspace }))
+    }
+    const sid = (await api('/agent/sessions', 'POST', { title: 'ZZ-网页发布真机', model_id: MODEL, project_path: workspace, project_name: '网页发布真机', agent_config: { preset: 'chat', execMode: 'sandbox' } })).session.id
+    step = '启动'
     app = await electron.launch({ args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', ROOT], cwd: ROOT, env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: base }, timeout: 90_000 })
     const win = await app.firstWindow({ timeout: 120_000 }); win.setDefaultTimeout(20_000)
     win.on('pageerror', (e) => pageErrors.push(`main: ${e.message}`))
@@ -86,21 +92,23 @@ async function main() {
 
     // 1. 聊天里让 Tangu 做页并发布:真输入框 → 审批卡在界面上点「批准」→ 回复给链接
     step = '发提示词 / 等审批卡'
+    const sentBefore = await uploads()
     const posted = win.waitForResponse((r) => /\/agent\/runs$/.test(r.url()) && r.request().method() === 'POST', { timeout: 30_000 })
     await ta.fill(PROMPT); await ta.press('Enter')
     const res = await posted
     const run = observeRun((await res.json()).runId)
     const card = win.locator('.approval-card', { has: win.locator('.approval-actions .btn', { hasText: '批准' }) }).first()
     const appeared = await card.waitFor({ timeout: 300_000 }).then(() => true, () => false)
-    let before = null
+    let early = null
     if (appeared) {
       approvalText = (await card.innerText()).replace(/\s+/g, ' ').slice(0, 600)
-      before = (await listed()).apps?.some((a) => a.slug === SLUG)
       await win.waitForTimeout(500) // 换卡冷却(ApprovalTray ARM_MS)
       await shot(win, '01-approval-card')
+      early = (await uploads()) - sentBefore // 点「批准」前的最后一刻
       await card.locator('.approval-actions .btn', { hasText: '批准' }).first().click()
     }
     ev = await run
+    const sentAfter = (await uploads()) - sentBefore
     await win.waitForTimeout(1500)
     await shot(win, '02-reply-with-link')
     const published = ev.results.some((r) => r.name === 'publish_web_page' && !r.isError && !/^Error/.test(r.result))
@@ -108,8 +116,8 @@ async function main() {
     const uiLink = await win.locator(`a[href="${url}"]`).count().catch(() => 0)
     const uiLinkText = uiLink ? (await win.locator(`a[href="${url}"]`).first().innerText().catch(() => '')).trim() : ''
     leg('聊天里让 Tangu 做页并发布:界面弹审批卡,点「批准」前一个字节都没发,批准后发布成功,回复(界面上)给了链接',
-      appeared && before === false && published && ev.content.includes(url) && uiLink > 0,
-      `${appeared ? `弹了审批卡「${approvalText.slice(0, 80)}…」` : '✗ 没弹审批卡'};批准前${before === false ? '服务端没有这页' : before ? '✗ 已经发了' : '-'};publish_web_page ${published ? '成功' : '✗ 没成'};回复${ev.content.includes(url) ? '带了链接' : `✗ 没带链接 ${url}`};界面${uiLink ? `显示了可点的链接「${uiLinkText}」` : '✗ 没显示链接'}${ev.error ? `;✗ ${ev.error}` : ''}`)
+      appeared && early === 0 && sentAfter === 1 && published && ev.content.includes(url) && uiLink > 0,
+      `${appeared ? `弹了审批卡「${approvalText.slice(0, 80)}…」` : '✗ 没弹审批卡'};批准前发布请求 ${early ?? '-'} 次、之后共 ${sentAfter} 次;publish_web_page ${published ? '成功' : '✗ 没成'};回复${ev.content.includes(url) ? '带了链接' : `✗ 没带链接 ${url}`};界面${uiLink ? `显示了可点的链接「${uiLinkText}」` : '✗ 没显示链接'}${ev.error ? `;✗ ${ev.error}` : ''}`)
 
     // 2. 链接真能打开:壳页 200,内容带 CSP sandbox,就是做的那页;再在窗口里打开看一眼
     const shellRes = await fetch(url).catch(() => null)
@@ -165,18 +173,18 @@ async function main() {
     const review = mine ? await adminCall(`/listings/${mine.app_id}/review`, 'POST', { action: 'approve' }) : null
     await sp.locator(root).getByRole('button', { name: '刷新', exact: true }).click()
     const approved = await item.getByText('已上架', { exact: true }).waitFor({ timeout: 15_000 }).then(() => true, () => false)
-    const store = await fetch(`${cloud}/api/connect/store`).then((r) => r.json()).catch(() => ({}))
+    const store = await storeSlugs()
     await shot(sp, '06-listed')
-    leg('后台批准后刷新:页上「已上架」,商店「网站应用」公开列表里有它', approved && (store.items || []).some((i) => i.slug === SLUG),
-      `审核 ${review?.status || '✗'};${approved ? '页上已上架' : '✗ 页上没变'};商店 ${(store.items || []).map((i) => i.slug).join(', ') || '空'}`)
+    leg('后台批准后刷新:页上「已上架」,商店「网站应用」公开列表里有它', approved && !!store?.includes(SLUG),
+      `审核 ${review?.status || '✗'};${approved ? '页上已上架' : '✗ 页上没变'};商店 ${store ? `[${store.join(', ')}]` : '✗ 接口没答'}`)
 
     step = '下架'
     // 6. 下架(二次确认)→ 商店里没了
     await item.getByRole('button', { name: '下架', exact: true }).click()
     await item.getByRole('button', { name: '确认下架', exact: true }).click()
     const delisted = await item.getByText('已上架', { exact: true }).waitFor({ state: 'detached', timeout: 15_000 }).then(() => true, () => false)
-    const store2 = await fetch(`${cloud}/api/connect/store`).then((r) => r.json()).catch(() => ({}))
-    leg('下架(二次确认):标记消失,商店里没了', delisted && !(store2.items || []).some((i) => i.slug === SLUG), `${delisted ? '标记消失' : '✗ 还在'};商店 ${(store2.items || []).map((i) => i.slug).join(', ') || '空'}`)
+    const store2 = await storeSlugs()
+    leg('下架(二次确认):标记消失,商店里没了', delisted && !!store2 && !store2.includes(SLUG), `${delisted ? '标记消失' : '✗ 还在'};商店 ${store2 ? `[${store2.join(', ')}]` : '✗ 接口没答'}`)
 
     step = '下线'
     // 7. 下线(二次确认)→ 列表少这一条,公开链接 404,服务端也没了
@@ -185,9 +193,9 @@ async function main() {
     await item.getByRole('button', { name: '确认下线', exact: true }).click()
     const gone = await item.waitFor({ state: 'detached', timeout: 15_000 }).then(() => true, () => false)
     const after = await fetch(url).then((r) => r.status).catch(() => null)
-    const left = ((await listed()).apps || []).map((a) => a.slug)
+    const left = await listed().then((j) => (Array.isArray(j?.apps) ? j.apps.map((a) => a.slug) : null)).catch(() => null)
     await shot(sp, '08-after-take-down')
-    leg('下线(二次确认):列表少这一条,公开链接 404,服务端没了', gone && after === 404 && !left.includes(SLUG), `${gone ? '页上没了' : '✗ 还在'};链接 ${after};服务端剩 [${left.join(', ')}]`)
+    leg('下线(二次确认):列表少这一条,公开链接 404,服务端没了', gone && after === 404 && !!left && !left.includes(SLUG), `${gone ? '页上没了' : '✗ 还在'};链接 ${after};服务端${left ? `剩 [${left.join(', ')}]` : ' ✗ 列表没答'}`)
     leg('界面没有报错', !pageErrors.length, pageErrors.join(' | ') || '无')
   } catch (e) {
     leg('旅程跑完', false, `卡在「${step}」:${String(e?.message || e).split('\n')[0]}`)

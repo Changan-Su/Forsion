@@ -43,6 +43,8 @@ export async function startFakeCloud(token, { connect } = {}) {
       if (req.headers.authorization !== `Bearer ${token}`) return send(401, { error: 'unauthorized' });
       seen.push({ method: req.method, path, body });
       const key = `${req.method} ${path}`;
+      // 台架自查用:前置收到过几次「发布」(含被拒的)—— 真机那段判「批准前一个字节都没发」看这个
+      if (key === 'GET /__harness/connect-posts') return send(200, { n: seen.filter((r) => r.method === 'POST' && r.path === '/api/connect/apps').length });
       if (key === 'GET /api/token-quota/my') return send(200, QUOTA);
       if (key === 'GET /api/brain/users/me') return send(200, { id: 'u-live', username: 'livetester', nickname: 'Live Tester', membershipTier: 'pro' });
       if (key === 'GET /api/membership/my') return send(200, { membership: { tier: 'pro', status: 'active', expiresAt: '2026-11-03T00:00:00.000Z', autoRenew: true, plan: { name: 'Pro' } } });

@@ -6555,15 +6555,18 @@ Then reply with only the command output.`,
   if (ONLY.has('webpublishreal')) {
     const pkg = opt('extend-pkg', process.env.TANGU_LIVE_EXTEND_PKG || '');
     const name = 'webpagesui 真机:聊天里发布 → 界面点批准 → 我的网页上架 / 下架 / 下线(本地真 Connect)';
-    if (!pkg || !FAKE_CLOUD?.connect) record('webpagesui', name, { ok: false, skipped: true, detail: '没给 --extend-pkg(签好并解开的 Extend 包),跳过真 Electron 那段' }, 0);
+    if (!pkg || !FAKE_CLOUD?.connect) console.log('webpagesui:没给 --extend-pkg(签好并解开的 Extend 包),只跑引擎那半');
     else {
       let failure;
       try {
-        const ui = await promisify(execFile)(process.execPath, [join(root, '../desktop/scripts/webpages-real.live.cjs')], {
+        const job = promisify(execFile)(process.execPath, [join(root, '../desktop/scripts/webpages-real.live.cjs')], {
           cwd: join(root, '../desktop'), timeout: 15 * 60_000, maxBuffer: 4 * 1024 * 1024,
           env: { ...process.env, TANGU_BACKEND_URL: base, TANGU_WP_TOKEN: TOKEN, TANGU_WP_CLOUD: FAKE_CLOUD.url, TANGU_WP_SIM: SIM.url, TANGU_WP_ADMIN: SIM.adminToken,
             TANGU_WP_PKG: resolve(pkg), TANGU_WP_OUT: OUT, TANGU_WP_MODEL: MODEL, TANGU_WP_WORKSPACE: workspace },
         });
+        const stopUi = () => { try { job.child.kill('SIGTERM'); } catch { /* gone */ } }; // 台架被停 / 总超时退出时别把真机那段(和它的 Electron)留下
+        process.on('exit', stopUi);
+        const ui = await job.finally(() => process.off('exit', stopUi));
         writeFileSync(join(OUT, 'webpagesui.log'), ui.stdout + ui.stderr);
       } catch (e) { failure = e; writeFileSync(join(OUT, 'webpagesui.log'), String(e.stdout || '') + String(e.stderr || '') + String(e.message)); }
       const path = join(OUT, 'webpagesui-evidence.json');
