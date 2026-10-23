@@ -19,7 +19,7 @@ import {
 import { builtinAgentAvatar } from './builtinAvatars.js';
 import { parseHarness, type HarnessEntry } from './harnessStore.js';
 import { createHash, randomUUID } from 'node:crypto';
-import { memoryContentVersion, memoryFactFingerprint, normalizeMemoryFact, validateMemoryTombstones, MemoryRepositoryError, type MemoryEntry, type MemorySnapshot, type MemoryTombstone } from '../services/memoryRepository.js';
+import { isMemoryTombstoneActive, memoryContentVersion, memoryFactFingerprint, normalizeMemoryFact, validateMemoryTombstones, MemoryRepositoryError, type MemoryEntry, type MemorySnapshot, type MemoryTombstone } from '../services/memoryRepository.js';
 
 /** 云端 agents 可用 = 非 host-exec profile 且注入了 agentFiles seam(旧云端/未注入 → 路由回落 404)。 */
 export function cloudAgentsEnabled(): boolean {
@@ -406,7 +406,9 @@ async function currentMemory(userId: string, slug: string): Promise<CloudMemory 
   if (f) return { scope, content: f.content, version: `${f.seq}:${f.hash}`, updatedAt: f.mtimeMs, seq: f.seq };
   // 默认 agent 还没同步上来过:显示云端运行一直在读的那份全局记忆(路由里没有 agent 作用域 = 全局)
   const legacy = scope === DEFAULT_AGENT_SLUG ? await deps().brain.memory.getMemory(userId) : null;
-  return { scope, content: legacy?.content ?? '', version: '0:', updatedAt: Number(new Date(legacy?.updatedAt ?? 0)) || 0, seq: 0 };
+  const content = legacy?.content ?? '';
+  // 版本带上内容哈希:编辑器开着时全局那份被云端运行改了,保存旧草稿会 409,不会把中间的改动丢掉(Codex 评审)
+  return { scope, content, version: `0:${memoryContentVersion(content).slice(0, 16)}`, updatedAt: Number(new Date(legacy?.updatedAt ?? 0)) || 0, seq: 0 };
 }
 export type CloudMemorySnapshot = MemorySnapshot & { cloud: true };
 const snapshotOf = (m: CloudMemory): CloudMemorySnapshot =>
@@ -430,17 +432,26 @@ export async function cloudWriteMemory(userId: string, slug: string, content: st
   if (cur.version !== expectedVersion) conflict();
   return commitMemory(userId, cur, content);
 }
-/** 忘掉一条:先记墓碑(按 seq 比对交换,冲突重读重试),再删行。墓碑形状与桌面 syncTombstones 一致。 */
-async function addTombstone(userId: string, scope: string, fact: string): Promise<void> {
+/** 改墓碑(.memory-tombstones.json,形状与桌面 syncTombstones 一致),按 seq 比对交换,冲突重读重试。
+ *  forget = 这些事实记为已忘;restore = 明确重新记下了,标 restoredAt(否则桌面同步时会把刚加的又滤掉)。
+ *  时间戳一律压过对方:跨设备时钟不准时,后发生的那次照样作数(Codex 评审)。 */
+async function editTombstones(userId: string, scope: string, change: { forget?: string[]; restore?: string[] }): Promise<void> {
   for (let attempt = 0; attempt < 4; attempt++) {
     const f = await liveText(userId, scope, TOMBSTONES);
     const parsed = f ? JSON.parse(f.content) : { schemaVersion: 1, tombstones: [] };
     if (parsed?.schemaVersion !== 1) throw new MemoryRepositoryError('MEMORY_CORRUPT', 'Unknown memory tombstone schema.');
     const tombstones: MemoryTombstone[] = validateMemoryTombstones(parsed.tombstones);
-    const fingerprint = memoryFactFingerprint(fact);
-    const old = tombstones.find((x) => x.fingerprint === fingerprint);
-    if (old) old.forgottenAt = Date.now();
-    else tombstones.push({ id: randomUUID(), fingerprint, content: fact, forgottenAt: Date.now(), evidenceIds: [] });
+    let changed = false;
+    for (const fact of change.forget ?? []) {
+      const fingerprint = memoryFactFingerprint(fact), old = tombstones.find((x) => x.fingerprint === fingerprint);
+      if (!old) { tombstones.push({ id: randomUUID(), fingerprint, content: fact, forgottenAt: Date.now(), evidenceIds: [] }); changed = true; }
+      else if (!isMemoryTombstoneActive(old)) { old.forgottenAt = Math.max(Date.now(), (old.restoredAt ?? 0) + 1); changed = true; }
+    }
+    for (const fact of change.restore ?? []) {
+      const old = tombstones.find((x) => x.fingerprint === memoryFactFingerprint(fact));
+      if (old && isMemoryTombstoneActive(old)) { old.restoredAt = Math.max(Date.now(), old.forgottenAt + 1); changed = true; }
+    }
+    if (!changed) return;
     const content = JSON.stringify({ schemaVersion: 1, tombstones: tombstones.sort((a, b) => a.fingerprint.localeCompare(b.fingerprint)) });
     try {
       await files().putFile(userId, scope, TOMBSTONES, { content, isBinary: false, size: Buffer.byteLength(content, 'utf8'), mtimeMs: Date.now(), deviceId: DEVICE_ID, baseSeq: f?.seq ?? 0 });
@@ -449,7 +460,8 @@ async function addTombstone(userId: string, scope: string, fact: string): Promis
   }
   throw new MemoryRepositoryError('MEMORY_BUSY', 'Memory is being changed elsewhere; try again.');
 }
-/** 加 / 改 / 忘一条(面板的条目操作)。 */
+/** 加 / 改 / 忘一条(面板的条目操作)。顺序:要重新记下的先解除墓碑,再写记忆,最后给去掉的旧行记墓碑 ——
+ *  记忆那一步 409 时不会留下一条「其实没忘掉」的墓碑;最后一步失败只少一层保险(桌面按基线合并照样删掉),不回报失败。 */
 export async function cloudMutateMemory(userId: string, slug: string, m: { action: string; id?: string; fact?: string; expectedVersion?: unknown }): Promise<CloudMemorySnapshot | null> {
   const cur = await currentMemory(userId, slug);
   if (!cur) return null;
@@ -457,24 +469,31 @@ export async function cloudMutateMemory(userId: string, slug: string, m: { actio
   if (cur.version !== m.expectedVersion) conflict();
   const fact = typeof m.fact === 'string' ? m.fact.trim().replace(/\s*\n\s*/g, ' ') : '';
   const lines = cur.content.split('\n');
+  let removed: string | null = null, next: string;
   if (m.action === 'add') {
     if (!fact) throw new MemoryRepositoryError('MEMORY_INVALID', 'fact is required.');
     if (lines.some((l) => normalizeMemoryFact(l) === normalizeMemoryFact(fact))) return snapshotOf(cur);
     const body = cur.content.replace(/\n*$/, '');
-    return commitMemory(userId, cur, `${body ? `${body}\n` : ''}${fact}\n`);
+    next = `${body ? `${body}\n` : ''}${fact}\n`;
+  } else {
+    const [at, hash] = String(m.id ?? '').split(':');
+    const i = Number(at);
+    // 行号 + 哈希对不上 = 版本没变却找不到这条(不该发生):按冲突处理,让面板重读
+    if (!Number.isInteger(i) || i < 0 || i >= lines.length || lineHash(lines[i]) !== hash) conflict();
+    removed = lines[i];
+    if (m.action === 'update') {
+      if (!fact) throw new MemoryRepositoryError('MEMORY_INVALID', 'fact is required.');
+      if (normalizeMemoryFact(fact) === normalizeMemoryFact(removed)) removed = null; // 只改了格式:旧那句不算忘掉
+      lines[i] = fact;
+    } else if (m.action === 'forget') lines.splice(i, 1);
+    else throw new MemoryRepositoryError('MEMORY_INVALID', 'Invalid memory mutation.');
+    next = lines.join('\n');
   }
-  const [at, hash] = String(m.id ?? '').split(':');
-  const i = Number(at);
-  // 行号 + 哈希对不上 = 版本没变却找不到这条(不该发生):按冲突处理,让面板重读
-  if (!Number.isInteger(i) || i < 0 || i >= lines.length || lineHash(lines[i]) !== hash) conflict();
-  if (m.action === 'update') {
-    if (!fact) throw new MemoryRepositoryError('MEMORY_INVALID', 'fact is required.');
-    lines[i] = fact;
-  } else if (m.action === 'forget') {
-    await addTombstone(userId, cur.scope, lines[i]);
-    lines.splice(i, 1);
-  } else throw new MemoryRepositoryError('MEMORY_INVALID', 'Invalid memory mutation.');
-  return commitMemory(userId, cur, lines.join('\n'));
+  if (fact) await editTombstones(userId, cur.scope, { restore: [fact] });
+  const snap = await commitMemory(userId, cur, next);
+  // 改 = 旧那句也记成已忘:桌面第一次见面取并集时不会把被替换掉的旧说法带回来(Codex 评审)
+  if (removed) await editTombstones(userId, cur.scope, { forget: [removed] }).catch((e) => console.warn('[cloud memory] tombstone', e instanceof Error ? e.message : e));
+  return snap;
 }
 export async function cloudLogDates(userId: string, slug: string): Promise<string[] | null> {
   const scope = await memoryScope(userId, slug);

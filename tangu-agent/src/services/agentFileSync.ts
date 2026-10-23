@@ -449,7 +449,7 @@ async function reconcileFile(cloud: AgentFilesBrain, uid: string, slug: string, 
     if (!current || !current.equals(out)) return; // 又被改了:下次同步再推
     const keepFetched = unsure(out);
     try {
-      const res = await cloud.putFile(uid, slug, p, { content: merged.content, isBinary: false, size: out.length, mtimeMs: Date.now(), deviceId: getDeviceId(), baseSeq: fetched.file.seq! }, { signal });
+      const res = await cloud.putFile(uid, slug, p, { content: out.toString('utf8'), isBinary: false, size: out.length, mtimeMs: Date.now(), deviceId: getDeviceId(), baseSeq: fetched.file.seq! }, { signal });
       guard(); record(res.seq, sha256(out), res.mtimeMs, out); result.pushed++;
     } catch (e) {
       if (e instanceof AgentFileConflictError) { keepFetched(); throw new Error(`cloud file changed during sync: ${p}`); }

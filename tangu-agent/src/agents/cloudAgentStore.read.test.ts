@@ -79,7 +79,23 @@ describe('cloud agent memory writes', () => {
     m = (await cloudMutateMemory('u', 'scout', { action: 'forget', id: tea.id, expectedVersion: m.version }))!;
     expect(m.content).toBe('\nWorks in Paris\nHas a cat\n');
     const t = JSON.parse(rows['xyra/.memory-tombstones.json'].content!);
-    expect(t).toMatchObject({ schemaVersion: 1, tombstones: [{ content: 'Likes tea', fingerprint: memoryFactFingerprint('Likes tea'), evidenceIds: [] }] });
+    expect(t.schemaVersion).toBe(1);
+    // 忘掉的那条、被改掉的旧说法都记了墓碑(桌面第一次见面取并集时不会带回来)
+    expect(t.tombstones.map((x: any) => x.content).sort()).toEqual(['Likes tea', 'Works in London']);
+    expect(t.tombstones.find((x: any) => x.content === 'Likes tea')).toMatchObject({ fingerprint: memoryFactFingerprint('Likes tea'), evidenceIds: [] });
+  });
+  it('adding a forgotten fact again restores it, so desktop does not filter it out', async () => {
+    let m = (await cloudReadMemory('u', 'scout'))!;
+    m = (await cloudMutateMemory('u', 'scout', { action: 'forget', id: m.entries[0].id, expectedVersion: m.version }))!;
+    await cloudMutateMemory('u', 'scout', { action: 'add', fact: 'Likes tea', expectedVersion: m.version });
+    const [t] = JSON.parse(rows['xyra/.memory-tombstones.json'].content!).tombstones;
+    expect(t.restoredAt).toBeGreaterThan(t.forgottenAt);
+  });
+  it('a forget whose memory write loses the race leaves no tombstone behind', async () => {
+    const m = (await cloudReadMemory('u', 'scout'))!;
+    agentFiles.putFile.mockRejectedValueOnce(Object.assign(new Error('conflict'), { status: 409, body: { seq: 4 } }));
+    await expect(cloudMutateMemory('u', 'scout', { action: 'forget', id: m.entries[0].id, expectedVersion: m.version })).rejects.toMatchObject({ code: 'MEMORY_VERSION_CONFLICT' });
+    expect(rows['xyra/.memory-tombstones.json']).toBeUndefined();
   });
   it('an entry id from another version is refused', async () => {
     const m = (await cloudReadMemory('u', 'scout'))!;
@@ -88,7 +104,12 @@ describe('cloud agent memory writes', () => {
   it('default agent with nothing synced yet shows the global memory; the first edit creates the synced copy', async () => {
     delete rows['xyra/MEMORY.md'];
     const m = (await cloudReadMemory('u', 'xyra'))!;
-    expect(m).toMatchObject({ content: 'Old global fact\n', version: '0:' });
+    expect(m).toMatchObject({ content: 'Old global fact\n' });
+    expect(m.version.startsWith('0:')).toBe(true);
+    // 编辑器开着时云端运行改了全局那份:旧草稿保存 = 409,不丢掉中间的改动
+    getMemory.mockResolvedValueOnce({ content: 'Old global fact\nWritten by a cloud run\n', updatedAt: '2026-01-02T00:00:00Z' });
+    await expect(cloudWriteMemory('u', 'xyra', 'stale draft', m.version)).rejects.toMatchObject({ code: 'MEMORY_VERSION_CONFLICT' });
+    expect(rows['xyra/MEMORY.md']).toBeUndefined();
     const w = (await cloudWriteMemory('u', 'xyra', 'Old global fact\nNew fact\n', m.version))!;
     expect(rows['xyra/MEMORY.md']).toMatchObject({ content: 'Old global fact\nNew fact\n', seq: 1 });
     expect(w.version).toBe('1:h1');

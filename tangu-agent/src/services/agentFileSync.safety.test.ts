@@ -137,6 +137,19 @@ describe('agent sync boundaries and lifecycle', () => {
     expect((await runAgentFilesSync(f.cloud, 'u', { onlySlug: 'private-agent' })).ok).toBe(true);
     expect(repo.snapshot().content).not.toContain('Old secret'); expect(repo.snapshot().content).toContain('Has a cat');
   });
+  it('pushes the merged memory as committed, with forgotten facts filtered out', async () => {
+    const f = cloudFixture(); const dir = owned(f.cloud); const repo = createMemoryRepository(dir);
+    repo.mutate({ action: 'add', fact: 'Likes tea' });
+    expect((await runAgentFilesSync(f.cloud, 'u', { onlySlug: 'private-agent' })).ok).toBe(true);
+    const x = repo.mutate({ action: 'add', fact: 'Old secret' }); repo.mutate({ action: 'forget', id: x.entries.find((e) => e.content === 'Old secret')!.id });
+    repo.mutate({ action: 'add', fact: 'Has a cat' });
+    const synced = f.files.get('private-agent/MEMORY.md')!;
+    const web = `${synced.content!.replace(/\n*$/, "\n")}Old secret\n`; // 另一台还没收到墓碑的设备把它写回了云端
+    f.files.set('private-agent/MEMORY.md', { ...synced, content: web, seq: synced.seq! + 1, hash: hash(web) });
+    expect((await runAgentFilesSync(f.cloud, 'u', { onlySlug: 'private-agent' })).ok).toBe(true);
+    expect(repo.snapshot().content).not.toContain('Old secret');
+    expect(f.files.get('private-agent/MEMORY.md')!.content).toBe(repo.snapshot().content);
+  });
   it('tracks dynamic token identity instead of keeping an old request user scope', () => {
     const f = cloudFixture(); const token = (u: string) => `x.${Buffer.from(JSON.stringify({ userId: u })).toString('base64url')}.x`;
     let current = token('a'); registerAgentSyncIdentity(f.cloud, 'https://synthetic.invalid', () => current);
