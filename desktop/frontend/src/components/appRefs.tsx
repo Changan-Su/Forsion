@@ -4,10 +4,9 @@
  * 聊天气泡(ChatWikiLink)、输入框「已选择」条(RefChipView)、引用菜单、笔记编辑器都从这里拿图标和状态。
  * 宿主没有 `window.tangu.appRefs`(网页版 / 手机)时芯片只显示名字、不可点;Linux 桌面有这组方法但什么都列不出,状态恒为「这台设备上没有」。
  */
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import { createPortal } from 'react-dom'
+import { useEffect, useSyncExternalStore } from 'react'
 import { AppWindow } from 'lucide-react'
-import { OverlayAt } from '@lcl/engine'
+import { useHoverCard } from '@lcl/components'
 import { appRefKey, parseAppRefInner, type AppRef, type AppRefState, type AppRefStatus } from '../../../shared/appRefs'
 import { registerMessages, translate, useI18n } from '../i18n'
 import './appRefs.css'
@@ -118,31 +117,19 @@ export function AppRefChip({ appRef }: { appRef: AppRef }) {
   const state = appRefsSupported() ? status?.state : 'missing'
   const canOpen = appRefsSupported() && state !== 'missing'
   const { sub, hint } = appRefCardText(appRef, status)
-  // 悬停卡挂到 body 上、按芯片的位置摆(OverlayAt 负责收进窗口、处理界面缩放):做成芯片的子元素的话,
-  // 贴着滚动区上沿 / 窄栏右沿时会被裁掉一截。停留 0.3 秒才出;滚动、点击、离开就收。
-  const [card, setCard] = useState<{ x: number; top: number; bottom: number } | null>(null)
-  const timer = useRef(0)
-  const hide = (): void => { window.clearTimeout(timer.current); setCard(null) }
-  const show = (el: HTMLElement): void => {
-    refreshAppRef(appRef)
-    window.clearTimeout(timer.current)
-    timer.current = window.setTimeout(() => {
-      const r = el.getClientRects()[0] ?? el.getBoundingClientRect() // 折行的芯片贴第一行;位置到点才量
-      // 等的这 0.3 秒里被滚出窗口了(键盘焦点还在它身上)→ 不出。⚠️ 别改成「一有滚动事件就取消」:把芯片滚到指针底下
-      // 停住时 mouseenter 只来一次,后面跟着的滚动事件会把这次取消掉,卡就再也不出了(台架的 hover 也是先滚再移)。
-      if (r.bottom < 0 || r.top > window.innerHeight) return
-      setCard({ x: r.left, top: r.top, bottom: r.bottom })
-    }, 300)
-  }
-  useEffect(() => () => window.clearTimeout(timer.current), [])
-  const shown = !!card
-  useEffect(() => {
-    if (!shown) return
-    const close = (): void => setCard(null)
-    window.addEventListener('scroll', close, true)
-    return () => window.removeEventListener('scroll', close, true)
-  }, [shown])
-  const open = (): void => { hide(); if (canOpen) openAppRef(appRef) }
+  // 悬停卡 = LCL 悬停卡(挂在 body 上,滚动区裁不到;停 0.3 秒才出、相邻芯片接力,滚动 / 点击 / 离开就收)。
+  // 贴芯片的第一行(折行的芯片)。等的那 0.3 秒里来了滚动事件照样出:mouseenter 只来一次,一滚就取消的话,先滚再停住就再也不出卡。
+  const card = useHoverCard(sub ? (
+    <>
+      <AppRefIcon id={appRef.id} className="app-ref-card-ico" />
+      <span className="app-ref-card-main">
+        <b>{appRef.name}</b>
+        <small>{sub}</small>
+        {hint && <em>{hint}</em>}
+      </span>
+    </>
+  ) : null, { className: 'app-ref-card', side: 'top', rect: (el) => el.getClientRects()[0] ?? el.getBoundingClientRect() })
+  const open = (): void => { if (canOpen) openAppRef(appRef) }
   const cps = [...appRef.name]
   const head = cps.slice(0, 2).join('')
   const rest = cps.slice(2).join('')
@@ -156,25 +143,14 @@ export function AppRefChip({ appRef }: { appRef: AppRef }) {
       tabIndex={canOpen ? 0 : undefined}
       onClick={(e) => { e.preventDefault(); e.stopPropagation(); open() }}
       onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); open() } }}
-      onMouseEnter={(e) => show(e.currentTarget)}
-      onMouseLeave={hide}
-      onFocus={(e) => { if (e.currentTarget.matches(':focus-visible')) show(e.currentTarget) }}
-      onBlur={hide}
+      {...card.triggerProps}
+      onMouseEnter={(e) => { refreshAppRef(appRef); card.triggerProps.onMouseEnter(e) }}
+      onFocus={(e) => { refreshAppRef(appRef); card.triggerProps.onFocus(e) }}
     >
       {/* 图标和名字的头两个字包在一个不折行的块里:不然折行时图标会单独留在上一行末尾、名字掉到下一行
           (试过在两者之间放 U+2060,Chromium 在图片旁边照样断) */}
       <span className="app-ref-head"><AppRefIcon id={appRef.id} />{head}</span>{rest}
-      {card && sub && createPortal(
-        <OverlayAt className="app-ref-card" role="tooltip" x={card.x} y={card.bottom + 6} anchorTop={card.top - 6} prefer="above">
-          <AppRefIcon id={appRef.id} className="app-ref-card-ico" />
-          <span className="app-ref-card-main">
-            <b>{appRef.name}</b>
-            <small>{sub}</small>
-            {hint && <em>{hint}</em>}
-          </span>
-        </OverlayAt>,
-        document.body,
-      )}
+      {card.portal}
     </span>
   )
 }

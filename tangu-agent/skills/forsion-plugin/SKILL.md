@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.60.2
+  version: 1.61.0
   author: Forsion
   category: Forsion
 ---
@@ -335,6 +335,7 @@ ctx.registerView({ id: 'home', title: 'Muse', mount(el) {
 | `ctx.ui.mountMarkdownEditor` | 视图内原生 Amadeus Markdown 编辑器 | 正文归调用方(API 草稿等),**不碰笔记库**;保存前 `getValue()`;`modes: false` 不画「编辑 / 源码 / 预览」那一排;老宿主没有 → 可选链 |
 | `ctx.ui.mountFloatingToc` | 视图内原生悬浮目录 | 插件保有正文 DOM,宿主负责扫描 / 滚动高亮 / 跳转 / 主题;老宿主没有 → 可选链 |
 | `ctx.ui.setViewModes(el, spec)` | 视图的几种「看法」(转写 / 笔记 / 纪要、文档 / 画布这类同一份东西换摆法) | 2026-10-19 起;宿主把胶囊画在视图头行最左,⌥⌘V、命令面板「看法：X」、窄宽变形、手机顶栏都归宿主;2–4 种,`icon` 用图标词表名;句柄 `actions` = 同一行右边,把自己栏里的按钮挪进去;记忆归你(按记录 / 文件记);老宿主没有 → 可选链,保留自己的标签。见下「View modes」 |
+| `ctx.ui.attachTooltip(el, content, opts?)` | 按钮 / 图标的悬停提示,和宿主自己的按钮同一个 | 2026-10-23 起;300ms 才出、弹着移到相邻触发点直接接力、键盘聚焦立刻出不做动画、按下 / 滚动即收;`content` = 一行或几行(首行标题);`side` 缺省 top、放不下翻面;句柄 `{ update, dispose }`,禁用时宿主统一收;留 `aria-label`、去掉 `title`;老宿主没有 → 可选链,照旧 `title`。见下「Tooltips」 |
 | `ctx.ui.mountSelectionBar` | 自己的视图里选中文字后浮出宿主的划线条 | 宿主给「问 Tangu / 翻译 / ⋯」,你声明自己的工具(图标钮 / 颜色点);不接就什么都不出;老宿主没有 → 可选链,保留自己的菜单 |
 | `ctx.ui.mountSettingsPage` / `ctx.ui.mountSettingsItem` | 设置类页面(账号、额度、诊断、偏好…)用宿主的设置零件画 | 只给 groups / items 数据和回调,宿主按端排版(手机上紧凑控件留右、宽控件换行、选了就执行 → 半屏);**别再抄宿主的设置 CSS**;老宿主没有 → 可选链,保留自己画的那套 |
 | `ctx.ui.mountRecord` | 自己的卡片里挂宿主的「一行记录」编辑字段(标题 / 时间 / 属性,和内置日历的事件浮卡同一份) | 2026-10-17 起;⚠️**声明 `"databases"` 才有**;写口同 `ctx.databases.setCell`,外框 / 关闭 / 打开 / 删除归你;见下「日历 / 待办类插件的其余入口」 |
@@ -673,6 +674,28 @@ ctx.registerView({ id: 'session', title: 'Session', mount(el) {
 - One switch per view, 2–4 modes; fewer or more throws (more than four belongs in tabs). Calling it again on the same
   view replaces the previous switch. The host removes it on disable / reload / view close.
 - Filters ("All / Mine") and source switches are not view modes: draw those in your own content, not in this slot.
+
+### Tooltips and motion tokens: ctx.ui.attachTooltip (2026-10-23+)
+
+Hover hints use the host's own tooltip — the one on the host's buttons, sidebar rows and Ribbon — not `title` and not
+a hand-made one. It appears after 300ms; while it shows, moving to a neighbouring element that also has one hands the
+same tooltip over without replaying the animation; it closes 80ms after you leave; keyboard focus (`:focus-visible`)
+shows it at once without animation; pressing or scrolling hides it.
+
+```js
+const tip = ctx.ui?.attachTooltip?.(exportBtn, ['Export', 'Saves a Markdown copy'], { side: 'bottom' })  // first line = title
+if (!tip) exportBtn.title = 'Export'                          // older hosts: keep title
+exportBtn.setAttribute('aria-label', 'Export')               // the tooltip does not name the element
+// later: tip?.update('Export again'); tip?.dispose()        // the host also disposes on disable / reload
+```
+
+- `side`: `top` (default) / `bottom` / `left` / `right`; it flips when there is no room. Drop `title` on elements
+  that have a host tooltip, or two tooltips stack.
+- Your own motion: use the host tokens, not literal durations — `--ease-surface` (enter), `--ease-exit` (leave,
+  accelerating), `--ease-calm`, `--ease-drawer`, `--menu-enter-duration` 180ms / `--menu-exit-duration` 80ms,
+  `--tip-enter` / `--tip-exit`, `--hovercard-enter` / `--hovercard-exit`. Leaving is shorter than entering;
+  interruptible states use `transition`, not `keyframes`; created / restored / scrolled-in content doesn't animate in;
+  under reduced motion keep colour and opacity, drop translation and scale.
 
 ### Selection bar: ctx.ui.mountSelectionBar and registerSelectionAction scopes (2026-10-13+)
 

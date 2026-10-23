@@ -53,6 +53,15 @@ Genesis 当前使用这份 LCL。`apps/Archived/Forsion-LCL` 是早期组合引�
 - 插件:`ctx.ui.setViewModes`;详见 [公共契约](../docs/customization/ui-components.md)。
 - 标签栏不再给视图留空位(原 `useViewChromeSlot` 已删):视图的东西放视图自己的头行。
 
+## 提示框、悬停卡与浮层退场(Motion base)
+
+动效规矩见仓根 `DESIGN.md` §3「动效」;token 在 `desktop/frontend/src/styles/base.css :root`,LCL 样式只写同值兜底。
+
+- `engine/hoverSurface.ts`:提示框 / 悬停卡的唯一真源(时序、接力、定位、键盘聚焦不做动画),Ribbon 浮签与侧栏行提示都走它。`@lcl/components` 出口:`tooltipProps`(React 摊 props)、`attachTooltip`(DOM)、`hideTooltip`、`useHoverCard`(React 内容的悬停卡);事件委托版 `delegateTooltips` 留在引擎里给 Ribbon。插件:`ctx.ui.attachTooltip`。
+- `engine/menuAnchor.tsx` 的 `useExitGhost`:条件渲染的浮层卸载时留一份 inert 替身放完退场再摘;`OverlayAt` 自带,命令面板 / ⌘P 接了。退不退由 base.css 那张名单决定(进场名单 == 退场名单,`check:motion` 钉着)。
+- 方向性按压:按钮写 `data-press="back|forward|reload"`(engine.css)。
+- 仪器:`npm run check:motion`(进 `npm test`;写死时长与不经 OverlayAt 的菜单走棘轮基线 `scripts/motion-baseline.json`)。
+
 ## English contract
 
 Space owns layout; View owns a navigable feature; UI components compose the inside of a View. Amadeus document Blocks and Dashboard Cards have different responsibilities. Use `@lcl/components` for host-independent primitives and application adapters for services. Inputs and callbacks are explicit; a component must not implicitly target the active session. DOM plugins consume `ctx.ui` mounts, with lifecycle cleanup owned by the host. Settings parts (panels, rows, switches, buttons, inputs, meters, steppers, sheets) currently live in the application layer (`components/SettingsPrimitives`, `components/SettingsPage`) because their CSS source of truth is `base.css`; plugins reach them through `ctx.ui.mountSettingsPage` / `mountSettingsItem`. Keep types, documentation, consumers, and lifecycle coverage together when changing public APIs.

@@ -46,6 +46,7 @@ import { registerDeskCompanion, revokeDeskCompanions, type DeskCompanionContribu
 // ctx.desk 的宿主闸:端判定单源(currentPlatform)+ UI 模式(叶子模块,不经 @lcl/engine barrel)。
 import { currentPlatform } from '../../services/agentRunService'
 import { UI_MODE } from '@lcl/engine/uiMode'
+import { attachTooltip } from '@lcl/engine/hoverSurface'
 import { setActiveSpace, useCommandStore, useSpaceStore, nativeHaptic, nativeHapticAvailable, claimNativeChrome, nativeChromeInstalled } from '@lcl/engine'
 import { AUTO_WORK_FOLDER_KEY, pluginDisplayName } from './display'
 // 自动化播种 / 禁用即关规则:backendService 依赖图干净(http / agentRunService / localInbox,均不引 appStore),
@@ -1758,6 +1759,16 @@ export const usePluginStore = create<PluginState>((set, get) => {
       setViewModes: (el, spec) => {
         if (!ctxAlive()) return { set() {}, update() {}, actions: document.createElement('div'), dispose() {} }
         return setPluginViewModes(el, spec, (d) => scope.own('mount', d, 'viewModes'), (e) => console.error(`[amadeus] plugin "${pluginId}" view mode onChange failed`, e))
+      },
+      // 提示框:LCL 那一份(hoverSurface.ts),同宿主按钮 / 侧栏行;插件停用 / 重载时统一收掉。同步可用,不走动态 import(很小)。
+      attachTooltip: (el, content, opts = {}) => {
+        if (!ctxAlive()) return { update() {}, dispose() {} }
+        if (!(el instanceof HTMLElement)) throw new TypeError('attachTooltip needs an HTMLElement')
+        const lines = (c: unknown): string[] => (Array.isArray(c) ? c : [c]).map((l) => String(l ?? '')).filter(Boolean)
+        const side = opts?.side && ['top', 'bottom', 'left', 'right'].includes(opts.side) ? opts.side : 'top'
+        const tip = attachTooltip(el, lines(content), { side })
+        const dispose = scope.own('mount', () => tip.dispose(), 'tooltip')
+        return { update: (next) => { if (ctxAlive()) tip.update(lines(next), { side }) }, dispose }
       },
       mountSelectionBar: (root, opts = {}) => {
         if (!ctxAlive()) return { show() {}, hide() {}, update() {}, dispose() {} }

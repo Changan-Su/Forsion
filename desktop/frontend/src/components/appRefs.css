@@ -18,11 +18,8 @@
 .app-ref-ico { display: inline-block; width: 1.1em; height: 1.1em; margin-right: 0.3em; vertical-align: -0.2em; object-fit: contain; }
 .app-ref[data-off] .app-ref-ico { filter: grayscale(1); opacity: 0.55; }
 
-/* 悬停卡:挂在 body 上的浮层,位置由 AppRefChip 按芯片量出来交给 OverlayAt(收进窗口、界面缩放都在那边处理)。
-   不接指针:鼠标从芯片滑到卡片上不该让它留着或闪。 */
+/* 悬停卡:LCL 悬停卡(.lcl-hovercard 管定位、层级、进退动效与不接指针),这里只管卡里的排版。 */
 .app-ref-card {
-  position: fixed;
-  z-index: 10020;
   display: flex;
   align-items: flex-start;
   gap: 10px;
@@ -40,13 +37,10 @@
   line-height: var(--ui-line-body);
   text-align: left;
   white-space: normal;
-  pointer-events: none;
-  animation: app-ref-card-in var(--duration-fast, 0.15s) ease;
 }
-@keyframes app-ref-card-in { from { opacity: 0; } }
 .app-ref-card-ico { flex: none; width: 28px; height: 28px; margin-top: 1px; object-fit: contain; }
 .app-ref-card-main { display: flex; min-width: 0; flex-direction: column; }
 .app-ref-card-main b { font-weight: 600; overflow-wrap: anywhere; }
 .app-ref-card-main small { font-size: var(--ui-font-caption); line-height: var(--ui-line-caption); color: var(--text-muted); }
 .app-ref-card-main em { margin-top: 6px; font-size: var(--ui-font-caption); font-style: normal; line-height: var(--ui-line-caption); color: var(--text-faint); }
-@media (prefers-reduced-motion: reduce) { .app-ref { transition: none; } .app-ref-card { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .app-ref { transition: none; } }

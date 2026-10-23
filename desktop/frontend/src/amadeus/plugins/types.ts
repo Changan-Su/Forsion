@@ -1557,6 +1557,17 @@ export interface PluginContext {
      *  Remember the mode per thing you show (a record, a file) yourself — the host stores nothing. Throws for fewer
      *  than 2 or more than 4 modes. Feature-detect on older hosts (`ctx.ui?.setViewModes`) and keep your own tabs there. */
     setViewModes?(el: HTMLElement, spec: import('./pluginViewModes').PluginViewModesSpec): import('./pluginViewModes').PluginViewModesHandle
+    /** The host tooltip on one of your own elements (2026-10-23+), instead of a native `title` or a hand-made one:
+     *  the same tooltip as the host's own buttons and sidebar rows. It appears after 300ms of hovering; moving to a
+     *  neighbouring element that also has one hands the open tooltip over without replaying its animation; keyboard
+     *  focus (:focus-visible) shows it at once without animation; pressing the element or scrolling hides it.
+     *  `content` is one line, or several (the first is the title, the rest secondary text). `opts.side` is the
+     *  preferred side (default `'top'`); it flips when there is no room. The tooltip does not name the element —
+     *  keep an `aria-label` on icon buttons, and drop their `title` so two tooltips don't stack.
+     *  `update(content)` changes the text (in place if it is showing). Call `dispose()` when the element goes away;
+     *  the host also disposes every tooltip on disable / reload. Feature-detect on older hosts (`ctx.ui?.attachTooltip`)
+     *  and fall back to `title` there. */
+    attachTooltip?(el: HTMLElement, content: string | string[], opts?: { side?: 'top' | 'bottom' | 'left' | 'right' }): { update(content: string | string[]): void; dispose(): void }
     /** A transparent layer of the host whiteboard over your own content (2026-10-10+): the same engine,
      *  pens and stroke feel as a `.excalidraw.md` board, without its chrome. See PluginBoardOptions.
      *  Feature-detect on older hosts: `ctx.ui?.mountBoard`. */

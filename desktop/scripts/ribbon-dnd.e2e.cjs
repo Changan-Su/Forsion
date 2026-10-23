@@ -503,7 +503,7 @@ async function main() {
       `badge.l=${Math.round(geo.badge.l)} icon.r=${Math.round(geo.icon.r)} badge.t=${Math.round(geo.badge.t)} rowMid=${Math.round((geo.row.t + geo.row.b) / 2)}`,
     )
 
-    // O. 收起态自绘浮签(取代原生 title,09-25 U-21):悬停 1s 弹、0.1s 内换图标立刻弹、拖动 / 按下即收;
+    // O. 收起态自绘浮签(取代原生 title,09-25 U-21;10-23 起 = LCL 提示框):悬停 300ms 弹、弹着换到相邻图标直接接力、拖动 / 按下即收;
     //    开关类命令(Command.checked)钉进命令区后按钮带 aria-pressed / .is-on。
     await fresh(page)
     const titles = await page.$$eval('.rb-top .rb-btn, .rb-bottom .rb-btn, .rb-head .rb-toggle', (els) => els.filter((e) => e.title).map((e) => e.className))
@@ -512,11 +512,11 @@ async function main() {
     const center = async (sel) => { const b = await page.$eval(sel, (e) => { const r = e.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } }); return b }
     let c = await center('.rb-top .rb-slot[data-id="tA"] .rb-btn')
     await page.mouse.move(c.x, c.y)
-    await page.waitForTimeout(500)
+    await page.waitForTimeout(150)
     const early = await tipText()
-    await page.waitForTimeout(700)
+    await page.waitForTimeout(450)
     const late = await tipText()
-    check('O2 悬停 0.5s 还不弹、1.2s 弹出且是该钮的名字', early === null && late === 'Top A', `0.5s=${early} 1.2s=${late}`)
+    check('O2 悬停 0.15s 还不弹、0.6s 弹出且是该钮的名字', early === null && late === 'Top A', `0.15s=${early} 0.6s=${late}`)
     const tipGeo = await page.evaluate(() => {
       const t = document.querySelector('.rb-tip')?.getBoundingClientRect()
       const b = document.querySelector('.rb-top .rb-slot[data-id="tA"] .rb-btn')?.getBoundingClientRect()
@@ -527,7 +527,7 @@ async function main() {
     c = await center('.rb-top .rb-slot[data-id="tB"] .rb-btn')
     await page.mouse.move(c.x, c.y)
     await page.waitForTimeout(60)
-    check('O4 已弹过后换到相邻钮立刻弹(skip-delay)', (await tipText()) === 'Top B', String(await tipText()))
+    check('O4 弹着换到相邻钮直接接力(不重等)', (await tipText()) === 'Top B', String(await tipText()))
     await page.mouse.down()
     await page.waitForTimeout(30)
     check('O5 按下鼠标即收', (await tipText()) === null, String(await tipText()))

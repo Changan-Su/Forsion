@@ -318,3 +318,28 @@ it('ctx.ui.mountSelectionBar({ watch: false }):hide() 只收条,开着的结果�
   usePluginStore.setState({ selectionActions: [] })
   expect(errors).toEqual([])
 })
+
+// 提示框(2026-10-23):ctx.ui.attachTooltip 用的是宿主那一份(LCL hoverSurface),插件元素里不加节点;停用插件即收、句柄变哑。
+// 负对照(实跑):pluginStore 里那份不进 scope.own → 「停用即收」红。
+it('ctx.ui.attachTooltip:悬停出宿主提示框、不往插件元素里加节点;停用插件即收,之后句柄是哑的', async () => {
+  const { usePluginStore } = await import('./pluginStore')
+  const tip = () => document.querySelector<HTMLElement>('.lcl-tip[data-open]')
+  let ctx!: import('./types').PluginContext
+  usePluginStore.setState({ initialized: false, plugins: [], activeIds: [], disabledIds: [], disposers: {}, selectionActions: [] })
+  usePluginStore.getState().init([{ id: 'tipper', name: 'tipper', version: '0', setup: (c) => { ctx = c } }])
+  const handle = ctx.ui!.attachTooltip!(el, ['Export', 'Saves a copy'], { side: 'bottom' })
+  el.dispatchEvent(new MouseEvent('mouseenter'))
+  await vi.waitFor(() => expect(tip()).not.toBeNull(), { timeout: 1000 })
+  expect(tip()!.textContent).toBe('ExportSaves a copy')
+  expect(el.childElementCount).toBe(0)
+  handle.update('Export now')
+  await vi.waitFor(() => expect(tip()!.textContent).toBe('Export now'))
+  await act(async () => { usePluginStore.getState().disable('tipper') })
+  await vi.waitFor(() => expect(document.querySelector('.lcl-tip'), '停用即收').toBeNull())
+  el.dispatchEvent(new MouseEvent('mouseleave'))
+  el.dispatchEvent(new MouseEvent('mouseenter'))
+  await new Promise((r) => setTimeout(r, 400))
+  expect(document.querySelector('.lcl-tip'), '句柄已哑').toBeNull()
+  expect(() => ctx.ui!.attachTooltip!({} as HTMLElement, 'x')).not.toThrow() // 停用之后:哑句柄,不抛
+  expect(errors).toEqual([])
+})

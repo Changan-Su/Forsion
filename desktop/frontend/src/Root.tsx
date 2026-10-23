@@ -15,7 +15,6 @@ import { sendTestNotification } from './components/NotificationsTab'
 import { AmadeusOverlays } from './amadeusOverlays'
 import { QuickFind } from './quickFind'
 import { FindBar } from './findInPage'
-import { HoverTip } from './hoverTip'
 import { MarketModal } from './components/MarketModal'
 import { PluginOnboardingHost } from './components/PluginOnboardingModal'
 import { OnboardingWizard, ONBOARDING_DISMISS_KEY } from './components/OnboardingWizard'
@@ -162,7 +161,6 @@ export function Root() {
       <QuickFind />
       {/* 页内查找浮条(mod+f)。挂在这里而不是编辑器里 —— 它服务所有 View。 */}
       <FindBar />
-      <HoverTip />
 
 
       {/* 更新提示已改为检测到新版自动弹出「更新」标签页(见 stores/bootstrap.ts),不再用顶部横幅。 */}

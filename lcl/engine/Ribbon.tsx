@@ -23,6 +23,7 @@ import { engineTr, useEngineI18n } from './i18nSeam'
 import { label } from './types'
 import type { Command, RibbonItem } from './types'
 import { OverlayAt, UI_ZOOM_EVENT, zoomOf } from './menuAnchor'
+import { delegateTooltips, hideTooltip } from './hoverSurface'
 import { useWorkspace } from './workspaceStore'
 import { getView, subscribeViews } from './viewRegistry'
 import { computeSideWidth } from './sideWidth'
@@ -46,10 +47,6 @@ const GAP = 4
 /** 常驻上限:上区(Spaces)与命令区各露几项,超出的进「…」(见下面 capT / capB)。 */
 const TOP_VISIBLE = 5
 const BOTTOM_VISIBLE = 5
-/** 收起态浮签时序 = desktop hoverTip 已拍板的那套(引擎不能 import 宿主,只能同值抄一份):
- *  悬停 1s 弹;刚收起 0.1s 内移到下一枚 → 立刻弹(连续扫图标时不必每枚重等 1s)。 */
-const TIP_SHOW_DELAY = 1000
-const TIP_SKIP_DELAY = 100
 /** 上区第 n 个槽(0 基)的快捷键显示文本;已解绑/超出前 9 个 → 空串(什么都不画)。 */
 function slotHint(i: number): string {
   if (i >= 9) return ''
@@ -176,19 +173,10 @@ export function Ribbon() {
     setOpenZone(zone)
   }
 
-  // ---- 收起态浮签(取代原生 title):根上事件委托,认 [data-rb-tip]。时序同 hoverTip(1s / 0.1s skip)。
-  //      拖动、菜单、图标选择器、收纳夹浮层任一打开时不弹且立刻收;按下鼠标即收(点完别挂着)。 ----
-  const [tip, setTip] = useState<{ text: string; mid: number } | null>(null)
-  const tipFor = useRef<HTMLElement | null>(null) // 当前悬停(已弹或计时中)的按钮
-  const tipTimer = useRef<number | undefined>(undefined)
-  const tipShown = useRef(false)
-  const tipHiddenAt = useRef(0)
-  const hideTip = (): void => {
-    window.clearTimeout(tipTimer.current)
-    tipFor.current = null
-    if (tipShown.current) { tipShown.current = false; tipHiddenAt.current = Date.now() }
-    setTip(null)
-  }
+  // ---- 收起态浮签(取代原生 title):LCL 提示框(hoverSurface.ts)根上事件委托,认 [data-rb-tip];时序 / 接力同全应用。
+  //      拖动、菜单、图标选择器、收纳夹浮层任一打开时不弹且立刻收;按下鼠标即收(点完别挂着)。贴着 Ribbon 外缘弹,不贴按钮。 ----
+  const tipBlocked = useRef(false)
+  const peekWillOpen = useRef<(spaceId: string) => boolean>(() => false)
   // ---- Space 左面板悬停预览(规则见 spacePeekRules.ts,卡片见 SpacePeek.tsx)。认的是 Space 按钮上的 data-space-id
   //      (宿主的 SpaceButton 写,同 data-rb-tip 的约定):条上、主位槽、「最近使用」三处一视同仁。
   //      views 在弹出那一刻定下:之后卡里一点击切了 Space,「当前 / 别的」的口径会变,列表跟着变就等于把正在用的 View 重挂。 ----
@@ -218,13 +206,18 @@ export function Ribbon() {
   // 卡里的 View 被注销了(插件停用):别留一个没人管的实例。
   useEffect(() => (peek ? subscribeViews(() => { if (peek.views.some((v) => !getView(v.type))) closePeek() }) : undefined), [peek]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => { window.clearTimeout(peekOpenTimer.current); window.clearTimeout(peekCloseTimer.current) }, [])
-  const openPeek = (id: string): void => {
-    if (onScreen(id)) { closePeek(); return } // 弹着别的 Space 的卡时移到当前 Space 的图标上:收,露出真的那块左栏
+  const peekViewsOf = (id: string): PersistedPanel[] => {
     const { spaces, activeSpaceId } = useSpaceStore.getState()
     const space = spaces.find((x) => x.id === id)
     const ws = useWorkspace.getState()
     const active = id === activeSpaceId
-    const views = space ? peekViews({ active, stash: ws.stash.left, defaults: active ? ws.sidebarDefaults.left : space.sidebarDefaults.left, known: (type) => !!getView(type) }) : []
+    return space ? peekViews({ active, stash: ws.stash.left, defaults: active ? ws.sidebarDefaults.left : space.sidebarDefaults.left, known: (type) => !!getView(type) }) : []
+  }
+  // 这枚 Space 图标停够会弹预览(卡头就是名字)→ 不再出名字浮签:两者同是 300ms,不让位就先闪一下浮签。
+  peekWillOpen.current = (id) => !blockHard && !onScreen(id) && peekViewsOf(id).length > 0
+  const openPeek = (id: string): void => {
+    if (onScreen(id)) { closePeek(); return } // 弹着别的 Space 的卡时移到当前 Space 的图标上:收,露出真的那块左栏
+    const views = peekViewsOf(id)
     cancelPeekClose()
     setPeek(views.length ? { spaceId: id, views } : null)
   }
@@ -313,24 +306,24 @@ export function Ribbon() {
   }
 
   const blockTip = !!drag || !!menu || !!iconPick || !!fly || !!peek
-  useEffect(() => { if (blockTip || expanded) hideTip() }, [blockTip, expanded]) // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => () => window.clearTimeout(tipTimer.current), [])
-  const onTipOver = (e: React.MouseEvent): void => {
-    const el = (e.target as Element).closest('[data-rb-tip]') as HTMLElement | null
-    if (el === tipFor.current) return
-    const warm = tipShown.current || Date.now() - tipHiddenAt.current <= TIP_SKIP_DELAY
-    hideTip()
-    if (!el || blockTip || expanded) return
-    tipFor.current = el
-    const fire = (): void => {
-      if (tipFor.current !== el || !el.isConnected || !el.dataset.rbTip) return
-      const r = el.getBoundingClientRect() // 视口 px;渲染时再按 zoom 折算
-      tipShown.current = true
-      setTip({ text: el.dataset.rbTip, mid: r.top + r.height / 2 })
-    }
-    if (warm) fire()
-    else tipTimer.current = window.setTimeout(fire, TIP_SHOW_DELAY)
-  }
+  tipBlocked.current = blockTip || expanded
+  useEffect(() => { if (blockTip || expanded) hideTooltip() }, [blockTip, expanded])
+  useEffect(() => {
+    const root = rootRef.current
+    if (!root) return
+    return delegateTooltips(root, {
+      selector: '[data-rb-tip]',
+      className: 'rb-tip',
+      side: 'right',
+      text: (el) => (el.dataset.spaceId && peekWillOpen.current(el.dataset.spaceId) ? undefined : el.dataset.rbTip),
+      enabled: () => !tipBlocked.current,
+      rect: (el) => {
+        const rb = root.getBoundingClientRect()
+        const r = el.getBoundingClientRect()
+        return { left: rb.left, right: rb.right - 2, top: r.top, bottom: r.bottom }
+      },
+    })
+  }, [])
 
   // ---- 数据整形:两区各自的顶层条目(收纳夹成员从条上隐藏,byId 供浮层反查) ----
   const inFolder = new Set(folders.flatMap((f) => f.items))
@@ -798,7 +791,7 @@ export function Ribbon() {
     if (!from) snapGeom(source, e.clientY)
     let target: PointerTarget = { kind: 'cancel' }
     pointerCancel.current = beginRibbonPointerDrag(e.nativeEvent, source, {
-      start: () => { hideTip(); cancelClose(); setDrag(d) },
+      start: () => { hideTooltip(); cancelClose(); setDrag(d) },
       move: (ev) => { target = pointerActions.current.target(ev, d) },
       drop: (ev) => { pointerActions.current.drop(ev, d, target) },
       cancel: endDrag,
@@ -1043,13 +1036,11 @@ export function Ribbon() {
       ref={rootRef}
       className={`rb${expanded ? ' rb-expanded' : ''}${drag ? ' rb-dragging' : ''}${openZone ? ` rb-open-${openZone}` : ''}`}
       onContextMenu={onRootCtx}
-      onMouseOver={(e) => { onTipOver(e); onPeekOver(e) }}
-      onMouseLeave={() => { hideTip(); window.clearTimeout(peekOpenTimer.current); peekFor.current = null }}
-      onMouseDownCapture={(e) => {
-        // 点下即收;记住这枚按钮 → 点完鼠标还停在它上面时不再重新计时弹出(移到别处才重新武装)。
-        hideTip()
-        window.clearTimeout(peekOpenTimer.current) // 预览同理:还没弹就点了 = 要进这个 Space,别再弹
-        tipFor.current = (e.target as Element).closest('[data-rb-tip]') as HTMLElement | null
+      onMouseOver={onPeekOver}
+      onMouseLeave={() => { window.clearTimeout(peekOpenTimer.current); peekFor.current = null }}
+      onMouseDownCapture={() => {
+        // 浮签的「点下即收、点完停在原处不再弹」由 delegateTooltips 管;预览同理:还没弹就点了 = 要进这个 Space,别再弹。
+        window.clearTimeout(peekOpenTimer.current)
       }}
       /* 兜底:两区之间的空隙、head、边距……凡是没被组接住的地方也放行 drop,一律落到**当前预览**
        * 那格。少了这层,松手差几像素落在组外就静默弹回 = 用户报的「显示了落点却没落过去」。 */
@@ -1132,17 +1123,6 @@ export function Ribbon() {
           onEnter={peek.spaceId === useSpaceStore.getState().activeSpaceId ? undefined : () => { closePeek(); switchSpace(peek.spaceId) }}
         />,
         rootRef.current.parentElement,
-      )}
-
-      {tip && !expanded && (
-        <div
-          className="rb-tip"
-          role="tooltip"
-          /* 同 .rb-fly:rect 是视口 px,fixed 的 left/top 会被祖先 zoom 再乘一遍 → 先除掉(见 menuAnchor.tsx)。 */
-          style={(() => { const z = zoomOf(rootRef.current); return { left: ((rootRef.current?.getBoundingClientRect().right ?? 44) + 6) / z, top: tip.mid / z } })()}
-        >
-          {tip.text}
-        </div>
       )}
 
       {menu && (

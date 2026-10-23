@@ -246,7 +246,47 @@ export function useEdgeNudge(
   return { ref, style: { translate: fix.dx ? `${fix.dx}px` : undefined, maxWidth: fix.maxWidth } }
 }
 
-/** 一行接入版:把 `style={{ left: x, top: y }}` 换成 `<OverlayAt x={x} y={y} className=…>`。 */
+/**
+ * 浮层退场(DESIGN §3「动效」):条件渲染的浮层一关就从 DOM 里没了,来不及放退场。这里在卸载那一刻拷一份「替身」
+ * 留在原处放完退场再摘 —— 调用方不用改成延迟卸载。
+ *
+ * - 有没有退场、怎么退由 CSS 决定:替身带 `data-lcl-exit`,命中了退场规则(base.css 那张名单)就放完再摘;
+ *   没命中(没有动画)就立刻摘,等于原样。仪器 `check:motion` 钉着进场名单 == 退场名单。
+ * - 卸载时父节点可能一起被拆(Ribbon 的 backdrop 包着菜单):替身落进**还在的最近祖先**,作用域类(`.am-app`…)和变量照旧。
+ * - 替身 inert + aria-hidden + 不吃指针:读屏、焦点、点击都只认真菜单;输入框的值手动带上(cloneNode 不拷 value)。
+ * - 组件常驻、靠 `open` 决定画不画的(命令面板、⌘P)传 open:翻成 false 时同样留替身。
+ */
+export function useExitGhost(ref: RefObject<HTMLElement | null>, open = true): void {
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!open || !el) return
+    // 祖先链在挂上时就记下:open 翻成 false 那一次,清理跑在 React 摘掉节点之后(卸载那一次则在之前)。
+    const chain: Element[] = []
+    for (let p = el.parentElement; p; p = p.parentElement) chain.push(p)
+    return () => {
+      const next = el.isConnected ? el.nextSibling : null
+      const ghost = el.cloneNode(true) as HTMLElement
+      const src = el.querySelectorAll('input, textarea')
+      ghost.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input, textarea').forEach((g, i) => { g.value = (src[i] as HTMLInputElement | undefined)?.value ?? g.value })
+      ghost.removeAttribute('id')
+      ghost.setAttribute('aria-hidden', 'true')
+      ghost.setAttribute('data-lcl-exit', '')
+      ghost.inert = true
+      ghost.style.pointerEvents = 'none'
+      queueMicrotask(() => {
+        if (el.isConnected) return // 没真卸(StrictMode 的演习卸载、换 key 前后同位)
+        const host = chain.find((p) => p.isConnected)
+        if (!host) return
+        host.insertBefore(ghost, next?.parentNode === host ? next : null)
+        const anims = ghost.getAnimations?.() ?? []
+        if (!anims.length) { ghost.remove(); return }
+        void Promise.allSettled(anims.map((a) => a.finished)).then(() => ghost.remove())
+      })
+    }
+  }, [ref, open])
+}
+
+/** 一行接入版:把 `style={{ left: x, top: y }}` 换成 `<OverlayAt x={x} y={y} className=…>`。关掉时放退场(useExitGhost)。 */
 export function OverlayAt({
   x,
   y,
@@ -273,6 +313,7 @@ export function OverlayAt({
   children?: ReactNode
 } & Omit<HTMLAttributes<HTMLDivElement>, 'style' | 'className' | 'children'>) {
   const p = useClampedMenu(x, y, { anchorTop, prefer, center, margin })
+  useExitGhost(p.ref)
   return (
     <div
       ref={(el) => {

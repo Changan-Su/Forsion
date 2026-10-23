@@ -13,6 +13,7 @@ afterEach(() => { disarmTip(); vi.useRealTimers() })
 
 const focusEvent = (visible: boolean) => {
   const el = document.createElement('button')
+  document.body.appendChild(el) // 提示框只给挂在文档里的元素弹
   el.matches = ((sel: string) => sel === ':focus-visible' ? visible : false) as typeof el.matches
   return { currentTarget: el } as unknown as React.FocusEvent<HTMLElement>
 }
@@ -21,7 +22,7 @@ it('键盘聚焦弹提示,失焦收起', async () => {
   const load = vi.fn(() => ['Name', 'Direct chat · 3 min ago'])
   const p = tipProps(load, { focus: true })
   p.onFocus!(focusEvent(true))
-  await vi.advanceTimersByTimeAsync(1000)
+  await vi.advanceTimersByTimeAsync(0) // 键盘聚焦立刻出(LCL 提示框,不等 300ms)
   expect(load).toHaveBeenCalledTimes(1)
   p.onBlur!()
 })

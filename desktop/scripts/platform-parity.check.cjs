@@ -111,7 +111,6 @@ const SKIP = {
   DesktopStatusBar: '单列壳无 footer 槽',
   installStatusBarItems: '同上:没有状态栏就没有状态栏内置项',
   installFileDropGuard: '移动端无 OS 文件拖放',
-  HoverTip: '触屏无 hover 态',
   MobilePreviewFrame: '桌面/web 的「手机预览框」;真机走 MobileRoot 不经此处',
   FloatingPanelFrame: 'Web 的固定居中 Floating 容器;移动端继续由 MobileRoot 渲染全屏二级页面',
   FloatingViewSurface: 'Floating 插件视图宿主;移动端不注入 openFloatingPanel,插件 feature-detect 后回退 openView',
