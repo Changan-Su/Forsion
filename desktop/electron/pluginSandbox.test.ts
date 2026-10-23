@@ -124,6 +124,21 @@ describe('控制通道', () => {
     expect(sbx.state().running).toBe(false)
   }, 60_000)
 
+  it('闲置:窗口不在前台、超过闲置时长 → 自动停;用户正在用(前台)→ 不停', async () => {
+    const { vi } = await import('vitest')
+    vi.useFakeTimers({ toFake: ['setInterval', 'Date'] })
+    try {
+      const f = fakeSpawn({ states: ['running'] })
+      const sbx = createPluginSandbox({
+        forsionHome: () => tmp(), spawn: f.spawn, appArgs: [], platform: process.platform, pid: process.pid, idleMs: 60_000,
+        ui: () => ({ locale: 'zh', storage: {} }), onChange: () => {}, onChildEvent: () => {}, log: () => {},
+      })
+      await sbx.exec('start', { dir: pluginDir() })
+      vi.advanceTimersByTime(61_000) // 61s 没人用、窗口不在前台(假子进程的状态 windowVisible:false)
+      await vi.waitFor(() => expect(f.ops).toContain('quit'), { timeout: 5_000 })
+    } finally { vi.useRealTimers() }
+  })
+
   it('没在跑时看状态 → no_sandbox', async () => {
     const r = await sandbox(tmp(), fakeSpawn()).exec('status', {})
     expect(r).toMatchObject({ ok: false, code: 'no_sandbox' })

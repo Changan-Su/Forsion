@@ -46,7 +46,7 @@ export interface SandboxStatus {
   errorCount: number
   /** 自启动以来加载了几次(保存即重载会累加)。 */
   loads: number
-  /** 用户此刻看得见沙箱窗口。 */
+  /** 用户此刻正在用沙箱窗口(它在前台)。窗口平时压在普通窗口之下,看得见不算。 */
   windowVisible: boolean
 }
 

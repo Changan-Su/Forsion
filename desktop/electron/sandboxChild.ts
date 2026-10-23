@@ -60,7 +60,8 @@ export function startSandboxChild(self: SandboxSelf, opts: { getWindow(): Browse
     if (!st || typeof st !== 'object') {
       return { v: 1, state: 'starting', pluginId: self.pluginId, name: self.name, version: self.version, dir: self.dir, views: [], spaces: [], hiddenSpaces: [], setupError: null, blocked: null, mountErrors: [], logs: [], warnCount: 0, errorCount: 0, loads: 0, windowVisible: false }
     }
-    return { ...(st as object), windowVisible: !!w && w.isVisible() && !w.isMinimized() }
+    // 「用户正在用沙箱窗口」= 它在前台。静默模式下窗口压在普通窗口之下,isVisible 恒真,拿它判闲置就永远不停
+    return { ...(st as object), windowVisible: !!w && w.isFocused() }
   }
   const screenshot = async (view?: string): Promise<string | null> => {
     if (view) { await hook(`openView(${JSON.stringify(view)})`); await new Promise((r) => setTimeout(r, 700)) }
@@ -89,7 +90,8 @@ export function startSandboxChild(self: SandboxSelf, opts: { getWindow(): Browse
       case 'reload': await hook('reload()'); return {}
       case 'show': {
         const w = win()
-        if (w) { if (w.isMinimized()) w.restore(); w.show(); w.focus(); if (process.platform === 'darwin') app.focus({ steal: true }) }
+        // 静默模式把窗口压在普通窗口之下(main.ts sinkForHarness):用户点「打开沙箱窗口」要先抬回普通层
+        if (w) { w.setAlwaysOnTop(false); if (w.isMinimized()) w.restore(); w.show(); w.focus(); if (process.platform === 'darwin') app.focus({ steal: true }) }
         return {}
       }
       case 'quit': setImmediate(opts.quit); return {}
@@ -141,6 +143,8 @@ export function startSandboxChild(self: SandboxSelf, opts: { getWindow(): Browse
     else return false
     return true
   })
-  // 渲染层装载落定 / 重载完会报一次,父进程那边的卡片跟着变
+  // 渲染层装载落定 / 重载完会报一次,父进程那边的卡片跟着变;用户切进 / 切出沙箱窗口也报(父进程据此算闲置)
   ipcMain.on('pluginSandbox:changed', () => { void pushState() })
+  app.on('browser-window-focus', () => { void pushState() })
+  app.on('browser-window-blur', () => { void pushState() })
 }

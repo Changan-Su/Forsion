@@ -22,6 +22,7 @@ import type { ChildProcess } from 'node:child_process'
 import { effectivePluginId } from '../shared/products'
 import { parseSandboxStatus, type SandboxStatus } from '../../tangu-agent/src/contracts/pluginSandbox'
 import { defineMainMessages } from './mainI18n'
+import { DEFAULT_APPEARANCE } from '../shared/startupAppearance'
 
 /** 「安装到我的 Forsion」确认框(main.ts 弹)。 */
 export const PLUGIN_SANDBOX_MESSAGES = defineMainMessages({
@@ -211,7 +212,12 @@ export function createPluginSandbox(deps: SandboxDeps) {
     try { msg = JSON.parse(line) } catch { return }
     if (typeof msg.id === 'number') { c.pending.get(msg.id)?.(msg); c.pending.delete(msg.id); return }
     const ev = msg.event
-    if (ev === 'state') { const st = parseSandboxStatus(msg.status); if (st) { c.status = st; changed() } return }
+    if (ev === 'state') {
+      const st = parseSandboxStatus(msg.status)
+      // 用户切进 / 切出沙箱窗口都会报一次:在用的时候和刚离开的那一刻都算「用过」,闲置从离开那一刻算起
+      if (st) { const was = c.status?.windowVisible; c.status = st; if (st.windowVisible || was) c.lastUsed = Date.now(); changed() }
+      return
+    }
     if (ev === 'report') {
       deps.onChildEvent({ event: 'report', note: typeof msg.note === 'string' ? msg.note.slice(0, 2000) : '', sessionId: c.sessionId, pluginId: c.manifest.pluginId, name: c.manifest.name })
       return
@@ -228,6 +234,8 @@ export function createPluginSandbox(deps: SandboxDeps) {
     for (const d of [paths.userData, `${paths.userData}-dev`]) {
       await writeFile(join(d, 'tangu-desktop-config.json'), JSON.stringify({ mode: 'external', backendUrl: 'http://127.0.0.1:1', token: 'sandbox' }))
       for (const f of ['amadeus-config.json', 'amadeus-config.dev.json']) await writeFile(join(d, f), JSON.stringify({ localVault: paths.vault, lastVault: paths.vault }))
+      // 不放开屏:沙箱窗口压在普通窗口之下,开屏等不到「窗口已显示」会一直盖到 10 秒上限,第一张截图拍到的全是它
+      await writeFile(join(d, 'startup-appearance.json'), JSON.stringify({ ...DEFAULT_APPEARANCE, showSplash: false }))
     }
     const token = randomBytes(24).toString('base64url')
     const sockPath = sandboxSockPath(deps.platform, deps.pid, randomBytes(6).toString('hex'))
@@ -402,7 +410,7 @@ export function createPluginSandbox(deps: SandboxDeps) {
     }
   }
 
-  // 闲置自动停:窗口没开着、15 分钟没人用
+  // 闲置自动停:沙箱窗口不在前台、15 分钟没人用(agent 没调、用户没切进去过)
   const idle = setInterval(() => {
     const c = child
     if (!c || c.exited || Date.now() - c.lastUsed < idleMs) return
