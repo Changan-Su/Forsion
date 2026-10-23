@@ -3,6 +3,7 @@
 // 波次 2 blocks 包:B-03(键盘搬块按选区类型分三路);B-04(折起的标题按整节搬 / 复制);R-17(块公式多行);R-27(代码块出口 / 自动配对 / 横滚工具条)。
 // 波次 2 serial 包:K-19(标题里 Shift+Enter 同回车,不再落盘丢换行)。
 // 波次 2 shell 包:K-16(mac ⌘↑/⌘↓ 越过代码块 / 嵌入到文首文末);K-17(块选中态 Shift+↑↓ / Shift+点击按块扩选、Mod-Alt-/ 转换、Mod-]/[ 缩进)。
+// IND(10-23):Tab 缩进过的段落再打 `- ` / `1. `,档位归列表、列表项段落无 margin(先 Tab 再转 = 先转再 Tab)。
 // 全部跑生产 UnifiedPage(台架 `?upage`),不走 v3 `.md-block` 台架 —— unified/keyboard.ts、headingFold
 // 只挂在 v4 实例上。用法:npm run check:unifiedkeys(由 e2e-editor 自起/复用 Vite;worktree 里设 HARNESS_URL)。
 // `--only=K03,R04` 只跑指定组。
@@ -1328,6 +1329,23 @@ async function main() {
       const e1 = await blk(page)
       check('K17e 对照:文字光标下 Shift+↓ 仍是文字选区', e1.sel === 'text' && e1.blocksel === null, JSON.stringify(e1))
       await page.close()
+    }
+    if (want('IND')) {
+      // 先 Tab 再打 `- ` / `1. ` = 先转列表再 Tab:缩进档归列表,列表项段落不带 margin(否则列表符与正文间撑出空隙)
+      for (const [trig, list] of [['- ', 'ul'], ['1. ', 'ol']]) {
+        const page = await open(browser, '缩进\n')
+        await caretAtText(page, '缩进', 0)
+        await page.keyboard.press('Tab'); await page.waitForTimeout(120)
+        await page.keyboard.type(trig); await page.waitForTimeout(200)
+        const r = await page.evaluate((list) => {
+          const el = document.querySelector(`.unified-body .ProseMirror > ${list}`)
+          const p = el?.querySelector('li p')
+          return { list: el?.dataset.indent ?? null, pIndent: p?.dataset.indent ?? null, pMargin: p ? getComputedStyle(p).marginLeft : null }
+        }, list)
+        if (process.env.SHOT_DIR) await page.screenshot({ path: path.join(process.env.SHOT_DIR, `ind-${list}.png`), clip: { x: 0, y: 0, width: 900, height: 300 } })
+        check(`IND 缩进段落打 \`${trig.trim()}\` → ${list} 带缩进档,段落无 margin`, r.list === '1' && r.pIndent === null && r.pMargin === '0px', JSON.stringify(r))
+        await page.close()
+      }
     }
   } finally {
     await browser.close()
