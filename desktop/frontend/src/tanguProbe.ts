@@ -28,7 +28,8 @@ import {
   type TanguStartChatOptions,
   type TanguStartChatResult,
 } from '@amadeus/plugins/tanguSeam'
-import { activeChatModelId, stickyDefaults, useApp, type AppState } from './stores/appStore'
+import { activeChatModelId, useApp, type AppState } from './stores/appStore'
+import { stickyDefaults } from '../../../tangu-agent/src/contracts/sessionDefaults'
 import { agentStatusOf, statusKey } from './stores/agentStatus'
 import { usePluginChat } from './stores/pluginChatStore'
 import type { TanguDesktopConfig } from './types'

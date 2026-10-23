@@ -10,8 +10,10 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentRunEvent } from '../types'
-import { AGENT_CONFIG_READ_RETRY_MS, AGENT_CONFIG_SYNC_WAIT_MS, useApp } from './appStore'
+import { useApp } from './appStore'
+import { AGENT_CONFIG_READ_RETRY_MS, AGENT_CONFIG_SYNC_WAIT_MS } from '../tangu/store/tanguSlice'
 import { useChildChat } from './childChatStore'
+import '../tangu/store/standalone' // 测试不走 activateTangu:自己装 Tangu 的 store 半身(界面热更新 3c)
 
 const updateSessionMock = vi.hoisted(() => vi.fn())
 const patchSessionConfigMock = vi.hoisted(() => vi.fn())

@@ -26,7 +26,7 @@ import { installBuiltins } from './builtins'
 import { AccountCard } from './components/AccountCard'
 import { RestartUpdateButton } from './components/RestartUpdateButton'
 import { UnitSwitcher } from './components/UnitSwitcher'
-import { useApp } from './stores/appStore'
+import { installTanguSlice, useApp } from './stores/appStore'
 import { PRODUCT } from './product'
 import { useTheme, useVisualTheme, toggleVisibleMode } from './stores/themeStore'
 import { notifyApp, useNotifications } from './stores/notificationStore'
@@ -112,9 +112,9 @@ export function installEngine(): void {
   registerView({ type: 'workspace', kind: 'collection', displayName: () => app().tr('view.workspace'), icon: Folder, factory: (props) => <WorkspaceView {...props} /> })
   // 统一「大纲」视图(合并 原目录/Amadeus 大纲):随活动主视图切换采集器。
   registerView({ type: 'outline', kind: 'aux', embeddable: true, displayName: () => app().tr('view.outline'), icon: ListTree, factory: (props) => <OutlineView {...props} />, singleton: true })
-  // Tangu 唯一的入口:视图 + 给宿主的接缝 + ctx.tangu 探针 + 命令(界面热更新 3b)。排在这里同时满足两条:
+  // Tangu 唯一的入口:store 半身 + 视图 + 给宿主的接缝 + ctx.tangu 探针 + 命令(界面热更新 3b / 3c)。排在这里同时满足两条:
   // 早于布局恢复(视图要先进注册表),早于 installAmadeusPlugins(ctx.tangu 的有无在建 plugin context 那一刻定)。
-  activateTangu({ installProbe: installTanguProbe })
+  activateTangu({ installSlice: installTanguSlice, installProbe: installTanguProbe })
   // 新建标签页(空白启动器):列出所有视图按 主区/侧区 分类,选中即在对应区打开。
   registerView({ type: 'launcher', kind: 'page', displayName: () => app().tr('newtab.title'), icon: Plus, factory: (props) => <NewTabView {...props} /> })
   // 工作区文件预览标签页(多实例,params.path 随布局持久化;打开一律走 views/wsFileNav.openWsFile,

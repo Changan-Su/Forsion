@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 await import('../stores/appStore') // 收集阶段先转译整张模块图(~350 个):放进用例体里,首次转译的耗时算进 5s 用例超时,机器一忙(本机多会话负载 40+)就假红;CI 上一直是绿的
+await import('../tangu/store/standalone')
 
 beforeEach(() => {
   vi.useFakeTimers()
@@ -64,6 +65,7 @@ describe('account-scoped content layouts', () => {
     const open = async (account: string) => {
       await openAccount(account)
       const { useApp } = await import('../stores/appStore')
+      await import('../tangu/store/standalone')
       useApp.setState({ desktopConfig: { agentDeskEnabled: true } as any, connState: 'ok', toast: () => {} })
       return useApp
     }

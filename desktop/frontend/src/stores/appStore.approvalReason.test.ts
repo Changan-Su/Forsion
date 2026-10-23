@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentRunEvent, UiMessage } from '../types'
 import { useApp } from './appStore'
+import '../tangu/store/standalone' // 测试不走 activateTangu:自己装 Tangu 的 store 半身(界面热更新 3c)
 
 const initial = useApp.getState()
 const assistant = (): UiMessage => ({ id: 'a1', role: 'assistant', content: '', status: 'streaming', timestamp: 1 })

@@ -1,5 +1,6 @@
 import type { TanguProbe, TanguStartChatResult } from '../amadeus/plugins/tanguSeam'
-import { stickyDefaults, useApp, withAmadeusWorkspace } from '../stores/appStore'
+import { useApp } from '../stores/appStore'
+import { stickyDefaults, withAmadeusWorkspace } from '../../../../tangu-agent/src/contracts/sessionDefaults'
 import { settleUltra } from '../stores/projectSettings'
 import { createSession } from './backendService'
 import { bindSession, connectionKey, homeTarget } from './engine/targets'
