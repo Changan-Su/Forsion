@@ -8,18 +8,98 @@
   .newchat-pickers .compact-chat-picker {
     position: relative; display: flex; align-items: center; gap: 7px;
     width: 100%; min-width: 0; min-height: 38px; padding: 8px 10px; box-sizing: border-box;
-    border-radius: var(--radius-md, 12px); background: var(--bg-card); color: var(--text);
-    font-size: var(--ui-font-body, 13px); line-height: 1.4; cursor: pointer;
+    border: none; border-radius: var(--radius-md, 12px); background: var(--bg-card); color: var(--text);
+    font: inherit; font-size: var(--ui-font-body, 13px); line-height: 1.4; text-align: left; cursor: pointer;
   }
-  .compact-chat-picker:hover { background: var(--overlay-medium); }
-  .compact-chat-picker:focus-within { outline: var(--focus-ring) solid var(--signal-line); outline-offset: 2px; }
+  .compact-chat-picker:hover, .compact-chat-picker[aria-expanded="true"] { background: var(--overlay-medium); }
+  .compact-chat-picker:focus-visible { outline: var(--focus-ring) solid var(--signal-line); outline-offset: 2px; }
   .compact-chat-picker-kind { flex: none; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
   .compact-chat-picker-icon { display: inline-flex; flex: none; }
   .compact-chat-picker-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
   .compact-chat-picker > svg { flex: none; color: var(--text-muted); }
-  .compact-chat-picker select { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
 }
 
 @container (max-width: 360px) {
   .t2-chat-col .newchat-pickers { flex-direction: column; gap: 6px; }
 }
+
+/* 团队的叠放头像(芯片里最多 3 个):每个描一圈卡片底色,叠出前后 */
+.chat-pick-stack { display: inline-flex; }
+.chat-pick-stack > * { border-radius: 50%; box-shadow: 0 0 0 2px var(--bg-card); }
+.chat-pick-stack > * + * { margin-left: -2px; }
+
+/* ─── 浮层与抽屉共用的行(Portal 到 body,不在容器查询里) ─── */
+.chat-pick-row .chat-pick-icon { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 22px; height: 22px; }
+.chat-pick-row .chat-pick-icon .agent-pill-avatar,
+.chat-pick-row .chat-pick-icon .agent-pill-initial { width: 22px; height: 22px; }
+.chat-pick-row .chat-pick-icon .agent-pill-initial { background: var(--overlay-medium); color: var(--text-muted); font-weight: 500; }
+.chat-pick-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-pick-row.is-picked { color: var(--text); }
+.chat-pick-row.is-picked .chat-pick-name { font-weight: 600; }
+.chat-pick-row .agent-badge-system { display: inline-block; }
+.chat-pick-check { flex: none; color: var(--text); }
+.chat-pick-index {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  min-width: 18px; height: 18px; padding: 0 5px; box-sizing: border-box; border-radius: var(--radius-pill, 999px);
+  background: var(--accent); color: var(--bg-card); font-size: var(--ui-font-caption, 11px); font-weight: 600; line-height: 1;
+}
+.chat-pick-section { padding: 6px 8px 4px; font-size: var(--ui-font-meta, 12px); font-weight: 500; color: var(--text-muted); }
+
+/* ─── B 浮层:外壳是 .ctx-menu,这里只定宽度与本组件的几件 ─── */
+.ctx-menu.chat-pick-pop { width: 252px; max-width: calc(100vw - 16px); }
+.chat-pick-pop .chat-pick-row { gap: 9px; }
+.chat-pick-pop .chat-pick-row:focus-visible { outline: none; background: var(--menu-hover); color: var(--text); }
+.chat-pick-status { padding: 4px 8px 6px; font-size: var(--ui-font-meta, 12px); font-weight: 500; color: var(--text-muted); }
+.chat-pick-direct { display: none; flex: none; padding: 3px; border-radius: var(--radius-sm); color: var(--text-muted); }
+.chat-pick-row:hover .chat-pick-direct, .chat-pick-row:focus-visible .chat-pick-direct { display: inline-flex; }
+.chat-pick-direct:hover { background: var(--bg-card); color: var(--text); }
+.chat-pick-desc { min-height: 36px; padding: 4px 8px; font-size: var(--ui-font-meta, 12px); line-height: 1.5; color: var(--text-muted); }
+.chat-pick-desc b { display: block; font-weight: 500; color: var(--text-light); }
+
+/* ─── C 抽屉(触屏):照手机端 .mb-sheet 的几何,不依赖它的样式表 ─── */
+.chat-pick-scrim {
+  position: fixed; inset: 0; z-index: 100; display: flex; flex-direction: column; justify-content: flex-end;
+  background: rgba(0, 0, 0, 0.4); -webkit-app-region: no-drag; animation: chat-pick-fade var(--duration-fast) var(--ease-calm);
+}
+.chat-pick-sheet {
+  position: relative; display: flex; flex-direction: column; max-height: 76%;
+  padding: 6px 10px calc(14px + env(safe-area-inset-bottom)); box-sizing: border-box;
+  border-radius: 16px 16px 0 0; background: var(--bg-card); color: var(--text); box-shadow: var(--card-shadow);
+  animation: chat-pick-up var(--duration-slow) var(--ease-drawer);
+}
+.chat-pick-grip { flex: none; width: 40px; height: 4px; margin: 6px auto 8px; border-radius: 2px; background: var(--border); }
+.chat-pick-head { flex: none; display: flex; flex-direction: column; gap: 2px; padding: 2px 12px 8px; }
+.chat-pick-head b { font-size: var(--ui-font-title, 16px); font-weight: 600; }
+.chat-pick-head span { font-size: var(--ui-font-meta, 12px); color: var(--text-muted); }
+.chat-pick-list { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.chat-pick-sheet .chat-pick-row {
+  display: flex; align-items: center; gap: 12px; width: 100%; padding: 9px 12px; box-sizing: border-box;
+  border: none; border-radius: var(--radius-md, 12px); background: transparent; color: var(--text-light);
+  font: inherit; font-size: var(--ui-font-heading, 14px); text-align: left;
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+}
+.chat-pick-sheet .chat-pick-row:active, .chat-pick-sheet .chat-pick-row.is-held { background: var(--overlay-medium); }
+.chat-pick-sheet .chat-pick-row:disabled { opacity: 0.4; }
+.chat-pick-sheet .chat-pick-row.is-picked { color: var(--text); }
+.chat-pick-sheet .chat-pick-icon,
+.chat-pick-sheet .chat-pick-icon .agent-pill-avatar,
+.chat-pick-sheet .chat-pick-icon .agent-pill-initial { width: 30px; height: 30px; }
+.chat-pick-sheet .chat-pick-icon .agent-pill-initial { font-size: var(--ui-font-body, 13px); }
+.chat-pick-sheet .chat-pick-index { min-width: 22px; height: 22px; font-size: var(--ui-font-meta, 12px); }
+.chat-pick-sheet .chat-pick-section { padding: 10px 12px 4px; }
+.chat-pick-sheet .chat-pick-sep { height: var(--border-width, 1px); margin: 4px 12px; background: var(--border); }
+.chat-pick-held {
+  position: absolute; left: 28px; right: 28px; transform: translateY(-100%); z-index: 1;
+  padding: 10px 12px; border-radius: var(--radius-md, 12px);
+  border: var(--border-width, 1px) solid var(--border); background: var(--bg-card); box-shadow: var(--card-shadow);
+}
+.chat-pick-held p { margin: 0; font-size: var(--ui-font-meta, 12px); line-height: 1.55; color: var(--text-muted); }
+.chat-pick-held p b { display: block; margin-bottom: 2px; font-size: var(--ui-font-body, 13px); font-weight: 600; color: var(--text); }
+.chat-pick-held button {
+  display: flex; align-items: center; gap: 8px; width: 100%; margin-top: 8px; padding: 9px 6px 2px;
+  border: none; border-top: var(--border-width, 1px) solid var(--border); background: transparent;
+  color: var(--text-light); font: inherit; font-size: var(--ui-font-body, 13px);
+}
+@keyframes chat-pick-up { from { transform: translateY(100%); } to { transform: none; } }
+@keyframes chat-pick-fade { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .chat-pick-scrim, .chat-pick-sheet { animation: none; } }

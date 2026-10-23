@@ -89,10 +89,16 @@ export const EnginePicker: React.FC<{
     <div className="engine-picker">
       <CompactChatPicker
         label={t('chatPicker.engine')}
-        value={selectedId}
+        title={t('engine.pickTitle')}
         icon={warmingId ? <Loader2 size={16} className="spin" /> : <EngineIcon engineId={selectedId} size={16} />}
-        options={options.map((option) => ({ value: option.id, name: option.name, disabled: !!warmingId && option.id !== warmingId }))}
-        onChange={(id) => { if (!warmingId) onSelect(id) }}
+        name={options.find((o) => o.id === selectedId)?.name || t('chatPicker.engine')}
+        status={warmingId ? t('engine.warming', { name: warmingName }) : undefined}
+        items={options.map((o) => ({
+          id: o.id, name: o.name, icon: <EngineIcon engineId={o.id} size={18} />,
+          mark: o.id === selectedId ? true : undefined, disabled: !!warmingId && o.id !== warmingId,
+        }))}
+        onPick={(id) => { if (!warmingId) onSelect(id) }}
+        closeOnPick={() => true}
         busy={!!warmingId}
       />
       <PillBar label={t('engine.pickTitle')}>
