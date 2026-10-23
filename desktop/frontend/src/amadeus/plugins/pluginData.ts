@@ -26,7 +26,7 @@ export const toDb = (db: AggDb): PluginDatabase => ({
   kind: db.isNoteView ? 'notes' : 'table',
   columns: db.columns.map((c) => ({ id: c.id, name: c.name, type: c.type, base: resolveBaseType(c.type) })),
   // 拷贝:宿主 store 里的 cells 是共享引用,插件原地改了会随下一次保存落盘(还绕过盖章列)
-  rows: db.rows.map((r) => ({ id: r.rowId, name: r.name, cells: copyCells(r.cells) })),
+  rows: db.rows.map((r) => ({ id: r.rowId, name: r.name, cells: copyCells(r.cells), ...(r.body?.trim() ? { hasBody: true } : {}) })),
 })
 
 const toTask = (m: MdMark): PluginNoteTask => ({
