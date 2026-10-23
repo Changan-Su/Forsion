@@ -55,6 +55,7 @@ import { sessionSettingsProvider } from './builtin/sessionSettings.js';
 import { appSettingsProvider } from './builtin/appSettings.js';
 import { sessionStatusProvider } from './builtin/sessionStatus.js';
 import { forsionAccountProvider } from './builtin/forsionAccount.js';
+import { webPublishProvider } from './builtin/webPublish.js';
 import { intelligentUiProvider } from './builtin/intelligentUi.js';
 import { sketchProvider } from './builtin/sketch.js';
 import { manageAutomationProvider } from './builtin/manageAutomation.js';
@@ -210,6 +211,7 @@ registerToolProvider(sessionStatusProvider); // both 前台 run:session_status �
 registerToolProvider(forsionAccountProvider); // both 前台 run、且 brain 有账号面(cloud)时:forsion_account 读额度 / 积分 / 套餐 / 用量,forsion_account_action 代办三件(每次都问;全 deferred,append 末尾,快照不变)
 registerToolProvider(marketplaceProvider); // both 前台 run、且 brain 有商店面时:search_marketplace 查商店条目(chat 常驻)、get_marketplace_plugin 按 ID 取详情(chat 按需;append 末尾,保前缀缓存)
 registerToolProvider(museMessageProvider); // 仅 Muse 周期(ctx.muse,子代理除外):message_user 往 Muse 私聊发一条(要用户回话 / 拍板的;append 末尾,普通 run 不可见,快照不变)
+registerToolProvider(webPublishProvider); // both 前台 run、且 brain 有账号面(cloud)时:publish_web_page 把工作区的网页 / 静态文件夹发成 Forsion Connect 链接或下线(每次都问;deferred,append 末尾,快照不变)
 // 插件(表情包/分段等)现为文件夹插件(plugins/),经 activateAllPlugins→ctx.registerPlugin 注册其工具,不在此处。
 
 /** ctx 自带 profile(loop 按 run.app_id 解析)优先;缺省回退本进程装配的 profile。 */

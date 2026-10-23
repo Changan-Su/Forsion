@@ -201,6 +201,7 @@ import { humanRealLive } from './lib/human-real-live.mjs';
 import { dreamSeedLive } from './lib/dream-seed-live.mjs';
 import { layersLive } from './lib/layers-live.mjs';
 import { accountLive, startFakeCloud } from './lib/account-live.mjs';
+import { webPublishLive } from './lib/webpublish-live.mjs';
 import { plantPlugin, pluginDiagLive, registeredViews, STUB_SELFTEST } from './lib/plugin-diag-live.mjs';
 import { plantNotebookPlugin, notebookLive, notebookSelftest } from './lib/notebook-live.mjs';
 import { cuVisionSetup, cuVisionLive, defaultFixture as cuDefaultFixture } from './lib/cu-vision-live.mjs';
@@ -217,7 +218,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'parkedask', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'imgtools', 'account', 'nested', 'branch', 'musedm', 'humandims'];
+const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'parkedask', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'imgtools', 'account', 'webpublish', 'nested', 'branch', 'musedm', 'humandims'];
 KEYS.push('bluebird');
 KEYS.push('signals');
 KEYS.push('musechat');
@@ -312,6 +313,7 @@ OPT_IN.add('pluginicon'); // 一个 run;只在动 forsion-plugin 手册「Startu
 OPT_IN.add('storeview'); // 一个 run;只在动 forsion-plugin 手册里 registerStoreView 那行、或商店左栏的插件页接缝时才有信息量。
 OPT_IN.add('skillcreate'); // 四个 run;只在动 manage_skill / use_skill / 随包的 skill-creator 技能时才有信息量。
 OPT_IN.add('account'); // --only account:五个 run;引擎的云端地址指向台架里的假 Forsion 云端 —— 只在显式跑它时才指,别的场景照旧连不上云端。
+OPT_IN.add('webpublish'); // --only webpublish:三个 run,同用 account 那个假云端(Forsion Connect 的列表 / 发布 / 下线也在里面)。
 OPT_IN.add('realuse'); // 真实使用模拟:每轮 12 个 run(--rounds),--usage-db 再加一个 Muse 周期;单独跑。
 OPT_IN.add('suggest'); // 三个 run + 三次建议调用;只在动 services/promptSuggestion.ts(提示词 / 前缀对齐)或主循环收尾处的快照时才有信息量。
 OPT_IN.add('humanreal'); // 协作说明写成什么样:每轮 6 个 run + 1 次判官(--rounds);只在动 HUMAN_GUIDANCE / manage_human 时才有信息量。
@@ -1224,7 +1226,7 @@ if (ONLY.has('notebook') && !NOTEBOOK_NEG) {
 }
 
 // account(10-10):假 Forsion 云端(额度 / 套餐 / 积分是已知数),只在跑它时起;显式给了 TANGU_LIVE_CLOUD_URL 的以那个为准。
-const FAKE_CLOUD = ONLY.has('account') && !process.env.TANGU_LIVE_CLOUD_URL ? await startFakeCloud(TOKEN) : null;
+const FAKE_CLOUD = (ONLY.has('account') || ONLY.has('webpublish')) && !process.env.TANGU_LIVE_CLOUD_URL ? await startFakeCloud(TOKEN) : null;
 
 const child = spawn(process.execPath, [
   entry, '--port', String(port), '--host', '127.0.0.1', '--data-dir', join(home, 'state.db'),
@@ -6532,6 +6534,11 @@ Then reply with only the command output.`,
   await scenario('account', 'account 「我还剩多少」:账号额度 + 本对话余量,账号动作逐次确认', async () => {
     if (!FAKE_CLOUD) return { ok: false, detail: '给了 TANGU_LIVE_CLOUD_URL:这个场景要用台架自带的假云端(数是已知的),去掉那个环境变量再跑' };
     return accountLive({ run, api, sleep, cloud: FAKE_CLOUD });
+  });
+  // webpublish(10-23):publish_web_page 从工作会话(本机文件)和聊天会话(会话沙箱里刚写的页)各发一次,逐次弹卡;再问「发过哪些」只读列出。判据与负对照见 lib/webpublish-live.mjs。
+  await scenario('webpublish', 'webpublish 「发布成网页」:工作 / 聊天会话各发一次,逐次确认,再列出已发布', async () => {
+    if (!FAKE_CLOUD) return { ok: false, detail: '给了 TANGU_LIVE_CLOUD_URL:这个场景要用台架自带的假云端,去掉那个环境变量再跑' };
+    return webPublishLive({ run, cloud: FAKE_CLOUD, workspace });
   });
   await finish();
 } catch (e) {
