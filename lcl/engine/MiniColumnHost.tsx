@@ -89,7 +89,7 @@ export const MiniColumnHost: React.FC<{
       params: { ...current.mini.mainView.params, ...useWorkspace.getState().getActiveLeaf()?.params } })
   }
   return (
-    <div className="mini-card-shell mini-card-floating" data-space={direct ? 'direct' : space?.id}>
+    <div className="mini-card-shell mini-card-floating" data-space={direct ? 'direct' : space?.id} data-resizable={resizable || undefined}>
       {/* 顶栏浮在内容之上、收成两颗胶囊(手机 .mb-cap 同款,10-17 方案 A);胶囊之外的透明条是拖拽区。 */}
       <header className="mini-card-chrome">
         <div className="mini-card-cap">

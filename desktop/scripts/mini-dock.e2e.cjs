@@ -147,8 +147,26 @@ async function main() {
       const eb = expanded.bounds
       check(`${edge}: expansion returns to the original display edge`, edge === 'left' ? eb.x === a.x : edge === 'right' ? eb.x + eb.width === a.x + a.width : edge === 'top' ? eb.y === a.y : eb.y + eb.height === a.y + a.height, eb)
       await mini.screenshot({ path: path.join(output, `${edge}-expanded.png`), omitBackground: true })
+      if (edge === 'left') {
+        const before = await app.evaluate(() => globalThis.__miniProbe.w.getContentBounds())
+        await mini.evaluate(() => {
+          window.tangu.miniResize('e', true, { x: 1000, y: 1000 })
+          window.tangu.miniResize('e', false, { x: 1040, y: 1000 })
+          window.tangu.miniResize(null)
+        })
+        await pause(150)
+        const resized = await app.evaluate(() => globalThis.__miniProbe.w.getContentBounds())
+        check('resizing an expanded docked card changes its width', resized.width === before.width + 40 && resized.x === before.x, { before, resized })
+        await app.evaluate(() => { const p = globalThis.__miniProbe, a = globalThis.__miniProbeArea; p.cursor = { x: a.x + a.width / 2, y: a.y + a.height / 2 } })
+        await pause(500)
+        const peek = await mini.evaluate(() => { const r = document.querySelector('.mini-card-shell').getBoundingClientRect(); return r.right })
+        check('resized docked card folds back to a 14 DIP handle', Math.abs(peek - 14) <= 1, peek)
+        await app.evaluate(() => { const p = globalThis.__miniProbe, a = globalThis.__miniProbeArea, b = p.w.getContentBounds(); p.cursor = { x: a.x + 7, y: b.y + b.height / 2 } })
+        await pause(500)
+        check('resized docked handle can expand again', await mini.evaluate(() => Math.abs(document.querySelector('.mini-card-shell').getBoundingClientRect().x) < 1))
+      }
       // A deliberate drag away must cancel docking and release the native input mask.
-      await app.evaluate(() => { const p = globalThis.__miniProbe, a = globalThis.__miniProbeArea; p.w.setContentBounds({ ...p.w.getContentBounds(), x: a.x + 50, y: a.y + 50 }) })
+      await app.evaluate((_, size) => { const p = globalThis.__miniProbe, a = globalThis.__miniProbeArea; p.w.setContentBounds({ ...p.w.getContentBounds(), x: a.x + 50, y: a.y + 50, ...size }) }, meta.cardSize)
       await pause(400)
       check(`${edge}: dragging away restores the full card and native input region`, await mini.evaluate(() => getComputedStyle(document.querySelector('.mini-card-shell')).transform === 'none') && await app.evaluate(() => globalThis.__miniProbe.shapes.at(-1)?.length === 0))
     }
