@@ -24,8 +24,8 @@ export interface HoverSpec {
   side?: HoverSide
   /** 锚定矩形(视口 px),缺省 = 触发元素的 getBoundingClientRect()。 */
   rect?: (trigger: HTMLElement) => RectLike
-  /** 往浮层里写内容。到点才调;false / 抛错 = 不弹。可以异步。 */
-  fill(el: HTMLDivElement): boolean | Promise<boolean>
+  /** 往浮层里写内容。到点才调;false / 抛错 = 不弹。可以异步:异步回来先问 alive(),已经过时(换了别的、离开了)就别写。 */
+  fill(el: HTMLDivElement, alive: () => boolean): boolean | Promise<boolean>
   /** 浮层不再显示这份内容时调(收完,或接力给了别人):React 调用方在这里摘掉 portal。 */
   release?(): void
 }
@@ -109,6 +109,7 @@ class HoverSurface {
   /** 键盘聚焦:立刻出,不做动画。 */
   focus(trigger: HTMLElement, spec: HoverSpec): void {
     window.clearTimeout(this.waitTimer)
+    this.pending = trigger
     void this.show(trigger, spec, ++this.gen, true)
   }
 
@@ -127,6 +128,7 @@ class HoverSurface {
   /** 触发点被拆掉 / 改了内容:只在它是当前主人时收。 */
   drop(trigger: HTMLElement): void {
     if (this.pressed === trigger) this.pressed = null
+    if (this.pending === trigger) { window.clearTimeout(this.waitTimer); this.gen++; this.pending = null } // 还在等延时 / 等内容的也作废
     if (this.owner === trigger) this.hide()
   }
 
@@ -139,7 +141,7 @@ class HoverSurface {
     if (r.bottom < 0 || r.top > window.innerHeight) return
     const el = this.el ?? document.createElement('div')
     let ok: boolean
-    try { ok = await spec.fill(el) } catch { ok = false }
+    try { ok = await spec.fill(el, () => myGen === this.gen) } catch { ok = false }
     if (myGen !== this.gen) return
     this.pending = null
     if (!ok) {
@@ -148,7 +150,8 @@ class HoverSurface {
       return
     }
     window.clearTimeout(this.lingerTimer)
-    if (this.spec && this.spec !== spec) this.spec.release?.()
+    // 换了主人才让上一份放手;同一个触发点(悬停之后又键盘聚焦)的两份 spec 共用一个 portal,放手会把刚填的内容清掉。
+    if (this.spec && this.spec !== spec && this.owner !== trigger) this.spec.release?.()
     this.showSeq++
     this.owner = trigger
     this.spec = spec
@@ -233,8 +236,9 @@ export interface TooltipOptions {
 }
 
 function fillLines(content: TooltipContent): HoverSpec['fill'] {
-  return async (el) => {
+  return async (el, alive) => {
     const v = typeof content === 'function' ? await content() : content
+    if (!alive()) return false
     const lines = (Array.isArray(v) ? v : v ? [v] : []).filter((l) => typeof l === 'string' && l)
     if (!lines.length) return false
     el.replaceChildren(...lines.map((l, i) => {
@@ -286,7 +290,7 @@ export function attachTooltip(el: HTMLElement, content: TooltipContent, opts: To
   const leave = (): void => tooltipSurface.leave(el)
   const down = (): void => tooltipSurface.press(el)
   const focus = (): void => { if (focusOn && keyboardFocus(el)) tooltipSurface.focus(el, spec) }
-  const blur = (): void => { if (tooltipSurface.isOwner(el)) tooltipSurface.hide() }
+  const blur = (): void => tooltipSurface.drop(el) // 含异步内容还没回来的那一次
   el.addEventListener('mouseenter', enter)
   el.addEventListener('mouseleave', leave)
   el.addEventListener('mousedown', down)

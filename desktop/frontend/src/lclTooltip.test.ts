@@ -146,3 +146,48 @@ it('弹着移到一个这次不出提示的元素:不一下子消失,宽限后�
   expect(tip()!.firstElementChild!.textContent).toBe('Beta')
   empty.remove()
 })
+
+// Codex 评审(10-23)的三条竞态,各钉一条。负对照(实跑):去掉 fill 里的 alive() 与 drop() 对 pending 的作废 → 三条全红。
+it('过时的异步内容不覆盖:A 弹着,B 的内容还在路上就移到 C,B 回来也不改字', async () => {
+  let resolveB!: (v: string) => void
+  const c = document.createElement('button')
+  const slow = document.createElement('button')
+  document.body.append(slow, c)
+  handles.push(attachTooltip(slow, () => new Promise<string>((r) => { resolveB = r })), attachTooltip(c, 'Gamma'))
+  fire(a, 'mouseenter')
+  await vi.advanceTimersByTimeAsync(320)
+  fire(a, 'mouseleave'); fire(slow, 'mouseenter')
+  await vi.advanceTimersByTimeAsync(0)
+  fire(slow, 'mouseleave'); fire(c, 'mouseenter')
+  await vi.advanceTimersByTimeAsync(0)
+  expect(tip()!.textContent).toBe('Gamma')
+  resolveB('Stale')
+  await vi.advanceTimersByTimeAsync(0)
+  expect(tip()!.textContent).toBe('Gamma')
+  slow.remove(); c.remove()
+})
+
+it('等延时的时候 dispose(插件停用):到点也不弹', async () => {
+  const h = attachTooltip(a, 'late')
+  fire(a, 'mouseenter')
+  await vi.advanceTimersByTimeAsync(100)
+  h.dispose()
+  for (const x of handles) x.dispose()
+  handles = []
+  await vi.advanceTimersByTimeAsync(400)
+  expect(tip()).toBeNull()
+})
+
+it('键盘聚焦、异步内容还没回来就失焦:回来也不弹', async () => {
+  let resolve!: (v: string) => void
+  const el = document.createElement('button')
+  document.body.append(el)
+  handles.push(attachTooltip(el, () => new Promise<string>((r) => { resolve = r })))
+  el.matches = ((sel: string) => sel === ':focus-visible') as typeof el.matches
+  el.dispatchEvent(new FocusEvent('focus'))
+  el.dispatchEvent(new FocusEvent('blur'))
+  resolve('Too late')
+  await vi.advanceTimersByTimeAsync(0)
+  expect(tip()).toBeNull()
+  el.remove()
+})
