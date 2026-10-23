@@ -447,6 +447,8 @@
 .t2c-apv .t2c-apv-body > .plan-decision { border-color: transparent; box-shadow: none; background: transparent; padding: 0; opacity: 1; }
 .t2c-apv .t2c-apv-body > .t2-tasks { margin-top: 0; }
 .t2c-apv .t2c-apv-body .t2-taskcard { background: transparent; padding: 0; }
+/* Muse 后台审批(收件箱那张卡):待批时收件箱给它描了边,在卡片堆里是卡中卡,去掉(四类选择器压过 inbox 的三类) */
+.t2c-apv .t2c-apv-body .t2-taskcard.ibx-approval { border-color: transparent; }
 .t2c-apv .approval-card .approval-title { margin-bottom: 6px; }
 /* 托盘里 diff 收矮一档(流里是 320px);卡还是放不下时按钮吸在托盘底边 —— 批准 / 拒绝永远不滚出视野 */
 .t2c-apv .approval-diff { max-height: min(24vh, 220px); }

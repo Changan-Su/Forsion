@@ -5,6 +5,8 @@
  * 托盘只是「本会话所有 pending」的另一个视图:选中的一项(缺省最早那项)展开,其余缩成一行,点哪行展开哪行。
  * 10-23 起(方案「待确认卡片」B)它是一叠卡:聊天里跟在最新内容后面(画布模式 / 预览仍在输入框上方),只露最上面一张,
  * 后面几张露出卡沿;头行写「还有 审批 1 · 提问 1」,‹ › 换卡。任务卡(```forsion-task)作为第四类垫在最后。
+ * 交互卡片(要你点 / 答的)一律进这里,内容卡片(Intelligent UI、白板、清单、插件结果卡)留在产出它的那条消息上;
+ * Muse 私聊里它后台排队的审批与它提的待办也在这里(10-23)。
  */
 import { useEffect, useRef, useState, type RefObject } from 'react'
 import { ArrowDown, ChevronDown, ChevronLeft, ChevronRight, ShieldQuestion } from 'lucide-react'
@@ -16,6 +18,8 @@ import type { TrayItem } from './approvalQueue'
 import type { PendingTask } from './pendingTasks'
 import { TaskCards } from './TaskCards'
 import type { MessageHandlers } from './EditorialMessage'
+import { ApprovalCard as MuseApprovalCard } from '../inbox/InboxBody'
+import { MuseTodoCards, museApprovalSettled, type MuseApprovalItem } from './MuseDm'
 import '../../tangu/messages'
 
 registerMessages({
@@ -32,8 +36,11 @@ registerMessages({
   'approval.pill': { zh: '{n} 件等你', en: '{n} waiting for you' },
 })
 
-/** 卡片堆里的一项:挡着 agent 的(审批 / 提问 / 计划)在前,任务卡垫底。 */
-export type DeckItem = TrayItem | PendingTask
+/** 卡片堆里的一项:挡着 agent 的(审批 / 提问 / 计划,Muse 的后台审批)在前,任务卡垫底。 */
+export type DeckItem = TrayItem | MuseApprovalItem | PendingTask
+
+/** 头行计数:Muse 的后台审批算审批。 */
+const countKind = (i: DeckItem): 'approval' | 'inquiry' | 'plan' | 'task' => (i.kind === 'muse-approval' ? 'approval' : i.kind)
 
 const ARM_MS = 350
 
@@ -103,12 +110,12 @@ export function ApprovalTray({ items, onDecide, onAnswer, onTask, sessionId }: {
   }
   if (!cur) return null
   const busy = sent.has(cur.id)
-  const title = items.every((i) => i.kind === 'approval') ? 'approval.tray.title' : 'approval.tray.titleAny'
+  const title = items.every((i) => countKind(i) === 'approval') ? 'approval.tray.title' : 'approval.tray.titleAny'
   const idx = items.indexOf(cur)
   const go = (d: number): void => setOpenId(items[(idx + d + items.length) % items.length].id)
   const rest = items.filter((i) => i !== cur)
   const more = (['approval', 'inquiry', 'plan', 'task'] as const)
-    .map((k) => [k, rest.filter((i) => i.kind === k).length] as const)
+    .map((k) => [k, rest.filter((i) => countKind(i) === k).length] as const)
     .filter(([, n]) => n)
     .map(([k, n]) => t(`approval.tray.k${k[0].toUpperCase()}${k.slice(1)}`, { n }))
     .join(' · ')
@@ -133,10 +140,16 @@ export function ApprovalTray({ items, onDecide, onAnswer, onTask, sessionId }: {
           data-tray-kind={cur.kind}
           data-tray-msg={cur.messageId}
         >
-          {cur.kind !== 'task' && cur.agentName && <div className="t2c-apv-from">{cur.agentName}</div>}
+          {cur.kind !== 'task' && cur.kind !== 'muse-approval' && cur.agentName && <div className="t2c-apv-from">{cur.agentName}</div>}
           {cur.kind === 'task' ? (
-            // 落点与锁都在 TaskCards 里(按会话 + 内容记处理过没);处理完它离开卡片堆,写卡那条回答下面留一行结局
-            <TaskCards key={cur.id} tasks={[cur.card]} ownerId={cur.messageId} sessionId={sessionId} createdAt={cur.createdAt} onTask={onTask} />
+            // 落点与锁都在 TaskCards 里(按会话 + 内容记处理过没);处理完它离开卡片堆,写卡那条回答下面留一行结局。
+            // Muse 提的待办按引擎里的真状态给按钮(MuseTodoCards,同流里与收件箱)
+            cur.card.todo
+              ? <MuseTodoCards key={cur.id} tasks={[cur.card]} ownerId={cur.messageId} sessionId={sessionId} createdAt={cur.createdAt} onTask={onTask} />
+              : <TaskCards key={cur.id} tasks={[cur.card]} ownerId={cur.messageId} sessionId={sessionId} createdAt={cur.createdAt} onTask={onTask} />
+          ) : cur.kind === 'muse-approval' ? (
+            // 按 id 读 pending_approvals、直接调引擎裁决(收件箱那张);批完重拉,它离开卡片堆
+            <MuseApprovalCard key={cur.id} id={cur.info.id} onSettled={museApprovalSettled} />
           ) : cur.kind === 'approval' ? (
             <ApprovalCard key={cur.id} req={cur.req} sessionId={sessionId} onDecide={(action, args) => submit(cur.id, () => onDecide(cur.messageId, cur.id, action, args))} />
           ) : cur.kind === 'plan' ? (

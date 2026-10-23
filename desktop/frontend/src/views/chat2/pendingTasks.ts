@@ -61,16 +61,17 @@ export function useTaskHandledVersion(): number {
 export interface PendingTask { kind: 'task'; id: string; messageId: string; card: TaskCard; createdAt?: number; doneKey: string }
 
 const tasksCache = new WeakMap<UiMessage, TaskCard[]>()
-function tasksOf(m: UiMessage): TaskCard[] {
+export function tasksOf(m: UiMessage): TaskCard[] {
   let hit = tasksCache.get(m)
-  if (!hit) { hit = m.content.includes('forsion-task') ? splitSuggestions(m.content, { kinds: ['task'] }).tasks : []; tasksCache.set(m, hit) }
+  // Muse 私聊里它提的待办(origin proactive:todo):`todo:` 头只在这种消息上生效(同 EditorialMessage)
+  if (!hit) { hit = m.content.includes('forsion-task') ? splitSuggestions(m.content, { kinds: ['task'], todo: m.origin === 'proactive:todo' }).tasks : []; tasksCache.set(m, hit) }
   return hit
 }
 
-/** 会话里还在等你选的任务卡,按出现顺序。不收:流式中的、Muse 自己提的待办(origin proactive:todo,状态在服务端,
- *  另有一套)、撤回的、过 7 天的、处理过的。 */
-export function pendingTaskCardsOf(list: UiMessage[] | undefined, sessionId: string, now = Date.now()): PendingTask[] {
-  const done = (m: UiMessage): boolean => m.role === 'assistant' && m.status === 'done' && m.origin !== 'proactive:todo'
+/** 会话里还在等你选的任务卡,按出现顺序。不收:流式中的、撤回的、过 7 天的、处理过的。
+ *  Muse 提的待办(带 `todo:` 的卡)状态在引擎那边:只收 musePending 里有的(引擎确认还 pending);没拉到(null)就先不收。 */
+export function pendingTaskCardsOf(list: UiMessage[] | undefined, sessionId: string, now = Date.now(), musePending?: ReadonlySet<string> | null): PendingTask[] {
+  const done = (m: UiMessage): boolean => m.role === 'assistant' && m.status === 'done'
   const withdrawn = new Set<string>()
   for (const m of list || []) if (done(m)) for (const c of tasksOf(m)) if (c.withdraw) withdrawn.add(c.withdraw)
   const out: PendingTask[] = []
@@ -79,6 +80,7 @@ export function pendingTaskCardsOf(list: UiMessage[] | undefined, sessionId: str
     if (m.timestamp && now - m.timestamp > TASK_CARD_TTL_MS) continue
     tasksOf(m).forEach((card, i) => {
       if (card.withdraw || (card.id && withdrawn.has(card.id))) return
+      if (card.todo && !musePending?.has(card.todo)) return
       const doneKey = taskDoneKey(sessionId, card)
       if (taskHandled(doneKey)) return
       out.push({ kind: 'task', id: `task:${m.id}:${i}`, messageId: m.id, card, createdAt: m.timestamp || undefined, doneKey })

@@ -68,7 +68,7 @@ import { CreationCards } from './CreationCards'
 import { formatDateTime, formatMessageTime } from '../../format/time'
 
 import { TaskCards, TaskTraces, type TaskLanding } from './TaskCards'
-import { MuseApprovalLine, MuseTodoCards, ProactiveMark, isProactive } from './MuseDm'
+import { MuseApprovalLine, MuseTodoCards, MuseTodoTraces, ProactiveMark, isProactive } from './MuseDm'
 import { CHILD_UPDATE_OPEN, ChildUpdateLine, ForkBlock, childIdsOf } from './ChildSessions'
 import { APPROVAL_UPDATE_OPEN, INQUIRY_UPDATE_OPEN, approvalForCall, parseApprovalUpdate, parseInquiryUpdate, pickPlanInquiry, type ApprovalOutcome } from './approvalQueue'
 import { isRemoteApprover, wasDecidedHere } from '../../components/ApprovalCard'
@@ -726,10 +726,12 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
         {runSid && <ForkBlock sessionId={runSid} messageId={msg.id} childIds={childIds} onSuggest={handlers?.onSuggest} />}
         {/* 任务卡:顺手发现的、塞进当前对话会撑爆的活。track=true 的卡主按钮是「交给 Muse 追踪」。同样只在 done 上渲染。
             渲染与落点按钮在 TaskCards(与收件箱共用)。 */}
-        {!!tasks.length && msg.status === 'done' && (museTodo
-          ? <MuseTodoCards tasks={tasks} ownerId={msg.id} onTask={handlers?.onTask} sessionId={runSid || undefined} createdAt={msg.timestamp || undefined} />
-          : handlers?.onJumpDeck && runSid
-            ? <TaskTraces tasks={tasks} ownerId={msg.id} sessionId={runSid} createdAt={msg.timestamp || undefined} onJump={handlers.onJumpDeck} />
+        {!!tasks.length && msg.status === 'done' && (handlers?.onJumpDeck && runSid
+          ? museTodo
+            ? <MuseTodoTraces tasks={tasks} ownerId={msg.id} sessionId={runSid} createdAt={msg.timestamp || undefined} onJump={handlers.onJumpDeck} />
+            : <TaskTraces tasks={tasks} ownerId={msg.id} sessionId={runSid} createdAt={msg.timestamp || undefined} onJump={handlers.onJumpDeck} />
+          : museTodo
+            ? <MuseTodoCards tasks={tasks} ownerId={msg.id} onTask={handlers?.onTask} sessionId={runSid || undefined} createdAt={msg.timestamp || undefined} />
             : <TaskCards tasks={tasks} ownerId={msg.id} onTask={handlers?.onTask} sessionId={runSid || undefined} createdAt={msg.timestamp || undefined} />)}
         {museApprovals.map((id) => <MuseApprovalLine key={id} id={id} />)}
         {/* 作品卡:把这条对话里做的东西变成「造物」(点了宿主才建文件夹 / 复制)。同样只在 done 上渲染。 */}

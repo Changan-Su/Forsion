@@ -28,6 +28,9 @@ registerMessages({
   'chat.task.traceDone': { zh: '任务卡「{title}」· {state}', en: 'Task card “{title}” · {state}' },
   'chat.task.redo': { zh: '要做就跟我说一声', en: 'Ask me to write a fresh one' },
   'chat.task.expiredShort': { zh: '已过期 · 7 天没开始', en: 'Expired · not started within 7 days' },
+  'chat.task.todoHandled': { zh: '已处理', en: 'Handled' },
+  'chat.task.todoGone': { zh: '已不存在', en: 'No longer exists' },
+  'chat.task.todoReadFail': { zh: '状态读取失败', en: 'Couldn’t load its status' },
 })
 
 export { TASK_CARD_TTL_MS, type TaskLanding }
@@ -90,14 +93,17 @@ function doneTextOf(done: TaskLanding | undefined, c: TaskCard): string {
 }
 
 /** 写卡那条回答下面:卡本身进了对话末尾的卡片堆(方案「待确认卡片」B),这里只留一行 —— 还在等你选的并成一行
- *  「N 张任务卡 · 在对话最下面」(点了滚过去),处理过 / 撤回 / 过期的各一行结局;从卡开出的子会话照旧原地变成子会话行。 */
-export function TaskTraces({ tasks, ownerId, sessionId, createdAt, onJump }: {
+ *  「N 张任务卡 · 在对话最下面」(点了滚过去),处理过 / 撤回 / 过期的各一行结局;从卡开出的子会话照旧原地变成子会话行。
+ *  Muse 提的待办(todo 卡)按引擎里的真状态(todoStatus,MuseTodoTraces 传入):还 pending 才算在卡片堆里,还在查的先不画。 */
+export function TaskTraces({ tasks, ownerId, sessionId, createdAt, onJump, todoStatus, onTodoRetry }: {
   tasks: TaskCard[]
   ownerId: string
   sessionId: string
   createdAt?: number
   /** 滚到对话末尾的卡片堆。 */
   onJump?: () => void
+  todoStatus?: Record<string, string>
+  onTodoRetry?: () => void
 }) {
   const { t } = useI18n()
   const withdrawn = useWithdrawn(sessionId)
@@ -116,6 +122,19 @@ export function TaskTraces({ tasks, ownerId, sessionId, createdAt, onJump }: {
     else if (rec) rows.push(line(key, <Check size={13} />, t('chat.task.traceDone', { title: c.title, state: t(doneTextOf(rec.landing, c)) }), rec.landing))
     else if (c.id && withdrawn.has(c.id)) rows.push(line(key, <X size={13} />, t('chat.task.traceDone', { title: c.title, state: `${t('chat.task.withdrawn')}${withdrawn.get(c.id) ? ` · ${withdrawn.get(c.id)}` : ''}` }), 'withdrawn'))
     else if (expired) rows.push(line(key, <Clock size={13} />, `${t('chat.task.traceDone', { title: c.title, state: t('chat.task.expiredShort') })} · ${t('chat.task.redo')}`, 'expired'))
+    else if (c.todo && todoStatus) {
+      const st = todoStatus[c.todo]
+      if (st === 'pending') pending.push(c)
+      else if (st === 'injected') rows.push(line(key, <Check size={13} />, t('chat.task.traceDone', { title: c.title, state: t('chat.task.doneMuseDo') }), 'muse'))
+      else if (st === 'missing') rows.push(line(key, <X size={13} />, t('chat.task.traceDone', { title: c.title, state: t('chat.task.todoGone') }), 'missing'))
+      else if (st === 'error') rows.push(
+        <div key={key} className="t2-dim t2-tasktrace" data-task-trace="error">
+          <X size={13} /><span>{t('chat.task.traceDone', { title: c.title, state: t('chat.task.todoReadFail') })}</span>
+          {onTodoRetry && <button type="button" className="t2-taskcard-toggle" onClick={onTodoRetry}>{t('inbox.approval.retry')}</button>}
+        </div>,
+      )
+      else if (st) rows.push(line(key, <Check size={13} />, t('chat.task.traceDone', { title: c.title, state: t('chat.task.todoHandled') }), 'handled'))
+    }
     else pending.push(c)
   })
   if (pending.length) {
