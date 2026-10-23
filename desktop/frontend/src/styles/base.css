@@ -1682,6 +1682,21 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .todo-row .todo-mark { flex-shrink: 0; margin-top: 1px; display: inline-flex; }
 .todo-row.completed { color: var(--text-faint); }
 .todo-row.completed .todo-text { text-decoration: line-through; }
+/* 任务清单收成一行(TodoList folded,10-23 方案 B):不是卡,是流里的一行;点开才是整张 .todo-card */
+.todo-strip {
+  display: flex; align-items: center; gap: 7px; width: 100%; max-width: 700px; box-sizing: border-box; padding: 4px 0;
+  border: none; background: none; cursor: pointer; text-align: left;
+  font-family: var(--font-ui); font-size: var(--ui-font-meta, 12px); color: var(--text-muted);
+}
+.todo-strip:hover { color: var(--text); }
+.todo-strip > svg { flex: none; color: var(--accent-ink); }
+.todo-strip > b { flex: none; font-weight: 600; color: var(--text); }
+.todo-strip-bar { flex: none; width: 44px; height: 4px; border-radius: 2px; overflow: hidden; background: var(--overlay-medium, rgba(127, 127, 127, 0.16)); }
+.todo-strip-bar > i { display: block; height: 100%; border-radius: 2px; background: var(--accent-ink); }
+.todo-strip-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.todo-strip > .todo-strip-chev { color: var(--text-muted); }
+.todo-fold { margin-left: auto; display: inline-flex; padding: 2px; border: none; border-radius: var(--radius-sm, 6px); background: none; color: var(--text-muted); cursor: pointer; }
+.todo-fold:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.1)); color: var(--text); }
 .todo-mark.completed { color: var(--green); }
 .todo-mark.in_progress { color: var(--accent-ink); }
 .todo-mark.pending { color: var(--text-ghost); }

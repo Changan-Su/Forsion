@@ -335,13 +335,15 @@ async function main() {
         kind: body?.getAttribute('data-tray-kind'),
         question: (body?.querySelector('.inquiry-q')?.textContent || '').trim(),
         options: body ? body.querySelectorAll('.inquiry-opts .btn').length : 0,
-        streamCards: document.querySelectorAll('.t2-stream .inquiry-card').length,
+        // 卡片堆在流的末尾(10-23 方案 B):算「流里插了待答卡」时不算堆里那张
+        streamCards: [...document.querySelectorAll('.t2-stream .inquiry-card')].filter((c) => !c.closest('[data-pending-deck]')).length,
+        inTail: !!document.querySelector('.t2-stream [data-pending-deck] .t2c-apv'),
         pointer: !!document.querySelector('.t2-stream [data-inquiry-pointer]'),
         waitingYou: !!document.querySelector('.t2-stream .tool-group [data-waiting-you]'),
       }
     })
-    check('Q1 提问整张进托盘(问题 + 选项),流里不插待答卡、只留一行指路;ask_user 那行显示「等你回复」',
-      askProbe.kind === 'inquiry' && /包管理器/.test(askProbe.question) && askProbe.options === 2 && askProbe.streamCards === 0 && askProbe.pointer && askProbe.waitingYou,
+    check('Q1 提问整张进对话末尾的卡片堆(问题 + 选项),原消息里不插待答卡、也不留「在输入框上方」那行;ask_user 那行显示「等你回复」',
+      askProbe.kind === 'inquiry' && /包管理器/.test(askProbe.question) && askProbe.options === 2 && askProbe.streamCards === 0 && askProbe.inTail && !askProbe.pointer && askProbe.waitingYou,
       JSON.stringify(askProbe))
     await win.screenshot({ path: process.env.ASK_SHOT || '/tmp/tray-ask.png' }).catch(() => {}) // 观感自查:提问在托盘
     stub.seen.inquiries.length = 0
@@ -723,16 +725,18 @@ async function main() {
     ])
     await send(win, '跑几个要批准的动作')
     await win.waitForTimeout(1200)
-    // 审批卡在输入框上方的托盘里攒着(一次展开一张,其余缩成行),流里只留一行指路。先断托盘本身,再逐张点开读。
+    // 审批卡攒在对话末尾的卡片堆里(10-23 方案 B:一次露一张,后面几张露卡沿,‹ › 换卡),原消息里不插整张卡、不留指路行。先断卡片堆本身,再逐张翻到读。
     const tray = await win.evaluate(() => ({
       count: document.querySelector('[data-approval-tray]')?.getAttribute('data-approval-tray'),
-      inComposer: !!document.querySelector('.composer-anchor .t2c-apv'),
-      streamCards: document.querySelectorAll('.t2-stream .approval-card').length,
-      pointer: document.querySelector('.t2-stream [data-approval-pointer]')?.getAttribute('data-approval-pointer'),
-      rows: document.querySelectorAll('.t2c-apv-row').length,
+      inTail: !!document.querySelector('.t2-stream-inner > [data-pending-deck]:last-child .t2c-apv'),
+      streamCards: [...document.querySelectorAll('.t2-stream .approval-card')].filter((c) => !c.closest('[data-pending-deck]')).length,
+      pointer: document.querySelector('.t2-stream [data-approval-pointer]')?.getAttribute('data-approval-pointer') || null,
+      n: (document.querySelector('.t2c-apv-n')?.textContent || '').trim(),
+      peek: document.querySelector('.t2c-apv')?.getAttribute('data-peek'),
+      more: (document.querySelector('.t2c-apv-more')?.textContent || '').trim(),
     }))
-    check('D0 五个待批审批攒进输入框上方的托盘(一张展开 + 四行排队),流里不插整张卡、只留一行指路',
-      tray.count === '5' && tray.inComposer && tray.streamCards === 0 && tray.pointer === '5' && tray.rows === 4, JSON.stringify(tray))
+    check('D0 五个待批审批攒进对话末尾的卡片堆(露一张 + 两道卡沿,「还有 审批 4」,1 / 5),原消息里不插整张卡、不留指路行',
+      tray.count === '5' && tray.inTail && tray.streamCards === 0 && !tray.pointer && tray.n === '1 / 5' && tray.peek === '2' && tray.more === '还有 审批 4', JSON.stringify(tray))
     const sneaky = win.locator('.approval-card', { hasText: '[200 spaces]' }).first()
     await sneaky.evaluate((el) => el.scrollIntoView({ block: 'center', behavior: 'instant' })).catch(() => {})
     await win.waitForTimeout(300)
@@ -750,8 +754,17 @@ async function main() {
     await sneaky.screenshot({ path: process.env.APPROVAL_BASH_SHOT || '/tmp/approval-bash-wideblank.png' }).catch(() => {})
     // 观感自查:托盘在真实悬浮输入区里的整窗实景(DESIGN §8)
     await win.screenshot({ path: process.env.TRAY_SHOT || '/tmp/approval-tray.png' }).catch(() => {})
+    // 按 › 往后翻,直到最上面那张是要读的(最多翻一圈)
+    const flipTo = async (text) => {
+      for (let i = 0; i < 6; i++) {
+        if (await win.evaluate((t) => (document.querySelector('.t2c-apv .t2c-apv-body')?.textContent || '').includes(t), text)) return true
+        await win.locator('.t2c-apv-nav[data-dir="next"]').first().click().catch(() => {})
+        await win.waitForTimeout(120)
+      }
+      return false
+    }
     const openTrayCard = async (rowText) => {
-      await win.locator('.t2c-apv-row', { hasText: rowText }).first().click().catch(() => {})
+      await flipTo(rowText)
       await win.waitForTimeout(250)
       return win.evaluate(() => {
         const c = document.querySelector('.t2c-apv .approval-card')
@@ -781,7 +794,7 @@ async function main() {
     // D6-D8(2026-09-21 实报「审批卡代码区异常显示、点不了批准」):d2h 行号格是 position:absolute,
     // 宿主不给定位祖先时它的包含块落到 .t2-chat-body —— 逃出 .approval-diff 与 .t2-stream 两层滚动盒,
     // 冻在未滚动的位置上压住别处的按钮。D6 是判别式(修前 gutter=0);D7/D8 是症状面。
-    await win.locator('.t2c-apv-row', { hasText: 'tall.txt' }).first().click().catch(() => {})
+    await flipTo('tall.txt')
     await win.waitForTimeout(700) // 换卡冷却(ApprovalTray ARM_MS)过去,按钮才接收点击
     const tall = win.locator('.t2c-apv .approval-card', { hasText: 'tall.txt' }).first()
     const gut = await tall.evaluate((card) => {
@@ -807,7 +820,7 @@ async function main() {
       JSON.stringify(stub.seen.approvals))
     // D9 换卡冷却:托盘里下一张会原地顶上来,连点两下「批准」不能把没看过的那张也批了 ——
     // 展开的卡一换,按钮先不接收点击,片刻后才生效。
-    await win.locator('.t2c-apv-row').first().click().catch(() => {})
+    await win.locator('.t2c-apv-nav[data-dir="next"]').first().click().catch(() => {})
     const armingNow = await win.evaluate(() => !!document.querySelector('.t2c-apv-body.is-arming'))
     await win.waitForTimeout(700)
     const armedLater = await win.evaluate(() => !document.querySelector('.t2c-apv-body.is-arming') && !!document.querySelector('.t2c-apv .approval-actions'))

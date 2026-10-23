@@ -3,34 +3,51 @@
  * 权限审批、Agent 的提问(ask_user)、计划审阅的拍板区(计划正文仍在流里的计划卡上)。
  * 状态不搬家 —— 它们仍挂在各自的消息上(持久化回放 / 兑现 / turn_boundary 的 keep 都钉在那),
  * 托盘只是「本会话所有 pending」的另一个视图:选中的一项(缺省最早那项)展开,其余缩成一行,点哪行展开哪行。
- * 排队行在上、展开的在下(贴着输入框):展开项带长 diff 时排队的几项仍一眼可见,不被挤进滚动区。
+ * 10-23 起(方案「待确认卡片」B)它是一叠卡:聊天里跟在最新内容后面(画布模式 / 预览仍在输入框上方),只露最上面一张,
+ * 后面几张露出卡沿;头行写「还有 审批 1 · 提问 1」,‹ › 换卡。任务卡(```forsion-task)作为第四类垫在最后。
  */
-import { useEffect, useRef, useState } from 'react'
-import { ChevronDown, CircleHelp, ClipboardList, ShieldQuestion } from 'lucide-react'
+import { useEffect, useRef, useState, type RefObject } from 'react'
+import { ArrowDown, ChevronDown, ChevronLeft, ChevronRight, ShieldQuestion } from 'lucide-react'
+import type { TodoItem } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { ApprovalCard } from '../../components/ApprovalCard'
 import { InquiryCard, PlanDecision } from '../../components/InquiryCard'
 import { registerMessages, useI18n } from '../../i18n'
 import type { TrayItem } from './approvalQueue'
+import type { PendingTask } from './pendingTasks'
+import { TaskCards } from './TaskCards'
+import type { MessageHandlers } from './EditorialMessage'
 
 registerMessages({
   'approval.tray.title': { zh: '等你批准 · {n}', en: 'Waiting for your approval · {n}' },
   'approval.tray.titleAny': { zh: '等你处理 · {n}', en: 'Waiting for you · {n}' },
   'approval.tray.label': { zh: '等你处理的事项', en: 'Items waiting for you' },
-  'approval.tray.planRow': { zh: '计划等你拍板', en: 'Plan waiting for your decision' },
+  'approval.tray.more': { zh: '还有 {list}', en: 'Also {list}' },
+  'approval.tray.kApproval': { zh: '审批 {n}', en: 'approvals: {n}' },
+  'approval.tray.kInquiry': { zh: '提问 {n}', en: 'questions: {n}' },
+  'approval.tray.kPlan': { zh: '计划 {n}', en: 'plans: {n}' },
+  'approval.tray.kTask': { zh: '任务卡 {n}', en: 'task cards: {n}' },
+  'approval.tray.prev': { zh: '上一件', en: 'Previous' },
+  'approval.tray.next': { zh: '下一件', en: 'Next' },
+  'approval.pill': { zh: '{n} 件等你', en: '{n} waiting for you' },
 })
+
+/** 卡片堆里的一项:挡着 agent 的(审批 / 提问 / 计划)在前,任务卡垫底。 */
+export type DeckItem = TrayItem | PendingTask
 
 const ARM_MS = 350
 
 type Sent = void | boolean | Promise<boolean | void>
 
-export function ApprovalTray({ items, onDecide, onAnswer, sessionId }: {
-  items: TrayItem[]
+export function ApprovalTray({ items, onDecide, onAnswer, onTask, sessionId }: {
+  items: DeckItem[]
   /** P1-K6:托盘所属会话(审批卡按会话所在的目标判远端只读,INTEGRATION R-31)。 */
   sessionId?: string
   /** 返回 false = 没送达,托盘解锁这一项让用户重试。 */
   onDecide: (messageId: string, approvalId: string, action: 'approve' | 'approve_always' | 'reject', argsOverride?: Record<string, any>) => Sent
   /** 询问 / 计划的回答;返回 false = 没送达。 */
   onAnswer: (messageId: string, inquiryId: string, answer: string) => Sent
+  /** 任务卡的落点(同流里任务卡的 onTask)。 */
+  onTask?: MessageHandlers['onTask']
 }) {
   const { t } = useI18n()
   const [openId, setOpenId] = useState<string | null>(null)
@@ -38,7 +55,7 @@ export function ApprovalTray({ items, onDecide, onAnswer, sessionId }: {
   const cur = items.find((i) => i.id === openId) ?? items[0]
   const curId = cur?.id
   // 钉住展开项:缺省那项一显示就钉住 —— 之后插到它前面的新条目(并行团队里排在前面的成员晚来的审批 / 提问)
-  // 只进排队行,不把正在看的这项顶掉(草稿会丢,冷却过后还会点到顶上来的那张)。它离开列表才回落到最早那项。
+  // 只垫到后面,不把正在看的这项顶掉(草稿会丢,冷却过后还会点到顶上来的那张)。它离开列表才回落到最早那项。
   useEffect(() => { if (curId && curId !== openId) setOpenId(curId) }, [curId, openId])
   // 换卡冷却:批完一项,下一项原地顶上来 —— 连点两下不能把没看过的下一项也批了 / 答了。
   // 展开项一换(含新出现),按钮先不接收点击,ARM_MS 后才生效。
@@ -67,41 +84,40 @@ export function ApprovalTray({ items, onDecide, onAnswer, sessionId }: {
   if (!cur) return null
   const busy = sent.current.has(cur.id)
   const title = items.every((i) => i.kind === 'approval') ? 'approval.tray.title' : 'approval.tray.titleAny'
+  const idx = items.indexOf(cur)
+  const go = (d: number): void => setOpenId(items[(idx + d + items.length) % items.length].id)
+  const rest = items.filter((i) => i !== cur)
+  const more = (['approval', 'inquiry', 'plan', 'task'] as const)
+    .map((k) => [k, rest.filter((i) => i.kind === k).length] as const)
+    .filter(([, n]) => n)
+    .map(([k, n]) => t(`approval.tray.k${k[0].toUpperCase()}${k.slice(1)}`, { n }))
+    .join(' · ')
   return (
-    <div className="t2c-apv" role="region" aria-label={t('approval.tray.label')} data-approval-tray={items.length}>
-      <button type="button" className="t2c-apv-head" aria-expanded={!collapsed} onClick={() => setCollapsed((c) => !c)}>
-        <ShieldQuestion size={13} className="t2c-apv-ic" />
-        <span className="t2c-apv-title">{t(title, { n: items.length })}</span>
-        <ChevronDown size={13} className={`t2c-apv-chev${collapsed ? ' is-collapsed' : ''}`} />
-      </button>
-      {!collapsed && items.length > 1 && (
-        <div className="t2c-apv-rest">
-          {items.filter((i) => i !== cur).map((i) => (
-            <button type="button" key={i.id} className="t2c-apv-row" data-tray-kind={i.kind} data-tray-msg={i.messageId} title={rowText(i, t)} onClick={() => setOpenId(i.id)}>
-              {i.agentName && <span className="t2c-apv-row-from">{i.agentName}</span>}
-              {i.kind === 'approval' ? (
-                <>
-                  <span className="t2c-apv-row-name">{i.req.name}</span>
-                  <span className="t2c-apv-row-preview">{i.req.preview}</span>
-                </>
-              ) : (
-                <>
-                  {i.kind === 'plan' ? <ClipboardList size={12} className="t2c-apv-row-ic" /> : <CircleHelp size={12} className="t2c-apv-row-ic" />}
-                  <span className="t2c-apv-row-text">{rowText(i, t)}</span>
-                </>
-              )}
-            </button>
-          ))}
-        </div>
-      )}
+    <div className="t2c-apv" role="region" aria-label={t('approval.tray.label')} data-approval-tray={items.length} data-tray-msgs={items.map((i) => i.messageId).join(' ')} data-peek={Math.min(rest.length, 2) || undefined}>
+      <div className="t2c-apv-top">
+        <button type="button" className="t2c-apv-head" aria-expanded={!collapsed} onClick={() => setCollapsed((c) => !c)}>
+          <ShieldQuestion size={13} className="t2c-apv-ic" />
+          <span className="t2c-apv-title">{t(title, { n: items.length })}</span>
+          {more && <span className="t2c-apv-more">{t('approval.tray.more', { list: more })}</span>}
+          <ChevronDown size={13} className={`t2c-apv-chev${collapsed ? ' is-collapsed' : ''}`} />
+        </button>
+        {!collapsed && items.length > 1 && <>
+          <span className="t2c-apv-n">{idx + 1} / {items.length}</span>
+          <button type="button" className="t2c-apv-nav" data-dir="prev" title={t('approval.tray.prev')} aria-label={t('approval.tray.prev')} onClick={() => go(-1)}><ChevronLeft size={14} /></button>
+          <button type="button" className="t2c-apv-nav" data-dir="next" title={t('approval.tray.next')} aria-label={t('approval.tray.next')} onClick={() => go(1)}><ChevronRight size={14} /></button>
+        </>}
+      </div>
       {!collapsed && (
         <div
           className={`t2c-apv-body${armedId === curId ? '' : ' is-arming'}${busy ? ' is-sent' : ''}`}
           data-tray-kind={cur.kind}
           data-tray-msg={cur.messageId}
         >
-          {cur.agentName && <div className="t2c-apv-from">{cur.agentName}</div>}
-          {cur.kind === 'approval' ? (
+          {cur.kind !== 'task' && cur.agentName && <div className="t2c-apv-from">{cur.agentName}</div>}
+          {cur.kind === 'task' ? (
+            // 落点与锁都在 TaskCards 里(按会话 + 内容记处理过没);处理完它离开卡片堆,写卡那条回答下面留一行结局
+            <TaskCards key={cur.id} tasks={[cur.card]} ownerId={cur.messageId} sessionId={sessionId} createdAt={cur.createdAt} onTask={onTask} />
+          ) : cur.kind === 'approval' ? (
             <ApprovalCard key={cur.id} req={cur.req} sessionId={sessionId} onDecide={(action, args) => submit(cur.id, () => onDecide(cur.messageId, cur.id, action, args))} />
           ) : cur.kind === 'plan' ? (
             <PlanDecision key={cur.id} plan={cur.plan} req={cur.req} busy={busy} onAnswer={(a) => submit(cur.id, () => onAnswer(cur.messageId, cur.id, a))} />
@@ -114,8 +130,31 @@ export function ApprovalTray({ items, onDecide, onAnswer, sessionId }: {
   )
 }
 
-function rowText(i: TrayItem, t: (k: string) => string): string {
-  if (i.kind === 'approval') return i.req.preview
-  if (i.kind === 'plan') return t('approval.tray.planRow')
-  return i.req.question
+/** 卡片堆滚出视野时(往上翻历史)输入框上方一枚药丸:「↓ N 件等你 · 任务清单 x/y」,点了回到对话末尾。
+ *  卡片堆跟着内容走,新来一张不把人拽下去(在底部时照旧吸底),所以要这枚药丸告诉你底下有事。
+ *  自己盯卡片堆进没进视口(IntersectionObserver),不让整个 ChatView 跟着滚动重渲。 */
+export function DeckPill({ rootRef, count, todos, onClick }: { rootRef: RefObject<HTMLElement | null>; count: number; todos?: TodoItem[]; onClick: () => void }) {
+  const { t } = useI18n()
+  const [away, setAway] = useState(false)
+  useEffect(() => {
+    const root = rootRef.current
+    const deck = root?.querySelector('[data-pending-deck] .t2c-apv')
+    if (!root || !deck) return
+    // 流的底下那一截压在悬浮的输入区后面:看得见的范围扣掉它
+    const cover = parseFloat(getComputedStyle(root).getPropertyValue('--t2-composer-h')) || 96
+    const io = new IntersectionObserver(([e]) => setAway(!e.isIntersecting), { root, rootMargin: `0px 0px -${Math.round(cover)}px 0px` })
+    io.observe(deck)
+    return () => io.disconnect()
+  }, [rootRef, count])
+  if (!away) return null
+  const done = todos?.filter((x) => x.status === 'completed').length ?? 0
+  return (
+    <div className="t2-deckpill-row">
+      <button type="button" className="t2-deckpill" data-deck-pill={count} onClick={onClick}>
+        <ArrowDown size={13} />
+        <span>{t('approval.pill', { n: count })}</span>
+        {!!todos?.length && <><span className="t2-deckpill-sep">·</span><span>{t('inquiry.todoList')} {done}/{todos.length}</span></>}
+      </button>
+    </div>
+  )
 }

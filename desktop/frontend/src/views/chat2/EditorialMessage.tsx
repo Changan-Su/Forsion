@@ -32,11 +32,12 @@ registerMessages({
   'chat.team.working': { zh: '工作中 · {activity}', en: 'Working · {activity}' },
   'chat.team.workingIdle': { zh: '工作中', en: 'Working' },
   'chat.team.waiting': { zh: '等待你的审批', en: 'Waiting for your approval' },
-  'chat.team.waitingAnswer': { zh: '等你回答 · 在输入框上方', en: 'Waiting for your answer · above the input box' },
+  'chat.team.waitingAnswer': { zh: '等你回答', en: 'Waiting for your answer' },
   'chat.team.done': { zh: '已完成', en: 'Done' },
   'chat.approval.pointer': { zh: '{name} 等你批准 · 在输入框上方', en: '{name} is waiting for your approval · above the input box' },
   'chat.approval.pointerN': { zh: '{n} 项操作等你批准 · 在输入框上方', en: '{n} actions are waiting for your approval · above the input box' },
   'chat.inquiry.pointer': { zh: '有问题等你回答 · 在输入框上方', en: 'A question is waiting for your answer · above the input box' },
+  'chat.inquiry.expiredLine': { zh: '提问已过期 · {q}', en: 'Question expired · {q}' },
   'chat.inquiry.pointerN': { zh: '{n} 个问题等你回答 · 在输入框上方', en: '{n} questions are waiting for your answer · above the input box' },
   'chat.approval.update.approved': { zh: '已批准并执行 {name}', en: 'Approved and ran {name}' },
   'chat.approval.update.failed': { zh: '已批准，{name} 执行出错', en: 'Approved; {name} ran with an error' },
@@ -63,7 +64,7 @@ import { splitSuggestions, type FenceKind, type SuggestState, type TaskCard } fr
 import { CreationCards } from './CreationCards'
 import { formatDateTime, formatMessageTime } from '../../format/time'
 
-import { TaskCards, type TaskLanding } from './TaskCards'
+import { TaskCards, TaskTraces, type TaskLanding } from './TaskCards'
 import { MuseApprovalLine, MuseTodoCards, ProactiveMark, isProactive } from './MuseDm'
 import { CHILD_UPDATE_OPEN, ChildUpdateLine, ForkBlock, childIdsOf } from './ChildSessions'
 import { APPROVAL_UPDATE_OPEN, approvalForCall, parseApprovalUpdate, pickPlanInquiry, type ApprovalOutcome } from './approvalQueue'
@@ -237,6 +238,8 @@ export interface MessageHandlers {
   /** 任务卡(```forsion-task)的落点点击:卡片本身什么也不做,点了才发消息 / 建 Muse 日程。
    *  返回 false = 没做成(卡片保留按钮);其余(true / void)= 做成,卡片定格。 */
   onTask?: (card: TaskCard, landing: TaskLanding) => boolean | void | { childId: string } | Promise<boolean | void | { childId: string }>
+  /** 有就说明这个视图在对话末尾画了卡片堆(10-23 方案 B):任务卡只在这里留一行,点了滚过去;审批 / 提问不再留「在输入框上方」那行。 */
+  onJumpDeck?: () => void
   /** 回退到本条消息的时刻(B1):仅代码 / 仅对话 / 两者。 */
   onRewind?: (mode: 'code' | 'conversation' | 'both') => void
   /** 把这条回答插回笔记(评审 G3-08,见 insertToNote.ts);宿主没有 Amadeus 编辑能力时不传 → 按钮不渲染。text = 摘掉围栏的正文。 */
@@ -382,7 +385,7 @@ function InsertNoteButton({ onInsert }: { onInsert: () => void }) {
  *  只有 props 稳住才挡得住:ChatView 的 handlers 按消息 id 缓存、fileCtx / voice 走 useMemo。 */
 export const EditorialMessage = memo(EditorialMessageView)
 
-function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, userAvatar, handlers, fileCtx, rootRef, speakState, voice, modelId, showWaitDetails = false, footer, onBringBack }: { /** 助手气泡正文末尾的附加行(ChatView 给最后一条助手消息挂 run 统计)。 */ footer?: React.ReactNode; /** 分支里最后一条回答:「带回这里」把它作为引用挂进来源那支的输入框(ChatView 只给这一条传)。 */ onBringBack?: (text: string) => void; msg: UiMessage; avatarUrl?: string; agentNameFallback?: string; userName?: string; userAvatar?: string; handlers?: MessageHandlers; fileCtx?: FileCtx; rootRef?: Ref<HTMLDivElement>; speakState?: 'loading' | 'playing'; voice?: { on: boolean; cfg: TanguDesktopConfig; stored: StoredDesktopConfig | null }; /** 这条消息实际用的模型(仅用于认出订阅直连过期 → 给重登按钮;缺省=不给)。 */ modelId?: string; /** 测试性功能:显示发送上下文 / 等待首帧 / 已等待时间。默认关。 */ showWaitDetails?: boolean }) {
+function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, userAvatar, handlers, fileCtx, rootRef, speakState, voice, modelId, showWaitDetails = false, footer, onBringBack, todoInTail = false }: { /** 这条的任务清单画在对话末尾(ChatView 只给最新那份传):这里不再画。 */ todoInTail?: boolean; /** 助手气泡正文末尾的附加行(ChatView 给最后一条助手消息挂 run 统计)。 */ footer?: React.ReactNode; /** 分支里最后一条回答:「带回这里」把它作为引用挂进来源那支的输入框(ChatView 只给这一条传)。 */ onBringBack?: (text: string) => void; msg: UiMessage; avatarUrl?: string; agentNameFallback?: string; userName?: string; userAvatar?: string; handlers?: MessageHandlers; fileCtx?: FileCtx; rootRef?: Ref<HTMLDivElement>; speakState?: 'loading' | 'playing'; voice?: { on: boolean; cfg: TanguDesktopConfig; stored: StoredDesktopConfig | null }; /** 这条消息实际用的模型(仅用于认出订阅直连过期 → 给重登按钮;缺省=不给)。 */ modelId?: string; /** 测试性功能:显示发送上下文 / 等待首帧 / 已等待时间。默认关。 */ showWaitDetails?: boolean }) {
   // shell 代码块「运行」的回传:结果作为用户消息发回**这条消息所在**的会话(run 活着自动变 steer)。
   // cwd 跟会话走(agent 的工作目录),没有就家目录。对象按会话 memo,别每次渲染新造一个(Markdown 是 React.memo)。
   const runSid = fileCtx?.sessionId
@@ -703,7 +706,9 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
             渲染与落点按钮在 TaskCards(与收件箱共用)。 */}
         {!!tasks.length && msg.status === 'done' && (museTodo
           ? <MuseTodoCards tasks={tasks} ownerId={msg.id} onTask={handlers?.onTask} sessionId={runSid || undefined} createdAt={msg.timestamp || undefined} />
-          : <TaskCards tasks={tasks} ownerId={msg.id} onTask={handlers?.onTask} sessionId={runSid || undefined} createdAt={msg.timestamp || undefined} />)}
+          : handlers?.onJumpDeck && runSid
+            ? <TaskTraces tasks={tasks} ownerId={msg.id} sessionId={runSid} createdAt={msg.timestamp || undefined} onJump={handlers.onJumpDeck} />
+            : <TaskCards tasks={tasks} ownerId={msg.id} onTask={handlers?.onTask} sessionId={runSid || undefined} createdAt={msg.timestamp || undefined} />)}
         {museApprovals.map((id) => <MuseApprovalLine key={id} id={id} />)}
         {/* 作品卡:把这条对话里做的东西变成「造物」(点了宿主才建文件夹 / 复制)。同样只在 done 上渲染。 */}
         {!!creations.length && msg.status === 'done' && <CreationCards cards={creations} sessionId={runSid} />}
@@ -718,7 +723,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
           // 没配上(重载后的历史、或 plan 事件缺失)就只渲染正文,询问仍走下面通用卡兜底。
           <PlanCard key={planInq?.inquiryId || 'plan'} plan={msg.planProposal} req={planInq} />
         )}
-        {!!msg.todos?.length && <TodoList todos={msg.todos} live={todoLive} />}
+        {!!msg.todos?.length && !todoInTail && <TodoList todos={msg.todos} live={todoLive} folded={!!handlers?.onJumpDeck} />}
         {/* 判空看 body 不看 msg.content:刚开始打建议围栏时 content 非空但正文为空,
             看 content 会让整条消息只剩一个署名圆点,连「思考中」都不显示。 */}
         {/* 测试性等待详情:开启时每次调用(含工具轮之后)画「发送 N KB / 等首帧 + 已等秒数」。
@@ -752,22 +757,25 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
         {trailingIntelligent.map(ev => <IntelligentUi key={ev.id} event={ev} live={streaming} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} />)}
         {!!trailingSketches.length && <SketchCards items={trailingSketches} actions={sketchActions} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} />}
         {trailingCards.map(({ ev, claim }) => <PluginToolCard key={`ptc-${ev.id}`} event={ev} claim={claim} onQuote={handlers?.onQuote} fallback={<ToolGroup events={[ev]} />} />)}
-        {/* 审批卡在输入框上方的托盘里批(ApprovalTray);流里只留一行指路,已兑现的不留痕 —— 结局看工具卡。
+        {/* 审批卡在托盘里批(ApprovalTray);托盘在输入框上方的视图(预览 / 画布)流里留一行指路,对话末尾有卡片堆的不留(卡就在下面)。已兑现的不留痕 —— 结局看工具卡。
             团队成员的占位气泡已有「等待你的审批」那行,不重复。 */}
-        {!msg.work && pendingApv.length > 0 && (
+        {!msg.work && !handlers?.onJumpDeck && pendingApv.length > 0 && (
           <div className="t2-dim t2-apv-pointer" data-approval-pointer={pendingApv.length}>
             <ShieldQuestion size={12} />
             {pendingApv.length === 1 ? t('chat.approval.pointer', { name: pendingApv[0].name }) : t('chat.approval.pointerN', { n: pendingApv.length })}
           </div>
         )}
         {/* 待答的问题在托盘里答(流里一行指路);答过 / 过期的留在流里当问答记录。 */}
-        {!msg.work && pendingAsk.length > 0 && (
+        {!msg.work && !handlers?.onJumpDeck && pendingAsk.length > 0 && (
           <div className="t2-dim t2-apv-pointer" data-inquiry-pointer={pendingAsk.length}>
             <CircleHelp size={12} />
             {pendingAsk.length === 1 ? t('chat.inquiry.pointer') : t('chat.inquiry.pointerN', { n: pendingAsk.length })}
           </div>
         )}
-        {msg.inquiries?.filter((q) => q !== planInq && q.status !== 'pending').map((q) => <InquiryCard key={q.inquiryId} req={q} onAnswer={() => {}} />)}
+        {/* 有卡片堆的视图里,过期的提问(run 停了没答)只留一行,不再摆一张灰卡 */}
+        {msg.inquiries?.filter((q) => q !== planInq && q.status !== 'pending').map((q) => (q.status === 'expired' && handlers?.onJumpDeck
+          ? <div key={q.inquiryId} className="t2-dim t2-apv-pointer" data-inquiry-expired={q.inquiryId}><CircleX size={12} /><span>{t('chat.inquiry.expiredLine', { q: q.question })}</span></div>
+          : <InquiryCard key={q.inquiryId} req={q} onAnswer={() => {}} />))}
         {msg.status === 'error' && (
           <div className="t2-tool err">
             <span className="t2-status-err">✕ {humanizeRunError(msg.error, t)}</span>

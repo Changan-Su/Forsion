@@ -3,7 +3,7 @@
  * 视觉对齐 ApprovalCard(边框卡片,token CSS)。待答时在输入框上方的托盘里;对话流里只留已答 / 过期的记录。
  */
 import React, { useState } from 'react'
-import { CircleHelp, Send, CheckSquare, Square, SquareDot, Loader2, Check, Pencil, Undo2, ClipboardList } from 'lucide-react'
+import { CircleHelp, Send, CheckSquare, Square, SquareDot, Loader2, Check, Pencil, Undo2, ClipboardList, ChevronDown, ChevronUp } from 'lucide-react'
 import type { InquiryRequest, TodoItem } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { Markdown } from './Markdown'
 import { useI18n, registerMessages } from '../i18n'
@@ -21,7 +21,11 @@ registerMessages({
   'plan.doneApproved': { zh: '已批准', en: 'Approved' },
   'plan.doneRevised': { zh: '已批准（按你修订的版本）', en: 'Approved (your revised version)' },
   'plan.doneRejected': { zh: '已打回：{answer}', en: 'Sent back: {answer}' },
-  'plan.pointer': { zh: '等你拍板 · 在输入框上方', en: 'Waiting for your decision · above the input box' },
+  'plan.pointer': { zh: '等你拍板 · 在对话最下面', en: 'Waiting for your decision · at the end of the chat' },
+  'inquiry.todoNow': { zh: '正在：{text}', en: 'Now: {text}' },
+  'inquiry.todoStopped': { zh: '已停止 · {text}', en: 'Stopped · {text}' },
+  'inquiry.todoAllDone': { zh: '全部完成', en: 'All done' },
+  'inquiry.todoFold': { zh: '收起任务清单', en: 'Collapse task list' },
   'plan.decisionTitle': { zh: '计划等你拍板（正文见对话里的计划卡）', en: 'The plan needs your decision (full text in the plan card above)' },
 })
 
@@ -216,13 +220,28 @@ export const PlanDecision: React.FC<{
 
 /** 任务清单(todo 事件;对齐 Claude TodoWrite 的实时显示)。 */
 /** live = 这份清单所在的 run 还在跑:只有这时「进行中」才转圈;停了 / 出错 / 后面的轮次里,停在进行中的那项画成静态的点。 */
-export const TodoList: React.FC<{ todos: TodoItem[]; live?: boolean }> = ({ todos, live = false }) => {
+/** folded:收成一行(进度 + 当前那项),点开才是整张清单 —— 对话末尾那份、以及流里更早的几份都这样画(方案「待确认卡片」B)。 */
+export const TodoList: React.FC<{ todos: TodoItem[]; live?: boolean; folded?: boolean }> = ({ todos, live = false, folded = false }) => {
   const { t: tr } = useI18n()
+  const [open, setOpen] = useState(false)
   const done = todos.filter((t) => t.status === 'completed').length
+  if (folded && !open) {
+    const cur = todos.find((t) => t.status === 'in_progress') ?? todos.find((t) => t.status === 'pending')
+    return (
+      <button type="button" className="todo-strip" aria-expanded={false} onClick={() => setOpen(true)} data-todo-strip={live ? 'live' : 'idle'}>
+        {live && cur ? <Loader2 size={13} className="spin" /> : cur ? <SquareDot size={13} /> : <CheckSquare size={13} />}
+        <b>{tr('inquiry.todoList')} {done}/{todos.length}</b>
+        <span className="todo-strip-bar"><i style={{ width: `${Math.round((done / todos.length) * 100)}%` }} /></span>
+        <span className="todo-strip-text">{!cur ? tr('inquiry.todoAllDone') : tr(live ? 'inquiry.todoNow' : 'inquiry.todoStopped', { text: cur.content })}</span>
+        <ChevronUp size={13} className="todo-strip-chev" />
+      </button>
+    )
+  }
   return (
     <div className="todo-card">
       <div className="tg-card-title">
         ✓ {tr('inquiry.todoList')} <span className="tg-count">({done}/{todos.length})</span>
+        {folded && <button type="button" className="todo-fold" aria-expanded title={tr('inquiry.todoFold')} aria-label={tr('inquiry.todoFold')} onClick={() => setOpen(false)}><ChevronDown size={13} /></button>}
       </div>
       <div className="todo-rows">
         {todos.map((t, i) => (
