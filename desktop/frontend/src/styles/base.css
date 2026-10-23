@@ -2425,6 +2425,32 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .att-tile--quote:hover { background: color-mix(in srgb, var(--overlay-light) 60%, var(--bg-card)); }
 .att-tile-open:focus-visible { outline: var(--focus-ring) solid var(--signal-line); outline-offset: 1px; }
 .att-tile-badge[data-kind='quote'] { color: var(--accent-ink); }
+/* 划选「引用」的就地回复框(ReplyPopover):外壳 = .ui-popover(与划线条同一套);上面引文两行收起带竖线,下面一行回应 + 加进输入框。
+   挂在 body 下:只用根上的 token。 */
+.quote-reply { z-index: 100; width: min(380px, calc((100vw - 16px) / var(--uiz, 1))); padding: 10px 10px 8px; -webkit-app-region: no-drag; }
+.quote-reply-text {
+  padding-left: 10px; border-left: 2px solid var(--overlay-strong); color: var(--text-muted);
+  font-size: var(--ui-font-meta, 12px); line-height: var(--ui-line-meta, 1.5); white-space: pre-wrap; overflow-wrap: anywhere;
+  overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+.quote-reply-row { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+.quote-reply-input {
+  flex: 1; min-width: 0; height: 30px; padding: 0 2px; border: 0; outline: none; background: none;
+  color: var(--text); font: inherit; font-size: var(--ui-font-body, 13px);
+}
+.quote-reply-input::placeholder { color: var(--text-faint); }
+.quote-reply-add {
+  flex: none; display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: var(--radius-sm);
+  background: none; color: var(--text-muted); cursor: pointer;
+}
+.quote-reply-add:hover { background: var(--overlay-light); color: var(--text); }
+.quote-reply-add:focus-visible { outline: var(--focus-ring) solid var(--signal-line); outline-offset: 1px; }
+.quote-preview-note {
+  width: 100%; min-height: 64px; padding: 8px 10px; resize: vertical; border: var(--border-width, 1px) solid var(--border); border-radius: var(--radius-md);
+  background: var(--bg-card); color: var(--text); font: inherit; font-size: var(--ui-font-body, 13px); line-height: var(--ui-line-body, 1.55);
+}
+.quote-preview-note:focus { outline: var(--focus-ring) solid var(--signal-line); outline-offset: 0; }
+.quote-preview-said { color: var(--text); font-size: var(--ui-font-body, 13px); line-height: var(--ui-line-body, 1.55); white-space: pre-wrap; overflow-wrap: anywhere; }
 /* 引用全文窗(QuotePreview):外壳是 Amadeus 的 .dialog,这里只放宽、给正文一条引用竖线和自己的滚动。 */
 .am-app .dialog.quote-preview { width: min(560px, 90vw); }
 .quote-preview-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
