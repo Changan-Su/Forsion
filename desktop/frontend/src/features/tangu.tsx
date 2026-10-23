@@ -1,6 +1,7 @@
 import { MessageCircle, MessageCircleQuestion, BookOpen, FolderOpen, Bot, Users } from 'lucide-react'
 import { addCommand, registerView, useWorkspace } from '@lcl/engine'
 import { activeChatModelId, useApp } from '../stores/appStore'
+import { TANGU_SLICE } from '../tangu/store/tanguSlice'
 import { translate } from '../i18n'
 import { ChatView } from '../views/ChatView'
 import { ChatPreview } from '../views/chat2/ChatPreview'
@@ -43,12 +44,14 @@ const splitChat = (): void => {
   ws().splitActive('right', { followActive: false, sessionId: pinned, reuseKey: `session:${pinned || 'new'}` })
 }
 
-/** Tangu 唯一的入口(界面热更新 3b):视图、给宿主的接缝、ctx.tangu 探针、命令都从这里进,宿主(installEngine)只调这一个。
+/** Tangu 唯一的入口(界面热更新 3b / 3c):store 半身、视图、给宿主的接缝、ctx.tangu 探针、命令都从这里进,宿主(installEngine)只调这一个。
  *  第 4 步打包版从界面包里取同一个函数;`host` 只装入口 import 不到的宿主私有件。
  *  **无条件调用、按段门控**:探针的门比 Tangu 宽 —— automation-only / 老档案没有 Tangu 界面,插件照样要 ctx.tangu
  *  (模型 / agent / startChat),只是没有对话那几块。排在布局恢复与插件宿主之前:视图要先进注册表,
  *  ctx.tangu 的有无在建 plugin context 那一刻定。 */
 export function activateTangu(host: TanguHost): void {
+  // store 半身先装(不看档案:宿主的连接 / 换号流程也读写会话字段,automation-only 档案同样要)
+  host.installSlice(TANGU_SLICE)
   registerTanguViews()
   if (tanguProbeAvailable()) {
     // 编辑器「问 Tangu」只在注册了 chat-panel 的宿主上给(与 registerTanguViews 同一个谓词)

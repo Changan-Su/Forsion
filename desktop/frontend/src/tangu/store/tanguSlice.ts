@@ -3,7 +3,7 @@
  * 核心插件化第 2a 步从 stores/appStore.ts 原样搬来(方案 docs/ToBeImproved/Tangu核心插件化方案_2026-10-17.md 第 9 节)。
  * 仍是**同一个** useApp 实例:appStore 用 createTanguSlice 把这一半拼进去,一次 set 照旧能同时改两边的字段,
  * 139 个 import 方和测试照旧从 stores/appStore 取 useApp / AppState / 这里导出的辅助函数(那边转出)。
- * 宿主那一侧的东西(账号代 / 目录代计数、unit 轮询节拍与等恢复、焦点那台的家目录拉取)经 TanguHost 交进来,
+ * 宿主那一侧的东西(账号代 / 目录代计数、unit 轮询节拍与等恢复、焦点那台的家目录拉取)经 TanguSliceDeps 交进来,
  * 不 import appStore 的值 —— 它是组装点,反过来引会成环。
  */
 import { useChildChat } from '../../stores/childChatStore'
@@ -32,8 +32,10 @@ import { registerMessages, translate, translationValues } from '../../i18n'
 import { publishAccountQuota } from '../../services/accountQuota'
 import { sanitizeAnswerBy, sanitizeApprovalPreviewI18n, sanitizeApprovalReason, sanitizeApprovalRemote } from '../../approvalReason'
 import { normalizeSessionEmoji } from '../../../../../tangu-agent/src/contracts/sessionEmoji'
+import { DEFAULT_APPROVAL, applyPreset, stickyDefaults, withAmadeusWorkspace } from '../../../../../tangu-agent/src/contracts/sessionDefaults'
+export { DEFAULT_APPROVAL, DEFAULT_THINKING, applyPreset, stickyDefaults, withAmadeusWorkspace } from '../../../../../tangu-agent/src/contracts/sessionDefaults'
 import type { StoreApi } from 'zustand'
-import type { AppState } from '../../stores/appStore'
+import { defaultModelOf, newChatModelId, reloadDesktopConfig, writeFocusModel, type AppState } from '../../stores/appStore'
 import '../messages' // Tangu 自己的文案片段(核心插件化 2c)
 import { failReason, landedAnyway, type FailedSend } from './failedSend'
 
@@ -365,39 +367,11 @@ const runWatchdogs = new Map<string, ReturnType<typeof setInterval>>()
 const loadedHistory = new Set<string>()
 /** 在途的历史加载:重复调用等同一份(建了分支马上发的,要等配置到了再发,不然拿空配置把继承来的 Agent 冲成缺省) */
 const historyInflight = new Map<string, Promise<void>>()
-/** 审批档缺省(全端统一「替我批准」);新会话没有记忆时的起步值。 */
-export const DEFAULT_APPROVAL = 'auto-edit' as const
-/** 思考档缺省(全端、两种模式统一「中」,09-19 用户拍板):与引擎的会话缺省(agentLoop `|| 'medium'`)、内置 Agent 预设同值。
- *  从前 chat 缺省 off(方案 D36 为首字延迟定的);现在 chat 也起步于中,想要更快的人在药丸上调低即可,调过的值按槽记住。 */
-export const DEFAULT_THINKING = 'medium' as const
-/** 新会话的起步档位 = 上次用的那套(没记忆过就用全端默认「替我批准」+ 不指定思考档)。
- *  只吐 AgentConfig 的键,好让调用方直接展开进 init;模型不在此(走 cfg.modelId 老路)。
- *  **云沙箱会话不带审批档**:引擎那边 approvalMode 缺席才等于 full-auto,写死 auto-edit 会让
- *  云会话的 MCP 调用开始逐个弹审批(gateToolCall 对 mcp__ 工具非 host 也过闸)。 */
-export function stickyDefaults(dc: StoredDesktopConfig | null, host: boolean, preset?: AgentConfig['preset']): Pick<AgentConfig, 'approvalMode' | 'thinkingLevel' | 'ultra'> {
-  const out: Pick<AgentConfig, 'approvalMode' | 'thinkingLevel' | 'ultra'> = {}
-  if (host) out.approvalMode = dc?.lastApprovalMode || DEFAULT_APPROVAL
-  // 思考档按 preset **分槽**(D36):chat 只读 chat 槽、缺省 DEFAULT_THINKING(dc 为 null 的 web/mobile 同);work 沿用 lastThinkingLevel,
-  // 没记过就不指定 —— 交给 Agent 自己的档位,再回落引擎的会话缺省(都是中)。
-  if (preset === 'chat') out.thinkingLevel = dc?.lastChatThinkingLevel || DEFAULT_THINKING
-  else if (dc?.lastThinkingLevel) out.thinkingLevel = dc.lastThinkingLevel
-  // Ultra 只延续到本机 work 会话(delegate 只在本机引擎有;云端 / chat 会话带上它药丸也显示不出来),且只跟 max 同在。
-  if (host && preset !== 'chat' && dc?.lastUltra && out.thinkingLevel === 'max') out.ultra = true
-  return out
-}
 
 /** 下一个新会话的模式(**唯一**判定源;空态药丸、send() 隐式建会话、createInWorkspace 三处同源):
  *  ① 项目会话(cloud/local)恒 work —— chat 按定义不带 Project;② 用户在空态显式选过就听他的;
  *  ③ 无根会话默认 chat;④ 没选工作区:全端默认 Work(方案 D5)。
  *  ⚠️ platform 由调用方每次现算传入(currentPlatform()),别在模块级冻结。 */
-/** 模式感知的配置物化(**唯一一处**,四个建会话/空态点都走它,放在 `...newChatCfg` 之后):chat 会话恒 sandbox、无 cwd,
- *  不带自选 Agent/外部引擎/计划/群聊——Chat 固定使用创建时的当前默认 Agent；草稿残留的 engineId 会让
- *  「chat」跑 ACP 外部 CLI 直打真实磁盘(creview 09-07 F1/E1);
- *  草稿里 work 下改出的 execMode:'host' 也压不过它(F6)。work 原样返回。 */
-export function applyPreset(cfg: AgentConfig, preset: 'chat' | undefined): AgentConfig {
-  if (preset !== 'chat') return cfg
-  return { ...cfg, preset: 'chat', execMode: 'sandbox', cwd: undefined, agentSlug: undefined, engineId: undefined, engineModelId: undefined, planMode: undefined, groupChat: undefined, groupAgents: undefined, ultra: undefined }
-}
 
 /** 「不在项目中工作」无根工作区描述符(项目列表底部常驻项、选 chat 时的落点、web 端 /new 的落点)。 */
 export const rootlessWs = (t: AppState['tr']): WorkspaceDescriptor =>
@@ -448,38 +422,6 @@ export function composerReady(s: Pick<AppState, 'connState'>, sessionId: string 
 }
 /** unit 会话的轮询间隔(home 仍是 bootstrap 的 4s):经 hub 的每条请求都吃全局限流。按目标记上次轮询的时刻(S4:会话可能在不同的电脑上)。 */
 const UNIT_POLL_MS = 12_000
-/** unit 焦点的「上次用的模型」(按设备记):手机自己的 cfg.modelId 在那台电脑上未必存在。 */
-const FOCUS_MODELS_KEY = 'forsion_engine_models'
-export function readFocusModel(ref: TargetRef): string {
-  if (ref.kind !== 'unit') return ''
-  try {
-    const m = JSON.parse(localStorage.getItem(FOCUS_MODELS_KEY) || '{}') as Record<string, unknown>
-    return typeof m[ref.unitId] === 'string' ? (m[ref.unitId] as string) : ''
-  } catch { return '' }
-}
-function writeFocusModel(ref: TargetRef, modelId: string): void {
-  if (ref.kind !== 'unit') return
-  try {
-    const m = JSON.parse(localStorage.getItem(FOCUS_MODELS_KEY) || '{}') as Record<string, string>
-    delete m[ref.unitId]
-    m[ref.unitId] = modelId
-    const keys = Object.keys(m)
-    for (const k of keys.slice(0, Math.max(0, keys.length - 50))) delete m[k] // 只留最近 50 台
-    localStorage.setItem(FOCUS_MODELS_KEY, JSON.stringify(m))
-  } catch { /* 隐私模式:只活在内存 */ }
-}
-/** 新会话的「默认模型」(newChatModelId / activeChatModelId / send 的回退链共用):home = cfg.modelId(不变);
- *  unit 焦点 = 按设备记的那个 → 手机偏好 → 都不在那台电脑的模型表里就不给(回落目标的 defaultModelId)。 */
-function defaultModelOf(s: Pick<AppState, 'cfg' | 'modelsResp'> & { focusModelId?: string }, ref: TargetRef = focusRef()): string | undefined {
-  if (ref.kind === 'home') return s.cfg.modelId || undefined
-  // P1-K6 S4:会话可能在一台已经不是焦点的电脑上 —— 用那台的目录缓存与按设备记的模型(顶层 modelsResp / focusModelId 只属于焦点)
-  const onFocus = sameRef(ref, focusRef())
-  const models = onFocus ? s.modelsResp?.models : host.catalogFor(targetKeyOf(ref))?.models?.models
-  const remembered = onFocus ? s.focusModelId : readFocusModel(ref)
-  const has = (id: string | undefined): id is string => !!id && !!models?.some((m) => m.id === id)
-  if (has(remembered)) return remembered
-  return has(s.cfg.modelId) ? s.cfg.modelId : undefined
-}
 
 /** 新对话在「没有显式 Project 选择」时的真实落点。
  *
@@ -560,14 +502,6 @@ export function newSessionPreset(
   return effectiveSessionMode(choice, platform) === 'chat' ? 'chat' : undefined
 }
 
-/** 活动 Amadeus Vault 是 Forsion 的系统工作区:本机会话默认把它并入额外可写根。
- *  cwd 仍是相对路径基准;同根/重复项不再列,并保留用户手工添加根的顺序。 */
-export function withAmadeusWorkspace(config: AgentConfig, vaultRoot: string | null | undefined): AgentConfig {
-  if (config.execMode !== 'host' || !vaultRoot || vaultRoot === config.cwd) return config
-  const roots = config.extraRoots || []
-  if (roots.includes(vaultRoot)) return config
-  return { ...config, extraRoots: [...roots, vaultRoot] }
-}
 
 const activeAmadeusRoot = (): string | null => usePageStore.getState().vaultRoot || null
 /** 笔记库的工作区描述符:项目列表里的常驻项,也是在 Amadeus 里呼出的新对话的隐式落点(两处同一份,键 = 库根)。 */
@@ -591,39 +525,6 @@ export function remoteSafeInit(c: AgentConfig): AgentConfig {
   const out = { ...c } as Record<string, unknown>
   for (const k of REMOTE_DROP_INIT_KEYS) delete out[k]
   return out as AgentConfig
-}
-/** 新会话「这条消息实际会用哪个模型」的**唯一**回退链:本次空态显式选的 → 全局记忆
- *  (cfg.modelId 就是「新会话用哪个模型」的真源,在会话里换模型也会写它)→ 后端默认。
- *  ⚠️ 输入栏药丸(ChatView)、建会话时落库、startRun 三处必须同源。三份各写各的时出过的 bug:
- *  建会话不传 model_id → 引擎按 profile.defaultModelId 落库(tangu-agent routes/sessions.ts),
- *  而药丸显示的是 cfg.modelId → 发出去药丸当场跳回默认,第二轮还真的换成默认模型跑
- *  (第二轮读的是会话自己的 model_id)。仪器:appStore.test.ts 的「新会话固化模型」。 */
-export function newChatModelId(s: Pick<AppState, 'newChatModel' | 'cfg' | 'modelsResp'> & { focusModelId?: string }): string | undefined {
-  return s.newChatModel || defaultModelOf(s) || s.modelsResp?.defaultModelId || undefined
-}
-/** 主区聊天此刻**实际会用**的模型 id(有会话 → 会话的;空白新对话 → newChatModelId)。
- *  = 输入栏药丸显示的那个(ChatView 的 mvModelId)。插件接缝 `ctx.tangu.activeModel()` 也读它 ——
- *  这条回退链已经被就地展开过三份、出过「发出去药丸跳回默认」的 bug,**别再抄第四份**。 */
-export function activeChatModelId(
-  s: Pick<AppState, 'activeId' | 'newChatModel' | 'cfg' | 'modelsResp'> & { activeSession?: SessionRecord | null; focusModelId?: string },
-): string {
-  if (!s.activeId) return newChatModelId(s) || ''
-  return s.activeSession?.model_id || defaultModelOf(s) || s.modelsResp?.defaultModelId || ''
-}
-/** 重读主进程折算好的配置,刷新本地缓存(agent 改了 config.json 之后)。cfg 只动「设置里的值」那三项,连接信息不碰。
- *  只认最后发起的那次读取:连改两次时两次读取的先后回来的顺序不保证,先发的那份(旧值)晚到就会把新值盖回去。 */
-let desktopConfigReloadSeq = 0
-export function reloadDesktopConfig(): void {
-  const generation = host.authGen()
-  const seq = ++desktopConfigReloadSeq
-  void window.tangu?.getConfig?.().then((c) => {
-    if (generation !== host.authGen()) return // 期间换了号:那份配置是上个账号的
-    if (seq !== desktopConfigReloadSeq) return // 后面又发起了一次读取:以那次为准
-    store.set((s) => ({
-      desktopConfig: c, homeDir: c.homeDir, defaultWsDir: c.defaultWorkspaceDir || '',
-      cfg: { ...s.cfg, modelId: c.modelId, visionModelId: c.visionModelId, visionMode: c.visionMode },
-    }))
-  }).catch(() => { /* 读不到就保留本地:关设置 / 下次启动都会再读 */ })
 }
 /** 记住「上次用的」审批档/思考档:**新会话据此起步**。先落内存(web/mobile 无 window.tangu,
  *  至少本次会期内粘住),再异步写盘(桌面跨重启)。 */
@@ -873,7 +774,7 @@ function deskViewTitle(type: string): string {
 }
 
 /** 宿主交给 Tangu 半身的接缝(第 2a 步;将来 `@forsion/host` 门面的第一版):Tangu 半身只经这里碰宿主自己的模块级状态。 */
-export interface TanguHost {
+export interface TanguSliceDeps {
   /** 账号代:换号即递增,在途加载回来后与发起时比对,不一致就丢弃。 */
   authGen(): number
   /** 账号代 + 焦点代:目录类加载(Agent / 团队 / 云项目)按它丢弃过期结果。 */
@@ -916,7 +817,7 @@ export interface TanguHost {
 type SessionMode = 'chat' | 'work'
 /** 界面动作 / Agent 命令的结果(与 agentCommands 的 UiActionResult 同形)。 */
 type UiCommandResult = { ok: boolean; error?: string; state?: string; result?: string; pending?: boolean }
-let host: TanguHost
+let host: TanguSliceDeps
 /** 组装时绑定的 store 句柄:模块级辅助函数(不在 createTanguSlice 闭包里)经它读写,不 import useApp。 */
 let store: { get: StoreApi<AppState>['getState']; set: StoreApi<AppState>['setState'] }
 
@@ -1159,7 +1060,7 @@ export interface TanguState {
 }
 
 /** 由 stores/appStore.ts 在建 useApp 时调用一次。 */
-export function createTanguSlice(set: StoreApi<AppState>['setState'], get: StoreApi<AppState>['getState'], h: TanguHost): TanguState {
+export function createTanguSlice(set: StoreApi<AppState>['setState'], get: StoreApi<AppState>['getState'], h: TanguSliceDeps): TanguState {
   host = h
   store = { get, set }
   return tanguMembers(set, get)
@@ -1190,6 +1091,11 @@ export function abortTanguRun(runId: string): void {
   clearInterval(runWatchdogs.get(runId))
   runWatchdogs.delete(runId)
 }
+
+/** 交给宿主 `installTanguSlice` 的那一份(界面热更新 3c,经 activateTangu 的 host.installSlice):store 半身,
+ *  加宿主在换号 / 换焦点时要调的复位。这几个动的是本模块的模块级状态(runAborts / loadedHistory …),宿主不能自己静态 import ——
+ *  打包版里宿主那份和界面包那份是两份模块,清的会是空表。 */
+export const TANGU_SLICE = { create: createTanguSlice, abortAllRuns: abortAllTanguRuns, abortRun: abortTanguRun, resetAuthScope: resetTanguAuthScope }
 
 const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppState>['getState']): TanguState => ({
   sessions: [],

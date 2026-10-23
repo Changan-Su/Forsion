@@ -1,6 +1,7 @@
 // Dev-only 编辑器 harness(npm run web → http://localhost:5173/harness.html):
 // 真浏览器裸挂 MarkdownBlock,给 Playwright 自动化实测 slash / markdown 触发层用。
 // window.__harness 暴露块状态供断言;不进产物(electron-vite build 只打 index.html)。
+import './tangu/store/standalone' // 不走 installEngine:自己装 Tangu 的 store 半身(界面热更新 3c)
 import type React from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'

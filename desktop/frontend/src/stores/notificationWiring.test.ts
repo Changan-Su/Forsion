@@ -91,6 +91,7 @@ describe('agent 会话结束提醒', () => {
   it('外部模式切号把 runningBySession 与消息同拍清空 → 不弹「完成」;看得到结局的正常结束照弹', async () => {
     ;(globalThis as any).window = {}
     const { useApp } = await import('./appStore')
+    await import('../tangu/store/standalone')
     const { notifyApp } = await import('./notificationStore')
     const { installNotificationWiring } = await import('./notificationWiring')
     const streaming = (id: string) => ({ id, role: 'assistant', content: '', status: 'streaming', timestamp: 1 })

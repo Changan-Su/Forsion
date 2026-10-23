@@ -12,6 +12,7 @@ g.React = React
 
 const { TaskCards, TASK_CARD_TTL_MS } = await import('./TaskCards')
 const { useApp } = await import('../../stores/appStore')
+await import('../../tangu/store/standalone')
 const { translate } = await import('../../i18n')
 
 function mount(props: Record<string, unknown>): HTMLDivElement {

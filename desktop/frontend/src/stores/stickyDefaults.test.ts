@@ -4,7 +4,7 @@
  * 病史:硬编码 'auto-edit',用户换到全自动后每建一个会话都要重设一次。
  */
 import { describe, it, expect } from 'vitest'
-import { stickyDefaults, DEFAULT_APPROVAL } from './appStore'
+import { stickyDefaults, DEFAULT_APPROVAL } from '../../../../tangu-agent/src/contracts/sessionDefaults'
 import { newSessionConfig, settleModes, settlePlanMode, settleUltra, teamModeOn } from './projectSettings'
 import type { StoredDesktopConfig } from '../types'
 

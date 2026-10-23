@@ -4,6 +4,7 @@
  *      ?over(占用超出窗口);window.__ctxu.switchAccount() = 直接换到账号 B(B 的额度 300ms 后才回来)
  * 跑:node scripts/e2e-editor.cjs --check=ctxusage --shot
  */
+import './tangu/store/standalone' // 不走 installEngine:自己装 Tangu 的 store 半身(界面热更新 3c)
 import { createRoot } from 'react-dom/client'
 import { LocaleProvider, setLocaleGlobal } from './i18n'
 import './i18n.generated'
