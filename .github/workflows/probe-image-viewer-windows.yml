@@ -45,6 +45,7 @@ jobs:
           if ($code -eq 0 -or $output -notmatch 'AssertionError.*normal: every viewer tool clears the native caption') {
             throw 'Negative control must fail at the real caption overlap assertion'
           }
+          exit 0
       - name: Old native drag interception must fail
         shell: pwsh
         run: |
@@ -55,6 +56,7 @@ jobs:
           if ($code -eq 0 -or $output -notmatch 'AssertionError.*normal: viewer buttons receive native client input') {
             throw 'Negative control must fail at the native client hit assertion'
           }
+          exit 0
       - uses: actions/upload-artifact@v4
         if: always()
         with:
