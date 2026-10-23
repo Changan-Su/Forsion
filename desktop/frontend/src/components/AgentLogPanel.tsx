@@ -42,7 +42,7 @@ const AgentLogPanelBody: React.FC<Props> = ({ slug, active = true }) => {
   const { t } = useI18n()
   const [dates, setDates] = useState<string[] | null>(null)
   const [open, setOpen] = useState<string | null>(null)
-  const [day, setDay] = useState<{ content: string; version: string } | null>(null)
+  const [day, setDay] = useState<{ content: string; version: string; readonly?: boolean } | null>(null)
   const [draft, setDraft] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -74,7 +74,7 @@ const AgentLogPanelBody: React.FC<Props> = ({ slug, active = true }) => {
     setDay(null); setSaved(false); setError(''); setConflict(false)
     if (!open) { setBusy(false); return } // 读到一半就收起:那次请求已作废,不会再有人把 busy 放下
     setBusy(true)
-    getAgentLogSnapshot(homeTarget(), slug, open).then((r) => { if (id === request.current) setDay({ content: r.content, version: r.version }) })
+    getAgentLogSnapshot(homeTarget(), slug, open).then((r) => { if (id === request.current) setDay({ content: r.content, version: r.version, readonly: r.readonly }) })
       .catch((e) => { if (id === request.current) setError(e?.message || t('agentLog.error')) })
       .finally(() => { if (id === request.current) setBusy(false) })
     return () => { ++request.current }
@@ -114,7 +114,7 @@ const AgentLogPanelBody: React.FC<Props> = ({ slug, active = true }) => {
           {/* 反馈跟着眼睛走:存完人在看左边刚加的那一条,不在行尾(Codex 走查 10-14) */}
           {isOpen && saved && <small className="agentmem-log-saved"><Check size={11} />{t('settings.agents.memSaved')}</small>}
         </button>
-        {isOpen && day && !editing && <button type="button" className="harness-undo" title={t('common.edit')} aria-label={t('agentLog.editDay', { date })} onClick={() => { setDraft(day.content); setSaved(false) }}><Pencil size={13} /></button>}
+        {isOpen && day && !day.readonly && !editing && <button type="button" className="harness-undo" title={t('common.edit')} aria-label={t('agentLog.editDay', { date })} onClick={() => { setDraft(day.content); setSaved(false) }}><Pencil size={13} /></button>}
       </div>
       {isOpen && (editing
         ? <div className="field agentmem-log-edit">

@@ -222,6 +222,8 @@ function decodeState(raw: string): MemoryState {
 function view(s: MemoryState): MemorySnapshot {
   return structuredClone({ version: s.version, content: s.content, entries: s.entries, tombstones: s.tombstones, updatedAt: s.updatedAt, processedCandidateIds: s.processedCandidateIds });
 }
+/** 只读展示用(网页 / 手机看云端同步上来的 MEMORY.md):条目 id 每次现编,不能拿来写。 */
+export function memoryEntriesOf(content: string): MemoryEntry[] { return reconcileEntries(content, [], { kind: 'sync' }); }
 function reconcileEntries(content: string, previous: MemoryEntry[], source: MemorySource, provenance: MemoryCommit['provenance'] = []): MemoryEntry[] {
   const used = new Set<string>();
   const now = Date.now();

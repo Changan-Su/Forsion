@@ -13,10 +13,12 @@ import { withKeyLock } from '../core/keyLock.js';
 import {
   DEFAULT_AGENTS, builtinAgentDef, buildAgentDef, parseAgentConfig, serializeAgentConfig, isValidSlug,
   AVATAR_MIME_EXT, AVATAR_EXT_MIME, AVATAR_MAX_BYTES, KEEP_APPROVAL_MODE, AgentNotFoundError, AgentExistsError, mergeAgentPatch,
-  isRetiredBuiltin, normalizeAgentsMeta, sortAgentDefs, upgradeAriosoPersona,
+  isRetiredBuiltin, normalizeAgentsMeta, sortAgentDefs, upgradeAriosoPersona, resolveMemorySlug,
   type NormalAgentDef, type SaveAgentInput, type AgentsMeta, type AgentPatch,
 } from './agentRegistry.js';
 import { builtinAgentAvatar } from './builtinAvatars.js';
+import { parseHarness, type HarnessEntry } from './harnessStore.js';
+import { memoryContentVersion, memoryEntriesOf, type MemorySnapshot } from '../services/memoryRepository.js';
 
 /** 云端 agents 可用 = 非 host-exec profile 且注入了 agentFiles seam(旧云端/未注入 → 路由回落 404)。 */
 export function cloudAgentsEnabled(): boolean {
@@ -368,4 +370,41 @@ export async function cloudWriteAgentsMeta(userId: string, patch: Partial<Agents
   });
   await putText(userId, '__meta__', '.meta.json', JSON.stringify(next, null, 2));
   return next;
+}
+
+// ── 网页 / 手机看某 agent 的记忆 / 日志 / 进化(只读):就是桌面同步上来的 MEMORY.md、LOG/<日期>.md、HARNESS.md。
+// 记忆和日志按 resolveMemorySlug 找桶(与本地 storeForAgent 一致),进化用 agent 自己的 slug。读失败照抛,别当成空白。
+// ponytail: 只读;要在网页上改,得先给云端这几份文件配上本地那套版本 / 冲突协议。
+const LOG_PATH = /^LOG\/(\d{4}-\d{2}-\d{2})\.md$/;
+async function liveText(userId: string, slug: string, relPath: string): Promise<{ content: string; mtimeMs: number } | null> {
+  const f = await files().getFile(userId, slug, relPath);
+  return f && !f.deleted && !f.isBinary && f.content != null ? { content: f.content, mtimeMs: f.mtimeMs } : null;
+}
+async function memoryScope(userId: string, slug: string): Promise<string | null> {
+  const def = await cloudGetAgent(userId, slug);
+  return def ? resolveMemorySlug(def) : null;
+}
+export async function cloudReadMemory(userId: string, slug: string): Promise<(MemorySnapshot & { readonly: true }) | null> {
+  const scope = await memoryScope(userId, slug);
+  if (!scope) return null;
+  const f = await liveText(userId, scope, 'MEMORY.md');
+  const content = f?.content ?? '';
+  return { version: memoryContentVersion(f ? content : null), content, entries: memoryEntriesOf(content), tombstones: [], updatedAt: f?.mtimeMs ?? 0, processedCandidateIds: [], readonly: true };
+}
+export async function cloudLogDates(userId: string, slug: string): Promise<string[] | null> {
+  const scope = await memoryScope(userId, slug);
+  if (!scope) return null;
+  const own = (await files().getManifest(userId)).find((a) => a.slug === scope)?.files ?? [];
+  return own.flatMap((f) => { const m = !f.deleted && LOG_PATH.exec(f.relPath); return m ? [m[1]] : []; }).sort();
+}
+export async function cloudReadLog(userId: string, slug: string, date: string): Promise<{ date: string; content: string; version: string; readonly: true } | null> {
+  const scope = await memoryScope(userId, slug);
+  if (!scope) return null;
+  const f = LOG_PATH.test(`LOG/${date}.md`) ? await liveText(userId, scope, `LOG/${date}.md`) : null;
+  return { date, content: f?.content ?? '', version: memoryContentVersion(f ? f.content : null), readonly: true };
+}
+export async function cloudReadHarness(userId: string, slug: string): Promise<HarnessEntry[] | null> {
+  if (!(await cloudGetAgent(userId, slug))) return null;
+  const f = await liveText(userId, slug, 'HARNESS.md');
+  return f ? parseHarness(f.content) : [];
 }

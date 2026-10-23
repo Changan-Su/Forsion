@@ -78,6 +78,16 @@ describe('Agent memory management', () => {
     expect(await tokenOf(call[0])).toBe('account-b')
     expect(call.slice(1)).toEqual(['beta', { action: 'forget', id: 'fact-1', expectedVersion: 'v1' }])
   })
+  it('cloud (web / phone) shows the synced memory read-only; the missing Dream route is not an error', async () => {
+    vi.mocked(api.getAgentMemorySnapshot).mockResolvedValueOnce({ ...snapshot('Likes tea'), readonly: true })
+    vi.mocked(api.getAgentMemoryDream).mockRejectedValueOnce(new Error('Local Agent memory maintenance is unavailable on this backend'))
+    await render()
+    expect(host.textContent).toContain('Likes tea')
+    expect(host.textContent).toContain('agentMemory.readonly')
+    expect(host.querySelector('[role="alert"]')).toBeNull()
+    expect(host.querySelector('textarea')).toBeNull()
+    expect([...host.querySelectorAll('button')].some((b) => b.textContent === 'agentMemory.forget')).toBe(false)
+  })
   it('read failures are visible and never become editable empty memory', async () => {
     vi.mocked(api.getAgentMemorySnapshot).mockRejectedValueOnce(new Error('EIO: storage unavailable'))
     await render()

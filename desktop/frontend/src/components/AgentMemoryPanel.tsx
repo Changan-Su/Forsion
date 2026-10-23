@@ -36,6 +36,7 @@ registerMessages({
   'agentMemory.fact': { zh: '要记住的事实', en: 'Fact to remember' },
   'agentMemory.saved': { zh: '记忆已更新', en: 'Memory updated' },
   'agentMemory.error': { zh: '操作失败，请刷新后重试。', en: 'The operation failed. Refresh and try again.' },
+  'agentMemory.readonly': { zh: '这里只能查看。要修改，请在桌面端打开这个 Agent。', en: 'View only here. To make changes, open this Agent on desktop.' },
   'agentMemory.unsupported': { zh: '后端尚不支持版本化记忆，请更新后端后重试。', en: 'This backend does not support versioned memory. Update the backend and try again.' },
   'agentMemory.document': { zh: '记忆原文', en: 'Memory document' },
   'agentMemory.raw': { zh: '编辑原文', en: 'Edit source text' },
@@ -111,6 +112,8 @@ const AgentMemoryPanelBody: React.FC<Props> = ({ cfg, slug, shareDefaultMemory, 
     const results = await Promise.allSettled([getAgentMemorySnapshot(homeTarget(), slug), getAgentMemoryDream(homeTarget(), slug)])
     if (!alive.current) return
     if (results[0].status === 'fulfilled') { try { applySnapshot(results[0].value) } catch (e) { fail(e) } } else fail(results[0].reason)
+    // 云端只读那份:Dream 在云端没有(404),不算错
+    if (results[0].status === 'fulfilled' && results[0].value.readonly) { setDream(null); return }
     // 老引擎 / 外部后端可能回一个不带 status / config 的壳:当作不支持 Dream,整块不画,别让下面的 dream.status.running 崩掉整页。
     if (results[1].status === 'fulfilled') { const d = validDream(results[1].value); setDream(d); if (d) setConfigDraft(d.config) } else fail(results[1].reason)
   }
@@ -152,7 +155,8 @@ const AgentMemoryPanelBody: React.FC<Props> = ({ cfg, slug, shareDefaultMemory, 
       if (alive.current && request === revisionRequest.current) setRevisions(items)
     }).catch(fail)
   }
-  const writeDisabled = busy || Boolean(dream?.status.running) || !snapshot || dirty || Boolean(editing)
+  const ro = !!snapshot?.readonly
+  const writeDisabled = ro || busy || Boolean(dream?.status.running) || !snapshot || dirty || Boolean(editing)
   // organized = Agent 详情「成长 › 记忆」:条目是主角,整理 / 原文 / 版本记录收成底部三个折叠块(09-19 前是四个二级标签 —— 窄栏里两排药丸叠在一起,正文被挤到半屏以下)。
   // 另一种(设置里的 Agent 大脑弹窗)保持原样:那边有自己的仪器(agent-memory.check)按现有 DOM 取元素。
   const dreamBody = dream && <>
@@ -201,6 +205,7 @@ const AgentMemoryPanelBody: React.FC<Props> = ({ cfg, slug, shareDefaultMemory, 
       </div>
       {snapshot && <div style={hint}>{t('agentMemory.version')}: <code title={snapshot.version}>{snapshot.version.slice(0, 8)}</code></div>}
     </>}
+    {ro && <p style={hint}>{t('agentMemory.readonly')}</p>}
     {error && <div role="alert" style={{ ...hint, color: 'var(--danger)', marginTop: 8 }}>{error}</div>}
     {notice && <div role="status" style={{ ...hint, color: 'var(--accent-ink)', marginTop: 8 }}>{notice}</div>}
 
@@ -212,10 +217,10 @@ const AgentMemoryPanelBody: React.FC<Props> = ({ cfg, slug, shareDefaultMemory, 
       <div className={organized ? 'memory-list' : undefined}>
       {organized && <label className="profile-search"><Search size={14} /><input aria-label={t('agentMemory.search')} placeholder={t('agentMemory.search')} value={query} onChange={(e) => setQuery(e.target.value)} /></label>}
       {!organized && <p style={{ ...hint, marginTop: 12 }}>{t('agentMemory.forgetHint')}</p>}
-      <details className={organized ? 'memory-add' : undefined} style={organized ? undefined : section}><summary>{organized && <Plus size={13} />}{t('agentMemory.add')}</summary><div className="field" style={{ marginTop: 8 }}>
+      {!ro && <details className={organized ? 'memory-add' : undefined} style={organized ? undefined : section}><summary>{organized && <Plus size={13} />}{t('agentMemory.add')}</summary><div className="field" style={{ marginTop: 8 }}>
         <textarea aria-label={t('agentMemory.fact')} rows={2} value={newFact} disabled={writeDisabled} onChange={(e) => setNewFact(e.target.value)} />
         <button className="btn sm" disabled={writeDisabled || !newFact.trim()} onClick={() => void action(() => update(() => mutateAgentMemoryEntry(homeTarget(), slug,
-          { action: 'add', fact: newFact, expectedVersion: snapshot.version }))) }>{t('agentMemory.add')}</button></div></details>
+          { action: 'add', fact: newFact, expectedVersion: snapshot.version }))) }>{t('agentMemory.add')}</button></div></details>}
       <ul className={organized ? 'harness-entries' : undefined} style={organized ? undefined : { listStyle: 'none', padding: 0, margin: 0 }}>
         {shown.map((entry) => <li key={entry.id} data-memory-entry-id={entry.id} className={organized ? 'harness-entry memory-entry' : undefined} style={organized ? undefined : section}>
           {editing?.id === entry.id ? <div className="field"><textarea aria-label={t('agentMemory.fact')} value={editing.text} disabled={busy} rows={3}
@@ -229,16 +234,16 @@ const AgentMemoryPanelBody: React.FC<Props> = ({ cfg, slug, shareDefaultMemory, 
             <details><summary>{t(`agentMemory.source.${entry.source.kind}`)}</summary>
               <div>{sourceText(entry.source, '')}</div><code>{entry.id}</code>
               {entry.evidenceIds.length > 0 && <div>{entry.evidenceIds.join(' · ')}</div>}</details>
-            <button type="button" className="harness-undo" disabled={writeDisabled} title={t('agentMemory.edit')} aria-label={t('agentMemory.edit')} onClick={() => setEditing({ id: entry.id, text: entry.content, version: snapshot.version })}><Pencil size={13} /></button>
+            {!ro && <><button type="button" className="harness-undo" disabled={writeDisabled} title={t('agentMemory.edit')} aria-label={t('agentMemory.edit')} onClick={() => setEditing({ id: entry.id, text: entry.content, version: snapshot.version })}><Pencil size={13} /></button>
             <button type="button" className="harness-undo" disabled={writeDisabled} title={t('agentMemory.forget')} aria-label={t('agentMemory.forget')} onClick={() => void action(() => update(() => mutateAgentMemoryEntry(homeTarget(), slug,
-              { action: 'forget', id: entry.id, expectedVersion: snapshot.version }))) }><Eraser size={13} /></button>
+              { action: 'forget', id: entry.id, expectedVersion: snapshot.version }))) }><Eraser size={13} /></button></>}
           </div> : <div style={{ ...row, justifyContent: 'space-between' }}>
             <details style={{ ...hint, flex: 1 }}><summary>{t('agentMemory.source')}</summary>
               <div>{sourceText(entry.source, t(`agentMemory.source.${entry.source.kind}`))}</div><code>{entry.id}</code>
               {entry.evidenceIds.length > 0 && <div>{entry.evidenceIds.join(' · ')}</div>}</details>
-            <button className="btn sm" disabled={writeDisabled} onClick={() => setEditing({ id: entry.id, text: entry.content, version: snapshot.version })}>{t('agentMemory.edit')}</button>
+            {!ro && <><button className="btn sm" disabled={writeDisabled} onClick={() => setEditing({ id: entry.id, text: entry.content, version: snapshot.version })}>{t('agentMemory.edit')}</button>
             <button className="btn danger sm" disabled={writeDisabled} onClick={() => void action(() => update(() => mutateAgentMemoryEntry(homeTarget(), slug,
-              { action: 'forget', id: entry.id, expectedVersion: snapshot.version }))) }>{t('agentMemory.forget')}</button>
+              { action: 'forget', id: entry.id, expectedVersion: snapshot.version }))) }>{t('agentMemory.forget')}</button></>}
           </div>}
         </li>)}
       </ul>
@@ -247,6 +252,7 @@ const AgentMemoryPanelBody: React.FC<Props> = ({ cfg, slug, shareDefaultMemory, 
       {organized && snapshot.entries.length > 0 && <p className="memory-footnote">{t('agentMemory.forgetHint')}</p>}
       </div>
       {organized && dream && <details className="profile-disclosure"><summary>{t('agentMemory.dream')}<small>{t(dream.config.enabled ? 'agentMemory.autoOn' : 'agentMemory.autoOff')} · {t(`agentMemory.${dream.status.state}`)}</small></summary>{dreamBody}</details>}
+      {!ro && <>
       <details className={organized ? 'profile-disclosure' : undefined} style={organized ? undefined : section}><summary>{t('agentMemory.raw')}</summary><div className="field" style={{ marginTop: 8 }}>
         <p style={hint}>{t('agentMemory.rawHint')}</p>
         {dirty && editorBase.version !== snapshot.version && <p role="alert" style={{ ...hint, color: 'var(--danger)' }}>{t('agentMemory.changed')}</p>}
@@ -265,6 +271,7 @@ const AgentMemoryPanelBody: React.FC<Props> = ({ cfg, slug, shareDefaultMemory, 
           <button className="btn sm" disabled={writeDisabled || revision.version === snapshot.version} onClick={() => void action(() => update(() => restoreAgentMemory(homeTarget(), slug, revision.version, snapshot.version)))}>{t('agentMemory.restore')}</button>
         </details>)}
       </details>
+      </>}
     </>}
   </div>
 }
