@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.60.2
+  version: 1.60.3
   author: Forsion
   category: Forsion
 ---
@@ -89,7 +89,7 @@ Plugin authors: run the same checker before every release. It is the generic hal
 
 ### 图标:`icon` + `iconFile`(2026-10-04 起)
 
-图标库只有 28 枚,几个 Space 一多就撞图标。给 Space 配一枚自己的图:
+图标库只有 30 枚,几个 Space 一多就撞图标。给 Space 配一枚自己的图:
 
 ```json
 { "icon": "video", "iconFile": "icon.png" }
@@ -956,7 +956,7 @@ refresh = (rows) => h.update({ ...spec, rows })   // 数据刷新走 update:排�
   (try/catch 照不到),列表就此定格为空。宿主挂载列表面 / 切库都会重订阅,这是重读的门。
   (青鸟 2026-08-28 实报「明明有记录却是空」,根因即此。)
 - 行首图标 `iconUrl`(favicon 等)与 `icon`(词表键)**两个都给**:老宿主 / 取不到图时退 `icon`。
-- 进度类列表(章节、关卡)的行状态用 `circle-check`(做完)/ `circle`(没做完)/ `lock`(锁住;2026-10-18 起,老宿主退兜底图标)。网盘 / 存储类的行用 `hard-drive`(2026-10-18 起;老宿主没有,可拿 `ctx.app.setSpaceProgress` 在不在判新旧,旧的退 `archive`)。别用 `todo` 表示没做完 —— 它是块菜单的「待办」图标,自带勾。
+- 进度类列表(章节、关卡)的行状态用 `circle-check`(做完)/ `circle`(没做完)/ `lock`(锁住;2026-10-18 起,老宿主退兜底图标)。网盘 / 存储类的行用 `hard-drive`(2026-10-18 起;老宿主没有,可拿 `ctx.app.setSpaceProgress` 在不在判新旧,旧的退 `archive`)。`penzor` 是蓬洲云自己的图标(2026-10-23 起),别的插件别用。别用 `todo` 表示没做完 —— 它是块菜单的「待办」图标,自带勾。
 - `actions` / `itemMenu()` 的每一项是 `{ id, label, primary?, danger?, icon?, run }`:`primary` 留在工具条外面(缺省第一项),其余收进「⋯」;
   `danger: true`(2026-09-25 起)= 不可逆动作(删除 / 移除),宿主在右键菜单和「⋯」里都用危险色画它。**只管配色,确认仍由插件自己在 `run()` 里做**
   (宿主不替你弹框);惯例把它排在最后一项。老宿主忽略该字段。
