@@ -299,6 +299,23 @@ export function liftOutOfWrappers(tr: Transaction, pos: number, names: string[])
  * 映射后的位置。调用方要接着改这个块时必须走它,不能 dispatch 之后再读 selection —— 别的插件的
  * appendTransaction(如标题折叠的光标矫正)可能已把光标挪走(K-04),而且两笔事务要撤销两次。
  */
+/** 段落 / 标题的 Tab 缩进档包进列表 / 引用时归容器(先 Tab 再转列表 = 先转列表再 Tab):容器里的段落不归缩进档管
+ *  (paragraphIndent 的 indentable),档位留在段落上只会在列表符与正文之间撑出一道空隙。先摘下、包完交给 giveIndent。 */
+function takeBlockIndent(tr: Transaction, $blk: ResolvedPos): number {
+  const indent = Number($blk.parent.attrs.indent) || 0
+  if (indent) tr.setNodeMarkup($blk.before(), undefined, { ...$blk.parent.attrs, indent: 0 })
+  return indent
+}
+function giveIndent(tr: Transaction, at: number, indent: number): void {
+  const node = indent ? tr.doc.nodeAt(at) : null
+  if (node && 'indent' in node.attrs) tr.setNodeMarkup(at, undefined, { ...node.attrs, indent })
+}
+/** 只并档位相同的相邻容器:join 留前者 attrs,不同档硬并会吃掉 Tab 出来的档位或挪动已有内容。 */
+const sameIndent = (tr: Transaction, at: number): boolean => {
+  const $at = tr.doc.resolve(at)
+  return (Number($at.nodeBefore?.attrs.indent) || 0) === (Number($at.nodeAfter?.attrs.indent) || 0)
+}
+
 export function applyTrigger(
   view: EditorView,
   trig: Trigger,
@@ -405,6 +422,7 @@ export function applyTrigger(
         $blk = tr.doc.resolve(pos)
         if (!$blk.parent.isTextblock) return false
       }
+      const indent = takeBlockIndent(tr, $blk)
       if ($blk.parent.type === heading) {
         // 引用内文本按段落呈现(Notion/AFFiNE 同款):标题先降级再包。
         tr.setBlockType($blk.before(), $blk.after(), paragraph)
@@ -415,6 +433,7 @@ export function applyTrigger(
       if (!wrap) return false
       const n = tr.steps.length
       tr.wrap(range, wrap)
+      giveIndent(tr, range.start, indent)
       pos = tr.mapping.slice(n).map(pos) // wrap 插了容器开标签,位置整体后移
       $blk = tr.doc.resolve(pos)
       if (trig.rejoin) {
@@ -422,9 +441,9 @@ export function applyTrigger(
         const d = findDepth($blk, 'blockquote')
         if (d !== null) {
           const end = $blk.after(d)
-          if (tr.doc.resolve(end).nodeAfter?.type === blockquote && canJoin(tr.doc, end)) tr.join(end)
+          if (tr.doc.resolve(end).nodeAfter?.type === blockquote && sameIndent(tr, end) && canJoin(tr.doc, end)) tr.join(end)
           const start = $blk.before(d)
-          if (tr.doc.resolve(start).nodeBefore?.type === blockquote && canJoin(tr.doc, start)) tr.join(start)
+          if (tr.doc.resolve(start).nodeBefore?.type === blockquote && sameIndent(tr, start) && canJoin(tr.doc, start)) tr.join(start)
         }
       }
     } // 已在引用内:幂等,只消费触发符。
@@ -441,6 +460,7 @@ export function applyTrigger(
   // bullet / ordered / task(不在列表内):包一层 list > list_item。
   const listType = trig.kind === 'ordered' ? orderedList : bulletList
   if (!listType || !listItem) return false
+  const indent = takeBlockIndent(tr, $blk)
   if ($blk.parent.type === heading) {
     tr.setBlockType($blk.before(), $blk.after(), paragraph)
     $blk = tr.doc.resolve(pos)
@@ -449,6 +469,7 @@ export function applyTrigger(
   const wrap = range && findWrapping(range, listType, trig.kind === 'ordered' ? { order: trig.order ?? 1 } : undefined)
   if (!wrap) return false
   tr.wrap(range, wrap)
+  giveIndent(tr, range.start, indent)
   if (trig.kind === 'task') {
     // wrap 后 list 起于 range.start,li 定在 range.start+1(gfm 扩展的 checked attr)。
     const li = tr.doc.nodeAt(range.start + 1)
@@ -458,7 +479,7 @@ export function applyTrigger(
   }
   // 紧邻的前一个同类列表 → 并入(与内置 wrappingInputRule 同款)。
   const nb = tr.doc.resolve(range.start).nodeBefore
-  if (nb && nb.type === listType && canJoin(tr.doc, range.start)) tr.join(range.start)
+  if (nb && nb.type === listType && sameIndent(tr, range.start) && canJoin(tr.doc, range.start)) tr.join(range.start)
   view.dispatch(tr.scrollIntoView())
   return true
 }

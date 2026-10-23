@@ -90,6 +90,8 @@ const paragraphIndentSchema = paragraphSchema.extendSchema((prev) => (ctx) => {
             children = rest ? [{ ...first, value: rest }, ...children!.slice(1)] : children!.slice(1)
           }
         }
+        // 列表项 / 引用里的段落不归缩进档管(见 indentable):旧版「先 Tab 再转列表」存下的 `* &#9;字` 打开即归零,下次存盘自愈。
+        if (['list_item', 'blockquote'].includes((state as unknown as { top(): { type: { name: string } } | undefined }).top()?.type.name ?? '')) indent = 0
         const raw = (node as MdNode).data?.amadeusRaw ?? null
         state.openNode(type, indent || align !== 'left' || raw != null ? { indent, align, raw } : undefined)
         if (children?.length) state.next(children as never)
