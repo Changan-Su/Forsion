@@ -36,6 +36,8 @@ registerMessages({
   'chat.team.done': { zh: '已完成', en: 'Done' },
   'chat.approval.pointer': { zh: '{name} 等你批准 · 在输入框上方', en: '{name} is waiting for your approval · above the input box' },
   'chat.approval.pointerN': { zh: '{n} 项操作等你批准 · 在输入框上方', en: '{n} actions are waiting for your approval · above the input box' },
+  'chat.inquiry.updateAnswered': { zh: '你答了「{q}」', en: 'You answered “{q}”' },
+  'chat.inquiry.updateNone': { zh: '「{q}」没等到回答', en: 'No answer to “{q}”' },
   'chat.inquiry.pointer': { zh: '有问题等你回答 · 在输入框上方', en: 'A question is waiting for your answer · above the input box' },
   'chat.inquiry.expiredLine': { zh: '提问已过期 · {q}', en: 'Question expired · {q}' },
   'chat.inquiry.pointerN': { zh: '{n} 个问题等你回答 · 在输入框上方', en: '{n} questions are waiting for your answer · above the input box' },
@@ -67,7 +69,7 @@ import { formatDateTime, formatMessageTime } from '../../format/time'
 import { TaskCards, TaskTraces, type TaskLanding } from './TaskCards'
 import { MuseApprovalLine, MuseTodoCards, ProactiveMark, isProactive } from './MuseDm'
 import { CHILD_UPDATE_OPEN, ChildUpdateLine, ForkBlock, childIdsOf } from './ChildSessions'
-import { APPROVAL_UPDATE_OPEN, approvalForCall, parseApprovalUpdate, pickPlanInquiry, type ApprovalOutcome } from './approvalQueue'
+import { APPROVAL_UPDATE_OPEN, INQUIRY_UPDATE_OPEN, approvalForCall, parseApprovalUpdate, parseInquiryUpdate, pickPlanInquiry, type ApprovalOutcome } from './approvalQueue'
 import { isRemoteApprover, wasDecidedHere } from '../../components/ApprovalCard'
 import { answeredByText } from '../../approvalReason'
 import { refForSession, targetForSession, useSessionHostName } from '../../services/engine/targets'
@@ -461,6 +463,21 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
     // 输出不在这里(引擎把真结果放回了原工具卡),这一行只说谁批了什么。
     // 子会话结果送回主会话(引擎落库的 <child_sessions_update> user 行):同理画成一行系统行。
     if (msg.content.startsWith(CHILD_UPDATE_OPEN)) return <div ref={rootRef}><ChildUpdateLine content={msg.content} /></div>
+    // 挂起提问的答案回灌(<inquiry_update>,10-23):agent 没停下来等,答案到了这一行标出「它从这里接着用上了」
+    if (msg.content.startsWith(INQUIRY_UPDATE_OPEN)) {
+      const rows = parseInquiryUpdate(msg.content)
+      return (
+        <div ref={rootRef} className="t2-sys t2-apv-update" data-inquiry-update={rows.length}>
+          {rows.map((r) => (
+            <div key={r.callId} className="t2-apv-update-row" data-status={r.answered ? 'approved' : 'rejected'}>
+              {r.answered ? <CircleCheck size={12} /> : <CircleX size={12} />}
+              <span className="t2-apv-update-what">{t(r.answered ? 'chat.inquiry.updateAnswered' : 'chat.inquiry.updateNone', { q: r.question })}</span>
+              {r.answered && <span className="t2-apv-update-preview" title={r.answer}>{r.answer}</span>}
+            </div>
+          ))}
+        </div>
+      )
+    }
     if (msg.content.startsWith(APPROVAL_UPDATE_OPEN)) {
       const rows = parseApprovalUpdate(msg.content)
       return (
