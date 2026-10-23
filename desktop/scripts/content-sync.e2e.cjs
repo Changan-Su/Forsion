@@ -130,16 +130,21 @@ async function main(){
   const win=await app.firstWindow({timeout:120000});win.on('pageerror',e=>console.log('pageerror',String(e)));await win.waitForSelector('#root');await skipOnboarding(win);await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].setContentSize(1512,950))
   await win.waitForTimeout(3000);const later=win.getByRole('button',{name:'稍后',exact:true});if(await later.count())await later.first().click()
   const btn=win.locator('.rb [aria-label="蓬洲云"]').first();if(!await btn.count())await win.locator('.rb-more[data-rb-more="top"]').click();await btn.click();await win.waitForSelector('.pz-total')
-  await win.locator('.t2s-srow-title',{hasText:/^同步$/}).first().click();await win.waitForSelector('.pz-rule-table',{timeout:20000})
-  check('B rule table loads through actual private IPC',true)
-  await win.locator('.pz-rule-enable input').check()
-  for(const [folder,target]of [['B','device-E'],['C','device-F'],['D','off']]){await win.getByRole('button',{name:'添加规则',exact:true}).click();const rows=win.locator('.pz-rule-row').filter({has:win.locator('input')});const row=rows.last();await row.locator('input').fill('agents/'+folder);await row.locator('select').selectOption(target)}
-  await win.screenshot({path:path.join(RAW,'rules-B-light.png')});check('per-folder destination overrides editable',await win.locator('.pz-rule-row input').count()===4)
-  await win.getByRole('button',{name:'预览变更',exact:true}).click();await win.waitForSelector('.pz-rule-preview');check('preview does not start content uploads',![...cloud.nodes.values()].flat().some(n=>n.path==='agents/A/MEMORY.md'))
-  await win.screenshot({path:path.join(RAW,'preview.png')});await win.getByRole('button',{name:'确认并开始',exact:true}).click()
-  await win.waitForFunction(()=>Array.from(document.querySelectorAll('.pz-rule-job')).some(e=>e.textContent.includes('incoming.bin')),{timeout:20000})
-  await win.getByRole('tab',{name:/正在传输/}).click();await win.waitForTimeout(1200);await win.screenshot({path:path.join(RAW,'transfers.png')})
-  check('live download is visible with byte progress',(await win.locator('.pz-rule-job').allTextContents()).some(t=>t.includes('incoming.bin')))
+  // 2026-10-23 起同步页是「分类清单」(方案 2):第一次打开四类摆成所有设备共用,展开 Agents 逐个改「和谁共用」;规则表收进「···」→「高级」
+  await win.locator('[data-row-key="sync-home"]').first().click();await win.waitForSelector('.pz-cs',{timeout:20000})
+  check('category list loads through actual private IPC',await win.locator('.pz-cs .pz-sync-row [role=switch]').count()>=4)
+  await win.locator('.pz-sync-row .pz-sync-main[aria-expanded]',{hasText:'Agents'}).click()
+  const child=(n)=>win.locator(`.pz-cs-child[title="agents/${n}"]`)
+  for(const [folder,name]of [['B','设备 E'],['C','设备 F']]){await child(folder).locator('.pz-scope').click();await win.locator('.pz-cs-menu').getByText(`只和 ${name} 共用`,{exact:true}).click()}
+  await child('D').locator('[role=switch]').click()
+  await win.waitForFunction(()=>/打开同步会上传/.test(document.querySelector('.pz-cs-bar')?.innerText||''),null,{timeout:20000})
+  await win.screenshot({path:path.join(RAW,'rules-B-light.png')})
+  check('per-agent destination overrides editable',(await child('B').innerText()).includes('设备 E')&&(await child('C').innerText()).includes('设备 F')&&(await child('D').locator('[role=switch]').getAttribute('aria-checked'))==='false')
+  check('preview does not start content uploads',![...cloud.nodes.values()].flat().some(n=>n.path==='agents/A/MEMORY.md'))
+  await win.locator('.pz-cs-bar').getByRole('button',{name:'开始同步',exact:true}).click()
+  await win.waitForFunction(()=>/incoming\.bin/.test(document.querySelector('.pz-cs-act')?.innerText||''),null,{timeout:20000})
+  await win.waitForTimeout(600);await win.screenshot({path:path.join(RAW,'transfers.png')})
+  check('live download is visible with byte progress',/incoming\.bin[\s\S]*\/ 20 MB/.test(await win.locator('.pz-cs-act').innerText()))
   const samples=[];for(let attempt=0;attempt<200;attempt++){const r=await win.evaluate(()=>window.tangu.cloudInvoke('penzor:sync:get'));samples.push({running:r.value?.running,phase:r.value?.phase});if(r.ok&&!r.value.running&&fs.existsSync(path.join(workspace,'incoming.bin')))break;await win.waitForTimeout(100)}
   fs.writeFileSync(path.join(RAW,'sync-samples.json'),JSON.stringify(samples));
   check('A goes to default',cloud.nodes.get('default').some(n=>n.path==='agents/A/MEMORY.md'&&n.bytes))
@@ -147,10 +152,10 @@ async function main(){
   check('C goes to device F',cloud.nodes.get('device-F').some(n=>n.path==='agents/C/MEMORY.md'&&n.bytes))
   check('D stays local',![...cloud.nodes.values()].flat().some(n=>n.path==='agents/D/MEMORY.md'))
   check('download writes expected bytes',fs.readFileSync(path.join(workspace,'incoming.bin')).equals(Buffer.alloc(20*1024*1024,7)))
-  await win.getByRole('tab',{name:'历史记录',exact:true}).click();await win.screenshot({path:path.join(RAW,'history.png')})
-  await win.getByRole('tab',{name:'同步规则',exact:true}).click();await win.evaluate(()=>{document.documentElement.dataset.mode='dark';document.documentElement.classList.add('dark')});await win.screenshot({path:path.join(RAW,'rules-B-dark.png')})
+  await win.getByRole('button',{name:'最近记录'}).click();await win.waitForSelector('.pz-cs-log');await win.screenshot({path:path.join(RAW,'history.png')})
+  await win.evaluate(()=>{document.documentElement.dataset.mode='dark';document.documentElement.classList.add('dark')});await win.screenshot({path:path.join(RAW,'rules-B-dark.png')})
   await app.evaluate(({BrowserWindow})=>{const w=BrowserWindow.getAllWindows()[0];w.setMinimumSize(480,400);w.setContentSize(620,850)});await win.waitForTimeout(300);check('narrow acceptance viewport is 620px',await win.evaluate(()=>innerWidth===620));await win.screenshot({path:path.join(RAW,'rules-B-narrow.png')})
-  check('narrow rule controls stay inside viewport',await win.evaluate(()=>[...document.querySelectorAll('.pz-rule-row input,.pz-rule-row select')].every(x=>x.getBoundingClientRect().right<=innerWidth)))
+  check('narrow sync controls stay inside viewport',await win.evaluate(()=>[...document.querySelectorAll('.pz-cs .pz-scope,.pz-cs [role=switch]')].every(x=>x.getBoundingClientRect().right<=innerWidth)))
   fs.writeFileSync(path.join(RAW,'result.json'),JSON.stringify({checks,context:'Built Electron + signed disposable Extend + real IPC/fs + local fake cloud + stub engine; no real account or installed app touched'},null,2))
  }catch(e){const win=app.windows()[0];await win?.screenshot({path:path.join(RAW,'failure.png')});console.error(await win?.evaluate(()=>document.body.innerText.slice(-5000)));throw e}
  finally{await app.windows()[0]?.evaluate(()=>window.tangu?.cloudInvoke?.('penzor:sync:pause',true)).catch(()=>{});await new Promise(r=>setTimeout(r,500));const closing=app.close().catch(()=>{});const timer=setTimeout(()=>{app.process()?.kill('SIGTERM')},5000);await closing;clearTimeout(timer);await stub.close();cloud.close();fs.rmSync(home,{recursive:true,force:true});fs.rmSync(fixture.root,{recursive:true,force:true})}
