@@ -1459,7 +1459,6 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
           else if (e.type === 'subagent' && p.phase === 'done') ev.subDones.push({ subId: String(p.subId || ''), at: Date.now() - t0, error: p.error ? String(p.error) : null });
           // agentConfig.debugSystemPrompt 时引擎回传本 run 组装好的系统提示:证「段真的进了提示词」,与模型配不配合无关。
           else if (e.type === 'system_prompt') { ev.systemPrompt = String(p.content || ''); ev.recalled = String(p.recalled || ''); }
-          else if (e.type === 'inquiry_request') { ev.inquiries.push({ inquiryId: p.inquiryId, question: String(p.question || '').slice(0, 300) }); pending.push({ inquiryId: p.inquiryId }); }
           else if (e.type === 'approval_request') {
             ev.approvals += 1;
             ev.approvalList.push({ name: p.name, reason: p.reason?.kind, mode: p.reason?.mode, agent: p.agentSlug, args: String(p.arguments || '').slice(0, 300), remote: p.remote ?? null });
@@ -1546,6 +1545,7 @@ async function runParked(sessionId, message, { onBeforeApprove, awaitingMs = 150
           if (e.type === 'usage') turn += 1;
           else if (e.type === 'tool_call') ev.toolCalls.push({ id: p.id, name: p.name, args: String(p.arguments || '').slice(0, 400), atMs: Date.now() - t0, turn });
           else if (e.type === 'tool_result') ev.toolResults.push({ id: p.id, name: p.name, parked: !!p.parked, isError: !!p.isError, result: String(p.result || '').slice(0, 1500), atMs: Date.now() - t0 });
+          else if (e.type === 'inquiry_request') { ev.inquiries.push({ inquiryId: p.inquiryId, question: String(p.question || '').slice(0, 300) }); pending.push({ inquiryId: p.inquiryId }); }
           else if (e.type === 'approval_request') { ev.approvals.push({ approvalId: p.approvalId, name: p.name, toolCallId: p.toolCallId, args: String(p.arguments || '').slice(0, 400) }); pending.push(p); }
           else if (e.type === 'status' && p.phase === 'awaiting_approval') { ev.awaiting += 1; awaitingSeen = true; await approveNext(true); awaitingSeen = false; }
           else if (e.type === 'done') { ev.done = true; ev.content = String(p.content || ''); break outer; }
@@ -3182,7 +3182,7 @@ try {
     const sid = `live-parkedask-${Date.now()}`;
     const ev = await runParked(sid,
       `Two independent tasks in ${dir}:\n` +
-      `1. Use ask_user to ask me which word to use, with the options "alpha" and "beta". Write the word I pick into ${choiceFile}.\n` +
+      `1. Ask me right away with ask_user which word to use, with the options "alpha" and "beta". Write the word I pick into ${choiceFile}.\n` +
       `2. Read ${srcFile} and write its single line into a new file ${sideFile}.\n` +
       'When both are done, tell me in one line what each file contains.',
       { answer: 'beta', onBeforeApprove: () => ({ side: existsSync(sideFile) ? readFileSync(sideFile, 'utf8').trim() : null, choice: existsSync(choiceFile) ? readFileSync(choiceFile, 'utf8').trim() : null }) });
@@ -3205,11 +3205,13 @@ try {
     };
     const sideCall = ev.toolCalls.find((c) => c.name === 'write_file' && c.args.includes('notes.md'));
     const sameTurn = !!sideCall && !!askCalls[0] && sideCall.turn === askCalls[0].turn;
+    // 模型先做完旁支再问:行为没错,但「读到占位后接着干」没受检 → 未判定
+    const sideFirst = !!sideCall && !!askCalls[0] && sideCall.turn < askCalls[0].turn;
     const bad = Object.entries(checks).filter(([, v]) => !v).map(([k]) => k);
     return {
-      ok: !bad.length, inconclusive: !bad.length && sameTurn,
+      ok: !bad.length, inconclusive: !bad.length && (sameTurn || sideFirst),
       detail: ev.error || (bad.length ? `未过:${bad.join(',')}` : '全过') +
-        `${sameTurn ? ';⚠️notes.md 与 ask_user 同一轮发出(占位措辞未受检)' : ''};提问 ${ev.inquiries.length} 个 / ask_user ${askCalls.length} 次;答前现场 ${JSON.stringify(ev.beforeApprove)};` +
+        `${sameTurn ? ';⚠️notes.md 与 ask_user 同一轮发出(占位措辞未受检)' : sideFirst ? ';⚠️先写完 notes.md 才问(占位后接着干没受检)' : sideCall ? ';notes.md 在读到占位之后写' : ''};提问 ${ev.inquiries.length} 个 / ask_user ${askCalls.length} 次;答前现场 ${JSON.stringify(ev.beforeApprove)};` +
         `${ev.approvedOnAwaiting ? '收尾闸门等答案时答' : '⚠️没等到 awaiting_approval(兜底答)'};choice=${choiceNow};回灌 ${updates.length} 条`,
       output: `${ev.content}\n\n[timeline]\n${[...ev.toolCalls.map((c) => `${c.atMs}ms call ${c.name} (turn ${c.turn})`), ...ev.toolResults.map((r) => `${r.atMs}ms result ${r.name}${r.parked ? ' (parked)' : ''}`), ev.approvedAtMs != null ? `${ev.approvedAtMs}ms answer` : ''].filter(Boolean).sort((a, b) => parseInt(a) - parseInt(b)).join('\n')}`,
       toolCalls: ev.toolCalls.map((c) => c.name),
