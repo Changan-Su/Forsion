@@ -12,7 +12,7 @@ import { targetCaps, type TargetCaps } from './engine/targetCaps'
 import { classify, noteReachable, noteVerdict } from './engine/health'
 import './engine/messages'
 import { AGENT_APP_ID, unitFailureMessage } from './agentRunService'
-import { localInbox } from './localInbox' // 移动端(window.tangu?.mobile)下 inbox 走设备本地存储
+import { localInbox, localizeInboxMessage } from './localInbox' // 移动端(window.tangu?.mobile)下 inbox 走设备本地存储
 import { registerMessages, translate } from '../i18n'
 import { LOCAL_ONLY_CODE, localOnlyMessage, remoteRefusalMessage } from './localOnly'
 import { saveResponseAs } from './nativeDownload'
@@ -1206,6 +1206,9 @@ export interface InboxMessage {
   id: string
   title: string
   body: string
+  /** 广播英文版(可空)。listInbox 已按界面语言挑进 title/body,视图只读那两个。 */
+  title_en?: string | null
+  body_en?: string | null
   sender_kind: 'agent' | 'server' | 'system'
   sender_id: string | null
   origin_broadcast_id: string | null
@@ -1220,9 +1223,10 @@ export type InboxFilter = 'all' | 'unread' | 'archived'
 
 // 移动端(window.tangu?.mobile)inbox 走设备本地存储(localInbox);桌面/web 走远程 /agent/inbox。
 export const listInbox = (t: EngineTarget, filter: InboxFilter = 'all') =>
-  window.tangu?.mobile
+  (window.tangu?.mobile
     ? localInbox.list(filter)
     : request<{ messages: InboxMessage[] }>(t, `/agent/inbox?filter=${filter}&limit=200`).then((r) => r.messages)
+  ).then((ms) => ms.map((m) => localizeInboxMessage(m)))
 
 export const getInboxUnreadCount = (t: EngineTarget) =>
   window.tangu?.mobile
