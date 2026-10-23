@@ -40,5 +40,7 @@ describe('cloud agent file reads', () => {
     expect(await cloudReadMemory('u', 'Bad Slug')).toBeNull();
     agentFiles.getFile.mockResolvedValueOnce(null).mockRejectedValueOnce(new Error('EIO')) // config.toml 缺 → 内置 xyra;再读 HARNESS.md 失败
     await expect(cloudReadHarness('u', 'xyra')).rejects.toThrow('EIO');
+    agentFiles.getFile.mockRejectedValueOnce(new Error('EIO')) // 配置读失败不许落回内置预设、读错记忆桶
+    await expect(cloudReadMemory('u', 'scout')).rejects.toThrow('EIO');
   });
 });

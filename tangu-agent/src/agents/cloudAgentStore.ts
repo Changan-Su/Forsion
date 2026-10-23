@@ -42,11 +42,11 @@ async function readText(userId: string, slug: string, relPath: string): Promise<
 /** 云端读一个 agent。文件未命中(从未存在或已墓碑)→ **内置预设兜底**(纯内存虚拟 def):
  *  Picker 选虚拟预设后 PATCH/头像的「读现有」由此命中,显式编辑才物化落库
  *  ——绝不因为「看了一眼列表」就往用户的 Forsion AI Brain 写数据。 */
-export async function cloudGetAgent(userId: string, slug: string): Promise<NormalAgentDef | null> {
+export async function cloudGetAgent(userId: string, slug: string, read = readText): Promise<NormalAgentDef | null> {
   if (!slug || !isValidSlug(slug)) return null;
-  const cfg = await readText(userId, slug, 'config.toml');
+  const cfg = await read(userId, slug, 'config.toml');
   if (cfg == null) return builtinAgentDef(slug);
-  const soul = (await readText(userId, slug, 'SOUL.md')) ?? '';
+  const soul = (await read(userId, slug, 'SOUL.md')) ?? '';
   try {
     return upgradeAriosoPersona(parseAgentConfig(slug, cfg, soul));
   } catch {
@@ -380,8 +380,10 @@ async function liveText(userId: string, slug: string, relPath: string): Promise<
   const f = await files().getFile(userId, slug, relPath);
   return f && !f.deleted && !f.isBinary && f.content != null ? { content: f.content, mtimeMs: f.mtimeMs } : null;
 }
+// 配置读失败要照抛:吞掉就落回内置预设,共用默认记忆的 agent 会读错桶(Codex 评审)
+const strictText = async (userId: string, slug: string, relPath: string): Promise<string | null> => (await liveText(userId, slug, relPath))?.content ?? null;
 async function memoryScope(userId: string, slug: string): Promise<string | null> {
-  const def = await cloudGetAgent(userId, slug);
+  const def = await cloudGetAgent(userId, slug, strictText);
   return def ? resolveMemorySlug(def) : null;
 }
 export async function cloudReadMemory(userId: string, slug: string): Promise<(MemorySnapshot & { readonly: true }) | null> {
@@ -404,7 +406,7 @@ export async function cloudReadLog(userId: string, slug: string, date: string): 
   return { date, content: f?.content ?? '', version: memoryContentVersion(f ? f.content : null), readonly: true };
 }
 export async function cloudReadHarness(userId: string, slug: string): Promise<HarnessEntry[] | null> {
-  if (!(await cloudGetAgent(userId, slug))) return null;
+  if (!(await cloudGetAgent(userId, slug, strictText))) return null;
   const f = await liveText(userId, slug, 'HARNESS.md');
   return f ? parseHarness(f.content) : [];
 }
