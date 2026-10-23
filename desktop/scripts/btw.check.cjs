@@ -180,6 +180,7 @@ async function main() {
     await win.screenshot({ path: path.join(shots, 'quote-preview.png') })
     await win.keyboard.press('Escape')
     check('Esc 关掉全文窗', await until(async () => (await preview.count()) === 0, 5000))
+    check('关掉后焦点回到点开它的那颗磁贴', await win.evaluate(() => !!document.activeElement?.closest('#tocmsg-u0 .att-tile--quote')))
     await win.locator('text=另一条会话').first().click()
     await until(async () => (await btw.count()) === 0)
     check('切到别的会话 → 主对话输入框上方没有上一个会话的引用卡', (await mainQuotes.count()) === 0)
