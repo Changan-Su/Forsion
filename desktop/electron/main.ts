@@ -1952,7 +1952,8 @@ let stopMiniPassThrough: (() => void) | null = null
 /** Mini 尚在载入时也保留最后一次定向,`did-finish-load` 后补发,避免快速连续打开丢第二个目标。 */
 let miniTarget: MiniOpenOptions | undefined
 /** 贴边吸附态:edge=贴哪条边,expanded=当前是否展开。null=未贴边(自由浮动)。 */
-let miniDock: { edge: Edge; expanded: boolean; displayId: number; workArea: Rect } | null = null
+type MiniDockState = { edge: Edge; expanded: boolean; displayId: number; workArea: Rect }
+let miniDock: MiniDockState | null = null
 let miniDockMotion: ReturnType<typeof createMiniDockMotion> | null = null
 let suppressMiniMoved = false // 抑制程序化 setBounds 触发的 moved(否则折叠/展开自激)
 let miniDragging = false // 用户正在拖窗(moved 连发中);其间不吸附/不轮询,避免和拖拽对打(修「拖不出来」)
@@ -1968,6 +1969,7 @@ const MINI_MAX = { width: 640, height: 900 }
 let miniSize = { width: MINI_CARD_WIDTH, height: MINI_CARD_HEIGHT }
 /** 正在拖缩放边:起手时的窗口与光标;null = 没在拖。 */
 let miniResizeFrom: { bounds: Rect; cursor: Electron.Point } | null = null
+let miniResizeDock: MiniDockState | null = null
 const MINI_PEEK = 14 // 折叠后露出可辨识的把手宽度,避免 8px 细线难发现
 const MINI_TRIGGER_PAD = 6 // 悬停触发容差(薄条外扩,好点中)
 const MINI_HYSTERESIS = 28 // 展开后离开迟滞(出界超此才折叠,修「一动就弹回」)
@@ -2038,6 +2040,7 @@ function createMiniWindow(opts?: MiniOpenOptions): void {
   hardenNav(miniWindow.webContents)
   miniWindow.webContents.on('did-finish-load', () => {
     miniResizeFrom = null // 拖到一半页面重载:收不到松手,这里收场
+    miniResizeDock = null
     if (miniTarget && miniWindow && !miniWindow.isDestroyed()) miniWindow.webContents.send('window:miniTarget', miniTarget)
   })
   stopMiniPassThrough = startMiniPassThrough(miniWindow, {
@@ -2057,7 +2060,7 @@ function createMiniWindow(opts?: MiniOpenOptions): void {
     if (miniSettleTimer) clearTimeout(miniSettleTimer)
     if (miniMovedTimer) clearTimeout(miniMovedTimer)
     suppressMiniMoved = false; miniDragging = false
-    miniWindow = null; miniTarget = undefined; miniDock = null; miniResizeFrom = null; stopMiniPoll()
+    miniWindow = null; miniTarget = undefined; miniDock = null; miniResizeFrom = null; miniResizeDock = null; stopMiniPoll()
   })
   console.log('[win] mini open')
   loadRendererWith(miniWindow, { window: 'mini', ...(opts?.sessionId ? { sessionId: opts.sessionId } : {}) })
@@ -4106,7 +4109,19 @@ app.whenReady().then(async () => {
   ipcMain.on('window:miniResize', (e, edge: unknown, start: unknown, point: unknown) => {
     if (!isTrustedSender(e) || !miniWindow || miniWindow.isDestroyed() || e.sender !== miniWindow.webContents) return
     if (typeof edge !== 'string' || !/^(?=.)[ns]?[ew]?$/.test(edge)) {
+      const dock = miniResizeDock
       miniResizeFrom = null
+      miniResizeDock = null
+      if (dock) {
+        const display = screen.getAllDisplays().find(d => d.id === dock.displayId)
+        // Resizing an expanded docked card pauses docking only for the gesture.
+        // Keep it docked if its original edge and monitor still match afterwards.
+        if (display && JSON.stringify(display.workArea) === JSON.stringify(dock.workArea) && nearestEdge(miniBounds(), dock.workArea) === dock.edge) {
+          miniDock = { ...dock, expanded: true }
+          setMiniBounds(expandedBounds(miniBounds(), dock.edge, dock.workArea), false)
+          ensureMiniPoll()
+        }
+      }
       if (process.platform === 'darwin') miniWindow.invalidateShadow() // 透明窗的投影按新轮廓重算(长大时新露出的那块在重绘前是透明的)
       return
     }
@@ -4118,6 +4133,7 @@ app.whenReady().then(async () => {
       // 刚拖到边上、还没判贴边就开始拉:那次判定作废,免得拉到一半被折叠
       if (miniSettleTimer) { clearTimeout(miniSettleTimer); miniSettleTimer = null }
       miniDragging = false
+      miniResizeDock = miniDock ? { ...miniDock } : null
       miniDockMotion?.reset(); miniDock = null; stopMiniPoll()
       miniResizeFrom = { bounds: miniBounds(), cursor }
     }
