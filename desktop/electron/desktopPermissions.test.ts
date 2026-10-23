@@ -222,26 +222,29 @@ describe('explicit permission actions', () => {
 })
 
 describe('repairing a grant row left by another helper signature', () => {
-  // After shutdown the old socket refuses until the relaunched helper answers.
-  const restartingHelper = () => {
+  const opened = () => m.launch.mock.calls.filter((call) => call[0] === '/usr/bin/open')
+  const reset = () => m.launch.mock.calls.filter((call) => call[0] === '/usr/bin/tccutil')
+  // Helper 81 reads both permissions as not granted; after shutdown the socket refuses until a new helper (82) answers.
+  const restartingHelper = (status: Partial<typeof native> = {}) => {
     let stopped = false
     m.ask.mockImplementation((_socket, request) => {
       if (request.cmd === 'shutdown') { stopped = true; return Promise.resolve({}) }
-      if (stopped && !m.launch.mock.calls.some((call) => call[0] === '/usr/bin/open')) return Promise.reject(Object.assign(new Error('refused'), { code: 'ECONNREFUSED' }))
-      return Promise.resolve({ ...native, accessibility: false })
+      if (stopped && !opened().length) return Promise.reject(Object.assign(new Error('refused'), { code: 'ECONNREFUSED' }))
+      return Promise.resolve({ ...native, accessibility: false, screenRecordingPreflight: false, ...status,
+        source: { attribution: 'helper-app', pid: opened().length ? 82 : 81 } })
     })
-    vi.spyOn(process, 'kill').mockImplementation(() => { throw Object.assign(new Error('gone'), { code: 'ESRCH' }) })
+    return vi.spyOn(process, 'kill').mockImplementation(() => { throw Object.assign(new Error('gone'), { code: 'ESRCH' }) })
   }
 
-  it('resets only that permission for the helper bundle, restarts the helper, re-registers and reopens its pane', async () => {
+  it('stops the helper, resets only that permission for its bundle, relaunches, re-registers and reopens the pane', async () => {
     restartingHelper()
     await service().repair('computerScreen', { locale: 'zh' })
-    expect(m.launch.mock.calls[0].slice(0, 2)).toEqual(['/usr/bin/tccutil', ['reset', 'ScreenCapture', 'com.forsion.tangu-computer-use']])
+    expect(reset().map((call) => call[1])).toEqual([['reset', 'ScreenCapture', 'com.forsion.tangu-computer-use']])
     const cmds = m.ask.mock.calls.map((call) => call[1])
     const shutdown = cmds.findIndex((r) => r.cmd === 'shutdown')
-    expect(shutdown).toBeGreaterThan(-1)
-    expect(m.launch.mock.invocationCallOrder[0]).toBeLessThan(m.ask.mock.invocationCallOrder[shutdown])
-    expect(m.launch.mock.calls[1].slice(0, 2)).toEqual(['/usr/bin/open', expect.arrayContaining(['-n', '-g', 'serve'])])
+    expect(m.ask.mock.invocationCallOrder[shutdown]).toBeLessThan(m.launch.mock.invocationCallOrder[0])
+    expect(opened()).toHaveLength(1)
+    expect(opened()[0][1]).toEqual(expect.arrayContaining(['-n', '-g', 'serve']))
     expect(cmds.slice(shutdown)).toContainEqual({ cmd: 'registerPermissions', kind: 'screenRecording' })
     expect(m.open).toHaveBeenCalledExactlyOnceWith('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture')
     expect(m.show).toHaveBeenCalledWith('computerScreen', { locale: 'zh' })
@@ -251,26 +254,64 @@ describe('repairing a grant row left by another helper signature', () => {
   it('from the guide it does not reopen the guide that is waiting on it', async () => {
     restartingHelper()
     await service().repair('computerAccessibility', {}, true)
-    expect(m.launch.mock.calls[0][1]).toEqual(['reset', 'Accessibility', 'com.forsion.tangu-computer-use'])
+    expect(reset()[0][1]).toEqual(['reset', 'Accessibility', 'com.forsion.tangu-computer-use'])
     expect(m.open).toHaveBeenCalledOnce()
     expect(m.show).not.toHaveBeenCalled()
   })
 
-  it('a failed reset leaves the helper running and opens nothing', async () => {
-    m.launch.mockImplementation((_command, _args, _options, callback) => callback(new Error('tccutil: No such bundle identifier')))
-    const s = service()
-    await expect(s.repair('computerAccessibility')).rejects.toThrow('No such bundle identifier')
+  it('a stale button cannot revoke a grant that works now: nothing is stopped or reset', async () => {
+    restartingHelper({ accessibility: true })
+    expect((await service().repair('computerAccessibility')).permissions.computerAccessibility).toBe('granted')
+    expect(m.launch).not.toHaveBeenCalled()
     expect(m.ask.mock.calls.map((call) => call[1].cmd)).not.toContain('shutdown')
-    expect(m.open).not.toHaveBeenCalled()
-    expect(s.helperBusy()).toBe(false)
   })
 
-  it('media permissions and untrusted senders never reach tccutil', async () => {
+  it('a helper that does not stop is not reset under', async () => {
+    restartingHelper()
+    vi.mocked(process.kill).mockImplementation(() => true)
+    const now = vi.spyOn(Date, 'now')
+    let t = 0
+    now.mockImplementation(() => (t += 1000))
+    await expect(service().repair('computerAccessibility')).rejects.toThrow('did not stop')
+    expect(reset()).toHaveLength(0)
+  })
+
+  it('a failed reset or leaving the page meanwhile still brings the helper back', async () => {
+    restartingHelper()
+    m.launch.mockImplementation((command, _args, _options, callback) => command === '/usr/bin/tccutil'
+      ? callback(new Error('tccutil: No such bundle identifier')) : callback(null, '', ''))
+    const s = service()
+    await expect(s.repair('computerAccessibility')).rejects.toThrow('No such bundle identifier')
+    expect(opened()).toHaveLength(1)
+    expect(m.open).not.toHaveBeenCalled()
+    expect(s.helperBusy()).toBe(false)
+
+    vi.clearAllMocks()
+    restartingHelper()
+    m.launch.mockImplementation((command, _args, _options, callback) => { if (command === '/usr/bin/tccutil') s.closeGuide(); callback(null, '', '') })
+    await s.repair('computerAccessibility')
+    expect(opened()).toHaveLength(1)
+    expect(m.ask.mock.calls.map((call) => call[1].cmd)).not.toContain('registerPermissions')
+    expect(m.open).not.toHaveBeenCalled()
+  })
+
+  it('media permissions, external helpers and untrusted senders never reach tccutil', async () => {
     await expect(service().repair('microphone')).rejects.toThrow('Only Computer Use')
     registerDesktopPermissions({ isTrustedSender: (e) => !!(e as any).trusted, computerUseAvailable: true, returnToApp: vi.fn() })
     expect(() => m.handlers.get('permissions:repair')!({}, 'computerScreen')).toThrow('Untrusted')
-    expect(() => m.handlers.get('permissions:repair')!({ trusted: true }, 'Accessibility')).toThrow('Unknown permission')
+    expect(() => m.handlers.get('permissions:repair')!({ trusted: true, sender: { on: vi.fn() } }, 'Accessibility')).toThrow('Unknown permission')
     expect(m.launch).not.toHaveBeenCalled()
+  })
+
+  it('repair owns the guide like a request does, so leaving the page closes it', async () => {
+    restartingHelper({ accessibility: true })
+    registerDesktopPermissions({ isTrustedSender: () => true, computerUseAvailable: true, returnToApp: vi.fn() })
+    const listeners = new Map<string, () => void>()
+    const sender = { on: (name: string, fn: () => void) => listeners.set(name, fn), removeListener: vi.fn() }
+    await m.handlers.get('permissions:repair')!({ sender }, 'computerAccessibility')
+    m.close.mockClear()
+    await m.handlers.get('permissions:closeGuide')!({ sender })
+    expect(m.close).toHaveBeenCalledOnce()
   })
 })
 

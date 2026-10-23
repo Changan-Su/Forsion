@@ -79,6 +79,14 @@ const TCC_SERVICES = { computerAccessibility: 'Accessibility', computerScreen: '
 const helperCommand = (cmd: string, args: Record<string, unknown> = {}, timeout = 2500): Promise<unknown> =>
   askHelper(helperSocketPath(), { cmd, ...args }, timeout)
 
+async function processExited(pid: number, timeoutMs: number): Promise<boolean> {
+  for (const deadline = Date.now() + timeoutMs; Date.now() < deadline;) {
+    try { process.kill(pid, 0) } catch { return true }
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  return false
+}
+
 export interface DesktopPermissionsOptions {
   /** Helper protocol an enabled feature needs from the RUNNING helper (Computer History: 13), or undefined.
    *  Asked on every status read; only while it returns a number does a read spend one extra `diagnostics` call. */
@@ -259,9 +267,8 @@ export class DesktopPermissions {
     }
     if (!stillWanted()) return false
     if (!snapshot.helperRunning || restartNeeded) {
-      await mkdir(path.dirname(helperSocketPath()), { recursive: true })
       if (!stillWanted()) return false
-      await exec('/usr/bin/open', ['-n', '-g', permissionHelperAppPath(), '--args', 'serve', '--socket', helperSocketPath()], { timeout: 10_000 })
+      await this.launchHelper()
     }
     for (let attempt = 0; attempt < 20; attempt++) {
       try {
@@ -345,30 +352,50 @@ export class DesktopPermissions {
   async repair(id: DesktopPermissionId, options: DesktopPermissionRequestOptions = {}, fromGuide = false): Promise<DesktopPermissionsSnapshot> {
     if (id !== 'computerAccessibility' && id !== 'computerScreen') throw new Error('Only Computer Use permissions can be repaired.')
     if (process.platform !== 'darwin' || !this.computerUseAvailable) throw new Error('Computer Use is unavailable in this product.')
+    // An externally configured helper is not ours to stop and relaunch.
+    if (helperSocketPath() !== helperSocketPath({})) throw new Error('Repair is unavailable for an externally configured Computer Use helper.')
     if (this.actionPending || this.setupPending) throw new Error('A permission request is already in progress.')
     this.actionPending = true
     const generation = ++this.generation
     const current = () => generation === this.generation
     try {
-      await exec('/usr/bin/tccutil', ['reset', TCC_SERVICES[id], HELPER_BUNDLE_ID], { timeout: 10_000 })
-      this.verification = undefined
+      // Re-check now: the button may be stale, and resetting a row that works would revoke a real grant.
       const { snapshot } = await this.read()
-      if (snapshot.helperRunning) {
-        const pid = (await helperCommand('permissionStatus').catch(() => undefined) as HelperStatus | undefined)?.source?.pid
-        await helperCommand('shutdown').catch(() => {})
-        // A helper still exiting answers the next permissionStatus, and the restarted one would register in its place.
-        for (let i = 0; typeof pid === 'number' && i < 50; i++) {
-          try { process.kill(pid, 0) } catch { break }
-          await new Promise((resolve) => setTimeout(resolve, 100))
-        }
+      if (!snapshot.helperRunning || snapshot.helperError || snapshot.permissions[id] !== 'denied') return snapshot
+      const pid = (await helperCommand('permissionStatus') as HelperStatus).source?.pid
+      if (typeof pid !== 'number') throw new Error('Computer Use did not report its process. Retry in a moment.')
+      // Nothing is reset until the old helper is gone: a helper still exiting would answer for the new one.
+      await helperCommand('shutdown')
+      if (!await processExited(pid, 5000)) throw new Error('Computer Use did not stop. Finish any active computer task, then retry.')
+      try {
+        await exec('/usr/bin/tccutil', ['reset', TCC_SERVICES[id], HELPER_BUNDLE_ID], { timeout: 10_000 })
+      } finally {
+        // It was running before this click: bring it back whether or not the reset worked or the page was left.
+        await this.launchHelper()
+        await this.awaitNewHelper(pid)
       }
-      if (!await this.prepareHelper(current, options.locale === 'zh' ? 'zh' : 'en') || !current()) return (await this.read()).snapshot
+      this.verification = undefined
+      if (!current()) return (await this.read()).snapshot
       await helperCommand('registerPermissions', { kind: id === 'computerAccessibility' ? 'accessibility' : 'screenRecording' }, 15_000)
       if (!current()) return (await this.read()).snapshot
       await this.openPane(id)
       if (!fromGuide && current()) await this.guide.show(id, options)
       return (await this.read()).snapshot
     } finally { this.actionPending = false; this.notifyIfIdle() }
+  }
+
+  private async launchHelper(): Promise<void> {
+    await mkdir(path.dirname(helperSocketPath()), { recursive: true })
+    await exec('/usr/bin/open', ['-n', '-g', permissionHelperAppPath(), '--args', 'serve', '--socket', helperSocketPath()], { timeout: 10_000 })
+  }
+
+  private async awaitNewHelper(previousPid: number): Promise<void> {
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const raw = await helperCommand('permissionStatus').catch(() => undefined) as HelperStatus | undefined
+      if (raw?.source?.attribution === 'helper-app' && raw.source.pid !== previousPid) return
+      await new Promise((resolve) => setTimeout(resolve, 150))
+    }
+    throw new Error('Computer Use did not restart. Open the permission setup again to start it.')
   }
 
   /** Explicit user action only: never called by page polling or focus refresh. */
@@ -406,23 +433,27 @@ export function registerDesktopPermissions(opts: {
     guideOwner = undefined
     permissions.closeGuide()
   }
+  // The page that opened the guide closes it when it leaves (request and repair both open it).
+  const own = (sender: Electron.WebContents) => {
+    if (guideOwner === sender) return
+    closeOwnedGuide()
+    guideOwner = sender
+    guideOwner.on('destroyed', closeOwnedGuide)
+    guideOwner.on('did-start-navigation', closeOwnedGuide)
+  }
   const trusted = (event: Electron.IpcMainInvokeEvent) => { if (!opts.isTrustedSender(event)) throw new Error('Untrusted permission request') }
   ipcMain.handle('permissions:status', (event) => { trusted(event); return permissions.read().then((r) => r.snapshot) })
   ipcMain.handle('permissions:request', (event, id: unknown, options?: DesktopPermissionRequestOptions) => {
     trusted(event)
     if (!isDesktopPermissionId(id)) throw new Error('Unknown permission')
-    if (guideOwner !== event.sender) {
-      closeOwnedGuide()
-      guideOwner = event.sender
-      guideOwner.on('destroyed', closeOwnedGuide)
-      guideOwner.on('did-start-navigation', closeOwnedGuide)
-    }
+    own(event.sender)
     return permissions.request(id, { locale: options?.locale === 'zh' ? 'zh' : 'en', mode: options?.mode === 'dark' ? 'dark' : 'light' })
   })
   ipcMain.handle('permissions:verify', (event) => { trusted(event); return permissions.verify() })
   ipcMain.handle('permissions:repair', (event, id: unknown, options?: DesktopPermissionRequestOptions) => {
     trusted(event)
     if (!isDesktopPermissionId(id)) throw new Error('Unknown permission')
+    own(event.sender)
     return permissions.repair(id, { locale: options?.locale === 'zh' ? 'zh' : 'en', mode: options?.mode === 'dark' ? 'dark' : 'light' })
   })
   ipcMain.handle('permissions:closeGuide', (event) => { trusted(event); if (guideOwner === event.sender) closeOwnedGuide() })
