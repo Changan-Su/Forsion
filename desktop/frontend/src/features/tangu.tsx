@@ -5,16 +5,17 @@ import { TANGU_SLICE } from '../tangu/store/tanguSlice'
 import { translate } from '../i18n'
 import { ChatView } from '../views/ChatView'
 import { ChatPreview } from '../views/chat2/ChatPreview'
-import { BtwSideView } from '../views/chat2/BtwPanel'
-import { openBtw } from '../views/chat2/btwStore'
+import { BtwHost, BtwPanel, BtwSideView } from '../views/chat2/BtwPanel'
+import { btwSeedOf, btwWebVisible, openBtw, quoteInMainChat, useBtw } from '../views/chat2/btwStore'
+import { FilesPanel, bumpDir } from '../views/chat2/FilesPanel'
 import { ensureAppRefCommand } from '../views/chat2/appRefCommand'
 import { MemoryPanelView, SubchatsView, SessionFilesView, TocView } from '../views/RightViews'
-import { AgentsDetailSpecialView, WorkspaceDetailSpecialView } from '../views/SpecialViews'
+import { AgentsDetailSpecialView, WorkspaceDetailSpecialView, openSpecial } from '../views/SpecialViews'
 import { AgentsSpaceView, AgentsRosterView, TanguDetailsView } from '../views/AgentProfileView'
 import { hasNativeFeature, tanguProbeAvailable } from './runtime'
 import { quoteInChatPanel } from '../views/chat2/chatPanelQuote'
 import { SessionTabIcon } from '../components/SessionIcon'
-import { setTanguChatOutline, setTanguChatViews, setTanguInboxTasks, setTanguNewChat, setTanguPrefs, setTanguSidebarModes, type TanguHost } from '../amadeus/plugins/tanguSeam'
+import { setTanguChatOutline, setTanguChatViews, setTanguInboxTasks, setTanguNewChat, setTanguPrefs, setTanguShell, setTanguSidebarModes, type TanguHost } from '../amadeus/plugins/tanguSeam'
 import { inboxTasks } from '../views/chat2/inboxTasks'
 import { isChatAvatarsOn, setChatAvatarsOn } from '../views/chat2/chatAvatars'
 import { isPromptSuggestOn, setPromptSuggest } from '../views/chat2/promptSuggest'
@@ -28,7 +29,7 @@ const CHAT_RIGHT = [{ type: 'tangu-details', params: {} }, { type: 'workspace', 
 const app = () => useApp.getState()
 const ws = () => useWorkspace.getState()
 
-export const blankNewChat = (): void => {
+const blankNewChat = (): void => {
   const s = app()
   s.setActiveId(null)
   s.setNewChatWs(null)
@@ -52,6 +53,14 @@ const splitChat = (): void => {
 export function activateTangu(host: TanguHost): void {
   // store 半身先装(不看档案:宿主的连接 / 换号流程也读写会话字段,automation-only 档案同样要)
   host.installSlice(TANGU_SLICE)
+  // 宿主外壳用的界面件(旁聊、文件树、特殊视图;3d):以前是宿主静态 import 的,任何档案都有 —— 同样不看档案
+  setTanguShell({
+    BtwHost, BtwPanel, btwSeedOf, quoteInMainChat,
+    btwPageVisible: (activeId) => btwWebVisible(useBtw.getState().webOpen, activeId),
+    closeBtwPage: () => useBtw.getState().closeWeb(),
+    subscribeBtw: (cb) => useBtw.subscribe(cb),
+    FilesPanel, bumpDir, openSpecial,
+  })
   registerTanguViews()
   if (tanguProbeAvailable()) {
     // 编辑器「问 Tangu」只在注册了 chat-panel 的宿主上给(与 registerTanguViews 同一个谓词)
@@ -97,7 +106,7 @@ export function registerTanguViews(): void {
   // 主页的新对话输入区(和 ctx.tangu.mountComposer)是 Tangu 交出的同一份;工作区侧栏的轨道 / 会话列表两种模式也由 Tangu 交出。
   setTanguInboxTasks(inboxTasks)
   setTanguPrefs({ chatAvatars: { get: isChatAvatarsOn, set: setChatAvatarsOn }, promptSuggest: { get: isPromptSuggestOn, set: setPromptSuggest } })
-  setTanguNewChat({ Composer: NewChatComposer, send: sendFromNewChat, startCall: startNewChatCall, mount: mountNewChatComposer })
+  setTanguNewChat({ Composer: NewChatComposer, send: sendFromNewChat, startCall: startNewChatCall, mount: mountNewChatComposer, blank: blankNewChat })
   setTanguSidebarModes({ Orbits: OrbitsView, Sessions: SessionsView })
   setTanguChatOutline(TocView) // 「大纲」视图在主区是对话时画会话目录
   setTanguChatViews({ Chat: ChatView, Preview: ChatPreview }) // 宿主嵌固定会话处(图像工作室 / 插件聊天 / mini)与外观预览窗口
