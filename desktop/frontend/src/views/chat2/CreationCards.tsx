@@ -6,7 +6,7 @@
  * 私聊 / 独立团队 / Chat 预设的会话挪不动(工作目录被身份锁住或没有本机文件工具)→ 退化成在作品里开一个新对话。
  * 只有桌面端渲染(按钮要宿主 IPC);卡片里的 path 是模型写的,先经 resolveInside 限定在会话工作目录内。 */
 import { useEffect, useState } from 'react'
-import { AppWindow, Code2, FolderInput, Loader2, Sparkles } from 'lucide-react'
+import { AppWindow, ArrowDown, Check, Code2, FolderInput, Loader2, Sparkles, X } from 'lucide-react'
 import { setActiveSpace } from '@lcl/engine'
 import { registerMessages, translate, useI18n } from '../../i18n'
 import { lockSessionMove, unlockSessionMove, useApp } from '../../stores/appStore'
@@ -14,6 +14,7 @@ import { useCodeStudio } from '../../stores/codeStudioStore'
 import { normPath } from '../coding/studioModel'
 import { resolveInside } from './creationPath'
 import type { CreationCard } from './suggest'
+import { creationDoneKey, markTaskHandled, taskHandled, useTaskHandledVersion, TASK_CARD_TTL_MS } from './pendingTasks'
 
 registerMessages({
   'creation.card.createTitle': { zh: '做成作品：{name}', en: 'Make it a creation: {name}' },
@@ -35,6 +36,13 @@ registerMessages({
   },
   'creation.card.openStudio': { zh: '在编码工作室中打开', en: 'Open in Coding Studio' },
   'creation.card.openCreations': { zh: '在造物中查看', en: 'View in Creations' },
+  'creation.card.dismiss': { zh: '不用了', en: 'No thanks' },
+  'creation.card.dismissed': { zh: '不用了', en: 'Dismissed' },
+  'creation.card.made': { zh: '已做成作品', en: 'Made into a creation' },
+  'creation.card.inDeck': { zh: '作品卡「{name}」· 在对话最下面', en: 'Creation card “{name}” · at the end of the chat' },
+  'creation.card.traceMade': { zh: '作品卡「{name}」· 已做成作品', en: 'Creation card “{name}” · made' },
+  'creation.card.traceDismissed': { zh: '作品卡「{name}」· 不用了', en: 'Creation card “{name}” · dismissed' },
+  'creation.card.traceIn': { zh: '作品卡「{name}」· 已在造物里', en: 'Creation card “{name}” · in Creations' },
   'creation.continuePrompt': {
     zh: '作品文件夹「{name}」已经建好，这条对话的工作目录已经切过去了。请在这里接着做。',
     en: 'The creation folder “{name}” is ready and this conversation now works in it. Please continue building here.',
@@ -66,16 +74,15 @@ export async function addToCreations(source: string, within: string, strict: boo
   return { dir: r.dir, name: r.name }
 }
 
-export function CreationCards({ cards, sessionId }: { cards: CreationCard[]; sessionId?: string }) {
-  if (!cards.length || !window.tangu?.productsCreate || !window.tangu?.productsRegister) return null
-  return <div className="t2-tasks">{cards.map((card, i) => <CreationCardView key={`${i}:${card.name}:${card.path || ''}`} card={card} sessionId={sessionId} />)}</div>
-}
+/** 作品卡只有桌面端画(按钮要宿主 IPC)。 */
+export const creationCardsSupported = (): boolean => !!(window.tangu?.productsCreate && window.tangu?.productsRegister)
 
-function CreationCardView({ card, sessionId }: { card: CreationCard; sessionId?: string }) {
-  const { t } = useI18n()
+/** 会话的工作目录,以及它是不是已经是造物(宿主 products:isCreation 判,只读)—— 是的话这条会话里的作品卡都已完成。 */
+export function useSessionCreation(sessionId?: string): { cwd: string; inCreation: boolean } {
+  // 点过一张作品卡就重查:原地加入的就是工作目录本身(cwd 不变)时,这条会话里别的作品卡也随之完成(Codex 10-23)
+  const handledV = useTaskHandledVersion()
   const session = useApp((s) => (sessionId ? s.sessions.find((x) => x.id === sessionId) : undefined))
   const configCwd = useApp((s) => (sessionId ? s.configBySession[sessionId]?.cwd : undefined))
-  const defaultWs = useApp((s) => s.defaultWsDir)
   const cwd = configCwd || session?.project_path || ''
   const [inCreation, setInCreation] = useState(false)
   useEffect(() => {
@@ -83,7 +90,58 @@ function CreationCardView({ card, sessionId }: { card: CreationCard; sessionId?:
     setInCreation(false)
     if (cwd) void window.tangu?.productsIsCreation?.(cwd).then((v) => { if (alive) setInCreation(!!v) }).catch(() => {})
     return () => { alive = false }
-  }, [cwd])
+  }, [cwd, handledV])
+  return { cwd, inCreation }
+}
+
+/** 10-23 起作品卡是交互卡片:有对话末尾卡片堆的视图里(onJump),还没做成 / 没点「不用了」的进卡片堆,
+ *  流里原处每张只留一行(指过去,或结局);过了 7 天的不进卡片堆,原处照旧摆整张。 */
+export function CreationCards({ cards, sessionId, onJump, createdAt }: { cards: CreationCard[]; sessionId?: string; onJump?: () => void; createdAt?: number }) {
+  if (!cards.length || !creationCardsSupported()) return null
+  if (onJump && sessionId && (!createdAt || Date.now() - createdAt <= TASK_CARD_TTL_MS)) return <CreationTraces cards={cards} sessionId={sessionId} onJump={onJump} />
+  return <div className="t2-tasks">{cards.map((card, i) => <CreationCardView key={`${i}:${card.name}:${card.path || ''}`} card={card} sessionId={sessionId} />)}</div>
+}
+
+function CreationTraces({ cards, sessionId, onJump }: { cards: CreationCard[]; sessionId: string; onJump: () => void }) {
+  const { t } = useI18n()
+  useTaskHandledVersion()
+  const { inCreation } = useSessionCreation(sessionId)
+  return (
+    <div className="t2-tasks t2-tasks--trace">
+      {cards.map((card, i) => {
+        const key = `${i}:${card.name}:${card.path || ''}`
+        const rec = taskHandled(creationDoneKey(sessionId, card))
+        if (rec || inCreation) {
+          const made = rec?.landing !== 'ignore'
+          return (
+            <div key={key} className="t2-dim t2-tasktrace" data-creation-trace={made ? 'made' : 'dismissed'}>
+              {made ? <Check size={13} /> : <X size={13} />}
+              <span>{t(!rec ? 'creation.card.traceIn' : made ? 'creation.card.traceMade' : 'creation.card.traceDismissed', { name: card.name })}</span>
+              {made && <button type="button" className="t2-taskcard-toggle" onClick={() => setActiveSpace('artificial')}>{t('creation.card.openCreations')}</button>}
+            </div>
+          )
+        }
+        return (
+          <button key={key} type="button" className="t2-dim t2-tasktrace t2-tasktrace-jump" data-creation-trace="pending" onClick={onJump}>
+            <Sparkles size={13} /><span>{t('creation.card.inDeck', { name: card.name })}</span><ArrowDown size={12} />
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+export function CreationCardView({ card, sessionId }: { card: CreationCard; sessionId?: string }) {
+  const { t } = useI18n()
+  useTaskHandledVersion()
+  const session = useApp((s) => (sessionId ? s.sessions.find((x) => x.id === sessionId) : undefined))
+  const defaultWs = useApp((s) => s.defaultWsDir)
+  const { cwd, inCreation } = useSessionCreation(sessionId)
+  const doneKey = sessionId ? creationDoneKey(sessionId, card) : ''
+  const rec = doneKey ? taskHandled(doneKey) : undefined
+  const dismissed = rec?.landing === 'ignore'
+  // 记过「做成了」的(没挪成、已切到新对话那种,工作目录不是造物):定格,不再给按钮 —— 再点会多建一个作品(Codex 10-23)
+  const recordedMade = rec?.landing === 'here'
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [made, setMade] = useState<{ dir: string; name: string; moved: boolean } | null>(null)
@@ -119,6 +177,7 @@ function CreationCardView({ card, sessionId }: { card: CreationCard; sessionId?:
       if (!moved) { app.setNewChatWs({ key: dir, name, kind: 'local', path: dir }); app.setActiveId(null) }
       setMade({ dir, name, moved })
       created = name
+      if (doneKey) markTaskHandled(doneKey, 'here') // 卡片堆据此把它拿走,流里那行写结局
     } catch (e: any) {
       setError(String(e?.message || e))
     } finally {
@@ -146,14 +205,25 @@ function CreationCardView({ card, sessionId }: { card: CreationCard; sessionId?:
             <button onClick={() => setActiveSpace('artificial')}><AppWindow size={12} /> {t('creation.card.openCreations')}</button>
           </div>
         </div>
-      ) : adding && !source ? (
-        <div className="t2-taskcard-done" role="alert">{t('creation.err.outside')}</div>
-      ) : (
-        <div className="t2-taskcard-actions">
-          <button className="primary" disabled={busy} onClick={() => void accept()} data-creation-accept>
-            {busy ? <Loader2 size={12} className="spin" /> : adding ? <FolderInput size={12} /> : <Sparkles size={12} />} {t(adding ? 'creation.card.add' : 'creation.card.create')}
-          </button>
+      ) : dismissed ? (
+        <div className="t2-taskcard-done" data-creation-dismissed>{t('creation.card.dismissed')}</div>
+      ) : recordedMade ? (
+        <div className="t2-taskcard-done" data-creation-done>
+          {t('creation.card.made')}
+          <div className="t2-taskcard-actions"><button onClick={() => setActiveSpace('artificial')}><AppWindow size={12} /> {t('creation.card.openCreations')}</button></div>
         </div>
+      ) : (
+        <>
+          {adding && !source && <div className="t2-taskcard-done" role="alert">{t('creation.err.outside')}</div>}
+          <div className="t2-taskcard-actions">
+            {(!adding || source) && (
+              <button className="primary" disabled={busy} onClick={() => void accept()} data-creation-accept>
+                {busy ? <Loader2 size={12} className="spin" /> : adding ? <FolderInput size={12} /> : <Sparkles size={12} />} {t(adding ? 'creation.card.add' : 'creation.card.create')}
+              </button>
+            )}
+            {doneKey && <button disabled={busy} onClick={() => markTaskHandled(doneKey, 'ignore')} data-creation-dismiss><X size={12} /> {t('creation.card.dismiss')}</button>}
+          </div>
+        </>
       )}
       {error && <div className="t2-taskcard-done" role="alert" data-creation-error>{error}</div>}
     </div>

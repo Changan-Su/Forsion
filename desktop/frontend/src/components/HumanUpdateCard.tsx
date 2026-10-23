@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'react'
-import { BookOpen, ChevronRight, Undo2 } from 'lucide-react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
+import { ArrowDown, BookOpen, ChevronRight, Undo2 } from 'lucide-react'
 import { registerMessages, useI18n } from '../i18n'
 import { useApp } from '../stores/appStore'
 import { showDetails } from '../stores/detailsSubject'
 import { openHumanProfile } from '../views/agentProfileNav'
-import { getHumanDocument, undoHumanChange, HUMAN_CHANGED_EVENT, type HumanChange, type HumanDocument, type HumanTarget } from '../services/humanCollaboration'
+import { ackHumanChanges, getHumanDocument, humanAcked, humanAckVersion, humanUndone, markHumanUndone, subscribeHumanAck, undoHumanChange, HUMAN_CHANGED_EVENT, type HumanChange, type HumanDocument, type HumanTarget } from '../services/humanCollaboration'
+import { TASK_CARD_TTL_MS } from '../views/chat2/pendingTasks'
 import type { TanguDesktopConfig } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { targetForSession, type EngineTarget } from '../services/engine/targets'
 import './humanMessages'
@@ -18,33 +19,73 @@ registerMessages({
   'human.ask.why': { zh: '为什么：{text}', en: 'Why: {text}' },
   'human.ask.ack': { zh: '知道了', en: 'Got it' },
   'human.ask.acked': { zh: '协作请求 {n} 条 · 已知道', en: 'Handbook requests: {n} · acknowledged' },
+  'human.ask.undoneAll': { zh: '协作请求 {n} 条 · 已撤销', en: 'Handbook requests: {n} · undone' },
+  'human.ask.undoAll': { zh: '撤销', en: 'Undo' },
+  'human.ask.undoAllN': { zh: '全部撤销', en: 'Undo all' },
+  'human.ask.inDeck': { zh: '{name}想请你配合 {n} 件事 · 在对话最下面', en: 'Requests from {name}: {n} · at the end of the chat' },
+  'human.ask.inDeckAnon': { zh: '想请你配合 {n} 件事 · 在对话最下面', en: 'Requests for you: {n} · at the end of the chat' },
 })
 
-// 「知道了」只是把卡收成一行(请求在卡出现时已经生效,这不是审批)。记在本机,存不下就只在本次有效。
-const ACK_KEY = 'forsion.humanAck'
-const readAck = (): string[] => { try { const v = JSON.parse(localStorage.getItem(ACK_KEY) || '[]'); return Array.isArray(v) ? v.filter((x) => typeof x === 'string') : [] } catch { return [] } }
-const writeAck = (ids: string[]): void => { try { localStorage.setItem(ACK_KEY, JSON.stringify([...new Set(ids)].slice(-200))) } catch { /* ignore */ } }
+/** 处理记录一变就重渲(卡片堆据此把处理过的卡拿走;流里那行跟着变)。 */
+export function useHumanAckVersion(): number { return useSyncExternalStore(subscribeHumanAck, humanAckVersion) }
+
+const targetOf = (change: HumanChange, sessionId: string): HumanTarget => change.scope.kind === 'project' ? { kind: 'project', sessionId } : change.scope
 
 /** 协作说明是 Agent 对用户提的请求:用户不看它就白写了,所以它不进回执行,单独一张卡,用 Agent 的口吻,把依据直接摆出来。
- *  One quiet card per assistant response, with all successful changes in that turn. */
-export function HumanUpdateCard({ changes, cfg, sessionId, agentName }: { changes: HumanChange[]; cfg: TanguDesktopConfig; sessionId: string; agentName?: string }) {
+ *  One quiet card per assistant response, with all successful changes in that turn.
+ *  10-23 起它是交互卡片:有对话末尾卡片堆的视图里(onJump),还没「知道了」/ 撤销的整张进卡片堆(inDeck 那份),
+ *  流里原处只留一行指过去;处理过的照旧收成一行(点开看全卡)。过了 7 天没处理的不进卡片堆,原处照旧摆整张。 */
+export function HumanUpdateCard({ changes, cfg, sessionId, agentName, inDeck = false, onJump, createdAt }: {
+  changes: HumanChange[]; cfg: TanguDesktopConfig; sessionId: string; agentName?: string
+  /** 卡片堆里那一份:不收成一行(处理完它自己离开卡片堆)。 */
+  inDeck?: boolean
+  /** 流里、有卡片堆的视图:滚到对话末尾。 */
+  onJump?: () => void
+  createdAt?: number
+}) {
   const { t } = useI18n()
-  const ids = changes.map(c => c.id).join(',')
+  useHumanAckVersion()
+  const ids = changes.map(c => c.id)
   const engine = targetForSession(sessionId)
-  // ackedIds 记的是「点知道了时卡里有哪几条」:之后同一条回复里又多出一条请求,卡重新展开
-  const [ackedIds, setAckedIds] = useState(''), [reopened, setReopened] = useState(false)
-  const stored = useMemo(() => { const seen = new Set(readAck()); return changes.every(c => seen.has(c.id)) }, [ids]) // eslint-disable-line react-hooks/exhaustive-deps
-  const acked = stored || ackedIds === ids
-  useEffect(() => { if (ids) window.dispatchEvent(new CustomEvent(HUMAN_CHANGED_EVENT)) }, [ids])
+  const [reopened, setReopened] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState('')
+  const acked = humanAcked(ids)
+  useEffect(() => { if (ids.length) window.dispatchEvent(new CustomEvent(HUMAN_CHANGED_EVENT)) }, [ids.join(',')]) // eslint-disable-line react-hooks/exhaustive-deps
   if (!changes.length) return null
-  if (acked && !reopened) return <button type="button" className="human-acked" data-human-updates data-human-acked onClick={() => setReopened(true)}>
-    <BookOpen size={15} />{t('human.ask.acked', { n: changes.length })}<ChevronRight size={12} />
+  const fresh = !createdAt || Date.now() - createdAt <= TASK_CARD_TTL_MS
+  if (onJump && !acked && fresh) return <button type="button" className="t2-dim t2-tasktrace t2-tasktrace-jump" data-human-trace="pending" onClick={onJump}>
+    <BookOpen size={13} /><span>{agentName ? t('human.ask.inDeck', { name: agentName, n: changes.length }) : t('human.ask.inDeckAnon', { n: changes.length })}</span><ArrowDown size={12} />
   </button>
-  const ack = () => { writeAck([...readAck(), ...changes.map(c => c.id)]); setReopened(false); setAckedIds(ids) }
+  if (acked && !reopened && !inDeck) return <button type="button" className="human-acked" data-human-updates data-human-acked onClick={() => setReopened(true)}>
+    <BookOpen size={15} />{t(humanUndone(ids) ? 'human.ask.undoneAll' : 'human.ask.acked', { n: changes.length })}<ChevronRight size={12} />
+  </button>
+  const ack = () => { ackHumanChanges(ids); setReopened(false) }
+  // 整张撤回 = 不接受这几条请求:新的在前一条条撤(引擎只让撤每份文档最新那一笔);已撤过的跳过;
+  // 撞上「后面还有新改动」就停在那条,卡留着(一条条撤 / 去资料页改,或点知道了)
+  // ponytail: 同一份文档在这张卡里改了两笔时只撤得动后一笔(撤完最新的是那条撤销记录);要整组撤得给引擎加按链批量撤销
+  const undoAll = async () => {
+    if (busy) return
+    setBusy(true); setError('')
+    let left = 0
+    for (const change of [...changes].reverse()) {
+      const target = targetOf(change, sessionId)
+      try {
+        const doc = await getHumanDocument(engine, target)
+        if (doc.history.some(h => h.undoOf === change.id)) continue
+        await undoHumanChange(engine, target, change)
+      } catch (e: any) { left++; setError(e?.status === 409 ? t('human.undoConflict') : String(e?.message || e)); break }
+    }
+    window.dispatchEvent(new CustomEvent(HUMAN_CHANGED_EVENT))
+    if (!left) markHumanUndone(ids)
+    setBusy(false)
+  }
   return <section className="human-update-card" data-human-updates>
     <div className="human-update-head"><BookOpen size={15} /><strong>{agentName ? t('human.ask.title', { name: agentName, n: changes.length }) : t('human.ask.titleAnon', { n: changes.length })}</strong><span className="human-ask-saved">{t('human.ask.saved')}</span></div>
     {changes.map(change => <HumanUpdate key={JSON.stringify([engine.key, engine.base, cfg.token, change.id])} change={change} engine={engine} cfg={cfg} sessionId={sessionId} />)}
-    <div className="human-ask-foot"><button type="button" className="btn sm" onClick={ack}>{t('human.ask.ack')}</button></div>
+    <div className="human-ask-foot">
+      <button type="button" className="btn sm" disabled={busy} onClick={ack} data-human-ack>{t('human.ask.ack')}</button>
+      {!humanUndone(ids) && <button type="button" className="btn sm ghost" disabled={busy} onClick={() => void undoAll()} data-human-undo-all><Undo2 size={12} />{t(changes.length > 1 ? 'human.ask.undoAllN' : 'human.ask.undoAll')}</button>}
+    </div>
+    {error && <p className="agent-profile-error" role="alert">{error}</p>}
   </section>
 }
 function HumanUpdate({ change, engine, cfg, sessionId }: { change: HumanChange; engine: EngineTarget; cfg: TanguDesktopConfig; sessionId: string }) {
@@ -53,7 +94,7 @@ function HumanUpdate({ change, engine, cfg, sessionId }: { change: HumanChange; 
   const name = useApp(s => scope.kind === 'agent' ? s.agentDefs.find(a => a.slug === scope.slug)?.name || scope.slug : scope.kind === 'project' ? scope.cwd.split(/[\\/]/).filter(Boolean).at(-1) : '')
   const projectPath = useApp(s => [...s.sessions, ...s.archivedSessions].find(x => x.id === sessionId)?.project_path)
   const [doc, setDoc] = useState<HumanDocument | null>(null), [error, setError] = useState(''), [busy, setBusy] = useState(false)
-  const target: HumanTarget = change.scope.kind === 'project' ? { kind: 'project', sessionId } : change.scope
+  const target = targetOf(change, sessionId)
   const validScope = (d: HumanDocument) => d.scope.kind === scope.kind && (d.scope.kind === 'agent' && scope.kind === 'agent' ? d.scope.slug === scope.slug
     : d.scope.kind === 'human' && scope.kind === 'human' ? d.scope.file === scope.file : d.scope.kind === 'project' && scope.kind === 'project' && d.scope.cwd === scope.cwd)
   useEffect(() => {

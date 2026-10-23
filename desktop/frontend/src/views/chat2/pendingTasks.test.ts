@@ -94,3 +94,58 @@ it('⑥ Muse 提的待办:引擎还 pending 的才进卡片堆;普通回答里�
   markTaskHandled(got[1].doneKey, 'muse')
   expect(pendingTaskCardsOf(list, 's1', Date.now(), new Set(['t1'])).map((p) => p.card.title), '本机处理过就离开,不等引擎重拉').toEqual(['Plain', 'Fake todo'])
 })
+
+it('⑦ 协作请求卡与作品卡(10-23 也算交互卡片):没处理的进卡片堆;知道了 / 撤销 / 做成 / 不用了 / 过 7 天的不进', async () => {
+  const { pendingHumanCardsOf, pendingCreationCardsOf, markTaskHandled } = await import('./pendingTasks')
+  const { ackHumanChanges, markHumanUndone } = await import('../../services/humanCollaboration')
+  const change = (id: string) => ({
+    id, scope: { kind: 'human', file: 'HUMAN.md' }, summary: `ask ${id}`, evidence: 'why', at: '2026-10-23T00:00:00Z', actor: 'agent',
+    beforeVersion: 'a'.repeat(64), afterVersion: 'b'.repeat(64),
+  })
+  const ev = (id: string) => ({ id: `ev-${id}`, name: 'manage_human', done: true, result: JSON.stringify({ kind: 'human_update', change: change(id) }) })
+  const uuid = (n: number) => `0000000${n}-0000-4000-8000-000000000000`
+  const list = [
+    msg('h1', 'one', { toolEvents: [ev(uuid(1))] } as Partial<UiMessage>),
+    msg('h2', 'two', { toolEvents: [ev(uuid(2))] } as Partial<UiMessage>),
+    msg('h3', 'three', { toolEvents: [ev(uuid(3))] } as Partial<UiMessage>),
+    msg('h4', 'old', { toolEvents: [ev(uuid(4))], timestamp: Date.now() - 8 * 24 * 3600_000 } as Partial<UiMessage>),
+  ]
+  expect(pendingHumanCardsOf(list).map((h) => h.messageId)).toEqual(['h1', 'h2', 'h3'])
+  ackHumanChanges([uuid(1)]); markHumanUndone([uuid(2)])
+  expect(pendingHumanCardsOf(list).map((h) => h.messageId)).toEqual(['h3'])
+
+  const cc = (name: string) => '```forsion-creation\nname: ' + name + '\n```'
+  // 一条回答最多一张作品卡(suggest MAX_CREATIONS)
+  const cl = [msg('c1', cc('Alpha')), msg('c3', cc('Beta')), msg('c2', cc('Old'), { timestamp: Date.now() - 8 * 24 * 3600_000 })]
+  const got = pendingCreationCardsOf(cl, 's1')
+  expect(got.map((c) => c.card.name)).toEqual(['Alpha', 'Beta'])
+  markTaskHandled(got[0].doneKey, 'here'); markTaskHandled(got[1].doneKey, 'ignore')
+  expect(pendingCreationCardsOf(cl, 's1')).toEqual([])
+  expect(pendingCreationCardsOf(cl, 's2').length, '别的会话不受影响').toBe(2)
+})
+
+it('⑧ 评审三条:停掉的回答里的协作请求也进卡片堆;作品卡记录不随 8 天清理;本机存不下时「知道了」照样在本次生效', async () => {
+  const { pendingHumanCardsOf, creationDoneKey, markTaskHandled } = await import('./pendingTasks')
+  const hc = await import('../../services/humanCollaboration')
+  const id = '00000009-0000-4000-8000-000000000000'
+  const change = { id, scope: { kind: 'human', file: 'HUMAN.md' }, summary: 's', evidence: 'e', at: '2026-10-23T00:00:00Z', actor: 'agent', beforeVersion: 'a'.repeat(64), afterVersion: 'b'.repeat(64) }
+  const stopped = msg('h9', 'cut off', { status: 'stopped', toolEvents: [{ id: 'ev', name: 'manage_human', done: true, result: JSON.stringify({ kind: 'human_update', change }) }] } as Partial<UiMessage>)
+  expect(pendingHumanCardsOf([stopped]).map((h) => h.messageId)).toEqual(['h9'])
+
+  const key = creationDoneKey('s1', { name: 'Old', path: undefined } as never)
+  markTaskHandled(key, 'ignore')
+  const raw = JSON.parse(localStorage.getItem('forsion_task_cards_handled') || '{}')
+  raw[key].t = Date.now() - 30 * 24 * 3600_000
+  raw['s1:old-task'] = { l: 'here', t: Date.now() - 30 * 24 * 3600_000 }
+  localStorage.setItem('forsion_task_cards_handled', JSON.stringify(raw))
+  vi.resetModules()
+  const again = await import('./pendingTasks')
+  expect(again.taskHandled(key)?.landing, '作品卡记录留着').toBe('ignore')
+  expect(again.taskHandled('s1:old-task'), '任务卡老记录照旧清掉').toBeUndefined()
+
+  const set = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('quota') })
+  hc.ackHumanChanges([id])
+  set.mockRestore()
+  expect(hc.humanAcked([id])).toBe(true)
+  expect(pendingHumanCardsOf([stopped])).toEqual([])
+})

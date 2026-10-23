@@ -3,7 +3,8 @@
  *  键 = 会话(收件箱是信 id)+ 卡内容哈希,不含消息 id 和卡序:消息 id 在乐观气泡 / 落库之间可能换,卡序在重排后会变。 */
 import { useSyncExternalStore } from 'react'
 import type { UiMessage } from '../../../../../tangu-agent/src/contracts/clientTypes'
-import { splitSuggestions, type TaskCard } from './suggest'
+import { splitSuggestions, type CreationCard, type TaskCard } from './suggest'
+import { humanAcked, humanChanges, type HumanChange } from '../../services/humanCollaboration'
 
 /** 任务卡落点:开个子会话 / 在这里做 / 新会话执行(收件箱,没有当前会话)/ 交给 Muse / 忽略(spawn_task 的 worktree、云端两档刻意不搬)。 */
 export type TaskLanding = 'child' | 'here' | 'new' | 'muse' | 'ignore'
@@ -18,6 +19,10 @@ function hashStr(s: string): string {
   for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0
   return (h >>> 0).toString(36)
 }
+/** 作品卡的处理记录(做成了 / 不用了)和任务卡记在同一处:按会话 + 名字与路径。 */
+export function creationDoneKey(scope: string, c: CreationCard): string {
+  return `${scope}:creation:${hashStr(`${c.name}|${c.path || ''}`)}`
+}
 /** Muse 待办按待办 id、带 id 的卡按卡 id 认(同样文字的两张不同待办不能共用一条记录,Codex 10-23);其余按内容。 */
 export function taskDoneKey(scope: string, c: TaskCard): string {
   return `${scope}:${c.todo ? `todo:${c.todo}` : c.id ? `id:${c.id}` : hashStr(`${c.title}|${c.prompt}`)}`
@@ -30,9 +35,10 @@ function read(): Record<string, Rec> {
   const out: Record<string, Rec> = {}
   try {
     const raw = JSON.parse(localStorage.getItem(KEY) || '{}') as Record<string, Rec>
-    // 卡 7 天就过期,记录多留一天够了
+    // 任务卡 7 天就过期,记录多留一天够了;作品卡过了 7 天在原处照旧能点(不过期),它的记录一直留着(Codex 10-23)
+    // ponytail: 作品卡记录不清,一条回答最多一张、量很小;多了再按会话归档清
     const keep = Date.now() - TASK_CARD_TTL_MS - 24 * 3600_000
-    for (const [k, v] of Object.entries(raw)) if (v && typeof v.t === 'number' && v.t > keep) out[k] = v
+    for (const [k, v] of Object.entries(raw)) if (v && typeof v.t === 'number' && (v.t > keep || k.includes(':creation:'))) out[k] = v
   } catch { /* 私密窗口 / 坏数据:当作没有记录 */ }
   return out
 }
@@ -85,6 +91,43 @@ export function pendingTaskCardsOf(list: UiMessage[] | undefined, sessionId: str
       if (taskHandled(doneKey)) return
       out.push({ kind: 'task', id: `task:${m.id}:${i}`, messageId: m.id, card, createdAt: m.timestamp || undefined, doneKey })
     })
+  }
+  return out
+}
+
+/** 卡片堆里的一张作品卡(```forsion-creation):还没做成、也没点「不用了」的。 */
+export interface PendingCreation { kind: 'creation'; id: string; messageId: string; card: CreationCard; createdAt?: number; doneKey: string }
+const creationsCache = new WeakMap<UiMessage, CreationCard[]>()
+function creationsOf(m: UiMessage): CreationCard[] {
+  let hit = creationsCache.get(m)
+  if (!hit) { hit = m.content.includes('forsion-creation') ? splitSuggestions(m.content, { kinds: ['creation'] }).creations : []; creationsCache.set(m, hit) }
+  return hit
+}
+/** 会话里还在等你点的作品卡,按出现顺序;过 7 天的不收(原处照旧摆整张)。会话工作目录本来就是造物(卡已完成)由调用方判。 */
+export function pendingCreationCardsOf(list: UiMessage[] | undefined, sessionId: string, now = Date.now()): PendingCreation[] {
+  const out: PendingCreation[] = []
+  for (const m of list || []) {
+    if (m.role !== 'assistant' || m.status !== 'done') continue
+    if (m.timestamp && now - m.timestamp > TASK_CARD_TTL_MS) continue
+    creationsOf(m).forEach((card, i) => {
+      const doneKey = creationDoneKey(sessionId, card)
+      if (!taskHandled(doneKey)) out.push({ kind: 'creation', id: `creation:${m.id}:${i}`, messageId: m.id, card, createdAt: m.timestamp || undefined, doneKey })
+    })
+  }
+  return out
+}
+
+/** 卡片堆里的一张协作请求卡(Agent 改了协作说明,请你配合):还没「知道了」/ 撤销的。 */
+export interface PendingHuman { kind: 'human'; id: string; messageId: string; changes: HumanChange[]; agentName?: string; createdAt?: number }
+/** 会话里还没处理的协作请求卡;过 7 天的不收(原处照旧摆整张)。不看回答收没收尾:写入在工具结果那一刻就生效了,
+ *  回答之后被停 / 出错,卡也得能处理(流里那行照样指过来,Codex 10-23)。 */
+export function pendingHumanCardsOf(list: UiMessage[] | undefined, now = Date.now()): PendingHuman[] {
+  const out: PendingHuman[] = []
+  for (const m of list || []) {
+    if (m.role !== 'assistant' || !m.toolEvents?.length) continue
+    if (m.timestamp && now - m.timestamp > TASK_CARD_TTL_MS) continue
+    const changes = humanChanges(m.toolEvents)
+    if (changes.length && !humanAcked(changes.map((c) => c.id))) out.push({ kind: 'human', id: `human:${m.id}`, messageId: m.id, changes, agentName: m.agentName, createdAt: m.timestamp || undefined })
   }
   return out
 }
