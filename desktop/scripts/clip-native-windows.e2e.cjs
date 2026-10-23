@@ -92,7 +92,10 @@ async function main() {
     // buttons open a new window of the installed browser and copy the address.
     // The runner image has both; prove the real process gets a visible window,
     // then close it so it cannot cover the drag target below.
-    const ps = async command => (await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { windowsHide: true, timeout: 30000 })).stdout.trim()
+    // Get-Process with no match leaves $? false, so Windows PowerShell exits 1
+    // even with SilentlyContinue (CI 40008673200). These are cleanup / queries
+    // whose output is checked separately; end with exit 0.
+    const ps = async command => (await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `${command}; exit 0`], { windowsHide: true, timeout: 30000 })).stdout.trim()
     const userBrowsers = name => `Get-Process -Name ${name} -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path -notmatch 'ms-playwright' }`
     check('settings offers both installed browsers', await settings.getByTestId('browser-extension-open-chrome').isVisible() && await settings.getByTestId('browser-extension-open-edge').isVisible())
     for (const [browserKey, processName, label] of [['chrome', 'chrome', 'Chrome'], ['edge', 'msedge', 'Edge']]) {
@@ -240,9 +243,14 @@ async function main() {
     // At this width Edge folds the left sidebar (where its switch lives) into a
     // drawer; flip the real profile setting and require the page to react.
     await page.evaluate(()=>new Promise(resolve=>chrome.developerPrivate.updateProfileConfiguration({inDeveloperMode:true},resolve)))
-    await page.getByRole('button',{name:'Load unpacked',exact:true}).waitFor({timeout:10000})
+    // Edge builds this page from Fluent web components whose button role is
+    // invisible to Playwright's getByRole (it finds no buttons at all); read
+    // the browser's own accessibility tree instead (on/off verified locally).
+    const edgeCdp=await page.context().newCDPSession(page)
+    const loadUnpackedShown=async()=>(await edgeCdp.send('Accessibility.getFullAXTree')).nodes.some(n=>n.role?.value==='button'&&n.name?.value==='Load unpacked'&&!n.ignored)
+    await until('Edge page shows Load unpacked',loadUnpackedShown,10000).catch(()=>{})
     const edgeProfile=await page.evaluate(()=>new Promise(resolve=>chrome.developerPrivate.getProfileConfiguration(resolve)))
-    check('Edge developer mode is on in the real profile and its page shows Load unpacked',edgeProfile.inDeveloperMode===true,edgeProfile)
+    check('Edge developer mode is on in the real profile and its page shows Load unpacked',edgeProfile.inDeveloperMode===true&&await loadUnpackedShown(),edgeProfile)
     await page.screenshot({path:path.join(output,'edge-developer-mode.png')})
     stage('Edge native drag')
     await app.evaluate(({ BrowserWindow }, { id, work, leftWidth }) => {
