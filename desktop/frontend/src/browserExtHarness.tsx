@@ -7,7 +7,6 @@
  * 复现「旧轮询晚到」竞态、验证换码进行中不可再点。
  * 跑法:node scripts/e2e-editor.cjs --check=browserext-settings --shot
  */
-import './tangu/store/standalone' // 不走 installEngine:自己装 Tangu 的 store 半身(界面热更新 3c)
 import { createRoot } from 'react-dom/client'
 import { LocaleProvider, setLocaleGlobal } from './i18n'
 import './i18n.generated'
@@ -17,6 +16,7 @@ import { BrowserExtensionPanel } from './components/BrowserExtensionPanel'
 import type { TanguDesktopConfig } from './types'
 import { installEngineHost } from './services/engine/targets'
 import { useApp } from './stores/appStore'
+import './tangu/store/standalone' // 不走 installEngine:自己装 Tangu 的 store 半身(界面热更新 3c);排在最后,别早于上面那些打桩的 import
 
 const params = new URLSearchParams(location.search)
 setLocaleGlobal(params.get('lang') === 'en' ? 'en' : 'zh')

@@ -1,5 +1,4 @@
 /** Isolated account UI fixture: no credentials, files, or network mutations. */
-import './tangu/store/standalone' // 不走 installEngine:自己装 Tangu 的 store 半身(界面热更新 3c)
 import React, { useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { AccountCard } from './components/AccountCard'
@@ -9,6 +8,7 @@ import './i18n.generated'
 import './styles/base.css'
 import { applyTheme } from './theme/loader'
 import type { AuthAccountInfo } from './types'
+import './tangu/store/standalone' // 不走 installEngine:自己装 Tangu 的 store 半身(界面热更新 3c);排在最后,别早于上面那些打桩的 import
 
 setLocaleGlobal('zh')
 const withBg = new URLSearchParams(location.search).has('bg')

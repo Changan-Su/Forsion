@@ -5,7 +5,6 @@
  *   | strict(「本账号的浏览器与网页版」已撤销 = D8 严格档)| signedout(本机没登录)
  * / ?width=<px>(窄栏)。截图:scripts/remote-sessions-settings.check.cjs(DESIGN §8:观感改动交付前看真截图)。
  */
-import './tangu/store/standalone' // 不走 installEngine:自己装 Tangu 的 store 半身(界面热更新 3c)
 import { createRoot } from 'react-dom/client'
 import { LocaleProvider, setLocaleGlobal } from './i18n'
 import './i18n.generated'
@@ -13,6 +12,7 @@ import './styles/base.css'
 import { applyTheme } from './theme/loader'
 import { RemoteSessionsSettings } from './components/RemoteSessionsSettings'
 import type { CapMode, RemoteSessionsApi, RemoteSessionsView } from '../../shared/remoteSessions'
+import './tangu/store/standalone' // 不走 installEngine:自己装 Tangu 的 store 半身(界面热更新 3c);排在最后,别早于上面那些打桩的 import
 
 const params = new URLSearchParams(location.search)
 const dark = params.has('dark')
