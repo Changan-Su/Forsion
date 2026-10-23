@@ -1,8 +1,8 @@
 import { registerAmadeusViews } from './features/amadeus'
 import { inboxAvailable } from './features/runtime'
-import { registerTanguCommands, registerTanguViews } from '@tangu/ui/features/tangu'
+import { activateTangu } from '@tangu/ui/features/tangu'
 import { registerOperationsViews } from './features/operations'
-import { hasNativeFeature, amadeusAvailable } from './features/runtime'
+import { amadeusAvailable } from './features/runtime'
 import { registerMiniViews } from './mini/miniViews'
 /** 真实引擎装配:注册视图(会话/对话)+ ribbon + 命令 + 默认布局。替代 demoBootstrap。 */
 import { Folder, Plus, Command as CommandIcon, Moon, Languages, MessageSquare, Store, Settings, FileText, ListTree, Search, Inbox, Mail, PanelLeft, PanelRight, PanelBottom, Code2, Trophy, Activity, AppWindow, Sun, TextCursorInput } from 'lucide-react'
@@ -58,7 +58,6 @@ import type { AccountQuotaView } from './services/accountQuota'
 // 本文件自有的词条(命名空间 `bootengine.*`,勿与别处撞键)。视图 displayName / 命令 title 都是
 // **惰性**求值的函数,所以一律在函数体里调 translate(),语言切换后重取即新文案(勿提到模块常量里)。
 registerMessages({
-  'bootengine.view.chatPanel': { zh: '对话面板', en: 'Chat panel' },
   'bootengine.view.dashboard': { zh: '仪表盘', en: 'Dashboard' },
   'bootengine.view.image': { zh: '图片', en: 'Image' },
   'bootengine.view.media': { zh: '媒体', en: 'Media' },
@@ -67,7 +66,6 @@ registerMessages({
   'bootengine.cmd.openNote': { zh: '打开笔记', en: 'Open note' },
   'bootengine.cmd.setActiveSpace': { zh: '切换 Space', en: 'Switch Space' },
   'bootengine.cmd.findInPage': { zh: '页内查找', en: 'Find in page' },
-  'bootengine.cmd.showChatPanel': { zh: '显示对话面板', en: 'Show chat panel' },
   'bootengine.cmd.openMini': { zh: '打开 Mini 卡片', en: 'Open mini card' },
 })
 
@@ -114,7 +112,9 @@ export function installEngine(): void {
   registerView({ type: 'workspace', kind: 'collection', displayName: () => app().tr('view.workspace'), icon: Folder, factory: (props) => <WorkspaceView {...props} /> })
   // 统一「大纲」视图(合并 原目录/Amadeus 大纲):随活动主视图切换采集器。
   registerView({ type: 'outline', kind: 'aux', embeddable: true, displayName: () => app().tr('view.outline'), icon: ListTree, factory: (props) => <OutlineView {...props} />, singleton: true })
-  registerTanguViews()
+  // Tangu 唯一的入口:视图 + 给宿主的接缝 + ctx.tangu 探针 + 命令(界面热更新 3b)。排在这里同时满足两条:
+  // 早于布局恢复(视图要先进注册表),早于 installAmadeusPlugins(ctx.tangu 的有无在建 plugin context 那一刻定)。
+  activateTangu({ installProbe: installTanguProbe })
   // 新建标签页(空白启动器):列出所有视图按 主区/侧区 分类,选中即在对应区打开。
   registerView({ type: 'launcher', kind: 'page', displayName: () => app().tr('newtab.title'), icon: Plus, factory: (props) => <NewTabView {...props} /> })
   // 工作区文件预览标签页(多实例,params.path 随布局持久化;打开一律走 views/wsFileNav.openWsFile,
@@ -205,9 +205,7 @@ export function installEngine(): void {
   // 插件视图也才恢复得回来。装完由 installAmadeusPlugins 自己补跑 loadUserSpaces。vault 恢复仍然懒。
   // unit 设备页(B 端渲染)没有 vault 桥(window.amadeus 缺席,本地 vault 面=v2.1)但**必须装宿主**:
   // 对方设备的插件清单经 unit/plugins 分发,视图/命令类插件不依赖 vault 即可工作(方案 §11.4)。
-  // 插件的 Tangu 只读探针(ctx.tangu:当前模型 / 当前 Space)。**必须早于 installAmadeusPlugins**:
-  // ctx.tangu 的有无是在建 plugin context 那一刻定的。见 amadeus/plugins/tanguSeam.ts。
-  if (PRODUCT.nativeFeatures === undefined || hasNativeFeature('tangu') || hasNativeFeature('automation')) installTanguProbe()
+  // 插件的 Tangu 只读探针(ctx.tangu)已由上面的 activateTangu 装好(必须早于这里)。见 amadeus/plugins/tanguSeam.ts。
   if (window.amadeus || window.tangu?.unitPage) installAmadeusPlugins()
   // 插件的 ctx.app.openSettings(插件层发窗口事件,这里转给应用层;口径同宿主深链)
   window.addEventListener('forsion:open-settings', (e) => {
@@ -421,8 +419,7 @@ export function installEngine(): void {
   })
 
   // commands
-  // Tangu 的命令(新对话、旁聊、分屏、对话面板、停止 / 压缩 / 分支)和应用 / 窗口引用的双 ⌘ 由 Tangu 自己注册(核心插件化 2e-4)
-  registerTanguCommands()
+  // Tangu 的命令(新对话、旁聊、分屏、对话面板、停止 / 压缩 / 分支)和应用 / 窗口引用的双 ⌘ 已由上面的 activateTangu 注册
   // hotkey 从 mod+b 改到 mod+/:mod+b 与 Amadeus 编辑器的加粗(commonmark Mod-b)冲突,编辑时会同时切侧栏。
   // 换 mod+/ 是因为 mod+shift+b 也被编辑器占(blockquote),mod+\ 被 split-right 占;mod+/ app 命令表与编辑器 keymap 皆空闲。
   addCommand({ id: 'toggle-left', icon: PanelLeft, checked: () => ws().leftVisible, title: () => app().tr('command.toggleLeft'), keywords: 'sidebar 左栏', hotkey: 'mod+/', run: () => ws().toggleSidebar('left') })
