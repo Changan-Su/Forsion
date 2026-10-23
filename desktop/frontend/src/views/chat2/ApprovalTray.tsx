@@ -16,6 +16,7 @@ import type { TrayItem } from './approvalQueue'
 import type { PendingTask } from './pendingTasks'
 import { TaskCards } from './TaskCards'
 import type { MessageHandlers } from './EditorialMessage'
+import '../../tangu/messages'
 
 registerMessages({
   'approval.tray.title': { zh: '等你批准 · {n}', en: 'Waiting for your approval · {n}' },
