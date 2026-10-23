@@ -88,6 +88,7 @@ registerMessages({
   'calview.untitled': { zh: '未命名', en: 'Untitled' },
   'calview.newEventTitle': { zh: '新事件', en: 'New event' },
   'calview.newEvent': { zh: '新建事件', en: 'New event' },
+  'calview.noTarget': { zh: '现在没有能写入的日历（个人日历暂时读不到）。请稍后再试，或在日历设置里添加一本日历。', en: 'No calendar can be written right now (your personal calendar could not be loaded). Try again later, or add a calendar in Calendar settings.' },
   'calview.today': { zh: '今天', en: 'Today' },
   'calview.prevPage': { zh: '上一页', en: 'Previous' },
   'calview.nextPage': { zh: '下一页', en: 'Next' },
@@ -361,9 +362,11 @@ export function CalendarView({ leafId }: { leafId?: string } = {}) {
     pasteAt.current = undefined
     return had
   }
+  // 没有可写的日历时点了要有回应,别让人以为没点到(10-23 用户)
+  const noTarget = (): void => { notifyApp({ level: 'warning', text: t('calview.noTarget') }) }
   const startDraft = (g: DraftGeom): void => {
     ++interactionEpoch.current
-    if (!target) return
+    if (!target) { noTarget(); return }
     const nav = useCalendarNav.getState()
     nav.setSelection(null)
     setCard(null)
@@ -395,7 +398,7 @@ export function CalendarView({ leafId }: { leafId?: string } = {}) {
 
   // 手机:双击空白当场建一条 30 分钟的事件并开浮卡(这一轮不动)。
   const createNow = async (day: Date, min: number | null, at: Anchor): Promise<void> => {
-    if (!target) return
+    if (!target) { noTarget(); return }
     if (!DESK) {
       const dayKey = iso(day)
       startDraft({ day: dayKey, endDay: dayKey, startMin: min, endMin: min === null ? 0 : min + 30 })

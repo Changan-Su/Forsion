@@ -781,6 +781,8 @@ export interface AgentMemoryEntry { id: string; content: string; source: AgentMe
 export interface AgentMemorySnapshot {
   version: string; content: string; entries: AgentMemoryEntry[]; updatedAt: number
   tombstones: Array<{ id: string; forgottenAt: number }>
+  /** 云端(网页 / 手机)= 桌面同步上来的那份:能改(按 version 比对交换),没有版本记录与 Dream。 */
+  cloud?: boolean
 }
 export interface AgentMemoryRevision { version: string; createdAt: number; source: AgentMemorySource; content: string }
 export interface AgentMemoryDreamConfig { enabled: boolean; modelId: string; timeoutMs: number; maxOutputTokens: number; intervalHours: number }
@@ -811,7 +813,7 @@ export const cancelAgentMemoryDream = (t: EngineTarget, slug: string) =>
 export const listAgentLogDates = (t: EngineTarget, slug: string) =>
   request<{ dates: string[] }>(t, `/agent/agents/${encodeURIComponent(slug)}/logs`).then((r) => r.dates)
 export const getAgentLogSnapshot = (t: EngineTarget, slug: string, date: string) =>
-  request<{ date: string; content: string; version: string }>(t, `/agent/agents/${encodeURIComponent(slug)}/log?date=${encodeURIComponent(date)}`)
+  request<{ date: string; content: string; version: string; readonly?: boolean }>(t, `/agent/agents/${encodeURIComponent(slug)}/log?date=${encodeURIComponent(date)}`)
 export const getAgentLog = (t: EngineTarget, slug: string, date: string) =>
   getAgentLogSnapshot(t, slug, date).then((r) => r.content)
 export const putAgentLog = (t: EngineTarget, slug: string, date: string, content: string, expectedVersion: string) =>
@@ -837,7 +839,7 @@ export type HarnessJournalLine = { ts: string; rev?: string; action: 'upsert' | 
 export type HarnessCandidate = { line: string; needsUser: boolean; adoptable: boolean }
 /** candidates = 候选收件箱的原始行 `- [YYYY-MM-DD s:xxxx] 正文`(只读);candidateItems = 同一批行逐条带上去处。旧引擎两个键都可能没有。 */
 export const getAgentHarness = (t: EngineTarget, slug: string) =>
-  request<{ entries: HarnessEntry[]; journal: HarnessJournalLine[]; candidates?: string[]; candidateItems?: HarnessCandidate[] }>(t, `/agent/agents/${encodeURIComponent(slug)}/harness`)
+  request<{ entries: HarnessEntry[]; journal: HarnessJournalLine[]; candidates?: string[]; candidateItems?: HarnessCandidate[]; readonly?: boolean }>(t, `/agent/agents/${encodeURIComponent(slug)}/harness`)
 /** 对一条候选点「采纳 / 丢弃」。line = 读到的那一行原文(身份)。失败时 err.code:HARNESS_CANDIDATE_GONE(404,已经不在了)/ _FULL / _TOO_LONG / _EQUIP。 */
 export const resolveHarnessCandidate = (t: EngineTarget, slug: string, line: string, action: 'adopt' | 'dismiss') =>
   request<{ ok: boolean; entry: HarnessEntry | null }>(t, `/agent/agents/${encodeURIComponent(slug)}/harness/candidate`, { method: 'POST', body: JSON.stringify({ line, action }) })

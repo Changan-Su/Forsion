@@ -17,6 +17,7 @@ import { listAgents, getAgent, saveAgent, patchAgent, AgentNotFoundError, AgentE
 import {
   cloudAgentsEnabled, cloudListAgents, cloudGetAgent, cloudSaveAgent, cloudPatchAgent, cloudDeleteAgent,
   cloudSaveAgentAvatar, cloudReadAgentAvatar, cloudDeleteAgentAvatar, cloudReadAgentsMeta, cloudWriteAgentsMeta,
+  cloudReadMemory, cloudWriteMemory, cloudMutateMemory, cloudLogDates, cloudReadLog, cloudReadHarness,
 } from '../agents/cloudAgentStore.js';
 import path from 'node:path';
 import { agentsDir, ensureHumanFolder, readUserMd } from '../core/tanguHome.js';
@@ -303,7 +304,20 @@ async function storeForAgent(slug: string): Promise<ReturnType<typeof createLoca
   return createLocalMemoryStore(path.join(agentsDir(), resolveMemorySlug(def)));
 }
 
+/** 云端(网页 / 手机)读写这几份同步上来的文件(agents/cloudAgentStore);null = 没这个 agent。 */
+async function cloudRead(res: any, read: () => Promise<unknown | null>): Promise<void> {
+  try {
+    const r = await read();
+    if (r === null) res.status(404).json({ detail: 'Agent not found' });
+    else res.json(r);
+  } catch (e: any) {
+    const code = e instanceof MemoryRepositoryError ? e.code : undefined;
+    res.status(code === 'MEMORY_VERSION_CONFLICT' || code === 'MEMORY_BUSY' ? 409 : code === 'MEMORY_INVALID' ? 400 : 500).json({ detail: e?.message || 'memory request failed', code });
+  }
+}
+
 router.get('/agent/agents/:slug/memory', authMiddleware, async (req: AuthRequest, res) => {
+  if (cloudAgentsEnabled()) return cloudRead(res, () => cloudReadMemory(req.user!.userId, req.params.slug));
   if (!ensureLocal(res)) return;
   try {
     const store = await storeForAgent(req.params.slug);
@@ -319,6 +333,11 @@ router.get('/agent/agents/:slug/memory', authMiddleware, async (req: AuthRequest
 });
 
 router.put('/agent/agents/:slug/memory', authMiddleware, async (req: AuthRequest, res) => {
+  if (cloudAgentsEnabled()) {
+    if (typeof req.body?.expectedVersion !== 'string') return res.status(428).json({ detail: 'expectedVersion is required; reload memory before saving.' });
+    if (typeof req.body?.content !== 'string') return res.status(400).json({ detail: 'content must be a string' });
+    return cloudRead(res, () => cloudWriteMemory(req.user!.userId, req.params.slug, req.body.content, req.body.expectedVersion));
+  }
   if (!ensureLocal(res)) return;
   try {
     const store = await storeForAgent(req.params.slug);
@@ -351,6 +370,7 @@ router.post('/agent/agents/:slug/memory/restore', authMiddleware, async (req: Au
 });
 
 router.post('/agent/agents/:slug/memory/entries', authMiddleware, async (req: AuthRequest, res) => {
+  if (cloudAgentsEnabled()) return cloudRead(res, () => cloudMutateMemory(req.user!.userId, req.params.slug, req.body || {}));
   if (!ensureLocal(res)) return;
   try {
     const store = await storeForAgent(req.params.slug);
@@ -363,6 +383,7 @@ router.post('/agent/agents/:slug/memory/entries', authMiddleware, async (req: Au
 });
 
 router.get('/agent/agents/:slug/logs', authMiddleware, async (req: AuthRequest, res) => {
+  if (cloudAgentsEnabled()) return cloudRead(res, () => cloudLogDates(req.user!.userId, req.params.slug).then((dates) => dates && { dates }));
   if (!ensureLocal(res)) return;
   try {
     const store = await storeForAgent(req.params.slug);
@@ -374,6 +395,7 @@ router.get('/agent/agents/:slug/logs', authMiddleware, async (req: AuthRequest, 
 });
 
 router.get('/agent/agents/:slug/log', authMiddleware, async (req: AuthRequest, res) => {
+  if (cloudAgentsEnabled()) return cloudRead(res, () => cloudReadLog(req.user!.userId, req.params.slug, String(req.query.date || '')));
   if (!ensureLocal(res)) return;
   try {
     const store = await storeForAgent(req.params.slug);
@@ -447,6 +469,7 @@ router.delete('/agent/agents/:slug/library/file', authMiddleware, async (req: Au
 
 // ── 工作笔记进化史(P2):当前 HARNESS 条目 + 本机编辑史(journal 是 dot-file 不同步,设备本地视角)。
 router.get('/agent/agents/:slug/harness', authMiddleware, async (req: AuthRequest, res) => {
+  if (cloudAgentsEnabled()) return cloudRead(res, () => cloudReadHarness(req.user!.userId, req.params.slug).then((entries) => entries && { entries, journal: [], candidates: [], candidateItems: [], readonly: true }));
   if (!ensureLocal(res)) return;
   try {
     if (!(await getAgent(req.params.slug))) return res.status(404).json({ detail: 'Agent not found' });
