@@ -56,6 +56,10 @@ registerMessages({
     en: 'Once installed, Clip opens a welcome page and asks to connect. In the Forsion prompt, click “Allow and turn on”. This also turns on Settings › Devices › Allow other devices to connect, and sets up clipping and browser control in one go. To keep it off, paste the connect code below into Clip instead (browser control only; clips can’t go into your local vault).',
   },
   'settings.browserExt.openFolder': { zh: '打开扩展文件夹', en: 'Open extension folder' },
+  'settings.browserExt.edgeWarning': {
+    zh: 'Edge 提醒：装好后 Edge 会弹出「关闭开发人员模式下的扩展」，别点「关闭扩展」，点旁边的另一个按钮；Edge 之后还可能再提醒。不小心关掉了，到 edge://extensions 把 Forsion Clip 重新打开即可。',
+    en: 'Edge note: after installing, Edge shows “Turn off extensions in developer mode”. Don’t click “Turn off extensions”; choose the other button. Edge may ask again later. If Clip gets turned off, turn it back on in edge://extensions.',
+  },
   'settings.browserExt.openIn': { zh: '在 {browser} 中打开扩展页', en: 'Open extensions in {browser}' },
   'settings.browserExt.addressCopied': { zh: '已复制 {url}，粘贴到 {browser} 地址栏打开。', en: 'Copied {url}. Paste it into the {browser} address bar.' },
   'settings.browserExt.notFound': { zh: '没找到 {browser}。已复制 {url}，粘贴到浏览器地址栏打开。', en: '{browser} was not found. Copied {url}. Paste it into the browser address bar.' },
@@ -185,7 +189,10 @@ export function BrowserExtensionPanel({ cfg, managed = true }: { cfg: TanguDeskt
               hostOn ? 'settings.browserExt.step3' : 'settings.browserExt.step3HostOff',
             ] as const).map((k, i) => (
               <React.Fragment key={k}>{i > 0 && <br />}{`${i + 1}. ${t(k)}`}</React.Fragment>
-            )).concat(openNote ? [<React.Fragment key="note"><br /><span data-testid="browser-extension-open-note">{openNote}</span></React.Fragment>] : [])
+            ))
+              // 装了 Edge 才提醒:Edge 装好已解压扩展后会弹「关闭开发人员模式下的扩展」,醒目的主按钮就是把 Clip 停用(10-23 CI 截图)
+              .concat(browsers?.includes('edge') ? [<React.Fragment key="edge"><br /><span data-testid="browser-extension-edge-warning">{t('settings.browserExt.edgeWarning')}</span></React.Fragment>] : [])
+              .concat(openNote ? [<React.Fragment key="note"><br /><span data-testid="browser-extension-open-note">{openNote}</span></React.Fragment>] : [])
               .concat(clipError ? [<React.Fragment key="err"><br /><span data-testid="browser-extension-copy-error">{t('settings.browserExt.copyFailed', { error: clipError })}</span></React.Fragment>] : [])}
             control={managed ? (
               <div className="settings-inline-actions">

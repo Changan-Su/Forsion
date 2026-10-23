@@ -50,7 +50,7 @@ async function main() {
   check('「允许其他设备连接本机」关着:第 3 步说 Forsion 会弹「允许并打开」,「手动配对」缺省展开', text.includes('允许并打开') && text.includes('允许其他设备连接本机') && (await page.locator('[data-testid="browser-extension-manual"]').getAttribute('aria-expanded')) === 'true')
 
   // 手动安装底座:扩展复制出包(用户找得到)、替用户打开扩展页、拖拽把手走原生拖出
-  check('只认到 Chrome:只给 Chrome 的按钮', (await panel.getByRole('button', { name: '在 Edge 中打开扩展页' }).count()) === 0)
+  check('只认到 Chrome:只给 Chrome 的按钮,也不出 Edge 提醒', (await panel.getByRole('button', { name: '在 Edge 中打开扩展页' }).count()) === 0 && (await page.locator('[data-testid="browser-extension-edge-warning"]').count()) === 0)
   await panel.getByRole('button', { name: '在 Chrome 中打开扩展页' }).click()
   await page.waitForFunction(() => window.__extHarness.pagesOpened.length === 1)
   check('「在 Chrome 中打开扩展页」交给主进程,打开成功不出提示', (await page.evaluate(() => window.__extHarness.pagesOpened)).join() === 'chrome' && (await page.locator('[data-testid="browser-extension-open-note"]').count()) === 0)
@@ -100,6 +100,8 @@ async function main() {
   // Windows:Chrome / Edge 都装了 → 两个按钮;点 Edge = 开了新窗口、地址已复制,提示 Ctrl+L 粘贴;选择框提示走 Windows 的
   await open('?both&launched&platform=win32')
   check('Chrome / Edge 都装了:两个按钮都在', (await panel.locator('[data-testid^="browser-extension-open-"]').evaluateAll((els) => els.map((el) => el.dataset.testid))).join() === 'browser-extension-open-chrome,browser-extension-open-edge')
+  const edgeWarning = await page.locator('[data-testid="browser-extension-edge-warning"]').textContent().catch(() => '')
+  check('装了 Edge:提醒 Edge 会弹「关闭开发人员模式下的扩展」,别点「关闭扩展」,关掉了去 edge://extensions 打开', edgeWarning.includes('关闭开发人员模式下的扩展') && edgeWarning.includes('别点「关闭扩展」') && edgeWarning.includes('edge://extensions'), edgeWarning)
   await panel.getByRole('button', { name: '在 Edge 中打开扩展页' }).click()
   await page.locator('[data-testid="browser-extension-open-note"]').waitFor()
   const launchedNote = await page.locator('[data-testid="browser-extension-open-note"]').textContent()
@@ -109,7 +111,7 @@ async function main() {
   await open('?platform=darwin')
   check('mac:选择框提示是 ⌘⇧G', (await panel.textContent()).includes('⌘⇧G') && !(await panel.textContent()).includes('按 Ctrl+L 粘贴路径'))
   await open('?edgeonly')
-  check('只装了 Edge:只给 Edge 的按钮', (await panel.getByRole('button', { name: '在 Edge 中打开扩展页' }).count()) === 1 && (await panel.getByRole('button', { name: '在 Chrome 中打开扩展页' }).count()) === 0)
+  check('只装了 Edge:只给 Edge 的按钮,带 Edge 提醒', (await panel.getByRole('button', { name: '在 Edge 中打开扩展页' }).count()) === 1 && (await panel.getByRole('button', { name: '在 Chrome 中打开扩展页' }).count()) === 0 && (await page.locator('[data-testid="browser-extension-edge-warning"]').count()) === 1)
   await open('?nobrowser')
   check('一个浏览器都认不出:退回只给 Chrome(主进程会复制地址)', (await panel.locator('[data-testid^="browser-extension-open-"]').count()) === 1 && (await panel.getByRole('button', { name: '在 Chrome 中打开扩展页' }).count()) === 1)
 
@@ -136,7 +138,7 @@ async function main() {
   await open('?external&both&platform=win32')
   const extText = await panel.textContent()
   check('外部引擎:不给「打开扩展文件夹」/「打开扩展页」(在引擎那台机器上装),选择框不给本机系统提示,改为写明路径',
-    (await panel.getByRole('button', { name: '打开扩展文件夹' }).count()) === 0 && (await panel.locator('[data-testid^="browser-extension-open-"]').count()) === 0 && !extText.includes('Ctrl+L 粘贴路径') && extText.includes('外部引擎') && extText.includes('/tangu-server/browser-extension'), extText.slice(-160))
+    (await panel.getByRole('button', { name: '打开扩展文件夹' }).count()) === 0 && (await panel.locator('[data-testid^="browser-extension-open-"]').count()) === 0 && !extText.includes('Ctrl+L 粘贴路径') && (await page.locator('[data-testid="browser-extension-edge-warning"]').count()) === 0 && extText.includes('外部引擎') && extText.includes('/tangu-server/browser-extension'), extText.slice(-160))
   if (shot) await page.locator('.settings-browser-ext-panel').screenshot({ path: path.join(out, 'ext-external.png') })
 
   await open('?connected')
