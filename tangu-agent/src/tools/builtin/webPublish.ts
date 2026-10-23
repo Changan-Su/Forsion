@@ -11,6 +11,9 @@
  *     slug 必填:它决定换掉哪一页,要先出现在审批卡上,不由这里按文件名猜。
  *   - 打包规则对齐 Extend connect.ts 的 collectProjectFiles:跳过点开头的、软链、node_modules、.d.ts;上限同 server(300 个 / 单个 5MB / 共 20MB)。
  *     不编译 TS / JSX(桌面发布对话框会),碰到就在结果里提醒。凭据文件(checkReadPath)整次拒发,不悄悄跳过。
+ *   - 每个文件经 readConfined 读(根锚定、末段 O_NOFOLLOW、打开后核验 inode 仍在根内、先判大小再读):遍历途中目录被换成
+ *     指到根外的软链、文件被换掉,都读不到根外内容(残余竞态见 confinedFs 头注);大文件不先整读进内存(Codex 10-23 P1 / P2)。
+ *     根 = 沙箱会话的工作区 / host 会话选中的文件夹(单个文件时是它所在的文件夹)。
  *   - 路径:host 会话按 cwd 解析(同 read_file);沙箱会话(聊天、网页 / 手机在云端节点上的 run)的文件在会话工作区目录里
  *     (同 workspaceFiles 的 read_file / write_file,'/' = 工作区根),解析后 realpath 必须还在那个目录里。
  *   - 链接用服务端给的 publicUrl(节点经内网地址调进来,自己拼不出);老 server 没这个字段就给相对路径。
@@ -24,6 +27,7 @@ import { resolvePath } from '../hostExec.js';
 import { checkReadPath } from '../fsPolicy.js';
 import { splitPath } from '../fileWorkspace.js';
 import { getSessionDir } from '../../sandbox/sessionSandbox.js';
+import { readConfined } from '../../sandbox/confinedFs.js';
 import { actionable, cloud, failure, formatBytes } from './forsionAccount.js';
 
 // = server connectService MAX_FILES / MAX_FILE_BYTES / MAX_TOTAL_BYTES / isValidSlug
@@ -76,14 +80,15 @@ interface PackedFile { path: string; content_b64: string; content_type: string; 
 type Packed = { files: PackedFile[]; total: number; uncompiled: string[]; htmlAtTop: string[] };
 
 /** 打包;出错回给模型的那句(以 Error: 开头)。 */
-async function pack(root: string, single: boolean): Promise<Packed | string> {
+async function pack(root: string, single: boolean, confine: string): Promise<Packed | string> {
   const out: Packed = { files: [], total: 0, uncompiled: [], htmlAtTop: [] };
   const add = async (abs: string, rel: string): Promise<string | null> => {
     const verdict = checkReadPath(abs);
     if (!verdict.ok) return `Error: ${verdict.reason} Nothing was published.`;
     if (out.files.length >= MAX_FILES) return `Error: more than ${MAX_FILES} files (hidden files and node_modules are already skipped). Publish a smaller folder, such as the build output.`;
-    const buf = await fs.readFile(abs);
-    if (buf.length > MAX_FILE_BYTES) return `Error: ${rel} is larger than 5 MB.`;
+    if ((await fs.lstat(abs)).size > MAX_FILE_BYTES) return `Error: ${rel} is larger than 5 MB.`;
+    const buf = await readConfined(confine, path.relative(confine, abs), { maxBytes: MAX_FILE_BYTES });
+    if (!buf) return `Error: ${rel} changed while it was being read, grew past 5 MB, or now points outside the folder. Nothing was published.`;
     out.total += buf.length;
     if (out.total > MAX_TOTAL_BYTES) return 'Error: the files add up to more than 20 MB.';
     if (UNCOMPILED.test(rel) && !rel.endsWith('.d.ts')) out.uncompiled.push(rel);
@@ -132,7 +137,8 @@ async function publish(c: CloudAccountBrain, ctx: ToolContext, a: Extract<Parsed
   if (jail && real !== jail && !real.startsWith(jail + path.sep)) return `Error: ${a.path} is outside this session's workspace.`;
   const st = await fs.stat(real);
   if (!st.isFile() && !st.isDirectory()) return `Error: ${a.path} is not a file or folder.`;
-  const packed = await pack(real, st.isFile()).catch((e: any) => `Error: could not read the files (${e?.code || e?.message || e}).`);
+  const confine = jail || (st.isFile() ? path.dirname(real) : real);
+  const packed = await pack(real, st.isFile(), confine).catch((e: any) => `Error: could not read the files (${e?.code || e?.message || e}).`);
   if (typeof packed === 'string') return packed;
   if (!packed.files.length) return `Error: ${a.path} has no files to publish (hidden files and node_modules are skipped).`;
   const entry = a.entry ?? (st.isFile() ? packed.files[0].path

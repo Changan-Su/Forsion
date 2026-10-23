@@ -108,6 +108,12 @@ describe('publish_web_page 发布', () => {
     expect(seen).toEqual([]);
   });
 
+  it('超过 5MB 的文件:读之前就拒,不发请求', async () => {
+    write('big/index.html'); write('big/video.mp4', Buffer.alloc(5 * 1024 * 1024 + 1));
+    expect(await call(NAME, { path: 'big', slug: 'big-page' })).toBe('Error: video.mp4 is larger than 5 MB.');
+    expect(seen).toEqual([]);
+  });
+
   it('slug 不合法 / 路径不存在 / 空文件夹:不发请求', async () => {
     write('empty/.hidden');
     for (const [args, msg] of [
