@@ -81,8 +81,8 @@ describe('permission guide content and navigation', () => {
       .toBe('&lt;b title=&quot;x&quot;&gt;Tom &amp; &#39;Jerry&#39;&lt;/b&gt;')
     expect(escapePermissionGuideHtml('&lt;')).toBe('&amp;lt;')
   })
-  it('only accepts the four exact internal actions', () => {
-    for (const action of ['close', 'return', 'open', 'verify']) {
+  it('only accepts the five exact internal actions', () => {
+    for (const action of ['close', 'return', 'open', 'verify', 'repair']) {
       expect(permissionGuideAction(`https://permission-guide.invalid/${action}`)).toBe(action)
     }
     for (const url of ['https://example.com', 'javascript:alert(1)', 'file:///tmp/test',
@@ -108,6 +108,21 @@ describe('permission guide content and navigation', () => {
     const zh = permissionGuideHtml({ id: 'screen', snapshot: snapshot('granted'), options: { locale: 'zh', mode: 'light' } })
     expect(zh).toContain('lang="zh" data-mode="light"')
     expect(zh).toContain('主动点击下一项')
+  })
+  it('offers repair only for a Computer Use permission the helper reads as not granted, with a manual fallback on failure', () => {
+    const repair = 'href="https://permission-guide.invalid/repair"'
+    const denied = (id: 'computerAccessibility' | 'computerScreen' | 'microphone', state = 'denied') => {
+      const data = snapshot()
+      data.permissions[id] = state as never
+      return permissionGuideHtml({ id, snapshot: data, options: { locale: 'en' } })
+    }
+    expect(denied('computerAccessibility')).toContain(repair)
+    expect(denied('computerScreen')).toContain('Repair access')
+    expect(denied('computerAccessibility', 'granted')).not.toContain(repair)
+    expect(denied('computerScreen', 'unverified')).not.toContain(repair)
+    expect(denied('microphone')).not.toContain(repair)
+    const failed = permissionGuideHtml({ id: 'computerScreen', snapshot: snapshot(), error: 'repair', options: { locale: 'zh' } })
+    expect(failed).toContain('点「−」删除，再点「+」重新添加')
   })
   it('keeps close and return available on errors and during verification', () => {
     const html = permissionGuideHtml({ id: 'camera', snapshot: snapshot('granted'), error: 'read', busy: true })

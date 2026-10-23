@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react'
-import { Camera, Check, Loader2, Mic, Monitor, MousePointer2, RefreshCw, ShieldCheck } from 'lucide-react'
+import { Camera, Check, Loader2, Mic, Monitor, MousePointer2, RefreshCw, ShieldCheck, Wrench } from 'lucide-react'
 import type { DesktopPermissionId, DesktopPermissionsSnapshot } from '../types'
 import { useI18n } from '../i18n'
 import './desktopPermissionsMessages'
@@ -11,7 +11,7 @@ export function hasDesktopPermissions(): boolean {
   return typeof api?.desktopPermissionsStatus === 'function' && !api.cloudWeb && !api.mobile && !api.unitPage
 }
 
-type Action = DesktopPermissionId | 'verify'
+type Action = DesktopPermissionId | 'verify' | `repair:${DesktopPermissionId}`
 type Session = {
   api: NonNullable<Window['tangu']>
   disposed: boolean
@@ -126,7 +126,8 @@ export function DesktopPermissions({ mode, only, onSnapshot, onBusyChange, embed
   const run = async (action: Action): Promise<void> => {
     const current = session.current
     if (!current || current.disposed || current.action) return
-    if (action === 'verify' ? !current.api.desktopPermissionsVerify : !current.api.desktopPermissionRequest) return
+    const repair = action.startsWith('repair:') ? action.slice('repair:'.length) as DesktopPermissionId : null
+    if (action === 'verify' ? !current.api.desktopPermissionsVerify : repair ? !current.api.desktopPermissionRepair : !current.api.desktopPermissionRequest) return
     if (action === 'verify' && !canVerify) return
     current.action = action
     current.revision++ // A read started before this user action must never overwrite its result.
@@ -135,7 +136,8 @@ export function DesktopPermissions({ mode, only, onSnapshot, onBusyChange, embed
     try {
       const next = action === 'verify'
         ? await current.api.desktopPermissionsVerify!()
-        : await current.api.desktopPermissionRequest!(action, { locale, mode })
+        : repair ? await current.api.desktopPermissionRepair!(repair, { locale, mode })
+          : await current.api.desktopPermissionRequest!(action as DesktopPermissionId, { locale, mode })
       if (!current.disposed) {
         setSnapshot(next)
         setReadError(null)
@@ -155,6 +157,7 @@ export function DesktopPermissions({ mode, only, onSnapshot, onBusyChange, embed
   const helperFault = helperError && !['not-installed', 'not-running'].includes(helperError)
   const app = snapshot?.appName || 'Forsion'
   const busyKey = busy === 'verify' ? 'desktopPermissions.verifying'
+    : busy?.startsWith('repair:') ? 'desktopPermissions.repairing'
     : busy?.startsWith('computer') && !snapshot?.helperInstalled ? 'desktopPermissions.installing' : 'desktopPermissions.requesting'
 
   const row = (id: DesktopPermissionId): React.ReactNode => {
@@ -166,6 +169,9 @@ export function DesktopPermissions({ mode, only, onSnapshot, onBusyChange, embed
     const requestKey = computer && !snapshot.helperInstalled ? 'desktopPermissions.install'
       : computer && !snapshot.helperRunning ? 'desktopPermissions.start'
         : snapshot.platform === 'darwin' || snapshot.platform === 'win32' ? 'desktopPermissions.openSettings' : 'desktopPermissions.request'
+    // 系统设置里开着、助手却读到未允许:那条授权记录多半是旧签名的。只在助手正常时给,装 / 启 / 坏了先走上面那个按钮。
+    const canRepair = computer && state === 'denied' && snapshot.platform === 'darwin' && !!api.desktopPermissionRepair
+      && snapshot.helperInstalled && snapshot.helperRunning && !snapshot.helperError
     return (
       <li className="desktop-permissions-row" key={id} data-permission={id}>
         {/* 嵌入时面板头已有同一个图标,行里不再重复。 */}
@@ -174,6 +180,7 @@ export function DesktopPermissions({ mode, only, onSnapshot, onBusyChange, embed
           <h3 id={`${headingId}-${id}`}>{t(`desktopPermissions.${id}.title`)}</h3>
           <p>{t(`desktopPermissions.${id}.hint`)}</p>
           {state === 'unverified' && <p className="desktop-permissions-unverified">{t(computer ? 'desktopPermissions.unverifiedHint' : 'desktopPermissions.mediaUnverifiedHint')}</p>}
+          {canRepair && <p className="desktop-permissions-unverified">{t('desktopPermissions.repairHint')}</p>}
         </div>
         <div className="desktop-permissions-row-actions">
           <span className="desktop-permissions-state" data-state={state}>
@@ -181,6 +188,9 @@ export function DesktopPermissions({ mode, only, onSnapshot, onBusyChange, embed
           </span>
           {canRequest && <button type="button" className="btn ghost sm" disabled={!!busy} aria-describedby={`${headingId}-${id}`} onClick={() => void run(id)}>
             {busy === id && <Loader2 size={12} className="spin" aria-hidden="true" />}{t(requestKey)}
+          </button>}
+          {canRepair && <button type="button" className="btn ghost sm" disabled={!!busy} aria-describedby={`${headingId}-${id}`} onClick={() => void run(`repair:${id}`)}>
+            {busy === `repair:${id}` ? <Loader2 size={12} className="spin" aria-hidden="true" /> : <Wrench size={12} aria-hidden="true" />}{t('desktopPermissions.repair')}
           </button>}
         </div>
       </li>
@@ -202,7 +212,7 @@ export function DesktopPermissions({ mode, only, onSnapshot, onBusyChange, embed
       </div>}
       {busy && <p className="desktop-permissions-progress" role="status"><Loader2 size={14} className="spin" aria-hidden="true" />{t(busyKey)}</p>}
       {actionError && <div className="desktop-permissions-error" role="alert">
-        <div><p>{t('desktopPermissions.actionFailed')}</p><p className="desktop-permissions-error-detail">{actionError.message}</p></div>
+        <div><p>{t(actionError.action.startsWith('repair:') ? 'desktopPermissions.repairFailed' : 'desktopPermissions.actionFailed')}</p><p className="desktop-permissions-error-detail">{actionError.message}</p></div>
         <button type="button" className="btn ghost sm" disabled={!!busy || (actionError.action === 'verify' && !canVerify)} onClick={() => void run(actionError.action)}>{t('desktopPermissions.retryAction')}</button>
       </div>}
       {snapshot && <>
