@@ -17,7 +17,7 @@ import { VaultWatcher } from './fs/watcher'
 import { VaultIndex } from './fs/vaultIndex'
 import { vaultRel } from './fs/vaultRel'
 import { adoptLegacyCloudState, currentCloudAccountId, readConfig, updateConfig, writeConfig } from './settings'
-import { defaultWorkspaceDir, forsionHomeDir, isDevMode, isSandboxMode, tanguDataDir } from '../forsionHome'
+import { defaultWorkspaceDir, forsionHomeDir, isDevMode, tanguDataDir } from '../forsionHome'
 import { getProduct } from '../productsRegistry'
 import { externalCreations } from '../productTrust'
 import { effectivePluginId } from '../../shared/products'
@@ -602,7 +602,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     const products: Array<{ id: string; root: string; name: string; updatedAt: number }> = []
     const authorizedPluginId = new Map<string, string | null>() // 产物 id → 授权当时的生效插件 id(清单写坏期间沿用)
     // 插件沙箱子进程:唯一的开发来源 = 父进程 spawn 时指定的那个插件目录(pluginSandbox.ts)。授权在父进程那侧(起沙箱要审批)。
-    const sandboxDir = isSandboxMode() ? process.env.FORSION_SANDBOX_PLUGIN?.trim() : undefined
+    const sandboxDir = process.env.FORSION_SANDBOX === '1' ? process.env.FORSION_SANDBOX_PLUGIN?.trim() : undefined // = isSandboxMode()(测试 mock 掉了 forsionHome,这里直读)
     if (sandboxDir) products.push({ id: 'plugin-sandbox', root: sandboxDir, name: path.basename(sandboxDir), updatedAt: 0 })
     const loads = sandboxDir ? {} : readDevLoads(forsionHomeDir())
     for (const [pid, grant] of Object.entries(loads)) {

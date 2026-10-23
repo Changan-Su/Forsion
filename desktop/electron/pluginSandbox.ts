@@ -28,7 +28,7 @@ export const PLUGIN_SANDBOX_MESSAGES = defineMainMessages({
   'main.pluginSandbox.installTitle': { zh: '安装插件', en: 'Install plugin' },
   'main.pluginSandbox.installMessage': { zh: '把「{name}」{version} 安装到你的 Forsion？', en: 'Install "{name}" {version} in your Forsion?' },
   'main.pluginSandbox.installDetail': {
-    zh: '会从 {dir} 复制一份到你的插件文件夹。装好后它拿到 manifest.json 里声明的权限，能访问你的笔记库。',
+    zh: '会从 {dir} 复制一份到你的插件文件夹。装好后它拿到 manifest.json 里声明的权限，能访问你的智库。',
     en: 'A copy of {dir} goes into your plugins folder. Once installed it gets the permissions declared in its manifest.json and can access your vault.',
   },
   'main.pluginSandbox.install': { zh: '安装', en: 'Install' },

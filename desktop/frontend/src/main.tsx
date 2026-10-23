@@ -24,6 +24,13 @@ import { applyUiFonts } from './uiFont'
 import { recordError } from './diag'
 import { installAccountTransition } from './services/accountTransition'
 import { installTabTitleBar } from './tabTitleBar'
+import { applySandboxSeed, installSandboxHook } from './sandbox/sandboxWindow'
+import { installPluginSandboxSurface } from './services/pluginSandboxSurface'
+
+// 插件沙箱:语言 / 主题 / 跳过引导要在下面读 localStorage 之前写好(普通实例 no-op)
+applySandboxSeed()
+installSandboxHook()
+installPluginSandboxSurface() // 用户那份:声明 plugin.sandbox,接 plugin_sandbox 工具的 client_cmd
 
 // Register for all desktop windows before workspace/Amadeus initialization.
 installAccountTransition()
