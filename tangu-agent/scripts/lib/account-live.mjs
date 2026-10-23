@@ -18,6 +18,8 @@ const RAW = [81_337, 30_219, 406_685, 2_033, 16_267, 40_668].flatMap((n) => [Str
 /** Fake Forsion cloud: only the account routes; everything else 404s. `seen` is every authenticated request. */
 export async function startFakeCloud(token) {
   const seen = [];
+  const apps = new Map(); // Forsion Connect(webpublish 场景):slug → 发布体;形状照 server microserver/connect 的响应
+  let url = '';
   const server = createServer((req, res) => {
     let body = '';
     req.on('data', (d) => (body += d));
@@ -33,12 +35,25 @@ export async function startFakeCloud(token) {
       if (key === 'GET /api/credits/balance') return send(200, { balance: 1234 });
       if (key === 'POST /api/token-quota/reset-card/use') return send(200, { success: true, resetCards: 1, quota: { ...QUOTA, dailyRemaining: QUOTA.dailyLimit, weeklyRemaining: QUOTA.weeklyLimit } });
       if (key === 'POST /api/token-quota/background/convert') return send(200, { success: true, converted: { daily: 1, weekly: 1 }, quota: QUOTA });
+      if (key === 'GET /api/connect/apps') {
+        return send(200, { apps: [...apps.values()].map((a) => ({ slug: a.slug, name: a.name, entry: a.entry, status: 'active', total_bytes: a.files.reduce((n, f) => n + f.size, 0), updated_at: new Date().toISOString(), listing_status: null })),
+          used: apps.size, limit: 5, tier: 'pro', handle: 'livetester', publicBase: url });
+      }
+      if (key === 'POST /api/connect/apps') {
+        let b; try { b = JSON.parse(body); } catch { return send(400, { code: 'invalid', detail: 'bad json' }); }
+        if (!/^[a-z0-9](?:[a-z0-9-]{1,30})?[a-z0-9]$/.test(String(b.slug)) || !Array.isArray(b.files) || !b.files.some((f) => f.path === b.entry)) return send(400, { code: 'invalid', detail: '参数不合法' });
+        apps.set(b.slug, b);
+        return send(200, { slug: b.slug, handle: 'livetester', url: `/apps/livetester/${b.slug}/`, publicUrl: `${url}/apps/livetester/${b.slug}/` });
+      }
+      const del = /^DELETE \/api\/connect\/apps\/([a-z0-9-]+)$/.exec(key);
+      if (del) return apps.delete(del[1]) ? send(200, { ok: true }) : send(404, { detail: '应用不存在或不属于你' });
       return send(404, { error: 'not_found' });
     });
   });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   server.unref();
-  return { url: `http://127.0.0.1:${server.address().port}`, seen, posts: (path) => seen.filter((r) => r.method === 'POST' && r.path === path) };
+  url = `http://127.0.0.1:${server.address().port}`;
+  return { url, seen, apps, urlFor: (slug) => `${url}/apps/livetester/${slug}/`, posts: (path) => seen.filter((r) => r.method === 'POST' && r.path === path) };
 }
 
 const CHAT = { preset: 'chat', execMode: 'sandbox', cwd: undefined };

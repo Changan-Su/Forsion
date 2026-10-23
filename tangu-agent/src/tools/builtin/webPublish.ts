@@ -11,6 +11,8 @@
  *     slug 必填:它决定换掉哪一页,要先出现在审批卡上,不由这里按文件名猜。
  *   - 打包规则对齐 Extend connect.ts 的 collectProjectFiles:跳过点开头的、软链、node_modules、.d.ts;上限同 server(300 个 / 单个 5MB / 共 20MB)。
  *     不编译 TS / JSX(桌面发布对话框会),碰到就在结果里提醒。凭据文件(checkReadPath)整次拒发,不悄悄跳过。
+ *   - 路径:host 会话按 cwd 解析(同 read_file);沙箱会话(聊天、网页 / 手机在云端节点上的 run)的文件在会话工作区目录里
+ *     (同 workspaceFiles 的 read_file / write_file,'/' = 工作区根),解析后 realpath 必须还在那个目录里。
  *   - 链接用服务端给的 publicUrl(节点经内网地址调进来,自己拼不出);老 server 没这个字段就给相对路径。
  */
 import fs from 'node:fs/promises';
@@ -20,6 +22,8 @@ import type { ToolContext } from '../toolTypes.js';
 import type { CloudAccountBrain, CloudResponse } from '../../seams/cloudBrain.js';
 import { resolvePath } from '../hostExec.js';
 import { checkReadPath } from '../fsPolicy.js';
+import { splitPath } from '../fileWorkspace.js';
+import { getSessionDir } from '../../sandbox/sessionSandbox.js';
 import { actionable, cloud, failure, formatBytes } from './forsionAccount.js';
 
 // = server connectService MAX_FILES / MAX_FILE_BYTES / MAX_TOTAL_BYTES / isValidSlug
@@ -115,8 +119,17 @@ async function limitReached(c: CloudAccountBrain, ctx: ToolContext, r: CloudResp
 }
 
 async function publish(c: CloudAccountBrain, ctx: ToolContext, a: Extract<Parsed, { action: 'publish' }>): Promise<string> {
+  let abs = resolvePath(ctx, a.path);
+  let jail = '';
+  if (ctx.execMode !== 'host') {
+    const dir = await getSessionDir(ctx).catch(() => null);
+    if (!dir) return 'Error: this session has no workspace folder to publish from.';
+    jail = await fs.realpath(dir);
+    abs = path.join(jail, ...splitPath(a.path));
+  }
   let real: string;
-  try { real = await fs.realpath(resolvePath(ctx, a.path)); } catch { return `Error: ${a.path} does not exist.`; }
+  try { real = await fs.realpath(abs); } catch { return `Error: ${a.path} does not exist.`; }
+  if (jail && real !== jail && !real.startsWith(jail + path.sep)) return `Error: ${a.path} is outside this session's workspace.`;
   const st = await fs.stat(real);
   if (!st.isFile() && !st.isDirectory()) return `Error: ${a.path} is not a file or folder.`;
   const packed = await pack(real, st.isFile()).catch((e: any) => `Error: could not read the files (${e?.code || e?.message || e}).`);

@@ -18,6 +18,7 @@ import { getToolDefinitions, listDeferredTools, executeTool, type ToolContext } 
 import { toolNeedsApproval } from '../src/services/approvals.js';
 import { isHostSandboxToolAllowed } from '../src/sandbox/hostSandboxPolicy.js';
 import { webPublishPreview } from '../src/tools/builtin/webPublish.js';
+import { getSessionDir } from '../src/sandbox/sessionSandbox.js';
 import type { CloudRequest, CloudResponse } from '../src/seams/cloudBrain.js';
 
 const profile = createTanguProfile({ sandboxMode: 'none' });
@@ -82,6 +83,21 @@ describe('publish_web_page 发布', () => {
     write('two/a.html'); write('two/b.html');
     expect(await call(NAME, { path: 'two', slug: 'two-pages' })).toBe('Error: the folder has no index.html; pass entry with the HTML file to open first (top-level HTML files: a.html, b.html).');
     expect(seen).toEqual([]);
+  });
+
+  it('沙箱会话(聊天 / 云端节点):路径按会话工作区解析,"/" 是工作区根;软链出工作区就拒', async () => {
+    const ctx = { execMode: 'sandbox' as const, preset: 'chat' as const, cwd: undefined, sessionId: `s-sbx-${Date.now()}` };
+    const ws = await getSessionDir({ ...base(), ...ctx });
+    fs.mkdirSync(path.join(ws, 'out'), { recursive: true });
+    fs.writeFileSync(path.join(ws, 'out/index.html'), '<p>sandbox</p>');
+    await call(NAME, { path: '/out', slug: 'sbx-page' }, ctx);
+    expect(sent()).toMatchObject({ entry: 'index.html', files: [{ path: 'index.html', content_b64: Buffer.from('<p>sandbox</p>').toString('base64') }] });
+    seen = [];
+    fs.symlinkSync(dir, path.join(ws, 'escape'));
+    expect(await call(NAME, { path: '/escape', slug: 'sbx-page' }, ctx)).toBe("Error: /escape is outside this session's workspace.");
+    expect(await call(NAME, { path: '../../etc', slug: 'sbx-page' }, ctx)).toMatch(/^Error: \.\.\/\.\.\/etc (does not exist|has no files)/);
+    expect(seen.filter((r) => r.method === 'POST')).toEqual([]);
+    fs.rmSync(ws, { recursive: true, force: true });
   });
 
   it('凭据文件:整次拒发,一个请求都不发', async () => {
