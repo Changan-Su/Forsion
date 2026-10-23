@@ -40,6 +40,7 @@ import { validateEntryInput } from './agentSchedule.js';
 import { validateTriggerInput } from './museTriggers.js';
 import { describeAppSettingsChange, touchesWorkspaceSetting } from './appSettings.js';
 import { accountActionPreview } from '../tools/builtin/forsionAccount.js';
+import { webPublishPreview } from '../tools/builtin/webPublish.js';
 
 export type ApprovalMode = 'readonly' | 'auto-edit' | 'full-auto' | 'custom';
 
@@ -407,6 +408,7 @@ function rawPreview(call: ToolCall, opts: { keptActions?: unknown[] | null } = {
     return `session settings: ${parts.join(' · ') || '(nothing)'}${args.reason ? ` — ${String(args.reason).slice(0, 200)}` : ''}`;
   }
   if (name === 'forsion_account_action') return accountActionPreview(args);
+  if (name === 'publish_web_page') return webPublishPreview(args);
   if (name === 'update_app_settings') {
     const v = args.values && typeof args.values === 'object' && !Array.isArray(args.values) ? (args.values as Record<string, unknown>) : {};
     const parts = Object.entries(v).map(([k, x]) => `${String(args.section ?? '')}.${k} → ${JSON.stringify(x)}`);
