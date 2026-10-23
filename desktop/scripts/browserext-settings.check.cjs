@@ -1,5 +1,5 @@
 /**
- * 设置 → 浏览器 →「Chrome 扩展」卡片:真组件 + 生产 CSS,Chromium 里点一遍(桩引擎,不连后端)。
+ * 设置 → 浏览器 →「浏览器扩展」卡片:真组件 + 生产 CSS,Chromium 里点一遍(桩引擎,不连后端)。
  * Run: node scripts/e2e-editor.cjs --check=browserext-settings --shot   (worktree 里加 HARNESS_URL=http://localhost:5199/harness.html)
  */
 const fs = require('fs')
@@ -45,13 +45,15 @@ async function main() {
   check('从没连上过:状态是「未安装」', (await page.locator('[data-testid="browser-extension-status"]').textContent()) === '未安装')
   check('连接码整段显示', (await page.locator('[data-testid="browser-extension-code"]').textContent()).startsWith('tangu:47655:'))
   const text = await panel.textContent()
-  check('三步安装说明齐全', text.includes('1. ') && text.includes('chrome://extensions') && text.includes('加载已解压的扩展程序') && text.includes('3. '))
+  check('三步安装说明齐全,Chrome / Edge 的扩展页与按钮名都写到', text.includes('1. ') && text.includes('chrome://extensions') && text.includes('edge://extensions') && text.includes('加载未打包的扩展程序') && text.includes('加载解压缩的扩展') && text.includes('3. '))
+  check('不知道系统时选择框不给系统专属提示', !text.includes('⌘⇧G') && !text.includes('Ctrl+L'))
   check('「允许其他设备连接本机」关着:第 3 步说 Forsion 会弹「允许并打开」,「手动配对」缺省展开', text.includes('允许并打开') && text.includes('允许其他设备连接本机') && (await page.locator('[data-testid="browser-extension-manual"]').getAttribute('aria-expanded')) === 'true')
 
-  // 手动安装底座:扩展复制出包(用户找得到)、替用户打开 Chrome 扩展页、拖拽把手走原生拖出
+  // 手动安装底座:扩展复制出包(用户找得到)、替用户打开扩展页、拖拽把手走原生拖出
+  check('只认到 Chrome:只给 Chrome 的按钮', (await panel.getByRole('button', { name: '在 Edge 中打开扩展页' }).count()) === 0)
   await panel.getByRole('button', { name: '在 Chrome 中打开扩展页' }).click()
-  await page.waitForFunction(() => window.__extHarness.chromeOpened === 1)
-  check('「在 Chrome 中打开扩展页」交给主进程,打开成功不出提示', (await page.locator('[data-testid="browser-extension-open-note"]').count()) === 0)
+  await page.waitForFunction(() => window.__extHarness.pagesOpened.length === 1)
+  check('「在 Chrome 中打开扩展页」交给主进程,打开成功不出提示', (await page.evaluate(() => window.__extHarness.pagesOpened)).join() === 'chrome' && (await page.locator('[data-testid="browser-extension-open-note"]').count()) === 0)
   await page.locator('[data-testid="browser-extension-drag"]').dispatchEvent('dragstart')
   const dragged = await page.evaluate(() => window.__extHarness.dragged)
   check('拖拽把手拖出的是复制出包的那份', dragged.length === 1 && dragged[0].endsWith('/Forsion/Forsion Clip'), dragged)
@@ -90,10 +92,26 @@ async function main() {
   await page.waitForFunction(() => document.querySelector('[data-testid="browser-extension-code"]')?.textContent?.includes('abab'))
   check('换码进行中「换一个」置灰,回来后恢复', busy && (await resetBtn.isEnabled()), { busy })
 
-  await open('?nochrome')
+  await open('?notfound')
   await panel.getByRole('button', { name: '在 Chrome 中打开扩展页' }).click()
   await page.locator('[data-testid="browser-extension-open-note"]').waitFor()
-  check('没装 Chrome:提示已复制地址', (await page.locator('[data-testid="browser-extension-open-note"]').textContent()).includes('没找到 Google Chrome'))
+  check('没找到浏览器:提示已复制地址', /没找到 Chrome。已复制 chrome:\/\/extensions/.test(await page.locator('[data-testid="browser-extension-open-note"]').textContent()))
+
+  // Windows:Chrome / Edge 都装了 → 两个按钮;点 Edge = 开了新窗口、地址已复制,提示 Ctrl+L 粘贴;选择框提示走 Windows 的
+  await open('?both&launched&platform=win32')
+  check('Chrome / Edge 都装了:两个按钮都在', (await panel.locator('[data-testid^="browser-extension-open-"]').evaluateAll((els) => els.map((el) => el.dataset.testid))).join() === 'browser-extension-open-chrome,browser-extension-open-edge')
+  await panel.getByRole('button', { name: '在 Edge 中打开扩展页' }).click()
+  await page.locator('[data-testid="browser-extension-open-note"]').waitFor()
+  const launchedNote = await page.locator('[data-testid="browser-extension-open-note"]').textContent()
+  check('Windows 打开 Edge:交给主进程的是 edge,提示新窗口 + 已复制 edge://extensions + Ctrl+L 粘贴', (await page.evaluate(() => window.__extHarness.pagesOpened)).join() === 'edge' && launchedNote.includes('已打开 Edge 新窗口') && launchedNote.includes('edge://extensions') && launchedNote.includes('Ctrl+L'), launchedNote)
+  check('Windows:选择框提示是 Ctrl+L 粘贴路径', (await panel.textContent()).includes('按 Ctrl+L 粘贴路径') && !(await panel.textContent()).includes('⌘⇧G'))
+  if (shot) await page.locator('.settings-browser-ext-panel').screenshot({ path: path.join(out, 'ext-win-both.png') })
+  await open('?platform=darwin')
+  check('mac:选择框提示是 ⌘⇧G', (await panel.textContent()).includes('⌘⇧G') && !(await panel.textContent()).includes('按 Ctrl+L 粘贴路径'))
+  await open('?edgeonly')
+  check('只装了 Edge:只给 Edge 的按钮', (await panel.getByRole('button', { name: '在 Edge 中打开扩展页' }).count()) === 1 && (await panel.getByRole('button', { name: '在 Chrome 中打开扩展页' }).count()) === 0)
+  await open('?nobrowser')
+  check('一个浏览器都认不出:退回只给 Chrome(主进程会复制地址)', (await panel.locator('[data-testid^="browser-extension-open-"]').count()) === 1 && (await panel.getByRole('button', { name: '在 Chrome 中打开扩展页' }).count()) === 1)
 
   // 副本是旧版:挂载时不换(Chrome 正从那里加载),写明有新版;拖的那一下先换成随包版本再拖
   await open('?stale')
@@ -115,10 +133,10 @@ async function main() {
   const openedOld = await page.evaluate(() => window.__extHarness.opened)
   check('壳里没有 clipExtension:退回打开随包目录,不给拖拽把手', openedOld.length === 1 && openedOld[0].endsWith('/tangu-server/browser-extension') && (await page.locator('[data-testid="browser-extension-drag"]').count()) === 0, openedOld)
 
-  await open('?external')
+  await open('?external&both&platform=win32')
   const extText = await panel.textContent()
-  check('外部引擎:不给「打开扩展文件夹」(目录在引擎那台机器上),改为写明路径',
-    (await panel.getByRole('button', { name: '打开扩展文件夹' }).count()) === 0 && (await panel.getByRole('button', { name: '在 Chrome 中打开扩展页' }).count()) === 0 && extText.includes('外部引擎') && extText.includes('/tangu-server/browser-extension'), extText.slice(-160))
+  check('外部引擎:不给「打开扩展文件夹」/「打开扩展页」(在引擎那台机器上装),选择框不给本机系统提示,改为写明路径',
+    (await panel.getByRole('button', { name: '打开扩展文件夹' }).count()) === 0 && (await panel.locator('[data-testid^="browser-extension-open-"]').count()) === 0 && !extText.includes('Ctrl+L 粘贴路径') && extText.includes('外部引擎') && extText.includes('/tangu-server/browser-extension'), extText.slice(-160))
   if (shot) await page.locator('.settings-browser-ext-panel').screenshot({ path: path.join(out, 'ext-external.png') })
 
   await open('?connected')
@@ -140,7 +158,7 @@ async function main() {
   check('端口被占时直说原因', (await page.locator('[data-testid="browser-extension-status"]').textContent()).includes('47655') )
 
   await page.setViewportSize({ width: 420, height: 900 })
-  await open('?connected')
+  await open('?connected&both')
   const narrow = await page.locator('.settings-browser-ext-panel').evaluate((el) => {
     const r = el.getBoundingClientRect()
     return { left: r.left, right: r.right, viewport: innerWidth, scroll: document.documentElement.scrollWidth }
@@ -150,7 +168,9 @@ async function main() {
 
   if (shot) {
     await page.setViewportSize({ width: 900, height: 900 })
-    await open('?connected&dark&lang=en')
+    await open('?connected&dark&lang=en&both&launched&platform=win32')
+    await panel.getByRole('button', { name: 'Open extensions in Edge' }).click()
+    await page.locator('[data-testid="browser-extension-open-note"]').waitFor()
     await page.locator('.settings-browser-ext-panel').screenshot({ path: path.join(out, 'ext-dark-en.png') })
     console.log(`SHOT ${out}`)
   }

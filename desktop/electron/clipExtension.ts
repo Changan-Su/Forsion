@@ -1,19 +1,47 @@
 /**
- * Forsion Clip(Chrome 扩展)手动安装的底座(方案页 docs/ToBeImproved/Clip安装引导方案_2026-10-20,用户选 C):
+ * Forsion Clip(Chrome / Edge 扩展)手动安装的底座(方案页 docs/ToBeImproved/Clip安装引导方案_2026-10-20,用户选 C):
  * - 随包那份在 .app 里,mac「加载已解压」的选择框进不去 → 复制到用户找得到的位置;
- * - 替用户打开 Chrome 扩展页:mac 走 `open -b com.google.Chrome chrome://extensions`(LaunchServices 送 GURL,实测
- *   Chrome 已开 / 冷启动都能开)。shell.openExternal 不行(系统里没有 chrome: 的处理者),命令行参数里的 chrome://
- *   会被 Chrome 拦成新标签页 → 别的系统只能复制地址让用户粘贴。
- * 拖拽把手复用 fs:startDrag(原生拖出,文件夹也行)。拖进扩展页只在 Chrome 开发者模式下生效(扩展页 drag-enabled = inDevMode)。
+ * - 替用户打开扩展页:mac 走 `open -b com.google.Chrome chrome://extensions`(LaunchServices 送 GURL,实测
+ *   Chrome 已开 / 冷启动都能开)。shell.openExternal 不行(系统里没有 chrome: 的处理者)。Windows 上 Chrome / Edge 都把
+ *   命令行里的内部页拦成新标签页(10-23 Chrome 155 / Edge 155 实测:chrome://、edge://、about:extensions、--app=、
+ *   microsoft-edge: 协议一律落到 newtab)→ 只能替用户开个新窗口、把地址放进剪贴板,由界面请用户粘贴。
+ * - Edge 与 Chrome 装的是同一份已解压扩展:扩展 ID 由 manifest.key 定、Origin 同为 chrome-extension://(Edge 155 实测),
+ *   引擎白名单与配对门铃不用改。Edge 扩展页的拖入同样只在「开发人员模式」开着时挂上(isDeveloperMode ? attach : detach)。
+ * 拖拽把手复用 fs:startDrag(原生拖出,文件夹也行)。拖进扩展页只在开发者模式下生效(扩展页 drag-enabled = inDevMode)。
  */
 import { app, clipboard, ipcMain } from 'electron'
-import { execFile } from 'child_process'
+import { execFile, spawn } from 'child_process'
 import { cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync } from 'fs'
-import { dirname, join } from 'path'
+import { homedir } from 'os'
+import { dirname, join, posix, win32 } from 'path'
 import { forsionHomeDir } from './forsionHome'
 
-export const CHROME_EXTENSIONS_URL = 'chrome://extensions'
-const CHROME_BUNDLE_ID = 'com.google.Chrome'
+export type ClipBrowser = 'chrome' | 'edge'
+export const EXTENSIONS_URL: Record<ClipBrowser, string> = { chrome: 'chrome://extensions', edge: 'edge://extensions' }
+const BROWSERS: Record<ClipBrowser, { macBundle: string; macApp: string; winExe: (env: NodeJS.ProcessEnv) => string[] }> = {
+  chrome: {
+    macBundle: 'com.google.Chrome', macApp: 'Google Chrome.app',
+    winExe: (env) => [env.ProgramFiles, env['ProgramFiles(x86)'], env.LOCALAPPDATA].filter(Boolean).map((root) => win32.join(root!, 'Google', 'Chrome', 'Application', 'chrome.exe')),
+  },
+  edge: {
+    macBundle: 'com.microsoft.edgemac', macApp: 'Microsoft Edge.app',
+    winExe: (env) => [env['ProgramFiles(x86)'], env.ProgramFiles].filter(Boolean).map((root) => win32.join(root!, 'Microsoft', 'Edge', 'Application', 'msedge.exe')),
+  },
+}
+/** 测试注入:平台 / 环境变量 / 文件存在判断 / 家目录;缺省取本机。 */
+export type BrowserProbe = { platform?: NodeJS.Platform; env?: NodeJS.ProcessEnv; exists?: (p: string) => boolean; home?: string }
+
+/** 浏览器装在哪:按官方安装位置找(Windows 的 exe / mac 的 .app)。ponytail: 自定义安装位置找不到,真有人报再查注册表 App Paths。 */
+function browserPath(browser: ClipBrowser, { platform = process.platform, env = process.env, exists = existsSync, home = homedir() }: BrowserProbe = {}): string | null {
+  const spec = BROWSERS[browser]
+  const candidates = platform === 'win32' ? spec.winExe(env) : platform === 'darwin' ? ['/Applications', posix.join(home, 'Applications')].map((dir) => posix.join(dir, spec.macApp)) : []
+  return candidates.find((p) => exists(p)) ?? null
+}
+
+/** 本机装了哪些能装 Clip 的浏览器(设置页按它给「打开扩展页」按钮);别的系统认不出 → [],界面退回只给 Chrome。 */
+export function detectBrowsers(probe?: BrowserProbe): ClipBrowser[] {
+  return (Object.keys(BROWSERS) as ClipBrowser[]).filter((b) => browserPath(b, probe) !== null)
+}
 
 /** 随包的扩展:安装包在 tangu-server/browser-extension,dev 用依赖里那份(npm @forsion/clip)。 */
 export function clipSourceDir(): string {
@@ -61,17 +89,35 @@ export function ensureClipCopy(src: string, dst: string, update = false): ClipCo
   }
 }
 
-export type OpenChromeResult = { ok: true } | { ok: false; copied: true; reason: 'no-chrome' | 'unsupported' }
+/** launched = Windows 已开了新窗口、地址在剪贴板(要用户粘贴);not-found = 没找到这个浏览器;unsupported = 别的系统,只复制。 */
+export type OpenExtensionsResult = { ok: true } | { ok: false; copied: true; reason: 'launched' | 'not-found' | 'unsupported' }
 
-/** mac:让 Chrome 打开扩展页。没装 Chrome、或不是 mac → 把地址复制到剪贴板,由界面请用户粘贴进 Chrome 地址栏。 */
-export function openChromeExtensions(): Promise<OpenChromeResult> {
-  const copy = (reason: 'no-chrome' | 'unsupported'): OpenChromeResult => {
-    clipboard.writeText(CHROME_EXTENSIONS_URL)
+/**
+ * 替用户打开扩展页。mac:`open -b` 直达扩展页。Windows:地址先进剪贴板,再起 `<浏览器> --new-window`(已在跑的会转给
+ * 原进程开窗,新窗口落在新标签页、焦点在地址栏)。没找到浏览器、或别的系统 → 只复制地址。
+ */
+export function openExtensionsPage(browser: ClipBrowser = 'chrome', probe: BrowserProbe = {}): Promise<OpenExtensionsResult> {
+  const url = EXTENSIONS_URL[browser]
+  const copy = (reason: 'launched' | 'not-found' | 'unsupported'): OpenExtensionsResult => {
+    clipboard.writeText(url)
     return { ok: false, copied: true, reason }
   }
-  if (process.platform !== 'darwin') return Promise.resolve(copy('unsupported'))
+  const platform = probe.platform ?? process.platform
+  if (platform === 'darwin') {
+    return new Promise((resolve) => {
+      execFile('open', ['-b', BROWSERS[browser].macBundle, url], (err) => resolve(err ? copy('not-found') : { ok: true }))
+    })
+  }
+  if (platform !== 'win32') return Promise.resolve(copy('unsupported'))
+  const exe = browserPath(browser, probe)
+  if (!exe) return Promise.resolve(copy('not-found'))
   return new Promise((resolve) => {
-    execFile('open', ['-b', CHROME_BUNDLE_ID, CHROME_EXTENSIONS_URL], (err) => resolve(err ? copy('no-chrome') : { ok: true }))
+    try {
+      // detached:Forsion 退出不带走浏览器;起不来(error)也只回「没找到」,不让主进程抛未处理的 error
+      const child = spawn(exe, ['--new-window'], { detached: true, stdio: 'ignore' })
+      child.once('spawn', () => { child.unref(); resolve(copy('launched')) })
+      child.once('error', () => resolve(copy('not-found')))
+    } catch { resolve(copy('not-found')) }
   })
 }
 
@@ -131,5 +177,6 @@ export function startClipVersionSync(engine: EngineRef): void {
 
 export function registerClipExtensionIpc(): void {
   ipcMain.handle('clipExt:prepare', (_e, update?: boolean) => ensureClipCopy(clipSourceDir(), clipCopyDir(), update === true))
-  ipcMain.handle('clipExt:openChrome', () => openChromeExtensions())
+  ipcMain.handle('clipExt:browsers', () => detectBrowsers())
+  ipcMain.handle('clipExt:openExtensions', (_e, browser?: unknown) => openExtensionsPage(browser === 'edge' ? 'edge' : 'chrome'))
 }
