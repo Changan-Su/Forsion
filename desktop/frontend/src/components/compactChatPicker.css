@@ -90,9 +90,11 @@
 .chat-pick-sheet .chat-pick-sep { height: var(--border-width, 1px); margin: 4px 12px; background: var(--border); }
 .chat-pick-held {
   position: absolute; left: 28px; right: 28px; transform: translateY(-100%); z-index: 1;
+  max-height: 40vh; overflow-y: auto; box-sizing: border-box;
   padding: 10px 12px; border-radius: var(--radius-md, 12px);
   border: var(--border-width, 1px) solid var(--border); background: var(--bg-card); box-shadow: var(--card-shadow);
 }
+.chat-pick-held.is-below { transform: none; }
 .chat-pick-held p { margin: 0; font-size: var(--ui-font-meta, 12px); line-height: 1.55; color: var(--text-muted); }
 .chat-pick-held p b { display: block; margin-bottom: 2px; font-size: var(--ui-font-body, 13px); font-weight: 600; color: var(--text); }
 .chat-pick-held button {

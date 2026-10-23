@@ -62,7 +62,9 @@ export function CompactChatPicker({
   const surfaceRef = useRef<HTMLDivElement | null>(null)
   const [open, setOpen] = useState<null | 'popover' | 'sheet'>(null)
   const [hover, setHover] = useState<string | null>(null)
-  const [held, setHeld] = useState<{ id: string; top: number } | null>(null)
+  const [held, setHeld] = useState<{ id: string; top: number; bottom: number } | null>(null)
+  const heldRef = useRef<HTMLDivElement>(null)
+  const [heldBelow, setHeldBelow] = useState(false)
   const [anchor, setAnchor] = useState({ x: 0, y: 0, top: 0 })
 
   const openWeb = (): void => setOpen(window.matchMedia?.('(pointer: coarse)').matches ? 'sheet' : 'popover')
@@ -114,7 +116,7 @@ export function CompactChatPicker({
     // 打开时焦点落到已选的第一项(没有就第一项),键盘直接上下挑
     const first = surfaceRef.current?.querySelector<HTMLElement>('[role="option"][aria-selected="true"]:not(:disabled)')
       ?? surfaceRef.current?.querySelector<HTMLElement>('[role="option"]:not(:disabled)')
-    if (open === 'popover') first?.focus({ preventScroll: true })
+    first?.focus({ preventScroll: true })
     return () => {
       document.removeEventListener('pointerdown', onDown, true)
       document.removeEventListener('keydown', onKey, true)
@@ -156,7 +158,8 @@ export function CompactChatPicker({
         onContextMenu={sheet && (item.description || (item.direct && onDirect)) ? (e) => {
           e.preventDefault()
           const sheetTop = surfaceRef.current?.getBoundingClientRect().top ?? 0
-          setHeld({ id: item.id, top: e.currentTarget.getBoundingClientRect().top - sheetTop })
+          const r = e.currentTarget.getBoundingClientRect()
+          setHeld({ id: item.id, top: r.top - sheetTop, bottom: r.bottom - sheetTop })
         } : undefined}
       >
         <span className="chat-pick-icon">{item.icon}</span>
@@ -181,6 +184,12 @@ export function CompactChatPicker({
   })
 
   const heldItem = held ? items.find((i) => i.id === held.id) : undefined
+  // 卡片默认浮在被按的那行上方;上方放不下(横屏、前几行)就翻到行下方
+  useLayoutEffect(() => {
+    if (!held || !heldRef.current || !surfaceRef.current) return
+    const sheetTop = surfaceRef.current.getBoundingClientRect().top
+    setHeldBelow(sheetTop + held.top - heldRef.current.offsetHeight - 6 < 8)
+  }, [held])
 
   return (
     <>
@@ -233,7 +242,10 @@ export function CompactChatPicker({
             <div className="chat-pick-head"><b>{title}</b>{status && <span>{status}</span>}</div>
             <div className="chat-pick-list" onClick={() => setHeld(null)}>{rows(true)}</div>
             {heldItem && (
-              <div className="chat-pick-held" role="dialog" aria-label={heldItem.name} style={{ top: held!.top - 6 }}>
+              <div
+                ref={heldRef} className={`chat-pick-held${heldBelow ? ' is-below' : ''}`} role="dialog" aria-label={heldItem.name}
+                style={{ top: heldBelow ? held!.bottom + 6 : held!.top - 6 }}
+              >
                 <p><b>{heldItem.name}</b>{heldItem.description}</p>
                 {heldItem.direct && onDirect && (
                   <button type="button" onClick={() => { close(); onDirect(heldItem.id) }}>

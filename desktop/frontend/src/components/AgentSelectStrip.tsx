@@ -237,6 +237,12 @@ export function AgentSelectStrip({ sessionId, cfg }: { sessionId: string | null;
     )
   }
 
+  // 原生清单开着时会话可能被换掉 / 本组件被卸掉:回来的结果只认发起它的那一轮,且用最新的 applyAgents 写(评审 10-24)。
+  const nativeAbort = useRef<AbortController | null>(null)
+  const applyLatest = useRef(applyAgents)
+  applyLatest.current = applyAgents
+  useEffect(() => () => nativeAbort.current?.abort(), [sessionId])
+
   // Chat 预设恒 sandbox + 无 agent(applyPreset 会抹掉 agentSlug/cwd),不露选择条;没有任何候选同理。
   if (cfg.preset === 'chat' || !items.length) return null
 
@@ -283,6 +289,9 @@ export function AgentSelectStrip({ sessionId, cfg }: { sessionId: string | null;
   // 引擎是单选互斥,清单表达不了 —— 列表里有引擎就留给网页面(引擎只在本机执行的会话里出现,手机上碰不到)。
   const openNative = (fallback: () => void): boolean => {
     if (!nativeSheetPresenter() || items.some((i) => i.kind === 'engine')) return false
+    nativeAbort.current?.abort()
+    const ctrl = new AbortController()
+    nativeAbort.current = ctrl
     const agents = items.filter((i): i is Extract<Candidate, { kind: 'agent' }> => i.kind === 'agent')
     void presentNativeChecklist({
       title: t('agentSelect.title'),
@@ -292,9 +301,10 @@ export function AgentSelectStrip({ sessionId, cfg }: { sessionId: string | null;
       done: t('chatPicker.done'),
       min: 0,
       max: agents.length,
-    }).then((out) => {
+    }, ctrl.signal).then((out) => {
+      if (ctrl.signal.aborted) return
       if (!out.handled) { fallback(); return }
-      if (out.value) applyAgents(out.value.checked.map((id) => id.slice('agent:'.length)))
+      if (out.value) applyLatest.current(out.value.checked.map((id) => id.slice('agent:'.length)))
     })
     return true
   }
