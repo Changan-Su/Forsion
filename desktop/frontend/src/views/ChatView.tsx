@@ -382,7 +382,7 @@ export function ChatView({ leaf, params }: ViewProps) {
     }
     el.classList.add('t2-jump-flash')
     // 不随 effect 清理:下一行 clearJumpTarget 改了依赖、effect 立刻重跑,清理会把这个定时器掐掉 → 类永远摘不掉,再跳到同一条就不闪了
-    window.setTimeout(() => el.classList.remove('t2-jump-flash'), 1600)
+    window.setTimeout(() => el.classList.remove('t2-jump-flash'), 1100)
     s.clearJumpTarget()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [s.jumpTarget?.seq, activeId, historyLoading, activeMessages.length])

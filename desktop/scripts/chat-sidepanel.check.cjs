@@ -292,12 +292,12 @@ async function main() {
   const selectionHandoff = await win.evaluate(`(() => {
     const main = document.querySelector('[data-chat-surface="chat"]')
     const panel = document.querySelector('[data-chat-surface="chat-panel"]')
-    const quote = (root) => root?.querySelector('.t2c-quote-text')?.textContent?.trim() || ''
+    const quote = (root) => root?.querySelector('.t2c-tilerow .att-tile--quote .att-tile-head')?.textContent?.trim() || ''
     return {
       panelMounted: !!panel,
       panelQuote: quote(panel),
       mainQuote: quote(main),
-      mainCards: main?.querySelectorAll('.t2c-quote').length || 0,
+      mainCards: main?.querySelectorAll('.t2c-tilerow .att-tile--quote').length || 0,
       focused: main?.querySelector('.t2c-ta') === document.activeElement,
       disabled: !!main?.querySelector('.t2c-ta')?.disabled,
     }
@@ -311,7 +311,7 @@ async function main() {
   await win.screenshot({ path: selectionPanelShot })
   await win.evaluate("document.querySelector('[data-selection-probe]')?.remove()")
   // 引用卡摘掉再往下量:后面几条量的是输入卡的常态高度。
-  await win.locator('[data-chat-surface="chat"] .t2c-quote-x').first().click().catch(() => {})
+  await win.locator('[data-chat-surface="chat"] .att-tile-x').first().click().catch(() => {})
   await win.waitForTimeout(300)
 
   // ── 28 Tangu 右栏 = 同一正式会话的 ChatView 承载形态 ────────────────────────
