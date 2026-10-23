@@ -63,7 +63,9 @@ import { loadSchedule, entriesOf, upcomingScheduleLines } from './agentSchedule.
 import { agentIdentitySection, applyAgentActivation } from './agentActivation.js';
 import { clampApprovalMode, clearRunRemoteTaint, effectiveRemote, remoteApprovalCap, remoteOf, REMOTE_WRITABLE_CONFIG_KEYS } from './remoteOrigin.js';
 import { remoteLocked, remoteLockedBody } from './remoteLock.js'; // P1-K2
-import { registerRun, runCategory, unregisterRun, type RunCategory } from './remoteActivity.js'; // P1-K2
+import { isChildBriefRun, isUnattendedRun, registerRun, runCategory, unregisterRun, type RunCategory } from './remoteActivity.js'; // P1-K2
+import { requestInquiry } from './inquiries.js';
+import { askUserPayload, formatInquiryResult, isSystemAnswer, normalizeInquiryAnswer } from '../tools/builtin/interaction.js';
 import { loadProjectDocSafe, wrapProjectDoc } from './projectDoc.js';
 import { onUserRunDone, onUserRunStart, type HistorianForkSeed } from './localHistorian.js';
 import { branchesSection } from './branchContext.js';
@@ -209,6 +211,18 @@ export function parkedToolResult(preview: string): string {
 }
 /** 挂起调用的结局回灌(user 行,落库 —— 后续 run 回放要看得到批准后那次执行的输出)。桌面按开头标记渲染成一行通知。 */
 export const APPROVAL_UPDATE_OPEN = '<approval_update>';
+
+/** 托盘 run 里挂起的 ask_user 给模型的占位结果(10-23 方案「待确认卡片」B,借 Codex:问题卡挂着等,任务照推)。
+ *  口径同 parkedToolResult:不依赖答案的接着做,依赖的别猜、等 <inquiry_update>;全都依赖就收尾,收尾闸门等答案再叫醒。 */
+export function parkedInquiryResult(question: string): string {
+  return `⏸ Waiting for the user's answer: ${question}\n` +
+    'The user has not answered yet. The question is waiting in their tray and they may take a while. Do not ask it again, and do not stop to wait for it. ' +
+    'Keep going right now with every remaining step that does not depend on the answer. For anything that does, do not guess: hold it until the answer arrives. ' +
+    'As soon as the user answers you will receive an <inquiry_update> message with their answer, and this placeholder will be replaced by it. ' +
+    'If everything left depends on the answer, end your turn with a brief note; you will be resumed automatically with the answer.';
+}
+/** 挂起询问的答案回灌(user 行,落库)。桌面按开头标记渲染成一行「你答了…」。 */
+export const INQUIRY_UPDATE_OPEN = '<inquiry_update>';
 
 // assistantTurnOf(续跑轮的 assistant 消息构造器)已移到 services/contextBudget.ts —— 子代理也要用它,
 // 而 agentLoop → tools/registry → builtin/delegate → subAgent 已是一条链,反向 import 会成环。
@@ -2388,7 +2402,14 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     };
     // 挂起的调用(托盘 run):tool_call id → 待兑现项。decided 兑现时记下决定与先后(seq),迭代边界按拍板先后执行。
     // preCtxText:PreToolUse 在挂起前注入的上下文 —— 占位里带着它,兑现后写回的真结果也要带,否则原位替换时就丢了(Codex 09-27 第二轮)。
-    interface ParkedCall { call: ToolCall; effCall: ToolCall; preview: string; preCtxText: string; parallelGroup?: string; decision?: ApprovalDecision; seq?: number }
+    // answer:挂起的 ask_user(托盘 run)拿到的答案;preview 存问题原文。decision / answer 有一个就算「可以兑现了」。
+    interface ParkedCall { call: ToolCall; effCall: ToolCall; preview: string; preCtxText: string; parallelGroup?: string; decision?: ApprovalDecision; answer?: string; seq?: number }
+    const parkedReady = (e: ParkedCall): boolean => !!e.decision || e.answer !== undefined;
+    /** 挂起提问兑现后的工具结果(落库 / 回填共用一份):答案就是不挂起时 ask_user 会返回的那串。 */
+    const askToolResult = (call: ToolCall, answer: string, parallelGroup?: string): any => {
+      const content = formatInquiryResult(answer);
+      return { tool_call_id: call.id, name: call.function.name, content, isError: false, startedAt: Date.now(), elapsedMs: 0, outputChars: content.length, parallelGroup };
+    };
     const parked = new Map<string, ParkedCall>();
     let parkedSeq = 0;
     let parkedWake: (() => void) | null = null; // 收尾闸门等拍板时挂的唤醒
@@ -2451,6 +2472,31 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         ? { ...call, function: { ...call.function, arguments: JSON.stringify(preV.updatedInput) } }
         : call;
       const preCtxText = hookContextText(preV); // PreToolUse 注入的上下文 → 拼进本工具结果尾部（保序）
+
+      // 托盘 run 的 ask_user 也挂起(10-23 方案「待确认卡片」B):问题照发进对话末尾的卡片堆、不等,先给模型占位结果;
+      // 用户答了,在迭代边界把答案放回原工具消息 + 一行 <inquiry_update>。子会话 / 无人值守照旧走工具里的当场代答;计划审阅不挂(只读模式下没别的可做)。
+      const ask = approvalTray && effCall.function.name === 'ask_user' && !isChildBriefRun(runId) && !isUnattendedRun(runId)
+        ? askUserPayload(safeParse(effCall.function.arguments)) : null;
+      if (ask) {
+        const entry: ParkedCall = { call, effCall, preview: ask.question, preCtxText, parallelGroup };
+        parked.set(call.id, entry);
+        void requestInquiry(runId, ask, parkAc.signal).then((raw) => {
+          const answer = normalizeInquiryAnswer(raw, parkAc.signal); // run 停了没答 → 英文系统说明,不冒充用户
+          // 落库那半当场改:答了之后、兑现之前被停,答案也得留在历史里;停了没答的写成「没等到回答」,不留「还在等」的占位(Codex 10-23 P1)。
+          // 模型上下文那半仍在迭代边界换(settleParkedCalls),不在模型调用途中动它。
+          void persistParkedResult(call.id, askToolResult(call, answer, parallelGroup))
+            .catch((e: any) => console.warn(`[agent-core] run ${runId} 挂起提问的答案落库失败:`, e?.message || e));
+          if (parkAc.signal.aborted) return;
+          entry.answer = answer; entry.seq = ++parkedSeq; parkedWake?.();
+        });
+        const msg = parkedInquiryResult(ask.question);
+        const elapsedMs = Date.now() - startedAt;
+        await publish(runId, 'tool_result', { id: call.id, name: call.function.name, result: msg, isError: false, parked: true, startedAt, elapsedMs, outputChars: msg.length, parallelGroup });
+        return {
+          toolResult: { tool_call_id: call.id, name: call.function.name, content: msg, isError: false, parked: true, startedAt, elapsedMs, outputChars: msg.length, parallelGroup },
+          toolMessage: { role: 'tool', content: preCtxText ? `${msg}\n\n${preCtxText}` : msg, tool_call_id: call.id } as ChatMessage,
+        };
+      }
 
       // host-exec 审批闸门：execMode!=='host' 时立即放行（无 await、无事件）→ server/worker 零影响。
       // 例外只有自己声明 capabilities.approval:'always' 的工具(花掉账号里的东西这类):那一档在云端 / sandbox 会话里也问。
@@ -2581,31 +2627,49 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       // 原位改 content、**不换对象**:段落库后 settleCheckpointAfterFinalize 按对象身份给它挂了来源行(压缩边界靠它认
       // 「这条已落库、属于哪一行」),换对象 = 丢标记,下次落库会被错标成后面那一段。
       if (i >= 0) (workingMessages[i] as { content: unknown }).content = done.toolMessage.content;
+      await persistParkedResult(callId, done.toolResult);
+      return i >= 0;
+    };
+    /** putBackParkedResult 的落库那半:段还在累积 → 改累加器(同步,随段落库);段已落库 → 用快照按同一 id 再 finalize。 */
+    const persistParkedResult = async (callId: string, toolResult: any): Promise<void> => {
       const j = allToolResults.findIndex((r) => r?.tool_call_id === callId);
-      if (j >= 0) allToolResults[j] = done.toolResult;
+      if (j >= 0) allToolResults[j] = toolResult;
       else {
         for (const [segId, snap] of finalizedWithParked) {
           const k = snap.toolResults.findIndex((r) => r?.tool_call_id === callId);
           if (k < 0) continue;
-          snap.toolResults[k] = done.toolResult;
+          snap.toolResults[k] = toolResult;
           await finalizeAssistantMessage(segId, sessionId, modelId, snap.content, snap.reasoning, snap.toolCalls, snap.toolResults, snap.displayFiles);
           if (!snap.toolResults.some((r) => r?.parked)) finalizedWithParked.delete(segId);
           break;
         }
       }
-      return i >= 0;
     };
     /** 用户已拍板的挂起调用:按拍板先后逐个兑现(批准 → 按原参数或用户改过的参数执行;拒绝 → 不执行)。真结果放回
      *  各自的工具消息(putBackParkedResult);交给模型的 <approval_update> 只有引擎自己写的拍板结论,**绝不带工具输出**
      *  —— 输出是不可信数据,拼进 user 消息等于给它用户的身份(Codex 09-27 P1)。
      *  只在迭代边界调:与循环自己的工具串行。某一项执行抛错只记成该项失败,不连累已执行的那些(它们的结果已写回)。 */
     const settleParkedCalls = async (): Promise<SteerMsg[]> => {
-      const ready = [...parked.values()].filter((e) => e.decision).sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0));
+      const ready = [...parked.values()].filter(parkedReady).sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0));
       if (!ready.length) return [];
       const parts: string[] = [];
+      const answers: string[] = [];
       for (const e of ready) {
         if (ac.signal.aborted) throw new AbortLikeError();
         parked.delete(e.call.id);
+        if (e.answer !== undefined) {
+          // 挂起的 ask_user:答案就是这次调用的结果(同不挂起时的工具结果),放回原位;回灌行里带答案 —— 那是用户自己的话,不是工具输出
+          const toolResult = askToolResult(e.call, e.answer, e.parallelGroup);
+          const content = toolResult.content as string;
+          await publish(runId, 'tool_result', { id: e.call.id, name: e.call.function.name, result: content, isError: false, startedAt: toolResult.startedAt, elapsedMs: 0, outputChars: content.length, parallelGroup: e.parallelGroup });
+          const inContext = await putBackParkedResult(e.call.id, {
+            toolResult,
+            toolMessage: { role: 'tool', content: e.preCtxText ? `${content}\n\n${e.preCtxText}` : content, tool_call_id: e.call.id } as ChatMessage,
+          });
+          answers.push(`[${isSystemAnswer(e.answer) ? 'no answer' : 'answered'}] ask_user (call ${e.call.id}) — ${e.preview.split('\n')[0].slice(0, 200)}\n${content}` +
+            (inContext ? '\nThat call\'s result above now holds this.' : '\n(That call is no longer in your context window.)'));
+          continue;
+        }
         const d = e.decision!;
         let status: 'approved' | 'failed' | 'rejected';
         let uncertain = false;
@@ -2635,14 +2699,14 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           (d.action !== 'reject' && d.argsOverride ? `\nThe user edited the arguments before approving; it ran with: ${JSON.stringify(d.argsOverride)}` : '') +
           (inContext ? '' : '\n(That call is no longer in your context window; check the current state with a read-only tool if you need its result.)'));
       }
-      return [{
-        id: uuidv4(),
-        content: `${APPROVAL_UPDATE_OPEN}\nThe user has decided on tool calls that were waiting for approval:\n\n${parts.join('\n\n')}\n</approval_update>`,
-      }];
+      const out: SteerMsg[] = [];
+      if (parts.length) out.push({ id: uuidv4(), content: `${APPROVAL_UPDATE_OPEN}\nThe user has decided on tool calls that were waiting for approval:\n\n${parts.join('\n\n')}\n</approval_update>` });
+      if (answers.length) out.push({ id: uuidv4(), content: `${INQUIRY_UPDATE_OPEN}\nQuestions you asked with ask_user now have an answer:\n\n${answers.join('\n\n')}\n</inquiry_update>` });
+      return out;
     };
     /** 收尾闸门用:还有挂起项、模型已无别的可干 → 等到有东西可交(任一张拍板 / 用户插话);中止即抛。 */
     const waitForParked = async (): Promise<void> => {
-      while (![...parked.values()].some((e) => e.decision) && !steerQueue.get(runId)?.length) {
+      while (![...parked.values()].some(parkedReady) && !steerQueue.get(runId)?.length) {
         await new Promise<void>((resolve, reject) => {
           const settle = (): void => { parkedWake = null; ac.signal.removeEventListener('abort', onAbort); };
           const onAbort = (): void => { settle(); reject(new AbortLikeError()); };
@@ -3511,6 +3575,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     const status = aborted ? 'aborted' : 'failed';
     const msg = aborted ? 'aborted' : (err?.message || String(err));
     console.error(`[agent-core] run ${runId} ${status}:`, msg);
+    // 先撤掉挂起项、让出一拍:挂起提问的「没等到回答」要先写进本段的工具结果,下面落库的半截段才不是「还在等」的占位
+    parkAc.abort();
+    await new Promise<void>((r) => setImmediate(r));
     // 落库「已停止/失败」时已累积的部分助手轮次:有正文或工具调用就持久化 → 留在聊天记录、且作为上下文
     // 喂给后续 run(否则被中断的这一轮凭空消失,用户与后续 agent 都读不到)。幂等 upsert,失败不二次抛。
     if (finalContent.trim() || allToolCalls.length) {

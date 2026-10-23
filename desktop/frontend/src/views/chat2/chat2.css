@@ -970,6 +970,28 @@ button.desk-cap-pick:hover, button.desk-cap-pick[aria-expanded='true'] { backgro
 .t2-taskcard-expire { margin-left: auto; font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted)); white-space: nowrap; }
 .t2-taskcard-note { font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted)); }
 .t2-tasks > .t2-childs { margin-top: 0; }
+/* 写卡那条回答下面的一行(TaskTraces):卡本身在对话末尾的卡片堆里,这里只写还在等 / 结局 */
+.t2-tasks--trace { gap: 4px; }
+.t2-tasktrace { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: var(--ui-font-meta, 12px); }
+.t2-tasktrace > svg { flex: none; color: var(--accent-ink); }
+.t2-tasktrace > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.t2-tasktrace-jump { padding: 0; border: none; background: none; font: inherit; text-align: left; cursor: pointer; }
+.t2-tasktrace-jump:hover { color: var(--text); }
+/* 对话末尾(10-23 方案 B):任务清单一行 + 等你处理的卡片堆,跟在最新内容后面,和助手正文同一列 */
+.t2-tail { display: flex; flex-direction: column; gap: 6px; padding-left: 46px; max-width: 746px; box-sizing: border-box; }
+.t2-tail > .t2c-apv[data-peek] { margin-top: 12px; }
+/* 头像那一列不在时(竖长窄列 / 手机原生外壳,见上面两处 .t2-avatar 隐藏)不缩进;放在基础规则之后,同特异性才压得住 */
+@container (aspect-ratio < 9 / 16) { .t2-tail { padding-left: 0; } }
+@container (max-width: 520px) { .mb-shell[data-native-chrome] .t2-tail { padding-left: 0; } }
+.t2-deckpill-row { display: flex; justify-content: center; margin-bottom: 8px; pointer-events: none; }
+.t2-deckpill {
+  pointer-events: auto; display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; cursor: pointer;
+  border: var(--border-width, 1px) solid var(--border); border-radius: 999px;
+  background: var(--t2c-card-surface, var(--bg-card, var(--bg))); box-shadow: var(--card-shadow, 0 6px 22px rgba(0, 0, 0, 0.08));
+  font-family: var(--font-ui); font-size: var(--ui-font-meta, 12px); color: var(--text);
+}
+.t2-deckpill > svg { color: var(--accent-ink); flex: none; }
+.t2-deckpill-sep { color: var(--text-faint, var(--text-muted)); }
 .t2-taskcard.busy .t2-taskcard-actions > button { opacity: .6; cursor: progress; }
 .t2-taskcard-toggle {
   align-self: flex-start; border: none; background: transparent; padding: 0; cursor: pointer;

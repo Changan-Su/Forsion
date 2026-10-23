@@ -178,12 +178,12 @@ async function main() {
     const root = document.getElementById(`tocmsg-${m.id}`)
     const card = root?.querySelector('.plan-card')
     // 拍板区在输入框上方的托盘里(09-27);按 data-tray-msg 锁到这条消息,理由同上(别的会话的托盘也可能挂在 DOM 上)
-    // 托盘收起着 / 这条排在队列行里(展开着别的待办,比如上一轮的残留):先展开到这一条再量,
-    // 别把状态残留误诊成「计划卡没出现」。托盘里压根没有这条 → 照常往下走,由 L3 报出来。
+    // 托盘收起着 / 最上面是别的待办(比如上一轮的残留):先展开、按 › 翻一张再量(10-23 起卡片堆不再列队列行),
+    // 别把状态残留误诊成「计划卡没出现」。托盘里压根没有这条 → 翻一圈后照常往下走,由 L3 报出来。
     if (!document.querySelector(`.t2c-apv-body[data-tray-msg="${m.id}"]`)) {
       const head = document.querySelector('.t2c-apv-head[aria-expanded="false"]')
-      const row = document.querySelector(`.t2c-apv-row[data-tray-msg="${m.id}"]`)
-      if (head || row) { head?.click(); row?.click(); return null } // 下一轮轮询再量(换卡有冷却)
+      const next = document.querySelector(`.t2c-apv[data-tray-msgs~="${m.id}"] .t2c-apv-nav[data-dir="next"]`)
+      if (head || next) { head?.click(); if (!head) next?.click(); return null } // 下一轮轮询再量(换卡有冷却)
     }
     const tray = document.querySelector(`.t2c-apv-body[data-tray-msg="${m.id}"] [data-plan-decision]`)
     const btns = [...(tray?.querySelectorAll('.approval-actions button') || [])].map((b) => (b.textContent || '').trim())

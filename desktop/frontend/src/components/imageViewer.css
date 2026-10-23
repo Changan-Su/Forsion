@@ -45,3 +45,7 @@
   .iv-back, .iv-bar { animation: none; }
   .iv-fly { transition: none; }
 }
+
+/* Windows 无边框窗口:原生最小化 / 最大化 / 关闭(WCO)盖在右上角,顶栏工具让开它的宽度(tabTitleBar.ts 写 --windows-caption-width)。
+   放文件末尾、特异性压过 .iv.is-compact .iv-bar(DESIGN §7)。 */
+[data-tab-titlebar] .iv .iv-bar { padding-right: calc(12px + var(--windows-caption-width, 138px) / var(--uiz, 1)); }

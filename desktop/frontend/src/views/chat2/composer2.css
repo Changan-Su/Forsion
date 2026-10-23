@@ -412,14 +412,31 @@
   animation: t2c-steer-in 0.18s var(--ease-out, ease);
 }
 @media (prefers-reduced-motion: reduce) { .t2c-apv { animation: none; } }
+.t2c-apv-top { display: flex; align-items: center; gap: 2px; min-width: 0; }
 .t2c-apv-head {
-  display: flex; align-items: center; gap: 6px; width: 100%;
+  display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0;
   padding: 6px 0; border: none; background: none; cursor: pointer; text-align: left;
   color: var(--text-muted); font-family: var(--font-ui); font-size: var(--ui-font-meta, 12px);
 }
 .t2c-apv-ic { flex-shrink: 0; color: var(--accent-ink); }
-.t2c-apv-title { flex: 1; min-width: 0; font-weight: 600; color: var(--text); }
-.t2c-apv-chev { flex-shrink: 0; transition: transform var(--duration-fast, 0.15s); }
+.t2c-apv-title { flex-shrink: 0; font-weight: 600; color: var(--text); }
+.t2c-apv-more { min-width: 0; color: var(--text-faint, var(--text-muted)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.t2c-apv-chev { flex-shrink: 0; margin-left: auto; transition: transform var(--duration-fast, 0.15s); }
+.t2c-apv-n { flex-shrink: 0; margin-left: 6px; font-family: var(--font-ui); font-size: var(--ui-font-meta, 12px); font-variant-numeric: tabular-nums; color: var(--text-muted); }
+.t2c-apv-nav {
+  display: inline-flex; flex-shrink: 0; padding: 2px; border: none; border-radius: var(--radius-sm, 6px);
+  background: none; color: var(--text-muted); cursor: pointer;
+}
+.t2c-apv-nav:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.1)); color: var(--text); }
+/* 卡片堆(10-23 方案 B):后面还有几张,就在卡顶上露几道卡沿(最多两道)。沿只在卡外、不压进卡里:
+ * 入场动画期间卡自成层叠上下文,压进去的那截会盖在卡面上。 */
+.t2c-apv[data-peek]::before, .t2c-apv[data-peek="2"]::after {
+  content: ''; position: absolute; left: 14px; right: 14px; top: -7px; height: 7px; box-sizing: border-box; pointer-events: none;
+  border: var(--border-width, 1px) solid var(--border); border-bottom: 0; border-radius: 7px 7px 0 0;
+  background: color-mix(in srgb, var(--t2c-card-surface, var(--bg-card, var(--bg))) 95%, var(--text));
+}
+.t2c-apv[data-peek="2"]::after { left: 28px; right: 28px; top: -13px; height: 6px; border-radius: 6px 6px 0 0;
+  background: color-mix(in srgb, var(--t2c-card-surface, var(--bg-card, var(--bg))) 90%, var(--text)); }
 .t2c-apv-chev.is-collapsed { transform: rotate(-90deg); }
 .t2c-apv-head:has(.is-collapsed) { padding-bottom: 0; }
 /* 卡高有上限:diff / 长命令放不下时在托盘里滚,不把整条输入区顶到窗口外 */
@@ -428,6 +445,8 @@
 .t2c-apv .t2c-apv-body > .approval-card,
 .t2c-apv .t2c-apv-body > .inquiry-card,
 .t2c-apv .t2c-apv-body > .plan-decision { border-color: transparent; box-shadow: none; background: transparent; padding: 0; opacity: 1; }
+.t2c-apv .t2c-apv-body > .t2-tasks { margin-top: 0; }
+.t2c-apv .t2c-apv-body .t2-taskcard { background: transparent; padding: 0; }
 .t2c-apv .approval-card .approval-title { margin-bottom: 6px; }
 /* 托盘里 diff 收矮一档(流里是 320px);卡还是放不下时按钮吸在托盘底边 —— 批准 / 拒绝永远不滚出视野 */
 .t2c-apv .approval-diff { max-height: min(24vh, 220px); }
@@ -439,7 +458,7 @@
 }
 /* 换卡冷却(ApprovalTray ARM_MS):刚顶上来的那项按钮不接收点击,淡一点提示「这是新的一项」;
  * 已送出等回执(is-sent)同样锁住 —— 同一项送第二次必然 410 */
-.t2c-apv-body:is(.is-arming, .is-sent) :is(.approval-actions, .inquiry-opts, .inquiry-input) { pointer-events: none; opacity: 0.55; }
+.t2c-apv-body:is(.is-arming, .is-sent) :is(.approval-actions, .inquiry-opts, .inquiry-input, .t2-taskcard-actions) { pointer-events: none; opacity: 0.55; }
 .t2c-apv .inquiry-opts, .t2c-apv .inquiry-input { transition: opacity var(--duration-fast, 0.15s); }
 /* 计划拍板区(PlanDecision):正文在流里的计划卡上,这里只有标题 + 可选的编辑框 + 决策按钮 */
 .t2c-apv .plan-decision-title {
@@ -457,7 +476,7 @@
 .t2c-apv textarea.plan-edit:focus { border-color: var(--accent-ink); }
 .t2c-apv .plan-decision .inquiry-input { margin-top: 8px; }
 .t2c-apv-from { font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted)); margin-bottom: 2px; }
-/* 排队的其余几张:在展开卡之上,排得再多也只占几行(多了在自己框里滚) */
+/* Muse 私聊托盘(MuseDm)排队的其余几张:在展开卡之上,排得再多也只占几行(多了在自己框里滚) */
 .t2c-apv-rest {
   display: flex; flex-direction: column; gap: 1px;
   max-height: 108px; overflow-y: auto;

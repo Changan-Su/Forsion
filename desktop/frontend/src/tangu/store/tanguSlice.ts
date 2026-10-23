@@ -1520,7 +1520,8 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
         break
       }
       case 'inquiry_result':
-        patchMessage(sessionId, targetOf(pl), (m) => ({
+        // 挂起的提问(托盘 run,10-23)答的时候 run 往往已切到后面的段:按 inquiryId 找回挂着它的消息(同 approval_result)
+        patchMessage(sessionId, (get().messagesBySession[sessionId] || []).find((m) => m.inquiries?.some((q) => q.inquiryId === pl.inquiryId))?.id ?? targetOf(pl), (m) => ({
           ...m, work: m.work ? { ...m.work, waiting: false } : m.work,
           inquiries: (m.inquiries || []).map((q) => { if (q.inquiryId !== pl.inquiryId) return q; const answeredBy = sanitizeAnswerBy(pl.by); return { ...q, status: 'answered' as const, answer: String(pl.answer ?? ''), ...(answeredBy ? { answeredBy } : {}) } }), // P1-K3
         }))

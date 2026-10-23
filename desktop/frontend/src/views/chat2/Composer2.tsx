@@ -835,6 +835,13 @@ export const Composer2: React.FC<{
     const ta = taRef.current
     if (running && !compactCard && !tipTall && ta && !ta.value && ta.scrollHeight > ta.clientHeight + 2) setTipTall(true)
   }, [running, tipIdx, locale, tipTall, draft, compactCard])
+  // 输入建议同理:末尾带着「⇥ Tab」提示,折行时一行高会把提示裁掉 → 撑到两行(换一句建议重量)。
+  const [suggestTall, setSuggestTall] = useState(false)
+  useLayoutEffect(() => setSuggestTall(false), [suggestion, locale])
+  useLayoutEffect(() => {
+    const ta = taRef.current
+    if (showSuggestion && !suggestTall && ta && !ta.value && ta.scrollHeight > ta.clientHeight + 2) setSuggestTall(true)
+  }, [showSuggestion, suggestion, suggestTall, locale, draft])
 
   // 历史召回:older=true→↑ 取更旧、false→↓ 取更新;越过最新回到暂存草稿。光标置末尾。
   const recallHistory = (older: boolean) => {
@@ -1811,10 +1818,10 @@ export const Composer2: React.FC<{
             rows={1}
             autoFocus={autoFocus}
             value={draft}
-            placeholder={showSuggestion ? suggestion : disabled ? disabledPlaceholder || t('input.placeholderDisabled') : inCall ? t('livecall.typeHint') : running ? compactCard ? t('input.runningPlaceholder') : t('input.tip', { tip: t(waitTips[tipIdx % waitTips.length]) }) : t(touchUi ? 'input.placeholderTouch' : 'input.placeholder')}
+            placeholder={showSuggestion ? t('input.suggestionTab', { text: suggestion }) : disabled ? disabledPlaceholder || t('input.placeholderDisabled') : inCall ? t('livecall.typeHint') : running ? compactCard ? t('input.runningPlaceholder') : t('input.tip', { tip: t(waitTips[tipIdx % waitTips.length]) }) : t(touchUi ? 'input.placeholderTouch' : 'input.placeholder')}
             data-suggestion={showSuggestion || undefined}
             data-tip-fade={(running && !compactCard && tipFade) || undefined}
-            data-tip-tall={(running && !compactCard && tipTall) || undefined}
+            data-tip-tall={(running && !compactCard && tipTall) || (showSuggestion && suggestTall) || undefined}
             disabled={disabled}
             onChange={(e) => {
               setDraft(e.target.value)
