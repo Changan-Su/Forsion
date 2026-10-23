@@ -17,7 +17,7 @@ import { VaultWatcher } from './fs/watcher'
 import { VaultIndex } from './fs/vaultIndex'
 import { vaultRel } from './fs/vaultRel'
 import { adoptLegacyCloudState, currentCloudAccountId, readConfig, updateConfig, writeConfig } from './settings'
-import { defaultWorkspaceDir, forsionHomeDir, isDevMode, tanguDataDir } from '../forsionHome'
+import { defaultWorkspaceDir, forsionHomeDir, isDevMode, isSandboxMode, tanguDataDir } from '../forsionHome'
 import { getProduct } from '../productsRegistry'
 import { externalCreations } from '../productTrust'
 import { effectivePluginId } from '../../shared/products'
@@ -599,9 +599,12 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     // ⚠️来源名单 = **宿主家目录里的授权**(devLoadStore),不是项目 sidecar 里的标志:项目目录不可信,
     //   克隆 / 解压来的文件夹自带一个 `devLoad:true` 就能零点击以插件权限执行 —— 第一版就是这么漏的(评审 HIGH)。
     //   授权按「产物 id + 授权当时的真实根」双钥匙核对;复制出来的项目(id 被重铸)与搬了家的 sidecar 都对不上。
-    const products: NonNullable<Awaited<ReturnType<typeof getProduct>>>[] = []
+    const products: Array<{ id: string; root: string; name: string; updatedAt: number }> = []
     const authorizedPluginId = new Map<string, string | null>() // 产物 id → 授权当时的生效插件 id(清单写坏期间沿用)
-    const loads = readDevLoads(forsionHomeDir())
+    // 插件沙箱子进程:唯一的开发来源 = 父进程 spawn 时指定的那个插件目录(pluginSandbox.ts)。授权在父进程那侧(起沙箱要审批)。
+    const sandboxDir = isSandboxMode() ? process.env.FORSION_SANDBOX_PLUGIN?.trim() : undefined
+    if (sandboxDir) products.push({ id: 'plugin-sandbox', root: sandboxDir, name: path.basename(sandboxDir), updatedAt: 0 })
+    const loads = sandboxDir ? {} : readDevLoads(forsionHomeDir())
     for (const [pid, grant] of Object.entries(loads)) {
       // 原地加入的外部插件项目也在造物里:同一份经目录身份核过的登记(productTrust),否则授权过的外部插件永远加载不出来
       const product = await getProduct(projectsRootDir(), pid, externalCreations(forsionHomeDir())).catch(() => null) // 托管根不存在 / 扫不动 → 当没有
