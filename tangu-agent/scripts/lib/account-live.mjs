@@ -7,7 +7,7 @@
  *  Negative controls (run them when touching this): drop `'forsion_account'` from CHAT_PRESET_DEFERRED → legs 1 / 4 go red
  *  (the chat face has no account tool); remove `!alwaysAsk` from the non-host early return in gateToolCall → leg 4 goes red
  *  (the card is spent with no approval card). */
-import { createServer } from 'node:http';
+import { createServer, request } from 'node:http';
 
 const QUOTA = {
   dailyLimit: 81_337, dailyRemaining: 30_219, weeklyLimit: 406_685, weeklyRemaining: 2_033, weeklyResetAt: '2026-10-12', tier: 'pro', resetCards: 2,
@@ -15,8 +15,11 @@ const QUOTA = {
 };
 const RAW = [81_337, 30_219, 406_685, 2_033, 16_267, 40_668].flatMap((n) => [String(n), n.toLocaleString('en-US')]);
 
-/** Fake Forsion cloud: only the account routes; everything else 404s. `seen` is every authenticated request. */
-export async function startFakeCloud(token) {
+/** Fake Forsion cloud: only the account routes; everything else 404s. `seen` is every authenticated request.
+ *  `connect` (webpublishreal): a real Forsion Connect server (server scripts/connect-local.mts) — /api/connect/* and /apps/*
+ *  are passed through to it untouched (Authorization and Host included, so its publicUrl / publicBase name this front),
+ *  and `apps` follows what it accepted, so the legs read the same way against the real routes. */
+export async function startFakeCloud(token, { connect } = {}) {
   const seen = [];
   const apps = new Map(); // Forsion Connect(webpublish 场景):slug → 发布体;形状照 server microserver/connect 的响应
   let url = '';
@@ -26,6 +29,17 @@ export async function startFakeCloud(token) {
     req.on('end', () => {
       const path = String(req.url || '').split('?')[0];
       const send = (status, json) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(json)); };
+      if (connect && (path.startsWith('/api/connect/') || path.startsWith('/apps/'))) {
+        seen.push({ method: req.method, path, body });
+        const up = request(connect + req.url, { method: req.method, headers: req.headers }, (r) => {
+          const del = /^\/api\/connect\/apps\/([a-z0-9-]+)$/.exec(path);
+          if (r.statusCode === 200 && req.method === 'POST' && path === '/api/connect/apps') { try { const b = JSON.parse(body); apps.set(b.slug, b); } catch { /* the server already said 200 */ } }
+          if (r.statusCode === 200 && req.method === 'DELETE' && del) apps.delete(del[1]);
+          res.writeHead(r.statusCode || 502, r.headers); r.pipe(res);
+        });
+        up.on('error', (e) => send(502, { detail: `connect upstream: ${e.message}` }));
+        return up.end(body);
+      }
       if (req.headers.authorization !== `Bearer ${token}`) return send(401, { error: 'unauthorized' });
       seen.push({ method: req.method, path, body });
       const key = `${req.method} ${path}`;
@@ -53,7 +67,7 @@ export async function startFakeCloud(token) {
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   server.unref();
   url = `http://127.0.0.1:${server.address().port}`;
-  return { url, seen, apps, urlFor: (slug) => `${url}/apps/livetester/${slug}/`, posts: (path) => seen.filter((r) => r.method === 'POST' && r.path === path) };
+  return { url, seen, apps, connect, token, urlFor: (slug) => `${url}/apps/livetester/${slug}/`, posts: (path) => seen.filter((r) => r.method === 'POST' && r.path === path) };
 }
 
 const CHAT = { preset: 'chat', execMode: 'sandbox', cwd: undefined };
