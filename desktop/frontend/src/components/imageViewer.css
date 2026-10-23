@@ -1,6 +1,7 @@
 /* 看图(A2,ImageViewer.tsx):整窗一层,底色 = 当前背景色 96%(跟主题、明暗走,不用黑底)。
    暗色下图片不加阴影,层次靠底色台阶(DESIGN.md)。字号只用界面角色变量(check:uiscale)。 */
-.iv { position: fixed; inset: 0; z-index: 10000; display: flex; flex-direction: column; color: var(--text); font-family: var(--font-ui, inherit); outline: none; }
+/* The overlay also covers the tab row's native drag region. Its tools must receive clicks. */
+.iv { position: fixed; inset: 0; z-index: 10000; display: flex; flex-direction: column; color: var(--text); font-family: var(--font-ui, inherit); outline: none; -webkit-app-region: no-drag; }
 .iv-back { position: absolute; inset: 0; background: color-mix(in srgb, var(--bg) 96%, transparent); animation: iv-fade 220ms ease-out; transition: opacity 160ms; }
 .iv.is-closing .iv-back, .iv.is-closing .iv-bar, .iv.is-closing .iv-hint, .iv.is-closing .iv-arrow { opacity: 0; transition: opacity 160ms; }
 @keyframes iv-fade { from { opacity: 0; } }
