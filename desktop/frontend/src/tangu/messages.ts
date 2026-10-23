@@ -244,6 +244,7 @@ registerMessages({
   'input.toWorkspace': { zh: '→工作区', en: '→ workspace' },
   'input.placeholderDisabled': { zh: '先在设置里连接后端…', en: 'Connect a backend in settings first…' },
   'input.placeholder': { zh: '输入消息，输入 / 唤起技能（Enter 发送，Shift+Enter 换行）', en: 'Type a message, type / to invoke skills (Enter to send, Shift+Enter for a new line)' },
+  'input.suggestionTab': { zh: '{text}　⇥ Tab 填入', en: '{text}  ⇥ Tab to fill' },
   'input.placeholderTouch': { zh: '输入消息，输入 / 唤起技能', en: 'Type a message, type / to invoke skills' },
   'input.addContent': { zh: '添加内容', en: 'Add content' },
   'input.micStart': { zh: '语音输入（点击开始录音）', en: 'Voice input (click to record)' },
