@@ -9,7 +9,7 @@ import { windowKind } from './windowKind'
 import {
   Bot, Inbox, Mail, NotebookText, BookOpen, Briefcase, CalendarDays, MessageCircle, Folder, FolderOpen,
   FileText, Star, Heart, Home, Target, Zap, Globe, Music, Image, Video, Code, Terminal, LayoutGrid, Sparkles,
-  Boxes, ListTree, ListTodo, Server, ServerCog,
+  Boxes, ListTree, ListTodo, Server, ServerCog, Cloud,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import {
@@ -51,6 +51,8 @@ const SPACE_ICONS: Record<string, LucideIcon> = {
   'file-text': FileText, star: Star, heart: Heart, home: Home, target: Target, zap: Zap, globe: Globe,
   music: Music, image: Image, video: Video, code: Code, terminal: Terminal, 'layout-grid': LayoutGrid,
   sparkles: Sparkles, boxes: Boxes, 'list-tree': ListTree, 'list-todo': ListTodo, server: Server, 'server-cog': ServerCog,
+  // 2026-10-23:蓬洲云的 space.json 一直写的 cloud,表里没有就回落成方块堆。它自带 iconFile,cloud 只在图读不到时兜底
+  cloud: Cloud,
 }
 
 /** 自绘图标(space.json 的 `iconFile`;主进程验过并读成 data URL)→ 与 lucide 同签名的组件,渲染点零改动。

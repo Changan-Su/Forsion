@@ -311,6 +311,18 @@ Since 2026-10-18 (added with the cloud drive in Forsion Extend's Penzor Cloud):
 - `ctx.app.setSpaceProgress?(spaceId, progress)` draws a progress ring around your own Space's icon in the Ribbon. It only accepts a Space bundled with your plugin; for anyone else's or a built-in Space it returns `false`. `progress` is `0`–`1`; pass `null` to remove it. The host draws whole percents, so frequent updates don't re-render the Ribbon. An unread badge on that Space takes precedence, and the host clears the ring when your plugin is disabled. A Space tucked into a Ribbon folder or the "⋯" overflow shows no ring.
 - The list icon vocabulary gains `hard-drive` for drive and storage rows. Older hosts lack it: use whether `ctx.app.setSpaceProgress` exists to tell, and fall back to `archive`.
 
+### 蓬洲云的图标 / Penzor Cloud's icon
+
+2026-10-23 起：
+
+- `space.json` 的 `icon` 图标库加了 `cloud`，全表 30 个见 forsion-plugin 技能的 `samples/forsion-sample-space/README.md`。旧宿主不认，回落方块。
+- 列表图标词表加了 `penzor`：蓬洲云自己的图标（祥云），给蓬洲云的视图用，别的插件别拿它表示别的东西。旧宿主不认，退兜底图标。
+
+Since 2026-10-23:
+
+- The `icon` library for `space.json` gains `cloud`; the full list of 30 is in the forsion-plugin skill's `samples/forsion-sample-space/README.md`. Older hosts don't know it and fall back to the boxes icon.
+- The list icon vocabulary gains `penzor`, Penzor Cloud's own icon (a ruyi cloud), for Penzor Cloud's views. Don't use it to mean anything else. Older hosts fall back to the default icon.
+
 ### 服务器管理用到的接缝 / Seams used by Server Admin
 
 2026-10-19 起（服务器管理插件给「反馈中心」挂提醒时加的）：
