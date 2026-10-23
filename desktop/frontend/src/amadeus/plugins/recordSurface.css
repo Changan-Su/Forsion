@@ -1,0 +1,7 @@
+/* ctx.ui.mountRecord({ body: true }) 的正文:插件卡片里的轻量备注区,无描边(DESIGN §5),空时只露一行提示 */
+.plugin-record-body { position: relative; margin-top: 6px; padding-top: 6px; border-top: var(--border-width, 1px) solid var(--border); }
+.plugin-record-body .ProseMirror { min-height: 1.6em; outline: none; caret-color: var(--text); font-size: var(--ui-font-body); line-height: 1.55; }
+.plugin-record-body .ProseMirror > :first-child { margin-top: 0; }
+.plugin-record-body .ProseMirror > :last-child { margin-bottom: 0; }
+.plugin-record-body[data-empty]::before { content: attr(data-hint); position: absolute; top: 6px; left: 0; pointer-events: none; color: var(--text-faint, var(--text-muted)); font-size: var(--ui-font-body); line-height: 1.55; }
+.plugin-record-body[data-empty]:focus-within::before { content: none; }
