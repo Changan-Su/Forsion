@@ -49,7 +49,7 @@ import { APPREF_EVENT, APPREF_TARGET_ATTR, ensureAppRefCommand, type AppRefDeliv
 import { appRefToken, type AppRef, type AppRefList } from '../../../../shared/appRefs'
 import { AppRefIcon } from '../../components/appRefs'
 import { useCapsuleSlide } from '../../components/capsuleTabs'
-import { composeQuotes } from './quotes'
+import { composeQuotes, noteOf } from './quotes'
 import { QuotePreview, QuoteTile } from './QuoteTile'
 import { NEW_CHAT_DRAFT, clearDraft, moveDraft, setDraftField, useComposerDrafts, useDraftField } from './composerDrafts'
 import { dropSend, fadeOutDraft, noteSend } from './sendFlight'
@@ -408,6 +408,9 @@ export const Composer2: React.FC<{
   onStop: () => void
   /** 输入框上方的引用卡(可多段);发送时拼成正文前的引用块,见 quotes.ts。 */
   quotes?: string[]
+  /** 各段引用的回应(就地回复框写的,全文窗里可改);发送时紧跟在各自的引用块后面 */
+  quoteNotes?: Record<string, string>
+  onQuoteNote?: (quote: string, note: string) => void
   onRemoveQuote?: (index: number) => void
   onClearQuote?: () => void
   /** /btw [问题]:旁聊(会话级浮窗,主对话里什么都不发);quote = 输入框此刻挂着的引用。无会话时不给 = 命令不露出。 */
@@ -462,7 +465,7 @@ export const Composer2: React.FC<{
   groupChat, groupAgents, groupTempAgents, onGroupChange, onAddAgent, onNormalWork,
   agents, onAgentSwitch, currentAgentSlug, mentionProjects, onNewSession, onBranch, onOpenSettings,
   onExecConfigChange, onSend, onStop,
-  quotes = NO_QUOTES, onRemoveQuote, onClearQuote, onBtw,
+  quotes = NO_QUOTES, quoteNotes, onRemoveQuote, onClearQuote, onBtw, onQuoteNote,
   contextWindow, ctxTokens, sessionTokens, runCost, costLimit, ctxInfo, onCompact,
   seedText, onSeedConsumed, seedShare, takeSeedShare, appendRefs, onAppendRefsConsumed, autoRefFromMain, appRef, sentHistory,
   pendingSteer, onCancelSteer, onWithdrawSteer, onSteerNow,
@@ -480,6 +483,7 @@ export const Composer2: React.FC<{
   // 等待期间宽卡轮播小贴士；窄卡固定短提示，避免文案闪烁与输入区高度跳动。
   const [tipIdx, setTipIdx] = useState(0)
   const [previewQuote, setPreviewQuote] = useState<string | null>(null)
+  const quotedNote = quotes.some((q) => !!noteOf(quoteNotes, q)?.trim())
   // 触屏(Android 壳 / 手机浏览器)没有 ⌘、悬停和拖拽,只留与指针无关的几条。
   const [touchUi] = useState(() => !!window.tangu?.mobile || !!window.matchMedia?.('(hover: none)').matches)
   const waitTips = (touchUi ? TOUCH_TIP_KEYS : WAIT_TIP_KEYS).filter((k) => !engineId || k !== STEER_TIP)
@@ -1315,7 +1319,7 @@ export const Composer2: React.FC<{
     // /btw [问题](别名 /side):旁聊。运行中也走这里,不会变成 steer;输入框挂着的引用一并交给旁聊并摘掉。
     const btwMatch = /^\/(?:btw|side)(?:\s+([\s\S]*))?$/i.exec(cmd)
     if (btwMatch && onBtw) {
-      onBtw(btwMatch[1]?.trim() || undefined, quotes.join('\n\n') || undefined)
+      onBtw(btwMatch[1]?.trim() || undefined, composeQuotes(quotes, quoteNotes).trim() || undefined) // 回应一起带过去,别丢
       if (quotes.length) onClearQuote?.()
       setDraft('')
       requestAnimationFrame(autoGrow)
@@ -1323,7 +1327,7 @@ export const Composer2: React.FC<{
     }
     // 只挂引用不写字也算一条消息:芯片化之前拖引用会往草稿塞文本,所以「拖完直接回车」是能发的;
     // 不放行的话按回车毫无反应 = 哑火(评审 M2)。斜杠命令那几段都要求 text,故只在这之后判空。
-    if (!text && !allRefChips.length) return
+    if (!text && !allRefChips.length && !quotedNote) return // 引用卡带了回应也算写了话
     // /compact [focus]:带关注点时不能走弹层菜单(那条只认裸命令),在这里直接派发
     const compactMatch = /^\/compact(?:\s+([\s\S]+))?$/i.exec(cmd)
     if (compactMatch && onCompact) {
@@ -1413,7 +1417,7 @@ export const Composer2: React.FC<{
         return sent
       })
     }
-    const quoted = composeQuotes(quotes)
+    const quoted = composeQuotes(quotes, quoteNotes)
     // 「已选择」芯片 → 正文最前面的一行引用 token。行内位置在芯片化之后不再存在,统一前置(= 上下文在前)。
     // 句子里已经写了的引用不再进这一行(否则模型看到两遍、气泡也画两遍)。
     const leadChips = allRefChips.filter((c) => !(c.run && inlined?.used.has(c.run)))
@@ -1702,7 +1706,7 @@ export const Composer2: React.FC<{
   // 发送 / 停止 / 通话键:桌面在底排末尾,手机在输入框右边(见上)。录音时两处都不出(录音条自带停止和发送)。
   const submitKeys = running ? (
     <>
-      {(!!draft.trim() || allRefChips.length > 0) && (
+      {(!!draft.trim() || allRefChips.length > 0 || quotedNote) && (
         <ChatBoxSubmit onClick={send} disabled={disabled} title={t('input.send')} aria-label={t('input.send')} />
       )}
       <button className="t2c-stop" onClick={onStop} title={t('input.stop')} aria-label={t('input.stop')}><Square size={10} /><span className="t2c-stop-label">{t('input.stop')}</span></button>
@@ -1720,7 +1724,7 @@ export const Composer2: React.FC<{
     </ChatBoxSubmit>
   ) : (
     // 只挂了引用、一个字没写也可发(与 send() 的放行条件同源;不同步的话按钮灰着 = 哑火)
-    <ChatBoxSubmit onClick={send} disabled={disabled || (!draft.trim() && !allRefChips.length)} title={t('input.send')} aria-label={t('input.send')} />
+    <ChatBoxSubmit onClick={send} disabled={disabled || (!draft.trim() && !allRefChips.length && !quotedNote)} title={t('input.send')} aria-label={t('input.send')} />
   )
 
   return (
@@ -1789,7 +1793,7 @@ export const Composer2: React.FC<{
             // 引用磁贴(10-23)排在最前:点一下看全文,发出去照旧是正文前的引用块(quotes.ts)。
             <div className="t2c-chiprow t2c-tilerow" role="group" aria-label={quotes.length ? t('input.quote.group') : undefined}>
               {quotes.map((quote, index) => (
-                <QuoteTile key={quote} text={quote} title={t('quote.tile.preview')} onOpen={() => setPreviewQuote(quote)} removeTitle={t('input.remove')} onRemove={() => (onRemoveQuote ? onRemoveQuote(index) : onClearQuote?.())} />
+                <QuoteTile key={quote} text={quote} note={noteOf(quoteNotes, quote)} title={t('quote.tile.preview')} onOpen={() => setPreviewQuote(quote)} removeTitle={t('input.remove')} onRemove={() => (onRemoveQuote ? onRemoveQuote(index) : onClearQuote?.())} />
               ))}
               {attachments.map((a) => (
                 <AttachmentTile key={tileKey(a)} file={a} removeTitle={t('input.remove')} onRemove={() => setDraftField(draftKey, 'attachments', (prev) => prev.filter((x) => x !== a))} />
@@ -2185,7 +2189,7 @@ export const Composer2: React.FC<{
             <div className="t2c-hint" style={{ marginTop: 6, marginBottom: 0 }}>{callError}</div>
           )}
         </ChatBoxSurface>
-        {previewQuote !== null && <QuotePreview text={previewQuote} onClose={() => setPreviewQuote(null)} />}
+        {previewQuote !== null && <QuotePreview text={previewQuote} note={noteOf(quoteNotes, previewQuote)} onNote={onQuoteNote ? (note) => onQuoteNote(previewQuote, note) : undefined} onClose={() => setPreviewQuote(null)} />}
       </div>
       {rulesOpen && <ApprovalRulesModal cfg={liveCfg} onClose={() => setRulesOpen(false)} />}
       {ultraAsk && (

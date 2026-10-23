@@ -16,7 +16,8 @@ import { openNewChat, openSession, rotateSolo } from '../sessionNav'
 import { TeamEditor } from '../components/TeamEditor'
 import { postMuseFeedback, saveAgentScheduleEntry } from '../services/backendService'
 import { runTaskCard } from './chat2/taskLanding'
-import { NO_QUOTE_DRAFT, quoteAdded, quotesFor } from './chat2/quotes'
+import { NO_QUOTE_DRAFT, notesFor, quoteAdded, quoteNoted, quotesFor } from './chat2/quotes'
+import { ReplyPopover } from './chat2/QuoteTile'
 import { askOriginOf, insertReplyToNote } from './chat2/insertToNote'
 import { amadeusAvailable } from '../features/runtime'
 import { resolveDeskPath } from '../stores/deskPlan'
@@ -219,6 +220,11 @@ export function ChatView({ leaf, params }: ViewProps) {
   const [quoteDraft, setQuoteDraft] = useState(NO_QUOTE_DRAFT)
   const quoteSid = activeId ?? null
   const quotes = quotesFor(quoteDraft, quoteSid)
+  const quoteNotes = notesFor(quoteDraft, quoteSid)
+  // 划选「引用」先弹的就地回复框(选中的字 + 选区位置;收起选区后照样知道开在哪)
+  const [replyAt, setReplyAt] = useState<{ text: string; rect: { left: number; top: number; bottom: number } } | null>(null)
+  const closeReply = useCallback(() => setReplyAt(null), [])
+  useEffect(() => setReplyAt(null), [quoteSid]) // 换了会话:回复框是上一个会话的,收掉,别把引用挂到新会话里
   const [refDrop, setRefDrop] = useState(false) // 工作区条目拖到聊天区上方(整块高亮)
   const childSession = useChildChat((state) => activeId ? state.sessions[activeId] : undefined)
   const activeSession = s.activeSession || childSession
@@ -777,11 +783,23 @@ export function ChatView({ leaf, params }: ViewProps) {
             dense={leaf.type === 'chat-panel'}
             source={() => ({ title: activeSession?.title || undefined, sessionId: activeId || undefined })}
             lead={(sel, done) => [
-              { id: 'quote', label: t('chat.action.quote'), icon: <Quote size={14} />, lead: true, testId: 'selection-quote', onRun: () => { setQuoteDraft((prev) => quoteAdded(prev, quoteSid, sel.text)); done() } },
+              { id: 'quote', label: t('chat.action.quote'), icon: <Quote size={14} />, lead: true, testId: 'selection-quote', onRun: () => { setReplyAt({ text: sel.text, rect: sel.rect }); done() } },
               // 划线顺便问:选中的那段作为引用,挂在它所在的那条回答上,主对话里什么都不发
               ...(activeId ? [{ id: 'btw', label: t('btw.selectionAction'), icon: <MessageCircleQuestion size={14} />, testId: 'selection-btw', onRun: () => { openBtw({ sessionId: activeId, title: activeSession?.title, quote: sel.text, modelId: mvModelId || undefined, messageId: selectedMessageId() }); done() } }] : []),
             ]}
           />
+          {replyAt && (
+            <ReplyPopover
+              text={replyAt.text}
+              rect={replyAt.rect}
+              onClose={closeReply}
+              onAdd={(note) => {
+                setQuoteDraft((prev) => quoteAdded(prev, quoteSid, replyAt.text, note))
+                setReplyAt(null)
+                composerRef.current?.querySelector<HTMLTextAreaElement>('textarea')?.focus() // 接着写这条消息
+              }}
+            />
+          )}
         </div>
       </ErrorBoundary>
       {/* 画布盖在对话流上(流照旧挂着、只是藏起来:切回来滚动位置还在);按树根挂,点到别的支时舞台不重挂。
@@ -940,7 +958,12 @@ export function ChatView({ leaf, params }: ViewProps) {
           }}
           onStop={() => s.stop(activeId)}
           quotes={quotes}
-          onRemoveQuote={(index) => setQuoteDraft((prev) => ({ sid: quoteSid, list: quotesFor(prev, quoteSid).filter((_, i) => i !== index) }))}
+          quoteNotes={quoteNotes}
+          onQuoteNote={(quote, note) => setQuoteDraft((prev) => quoteNoted(prev, quoteSid, quote, note))}
+          onRemoveQuote={(index) => setQuoteDraft((prev) => {
+            const list = quotesFor(prev, quoteSid)
+            return quoteNoted({ sid: quoteSid, list: list.filter((_, i) => i !== index), notes: notesFor(prev, quoteSid) }, quoteSid, list[index] ?? '', '')
+          })}
           onClearQuote={() => setQuoteDraft({ sid: quoteSid, list: [] })}
           // /btw [问题]:带本会话上下文旁聊(会话级浮窗);输入框挂着的引用一并带过去
           onBtw={activeId ? (question, quote) => openBtw({ sessionId: activeId, title: activeSession?.title, question, quote, modelId: mvModelId || undefined }) : undefined}

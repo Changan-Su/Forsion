@@ -288,6 +288,7 @@ async function main() {
   )
   await win.screenshot({ path: selectionMenuShot })
   await askButton.click()
+  await win.locator('.quote-reply-input').waitFor({ timeout: 5000 }).then(() => win.keyboard.press('Enter')).catch(() => {}) // 就地回复框:空着回车 = 只挂引用
   await win.waitForTimeout(1600)
   const selectionHandoff = await win.evaluate(`(() => {
     const main = document.querySelector('[data-chat-surface="chat"]')

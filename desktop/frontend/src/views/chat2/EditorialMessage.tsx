@@ -412,7 +412,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
   // 建议芯片是一次性的:点了就等于用户按了回车,整排随即失效 —— 不然双击会把同一句排两遍。
   const [suggestSent, setSuggestSent] = useState(false)
   const [rewindOpen, setRewindOpen] = useState(false)
-  const [previewQuote, setPreviewQuote] = useState<string | null>(null)
+  const [previewQuote, setPreviewQuote] = useState<{ text: string; note?: string } | null>(null)
   // 手机:长按菜单原生那头弹不出来过(宿主拒了这次请求)→ 这条消息把三个小键和文字选择还回来,动作不至于够不着。
   const [inlineActions, setInlineActions] = useState(false)
   // 原生回退半屏的在途请求(Android):消息卸载、或它所属的会话 / 消息换了 → 作废(见 openNativeRewind)。
@@ -543,7 +543,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
       <div ref={setUserWrap} className={`t2-userwrap${inlineActions ? ' t2-userwrap--inline' : ''}`} id={`tocmsg-${msg.id}`} data-toc-msg-role="user" data-toc-title={tocTitle}>
         <div className="t2-user-col">
           <div className="t2-username">{name}</div>
-          {previewQuote !== null && <QuotePreview text={previewQuote} onClose={() => setPreviewQuote(null)} />}
+          {previewQuote && <QuotePreview text={previewQuote.text} note={previewQuote.note} onClose={() => setPreviewQuote(null)} />}
           {(atts.length > 0 || quoted) && (
             // 附件磁贴(B2)挪到气泡上方、右对齐:图片一行在前,文件一行在后;不参与长提问折叠。
             // 引用磁贴(10-23)排在最上面一行:点了跳回原文闪两下,找不到原文(老分页 / 别处带来的引用)就看全文。
@@ -551,10 +551,11 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
               {quoted && (
                 <div className="t2-user-atts-row">
                   {quoted.quotes.map((quote, i) => (
-                    <QuoteTile key={i} text={quote} title={t('quote.tile.jump')} onOpen={(el) => {
+                    // 带回应的卡显示回应(两段引用之间的文字);最后一段后面的字分不出回应还是正文,照旧进气泡
+                    <QuoteTile key={i} text={quote} note={quoted.notes[i]} title={t('quote.tile.jump')} onOpen={(el) => {
                       const source = runSid ? findQuoteSource(el, quote) : undefined
                       if (source && runSid) useApp.getState().setJumpTarget(runSid, source)
-                      else setPreviewQuote(quote)
+                      else setPreviewQuote({ text: quote, note: quoted.notes[i] })
                     }} />
                   ))}
                 </div>
