@@ -1,6 +1,7 @@
 name: web mobile parity
 on:
   push:
+    branches: [main]
     paths: &paths
       - 'mobile/src/browser*'
       - 'mobile/src/MobileRoot.tsx'

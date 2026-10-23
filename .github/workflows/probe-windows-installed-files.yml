@@ -1,6 +1,7 @@
 name: probe-windows-installed-files
 on:
-  pull_request:
+  push:
+    branches: [main]
     paths:
       - '.github/workflows/probe-windows-installed-files.yml'
       - 'desktop/scripts/windows-installed-file.e2e.cjs'

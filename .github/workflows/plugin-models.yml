@@ -1,6 +1,7 @@
 name: plugin model contracts
 on:
   push:
+    branches: [main]
     paths: &paths
       - 'desktop/frontend/src/amadeus/plugins/**'
       - 'desktop/frontend/src/tanguProbe*'

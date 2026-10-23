@@ -1,6 +1,7 @@
 name: cloud settings
 on:
   push:
+    branches: [main]
     paths: &paths
       - 'desktop/frontend/src/components/settingsCloudNavigation*'
       - 'desktop/frontend/src/components/SettingsModal.tsx'

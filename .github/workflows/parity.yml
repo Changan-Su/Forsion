@@ -24,6 +24,7 @@ on:
       - 'desktop/scripts/tangu-boundary.*'
       - '.github/workflows/parity.yml'
   push:
+    branches: [main]
     paths: *parity_paths
 
 jobs:
