@@ -20,6 +20,7 @@ describe('打开扩展页 / 认浏览器', () => {
   const env = { ProgramFiles: 'C:\\Program Files', 'ProgramFiles(x86)': 'C:\\Program Files (x86)', LOCALAPPDATA: 'C:\\Users\\me\\AppData\\Local' }
   const CHROME_USER = 'C:\\Users\\me\\AppData\\Local\\Google\\Chrome\\Application\\chrome.exe'
   const EDGE = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'
+  const EDGE_USER = 'C:\\Users\\me\\AppData\\Local\\Microsoft\\Edge\\Application\\msedge.exe'
   const win = (...installed: string[]) => ({ platform: 'win32' as const, env, exists: (p: string) => installed.includes(p) })
   const fakeChild = (event: 'spawn' | 'error') => {
     const c = Object.assign(new EventEmitter(), { unref: vi.fn() })
@@ -28,9 +29,10 @@ describe('打开扩展页 / 认浏览器', () => {
   }
   const reset = () => { clipboard.writeText.mockClear(); proc.spawn.mockReset(); proc.execFile.mockReset() }
 
-  it('按官方安装位置认 Chrome(含按用户安装)/ Edge;别的系统认不出', () => {
+  it('按官方安装位置认 Chrome / Edge(都含按用户安装);别的系统认不出', () => {
     expect(detectBrowsers(win(CHROME_USER, EDGE))).toEqual(['chrome', 'edge'])
     expect(detectBrowsers(win(EDGE))).toEqual(['edge'])
+    expect(detectBrowsers(win(EDGE_USER))).toEqual(['edge'])
     expect(detectBrowsers(win())).toEqual([])
     expect(detectBrowsers({ platform: 'darwin', home: '/Users/me', exists: (p) => p === '/Users/me/Applications/Microsoft Edge.app' })).toEqual(['edge'])
     expect(detectBrowsers({ platform: 'linux', exists: () => true })).toEqual([])
@@ -42,6 +44,10 @@ describe('打开扩展页 / 认浏览器', () => {
     expect(await openExtensionsPage('edge', win(EDGE))).toEqual({ ok: false, copied: true, reason: 'launched' })
     expect(proc.spawn).toHaveBeenCalledExactlyOnceWith(EDGE, ['--new-window'], { detached: true, stdio: 'ignore' })
     expect(clipboard.writeText).toHaveBeenCalledExactlyOnceWith(EXTENSIONS_URL.edge)
+    reset()
+    proc.spawn.mockImplementation(() => fakeChild('spawn'))
+    expect(await openExtensionsPage('edge', win(EDGE_USER))).toEqual({ ok: false, copied: true, reason: 'launched' })
+    expect(proc.spawn).toHaveBeenCalledExactlyOnceWith(EDGE_USER, ['--new-window'], { detached: true, stdio: 'ignore' })
   })
 
   it('Windows:没装 / 起不来 → 只复制地址,回 not-found', async () => {

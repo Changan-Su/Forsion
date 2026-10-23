@@ -25,7 +25,7 @@ const BROWSERS: Record<ClipBrowser, { macBundle: string; macApp: string; winExe:
   },
   edge: {
     macBundle: 'com.microsoft.edgemac', macApp: 'Microsoft Edge.app',
-    winExe: (env) => [env['ProgramFiles(x86)'], env.ProgramFiles].filter(Boolean).map((root) => win32.join(root!, 'Microsoft', 'Edge', 'Application', 'msedge.exe')),
+    winExe: (env) => [env['ProgramFiles(x86)'], env.ProgramFiles, env.LOCALAPPDATA].filter(Boolean).map((root) => win32.join(root!, 'Microsoft', 'Edge', 'Application', 'msedge.exe')),
   },
 }
 /** 测试注入:平台 / 环境变量 / 文件存在判断 / 家目录;缺省取本机。 */
