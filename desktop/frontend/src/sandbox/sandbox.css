@@ -86,13 +86,3 @@
 .sbx-note-x { flex: none; display: inline-flex; padding: 3px; border: none; border-radius: var(--radius-sm); background: transparent; color: var(--text-faint); cursor: pointer; }
 .sbx-note-x:hover { color: var(--text); background: var(--menu-hover, var(--bg-hover)); }
 @media (prefers-reduced-motion: reduce) { .sbx-pop { animation: none; } }
-
-/* 对话里的沙箱卡(PluginSandboxCard.tsx;外壳是任务卡 .t2-taskcard,这里只补状态签与事实行) */
-.sbx-tag-run { color: var(--accent-ink, var(--accent)); background: var(--accent-light); }
-.sbx-tag-bad { color: var(--danger); background: var(--danger-light); }
-.sbx-facts { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
-.sbx-fact { display: flex; gap: 6px; align-items: flex-start; color: var(--text-muted); line-height: 1.45; overflow-wrap: anywhere; }
-.sbx-fact > svg { flex: none; margin-top: 2px; }
-.sbx-fact.ok > svg { color: var(--accent-ink, var(--accent)); }
-.sbx-fact.warn > svg { color: var(--warning); }
-.sbx-fact.bad > svg { color: var(--danger); }

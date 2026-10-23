@@ -5,7 +5,6 @@
  *  证据(setup 抛错 / 视图 mount 抛错 / 这个插件自己的 console)收在这里,一键带回对话。 */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { AlertCircle, AppWindow, Download, FlaskConical, Loader2, Play, RotateCcw, RotateCw, ShieldAlert, Square, Trash2 } from 'lucide-react'
-import { useLiveSandbox } from '../../sandbox/PluginSandboxCard'
 import { sandboxUiStorage } from '../../services/pluginSandboxSurface'
 import { clearDevPluginLogs, reloadDevPlugin, useDevPluginState } from '@amadeus/plugins/devSandbox'
 import { useI18n } from '../../i18n'
@@ -14,7 +13,23 @@ import { useCodeStudio } from '../../stores/codeStudioStore'
 import { isNearBottom, isolatedSandboxPrompt, sandboxPrompt } from './sandboxModel'
 import { normPath } from './studioModel'
 import type { ProductSummary } from '../../../../shared/products'
+import type { PluginSandboxState } from '../../types'
 import './studioMessages'
+
+/** 隔离沙箱的实时状态(没有沙箱控制面的端 = null)。
+ * ponytail: 对话里的沙箱卡(views/chat2/PluginSandboxCard.tsx)有同样的一份 —— 卡片在 Tangu 界面那边,共用就得跨 tangu-boundary 加依赖。 */
+function useLiveSandbox(): PluginSandboxState | null {
+  const api = window.tangu?.pluginSandbox
+  const [live, setLive] = useState<PluginSandboxState | null>(null)
+  useEffect(() => {
+    if (!api) return
+    let alive = true
+    void api.state().then((s) => { if (alive) setLive(s) }, () => {})
+    const off = api.onChanged((s) => setLive(s))
+    return () => { alive = false; off() }
+  }, [api])
+  return live
+}
 
 export type SandboxState = 'unavailable' | 'unloaded' | 'active' | 'blocked' | 'failed'
 type Busy = 'load' | 'unload' | 'reload' | null

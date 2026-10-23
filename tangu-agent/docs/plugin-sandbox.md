@@ -67,7 +67,7 @@ console 与最后的挂载报错 —— client_cmd 结果 text 与工具结果�
 
 ## 5. 界面
 
-- **对话卡**(`frontend/src/sandbox/PluginSandboxCard.tsx`,任务卡一族):plugin_sandbox start / reset 成功后替掉那行工具调用。
+- **对话卡**(`frontend/src/views/chat2/PluginSandboxCard.tsx`,任务卡一族,在 Tangu 界面边界里):plugin_sandbox start / reset 成功后替掉那行工具调用。
   头:「沙箱:名字 版本」+ 状态签 + 「隔离数据 · 未登录」;事实行(视图 / 隐藏的 Space / 报错 / 控制台计数);
   按钮:打开沙箱窗口 / 重置数据 / 安装到我的 Forsion,沙箱停了换成「重新启动」。手机 / 网页只读,提示到电脑上打开。
 - **沙箱窗口**(`frontend/src/sandbox/SandboxChrome.tsx`):标题栏右侧「沙箱 · 名字 版本」胶囊 + 重置 / 报告问题 / 安装到我的 Forsion,

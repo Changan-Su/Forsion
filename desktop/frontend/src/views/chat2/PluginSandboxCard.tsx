@@ -5,11 +5,10 @@
  */
 import { useEffect, useState } from 'react'
 import { AppWindow, CircleAlert, CircleCheck, Download, FlaskConical, Loader2, Play, RotateCcw, TriangleAlert } from 'lucide-react'
-import type { PluginSandboxState, ToolEvent } from '../types'
-import { registerMessages, useI18n } from '../i18n'
-import { extractSandboxStatus, type SandboxStatus } from '../../../../tangu-agent/src/contracts/pluginSandbox'
-import { sandboxUiStorage } from '../services/pluginSandboxSurface'
-import './sandbox.css'
+import type { ToolEvent } from '../../../../../tangu-agent/src/contracts/clientTypes'
+import { registerMessages, useI18n } from '../../i18n'
+import { extractSandboxStatus, type SandboxStatus } from '../../../../../tangu-agent/src/contracts/pluginSandbox'
+import './pluginSandboxCard.css'
 
 registerMessages({
   'sandbox.card.title': { zh: '沙箱：{name} {version}', en: 'Sandbox: {name} {version}' },
@@ -35,13 +34,17 @@ registerMessages({
   'sandbox.card.restart': { zh: '重新启动', en: 'Start again' },
 })
 
+/** 沙箱控制面的实时状态(形状跟着全局 window.tangu 的声明走,不为一个类型跨 tangu-boundary 引宿主的 types.ts)。 */
+type LiveSandbox = Awaited<ReturnType<NonNullable<NonNullable<Window['tangu']>['pluginSandbox']>['state']>>
+
 export const isSandboxCardTool = (ev: ToolEvent): boolean =>
   ev.name === 'plugin_sandbox' && ev.done && !ev.isError && !!extractSandboxStatus(ev.result)
 
-/** 用户那份桌面 Forsion 的沙箱实时状态(其余端 = null)。 */
-export function useLiveSandbox(): PluginSandboxState | null {
+/** 用户那份桌面 Forsion 的沙箱实时状态(其余端 = null)。
+ * ponytail: Coding Studio 的 SandboxPanel 里有同样的一份 —— 卡片在 Tangu 界面这边,共用一份就得跨 tangu-boundary 加依赖,十行不值得。 */
+function useLiveSandbox(): LiveSandbox | null {
   const api = window.tangu?.pluginSandbox
-  const [live, setLive] = useState<PluginSandboxState | null>(null)
+  const [live, setLive] = useState<LiveSandbox | null>(null)
   useEffect(() => {
     if (!api) return
     let alive = true
@@ -73,7 +76,8 @@ export function PluginSandboxCard({ event }: { event: ToolEvent }) {
         if (r.ok) setNote(t('sandbox.card.installed'))
         else if (!r.cancelled && r.error) setNote(r.error)
       } else {
-        const r = what === 'reset' ? await api.reset() : await api.exec('start', { dir: saved.dir }, { ui: { storage: sandboxUiStorage() } })
+        // 不带主题键:主进程用上次带来的那份(工具调用每次都带)
+        const r = what === 'reset' ? await api.reset() : await api.exec('start', { dir: saved.dir }, {})
         if (!r.ok && r.error) setNote(r.error)
       }
     } finally { setBusy(null) }

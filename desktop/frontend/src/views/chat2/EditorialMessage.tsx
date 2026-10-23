@@ -1,5 +1,5 @@
 import { MarketPluginCards, isMarketplaceTool } from '../../components/MarketPluginCards'
-import { PluginSandboxCard, isSandboxCardTool } from '../../sandbox/PluginSandboxCard'
+import { PluginSandboxCard, isSandboxCardTool } from './PluginSandboxCard'
 import { HumanUpdateCard } from '../../components/HumanUpdateCard'
 import { humanChanges } from '../../services/humanCollaboration'
 import { SelfUpdateReceipt } from '../../components/SelfUpdateReceipt'
