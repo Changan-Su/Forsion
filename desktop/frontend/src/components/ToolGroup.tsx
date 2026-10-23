@@ -251,6 +251,8 @@ export const ToolGroup: React.FC<{
   // 挂起的调用「还在等你」= 它那张审批仍 pending(审批与工具卡按 toolCallId 对上;重载后审批不在 → 只算「当时挂起」)
   const waitingIds = new Set((approvals || []).filter((a) => a.status === 'pending' && a.toolCallId).map((a) => a.toolCallId!))
   const anyParked = groupedEvents.some((e) => e.parked)
+  // 挂起的提问还在等你答:agent 在干别的(当前步骤照常写在头上),暂停图标标出「这组里有个问题等你」
+  const parkedAsk = groupedEvents.some((e) => e.parked && asksYou(e))
   // 运行中:展示第一个未完成的调用作为「当前」;都完成则无。思考中优先(它是这一行最新的动静)。
   const curIdx = running && !thinking ? groupedEvents.findIndex((e) => !e.done) : -1
   const curAsks = curIdx >= 0 && asksYou(groupedEvents[curIdx])
@@ -288,7 +290,9 @@ export const ToolGroup: React.FC<{
               </span>
             )}
             <span className="tool-group-status">
-              {anyParked ? <PauseCircle size={13} style={{ color: groupedEvents.some((e) => e.parked && waitingIds.has(e.id)) ? 'var(--accent-ink)' : 'var(--text-faint)' }} />
+              {anyParked ? (parkedAsk
+                ? <PauseCircle size={13} style={{ color: 'var(--accent-ink)' }} data-waiting-you="1" aria-label={t('tool.waitingYou')}><title>{t('tool.waitingYou')}</title></PauseCircle>
+                : <PauseCircle size={13} style={{ color: groupedEvents.some((e) => e.parked && waitingIds.has(e.id)) ? 'var(--accent-ink)' : 'var(--text-faint)' }} />)
                 : allDone && anyErr ? <XCircle size={13} style={{ color: 'var(--danger)' }} /> : null}
             </span>
           </button>
