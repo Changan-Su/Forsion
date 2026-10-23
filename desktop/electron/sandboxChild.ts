@@ -119,7 +119,8 @@ export function startSandboxChild(self: SandboxSelf, opts: { getWindow(): Browse
     }
   })
   // 父进程没了(退出 / 崩了)→ 沙箱跟着走,不留孤儿窗口
-  sock.on('close', () => { opts.log('[sandbox] control channel closed, quitting'); opts.quit() })
+  // 退出守卫(插件说还没做完)会拦下这次 quit:父进程已经没了,没人能点「仍要退出」,过一会儿硬退
+  sock.on('close', () => { opts.log('[sandbox] control channel closed, quitting'); opts.quit(); setTimeout(() => app.exit(0), 3_000).unref() })
   sock.on('error', (e) => opts.log(`[sandbox] control channel error: ${e.message}`))
 
   // 保存即重载

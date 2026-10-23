@@ -15,9 +15,9 @@
  */
 import { randomBytes } from 'node:crypto'
 import { createServer, type Server, type Socket } from 'node:net'
-import { cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { cp, lstat, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { isAbsolute, join, normalize, sep } from 'node:path'
+import { basename, isAbsolute, join, normalize, relative, sep } from 'node:path'
 import type { ChildProcess } from 'node:child_process'
 import { effectivePluginId } from '../shared/products'
 import { parseSandboxStatus, type SandboxStatus } from '../../tangu-agent/src/contracts/pluginSandbox'
@@ -104,6 +104,16 @@ export function isSandboxRoot(forsionHome: string, p: string): boolean {
   return n.startsWith(base) && /^[a-z0-9][a-z0-9-]{0,63}$/.test(n.slice(base.length))
 }
 
+/** 删 / 写沙箱目录前再按真实路径核一遍:<forsionHome> 自己是软链没关系(dev 的 ~/.forsion-dev 就是),sandbox/<id> 和下面那几层不能是。 */
+async function insideSandbox(forsionHome: string, p: ReturnType<typeof sandboxPaths>, dirs: string[] = []): Promise<boolean> {
+  if (!isSandboxRoot(forsionHome, p.root)) return false
+  const base = await realpath(join(forsionHome, 'sandbox')).catch(() => null)
+  if (!base) return false
+  const root = join(base, basename(p.root))
+  for (const d of [p.root, ...dirs]) if ((await realpath(d).catch(() => null)) !== join(root, relative(p.root, d))) return false
+  return true
+}
+
 /** 「安装到我的 Forsion」不拷的东西。 */
 export const INSTALL_SKIP = /(^|[\\/])(node_modules|\.git|\.forsion|\.DS_Store)([\\/]|$)/
 
@@ -152,6 +162,8 @@ interface Child {
   pending: Map<number, (msg: Record<string, unknown>) => void>
   seq: number
   exited: boolean
+  /** 进程没了(正常退出 / 被杀 / 根本没起来)且通道已收拾干净。 */
+  done: Promise<void>
   lastUsed: number
   status: SandboxStatus | null
 }
@@ -162,8 +174,19 @@ const REQ_MS = 15_000
 
 export function createPluginSandbox(deps: SandboxDeps) {
   let child: Child | null = null
-  let starting: Promise<SandboxResult> | null = null
+  let disposed = false
   const idleMs = deps.idleMs ?? 15 * 60_000
+
+  // 起 / 停 / 重置 / 安装 / 闲置停 / 退出排成一队,一件做完再做下一件:agent、卡片、沙箱窗口三处都能点,
+  // 交错起来会出「停先返回、起后落地」或「重置删数据时另一次 start 已经起在同一个目录上」。
+  let chain: Promise<unknown> = Promise.resolve()
+  function serial<T>(fn: () => Promise<T>): Promise<T> {
+    const p = chain.then(fn)
+    chain = p.catch(() => {})
+    return p
+  }
+  const fail = (e: unknown): SandboxResult =>
+    ({ ok: false, code: e instanceof SandboxError ? e.code : 'error', error: e instanceof Error ? e.message : String(e) })
 
   const publicState = (): SandboxPublicState => child && !child.exited
     ? { running: true, pluginId: child.manifest.pluginId, name: child.manifest.name, version: child.manifest.version, dir: child.dir, sessionId: child.sessionId, status: child.status }
@@ -229,13 +252,17 @@ export function createPluginSandbox(deps: SandboxDeps) {
   async function spawnChild(dir: string, manifest: SandboxManifest, sessionId?: string): Promise<Child> {
     const home = deps.forsionHome()
     const paths = sandboxPaths(home, manifest.pluginId)
-    for (const d of [paths.userData, `${paths.userData}-dev`, paths.home, paths.workspace, paths.vault]) await mkdir(d, { recursive: true })
+    const dirs = [paths.userData, `${paths.userData}-dev`, paths.home, paths.workspace, paths.vault]
+    for (const d of dirs) await mkdir(d, { recursive: true })
+    if (!(await insideSandbox(home, paths, dirs))) throw new SandboxError('error', `refusing to use ${paths.root}: it links outside the sandbox folder`)
+    // 先删再写:配置文件若是软链,写穿到别处
+    const put = async (f: string, data: unknown): Promise<void> => { await rm(f, { force: true }); await writeFile(f, JSON.stringify(data)) }
     // 两份 userData 都写:dev 态的 Electron 会给 --user-data-dir 再挂一个 -dev(main.ts)
     for (const d of [paths.userData, `${paths.userData}-dev`]) {
-      await writeFile(join(d, 'tangu-desktop-config.json'), JSON.stringify({ mode: 'external', backendUrl: 'http://127.0.0.1:1', token: 'sandbox' }))
-      for (const f of ['amadeus-config.json', 'amadeus-config.dev.json']) await writeFile(join(d, f), JSON.stringify({ localVault: paths.vault, lastVault: paths.vault }))
+      await put(join(d, 'tangu-desktop-config.json'), { mode: 'external', backendUrl: 'http://127.0.0.1:1', token: 'sandbox' })
+      for (const f of ['amadeus-config.json', 'amadeus-config.dev.json']) await put(join(d, f), { localVault: paths.vault, lastVault: paths.vault })
       // 不放开屏:沙箱窗口压在普通窗口之下,开屏等不到「窗口已显示」会一直盖到 10 秒上限,第一张截图拍到的全是它
-      await writeFile(join(d, 'startup-appearance.json'), JSON.stringify({ ...DEFAULT_APPEARANCE, showSplash: false }))
+      await put(join(d, 'startup-appearance.json'), { ...DEFAULT_APPEARANCE, showSplash: false })
     }
     const token = randomBytes(24).toString('base64url')
     const sockPath = sandboxSockPath(deps.platform, deps.pid, randomBytes(6).toString('hex'))
@@ -245,9 +272,34 @@ export function createPluginSandbox(deps: SandboxDeps) {
     const ui = deps.ui()
     const info = JSON.stringify({ pluginId: manifest.pluginId, name: manifest.name, version: manifest.version, dir, ui })
     const args = [...deps.appArgs, `--user-data-dir=${paths.userData}`, `--lang=${ui.locale === 'en' ? 'en' : 'zh-CN'}`, ...(deps.platform === 'darwin' ? ['-ApplePersistenceIgnoreState', 'YES'] : [])]
-    const proc = deps.spawn(args, sandboxEnv(process.env, paths, { dir, sock: sockPath, token, info }))
-    const c: Child = { proc, server, sockPath, sock: null, manifest, dir, paths, sessionId, pending: new Map(), seq: 0, exited: false, lastUsed: Date.now(), status: null }
+    const dropServer = (): void => { server.close(); if (deps.platform !== 'win32') void rm(sockPath, { force: true }) }
+    let proc: ChildProcess
+    try {
+      proc = deps.spawn(args, sandboxEnv(process.env, paths, { dir, sock: sockPath, token, info }))
+    } catch (e) {
+      dropServer()
+      throw new SandboxError('error', `could not start the sandbox: ${e instanceof Error ? e.message : String(e)}`)
+    }
+    let markDone!: () => void
+    const c: Child = { proc, server, sockPath, sock: null, manifest, dir, paths, sessionId, pending: new Map(), seq: 0, exited: false, done: new Promise((r) => { markDone = r }), lastUsed: Date.now(), status: null }
+    let helloFail: (e: Error) => void = () => {}
+    // 正常退出 / 被杀 / 根本没起来(spawn 失败只发 error + close,不发 exit)都走这一条,只收拾一次
+    const finish = (why: string): void => {
+      if (c.exited) return
+      c.exited = true
+      helloFail(new SandboxError('error', 'the sandbox window exited while starting'))
+      for (const fn of c.pending.values()) fn({ ok: false, error: 'exited' })
+      c.pending.clear()
+      dropServer()
+      deps.log(`[plugin-sandbox] ${manifest.pluginId} ${why}`)
+      if (child === c) { child = null; changed() }
+      markDone()
+    }
+    proc.once('exit', (code) => finish(`exited (${code})`))
+    proc.once('close', (code) => finish(`closed (${code})`))
+    proc.on('error', (e) => finish(`spawn failed: ${e.message}`))
     const hello = new Promise<void>((resolve, reject) => {
+      helloFail = reject
       const timer = setTimeout(() => reject(new SandboxError('error', 'the sandbox window did not start in time')), HELLO_MS)
       server.on('connection', (sock) => {
         if (c.sock) { sock.destroy(); return } // 只收一个:令牌只给了这一个子进程
@@ -277,18 +329,8 @@ export function createPluginSandbox(deps: SandboxDeps) {
         sock.on('close', () => { if (c.sock === sock) c.sock = null })
         sock.on('error', () => {})
       })
-      proc.once('exit', () => { clearTimeout(timer); reject(new SandboxError('error', 'the sandbox window exited while starting')) })
+      void c.done.then(() => clearTimeout(timer))
     })
-    proc.once('exit', (code) => {
-      c.exited = true
-      for (const fn of c.pending.values()) fn({ ok: false, error: 'exited' })
-      c.pending.clear()
-      server.close()
-      if (deps.platform !== 'win32') void rm(sockPath, { force: true })
-      deps.log(`[plugin-sandbox] ${manifest.pluginId} exited (${code})`)
-      if (child === c) { child = null; changed() }
-    })
-    proc.on('error', (e) => deps.log(`[plugin-sandbox] spawn failed: ${e.message}`))
     child = c
     changed()
     try {
@@ -309,13 +351,13 @@ export function createPluginSandbox(deps: SandboxDeps) {
     if (c.exited) return
     try { c.sock?.write(JSON.stringify({ id: 0, op: 'quit' }) + '\n') } catch { /* 通道已断 */ }
     await new Promise<void>((resolve) => {
-      if (c.exited) return resolve()
       const kill = setTimeout(() => { try { c.proc.kill('SIGKILL') } catch { /* 已退 */ } resolve() }, 5_000)
-      c.proc.once('exit', () => { clearTimeout(kill); resolve() })
+      void c.done.then(() => { clearTimeout(kill); resolve() })
     })
   }
 
   async function start(dir: string, sessionId?: string): Promise<SandboxResult> {
+    if (disposed) return { ok: false, code: 'error', error: 'Forsion is quitting' }
     const manifest = await readSandboxManifest(dir)
     let c = child && !child.exited ? child : null
     if (c && (c.dir !== dir || c.manifest.pluginId !== manifest.pluginId)) { await stop(); c = null }
@@ -335,22 +377,22 @@ export function createPluginSandbox(deps: SandboxDeps) {
     if (!c) return { ok: false, code: 'no_sandbox', error: 'no sandbox is running' }
     const { dir, sessionId, paths } = c
     await stop()
-    if (!isSandboxRoot(deps.forsionHome(), paths.root)) return { ok: false, code: 'error', error: 'refusing to wipe an unexpected folder' }
-    await rm(paths.root, { recursive: true, force: true })
+    const home = deps.forsionHome()
+    const there = await lstat(paths.root).then(() => true, () => false)
+    if (there && !(await insideSandbox(home, paths))) return { ok: false, code: 'error', error: 'refusing to wipe an unexpected folder' }
+    if (there) await rm(paths.root, { recursive: true, force: true })
     return start(dir, sessionId)
   }
 
-  async function exec(op: string, args: Record<string, unknown>, origin: { sessionId?: string } = {}): Promise<SandboxResult> {
+  /** origin.deadline = 引擎给这次动作的期限(本机时钟);排队排过了就不做了 —— 引擎那边已按「可能发生了」兑现。 */
+  async function exec(op: string, args: Record<string, unknown>, origin: { sessionId?: string; deadline?: number } = {}): Promise<SandboxResult> {
+    const expired = (): boolean => typeof origin.deadline === 'number' && Date.now() > origin.deadline
+    const queued = (fn: () => Promise<SandboxResult>): Promise<SandboxResult> =>
+      serial(() => (expired() ? Promise.resolve({ ok: false, code: 'error', error: 'timed out waiting for another sandbox action' }) : fn().catch(fail)))
     try {
-      if (op === 'start') {
-        const dir = typeof args.dir === 'string' ? args.dir : ''
-        // 两个 start 撞在一起(agent 和用户同时点):后一个等前一个落定再走,不并发起两份
-        while (starting) await starting.catch(() => {})
-        starting = start(dir, origin.sessionId)
-        try { return await starting } finally { starting = null }
-      }
-      if (op === 'stop') { await stop(); return { ok: true, text: JSON.stringify({ stopped: true }) } }
-      if (op === 'reset') return await reset()
+      if (op === 'start') return await queued(() => start(typeof args.dir === 'string' ? args.dir : '', origin.sessionId))
+      if (op === 'stop') return await queued(async () => { await stop(); return { ok: true, text: JSON.stringify({ stopped: true }) } })
+      if (op === 'reset') return await queued(reset)
       const c = child && !child.exited ? child : null
       if (!c || !c.sock) return { ok: false, code: 'no_sandbox', error: 'no sandbox is running' }
       c.lastUsed = Date.now()
@@ -366,8 +408,7 @@ export function createPluginSandbox(deps: SandboxDeps) {
       }
       return { ok: false, code: 'unsupported', error: `unknown sandbox action "${op}"` }
     } catch (e) {
-      const code = e instanceof SandboxError ? e.code : 'error'
-      return { ok: false, code, error: e instanceof Error ? e.message : String(e) }
+      return fail(e)
     }
   }
 
@@ -380,52 +421,74 @@ export function createPluginSandbox(deps: SandboxDeps) {
     return true
   }
 
-  /** 「安装到我的 Forsion」:拷进 <forsionHome>/plugins/<插件 id>(先拷到旁边再换,失败不留半截)。确认框由 main.ts 先弹。 */
-  async function install(): Promise<{ ok: boolean; pluginId?: string; error?: string }> {
+  /**
+   * 「安装到我的 Forsion」:拷进 <forsionHome>/plugins/<插件 id>(先拷到旁边再换,失败不留半截)。确认框由 main.ts 先弹,
+   * expect = 确认框里给用户看的那个插件:等用户点的工夫沙箱换了插件 / manifest 换了 id,就不拿这次同意去装别的。
+   */
+  async function install(expect: { pluginId?: string; dir?: string }): Promise<{ ok: boolean; pluginId?: string; error?: string }> {
     const c = child && !child.exited ? child : null
     if (!c) return { ok: false, error: 'no sandbox is running' }
-    const manifest = await readSandboxManifest(c.dir)
-    const root = join(deps.forsionHome(), 'plugins')
-    await mkdir(root, { recursive: true })
-    // 同一个插件已从商店装在别的目录名下(market-<uuid> 或 install_slug):再装一份就是两个同 id 的插件抢位置
-    for (const e of await readdir(root, { withFileTypes: true }).catch(() => [])) {
-      if (!e.isDirectory() || e.name === manifest.pluginId || e.name.startsWith('.')) continue
-      const m = await readFile(join(root, e.name, 'manifest.json'), 'utf8').then((s) => JSON.parse(s), () => null)
-      if (m && effectivePluginId(e.name, m.id) === manifest.pluginId) return { ok: false, error: `the same plugin is already installed in plugins/${e.name}; uninstall it first` }
-    }
-    const dest = join(root, manifest.pluginId)
+    const changedMeanwhile = { ok: false, error: 'the sandbox changed while you were confirming; try installing again' }
+    if (c.dir !== expect.dir || c.manifest.pluginId !== expect.pluginId) return changedMeanwhile
     const rand = randomBytes(4).toString('hex')
-    const tmp = `${dest}.installing-${rand}`
-    const old = `${dest}.old-${rand}`
+    let tmp = ''
     try {
-      await cp(c.dir, tmp, { recursive: true, filter: (src) => !INSTALL_SKIP.test(src.slice(c.dir.length)) })
-      const had = await stat(dest).then(() => true, () => false)
+      const manifest = await readSandboxManifest(c.dir)
+      if (manifest.pluginId !== expect.pluginId) return changedMeanwhile
+      const root = join(deps.forsionHome(), 'plugins')
+      await mkdir(root, { recursive: true })
+      // 同一个插件已从商店装在别的目录名下(market-<uuid> 或 install_slug):再装一份就是两个同 id 的插件抢位置
+      for (const e of await readdir(root, { withFileTypes: true }).catch(() => [])) {
+        if (!e.isDirectory() || e.name === manifest.pluginId || e.name.startsWith('.')) continue
+        const m = await readFile(join(root, e.name, 'manifest.json'), 'utf8').then((s) => JSON.parse(s), () => null)
+        if (m && effectivePluginId(e.name, m.id) === manifest.pluginId) return { ok: false, error: `the same plugin is already installed in plugins/${e.name}; uninstall it first` }
+      }
+      const dest = join(root, manifest.pluginId)
+      tmp = `${dest}.installing-${rand}`
+      const old = `${dest}.old-${rand}`
+      // 插件目录常是软链(开发者把项目链过来):按真实目录拷,里面的软链也拷成实体,装好的是一份真目录
+      const src = await realpath(c.dir)
+      await cp(src, tmp, { recursive: true, dereference: true, filter: (p) => !INSTALL_SKIP.test(p.slice(src.length)) })
+      const had = await lstat(dest).then(() => true, () => false)
       if (had) await rename(dest, old)
-      await rename(tmp, dest)
-      if (had) await rm(old, { recursive: true, force: true })
+      try {
+        await rename(tmp, dest)
+      } catch (e) {
+        if (had) await rename(old, dest).catch((r) => deps.log(`[plugin-sandbox] could not put the previous copy back from ${old}: ${r instanceof Error ? r.message : String(r)}`))
+        throw e
+      }
+      // 旧的那份删不掉不算装失败(新的已经在位),记一笔
+      if (had) await rm(old, { recursive: true, force: true }).catch((r) => deps.log(`[plugin-sandbox] could not remove the previous copy ${old}: ${r instanceof Error ? r.message : String(r)}`))
       return { ok: true, pluginId: manifest.pluginId }
     } catch (e) {
-      await rm(tmp, { recursive: true, force: true }).catch(() => {})
+      if (tmp) await rm(tmp, { recursive: true, force: true }).catch(() => {})
       return { ok: false, error: e instanceof Error ? e.message : String(e) }
     }
   }
 
-  // 闲置自动停:沙箱窗口不在前台、15 分钟没人用(agent 没调、用户没切进去过)
+  // 闲置自动停:沙箱窗口不在前台、15 分钟没人用(agent 没调、用户没切进去过)。只有一份新鲜的「在前台」才留它;
+  // 状态要不回来(插件把渲染层卡死了)也停
   const idle = setInterval(() => {
     const c = child
     if (!c || c.exited || Date.now() - c.lastUsed < idleMs) return
-    void readStatus(c).then((st) => { if (!st?.windowVisible && child === c) { deps.log(`[plugin-sandbox] ${c.manifest.pluginId} idle, stopping`); void stop() } }, () => {})
+    void serial(async () => {
+      if (child !== c || Date.now() - c.lastUsed < idleMs) return
+      const st = await readStatus(c).catch(() => null)
+      if (st?.windowVisible || child !== c) return
+      deps.log(`[plugin-sandbox] ${c.manifest.pluginId} idle, stopping`)
+      await stop()
+    })
   }, 60_000)
   idle.unref?.()
 
   return {
     exec,
     show,
-    stop,
-    reset,
-    install,
+    stop: () => serial(stop),
+    reset: () => serial(() => reset().catch(fail)),
+    install: (expect: { pluginId?: string; dir?: string }) => serial(() => install(expect)),
     state: publicState,
-    dispose: async () => { clearInterval(idle); await stop() },
+    dispose: () => { disposed = true; clearInterval(idle); return serial(stop) },
   }
 }
 

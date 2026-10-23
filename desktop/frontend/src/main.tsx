@@ -1,3 +1,4 @@
+import './sandbox/seed' // 插件沙箱首屏的语言 / 主题:必须排第一,store 一被 import 就读 localStorage(普通实例 no-op)
 import { createRoot } from 'react-dom/client'
 import { Root } from './Root'
 import { ErrorBoundary } from './components/ErrorBoundary'
@@ -24,12 +25,10 @@ import { applyUiFonts } from './uiFont'
 import { recordError } from './diag'
 import { installAccountTransition } from './services/accountTransition'
 import { installTabTitleBar } from './tabTitleBar'
-import { applySandboxSeed, installSandboxHook } from './sandbox/sandboxWindow'
+import { installSandboxHook } from './sandbox/sandboxWindow'
 import { installPluginSandboxSurface } from './services/pluginSandboxSurface'
 
-// 插件沙箱:语言 / 主题 / 跳过引导要在下面读 localStorage 之前写好(普通实例 no-op)
-applySandboxSeed()
-installSandboxHook()
+installSandboxHook() // 插件沙箱那份:主进程经 executeJavaScript 调的钩子(普通实例 no-op)
 installPluginSandboxSurface() // 用户那份:声明 plugin.sandbox,接 plugin_sandbox 工具的 client_cmd
 
 // Register for all desktop windows before workspace/Amadeus initialization.

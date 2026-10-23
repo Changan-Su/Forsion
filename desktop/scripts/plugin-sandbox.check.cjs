@@ -35,6 +35,7 @@ const SBX = path.join(home, 'sandbox', PLUGIN_ID)
 const SHOT_DIR = process.env.SHOT_DIR ? path.resolve(process.env.SHOT_DIR) : null
 
 const mainJs = (marker) => `console.log('${marker}')
+console.log('SBX_SKIN ' + document.documentElement.dataset.skin)
 ctx.registerView({ id: 'fixture-view', title: 'Sandbox fixture', mount(el) { const b = document.createElement('h1'); b.textContent = '${marker}'; el.append(b); return () => b.remove() } })
 ctx.registerCommand({ id: 'fixture-ping', title: 'Fixture ping', run(a) { console.log('FIXTURE_PING ' + JSON.stringify(a || {})) } })
 ctx.registerCommand({ id: 'fixture-report', title: 'Fixture report', run() { window.tangu.sandbox.action('report', 'FIXTURE_NOTE_FROM_SANDBOX') } })
@@ -116,6 +117,8 @@ async function main() {
       await win.evaluate(() => !!window.tangu?.pluginSandbox && !window.tangu?.sandbox))
 
     // ── 1 走一遍真实的 run:工具调用 → client_cmd → 渲染层 claim → 主进程起沙箱 → result ──
+    // 用户这份换成非缺省的主题色:沙箱首屏要跟上(能力面每次 exec 带上 forsion_theme* 键)
+    await win.evaluate(() => localStorage.setItem('forsion_theme_skin', 'coral'))
     await win.evaluate(() => {
       const b = [...document.querySelectorAll('button.rb-space')].find((x) => /Agent|Tangu/.test(x.getAttribute('aria-label') || x.getAttribute('title') || x.textContent || ''))
       b?.click()
@@ -142,6 +145,7 @@ async function main() {
       res && res.ok === true && res.nonce === 'nonce-1' && st?.state === 'running' && st.views.includes('fixture-view')
       && st.logs.some((l) => l.text.includes('SBX_MARK_ONE')) && /^data:image\/jpeg;base64,/.test(res.image || ''),
       JSON.stringify({ ok: res && res.ok, state: st?.state, views: st?.views, logs: st?.logs?.slice(-3), image: (res?.image || '').slice(0, 30), error: res?.error }))
+    check('1c 外观跟着用户那份:沙箱首屏的主题色 = 用户这份的(coral)', !!st?.logs.some((l) => l.text === 'SBX_SKIN coral'), JSON.stringify(st?.logs?.filter((l) => l.text.startsWith('SBX_SKIN'))))
     saveShot('sandbox-window.jpg', res?.image)
     if (st) stub.finish('r1', [{ type: 'tool_result', payload: { id: 'ts1', name: 'plugin_sandbox', result: embedded(st), elapsedMs: 5000 } }, { type: 'done', payload: {} }])
 

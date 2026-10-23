@@ -963,6 +963,7 @@ const mcpLifecycle = createMcpLifecycle({
   log: (m) => console.log(m),
 })
 async function applyForsionMcp(enabled: boolean | (() => Promise<boolean>)): Promise<void> {
+  if (SANDBOX) return // 沙箱不开对外 MCP:固定端口是整机共享的(设置页里打开也不起)
   try {
     await mcpLifecycle.apply(enabled)
   } catch (e) {
@@ -1191,6 +1192,7 @@ async function openUnitScopedFile(p: string): ReturnType<typeof openUnitHostRegu
  *  startUnitWeb 撞 EADDRINUSE → 落 port 0 → 悄悄换掉用户刚抄走的直连端口。 */
 let unitRefreshChain: Promise<void> = Promise.resolve()
 function refreshUnitHost(): Promise<void> {
+  if (SANDBOX) return Promise.resolve() // 沙箱不做设备互联(局域网端口、云端通道都是整机的)
   unitRefreshChain = unitRefreshChain
     .then(() => doRefreshUnitHost())
     .catch((e) => { console.error('[unit] refresh failed:', e) })
@@ -1478,6 +1480,7 @@ function initEngineOverlay(): Promise<void> {
 let ensureChain: Promise<void> = Promise.resolve()
 function ensureBackend(): Promise<void> {
   if (!PRODUCT.agentBackend) return Promise.resolve() // 产品档案:本变体不捆 agent 托管后端
+  if (SANDBOX) return Promise.resolve() // 沙箱不起引擎(设置页里切到托管也不起;契约 plugin-sandbox.md §6)
   ensureChain = ensureChain.then(async () => {
     const stored = await loadConfig()
     // 「允许其他设备连接本机」开着时引擎必须常驻:本机 UI 切去别的 Unit(mode≠managed)
@@ -4415,8 +4418,8 @@ const pluginSandbox = SANDBOX ? null : createPluginSandbox({
   onChange: (st) => { for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && !w.webContents.isDestroyed()) w.webContents.send('pluginSandbox:changed', st) },
   onChildEvent: (ev) => {
     if (ev.event === 'report') { showMainWindow(); mainWindow?.webContents.send('pluginSandbox:report', ev) }
-    else if (ev.event === 'install') void installFromSandbox()
-    else if (ev.event === 'reset') void pluginSandbox?.reset()
+    else if (ev.event === 'install') void installFromSandbox().catch((e) => console.error('[plugin-sandbox] install failed:', e))
+    else if (ev.event === 'reset') void pluginSandbox?.reset().catch((e) => console.error('[plugin-sandbox] reset failed:', e))
     else if (ev.kind === 'url') { if (isForsionUrl(ev.value)) deliverDeepLink(ev.value) }
     else deliverOpenFile(ev.value)
   },
@@ -4426,6 +4429,7 @@ const pluginSandbox = SANDBOX ? null : createPluginSandbox({
 async function installFromSandbox(): Promise<{ ok: boolean; pluginId?: string; error?: string; cancelled?: boolean }> {
   const st = pluginSandbox?.state()
   if (!pluginSandbox || !st?.running) return { ok: false, error: 'no sandbox is running' }
+  const expect = { pluginId: st.pluginId, dir: st.dir } // 用户点「安装」同意的就是框里这一个
   showMainWindow()
   // ⚠️ 必须挂父窗(同 confirmPair):无父的 showMessageBox 在 mac 上冻住主循环;拿不到窗就不装
   const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
@@ -4437,7 +4441,7 @@ async function installFromSandbox(): Promise<{ ok: boolean; pluginId?: string; e
     buttons: [mt('main.pluginSandbox.install'), mt('main.pluginSandbox.cancel')], defaultId: 0, cancelId: 1, noLink: true,
   })
   if (response !== 0) return { ok: false, cancelled: true }
-  const r = await pluginSandbox.install()
+  const r = await pluginSandbox.install(expect)
   // 各窗自己重载插件(与商店安装同一条广播)
   if (r.ok) for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('window:mainAction', 'extensions-changed', JSON.stringify({ type: 'amadeus-plugin', ids: [r.pluginId] }))
   return r
@@ -4445,13 +4449,16 @@ async function installFromSandbox(): Promise<{ ok: boolean; pluginId?: string; e
 if (pluginSandbox) {
   ipcMain.handle('pluginSandbox:exec', (e, op: unknown, args: unknown, origin: unknown) => {
     if (!isTrustedSender(e)) return { ok: false, code: 'error', error: 'untrusted sender' }
-    const o = (origin && typeof origin === 'object' ? origin : {}) as { sessionId?: unknown; ui?: { storage?: unknown } }
+    const o = (origin && typeof origin === 'object' ? origin : {}) as { sessionId?: unknown; deadline?: unknown; ui?: { storage?: unknown } }
     const storage = o.ui?.storage
     if (storage && typeof storage === 'object') {
       sandboxStorage = Object.fromEntries(Object.entries(storage as Record<string, unknown>)
         .filter(([k, v]) => /^forsion_(theme|glass)/.test(k) && typeof v === 'string' && v.length <= 4096).slice(0, 40)) as Record<string, string>
     }
-    return pluginSandbox.exec(String(op), args && typeof args === 'object' ? args as Record<string, unknown> : {}, { sessionId: typeof o.sessionId === 'string' ? o.sessionId : undefined })
+    return pluginSandbox.exec(String(op), args && typeof args === 'object' ? args as Record<string, unknown> : {}, {
+      sessionId: typeof o.sessionId === 'string' ? o.sessionId : undefined,
+      deadline: typeof o.deadline === 'number' && Number.isFinite(o.deadline) ? o.deadline : undefined,
+    })
   })
   ipcMain.handle('pluginSandbox:state', (e) => (isTrustedSender(e) ? pluginSandbox.state() : { running: false }))
   ipcMain.handle('pluginSandbox:show', (e) => (isTrustedSender(e) ? pluginSandbox.show() : false))

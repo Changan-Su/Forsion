@@ -52,7 +52,9 @@ export interface SandboxStatus {
 
 const LEVELS: readonly SandboxLogLevel[] = ['log', 'info', 'warn', 'error', 'debug']
 const STATES: readonly SandboxState[] = ['starting', 'running', 'failed', 'blocked', 'stopped']
-export const SANDBOX_LIMITS = { name: 120, dir: 1024, item: 120, list: 40, text: 2000, logs: 40, reason: 400 } as const
+export const SANDBOX_LIMITS = { name: 120, dir: 1024, item: 120, list: 40, text: 2000, logs: 40, logText: 500, reason: 400 } as const
+/** 整份状态(按 embedSandboxStatus 的转义后长度算)的上限:要在 client_cmd 结果 text 的 48k 帽、和工具结果的 48k 帽里都放得下。 */
+export const SANDBOX_STATUS_BUDGET = 24_000
 
 const s = (v: unknown, max: number): string => (typeof v === 'string' ? v.slice(0, max) : '')
 const n = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.floor(v) : 0)
@@ -77,11 +79,11 @@ export function parseSandboxStatus(raw: unknown): SandboxStatus | null {
     ? o.logs.slice(-SANDBOX_LIMITS.logs).flatMap((x) => {
       const r = x && typeof x === 'object' ? (x as Record<string, unknown>) : null
       return r && typeof r.text === 'string'
-        ? [{ level: LEVELS.includes(r.level as SandboxLogLevel) ? (r.level as SandboxLogLevel) : 'log', text: s(r.text, SANDBOX_LIMITS.text) }]
+        ? [{ level: LEVELS.includes(r.level as SandboxLogLevel) ? (r.level as SandboxLogLevel) : 'log', text: s(r.text, SANDBOX_LIMITS.logText) }]
         : []
     })
     : []
-  return {
+  return fitSandboxStatus({
     v: 1,
     state: o.state as SandboxState,
     pluginId,
@@ -99,7 +101,16 @@ export function parseSandboxStatus(raw: unknown): SandboxStatus | null {
     errorCount: n(o.errorCount),
     loads: n(o.loads),
     windowVisible: o.windowVisible === true,
-  }
+  })
+}
+
+/** 超预算就轮流丢最早的 console 与最后的挂载报错,还不够再丢别的列表尾巴:截断 JSON 会让整份状态解析不出来,宁可少几条。 */
+function fitSandboxStatus(st: SandboxStatus): SandboxStatus {
+  const over = (): boolean => embedSandboxStatus(st).length > SANDBOX_STATUS_BUDGET
+  // ponytail: 每丢一轮重算一次(O(n²),n ≤ 40),只在超预算时才走到
+  while (over() && (st.logs.length || st.mountErrors.length)) { st.logs.shift(); st.mountErrors.pop() }
+  for (const list of [st.hiddenSpaces, st.views, st.spaces] as unknown[][]) while (over() && list.length) list.pop()
+  return st
 }
 
 /** 工具结果末尾挂一份状态,卡片据此重画历史(实时状态另向桌面要)。标签名不能出现在插件文本里:文本先换掉尖括号。 */

@@ -14,7 +14,10 @@ Forsion 进程**,只装这一个插件的开发副本:
 - 不碰整机共享的东西:协议注册、托盘、全局快捷键、CLI、MCP 固定端口、更新检查、自动 Mini;关窗即退出;
 - 插件以开发副本加载(`amadeus/ipc.ts` 的 `readDevPlugins`,来源 = `FORSION_SANDBOX_PLUGIN`),监视插件目录,保存即重载;
 - 跟随用户那份的界面语言与主题(起沙箱时带过去),跳过首启引导和开屏;
-- 同一时刻只有一个沙箱;沙箱窗口不在前台、15 分钟没人用就自动停。
+- 同一时刻只有一个沙箱;沙箱窗口不在前台、15 分钟没人用就自动停(状态要不回来也停)。起 / 停 / 重置 / 安装 / 闲置停排成一队,一件做完再做下一件。
+
+⚠️ **隔离的是数据和登录,不是权限**:沙箱不是防恶意插件的安全边界。插件代码在沙箱里拿到的宿主 API 与装进用户那份之后一样
+(读写文件、终端等照样能用),只是缺省目录、智库、登录、引擎都换成了沙箱自己的。按插件 API(`ctx.vault` 等)走的读写碰不到用户的数据。
 
 与 Coding Studio「我的 Forsion」那一档(`devLoad`,开发副本直接装进用户正在用的 Forsion)并存:那一档不是隔离环境。
 
@@ -59,7 +62,8 @@ logs[{level,text}](最近 40 条), warnCount, errorCount, loads, windowVisible}`
 - `loads`:自启动以来装载了几次(保存即重载会累加);
 - `windowVisible`:用户此刻正在用沙箱窗口(它在前台)。窗口平时压在普通窗口之下,看得见不算;闲置判定靠它。
 
-引擎与卡片都过 `parseSandboxStatus`(不像状态就 null,超长截断)。
+引擎与卡片都过 `parseSandboxStatus`(不像状态就 null,超长截断;整份按转义后长度封顶 `SANDBOX_STATUS_BUDGET` = 24k,超了轮流丢最早的
+console 与最后的挂载报错 —— client_cmd 结果 text 与工具结果都是 48k 帽,截断的 JSON 解析不出来)。
 
 ## 5. 界面
 
@@ -70,16 +74,19 @@ logs[{level,text}](最近 40 条), warnCount, errorCount, loads, windowVisible}`
   首次打开垂一条说明。按钮只把意图交给父进程:报告问题 → 回到发起沙箱的那个对话,话放进输入框(用户自己决定发不发)。
 - **Coding Studio Sandbox 面板**:两档,隔离沙箱(缺省)/ 我的 Forsion(原来的开发加载器,原样保留)。
 - **安装到我的 Forsion**:先在用户那份主窗弹确认框,再把插件目录拷进 `<forsionHome>/plugins/<id>`(先拷到旁边再换,不带
-  `node_modules` / `.git` / `.forsion`);同一个插件已从商店装在别的目录名下就拒绝。装好广播 `extensions-changed`,各窗自己重载。
+  `node_modules` / `.git` / `.forsion`;按真实目录拷,软链拷成实体;换的那一步失败就把旧的放回去);同一个插件已从商店装在别的目录名下就拒绝。
+  同意绑在确认框里那个插件上:等用户点的工夫沙箱换了插件 / manifest 换了 id,就不装。装好广播 `extensions-changed`,各窗自己重载。
 
 ## 6. 不做(v1)
 
-快照回滚、商店里「在沙箱里试」、多个插件同时开、云端沙箱、沙箱里起引擎(插件的引擎半身 / agent / 技能)。
+快照回滚、商店里「在沙箱里试」、多个插件同时开、云端沙箱、沙箱里起引擎(插件的引擎半身 / agent / 技能)、
+能力级沙箱(收窄插件能用的宿主 API)。沙箱里的设置页也起不了整机共享的东西:对外 MCP、设备互联、托管引擎、写系统图标在入口处一律跳过。
 
 ## 7. 仪器
 
 - 引擎:`src/tools/builtin/pluginSandbox.test.ts`、`src/tools/clientCapabilityGate.test.ts`(plugin.* 只给桌面);
-- 桌面主进程:`desktop/electron/pluginSandbox.test.ts`(假子进程走真 socket:握手 / 令牌负对照 / 就地重载 / 闲置自动停 / 安装);
-- 真 Electron:`desktop` 的 `npm run check:pluginsandbox`(父进程 + 它真起的沙箱:claim 电文、隔离、保存即重载、命令、报告问题、
+- 桌面主进程:`desktop/electron/pluginSandbox.test.ts`(假子进程走真 socket:握手 / 令牌负对照 / 就地重载 / 闲置自动停 / 安装与同意绑定 /
+  起停排队 / spawn 失败马上报);
+- 真 Electron:`desktop` 的 `npm run check:pluginsandbox`(父进程 + 它真起的沙箱:claim 电文、主题色跟随、隔离、保存即重载、命令、报告问题、
   对话卡、setup 抛错、安装、停止与不留孤儿、负对照);`SHOT_DIR=<目录>` 落沙箱窗口与对话卡截图;
 - 真模型:live 台架 `--only pluginsandbox`(台架扮桌面应答 `plugin.*`,含无能力 / 手机端两个负对照)。

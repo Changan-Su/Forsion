@@ -1,7 +1,7 @@
 /**
  * 插件沙箱 · 沙箱那份 Forsion 的渲染层(主进程那侧见 electron/sandboxChild.ts,契约 tangu-agent/docs/plugin-sandbox.md)。
  *
- *  · applySandboxSeed:首屏之前把父进程带来的语言、主题写进本机 localStorage,并把首启引导标成走过 —— 沙箱一开就是插件;
+ *  · 首屏种子(语言、主题、跳过引导)在 seed.ts:它得赶在所有 store 之前,是 main.tsx 的第一个 import;
  *  · installSandboxHook:`window.__forsionSandbox`,主进程经 executeJavaScript 调它:状态 / 跑插件命令 / 开视图 / 重载;
  *  · 插件第一次装好时把它的第一个视图开出来,之后每次装载落定都报一次给主进程(父进程那边的卡片跟着变)。
  *
@@ -11,25 +11,9 @@ import { usePluginStore } from '../amadeus/plugins/pluginStore'
 import { getDevPluginState, reloadDevPlugin } from '../amadeus/plugins/devSandbox'
 import { hiddenSpaceForAgent, hiddenSpacesOf } from '../pluginSpaceHealth'
 import { pluginSpaceOwner } from '../stores/spaceProgress'
-import { ONBOARDING_DISMISS_KEY, ONBOARDING_VERSION_KEY } from '../components/OnboardingWizard'
-import { LOCALE_KEY } from '../types'
 import type { SandboxStatus } from '../../../../tangu-agent/src/contracts/pluginSandbox'
 
 export const sandboxSelf = () => window.tangu?.sandbox?.self ?? null
-
-/** 父进程带来的那几把主题键:只收主题 / 玻璃,别的键(登录、库、偏好)一律不写。 */
-const SEED_KEY = /^forsion_(theme|glass)/
-
-export function applySandboxSeed(): void {
-  const self = sandboxSelf()
-  if (!self) return
-  try {
-    for (const [k, v] of Object.entries(self.ui?.storage ?? {})) if (SEED_KEY.test(k) && typeof v === 'string') localStorage.setItem(k, v)
-    if (self.ui?.locale === 'zh' || self.ui?.locale === 'en') localStorage.setItem(LOCALE_KEY, self.ui.locale)
-    localStorage.setItem(ONBOARDING_DISMISS_KEY, '1')
-    if (self.appVersion) localStorage.setItem(ONBOARDING_VERSION_KEY, self.appVersion)
-  } catch { /* 存不下:照常启动,只是会看到引导 */ }
-}
 
 let loads = 0
 let settled = false

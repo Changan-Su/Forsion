@@ -148,9 +148,38 @@ describe('控制通道', () => {
     const home = tmp(); const dir = pluginDir()
     const sbx = sandbox(home, fakeSpawn({ states: ['running'] }))
     await sbx.exec('start', { dir })
-    expect(await sbx.install()).toEqual({ ok: true, pluginId: 'reading-log' })
+    // 确认框给用户看的是别的插件(等确认的工夫换了)→ 不拿这次同意去装
+    expect((await sbx.install({ pluginId: 'other', dir })).ok).toBe(false)
+    expect(await sbx.install({ pluginId: 'reading-log', dir })).toEqual({ ok: true, pluginId: 'reading-log' })
     expect(existsSync(join(home, 'plugins/reading-log/main.js'))).toBe(true)
     expect(existsSync(join(home, 'plugins/reading-log/node_modules'))).toBe(false)
     await sbx.dispose()
+  })
+
+  it('起停排队:start 还在路上就点了 stop → 最后是停着的,不留一个起来的', async () => {
+    const f = fakeSpawn({ states: ['running'] })
+    const sbx = sandbox(tmp(), f)
+    const [a, b] = await Promise.all([sbx.exec('start', { dir: pluginDir() }), sbx.exec('stop', {})])
+    expect(a.ok && b.ok).toBe(true)
+    expect(f.ops).toContain('quit')
+    expect(sbx.state().running).toBe(false)
+  })
+
+  it('spawn 失败(只有 error + close,没有 exit)→ 马上报失败,不干等握手', async () => {
+    const spawn = (): ChildProcess => {
+      const proc = new EventEmitter() as ChildProcess & EventEmitter
+      ;(proc as { kill: unknown }).kill = () => true
+      setImmediate(() => { proc.emit('error', new Error('ENOENT')); proc.emit('close', -2) })
+      return proc
+    }
+    const sbx = createPluginSandbox({
+      forsionHome: () => tmp(), spawn, appArgs: [], platform: process.platform, pid: process.pid,
+      ui: () => ({ locale: 'zh', storage: {} }), onChange: () => {}, onChildEvent: () => {}, log: () => {},
+    })
+    const t0 = Date.now()
+    const r = await sbx.exec('start', { dir: pluginDir() })
+    expect(r.ok).toBe(false)
+    expect(Date.now() - t0).toBeLessThan(5_000)
+    expect(sbx.state().running).toBe(false)
   })
 })

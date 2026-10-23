@@ -60,7 +60,7 @@ export function installPluginSandboxSurface(): void {
       const deadline = Date.now() + Math.min(typeof claim?.execMs === 'number' ? claim.execMs : 20_000, 120_000)
       const args = cmd.args && typeof cmd.args === 'object' && !Array.isArray(cmd.args) ? cmd.args as Record<string, unknown> : {}
       const r = isSandboxOp(cmd.op)
-        ? await api.exec(cmd.op, args, { sessionId, ui: { storage: sandboxUiStorage() } }).catch((e: unknown) => ({ ok: false, code: 'error', error: e instanceof Error ? e.message : String(e) }))
+        ? await api.exec(cmd.op, args, { sessionId, deadline, ui: { storage: sandboxUiStorage() } }).catch((e: unknown) => ({ ok: false, code: 'error', error: e instanceof Error ? e.message : String(e) }))
         : { ok: false, code: 'unsupported', error: `unknown sandbox action "${String(cmd.op)}"` }
       // 过了引擎的期限:引擎已按 no_report(可能已发生)兑现,再回只会 410
       if (Date.now() > deadline) return
