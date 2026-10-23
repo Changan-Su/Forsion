@@ -24,7 +24,9 @@ import { useDeskAcceptsFiles } from '../amadeus/plugins/deskCompanion'
 import { ToolCardDeskContext, toolCardDeskFor } from '../components/PluginToolCard'
 import { ErrorBoundary } from '../components/ErrorBoundary'
 import { EditorialMessage, type MessageHandlers } from './chat2/EditorialMessage'
-import { ApprovalTray } from './chat2/ApprovalTray'
+import { ApprovalTray, DeckPill, type DeckItem } from './chat2/ApprovalTray'
+import { pendingTaskCardsOf, useTaskHandledVersion } from './chat2/pendingTasks'
+import { TodoList } from '../components/InquiryCard'
 import { MuseApprovalTray } from './chat2/MuseDm'
 import { APPROVAL_UPDATE_OPEN, pendingPromptsOf } from './chat2/approvalQueue'
 import { CHILD_UPDATE_OPEN, ChildFromLine } from './chat2/ChildSessions'
@@ -240,6 +242,21 @@ export function ChatView({ leaf, params }: ViewProps) {
   }
   const pendingApprovals = useMemo(() => pendingPromptsOf(activeMessages), [activeMessages])
   const running = s.running
+  // 对话末尾的卡片堆(10-23 方案「待确认卡片」B):挡着 agent 的在前,还在等你选的任务卡垫底
+  const taskHandledV = useTaskHandledVersion()
+  const pendingTasks = useMemo(() => (activeId ? pendingTaskCardsOf(activeMessages, activeId) : []), [activeMessages, activeId, taskHandledV])
+  const deckItems = useMemo<DeckItem[]>(() => [...pendingApprovals, ...pendingTasks], [pendingApprovals, pendingTasks])
+  // 对话末尾那一行任务清单:最新那一份 —— 会话还在跑,或它在最后一条回答上、还有没做完的;其余几份在各自回答里收成一行
+  const tailTodo = useMemo(() => {
+    let last = true
+    for (let i = activeMessages.length - 1; i >= 0; i--) {
+      const m = activeMessages[i]
+      if (m.role !== 'assistant') continue
+      if (m.todos?.length) return running || (last && m.todos.some((x) => x.status !== 'completed')) ? m : null
+      last = false
+    }
+    return null
+  }, [activeMessages, running])
   const execConfig = s.execConfig
   // Vault 切换会即时重算 Project 列表与系统工作根;不能只在 s.workspaces() 里 getState 快照,
   // 否则 appStore 本身没变化时 React 不会重渲染选择器。
@@ -510,6 +527,7 @@ export function ChatView({ leaf, params }: ViewProps) {
       // 建议芯片 = 用户自己把这句话打进去按了回车(运行中则落进 steer 等待区)。
       onSuggest: readOnly ? undefined : (text) => void env().s.send(text, [], undefined, undefined, undefined, env().activeId),
       onTask: (card, landing) => runTaskCard(card, landing, env().activeId),
+      onJumpDeck: () => scrollToBottom(true),
       // 回答插回笔记(G3-08):由「问 Tangu」发起的对话优先插回出处那篇;宿主没有 Amadeus 编辑能力就不出按钮。
       onInsertNote: canInsertNote ? (text) => void insertReplyToNote(text, askOriginOf(env().activeMessages, id)) : undefined,
       // 插件结果卡片的 call.quote:同划线「引用」,挂进这块输入框
@@ -556,6 +574,18 @@ export function ChatView({ leaf, params }: ViewProps) {
     && !mvCfg.groupChat && !mvCfg.teamSlug && !mvCfg.teamMember && !mvCfg.soloAgentSlug && !mvCfg.soloEngineId && !mvCfg.engineId
   const [canvasPref, setCanvasPref] = useChatCanvasPref(treeRoot)
   const canvasOn = canvasAllowed && canvasPref.on
+  const museTray = mvCfg.soloAgentSlug === 'muse' && !params.childSurface ? <MuseApprovalTray key={activeId ?? ''} /> : null
+  const deck = deckItems.length ? (
+    <ApprovalTray
+      // 每个会话一份托盘状态(收起 / 展开项 / 已送出锁),别从上一个会话带过来
+      key={activeId ?? ''}
+      sessionId={activeId ?? undefined}
+      items={deckItems}
+      onDecide={(mid, aid, action, args) => s.decideApproval(mid, aid, action, args, activeId)}
+      onAnswer={(mid, iid, ans) => s.answerInquiry(mid, iid, ans, activeId)}
+      onTask={(card, landing) => runTaskCard(card, landing, activeId)}
+    />
+  ) : null
   const toolCardDesk = toolCardDeskFor({ sessionId: activeId, takesFiles: deskTakesFiles, canvas: canvasOn, width: chatViewW, childOpen: !!(activeId && childSelections[activeId]), deskOpen: deskOpenNow })
   // 「对话 / 画布」= 视图模式(lcl viewModes):胶囊在这一列的头行左端,⌥⌘V 切换;记忆照旧按树根
   useViewModes(leaf.id, canvasAllowed ? {
@@ -688,6 +718,7 @@ export function ChatView({ leaf, params }: ViewProps) {
                     speakState={tts?.msgId === m.id ? tts.phase : undefined}
                     voice={voice}
                     handlers={handlersFor(m.id)}
+                    todoInTail={m.id === tailTodo?.id}
                   />
                 )
               })
@@ -708,6 +739,13 @@ export function ChatView({ leaf, params }: ViewProps) {
                   <span className="t2-compact-pct">{s.compacting}%</span>
                 </div>
                 <div className="t2-compact-track"><div className="t2-compact-fill" style={{ width: `${s.compacting}%` }} /></div>
+              </div>
+            )}
+            {/* 对话末尾:任务清单一行 + 等你处理的卡片堆,跟着最新内容走(画布模式下卡片堆回到输入框上方) */}
+            {!canvasOn && (tailTodo || deck) && (
+              <div className="t2-tail" data-pending-deck>
+                {tailTodo && <TodoList todos={tailTodo.todos!} live={tailTodo.status === 'streaming' && running} folded />}
+                {deck}
               </div>
             )}
             </div>
@@ -788,17 +826,13 @@ export function ChatView({ leaf, params }: ViewProps) {
         </AnimatePresence>
         <Composer2
           sessionId={activeId}
-          approvalTray={pendingApprovals.length ? (
-            <ApprovalTray
-              // 每个会话一份托盘状态(收起 / 展开项 / 已送出锁),别从上一个会话带过来
-              key={activeId ?? ''}
-              sessionId={activeId ?? undefined}
-              items={pendingApprovals}
-              onDecide={(mid, aid, action, args) => s.decideApproval(mid, aid, action, args, activeId)}
-              onAnswer={(mid, iid, ans) => s.answerInquiry(mid, iid, ans, activeId)}
-            />
+          // 卡片堆在对话末尾时这里只放「↓ N 件等你」药丸(滚出视野才露);画布模式下卡片堆本身回到这里。
           // Muse 私聊:它后台排队的审批也在这里批(10-18 方案 B;没有待批时托盘不画)
-          ) : mvCfg.soloAgentSlug === 'muse' && !params.childSurface ? <MuseApprovalTray key={activeId ?? ''} /> : undefined}
+          // Muse 后台排队的审批不在卡片堆里:卡片堆在流尾时它照样挂在这里(只有任务卡也不能把它挤掉,Codex 10-23)
+          approvalTray={canvasOn ? (deck ?? museTray ?? undefined) : (deck || museTray) ? <>
+            {deck && <DeckPill key={activeId ?? ''} rootRef={chatScrollRef} count={deckItems.length} todos={tailTodo?.todos} onClick={() => scrollToBottom(true)} />}
+            {museTray}
+          </> : undefined}
           advisory={!params.childSurface ? (
             // P1-K6:焦点在「我的电脑」且连不上时,顶上这一段换成连接态提示(同一段语汇,两条不叠放)。
             // ⚠️ 本文件的状态条 / disabled 归 K7(INTEGRATION §2.2,合入顺序 K6-S4 → K7):K7 的 RemoteSessionStrip(§3.8)落地时
