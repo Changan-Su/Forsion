@@ -97,3 +97,18 @@ it('④ 任务卡垫底且不挡路:停在任务卡上时来了审批,换到审�
   await render([apv('a1', 'm1', '$ make'), apv('a2', 'm2', '$ test'), task as never, task2 as never])
   expect(host.querySelector('.t2c-apv-body'), '来了新审批该展开').not.toBeNull()
 })
+
+it('⑤ 卡片堆挪位置(画布模式切换 = 重挂)后,已送出的那项照样锁着(Codex 10-23)', async () => {
+  const onAnswer = vi.fn(() => new Promise<boolean>(() => {})) // 一直没回执
+  vi.useFakeTimers()
+  const q = ask('q1', 'm1', 'Pick one')
+  await act(async () => root.render(React.createElement(ApprovalTray, { items: [q], onAnswer, onDecide: vi.fn(), sessionId: 's-lock' })))
+  await act(async () => { vi.advanceTimersByTime(400) })
+  await act(async () => { optionBtn('yes').click() })
+  await act(async () => root.unmount())
+  root = createRoot(host)
+  await act(async () => root.render(React.createElement(ApprovalTray, { items: [q], onAnswer, onDecide: vi.fn(), sessionId: 's-lock' })))
+  await act(async () => { vi.advanceTimersByTime(400) })
+  await act(async () => { optionBtn('yes').click() })
+  expect(onAnswer).toHaveBeenCalledTimes(1)
+})

@@ -58,3 +58,21 @@ it('③ 回答下面只留一行', async () => {
   expect(host.querySelector('[data-task-trace="pending"]')?.textContent).toBe('任务卡「B」· 在对话最下面')
   await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals()
 })
+
+it('④ 两个窗口各记一笔不互相抹掉;同样文字的两条 Muse 待办各认各的(Codex 10-23)', async () => {
+  const list = [msg('m1', `${card('A')}\n${card('B')}`)]
+  const winA = await import('./pendingTasks')
+  winA.pendingTaskCardsOf(list, 's1') // 两边都先读过一遍(各自缓存了空记录)
+  vi.resetModules()
+  const winB = await import('./pendingTasks')
+  winB.pendingTaskCardsOf(list, 's1')
+  const [a, b] = winA.pendingTaskCardsOf(list, 's1')
+  winA.markTaskHandled(a.doneKey, 'here')
+  winB.markTaskHandled(b.doneKey, 'ignore')
+  vi.resetModules()
+  const after = await import('./pendingTasks')
+  expect(after.pendingTaskCardsOf(list, 's1')).toEqual([])
+  const todo1 = { title: 'Same', prompt: 'p', todo: 't1' }, todo2 = { ...todo1, todo: 't2' }
+  after.markTaskHandled(after.taskDoneKey('s1', todo1), 'muse')
+  expect(after.taskHandled(after.taskDoneKey('s1', todo2))).toBeUndefined()
+})

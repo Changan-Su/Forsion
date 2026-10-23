@@ -18,33 +18,39 @@ function hashStr(s: string): string {
   for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0
   return (h >>> 0).toString(36)
 }
+/** Muse 待办按待办 id、带 id 的卡按卡 id 认(同样文字的两张不同待办不能共用一条记录,Codex 10-23);其余按内容。 */
 export function taskDoneKey(scope: string, c: TaskCard): string {
-  return `${scope}:${hashStr(`${c.title}|${c.prompt}`)}`
+  return `${scope}:${c.todo ? `todo:${c.todo}` : c.id ? `id:${c.id}` : hashStr(`${c.title}|${c.prompt}`)}`
 }
 
 let recs: Record<string, Rec> | null = null
 let version = 0
 const listeners = new Set<() => void>()
-function load(): Record<string, Rec> {
-  if (recs) return recs
-  recs = {}
+function read(): Record<string, Rec> {
+  const out: Record<string, Rec> = {}
   try {
     const raw = JSON.parse(localStorage.getItem(KEY) || '{}') as Record<string, Rec>
     // 卡 7 天就过期,记录多留一天够了
     const keep = Date.now() - TASK_CARD_TTL_MS - 24 * 3600_000
-    for (const [k, v] of Object.entries(raw)) if (v && typeof v.t === 'number' && v.t > keep) recs[k] = v
+    for (const [k, v] of Object.entries(raw)) if (v && typeof v.t === 'number' && v.t > keep) out[k] = v
   } catch { /* 私密窗口 / 坏数据:当作没有记录 */ }
-  return recs
+  return out
 }
+function load(): Record<string, Rec> {
+  return (recs ??= read())
+}
+const bump = (): void => { version++; for (const f of listeners) f() }
+// 别的窗口(Mini / 分离窗口各是一个渲染进程)记了一笔:作废缓存,跟着重渲
+if (typeof window !== 'undefined') window.addEventListener('storage', (e) => { if (e.key === KEY || e.key === null) { recs = null; bump() } })
 export function taskHandled(key: string): { landing: TaskLanding; childId?: string } | undefined {
   const r = load()[key]
   return r ? { landing: r.l, childId: r.c } : undefined
 }
 export function markTaskHandled(key: string, landing: TaskLanding, childId?: string): void {
-  load()[key] = { l: landing, t: Date.now(), ...(childId ? { c: childId } : {}) }
+  // 写之前重读一遍再并上:两个窗口各拿着旧快照整份写回,后写的会抹掉先写的那条(Codex 10-23)
+  recs = { ...load(), ...read(), [key]: { l: landing, t: Date.now(), ...(childId ? { c: childId } : {}) } }
   try { localStorage.setItem(KEY, JSON.stringify(recs)) } catch { /* 存不下就只活到应用关闭 */ }
-  version++
-  for (const f of listeners) f()
+  bump()
 }
 /** 处理记录一变就重渲(卡片堆据此把处理过的卡拿走)。 */
 export function useTaskHandledVersion(): number {

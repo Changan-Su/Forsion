@@ -36,6 +36,14 @@ export type DeckItem = TrayItem | PendingTask
 
 const ARM_MS = 350
 
+const sentBySession = new Map<string, Set<string>>()
+function sentLocks(sessionId?: string): Set<string> {
+  const k = sessionId ?? ''
+  let hit = sentBySession.get(k)
+  if (!hit) { hit = new Set(); sentBySession.set(k, hit) }
+  return hit
+}
+
 type Sent = void | boolean | Promise<boolean | void>
 
 export function ApprovalTray({ items, onDecide, onAnswer, onTask, sessionId }: {
@@ -76,23 +84,24 @@ export function ApprovalTray({ items, onDecide, onAnswer, onTask, sessionId }: {
   }, [curId])
   // 已送出、还等回执的项:锁在托盘层(卡片切走再切回、收起再展开都不丢),同一项绝不送第二次 ——
   // 第二次必然 410,从前还会把已送达的回答改判成「已过期」。没送达(返回 false / 抛错)才解锁重试。
-  const sent = useRef(new Set<string>())
+  // 锁按会话放在模块里:画布模式切换会把托盘在流尾与输入框上方之间挪(= 重挂),组件里的 ref 会跟着丢(Codex 10-23)
+  const sent = sentLocks(sessionId)
   const [, rerender] = useState(0)
   // 兑现离开托盘的不再占着。放在提交后的 effect 里,不在 render 里改 ref:并发渲染可能丢弃一次 render,
   // 那次若先把锁删了,屏幕上仍在的旧项就又能送一次(Codex 09-27 第三轮)。
   useEffect(() => {
-    for (const id of sent.current) if (!items.some((i) => i.id === id)) sent.current.delete(id)
+    for (const id of sent) if (!items.some((i) => i.id === id)) sent.delete(id)
   }, [items])
   const submit = (id: string, send: () => Sent): void => {
     // 冷却期内一律不送:CSS 的 pointer-events 只挡鼠标,这里连键盘(回车提交)一起挡,也让冷却可测
-    if (armedId !== id || sent.current.has(id)) return
-    sent.current.add(id)
+    if (armedId !== id || sent.has(id)) return
+    sent.add(id)
     rerender((n) => n + 1)
-    const unlock = (): void => { sent.current.delete(id); rerender((n) => n + 1) }
+    const unlock = (): void => { sent.delete(id); rerender((n) => n + 1) }
     void Promise.resolve().then(send).then((ok) => { if (ok === false) unlock() }, unlock)
   }
   if (!cur) return null
-  const busy = sent.current.has(cur.id)
+  const busy = sent.has(cur.id)
   const title = items.every((i) => i.kind === 'approval') ? 'approval.tray.title' : 'approval.tray.titleAny'
   const idx = items.indexOf(cur)
   const go = (d: number): void => setOpenId(items[(idx + d + items.length) % items.length].id)

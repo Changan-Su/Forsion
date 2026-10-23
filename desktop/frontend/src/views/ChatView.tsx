@@ -574,6 +574,7 @@ export function ChatView({ leaf, params }: ViewProps) {
     && !mvCfg.groupChat && !mvCfg.teamSlug && !mvCfg.teamMember && !mvCfg.soloAgentSlug && !mvCfg.soloEngineId && !mvCfg.engineId
   const [canvasPref, setCanvasPref] = useChatCanvasPref(treeRoot)
   const canvasOn = canvasAllowed && canvasPref.on
+  const museTray = mvCfg.soloAgentSlug === 'muse' && !params.childSurface ? <MuseApprovalTray key={activeId ?? ''} /> : null
   const deck = deckItems.length ? (
     <ApprovalTray
       // 每个会话一份托盘状态(收起 / 展开项 / 已送出锁),别从上一个会话带过来
@@ -827,9 +828,11 @@ export function ChatView({ leaf, params }: ViewProps) {
           sessionId={activeId}
           // 卡片堆在对话末尾时这里只放「↓ N 件等你」药丸(滚出视野才露);画布模式下卡片堆本身回到这里。
           // Muse 私聊:它后台排队的审批也在这里批(10-18 方案 B;没有待批时托盘不画)
-          approvalTray={deck
-            ? canvasOn ? deck : <DeckPill key={activeId ?? ''} rootRef={chatScrollRef} count={deckItems.length} todos={tailTodo?.todos} onClick={() => scrollToBottom(true)} />
-            : mvCfg.soloAgentSlug === 'muse' && !params.childSurface ? <MuseApprovalTray key={activeId ?? ''} /> : undefined}
+          // Muse 后台排队的审批不在卡片堆里:卡片堆在流尾时它照样挂在这里(只有任务卡也不能把它挤掉,Codex 10-23)
+          approvalTray={canvasOn ? (deck ?? museTray ?? undefined) : (deck || museTray) ? <>
+            {deck && <DeckPill key={activeId ?? ''} rootRef={chatScrollRef} count={deckItems.length} todos={tailTodo?.todos} onClick={() => scrollToBottom(true)} />}
+            {museTray}
+          </> : undefined}
           advisory={!params.childSurface ? (
             // P1-K6:焦点在「我的电脑」且连不上时,顶上这一段换成连接态提示(同一段语汇,两条不叠放)。
             // ⚠️ 本文件的状态条 / disabled 归 K7(INTEGRATION §2.2,合入顺序 K6-S4 → K7):K7 的 RemoteSessionStrip(§3.8)落地时
