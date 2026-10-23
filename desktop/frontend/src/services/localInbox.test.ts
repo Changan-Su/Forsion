@@ -11,7 +11,7 @@ vi.mock('./engine/targets', () => ({
 /** 移动端 home 目标的替身:凭据只经目标鉴权头取(P1-K6 S3:pull 收目标,不再收整份 cfg)。 */
 const phoneHome = { headers: async () => ({ Authorization: 'Bearer phone-token' }) } as any
 
-import { localInbox } from './localInbox'
+import { localInbox, localizeInboxMessage } from './localInbox'
 
 const store = new Map<string, string>()
 const THREAD = JSON.stringify({ kind: 'approval', unitId: '6c1d7a4e-2b3f-4a5c-8d9e-0f1a2b3c4d5e', sessionId: '9f40ad71-5e6c-4d8f-9021-3c4d5e6f7081', event: 'pending' })
@@ -60,5 +60,25 @@ describe('localInbox.pull × thread / expires_at', () => {
     expect((await localInbox.list('all')).map((m) => m.origin_broadcast_id)).toEqual(['new'])
     expect((await localInbox.list('archived')).map((m) => m.origin_broadcast_id)).toEqual(['old'])
     expect((await localInbox.list('unread')).map((m) => m.origin_broadcast_id)).toEqual(['new'])
+  })
+})
+
+describe('广播英文版', () => {
+  it('pull 存下 title_en / body_en;英文界面挑英文,缺哪项哪项留中文;中文界面原样', async () => {
+    serve([
+      { id: 'both', title: '维护', body: '今晚', title_en: 'Maintenance', body_en: 'Tonight', created_at: '2026-10-23 10:00:00.000001' },
+      { id: 'title-only', title: '公告', body: '正文', title_en: 'Notice', created_at: '2026-10-23 10:00:00.000002' },
+      { id: 'zh', title: '只有中文', body: '正文', created_at: '2026-10-23 10:00:00.000003' },
+    ])
+    await localInbox.pull(phoneHome)
+    const rows = await localInbox.list('all')
+    const pick = (id: string, locale: 'zh' | 'en') => {
+      const m = localizeInboxMessage(rows.find((r) => r.origin_broadcast_id === id)!, locale)
+      return [m.title, m.body]
+    }
+    expect(pick('both', 'en')).toEqual(['Maintenance', 'Tonight'])
+    expect(pick('both', 'zh')).toEqual(['维护', '今晚'])
+    expect(pick('title-only', 'en')).toEqual(['Notice', '正文'])
+    expect(pick('zh', 'en')).toEqual(['只有中文', '正文'])
   })
 })

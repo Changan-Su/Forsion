@@ -11,6 +11,7 @@
  */
 import type { InboxMessage, InboxFilter } from './backendService'
 import { cloudApiBase, type EngineTarget } from './engine/targets'
+import { currentLocale } from '../i18n'
 
 const KEY = 'tangu_inbox_msgs'
 
@@ -55,6 +56,11 @@ function loadLive(now: string): StoredMsg[] {
   const rows = loadAll()
   if (archiveExpired(rows, now)) saveAll(rows)
   return rows
+}
+
+/** 英文界面下广播换成英文版;哪一项没写英文就那一项留中文。 */
+export function localizeInboxMessage(m: InboxMessage, locale = currentLocale()): InboxMessage {
+  return locale === 'en' && (m.title_en || m.body_en) ? { ...m, title: m.title_en || m.title, body: m.body_en || m.body } : m
 }
 
 /** 广播游标 = 本地广播来源(origin_broadcast_id 非空)消息的 max created_at(含软删,微秒原文;对齐后端 pull 语义)。 */
@@ -124,7 +130,7 @@ export const localInbox = {
     if (!base || !/^Bearer \S/.test(auth)) return { pulled: false, added: 0, detail: 'no backend/token' }
     const cursor = broadcastCursor(loadAll())
     const url = `${base}/brain/inbox/broadcasts${cursor ? `?since=${encodeURIComponent(cursor)}` : ''}`
-    let data: { broadcasts?: Array<{ id: string; title: string; body: string; created_at: string; thread?: unknown; expires_at?: unknown }> }
+    let data: { broadcasts?: Array<{ id: string; title: string; body: string; title_en?: string | null; body_en?: string | null; created_at: string; thread?: unknown; expires_at?: unknown }> }
     try {
       const r = await fetch(url, { headers: { Authorization: auth } })
       if (!r.ok) return { pulled: false, added: 0, detail: `broadcasts ${r.status}` }
@@ -138,6 +144,7 @@ export const localInbox = {
       if (!b?.id || seen.has(b.id)) continue
       rows.push({
         id: `bc:${b.id}`, title: b.title, body: b.body,
+        ...(b.title_en ? { title_en: b.title_en } : {}), ...(b.body_en ? { body_en: b.body_en } : {}),
         sender_kind: 'server', sender_id: 'forsion', origin_broadcast_id: b.id,
         read_at: null, archived_at: null, created_at: b.created_at, deleted_at: null,
         // P1-K3:线程判别(审批提醒 / 反馈线程)原文串照存,解析与信任裁决在读端(approvalThreadOf / inboxThreadOf);有效期 UTC 秒级串

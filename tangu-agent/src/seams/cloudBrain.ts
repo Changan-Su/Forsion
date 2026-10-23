@@ -457,6 +457,8 @@ export interface CloudBrainServices {
 export interface InboxBrain {
   listBroadcasts(since?: string): Promise<Array<{
     id: string; title: string; body: string | null; created_at: string;
+    /** 英文版(可空;老云端不给)。title/body 是中文主版本。 */
+    title_en?: string | null; body_en?: string | null;
     attachments?: string | null; expires_at?: string | null; claimed?: boolean;
     /** 领取条件 JSON 原文({minVersion?, tiers?},服务端 claimRequirements.ts);只拿来展示,裁决在服务端。 */
     claim_requirements?: string | null;

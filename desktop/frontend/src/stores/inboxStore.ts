@@ -6,7 +6,7 @@
 import { inboxCardOf } from '@amadeus/plugins/inboxCards'
 import { create } from 'zustand'
 import { setActiveSpace } from '@lcl/engine'
-import { translate } from '../i18n'
+import { subscribeLocale, translate } from '../i18n'
 import { useApp } from './appStore'
 import { homeAgentDefs } from './homeCatalog'
 import { notifyApp } from './notificationStore'
@@ -23,6 +23,7 @@ export type { InboxMessage, InboxFilter }
 // 首拉只记基准不弹通知(历史未读只上角标,防启动通知轰炸)。
 let pollTimer: number | null = null
 let unsubConn: (() => void) | null = null
+let unsubLocale: (() => void) | null = null
 let lastLatestId: string | null | undefined = undefined
 /** 未读轮询单飞(Codex 09-11 P2):挂载刷新、15s 轮询、多个列表实例撞在一起时,并发的 refreshUnread 会在
  *  lastLatestId 更新前都判成「新消息」→ 同一条通知两遍。同一时刻只跑一个,期间再来的合成一次尾随重跑。 */
@@ -250,6 +251,11 @@ export const useInbox = create<InboxState>((set, get) => ({
       if (s.connState === 'ok' && prev !== 'ok') void get().refreshUnread()
       prev = s.connState
     })
+    // 广播的中英文在 listInbox 里挑:切界面语言时重拉一遍已载入的列表
+    unsubLocale = subscribeLocale(() => {
+      void get().refreshList()
+      if (get().archivedLoaded) void get().refreshArchived()
+    })
     tickBody()
   },
 
@@ -257,5 +263,7 @@ export const useInbox = create<InboxState>((set, get) => ({
     if (pollTimer != null) { window.clearInterval(pollTimer); pollTimer = null }
     unsubConn?.()
     unsubConn = null
+    unsubLocale?.()
+    unsubLocale = null
   },
 }))
