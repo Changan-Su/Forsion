@@ -52,13 +52,23 @@ export function ApprovalTray({ items, onDecide, onAnswer, onTask, sessionId }: {
   const { t } = useI18n()
   const [openId, setOpenId] = useState<string | null>(null)
   const [collapsed, setCollapsed] = useState(false)
-  const cur = items.find((i) => i.id === openId) ?? items[0]
+  // 任务卡不挡 agent:停在任务卡上时来了审批 / 提问 / 计划(排在前面),换到它(任务卡里没有会丢的草稿)
+  const picked = items.find((i) => i.id === openId)
+  const cur = (picked && !(picked.kind === 'task' && items[0].kind !== 'task') ? picked : undefined) ?? items[0]
   const curId = cur?.id
   // 钉住展开项:缺省那项一显示就钉住 —— 之后插到它前面的新条目(并行团队里排在前面的成员晚来的审批 / 提问)
   // 只垫到后面,不把正在看的这项顶掉(草稿会丢,冷却过后还会点到顶上来的那张)。它离开列表才回落到最早那项。
   useEffect(() => { if (curId && curId !== openId) setOpenId(curId) }, [curId, openId])
   // 换卡冷却:批完一项,下一项原地顶上来 —— 连点两下不能把没看过的下一项也批了 / 答了。
   // 展开项一换(含新出现),按钮先不接收点击,ARM_MS 后才生效。
+  // 收着时来了新的审批 / 提问 / 计划:展开一次(来了任务卡不展开)
+  const blocking = items.filter((i) => i.kind !== 'task').map((i) => i.id).join(' ')
+  const seenBlocking = useRef(new Set<string>())
+  useEffect(() => {
+    const ids = blocking ? blocking.split(' ') : []
+    if (ids.some((id) => !seenBlocking.current.has(id))) setCollapsed(false)
+    seenBlocking.current = new Set(ids)
+  }, [blocking])
   const [armedId, setArmedId] = useState<string | undefined>(undefined)
   useEffect(() => {
     const timer = setTimeout(() => setArmedId(curId), ARM_MS)

@@ -82,3 +82,18 @@ it('③ 换卡冷却:点 › 换卡后,冷却内的点击不送(JS 层拦,键盘
   await act(async () => { optionBtn('yes').click() })
   expect(onAnswer).toHaveBeenCalledWith('m2', 'q2', 'yes')
 })
+
+it('④ 任务卡垫底且不挡路:停在任务卡上时来了审批,换到审批;收着时来了新的审批会展开,来了任务卡不展开', async () => {
+  const task = { kind: 'task', id: 'task:m0:0', messageId: 'm0', doneKey: 's:x', card: { title: 'Later', prompt: 'do it' } } as const
+  await render([task as never])
+  expect(body().dataset.trayKind).toBe('task')
+  await render([apv('a1', 'm1', '$ make'), task as never])
+  expect(body().dataset.trayKind, '审批来了还停在任务卡上').toBe('approval')
+  await act(async () => { host.querySelector<HTMLButtonElement>('.t2c-apv-head')!.click() }) // 收起
+  expect(host.querySelector('.t2c-apv-body')).toBeNull()
+  const task2 = { ...task, id: 'task:m0:1', card: { title: 'Another', prompt: 'p' } }
+  await render([apv('a1', 'm1', '$ make'), task as never, task2 as never])
+  expect(host.querySelector('.t2c-apv-body'), '来了任务卡不该展开').toBeNull()
+  await render([apv('a1', 'm1', '$ make'), apv('a2', 'm2', '$ test'), task as never, task2 as never])
+  expect(host.querySelector('.t2c-apv-body'), '来了新审批该展开').not.toBeNull()
+})
