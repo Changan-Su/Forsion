@@ -285,13 +285,14 @@ const HUMAN_LAYOUT = '.layout';
 interface ReconcileOptions { plain?: boolean; merge?: boolean; text?: boolean; /** 把影子立刻落盘:merge 文件在推送 / 落合并结果之前要用 */ persist?: () => void }
 /** 两边都改了:.db 按行(id)合并,.md 按行三方合并;还没有基线(第一次见面)时取并集,不整份二选一。
  *  合不了返回 null(退回整份冲突副本)。 */
-function mergeFile(p: string, ours: string, base: string | null, theirs: string, agentCalendar = false): { content: string; conflict: boolean } | null {
+function mergeFile(p: string, ours: string, base: string | null, theirs: string, agent = false): { content: string; conflict: boolean } | null {
   if (p.endsWith('.db')) {
     const merged = mergeDbFile(ours, base, theirs);
     // Agent 的日历:同一行冲突时整行取了一边,lastRun 不能跟着回滚(否则排它的那台会把同一次再跑一遍)
-    return merged && agentCalendar ? { ...merged, content: keepLatestRuns(merged.content, ours, theirs) } : merged;
+    return merged && agent && p === 'CALENDAR.db' ? { ...merged, content: keepLatestRuns(merged.content, ours, theirs) } : merged;
   }
-  if (p === 'MEMORY.md' && base !== null) return { content: mergeFactLines(ours, base, theirs), conflict: false };
+  // 只有 Agent 的记忆按事实集合合并;human/MEMORY.md 是人的本子、和 USER.md 镜像互相 diff3,集合合并会重排行,下一轮镜像那对合不拢、丢行(10-23)
+  if (agent && p === 'MEMORY.md' && base !== null) return { content: mergeFactLines(ours, base, theirs), conflict: false };
   const text = base === null ? joinFirstContact(ours, theirs) : mergeText3(ours, base, theirs);
   return text === null ? null : { content: text, conflict: false };
 }
@@ -427,7 +428,7 @@ async function reconcileFile(cloud: AgentFilesBrain, uid: string, slug: string, 
   };
   if (decision.kind === 'conflict' && opts.merge && modern && initial) {
     const fetched = await fetchRemote();
-    const merged = fetched.file.isBinary ? null : mergeFile(p, initial.toString('utf8'), base, fetched.bytes.toString('utf8'), slug !== HUMAN_SLOT && p === 'CALENDAR.db');
+    const merged = fetched.file.isBinary ? null : mergeFile(p, initial.toString('utf8'), base, fetched.bytes.toString('utf8'), slug !== HUMAN_SLOT);
     if (!merged) { await pull(true, fetched); return; }
     let out = Buffer.from(merged.content);
     verifyBytes({}, out);
