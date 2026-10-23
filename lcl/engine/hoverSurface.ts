@@ -142,7 +142,11 @@ class HoverSurface {
     try { ok = await spec.fill(el) } catch { ok = false }
     if (myGen !== this.gen) return
     this.pending = null
-    if (!ok) { if (this.shown) this.close(true); return }
+    if (!ok) {
+      // 接力到一个这次不出提示的元素(内容为空、让位给别的浮层)= 当成离开:宽限后照常退场,宽限里再移到有提示的照样接力。
+      if (this.shown) { window.clearTimeout(this.lingerTimer); this.lingerTimer = window.setTimeout(() => this.close(false), ms(TOKENS[this.kind].handoff)) }
+      return
+    }
     window.clearTimeout(this.lingerTimer)
     if (this.spec && this.spec !== spec) this.spec.release?.()
     this.showSeq++

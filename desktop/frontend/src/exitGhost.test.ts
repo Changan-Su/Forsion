@@ -58,13 +58,17 @@ it('样式里没有退场动画:替身立刻摘,等于原样', async () => {
   expect(ghosts().length).toBe(0)
 })
 
-it('外面包着的一层一起被拆:替身落进还在的最近祖先(作用域类照旧)', async () => {
+it('外面包着的一层一起被拆:替身落进还在的最近祖先(作用域类照旧),拆掉的那层浅拷当壳', async () => {
   await render(h('div', { className: 'keep' }, h('div', { className: 'backdrop' }, h(OverlayAt, { x: 0, y: 0, className: 'ctx-menu' }))))
   await render(h('div', { className: 'keep' }))
   await act(async () => { await Promise.resolve() })
   expect(ghosts().length).toBe(1)
-  expect(ghosts()[0].parentElement!.className).toBe('keep')
+  const shell = ghosts()[0].parentElement!
+  expect(shell.className, '拆掉的那层浅拷一份当壳(层叠上下文照旧)').toBe('backdrop')
+  expect(shell.style.pointerEvents).toBe('none')
+  expect(shell.parentElement!.className).toBe('keep')
   await act(async () => { finish(); await new Promise((r) => setTimeout(r, 0)) })
+  expect(document.querySelector('.keep > .backdrop'), '放完连壳一起摘').toBeNull()
 })
 
 it('还挂着的(重渲染、没卸载)不留替身', async () => {
