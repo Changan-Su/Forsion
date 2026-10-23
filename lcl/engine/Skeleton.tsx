@@ -78,6 +78,17 @@ export function Skeleton({ variant = 'document' }: { variant?: SkeletonVariant }
   )
 }
 
+/** 布局里存着、此刻没注册的视图(它的插件还没就位,或者已关掉 / 卸载)原地留的占位:不丢整份布局,
+ *  注册上来由 WorkspaceHost 的 FrameHost 订阅注册表就地换回真视图。外观同 ViewErrorBoundary。 */
+export function ViewPlaceholder(): React.ReactElement {
+  return (
+    <div className="sk-error" role="status" data-view-placeholder="">
+      <div className="sk-error-title">{engineTr('lcl.view.unavailable')}</div>
+      <div className="sk-error-msg">{engineTr('lcl.view.unavailableHint')}</div>
+    </div>
+  )
+}
+
 interface GuardState { err: Error | null; n: number }
 
 /** 面板级错误边界:视图渲染 / 懒 chunk 拉取失败只塌**本面板**并给出重试,

@@ -707,8 +707,8 @@ interface WorkspaceState {
   /** 关掉**所有区**里该类型的全部实例(反注册插件/内置视图前的清场)。
    *  调用方从前是各自 `mainTabs + closeSideView('left') + closeSideView('right')` 手写一遍 —— 加了
    *  bottom 之后那种写法会漏掉停在底部的实例:视图被 unregisterView 之后 panel 还活着(cleanup 不跑、
-   *  插件 UI 继续存活),且这个已不存在的类型会留在持久化布局里 → 下次启动 layoutViewsAllRegistered
-   *  判定失败,**整份布局被丢弃回默认**。清场必须以 api.panels 为准,不能按位置手写枚举。
+   *  插件 UI 继续存活),且这个已不存在的类型会留在持久化布局里 → 下次启动它只剩一个占位(从前更糟:
+   *  整份布局被丢弃回默认)。清场必须以 api.panels 为准,不能按位置手写枚举。
    *  force = 视图要注销了,固定 View 也一并关掉;不传(插件自己的 ctx.closeView)则留下区内最后一个固定的。 */
   closeViewsOfType(type: string, force?: boolean): void
   /** 把该类型的全部实例**原地**换成另一个视图(2026-10-02,插件 `ctx.replaceView` 的引擎半身;Coding 进出项目
@@ -1492,6 +1492,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       // 侧栏 panel 的 component 就是视图名,Dockview 的表里没有它就当场抛
       // (「Only React.memo… are accepted as components」,一次未捕获异常打断整次展开)。
       // 在**使用点**过滤而不是在 applyNamed/存档时剔除:stash 原样留在布局里,插件开回来即原样复活。
+      // ponytail: 插件没回来时展开再收起,这些 unknown 条目就随这一轮丢了(展开只开认得的);要保住得让 stash 与活 panel 并存,
+      //   等真有人报再做。(侧栏组件表现在有兜底,开出来也不会抛了,只是不该替用户把死视图摆出来。)
       const known = (v: Stashed): boolean => !!getView(v.type)
       const live = get().stash[side].filter(known)
       const defaults = get().sidebarDefaults[side].filter(known)
@@ -1600,9 +1602,9 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
 }))
 
 /** 启动时尝试恢复上次布局(给 WorkspaceHost.onReady 用)。成功返回 true。 */
-/** 布局引用的所有视图当前是否都已注册。Tangu Web 无 window.amadeus → amadeus-* 未注册;
- *  若旧布局引用了它们,dockview.fromJSON 会异步挂载未知组件、在其 effect 里 deref undefined 崩溃
- *  (越过下面的 try/catch)。故先校验:有未注册视图即丢弃整份布局 → 回退默认布局。 */
+/** 布局引用的所有视图当前是否都已注册。没注册的组件名今天由 WorkspaceHost 的兜底(withComponentFallback)画占位,
+ *  不再崩;这里留着给「要不要再等等插件」的判断用:归属不明 / 别的 Space 的布局还原(见 restoreLayout)、
+ *  namedLayoutRestorable、savedLayoutRestorable。 */
 function layoutViewsAllRegistered(dockview: unknown): boolean {
   const panels = (dockview as { panels?: Record<string, { params?: { __type?: string } }> } | null)?.panels
   if (!panels) return true
@@ -1699,8 +1701,15 @@ function restoreLayout(api: DockviewApi): boolean {
   const layout = loadLayout()
   if (!layout) return false
   migrateLayoutBlob(layout) // 必须先迁移再校验:退役视图(sessions 等)已无注册,迁移前校验会误丢整份布局
-  if (!layoutViewsAllRegistered(layout.dockview)) return false
-  const known = (v: PersistedPanel): boolean => !!getView(v.type) // 收起态 stash 也剔除未注册视图,防展开时重开死视图
+  // 布局归当前 Space(信封里记的归属 = 画像键,onReady 之前已按活动 Space 设好)时,里面个别视图没注册
+  // (插件还没就位 / 已关掉)不再让整份落空:落空 = 屏上换成默认布局,第一次保存就盖掉布局键,
+  // 下一次切 Space 再把默认布局存进本 Space 自己的槽 —— 用户的布局就这样丢了。那些 panel 交给
+  // WorkspaceHost 的兜底画占位、注册上来就地复活;stash 里的原样留着(展开侧栏时在使用点过滤)。
+  // 归属不明(老存档)或是别的 Space(它整个还没注册,如插件 Space 晚到、人被停在回落 Space 上)照旧落空:
+  // 那条路有 adoptSpaceLayoutCold 的归档 + settleAsyncStartupSpace 的补还原兜着,屏上也不该摆别人 Space 的占位。
+  const ownedHere = !!layout.space && layout.space === useWorkspace.getState().sideProfileKey
+  if (!ownedHere && !layoutViewsAllRegistered(layout.dockview)) return false
+  const known = (v: PersistedPanel): boolean => ownedHere || !!getView(v.type) // 别人的布局:收起态 stash 也剔除未注册视图
   try {
     selfTitled.clear()
     rightKey = layout.sidebars.right.rule ?? null // 同 applyLayout
