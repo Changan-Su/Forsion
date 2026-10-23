@@ -1,15 +1,14 @@
 /** 新建草稿 → 日历列的值。纯函数(无 store / DOM),CalendarView 与右栏草稿面板共用。 */
 import type { CalDraft } from '../../amadeus/store/calendarNavStore'
-import { addMinutes, fmtStamp, toLocalDate } from './dateUtils'
+import { atMinute, fmtStamp } from './dateUtils'
 
 /** 单击新建的默认时长(分钟)。 */
 export const DRAFT_MINUTES = 60
 
 export function draftValue(d: CalDraft): string {
   if (d.startMin === null) return d.endDay !== d.day ? `${d.day}/${d.endDay}` : d.day
-  const base = toLocalDate(d.day)
-  if (d.hasEnd === false) return fmtStamp(addMinutes(base, d.startMin), false)
-  return `${fmtStamp(addMinutes(base, d.startMin), false)}/${fmtStamp(addMinutes(base, d.endMin), false)}`
+  if (d.hasEnd === false) return fmtStamp(atMinute(d.day, d.startMin), false)
+  return `${fmtStamp(atMinute(d.day, d.startMin), false)}/${fmtStamp(atMinute(d.day, d.endMin), false)}`
 }
 
 /** 从按下点 a 拖到 b(都是吸附后的分钟,同一天):起止按先后排好,至少 15 分钟,不出当天。

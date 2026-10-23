@@ -78,6 +78,7 @@ import {
   startOfDay,
   startOfWeek,
   toLocalDate,
+  atMinute,
   useWeekStart,
   useWeekStartPref,
   type WeekStartPref,
@@ -370,7 +371,7 @@ export function CalendarView({ leafId }: { leafId?: string } = {}) {
     const nav = useCalendarNav.getState()
     nav.setSelection(null)
     setCard(null)
-    pasteAt.current = addMinutes(toLocalDate(g.day), g.startMin ?? 0)
+    pasteAt.current = atMinute(g.day, g.startMin ?? 0)
     nav.setDraft({ ...g, scope: calendarScope(), title: '', dbPath: clip && members.some((m) => m.db.path === clip.event.db.path) ? clip.event.db.path : null })
   }
   // 草稿提交 / 取消挂进 store,右栏草稿面板的按钮和格子里的输入框走同一份。
@@ -446,7 +447,7 @@ export function CalendarView({ leafId }: { leafId?: string } = {}) {
         const draft = useCalendarNav.getState().draft
         if (draft?.title.trim() && !window.confirm(t('calside.discard'))) break
         const epoch = interactionEpoch.current, scope = calendarScope()
-        const date = pasteAt.current ?? (draft ? addMinutes(toLocalDate(draft.day), draft.startMin ?? 0) : undefined)
+        const date = pasteAt.current ?? (draft ? atMinute(draft.day, draft.startMin ?? 0) : undefined)
         void pasteCalendarEvent(date ? undefined : sel?.db, date).then((result) => {
           if (!result || epoch !== interactionEpoch.current || calendarScope() !== scope || useCalendarNav.getState().draft !== draft) return
           useCalendarNav.getState().setDraft(null)
@@ -639,7 +640,7 @@ export function CalendarView({ leafId }: { leafId?: string } = {}) {
           e.preventDefault(); e.stopPropagation()
           dismiss()
           const mins = day.classList.contains('amx-cal-daycol2') ? Math.max(0, Math.min(1425, snap15((e.clientY - day.getBoundingClientRect().top) / (zoomOf(day) || 1) / hourPx * 60))) : 0
-          pasteAt.current = addMinutes(toLocalDate(day.dataset.date), mins)
+          pasteAt.current = atMinute(day.dataset.date, mins)
           setMenu({ x: e.clientX, y: e.clientY })
         }
       }}>
