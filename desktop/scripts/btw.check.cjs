@@ -24,7 +24,7 @@ const SESSIONS = [
 const MESSAGES = [
   // 引用磁贴跳回原文的来源(u0 的第二段引用出自这里;第一段哪都没有 → 点了看全文)
   { id: 'a00', role: 'model', content: '先记一笔:第二段引用\n还有第二行,后面会用到。', timestamp: now - 800 },
-  { id: 'u0', role: 'user', content: '> 第一段引用\n\n先看这段\n\n> 第二段引用\n> 还有第二行\n\n这两段是什么关系?', timestamp: now - 700 },
+  { id: 'u0', role: 'user', content: '> 第一段引用\n\n↳ 先看这段\n\n> 第二段引用\n> 还有第二行\n\n这两段是什么关系?', timestamp: now - 700 },
   { id: 'a0', role: 'model', content: '它们说的是同一件事。', timestamp: now - 600 },
   { id: 'u1', role: 'user', content: '记住:项目代号是 AZURE-FALCON。', timestamp: now - 500 },
   { id: 'a1', role: 'model', content: '好的,代号 AZURE-FALCON 已记下。接下来重构解析器的词法阶段。', timestamp: now - 400 },

@@ -92,7 +92,7 @@ export function QuotePreview({ text, note, onNote, onClose }: {
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       // 捕获阶段吞掉 Esc:不然同一下会接着关掉身后的旁聊面板 / 侧栏(useEscape 不拦冒泡)
-      if (e.key === 'Escape') { e.stopPropagation(); e.preventDefault(); onClose(); return }
+      if (e.key === 'Escape') { if (e.isComposing) return; e.stopPropagation(); e.preventDefault(); onClose(); return }
       if (e.key !== 'Tab' || !box.current) return
       // Tab 只在窗里转:身后被遮住的控件别够得着
       const items = Array.from(box.current.querySelectorAll<HTMLElement>('button, a[href], textarea, [tabindex]:not([tabindex="-1"])'))
@@ -135,7 +135,7 @@ export function ReplyPopover({ text, rect, onAdd, onClose }: {
   const [note, setNote] = useState('')
   const box = useRef<HTMLDivElement | null>(null)
   useEffect(() => {
-    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') { e.stopPropagation(); e.preventDefault(); onClose() } }
+    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape' && !e.isComposing) { e.stopPropagation(); e.preventDefault(); onClose() } } // 输入法组字时的 Esc 是取消组字
     const onDown = (e: PointerEvent): void => { if (!box.current?.contains(e.target as Node)) onClose() }
     window.addEventListener('keydown', onKey, true)
     window.addEventListener('pointerdown', onDown, true)
