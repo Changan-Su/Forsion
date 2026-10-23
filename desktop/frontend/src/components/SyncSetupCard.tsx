@@ -5,7 +5,8 @@
  * 点了开始之后第一次同步时主窗底部一条进度,传完自己收走。只在桌面主窗、引导走完之后;手机 / 网页没有本地库远程同步。
  */
 import { useEffect, useState, useSyncExternalStore } from 'react'
-import { Bot, Cloud, NotebookPen, Puzzle, RefreshCw } from 'lucide-react'
+import { Bot, NotebookPen, Puzzle, RefreshCw } from 'lucide-react'
+import { PenzorIcon } from '../amadeus/components/icons'
 import { setActiveSpace, useSpaceStore } from '@lcl/engine'
 import { registerMessages, useI18n } from '../i18n'
 import { windowKind } from '../windowKind'
@@ -116,7 +117,7 @@ export function SyncSetupHost(): React.JSX.Element | null {
       {turn && (
         <div className="u-backdrop sync-setup-backdrop">
           <div className="modal modal-sm sync-setup" role="dialog" aria-modal="true" aria-label={t('syncSetup.title')}>
-            <div className="modal-head"><Cloud size={16} /><span className="sync-setup-title">{t('syncSetup.title')}</span></div>
+            <div className="modal-head"><PenzorIcon width={16} height={16} /><span className="sync-setup-title">{t('syncSetup.title')}</span></div>
             <div className="sync-setup-body">
               <p className="sync-setup-lead">{s.contentRules?t('syncSetup.scopeLead'):t('syncSetup.lead', { name })}</p>
               <p className="sync-setup-hint">{s.storage?.complete && s.storage.usedBytes != null ? t(s.storage.enforcement ? 'syncSetup.storageEnforced' : 'syncSetup.storage', { used: fmtBytes(s.storage.usedBytes), max: fmtBytes(s.storage.limitBytes) }) : t('syncSetup.storageUnknown')}</p>
