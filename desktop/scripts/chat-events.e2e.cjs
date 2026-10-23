@@ -888,6 +888,49 @@ async function main() {
     check('P5 ↑ 召回拿到的是上一句真话,不是 <approval_update>', recalled === '先改 CHANGELOG 再发布', JSON.stringify(recalled))
     await win.screenshot({ path: process.env.PARKED_SHOT || '/tmp/approval-parked.png' }).catch(() => {})
 
+    // ── 场景 PQ(10-23 待确认卡片 B):挂起提问 —— 托盘 run 里 ask_user 不停下来:它那行有了占位结果也仍是「等你回复」(不是完成、
+    // 不是「等你批准」),agent 接着出字;答案到了以一行 <inquiry_update> 进对话(不是用户气泡、不进 ↑ 历史)。
+    // 引擎那半在 tangu-agent test/agentLoopParkedInquiries.test.ts + live --only parkedask;这里钉渲染层的接法(剧本扮演答完之后的事件)。
+    const QUPDATE = '<inquiry_update>\nQuestions you asked with ask_user now have an answer:\n\n' +
+      "[answered] ask_user (call qk1) — 冲突副本放哪?\nUser answered: .conflicts/\nThat call's result above now holds this.\n</inquiry_update>"
+    stub.script([
+      { type: 'token', payload: { delta: '冲突副本放哪要你定,不依赖它的我先做。' } },
+      { type: 'tool_call', payload: { id: 'qk1', name: 'ask_user', arguments: JSON.stringify({ question: '冲突副本放哪?', options: ['.conflicts/', '原文件旁边'] }) } },
+      { type: 'tool_result', payload: { id: 'qk1', name: 'ask_user', parked: true, result: "⏸ Waiting for the user's answer: 冲突副本放哪?" } },
+      { type: 'inquiry_request', payload: { inquiryId: 'qp1', question: '冲突副本放哪?', options: ['.conflicts/', '原文件旁边'], allowFreeText: true } },
+      { type: 'tool_call', payload: { id: 'qk2', name: 'edit_file', arguments: JSON.stringify({ path: 'reconcile.ts', old_string: 'a', new_string: 'b' }) } },
+      { type: 'tool_result', payload: { id: 'qk2', name: 'edit_file', result: 'ok' } },
+      { type: 'token', payload: { delta: '对账那半已经改好。' } },
+      // ↓ 用户答了之后引擎会发的那几条(剧本直接推进)
+      { type: 'inquiry_result', payload: { inquiryId: 'qp1', answer: '.conflicts/' }, delay: 3000 },
+      { type: 'tool_result', payload: { id: 'qk1', name: 'ask_user', result: 'User answered: .conflicts/' } },
+      { type: 'turn_boundary', payload: { finalizedAssistantId: '(unknown → 回落当前段)', finalizedContent: '冲突副本放哪要你定,不依赖它的我先做。对账那半已经改好。', userMessages: [{ id: 'iu1', content: QUPDATE }], newAssistantId: 'qk-next' } },
+      { type: 'token', payload: { delta: '副本收进 .conflicts/ 了。' } },
+      { type: 'done', payload: { content: '副本收进 .conflicts/ 了。' } },
+    ])
+    await send(win, '冲突副本那件也做了')
+    const qmid = await win.evaluate(() => ({
+      waitingYou: !!document.querySelector('.t2-stream .tool-group [data-waiting-you]'),
+      parkedApprovalText: document.body.innerText.includes('等你批准。Agent 先做别的'),
+      deckAsk: document.querySelector('[data-approval-tray] .t2c-apv-body')?.getAttribute('data-tray-kind') || null,
+      kept: document.body.innerText.includes('对账那半已经改好'),
+    }))
+    check('PQ1 挂起的提问:ask_user 那行仍是「等你回复」(有占位结果也不算完成),提问在托盘里;agent 接着出字',
+      qmid.waitingYou && !qmid.parkedApprovalText && qmid.deckAsk === 'inquiry' && qmid.kept, JSON.stringify(qmid))
+    await win.waitForTimeout(4200)
+    const qfin = await win.evaluate(() => ({
+      tray: document.querySelectorAll('[data-approval-tray]').length,
+      update: document.querySelector('[data-inquiry-update]')?.textContent || '',
+      bubble: [...document.querySelectorAll('.t2-user')].some((b) => (b.textContent || '').includes('inquiry_update')),
+    }))
+    check('PQ2 答案到了是一行通知(你答了「冲突副本放哪?」.conflicts/),不是用户气泡;托盘清空', /你答了「冲突副本放哪\?」/.test(qfin.update) && /\.conflicts\//.test(qfin.update) && !qfin.bubble && qfin.tray === 0, JSON.stringify(qfin))
+    await inputTa.click().catch(() => {})
+    await inputTa.fill('').catch(() => {})
+    await win.keyboard.press('ArrowUp')
+    await win.waitForTimeout(300)
+    const recalledQ = await inputTa.inputValue().catch(() => '')
+    check('PQ3 ↑ 召回拿到的是上一句真话,不是 <inquiry_update>', recalledQ === '冲突副本那件也做了', JSON.stringify(recalledQ))
+
     // ── 场景 K3(P1 · K3 审批送达):① 会话列表「等你处理」点来自引擎待批索引(没订阅的会话也亮);
     //    ② 远程会话的审批卡写明来源设备,另一端(这里由剧本扮演)先答 → 卡离开托盘。
     //    「在 Pixel 9 上」这句收起后缀只在渲染已收起卡片的地方可见(托盘在兑现那一刻就撤卡),由 ApprovalCard.remote.test 钉。

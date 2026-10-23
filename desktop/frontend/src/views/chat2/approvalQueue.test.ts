@@ -41,3 +41,18 @@ describe('pendingPromptsOf', () => {
     ])
   })
 })
+
+describe('parseInquiryUpdate(<inquiry_update>,10-23 挂起询问)', () => {
+  it('每个问题一行:答了的取出答案,没答的标出来', async () => {
+    const { parseInquiryUpdate } = await import('./approvalQueue')
+    const text = '<inquiry_update>\nQuestions you asked with ask_user now have an answer:\n\n' +
+      '[answered] ask_user (call c-1) — Where should conflict copies go?\nUser answered: .conflicts/\nThat call\'s result above now holds this.\n\n' +
+      '[no answer] ask_user (call c-2) — Which one?\n[No answer] The chat channel was stopped.\nThat call\'s result above now holds this.\n\n' +
+      '[answered] ask_user (call c-3) — Where?\nUser answered: Use staging.\nDo not touch production.\n(That call is no longer in your context window.)\n</inquiry_update>'
+    expect(parseInquiryUpdate(text)).toEqual([
+      { answered: true, callId: 'c-1', question: 'Where should conflict copies go?', answer: '.conflicts/' },
+      { answered: false, callId: 'c-2', question: 'Which one?', answer: '[No answer] The chat channel was stopped.' },
+      { answered: true, callId: 'c-3', question: 'Where?', answer: 'Use staging.\nDo not touch production.' },
+    ])
+  })
+})

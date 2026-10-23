@@ -19,6 +19,7 @@ import '../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 registerMessages({
   'tool.parked.waiting': { zh: '已挂起，等你批准。Agent 先做别的，拍板后结果会补在这里。', en: 'Parked until you approve it. The agent carries on meanwhile; the result lands here once you decide.' },
   'tool.parked.past': { zh: '当时挂起等你批准，结局见后面的审批结果。', en: 'This call was parked for your approval; see the approval result further down.' },
+  'tool.parked.askPast': { zh: '当时挂起等你回答，Agent 没停下来；答案见后面那一行。', en: 'This question was parked while the agent kept going; see your answer further down.' },
   // 不写「在输入框上方」:紧挨着的指路行 / 计划卡 / 团队 work 行已经说了在哪答,这里再写一遍是重复
   'tool.waitingYou': { zh: '等你回复', en: 'Waiting for your reply' },
   'tool.verb.readComputerHistory': { zh: '读取电脑历史', en: 'Read computer history' },
@@ -198,7 +199,7 @@ const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc; running: boolean; waiting: 
             </>
           ) : ev.arguments ? (<><div className="label">{t('tool.argsLabel')}</div>{fmtArgs(ev.arguments)}</>) : null}
           {/* 挂起的占位结果是写给模型的英文说明,对人换成一句本地化的状态 */}
-          {ev.parked ? (<><div className="label">{t('tool.resultLabel')}</div>{t(waiting ? 'tool.parked.waiting' : 'tool.parked.past')}</>)
+          {ev.parked ? (<><div className="label">{t('tool.resultLabel')}</div>{t(ASKS_YOU.has(ev.name) ? (asking ? 'tool.waitingYou' : 'tool.parked.askPast') : waiting ? 'tool.parked.waiting' : 'tool.parked.past')}</>)
             : ev.result !== undefined && (<><div className="label">{t('tool.resultLabel')}</div>{toolResultText(ev, t)}</>)}
         </div>
       </AnimatedCollapse>
@@ -243,12 +244,15 @@ export const ToolGroup: React.FC<{
   const summary = [...(thinking ? [] : [thinkLabel]), ...order.filter((k) => counts[k] > 0).map((k) => t(SUM[k], { n: counts[k] }))].filter(Boolean).join(' · ')
   const shortSummary = [...(thinking ? [] : [thinkLabel]), groupedEvents.length ? t('tool.sumN', { n: groupedEvents.length }) : ''].filter(Boolean).join(' · ') || thinkLabel
 
-  const asksYou = (e: ToolEvent): boolean => !!awaitingAnswer && !!running && !e.done && ASKS_YOU.has(e.name)
+  // 挂起的 ask_user(托盘 run,10-23)已经有占位结果(done),仍在等你答 —— 它那一段可能已经收尾(切段),不看 running
+  const asksYou = (e: ToolEvent): boolean => !!awaitingAnswer && ASKS_YOU.has(e.name) && (!!e.parked || (!!running && !e.done))
   const allDone = groupedEvents.every((e) => e.done)
   const anyErr = groupedEvents.some((e) => e.isError)
   // 挂起的调用「还在等你」= 它那张审批仍 pending(审批与工具卡按 toolCallId 对上;重载后审批不在 → 只算「当时挂起」)
   const waitingIds = new Set((approvals || []).filter((a) => a.status === 'pending' && a.toolCallId).map((a) => a.toolCallId!))
   const anyParked = groupedEvents.some((e) => e.parked)
+  // 挂起的提问还在等你答:agent 在干别的(当前步骤照常写在头上),暂停图标标出「这组里有个问题等你」
+  const parkedAsk = groupedEvents.some((e) => e.parked && asksYou(e))
   // 运行中:展示第一个未完成的调用作为「当前」;都完成则无。思考中优先(它是这一行最新的动静)。
   const curIdx = running && !thinking ? groupedEvents.findIndex((e) => !e.done) : -1
   const curAsks = curIdx >= 0 && asksYou(groupedEvents[curIdx])
@@ -286,7 +290,9 @@ export const ToolGroup: React.FC<{
               </span>
             )}
             <span className="tool-group-status">
-              {anyParked ? <PauseCircle size={13} style={{ color: groupedEvents.some((e) => e.parked && waitingIds.has(e.id)) ? 'var(--accent-ink)' : 'var(--text-faint)' }} />
+              {anyParked ? (parkedAsk
+                ? <PauseCircle size={13} style={{ color: 'var(--accent-ink)' }} data-waiting-you="1" aria-label={t('tool.waitingYou')}><title>{t('tool.waitingYou')}</title></PauseCircle>
+                : <PauseCircle size={13} style={{ color: groupedEvents.some((e) => e.parked && waitingIds.has(e.id)) ? 'var(--accent-ink)' : 'var(--text-faint)' }} />)
                 : allDone && anyErr ? <XCircle size={13} style={{ color: 'var(--danger)' }} /> : null}
             </span>
           </button>

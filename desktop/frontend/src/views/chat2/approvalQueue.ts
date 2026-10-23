@@ -48,6 +48,16 @@ export function pendingPromptsOf(list: UiMessage[] | undefined): TrayItem[] {
 /** 挂起调用的结局回灌行(引擎 agentLoop.APPROVAL_UPDATE_OPEN 开头的 user 行):给模型看的,对人渲染成一行结局。 */
 export const APPROVAL_UPDATE_OPEN = '<approval_update>'
 
+/** 挂起询问的答案回灌行(引擎 agentLoop.INQUIRY_UPDATE_OPEN 开头的 user 行,10-23):对人渲染成一行「你答了…」。 */
+export const INQUIRY_UPDATE_OPEN = '<inquiry_update>'
+
+/** 按引擎写死的行头 `[answered|no answer] ask_user (call id) — 问题`,其后到收尾那一句之间是交给模型的结果
+ *  (`User answered: …` / 系统说明,答案可以有多行)。 */
+export function parseInquiryUpdate(text: string): Array<{ answered: boolean; callId: string; question: string; answer: string }> {
+  return [...text.matchAll(/^\[(answered|no answer)\] ask_user \(call ([^)]*)\) — (.*)\n([\s\S]*?)\n(?:That call's result above now holds this\.|\(That call is no longer in your context window\.\))$/gm)]
+    .map((m) => ({ answered: m[1] === 'answered', callId: m[2], question: m[3], answer: m[4].replace(/^User answered: /, '') }))
+}
+
 export interface ApprovalOutcome {
   status: 'approved' | 'rejected' | 'failed'
   name: string
