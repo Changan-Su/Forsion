@@ -1,0 +1,62 @@
+name: probe-image-viewer-windows
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/probe-image-viewer-windows.yml'
+      - 'desktop/scripts/chat-image-viewer.check.cjs'
+      - 'desktop/scripts/lib/image-viewer-caption.cjs'
+      - 'desktop/scripts/lib/launch-electron.cjs'
+      - 'desktop/scripts/lib/uiux-electron.cjs'
+      - 'desktop/frontend/src/components/ImageViewer.tsx'
+      - 'desktop/frontend/src/components/imageViewer.css'
+      - 'desktop/frontend/src/tabTitleBar.ts'
+      - 'desktop/electron/tabTitleBar.ts'
+
+permissions:
+  contents: read
+
+jobs:
+  image-viewer:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci --no-audit --no-fund
+      - run: npm run build
+      - name: Real Windows caption and viewer checks
+        env:
+          SHOTS: outputs/image-viewer-windows
+        run: npm run check:imageviewer
+      - name: Old caption overlap must fail
+        shell: pwsh
+        run: |
+          $output = & node scripts/chat-image-viewer.check.cjs --no-caption-gap 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          $output | Set-Content outputs/image-viewer-windows/negative-control.txt
+          Write-Host $output
+          if ($code -eq 0 -or $output -notmatch 'AssertionError.*normal: every viewer tool clears the native caption') {
+            throw 'Negative control must fail at the real caption overlap assertion'
+          }
+      - name: Old native drag interception must fail
+        shell: pwsh
+        run: |
+          $output = & node scripts/chat-image-viewer.check.cjs --no-viewer-client-region 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          $output | Set-Content outputs/image-viewer-windows/negative-drag-control.txt
+          Write-Host $output
+          if ($code -eq 0 -or $output -notmatch 'AssertionError.*normal: viewer buttons receive native client input') {
+            throw 'Negative control must fail at the native client hit assertion'
+          }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-image-viewer
+          path: desktop/outputs/image-viewer-windows/
