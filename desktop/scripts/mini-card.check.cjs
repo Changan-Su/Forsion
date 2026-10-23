@@ -209,6 +209,11 @@ async function main() {
     const shorter = await bounds()
     check('dragging the bottom edge shrinks the card in place', shorter.height === before.height - 200 && shorter.width === before.width && shorter.x === before.x && shorter.y === before.y, JSON.stringify(shorter))
     check('content follows the new size', await fills())
+    check('content scrollbar stays clear of the right resize grip', await mini.evaluate(() => {
+      const content = document.querySelector('.mini-card-main').getBoundingClientRect()
+      const grip = document.querySelector('.mini-card-edge[data-edge="e"]').getBoundingClientRect()
+      return content.right <= grip.left + 0.1
+    }))
     await mini.screenshot({ path: path.join(shots, 'todo-resized.png') })
     await mini.mouse.up(); await pause(100)
     // 松手后主进程要忘掉起手位置:此时再来一条不带起手的「拖动」,只能从当前光标重新起算(位移为零)
