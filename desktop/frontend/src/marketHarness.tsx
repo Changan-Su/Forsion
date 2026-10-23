@@ -1,3 +1,4 @@
+import './tangu/store/standalone' // 不走 installEngine:自己装 Tangu 的 store 半身(界面热更新 3c)
 import './marketHarnessBridge'
 import { createRoot } from 'react-dom/client'
 import './styles/base.css'

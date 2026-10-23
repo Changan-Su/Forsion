@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { registerView } from '@lcl/engine/viewRegistry'
 import { useApp } from './appStore'
+import '../tangu/store/standalone' // 测试不走 activateTangu:自己装 Tangu 的 store 半身(界面热更新 3c)
 
 // 插件自己摆上 Desk 的视图(computer-use 第一次动手时)不带 name:卡片标题要用注册的视图标题,不能露出类型名。
 describe('deskPresent view title', () => {

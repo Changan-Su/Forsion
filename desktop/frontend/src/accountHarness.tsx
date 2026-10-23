@@ -1,4 +1,5 @@
 /** Isolated account UI fixture: no credentials, files, or network mutations. */
+import './tangu/store/standalone' // 不走 installEngine:自己装 Tangu 的 store 半身(界面热更新 3c)
 import React, { useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { AccountCard } from './components/AccountCard'

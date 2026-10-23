@@ -4,6 +4,7 @@
  * ?remote(设备页:引擎对远程来源只回开关摘要 + remote:true,P1-K10b —— 只读说明 + 两张开关卡)。
  * 跑法:node scripts/e2e-editor.cjs --check=bgquota-settings --shot
  */
+import './tangu/store/standalone' // 不走 installEngine:自己装 Tangu 的 store 半身(界面热更新 3c)
 import { createRoot } from 'react-dom/client'
 import { LocaleProvider, setLocaleGlobal } from './i18n'
 import './i18n.generated'

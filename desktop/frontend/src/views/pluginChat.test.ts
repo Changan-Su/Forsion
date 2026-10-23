@@ -32,6 +32,7 @@ setTanguChatViews({ Chat: (props) => { api.seen.push(props as unknown as (typeof
 const { usePluginStore } = await import('../amadeus/plugins/pluginStore')
 const { usePageStore } = await import('../amadeus/store/pageStore')
 const { useApp } = await import('../stores/appStore')
+await import('../tangu/store/standalone')
 const { usePluginChat } = await import('../stores/pluginChatStore')
 type Ctx = import('../amadeus/plugins/types').PluginContext
 

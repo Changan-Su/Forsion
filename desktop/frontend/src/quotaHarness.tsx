@@ -1,4 +1,5 @@
 /** Dev-only visual harness for the real quota advisory component and Chatbox surfaces. */
+import './tangu/store/standalone' // 不走 installEngine:自己装 Tangu 的 store 半身(界面热更新 3c)
 import { useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { ArrowUp, Plus } from 'lucide-react'

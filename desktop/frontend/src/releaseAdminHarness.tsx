@@ -1,5 +1,6 @@
 /** Dev-only acceptance harness: real Website panel, native Workspace/Extend View and Amadeus editor.
  * Paired with server/scripts/preview-releases.ts; all SQL/media state stays in the local fixture. */
+import './tangu/store/standalone' // 不走 installEngine:自己装 Tangu 的 store 半身(界面热更新 3c)
 import './harnessBridge'
 import { useEffect, useRef } from 'react'
 import { createRoot } from 'react-dom/client'

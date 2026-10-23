@@ -10,6 +10,7 @@
  * `capabilities` 白名单那道双闸)。
  */
 
+import type { TanguSliceModule } from '../../stores/appStore'
 import { createContext, type ComponentType } from 'react'
 import type { CtxItem } from '../../components/RightPanel'
 import type { ViewProps } from '@lcl/engine'
@@ -292,6 +293,8 @@ export interface TanguAgentSelf {
 /** 宿主交给 Tangu 入口 `activateTangu(host)` 的东西(界面热更新 3b):只放入口 import 不到的宿主私有件,
  *  其余宿主模块照共享模块表直接 import。**宿主内部接缝,不进 `ctx.tangu`**。 */
 export interface TanguHost {
+  /** 把 Tangu 的 store 半身装进 useApp(宿主 stores/appStore.ts 的 installTanguSlice;界面热更新 3c)。入口第一件事就做。 */
+  installSlice(mod: TanguSliceModule): void
   /** 装 ctx.tangu 探针(宿主 tanguProbe.ts)。`tangu` = Tangu 自己交进去的那几块,Tangu 没激活时为空。 */
   installProbe(tangu: Pick<TanguProbe, 'askInChat'>): void
 }

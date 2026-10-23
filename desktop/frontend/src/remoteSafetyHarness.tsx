@@ -5,6 +5,7 @@
  * ?state=idle(缺省:未锁、没有远程任务)| running(三条远程任务,一条等批准)| locked(已锁定 + 写盘失败 + 待补发)| hotkeyfail(热键被占用)
  * 截图:scripts/remote-safety-settings.check.cjs(DESIGN §8:观感改动交付前看真截图)。
  */
+import './tangu/store/standalone' // 不走 installEngine:自己装 Tangu 的 store 半身(界面热更新 3c)
 import { createRoot } from 'react-dom/client'
 import { LocaleProvider, setLocaleGlobal } from './i18n'
 import './i18n.generated'
