@@ -25,9 +25,11 @@ import { ToolCardDeskContext, toolCardDeskFor } from '../components/PluginToolCa
 import { ErrorBoundary } from '../components/ErrorBoundary'
 import { EditorialMessage, type MessageHandlers } from './chat2/EditorialMessage'
 import { ApprovalTray, DeckPill, type DeckItem } from './chat2/ApprovalTray'
-import { pendingTaskCardsOf, useTaskHandledVersion } from './chat2/pendingTasks'
+import { pendingCreationCardsOf, pendingHumanCardsOf, pendingTaskCardsOf, tasksOf, useTaskHandledVersion } from './chat2/pendingTasks'
+import { useHumanAckVersion } from '../components/HumanUpdateCard'
+import { creationCardsSupported, useSessionCreation } from './chat2/CreationCards'
 import { TodoList } from '../components/InquiryCard'
-import { MuseApprovalTray } from './chat2/MuseDm'
+import { useMusePendingApprovals, useMusePendingTodos } from './chat2/MuseDm'
 import { APPROVAL_UPDATE_OPEN, INQUIRY_UPDATE_OPEN, pendingPromptsOf } from './chat2/approvalQueue'
 import { CHILD_UPDATE_OPEN, ChildFromLine } from './chat2/ChildSessions'
 import { RunStatsLine } from './chat2/RunStatsLine'
@@ -244,8 +246,15 @@ export function ChatView({ leaf, params }: ViewProps) {
   const running = s.running
   // 对话末尾的卡片堆(10-23 方案「待确认卡片」B):挡着 agent 的在前,还在等你选的任务卡垫底
   const taskHandledV = useTaskHandledVersion()
-  const pendingTasks = useMemo(() => (activeId ? pendingTaskCardsOf(activeMessages, activeId) : []), [activeMessages, activeId, taskHandledV])
-  const deckItems = useMemo<DeckItem[]>(() => [...pendingApprovals, ...pendingTasks], [pendingApprovals, pendingTasks])
+  // Muse 私聊里它提的待办:引擎确认还 pending 的才进卡片堆
+  const museTodoIds = useMemo(() => activeMessages.filter((m) => m.origin === 'proactive:todo').flatMap((m) => tasksOf(m).map((c) => c.todo || '')).filter(Boolean).join(','), [activeMessages])
+  const musePendingTodos = useMusePendingTodos(museTodoIds, taskHandledV)
+  const pendingTasks = useMemo(() => (activeId ? pendingTaskCardsOf(activeMessages, activeId, Date.now(), musePendingTodos) : []), [activeMessages, activeId, taskHandledV, musePendingTodos])
+  // 协作请求卡(Agent 改了协作说明)与作品卡也是交互卡片(10-23 用户定):没处理的进卡片堆,垫在任务卡后面
+  const humanAckV = useHumanAckVersion()
+  const pendingHuman = useMemo(() => (activeId ? pendingHumanCardsOf(activeMessages) : []), [activeMessages, activeId, humanAckV])
+  const sessionInCreation = useSessionCreation(activeId ?? undefined).inCreation
+  const pendingCreations = useMemo(() => (activeId && creationCardsSupported() && !sessionInCreation ? pendingCreationCardsOf(activeMessages, activeId) : []), [activeMessages, activeId, taskHandledV, sessionInCreation])
   // 对话末尾那一行任务清单:最新那一份 —— 会话还在跑,或它在最后一条回答上、还有没做完的;其余几份在各自回答里收成一行
   const tailTodo = useMemo(() => {
     let last = true
@@ -574,7 +583,15 @@ export function ChatView({ leaf, params }: ViewProps) {
     && !mvCfg.groupChat && !mvCfg.teamSlug && !mvCfg.teamMember && !mvCfg.soloAgentSlug && !mvCfg.soloEngineId && !mvCfg.engineId
   const [canvasPref, setCanvasPref] = useChatCanvasPref(treeRoot)
   const canvasOn = canvasAllowed && canvasPref.on
-  const museTray = mvCfg.soloAgentSlug === 'muse' && !params.childSurface ? <MuseApprovalTray key={activeId ?? ''} /> : null
+  // Muse 私聊:它后台排队的审批也进卡片堆(排在本会话的审批 / 提问之后、任务卡之前)
+  const museApprovals = useMusePendingApprovals(mvCfg.soloAgentSlug === 'muse' && !params.childSurface)
+  const deckItems = useMemo<DeckItem[]>(() => [
+    ...pendingApprovals,
+    ...museApprovals.map((info) => ({ kind: 'muse-approval' as const, id: `muse:${info.id}`, messageId: '', info })),
+    ...pendingTasks,
+    ...pendingHuman.map((h) => (h.agentName || !chatAgentName ? h : { ...h, agentName: chatAgentName })), // 同流里那张的署名
+    ...pendingCreations,
+  ], [pendingApprovals, museApprovals, pendingTasks, pendingHuman, pendingCreations, chatAgentName])
   const deck = deckItems.length ? (
     <ApprovalTray
       // 每个会话一份托盘状态(收起 / 展开项 / 已送出锁),别从上一个会话带过来
@@ -827,12 +844,7 @@ export function ChatView({ leaf, params }: ViewProps) {
         <Composer2
           sessionId={activeId}
           // 卡片堆在对话末尾时这里只放「↓ N 件等你」药丸(滚出视野才露);画布模式下卡片堆本身回到这里。
-          // Muse 私聊:它后台排队的审批也在这里批(10-18 方案 B;没有待批时托盘不画)
-          // Muse 后台排队的审批不在卡片堆里:卡片堆在流尾时它照样挂在这里(只有任务卡也不能把它挤掉,Codex 10-23)
-          approvalTray={canvasOn ? (deck ?? museTray ?? undefined) : (deck || museTray) ? <>
-            {deck && <DeckPill key={activeId ?? ''} rootRef={chatScrollRef} count={deckItems.length} todos={tailTodo?.todos} onClick={() => scrollToBottom(true)} />}
-            {museTray}
-          </> : undefined}
+          approvalTray={canvasOn ? (deck ?? undefined) : deck ? <DeckPill key={activeId ?? ''} rootRef={chatScrollRef} count={deckItems.length} todos={tailTodo?.todos} onClick={() => scrollToBottom(true)} /> : undefined}
           advisory={!params.childSurface ? (
             // P1-K6:焦点在「我的电脑」且连不上时,顶上这一段换成连接态提示(同一段语汇,两条不叠放)。
             // ⚠️ 本文件的状态条 / disabled 归 K7(INTEGRATION §2.2,合入顺序 K6-S4 → K7):K7 的 RemoteSessionStrip(§3.8)落地时

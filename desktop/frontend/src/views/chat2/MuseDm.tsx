@@ -2,12 +2,14 @@
  * Muse 私聊里它自己开口的那几样(2026-10-18,方案 docs/ToBeImproved/Muse私聊与收件箱分工方案_2026-10-17,用户选 B):
  *  - 消息头上一行「主动发来 · 时间」(引擎 chat_messages.origin = proactive*,只有引擎写得出这一列,模型冒充不了);
  *  - 它提的待办(proactive:todo)按收件箱那张 Muse 待办卡画:主按钮「交给 Muse 执行」,按 id 现读真状态;
- *  - 它后台排队的审批(proactive:approval):流里只留一行 —— 待批时指向输入框上方的托盘,批完是回执「你在 10:38 批准了 · …」;
- *    托盘(MuseApprovalTray)列出 Muse 所有待批,卡片复用收件箱的 ApprovalCard(按 id 读 pending_approvals、直接调引擎裁决)。
+ *  - 它后台排队的审批(proactive:approval):流里只留一行 —— 待批时指向对话末尾的卡片堆,批完是回执「你在 10:38 批准了 · …」;
+ *    卡片堆里收 Muse 所有待批(useMusePendingApprovals),卡片复用收件箱的 ApprovalCard(按 id 读 pending_approvals、直接调引擎裁决)。
+ *  10-23 起(用户:「审批、任务卡这种要用户交互的卡片放在最新的末尾」)待办与后台审批都进对话末尾的卡片堆,
+ *  不再在输入框上方另挂一个 Muse 托盘;流里原处各留一行(MuseTodoTraces / MuseApprovalLine)。
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { create } from 'zustand'
-import { BellDot, ChevronDown, CircleCheck, CircleX, ShieldQuestion } from 'lucide-react'
+import { BellDot, CircleCheck, CircleX, ShieldQuestion } from 'lucide-react'
 import { registerMessages, useI18n } from '../../i18n'
 import { useApp } from '../../stores/appStore'
 import { useAttention } from '../../stores/attentionStore'
@@ -16,19 +18,18 @@ import { homeTarget } from '../../services/engine/targets'
 import { formatMessageTime } from '../../format/time'
 import type { PendingApprovalInfo, UiMessage } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { ApprovalCard } from '../inbox/InboxBody'
-import { TaskCards, useMuseTodoStatus, type TaskLanding } from './TaskCards'
+import { TaskCards, TaskTraces, fetchMuseTodoStatus, useMuseTodoSeen, useMuseTodoStatus, type TaskLanding } from './TaskCards'
 import type { TaskCard } from './suggest'
 
 registerMessages({
   'museDm.from': { zh: '主动发来 · {time}', en: 'Reached out · {time}' },
-  'museDm.apvPending': { zh: '等你批准 · 在输入框上方', en: 'Waiting for your approval · above the input box' },
+  'museDm.apvPending': { zh: '等你批准 · 在对话最下面', en: 'Waiting for your approval · at the end of the chat' },
   'museDm.apvExecuting': { zh: '已批准，执行中…', en: 'Approved, running…' },
   'museDm.apvApproved': { zh: '你在 {time} 批准了', en: 'You approved at {time}' },
   'museDm.apvApprovedBy': { zh: '{time} 已批准', en: 'Approved at {time}' },
   'museDm.apvRejected': { zh: '你在 {time} 拒绝了', en: 'You rejected at {time}' },
   'museDm.apvWithdrawn': { zh: '{time} 已撤回', en: 'Withdrawn at {time}' },
   'museDm.apvFailed': { zh: '你在 {time} 批准了，但执行失败', en: 'You approved at {time}, but it failed' },
-  'museDm.tray': { zh: 'Muse 等你批准 · {n}', en: 'Muse is waiting for your approval · {n}' },
 })
 
 /** 托盘里批完 → 流里那几行按 id 重读(同一会话的两处视图不共享组件状态)。 */
@@ -107,51 +108,49 @@ export function MuseApprovalLine({ id }: { id: string }) {
   )
 }
 
-/** 输入框上方的托盘:Muse 后台所有待批(不止这条私聊里看得到的那几条)。最早那张展开,其余一行一条,点哪行展开哪行。 */
-export function MuseApprovalTray() {
-  const { t } = useI18n()
+/** 卡片堆里的一张 Muse 后台审批(不挂在本会话哪条消息上:Muse 每个周期一个新会话,批的是它在后台排队的那几步)。 */
+export interface MuseApprovalItem { kind: 'muse-approval'; id: string; messageId: string; info: PendingApprovalInfo }
+
+const NO_APPROVALS: PendingApprovalInfo[] = []
+
+/** Muse 后台所有待批(不止这条私聊里看得到的那几条),最早的在前。on = 是 Muse 私聊。 */
+export function useMusePendingApprovals(on: boolean): PendingApprovalInfo[] {
   const cfg = useApp((s) => s.cfg)
   const decided = useDecided((s) => s.n)
-  // attention 轮询(20s)报 Muse 私聊在等你 → 托盘跟着重拉;批完的那一下由 bump 触发
+  // attention 轮询(20s)报 Muse 私聊在等你 → 跟着重拉;批完的那一下由 bump 触发
   const waitSig = useAttention((s) => Object.values(s.dm).filter((d) => d.awaiting).length)
-  const [items, setItems] = useState<PendingApprovalInfo[]>([])
-  const [openId, setOpenId] = useState<string | null>(null)
-  const [collapsed, setCollapsed] = useState(false)
+  const [items, setItems] = useState<PendingApprovalInfo[]>(NO_APPROVALS)
   useEffect(() => {
+    if (!on) return
     let alive = true
     listMuseApprovals(homeTarget(), 'pending')
       .then((list) => { if (alive) setItems(list.filter((a) => a.agent_slug === 'muse').sort((a, b) => a.created_at.localeCompare(b.created_at))) })
       .catch(() => {})
     return () => { alive = false }
-  }, [cfg, decided, waitSig])
-  const cur = items.find((a) => a.id === openId) ?? items[0]
-  if (!cur) return null
-  const settled = (): void => {
-    useDecided.getState().bump()
-    void useAttention.getState().refresh('home')
-  }
-  return (
-    <div className="t2c-apv" role="region" aria-label={t('approval.tray.label')} data-approval-tray={items.length} data-muse-tray="">
-      <button type="button" className="t2c-apv-head" aria-expanded={!collapsed} onClick={() => setCollapsed((c) => !c)}>
-        <ShieldQuestion size={13} className="t2c-apv-ic" />
-        <span className="t2c-apv-title">{t('museDm.tray', { n: items.length })}</span>
-        <ChevronDown size={13} className={`t2c-apv-chev${collapsed ? ' is-collapsed' : ''}`} />
-      </button>
-      {!collapsed && items.length > 1 && (
-        <div className="t2c-apv-rest">
-          {items.filter((a) => a !== cur).map((a) => (
-            <button type="button" key={a.id} className="t2c-apv-row" title={a.preview} onClick={() => setOpenId(a.id)}>
-              <span className="t2c-apv-row-name">{a.tool}</span>
-              <span className="t2c-apv-row-preview">{a.preview}</span>
-            </button>
-          ))}
-        </div>
-      )}
-      {!collapsed && (
-        <div className="t2c-apv-body">
-          <ApprovalCard key={cur.id} id={cur.id} onSettled={settled} />
-        </div>
-      )}
-    </div>
-  )
+  }, [cfg, decided, waitSig, on])
+  return on ? items : NO_APPROVALS
+}
+
+/** 卡片堆里批完一张:流里那几行按 id 重读、待批重拉、角标刷新。 */
+export function museApprovalSettled(): void {
+  useDecided.getState().bump()
+  void useAttention.getState().refresh('home')
+}
+
+/** 引擎那边还 pending 的 Muse 待办 id(按 id 读,和流里那行 / 卡片堆里那张共用 useMuseTodoSeen):ids = 这条私聊里出现过的待办 id。
+ *  还在读 / 读失败的先不进卡片堆 —— 流里那行照样显示状态,读失败给重试,重试读到 pending 就进来;
+ *  在别处处理掉的,换到这张卡时它自己重读一次(MuseTodoCards),读到不是 pending 就离开。 */
+export function useMusePendingTodos(ids: string, sig: number): ReadonlySet<string> {
+  const cfg = useApp((s) => s.cfg)
+  const seen = useMuseTodoSeen()
+  useEffect(() => {
+    if (ids) for (const id of ids.split(',')) void fetchMuseTodoStatus(id)
+  }, [cfg, ids, sig])
+  return useMemo(() => new Set(ids ? ids.split(',').filter((id) => seen[id] === 'pending') : []), [ids, seen])
+}
+
+/** 流里 Muse 待办那条下面的一行:还 pending → 「任务卡「…」· 在对话最下面」;处理过 / 已不存在 / 读失败各一行结局。 */
+export function MuseTodoTraces({ tasks, ownerId, sessionId, createdAt, onJump }: { tasks: TaskCard[]; ownerId: string; sessionId: string; createdAt?: number; onJump?: () => void }) {
+  const todo = useMuseTodoStatus(ownerId, tasks)
+  return <TaskTraces tasks={tasks} ownerId={ownerId} sessionId={sessionId} createdAt={createdAt} onJump={onJump} todoStatus={todo.status} onTodoRetry={todo.retry} />
 }

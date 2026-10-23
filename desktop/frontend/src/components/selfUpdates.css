@@ -42,7 +42,8 @@
 .human-ask-saved { margin-left: auto; font-size: var(--ui-font-caption); color: var(--text-faint, var(--text-muted)); }
 .human-update-card .human-say { margin: 6px 0 4px; font-size: var(--ui-font-heading); line-height: var(--chat-line-height, 1.72); overflow-wrap: anywhere; }
 .human-update-card .human-why { margin: 0; font-size: var(--ui-font-meta); color: var(--text-muted); overflow-wrap: anywhere; }
-.human-ask-foot { margin-top: 12px; }
+.human-ask-foot { margin-top: 12px; display: flex; gap: 8px; align-items: center; }
+.human-ask-foot .btn svg { margin-right: 4px; }
 .human-acked { border: 0; background: transparent; }
 .human-acked:hover { color: var(--text); }
 
