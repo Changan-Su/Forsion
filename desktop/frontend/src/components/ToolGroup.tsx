@@ -244,8 +244,8 @@ export const ToolGroup: React.FC<{
   const summary = [...(thinking ? [] : [thinkLabel]), ...order.filter((k) => counts[k] > 0).map((k) => t(SUM[k], { n: counts[k] }))].filter(Boolean).join(' · ')
   const shortSummary = [...(thinking ? [] : [thinkLabel]), groupedEvents.length ? t('tool.sumN', { n: groupedEvents.length }) : ''].filter(Boolean).join(' · ') || thinkLabel
 
-  // 挂起的 ask_user(托盘 run,10-23)已经有占位结果(done),仍在等你答
-  const asksYou = (e: ToolEvent): boolean => !!awaitingAnswer && !!running && (!e.done || !!e.parked) && ASKS_YOU.has(e.name)
+  // 挂起的 ask_user(托盘 run,10-23)已经有占位结果(done),仍在等你答 —— 它那一段可能已经收尾(切段),不看 running
+  const asksYou = (e: ToolEvent): boolean => !!awaitingAnswer && ASKS_YOU.has(e.name) && (!!e.parked || (!!running && !e.done))
   const allDone = groupedEvents.every((e) => e.done)
   const anyErr = groupedEvents.some((e) => e.isError)
   // 挂起的调用「还在等你」= 它那张审批仍 pending(审批与工具卡按 toolCallId 对上;重载后审批不在 → 只算「当时挂起」)

@@ -211,6 +211,38 @@ describe('挂起询问(托盘 run)', () => {
     expect(resolveInquiry(req.inquiryId, 'late', r.runId)).toBe(false);
   }, 20_000);
 
+  it('⑤ 答了、还没到迭代边界就被停 → 落库的是答案,不是「还在等」(Codex 10-23 P1)', async () => {
+    let gate!: () => void;
+    const held = new Promise<void>((res) => { gate = res; });
+    script = [
+      askUser('c-ask', 'Pick one?'),
+      async (o: any) => { await held; if (o.signal?.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' }); return finalStep('x')(); },
+    ];
+    const r = await start(true);
+    const req = await r.nextInquiry();
+    await until(() => payloads.length >= 2, '第 2 轮 LLM(挂住)');
+    expect(resolveInquiry(req.inquiryId, 'beta', r.runId)).toBe(true);
+    await new Promise((res) => setTimeout(res, 50));
+    await abortRun(r.runId);
+    gate();
+    const run = await r.settled();
+    expect(run.status).toBe('aborted');
+    expect((await persistedResult('c-ask'))?.content).toBe('User answered: beta');
+  }, 20_000);
+
+  it('⑥ 没答就停 → 落库写「没等到回答」,不留「还在等」的占位', async () => {
+    script = [askUser('c-ask', 'Q?'), finalStep('Waiting for your answer.')];
+    const r = await start(true);
+    await r.nextInquiry();
+    await until(() => payloads.length >= 2, '第 2 轮 LLM');
+    await new Promise((res) => setTimeout(res, 100));
+    await abortRun(r.runId);
+    await r.settled();
+    await new Promise((res) => setTimeout(res, 100));
+    const saved = String((await persistedResult('c-ask'))?.content || '');
+    expect(saved).toMatch(/^\[No answer\] The run was stopped/);
+  }, 20_000);
+
   it('④ 没握手的 run 照旧阻塞:答之前模型拿不到下一轮', async () => {
     script = [askUser('c-ask', 'Q?'), finalStep('Got it.')];
     const r = await start(false);

@@ -341,6 +341,18 @@ describe('appStore.reduceEvent', () => {
     expect(useApp.getState().messagesBySession.s1.find((m) => m.id === 'a2')?.toolEvents ?? []).toHaveLength(0)
   })
 
+  it('挂起的提问(10-23):切段之后才答,答案记回**原来那段**的提问上(不然它一直挂在卡片堆里,收尾时被判过期)', () => {
+    const ref = { current: 'a1' }
+    const emit = (type: string, payload: Record<string, unknown>) => useApp.getState().reduceEvent('s1', 'r1', ref, { seq: 1, type, payload } as AgentRunEvent)
+    emit('tool_call', { id: 'qk1', name: 'ask_user', arguments: '{"question":"Q?"}' })
+    emit('tool_result', { id: 'qk1', name: 'ask_user', result: 'Waiting…', parked: true })
+    emit('inquiry_request', { inquiryId: 'qa1', question: 'Q?', options: ['a', 'b'], allowFreeText: true })
+    emit('turn_boundary', { finalizedAssistantId: 'a1', finalizedContent: '', userMessages: [], newAssistantId: 'a2' })
+    expect(ref.current).toBe('a2')
+    emit('inquiry_result', { inquiryId: 'qa1', answer: 'b' })
+    expect(useApp.getState().messagesBySession.s1.find((m) => m.id === 'a1')?.inquiries?.[0]).toMatchObject({ status: 'answered', answer: 'b' })
+  })
+
   it('P1-K1 approval_request.remote:reducer 存清洗后的值(畸形调用方丢掉);本机审批没有 remote', () => {
     const ref = { current: 'a1' }
     const emit = (type: string, payload: Record<string, unknown>) => useApp.getState().reduceEvent('s1', 'r1', ref, { seq: 1, type, payload } as AgentRunEvent)

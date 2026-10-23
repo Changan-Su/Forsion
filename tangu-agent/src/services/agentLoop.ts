@@ -65,7 +65,7 @@ import { clampApprovalMode, clearRunRemoteTaint, effectiveRemote, remoteApproval
 import { remoteLocked, remoteLockedBody } from './remoteLock.js'; // P1-K2
 import { isChildBriefRun, isUnattendedRun, registerRun, runCategory, unregisterRun, type RunCategory } from './remoteActivity.js'; // P1-K2
 import { requestInquiry } from './inquiries.js';
-import { askUserPayload, formatInquiryResult, isSystemAnswer } from '../tools/builtin/interaction.js';
+import { askUserPayload, formatInquiryResult, isSystemAnswer, normalizeInquiryAnswer } from '../tools/builtin/interaction.js';
 import { loadProjectDocSafe, wrapProjectDoc } from './projectDoc.js';
 import { onUserRunDone, onUserRunStart, type HistorianForkSeed } from './localHistorian.js';
 import { branchesSection } from './branchContext.js';
@@ -2405,6 +2405,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // answer:挂起的 ask_user(托盘 run)拿到的答案;preview 存问题原文。decision / answer 有一个就算「可以兑现了」。
     interface ParkedCall { call: ToolCall; effCall: ToolCall; preview: string; preCtxText: string; parallelGroup?: string; decision?: ApprovalDecision; answer?: string; seq?: number }
     const parkedReady = (e: ParkedCall): boolean => !!e.decision || e.answer !== undefined;
+    /** 挂起提问兑现后的工具结果(落库 / 回填共用一份):答案就是不挂起时 ask_user 会返回的那串。 */
+    const askToolResult = (call: ToolCall, answer: string, parallelGroup?: string): any => {
+      const content = formatInquiryResult(answer);
+      return { tool_call_id: call.id, name: call.function.name, content, isError: false, startedAt: Date.now(), elapsedMs: 0, outputChars: content.length, parallelGroup };
+    };
     const parked = new Map<string, ParkedCall>();
     let parkedSeq = 0;
     let parkedWake: (() => void) | null = null; // 收尾闸门等拍板时挂的唤醒
@@ -2475,8 +2480,13 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       if (ask) {
         const entry: ParkedCall = { call, effCall, preview: ask.question, preCtxText, parallelGroup };
         parked.set(call.id, entry);
-        void requestInquiry(runId, ask, parkAc.signal).then((answer) => {
-          if (parkAc.signal.aborted) return; // run 停了:询问随之过期,没人再读
+        void requestInquiry(runId, ask, parkAc.signal).then((raw) => {
+          const answer = normalizeInquiryAnswer(raw, parkAc.signal); // run 停了没答 → 英文系统说明,不冒充用户
+          // 落库那半当场改:答了之后、兑现之前被停,答案也得留在历史里;停了没答的写成「没等到回答」,不留「还在等」的占位(Codex 10-23 P1)。
+          // 模型上下文那半仍在迭代边界换(settleParkedCalls),不在模型调用途中动它。
+          void persistParkedResult(call.id, askToolResult(call, answer, parallelGroup))
+            .catch((e: any) => console.warn(`[agent-core] run ${runId} 挂起提问的答案落库失败:`, e?.message || e));
+          if (parkAc.signal.aborted) return;
           entry.answer = answer; entry.seq = ++parkedSeq; parkedWake?.();
         });
         const msg = parkedInquiryResult(ask.question);
@@ -2617,19 +2627,23 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       // 原位改 content、**不换对象**:段落库后 settleCheckpointAfterFinalize 按对象身份给它挂了来源行(压缩边界靠它认
       // 「这条已落库、属于哪一行」),换对象 = 丢标记,下次落库会被错标成后面那一段。
       if (i >= 0) (workingMessages[i] as { content: unknown }).content = done.toolMessage.content;
+      await persistParkedResult(callId, done.toolResult);
+      return i >= 0;
+    };
+    /** putBackParkedResult 的落库那半:段还在累积 → 改累加器(同步,随段落库);段已落库 → 用快照按同一 id 再 finalize。 */
+    const persistParkedResult = async (callId: string, toolResult: any): Promise<void> => {
       const j = allToolResults.findIndex((r) => r?.tool_call_id === callId);
-      if (j >= 0) allToolResults[j] = done.toolResult;
+      if (j >= 0) allToolResults[j] = toolResult;
       else {
         for (const [segId, snap] of finalizedWithParked) {
           const k = snap.toolResults.findIndex((r) => r?.tool_call_id === callId);
           if (k < 0) continue;
-          snap.toolResults[k] = done.toolResult;
+          snap.toolResults[k] = toolResult;
           await finalizeAssistantMessage(segId, sessionId, modelId, snap.content, snap.reasoning, snap.toolCalls, snap.toolResults, snap.displayFiles);
           if (!snap.toolResults.some((r) => r?.parked)) finalizedWithParked.delete(segId);
           break;
         }
       }
-      return i >= 0;
     };
     /** 用户已拍板的挂起调用:按拍板先后逐个兑现(批准 → 按原参数或用户改过的参数执行;拒绝 → 不执行)。真结果放回
      *  各自的工具消息(putBackParkedResult);交给模型的 <approval_update> 只有引擎自己写的拍板结论,**绝不带工具输出**
@@ -2645,11 +2659,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         parked.delete(e.call.id);
         if (e.answer !== undefined) {
           // 挂起的 ask_user:答案就是这次调用的结果(同不挂起时的工具结果),放回原位;回灌行里带答案 —— 那是用户自己的话,不是工具输出
-          const content = formatInquiryResult(e.answer);
-          const now = Date.now();
-          await publish(runId, 'tool_result', { id: e.call.id, name: e.call.function.name, result: content, isError: false, startedAt: now, elapsedMs: 0, outputChars: content.length, parallelGroup: e.parallelGroup });
+          const toolResult = askToolResult(e.call, e.answer, e.parallelGroup);
+          const content = toolResult.content as string;
+          await publish(runId, 'tool_result', { id: e.call.id, name: e.call.function.name, result: content, isError: false, startedAt: toolResult.startedAt, elapsedMs: 0, outputChars: content.length, parallelGroup: e.parallelGroup });
           const inContext = await putBackParkedResult(e.call.id, {
-            toolResult: { tool_call_id: e.call.id, name: e.call.function.name, content, isError: false, startedAt: now, elapsedMs: 0, outputChars: content.length, parallelGroup: e.parallelGroup },
+            toolResult,
             toolMessage: { role: 'tool', content: e.preCtxText ? `${content}\n\n${e.preCtxText}` : content, tool_call_id: e.call.id } as ChatMessage,
           });
           answers.push(`[${isSystemAnswer(e.answer) ? 'no answer' : 'answered'}] ask_user (call ${e.call.id}) — ${e.preview.split('\n')[0].slice(0, 200)}\n${content}` +
@@ -3561,6 +3575,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     const status = aborted ? 'aborted' : 'failed';
     const msg = aborted ? 'aborted' : (err?.message || String(err));
     console.error(`[agent-core] run ${runId} ${status}:`, msg);
+    // 先撤掉挂起项、让出一拍:挂起提问的「没等到回答」要先写进本段的工具结果,下面落库的半截段才不是「还在等」的占位
+    parkAc.abort();
+    await new Promise<void>((r) => setImmediate(r));
     // 落库「已停止/失败」时已累积的部分助手轮次:有正文或工具调用就持久化 → 留在聊天记录、且作为上下文
     // 喂给后续 run(否则被中断的这一轮凭空消失,用户与后续 agent 都读不到)。幂等 upsert,失败不二次抛。
     if (finalContent.trim() || allToolCalls.length) {
