@@ -27,3 +27,13 @@
    写死了 color:#fff,深色皮肤下 --accent 近白 = 白字白底(截图自查才发现)。 */
 .amx-qf-seg { margin: 8px 14px; height: 28px; }
 .amx-qf-seg button { font-size: var(--ui-font-meta, 12px); }
+
+/* 进退同命令面板(关键帧在 lcl engine.css):120ms 进、80ms 出;退场由卸载时的替身播(useExitGhost)。 */
+.amx-qf-scrim { animation: lcl-fade-in var(--palette-enter-duration) var(--ease-surface); }
+.amx-qf { animation: lcl-panel-in var(--palette-enter-duration) var(--ease-surface); }
+.amx-qf-scrim[data-lcl-exit] { animation: lcl-fade-out var(--menu-exit-duration) var(--ease-exit) forwards; }
+.amx-qf-scrim[data-lcl-exit] > .amx-qf { animation: lcl-panel-out var(--menu-exit-duration) var(--ease-exit) forwards; }
+@media (prefers-reduced-motion: reduce) {
+  .amx-qf { animation-name: lcl-fade-in; }
+  .amx-qf-scrim[data-lcl-exit] > .amx-qf { animation-name: lcl-fade-out; }
+}

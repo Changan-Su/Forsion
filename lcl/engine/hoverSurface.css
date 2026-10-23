@@ -1,0 +1,70 @@
+/* 提示框 / 悬停卡(hoverSurface.ts)。外观取原侧栏 hoverTip,时长曲线全走 token(base.css :root,这里只写同值兜底)。
+ * 进退用 transition,不用 keyframes:接力和中途叫回都会打断它(DESIGN §3「动效」)。
+ * 只动独立属性 scale / opacity,不碰 transform —— 位置写在 left / top 上,别的规则写 transform 也不打架。 */
+.lcl-tip,
+.lcl-hovercard {
+  position: fixed;
+  left: 0;
+  top: 0;
+  pointer-events: none; /* 浮层不吃鼠标:贴着触发点弹出时自己抢走 hover 会闪 */
+  background: var(--bg-card, var(--bg));
+  color: var(--text);
+  box-shadow: var(--card-shadow);
+  font-family: var(--font-ui);
+  opacity: 0;
+  scale: 0.97;
+}
+.lcl-tip {
+  z-index: 95;
+  max-width: 320px;
+  padding: 5px 9px;
+  border-radius: var(--radius-sm, 6px);
+  outline: 0.5px solid var(--border);
+  outline-offset: -0.5px;
+  font-size: var(--ui-font-meta, 12px);
+  line-height: 1.55;
+  transition:
+    opacity var(--tip-exit, 125ms) var(--ease-exit, cubic-bezier(0.4, 0, 1, 1)),
+    scale var(--tip-exit, 125ms) var(--ease-exit, cubic-bezier(0.4, 0, 1, 1));
+}
+.lcl-tip > div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lcl-tip > div:not(.lcl-tip-head) { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.lcl-tip[data-open] {
+  opacity: 1;
+  scale: 1;
+  transition:
+    opacity var(--tip-enter, 150ms) var(--ease-surface, cubic-bezier(0.22, 1, 0.36, 1)),
+    scale var(--tip-enter, 150ms) var(--ease-surface, cubic-bezier(0.22, 1, 0.36, 1));
+}
+.lcl-hovercard {
+  z-index: 10020;
+  transition:
+    opacity var(--hovercard-exit, 140ms) var(--ease-exit, cubic-bezier(0.4, 0, 1, 1)),
+    scale var(--hovercard-exit, 140ms) var(--ease-exit, cubic-bezier(0.4, 0, 1, 1));
+}
+.lcl-hovercard[data-open] {
+  opacity: 1;
+  scale: 1;
+  transition:
+    opacity var(--hovercard-enter, 190ms) var(--ease-surface, cubic-bezier(0.22, 1, 0.36, 1)),
+    scale var(--hovercard-enter, 190ms) var(--ease-surface, cubic-bezier(0.22, 1, 0.36, 1));
+}
+@starting-style {
+  .lcl-tip[data-open],
+  .lcl-hovercard[data-open] { opacity: 0; scale: 0.97; }
+}
+/* 缩放从靠近触发点的那一边长出来。 */
+.lcl-tip[data-side='top'], .lcl-hovercard[data-side='top'] { transform-origin: 50% 100%; }
+.lcl-tip[data-side='bottom'], .lcl-hovercard[data-side='bottom'] { transform-origin: 50% 0; }
+.lcl-tip[data-side='right'], .lcl-hovercard[data-side='right'] { transform-origin: 0 50%; }
+.lcl-tip[data-side='left'], .lcl-hovercard[data-side='left'] { transform-origin: 100% 50%; }
+/* 接力 / 键盘聚焦:直接到位。放在后面,同特异性靠顺序压过上面的 transition(DESIGN §7.2)。 */
+.lcl-tip[data-instant],
+.lcl-hovercard[data-instant] { transition: none; }
+/* 减少动态效果:留淡入淡出,去掉缩放。 */
+@media (prefers-reduced-motion: reduce) {
+  .lcl-tip, .lcl-hovercard, .lcl-tip[data-open], .lcl-hovercard[data-open] { scale: none; }
+  @starting-style {
+    .lcl-tip[data-open], .lcl-hovercard[data-open] { scale: none; }
+  }
+}

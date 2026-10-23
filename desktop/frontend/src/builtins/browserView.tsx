@@ -180,10 +180,11 @@ export const BrowserView: React.FC<ViewProps> = ({ leaf, params }) => {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
       <div style={bar}>
-        <button className="btn ghost sm" disabled={!nav.back} onClick={() => ref.current?.goBack()} title={t('browser.back')}><ArrowLeft size={14} /></button>
-        <button className="btn ghost sm" disabled={!nav.forward} onClick={() => ref.current?.goForward()} title={t('browser.forward')}><ArrowRight size={14} /></button>
+        <button className="btn ghost sm" data-press="back" disabled={!nav.back} onClick={() => ref.current?.goBack()} title={t('browser.back')}><ArrowLeft size={14} /></button>
+        <button className="btn ghost sm" data-press="forward" disabled={!nav.forward} onClick={() => ref.current?.goForward()} title={t('browser.forward')}><ArrowRight size={14} /></button>
         <button
           className="btn ghost sm"
+          data-press={loading ? undefined : 'reload'}
           onClick={() => (loading ? ref.current?.stop() : ref.current?.reload())}
           title={loading ? t('browser.stop') : t('browser.reload')}
         >

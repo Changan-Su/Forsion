@@ -742,7 +742,7 @@ async function main() {
       ['t2sw-plug-menu', 't2sw-plug-menu', '', 'fallback'],
       ['selbar', 'ui-popover selbar', '', 'menu'],
       ['selbar-dense', 'ui-popover selbar', '', 'fallback', 'data-dense'],
-      ['amx-tip', 'amx-tip', '', 'fallback'],
+      ['lcl-tip', 'lcl-tip', '', 'fallback'],
       ['amx-db-pop', 'amx-db-pop', '', 'menu'],
       ['amx-cal-agenda', 'amx-cal-agenda', '', 'menu'],
       ['amx-cal-cardwrap', 'amx-cal-cardwrap', '', 'menu'],

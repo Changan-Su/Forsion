@@ -1,5 +1,6 @@
 /** 命令面板(Cmd/Ctrl+K):跑 commandRegistry 里的命令。移植自 Amadeus,改读引擎 store。 */
-import { useEffect, useState, type KeyboardEvent } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { useExitGhost } from './menuAnchor'
 import { commandHotkeyText, useCommandStore } from './commandRegistry'
 import { fuzzyRank } from './fuzzy'
 import { label } from './types'
@@ -14,6 +15,8 @@ export function CommandPalette() {
   const pickCb = useCommandStore((s) => s.pickCb)
   const [query, setQuery] = useState('')
   const [active, setActive] = useState(0)
+  const overlayRef = useRef<HTMLDivElement>(null)
+  useExitGhost(overlayRef, open)
 
   useEffect(() => {
     if (open) {
@@ -53,7 +56,7 @@ export function CommandPalette() {
   }
 
   return (
-    <div className="cmd-overlay" onMouseDown={close}>
+    <div ref={overlayRef} className="cmd-overlay" onMouseDown={close}>
       <div className="cmd-panel" onMouseDown={(e) => e.stopPropagation()}>
         <input
           className="cmd-input"

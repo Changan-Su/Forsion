@@ -22,7 +22,7 @@ import { useApp } from './stores/appStore'
 import { openNote, openDb, openFile } from './amadeusNav'
 import { registerMessages, useI18n } from './i18n'
 import { pageKey } from '@amadeus-shared/links'
-import { isImeKeyEvent, isMacPlatform, useNativeChromeClaim, useNativeChromeInstalled, type NativeChromeClaim } from '@lcl/engine'
+import { isImeKeyEvent, isMacPlatform, useExitGhost, useNativeChromeClaim, useNativeChromeInstalled, type NativeChromeClaim } from '@lcl/engine'
 
 registerMessages({
   'quickfind.catAll': { zh: '全部', en: 'All' },
@@ -141,6 +141,8 @@ function QuickFindInner() {
   // 输入框上(它们是原生视图,永远在页面之上)。面板改成贴顶、通栏,键盘提示那一行不画(手机没有那些键)。
   const phone = useNativeChromeInstalled()
   useNativeChromeClaim(phone ? CHROME_HIDDEN : null)
+  const scrimRef = useRef<HTMLDivElement>(null)
+  useExitGhost(scrimRef) // 关掉(卸载)时留替身放 80ms 退场
   const close = useQuickFind((s) => s.close)
   const pick = useQuickFind((s) => s.pick)
   const pages = usePageStore((s) => s.pages)
@@ -258,7 +260,7 @@ function QuickFindInner() {
             : <FileText size={15} />
 
   return (
-    <div className={`amx-qf-scrim${phone ? ' amx-qf-phone' : ''}`} onMouseDown={close}>
+    <div ref={scrimRef} className={`amx-qf-scrim${phone ? ' amx-qf-phone' : ''}`} onMouseDown={close}>
       <div className="amx-qf" onMouseDown={(e) => e.stopPropagation()} onKeyDown={onKey}>
         <div className="amx-qf-head">
           <Search size={16} className="amx-qf-searchicon" />

@@ -8,3 +8,6 @@ export type { SelectionBarAction, SelectionBarTool, SelectionBarOrder } from './
 /** 看法胶囊 / 视图头行(真身在引擎:手机顶栏也要画它)。标准见 viewModes.tsx 顶注。 */
 export { ViewModeSwitch, ViewHead } from '../engine/viewModes'
 export type { ViewModeOption, ViewModesSpec } from '../engine/viewModes'
+/** 提示框 / 悬停卡:300ms 才出、相邻接力不重播、键盘聚焦不做动画(真身在引擎 hoverSurface.ts)。插件走 ctx.ui.attachTooltip。 */
+export { tooltipProps, attachTooltip, hideTooltip, useHoverCard } from './Tooltip'
+export type { TooltipContent, TooltipLines, TooltipOptions, HoverCardOptions, HoverSide } from './Tooltip'

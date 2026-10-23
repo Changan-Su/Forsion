@@ -5237,10 +5237,37 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
 :root {
   --menu-enter-duration: 180ms;
   --menu-enter-ease: cubic-bezier(0.2, 0, 0.2, 1);
+  /* 动效 token(DESIGN §3「动效」,2026-10-23 借鉴 Comma 方案 §4)。浮层一对进 / 出,出比进短、加速离开;
+     LCL 的样式只写同值兜底。数值即方案试玩页「借鉴后」那一栏。 */
+  --ease-surface: cubic-bezier(0.22, 1, 0.36, 1); /* 提示框、悬停卡、面板进场 */
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1); /* 所有退场 */
+  --ease-calm: cubic-bezier(0.33, 1, 0.68, 1); /* 状态行滚动、淡入淡出 */
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1); /* 抽屉、聚拢 */
+  --ease-press-travel: cubic-bezier(0.05, 0, 0.55, 0.85); /* 方向性按压:按下 */
+  --ease-press-recoil: cubic-bezier(0.25, 0.3, 0.25, 1.32); /* 方向性按压:回弹(约 6% 过冲) */
+  --press-travel-duration: 50ms;
+  --press-recoil-duration: 150ms;
+  --menu-exit-duration: 80ms; /* 菜单、二级面板、命令面板退场 */
+  --palette-enter-duration: 120ms; /* 命令面板、⌘P 进场 */
+  --tip-delay: 300ms; /* 提示框首次出现 */
+  --tip-handoff: 80ms; /* 离开后多久再收(期间移到相邻触发点 = 接力) */
+  --tip-enter: 150ms;
+  --tip-exit: 125ms;
+  --hovercard-delay: 300ms;
+  --hovercard-enter: 190ms;
+  --hovercard-exit: 140ms;
+  --flash-duration: 1100ms; /* 跳转落点双闪 */
+  --draw-duration: 600ms; /* 描线 */
 }
 @keyframes ui-menu-enter {
   from { opacity: 0; scale: 0.985; }
   to { opacity: 1; scale: 1; }
+}
+@keyframes ui-menu-exit {
+  to { opacity: 0; scale: 0.99; }
+}
+@keyframes ui-fade-out {
+  to { opacity: 0; }
 }
 /* 名单 = 所有「弹出来的菜单」;10-02 去掉匹配不到任何元素的 .add-menu,补上 Chat 的 / @ 菜单、账户菜单、仪表盘添加菜单。 */
 html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .paste-as-menu,
@@ -5255,6 +5282,23 @@ html:root :is(.project-menu, .composer-menu, .engine-picker, .t2c-menu) { transf
     .project-menu, .composer-menu, .cm-sub, .engine-picker, .add-menu-sub, .unitsw-menu,
     .rb-menu, .rb-iconpick, .t2c-menu, .account-pop, .dash-add-menu) { animation: none; }
 }
+/* 退场:与上面的进场是**同一张名单**(check:motion 钉着)。OverlayAt 卸载时留下的替身(data-lcl-exit,见 menuAnchor.tsx
+   useExitGhost)缩到 0.99、淡出、加速离开;不加模糊(filter 会让菜单成为 fixed 后代的包含块,DESIGN §4)。
+   不在 OverlayAt 里的菜单关掉照旧立刻消失。减少动态效果时只淡出。 */
+html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .paste-as-menu,
+  .project-menu, .composer-menu, .cm-sub, .engine-picker, .add-menu-sub, .unitsw-menu,
+  .rb-menu, .rb-iconpick, .t2c-menu, .account-pop, .dash-add-menu)[data-lcl-exit] {
+  animation: ui-menu-exit var(--menu-exit-duration) var(--ease-exit) forwards;
+}
+@media (prefers-reduced-motion: reduce) {
+  html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .paste-as-menu,
+    .project-menu, .composer-menu, .cm-sub, .engine-picker, .add-menu-sub, .unitsw-menu,
+    .rb-menu, .rb-iconpick, .t2c-menu, .account-pop, .dash-add-menu)[data-lcl-exit] {
+    animation-name: ui-fade-out;
+  }
+}
+/* 替身里的子元素不重放自己的进场(命令面板 / ⌘P 的面板本身除外:它跟着遮罩一起退,见 engine.css)。 */
+[data-lcl-exit] :not(.cmd-panel, .amx-qf) { animation: none !important; }
 
 /* uiux-c: 全局键盘焦点环(U-43)。
    原来唯一的「全局」规则是 .am-app :focus-visible(amadeus/styles.css),Ribbon、标签条、侧栏行、状态栏都不在它的作用域里,

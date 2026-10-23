@@ -271,10 +271,10 @@ function makePrefixActions(): React.FC<IDockviewHeaderActionsProps> {
     return (
       <div className={`dv-prefix${leftCollapsed ? ' dv-prefix--edge' : ''}`}>
         {/* 主面板常驻前进/后退(per-tab 历史,只走当前 tab 的栈;由各 feature recordNav(leafId,…) 喂)。 */}
-        <button className="dv-nav-btn" disabled={!canBack} title={withHotkey(t, t('lcl.nav.back'), 'nav-back')} onClick={() => { if (amId) useNav.getState().back(amId) }}>
+        <button className="dv-nav-btn" data-press="back" disabled={!canBack} title={withHotkey(t, t('lcl.nav.back'), 'nav-back')} onClick={() => { if (amId) useNav.getState().back(amId) }}>
           <ArrowLeft size={15} />
         </button>
-        <button className="dv-nav-btn" disabled={!canFwd} title={withHotkey(t, t('lcl.nav.forward'), 'nav-forward')} onClick={() => { if (amId) useNav.getState().forward(amId) }}>
+        <button className="dv-nav-btn" data-press="forward" disabled={!canFwd} title={withHotkey(t, t('lcl.nav.forward'), 'nav-forward')} onClick={() => { if (amId) useNav.getState().forward(amId) }}>
           <ArrowRight size={15} />
         </button>
         <button

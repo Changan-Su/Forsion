@@ -261,7 +261,7 @@
 [data-theme='genesis-glass'] .rb-iconpick,
 [data-theme='genesis-glass'] .unitsw-menu,
 [data-theme='genesis-glass'] .t2sw-plug-menu,
-[data-theme='genesis-glass'] .amx-tip,
+[data-theme='genesis-glass'] .lcl-tip,
 [data-theme='genesis-glass'] .amx-db-pop,
 [data-theme='genesis-glass'] .ui-popover,
 [data-theme='genesis-glass'] .amx-bpick,
@@ -302,7 +302,7 @@
 [data-theme='genesis-glass'] .rb-iconpick,
 [data-theme='genesis-glass'] .unitsw-menu,
 [data-theme='genesis-glass'] .t2sw-plug-menu,
-[data-theme='genesis-glass'] .amx-tip {
+[data-theme='genesis-glass'] .lcl-tip {
   background: var(--gl-sheen), var(--gl-side);
 }
 

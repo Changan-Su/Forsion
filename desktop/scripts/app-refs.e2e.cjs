@@ -169,7 +169,7 @@ async function main() {
     await view.screenshot({ path: path.join(SHOT_DIR, `bubble${tag}.png`) })
     // 移开就收;等着出卡的那 0.3 秒里来了滚动事件(芯片还在原处)照样出 —— 一有滚动就取消的话,先滚再停在芯片上就再也不出卡
     await win.mouse.move(2, 2)
-    await win.waitForTimeout(150)
+    await win.waitForTimeout(400) // 离开 80ms 宽限 + 140ms 退场(LCL 悬停卡)
     const gone = await win.locator('body > .app-ref-card').count() === 0
     await chip('Linear – Pricing').hover()
     await win.evaluate(() => document.querySelector('.app-ref').dispatchEvent(new Event('scroll')))
