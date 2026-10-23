@@ -3,7 +3,7 @@
  * 界面热更新 3c 从 Tangu 的 store 半身(desktop tanguSlice.ts)原样挪来,宿主(文档任务、图像工作室、插件聊天、ctx.tangu 探针)
  * 与 Tangu 同引这一份,不再经 appStore 转出口。只依赖同目录的 clientTypes。
  */
-import type { AgentConfig, StoredDesktopConfig } from './clientTypes'
+import type { AgentConfig, StoredDesktopConfig } from './clientTypes.js'
 
 /** 审批档缺省(全端统一「替我批准」);新会话没有记忆时的起步值。 */
 export const DEFAULT_APPROVAL = 'auto-edit' as const
