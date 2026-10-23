@@ -1,6 +1,5 @@
 /** Dev-only acceptance harness: real Website panel, native Workspace/Extend View and Amadeus editor.
  * Paired with server/scripts/preview-releases.ts; all SQL/media state stays in the local fixture. */
-import './tangu/store/standalone' // 不走 installEngine:自己装 Tangu 的 store 半身(界面热更新 3c)
 import './harnessBridge'
 import { useEffect, useRef } from 'react'
 import { createRoot } from 'react-dom/client'
@@ -14,6 +13,7 @@ import { setEngineI18n } from '@lcl/engine/i18nSeam'
 import './styles/base.css'
 import './amadeus-host.css'
 import '@lcl/engine/engine.css'
+import './tangu/store/standalone' // 不走 installEngine:自己装 Tangu 的 store 半身(界面热更新 3c);排在最后,别早于上面那些打桩的 import
 
 const origin =
   new URLSearchParams(location.search).get('backend') || 'http://localhost:3118'

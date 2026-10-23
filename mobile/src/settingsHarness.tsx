@@ -9,7 +9,6 @@
  * 裸挂生产 SettingsModal + 生产主题/CSS,绕过移动端登录与后端启动,供两层 IA 截图和触控回归。
  * Vite 的 build 入口只有 index.html,本文件不进 APK 产物。
  */
-import '@tangu/ui/tangu/store/standalone' // 不走 installEngine:自己装 Tangu 的 store 半身(界面热更新 3c)
 import { useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import '@/styles/base.css'
@@ -29,6 +28,7 @@ import type { PluginSettingsPageSchema } from '../../desktop/shared/settingsPage
 import { setTanguPrefs } from '@/amadeus/plugins/tanguSeam'
 import { isChatAvatarsOn, setChatAvatarsOn } from '@tangu/ui/views/chat2/chatAvatars'
 import { isPromptSuggestOn, setPromptSuggest } from '@tangu/ui/views/chat2/promptSuggest'
+import '@tangu/ui/tangu/store/standalone' // 不走 installEngine:自己装 Tangu 的 store 半身(界面热更新 3c);排在最后,别早于上面那些打桩的 import
 
 // 裸挂绕过了 installEngine:Tangu 交给设置页的偏好槽(核心插件化 2e-2)照 features/tangu.tsx 注入一份,聊天头像 / 输入建议开关才摆得出来
 setTanguPrefs({ chatAvatars: { get: isChatAvatarsOn, set: setChatAvatarsOn }, promptSuggest: { get: isPromptSuggestOn, set: setPromptSuggest } })
