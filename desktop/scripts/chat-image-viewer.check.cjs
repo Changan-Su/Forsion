@@ -82,6 +82,19 @@ async function main() {
     check('点缩略图打开看图(对话里四张图,这是第二张)', s && s.role === 'dialog' && s.name === 'mail.png' && s.count === '2 / 4' && s.focusIn, s)
     check('左右邻图都露出来', s.sides === 2, s)
     check('小图适应窗口 = 100%(不放大超过原图)', s.pct === '100%' && s.main[0] === 720, s)
+    // Windows(10-23 用户报):原生最小化 / 最大化 / 关闭盖在右上角,看图的关闭钮不能压在它底下。
+    // mac 上没有 WCO,这里照 tabTitleBar.ts 的写法摆出那两个标记,量关闭钮右缘让开了它。
+    const wco = await win.evaluate(async () => {
+      const root = document.documentElement
+      root.dataset.tabTitlebar = '1'
+      root.style.setProperty('--windows-caption-width', '138px')
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
+      const right = document.querySelector('.iv-bar .iv-tools > button:last-child').getBoundingClientRect().right
+      delete root.dataset.tabTitlebar
+      root.style.removeProperty('--windows-caption-width')
+      return { right: Math.round(right), limit: innerWidth - 138 }
+    })
+    check('Windows 标题栏按钮在右上角时,关闭钮让开它', wco.right <= wco.limit, wco)
 
     // 点一下主图不关(指针一按下就被舞台捕获,松手时的 target 恒是舞台 —— 早先按它判「点在空处」,点主图也关了,Codex P1)
     const mainBox = await win.locator('.iv-img:not(.is-side)').boundingBox()
