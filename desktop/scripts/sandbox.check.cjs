@@ -168,6 +168,20 @@ async function main() {
 
     await win.locator('[data-sandbox-placeholder] [data-action="sandbox-open"]').click()
     await win.waitForSelector('[data-sandbox-state]', { timeout: 20_000 })
+
+    // 1b 隔离沙箱(缺省一档,2026-10-23 插件沙箱方案 A):启动 → 主进程真起一份独立的 Forsion → 面板变运行中 → 停止。
+    //    之后切到「我的 Forsion」一档,原来的开发加载器流程照旧(下面 2–6)。整条隔离链路另见 check:pluginsandbox。
+    const isoDefault = await win.locator('[data-sandbox-tier="isolated"]').count() === 1
+    await win.locator('[data-action="sandbox-iso-start"]').click()
+    const isoRunning = await until(async () => await win.locator('[data-sandbox-tier="isolated"]').getAttribute('data-sandbox-state') === 'active', 60_000)
+    const isoViews = await win.locator('[data-sandbox-tier="isolated"] [data-sandbox-views]').getAttribute('data-sandbox-views').catch(() => null)
+    await shoot(app, win, 'isolated')
+    await win.locator('[data-action="sandbox-iso-stop"]').click()
+    const isoStopped = await until(async () => await win.locator('[data-action="sandbox-iso-start"]').count() === 1, 20_000)
+    check('1b 隔离沙箱是缺省一档:启动 → 运行中(注册了 1 个视图)→ 停止',
+      isoDefault && isoRunning && isoViews === '1' && isoStopped, JSON.stringify({ isoDefault, isoRunning, isoViews, isoStopped }))
+    await win.locator('[data-tier="mine"]').click()
+    await win.waitForSelector('[data-action="sandbox-load"]', { timeout: 10_000 })
     const before = await win.locator('[data-sandbox-state]').getAttribute('data-sandbox-state')
     await win.locator('[data-action="sandbox-load"]').click()
     const active = await until(async () => await win.locator('[data-sandbox-state]').getAttribute('data-sandbox-state') === 'active', 30_000)
