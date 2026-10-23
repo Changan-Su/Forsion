@@ -38,7 +38,7 @@ const nowUtc = (): string => new Date().toISOString().slice(0, 19).replace('T', 
 const ts = (v: any): string | null =>
   v == null ? null : v instanceof Date ? v.toISOString().slice(0, 19).replace('T', ' ') : String(v).slice(0, 19);
 
-const COLS = 'id, title, body, sender_kind, sender_id, origin_broadcast_id, read_at, archived_at, attachments, expires_at, thread, created_at';
+const COLS = 'id, title, body, title_en, body_en, sender_kind, sender_id, origin_broadcast_id, read_at, archived_at, attachments, expires_at, thread, created_at';
 
 /** thread 只认服务端广播落下来的行(sender_kind='server'):本地 POST /agent/inbox 与 agent 信永远没有它;
  *  形状只认 {kind:'feedback', ticketId:<uuid>}(客户端据此挂回复框、按 ticketId 打反馈 API),别的一律当无线程。 */
@@ -69,6 +69,8 @@ function serialize(r: any) {
     id: r.id,
     title: r.title,
     body: r.body ?? '',
+    title_en: r.title_en || null,
+    body_en: r.body_en || null,
     sender_kind: r.sender_kind,
     sender_id: r.sender_id,
     origin_broadcast_id: r.origin_broadcast_id ?? null,

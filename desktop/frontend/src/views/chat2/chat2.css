@@ -924,10 +924,12 @@ button.desk-cap-pick:hover, button.desk-cap-pick[aria-expanded='true'] { backgro
 .t2-tool, .t2-todo, .t2-panelcard, .t2-tsum-in, .agent-desk-card,
 .t2-chat-col .tool-card:not(.err), .t2-chat-col .tool-group { border-color: transparent; }
 
-/* 搜索命中跳转:落点闪一下再淡出(不改布局,只加底色) */
-.t2-jump-flash { animation: t2JumpFlash 1.6s ease-out; border-radius: var(--radius-md); }
+/* 搜索命中 / 引用磁贴跳回原文:闪两下,第二下更淡(10-23 借鉴 Comma,1.1s;原来 1.6s 闪一下) */
+.t2-jump-flash { animation: t2JumpFlash 1.1s ease-out; border-radius: var(--radius-md); }
 @keyframes t2JumpFlash {
-  0% { background: var(--overlay-light); }
+  0% { background: var(--overlay-medium); }
+  30% { background: transparent; }
+  50% { background: var(--overlay-light); }
   100% { background: transparent; }
 }
 @media (prefers-reduced-motion: reduce) { .t2-jump-flash { animation: none; } }
@@ -1100,14 +1102,6 @@ button.desk-cap-pick:hover, button.desk-cap-pick[aria-expanded='true'] { backgro
 .t2-user-refs .attach-chip { max-width: 240px; }
 
 /* 用户气泡开头的引用卡:输入框上方挂的那几段,发出后原样留在气泡里。只有 summary 的 details —— 平时收成四行,点开看全 */
-.t2-user-quotes { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; white-space: normal; }
-.t2-user-quotes:last-child { margin-bottom: 0; }
-.t2-user-quote { border-radius: var(--radius-md, 10px); background: color-mix(in srgb, var(--bg) 62%, transparent); }
-.t2-user-quote > summary { display: flex; gap: 8px; align-items: flex-start; padding: 8px 10px; list-style: none; cursor: pointer; border-radius: inherit; color: var(--text-muted); font-size: var(--ui-font-body, 13px); line-height: var(--ui-line-body, 1.55); }
-.t2-user-quote > summary::-webkit-details-marker { display: none; }
-.t2-user-quote > summary > svg { flex: none; margin-top: 3px; color: var(--accent-ink); }
-.t2-user-quote > summary > span { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; }
-.t2-user-quote[open] > summary > span { display: block; }
 
 /* 对话里的子会话块(ChildSessions.tsx;方案「子会话与任务卡」第一轮 B):任务卡同一个壳(--bg-card + 圆角,不描边)。
  * 行 = [图标][标题][状态字 + 行尾状态标][箭头],下一行是最后一句;在等你的行带两颗按钮。 */

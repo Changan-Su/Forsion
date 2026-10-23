@@ -9,7 +9,7 @@ import { SelfUpdateReceipt } from '../../components/SelfUpdateReceipt'
  */
 import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from 'react'
 import { Copy, RotateCcw, GitBranch, MessageCircleQuestion, CornerUpLeft, Pencil, Volume2, Square, Loader2, LogIn, Zap, History as HistoryIcon, FileCode2, MessageSquare, ShieldQuestion, CircleCheck, CircleX, CircleHelp } from 'lucide-react'
-import { FileInput, Quote } from 'lucide-react'
+import { FileInput } from 'lucide-react'
 import { useNoteInsertState } from './insertToNote'
 import * as api from '../../services/backendService'
 import type { UiMessage, TanguDesktopConfig, AgentConfig, StoredDesktopConfig, ToolEvent, InquiryRequest, SketchItem, LiveWait } from '../../../../../tangu-agent/src/contracts/clientTypes'
@@ -18,6 +18,7 @@ import { Markdown } from '../../components/Markdown'
 import { ChatWikiLink, WikiText } from '../../components/ChatWikiLink'
 import { RefChipView, splitLeadingRefs } from './RefChipView'
 import { splitLeadingQuotes } from './quotes'
+import { QuotePreview, QuoteTile, findQuoteSource } from './QuoteTile'
 import { VoiceBubble } from '../../components/VoiceBubble'
 import { InlineFiles } from '../../components/InlineFiles'
 import { IntelligentUi } from '../../components/IntelligentUi'
@@ -411,6 +412,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
   // 建议芯片是一次性的:点了就等于用户按了回车,整排随即失效 —— 不然双击会把同一句排两遍。
   const [suggestSent, setSuggestSent] = useState(false)
   const [rewindOpen, setRewindOpen] = useState(false)
+  const [previewQuote, setPreviewQuote] = useState<string | null>(null)
   // 手机:长按菜单原生那头弹不出来过(宿主拒了这次请求)→ 这条消息把三个小键和文字选择还回来,动作不至于够不着。
   const [inlineActions, setInlineActions] = useState(false)
   // 原生回退半屏的在途请求(Android):消息卸载、或它所属的会话 / 消息换了 → 作废(见 openNativeRewind)。
@@ -505,7 +507,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
     const tocTitle = lead || quoted ? (body.trim() || lead?.refs.map((r) => r.name).join(' ') || quoted?.quotes[0] || '') : msg.content
     const atts = msg.attachments || []
     // 只发了附件、没写字:不摆一个空气泡
-    const hasBubble = !!(lead || quoted || msg.content.trim())
+    const hasBubble = !!(lead || (quoted ? body.trim() : msg.content.trim()))
     const toggleRewind = (): void => {
       // Android:三档改由原生半屏呈现;没有原生宿主时照旧切换 Web 菜单。
       if (!rewindOpen) {
@@ -541,9 +543,22 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
       <div ref={setUserWrap} className={`t2-userwrap${inlineActions ? ' t2-userwrap--inline' : ''}`} id={`tocmsg-${msg.id}`} data-toc-msg-role="user" data-toc-title={tocTitle}>
         <div className="t2-user-col">
           <div className="t2-username">{name}</div>
-          {atts.length > 0 && (
-            // 附件磁贴(B2)挪到气泡上方、右对齐:图片一行在前,文件一行在后;不参与长提问折叠
+          {previewQuote !== null && <QuotePreview text={previewQuote} onClose={() => setPreviewQuote(null)} />}
+          {(atts.length > 0 || quoted) && (
+            // 附件磁贴(B2)挪到气泡上方、右对齐:图片一行在前,文件一行在后;不参与长提问折叠。
+            // 引用磁贴(10-23)排在最上面一行:点了跳回原文闪两下,找不到原文(老分页 / 别处带来的引用)就看全文。
             <div className="t2-user-atts" onContextMenu={onBubbleMenu}>
+              {quoted && (
+                <div className="t2-user-atts-row">
+                  {quoted.quotes.map((quote, i) => (
+                    <QuoteTile key={i} text={quote} title={t('quote.tile.jump')} onOpen={(el) => {
+                      const source = runSid ? findQuoteSource(el, quote) : undefined
+                      if (source && runSid) useApp.getState().setJumpTarget(runSid, source)
+                      else setPreviewQuote(quote)
+                    }} />
+                  ))}
+                </div>
+              )}
               {[atts.filter(isImageAtt), atts.filter((a) => !isImageAtt(a))].map((row, r) => row.length > 0 && (
                 <div key={r} className="t2-user-atts-row">
                   {row.map((a, i) => <AttachmentTile key={`${a.name}-${i}`} file={a} view />)}
@@ -560,16 +575,6 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
                   <RefChipView key={`${r.token}-${i}`} chip={r}>
                     {r.wiki ? <ChatWikiLink inner={r.wiki} /> : undefined}
                   </RefChipView>
-                ))}
-              </div>
-            )}
-            {quoted && (
-              <div className="t2-user-quotes">
-                {quoted.quotes.map((quote, i) => (
-                  // 只有 summary 的 details:平时收成几行,点一下看全(与 Intelligent UI 的来源摘要同一做法)
-                  <details key={i} className="t2-user-quote">
-                    <summary><Quote size={13} aria-hidden /><span><WikiText text={quote} /></span></summary>
-                  </details>
                 ))}
               </div>
             )}

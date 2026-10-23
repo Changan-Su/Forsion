@@ -2416,6 +2416,27 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .att-tile:hover .att-tile-x, .att-tile-x:focus-visible { opacity: 1; }
 @media (hover: none) { .att-tile-x { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .att-tile { transition: none; } }
+/* 引用磁贴(10-23,views/chat2/QuoteTile.tsx):文件条同一副身材,色块里是引号(强调色墨);整条是一颗按钮(看全文 / 跳回原文)。 */
+.att-tile--quote { padding: 0; width: 220px; }
+.att-tile-open {
+  display: flex; align-items: center; gap: 10px; width: 100%; height: 100%; min-width: 0; padding: 0 14px 0 7px;
+  border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; border-radius: inherit;
+}
+.att-tile--quote:hover { background: color-mix(in srgb, var(--overlay-light) 60%, var(--bg-card)); }
+.att-tile-open:focus-visible { outline: var(--focus-ring) solid var(--signal-line); outline-offset: 1px; }
+.att-tile-badge[data-kind='quote'] { color: var(--accent-ink); }
+/* 引用全文窗(QuotePreview):外壳是 Amadeus 的 .dialog,这里只放宽、给正文一条引用竖线和自己的滚动。 */
+.am-app .dialog.quote-preview { width: min(560px, 90vw); }
+.quote-preview-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.quote-preview-x {
+  display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: var(--radius-sm);
+  background: none; color: var(--text-muted); cursor: pointer;
+}
+.quote-preview-x:hover { background: var(--overlay-light); color: var(--text); }
+.quote-preview-body {
+  max-height: min(60vh, 480px); overflow-y: auto; padding: 2px 0 2px 12px; border-left: 2px solid var(--overlay-strong);
+  color: var(--text-muted); font-size: var(--ui-font-body, 13px); line-height: var(--ui-line-body, 1.55); white-space: pre-wrap; overflow-wrap: anywhere;
+}
 
 /* agent 在对话区展示的文件(display_file / 生图 / 表情包):图片缩略图(点击放大)+ 文件卡片 */
 .inline-file-grid { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }

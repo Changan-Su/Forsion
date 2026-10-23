@@ -117,14 +117,21 @@ function neighborCaretRect(el: Element, offset: number): { x: number; y: number;
     const h = Math.min(r.height, caretEm(el))
     return { x, y: r.top + (r.height - h) / 2, h }
   }
+  // 段内硬换行(Shift+Enter 的 <br>,不是 PM 的 trailingBreak)之后的光标在**下一行**:取它的右边会画回上一行
+  // 行尾(用户实报「Shift+回车没反应、多出的空隙删不掉」)。这时跳过往前找,改用后面的邻居(段尾即 trailingBreak)。
+  let afterBreak: DOMRect | null = null
   for (let i = offset - 1; i >= 0; i--) {
-    const r = usable(el.childNodes[i])
-    if (r) return at(el.childNodes[i], r, r.right)
+    const n = el.childNodes[i]
+    const r = usable(n)
+    if (!r) continue
+    if (n.nodeName === 'BR' && !(n as Element).classList.contains('ProseMirror-trailingBreak')) { afterBreak = r; break }
+    return at(n, r, r.right)
   }
   for (let i = offset; i < el.childNodes.length; i++) {
     const r = usable(el.childNodes[i])
     if (r) return at(el.childNodes[i], r, r.left)
   }
+  if (afterBreak) return { x: el.getBoundingClientRect().left, y: afterBreak.bottom, h: afterBreak.height }
   return null
 }
 

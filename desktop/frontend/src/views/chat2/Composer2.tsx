@@ -8,7 +8,7 @@ import { useModelPickerPreferences } from '../../modelPickerPreferences'
 import React, { useEffect, useId, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from 'react'
 import {
   ArrowUp, Square, Mic, X, ClipboardList, Check, ChevronDown, Users, Sparkles,
-  Hand, ShieldCheck, ShieldAlert, Settings2, SlidersHorizontal, MessageSquare, Loader2, Clock, Zap, AudioLines, Quote, type LucideIcon } from 'lucide-react'
+  Hand, ShieldCheck, ShieldAlert, Settings2, SlidersHorizontal, MessageSquare, Loader2, Clock, Zap, AudioLines, type LucideIcon } from 'lucide-react'
 import { useVoiceInput } from '../../hooks/useVoiceInput'
 import { CALL_TEXT_MAX, getCallPresence, onCallEvent, openCallLayer, sendTextToCall, subscribeCallPresence, useRealtimeConfig } from '../../services/realtimeCall'
 import { resolveRealtimeCall } from '../../services/realtimeModel'
@@ -50,6 +50,7 @@ import { appRefToken, type AppRef, type AppRefList } from '../../../../shared/ap
 import { AppRefIcon } from '../../components/appRefs'
 import { useCapsuleSlide } from '../../components/capsuleTabs'
 import { composeQuotes } from './quotes'
+import { QuotePreview, QuoteTile } from './QuoteTile'
 import { NEW_CHAT_DRAFT, clearDraft, moveDraft, setDraftField, useComposerDrafts, useDraftField } from './composerDrafts'
 import { dropSend, fadeOutDraft, noteSend } from './sendFlight'
 import { ContextUsagePop } from './ContextUsagePop'
@@ -478,6 +479,7 @@ export const Composer2: React.FC<{
   const [draft, setDraft] = useDraftField(draftKey, 'text')
   // 等待期间宽卡轮播小贴士；窄卡固定短提示，避免文案闪烁与输入区高度跳动。
   const [tipIdx, setTipIdx] = useState(0)
+  const [previewQuote, setPreviewQuote] = useState<string | null>(null)
   // 触屏(Android 壳 / 手机浏览器)没有 ⌘、悬停和拖拽,只留与指针无关的几条。
   const [touchUi] = useState(() => !!window.tangu?.mobile || !!window.matchMedia?.('(hover: none)').matches)
   const waitTips = (touchUi ? TOUCH_TIP_KEYS : WAIT_TIP_KEYS).filter((k) => !engineId || k !== STEER_TIP)
@@ -833,6 +835,13 @@ export const Composer2: React.FC<{
     const ta = taRef.current
     if (running && !compactCard && !tipTall && ta && !ta.value && ta.scrollHeight > ta.clientHeight + 2) setTipTall(true)
   }, [running, tipIdx, locale, tipTall, draft, compactCard])
+  // 输入建议同理:末尾带着「⇥ Tab」提示,折行时一行高会把提示裁掉 → 撑到两行(换一句建议重量)。
+  const [suggestTall, setSuggestTall] = useState(false)
+  useLayoutEffect(() => setSuggestTall(false), [suggestion, locale])
+  useLayoutEffect(() => {
+    const ta = taRef.current
+    if (showSuggestion && !suggestTall && ta && !ta.value && ta.scrollHeight > ta.clientHeight + 2) setSuggestTall(true)
+  }, [showSuggestion, suggestion, suggestTall, locale, draft])
 
   // 历史召回:older=true→↑ 取更旧、false→↓ 取更新;越过最新回到暂存草稿。光标置末尾。
   const recallHistory = (older: boolean) => {
@@ -1753,17 +1762,6 @@ export const Composer2: React.FC<{
         <ChatBoxSurface ref={cardRef} data-guide-anchor="chat-composer" className={`${phoneCard ? 't2c-card--phone' : ''}${dragOver ? ' dragover' : ''}`}>
           {advisory}
           {hint && <div className="t2c-hint">{hint}</div>}
-          {quotes.length > 0 && (
-            <div className="t2c-quotes" role="group" aria-label={t('input.quote.group')}>
-              {quotes.map((quote, index) => (
-                <div className="t2c-quote" key={quote}>
-                  <Quote size={13} className="t2c-quote-mark" aria-hidden />
-                  <span className="t2c-quote-text">{quote.length > 280 ? `${quote.slice(0, 280)}…` : quote}</span>
-                  <button title={t('input.remove')} aria-label={t('input.remove')} onClick={() => (onRemoveQuote ? onRemoveQuote(index) : onClearQuote?.())} className="t2c-quote-x"><X size={12} /></button>
-                </div>
-              ))}
-            </div>
-          )}
           {allRefChips.length > 0 && (
             <div className="t2c-chiprow t2c-refrow" role="group" aria-label={t('input.ref.selected')}>
               <span className="t2c-reflabel">{t('input.ref.selected')}</span>
@@ -1785,10 +1783,14 @@ export const Composer2: React.FC<{
               ))}
             </div>
           )}
-          {(attachments.length > 0 || wsFiles.length > 0) && (
+          {(quotes.length > 0 || attachments.length > 0 || wsFiles.length > 0) && (
             // 附件磁贴(B2):随消息发的与「到工作区」的排在同一行。删按对象认、写回点删那一刻的草稿(draftKey 闭包),
             // 淡出那 130ms 里删了别的、切了会话都不会删错;发送时跳过正在淡出的(isLeaving)。
-            <div className="t2c-chiprow t2c-tilerow">
+            // 引用磁贴(10-23)排在最前:点一下看全文,发出去照旧是正文前的引用块(quotes.ts)。
+            <div className="t2c-chiprow t2c-tilerow" role="group" aria-label={quotes.length ? t('input.quote.group') : undefined}>
+              {quotes.map((quote, index) => (
+                <QuoteTile key={quote} text={quote} title={t('quote.tile.preview')} onOpen={() => setPreviewQuote(quote)} removeTitle={t('input.remove')} onRemove={() => (onRemoveQuote ? onRemoveQuote(index) : onClearQuote?.())} />
+              ))}
               {attachments.map((a) => (
                 <AttachmentTile key={tileKey(a)} file={a} removeTitle={t('input.remove')} onRemove={() => setDraftField(draftKey, 'attachments', (prev) => prev.filter((x) => x !== a))} />
               ))}
@@ -1816,10 +1818,10 @@ export const Composer2: React.FC<{
             rows={1}
             autoFocus={autoFocus}
             value={draft}
-            placeholder={showSuggestion ? suggestion : disabled ? disabledPlaceholder || t('input.placeholderDisabled') : inCall ? t('livecall.typeHint') : running ? compactCard ? t('input.runningPlaceholder') : t('input.tip', { tip: t(waitTips[tipIdx % waitTips.length]) }) : t(touchUi ? 'input.placeholderTouch' : 'input.placeholder')}
+            placeholder={showSuggestion ? t('input.suggestionTab', { text: suggestion }) : disabled ? disabledPlaceholder || t('input.placeholderDisabled') : inCall ? t('livecall.typeHint') : running ? compactCard ? t('input.runningPlaceholder') : t('input.tip', { tip: t(waitTips[tipIdx % waitTips.length]) }) : t(touchUi ? 'input.placeholderTouch' : 'input.placeholder')}
             data-suggestion={showSuggestion || undefined}
             data-tip-fade={(running && !compactCard && tipFade) || undefined}
-            data-tip-tall={(running && !compactCard && tipTall) || undefined}
+            data-tip-tall={(running && !compactCard && tipTall) || (showSuggestion && suggestTall) || undefined}
             disabled={disabled}
             onChange={(e) => {
               setDraft(e.target.value)
@@ -2183,6 +2185,7 @@ export const Composer2: React.FC<{
             <div className="t2c-hint" style={{ marginTop: 6, marginBottom: 0 }}>{callError}</div>
           )}
         </ChatBoxSurface>
+        {previewQuote !== null && <QuotePreview text={previewQuote} onClose={() => setPreviewQuote(null)} />}
       </div>
       {rulesOpen && <ApprovalRulesModal cfg={liveCfg} onClose={() => setRulesOpen(false)} />}
       {ultraAsk && (
