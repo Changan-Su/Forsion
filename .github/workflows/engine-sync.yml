@@ -34,5 +34,5 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: tangu-agent/package-lock.json
-      - run: npm ci --ignore-scripts
+      - run: npm ci --no-audit --no-fund # 不能 --ignore-scripts:human / cloudAgentStore 的测试要原生 sqlite 绑定
       - run: npx vitest run src/agents/cloudAgentStore.read.test.ts src/services/agentFileSync.safety.test.ts src/services/agentFileSync.test.ts src/services/memorySyncService.test.ts test/agentFileSync.test.ts test/agentLoopRuntimeSafety.test.ts test/agentsPatchRaceCloud.test.ts test/cloudAgentStore.locking.test.ts test/cloudAgentStore.test.ts test/harnessEquip.test.ts test/historianCloudMemory.test.ts test/humanCollaboration.test.ts test/humanFolder.test.ts test/humanFolderSync.test.ts test/loadoutReview.test.ts test/manageHarnessOpen.test.ts test/memoryManagementRoutes.test.ts
