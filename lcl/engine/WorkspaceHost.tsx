@@ -217,8 +217,9 @@ const WbTab: React.FC<IDockviewPanelHeaderProps> = ({ api, params }) => {
       )}
       {menu && createPortal(
         <OverlayAt className="ctx-menu" x={menu.x} y={menu.y} onClick={(e) => e.stopPropagation()} onContextMenu={(e) => e.preventDefault()}>
-          {/* 「移到新窗口」:确定性撕出路径(不依赖跨窗拖拽);仅桌面(getDetachApi 有真身)显示。 */}
-          {type !== '__extend' && getDetachApi() && (
+          {/* 「移到新窗口」:确定性撕出路径(不依赖跨窗拖拽);仅桌面(getDetachApi 有真身)显示。
+           *  占位(视图没注册)不给:对面窗口开不出它、这边又先关了源面板,面板就没了(Codex 3a 评审)。 */}
+          {type !== '__extend' && def && getDetachApi() && (
             <button onClick={() => {
               const ref = viewRefFromParams(params as Record<string, unknown> | undefined, (api as { component?: string }).component)
               const d = getDetachApi()
@@ -584,7 +585,8 @@ export const WorkspaceHost: React.FC<{
       const id = draggingId, view = draggingView
       const d = getDetachApi()
       const outside = e.clientX < 0 || e.clientY < 0 || e.clientX > window.innerWidth || e.clientY > window.innerHeight
-      if (id && view && d?.drop && outside && !useWorkspace.getState().isPinnedLeaf(id)) { // 固定 View 不撕出窗口
+      // 固定 View 不撕出窗口;占位(视图没注册)也不撕:对面开不出它,源面板却会被关掉
+      if (id && view && d?.drop && outside && !useWorkspace.getState().isPinnedLeaf(id) && getView(view.type)) {
         void d.drop(e.screenX, e.screenY, view).then((routed) => { if (routed) useWorkspace.getState().closeLeaf(id) })
       }
       clearDragState()

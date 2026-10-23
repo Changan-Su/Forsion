@@ -458,6 +458,9 @@ const usableRight = (type: string): boolean => { const def = getView(type); retu
 function rightGroupNow(api: DockviewApi, defaults: readonly Stashed[]): ReturnType<typeof rightGroupFor> {
   const main = activeMainPanel(api)
   const type = main ? panelType(main) : null
+  // 主视图还是占位(它的插件没就位 / 已关掉):不对账。按缺省组对的话,会把它带 __by:'rule' 的伴随视图当成
+  // 「不属于本组」关掉、随即存盘 —— 参数一丢,插件回来也复原不了(Codex 3a 评审)。注册上来后下一次 refreshTabs 再对。
+  if (type && !getView(type)) return null
   return rightGroupFor(type, type ? getView(type)?.rightCompanions : undefined, defaults, usableRight)
 }
 /** refreshTabs 里发现组变了:推一拍再对账 —— 它本身就在开 / 关 / 激活的半路上,当场再开关面板会重入。 */
