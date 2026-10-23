@@ -64,6 +64,7 @@
  *   npm run live:harness -- --only ttft --ttft-rounds 5      # 首 token 延迟:preset(chat|work)× 思考档(off|medium)2×2,每格 N 会话 × 2 轮(冷/热缓存),交错跑
  *   npm run live:harness -- --only agentapproval             # 审批档只归用户(09-27):模型被要求把一个 agent 调成完全放行,manage_agent 不收 approval_mode、用户设的只读原样保留;改 manage_agent / manage-agents-guide 后跑
  *   npm run live:harness -- --only teamapproval              # 团队 × 完全通行(09-21 反馈):成员 config 自带 auto-edit / run 启动后才切档,两条都须 0 次审批;改审批闸 / teamRuns 档位后跑
+ *   npm run live:harness -- --only parkedask                 # 提问挂起(10-23 待确认卡片 B):托盘 run 里 ask_user 不停下来 —— 真模型先干不依赖答案的活、不重问,收尾后才答 → 答案回到原工具结果、<inquiry_update> 回灌、按答案做完;改 agentLoop 挂起询问 / parkedInquiryResult 措辞后跑
  *   npm run live:harness -- --only parked                    # 审批挂起(09-27 审批托盘):要批的调用挂起、真模型先干别的且不重试(任务故意不写 First/Then,见场景注释),收尾后才批 → 按原参数执行、结局回灌再收尾;改 approvals park / agentLoop 挂起兑现 / parkedToolResult 措辞后跑
  *   npm run live:harness -- --only remoteclamp               # 远程来源钳制(09-27,设备能力 MCP 方案 P0 ④):带 x-forsion-remote 起 run、agent_config 给 full-auto + verifyCommand,
  *                                                           #   run_bash 须弹审批(auto-edit 上限)、verifyCommand 绝不执行;改 remoteOrigin / 审批闸 / runs 路由后跑。负对照 = 修复前的 dist 跑(须红)
@@ -216,7 +217,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'imgtools', 'account', 'nested', 'branch', 'musedm', 'humandims'];
+const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'parkedask', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'imgtools', 'account', 'nested', 'branch', 'musedm', 'humandims'];
 KEYS.push('bluebird');
 KEYS.push('signals');
 KEYS.push('musechat');
@@ -261,7 +262,7 @@ const GIT_PREFIX = 'livetest/'; const GIT_TAG = '[LIVE]';
 // opt-in:缺省全量跑里**不带**这几个 —— cache 7 个 run / churn 6 个 run(都慢),cache 与 recall-unprompted
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
-const OPT_IN = new Set(['humandims', 'nested', 'branch', 'musedm', 'realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'appsettings', 'control', 'phone']);
+const OPT_IN = new Set(['humandims', 'nested', 'branch', 'musedm', 'realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'parkedask', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'appsettings', 'control', 'phone']);
 OPT_IN.add('bluebird'); // --only bluebird --plugin-src <bundle>: real instruction-following on supplied transcripts
 OPT_IN.add('signals');
 OPT_IN.add('musechat');
@@ -1458,6 +1459,7 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
           else if (e.type === 'subagent' && p.phase === 'done') ev.subDones.push({ subId: String(p.subId || ''), at: Date.now() - t0, error: p.error ? String(p.error) : null });
           // agentConfig.debugSystemPrompt 时引擎回传本 run 组装好的系统提示:证「段真的进了提示词」,与模型配不配合无关。
           else if (e.type === 'system_prompt') { ev.systemPrompt = String(p.content || ''); ev.recalled = String(p.recalled || ''); }
+          else if (e.type === 'inquiry_request') { ev.inquiries.push({ inquiryId: p.inquiryId, question: String(p.question || '').slice(0, 300) }); pending.push({ inquiryId: p.inquiryId }); }
           else if (e.type === 'approval_request') {
             ev.approvals += 1;
             ev.approvalList.push({ name: p.name, reason: p.reason?.kind, mode: p.reason?.mode, agent: p.agentSlug, args: String(p.arguments || '').slice(0, 300), remote: p.remote ?? null });
@@ -1507,10 +1509,10 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
 }
 /** parked 专用:按桌面口径带 approval_tray 起 run;审批**先不批** —— 等引擎报 awaiting_approval(模型已收尾、收尾闸门在等拍板)
  *  再批,批之前 onBeforeApprove() 拍一张现场(别的活干完没有)。兜底:awaitingMs 内等不到就照样批(记下来,判据按红)。 */
-async function runParked(sessionId, message, { onBeforeApprove, awaitingMs = 150_000, timeoutMs = 300_000 } = {}) {
+async function runParked(sessionId, message, { onBeforeApprove, awaitingMs = 150_000, timeoutMs = 300_000, answer = 'yes' } = {}) {
   const t0 = Date.now();
   const { runId } = await api('/agent/runs', { method: 'POST', body: JSON.stringify({ session_id: sessionId, model_id: MODEL, message, agent_config: { ...AGENT_CONFIG }, approval_tray: true }) });
-  const ev = { runId, toolCalls: [], toolResults: [], approvals: [], awaiting: 0, approvedAtMs: null, approvedOnAwaiting: false, beforeApprove: null, content: '', done: false, error: null, wallMs: 0 };
+  const ev = { runId, toolCalls: [], toolResults: [], approvals: [], inquiries: [], awaiting: 0, approvedAtMs: null, approvedOnAwaiting: false, beforeApprove: null, content: '', done: false, error: null, wallMs: 0 };
   const pending = [];
   let awaitingSeen = false;
   let turn = 0; // 模型调用序号:usage 帧在每次模型调用返回后、执行工具之前发,工具调用据此标出自己属于哪一轮
@@ -1520,7 +1522,9 @@ async function runParked(sessionId, message, { onBeforeApprove, awaitingMs = 150
     ev.beforeApprove = onBeforeApprove ? onBeforeApprove() : null;
     ev.approvedAtMs = Date.now() - t0;
     ev.approvedOnAwaiting = onAwaiting;
-    await api(`/agent/runs/${runId}/approvals/${p.approvalId}`, { method: 'POST', body: JSON.stringify({ action: 'approve' }) }).catch((err) => { ev.approveError = String(err.message); });
+    // 提问(parkedask)按 answer 答;审批一律批
+    const url = p.inquiryId ? `/agent/runs/${runId}/inquiries/${p.inquiryId}` : `/agent/runs/${runId}/approvals/${p.approvalId}`;
+    await api(url, { method: 'POST', body: JSON.stringify(p.inquiryId ? { answer } : { action: 'approve' }) }).catch((err) => { ev.approveError = String(err.message); });
   };
   const fallback = setInterval(() => { if (pending.length && !awaitingSeen && Date.now() - t0 > awaitingMs) void approveNext(false); }, 1000);
   const ac = new AbortController();
@@ -3158,6 +3162,56 @@ try {
         `终稿${mentions ? '提到了结局' : '没提结局(不计红,读原话)'}`,
       // 时间线拼进 output(report.md 逐场景打印 output):看得出「挂起 → 先干别的 → 收尾 → 批 → 执行」的真实先后
       output: `${ev.content}\n\n[timeline]\n${[...ev.toolCalls.map((c) => `${c.atMs}ms call ${c.name} (turn ${c.turn})`), ...ev.toolResults.map((r) => `${r.atMs}ms result ${r.name}${r.parked ? ' (parked)' : ''}`), ev.approvedAtMs != null ? `${ev.approvedAtMs}ms approve` : ''].filter(Boolean).sort((a, b) => parseInt(a) - parseInt(b)).join('\n')}`,
+      toolCalls: ev.toolCalls.map((c) => c.name),
+    };
+  });
+
+  // ── parkedask(10-23,opt-in):托盘 run 的 ask_user 挂起(待确认卡片方案 B,借 Codex)。真模型要满足:① 只问一次、不重问
+  // ② 挂起期间把不依赖答案的活干完(答之前 notes.md 已写好、choice.txt 还没有 —— 不许猜答案)③ 没别的可干就收尾,引擎报
+  // awaiting_approval 才答 ④ 按答案写 choice.txt ⑤ <inquiry_update> 落库、ask_user 的落库结果是答案、run 正常 done。
+  // 旁支同 parked:先读 side.txt 再写 notes.md,把写入推到读到占位之后的一轮。答案故意选第二个选项(猜第一个会被抓)。
+  await scenario('parkedask', 'parkedask 提问挂起不打断 agent', async () => {
+    if (EXEC_MODE !== 'host') return { ok: false, skipped: true, detail: '只在 host 形态有 ask_user' };
+    const dir = join(workspace, `parkedask-${Date.now()}`);
+    mkdirSync(dir, { recursive: true });
+    const choiceFile = join(dir, 'choice.txt');
+    const sideFile = join(dir, 'notes.md');
+    const srcFile = join(dir, 'side.txt');
+    const sideTok = `SIDE-${randomUUID().slice(0, 8)}`;
+    writeFileSync(srcFile, `${sideTok}\n`);
+    const sid = `live-parkedask-${Date.now()}`;
+    const ev = await runParked(sid,
+      `Two independent tasks in ${dir}:\n` +
+      `1. Use ask_user to ask me which word to use, with the options "alpha" and "beta". Write the word I pick into ${choiceFile}.\n` +
+      `2. Read ${srcFile} and write its single line into a new file ${sideFile}.\n` +
+      'When both are done, tell me in one line what each file contains.',
+      { answer: 'beta', onBeforeApprove: () => ({ side: existsSync(sideFile) ? readFileSync(sideFile, 'utf8').trim() : null, choice: existsSync(choiceFile) ? readFileSync(choiceFile, 'utf8').trim() : null }) });
+    const askCalls = ev.toolCalls.filter((c) => c.name === 'ask_user');
+    const askId = askCalls[0]?.id;
+    const choiceNow = existsSync(choiceFile) ? readFileSync(choiceFile, 'utf8').trim() : null;
+    const msgs = asList(await api(`/agent/sessions/${sid}/messages`).catch(() => []), 'messages');
+    const updates = msgs.filter((m) => m.role === 'user' && String(m.content || '').startsWith('<inquiry_update>'));
+    const savedAsk = msgs.flatMap((m) => (Array.isArray(m.tool_results) ? m.tool_results : [])).find((t) => t?.tool_call_id === askId);
+    const checks = {
+      oneQuestion: ev.inquiries.length === 1 && askCalls.length === 1,
+      parkedPlaceholder: ev.toolResults.some((r) => r.parked && r.name === 'ask_user'),
+      sideBeforeAnswer: ev.beforeApprove?.side === sideTok,
+      noGuess: ev.beforeApprove != null && ev.beforeApprove.choice == null,
+      answeredAtFinishGate: ev.approvedOnAwaiting,
+      usedAnswer: choiceNow === 'beta',
+      updatePersisted: updates.length === 1 && String(updates[0].content).includes('User answered: beta'),
+      resultPutBack: !!savedAsk && !savedAsk.parked && String(savedAsk.content || '').trim() === 'User answered: beta',
+      done: ev.done && !ev.error,
+    };
+    const sideCall = ev.toolCalls.find((c) => c.name === 'write_file' && c.args.includes('notes.md'));
+    const sameTurn = !!sideCall && !!askCalls[0] && sideCall.turn === askCalls[0].turn;
+    const bad = Object.entries(checks).filter(([, v]) => !v).map(([k]) => k);
+    return {
+      ok: !bad.length, inconclusive: !bad.length && sameTurn,
+      detail: ev.error || (bad.length ? `未过:${bad.join(',')}` : '全过') +
+        `${sameTurn ? ';⚠️notes.md 与 ask_user 同一轮发出(占位措辞未受检)' : ''};提问 ${ev.inquiries.length} 个 / ask_user ${askCalls.length} 次;答前现场 ${JSON.stringify(ev.beforeApprove)};` +
+        `${ev.approvedOnAwaiting ? '收尾闸门等答案时答' : '⚠️没等到 awaiting_approval(兜底答)'};choice=${choiceNow};回灌 ${updates.length} 条`,
+      output: `${ev.content}\n\n[timeline]\n${[...ev.toolCalls.map((c) => `${c.atMs}ms call ${c.name} (turn ${c.turn})`), ...ev.toolResults.map((r) => `${r.atMs}ms result ${r.name}${r.parked ? ' (parked)' : ''}`), ev.approvedAtMs != null ? `${ev.approvedAtMs}ms answer` : ''].filter(Boolean).sort((a, b) => parseInt(a) - parseInt(b)).join('\n')}`,
       toolCalls: ev.toolCalls.map((c) => c.name),
     };
   });
