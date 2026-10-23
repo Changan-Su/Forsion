@@ -386,6 +386,8 @@ declare global {
       desktopPermissionRequest?(id: DesktopPermissionId, options?: DesktopPermissionRequestOptions): Promise<DesktopPermissionsSnapshot>
       /** 用户主动验证 Computer Use,可能探测实际屏幕访问。 */
       desktopPermissionsVerify?(): Promise<DesktopPermissionsSnapshot>
+      /** 仅由用户点击触发:清掉这一项 Computer Use 权限的旧授权记录(tccutil reset)、重启助手并重新登记,等同系统设置里的「−」再「+」。 */
+      desktopPermissionRepair?(id: DesktopPermissionId, options?: DesktopPermissionRequestOptions): Promise<DesktopPermissionsSnapshot>
       /** 离开权限页关闭指导窗;main 同时处理尚未完成的 request 取消竞态。 */
       desktopPermissionsCloseGuide?(): Promise<void>
       /** 电脑历史(主进程 electron/computerHistory.ts);无 agent 后端的产品形态没有这个键。 */

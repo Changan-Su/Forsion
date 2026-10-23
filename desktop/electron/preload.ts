@@ -42,6 +42,7 @@ const api = {
   desktopPermissionsStatus: (): Promise<DesktopPermissionsSnapshot> => ipcRenderer.invoke('permissions:status'),
   desktopPermissionRequest: (id: DesktopPermissionId, options?: DesktopPermissionRequestOptions): Promise<DesktopPermissionsSnapshot> => ipcRenderer.invoke('permissions:request', id, options),
   desktopPermissionsVerify: (): Promise<DesktopPermissionsSnapshot> => ipcRenderer.invoke('permissions:verify'),
+  desktopPermissionRepair: (id: DesktopPermissionId, options?: DesktopPermissionRequestOptions): Promise<DesktopPermissionsSnapshot> => ipcRenderer.invoke('permissions:repair', id, options),
   desktopPermissionsCloseGuide: (): Promise<void> => ipcRenderer.invoke('permissions:closeGuide'),
   /** 电脑历史:开关 / 暂停 / 清除 / 排除表 / 折叠预览(落盘与策略全在主进程 computerHistory.ts)。 */
   computerHistory: {

@@ -12,6 +12,8 @@ export interface PermissionGuideDependencies {
   }>
   verify: (id: DesktopPermissionId) => Promise<DesktopPermissionsSnapshot>
   open: (id: DesktopPermissionId) => Promise<void>
+  /** Computer Use only: clear this permission's grant row, restart the helper and register it again. */
+  repair: (id: DesktopPermissionId, options?: DesktopPermissionRequestOptions) => Promise<DesktopPermissionsSnapshot>
   returnToApp: () => void
 }
 
@@ -75,6 +77,7 @@ const ACTION_URLS = {
   return: 'https://permission-guide.invalid/return',
   open: 'https://permission-guide.invalid/open',
   verify: 'https://permission-guide.invalid/verify',
+  repair: 'https://permission-guide.invalid/repair',
 } as const
 type Action = keyof typeof ACTION_URLS
 
@@ -94,7 +97,9 @@ const COPY = {
     add: 'App missing? If this page has a + button, click it and add the app shown above. Otherwise, return to Forsion and request this permission again.',
     restart: 'Already on but still not working? Follow any system prompt to quit and reopen the app. This guide never restarts an app for you.',
     next: 'This permission is ready. Return to Forsion and click the next permission you want to set up.',
-    back: 'Return to Forsion', verify: 'Verify', open: 'Reopen settings', busy: 'Working…',
+    repairNote: 'Switch already on but still shown as not enabled? An older helper\'s record is in the way. Click Repair access: it removes that record, restarts the helper and adds it again. Then turn the switch on once more.',
+    repairError: 'Automatic repair failed. Select tangu-computer-use in the list, click − to remove it, then click + and add it again.',
+    back: 'Return to Forsion', verify: 'Verify', open: 'Reopen settings', repair: 'Repair access', busy: 'Working…',
     loading: 'Reading permission status…', error: 'Could not read permission status. You can retry or close this guide.',
     actionError: 'The action failed. Try again or return to Forsion.',
     unverified: 'Screen access has not been verified. Click Verify; an enabled switch alone does not confirm it works.',
@@ -113,7 +118,9 @@ const COPY = {
     add: '找不到应用？如果页面有「+」按钮，点它添加上方应用；若没有，请返回 Forsion 再次请求此权限。',
     restart: '已开启但仍无效？请按系统提示退出并重新打开应用。此辅助窗口不会自动重启应用。',
     next: '当前权限已就绪。请返回 Forsion，主动点击下一项需要设置的权限。',
-    back: '返回 Forsion', verify: '验证', open: '重新打开设置', busy: '处理中…',
+    repairNote: '开关已经开着，这里仍显示未开启？是旧版助手留下的授权记录对不上了。点「修复授权」：删掉这条记录、重启助手并重新添加，然后再打开一次开关。',
+    repairError: '自动修复失败。请在列表里选中 tangu-computer-use，点「−」删除，再点「+」重新添加。',
+    back: '返回 Forsion', verify: '验证', open: '重新打开设置', repair: '修复授权', busy: '处理中…',
     loading: '正在读取权限状态…', error: '无法读取权限状态，可重试或关闭辅助窗口。',
     actionError: '操作失败，请重试或返回 Forsion。',
     unverified: '屏幕访问尚未验证。请点击「验证」；仅开关开启不代表实际可用。',
@@ -131,7 +138,7 @@ const STYLE = `
 *{box-sizing:border-box}html,body{margin:0;height:100%;overflow:hidden}body{background:var(--bg-card);color:var(--text);font:13px/1.5 system-ui,-apple-system,'PingFang SC',sans-serif;display:flex;flex-direction:column}
 header{display:flex;align-items:center;gap:8px;padding:12px 16px 8px;flex-shrink:0;-webkit-app-region:drag;font-size:12px;color:var(--text-muted)}header span{flex:1}a{-webkit-app-region:no-drag;color:inherit;text-decoration:none}a:focus-visible{outline:2px solid var(--text);outline-offset:2px}header a{font-size:20px;line-height:24px;width:24px;text-align:center;border-radius:6px}
 main{min-height:0;overflow:auto;padding:4px 18px 14px;overflow-wrap:anywhere}h1{font-size:19px;line-height:1.3;margin:4px 0 16px}p{margin:10px 0}.app{background:var(--bg);border-radius:10px;padding:10px 12px;margin-bottom:14px}.app small{display:block;color:var(--text-muted);margin-bottom:3px}.app strong{user-select:text}small,.note{font-size:12px;color:var(--text-muted)}.status{font-weight:600}.success{color:var(--green)}.error{color:var(--danger)}
-footer{flex-shrink:0;display:flex;flex-wrap:wrap;gap:8px;padding:10px 16px 14px;background:var(--bg-card)}footer a,footer span{border:1px solid var(--border);border-radius:8px;padding:7px 10px;text-align:center;flex:1;white-space:normal}footer .back{flex-basis:100%;background:var(--text);color:var(--bg-card);border-color:transparent}footer span{color:var(--text-muted)}a:hover{background:var(--bg)}footer .back:hover{opacity:.85}
+footer{flex-shrink:0;display:flex;flex-wrap:wrap;gap:8px;padding:10px 16px 14px;background:var(--bg-card)}footer a,footer span{border:1px solid var(--border);border-radius:8px;padding:7px 10px;text-align:center;flex:1;white-space:normal;display:flex;align-items:center;justify-content:center}footer .back{flex-basis:100%;background:var(--text);color:var(--bg-card);border-color:transparent}footer span{color:var(--text-muted)}a:hover{background:var(--bg)}footer .back:hover{opacity:.85}
 @media(max-height:320px){header{padding-top:6px}footer{padding-block:6px;gap:4px}footer a,footer span{padding-block:4px}}
 `
 const STYLE_HASH = createHash('sha256').update(STYLE).digest('base64')
@@ -140,7 +147,7 @@ export interface PermissionGuideView {
   id: DesktopPermissionId
   options?: DesktopPermissionRequestOptions
   snapshot?: DesktopPermissionsSnapshot
-  error?: 'read' | 'action'
+  error?: 'read' | 'action' | 'repair'
   busy?: boolean
 }
 
@@ -150,6 +157,7 @@ export function permissionGuideHtml(view: PermissionGuideView): string {
   const t = COPY[locale], esc = escapePermissionGuideHtml
   const state = view.snapshot?.permissions[view.id]
   const ready = state === 'granted' || state === 'not-required'
+  const repairable = (view.id === 'computerAccessibility' || view.id === 'computerScreen') && state === 'denied'
   const name = t.names[view.id]
   const appName = view.id === 'computerAccessibility' || view.id === 'computerScreen'
     ? 'tangu-computer-use' : view.snapshot?.appName || 'Forsion'
@@ -162,11 +170,11 @@ export function permissionGuideHtml(view: PermissionGuideView): string {
 <main><h1>${esc(name)}</h1><div class="app"><small>${esc(t.app)}</small><strong>${esc(appName)}</strong></div>
 <p>${esc(t.path)} <strong>${esc(name)}</strong>${locale === 'zh' ? '。' : '.'}</p>
 ${view.id === 'computerScreen' || view.id === 'screen' ? `<p class="note">${esc(t.screenPath)}</p>` : ''}
-<p>${esc(t.enable)}</p><p class="note">${esc(t.add)}</p><p class="note">${esc(t.restart)}</p>
-<div role="status" aria-live="polite"><p class="status ${view.error ? 'error' : ready ? 'success' : ''}">${esc(view.error ? (view.error === 'read' ? t.error : t.actionError) : state ? t.states[state] : t.loading)}</p>
+<p>${esc(t.enable)}</p>${repairable ? `<p class="note">${esc(t.repairNote)}</p>` : ''}<p class="note">${esc(t.add)}</p>${repairable ? '' : `<p class="note">${esc(t.restart)}</p>`}
+<div role="status" aria-live="polite"><p class="status ${view.error ? 'error' : ready ? 'success' : ''}">${esc(view.error ? (view.error === 'read' ? t.error : view.error === 'repair' ? t.repairError : t.actionError) : state ? t.states[state] : t.loading)}</p>
 ${!view.error && ready ? `<p>${esc(t.next)}</p>` : ''}
 ${!view.error && state === 'unverified' ? `<p class="note">${esc(t.unverified)}</p>` : ''}</div></main>
-<footer>${view.busy ? `<span>${esc(t.busy)}</span>` : action('verify', t.verify) + action('open', t.open)}${action('return', t.back, 'back')}</footer>
+<footer>${view.busy ? `<span>${esc(t.busy)}</span>` : action('verify', t.verify) + action('open', t.open) + (repairable ? action('repair', t.repair) : '')}${action('return', t.back, 'back')}</footer>
 </body></html>`
 }
 
@@ -347,12 +355,12 @@ export class PermissionGuide {
       await this.render(view)
       if (!this.alive(view)) return
       try {
-        if (action === 'verify') {
-          const snapshot = await this.deps.verify(view.id)
+        if (action === 'verify' || action === 'repair') {
+          const snapshot = action === 'verify' ? await this.deps.verify(view.id) : await this.deps.repair(view.id, view.options)
           if (this.alive(view)) view.snapshot = snapshot
         } else await this.deps.open(view.id)
       } catch {
-        if (this.alive(view)) view.error = 'action'
+        if (this.alive(view)) view.error = action === 'repair' ? 'repair' : 'action'
       } finally {
         if (this.alive(view)) { view.busy = false; await this.render(view) }
       }

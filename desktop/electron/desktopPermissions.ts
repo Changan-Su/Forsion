@@ -74,6 +74,8 @@ const MAC_PANES: Record<DesktopPermissionId, string> = {
   computerAccessibility: 'Privacy_Accessibility', computerScreen: 'Privacy_ScreenCapture',
   microphone: 'Privacy_Microphone', camera: 'Privacy_Camera', screen: 'Privacy_ScreenCapture',
 }
+const HELPER_BUNDLE_ID = 'com.forsion.tangu-computer-use'
+const TCC_SERVICES = { computerAccessibility: 'Accessibility', computerScreen: 'ScreenCapture' } as const
 const helperCommand = (cmd: string, args: Record<string, unknown> = {}, timeout = 2500): Promise<unknown> =>
   askHelper(helperSocketPath(), { cmd, ...args }, timeout)
 
@@ -99,6 +101,7 @@ export class DesktopPermissions {
       read: () => this.read(), verify: (id) => id === 'computerScreen' ? this.verify() : this.read().then((r) => r.snapshot),
       // This button only reopens the selected pane. It cannot launch another installer/prompt.
       open: (id) => this.openPane(id), returnToApp,
+      repair: (id, options) => this.repair(id, options, true),
     })
   }
 
@@ -333,6 +336,41 @@ export class DesktopPermissions {
     } finally { this.actionPending = false; this.notifyIfIdle() }
   }
 
+  /** The − and + in System Settings, done for the user. A grant row keeps the signature of the helper the user
+   *  approved; once a differently signed helper took its place, the switch stays on while the helper reads
+   *  "not granted". Drop only this permission's row (`tccutil reset` needs no admin rights for a bundle id
+   *  LaunchServices knows), restart the helper so it reads TCC afresh, and register it again so it reappears
+   *  in the list for one more switch flip. Explicit user action only. `fromGuide`: the guide's own action queue
+   *  is waiting on this call, so it must not show the guide again (that would wait on itself). */
+  async repair(id: DesktopPermissionId, options: DesktopPermissionRequestOptions = {}, fromGuide = false): Promise<DesktopPermissionsSnapshot> {
+    if (id !== 'computerAccessibility' && id !== 'computerScreen') throw new Error('Only Computer Use permissions can be repaired.')
+    if (process.platform !== 'darwin' || !this.computerUseAvailable) throw new Error('Computer Use is unavailable in this product.')
+    if (this.actionPending || this.setupPending) throw new Error('A permission request is already in progress.')
+    this.actionPending = true
+    const generation = ++this.generation
+    const current = () => generation === this.generation
+    try {
+      await exec('/usr/bin/tccutil', ['reset', TCC_SERVICES[id], HELPER_BUNDLE_ID], { timeout: 10_000 })
+      this.verification = undefined
+      const { snapshot } = await this.read()
+      if (snapshot.helperRunning) {
+        const pid = (await helperCommand('permissionStatus').catch(() => undefined) as HelperStatus | undefined)?.source?.pid
+        await helperCommand('shutdown').catch(() => {})
+        // A helper still exiting answers the next permissionStatus, and the restarted one would register in its place.
+        for (let i = 0; typeof pid === 'number' && i < 50; i++) {
+          try { process.kill(pid, 0) } catch { break }
+          await new Promise((resolve) => setTimeout(resolve, 100))
+        }
+      }
+      if (!await this.prepareHelper(current, options.locale === 'zh' ? 'zh' : 'en') || !current()) return (await this.read()).snapshot
+      await helperCommand('registerPermissions', { kind: id === 'computerAccessibility' ? 'accessibility' : 'screenRecording' }, 15_000)
+      if (!current()) return (await this.read()).snapshot
+      await this.openPane(id)
+      if (!fromGuide && current()) await this.guide.show(id, options)
+      return (await this.read()).snapshot
+    } finally { this.actionPending = false; this.notifyIfIdle() }
+  }
+
   /** Explicit user action only: never called by page polling or focus refresh. */
   verify(): Promise<DesktopPermissionsSnapshot> {
     this.verifyPending ??= this.verifyNow().finally(() => { this.verifyPending = undefined })
@@ -382,6 +420,11 @@ export function registerDesktopPermissions(opts: {
     return permissions.request(id, { locale: options?.locale === 'zh' ? 'zh' : 'en', mode: options?.mode === 'dark' ? 'dark' : 'light' })
   })
   ipcMain.handle('permissions:verify', (event) => { trusted(event); return permissions.verify() })
+  ipcMain.handle('permissions:repair', (event, id: unknown, options?: DesktopPermissionRequestOptions) => {
+    trusted(event)
+    if (!isDesktopPermissionId(id)) throw new Error('Unknown permission')
+    return permissions.repair(id, { locale: options?.locale === 'zh' ? 'zh' : 'en', mode: options?.mode === 'dark' ? 'dark' : 'light' })
+  })
   ipcMain.handle('permissions:closeGuide', (event) => { trusted(event); if (guideOwner === event.sender) closeOwnedGuide() })
   app.on('before-quit', closeOwnedGuide)
   return permissions

@@ -221,6 +221,59 @@ describe('explicit permission actions', () => {
   })
 })
 
+describe('repairing a grant row left by another helper signature', () => {
+  // After shutdown the old socket refuses until the relaunched helper answers.
+  const restartingHelper = () => {
+    let stopped = false
+    m.ask.mockImplementation((_socket, request) => {
+      if (request.cmd === 'shutdown') { stopped = true; return Promise.resolve({}) }
+      if (stopped && !m.launch.mock.calls.some((call) => call[0] === '/usr/bin/open')) return Promise.reject(Object.assign(new Error('refused'), { code: 'ECONNREFUSED' }))
+      return Promise.resolve({ ...native, accessibility: false })
+    })
+    vi.spyOn(process, 'kill').mockImplementation(() => { throw Object.assign(new Error('gone'), { code: 'ESRCH' }) })
+  }
+
+  it('resets only that permission for the helper bundle, restarts the helper, re-registers and reopens its pane', async () => {
+    restartingHelper()
+    await service().repair('computerScreen', { locale: 'zh' })
+    expect(m.launch.mock.calls[0].slice(0, 2)).toEqual(['/usr/bin/tccutil', ['reset', 'ScreenCapture', 'com.forsion.tangu-computer-use']])
+    const cmds = m.ask.mock.calls.map((call) => call[1])
+    const shutdown = cmds.findIndex((r) => r.cmd === 'shutdown')
+    expect(shutdown).toBeGreaterThan(-1)
+    expect(m.launch.mock.invocationCallOrder[0]).toBeLessThan(m.ask.mock.invocationCallOrder[shutdown])
+    expect(m.launch.mock.calls[1].slice(0, 2)).toEqual(['/usr/bin/open', expect.arrayContaining(['-n', '-g', 'serve'])])
+    expect(cmds.slice(shutdown)).toContainEqual({ cmd: 'registerPermissions', kind: 'screenRecording' })
+    expect(m.open).toHaveBeenCalledExactlyOnceWith('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture')
+    expect(m.show).toHaveBeenCalledWith('computerScreen', { locale: 'zh' })
+    expect(m.confirm).not.toHaveBeenCalled()
+  })
+
+  it('from the guide it does not reopen the guide that is waiting on it', async () => {
+    restartingHelper()
+    await service().repair('computerAccessibility', {}, true)
+    expect(m.launch.mock.calls[0][1]).toEqual(['reset', 'Accessibility', 'com.forsion.tangu-computer-use'])
+    expect(m.open).toHaveBeenCalledOnce()
+    expect(m.show).not.toHaveBeenCalled()
+  })
+
+  it('a failed reset leaves the helper running and opens nothing', async () => {
+    m.launch.mockImplementation((_command, _args, _options, callback) => callback(new Error('tccutil: No such bundle identifier')))
+    const s = service()
+    await expect(s.repair('computerAccessibility')).rejects.toThrow('No such bundle identifier')
+    expect(m.ask.mock.calls.map((call) => call[1].cmd)).not.toContain('shutdown')
+    expect(m.open).not.toHaveBeenCalled()
+    expect(s.helperBusy()).toBe(false)
+  })
+
+  it('media permissions and untrusted senders never reach tccutil', async () => {
+    await expect(service().repair('microphone')).rejects.toThrow('Only Computer Use')
+    registerDesktopPermissions({ isTrustedSender: (e) => !!(e as any).trusted, computerUseAvailable: true, returnToApp: vi.fn() })
+    expect(() => m.handlers.get('permissions:repair')!({}, 'computerScreen')).toThrow('Untrusted')
+    expect(() => m.handlers.get('permissions:repair')!({ trusted: true }, 'Accessibility')).toThrow('Unknown permission')
+    expect(m.launch).not.toHaveBeenCalled()
+  })
+})
+
 describe('helper update for the global ⌘⌘ hotkey', () => {
   const helperAt = (protocolVersion: number, bundled: string) => {
     m.ask.mockImplementation((_socket, request) => Promise.resolve(request.cmd === 'diagnostics' ? { protocolVersion } : native))
