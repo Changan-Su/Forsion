@@ -71,8 +71,6 @@ registerMessages({
 
 const ws = () => useWorkspace.getState()
 const app = () => useApp.getState()
-// 「新对话」随 Tangu 的命令挪进了 features/tangu.tsx(核心插件化 2e-4);手机分享入口(mobile/src/shareInbox)仍从这里取
-export { blankNewChat } from '@tangu/ui/features/tangu'
 /** 空占位内容(订阅 i18n,语言切换即时生效)。同一个视图服务左右侧栏与**底部面板**,
  *  故文案按所在区取:底部说「面板」不说「侧栏」。tab 标题在 displayName 里拿不到 leaf,
  *  只能在这儿按区改写(WbTab 订阅了 onDidTitleChange,改完即刷)。 */

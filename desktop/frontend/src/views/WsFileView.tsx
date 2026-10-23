@@ -22,13 +22,12 @@ import { useVisualTheme as useTheme } from '../stores/themeStore'
 import { PlainMarkdownEditor } from '../amadeus/blocks/markdown/MarkdownBlock'
 import { getTransientTarget, hostTargetFor, pendingWrites } from './wsFileNav'
 import { useApp } from '../stores/appStore'
-import { bumpDir } from '@tangu/ui/views/chat2/FilesPanel'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { findFileType, usePluginStore } from '@amadeus/plugins/pluginStore'
 import { openNote } from '../amadeusNav'
 import { newTabOf } from './itemSelect'
 import type { CtxItem } from '../components/RightPanel'
-import { DeskChromeContext } from '../amadeus/plugins/tanguSeam'
+import { DeskChromeContext, readTanguShell } from '../amadeus/plugins/tanguSeam'
 
 /** 卸载冲刷失败/冲突时的兜底:把未保存内容另存为旁路文件(绝不静默丢),全局 toast 告知。 */
 async function salvageDraft(path: string, content: string): Promise<void> {
@@ -36,7 +35,7 @@ async function salvageDraft(path: string, content: string): Promise<void> {
   const salvagePath = path.replace(/(\.[^./\\]+)?$/, `.本地未保存-${Date.now()}$1`)
   try {
     await window.tangu?.writeHostFile?.(salvagePath, content, undefined, true)
-    bumpDir(salvagePath.slice(0, Math.max(salvagePath.lastIndexOf('/'), salvagePath.lastIndexOf('\\'))))
+    readTanguShell()?.bumpDir(salvagePath.slice(0, Math.max(salvagePath.lastIndexOf('/'), salvagePath.lastIndexOf('\\'))))
     toast(useApp.getState().tr('preview.mdSalvaged', { file: salvagePath.split(/[/\\]/).pop() || salvagePath }), true)
   } catch {
     toast(useApp.getState().tr('preview.mdSaveFail', { err: path }), true)
