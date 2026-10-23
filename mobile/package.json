@@ -49,6 +49,7 @@
     "test:nativebar": "./android/gradlew -p android :app:testDebugUnitTest --tests '*NativeChromeBarLayoutTest'",
     "stage:phone": "node scripts/phone-stage.cjs",
     "check:calendar-phone": "node scripts/calendar-phone.check.cjs",
+    "check:calendar-create": "node scripts/calendar-create.check.cjs",
     "emu:launchericon": "node scripts/launcher-icon-upgrade-emu.cjs",
     "emu:phone": "node scripts/phone-control-emu.cjs",
     "emu:localasset": "node scripts/local-asset-emu.cjs",
