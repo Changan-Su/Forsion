@@ -7,18 +7,18 @@
  *  10-23 起(用户:「审批、任务卡这种要用户交互的卡片放在最新的末尾」)待办与后台审批都进对话末尾的卡片堆,
  *  不再在输入框上方另挂一个 Muse 托盘;流里原处各留一行(MuseTodoTraces / MuseApprovalLine)。
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { create } from 'zustand'
 import { BellDot, CircleCheck, CircleX, ShieldQuestion } from 'lucide-react'
 import { registerMessages, useI18n } from '../../i18n'
 import { useApp } from '../../stores/appStore'
 import { useAttention } from '../../stores/attentionStore'
-import { getMuseApproval, getMuseTodos, listMuseApprovals } from '../../services/backendService'
+import { getMuseApproval, listMuseApprovals } from '../../services/backendService'
 import { homeTarget } from '../../services/engine/targets'
 import { formatMessageTime } from '../../format/time'
 import type { PendingApprovalInfo, UiMessage } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { ApprovalCard } from '../inbox/InboxBody'
-import { TaskCards, TaskTraces, useMuseTodoStatus, type TaskLanding } from './TaskCards'
+import { TaskCards, TaskTraces, fetchMuseTodoStatus, useMuseTodoSeen, useMuseTodoStatus, type TaskLanding } from './TaskCards'
 import type { TaskCard } from './suggest'
 
 registerMessages({
@@ -137,19 +137,16 @@ export function museApprovalSettled(): void {
   void useAttention.getState().refresh('home')
 }
 
-/** 引擎那边还 pending 的 Muse 待办 id(一次拉全部 pending,卡片堆按 todo id 筛)。ids = 这条私聊里出现过的待办 id;
- *  没有就不拉。null = 还没拉到 —— 这时待办先不进卡片堆(流里那行照样按单条真状态显示)。
- *  ponytail: 列表接口上限 500 条 pending,超过的进不了卡片堆(不会误给按钮);别处处理掉的要等下次重拉(sig 变)才离开。 */
-export function useMusePendingTodos(ids: string, sig: number): ReadonlySet<string> | null {
+/** 引擎那边还 pending 的 Muse 待办 id(按 id 读,和流里那行 / 卡片堆里那张共用 useMuseTodoSeen):ids = 这条私聊里出现过的待办 id。
+ *  还在读 / 读失败的先不进卡片堆 —— 流里那行照样显示状态,读失败给重试,重试读到 pending 就进来;
+ *  在别处处理掉的,换到这张卡时它自己重读一次(MuseTodoCards),读到不是 pending 就离开。 */
+export function useMusePendingTodos(ids: string, sig: number): ReadonlySet<string> {
   const cfg = useApp((s) => s.cfg)
-  const [set, setSet] = useState<ReadonlySet<string> | null>(null)
+  const seen = useMuseTodoSeen()
   useEffect(() => {
-    if (!ids) return
-    let alive = true
-    getMuseTodos(homeTarget(), 'pending').then((todos) => { if (alive) setSet(new Set(todos.map((x) => x.id))) }, () => {})
-    return () => { alive = false }
+    if (ids) for (const id of ids.split(',')) void fetchMuseTodoStatus(id)
   }, [cfg, ids, sig])
-  return ids ? set : null
+  return useMemo(() => new Set(ids ? ids.split(',').filter((id) => seen[id] === 'pending') : []), [ids, seen])
 }
 
 /** 流里 Muse 待办那条下面的一行:还 pending → 「任务卡「…」· 在对话最下面」;处理过 / 已不存在 / 读失败各一行结局。 */

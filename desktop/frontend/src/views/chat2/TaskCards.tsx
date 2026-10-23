@@ -2,6 +2,7 @@
  *  卡片本身什么也不做,点了才经 onTask 发消息 / 建 Muse 日程;做成了定格成「已…」(失败保留按钮)。
  *  任务书默认折叠但**必须可展开**:点下去发出的是任务书而不是标题,不能让用户看不见自己在同意什么。 */
 import { useEffect, useState } from 'react'
+import { create } from 'zustand'
 import { ArrowDown, Check, ClipboardList, ChevronDown, ChevronRight, Clock, MessageSquarePlus, Play, Sparkles, X } from 'lucide-react'
 import { registerMessages, useI18n } from '../../i18n'
 import { useApp } from '../../stores/appStore'
@@ -68,6 +69,22 @@ function useWithdrawn(sessionId?: string): Map<string, string> {
 /** Muse TODO 卡按待办的真状态(按 id 现拉)决定给不给按钮:确认 pending 才给;还在查 / 读失败 / 已不存在 / 已处理都不给
  *  —— 否则一张旧卡(应用重启后模块级记录没了)能把已交给 Muse 的待办改成忽略、或再发一遍(Codex 09-11 P1)。
  *  收件箱里 Muse 的信与 Muse 私聊里它提的待办(10-18 方案 B)共用。没有 todo 卡 → status 为 undefined(TaskCards 不锁)。 */
+/** 各处按 id 读到的 Muse 待办真状态(流里那行、卡片堆里那张、收件箱):卡片堆按它收不收这张卡 —— 谁读到新状态,
+ *  卡片堆跟着进出(重试、换到这张卡时的重读、在别处处理掉)。按钮给不给仍按各自那一代的结果(见下),不读这份。 */
+export const useMuseTodoSeen = create<Record<string, string>>(() => ({}))
+const todoInflight = new Map<string, Promise<string>>()
+/** 读一条待办的状态并记进 useMuseTodoSeen;同一 id 并发只发一次。 */
+export function fetchMuseTodoStatus(id: string): Promise<string> {
+  let p = todoInflight.get(id)
+  if (!p) {
+    p = getMuseTodo(homeTarget(), id)
+      .then((t): string => t.status, (e: any): string => (e?.code === 'todo_not_found' ? 'missing' : 'error'))
+      .then((st) => { todoInflight.delete(id); useMuseTodoSeen.setState({ [id]: st }); return st })
+    todoInflight.set(id, p)
+  }
+  return p
+}
+
 export function useMuseTodoStatus(ownerId: string, tasks: TaskCard[]): { status: Record<string, string> | undefined; retry: () => void } {
   const cfg = useApp((s) => s.cfg)
   const todoKey = tasks.map((c) => c.todo || '').filter(Boolean).join(',')
@@ -79,9 +96,7 @@ export function useMuseTodoStatus(ownerId: string, tasks: TaskCard[]): { status:
     if (!todoKey) return
     let alive = true
     for (const id of todoKey.split(',')) {
-      getMuseTodo(homeTarget(), id)
-        .then((t): string => t.status, (e: any): string => (e?.code === 'todo_not_found' ? 'missing' : 'error'))
-        .then((st) => { if (alive) setRes((p) => ({ gen, map: { ...(p.gen === gen ? p.map : {}), [id]: st } })) })
+      void fetchMuseTodoStatus(id).then((st) => { if (alive) setRes((p) => ({ gen, map: { ...(p.gen === gen ? p.map : {}), [id]: st } })) })
     }
     return () => { alive = false }
   }, [cfg, gen, todoKey])
