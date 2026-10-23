@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { runAgentFilesSync, prepareAgentFilesForRun } from './agentFileSync.js';
+import { runAgentFilesSync, prepareAgentFilesForRun, mergeFactLines } from './agentFileSync.js';
 import { agentSyncScope, setAgentSyncPermission, invalidateAgentSyncOperations, registerAgentSyncIdentity } from './cloudSyncAccount.js';
 import { createLocalMemoryStore } from '../adapters/standalone/localMemoryBrain.js';
 import { createMemoryRepository } from './memoryRepository.js';
@@ -110,6 +110,33 @@ describe('agent sync boundaries and lifecycle', () => {
     expect(f.files.get('private-agent/.memory-tombstones.json')?.content).toContain('forgotten exact fact');
     expect(vi.mocked(f.cloud.putFile).mock.calls[0][2]).toBe('.memory-tombstones.json');
   });
+  // 10-23:网页 / 手机也能改记忆了。两边都改了 = 按行三方合并,不再整份另存冲突副本、云端那份胜
+  it('merges MEMORY.md line by line when this device and the cloud both changed it', async () => {
+    const f = cloudFixture(); const dir = owned(f.cloud); const repo = createMemoryRepository(dir);
+    repo.mutate({ action: 'add', fact: 'Likes tea' }); repo.mutate({ action: 'add', fact: 'Works in London' });
+    expect((await runAgentFilesSync(f.cloud, 'u', { onlySlug: 'private-agent' })).ok).toBe(true);
+    const synced = f.files.get('private-agent/MEMORY.md')!;
+    // 网页上把 London 改成 Paris(云端 seq +1),同时本机记了一条新的
+    const web = synced.content!.replace('Works in London', 'Works in Paris');
+    f.files.set('private-agent/MEMORY.md', { ...synced, content: web, seq: synced.seq! + 1, hash: hash(web) });
+    repo.mutate({ action: 'add', fact: 'Has a cat' });
+    const r = await runAgentFilesSync(f.cloud, 'u', { onlySlug: 'private-agent' }); expect(r.ok).toBe(true);
+    expect(r.conflicts).toBe(0);
+    const local = repo.snapshot().content;
+    expect(local).toContain('Works in Paris'); expect(local).toContain('Has a cat'); expect(local).not.toContain('London');
+    expect(f.files.get('private-agent/MEMORY.md')!.content).toBe(local);
+  });
+  it('a fact forgotten on the web stays forgotten when this device added something meanwhile', async () => {
+    const f = cloudFixture(); const dir = owned(f.cloud); const repo = createMemoryRepository(dir);
+    repo.mutate({ action: 'add', fact: 'Likes tea' }); repo.mutate({ action: 'add', fact: 'Old secret' });
+    expect((await runAgentFilesSync(f.cloud, 'u', { onlySlug: 'private-agent' })).ok).toBe(true);
+    const synced = f.files.get('private-agent/MEMORY.md')!;
+    const web = synced.content!.replace('Old secret\n', '').replace('\nOld secret', '');
+    f.files.set('private-agent/MEMORY.md', { ...synced, content: web, seq: synced.seq! + 1, hash: hash(web) });
+    repo.mutate({ action: 'add', fact: 'Has a cat' });
+    expect((await runAgentFilesSync(f.cloud, 'u', { onlySlug: 'private-agent' })).ok).toBe(true);
+    expect(repo.snapshot().content).not.toContain('Old secret'); expect(repo.snapshot().content).toContain('Has a cat');
+  });
   it('tracks dynamic token identity instead of keeping an old request user scope', () => {
     const f = cloudFixture(); const token = (u: string) => `x.${Buffer.from(JSON.stringify({ userId: u })).toString('base64url')}.x`;
     let current = token('a'); registerAgentSyncIdentity(f.cloud, 'https://synthetic.invalid', () => current);
@@ -211,4 +238,16 @@ it('quota rejection keeps local Agent edits and cloud content for a later retry'
  expect(r.ok).toBe(false);expect(readFileSync(join(dir,'SOUL.md'),'utf8')).toBe('LOCAL edit');
  expect(f.files.has('private-agent/SOUL.md')).toBe(false);
  expect(r.error).toContain('STORAGE_QUOTA_EXCEEDED');
+});
+
+describe('mergeFactLines', () => {
+  it('keeps both sides\' additions, drops either side\'s deletions, an edit replaces the line', () => {
+    expect(mergeFactLines('A\nB\nC\nL\n', 'A\nB\nC\n', 'A\nB2\n')).toBe('A\nL\nB2\n');
+  });
+  it('the same fact added on both sides is kept once', () => {
+    expect(mergeFactLines('A\nNew\n', 'A\n', 'A\nNew\n')).toBe('A\nNew\n');
+  });
+  it('everything deleted on one side and untouched on the other = empty', () => {
+    expect(mergeFactLines('A\n', 'A\n', '')).toBe('');
+  });
 });

@@ -17,7 +17,7 @@ import { listAgents, getAgent, saveAgent, patchAgent, AgentNotFoundError, AgentE
 import {
   cloudAgentsEnabled, cloudListAgents, cloudGetAgent, cloudSaveAgent, cloudPatchAgent, cloudDeleteAgent,
   cloudSaveAgentAvatar, cloudReadAgentAvatar, cloudDeleteAgentAvatar, cloudReadAgentsMeta, cloudWriteAgentsMeta,
-  cloudReadMemory, cloudLogDates, cloudReadLog, cloudReadHarness,
+  cloudReadMemory, cloudWriteMemory, cloudMutateMemory, cloudLogDates, cloudReadLog, cloudReadHarness,
 } from '../agents/cloudAgentStore.js';
 import path from 'node:path';
 import { agentsDir, ensureHumanFolder, readUserMd } from '../core/tanguHome.js';
@@ -304,13 +304,16 @@ async function storeForAgent(slug: string): Promise<ReturnType<typeof createLoca
   return createLocalMemoryStore(path.join(agentsDir(), resolveMemorySlug(def)));
 }
 
-/** 云端(网页 / 手机)只读这几份同步上来的文件;null = 没这个 agent。 */
+/** 云端(网页 / 手机)读写这几份同步上来的文件(agents/cloudAgentStore);null = 没这个 agent。 */
 async function cloudRead(res: any, read: () => Promise<unknown | null>): Promise<void> {
   try {
     const r = await read();
     if (r === null) res.status(404).json({ detail: 'Agent not found' });
     else res.json(r);
-  } catch (e: any) { res.status(500).json({ detail: e?.message || 'read failed' }); }
+  } catch (e: any) {
+    const code = e instanceof MemoryRepositoryError ? e.code : undefined;
+    res.status(code === 'MEMORY_VERSION_CONFLICT' || code === 'MEMORY_BUSY' ? 409 : code === 'MEMORY_INVALID' ? 400 : 500).json({ detail: e?.message || 'memory request failed', code });
+  }
 }
 
 router.get('/agent/agents/:slug/memory', authMiddleware, async (req: AuthRequest, res) => {
@@ -330,6 +333,11 @@ router.get('/agent/agents/:slug/memory', authMiddleware, async (req: AuthRequest
 });
 
 router.put('/agent/agents/:slug/memory', authMiddleware, async (req: AuthRequest, res) => {
+  if (cloudAgentsEnabled()) {
+    if (typeof req.body?.expectedVersion !== 'string') return res.status(428).json({ detail: 'expectedVersion is required; reload memory before saving.' });
+    if (typeof req.body?.content !== 'string') return res.status(400).json({ detail: 'content must be a string' });
+    return cloudRead(res, () => cloudWriteMemory(req.user!.userId, req.params.slug, req.body.content, req.body.expectedVersion));
+  }
   if (!ensureLocal(res)) return;
   try {
     const store = await storeForAgent(req.params.slug);
@@ -362,6 +370,7 @@ router.post('/agent/agents/:slug/memory/restore', authMiddleware, async (req: Au
 });
 
 router.post('/agent/agents/:slug/memory/entries', authMiddleware, async (req: AuthRequest, res) => {
+  if (cloudAgentsEnabled()) return cloudRead(res, () => cloudMutateMemory(req.user!.userId, req.params.slug, req.body || {}));
   if (!ensureLocal(res)) return;
   try {
     const store = await storeForAgent(req.params.slug);

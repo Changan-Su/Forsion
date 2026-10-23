@@ -781,8 +781,8 @@ export interface AgentMemoryEntry { id: string; content: string; source: AgentMe
 export interface AgentMemorySnapshot {
   version: string; content: string; entries: AgentMemoryEntry[]; updatedAt: number
   tombstones: Array<{ id: string; forgottenAt: number }>
-  /** 云端(网页 / 手机)= 桌面同步上来的那份,只能看。 */
-  readonly?: boolean
+  /** 云端(网页 / 手机)= 桌面同步上来的那份:能改(按 version 比对交换),没有版本记录与 Dream。 */
+  cloud?: boolean
 }
 export interface AgentMemoryRevision { version: string; createdAt: number; source: AgentMemorySource; content: string }
 export interface AgentMemoryDreamConfig { enabled: boolean; modelId: string; timeoutMs: number; maxOutputTokens: number; intervalHours: number }
