@@ -482,11 +482,12 @@ export function approvalRequestBody(a: { id: string; tool: string; preview: stri
   return [
     `${escapeMd(a.tool)} · ${escapeMd(displayText(a.preview, 1000))}`,
     a.note ? escapeMd(displayText(a.note, 500)) : '',
-    '```forsion-approval\n' + JSON.stringify({ id: a.id }) + '\n```',
+    approvalFence(a.id),
   ].filter(Boolean).join('\n\n');
 }
+const approvalFence = (id: string): string => '```forsion-approval\n' + JSON.stringify({ id }) + '\n```';
 
-/** 入队即发一封收件箱消息(只在 queueApproval 新建行时:existing=true 不重发,去重与行同源)。
+/** 入队即发一封收件箱消息(只在 queueApproval 新建行时:existing=true 不重发,去重与行同源;被删 / 已读的由 resurfaceApprovalLetter 请回来)。
  *  刻意绕过 notify=digest —— 审批是等用户拍板的请求,不是通知。发送失败(小时上限 / 落库失败)不阻断排队,
  *  但在该 agent 的 LOG 留痕,否则请求就只剩 Muse 面板一处可见。 */
 async function notifyApprovalRequest(a: { userId: string; agentSlug: string; id: string; tool: string; preview: string; note?: string }): Promise<void> {
@@ -507,6 +508,41 @@ async function notifyApprovalRequest(a: { userId: string; agentSlug: string; id:
   }).catch((e: any) => ({ ok: false as const, error: String(e?.message || e) }));
   if (!sent.ok) {
     await appendAgentLog(a.agentSlug, a.userId, `[approval] request ${a.id} queued, but the inbox message was not delivered: ${sent.error || 'send failed'}`);
+  }
+}
+
+/** 同一条待批请求被再次提出时(queueApproval 复用行,不发新信),收件箱里那封信若已被删或已读,就让它回来:
+ *  发一封新的未读信排到最上面,还看得见的旧信软删 —— 同一条请求在列表里始终只有一封(借鉴 Comma §2.9,2026-10-24 用户定)。
+ *  不动的:归档过的(用户明说收好了)、还开着且未读的(不刷屏)、找不到信的(不补发);不转发通道。
+ *  Muse 的审批在它的私聊里,不走这里。想让它停,用户该在卡上点「拒绝」—— 删除不等于拒绝。
+ *  ponytail: 同进程并发的两次重提靠 resurfacing 挡;多进程同库才会双发,本地引擎是单进程。 */
+const resurfacing = new Set<string>();
+async function resurfaceApprovalLetter(a: { userId: string; agentSlug: string; id: string; tool: string; preview: string; note?: string }): Promise<void> {
+  if (a.agentSlug === MUSE_AGENT_SLUG || resurfacing.has(a.id)) return;
+  resurfacing.add(a.id);
+  try {
+    // 按引擎自己拼在正文末尾的围栏认信(approvalRequestBody);行 id 是 uuid,围栏里没有 LIKE 的通配符和转义符。
+    const fence = approvalFence(a.id);
+    const letters = await query<any[]>(
+      `SELECT id, read_at, archived_at, deleted_at FROM inbox_messages
+       WHERE user_id = ? AND sender_kind = 'agent' AND sender_id = ? AND body LIKE ?`,
+      [a.userId, a.agentSlug, `%${fence}%`],
+    );
+    if (!letters?.length) return;
+    const shown = letters.filter((m) => !m.deleted_at);
+    if (shown.some((m) => m.archived_at || !m.read_at)) return;
+    const sent = await sendInboxMessage(a.userId, {
+      title: `⏸ ${displayText(a.preview, 180)}`, body: approvalRequestBody(a), senderId: a.agentSlug, forward: false,
+    }).catch((e: any) => ({ ok: false as const, error: String(e?.message || e) }));
+    if (!sent.ok) {
+      await appendAgentLog(a.agentSlug, a.userId, `[approval] request ${a.id} was asked again, but its inbox message could not be brought back: ${sent.error || 'send failed'}`);
+      return;
+    }
+    const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
+    for (const m of shown) await query(`UPDATE inbox_messages SET deleted_at = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, [now, m.id, a.userId]);
+    log(`resurfaced the inbox message for ${a.id} (${shown.length ? 'was read' : 'was deleted'})`);
+  } finally {
+    resurfacing.delete(a.id);
   }
 }
 
@@ -587,6 +623,9 @@ export async function deferApproval(
   if (!existing) {
     log(`queued ${id} (${call.function.name}) for ${agentSlug}${note ? ` — ${note}` : ''}`);
     await notifyApprovalRequest({ userId, agentSlug, id, tool: call.function.name, preview, note });
+  } else {
+    await resurfaceApprovalLetter({ userId, agentSlug, id, tool: call.function.name, preview, note })
+      .catch((e: any) => log(`resurfacing the inbox message for ${id} failed: ${e?.message || e}`));
   }
   return {
     action: 'reject',
