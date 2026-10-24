@@ -710,4 +710,31 @@ const CLOUD_KEYS: Record<string, string> = {
 for (const [k, channel] of Object.entries(CLOUD_KEYS)) if (!cloudPresent().has(channel)) delete (api as Record<string, unknown>)[k]
 if (!cloudPresent().size) delete (api as Record<string, unknown>).cloudInvoke
 
+// 插件沙箱(electron/pluginSandbox.ts / sandboxChild.ts):用户那份 Forsion 拿控制面 pluginSandbox;沙箱那份拿 sandbox(自身信息 +
+// 沙箱条按钮)。两者互斥:沙箱里不能再起沙箱。主进程两种身份都答 pluginSandbox:self(普通实例答 null),同步问一次就分得清。
+const sandboxSelf: unknown = ipcRenderer.sendSync('pluginSandbox:self')
+const on = <T,>(channel: string) => (cb: (v: T) => void): (() => void) => {
+  const listener = (_e: unknown, v: T) => cb(v)
+  ipcRenderer.on(channel, listener)
+  return () => { ipcRenderer.removeListener(channel, listener) }
+}
+if (sandboxSelf) {
+  (api as Record<string, unknown>).sandbox = {
+    self: sandboxSelf,
+    action: (a: string, note?: string) => ipcRenderer.invoke('pluginSandbox:childAction', a, note),
+    changed: () => ipcRenderer.send('pluginSandbox:changed'),
+  }
+} else {
+  (api as Record<string, unknown>).pluginSandbox = {
+    exec: (op: string, args: Record<string, unknown>, origin: unknown) => ipcRenderer.invoke('pluginSandbox:exec', op, args, origin),
+    state: () => ipcRenderer.invoke('pluginSandbox:state'),
+    show: () => ipcRenderer.invoke('pluginSandbox:show'),
+    stop: () => ipcRenderer.invoke('pluginSandbox:stop'),
+    reset: () => ipcRenderer.invoke('pluginSandbox:reset'),
+    install: () => ipcRenderer.invoke('pluginSandbox:install'),
+    onChanged: on('pluginSandbox:changed'),
+    onReport: on('pluginSandbox:report'),
+  }
+}
+
 contextBridge.exposeInMainWorld('tangu', api)

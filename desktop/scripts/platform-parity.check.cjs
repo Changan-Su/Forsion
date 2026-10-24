@@ -120,6 +120,10 @@ const SKIP = {
   WorkspaceHost: 'Dockview 分栏宿主;单列壳自己就是它的对位物',
   installHotkeys: '移动端无物理键盘;命令一律经「⋯」菜单/命令面板点选',
   installSashAffordance: '无分栏缝 = 无缝拖拽提示',
+  // —— 插件沙箱(tangu-agent/docs/plugin-sandbox.md):沙箱是桌面主进程另起的一份 Forsion,手机 / web 不起沙箱 ——
+  installSandboxHook: '同上:沙箱窗口给主进程调的 window.__forsionSandbox 钩子',
+  installPluginSandboxSurface: '插件沙箱能力面 plugin.sandbox:引擎门控只给 desktop/ 客户端(toolRegistry CLIENT_FOR_NS),手机 / web 不声明;卡片在手机上照常渲染并提示到电脑上打开',
+  SandboxChrome: '沙箱窗口标题栏的标识与按钮,只在桌面沙箱子进程里挂',
 }
 
 /** bootstrapEngine 里已知的 host 门控。新增门控 = 又一条「web/移动端会静默少一块」的通道,必须登记。 */

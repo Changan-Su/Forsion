@@ -126,7 +126,7 @@ export function useHiddenSpacesOf(pluginId: string | null | undefined): HiddenSp
 }
 const NONE: HiddenSpace[] = []
 /** 非 React 读(agent 命令)。 */
-function hiddenSpacesOf(pluginId: string): HiddenSpace[] {
+export function hiddenSpacesOf(pluginId: string): HiddenSpace[] {
   const hidden = useHiddenPluginSpaces.getState().byPlugin[pluginId]
   return hidden && usePluginStore.getState().activeIds.includes(pluginId) ? stillHidden(pluginId, hidden, viewsOf(pluginId)) : NONE
 }
