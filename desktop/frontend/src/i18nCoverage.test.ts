@@ -446,6 +446,8 @@ describe('i18n 覆盖', () => {
       'components/ModelPickerSettings.tsx  (model.contextWindow ?? 0)': [1, '上下文窗口(token 数)'],
       'views/AgentProfileView.tsx  s.usage.ctx': [1, '上下文 token 数'],
       'views/chat2/Composer2.tsx  (sessionTokens ?? 0)': [2, '会话 token 数'],
+      'views/chat2/QuoteTile.tsx  lines': [1, '长粘贴磁贴的行数(数字)'],
+      'views/chat2/QuoteTile.tsx  text.length': [1, '长粘贴磁贴的字数(数字)'],
       'views/chat2/Composer2.tsx  (ctxTokens ?? 0)': [1, '上下文 token 数'],
       'views/chat2/Composer2.tsx  (ringWindow ?? 0)': [1, '上下文窗口(token 数;Ultra 切换后按下一轮口径)'],
       'views/chat2/Composer2.tsx  Math.round(runCost)': [2, '单次运行费用(数字)'],

@@ -75,6 +75,7 @@ import { isRemoteApprover, wasDecidedHere } from '../../components/ApprovalCard'
 import { answeredByText } from '../../approvalReason'
 import { refForSession, targetForSession, useSessionHostName } from '../../services/engine/targets'
 import { AttachmentTile } from '../../components/AttachmentTile'
+import { ImageStack, stackable } from '../../components/ImageStack'
 import { UserFold } from './UserFold'
 export type { TaskLanding }
 import './chat2.css'
@@ -412,7 +413,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
   // 建议芯片是一次性的:点了就等于用户按了回车,整排随即失效 —— 不然双击会把同一句排两遍。
   const [suggestSent, setSuggestSent] = useState(false)
   const [rewindOpen, setRewindOpen] = useState(false)
-  const [previewQuote, setPreviewQuote] = useState<string | null>(null)
+  const [previewQuote, setPreviewQuote] = useState<{ text: string; note?: string } | null>(null)
   // 手机:长按菜单原生那头弹不出来过(宿主拒了这次请求)→ 这条消息把三个小键和文字选择还回来,动作不至于够不着。
   const [inlineActions, setInlineActions] = useState(false)
   // 原生回退半屏的在途请求(Android):消息卸载、或它所属的会话 / 消息换了 → 作废(见 openNativeRewind)。
@@ -540,10 +541,10 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
         .then((shown) => { if (!shown) restore() }, restore)
     }
     return (
-      <div ref={setUserWrap} className={`t2-userwrap${inlineActions ? ' t2-userwrap--inline' : ''}`} id={`tocmsg-${msg.id}`} data-toc-msg-role="user" data-toc-title={tocTitle}>
+      <div ref={setUserWrap} className={`t2-userwrap${inlineActions ? ' t2-userwrap--inline' : ''}${footer ? ' t2-userwrap--failed' : ''}`} id={`tocmsg-${msg.id}`} data-toc-msg-role="user" data-toc-title={tocTitle}>
         <div className="t2-user-col">
           <div className="t2-username">{name}</div>
-          {previewQuote !== null && <QuotePreview text={previewQuote} onClose={() => setPreviewQuote(null)} />}
+          {previewQuote && <QuotePreview text={previewQuote.text} note={previewQuote.note} onClose={() => setPreviewQuote(null)} />}
           {(atts.length > 0 || quoted) && (
             // 附件磁贴(B2)挪到气泡上方、右对齐:图片一行在前,文件一行在后;不参与长提问折叠。
             // 引用磁贴(10-23)排在最上面一行:点了跳回原文闪两下,找不到原文(老分页 / 别处带来的引用)就看全文。
@@ -551,15 +552,18 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
               {quoted && (
                 <div className="t2-user-atts-row">
                   {quoted.quotes.map((quote, i) => (
-                    <QuoteTile key={i} text={quote} title={t('quote.tile.jump')} onOpen={(el) => {
+                    // 带回应的卡显示回应(两段引用之间的文字);最后一段后面的字分不出回应还是正文,照旧进气泡
+                    <QuoteTile key={i} text={quote} note={quoted.notes[i]} title={t('quote.tile.jump')} onOpen={(el) => {
                       const source = runSid ? findQuoteSource(el, quote) : undefined
                       if (source && runSid) useApp.getState().setJumpTarget(runSid, source)
-                      else setPreviewQuote(quote)
+                      else setPreviewQuote({ text: quote, note: quoted.notes[i] })
                     }} />
                   ))}
                 </div>
               )}
               {[atts.filter(isImageAtt), atts.filter((a) => !isImageAtt(a))].map((row, r) => row.length > 0 && (
+                // 图片超过 3 张叠成一摞(ImageStack.tsx);3 张以内照旧平铺
+                r === 0 && stackable(row.length) ? <ImageStack key={r} files={row} /> :
                 <div key={r} className="t2-user-atts-row">
                   {row.map((a, i) => <AttachmentTile key={`${a.name}-${i}`} file={a} view />)}
                 </div>
@@ -582,6 +586,8 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
             </UserFold>
           </div>
           )}
+          {/* 用户消息只有「没发出去」那条(ChatView 的 failedSends)传 footer:换掉复制 / 编辑那一排,放原因 + 丢弃 / 重试 */}
+          {footer ?? (
           <div className="t2-actions">
             <MsgTime at={msg.timestamp} />
             <button className="t2-iconbtn" title={t('chat.action.copy')} onClick={() => handlers?.onCopy?.(msg.content)}><Copy size={14} /></button>
@@ -595,6 +601,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
               </span>
             )}
           </div>
+          )}
         </div>
         <div className="t2-avatar t2-user-avatar" style={!userAvatar ? { background: 'color-mix(in srgb, var(--text-muted) 22%, transparent)' } : undefined}>
           {userAvatar ? <img src={userAvatar} alt="" /> : firstChar(name)}
@@ -671,7 +678,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
                 fenceState = parsed.state
                 const segBody = parsed.text
                 return segBody
-                  ? <div key={i} className="t2-content"><Markdown content={segBody} anchorPrefix={`toc-${msg.id}`} run={runCtx} allowRun={!elsewhere} embeds={embeds} /></div>
+                  ? <div key={i} className="t2-content"><Markdown content={segBody} anchorPrefix={`toc-${msg.id}`} run={runCtx} allowRun={!elsewhere} embeds={embeds} linkCards /></div>
                   : null
               }
               const skip = i === firstIdx && headEvents ? 1 : 0
@@ -701,7 +708,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
               {body && (
                 voiceMode
                   ? <VoiceBubble text={body} stored={voice!.stored} anchorPrefix={`toc-${msg.id}`} />
-                  : <div className="t2-content"><Markdown content={body} anchorPrefix={`toc-${msg.id}`} run={runCtx} allowRun={!elsewhere} embeds={embeds} /></div>
+                  : <div className="t2-content"><Markdown content={body} anchorPrefix={`toc-${msg.id}`} run={runCtx} allowRun={!elsewhere} embeds={embeds} linkCards /></div>
               )}
             </>
           )

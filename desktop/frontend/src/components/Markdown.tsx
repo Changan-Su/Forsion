@@ -22,19 +22,24 @@ import { isShellLang, runInTerminal, stripPrompt, type RunResult } from '../buil
 import { normalizeMath } from '../services/mathNormalize'
 import { remarkWiki } from './wikiChat'
 import { ChatWebLink, ChatWikiLink } from './ChatWikiLink'
+import { ChatLinkWithCard } from './ChatLinkCard'
 import { ChatEmbed, type EmbedCtx } from './ChatEmbed'
 import { whenNear } from '../lib/nearViewport'
 
+/** 网页链接的悬停预览卡(ChatLinkCard)。⚠️ 缺省关、只由聊天回答开:本组件还给市场 README / 收件箱 / 更新日志渲第三方文本,
+ *  那里的链接不该一悬停就让引擎去问 GitHub。 */
+const LinkCardContext = React.createContext(false)
+
 // [[双链]] 经 remarkWiki 变成 #wiki= 链接,在这里拦下渲染;http(s) 走网页引用条(Desk 内置浏览器
-// + 链接文字当引语定位);其余(mailto/相对/锚点)维持默认 <a>。
-const WikiAnchor = ({ href, children, node: _node, ...rest }: any) =>
-  typeof href === 'string' && href.startsWith('#wiki=') ? (
-    <ChatWikiLink inner={decodeURIComponent(href.slice(6))} />
-  ) : typeof href === 'string' && /^https?:\/\//i.test(href) ? (
-    <ChatWebLink href={href} {...rest}>{children}</ChatWebLink>
-  ) : (
-    <a href={href} {...rest}>{children}</a>
-  )
+// + 链接文字当引语定位;聊天回答里另带悬停预览卡);其余(mailto/相对/锚点)维持默认 <a>。
+const WikiAnchor = ({ href, children, node: _node, ...rest }: any) => {
+  const cards = useContext(LinkCardContext)
+  if (typeof href === 'string' && href.startsWith('#wiki=')) return <ChatWikiLink inner={decodeURIComponent(href.slice(6))} />
+  if (typeof href === 'string' && /^https?:\/\//i.test(href)) {
+    return cards ? <ChatLinkWithCard href={href} {...rest}>{children}</ChatLinkWithCard> : <ChatWebLink href={href} {...rest}>{children}</ChatWebLink>
+  }
+  return <a href={href} {...rest}>{children}</a>
+}
 
 /** 代码块「运行」的回传口:聊天消息给 onRun(把结果作为用户消息发回会话);别处(工作区文件预览等)不给 = 只跑不回传。 */
 const RunContext = React.createContext<{ onRun?: (r: RunResult) => void; cwd?: string; allowRun: boolean } | undefined>(undefined)
@@ -143,8 +148,8 @@ const Th = tableCell('th')
  * anchorPrefix:传入时给 h1/h2/h3 渲染稳定 id(`${anchorPrefix}-${第n个标题}`)+ data-toc-level,
  * 供右侧「目录」扫描跳转。不传则零影响(记忆/日志面板等普通渲染)。
  */
-export const Markdown: React.FC<{ content: string; anchorPrefix?: string; /** shell 代码块「运行」的回传与工作目录(聊天消息给;缺省=只跑不回传)。 */ run?: { onRun?: (r: RunResult) => void; cwd?: string }; /** 只读文档可隐藏运行入口，仍保留复制代码。 */ allowRun?: boolean; /** 开内联嵌入(独占一段的 `![[…]]`);缺省关,见 EmbedContext。 */ embeds?: EmbedCtx }> = React.memo(
-  ({ content, anchorPrefix, run, allowRun = true, embeds }) => {
+export const Markdown: React.FC<{ content: string; anchorPrefix?: string; /** shell 代码块「运行」的回传与工作目录(聊天消息给;缺省=只跑不回传)。 */ run?: { onRun?: (r: RunResult) => void; cwd?: string }; /** 只读文档可隐藏运行入口，仍保留复制代码。 */ allowRun?: boolean; /** 开内联嵌入(独占一段的 `![[…]]`);缺省关,见 EmbedContext。 */ embeds?: EmbedCtx; /** 网页链接悬停出预览卡;缺省关,见 LinkCardContext。 */ linkCards?: boolean }> = React.memo(
+  ({ content, anchorPrefix, run, allowRun = true, embeds, linkCards = false }) => {
     const components: Record<string, any> = { pre: CodeBlock, a: WikiAnchor, p: Para, td: Td, th: Th }
     if (anchorPrefix) {
       const counter = { i: 0 }
@@ -163,13 +168,15 @@ export const Markdown: React.FC<{ content: string; anchorPrefix?: string; /** sh
     return (
       <RunContext.Provider value={{ ...run, allowRun }}>
         <EmbedContext.Provider value={embeds}>
-          <ReactMarkdown
-            remarkPlugins={[remarkMath, remarkGfm, remarkCjkFriendly, remarkCjkFriendlyStrikethrough, remarkWiki]}
-            rehypePlugins={[[rehypeKatex, { throwOnError: false }]]}
-            components={components}
-          >
-            {normalizeMath(content)}
-          </ReactMarkdown>
+          <LinkCardContext.Provider value={linkCards}>
+            <ReactMarkdown
+              remarkPlugins={[remarkMath, remarkGfm, remarkCjkFriendly, remarkCjkFriendlyStrikethrough, remarkWiki]}
+              rehypePlugins={[[rehypeKatex, { throwOnError: false }]]}
+              components={components}
+            >
+              {normalizeMath(content)}
+            </ReactMarkdown>
+          </LinkCardContext.Provider>
         </EmbedContext.Provider>
       </RunContext.Provider>
     )

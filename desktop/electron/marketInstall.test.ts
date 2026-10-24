@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import JSZip from 'jszip'
 import { planZipFiles, planZipEntries, ZipPlanError } from '../shared/marketPackage'
-import { isSafeSlug, isJunkPath, computeStripPrefix, safeEntryPath, extractZipToDir, readInstalledVersion, readInstalledPluginId, readUserPluginDirs, detectMarketType, marketItemDir, toArchiveUrl, downloadCandidates, downloadZip, DownloadFailed, type DownloadProgress } from './marketInstall'
+import { skillVersion, isSafeSlug, isJunkPath, computeStripPrefix, safeEntryPath, extractZipToDir, readInstalledVersion, readInstalledPluginId, readUserPluginDirs, detectMarketType, marketItemDir, toArchiveUrl, downloadCandidates, downloadZip, DownloadFailed, type DownloadProgress } from './marketInstall'
 
 async function zipOf(names: string[]): Promise<Buffer> {
   const z = new JSZip()
@@ -380,5 +380,19 @@ describe('downloadZip(每个候选有超时,失败带逐个原因)', () => {
       { host: 'reset.test', reason: 'ECONNRESET' },
     ])
     expect(err.message).toBe('h404.test: HTTP 404 · hang.test: timeout · html.test: not a zip · stall.test: stalled · reset.test: ECONNRESET')
+  })
+})
+
+// 与 server zipVersion.ts 的 skillField 同一组用例:两边对不上 = 服务端有版本、装机读成 null、永不提示更新
+describe('skillVersion(SKILL.md frontmatter)', () => {
+  it('顶层优先,没有再读 metadata.version', () => {
+    expect(skillVersion('---\nname: a\nmetadata:\n  version: 1.2.0\n  author: x\n---\n')).toBe('1.2.0')
+    expect(skillVersion('---\nname: a\nversion: 2.0.0\nmetadata:\n  version: 1.2.0\n---\n')).toBe('2.0.0')
+    expect(skillVersion('---\r\nname: a\r\nmetadata:\r\n  version: "1.3.0"\r\n---\r\n')).toBe('1.3.0')
+    expect(skillVersion('---\nname: a\nmetadata:\n  author: x\n\n  version: 1.4.0\n---\n')).toBe('1.4.0')
+    expect(skillVersion('---\r\nname: a\r\nmetadata:\r\n  author: x\r\n\r\n  version: 1.4.1\r\n---\r\n')).toBe('1.4.1')
+    expect(skillVersion('---\nname: a\nmetadata:\n  author: x\n\nother:\n  version: 9.9.9\n---\n')).toBeNull()
+    expect(skillVersion('---\nname: a\nmetadata:\n  author: x\nother:\n  version: 9.9.9\n---\n')).toBeNull()
+    expect(skillVersion('# no frontmatter')).toBeNull()
   })
 })
