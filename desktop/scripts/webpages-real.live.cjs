@@ -42,7 +42,8 @@ async function observeRun(runId) {
           if (!line.startsWith('data:')) continue
           const e = JSON.parse(line.slice(5)), p = e.payload || {}
           if (e.type === 'tool_call') ev.calls.push(p.name)
-          if (e.type === 'tool_result') ev.results.push({ name: p.name, isError: !!p.isError, result: String(p.result || '').slice(0, 2000) })
+          // parked = 挂起审批的占位结果(调用还没跑),不算发布成功;批准后真结果另发一条
+          if (e.type === 'tool_result') ev.results.push({ name: p.name, isError: !!p.isError, parked: !!p.parked, result: String(p.result || '').slice(0, 2000) })
           if (e.type === 'approval_request') ev.approvals.push({ name: p.name, reason: p.reason })
           if (e.type === 'usage') ev.usages.push(p)
           if (e.type === 'done') { ev.content = p.content || ''; return ev }
@@ -91,33 +92,44 @@ async function main() {
     const ta = win.locator('.t2c-ta').first(); await ta.waitFor()
 
     // 1. 聊天里让 Tangu 做页并发布:真输入框 → 审批卡在界面上点「批准」→ 回复给链接
-    step = '发提示词 / 等审批卡'
+    step = '发提示词 / 批审批卡'
     const sentBefore = await uploads()
     const posted = win.waitForResponse((r) => /\/agent\/runs$/.test(r.url()) && r.request().method() === 'POST', { timeout: 30_000 })
     await ta.fill(PROMPT); await ta.press('Enter')
     const res = await posted
-    const run = observeRun((await res.json()).runId)
-    const card = win.locator('.approval-card', { has: win.locator('.approval-actions .btn', { hasText: '批准' }) }).first()
-    const appeared = await card.waitFor({ timeout: 300_000 }).then(() => true, () => false)
-    let early = null
-    if (appeared) {
-      approvalText = (await card.innerText()).replace(/\s+/g, ' ').slice(0, 600)
+    let finished = false
+    const run = observeRun((await res.json()).runId).finally(() => { finished = true })
+    // 审批是挂起的:模型可能先叫 publish_web_page、写完文件再发布一次 —— 每张发布卡都批,直到 run 收尾(收尾闸门等所有挂起的卡)。
+    // 别的工具的卡不批:run 挂到 observeRun 超时,如实判红
+    const card = win.locator('.approval-card', { hasText: 'publish_web_page', has: win.locator('.approval-actions .btn', { hasText: '批准' }) }).first()
+    let early = null, cards = 0
+    while (!finished) {
+      if (!await card.waitFor({ timeout: 3000 }).then(() => true, () => false)) continue
+      const h = await card.elementHandle()
       await win.waitForTimeout(500) // 换卡冷却(ApprovalTray ARM_MS)
-      await shot(win, '01-approval-card')
-      early = (await uploads()) - sentBefore // 点「批准」前的最后一刻
+      if (!cards) {
+        approvalText = (await card.innerText()).replace(/\s+/g, ' ').slice(0, 600)
+        await shot(win, '01-approval-card')
+        early = (await uploads()) - sentBefore // 点第一张「批准」前的最后一刻
+      }
       await card.locator('.approval-actions .btn', { hasText: '批准' }).first().click()
+      cards++
+      // ApprovalCard 按项 key 重挂:这张离开托盘才找下一张,同一张不点两次
+      await h.waitForElementState('hidden', { timeout: 20_000 }).catch(() => { throw new Error(`第 ${cards} 张审批卡批了 20 秒还在托盘里`) })
     }
+    const appeared = cards > 0
     ev = await run
     const sentAfter = (await uploads()) - sentBefore
     await win.waitForTimeout(1500)
     await shot(win, '02-reply-with-link')
-    const published = ev.results.some((r) => r.name === 'publish_web_page' && !r.isError && !/^Error/.test(r.result))
+    const published = ev.results.some((r) => r.name === 'publish_web_page' && !r.parked && !r.isError && !/^Error/.test(r.result))
     // 模型常把链接写成带标题的 markdown 链接(「已发布:[周五下午茶接龙](…)」),界面上看得到的是标题、地址在 href 里
     const uiLink = await win.locator(`a[href="${url}"]`).count().catch(() => 0)
     const uiLinkText = uiLink ? (await win.locator(`a[href="${url}"]`).first().innerText().catch(() => '')).trim() : ''
-    leg('聊天里让 Tangu 做页并发布:界面弹审批卡,点「批准」前一个字节都没发,批准后发布成功,回复(界面上)给了链接',
-      appeared && early === 0 && sentAfter === 1 && published && ev.content.includes(url) && uiLink > 0,
-      `${appeared ? `弹了审批卡「${approvalText.slice(0, 80)}…」` : '✗ 没弹审批卡'};批准前发布请求 ${early ?? '-'} 次、之后共 ${sentAfter} 次;publish_web_page ${published ? '成功' : '✗ 没成'};回复${ev.content.includes(url) ? '带了链接' : `✗ 没带链接 ${url}`};界面${uiLink ? `显示了可点的链接「${uiLinkText}」` : '✗ 没显示链接'}${ev.error ? `;✗ ${ev.error}` : ''}`)
+    // 判收尾的样子:发布过(一次或多次,每次都有一张批过的卡)、回复里有链接;不钉「恰好一次」—— 挂起审批下多发一次是模型的合理路径
+    leg('聊天里让 Tangu 做页并发布:界面弹审批卡,点第一张「批准」前一个字节都没发,每张发布卡都批,收尾时发布成功,回复(界面上)给了链接',
+      appeared && early === 0 && sentAfter >= 1 && sentAfter <= cards && published && !ev.error && ev.content.includes(url) && uiLink > 0,
+      `${appeared ? `批了 ${cards} 张发布卡,第一张「${approvalText.slice(0, 80)}…」` : '✗ 没弹审批卡'};批准前发布请求 ${early ?? '-'} 次、之后共 ${sentAfter} 次${sentAfter > cards ? '(✗ 比批过的卡多)' : ''};publish_web_page ${published ? '成功' : '✗ 没成'};回复${ev.content.includes(url) ? '带了链接' : `✗ 没带链接 ${url}`};界面${uiLink ? `显示了可点的链接「${uiLinkText}」` : '✗ 没显示链接'}${ev.error ? `;✗ ${ev.error}` : ''}`)
 
     // 2. 链接真能打开:壳页 200,内容带 CSP sandbox,就是做的那页;再在窗口里打开看一眼
     const shellRes = await fetch(url).catch(() => null)
