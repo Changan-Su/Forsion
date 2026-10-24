@@ -82,7 +82,6 @@
       "desktop/frontend/src/views/chat2/RunStatsLine.tsx",
       "desktop/frontend/src/views/chat2/approvalQueue.ts",
       "desktop/frontend/src/views/chat2/btwStore.ts",
-      "desktop/frontend/src/views/chat2/chatPanelQuote.ts",
       "desktop/frontend/src/views/chat2/chatToNote.ts",
       "desktop/frontend/src/views/chat2/composer2.css",
       "desktop/frontend/src/views/chat2/sessionTree.ts"

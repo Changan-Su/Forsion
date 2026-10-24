@@ -7,7 +7,8 @@ import { SelfUpdateReceipt } from '../../components/SelfUpdateReceipt'
  * 用户为暖色带尾气泡。子件(思考/工具/待办/审批/反问)以新 t2 风格内联呈现。
  * 接 UiMessage,故可直接喂真实 store 数据(集成期用);回调可选(预览传空)。
  */
-import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from 'react'
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from 'react'
+import { useStreamReveal } from './streamReveal'
 import { Copy, RotateCcw, GitBranch, MessageCircleQuestion, CornerUpLeft, Pencil, Volume2, Square, Loader2, LogIn, Zap, History as HistoryIcon, FileCode2, MessageSquare, ShieldQuestion, CircleCheck, CircleX, CircleHelp } from 'lucide-react'
 import { FileInput } from 'lucide-react'
 import { useNoteInsertState } from './insertToNote'
@@ -72,7 +73,7 @@ import { MuseApprovalLine, MuseTodoCards, MuseTodoTraces, ProactiveMark, isProac
 import { CHILD_UPDATE_OPEN, ChildUpdateLine, ForkBlock, childIdsOf } from './ChildSessions'
 import { APPROVAL_UPDATE_OPEN, INQUIRY_UPDATE_OPEN, approvalForCall, parseApprovalUpdate, parseInquiryUpdate, pickPlanInquiry, type ApprovalOutcome } from './approvalQueue'
 import { isRemoteApprover, wasDecidedHere } from '../../components/ApprovalCard'
-import { answeredByText } from '../../approvalReason'
+import { answeredByText, approvalPreviewText } from '../../approvalReason'
 import { refForSession, targetForSession, useSessionHostName } from '../../services/engine/targets'
 import { AttachmentTile } from '../../components/AttachmentTile'
 import { ImageStack, stackable } from '../../components/ImageStack'
@@ -364,6 +365,14 @@ function ApprovalUpdateBy({ sessionId, callId, status }: { sessionId?: string; c
   return <div className="t2-apv-update-by" data-answered-by>{t(status === 'rejected' ? 'chat.approval.update.byRejected' : 'chat.approval.update.byApproved', { where })}</div>
 }
 
+/** 结局行里的预览:原审批带 previewI18n(账号动作 / 发布网页)→ 与审批卡同一句、按界面语言;否则回灌行里的英文摘要。 */
+function ApprovalUpdatePreview({ sessionId, callId, preview }: { sessionId?: string; callId: string; preview: string }) {
+  const { t } = useI18n()
+  const req = useApp((s) => (sessionId ? approvalForCall(s.messagesBySession[sessionId], callId) : undefined))
+  const text = req?.previewI18n ? approvalPreviewText(req, t as (k: string, v?: Record<string, unknown>) => string) : preview
+  return <span className="t2-apv-update-preview" title={text}>{text}</span>
+}
+
 /** 「插入笔记」(G3-08):一篇 v4 笔记都没开 → 不出现;开着的全是只读 / 锁定 → aria-disabled + 说明 —— 不用 disabled:
  *  手机上没有悬停,点一下得有人告诉他为什么不行(点了走 onInsert,insertReplyToNote 自己说明)。 */
 function InsertNoteButton({ onInsert }: { onInsert: () => void }) {
@@ -426,6 +435,14 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
     if (typeof rootRef === 'function') rootRef(el)
     else if (rootRef) (rootRef as React.MutableRefObject<HTMLDivElement | null>).current = el
   }
+  // 流式尾巴淡入(streamReveal.ts):只认助手那支的根
+  const asstRef = useRef<HTMLDivElement | null>(null)
+  const setAsst = useCallback((el: HTMLDivElement | null): void => {
+    asstRef.current = el
+    if (typeof rootRef === 'function') rootRef(el)
+    else if (rootRef) (rootRef as React.MutableRefObject<HTMLDivElement | null>).current = el
+  }, [rootRef])
+  useStreamReveal(asstRef, msg.role === 'assistant' && msg.status === 'streaming')
   useLayoutEffect(() => {
     if (msg.role === 'user' && userWrapRef.current) playSendFlight(userWrapRef.current, msg.content)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -490,7 +507,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
               <div className="t2-apv-update-row" data-status={r.status}>
                 {r.status === 'approved' ? <CircleCheck size={12} /> : <CircleX size={12} />}
                 <span className="t2-apv-update-what">{t(UPDATE_KEY[r.status], { name: r.name })}</span>
-                <span className="t2-apv-update-preview" title={r.preview}>{r.preview}</span>
+                <ApprovalUpdatePreview sessionId={runSid} callId={r.callId} preview={r.preview} />
               </div>
               <ApprovalUpdateBy sessionId={runSid} callId={r.callId} status={r.status} />
             </Fragment>
@@ -646,7 +663,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
   })
 
   return (
-    <div ref={rootRef} className="t2-asst" id={`tocmsg-${msg.id}`} data-streaming={msg.status === 'streaming' ? '' : undefined}>
+    <div ref={setAsst} className="t2-asst" id={`tocmsg-${msg.id}`} data-streaming={msg.status === 'streaming' ? '' : undefined}>
       <div className="t2-avatar" style={!avatarUrl && msg.agentColor ? { background: msg.agentColor, color: '#fff' } : undefined}>{avatarUrl ? <img src={avatarUrl} alt="" /> : firstChar(msg.agentName || agentNameFallback || 'Tangu')}</div>
       <div className="t2-asst-col">
         <div className="t2-name" style={msg.agentColor ? { color: msg.agentColor } : undefined}>{msg.agentName || agentNameFallback || 'Tangu'}{msg.status === 'streaming' && <span className="t2-dot" />}</div>

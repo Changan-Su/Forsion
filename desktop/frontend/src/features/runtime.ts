@@ -9,6 +9,9 @@ export const amadeusAvailable = (): boolean => !!window.amadeus && nativeFeature
 export const miniFeatureAvailable = (feature: NativeFeatureId): boolean => nativeFeatureEnabled(PRODUCT, feature, true)
 
 export const sessionsAvailable = (): boolean => nativeFeatureEnabled(PRODUCT, 'tangu', true)
+/** 插件拿得到 ctx.tangu(模型 / agent / startChat)的档案:老档案一律有;新档案要 Tangu 或 Automation 包。
+ *  比 Tangu 界面的门宽 —— automation-only 没有对话那几块,探针照装(features/tangu.tsx 的 activateTangu)。 */
+export const tanguProbeAvailable = (): boolean => PRODUCT.nativeFeatures === undefined || hasNativeFeature('tangu') || hasNativeFeature('automation')
 
 /** Inbox and Muse are faces of the local Tangu backend (`/agent/inbox`, `/agent/special/muse`).
  * Legacy profiles opt in through `spaces`; a Unit host empties `spaces` and grants both with the

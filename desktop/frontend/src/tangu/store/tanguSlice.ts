@@ -30,7 +30,7 @@ import { deskAcceptsFiles } from '../../amadeus/plugins/deskCompanion'
 import { usePageStore } from '../../amadeus/store/pageStore'
 import { registerMessages, translate, translationValues } from '../../i18n'
 import { publishAccountQuota } from '../../services/accountQuota'
-import { sanitizeAnswerBy, sanitizeApprovalReason, sanitizeApprovalRemote } from '../../approvalReason'
+import { sanitizeAnswerBy, sanitizeApprovalPreviewI18n, sanitizeApprovalReason, sanitizeApprovalRemote } from '../../approvalReason'
 import { normalizeSessionEmoji } from '../../../../../tangu-agent/src/contracts/sessionEmoji'
 import type { StoreApi } from 'zustand'
 import type { AppState } from '../../stores/appStore'
@@ -1472,11 +1472,12 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
         // reason 白名单清洗:审批事件会持久化重放,一条畸形 payload 不清洗 = 每次渲染都炸(同 context_info 纪律)
         const reason = sanitizeApprovalReason(pl.reason)
         const remote = sanitizeApprovalRemote(pl.remote) // P1-K1:远程会话来源(同样白名单清洗)
+        const previewI18n = sanitizeApprovalPreviewI18n(pl.previewI18n) // 散文类预览的结构化版(卡上按界面语言渲染)
         // 落点:团队成员的转发事件带 messageId(它本次激活的占位气泡)与子 runId;普通 run 落当前气泡(群聊里首位发言人的占位已被改名成持久 id,
         // 用闭包常量 assistantId 会落到一条不存在的消息上 —— 一律走 ref.current)。
         patchMessage(sessionId, targetOf(pl), (m) => ({
           ...m, live: undefined, work: m.work ? { ...m.work, waiting: true } : m.work,
-          approvals: [...(m.approvals || []), { approvalId: pl.approvalId, runId: String(pl.runId || runId), name: pl.name, arguments: pl.arguments, preview: pl.preview || '', status: 'pending' as const, ...(reason ? { reason } : {}), ...(remote ? { remote } : {}), ...(pl.localOnly === true ? { localOnly: true } : {}) /* P1-K3 */, ...(typeof pl.toolCallId === 'string' ? { toolCallId: pl.toolCallId } : {}) }],
+          approvals: [...(m.approvals || []), { approvalId: pl.approvalId, runId: String(pl.runId || runId), name: pl.name, arguments: pl.arguments, preview: pl.preview || '', ...(previewI18n ? { previewI18n } : {}), status: 'pending' as const, ...(reason ? { reason } : {}), ...(remote ? { remote } : {}), ...(pl.localOnly === true ? { localOnly: true } : {}) /* P1-K3 */, ...(typeof pl.toolCallId === 'string' ? { toolCallId: pl.toolCallId } : {}) }],
         }))
         if (typeof pl.agentSlug === 'string') setTeamStatus(sessionId, pl.agentSlug, 'waiting')
         break

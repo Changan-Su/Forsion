@@ -3,8 +3,8 @@ import { useChildChat } from './stores/childChatStore';
  * `ctx.tangu` 探针的实现(2026-08-29+)。契约与「为什么要探针」见
  * `amadeus/plugins/tanguSeam.ts` —— 那边是叶子,这边才碰 store。
  *
- * 由 `installEngine()` 调用,**必须早于 `installAmadeusPlugins()`**:`ctx.tangu` 的有无是在
- * 建 plugin context 那一刻定的。三端共用 installEngine,移动端自动跟上(check:parity)。
+ * 由 Tangu 入口 `activateTangu(host)` 经 `host.installProbe` 调用(installEngine 里排在 `installAmadeusPlugins()` 之前):
+ * `ctx.tangu` 的有无是在建 plugin context 那一刻定的。三端共用 installEngine,移动端自动跟上(check:parity)。
  */
 import { setActiveSpace, useSpaceStore, useWorkspace } from '@lcl/engine'
 import { claimHostMount } from '@lcl/components'
@@ -12,6 +12,7 @@ import {
   pluginChatType,
   readTanguNewChat,
   setTanguProbe,
+  type TanguProbe,
   type TanguAgentSelf,
   type TanguAgentInfo,
   type TanguAgentStatus,
@@ -33,7 +34,6 @@ import { usePluginChat } from './stores/pluginChatStore'
 import type { TanguDesktopConfig } from './types'
 import { getSessionDetail, getAgentSchedules, getMuseLibrary, getMuseLibraryFile, getMuseStatus, getMuseTodos, patchMuseTodo } from './services/backendService'
 import { hasNativeFeature } from './features/runtime'
-import { quoteInChatPanel } from '@tangu/ui/views/chat2/chatPanelQuote'
 import { completeInline } from './services/inlineAi'
 import { submitDocumentTask } from './services/documentTasks'
 import { openSession } from './sessionNav'
@@ -455,7 +455,7 @@ function museSelf(): TanguAgentSelf {
   }
 }
 
-export function installTanguProbe(): void {
+export function installTanguProbe(fromTangu: Pick<TanguProbe, 'askInChat'> = {}): void {
   setTanguProbe({
     hostExecution: () => window.tangu?.executionCapabilities?.host ?? (useApp.getState().desktopConfig?.mode === 'managed'),
     activeModel: readActiveModel,
@@ -496,9 +496,9 @@ export function installTanguProbe(): void {
       openDocumentTask: (id: string) => openSession(id, { newTab: true }),
     } : {}),
     agentSelf: (slug) => (slug === 'muse' ? museSelf() : null),
-    // 编辑器「问 Tangu」(G3-04):只在注册了 chat-panel 的宿主上给(与 features/tangu.tsx 同一个谓词)。
-    // automation-only 档案也会装本探针(bootstrapEngine),那里没有侧栏对话 → 方法缺席,编辑器不出入口。
-    ...(hasNativeFeature('tangu') ? { askInChat: quoteInChatPanel } : {}),
+    // 编辑器「问 Tangu」(G3-04):Tangu 激活时自己交进来(与注册 chat-panel 同一个谓词)。
+    // automation-only 档案也会装本探针,那里没有侧栏对话 → 没交、方法缺席,编辑器不出入口。
+    ...(fromTangu.askInChat ? { askInChat: fromTangu.askInChat } : {}),
     // 插件视图里的原生对话(ctx.tangu.mountChat):同一门控 —— 没有对话能力的档案里 ChatView 没有数据源。
     ...(hasNativeFeature('tangu') ? { mountChat } : {}),
     // 新对话输入区(ctx.tangu.mountComposer,主页插件化 S2):同一门控。

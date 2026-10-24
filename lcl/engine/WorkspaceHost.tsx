@@ -3,7 +3,7 @@
  * 从 panel props 造 Leaf 再调 def.factory)。onReady 恢复上次布局,否则调 buildDefault;
  * 布局变更持久化。主题叠 dockview-theme-light|dark + .dockview-theme-lcl(--dv-* → LCL token)。
  */
-import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
+import { Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import {
   DockviewReact,
   type DockviewReadyEvent,
@@ -31,7 +31,8 @@ import { computeDropTarget, locOf, type DropTarget } from './dropModel'
 import { getDetachApi, type ViewRef } from './detachSeam'
 import { OverlayAt, zoomOf } from './menuAnchor'
 import { dropHide, dropRetarget } from './dropIndicator'
-import { Skeleton, ViewErrorBoundary, skeletonVariantOf } from './Skeleton'
+import { Skeleton, ViewErrorBoundary, ViewPlaceholder, skeletonVariantOf } from './Skeleton'
+import { withComponentFallback } from './componentFallback'
 import { cycleFocusedGroupTab, tabCycleDelta } from './tabCycle'
 import { besideTarget, openMainBesideThisTask } from './openBeside'
 import { keepScroll } from './keepScroll'
@@ -129,12 +130,16 @@ function makeComponent(def: ViewDefinition): React.FC<IDockviewPanelProps> {
 
 /** 主区 frame 宿主:按 params.__type 动态派发到注册视图(包装组件按类型缓存)。
  *  就地切视图 = navigateLeaf 改 __type → key 换 → 内层 remount,复用 makeComponent 的
- *  「类型真变才播淡入」机制(lastMainViewType)。视图注册变化时整个 components map 重建,缓存随之作废。 */
+ *  「类型真变才播淡入」机制(lastMainViewType)。视图注册变化时整个 components map 重建,缓存随之作废。
+ *  也是 components 表的兜底(withComponentFallback):布局里存着、此刻没注册的视图(侧栏 panel 的组件名就是视图类型)
+ *  交给它 —— 先画占位,订阅注册表,注册上来就地换回真视图,不丢整份布局。 */
 function makeFrameHost(cache: Map<string, React.FC<IDockviewPanelProps>>): React.FC<IDockviewPanelProps> {
   return function FrameHost(props) {
-    const type = ((props.params ?? {}) as { __type?: string }).__type || ''
-    const def = getView(type)
-    if (!def) return null
+    const component = (props.api as { component?: string }).component
+    const type = ((props.params ?? {}) as { __type?: string }).__type || (component !== '__frame' ? component : '') || ''
+    const def = useSyncExternalStore(subscribeViews, () => getView(type))
+    if (!type) return null
+    if (!def) return <ViewPlaceholder />
     let Comp = cache.get(type)
     if (!Comp) { Comp = makeComponent(def); cache.set(type, Comp) }
     return <Comp key={type} {...props} />
@@ -213,8 +218,9 @@ const WbTab: React.FC<IDockviewPanelHeaderProps> = ({ api, params }) => {
       )}
       {menu && createPortal(
         <OverlayAt className="ctx-menu" x={menu.x} y={menu.y} onClick={(e) => e.stopPropagation()} onContextMenu={(e) => e.preventDefault()}>
-          {/* 「移到新窗口」:确定性撕出路径(不依赖跨窗拖拽);仅桌面(getDetachApi 有真身)显示。 */}
-          {type !== '__extend' && getDetachApi() && (
+          {/* 「移到新窗口」:确定性撕出路径(不依赖跨窗拖拽);仅桌面(getDetachApi 有真身)显示。
+           *  占位(视图没注册)不给:对面窗口开不出它、这边又先关了源面板,面板就没了(Codex 3a 评审)。 */}
+          {type !== '__extend' && def && getDetachApi() && (
             <button onClick={() => {
               const ref = viewRefFromParams(params as Record<string, unknown> | undefined, (api as { component?: string }).component)
               const d = getDetachApi()
@@ -478,7 +484,14 @@ export const WorkspaceHost: React.FC<{
           // 标签头自己也盯着:侧栏开合是补间出来的,store 变的那一帧量到的还是旧位置(实测:左栏展开后主区标签头仍带着让位)。
           if (!watched.has(el)) { watched.add(el); ro.observe(el) }
           const r = el.getBoundingClientRect()
-          el.classList.toggle('dv-under-edge', r.width > 0 && r.top < er.bottom && r.bottom > er.top && r.right > er.left && r.left < er.right)
+          const under = r.width > 0 && r.top < er.bottom && r.bottom > er.top && r.right > er.left && r.left < er.right
+          el.classList.toggle('dv-under-edge', under)
+          // 浮钮组左边剩下的宽度放不下这条标签头的内容(Windows 上浮钮组还带着系统按钮的让位,窄右栏只剩几十 px)
+          // → 标出来,engine.css 末尾让标签落到第二行。内容宽用 scrollWidth(不随让位缩),两边都换成布局 px 比:
+          // 放下 / 不放下都不改这两个读数,不会来回跳。
+          const zoom = el.offsetWidth > 0 ? r.width / el.offsetWidth : 1
+          const need = [...el.children].reduce((w, c) => c.classList.contains('dv-void-container') ? w : w + c.scrollWidth, 0)
+          el.classList.toggle('dv-edge-stacked', under && (er.left - r.left) / zoom < need + 8)
           // mac 独立窗 / Space 窗口没有 ribbon,交通灯直接落在左上角那条标签头上 → 同样按几何标出来让位(engine.css 末尾)。
           // 不按「左栏开没开」猜:没有左栏组的 Space(主页)主区标签头就在最左,而 leftVisible 照样是 true。
           // 70×28 = 交通灯占的原生区域,不随界面缩放;getBoundingClientRect 也是缩放后的读数,两边同一把尺。
@@ -503,8 +516,9 @@ export const WorkspaceHost: React.FC<{
     const map: Record<string, React.FC<IDockviewPanelProps>> = {}
     for (const def of allViews()) map[def.type] = makeComponent(def)
     map['__extend'] = (props) => <NativeExtendView id={props.api.id} side={props.params.__loc} />
-    map['__frame'] = makeFrameHost(new Map()) // 主区统一宿主(见 makeFrameHost)
-    return map
+    const frame = makeFrameHost(new Map())
+    map['__frame'] = frame // 主区统一宿主(见 makeFrameHost)
+    return withComponentFallback(map, frame) // 没注册的组件名也交给它:占位 + 注册上来复活
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [version])
   const prefixActions = useMemo(() => makePrefixActions(), [])
@@ -580,7 +594,8 @@ export const WorkspaceHost: React.FC<{
       const id = draggingId, view = draggingView
       const d = getDetachApi()
       const outside = e.clientX < 0 || e.clientY < 0 || e.clientX > window.innerWidth || e.clientY > window.innerHeight
-      if (id && view && d?.drop && outside && !useWorkspace.getState().isPinnedLeaf(id)) { // 固定 View 不撕出窗口
+      // 固定 View 不撕出窗口;占位(视图没注册)也不撕:对面开不出它,源面板却会被关掉
+      if (id && view && d?.drop && outside && !useWorkspace.getState().isPinnedLeaf(id) && getView(view.type)) {
         void d.drop(e.screenX, e.screenY, view).then((routed) => { if (routed) useWorkspace.getState().closeLeaf(id) })
       }
       clearDragState()

@@ -23,6 +23,7 @@ import path from 'node:path';
 import type { ToolProvider } from '../toolRegistry.js';
 import type { ToolContext } from '../toolTypes.js';
 import type { CloudAccountBrain, CloudResponse } from '../../seams/cloudBrain.js';
+import type { ApprovalPreviewI18n } from '../../services/approvals.js';
 import { resolvePath } from '../hostExec.js';
 import { checkReadPath } from '../fsPolicy.js';
 import { splitPath } from '../fileWorkspace.js';
@@ -74,6 +75,14 @@ export function webPublishPreview(args: any): string {
   return `Publish ${a.path} as a Forsion web page "${a.name}" (link name: ${a.slug}).\n` +
     'Anyone with the link can open it. The files go to your Forsion cloud drive and count toward its storage. ' +
     `If you already have a page called ${a.slug}, it is replaced.`;
+}
+
+/** 同一句的结构化版:桌面卡按界面语言渲染(键 approval.preview.*,en 与上面逐字相同)。请求无效 → 不给,卡上照旧显示英文那句。 */
+export function webPublishPreviewI18n(args: any): ApprovalPreviewI18n | undefined {
+  const a = parseWebPublish(args);
+  if (!a.ok) return undefined;
+  if (a.action === 'unpublish') return { key: 'approval.preview.webUnpublish', vars: { slug: a.slug } };
+  return { key: 'approval.preview.webPublish', vars: { path: a.path, name: a.name, slug: a.slug } };
 }
 
 interface PackedFile { path: string; content_b64: string; content_type: string; size: number }

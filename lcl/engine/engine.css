@@ -1012,3 +1012,13 @@ html[data-space-switch-axis='x'][data-space-switch]::view-transition-new(space-w
   [data-press] > svg { transition: none; }
   [data-press]:not(:disabled):active > svg { translate: none; rotate: none; }
 }
+
+/* Windows 原生按钮并进标签行后,压在右上角的那条标签头要让出「浮钮组 + 系统按钮」两份宽度;窄右栏让完就没地方放标签了
+ * (10-24 用户截图:右栏标签被挤成一竖列)。WorkspaceHost 按几何打 .dv-edge-stacked → 这条标签头加一行:
+ * 第一行留给浮钮组和系统按钮(仍是拖窗区),标签落到第二行、不再让位。系统按钮的高度只量没加行的标签头(tabTitleBar.ts)。
+ * 只在 Windows 生效:mac 的浮钮组没有系统按钮叠加,照旧横向滚动。放文件末尾:与上面 .dv-under-edge 的让位同条标签头。 */
+[data-tab-titlebar] .dockview-theme-lcl .dv-tabs-and-actions-container.dv-under-edge.dv-edge-stacked {
+  height: calc(var(--dv-tabs-and-actions-container-height, 32px) * 2);
+  padding-top: var(--dv-tabs-and-actions-container-height, 32px);
+  padding-right: 0;
+}

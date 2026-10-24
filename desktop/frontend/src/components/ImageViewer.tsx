@@ -16,6 +16,7 @@ import { ChevronLeft, ChevronRight, Copy, Download, ExternalLink, Minus, MoreHor
 import { useNativeChromeClaim, useNativeChromeInstalled, type NativeChromeClaim } from '@lcl/engine'
 import { registerMessages, translate as tr } from '../i18n'
 import { saveResponseAs } from '../services/nativeDownload'
+import { writeImageToClipboard } from '../lib/imageClipboard'
 import { pushMobileBack } from '../amadeus/lib/mobileBack'
 import { useApp } from '../stores/appStore'
 import './imageViewer.css'
@@ -96,24 +97,9 @@ export function openImageViewer(from: HTMLImageElement): void {
 
 const reduced = (): boolean => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
 
-async function fetchBlob(src: string): Promise<Blob> {
-  const r = await fetch(src)
-  if (!r.ok) throw new Error(String(r.status))
-  return r.blob()
-}
-async function toPng(blob: Blob): Promise<Blob> {
-  if (blob.type === 'image/png') return blob
-  const bmp = await createImageBitmap(blob) // 剪贴板只认 PNG:别的格式先画一遍
-  const c = document.createElement('canvas')
-  c.width = bmp.width
-  c.height = bmp.height
-  c.getContext('2d')!.drawImage(bmp, 0, 0)
-  return new Promise((res, rej) => c.toBlob((b) => (b ? res(b) : rej(new Error('toBlob'))), 'image/png'))
-}
 async function copyImage(src: string): Promise<void> {
   try {
-    const png = await toPng(await fetchBlob(src))
-    await navigator.clipboard.write([new ClipboardItem({ 'image/png': png })])
+    await writeImageToClipboard(src)
     useApp.getState().toast(tr('viewer.copied'))
   } catch {
     useApp.getState().toast(tr('viewer.copyFailed'), true)
