@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ancestorsOf, buildListTree, dropCandidates, fitsPhoneList, flattenLeaves, groupFold, isGroupHead, leafCount, type GroupFold } from './listTree'
+import { ancestorsOf, buildListTree, dropCandidates, fitsPhoneList, flattenLeaves, groupFold, hiddenByFilter, isGroupHead, leafCount, type GroupFold } from './listTree'
 import type { ListItem } from './types'
 
 const row = (key: string, extra: Partial<ListItem> = {}): ListItem => ({ key, title: key, ...extra })
@@ -95,5 +95,12 @@ describe('组头(folderStyle: group)', () => {
     expect(at(false).open).toBe(true)           // 读完了:不在光标底下合上
     at(false).open = true
     expect(at(false).open).toBe(true)           // 用户自己打开的没有未读的组:开着
+  })
+})
+
+describe('hiddenByFilter', () => {
+  it('数清掉筛选会多出来的行:文件夹不算,重复的 key 只算一行(和 buildListTree 画出来的一样)', () => {
+    expect(hiddenByFilter([row('g', { kind: 'folder' }), row('a', { parent: 'g' }), row('a'), row('b')], [row('b')])).toBe(1)
+    expect(hiddenByFilter([row('a')], [row('x')])).toBe(1) // 筛出来的不是子集:不会减成 0 或负数
   })
 })

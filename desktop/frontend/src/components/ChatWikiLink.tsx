@@ -13,6 +13,7 @@ import { parseAppRefInner } from '../../../shared/appRefs'
 import { AppRefChip } from './appRefs'
 import { deskAcceptsFiles } from '../amadeus/plugins/deskCompanion'
 import { newTabOf } from '../views/itemSelect'
+import { FILE_ICON, fileIconKind, type FileIconKind } from '../amadeus/blocks/markdown/fileIcon'
 
 registerMessages({
   'chatwiki.mediaTipBadAnchor': { zh: '{path}（时刻锚点无效，从头播放）', en: '{path} (invalid time anchor — playing from the start)' },
@@ -24,6 +25,14 @@ registerMessages({
 export function ChatWikiLink({ inner }: { inner: string }) {
   const app = parseAppRefInner(inner)
   return app ? <AppRefChip appRef={app} /> : <NoteWikiLink inner={inner} />
+}
+
+/** 文件类引用前那枚类型图标，和 Amadeus 正文双链同一套（wikilink.ts 的 fileIconEl）。FILE_ICON 是常量，不含用户内容。 */
+// 图标只和第一个字绑成不折行的一组：行尾时图标不会单独留在上一行，长别名照常换行。
+function FileIcon({ kind, children }: { kind: FileIconKind | null; children: string }) {
+  if (!kind) return <>{children}</>
+  const [first = '', ...rest] = Array.from(children)
+  return <><span className="wikilink-nb"><svg className="wikilink-ic" viewBox="0 0 24 24" aria-hidden="true" dangerouslySetInnerHTML={{ __html: FILE_ICON[kind] }} />{first}</span>{rest.join('')}</>
 }
 
 function NoteWikiLink({ inner }: { inner: string }) {
@@ -145,7 +154,7 @@ function NoteWikiLink({ inner }: { inner: string }) {
     const text = inner.includes('|') ? label : pdf.page ? `${short} p.${pdf.page}` : short
     return (
       <a className="wikilink" data-wiki={pdf.path} title={pdf.path} onClick={(e) => { void openPdfCitation(pdf.path, pdf.page, pdf.q, newTabOf(e)) }}>
-        {text}
+        <FileIcon kind="pdf">{text}</FileIcon>
       </a>
     )
   }
@@ -161,7 +170,7 @@ function NoteWikiLink({ inner }: { inner: string }) {
         : `${media.abs} ${stamp}`
     return (
       <a className="wikilink" data-wiki={media.abs} title={tip} onClick={(e) => { void openMediaCitation(media, newTabOf(e)) }}>
-        {text}
+        <FileIcon kind="media">{text}</FileIcon>
       </a>
     )
   }
@@ -172,7 +181,7 @@ function NoteWikiLink({ inner }: { inner: string }) {
     const text = inner.includes('|') ? label : `${short}${lineTag}`
     return (
       <a className="wikilink" data-wiki={fileCite.abs} title={`${fileCite.abs}${lineTag}`} onClick={(e) => { void openFileCitation(fileCite.abs, fileCite.name, fileCite.line, newTabOf(e)) }}>
-        {text}
+        <FileIcon kind={fileIconKind(inner, fileCite.abs) ?? 'file'}>{text}</FileIcon>
       </a>
     )
   }
@@ -194,7 +203,7 @@ function NoteWikiLink({ inner }: { inner: string }) {
               : m.openNote(path, nt)))
       }}
     >
-      {noteText}
+      <FileIcon kind={fileIconKind(inner, path)}>{noteText}</FileIcon>
     </a>
   )
 }
@@ -345,7 +354,7 @@ export function ChatWebLink({ href, children, quote, ...rest }: { href: string; 
 }
 
 /** React 子树 → 纯文本(链接文字可能被 <em>/<code> 拆成好几节)。 */
-function textOf(node: ReactNode): string {
+export function textOf(node: ReactNode): string {
   if (typeof node === 'string' || typeof node === 'number') return String(node)
   if (Array.isArray(node)) return node.map(textOf).join('')
   if (isValidElement(node)) return textOf((node.props as { children?: ReactNode }).children)

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { NO_QUOTE_DRAFT, addQuote, composeQuotes, noteOf, notesFor, quoteAdded, quoteNoted, quotesFor, splitLeadingQuotes } from './quotes'
+import { NO_QUOTE_DRAFT, addQuote, composePastes, composeQuotes, noteOf, notesFor, pasteTitle, quoteAdded, quoteNoted, quotesFor, splitLeadingQuotes } from './quotes'
 import { composeOutgoing } from './Composer2'
 import { parseAskOrigin } from './insertToNote'
 
@@ -73,5 +73,25 @@ describe('引用卡', () => {
   it('多段里各自的「问 Tangu」出处仍然认得出(取最后一段)', () => {
     const sent = composeQuotes(['甲\n— [[a.md#一]]', '乙\n— [[b.md#二]]']) + '问'
     expect(parseAskOrigin(sent)).toEqual({ path: 'b.md', anchor: { heading: '二', text: '乙' } })
+  })
+})
+
+describe('长粘贴磁贴', () => {
+  it('标题取第一行有字的', () => {
+    expect(pasteTitle('\n\n  npm ERR! code ERESOLVE  \nline 2')).toBe('npm ERR! code ERESOLVE')
+    expect(pasteTitle('   \n')).toBe('')
+  })
+  it('粘贴接在正文后面、各自围起来,围栏比内容里的反引号长', () => {
+    expect(composePastes('看下这个报错', ['a\nb\n'])).toBe('看下这个报错\n\n```\na\nb\n```')
+    expect(composePastes('', ['x', 'y'])).toBe('```\nx\n```\n\n```\ny\n```')
+    expect(composePastes('t', ['```js\nz\n```'])).toBe('t\n\n````\n```js\nz\n```\n````')
+  })
+  it('满屏反引号也不爆栈', () => {
+    const out = composePastes('', ['`x'.repeat(130_000)])
+    expect(out.startsWith('````\n`x')).toBe(false) // 最长一串是 1 个反引号 → 围栏还是 3 个
+    expect(out.startsWith('```\n`x')).toBe(true)
+  })
+  it('没有粘贴 = 原样', () => {
+    expect(composePastes('只有字', [])).toBe('只有字')
   })
 })

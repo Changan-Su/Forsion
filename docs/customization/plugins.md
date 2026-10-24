@@ -53,6 +53,10 @@ Engine plugin text settings can set `secret: true` to render a password input (i
 
 When you submit, you can add tags (up to 8), a long description, supported platforms (`desktop`, `macos`, `windows`, `linux`, `android`, `ios`, `web`) and a Forsion version range: the minimum is inclusive, the maximum exclusive. `minAppVersion`, `maxAppVersion` and `platforms` in the package manifest take precedence over the form. The Store home filters on them, and desktop and phone check the package manifest again before installing: a version or platform that does not fit is never downloaded or written to disk. Every listing has a public comment section. New comments reach your inbox (the submitting account) and replies also notify the person replied to; you can turn off comment messages for all your plugins or for one, and the comments stay public.
 
+发新版或改商店信息时,在「投稿」里选中你的条目:ZIP 拖进新包,GitHub / npm 先在原渠道发新版本再点「检查新版本」。版本号只从包里或上游读(技能写在 SKILL.md 的 `version` 或 `metadata.version`),要比商店当前的高。提交前会先检查一遍,列出读到的类型、版本、图标和 README,你确认后才提交。简介、标签、长描述和版本要求可以单独编辑,不用传包。已上架的条目改了都要过审,通过前商店照旧,审核结果发到你的收件箱。
+
+To ship a new version or change the Store details, select your item under Submissions: drop a new ZIP, or for GitHub and npm publish the new version there first and choose “Check for a new version”. The version is always read from the package or upstream (for skills, `version` or `metadata.version` in SKILL.md) and must be newer than the Store’s. The package is checked before anything is submitted: you see the type, version, icon and README that were read, then confirm. Summary, tags, description and version requirements can be edited on their own, without a package. Changes to a published item are reviewed; until then the Store keeps the current version and details, and the review result goes to your inbox.
+
 ## 在 Android 上用插件
 
 Forsion Android App 也能装 Forsion 插件,与桌面是同一套插件接口:
