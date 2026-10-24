@@ -69,6 +69,7 @@ import { Decoration, DecorationSet, type EditorView } from '@milkdown/kit/prose/
 import { Milkdown, MilkdownProvider, useEditor, useInstance } from '@milkdown/react'
 import { joinRel, toAssetUrl, toDisplayMarkdown, toStoredMarkdown, fromAssetUrl } from '@amadeus-shared/assets'
 import { ATTACHMENT_CLIP_MIME, recentAttachmentCopy, rememberAttachmentCopy } from '../../lib/attachmentClipboard'
+import { writeImageToClipboard } from '../../../lib/imageClipboard'
 import { tabsToEntities, entitiesToTabs } from '@amadeus-shared/indentIo'
 import { resolvePageName, unescapeWikiOutsideFences, normalizeUrlLiterals } from '@amadeus-shared/links'
 import { resolveFileLink } from '../../lib/vaultFiles'
@@ -338,7 +339,7 @@ function imageFromTransfer(dt: DataTransfer | null): File | null {
 }
 
 /** 当前 PM 选区若正好是一份附件,返回「库内 markdown 引用 + 主进程解析用 ref」。 */
-function selectedAttachment(view: EditorView): { reference: string; ref: string } | null {
+export function selectedAttachment(view: EditorView): { reference: string; ref: string } | null {
   const sel = view.state.selection
   let reference = ''
   let image: ProseNode | null = null
@@ -363,6 +364,29 @@ function selectedAttachment(view: EditorView): { reference: string; ref: string 
   const hash = ref.indexOf('#')
   if (hash > 0 && /\.[a-z0-9]{1,10}$/i.test(ref.slice(0, hash))) ref = ref.slice(0, hash)
   return ref ? { reference, ref } : null
+}
+
+/** 选中的那张图在页面上画出来的 <img>(`![](…)` 图片节点,或 `![[x.png]]` 那一段里的嵌入图)。
+ *  网页 / 手机复制图片从它取字节:显示得出来就取得到,不用另走一遍附件解析。 */
+export function selectedImageEl(view: EditorView): HTMLImageElement | null {
+  const sel = view.state.selection
+  const pos = sel instanceof NodeSelection ? sel.from : sel.$from.depth ? sel.$from.before() : null
+  const el = pos == null ? null : view.nodeDOM(pos)
+  if (!(el instanceof HTMLElement)) return null
+  const img = el instanceof HTMLImageElement ? el : el.querySelector('img')
+  return img && (img.currentSrc || img.src) ? img : null
+}
+
+/** 把选中的图片复制成真图片(块菜单「复制图片」)。桌面走主进程(原生图片 + 文件);网页 / 手机写 PNG + 引用文字。 */
+export async function copySelectedImage(view: EditorView, pagePath: string): Promise<boolean> {
+  const hit = selectedAttachment(view)
+  const img = selectedImageEl(view)
+  if (!hit || !img) return false
+  const ok = amadeus.copyAttachment
+    ? await amadeus.copyAttachment(pagePath, hit.ref, hit.reference).catch(() => false)
+    : await writeImageToClipboard(img.currentSrc || img.src, hit.reference).then(() => true, () => false)
+  if (ok) rememberAttachmentCopy(hit.reference, hit.ref)
+  return ok
 }
 
 /** Forsion 自己写入的 attachment flavor 优先于同一剪贴板里的 native image/file。 */
@@ -949,17 +973,25 @@ export function MilkdownInner({
       return false
     }
     const handleAttachmentCopy = (view: EditorView, event: Event): boolean => {
-      if (!attachmentPagePath || !amadeus.copyAttachment) return false
+      if (!attachmentPagePath) return false
       const hit = selectedAttachment(view)
       const e = event as ClipboardEvent
       if (!hit || !e.clipboardData) return false
+      // 网页 / 手机没有主进程:图片随后由 Clipboard API 补成 PNG(引用文字同一项带上);别的附件照旧只复制引用。
+      const img = amadeus.copyAttachment ? null : selectedImageEl(view)
+      if (!amadeus.copyAttachment && !img) return false
       e.preventDefault()
       e.clipboardData.clearData()
       e.clipboardData.setData('text/plain', hit.reference)
       try { e.clipboardData.setData(ATTACHMENT_CLIP_MIME, hit.reference) } catch { /* browser flavor limit */ }
       // copy 事件必须同步返回;主进程随后把同一份剪贴板升级为原生 image/file flavor。
-      void amadeus.copyAttachment(attachmentPagePath, hit.ref, hit.reference)
-        .then((ok) => { if (ok) rememberAttachmentCopy(hit.reference, hit.ref) })
+      if (amadeus.copyAttachment) {
+        void amadeus.copyAttachment(attachmentPagePath, hit.ref, hit.reference)
+          .then((ok) => { if (ok) rememberAttachmentCopy(hit.reference, hit.ref) })
+      } else if (img) {
+        rememberAttachmentCopy(hit.reference, hit.ref)
+        void writeImageToClipboard(img.currentSrc || img.src, hit.reference).catch(() => { /* 取图失败:剪贴板里照旧是引用文字 */ })
+      }
       return true
     }
     // 文件拖入(含图片)统一交给编辑器级附件处理(AmadeusEditorView.onDrop),按笔记设置存放 → 不在块内内联,
