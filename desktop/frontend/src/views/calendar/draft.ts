@@ -8,8 +8,12 @@ export const DRAFT_MINUTES = 60
 export function draftValue(d: CalDraft): string {
   if (d.startMin === null) return d.endDay !== d.day ? `${d.day}/${d.endDay}` : d.day
   const base = toLocalDate(d.day)
-  if (d.hasEnd === false) return fmtStamp(addMinutes(base, d.startMin), false)
-  return `${fmtStamp(addMinutes(base, d.startMin), false)}/${fmtStamp(addMinutes(base, d.endMin), false)}`
+  const start = addMinutes(base, d.startMin)
+  if (d.hasEnd === false) return fmtStamp(start, false)
+  let end = addMinutes(base, d.endMin)
+  // 起点落进春季拨快的空档(如 01:45)会被顺延一小时,终点不会:按原时长从起点再算,别存成倒序区间
+  if (end.getTime() <= start.getTime()) end = addMinutes(start, d.endMin - d.startMin)
+  return `${fmtStamp(start, false)}/${fmtStamp(end, false)}`
 }
 
 /** 从按下点 a 拖到 b(都是吸附后的分钟,同一天):起止按先后排好,至少 15 分钟,不出当天。

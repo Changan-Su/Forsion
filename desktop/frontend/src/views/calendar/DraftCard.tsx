@@ -10,7 +10,7 @@ import { pasteCalendarEvent, useCalendarClipboard } from './eventClipboard'
 import { calendarScope } from './eventActions'
 import { cardPos } from './EventCard'
 import { draftValue, pickDraftDb } from './draft'
-import { eventTimeSummary, addMinutes, toLocalDate } from './dateUtils'
+import { eventTimeSummary, addMinutes, toLocalDate, wallDiffMin } from './dateUtils'
 import { useCalendarNav } from '../../amadeus/store/calendarNavStore'
 import { useCalendarMembers } from '../../amadeus/store/calendarMembers'
 import { useCalendarConfig, colorForDb, defaultDbPath } from '../../amadeus/store/calendarConfigStore'
@@ -87,7 +87,7 @@ export function DraftCard({ rootRef, onPasted }: { rootRef: RefObject<HTMLElemen
           if (!d) return
           const start = toLocalDate(d.start), end = d.end ? toLocalDate(d.end) : addMinutes(start, 30)
           useCalendarNav.getState().setDraft({ ...draft, hasEnd: !!d.end, day: d.start.slice(0, 10), endDay: (d.end ?? d.start).slice(0, 10),
-            startMin: d.allDay ? null : start.getHours() * 60 + start.getMinutes(), endMin: d.allDay ? 0 : (end.getTime() - toLocalDate(d.start.slice(0, 10)).getTime()) / 60000 })
+            startMin: d.allDay ? null : start.getHours() * 60 + start.getMinutes(), endMin: d.allDay ? 0 : wallDiffMin(end, toLocalDate(d.start.slice(0, 10))) })
         }} />
       </> : <div className="amx-cal-draft-title">{draft.title || <span className="ph">{t('calside.newEvent')}</span>}</div>}
       {summary && (
