@@ -424,13 +424,14 @@ export function ChatView({ leaf, params }: ViewProps) {
     // 命中可能在长提问折叠起来的那截里(不知道落在哪一段):跳到用户消息先展开
     el.querySelector<HTMLButtonElement>('.t2-user-more[aria-expanded="false"]')?.click()
     const root = chatScrollRef.current
+    // 不随 effect 清理:下一行 clearJumpTarget 改了依赖、effect 立刻重跑,清理会把这个定时器掐掉 → 类永远摘不掉,再跳到同一条就不闪了
+    const flash = (): void => { el.classList.add('t2-jump-flash'); window.setTimeout(() => el.classList.remove('t2-jump-flash'), 1100) }
     if (root) {
       stickToBottom.current = false
-      scrollToElement(root, el, 24) // 落地后再量再补:上面的消息带 content-visibility,进视口才量出真实高度
-    }
-    el.classList.add('t2-jump-flash')
-    // 不随 effect 清理:下一行 clearJumpTarget 改了依赖、effect 立刻重跑,清理会把这个定时器掐掉 → 类永远摘不掉,再跳到同一条就不闪了
-    window.setTimeout(() => el.classList.remove('t2-jump-flash'), 1100)
+      // 落地后再量再补:上面的消息带 content-visibility,进视口才量出真实高度。
+      // 落稳了才闪:刚打开的长会话从底部平滑滚上去要大半秒,先闪就在半路放完了(10-24 ⌘P ⌘↵ 台架实测:到位时 1.1s 已过)
+      scrollToElement(root, el, 24, flash)
+    } else flash()
     s.clearJumpTarget()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [s.jumpTarget?.seq, activeId, historyLoading, activeMessages.length])
