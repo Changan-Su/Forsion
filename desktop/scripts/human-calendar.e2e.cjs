@@ -84,7 +84,7 @@ async function main() {
     }, d0)
     await win.waitForTimeout(350)
     const p = await slotPoint(win, d0, 13 * 60)
-    await win.mouse.click(p.x, p.y)
+    await win.mouse.dblclick(p.x, p.y)
     await win.waitForSelector('.amx-cal-event.amx-cal-draft', { timeout: 3000 }).catch(async (e) => { await win.screenshot({ path: path.join(OUT, 'no-draft.png') }); throw e })
     await win.keyboard.type('新建到我的日历')
     await win.keyboard.press('Enter')

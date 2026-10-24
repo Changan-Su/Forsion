@@ -2,8 +2,8 @@
 import type { CalDraft } from '../../amadeus/store/calendarNavStore'
 import { addMinutes, fmtStamp, toLocalDate } from './dateUtils'
 
-/** 单击新建的默认时长(分钟)。 */
-export const DRAFT_MINUTES = 60
+/** 双击 / 按 C 新建的默认时长(分钟)。 */
+export const DRAFT_MINUTES = 30
 
 export function draftValue(d: CalDraft): string {
   if (d.startMin === null) return d.endDay !== d.day ? `${d.day}/${d.endDay}` : d.day
@@ -17,7 +17,7 @@ export function draftValue(d: CalDraft): string {
 }
 
 /** 从按下点 a 拖到 b(都是吸附后的分钟,同一天):起止按先后排好,至少 15 分钟,不出当天。
- *  没拖(a === b)= 单击:从 a 起默认时长,碰到 24:00 就整体往前挪。 */
+ *  没拖(a === b)= 双击:从 a 起默认时长,碰到 24:00 就整体往前挪。 */
 export function draftRange(a: number, b: number, clicked: boolean): [number, number] {
   if (clicked) {
     const start = Math.max(0, Math.min(a, 24 * 60 - DRAFT_MINUTES))
