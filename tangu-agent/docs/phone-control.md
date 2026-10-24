@@ -28,8 +28,10 @@ model → phone_* 工具 (tangu-agent, builtin) → ctx.requestClientAction
 - run 请求体字段 `client_capabilities: string[]`(`POST /agent/runs`)。
 - 引擎消毒:数组、≤16 项、每项 `/^[a-z][a-z0-9-]{0,23}\.[a-z0-9-]{1,16}$/`、去重、排序 →
   `input.clientCapabilities`。不合法项静默丢弃。
-- 已定义能力:`phone.intents`(T1)、`phone.ui`(T2,伴随包健康时才声明)。
-- 工具闸(`toolRegistry.ts` 中央闸,default-deny):`ctx.client` 匹配 `^mobile/` **且**
+- 已定义能力:`phone.intents`(T1)、`phone.ui`(T2,伴随包健康时才声明)、`plugin.sandbox`(桌面插件沙箱,
+  契约 [plugin-sandbox.md](plugin-sandbox.md))。
+- 工具闸(`toolRegistry.ts` 中央闸,default-deny):`ctx.client` 匹配该 ns 的端(`CLIENT_FOR_NS`:`plugin` → `^desktop/`,
+  其余缺省 `^mobile/`)**且**
   `ctx.clientCapabilities` 含该工具的 `clientCapability` **且** 非子代理 / 计划模式 / 通道会话 /
   讨论 **且** 工具名以 `<ns>_` 开头(`phone.intents` → `phone_`)。chat 预设按「带 clientCapability」
   放行,不看工具来源(内置与插件等价)。
@@ -154,8 +156,11 @@ registerClientSurface(ns: string, s: {
   onReset?(): void                                 // 登出 / 鉴权重置(不走 endRun 的路径)
   SettingsRow?: React.ComponentType                // 设置 → 高级 页里渲染
 }): () => void
-collectClientCapabilities(): string[]              // startRun body 用;desktop/web 为 []
+collectClientCapabilities(): string[]              // startRun body 用;web 为 [];desktop 用户那份 = ['plugin.sandbox']
 ```
+
+桌面的 `plugin` 面(`services/pluginSandboxSurface.ts`)是唯一**在 JS 里回执**的面:动作在桌面主进程做,
+渲染层与主进程同属被信任的宿主,没有「JS 是不受信搬运工」那层顾虑。claim / result 电文与手机完全相同(§3.2)。
 
 ## 6. 原生插件 API(`Capacitor.Plugins.PhoneControl`)
 
