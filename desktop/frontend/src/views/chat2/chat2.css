@@ -377,6 +377,21 @@
    (0,1,0),排在后面胜出 —— 以前两边都是 16px 看不出来,现在会把按钮按回卡里。 */
 .t2-jump { position: absolute; right: 22px; z-index: 12; }
 .t2-jump.jump-bottom { bottom: calc(var(--t2-composer-h, 96px) + 16px); }
+/* 带数的那一版(借 Comma):同一颗键拉成药丸、挪到输入卡正上方居中;车道让位时 right 照下面那条规则抬起,居中跟着偏半个车道 */
+.t2-jump.jump-bottom.t2-jump--count {
+  left: 0; margin-inline: auto; width: max-content; gap: 6px; padding: 0 12px 0 10px;
+  color: var(--text); font-size: var(--ui-font-caption); font-weight: 500; white-space: nowrap;
+}
+.t2-jump--count > svg { color: var(--accent-ink); }
+/* 没发出去的那条(借 Comma):气泡淡掉,底下一行原因 + 查看余量 / 丢弃 / 重试,占原来复制 / 编辑那一排 */
+.t2-userwrap--failed .t2-user, .t2-userwrap--failed .t2-user-atts { opacity: 0.55; }
+.t2-failed { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 4px 6px; margin-top: 4px; font-size: var(--ui-font-caption); }
+.t2-failed-why { display: inline-flex; align-items: center; gap: 4px; margin-right: 4px; color: var(--danger); }
+.t2-failed-btn { border: 0; padding: 3px 8px; border-radius: var(--radius-sm); background: none; color: var(--text-muted); font: inherit; cursor: pointer; }
+.t2-failed-btn:hover { background: var(--overlay-light); color: var(--text); }
+.t2-failed-btn.primary { background: var(--overlay-light); color: var(--text); }
+.t2-failed-btn.primary:hover { background: var(--overlay-medium); }
+.t2-failed-btn:focus-visible { outline: var(--focus-ring) solid var(--signal-line); outline-offset: 1px; }
 /* 划线后的那一条不在这里了:全应用共用 lcl/components/selectionBar.css(外壳 .ui-popover.selbar,挂在 body 下)。 */
 
 @media (max-width: 1040px) {

@@ -35,6 +35,7 @@ import { normalizeSessionEmoji } from '../../../../../tangu-agent/src/contracts/
 import type { StoreApi } from 'zustand'
 import type { AppState } from '../../stores/appStore'
 import '../messages' // Tangu 自己的文案片段(核心插件化 2c)
+import { failReason, landedAnyway, type FailedSend } from './failedSend'
 
 
 // 本文件自带的词条片段(命名空间 `appstore.*`,与其它文件不重叠)。
@@ -965,6 +966,8 @@ export interface TanguState {
   steerSentBySession: Record<string, string[]>
   /** run 终结时未送达的插话回填输入框(per-session,防串会话;ChatView 并进 seedText 通道)。 */
   steerRestoreBySession: Record<string, string | undefined>
+  /** 没发出去的那几条(借 Comma):留在会话末尾,带丢弃 / 重试(failedSend.ts)。 */
+  failedBySession: Record<string, FailedSend[]>
   /** 会话搜索命中后的跳转目标:打开会话 → ChatView 滚到该消息并高亮一次。seq 让同一目标可重复触发。 */
   jumpTarget: { sessionId: string; messageId: string; seq: number } | null
   filePreview: PreviewTarget | null
@@ -1140,6 +1143,9 @@ export interface TanguState {
   clearPendingChatQuote(seq: number): void
   /** Composer 消费掉「未送达插话」的回填后清位(per-session)。 */
   clearSteerRestore(sessionId: string): void
+  /** 重试一条没发出去的:断在半路(offline)的先查引擎是不是其实收下了,收下了就只把它拉进来、不再发。 */
+  retryFailed(sessionId: string, id: string): Promise<void>
+  discardFailed(sessionId: string, id: string): void
   appendRefs(refs: ChatRef[]): void
   clearDraftRefs(): void
   /** opts.newTab(⌘/Ctrl 单击文件行)= 强开新标签页,不聚焦已开的同路径页。 */
@@ -1205,6 +1211,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
   steerPendingBySession: {},
   steerSentBySession: {},
   steerRestoreBySession: {},
+  failedBySession: {},
   jumpTarget: null,
   filePreview: null,
   messagesBySession: {},
@@ -2934,6 +2941,13 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
         get().toast(t('app.filesUploaded', { count: workspaceFiles.length }))
       } catch (e: any) { get().toast(t('app.workspaceUploadFail', { e: e?.message || e }), true) }
     }
+    // 借 Comma:没发出去的那条落在会话末尾,带丢弃 / 重试(failedSend.ts);随后 return true = 输入框照常清空,字在那条气泡里。
+    // 队列取出的(fromQueue)不走这条:队列自己管重发。
+    const recordFailed = (sid: string, e: any): void => {
+      const at = Date.now()
+      const item: FailedSend = { id: `failed-${at}-${Math.random().toString(36).slice(2, 6)}`, text, attachments, skillIds, mentions, reason: failReason(e), detail: String(e?.message || e), at }
+      set((st) => ({ failedBySession: { ...st.failedBySession, [sid]: [...(st.failedBySession[sid] || []), item] } }))
+    }
     const activeRunId = get().runningBySession[sessionId]
     // 排队(先于 steer 判):队里已有东西 / 压缩或排队消息在途 / 运行中的 /refine(引擎只在 run 开头认它)→ 排到队尾,保住先后。
     // 空闲时队里还有(上一条排队消息没发出去)也走队:入队即试着取,顺带重试卡住的队首。
@@ -2959,7 +2973,11 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
           set((s) => steerAcceptPatch(s, sessionId, activeRunId, { id: sr.userMessageId || `u-${Date.now()}`, text, attachments }))
           return true
         }
-      } catch (e: any) { get().toast(t('app.sendFail', { e: e?.message || e }), true); return false }
+      } catch (e: any) {
+        if (fromQueue) { get().toast(t('app.sendFail', { e: e?.message || e }), true); return false }
+        recordFailed(sessionId, e)
+        return true
+      }
     }
     // 与输入栏「显示的模型」(mvModelId)同一回退链:newChat/会话模型 → 全局 cfg.modelId → 后端默认模型。
     // 否则新会话(未显式选模型、cloud.defaultModel 又空)会发出空 model_id → 后端 400「model_id required」。
@@ -2986,7 +3004,11 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       const sess = get().sessions.find((s) => s.id === sessionId)
       if (sess && (!sess.title || sess.title === 'New Chat')) void get().renameSession(sessionId, text.slice(0, 30))
       return true
-    } catch (e: any) { get().toast(t('app.sendFail', { e: e?.message || e }), true); return false }
+    } catch (e: any) {
+      if (fromQueue) { get().toast(t('app.sendFail', { e: e?.message || e }), true); return false }
+      recordFailed(sessionId, e)
+      return true
+    }
   },
 
   withdrawSteer: async (sessionId, msgId) => {
@@ -3576,6 +3598,18 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
   setPendingChatQuote: (targetType, text) => set({ pendingChatQuote: { targetType, text, seq: ++pendingChatQuoteSeq } }),
   clearPendingChatQuote: (seq) => set((s) => (s.pendingChatQuote?.seq === seq ? { pendingChatQuote: null } : {})),
   clearSteerRestore: (sessionId) => set((s) => ({ steerRestoreBySession: { ...s.steerRestoreBySession, [sessionId]: undefined } })),
+  discardFailed: (sessionId, id) => set((s) => ({ failedBySession: { ...s.failedBySession, [sessionId]: (s.failedBySession[sessionId] || []).filter((f) => f.id !== id) } })),
+  retryFailed: async (sessionId, id) => {
+    const item = (get().failedBySession[sessionId] || []).find((f) => f.id === id)
+    if (!item) return
+    get().discardFailed(sessionId, id)
+    if (item.reason === 'offline') {
+      const records = await api.listMessages(targetForSession(sessionId), sessionId).catch(() => null)
+      if (records && landedAnyway(item, records)) { void get().pollSession(sessionId); return }
+    }
+    // 再没成就再落一条(sendNow 的 catch),排在最后
+    await get().send(item.text, item.attachments, undefined, item.skillIds, item.mentions, sessionId)
+  },
 
   setJumpTarget: (sessionId, messageId) => {
     // 目标要先落下再开会话:ChatView 那侧是「消息到齐了就滚」,顺序反了会错过第一次渲染。

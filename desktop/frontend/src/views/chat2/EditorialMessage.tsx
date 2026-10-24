@@ -540,7 +540,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
         .then((shown) => { if (!shown) restore() }, restore)
     }
     return (
-      <div ref={setUserWrap} className={`t2-userwrap${inlineActions ? ' t2-userwrap--inline' : ''}`} id={`tocmsg-${msg.id}`} data-toc-msg-role="user" data-toc-title={tocTitle}>
+      <div ref={setUserWrap} className={`t2-userwrap${inlineActions ? ' t2-userwrap--inline' : ''}${footer ? ' t2-userwrap--failed' : ''}`} id={`tocmsg-${msg.id}`} data-toc-msg-role="user" data-toc-title={tocTitle}>
         <div className="t2-user-col">
           <div className="t2-username">{name}</div>
           {previewQuote && <QuotePreview text={previewQuote.text} note={previewQuote.note} onClose={() => setPreviewQuote(null)} />}
@@ -583,6 +583,8 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
             </UserFold>
           </div>
           )}
+          {/* 用户消息只有「没发出去」那条(ChatView 的 failedSends)传 footer:换掉复制 / 编辑那一排,放原因 + 丢弃 / 重试 */}
+          {footer ?? (
           <div className="t2-actions">
             <MsgTime at={msg.timestamp} />
             <button className="t2-iconbtn" title={t('chat.action.copy')} onClick={() => handlers?.onCopy?.(msg.content)}><Copy size={14} /></button>
@@ -596,6 +598,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
               </span>
             )}
           </div>
+          )}
         </div>
         <div className="t2-avatar t2-user-avatar" style={!userAvatar ? { background: 'color-mix(in srgb, var(--text-muted) 22%, transparent)' } : undefined}>
           {userAvatar ? <img src={userAvatar} alt="" /> : firstChar(name)}

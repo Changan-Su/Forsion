@@ -74,3 +74,21 @@ export function splitLeadingQuotes(text: string): { quotes: string[]; notes: str
   }
   return quotes.length ? { quotes, notes, body: lines.slice(at).join('\n') } : null
 }
+
+/** 长粘贴磁贴(借 Comma):纯文本粘贴到这么长才不进输入框、成一张磁贴(Comma 同值)。 */
+export const PASTE_TILE_MIN = 5000
+
+/** 磁贴标题 = 第一行有字的那一行。 */
+export function pasteTitle(text: string): string {
+  return (text.split('\n').find((l) => l.trim()) ?? '').trim()
+}
+
+/** 发出的正文:你写的话在前,粘贴的内容按顺序接在后面,各自用代码块围住 —— 模型看到的仍是全文。
+ *  围栏比内容里最长的一串反引号多一个,内容里自带 ``` 也围不断。 */
+export function composePastes(text: string, pastes: string[]): string {
+  const blocks = pastes.map((p) => {
+    const fence = '`'.repeat(Math.max(3, ...(p.match(/`+/g) ?? []).map((r) => r.length + 1)))
+    return `${fence}\n${p.replace(/\n+$/, '')}\n${fence}`
+  })
+  return [text, ...blocks].filter(Boolean).join('\n\n')
+}
