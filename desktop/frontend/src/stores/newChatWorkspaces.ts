@@ -12,7 +12,7 @@ import { DEFAULT_LOCAL_WORKSPACE_KEY, type WorkspaceDescriptor } from '../types'
 import { useEngineFocus } from '../services/engine/targets'
 import { currentPlatform } from '../services/platform'
 import { useApp } from './appStore'
-import { rootlessWs } from '@tangu/ui/tangu/store/tanguSlice'
+import { rootlessWs } from '../tangu/store/tanguSlice'
 import { useDeviceSessions } from './deviceSessionsStore'
 
 export function useRemoteNewChatWorkspaces(): WorkspaceDescriptor[] | null {
