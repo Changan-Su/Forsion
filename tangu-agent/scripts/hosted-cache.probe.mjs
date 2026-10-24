@@ -111,20 +111,19 @@ for (let round = 1; round <= ROUNDS; round++) {
   try { await call(round); } catch (e) { console.error(`第 ${round} 轮失败:${e.message}`); break; }
 }
 
-// 归因只认「对得上具体某一轮」的:上游按 128 细报时,命中第 j 轮写下的前缀 = cached 等于第 j 轮 prompt 的
-// 128 取整(容一个块的尾差)。恰好对上一轮 → adjacent / older;对不上或同时对上两轮 → 只报 hit,不硬判。
-// 上游没报 cached 的轮记 unknown,不进命中率。
+// 归因只认「对得上具体某一轮」的:命中第 j 轮写下的前缀 = cached 落在第 j 轮 prompt 往下 256 以内 —— 按 128
+// 细报的上游是 prompt 的 128 取整(容一个块的尾差),Claude 原生报精确数、就等于 prompt。
+// 恰好对上一轮 → adjacent / older;对不上或同时对上两轮 → 只报 hit,不硬判。上游没报 cached 的轮记 unknown,不进命中率。
 // ponytail: 「上游是不是按 128 细报」靠全部非零 cached 之间有没有非 1024 倍数的差来认(这个中转站上 gpt-5.5
 // 是 1024 一档,那种上游的 cached 停着不动既可能是粒度粗也可能是落到了旧缓存,分不开)。认不出细粒度(含样本
 // 太少)就整场只报 hit / miss。上限:真 128 粒度但几次命中恰好相差 1024 的倍数时会少报归因,不会报错归因。
-const f128 = (x) => Math.floor(x / 128) * 128;
 function classify(rows, fine) {
   return rows.map((r, i) => {
     if (i === 0) return 'first';
     if (!r.reported) return 'unknown';
     if (!r.cached) return 'miss';
     if (!fine) return 'hit';
-    const src = rows.slice(0, i).flatMap((e, j) => ([0, 128].includes(f128(e.prompt) - r.cached) ? [j] : []));
+    const src = rows.slice(0, i).flatMap((e, j) => (e.prompt - r.cached >= 0 && e.prompt - r.cached < 256 ? [j] : []));
     return src.length !== 1 ? 'hit' : src[0] === i - 1 ? 'adjacent' : 'older';
   });
 }
