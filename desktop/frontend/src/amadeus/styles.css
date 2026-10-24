@@ -4111,11 +4111,13 @@ body.amx-marquee-active * {
 }
 .am-app .amx-card-overview[data-overview-density='title'] .amx-card-overview-detail { display: none; }
 /* 画布缩略图：固定在 chrome 层，不吃舞台 pan/zoom；盒子来自真实卡片/主卡/图形几何。
-   视口框本身也是导航面，点击或拖动都会平移画布。 */
+   视口框本身也是导航面，点击或拖动都会平移画布。
+   缩放胶囊与缩略图离边 16px(10-24 三张画布统一:与 Tangu 画布 chat2.css、图像工作室同值;仪表盘 / 流程画布同吃这两条)。
+   缩略图底边 = 胶囊 16 + 胶囊高 ≈28 + 间距 8。 */
 .am-app .amx-stage-minimap {
   position: absolute;
-  right: 8px;
-  bottom: 42px;
+  right: 16px;
+  bottom: 52px;
   width: 184px;
   height: 112px;
   box-sizing: border-box;
@@ -4159,8 +4161,8 @@ body.amx-marquee-active * {
 }
 .am-app .amx-stage-hud {
   position: absolute;
-  right: 8px;
-  bottom: 8px;
+  right: 16px;
+  bottom: 16px;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -4309,6 +4311,10 @@ body.amx-marquee-active * {
      手机上整条点不到。抬到工具条之上;缩略图再让一档。 */
   .am-app .amx-stage-hud { bottom: 112px; }
   .am-app .amx-stage-minimap { bottom: 168px; }
+  /* 离边仍是 8px(桌面是 16px,10-24 三张画布统一):手机上 HUD 那排 34px 按钮已经顶满窄机宽度(见下),
+     再多让 8px 左边就伸出舞台(check:canvastouch T8)。 */
+  .am-app .amx-stage-hud,
+  .am-app .amx-stage-minimap { right: 8px; }
   /* 手指命中面:这几颗按钮的尺寸是按鼠标定的(28×26 / 12px 图标)。只放大盒子,图标 size 归 React。
      ⚠️ 34px 是**上限不是审美**:8 颗工具 + 间距 + 内边距 = 294px,窄机(360pt ÷ body zoom 1.15
      ≈ 313px)刚好装得下;再大就顶穿工具条背景往外溢(与 .amx-mbar 那条同一笔账)。 */
@@ -4348,6 +4354,13 @@ body.amx-marquee-active * {
    同特异性的覆盖靠源码顺序(DESIGN §7.2)。 */
 .am-app .amx-stage.amx-space-pan,
 .am-app .amx-stage.amx-space-pan * { cursor: grab; }
+/* 空白处右键按住拖 = 平移(10-24,canvasStage 的 setPanning):拖起来之后整片握紧抓手,同样压住卡片 / 正文 / 把手的光标。
+   排在空格抓手之后:按着空格再右键拖,显示的是「正在拖」。 */
+.am-app .amx-stage[data-panning],
+.am-app .amx-stage[data-panning] * { cursor: grabbing; }
+/* 白板同一手势(blocks/excalidraw/rightPan.ts):引擎把光标写在交互画布的行内 style 上,只有 !important 压得住。 */
+.amx-boardhost[data-rpan],
+.amx-boardhost[data-rpan] * { cursor: grabbing !important; }
 
 /* ── Agent 改动呈现(评审 G3-03)──────────────────────────────────────────────────────
    装饰只在内存(agentChanges.ts),不进序列化。色值一律走语义 token:改动 = --green 的淡底 + 下划线

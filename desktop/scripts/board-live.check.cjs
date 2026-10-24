@@ -9,6 +9,7 @@
 //   L3 打开网格后纸面上真的出现网格线(截图回灌读像素,mix-blend-mode 的结果 JS 读不到)。
 //   L4 选了纸张后视口被钳住,且纸外点不进画布。
 //   L23–L31 底部视图岛(网格 / 吸附 / 查看 / 禅)与网格两条路由(引擎网格 ↔ 纸张覆盖层 ↔ 老网格)。
+//   L32 空白处右键按住拖 = 平移、没拖松开才弹引擎的画布菜单;元素上右键照旧归引擎(10-24 三张画布统一)。
 //
 // 用法:npm run check:boardlive(自带起停 vite);或 npm run web 后 node scripts/board-live.check.cjs
 const fs = require('fs')
@@ -1144,6 +1145,162 @@ async function probes(p, pts) {
   await p.click(isle('grid'))
   await p.mouse.click(500, 300)
   await p.waitForTimeout(300)
+
+  // ── L32 空白处右键按住拖 = 平移(10-24 三张画布统一方案 B,blocks/excalidraw/rightPan.ts)──
+  // 新开一页(无限画布、视口在原点),不吃上面几十格留下的纸张 / 网格状态。引擎的菜单是 `.context-menu`。
+  //  a 空白右键拖:过 4px 才平移、拖时握紧抓手、全程零菜单;平移量靠「之后在同一屏幕点画方块,看场景坐标」量
+  //  b 空白右键点一下:按下时没有菜单,松开才弹引擎的画布菜单(引擎自己判类型)
+  //  c 元素描边上右键:引擎原样(按下即弹元素菜单,右键拖不平移)
+  //  d 空心矩形内部 = 引擎眼里的空白:归我们,松开才弹,菜单仍是引擎判的画布菜单
+  //  e 菜单开着时在别处空白右键拖:旧菜单关掉、拖完不弹新菜单
+  //  f Windows 式补发的 contextmenu(按下期间没来、松开后才到):拖完补发那下不许让引擎弹菜单;远处的照常
+  //  g 空心椭圆的对角描边仍归引擎(判空白按各自轮廓量,不按包围盒)
+  {
+    const q = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1000, height: 760 }, deviceScaleFactor: 1 })
+    q.on('pageerror', (e) => { errs.push(e.message); console.log('  [pageerror]', e.message) })
+    await q.goto(`${BASE}?board`)
+    await q.waitForSelector('.excalidraw canvas.excalidraw__canvas.interactive', { timeout: 20000 })
+    await q.waitForTimeout(600)
+    const bx = await rect(q, '.excalidraw')
+    const at = (x, y) => ({ x: bx.x + x, y: bx.y + y })
+    const menu = () => q.evaluate(() => {
+      const m = document.querySelector('.context-menu')
+      if (!m) return null
+      const names = [...m.querySelectorAll('li[data-testid]')].map((li) => li.dataset.testid)
+      return { cut: names.includes('cut'), paste: names.includes('paste'), n: names.length }
+    })
+    const lastEl = () => q.evaluate(() => { const e = (window.__scene?.elements ?? []).filter((x) => !x.isDeleted); const l = e[e.length - 1]; return l ? { x: Math.round(l.x), y: Math.round(l.y), n: e.length } : null })
+    /** 回到干净状态:左键点一处**真空白画布**(引擎在按下时关菜单、取消选中)。⚠️ 点位现找:写死的点会落在刚弹出的
+     *  引擎菜单上(菜单贴着视口往回挪),点中「查看模式」之类的项,后面整段都在另一个模式里跑(第一次写就踩了)。 */
+    const idle = async () => {
+      await q.keyboard.press('Escape')
+      const pt = await q.evaluate(({ bx }) => {
+        for (const [x, y] of [[900, 700], [150, 650], [900, 120], [560, 700], [150, 120], [60, 400]]) {
+          const el = document.elementFromPoint(bx.x + x, bx.y + y)
+          if (el?.matches?.('canvas.excalidraw__canvas.interactive')) return { x: bx.x + x, y: bx.y + y }
+        }
+        return null
+      }, { bx })
+      if (!pt) throw new Error('L32 找不到能点的空白画布')
+      await q.mouse.click(pt.x, pt.y)
+      await q.waitForTimeout(150)
+    }
+    const drawRect = async (x0, y0, x1, y1) => {
+      await q.keyboard.press('r')
+      await q.waitForTimeout(100)
+      await q.mouse.move(bx.x + x0, bx.y + y0)
+      await q.mouse.down()
+      await q.mouse.move(bx.x + x1, bx.y + y1, { steps: 6 })
+      await q.mouse.up()
+      await q.waitForTimeout(200)
+      return lastEl()
+    }
+    /** 平移探针:在屏幕 (300,220) 画个小方块,读它的场景坐标(无限画布、zoom 1:场景 = 屏幕 − 平移)。 */
+    const probe = async () => { const e = await drawRect(300, 220, 312, 232); await idle(); return e && [e.x, e.y] }
+    const rpress = async (p0, p1, mid) => {
+      await q.mouse.move(p0.x, p0.y)
+      await q.mouse.down({ button: 'right' })
+      await q.waitForTimeout(120)
+      const down = await menu()
+      let during = null
+      if (p1) {
+        await q.mouse.move((p0.x + p1.x) / 2, (p0.y + p1.y) / 2, { steps: 4 })
+        during = await q.evaluate(() => ({ rpan: document.querySelector('.amx-boardhost')?.hasAttribute('data-rpan') ?? false, cursor: getComputedStyle(document.querySelector('canvas.excalidraw__canvas.interactive')).cursor }))
+        await q.mouse.move(p1.x, p1.y, { steps: 4 })
+      } else if (mid) await q.mouse.move(p0.x + mid, p0.y + mid)
+      await q.mouse.up({ button: 'right' })
+      await q.waitForTimeout(250)
+      return { down, during, up: await menu() }
+    }
+    await q.mouse.click(bx.x + 600, bx.y + 600) // 焦点给画布,快捷键才落得下
+    const r1 = await drawRect(300, 220, 420, 320) // 空心矩形(引擎缺省无填充)
+    await idle()
+    const base = await probe()
+    // a
+    const a = await rpress(at(700, 500), at(800, 560))
+    const moved = await probe()
+    check('L32a 白板空白右键拖 = 平移(拖时握紧抓手、全程零菜单),平移量 = 指针位移',
+      !!r1 && !!base && !!moved && a.down === null && a.up === null && a.during?.rpan && a.during.cursor === 'grabbing'
+        && moved[0] === base[0] - 100 && moved[1] === base[1] - 60,
+      JSON.stringify({ base, moved, a }))
+    // b(手抖 ≤4px 也算点一下:斜着 2px + 2px = 2.8px)
+    const b = await rpress(at(700, 500), null, 2)
+    await idle()
+    check('L32b 白板空白右键点一下(手抖 ≤4px)= 按下时没有菜单,松开才弹引擎的画布菜单',
+      b.down === null && !!b.up?.paste && !b.up.cut, JSON.stringify(b))
+    // c:矩形平移后屏幕上是 (400..520, 280..380),左边线 x=400
+    const c = await rpress(at(400, 330))
+    await idle()
+    const c0 = await probe()
+    const cd = await rpress(at(400, 330), at(460, 380))
+    await idle()
+    const c1 = await probe()
+    check('L32c 元素描边上右键照旧归引擎:按下即弹元素菜单;右键拖不平移',
+      !!c.down?.cut && !!c.up?.cut && !!cd.down?.cut && !!c0 && !!c1 && c0[0] === c1[0] && c0[1] === c1[1],
+      JSON.stringify({ c, cd, c0, c1 }))
+    // d
+    const d = await rpress(at(460, 330))
+    await idle()
+    check('L32d 空心矩形内部(引擎眼里的空白)= 松开才弹,菜单仍由引擎判(画布菜单)',
+      d.down === null && !!d.up?.paste && !d.up.cut, JSON.stringify(d))
+    // e
+    await q.mouse.click(bx.x + 700, bx.y + 200, { button: 'right' })
+    await q.waitForTimeout(200)
+    const eOpen = await menu()
+    const e = await rpress(at(120, 640), at(180, 600))
+    await idle()
+    check('L32e 菜单开着时在别处空白右键拖:按下即关旧菜单,拖完不弹新菜单', !!eOpen && e.down === null && e.up === null, JSON.stringify({ eOpen, e }))
+    // f:按下那一下由测试在窗口捕获期先截掉(= 按下期间没来过 contextmenu),松开后补发一下
+    await q.evaluate(() => {
+      window.__eatPress = false
+      window.addEventListener('contextmenu', (ev) => { if (window.__eatPress) { window.__eatPress = false; ev.preventDefault(); ev.stopImmediatePropagation() } }, true)
+    })
+    const trail = (x, y) => q.evaluate(({ x, y }) => {
+      const el = document.elementFromPoint(x, y) ?? document.body
+      const ev = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 2 })
+      el.dispatchEvent(ev)
+      return ev.defaultPrevented
+    }, { x, y })
+    await q.evaluate(() => { window.__eatPress = true })
+    const f1 = await rpress(at(700, 500), at(760, 540))
+    const fT = await trail(bx.x + 760, bx.y + 540)
+    await q.waitForTimeout(200)
+    const fAfter = await menu()
+    await idle()
+    // 对照:同样拖完,补发那下离松开处 >8px = 不是这次的,照常交给引擎(弹画布菜单)
+    await q.evaluate(() => { window.__eatPress = true })
+    await q.mouse.move(bx.x + 700, bx.y + 500)
+    await q.mouse.down({ button: 'right' })
+    await q.mouse.move(bx.x + 760, bx.y + 540, { steps: 4 })
+    await q.mouse.up({ button: 'right' })
+    await q.waitForTimeout(60)
+    await trail(bx.x + 640, bx.y + 420)
+    await q.waitForTimeout(200)
+    const fFar = await menu()
+    await idle()
+    check('L32f Windows 式补发的 contextmenu:拖完那下(400ms / 8px 内)吞掉、引擎不弹菜单;离得远的照常交给引擎',
+      f1.up === null && fT && fAfter === null && !!fFar?.paste, JSON.stringify({ f1, fT, fAfter, fFar }))
+    // g 空心椭圆:对角处的描边缩进包围盒几十 px —— 压在描边上仍归引擎(元素菜单、右键拖不平移),圆心是空白(Codex 评审 10-24)
+    await q.keyboard.press('o')
+    await q.waitForTimeout(100)
+    await q.mouse.move(bx.x + 520, bx.y + 120)
+    await q.mouse.down()
+    await q.mouse.move(bx.x + 720, bx.y + 320, { steps: 6 })
+    await q.mouse.up()
+    await q.waitForTimeout(200)
+    await idle()
+    const g0 = await probe()
+    const k = Math.SQRT1_2 * 100 // 圆心 (620,220),半轴 100:45° 处的描边
+    const gEdge = await rpress(at(620 + k, 220 + k), at(660 + k, 250 + k))
+    await idle()
+    const g1 = await probe()
+    const gIn = await rpress(at(620, 220))
+    await idle()
+    check('L32g 空心椭圆:对角描边上右键归引擎(按下即弹元素菜单、拖不平移);圆心(引擎眼里的空白)松开才弹画布菜单',
+      !!gEdge.down?.cut && !!g0 && !!g1 && g0[0] === g1[0] && g0[1] === g1[1] && gIn.down === null && !!gIn.up?.paste && !gIn.up.cut,
+      JSON.stringify({ gEdge, g0, g1, gIn }))
+    await q.close()
+  }
 
   // ── L21 端级 UI 缩放:光标偏移的哨兵 ──
   // `Element.currentCSSZoom` 规范规定「元素未参与渲染时返回 1」—— 白板在隐藏的 Dockview 面板里挂载时

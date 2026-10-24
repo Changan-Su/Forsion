@@ -108,6 +108,9 @@
 //        选中连线拖端点 = 改连(落空白 / 自连 / 判重 = 不写,一击撤销);从选中卡的边口圆点拖出 = 新连线(卡↔卡默认父子、Shift 自由连)
 //   C107 导出 JSON Canvas(V-19,拍板 #10 单向):画布右键 / ⋯ 菜单(onCanvasMode.exportCanvas)写同目录 `<笔记名>.canvas`,
 //        卡 → text(恰为一个能解析的嵌入 → file)、Frame → group、形状 → text、连线 / 层级 → edge;重名加后缀不覆盖;笔记本身零写入
+//   —— 波次 5(10-24 三张画布统一方案 B)在 wave5();`UCANVAS_ONLY=w5` 只跑这一段 ——
+//   C108 空白右键按住拖 = 平移(b 丢指针捕获即收尾)   C109 空白右键点一下松开才弹菜单 / 对象右键照旧   C110 Windows 式补发 contextmenu 只吞本次按压的
+//   C111 适应内容 / 缩放按钮走镜头动画,落点同当场落定   C112 缩放胶囊 / 缩略图离边 16px
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
@@ -168,6 +171,9 @@ const fmOf = (p) => p.evaluate(() => {
   return window.__upage.probe.fmState?.().fm ?? ''
 })
 const canvasLine = (fm) => (/^amadeus_canvas:\s*(.*)$/m.exec(fm ?? '') || [])[1] ?? null
+/** 镜头动画落定(10-24 起适应内容 / 缩放按钮 / 键盘缩放与双击聚焦同走 flyTo,约 300ms):等舞台摘掉 amx-vp-focus。
+ *  点完缩放就量视口的格子先等它 —— 量在半路上拿到的是中间值(还带 1.5% 回弹)。 */
+const settleCam = (p) => p.waitForFunction(() => !document.querySelector('.amx-stage.amx-vp-focus'), null, { timeout: 3000 }).catch(() => {})
 
 /* ⚠️「在不在画布模式」的判据:2026-08-17 舞台改为**常驻**(文档模式挂 .amx-stage-off + display:contents)
  *  之后,`!!querySelector('.amx-stage')` 恒真 —— 拿它当判据的断言会静默退化成恒绿(对抗评审 P2:
@@ -331,6 +337,7 @@ async function wave2(browser) {
     const panned = await vis94(pg)
     await pg.click('.amx-stage-hud button[title="适应内容"]')
     await pg.waitForTimeout(400)
+    await settleCam(pg)
     out94[name] = { opened, panned, fitted: await vis94(pg) }
     await pg.close()
   }
@@ -1381,8 +1388,367 @@ async function wave4(browser) {
   })
 }
 
+/** 波次 5(10-24 三张画布统一方案 B:手势 / 镜头 / HUD 与 Tangu 画布同一套)。默认跟在全套后面跑;`UCANVAS_ONLY=w5` 只跑这里。
+ *  C108 空白右键按住拖 = 平移(过 4px 才算拖,拖时握紧抓手),全程不弹菜单、不改选中、不框选
+ *  C109 空白右键点一下(没拖 / 手抖 ≤4px)= **松开**才弹空白菜单;卡片 / 连线上右键照旧「先选中再弹」(按下即弹)
+ *  C110 Windows 式「松开后才补发的 contextmenu」:只吞这一次按压的(400ms / 8px 内)—— 菜单不被它关掉、拖完不被它弹出菜单;
+ *       离得远的照旧关菜单(headless 是 mac 路径:按下那一下由测试先截掉,模拟「按下期间没来过 contextmenu」)
+ *  C111 适应内容 / 缩放按钮走镜头动画(途中逐帧有中间值),落点与「减少动态」下的当场落定逐像素一致;连按两下 + = 1.44 倍
+ *  C112 缩放胶囊 / 缩略图离舞台右下 16px(与 Tangu 画布同值) */
+async function wave5(browser) {
+  const guard = async (id, fn) => { try { await fn() } catch (err) { record(`${id} 运行中断(视作失败)`, false, String(err?.message ?? err).split('\n')[0].slice(0, 300)) } }
+  const SEED5 = [
+    '---', 'amadeus_schema: amadeus.page/4',
+    'amadeus_canvas: {"v":1,"mode":"canvas","main":{"x":0,"y":0,"w":400},"cards":[{"ref":"k1","x":480,"y":0,"w":300},{"ref":"k2","x":480,"y":320,"w":300}],"elements":[{"id":"e1","type":"connector","from":{"ref":"k1"},"to":{"ref":"k2"}}]}',
+    '---', '', '# 画布页', '', '主卡一段。', '', '<!-- a k1 -->', '', '卡 K1', '', '<!-- /a k1 -->', '', '<!-- a k2 -->', '', '卡 K2', '', '<!-- /a k2 -->', '',
+  ].join('\n')
+  const vpOf = (pg) => pg.evaluate(() => { const m = new DOMMatrixReadOnly(getComputedStyle(document.querySelector('.amx-stage-inner')).transform); return { x: Math.round(m.e), y: Math.round(m.f), z: +m.a.toFixed(3) } })
+  const stateOf = (pg) => pg.evaluate(() => ({
+    menus: document.querySelectorAll('.ctx-menu.amx-canvas-menu').length,
+    fitItem: [...document.querySelectorAll('.ctx-menu.amx-canvas-menu button')].some((b) => (b.textContent ?? '').includes('适应内容')),
+    delItem: [...document.querySelectorAll('.ctx-menu.amx-canvas-menu button')].some((b) => (b.textContent ?? '').includes('删除')),
+    sel: [...document.querySelectorAll('.amx-el-selbox')].map((b) => b.dataset.anchor || (b.dataset.mainSel != null ? 'main' : b.dataset.el || '?')),
+    connSel: !!document.querySelector('svg.amx-el-conn[data-el="e1"].is-sel'),
+    panning: document.querySelector('.amx-stage')?.hasAttribute('data-panning') ?? false,
+    cursor: getComputedStyle(document.querySelector('.amx-stage')).cursor,
+    marquee: !!document.querySelector('.amx-stage-marquee'),
+    k1x: document.querySelector('.amx-ucard[data-anchor="k1"]')?.dataset.x ?? null,
+  }))
+  /** 视口内一处真空白(离卡片 / 连线都远)。 */
+  const blankOf = (pg) => pg.evaluate(() => {
+    const s = document.querySelector('.amx-stage').getBoundingClientRect()
+    const busy = [...document.querySelectorAll('.amx-ucard, .ProseMirror, svg.amx-el-conn, .amx-stage-hud, .amx-stage-minimap, .amx-stage-tools')].map((e) => e.getBoundingClientRect())
+    for (let y = s.top + 80; y < s.bottom - 80; y += 30)
+      for (let x = s.left + 80; x < s.right - 80; x += 30) {
+        if (busy.some((r) => x > r.left - 60 && x < r.right + 60 && y > r.top - 60 && y < r.bottom + 60)) continue
+        const t = document.elementFromPoint(x, y)
+        if (t && (t.classList.contains('amx-stage') || t.classList.contains('amx-stage-inner') || t.classList.contains('amx-el-layer'))) return { x, y }
+      }
+    return null
+  })
+  const centerOf = (pg, sel) => pg.evaluate((s) => { const r = document.querySelector(s).getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } }, sel)
+  /** 连线 e1 的中点(屏幕坐标):路径长度一半处,经 getScreenCTM 折回(含舞台 transform)。 */
+  const connMid = (pg) => pg.evaluate(() => {
+    const path = document.querySelector('svg.amx-el-conn[data-el="e1"] path.amx-el-conn-core')
+    if (!path) return null
+    const pt = path.getPointAtLength(path.getTotalLength() / 2).matrixTransform(path.getScreenCTM())
+    return { x: pt.x, y: pt.y }
+  })
+  const ctxLog = (pg) => pg.evaluate(() => {
+    window.__ctx5 = []
+    window.addEventListener('contextmenu', (e) => { setTimeout(() => window.__ctx5.push(e.defaultPrevented)) }, true)
+  })
+
+  await guard('C108', async () => {
+    const pg = await open(browser, SEED5)
+    await pg.waitForTimeout(700)
+    await ctxLog(pg)
+    const k1 = await centerOf(pg, '.amx-ucard[data-anchor="k1"] p')
+    await pg.mouse.click(k1.x, k1.y) // 选中 k1:右键拖之后选中必须原样
+    await pg.waitForTimeout(200)
+    const b = await blankOf(pg)
+    if (!b) throw new Error('找不到空白处')
+    const v0 = await vpOf(pg)
+    await pg.mouse.move(b.x, b.y)
+    await pg.mouse.down({ button: 'right' })
+    await pg.waitForTimeout(120)
+    const pressed = await stateOf(pg)
+    await pg.mouse.move(b.x + 3, b.y + 2) // 手抖:不算拖
+    await pg.waitForTimeout(60)
+    const jitter = { vp: await vpOf(pg), st: await stateOf(pg) }
+    await pg.mouse.move(b.x + 60, b.y + 40, { steps: 4 })
+    await pg.mouse.move(b.x + 120, b.y + 80, { steps: 4 })
+    await pg.waitForTimeout(60)
+    const mid = { vp: await vpOf(pg), st: await stateOf(pg) }
+    await pg.mouse.up({ button: 'right' })
+    await pg.waitForTimeout(300)
+    const end = { vp: await vpOf(pg), st: await stateOf(pg) }
+    const ctx = await pg.evaluate(() => window.__ctx5.slice())
+    await pg.close()
+    record('C108 空白右键按住拖 = 平移:4px 内不动、拖起来握紧抓手;全程零菜单、选中 / 卡位不变、不框选;按下那下 contextmenu 被拦',
+      pressed.menus === 0 && !pressed.panning
+        && jitter.vp.x === v0.x && jitter.vp.y === v0.y && jitter.st.menus === 0 && !jitter.st.panning
+        && mid.st.panning && mid.st.cursor === 'grabbing' && mid.st.menus === 0 && !mid.st.marquee
+        && end.vp.x - v0.x === 120 && end.vp.y - v0.y === 80 && end.vp.z === v0.z
+        && end.st.menus === 0 && !end.st.panning && end.st.cursor !== 'grabbing'
+        && JSON.stringify(end.st.sel) === '["k1"]' && end.st.k1x === pressed.k1x
+        && ctx.length === 1 && ctx[0] === true,
+      JSON.stringify({ v0, pressed, jitter, mid, end, ctx }))
+  })
+
+  await guard('C108b', async () => {
+    // 右键拖到一半指针捕获被收走(窗口失焦 / 系统接管,pointerup 不会再来):手势当场收尾 —— 之后按着键移动不再平移、
+    // 握紧抓手撤掉、松开不弹菜单;下一次右键拖照常(Codex 评审 10-24)
+    const pg = await open(browser, SEED5)
+    await pg.waitForTimeout(700)
+    const b = await blankOf(pg)
+    await pg.mouse.move(b.x, b.y)
+    await pg.mouse.down({ button: 'right' })
+    await pg.mouse.move(b.x + 60, b.y + 30, { steps: 4 })
+    await pg.waitForTimeout(60)
+    const v1 = await vpOf(pg)
+    const lost = await pg.evaluate(() => {
+      const s = document.querySelector('.amx-stage')
+      let id = null
+      for (const k of [1, 0, 2, 3]) { try { if (s.hasPointerCapture(k)) { id = k; break } } catch { /* 无效 id */ } }
+      if (id != null) s.releasePointerCapture(id)
+      return id
+    })
+    await pg.waitForTimeout(60)
+    await pg.mouse.move(b.x + 140, b.y + 90, { steps: 4 })
+    const v2 = await vpOf(pg)
+    const mid = await stateOf(pg)
+    await pg.mouse.up({ button: 'right' })
+    await pg.waitForTimeout(250)
+    const end = await stateOf(pg)
+    // 下一次右键拖照常
+    await pg.mouse.move(b.x, b.y)
+    await pg.mouse.down({ button: 'right' })
+    await pg.mouse.move(b.x + 50, b.y, { steps: 4 })
+    await pg.mouse.up({ button: 'right' })
+    await pg.waitForTimeout(250)
+    const v3 = await vpOf(pg)
+    await pg.close()
+    record('C108b 右键拖途中丢了指针捕获 = 手势收尾:不再跟着平移、抓手撤掉、松开不弹菜单;下一次照常',
+      lost != null && v2.x === v1.x && v2.y === v1.y && !mid.panning && end.menus === 0 && v3.x - v2.x === 50,
+      JSON.stringify({ lost, v1, v2, mid, end, v3 }))
+  })
+
+  await guard('C109', async () => {
+    const pg = await open(browser, SEED5)
+    await pg.waitForTimeout(700)
+    const k1 = await centerOf(pg, '.amx-ucard[data-anchor="k1"] p')
+    await pg.mouse.click(k1.x, k1.y)
+    await pg.waitForTimeout(200)
+    const b = await blankOf(pg)
+    const v0 = await vpOf(pg)
+    // a) 空白右键点一下:按下时不弹,松开才弹空白菜单;选中不变
+    await pg.mouse.move(b.x, b.y)
+    await pg.mouse.down({ button: 'right' })
+    await pg.waitForTimeout(150)
+    const down = await stateOf(pg)
+    await pg.mouse.up({ button: 'right' })
+    await pg.waitForTimeout(200)
+    const up = await stateOf(pg)
+    const menuAt = await pg.evaluate(() => { const r = document.querySelector('.ctx-menu.amx-canvas-menu')?.getBoundingClientRect(); return r ? { x: Math.round(r.left), y: Math.round(r.top) } : null })
+    await pg.keyboard.press('Escape')
+    await pg.mouse.click(b.x, b.y) // 关菜单(点空白)
+    await pg.waitForTimeout(150)
+    // b) 手抖 3px 再松开:仍是「点一下」→ 空白菜单,视口不动
+    await pg.mouse.move(b.x, b.y)
+    await pg.mouse.down({ button: 'right' })
+    await pg.mouse.move(b.x + 3, b.y + 2)
+    await pg.mouse.up({ button: 'right' })
+    await pg.waitForTimeout(200)
+    const jit = { st: await stateOf(pg), vp: await vpOf(pg) }
+    await pg.mouse.click(b.x, b.y)
+    await pg.waitForTimeout(150)
+    // c) 卡片 k2(未选中)上右键:照旧「先选中再弹」,按下即弹(mac 路径)
+    const k2 = await centerOf(pg, '.amx-ucard[data-anchor="k2"] p')
+    await pg.mouse.move(k2.x, k2.y)
+    await pg.mouse.down({ button: 'right' })
+    await pg.waitForTimeout(150)
+    const cardDown = await stateOf(pg)
+    await pg.mouse.move(k2.x + 40, k2.y + 30, { steps: 3 }) // 卡上右键拖不平移
+    await pg.mouse.up({ button: 'right' })
+    await pg.waitForTimeout(200)
+    const cardUp = { st: await stateOf(pg), vp: await vpOf(pg) }
+    await pg.keyboard.press('Escape')
+    await pg.mouse.click(b.x, b.y)
+    await pg.waitForTimeout(150)
+    // d) 连线中点右键:连线菜单(选中连线),不是平移
+    const cm = await connMid(pg)
+    if (!cm) throw new Error('连线 e1 没渲染')
+    await pg.mouse.move(cm.x, cm.y)
+    await pg.mouse.down({ button: 'right' })
+    await pg.waitForTimeout(150)
+    const connDown = await stateOf(pg)
+    await pg.mouse.move(cm.x + 30, cm.y + 30, { steps: 3 })
+    await pg.mouse.up({ button: 'right' })
+    await pg.waitForTimeout(200)
+    const connUp = { st: await stateOf(pg), vp: await vpOf(pg) }
+    await pg.close()
+    record('C109a 空白右键点一下 = 松开才弹空白菜单(按下时没有),落在指针处;选中不变',
+      down.menus === 0 && up.menus === 1 && up.fitItem && !up.delItem && JSON.stringify(up.sel) === '["k1"]'
+        && menuAt && Math.abs(menuAt.x - b.x) <= 2 && Math.abs(menuAt.y - b.y) <= 2,
+      JSON.stringify({ down, up, menuAt, b }))
+    record('C109b 手抖 ≤4px 再松开仍是「点一下」:空白菜单 + 视口不动',
+      jit.st.menus === 1 && jit.st.fitItem && jit.vp.x === v0.x && jit.vp.y === v0.y,
+      JSON.stringify({ jit, v0 }))
+    record('C109c 卡片 / 连线上右键照旧:按下即先选中再弹对象菜单,右键拖不平移',
+      cardDown.menus === 1 && cardDown.delItem && JSON.stringify(cardDown.sel) === '["k2"]'
+        && cardUp.st.menus === 1 && cardUp.vp.x === v0.x && cardUp.vp.y === v0.y && !cardUp.st.panning
+        && connDown.menus === 1 && connDown.connSel && connDown.delItem
+        && connUp.st.menus === 1 && connUp.vp.x === v0.x && connUp.vp.y === v0.y,
+      JSON.stringify({ cardDown, cardUp, connDown, connUp }))
+  })
+
+  await guard('C110', async () => {
+    const pg = await open(browser, SEED5)
+    await pg.waitForTimeout(700)
+    // 模拟 Windows:按下期间系统不发 contextmenu。测试在窗口捕获期把按下那一下截掉(舞台看不到 → ctxSeen=false)。
+    await pg.evaluate(() => {
+      window.__eatPress = false
+      window.addEventListener('contextmenu', (e) => { if (window.__eatPress) { window.__eatPress = false; e.preventDefault(); e.stopImmediatePropagation() } }, true)
+    })
+    const b = await blankOf(pg)
+    /** 松开后补发一下 contextmenu(真人在 Windows 上就是这个时序):派发给那个点上的元素,返回它有没有被取消。 */
+    const trail = (x, y) => pg.evaluate(({ x, y }) => {
+      const el = document.elementFromPoint(x, y) ?? document.body
+      const ev = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 2 })
+      el.dispatchEvent(ev)
+      return { prevented: ev.defaultPrevented, on: el.className?.baseVal ?? el.className ?? el.tagName }
+    }, { x, y })
+    // a) 右键点一下:松开弹菜单,紧跟着补发的那下(落在菜单上)不许把菜单关掉
+    await pg.evaluate(() => { window.__eatPress = true })
+    await pg.mouse.move(b.x, b.y)
+    await pg.mouse.down({ button: 'right' })
+    await pg.mouse.up({ button: 'right' })
+    await pg.waitForTimeout(60)
+    const tA = await trail(b.x + 2, b.y + 2)
+    await pg.waitForTimeout(150)
+    const a = await stateOf(pg)
+    await pg.mouse.click(b.x, b.y)
+    await pg.waitForTimeout(150)
+    // b) 对照:同样一次右键点一下,但紧跟着的 contextmenu 离松开处 >8px(落在菜单外的空白上)= 不是这次的补发,
+    //    照常放行:旧菜单被关、舞台在那个点重新弹空白菜单(菜单挪到了新位置 = 没被吞)
+    await pg.evaluate(() => { window.__eatPress = true })
+    await pg.mouse.move(b.x, b.y)
+    await pg.mouse.down({ button: 'right' })
+    await pg.mouse.up({ button: 'right' })
+    await pg.waitForTimeout(60)
+    const far = await pg.evaluate(() => { const r = document.querySelector('.ctx-menu.amx-canvas-menu').getBoundingClientRect(); return { x: Math.round(r.right + 40), y: Math.round(r.top + 10) } })
+    const tB = await trail(far.x, far.y)
+    await pg.waitForTimeout(150)
+    const bSt = await stateOf(pg)
+    const bAt = await pg.evaluate(() => { const r = document.querySelector('.ctx-menu.amx-canvas-menu')?.getBoundingClientRect(); return r ? { x: Math.round(r.left), y: Math.round(r.top) } : null })
+    await pg.mouse.click(b.x, b.y)
+    await pg.waitForTimeout(150)
+    // c) 右键拖完松开:补发的那下落在空白上,不许弹出空白菜单
+    await pg.evaluate(() => { window.__eatPress = true })
+    await pg.mouse.move(b.x, b.y)
+    await pg.mouse.down({ button: 'right' })
+    await pg.mouse.move(b.x + 80, b.y + 50, { steps: 4 })
+    await pg.mouse.up({ button: 'right' })
+    await pg.waitForTimeout(60)
+    const tC = await trail(b.x + 80, b.y + 50)
+    await pg.waitForTimeout(150)
+    const c = await stateOf(pg)
+    // d) 超时(>400ms)的补发不算这次的:放行给舞台,照常弹空白菜单
+    await pg.evaluate(() => { window.__eatPress = true })
+    await pg.mouse.move(b.x, b.y)
+    await pg.mouse.down({ button: 'right' })
+    await pg.mouse.move(b.x + 60, b.y, { steps: 3 })
+    await pg.mouse.up({ button: 'right' })
+    await pg.waitForTimeout(500)
+    const tD = await trail(b.x + 60, b.y)
+    await pg.waitForTimeout(150)
+    const d = await stateOf(pg)
+    await pg.close()
+    record('C110 Windows 式补发的 contextmenu:本次按压的(400ms / 8px 内)整个吞掉 —— 菜单不被关、拖完不弹菜单;远处的 / 超时的照旧',
+      tA.prevented && a.menus === 1 && a.fitItem
+        && bSt.menus === 1 && !!bAt && Math.abs(bAt.x - far.x) <= 2 && Math.abs(bAt.y - far.y) <= 2
+        && tC.prevented && c.menus === 0
+        && d.menus === 1,
+      JSON.stringify({ tA, a, far, tB, bSt, bAt, tC, c, tD, d }))
+  })
+
+  await guard('C111', async () => {
+    const pg = await open(browser, SEED5)
+    await pg.waitForTimeout(700)
+    const b = await blankOf(pg)
+    /** 逐帧记 transform:点下去之后 700ms 内每一帧的视口。 */
+    const record5 = () => pg.evaluate(() => {
+      window.__vp5 = []
+      const inner = document.querySelector('.amx-stage-inner')
+      const t0 = performance.now()
+      const step = () => {
+        const m = new DOMMatrixReadOnly(getComputedStyle(inner).transform)
+        window.__vp5.push({ x: m.e, y: m.f, z: m.a, focus: document.querySelector('.amx-stage').classList.contains('amx-vp-focus') })
+        if (performance.now() - t0 < 700) requestAnimationFrame(step)
+      }
+      requestAnimationFrame(step)
+    })
+    const samples = () => pg.evaluate(() => window.__vp5.slice())
+    const panAway = async () => {
+      await pg.mouse.move(b.x, b.y)
+      await pg.mouse.wheel(260, 180)
+      await pg.waitForTimeout(250)
+    }
+    const fitBtn = '.amx-stage-hud button[title="适应内容"]'
+    // a) 平移走,点 ⤢:逐帧过渡(起点与终点之间至少 3 帧中间值,途中挂着 amx-vp-focus),停在终点
+    await panAway()
+    const s0 = await vpOf(pg)
+    await record5()
+    await pg.click(fitBtn)
+    await pg.waitForTimeout(750)
+    const fitSamples = await samples()
+    const fitEnd = await vpOf(pg)
+    const inner = (arr, a, e) => arr.filter((v) => Math.abs(v.x - a.x) > 1 && Math.abs(v.x - e.x) > 1)
+    const fitMid = inner(fitSamples, s0, fitEnd)
+    // b) 对照:「减少动态」下同样的起点 → 当场落定,落点逐像素一致
+    await panAway()
+    await pg.emulateMedia({ reducedMotion: 'reduce' })
+    await record5()
+    await pg.click(fitBtn)
+    await pg.waitForTimeout(750)
+    const instSamples = await samples()
+    const fitInstant = await vpOf(pg)
+    const instMid = inner(instSamples, s0, fitInstant).length
+    await pg.emulateMedia({ reducedMotion: null })
+    // c) 缩放胶囊 +:动画 + 连按两下按终点叠加(1.44 倍),百分比显示终点
+    await pg.click('.amx-stage-hud button[title="重置为 100%"]')
+    await pg.waitForTimeout(500)
+    const z0 = await vpOf(pg)
+    await record5()
+    await pg.click('.amx-stage-hud button[title="放大"]')
+    await pg.click('.amx-stage-hud button[title="放大"]')
+    const pctNow = await pg.evaluate(() => document.querySelector('.amx-stage-hud .amx-hud-zoom')?.textContent?.trim() ?? null)
+    await pg.waitForTimeout(750)
+    const zSamples = await samples()
+    const zEnd = await vpOf(pg)
+    const zMid = zSamples.filter((v) => v.z > z0.z + 0.005 && v.z < 1.44 - 0.005).length
+    // d) 动画途中点百分比 = 精确回到 100%
+    await pg.click('.amx-stage-hud button[title="缩小"]')
+    await pg.waitForTimeout(60)
+    await pg.click('.amx-stage-hud button[title="重置为 100%"]')
+    await pg.waitForTimeout(600)
+    const zReset = await pg.evaluate(() => new DOMMatrixReadOnly(getComputedStyle(document.querySelector('.amx-stage-inner')).transform).a)
+    await pg.close()
+    record('C111a 「适应内容」走镜头动画:途中有逐帧中间值(挂 amx-vp-focus),落点与减少动态下当场落定的一致;减少动态零中间帧',
+      fitMid.length >= 3 && fitMid.some((v) => v.focus) && (s0.x !== fitEnd.x || s0.y !== fitEnd.y)
+        && fitEnd.x === fitInstant.x && fitEnd.y === fitInstant.y && fitEnd.z === fitInstant.z && instMid === 0,
+      JSON.stringify({ s0, fitEnd, fitInstant, mid: fitMid.length, instMid }))
+    record('C111b 缩放胶囊 + 走动画,连按两下按终点叠加 = 1.44(百分比当场显示终点);动画途中点百分比 = 精确 100%',
+      zMid >= 3 && Math.round(zEnd.z * 1000) === 1440 && z0.z === 1 && pctNow === '144%' && zReset === 1,
+      JSON.stringify({ z0, zEnd, zMid, pctNow, zReset }))
+  })
+
+  await guard('C112', async () => {
+    const pg = await open(browser, SEED5)
+    await pg.waitForTimeout(700)
+    const g = await pg.evaluate(() => {
+      const s = document.querySelector('.amx-stage').getBoundingClientRect()
+      const h = document.querySelector('.amx-stage-hud')?.getBoundingClientRect()
+      const m = document.querySelector('.amx-stage-minimap')?.getBoundingClientRect()
+      return h && m ? { hudR: Math.round(s.right - h.right), hudB: Math.round(s.bottom - h.bottom), hudH: Math.round(h.height), miniR: Math.round(s.right - m.right), gap: Math.round(h.top - m.bottom) } : null
+    })
+    await pg.close()
+    record('C112 缩放胶囊 / 缩略图离舞台右下 16px(与 Tangu 画布同值),缩略图压在胶囊上方 ≥6px',
+      !!g && g.hudR === 16 && g.hudB === 16 && g.miniR === 16 && g.gap >= 6 && g.gap <= 10,
+      JSON.stringify(g))
+  })
+}
+
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
+  if (process.env.UCANVAS_ONLY === 'w5') {
+    await wave5(browser)
+    await browser.close()
+    const ok = results.filter(Boolean).length
+    console.log(`\n${ok}/${results.length} 通过(仅波次 5 段)`)
+    process.exit(ok === results.length ? 0 : 1)
+  }
   if (process.env.UCANVAS_ONLY === 'w2') {
     await wave2(browser)
     await browser.close()
@@ -5030,6 +5396,7 @@ async function main() {
   const bg1 = await bg()
   await p65.click('.amx-stage-hud button[title="放大"]')
   await p65.waitForTimeout(250)
+  await settleCam(p65)
   const bg2 = await bg()
   await p65.close()
   record('C65 点阵是画布合成层：触控板与抓手平移均和内容同帧，缩放时格距同步变化',
@@ -5054,6 +5421,7 @@ async function main() {
   await p66.click('.amx-stage-hud button[title="放大"]')
   await p66.click('.amx-stage-hud button[title="放大"]')
   await p66.waitForTimeout(350)
+  await settleCam(p66)
   const at66 = await p66.evaluate(() => {
     const row = [...document.querySelectorAll('.ProseMirror > p')].find((p) => (p.textContent ?? '').includes('第二行'))
     const r = row?.getBoundingClientRect()
@@ -5330,6 +5698,7 @@ async function main() {
   }))
   for (let i = 0; i < 4; i++) await p78.click('.amx-stage-hud button[title="缩小"]')
   await p78.waitForTimeout(250)
+  await settleCam(p78)
   const low78 = await p78.evaluate(() => {
     const matrix = new DOMMatrixReadOnly(getComputedStyle(document.querySelector('.amx-stage-inner')).transform)
     const labels = Object.fromEntries([...document.querySelectorAll('[data-card-label]')].map((el) => [el.dataset.cardLabel, {
@@ -5364,6 +5733,7 @@ async function main() {
   // 不只看 overflow 值；flex item 会被压扁到盒内，必须同时确认每条可见文字仍保有完整 line-height。
   await p78.click('.amx-stage-hud button[title="缩小"]')
   await p78.waitForTimeout(160)
+  await settleCam(p78)
   const veryLow78 = await p78.evaluate(() => {
     const matrix = new DOMMatrixReadOnly(getComputedStyle(document.querySelector('.amx-stage-inner')).transform)
     const items = Object.fromEntries([...document.querySelectorAll('[data-card-label]')].map((el) => {
@@ -5424,6 +5794,7 @@ async function main() {
   await p78.waitForTimeout(350)
   for (let i = 0; i < 5; i++) await p78.click('.amx-stage-hud button[title="缩小"]')
   await p78.waitForTimeout(200)
+  await settleCam(p78)
   const rememberedOff78 = await p78.evaluate(() => ({
     z: new DOMMatrixReadOnly(getComputedStyle(document.querySelector('.amx-stage-inner')).transform).a,
     mode: document.querySelector('.amx-stage')?.classList.contains('amx-stage-overview') ?? false,
@@ -5461,6 +5832,7 @@ async function main() {
   await p78.evaluate(() => localStorage.removeItem('amadeus.canvas.overview'))
   for (let i = 0; i < 3; i++) await p78.click('.amx-stage-hud button[title="放大"]')
   await p78.waitForTimeout(200)
+  await settleCam(p78)
   const after78 = await p78.evaluate(() => ({
     labels: document.querySelectorAll('.amx-card-overview').length,
     overview: document.querySelector('.amx-stage')?.classList.contains('amx-stage-overview') ?? false,
@@ -5500,7 +5872,7 @@ async function main() {
   //  ⚠️ 两头都要钉:只断「25% 时是简略的」会假绿(0.55 也满足);必须同时断中间那档**不是**简略的。
   const p84 = await open(browser, OVERVIEW78)
   await p84.waitForTimeout(300)
-  const zoomOut84 = async (n) => { for (let i = 0; i < n; i++) await p84.click('.amx-stage-hud button[title="缩小"]'); await p84.waitForTimeout(200) }
+  const zoomOut84 = async (n) => { for (let i = 0; i < n; i++) await p84.click('.amx-stage-hud button[title="缩小"]'); await p84.waitForTimeout(200); await settleCam(p84) }
   const state84 = () => p84.evaluate(() => ({
     z: new DOMMatrixReadOnly(getComputedStyle(document.querySelector('.amx-stage-inner')).transform).a,
     overview: document.querySelector('.amx-stage')?.classList.contains('amx-stage-overview') ?? false,
@@ -5519,6 +5891,7 @@ async function main() {
   await p84.waitForTimeout(200)
   for (let i = 0; i < 3; i++) await p84.click('.amx-stage-hud button[title="放大"]') // 回到 ≈43%
   await p84.waitForTimeout(220)
+  await settleCam(p84)
   const raised84 = await state84()
   await p84.evaluate(() => localStorage.removeItem('amadeus.canvas.overviewZ'))
   await p84.close()
@@ -6818,7 +7191,7 @@ async function main() {
   await p92.mouse.click(blank92.x, blank92.y) // 焦点落舞台、清选中
   await p92.waitForTimeout(200)
   const MOD92 = process.platform === 'darwin' ? 'Meta' : 'Control'
-  const key92 = async (k) => { await p92.keyboard.press(k); await p92.waitForTimeout(200); return vp91(p92) }
+  const key92 = async (k) => { await p92.keyboard.press(k); await p92.waitForTimeout(200); await settleCam(p92); return vp91(p92) }
   const z0 = await vp91(p92)
   const zIn = await key92(`${MOD92}+Equal`)
   const zOut = await key92(`${MOD92}+Minus`)
@@ -6832,6 +7205,7 @@ async function main() {
   await key92(`${MOD92}+Equal`)
   await p92.click('.amx-stage-hud button[title="适应内容"]')
   await p92.waitForTimeout(250)
+  await settleCam(p92)
   const fitBtn = await vp91(p92)
   // HUD 百分比 = 可点按钮:放大后点它回 100%
   await key92(`${MOD92}+Equal`)
@@ -6843,6 +7217,7 @@ async function main() {
   const pctBtn92 = await p92.evaluate(() => { const b = document.querySelector('.amx-stage-hud button[title="重置为 100%"]'); if (!b) return null; const r = b.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })
   if (pctBtn92) await p92.mouse.click(pctBtn92.x, pctBtn92.y)
   await p92.waitForTimeout(250)
+  await settleCam(p92)
   const pctAfter = await vp91(p92)
   const pctText = await p92.evaluate(() => [...document.querySelectorAll('.amx-stage-hud > *')].find((e) => /%$/.test((e.textContent ?? '').trim()))?.textContent.trim() ?? null)
   // 卡内编辑:Shift+1 打字、Cmd+= 不被舞台吃(视口不动、不 preventDefault)
@@ -6883,6 +7258,7 @@ async function main() {
   await wave2(browser)
   await wave3(browser)
   await wave4(browser)
+  await wave5(browser)
   await browser.close()
   const ok = results.filter(Boolean).length
   console.log(`\n${ok}/${results.length} 通过`)
