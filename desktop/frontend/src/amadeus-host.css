@@ -1131,6 +1131,15 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .amx-cover-repo img { touch-action: none; } /* 调位模式:触屏拖动交给 pointer 事件,不让页面滚走(C-11) */
 .amx-cover-hint { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 1; pointer-events: none; font-size: var(--ui-font-caption, 11px); color: var(--text); background: color-mix(in srgb, var(--bg-card) 82%, transparent); border: 1px solid var(--border); border-radius: var(--radius-sm, 6px); padding: 3px 10px; backdrop-filter: blur(8px); box-shadow: var(--btn-shadow); }
 .amx-cover img { width: 100%; height: 100%; object-fit: cover; display: block; user-select: none; -webkit-user-drag: none; }
+/* 在传的封面(附件上传进度方案 r2):本地预览 + 纱 + 环;失败一行红字 + 重试 / 不用了 */
+.amx-cover--up .amx-cover-veil { position: absolute; inset: 0; background: color-mix(in srgb, var(--bg-card) 50%, transparent); }
+.amx-cover--up > .lcl-upring { position: absolute; inset: 0; margin: auto; }
+.amx-cover-upfail {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: flex; align-items: center; gap: 6px;
+  padding: 4px 6px 4px 12px; border-radius: var(--radius-pill); background: var(--bg-card); color: var(--danger); font-size: var(--ui-font-meta, 12px);
+}
+.amx-cover-upfail button { border: 0; background: none; padding: 2px 6px; border-radius: var(--radius-pill); color: var(--text); font: inherit; cursor: pointer; }
+.amx-cover-upfail button:hover { background: var(--menu-hover); }
 /* 底部柔和渐变:从中下部起逐渐融入页面背景色(--bg),与正文自然过渡;克制、不纯色底、无硬分界 */
 .amx-cover-grad { position: absolute; inset: 0; pointer-events: none; border-radius: inherit; background: linear-gradient(to bottom, transparent 52%, color-mix(in srgb, var(--bg) 55%, transparent) 82%, var(--bg) 100%); }
 .amx-cover-tools { position: absolute; right: 14px; bottom: 10px; display: flex; gap: 6px; opacity: 0; transition: opacity 0.15s ease; }
@@ -2252,3 +2261,10 @@ html.dark .amx-cal-chip-ev, html.dark .amx-cal-event {
 }
 .amx-sec-device > svg { flex: none; }
 .amx-sec-device-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 120px; }
+
+/* 文件树里正在传的那一行(amadeusViews FolderUploadRow,附件上传进度方案 r2):名字弱一档,行尾一颗小环;失败的红字 + 重试 / 移除常亮 */
+.amx-uprow { cursor: default; }
+.amx-uprow .t2s-srow-title { color: var(--text-muted); }
+.amx-uprow-ring { margin-left: auto; margin-right: 6px; }
+.amx-uprow.is-failed .t2s-srow-title, .amx-uprow.is-failed .t2s-lead-icon { color: var(--danger); }
+.amx-uprow.is-failed .t2s-srow-menu { opacity: 0.7; }

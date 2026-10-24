@@ -29,10 +29,11 @@ registerMessages({
 
 export const pendingInsertKey = new PluginKey<DecorationSet>('UNIFIED_PENDING_INSERT')
 
-interface AddMeta { id: string; pos: number; label: string; visible: boolean; onCancel: () => void }
+interface AddMeta { id: string; pos: number; label: string; visible: boolean; onCancel: () => void; widget?: HTMLElement }
 type Meta = { add: AddMeta } | { remove: string }
 
 function chip(a: AddMeta): HTMLElement {
+  if (a.widget) return a.widget // 调用方自带外形(正文上传占位,bodyUploads.ts);重绘时还给同一个节点,进度不丢
   const el = document.createElement('span')
   el.className = 'amx-pending-insert'
   el.dataset.pendingInsert = a.id
@@ -98,15 +99,15 @@ export interface PendingAnchor {
   cancelled: () => boolean
 }
 
-/** 在当前光标处钉锚。visible=false:不画占位(对话框开着时画「进行中」是噪音),只记位置。 */
-export function beginPending(view: EditorView, label: string, visible = true): PendingAnchor {
+/** 在当前光标处钉锚。visible=false:不画占位(对话框开着时画「进行中」是噪音),只记位置。widget:自带的占位外形。 */
+export function beginPending(view: EditorView, label: string, visible = true, widget?: HTMLElement): PendingAnchor {
   const id = `p${Date.now().toString(36)}${(seq++).toString(36)}`
   let cancelled = false
   const onCancel = (): void => {
     cancelled = true
     endPending(view, id)
   }
-  view.dispatch(view.state.tr.setMeta(pendingInsertKey, { add: { id, pos: view.state.selection.head, label, visible, onCancel } } satisfies Meta))
+  view.dispatch(view.state.tr.setMeta(pendingInsertKey, { add: { id, pos: view.state.selection.head, label, visible, onCancel, widget } } satisfies Meta))
   return { id, label, cancelled: () => cancelled }
 }
 

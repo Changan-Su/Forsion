@@ -98,6 +98,21 @@ export function forgetUpload(id: string): void {
   }, true)
 }
 
+/** 一批上传都落定(完成;或失败 / 在传的被移除、从台账里拿掉了)时回调一次,给出完成了的那几条 id,随后把它们从台账里拿掉。
+ *  给「全部传完再写一次」的调用方:数据库附件格逐个写,会各自读到同一份陈旧的格值,最后只剩一个附件。 */
+export function onBatchSettled(ids: string[], cb: (done: string[]) => void): void {
+  const check = (): void => {
+    const all = useUploads.getState()
+    if (ids.some((id) => all[id] && all[id].phase !== 'done')) return
+    unsub()
+    const done = ids.filter((id) => all[id]?.phase === 'done')
+    cb(done)
+    done.forEach(forgetUpload)
+  }
+  const unsub = useUploads.subscribe(check)
+  check()
+}
+
 /** 还在路上(排队 / 读取 / 上传)。 */
 export const uploadBusy = (e: UploadEntry | undefined): boolean => !!e && (e.phase === 'queued' || e.phase === 'reading' || e.phase === 'uploading')
 

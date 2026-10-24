@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cancelUpload, forgetUpload, retryUpload, startUpload, uploadBytesLabel, uploadFraction, useUploads, type UploadJobCtx } from './uploads'
+import { cancelUpload, forgetUpload, onBatchSettled, retryUpload, startUpload, uploadBytesLabel, uploadFraction, useUploads, type UploadJobCtx } from './uploads'
 
 const tick = () => new Promise((r) => setTimeout(r, 0))
 /** 一个由测试手动收尾的 job */
@@ -61,6 +61,19 @@ describe('upload ledger', () => {
     expect(entry(id)).toBeUndefined()
     m.fail('aborted'); await tick()
     expect(entry(id)).toBeUndefined()
+  })
+
+  it('onBatchSettled waits for every file, skips removed failures, then clears the ledger', async () => {
+    const a = manual(), b = manual()
+    const ids = [startUpload('a', 1, a.job), startUpload('b', 1, b.job)]
+    const got: string[][] = []
+    onBatchSettled(ids, (done) => got.push(done))
+    a.done(); await tick()
+    b.fail('x'); await tick()
+    expect(got).toEqual([]) // b 失败还挂着:等重试或移除
+    forgetUpload(ids[1])
+    expect(got).toEqual([[ids[0]]])
+    expect(entry(ids[0])).toBeUndefined()
   })
 
   it('labels bytes in one unit', () => {

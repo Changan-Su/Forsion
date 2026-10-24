@@ -483,6 +483,7 @@ export function MilkdownInner({
   keys,
   saveImage,
   saveFiles,
+  uploadImage,
   onOpenWiki,
   getPageNames,
   getFiles,
@@ -507,6 +508,8 @@ export function MilkdownInner({
   keys: BlockKeys
   saveImage: (file: File) => Promise<string | null>
   saveFiles: (files: File[]) => Promise<void>
+  /** 粘贴图片交给宿主(统一编辑器:带上传占位,见 unified/bodyUploads.ts);缺 = 存完在光标处插图片(v3)。 */
+  uploadImage?: (file: File) => void
   /** opts.newTab:⌘/Ctrl+点击、中键(L-11)或「在新标签页打开光标处链接」;宿主转给 openWikiLink 的第三参。 */
   onOpenWiki: (name: string, opts?: { newTab?: boolean }) => void
   getPageNames: () => string[]
@@ -552,6 +555,8 @@ export function MilkdownInner({
   saveImageRef.current = saveImage
   const saveFilesRef = useRef(saveFiles)
   saveFilesRef.current = saveFiles
+  const uploadImageRef = useRef(uploadImage)
+  uploadImageRef.current = uploadImage
   const wikiRef = useRef(onOpenWiki)
   wikiRef.current = onOpenWiki
   const pageNamesRef = useRef(getPageNames)
@@ -845,7 +850,8 @@ export function MilkdownInner({
       const file = imageFromTransfer(event.clipboardData)
       if (file) {
         event.preventDefault()
-        void insertImage(view, file)
+        if (uploadImageRef.current) uploadImageRef.current(file)
+        else void insertImage(view, file)
         return true
       }
       // 非图片文件(PDF/压缩包/音视频…):存为附件 → 独立 ![[base]] 嵌入块(与拖入同形态)。

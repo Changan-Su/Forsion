@@ -1809,7 +1809,7 @@ body.amx-marquee-active * {
   content: none;
 }
 /* 异步插入的占位钉在空行里(评审 G3-06):空行提示别从占位胶囊底下漏出来。 */
-.am-app .milkdown .ProseMirror .is-empty:has(.amx-pending-insert)::before {
+.am-app .milkdown .ProseMirror .is-empty:has(.amx-pending-insert, .amx-upph)::before {
   content: none;
 }
 /* 焦点门控(评审 K-23):提示只给正在编辑的空块。装饰跟着选区走、不看焦点 —— 编辑器失焦后选区还在,
@@ -4444,6 +4444,33 @@ body.amx-marquee-active * {
   animation: spin 0.9s linear infinite;
 }
 .am-app .amx-pending-insert .btn.sm { border-radius: var(--radius-pill); }
+
+/* 正文上传占位(unified/bodyUploads.ts,附件上传进度方案 r2 §4 A):不进文档,传完原地换成真的嵌入。
+   图片 = 本地预览 + 纱 + 环(底部一行状态);文件 = 与嵌入层同一张 .embed-file 卡 + 状态 + 底边内侧细条。
+   失败只垫红、不描边(同 Tangu 磁贴)。环 / 条是 @lcl/components 的 UploadRing / UploadBar,前 300ms 不显示。 */
+/* 自成一行(锚在段尾时也换到段下):传完插在这一块之后,占位先站在那个位置上,完成时不跳 */
+.am-app .amx-upph { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; width: 100%; margin: 6px 0; user-select: none; }
+.am-app .amx-upph-img { position: relative; display: block; max-width: min(100%, 360px); border-radius: var(--radius-md, 10px); overflow: hidden; }
+.am-app .amx-upph-img > img { display: block; max-width: 100%; max-height: 320px; }
+.am-app .amx-upph-veil { position: absolute; inset: 0; background: color-mix(in srgb, var(--bg-card) 50%, transparent); }
+.am-app .amx-upph-img > .lcl-upring { position: absolute; inset: 0; margin: auto; }
+.am-app .amx-upph-foot {
+  position: absolute; left: 6px; right: 6px; bottom: 6px; display: flex; align-items: center; gap: 4px;
+  padding: 2px 6px; border-radius: var(--radius-pill); background: color-mix(in srgb, var(--bg-card) 82%, transparent); width: fit-content; max-width: calc(100% - 12px);
+}
+.am-app .amx-upph-file { position: relative; cursor: default; }
+.am-app .amx-upph-file:hover { background: var(--bg-card); }
+.am-app .amx-upph-file > .lcl-upbar { position: absolute; left: 12px; right: 12px; bottom: 3px; }
+.am-app .amx-upph-status { flex: 0 0 auto; font-size: var(--ui-font-caption, 11px); color: var(--text-muted); white-space: nowrap; }
+.am-app .amx-upph-acts { display: inline-flex; gap: 2px; }
+.am-app .amx-upph-act {
+  border: 0; background: none; padding: 0 4px; border-radius: var(--radius-sm, 4px); cursor: pointer;
+  font: inherit; font-size: var(--ui-font-caption, 11px); color: var(--text);
+}
+.am-app .amx-upph-act:hover { background: var(--menu-hover); }
+.am-app .amx-upph .is-failed .amx-upph-status { color: var(--danger); }
+.am-app .amx-upph-file.is-failed, .am-app .amx-upph-file.is-failed:hover { background: color-mix(in srgb, var(--danger) 8%, var(--bg-card)); }
+.am-app .amx-upph-img.is-failed > .lcl-upring { display: none; }
 
 /* ── 正文 AI(评审 G3-07):目标淡底 + 预览面板。面板外壳走共享 `.ui-popover`(字体 / 描边 / 圆角 / 阴影),
    这里只管内容布局;色值只消费语义 token。 */
