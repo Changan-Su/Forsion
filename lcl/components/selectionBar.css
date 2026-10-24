@@ -132,3 +132,15 @@
 }
 .selbar-menu-item > svg { flex: 0 0 auto; color: var(--text-muted); }
 .selbar-menu-item > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 顺着拖选的方向滑进来(借鉴 Comma 方案「Chat 手感」,10-24):从左往右拖,条从左边来;反过来从右边来。
+   位移比到字的间距小,读起来是手势的延续而不是另一段滑动;双击 / 三击没有方向(宿主不给 data-dir),照旧菜单进场。
+   用 transform 不用 translate:OverlayAt 夹边用的是 inline translate,动画写 translate 会把它压掉。 */
+@keyframes selbar-in {
+  from { opacity: 0; scale: 0.985; transform: translateX(var(--selbar-travel, 0px)); }
+}
+.selbar[data-dir='forward'] { --selbar-travel: -8px; }
+.selbar[data-dir='backward'] { --selbar-travel: 8px; }
+@media (prefers-reduced-motion: no-preference) {
+  html:root .selbar[data-dir]:not([data-lcl-exit]) { animation: selbar-in var(--tip-enter, 150ms) var(--ease-surface, cubic-bezier(0.22, 1, 0.36, 1)); }
+}

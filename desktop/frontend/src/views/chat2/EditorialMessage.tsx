@@ -7,7 +7,8 @@ import { SelfUpdateReceipt } from '../../components/SelfUpdateReceipt'
  * 用户为暖色带尾气泡。子件(思考/工具/待办/审批/反问)以新 t2 风格内联呈现。
  * 接 UiMessage,故可直接喂真实 store 数据(集成期用);回调可选(预览传空)。
  */
-import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from 'react'
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from 'react'
+import { useStreamReveal } from './streamReveal'
 import { Copy, RotateCcw, GitBranch, MessageCircleQuestion, CornerUpLeft, Pencil, Volume2, Square, Loader2, LogIn, Zap, History as HistoryIcon, FileCode2, MessageSquare, ShieldQuestion, CircleCheck, CircleX, CircleHelp } from 'lucide-react'
 import { FileInput } from 'lucide-react'
 import { useNoteInsertState } from './insertToNote'
@@ -426,6 +427,14 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
     if (typeof rootRef === 'function') rootRef(el)
     else if (rootRef) (rootRef as React.MutableRefObject<HTMLDivElement | null>).current = el
   }
+  // 流式尾巴淡入(streamReveal.ts):只认助手那支的根
+  const asstRef = useRef<HTMLDivElement | null>(null)
+  const setAsst = useCallback((el: HTMLDivElement | null): void => {
+    asstRef.current = el
+    if (typeof rootRef === 'function') rootRef(el)
+    else if (rootRef) (rootRef as React.MutableRefObject<HTMLDivElement | null>).current = el
+  }, [rootRef])
+  useStreamReveal(asstRef, msg.role === 'assistant' && msg.status === 'streaming')
   useLayoutEffect(() => {
     if (msg.role === 'user' && userWrapRef.current) playSendFlight(userWrapRef.current, msg.content)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -646,7 +655,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
   })
 
   return (
-    <div ref={rootRef} className="t2-asst" id={`tocmsg-${msg.id}`} data-streaming={msg.status === 'streaming' ? '' : undefined}>
+    <div ref={setAsst} className="t2-asst" id={`tocmsg-${msg.id}`} data-streaming={msg.status === 'streaming' ? '' : undefined}>
       <div className="t2-avatar" style={!avatarUrl && msg.agentColor ? { background: msg.agentColor, color: '#fff' } : undefined}>{avatarUrl ? <img src={avatarUrl} alt="" /> : firstChar(msg.agentName || agentNameFallback || 'Tangu')}</div>
       <div className="t2-asst-col">
         <div className="t2-name" style={msg.agentColor ? { color: msg.agentColor } : undefined}>{msg.agentName || agentNameFallback || 'Tangu'}{msg.status === 'streaming' && <span className="t2-dot" />}</div>
