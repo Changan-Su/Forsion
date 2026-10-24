@@ -2,7 +2,8 @@
  * Chat 正文里的网页链接:悬停 300ms 出预览卡(LCL 悬停卡,相邻链接接力),手机上长按出同一张(借鉴 Comma 方案 §2.6)。
  *
  * - 富卡:GitHub / Forsion Git 的 PR、issue。卡**第一次打开**时才问引擎要数据(GET /agent/link-preview,引擎用这台机器上
- *   绑定的凭据去问;渲染层不直连外站),拿到的本次运行内留着,同一条链接再悬停不再问。
+ *   绑定的凭据去问;渲染层不直连外站)。同一条链接再悬停用组件里那份;别处的同一条链接再问一次本机引擎,引擎按「用户 + 地址」
+ *   缓存着。渲染层不另存一份按地址的缓存:换了账号它不知道,会把上一个人私有仓的卡给下一个人看(Codex 评审 P1)。
  * - 素卡:其余链接,以及富卡问不到的(没绑定且限流、私有仓、老引擎、远端设备不放行):图标 + 链接文字 + 站名 · 路径。
  *   只看 URL,不联网,不报错。
  */
@@ -57,18 +58,6 @@ function day(iso: string | undefined): string | null {
   return d.getFullYear() === new Date().getFullYear() ? md : `${d.getFullYear()}-${md}`
 }
 
-// 本次运行内的结果:拿到的留着;没拿到的丢掉(引擎那边 60 秒内照样回缓存的 null,过了再真问)。
-const settled = new Map<string, LinkPreview>()
-const flights = new Map<string, Promise<LinkPreview | null>>()
-function previewFor(href: string): Promise<LinkPreview | null> {
-  let p = flights.get(href)
-  if (!p) {
-    p = getLinkPreview(homeTarget(), href).then((v) => { if (v) settled.set(href, v); flights.delete(href); return v })
-    flights.set(href, p)
-  }
-  return p
-}
-
 function LinkCard({ href, label, preview }: { href: string; label: string; preview: LinkPreview | null }) {
   const { t } = useI18n()
   if (preview) {
@@ -109,7 +98,9 @@ function LinkCard({ href, label, preview }: { href: string; label: string; previ
 
 /** 带预览卡的 ChatWebLink(点击行为不变)。只在聊天回答里用(Markdown 的 linkCards 开关);市场 README、收件箱这些第三方文本不出卡。 */
 export function ChatLinkWithCard({ href, children, ...rest }: { href: string; children?: ReactNode } & Record<string, unknown>) {
-  const [preview, setPreview] = useState<LinkPreview | null>(() => settled.get(href) ?? null)
+  // 拿到的数据带着它的地址:流式输出时同一个位置的链接会变(#1 → #15),旧数据不能顶着新地址出现
+  const [got, setGot] = useState<{ href: string; preview: LinkPreview } | null>(null)
+  const preview = got?.href === href ? got.preview : null
   const card = useHoverCard(<LinkCard href={href} label={textOf(children).trim()} preview={preview} />, {
     className: 'chat-link-card',
     side: 'bottom',
@@ -120,7 +111,7 @@ export function ChatLinkWithCard({ href, children, ...rest }: { href: string; ch
   useEffect(() => {
     if (!open || preview || !mayHaveRichCard(href)) return
     let live = true
-    void previewFor(href).then((v) => { if (live && v) setPreview(v) })
+    void getLinkPreview(homeTarget(), href).then((v) => { if (live && v) setGot({ href, preview: v }) })
     return () => { live = false }
   }, [open, preview, href])
   return (

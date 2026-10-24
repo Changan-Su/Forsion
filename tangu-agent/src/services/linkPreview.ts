@@ -4,8 +4,11 @@
  *
  * - 只认 https://github.com/<o>/<r>/(pull|issues)/<n>,与云端给的 Forsion Git 站点下的 <o>/<r>/(pulls|issues)/<n>。
  *   请求只发往 api.github.com 与那个站点自己的 /api/v1:用户给的 URL 只贡献 owner / repo / 编号三段(字符集钉死),主机不取自它。
- * - 网络走 web_fetch 的 fetchPublic:每一跳重新解析并拒内网 / 回环、连接钉住校验时的地址、跨主机跳转剥 Authorization。
- *   总时限 6 秒、正文 1MB 封顶。
+ * - 网络走 web_fetch 的 fetchPublic:每一跳重新解析并拒内网 / 回环、连接钉住校验时的地址;重定向只跟同一个 https 源
+ *   (改名的仓库 GitHub 回 301 到同源的 /repositories/<id>/…),跳到 http 或别的主机一律不跟 —— 凭据不跟着走。
+ *   一个 6 秒时限管到底(找 Forsion Git 站点、取凭据、请求共用),正文 1MB 封顶。
+ * - 上游预算:同时在问的最多 8 个,每个用户每 10 分钟最多真问 60 次(缓存命中不算);超了这一次 null(素卡),不进缓存。
+ *   多用户的 server 也挂这条路由(那里没有凭据提供方,只能匿名问):一个用户刷不光整台的匿名额度。
  * - 凭据走 git 凭据接缝:绑了 GitHub 就用那一枚(Bearer),Forsion Git 用推拉那一枚(Basic)。令牌不出引擎进程。
  *   没有 / 取不到 → 匿名;带令牌被拒(401 / 403 / 404)→ 匿名再问一次;匿名也拿不到(限流、私有仓)→ null,渲染端出素卡。
  * - 缓存按「用户 + 地址」:拿到的整个进程期间有效;没拿到的 60 秒后可以再问(限流过去、刚绑上 GitHub)。
@@ -13,6 +16,7 @@
  * ponytail: 「检查过没过」要再打 check-runs 一个接口,没做;卡上的事实只用这一次响应里有的(增删行、文件数、评论数)。
  */
 import { fetchPublic } from '../tools/builtin/webFetch.js';
+import { resolvePublicHttpUrl } from '../core/util/urlSafety.js';
 import { gitCredentialEnv } from './gitCredentials.js';
 import { forsionGit } from './forsionGit.js';
 
@@ -47,8 +51,12 @@ export interface RepoItem {
 const GITHUB_SITE = 'https://github.com';
 const NAME = /^[\w.-]{1,100}$/;
 const TIMEOUT_MS = 6000;
-/** 取凭据最多等这么久(云端接缝慢 / 挂住时),过了就匿名:总时限得留给真正的请求。 */
-const AUTH_WAIT_MS = 3000;
+/** 找站点 / 取凭据各最多等这么久(云端接缝慢 / 挂住时):过了当没有,总时限留给真正的请求。 */
+const SITE_WAIT_MS = 1500;
+const AUTH_WAIT_MS = 2500;
+const MAX_INFLIGHT = 8;
+const USER_BUDGET = 60;
+const BUDGET_WINDOW_MS = 10 * 60_000;
 const MAX_BYTES = 1024 * 1024;
 const RETRY_MS = 60_000;
 const MAX_ENTRIES = 500;
@@ -112,11 +120,25 @@ export function previewOf(item: RepoItem, j: unknown): LinkPreview | null {
   };
 }
 
+/** 重定向的下一跳:只认和第一跳同一个 https 源。纯函数。 */
+export function sameSecureOrigin(first: string, next: string): boolean {
+  try {
+    const a = new URL(first);
+    const b = new URL(next);
+    return a.protocol === 'https:' && b.protocol === 'https:' && a.origin === b.origin;
+  } catch {
+    return false;
+  }
+}
+
 /** 一次 GET:非 2xx 不读正文;超 MAX_BYTES 抛错。测试换成假的。 */
 export type PreviewFetcher = (url: string, headers: Record<string, string>, signal: AbortSignal) => Promise<{ status: number; text: string }>;
 
 const fetchCapped: PreviewFetcher = async (url, headers, signal) => {
-  const page = await fetchPublic(url, { headers, signal });
+  const page = await fetchPublic(url, { headers, signal }, async (next) => {
+    if (!sameSecureOrigin(url, next)) throw new Error('link preview: redirect leaves the API origin');
+    return resolvePublicHttpUrl(next);
+  });
   try {
     if (page.status < 200 || page.status >= 300) return { status: page.status, text: '' };
     const chunks: Buffer[] = [];
@@ -132,6 +154,15 @@ const fetchCapped: PreviewFetcher = async (url, headers, signal) => {
   }
 };
 
+/** p 在 ms 内没给结果(或失败)→ fallback;p 自己接着跑,结果不要了。 */
+function within<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  return Promise.race([
+    p.catch(() => fallback),
+    new Promise<T>((r) => { timer = setTimeout(() => r(fallback), ms); timer.unref?.(); }),
+  ]).finally(() => clearTimeout(timer));
+}
+
 async function authFor(item: RepoItem): Promise<string | undefined> {
   try {
     const { credential } = await gitCredentialEnv(`${item.site}/`);
@@ -144,15 +175,10 @@ async function authFor(item: RepoItem): Promise<string | undefined> {
   }
 }
 
-async function load(item: RepoItem, fetcher: PreviewFetcher, authWaitMs: number): Promise<LinkPreview | null> {
-  const signal = AbortSignal.timeout(TIMEOUT_MS);
+async function load(item: RepoItem, fetcher: PreviewFetcher, signal: AbortSignal, authWaitMs: number): Promise<LinkPreview | null> {
   const base = { accept: item.source === 'github' ? 'application/vnd.github+json' : 'application/json', 'user-agent': 'Forsion-Tangu-LinkPreview' };
   try {
-    let timer: NodeJS.Timeout | undefined;
-    const auth = await Promise.race([
-      authFor(item),
-      new Promise<undefined>((r) => { timer = setTimeout(() => r(undefined), authWaitMs); timer.unref?.(); }),
-    ]).finally(() => clearTimeout(timer));
+    const auth = await within(authFor(item), authWaitMs, undefined);
     let r = await fetcher(item.api, auth ? { ...base, authorization: auth } : base, signal);
     if (auth && (r.status === 401 || r.status === 403 || r.status === 404)) r = await fetcher(item.api, base, signal);
     return r.status === 200 ? previewOf(item, JSON.parse(r.text)) : null;
@@ -162,6 +188,22 @@ async function load(item: RepoItem, fetcher: PreviewFetcher, authWaitMs: number)
 }
 
 const cache = new Map<string, { value: Promise<LinkPreview | null>; until: number }>();
+const budgets = new Map<string, { since: number; n: number }>();
+let inflight = 0;
+
+/** 这个用户这一窗还能不能真问一次(能就记一次)。 */
+function spend(userId: string, t: number): boolean {
+  let b = budgets.get(userId);
+  if (!b || t - b.since >= BUDGET_WINDOW_MS) {
+    budgets.delete(userId);
+    b = { since: t, n: 0 };
+    budgets.set(userId, b);
+    if (budgets.size > MAX_ENTRIES) budgets.delete(budgets.keys().next().value!);
+  }
+  if (b.n >= USER_BUDGET) return false;
+  b.n++;
+  return true;
+}
 
 export interface LinkPreviewOptions {
   fetcher?: PreviewFetcher;
@@ -172,18 +214,21 @@ export interface LinkPreviewOptions {
   authWaitMs?: number;
 }
 
-/** 链接的富卡数据;认不得 / 取不到 → null(不抛)。 */
+/** 链接的富卡数据;认不得 / 取不到 / 超了预算 → null(不抛)。 */
 export async function linkPreview(userId: string, href: string, opts: LinkPreviewOptions = {}): Promise<LinkPreview | null> {
   const now = opts.now ?? Date.now;
+  const signal = AbortSignal.timeout(TIMEOUT_MS); // 一个时限管到底:找站点、取凭据、请求
   const site = opts.forsionGitWebUrl !== undefined
     ? opts.forsionGitWebUrl
-    : (await Promise.resolve(forsionGit()?.hosting()).catch(() => null))?.webUrl ?? null;
+    : (await within(Promise.resolve(forsionGit()?.hosting() ?? null), SITE_WAIT_MS, null))?.webUrl ?? null;
   const item = repoItemOf(href, site);
   if (!item) return null;
   const key = `${userId}\n${item.api}`;
   const hit = cache.get(key);
   if (hit && now() < hit.until) return hit.value;
-  const entry = { value: load(item, opts.fetcher ?? fetchCapped, opts.authWaitMs ?? AUTH_WAIT_MS), until: Number.POSITIVE_INFINITY };
+  if (inflight >= MAX_INFLIGHT || !spend(userId, now())) return null;
+  inflight++;
+  const entry = { value: load(item, opts.fetcher ?? fetchCapped, signal, opts.authWaitMs ?? AUTH_WAIT_MS).finally(() => { inflight--; }), until: Number.POSITIVE_INFINITY };
   cache.delete(key);
   cache.set(key, entry);
   if (cache.size > MAX_ENTRIES) cache.delete(cache.keys().next().value!);
@@ -191,4 +236,4 @@ export async function linkPreview(userId: string, href: string, opts: LinkPrevie
   return entry.value;
 }
 
-export function resetLinkPreviewCacheForTest(): void { cache.clear(); }
+export function resetLinkPreviewCacheForTest(): void { cache.clear(); budgets.clear(); }

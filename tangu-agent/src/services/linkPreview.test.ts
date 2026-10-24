@@ -5,13 +5,16 @@
  *   - JSON → 卡片:合并 / 关闭 / 草稿 / 打开;issues 接口问到的 PR 认成 PR
  *   - 缓存按「用户 + 地址」;拿到的一直用,没拿到的 60 秒后再问
  *   - 绑了 GitHub 用 Bearer、Forsion Git 用 Basic;带令牌被拒 → 匿名再问一次
+ *   - 重定向只跟同一个 https 源(降到 http / 换主机不跟,凭据不跟着走)
+ *   - 上游预算:同时最多 8 个、每用户 10 分钟 60 次;找站点 / 取凭据挂住不拖过时限
  *
  * 负对照(2026-10-24 实跑):fetchCapped 里给 fetchPublic 换一个不校验的解析器 → SSRF 那条红(本机端口收到 1 次连接)。
  * 只看「返回 null」不够:没有闸时连接被拒也是 null,所以那条数的是连接。
  */
 import net from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
-import { linkPreview, previewOf, repoItemOf, resetLinkPreviewCacheForTest, type PreviewFetcher } from './linkPreview.js';
+import { linkPreview, previewOf, repoItemOf, resetLinkPreviewCacheForTest, sameSecureOrigin, type PreviewFetcher } from './linkPreview.js';
+import { installForsionGit } from './forsionGit.js';
 import { registerGitCredentialProvider, resetGitCredentialProvidersForTest } from './gitCredentials.js';
 
 const FG = 'https://git.forsion.net';
@@ -27,7 +30,7 @@ function fakeFetch(reply: (url: string, headers: Record<string, string>) => { st
   return { fetcher, calls };
 }
 
-afterEach(() => { resetLinkPreviewCacheForTest(); resetGitCredentialProvidersForTest(); });
+afterEach(() => { resetLinkPreviewCacheForTest(); installForsionGit(undefined); resetGitCredentialProvidersForTest(); });
 
 describe('repoItemOf', () => {
   it('认 GitHub 的 PR / issue(子页、查询串、锚点照认)', () => {
@@ -79,6 +82,18 @@ describe('previewOf', () => {
   it('没有标题 / 不是对象 → null', () => {
     expect(previewOf(item, { message: 'Not Found' })).toBeNull();
     expect(previewOf(item, null)).toBeNull();
+  });
+});
+
+describe('sameSecureOrigin', () => {
+  const api = 'https://api.github.com/repos/a/b/pulls/1';
+  it('同源 https 才跟(改名的仓库跳到 /repositories/<id>/…)', () => {
+    expect(sameSecureOrigin(api, 'https://api.github.com/repositories/42/pulls/1')).toBe(true);
+    expect(sameSecureOrigin(api, 'http://api.github.com/repos/a/b/pulls/1')).toBe(false);
+    expect(sameSecureOrigin(api, 'https://evil.example/x')).toBe(false);
+    expect(sameSecureOrigin(api, 'https://api.github.com:8443/x')).toBe(false);
+    expect(sameSecureOrigin('https://git.forsion.net/api/v1/repos/o/r/pulls/1', 'http://git.forsion.net/api/v1/repos/o/r/pulls/1')).toBe(false);
+    expect(sameSecureOrigin(api, 'not a url')).toBe(false);
   });
 });
 
@@ -166,6 +181,39 @@ describe('linkPreview', () => {
     expect(await linkPreview('u', url, { fetcher: f.fetcher, forsionGitWebUrl: null, authWaitMs: 50 })).not.toBeNull();
     expect(Date.now() - t0).toBeLessThan(1000);
     expect(f.calls[0]!.headers.authorization).toBeUndefined();
+  });
+
+  it('每个用户 10 分钟最多真问 60 次;超了 null 且不发请求,别的用户不受影响,过了窗口再给', async () => {
+    let t = 0;
+    const f = fakeFetch(() => ({ status: 200, body: PR }));
+    const opts = { fetcher: f.fetcher, forsionGitWebUrl: null, now: () => t };
+    for (let i = 1; i <= 60; i++) expect(await linkPreview('u', `https://github.com/a/b/pull/${i}`, opts)).not.toBeNull();
+    expect(await linkPreview('u', 'https://github.com/a/b/pull/61', opts)).toBeNull();
+    expect(f.calls).toHaveLength(60);
+    expect(await linkPreview('u', 'https://github.com/a/b/pull/1', opts)).not.toBeNull(); // 缓存命中不算
+    expect(await linkPreview('v', 'https://github.com/a/b/pull/61', opts)).not.toBeNull();
+    t += 10 * 60_000;
+    expect(await linkPreview('u', 'https://github.com/a/b/pull/62', opts)).not.toBeNull();
+  });
+
+  it('同时最多 8 个上游请求;第 9 个当场 null', async () => {
+    const release: Array<() => void> = [];
+    const hold: PreviewFetcher = () => new Promise((r) => release.push(() => r({ status: 200, text: JSON.stringify(PR) })));
+    const runs = Array.from({ length: 8 }, (_, i) => linkPreview(`u${i}`, url, { fetcher: hold, forsionGitWebUrl: null }));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(await linkPreview('u9', url, { fetcher: hold, forsionGitWebUrl: null })).toBeNull();
+    for (const go of release) go();
+    expect((await Promise.all(runs)).every((v) => v?.state === 'merged')).toBe(true);
+    const f = fakeFetch(() => ({ status: 200, body: PR }));
+    expect(await linkPreview('u9', url, { fetcher: f.fetcher, forsionGitWebUrl: null })).not.toBeNull(); // 放完了再问就有
+  });
+
+  it('找 Forsion Git 站点挂住 → 当没有,GitHub 链接照问,不拖过 6 秒时限(找站点 1.5 秒 + 取凭据时它又挂 2.5 秒)', async () => {
+    installForsionGit({ info: () => new Promise(() => {}), credential: () => new Promise(() => {}) });
+    const f = fakeFetch(() => ({ status: 200, body: PR }));
+    const t0 = Date.now();
+    expect(await linkPreview('u', url, { fetcher: f.fetcher })).not.toBeNull();
+    expect(Date.now() - t0).toBeLessThan(5000);
   });
 
   it('SSRF:站点地址指向本机 / 内网时,真的 fetchPublic 在连接之前拒掉 → null(本机监听的端口一次连接都没收到)', async () => {
