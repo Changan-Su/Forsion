@@ -29,7 +29,7 @@ import { awaitTypingQuiet, installTypingGuard } from '../store/typingGuard'
 import {
   DbLinkPicker, MilkdownInner, normalizeSerializedMd, serializeUnified, stampedFileName,
   PREFIX_TRIGGERS, SLASH_SENTINELS, slashTurnFailed, getFocusedBlockApply, setFocusedBlockApply, type SlashItem, type SlashOps,
-  copySelectedImage, selectedAttachment, selectedImageEl,
+  copySelectedImage, selectedImage,
 } from '../blocks/markdown/MarkdownBlock'
 import { emptyDb, emptyNoteView, serializeDb } from '@amadeus-shared/db/schema'
 import { BLANK_SCENE_JSON, blankDrawing } from '@amadeus-shared/excalidraw/format'
@@ -3736,7 +3736,7 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
             {/* 选中的是一张图(右键图片即选中它):复制成真图片,能直接贴进聊天 / 别的应用。键盘 Mod+C 走同一份。 */}
             {(() => {
               const view = layer.getView()
-              return view && selectedAttachment(view) && selectedImageEl(view) && (
+              return view && selectedImage(view) && (
                 <button role="menuitem" tabIndex={-1} data-act="copyImage" onClick={() => {
                   setBlockMenu(null)
                   const v = layer.getView()

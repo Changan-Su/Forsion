@@ -366,25 +366,36 @@ export function selectedAttachment(view: EditorView): { reference: string; ref: 
   return ref ? { reference, ref } : null
 }
 
-/** 选中的那张图在页面上画出来的 <img>(`![](…)` 图片节点,或 `![[x.png]]` 那一段里的嵌入图)。
- *  网页 / 手机复制图片从它取字节:显示得出来就取得到,不用另走一遍附件解析。 */
-export function selectedImageEl(view: EditorView): HTMLImageElement | null {
+/** 选中的是一张图片附件时,给出引用 + 它在页面上画出来的 <img>(`![](…)` 图片节点,或 `![[x.png]]` 嵌入图)。
+ *  网页 / 手机复制图片从这张 <img> 取字节:显示得出来就取得到,不用另走一遍附件解析。
+ *  只认一个文本块之内、范围里恰好一张图;笔记 / PDF 嵌入块的预览里带图也不算。 */
+export function selectedImage(view: EditorView): { reference: string; ref: string; img: HTMLImageElement } | null {
+  const hit = selectedAttachment(view)
   const sel = view.state.selection
-  const pos = sel instanceof NodeSelection ? sel.from : sel.$from.depth ? sel.$from.before() : null
-  const el = pos == null ? null : view.nodeDOM(pos)
+  if (!hit) return null
+  const imageNode = sel instanceof NodeSelection && (sel.node.type.name === 'image' || sel.node.firstChild?.type.name === 'image')
+  if (!imageNode && !/\.(?:png|jpe?g|gif|webp|svg|avif|bmp)$/i.test(hit.ref)) return null
+  if (!(sel instanceof NodeSelection) && !sel.$from.sameParent(sel.$to)) return null
+  const pos = sel instanceof NodeSelection ? sel.from : sel.$from.before()
+  const el = view.nodeDOM(pos)
   if (!(el instanceof HTMLElement)) return null
-  const img = el instanceof HTMLImageElement ? el : el.querySelector('img')
-  return img && (img.currentSrc || img.src) ? img : null
+  const imgs = (el instanceof HTMLImageElement ? [el] : [...el.querySelectorAll('img')]).filter((img) => {
+    if (!(img.currentSrc || img.src)) return false
+    try {
+      const at = view.posAtDOM(img, 0)
+      return at >= sel.from && at <= sel.to
+    } catch { return false }
+  })
+  return imgs.length === 1 ? { ...hit, img: imgs[0] } : null
 }
 
 /** 把选中的图片复制成真图片(块菜单「复制图片」)。桌面走主进程(原生图片 + 文件);网页 / 手机写 PNG + 引用文字。 */
 export async function copySelectedImage(view: EditorView, pagePath: string): Promise<boolean> {
-  const hit = selectedAttachment(view)
-  const img = selectedImageEl(view)
-  if (!hit || !img) return false
+  const hit = selectedImage(view)
+  if (!hit) return false
   const ok = amadeus.copyAttachment
     ? await amadeus.copyAttachment(pagePath, hit.ref, hit.reference).catch(() => false)
-    : await writeImageToClipboard(img.currentSrc || img.src, hit.reference).then(() => true, () => false)
+    : await writeImageToClipboard(hit.img.currentSrc || hit.img.src, hit.reference).then(() => true, () => false)
   if (ok) rememberAttachmentCopy(hit.reference, hit.ref)
   return ok
 }
@@ -974,12 +985,11 @@ export function MilkdownInner({
     }
     const handleAttachmentCopy = (view: EditorView, event: Event): boolean => {
       if (!attachmentPagePath) return false
-      const hit = selectedAttachment(view)
+      // 网页 / 手机没有主进程:只接图片,随后由 Clipboard API 补成 PNG(引用文字同一项带上);别的附件照旧走默认复制。
+      const image = amadeus.copyAttachment ? null : selectedImage(view)
+      const hit = amadeus.copyAttachment ? selectedAttachment(view) : image
       const e = event as ClipboardEvent
       if (!hit || !e.clipboardData) return false
-      // 网页 / 手机没有主进程:图片随后由 Clipboard API 补成 PNG(引用文字同一项带上);别的附件照旧只复制引用。
-      const img = amadeus.copyAttachment ? null : selectedImageEl(view)
-      if (!amadeus.copyAttachment && !img) return false
       e.preventDefault()
       e.clipboardData.clearData()
       e.clipboardData.setData('text/plain', hit.reference)
@@ -988,9 +998,9 @@ export function MilkdownInner({
       if (amadeus.copyAttachment) {
         void amadeus.copyAttachment(attachmentPagePath, hit.ref, hit.reference)
           .then((ok) => { if (ok) rememberAttachmentCopy(hit.reference, hit.ref) })
-      } else if (img) {
-        rememberAttachmentCopy(hit.reference, hit.ref)
-        void writeImageToClipboard(img.currentSrc || img.src, hit.reference).catch(() => { /* 取图失败:剪贴板里照旧是引用文字 */ })
+      } else if (image) {
+        void writeImageToClipboard(image.img.currentSrc || image.img.src, image.reference)
+          .then(() => rememberAttachmentCopy(image.reference, image.ref), () => { /* 取图失败 / 被后来的复制顶掉:剪贴板里照旧是引用文字 */ })
       }
       return true
     }
