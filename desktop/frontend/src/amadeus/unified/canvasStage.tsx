@@ -3378,8 +3378,13 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
         if (d.right) {
           setPanning(false)
           if (!d.ctxSeen) trailing = { t: performance.now(), x: e.clientX, y: e.clientY }
-          // 没拖 = 右键点了一下空白:这时才弹空白菜单(按下时已判定是空白;与 stageMenuAt 的空白分支同一份 —— 不改选中)
-          if (!d.live) setMenu({ x: e.clientX, y: e.clientY, key: null, at: toStage(e.clientX, e.clientY) })
+          // 没拖 = 右键点了一下空白:这时才弹空白菜单(按下时已判定是空白;与 stageMenuAt 的空白分支同一份 —— 不改选中)。
+          // 焦点交给舞台 = 修前右键按下的默认结果(按下那一下现在 preventDefault 了):Esc 关菜单走舞台的 onKeyDown,
+          // 焦点留在侧栏 / body / 正在编辑的卡里的话,Esc 关不掉这份菜单。只是拖了一下(平移)才保留原焦点。
+          if (!d.live) {
+            host.focus({ preventScroll: true })
+            setMenu({ x: e.clientX, y: e.clientY, key: null, at: toStage(e.clientX, e.clientY) })
+          }
           return
         }
         // 触屏两段式的第一段:落在对象上但没真拖动 = 一次点选(见 onDown 的 touchKey)。

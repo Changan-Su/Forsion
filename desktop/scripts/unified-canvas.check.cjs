@@ -1567,7 +1567,19 @@ async function wave5(browser) {
     await pg.mouse.up({ button: 'right' })
     await pg.waitForTimeout(200)
     const connUp = { st: await stateOf(pg), vp: await vpOf(pg) }
+    await pg.keyboard.press('Escape')
+    await pg.mouse.click(b.x, b.y)
+    await pg.waitForTimeout(150)
+    // e) 焦点不在舞台(侧栏 / body)时右键点空白:菜单弹出后 Esc 照样关得掉(焦点交给舞台,与修前右键按下的默认结果一致)
+    await pg.evaluate(() => document.activeElement?.blur?.())
+    await pg.mouse.click(b.x, b.y, { button: 'right' })
+    await pg.waitForTimeout(200)
+    const escOpen = (await stateOf(pg)).menus
+    await pg.keyboard.press('Escape')
+    await pg.waitForTimeout(200)
+    const escAfter = (await stateOf(pg)).menus
     await pg.close()
+    record('C109d 焦点在舞台外时右键点空白:菜单弹出,Esc 关得掉', escOpen === 1 && escAfter === 0, JSON.stringify({ escOpen, escAfter }))
     record('C109a 空白右键点一下 = 松开才弹空白菜单(按下时没有),落在指针处;选中不变',
       down.menus === 0 && up.menus === 1 && up.fitItem && !up.delItem && JSON.stringify(up.sel) === '["k1"]'
         && menuAt && Math.abs(menuAt.x - b.x) <= 2 && Math.abs(menuAt.y - b.y) <= 2,
