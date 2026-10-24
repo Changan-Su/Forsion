@@ -153,21 +153,9 @@ export function fmtStamp(d: Date, allDay: boolean): string {
 export function snap15(min: number): number {
   return Math.round(min / 15) * 15
 }
-/** 某天的第 min 分钟(墙上时钟;超过 24:00 落到次日)。别写 addMinutes(零点, min):夏令时切换那天不是 24 小时,
- *  Europe/London 2026-10-25 右键 13:00 粘贴落到了 12:00(10-24 CI calendar-actions 实测)。 */
-export function atMinute(day: Date | string, min: number): Date {
-  const d = typeof day === 'string' ? toLocalDate(day) : day
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, min)
-}
-/** atMinute 的反算:t 是 day 那天的第几分钟(墙上时钟,跨天按 1440 累加)。 */
-export function minuteOf(day: Date | string, t: Date): number {
-  const d = typeof day === 'string' ? toLocalDate(day) : day
-  const days = Math.round((Date.UTC(t.getFullYear(), t.getMonth(), t.getDate()) - Date.UTC(d.getFullYear(), d.getMonth(), d.getDate())) / 864e5)
-  return days * 1440 + t.getHours() * 60 + t.getMinutes()
-}
-/** Date 加分钟(返回新 Date)。 */
+/** Date 加分钟(返回新 Date)。按墙钟加,与网格 / fmtStamp 一致:夏令时切换日「零点 + 13h」仍是 13:00,不是 12:00 / 14:00。 */
 export function addMinutes(d: Date, min: number): Date {
-  return new Date(d.getTime() + min * 60000)
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), d.getHours(), d.getMinutes() + min, d.getSeconds(), d.getMilliseconds())
 }
 /** ISO 周数(周一起算,1 月 4 日所在周为第 1 周)。日历页眉「第 42 周」用;周首日设成周日也照 ISO 算,与系统日历一致。 */
 export function isoWeek(d: Date): number {
@@ -183,6 +171,10 @@ export function shiftDays(d: Date, n: number): Date {
 /** a、b 相差的天数(按当地日界)。 */
 export function diffDays(a: Date, b: Date): number {
   return Math.round((startOfDay(a).getTime() - startOfDay(b).getTime()) / 86400000)
+}
+/** a − b 的墙钟分钟数(与 addMinutes 互逆;夏令时切换日不多不少一小时)。 */
+export function wallDiffMin(a: Date, b: Date): number {
+  return diffDays(a, b) * 1440 + a.getHours() * 60 + a.getMinutes() - (b.getHours() * 60 + b.getMinutes())
 }
 
 export function monthLabel(d: Date): string {

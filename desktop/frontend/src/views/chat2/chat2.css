@@ -14,12 +14,12 @@
 .t2-chat-view[data-filedrop]::after { /* OS 文件也落整片(见 Composer2) */
   content: ''; position: absolute; inset: 6px; pointer-events: none; z-index: 20;
   border-radius: var(--radius-lg, 12px);
-  background: color-mix(in srgb, var(--accent-ink, var(--accent)) 5%, transparent);
+  background: color-mix(in srgb, var(--signal) 5%, transparent);
 }
 /* 与 lcl/components/chatBox.css 的 .t2c-card.dragover 同一画法(那条是卡片自己当落区时用的) */
 :is(.t2-chat-view.refdrop, .t2-chat-view[data-filedrop]) .t2c-card {
-  border-color: var(--accent-ink);
-  background: color-mix(in srgb, var(--accent-ink) 6%, var(--t2c-card-surface, var(--bg-card, var(--bg))));
+  border-color: var(--signal-line);
+  background: var(--accent-wash);
 }
 .t2-toolbar {
   min-height: 38px;
@@ -214,6 +214,43 @@
 .t2-user-atts { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; max-width: 100%; --att-tile: 120px; }
 .t2-user-atts-row { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; max-width: 100%; }
 .t2-user-atts .att-tile--file { max-width: 280px; }
+/* 多图叠成一摞(10-24,借鉴 Comma §2.5;组件 components/ImageStack.tsx):超过 3 张才叠。卡片大小跟 --att-tile 走
+   (消息里 120px → 216×144,窄栏 96px → 173×115),左右各留两层露边的位置(2 × 7px)。
+   每张卡的槽位(位移 / 层级 / 透明度)由组件写内联,这里只管过渡与外观;翻页走 --duration-slow,甩出去的那张由 WAAPI 带(data-flying 时压掉过渡、垫到最上面)。 */
+.img-stack { --img-stack-w: calc(var(--att-tile, 120px) * 1.8); position: relative; flex: none; width: calc(var(--img-stack-w) + 28px); height: calc(var(--att-tile, 120px) * 1.2); touch-action: pan-y; }
+.img-stack-card {
+  position: absolute; top: 0; left: 14px; width: var(--img-stack-w); height: 100%;
+  z-index: var(--img-stack-z); border-radius: var(--radius-md); box-shadow: var(--card-shadow);
+  transition: transform var(--duration-slow) var(--ease-out), opacity var(--duration-slow) var(--ease-out);
+}
+.img-stack-card[aria-hidden] { pointer-events: none; }
+.img-stack-card[data-flying] { z-index: 20; transition: none; }
+.img-stack-card > img {
+  display: block; width: 100%; height: 100%; object-fit: cover; object-position: left top; /* 同磁贴:截图的要紧处多在左上 */
+  border-radius: inherit; border: var(--border-width) solid var(--border); background: var(--bg-card);
+}
+.img-stack-card > img:focus-visible { outline: var(--focus-ring) solid var(--signal-line); outline-offset: 1px; }
+.img-stack-count {
+  position: absolute; right: 22px; bottom: 8px; z-index: 30; pointer-events: none;
+  padding: 2px 8px; border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--bg-card) 88%, transparent); color: var(--text);
+  font-size: var(--ui-font-caption, 11px); font-weight: 500;
+}
+.img-stack-nav {
+  position: absolute; top: 50%; z-index: 30; width: 26px; height: 26px; margin-top: -13px;
+  display: grid; place-items: center; padding: 0; border: none; border-radius: var(--radius-pill);
+  background: var(--bg-card); color: var(--text); box-shadow: var(--card-shadow);
+  opacity: 0; transition: opacity var(--duration-instant);
+}
+.img-stack-nav:hover { background: color-mix(in srgb, var(--overlay-light) 60%, var(--bg-card)); }
+.img-stack-nav:focus-visible { outline: var(--focus-ring) solid var(--signal-line); outline-offset: 1px; }
+.img-stack-nav[data-dir='prev'] { left: 20px; }
+.img-stack-nav[data-dir='next'] { right: 20px; }
+@media (hover: hover) { .img-stack:hover .img-stack-nav:not(:disabled), .img-stack:focus-within .img-stack-nav:not(:disabled) { opacity: 1; } }
+@media (hover: none) { .img-stack-nav { pointer-events: none; } } /* 触屏:左右滑;看不见的钮别吃掉点图 */
+.img-stack:has(:focus-visible) .img-stack-nav:not(:disabled) { opacity: 1; pointer-events: auto; } /* 外接键盘 / 读屏:触屏上也得翻得了 */
+.img-stack-nav:disabled { pointer-events: none; }
+@media (prefers-reduced-motion: reduce) { .img-stack-card, .img-stack-nav { transition: none; } }
 /* 长提问折叠(C2,UserFold.tsx):高过 300px 收起;底部 64px 七档渐隐(1 → .85 → .7 → .5 → .3 → .15 → .05 → 0),两点线性在起点有一道看得见的棱 */
 .t2-user-fold { position: relative; }
 .t2-user-fold[data-folded] {
@@ -377,6 +414,21 @@
    (0,1,0),排在后面胜出 —— 以前两边都是 16px 看不出来,现在会把按钮按回卡里。 */
 .t2-jump { position: absolute; right: 22px; z-index: 12; }
 .t2-jump.jump-bottom { bottom: calc(var(--t2-composer-h, 96px) + 16px); }
+/* 带数的那一版(借 Comma):同一颗键拉成药丸、挪到输入卡正上方居中;车道让位时 right 照下面那条规则抬起,居中跟着偏半个车道 */
+.t2-jump.jump-bottom.t2-jump--count {
+  left: 0; margin-inline: auto; width: max-content; gap: 6px; padding: 0 12px 0 10px;
+  color: var(--text); font-size: var(--ui-font-caption); font-weight: 500; white-space: nowrap;
+}
+.t2-jump--count > svg { color: var(--accent-ink); }
+/* 没发出去的那条(借 Comma):气泡淡掉,底下一行原因 + 查看余量 / 丢弃 / 重试,占原来复制 / 编辑那一排 */
+.t2-userwrap--failed .t2-user, .t2-userwrap--failed .t2-user-atts { opacity: 0.55; }
+.t2-failed { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 4px 6px; margin-top: 4px; font-size: var(--ui-font-caption); }
+.t2-failed-why { display: inline-flex; align-items: center; gap: 4px; margin-right: 4px; color: var(--danger); }
+.t2-failed-btn { border: 0; padding: 3px 8px; border-radius: var(--radius-sm); background: none; color: var(--text-muted); font: inherit; cursor: pointer; }
+.t2-failed-btn:hover { background: var(--overlay-light); color: var(--text); }
+.t2-failed-btn.primary { background: var(--overlay-light); color: var(--text); }
+.t2-failed-btn.primary:hover { background: var(--overlay-medium); }
+.t2-failed-btn:focus-visible { outline: var(--focus-ring) solid var(--signal-line); outline-offset: 1px; }
 /* 划线后的那一条不在这里了:全应用共用 lcl/components/selectionBar.css(外壳 .ui-popover.selbar,挂在 body 下)。 */
 
 @media (max-width: 1040px) {
@@ -512,20 +564,26 @@
 .t2-voice-txt:hover { color: var(--text); background: color-mix(in srgb, var(--text-muted) 14%, transparent); }
 
 /* ── 聊天气泡里的 [[双链]](assistant Markdown 经 remarkWiki、user 纯文本经 WikiText;观感对齐编辑器) ── */
-/* .citelink = 网页引用(普通 markdown 链接,ChatWebLink)。与文件引用条**同一套观感**:出厂配色是
-   单色的(--accent-ink ≈ 正文色,e2e 实测两者都是 rgb(28,28,28)),光靠颜色的链接在这儿等于隐形 ——
-   下划线才是这套语言里唯一跨配色成立的「可点」信号。 */
-.t2-content .wikilink, .t2-user .wikilink, .t2-content .citelink {
+/* 双链 / 文件引用与 Amadeus 正文同一画法(2026-10-24 用户选 A,对照页 docs/ToBeImproved/Tangu强调色分批方案_2026-10-24/links.html):
+   强调色、不画常驻下划线、悬停才出;文件类前面那枚类型图标(ChatWikiLink 的 FileIcon,样式在 base.css .wikilink-ic)。
+   单色配色(经典 / 墨色)的强调色自带柔蓝,不会和正文一个色,所以不再靠下划线标「可点」。
+   .citelink = 网页引用(普通 markdown 链接,ChatWebLink):和 Amadeus 正文的网页链接一样是正文色 + 下划线。 */
+.t2-content .wikilink, .t2-user .wikilink {
+  color: var(--signal);
+  cursor: pointer;
+  text-decoration: none;
+}
+.t2-content .citelink {
   color: var(--primary);
   cursor: pointer;
   text-decoration: underline;
   text-underline-offset: 2px;
 }
-.t2-content .wikilink:hover, .t2-user .wikilink:hover, .t2-content .citelink:hover { background: var(--drop); border-radius: 3px; }
+.t2-content .wikilink:hover, .t2-user .wikilink:hover { text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1px; }
 .t2-content .wikilink.wikilink-unresolved, .t2-user .wikilink.wikilink-unresolved {
   color: var(--text-muted);
-  opacity: 0.75;
-  text-decoration-style: dashed;
+  opacity: 0.8;
+  text-decoration: none;
   cursor: default;
 }
 

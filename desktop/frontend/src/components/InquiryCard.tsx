@@ -2,7 +2,8 @@
  * 询问卡(ask_user / exit_plan_mode):问题 + 选项按钮 + 自由输入;answered/expired 显示灰态。
  * 视觉对齐 ApprovalCard(边框卡片,token CSS)。待答时在输入框上方的托盘里;对话流里只留已答 / 过期的记录。
  */
-import React, { useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
+import { isMacPlatform } from '@lcl/engine'
 import { CircleHelp, Send, CheckSquare, Square, SquareDot, Loader2, Check, Pencil, Undo2, ClipboardList, ChevronDown, ChevronUp } from 'lucide-react'
 import type { InquiryRequest, TodoItem } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { Markdown } from './Markdown'
@@ -27,7 +28,15 @@ registerMessages({
   'inquiry.todoAllDone': { zh: '全部完成', en: 'All done' },
   'inquiry.todoFold': { zh: '收起任务清单', en: 'Collapse task list' },
   'plan.decisionTitle': { zh: '计划等你拍板（正文见对话里的计划卡）', en: 'The plan needs your decision (full text in the plan card above)' },
+  'inquiry.keys': { zh: '{keys} 选一项 · 直接打字 = 其他回答 · {send} 发出', en: '{keys} pick · Type to answer differently · {send} send' },
 })
+
+/** 托盘里的提问卡出现时,输入框空着(或焦点不在任何输入上)才把键盘交给它;手机(没有悬停 = 触屏)不抢。 */
+function keyboardIdle(): boolean {
+  if (typeof window.matchMedia === 'function' && window.matchMedia('(hover: none)').matches) return false
+  const a = document.activeElement
+  return !a || a === document.body || (a instanceof HTMLTextAreaElement && a.classList.contains('t2c-ta') && !a.value.trim())
+}
 
 export const InquiryCard: React.FC<{
   req: InquiryRequest
@@ -36,9 +45,36 @@ export const InquiryCard: React.FC<{
   const { t } = useI18n()
   const [draft, setDraft] = useState('')
   const pending = req.status === 'pending'
+  // 借 Comma:用键盘答。编号就是键位,按数字直接选;在选项上直接打字 = 跳进「其他回答」;⌘↵ / Ctrl↵ 发出。
+  // 键位提示只在用过一次键盘后出现(鼠标用户不多看一行字)。
+  const [keys, setKeys] = useState(false)
+  const opts = useRef<HTMLDivElement>(null)
+  const input = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (pending && keyboardIdle()) opts.current?.querySelector('button')?.focus({ preventScroll: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  const n = req.options.length
+  const onKey = (e: React.KeyboardEvent): void => {
+    if (!pending || e.nativeEvent.isComposing) return
+    if (!['Tab', 'Shift', 'Meta', 'Control', 'Alt'].includes(e.key)) setKeys(true)
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+      e.preventDefault()
+      if (draft.trim()) onAnswer(draft.trim())
+      return
+    }
+    if (e.metaKey || e.ctrlKey || e.altKey || !(e.target as HTMLElement).closest('.inquiry-opts')) return
+    if (/^[1-9]$/.test(e.key)) {
+      const i = Number(e.key) - 1
+      if (i < n) { e.preventDefault(); onAnswer(req.options[i]) } else if (i === n) { e.preventDefault(); input.current?.focus() }
+      return
+    }
+    // 不拦这一下:焦点在 keydown 里挪进输入框,这个字由浏览器落进去(大小写、符号都照原样)
+    if (e.key.length === 1 && e.key !== ' ') input.current?.focus()
+  }
 
   return (
-    <div className={`inquiry-card${pending ? '' : ' resolved'}`}>
+    <div className={`inquiry-card${pending ? '' : ' resolved'}`} onKeyDown={onKey}>
       <div className="inquiry-q">
         <CircleHelp size={14} />
         {req.question}
@@ -46,7 +82,7 @@ export const InquiryCard: React.FC<{
       {pending ? (
         <>
           {req.options.length > 0 && (
-            <div className="inquiry-opts">
+            <div className="inquiry-opts" ref={opts}>
               {req.options.map((opt, i) => (
                 <button key={i} className="btn ghost sm" style={{ justifyContent: 'flex-start' }} onClick={() => onAnswer(opt)}>
                   {i + 1}. {opt}
@@ -56,6 +92,7 @@ export const InquiryCard: React.FC<{
           )}
           <div className="inquiry-input">
             <input
+              ref={input}
               type="text"
               className="inline-input"
               value={draft}
@@ -72,6 +109,9 @@ export const InquiryCard: React.FC<{
               <Send size={12} /> {t('inquiry.answer')}
             </button>
           </div>
+          {keys && n > 0 && (
+            <div className="inquiry-keys">{t('inquiry.keys', { keys: n === 1 ? '1' : `1–${Math.min(n, 9)}`, send: isMacPlatform() ? '⌘↵' : 'Ctrl+↵' })}</div>
+          )}
         </>
       ) : (
         <div className="inquiry-resolved">

@@ -78,9 +78,9 @@ import {
   startOfDay,
   startOfWeek,
   toLocalDate,
-  atMinute,
   useWeekStart,
   useWeekStartPref,
+  wallDiffMin,
   type WeekStartPref,
 } from './calendar/dateUtils'
 
@@ -371,7 +371,7 @@ export function CalendarView({ leafId }: { leafId?: string } = {}) {
     const nav = useCalendarNav.getState()
     nav.setSelection(null)
     setCard(null)
-    pasteAt.current = atMinute(g.day, g.startMin ?? 0)
+    pasteAt.current = addMinutes(toLocalDate(g.day), g.startMin ?? 0)
     nav.setDraft({ ...g, scope: calendarScope(), title: '', dbPath: clip && members.some((m) => m.db.path === clip.event.db.path) ? clip.event.db.path : null })
   }
   // 草稿提交 / 取消挂进 store,右栏草稿面板的按钮和格子里的输入框走同一份。
@@ -447,7 +447,7 @@ export function CalendarView({ leafId }: { leafId?: string } = {}) {
         const draft = useCalendarNav.getState().draft
         if (draft?.title.trim() && !window.confirm(t('calside.discard'))) break
         const epoch = interactionEpoch.current, scope = calendarScope()
-        const date = pasteAt.current ?? (draft ? atMinute(draft.day, draft.startMin ?? 0) : undefined)
+        const date = pasteAt.current ?? (draft ? addMinutes(toLocalDate(draft.day), draft.startMin ?? 0) : undefined)
         void pasteCalendarEvent(date ? undefined : sel?.db, date).then((result) => {
           if (!result || epoch !== interactionEpoch.current || calendarScope() !== scope || useCalendarNav.getState().draft !== draft) return
           useCalendarNav.getState().setDraft(null)
@@ -640,7 +640,7 @@ export function CalendarView({ leafId }: { leafId?: string } = {}) {
           e.preventDefault(); e.stopPropagation()
           dismiss()
           const mins = day.classList.contains('amx-cal-daycol2') ? Math.max(0, Math.min(1425, snap15((e.clientY - day.getBoundingClientRect().top) / (zoomOf(day) || 1) / hourPx * 60))) : 0
-          pasteAt.current = atMinute(day.dataset.date, mins)
+          pasteAt.current = addMinutes(toLocalDate(day.dataset.date), mins)
           setMenu({ x: e.clientX, y: e.clientY })
         }
       }}>
@@ -1028,7 +1028,7 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
     // resize(start/end):竖向改时长;时间文本随预览实时反算(与 up() 的钳制一致)
     const delta = snap15((((e.clientY - d.y0) / d.zoom) / hourPx) * 60)
     const baseEndForClamp = d.ev.end ?? addMinutes(d.ev.start, 60)
-    const duration = (baseEndForClamp.getTime() - d.ev.start.getTime()) / 60000
+    const duration = wallDiffMin(baseEndForClamp, d.ev.start) // 与 dyMin 同为墙钟分钟
     const dyMin = d.mode === 'start' ? Math.max(-d.min0, Math.min(duration - 15, delta)) : Math.max(15 - duration, delta)
     if (!d.moved && Math.abs(e.clientY - d.y0) < 5) return
     if (!d.moved) { d.moved = true; d.el.classList.add('dragging') }

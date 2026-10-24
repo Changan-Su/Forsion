@@ -351,6 +351,10 @@ a { color: var(--accent-ink); text-decoration: none; }
    聊天正文那份在 chat2.css 里用更高特异性补上引用条同款配色,这里是**全局兜底**:少了它,
    `.t2-content` 之外的每一处网页链接都是隐形的。 */
 .citelink { text-decoration: underline; text-underline-offset: 2px; }
+/* 文件类双链 / 引用前那枚类型图标(聊天 ChatWikiLink 与 Amadeus 正文同一套,后者在 amadeus/styles.css 有同值的作用域版);
+   全局放这里是因为 <Markdown> 也出现在收件箱、更新日志等不加载 chat2.css 的地方,没有尺寸的 svg 会撑成 300×150。 */
+.wikilink-nb { white-space: nowrap; }
+.wikilink-ic { display: inline-block; width: 0.95em; height: 0.95em; vertical-align: -0.15em; margin-right: 0.25em; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 a:hover { color: var(--accent-ink); }
 
 /* ⚠️ 全局**不要**写 `::-webkit-scrollbar` 自定义样式(2026-08-13 起)。
@@ -1605,6 +1609,9 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .inquiry-opts { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
 .inquiry-input { display: flex; gap: 6px; }
 .inquiry-input .inline-input { flex: 1; }
+/* 键位提示(用过一次键盘才出现);触屏没有键盘,不显示 */
+.inquiry-keys { margin-top: 6px; font-size: var(--ui-font-caption); color: var(--text-faint); }
+@media (hover: none) { .inquiry-keys { display: none; } }
 .inquiry-resolved { font-size: var(--ui-font-meta, 12px); color: var(--text-muted); }
 /* 卡片标题(计划 / 待办)——calm:文字色 + 强调只在 emoji/图标 */
 .tg-card-title {
@@ -2424,7 +2431,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 }
 .att-tile--quote:hover { background: color-mix(in srgb, var(--overlay-light) 60%, var(--bg-card)); }
 .att-tile-open:focus-visible { outline: var(--focus-ring) solid var(--signal-line); outline-offset: 1px; }
-.att-tile-badge[data-kind='quote'] { color: var(--accent-ink); }
+.att-tile-badge[data-kind='quote'], .att-tile-badge[data-kind='paste'] { color: var(--accent-ink); }
 /* 划选「引用」的就地回复框(ReplyPopover):外壳 = .ui-popover(与划线条同一套);上面引文两行收起带竖线,下面一行回应 + 加进输入框。
    挂在 body 下:只用根上的 token。 */
 .quote-reply { z-index: 100; width: min(380px, calc((100vw - 16px) / var(--uiz, 1))); padding: 10px 10px 8px; -webkit-app-region: no-drag; }
@@ -2463,6 +2470,8 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   max-height: min(60vh, 480px); overflow-y: auto; padding: 2px 0 2px 12px; border-left: 2px solid var(--overlay-strong);
   color: var(--text-muted); font-size: var(--ui-font-body, 13px); line-height: var(--ui-line-body, 1.55); white-space: pre-wrap; overflow-wrap: anywhere;
 }
+/* 长粘贴磁贴的全文:日志 / 代码多,等宽小一号 */
+.quote-preview-body--mono { font-family: var(--font-mono); font-size: var(--ui-font-caption); }
 
 /* agent 在对话区展示的文件(display_file / 生图 / 表情包):图片缩略图(点击放大)+ 文件卡片 */
 .inline-file-grid { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }

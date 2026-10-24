@@ -57,7 +57,7 @@ Genesis 当前使用这份 LCL。`apps/Archived/Forsion-LCL` 是早期组合引�
 
 动效规矩见仓根 `DESIGN.md` §3「动效」;token 在 `desktop/frontend/src/styles/base.css :root`,LCL 样式只写同值兜底。
 
-- `engine/hoverSurface.ts`:提示框 / 悬停卡的唯一真源(时序、接力、定位、键盘聚焦不做动画),Ribbon 浮签与侧栏行提示都走它。`@lcl/components` 出口:`tooltipProps`(React 摊 props)、`attachTooltip`(DOM)、`hideTooltip`、`useHoverCard`(React 内容的悬停卡);事件委托版 `delegateTooltips` 留在引擎里给 Ribbon。插件:`ctx.ui.attachTooltip`。
+- `engine/hoverSurface.ts`:提示框 / 悬停卡的唯一真源(时序、接力、定位、键盘聚焦不做动画),Ribbon 浮签与侧栏行提示都走它。`@lcl/components` 出口:`tooltipProps`(React 摊 props)、`attachTooltip`(DOM)、`hideTooltip`、`useHoverCard`(React 内容的悬停卡;`longPress` 选项给手机:按住 0.5 秒出、松手收);事件委托版 `delegateTooltips` 留在引擎里给 Ribbon。插件:`ctx.ui.attachTooltip`。
 - `engine/menuAnchor.tsx` 的 `useExitGhost`:条件渲染的浮层卸载时留一份 inert 替身放完退场再摘;`OverlayAt` 自带,命令面板 / ⌘P 接了。退不退由 base.css 那张名单决定(进场名单 == 退场名单,`check:motion` 钉着)。
 - 方向性按压:按钮写 `data-press="back|forward|reload"`(engine.css)。
 - 仪器:`npm run check:motion`(进 `npm test`;写死时长与不经 OverlayAt 的菜单走棘轮基线 `scripts/motion-baseline.json`)。

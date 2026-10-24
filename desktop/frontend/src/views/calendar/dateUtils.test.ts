@@ -1,6 +1,7 @@
 import { describe, expect, it, beforeEach } from 'vitest'
 import { setLocaleGlobal } from '../../i18n'
-import { atMinute, minuteOf, toLocalDate, monthGridDays, coversDay, eventBox, sameDay, startOfWeek, weekStart, useWeekStartPref, eventTimeSummary, fmtDur } from './dateUtils'
+import { toLocalDate, addMinutes, wallDiffMin, monthGridDays, coversDay, eventBox, sameDay, startOfWeek, weekStart, useWeekStartPref, eventTimeSummary, fmtDur } from './dateUtils'
+import { draftValue } from './draft'
 
 describe('toLocalDate', () => {
   it('全天 = 本地午夜(不偏 UTC)', () => {
@@ -125,20 +126,26 @@ describe('isoWeek', () => {
   })
 })
 
-describe('atMinute / minuteOf(夏令时切换日)', () => {
-  // Node 运行期改 TZ 即时生效;Europe/London 2026-10-25 02:00 回拨,那天有 25 小时。
-  const was = process.env.TZ
-  it('切换日按墙上时钟落格,来回一致', () => {
+describe('addMinutes / wallDiffMin', () => {
+  it('夏令时切换日按墙钟算(Europe/London 2026-10-25 / 2026-03-29)', () => {
+    const tz = process.env.TZ
     process.env.TZ = 'Europe/London'
     try {
-      const d = atMinute('2026-10-25', 13 * 60)
-      expect([d.getDate(), d.getHours(), d.getMinutes()]).toEqual([25, 13, 0])
-      expect(minuteOf('2026-10-25', d)).toBe(13 * 60)
-      const next = atMinute('2026-10-25', 24 * 60 + 30)
-      expect([next.getDate(), next.getHours(), next.getMinutes()]).toEqual([26, 0, 30])
-      expect(minuteOf('2026-10-25', next)).toBe(24 * 60 + 30)
+      expect(new Date(2026, 9, 25, 13).getTimezoneOffset()).not.toBe(new Date(2026, 9, 25).getTimezoneOffset())
+      expect(addMinutes(new Date(2026, 9, 25), 13 * 60).getHours()).toBe(13)
+      expect(addMinutes(new Date(2026, 2, 29), 13 * 60).getHours()).toBe(13)
+      expect(addMinutes(new Date(2026, 9, 25, 13), -13 * 60).getHours()).toBe(0)
+      expect(addMinutes(new Date(2026, 9, 24, 23, 30), 60).getDate()).toBe(25)
+      // 互逆:墙钟差,不是毫秒差(那天 13:00 距零点实际过了 14 小时)
+      expect(wallDiffMin(new Date(2026, 9, 25, 13), new Date(2026, 9, 25))).toBe(13 * 60)
+      expect(wallDiffMin(new Date(2026, 2, 29, 3, 30), new Date(2026, 2, 29))).toBe(210)
+      expect(wallDiffMin(new Date(2026, 9, 26, 1), new Date(2026, 9, 25))).toBe(25 * 60)
+      // 起点落进拨快空档被顺延,终点不能因此早于起点
+      expect(draftValue({ day: '2026-03-29', startMin: 105, endMin: 135, endDay: '2026-03-29', title: '', dbPath: null })).toBe('2026-03-29T02:45/2026-03-29T03:15')
+      expect(draftValue({ day: '2026-10-25', startMin: 780, endMin: 840, endDay: '2026-10-25', title: '', dbPath: null })).toBe('2026-10-25T13:00/2026-10-25T14:00')
     } finally {
-      if (was === undefined) delete process.env.TZ; else process.env.TZ = was
+      if (tz === undefined) delete process.env.TZ
+      else process.env.TZ = tz
     }
   })
 })
