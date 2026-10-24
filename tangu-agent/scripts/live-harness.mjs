@@ -3857,13 +3857,20 @@ Then reply with only the command output.`,
     const fileWord = `PASS-${Math.random().toString(36).slice(2, 7).toUpperCase()}`;
     const pdfWord = `PDF${Math.random().toString(36).slice(2, 7).toUpperCase()}`;
     const pngB64 = digitsPng(imgDigits).toString('base64');
+    // 缩略图另画一张小的(别拿原图当缩略图 —— 那样判不出「原图内容没落库」)
+    const thumbB64 = digitsPng(imgDigits, 0, { scale: 2 }).toString('base64');
+    const notesText = `Meeting notes, 24 October\nThe passphrase for the staging box is ${fileWord}.\nNothing else to report.\n`;
+    const notesB64 = Buffer.from(notesText).toString('base64');
+    const pdfB64 = textPdf(`Release code: ${pdfWord}`).toString('base64');
     const with_ = (attachments) => (noAttach ? {} : { attachments });
-    const a5 = await aside({ question: 'What 4-digit number is shown in the attached image? Reply with just the number.', ...with_([{ name: 'number.png', mimeType: 'image/png', data: pngB64, ...(pngB64.length < 11_000 ? { thumb: `data:image/png;base64,${pngB64}` } : {}) }]) });
-    const a6 = await aside({ question: 'What is the passphrase written in the attached notes.txt? Reply with just the passphrase.', ...with_([{ name: 'notes.txt', mimeType: 'text/plain', data: Buffer.from(`Meeting notes, 24 October\nThe passphrase for the staging box is ${fileWord}.\nNothing else to report.\n`).toString('base64') }]) });
-    const a7 = await aside({ question: 'What code is printed in the attached PDF? Reply with just the code.', ...with_([{ name: 'code.pdf', mimeType: 'application/pdf', data: textPdf(`Release code: ${pdfWord}`).toString('base64') }]) });
+    const a5 = await aside({ question: 'What 4-digit number is shown in the attached image? Reply with just the number.', ...with_([{ name: 'number.png', mimeType: 'image/png', data: pngB64, thumb: `data:image/png;base64,${thumbB64}` }]) });
+    const a6 = await aside({ question: 'What is the passphrase written in the attached notes.txt? Reply with just the passphrase.', ...with_([{ name: 'notes.txt', mimeType: 'text/plain', data: notesB64 }]) });
+    const a7 = await aside({ question: 'What code is printed in the attached PDF? Reply with just the code.', ...with_([{ name: 'code.pdf', mimeType: 'application/pdf', data: pdfB64 }]) });
     const saved = asList(await api(`/agent/sessions/${sid}/asides`).catch(() => []), 'asides');
     const savedTurn = saved.flatMap((a) => a.turns || []).find((t) => String(t.question).startsWith('What 4-digit number'));
     const savedJson = JSON.stringify(saved);
+    // 落库只留记录:原图 / txt / PDF 的内容一个字节都不该在 chat_asides 里(回答里出现口令是正常的,那是模型答的)
+    const leaked = [pngB64.slice(0, 120), notesB64.slice(0, 40), 'Meeting notes, 24 October', pdfB64.slice(0, 120)].filter((s) => savedJson.includes(s)).length;
     const back = (x) => x.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
     const reversed = back(CODE).split('').reverse().join('');
     const checks = {
@@ -3875,12 +3882,12 @@ Then reply with only the command output.`,
       attachImage: !a5.error && a5.content.replace(/\D/g, '').includes(imgDigits) && a5.attached?.images === 1,
       attachFile: !a6.error && back(a6.content).includes(back(fileWord)) && a6.attached?.files?.includes('notes.txt'),
       attachPdf: !a7.error && back(a7.content).includes(pdfWord) && a7.attached?.files?.includes('code.pdf'),
-      savedMeta: savedTurn?.attachments?.[0]?.name === 'number.png' && /^data:image\/png;base64,/.test(savedTurn.attachments[0].thumb || '') && !('data' in savedTurn.attachments[0]) && !savedJson.includes(fileWord),
+      savedMeta: savedTurn?.attachments?.[0]?.name === 'number.png' && savedTurn.attachments[0].thumb === `data:image/png;base64,${thumbB64}` && !('data' in savedTurn.attachments[0]) && leaked === 0,
     };
     const ok = Object.values(checks).every(Boolean) && !a1.error && !a2.error && !mainEv.error;
     return {
       ok,
-      detail: `${Object.entries(checks).map(([k, v]) => `${k}${v ? '✓' : '✗'}`).join(' ')}${noAttach ? '(负对照:不带附件)' : ''};主会话 ${before}→${after} 行;发问时主 run ${mainBusy ? '在跑' : '已结束(未判到并发)'};流式 ${a1.deltas} 帧;图里 ${imgDigits} / 口令 ${fileWord} / PDF ${pdfWord};attached ${JSON.stringify([a5.attached, a6.attached, a7.attached])};首帧/总 ${[a1, a2, a3, a4, a5, a6, a7].map((a) => `${a.firstMs == null ? '-' : (a.firstMs / 1000).toFixed(1)}/${(a.ms / 1000).toFixed(1)}s`).join(' ')}${a1.error ? `;a1 错:${a1.error}` : ''}`,
+      detail: `${Object.entries(checks).map(([k, v]) => `${k}${v ? '✓' : '✗'}`).join(' ')}${noAttach ? '(负对照:不带附件)' : ''};主会话 ${before}→${after} 行;发问时主 run ${mainBusy ? '在跑' : '已结束(未判到并发)'};流式 ${a1.deltas} 帧;图里 ${imgDigits} / 口令 ${fileWord} / PDF ${pdfWord};attached ${JSON.stringify([a5.attached, a6.attached, a7.attached])};落库 ${saved.length} 段,那一轮附件 ${JSON.stringify((savedTurn?.attachments || []).map((a) => ({ name: a.name, thumb: (a.thumb || '').length, data: 'data' in a })))},内容泄进库 ${leaked} 处;首帧/总 ${[a1, a2, a3, a4, a5, a6, a7].map((a) => `${a.firstMs == null ? '-' : (a.firstMs / 1000).toFixed(1)}/${(a.ms / 1000).toFixed(1)}s`).join(' ')}${a1.error ? `;a1 错:${a1.error}` : ''}`,
       inconclusive: ok && !mainBusy,
       output: [a1, a2, a3, a4, a5, a6, a7].map((a, i) => `[${i + 1}] ${a.error ? `ERROR ${a.error}` : a.content}`).join('\n\n'),
     };
