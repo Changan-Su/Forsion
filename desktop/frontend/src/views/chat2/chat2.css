@@ -216,12 +216,12 @@
 .t2-user-atts .att-tile--file { max-width: 280px; }
 /* 多图叠成一摞(10-24,借鉴 Comma §2.5;组件 components/ImageStack.tsx):超过 3 张才叠。卡片大小跟 --att-tile 走
    (消息里 120px → 216×144,窄栏 96px → 173×115),左右各留两层露边的位置(2 × 7px)。
-   每张卡的槽位(位移 / 层级 / 透明度)由组件写内联,这里只管过渡与外观;翻页 240ms,甩出去的那张由 WAAPI 带(data-flying 时压掉过渡、垫到最上面)。 */
+   每张卡的槽位(位移 / 层级 / 透明度)由组件写内联,这里只管过渡与外观;翻页走 --duration-slow,甩出去的那张由 WAAPI 带(data-flying 时压掉过渡、垫到最上面)。 */
 .img-stack { --img-stack-w: calc(var(--att-tile, 120px) * 1.8); position: relative; flex: none; width: calc(var(--img-stack-w) + 28px); height: calc(var(--att-tile, 120px) * 1.2); touch-action: pan-y; }
 .img-stack-card {
   position: absolute; top: 0; left: 14px; width: var(--img-stack-w); height: 100%;
   z-index: var(--img-stack-z); border-radius: var(--radius-md); box-shadow: var(--card-shadow);
-  transition: transform 240ms var(--ease-out), opacity 240ms var(--ease-out);
+  transition: transform var(--duration-slow) var(--ease-out), opacity var(--duration-slow) var(--ease-out);
 }
 .img-stack-card[aria-hidden] { pointer-events: none; }
 .img-stack-card[data-flying] { z-index: 20; transition: none; }
@@ -240,7 +240,7 @@
   position: absolute; top: 50%; z-index: 30; width: 26px; height: 26px; margin-top: -13px;
   display: grid; place-items: center; padding: 0; border: none; border-radius: var(--radius-pill);
   background: var(--bg-card); color: var(--text); box-shadow: var(--card-shadow);
-  opacity: 0; transition: opacity 120ms;
+  opacity: 0; transition: opacity var(--duration-instant);
 }
 .img-stack-nav:hover { background: color-mix(in srgb, var(--overlay-light) 60%, var(--bg-card)); }
 .img-stack-nav:focus-visible { outline: var(--focus-ring) solid var(--signal-line); outline-offset: 1px; }
