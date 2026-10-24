@@ -189,7 +189,7 @@ export const MuseView: React.FC<{
           style={{ fontSize: 'var(--ui-font-meta, 12px)' }}
           title={status?.enabled && sleepUntil ? t('special.muse.sleepingTitle', { reason: status.sleepReason || '—' }) : undefined}
         >
-          <span className="dot" style={{ background: running ? 'var(--accent-ink)' : 'var(--text-muted)' }} />
+          <span className="dot" style={{ background: running ? 'var(--signal-mark)' : 'var(--text-muted)' }} />
           {!status?.enabled ? t('special.muse.disabled') : running ? t('special.muse.running') : sleepUntil ? t('special.muse.sleeping', { time: hhmm(sleepUntil) }) : t('special.muse.idle')}
         </span>
         <button className="icon-btn" title={t('muse.openLibrary')} onClick={() => useWorkspace.getState().openView('muse-files', {}, 'main', { newTab: true })}><FolderOpen size={13} /></button>

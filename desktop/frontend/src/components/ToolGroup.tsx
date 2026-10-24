@@ -179,8 +179,8 @@ const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc; running: boolean; waiting: 
         </span>
         <Stat d={desc} />
         <span className="tool-row-status">
-          {asking ? <PauseCircle size={11} style={{ color: 'var(--accent-ink)' }} data-waiting-you="1" aria-label={t('tool.waitingYou')}><title>{t('tool.waitingYou')}</title></PauseCircle>
-            : ev.parked ? <PauseCircle size={11} style={{ color: waiting ? 'var(--accent-ink)' : 'var(--text-faint)' }} />
+          {asking ? <PauseCircle size={11} style={{ color: 'var(--signal-mark)' }} data-waiting-you="1" aria-label={t('tool.waitingYou')}><title>{t('tool.waitingYou')}</title></PauseCircle>
+            : ev.parked ? <PauseCircle size={11} style={{ color: waiting ? 'var(--signal-mark)' : 'var(--text-faint)' }} />
             : ev.done && ev.isError ? <XCircle size={11} style={{ color: 'var(--danger)' }} /> : null}
         </span>
         {open ? <ChevronDown size={12} className="tool-row-chev" /> : <ChevronRight size={12} className="tool-row-chev" />}
@@ -291,8 +291,8 @@ export const ToolGroup: React.FC<{
             )}
             <span className="tool-group-status">
               {anyParked ? (parkedAsk
-                ? <PauseCircle size={13} style={{ color: 'var(--accent-ink)' }} data-waiting-you="1" aria-label={t('tool.waitingYou')}><title>{t('tool.waitingYou')}</title></PauseCircle>
-                : <PauseCircle size={13} style={{ color: groupedEvents.some((e) => e.parked && waitingIds.has(e.id)) ? 'var(--accent-ink)' : 'var(--text-faint)' }} />)
+                ? <PauseCircle size={13} style={{ color: 'var(--signal-mark)' }} data-waiting-you="1" aria-label={t('tool.waitingYou')}><title>{t('tool.waitingYou')}</title></PauseCircle>
+                : <PauseCircle size={13} style={{ color: groupedEvents.some((e) => e.parked && waitingIds.has(e.id)) ? 'var(--signal-mark)' : 'var(--text-faint)' }} />)
                 : allDone && anyErr ? <XCircle size={13} style={{ color: 'var(--danger)' }} /> : null}
             </span>
           </button>

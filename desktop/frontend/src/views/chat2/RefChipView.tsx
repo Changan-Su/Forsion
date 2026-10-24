@@ -23,7 +23,7 @@ import type { RefChip } from './Composer2'
 import { parseAppRefInner, type AppRef } from '../../../../shared/appRefs'
 import { AppRefIcon, appRefCardText, appRefsSupported, openAppRef, useAppRefStatus } from '../../components/appRefs'
 
-const ICON = { color: 'var(--accent-ink)', flexShrink: 0 } as const
+const ICON = { color: 'var(--signal-mark)', flexShrink: 0 } as const
 
 /** 应用 / 窗口引用的芯片(气泡开头那一行):真图标,窗口关了 / 这台设备上没有就变灰,点击切过去。 */
 function AppRefStripChip({ chip, appRef }: { chip: RefChip; appRef: AppRef }) {

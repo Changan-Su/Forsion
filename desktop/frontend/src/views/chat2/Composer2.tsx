@@ -1807,7 +1807,7 @@ export const Composer2: React.FC<{
             <div className="t2c-chiprow">
               {pinnedSkills.map((s) => (
                 <span className="attach-chip" key={`skill-${s.id}`} title={t('input.skillChipTitle')}>
-                  <Sparkles size={13} style={{ color: 'var(--accent-ink)', flexShrink: 0 }} />
+                  <Sparkles size={13} style={{ color: 'var(--signal-mark)', flexShrink: 0 }} />
                   <span>{s.name}</span>
                   <button title={t('input.remove')} onClick={() => setPinnedSkills(pinnedSkills.filter((x) => x.id !== s.id))}><X size={12} /></button>
                 </span>

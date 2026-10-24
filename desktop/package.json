@@ -359,6 +359,7 @@
     "check:quickfind": "node scripts/e2e-editor.cjs --check=quickfind-cats",
     "check:findbar": "node scripts/findbar.check.cjs",
     "check:cssvar": "node scripts/css-var-override.check.cjs",
+    "check:rawaccent": "node scripts/raw-accent.report.cjs",
     "check:shadowcontract": "node scripts/shadow-contract.check.cjs",
     "check:motion": "node scripts/motion.check.cjs",
     "check:shadowsurface": "node scripts/shadow-surface.check.cjs",
