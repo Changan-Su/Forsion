@@ -26,6 +26,8 @@ const current = new WeakMap<HTMLElement, string>()
 /** 刚藏起来的那一下:同一个落点很快又显示回来(编辑器在同一个 dragover 里先藏后画、或下一拍接着画)就当没藏过。 */
 const lastHide = new WeakMap<HTMLElement, { key: string; ghost: HTMLElement | null; at: number }>()
 const REHIDE_MS = 80
+/** 每个落点元素名下还在淡出的影子:销毁时一起收(插件停用那一刻不许留尾巴)。 */
+const ghostsOf = new WeakMap<HTMLElement, Set<HTMLElement>>()
 
 const shown = (el: HTMLElement): boolean => el.isConnected && getComputedStyle(el).display !== 'none'
 
@@ -57,8 +59,12 @@ function leaveGhost(el: HTMLElement): HTMLElement | null {
   g.style.pointerEvents = 'none'
   g.style.animation = 'none'
   parent.insertBefore(g, el)
+  let set = ghostsOf.get(el)
+  if (!set) ghostsOf.set(el, (set = new Set()))
+  set.add(g)
+  const done = (): void => { g.remove(); set!.delete(g) }
   const a = g.animate([{ opacity: cs.opacity }, { opacity: 0 }], { duration: DROP_OUT_MS, easing: 'ease-out', fill: 'forwards' })
-  a.finished.then(() => g.remove(), () => g.remove())
+  a.finished.then(done, done)
   return g
 }
 
@@ -125,23 +131,25 @@ function fixedOrigin(el: HTMLElement): { x: number; y: number } {
 export function createDropIndicator(opts: { host?: HTMLElement; className?: string } = {}): DropIndicator {
   let el: HTMLDivElement | null = null
   const ensure = (): HTMLDivElement => {
-    if (el?.isConnected) return el
-    el = document.createElement('div')
-    el.className = `lcl-drop-ind${opts.className ? ` ${opts.className}` : ''}`
-    el.setAttribute('aria-hidden', 'true')
-    ;(opts.host ?? document.body).appendChild(el)
+    const host = opts.host ?? document.body
+    if (!el) {
+      el = document.createElement('div')
+      el.className = `lcl-drop-ind${opts.className ? ` ${opts.className}` : ''}`
+      el.setAttribute('aria-hidden', 'true')
+    }
+    if (el.parentElement !== host) host.appendChild(el) // 建过就复用:host 还没挂进文档时也不另起一个
     return el
   }
   const place = (r: Required<DropRect>, shape: DropShape, axis: 'h' | 'v', key: string): void => {
     const d = ensure()
-    d.classList.toggle('lcl-drop-ind--zone', shape === 'zone')
-    d.classList.toggle('lcl-drop-ind--v', shape === 'line' && axis === 'v')
     // 先显示再量:display:none 的元素 currentCSSZoom 恒为 1(见 WorkspaceHost showTarget)
     const wasHidden = !shown(d)
     if (wasHidden) d.style.display = 'block'
     const z = zoomOf(d), o = fixedOrigin(d)
     if (wasHidden) d.style.display = 'none'
-    dropRetarget(d, `${shape}:${key}`, { shape, axis })
+    dropRetarget(d, `${shape}:${key}`, { shape, axis }) // 先留旧样子的影子,再换形状
+    d.classList.toggle('lcl-drop-ind--zone', shape === 'zone')
+    d.classList.toggle('lcl-drop-ind--v', shape === 'line' && axis === 'v')
     d.style.display = 'block'
     d.style.left = `${(r.x - o.x) / z}px`
     d.style.top = `${(r.y - o.y) / z}px`
@@ -157,6 +165,11 @@ export function createDropIndicator(opts: { host?: HTMLElement; className?: stri
     },
     zone(rect, o = {}) { place(rect, 'zone', 'h', o.key ?? auto(rect)) },
     hide() { dropHide(el) },
-    destroy() { if (el) { current.delete(el); el.remove(); el = null } },
+    destroy() {
+      if (!el) return
+      for (const g of ghostsOf.get(el) ?? []) g.remove()
+      ghostsOf.delete(el); lastHide.delete(el); current.delete(el)
+      el.remove(); el = null
+    },
   }
 }

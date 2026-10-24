@@ -102,6 +102,24 @@ describe('dropRetarget', () => {
 })
 
 describe('createDropIndicator', () => {
+  it('host 还没挂进文档:反复画也只有一个元素,销毁后一个不剩(连淡出中的影子)', () => {
+    const host = document.createElement('div')
+    const d = createDropIndicator({ host })
+    d.line({ x: 0, y: 0, w: 10 }); d.line({ x: 0, y: 5, w: 10 }); d.line({ x: 0, y: 9, w: 10 })
+    expect(host.querySelectorAll('.lcl-drop-ind')).toHaveLength(1)
+    d.destroy()
+    expect(host.children).toHaveLength(0)
+  })
+  it('线换成描边:影子是旧的那根线,不是描边', () => {
+    const d = createDropIndicator()
+    d.line({ x: 0, y: 10, w: 100 })
+    d.zone({ x: 0, y: 0, w: 50, h: 30 })
+    const g = ghosts()[0] as HTMLElement
+    expect(g.style.width).toBe('100px')
+    d.destroy()
+    expect(ghosts(), '销毁时影子一起收').toHaveLength(0)
+  })
+
   it('线 / 描边按视口坐标落位,换形状算换落点,destroy 收走元素', () => {
     const d = createDropIndicator({ className: 'my-drop' })
     d.line({ x: 10, y: 20, w: 100 })

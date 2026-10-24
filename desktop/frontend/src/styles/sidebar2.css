@@ -328,7 +328,7 @@
 }
 .t2s-group.drag-over::before { opacity: 1; scale: 1; transition: var(--lcl-drop-enter); }
 /* 下移:落点在目标整块之下 —— 收起态块 = 组头本身,展开态块的下沿 = 会话容器下沿。 */
-.t2s-group.drag-over.below::before { top: auto; bottom: -4px; }
+.t2s-group.drag-over.below::before { top: calc(100% + 1px); } /* = bottom: -4px;写成 top 才能等离场淡完再变 */
 .t2s-group-sessions::after {
   content: '';
   position: absolute;
@@ -630,7 +630,7 @@
   opacity: 0; scale: .6 1; transform-origin: left center; transition: var(--lcl-drop-leave);
 }
 .t2sw-plug-ghead.drag-over::before { opacity: 1; scale: 1; transition: var(--lcl-drop-enter); }
-.t2sw-plug-ghead.drag-over.below::before { top: auto; bottom: -2px; }
+.t2sw-plug-ghead.drag-over.below::before { top: calc(100% - 1px); } /* = bottom: -2px */
 .t2sw-plug-ghead.dragging { opacity: 0.4; }
 /* 组里的行前导槽里只有这一颗:未读的圆点(和 .t2s-dot.unread 同色同大,只是不贴在图标角上) */
 .t2sw-plug-udot { width: 6px; height: 6px; border-radius: 50%; background: var(--signal-line); }

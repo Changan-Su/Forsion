@@ -240,7 +240,7 @@ html.rb-pointer-dragging, html.rb-pointer-dragging * { cursor: grabbing !importa
 }
 .rb-fly-row.drag-over::before { opacity: 1; scale: 1; transition: var(--lcl-drop-enter); }
 /* 下移:落点在该行之下,线画下沿(悬停谁就顶掉谁 → 线必须画在真正的落点上)。 */
-.rb-fly-row.drag-over.below::before { top: auto; bottom: -3px; }
+.rb-fly-row.drag-over.below::before { top: 100%; } /* = bottom: -3px;写成 top 才能等离场淡完再变 */
 
 /* ===== ribbon 右键 / ＋ 菜单(轻量,复用命令面板卡片观感) ===== */
 /* ===== Space 左面板悬停预览(左面板收起时指针停在 Space 图标上;卡片见 SpacePeek.tsx,规则见 spacePeekRules.ts) =====
