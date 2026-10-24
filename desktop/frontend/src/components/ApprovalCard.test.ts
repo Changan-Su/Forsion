@@ -173,6 +173,11 @@ describe('散文类预览(previewI18n)跟随界面语言', () => {
     expect(await shown({ ...publish, previewI18n: { key: 'approval.preview.notYet' } }, 'zh')).toBe(enPublish)
   })
 
+  it('词条要的值缺一个(重放的畸形事件):退回英文 preview,不显示 {slug}', async () => {
+    expect(await shown({ ...publish, previewI18n: { key: 'approval.preview.webUnpublish' } }, 'zh')).toBe(enPublish)
+    expect(await shown({ ...publish, previewI18n: { key: 'approval.preview.webPublish', vars: { path: 'a.html', name: 'a' } } }, 'zh')).toBe(enPublish)
+  })
+
   it('清洗:键只认 approval.preview.*,vars 有一个不是串 / 有限数就整份丢', () => {
     expect(sanitizeApprovalPreviewI18n({ key: 'approval.preview.resetCard' })).toEqual({ key: 'approval.preview.resetCard' })
     expect(sanitizeApprovalPreviewI18n({ key: 'approval.approve' })).toBeUndefined()

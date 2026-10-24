@@ -143,6 +143,8 @@ export function sanitizeApprovalPreviewI18n(raw: unknown): ApprovalPreviewI18n |
 export function approvalPreviewText(req: Pick<ApprovalRequest, 'preview' | 'previewI18n'>, t: (k: string, v?: Record<string, unknown>) => string): string {
   const p = req.previewI18n
   if (!p) return req.preview
-  const s = t(p.key, p.vars)
-  return s === p.key ? req.preview : s
+  const tpl = t(p.key)
+  // 词条里的占位符缺一个值都不用(Codex):`下线「{slug}」` 会把要删的是哪个藏起来,英文 preview 却是全的
+  if (tpl === p.key || [...tpl.matchAll(/\{(\w+)\}/g)].some((m) => !p.vars || !(m[1] in p.vars))) return req.preview
+  return t(p.key, p.vars)
 }
