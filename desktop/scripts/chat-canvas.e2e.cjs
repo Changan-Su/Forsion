@@ -734,6 +734,17 @@ async function main() {
     await win.keyboard.press('Escape')
     const hand1 = await win.evaluate(() => document.querySelector(".t2cv").hasAttribute("data-hand"))
     r.check('HD1 「视图 → 抓手」开着时 Esc 先退抓手', hand0 && !hand1, JSON.stringify({ hand0, hand1 }))
+    // 「视图」菜单用键盘也能走:Enter 打开焦点进菜单、↓ 换项、Esc 关掉焦点回到那颗钮
+    await win.locator('[data-testid="cv-view"]').focus()
+    await win.keyboard.press('Enter')
+    await win.locator('.ctx-menu').waitFor({ timeout: 3_000 })
+    const km0 = await win.evaluate(() => document.activeElement?.closest('.ctx-menu') ? document.activeElement.getAttribute('aria-label') || document.activeElement.textContent : null)
+    await win.keyboard.press('ArrowDown')
+    const km1 = await win.evaluate(() => document.activeElement?.closest('.ctx-menu') ? document.activeElement.getAttribute('aria-label') || document.activeElement.textContent : null)
+    await win.keyboard.press('Escape')
+    await win.locator('.ctx-menu').waitFor({ state: 'detached', timeout: 2_000 }).catch(() => {})
+    const kmBack = await win.evaluate(() => document.activeElement?.dataset.testid)
+    r.check('KM1 「视图」菜单键盘可走:打开即聚焦第一项、↓ 换项、Esc 回到「视图」钮', !!km0 && !!km1 && km0 !== km1 && kmBack === 'cv-view', JSON.stringify({ km0, km1, kmBack }))
 
     // ── 观感:亮 / 暗 / 柔青 ──
     await win.waitForTimeout(500)

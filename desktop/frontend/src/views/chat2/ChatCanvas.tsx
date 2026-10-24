@@ -250,8 +250,6 @@ function answerLead(c: { answers: UiMessage[]; user?: UiMessage }): string {
   return [...s].length > 16 ? `${[...s].slice(0, 16).join('')}…` : s
 }
 // 卡里:「从这里分出」不画在消息里(会被折起的正文裁掉),画在卡底,分支不列(已经是卡);阅读栏:照常画在消息里,分支不列
-const CARD_FORKS: ForkScopeValue = { inline: false, hideBranches: true }
-const READ_FORKS: ForkScopeValue = { inline: true, hideBranches: true }
 const reduceMotion = (): boolean => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches
 /** 「跳到某处」那条曲线:快出、落点带一点点过冲(约 1.5%),同 Amadeus 画布聚焦 */
 const settleCurve = (t: number): number => { const u = t - 1; return 1 + 1.5 * u ** 3 + 0.5 * u ** 2 }
@@ -280,6 +278,8 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onChat, exiting, onEx
   useEffect(() => { for (const id of ids) void useApp.getState().loadSessionHistory(id) }, [ids])
   const tree = useMemo(() => buildTurnTree(rootId, branches, (sid) => msgs[sid]), [rootId, branches, msgs])
   const [pref, setPref] = useChatCanvasPref(rootId)
+  const cardForks = useMemo<ForkScopeValue>(() => ({ inline: false, hideBranches: true, host: activeId }), [activeId])
+  const readForks = useMemo<ForkScopeValue>(() => ({ inline: true, hideBranches: true, host: activeId }), [activeId])
   const draft = pref.draft && tree.cards.has(pref.draft.parent) ? pref.draft : null
 
   // ── 量格子高(布局用)、回答卡在格子里的偏移(横排的线用)、正文是否超长(预览用):一个 ResizeObserver ──
@@ -537,16 +537,21 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onChat, exiting, onEx
   useEffect(() => {
     const el = host.current
     if (!el) return
-    let w0 = 0
+    // 等宽度停下来再比(面板开合有动画、分隔条会被慢慢拖):跟上一次处理过的宽度比,不跟上一帧比 —— 一帧挪几像素永远够不到 24(Codex 评审)
+    let done = 0, timer = 0
     const ro = new ResizeObserver(() => {
-      const { w } = hostSize(el)
-      const was = w0
-      w0 = w
-      const { reveal: go, key } = latest.current
-      if (was && Math.abs(w - was) >= 24 && key && !followRef.current) go(key, true)
+      if (!done) { done = hostSize(el).w; return }
+      clearTimeout(timer)
+      timer = window.setTimeout(() => {
+        const { w } = hostSize(el)
+        if (Math.abs(w - done) < 24) return
+        done = w
+        const { reveal: go, key } = latest.current
+        if (key && !followRef.current) go(key, true)
+      }, 120)
     })
     ro.observe(el)
-    return () => ro.disconnect()
+    return () => { ro.disconnect(); clearTimeout(timer) }
   }, [])
   const openReading = (key: string): void => {
     if (!tree.cards.has(key)) return
@@ -690,7 +695,8 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onChat, exiting, onEx
     const world = host.current?.querySelector('.t2cv-world')
     if (!el || !world || !host.current) return null
     const e = el.getBoundingClientRect(), w = world.getBoundingClientRect(), hr = host.current.getBoundingClientRect(), z0 = view.vp.z // DOM 上是这一帧画出来的视口
-    return { z: 1, x: a.left - hr.left - (e.left - w.left) / z0, y: a.top - hr.top - (e.top - w.top) / z0 }
+    const u = hostSize(host.current).u // 屏幕像素 ÷ 整窗缩放 = 视口用的 CSS 像素(用户开发版常年 110%)
+    return { z: 1, x: (a.left - hr.left) / u - (e.left - w.left) / (z0 * u), y: (a.top - hr.top) / u - (e.top - w.top) / (z0 * u) }
   }
   const entered = useRef(!enterFrom)
   useLayoutEffect(() => {
@@ -762,7 +768,8 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onChat, exiting, onEx
     if (streamKey) { followRef.current = true; setFollow(true); return }
     const k = activePath[activePath.length - 1]
     const b = k ? boxesRef.current.get(k) : undefined
-    if (b) { release(); fly(readingVp(b, view.vpRef.current), JUMP_MS) }
+    // 不 release:它会把刚写完、还展开着的那张收回预览,落点却是按展开的高度算的 → 落进卡下面的空白(Codex 评审)
+    if (b) fly(readingVp(b, view.vpRef.current), JUMP_MS)
   }
   /** 缩放胶囊 / ⌘+ ⌘− ⌘0:以舞台中心为锚,走「跳到某处」那条曲线;连按几下按上一次的终点接着算 */
   const zoomStep = (f: number): void => {
@@ -874,6 +881,16 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onChat, exiting, onEx
 
   // ── 右键:回答卡 / 提问卡 / 空白处 ──
   const [menu, setMenu] = useState<CtxMenu>(null)
+  // 「视图」菜单(胶囊上那颗)开着时焦点进菜单、方向键能走;关掉时焦点还在菜单里就回到那颗钮(Codex 评审)
+  const [menuFocus, setMenuFocus] = useState(false)
+  const viewBtn = useRef<HTMLButtonElement>(null)
+  const closeMenu = (): void => {
+    setMenu(null)
+    if (!menuFocus) return
+    setMenuFocus(false)
+    const a = document.activeElement
+    if (!a || a === document.body || a.closest('.ctx-menu')) viewBtn.current?.focus({ preventScroll: true })
+  }
   const [renaming, setRenaming] = useState<string | null>(null) // 正在改名的那一支(卡 key)
   const copy = (text: string): void => { try { void navigator.clipboard.writeText(text) } catch { /* ignore */ } }
   /** 这张卡是不是一支的开头(这一支自己的第一轮):重命名 / 归档挂在它上面 */
@@ -937,6 +954,7 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onChat, exiting, onEx
     if (key === DRAFT) return // 草稿卡里是在打字
     const part = document.elementFromPoint(at.clientX, at.clientY)?.closest('[data-cv-part="q"]') ? 'q' : 'a'
     // 右键只弹菜单、不选中:选中别的支上的卡会把主区切过去,那张卡就落到当前这一支上,「收起」永远收不了
+    setMenuFocus(false)
     setMenu({ x: at.clientX, y: at.clientY, items: menuFor(key, part) })
   }
   const commitRename = (key: string, title: string): void => {
@@ -1052,7 +1070,7 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onChat, exiting, onEx
             <span>{t('chatcanvas.hint.menu')}</span>
           </div>
         )}
-        <ForkScope.Provider value={CARD_FORKS}>
+        <ForkScope.Provider value={cardForks}>
         <div className="t2cv-world" style={{ transform: `translate(${vp.x}px, ${vp.y}px) scale(${vp.z})` }}>
           <svg className="t2cv-edges" aria-hidden="true">
             {[...boxes.keys()].map((k) => {
@@ -1181,8 +1199,8 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onChat, exiting, onEx
             onFit={fitAll}
             extra={<>
               <button
-                type="button" className="t2cv-hud-view" aria-haspopup="menu" data-testid="cv-view" title={t('chatcanvas.view')}
-                onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setMenu({ x: r.left, y: r.bottom + 6, anchorTop: r.top - 6, items: menuFor(null, 'a') }) }}
+                ref={viewBtn} type="button" className="t2cv-hud-view" aria-haspopup="menu" data-testid="cv-view" title={t('chatcanvas.view')}
+                onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setMenuFocus(true); setMenu({ x: r.left, y: r.bottom + 6, anchorTop: r.top - 6, items: menuFor(null, 'a') }) }}
               ><span>{t('chatcanvas.view')}</span><ChevronDown size={11} /></button>
               <button
                 type="button" className={helpAt ? 'is-on' : ''} aria-pressed={!!helpAt} aria-label={t('chatcanvas.help')} title={t('chatcanvas.help')} data-testid="cv-help"
@@ -1223,7 +1241,7 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onChat, exiting, onEx
           </div>
           {/* 换一轮 = 换一块正文(从头读、按方向滑进来) */}
           <div key={paneCard.key} className="t2cv-read-b" data-dir={readDir || undefined}>
-            <ForkScope.Provider value={READ_FORKS}>
+            <ForkScope.Provider value={readForks}>
               {paneCard.answers.map((m) => (
                 <EditorialMessage key={m.id} msg={m} fileCtx={ctxFor(paneCard.sid)} handlers={handlersFor(paneCard.sid, m.id)} showWaitDetails={showWaitDetails} />
               ))}
@@ -1257,7 +1275,7 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onChat, exiting, onEx
         </button>
       )}
       {!tree.cards.size && !loading && <div className="t2cv-empty">{t('chatcanvas.empty')}</div>}
-      {menu && <ContextMenu menu={menu} onClose={() => setMenu(null)} />}
+      {menu && <ContextMenu menu={menu} autoFocus={menuFocus} onClose={closeMenu} />}
       {helpAt && (
         <HelpPop at={helpAt} onClose={() => setHelpAt(null)}>
           <span>{t('chatcanvas.hint.read')}</span>

@@ -599,6 +599,7 @@ export function ChatView({ leaf, params }: ViewProps) {
   const deskQuote = useCallback((text: string) => setQuoteDraft((prev) => quoteAdded(prev, quoteSid, text)), [quoteSid])
   // 插件结果卡片的 Desk 落点只在 Desk 真看得见时成立(判定在 toolCardDeskFor;这里量聊天视图宽度,对齐 CSS 容器查询)
   const chatViewRef = useRef<HTMLDivElement>(null)
+  const chatColRef = useRef<HTMLDivElement>(null)
   const [chatViewW, setChatViewW] = useState(Infinity)
   useEffect(() => {
     const el = chatViewRef.current
@@ -723,7 +724,7 @@ export function ChatView({ leaf, params }: ViewProps) {
           a conversation is on screen and at its end (it is laid out from the bottom up there, so it lands where layout
           puts it afterwards), the input alone otherwise: an empty chat's mark is centred, not bottom-anchored.
           Markers only; nothing reads them elsewhere. */}
-      <div className="t2-chat-col" data-kb-rise={anyShown ? 'end' : undefined}>
+      <div ref={chatColRef} className="t2-chat-col" data-kb-rise={anyShown ? 'end' : undefined}>
       {/* 头行只盖这一列(右栏卡片不动、不放会话标题);画布模式下它浮在舞台上面 */}
       <ViewHead leafId={leaf.id} testId="chat-canvas-seg" />
       <ErrorBoundary key={activeId || 'none'}>
@@ -838,7 +839,7 @@ export function ChatView({ leaf, params }: ViewProps) {
               行为与原来的胶囊菜单一字不差;翻译和插件动作(⋯)由共用的那一层给。条自己 portal 到 body。 */}
           <ViewSelectionBar
             view="chat"
-            watch={canvasOn ? chatViewRef : chatScrollRef} // 画布开着:卡和右边阅读栏都在对话流外面,看整个对话视图
+            watch={canvasOn ? chatColRef : chatScrollRef} // 画布开着:卡和右边阅读栏都在对话流外面,看这一列(别看整个视图:右边子会话面板里嵌着另一个 ChatView,两条菜单会叠在一起 —— Codex 评审)
             watchKey={`${activeId}:${activeMessages.length}:${canvasOn ? 'canvas' : 'chat'}`}
             dense={leaf.type === 'chat-panel'}
             source={() => ({ title: activeSession?.title || undefined, sessionId: activeId || undefined })}

@@ -175,12 +175,13 @@ const NO_ASIDES: SavedAside[] = []
  *  ponytail: 分支只认来源会话里的这条消息;在分支里看,分叉前那几条是复制出来的新 id,兄弟分支不挂在它们下面(画布那一步按时间对齐)。 */
 /** 「从这里分出」画在哪:对话页 = 消息里、分支也列;画布卡 = 分支已经是卡,不列;卡里还要挪到正文外面(长卡的正文会被折起,块不能跟着被裁),
  *  所以 inline:false = 消息里不画,由 ChatCanvas 画在卡底;阅读栏不折,照常画在消息里、只藏分支。 */
-export interface ForkScopeValue { inline: boolean; hideBranches: boolean }
+/** host:子会话面板挂在哪个会话下(主区正开着的那一支)。画布里共享的祖先卡属于树根,不传就开在树根下、主区看不见 */
+export interface ForkScopeValue { inline: boolean; hideBranches: boolean; host?: string }
 export const ForkScope = createContext<ForkScopeValue>({ inline: true, hideBranches: false })
 
 export function ForkBlock({ sessionId, messageId, childIds, onSuggest }: { sessionId: string; messageId: string; childIds: string[]; onSuggest?: (text: string) => void }) {
   const { t } = useI18n()
-  const { hideBranches } = useContext(ForkScope)
+  const { hideBranches, host } = useContext(ForkScope)
   const sessions = useApp((s) => s.sessions)
   const running = useApp((s) => s.runningBySession)
   const unread = useApp((s) => s.unread)
@@ -204,7 +205,7 @@ export function ForkBlock({ sessionId, messageId, childIds, onSuggest }: { sessi
       </div>
       {branches.map((b) => <BranchRow key={b.id} s={b} status={stOf(b)} />)}
       {asides.map((a) => <AsideRow key={a.id} sessionId={sessionId} aside={a} />)}
-      {kids.map((k, i) => <ChildRow key={k.id} parentId={sessionId} s={k} status={st[i]} onSuggest={onSuggest} />)}
+      {kids.map((k, i) => <ChildRow key={k.id} parentId={host ?? sessionId} s={k} status={st[i]} onSuggest={onSuggest} />)}
     </div>
   )
 }
