@@ -32,7 +32,7 @@ export function skillVersion(text: string): string | null {
   if (!fm) return null
   const top = /(?:^|\n)version\s*:\s*["']?([^"'\n]+)/.exec(fm)
   if (top) return top[1].trim() || null
-  const meta = /(?:^|\n)metadata\s*:[ \t]*\r?\n((?:[ \t]+[^\n]*(?:\n|$))*)/.exec(fm)?.[1]
+  const meta = /(?:^|\n)metadata\s*:[ \t]*\r?\n((?:(?:[ \t]+[^\n]*|\r?)(?:\n|$))*)/.exec(fm)?.[1] // 块里的空行照样算块内(YAML 合法)
   const nested = meta && /(?:^|\n)[ \t]+version\s*:\s*["']?([^"'\n]+)/.exec(meta)
   return nested ? nested[1].trim() || null : null
 }

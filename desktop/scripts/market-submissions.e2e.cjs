@@ -42,7 +42,7 @@ async function main() {
     const u = new URL(req.url, 'http://fixture'), p = u.pathname, dry = u.searchParams.get('dryRun') === '1'
     const send = (code, data) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(data)) }
     if (p === '/api/brain/users/me' || p === '/api/auth/me') return send(200, { id: 'fixture-user', username: 'fixture', nickname: 'Fixture', role: 'USER', membershipTier: 'free' })
-    if (p === '/api/market/mine' && req.method === 'GET') { reads.push(req.headers.authorization); return state === 'signedout' ? send(401, {}) : state === 'error' ? send(503, { detail: 'Fixture offline' }) : send(200, { items }) }
+    if (p === '/api/market/mine' && req.method === 'GET') { reads.push(req.headers.authorization); return state === 'signedout' ? send(401, {}) : state === 'error' ? send(503, { detail: 'Fixture offline' }) : send(200, { items, dryRun: true }) }
     if (p === '/api/market/items') return send(200, { items: [] })
     const update = p.match(/^\/api\/market\/mine\/([^/]+)\/update$/)
     if (p === '/api/market/submit' || update) {
