@@ -1703,6 +1703,8 @@ async function wave5(browser) {
     await record5()
     await pg.click('.amx-stage-hud button[title="放大"]')
     await pg.click('.amx-stage-hud button[title="放大"]')
+    // 等一帧再读:第二下只改了终点,重渲跟着下一帧的视口一起来。50ms 时动画才走到一半左右,显示的若是实时倍率会是 13x%
+    await pg.waitForTimeout(50)
     const pctNow = await pg.evaluate(() => document.querySelector('.amx-stage-hud .amx-hud-zoom')?.textContent?.trim() ?? null)
     await pg.waitForTimeout(750)
     const zSamples = await samples()
