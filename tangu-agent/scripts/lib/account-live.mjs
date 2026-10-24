@@ -123,8 +123,9 @@ export async function accountLive({ run, api, sleep, cloud }) {
       () => { sentBeforeAnswer = cloud.posts(path).length - before; return 'approve'; });
     const ask = ev.approvalList.find((a) => a.name === 'forsion_account_action');
     const sent = cloud.posts(path).length - before;
-    leg('用重置卡(聊天会话 + 完全通行):照样弹卡,批准后只发一次', !ev.error && !!ask && ask.reason === 'always' && sentBeforeAnswer === 0 && sent === 1,
-      ev.error || `${ask ? `弹卡(原因 ${ask.reason})` : '✗ 没弹卡'};批准前已发 ${sentBeforeAnswer ?? '-'} 次;共发 ${sent} 次`, ev);
+    const i18n = ask?.previewI18n?.key === 'approval.preview.resetCard'; // 卡上那句按界面语言渲染的结构化版(10-24)
+    leg('用重置卡(聊天会话 + 完全通行):照样弹卡,批准后只发一次,卡带本地化预览', !ev.error && !!ask && ask.reason === 'always' && sentBeforeAnswer === 0 && sent === 1 && i18n,
+      ev.error || `${ask ? `弹卡(原因 ${ask.reason})` : '✗ 没弹卡'};批准前已发 ${sentBeforeAnswer ?? '-'} 次;共发 ${sent} 次;预览键 ${ask?.previewI18n?.key ?? '✗ 没有'}`, ev);
   }
   // 5. Rejected on the card → nothing is sent, and the reply does not claim it was done.
   {
@@ -134,8 +135,9 @@ export async function accountLive({ run, api, sleep, cloud }) {
     const ask = ev.approvalList.find((a) => a.name === 'forsion_account_action');
     const sent = cloud.posts(path).length - before;
     const claimed = /(已经?|成功)(帮你|为你)?(挪|转|移)/.test(ev.content) && !/没有|未|没能|拒绝|取消|未能/.test(ev.content);
-    leg('挪额度被用户拒绝:不发请求,不谎称做了', !ev.error && !!ask && ask.reason === 'always' && sent === 0 && !claimed,
-      ev.error || `${ask ? `弹卡(原因 ${ask.reason})` : '✗ 没弹卡'};发了 ${sent} 次${claimed ? ';✗ 回复声称已挪' : ''}`, ev);
+    const i18n = ask?.previewI18n?.key === 'approval.preview.moveQuota' && ask.previewI18n.vars?.percent === 30;
+    leg('挪额度被用户拒绝:不发请求,不谎称做了;卡带本地化预览(30%)', !ev.error && !!ask && ask.reason === 'always' && sent === 0 && !claimed && i18n,
+      ev.error || `${ask ? `弹卡(原因 ${ask.reason})` : '✗ 没弹卡'};发了 ${sent} 次${claimed ? ';✗ 回复声称已挪' : ''};预览 ${ask?.previewI18n ? JSON.stringify(ask.previewI18n) : '✗ 没有'}`, ev);
   }
 
   const bad = legs.filter((l) => !l.ok);

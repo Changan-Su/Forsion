@@ -1,18 +1,21 @@
 import { MessageCircle, MessageCircleQuestion, BookOpen, FolderOpen, Bot, Users } from 'lucide-react'
 import { addCommand, registerView, useWorkspace } from '@lcl/engine'
 import { activeChatModelId, useApp } from '../stores/appStore'
+import { TANGU_SLICE } from '../tangu/store/tanguSlice'
 import { translate } from '../i18n'
 import { ChatView } from '../views/ChatView'
 import { ChatPreview } from '../views/chat2/ChatPreview'
-import { BtwSideView } from '../views/chat2/BtwPanel'
-import { openBtw } from '../views/chat2/btwStore'
+import { BtwHost, BtwPanel, BtwSideView } from '../views/chat2/BtwPanel'
+import { btwSeedOf, btwWebVisible, openBtw, quoteInMainChat, useBtw } from '../views/chat2/btwStore'
+import { FilesPanel, bumpDir } from '../views/chat2/FilesPanel'
 import { ensureAppRefCommand } from '../views/chat2/appRefCommand'
 import { MemoryPanelView, SubchatsView, SessionFilesView, TocView } from '../views/RightViews'
-import { AgentsDetailSpecialView, WorkspaceDetailSpecialView } from '../views/SpecialViews'
+import { AgentsDetailSpecialView, WorkspaceDetailSpecialView, openSpecial } from '../views/SpecialViews'
 import { AgentsSpaceView, AgentsRosterView, TanguDetailsView } from '../views/AgentProfileView'
-import { hasNativeFeature } from './runtime'
+import { hasNativeFeature, tanguProbeAvailable } from './runtime'
+import { quoteInChatPanel } from '../views/chat2/chatPanelQuote'
 import { SessionTabIcon } from '../components/SessionIcon'
-import { setTanguChatOutline, setTanguChatViews, setTanguInboxTasks, setTanguNewChat, setTanguPrefs, setTanguSidebarModes } from '../amadeus/plugins/tanguSeam'
+import { setTanguChatOutline, setTanguChatViews, setTanguInboxTasks, setTanguNewChat, setTanguPrefs, setTanguShell, setTanguSidebarModes, type TanguHost } from '../amadeus/plugins/tanguSeam'
 import { inboxTasks } from '../views/chat2/inboxTasks'
 import { isChatAvatarsOn, setChatAvatarsOn } from '../views/chat2/chatAvatars'
 import { isPromptSuggestOn, setPromptSuggest } from '../views/chat2/promptSuggest'
@@ -26,7 +29,7 @@ const CHAT_RIGHT = [{ type: 'tangu-details', params: {} }, { type: 'workspace', 
 const app = () => useApp.getState()
 const ws = () => useWorkspace.getState()
 
-export const blankNewChat = (): void => {
+const blankNewChat = (): void => {
   const s = app()
   s.setActiveId(null)
   s.setNewChatWs(null)
@@ -42,8 +45,31 @@ const splitChat = (): void => {
   ws().splitActive('right', { followActive: false, sessionId: pinned, reuseKey: `session:${pinned || 'new'}` })
 }
 
-/** Tangu 的命令(核心插件化 2e-4,原在 bootstrapEngine;第 3 步进包的 setup)。bootstrapEngine 在原来那一处调,
- *  命令面板 / 快捷键表里这几条从此挨在一起。 */
+/** Tangu 唯一的入口(界面热更新 3b / 3c):store 半身、视图、给宿主的接缝、ctx.tangu 探针、命令都从这里进,宿主(installEngine)只调这一个。
+ *  第 4 步打包版从界面包里取同一个函数;`host` 只装入口 import 不到的宿主私有件。
+ *  **无条件调用、按段门控**:探针的门比 Tangu 宽 —— automation-only / 老档案没有 Tangu 界面,插件照样要 ctx.tangu
+ *  (模型 / agent / startChat),只是没有对话那几块。排在布局恢复与插件宿主之前:视图要先进注册表,
+ *  ctx.tangu 的有无在建 plugin context 那一刻定。 */
+export function activateTangu(host: TanguHost): void {
+  // store 半身先装(不看档案:宿主的连接 / 换号流程也读写会话字段,automation-only 档案同样要)
+  host.installSlice(TANGU_SLICE)
+  // 宿主外壳用的界面件(旁聊、文件树、特殊视图;3d):以前是宿主静态 import 的,任何档案都有 —— 同样不看档案
+  setTanguShell({
+    BtwHost, BtwPanel, btwSeedOf, quoteInMainChat,
+    btwPageVisible: (activeId) => btwWebVisible(useBtw.getState().webOpen, activeId),
+    closeBtwPage: () => useBtw.getState().closeWeb(),
+    subscribeBtw: (cb) => useBtw.subscribe(cb),
+    FilesPanel, bumpDir, openSpecial,
+  })
+  registerTanguViews()
+  if (tanguProbeAvailable()) {
+    // 编辑器「问 Tangu」只在注册了 chat-panel 的宿主上给(与 registerTanguViews 同一个谓词)
+    host.installProbe(hasNativeFeature('tangu') ? { askInChat: quoteInChatPanel } : {})
+  }
+  registerTanguCommands()
+}
+
+/** Tangu 的命令(核心插件化 2e-4,原在 bootstrapEngine)。命令面板 / 快捷键表里这几条挨在一起。 */
 export function registerTanguCommands(): void {
   // 应用 / 窗口引用的快捷键(双 ⌘):开机就注册,别等第一张输入卡 —— 停在没有输入卡的 Space 上启动时全局那条订阅会一直没人要。
   // 写进笔记那条路不要对话,所以照旧不随 tangu 门控(没装 Tangu 时它还该不该在,第 3 步定)。
@@ -64,7 +90,7 @@ export function registerTanguCommands(): void {
   addCommand({
     id: 'show-chat-panel',
     icon: MessageCircle,
-    title: () => translate('bootengine.cmd.showChatPanel'),
+    title: () => translate('tangu.cmd.showChatPanel'),
     keywords: 'chat panel side conversation 侧栏 对话 面板',
     run: () => ws().showSideView('right', 'chat-panel'),
   })
@@ -80,7 +106,7 @@ export function registerTanguViews(): void {
   // 主页的新对话输入区(和 ctx.tangu.mountComposer)是 Tangu 交出的同一份;工作区侧栏的轨道 / 会话列表两种模式也由 Tangu 交出。
   setTanguInboxTasks(inboxTasks)
   setTanguPrefs({ chatAvatars: { get: isChatAvatarsOn, set: setChatAvatarsOn }, promptSuggest: { get: isPromptSuggestOn, set: setPromptSuggest } })
-  setTanguNewChat({ Composer: NewChatComposer, send: sendFromNewChat, startCall: startNewChatCall, mount: mountNewChatComposer })
+  setTanguNewChat({ Composer: NewChatComposer, send: sendFromNewChat, startCall: startNewChatCall, mount: mountNewChatComposer, blank: blankNewChat })
   setTanguSidebarModes({ Orbits: OrbitsView, Sessions: SessionsView })
   setTanguChatOutline(TocView) // 「大纲」视图在主区是对话时画会话目录
   setTanguChatViews({ Chat: ChatView, Preview: ChatPreview }) // 宿主嵌固定会话处(图像工作室 / 插件聊天 / mini)与外观预览窗口
@@ -91,7 +117,7 @@ export function registerTanguViews(): void {
   registerView({ type: 'chat', kind: 'entity', rightCompanions: CHAT_RIGHT, idParam: 'sessionId', displayName: () => app().tr('workbench.chat'), icon: MessageCircle, TabIcon: SessionTabIcon, factory: (props) => <ChatView {...props} />, singleton: true, workspaceSource: 'orbits' })
   // 侧栏对话只是 ChatView 的另一个停靠身份:绕开 `chat` singleton 与主区实例冲突,但仍跟随同一
   // activeId / messagesBySession / runningBySession,不创建所谓「Side Chat」会话或第二套 runtime。
-  registerView({ type: 'chat-panel', kind: 'aux', displayName: () => translate('bootengine.view.chatPanel'), icon: MessageCircle, TabIcon: SessionTabIcon, factory: (props) => <ChatView {...props} />, singleton: true })
+  registerView({ type: 'chat-panel', kind: 'aux', displayName: () => translate('tangu.view.chatPanel'), icon: MessageCircle, TabIcon: SessionTabIcon, factory: (props) => <ChatView {...props} />, singleton: true })
   // 旁聊的侧栏形态(划线「在侧栏提问」):带着主区当前会话的上下文问,不进主对话;浮窗版 /btw 照旧。
   registerView({ type: 'btw-panel', kind: 'aux', displayName: () => translate('btw.title'), icon: MessageCircleQuestion, factory: () => <BtwSideView />, singleton: true })
   registerView({ type: 'tangu-details', kind: 'aux', displayName: () => translate('agentProfile.title'), icon: Bot, factory: (props) => <TanguDetailsView {...props} />, singleton: true })

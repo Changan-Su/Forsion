@@ -1608,6 +1608,8 @@ export const usePluginStore = create<PluginState>((set, get) => {
                 ...(typeof o.rowId === 'string' ? { rowId: o.rowId } : {}),
                 ...('dateCol' in o ? { dateCol: typeof o.dateCol === 'string' ? o.dateCol : undefined } : {}),
                 ...(typeof o.readOnly === 'boolean' ? { readOnly: o.readOnly } : {}),
+                ...(typeof o.body === 'boolean' ? { body: o.body } : {}),
+                ...(Array.isArray(o.hideColumns) ? { hideColumns: o.hideColumns.filter((c): c is string => typeof c === 'string') } : {}),
               })
               const pending = { ...clean(opts), path, rowId: opts.rowId } as import('./types').PluginRecordOptions
               let mounted: { update(p: Partial<import('./types').PluginRecordOptions>): void; dispose(): void } | null = null

@@ -6,7 +6,8 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { ApprovalRequest } from '../types'
 import { ApprovalCard } from './ApprovalCard'
-import { setLocaleGlobal, translate } from '../i18n'
+import { HostLocaleProvider, setLocaleGlobal, translate } from '../i18n'
+import { sanitizeApprovalPreviewI18n } from '../approvalReason'
 
 describe('ApprovalCard「总允许」按钮与 why 行', () => {
   let host: HTMLDivElement
@@ -120,3 +121,70 @@ describe('run_bash 命令框:所见即所跑', () => {
     }
   })
 })
+
+describe('散文类预览(previewI18n)跟随界面语言', () => {
+  let host: HTMLDivElement
+  let root: Root
+  beforeEach(() => { ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true; host = document.createElement('div'); document.body.append(host); root = createRoot(host) })
+  afterEach(async () => { await act(async () => root.unmount()); host.remove(); setLocaleGlobal('zh') })
+
+  // 引擎 webPublishPreview 的原样输出(publish_web_page { path: 'tea-signup.html', slug: 'tea-signup' })
+  const enPublish = 'Publish tea-signup.html as a Forsion web page "tea-signup" (link name: tea-signup).\n' +
+    'Anyone with the link can open it. The files go to your Forsion cloud drive and count toward its storage. If you already have a page called tea-signup, it is replaced.'
+  const publish: ApprovalRequest = {
+    approvalId: 'w1', runId: 'r1', name: 'publish_web_page', status: 'pending', reason: { kind: 'always', mode: 'full-auto' },
+    arguments: JSON.stringify({ path: 'tea-signup.html', slug: 'tea-signup' }), preview: enPublish,
+    previewI18n: { key: 'approval.preview.webPublish', vars: { path: 'tea-signup.html', name: 'tea-signup', slug: 'tea-signup' } },
+  }
+  const shown = async (req: ApprovalRequest, locale: 'zh' | 'en'): Promise<string> => {
+    setLocaleGlobal(locale)
+    await act(async () => root.render(React.createElement(HostLocaleProvider, null, React.createElement(ApprovalCard, { key: `${req.approvalId}-${locale}`, req, onDecide: () => {} }))))
+    return host.querySelector('.approval-preview')?.textContent || ''
+  }
+
+  it('publish_web_page:中文界面出中文,英文界面与引擎那句逐字相同', async () => {
+    const zh = await shown(publish, 'zh')
+    expect(zh).toContain('把 tea-signup.html 发布为 Forsion 网页「tea-signup」')
+    expect(zh).toContain('拿到链接的人都能打开')
+    expect(await shown(publish, 'en')).toBe(enPublish)
+  })
+
+  it('账号动作三种 + 下线:zh 是中文、en 不含汉字,值都填进去了', async () => {
+    const cases: Array<[ApprovalRequest['previewI18n'], string]> = [
+      [{ key: 'approval.preview.resetCard' }, '重置卡'],
+      [{ key: 'approval.preview.moveQuota', vars: { percent: 30 } }, '30%'],
+      [{ key: 'approval.preview.feedback', vars: { message: 'dark mode please' } }, 'dark mode please'],
+      [{ key: 'approval.preview.webUnpublish', vars: { slug: 'tea-signup' } }, 'tea-signup'],
+    ]
+    for (const [previewI18n, needle] of cases) {
+      const req = { ...publish, approvalId: previewI18n!.key, name: 'forsion_account_action', preview: 'english', previewI18n }
+      const zh = await shown(req, 'zh')
+      expect(zh, previewI18n!.key).toMatch(/[一-鿿]/)
+      expect(zh).toContain(needle)
+      const en = await shown(req, 'en')
+      expect(en, previewI18n!.key).not.toMatch(/[一-鿿]/)
+      expect(en).not.toBe('english')
+      if (previewI18n!.key !== 'approval.preview.resetCard') expect(en).toContain(needle.replace('%', ''))
+    }
+  })
+
+  it('旧事件 / 本端没有的键:退回英文 preview', async () => {
+    expect(await shown({ ...publish, previewI18n: undefined }, 'zh')).toBe(enPublish)
+    expect(await shown({ ...publish, previewI18n: { key: 'approval.preview.notYet' } }, 'zh')).toBe(enPublish)
+  })
+
+  it('词条要的值缺一个(重放的畸形事件):退回英文 preview,不显示 {slug}', async () => {
+    expect(await shown({ ...publish, previewI18n: { key: 'approval.preview.webUnpublish' } }, 'zh')).toBe(enPublish)
+    expect(await shown({ ...publish, previewI18n: { key: 'approval.preview.webPublish', vars: { path: 'a.html', name: 'a' } } }, 'zh')).toBe(enPublish)
+  })
+
+  it('清洗:键只认 approval.preview.*,vars 有一个不是串 / 有限数就整份丢', () => {
+    expect(sanitizeApprovalPreviewI18n({ key: 'approval.preview.resetCard' })).toEqual({ key: 'approval.preview.resetCard' })
+    expect(sanitizeApprovalPreviewI18n({ key: 'approval.approve' })).toBeUndefined()
+    expect(sanitizeApprovalPreviewI18n({ key: 'approval.preview.moveQuota', vars: { percent: Infinity } })).toBeUndefined()
+    expect(sanitizeApprovalPreviewI18n({ key: 'approval.preview.feedback', vars: { message: { x: 1 } } })).toBeUndefined()
+    expect(sanitizeApprovalPreviewI18n({ key: 'approval.preview.feedback', vars: [] })).toBeUndefined()
+    expect(sanitizeApprovalPreviewI18n('approval.preview.resetCard')).toBeUndefined()
+  })
+})
+

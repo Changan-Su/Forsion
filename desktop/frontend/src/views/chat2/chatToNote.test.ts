@@ -1,7 +1,8 @@
 // 整段对话整理成笔记:对话记录的拼法(只取正文、尾部截断)与模型标题的拆法。
 import { describe, it, expect } from 'vitest'
 import type { UiMessage } from '../../types'
-import { splitNoteTitle, transcriptOf } from './chatToNote'
+import { transcriptOf } from './chatToNote'
+import { splitNoteTitle } from '../../amadeus/freshNote'
 
 const msg = (role: UiMessage['role'], content: string): UiMessage => ({ id: Math.random().toString(36), role, content, status: 'done', timestamp: 1 })
 

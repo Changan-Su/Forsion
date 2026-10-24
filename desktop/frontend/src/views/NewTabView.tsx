@@ -8,7 +8,7 @@ import { createPortal } from 'react-dom'
 import { Plus, Bot, FileText, Globe, TerminalSquare, Search, ChevronDown, ArrowUpRight, PanelLeft, PanelRight } from 'lucide-react'
 import { useApp } from '../stores/appStore'
 import { hasNativeFeature, amadeusAvailable } from '../features/runtime'
-import { openSpecial } from '@tangu/ui/views/SpecialViews'
+import { readTanguShell } from '../amadeus/plugins/tanguSeam'
 import { useWorkspace, useSpaceStore, useRibbonStore, getActiveSpace, switchSpace, getView, label, startOpenDrag, rankIds, OverlayAt, formatHotkey, effectiveHotkey, isMacPlatform, type PersistedPanel } from '@lcl/engine'
 import { AMADEUS_ENABLED } from '../spaces'
 import { pluginOfSpace } from '../userSpaces'
@@ -141,7 +141,7 @@ export function NewTabView({ leaf }: ViewProps) {
   const freeItems: Item[] = [
     { key: 'browser', icon: <Globe size={16} />, label: t('browser.title'), run: () => ws().openView('browser', {}, 'main'), show: !!getView('browser'), drag: { type: 'browser' } },
     { key: 'terminal', icon: <TerminalSquare size={16} />, label: t('terminal.title'), run: () => ws().openView('terminal', {}, 'main'), show: !!getView('terminal'), drag: { type: 'terminal' } },
-    { key: 'agents', icon: <Bot size={16} />, label: t('special.agents.title'), run: () => openSpecial('agents'), show: hasBackend && (s.specialEnabled.historian || s.specialEnabled.muse) },
+    { key: 'agents', icon: <Bot size={16} />, label: t('special.agents.title'), run: () => readTanguShell()?.openSpecial('agents'), show: hasBackend && (s.specialEnabled.historian || s.specialEnabled.muse) },
     ...free.map((type) => viewItem({ type, params: {} }, type)),
   ]
 
@@ -193,7 +193,7 @@ export function NewTabView({ leaf }: ViewProps) {
       return
     }
     // kind === 'view'
-    if (r.viewType === 'agents-detail') { openSpecial('agents'); return }
+    if (r.viewType === 'agents-detail') { readTanguShell()?.openSpecial('agents'); return }
     if (r.viewType) ws().openView(r.viewType, {}, 'main')
   }
 

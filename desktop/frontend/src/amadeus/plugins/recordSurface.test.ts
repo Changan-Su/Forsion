@@ -140,3 +140,29 @@ describe('ctx.ui.mountRecord 的闸', () => {
   })
 
 })
+
+describe('ctx.ui.mountRecord 的正文与隐藏列(10-24)', () => {
+  it('hideColumns:那一列不列出;body:挂正文编辑器,空时露提示', async () => {
+    await act(async () => { handle = mountPluginRecord(el, { path: 'T.db', rowId: 'r1', dateCol: 'd1', hideColumns: ['k1'], body: true }) })
+    await vi.waitFor(() => expect(el.querySelector('.plugin-record-body .ProseMirror')).toBeTruthy(), { timeout: 8000 })
+    const keys = [...el.querySelectorAll('.amx-cal-card-keyt')].map((n) => n.textContent)
+    expect(keys).toEqual(['备注'])
+    expect(el.querySelector('.plugin-record-body')!.hasAttribute('data-empty')).toBe(true)
+  })
+
+  it('readOnly / 不给 body:没有正文编辑器', async () => {
+    await act(async () => { handle = mountPluginRecord(el, { path: 'T.db', rowId: 'r1', body: true, readOnly: true }) })
+    expect(el.querySelector('.plugin-record-body')).toBeNull()
+    await act(async () => { handle!.update({ readOnly: false, body: false }) })
+    expect(el.querySelector('.plugin-record-body')).toBeNull()
+  })
+
+  it('setAggBody:写进同一份 store,版本升到 2;笔记视图不写', async () => {
+    const { setAggBody, getAggDb } = await import('../store/dbAggregateStore')
+    setAggBody(getAggDb('T.db')!, 'r1', '带上 **材料**')
+    expect(rows()[0].body).toBe('带上 **材料**')
+    expect((useDbStore.getState().entries['T.db'].data as DbFile).version).toBe(2)
+    setAggBody({ ...getAggDb('T.db')!, isNoteView: true }, 'r1', '不该写')
+    expect(rows()[0].body).toBe('带上 **材料**')
+  })
+})

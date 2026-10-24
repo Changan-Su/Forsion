@@ -370,7 +370,11 @@ type PluginCellValue = import('../../../../shared/amadeus/db/schema').CellValue
  *  找勾选列看 `base === 'checkbox'`。 */
 export interface PluginDbColumn { id: string; name: string; type: string; base: string }
 /** ctx.databases 的一行。`kind: 'notes'` 的表里 `id` 就是那篇笔记的库相对路径。`name` = 首列文本(空就是空)。 */
-export interface PluginDbRow { id: string; name: string; cells: Record<string, PluginCellValue> }
+export interface PluginDbRow {
+  id: string; name: string; cells: Record<string, PluginCellValue>
+  /** 经典表记录有非空正文(2026-10-24+):给列表画「有备注」标记用;正文本身经 ctx.ui.mountRecord({ body: true }) 编辑。旧宿主没有这个字段。 */
+  hasBody?: boolean
+}
 /** 库里的一张多维表。`table` = 经典 .db(行在文件里);`notes` = 笔记视图(一行 = 文件夹里的一篇笔记,属性在 frontmatter)。 */
 export interface PluginDatabase {
   /** Vault-relative .db path; calendar-capable plugins also receive the exact human://CALENDAR.db reference on local hosts. */
@@ -388,6 +392,11 @@ export interface PluginRecordOptions {
   /** 当作时间显示的日期列(给日历成员的 dateCol);不给 = 日期列和别的属性一样列在下面 */
   dateCol?: string
   readOnly?: boolean
+  /** 2026-10-24+:在字段下面挂记录正文编辑器(与表格「打开记录」同一份 Markdown 正文、同一条写口)。
+   *  只对经典表生效;笔记视图(正文就是笔记文件)、只读源和 `readOnly` 时不画编辑器。旧宿主忽略。 */
+  body?: boolean
+  /** 2026-10-24+:不列出的属性列 id(例如插件自己已经画了勾选框的完成列)。旧宿主忽略。 */
+  hideColumns?: string[]
 }
 /** ctx.calendar 的一个只读叠加源(2026-10-17+):不在库里、改不了的日历 —— Agent 日程、.ics 订阅、
  *  Local↔Cloud 另一侧库里的表。行和列的形状同 ctx.databases(`kind` 恒 `'table'`);**没有写口**,

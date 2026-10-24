@@ -76,6 +76,10 @@ export const SelectIcon = I(<><path fill="currentColor" fillRule="evenodd" d="M4
  *  阅读面板头部画的就是 lucide 的这几枚,列表和头部要是同一个字形。尺寸与上面一样跟字号(1em)。 */
 const L = (Icon: LucideIcon) => (props: SVGProps<SVGSVGElement>) => <Icon width="1em" height="1em" aria-hidden {...(props as LucideProps)} />
 
+/** 蓬洲云的「祥云」(2026-10-23 图标方案 C,路径真源在仓根 docs/ToBeImproved/蓬洲云图标方案_2026-10-23/instrument/icons.cjs)。
+ *  这是 ≤16px 用的小号版(没有云尾那道线、云身大一号):标签页、首登卡片都在 16px 上下。18px 的完整版随 Extend 包走(spaces/penzor/icon.svg)。 */
+export const PenzorIcon = I(<path d="M3 18.5h13.5a4.25 4.25 0 0 0 0-8.5 4.75 4.75 0 0 0-9.5 0 2.5 2.5 0 0 0 5 0" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />)
+
 /**
  * **插件图标词表** —— 公开契约。插件写 `icon: 'callout-warning'`,宿主查表画出上面那枚 SVG,
  * 于是插件项和内置项在 slash 菜单里是**同一套视觉**,而不是各自塞一个 emoji。
@@ -158,6 +162,8 @@ export const PLUGIN_ICONS: Record<string, ComponentType<SVGProps<SVGSVGElement>>
   lock: L(Lock),
   // 网盘一类的位置(蓬洲云「我的云盘」,2026-10-18)
   'hard-drive': L(HardDrive),
+  // 蓬洲云自己的图标(2026-10-23,它主区视图的标签页用):别的插件别拿它指别的东西
+  penzor: PenzorIcon,
   // 看法胶囊窄时只留图标(ctx.ui.setViewModes,2026-10-19;谛听的转写 / 笔记 / 纪要)
   'audio-lines': L(AudioLines),
   'notebook-pen': L(NotebookPen),

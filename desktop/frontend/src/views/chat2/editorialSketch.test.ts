@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { SketchItem, ToolEvent } from '../../types'
 import { partitionToolSegment } from './EditorialMessage'
-import { sketchFromToolEvent } from '../../stores/appStore'
+import { sketchFromToolEvent } from '../../tangu/store/tanguSlice'
 
 const done = (id: string, name: string): ToolEvent => ({ id, name, done: true, result: 'ok' })
 

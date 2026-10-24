@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.64.0
+  version: 1.66.0
   author: Forsion
   category: Forsion
 ---
@@ -110,7 +110,7 @@ No `plugin_sandbox` (mobile, web, cloud sessions, older desktop builds)? Fall ba
 
 ### 图标:`icon` + `iconFile`(2026-10-04 起)
 
-图标库只有 28 枚,几个 Space 一多就撞图标。给 Space 配一枚自己的图:
+图标库只有 30 枚,几个 Space 一多就撞图标。给 Space 配一枚自己的图:
 
 ```json
 { "icon": "video", "iconFile": "icon.png" }
@@ -670,7 +670,7 @@ The full contracts, examples and old-host fallbacks for these mounts live in [re
   (try/catch 照不到),列表就此定格为空。宿主挂载列表面 / 切库都会重订阅,这是重读的门。
   (青鸟 2026-08-28 实报「明明有记录却是空」,根因即此。)
 - 行首图标 `iconUrl`(favicon 等)与 `icon`(词表键)**两个都给**:老宿主 / 取不到图时退 `icon`。
-- 进度类列表(章节、关卡)的行状态用 `circle-check`(做完)/ `circle`(没做完)/ `lock`(锁住;2026-10-18 起,老宿主退兜底图标)。网盘 / 存储类的行用 `hard-drive`(2026-10-18 起;老宿主没有,可拿 `ctx.app.setSpaceProgress` 在不在判新旧,旧的退 `archive`)。别用 `todo` 表示没做完 —— 它是块菜单的「待办」图标,自带勾。
+- 进度类列表(章节、关卡)的行状态用 `circle-check`(做完)/ `circle`(没做完)/ `lock`(锁住;2026-10-18 起,老宿主退兜底图标)。网盘 / 存储类的行用 `hard-drive`(2026-10-18 起;老宿主没有,可拿 `ctx.app.setSpaceProgress` 在不在判新旧,旧的退 `archive`)。`penzor` 是蓬洲云自己的图标(2026-10-23 起),别的插件别用。别用 `todo` 表示没做完 —— 它是块菜单的「待办」图标,自带勾。
 - `actions` / `itemMenu()` 的每一项是 `{ id, label, primary?, danger?, icon?, run }`:`primary` 留在工具条外面(缺省第一项),其余收进「⋯」;
   `danger: true`(2026-09-25 起)= 不可逆动作(删除 / 移除),宿主在右键菜单和「⋯」里都用危险色画它。**只管配色,确认仍由插件自己在 `run()` 里做**
   (宿主不替你弹框);惯例把它排在最后一项。老宿主忽略该字段。
@@ -930,6 +930,8 @@ ctx.calendar?.ics?.remove(id)
   其余属性)画进你的容器,返回 `{ update(patch), dispose() }`;改动直接写那张表(同 `ctx.databases.setCell`,和打开着的表格同一份),
   行被删 / 换库就什么都不画;`path` 不是库里的表或没有 `rowId` 当场抛 `TypeError`。外框、关闭、「打开 / 删除」按钮、定位归插件。
   `dateCol` 那一列当时间行、不在属性里重复(必须是日期类列,别的列类型忽略、照常列在属性里);叠加源(只读表)或 `readOnly: true` 只显示值。**声明 `"databases"` 才有。**
+  2026-10-24+:`body: true` 在字段下面挂这条记录的 Markdown 正文编辑器(与表格「打开记录」同一份正文、同一条写口;只对可写经典表,笔记视图 / 叠加源 / `readOnly` 不画);
+  `hideColumns: [colId…]` 不列出这些属性列(例如你已经画了勾选框的完成列)。`ctx.databases` 快照的行多了 `hasBody?: true`(正文非空),画「有备注」标记用。旧宿主忽略这三项,照常只有字段。
 - **界面**:插件拿不到宿主的 React 实例。要宿主组件就走 `ctx.ui.mount*`(行编辑字段就是上面的 `mountRecord`);画大块自绘界面时自带 React(两份共存没问题,边界是挂载点 DOM)。
 
 - **事件操作**（2.13.7+）：`ctx.calendar?.events` 共用宿主的完整记录剪贴板和条件撤销历史。`copy(path,rowId,dateCol,before,cut?)`、`clone(path,rowId,dateCol,before,after?)`、`paste(path?,ISO时间?)` 保留记录正文／属性／关联，笔记视图保留完整笔记。`reschedule` / `rescheduleNote` 检查旧日期；`remove` 复用原删除语义；`undo` / `redo` 不覆盖后续编辑。`clipboard()` + `subscribe(cb)` 供界面画剪切态，`scope()` 区分智库，`clearClipboard()` 清空。只在声明 `calendar` 能力后提供；旧宿主需检测，不能手写有损复制来降级。

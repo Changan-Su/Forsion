@@ -109,9 +109,13 @@ async function main() {
     await win.waitForFunction(() => document.documentElement.dataset.mode === 'dark')
     await win.waitForTimeout(400)
     await win.screenshot({ path: path.join(OUT, 'todo-dark.png') })
-    await root.getByRole('button', { name: '今天', exact: true }).first().click()
+    // @forsion/calendar 0.1.2+ 把宽档的筛选分段收进「待办选项」菜单、标题跟着筛选走;旧版仍是分段按钮。两版都认。
+    const seg = root.locator('.amx-todo-seg')
+    if (await seg.count()) await seg.getByRole('button', { name: '今天', exact: true }).click()
+    else { await root.getByRole('button', { name: '待办选项', exact: true }).click(); await win.getByRole('menuitemcheckbox', { name: '今天', exact: true }).click() }
     await space(win, 'calendar'); await space(win, 'forsion-todo')
-    pass('Filters survive Space navigation', await root.getByRole('button', { name: '今天', exact: true }).first().getAttribute('aria-pressed') === 'true')
+    const todayOn = await seg.count() ? await seg.getByRole('button', { name: '今天', exact: true }).getAttribute('aria-pressed') === 'true' : (await root.locator('.amx-todo-title').innerText()).trim() === '今天'
+    pass('Filters survive Space navigation', todayOn)
     pass('No renderer exceptions', !f.errors.length)
     await f.cleanup(); f = null; f = await fixture(true, stub)
     await space(f.win, 'forsion-todo')

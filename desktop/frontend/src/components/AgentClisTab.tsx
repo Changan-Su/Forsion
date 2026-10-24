@@ -15,7 +15,7 @@ import {
   importEngineAsset,
   type EngineAssets,
 } from '../services/backendService'
-import { EngineIcon } from '@tangu/ui/components/EngineIcon'
+import { EngineIcon } from './EngineIcon'
 import type { TanguDesktopConfig } from '../types'
 import { homeTarget } from '../services/engine/targets'
 

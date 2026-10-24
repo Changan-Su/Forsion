@@ -1,4 +1,5 @@
-import { useApp, applyPreset, stickyDefaults } from '../../stores/appStore'
+import { useApp } from '../../stores/appStore'
+import { applyPreset, stickyDefaults } from '../../../../../tangu-agent/src/contracts/sessionDefaults'
 import { useImageStudio } from '../../stores/imageStudioStore'
 import { createSession } from '../../services/backendService'
 import type { Attachment } from '../../types'

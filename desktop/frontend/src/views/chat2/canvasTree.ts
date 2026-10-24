@@ -122,3 +122,11 @@ export function buildTurnTree(rootId: string, branches: readonly SessionRecord[]
   }
   return { cards, roots, paths }
 }
+
+const READ_STEPS_MAX = 8 // 这一支超过这么多轮:轮次折成「1 2 … 7 8 9」
+/** 阅读栏顶上的轮次(下标):不多就全列;多了留头两轮、当前和前后各一轮、最后一轮,中间折成 -1(画成「…」),只隔一轮就直接列出来 */
+export function readSteps(n: number, cur: number): number[] {
+  if (n <= READ_STEPS_MAX) return Array.from({ length: n }, (_, i) => i)
+  const keep = [...new Set([0, 1, cur - 1, cur, cur + 1, n - 1])].filter((i) => i >= 0 && i < n).sort((a, b) => a - b)
+  return keep.flatMap((i, j) => (!j || i - keep[j - 1] === 1 ? [i] : i - keep[j - 1] === 2 ? [i - 1, i] : [-1, i]))
+}

@@ -2,6 +2,7 @@ import { afterEach, expect, it } from 'vitest'
 import { useApp } from './appStore'
 import { useChildChat } from './childChatStore'
 import type { AgentRunEvent } from '../types'
+import '../tangu/store/standalone' // 测试不走 activateTangu:自己装 Tangu 的 store 半身(界面热更新 3c)
 const initial = useApp.getState()
 afterEach(() => { useApp.setState(initial, true); useChildChat.setState({ sessions: {}, selected: {} }) })
 it('streams full delegated output into the child without changing the main selection or parent content', () => {

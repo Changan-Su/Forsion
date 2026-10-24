@@ -9,6 +9,8 @@ const mock = vi.hoisted(() => ({
 }))
 vi.mock('../stores/appStore', () => ({
   useApp: { subscribe: (fn: () => void) => { mock.listener = fn; return () => { mock.listener = undefined } }, getState: () => ({ cfg: mock.cfg, authInfo: null, agentDefs: mock.agents, desktopConfig: { mode: 'managed' }, adoptSession: mock.adopt, send: mock.send }) },
+}))
+vi.mock('../../../../tangu-agent/src/contracts/sessionDefaults', () => ({
   stickyDefaults: () => ({ approvalMode: 'ask' }),
   withAmadeusWorkspace: (value: unknown) => value,
 }))
