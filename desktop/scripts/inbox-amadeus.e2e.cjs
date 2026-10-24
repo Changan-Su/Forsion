@@ -218,6 +218,9 @@ async function main() {
     const win = await app.firstWindow()
     await win.setViewportSize({ width: 1500, height: 900 })
     await win.waitForSelector('#root', { timeout: 30_000 })
+    // 登录后首次同步卡(SyncSetupCard)启动 2.5s 后弹、盖住列表(悬停 / 点击被它截走),和本台架无关:藏掉(同 btw.check);reload 之后再藏一次
+    const hideSyncCard = () => win.addStyleTag({ content: '.sync-setup-backdrop { display: none !important; }' })
+    await hideSyncCard()
     await win.waitForTimeout(2500)
     for (const label of ['跳过引导', 'Skip']) {
       const b = win.locator(`text=${label}`).first()
@@ -595,6 +598,7 @@ async function main() {
     if (!NEGATIVE_CONTROL) {
       await win.evaluate(() => { localStorage.setItem('tangu_locale', 'en'); localStorage.setItem('forsion_theme', 'dark') })
       await win.reload({ waitUntil: 'domcontentloaded' })
+      await hideSyncCard()
       await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1000, 820))
       await win.setViewportSize({ width: 1000, height: 820 })
       await win.locator('button.rb-space[aria-label^="Inbox"]').first().click() // 中间的最近使用里也会有它一份
