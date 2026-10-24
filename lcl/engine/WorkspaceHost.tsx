@@ -476,7 +476,14 @@ export const WorkspaceHost: React.FC<{
           // 标签头自己也盯着:侧栏开合是补间出来的,store 变的那一帧量到的还是旧位置(实测:左栏展开后主区标签头仍带着让位)。
           if (!watched.has(el)) { watched.add(el); ro.observe(el) }
           const r = el.getBoundingClientRect()
-          el.classList.toggle('dv-under-edge', r.width > 0 && r.top < er.bottom && r.bottom > er.top && r.right > er.left && r.left < er.right)
+          const under = r.width > 0 && r.top < er.bottom && r.bottom > er.top && r.right > er.left && r.left < er.right
+          el.classList.toggle('dv-under-edge', under)
+          // 浮钮组左边剩下的宽度放不下这条标签头的内容(Windows 上浮钮组还带着系统按钮的让位,窄右栏只剩几十 px)
+          // → 标出来,engine.css 末尾让标签落到第二行。内容宽用 scrollWidth(不随让位缩),两边都换成布局 px 比:
+          // 放下 / 不放下都不改这两个读数,不会来回跳。
+          const zoom = el.offsetWidth > 0 ? r.width / el.offsetWidth : 1
+          const need = [...el.children].reduce((w, c) => c.classList.contains('dv-void-container') ? w : w + c.scrollWidth, 0)
+          el.classList.toggle('dv-edge-stacked', under && (er.left - r.left) / zoom < need + 8)
           // mac 独立窗 / Space 窗口没有 ribbon,交通灯直接落在左上角那条标签头上 → 同样按几何标出来让位(engine.css 末尾)。
           // 不按「左栏开没开」猜:没有左栏组的 Space(主页)主区标签头就在最左,而 leftVisible 照样是 true。
           // 70×28 = 交通灯占的原生区域,不随界面缩放;getBoundingClientRect 也是缩放后的读数,两边同一把尺。
