@@ -106,6 +106,7 @@
     "check:feedback": "node scripts/feedback.check.cjs",
     "check:floatingsession": "node scripts/floating-session.check.cjs",
     "check:btw": "node scripts/btw.check.cjs",
+    "check:commapolish": "node scripts/chat-comma-polish.check.cjs",
     "check:selectionbar": "node scripts/selection-bar.check.cjs",
     "check:promptsuggest": "node scripts/prompt-suggest.check.cjs",
     "check:chatlayout": "node scripts/chat-layout.check.cjs",

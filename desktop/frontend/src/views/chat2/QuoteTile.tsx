@@ -7,10 +7,11 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { MessageSquarePlus, Quote, X } from 'lucide-react'
+import { ClipboardList, MessageSquarePlus, Quote, X } from 'lucide-react'
 import { OverlayAt } from '@lcl/engine'
 import { WikiText } from '../../components/ChatWikiLink'
 import { registerMessages, useI18n } from '../../i18n'
+import { pasteTitle } from './quotes'
 
 registerMessages({
   'quote.tile.kind': { zh: '引用', en: 'Quote' },
@@ -23,6 +24,9 @@ registerMessages({
   'quote.preview.notePlaceholder': { zh: '对这段说点什么（可不写）', en: 'Say something about this (optional)' },
   'quote.reply.placeholder': { zh: '回复这段…', en: 'Reply to this…' },
   'quote.reply.add': { zh: '加进输入框（回车）', en: 'Add to the message (Enter)' },
+  'paste.tile.sub': { zh: '粘贴 · {lines} 行 · {chars} 字', en: 'Pasted · {lines} lines · {chars} chars' },
+  'paste.preview.title': { zh: '粘贴的内容', en: 'Pasted text' },
+  'paste.preview.restore': { zh: '放回输入框', en: 'Put back in the text field' },
 })
 
 const squash = (s: string): string => s.replace(/\s+/g, '')
@@ -76,15 +80,19 @@ export function QuoteTile({ text, note, onOpen, onRemove, removeTitle, title }: 
 }
 
 /** 引用全文(Claude 点引用卡出的那个窗)。外壳复用 Amadeus 的 .dialog-*(同 RemoveDialog 的挂法)。 */
-export function QuotePreview({ text, note, onNote, onClose }: {
+export function QuotePreview({ text, note, onNote, onClose, paste, onRestore }: {
   text: string
   note?: string
   /** 给了 = 回应可改(输入框里的卡);不给 = 只读(已发的) */
   onNote?: (note: string) => void
   onClose: () => void
+  /** 长粘贴磁贴的全文:等宽、原样显示(不当 wiki 文本渲染) */
+  paste?: boolean
+  /** 给了 = 窗底一颗「放回输入框」 */
+  onRestore?: () => void
 }) {
   const { t } = useI18n()
-  const title = onNote || note ? 'quote.preview.reply' : 'quote.preview.title'
+  const title = paste ? 'paste.preview.title' : onNote || note ? 'quote.preview.reply' : 'quote.preview.title'
   const box = useRef<HTMLDivElement>(null)
   // 关了把焦点还给点开它的那颗磁贴。在渲染时记:effect 跑的时候 autoFocus 已经把焦点挪到关闭钮上了
   const opener = useRef(document.activeElement as HTMLElement | null)
@@ -112,7 +120,10 @@ export function QuotePreview({ text, note, onNote, onClose }: {
             <div className="dialog-title">{t(title)}</div>
             <button type="button" className="quote-preview-x" title={t('quote.preview.close')} aria-label={t('quote.preview.close')} autoFocus onClick={onClose}><X size={16} /></button>
           </div>
-          <div className="quote-preview-body"><WikiText text={text} /></div>
+          {paste
+            ? <div className="quote-preview-body quote-preview-body--mono">{text}</div>
+            : <div className="quote-preview-body"><WikiText text={text} /></div>}
+          {onRestore && <div className="dialog-actions"><button type="button" className="dialog-btn" onClick={onRestore}>{t('paste.preview.restore')}</button></div>}
           {onNote
             ? <textarea className="quote-preview-note" rows={3} value={note ?? ''} placeholder={t('quote.preview.notePlaceholder')} onChange={(e) => onNote(e.target.value)} />
             : note && <div className="quote-preview-said"><WikiText text={note} /></div>}
@@ -120,6 +131,33 @@ export function QuotePreview({ text, note, onNote, onClose }: {
       </div>
     </div>,
     document.body,
+  )
+}
+
+/** 长粘贴磁贴(借 Comma):≥ PASTE_TILE_MIN 字的纯文本粘贴不进输入框,成一张磁贴 —— 和引用磁贴同一副身材,
+ *  标题取第一行有字的,副行写行数 · 字数;点一下看全文(窗里能放回输入框)。 */
+export function PasteTile({ text, title, onOpen, onRemove, removeTitle }: {
+  text: string
+  title: string
+  onOpen: () => void
+  onRemove: () => void
+  removeTitle: string
+}) {
+  const { t } = useI18n()
+  const lines = text.replace(/\n+$/, '').split('\n').length
+  return (
+    <span className="att-tile att-tile--file att-tile--quote att-tile--paste">
+      <button type="button" className="att-tile-open" title={title} onClick={onOpen}>
+        <span className="att-tile-badge" data-kind="paste" aria-hidden><ClipboardList size={16} /></span>
+        <span className="att-tile-meta">
+          <span className="att-tile-name"><span className="att-tile-head">{pasteTitle(text)}</span></span>
+          <span className="att-tile-sub">{t('paste.tile.sub', { lines: lines.toLocaleString(), chars: text.length.toLocaleString() })}</span>
+        </span>
+      </button>
+      <button type="button" className="att-tile-x" title={removeTitle} aria-label={removeTitle} onClick={onRemove}>
+        <X size={11} strokeWidth={2.5} />
+      </button>
+    </span>
   )
 }
 

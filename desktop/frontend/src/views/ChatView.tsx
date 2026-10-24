@@ -1,8 +1,9 @@
 /** 主区聊天 leaf：followActive 跟随侧栏；分屏 leaf 用 sessionId 固定会话。 */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from 'react'
 import { AnimatePresence } from 'framer-motion'
-import { ArrowDown, Folder, MessageCircleQuestion, MessageSquare, Quote, Waypoints } from 'lucide-react'
+import { ArrowDown, CircleAlert, Folder, MessageCircleQuestion, MessageSquare, Quote, Waypoints } from 'lucide-react'
 import type { AgentConfig, UiMessage } from '../../../../tangu-agent/src/contracts/clientTypes'
+import type { FailedSend } from '../tangu/store/failedSend'
 import { Composer2 } from './chat2/Composer2'
 import { AgentSelectStrip } from '../components/AgentSelectStrip'
 import { displaySessionTitle } from '../sessionTitle'
@@ -74,6 +75,7 @@ import '../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 const EMPTY_MESSAGES: UiMessage[] = []
 const EMPTY_CONFIG: AgentConfig = {}
+const EMPTY_FAILED: FailedSend[] = []
 const EMPTY_USAGE: { ctx: number; base: number; live: number; runCost?: number; costLimit?: number } = { ctx: 0, base: 0, live: 0 }
 const EMPTY_STEER: Array<{ id: string; text: string }> = []
 const EMPTY_STRS: string[] = []
@@ -90,10 +92,22 @@ function appRefOf(raw: unknown): { app: string; bundleId?: string; pid: number; 
 
 /** 「回到底部」键自己管显隐。它在滚动起手的那一下翻转;原来是 ChatView 的 state,翻一次就把整段对话的每条消息
  *  重渲一遍(2026-10-11 实测:中端手机速度下每次滑动起手顿约 150ms)。ChatView 只握一个写入口(`setter`),不随它重渲。 */
-function JumpToBottom({ setter, title, onClick }: { setter: MutableRefObject<(show: boolean) => void>; title: string; onClick: () => void }) {
+function JumpToBottom({ setter, title, replies, onClick }: { setter: MutableRefObject<(show: boolean) => void>; title: string; replies: number; onClick: () => void }) {
+  const { t } = useI18n()
   const [show, setShow] = useState(false)
-  setter.current = setShow
-  return show ? <button className="jump-bottom t2-jump" title={title} onClick={onClick}><ArrowDown size={16} /></button> : null
+  // 借 Comma:离开底部那一刻记下回答条数,之后新落下的整条回答(用户自己的不算)写在键上,变成「↓ N 条新消息」
+  const base = useRef(replies)
+  const latest = useRef(replies)
+  latest.current = replies
+  setter.current = (next) => setShow((prev) => { if (next && !prev) base.current = latest.current; return next })
+  if (!show) return null
+  const n = Math.max(0, replies - base.current)
+  return (
+    <button className={`jump-bottom t2-jump${n ? ' t2-jump--count' : ''}`} title={title} onClick={onClick}>
+      <ArrowDown size={n ? 14 : 16} />
+      {n > 0 && <span>{t(n === 1 ? 'chat.newMessage' : 'chat.newMessages', { n })}</span>}
+    </button>
+  )
 }
 
 /** 划线所在的那条回答(EditorialMessage 根节点 id = tocmsg-<消息 id>);不在某条回答里 → undefined(引擎挂到最近一条回答)。 */
@@ -132,6 +146,7 @@ export function ChatView({ leaf, params }: ViewProps) {
   const s = useApp(useShallow((state) => ({
     activeSession: state.sessions.find((x) => x.id === activeId) || state.archivedSessions.find((x) => x.id === activeId) || null,
     activeMessages: (activeId && state.messagesBySession[activeId]) || EMPTY_MESSAGES,
+    failedSends: (activeId && state.failedBySession[activeId]) || EMPTY_FAILED,
     running: !!(activeId && state.runningBySession[activeId]),
     runStats: (activeId && state.runStatsBySession[activeId]) || null,
     historianEnabled: state.specialEnabled.historian,
@@ -234,6 +249,7 @@ export function ChatView({ leaf, params }: ViewProps) {
   const activeCtxInfo = s.activeCtxInfo && (!s.activeCtxInfo.modelId || !activeModel || s.activeCtxInfo.modelId === activeModel.id) ? s.activeCtxInfo : null
   const activeUsage = s.activeUsage
   const activeMessages = s.activeMessages
+  const replyCount = useMemo(() => activeMessages.reduce((n, m) => (m.role === 'user' ? n : n + 1), 0), [activeMessages])
   // 画到流里的那一段(长会话先是末尾几条、空闲时往上补,见 useTailFirst;桌面与网页 10-16 起也这样,原来只有手机);
   // 数据层的判断一律仍看 activeMessages。要跳到某条消息(搜索命中)时整段挂。
   const shownMessages = useTailFirst(activeMessages, activeId || null, s.jumpTarget?.sessionId !== activeId)
@@ -555,12 +571,12 @@ export function ChatView({ leaf, params }: ViewProps) {
   const fileCtx = useMemo(() => ({ cfg: s.cfg, sessionId: activeId || '', execMode: mvCfg.execMode, onOpenPreview: s.setFilePreview }), [s.cfg, activeId, mvCfg.execMode, s.setFilePreview])
   const voice = useMemo(() => (ttsEnabled ? { on: voiceOn, cfg: s.cfg, stored: s.desktopConfig } : undefined), [ttsEnabled, voiceOn, s.cfg, s.desktopConfig])
 
-  const hasMessages = activeMessages.length > 0
+  const hasMessages = activeMessages.length > 0 || s.failedSends.length > 0
   // 输入卡上方那一栏的两半(JSX 在 .composer-anchor 里):项目那半只在空白新对话上;开场那半还包括已建好但没发过消息的会话。
   const projectBarOn = !activeId && (!studioChat || !!studioRoot) && (mvCfg.preset !== 'chat' || (runPickerOn && !studioChat))
   const openingOn = !hasMessages && !historyLoading && !params.miniSurface && !params.childSurface && !mvCfg.teamSlug && !mvCfg.groupChat && !mvCfg.teamMember && !mvCfg.soloEngineId && !mvCfg.engineId && s.connState === 'ok'
   /** 流里有画出来的消息(系统消息、列表里隐藏的不算):决定底对齐的排法,也决定手机上整列跟不跟键盘走。 */
-  const anyShown = hasMessages && shownMessages.some((m) => m.role !== 'system' && !isHiddenInList(m))
+  const anyShown = (hasMessages && shownMessages.some((m) => m.role !== 'system' && !isHiddenInList(m))) || s.failedSends.length > 0
   // Agent Desk 只在会话开始后显示:草稿与已建 ID 但未发消息的新会话都不挂载,也不占右侧车道。
   // 例外(10-13):Muse 私聊一进来就挂 —— 它的 Desk 空闲时演 Muse Space(见 useDeskHome),不必等第一条消息。
   // 桌面端默认开(移动端没有);用户可在设置→高级关掉,窄容器由 CSS 容器查询兜底隐藏。
@@ -746,6 +762,24 @@ export function ChatView({ leaf, params }: ViewProps) {
                 )
               })
             )}
+            {/* 借 Comma:没发出去的那几条留在末尾,淡掉的气泡 + 原因 · 丢弃 · 重试(原因的原文在悬停提示里) */}
+            {s.failedSends.map((f) => (
+              <EditorialMessage
+                key={f.id}
+                msg={{ id: f.id, role: 'user', content: f.text, attachments: f.attachments, status: 'done', timestamp: f.at }}
+                userName={userName}
+                userAvatar={userAvatar}
+                fileCtx={fileCtx}
+                footer={
+                  <div className="t2-failed" role="status">
+                    <span className="t2-failed-why" title={f.detail}><CircleAlert size={13} />{t(`chat.failed.${f.reason}`)}</span>
+                    {f.reason === 'quota' && <button type="button" className="t2-failed-btn" onClick={() => useApp.getState().openSettings('forsion')}>{t('chat.failed.credits')}</button>}
+                    <button type="button" className="t2-failed-btn" onClick={() => useApp.getState().discardFailed(activeId!, f.id)}>{t('chat.failed.discard')}</button>
+                    <button type="button" className="t2-failed-btn primary" onClick={() => { void useApp.getState().retryFailed(activeId!, f.id) }}>{t('chat.failed.retry')}</button>
+                  </div>
+                }
+              />
+            ))}
             {running && runStats && !runStatsMsgId && runStats.finishedAt == null && <div className="t2-runstats-solo"><RunStatsLine stats={runStats} /></div>}
             {activeMessages.filter((m) => m.teamSummary).slice(-1).map((m) => <TeamSummary key={m.id} message={m} />)}
             {running && activeId && s.isGroupVoting && <div className="t2-sys"><span className="t2-dot" /> {t('group.voting.inProgress')}</div>}
@@ -773,7 +807,7 @@ export function ChatView({ leaf, params }: ViewProps) {
             )}
             </div>
           </div>
-          <JumpToBottom setter={jumpSetter} title={t('chat.jumpToBottom')} onClick={() => scrollToBottom(true)} />
+          <JumpToBottom key={activeId || ''} setter={jumpSetter} title={t('chat.jumpToBottom')} replies={replyCount} onClick={() => scrollToBottom(true)} />
           {/* 划线条(全应用同一条,components/selectionBar):这里接管「带去对话」那一格 —— 引用 / 顺便问(10-18 起「在侧栏提问」并进顺便问,开在右边那块面板),
               行为与原来的胶囊菜单一字不差;翻译和插件动作(⋯)由共用的那一层给。条自己 portal 到 body。 */}
           <ViewSelectionBar
@@ -952,9 +986,9 @@ export function ChatView({ leaf, params }: ViewProps) {
             if (studioChat) {
               const target = useCodeStudio.getState().prepareRun()
               if (!target) return false
-              return useApp.getState().send(text, attachments, workspaceFiles, skillIds, mentions, target.sessionId)
+              return useApp.getState().send(text, attachments, workspaceFiles, skillIds, mentions, target.sessionId, false, true)
             }
-            return s.send(text, attachments, workspaceFiles, skillIds, mentions, activeId)
+            return s.send(text, attachments, workspaceFiles, skillIds, mentions, activeId, false, true)
           }}
           onStop={() => s.stop(activeId)}
           quotes={quotes}

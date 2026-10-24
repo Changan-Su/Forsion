@@ -49,8 +49,8 @@ import { APPREF_EVENT, APPREF_TARGET_ATTR, ensureAppRefCommand, type AppRefDeliv
 import { appRefToken, type AppRef, type AppRefList } from '../../../../shared/appRefs'
 import { AppRefIcon } from '../../components/appRefs'
 import { useCapsuleSlide } from '../../components/capsuleTabs'
-import { composeQuotes, noteOf } from './quotes'
-import { QuotePreview, QuoteTile } from './QuoteTile'
+import { PASTE_TILE_MIN, composePastes, composeQuotes, noteOf } from './quotes'
+import { PasteTile, QuotePreview, QuoteTile } from './QuoteTile'
 import { NEW_CHAT_DRAFT, clearDraft, moveDraft, setDraftField, useComposerDrafts, useDraftField } from './composerDrafts'
 import { dropSend, fadeOutDraft, noteSend } from './sendFlight'
 import { ContextUsagePop } from './ContextUsagePop'
@@ -483,6 +483,9 @@ export const Composer2: React.FC<{
   // 等待期间宽卡轮播小贴士；窄卡固定短提示，避免文案闪烁与输入区高度跳动。
   const [tipIdx, setTipIdx] = useState(0)
   const [previewQuote, setPreviewQuote] = useState<string | null>(null)
+  // 长粘贴磁贴(借 Comma):跟着这个会话的草稿走;previewPaste = 正在看全文的那张的下标(按下标删:同一段贴两次是两张,删一张只删一张)
+  const [pastes, setPastes] = useDraftField(draftKey, 'pastes')
+  const [previewPaste, setPreviewPaste] = useState<number | null>(null)
   const quotedNote = quotes.some((q) => !!noteOf(quoteNotes, q)?.trim())
   // 触屏(Android 壳 / 手机浏览器)没有 ⌘、悬停和拖拽,只留与指针无关的几条。
   const [touchUi] = useState(() => !!window.tangu?.mobile || !!window.matchMedia?.('(hover: none)').matches)
@@ -1327,7 +1330,7 @@ export const Composer2: React.FC<{
     }
     // 只挂引用不写字也算一条消息:芯片化之前拖引用会往草稿塞文本,所以「拖完直接回车」是能发的;
     // 不放行的话按回车毫无反应 = 哑火(评审 M2)。斜杠命令那几段都要求 text,故只在这之后判空。
-    if (!text && !allRefChips.length && !quotedNote) return // 引用卡带了回应也算写了话
+    if (!text && !allRefChips.length && !quotedNote && !pastes.length) return // 引用卡带了回应也算写了话
     // /compact [focus]:带关注点时不能走弹层菜单(那条只认裸命令),在这里直接派发
     const compactMatch = /^\/compact(?:\s+([\s\S]+))?$/i.exec(cmd)
     if (compactMatch && onCompact) {
@@ -1406,7 +1409,7 @@ export const Composer2: React.FC<{
     if (disabled) return
     // 通话中:纯文字送进电话(实时模型听到、用语音回);带附件 / 引用 / 技能的照常交给 Tangu。
     // Mini 没确认(崩了 / 刚挂)就改走普通发送并提示 —— 打的字不能丢。override(兜底重发、听写)不再进这条。
-    if (inCall && !override && text && text.length <= CALL_TEXT_MAX && !attachments.length && !wsFiles.length && !allRefChips.length && !quotes.length && !pinnedSkills.length) {
+    if (inCall && !override && text && text.length <= CALL_TEXT_MAX && !attachments.length && !wsFiles.length && !allRefChips.length && !quotes.length && !pastes.length && !pinnedSkills.length) {
       setDraft(''); setHistPos(0); setHint(null)
       requestAnimationFrame(autoGrow)
       return sendTextToCall(activeSessionId!, text).then(async (ok) => {
@@ -1422,7 +1425,7 @@ export const Composer2: React.FC<{
     // 句子里已经写了的引用不再进这一行(否则模型看到两遍、气泡也画两遍)。
     const leadChips = allRefChips.filter((c) => !(c.run && inlined?.used.has(c.run)))
     const refs = leadChips.length ? leadChips.map((c) => c.token).join(' ') + '\n' : ''
-    const outgoing = composeOutgoing(refs, quoted, text)
+    const outgoing = composeOutgoing(refs, quoted, composePastes(text, pastes))
     if (outgoing.length > MAX_INPUT_CHARS) {
       setHint(t('input.tooLong', { len: outgoing.length.toLocaleString(), max: MAX_INPUT_CHARS.toLocaleString() }))
       return
@@ -1706,12 +1709,12 @@ export const Composer2: React.FC<{
   // 发送 / 停止 / 通话键:桌面在底排末尾,手机在输入框右边(见上)。录音时两处都不出(录音条自带停止和发送)。
   const submitKeys = running ? (
     <>
-      {(!!draft.trim() || allRefChips.length > 0 || quotedNote) && (
+      {(!!draft.trim() || allRefChips.length > 0 || quotedNote || pastes.length > 0) && (
         <ChatBoxSubmit onClick={send} disabled={disabled} title={t('input.send')} aria-label={t('input.send')} />
       )}
       <button className="t2c-stop" onClick={onStop} title={t('input.stop')} aria-label={t('input.stop')}><Square size={10} /><span className="t2c-stop-label">{t('input.stop')}</span></button>
     </>
-  ) : callable && !draft.trim() && !allRefChips.length && !attachments.length && !wsFiles.length && !quotes.length && !pinnedSkills.length ? (
+  ) : callable && !draft.trim() && !allRefChips.length && !attachments.length && !wsFiles.length && !quotes.length && !pastes.length && !pinnedSkills.length ? (
     // 照 ChatGPT:输入框空着时发送键就是通话键,打了字变回发送。通话中再按 = 叫回 Mini 卡片(不重拨)。
     <ChatBoxSubmit
       className="t2c-live-control"
@@ -1724,7 +1727,7 @@ export const Composer2: React.FC<{
     </ChatBoxSubmit>
   ) : (
     // 只挂了引用、一个字没写也可发(与 send() 的放行条件同源;不同步的话按钮灰着 = 哑火)
-    <ChatBoxSubmit onClick={send} disabled={disabled || (!draft.trim() && !allRefChips.length && !quotedNote)} title={t('input.send')} aria-label={t('input.send')} />
+    <ChatBoxSubmit onClick={send} disabled={disabled || (!draft.trim() && !allRefChips.length && !quotedNote && !pastes.length)} title={t('input.send')} aria-label={t('input.send')} />
   )
 
   return (
@@ -1787,13 +1790,16 @@ export const Composer2: React.FC<{
               ))}
             </div>
           )}
-          {(quotes.length > 0 || attachments.length > 0 || wsFiles.length > 0) && (
+          {(quotes.length > 0 || pastes.length > 0 || attachments.length > 0 || wsFiles.length > 0) && (
             // 附件磁贴(B2):随消息发的与「到工作区」的排在同一行。删按对象认、写回点删那一刻的草稿(draftKey 闭包),
             // 淡出那 130ms 里删了别的、切了会话都不会删错;发送时跳过正在淡出的(isLeaving)。
             // 引用磁贴(10-23)排在最前:点一下看全文,发出去照旧是正文前的引用块(quotes.ts)。
             <div className="t2c-chiprow t2c-tilerow" role="group" aria-label={quotes.length ? t('input.quote.group') : undefined}>
               {quotes.map((quote, index) => (
                 <QuoteTile key={quote} text={quote} note={noteOf(quoteNotes, quote)} title={t('quote.tile.preview')} onOpen={() => setPreviewQuote(quote)} removeTitle={t('input.remove')} onRemove={() => (onRemoveQuote ? onRemoveQuote(index) : onClearQuote?.())} />
+              ))}
+              {pastes.map((p, i) => (
+                <PasteTile key={i} text={p} title={t('quote.tile.preview')} onOpen={() => setPreviewPaste(i)} removeTitle={t('input.remove')} onRemove={() => setDraftField(draftKey, 'pastes', (prev) => prev.filter((_, j) => j !== i))} />
               ))}
               {attachments.map((a) => (
                 <AttachmentTile key={tileKey(a)} file={a} removeTitle={t('input.remove')} onRemove={() => setDraftField(draftKey, 'attachments', (prev) => prev.filter((x) => x !== a))} />
@@ -1840,7 +1846,12 @@ export const Composer2: React.FC<{
             onSelect={(e) => setCursorPos((e.target as HTMLTextAreaElement).selectionStart || 0)}
             onPaste={(e) => {
               const files = e.clipboardData?.files
-              if (!files?.length) return // 纯文本粘贴照常,不拦
+              if (!files?.length) {
+                // 纯文本照常进输入框;太长的(借 Comma,≥5000 字)成一张磁贴,输入框留给你要说的话
+                const pasted = e.clipboardData?.getData('text/plain') ?? ''
+                if (pasted.length >= PASTE_TILE_MIN) { e.preventDefault(); setPastes((prev) => [...prev, pasted]) }
+                return
+              }
               e.preventDefault()
               const all = Array.from(files)
               const images = all.filter((f) => f.type.startsWith('image/'))
@@ -2189,6 +2200,20 @@ export const Composer2: React.FC<{
             <div className="t2c-hint" style={{ marginTop: 6, marginBottom: 0 }}>{callError}</div>
           )}
         </ChatBoxSurface>
+        {previewPaste !== null && pastes[previewPaste] !== undefined && (
+          <QuotePreview
+            text={pastes[previewPaste]}
+            paste
+            onClose={() => setPreviewPaste(null)}
+            onRestore={() => {
+              const i = previewPaste, p = pastes[i]
+              setDraftField(draftKey, 'pastes', (prev) => prev.filter((_, j) => j !== i))
+              setDraft((d) => (d.trim() ? `${d.replace(/\s+$/, '')}\n${p}` : p))
+              setPreviewPaste(null)
+              requestAnimationFrame(autoGrow)
+            }}
+          />
+        )}
         {previewQuote !== null && <QuotePreview text={previewQuote} note={noteOf(quoteNotes, previewQuote)} onNote={onQuoteNote ? (note) => onQuoteNote(previewQuote, note) : undefined} onClose={() => setPreviewQuote(null)} />}
       </div>
       {rulesOpen && <ApprovalRulesModal cfg={liveCfg} onClose={() => setRulesOpen(false)} />}
