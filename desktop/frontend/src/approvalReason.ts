@@ -3,7 +3,7 @@
  * 审批事件会持久化重放,畸形 payload 不清洗 = 每次渲染都炸(同 context_info 纪律);kind 白名单外的一律丢掉。
  * 契约 C6:protected = 写凭据 / Forsion 本机配置(C4),引擎每次都问、「总允许」不落 —— 与 escalate 分开标注。
  */
-import type { AnswerBy, ApprovalReason, ApprovalRemote } from './types'
+import type { AnswerBy, ApprovalPreviewI18n, ApprovalReason, ApprovalRemote, ApprovalRequest } from './types'
 
 const KINDS: ReadonlySet<string> = new Set<ApprovalReason['kind']>(['custom-ask', 'escalate', 'mode', 'protected', 'control', 'always'])
 const MODES: ReadonlySet<string> = new Set(['readonly', 'auto-edit', 'full-auto'])
@@ -118,4 +118,31 @@ export function answeredByText(
   if (by.via === 'local') return o.remotePage ? (o.hostName ? t('approval.byHostNamed', { device: o.hostName }) : t('approval.byHost')) : ''
   if (by.via === 'channel') return t('approval.byChannel')
   return t('approval.byOther')
+}
+
+/**
+ * approval_request.previewI18n 的清洗(事件持久化重放,同上纪律):键只认 approval.preview.*(引擎点不到别的词条),
+ * vars 只收串与有限数;有一个不对就整份丢掉 —— 卡上退回英文 preview,不渲染缺了值的句子。
+ */
+export function sanitizeApprovalPreviewI18n(raw: unknown): ApprovalPreviewI18n | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const r = raw as Record<string, unknown>
+  if (typeof r.key !== 'string' || !/^approval\.preview\.\w+$/.test(r.key)) return undefined
+  if (r.vars === undefined) return { key: r.key }
+  if (!r.vars || typeof r.vars !== 'object' || Array.isArray(r.vars)) return undefined
+  const vars: Record<string, string | number> = {}
+  for (const [k, v] of Object.entries(r.vars)) {
+    if (typeof v === 'string') vars[k] = v.slice(0, 20_000)
+    else if (typeof v === 'number' && Number.isFinite(v)) vars[k] = v
+    else return undefined
+  }
+  return { key: r.key, vars }
+}
+
+/** 卡上那句:有结构化版且本端有这个词条 → 按界面语言;否则(旧事件 / 新引擎配旧桌面)原样的英文 preview。 */
+export function approvalPreviewText(req: Pick<ApprovalRequest, 'preview' | 'previewI18n'>, t: (k: string, v?: Record<string, unknown>) => string): string {
+  const p = req.previewI18n
+  if (!p) return req.preview
+  const s = t(p.key, p.vars)
+  return s === p.key ? req.preview : s
 }

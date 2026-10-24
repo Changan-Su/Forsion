@@ -1470,7 +1470,7 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
           else if (e.type === 'system_prompt') { ev.systemPrompt = String(p.content || ''); ev.recalled = String(p.recalled || ''); }
           else if (e.type === 'approval_request') {
             ev.approvals += 1;
-            ev.approvalList.push({ name: p.name, reason: p.reason?.kind, mode: p.reason?.mode, agent: p.agentSlug, args: String(p.arguments || '').slice(0, 300), remote: p.remote ?? null });
+            ev.approvalList.push({ name: p.name, reason: p.reason?.kind, mode: p.reason?.mode, agent: p.agentSlug, args: String(p.arguments || '').slice(0, 300), remote: p.remote ?? null, previewI18n: p.previewI18n ?? null });
             const decision = onApproval ? await onApproval(p) : undefined;
             const action = approvalActionOf(decision);
             const id = p.approvalId || p.id || p.approval_id;
