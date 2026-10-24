@@ -196,6 +196,21 @@ async function main() {
     g = await geometry(page)
     check('minimum main window width preserves caption/tools separation', g.lastButton.right <= g.area.right - 2, g)
     native(meta.handle, [], '', path.join(output, 'main-narrow.png'))
+    // A narrow right sidebar cannot also give up toolbar + caption width; its tabs drop below the caption row.
+    await page.locator('.rb-btn[aria-label="Tangu"]').first().click()
+    await pause(800)
+    if (!(await page.locator('.dv-edge-right.is-on').count())) await page.locator('.dv-edge-right').click()
+    await pause(600)
+    // (The main group's overflow tabs are scroll-clipped, so only the rightmost header is measured here.)
+    const side = await page.evaluate(() => {
+      const edge = document.querySelector('.dv-edge-actions').getBoundingClientRect()
+      const header = [...document.querySelectorAll('.dv-tabs-and-actions-container.dv-under-edge')].sort((a, b) => b.getBoundingClientRect().left - a.getBoundingClientRect().left)[0]
+      const tabs = [...header.querySelectorAll('.dv-tab')].map(t => t.getBoundingClientRect().toJSON())
+      return { edge: edge.toJSON(), header: header.className, tabs, ok: tabs.length > 0 && tabs.every(r => r.width > 0 && (r.right <= edge.left + 2 || r.top >= edge.bottom - 2) && r.right <= innerWidth) }
+    })
+    check('right sidebar tabs stay visible beside the caption', side.ok, side)
+    check('stacked sidebar header does not stretch the native caption', Math.abs((g = await geometry(page)).area.height - g.tabs.height) <= 2)
+    native(meta.handle, [], '', path.join(output, 'main-right-sidebar.png'))
 
     // Detached/Space windows use the same native buttons with no Ribbon.
     const opened = app.waitForEvent('window')
