@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach } from 'vitest'
 import { setLocaleGlobal } from '../../i18n'
-import { toLocalDate, monthGridDays, coversDay, eventBox, sameDay, startOfWeek, weekStart, useWeekStartPref, eventTimeSummary, fmtDur } from './dateUtils'
+import { toLocalDate, addMinutes, monthGridDays, coversDay, eventBox, sameDay, startOfWeek, weekStart, useWeekStartPref, eventTimeSummary, fmtDur } from './dateUtils'
 
 describe('toLocalDate', () => {
   it('全天 = 本地午夜(不偏 UTC)', () => {
@@ -122,5 +122,22 @@ describe('isoWeek', () => {
     expect(isoWeek(new Date(2026, 0, 1))).toBe(1)
     expect(isoWeek(new Date(2021, 0, 3))).toBe(53)
     expect(isoWeek(new Date(2024, 11, 30))).toBe(1)
+  })
+})
+
+describe('addMinutes', () => {
+  it('夏令时切换日按墙钟加(Europe/London 2026-10-25 / 2026-03-29)', () => {
+    const tz = process.env.TZ
+    process.env.TZ = 'Europe/London'
+    try {
+      expect(new Date(2026, 9, 25, 13).getTimezoneOffset()).not.toBe(new Date(2026, 9, 25).getTimezoneOffset())
+      expect(addMinutes(new Date(2026, 9, 25), 13 * 60).getHours()).toBe(13)
+      expect(addMinutes(new Date(2026, 2, 29), 13 * 60).getHours()).toBe(13)
+      expect(addMinutes(new Date(2026, 9, 25, 13), -13 * 60).getHours()).toBe(0)
+      expect(addMinutes(new Date(2026, 9, 24, 23, 30), 60).getDate()).toBe(25)
+    } finally {
+      if (tz === undefined) delete process.env.TZ
+      else process.env.TZ = tz
+    }
   })
 })

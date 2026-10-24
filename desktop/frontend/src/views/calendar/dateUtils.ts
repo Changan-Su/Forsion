@@ -153,9 +153,9 @@ export function fmtStamp(d: Date, allDay: boolean): string {
 export function snap15(min: number): number {
   return Math.round(min / 15) * 15
 }
-/** Date 加分钟(返回新 Date)。 */
+/** Date 加分钟(返回新 Date)。按墙钟加,与网格 / fmtStamp 一致:夏令时切换日「零点 + 13h」仍是 13:00,不是 12:00 / 14:00。 */
 export function addMinutes(d: Date, min: number): Date {
-  return new Date(d.getTime() + min * 60000)
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), d.getHours(), d.getMinutes() + min, d.getSeconds(), d.getMilliseconds())
 }
 /** ISO 周数(周一起算,1 月 4 日所在周为第 1 周)。日历页眉「第 42 周」用;周首日设成周日也照 ISO 算,与系统日历一致。 */
 export function isoWeek(d: Date): number {
