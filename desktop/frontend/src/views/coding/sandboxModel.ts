@@ -119,3 +119,12 @@ export function createReloadScheduler({ delay = 300, run, onError }: { delay?: n
 export function isNearBottom(scrollTop: number, scrollHeight: number, clientHeight: number, slack = 24): boolean {
   return scrollHeight - clientHeight - scrollTop <= slack
 }
+
+/** 隔离沙箱那一档的「发回对话」:证据在沙箱里,让模型自己用 plugin_sandbox_inspect 去看(状态 + 截图),不在这里抄一份。 */
+export function isolatedSandboxPrompt(pluginId: string, note: string): string {
+  return [
+    `The plugin "${pluginId}" from this project is running in the isolated plugin sandbox (a separate Forsion with its own empty vault).`,
+    'Call plugin_sandbox_inspect with action "status" and then "screenshot" to see what it shows, identify the root cause from that evidence, then fix the code; saving reloads the sandbox.',
+    `Observed behavior: ${note.trim() || 'not described; inspect the sandbox first.'}`,
+  ].join('\n')
+}

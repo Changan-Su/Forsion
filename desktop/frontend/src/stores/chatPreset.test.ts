@@ -8,12 +8,15 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_CLOUD_PROJECT, ROOTLESS_WORKSPACE_KEY, type WorkspaceDescriptor } from '../types'
-import { useApp, newSessionPreset, stickyDefaults, applyPreset, resolveNewSessionWorkspace, newChatProjectPath, type AppState } from './appStore'
+import { useApp, type AppState } from './appStore'
+import { stickyDefaults, applyPreset } from '../../../../tangu-agent/src/contracts/sessionDefaults'
+import { newSessionPreset, resolveNewSessionWorkspace, newChatProjectPath } from '../tangu/store/tanguSlice'
 import { effectiveSessionMode, sessionsInMode, workspacesInMode } from '../views/sessionMode'
 import { currentPlatform } from '../services/agentRunService'
 import { usePageStore } from '../amadeus/store/pageStore'
 import { useSpaceStore } from '@lcl/engine/spaceRegistry'
 import { selectableChatModels } from '../views/chatModelCatalog'
+import '../tangu/store/standalone' // 测试不走 activateTangu:自己装 Tangu 的 store 半身(界面热更新 3c)
 
 const createSessionMock = vi.hoisted(() => vi.fn())
 const putSessionConfigMock = vi.hoisted(() => vi.fn())

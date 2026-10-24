@@ -370,7 +370,11 @@ type PluginCellValue = import('../../../../shared/amadeus/db/schema').CellValue
  *  找勾选列看 `base === 'checkbox'`。 */
 export interface PluginDbColumn { id: string; name: string; type: string; base: string }
 /** ctx.databases 的一行。`kind: 'notes'` 的表里 `id` 就是那篇笔记的库相对路径。`name` = 首列文本(空就是空)。 */
-export interface PluginDbRow { id: string; name: string; cells: Record<string, PluginCellValue> }
+export interface PluginDbRow {
+  id: string; name: string; cells: Record<string, PluginCellValue>
+  /** 经典表记录有非空正文(2026-10-24+):给列表画「有备注」标记用;正文本身经 ctx.ui.mountRecord({ body: true }) 编辑。旧宿主没有这个字段。 */
+  hasBody?: boolean
+}
 /** 库里的一张多维表。`table` = 经典 .db(行在文件里);`notes` = 笔记视图(一行 = 文件夹里的一篇笔记,属性在 frontmatter)。 */
 export interface PluginDatabase {
   /** Vault-relative .db path; calendar-capable plugins also receive the exact human://CALENDAR.db reference on local hosts. */
@@ -388,6 +392,11 @@ export interface PluginRecordOptions {
   /** 当作时间显示的日期列(给日历成员的 dateCol);不给 = 日期列和别的属性一样列在下面 */
   dateCol?: string
   readOnly?: boolean
+  /** 2026-10-24+:在字段下面挂记录正文编辑器(与表格「打开记录」同一份 Markdown 正文、同一条写口)。
+   *  只对经典表生效;笔记视图(正文就是笔记文件)、只读源和 `readOnly` 时不画编辑器。旧宿主忽略。 */
+  body?: boolean
+  /** 2026-10-24+:不列出的属性列 id(例如插件自己已经画了勾选框的完成列)。旧宿主忽略。 */
+  hideColumns?: string[]
 }
 /** ctx.calendar 的一个只读叠加源(2026-10-17+):不在库里、改不了的日历 —— Agent 日程、.ics 订阅、
  *  Local↔Cloud 另一侧库里的表。行和列的形状同 ctx.databases(`kind` 恒 `'table'`);**没有写口**,
@@ -1568,6 +1577,21 @@ export interface PluginContext {
      *  the host also disposes every tooltip on disable / reload. Feature-detect on older hosts (`ctx.ui?.attachTooltip`)
      *  and fall back to `title` there. */
     attachTooltip?(el: HTMLElement, content: string | string[], opts?: { side?: 'top' | 'bottom' | 'left' | 'right' }): { update(content: string | string[]): void; dispose(): void }
+    /** The host drop indicator (2026-10-24+) for drag-to-reorder and drag-into in your own view, instead of drawing
+     *  your own line: the same line / outline as the host's editor, sidebar and tab bar, in the theme's colour.
+     *  Moving to another drop point fades the old one out and the new one in where it is; the same drop point
+     *  moving with a scroll just follows. All coordinates are viewport px (clientX/Y, getBoundingClientRect):
+     *  `line({ x, y, w })` is a horizontal line whose top edge is at `y`; `line({ x, y, h }, { axis: 'v' })` a vertical
+     *  one; `zone({ x, y, w, h })` the outline for "drop into this". Pass `key` (your row / slot id) so a scroll is
+     *  not mistaken for a new drop point. `hide()` on dragleave / drop / dragend; `dispose()` when your view goes
+     *  away — the host also disposes it on disable / reload. `opts.host` defaults to `document.body`.
+     *  Feature-detect on older hosts: `ctx.ui?.dropIndicator`. */
+    dropIndicator?(opts?: { host?: HTMLElement }): {
+      line(rect: { x: number; y: number; w?: number; h?: number }, opts?: { key?: string; axis?: 'h' | 'v' }): void
+      zone(rect: { x: number; y: number; w: number; h: number }, opts?: { key?: string }): void
+      hide(): void
+      dispose(): void
+    }
     /** A transparent layer of the host whiteboard over your own content (2026-10-10+): the same engine,
      *  pens and stroke feel as a `.excalidraw.md` board, without its chrome. See PluginBoardOptions.
      *  Feature-detect on older hosts: `ctx.ui?.mountBoard`. */

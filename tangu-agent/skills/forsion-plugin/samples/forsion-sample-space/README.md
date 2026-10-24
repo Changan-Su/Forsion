@@ -14,7 +14,7 @@ Space 是纯数据的布局配方（L0）：把**已注册的视图**组合成�
 
 - `id`：kebab-case（`/^[a-z0-9][a-z0-9-]{0,63}$/`），保留字 `tangu` / `inbox` / `amadeus` 不可用。
 - `name`：字符串 或 `{ "zh": "…", "en": "…" }`。
-- `icon`（可选）：图标库 28 个——`bot, inbox, mail, notebook-text, book-open, briefcase, calendar-days, message-circle, folder, folder-open, file-text, star, heart, home, target, zap, globe, music, image, video, code, terminal, layout-grid, sparkles, boxes, list-tree, server, server-cog`；不认识的名字静默回落方块图标。
+- `icon`（可选）：图标库 30 个——`bot, inbox, mail, notebook-text, book-open, briefcase, calendar-days, message-circle, folder, folder-open, file-text, star, heart, home, target, zap, globe, music, image, video, code, terminal, layout-grid, sparkles, boxes, list-tree, list-todo, server, server-cog, cloud`；不认识的名字静默回落方块图标。
 - `iconFile`（可选，2026-10-04 起）：自绘图标。写同目录下一枚图片的**文件名**（`.png` / `.svg`，不能带路径），本模板用的是 `icon.svg`。PNG 原色显示（正方形、边长 64~512 像素、≤256KB）；SVG 只取轮廓、颜色跟随主题和选中态（≤64KB），照 `viewBox="0 0 24 24"`、2px 描边画最协调。`icon` 照样写：老版本应用不认 `iconFile`，图读不到时也退到它。
 - `layout.main / left / right`：`{ "type": "<视图>", "params": {…} }` 数组；**main 至少一个视图**。
 - `layout.main` 第二项起可加 `"split":"right"` 或 `"split":"down"`，建立宿主原生 Dockview 分栏；省略时仍与旧配方一样开成同组标签页。`split` 不可用于第一项或左右侧栏。

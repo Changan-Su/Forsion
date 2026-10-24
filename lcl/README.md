@@ -61,6 +61,7 @@ Genesis 当前使用这份 LCL。`apps/Archived/Forsion-LCL` 是早期组合引�
 - `engine/menuAnchor.tsx` 的 `useExitGhost`:条件渲染的浮层卸载时留一份 inert 替身放完退场再摘;`OverlayAt` 自带,命令面板 / ⌘P 接了。退不退由 base.css 那张名单决定(进场名单 == 退场名单,`check:motion` 钉着)。
 - 方向性按压:按钮写 `data-press="back|forward|reload"`(engine.css)。
 - 仪器:`npm run check:motion`(进 `npm test`;写死时长与不经 OverlayAt 的菜单走棘轮基线 `scripts/motion-baseline.json`)。
+- `engine/dropIndicator.ts`:落点提示(拖动排序 / 拖入时的那根线、那圈「放进去」描边)的唯一真源。换落点 = 旧的原地淡出 90ms、新的在新位置淡入 130ms 并从近端展开;同一个落点只是坐标变了(自动滚动、重排)就直接跟。新代码用 `createDropIndicator()`(视口坐标,fixed 包含块与祖先 zoom 已补偿);已经自己画线的地方在定位前调 `dropRetarget(el, key)`、藏之前调 `dropHide(el)`(Amadeus 编辑器三根线、标签条竖线);每行自带伪元素线的列表用 `dropIndicator.css` 的 `--lcl-drop-enter` / `--lcl-drop-leave` / `--lcl-drop-fade`(写法见该文件顶注)。颜色一律 `--signal-line`。插件:`ctx.ui.dropIndicator`。入场只动 `opacity` 和独立的 `scale`,不碰 `transform`(各处靠内联 transform 定位)。方案页:仓根 `docs/ToBeImproved/落点过渡动效方案_2026-10-24/`(选 B 原地淡入)。
 
 ## English contract
 

@@ -24,6 +24,7 @@ import { AchievementToast } from './achievements/AchievementToast'
 import { debugFireToast } from './achievements/store'
 import { forgetUserSpace } from './userSpaces'
 import { NotificationHost } from './components/NotificationHost'
+import { SandboxChrome } from './sandbox/SandboxChrome'
 import { WhatsNewHost } from './components/WhatsNewDialog'
 import { SyncSetupHost } from './components/SyncSetupCard'
 import { TermsUpdateHost } from './components/TermsUpdateDialog'
@@ -37,11 +38,10 @@ import { syncDevCommands } from './devCommands'
 import { openAgentProfile } from './views/agentProfileNav'
 import { listSkills } from './services/backendService'
 import { FloatingPanelFrame } from './components/FloatingPanelFrame'
-import { BtwHost } from '@tangu/ui/views/chat2/BtwPanel'
-import { quoteInMainChat } from '@tangu/ui/views/chat2/btwStore'
 import { FloatingViewSurface } from './components/FloatingViewSurface'
 import { closeWebFloatingPanel, getWebFloatingPanel, subscribeWebFloatingPanel } from './pluginPanelSeam'
 import { homeTarget } from './services/engine/targets'
+import { readTanguShell, TanguBtwHost } from './amadeus/plugins/tanguSeam'
 
 const PREVIEW_SIZES: Array<[number, string]> = [[390, 'iPhone'], [414, 'Max'], [768, 'iPad']]
 /** 桌面/web 移动预览「手机框」:套在整个 app 外(引擎壳 + 设置/商店/成就等 fixed 浮层),
@@ -81,7 +81,7 @@ export function Root() {
     if (action === 'space-removed' && payload) forgetUserSpace(payload)
     if (action === 'chat-draft' && payload) draftInMainChat(payload)
     // 旁聊浮窗「引用到对话」:回答挂成主窗输入框的引用,不动草稿
-    if (action === 'chat-quote' && payload) quoteInMainChat(payload)
+    if (action === 'chat-quote' && payload) readTanguShell()?.quoteInMainChat(payload)
     if (action === 'agents-changed') {
       void useApp.getState().refreshAgents()
       window.dispatchEvent(new Event('forsion:agents-changed'))
@@ -265,7 +265,7 @@ export function Root() {
       </AnimatePresence>
 
       {/* 旁聊(/btw)在 Web 上的居中窄浮层;桌面走原生 Floating Panel,这里恒为空 */}
-      <BtwHost />
+      <TanguBtwHost />
 
       <WhatsNewHost />
       <TermsUpdateHost />
@@ -288,6 +288,7 @@ export function Root() {
           卡片(z 100)压在浮层(z 55)上正常弹 —— 否则浮层开着时「发送测试通知」等于没按(Codex 评审 P1)。
           web 只有一个渲染进程,不存在与别的窗口重复;面板自己的操作结果照旧走面板提示条(panelToast)。 */}
       {!a.onboarding && <NotificationHost />}
+      {window.tangu?.sandbox && <SandboxChrome />}
     </MobilePreviewFrame>
   )
 }

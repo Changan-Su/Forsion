@@ -63,6 +63,7 @@ import { transcribeAudioProvider } from './builtin/transcribeAudio.js';
 import { viewVideoProvider } from './builtin/viewVideo.js';
 import { uiCommandsProvider } from './builtin/uiCommands.js';
 import { phoneToolsProvider } from './builtin/phoneTools.js';
+import { pluginSandboxProvider } from './builtin/pluginSandbox.js';
 import { reviewLoadoutProvider } from './builtin/reviewLoadout.js';
 import { manageScheduleProvider } from './builtin/manageSchedule.js';
 import { loadToolsProvider } from './builtin/loadTools.js';
@@ -212,6 +213,7 @@ registerToolProvider(forsionAccountProvider); // both 前台 run、且 brain 有
 registerToolProvider(marketplaceProvider); // both 前台 run、且 brain 有商店面时:search_marketplace 查商店条目(chat 常驻)、get_marketplace_plugin 按 ID 取详情(chat 按需;append 末尾,保前缀缓存)
 registerToolProvider(museMessageProvider); // 仅 Muse 周期(ctx.muse,子代理除外):message_user 往 Muse 私聊发一条(要用户回话 / 拍板的;append 末尾,普通 run 不可见,快照不变)
 registerToolProvider(webPublishProvider); // both 前台 run、且 brain 有账号面(cloud)时:publish_web_page 把工作区的网页 / 静态文件夹发成 Forsion Connect 链接或下线(每次都问;deferred,append 末尾,快照不变)
+registerToolProvider(pluginSandboxProvider); // 桌面端限定(clientCapability 'plugin.sandbox' 中央闸,host-only):plugin_sandbox 起停 / 重置隔离的插件沙箱(审批同 run_bash)、plugin_sandbox_inspect 截图 / 控制台 / 状态 / 在沙箱里执行命令(全 deferred,append 末尾;无能力的 run 不可见,快照不变)
 // 插件(表情包/分段等)现为文件夹插件(plugins/),经 activateAllPlugins→ctx.registerPlugin 注册其工具,不在此处。
 
 /** ctx 自带 profile(loop 按 run.app_id 解析)优先;缺省回退本进程装配的 profile。 */

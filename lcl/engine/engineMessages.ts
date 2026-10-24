@@ -53,6 +53,9 @@ export const LCL_MESSAGES: Record<string, { zh: string; en: string }> = {
   // 视图错误边界
   'lcl.view.loadFailed': { zh: '此视图加载失败', en: 'Failed to load this view' },
   'lcl.view.retry': { zh: '重试', en: 'Retry' },
+  // 布局里存着、此刻没注册的视图(插件还没就位 / 已关掉)的占位
+  'lcl.view.unavailable': { zh: '此视图暂不可用', en: "This view isn't available" },
+  'lcl.view.unavailableHint': { zh: '它所属的插件还没加载，或者已经关掉。插件回来后，这里会原样恢复。', en: "Its plugin hasn't loaded yet or is turned off. It will come back here once the plugin is available." },
 
   // 命令面板 / Mini Panel / 移动单列壳
   'lcl.palette.pickCommand': { zh: '选择要添加的命令…', en: 'Pick a command to add…' },

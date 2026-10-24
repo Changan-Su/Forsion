@@ -74,6 +74,7 @@ import { UnifiedSpikeHarness } from './amadeus/unified/UnifiedSpike'
 import { routeNote } from './amadeus/unified/router'
 import { SEG_SLOT } from './amadeus/unified/CanvasModeSeg'
 import { useUiOverlay } from './amadeusOverlayStore'
+import './tangu/store/standalone' // 不走 installEngine:自己装 Tangu 的 store 半身(界面热更新 3c);排在最后,别早于上面那些打桩的 import
 
 // ExcalidrawEmbed 平时干这件事;harness 直挂画布,得自己设(否则字体去 CDN 拉,CSP 拦)。
 ;(window as unknown as { EXCALIDRAW_ASSET_PATH?: string }).EXCALIDRAW_ASSET_PATH = new URL('excalidraw/', document.baseURI).href

@@ -5,7 +5,7 @@
  * 展开:竖排步骤(图标列 + 步骤间细线),思考原文在第一步下;每个调用一行(动作 + 目标 + 可选 +增/-删),可再展开看参数/结果。
  * 复用 .tool-card-body/.label 样式;+增/-删 best-effort(算不出就只显目标)。
  */
-import React, { useMemo, useState } from 'react'
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ChevronRight, ChevronDown, XCircle, PauseCircle, Sparkles, FilePlus2, Pencil, Terminal, FileText, Search, Globe, Wrench, type LucideIcon } from 'lucide-react'
 import { AnimatedCollapse } from './AnimatedUI'
 import { DiffView } from './DiffView'
@@ -143,6 +143,28 @@ export function thoughtLabel(t: (key: string, vars?: Record<string, string | num
   return sec < 60 ? t('tool.thoughtSec', { n: sec }) : t('tool.thoughtMin', { m: Math.floor(sec / 60), s: sec % 60 })
 }
 
+/** 过程行换一步时滚动替换(借鉴 Comma 方案 §6,10-24):旧行上滑淡出、新行从下面进。`k` 变了才滚;挂上时不入场。
+ *  两行叠在同一个 grid 格子里,不挤动后面的状态图标;动效与时长全在 base.css 的 .tool-roll。 */
+const RollLine: React.FC<{ k: string; children: React.ReactNode }> = ({ k, children }) => {
+  const cur = useRef({ k, node: children })
+  const moved = useRef(false)
+  const [out, setOut] = useState<{ k: string; node: React.ReactNode } | null>(null)
+  if (cur.current.k !== k) moved.current = true
+  useLayoutEffect(() => {
+    if (cur.current.k === k) { cur.current.node = children; return }
+    setOut(cur.current)
+    cur.current = { k, node: children }
+  })
+  // 兜底:藏起来的容器里动画不放、animationend 不来,旧行别一直叠在那儿
+  useEffect(() => { if (!out) return; const id = setTimeout(() => setOut(null), 250); return () => clearTimeout(id) }, [out])
+  return (
+    <span className="tool-roll">
+      {out && <span key={`out-${out.k}`} className="tool-roll-item is-out" aria-hidden onAnimationEnd={() => setOut(null)}>{out.node}</span>}
+      <span key={k} className={`tool-roll-item${moved.current ? ' is-in' : ''}`}>{children}</span>
+    </span>
+  )
+}
+
 const ThinkRow: React.FC<{ reasoning: string; label: string; thinking: boolean }> = ({ reasoning, label, thinking }) => {
   const [open, setOpen] = useState(true)
   return (
@@ -268,6 +290,7 @@ export const ToolGroup: React.FC<{
         <div className="tool-group">
           <button className="tool-group-head" aria-busy={busy} aria-expanded={open} onClick={() => setOpen((o) => !o)}>
             <span className="tool-group-ic">{open ? <ChevronDown size={13} /> : busy ? <Dots /> : <ChevronRight size={13} />}</span>
+            <RollLine k={open ? 'sum' : thinking ? 'think' : curAsks ? 'ask' : curDesc ? `cur-${groupedEvents[curIdx].id}` : 'sum'}>
             {!open && thinking ? (
               <span className="tool-group-cur"><span className="tool-group-cur-copy chat-run-shimmer-text">{thinkLabel}</span></span>
             ) : !open && curAsks ? (
@@ -289,6 +312,7 @@ export const ToolGroup: React.FC<{
                 <span className="tool-group-sum-short">{shortSummary}</span>
               </span>
             )}
+            </RollLine>
             <span className="tool-group-status">
               {anyParked ? (parkedAsk
                 ? <PauseCircle size={13} style={{ color: 'var(--accent-ink)' }} data-waiting-you="1" aria-label={t('tool.waitingYou')}><title>{t('tool.waitingYou')}</title></PauseCircle>

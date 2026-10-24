@@ -1,4 +1,5 @@
 import { MarketPluginCards, isMarketplaceTool } from '../../components/MarketPluginCards'
+import { PluginSandboxCard, isSandboxCardTool } from './PluginSandboxCard'
 import { HumanUpdateCard } from '../../components/HumanUpdateCard'
 import { humanChanges } from '../../services/humanCollaboration'
 import { SelfUpdateReceipt } from '../../components/SelfUpdateReceipt'
@@ -7,7 +8,8 @@ import { SelfUpdateReceipt } from '../../components/SelfUpdateReceipt'
  * 用户为暖色带尾气泡。子件(思考/工具/待办/审批/反问)以新 t2 风格内联呈现。
  * 接 UiMessage,故可直接喂真实 store 数据(集成期用);回调可选(预览传空)。
  */
-import { Fragment, memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from 'react'
+import { Fragment, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from 'react'
+import { useStreamReveal } from './streamReveal'
 import { Copy, RotateCcw, GitBranch, MessageCircleQuestion, CornerUpLeft, Pencil, Volume2, Square, Loader2, LogIn, Zap, History as HistoryIcon, FileCode2, MessageSquare, ShieldQuestion, CircleCheck, CircleX, CircleHelp } from 'lucide-react'
 import { FileInput } from 'lucide-react'
 import { useNoteInsertState } from './insertToNote'
@@ -59,7 +61,8 @@ import { useSpeechReveal } from './useSpeechReveal'
 import { playSendFlight } from './sendFlight'
 import { InquiryCard, PlanCard, TodoList } from '../../components/InquiryCard'
 import { registerMessages, useI18n } from '../../i18n'
-import { isHtmlCardTool, useApp } from '../../stores/appStore'
+import { useApp } from '../../stores/appStore'
+import { isHtmlCardTool } from '../../tangu/store/tanguSlice'
 import { runResultText, type RunResult } from '../../builtins/runCommand'
 import { SUB_PROVIDER_LABELS } from '../../components/OnboardingWizard'
 import { UI_MODE, nativeSheetPresenter, runNativeCtxMenu, runNativeSheetMenu, useEdgeNudge, type SheetMenuItem } from '@lcl/engine'
@@ -72,7 +75,7 @@ import { MuseApprovalLine, MuseTodoCards, MuseTodoTraces, ProactiveMark, isProac
 import { CHILD_UPDATE_OPEN, ChildUpdateLine, ForkBlock, ForkScope, childIdsOf } from './ChildSessions'
 import { APPROVAL_UPDATE_OPEN, INQUIRY_UPDATE_OPEN, approvalForCall, parseApprovalUpdate, parseInquiryUpdate, pickPlanInquiry, type ApprovalOutcome } from './approvalQueue'
 import { isRemoteApprover, wasDecidedHere } from '../../components/ApprovalCard'
-import { answeredByText } from '../../approvalReason'
+import { answeredByText, approvalPreviewText } from '../../approvalReason'
 import { refForSession, targetForSession, useSessionHostName } from '../../services/engine/targets'
 import { AttachmentTile } from '../../components/AttachmentTile'
 import { ImageStack, stackable } from '../../components/ImageStack'
@@ -88,6 +91,7 @@ export type OrderedToolPart =
   | { t: 'sketch'; item: SketchItem }
   | { t: 'intelligent'; event: ToolEvent }
   | { t: 'marketplace'; event: ToolEvent }
+  | { t: 'sandbox'; event: ToolEvent }
   | { t: 'pluginCard'; event: ToolEvent; claim: ToolCardClaim }
 
 /** 直播中还没收口的 sketch 调用 → 草稿卡(10-09,对标 ChatGPT Intelligent UI 边生成边渲染):tool_stream 已把参数增量
@@ -130,6 +134,7 @@ export function partitionToolSegment(events: ToolEvent[], sketches?: SketchItem[
     }
     const claim = cardOf?.(ev)
     if (claim) { flushTools(); parts.push({ t: 'pluginCard', event: ev, claim }); continue }
+    if (isSandboxCardTool(ev)) { flushTools(); parts.push({ t: 'sandbox', event: ev }); continue }
     tools.push(ev)
     if (isMarketplaceTool(ev) && ev.done && !ev.isError) { flushTools(); parts.push({ t: 'marketplace', event: ev }); continue }
     const sketch = sketchByCall.get(ev.id) ?? (live ? draftSketchOf(ev) : undefined)
@@ -364,6 +369,14 @@ function ApprovalUpdateBy({ sessionId, callId, status }: { sessionId?: string; c
   return <div className="t2-apv-update-by" data-answered-by>{t(status === 'rejected' ? 'chat.approval.update.byRejected' : 'chat.approval.update.byApproved', { where })}</div>
 }
 
+/** 结局行里的预览:原审批带 previewI18n(账号动作 / 发布网页)→ 与审批卡同一句、按界面语言;否则回灌行里的英文摘要。 */
+function ApprovalUpdatePreview({ sessionId, callId, preview }: { sessionId?: string; callId: string; preview: string }) {
+  const { t } = useI18n()
+  const req = useApp((s) => (sessionId ? approvalForCall(s.messagesBySession[sessionId], callId) : undefined))
+  const text = req?.previewI18n ? approvalPreviewText(req, t as (k: string, v?: Record<string, unknown>) => string) : preview
+  return <span className="t2-apv-update-preview" title={text}>{text}</span>
+}
+
 /** 「插入笔记」(G3-08):一篇 v4 笔记都没开 → 不出现;开着的全是只读 / 锁定 → aria-disabled + 说明 —— 不用 disabled:
  *  手机上没有悬停,点一下得有人告诉他为什么不行(点了走 onInsert,insertReplyToNote 自己说明)。 */
 function InsertNoteButton({ onInsert }: { onInsert: () => void }) {
@@ -427,6 +440,14 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
     if (typeof rootRef === 'function') rootRef(el)
     else if (rootRef) (rootRef as React.MutableRefObject<HTMLDivElement | null>).current = el
   }
+  // 流式尾巴淡入(streamReveal.ts):只认助手那支的根
+  const asstRef = useRef<HTMLDivElement | null>(null)
+  const setAsst = useCallback((el: HTMLDivElement | null): void => {
+    asstRef.current = el
+    if (typeof rootRef === 'function') rootRef(el)
+    else if (rootRef) (rootRef as React.MutableRefObject<HTMLDivElement | null>).current = el
+  }, [rootRef])
+  useStreamReveal(asstRef, msg.role === 'assistant' && msg.status === 'streaming')
   useLayoutEffect(() => {
     if (msg.role === 'user' && userWrapRef.current) playSendFlight(userWrapRef.current, msg.content)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -491,7 +512,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
               <div className="t2-apv-update-row" data-status={r.status}>
                 {r.status === 'approved' ? <CircleCheck size={12} /> : <CircleX size={12} />}
                 <span className="t2-apv-update-what">{t(UPDATE_KEY[r.status], { name: r.name })}</span>
-                <span className="t2-apv-update-preview" title={r.preview}>{r.preview}</span>
+                <ApprovalUpdatePreview sessionId={runSid} callId={r.callId} preview={r.preview} />
               </div>
               <ApprovalUpdateBy sessionId={runSid} callId={r.callId} status={r.status} />
             </Fragment>
@@ -647,7 +668,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
   })
 
   return (
-    <div ref={rootRef} className="t2-asst" id={`tocmsg-${msg.id}`} data-streaming={msg.status === 'streaming' ? '' : undefined}>
+    <div ref={setAsst} className="t2-asst" id={`tocmsg-${msg.id}`} data-streaming={msg.status === 'streaming' ? '' : undefined}>
       <div className="t2-avatar" style={!avatarUrl && msg.agentColor ? { background: msg.agentColor, color: '#fff' } : undefined}>{avatarUrl ? <img src={avatarUrl} alt="" /> : firstChar(msg.agentName || agentNameFallback || 'Tangu')}</div>
       <div className="t2-asst-col">
         <div className="t2-name" style={msg.agentColor ? { color: msg.agentColor } : undefined}>{msg.agentName || agentNameFallback || 'Tangu'}{msg.status === 'streaming' && <span className="t2-dot" />}</div>
@@ -690,6 +711,8 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
                     ? <ToolGroup key={`tools-${part.events.map((ev) => ev.id).join('-')}-${k + skip}`} events={part.events} running={msg.status === 'streaming'} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} />
                     : part.t === 'marketplace'
                       ? <MarketPluginCards key={`market-${part.event.id}`} event={part.event} />
+                    : part.t === 'sandbox'
+                      ? <PluginSandboxCard key={`sandbox-${part.event.id}`} event={part.event} />
                     : part.t === 'pluginCard'
                       ? <PluginToolCard key={`ptc-${part.event.id}`} event={part.event} claim={part.claim} onQuote={handlers?.onQuote} fallback={<ToolGroup events={[part.event]} />} />
                     : part.t === 'intelligent'
@@ -786,6 +809,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
           <InlineFiles files={msg.displayFiles} cfg={fileCtx.cfg} sessionId={fileCtx.sessionId} execMode={fileCtx.execMode} onOpenPreview={fileCtx.onOpenPreview} />
         )}
         {(msg.toolEvents || []).filter(ev => isMarketplaceTool(ev) && !inlineToolIds.has(ev.id)).map(ev => <MarketPluginCards key={`market-${ev.id}`} event={ev} />)}
+        {(msg.toolEvents || []).filter(ev => isSandboxCardTool(ev) && !inlineToolIds.has(ev.id)).map(ev => <PluginSandboxCard key={`sandbox-${ev.id}`} event={ev} />)}
         {trailingIntelligent.map(ev => <IntelligentUi key={ev.id} event={ev} live={streaming} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} />)}
         {!!trailingSketches.length && <SketchCards items={trailingSketches} actions={sketchActions} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} />}
         {trailingCards.map(({ ev, claim }) => <PluginToolCard key={`ptc-${ev.id}`} event={ev} claim={claim} onQuote={handlers?.onQuote} fallback={<ToolGroup events={[ev]} />} />)}

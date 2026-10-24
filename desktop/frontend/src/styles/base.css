@@ -505,7 +505,7 @@ a:hover { color: var(--accent-ink); }
   margin: 0;
   padding: 3px 4px 3px 6px;
   border-radius: var(--radius-md);
-  transition: background var(--duration-fast);
+  transition: background var(--duration-fast), box-shadow var(--lcl-drop-fade);
 }
 .ws-group-head:hover { background: var(--overlay-light); }
 /* 工作区下的会话:缩进嵌在分组之下(Codex 式层级)。 */
@@ -725,7 +725,7 @@ a:hover { color: var(--accent-ink); }
 /* 工作区拖拽排序:拖起的组半透明,落点组上方画一条 accent 插入线。 */
 .ws-group-head[draggable="true"] { cursor: grab; }
 .ws-group-head.ws-dragging { opacity: 0.4; }
-.ws-group-head.ws-drag-over { box-shadow: inset 0 2px 0 var(--accent-ink); }
+.ws-group-head.ws-drag-over { box-shadow: inset 0 2px 0 var(--signal-line); }
 .ws-group-toggle {
   flex: 1;
   display: flex;
@@ -1391,6 +1391,17 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .tool-group-sum, .tool-group-cur { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tool-group-cur-copy {
   display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom;
+}
+.tool-roll { display: inline-grid; min-width: 0; overflow: hidden; }
+.tool-roll-item { grid-area: 1 / 1; display: flex; min-width: 0; }
+/* 过程行滚动替换(ToolGroup 的 RollLine):旧行上滑 8px 淡出、新行从下面 8px 进,带 2px 模糊;减少动态效果直接换字 */
+.tool-roll-item.is-in { animation: tool-roll-in var(--roll-enter-duration) var(--ease-calm) both; }
+.tool-roll-item.is-out { pointer-events: none; animation: tool-roll-out var(--roll-exit-duration) var(--ease-exit) forwards; }
+@keyframes tool-roll-in { from { opacity: 0; translate: 0 8px; filter: blur(2px); } }
+@keyframes tool-roll-out { to { opacity: 0; translate: 0 -8px; filter: blur(2px); } }
+@media (prefers-reduced-motion: reduce) {
+  .tool-roll-item.is-in { animation: none; }
+  .tool-roll-item.is-out { display: none; }
 }
 .tool-group-cur .file { color: var(--accent-ink); font-family: var(--font-mono); font-size: var(--ui-font-meta, 12px); }
 .tool-group-step { color: var(--text-faint); }
@@ -3227,23 +3238,36 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   cursor: pointer;
   transition: border-color var(--duration-fast), background var(--duration-fast);
 }
+/* 旋钮按左右两条边定位(借鉴 Comma 方案 §4「开关拉伸」,10-24):两条边各走 --switch-edge-duration,后沿晚 --switch-edge-lag
+ * 出发 —— 离开时拉长、落地时回缩;过渡写在「要去的那一态」上,所以哪条边是后沿跟着方向换。不用 keyframes,中途反悔也接得住。
+ * 悬停时前沿朝要去的方向探 2px。 */
 .settings-switch > span {
   position: absolute;
   top: 2px;
   left: 2px;
-  width: 14px;
+  right: calc(100% - 16px);
   height: 14px;
-  border-radius: 50%;
+  border-radius: var(--radius-pill, 999px);
   background: var(--bg-card);
   box-shadow: var(--btn-shadow);
-  transition: transform var(--duration-fast), background var(--duration-fast);
+  transition: left var(--switch-edge-duration) var(--ease-surface), right var(--switch-edge-duration) var(--ease-surface) var(--switch-edge-lag), background var(--duration-fast);
 }
 /* 暗色的「关」:旋钮若仍是 --bg-card,与卡面同色、与半透明轨道只差一丝(≈1.3:1),开关看不出状态。
  * 改用背景族的 --text-faint(随 data-bg 走,不碰主题色轴),旋钮对轨道 ≥ 3:1(WCAG 1.4.11);「开」与浅色不变。
  * 仪器:check:themecontrast 的 switch-off 探针(全部语言 × 配色 × 暗色)。 */
 :root[data-mode='dark'] .settings-switch:not(.active) > span { background: var(--text-faint); }
 .settings-switch.active { border-color: var(--signal-mark); background: var(--signal-mark); }
-.settings-switch.active > span { transform: translateX(14px); background: var(--bg-card); }
+.settings-switch.active > span {
+  left: calc(100% - 16px); right: 2px; background: var(--bg-card);
+  transition: left var(--switch-edge-duration) var(--ease-surface) var(--switch-edge-lag), right var(--switch-edge-duration) var(--ease-surface), background var(--duration-fast);
+}
+.settings-switch:not(:disabled):hover > span { right: calc(100% - 18px); }
+.settings-switch.active:not(:disabled):hover > span { left: calc(100% - 18px); right: 2px; }
+@media (prefers-reduced-motion: reduce) {
+  .settings-switch > span, .settings-switch.active > span { transition: background var(--duration-fast); }
+  .settings-switch:not(:disabled):hover > span { right: calc(100% - 16px); }
+  .settings-switch.active:not(:disabled):hover > span { left: calc(100% - 16px); }
+}
 .settings-switch:focus-visible { outline: var(--focus-ring) solid var(--signal-line); outline-offset: 2px; }
 .settings-switch:disabled { cursor: not-allowed; }
 .is-disabled { opacity: .48; }
@@ -5292,6 +5316,10 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
   --hovercard-enter: 190ms;
   --hovercard-exit: 140ms;
   --flash-duration: 1100ms; /* 跳转落点双闪 */
+  --roll-enter-duration: 150ms; /* 过程行滚动替换:新行进 */
+  --roll-exit-duration: 100ms; /* 过程行滚动替换:旧行出 */
+  --switch-edge-duration: 120ms; /* 开关旋钮左右两条边各自的时长 */
+  --switch-edge-lag: 30ms; /* 开关旋钮后沿晚出发多久(离开时拉长、落地时回缩) */
   --draw-duration: 600ms; /* 描线 */
 }
 @keyframes ui-menu-enter {
