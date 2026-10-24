@@ -14,7 +14,7 @@
  * 只查「提到没提到」,不查措辞 —— 这是漂移探针,不是文风警察。
  */
 import { describe, expect, it } from 'vitest'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 
 const HERE = path.dirname(new URL(import.meta.url).pathname)
@@ -38,7 +38,10 @@ function membersOf(src: string, iface: string): string[] {
 
 describe('插件契约 ↔ 作者手册漂移', () => {
   const types = readFileSync(TYPES, 'utf8')
-  const skill = existsSync(SKILL) ? readFileSync(SKILL, 'utf8') : ''
+  // 手册 = SKILL.md + 它指过去的 references/*.md(10-24 起长段拆进 references,模型按需读)
+  const REFS = path.join(path.dirname(SKILL), 'references')
+  const skill = (existsSync(SKILL) ? readFileSync(SKILL, 'utf8') : '')
+    + (existsSync(REFS) ? readdirSync(REFS).filter((f) => f.endsWith('.md')).map((f) => '\n' + readFileSync(path.join(REFS, f), 'utf8')).join('') : '')
   const guide = existsSync(GUIDE) ? readFileSync(GUIDE, 'utf8') : ''
   /** 正典在仓外(见文件头 ③):CI 上恒 false。门控只作用于正典那两条,手册侧照常硬断言。 */
   const HAS_GUIDE = existsSync(GUIDE)
