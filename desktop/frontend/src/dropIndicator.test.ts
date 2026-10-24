@@ -64,8 +64,31 @@ describe('dropRetarget', () => {
     expect(ghosts()).toHaveLength(1)
     calls = []
     el.style.display = ''
+    vi.spyOn(performance, 'now').mockReturnValue(performance.now() + 1000) // 过了 80ms 才回来
     dropRetarget(el, 'a')
+    vi.restoreAllMocks()
     expect(calls).toHaveLength(1) // key 一样也重新淡入
+  })
+  it('藏了又马上以同一个落点画回来(编辑器同一拍先藏后画):撤掉影子、不重播淡入', () => {
+    const el = line()
+    dropRetarget(el, 'a')
+    dropHide(el)
+    expect(ghosts()).toHaveLength(1)
+    calls = [] // 影子自己的淡出不算
+    el.style.display = 'block'
+    dropRetarget(el, 'a')
+    expect(ghosts()).toHaveLength(0)
+    expect(calls).toHaveLength(0)
+  })
+  it('藏了马上画到别的落点:影子留着淡出,新的淡入', () => {
+    const el = line()
+    dropRetarget(el, 'a')
+    dropHide(el)
+    el.style.display = 'block'
+    calls = []
+    dropRetarget(el, 'b')
+    expect(ghosts()).toHaveLength(1)
+    expect(calls).toHaveLength(1)
   })
   it('系统关了动效:不动画、不留影子', () => {
     vi.stubGlobal('matchMedia', () => ({ matches: true }))

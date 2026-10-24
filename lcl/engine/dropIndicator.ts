@@ -23,6 +23,9 @@ const EASE = 'cubic-bezier(.2,.8,.2,1)'
 export type DropShape = 'line' | 'zone'
 
 const current = new WeakMap<HTMLElement, string>()
+/** 刚藏起来的那一下:同一个落点很快又显示回来(编辑器在同一个 dragover 里先藏后画、或下一拍接着画)就当没藏过。 */
+const lastHide = new WeakMap<HTMLElement, { key: string; ghost: HTMLElement | null; at: number }>()
+const REHIDE_MS = 80
 
 const shown = (el: HTMLElement): boolean => el.isConnected && getComputedStyle(el).display !== 'none'
 
@@ -41,9 +44,9 @@ function enterScale(el: HTMLElement, { shape = 'line', axis }: DropRetargetOptio
 }
 
 /** 把元素此刻的样子留一份,原地淡出后删掉。只抄画得出来的那几样;类名不带过去,免得仪器把它当成活的那根。 */
-function leaveGhost(el: HTMLElement): void {
+function leaveGhost(el: HTMLElement): HTMLElement | null {
   const parent = el.parentElement
-  if (!parent || typeof el.animate !== 'function') return
+  if (!parent || typeof el.animate !== 'function') return null
   const cs = getComputedStyle(el)
   const g = el.cloneNode(false) as HTMLElement
   g.removeAttribute('id')
@@ -56,6 +59,7 @@ function leaveGhost(el: HTMLElement): void {
   parent.insertBefore(g, el)
   const a = g.animate([{ opacity: cs.opacity }, { opacity: 0 }], { duration: DROP_OUT_MS, easing: 'ease-out', fill: 'forwards' })
   a.finished.then(() => g.remove(), () => g.remove())
+  return g
 }
 
 /**
@@ -63,6 +67,13 @@ function leaveGhost(el: HTMLElement): void {
  * key 不变 = 同一个落点只是挪了坐标,什么都不做;key 变了且原来亮着 = 旧样子留一份淡出,el 在新位置淡入。
  */
 export function dropRetarget(el: HTMLElement, key: string, opts: DropRetargetOptions = {}): void {
+  const hid = lastHide.get(el)
+  lastHide.delete(el)
+  if (hid && hid.key === key && performance.now() - hid.at < REHIDE_MS) {
+    hid.ghost?.remove() // 刚才那一下藏不算数:撤掉影子,原样亮着,不重播淡入
+    current.set(el, key)
+    return
+  }
   const prev = current.get(el)
   current.set(el, key)
   if (prev === key || reducedMotion() || typeof el.animate !== 'function') return
@@ -71,10 +82,15 @@ export function dropRetarget(el: HTMLElement, key: string, opts: DropRetargetOpt
   el.animate([{ opacity: 0, scale: from }, { opacity: 1, scale: '1' }], { duration: DROP_IN_MS, easing: EASE })
 }
 
-/** 落点提示要藏了:留一份淡出,再 `display: none`。之后再出现算新落点(会淡入)。 */
+/** 落点提示要藏了:留一份淡出,再 `display: none`。之后再出现算新落点(会淡入);
+ *  只有 80ms 内又以同一个 key 显示回来时例外 —— 那是调用方先藏后画同一处,原样接上。 */
 export function dropHide(el: HTMLElement | null | undefined): void {
   if (!el) return
-  if (current.has(el) && shown(el) && !reducedMotion()) leaveGhost(el)
+  const key = current.get(el)
+  if (key !== undefined && shown(el)) {
+    const ghost = reducedMotion() ? null : leaveGhost(el)
+    lastHide.set(el, { key, ghost, at: performance.now() })
+  }
   current.delete(el)
   el.style.display = 'none'
 }
