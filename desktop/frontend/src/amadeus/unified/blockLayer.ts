@@ -24,7 +24,7 @@ import { Fragment } from '@milkdown/kit/prose/model'
 import type { Node as ProseNode, ResolvedPos } from '@milkdown/kit/prose/model'
 import { createDropIndicatorPlugin } from 'prosemirror-drop-indicator'
 import { unfoldCalloutsForInsert } from '../blocks/markdown/callout'
-import { zoomOf } from '@lcl/engine'
+import { zoomOf, dropRetarget, dropHide } from '@lcl/engine'
 import { runEndOf } from './canvasEdit'
 import { tabIndent, tabOutdent, type TabFoldHooks } from '../blocks/markdown/tabIndent'
 import { blockDragViews, imageDragParagraph, visualBlockElement } from '../blocks/markdown/imageDrag'
@@ -111,6 +111,15 @@ export interface BlockLayer {
  *  bounding box 宽度不是 x/y 的统一因子 —— 真要支持那些,换 `new DOMMatrix(cs.transform)` 逐层
  *  累乘。另:offsetWidth 取整,分数布局宽会带亚像素误差,故与 zoomOf 差得极小时按 zoomOf 算,
  *  保证「无 transform 时严格退化成老行为」(Codex 评审 P2)。 */
+/** 落点 key 里认元素用(dropRetarget 只认字符串):同一个块元素恒拿同一个编号。 */
+const dropIds = new WeakMap<Element, number>()
+let dropSeq = 0
+const dropIdOf = (el: Element): number => {
+  let id = dropIds.get(el)
+  if (id === undefined) dropIds.set(el, (id = ++dropSeq))
+  return id
+}
+
 function visualScale(el: HTMLElement): number {
   const w = el.offsetWidth
   if (w <= 0) return zoomOf(el)
@@ -274,13 +283,12 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
     const o = overlayOrigin(dom)
     const r = el.getBoundingClientRect()
     const x = (side === 'left' ? r.left - 6 : r.right + 3) - o.x
+    dropRetarget(dom, `${dropIdOf(el)}:${side}`, { axis: 'v' }) // 换落点原地淡出淡入(LCL 落点提示)
     dom.style.display = 'block'
     dom.style.height = `${r.height / z}px`
     dom.style.transform = `translate(${Math.round(x / z)}px, ${Math.round((r.top - o.y) / z)}px)`
   }
-  const hideVline = (): void => {
-    if (vline) vline.style.display = 'none'
-  }
+  const hideVline = (): void => dropHide(vline)
   const EDGE = 28
 
   // ── 分栏行下方落点(第5振):指针越过行底 → 落点=行后顶层,整宽横线。与 pairRef 同一套
@@ -713,13 +721,12 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
     const o = overlayOrigin(dom)
     const r = rowEl.getBoundingClientRect()
     const y = edge === 'top' ? r.top - 6 : r.bottom + 6 // top:卡拖拽的「插到单元之前」画在上缘
+    dropRetarget(dom, `${dropIdOf(rowEl)}:${edge}:${indent}`)
     dom.style.display = 'block'
     dom.style.width = `${Math.max(0, r.width - indent) / z}px`
     dom.style.transform = `translate(${Math.round((r.left + indent - o.x) / z)}px, ${Math.round((y - o.y) / z)}px)`
   }
-  const hideHline = (): void => {
-    if (hline) hline.style.display = 'none'
-  }
+  const hideHline = (): void => dropHide(hline)
   /** 这个块能不能当「拖到左右缘成列」的配对目标 —— **判据必须与 executePair 逐字同源**:
    *  行只允许顶级,所以目标要么在 doc 顶层,要么在顶级行的 cell 里。列表第 2 项起、卡内块都不满足,
    *  而竖线只看 EDGE 距离 —— 不同源就会「竖线明晃晃地在、松手零反应」(dropGuard 之后更明显)。 */
@@ -937,9 +944,7 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
   // 由捕获期路由消费 drop 并 stopPropagation,库收不到;dragend 发在 gutter 的 ⠿ 上,不在 view.dom。
   // 所以提到这里:库每轮判定后同步收敛(settlePmLine),各收尾口直接藏。
   let pmLine: HTMLDivElement | null = null
-  const hidePmLine = (): void => {
-    if (pmLine) pmLine.style.display = 'none'
-  }
+  const hidePmLine = (): void => dropHide(pmLine)
   let pmShown = false
   let pmSettling = false
   /** onDrag 首次被问到时挂一个微任务:本轮 dragover 的库判定跑完仍没 onShow(接管分支 / 无合法
@@ -2214,7 +2219,7 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         }
         return true
       },
-      onShow: ({ view, line }) => {
+      onShow: ({ view, line, pos }) => {
         pmShown = true
         const el = ensureDom(view)
         // 与 showHline 同一套补偿(见那两个 helper 的注释):累计视觉缩放 + fixed 包含块原点。
@@ -2223,6 +2228,7 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         const x1 = (line.p1.x - o.x) / z
         const x2 = (line.p2.x - o.x) / z
         const y = (line.p1.y - o.y) / z
+        dropRetarget(el, `pm:${pos}`)
         el.style.display = 'block'
         el.style.width = `${Math.max(0, x2 - x1)}px`
         el.style.transform = `translate(${Math.round(x1)}px, ${Math.round(y - 1.5)}px)`

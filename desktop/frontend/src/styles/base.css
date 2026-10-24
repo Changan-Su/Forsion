@@ -505,7 +505,7 @@ a:hover { color: var(--accent-ink); }
   margin: 0;
   padding: 3px 4px 3px 6px;
   border-radius: var(--radius-md);
-  transition: background var(--duration-fast);
+  transition: background var(--duration-fast), box-shadow var(--lcl-drop-fade);
 }
 .ws-group-head:hover { background: var(--overlay-light); }
 /* 工作区下的会话:缩进嵌在分组之下(Codex 式层级)。 */
@@ -725,7 +725,7 @@ a:hover { color: var(--accent-ink); }
 /* 工作区拖拽排序:拖起的组半透明,落点组上方画一条 accent 插入线。 */
 .ws-group-head[draggable="true"] { cursor: grab; }
 .ws-group-head.ws-dragging { opacity: 0.4; }
-.ws-group-head.ws-drag-over { box-shadow: inset 0 2px 0 var(--accent-ink); }
+.ws-group-head.ws-drag-over { box-shadow: inset 0 2px 0 var(--signal-line); }
 .ws-group-toggle {
   flex: 1;
   display: flex;
