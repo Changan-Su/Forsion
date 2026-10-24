@@ -7,6 +7,9 @@
 import { registerMessages } from '../i18n'
 
 registerMessages({
+  // 侧栏对话(features/tangu.tsx 的 chat-panel 视图与「显示对话面板」命令;3b 从宿主 bootengine.* 挪来)
+  'tangu.view.chatPanel': { zh: '对话面板', en: 'Chat panel' },
+  'tangu.cmd.showChatPanel': { zh: '显示对话面板', en: 'Show chat panel' },
   // 等模型期间的实况行(EditorialMessage LiveWaitLine)
   'chat.wait.sending': { zh: '正在发送上下文 {kb} KB', en: 'Sending context ({kb} KB)' },
   'chat.wait.firstToken': { zh: '等待模型首帧', en: 'Waiting for the model' },
