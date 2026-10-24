@@ -54,7 +54,7 @@ import { TeamStatus } from './chat2/TeamDesk'
 import { ChildChatPanel, SubChatStatus } from './chat2/ChildChatPanel'
 import { openBtw, quoteInMainChat } from './chat2/btwStore'
 import { useChildChat } from '../stores/childChatStore'
-import { ChatCanvas, useChatCanvasPref } from './chat2/ChatCanvas'
+import { ChatCanvas, armCanvasEnter, chatAnchor, useChatCanvasPref, type CanvasAnchor } from './chat2/ChatCanvas'
 import { TeamSummary } from './chat2/TeamSummary'
 import { useI18n } from '../i18n'
 import { speakMessage, stopSpeaking, subscribeTts, ttsState, type TtsState } from '../services/ttsService'
@@ -116,6 +116,15 @@ function selectedMessageId(): string | undefined {
   const el = node instanceof Element ? node : node?.parentElement
   const id = el?.closest('.t2-asst[id^="tocmsg-"]')?.id
   return id ? id.slice('tocmsg-'.length) : undefined
+}
+
+/** 划线在画布卡 / 阅读栏里:那张卡是哪个会话的(卡 key = `${会话 id}:${提问 id}`)。分支卡上的消息 id 是复制出来的,顺便问得挂在它自己的会话上。 */
+function selectedCanvasSessionId(): string | undefined {
+  const node = window.getSelection()?.anchorNode
+  const el = node instanceof Element ? node : node?.parentElement
+  const d = el?.closest<HTMLElement>('[data-cv-node], [data-cv-read]')?.dataset
+  const k = d?.cvNode ?? d?.cvRead
+  return k?.includes(':') ? k.slice(0, k.indexOf(':')) : undefined
 }
 
 export function ChatView({ leaf, params }: ViewProps) {
@@ -606,6 +615,12 @@ export function ChatView({ leaf, params }: ViewProps) {
     && !mvCfg.groupChat && !mvCfg.teamSlug && !mvCfg.teamMember && !mvCfg.soloAgentSlug && !mvCfg.soloEngineId && !mvCfg.engineId
   const [canvasPref, setCanvasPref] = useChatCanvasPref(treeRoot)
   const canvasOn = canvasAllowed && canvasPref.on
+  const [canvasExit, setCanvasExit] = useState(false) // 刚切回对话:画布留一会儿播退场
+  // 按下「对话 / 画布」胶囊那一刻就量好对齐哪条:松手时胶囊先激活这个视图,那一下对话流的滚动位置会短暂归零(台架实测),再量就歪了
+  const segAnchor = useRef<{ at: number; a: CanvasAnchor | null } | null>(null)
+  // 切到画布那一下:右栏卡片照它们的离场过渡往右收完再卸。⚠️ 别改成画布开着也一直挂着:切回对话时「在对话里打开」的落点会偏高(台架 RA5 对照实测)
+  const [railOut, setRailOut] = useState(false)
+  useEffect(() => { if (!railOut) return; const t = setTimeout(() => setRailOut(false), 450); return () => clearTimeout(t) }, [railOut])
   // Muse 私聊:它后台排队的审批也进卡片堆(排在本会话的审批 / 提问之后、任务卡之前)
   const museApprovals = useMusePendingApprovals(mvCfg.soloAgentSlug === 'muse' && !params.childSurface)
   const deckItems = useMemo<DeckItem[]>(() => [
@@ -634,7 +649,14 @@ export function ChatView({ leaf, params }: ViewProps) {
       { value: 'canvas', label: t('chatcanvas.seg.canvas'), icon: Waypoints },
     ],
     value: canvasOn ? 'canvas' : 'chat',
-    onChange: (v) => setCanvasPref({ on: v === 'canvas' }),
+    onChange: (v) => {
+      const on = v === 'canvas'
+      const p = segAnchor.current
+      if (on) armCanvasEnter(p && performance.now() - p.at < 1000 ? p.a : chatAnchor(chatViewRef.current)) // 进场对齐对话流里正看着的那条
+      setCanvasExit(!on)
+      setRailOut(on)
+      setCanvasPref({ on })
+    },
     ariaLabel: t('chatcanvas.seg.aria'),
   } : null)
 
@@ -682,6 +704,7 @@ export function ChatView({ leaf, params }: ViewProps) {
       // 只有真的离开整块才撤高亮(子元素间移动会连发 leave/enter)
       onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setRefDrop(false) }}
       onDrop={onRefDrop}
+      onPointerDownCapture={(e) => { if (!canvasOn && (e.target as Element).closest?.('[data-testid="chat-canvas-seg"]')) segAnchor.current = { at: performance.now(), a: chatAnchor(chatViewRef.current) } }}
     >
       {raiseTeam && mvCfg.soloAgentSlug && activeId && <TeamEditor
         agents={s.agentDefs.filter((a) => a.createdBy !== 'system' && !!a.libraryDir)} team={null} initialMembers={[mvCfg.soloAgentSlug]}
@@ -813,14 +836,18 @@ export function ChatView({ leaf, params }: ViewProps) {
               行为与原来的胶囊菜单一字不差;翻译和插件动作(⋯)由共用的那一层给。条自己 portal 到 body。 */}
           <ViewSelectionBar
             view="chat"
-            watch={chatScrollRef}
-            watchKey={`${activeId}:${activeMessages.length}`}
+            watch={canvasOn ? chatViewRef : chatScrollRef} // 画布开着:卡和右边阅读栏都在对话流外面,看整个对话视图
+            watchKey={`${activeId}:${activeMessages.length}:${canvasOn ? 'canvas' : 'chat'}`}
             dense={leaf.type === 'chat-panel'}
             source={() => ({ title: activeSession?.title || undefined, sessionId: activeId || undefined })}
             lead={(sel, done) => [
               { id: 'quote', label: t('chat.action.quote'), icon: <Quote size={14} />, lead: true, testId: 'selection-quote', onRun: () => { setReplyAt({ text: sel.text, rect: sel.rect }); done() } },
               // 划线顺便问:选中的那段作为引用,挂在它所在的那条回答上,主对话里什么都不发
-              ...(activeId ? [{ id: 'btw', label: t('btw.selectionAction'), icon: <MessageCircleQuestion size={14} />, testId: 'selection-btw', onRun: () => { openBtw({ sessionId: activeId, title: activeSession?.title, quote: sel.text, modelId: mvModelId || undefined, messageId: selectedMessageId() }); done() } }] : []),
+              ...(activeId ? [{ id: 'btw', label: t('btw.selectionAction'), icon: <MessageCircleQuestion size={14} />, testId: 'selection-btw', onRun: () => {
+                const sid = selectedCanvasSessionId() || activeId
+                openBtw({ sessionId: sid, title: (sid === activeId ? activeSession : useApp.getState().sessions.find((x) => x.id === sid))?.title, quote: sel.text, modelId: mvModelId || undefined, messageId: selectedMessageId() })
+                done()
+              } }] : []),
             ]}
           />
           {replyAt && (
@@ -840,8 +867,11 @@ export function ChatView({ leaf, params }: ViewProps) {
       {/* 画布盖在对话流上(流照旧挂着、只是藏起来:切回来滚动位置还在);按树根挂,点到别的支时舞台不重挂。
           ⚠️ key 带前缀:和上面正文的 key={activeId} 是兄弟,在主线上两者同为会话 id → React 认重,
           画布开着换会话时旧正文删不掉,回到对话就上下叠两份(10-20 用户报) */}
-      {canvasOn && activeId && treeRoot && (
-        <ChatCanvas key={`canvas:${treeRoot}`} rootId={treeRoot} activeId={activeId} dir={canvasPref.dir} onDir={(dir) => setCanvasPref({ dir })} onChat={() => setCanvasPref({ on: false })} />
+      {(canvasOn || (canvasExit && canvasAllowed)) && activeId && treeRoot && (
+        <ChatCanvas
+          key={`canvas:${treeRoot}`} rootId={treeRoot} activeId={activeId} dir={canvasPref.dir} onDir={(dir) => setCanvasPref({ dir })} onChat={() => setCanvasPref({ on: false })}
+          exiting={!canvasOn} onExited={() => setCanvasExit(false)}
+        />
       )}
 
       {/* 空状态优先保持 view 居中;空间不足时按 composer 实高向上避让,小高度逐级精简。 */}
@@ -1030,8 +1060,8 @@ export function ChatView({ leaf, params }: ViewProps) {
       {/* 右侧车道:任务概览卡 + Agent Desk 卡片态。锚在整列(.t2-chat-col,含输入框区)——
         * Desk 卡底缘与输入框底缘同一条线(都是列底 -16px);滚动条仍在最右缘
         * (卡片右侧留 --tsum-gut 让 thumb 落位)。够宽才显示(容器查询),见 chat2.css .t2-rail */}
-      {/* 画布模式下右侧车道收起,舞台铺满;切回对话原样回来 */}
-      {!params.childSurface && !canvasOn && <div className="t2-rail">
+      {/* 画布模式下右侧车道收起,舞台铺满(刚切过去那 450ms 留着播卡片往右收);切回对话原样回来 */}
+      {!params.childSurface && (!canvasOn || railOut) && <div className="t2-rail" data-off={canvasOn ? '' : undefined}>
         <TaskSummary
           teamStatus={activeId ? <>
             {teamDesk && <TeamStatus sessionId={activeId} />}

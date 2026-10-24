@@ -7,7 +7,7 @@
  *    (行就是上面子会话那一行的样子)。点分支 = 主区就地换成那一支(⌘ 开新标签);点顺便问 / 子会话 = 右边那块子会话面板。
  *  - ChildFromLine:子会话顶上「来自 主会话」;分支顶上「从 X 分出」。
  */
-import React, { useEffect, useState } from 'react'
+import React, { createContext, useContext, useEffect, useState } from 'react'
 import { ChevronRight, CornerDownRight, CornerUpLeft, GitBranch, MessageCircleQuestion, MessageSquare, Sparkles } from 'lucide-react'
 import type { SessionRecord, ToolEvent } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { useApp } from '../../stores/appStore'
@@ -173,15 +173,21 @@ const NO_ASIDES: SavedAside[] = []
 
 /** 一条回答下面「从这里分出 N」:分支(fork_message_id = 这条)、挂在这条上的顺便问、这条开出的子会话。都没有就不画。
  *  ponytail: 分支只认来源会话里的这条消息;在分支里看,分叉前那几条是复制出来的新 id,兄弟分支不挂在它们下面(画布那一步按时间对齐)。 */
+/** 「从这里分出」画在哪:对话页 = 消息里、分支也列;画布卡 = 分支已经是卡,不列;卡里还要挪到正文外面(长卡的正文会被折起,块不能跟着被裁),
+ *  所以 inline:false = 消息里不画,由 ChatCanvas 画在卡底;阅读栏不折,照常画在消息里、只藏分支。 */
+export interface ForkScopeValue { inline: boolean; hideBranches: boolean }
+export const ForkScope = createContext<ForkScopeValue>({ inline: true, hideBranches: false })
+
 export function ForkBlock({ sessionId, messageId, childIds, onSuggest }: { sessionId: string; messageId: string; childIds: string[]; onSuggest?: (text: string) => void }) {
   const { t } = useI18n()
+  const { hideBranches } = useContext(ForkScope)
   const sessions = useApp((s) => s.sessions)
   const running = useApp((s) => s.runningBySession)
   const unread = useApp((s) => s.unread)
   const attention = useSessionAttention()
   const saved = useBtw((s) => s.saved[sessionId] || NO_ASIDES)
   useEffect(() => { useBtw.getState().loadSaved(sessionId) }, [sessionId])
-  const branches = sessions.filter((x) => x.fork_message_id === messageId).sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')))
+  const branches = hideBranches ? [] : sessions.filter((x) => x.fork_message_id === messageId).sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')))
   const asides = saved.filter((a) => a.message_id === messageId)
   const kids = childIds.map((id) => sessions.find((x) => x.id === id)).filter((x): x is SessionRecord => !!x)
   const n = branches.length + asides.length + kids.length

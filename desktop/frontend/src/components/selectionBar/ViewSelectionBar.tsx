@@ -34,6 +34,8 @@ export interface BarSelection {
   rect: { left: number; right: number; top: number; bottom: number }
 }
 export interface BarSource { title?: string; path?: string; sessionId?: string; page?: number }
+/** 动的是变换、不是滚动的视图(画布):视口一挪就在 `watch` 里面的元素上派发这个事件,条跟着收(条是固定定位,不收会飘在原处)。 */
+export const SELBAR_VIEWPORT_MOVED = 'selbar:viewport-moved'
 
 export interface ViewSelectionBarProps {
   /** 'chat' 或 '<插件 id>:<视图 id>':插件动作的 scope / when 按它过滤。 */
@@ -131,6 +133,7 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
     document.addEventListener('mousedown', onDown, true)
     // capture:滚动不冒泡,里面哪一层滚了都要收(选区的位置已经变了)。
     el.addEventListener('scroll', clear, { passive: true, capture: true })
+    el.addEventListener(SELBAR_VIEWPORT_MOVED, clear, true)
     return () => {
       ro.disconnect()
       el.removeEventListener('mouseup', read)
@@ -138,6 +141,7 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
       document.removeEventListener('selectionchange', onSelection)
       document.removeEventListener('mousedown', onDown, true)
       el.removeEventListener('scroll', clear, { capture: true })
+      el.removeEventListener(SELBAR_VIEWPORT_MOVED, clear, true)
     }
   }, [watch, watchKey])
 
