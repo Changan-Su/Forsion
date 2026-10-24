@@ -1395,7 +1395,7 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 /* 阅读栏开着:缩放胶囊 / 缩略图让到它左边(压过上面两档的定位) */
 .t2cv[data-reading] .t2cv-am.am-app .amx-stage-hud, .t2cv[data-reading] .t2cv-am.am-app .amx-stage-minimap { right: calc(var(--t2cv-read-w) + 24px); }
 /* 「接着问」点下去:输入框上面那条闪一下强调色,告诉你发出去接在哪 */
-.t2cv-attach[data-flash] { border-color: var(--signal-line); color: var(--signal-mark); }
+.t2cv-attach[data-flash] { border-color: var(--signal-line); color: var(--accent-ink); }
 /* 画布里的列表:对话页的序号 / 圆点挂在正文左边的留白里(padding 0);卡的正文区为了限高是 overflow:hidden,挂在外面的会被整个裁掉,
    阅读栏左边也只有 22px → 卡和阅读栏都给它们留位置 */
 .t2cv .t2-content :is(ul, ol) { padding-inline-start: 2em; }

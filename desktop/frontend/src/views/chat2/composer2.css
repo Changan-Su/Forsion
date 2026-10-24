@@ -90,7 +90,7 @@
 /* 模型药丸(ModelPill 用 base.css .composer-chip)与模式药丸统一到 12px；作用域限定，不动别处的 chip。 */
 .t2c-row .composer-chip { font-size: var(--t2c-font-control, 12px); }
 .t2c-pill:hover { background: var(--overlay-medium, rgba(127, 127, 127, 0.18)); }
-.t2c-pill.active { background: color-mix(in srgb, var(--signal) 16%, transparent); color: var(--signal); }
+.t2c-pill.active { background: color-mix(in srgb, var(--accent-ink) 16%, transparent); color: var(--accent-ink); }
 .t2c-pill-label { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* 模式胶囊与 ModelPill 共用同一展开契约:224px、三列居中、菜单右缘对齐。
@@ -534,7 +534,7 @@
 }
 .t2c-card--phone .t2c-row .composer-chip.model-pill-btn .pill-marquee { display: inline-block; max-width: none; text-overflow: ellipsis; }
 .t2c-card--phone .t2c-row .composer-chip.model-pill-btn .pill-ultra-tag { display: inline; }
-.t2c-card--phone .model-pill-wrap.is-plan .composer-chip.model-pill-btn:not(.is-max) { color: var(--signal); background-color: color-mix(in srgb, var(--signal) 16%, transparent); }
+.t2c-card--phone .model-pill-wrap.is-plan .composer-chip.model-pill-btn:not(.is-max) { color: var(--accent-ink); background-color: color-mix(in srgb, var(--accent-ink) 16%, transparent); }
 .t2c-card--phone .model-pill-wrap.is-danger .composer-chip.model-pill-btn { color: var(--danger); background-color: var(--danger-light); }
 
 /* 发送动效:输入框里的字影子上移淡出那 200ms 先不露占位提示,两行字不叠(views/chat2/sendFlight.ts) */

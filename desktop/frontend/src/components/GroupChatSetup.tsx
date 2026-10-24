@@ -170,8 +170,8 @@ export const GroupChatSetup: React.FC<{
                         border: `1px solid ${on ? 'var(--signal-line)' : 'var(--border)'}`,
                         background: on ? 'var(--accent-wash)' : 'transparent', color: 'inherit', cursor: 'pointer',
                       }}>
-                        <span style={{ width: 16, height: 16, borderRadius: 4, flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', border: `1px solid ${on ? 'var(--signal-mark)' : 'var(--border)'}`, background: on ? 'var(--signal-mark)' : 'transparent' }}>
-                          {on && <Check size={12} color="var(--bg-card)" />}
+                        <span style={{ width: 16, height: 16, borderRadius: 4, flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', border: `1px solid ${on ? 'var(--signal-mark)' : 'var(--border)'}`, background: 'transparent' }}>
+                          {on && <Check size={12} color="var(--signal-mark)" />}
                         </span>
                         <span style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ fontSize: 'var(--ui-font-body, 13px)', fontWeight: 600 }}>{a.name}</div>
