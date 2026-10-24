@@ -101,9 +101,12 @@ const MESSAGES = [
 ]
 // A reply the way an agent writes one — a list inside a list, a numbered list that reaches two digits. The chat page is
 // judged on it (st-3); st-1 keeps its two short lines for the scenes that need a conversation shorter than the screen.
+const LINK_PR = 'https://github.com/Changan-Su/Forsion/pull/153'
+// what the engine answers for that link (GET /agent/link-preview): the rich card's data
+const LINK_PREVIEW = { source: 'github', kind: 'pr', repo: 'Changan-Su/Forsion', number: 153, title: 'Fix the asset URL prefix', state: 'merged', author: 'Changan-Su', at: new Date(T0 - DAY).toISOString(), additions: 9, deletions: 6, changedFiles: 2 }
 const CHAT_MESSAGES = [
   { ...MESSAGES[0], id: 'st-c1', content: '登录页的验证码图片不显示了，帮我查一下原因。' },
-  { ...MESSAGES[1], id: 'st-c2', content: ['先说结论：验证码不显示是因为图片地址被拼了两次前缀。', '', '- 开发环境走代理，前缀由 `BACKEND_URL` 决定', '  - 本机 dev', '  - 预览包', '- 生产环境同源，所以线上一直没事', '', '改法两步：', '', '9. 改 `shared/assetUrl.ts`', '10. 补一条测试'].join('\n') },
+  { ...MESSAGES[1], id: 'st-c2', content: ['先说结论：验证码不显示是因为图片地址被拼了两次前缀。', '', '- 开发环境走代理，前缀由 `BACKEND_URL` 决定', '  - 本机 dev', '  - 预览包', '- 生产环境同源，所以线上一直没事', '', '改法两步：', '', '9. 改 `shared/assetUrl.ts`', '10. 补一条测试', '', `同样的毛病在 [#153](${LINK_PR}) 里修过一次。`].join('\n') },
   { ...MESSAGES[0], id: 'st-c3', content: '把改了的三处列成表。', timestamp: T0 - 3 * MIN },
   // a table wider than the screen (five columns, one cell a sentence), one that fits (two columns), a code block,
   // and a reply that thought first: the "thinking" row
@@ -176,6 +179,7 @@ async function stubApi(page, unknown) {
       if (m === 'PATCH' || m === 'PUT') configs[id] = { ...(m === 'PATCH' ? configs[id] : {}), ...JSON.parse(req.postData() || '{}') }
       return json({ agent_config: configs[id] || {} })
     }
+    if (p.endsWith('/agent/link-preview')) return json({ preview: url.searchParams.get('url') === LINK_PR ? LINK_PREVIEW : null })
     if (/\/agent\/sessions\/[^/]+\/messages$/.test(p)) return json({ messages: p.includes('/st-1/') ? MESSAGES : p.includes('/st-3/') ? CHAT_MESSAGES : [] })
     const one = p.match(/\/agent\/sessions\/([^/]+)$/)
     if (one && m === 'PATCH') {
@@ -822,6 +826,34 @@ const SCENES = {
     const back = await page.evaluate(() => getComputedStyle(document.querySelector('.mb-shell')).getPropertyValue('--mb-top-extra').trim())
     rows.push(['the call over: the pages take the room back', !(await rect(page, '.vc-bar')) && (back === '' || back === '0px'), `--mb-top-extra «${back}»`])
     return rows
+  },
+  // A link in an answer: a long press shows the card a hover shows on the desktop (here the rich one: the engine answers
+  // for that PR); lifting the finger closes it and does not open the link. Shot while held: linkcard-held.png.
+  linkcard: async (page) => {
+    await openChat(page, '登录页验证码不显示')
+    const a = page.locator(`${CHAT} a.citelink`).first()
+    await a.scrollIntoViewIfNeeded()
+    const box = await a.boundingBox()
+    const at = [{ x: box.x + box.width / 2, y: box.y + box.height / 2 }]
+    const card = () => page.evaluate(() => { const el = document.querySelector('body > .chat-link-card'); return el ? { text: el.textContent, rich: !!el.querySelector('.chat-link-card-rich') } : null })
+    const cdp = await page.context().newCDPSession(page)
+    const url = page.url()
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: at })
+    await page.waitForTimeout(250)
+    const early = await card()
+    await page.waitForTimeout(900)
+    const held = await card()
+    await page.screenshot({ path: path.join(OUT, `linkcard-held${DARK ? '-dark' : ''}.png`) })
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+    await page.waitForTimeout(500)
+    const after = await card()
+    const stayed = page.url() === url && (await page.locator('.mb-shell').count()) === 1
+    await cdp.detach()
+    return [
+      ['a long press: nothing at a quarter second', early === null, JSON.stringify(early)],
+      ['a long press: the rich card once held', !!held?.rich && /已合并/.test(held.text) && /#153/.test(held.text), JSON.stringify(held)],
+      ['lifting the finger closes it and does not open the link', after === null && stayed, JSON.stringify({ after, stayed })],
+    ]
   },
   // The notification stack is mounted outside the shell (MobileRoot's last child): none of the shell's room-keeping
   // reaches it. The capsules and the dock are native — drawn over the page — so a card under one of them is cut off.

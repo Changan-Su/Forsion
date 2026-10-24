@@ -354,7 +354,7 @@ export function ChatWebLink({ href, children, quote, ...rest }: { href: string; 
 }
 
 /** React 子树 → 纯文本(链接文字可能被 <em>/<code> 拆成好几节)。 */
-function textOf(node: ReactNode): string {
+export function textOf(node: ReactNode): string {
   if (typeof node === 'string' || typeof node === 'number') return String(node)
   if (Array.isArray(node)) return node.map(textOf).join('')
   if (isValidElement(node)) return textOf((node.props as { children?: ReactNode }).children)
