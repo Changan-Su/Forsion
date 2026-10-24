@@ -11,7 +11,7 @@
  */
 import { Plugin, PluginKey, TextSelection, type EditorState } from '@milkdown/kit/prose/state'
 import { Decoration, DecorationSet, type EditorView } from '@milkdown/kit/prose/view'
-import type { Fragment } from '@milkdown/kit/prose/model'
+import type { Fragment, Node as ProseNode } from '@milkdown/kit/prose/model'
 import { $prose } from '@milkdown/kit/utils'
 import type { MilkdownPlugin } from '@milkdown/kit/ctx'
 import { registerMessages, translate } from '../../i18n'
@@ -29,11 +29,13 @@ registerMessages({
 
 export const pendingInsertKey = new PluginKey<DecorationSet>('UNIFIED_PENDING_INSERT')
 
-interface AddMeta { id: string; pos: number; label: string; visible: boolean; onCancel: () => void; widget?: HTMLElement }
+/** 调用方自带的占位外形(正文上传占位,bodyUploads.ts);destroy:PM 拆掉这个 widget 时(换页 / 那一行被删,也可能只是重绘)。 */
+export interface PendingWidget { dom: HTMLElement; destroy?: () => void }
+interface AddMeta { id: string; pos: number; label: string; visible: boolean; onCancel: () => void; widget?: PendingWidget }
 type Meta = { add: AddMeta } | { remove: string }
 
 function chip(a: AddMeta): HTMLElement {
-  if (a.widget) return a.widget // 调用方自带外形(正文上传占位,bodyUploads.ts);重绘时还给同一个节点,进度不丢
+  if (a.widget) return a.widget.dom // 调用方自带外形(正文上传占位,bodyUploads.ts);重绘时还给同一个节点,进度不丢
   const el = document.createElement('span')
   el.className = 'amx-pending-insert'
   el.dataset.pendingInsert = a.id
@@ -62,8 +64,12 @@ function chip(a: AddMeta): HTMLElement {
 }
 
 export function createPendingInsert(): MilkdownPlugin[] {
-  return [
-    $prose(() => new Plugin<DecorationSet>({
+  return [$prose(() => pendingInsertPlugin())]
+}
+
+/** 裸 ProseMirror 插件(单测直接装;编辑器里经上面的 $prose 装)。 */
+export function pendingInsertPlugin(): Plugin<DecorationSet> {
+  return new Plugin<DecorationSet>({
       key: pendingInsertKey,
       state: {
         init: () => DecorationSet.empty,
@@ -72,7 +78,7 @@ export function createPendingInsert(): MilkdownPlugin[] {
           const m = tr.getMeta(pendingInsertKey) as Meta | undefined
           if (m && 'add' in m) {
             next = next.add(tr.doc, [Decoration.widget(m.add.pos, () => chip(m.add), {
-              id: m.add.id, key: `pending:${m.add.id}`, side: -1, ignoreSelection: true, stopEvent: () => true,
+              id: m.add.id, key: `pending:${m.add.id}`, side: -1, ignoreSelection: true, stopEvent: () => true, destroy: m.add.widget?.destroy,
             })])
           } else if (m && 'remove' in m) {
             next = next.remove(next.find(undefined, undefined, (spec) => spec.id === m.remove))
@@ -81,8 +87,7 @@ export function createPendingInsert(): MilkdownPlugin[] {
         },
       },
       props: { decorations: (st) => pendingInsertKey.getState(st) },
-    })),
-  ]
+  })
 }
 
 /** 锚现在在哪(已被删掉 / 已取消 = null)。 */
@@ -100,7 +105,7 @@ export interface PendingAnchor {
 }
 
 /** 在当前光标处钉锚。visible=false:不画占位(对话框开着时画「进行中」是噪音),只记位置。widget:自带的占位外形。 */
-export function beginPending(view: EditorView, label: string, visible = true, widget?: HTMLElement): PendingAnchor {
+export function beginPending(view: EditorView, label: string, visible = true, widget?: PendingWidget): PendingAnchor {
   const id = `p${Date.now().toString(36)}${(seq++).toString(36)}`
   let cancelled = false
   const onCancel = (): void => {
@@ -142,7 +147,10 @@ export function insertAtPending(view: EditorView, id: string, content: Fragment 
   } else {
     const from = $p.before(d)
     const to = $p.after(d)
-    const blank = $p.node(d).textContent.trim() === ''
+    // 「空」= 只有空白文字:只有一张图(或别的行内原子)的段 textContent 也是空串,原地替换会把那张图删掉
+    let atom = false
+    $p.node(d).descendants((c) => { if (c.isLeaf && !c.isText) atom = true })
+    const blank = !atom && $p.node(d).textContent.trim() === ''
     focusHere = view.hasFocus() && sel.from >= from && sel.to <= to
     at = blank ? from : to
     tr = blank ? tr.replaceWith(from, to, content) : tr.insert(to, content)
@@ -150,6 +158,21 @@ export function insertAtPending(view: EditorView, id: string, content: Fragment 
   }
   unfoldCalloutsForInsert(tr, at, end)
   if (focusHere) tr = tr.setSelection(TextSelection.near(tr.doc.resolve(Math.min(end, tr.doc.content.size)), -1)).scrollIntoView()
+  view.dispatch(tr)
+  return true
+}
+
+/** 行内插一个节点到锚处(粘贴图片:与此前 replaceSelectionWith 同形,落在光标那一行的那个位置)。锚不在 / 那里放不下行内节点 = false,
+ *  调用方退回按块插(insertAtPending)。 */
+export function insertInlineAtPending(view: EditorView, id: string, node: ProseNode): boolean {
+  const pos = pendingPos(view.state, id)
+  if (pos == null) return false
+  const $p = view.state.doc.resolve(pos)
+  if (!$p.parent.inlineContent || !$p.parent.canReplaceWith($p.index(), $p.index(), node.type)) return false
+  const sel = view.state.selection
+  const focusHere = view.hasFocus() && sel.empty && sel.head === pos
+  let tr = view.state.tr.setMeta(pendingInsertKey, { remove: id } satisfies Meta).insert(pos, node)
+  if (focusHere) tr = tr.setSelection(TextSelection.near(tr.doc.resolve(pos + node.nodeSize))).scrollIntoView()
   view.dispatch(tr)
   return true
 }

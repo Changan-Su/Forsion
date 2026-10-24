@@ -60,7 +60,7 @@ import { usePageStore, useScopedPageStore } from '../../store/pageStore'
 import { amadeus } from '../../api'
 import { Settings2, ExternalLink, Plus, Paperclip, ArrowRightLeft, ChevronRight, Download, RotateCw } from 'lucide-react'
 import { UploadRing } from '@lcl/components'
-import { forgetUpload, onBatchSettled, retryUpload, startUpload, uploadBusy, uploadFraction, useUploads } from '../../../services/uploads'
+import { abandonFailures, forgetUpload, oneSaveAtATime, onBatchSettled, retryUpload, startUpload, uploadBusy, uploadFraction, useUploads } from '../../../services/uploads'
 import { openDb } from '../../../amadeusNav'
 import { newTabOf } from '../../../views/itemSelect'
 import { registerMessages, useI18n } from '../../../i18n'
@@ -2578,17 +2578,15 @@ function FileCell({ row, col, env, setCell }: {
   rowRef.current = row
   const pendRef = useRef(pend)
   pendRef.current = pend
-  // 格子卸载时还挂着失败的:放弃它们,好让同一批里传成功的照样写进格子(否则那一批永远落定不了)
-  useEffect(() => () => {
-    const all = useUploads.getState()
-    for (const p of pendRef.current) if (all[p.id]?.phase === 'failed') forgetUpload(p.id)
-  }, [])
+  // 格子卸载:还挂着的(和之后才失败的)失败项没人点得到了,放弃它们,好让同一批里传成功的照样写进格子
+  useEffect(() => () => abandonFailures(pendRef.current.map((p) => p.id)), [])
   const up = (files: File[]): void => {
     const items = files.map((f): PendingFile => {
       const item: PendingFile = { id: '', name: f.name, preview: IMG_EXT_RE.test(f.name) ? URL.createObjectURL(f) : null, rel: null }
       item.id = startUpload(f.name, f.size, async ({ stage, progress }) => {
         stage('uploading')
-        item.rel = await amadeus.saveAsset(env.dbPath, f.name, new Uint8Array(await f.arrayBuffer()), (sent, total) => progress(total > 0 ? (sent / total) * f.size : null))
+        const bytes = new Uint8Array(await f.arrayBuffer())
+        item.rel = await oneSaveAtATime(() => amadeus.saveAsset(env.dbPath, f.name, bytes, (sent, total) => progress(total > 0 ? (sent / total) * f.size : null)))
       })
       return item
     })

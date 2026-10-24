@@ -88,7 +88,8 @@ import { AgentChangeCapsule, AgentLiveCapsule } from './AgentChangeCapsule'
 import { InlineAiPanel, type InlineAiRun } from './InlineAiPanel'
 import { alignByAnchor, hostTop, registerModeCapture, scrollHostOf, textareaCaretY } from './modeRelay'
 import { startBodyUploads } from './bodyUploads'
-import { beginPending, createPendingInsert, endPending, insertAtPending, toastPendingLost, toastPendingSourceMode, type PendingAnchor } from './pendingInsert'
+import { oneSaveAtATime } from '../../services/uploads'
+import { beginPending, createPendingInsert, endPending, insertAtPending, insertInlineAtPending, type PendingWidget, toastPendingLost, toastPendingSourceMode, type PendingAnchor } from './pendingInsert'
 import { aiContextOf, aiTargetOf, applyAiResult, clearAiTarget, createInlineAi, setAiTarget, translateTargetOf, type AiApply } from './inlineAi'
 import { aiSpaceTriggerEnabled } from '../lib/aiSpaceTrigger'
 import type { TanguInlineAction } from '../plugins/tanguSeam'
@@ -598,14 +599,26 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
     if (!files.length) return
     startBodyUploads({
       files,
-      pin: (w) => pinPending(files[0].name, true, w.dom),
+      pin: (w) => pinPending(files[0].name, true, w),
       save: async (f, onProgress) => {
         const bytes = new Uint8Array(await f.arrayBuffer())
         const { opts } = await getAttachmentPrefs()
-        const r = await amadeus.saveAttachment(path, f.name || (asImage ? 'pasted.png' : 'file'), bytes, opts, onProgress)
+        const r = await oneSaveAtATime(() => amadeus.saveAttachment(path, f.name || (asImage ? 'pasted.png' : 'file'), bytes, opts, onProgress))
         return asImage ? `![](${toAssetUrl(joinRel(pageDir, r.pageRel), true)})` : `![[${r.base}]]`
       },
-      finish: (md, a) => { if (md) insertAsync(md, a); else dropPending(a) },
+      finish: (md, a) => {
+        if (!md) { dropPending(a); return }
+        // 粘贴图片:插在锚那一行的那个位置(行内,与此前 replaceSelectionWith 同形);那里放不下行内节点才按块插
+        let placed = false
+        if (asImage && a && !a.cancelled() && !hidden?.()) {
+          getInstance()?.action((ctx) => {
+            const doc = ctx.get(parserCtx)(toDisplayMarkdown(md, pageDir)) as ProseNode | undefined
+            const img = doc?.firstChild?.firstChild
+            if (img?.type.name === 'image') placed = insertInlineAtPending(ctx.get(editorViewCtx), a.id, img)
+          })
+        }
+        if (!placed) insertAsync(md, a)
+      },
     })
   }
   const saveFiles = async (files: File[]): Promise<void> => uploadIntoBody(files)
@@ -711,7 +724,7 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
   /** 异步 slash 项的锚(评审 G3-06,见 pendingInsert.ts):'/query' 消费掉之后**当场**在光标处钉住,结果回来插到那里 ——
    *  不插在完成那一刻的光标处、不抢别的输入框的焦点、不在唤起处留空段。编辑器已拆 = null。
    *  visible=false:只记位置不画占位(弹对话框问地址的那几项,对话框开着时画「进行中」是噪音)。 */
-  const pinPending = (label: string, visible = true, widget?: HTMLElement): PendingAnchor | null => {
+  const pinPending = (label: string, visible = true, widget?: PendingWidget): PendingAnchor | null => {
     let a: PendingAnchor | null = null
     getInstance()?.action((ctx) => { a = beginPending(ctx.get(editorViewCtx), label, visible, widget) })
     return a

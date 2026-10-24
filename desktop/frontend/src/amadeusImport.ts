@@ -2,7 +2,7 @@
 // (本地磁盘 / 云端 HTTP / 移动 FS 各自实现),调用方不分本地云端。云端直写才预检单文件上限(随会员档位)。
 import { amadeus } from '@amadeus/api'
 import { create } from 'zustand'
-import { onBatchSettled, startUpload } from './services/uploads'
+import { onBatchSettled, oneSaveAtATime, startUpload } from './services/uploads'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { getAttachmentPrefs } from '@amadeus/lib/attachments'
 import { useUiStore } from '@amadeus/store/uiStore'
@@ -168,7 +168,7 @@ export async function importToFolder(files: File[], folder: string): Promise<voi
     ids.push(startUpload(f.name, f.size, async ({ stage, progress }) => {
       stage('uploading')
       const bytes = new Uint8Array(await f.arrayBuffer())
-      await amadeus.saveAttachment('', f.name, bytes, { mode: 'vault', folder }, (sent, total) => progress(total > 0 ? (sent / total) * f.size : null))
+      await oneSaveAtATime(() => amadeus.saveAttachment('', f.name, bytes, { mode: 'vault', folder }, (sent, total) => progress(total > 0 ? (sent / total) * f.size : null)))
       await refreshTree() // 真行先出来,再收在传的那一行(不闪空)
     }))
   }

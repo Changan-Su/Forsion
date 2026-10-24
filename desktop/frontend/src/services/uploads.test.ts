@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cancelUpload, forgetUpload, onBatchSettled, retryUpload, startUpload, uploadBytesLabel, uploadFraction, useUploads, type UploadJobCtx } from './uploads'
+import { abandonFailures, cancelUpload, forgetUpload, onBatchSettled, oneSaveAtATime, retryUpload, startUpload, uploadBytesLabel, uploadFraction, useUploads, type UploadJobCtx } from './uploads'
 
 const tick = () => new Promise((r) => setTimeout(r, 0))
 /** 一个由测试手动收尾的 job */
@@ -74,6 +74,25 @@ describe('upload ledger', () => {
     forgetUpload(ids[1])
     expect(got).toEqual([[ids[0]]])
     expect(entry(ids[0])).toBeUndefined()
+  })
+
+  it('abandonFailures drops later failures so the batch still settles', async () => {
+    const a = manual(), b = manual()
+    const ids = [startUpload('a', 1, a.job), startUpload('b', 1, b.job)]
+    const got: string[][] = []
+    onBatchSettled(ids, (done) => got.push(done))
+    abandonFailures(ids) // 界面没了
+    a.done(); await tick()
+    b.fail('x'); await tick()
+    expect(got).toEqual([[ids[0]]])
+  })
+
+  it('oneSaveAtATime runs saves in order, one at a time, and survives a failure', async () => {
+    const log: string[] = []
+    const step = (n: string, fail = false) => () => new Promise<string>((res, rej) => { log.push(`start ${n}`); setTimeout(() => { log.push(`end ${n}`); fail ? rej(new Error(n)) : res(n) }, 5) })
+    const r = await Promise.allSettled([oneSaveAtATime(step('1')), oneSaveAtATime(step('2', true)), oneSaveAtATime(step('3'))])
+    expect(log).toEqual(['start 1', 'end 1', 'start 2', 'end 2', 'start 3', 'end 3'])
+    expect(r.map((x) => x.status)).toEqual(['fulfilled', 'rejected', 'fulfilled'])
   })
 
   it('labels bytes in one unit', () => {

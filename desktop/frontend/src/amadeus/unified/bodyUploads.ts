@@ -9,7 +9,7 @@
  * ponytail: 取消只丢结果,不中止写盘(saveAttachment 不收 signal)—— 文件照样进了附件文件夹,只是不插进正文。
  */
 import { createUploadBar, createUploadRing } from '@lcl/components'
-import { cancelUpload, forgetUpload, retryUpload, startUpload, uploadBusy, uploadBytesLabel, uploadFraction, useUploads, type UploadEntry } from '../../services/uploads'
+import { abandonFailures, cancelUpload, forgetUpload, retryUpload, startUpload, uploadBusy, uploadBytesLabel, uploadFraction, useUploads, type UploadEntry } from '../../services/uploads'
 import { registerMessages, translate } from '../../i18n'
 
 registerMessages({
@@ -22,8 +22,8 @@ registerMessages({
   'bodyup.cancel': { zh: '取消', en: 'Cancel' },
 })
 
-/** 占位 widget 的 DOM;交给 beginPending 当锚的外形。 */
-export interface UploadWidget { dom: HTMLElement }
+/** 占位 widget:DOM + 被 PM 拆掉时的回调;交给 beginPending 当锚的外形。 */
+export interface UploadWidget { dom: HTMLElement; destroy: () => void }
 
 interface Row {
   file: File
@@ -80,7 +80,15 @@ export function startBodyUploads<A>(opts: {
       ? [btn(translate('bodyup.retry'), () => retryUpload(r.id)), btn(translate('bodyup.remove'), () => drop(r))]
       : uploadBusy(e) ? [btn(translate('bodyup.cancel'), () => drop(r))] : []))
   }
-  const repaint = (): void => { const all = useUploads.getState(); for (const r of rows) if (!r.removed) paint(r, all[r.id]) }
+  const repaint = (): void => {
+    const all = useUploads.getState()
+    for (const r of rows) {
+      if (r.removed) continue
+      if (!all[r.id] && r.md == null && r.id) { r.removed = true; continue } // 失败后被放弃(占位已不在,见 destroy)
+      paint(r, all[r.id])
+    }
+    settle()
+  }
   const unsub = useUploads.subscribe(repaint)
 
   const settle = (): void => {
@@ -145,6 +153,9 @@ export function startBodyUploads<A>(opts: {
       settle()
     })
   }
-  const anchor = opts.pin({ dom })
+  // PM 拆 widget 也可能只是重绘(同一个节点马上又挂回去):过一拍还不在文档里才算占位没了 ——
+  // 换页 / 那一行被删。这时失败的没人点得到重试了,放弃它们,传成功的照样落定(insertAsync 会报插入点没了)。
+  const destroy = (): void => { setTimeout(() => { if (!ended && !dom.isConnected) abandonFailures(rows.map((r) => r.id)) }, 0) }
+  const anchor = opts.pin({ dom, destroy })
   repaint()
 }
