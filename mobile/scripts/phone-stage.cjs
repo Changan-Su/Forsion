@@ -884,6 +884,56 @@ const SCENES = {
     rows.push(['a notification: the card starts right below the capsule row, inside the screen', clear(c) && near(c.y, LAYOUT.top + 6 * zoom, 2), JSON.stringify({ card: c, capsulesEnd: LAYOUT.top })])
     return rows
   },
+  // The agent picker of a new chat. The phone's column is narrow, so the strip folds into one chip. Without a native host
+  // the chip opens a web bottom sheet (names only, ticks, team order); with one, the Android checklist — ticked in order,
+  // applied when it closes (docs/ToBeImproved/窄栏Agent选择器方案_2026-10-23, chosen 10-24).
+  'agent-picker': async (page) => {
+    if ((await stage.nav(page)) === 'detail') await stage.action(page, 'left')
+    await stage.space(page, 'tangu'); await chip(page, 'all')
+    await page.locator(`${LIST} [data-act="list-fab"], ${LIST} [data-act="new-chat"]`).first().tap()
+    await page.waitForFunction(() => document.querySelector('.mb-shell')?.getAttribute('data-nav') === 'detail', null, { timeout: 6000 })
+    await page.waitForTimeout(600)
+    const pickerChip = page.locator('.agent-select-strip .compact-chat-picker').filter({ visible: true }).first()
+    const chipName = () => pickerChip.locator('.compact-chat-picker-name').textContent()
+    // web sheet
+    await pickerChip.tap()
+    await page.waitForSelector('.chat-pick-sheet')
+    const names = await texts(page, '.chat-pick-sheet .chat-pick-name')
+    const sheetText = await page.locator('.chat-pick-sheet').textContent()
+    await page.locator('.chat-pick-sheet [data-pick-id="agent:editor"]').tap()
+    await page.locator('.chat-pick-sheet [data-pick-id="agent:researcher"]').tap()
+    await page.waitForTimeout(400)
+    const order = await page.evaluate(() => [...document.querySelectorAll('.chat-pick-sheet .chat-pick-index')]
+      .map((el) => `${el.closest('[data-pick-id]').dataset.pickId}=${el.textContent}`).sort((a, b) => a.split('=')[1] - b.split('=')[1]))
+    await page.screenshot({ path: path.join(OUT, `agent-picker-sheet${DARK ? '-dark' : ''}.png`) })
+    await page.locator('.chat-pick-scrim').tap({ position: { x: 40, y: 80 } })
+    await page.waitForTimeout(300)
+    const sheetTeam = await chipName()
+    const sheetGone = !(await page.locator('.chat-pick-sheet').count())
+    await pickerChip.tap()
+    await page.locator('.chat-pick-sheet [data-pick-id=""]').tap()
+    await page.waitForTimeout(300)
+    // native checklist (a stand-in presenter, as in chat-card): the host answers with the ticks in tick order
+    await page.evaluate(async (url) => {
+      const st = window.__stage; st.menus = []; st.answer = { checked: ['agent:researcher', 'agent:editor'] }
+      st.offSheet = (await import(/* @vite-ignore */ url)).installNativeSheetPresenter(async (payload) => { st.menus.push(payload); const a = st.answer; st.answer = null; return a })
+    }, moduleUrl('../lcl/engine/nativeSheet.ts'))
+    await pickerChip.tap()
+    await page.waitForFunction(() => window.__stage.menus.length > 0, null, { timeout: 5000 }).catch(() => {})
+    await page.waitForTimeout(500)
+    const sent = await page.evaluate(() => window.__stage.menus[0] || null)
+    const nativeTeam = await chipName()
+    const noWebSheet = !(await page.locator('.chat-pick-sheet').count())
+    await page.evaluate(() => { window.__stage.offSheet(); delete window.__stage.offSheet })
+    const items = sent?.items || []
+    return [
+      ['web sheet: names only, the descriptions stay out of the rows', names.includes('研究员') && names.includes('编辑') && !sheetText.includes('改稿、压字数'), JSON.stringify(names)],
+      ['web sheet: two picks = a team, numbered in pick order', order.join(',') === 'agent:editor=1,agent:researcher=2', order.join(',')],
+      ['web sheet: tapping the scrim closes it, the chip names both', sheetGone && sheetTeam === '编辑、研究员', sheetTeam],
+      ['native host: a checklist of names, no web sheet', sent?.kind === 'checklist' && items.map((i) => i.label).join('、') === '研究员、编辑' && items.every((i) => !i.detail) && noWebSheet, JSON.stringify(sent && { kind: sent.kind, items: items.map((i) => [i.label, i.detail]) })],
+      ['native host: the ticks come back in tick order', nativeTeam === '研究员、编辑', nativeTeam],
+    ]
+  },
 }
 
 /** Puts the app's own call bar up (or takes it down) through the store the composer's call key writes to. No call is
