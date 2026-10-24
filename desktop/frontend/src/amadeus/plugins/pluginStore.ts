@@ -47,6 +47,7 @@ import { registerDeskCompanion, revokeDeskCompanions, type DeskCompanionContribu
 import { currentPlatform } from '../../services/agentRunService'
 import { UI_MODE } from '@lcl/engine/uiMode'
 import { attachTooltip } from '@lcl/engine/hoverSurface'
+import { createDropIndicator } from '@lcl/engine/dropIndicator'
 import { setActiveSpace, useCommandStore, useSpaceStore, nativeHaptic, nativeHapticAvailable, claimNativeChrome, nativeChromeInstalled } from '@lcl/engine'
 import { AUTO_WORK_FOLDER_KEY, pluginDisplayName } from './display'
 // 自动化播种 / 禁用即关规则:backendService 依赖图干净(http / agentRunService / localInbox,均不引 appStore),
@@ -1769,6 +1770,23 @@ export const usePluginStore = create<PluginState>((set, get) => {
         const tip = attachTooltip(el, lines(content), { side })
         const dispose = scope.own('mount', () => tip.dispose(), 'tooltip')
         return { update: (next) => { if (ctxAlive()) tip.update(lines(next), { side }) }, dispose }
+      },
+      // 落点提示:LCL 那一份(dropIndicator.ts),换落点原地淡出淡入、颜色跟主题;插件停用 / 重载时统一收掉。同步可用。
+      dropIndicator: (opts = {}) => {
+        if (!ctxAlive()) return { line() {}, zone() {}, hide() {}, dispose() {} }
+        const host = opts && typeof opts === 'object' && opts.host instanceof HTMLElement ? opts.host : undefined
+        const ind = createDropIndicator({ host })
+        let alive = true
+        const dispose = scope.own('mount', () => { alive = false; ind.destroy() }, 'dropIndicator')
+        const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
+        const rect = (r: unknown) => { const o = (r && typeof r === 'object' ? r : {}) as Record<string, unknown>; return { x: num(o.x), y: num(o.y), w: num(o.w), h: num(o.h) } }
+        const key = (o: unknown): string | undefined => { const k = (o as { key?: unknown } | undefined)?.key; return typeof k === 'string' || typeof k === 'number' ? String(k) : undefined }
+        return {
+          line: (r, o) => { if (alive) ind.line(rect(r), { key: key(o), axis: (o as { axis?: unknown } | undefined)?.axis === 'v' ? 'v' : 'h' }) },
+          zone: (r, o) => { if (alive) ind.zone(rect(r), { key: key(o) }) },
+          hide: () => { if (alive) ind.hide() },
+          dispose,
+        }
       },
       mountSelectionBar: (root, opts = {}) => {
         if (!ctxAlive()) return { show() {}, hide() {}, update() {}, dispose() {} }

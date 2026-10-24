@@ -130,6 +130,33 @@ exportBtn.setAttribute('aria-label', 'Export')               // the tooltip does
   interruptible states use `transition`, not `keyframes`; created / restored / scrolled-in content doesn't animate in;
   under reduced motion keep colour and opacity, drop translation and scale.
 
+### Drop indicators: ctx.ui.dropIndicator (2026-10-24+)
+
+While dragging to reorder or into something in your own view, show the host's drop indicator — the same line and
+"drop into" outline as the host editor, sidebar and tab bar, in the theme's `--signal-line` — instead of drawing one.
+Moving to another drop point fades the old one out where it is and the new one in (unfolding from its near end); the
+same drop point moving with a scroll follows without replaying; reduced motion turns the fades off.
+
+```js
+const drop = ctx.ui?.dropIndicator?.()                       // opts.host defaults to document.body
+list.addEventListener('dragover', (e) => {
+  const row = e.target.closest('[data-row]'); if (!row) return
+  e.preventDefault()
+  const r = row.getBoundingClientRect(), after = e.clientY > r.top + r.height / 2
+  drop?.line({ x: r.left + 4, y: (after ? r.bottom : r.top) - 1.5, w: r.width - 8 }, { key: `${row.dataset.row}:${after}` })
+})
+list.addEventListener('dragleave', (e) => { if (!list.contains(e.relatedTarget)) drop?.hide() })
+list.addEventListener('drop', () => drop?.hide())
+// a folder that takes the dragged item: drop?.zone({ x, y, w, h }, { key: folderId })
+// later: drop?.dispose()  — the host also disposes it on disable / reload
+```
+
+- Coordinates are viewport px (clientX/Y, getBoundingClientRect); zoom and transformed ancestors are handled.
+  `line({ x, y, w })` is horizontal with its top edge at `y`; `line({ x, y, h }, { axis: 'v' })` vertical.
+- `key` names the drop point (row / slot id + side). Without it any coordinate change counts as a new drop point,
+  so a scroll would replay the fade.
+- Older hosts lack the method: keep your own line there.
+
 ### Selection bar: ctx.ui.mountSelectionBar and registerSelectionAction scopes (2026-10-13+)
 
 The **selection bar** is the strip that appears over selected text. Chat, notes and any plugin view that opts in

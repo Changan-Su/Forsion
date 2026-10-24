@@ -319,6 +319,29 @@ it('ctx.ui.mountSelectionBar({ watch: false }):hide() 只收条,开着的结果�
   expect(errors).toEqual([])
 })
 
+// 落点提示(2026-10-24):ctx.ui.dropIndicator 是 LCL 那一份;传视口坐标落位,停用插件即收、句柄变哑。
+it('ctx.ui.dropIndicator:线 / 描边按视口坐标落位,停用插件即收,之后句柄是哑的', async () => {
+  const { usePluginStore } = await import('./pluginStore')
+  const ind = () => document.querySelector<HTMLElement>('.lcl-drop-ind')
+  let ctx!: import('./types').PluginContext
+  usePluginStore.setState({ initialized: false, plugins: [], activeIds: [], disabledIds: [], disposers: {}, selectionActions: [] })
+  usePluginStore.getState().init([{ id: 'dropper', name: 'dropper', version: '0', setup: (c) => { ctx = c } }])
+  const d = ctx.ui!.dropIndicator!()
+  d.line({ x: 12, y: 40, w: 200 }, { key: 'row-2' })
+  expect(ind()!.style.display).toBe('block')
+  expect([ind()!.style.left, ind()!.style.top, ind()!.style.width]).toEqual(['12px', '40px', '200px'])
+  d.zone({ x: 0, y: 0, w: 80, h: 30 }, { key: 'folder-1' })
+  expect(ind()!.classList.contains('lcl-drop-ind--zone')).toBe(true)
+  d.hide()
+  expect(ind()!.style.display).toBe('none')
+  await act(async () => { usePluginStore.getState().disable('dropper') })
+  expect(ind(), '停用即收').toBeNull()
+  d.line({ x: 1, y: 1, w: 10 })
+  expect(ind(), '句柄已哑').toBeNull()
+  expect(() => ctx.ui!.dropIndicator!().line({ x: 0, y: 0, w: 1 })).not.toThrow() // 停用之后:哑句柄,不抛
+  expect(errors).toEqual([])
+})
+
 // 提示框(2026-10-23):ctx.ui.attachTooltip 用的是宿主那一份(LCL hoverSurface),插件元素里不加节点;停用插件即收、句柄变哑。
 // 负对照(实跑):pluginStore 里那份不进 scope.own → 「停用即收」红。
 it('ctx.ui.attachTooltip:悬停出宿主提示框、不往插件元素里加节点;停用插件即收,之后句柄是哑的', async () => {

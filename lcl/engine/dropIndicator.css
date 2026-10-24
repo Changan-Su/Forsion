@@ -1,0 +1,24 @@
+/* 落点提示(见 dropIndicator.ts 顶注)。时长与 DROP_IN_MS / DROP_OUT_MS 同值。
+ * 每行自己用伪元素画线的列表照这样写:伪元素常驻、平时透明,落点类只把它亮起来 ——
+ *   .row::before { content: ''; …几何…; opacity: 0; scale: .6 1; transform-origin: left center; transition: var(--lcl-drop-leave); }
+ *   .row.drop-before::before { opacity: 1; scale: 1; transition: var(--lcl-drop-enter); }
+ * 离场只淡出,scale 等淡完再归位(下一次亮起才从近端展开)。 */
+:root {
+  --lcl-drop-in: 130ms;
+  --lcl-drop-out: 90ms;
+  --lcl-drop-ease: cubic-bezier(.2, .8, .2, 1);
+  --lcl-drop-enter: opacity var(--lcl-drop-in) var(--lcl-drop-ease), scale var(--lcl-drop-in) var(--lcl-drop-ease);
+  --lcl-drop-leave: opacity var(--lcl-drop-out) ease-out, scale 0s linear var(--lcl-drop-out);
+  /* 描边 / 底色类的落点(box-shadow、background 亮起来)用这一条 */
+  --lcl-drop-fade: var(--lcl-drop-in) var(--lcl-drop-ease);
+}
+@media (prefers-reduced-motion: reduce) {
+  :root { --lcl-drop-in: 0ms; --lcl-drop-out: 0ms; }
+}
+
+.lcl-drop-ind {
+  position: fixed; left: 0; top: 0; z-index: 9999; display: none; pointer-events: none;
+  height: 3px; border-radius: 2px; background: var(--signal-line);
+}
+.lcl-drop-ind--v { width: 2px; border-radius: 1px; }
+.lcl-drop-ind--zone { background: transparent; box-shadow: inset 0 0 0 1.5px var(--signal-line); border-radius: var(--radius-sm, 6px); }

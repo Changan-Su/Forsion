@@ -211,17 +211,20 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 /* 收藏/最近分区容器(内部复用 t2s-group 系列):只负责与下方文件树的间隔。 */
 .amx-prefs-group { margin-bottom: 2px; }
 
-/* 笔记拖进文件夹:目标文件夹(头/展开区)描边(区别于会话列表 drag-over 的「插入线」——这里是「放进去」语义)。 */
+/* 笔记拖进文件夹:目标文件夹(头/展开区)描边(区别于会话列表 drag-over 的「插入线」——这里是「放进去」语义)。
+ * 颜色与落点线同一个 --signal-line(10-24 落点动效方案:原来是 --accent,默认主题下纯黑);淡入淡出靠各元素基础规则里的
+ * transition: box-shadow var(--lcl-drop-fade)。 */
 .t2s-group.amx-drop-into,
-.t2s-group-sessions.amx-drop-into { box-shadow: inset 0 0 0 1.5px var(--accent, #6c5ce7); border-radius: var(--radius-sm, 6px); }
+.t2s-group-sessions.amx-drop-into { box-shadow: inset 0 0 0 1.5px var(--signal-line); border-radius: var(--radius-sm, 6px); }
 /* .fd 合并笔记节点(Notion「笔记即文件夹」):拖入描边见下方 .t2s-srow.amx-drop-into。
  * 前导槽 .t2s-lead 已提到 sidebar2.css(会话/文件/笔记三个 view 共用),这里只留 Amadeus 专有的
  * emoji 占位规则(.amx-page-emoji)。 */
-.t2s-srow.amx-drop-into { box-shadow: inset 0 0 0 1.5px var(--accent, #6c5ce7); border-radius: var(--radius-sm, 6px); }
+.t2s-srow.amx-drop-into { box-shadow: inset 0 0 0 1.5px var(--signal-line); border-radius: var(--radius-sm, 6px); }
 /* 拖到真空白处 = 移到根目录:整个滚动区内描边提示。 */
-.t2s-scroll.amx-drop-root { box-shadow: inset 0 0 0 1.5px var(--accent, #6c5ce7); border-radius: var(--radius-sm, 6px); }
+.t2s-scroll.amx-drop-root { box-shadow: inset 0 0 0 1.5px var(--signal-line); border-radius: var(--radius-sm, 6px); }
 /* 分区拖拽排序:落点分区描边(与拖入落点同款视觉);空分区包装不占位不接拖。 */
-.amx-sec-wrap.amx-sec-over { box-shadow: inset 0 0 0 1.5px var(--accent, #6c5ce7); border-radius: var(--radius-sm, 6px); }
+.amx-sec-wrap { transition: box-shadow var(--lcl-drop-fade); }
+.amx-sec-wrap.amx-sec-over { box-shadow: inset 0 0 0 1.5px var(--signal-line); border-radius: var(--radius-sm, 6px); }
 .amx-sec-wrap:empty { display: none; }
 .t2s-srow.dragging { opacity: 0.4; }
 /* 非笔记文件行(.db/.png 等):图标(SVG)与文件名强制同一行,过长省略——不换成两行。
@@ -1856,7 +1859,7 @@ html.dark .amx-cal-chip-ev, html.dark .amx-cal-event {
 .amx-todo-rest { padding: 8px 12px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
 .amx-todo-link { border: none; background: none; padding: 0; font: inherit; color: var(--text); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; text-decoration-color: var(--border-strong, var(--border)); }
 /* 拖到组头改日期:能放的组头整块换一档底色,不画虚线框(DESIGN §6) */
-.amx-todo-ghead.is-drop { background: var(--accent-light, var(--bg-hover)); color: var(--text); }
+.amx-todo-ghead.is-drop { background: var(--accent-light, var(--bg-hover)); color: var(--text); transition: background var(--lcl-drop-fade); } /* 只在亮起时淡入,悬停手感不变 */
 .amx-todo.is-wide .amx-todo-col { max-width: 720px; margin: 0 auto; padding: 22px 24px 40px; }
 .amx-todo.is-wide .amx-todo-bar { gap: 8px; padding: 0 10px 12px; }
 .amx-todo.is-wide .amx-todo-title { font-size: var(--ui-font-title, 16px); }
@@ -2019,7 +2022,7 @@ html.dark .amx-cal-chip-ev, html.dark .amx-cal-event {
 
 /* 分区空态引导文案(置顶/云同步/云端占位) + 分区整体拖入描边 */
 .amx-sec-hint { padding: 4px 10px 6px; font-size: var(--ui-font-caption, 11px); opacity: .55; }
-.amx-prefs-group.amx-drop-into { box-shadow: inset 0 0 0 1.5px var(--accent, #6c5ce7); border-radius: var(--radius-sm, 6px); }
+.amx-prefs-group.amx-drop-into { box-shadow: inset 0 0 0 1.5px var(--signal-line); border-radius: var(--radius-sm, 6px); }
 
 /* 分区头布局:纯文字标题 + 折叠箭头紧跟其后(压过 sidebar2 的 label flex:1),计数/状态点靠行尾 */
 .amx-sec-head .t2s-group-label { flex: 0 1 auto; }

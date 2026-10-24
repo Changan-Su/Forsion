@@ -30,6 +30,7 @@ import { getActiveSpace, landOnMainPage } from './spaceRegistry'
 import { computeDropTarget, locOf, type DropTarget } from './dropModel'
 import { getDetachApi, type ViewRef } from './detachSeam'
 import { OverlayAt, zoomOf } from './menuAnchor'
+import { dropHide, dropRetarget } from './dropIndicator'
 import { Skeleton, ViewErrorBoundary, skeletonVariantOf } from './Skeleton'
 import { cycleFocusedGroupTab, tabCycleDelta } from './tabCycle'
 import { besideTarget, openMainBesideThisTask } from './openBeside'
@@ -350,7 +351,7 @@ function indicatorEl(cls: 'wb-drop-line' | 'wb-drop-zone'): HTMLDivElement {
 }
 
 function hideIndicator(): void {
-  if (dropLineEl) dropLineEl.style.display = 'none'
+  dropHide(dropLineEl) // 落点线原地淡出(LCL 落点提示);分屏高亮照旧滑移,不走这套
   if (dropZoneEl) dropZoneEl.style.display = 'none'
 }
 
@@ -362,13 +363,14 @@ function showTarget(t: DropTarget): void {
   if (t.mode === 'tab') {
     if (dropZoneEl) dropZoneEl.style.display = 'none'
     const el = (dropLineEl ??= indicatorEl('wb-drop-line'))
+    dropRetarget(el, `${Math.round(t.lineX)}:${Math.round(t.top)}`, { axis: 'v' }) // 换落点原地淡出淡入
     el.style.display = 'block'
     const z = zoomOf(el)
     el.style.left = `${Math.round(t.lineX) / z - 1}px`
     el.style.top = `${Math.round(t.top) / z}px`
     el.style.height = `${Math.round(t.height) / z}px`
   } else {
-    if (dropLineEl) dropLineEl.style.display = 'none'
+    dropHide(dropLineEl)
     const el = (dropZoneEl ??= indicatorEl('wb-drop-zone'))
     el.style.display = 'block'
     const z = zoomOf(el)
