@@ -159,6 +159,15 @@ describe('linkPreview', () => {
     expect(f.calls[0]!.headers.authorization).toBeUndefined();
   });
 
+  it('取凭据挂住 → 等够就匿名去问,不把总时限耗光', async () => {
+    registerGitCredentialProvider('github', () => new Promise(() => {}));
+    const f = fakeFetch(() => ({ status: 200, body: PR }));
+    const t0 = Date.now();
+    expect(await linkPreview('u', url, { fetcher: f.fetcher, forsionGitWebUrl: null, authWaitMs: 50 })).not.toBeNull();
+    expect(Date.now() - t0).toBeLessThan(1000);
+    expect(f.calls[0]!.headers.authorization).toBeUndefined();
+  });
+
   it('SSRF:站点地址指向本机 / 内网时,真的 fetchPublic 在连接之前拒掉 → null(本机监听的端口一次连接都没收到)', async () => {
     let hits = 0;
     const server = net.createServer((s) => { hits++; s.destroy(); });

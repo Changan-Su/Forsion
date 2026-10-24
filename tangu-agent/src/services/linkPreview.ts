@@ -47,6 +47,8 @@ export interface RepoItem {
 const GITHUB_SITE = 'https://github.com';
 const NAME = /^[\w.-]{1,100}$/;
 const TIMEOUT_MS = 6000;
+/** 取凭据最多等这么久(云端接缝慢 / 挂住时),过了就匿名:总时限得留给真正的请求。 */
+const AUTH_WAIT_MS = 3000;
 const MAX_BYTES = 1024 * 1024;
 const RETRY_MS = 60_000;
 const MAX_ENTRIES = 500;
@@ -142,11 +144,15 @@ async function authFor(item: RepoItem): Promise<string | undefined> {
   }
 }
 
-async function load(item: RepoItem, fetcher: PreviewFetcher): Promise<LinkPreview | null> {
+async function load(item: RepoItem, fetcher: PreviewFetcher, authWaitMs: number): Promise<LinkPreview | null> {
   const signal = AbortSignal.timeout(TIMEOUT_MS);
   const base = { accept: item.source === 'github' ? 'application/vnd.github+json' : 'application/json', 'user-agent': 'Forsion-Tangu-LinkPreview' };
   try {
-    const auth = await authFor(item);
+    let timer: NodeJS.Timeout | undefined;
+    const auth = await Promise.race([
+      authFor(item),
+      new Promise<undefined>((r) => { timer = setTimeout(() => r(undefined), authWaitMs); timer.unref?.(); }),
+    ]).finally(() => clearTimeout(timer));
     let r = await fetcher(item.api, auth ? { ...base, authorization: auth } : base, signal);
     if (auth && (r.status === 401 || r.status === 403 || r.status === 404)) r = await fetcher(item.api, base, signal);
     return r.status === 200 ? previewOf(item, JSON.parse(r.text)) : null;
@@ -162,6 +168,8 @@ export interface LinkPreviewOptions {
   now?: () => number;
   /** 测试用:不问 forsionGit(),直接给站点地址(null = 没有 Forsion Git)。 */
   forsionGitWebUrl?: string | null;
+  /** 测试用:取凭据最多等多久(缺省 AUTH_WAIT_MS)。 */
+  authWaitMs?: number;
 }
 
 /** 链接的富卡数据;认不得 / 取不到 → null(不抛)。 */
@@ -175,7 +183,7 @@ export async function linkPreview(userId: string, href: string, opts: LinkPrevie
   const key = `${userId}\n${item.api}`;
   const hit = cache.get(key);
   if (hit && now() < hit.until) return hit.value;
-  const entry = { value: load(item, opts.fetcher ?? fetchCapped), until: Number.POSITIVE_INFINITY };
+  const entry = { value: load(item, opts.fetcher ?? fetchCapped, opts.authWaitMs ?? AUTH_WAIT_MS), until: Number.POSITIVE_INFINITY };
   cache.delete(key);
   cache.set(key, entry);
   if (cache.size > MAX_ENTRIES) cache.delete(cache.keys().next().value!);
