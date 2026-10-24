@@ -134,8 +134,9 @@ export function cancelScrollToElement(root: Element): void {
  *  corrects (up to 3 times). Blocks skipped by `content-visibility: auto` only get their real height in the frame they
  *  come near the viewport, which pushes the target away, and scroll anchoring has no anchor to compensate with then
  *  (a long chat landed 850 px off). Stops as soon as the user scrolls, clicks or types, or another jump on the same
- *  root starts; call `cancelScrollToElement(root)` before scrolling `root` somewhere else yourself. */
-export function scrollToElement(root: Element, target: Element, offset = 0): void {
+ *  root starts; call `cancelScrollToElement(root)` before scrolling `root` somewhere else yourself.
+ *  `onLanded` runs once the target has settled in place (not when the user or a newer jump cut it short). */
+export function scrollToElement(root: Element, target: Element, offset = 0, onLanded?: () => void): void {
   cancelScrollToElement(root)
   const delta = (): number => target.getBoundingClientRect().top - root.getBoundingClientRect().top - offset
   root.scrollTo({ top: Math.max(0, root.scrollTop + delta()), behavior: 'smooth' })
@@ -153,7 +154,7 @@ export function scrollToElement(root: Element, target: Element, offset = 0): voi
     if (root.scrollTop !== last) { last = root.scrollTop; still = 0 } // smooth scroll still moving
     else if (++still >= 2) {
       const d = delta()
-      if (Math.abs(d) <= 2 || tries++ >= 3) return done()
+      if (Math.abs(d) <= 2 || tries++ >= 3) { done(); onLanded?.(); return }
       root.scrollBy({ top: d })
       still = 0
     }

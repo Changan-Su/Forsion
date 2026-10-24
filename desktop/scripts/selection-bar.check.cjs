@@ -122,7 +122,7 @@ async function dragSelect(win, rootSel, text) {
 }
 /** 条的现状:位置、外壳、行里各枚按钮的 data-act(竖线记成 '|')。 */
 const barState = (win) => win.evaluate(() => {
-  const el = document.querySelector('[data-testid="selection-bar"]')
+  const el = document.querySelector('[data-testid="selection-bar"]:not([data-lcl-exit])') // 收起时的退场替身(useExitGhost)不算
   if (!el) return null
   const b = el.getBoundingClientRect()
   const cs = getComputedStyle(el)
@@ -238,6 +238,7 @@ async function main() {
       console.log(`DIAG ${name} | ${JSON.stringify(dom)} | ${file}`)
     }
     check('主窗离开首启引导', await skipOnboarding(win))
+    await win.addStyleTag({ content: '.sync-setup-backdrop { display: none !important; }' }) // 登录后首次同步卡 2.5s 后弹、会盖住划线条(同 btw.check)
     const input = win.locator('.t2c-ta').first()
     await input.waitFor({ timeout: 30000 })
     await win.locator('text=Parser 重构').first().click()
@@ -253,7 +254,7 @@ async function main() {
     check('聊天里选中文字 → 划线条出现,挂在 body 下、fixed', !!sel1 && !!bar1 && bar1.inBody && bar1.position === 'fixed' && bar1.view === 'chat', JSON.stringify({ sel1, bar1 }))
     check('条在选区上方、水平居中(±2px)、不越出视口', bar1.bottom <= sel1.top + 1 && sel1.top - bar1.bottom < 16 && Math.abs((bar1.left + bar1.right) / 2 - (sel1.left + sel1.right) / 2) <= 2 && bar1.left >= 0 && bar1.right <= bar1.vw && bar1.top >= 0, JSON.stringify({ sel1, bar1 }))
     check('外壳是共用的 .ui-popover 圆角矩形(不是胶囊)', bar1.popover && bar1.radius > 0 && bar1.radius <= 14 && (await win.locator('.t2-quote-menu').count()) === 0, `radius=${bar1.radius}`)
-    check('组成:引用 / 在侧栏提问 / 顺便问 / 翻译 / ⋯(聊天没有自己的工具,不画竖线)', bar1.row.join(',') === 'quote,ask-in-panel,btw,translate,more', bar1.row.join(','))
+    check('组成:引用 / 顺便问 / 翻译 / ⋯(10-18「在侧栏提问」并进顺便问;聊天没有自己的工具,不画竖线)', bar1.row.join(',') === 'quote,btw,translate,more', bar1.row.join(','))
     await shot(win, path.join(shots, 'chat-bar.png'))
     // 选区贴着聊天区顶上时条会压到标签栏上,标签栏是窗口拖拽区(不看层叠):条自己得打 no-drag 的洞,不然按下去是拖窗口。
     // CDP 派发的点击不经过系统的拖拽区,这里只能钉计算样式;先确认标签栏那边读得出 drag,读不出就如实跳过。
@@ -282,9 +283,12 @@ async function main() {
     // ── 「引用」照旧:挂成输入框上方的引用卡,条收起、选区清掉 ──
     await dragSelect(win, CHAT, 'AZURE-FALCON 已记下')
     await win.locator('[data-testid="selection-quote"]').click()
-    await win.locator('[data-chat-surface="chat"] .t2c-quote-text', { hasText: 'AZURE-FALCON' }).first().waitFor({ timeout: 5000 })
-    check('「引用」挂卡后条收起、选区清掉', !(await barState(win)) && (await win.evaluate(() => window.getSelection().isCollapsed)))
-    await win.locator('[data-chat-surface="chat"] .t2c-quote-x').first().click()
+    await win.locator('.quote-reply-input').waitFor({ timeout: 5000 }) // 先弹就地回复框;空着回车 = 只挂引用
+    await win.keyboard.press('Enter')
+    await win.locator('[data-chat-surface="chat"] .t2c-tilerow .att-tile--quote .att-tile-head', { hasText: 'AZURE-FALCON' }).first().waitFor({ timeout: 5000 })
+    const quoted = { bar: await barState(win), collapsed: await win.evaluate(() => window.getSelection().isCollapsed) }
+    check('「引用」挂卡后条收起、选区清掉', !quoted.bar && quoted.collapsed, JSON.stringify(quoted))
+    await win.locator('[data-chat-surface="chat"] .t2c-tilerow .att-tile--quote .att-tile-x').first().click()
 
     // ── 翻译:只读结果卡;目标语言 = 界面语言之外的那种;缺省走目录里的机器翻译模型 ──
     const sel2 = await dragSelect(win, CHAT, '重构解析器的词法阶段')
@@ -416,6 +420,7 @@ async function main() {
       app = second.app
       win = second.win
       check('深色 + 英文的实例离开首启引导', await skipOnboarding(win))
+      await win.addStyleTag({ content: '.sync-setup-backdrop { display: none !important; }' })
       const row = win.locator('.t2s-srow', { hasText: 'Parser 重构' }).first()
       await row.waitFor({ timeout: 30000 })
       await row.click()
@@ -423,7 +428,7 @@ async function main() {
       await dragSelect(win, CHAT, '重构解析器的词法阶段')
       const barEn = await barReady(win)
       const labels = await win.evaluate(() => [...document.querySelectorAll('[data-testid="selection-bar"] .selbar-row > button')].map((b) => b.textContent.trim()))
-      check('英文界面:条上的字是英文(不是 key、不是中文)', !!barEn && labels.slice(0, 4).every((l) => /^[A-Za-z ]+$/.test(l)) && labels.includes('Translate'), labels.join(' | '))
+      check('英文界面:条上的字是英文(不是 key、不是中文)', !!barEn && labels.slice(0, 3).every((l) => /^[A-Za-z ]+$/.test(l)) && labels.includes('Translate'), labels.join(' | '))
       await shot(win, path.join(shots, 'chat-bar-dark-en.png'))
       await win.locator('[data-testid="selection-translate"]').click({ timeout: 8000 })
       const cEn = await cardDone(win)

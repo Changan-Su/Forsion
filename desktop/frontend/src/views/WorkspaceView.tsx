@@ -15,7 +15,7 @@ import type { ViewProps } from '@lcl/engine'
 import { ChevronDown, ChevronRight, FileText, Folder, FolderOpen, ListFilter, MoreHorizontal, Pencil, Plus, Search, X } from 'lucide-react'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
 import type { ListAction, ListDropTarget, ListItem, ListSourceContribution } from '@amadeus/plugins/types'
-import { LIST_ROW_MIME, ancestorsOf, buildListTree, dropCandidates, fitsPhoneList, flattenLeaves, groupFold, isFolder, isGroupHead, leafCount, type GroupFold, type ListDropPosition, type ListNode } from '@amadeus/plugins/listTree'
+import { LIST_ROW_MIME, ancestorsOf, buildListTree, dropCandidates, fitsPhoneList, flattenLeaves, groupFold, hiddenByFilter, isFolder, isGroupHead, leafCount, type GroupFold, type ListDropPosition, type ListNode } from '@amadeus/plugins/listTree'
 import { folderPadLeft, nameLeft } from '@amadeus/lib/treeIndent'
 import { initialFor } from '../components/agentInitial'
 import { useApp } from '../stores/appStore'
@@ -51,6 +51,7 @@ registerMessages({
   'wsview.actions': { zh: '{source}操作', en: '{source} actions' },
   'wsview.itemActions': { zh: '{title}的操作', en: 'Actions for {title}' },
   'wsview.resultCount': { zh: '{count} 项', en: '{count} items' },
+  'wsview.hiddenByFilters': { zh: '筛掉了 {count} 条', en: '{count} hidden by filters' },
   'wsview.rename': { zh: '重命名', en: 'Rename' },
   'wsview.renameLabel': { zh: '重命名{title}', en: 'Rename {title}' },
   // 手机的整屏列表:首次提示把这张列表自己的动作念一遍(动作名来自列表源)
@@ -319,6 +320,8 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
   // Sources may remove an empty category after archive/delete; never leave a hidden stale filter.
   useEffect(() => { if (group && !activeGroup) setGroup(null) }, [group, activeGroup?.key])
   const items = src.items({ query: query || undefined, group: activeGroup?.key })
+  // 开着筛选时列表底下写「筛掉了几条」(借鉴 Comma §2.9);跟着同一个搜索词比,搜索 + 筛选时数的是搜索结果里被筛掉的
+  const hidden = activeGroup ? hiddenByFilter(src.items({ query: query || undefined }), items) : 0
   // 文件夹的开合:普通文件夹落盘(缺省收起);组头只记这一次运行,由插件的 defaultOpen 带着走。
   // 键带上当前的筛选:同一个源在「全部」和「已归档」里是两张不同的列表(同一个发信人在两边该不该开着并不一样),
   // 两处同时显示这个源、筛选不同的时候也就不会互相改对方的开合。
@@ -752,6 +755,7 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
         {flat && phoneHint && <ListHint id={`list:${src.id}`}>{phoneHint}</ListHint>}
         {sections ? sections.map(([g, list]) => section(g, list)) : roots.map((n) => node(n, 1))}
         {items.length === 0 && <div className="t2sw-empty">{query ? t('wsview.noMatches') : t('wsview.empty')}</div>}
+        {hidden > 0 && <div className="t2sw-plug-hidden">{t('wsview.hiddenByFilters', { count: hidden })}</div>}
       </div>
       {/* 手机:源的常用动作是右下角的主按钮,其余动作在它的长按菜单里 */}
       {flat && primary && <ListFab label={primary.label} icon={fabIcon} onClick={() => primary.run()}

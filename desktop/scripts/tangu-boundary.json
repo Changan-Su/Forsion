@@ -18,6 +18,7 @@
       "desktop/frontend/src/components/HarnessUpdateCard.tsx",
       "desktop/frontend/src/components/HumanCollaborationPanel.tsx",
       "desktop/frontend/src/components/HumanUpdateCard.tsx",
+      "desktop/frontend/src/components/ImageStack.tsx",
       "desktop/frontend/src/components/InquiryCard.tsx",
       "desktop/frontend/src/components/IntelligentAppCard.css",
       "desktop/frontend/src/components/IntelligentAppCard.tsx",

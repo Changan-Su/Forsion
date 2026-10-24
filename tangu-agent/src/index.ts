@@ -38,6 +38,7 @@ import browserExtensionRouter from './routes/browserExtension.js';
 import inboxRouter from './routes/inbox.js';
 import ttsRouter from './routes/tts.js';
 import inlineRouter from './routes/inline.js';
+import linkPreviewRouter from './routes/linkPreview.js';
 import adminRouter from './routes/admin.js';
 import { runMigration } from './db/migrate.js';
 import { recoverQueuedRuns, abortAllRuns } from './services/agentLoop.js';
@@ -114,6 +115,7 @@ export function createTanguModule(d: TanguDeps): TanguModule {
   dataRouter.use(inboxRouter);
   dataRouter.use(ttsRouter);
   dataRouter.use(inlineRouter); // 正文生成式 AI(G3-07):POST /agent/inline
+  dataRouter.use(linkPreviewRouter); // Chat 链接悬停卡的富卡数据:GET /agent/link-preview
   dataRouter.use(remoteRouter);
 
   const startBackgroundTasks = (opts?: { recoverRuns?: boolean; historian?: boolean; sandbox?: boolean; profilePolling?: boolean; eventRetention?: boolean }): void => {

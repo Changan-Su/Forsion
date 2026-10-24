@@ -15,9 +15,11 @@ export interface ComposerDraft {
   mentionedSlug: string
   mentionAgents: string[]
   mentionedProjects: Array<{ name: string; path: string }>
+  /** 长粘贴磁贴里的原文(借 Comma,≥ PASTE_TILE_MIN 字的纯文本粘贴),发送时接在正文后面。 */
+  pastes: string[]
 }
 
-const EMPTY: ComposerDraft = { text: '', attachments: [], wsFiles: [], refChips: [], pinnedSkills: [], mentionedSlug: '', mentionAgents: [], mentionedProjects: [] }
+const EMPTY: ComposerDraft = { text: '', attachments: [], wsFiles: [], refChips: [], pinnedSkills: [], mentionedSlug: '', mentionAgents: [], mentionedProjects: [], pastes: [] }
 
 /** 还没有会话的「新对话」那一份:主页、主区的空白对话、侧栏聊天共用。会话 id 是 UUID,撞不上。 */
 export const NEW_CHAT_DRAFT = 'new'
@@ -45,7 +47,7 @@ export function clearDraft(key: string, keepText = false): void {
 }
 
 const isBlank = (d: ComposerDraft | undefined): boolean =>
-  !d || (!d.text && !d.attachments.length && !d.wsFiles.length && !d.refChips.length && !d.pinnedSkills.length)
+  !d || (!d.text && !d.attachments.length && !d.wsFiles.length && !d.refChips.length && !d.pinnedSkills.length && !d.pastes.length)
 
 /** 把一份草稿挪到另一个会话名下;那边已经有东西就不动(谁的草稿都不许被顶掉)。 */
 export function moveDraft(from: string, to: string): void {

@@ -24,7 +24,7 @@ const SESSIONS = [
 const MESSAGES = [
   // 引用磁贴跳回原文的来源(u0 的第二段引用出自这里;第一段哪都没有 → 点了看全文)
   { id: 'a00', role: 'model', content: '先记一笔:第二段引用\n还有第二行,后面会用到。', timestamp: now - 800 },
-  { id: 'u0', role: 'user', content: '> 第一段引用\n\n> 第二段引用\n> 还有第二行\n\n这两段是什么关系?', timestamp: now - 700 },
+  { id: 'u0', role: 'user', content: '> 第一段引用\n\n↳ 先看这段\n\n> 第二段引用\n> 还有第二行\n\n这两段是什么关系?', timestamp: now - 700 },
   { id: 'a0', role: 'model', content: '它们说的是同一件事。', timestamp: now - 600 },
   { id: 'u1', role: 'user', content: '记住:项目代号是 AZURE-FALCON。', timestamp: now - 500 },
   { id: 'a1', role: 'model', content: '好的,代号 AZURE-FALCON 已记下。接下来重构解析器的词法阶段。', timestamp: now - 400 },
@@ -152,13 +152,31 @@ async function main() {
     await win.waitForTimeout(800) // 引用卡挂上后输入区长高、对话区重排:选区会被冲掉,等它落定再划
     await pickReply()
     await win.locator('[data-testid="selection-quote"]').first().click()
+    // 就地回复框(Claude 的「Reply to Claude」):上面是引文,写一句回应回车,连引用带回应加进输入框
+    const replyBox = win.locator('.quote-reply')
+    await replyBox.waitFor({ timeout: 5000 })
+    check('点「引用」先弹就地回复框,框里是选中的那段', (await replyBox.locator('.quote-reply-text').textContent()).includes('AZURE-FALCON'))
+    await win.keyboard.type('这句是重点')
+    await win.screenshot({ path: path.join(shots, 'quote-reply.png') })
+    await win.keyboard.press('Enter')
     await until(async () => (await mainQuotes.count()) === 2, 5000)
-    const cardTexts = await mainQuotes.locator('.att-tile-head').allTextContents()
-    check('再引用一段 → 输入框上方两张引用卡,先挂的那张还在', cardTexts.length === 2 && cardTexts[0].includes('NOCLAF-ERUZA') && cardTexts[1].includes('AZURE-FALCON'), JSON.stringify(cardTexts))
+    const cardTexts = await mainQuotes.locator('.att-tile-open').allTextContents()
+    check('再引用一段 → 输入框上方两张引用卡,先挂的那张还在;新卡显示回应、第二行是引文', cardTexts.length === 2 && cardTexts[0].includes('NOCLAF-ERUZA') && (await mainQuotes.nth(1).locator('.att-tile-head').textContent()) === '这句是重点' && cardTexts[1].includes('AZURE-FALCON'), JSON.stringify(cardTexts))
+    const focusAt = await win.evaluate(() => { const a = document.activeElement; return { inComposer: !!a?.closest('.composer-anchor'), tag: a?.tagName, cls: String(a?.className || '').slice(0, 80) } })
+    check('回复框收起,焦点回到输入框', (await until(async () => (await replyBox.count()) === 0, 2000)) && focusAt.inComposer, JSON.stringify({ boxes: await replyBox.count(), focusAt }))
+    // 点卡 → 全文窗里能改回应
+    await mainQuotes.nth(1).locator('.att-tile-open').click()
+    const note = win.locator('.quote-preview .quote-preview-note')
+    await note.waitFor({ timeout: 5000 })
+    check('输入框里的卡点开 = 引文 + 可改的回应', (await note.inputValue()) === '这句是重点' && (await win.locator('.quote-preview-body').textContent()).includes('AZURE-FALCON'))
+    await note.fill('改过的回应')
+    await win.keyboard.press('Escape')
+    await until(async () => (await mainQuotes.nth(1).locator('.att-tile-head').textContent()) === '改过的回应', 5000)
+    check('全文窗里改的回应回到卡上', (await mainQuotes.nth(1).locator('.att-tile-head').textContent()) === '改过的回应')
     await win.screenshot({ path: path.join(shots, 'quote-cards.png') })
     await mainQuotes.first().locator('.att-tile-x').click()
     await until(async () => (await mainQuotes.count()) === 1, 5000)
-    check('单独移除一张,另一张留着', (await mainQuotes.locator('.att-tile-head').allTextContents()).join('|').includes('AZURE-FALCON') && (await mainQuotes.count()) === 1)
+    check('单独移除一张,另一张留着', (await mainQuotes.locator('.att-tile-open').allTextContents()).join('|').includes('AZURE-FALCON') && (await mainQuotes.count()) === 1)
     const bubble = await win.evaluate(() => {
       const wrap = [...document.querySelectorAll('[data-chat-surface="chat"] .t2-userwrap')].find((el) => el.textContent.includes('这两段是什么关系'))
       const cards = [...(wrap?.querySelectorAll('.att-tile--quote .att-tile-head') || [])].map((el) => el.textContent)
@@ -168,6 +186,7 @@ async function main() {
       return { cards, body: (rest?.textContent || '').trim(), raw: !!rest?.textContent.includes('> ') }
     })
     check('已发消息开头的两段引用是两张卡,正文不再带「> 」', bubble.cards.length === 2 && bubble.cards[1].includes('还有第二行') && bubble.body === '这两段是什么关系?' && !bubble.raw, JSON.stringify(bubble))
+    check('两段引用之间那句是前一张卡的回应,卡上显示它', bubble.cards[0] === '先看这段', JSON.stringify(bubble.cards))
     // 气泡里的引用磁贴:点得到原文的跳回去闪两下,点不到的看全文(QuoteTile)
     const bubbleTiles = win.locator('[data-chat-surface="chat"] #tocmsg-u0 .att-tile--quote .att-tile-open')
     await bubbleTiles.nth(1).click()
