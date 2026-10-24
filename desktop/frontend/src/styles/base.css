@@ -351,6 +351,10 @@ a { color: var(--accent-ink); text-decoration: none; }
    聊天正文那份在 chat2.css 里用更高特异性补上引用条同款配色,这里是**全局兜底**:少了它,
    `.t2-content` 之外的每一处网页链接都是隐形的。 */
 .citelink { text-decoration: underline; text-underline-offset: 2px; }
+/* 文件类双链 / 引用前那枚类型图标(聊天 ChatWikiLink 与 Amadeus 正文同一套,后者在 amadeus/styles.css 有同值的作用域版);
+   全局放这里是因为 <Markdown> 也出现在收件箱、更新日志等不加载 chat2.css 的地方,没有尺寸的 svg 会撑成 300×150。 */
+.wikilink-nb { white-space: nowrap; }
+.wikilink-ic { display: inline-block; width: 0.95em; height: 0.95em; vertical-align: -0.15em; margin-right: 0.25em; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 a:hover { color: var(--accent-ink); }
 
 /* ⚠️ 全局**不要**写 `::-webkit-scrollbar` 自定义样式(2026-08-13 起)。

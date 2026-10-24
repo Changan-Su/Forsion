@@ -13,6 +13,7 @@ import { parseAppRefInner } from '../../../shared/appRefs'
 import { AppRefChip } from './appRefs'
 import { deskAcceptsFiles } from '../amadeus/plugins/deskCompanion'
 import { newTabOf } from '../views/itemSelect'
+import { FILE_ICON, fileIconKind, type FileIconKind } from '../amadeus/blocks/markdown/fileIcon'
 
 registerMessages({
   'chatwiki.mediaTipBadAnchor': { zh: '{path}（时刻锚点无效，从头播放）', en: '{path} (invalid time anchor — playing from the start)' },
@@ -25,6 +26,11 @@ export function ChatWikiLink({ inner }: { inner: string }) {
   const app = parseAppRefInner(inner)
   return app ? <AppRefChip appRef={app} /> : <NoteWikiLink inner={inner} />
 }
+
+/** 文件类引用前那枚类型图标，和 Amadeus 正文双链同一套（wikilink.ts 的 fileIconEl）。FILE_ICON 是常量，不含用户内容。 */
+// 图标和文字包成不折行的一组：行尾时图标不会单独留在上一行（文字已按 26 字截短）。
+const FileIcon = ({ kind, children }: { kind: FileIconKind | null; children: ReactNode }) =>
+  kind ? <span className="wikilink-nb"><svg className="wikilink-ic" viewBox="0 0 24 24" aria-hidden="true" dangerouslySetInnerHTML={{ __html: FILE_ICON[kind] }} />{children}</span> : <>{children}</>
 
 function NoteWikiLink({ inner }: { inner: string }) {
   const { t } = useI18n()
@@ -145,7 +151,7 @@ function NoteWikiLink({ inner }: { inner: string }) {
     const text = inner.includes('|') ? label : pdf.page ? `${short} p.${pdf.page}` : short
     return (
       <a className="wikilink" data-wiki={pdf.path} title={pdf.path} onClick={(e) => { void openPdfCitation(pdf.path, pdf.page, pdf.q, newTabOf(e)) }}>
-        {text}
+        <FileIcon kind="pdf">{text}</FileIcon>
       </a>
     )
   }
@@ -161,7 +167,7 @@ function NoteWikiLink({ inner }: { inner: string }) {
         : `${media.abs} ${stamp}`
     return (
       <a className="wikilink" data-wiki={media.abs} title={tip} onClick={(e) => { void openMediaCitation(media, newTabOf(e)) }}>
-        {text}
+        <FileIcon kind="media">{text}</FileIcon>
       </a>
     )
   }
@@ -172,7 +178,7 @@ function NoteWikiLink({ inner }: { inner: string }) {
     const text = inner.includes('|') ? label : `${short}${lineTag}`
     return (
       <a className="wikilink" data-wiki={fileCite.abs} title={`${fileCite.abs}${lineTag}`} onClick={(e) => { void openFileCitation(fileCite.abs, fileCite.name, fileCite.line, newTabOf(e)) }}>
-        {text}
+        <FileIcon kind={fileIconKind(inner, fileCite.abs) ?? 'file'}>{text}</FileIcon>
       </a>
     )
   }
@@ -194,7 +200,7 @@ function NoteWikiLink({ inner }: { inner: string }) {
               : m.openNote(path, nt)))
       }}
     >
-      {noteText}
+      <FileIcon kind={fileIconKind(inner, path)}>{noteText}</FileIcon>
     </a>
   )
 }
