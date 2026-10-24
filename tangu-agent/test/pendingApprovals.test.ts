@@ -785,16 +785,25 @@ describe('同一条请求被再次提出:删掉或已读的审批信回来(借�
     expect(await shown()).toHaveLength(1)
   })
 
-  it('Muse 的审批不走这里(在它的私聊里;这里桩环境私聊不可用,退回成收件箱信):删了再提不回来;找不到信的也不补发', async () => {
+  it('Muse 私聊不可用时退回的收件箱信(桩环境就是这样)照同样的规矩回来;找不到信的不补发', async () => {
     await ask('muse')
-    for (const m of await letters()) await set(m.id, 'deleted_at = ?')
+    const [first] = await letters()
+    expect(first).toBeTruthy()
+    await set(first.id, 'deleted_at = ?')
     await ask('muse')
-    expect(await shown()).toHaveLength(0)
-    await query(`DELETE FROM inbox_messages WHERE user_id = ?`, [USER])
-    await ask()
+    expect(await shown()).toHaveLength(1)
     await query(`DELETE FROM inbox_messages WHERE user_id = ?`, [USER])
     await ask()
     expect(await letters()).toHaveLength(0)
+  })
+
+  it('上次发了新信却没删成旧信(两封都看得见):下一次重提把已读的旧信收拾掉,不再发第三封', async () => {
+    await ask()
+    const [first] = await letters()
+    await query(`INSERT INTO inbox_messages (id, user_id, title, body, sender_kind, sender_id) SELECT 'dup', user_id, title, body, sender_kind, sender_id FROM inbox_messages WHERE id = ?`, [first.id])
+    await set(first.id, 'read_at = ?')
+    await ask()
+    expect((await letters()).map((m) => `${m.id === first.id ? 'old' : m.id}:${m.deleted_at ? 'gone' : 'shown'}`).sort()).toEqual(['dup:shown', 'old:gone'])
   })
 
   it('发不出去(小时上限):已读的旧信留着,LOG 留痕;请求本身照旧是 pending', async () => {
