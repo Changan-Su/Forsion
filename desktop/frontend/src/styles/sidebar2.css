@@ -563,6 +563,8 @@
 .t2sw-plug-filter > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .t2sw-plug-filter > svg { flex: none; }
 .t2sw-plug-total { margin-left: auto; flex: none; color: var(--text-faint); font-size: var(--ui-font-caption, 11px); font-variant-numeric: tabular-nums; }
+/* 开着筛选时最后一行下面的「筛掉了几条」 */
+.t2sw-plug-hidden { padding: 10px 12px; text-align: center; color: var(--text-faint); font-size: var(--ui-font-caption, 11px); font-variant-numeric: tabular-nums; }
 .t2sw-plug-item { position: relative; }
 .t2sw-plug-item .t2s-srow { font-weight: 400; }
 .t2sw-plug-item .t2s-srow:is(.active, .is-unread) { font-weight: 500; }
