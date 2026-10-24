@@ -19,7 +19,7 @@ import type { ToolResultSurface } from '../amadeus/plugins/types'
 import { cardStateHandle, parseToolArgs, refreshEngineTools, toolCardOf, toolCardTitle, type ToolCardClaim } from '../amadeus/plugins/toolResultCards'
 // Tangu 聊天界面只经本文件碰工具结果卡片(tangu-boundary 的接缝面只多这一个宿主模块)
 export { useToolCardOf, type ToolCardClaim } from '../amadeus/plugins/toolResultCards'
-import { quoteInMainChat } from '@tangu/ui/views/chat2/btwStore'
+import { quoteInMainChat } from '../views/chat2/btwStore'
 import { deskAcceptsFiles } from '../amadeus/plugins/deskCompanion'
 import { UI_MODE } from '@lcl/engine'
 import './PluginToolCard.css'

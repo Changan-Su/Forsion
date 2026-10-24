@@ -218,6 +218,13 @@ export function setAggCell(db: AggDb, rowId: string, colId: string, value: CellV
   }))
 }
 
+/** 经典表的记录正文(插件 mountRecord 的 body):与 DatabaseEmbed 行预览同一条 mutate,正文从 v2 起才有。
+ *  笔记视图(正文是笔记文件)、只读源 / 可编辑投影一律不写。 */
+export function setAggBody(db: AggDb, rowId: string, body: string): void {
+  if (db.isNoteView || db.readonly || db.writeCell) return
+  useDbStore.getState().mutate(db.path, (d) => ({ ...d, version: Math.max(d.version, 2), rows: d.rows.map((r) => r.id === rowId ? { ...r, body } : r) }))
+}
+
 /** 新建一个事件行(双击创建):经典表 push 新行;笔记视图新建笔记 + 写日期 frontmatter。
  *  返回新行的 rowId(经典)/ 笔记路径(笔记视图),供旁弹卡片定位。 */
 export function createAggEvent(db: AggDb, calColId: string, value: string, name: string): Promise<string> {

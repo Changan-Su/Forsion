@@ -42,7 +42,9 @@ import { inRunWindow } from '../stores/runStats'
 import { EmptyState2 } from './chat2/EmptyState2'
 import { FloatingToc } from './chat2/FloatingToc'
 import { TaskSummary } from './chat2/TaskSummary'
-import { useApp, stickyDefaults, activeChatModelId, withAmadeusWorkspace, applyPreset, newSessionPreset, amadeusLandingRoot } from '../stores/appStore'
+import { useApp, activeChatModelId } from '../stores/appStore'
+import { stickyDefaults, withAmadeusWorkspace, applyPreset } from '../../../../tangu-agent/src/contracts/sessionDefaults'
+import { newSessionPreset, amadeusLandingRoot } from '../tangu/store/tanguSlice'
 import { settleModes } from '../stores/projectSettings'
 import { currentPlatform } from '../services/agentRunService'
 import { hasChatRef, readChatRefs } from '../components/chatDragRef'
@@ -841,7 +843,7 @@ export function ChatView({ leaf, params }: ViewProps) {
           ⚠️ key 带前缀:和上面正文的 key={activeId} 是兄弟,在主线上两者同为会话 id → React 认重,
           画布开着换会话时旧正文删不掉,回到对话就上下叠两份(10-20 用户报) */}
       {canvasOn && activeId && treeRoot && (
-        <ChatCanvas key={`canvas:${treeRoot}`} rootId={treeRoot} activeId={activeId} dir={canvasPref.dir} onDir={(dir) => setCanvasPref({ dir })} />
+        <ChatCanvas key={`canvas:${treeRoot}`} rootId={treeRoot} activeId={activeId} dir={canvasPref.dir} onDir={(dir) => setCanvasPref({ dir })} onChat={() => setCanvasPref({ on: false })} />
       )}
 
       {/* 空状态优先保持 view 居中;空间不足时按 composer 实高向上避让,小高度逐级精简。 */}

@@ -90,6 +90,13 @@ export function inboxLetterPops(m: Pick<InboxMessage, 'sender_id' | 'body'>): bo
   return !!m.sender_id?.startsWith('automation:') || /```forsion-approval\b/.test(m.body || '')
 }
 
+/** 删除确认:Agent 的审批信多一句 —— 请求还在等批时,Agent 再提出它会回来(引擎 pendingApprovals.resurfaceApprovalLetter),
+ *  想让它停得在卡上点「拒绝」。只认 Agent 发的(和审批卡同一道信任闸:服务端广播里的同名围栏不出卡)。 */
+export function inboxDeleteConfirm(m: Pick<InboxMessage, 'title' | 'sender_kind' | 'body'>): string {
+  const approval = m.sender_kind === 'agent' && /```forsion-approval\b/.test(m.body || '')
+  return translate(approval ? 'inbox.deleteConfirmApproval' : 'inbox.deleteConfirm', { title: m.title })
+}
+
 export const useInbox = create<InboxState>((set, get) => ({
   messages: [],
   archived: [],

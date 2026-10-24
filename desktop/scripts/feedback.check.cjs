@@ -57,6 +57,8 @@ async function main() {
       const b = win.locator(`button:text-is("${label}")`).first()
       if (await b.isVisible().catch(() => false)) { await b.click(); break }
     }
+    // 登录后首次同步卡 2.5s 后弹、会挡住 ⌘K 切换语言那一步(同 btw / selection-bar.check)
+    await win.addStyleTag({ content: '.sync-setup-backdrop { display: none !important; }' })
     const input = win.locator('.t2c-ta').first()
     await input.waitFor({ timeout: 30000 })
     /** 敲一次斜杠命令,等浮窗开出来并返回它的 page + 面板 locator。 */

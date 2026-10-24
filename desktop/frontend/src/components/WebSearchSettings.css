@@ -1,8 +1,9 @@
 /* 设置 → 联网搜索:settings-panel 里的有序列表。落点线是 2px 实线(不画虚线框,见 DESIGN §6)。 */
 .wsc .wsc-n { margin-left: 4px; font-weight: 400; color: var(--text-faint); }
 .wsc-item + .wsc-item { border-top: var(--border-width) solid var(--border); }
-.wsc-item.drop-before { box-shadow: inset 0 2px 0 var(--accent); }
-.wsc-item.drop-after { box-shadow: inset 0 -2px 0 var(--accent); }
+.wsc-item { transition: box-shadow var(--lcl-drop-fade); }
+.wsc-item.drop-before { box-shadow: inset 0 2px 0 var(--signal-line); }
+.wsc-item.drop-after { box-shadow: inset 0 -2px 0 var(--signal-line); }
 .wsc-item.is-ghost { opacity: 0.35; }
 .wsc-row { display: flex; align-items: center; gap: 10px; min-height: 54px; padding: 10px 12px 10px 8px; box-sizing: border-box; }
 .wsc-row[draggable='true']:hover { background: var(--overlay-light); }

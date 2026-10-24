@@ -22,7 +22,11 @@ describe('ToolGroup as the process line', () => {
     await act(async () => root.unmount())
     host.remove()
   })
-  const render = (props: Parameters<typeof ToolGroup>[0]) => act(async () => root.render(React.createElement(ToolGroup, props)))
+  const render = async (props: Parameters<typeof ToolGroup>[0]) => {
+    await act(async () => root.render(React.createElement(ToolGroup, props)))
+    // 过程行换态时旧行留着放 100ms 退场(RollLine);happy-dom 不放动画,这里替它把退场放完
+    await act(async () => { host.querySelectorAll('.tool-roll-item.is-out').forEach((el) => el.dispatchEvent(new Event('animationend', { bubbles: true }))) })
+  }
   const head = () => host.querySelector('.tool-group-head') as HTMLButtonElement
   const longSum = () => host.querySelector('.tool-group-sum-long')?.textContent
 

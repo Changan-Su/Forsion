@@ -14,7 +14,7 @@ import { formatDate, formatDateTime } from '../../format/time'
 import { APP_VERSION } from '../../changelog'
 import { useApp } from '../../stores/appStore'
 import { useHomeAgentDefs } from '../../stores/homeCatalog'
-import { useInbox, senderOf, parseUtc, type InboxMessage } from '../../stores/inboxStore'
+import { useInbox, inboxDeleteConfirm, senderOf, parseUtc, type InboxMessage } from '../../stores/inboxStore'
 import { useWorkspace, setActiveSpace, type Leaf } from '@lcl/engine'
 import { InboxBody } from './InboxBody'
 import { SenderGlyph } from './SenderGlyph'
@@ -162,7 +162,7 @@ export function InboxReaderView({ leaf }: { leaf?: Leaf }) {
               <button
                 className="ibx-iconbtn"
                 title={t('inbox.action.delete')}
-                onClick={() => { if (window.confirm(t('inbox.deleteConfirm', { title: msg.title }))) remove(msg.id) }}
+                onClick={() => { if (window.confirm(inboxDeleteConfirm(msg))) remove(msg.id) }}
               >
                 <Trash2 size={14} />
               </button>

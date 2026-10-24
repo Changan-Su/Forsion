@@ -7,12 +7,14 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { useSpaceStore, useWorkspace } from '@lcl/engine'
 import { installTanguProbe, START_CHAT_MAX_PROMPT, translateModelChoice, modelCatalog } from './tanguProbe'
 import { readTangu } from './amadeus/plugins/tanguSeam'
-import { resolveNewSessionWorkspace, useApp } from './stores/appStore'
+import { useApp } from './stores/appStore'
+import { resolveNewSessionWorkspace } from './tangu/store/tanguSlice'
 import { rememberCatalog, useTargetCatalogs } from './services/engine/catalog'
 import * as catalogService from './services/engine/catalog'
 import { DONE_HOLD_MS } from './stores/agentStatus'
 import { ingestCallVoice } from './services/callVoice'
 import type { AgentRunEvent, UiMessage } from './types'
+import './tangu/store/standalone' // 测试不走 activateTangu:自己装 Tangu 的 store 半身(界面热更新 3c)
 
 describe('ctx.tangu 探针', () => {
   beforeEach(() => {

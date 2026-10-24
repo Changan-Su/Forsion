@@ -9,6 +9,7 @@ vi.mock('../services/backendService', async (original) => ({
   compactSession: service.compact, deleteMessages: service.del,
 }))
 import { useApp } from './appStore'
+import '../tangu/store/standalone' // 测试不走 activateTangu:自己装 Tangu 的 store 半身(界面热更新 3c)
 
 // 运行中的 /compact、/refine 排到本轮结束后执行(Codex 同款);排在它们后面的消息也跟着排,不插队 steer。
 const initial = useApp.getState()

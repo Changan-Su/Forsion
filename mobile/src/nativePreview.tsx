@@ -15,6 +15,11 @@ import { installNativeModelPicker } from './nativeModelPicker'
 import '@/styles/base.css'
 import '@tangu/ui/views/chat2/composer2.css'
 import './nativePreview.css'
+import { installTanguSlice } from '@/stores/appStore'
+import { TANGU_SLICE } from '@tangu/ui/tangu/store/tanguSlice'
+
+// 不走 installEngine:自己装 Tangu 的 store 半身(界面热更新 3c)
+installTanguSlice(TANGU_SLICE)
 
 const locale = new URLSearchParams(location.search).get('locale') === 'en' ? 'en' : 'zh'
 localStorage.setItem(LOCALE_KEY, locale)

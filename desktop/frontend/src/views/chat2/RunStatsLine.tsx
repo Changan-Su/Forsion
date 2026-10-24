@@ -3,6 +3,8 @@ import { useEffect, useState } from 'react'
 import { registerMessages, useI18n } from '../../i18n'
 import type { RunStats } from '../../stores/runStats'
 import { fmtTokens } from './Composer2'
+import { fmtElapsed } from '../../../../../tangu-agent/src/contracts/sessionStatus'
+export { fmtElapsed } from '../../../../../tangu-agent/src/contracts/sessionStatus'
 
 registerMessages({
   'chat.runStats.tokens': { zh: '{n} tokens', en: '{n} tokens' },
@@ -10,13 +12,6 @@ registerMessages({
   'chat.runStats.thought': { zh: '思考 {t}', en: 'Thought for {t}' },
 })
 
-/** 33s / 17m 33s / 1h 02m */
-export const fmtElapsed = (ms: number): string => {
-  const s = Math.max(0, Math.floor(ms / 1000))
-  if (s < 60) return `${s}s`
-  if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`
-  return `${Math.floor(s / 3600)}h ${String(Math.floor(s / 60) % 60).padStart(2, '0')}m`
-}
 
 export function RunStatsLine({ stats }: { stats: RunStats }) {
   const { t } = useI18n()

@@ -726,6 +726,8 @@ export interface ApprovalRequest {
   name: string
   arguments?: string
   preview: string
+  /** 散文类预览的结构化版(引擎 approvals.ApprovalPreviewI18n 镜像):卡上按界面语言渲染 t(key, vars),没有就显示 preview。 */
+  previewI18n?: ApprovalPreviewI18n
   status: 'pending' | 'approved' | 'rejected' | 'expired'
   /** 「这次为什么问你」(B3)。旧事件没有这个字段 → 卡上不显示解释,不是错误。 */
   reason?: ApprovalReason
@@ -753,6 +755,11 @@ export interface AnswerBy {
 // P1-K1
 /** approval_request.remote(设备能力 MCP 方案 P1 · K1)。callerUnit/Kind/Name 只在 via==='tunnel' 且 hub → 本机 unitWeb 验过调用方断言时才有;
  *  缺席 = 账号下未识别的客户端(隧道)/ 局域网配对设备 / 点对点直连。callerName 是登记者自选的不可信串,只作纯文本展示。 */
+export interface ApprovalPreviewI18n {
+  key: string
+  vars?: Record<string, string | number>
+}
+
 export interface ApprovalRemote {
   via?: 'tunnel' | 'p2p' | 'lan'
   callerUnit?: string
