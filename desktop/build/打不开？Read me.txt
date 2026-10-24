@@ -16,8 +16,10 @@ macOS 会拦下从网上下载的未公证 App。按下面任一方法打开即�
    （不要点「移到废纸篓」）。
 3. 打开「系统设置」→「隐私与安全性」，滑到最下方的「安全性」一栏，
    在关于 Forsion 的提示旁点「仍要打开」，再按提示确认
-   （可能要输入开机密码或按指纹）。
+   （要输入这台 Mac 管理员的开机密码，这一步不能用指纹）。
+   密码框打不出字？先把输入法切到系统自带的「ABC」再输入。
 之后就能像平常一样双击打开了（首次打开成功后 App 会自动完成剩余清理）。
+还是不行，就不用这个密码框了，直接用下面「方法三」终端那一行。
 
 
 方法二（macOS 14 及更早）
@@ -52,9 +54,12 @@ yet, so macOS blocks it after download. Any one of these opens it:
      blocked: click Done (not Move to Trash). Then go to
      System Settings → Privacy & Security, scroll to the bottom,
      click "Open Anyway" next to the Forsion notice and confirm
-     (you may be asked for your password or Touch ID).
+     with your Mac administrator password (Touch ID isn't accepted
+     here). Can't type in the password box? Switch the input source
+     to the built-in "ABC" first.
      After the first successful launch the app cleans up the rest
-     automatically.
+     automatically. Still stuck? Skip the password box and use the
+     Terminal line in 3) below.
 
   2) macOS 14 and earlier
      Drag Forsion into Applications, then RIGHT-CLICK it → Open → Open.
