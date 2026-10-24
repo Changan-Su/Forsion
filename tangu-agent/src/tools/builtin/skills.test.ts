@@ -75,6 +75,20 @@ describe('use_skill:技能文件夹', () => {
       await expect(fs.access(path.join(home, 'skills', 'skill-creator', rel))).resolves.toBeUndefined();
     }
   });
+
+  // 10-24:forsion-plugin 正文长到 14.5 万字,超过 use_skill 的截断线,「发布到商店」及之后几节模型从来看不到(live storename 红了三天)。
+  // 长而少用的 API 细则搬进 references/;这里钉住:内置技能都不被截断,正文点名的 references/ 文件都真在。
+  it('包内置技能装载后都不被截断;正文点名的 references/ 文件都在', async () => {
+    for (const slug of await fs.readdir(builtinSkillsDir())) {
+      const out = await load(`local:${slug}`);
+      expect(out, slug).not.toContain('…(truncated)');
+      const dir = out.match(/^Skill folder: (.+)$/m)?.[1];
+      for (const rel of new Set(out.match(/references\/[\w.-]+\.md/g) || [])) {
+        await expect(fs.access(path.join(dir!, rel)), `${slug}: ${rel}`).resolves.toBeUndefined();
+      }
+    }
+    expect(await load('local:forsion-plugin')).toContain('## 发布到商店');
+  });
 });
 
 describe('use_skill:镜像还是上一版时', () => {
