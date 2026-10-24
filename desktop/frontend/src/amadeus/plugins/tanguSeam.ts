@@ -289,6 +289,13 @@ export interface TanguAgentSelf {
   libraryRead(path: string): Promise<string>
 }
 
+/** 宿主交给 Tangu 入口 `activateTangu(host)` 的东西(界面热更新 3b):只放入口 import 不到的宿主私有件,
+ *  其余宿主模块照共享模块表直接 import。**宿主内部接缝,不进 `ctx.tangu`**。 */
+export interface TanguHost {
+  /** 装 ctx.tangu 探针(宿主 tanguProbe.ts)。`tangu` = Tangu 自己交进去的那几块,Tangu 没激活时为空。 */
+  installProbe(tangu: Pick<TanguProbe, 'askInChat'>): void
+}
+
 let probe: TanguProbe | null = null
 
 /** 由 `installEngine()` 注入(desktop / web / mobile 三端共用那一处装配 → 天然对齐)。
