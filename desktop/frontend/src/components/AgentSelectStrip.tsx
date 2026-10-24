@@ -16,17 +16,18 @@
 import React, { useMemo, useState, useRef, useEffect } from 'react'
 import { Loader2, MessageCircle } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
+import { nativeSheetPresenter, presentNativeChecklist } from '@lcl/engine'
 import { registerMessages, useI18n } from '../i18n'
 import { EngineIcon } from './EngineIcon'
 import { PillBar } from './EnginePicker'
-import { CompactChatPicker } from './CompactChatPicker'
+import { CompactChatPicker, type ChatPickItem } from './CompactChatPicker'
 import { ContextMenu, menuPos, type CtxMenu } from './RightPanel'
 import { useApp } from '../stores/appStore'
 import { newChatProjectPath } from '../tangu/store/tanguSlice'
 import { currentPlatform } from '../services/agentRunService'
 import { projectDefaultsForNewSession } from '../stores/projectSettings'
 import { draftDispatch } from './agentSelectStatus'
-import { AgentAvatar } from './AgentAvatar'
+import { AgentAvatar, initialFor } from './AgentAvatar'
 import { openSolo } from '../sessionNav'
 import type { AgentConfig } from '../types'
 import './agentSelectStrip.css'
@@ -70,7 +71,7 @@ export function pickedAgentSlugs(cfg: AgentConfig): string[] {
  * @param cfg 该会话/新对话的**有效**配置(ChatView 的 mvCfg / 主页的 config)。
  */
 export function AgentSelectStrip({ sessionId, cfg }: { sessionId: string | null; cfg: AgentConfig }): React.ReactElement | null {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const [menu, setMenu] = useState<CtxMenu>(null)
   const s = useApp(useShallow((state) => ({
     agentDefs: state.agentDefs,
@@ -237,6 +238,12 @@ export function AgentSelectStrip({ sessionId, cfg }: { sessionId: string | null;
     )
   }
 
+  // 原生清单开着时会话可能被换掉 / 本组件被卸掉:回来的结果只认发起它的那一轮,且用最新的 applyAgents 写(评审 10-24)。
+  const nativeAbort = useRef<AbortController | null>(null)
+  const applyLatest = useRef(applyAgents)
+  applyLatest.current = applyAgents
+  useEffect(() => () => nativeAbort.current?.abort(), [sessionId])
+
   // Chat 预设恒 sandbox + 无 agent(applyPreset 会抹掉 agentSlug/cwd),不露选择条;没有任何候选同理。
   if (cfg.preset === 'chat' || !items.length) return null
 
@@ -254,30 +261,74 @@ export function AgentSelectStrip({ sessionId, cfg }: { sessionId: string | null;
   // 什么都没选 = 走默认:主页不再常驻这句(10-02 用户拍板 v8,悬停头像的提示里有「默认」);选了 / 组队时它在报状态,照常显示。
   const isDefaultLine = teamCount < TEAM_MIN && picked.length !== 1 && dispatch.kind !== 'team'
 
-  const compactValue = pickedIds[0] || ''
-  const compactIcon = picked[0] ? pillIcon(picked[0]) : <EngineIcon engineId="" size={16} />
+  // 窄栏芯片 + 浮层 / 抽屉(方案页 docs/ToBeImproved/窄栏Agent选择器方案_2026-10-23,用户选 B+C):
+  // 行只放头像 + 名字,勾 / 团队序号可见;点行 = 宽栏点 pill 的同一个 toggle,浮层不收。
+  const isTeam = picked.length >= TEAM_MIN
+  const compactIcon = isTeam
+    ? <span className="chat-pick-stack">{picked.slice(0, 3).map((item) => <React.Fragment key={item.id}>{pillIcon(item)}</React.Fragment>)}</span>
+    : picked[0] ? pillIcon(picked[0]) : <EngineIcon engineId="" size={16} />
+  const compactName = picked.length ? picked.map((i) => i.name).join(locale === 'zh' ? '、' : ', ') : t('agentSelect.default')
+  const markOf = (id: string): true | number | undefined => {
+    const at = pickedIds.indexOf(id)
+    return at < 0 ? undefined : isTeam ? at + 1 : true
+  }
+  const pickItems: ChatPickItem[] = [
+    { id: '', name: t('agentSelect.default'), icon: <EngineIcon engineId="" size={18} />, mark: picked.length ? undefined : true, disabled: !!warming, separatorAfter: items.length > 0 },
+    ...items.map((i): ChatPickItem => ({
+      id: i.id,
+      name: i.name,
+      description: i.kind === 'agent' ? i.description : undefined,
+      icon: pillIcon(i),
+      mark: markOf(i.id),
+      badge: i.kind === 'agent' && i.system ? <span className="agent-badge-system">{t('agent.badge.system')}</span> : undefined,
+      disabled: !!warming && i.id !== engineKey(warming),
+      section: i.kind === 'engine' ? t('chatPicker.engines') : undefined,
+      direct: true,
+    })),
+  ]
+  // 安卓原生外壳:原生勾选清单(按勾选顺序 = 发言顺序,关上时一起生效;10-24 用户选定)。
+  // 引擎是单选互斥,清单表达不了 —— 列表里有引擎就留给网页面(引擎只在本机执行的会话里出现,手机上碰不到)。
+  const openNative = (fallback: () => void): boolean => {
+    if (!nativeSheetPresenter() || items.some((i) => i.kind === 'engine')) return false
+    nativeAbort.current?.abort()
+    const ctrl = new AbortController()
+    nativeAbort.current = ctrl
+    const agents = items.filter((i): i is Extract<Candidate, { kind: 'agent' }> => i.kind === 'agent')
+    void presentNativeChecklist({
+      title: t('agentSelect.title'),
+      items: agents.map((a) => ({ id: a.id, label: a.name, icon: initialFor(a.name, agentNames) })),
+      checked: pickedIds.filter((id) => agents.some((a) => a.id === id)),
+      footer: statusLine,
+      done: t('chatPicker.done'),
+      min: 0,
+      max: agents.length,
+    }, ctrl.signal).then((out) => {
+      if (ctrl.signal.aborted) return
+      if (!out.handled) { fallback(); return }
+      if (out.value) applyLatest.current(out.value.checked.map((id) => id.slice('agent:'.length)))
+    })
+    return true
+  }
   return (
     <div ref={rootRef} className="engine-picker agent-picker agent-select-strip" role="group" aria-label={t('agentSelect.title')}>
       {/* 窄栏芯片的前缀要短,故用既有的「Agent」词条;整条的可访问名走根节点 aria-label。 */}
       <CompactChatPicker
-        label={t('chatPicker.agent')}
-        value={compactValue}
+        label={isTeam ? t('chatPicker.team') : t('chatPicker.agent')}
+        title={t('agentSelect.title')}
         icon={compactIcon}
-        options={[
-          { value: '', name: t('agentSelect.default') },
-          ...items.map((i) => ({
-            value: i.id,
-            name: i.name,
-            // 原生 select 选不掉自己,故「已选」只作说明写进选项正文,name 保持干净(仪器读它)。
-            description: pickedIds.includes(i.id) ? t('agentSelect.picked') : (i.kind === 'agent' ? i.description : undefined),
-            disabled: !!warming && i.id !== engineKey(warming),
-          })),
-        ]}
-        onChange={(value) => {
-          if (!value) { clearAll(); return }
-          const item = byId.get(value)
+        name={compactName}
+        status={statusLine}
+        items={pickItems}
+        onPick={(id) => {
+          if (!id) { clearAll(); return }
+          const item = byId.get(id)
           if (item) toggle(item)
         }}
+        // 「默认 Agent」= 清空,和选了引擎(单选互斥)一样收起;选 Agent 不收,好接着组队
+        closeOnPick={(id) => !id || byId.get(id)?.kind === 'engine'}
+        onDirect={(id) => { const item = byId.get(id); if (item) openDirect(item) }}
+        directLabel={t('agentSelect.direct')}
+        onNative={openNative}
         busy={!!warming}
       />
       <PillBar label={t('agentSelect.title')} role="group">
