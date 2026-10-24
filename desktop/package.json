@@ -226,6 +226,7 @@
     "check:uiscale": "node scripts/ui-scale.check.cjs",
     "check:attachfold": "node scripts/chat-attach-fold.check.cjs",
     "check:imageviewer": "node scripts/chat-image-viewer.check.cjs",
+    "check:imagestack": "node scripts/chat-image-stack.check.cjs",
     "check:shortcuts": "node scripts/shortcut-conflicts.check.cjs",
     "e2e:cusettings": "node scripts/computer-use-settings.e2e.cjs",
     "check:uifont": "node scripts/ui-font.check.cjs",

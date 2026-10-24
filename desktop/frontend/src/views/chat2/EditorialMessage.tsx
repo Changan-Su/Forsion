@@ -75,6 +75,7 @@ import { isRemoteApprover, wasDecidedHere } from '../../components/ApprovalCard'
 import { answeredByText } from '../../approvalReason'
 import { refForSession, targetForSession, useSessionHostName } from '../../services/engine/targets'
 import { AttachmentTile } from '../../components/AttachmentTile'
+import { ImageStack, stackable } from '../../components/ImageStack'
 import { UserFold } from './UserFold'
 export type { TaskLanding }
 import './chat2.css'
@@ -561,6 +562,8 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
                 </div>
               )}
               {[atts.filter(isImageAtt), atts.filter((a) => !isImageAtt(a))].map((row, r) => row.length > 0 && (
+                // 图片超过 3 张叠成一摞(ImageStack.tsx);3 张以内照旧平铺
+                r === 0 && stackable(row.length) ? <ImageStack key={r} files={row} /> :
                 <div key={r} className="t2-user-atts-row">
                   {row.map((a, i) => <AttachmentTile key={`${a.name}-${i}`} file={a} view />)}
                 </div>

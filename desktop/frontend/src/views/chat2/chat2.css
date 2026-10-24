@@ -214,6 +214,43 @@
 .t2-user-atts { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; max-width: 100%; --att-tile: 120px; }
 .t2-user-atts-row { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; max-width: 100%; }
 .t2-user-atts .att-tile--file { max-width: 280px; }
+/* 多图叠成一摞(10-24,借鉴 Comma §2.5;组件 components/ImageStack.tsx):超过 3 张才叠。卡片大小跟 --att-tile 走
+   (消息里 120px → 216×144,窄栏 96px → 173×115),左右各留两层露边的位置(2 × 7px)。
+   每张卡的槽位(位移 / 层级 / 透明度)由组件写内联,这里只管过渡与外观;翻页走 --duration-slow,甩出去的那张由 WAAPI 带(data-flying 时压掉过渡、垫到最上面)。 */
+.img-stack { --img-stack-w: calc(var(--att-tile, 120px) * 1.8); position: relative; flex: none; width: calc(var(--img-stack-w) + 28px); height: calc(var(--att-tile, 120px) * 1.2); touch-action: pan-y; }
+.img-stack-card {
+  position: absolute; top: 0; left: 14px; width: var(--img-stack-w); height: 100%;
+  z-index: var(--img-stack-z); border-radius: var(--radius-md); box-shadow: var(--card-shadow);
+  transition: transform var(--duration-slow) var(--ease-out), opacity var(--duration-slow) var(--ease-out);
+}
+.img-stack-card[aria-hidden] { pointer-events: none; }
+.img-stack-card[data-flying] { z-index: 20; transition: none; }
+.img-stack-card > img {
+  display: block; width: 100%; height: 100%; object-fit: cover; object-position: left top; /* 同磁贴:截图的要紧处多在左上 */
+  border-radius: inherit; border: var(--border-width) solid var(--border); background: var(--bg-card);
+}
+.img-stack-card > img:focus-visible { outline: var(--focus-ring) solid var(--signal-line); outline-offset: 1px; }
+.img-stack-count {
+  position: absolute; right: 22px; bottom: 8px; z-index: 30; pointer-events: none;
+  padding: 2px 8px; border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--bg-card) 88%, transparent); color: var(--text);
+  font-size: var(--ui-font-caption, 11px); font-weight: 500;
+}
+.img-stack-nav {
+  position: absolute; top: 50%; z-index: 30; width: 26px; height: 26px; margin-top: -13px;
+  display: grid; place-items: center; padding: 0; border: none; border-radius: var(--radius-pill);
+  background: var(--bg-card); color: var(--text); box-shadow: var(--card-shadow);
+  opacity: 0; transition: opacity var(--duration-instant);
+}
+.img-stack-nav:hover { background: color-mix(in srgb, var(--overlay-light) 60%, var(--bg-card)); }
+.img-stack-nav:focus-visible { outline: var(--focus-ring) solid var(--signal-line); outline-offset: 1px; }
+.img-stack-nav[data-dir='prev'] { left: 20px; }
+.img-stack-nav[data-dir='next'] { right: 20px; }
+@media (hover: hover) { .img-stack:hover .img-stack-nav:not(:disabled), .img-stack:focus-within .img-stack-nav:not(:disabled) { opacity: 1; } }
+@media (hover: none) { .img-stack-nav { pointer-events: none; } } /* 触屏:左右滑;看不见的钮别吃掉点图 */
+.img-stack:has(:focus-visible) .img-stack-nav:not(:disabled) { opacity: 1; pointer-events: auto; } /* 外接键盘 / 读屏:触屏上也得翻得了 */
+.img-stack-nav:disabled { pointer-events: none; }
+@media (prefers-reduced-motion: reduce) { .img-stack-card, .img-stack-nav { transition: none; } }
 /* 长提问折叠(C2,UserFold.tsx):高过 300px 收起;底部 64px 七档渐隐(1 → .85 → .7 → .5 → .3 → .15 → .05 → 0),两点线性在起点有一道看得见的棱 */
 .t2-user-fold { position: relative; }
 .t2-user-fold[data-folded] {
