@@ -11,12 +11,16 @@ export interface FailedSend {
   id: string
   text: string
   attachments: Attachment[]
+  /** 没传上去的工作区文件(传上去了的不重传) */
+  workspaceFiles?: Attachment[]
   skillIds?: string[]
   mentions?: { priorityAgent?: string; mentionAgents?: string[]; mentionProjects?: Array<{ name: string; path: string }> }
   reason: FailReason
   /** 错误原文,放悬停提示里 */
   detail: string
   at: number
+  /** 失败那一刻本地已经有的消息 id:「其实到了」只认这之后才冒出来的 */
+  known: string[]
 }
 
 export function failReason(e: unknown): FailReason {
@@ -26,9 +30,10 @@ export function failReason(e: unknown): FailReason {
   return typeof status === 'number' ? 'refused' : 'offline'
 }
 
-/** 断在半路的那种(offline):引擎那边是不是其实已经收下了 —— 失败之后落库的用户消息里有一条字一样的。
- *  ponytail: 按正文 + 时间认,不给 startRun 加请求号(那要同时改本机引擎和云端 worker);上限:失败后又手发了一条一模一样的,会被当成已送达。 */
-export function landedAnyway(item: FailedSend, records: Array<{ role?: string; content?: string | null; timestamp?: number | string }>): boolean {
-  const since = item.at - 60_000
-  return records.some((r) => r.role === 'user' && (r.content ?? '').trim() === item.text.trim() && new Date(r.timestamp ?? 0).getTime() >= since)
+/** 断在半路的那种(offline):引擎那边是不是其实已经收下了 —— 失败那一刻本地还没有、现在却落了库的用户消息里,有一条字一样的。
+ *  ponytail: 按正文认,不给 startRun 加请求号(那要同时改本机引擎和云端 worker);
+ *  上限:失败之后又从别的窗口 / 设备发了一模一样的一句,会被当成这条已送达。 */
+export function landedAnyway(item: FailedSend, records: Array<{ id: string; role?: string; content?: string | null }>): boolean {
+  const known = new Set(item.known)
+  return records.some((r) => r.role === 'user' && !known.has(r.id) && (r.content ?? '').trim() === item.text.trim())
 }

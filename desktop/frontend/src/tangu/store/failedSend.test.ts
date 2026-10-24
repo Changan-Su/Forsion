@@ -9,11 +9,12 @@ describe('发送失败留在原地', () => {
     expect(failReason(Object.assign(new Error('engine unreachable'), { status: 503 }))).toBe('refused')
     expect(failReason('boom')).toBe('offline')
   })
-  it('断在半路的:失败之后落库了一条字一样的用户消息 = 其实到了', () => {
-    const item: FailedSend = { id: 'f1', text: '把圆角改成 12px ', attachments: [], reason: 'offline', detail: '', at: 1_000_000 }
-    expect(landedAnyway(item, [{ role: 'user', content: '把圆角改成 12px', timestamp: 1_000_500 }])).toBe(true)
-    expect(landedAnyway(item, [{ role: 'user', content: '把圆角改成 12px', timestamp: 100 }])).toBe(false) // 很早以前发过同样的话,不算
-    expect(landedAnyway(item, [{ role: 'assistant', content: '把圆角改成 12px', timestamp: 1_000_500 }])).toBe(false)
-    expect(landedAnyway(item, [{ role: 'user', content: null, timestamp: 1_000_500 }])).toBe(false)
+  it('断在半路的:失败那一刻本地还没有、现在落了库的用户消息里有一条字一样的 = 其实到了', () => {
+    const item: FailedSend = { id: 'f1', text: '继续 ', attachments: [], reason: 'offline', detail: '', at: 1_000_000, known: ['u1', 'a1'] }
+    expect(landedAnyway(item, [{ id: 'u1', role: 'user', content: '继续' }, { id: 'u9', role: 'user', content: '继续' }])).toBe(true)
+    // 十秒前刚发过一句一模一样的(本地早就有了):不算这条到了(Codex 评审 P2)
+    expect(landedAnyway(item, [{ id: 'u1', role: 'user', content: '继续' }])).toBe(false)
+    expect(landedAnyway(item, [{ id: 'a9', role: 'assistant', content: '继续' }])).toBe(false)
+    expect(landedAnyway(item, [{ id: 'u9', role: 'user', content: null }])).toBe(false)
   })
 })

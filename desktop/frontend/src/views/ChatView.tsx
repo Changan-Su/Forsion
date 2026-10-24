@@ -807,7 +807,7 @@ export function ChatView({ leaf, params }: ViewProps) {
             )}
             </div>
           </div>
-          <JumpToBottom setter={jumpSetter} title={t('chat.jumpToBottom')} replies={replyCount} onClick={() => scrollToBottom(true)} />
+          <JumpToBottom key={activeId || ''} setter={jumpSetter} title={t('chat.jumpToBottom')} replies={replyCount} onClick={() => scrollToBottom(true)} />
           {/* 划线条(全应用同一条,components/selectionBar):这里接管「带去对话」那一格 —— 引用 / 顺便问(10-18 起「在侧栏提问」并进顺便问,开在右边那块面板),
               行为与原来的胶囊菜单一字不差;翻译和插件动作(⋯)由共用的那一层给。条自己 portal 到 body。 */}
           <ViewSelectionBar
@@ -986,9 +986,9 @@ export function ChatView({ leaf, params }: ViewProps) {
             if (studioChat) {
               const target = useCodeStudio.getState().prepareRun()
               if (!target) return false
-              return useApp.getState().send(text, attachments, workspaceFiles, skillIds, mentions, target.sessionId)
+              return useApp.getState().send(text, attachments, workspaceFiles, skillIds, mentions, target.sessionId, false, true)
             }
-            return s.send(text, attachments, workspaceFiles, skillIds, mentions, activeId)
+            return s.send(text, attachments, workspaceFiles, skillIds, mentions, activeId, false, true)
           }}
           onStop={() => s.stop(activeId)}
           quotes={quotes}

@@ -483,9 +483,9 @@ export const Composer2: React.FC<{
   // 等待期间宽卡轮播小贴士；窄卡固定短提示，避免文案闪烁与输入区高度跳动。
   const [tipIdx, setTipIdx] = useState(0)
   const [previewQuote, setPreviewQuote] = useState<string | null>(null)
-  // 长粘贴磁贴(借 Comma):跟着这个会话的草稿走;previewPaste = 正在看全文的那张(按对象认,删别的不会错位)
+  // 长粘贴磁贴(借 Comma):跟着这个会话的草稿走;previewPaste = 正在看全文的那张的下标(按下标删:同一段贴两次是两张,删一张只删一张)
   const [pastes, setPastes] = useDraftField(draftKey, 'pastes')
-  const [previewPaste, setPreviewPaste] = useState<string | null>(null)
+  const [previewPaste, setPreviewPaste] = useState<number | null>(null)
   const quotedNote = quotes.some((q) => !!noteOf(quoteNotes, q)?.trim())
   // 触屏(Android 壳 / 手机浏览器)没有 ⌘、悬停和拖拽,只留与指针无关的几条。
   const [touchUi] = useState(() => !!window.tangu?.mobile || !!window.matchMedia?.('(hover: none)').matches)
@@ -1799,7 +1799,7 @@ export const Composer2: React.FC<{
                 <QuoteTile key={quote} text={quote} note={noteOf(quoteNotes, quote)} title={t('quote.tile.preview')} onOpen={() => setPreviewQuote(quote)} removeTitle={t('input.remove')} onRemove={() => (onRemoveQuote ? onRemoveQuote(index) : onClearQuote?.())} />
               ))}
               {pastes.map((p, i) => (
-                <PasteTile key={i} text={p} title={t('quote.tile.preview')} onOpen={() => setPreviewPaste(p)} removeTitle={t('input.remove')} onRemove={() => setDraftField(draftKey, 'pastes', (prev) => prev.filter((x) => x !== p))} />
+                <PasteTile key={i} text={p} title={t('quote.tile.preview')} onOpen={() => setPreviewPaste(i)} removeTitle={t('input.remove')} onRemove={() => setDraftField(draftKey, 'pastes', (prev) => prev.filter((_, j) => j !== i))} />
               ))}
               {attachments.map((a) => (
                 <AttachmentTile key={tileKey(a)} file={a} removeTitle={t('input.remove')} onRemove={() => setDraftField(draftKey, 'attachments', (prev) => prev.filter((x) => x !== a))} />
@@ -2200,14 +2200,14 @@ export const Composer2: React.FC<{
             <div className="t2c-hint" style={{ marginTop: 6, marginBottom: 0 }}>{callError}</div>
           )}
         </ChatBoxSurface>
-        {previewPaste !== null && (
+        {previewPaste !== null && pastes[previewPaste] !== undefined && (
           <QuotePreview
-            text={previewPaste}
+            text={pastes[previewPaste]}
             paste
             onClose={() => setPreviewPaste(null)}
             onRestore={() => {
-              const p = previewPaste
-              setDraftField(draftKey, 'pastes', (prev) => prev.filter((x) => x !== p))
+              const i = previewPaste, p = pastes[i]
+              setDraftField(draftKey, 'pastes', (prev) => prev.filter((_, j) => j !== i))
               setDraft((d) => (d.trim() ? `${d.replace(/\s+$/, '')}\n${p}` : p))
               setPreviewPaste(null)
               requestAnimationFrame(autoGrow)

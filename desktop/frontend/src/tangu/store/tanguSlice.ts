@@ -641,6 +641,8 @@ const approvalWrites = new Map<string, { issued: number; pending: number; mode: 
 /** 「进造物」挪会话与发送互斥:挪的一方(作品卡从点下到挪完,含复制那几秒)与发送的一方(从进入 send 到 run 起来 / 失败,
  *  中间可能在传附件)谁先占住谁先做,另一方不动手 —— 否则这一轮带着旧目录的配置起跑,会话却已经指到新目录。 */
 const movingSessions = new Set<string>()
+/** 正在重试的失败气泡 id:连点「重试」只发一次。 */
+const retrying = new Set<string>()
 const sendingSessions = new Map<string, number>()
 /** 占住这条会话来挪;它正在发送,或已有一张作品卡在挪 → false(调用方什么都别做)。 */
 export const lockSessionMove = (sid: string): boolean => {
@@ -1051,9 +1053,11 @@ export interface TanguState {
   removeWorkspace(ws: WorkspaceDescriptor, opts?: { deleteFiles?: boolean }): Promise<void>
   /** 删除 Agent(侧栏 / 名册共用);deleteFiles = 连它的文件(记忆、Library)一起移进系统废纸篓,否则留在引擎的 agents/.removed/。失败抛错。 */
   removeAgent(agent: NormalAgentDef, deleteFiles: boolean): Promise<void>
-  send(text: string, attachments: Attachment[], workspaceFiles?: Attachment[], skillIds?: string[], mentions?: { priorityAgent?: string; mentionAgents?: string[]; mentionProjects?: Array<{ name: string; path: string }> }, sessionId?: string | null, fromQueue?: boolean): Promise<boolean>
+  /** holdFailed:没发出去的那条留在会话末尾(借 Comma 的失败气泡)并当作「收下了」返回 true —— 只给输入框里手打的那条用;
+   *  其余调用方(编辑重发、插件、文档任务……)靠 false 回滚 / 报错,照旧 toast + false。 */
+  send(text: string, attachments: Attachment[], workspaceFiles?: Attachment[], skillIds?: string[], mentions?: { priorityAgent?: string; mentionAgents?: string[]; mentionProjects?: Array<{ name: string; path: string }> }, sessionId?: string | null, fromQueue?: boolean, holdFailed?: boolean): Promise<boolean>
   /** send 的本体;只给 send 用(send 在外面套了「作品卡挪会话」互斥,直接调它会绕过)。 */
-  sendNow(text: string, attachments: Attachment[], workspaceFiles?: Attachment[], skillIds?: string[], mentions?: { priorityAgent?: string; mentionAgents?: string[]; mentionProjects?: Array<{ name: string; path: string }> }, sessionId?: string | null, fromQueue?: boolean): Promise<boolean>
+  sendNow(text: string, attachments: Attachment[], workspaceFiles?: Attachment[], skillIds?: string[], mentions?: { priorityAgent?: string; mentionAgents?: string[]; mentionProjects?: Array<{ name: string; path: string }> }, sessionId?: string | null, fromQueue?: boolean, holdFailed?: boolean): Promise<boolean>
   /** 撤回一条等待中的插话(删除/↑取回)。返回消息文本;已注入或来不及则 null(等待区交给事件流收拾)。 */
   withdrawSteer(sessionId: string, msgId: string): Promise<string | null>
   /** 「立即插话」:打断当前 run,把等待区消息按序强发。 */
@@ -2787,14 +2791,14 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     })
     persistDeskSoon()
   },
-  send: async (text, attachments, workspaceFiles, skillIds, mentions, targetSessionId, fromQueue) => {
+  send: async (text, attachments, workspaceFiles, skillIds, mentions, targetSessionId, fromQueue, holdFailed) => {
     const sid = targetSessionId === undefined ? get().activeId : targetSessionId
     if (sid && movingSessions.has(sid)) { get().toast(get().tr('app.sessionMoving'), true); return false }
     if (sid) markSending(sid, 1)
-    try { return await get().sendNow(text, attachments, workspaceFiles, skillIds, mentions, targetSessionId, fromQueue) } finally { if (sid) markSending(sid, -1) }
+    try { return await get().sendNow(text, attachments, workspaceFiles, skillIds, mentions, targetSessionId, fromQueue, holdFailed) } finally { if (sid) markSending(sid, -1) }
   },
 
-  sendNow: async (text, attachments, workspaceFiles, skillIds, mentions, targetSessionId, fromQueue) => {
+  sendNow: async (text, attachments, workspaceFiles, skillIds, mentions, targetSessionId, fromQueue, holdFailed) => {
     track('chat.send')
     const t = get().tr
     let sid = targetSessionId === undefined ? get().activeId : targetSessionId
@@ -2935,17 +2939,20 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     // 同理带上「何时转写」档:云端会话的引擎读不到本机 config.json,不带就永远按 auto 跑。
     if (!onUnit && !agentConfig.visionMode && get().cfg.visionMode) agentConfig.visionMode = get().cfg.visionMode
     try { if (localStorage.getItem(SHOW_SYSTEM_PROMPT_KEY) === '1') agentConfig.debugSystemPrompt = true } catch { /* ignore */ }
+    let wsUnsent: Attachment[] | undefined // 没传上去的工作区文件:这条没发出去时跟着失败气泡留下,重试再传(传上去了的不重传)
     if (workspaceFiles?.length) {
       try {
         await api.uploadWorkspaceFiles(targetForSession(sessionId), sessionId, workspaceFiles.map((f) => ({ path: f.name, content: f.data, encoding: 'base64' as const, mimeType: f.mimeType })))
         get().toast(t('app.filesUploaded', { count: workspaceFiles.length }))
-      } catch (e: any) { get().toast(t('app.workspaceUploadFail', { e: e?.message || e }), true) }
+      } catch (e: any) { wsUnsent = workspaceFiles; get().toast(t('app.workspaceUploadFail', { e: e?.message || e }), true) }
     }
-    // 借 Comma:没发出去的那条落在会话末尾,带丢弃 / 重试(failedSend.ts);随后 return true = 输入框照常清空,字在那条气泡里。
-    // 队列取出的(fromQueue)不走这条:队列自己管重发。
+    // 借 Comma:startRun 没成的那条落在会话末尾,带丢弃 / 重试(failedSend.ts);随后 return true = 输入框照常清空,字在那条气泡里。
+    // 只在调用方要(holdFailed,输入框手打的)时这样做;队列取出的(fromQueue)也不走这条 —— 队列自己管重发。
+    // steer 失败不走这条(照旧提示 + 字留在输入框):插话被引擎收下后要到迭代边界才进历史,重试前查不出它到没到,会插两遍(Codex 评审)。
     const recordFailed = (sid: string, e: any): void => {
       const at = Date.now()
-      const item: FailedSend = { id: `failed-${at}-${Math.random().toString(36).slice(2, 6)}`, text, attachments, skillIds, mentions, reason: failReason(e), detail: String(e?.message || e), at }
+      const known = (get().messagesBySession[sid] || []).map((m) => m.id)
+      const item: FailedSend = { id: `failed-${at}-${Math.random().toString(36).slice(2, 6)}`, text, attachments, workspaceFiles: wsUnsent, skillIds, mentions, reason: failReason(e), detail: String(e?.message || e), at, known }
       set((st) => ({ failedBySession: { ...st.failedBySession, [sid]: [...(st.failedBySession[sid] || []), item] } }))
     }
     const activeRunId = get().runningBySession[sessionId]
@@ -2973,11 +2980,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
           set((s) => steerAcceptPatch(s, sessionId, activeRunId, { id: sr.userMessageId || `u-${Date.now()}`, text, attachments }))
           return true
         }
-      } catch (e: any) {
-        if (fromQueue) { get().toast(t('app.sendFail', { e: e?.message || e }), true); return false }
-        recordFailed(sessionId, e)
-        return true
-      }
+      } catch (e: any) { get().toast(t('app.sendFail', { e: e?.message || e }), true); return false }
     }
     // 与输入栏「显示的模型」(mvModelId)同一回退链:newChat/会话模型 → 全局 cfg.modelId → 后端默认模型。
     // 否则新会话(未显式选模型、cloud.defaultModel 又空)会发出空 model_id → 后端 400「model_id required」。
@@ -3005,7 +3008,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       if (sess && (!sess.title || sess.title === 'New Chat')) void get().renameSession(sessionId, text.slice(0, 30))
       return true
     } catch (e: any) {
-      if (fromQueue) { get().toast(t('app.sendFail', { e: e?.message || e }), true); return false }
+      if (fromQueue || !holdFailed) { get().toast(t('app.sendFail', { e: e?.message || e }), true); return false }
       recordFailed(sessionId, e)
       return true
     }
@@ -3601,14 +3604,16 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
   discardFailed: (sessionId, id) => set((s) => ({ failedBySession: { ...s.failedBySession, [sessionId]: (s.failedBySession[sessionId] || []).filter((f) => f.id !== id) } })),
   retryFailed: async (sessionId, id) => {
     const item = (get().failedBySession[sessionId] || []).find((f) => f.id === id)
-    if (!item) return
-    get().discardFailed(sessionId, id)
-    if (item.reason === 'offline') {
-      const records = await api.listMessages(targetForSession(sessionId), sessionId).catch(() => null)
-      if (records && landedAnyway(item, records)) { void get().pollSession(sessionId); return }
-    }
-    // 再没成就再落一条(sendNow 的 catch),排在最后
-    await get().send(item.text, item.attachments, undefined, item.skillIds, item.mentions, sessionId)
+    if (!item || retrying.has(id)) return
+    retrying.add(id)
+    try {
+      if (item.reason === 'offline') {
+        const records = await api.listMessages(targetForSession(sessionId), sessionId).catch(() => null)
+        if (records && landedAnyway(item, records)) { get().discardFailed(sessionId, id); void get().pollSession(sessionId); return }
+      }
+      // 送出去了才摘掉这条;又没成会再落一条新的(sendNow 的 catch)、也摘掉这条;被别的闸拦下(false)就留着,字不丢
+      if (await get().send(item.text, item.attachments, item.workspaceFiles, item.skillIds, item.mentions, sessionId, false, true)) get().discardFailed(sessionId, id)
+    } finally { retrying.delete(id) }
   },
 
   setJumpTarget: (sessionId, messageId) => {

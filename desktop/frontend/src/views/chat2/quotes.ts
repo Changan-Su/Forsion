@@ -87,7 +87,9 @@ export function pasteTitle(text: string): string {
  *  围栏比内容里最长的一串反引号多一个,内容里自带 ``` 也围不断。 */
 export function composePastes(text: string, pastes: string[]): string {
   const blocks = pastes.map((p) => {
-    const fence = '`'.repeat(Math.max(3, ...(p.match(/`+/g) ?? []).map((r) => r.length + 1)))
+    let longest = 2
+    for (const run of p.matchAll(/`+/g)) longest = Math.max(longest, run[0].length) // 别 spread 进 Math.max:满屏反引号的粘贴会爆栈(Codex 评审)
+    const fence = '`'.repeat(longest + 1)
     return `${fence}\n${p.replace(/\n+$/, '')}\n${fence}`
   })
   return [text, ...blocks].filter(Boolean).join('\n\n')

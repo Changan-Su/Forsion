@@ -86,6 +86,11 @@ describe('长粘贴磁贴', () => {
     expect(composePastes('', ['x', 'y'])).toBe('```\nx\n```\n\n```\ny\n```')
     expect(composePastes('t', ['```js\nz\n```'])).toBe('t\n\n````\n```js\nz\n```\n````')
   })
+  it('满屏反引号也不爆栈', () => {
+    const out = composePastes('', ['`x'.repeat(130_000)])
+    expect(out.startsWith('````\n`x')).toBe(false) // 最长一串是 1 个反引号 → 围栏还是 3 个
+    expect(out.startsWith('```\n`x')).toBe(true)
+  })
   it('没有粘贴 = 原样', () => {
     expect(composePastes('只有字', [])).toBe('只有字')
   })
