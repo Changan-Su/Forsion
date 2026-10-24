@@ -8,7 +8,7 @@
  *   POST   /agent/sessions/:id/messages/delete { ids }  按 id 截断消息(编辑重发 / 重新生成前清掉该点及之后)
  *   GET    /agent/sessions/:id/config              读 agent_config(enabledSkillIds/execMode/approvalMode/…)
  *   PUT    /agent/sessions/:id/config              整体替换 agent_config
- *   POST   /agent/sessions/:id/aside { question, quote?, thread?, model_id? }  旁聊 /btw(SSE,不落库)
+ *   POST   /agent/sessions/:id/aside { question, quote?, thread?, attachments?, model_id?, thinking_level?, vision_mode?, vision_model_id? }  旁聊 /btw(SSE;答完存进 chat_asides)
  *   POST   /agent/sessions/:id/suggest { run_id? }  输入建议(JSON { suggestion };空串 = 没有)
  */
 import { Router, type Response } from 'express';
@@ -36,7 +36,7 @@ import { ensureMemberSession, memberRunConfig } from '../services/teamRuns.js';
 import { recoverTeamOutputs } from '../services/teamOutputs.js';
 import { withKeyLock } from '../core/keyLock.js';
 import { settleTeamPlanMode } from '../services/sessionSettings.js';
-import { answerAside, deleteAside, listAsides, normalizeAsideInput, saveAside } from '../services/aside.js';
+import { answerAside, asideAttachmentsTooLarge, asideThinkingLevel, attachmentMetas, deleteAside, listAsides, normalizeAsideInput, saveAside } from '../services/aside.js';
 import { suggestNextPrompt } from '../services/promptSuggestion.js';
 import { normalizeClientTag } from './runs.js';
 import { parseRemoteOrigin, applyRemoteConfigWrite, remoteCwdViolation, remoteCwdErrorBody, remoteOriginMarker } from '../services/remoteOrigin.js';
@@ -731,6 +731,8 @@ router.post('/agent/sessions/:id/aside', authMiddleware, async (req: AuthRequest
   const userId = req.user!.userId;
   const s = await getOwnSession(req.params.id, userId).catch(() => null);
   if (!s) return res.status(404).json({ detail: 'Session not found' });
+  // 附件合计过大:回 400 带 code(客户端译成人话),不悄悄丢掉一部分 —— 用户会以为模型看到了
+  if (asideAttachmentsTooLarge(req.body)) return res.status(400).json({ detail: 'Attachments too large', code: 'aside_attachments_too_large' });
   const input = normalizeAsideInput(req.body);
   if (!input) return res.status(400).json({ detail: 'question required' });
   const modelId = (typeof req.body?.model_id === 'string' && req.body.model_id) || s.model_id || resolveProfile(s.app_id)?.defaultModelId || '';
@@ -753,16 +755,22 @@ router.post('/agent/sessions/:id/aside', authMiddleware, async (req: AuthRequest
   const heartbeat = setInterval(() => { if (!res.writableEnded) res.write(': hb\n\n'); }, 15_000);
   asideInFlight.set(userId, inFlight + 1);
   try {
+    const str = (v: unknown): string | undefined => (typeof v === 'string' && v.trim() ? v.trim().slice(0, 200) : undefined);
     const answer = await answerAside({
       sessionId: s.id, userId, modelId, appId: s.app_id, client: normalizeClientTag(req.body?.client),
       input, signal: ac.signal, onToken: (text) => write({ type: 'delta', text }),
+      // 同主对话 run 的 agentConfig.visionMode / visionModelId(云端会话的引擎读不到本机 config.json,只能随请求带)
+      visionMode: str(req.body?.vision_mode), visionModelId: str(req.body?.vision_model_id),
+      thinkingLevel: asideThinkingLevel(req.body?.thinking_level),
+      onStatus: (ev) => write({ type: 'status', ...ev }),
     });
-    // 落库失败不影响这次回答(客户端照样拿到全文,只是重开时没有这一条)。
+    // 落库失败不影响这次回答(客户端照样拿到全文,只是重开时没有这一条)。附件只存记录(名字 / 类型 / 大小 / 缩略图),不存内容。
+    const metas = attachmentMetas(input.attachments);
     const saved = answer.content
       ? await saveAside({
         asideId: typeof req.body?.aside_id === 'string' ? req.body.aside_id : undefined, sessionId: s.id, userId,
         messageId: typeof req.body?.message_id === 'string' ? req.body.message_id : undefined,
-        turn: { question: input.question, ...(input.quote ? { quote: input.quote } : {}), answer: answer.content }, thread: input.thread,
+        turn: { question: input.question, ...(input.quote ? { quote: input.quote } : {}), answer: answer.content, ...(metas.length ? { attachments: metas } : {}) }, thread: input.thread,
       }).catch((e) => { console.warn('[aside] save failed:', e?.message || e); return undefined; })
       : undefined;
     write({ type: 'done', ...answer, modelId, ...(saved ? { asideId: saved.id, asideMessageId: saved.messageId } : {}) });
