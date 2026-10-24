@@ -167,6 +167,21 @@ export async function readBtwFiles(files: File[], have: BtwAttachment[]): Promis
   return { added, skipped }
 }
 
+/** 读完再并进草稿:读盘是异步的,两批同时在读时各自只对着开读那一刻的草稿查过上限 —— 并进去前按**最新**的草稿再查一遍个数和总量
+ *  (Codex 10-24 #3:7 + 两批各 1 曾并成 9 个,引擎只收 8 个且不吭声)。 */
+export function mergeBtwAttachments(now: BtwAttachment[], added: BtwAttachment[]): { merged: BtwAttachment[]; skipped: string[] } {
+  const merged = [...now]
+  const skipped: string[] = []
+  let total = now.reduce((n, a) => n + a.data.length, 0)
+  for (const a of added) {
+    if (merged.length >= BTW_MAX_ATTACHMENTS) { skipped.push(translate('btw.att.tooMany', { name: a.name, n: String(BTW_MAX_ATTACHMENTS) })); continue }
+    if (total + a.data.length > BTW_MAX_ATTACH_CHARS) { skipped.push(translate('btw.att.overTotal', { name: a.name, mb: String(Math.round(BTW_MAX_ATTACH_CHARS * 3 / 4 / 1024 / 1024)) })); continue }
+    total += a.data.length
+    merged.push(a)
+  }
+  return { merged, skipped }
+}
+
 /** 打开旁聊时递给面板的一次性指令:带 question 就直接问,只带 quote 就挂成引用等用户打字。
  *  nonce 唯一,面板据此只消费一次 —— Web 上切走会话再切回会重挂面板,不能把同一个问题再问一遍。
  *  sessionId = 上下文会话;scope = 开的时候主窗当前会话(团队成员子聊天里两者不同),会话级显隐按 scope 判。 */
@@ -340,6 +355,13 @@ export const useBtw = create<BtwState>((set, get) => ({
     } catch (e: any) {
       patch((t) => (t.status !== 'streaming' ? {} : ac.signal.aborted ? { status: 'stopped', describing: false } : { status: 'error', describing: false, error: readableError(String(e?.message || e)) }))
     } finally {
+      // 没答成(出错 / 停了):附件内容只在这次请求体里,线程里只有记录 —— 放回草稿,别让用户重新找一遍截图(Codex 10-24 #1)。
+      // 用户已经在给下一问挂附件了就不覆盖;草稿空着顺手把问题也放回去,回车就能重发。
+      const ended = get().threads[sessionId]?.find((t) => t.id === id)
+      const cur = get().compose[sessionId]
+      if (atts.length && ended && (ended.status === 'error' || ended.status === 'stopped') && !cur?.attachments?.length) {
+        get().setCompose(sessionId, { attachments: atts, ...(cur?.draft?.trim() ? {} : { draft: question }) })
+      }
       if (controllers.get(sessionId) === ac) controllers.delete(sessionId)
       const next = pendingSeeds.get(sessionId)
       if (next && !controllers.has(sessionId)) { pendingSeeds.delete(sessionId); get().applySeed(next) }

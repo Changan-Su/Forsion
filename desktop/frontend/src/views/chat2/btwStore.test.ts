@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useApp } from '../../stores/appStore'
 import { useChildChat } from '../../stores/childChatStore'
 import type { SavedAside } from '../../services/backendService'
-import { BTW_MAX_ATTACHMENTS, asidesOnMessage, btwSeedOf, consumeSeed, openBtw, readBtwFiles, useBtw, type BtwAttachment } from './btwStore'
+import { BTW_MAX_ATTACHMENTS, BTW_MAX_ATTACH_CHARS, asidesOnMessage, btwSeedOf, consumeSeed, mergeBtwAttachments, openBtw, readBtwFiles, useBtw, type BtwAttachment } from './btwStore'
 
 const sse = (...events: object[]): Response => new Response(events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join(''), { headers: { 'Content-Type': 'text/event-stream' } })
 const initialApp = useApp.getState()
@@ -184,8 +184,34 @@ describe('旁聊附件(10-24 方案 A)', () => {
     expect(useBtw.getState().threads.s1[1].error).toContain('附件太大')
   })
 
+  it('没答成(出错 / 停了)→ 附件放回草稿(问题也放回空草稿);用户已经挂了新附件就不覆盖(Codex 10-24 #1)', async () => {
+    fetchMock.mockResolvedValueOnce(sse({ type: 'error', error: 'upstream 500' }))
+    await useBtw.getState().ask('s1', 'what is this?', undefined, undefined, { attachments: [IMG, TXT] })
+    expect(useBtw.getState().compose.s1).toMatchObject({ draft: 'what is this?', attachments: [IMG, TXT] })
+    // 放回的是同一批对象(磁贴按对象认 key)
+    expect(useBtw.getState().compose.s1.attachments![0]).toBe(IMG)
+    const fresh = { ...TXT, name: 'next.md' }
+    useBtw.setState({ compose: { s1: { draft: 'next', attachments: [fresh] } } })
+    fetchMock.mockResolvedValueOnce(new Response('boom', { status: 500 }))
+    await useBtw.getState().ask('s1', 'again', undefined, undefined, { attachments: [IMG] })
+    expect(useBtw.getState().compose.s1).toEqual({ draft: 'next', attachments: [fresh] })
+    fetchMock.mockResolvedValueOnce(sse({ type: 'done', content: 'ok', attached: { images: 1, files: [], transcribed: false } }))
+    useBtw.setState({ compose: {} })
+    await useBtw.getState().ask('s1', 'fine', undefined, undefined, { attachments: [IMG] })
+    expect(useBtw.getState().compose.s1).toBeUndefined() // 答成了不放回
+  })
+
+  it('并进草稿前按最新的草稿再查上限:两批同时读完也不超 8 个(Codex 10-24 #3)', () => {
+    const seven = Array.from({ length: 7 }, (_, i) => ({ ...IMG, name: `p${i}.png` }))
+    const { merged, skipped } = mergeBtwAttachments(seven, [{ ...IMG, name: 'a.png' }, { ...IMG, name: 'b.png' }])
+    expect(merged.map((a) => a.name)).toEqual([...seven.map((a) => a.name), 'a.png'])
+    expect(skipped).toEqual(['b.png（一问最多 8 个）'])
+    const big = { ...TXT, name: 'big.txt', data: 'A'.repeat(BTW_MAX_ATTACH_CHARS - 10) }
+    expect(mergeBtwAttachments([big], [{ ...TXT, name: 'more.txt', data: 'A'.repeat(20) }]).skipped).toEqual(['more.txt（附件合计超 13MB）'])
+  })
+
   it('重开存下来的那段:附件记录(含缩略图)一起载回;「新的一段」清空线程、留挂点、不删记录', () => {
-    useBtw.setState({ saved: { s1: [{ id: 'x2', message_id: 'm2', turns: [{ question: 'q1', answer: 'a1', attachments: [{ name: 'a.png', mimeType: 'image/png', thumb: 'data:image/jpeg;base64,AAAA' }] }], created_at: '', updated_at: '' } as SavedAside] } })
+    useBtw.setState({ saved: { s1: [{ id: 'x2', message_id: 'm2', turns: [{ question: 'q1', answer: 'a1', attachments: [{ name: 'a.png', mimeType: 'image/png', thumb: 'data:image/jpeg;base64,AAAA' }] }], created_at: '', updated_at: '' } as unknown as SavedAside] } })
     useBtw.getState().applySeed({ sessionId: 's1', nonce: 'n1', asideId: 'x2' })
     expect(useBtw.getState().threads.s1[0].attachments).toEqual([{ name: 'a.png', mimeType: 'image/png', thumb: 'data:image/jpeg;base64,AAAA' }])
     useBtw.getState().startNew('s1')

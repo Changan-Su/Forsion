@@ -25,7 +25,7 @@ import { deps } from '../seams/runtime.js';
 import type { ChatMessage, ThinkingLevel } from '../core/types.js';
 import { hydrateHistory } from './agentLoop.js';
 import { buildTranscript } from './compaction.js';
-import { estimateMessagesTokens, modelContextWindow } from './contextBudget.js';
+import { estimateMessagesTokens, estimateTokensRough, modelContextWindow } from './contextBudget.js';
 import { looksLikeToolCallText } from '../llm/textToolCalls.js';
 import { thinkingHeadroom } from '../llm/openaiCompat.js';
 import { fitUserImages, normalizeImageAttachments, toImageParts, type NormalizedImage } from './imageAttachments.js';
@@ -71,11 +71,19 @@ const mimeOf = (v: unknown): string => {
 };
 const sizeOf = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.floor(v) : undefined);
 
-/** 附件 base64 合计超过 ASIDE_MAX_ATTACH_CHARS → 路由回 400(不静默丢:用户会以为模型看到了)。 */
+/** 单张图的 base64 上限:normalizeImageAttachments 只收 ≤8,000,000 字符的 data URL(含 `data:<mime>;base64,` 前缀),
+ *  超了它会悄悄跳过 —— 这里先拦成 400。 */
+const IMAGE_MAX_CHARS = 8_000_000 - 64;
+
+/** 附件 base64 合计超过 ASIDE_MAX_ATTACH_CHARS,或有一张图超过单张上限 → 路由回 400(不静默丢:用户会以为模型看到了)。 */
 export function asideAttachmentsTooLarge(body: any): boolean {
   const rows: any[] = Array.isArray(body?.attachments) ? body.attachments : [];
   let n = 0;
-  for (const a of rows) n += typeof a?.data === 'string' ? a.data.length : 0;
+  for (const a of rows) {
+    const len = typeof a?.data === 'string' ? a.data.length : 0;
+    n += len;
+    if (len > IMAGE_MAX_CHARS && isImage({ name: '', mimeType: mimeOf(a?.mimeType) })) return true;
+  }
   return n > ASIDE_MAX_ATTACH_CHARS;
 }
 
@@ -271,6 +279,26 @@ export async function prepareAsideAttachments(atts: AsideAttachment[], ctx: {
   return out;
 }
 
+/** 规则 + 往返 + 本问(含文件文字)估出来超过 room 个 token → 按比例截短各文件(注明被截)。最多收四轮,文件截到只剩说明为止。 */
+export function fitFilesToWindow(input: AsideInput, prepared: PreparedAttachments, room: number): PreparedAttachments {
+  let p = prepared;
+  for (let i = 0; i < 4 && p.files.length; i++) {
+    const over = estimateMessagesTokens(buildAsideMessages('', input, p)) - room;
+    if (over <= 0) break;
+    const fileTokens = p.files.reduce((n, f) => n + estimateTokensRough(f.text), 0);
+    if (fileTokens <= 0) break;
+    const keep = Math.max(0, (fileTokens - over) / fileTokens) * 0.9;
+    p = {
+      ...p,
+      files: p.files.map((f) => {
+        const max = Math.floor(f.text.length * keep);
+        return { name: f.name, text: `${f.text.slice(0, max)}\n\n[… truncated: the rest of this file does not fit in the model's context window]` };
+      }),
+    };
+  }
+  return p;
+}
+
 export interface AsideAnswer {
   content: string
   toolCallText: boolean
@@ -316,9 +344,11 @@ export async function answerAside(opts: {
   const thinkingLevel = opts.thinkingLevel && opts.thinkingLevel !== 'off' ? opts.thinkingLevel : undefined;
   const maxTokens = Math.max(512, Math.min(ANSWER_MAX_TOKENS, Math.floor(windowTokens / 4)))
     + (thinkingLevel ? thinkingHeadroom({ model, baseUrl, apiModelId }, thinkingLevel) : 0);
-  const budget = windowTokens - maxTokens - PROMPT_OVERHEAD_TOKENS - estimateMessagesTokens(buildAsideMessages('', opts.input, prepared));
+  // 附件抽出的文字也得放得进窗口(小窗口模型 + 长文件):转写以外那几条最多占剩余窗口的一半,超了按比例截短每个文件并注明
+  const fitted = fitFilesToWindow(opts.input, prepared, Math.floor((windowTokens - maxTokens - PROMPT_OVERHEAD_TOKENS) / 2));
+  const budget = windowTokens - maxTokens - PROMPT_OVERHEAD_TOKENS - estimateMessagesTokens(buildAsideMessages('', opts.input, fitted));
   const { text: transcript } = buildTranscript(messages, { read: new Set(), modified: new Set() }, budget);
-  const asideMessages = buildAsideMessages(transcript, opts.input, prepared);
+  const asideMessages = buildAsideMessages(transcript, opts.input, fitted);
   // 额度与记账同主循环 / 图像识别一个口径:先按估算预检(额度用尽不许绕道旁聊),完了按实际 usage 扣费、记用量。
   // standalone 的 billing 是 no-op;直连(BYOK / 订阅)模型取不到云端用户时降级成本地桩用户(同 visionService)。
   const user = (await deps().brain.users.getUserById(opts.userId).catch(() => null)) ?? { id: opts.userId, username: 'local' };

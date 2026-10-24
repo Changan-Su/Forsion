@@ -11,7 +11,7 @@ import { FloatingPanelFrame } from '../../components/FloatingPanelFrame'
 import { AttachmentTile, isLeaving, tileKey, type TileFile } from '../../components/AttachmentTile'
 import { ChatBox, type ChatBoxSelection } from '../../components/chatbox'
 import {
-  asidesOnMessage, btwWebVisible, consumeSeed, quoteInMainChat, readBtwFiles, useBtw,
+  asidesOnMessage, btwWebVisible, consumeSeed, mergeBtwAttachments, quoteInMainChat, readBtwFiles, useBtw,
   type BtwAttachment, type BtwAttachmentMeta, type BtwSeed, type BtwTurn,
 } from './btwStore'
 import './btw.css'
@@ -161,16 +161,23 @@ export function BtwPanel({ seed, onClose, onQuoted }: { seed: BtwSeed; onClose?:
     if (el) el.scrollTop = el.scrollHeight
   }, [turns.length, last?.answer, last?.status])
 
-  /** 读完再挂:读盘是异步的,挂的时候取 store 里最新那份(期间可能又加 / 删了别的),不拿闭包里的旧数组。 */
+  /** 读完再挂:读盘是异步的,挂的时候取 store 里最新那份(期间可能又加 / 删了别的)并按它再查一遍上限,不拿闭包里的旧数组。
+   *  读着的时候不许发(Codex 10-24 #2:否则这批会漏在这一问外面、读完又挂进下一问)。 */
+  const [reading, setReading] = useState(0)
   const addFiles = async (files: File[]): Promise<void> => {
     if (!files.length) return
-    const have = useBtw.getState().compose[sessionId]?.attachments ?? []
-    const { added, skipped } = await readBtwFiles(files, have)
-    setHint(skipped.length ? t('btw.att.skipped', { items: skipped.join(t('btw.listSep')) }) : null)
-    if (!added.length) return
-    const now = useBtw.getState().compose[sessionId]?.attachments ?? []
-    setCompose({ attachments: [...now, ...added] })
-    requestAnimationFrame(() => taRef.current?.focus())
+    setReading((n) => n + 1)
+    try {
+      const have = useBtw.getState().compose[sessionId]?.attachments ?? []
+      const { added, skipped } = await readBtwFiles(files, have)
+      const { merged, skipped: over } = mergeBtwAttachments(useBtw.getState().compose[sessionId]?.attachments ?? [], added)
+      const all = [...skipped, ...over]
+      setHint(all.length ? t('btw.att.skipped', { items: all.join(t('btw.listSep')) }) : null)
+      if (merged.length !== (useBtw.getState().compose[sessionId]?.attachments ?? []).length) setCompose({ attachments: merged })
+      requestAnimationFrame(() => taRef.current?.focus())
+    } finally {
+      setReading((n) => n - 1)
+    }
   }
   const addRef = useRef(addFiles)
   addRef.current = addFiles
@@ -223,11 +230,11 @@ export function BtwPanel({ seed, onClose, onQuoted }: { seed: BtwSeed; onClose?:
   }
 
   const live = attachments.filter((a) => !isLeaving(a))
-  const canSend = !!draft.trim() || !!quote || live.length > 0
+  const canSend = (!!draft.trim() || !!quote || live.length > 0) && !reading
   const send = (): void => {
     const sending = attachments.filter((a) => !isLeaving(a)) // 正在淡出的(用户刚点了移除)不发
     const question = draft.trim() || (quote ? t('btw.defaultQuestion') : sending.length ? t('btw.defaultAttachQuestion') : '')
-    if (!question || busy) return
+    if (!question || busy || reading) return
     ask(question, quote, sending)
     setCompose({ draft: '', quote: undefined, attachments: [] })
     setHint(null)
@@ -235,7 +242,7 @@ export function BtwPanel({ seed, onClose, onQuoted }: { seed: BtwSeed; onClose?:
   const stop = (): void => useBtw.getState().stop(sessionId)
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>): void => {
     // 在流的时候回车不发(一次一问),也不能落到 Chat Box 的提交上 —— 那时提交钮是「停止」
-    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && busy) e.preventDefault()
+    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && (busy || reading)) e.preventDefault()
     else if (e.key === 'Escape') {
       e.preventDefault()
       if (busy) stop()

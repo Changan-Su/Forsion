@@ -18,8 +18,9 @@ import { runMigration } from '../src/db/migrate.js';
 import { query } from '../src/core/db.js';
 import {
   answerAside, normalizeAsideInput, asideAttachmentsTooLarge, asideThinkingLevel, attachmentMetas, extractAttachmentText, saveAside,
-  ASIDE_MAX_TURNS, ASIDE_MAX_ATTACH_CHARS, THUMB_MAX_CHARS,
+  buildAsideMessages, fitFilesToWindow, ASIDE_MAX_TURNS, ASIDE_MAX_ATTACH_CHARS, THUMB_MAX_CHARS,
 } from '../src/services/aside.js';
+import { estimateMessagesTokens } from '../src/services/contextBudget.js';
 
 let home = '';
 let payloads: any[] = [];
@@ -212,6 +213,16 @@ describe('旁聊附件(10-24 方案 A):只给这一问、主对话同一条图�
     expect(pdf).toContain('ORCHID-LANTERN-93');
   });
 
+  it('小窗口模型 + 长文件 → 文件文字按比例截短到放得进窗口(Codex 10-24 #5)', () => {
+    const input = normalizeAsideInput({ question: 'Summarise.' })!;
+    const prepared = { images: [], files: [{ name: 'zh.txt', text: '中文内容'.repeat(15_000) }, { name: 'b.txt', text: 'x'.repeat(20_000) }] };
+    const fitted = fitFilesToWindow(input, prepared, 10_000);
+    expect(estimateMessagesTokens(buildAsideMessages('', input, fitted))).toBeLessThanOrEqual(10_000);
+    expect(fitted.files.map((f) => f.name)).toEqual(['zh.txt', 'b.txt']);
+    expect(fitted.files[0].text).toContain('[… truncated: the rest of this file does not fit');
+    expect(fitFilesToWindow(input, { images: [], files: [{ name: 's.txt', text: 'short' }] }, 10_000).files[0].text).toBe('short');
+  });
+
   it('文件太长 → 截断并注明', async () => {
     const t = await extractAttachmentText({ name: 'a.txt', mimeType: 'text/plain', data: b64('x'.repeat(10)) });
     expect(t).toBe('x'.repeat(10));
@@ -259,6 +270,9 @@ describe('旁聊附件(10-24 方案 A):只给这一问、主对话同一条图�
     expect(meta.thread[0].attachments).toEqual([{ name: 'x y.png', mimeType: 'image/png', size: 12 }]);
     expect(asideAttachmentsTooLarge({ attachments: [{ data: 'A'.repeat(ASIDE_MAX_ATTACH_CHARS + 1) }] })).toBe(true);
     expect(asideAttachmentsTooLarge({ attachments: [{ data: PNG_1PX }] })).toBe(false);
+    // 单张图超过 normalizeImageAttachments 的单张上限(它会悄悄跳过)→ 也拒,不静默少一张(Codex 10-24 #4)
+    expect(asideAttachmentsTooLarge({ attachments: [{ mimeType: 'image/png', data: 'A'.repeat(8_000_000) }] })).toBe(true);
+    expect(asideAttachmentsTooLarge({ attachments: [{ mimeType: 'text/plain', data: 'A'.repeat(8_000_000) }] })).toBe(false);
     expect(asideThinkingLevel('medium')).toBe('medium');
     expect(asideThinkingLevel('off')).toBeUndefined();
     expect(asideThinkingLevel('turbo')).toBeUndefined();
