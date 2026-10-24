@@ -1,0 +1,20 @@
+/* Upload progress: the ring is the composer's context ring (3px, --accent-ink, faint track); the bar is 2px.
+   `.lcl-up-late` (and the ring / bar themselves) stay invisible for 300ms: a read or write that finishes sooner never flashes.
+   Durations are named here (--lcl-up-*) so a theme can retune them; the motion tokens live in base.css :root. */
+@keyframes lcl-up-appear { from { opacity: 0; } }
+@keyframes lcl-up-spin { to { transform: rotate(270deg); } }
+@keyframes lcl-up-slide { from { margin-left: -30%; } to { margin-left: 100%; } }
+.lcl-upring, .lcl-upbar, .lcl-up-late { animation: lcl-up-appear 0s var(--lcl-up-delay, 300ms) both; }
+.lcl-upring { flex: none; width: 24px; height: 24px; transform: rotate(-90deg); overflow: visible; }
+.lcl-upring circle { fill: none; stroke-width: 3; }
+.lcl-upring-track { stroke: color-mix(in srgb, var(--text, #1c1c1c) 14%, transparent); }
+.lcl-upring-fill { stroke: var(--accent-ink, currentColor); stroke-linecap: round; transition: stroke-dashoffset var(--duration-fast, 0.15s) var(--ease-out, ease-out); }
+.lcl-upring[data-indeterminate] { animation: lcl-up-appear 0s var(--lcl-up-delay, 300ms) both, lcl-up-spin var(--lcl-up-spin, 0.9s) linear infinite; }
+.lcl-upbar { display: block; height: 2px; border-radius: 2px; background: var(--overlay-light, rgba(127, 127, 127, 0.16)); overflow: hidden; }
+.lcl-upbar > i { display: block; height: 100%; border-radius: 2px; background: var(--accent-ink, currentColor); transition: width var(--duration-fast, 0.15s) var(--ease-out, ease-out); }
+.lcl-upbar[data-indeterminate] > i { animation: lcl-up-slide var(--lcl-up-slide, 1.2s) ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .lcl-upring-fill, .lcl-upbar > i { transition: none; }
+  .lcl-upring[data-indeterminate] { animation: lcl-up-appear 0s var(--lcl-up-delay, 300ms) both; }
+  .lcl-upbar[data-indeterminate] > i { animation: none; }
+}

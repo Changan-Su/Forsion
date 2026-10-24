@@ -11,3 +11,5 @@ export type { ViewModeOption, ViewModesSpec } from '../engine/viewModes'
 /** 提示框 / 悬停卡:300ms 才出、相邻接力不重播、键盘聚焦不做动画(真身在引擎 hoverSurface.ts)。插件走 ctx.ui.attachTooltip。 */
 export { tooltipProps, attachTooltip, hideTooltip, useHoverCard } from './Tooltip'
 export type { TooltipContent, TooltipLines, TooltipOptions, HoverCardOptions, HoverSide } from './Tooltip'
+
+export { UploadRing, UploadBar, createUploadRing, createUploadBar } from './UploadProgress'

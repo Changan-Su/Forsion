@@ -33,7 +33,7 @@ import { createRun, getRun } from '../src/services/runStore.js';
 import { enqueueRun } from '../src/services/agentLoop.js';
 import workspaceRouter from '../src/routes/workspace.js';
 import { getSessionDir } from '../src/sandbox/sessionSandbox.js';
-import { withUploadRefs, noteWorkspaceUpload, takeWorkspaceUploads, _resetWorkspaceUploads, MAX_UPLOAD_REFS } from '../src/services/workspaceUploads.js';
+import { withUploadRefs, noteWorkspaceUpload, takeWorkspaceUploads, forgetWorkspaceUpload, _resetWorkspaceUploads, MAX_UPLOAD_REFS } from '../src/services/workspaceUploads.js';
 
 const USER = 'u1';
 const REMOTE = { 'x-forsion-remote': 'tunnel' };
@@ -127,6 +127,12 @@ describe('withUploadRefs:与桌面 fileChip 同一格式', () => {
     expect(takeWorkspaceUploads('s', R)).toEqual(['/x/b', '/x/a']);
     expect(takeWorkspaceUploads('s', R)).toEqual([]);
   });
+  it('登记表:删掉的文件撤掉登记,别的留着', () => {
+    const R = { remote: false };
+    noteWorkspaceUpload('s', '/x/a', R); noteWorkspaceUpload('s', '/x/b', R);
+    forgetWorkspaceUpload('s', '/x/a');
+    expect(takeWorkspaceUploads('s', R)).toEqual(['/x/b']);
+  });
   it('登记表:只取同来源的,别的来源留着', () => {
     noteWorkspaceUpload('s', '/x/remote', { remote: true }); noteWorkspaceUpload('s', '/x/local', { remote: false });
     expect(takeWorkspaceUploads('s', { remote: false })).toEqual(['/x/local']);
@@ -153,6 +159,19 @@ describe('真路由 × 真 loop:手机上传的附件进 host run 的本轮 user
 
     await runToSettled(sid, 'R2', 'again');
     expect(lastUser(llmPayloads[1]), '取走即清:第二轮不再拼').toBe('again');
+  });
+
+  it('传上去又删掉(输入框里移除了附件):下一条 run 的第一行不再报它', async () => {
+    const sid = 'M1A-DELETED';
+    await session(sid);
+    await upload(sid, [{ path: 'gone.txt', content: 'x' }, { path: 'kept.txt', content: 'y' }], { local: true });
+    const del = await fetch(`${base}/agent/workspace/delete`, {
+      method: 'POST', headers: { Authorization: 'Bearer x', 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: sid, path: 'gone.txt' }),
+    }).then((r) => r.json() as Promise<any>);
+    expect(del.ok).toBe(true);
+    const dir = realpathSync(await getSessionDir({ userId: USER, appId: 'tangu', sessionId: sid, wsProject: null }));
+    await runToSettled(sid, 'RD1', 'hi');
+    expect(lastUser(llmPayloads[0]).split('\n')[0]).toBe(`"${join(dir, 'kept.txt')}"`);
   });
 
   it('派生 run(非输入区)不吃别人的上传;sandbox run 取走但不拼', async () => {

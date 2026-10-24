@@ -22,7 +22,7 @@ export function setUnauthorizedHandler(fn: (target: UnauthorizedTarget) => void)
 export async function authFetch(
   input: RequestInfo | URL,
   init?: RequestInit,
-  opts?: { timeoutMs?: number; target?: UnauthorizedTarget },
+  opts?: { timeoutMs?: number; target?: UnauthorizedTarget; onUploadProgress?: (sent: number, total: number) => void },
 ): Promise<Response> {
   let signal = init?.signal ?? undefined
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -38,7 +38,12 @@ export async function authFetch(
     signal = deadline = ac.signal
   }
   try {
-    const res = await fetch(input, signal ? { ...init, signal } : init)
+    const req = signal ? { ...init, signal } : init
+    // 要上传进度的走 XHR(fetch 报不了请求体进度);回来照样是一个 Response,下面的 401 / 超时与调用方的错误处理不变。
+    // 只在 fetch 还是浏览器原生的时候:网页版的账号层把 window.fetch 换成了带守卫的那份(换号作废、401 跳登录、
+    // Unit 访客走另一条带凭据的通道),XHR 会绕过它 —— 那边退回 fetch,进度报不了,环转圈。
+    // ponytail: 网页版要真进度,得让账号层的 boundRequest 自己支持上传进度回调。
+    const res = opts?.onUploadProgress && isNativeFetch() ? await xhrFetch(input, req, opts.onUploadProgress) : await fetch(input, req)
     if (res.status === 401) {
       try { onUnauthorized?.(opts?.target ?? 'home') } catch { /* 拦截器自身不应影响请求返回 */ }
     }
@@ -75,3 +80,33 @@ function reportBodyTimeouts(res: Response, deadline: AbortSignal): void {
     })
   }
 }
+
+/** fetch 的 XHR 版,只多一个请求体上传进度。返回真的 Response(状态、头、体原样),调用方当 fetch 用。 */
+function xhrFetch(input: RequestInfo | URL, init: RequestInit | undefined, onUploadProgress: (sent: number, total: number) => void): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open(init?.method || 'GET', input instanceof Request ? input.url : String(input))
+    new Headers(init?.headers).forEach((v, k) => xhr.setRequestHeader(k, v))
+    if (init?.credentials === 'include') xhr.withCredentials = true
+    xhr.responseType = 'blob'
+    xhr.upload.onprogress = (e) => onUploadProgress(e.loaded, e.lengthComputable ? e.total : 0)
+    xhr.onload = () => {
+      const headers = new Headers()
+      for (const line of xhr.getAllResponseHeaders().trim().split(/[\r\n]+/)) {
+        const i = line.indexOf(':')
+        if (i > 0) headers.append(line.slice(0, i).trim(), line.slice(i + 1).trim())
+      }
+      const empty = xhr.status === 204 || xhr.status === 205 || xhr.status === 304
+      resolve(new Response(empty ? null : xhr.response, { status: xhr.status, statusText: xhr.statusText, headers }))
+    }
+    xhr.onerror = () => reject(new TypeError('Failed to fetch'))
+    const signal = init?.signal
+    xhr.onabort = () => reject(signal?.reason ?? new DOMException('Aborted', 'AbortError'))
+    if (signal?.aborted) { reject(signal.reason ?? new DOMException('Aborted', 'AbortError')); return }
+    signal?.addEventListener('abort', () => xhr.abort(), { once: true })
+    xhr.send((init?.body ?? null) as XMLHttpRequestBodyInit | null)
+  })
+}
+
+/** window.fetch 没被宿主换掉(运行时才判断:网页版登录后才换)。 */
+const isNativeFetch = (): boolean => /\[native code\]/.test(Function.prototype.toString.call(fetch))
