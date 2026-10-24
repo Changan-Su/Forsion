@@ -23,16 +23,27 @@ async function main() {
     if (!await skipOnboarding(win)) throw new Error('Onboarding did not close')
     await win.locator('.rb-space[aria-label="笔记"]').first().click()
     await win.waitForTimeout(1000)
+    await app.evaluate(async ({ screen, BrowserWindow }) => {
+      const primary = screen.getPrimaryDisplay().workArea
+      const backdrop = new BrowserWindow({ x: primary.x + 180, y: primary.y + 120, width: 1000, height: 1150,
+        focusable: false, title: 'Forsion Mini acceptance background', backgroundColor: '#242831', webPreferences: { sandbox: true } })
+      await backdrop.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent('<body style="margin:0;background:#242831;color:#b9c5d8;font:20px sans-serif"><p style="margin:20px">Forsion Windows Mini acceptance · isolated fixture</p></body>'))
+      globalThis.__acceptanceBackdrop = backdrop
+    })
     await win.evaluate(() => window.tangu.openMini({ spaceId: 'calendar' }))
     let mini
     for (let i = 0; i < 200; i++) { mini = app.windows().find(w => w.url().includes('window=mini')); if (mini) break; await win.waitForTimeout(50) }
     await mini.locator('.mini-todo').waitFor({ timeout: 30000 })
-    const runtime = await app.evaluate(({ screen, BrowserWindow }) => {
+    const runtime = await app.evaluate(async ({ screen, BrowserWindow }) => {
       const mini = BrowserWindow.getAllWindows().find(w => w.webContents.getURL().includes('window=mini'))
       const primary = screen.getPrimaryDisplay().workArea
+      const originalTop = mini.isAlwaysOnTop()
+      globalThis.__acceptanceTopEvents = []
+      mini.on('always-on-top-changed', (_e, top) => globalThis.__acceptanceTopEvents.push({ top, at: Date.now() }))
       mini.setContentBounds({ x: primary.x + 300, y: primary.y + 200, width: 360, height: 400 })
       mini.setTitle('Forsion Windows acceptance Mini')
-      return { windows: process.getSystemVersion(), displays: screen.getAllDisplays(), mini: mini.getContentBounds(), pid: process.pid }
+      mini.show(); mini.focus()
+      return { windows: process.getSystemVersion(), displays: screen.getAllDisplays(), mini: mini.getContentBounds(), originalTop, top: mini.isAlwaysOnTop(), pid: process.pid }
     })
     fs.writeFileSync(path.join(home, 'runtime.json'), JSON.stringify(runtime, null, 2))
     await mini.evaluate(() => {
@@ -50,12 +61,21 @@ async function main() {
         const output = await app.evaluate(({ BrowserWindow, screen }, input) => {
           const mini = BrowserWindow.getAllWindows().find(w => w.webContents.getURL().includes('window=mini'))
           if (input.bounds) mini.setContentBounds(input.bounds)
-          return { bounds: mini.getContentBounds(), displays: screen.getAllDisplays() }
+          if (input.activate) { mini.show(); mini.focus() }
+          if (typeof input.top === 'boolean') { mini.setAlwaysOnTop(input.top, 'floating'); if (input.top) mini.moveTop() }
+          if (input.backdrop) globalThis.__acceptanceBackdrop?.setBounds(input.backdrop)
+          return { bounds: mini.getContentBounds(), displays: screen.getAllDisplays(), visible: mini.isVisible(), focused: mini.isFocused(), top: mini.isAlwaysOnTop(), topEvents: globalThis.__acceptanceTopEvents }
         }, input)
         fs.writeFileSync(path.join(home, 'receipt.json'), JSON.stringify(output, null, 2))
       }
       await new Promise(r => setTimeout(r, 150))
     }
-  } finally { await app?.close(); await stub.close() }
+  } finally {
+    if (app) {
+      await Promise.race([app.close().catch(() => {}), new Promise(r => setTimeout(r, 5000))])
+      if (app.process().exitCode === null) app.process().kill('SIGKILL')
+    }
+    await stub.close()
+  }
 }
 main().catch(e => { console.error(e); process.exitCode = 1 })
