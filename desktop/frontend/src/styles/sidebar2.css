@@ -258,7 +258,7 @@
 .t2sf-input {
   display: block; width: calc(100% - 32px); margin: 1.5px 6px 1.5px 0;
   padding: 1.5px 4.5px; font-size: var(--ui-font-body, 13px); color: var(--text);
-  background: var(--bg-card); border: 1px solid var(--signal-line); border-radius: var(--radius-sm, 8px);
+  background: var(--bg-card); border: 1px solid var(--accent-ink); border-radius: var(--radius-sm, 8px);
   outline: none;
 }
 
@@ -296,7 +296,7 @@
 /* 入口行图标也吃同一个 --t2s-icon:它与树行的图标同处一列,尺寸不同就是「有的图标偏小」。
  * ⚠️CSS 的 width/height 压得过 lucide 的 size={N}(表现属性)→ JSX 里传的 size 对本槽**无效**,别改那里。 */
 .t2s-side .t2s-special-ic > svg { width: var(--t2s-icon, 13px); height: var(--t2s-icon, 13px); }
-.t2s-special.active .t2s-special-ic { color: var(--signal-mark); }
+.t2s-special.active .t2s-special-ic { color: var(--accent-ink); }
 .t2s-special-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .t2s-special-go { display: inline-flex; color: var(--text-faint, var(--text-muted)); opacity: 0.6; border-radius: var(--radius-sm, 6px); }
 .t2s-special-go:hover { opacity: 1; background: var(--overlay-light, rgba(127, 127, 127, 0.12)); }
@@ -357,7 +357,7 @@
   border-radius: var(--radius-sm, 6px);
 }
 .t2s-group-toggle:hover { color: var(--text); }
-.t2s-group-toggle.active { color: var(--signal-mark); }
+.t2s-group-toggle.active { color: var(--accent-ink); }
 .t2s-chev { display: inline-flex; opacity: 0.7; flex-shrink: 0; cursor: pointer; }
 .t2s-group-name { display: inline-flex; align-items: center; gap: 4px; flex: 1; min-width: 0; white-space: nowrap; }
 .t2s-group-name > svg { flex-shrink: 0; }
@@ -441,12 +441,12 @@
 .t2s-st::before { content: ''; border-radius: 50%; }
 .t2s-st.run::before {
   width: 11px; height: 11px; box-sizing: border-box;
-  border: 1.75px solid color-mix(in srgb, var(--signal) 30%, transparent);
-  border-top-color: var(--signal-mark); border-right-color: var(--signal-mark);
+  border: 1.75px solid color-mix(in srgb, var(--accent-ink) 30%, transparent);
+  border-top-color: var(--accent-ink); border-right-color: var(--accent-ink);
   animation: t2s-spin 0.9s linear infinite;
 }
 .t2s-st.wait::before { width: 7px; height: 7px; background: var(--warning); box-shadow: 0 0 0 3px var(--warning-light); }
-.t2s-st.done::before { width: 6px; height: 6px; background: var(--signal-mark); opacity: 0.5; }
+.t2s-st.done::before { width: 6px; height: 6px; background: var(--accent-ink); opacity: 0.5; }
 @keyframes t2s-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .t2s-st.run::before { animation: none; } }
 /* 主会话行尾的子会话个数(点一下收起 / 展开,触屏没有 hover 箭头时靠它) */
@@ -477,7 +477,7 @@
   background: var(--bg-card, var(--bg));
   color: var(--text);
   font-family: var(--font-ui); font-size: var(--ui-font-body, 13px);
-  border: var(--border-width, 1px) solid var(--signal-line);
+  border: var(--border-width, 1px) solid var(--accent-ink);
   border-radius: var(--radius-sm, 8px);
   padding: 1.5px 4.5px; outline: none;
 }

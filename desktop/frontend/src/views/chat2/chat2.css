@@ -227,7 +227,7 @@
   font-size: var(--ui-font-meta, 12px); color: var(--text-muted); white-space: nowrap;
 }
 .t2-user-more:hover { color: var(--text); }
-.t2-user-more svg { color: var(--signal-mark); }
+.t2-user-more svg { color: var(--accent-ink); }
 
 /* ====== 系统行(分隔/提示) ====== */
 .t2-sys { text-align: center; font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted)); padding: 2px 0; }
@@ -296,10 +296,10 @@
   cursor: pointer;
   transition: background var(--duration-fast, .15s), color var(--duration-fast, .15s);
 }
-.t2-suggest-chip > svg { color: var(--signal-mark); flex: none; }
+.t2-suggest-chip > svg { color: var(--accent-ink); flex: none; }
 .t2-suggest-chip:hover { background: var(--overlay-light, rgba(127,127,127,.1)); }
 
-.t2-status-ok { color: var(--signal-mark); }
+.t2-status-ok { color: var(--accent-ink); }
 .t2-status-err { color: var(--danger); }
 
 /* ====== 待办 ====== */
@@ -312,7 +312,7 @@
 .t2-card-title { font-size: var(--ui-font-meta, 12px); font-weight: 600; margin-bottom: 8px; display: flex; gap: 6px; align-items: center; }
 .t2-todo-row { display: flex; gap: 8px; align-items: baseline; font-size: var(--ui-font-meta, 12px); padding: 3px 0; color: var(--text); }
 .t2-todo-mark { width: 16px; text-align: center; flex-shrink: 0; }
-.t2-todo-mark.completed { color: var(--signal-mark); }
+.t2-todo-mark.completed { color: var(--accent-ink); }
 .t2-todo-mark.in_progress { color: var(--text-muted); }
 .t2-todo-mark.pending { color: var(--text-faint, var(--text-muted)); }
 .t2-done { text-decoration: line-through; color: var(--text-muted); }
@@ -326,7 +326,7 @@
   display: flex; flex-direction: column; gap: 10px;
 }
 .t2-panel-title { font-size: var(--ui-font-body, 13px); font-weight: 600; display: inline-flex; align-items: center; gap: 7px; }
-.t2-accent-ic { color: var(--signal-mark); }
+.t2-accent-ic { color: var(--accent-ink); }
 .t2-preview {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: var(--ui-font-caption, 11px);
   background: var(--overlay-light, rgba(127,127,127,.08)); color: var(--text);
@@ -339,7 +339,7 @@
   border: var(--border-width, 1px) solid var(--border); border-radius: var(--radius-sm, 8px);
   background: var(--bg); color: var(--text); padding: 7px 10px; font-size: var(--ui-font-meta, 12px); font-family: var(--font-ui); outline: none;
 }
-.t2-inline-input:focus { border-color: var(--signal-line); }
+.t2-inline-input:focus { border-color: var(--accent-ink); }
 
 /* ====== 按钮 ====== */
 .t2-btn {
@@ -453,7 +453,7 @@
   display: flex; flex-direction: column; gap: 8px;
   transition: border-color var(--duration-fast, .15s);
 }
-.t2-composer:focus-within { border-color: var(--signal-line); }
+.t2-composer:focus-within { border-color: color-mix(in srgb, var(--accent-ink) 55%, var(--border)); }
 .t2-ta {
   border: none; outline: none; resize: none; background: transparent;
   font-family: var(--font-ui); font-size: var(--ui-font-body, 13px); line-height: 1.5; color: var(--text);
@@ -502,7 +502,7 @@
   border: none; border-radius: 50%; cursor: pointer; color: var(--on-action, #fff); background: var(--action-fill);
 }
 .t2-voice-play:hover { filter: brightness(1.08); }
-.t2-voice-track { flex: 1; height: 4px; border-radius: 2px; background: color-mix(in srgb, var(--signal) 22%, transparent); overflow: hidden; }
+.t2-voice-track { flex: 1; height: 4px; border-radius: 2px; background: color-mix(in srgb, var(--accent-ink) 22%, transparent); overflow: hidden; }
 .t2-voice-track > span { display: block; height: 100%; background: var(--signal-mark); transition: width .15s linear; }
 .t2-voice-dur { flex-shrink: 0; font-size: var(--ui-font-caption, 11px); color: var(--text-muted); font-variant-numeric: tabular-nums; min-width: 32px; text-align: right; }
 .t2-voice-txt {
@@ -660,7 +660,7 @@
   font-size: var(--ui-font-meta, 12px); color: var(--text);
 }
 .t2-tsum-state { display: flex; align-items: center; gap: 7px; font-size: var(--ui-font-body, 13px); font-weight: 600; }
-.t2-tsum-state.running { color: var(--signal-mark); }
+.t2-tsum-state.running { color: var(--accent-ink); }
 .t2-tsum-state.attention { color: var(--danger); }
 .t2-tsum-state.error { color: var(--danger); }
 .t2-tsum-state.stopped { color: var(--text-muted); }
@@ -693,7 +693,7 @@
   cursor: pointer; user-select: none; list-style: none; /* Firefox 的 ▸ */
 }
 .t2-tsum-sectitle::-webkit-details-marker { display: none; } /* Safari/旧 Chromium 的 ▸ */
-.t2-tsum-sectitle:hover { color: var(--text-muted); }
+.t2-tsum-sectitle:hover { color: var(--accent-ink, var(--accent, var(--text))); }
 /* chevron 贴右缘。有计数时计数自己带 margin-left:auto 已经顶到头,chevron 的 auto 必须清零
    —— 两个 auto 会平分剩余空间,把计数推到中间。 */
 .t2-tsum-chev {
@@ -742,7 +742,7 @@
 .t2-tsum-todo.completed { color: var(--text-muted); }
 .t2-tsum-todo.completed .t2-tsum-todo-mark { color: var(--green); }
 .t2-tsum-todo.in_progress { font-weight: 600; }
-.t2-tsum-todo.in_progress .t2-tsum-todo-mark { color: var(--signal-mark); }
+.t2-tsum-todo.in_progress .t2-tsum-todo-mark { color: var(--accent-ink); }
 .t2-tsum-todo-tx { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .t2-tsum-row {
   display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
@@ -790,14 +790,14 @@
 .agent-desk-card.gone { display: none; opacity: 0; scale: 0.8; translate: 100% 0; }
 @media (prefers-reduced-motion: reduce) { .agent-desk { transition: none; } }
 .agent-desk-grip { flex: 0 0 6px; margin-left: -3px; cursor: col-resize; z-index: 3; border-radius: 3px; }
-.agent-desk-grip:hover, .agent-desk-grip:active { background: var(--text); opacity: 0.3; }
+.agent-desk-grip:hover, .agent-desk-grip:active { background: var(--accent-ink); opacity: 0.3; }
 .agent-desk-inner { flex: 1; min-width: 0; display: flex; flex-direction: column; border-left: var(--border-width) solid var(--border); }
 .agent-desk-head {
   flex: 0 0 auto; display: flex; align-items: center; gap: 6px; min-width: 0;
   padding: 5px 6px 5px 12px; border-bottom: var(--border-width) solid var(--border);
   font-size: var(--ui-font-meta, 12px); color: var(--text-muted);
 }
-.agent-desk-spark { color: var(--signal-mark); flex-shrink: 0; }
+.agent-desk-spark { color: var(--accent-ink); flex-shrink: 0; }
 .agent-desk-title { flex-shrink: 0; font-weight: 600; color: var(--text); }
 .agent-desk-note { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agent-desk-head .icon-btn { flex-shrink: 0; }
@@ -857,7 +857,7 @@
 button.desk-cap-pick { cursor: pointer; }
 button.desk-cap-pick:hover, button.desk-cap-pick[aria-expanded='true'] { background: var(--overlay-light, rgba(127, 127, 127, 0.1)); }
 .desk-cap-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.desk-cap-ic { flex-shrink: 0; color: var(--signal-mark); }
+.desk-cap-ic { flex-shrink: 0; color: var(--accent-ink); }
 .desk-cap-caret { flex-shrink: 0; color: var(--text-faint, var(--text-muted)); }
 .desk-cap-slot { display: flex; align-items: center; gap: 1px; min-width: 0; overflow: hidden; }
 .desk-cap-slot .wsfile-seg { margin: 0; }
@@ -876,7 +876,7 @@ button.desk-cap-pick:hover, button.desk-cap-pick[aria-expanded='true'] { backgro
   box-shadow: var(--card-shadow);
 }
 .agent-desk-card.act { cursor: zoom-in; }
-.agent-desk-card.act:hover { border-color: var(--hover-line); }
+.agent-desk-card.act:hover { border-color: color-mix(in srgb, var(--accent-ink) 45%, var(--border)); }
 .agent-desk-card-head {
   flex: 0 0 auto; display: flex; align-items: center; gap: 6px; min-width: 0;
   padding: 8px 8px 6px 12px; font-size: var(--ui-font-meta, 12px); font-weight: 600; color: var(--text);
@@ -947,7 +947,7 @@ button.desk-cap-pick:hover, button.desk-cap-pick[aria-expanded='true'] { backgro
 }
 .t2-taskcard.done { opacity: .7; }
 .t2-taskcard-head { display: flex; align-items: center; gap: 7px; min-width: 0; }
-.t2-taskcard-head > svg { color: var(--signal-mark); flex: none; }
+.t2-taskcard-head > svg { color: var(--accent-ink); flex: none; }
 .t2-taskcard-head > b { font-weight: 600; overflow-wrap: anywhere; }
 .t2-taskcard-tag {
   font-size: var(--ui-font-caption, 11px); line-height: 1; padding: 3px 7px; border-radius: var(--radius-pill, 999px);
@@ -973,7 +973,7 @@ button.desk-cap-pick:hover, button.desk-cap-pick[aria-expanded='true'] { backgro
 /* 写卡那条回答下面的一行(TaskTraces):卡本身在对话末尾的卡片堆里,这里只写还在等 / 结局 */
 .t2-tasks--trace { gap: 4px; }
 .t2-tasktrace { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: var(--ui-font-meta, 12px); }
-.t2-tasktrace > svg { flex: none; color: var(--signal-mark); }
+.t2-tasktrace > svg { flex: none; color: var(--accent-ink); }
 .t2-tasktrace > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .t2-tasktrace-jump { padding: 0; border: none; background: none; font: inherit; text-align: left; cursor: pointer; }
 .t2-tasktrace-jump:hover { color: var(--text); }
@@ -990,7 +990,7 @@ button.desk-cap-pick:hover, button.desk-cap-pick[aria-expanded='true'] { backgro
   background: var(--t2c-card-surface, var(--bg-card, var(--bg))); box-shadow: var(--card-shadow, 0 6px 22px rgba(0, 0, 0, 0.08));
   font-family: var(--font-ui); font-size: var(--ui-font-meta, 12px); color: var(--text);
 }
-.t2-deckpill > svg { color: var(--signal-mark); flex: none; }
+.t2-deckpill > svg { color: var(--accent-ink); flex: none; }
 .t2-deckpill-sep { color: var(--text-faint, var(--text-muted)); }
 .t2-taskcard.busy .t2-taskcard-actions > button { opacity: .6; cursor: progress; }
 .t2-taskcard-toggle {
@@ -1129,21 +1129,21 @@ button.desk-cap-pick:hover, button.desk-cap-pick[aria-expanded='true'] { backgro
 .t2-child-actions { grid-column: 2 / 4; margin-top: 7px; }
 /* <child_sessions_update> 落库行(子会话结果送回主会话):一行说明谁回来了 */
 .t2-child-update { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 4px 8px; margin: 4px 0; color: var(--text-muted); }
-.t2-child-update > svg { color: var(--signal-mark); flex: none; }
+.t2-child-update > svg { color: var(--accent-ink); flex: none; }
 .t2-child-update-item[data-status='waiting_for_user'] { color: var(--warning); }
 .t2-child-update-item[data-status='failed'] { color: var(--danger); }
 .t2-child-update-item + .t2-child-update-item::before { content: '·'; margin-right: 8px; color: var(--text-faint, var(--text-muted)); }
 /* 子会话顶上「来自 主会话」:按一段文字排(窄的子会话面板里会折行,不能是 flex —— 那样每一截各自竖着挤成一列) */
 .t2-child-from { display: block; text-align: center; margin: 0 0 10px; color: var(--text-muted); }
 .t2-child-from > svg { vertical-align: -2px; margin-right: 4px; }
-.t2-child-from > a { display: inline-block; vertical-align: bottom; margin: 0 4px; color: var(--signal); cursor: pointer; text-decoration: none; max-width: 24ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.t2-child-from > a { display: inline-block; vertical-align: bottom; margin: 0 4px; color: var(--accent-ink); cursor: pointer; text-decoration: none; max-width: 24ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .t2-child-from > a:hover { text-decoration: underline; }
 
 /* 流里给待批审批留的一行指路(卡本身在输入框上方的托盘里) */
 .t2-apv-pointer { display: flex; align-items: center; gap: 6px; font-size: var(--ui-font-meta, 12px); margin: 4px 0; }
 /* Muse 私聊里它自己开口的那条(MuseDm.tsx,10-18 方案 B):署名下一行「主动发来 · 时间」;它的审批批完后流里留一行回执。 */
 .t2-dm-from { display: flex; align-items: center; gap: 5px; margin: 0 0 6px; font-family: var(--font-ui); font-size: var(--ui-font-meta, 12px); color: var(--text-muted); }
-.t2-dm-from svg { flex: none; color: var(--signal-mark); }
+.t2-dm-from svg { flex: none; color: var(--accent-ink); }
 .t2-dm-receipt { display: flex; align-items: center; gap: 6px; margin: 4px 0; font-size: var(--ui-font-meta, 12px); }
 .t2-dm-receipt svg { flex: none; }
 .t2-dm-receipt.ok svg { color: var(--green); }
@@ -1261,8 +1261,8 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 .t2cv-am { display: contents; }
 .t2cv-world { position: absolute; left: 0; top: 0; width: 0; height: 0; transform-origin: 0 0; }
 .t2cv-edges { position: absolute; left: 0; top: 0; width: 1px; height: 1px; overflow: visible; pointer-events: none; }
-.t2cv-edges path { fill: none; stroke: var(--signal-line); stroke-width: 2; }
-.t2cv-edges path.hot { stroke: var(--signal-mark); stroke-width: 2.5; }
+.t2cv-edges path { fill: none; stroke: color-mix(in srgb, var(--accent-ink) 55%, transparent); stroke-width: 2; }
+.t2cv-edges path.hot { stroke: var(--accent-ink); stroke-width: 2.5; }
 /* 一轮 = 一个格子(.t2cv-turn,排版和量高都认它)里上下两张卡:提问卡 + 回答卡,中间一小段线 */
 .t2cv-turn { position: absolute; box-sizing: border-box; display: flex; flex-direction: column; }
 /* 还没量到高的格子先不露面:它的位置是按估高排的,量到后才落定(否则第一帧会叠在别的卡上闪一下) */
@@ -1272,17 +1272,17 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
   border: 1px solid var(--border); border-radius: 10px; background: var(--bg-card, var(--bg)); box-shadow: var(--card-shadow);
 }
 /* 提问卡:对话里用户气泡的配方(强调色混进卡底),扁一些 */
-.t2cv-qcard { padding: 9px 14px 10px; background: var(--accent-wash); }
+.t2cv-qcard { padding: 9px 14px 10px; background: color-mix(in srgb, var(--accent-ink) 9%, var(--bg-card, var(--bg))); }
 .t2cv-qlabel { margin-bottom: 2px; font-size: var(--ui-font-caption, 11px); line-height: 1.4; color: var(--text-muted); }
 .t2cv-q {
   font-size: var(--ui-font-body, 14px); line-height: 1.55; color: var(--text);
   white-space: pre-wrap; overflow-wrap: anywhere;
   display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden;
 }
-.t2cv-link { flex: none; align-self: center; width: 2px; height: 10px; background: var(--signal-line); }
-.t2cv-turn[data-hot] > .t2cv-link { background: var(--signal-mark); }
+.t2cv-link { flex: none; align-self: center; width: 2px; height: 10px; background: color-mix(in srgb, var(--accent-ink) 55%, transparent); }
+.t2cv-turn[data-hot] > .t2cv-link { background: var(--accent-ink); }
 /* 选中:DESIGN §5 强调带(1px 换强调色 + 0.5px 环,不加粗边框);点哪张亮哪张 */
-.t2cv-card[data-sel] { border-color: var(--signal-line); box-shadow: var(--card-shadow), 0 0 0 0.5px var(--signal-line); }
+.t2cv-card[data-sel] { border-color: var(--accent-ink); box-shadow: var(--card-shadow), 0 0 0 0.5px var(--accent-ink); }
 /* 「只看这一支」:旁支只露问题和两行、淡一档,点一下就切过去 */
 .t2cv-turn[data-dim] { opacity: 0.55; cursor: pointer; }
 .t2cv-turn[data-dim] .t2cv-body { max-height: 3.6em; overflow: hidden; }
@@ -1295,7 +1295,7 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
   border: 1px solid var(--border); border-radius: var(--radius-pill, 999px); background: transparent;
   color: var(--text-sec); font: inherit; font-size: var(--ui-font-meta, 12px); cursor: pointer;
 }
-.t2cv-readbtn:hover { color: var(--text); border-color: var(--hover-line); }
+.t2cv-readbtn:hover { color: var(--accent-ink); border-color: var(--accent-ink); }
 /* 卡里的消息:不画头像 / 署名 / 时刻,也不画「从这里分出」块(分支在画布上已经是卡);操作条只留两个动词(接着问 / 顺便问) */
 .t2cv-card .t2-avatar, .t2cv-card .t2-name, .t2cv-card .t2-childs, .t2cv-card .t2-msgtime { display: none; }
 .t2cv-card .t2-asst { display: block; }
@@ -1312,7 +1312,7 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 .t2cv-add::before { content: ''; position: absolute; inset: -9px; }
 /* 平时透明不接指针(不用 display:none:那样 Tab 走不到它);悬停 / 选中 / 键盘聚焦时露出来 */
 .t2cv-card:hover > .t2cv-add, .t2cv-card[data-sel] > .t2cv-add, .t2cv-add:focus-visible { opacity: 1; pointer-events: auto; }
-.t2cv-add:hover { border-color: var(--hover-line); color: var(--text); }
+.t2cv-add:hover { border-color: var(--accent-ink); color: var(--accent-ink); }
 .t2cv-add[data-add="next"] { left: 50%; bottom: -29px; transform: translateX(-50%); }
 .t2cv-add[data-add="before"] { left: -30px; top: 50%; transform: translateY(-50%); }
 .t2cv-add[data-add="after"] { right: -30px; top: 50%; transform: translateY(-50%); }
@@ -1320,7 +1320,7 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 .t2cv[data-dir="h"] .t2cv-add[data-add="before"] { left: 50%; top: -29px; transform: translateX(-50%); }
 .t2cv[data-dir="h"] .t2cv-add[data-add="after"] { left: 50%; right: auto; top: auto; bottom: -29px; transform: translateX(-50%); }
 /* 草稿提问卡:卡本身就是输入框;它头上那根线淡一档(还没发出去) */
-.t2cv-qcard.t2cv-draft { background: var(--bg-card, var(--bg)); border-color: var(--signal-line); box-shadow: var(--card-shadow), 0 0 0 0.5px var(--signal-line); }
+.t2cv-qcard.t2cv-draft { background: var(--bg-card, var(--bg)); border-color: var(--accent-ink); box-shadow: var(--card-shadow), 0 0 0 0.5px var(--accent-ink); }
 .t2cv-draft-ta {
   display: block; box-sizing: border-box; width: 100%; min-height: 3.1em; max-height: 240px; margin: 2px 0 0; padding: 0;
   border: 0; outline: 0; resize: none; background: transparent; color: var(--text);
@@ -1332,7 +1332,7 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 .t2cv-draft-foot > span { flex: 1; min-width: 0; }
 .t2cv-send {
   display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; padding: 0;
-  border: 0; border-radius: 50%; background: var(--action-fill); color: var(--on-action); cursor: pointer;
+  border: 0; border-radius: 50%; background: var(--accent-ink); color: var(--bg-card, var(--bg)); cursor: pointer;
 }
 .t2cv-send:disabled { background: var(--overlay-medium, rgba(127, 127, 127, 0.16)); color: var(--text-faint); cursor: default; }
 .t2cv-edges path.draft { opacity: 0.45; }
@@ -1380,7 +1380,7 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
   padding: 2px 10px 2px 8px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg-card);
   font-size: var(--ui-font-caption, 11px); color: var(--text-muted);
 }
-.t2cv-attach > svg { flex: none; color: var(--signal-mark); }
+.t2cv-attach > svg { flex: none; color: var(--accent-ink); }
 .t2cv-attach > b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; color: var(--text); }
 /* 缩放胶囊 + 缩略图:宽列里放在输入卡右边(同 Amadeus 画布的右下角),窄到挨着输入卡了就抬到它上面。
    (0,3,0) 压过 .am-app 里的 (0,2,0) 定位。 */
@@ -1395,7 +1395,7 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 /* 阅读栏开着:缩放胶囊 / 缩略图让到它左边(压过上面两档的定位) */
 .t2cv[data-reading] .t2cv-am.am-app .amx-stage-hud, .t2cv[data-reading] .t2cv-am.am-app .amx-stage-minimap { right: calc(var(--t2cv-read-w) + 24px); }
 /* 「接着问」点下去:输入框上面那条闪一下强调色,告诉你发出去接在哪 */
-.t2cv-attach[data-flash] { border-color: var(--signal-line); color: var(--accent-ink); }
+.t2cv-attach[data-flash] { border-color: var(--accent-ink); color: var(--accent-ink); }
 /* 画布里的列表:对话页的序号 / 圆点挂在正文左边的留白里(padding 0);卡的正文区为了限高是 overflow:hidden,挂在外面的会被整个裁掉,
    阅读栏左边也只有 22px → 卡和阅读栏都给它们留位置 */
 .t2cv .t2-content :is(ul, ol) { padding-inline-start: 2em; }
@@ -1406,12 +1406,12 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
   align-self: center; margin-top: 8px; padding: 2px 10px; border: 1px solid var(--border); border-radius: var(--radius-pill, 999px);
   background: var(--bg-card, var(--bg)); color: var(--text-sec); font: inherit; font-size: var(--ui-font-meta, 12px); line-height: 1.5; cursor: pointer;
 }
-.t2cv-foldpill:hover { color: var(--text); border-color: var(--hover-line); }
+.t2cv-foldpill:hover { color: var(--accent-ink); border-color: var(--accent-ink); }
 /* 一支开头那张提问卡上原地改名 */
 .t2cv-rename {
-  display: block; width: 100%; box-sizing: border-box; margin: -2px 0 4px; padding: 2px 6px; border: 1px solid var(--signal-line); border-radius: var(--radius-sm, 6px);
+  display: block; width: 100%; box-sizing: border-box; margin: -2px 0 4px; padding: 2px 6px; border: 1px solid var(--accent-ink); border-radius: var(--radius-sm, 6px);
   background: var(--bg-card, var(--bg)); color: var(--text); font: inherit; font-size: var(--ui-font-meta, 12px); outline: none;
 }
 /* 阅读栏左边缘:拖动调宽度 */
 .t2cv-read-grip { position: absolute; z-index: 1; left: 0; top: 0; bottom: 0; width: 6px; cursor: col-resize; touch-action: none; }
-.t2cv-read-grip:hover, .t2cv-read-grip:active { background: var(--hover-line); }
+.t2cv-read-grip:hover, .t2cv-read-grip:active { background: color-mix(in srgb, var(--accent-ink) 25%, transparent); }

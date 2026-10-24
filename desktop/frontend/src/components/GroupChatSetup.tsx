@@ -167,11 +167,11 @@ export const GroupChatSetup: React.FC<{
                     return (
                       <button key={a.slug} onClick={() => toggleSaved(a.slug)} style={{
                         display: 'flex', alignItems: 'center', gap: 10, textAlign: 'left', padding: '8px 10px', borderRadius: 'var(--radius-sm, 6px)',
-                        border: `1px solid ${on ? 'var(--signal-line)' : 'var(--border)'}`,
-                        background: on ? 'var(--accent-wash)' : 'transparent', color: 'inherit', cursor: 'pointer',
+                        border: `1px solid ${on ? 'var(--accent-ink)' : 'var(--border)'}`,
+                        background: on ? 'var(--accent-soft)' : 'transparent', color: 'inherit', cursor: 'pointer',
                       }}>
-                        <span style={{ width: 16, height: 16, borderRadius: 4, flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', border: `1px solid ${on ? 'var(--signal-mark)' : 'var(--border)'}`, background: 'transparent' }}>
-                          {on && <Check size={12} color="var(--signal-mark)" />}
+                        <span style={{ width: 16, height: 16, borderRadius: 4, flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', border: `1px solid ${on ? 'var(--accent-ink)' : 'var(--border)'}`, background: on ? 'var(--accent-ink)' : 'transparent' }}>
+                          {on && <Check size={12} color="var(--on-accent-ink, var(--on-accent))" />}
                         </span>
                         <span style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ fontSize: 'var(--ui-font-body, 13px)', fontWeight: 600 }}>{a.name}</div>
@@ -189,7 +189,7 @@ export const GroupChatSetup: React.FC<{
             {tempAgents.length > 0 && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 8 }}>
                 {tempAgents.map((a) => (
-                  <div key={a.slug} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderRadius: 'var(--radius-sm, 6px)', border: '1px solid var(--signal-line)', background: 'var(--accent-wash)' }}>
+                  <div key={a.slug} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderRadius: 'var(--radius-sm, 6px)', border: '1px solid var(--accent-ink)', background: 'var(--accent-soft)' }}>
                     <UserPlus size={14} style={{ flexShrink: 0, opacity: 0.8 }} />
                     <span style={{ flex: 1, minWidth: 0 }}>
                       <span style={{ fontSize: 'var(--ui-font-body, 13px)', fontWeight: 600 }}>{a.name}</span>

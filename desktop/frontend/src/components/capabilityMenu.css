@@ -7,7 +7,7 @@
 .capability-menu-items { max-height: min(330px, 55vh); overflow-y: auto; }
 .capability-menu-items > button { display: flex; align-items: center; gap: 8px; width: 100%; min-height: var(--menu-item-min-height); padding: var(--menu-item-pad-block) var(--menu-item-pad-inline); border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
 .capability-menu-items > button > span:nth-child(2) { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.capability-menu-items > button > svg { flex: 0 0 auto; color: var(--signal-mark); }
+.capability-menu-items > button > svg { flex: 0 0 auto; color: var(--accent-ink); }
 .capability-menu-icon { display: flex; width: 15px; flex: 0 0 15px; color: var(--text-muted); }
 .capability-menu-items > button:hover, .capability-menu-items > button:focus-visible { outline: none; background: var(--menu-hover); }
 .capability-menu-items > button.danger { color: var(--danger); }

@@ -43,7 +43,7 @@
 .t2c-refrow { align-items: center; }
 .t2c-reflabel { font-size: var(--ui-font-meta, 12px); color: var(--text-faint); flex-shrink: 0; }
 /* 两个类压过 base.css 的 `.attach-chip img`(那条是给附件缩略图的 28px 圆角图) */
-.attach-chip .attach-chip-appico { flex: none; width: 16px; height: 16px; margin-left: 3px; border-radius: 0; object-fit: contain; color: var(--signal-mark); }
+.attach-chip .attach-chip-appico { flex: none; width: 16px; height: 16px; margin-left: 3px; border-radius: 0; object-fit: contain; color: var(--accent-ink); }
 .attach-chip--appref { cursor: pointer; }
 .attach-chip--appref[data-off] { color: var(--text-faint); }
 .attach-chip--appref[data-off] .attach-chip-appico { filter: grayscale(1); opacity: 0.55; }
@@ -79,7 +79,7 @@
 .t2c-mirror { position: absolute; z-index: 1; margin: 0; border: 0; box-sizing: border-box; overflow: hidden; pointer-events: none; color: transparent; white-space: pre-wrap; overflow-wrap: break-word; }
 .t2c-inref { border-radius: var(--radius-sm, 6px); background: var(--overlay-medium); box-shadow: 0 0 0 1.5px var(--overlay-medium); -webkit-box-decoration-break: clone; box-decoration-break: clone; }
 .t2c-inref-slot { position: relative; }
-.t2c-inref-ico { position: absolute; top: 50%; left: 50%; width: 1em; height: 1em; translate: -50% -50%; object-fit: contain; color: var(--signal-mark); }
+.t2c-inref-ico { position: absolute; top: 50%; left: 50%; width: 1em; height: 1em; translate: -50% -50%; object-fit: contain; color: var(--accent-ink); }
 
 /* 模式 / 模型 药丸(移入卡内底排 .t2c-row) */
 .t2c-pill {
@@ -274,7 +274,7 @@
 .t2c-ctxring-btn { display: inline-flex; padding: 0; border: none; background: none; color: inherit; cursor: pointer; }
 .t2c-ctxring svg { transform: rotate(-90deg); }
 .t2c-ctxring-track { fill: none; stroke: var(--overlay-light, rgba(127, 127, 127, 0.2)); stroke-width: 3; }
-.t2c-ctxring-fill { fill: none; stroke: var(--signal-mark); stroke-width: 3; stroke-linecap: round; transition: stroke-dashoffset 0.35s var(--ease-out, ease); }
+.t2c-ctxring-fill { fill: none; stroke: var(--accent-ink); stroke-width: 3; stroke-linecap: round; transition: stroke-dashoffset 0.35s var(--ease-out, ease); }
 .t2c-ctxring[data-warn] .t2c-ctxring-fill { stroke: var(--danger, #e0564b); }
 .t2c-ctxring-pop span[data-warn] { color: var(--danger, #e0564b); }
 /* 详情弹层(09-26 对标 Claude 的 Context window 面板,内容见 ContextUsagePop.tsx):定宽,长说明折行而不是把弹层撑宽 */
@@ -418,7 +418,7 @@
   padding: 6px 0; border: none; background: none; cursor: pointer; text-align: left;
   color: var(--text-muted); font-family: var(--font-ui); font-size: var(--ui-font-meta, 12px);
 }
-.t2c-apv-ic { flex-shrink: 0; color: var(--signal-mark); }
+.t2c-apv-ic { flex-shrink: 0; color: var(--accent-ink); }
 .t2c-apv-title { flex-shrink: 0; font-weight: 600; color: var(--text); }
 .t2c-apv-more { min-width: 0; color: var(--text-faint, var(--text-muted)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .t2c-apv-chev { flex-shrink: 0; margin-left: auto; transition: transform var(--duration-fast, 0.15s); }
@@ -467,7 +467,7 @@
   display: flex; align-items: center; gap: 7px; margin-bottom: 8px;
   font-size: var(--ui-font-body, 13px); font-weight: 600; color: var(--text);
 }
-.t2c-apv .plan-decision-title svg { flex-shrink: 0; color: var(--signal-mark); }
+.t2c-apv .plan-decision-title svg { flex-shrink: 0; color: var(--accent-ink); }
 .t2c-apv textarea.plan-edit {
   display: block; width: 100%; box-sizing: border-box;
   min-height: 140px; max-height: 30vh; margin-bottom: 8px; padding: 8px 10px;
@@ -475,7 +475,7 @@
   background: var(--bg-card); border: var(--border-width, 1px) solid var(--border); border-radius: var(--radius-sm, 8px);
   resize: vertical; outline: none;
 }
-.t2c-apv textarea.plan-edit:focus { border-color: var(--signal-line); }
+.t2c-apv textarea.plan-edit:focus { border-color: var(--accent-ink); }
 .t2c-apv .plan-decision .inquiry-input { margin-top: 8px; }
 .t2c-apv-from { font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted)); margin-bottom: 2px; }
 /* Muse 私聊托盘(MuseDm)排队的其余几张:在展开卡之上,排得再多也只占几行(多了在自己框里滚) */
@@ -494,7 +494,7 @@
 .t2c-apv-row-from { flex-shrink: 0; color: var(--text-faint, var(--text-muted)); }
 .t2c-apv-row-name { flex-shrink: 0; font-weight: 600; color: var(--text); }
 .t2c-apv-row-preview { flex: 1; min-width: 0; font-family: var(--font-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.t2c-apv-row-ic { flex-shrink: 0; color: var(--signal-mark); }
+.t2c-apv-row-ic { flex-shrink: 0; color: var(--accent-ink); }
 .t2c-apv-row-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* ── 手机(Android 原生外壳)的输入卡:发送键在输入框右边,底排是 + / 模型 / 麦克风 ──

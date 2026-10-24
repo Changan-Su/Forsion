@@ -103,7 +103,7 @@
   bottom: 8px;
   width: 2px;
   border-radius: 2px;
-  background: var(--signal-mark);
+  background: var(--accent-ink);
 }
 .t2o-name {
   flex: 1;
@@ -121,7 +121,7 @@
   width: 12px;
   height: 12px;
   flex-shrink: 0;
-  color: var(--signal-mark);
+  color: var(--accent-ink);
   opacity: 0.72;
 }
 
@@ -299,11 +299,11 @@
 .t2o-desk-activity { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
 .t2o-desk-strip { display: flex; gap: 4px; padding: 6px 8px; border-bottom: var(--border-width) solid var(--border); overflow: auto; flex-shrink: 0; }
 .t2o-desk-tab { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px 3px 5px; border-radius: var(--radius-pill, 999px); border: 1px solid var(--border); background: transparent; color: var(--text); font-size: var(--ui-font-meta, 12px); cursor: pointer; white-space: nowrap; }
-.t2o-desk-tab[aria-selected="true"] { border-color: var(--signal-line); background: var(--accent-wash); }
+.t2o-desk-tab[aria-selected="true"] { border-color: var(--accent-ink); background: color-mix(in srgb, var(--accent-ink) 10%, transparent); }
 .t2o-desk-work { flex: 1; min-height: 0; overflow: auto; padding: 8px 10px; font-size: var(--ui-font-meta, 12px); }
 .t2o-desk-task { font-size: var(--ui-font-caption, 11px); color: var(--text-muted); margin-bottom: 8px; }
 .t2o-desk-empty { color: var(--text-muted); font-size: var(--ui-font-meta, 12px); padding: 12px 10px; }
-.t2o-bar-avatar.is-working { box-shadow: 0 0 0 1.5px var(--signal-mark); animation: t2o-pulse 1.2s ease-in-out infinite; }
+.t2o-bar-avatar.is-working { box-shadow: 0 0 0 1.5px var(--accent-ink); animation: t2o-pulse 1.2s ease-in-out infinite; }
 .t2o-bar-avatar.is-waiting { box-shadow: 0 0 0 1.5px var(--warning); }
 .t2-team-done { font-size: var(--ui-font-caption, 11px); margin-top: 4px; color: var(--accent-ink); opacity: 0.85; }
 @keyframes t2o-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
@@ -312,7 +312,7 @@
 /* Team status inside Pin Summary; independent from Agent Desk presentation. */
 .t2o-team-status { margin-top: 8px; }
 .t2o-team-status .t2o-desk-row { width: 100%; text-align: left; border: 0; background: transparent; padding: 5px 0; cursor: pointer; }
-.t2o-team-status .t2o-desk-row:hover { color: var(--text); }
+.t2o-team-status .t2o-desk-row:hover { color: var(--accent-ink); }
 .t2o-team-status .t2o-desk-work { max-height: 280px; padding: 8px 0; }
 .t2-team-summary { margin: 16px 0; padding: 12px 16px; border-radius: var(--radius-md, 12px); background: var(--overlay-light, rgba(127,127,127,.06)); color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
 .t2-team-summary > summary { cursor: pointer; font-weight: 600; }

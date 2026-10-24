@@ -374,7 +374,7 @@ const HostFilesTab: React.FC<{
       </div>
       {newFolder && (
         <div className="file-row" style={{ cursor: 'default' }}>
-          <Folder size={13} style={{ color: 'var(--signal-mark)' }} />
+          <Folder size={13} style={{ color: 'var(--accent-ink)' }} />
           <input
             autoFocus
             className="file-rename-input"
@@ -425,7 +425,7 @@ const HostFilesTab: React.FC<{
             onContextMenu={(e) => openMenu(e, en)}
             onKeyDown={(e) => { if (renaming !== en.path && e.key === 'Enter') { e.preventDefault(); open(en) } }}
           >
-            {en.isDir ? <Folder size={13} style={{ color: 'var(--signal-mark)' }} /> : /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(en.name) ? <ImageIcon size={13} /> : <FileText size={13} />}
+            {en.isDir ? <Folder size={13} style={{ color: 'var(--accent-ink)' }} /> : /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(en.name) ? <ImageIcon size={13} /> : <FileText size={13} />}
             {renaming === en.path ? (
               <input
                 autoFocus
