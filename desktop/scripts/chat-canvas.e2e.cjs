@@ -11,7 +11,7 @@
  * 胶囊 − % + ⤢ 视图 ?、说明只出前 3 次、缩略图缺省关;对话 ↔ 画布镜头拉远 / 推回;空格 / 中键拖平移、⌘0 ⌘− ⇧1、Esc 先退抓手。
  * 量的是 out/ 产物:改了源码先 `npm run build`。
  *   node ../.claude/hooks/devlock.cjs run --vehicle=e2e --what="Chat 画布台架" --eta=4 -- node scripts/chat-canvas.e2e.cjs
- *   SHOT_DIR=… 指定截图目录;LANG_EN=1 拍英文
+ *   SHOT_DIR=… 指定截图目录;LANG_EN=1 拍英文;ZOOM=1.1 按用户开发版的整窗缩放跑(只看 SW 那几条,别的几何断言按 100% 写的)
  */
 const path = require('path')
 const { launch, boot, enterSpace, makeReporter, shotDir } = require('./lib/uiux-electron.cjs')
@@ -152,7 +152,10 @@ async function main() {
   try {
     await boot(ctx.app, win, { space: 'tangu', width: 1440, height: 900 })
     if (process.env.LANG_EN) await win.evaluate(() => localStorage.setItem('tangu_locale', 'en'))
-    await win.evaluate(() => localStorage.setItem('tangu.chatCanvas.hintsSeen', '-999')) // 说明只出前 3 次:台架里一直让它出,末尾 HN1 单独核「第 4 次不出」
+    await win.evaluate(() => localStorage.setItem('tangu.chatCanvas.hintsSeen', '-999'))
+    const ZOOM = Number(process.env.ZOOM || 1)
+    // 2.10.0 那次「缩放回到默认」的一次性迁移会清掉存着的缩放:先标成已迁移(同 selection-bar.check)
+    if (ZOOM !== 1) await win.evaluate((z) => { localStorage.setItem('forsion_ui_zoom_default_2_10_0', '1'); localStorage.setItem('forsion_ui_zoom', String(z)) }, ZOOM) // 说明只出前 3 次:台架里一直让它出,末尾 HN1 单独核「第 4 次不出」
     await win.reload({ waitUntil: 'domcontentloaded' })
     await win.waitForSelector('.dv-groupview', { timeout: 30_000 })
     await enterSpace(win, 'tangu')
@@ -174,7 +177,8 @@ async function main() {
     const preAnchor = await win.evaluate(() => {
       const body = document.querySelector('.t2-chat-col > .t2-chat-body'), r = body.getBoundingClientRect()
       const ch = parseFloat(getComputedStyle(body).getPropertyValue('--t2-composer-h'))
-      return { bottom: Math.round(r.bottom), ch, msgs: [...body.querySelectorAll('.t2-asst[id^="tocmsg-"]')].map((e) => { const c = (e.querySelector('.t2-asst-col') ?? e).getBoundingClientRect(); return `${e.id.slice(7)}:${Math.round(c.top)}-${Math.round(c.bottom)}` }) }
+      const a3 = body.querySelector('#tocmsg-a3 .t2-asst-col')?.getBoundingClientRect()
+      return { zoom: document.body.currentCSSZoom || 1, a3: a3 ? { x: Math.round(a3.left), y: Math.round(a3.top) } : null, bottom: Math.round(r.bottom), ch, msgs: [...body.querySelectorAll('.t2-asst[id^="tocmsg-"]')].map((e) => { const c = (e.querySelector('.t2-asst-col') ?? e).getBoundingClientRect(); return `${e.id.slice(7)}:${Math.round(c.top)}-${Math.round(c.bottom)}` }) }
     })
     await win.evaluate(() => {
       window.__sw = []
@@ -183,7 +187,8 @@ async function main() {
         const w = document.querySelector('.t2cv-world'), c = document.querySelector('.t2cv')
         const col = (id) => { const e = document.querySelector(`.t2-chat-col > .t2-chat-body #tocmsg-${id} .t2-asst-col`); return e ? Math.round(e.getBoundingClientRect().top) : null }
         if (!w) window.__pre = (window.__pre || []).concat([{ t: Math.round(performance.now() - t0), a2: col('a2'), a3: col('a3') }]).slice(-4)
-        if (w) window.__sw.push({ t: Math.round(performance.now() - t0), z: +new DOMMatrix(getComputedStyle(w).transform).a.toFixed(3), sw: c?.dataset.switch || '',
+        const ac = document.querySelector('.t2cv-turn[data-anchor] .t2-asst-col')?.getBoundingClientRect()
+        if (w) window.__sw.push({ ac: ac ? { x: Math.round(ac.left), y: Math.round(ac.top) } : null, t: Math.round(performance.now() - t0), z: +new DOMMatrix(getComputedStyle(w).transform).a.toFixed(3), sw: c?.dataset.switch || '',
           body: getComputedStyle(document.querySelector('.t2-chat-col > .t2-chat-body')).visibility, anchor: document.querySelector('.t2cv-turn[data-anchor]')?.dataset.cvNode || '', })
         if (performance.now() - t0 < 1500) requestAnimationFrame(tick)
       }
@@ -200,6 +205,8 @@ async function main() {
     r.check('SW1 切到画布:对话里最下面那条回答原地变成它那张卡(起点 100%),镜头拉到落位(90%);途中对话流不先藏;播完收掉',
       swIn.length >= 5 && Math.abs(swIn[0].z - 1) < 0.03 && swIn[0].body === 'visible' && swIn[0].anchor === `${R}:u3` && Math.abs(swEnd.z - 0.9) < 0.005 && !swEnd.sw && swEnd.body === 'hidden',
       JSON.stringify({ n: swIn.length, first: swIn[0], mid: swIn[Math.floor(swIn.length / 2)], end: swEnd, preAnchor, preFrames }))
+    const ac0 = swIn[0]?.ac, a30 = preAnchor.a3
+    r.check('SW1b 进场第一帧:那张卡的正文压在对话里那一条的位置上(差 12px 内,含整窗缩放)', !!ac0 && !!a30 && Math.abs(ac0.x - a30.x) <= 12 && Math.abs(ac0.y - a30.y) <= 12, JSON.stringify({ ac0, a30, zoom: preAnchor.zoom }))
     const shape = await win.evaluate(() => ({
       cards: [...document.querySelectorAll('.t2cv-turn')].map((e) => e.dataset.cvNode),
       bodyHidden: getComputedStyle(document.querySelector('.t2-chat-body')).visibility === 'hidden',
