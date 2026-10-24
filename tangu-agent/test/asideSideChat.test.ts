@@ -197,14 +197,16 @@ describe('旁聊附件(10-24 方案 A):只给这一问、主对话同一条图�
       attachments: [
         { name: 'notes.md', mimeType: 'text/markdown', data: b64('﻿# Notes\nThe vault key is ORCHID-7.') },
         { name: 'blob.bin', mimeType: 'application/octet-stream', data: Buffer.from([1, 0, 2, 0, 3]).toString('base64') },
+        { name: 'logo.svg', mimeType: 'image/svg+xml', data: b64('<svg xmlns="http://www.w3.org/2000/svg"><title>LOGO-9</title></svg>') }, // SVG 按文本读,不当图发
       ],
     });
     const m = lastUser();
     expect(typeof m.content).toBe('string');
+    expect(m.content).toContain('<attached_file name="logo.svg">\n<svg');
     expect(m.content).toContain('<attached_file name="notes.md">\n# Notes\nThe vault key is ORCHID-7.\n</attached_file>');
     expect(m.content).toContain('<attached_file name="blob.bin">\n(This is a binary file.');
     expect(m.content.endsWith('Summarise the notes.')).toBe(true);
-    expect(r.attached).toEqual({ images: 0, files: ['notes.md', 'blob.bin'], transcribed: false });
+    expect(r.attached).toEqual({ images: 0, files: ['notes.md', 'blob.bin', 'logo.svg'], transcribed: false });
     const pdf = await extractAttachmentText({ name: 'plan.pdf', mimeType: 'application/pdf', data: makePdf('ORCHID-LANTERN-93').toString('base64') });
     expect(pdf).toContain('--- page 1 ---');
     expect(pdf).toContain('ORCHID-LANTERN-93');

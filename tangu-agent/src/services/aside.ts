@@ -183,7 +183,8 @@ export function buildAsideMessages(transcript: string, input: AsideInput, prepar
   ] as ChatMessage[];
 }
 
-const isImage = (a: AsideAttachmentMeta): boolean => a.mimeType.startsWith('image/');
+/** 走原生图像输入的附件。SVG 是 XML 文本,供应方的图像入口不收:按文本读。 */
+const isImage = (a: AsideAttachmentMeta): boolean => a.mimeType.startsWith('image/') && a.mimeType !== 'image/svg+xml';
 
 /** 前 4KB 里有 NUL = 二进制(fileSearch 的 looksBinary 同款判据)。 */
 const looksBinary = (buf: Buffer): boolean => {
