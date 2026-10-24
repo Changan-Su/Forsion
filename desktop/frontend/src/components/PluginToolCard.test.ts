@@ -18,6 +18,7 @@ const { usePluginStore } = await import('../amadeus/plugins/pluginStore')
 const { setTanguProbe } = await import('../amadeus/plugins/tanguSeam')
 const { useEngineTools, cardStateHandle, __resetToolCards } = await import('../amadeus/plugins/toolResultCards')
 const { useApp } = await import('../stores/appStore')
+await import('../tangu/store/standalone')
 const { PluginToolCard, ToolCardDeskContext, placeLiveToolCard, returnToolCardToChat, toolCardDeskFor, __resetToolCardPlacement } = await import('./PluginToolCard')
 const { DeskToolCardPane } = await import('../views/chat2/DeskToolCardPane')
 type Contribution = import('../amadeus/plugins/types').ToolResultRendererContribution

@@ -38,6 +38,7 @@ const { mountPluginFloatingToc } = await import('./floatingTocSurface')
 const { mountPluginBoard } = await import('./boardSurface')
 const { mountPluginSettingsPage, mountPluginSettingsItem } = await import('./settingsPageSurface')
 const { useApp } = await import('../../stores/appStore')
+await import('../../tangu/store/standalone')
 const { hasPageScope } = await import('../store/pageStore')
 
 // 插件文件类型的视图表面:mountBlocks 与 mountNoteView 都从它身上来

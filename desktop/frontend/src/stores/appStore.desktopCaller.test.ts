@@ -27,7 +27,9 @@ vi.mock('../services/http', () => ({
   setUnauthorizedHandler: () => {},
 }))
 
-const { useApp, newSessionDirs, resolveNewSessionWorkspace } = await import('./appStore')
+const { useApp } = await import('./appStore')
+await import('../tangu/store/standalone')
+const { newSessionDirs, resolveNewSessionWorkspace } = await import('../tangu/store/tanguSlice')
 const T = await import('../services/engine/targets')
 const H = await import('../services/engine/health')
 const C = await import('../services/engine/catalog')

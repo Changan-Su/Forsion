@@ -1,11 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentRunEvent, AuthStatusInfo, SessionRecord, UiMessage } from '../types'
 import { DEFAULT_LOCAL_WORKSPACE_KEY, ROOTLESS_WORKSPACE_KEY, sessionWorkspaceKey } from '../types'
-import { useApp, recordToUi, withAmadeusWorkspace, lockSessionMove, unlockSessionMove, newChatModelId, type AppState } from './appStore'
+import { useApp, newChatModelId, type AppState } from './appStore'
+import { withAmadeusWorkspace } from '../../../../tangu-agent/src/contracts/sessionDefaults'
+import { recordToUi, lockSessionMove, unlockSessionMove } from '../tangu/store/tanguSlice'
 import { agentEditing, resetAgentWriteLedger } from './agentWriteLedger'
 import { usePageStore } from '../amadeus/store/pageStore'
 import '../i18n.generated'
 import { translationValues } from '../i18n'
+import '../tangu/store/standalone' // 测试不走 activateTangu:自己装 Tangu 的 store 半身(界面热更新 3c)
 
 // 助手消息身份还原:历史/重载的助手消息按「每条存的 agent_slug」显示真实作者,
 // 否则只能回退到「会话默认 agent」(就是 Christina 被显示成默认 Tangu Arioso 的 bug)。
@@ -573,7 +576,7 @@ describe('appStore.reduceEvent', () => {
 
   // Codex 评审 #1:turn_boundary(SSE)可能抢在 steer POST 响应前到达。
   it('steerAcceptPatch:消息已上屏或 run 已易主 → 不进等待区;↑ 历史始终记', async () => {
-    const { steerAcceptPatch } = await import('./appStore')
+    const { steerAcceptPatch } = await import('../tangu/store/tanguSlice')
     const base = { runningBySession: { s1: 'r1' }, steerPendingBySession: {}, steerSentBySession: {} }
     // 正常:进等待区 + 记历史
     const ok = steerAcceptPatch({ ...base, messagesBySession: {} } as any, 's1', 'r1', { id: 'u9', text: 'hi' })
