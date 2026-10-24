@@ -39,4 +39,12 @@ describe('appStore approval_request reason 白名单', () => {
     expect(approvals()[0].reason).toBeUndefined()
     expect(approvals()[1].reason).toEqual({ kind: 'mode' }) // 未知档位丢掉,kind 照留
   })
+
+  it('previewI18n 清洗后落进审批(卡上按界面语言渲染);畸形的丢掉,preview 照留', () => {
+    emit({ approvalId: 'w1', name: 'publish_web_page', preview: 'Publish a.html …', previewI18n: { key: 'approval.preview.webPublish', vars: { path: 'a.html', name: 'a', slug: 'abc' } } })
+    emit({ approvalId: 'w2', name: 'publish_web_page', preview: 'Publish a.html …', previewI18n: { key: 'approval.approve' } })
+    expect(approvals()[0].previewI18n).toEqual({ key: 'approval.preview.webPublish', vars: { path: 'a.html', name: 'a', slug: 'abc' } })
+    expect(approvals()[1].previewI18n).toBeUndefined()
+    expect(approvals()[1].preview).toBe('Publish a.html …')
+  })
 })

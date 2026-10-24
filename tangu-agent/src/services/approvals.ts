@@ -39,8 +39,8 @@ import { MUSE_AGENT_SLUG, AGENT_MAX_ITERATIONS_MIN, buildAgentDef, getAgent, isV
 import { validateEntryInput } from './agentSchedule.js';
 import { validateTriggerInput } from './museTriggers.js';
 import { describeAppSettingsChange, touchesWorkspaceSetting } from './appSettings.js';
-import { accountActionPreview } from '../tools/builtin/forsionAccount.js';
-import { webPublishPreview } from '../tools/builtin/webPublish.js';
+import { accountActionPreview, accountActionPreviewI18n } from '../tools/builtin/forsionAccount.js';
+import { webPublishPreview, webPublishPreviewI18n } from '../tools/builtin/webPublish.js';
 
 export type ApprovalMode = 'readonly' | 'auto-edit' | 'full-auto' | 'custom';
 
@@ -360,6 +360,15 @@ export function approvalPreview(call: ToolCall, opts: { keptActions?: unknown[] 
   return previewText(rawPreview(call, opts));
 }
 
+/** approvalPreview 的结构化版(只有散文类预览有;命令 / 路径类原样就是对的,不翻)。串值与英文那份同一道 previewText。 */
+export function approvalPreviewI18n(call: ToolCall): ApprovalPreviewI18n | undefined {
+  const args = parseCallArgs(call);
+  const name = call.function.name;
+  const p = name === 'forsion_account_action' ? accountActionPreviewI18n(args) : name === 'publish_web_page' ? webPublishPreviewI18n(args) : undefined;
+  if (!p?.vars) return p;
+  return { key: p.key, vars: Object.fromEntries(Object.entries(p.vars).map(([k, v]) => [k, typeof v === 'number' ? v : previewText(v)])) };
+}
+
 /** approvalPreview 的未净化版本:末尾可能是块(以换行结尾),controlPreview 据此在后面接补充信息。 */
 function rawPreview(call: ToolCall, opts: { keptActions?: unknown[] | null } = {}): string {
   let args: any = {};
@@ -585,12 +594,13 @@ export function requestApproval(
   signal?: AbortSignal,
   reason?: ApprovalReason,
   origin?: RemoteInfo,
+  previewI18n?: ApprovalPreviewI18n,
 ): Promise<ApprovalDecision> {
   // 无人值守 run 没人答:当场拒(gateToolCall 的同名分支只管自己那条路;引擎委派中继 / 外部引擎主循环直调这里)。
   if (isUnattendedRun(runId)) return Promise.resolve({ action: 'reject', rejectReason: UNATTENDED_REJECT_REASON });
-  if (trayRuns.has(runId)) return requestApprovalNow(runId, call, preview, signal, reason, origin);
+  if (trayRuns.has(runId)) return requestApprovalNow(runId, call, preview, signal, reason, origin, previewI18n);
   const tail = approvalQueues.get(runId) || Promise.resolve();
-  const mine = tail.then(() => requestApprovalNow(runId, call, preview, signal, reason, origin));
+  const mine = tail.then(() => requestApprovalNow(runId, call, preview, signal, reason, origin, previewI18n));
   const entry = mine.then(() => undefined, () => undefined);
   approvalQueues.set(runId, entry);
   void entry.then(() => { if (approvalQueues.get(runId) === entry) approvalQueues.delete(runId); });
@@ -604,6 +614,7 @@ function requestApprovalNow(
   signal?: AbortSignal,
   reason?: ApprovalReason,
   origin?: RemoteInfo,
+  previewI18n?: ApprovalPreviewI18n,
 ): Promise<ApprovalDecision> {
   // 中止 ≠ 用户拒绝:按拒绝兑现,但原因写清(主 loop 随后抛 AbortLikeError 不会读到;子代理等其它消费方会)
   if (signal?.aborted) return Promise.resolve({ action: 'reject', rejectReason: ABORTED_REJECT_REASON });
@@ -630,6 +641,7 @@ function requestApprovalNow(
       name: call.function.name,
       arguments: call.function.arguments,
       preview,
+      ...(previewI18n ? { previewI18n } : {}), // 桌面卡按界面语言渲染;旧客户端忽略,照旧显示 preview
       ...(reason ? { reason } : {}), // 旧客户端忽略未知字段;preview 一个字都没动(它是越界警示的唯一载体)
       ...(origin ? { remote: remoteApprovalPayload(origin) } : {}), // 远程污点 run 才带(P1 · K1);旧客户端忽略
       ...(localOnly ? { localOnly: true } : {}), // P1 · K3;旧客户端忽略
@@ -875,6 +887,15 @@ export interface ApprovalReason {
   rule?: string;
   /** 引擎侧**生效**的档位(custom 未命中时是降解后的 base;客户端算不出来) */
   mode?: Exclude<ApprovalMode, 'custom'>;
+}
+
+/**
+ * 散文类预览的结构化版(approval_request.previewI18n):桌面卡按界面语言渲染 `approval.preview.<key>`,
+ * preview 照旧是英文(TUI / 通道 / 代批判官 / 收件箱读它,旧客户端也只认它)。vars 里的串已过 previewText。
+ */
+export interface ApprovalPreviewI18n {
+  key: string;
+  vars?: Record<string, string | number>;
 }
 
 export interface CustomApprovalRules {
@@ -1200,6 +1221,8 @@ export async function gateToolCall(
   const preview = protectedAsk
     ? '⚠ Protected config or credentials · ' + base
     : escalate ? '⚠ Write outside the workspace · ' + base : base;
+  // 带了 ⚠ 前缀的不给结构化版:警示只在 preview 里,卡上换成本地化那句就把它丢了。
+  const previewI18n = preview === base ? approvalPreviewI18n(call) : undefined;
   // 「为什么问你」(B3):保护路径 > 用户自己写的规则 > 越界升级 > 档位本身。
   // 保护路径排最前:它是「总允许在这里不作数、完全通行也要问」的那个理由,卡片据此说清(契约 C6,桌面映射 zh/en 文案)。
   const reason: ApprovalReason = protectedAsk
@@ -1222,7 +1245,7 @@ export async function gateToolCall(
     // 而 H1 的约定是这类调用必须由用户本人点头 → 'agent' 档也按 'queue' 排队进收件箱。
     return deferApproval(runId, call, preview, reason, control ? { ...ctx, approvalDeferral: 'queue' } : ctx);
   }
-  const decided = requestApproval(runId, call, preview, signal, reason, remote).then(async (d): Promise<ApprovalDecision> => {
+  const decided = requestApproval(runId, call, preview, signal, reason, remote, previewI18n).then(async (d): Promise<ApprovalDecision> => {
     if (d.action === 'reject') return d;
     let out: ApprovalDecision = { action: 'approve' };
     if (d.argsOverride) {

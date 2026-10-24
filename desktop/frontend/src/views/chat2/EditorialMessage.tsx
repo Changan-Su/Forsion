@@ -72,7 +72,7 @@ import { MuseApprovalLine, MuseTodoCards, MuseTodoTraces, ProactiveMark, isProac
 import { CHILD_UPDATE_OPEN, ChildUpdateLine, ForkBlock, childIdsOf } from './ChildSessions'
 import { APPROVAL_UPDATE_OPEN, INQUIRY_UPDATE_OPEN, approvalForCall, parseApprovalUpdate, parseInquiryUpdate, pickPlanInquiry, type ApprovalOutcome } from './approvalQueue'
 import { isRemoteApprover, wasDecidedHere } from '../../components/ApprovalCard'
-import { answeredByText } from '../../approvalReason'
+import { answeredByText, approvalPreviewText } from '../../approvalReason'
 import { refForSession, targetForSession, useSessionHostName } from '../../services/engine/targets'
 import { AttachmentTile } from '../../components/AttachmentTile'
 import { UserFold } from './UserFold'
@@ -363,6 +363,14 @@ function ApprovalUpdateBy({ sessionId, callId, status }: { sessionId?: string; c
   return <div className="t2-apv-update-by" data-answered-by>{t(status === 'rejected' ? 'chat.approval.update.byRejected' : 'chat.approval.update.byApproved', { where })}</div>
 }
 
+/** 结局行里的预览:原审批带 previewI18n(账号动作 / 发布网页)→ 与审批卡同一句、按界面语言;否则回灌行里的英文摘要。 */
+function ApprovalUpdatePreview({ sessionId, callId, preview }: { sessionId?: string; callId: string; preview: string }) {
+  const { t } = useI18n()
+  const req = useApp((s) => (sessionId ? approvalForCall(s.messagesBySession[sessionId], callId) : undefined))
+  const text = req?.previewI18n ? approvalPreviewText(req, t as (k: string, v?: Record<string, unknown>) => string) : preview
+  return <span className="t2-apv-update-preview" title={text}>{text}</span>
+}
+
 /** 「插入笔记」(G3-08):一篇 v4 笔记都没开 → 不出现;开着的全是只读 / 锁定 → aria-disabled + 说明 —— 不用 disabled:
  *  手机上没有悬停,点一下得有人告诉他为什么不行(点了走 onInsert,insertReplyToNote 自己说明)。 */
 function InsertNoteButton({ onInsert }: { onInsert: () => void }) {
@@ -489,7 +497,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
               <div className="t2-apv-update-row" data-status={r.status}>
                 {r.status === 'approved' ? <CircleCheck size={12} /> : <CircleX size={12} />}
                 <span className="t2-apv-update-what">{t(UPDATE_KEY[r.status], { name: r.name })}</span>
-                <span className="t2-apv-update-preview" title={r.preview}>{r.preview}</span>
+                <ApprovalUpdatePreview sessionId={runSid} callId={r.callId} preview={r.preview} />
               </div>
               <ApprovalUpdateBy sessionId={runSid} callId={r.callId} status={r.status} />
             </Fragment>

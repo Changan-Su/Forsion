@@ -126,3 +126,20 @@ describe('<approval_update> 结局行 ×「在哪批的」(M1B)', () => {
     }
   })
 })
+
+describe('<approval_update> 结局行的预览跟随界面语言', () => {
+  it('原审批带 previewI18n → 与审批卡同一句(zh);不带 → 回灌行里的英文摘要', async () => {
+    const content = '<approval_update>\nThe user has decided on tool calls that were waiting for approval:\n\n' +
+      '[approved] publish_web_page (call c-w) — Publish a.html as a Forsion web page "a" (link name: abc).\nIt has run.\n\n' +
+      '[approved] run_bash (call c-b) — $ ls\nIt has run.\n</approval_update>'
+    const msg = seed([
+      apv('w1', 'c-w', { name: 'publish_web_page', preview: 'Publish a.html …', previewI18n: { key: 'approval.preview.webPublish', vars: { path: 'a.html', name: 'a', slug: 'abc' } } }),
+      apv('b1', 'c-b', {}),
+    ], content)
+    await renderMsg(msg)
+    const previews = [...host.querySelectorAll('.t2-apv-update-preview')].map((e) => e.textContent || '')
+    expect(previews[0]).toContain('把 a.html 发布为 Forsion 网页「a」')
+    expect(previews[1]).toBe('$ ls')
+  })
+})
+
