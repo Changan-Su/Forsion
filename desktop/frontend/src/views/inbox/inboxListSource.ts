@@ -26,7 +26,7 @@ import { translate } from '../../i18n'
 import { formatListTime } from '../../format/time'
 import { useApp } from '../../stores/appStore'
 import { homeAgentAvatars, subscribeHomeAgents } from '../../stores/homeCatalog'
-import { useInbox, isAutomationSender, senderOf, parseUtc, type InboxMessage } from '../../stores/inboxStore'
+import { useInbox, inboxDeleteConfirm, isAutomationSender, senderOf, parseUtc, type InboxMessage } from '../../stores/inboxStore'
 import { INBOX_WORKSPACE_MODE } from '../workspaceMode'
 
 // 源身份单源:从工作区模式串 `plugin:<pid>:<srcId>` 拆出来 —— Space 默认档 / workspaceSource / 注册三处永远一致。
@@ -190,7 +190,7 @@ export const inboxListSource: ListSourceContribution = {
       // 图标给手机上左滑出来的圆钮用(只有图标,不带字):成对的动作各用各的
       { id: 'read', icon: m.read_at ? 'mail' : 'mail-open', label: translate(m.read_at ? 'inbox.action.markUnread' : 'inbox.action.markRead'), run: () => st.markRead(m.id, !m.read_at) },
       { id: 'archive', icon: m.archived_at ? 'unarchive' : 'archive', label: translate(m.archived_at ? 'inbox.action.unarchive' : 'inbox.action.archive'), run: () => st.markArchived(m.id, !m.archived_at) },
-      { id: 'delete', icon: 'trash', label: translate('inbox.action.delete'), danger: true, run: () => { if (window.confirm(translate('inbox.deleteConfirm', { title: m.title }))) st.remove(m.id) } },
+      { id: 'delete', icon: 'trash', label: translate('inbox.action.delete'), danger: true, run: () => { if (window.confirm(inboxDeleteConfirm(m))) st.remove(m.id) } },
     ]
   },
 }

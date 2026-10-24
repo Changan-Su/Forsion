@@ -24,6 +24,9 @@ vi.mock('../src/services/agentLoop.js', () => ({ enqueueRun: vi.fn() }));
 // 观测「叫醒 Muse」:其余导出照旧(pendingApprovals 对 muse.js 是动态 import,真模块本来就会被加载)
 const kickMuse = vi.hoisted(() => vi.fn());
 vi.mock('../src/services/muse.js', async (importOriginal) => ({ ...(await importOriginal<any>()), kickMuse }));
+// 观测「转发到通道」(测试里没配通道,真模块本来就什么都不发)
+const forwardInboxToChannels = vi.hoisted(() => vi.fn());
+vi.mock('../src/channels/forward.js', async (importOriginal) => ({ ...(await importOriginal<any>()), forwardInboxToChannels }));
 
 const USER = 'u1';
 let home: string;
@@ -726,5 +729,93 @@ describe('撤回旧行:LOG 带工具与摘要,Muse 的行叫醒 Muse(四轮复�
     await insertLegacy('old-muse-2', 'muse', 'write_file', JSON.parse(c.function.arguments), stored)
     expect(await decideApproval('old-muse-2', USER, 'approve', 'user')).toMatchObject({ ok: false, error: LEGACY_PREVIEW_REFUSAL })
     expect(kickMuse).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('同一条请求被再次提出:删掉或已读的审批信回来(借鉴 Comma §2.9,10-24)', () => {
+  const ctx = (agentSlug = 'tangu') => ({ sessionId: 'S', execMode: 'host', approvalMode: 'auto-edit' as const, cwd: work, userId: USER, agentSlug, approvalDeferral: 'queue' as const })
+  const ask = (agentSlug?: string) => gateToolCall('R1', call('run_bash', { command: 'git push --force' }), ctx(agentSlug))
+  const letters = () => query<any[]>(`SELECT id, title, body, read_at, archived_at, deleted_at FROM inbox_messages WHERE user_id = ? AND body LIKE '%forsion-approval%' ORDER BY created_at, id`, [USER])
+  const shown = async () => (await letters()).filter((m) => !m.deleted_at)
+  const T = '2026-10-24 10:00:00'
+  const set = (id: string, cols: string) => query(`UPDATE inbox_messages SET ${cols} WHERE id = ?`, [T, ...(cols.includes(',') ? [T] : []), id])
+  beforeEach(() => { forwardInboxToChannels.mockClear() })
+
+  it('还开着且未读:再提不发新信', async () => {
+    await ask(); await ask()
+    expect(await letters()).toHaveLength(1)
+  })
+
+  it('删掉之后再提:回来一封新的未读信,指向同一条请求、不转发通道;回来的那封没读之前不再发', async () => {
+    await ask()
+    expect(forwardInboxToChannels).toHaveBeenCalledTimes(1) // 第一次入队照旧转发
+    const [first] = await letters()
+    await set(first.id, 'deleted_at = ?')
+    await ask()
+    const [back] = await shown()
+    expect(back.id).not.toBe(first.id)
+    expect(back.read_at).toBeNull()
+    expect(back.title).toBe(first.title)
+    const [row] = await listApprovals(USER, 'pending')
+    expect(back.body).toContain(`{"id":"${row.id}"}`)
+    expect(forwardInboxToChannels).toHaveBeenCalledTimes(1)
+    await ask()
+    expect(await letters()).toHaveLength(2)
+  })
+
+  it('已读之后再提:旧信软删、新的未读信顶上来,列表里只剩一封', async () => {
+    await ask()
+    const [first] = await letters()
+    await set(first.id, 'read_at = ?')
+    await ask()
+    expect((await letters()).find((m) => m.id === first.id)!.deleted_at).toBeTruthy()
+    const now = await shown()
+    expect(now).toHaveLength(1)
+    expect(now[0].read_at).toBeNull()
+  })
+
+  it('归档的不动(已读的归档也一样);删掉的归档信照样回来', async () => {
+    await ask()
+    const [first] = await letters()
+    await set(first.id, 'read_at = ?, archived_at = ?')
+    await ask()
+    expect(await letters()).toHaveLength(1)
+    await set(first.id, 'deleted_at = ?')
+    await ask()
+    expect(await shown()).toHaveLength(1)
+  })
+
+  it('Muse 私聊不可用时退回的收件箱信(桩环境就是这样)照同样的规矩回来;找不到信的不补发', async () => {
+    await ask('muse')
+    const [first] = await letters()
+    expect(first).toBeTruthy()
+    await set(first.id, 'deleted_at = ?')
+    await ask('muse')
+    expect(await shown()).toHaveLength(1)
+    await query(`DELETE FROM inbox_messages WHERE user_id = ?`, [USER])
+    await ask()
+    expect(await letters()).toHaveLength(0)
+  })
+
+  it('上次发了新信却没删成旧信(两封都看得见):下一次重提把已读的旧信收拾掉,不再发第三封', async () => {
+    await ask()
+    const [first] = await letters()
+    await query(`INSERT INTO inbox_messages (id, user_id, title, body, sender_kind, sender_id) SELECT 'dup', user_id, title, body, sender_kind, sender_id FROM inbox_messages WHERE id = ?`, [first.id])
+    await set(first.id, 'read_at = ?')
+    await ask()
+    expect((await letters()).map((m) => `${m.id === first.id ? 'old' : m.id}:${m.deleted_at ? 'gone' : 'shown'}`).sort()).toEqual(['dup:shown', 'old:gone'])
+  })
+
+  it('发不出去(小时上限):已读的旧信留着,LOG 留痕;请求本身照旧是 pending', async () => {
+    await ask()
+    const [first] = await letters()
+    await set(first.id, 'read_at = ?')
+    for (let i = 0; i < 20; i++) await query(`INSERT INTO inbox_messages (id, user_id, title, body, sender_kind, sender_id) VALUES (?, ?, 'x', '', 'agent', 'tangu')`, [`fill-${i}`, USER])
+    await ask()
+    const now = await letters()
+    expect(now).toHaveLength(1)
+    expect(now[0].deleted_at).toBeNull()
+    expect(appendedLogs.some((l) => l.includes('was asked again, but its inbox message could not be brought back'))).toBe(true)
+    expect(await countPendingApprovals(USER)).toBe(1)
   })
 })
