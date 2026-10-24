@@ -161,6 +161,8 @@ View 内需要一个完整的常驻对话时（例如创作类 Space 的右栏�
 
 按钮和图标的悬停提示用宿主那一个：`ctx.ui?.attachTooltip?.(el, content, { side })`，300ms 才出、相邻接力不重播、键盘聚焦立刻出，和宿主自己的按钮一个样子；`content` 是一行或几行文字，句柄 `{ update, dispose }`，插件禁用时宿主统一收。图标按钮留 `aria-label`、去掉 `title`；旧宿主没有这个方法就照旧 `title`。见 [可复用界面组件](./ui-components.md)。Hover hints on buttons and icons use the host tooltip: `ctx.ui?.attachTooltip?.(el, content, { side })` — 300ms delay, neighbours hand the open tooltip over without replaying it, keyboard focus shows it at once, the same look as the host's own buttons. `content` is one or several lines; the handle has `update` and `dispose`, and the host disposes it on disable. Keep `aria-label` on icon buttons and drop their `title`; older hosts lack the method, so fall back to `title` there.
 
+拖动排序、拖进去的落点提示也用宿主那一个：`ctx.ui?.dropIndicator?.()` 拿到 `{ line, zone, hide, dispose }`，传视口坐标；换落点原地淡出淡入、颜色跟主题，给 `key` 免得滚动被当成换落点，插件禁用时宿主统一收；旧宿主没有就照旧自己画。见 [可复用界面组件](./ui-components.md)。Drag-to-reorder and drag-into indicators use the host's too: `ctx.ui?.dropIndicator?.()` returns `{ line, zone, hide, dispose }` taking viewport coordinates; it fades between drop points in the theme's colour, a `key` keeps a scroll from counting as a new drop point, and the host disposes it on disable. Older hosts lack it, so draw your own there.
+
 选中文字后浮出的那一条（划线条）对插件开放两半。一是加动作：`ctx.registerSelectionAction({ id, title, run })` 的动作列在条上的「⋯ → 插件」里，`run(cx)` 返回的 markdown 进宿主的结果卡（笔记里用户点「替换 / 插入下方」才写，别处只读）。不写 `scope` 只在笔记里出现；`scope: 'all'` 出现在所有有这一条的视图（笔记、聊天、接入了的插件视图），`'own'` 只在自己的视图，数组点名视图；`when({ view, editable, length })` 按视图和字数过滤，`output: 'none'` 表示结果由插件自己处理。二是让自己的视图用上这一条：`ctx.ui?.mountSelectionBar?.(root, { tools, source, ask, watch })`，宿主给「问 Tangu」「翻译」「⋯」，插件声明自己的工具（图标钮或颜色点）；不接就不出。这两半在 2.13.3 之后的桌面版本里才有：更早的版本只在笔记里列动作（「AI ▾ → 插件」），没有 `mountSelectionBar`，先探测、保留自己的菜单。见 [可复用界面组件](./ui-components.md)。The selection bar — the strip that appears over selected text — is open to plugins in two ways. Adding actions: entries from `ctx.registerSelectionAction({ id, title, run })` are listed behind "⋯" under "Plugins", and the markdown `run(cx)` returns goes to the host's result card (in a note nothing is written until the user picks Replace or Insert below; elsewhere the card is read-only). Without `scope` an action appears in notes only; `scope: 'all'` lists it in every view that shows the bar (notes, chat, plugin views that opted in), `'own'` only in the plugin's own views, and an array names views. `when({ view, editable, length })` filters by view and length, and `output: 'none'` means the plugin handles the result itself. Using the bar in your own view: `ctx.ui?.mountSelectionBar?.(root, { tools, source, ask, watch })` gives the view Ask Tangu, Translate and "⋯" from the host next to the tools the plugin declares (icon buttons or colour swatches); a view that does not call it gets no bar. Both exist in desktop versions after 2.13.3. Earlier versions list actions in notes only (under "AI ▾ → Plugins") and have no `mountSelectionBar`, so feature-detect and keep your own menu there. See [Reusable UI components](./ui-components.md).
 
 
@@ -314,6 +316,18 @@ Since 2026-10-18 (added with the cloud drive in Forsion Extend's Penzor Cloud):
 
 - `ctx.app.setSpaceProgress?(spaceId, progress)` draws a progress ring around your own Space's icon in the Ribbon. It only accepts a Space bundled with your plugin; for anyone else's or a built-in Space it returns `false`. `progress` is `0`–`1`; pass `null` to remove it. The host draws whole percents, so frequent updates don't re-render the Ribbon. An unread badge on that Space takes precedence, and the host clears the ring when your plugin is disabled. A Space tucked into a Ribbon folder or the "⋯" overflow shows no ring.
 - The list icon vocabulary gains `hard-drive` for drive and storage rows. Older hosts lack it: use whether `ctx.app.setSpaceProgress` exists to tell, and fall back to `archive`.
+
+### 蓬洲云的图标 / Penzor Cloud's icon
+
+2026-10-23 起：
+
+- `space.json` 的 `icon` 图标库加了 `cloud`，全表 30 个见 forsion-plugin 技能的 `samples/forsion-sample-space/README.md`。旧宿主不认，回落方块。
+- 列表图标词表加了 `penzor`：蓬洲云自己的图标（祥云），给蓬洲云的视图用，别的插件别拿它表示别的东西。旧宿主不认，退兜底图标。
+
+Since 2026-10-23:
+
+- The `icon` library for `space.json` gains `cloud`; the full list of 30 is in the forsion-plugin skill's `samples/forsion-sample-space/README.md`. Older hosts don't know it and fall back to the boxes icon.
+- The list icon vocabulary gains `penzor`, Penzor Cloud's own icon (a ruyi cloud), for Penzor Cloud's views. Don't use it to mean anything else. Older hosts fall back to the default icon.
 
 ### 服务器管理用到的接缝 / Seams used by Server Admin
 

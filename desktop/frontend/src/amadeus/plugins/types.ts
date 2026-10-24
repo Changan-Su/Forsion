@@ -1577,6 +1577,21 @@ export interface PluginContext {
      *  the host also disposes every tooltip on disable / reload. Feature-detect on older hosts (`ctx.ui?.attachTooltip`)
      *  and fall back to `title` there. */
     attachTooltip?(el: HTMLElement, content: string | string[], opts?: { side?: 'top' | 'bottom' | 'left' | 'right' }): { update(content: string | string[]): void; dispose(): void }
+    /** The host drop indicator (2026-10-24+) for drag-to-reorder and drag-into in your own view, instead of drawing
+     *  your own line: the same line / outline as the host's editor, sidebar and tab bar, in the theme's colour.
+     *  Moving to another drop point fades the old one out and the new one in where it is; the same drop point
+     *  moving with a scroll just follows. All coordinates are viewport px (clientX/Y, getBoundingClientRect):
+     *  `line({ x, y, w })` is a horizontal line whose top edge is at `y`; `line({ x, y, h }, { axis: 'v' })` a vertical
+     *  one; `zone({ x, y, w, h })` the outline for "drop into this". Pass `key` (your row / slot id) so a scroll is
+     *  not mistaken for a new drop point. `hide()` on dragleave / drop / dragend; `dispose()` when your view goes
+     *  away — the host also disposes it on disable / reload. `opts.host` defaults to `document.body`.
+     *  Feature-detect on older hosts: `ctx.ui?.dropIndicator`. */
+    dropIndicator?(opts?: { host?: HTMLElement }): {
+      line(rect: { x: number; y: number; w?: number; h?: number }, opts?: { key?: string; axis?: 'h' | 'v' }): void
+      zone(rect: { x: number; y: number; w: number; h: number }, opts?: { key?: string }): void
+      hide(): void
+      dispose(): void
+    }
     /** A transparent layer of the host whiteboard over your own content (2026-10-10+): the same engine,
      *  pens and stroke feel as a `.excalidraw.md` board, without its chrome. See PluginBoardOptions.
      *  Feature-detect on older hosts: `ctx.ui?.mountBoard`. */

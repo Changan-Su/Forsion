@@ -4289,7 +4289,8 @@ body.amx-marquee-active * {
 .am-app .amx-canvas .amx-ucard { box-sizing: border-box; }
 /* 块拖拽的落点指示:画布模式下换成「目标卡描边」(那条横线在绝对定位的卡片间必然撒谎,
    见 blockLayer 的 executeDropInCanvas)。outline 不进布局,连线端点不会因此跳。 */
-.am-app .amx-canvas .amx-ucard.amx-droptarget { outline: 2px solid var(--signal-line); outline-offset: 2px; }
+.am-app .amx-canvas .amx-ucard { outline: 2px solid transparent; outline-offset: 2px; transition: outline-color var(--lcl-drop-fade); } /* 常驻透明,亮起 / 熄灭只换颜色 */
+.am-app .amx-canvas .amx-ucard.amx-droptarget { outline-color: var(--signal-line); }
 
 /* 顶栏胶囊的插槽与锚(2026-08-18 portal 化,见 unified/CanvasModeSeg 顶注)。
    插槽是顶栏里的一个空 span:里头没有胶囊时不许占位、也不许把 flex 间距撑开。
