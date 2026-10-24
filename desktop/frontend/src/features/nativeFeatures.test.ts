@@ -93,7 +93,7 @@ describe('native package contribution boundary', () => {
   // 界面热更新 3b:Tangu 唯一的入口。探针的门比 Tangu 宽 —— automation-only 也要 ctx.tangu,只是没有对话那几块
   it('activateTangu installs the probe for Tangu or automation, and hands askInChat over only with Tangu', () => {
     const probes: Record<string, unknown>[] = []
-    const host = { installProbe: (p: Record<string, unknown>) => { probes.push(p) } }
+    const host = { installSlice: () => {}, installProbe: (p: Record<string, unknown>) => { probes.push(p) } }
     activateTangu(host)
     expect(probes).toEqual([])
     expect(state.views.has('chat')).toBe(false)

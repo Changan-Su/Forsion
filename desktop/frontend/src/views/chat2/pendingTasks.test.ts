@@ -16,7 +16,8 @@ const card = (title: string, extra = '') => '```forsion-task\ntitle: ' + title +
 const msg = (id: string, content: string, over: Partial<UiMessage> = {}): UiMessage =>
   ({ id, role: 'assistant', content, status: 'done', timestamp: Date.now(), ...over }) as UiMessage
 
-beforeEach(() => { localStorage.clear(); vi.resetModules() })
+// resetModules 之后动态 import 拿到的是新的 useApp:每次都重装 Tangu 的 store 半身(界面热更新 3c)
+beforeEach(async () => { localStorage.clear(); vi.resetModules(); await import('../../tangu/store/standalone') })
 
 it('① 只收还在等你选的卡', async () => {
   const { pendingTaskCardsOf } = await import('./pendingTasks')

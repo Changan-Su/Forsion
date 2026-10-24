@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { useApp } from './appStore'
+import '../tangu/store/standalone' // 测试不走 activateTangu:自己装 Tangu 的 store 半身(界面热更新 3c)
 
 // C-5:后台 LLM 调用(压缩/子代理/脑暴/判官)发的 usage 事件带 phase,其 prompt 是那次后台调用
 // 自己的一小段上下文。没有这道闸,上下文进度条会在每次 delegate/脑暴/压缩时塌成子代理的体量。

@@ -30,6 +30,11 @@ import { stripPageBasename } from '@amadeus-shared/compiler/names'
 import { buildTree, mergeFdNotes, pathTo, subtreeAt, type TreeNode } from '@amadeus/lib/pageTree'
 import { ShareMarkdown } from './shareMarkdown'
 import type { ShareTree } from './amadeus/shareBridge'
+import { installTanguSlice } from '@/stores/appStore'
+import { TANGU_SLICE } from '@tangu/ui/tangu/store/tanguSlice'
+
+// 不走 installEngine:自己装 Tangu 的 store 半身(界面热更新 3c)
+installTanguSlice(TANGU_SLICE)
 
 registerMessages({
   'shareview.readOnly': { zh: '只读', en: 'Read-only' },

@@ -3,6 +3,7 @@ import { useInbox, inboxDeleteConfirm, senderOf, type InboxMessage } from '../..
 import { inboxListSource as src, inboxSnippet } from './inboxListSource'
 import { PLUGIN_ICONS } from '@amadeus/components/icons'
 import { hiddenByFilter } from '@amadeus/plugins/listTree'
+import '../../tangu/store/standalone' // 测试不走 activateTangu:自己装 Tangu 的 store 半身(界面热更新 3c)
 
 const msg = (id: string, extra: Partial<InboxMessage> = {}): InboxMessage => ({
   id, title: `标题${id}`, body: '', sender_kind: 'agent', sender_id: 'muse', origin_broadcast_id: null,

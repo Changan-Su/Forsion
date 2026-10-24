@@ -5,6 +5,7 @@ import { useApp } from '../../stores/appStore'
 import { useNotifications } from '../../stores/notificationStore'
 import * as backend from '../../services/backendService'
 import type { MuseTriggerInfo } from '../../types'
+import '../../tangu/store/standalone' // 测试不走 activateTangu:自己装 Tangu 的 store 半身(界面热更新 3c)
 
 const oldRefresh = useAutomation.getState().refresh
 const trigger: MuseTriggerInfo = {
