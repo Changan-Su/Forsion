@@ -62,9 +62,11 @@ function paint(now: number): void {
   raf = 0
   const hs = ensureHighlights()
   hs.forEach((h) => h.clear())
+  let pending = false
   for (const root of roots) {
-    root.runs = root.runs.filter((r) => now < r.at + MAX_STAGGER + DURATION)
+    root.runs = reducedMotion() ? [] : root.runs.filter((r) => now < r.at + MAX_STAGGER + DURATION)
     if (!root.runs.length) { if (!root.live) roots.delete(root); continue }
+    pending = true
     const nodes = textNodes(root.el)
     // 新字一律在尾巴上:从后往前数够 220 个就停,更早的那些直接算落定
     let budget = MAX_CHARS
@@ -100,7 +102,8 @@ function paint(now: number): void {
       k = j + 1
     }
   }
-  if (roots.size) raf = requestAnimationFrame(paint)
+  // 没有在动的字就停(工具跑很久时回答还挂着,别空转);新字到了 kick() 再起
+  if (pending) raf = requestAnimationFrame(paint)
 }
 
 const kick = (): void => { if (!raf) raf = requestAnimationFrame(paint) }
@@ -120,7 +123,7 @@ export function useStreamReveal(ref: RefObject<HTMLElement | null>, streaming: b
     const r = root.current
     if (!r) return
     const len = textLength(r.el)
-    if (len > r.seen) { r.runs.push({ start: r.seen, end: len, at: performance.now() }); kick() }
+    if (len > r.seen && !reducedMotion()) { r.runs.push({ start: r.seen, end: len, at: performance.now() }); kick() }
     else if (len < r.seen) r.runs = r.runs.filter((run) => run.start < len).map((run) => ({ ...run, end: Math.min(run.end, len) }))
     r.seen = len
   })
