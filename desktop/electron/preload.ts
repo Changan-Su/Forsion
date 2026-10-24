@@ -335,11 +335,13 @@ const api = {
     ipcRenderer.invoke('fs:mkdir', parentDir, name),
   trashHostPath: (p: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('fs:trash', p),
   revealHostPath: (p: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('fs:reveal', p),
-  /** Forsion Clip 手动安装:把随包的扩展复制到用户找得到的位置(版本变了才覆盖)/ 替用户打开 Chrome 扩展页(mac;别处复制地址)。拖拽走 startHostDrag。 */
+  /** Forsion Clip 手动安装:把随包的扩展复制到用户找得到的位置(版本变了才覆盖)/ 替用户打开 Chrome / Edge 扩展页
+   *  (mac 直达;Windows 开新窗口 + 复制地址;别处复制地址)。拖拽走 startHostDrag。 */
   clipExtension: {
-    /** update=false:只补缺,不动已有副本(Chrome 正从那里加载);用户要(重新)装的那一下才传 true 换成随包版本。 */
+    /** update=false:只补缺,不动已有副本(浏览器正从那里加载);用户要(重新)装的那一下才传 true 换成随包版本。 */
     prepare: (update?: boolean): Promise<{ dir: string; version: string; bundled: string } | { error: string }> => ipcRenderer.invoke('clipExt:prepare', update === true),
-    openChromeExtensions: (): Promise<{ ok: true } | { ok: false; copied: true; reason: 'no-chrome' | 'unsupported' }> => ipcRenderer.invoke('clipExt:openChrome'),
+    browsers: (): Promise<Array<'chrome' | 'edge'>> => ipcRenderer.invoke('clipExt:browsers'),
+    openExtensionsPage: (browser: 'chrome' | 'edge'): Promise<{ ok: true } | { ok: false; copied: true; reason: 'launched' | 'not-found' | 'unsupported' }> => ipcRenderer.invoke('clipExt:openExtensions', browser),
   },
   /** 原生拖出:在元素 onDragStart 里 e.preventDefault() 后调用,主进程接管系统级拖拽。 */
   startHostDrag: (filePath: string): void => ipcRenderer.send('fs:startDrag', filePath),

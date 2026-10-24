@@ -1,4 +1,5 @@
-/** Genuine Electron folder drag -> headed Chrome and its native folder picker.
+/** Genuine Electron folder drag -> headed Chrome / Edge, Chrome's native folder picker, and the
+ * open-extensions buttons launching the installed browsers.
  * All desktop input, clipboard and Explorer operations are CI-only. */
 const assert = require('node:assert/strict')
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path')
@@ -87,11 +88,31 @@ async function main() {
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(copyDir,'manifest.json'),'utf8')),JSON.parse(fs.readFileSync(sourceManifest,'utf8')))
     check('the copied manifest matches the real runtime bundle',true)
     check('settings displays exactly the prepared copy path', (await settings.locator('.settings-browser-ext-panel').innerText()).includes(copyDir))
-    await nativeClick(settings.getByTestId('browser-extension-open-chrome'))
-    await until('the fallback address reaches the clipboard',async()=>await app.evaluate(({clipboard})=>clipboard.readText())==='chrome://extensions')
-    check('Windows fallback copies the real chrome extensions address', await app.evaluate(({ clipboard }) => clipboard.readText()) === 'chrome://extensions')
-    await settings.getByTestId('browser-extension-open-note').waitFor()
-    check('the fallback prompt is visible', /Copied the address\. Paste it into the Chrome address bar\.|已复制扩展页地址/.test(await settings.getByTestId('browser-extension-open-note').innerText()))
+    // Windows browsers drop chrome:// / edge:// from the command line, so the
+    // buttons open a new window of the installed browser and copy the address.
+    // The runner image has both; prove the real process gets a visible window,
+    // then close it so it cannot cover the drag target below.
+    // Get-Process with no match leaves $? false, so Windows PowerShell exits 1
+    // even with SilentlyContinue (CI 40008673200). These are cleanup / queries
+    // whose output is checked separately; end with exit 0.
+    const ps = async command => (await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `${command}; exit 0`], { windowsHide: true, timeout: 30000 })).stdout.trim()
+    const userBrowsers = name => `Get-Process -Name ${name} -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path -notmatch 'ms-playwright' }`
+    check('settings offers both installed browsers', await settings.getByTestId('browser-extension-open-chrome').isVisible() && await settings.getByTestId('browser-extension-open-edge').isVisible())
+    for (const [browserKey, processName, label] of [['chrome', 'chrome', 'Chrome'], ['edge', 'msedge', 'Edge']]) {
+      await ps(`${userBrowsers(processName)} | Stop-Process -Force`)
+      await nativeClick(settings.getByTestId(`browser-extension-open-${browserKey}`))
+      const url = `${browserKey}://extensions`
+      await until(`the ${label} extensions address reaches the clipboard`,async()=>await app.evaluate(({clipboard})=>clipboard.readText())===url)
+      check(`Windows ${label} button copies the real extensions address`, await app.evaluate(({ clipboard }) => clipboard.readText()) === url)
+      await until(`the ${label} paste prompt is visible`,async()=>new RegExp(`Opened a new ${label} window and copied ${url}`).test(await settings.getByTestId('browser-extension-open-note').innerText().catch(()=>'')))
+      check(`the ${label} paste prompt names the browser, the address and Ctrl+L`, /Ctrl\+L, then Ctrl\+V and Enter/.test(await settings.getByTestId('browser-extension-open-note').innerText()))
+      let windows=[]
+      for(let i=0;i<60&&!windows.length;i++){ windows=JSON.parse(await ps(`ConvertTo-Json -Compress -InputObject @(${userBrowsers(processName)} | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object Id, Path, MainWindowTitle)`)||'[]'); if(!windows.length) await sleep(500) }
+      fs.writeFileSync(path.join(output,`open-${browserKey}.json`),JSON.stringify(windows,null,2))
+      await desktop('capture',['-Path',path.join(output,`open-${browserKey}.png`)])
+      check(`the ${label} button launches the installed ${label} with a visible window`, windows.length>0, windows)
+      await ps(`${userBrowsers(processName)} | Stop-Process -Force`)
+    }
     await nativeClick(settings.getByRole('button', { name: /^(Copy path|复制路径)$/ }))
     await until('Copy path reaches the real clipboard',async()=>await app.evaluate(({clipboard})=>clipboard.readText())===copyDir)
     check('Copy path writes the exact extension directory', await app.evaluate(({ clipboard }) => clipboard.readText()) === copyDir)
@@ -129,7 +150,9 @@ async function main() {
       globalThis.__clipNativeDragRequests=[]
       ipcMain.on('fs:startDrag',(_event,file)=>globalThis.__clipNativeDragRequests.push(file))
     })
-    const info = () => page.evaluate(() => chrome.developerPrivate.getExtensionsInfo({includeDisabled:true,includeTerminated:true}))
+    // Callback form works on both Chrome's and Edge's extensions pages.
+    const info = () => page.evaluate(() => new Promise(resolve => chrome.developerPrivate.getExtensionsInfo({includeDisabled:true,includeTerminated:true}, resolve)))
+    let browserName = 'Chrome'
     const dev = async enabled => {
       await page.bringToFront()
       const toggle=page.locator('extensions-toolbar').locator('#devMode')
@@ -164,8 +187,8 @@ async function main() {
       // Chromium refuses dragover with developer mode off, so the OS cannot
       // deliver an accepted drop. Observe trusted Files input without changing
       // that decision; filenames become readable only on an accepted drop.
-      check('each native folder drag is received by Chrome',events.some(event=>['dragenter','dragover'].includes(event.type)&&event.trusted&&event.types.includes('Files'))||(!accepted&&directoryTabs.length===1),{events,directoryTabs:directoryTabs.map(tab=>tab.url())})
-      if(accepted) check('enabled developer mode accepts the actual folder drop',events.some(event=>event.type==='drop'&&event.trusted&&event.types.includes('Files')&&event.names.includes(path.basename(copyDir))),events)
+      check(`each native folder drag is received by ${browserName}`,events.some(event=>['dragenter','dragover'].includes(event.type)&&event.trusted&&event.types.includes('Files'))||(!accepted&&directoryTabs.length===1),{events,directoryTabs:directoryTabs.map(tab=>tab.url())})
+      if(accepted) check(`enabled ${browserName} developer mode accepts the actual folder drop`,events.some(event=>event.type==='drop'&&event.trusted&&event.types.includes('Files')&&event.names.includes(path.basename(copyDir))),events)
       if(!accepted&&directoryTabs.length) {
         fs.writeFileSync(path.join(output,'developer-off-behavior.json'),JSON.stringify({installed:(await info()).some(extension=>extension.id===ID),behavior:'Chrome opens the exact dropped directory as a file tab',urls:directoryTabs.map(tab=>tab.url())},null,2))
         await directoryTabs[0].screenshot({path:path.join(output,'developer-off-directory.png')})
@@ -206,8 +229,42 @@ async function main() {
     for(let i=0;i<30;i++){ installed=(await info()).find(e=>e.id===ID);if(installed)break;await sleep(300) }
     check('native Load unpacked folder picker independently installs the copy',installed?.location==='UNPACKED' && installed?.state==='ENABLED' && sameCopy(installed?.path),installed)
     await page.screenshot({path:path.join(output,'native-picker-installed.png')})
+    // Edge installs the same unpacked folder (same key-derived ID). Its own
+    // extensions page attaches the drop handler only in developer mode, and
+    // wraps the whole page (display: contents), so the same drop point works.
+    stage('launch Edge')
+    await browser.close()
+    browserName = 'Edge'
+    browser = await chromium.launchPersistentContext(path.join(home, 'edge-drag'), { channel: 'msedge', headless: false, viewport: null, locale: 'en-US', ignoreDefaultArgs: ['--disable-extensions'],
+      args: ['--lang=en-US', '--no-first-run', '--no-default-browser-check', '--proxy-server=http://127.0.0.1:9', '--proxy-bypass-list=<-loopback>', `--window-position=${work.x+work.width-chromeWidth},${work.y}`, `--window-size=${chromeWidth},${work.height}`] })
+    page = browser.pages()[0]; await page.goto('edge://extensions'); await observeDrops()
+    fs.writeFileSync(path.join(output,'edge.json'),JSON.stringify({version:browser.browser()?.version(),url:page.url()},null,2))
+    check('Edge starts without Clip',!(await info()).some(e=>e.id===ID))
+    // At this width Edge folds the left sidebar (where its switch lives) into a
+    // drawer; flip the real profile setting and require the page to react.
+    await page.evaluate(()=>new Promise(resolve=>chrome.developerPrivate.updateProfileConfiguration({inDeveloperMode:true},resolve)))
+    // Edge builds this page from Fluent web components whose button role is
+    // invisible to Playwright's getByRole (it finds no buttons at all); read
+    // the browser's own accessibility tree instead (on/off verified locally).
+    const edgeCdp=await page.context().newCDPSession(page)
+    const loadUnpackedShown=async()=>(await edgeCdp.send('Accessibility.getFullAXTree')).nodes.some(n=>n.role?.value==='button'&&n.name?.value==='Load unpacked'&&!n.ignored)
+    await until('Edge page shows Load unpacked',loadUnpackedShown,10000).catch(()=>{})
+    const edgeProfile=await page.evaluate(()=>new Promise(resolve=>chrome.developerPrivate.getProfileConfiguration(resolve)))
+    check('Edge developer mode is on in the real profile and its page shows Load unpacked',edgeProfile.inDeveloperMode===true&&await loadUnpackedShown(),edgeProfile)
+    await page.screenshot({path:path.join(output,'edge-developer-mode.png')})
+    stage('Edge native drag')
+    await app.evaluate(({ BrowserWindow }, { id, work, leftWidth }) => {
+      const window=BrowserWindow.fromId(id)
+      window.setBounds({x:work.x,y:work.y,width:leftWidth,height:work.height}); window.show(); window.focus()
+    }, {id,work,leftWidth})
+    await drag(true)
+    installed=undefined
+    for(let i=0;i<30;i++){ installed=(await info()).find(e=>e.id===ID);if(installed)break;await sleep(300) }
+    await desktop('capture',['-Path',path.join(output,'edge-native-drop.png')])
+    check('real Electron native folder drag installs Clip as unpacked in Edge', installed?.location==='UNPACKED' && installed?.state==='ENABLED' && sameCopy(installed?.path), installed)
+    await page.screenshot({path:path.join(output,'edge-installed.png')})
     stage('completed native checks')
-    })(),new Promise((_,reject)=>{deadline=setTimeout(()=>reject(new Error('Native Clip deadline exceeded at '+phase)),180000)})])
+    })(),new Promise((_,reject)=>{deadline=setTimeout(()=>reject(new Error('Native Clip deadline exceeded at '+phase)),300000)})])
   } catch(error) {
     console.error('Native Clip acceptance failed:',error)
     await desktop('capture',['-Path',path.join(output,'failure-desktop.png')]).catch(()=>{})

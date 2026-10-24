@@ -33,8 +33,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node desktop/node_modules/playwright-core/cli.js install chromium
           exit $LASTEXITCODE
-      - name: Verify native folder drop, clipboard, Explorer and picker
-        timeout-minutes: 5
+      - name: Verify open buttons, native Chrome / Edge folder drop, clipboard, Explorer and picker
+        timeout-minutes: 8
         working-directory: desktop
         run: |
           New-Item -ItemType Directory -Force outputs/windows-clip-native | Out-Null
@@ -50,7 +50,7 @@ jobs:
           npx electron-builder --config electron-builder.config.cjs --win --x64 --dir --publish never --config.directories.output=outputs/clip-package
           exit $LASTEXITCODE
       - name: Verify the packaged APPDATA copy and native installation
-        timeout-minutes: 5
+        timeout-minutes: 8
         working-directory: desktop
         run: |
           $env:FORSION_CLIP_NATIVE_EXE = Join-Path $PWD 'outputs/clip-package/win-unpacked/Forsion.exe'

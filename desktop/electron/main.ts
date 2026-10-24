@@ -3329,7 +3329,7 @@ app.whenReady().then(async () => {
     if (!icon || icon.isEmpty()) icon = nativeImage.createFromDataURL(DRAG_FALLBACK_ICON)
     e.sender.startDrag({ file: filePath, icon })
   })
-  registerClipExtensionIpc() // Forsion Clip 手动安装:复制出包的扩展文件夹、打开 Chrome 扩展页(拖拽复用上面的 fs:startDrag)
+  registerClipExtensionIpc() // Forsion Clip 手动安装:复制出包的扩展文件夹、打开 Chrome / Edge 扩展页(拖拽复用上面的 fs:startDrag)
   startClipVersionSync(localEngineRef) // Forsion 更新后连着的 Clip 换成随包版本并重载
 
   ipcMain.handle('backend:getStatus', () => backend.getStatus())

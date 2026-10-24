@@ -1,7 +1,9 @@
 /**
- * Dev-only visual harness:设置 → 浏览器 →「Chrome 扩展」卡片 —— 真 BrowserExtensionPanel + 生产 CSS;
+ * Dev-only visual harness:设置 → 浏览器 →「浏览器扩展」卡片 —— 真 BrowserExtensionPanel + 生产 CSS;
  * 引擎端点与 openHostPath / clipExtension / startHostDrag 都是桩,不连后端。?connected / ?busy(端口被占)/ ?external(外部引擎)/
- * ?noclip(壳里没有 clipExtension,退回老的「打开扩展文件夹」)/ ?nochrome(没装 Chrome,复制地址)/ ?stale(副本是旧版)/
+ * ?noclip(壳里没有 clipExtension,退回老的「打开扩展文件夹」)/ ?notfound(浏览器没找到,复制地址)/
+ * ?launched(Windows:开了新窗口、地址待粘贴)/ ?both / ?edgeonly / ?nobrowser(认到的浏览器,缺省只有 Chrome)/
+ * ?platform=win32|darwin(选择框的系统提示)/ ?stale(副本是旧版)/
  * ?copyfail(副本准备失败)/ ?installed(连上过、现在没连)/ ?hoston(「允许其他设备连接本机」开着)/ ?dark / ?lang=en;
  * __extHarness.holdPolls / holdResets = true 扣住之后的状态轮询(按发出时刻的状态作答)/ 换码请求,release() 放行 ——
  * 复现「旧轮询晚到」竞态、验证换码进行中不可再点。
@@ -25,7 +27,7 @@ const BACKEND = 'http://stub.local'
 useApp.setState({ desktopConfig: { unitHostEnabled: params.has('hoston') } as never }) // ?hoston = 「允许其他设备连接本机」开着(一次配对能用)
 installEngineHost({ cfg: () => ({ backendUrl: BACKEND, token: 'stub' } as TanguDesktopConfig), desktopConfig: () => ({ mode: params.has('external') ? 'external' : 'managed' }) })
 const harness = {
-  opened: [] as string[], dragged: [] as string[], prepares: [] as boolean[], chromeOpened: 0, resets: 0, code: 'tangu:47655:3f9c2a71d04b8e56a1c7f02d9e4b6a8c13e5f7092b4d6c8e',
+  opened: [] as string[], dragged: [] as string[], prepares: [] as boolean[], pagesOpened: [] as string[], resets: 0, code: 'tangu:47655:3f9c2a71d04b8e56a1c7f02d9e4b6a8c13e5f7092b4d6c8e',
   holdPolls: false, holdResets: false, held: [] as Array<() => void>,
   release() { harness.holdPolls = harness.holdResets = false; for (const r of harness.held.splice(0)) r() },
 }
@@ -55,6 +57,7 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
 }
 const CLIP_DIR = '/Users/me/Library/Application Support/Forsion/Forsion Clip'
 window.tangu = {
+  ...(params.get('platform') ? { platform: params.get('platform') } : {}),
   openHostPath: async (p: string) => { harness.opened.push(p); return { ok: true } },
   startHostDrag: (p: string) => { harness.dragged.push(p) },
   ...(params.has('noclip') ? {} : {
@@ -64,7 +67,11 @@ window.tangu = {
         if (params.has('copyfail')) return { error: 'EACCES' }
         return { dir: CLIP_DIR, version: params.has('stale') && !update ? '2.0.9' : '2.1.0', bundled: '2.1.0' }
       },
-      openChromeExtensions: async () => { harness.chromeOpened++; return params.has('nochrome') ? { ok: false, copied: true, reason: 'no-chrome' } : { ok: true } },
+      browsers: async () => (params.has('nobrowser') ? [] : params.has('edgeonly') ? ['edge'] : params.has('both') ? ['chrome', 'edge'] : ['chrome']),
+      openExtensionsPage: async (browser: string) => {
+        harness.pagesOpened.push(browser)
+        return params.has('notfound') ? { ok: false, copied: true, reason: 'not-found' } : params.has('launched') ? { ok: false, copied: true, reason: 'launched' } : { ok: true }
+      },
     },
   }),
 } as unknown as NonNullable<Window['tangu']>

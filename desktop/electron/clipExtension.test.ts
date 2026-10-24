@@ -10,12 +10,68 @@ vi.mock('fs', async (importOriginal) => {
   const real = await importOriginal<typeof import('fs')>()
   return { ...real, renameSync: (from: string, to: string) => { if (inject.failTmpRename && from.endsWith('.tmp')) throw new Error('EPERM (injected)'); return real.renameSync(from, to) } }
 })
-import { browserControlCode, CHROME_EXTENSIONS_URL, ensureClipCopy, openChromeExtensions, syncClipVersion } from './clipExtension'
+// 起浏览器 / `open -b` 都换成桩:spawn 回一个下一拍发 spawn(或 error)事件的假子进程
+const proc = vi.hoisted(() => ({ spawn: vi.fn(), execFile: vi.fn() }))
+vi.mock('child_process', async (importOriginal) => ({ ...(await importOriginal<typeof import('child_process')>()), spawn: proc.spawn, execFile: proc.execFile }))
+import { EventEmitter } from 'events'
+import { browserControlCode, detectBrowsers, ensureClipCopy, EXTENSIONS_URL, openExtensionsPage, syncClipVersion } from './clipExtension'
 
-it.skipIf(process.platform === 'darwin')('Windows/Linux open-extensions fallback returns the copy instruction', async () => {
-  clipboard.writeText.mockClear()
-  expect(await openChromeExtensions()).toEqual({ ok: false, copied: true, reason: 'unsupported' })
-  expect(clipboard.writeText).toHaveBeenCalledExactlyOnceWith(CHROME_EXTENSIONS_URL)
+describe('打开扩展页 / 认浏览器', () => {
+  const env = { ProgramFiles: 'C:\\Program Files', 'ProgramFiles(x86)': 'C:\\Program Files (x86)', LOCALAPPDATA: 'C:\\Users\\me\\AppData\\Local' }
+  const CHROME_USER = 'C:\\Users\\me\\AppData\\Local\\Google\\Chrome\\Application\\chrome.exe'
+  const EDGE = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'
+  const EDGE_USER = 'C:\\Users\\me\\AppData\\Local\\Microsoft\\Edge\\Application\\msedge.exe'
+  const win = (...installed: string[]) => ({ platform: 'win32' as const, env, exists: (p: string) => installed.includes(p) })
+  const fakeChild = (event: 'spawn' | 'error') => {
+    const c = Object.assign(new EventEmitter(), { unref: vi.fn() })
+    queueMicrotask(() => c.emit(event, event === 'error' ? new Error('ENOENT') : undefined))
+    return c
+  }
+  const reset = () => { clipboard.writeText.mockClear(); proc.spawn.mockReset(); proc.execFile.mockReset() }
+
+  it('按官方安装位置认 Chrome / Edge(都含按用户安装);别的系统认不出', () => {
+    expect(detectBrowsers(win(CHROME_USER, EDGE))).toEqual(['chrome', 'edge'])
+    expect(detectBrowsers(win(EDGE))).toEqual(['edge'])
+    expect(detectBrowsers(win(EDGE_USER))).toEqual(['edge'])
+    expect(detectBrowsers(win())).toEqual([])
+    expect(detectBrowsers({ platform: 'darwin', home: '/Users/me', exists: (p) => p === '/Users/me/Applications/Microsoft Edge.app' })).toEqual(['edge'])
+    expect(detectBrowsers({ platform: 'linux', exists: () => true })).toEqual([])
+  })
+
+  it('Windows:地址先进剪贴板,再起 <浏览器> --new-window(脱离 Forsion),回 launched', async () => {
+    reset()
+    proc.spawn.mockImplementation(() => fakeChild('spawn'))
+    expect(await openExtensionsPage('edge', win(EDGE))).toEqual({ ok: false, copied: true, reason: 'launched' })
+    expect(proc.spawn).toHaveBeenCalledExactlyOnceWith(EDGE, ['--new-window'], { detached: true, stdio: 'ignore' })
+    expect(clipboard.writeText).toHaveBeenCalledExactlyOnceWith(EXTENSIONS_URL.edge)
+    reset()
+    proc.spawn.mockImplementation(() => fakeChild('spawn'))
+    expect(await openExtensionsPage('edge', win(EDGE_USER))).toEqual({ ok: false, copied: true, reason: 'launched' })
+    expect(proc.spawn).toHaveBeenCalledExactlyOnceWith(EDGE_USER, ['--new-window'], { detached: true, stdio: 'ignore' })
+  })
+
+  it('Windows:没装 / 起不来 → 只复制地址,回 not-found', async () => {
+    reset()
+    expect(await openExtensionsPage('chrome', win(EDGE))).toEqual({ ok: false, copied: true, reason: 'not-found' })
+    expect(proc.spawn).not.toHaveBeenCalled()
+    expect(clipboard.writeText).toHaveBeenCalledExactlyOnceWith(EXTENSIONS_URL.chrome)
+    reset()
+    proc.spawn.mockImplementation(() => fakeChild('error'))
+    expect(await openExtensionsPage('chrome', win(CHROME_USER))).toEqual({ ok: false, copied: true, reason: 'not-found' })
+    expect(clipboard.writeText).toHaveBeenLastCalledWith(EXTENSIONS_URL.chrome)
+  })
+
+  it('mac 走 open -b 直达扩展页;没装 → 复制地址;别的系统只复制', async () => {
+    reset()
+    proc.execFile.mockImplementation((_cmd: string, _args: string[], cb: (err: Error | null) => void) => cb(null))
+    expect(await openExtensionsPage('edge', { platform: 'darwin' })).toEqual({ ok: true })
+    expect(proc.execFile.mock.calls[0].slice(0, 2)).toEqual(['open', ['-b', 'com.microsoft.edgemac', 'edge://extensions']])
+    expect(clipboard.writeText).not.toHaveBeenCalled()
+    proc.execFile.mockImplementation((_cmd: string, _args: string[], cb: (err: Error | null) => void) => cb(new Error('Unable to find application')))
+    expect(await openExtensionsPage('chrome', { platform: 'darwin' })).toEqual({ ok: false, copied: true, reason: 'not-found' })
+    expect(await openExtensionsPage('chrome', { platform: 'linux' })).toEqual({ ok: false, copied: true, reason: 'unsupported' })
+    expect(proc.spawn).not.toHaveBeenCalled()
+  })
 })
 
 const ext = (root: string, version: string): string => {
