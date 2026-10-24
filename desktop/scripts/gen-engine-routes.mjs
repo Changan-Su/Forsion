@@ -126,6 +126,7 @@ export const CLASSIFICATION = {
   'POST /agent/sessions/:id/suggest': [A, 'next-message suggestion for the input box (reads a one-shot in-memory snapshot of the run that just ended; writes nothing)'],
   // ── inline.ts:正文生成式 AI(G3-07)──
   'POST /agent/inline': [A, 'inline writing completion for the note editor (no tools, nothing persisted; same shape as aside)'],
+  'GET /agent/link-preview': [D, 'host-only: reads GitHub / Forsion Git PR and issue metadata with the credentials linked on this machine'],
   'GET /agent/sessions/:id/checkpoints': [A, 'list code checkpoints'],
   'POST /agent/sessions/:id/checkpoints/restore': [D, 'restores host files from checkpoints (design appendix C)'],
   'GET /agent/compaction': [A, 'read compaction settings'],

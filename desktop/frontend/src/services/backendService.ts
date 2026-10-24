@@ -1348,6 +1348,28 @@ export interface GitHosting {
   /** 引擎有「连接已有远端」。 */
   connect: boolean
 }
+/** Chat 链接悬停卡的富卡数据(GitHub / Forsion Git 的 PR、issue;引擎用这台机器上绑定的凭据去问,渲染层不直连外站)。
+ *  认不得 / 问不到 / 老引擎(404)/ 远端设备不放行 → null:卡片照出素卡,不报错。 */
+export interface LinkPreview {
+  source: 'github' | 'forsion-git'
+  kind: 'pr' | 'issue'
+  repo: string
+  number: number
+  title: string
+  state: 'open' | 'draft' | 'merged' | 'closed'
+  author?: string
+  /** 合并 / 关闭 / 创建时刻(ISO)。 */
+  at?: string
+  additions?: number
+  deletions?: number
+  changedFiles?: number
+  comments?: number
+}
+const LINK_STATES = new Set(['open', 'draft', 'merged', 'closed'])
+export const getLinkPreview = (t: EngineTarget, url: string): Promise<LinkPreview | null> =>
+  request<{ preview?: LinkPreview | null }>(t, `/agent/link-preview?url=${encodeURIComponent(url)}`, undefined, { timeoutMs: 8000 })
+    .then((r) => (r.preview && typeof r.preview.title === 'string' && typeof r.preview.repo === 'string' && LINK_STATES.has(r.preview.state) ? r.preview : null))
+    .catch(() => null)
 export const getGitHosting = (t: EngineTarget, sessionId: string): Promise<GitHosting | null> =>
   request<Partial<GitHosting>>(t, `/agent/project-context/git/hosting?sessionId=${encodeURIComponent(sessionId)}`, undefined, { timeoutMs: 8000 })
     .then((r): GitHosting => ({

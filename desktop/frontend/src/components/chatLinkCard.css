@@ -1,0 +1,87 @@
+/* Chat 链接预览卡(ChatLinkCard.tsx)。浮层材质与字号照 .app-ref-card(appRefs.css);富卡排版照借鉴 Comma 方案 §2.6。 */
+.chat-link-card {
+  width: max-content;
+  max-width: 360px;
+  padding: 10px 12px;
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  box-shadow: var(--card-shadow);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: var(--ui-font-body);
+  font-weight: 400;
+  line-height: var(--ui-line-body);
+  text-align: left;
+  white-space: normal;
+}
+.chat-link-card small,
+.chat-link-card-top,
+.chat-link-card-who,
+.chat-link-card-facts span {
+  font-size: var(--ui-font-caption);
+  line-height: var(--ui-line-caption);
+  color: var(--text-muted);
+}
+
+.chat-link-card-plain { display: flex; align-items: flex-start; gap: 10px; }
+.chat-link-card-ico {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  margin-top: 1px;
+  border-radius: var(--radius-sm);
+  background: var(--overlay-light);
+  color: var(--accent-ink);
+}
+.chat-link-card-main { display: flex; min-width: 0; flex-direction: column; }
+.chat-link-card-main b { font-weight: 600; overflow-wrap: anywhere; }
+.chat-link-card-main small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } /* 路径已在中段省略;一行放不下再截尾 */
+
+.chat-link-card-rich { width: 296px; }
+.chat-link-card-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.chat-link-card-repo { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-link-card-day { flex: none; margin-left: auto; font-variant-numeric: tabular-nums; }
+.chat-link-card-pill {
+  --pill: var(--green);
+  flex: none;
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--pill) 14%, transparent);
+  color: var(--pill);
+  font-weight: 500;
+}
+.chat-link-card-rich[data-state='merged'] .chat-link-card-pill { --pill: var(--accent-ink); }
+.chat-link-card-rich[data-state='closed'] .chat-link-card-pill { --pill: var(--danger); }
+.chat-link-card-rich[data-state='draft'] .chat-link-card-pill { --pill: var(--text-muted); }
+.chat-link-card-title {
+  display: -webkit-box;
+  margin: 6px 0 8px;
+  overflow: hidden;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+.chat-link-card-who { display: flex; align-items: center; gap: 6px; }
+.chat-link-card-av {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--overlay-medium);
+  color: var(--text);
+  font-weight: 600;
+  font-size: var(--ui-font-caption);
+  line-height: 1;
+}
+.chat-link-card-facts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.chat-link-card-facts span {
+  padding: 1px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--overlay-light);
+  font-variant-numeric: tabular-nums;
+}
