@@ -28,9 +28,12 @@ export function ChatWikiLink({ inner }: { inner: string }) {
 }
 
 /** 文件类引用前那枚类型图标，和 Amadeus 正文双链同一套（wikilink.ts 的 fileIconEl）。FILE_ICON 是常量，不含用户内容。 */
-// 图标和文字包成不折行的一组：行尾时图标不会单独留在上一行（文字已按 26 字截短）。
-const FileIcon = ({ kind, children }: { kind: FileIconKind | null; children: ReactNode }) =>
-  kind ? <span className="wikilink-nb"><svg className="wikilink-ic" viewBox="0 0 24 24" aria-hidden="true" dangerouslySetInnerHTML={{ __html: FILE_ICON[kind] }} />{children}</span> : <>{children}</>
+// 图标只和第一个字绑成不折行的一组：行尾时图标不会单独留在上一行，长别名照常换行。
+function FileIcon({ kind, children }: { kind: FileIconKind | null; children: string }) {
+  if (!kind) return <>{children}</>
+  const [first = '', ...rest] = Array.from(children)
+  return <><span className="wikilink-nb"><svg className="wikilink-ic" viewBox="0 0 24 24" aria-hidden="true" dangerouslySetInnerHTML={{ __html: FILE_ICON[kind] }} />{first}</span>{rest.join('')}</>
+}
 
 function NoteWikiLink({ inner }: { inner: string }) {
   const { t } = useI18n()
