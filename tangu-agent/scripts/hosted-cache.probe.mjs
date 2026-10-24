@@ -1,19 +1,22 @@
 #!/usr/bin/env node
 /**
- * 托管面(/api/brain/llm/build-and-stream)前缀缓存探针:同一个上游,带不带 prompt_cache_key 各跑一条
- * 只在尾部追加的会话,看后续轮的 cached 是不是「紧挨着的上一轮」。回答「这个上游认不认会话粘性」。
+ * 托管面(/api/brain/llm/build-and-stream)前缀缓存探针:跑一条只在尾部追加的会话,看后续轮的 cached
+ * 是不是「紧挨着的上一轮」。回答「这个上游在后台现在的缓存开关下粘不粘会话」。
  *
- *   node scripts/hosted-cache.probe.mjs --model <模型 id> [--rounds 10] [--arms off,on] [--thinking low]
+ *   node scripts/hosted-cache.probe.mjs --model <模型 id> [--rounds 10] [--arms off|on] [--thinking low]
  *   node scripts/hosted-cache.probe.mjs --model <模型 id> --auth ~/.forsion/auth.json --allow-production-auth
  *
- * 两臂只差一位:发给服务端的模型记录里 promptCachingEnabled 是 false 还是 true —— 服务端据此决定
- * 发不发 prompt_cache_key(server llmService.buildProviderPayload),所以**不用改后台的模型配置**。
- * 每臂各用一个随机会话 id 和一段带随机数开头的系统提示,两臂互不串缓存;两臂交替发,时段影响对等。
+ * 一次只跑一臂,就是后台该模型「请求侧缓存提示」(promptCachingEnabled)的现值:server #34(10-24)起
+ * 托管组包按服务端当前那行(server llmService.payloadModelFor),客户端带去的模型记录不再生效,一次运行里
+ * 换不了臂。开关在 OpenAI 兼容行上管发不发 prompt_cache_key,在 Claude 行上管打不打 cache_control 断点。
+ * 要对比两臂:按现值跑一次 → 后台切开关 → 再跑一次(两次不在同一时段,差异要打折看)。
+ * --arms 写了和现值不同的臂就直接退出,提示先去切开关。每次用一个随机会话 id 和一段带随机数开头的
+ * 系统提示,不吃之前运行留下的缓存。
  * 判读:adjacent = 命中了上一轮写下的前缀;older = 只命中更早某一轮的;hit = 命中了但对不上具体哪一轮;miss = cached 0。
- * 带键那臂全是 adjacent 而不带键那臂零散 → 上游认这个键,把后台该模型的「请求侧缓存提示」打开即可。
- * 两臂都零散 → 上游不认,Forsion 这边无解。凭证只读、不打印;每发约 3k–8k prompt token,真实计费。
+ * on 那次全是 adjacent 而 off 那次零散 → 上游认这个提示,把开关打开即可。
+ * 两次都零散 → 上游不认,Forsion 这边无解。凭证只读、不打印;每发约 3k–8k prompt token,真实计费。
  *
- * 10-07 实测(本机 dev 服务端 2.3.36 → api.gpt.ge,Responses 协议):
+ * 10-07 实测(本机 dev 服务端 2.3.36 → api.gpt.ge,Responses 协议;那时客户端还能改记录,两臂同一次交替跑):
  *   gpt-5-mini 各 9 轮后续(那次每轮只涨约 107 token):不带键 命中上一轮 4 / 命中但不是上一轮或分不清 2 / miss 3;
  *   带键 3 / 4 / 2。
  *   gpt-5.5 各 11 轮后续(上游计数粒度 1024,只能分命中与否):不带键 miss 4;带键 miss 2。
@@ -31,8 +34,8 @@ const AUTH = opt('auth', join(homedir(), '.forsion-dev', 'auth.json')).replace(/
 const MODEL = opt('model', '');
 const ROUNDS = Number(opt('rounds', 10));
 const THINKING = opt('thinking', 'low'); // 'off' 会被部分模型拒(gpt-5-mini 不收 effort=none)
-const ARMS = opt('arms', 'off,on').split(',').filter((a) => a === 'off' || a === 'on');
-if (!MODEL || !ARMS.length || !(ROUNDS >= 2)) { console.error('用法:--model <模型 id> [--rounds 10] [--arms off,on] [--thinking low] [--auth <auth.json>]'); process.exit(2); }
+const ARMS = opt('arms', '').split(',').filter(Boolean); // 空 = 跟后台现值
+if (!MODEL || ARMS.some((a) => a !== 'off' && a !== 'on') || !(ROUNDS >= 2)) { console.error('用法:--model <模型 id> [--rounds 10] [--arms off|on] [--thinking low] [--auth <auth.json>]'); process.exit(2); }
 const real = (p) => { try { return realpathSync(p); } catch { return p; } };
 if (real(AUTH).startsWith(real(join(homedir(), '.forsion')) + '/') && !argv.includes('--allow-production-auth')) {
   console.error(`--auth 指向生产登录 ${AUTH};要用它请显式加 --allow-production-auth`); process.exit(2);
@@ -48,26 +51,33 @@ if (!resolved.ok) { console.error(`resolve 失败:HTTP ${resolved.status} ${(awa
 const { model, apiModelId } = await resolved.json();
 const host = (() => { try { return new URL(model.defaultBaseUrl).hostname; } catch { return '?'; } })();
 console.log(`服务端 ${BASE} ｜ 模型 ${model.name}(${apiModelId})｜ 上游 ${host} ｜ 后台开关现值 promptCachingEnabled=${!!model.promptCachingEnabled}`);
-if (/anthropic|claude|gemini/i.test(String(model.provider))) {
-  console.error(`provider=${model.provider}:这类行不发 prompt_cache_key(Claude 的开关改的是 cache_control 断点),两臂不可比,不测`); process.exit(2);
+if (model.provider === 'gemini') {
+  console.error('provider=gemini:缓存开关对 Gemini 行不改请求(不发 prompt_cache_key、不打断点),不测'); process.exit(2);
 }
+const ARM = model.promptCachingEnabled ? 'on' : 'off';
+const other = ARMS.find((a) => a !== ARM);
+if (other) {
+  console.error(`后台该模型 promptCachingEnabled=${ARM === 'on'},这次只能跑 ${ARM} 臂;要跑 ${other}:先去后台切换该模型的「请求侧缓存提示」开关,再跑一次`); process.exit(2);
+}
+const isClaude = /anthropic|claude/i.test(String(model.provider));
+const LABEL = isClaude ? `${ARM === 'on' ? '打' : '不打'} cache_control 断点` : `${ARM === 'on' ? '带' : '不带'} prompt_cache_key`;
 
 // ~3k token 的稳定系统提示,远大于 1024 的起缓存门槛和 128 的计数粒度。
 const rules = Array.from({ length: 70 }, (_, i) =>
   `Rule ${i + 1}: When handling task category ${i + 1}, prefer deterministic, well-documented steps; record the outcome, verify assumptions against primary sources, and keep the user informed briefly.`).join('\n');
 const filler = 'Context note: the previous step finished without errors, the workspace is unchanged, and no further files were touched since the last check. ';
-const arms = ARMS.map((name) => ({
-  name, sessionId: randomUUID(), rows: [],
+const arm = {
+  sessionId: randomUUID(), rows: [],
   messages: [{ role: 'system', content: `Probe session ${randomUUID()}. You are a terse assistant.\n${rules}` }],
-}));
+};
 
-async function call(arm, round) {
+async function call(round) {
   arm.messages.push({ role: 'user', content: `${filler.repeat(14)}Step ${round}: reply with exactly "ok ${round}" and nothing else.` });
   const started = Date.now();
   const res = await fetch(`${BASE}/api/brain/llm/build-and-stream`, {
     method: 'POST', headers, signal: AbortSignal.timeout(180_000),
     body: JSON.stringify({
-      modelId: MODEL, apiModelId, model: { ...model, promptCachingEnabled: arm.name === 'on' },
+      modelId: MODEL, apiModelId, model,
       messages: arm.messages, usageSource: 'cache-probe', temperature: 0.7, maxTokens: 2000,
       attachments: [], thinkingLevel: THINKING, stream: true, cacheKey: arm.sessionId,
     }),
@@ -96,11 +106,9 @@ async function call(arm, round) {
   arm.rows.push({ round, prompt: u.prompt_tokens || 0, cached: u.cached_tokens || 0, reported: u.cacheReported === true, ms: Date.now() - started });
 }
 
-for (let round = 1; round <= ROUNDS && arms.some((a) => !a.failed); round++) {
-  for (const arm of arms) {
-    if (arm.failed) continue; // 失败的那臂前缀已经断了,不再续发;另一臂照常跑完
-    try { await call(arm, round); } catch (e) { console.error(`[${arm.name}] 第 ${round} 轮失败:${e.message}`); arm.failed = true; }
-  }
+for (let round = 1; round <= ROUNDS; round++) {
+  // 失败之后前缀已经断了,不再续发,拿已成功的轮出结果
+  try { await call(round); } catch (e) { console.error(`第 ${round} 轮失败:${e.message}`); break; }
 }
 
 // 归因只认「对得上具体某一轮」的:上游按 128 细报时,命中第 j 轮写下的前缀 = cached 等于第 j 轮 prompt 的
@@ -121,19 +129,17 @@ function classify(rows, fine) {
   });
 }
 const isFine = (allRows) => { const v = allRows.map((r) => r.cached).filter(Boolean); return v.some((x) => (x - v[0]) % 1024 !== 0); };
-const FINE = isFine(arms.flatMap((arm) => arm.rows));
+const FINE = isFine(arm.rows);
 if (!FINE) console.log('\n⚠️ 认不出这个上游按 128 细报 cached(粒度更粗或样本太少),下面只分命中 / 未命中,不做归因');
-for (const arm of arms) {
-  console.log(`\n== ${arm.name === 'on' ? '带 prompt_cache_key' : '不带 prompt_cache_key'}(会话 ${arm.sessionId.slice(0, 8)})`);
-  if (arm.rows.length < 2) { console.log('  成功的请求不足两轮,没有可判的后续轮'); continue; }
-  const verdicts = classify(arm.rows, FINE);
-  const tally = { adjacent: 0, older: 0, hit: 0, miss: 0, unknown: 0 };
-  arm.rows.forEach((r, i) => {
-    if (i > 0) tally[verdicts[i]]++;
-    console.log(`  轮 ${String(r.round).padStart(2)}  prompt ${String(r.prompt).padStart(6)}  cached ${String(r.reported ? r.cached : '-').padStart(6)}  ${verdicts[i]}  ${(r.ms / 1000).toFixed(1)}s`);
-  });
-  const known = arm.rows.filter((r, i) => i > 0 && r.reported);
-  const pct = known.length ? Math.round(100 * known.reduce((s, r) => s + r.cached, 0) / known.reduce((s, r) => s + r.prompt, 0)) : 0;
-  console.log(`  后续 ${arm.rows.length - 1} 轮:adjacent ${tally.adjacent} / older ${tally.older} / hit(对不上具体哪一轮)${tally.hit} / miss ${tally.miss}`
-    + `${tally.unknown ? ` / 上游没报 ${tally.unknown}` : ''} ｜ 按 token 命中 ${pct}%${tally.unknown ? '(只算报了的轮)' : ''}`);
-}
+console.log(`\n== ${LABEL}(会话 ${arm.sessionId.slice(0, 8)})`);
+if (arm.rows.length < 2) { console.log('  成功的请求不足两轮,没有可判的后续轮'); process.exit(1); }
+const verdicts = classify(arm.rows, FINE);
+const tally = { adjacent: 0, older: 0, hit: 0, miss: 0, unknown: 0 };
+arm.rows.forEach((r, i) => {
+  if (i > 0) tally[verdicts[i]]++;
+  console.log(`  轮 ${String(r.round).padStart(2)}  prompt ${String(r.prompt).padStart(6)}  cached ${String(r.reported ? r.cached : '-').padStart(6)}  ${verdicts[i]}  ${(r.ms / 1000).toFixed(1)}s`);
+});
+const known = arm.rows.filter((r, i) => i > 0 && r.reported);
+const pct = known.length ? Math.round(100 * known.reduce((s, r) => s + r.cached, 0) / known.reduce((s, r) => s + r.prompt, 0)) : 0;
+console.log(`  后续 ${arm.rows.length - 1} 轮:adjacent ${tally.adjacent} / older ${tally.older} / hit(对不上具体哪一轮)${tally.hit} / miss ${tally.miss}`
+  + `${tally.unknown ? ` / 上游没报 ${tally.unknown}` : ''} ｜ 按 token 命中 ${pct}%${tally.unknown ? '(只算报了的轮)' : ''}`);
