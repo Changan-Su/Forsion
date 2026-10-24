@@ -172,6 +172,10 @@ export function shiftDays(d: Date, n: number): Date {
 export function diffDays(a: Date, b: Date): number {
   return Math.round((startOfDay(a).getTime() - startOfDay(b).getTime()) / 86400000)
 }
+/** a − b 的墙钟分钟数(与 addMinutes 互逆;夏令时切换日不多不少一小时)。 */
+export function wallDiffMin(a: Date, b: Date): number {
+  return diffDays(a, b) * 1440 + a.getHours() * 60 + a.getMinutes() - (b.getHours() * 60 + b.getMinutes())
+}
 
 export function monthLabel(d: Date): string {
   return translate('caldate.monthLabel', { y: d.getFullYear(), m: monthName(d) })
