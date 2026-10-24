@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useApp } from '../../stores/appStore'
 import { useChildChat } from '../../stores/childChatStore'
-import { btwSeedOf, consumeSeed, openBtw, useBtw } from './btwStore'
+import type { SavedAside } from '../../services/backendService'
+import { BTW_MAX_ATTACHMENTS, asidesOnMessage, btwSeedOf, consumeSeed, openBtw, readBtwFiles, useBtw, type BtwAttachment } from './btwStore'
 
 const sse = (...events: object[]): Response => new Response(events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join(''), { headers: { 'Content-Type': 'text/event-stream' } })
 const initialApp = useApp.getState()
@@ -130,5 +131,89 @@ describe('旁聊 store', () => {
     useBtw.getState().applySeed({ sessionId: 's1', nonce: 'n1', asideId: 'x2' })
     await vi.waitFor(() => expect(useBtw.getState().anchors.s1).toEqual({ asideId: 'x2', messageId: 'm2' }))
     expect(useBtw.getState().threads.s1.map((t) => t.question)).toEqual(['q1'])
+  })
+})
+
+describe('旁聊附件(10-24 方案 A)', () => {
+  const IMG: BtwAttachment = { name: 'shot.png', mimeType: 'image/png', data: 'iVBORw0K', size: 6, thumb: 'data:image/jpeg;base64,AAAA' }
+  const TXT: BtwAttachment = { name: 'notes.md', mimeType: 'text/markdown', data: 'IyBOb3Rlcw==', size: 7 }
+
+  it('附件随这一问整份发出(含缩略图);线程里只留记录;追问只带名字 / 类型 / 大小,内容和缩略图都不再发', async () => {
+    useApp.setState({ cfg: { ...useApp.getState().cfg, visionModelId: 'vis-1', visionMode: 'auto' } })
+    fetchMock.mockResolvedValueOnce(sse({ type: 'done', content: 'A dot.', attached: { images: 1, files: ['notes.md'], transcribed: false } }))
+    await useBtw.getState().ask('s1', 'what is this?', undefined, 'm1', { attachments: [IMG, TXT], thinkingLevel: 'medium' })
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+    expect(body.attachments).toEqual([
+      { name: 'shot.png', mimeType: 'image/png', data: 'iVBORw0K', size: 6, thumb: 'data:image/jpeg;base64,AAAA' },
+      { name: 'notes.md', mimeType: 'text/markdown', data: 'IyBOb3Rlcw==', size: 7 },
+    ])
+    expect(body).toMatchObject({ thinking_level: 'medium', vision_model_id: 'vis-1', vision_mode: 'auto' })
+    const turn = useBtw.getState().threads.s1[0]
+    expect(turn.attachments).toEqual([{ name: 'shot.png', mimeType: 'image/png', size: 6, thumb: 'data:image/jpeg;base64,AAAA' }, { name: 'notes.md', mimeType: 'text/markdown', size: 7 }])
+    expect(JSON.stringify(useBtw.getState().threads)).not.toContain('iVBORw0K') // 内容不留在线程里
+    expect(turn.attachNote).toBeUndefined()
+
+    fetchMock.mockResolvedValueOnce(sse({ type: 'done', content: 'Red.' }))
+    await useBtw.getState().ask('s1', 'colour?', undefined, 'm1')
+    const second = JSON.parse(fetchMock.mock.calls[1][1].body)
+    expect(second.attachments).toBeUndefined()
+    expect(second.thinking_level).toBeUndefined()
+    expect(second.vision_mode).toBeUndefined() // 没附图就不带图像识别档
+    expect(second.thread).toEqual([{ question: 'what is this?', answer: 'A dot.', attachments: [{ name: 'shot.png', mimeType: 'image/png', size: 6 }, { name: 'notes.md', mimeType: 'text/markdown', size: 7 }] }])
+  })
+
+  it('老引擎没认附件(done 不报 attached)→ 标「没收到」;转写过 → 标「先转成了文字」;转写中显示状态', async () => {
+    fetchMock.mockResolvedValueOnce(sse({ type: 'done', content: 'ok' }))
+    await useBtw.getState().ask('s1', 'q1', undefined, undefined, { attachments: [IMG] })
+    expect(useBtw.getState().threads.s1[0].attachNote).toBe('ignored')
+    let finish!: (r: Response) => void
+    fetchMock.mockReturnValueOnce(new Promise<Response>((r) => { finish = r }))
+    const asking = useBtw.getState().ask('s1', 'q2', undefined, undefined, { attachments: [IMG] })
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+    finish(sse({ type: 'status', phase: 'describing_images', stage: 'start', count: 1 }, { type: 'done', content: 'ok', attached: { images: 1, files: [], transcribed: true } }))
+    await asking
+    expect(useBtw.getState().threads.s1[1]).toMatchObject({ attachNote: 'transcribed', describing: false, status: 'done' })
+  })
+
+  it('附件合计过大:引擎 400 带 code → 人话;网关 413 同一句', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ detail: 'Attachments too large', code: 'aside_attachments_too_large' }), { status: 400 }))
+    await useBtw.getState().ask('s1', 'q', undefined, undefined, { attachments: [IMG] })
+    expect(useBtw.getState().threads.s1[0].error).toContain('附件太大')
+    fetchMock.mockResolvedValueOnce(new Response('Payload Too Large', { status: 413 }))
+    await useBtw.getState().ask('s1', 'q', undefined, undefined, { attachments: [IMG] })
+    expect(useBtw.getState().threads.s1[1].error).toContain('附件太大')
+  })
+
+  it('重开存下来的那段:附件记录(含缩略图)一起载回;「新的一段」清空线程、留挂点、不删记录', () => {
+    useBtw.setState({ saved: { s1: [{ id: 'x2', message_id: 'm2', turns: [{ question: 'q1', answer: 'a1', attachments: [{ name: 'a.png', mimeType: 'image/png', thumb: 'data:image/jpeg;base64,AAAA' }] }], created_at: '', updated_at: '' } as SavedAside] } })
+    useBtw.getState().applySeed({ sessionId: 's1', nonce: 'n1', asideId: 'x2' })
+    expect(useBtw.getState().threads.s1[0].attachments).toEqual([{ name: 'a.png', mimeType: 'image/png', thumb: 'data:image/jpeg;base64,AAAA' }])
+    useBtw.getState().startNew('s1')
+    expect(useBtw.getState().threads.s1).toEqual([])
+    expect(useBtw.getState().anchors.s1).toEqual({ messageId: 'm2' })
+    expect(useBtw.getState().saved.s1).toHaveLength(1)
+    expect(fetchMock).not.toHaveBeenCalled() // 不是 clear:不去引擎删
+  })
+
+  it('面板头的列表:按挂点筛存下来的那几段(与「从这里分出」同源);没挂点 / 没有就空', () => {
+    const rows = [{ id: 'a', message_id: 'm1' }, { id: 'b', message_id: 'm2' }, { id: 'c', message_id: 'm1' }] as SavedAside[]
+    expect(asidesOnMessage(rows, 'm1').map((a) => a.id)).toEqual(['a', 'c'])
+    expect(asidesOnMessage(rows, undefined)).toEqual([])
+    expect(asidesOnMessage(undefined, 'm1')).toEqual([])
+  })
+
+  it('读文件:图片 / 文本 / PDF 收,压缩包之类跳过;超大、超个数跳过并说明', async () => {
+    const f = (name: string, type: string, body = 'x') => new File([body], name, { type })
+    const { added, skipped } = await readBtwFiles([
+      f('a.png', 'image/png', 'PNGDATA'), f('main.ts', 'video/mp2t', 'const a = 1'), f('doc.pdf', 'application/pdf'), f('pack.zip', 'application/zip'),
+    ], [])
+    expect(added.map((a) => [a.name, a.mimeType])).toEqual([['a.png', 'image/png'], ['main.ts', 'video/mp2t'], ['doc.pdf', 'application/pdf']])
+    expect(added[0].data).toBe(btoa('PNGDATA'))
+    expect(skipped).toEqual(['pack.zip（不支持的类型）'])
+    const big = new File([new Uint8Array(6 * 1024 * 1024)], 'big.png', { type: 'image/png' })
+    const many = Array.from({ length: BTW_MAX_ATTACHMENTS }, (_, i) => ({ ...IMG, name: `p${i}.png` }))
+    const r2 = await readBtwFiles([big, f('one-more.txt', 'text/plain')], many)
+    expect(r2.added).toEqual([])
+    expect(r2.skipped).toEqual(['big.png（超 5MB）', 'one-more.txt（一问最多 8 个）'])
   })
 })

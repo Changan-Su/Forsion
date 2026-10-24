@@ -1,5 +1,5 @@
 /** Host Chat Box API. Session orchestration lives in Composer2; prompt hosts use this component. */
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { ChatBox as ChatBoxBase, type ChatBoxProps as BaseProps } from '@lcl/components'
 import { ModelPill } from '../ModelPill'
 import { groupModelsByProvider } from '../ModelGroupList'
@@ -24,9 +24,11 @@ export function useChatBoxSelection(agentSlug?: string) {
 export interface ChatBoxProps extends BaseProps {
   selection: ChatBoxSelection
   onSelectionChange(selection: ChatBoxSelection): void
+  /** Bottom-left controls placed before the model pill (e.g. an attach "+" button, like the main composer). */
+  leadingControls?: ReactNode
 }
 
-export function ChatBox({ selection, onSelectionChange, controls, ...props }: ChatBoxProps) {
+export function ChatBox({ selection, onSelectionChange, controls, leadingControls, ...props }: ChatBoxProps) {
   const { t } = useI18n()
   const catalog = useApp(s => s.modelsResp)
   const prefs = useModelPickerPreferences()
@@ -36,6 +38,7 @@ export function ChatBox({ selection, onSelectionChange, controls, ...props }: Ch
     options: g.models.map(m => ({ ...m, description: `${m.provider} · ${m.id}` })),
   })), [models, prefs])
   return <ChatBoxBase {...props} controls={<>
+    {leadingControls}
     <ModelPill menuPortal groups={groups} modelId={selection.modelId} disabled={props.disabled}
       onSelectionChange={patch => onSelectionChange({ ...selection, ...patch })}
       onSelect={modelId => onSelectionChange({ ...selection, modelId })}
