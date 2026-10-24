@@ -21,8 +21,7 @@ import { initialFor } from '../components/agentInitial'
 import { useApp } from '../stores/appStore'
 import { registerMessages, useI18n } from '../i18n'
 import { useShallow } from 'zustand/react/shallow'
-import { readTanguChatOutline, readTanguSidebarModes } from '../amadeus/plugins/tanguSeam'
-import { FilesPanel } from '@tangu/ui/views/chat2/FilesPanel'
+import { readTanguChatOutline, readTanguShell, readTanguSidebarModes } from '../amadeus/plugins/tanguSeam'
 import { PATHS_MIME as DRAG_MIME } from '../components/chatDragRef'
 import type { PreviewTarget } from '../components/WorkspaceFilePreview'
 import { AmadeusPagesView, AmadeusOutlineView, ScopedPageOutline } from '../amadeusViews'
@@ -126,6 +125,8 @@ function FilesBody({ vaultCtx, sideFilter }: { vaultCtx: { root: string; noteDir
   // 置顶「当前打开文件所在的工作区」;编辑器场景的 vault 工作区本来就排在首位,直接用它。
   const curFile = useCurrentFilePath()
   const pinnedWorkspaceKey = vaultKey ?? workspaceKeyForPath(workspaces, curFile)
+  const FilesPanel = readTanguShell()?.FilesPanel
+  if (!FilesPanel) return null
   return (
     <FilesPanel
       workspaces={workspaces}

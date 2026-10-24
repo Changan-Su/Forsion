@@ -28,10 +28,9 @@ import { setPopupsBlocked } from '@/stores/popupQueue'
 import { AmadeusOverlays } from '@/amadeusOverlays'
 import { AchievementToast } from '@/achievements/AchievementToast'
 import { AchievementsModal } from '@/achievements/AchievementsModal'
-import { BtwHost } from '@tangu/ui/views/chat2/BtwPanel'
 import { VoiceCallBar } from '@/mini/VoiceCallView'
 import { getCallLayer, openCallLayer, subscribeCallLayer } from '@/services/realtimeCall'
-import { btwWebVisible, useBtw } from '@tangu/ui/views/chat2/btwStore'
+import { readTanguShell, TanguBtwHost } from '@/amadeus/plugins/tanguSeam'
 import { QuickFind, useQuickFind } from '@/quickFind'
 import { FindBar } from '@/findInPage'
 import { installNotificationWiring } from '@/stores/notificationWiring'
@@ -112,7 +111,8 @@ function planBack(): BrowserBackPlan & { slide?: 'left' | 'right' } {
   // 不自动关引导 —— 退出引导只走里面的「跳过」(那条会记 dismiss),否则下次启动又弹一遍。
   if (app.onboarding) return { run: () => {} }
   // 旁聊全屏页在最上层:返回先关它。判据与 BtwHost 同一条 —— 它因切了会话而隐着时不能白吞一次返回
-  if (btwWebVisible(useBtw.getState().webOpen, app.activeId)) return { run: () => useBtw.getState().closeWeb() }
+  const shell = readTanguShell()
+  if (shell?.btwPageVisible(app.activeId)) return { run: () => shell.closeBtwPage() }
   // 应用市场全屏页(详情页开着时,MarketModal 自己在 forsion:mobile-back 里先退回列表)
   if (app.marketOpen) return { run: () => app.closeMarket() }
   if (app.settingsOpen) return { run: () => app.closeSettings() }
@@ -153,7 +153,7 @@ function useBrowserBack(): void {
       // same cancellable back event as Android; its sheet presenter reports opening/closing here.
       const offs = [
         useWorkspace.subscribe(changed), useNav.subscribe(changed), useSpaceStore.subscribe(changed),
-        useQuickFind.subscribe(changed), useBtw.subscribe(changed), subscribeBrowserSheet(changed),
+        useQuickFind.subscribe(changed), readTanguShell()?.subscribeBtw(changed) ?? (() => {}), subscribeBrowserSheet(changed),
         useApp.subscribe((s, prev) => {
           if (s.settingsOpen !== prev.settingsOpen || s.marketOpen !== prev.marketOpen || s.onboarding !== prev.onboarding || s.activeId !== prev.activeId || s.achievementsOpen !== prev.achievementsOpen) changed()
         }),
@@ -211,6 +211,9 @@ function useAndroidBack(): void {
  *  子组件的 effect 先于父组件跑,这里的 hidden 会后入栈、盖掉设置页的 page 声明(最后一个声明生效)。 */
 const CHROME_HIDDEN: NativeChromeClaim = { mode: 'hidden' }
 
+/** 旁聊全屏页的订阅(Tangu 没交外壳件时不订) */
+const subscribeBtwPage = (cb: () => void): (() => void) => readTanguShell()?.subscribeBtw(cb) ?? (() => {})
+
 export function MobileRoot() {
   useBootstrap()
   useInboxAutoPull()
@@ -251,7 +254,7 @@ export function MobileRoot() {
   const activeSession = a.sessions.find((s) => s.id === a.activeId) || a.archivedSessions.find((s) => s.id === a.activeId) || null
   const unitsOpen = useUnitsSheet((s) => s.open)
   const callLayer = useSyncExternalStore(subscribeCallLayer, getCallLayer)
-  const btwPage = useBtw((s) => btwWebVisible(s.webOpen, a.activeId))
+  const btwPage = useSyncExternalStore(subscribeBtwPage, () => readTanguShell()?.btwPageVisible(a.activeId) ?? false)
   useNativeChromeClaim(a.onboarding || a.achievementsOpen || unitsOpen || btwPage ? CHROME_HIDDEN : null)
   // 同 Root:全屏引导开着时,协议更新 / What's new / 插件公告先排着
   useEffect(() => setPopupsBlocked(!!a.onboarding), [a.onboarding])
@@ -393,7 +396,7 @@ export function MobileRoot() {
       {/* 成就解锁提示:埋点(track)与存档(localStorage)在移动端本就照跑,缺的只是这块弹层。
           点它开成就总览 —— AchievementsModal 上面已挂(⋯ 菜单里的 rb-achievements 也进得去)。 */}
       {/* 旁聊(/btw):手机没有浮窗语义,走全屏二级页;只在它归属的会话仍是当前会话时显示 */}
-      <BtwHost page />
+      <TanguBtwHost page />
 
       {/* 插件就绪检查卡(带 requires 的插件刚装好 / 手动启用时弹):全屏二级页开着时延后,回到主界面再出(同桌面 Root)。 */}
       {!a.settingsOpen && !a.marketOpen && !a.onboarding && <PluginOnboardingHost />}

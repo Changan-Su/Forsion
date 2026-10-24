@@ -1404,7 +1404,7 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 }
 .t2cv-hints[data-covered] { opacity: 0; }
 /* 阅读栏:画布右边一栏,对话页那套排版;开着时缩放胶囊 / 缩略图挪到它左边 */
-.t2cv { --t2cv-read-w: min(480px, calc(100% - 64px)); }
+.t2cv { --t2cv-read-w: min(clamp(360px, 46%, 560px), calc(100% - 64px)); }
 .t2cv-read {
   position: absolute; z-index: 4; top: 40px; right: 12px; bottom: calc(var(--t2-composer-h, 96px) + 8px); width: var(--t2cv-read-w);
   display: flex; flex-direction: column; box-sizing: border-box; overflow: hidden;
@@ -1473,3 +1473,42 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 /* 阅读栏左边缘:拖动调宽度 */
 .t2cv-read-grip { position: absolute; z-index: 1; left: 0; top: 0; bottom: 0; width: 6px; cursor: col-resize; touch-action: none; }
 .t2cv-read-grip:hover, .t2cv-read-grip:active { background: color-mix(in srgb, var(--accent-ink) 25%, transparent); }
+/* ── 阅读栏 A(方案 docs/ToBeImproved/画布交互统一方案_2026-10-24/read.html):从卡长出、顶上这一支的每一轮、底下一排操作、
+   正在读的卡描一圈、换轮正文滑进来、关掉往右淡出。放文件末尾:同特异性压过上面阅读栏那几条 ── */
+.t2cv-read-steps { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 4px; }
+.t2cv-read-steps > button {
+  min-width: 18px; height: 18px; padding: 0 5px; box-sizing: border-box; border: 0; border-radius: var(--radius-pill, 999px);
+  background: var(--overlay-light, rgba(127,127,127,.1)); color: var(--text-muted);
+  font: inherit; font-size: var(--ui-font-caption, 11px); line-height: 18px; text-align: center; cursor: pointer;
+}
+.t2cv-read-steps > button:hover { color: var(--text); }
+.t2cv-read-steps > button[aria-current] { background: var(--text); color: var(--bg-card, var(--bg)); }
+.t2cv-read-gap, .t2cv-read-pos { font-size: var(--ui-font-caption, 11px); color: var(--text-faint); }
+.t2cv-read-pos { margin-left: 4px; }
+.t2cv-read-acts { flex: none; display: flex; align-items: center; gap: 2px; padding: 6px 8px 7px 10px; border-top: 1px solid var(--border); }
+.t2cv-read-acts > .t2-textbtn { color: var(--text-sec, var(--text-muted)); }
+.t2cv-read-acts > button:disabled { opacity: 0.45; cursor: default; background: transparent; }
+.t2cv-read-grow { flex: 1; }
+/* 每条消息自己的操作行(复制 / 重新生成 / 分出 / 顺便问)交给底下这一排:画布里没有重新生成,分出走草稿卡 */
+.t2cv-read-b .t2-actions { display: none; }
+/* 正在读的那张:选中那道强调带再加一圈 */
+.t2cv-turn[data-reading] > .t2cv-acard { border-color: var(--accent-ink); box-shadow: var(--card-shadow), 0 0 0 1.5px var(--accent-ink); }
+/* 打开时从卡长出来的那只卡框(ChatCanvas growFrom) */
+.t2cv-read-ghost {
+  position: absolute; z-index: 5; box-sizing: border-box; pointer-events: none;
+  border: 1px solid var(--border); border-radius: 12px; background: var(--bg-card, var(--bg)); box-shadow: var(--card-shadow);
+}
+.t2cv-read-b[data-dir="1"] { animation: t2cvReadInDown 170ms cubic-bezier(.2,.8,.2,1); }
+.t2cv-read-b[data-dir="-1"] { animation: t2cvReadInUp 170ms cubic-bezier(.2,.8,.2,1); }
+@keyframes t2cvReadInDown { from { opacity: 0; transform: translateY(8px); } }
+@keyframes t2cvReadInUp { from { opacity: 0; transform: translateY(-8px); } }
+.t2cv-read[data-out] { pointer-events: none; animation: t2cvReadOut 200ms cubic-bezier(.4,0,1,1) forwards; }
+@keyframes t2cvReadOut { to { opacity: 0; transform: translateX(18px); } }
+/* 左边缘拖宽:原来那条 6px 看不见,加一截看得见的拖手 */
+.t2cv-read-grip { width: 9px; }
+.t2cv-read-grip::after { content: ''; position: absolute; left: 3px; top: 50%; width: 3px; height: 36px; margin-top: -18px; border-radius: 3px; background: var(--border); }
+@media (prefers-reduced-motion: reduce) {
+  .t2cv-read-b[data-dir], .t2cv-read[data-out] { animation: none; }
+}
+/* 空白处拖着平移(左键 / 右键):握紧的抓手 */
+.t2cv-stage[data-panning] { cursor: grabbing; }

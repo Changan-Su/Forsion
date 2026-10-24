@@ -60,9 +60,11 @@ export async function webPublishLive({ run, cloud, workspace }) {
     const files = mine[0] ? JSON.parse(mine[0].body).files.map((f) => f.path).sort() : [];
     const url = mine[0] ? cloud.urlFor(JSON.parse(mine[0].body).slug) : '';
     const linked = !!url && ev.content.includes(url);
-    leg('工作会话发布文件夹(完全通行):照样弹卡,批准后只发一次,不带 .env,回复给链接',
-      !ev.error && !!ask && ask.reason === 'always' && sentBeforeAnswer === 0 && mine.length === 1 && files.join(',') === 'index.html,style.css' && linked,
-      ev.error || `${ask ? `弹卡(原因 ${ask.reason})` : '✗ 没弹卡'};批准前已发 ${sentBeforeAnswer ?? '-'} 次;共发 ${mine.length} 次;文件 [${files.join(', ')}];回复${linked ? '带了链接' : `✗ 没带链接 ${url}`}`, ev);
+    // 卡上那句按界面语言渲染的结构化版(10-24):键对、slug 就是发出去的那个
+    const i18n = ask?.previewI18n?.key === 'approval.preview.webPublish' && !!mine[0] && ask.previewI18n.vars?.slug === JSON.parse(mine[0].body).slug;
+    leg('工作会话发布文件夹(完全通行):照样弹卡,批准后只发一次,不带 .env,回复给链接,卡带本地化预览',
+      !ev.error && !!ask && ask.reason === 'always' && sentBeforeAnswer === 0 && mine.length === 1 && files.join(',') === 'index.html,style.css' && linked && i18n,
+      ev.error || `${ask ? `弹卡(原因 ${ask.reason})` : '✗ 没弹卡'};批准前已发 ${sentBeforeAnswer ?? '-'} 次;共发 ${mine.length} 次;文件 [${files.join(', ')}];回复${linked ? '带了链接' : `✗ 没带链接 ${url}`};预览 ${ask?.previewI18n ? JSON.stringify(ask.previewI18n) : '✗ 没有'}`, ev);
   }
   // 2. Chat session: the model writes the page into the session sandbox, then publishes it from there.
   {

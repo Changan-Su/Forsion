@@ -2,13 +2,13 @@ import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor
 import { MessageSquarePlus, MessagesSquare, NotebookPen } from 'lucide-react'
 import { runNativeSheetMenu, setActiveSpace, useSpaceStore, type SheetMenuItem } from '@lcl/engine'
 import { registerMessages, translate } from '@/i18n'
-import { blankNewChat } from '@/bootstrapEngine'
+import { readTanguNewChat } from '@/amadeus/plugins/tanguSeam'
 import { useApp } from '@/stores/appStore'
 import { openSession } from '@/sessionNav'
 import { displaySessionTitle } from '@/sessionTitle'
 import { amadeusAvailable } from '@/features/runtime'
 import { navigateToNote } from '@/amadeus/store/pageStore'
-import { splitNoteTitle, writeFresh } from '@tangu/ui/views/chat2/chatToNote'
+import { splitNoteTitle, writeFresh } from '@/amadeus/freshNote'
 import { loadPickedFiles } from './pickedFiles'
 import { whenShellReady } from './liveIsland'
 
@@ -43,7 +43,7 @@ function toChat(sessionId: string | null, text: string, files: File[]): void {
   // Home has no chat view of its own (tanguProbe.startChat does the same).
   if (useSpaceStore.getState().activeSpaceId !== 'tangu') setActiveSpace('tangu')
   if (sessionId) openSession(sessionId)
-  else blankNewChat()
+  else readTanguNewChat()?.blank()
   useApp.getState().setPendingShare({ text, files })
 }
 

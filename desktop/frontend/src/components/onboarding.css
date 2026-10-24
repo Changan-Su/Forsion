@@ -360,8 +360,7 @@ button.ob-progress-item:focus-visible { outline: var(--focus-ring) solid var(--s
   .ob-history-row { animation: ob-pane-in .3s var(--ease-out) both; }
   /* 左栏走完的一步:对勾画出来。 */
   .ob-draw path, .ob-draw polyline { stroke-dasharray: 24; animation: ob-draw .38s var(--ease-out) .08s both; }
-  /* 开关的滑块、选项卡的选中态、「完整说明」的箭头 */
-  .ob-flow .settings-switch > span { transition: transform .34s var(--ease-spring), background var(--duration-fast); }
+  /* 选项卡的选中态、「完整说明」的箭头(开关的滑块用 base.css 那份拉伸,10-24) */
   .ob-connect-option, .ob-env-option { transition: border-color .2s ease, background .2s ease; }
   button.ob-progress-item, .ob-skip { transition: color var(--duration-fast); }
   .ob-history-more > svg { transition: translate var(--duration-fast); }

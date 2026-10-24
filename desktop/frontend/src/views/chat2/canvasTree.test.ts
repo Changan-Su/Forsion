@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { SessionRecord, UiMessage } from '../../types'
-import { buildTurnTree, splitTurns } from './canvasTree'
+import { buildTurnTree, readSteps, splitTurns } from './canvasTree'
 
 const u = (id: string, content: string, ts = 0): UiMessage => ({ id, role: 'user', content, status: 'done', timestamp: ts })
 const a = (id: string, content: string, ts = 0): UiMessage => ({ id, role: 'assistant', content, status: 'done', timestamp: ts })
@@ -96,5 +96,16 @@ describe('buildTurnTree', () => {
     const tree = buildTurnTree('R', [br('B1', 'a1', 'R', '2026-10-18 10:00:00')], (s) => (s === 'B1' ? B1 : undefined))
     expect(tree.cards.size).toBe(0)
     expect(tree.paths.B1).toBeUndefined()
+  })
+})
+
+describe('readSteps(阅读栏顶上的轮次)', () => {
+  it('不超过 8 轮全列,多了折成「1 2 … 7 8 9」,只隔一轮不折', () => {
+    expect(readSteps(3, 1)).toEqual([0, 1, 2])
+    expect(readSteps(8, 7)).toEqual([0, 1, 2, 3, 4, 5, 6, 7])
+    expect(readSteps(9, 7)).toEqual([0, 1, -1, 6, 7, 8])
+    expect(readSteps(12, 0)).toEqual([0, 1, -1, 11])
+    expect(readSteps(12, 5)).toEqual([0, 1, -1, 4, 5, 6, -1, 11])
+    expect(readSteps(12, 3)).toEqual([0, 1, 2, 3, 4, -1, 11])
   })
 })

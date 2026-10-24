@@ -8,6 +8,7 @@ const state = vi.hoisted(() => ({
 vi.mock('../product', () => ({ PRODUCT: state.profile }))
 vi.mock('@lcl/engine', () => ({
   registerView: (view: { type: string }) => state.views.set(view.type, view),
+  addCommand: vi.fn(),
   registerSpace: vi.fn(), unregisterSpace: vi.fn(), addRibbonIcon: vi.fn(), removeRibbonIcon: vi.fn(),
   setActiveSpace: vi.fn(), useSpaceStore: { getState: () => ({ spaces: [] }) }, useWorkspace: { getState: () => ({}) },
   Skeleton: () => null,
@@ -20,7 +21,7 @@ vi.mock('../views/OrbitsView', () => ({ OrbitsView: () => null }))
 vi.mock('../views/SessionsView', () => ({ SessionsView: () => null }))
 vi.mock('../views/newChatComposer', () => ({ NewChatComposer: () => null, mountNewChatComposer: vi.fn(), sendFromNewChat: vi.fn(), startNewChatCall: vi.fn() }))
 vi.mock('../views/RightViews', () => ({ MemoryPanelView: () => null, SubchatsView: () => null, SessionFilesView: () => null, TocView: () => null }))
-vi.mock('../views/SpecialViews', () => ({ AgentsDetailSpecialView: () => null, WorkspaceDetailSpecialView: () => null }))
+vi.mock('../views/SpecialViews', () => ({ AgentsDetailSpecialView: () => null, WorkspaceDetailSpecialView: () => null, openSpecial: vi.fn() }))
 vi.mock('../amadeusViews', () => ({ AmadeusEditorView: () => null, AmadeusBacklinksView: () => null, NoteTabIcon: () => null }))
 vi.mock('../views/AmadeusDbView', () => ({ AmadeusDbView: () => null }))
 vi.mock('../views/AmadeusDrawingView', () => ({ AmadeusDrawingView: () => null }))
@@ -36,7 +37,7 @@ vi.mock('../views/automation/AutomationDetailView', () => ({ AutomationDetailVie
 vi.mock('../views/automation/AutomationRunsView', () => ({ AutomationRunsView: () => null }))
 
 import { registerAmadeusViews } from './amadeus'
-import { registerTanguViews } from './tangu'
+import { activateTangu, registerTanguViews } from './tangu'
 import { registerOperationsViews } from './operations'
 import { installCalendarViews } from '../builtins/calendar'
 import { amadeusAvailable, inboxAvailable, miniFeatureAvailable, museAvailable, sessionsAvailable } from './runtime'
@@ -87,6 +88,29 @@ describe('native package contribution boundary', () => {
     state.profile.nativeFeatures = ['tangu']
     register()
     expect(SLOTS.filter(([, read]) => read() === null)).toEqual([])
+  })
+
+  // 界面热更新 3b:Tangu 唯一的入口。探针的门比 Tangu 宽 —— automation-only 也要 ctx.tangu,只是没有对话那几块
+  it('activateTangu installs the probe for Tangu or automation, and hands askInChat over only with Tangu', () => {
+    const probes: Record<string, unknown>[] = []
+    const host = { installSlice: () => {}, installProbe: (p: Record<string, unknown>) => { probes.push(p) } }
+    activateTangu(host)
+    expect(probes).toEqual([])
+    expect(state.views.has('chat')).toBe(false)
+    state.profile.nativeFeatures = ['automation']
+    activateTangu(host)
+    expect(probes).toEqual([{}])
+    expect(state.views.has('chat')).toBe(false)
+    state.profile.nativeFeatures = ['tangu']
+    activateTangu(host)
+    expect(probes).toHaveLength(2)
+    expect(typeof probes[1].askInChat).toBe('function')
+    expect(state.views.has('chat')).toBe(true)
+    state.profile.nativeFeatures = undefined // 老档案(没写 nativeFeatures):照旧装探针
+    state.profile.spaces = state.profile.spaces.filter((x) => x !== 'tangu' && x !== 'automation')
+    activateTangu(host)
+    expect(probes).toEqual([{}, probes[1], {}])
+    state.profile.spaces = ['tangu', 'amadeus', 'calendar', 'automation', 'public']
   })
 
   it('adds and removes Calendar independently of Amadeus between page boots', () => {

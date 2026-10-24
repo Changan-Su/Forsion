@@ -42,6 +42,7 @@ void (async () => {
   const [{ useApp }, T, { RunLocationPicker }, { ProjectSelector }, { ExtraFolders }, { useRemoteNewChatWorkspaces }] = await Promise.all([
     import('./stores/appStore'), import('./services/engine/targets'), import('./components/RunLocationPicker'),
     import('./components/ProjectSelector'), import('./components/ExtraFolders'), import('./stores/newChatWorkspaces'),
+    import('./tangu/store/standalone'), // 不走 installEngine:自己装 Tangu 的 store 半身(界面热更新 3c),同样排在打桩之后
   ])
   useApp.getState().setTr(translate) // main.tsx 做的那一步:store 里的文案(默认工作区的名字)靠它
   useApp.setState({

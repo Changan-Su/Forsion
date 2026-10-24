@@ -5,6 +5,8 @@
  * 卡里是全文、超长的只露预览、「阅读」在右边开全文;「只看这一支」(旁支淡、点了切过去);自动跟随(卡底停在输入框上方)、滚走停跟出箭头、
  * 点箭头飞回并恢复跟随;双击 = 右边阅读栏、卡让开它(方案 Chat画布第三轮);胶囊切回对话只有一份正文;偏好按树根记;
  * ⊕:回答卡下 = 草稿提问卡(卡里写、Enter 建分支并发进去)/ 末尾那张 = 聚焦输入框,提问卡左右 = 换个问法。最后拍亮 / 暗 / 柔青三张,自己看。
+ * 阅读栏 A(画布交互统一方案_2026-10-24 read.html):卡框长出、顶上轮次直接跳、底下一排操作、换轮滑入、关掉淡出、「在对话里打开」;
+ * 空白处右键按住拖 = 平移(握紧的抓手),没拖才弹菜单。
  * 量的是 out/ 产物:改了源码先 `npm run build`。
  *   node ../.claude/hooks/devlock.cjs run --vehicle=e2e --what="Chat 画布台架" --eta=4 -- node scripts/chat-canvas.e2e.cjs
  *   SHOT_DIR=… 指定截图目录;LANG_EN=1 拍英文
@@ -288,7 +290,7 @@ async function main() {
     await win.waitForTimeout(300)
     const prevKey2 = await pane.getAttribute('data-cv-read')
     await win.keyboard.press('Escape')
-    await win.waitForTimeout(200)
+    await pane.waitFor({ state: 'detached', timeout: 2_000 }).catch(() => {}) // 关 = 往右淡出 200ms 再拿掉
     const backOnStage = await win.evaluate(() => document.activeElement?.classList.contains('t2cv-stage'))
     r.check('D3 双击后直接 ↑ 换到上一轮、点「下一轮」后 ↑ 照样翻,Esc 关掉、焦点回舞台', prevKey === `${R}:u1` && nextKey === `${B2}:d1` && prevKey2 === `${R}:u1` && (await pane.count()) === 0 && backOnStage,
       JSON.stringify({ prevKey, nextKey, prevKey2, backOnStage }))
@@ -492,6 +494,74 @@ async function main() {
     r.check('G1 阅读栏左边缘拖宽:变宽、记在本机,卡照样让到它左边', pb2.width > pb.width + 60 && Number(savedW) > 0 && cardOk, JSON.stringify({ w0: Math.round(pb.width), w1: Math.round(pb2.width), savedW, cardOk }))
     await win.screenshot({ path: path.join(dir, 'canvas-read-wide.png') })
     await win.keyboard.press('Escape')
+    await pane.waitFor({ state: 'detached', timeout: 2_000 })
+
+    // ── 阅读栏 A:卡框长出、顶上轮次、底下一排操作(同卡边 ⊕ 的规则)、换轮滑入、关掉往右淡出 ──
+    await show(R, 'u2')
+    const miniBefore = await win.evaluate(() => !!document.querySelector('.t2cv .amx-stage-minimap'))
+    await card(R, 'u2').locator('.t2cv-q').dblclick()
+    await pane.waitFor({ timeout: 5_000 })
+    const ghost = await win.evaluate(() => !!document.querySelector('.t2cv-read-ghost'))
+    await win.waitForTimeout(500)
+    const ra = await win.evaluate((k) => {
+      const p = document.querySelector('[data-testid="cv-read"]')
+      const chips = [...p.querySelectorAll('.t2cv-read-steps > button')]
+      return { chips: chips.length, cur: chips.findIndex((b) => b.getAttribute('aria-current') === 'true'), follow: !!p.querySelector('[data-testid="cv-read-follow"]'),
+        branch: !!p.querySelector('[data-testid="cv-read-branch"]'), msgActs: [...p.querySelectorAll('.t2-actions')].filter((e) => e.offsetParent).length,
+        ring: !!document.querySelector(`.t2cv-turn[data-cv-node="${k}"][data-reading]`), mini: !!document.querySelector('.t2cv .amx-stage-minimap'),
+        ghostLeft: !!document.querySelector('.t2cv-read-ghost'), wr: +(p.getBoundingClientRect().width / document.querySelector('.t2cv').getBoundingClientRect().width).toFixed(3) }
+    }, `${R}:u2`)
+    r.check('RA1 双击:卡框从卡长出来、到位后收掉;顶上一排轮次第 2 轮亮;中间那轮出「从这里分出」不出「接着问」;正读的卡描一圈;缩略图收起;消息自己那行操作藏掉;拖宽过的也不超过画布 70%',
+      ghost && !ra.ghostLeft && ra.chips >= 3 && ra.cur === 1 && ra.branch && !ra.follow && ra.ring && !ra.mini && ra.msgActs === 0 && ra.wr <= 0.701, JSON.stringify({ ghost, miniBefore, ...ra }))
+    await win.screenshot({ path: path.join(dir, 'canvas-read-a.png') })
+    await win.locator('.t2cv-read-steps > button').first().click()
+    await win.waitForTimeout(60)
+    const rb = await win.evaluate(() => { const p = document.querySelector('[data-testid="cv-read"]'); return { key: p.dataset.cvRead, dir: p.querySelector('.t2cv-read-b').dataset.dir ?? null } })
+    r.check('RA2 点轮次「1」直接跳到第一轮,正文从上面滑进来', rb.key === `${R}:u1` && rb.dir === '-1', JSON.stringify(rb))
+    await win.locator('.t2cv-read-steps > button').last().click()
+    await win.waitForTimeout(300)
+    const rc = await win.evaluate(() => { const p = document.querySelector('[data-testid="cv-read"]'); return { key: p.dataset.cvRead, follow: !!p.querySelector('[data-testid="cv-read-follow"]'), branch: !!p.querySelector('[data-testid="cv-read-branch"]'), dir: p.querySelector('.t2cv-read-b').dataset.dir ?? null } })
+    await win.locator('[data-testid="cv-read-follow"]').click()
+    await win.waitForTimeout(100)
+    const focusTa = await win.evaluate(() => !!document.activeElement?.classList.contains('t2c-ta') && !!document.querySelector('.t2cv-attach[data-flash]'))
+    r.check('RA3 这一支最后一轮出「接着问」:点了聚焦下面的输入框、「接在」闪一下;往下跳正文从下面滑进来', rc.follow && !rc.branch && rc.dir === '1' && focusTa, JSON.stringify({ ...rc, focusTa }))
+    await win.locator('[data-testid="cv-read-close"]').click()
+    const out = await win.evaluate(() => document.querySelector('[data-testid="cv-read"]')?.hasAttribute('data-out') ?? false)
+    await pane.waitFor({ state: 'detached', timeout: 2_000 })
+    const ringLeft = await win.locator('.t2cv-turn[data-reading]').count()
+    r.check('RA4 关:先往右淡出再拿掉,卡上那一圈跟着没了', out && ringLeft === 0, JSON.stringify({ out, ringLeft }))
+
+    // ── 空白处右键按住拖 = 平移;没拖才弹空白菜单(用户 10-24 定)──
+    const blankPt = () => win.evaluate(() => {
+      const s = document.querySelector('.t2cv-stage').getBoundingClientRect()
+      for (let y = s.top + 220; y < s.bottom - 160; y += 40) for (let x = s.left + 40; x < s.right - 40; x += 40) {
+        const el = document.elementFromPoint(x, y)
+        if (el && el.closest('.t2cv-stage') && !el.closest('.t2cv-turn, .amx-stage-hud, .amx-stage-minimap, .t2cv-hints, button')) return { x, y }
+      }
+      return null
+    })
+    const worldXY = () => win.evaluate(() => { const m = /translate\(([-\d.]+)px, ([-\d.]+)px\)/.exec(document.querySelector('.t2cv-world').style.transform); return { x: +m[1], y: +m[2] } })
+    let bp = await blankPt()
+    const w0 = await worldXY()
+    await win.mouse.move(bp.x, bp.y)
+    await win.mouse.down({ button: 'right' })
+    await win.mouse.move(bp.x + 90, bp.y + 50, { steps: 6 })
+    const grab = await win.evaluate(() => getComputedStyle(document.querySelector('.t2cv-stage')).cursor)
+    await win.mouse.up({ button: 'right' })
+    await win.waitForTimeout(250)
+    const w1 = await worldXY()
+    const menuAfterDrag = await win.locator('.ctx-menu').count()
+    r.check('RP1 空白处右键按住拖 = 平移(拖着是握紧的抓手),松开不弹菜单', w1.x - w0.x > 40 && w1.y - w0.y > 20 && grab === 'grabbing' && menuAfterDrag === 0, JSON.stringify({ w0, w1, grab, menuAfterDrag }))
+    bp = await blankPt()
+    await win.mouse.move(bp.x, bp.y)
+    await win.mouse.down({ button: 'right' })
+    const menuOnDown = await win.locator('.ctx-menu').count()
+    await win.mouse.up({ button: 'right' })
+    await win.locator('.ctx-menu').waitFor({ timeout: 3_000 })
+    const m10 = await menuItems()
+    r.check('RP2 空白处右键没拖:按下不弹、松开才弹空白菜单', menuOnDown === 0 && has(m10, /看全部$/), JSON.stringify({ menuOnDown, m10 }))
+    await win.keyboard.press('Escape')
+    await win.locator('.ctx-menu').waitFor({ state: 'detached', timeout: 3_000 })
 
     // ── 观感:亮 / 暗 / 柔青 ──
     await win.waitForTimeout(500)
@@ -502,6 +572,19 @@ async function main() {
     await win.evaluate(() => { const e = document.documentElement; e.dataset.mode = 'light'; e.classList.remove('dark'); e.dataset.skin = 'teal'; e.dataset.bg = 'teal' })
     await win.waitForTimeout(400)
     await win.screenshot({ path: path.join(dir, 'look-teal.png') })
+
+    // 「在对话里打开」:切回对话、停在这一支,滚到那一轮的提问
+    await show(R, 'u2')
+    await card(R, 'u2').locator('.t2cv-q').dblclick()
+    await pane.waitFor({ timeout: 5_000 })
+    await win.locator('[data-testid="cv-read-chat"]').click()
+    await win.waitForFunction(() => !document.querySelector('.t2cv'), null, { timeout: 5_000 })
+    await win.waitForTimeout(1200) // 对话页从底部滚上去
+    const ic = await win.evaluate(() => {
+      const el = document.getElementById('tocmsg-u2'), b = el?.getBoundingClientRect()
+      return { found: !!el, top: b ? Math.round(b.top) : null, inView: !!b && b.top > 40 && b.top < window.innerHeight * 0.6, seg: document.querySelector('[data-testid="chat-canvas-seg"] [aria-selected="true"]')?.textContent }
+    })
+    r.check('RA5 「在对话里打开」:回到对话,那一轮的提问滚进视野', ic.found && ic.inView && /对话|Chat/.test(ic.seg || ''), JSON.stringify(ic))
     console.log(`截图:${dir}`)
   } finally {
     await ctx.close()
