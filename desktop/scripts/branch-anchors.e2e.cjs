@@ -146,7 +146,7 @@ async function main() {
     const panel = win.locator('[data-aside-panel] .btw-panel')
     await panel.waitFor({ timeout: 10_000 })
     r.check('A1 顺便问开在右边那块面板,不新开窗,存下来的那一问载回来了', ctx.app.windows().length === windowsBefore && (await panel.locator('.btw-turn').count()) === 1 && (await panel.locator('.btw-turn-q').first().textContent()).includes('Yjs'), '')
-    const box = panel.locator('.btw-input textarea')
+    const box = panel.locator('.btw-compose .t2c-ta') // 10-24 起输入区是共用 Chat Box
     await box.fill('包有多大?')
     await box.press('Enter')
     await panel.locator('.btw-turn').nth(1).locator('.btw-turn-a').waitFor({ timeout: 10_000 })
