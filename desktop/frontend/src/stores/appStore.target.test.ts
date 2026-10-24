@@ -21,6 +21,7 @@ vi.mock('../services/http', () => ({
 }))
 
 const { useApp } = await import('./appStore')
+await import('../tangu/store/standalone')
 const T = await import('../services/engine/targets')
 const H = await import('../services/engine/health')
 const C = await import('../services/engine/catalog')
@@ -188,6 +189,7 @@ describe('setFocusTarget(S4:焦点 = 新会话建在哪)', () => {
     expect(useApp.getState().homeDir).toBe('/Users/mac')
     // 焦点在 unit 时,手机偏好的模型不在那台的模型表里 → 回落那台的缺省
     const { newChatModelId } = await import('./appStore')
+    await import('../tangu/store/standalone')
     expect(newChatModelId(useApp.getState())).toBe('mac-model')
     // 收件箱(home 类)仍打 home
     const api = await import('../services/backendService')

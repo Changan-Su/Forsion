@@ -29,6 +29,7 @@ import { awaitTypingQuiet, installTypingGuard } from '../store/typingGuard'
 import {
   DbLinkPicker, MilkdownInner, normalizeSerializedMd, serializeUnified, stampedFileName,
   PREFIX_TRIGGERS, SLASH_SENTINELS, slashTurnFailed, getFocusedBlockApply, setFocusedBlockApply, type SlashItem, type SlashOps,
+  copySelectedImage, selectedImage,
 } from '../blocks/markdown/MarkdownBlock'
 import { emptyDb, emptyNoteView, serializeDb } from '@amadeus-shared/db/schema'
 import { BLANK_SCENE_JSON, blankDrawing } from '@amadeus-shared/excalidraw/format'
@@ -162,6 +163,9 @@ registerMessages({
   'unipage.menu.toNewColumnMulti': { zh: '选中多块时不能移到新列，请只选一块', en: 'Select a single block to move it to a new column' },
   'unipage.menu.backToDoc': { zh: '收回文档', en: 'Return to document' },
   'unipage.menu.duplicate': { zh: '复制块', en: 'Duplicate block' },
+  'unipage.menu.copyImage': { zh: '复制图片', en: 'Copy image' },
+  'unipage.menu.imageCopied': { zh: '已复制图片', en: 'Image copied' },
+  'unipage.menu.imageCopyFailed': { zh: '复制失败', en: 'Could not copy the image' },
   'unipage.menu.delete': { zh: '删除', en: 'Delete' },
   'unipage.lock.bar': { zh: '页面已锁定，防止误改。', en: 'This page is locked to prevent accidental edits.' },
   'unipage.lock.unlock': { zh: '解锁', en: 'Unlock' },
@@ -3729,6 +3733,23 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
             }}>
               <Copy size={13} /> {t('unipage.menu.duplicate')}
             </button>
+            {/* 选中的是一张图(右键图片即选中它):复制成真图片,能直接贴进聊天 / 别的应用。键盘 Mod+C 走同一份。 */}
+            {(() => {
+              const view = layer.getView()
+              return view && selectedImage(view) && (
+                <button role="menuitem" tabIndex={-1} data-act="copyImage" onClick={() => {
+                  setBlockMenu(null)
+                  const v = layer.getView()
+                  if (!v || !restoreMenuTarget(v)) return
+                  void copySelectedImage(v, path).then((ok) => {
+                    window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: translate(ok ? 'unipage.menu.imageCopied' : 'unipage.menu.imageCopyFailed') } }))
+                  })
+                  v.focus()
+                }}>
+                  <CoverImageIcon size={13} /> {t('unipage.menu.copyImage')}
+                </button>
+              )
+            })()}
             {/* 复制标题链接 / 复制块链接 / 移动到(B-15):只在真能用的时候露出 —— 块链接只给已有 `^id` 的块(不铸 ID)。 */}
             {(() => {
               const view = layer.getView()

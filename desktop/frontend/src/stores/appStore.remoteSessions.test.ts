@@ -21,6 +21,7 @@ vi.mock('../services/http', () => ({
 }))
 
 const { useApp } = await import('./appStore')
+await import('../tangu/store/standalone')
 const T = await import('../services/engine/targets')
 const H = await import('../services/engine/health')
 const C = await import('../services/engine/catalog')

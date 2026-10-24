@@ -20,7 +20,7 @@ export function installTabTitleBar(): void {
   const update = (): void => {
     frame = 0
     const tabs = [...document.querySelectorAll<HTMLElement>('.dv-tabs-and-actions-container')]
-      .find((el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.top < 2 && r.height > 0 })
+      .find((el) => { const r = el.getBoundingClientRect(); return !el.classList.contains('dv-edge-stacked') && r.width > 0 && r.top < 2 && r.height > 0 })
     const height = Math.max(16, Math.min(128, Math.round(tabs?.getBoundingClientRect().bottom ?? 32)))
     const symbolColor = root.dataset.mode === 'dark' ? '#ecebea' : '#383837'
     const key = `${height}:${symbolColor}`

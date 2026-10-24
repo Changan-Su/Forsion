@@ -7,8 +7,11 @@
  * 规则(纯正则解析 import,不引 TS parser):
  *   1. 宿主 → Tangu 一律写成 `@tangu/ui/<相对 frontend/src 的路径>`(alias 指向 frontend/src,所以指到的模块和原来一样,
  *      不聚合成一个大出口 —— 聚合会让只用一个小函数的宿主文件和它的单测连带拉起整棵聊天界面)。
- *      宿主能碰的 Tangu 模块 = baseline.hostImports(公开面,第 2 步逐个换成 ctx 接缝,只许减)。
  *      用 `@/`、相对路径直连 Tangu 文件 = 红;`@tangu/ui/` 指到不是 Tangu 的文件 = 红。
+ *   1b. 单入口、零转出(界面热更新 3d 起):宿主运行时只许 import `entries` 里的文件(激活入口 + 不走激活的独立页用的
+ *      standalone),别的 Tangu 模块一律经 tanguSeam 的接缝拿 —— 这条是硬规则,--update 改不动;宿主 `export … from` Tangu
+ *      模块 = 红(转出会让宿主变成 Tangu 的第二个出口)。只引类型(`import type` / `export type` / 花括号里全是 `type X`)
+ *      不算运行时依赖,两条都不管。宿主在用的入口 = baseline.hostImports(只许减)。
  *   2. Tangu 文件之间用相对路径,不许写 `@tangu/ui/`(这个前缀只标宿主一侧的越界)。
  *   3. Tangu → 宿主:Tangu 文件用到的宿主模块集合 = 将来要补的 ctx 接缝面,只许减不许增(baseline.tanguHostDeps)。
  *   4. 契约(`contracts.dirs`,第 2b 步起;方案里包的 contracts/ 子路径):引擎、Tangu 界面、宿主三方共用的纯 TS。
@@ -46,7 +49,11 @@ const ALIAS = [ // 与各 vite.config 的 alias 同表;长前缀在前
   ['@', SRC],
 ]
 const EXT = ['', '.ts', '.tsx', '.js', '.jsx', '.mjs', '.css', '/index.ts', '/index.tsx', '/index.js']
-const EXEMPT = /\.(test|spec)\.[cm]?[tj]sx?$|\/__tests__\/|(^|\/)harness\.tsx$|Harness\.tsx$|\.typecheck\.ts$|\.d\.ts$/
+const EXEMPT = /\.(test|spec)\.[cm]?[tj]sx?$|\/__tests__\/|(^|\/)harness\.tsx$|Harness\.tsx$|\/harness\/|nativePreview\.tsx$|\.typecheck\.ts$|\.d\.ts$/
+/** IMPORT_RE 的静态分支会跨语句(`[^'"`]*?` 吃得过分号和换行):只看匹配里最后一条语句(Codex 3d 评审) */
+const lastStmt = (m) => m.split(/[;\n](?=\s*(?:import|export)\b)/).pop().trim()
+/** 只引类型的 import / export:不进运行时,不算宿主用了 Tangu 模块 */
+const typeOnly = (stmt) => /^(?:import|export)\s+type[\s{*]/.test(stmt) || /^(?:import|export)\s*\{([^}]*)\}/.test(stmt) && stmt.match(/\{([^}]*)\}/)[1].split(',').every((x) => !x.trim() || /^type\s/.test(x.trim()))
 const IMPORT_RE = /(?:import|export)(?=[\s{*])[^'"`]*?from\s*['"]([^'"]+)['"]|import\s*\(\s*(['"`])([^'"`$]+)\2\s*[,)]|import\s*['"]([^'"]+)['"]|@import\s+(?:url\(\s*)?['"]?([^'")\s;]+)|\brequire\s*\(\s*['"]([^'"]+)['"]\s*\)/g
 
 /** 把注释换成空格,字符串原样留着(这样字符串里的 '/*'、'//' 不会被当成注释)。
@@ -87,6 +94,7 @@ function analyze(files, cfg) {
   const errors = [], notes = []
   const used = new Set(), hostDeps = new Set()
   const known = new Set(cfg.baseline.hostImports)
+  const entries = new Set(cfg.entries || [])
   for (const [f, src] of files) {
     if (isContract(f) ? /\.(test|spec)\.[cm]?[tj]sx?$/.test(f) : EXEMPT.test(f)) continue // 契约里的 .d.ts 也要查(Codex 2b 评审)
     const tangu = isTangu(f)
@@ -106,9 +114,14 @@ function analyze(files, cfg) {
       if (!to && spec.startsWith(PREFIX)) { errors.push(`${f} import '${spec}' 解析不到文件`); continue }
       if (!to || to === f || isContract(to)) continue
       if (!tangu && isTangu(to)) {
-        used.add(to)
         if (!spec.startsWith(PREFIX)) errors.push(`宿主直连 Tangu 文件没走 @tangu/ui/ 前缀:${f} import '${spec}'(→ ${to})。写成 '${PREFIX}${to.slice(SRC.length + 1).replace(/\.(tsx?|jsx?)$/, '')}';它若其实是通用件,从 tangu-boundary.json 的 files 拿掉`)
-        else if (!known.has(to)) errors.push(`宿主开始用一个新的 Tangu 模块:${f} → ${to}(公开面只许减)。能走 ctx 就别加;确需直用,跑 --update --allow-grow 并在提交说明写理由`)
+        else if (typeOnly(lastStmt(m[0]))) continue
+        else if (/^export\b/.test(lastStmt(m[0]))) errors.push(`宿主转出了 Tangu 模块:${f} '${spec}'(零转出)。要用的地方自己经 tanguSeam 的接缝拿`)
+        else if (!entries.has(to)) errors.push(`宿主只许经入口用 Tangu:${f} → ${to}。入口 = tangu-boundary.json 的 entries;别的 Tangu 件由 activateTangu 经 tanguSeam 的接缝交给宿主`)
+        else {
+          used.add(to)
+          if (!known.has(to)) errors.push(`宿主开始用一个新的 Tangu 入口:${f} → ${to}(只许减)。确需新增,先加进 entries,再跑 --update --allow-grow 并在提交说明写理由`)
+        }
       } else if (!tangu && spec.startsWith(PREFIX)) {
         errors.push(`${f} import '${spec}' 指到的不是 Tangu 文件(→ ${to}),宿主自己的文件用 @/ 或相对路径`)
       } else if (tangu && spec.startsWith(PREFIX)) {
@@ -147,7 +160,7 @@ const grownBy = (baseline, current) => Object.keys(current).flatMap((k) => curre
 function selftest() {
   const assert = require('node:assert/strict')
   const A = `${SRC}/views/chat2/A.tsx`
-  const cfg = { tangu: { dirs: [`${SRC}/views/chat2/`], files: [] }, baseline: { hostImports: [A], tanguHostDeps: [`${SRC}/i18n.tsx`] } }
+  const cfg = { tangu: { dirs: [`${SRC}/views/chat2/`], files: [] }, entries: [A], baseline: { hostImports: [A], tanguHostDeps: [`${SRC}/i18n.tsx`] } }
   const base = {
     [`${SRC}/i18n.tsx`]: 'export const t = 1',
     [`${SRC}/stores/x.ts`]: 'export const x = 1',
@@ -158,7 +171,21 @@ function selftest() {
   const run = (extra) => analyze(new Map(Object.entries({ ...base, ...extra })), cfg)
   assert.deepEqual(run({}).errors, [], '干净的树应当是绿的(注释里的 import 不算)')
   assert.match(run({ [`${SRC}/Other.tsx`]: "import { A } from './views/chat2/A'" }).errors.join(), /没走 @tangu\/ui\/ 前缀/)
-  assert.match(run({ [`${SRC}/Other.tsx`]: "import { B } from '@tangu/ui/views/chat2/B'" }).errors.join(), /新的 Tangu 模块/)
+  assert.match(run({ [`${SRC}/Other.tsx`]: "import { B } from '@tangu/ui/views/chat2/B'" }).errors.join(), /只许经入口/)
+  assert.match(analyze(new Map(Object.entries(base)), { ...cfg, baseline: { ...cfg.baseline, hostImports: [] } }).errors.join(), /新的 Tangu 入口/)
+  // 3d:单入口、零转出;只引类型不管
+  assert.match(run({ [`${SRC}/Other.tsx`]: "export { A } from '@tangu/ui/views/chat2/A'" }).errors.join(), /转出/, '转出入口也红')
+  assert.match(run({ [`${SRC}/Other.tsx`]: "export * from '@tangu/ui/views/chat2/B'" }).errors.join(), /转出/)
+  assert.match(run({ [`${SRC}/Other.tsx`]: "import '@tangu/ui/views/chat2/B'" }).errors.join(), /只许经入口/, '副作用 import 也算')
+  assert.match(run({ [`${SRC}/Other.tsx`]: "const m = import('@tangu/ui/views/chat2/B')" }).errors.join(), /只许经入口/, '动态 import 也算')
+  assert.match(run({ [`${SRC}/Other.tsx`]: "import { type B, b } from '@tangu/ui/views/chat2/B'" }).errors.join(), /只许经入口/, '花括号里混了值')
+  for (const code of ["import type { B } from '@tangu/ui/views/chat2/B'", "export type { B } from '@tangu/ui/views/chat2/B'", "import { type B, type C } from '@tangu/ui/views/chat2/B'"]) {
+    assert.deepEqual(run({ [`${SRC}/Other.tsx`]: code }).errors, [], `只引类型放行:${code}`)
+  }
+  assert.match(run({ [`${SRC}/Other.tsx`]: "import type { B } from './views/chat2/B'" }).errors.join(), /没走 @tangu\/ui\/ 前缀/, '只引类型也要走前缀')
+  assert.match(run({ [`${SRC}/Other.tsx`]: "export type M = object\nimport { B } from '@tangu/ui/views/chat2/B'" }).errors.join(), /只许经入口/, '前一条是 export type 不许带过后面的运行时 import')
+  assert.match(run({ [`${SRC}/Other.tsx`]: "export type M = object; import { B } from '@tangu/ui/views/chat2/B'" }).errors.join(), /只许经入口/, '同一行分号隔开也一样')
+  assert.deepEqual(run({ [`${SRC}/Other.tsx`]: "export const k = 1\nimport type {\n  B,\n} from '@tangu/ui/views/chat2/B'" }).errors, [], '多行 import type 照旧放行')
   assert.match(run({ [`${SRC}/Other.tsx`]: "import { x } from '@tangu/ui/stores/x'" }).errors.join(), /不是 Tangu 文件/)
   assert.match(run({ [`${SRC}/views/chat2/C.tsx`]: "import { A } from '@tangu/ui/views/chat2/A'" }).errors.join(), /用相对路径/)
   assert.match(run({ [`${SRC}/views/chat2/C.tsx`]: "import { x } from '../../stores/x'" }).errors.join(), /新增了宿主依赖/)
@@ -194,7 +221,7 @@ function selftest() {
   assert.match(runK({ [`${SRC}/Other.tsx`]: "import { k } from '@/../../../tangu-agent/src/core/keyLock.js'" }).errors.join(), /直接引了引擎源码/, '经 alias 绕过去也要拦')
   assert.match(runK({ ['desktop/shared/m.ts']: "export * from '../../tangu-agent/src/shared/marketplace'" }).errors.join(), /直接引了引擎源码/, 'export * from 也算')
   assert.deepEqual(runK({ [`${SRC}/Other.tsx`]: "import { a } from '../../../tangu-agent/src/contracts/a'" }).errors, [], '引契约放行')
-  console.log('tangu-boundary selftest: 30/30 PASS')
+  console.log('tangu-boundary selftest: 43/43 PASS')
 }
 
 if (process.argv.includes('--selftest')) { selftest(); process.exit(0) }

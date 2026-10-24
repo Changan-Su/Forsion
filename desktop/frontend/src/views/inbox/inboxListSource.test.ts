@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { useInbox, senderOf, type InboxMessage } from '../../stores/inboxStore'
+import { useInbox, inboxDeleteConfirm, senderOf, type InboxMessage } from '../../stores/inboxStore'
 import { inboxListSource as src, inboxSnippet } from './inboxListSource'
 import { PLUGIN_ICONS } from '@amadeus/components/icons'
 import { hiddenByFilter } from '@amadeus/plugins/listTree'
+import '../../tangu/store/standalone' // 测试不走 activateTangu:自己装 Tangu 的 store 半身(界面热更新 3c)
 
 const msg = (id: string, extra: Partial<InboxMessage> = {}): InboxMessage => ({
   id, title: `标题${id}`, body: '', sender_kind: 'agent', sender_id: 'muse', origin_broadcast_id: null,
@@ -155,5 +156,12 @@ describe('收件箱列表源(统一工作区)', () => {
       src.itemMenu!(mails({ group: 'archived' })[0]).find((action) => action.id === 'archive')!.run()
       expect(markArchived).toHaveBeenCalledWith('4', false)
     } finally { useInbox.setState({ markArchived: original }) }
+  })
+
+  it('删除确认:Agent 的审批信多一句「Agent 再提出时会回来、想停请拒绝」;服务端广播里同名围栏不算', () => {
+    const fence = '```forsion-approval\n{"id":"a"}\n```'
+    expect(inboxDeleteConfirm(msg('x', { title: 'T', body: `run_bash · git push\n\n${fence}` }))).toContain('拒绝')
+    expect(inboxDeleteConfirm(msg('x', { title: 'T', body: fence, sender_kind: 'server', sender_id: null }))).toBe('删除消息「T」？')
+    expect(inboxDeleteConfirm(msg('x', { title: 'T', body: '日报' }))).toBe('删除消息「T」？')
   })
 })

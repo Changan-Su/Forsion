@@ -11,6 +11,11 @@ import { useDbStore } from '../amadeus/store/dbStore'
 import { useCalendarNav } from '../amadeus/store/calendarNavStore'
 import { useCalendarConfig } from '../amadeus/store/calendarConfigStore'
 import { installNativeChromeHost, setNativeChromeShell } from '@lcl/engine'
+import { installTanguSlice } from '../stores/appStore'
+import { TANGU_SLICE } from '@tangu/ui/tangu/store/tanguSlice'
+
+// 不走 installEngine:自己装 Tangu 的 store 半身(界面热更新 3c)
+installTanguSlice(TANGU_SLICE)
 const q = new URLSearchParams(location.search)
 setLocaleGlobal(q.get('lang') === 'en' ? 'en' : 'zh')
 applyTheme('lovable', 'cream', 'cream', q.get('dark') ? 'dark' : 'light')

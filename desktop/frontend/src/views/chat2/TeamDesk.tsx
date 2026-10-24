@@ -2,7 +2,8 @@ import { useEffect, useMemo } from 'react'
 import { ChevronRight } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 import { registerMessages, useI18n } from '../../i18n'
-import { useApp, type TeamWorkMember } from '../../stores/appStore'
+import { useApp } from '../../stores/appStore'
+import { type TeamWorkMember } from '../../tangu/store/tanguSlice'
 import { useChildChat } from '../../stores/childChatStore'
 
 registerMessages({

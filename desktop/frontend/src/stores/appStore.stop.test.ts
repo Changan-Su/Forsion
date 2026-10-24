@@ -6,6 +6,7 @@ vi.mock('../services/agentRunService', async (original) => ({
   expediteSteer: service.expedite,
 }))
 import { useApp } from './appStore'
+import '../tangu/store/standalone' // 测试不走 activateTangu:自己装 Tangu 的 store 半身(界面热更新 3c)
 
 const initial = useApp.getState()
 const event = (type: string, payload: any = {}) => useApp.getState().reduceEvent('s', 'r', { current: 'a' }, { seq: 1, type, payload })

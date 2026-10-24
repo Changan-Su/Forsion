@@ -13,6 +13,7 @@ import { applyTheme } from './theme/loader'
 import { RemoteSessionsSettings } from './components/RemoteSessionsSettings'
 import type { RemoteSessionsApi, RemoteSessionsView } from '../../shared/remoteSessions'
 import type { RemoteSafetyApi, RemoteSafetyState } from '../../shared/remoteSafety'
+import './tangu/store/standalone' // 不走 installEngine:自己装 Tangu 的 store 半身(界面热更新 3c);排在最后,别早于上面那些打桩的 import
 
 const params = new URLSearchParams(location.search)
 const dark = params.has('dark')

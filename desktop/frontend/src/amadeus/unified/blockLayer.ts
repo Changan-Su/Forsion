@@ -2727,8 +2727,8 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
   //    Shift+点击只延伸字符。这里按**顶层块**(doc / 分栏 cell 的直接子,与 topRangeOf 同一容器口径)扩选:
   //    锚块不动、头块一格一格走,单块回到 NodeSelection,多块 = 整块文字范围 + blockSelectionKey(与框选同一表示,
   //    删除 / 复制 / 拖动 / 块菜单全走既有多块机器)。折叠标题藏起来的块跳过(随折叠标题整体进出)。
-  //    另:Mod-Alt-/ 打开块菜单并把焦点放在「转换为」第一项(Cmd+/ 被左侧栏占着);Mod-] / Mod-[ = 缩进 / 减少缩进
-  //    (段落接缩进档,与 Tab 同一套;代码块里不接,免得插空格)。
+  //    另:Mod-Alt-/ 打开块菜单并把焦点放在「转换为」第一项(Cmd+/ 被左侧栏占着)。
+  //    Mod-] / Mod-[ 不绑:与 Tab / Shift-Tab 重复,且会吃掉页面前进 / 后退。
   const TOP_CONTAINERS = ['doc', 'amadeusColumnCell']
   const inBlockMode = (state: EditorState): boolean => {
     const sel = state.selection
@@ -2785,7 +2785,6 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
     }
     return true // 到头了:吞键,不退回文字扩选(那会把块模式悄悄换成字符选区)
   }
-  const inCode = (state: EditorState): boolean => state.selection.$from.parent.type.name === 'code_block'
   const blockKbKeymap = $prose(() =>
     new Plugin({
       props: {
@@ -2806,8 +2805,6 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
             hooks.onMenu({ x: r.left, y: r.bottom + 4, keyboard: true, focus: 'turnInto' })
             return true
           },
-          'Mod-]': (state, dispatch, view) => (inCode(state) ? false : tabIndent(state, dispatch, view, tabFoldHooks)),
-          'Mod-[': (state, dispatch) => (inCode(state) ? false : tabOutdent(state, dispatch)),
         }),
         handleDOMEvents: {
           // Shift+点击:块模式下按顶层块延伸到点中的那块(文字选区照旧由浏览器延伸字符)。
