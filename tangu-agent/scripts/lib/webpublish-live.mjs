@@ -7,8 +7,32 @@
  *  Negative controls (run them when touching this): drop 'publish_web_page' from CHAT_PRESET_DEFERRED → leg 2 goes red
  *  (the chat face cannot publish); in webPublish.ts publish(), skip the sandbox branch (always resolvePath) → leg 2 goes red
  *  (the chat sandbox's files are not on the engine's cwd). */
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { spawn } from 'node:child_process';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+
+/** webpublishreal: start server/scripts/connect-local.mts (real Connect routes + SQL on PGlite) from a server checkout and read
+ *  its ready line. Tokens stay in memory; nothing it prints is written to the run's artifacts. */
+export function startConnectLocal(serverDir) {
+  const dir = resolve(serverDir || '');
+  const script = join(dir, 'scripts', 'connect-local.mts');
+  const tsx = join(dir, 'node_modules', '.bin', 'tsx');
+  if (!serverDir || !existsSync(script) || !existsSync(tsx)) return Promise.reject(new Error(`--connect-server <server 检出>:要有 scripts/connect-local.mts 且装过依赖(${dir})`));
+  const proc = spawn(tsx, [script], { cwd: dir, stdio: ['ignore', 'pipe', 'pipe'] });
+  return new Promise((ok, fail) => {
+    let out = '', err = '';
+    const timer = setTimeout(() => { proc.kill(); fail(new Error(`connect-local 60 秒没就绪:${err.slice(-400)}`)); }, 60_000);
+    proc.stderr.on('data', (d) => { err += d; });
+    proc.stdout.on('data', (d) => {
+      out += d;
+      const line = out.split('\n').slice(0, -1).find((l) => l.startsWith('CONNECT_LOCAL ')); // 只认收齐的整行
+      if (!line) return;
+      clearTimeout(timer);
+      ok({ ...JSON.parse(line.slice('CONNECT_LOCAL '.length)), stop: () => { try { proc.kill('SIGTERM'); } catch { /* gone */ } } });
+    });
+    proc.on('exit', (c) => { clearTimeout(timer); fail(new Error(`connect-local 退出 ${c}:${err.slice(-400)}`)); });
+  });
+}
 
 const CHAT = { preset: 'chat', execMode: 'sandbox', cwd: undefined };
 const called = (ev, name) => ev.toolCalls.includes(name) && ev.toolResults.some((r) => r.name === name && !r.isError && !/^Error/.test(r.full || ''));
@@ -61,6 +85,27 @@ export async function webPublishLive({ run, cloud, workspace }) {
     const all = urls.length >= 2 && urls.every((u) => ev.content.includes(u));
     leg('「我发布过哪些网页」:只读,不弹卡,列出全部链接', !ev.error && called(ev, 'forsion_account') && !ev.approvalList.length && all,
       ev.error || `${called(ev, 'forsion_account') ? '调了 forsion_account' : '✗ 没调 forsion_account'};弹卡 ${ev.approvalList.length} 次;链接 ${urls.filter((u) => ev.content.includes(u)).length}/${urls.length}`, ev);
+  }
+
+  // 4. webpublishreal only (cloud.connect = a real Connect server behind the front): every page the legs published opens
+  //    through its public link — shell 200, content served sandboxed and is the page that was sent — and the server's own
+  //    list agrees with what the legs saw. Against the fake cloud this leg does not exist (nothing is served there).
+  if (cloud.connect) {
+    const rows = [];
+    for (const [slug, b] of cloud.apps) {
+      const url = cloud.urlFor(slug);
+      const shell = await fetch(url).catch(() => null);
+      const content = await fetch(`${url}__content/`).catch(() => null);
+      const html = content ? await content.text() : '';
+      const sent = Buffer.from(b.files.find((f) => f.path === b.entry)?.content_b64 || '', 'base64').toString('utf8');
+      rows.push({ slug, shell: shell?.status, content: content?.status, csp: /sandbox/.test(content?.headers.get('content-security-policy') || ''), same: !!html && html === sent });
+    }
+    const listed = await fetch(`${cloud.url}/api/connect/apps`, { headers: { Authorization: `Bearer ${cloud.token}` } }).then((r) => r.json()).catch(() => null);
+    const slugs = (listed?.apps || []).map((a) => a.slug).sort();
+    const ok = rows.length >= 2 && rows.every((r) => r.shell === 200 && r.content === 200 && r.csp && r.same) && slugs.join() === [...cloud.apps.keys()].sort().join();
+    legs.push({ name: '真 Connect:发出去的每一页都能经公开链接打开(壳页 200、内容带 CSP sandbox 且就是发的那页),服务端列表与之一致', ok,
+      why: `${rows.map((r) => `${r.slug} 壳 ${r.shell} / 内容 ${r.content}${r.csp ? ' sandbox' : ' ✗无 sandbox'}${r.same ? '' : ' ✗内容不符'}`).join(';')};服务端列表 [${slugs.join(', ')}] 名额 ${listed?.used}/${listed?.limit}`,
+      ev: { content: JSON.stringify({ rows, listed: listed && { ...listed, apps: slugs } }), toolCalls: [], usages: [] } });
   }
 
   const bad = legs.filter((l) => !l.ok);
