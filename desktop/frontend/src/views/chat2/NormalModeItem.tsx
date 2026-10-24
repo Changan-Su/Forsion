@@ -10,6 +10,8 @@ import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Bot, Check, ChevronRight } from 'lucide-react'
 import { nestedPanelPlacement, nestedPanelTop, UI_ZOOM_EVENT, useEdgeNudge, zoomOf, type NestedPanelPlacement, type SheetMenuItem } from '@lcl/engine'
 import { useI18n } from '../../i18n'
+import { useApp } from '../../stores/appStore'
+import { AgentAvatar } from '../../components/AgentAvatar'
 import type { NormalAgentDef } from '../../../../../tangu-agent/src/contracts/clientTypes'
 
 interface NormalModeProps {
@@ -55,6 +57,8 @@ export function NormalModeItem(props: NormalModeProps): React.ReactElement {
   const items = normalModeItems(props, t)
   const openSub = items.agentSwitch ? () => setOpen(true) : undefined
   const current = agents.find((a) => a.slug === currentAgentSlug)
+  const avatars = useApp((s) => s.agentAvatars)
+  const names = agents.map((a) => a.name)
 
   useLayoutEffect(() => {
     const row = rowRef.current
@@ -126,14 +130,19 @@ export function NormalModeItem(props: NormalModeProps): React.ReactElement {
           style={{ ...subFix.style, '--cm-sub-top': `${subTop}px` } as React.CSSProperties}
         >
           <div className="menu-section">{t('input.agentSwitch.section')}</div>
-          {items.agents.map((it) => (
+          {items.agents.map((it) => {
+            const slug = it.id.slice('agent:'.length)
+            return (
             <button key={it.id} role="menuitemradio" aria-checked={!!it.checked}
               className={`menu-item${it.checked ? ' active' : ''}`}
               onClick={it.run}>
-              {it.icon}<span className="grow">{it.label}</span>
+              {/* ponytail: 原生半屏(normalModeItems.icon)仍是 Bot,它吃不了 <img>;Web 浮层画真头像,与选择条同一枚 */}
+              <AgentAvatar name={it.label} url={avatars[slug]} siblings={names} imgClassName="agent-pill-avatar" initialClassName="agent-pill-initial" />
+              <span className="grow">{it.label}</span>
               {it.checked && <Check size={13} />}
             </button>
-          ))}
+            )
+          })}
         </div>
       )}
     </div>
