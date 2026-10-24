@@ -94,8 +94,6 @@ export interface BtwTurn {
   describing?: boolean
 }
 
-/** 保存下来的那一轮(SavedAside 的每轮)可能带着附件记录(引擎 10-24 起);老记录没有。 */
-type SavedTurn = SavedAside['turns'][number] & { attachments?: BtwAttachmentMeta[] }
 const metaOf = (a: BtwAttachmentMeta): BtwAttachmentMeta => ({ name: a.name, mimeType: a.mimeType, ...(a.size != null ? { size: a.size } : {}), ...(a.thumb ? { thumb: a.thumb } : {}) })
 
 /** 存下来的顺便问里挂在某条回答上的那几段(与「从这里分出」ForkBlock 同一个来源、同一个筛法)。 */
@@ -287,7 +285,7 @@ export const useBtw = create<BtwState>((set, get) => ({
         }
         return
       }
-      const turns: BtwTurn[] = (rec.turns as SavedTurn[]).map((x, i) => ({
+      const turns: BtwTurn[] = rec.turns.map((x, i) => ({
         id: `${rec.id}-${i}`, question: x.question, quote: x.quote, answer: x.answer, status: 'done',
         ...(Array.isArray(x.attachments) && x.attachments.length ? { attachments: x.attachments.map(metaOf) } : {}),
       }))

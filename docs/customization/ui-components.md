@@ -7,7 +7,7 @@ description: 在 View 与插件中复用 Chat Box，明确草稿、模型选择�
 
 Space 组织布局，View 是可独立打开的功能面，UI component 是 View 内可组合的部件。此处不使用 Amadeus 的文档 Block 或仪表盘 Card 作为组件名称。工程分层及维护规则见 [LCL](../../lcl/README.md)。
 
-Chat Box 的卡面、输入、操作栏和提交按钮由 `@lcl/components` 维护。聊天与首页通过 `Composer2` 接会话行为；Coding 的新建项目通过 `components/chatbox` 接模型目录，并在创建完成后传递选定模型与思考档。项目详情与 Forsion 能力选择是宿主插槽。
+Chat Box 的卡面、输入、操作栏和提交按钮由 `@lcl/components` 维护。聊天与首页通过 `Composer2` 接会话行为；Coding 的新建项目通过 `components/chatbox` 接模型目录，并在创建完成后传递选定模型与思考档。项目详情与 Forsion 能力选择是宿主插槽。顺便问面板也用 `components/chatbox`，可选插槽 `leadingControls` 把附件「+」放在模型药丸前面；这个插槽只给内置宿主，插件的 `ctx.ui.mountChatBox` 仍不带附件。
 
 ## 插件使用
 
@@ -74,6 +74,8 @@ Space 切换在 Android 上是原生底部导航栏（宿主声明 `spaces: true
 移动端外部插件加载的支持情况需独立确认，详见 [Android 试点与验收](../../mobile/README.md)。
 
 ## English API notes
+
+Built-in prompt hosts (Coding's new-project box, the aside panel) use the `components/chatbox` wrapper. Its optional `leadingControls` slot renders before the model pill, which is where the aside panel puts its attach "+". The slot is host-only: `ctx.ui.mountChatBox` still has no attachments.
 
 Use `ctx.ui?.mountChatBox?.(element, options)` inside a plugin View. The host supplies the same input surface and model picker used by built-in Views; the plugin supplies localized labels and owns submission. `onSubmit` receives `{ text, modelId, thinkingLevel }`: return true to clear the submitted text, or false to keep it. Rejected submissions keep the draft and show a retryable error. Model and effort choices remain local, without changing the active conversation or global defaults.
 

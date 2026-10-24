@@ -155,6 +155,7 @@
       "desktop/frontend/src/components/builtinAgentDescriptions.ts",
       "desktop/frontend/src/components/capsuleTabs.ts",
       "desktop/frontend/src/components/chatDragRef.ts",
+      "desktop/frontend/src/components/chatbox/index.tsx",
       "desktop/frontend/src/components/phoneList.tsx",
       "desktop/frontend/src/components/selectionBar/ViewSelectionBar.tsx",
       "desktop/frontend/src/components/thinkingLabel.ts",

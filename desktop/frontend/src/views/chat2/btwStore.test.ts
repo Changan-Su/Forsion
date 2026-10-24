@@ -211,7 +211,7 @@ describe('旁聊附件(10-24 方案 A)', () => {
   })
 
   it('重开存下来的那段:附件记录(含缩略图)一起载回;「新的一段」清空线程、留挂点、不删记录', () => {
-    useBtw.setState({ saved: { s1: [{ id: 'x2', message_id: 'm2', turns: [{ question: 'q1', answer: 'a1', attachments: [{ name: 'a.png', mimeType: 'image/png', thumb: 'data:image/jpeg;base64,AAAA' }] }], created_at: '', updated_at: '' } as unknown as SavedAside] } })
+    useBtw.setState({ saved: { s1: [{ id: 'x2', message_id: 'm2', turns: [{ question: 'q1', answer: 'a1', attachments: [{ name: 'a.png', mimeType: 'image/png', thumb: 'data:image/jpeg;base64,AAAA' }] }], created_at: '', updated_at: '' }] } })
     useBtw.getState().applySeed({ sessionId: 's1', nonce: 'n1', asideId: 'x2' })
     expect(useBtw.getState().threads.s1[0].attachments).toEqual([{ name: 'a.png', mimeType: 'image/png', thumb: 'data:image/jpeg;base64,AAAA' }])
     useBtw.getState().startNew('s1')
