@@ -1,6 +1,6 @@
 # Tangu host APIs: ctx.tangu, ctx.desk, ctx.automation
 
-Split out of the forsion-plugin SKILL.md (1.63.0) so the main body stays under the use_skill cut. All of these are missing on non-Tangu hosts: always use optional chaining (`ctx.tangu?.`, `ctx.desk?.`, `ctx.automation?.`). A 见「…」 that is not in this file points back to SKILL.md.
+Split out of the forsion-plugin SKILL.md (1.63.0) because the model only sees the head and tail of a long tool result (capToolResult keeps 34k + 12k of anything over 48k chars). All of these are missing on non-Tangu hosts: always use optional chaining (`ctx.tangu?.`, `ctx.desk?.`, `ctx.automation?.`). A 见「…」 that is not in this file points back to SKILL.md.
 
 ## 当前模型与当前 Space:ctx.tangu(2026-08-29 起)
 

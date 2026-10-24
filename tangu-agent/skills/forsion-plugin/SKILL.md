@@ -24,6 +24,14 @@ Forsion / Tangu 的扩展**默认按捆绑包(bundle)形态发行**(2026-07-25 �
 > - **Amadeus/Forsion 桌面插件**:UI 层,`manifest.json` + 裸 `main.js`(宿主 `new Function('ctx', code)` 跑 —— **文件本身就是 `setup(ctx)` 的函数体**,顶层直接 `ctx.registerView(…)`;别包成 `function setup(ctx) { … }`,没人调用它 = 零注册、零报错),加命令/斜杠项/视图/文件类型。桌面端 设置 → 插件 有一键脚手架(hello-amadeus);捆绑包模板的根即这一形态。
 > 要"一套功能跨两层发行"(UI+工具+Agent+Space)时,用**捆绑包**把它们装进一个目录。
 
+## Reference files (read the one you need)
+
+Tool results are capped, so this skill keeps long, API-by-API details in `references/` next to it. When a section below says 见下「…」 or names an API listed here, read that file before writing code:
+
+- [references/host-ui-mounts.md](references/host-ui-mounts.md): 可复用 UI 组件：ctx.ui.mountChatBox; 原生 Markdown 编辑器 ctx.ui.mountMarkdownEditor; 原生悬浮目录 ctx.ui.mountFloatingToc; View modes: ctx.ui.setViewModes; Tooltips and motion tokens: ctx.ui.attachTooltip; Selection bar: ctx.ui.mountSelectionBar and registerSelectionAction scopes; Settings parts: ctx.ui.mountSettingsPage / mountSettingsItem; 白板层 ctx.ui.mountBoard / ctx.ui.boardToSvg; 仪表盘 ctx.dashboard; 原生多维表 ctx.table.mount
+- [references/tangu-host-apis.md](references/tangu-host-apis.md): 当前模型与当前 Space:ctx.tangu; Agent 状态:agentStatus / subscribeAgentStatus; Agent 名册:agents; 开新对话:startChat; 把对话挂进自己的视图:mountChat; 新对话输入区:mountComposer; 正文 AI:ctx.tangu.complete 与 registerSelectionAction; 翻译:ctx.tangu.translate; Agent Desk 伴随面:ctx.desk; 自动化规则播种:ctx.automation
+- [references/work-folder-migration.md](references/work-folder-migration.md): one-time upgrade of old plugin data into the working folder (Identity and destination; Request and result; Upgrade sequence; Acceptance cases; Ordinary writes after upgrade)
+
 ## Troubleshooting an installed plugin: Space missing, view blank, "stopped working after an update" (2026-10-10)
 
 When a user says a plugin's Space / view / command is gone, or that a plugin broke after updating the app or the plugin, **run the checker first** — before reading the code, and before asking the user for logs:
@@ -264,6 +272,31 @@ ctx.openMiniPanel?.('mini-counter', {
 3. **都不行**(没 delegate / 云端库 / 第 2 档失败)→ 让用户从命令面板打开工作台自己操作。
 
 需要桌面主进程能力时(语音转写、系统面)引擎侧已有 MCP 桥工具,如 `transcribe_audio(path, timestamps?)` —— 它在没开桌面/云端 worker 上自动隐身。**调用方明确说了「我自己接力转写」时,即使工具可见也不要调**。子 agent 继承**父会话**的审批档位,不是它 config 里的 `approval_mode`。
+
+## 发布到商店
+
+上架的地方叫 **Forsion 商店**——界面里的名字就是「商店」(英文界面 Store),不叫「应用市场」「插件商店」或 Market。过审后,用户从桌面端功能区底部的「商店」入口进去,在对应分类(插件 / 技能 / 主题;Agent 与 Space 归在「插件」分类下)里一键安装。给用户指路时照这个名字说。
+
+推成独立 GitHub 公开仓库(引擎插件记得含 `dist/`)→ 个人中心 → 投稿 选对应类型给仓库链接或传 zip(zip 内容放根或单层文件夹,两层路径装不了)。捆绑包(默认形态)按 **amadeus-plugin** 类投稿(桌面按包内 manifest 实测路由,自然落进 `~/.forsion/plugins/`)。GitHub 来源会**锁定过审时的 release tag**,发新版需重新过审。升版号必写 `CHANGELOG.md` 一节(`## x.y.z — YYYY-MM-DD`),宿主会渲染成插件详情页的更新日志。
+
+### 投稿元数据、版本要求与评论(2026-10-17 起)
+
+- 投稿表单可填:标签(≤8 个,每个 ≤40 字)、长描述(详情页「内容介绍」)、支持平台(`desktop` / `macos` / `windows` / `linux` / `android` / `ios` / `web`)、Forsion 版本范围(`minAppVersion` 含、`maxAppVersion` 不含,语义化版本号)。
+- 包里 manifest 的 `minAppVersion` / `maxAppVersion` / `platforms` 优先于表单;已有的 `isDesktopOnly: true` 等同只支持桌面。桌面和手机安装前都会读包里的 manifest 再核一遍,不符就不下载、不写盘;旧版本的过审包和快照会留着,用户可以在「版本」栏装回历史版本。
+- 不写版本范围 = 「未知」,商店照常展示但不算确认适配;靠新宿主接缝的插件写 `minAppVersion`,已知在某个版本坏掉的写 `maxAppVersion`。
+- 每个条目有公开评论区(登录可评、可回复、本人可改可删)。新评论发到投稿账号的收件箱,回复通知被回复者;作者可以在评论区关掉全部或单个插件的评论消息。
+- Tangu 在聊天里可以用 `search_marketplace` 搜商店、给用户推荐(画成插件卡片,装不装由用户在卡片上点),所以标签和描述写清能力,别堆营销词。
+
+### Android App 与 `isDesktopOnly`(2026-10-02 起)
+
+Forsion Android App 也跑 Forsion 插件(同一份 `pluginStore`、同一个 `ctx`),**只经市场装**、只装 `amadeus-plugin` 类;插件住在 App 私有目录,`ctx.loadData` / `ctx.saveData` 照常可用。
+- 依赖桌面才有的东西(本机程序 / Node / `ctx.app.hostPath` 必须非 null / 引擎插件 / 浮窗)且没有降级路径的,manifest 写 `"isDesktopOnly": true`(只认布尔 `true`):手机市场拒装并说明原因,已在列表里的显示「仅支持桌面端」且代码不执行。桌面上这个字段不影响任何行为。
+- 能在手机上跑的,照「能力判断运行环境」写:`openFloatingPanel` / `openMiniPanel` 手机没有(可选链),状态栏项手机不显示,捆绑包里的引擎插件 / Agent / 技能手机不装(手机上没有本机引擎)。
+- 捆绑包里的 **Space**(`spaces/<slug>/space.json`)手机上照常注册(2026-10-09 起;此前不装),出现在底部导航栏,图标用 `iconFile` 那张 PNG(没有或是 SVG 就用 `icon` 的线条图标)。手机是单列:进这个 Space 先看到 `layout.main` 的第一个视图,`left` / `right` 是从顶栏按钮拉出来的抽屉,`bottom` 不开 —— 主视图要在约 400px 宽里独立可用,别把必经的操作只放在左栏或底部面板里。
+- 手机上插件包的上限:下载 25 MB、解压 64 MB、2000 个文件。
+- 手机的**主页只有一页、不开标签**(2026-10-11 起):用户停在主页时,命令里 `openView` 打开的视图会被带到「主人」那个 Space 去开 —— 主人 = `layout.main` 里列着这个视图的 Space(插件自带的 Space 就是这么认的)。没有任何 Space 列着它的视图仍然盖在主页上打开,但用户下次回到主页时会被宿主关掉:这类视图别攒没保存的状态,要长驻就给插件带一个 Space。
+- 手机没有 ribbon:插件的 `registerCommand` 命令由宿主按插件分节列进顶栏「⋯」菜单(节标题 = 插件展示名),`checked` 开关在那里显示为勾选态 —— 命令 `title` 要能独立看懂(手机上它就是菜单行文案)。
+
 ## Agent 自建 Space(2026-09-11 起;Muse 首例)
 
 一个 agent 自己的 Space = 它目录下的一个桌面插件:`<tangu>/agents/<slug>/Space/{manifest.json, main.js}`,与普通桌面插件**同一份契约**(manifest + main.js,`registerView` / `registerCommand` / `registerStatusItem` / `registerSetting` / `notify` / `loadData` 都能用),但有五条不同:
@@ -1227,29 +1260,7 @@ const off = ctx.app.watchFile?.('Snippets/latex.js', () => reload())
 
 `check.mjs` 仍然要留(通用纪律 4):Sandbox 证「在真宿主里能起来」,`check.mjs` 证「逻辑回归得了」,两个证的不是一件事。
 
-## 发布到商店
-
-上架的地方叫 **Forsion 商店**——界面里的名字就是「商店」(英文界面 Store),不叫「应用市场」「插件商店」或 Market。过审后,用户从桌面端功能区底部的「商店」入口进去,在对应分类(插件 / 技能 / 主题;Agent 与 Space 归在「插件」分类下)里一键安装。给用户指路时照这个名字说。
-
-推成独立 GitHub 公开仓库(引擎插件记得含 `dist/`)→ 个人中心 → 投稿 选对应类型给仓库链接或传 zip(zip 内容放根或单层文件夹,两层路径装不了)。捆绑包(默认形态)按 **amadeus-plugin** 类投稿(桌面按包内 manifest 实测路由,自然落进 `~/.forsion/plugins/`)。GitHub 来源会**锁定过审时的 release tag**,发新版需重新过审。升版号必写 `CHANGELOG.md` 一节(`## x.y.z — YYYY-MM-DD`),宿主会渲染成插件详情页的更新日志。
-
-### 投稿元数据、版本要求与评论(2026-10-17 起)
-
-- 投稿表单可填:标签(≤8 个,每个 ≤40 字)、长描述(详情页「内容介绍」)、支持平台(`desktop` / `macos` / `windows` / `linux` / `android` / `ios` / `web`)、Forsion 版本范围(`minAppVersion` 含、`maxAppVersion` 不含,语义化版本号)。
-- 包里 manifest 的 `minAppVersion` / `maxAppVersion` / `platforms` 优先于表单;已有的 `isDesktopOnly: true` 等同只支持桌面。桌面和手机安装前都会读包里的 manifest 再核一遍,不符就不下载、不写盘;旧版本的过审包和快照会留着,用户可以在「版本」栏装回历史版本。
-- 不写版本范围 = 「未知」,商店照常展示但不算确认适配;靠新宿主接缝的插件写 `minAppVersion`,已知在某个版本坏掉的写 `maxAppVersion`。
-- 每个条目有公开评论区(登录可评、可回复、本人可改可删)。新评论发到投稿账号的收件箱,回复通知被回复者;作者可以在评论区关掉全部或单个插件的评论消息。
-- Tangu 在聊天里可以用 `search_marketplace` 搜商店、给用户推荐(画成插件卡片,装不装由用户在卡片上点),所以标签和描述写清能力,别堆营销词。
-
-### Android App 与 `isDesktopOnly`(2026-10-02 起)
-
-Forsion Android App 也跑 Forsion 插件(同一份 `pluginStore`、同一个 `ctx`),**只经市场装**、只装 `amadeus-plugin` 类;插件住在 App 私有目录,`ctx.loadData` / `ctx.saveData` 照常可用。
-- 依赖桌面才有的东西(本机程序 / Node / `ctx.app.hostPath` 必须非 null / 引擎插件 / 浮窗)且没有降级路径的,manifest 写 `"isDesktopOnly": true`(只认布尔 `true`):手机市场拒装并说明原因,已在列表里的显示「仅支持桌面端」且代码不执行。桌面上这个字段不影响任何行为。
-- 能在手机上跑的,照「能力判断运行环境」写:`openFloatingPanel` / `openMiniPanel` 手机没有(可选链),状态栏项手机不显示,捆绑包里的引擎插件 / Agent / 技能手机不装(手机上没有本机引擎)。
-- 捆绑包里的 **Space**(`spaces/<slug>/space.json`)手机上照常注册(2026-10-09 起;此前不装),出现在底部导航栏,图标用 `iconFile` 那张 PNG(没有或是 SVG 就用 `icon` 的线条图标)。手机是单列:进这个 Space 先看到 `layout.main` 的第一个视图,`left` / `right` 是从顶栏按钮拉出来的抽屉,`bottom` 不开 —— 主视图要在约 400px 宽里独立可用,别把必经的操作只放在左栏或底部面板里。
-- 手机上插件包的上限:下载 25 MB、解压 64 MB、2000 个文件。
-- 手机的**主页只有一页、不开标签**(2026-10-11 起):用户停在主页时,命令里 `openView` 打开的视图会被带到「主人」那个 Space 去开 —— 主人 = `layout.main` 里列着这个视图的 Space(插件自带的 Space 就是这么认的)。没有任何 Space 列着它的视图仍然盖在主页上打开,但用户下次回到主页时会被宿主关掉:这类视图别攒没保存的状态,要长驻就给插件带一个 Space。
-- 手机没有 ribbon:插件的 `registerCommand` 命令由宿主按插件分节列进顶栏「⋯」菜单(节标题 = 插件展示名),`checked` 开关在那里显示为勾选态 —— 命令 `title` 要能独立看懂(手机上它就是菜单行文案)。
+## Other host APIs and assets
 
 ### 共享账号 `ctx.account`（可选）
 

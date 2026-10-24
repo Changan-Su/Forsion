@@ -1,6 +1,6 @@
 # Host UI mounts for desktop plugins
 
-Split out of the forsion-plugin SKILL.md (1.63.0) so the main body stays under the use_skill cut. Read the section for the API you are about to use; the contribution table in SKILL.md links here. A 见「…」 that is not in this file points back to SKILL.md.
+Split out of the forsion-plugin SKILL.md (1.63.0) because the model only sees the head and tail of a long tool result (capToolResult keeps 34k + 12k of anything over 48k chars). Read the section for the API you are about to use; the contribution table in SKILL.md links here. A 见「…」 that is not in this file points back to SKILL.md.
 
 ### 可复用 UI 组件：ctx.ui.mountChatBox（2026-09-24 起）
 
