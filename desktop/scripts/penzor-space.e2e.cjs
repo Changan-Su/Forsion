@@ -407,6 +407,8 @@ async function main() {
     }
     const shot = async (name, page = win) => { await page.mouse.move(1000, 5).catch(() => {}); await page.waitForTimeout(500); await page.screenshot({ path: path.join(SHOTS, `${name}.png`) }); console.log('shot', name) }
     const setMode = (mode, skin) => win.evaluate(([m, s]) => { const r = document.documentElement; r.dataset.mode = m; r.classList.toggle('dark', m === 'dark'); if (s) r.dataset.skin = s; else delete r.dataset.skin }, [mode, skin || null])
+    // 子项可能是一行,也可能本身是一个分组(按应用看 → 应用文件,行尾还带用量):两种都算看得见,免得把已展开的上层又点收起
+    const treeShows = async (title) => { for (const l of [win.locator('.t2s-srow-title', { hasText: new RegExp(`^${title}$`) }), win.locator('.t2s-folder-row', { hasText: new RegExp(`^${title}`) })]) if (await l.first().isVisible().catch(() => false)) return true; return false }
     const sideWidth = () => win.evaluate(() => { const e = document.querySelector('.pz-side'); return e ? Math.round(e.getBoundingClientRect().width) : 0 })
 
     await win.waitForTimeout(3000)
@@ -418,7 +420,7 @@ async function main() {
     await win.waitForSelector('.pz-total', { timeout: 20_000 })
     const total = await win.locator('.pz-total b').textContent().catch(() => '')
     check('① 统一根展示八个来源和总量', await win.locator('.pz-rows .row').count() === 8 && total === '4.2 GB', total)
-    check('① T2 提醒且历史不计', /提醒阶段/.test(await win.locator('.pz-unified-quota').textContent()) && /历史版本/.test(await win.locator('.pz-unified-quota').textContent()))
+    check('① T2 提醒且历史不计', /只是提醒/.test(await win.locator('.pz-unified-quota').textContent()) && /历史版本不算/.test(await win.locator('.pz-unified-quota').textContent()))
     await win.waitForTimeout(900)
     check('① 概览时右栏收起(不是空占位)', (await sideWidth()) < 40 && !(await win.locator('.dv-groupview .sidebar-empty, [data-view-type="sidebar-empty"]').count()), `side=${await sideWidth()}`)
     await setMode('light'); await shot('overview')
@@ -443,10 +445,11 @@ async function main() {
     if (!process.env.PENZOR_VISUAL_ONLY) {
     // Native root folder contains every source.
     const rootFolder = win.locator('.t2s-folder-row', { hasText: '我的云盘' }).first()
-    if (!(await win.locator('.t2s-srow-title', { hasText: /^我上传的$/ }).first().isVisible().catch(()=>false))) await rootFolder.click()
+    if (!(await win.locator('.t2s-srow-title', { hasText: /^我的文件$/ }).first().isVisible().catch(()=>false))) await rootFolder.click()
     // ② 同步库:展开组头 → 点 WMOSv11
-    for (const [folder, child] of [['智库同步', 'WMOSv11'], ['应用文件', 'AI Studio'], ['Amadeus Cloud', '我的云端笔记']]) {
-      const vis = await win.locator('.t2s-srow-title', { hasText: new RegExp(`^${child}$`) }).first().isVisible().catch(() => false)
+    // Extend 0.9.4 起应用文件、Amadeus Cloud 收在「按应用看」下面一层(左栏 A)
+    for (const [folder, child] of [['智库同步', 'WMOSv11'], ['按应用看', '应用文件'], ['应用文件', 'AI Studio'], ['Amadeus Cloud', '我的云端笔记']]) {
+      const vis = await treeShows(child)
       if (!vis) await win.locator('.t2s-folder-row', { hasText: folder }).first().click().catch(() => {})
       await win.waitForTimeout(300)
     }
@@ -506,8 +509,8 @@ async function main() {
     check('旧服务端 404 不伪造统一统计或清除登录态', await win.locator('.pz-total b').textContent() === '—' && !(await win.getByText('登录后查看你的蓬洲云').count()))
     await shot('legacy-backend')
     // Re-open the folder tree after reload; old APIs still supply its known vaults.
-    for (const [folder, child] of [['我的云盘', '我上传的'], ['Amadeus Cloud', '我的云端笔记']]) {
-      if (!(await win.locator('.t2s-srow-title', { hasText: new RegExp(`^${child}$`) }).first().isVisible().catch(() => false))) await win.locator('.t2s-folder-row', { hasText: folder }).first().click()
+    for (const [folder, child] of [['我的云盘', '我的文件'], ['按应用看', 'Amadeus Cloud'], ['Amadeus Cloud', '我的云端笔记']]) {
+      if (!(await treeShows(child))) await win.locator('.t2s-folder-row', { hasText: folder }).first().click()
     }
 
     // Amadeus Cloud:只看和下载
@@ -525,7 +528,7 @@ async function main() {
     const uploadsHit = () => cloud.st.hits.filter((h) => h.startsWith('POST /api/files/upload')).length
     const cardTitle = () => win.locator('.pz-txcard .pz-txhead b').textContent({ timeout: 1000 }).catch(() => '')
     const tableNames = () => win.locator('.pz-table td.n b').allTextContents()
-    await win.locator('.t2s-srow-title', { hasText: /^我上传的$/ }).first().click()
+    await win.locator('.t2s-srow-title', { hasText: /^我的文件$/ }).first().click()
     await win.waitForSelector('text=这里还空着', { timeout: 10_000 }).catch(() => {})
     check('⑥ 我的云盘在概览下面,装好是空的', await win.getByText('这里还空着').count() > 0)
     await shot('drive-empty')
@@ -629,9 +632,9 @@ async function main() {
     await win.waitForSelector('.pz-unified-quota')
     // The same persistent root picker used by the overview action survives navigation to uploads.
     await win.locator('.pz-root-upload').setInputFiles(mk('根上传.md', 1024))
-    await win.waitForFunction(()=>document.querySelector('.pz-h1')?.textContent === '我上传的')
+    await win.waitForFunction(()=>document.querySelector('.pz-h1')?.textContent === '我的文件')
     await win.waitForFunction(()=>document.querySelector('.pz-table')?.textContent?.includes('根上传.md'))
-    check('⑦ 根上传落在我上传的，T2 超额未新增拦截', cloud.st.uploads.some(f=>f.name==='根上传.md'))
+    check('⑦ 根上传落在我的文件，T2 超额未新增拦截', cloud.st.uploads.some(f=>f.name==='根上传.md'))
 
     // 退出前确认:还有在传的,退出先问(主进程的对话框换成假的,答「取消」)→ 不退;取消那一项后照常退(收尾的 app.close 就是这条)
     cloud.st.throttle = true

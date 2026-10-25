@@ -211,6 +211,45 @@ async function main() {
     n = drops.length
     drops = await drag(leaf('版本 2.12'), leaf('快速上手'), 0.2)
     check('没标 draggable 的行拖不动', drops.length === n, JSON.stringify(drops.at(-1)))
+
+    // 松手落位(2026-10-25,LCL land):插件写完才重渲(替身晚 60ms 真的挪),那一行从松手处滑进新位置;邻居不让位
+    await tree.evaluate(() => {
+      const p = window.__treeProbe
+      p.refuse = ''
+      p.reorder = true
+      const d = (window.__land = { grabY: null, dropY: null, samples: [] })
+      const find = () => document.querySelector('.t2sw-plug-list [data-row-key="a2"]')?.closest('.t2sw-plug-item')
+      addEventListener('dragstart', (e) => { const it = e.target.closest?.('.t2sw-plug-item'); if (it) d.grabY = e.clientY - it.getBoundingClientRect().top }, { capture: true, once: true })
+      addEventListener('drop', (e) => {
+        d.dropY = e.clientY
+        const t0 = performance.now()
+        setTimeout(() => {
+          const tick = () => {
+            const it = find()
+            if (it) {
+              const tr = getComputedStyle(it).transform
+              d.samples.push({ t: Math.round(performance.now() - t0), top: it.getBoundingClientRect().top, ty: tr === 'none' ? 0 : Number(tr.match(/-?[\d.e]+/g)[5]), prev: it.previousElementSibling?.querySelector('[data-row-key]')?.dataset.rowKey ?? null })
+            }
+            if (performance.now() - t0 < 600) requestAnimationFrame(tick)
+          }
+          requestAnimationFrame(tick)
+        }, 0)
+      }, { capture: true, once: true })
+    })
+    await leaf('核心概念').dragTo(leaf('快速上手'), { targetPosition: { x: 60, y: 3 } })
+    await tree.waitForTimeout(800)
+    const land = await tree.evaluate(() => window.__land)
+    {
+      const S = land.samples
+      const movedAt = S.findIndex((x) => x.prev !== S[0]?.prev)
+      const fly = movedAt >= 0 ? S.slice(movedAt) : []
+      const release = land.dropY - land.grabY
+      console.log(`      落位采样:${S.map((x) => `${x.t}:${x.ty.toFixed(1)}`).join(' ')}`)
+      check('松手落位:插件挪完之前一帧都不飞;挪完那一帧看上去还在松手处,之后滑回 0',
+        movedAt > 0 && S.slice(0, movedAt).every((x) => Math.abs(x.ty) < 0.5) && Math.abs(fly[0].top - release) <= 3 && Math.abs(fly[0].ty) > 5 && Math.abs(fly.at(-1).ty) < 0.5,
+        fly[0] ? `第 ${movedAt} 帧挪动;top=${fly[0].top.toFixed(1)} 松手处=${release.toFixed(1)} ty=${fly[0].ty.toFixed(1)}` : `没等到挪动 ${JSON.stringify(S.slice(0, 3))}`)
+    }
+    await tree.evaluate(() => { window.__treeProbe.reorder = false })
     check('拖完不留落点提示', await list.locator('.drop-before, .drop-after, .amx-drop-into, .drag-over, .dragging').count() === 0)
 
     // 就地改名:菜单项由宿主加;回车提交、Esc 取消、失焦提交;没改或改成空不回报

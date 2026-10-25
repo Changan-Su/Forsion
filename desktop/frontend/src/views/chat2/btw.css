@@ -49,7 +49,53 @@
 .btw-act:hover { background: var(--overlay-light); color: var(--text); }
 .btw-act:focus-visible { outline: var(--focus-ring) solid var(--signal-line); outline-offset: 1px; }
 
-.btw-compose { padding: 10px 14px 14px; display: flex; flex-direction: column; gap: 8px; border-top: var(--border-width, 1px) solid var(--border); }
+/* 输入区 = 共用 Chat Box(components/chatbox,卡面 .t2c-card 来自 @lcl/components)。面板窄,卡的内边距与圆角收一档。 */
+.btw-compose { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 8px; border-top: var(--border-width, 1px) solid var(--border); }
+.btw-compose .btw-box { padding: 10px 12px; border-radius: var(--radius-lg, 14px); }
+.btw-compose .btw-box .t2c-ta { max-height: 160px; }
+.btw-compose .btw-box .t2c-row { margin-top: 6px; }
+.btw-compose-top { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
+/* 附件磁贴一排(与主输入框同一种 .att-tile,样式在 base.css);上面留出移除钮往外探的 6px */
+.btw-tiles { display: flex; flex-wrap: wrap; gap: 10px; padding-top: 6px; }
+.btw-att-hint { color: var(--text-muted); font-size: var(--ui-font-caption, 11px); line-height: 1.5; }
+/* 「+」:与主输入框闭合态的加号胶囊同一副样子(28px 圆、淡底、弱色) */
+.btw-plus {
+  flex: none; width: 28px; height: 28px;
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 0; border: 0; border-radius: var(--radius-pill, 999px);
+  background: var(--overlay-light, rgba(127, 127, 127, 0.1)); color: var(--text-muted); cursor: pointer;
+  transition: background var(--duration-fast, 0.15s), color var(--duration-fast, 0.15s);
+}
+.btw-plus:hover { background: var(--overlay-medium, rgba(127, 127, 127, 0.18)); color: var(--text); }
+.btw-plus:focus-visible { outline: var(--focus-ring) solid var(--signal-line); outline-offset: 1px; }
+/* 发送钮在流的时候换成「停止」:与聊天输入卡的 .t2c-stop 同一套配色 */
+.t2c-send.btw-stop { width: 28px; height: 28px; background: color-mix(in srgb, var(--danger, #e0564b) 14%, transparent); color: var(--danger, #e0564b); }
+.btw-compose .t2c-send { width: 28px; height: 28px; }
+/* 拖文件进面板:输入卡亮边(同 .t2c-card.dragover) */
+.btw-panel[data-dragover] .btw-box { border-color: var(--signal-line); background: var(--accent-wash); }
+
+/* 已发的那一问附过什么:缩略图 / 文件条,靠右跟着问题气泡 */
+.btw-turn-files { align-self: flex-end; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; max-width: 88%; }
+
+/* 面板头下面:这条回答上存下来的几段。第一行永远是「新的一段」;太多就在自己的框里滚,不把对话挤没 */
+.btw-list { flex: none; padding: 8px 10px 10px; border-bottom: var(--border-width, 1px) solid var(--border); }
+.btw-list-head { padding: 0 8px 6px; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); line-height: 1.4; }
+.btw-list-rows { display: flex; flex-direction: column; gap: 2px; max-height: 172px; overflow-y: auto; }
+.btw-list-row {
+  display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: center; column-gap: 8px; row-gap: 1px;
+  width: 100%; padding: 6px 8px; border: 0; border-radius: var(--radius-sm, 6px);
+  background: transparent; color: var(--text); text-align: left; cursor: pointer;
+  font-family: var(--font-ui); font-size: var(--ui-font-body, 13px); line-height: 1.45;
+}
+.btw-list-row:hover:not(:disabled) { background: var(--overlay-light); }
+.btw-list-row[aria-current='true'] { background: var(--overlay-light); }
+.btw-list-row:disabled { cursor: default; opacity: 0.55; }
+.btw-list-row:focus-visible { outline: var(--focus-ring) solid var(--signal-line); outline-offset: -1px; }
+.btw-list-lead { display: inline-flex; color: var(--text-muted); }
+.btw-list-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.btw-list-n { color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
+.btw-list-sub { grid-column: 2 / -1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
+
 .btw-quote-chip {
   display: flex; align-items: flex-start; gap: 6px;
   padding: 6px 8px; border-radius: var(--radius-sm, 6px);
@@ -59,30 +105,7 @@
 .btw-quote-chip > svg { flex: none; margin-top: 3px; }
 .btw-quote-chip > span { flex: 1; min-width: 0; white-space: pre-wrap; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .btw-quote-chip > button { flex: none; display: inline-flex; padding: 2px; border: 0; background: transparent; color: inherit; cursor: pointer; }
-.btw-input {
-  display: flex; align-items: flex-end; gap: 8px;
-  padding: 8px 8px 8px 12px;
-  background: var(--bg-card, var(--bg));
-  border: var(--border-width, 1px) solid transparent; border-radius: var(--radius-lg, 14px);
-  box-shadow: var(--card-shadow, 0 6px 22px rgba(0, 0, 0, 0.08));
-}
-.btw-input:focus-within { border-color: var(--border); }
-/* 壳画框、内部裸输入:padding / 圆角显式写死,不吃表单基线的 7px 10px */
-.btw-input textarea {
-  flex: 1; min-width: 0; max-height: 160px;
-  padding: 4px 0; border: 0; border-radius: 0; outline: none; resize: none;
-  background: transparent; color: var(--text);
-  font-family: var(--font-ui); font-size: var(--ui-font-body, 13px); line-height: 1.55;
-}
-/* 发送 / 停止与聊天输入卡同一套配色(.t2c-send / .t2c-stop) */
-.btw-send {
-  flex: none; width: 28px; height: 28px;
-  display: inline-flex; align-items: center; justify-content: center;
-  border: 0; border-radius: var(--radius-pill, 999px);
-  background: var(--action-fill); color: var(--on-action, #fff); cursor: pointer;
-}
-.btw-send:disabled { opacity: 0.35; cursor: default; background: var(--overlay-medium, var(--overlay-light, rgba(127, 127, 127, 0.25))); color: var(--text-faint, var(--text-muted)); }
-.btw-send.stop { background: color-mix(in srgb, var(--danger, #e0564b) 14%, transparent); color: var(--danger, #e0564b); }
+.btw-box:focus-within { border-color: var(--border); }
 
 /* 手机:全屏二级页(同设置 / 成就那套 z 50) */
 .btw-page { position: fixed; inset: 0; z-index: 50; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg); }
@@ -93,3 +116,5 @@
   font-size: var(--ui-font-heading, 14px); font-weight: 600; color: var(--text);
 }
 .btw-page-head > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 二级页贴着屏幕底:输入卡让出底部安全区(只改下边,别用简写抹掉上面的 padding) */
+.btw-page .btw-compose { padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px)); }

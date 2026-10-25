@@ -230,7 +230,7 @@ export const branchSession = (t: EngineTarget, sessionId: string, messageId: str
   ).then((r) => r.session)
 
 /** 存下来的顺便问(挂在某条消息上;引擎 chat_asides)。 */
-export interface SavedAside { id: string; message_id: string | null; turns: Array<{ question: string; quote?: string; answer: string }>; created_at: string; updated_at: string }
+export interface SavedAside { id: string; message_id: string | null; turns: Array<{ question: string; quote?: string; answer: string; attachments?: Array<{ name: string; mimeType: string; size?: number; thumb?: string }> }>; created_at: string; updated_at: string }
 
 export const listAsides = (t: EngineTarget, sessionId: string) =>
   request<{ asides: SavedAside[] }>(t, `/agent/sessions/${encodeURIComponent(sessionId)}/asides`).then((r) => r.asides || [])
@@ -658,7 +658,7 @@ export const setWechatSessionAgent = (t: EngineTarget, sessionId: string, agentS
 export const createWechatSession = (t: EngineTarget, title?: string) =>
   request<{ sessionId: string }>(t, '/agent/wechat/sessions/new', { method: 'POST', body: JSON.stringify({ title }) }).then((r) => r.sessionId)
 
-// ── 多通道(Channels:微信/Telegram/QQ;本地后端)──
+// ── 多通道(Channels:微信/Telegram/QQ + 插件通道;本地后端)──
 export type { ChannelKind } from '../types'
 
 export interface ChannelStatus {
@@ -679,6 +679,12 @@ export interface ChannelStatus {
   accountId: string | null
   peerBound: boolean
   workspace: string
+  /** 插件通道(引擎插件 ctx.registerChannel)的卡片声明:显示名 / 提示 / 凭据字段。内置通道没有。 */
+  plugin?: {
+    name: { zh: string; en: string }
+    hint: { zh: string; en: string } | null
+    fields: Array<{ key: 'appId' | 'appSecret' | 'botToken'; label: { zh: string; en: string }; secret: boolean }>
+  }
 }
 
 export interface ChannelConfigPatch {

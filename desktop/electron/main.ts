@@ -10,6 +10,8 @@ import { composeUnitRoots, createFileProjectRegistry, createUnitSessionRoots, re
 import { normalizeHostSandboxConfig, type HostSandboxConfig } from '../shared/hostSandboxConfig'
 import { startMiniPassThrough, readComputerUseForeground, topRightPosition } from './miniForeground'
 import { startMiniAutoPanel } from './miniAutoPanel'
+import { createPluginSandbox, type PluginSandboxUiSeed } from './pluginSandbox'
+import { sandboxSelf, startSandboxChild, sandboxForward } from './sandboxChild'
 import { normalizeMiniOpenOptions, normalizeMiniSessionContext, type MiniSessionContext, type MiniOpenOptions, type MainPanelTarget } from '../shared/miniPanel'
 import { normalizeFloatingPanelOpenOptions, normalizeMainAction, type FloatingPanelOpenOptions } from '../shared/floatingPanel'
 import { normalizeUiSync, UI_LOCALE_CHANNEL } from '../shared/uiSync'
@@ -48,7 +50,7 @@ import { checkForUpdates, downloadUpdate, installUpdate, canInstallUpdate, betaC
 import { parseSourcePref } from '../shared/updateSource'
 import { fetchWebsiteReleases } from './websiteReleases'
 import { createRestartGuard, readRestartActivity } from './restartGuard'
-import { createTray, refreshTrayMenu, setTrayIndicator, trayLang } from './tray'
+import { createTray, MINI_ACCELERATOR, mergeTrayReports, refreshTrayMenu, sanitizeTraySessions, setTrayIndicator, setTraySessions, traySessions, trayLang } from './tray'
 import { initMainLocale, mainLocale, mt } from './mainI18n'
 import { createQuitGuards } from './quitGuard'
 import { createUiLocaleSync, UI_LOCALE_FILE } from './uiLocaleSync' // P1-KF:主进程文案跟渲染层的生效语言
@@ -120,6 +122,9 @@ import { isForsionUrl, pushDeepLink, drainDeepLinks, filesFromArgv, pushOpenFile
 
 /** ~/.tangu(与包内 core/tanguHome.ts 同约定;TANGU_HOME 可整体重定向)。 */
 setDevMode(!app.isPackaged) // dev 数据目录 ~/.forsion-dev,与正式版隔离(模块装载即定,先于一切路径解析)
+/** 本进程是插件沙箱(用户那份 Forsion 按需另起的,见 pluginSandbox.ts)。沙箱不碰整机共享的东西:协议注册、托盘、全局快捷键、
+ *  CLI、MCP 固定端口、更新检查、自动 Mini;关窗即退出。数据目录由父进程经 --user-data-dir / TANGU_HOME / FORSION_WORKSPACE_DIR 指进去。 */
+const SANDBOX = sandboxSelf()
 // dev 与安装版的 Electron userData 默认共用同一目录 appData/forsion-desktop(app.getName() 取 package.json
 // name="forsion-desktop";electron-builder 的 productName 只改 .app 包名/CFBundleName「Forsion」,不动 userData)。
 // → 二者抢同一把 userData/SingletonLock,后启者 requestSingleInstanceLock() 返 false 被下方 app.exit(0)(即
@@ -142,7 +147,7 @@ app.on('second-instance', (_e, argv, cwd) => {
 // ── forsion:// deep link(入站;与出站外链回投的 app:open-url 无关)────────────────────────
 // 正典:docs/ToBeImproved/View基座统一化方案_2026-08-25.md §4。只导航不执行;白名单在渲染层 resolver。
 // 系统 handler 仅打包版注册:dev 注册会把裸 electron 二进制写进 LaunchServices/注册表,污染整机。
-if (app.isPackaged) app.setAsDefaultProtocolClient('forsion')
+if (app.isPackaged && !SANDBOX) app.setAsDefaultProtocolClient('forsion')
 /** 渲染层已 drain 过 → 之后直推;窗口 reload/重建把它翻回 false(Cmd+R 会换掉监听者,推进虚空)。 */
 let deepLinkReady = false
 function deliverDeepLink(url: string): void {
@@ -154,7 +159,8 @@ function deliverDeepLink(url: string): void {
   }
 }
 // mac:open-url 必须在 whenReady 之前挂上,冷启动经 Dock/浏览器唤起的 URL 才接得到。
-app.on('open-url', (e, url) => { e.preventDefault(); if (isForsionUrl(url)) deliverDeepLink(url) })
+// 沙箱与用户那份同一个 bundle:系统可能把链接 / 文件投给沙箱,转回给用户那份
+app.on('open-url', (e, url) => { e.preventDefault(); if (isForsionUrl(url)) { if (SANDBOX) sandboxForward('url', url); else deliverDeepLink(url) } })
 // win/linux 首启:URL 直接躺在 process.argv(mac 走 open-url,不经 argv)。
 for (const a of process.argv.slice(1)) if (isForsionUrl(a)) pushDeepLink(a)
 
@@ -170,7 +176,7 @@ function deliverOpenFile(p: string): void {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('app:open-file')
 }
 // mac:Finder 双击 / 打开方式 / 拖到 Dock 图标。同 open-url,必须在 whenReady 之前挂上,冷启动才接得到。
-app.on('open-file', (e, p) => { e.preventDefault(); deliverOpenFile(p) })
+app.on('open-file', (e, p) => { e.preventDefault(); if (SANDBOX) sandboxForward('file', p); else deliverOpenFile(p) })
 // win/linux 首启:文件路径在 argv 里(argv[0] 是可执行文件本身,切掉)。
 for (const f of filesFromArgv(process.argv.slice(1), process.cwd())) pushOpenFile(f)
 
@@ -957,6 +963,7 @@ const mcpLifecycle = createMcpLifecycle({
   log: (m) => console.log(m),
 })
 async function applyForsionMcp(enabled: boolean | (() => Promise<boolean>)): Promise<void> {
+  if (SANDBOX) return // 沙箱不开对外 MCP:固定端口是整机共享的(设置页里打开也不起)
   try {
     await mcpLifecycle.apply(enabled)
   } catch (e) {
@@ -1185,6 +1192,7 @@ async function openUnitScopedFile(p: string): ReturnType<typeof openUnitHostRegu
  *  startUnitWeb 撞 EADDRINUSE → 落 port 0 → 悄悄换掉用户刚抄走的直连端口。 */
 let unitRefreshChain: Promise<void> = Promise.resolve()
 function refreshUnitHost(): Promise<void> {
+  if (SANDBOX) return Promise.resolve() // 沙箱不做设备互联(局域网端口、云端通道都是整机的)
   unitRefreshChain = unitRefreshChain
     .then(() => doRefreshUnitHost())
     .catch((e) => { console.error('[unit] refresh failed:', e) })
@@ -1472,6 +1480,7 @@ function initEngineOverlay(): Promise<void> {
 let ensureChain: Promise<void> = Promise.resolve()
 function ensureBackend(): Promise<void> {
   if (!PRODUCT.agentBackend) return Promise.resolve() // 产品档案:本变体不捆 agent 托管后端
+  if (SANDBOX) return Promise.resolve() // 沙箱不起引擎(设置页里切到托管也不起;契约 plugin-sandbox.md §6)
   ensureChain = ensureChain.then(async () => {
     const stored = await loadConfig()
     // 「允许其他设备连接本机」开着时引擎必须常驻:本机 UI 切去别的 Unit(mode≠managed)
@@ -1686,6 +1695,7 @@ function createWindow(): void {
   // 关闭窗口 = 最小化到托盘(App 常驻后台,后端/Muse 不中断);真正退出走托盘「退出」/before-quit(置 isQuitting)。
   mainWindow.on('close', (e) => {
     if (isQuitting) return
+    if (SANDBOX) { isQuitting = true; app.quit(); return } // 沙箱不进托盘:关窗就停
     e.preventDefault()
     mainWindow?.hide()
   })
@@ -2752,7 +2762,7 @@ app.whenReady().then(async () => {
     return checkForUpdates()
   }
   ipcMain.handle('updater:core-status', () => corePluginUpdater.snapshot())
-  if (app.isPackaged) {
+  if (app.isPackaged && !SANDBOX) {
     setTimeout(() => {
       void corePluginUpdater.check()
       // 应用本体也跟着每 6 小时查一次:原来只在渲染层启动时查,一直开着不退的人永远收不到新版本(What's new 弹窗靠这个广播)
@@ -2760,7 +2770,7 @@ app.whenReady().then(async () => {
     }, 60_000).unref()
   }
   // tangu CLI 自动安装/自愈:shim 指向 App 内部资源(App 自动更新 → CLI 同步),幂等注入 PATH;吞错不阻塞。
-  if (PRODUCT.agentBackend) void ensureCliInstalled({
+  if (PRODUCT.agentBackend && !SANDBOX) void ensureCliInstalled({
     isPackaged: app.isPackaged,
     platform: process.platform,
     execPath: process.execPath,
@@ -2813,6 +2823,24 @@ app.whenReady().then(async () => {
       wc.on('did-fail-load', (_ev, code, _desc, _url, isMainFrame) => { if (isMainFrame && code !== -3) keepAwake.forget(id) }) // -3=导航被取消,旧页面还在
     }
     keepAwake.report(id, Number.isSafeInteger(count) && (count as number) > 0)
+  })
+  // 托盘 / 菜单栏的在跑 / 等你会话(借鉴 Comma 2.6):会话名册在渲染层。主窗 / Mini / 独立窗各有自己的名册,在哪个窗口里起的 run
+  // 只有那个窗口先知道 —— 所以各窗口各报一份、按窗口记,并起来再给托盘(mergeTrayReports)。窗口销毁 / 渲染进程崩溃 / 重载时
+  // 丢掉它那份(同 power:running 的清法),新页面装好会话列表后会重新报。
+  const trayReports = new Map<number, ReturnType<typeof sanitizeTraySessions>>()
+  const pushTrayReports = (): void => setTraySessions(mergeTrayReports(trayReports.values()))
+  ipcMain.on('tray:sessions', (e, raw: unknown) => {
+    if (!isTrustedSender(e) || !e.senderFrame) return // senderFrame 为空 = 旧文档导航后才到的迟到上报,丢弃
+    const wc = e.sender
+    const id = wc.id
+    if (!trayReports.has(id)) {
+      const forget = (): void => { if (trayReports.delete(id)) pushTrayReports() }
+      wc.once('destroyed', forget)
+      wc.on('render-process-gone', forget)
+      wc.on('did-navigate', forget)
+    }
+    trayReports.set(id, sanitizeTraySessions(raw))
+    pushTrayReports()
   })
   // Windows 在用户主动睡眠时终止电源请求,唤醒后手里的 id 已失效 → 重新申请(macOS 断言跨睡眠保留,重申无害)。
   // 设备互联通道:合盖期间的出站长连多半已是半开连接(不报错也收不到东西)→ 唤醒即重拨,别等 45s 读看门狗。
@@ -3330,7 +3358,7 @@ app.whenReady().then(async () => {
     e.sender.startDrag({ file: filePath, icon })
   })
   registerClipExtensionIpc() // Forsion Clip 手动安装:复制出包的扩展文件夹、打开 Chrome 扩展页(拖拽复用上面的 fs:startDrag)
-  startClipVersionSync(localEngineRef) // Forsion 更新后连着的 Clip 换成随包版本并重载
+  if (!SANDBOX) startClipVersionSync(localEngineRef) // Forsion 更新后连着的 Clip 换成随包版本并重载
 
   ipcMain.handle('backend:getStatus', () => backend.getStatus())
   ipcMain.handle('backend:getLogs', () => backend.getLogs())
@@ -3542,7 +3570,7 @@ app.whenReady().then(async () => {
     if (!audio.length) throw new Error('空音频')
     // 本地优先:选了本地且模型就绪 → 离线转写(不联网)。
     if (asrBackendFor(cfg.asrBackend, req.backend, localModelReady()) === 'local') {
-      return transcribeLocal(audio, { timestamps: req?.timestamps })
+      return transcribeLocal(audio, { timestamps: req?.timestamps, language: req?.language })
     }
     // 云端:自带 provider(<provider>/<model> 命中 providers.json)→ 主进程直连上游;否则走 Forsion 托管(计费)。
     const modelId = (req?.modelId || cfg.asrModelId || '').trim()
@@ -3711,7 +3739,7 @@ app.whenReady().then(async () => {
   // 普通组合键只在 Forsion 不在前台时注册成全局快捷键(同手势那边的 excludePids):在前台时交给窗口里的命令分发 ——
   // 不然全局注册会把键吞掉,设置里录这个组合也录不到。注册不上(被别的应用占了)就只在 Forsion 里管用,下次失焦再试。
   function syncAppRefAccelerator(): void {
-    const want = BrowserWindow.getFocusedWindow() ? null : appRefWantedAccel
+    const want = BrowserWindow.getFocusedWindow() || SANDBOX ? null : appRefWantedAccel
     if (want === appRefAccelerator) return
     if (appRefAccelerator) globalShortcut.unregister(appRefAccelerator)
     appRefAccelerator = null
@@ -3766,7 +3794,7 @@ app.whenReady().then(async () => {
   })
 
   // ── 应用内自动更新(electron-updater;检查 → 下载 → 重启安装。mac 仅检测,UI 引导手动下载)──
-  ipcMain.handle('updater:check', () => checkAllUpdates())
+  ipcMain.handle('updater:check', () => (SANDBOX ? { phase: 'unsupported' } : checkAllUpdates()))
   ipcMain.handle('updater:status', () => getUpdaterStatus())
   // 测试版通道开关。落 config.json 的 updater 段;updater.ts 每次检查现读,改完无需重启。
   ipcMain.handle('updater:getBeta', () => betaChannelOn())
@@ -4345,12 +4373,12 @@ app.whenReady().then(async () => {
     return { routed: true }
   })
   // mini 全局快捷键(默认 ⌘/Ctrl+⇧+M;register 返回 false=被占用,吞掉不阻塞启动)。
-  const MINI_ACCEL = 'CommandOrControl+Shift+M'
+  const MINI_ACCEL = MINI_ACCELERATOR // 托盘菜单「新建 Mini 对话」显示的是同一个
   const registerMiniShortcut = (): void => { try { globalShortcut.register(MINI_ACCEL, () => toggleMiniWindow()) } catch { /* 快捷键冲突 */ } }
-  registerMiniShortcut()
-  globalHotkeyPause.add({ pause: () => globalShortcut.unregister(MINI_ACCEL), resume: registerMiniShortcut })
-  if (PRODUCT.agentBackend) approvalDelivery.start() // P1-K3:订阅本机引擎待批流(引擎未就绪时 idle,ready 后自连)
-  if (PRODUCT.agentBackend) void remoteSafety.start() // P1-K2:读锁文件(跨重启)→ 注册急停热键 ⌃⌥⇧.(失败托盘 / 设置页可见)→ 订引擎活动流
+  if (!SANDBOX) registerMiniShortcut()
+  if (!SANDBOX) globalHotkeyPause.add({ pause: () => globalShortcut.unregister(MINI_ACCEL), resume: registerMiniShortcut })
+  if (PRODUCT.agentBackend && !SANDBOX) approvalDelivery.start() // P1-K3:订阅本机引擎待批流(引擎未就绪时 idle,ready 后自连)
+  if (PRODUCT.agentBackend && !SANDBOX) void remoteSafety.start() // P1-K2:读锁文件(跨重启)→ 注册急停热键 ⌃⌥⇧.(失败托盘 / 设置页可见)→ 订引擎活动流
 
   // 启动即续期(2 周滑动窗口),且**必须先于 ensureBackend**:后端 token 走 env 快照,而本地端点鉴权
   // 是**逐字比对**那枚快照 —— 续期把 auth.json 换成新的、引擎手上还是旧串,渲染层(getConfig 实时读
@@ -4360,11 +4388,11 @@ app.whenReady().then(async () => {
   setInterval(() => { void accountCore.refresh() }, 24 * 3600_000) // 一直开着不关的也算「在用软件」
   // MCP 服务常驻、随 App 启动(引擎的 ASR 桥要用);外部面按设置「高级」开关(默认关)。开关值在 lifecycle 队列里现读:
   // 若先读到旧值、用户又在读完前切了开关,旧值作废(见 createMcpLifecycle)。不依赖后端就绪,工具调用时现取引擎地址。
-  void applyForsionMcp(async () => (await loadConfig()).mcpEnabled)
+  if (!SANDBOX) void applyForsionMcp(async () => (await loadConfig()).mcpEnabled)
   // ⚠️必须**先于** createWindow / restoreDetachedWindows:恢复的终端 tab 一挂载就 pty:spawn,
   // 那时 handler 还没注册的话 IPC 直接「No handler registered」,视图落进已退出态且不会重试。
   registerPtyIpc(isTrustedSender)
-  if (PRODUCT.agentBackend && process.platform === 'darwin') {
+  if (PRODUCT.agentBackend && process.platform === 'darwin' && !SANDBOX) {
     miniAutoPanel = startMiniAutoPanel({
       readForeground: readComputerUseForeground,
       // 用户按住自动 Mini 拖走时焦点落在它自己身上 —— 不算「回到 Forsion」,否则一拖就收起。
@@ -4376,10 +4404,11 @@ app.whenReady().then(async () => {
     app.on('browser-window-focus', (_e, w) => { if (w !== autoMiniWindow) lastFocusedWindow = w; miniAutoPanel?.refresh() })
   }
   createWindow()
+  if (SANDBOX) startSandboxChild(SANDBOX, { getWindow: () => mainWindow, quit: () => { isQuitting = true; app.quit() }, log: (m) => console.log(m) })
   void restoreDetachedWindows() // 恢复上次退出时的独立窗(位置/尺寸 + 各窗自恢复布局)
   // 系统托盘 / mac 菜单栏图标:显示窗口 / 检查更新 / 退出。
   const ch = computerHistory
-  createTray({
+  if (!SANDBOX) createTray({
     show: showMainWindow,
     checkUpdates: () => { void checkAllUpdates() },
     quit: () => { isQuitting = true; app.quit() },
@@ -4389,6 +4418,16 @@ app.whenReady().then(async () => {
       resume: () => { void ch.resume().catch(() => {}) },
     } : undefined,
     remote: PRODUCT.agentBackend ? remoteSafety.trayHandlers(openRemoteSafetySettings) : undefined, // P1-K2:远程会话运行中 · 设备名 / 停止全部 / 解锁
+    // 借鉴 Comma 2.6:在跑 / 等你的会话(清单由各窗口经 tray:sessions 报上来、并成一份);点一条 = 显示主窗并打开它(同审批通知点击那条 approval:open)
+    sessions: PRODUCT.agentBackend ? {
+      list: traySessions,
+      open: (sessionId) => { showMainWindow(); if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(APPROVAL_OPEN_CHANNEL, { sessionId }) },
+    } : undefined,
+    // 「随处说一句」= Mini 窗:已经开着就提到前面(热键是开合切换,菜单项不该把开着的 Mini 藏掉)
+    newMini: {
+      open: () => { if (miniWindow && !miniWindow.isDestroyed() && miniWindow.isVisible()) present(miniWindow); else toggleMiniWindow() },
+      accelerator: () => (globalShortcut.isRegistered(MINI_ACCEL) ? MINI_ACCEL : null),
+    },
   })
   // Amadeus Space:装载 vault IPC(暴露给 window.amadeus)+ 资产协议(指向当前 vault 根)。
   const { getVaultRoot, restartSync, stopSync, readExternalPlugins, vaultFace } = registerAmadeusIpc(() => mainWindow, amadeusSyncFactory)
@@ -4407,6 +4446,71 @@ app.whenReady().then(async () => {
   })
 })
 
+// ── 插件沙箱(契约 tangu-agent/docs/plugin-sandbox.md)────────────────────────────────────────
+// 两种身份都答 pluginSandbox:self(preload 同步问一次分身份):沙箱答自己的信息,用户那份答 null。
+ipcMain.on('pluginSandbox:self', (e) => { e.returnValue = SANDBOX ? { ...SANDBOX, appVersion: app.getVersion() } : null })
+/** 父进程渲染层最近一次带来的主题键(起沙箱时随 exec 报上来)。 */
+let sandboxStorage: Record<string, string> = {}
+const pluginSandbox = SANDBOX ? null : createPluginSandbox({
+  forsionHome: forsionHomeDir,
+  // dev:同一个 electron 二进制 + app 路径(ELECTRON_RENDERER_URL 随环境带过去,沙箱也吃 vite 热更新);打包态:应用本体
+  spawn: (args, env) => spawn(process.execPath, args, { env, stdio: 'ignore' }),
+  appArgs: app.isPackaged ? [] : [app.getAppPath()],
+  platform: process.platform,
+  pid: process.pid,
+  ui: (): PluginSandboxUiSeed => ({ locale: mainLocale(), storage: sandboxStorage }),
+  onChange: (st) => { for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && !w.webContents.isDestroyed()) w.webContents.send('pluginSandbox:changed', st) },
+  onChildEvent: (ev) => {
+    if (ev.event === 'report') { showMainWindow(); mainWindow?.webContents.send('pluginSandbox:report', ev) }
+    else if (ev.event === 'install') void installFromSandbox().catch((e) => console.error('[plugin-sandbox] install failed:', e))
+    else if (ev.event === 'reset') void pluginSandbox?.reset().catch((e) => console.error('[plugin-sandbox] reset failed:', e))
+    else if (ev.kind === 'url') { if (isForsionUrl(ev.value)) deliverDeepLink(ev.value) }
+    else deliverOpenFile(ev.value)
+  },
+  log: (m) => console.log(m),
+})
+/** 「安装到我的 Forsion」:卡片、Coding Studio、沙箱窗口三处的按钮都到这里,先在用户那份的主窗上确认。 */
+async function installFromSandbox(): Promise<{ ok: boolean; pluginId?: string; error?: string; cancelled?: boolean }> {
+  const st = pluginSandbox?.state()
+  if (!pluginSandbox || !st?.running) return { ok: false, error: 'no sandbox is running' }
+  const expect = { pluginId: st.pluginId, dir: st.dir } // 用户点「安装」同意的就是框里这一个
+  showMainWindow()
+  // ⚠️ 必须挂父窗(同 confirmPair):无父的 showMessageBox 在 mac 上冻住主循环;拿不到窗就不装
+  const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
+  if (!win) return { ok: false, cancelled: true }
+  const { response } = await dialog.showMessageBox(win, {
+    type: 'question', title: mt('main.pluginSandbox.installTitle'),
+    message: mt('main.pluginSandbox.installMessage', { name: st.name ?? '', version: st.version ?? '' }),
+    detail: mt('main.pluginSandbox.installDetail', { dir: st.dir ?? '' }),
+    buttons: [mt('main.pluginSandbox.install'), mt('main.pluginSandbox.cancel')], defaultId: 0, cancelId: 1, noLink: true,
+  })
+  if (response !== 0) return { ok: false, cancelled: true }
+  const r = await pluginSandbox.install(expect)
+  // 各窗自己重载插件(与商店安装同一条广播)
+  if (r.ok) for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('window:mainAction', 'extensions-changed', JSON.stringify({ type: 'amadeus-plugin', ids: [r.pluginId] }))
+  return r
+}
+if (pluginSandbox) {
+  ipcMain.handle('pluginSandbox:exec', (e, op: unknown, args: unknown, origin: unknown) => {
+    if (!isTrustedSender(e)) return { ok: false, code: 'error', error: 'untrusted sender' }
+    const o = (origin && typeof origin === 'object' ? origin : {}) as { sessionId?: unknown; deadline?: unknown; ui?: { storage?: unknown } }
+    const storage = o.ui?.storage
+    if (storage && typeof storage === 'object') {
+      sandboxStorage = Object.fromEntries(Object.entries(storage as Record<string, unknown>)
+        .filter(([k, v]) => /^forsion_(theme|glass)/.test(k) && typeof v === 'string' && v.length <= 4096).slice(0, 40)) as Record<string, string>
+    }
+    return pluginSandbox.exec(String(op), args && typeof args === 'object' ? args as Record<string, unknown> : {}, {
+      sessionId: typeof o.sessionId === 'string' ? o.sessionId : undefined,
+      deadline: typeof o.deadline === 'number' && Number.isFinite(o.deadline) ? o.deadline : undefined,
+    })
+  })
+  ipcMain.handle('pluginSandbox:state', (e) => (isTrustedSender(e) ? pluginSandbox.state() : { running: false }))
+  ipcMain.handle('pluginSandbox:show', (e) => (isTrustedSender(e) ? pluginSandbox.show() : false))
+  ipcMain.handle('pluginSandbox:stop', (e) => (isTrustedSender(e) ? pluginSandbox.stop() : undefined))
+  ipcMain.handle('pluginSandbox:reset', (e) => (isTrustedSender(e) ? pluginSandbox.reset() : { ok: false }))
+  ipcMain.handle('pluginSandbox:install', (e) => (isTrustedSender(e) ? installFromSandbox() : { ok: false }))
+}
+
 app.on('before-quit', (e) => {
   // 第一件事:有插件说还没做完就拦下问(别先做下面那些收尾 —— 取消的话应用还要接着用)。
   // 托盘「退出」在 app.quit() 之前就把 isQuitting 置了 true:拦下时还原,否则取消后关窗就真关了
@@ -4417,6 +4521,7 @@ app.on('before-quit', (e) => {
     if (win && !win.isDestroyed()) state.bounds = win.getBounds()
   }
   saveDetachedState()
+  void pluginSandbox?.dispose() // 沙箱跟着退(它那头也会因控制通道断开自己退)
   globalShortcut.unregisterAll() // 释放 mini 全局快捷键
   miniAutoPanel?.stop(); miniAutoPanel = null
   approvalDelivery.stop() // P1-K3

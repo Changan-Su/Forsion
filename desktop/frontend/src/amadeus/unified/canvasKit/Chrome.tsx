@@ -24,8 +24,9 @@ export function CanvasChrome({ zoom, onZoomBy, onFit, snap, onSnap, mini, onMini
   /** 不传 onSnap = 这块画布没有可拖的卡(Chat 画布),不出吸附开关。 */
   snap?: boolean
   onSnap?: (on: boolean) => void
-  mini: boolean
-  onMini: (on: boolean) => void
+  mini?: boolean
+  /** 不传 = 缩略图开关不在胶囊上(Chat 画布把它收进了「视图」菜单)。 */
+  onMini?: (on: boolean) => void
   /** 各家自己的按钮(画布的「低倍率简略」之类)。 */
   extra?: React.ReactNode
 }) {
@@ -51,15 +52,17 @@ export function CanvasChrome({ zoom, onZoomBy, onFit, snap, onSnap, mini, onMini
           <Magnet size={12} />
         </button>
       )}
-      <button
-        type="button"
-        className={mini ? 'is-on' : ''}
-        aria-pressed={mini}
-        title={mini ? t('ckchrome.miniHide') : t('ckchrome.miniShow')}
-        onClick={() => onMini(!mini)}
-      >
-        <MapIcon size={12} />
-      </button>
+      {onMini && (
+        <button
+          type="button"
+          className={mini ? 'is-on' : ''}
+          aria-pressed={!!mini}
+          title={mini ? t('ckchrome.miniHide') : t('ckchrome.miniShow')}
+          onClick={() => onMini(!mini)}
+        >
+          <MapIcon size={12} />
+        </button>
+      )}
     </div>
   )
 }

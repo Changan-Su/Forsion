@@ -157,6 +157,14 @@ describe('slug 工具', () => {
     expect(cmpVersion('v2.3.0', '2.3')).toBe(0)
     expect(cmpVersion('2.2.4', '2.3.0')).toBe(-1)
   })
+  it('cmpVersion 预发布排在同号正式版之前(与 desktop/shared/amadeus/ipc.ts 那份同口径)', () => {
+    expect(cmpVersion('2.13.8-beta.1', '2.13.8-beta.2')).toBe(-1)
+    expect(cmpVersion('2.13.8-beta.2', '2.13.8')).toBe(-1)
+    expect(cmpVersion('2.13.8', '2.13.8-rc.1')).toBe(1)
+    expect(cmpVersion('2.13.8-beta.11', '2.13.8-beta.2')).toBe(1)
+    expect(cmpVersion('2.13.7+build.10', '2.13.7+build.2')).toBe(1)
+    expect(cmpVersion('2.13.7', '2.13.7+build.1')).toBe(-1)
+  })
 })
 
 describe('配方版本(version)', () => {

@@ -92,6 +92,8 @@ export function installAmadeusPlugins(): void {
     // 徽标常驻设置页。check 类(可能打远端)启动期不跑,见 pluginOnboardingStore 文件头。
     const s = usePluginStore.getState()
     for (const p of s.plugins) if (s.activeIds.includes(p.id)) void evaluateAndNudge(p)
+    // 插件沙箱:装载落定 = 卡片从「启动中」变成「运行中 / 失败」,并把插件的第一个视图开出来
+    if (window.tangu?.sandbox && windowKind() === 'main') void import('./sandbox/sandboxWindow').then((m) => m.sandboxPluginsLoaded())
   })
 
   // 插件 commands → engine 命令面板(**全局可见**,2026-07-18 放开——插件视图可装进任意 Space,

@@ -6,11 +6,11 @@
  * 样式全在 sidebar2.css(t2s- 前缀,token 驱动);右键菜单复用 base.css 的 .ctx-menu。
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { Plus, MoreHorizontal, Pencil, Archive, ArchiveRestore, Trash2, ChevronRight, Folder, FolderOpen, Cloud, FolderPlus, SquarePen, Smartphone, Send, MessagesSquare, MessageSquare, GitBranch, Pin, PinOff, Info, NotebookPen, Smile } from 'lucide-react'
+import { Plus, MoreHorizontal, Pencil, Archive, ArchiveRestore, Trash2, ChevronRight, Folder, FolderOpen, Cloud, FolderPlus, SquarePen, Smartphone, Send, MessagesSquare, MessageSquare, Bot, GitBranch, Pin, PinOff, Info, NotebookPen, Smile } from 'lucide-react'
 import { SessionIcon, SessionIconPicker } from '../../components/SessionIcon'
 import { folderPadLeft, rowPadLeft } from '@amadeus/lib/treeIndent'
 import { SidebarRow } from '../../components/SidebarRow'
-import { moveTo, startOpenDrag } from '@lcl/engine'
+import { dragGrab, landWhenMoved, moveTo, releasePoint, startOpenDrag, type LandPoint } from '@lcl/engine'
 import { ProjectIcon } from '../../components/ProjectIcon'
 import { RemoveDialog } from '../../components/RemoveDialog'
 import { isProjectWorkspace } from '../../stores/projectSettings'
@@ -35,7 +35,9 @@ import { formatRowTime } from '../../format/time'
 import { ListSection, PullHint, SwipeRow, closeOtherSwipes, dayBucket, usePullToSearch, withSections, type SwipeAction } from '../../components/phoneList'
 import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
-const CHANNEL_ICONS: Record<ChannelKind, typeof Smartphone> = { wechat: Smartphone, telegram: Send, qq: MessagesSquare }
+const CHANNEL_ICONS: Partial<Record<ChannelKind, typeof Smartphone>> = { wechat: Smartphone, telegram: Send, qq: MessagesSquare }
+/** 插件通道没有专属图标,统一用 Bot。 */
+const channelIcon = (kind: ChannelKind): typeof Smartphone => CHANNEL_ICONS[kind] ?? Bot
 
 registerMessages({
   'sidebar.openInNewTab': { zh: '在新标签页打开', en: 'Open in new tab' },
@@ -207,6 +209,8 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
   const [wsOrder, setWsOrder] = useState<string[]>(loadWsOrder)
   const [dragKey, setDragKey] = useState<string | null>(null)
   const [dragOverKey, setDragOverKey] = useState<string | null>(null)
+  /** 拖起组头时指针在组头里的位置:松手处 = 拖影左上角,落位(LCL land)从那里滑进新位置。 */
+  const dragGrabRef = useRef<LandPoint | null>(null)
   const renameRef = useRef<HTMLInputElement>(null)
   const didMountActiveWorkspace = useRef(false)
   const [wsMenu, setWsMenu] = useState<{ ws: WorkspaceDescriptor; x: number; y: number } | null>(null)
@@ -265,8 +269,10 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
 
   /** 落到 targetKey 上 = 顶掉它的位置,其余顺次让位。语义与 ribbon 共用 lcl 的 moveTo(已单测),
    *  别再手写「插到目标之前」那套:下移一格会算成空操作,且永远排不到最末 = 用户报的「线显示了但松手没动」。 */
-  const dropWorkspace = (targetKey: string): void => {
+  const dropWorkspace = (targetKey: string, at?: { clientX: number; clientY: number }): void => {
     const from = dragKey
+    const grab = dragGrabRef.current
+    dragGrabRef.current = null
     setDragKey(null)
     setDragOverKey(null)
     if (!from || from === targetKey) return
@@ -274,6 +280,18 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
     const ti = keys.indexOf(targetKey)
     if (ti < 0 || !keys.includes(from)) return
     const next = moveTo(keys, from, ti)
+    // 松手落位:组头从松手处滑进新位置,展开着的那块会话跟着同一段位移走(邻居不让位,DESIGN §3 动效)。
+    // 在 setState 之前布置:此刻量到的还是旧位置,等提交后组头换了前一个兄弟才落。
+    if (grab && at) {
+      const sel = `.t2s-group[data-workspace-key="${CSS.escape(from)}"]`
+      landWhenMoved(() => rootRef.current?.querySelector<HTMLElement>(sel), releasePoint(at, grab), {
+        timeout: 400,
+        with: (el) => {
+          const n = el.nextElementSibling as HTMLElement | null
+          return n && n.querySelector(':scope > .t2s-group-sessions') ? [n] : []
+        },
+      })
+    }
     setWsOrder(next)
     saveWsOrder(next)
   }
@@ -375,7 +393,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
     // 通道会话 → 「设为正在连接」(该通道的入站消息改走此会话)。
     const chWs = s?.project_path ? p.workspaces.find((w) => w.kind === 'channel' && w.key === s.project_path) : null
     if (s && chWs?.channel) {
-      const Ic = CHANNEL_ICONS[chWs.channel]
+      const Ic = channelIcon(chWs.channel)
       items.push({
         id: 'channel-connect', label: t('sidebar.channel.setAsConnected'), icon: <Ic size={13} />,
         run: () => {
@@ -442,7 +460,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
    *  本地工作区用 Folder/FolderOpen 表达展开态 —— 箭头默认不显,总得有东西担起「展开了没」。
    *  Project 设了图标(PROJECT 详情里换的 emoji / 图片)就换成它:展开态只剩 hover 箭头表达,与笔记树带 emoji 的文件夹同理。 */
   const wsLead = (ws: WorkspaceDescriptor, collapsed: boolean) => {
-    const Ic = ws.kind === 'channel' ? CHANNEL_ICONS[ws.channel || 'wechat'] : ws.kind === 'cloud' ? Cloud : ws.kind === 'rootless' ? MessagesSquare : collapsed ? Folder : FolderOpen
+    const Ic = ws.kind === 'channel' ? channelIcon(ws.channel || 'wechat') : ws.kind === 'cloud' ? Cloud : ws.kind === 'rootless' ? MessagesSquare : collapsed ? Folder : FolderOpen
     return (
       <span className="t2s-lead">
         {isProjectWorkspace(ws) ? <ProjectIcon path={ws.path} className="amx-page-emoji t2s-project-icon" fallback={<Ic className="t2s-lead-icon" />} /> : <Ic className="t2s-lead-icon" />}
@@ -610,7 +628,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
         onTouchStart={p.timeline ? closeOtherSwipes : undefined}
         // 拖组时整列表放行 drop:落在组间外边距 / 列表空白处也提交到当前落点,不再「松手什么都没发生」。
         onDragOver={(e) => { if (dragKey) { e.preventDefault(); e.dataTransfer.dropEffect = 'move' } }}
-        onDrop={(e) => { if (dragKey && dragOverKey) { e.preventDefault(); dropWorkspace(dragOverKey) } }}
+        onDrop={(e) => { if (dragKey && dragOverKey) { e.preventDefault(); dropWorkspace(dragOverKey, e) } }}
       >
         {p.showSpecial && (
           <div className="t2s-special-group">
@@ -661,7 +679,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
                   const k = dragKey === ws.key ? null : ws.key
                   if (dragOverKey !== k) setDragOverKey(k)
                 },
-                onDrop: (e: React.DragEvent) => { if (dragKey) { e.preventDefault(); e.stopPropagation(); dropWorkspace(ws.key) } },
+                onDrop: (e: React.DragEvent) => { if (dragKey) { e.preventDefault(); e.stopPropagation(); dropWorkspace(ws.key, e) } },
               }
               // 顶掉目标位置 → 下移时落点在整块「之下」,插入线就得画到块下沿(展开态 = sessions 容器下沿),
               // 不能还画在组头上方骗人。也正因如此,拖到最后一组 = 能真的排到最末(旧的插入语义排不到)。
@@ -688,6 +706,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
                       const r = e.currentTarget.getBoundingClientRect()
                       e.dataTransfer.setDragImage(e.currentTarget, e.clientX - r.left, e.clientY - r.top)
                       e.dataTransfer.effectAllowed = 'move'
+                      dragGrabRef.current = dragGrab(e.currentTarget, e)
                       setDragKey(ws.key)
                     }}
                     {...dropOn}

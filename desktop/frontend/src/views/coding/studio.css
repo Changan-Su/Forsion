@@ -220,3 +220,8 @@
   .csu-sandbox-evidence { grid-column: 2; grid-row: 1; min-height: 0; overflow: auto; }
   .csu-sandbox-send { grid-column: 2; grid-row: 2; }
 }
+/* Sandbox 面板的两档(隔离沙箱 / 我的 Forsion):小号分段钮,放在 head 最上面 */
+.csu-sandbox-tiers { display: inline-flex; align-self: flex-start; gap: 2px; padding: 2px; border-radius: var(--radius-pill); background: var(--overlay-light); }
+.csu-sandbox-tiers > button { border: none; background: transparent; color: var(--text-muted); font: inherit; font-size: var(--ui-font-caption, 11px); padding: 3px 10px; border-radius: var(--radius-pill); cursor: pointer; }
+.csu-sandbox-tiers > button[aria-pressed='true'] { background: var(--bg-card); color: var(--text); box-shadow: var(--card-shadow); }
+.csu-sandbox[data-sandbox-tier='isolated'] .csu-sandbox-status strong { display: inline-flex; align-items: center; gap: 4px; }
