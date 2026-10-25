@@ -83,7 +83,7 @@ export interface BuiltinUpdateOpts {
   onStatus?: (status: CorePluginUpdate) => void
 }
 
-/** 只认正式版:cmpVersion 把 0.5.9-rc.1 排在 0.5.9 之上,预发布一旦进了暂存区,同号正式版就永远换不上去。 */
+/** 只认正式版:自动更新不装预发布。10-25 之前的 cmpVersion 把 0.5.9-rc.1 排在 0.5.9 之上,预发布进了暂存区同号正式版就换不上;排序已改对,这条照旧守着。 */
 const RELEASE_VERSION = /^\d+\.\d+\.\d+$/
 
 /** 查一遍各内置包;有更新的下载进暂存区。返回暂存了的 `id@version`。逐包吞错,只进 log。 */
