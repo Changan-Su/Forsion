@@ -112,7 +112,7 @@ function makeComponent(def: ViewDefinition): React.FC<IDockviewPanelProps> {
           if (e.animationName === 'wb-view-enter' && e.target === e.currentTarget) setEnter(false)
         }}
       >
-        <ViewErrorBoundary>
+        <ViewErrorBoundary type={def.type}>
           <Suspense fallback={<Skeleton variant={skeletonVariantOf(def.type, loc)} />}>
             {loc === 'main' ? <ExtendViewHost present={presentDockedExtension} owner={props.api} ownerKey={ownerKey}>
               {(extendView) => def.factory({ leaf, params: leaf.params, extendView })}

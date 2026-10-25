@@ -95,10 +95,10 @@ describe('左右修饰键同按(mod+mod / shift+shift / alt+alt)', () => {
   })
   it('哪些算成对热键;显示成两个修饰键', () => {
     expect([MOD_PAIR, 'shift+shift', 'alt+alt', 'mod+shift', 'shift+k'].map(isPairHotkey)).toEqual([true, true, true, false, false])
-    expect(formatHotkey(MOD_PAIR, true)).toBe('⌘ + ⌘')
+    expect(formatHotkey(MOD_PAIR, true)).toBe('⌘⌘')
     expect(formatHotkey(MOD_PAIR, false)).toBe('Ctrl + Ctrl')
-    expect(formatHotkey('shift+shift', true)).toBe('⇧ + ⇧')
+    expect(formatHotkey('shift+shift', true)).toBe('⇧⇧')
     expect(formatHotkey('shift+shift', false)).toBe('Shift + Shift')
-    expect(formatHotkey('alt+alt', true)).toBe('⌥ + ⌥')
+    expect(formatHotkey('alt+alt', true)).toBe('⌥⌥')
   })
 })

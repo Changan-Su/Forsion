@@ -61,6 +61,10 @@
   --ui-control-height: 28px;
   --ui-control-pad-block: 4px;
   --radius-pill: 999px;
+  /* 分段控件选中滑块(5.11 A,10-25 用户定):凸起 —— 浅色卡面色 + 软阴影,暗色比轨道亮一档(:root.dark 那块)。
+   * 侧栏胶囊 .t2s-vaultseg、LCL 看法胶囊 .lcl-vmode、Agent 标签条 .agent-section-nav 共用。 */
+  --seg-thumb: var(--bg-card);
+  --seg-thumb-shadow: 0 1px 2px rgba(0, 0, 0, 0.08), 0 0 0 0.5px rgba(0, 0, 0, 0.06);
   --font-body: var(--font-ui);
   --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
   --user-bg: rgba(28, 28, 28, 0.04);
@@ -183,6 +187,8 @@
  * 没有这块时,暗色下会泄漏亮色 :root 中性色到深底上(= 之前「暗色完全异常」的根因)。 */
 :root.dark {
   --bg: #2a292b;
+  --seg-thumb: var(--overlay-strong);
+  --seg-thumb-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
   --bg-card: #323134;
   --bg-glass: rgba(28, 26, 22, 0.9);
   --sidebar-bg: #262528;
@@ -1850,7 +1856,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   overflow: visible;
 }
 .composer-menu--mode .menu-item { font-size: var(--t2c-font-control, 12px); }
-.composer-menu .menu-item.approval-item { position: relative; align-items: center; gap: 9px; }
+.composer-menu .menu-item.approval-item { position: relative; align-items: center; }
 .composer-menu .menu-item.approval-item .grow { min-width: 0; }
 .approval-ic, .approval-ck { flex: none; color: var(--text-muted); }
 .menu-item.approval-item.active .approval-ic, .menu-item.approval-item.active .approval-ck { color: inherit; }

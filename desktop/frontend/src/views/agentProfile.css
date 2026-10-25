@@ -6,7 +6,8 @@
 .agents-roster-heading small { font-size: var(--ui-font-caption, 11px); color: var(--text-faint); }
 .agents-roster-heading > button { display: grid; place-items: center; width: 24px; height: 24px; margin: -4px 0; border: 0; border-radius: var(--radius-sm, 8px); background: transparent; color: var(--text-muted); cursor: pointer; }
 .agents-roster-heading > button:hover { background: var(--overlay-medium); color: var(--text); }
-.agents-search, .profile-search { display: flex; align-items: center; gap: 8px; padding: 9px 10px; border-radius: var(--radius-sm, 8px); background: var(--overlay-light); color: var(--text-muted); }
+/* 搜索框一个形状(走查 5.12):同侧栏 .t2s-search 的 32px 胶囊。 */
+.agents-search, .profile-search { display: flex; align-items: center; gap: 8px; box-sizing: border-box; height: 32px; padding: 0 10px; border-radius: var(--radius-pill, 999px); background: var(--overlay-light); color: var(--text-muted); }
 .agents-search input, .profile-search input { width: 100%; min-width: 0; border: 0; background: transparent; outline: none; padding: 0; box-shadow: none; font-size: var(--ui-font-meta, 12px); color: var(--text); }
 /* 环画在框内:正文滚动区左右只有 2px 内边距,外扩的环会被裁掉两条竖边 */
 .profile-search:focus-within { outline: var(--focus-ring) solid var(--signal-line); outline-offset: -2px; }
@@ -71,13 +72,14 @@
 .agent-state.working i { background: var(--signal-mark); }
 .profile-expand { flex-shrink: 0; align-self: flex-start; display: grid; place-items: center; width: 30px; height: 30px; padding: 0; background: transparent; border: 0; border-radius: var(--radius-sm, 8px); color: var(--text-muted); cursor: pointer; }
 .profile-expand:hover { background: var(--overlay-medium); color: var(--text); }
-.agent-section-nav { --profile-nav-gap: 4px; --profile-nav-padding: 5px; position: relative; isolation: isolate; display: flex; gap: var(--profile-nav-gap); padding: var(--profile-nav-padding); background: var(--overlay-light); border-radius: var(--radius-md, 12px); min-width: 0; }
-.agent-section-nav::before { content: ""; position: absolute; z-index: -1; pointer-events: none; inset-block: var(--profile-nav-padding); left: var(--profile-nav-padding); width: calc((100% - 2 * var(--profile-nav-padding) - (var(--profile-tab-count, 5) - 1) * var(--profile-nav-gap)) / var(--profile-tab-count, 5)); border-radius: var(--radius-sm, 8px); background: var(--bg); box-shadow: var(--btn-shadow); transform: translateX(calc(var(--profile-tab-index, 0) * (100% + var(--profile-nav-gap)))); transition: transform 200ms cubic-bezier(.2,.8,.2,1); }
-.agent-section-nav button { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 36px; padding: 8px 10px; border: 0; background: transparent; color: var(--text-muted); border-radius: var(--radius-sm, 8px); cursor: pointer; white-space: nowrap; font-size: var(--ui-font-meta, 12px); transition: background 160ms ease, color 160ms ease; }
+/* 分段标签条:与侧栏 .t2s-vaultseg、LCL 看法胶囊同一种选中态(凸起滑块 --seg-thumb)、同一档圆角(pill)—— 10-25 走查 5.11 A。 */
+.agent-section-nav { --profile-nav-gap: 4px; --profile-nav-padding: 5px; position: relative; isolation: isolate; display: flex; gap: var(--profile-nav-gap); padding: var(--profile-nav-padding); background: var(--overlay-light); border-radius: var(--radius-pill, 999px); min-width: 0; }
+.agent-section-nav::before { content: ""; position: absolute; z-index: -1; pointer-events: none; inset-block: var(--profile-nav-padding); left: var(--profile-nav-padding); width: calc((100% - 2 * var(--profile-nav-padding) - (var(--profile-tab-count, 5) - 1) * var(--profile-nav-gap)) / var(--profile-tab-count, 5)); border-radius: var(--radius-pill, 999px); background: var(--seg-thumb); box-shadow: var(--seg-thumb-shadow); transform: translateX(calc(var(--profile-tab-index, 0) * (100% + var(--profile-nav-gap)))); transition: transform 200ms cubic-bezier(.2,.8,.2,1); }
+.agent-section-nav button { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 36px; padding: 8px 10px; border: 0; background: transparent; color: var(--text-muted); border-radius: var(--radius-pill, 999px); cursor: pointer; white-space: nowrap; font-size: var(--ui-font-meta, 12px); transition: background 160ms ease, color 160ms ease; }
 .agent-section-nav button svg { flex-shrink: 0; }
 .agent-section-nav button span { overflow: hidden; text-overflow: ellipsis; }
 .agent-section-nav button:hover { color: var(--text); background: var(--overlay-medium); }
-.agent-section-nav button.selected { color: var(--accent-ink); background: transparent; }
+.agent-section-nav button.selected { color: var(--text); background: transparent; }
 .agent-profile-content { min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 24px 2px; scrollbar-width: thin; }
 .agent-profile-content:focus { outline: none; }
 .agent-profile-content:focus-visible { outline: var(--focus-ring) solid var(--signal-line); outline-offset: -2px; }

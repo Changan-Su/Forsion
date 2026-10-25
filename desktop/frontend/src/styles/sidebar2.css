@@ -131,10 +131,10 @@
   margin: 4px 10px 8px;
   padding: 2px;
   border-radius: var(--radius-pill, 999px);
-  /* 明暗关系(2026-08-13 用户拍板反转):**轨道恒比所在面板暗一档(凹),选中态用 --accent 实底反色**。
-   * --accent 深色是近白 / 浅色是近黑,所以一套规则同时满足「深色选中浅、浅色选中深」。
-   * ⚠️ 轨道不能用 --overlay-light:它在深色下是**提亮**叠层(rgba(242,239,232,.05)),轨道会比面板更亮
-   *    而滑块回落到 --bg = 面板色,正好把明暗关系做反了 —— 这就是改前的观感。固定黑色叠层两模式都凹。 */
+  /* 明暗关系:轨道恒比所在面板暗一档(固定黑色叠层,两模式都凹);**选中格是凸起滑块**(--seg-thumb:
+   * 浅色卡面色 + 软阴影,暗色比轨道亮一档),选中字 --text。2026-10-25 用户选走查 5.11 A,推翻了 08-13
+   * 「次强调色滑块 + --accent-ink 字」那条 —— 侧栏胶囊、LCL 看法胶囊、Agent 标签条从此一种选中态、一种圆角(pill)。
+   * ⚠️ 轨道不能用 --overlay-light:它在深色下是**提亮**叠层(rgba(242,239,232,.05)),轨道会比面板更亮。 */
   background: rgba(0, 0, 0, 0.05);
   -webkit-app-region: no-drag;
   flex-shrink: 0;
@@ -151,11 +151,9 @@
      它们照旧靠下面的 `[data-side=…]` 规则平移(属性选择器特异性更高,盖得住这条)。 */
   width: calc((100% - 4px) / var(--seg-n, 2));
   border-radius: var(--radius-pill, 999px);
-  /* 次强调色(= 桌面 ribbon `.rb-space.on` 那一档),不是纯 --accent 实底 —— 用户拍板 2026-08-13。
-   * 半透明叠在上面的黑色轨道上:深色下往亮里走、浅色下往暗里走,明暗方向照旧成立,只是更克制。 */
-  background: var(--accent-light, var(--overlay-light, rgba(127, 127, 127, 0.12)));
+  background: var(--seg-thumb);
   border: none;
-  box-shadow: none;
+  box-shadow: var(--seg-thumb-shadow);
   /* 克制的弹性:轻微过冲即收,不弹跳 */
   transition: transform 0.3s cubic-bezier(0.32, 1.25, 0.5, 1);
   will-change: transform;
@@ -184,8 +182,7 @@
   cursor: pointer;
   transition: color 0.25s var(--ease-out, ease);
 }
-/* 与 `.rb-space.on` 同款:accent 前景(--accent-ink 是它的可读性守卫版)。 */
-.t2s-vaultseg button.on { color: var(--accent-ink, var(--accent, var(--text))); }
+.t2s-vaultseg button.on { color: var(--text); }
 .t2s-vaultseg[data-busy] button { cursor: default; }
 .t2s-vaultseg-hint {
   margin: 0 12px 8px;
@@ -683,7 +680,7 @@
 .t2sw .t2s-special-group { gap: 0.65px; }
 
 /* ── 侧栏 Chat/Work 模式胶囊(新对话行右侧):复用 Local/Cloud 的 `.t2s-vaultseg` 正典,
- *    包括凹轨道、弹性滑块和 `.on` 文字态;这里只规定这一处嵌入行的宽度与间距。 */
+ *    包括凹轨道、凸起的弹性滑块和 `.on` 文字态;这里只规定这一处嵌入行的宽度与间距。 */
 .t2s-special-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .t2s-special-row .t2s-special { flex: 1; min-width: 0; }
 .t2s-side .t2s-vaultseg.t2s-mode {

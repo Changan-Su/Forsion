@@ -5,9 +5,10 @@
  * 外观契约:低对比主题色灰块 + 1.5s Shimmer 流光;出现自带 150ms 延迟(快加载整个骨架不闪);
  * 明暗/配色跟随 token(--accent-rgb/--text 等),reduced-motion 下静止。样式见 skeleton.css。
  */
-import React, { Component, type ReactNode } from 'react'
+import React, { Component, useState, type ReactNode } from 'react'
+import { CircleAlert, RotateCw } from 'lucide-react'
 import './skeleton.css'
-import { engineTr } from './i18nSeam'
+import { engineTr, useEngineI18n } from './i18nSeam'
 
 export type SkeletonVariant = 'list' | 'document' | 'chat'
 
@@ -90,10 +91,49 @@ export function ViewPlaceholder(): React.ReactElement {
 }
 
 interface GuardState { err: Error | null; n: number }
+interface GuardProps {
+  children: ReactNode
+  /** 用户看得懂的名字(标签名 / 视图标题),进说明句和「复制详情」。 */
+  name?: string
+  /** 视图类型,只进「复制详情」。 */
+  type?: string
+}
+
+/** 错误态(走查 5.10):样子同宿主的 EmptyState —— 图标、一句标题、一句话、「重试」+「复制详情」,原始异常默认折起。 */
+function ViewError({ err, name, type, onRetry }: { err: Error; name?: string; type?: string; onRetry: () => void }): React.ReactElement {
+  const { t } = useEngineI18n()
+  const [copied, setCopied] = useState(false)
+  const message = String(err?.message || err)
+  const copy = async (): Promise<void> => {
+    const version = await window.tangu?.appVersion?.().catch(() => '')
+    const text = [name && `View: ${name}`, type && `Type: ${type}`, version && `Version: ${version}`, err?.stack || message].filter(Boolean).join('\n')
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch { /* 剪贴板被拒:按钮不变,详情仍可手选复制 */ }
+  }
+  return (
+    <div className="sk-error" role="alert" data-view-error="">
+      <CircleAlert className="sk-error-icon" size={22} strokeWidth={1.6} aria-hidden />
+      <strong className="sk-error-title">{t('lcl.view.errorTitle')}</strong>
+      <p className="sk-error-msg">{name ? t('lcl.view.errorLineNamed', { name }) : t('lcl.view.errorLine')}</p>
+      <div className="sk-error-actions">
+        <button type="button" className="sk-error-btn sk-error-btn--primary" data-action="retry" onClick={onRetry}><RotateCw size={14} aria-hidden />{t('lcl.view.retry')}</button>
+        <button type="button" className="sk-error-btn" data-action="copy" onClick={() => void copy()}>{t(copied ? 'lcl.view.copied' : 'lcl.view.copyDetails')}</button>
+      </div>
+      <details className="sk-error-details">
+        <summary>{t('lcl.view.errorDetails')}</summary>
+        <pre>{message}</pre>
+      </details>
+    </div>
+  )
+}
 
 /** 面板级错误边界:视图渲染 / 懒 chunk 拉取失败只塌**本面板**并给出重试,
- *  不再冒泡到根 ErrorBoundary 把整个应用换成错误页(弱网下点开重视图 = 全 app 白屏的根因)。 */
-export class ViewErrorBoundary extends Component<{ children: ReactNode }, GuardState> {
+ *  不再冒泡到根 ErrorBoundary 把整个应用换成错误页(弱网下点开重视图 = 全 app 白屏的根因)。
+ *  视图内也可以再包一层(Agent 详情包在标签内容外),只塌那一格、头部和标签条留着。 */
+export class ViewErrorBoundary extends Component<GuardProps, GuardState> {
   state: GuardState = { err: null, n: 0 }
   static getDerivedStateFromError(err: Error): Partial<GuardState> {
     return { err }
@@ -101,14 +141,6 @@ export class ViewErrorBoundary extends Component<{ children: ReactNode }, GuardS
   render() {
     const { err, n } = this.state
     if (!err) return <React.Fragment key={n}>{this.props.children}</React.Fragment>
-    return (
-      <div className="sk-error" role="alert">
-        <div className="sk-error-title">{engineTr('lcl.view.loadFailed')}</div>
-        <div className="sk-error-msg">{String(err?.message || err)}</div>
-        <button className="sk-error-btn" onClick={() => this.setState((s) => ({ err: null, n: s.n + 1 }))}>
-          {engineTr('lcl.view.retry')}
-        </button>
-      </div>
-    )
+    return <ViewError err={err} name={this.props.name} type={this.props.type} onRetry={() => this.setState((s) => ({ err: null, n: s.n + 1 }))} />
   }
 }

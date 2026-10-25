@@ -379,6 +379,7 @@ html.rb-pointer-dragging, html.rb-pointer-dragging * { cursor: grabbing !importa
 /* 命令面板行首图标(选取模式 + 常规都用)。 */
 .cmd-title { display: inline-flex; align-items: center; gap: 8px; }
 .cmd-icon { flex-shrink: 0; color: var(--text-muted); }
+.cmd-icon-empty { display: inline-block; width: 14px; height: 14px; }
 
 /* ===== 状态栏(悬浮右下 ≈ Obsidian;整体右靠,side 只决定前后段次序) =====
    悬浮不占布局 → ribbon 与 left 会话侧栏都满高不抬;只有 main/right 视图容器 height 缩掉 --sb-h 让位

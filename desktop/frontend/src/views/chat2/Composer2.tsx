@@ -822,7 +822,8 @@ export const Composer2: React.FC<{
   // mode 的外层会先占住 224px 最终宽度,避免胶囊展开时 right:0 锚点横移。见 menuAnchor.useEdgeNudge。
   const modeFix = useEdgeNudge(openMenu === 'mode', { boundary: '.t2-chat-view' })
   // 上下文占比的详情浮层:同款 absolute + 固定宽,窄屏也会捅出边缘。
-  const ctxPopFix = useEdgeNudge(openMenu === 'ctx', { boundary: '.t2-chat-view' })
+  // 右边缘贴输入卡右边缘,不越出输入卡(走查 5.13):边界 = 输入卡、边距 0。
+  const ctxPopFix = useEdgeNudge(openMenu === 'ctx', { boundary: '.t2c-card', margin: 0 })
 
   useEffect(() => {
     if (!openMenu) return
@@ -1686,7 +1687,7 @@ export const Composer2: React.FC<{
   const curApproval = APPROVALS.find((a) => a.id === approval) || APPROVALS[1]
   const modeLabel = groupActive
     ? t('group.modeLabel', { n: groupAgents!.length })
-    : planMode && !isChat ? t('input.planMode') : isChat ? t('input.presetChat') : (isHost ? t(curApproval.key) : t('input.normal'))
+    : planMode && !isChat ? t('input.planMode') : isChat ? t('input.presetChat') : (isHost ? t(curApproval.key) : t('input.normalWork'))
   // 收窄时药丸只剩图标,故图标随当前模式变(群聊/计划/审批档位),窄屏也能一眼看出状态。
   const ModeIcon = groupActive ? Users
     : planMode && !isChat ? ClipboardList
@@ -1746,12 +1747,12 @@ export const Composer2: React.FC<{
     items: [{ id: 'group-chat', label: groupActive ? t('group.menu.configured', { n: groupAgents!.length }) : t('group.menu.enable'), icon: <Users size={14} />, checked: groupActive, run: () => { setGroupSetupOpen(true); closeModeMenu() } }],
   } : null
   const approvalItems: Array<SheetMenuItem & { approvalId: (typeof APPROVALS)[number]['id'] }> = isHost ? APPROVALS.map(({ id, Icon, key, desc, ...a }) => ({
-    id: `approval:${id}`, approvalId: id, label: t(key), detail: t(desc), icon: <Icon size={15} className="approval-ic" />,
+    id: `approval:${id}`, approvalId: id, label: t(key), detail: t(desc), icon: <Icon size={14} className="approval-ic" />,
     checked: approval === id, danger: 'danger' in a, run: () => setApproval(id),
   })) : []
   /** 选了自定义才给编辑入口:没选这一档时打开它没有意义(规则不参与判定) */
   const editRulesItem: SheetMenuItem | null = isHost && approval === 'custom' ? {
-    id: 'approval-rules', label: t('input.approval.editRules'), detail: t('input.approval.editRulesDesc'), icon: <SlidersHorizontal size={15} className="approval-ic" />,
+    id: 'approval-rules', label: t('input.approval.editRules'), detail: t('input.approval.editRulesDesc'), icon: <SlidersHorizontal size={14} className="approval-ic" />,
     run: () => { setRulesOpen(true); closeModeMenu() },
   } : null
   const modeSheet = (): { title: string; back: string; sections: SheetMenuSection[] } => {
