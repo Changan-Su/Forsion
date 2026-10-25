@@ -204,6 +204,22 @@ export function releasePoint(e: { clientX: number; clientY: number }, grab: Land
 }
 
 const landing = new WeakMap<HTMLElement, () => void>()
+/** 放开裁剪按祖先记数:两段飞行同时穿过同一个折叠容器时,最后一段落定才还原,原值只记第一次的。 */
+const unclipped = new WeakMap<HTMLElement, { n: number; prev: string }>()
+function unclip(u: HTMLElement): () => void {
+  const hold = unclipped.get(u)
+  if (hold) hold.n++
+  else { unclipped.set(u, { n: 1, prev: u.style.overflow }); u.style.overflow = 'visible' }
+  let done = false
+  return () => {
+    if (done) return
+    done = true
+    const h = unclipped.get(u)
+    if (!h || --h.n > 0) return
+    unclipped.delete(u)
+    u.style.overflow = h.prev
+  }
+}
 
 /** 停掉某个元素还在飞的落位,内联样式原样还回去。 */
 export function landCancel(el: HTMLElement | null | undefined): void {
@@ -260,17 +276,13 @@ export function land(el: HTMLElement | null | undefined, from: LandPoint | null 
     flights.push(flight(w, o.dx, o.dy, false))
     movers.push(w)
   }
-  const unclips: Array<() => void> = []
-  for (const u of opts.unclip ?? []) {
-    if (!u) continue
-    const prev = u.style.overflow
-    u.style.overflow = 'visible'
-    unclips.push(() => { u.style.overflow = prev })
-  }
+  const unclips = [...new Set(opts.unclip ?? [])].filter((u): u is HTMLElement => !!u).map(unclip)
   void el.getBoundingClientRect() // 先把反向位移落定,下面的 transition 才有起点
   let timer = 0
+  let raf = 0
   const done = (): void => {
     window.clearTimeout(timer)
+    if (raf) cancelAnimationFrame(raf)
     el.removeEventListener('transitionend', onEnd)
     for (const m of movers) landing.delete(m)
     for (const f of flights) f.restore()
@@ -278,16 +290,23 @@ export function land(el: HTMLElement | null | undefined, from: LandPoint | null 
   }
   const onEnd = (e: TransitionEvent): void => { if (e.target === el && e.propertyName === 'transform') done() }
   for (const m of movers) landing.set(m, done)
-  for (const f of flights) f.go()
-  el.addEventListener('transitionend', onEnd)
-  timer = window.setTimeout(done, LAND_MS + 80) // transitionend 不一定来(被打断、元素被摘、主题把时长改成 0)
+  // 过渡在下一帧的 rAF 里起跑:过渡的起点是那一帧的时间,画出来的第一帧正好在松手处。
+  // 直接在这里起跑的话,起点是**上一帧**的时间戳(文档时间线按帧冻结),第一帧已经走掉一截(110% 下实测差 19px)。
+  const go = (): void => {
+    raf = 0
+    for (const f of flights) f.go()
+    el.addEventListener('transitionend', onEnd)
+    timer = window.setTimeout(done, LAND_MS + 80) // transitionend 不一定来(被打断、元素被摘、主题把时长改成 0)
+  }
+  if (typeof requestAnimationFrame === 'function') raf = requestAnimationFrame(go)
+  else go()
   return { dx, dy }
 }
 
 /**
- * 数据要过一会儿才重渲(插件 / 写盘之后才换组)时用:每帧问一次 `find()`,等它返回的元素**换了地方**
- * (换了元素 —— 重新挂载;或换了父节点 / 前一个兄弟 —— 被挪动)就落位;`timeout` 内没动就作罢。
- * 在绘制之前的那一帧里落,不会先闪一下新位置。返回取消函数。
+ * 数据要过一会儿才重渲(插件 / 写盘之后才换组)时用:每次 DOM 有增删(MutationObserver,微任务里、绘制之前)就问一次
+ * `find()`,等它返回的元素**换了地方**(换了元素 —— 重新挂载;或换了父节点 / 前一个兄弟 —— 被挪动)就落位;
+ * `timeout` 内没动就作罢。新位置一帧都不会先画出来(不管重渲是在任务、微任务还是别人的 rAF 里提交的)。返回取消函数。
  */
 export function landWhenMoved(
   find: () => HTMLElement | null | undefined,
@@ -300,21 +319,28 @@ export function landWhenMoved(
     onMoved?: (el: HTMLElement) => void
   } = {},
 ): () => void {
-  if (reducedMotion() || typeof requestAnimationFrame !== 'function') return () => {}
+  if (reducedMotion() || typeof MutationObserver !== 'function' || typeof document === 'undefined') return () => {}
   const was = find() ?? null
   const parent = was?.parentElement ?? null
   const prev = was?.previousElementSibling ?? null
-  const until = performance.now() + (opts.timeout ?? 1200)
-  let raf = 0
-  const tick = (): void => {
-    const el = find()
-    if (el && (el !== was || el.parentElement !== parent || el.previousElementSibling !== prev)) {
-      if (opts.onMoved) opts.onMoved(el)
-      else land(el, from, { with: opts.with?.(el), unclip: opts.unclip?.(el) })
-      return
-    }
-    if (performance.now() < until) raf = requestAnimationFrame(tick)
+  let over = false
+  const stop = (): void => {
+    if (over) return
+    over = true
+    mo.disconnect()
+    window.clearTimeout(timer)
   }
-  raf = requestAnimationFrame(tick)
-  return () => cancelAnimationFrame(raf)
+  const check = (): void => {
+    if (over) return
+    let el: HTMLElement | null | undefined = null
+    try { el = find() } catch { el = null }
+    if (!el || (el === was && el.parentElement === parent && el.previousElementSibling === prev)) return
+    stop()
+    if (opts.onMoved) opts.onMoved(el)
+    else land(el, from, { with: opts.with?.(el), unclip: opts.unclip?.(el) })
+  }
+  const mo = new MutationObserver(check)
+  mo.observe(document.documentElement, { childList: true, subtree: true })
+  const timer = window.setTimeout(stop, opts.timeout ?? 1200)
+  return stop
 }

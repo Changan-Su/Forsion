@@ -10,6 +10,9 @@ beforeEach(() => {
   reduce = false
   vi.stubGlobal('matchMedia', () => ({ matches: reduce }))
   vi.useFakeTimers()
+  // 落位在下一帧起跑:这里的 rAF 直接同步执行(要验「起跑前」的那个用例自己换掉它)
+  vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => { cb(0); return 1 })
+  vi.stubGlobal('cancelAnimationFrame', () => {})
 })
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals() })
 
@@ -125,54 +128,97 @@ describe('land', () => {
   })
 })
 
-describe('landWhenMoved', () => {
-  const frames = (): (() => void) => {
+describe('land 起跑时机', () => {
+  it('反向位移当场写上(这一帧画在松手处),过渡等下一帧的 rAF 才起跑;起跑前取消也能还原', () => {
     const q: FrameRequestCallback[] = []
     vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => { q.push(cb); return q.length })
-    vi.stubGlobal('cancelAnimationFrame', () => { q.length = 0 })
-    return () => { const cbs = q.splice(0); for (const cb of cbs) cb(performance.now()) }
-  }
-  it('异步重渲:元素重新挂载(换了一个)才落;之前每帧只是等', () => {
-    const step = frames()
+    const el = box({ x: 0, y: 0 })
+    land(el, { x: 0, y: 40 })
+    expect(el.style.transform).toBe('translate(0px, 40px)')
+    expect(el.style.transition).toBe('none')
+    q.shift()!(0)
+    expect(el.style.transform).toBe('')
+    expect(el.style.transition).toContain('transform')
+    const el2 = box({ x: 0, y: 0 })
+    land(el2, { x: 0, y: 40 })
+    landCancel(el2)
+    expect(el2.style.transform).toBe('')
+    expect(el2.style.transition).toBe('')
+  })
+})
+
+describe('landWhenMoved', () => {
+  /** MutationObserver 在微任务里报:让出一拍。 */
+  const flush = async (): Promise<void> => { for (let i = 0; i < 3; i++) await Promise.resolve() }
+  it('异步重渲:元素重新挂载(换了一个)才落;之前的增删只是等', async () => {
     const list = document.createElement('ul'); document.body.appendChild(list)
     const old = box({ x: 0, y: 0 }); list.appendChild(old); old.dataset.k = 'a'
     const onMoved = vi.fn()
     landWhenMoved(() => document.querySelector<HTMLElement>('[data-k="a"]'), { x: 0, y: 60 }, { onMoved })
-    step(); step()
+    list.appendChild(document.createElement('li')) // 不相干的增删
+    await flush()
     expect(onMoved).not.toHaveBeenCalled()
     old.remove()
-    step()
+    await flush()
     expect(onMoved).not.toHaveBeenCalled() // 旧的摘了、新的还没来
     const fresh = box({ x: 0, y: 30 }); fresh.dataset.k = 'a'
     const other = document.createElement('ul'); document.body.appendChild(other); other.appendChild(fresh)
-    step()
+    await flush()
+    expect(onMoved).toHaveBeenCalledTimes(1)
     expect(onMoved).toHaveBeenCalledWith(fresh)
   })
-  it('同一个元素被挪动(前一个兄弟变了)也算;一直没动到点就作罢', () => {
-    const step = frames()
+  it('同一个元素被挪动(前一个兄弟变了)也算,而且在下一帧之前就发现(不靠轮询 rAF)', async () => {
+    const raf = vi.fn()
+    vi.stubGlobal('requestAnimationFrame', raf)
     const list = document.createElement('div'); document.body.appendChild(list)
     const a = box({ x: 0, y: 0 }); const b = box({ x: 0, y: 28 })
     list.append(a, b)
     const onMoved = vi.fn()
     landWhenMoved(() => b, { x: 0, y: 0 }, { onMoved })
-    step()
-    expect(onMoved).not.toHaveBeenCalled()
     list.insertBefore(b, a)
-    step()
+    await flush()
     expect(onMoved).toHaveBeenCalledWith(b)
-
-    const late = vi.fn()
-    landWhenMoved(() => a, { x: 0, y: 0 }, { onMoved: late, timeout: 0 })
-    step() // 到点:没动 → 不再排帧
-    list.insertBefore(a, b) // 过了时限才挪(不相干的重渲),不算这一次拖放的
-    step(); step()
-    expect(late).not.toHaveBeenCalled()
-  })
-  it('减少动态效果:不排帧', () => {
-    reduce = true
-    const raf = vi.fn()
-    vi.stubGlobal('requestAnimationFrame', raf)
-    landWhenMoved(() => box({ x: 0, y: 0 }), { x: 0, y: 50 })
     expect(raf).not.toHaveBeenCalled()
+  })
+  it('到点没动就作罢;取消之后也不落', async () => {
+    const list = document.createElement('div'); document.body.appendChild(list)
+    const a = box({ x: 0, y: 0 }); const b = box({ x: 0, y: 28 })
+    list.append(a, b)
+    const late = vi.fn()
+    landWhenMoved(() => a, { x: 0, y: 0 }, { onMoved: late, timeout: 50 })
+    vi.advanceTimersByTime(60)
+    list.insertBefore(b, a) // 过了时限才挪(不相干的重渲),不算这一次拖放的
+    await flush()
+    expect(late).not.toHaveBeenCalled()
+    const cancelled = vi.fn()
+    const stop = landWhenMoved(() => b, { x: 0, y: 0 }, { onMoved: cancelled })
+    stop()
+    list.insertBefore(a, b)
+    await flush()
+    expect(cancelled).not.toHaveBeenCalled()
+  })
+  it('减少动态效果:不观察', async () => {
+    reduce = true
+    const onMoved = vi.fn()
+    const list = document.createElement('div'); document.body.appendChild(list)
+    const a = box({ x: 0, y: 0 }); const b = box({ x: 0, y: 28 }); list.append(a, b)
+    landWhenMoved(() => b, { x: 0, y: 50 }, { onMoved })
+    list.insertBefore(b, a)
+    await flush()
+    expect(onMoved).not.toHaveBeenCalled()
+  })
+})
+
+describe('unclip 记数', () => {
+  it('两段飞行同时穿过同一个折叠容器:第一段落定不提前裁掉,最后一段落定才还原成原值', () => {
+    const clip = box({ x: 0, y: 0 }); clip.style.overflow = 'clip'
+    const r1 = box({ x: 0, y: 0 }); const r2 = box({ x: 0, y: 40 })
+    land(r1, { x: 0, y: 100 }, { unclip: [clip] })
+    vi.advanceTimersByTime(100)
+    land(r2, { x: 0, y: 140 }, { unclip: [clip] })
+    vi.advanceTimersByTime(LAND_MS + 10) // r1 落定,r2 还在飞
+    expect(clip.style.overflow).toBe('visible')
+    vi.advanceTimersByTime(200)
+    expect(clip.style.overflow).toBe('clip')
   })
 })

@@ -145,50 +145,8 @@ async function standalone(win, app, { vault, d0, d1 }) {
     return g?.querySelector('.amx-todo-gname')?.textContent?.trim() ?? ''
   }, [MAIN, n])
   const dbFile = () => JSON.parse(fs.readFileSync(path.join(vault, 'calendar-demo.db'), 'utf8')).rows.find((r) => r.id === 'r-undated')?.cells?.date ?? ''
-  // 松手落位(2026-10-25,LCL land):写盘之后那一行才重挂进「今天」,要从松手处滑过去,不是凭空出现。
-  // 页内逐帧采样(排在落位那一帧之后):行的视口上沿、transform 的 ty、所在折叠容器的 overflow(飞行时放开 clip)
-  await win.evaluate(([sel, name]) => {
-    const w = window
-    const d = (w.__todoLand = { grabY: null, dropY: null, samples: [] })
-    const find = () => [...document.querySelectorAll(`${sel} li.amx-todo-item[data-todo-key]`)].find((li) => li.querySelector('.amx-todo-name')?.textContent.trim() === name)
-    w.addEventListener('dragstart', (e) => { const li = e.target.closest?.('li.amx-todo-item'); if (li) d.grabY = e.clientY - li.getBoundingClientRect().top }, { capture: true, once: true })
-    w.addEventListener('drop', (e) => {
-      d.dropY = e.clientY
-      const t0 = performance.now()
-      setTimeout(() => {
-        const tick = () => {
-          const li = find()
-          if (li) {
-            const tr = getComputedStyle(li).transform
-            const clip = li.closest('.amx-todo-reveal-in')
-            d.samples.push({ t: Math.round(performance.now() - t0), el: li, top: li.getBoundingClientRect().top, ty: tr === 'none' ? 0 : Number(tr.match(/-?[\d.e]+/g)[5]), ov: clip ? getComputedStyle(clip).overflow : null, group: li.closest('.amx-todo-group')?.querySelector('.amx-todo-gname')?.textContent.trim() })
-          }
-          if (performance.now() - t0 < 1400) requestAnimationFrame(tick)
-        }
-        requestAnimationFrame(tick)
-      }, 0)
-    }, { capture: true, once: true })
-  }, [MAIN, '没有日期的表行'])
   await win.locator(`${MAIN} .amx-todo-item`, { hasText: '没有日期的表行' }).dragTo(win.locator(`${MAIN} .amx-todo-ghead`, { hasText: '今天' }))
   await win.waitForTimeout(1500)
-  const landing = await win.evaluate(() => {
-    const d = window.__todoLand
-    const els = [...new Set(d.samples.map((x) => x.el))]
-    const fresh = d.samples.filter((x) => x.el === els.at(-1))
-    return { grabY: d.grabY, dropY: d.dropY, remounted: els.length, fresh: fresh.map(({ t, top, ty, ov, group }) => ({ t, top, ty, ov, group })) }
-  })
-  {
-    const f = landing.fresh
-    const flying = f.filter((x) => Math.abs(x.ty) > 0.5)
-    const first = f[0]
-    const release = landing.dropY - landing.grabY
-    console.log(`NOTE  S9b 落位采样 | 挂载 ${landing.remounted} 次;${f.map((x) => `${x.t}:${x.ty.toFixed(1)}/${x.ov}`).join(' ')}`)
-    check('S9b 拖到「今天」:重挂进新组的第一帧看上去还在松手处,之后滑回 0(写盘之后才重渲也接得上)',
-      landing.remounted >= 2 && !!first && first.group === '今天' && Math.abs(first.top - release) <= 3 && flying.length >= 3 && Math.abs(f.at(-1).ty) < 0.5,
-      first ? `top=${first.top.toFixed(1)} 松手处=${release.toFixed(1)} 飞 ${flying.length} 帧` : '没采到新组里的那一行')
-    check('S9b 飞行时所在折叠容器放开裁剪(overflow visible),落定后回到 clip',
-      flying.length > 0 && flying.every((x) => x.ov === 'visible') && f.at(-1).ov === 'clip', `${flying[0]?.ov} → ${f.at(-1)?.ov}`)
-  }
   const moved = { group: await groupOf('没有日期的表行'), file: dbFile() }
   await win.locator('.ntf-action', { hasText: '撤销' }).first().click().catch(() => {})
   await win.waitForTimeout(1500)

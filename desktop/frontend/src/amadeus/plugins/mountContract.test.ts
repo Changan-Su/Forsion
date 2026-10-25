@@ -355,13 +355,13 @@ it('ctx.ui.dropIndicator().land:落位写内联过渡、停用即还原,之后�
   const d = ctx.ui!.dropIndicator!()
   expect(typeof d.land).toBe('function')
   d.land!(row, { x: 0, y: 40 })
-  expect(row.style.transition, '在飞').toContain('transform')
+  expect(row.style.transform, '起飞:反向位移已写上(过渡下一帧起跑)').toBe('translate(0px, -60px)')
   d.land!(row, { x: Number.NaN, y: 0 } as { x: number; y: number }) // 坏坐标:不抛、不动
   d.land!(() => { throw new Error('boom') }, { x: 0, y: 0 }) // 查找函数抛错:吞掉
   await act(async () => { usePluginStore.getState().disable('lander') })
-  expect(row.style.transition, '停用即还原').toBe('')
+  expect([row.style.transition, row.style.transform], '停用即还原').toEqual(['', ''])
   d.land!(row, { x: 0, y: 40 })
-  expect(row.style.transition, '句柄已哑').toBe('')
+  expect(row.style.transform, '句柄已哑').toBe('')
   row.remove()
   expect(errors).toEqual([])
 })

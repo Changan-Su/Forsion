@@ -39,7 +39,7 @@ function fixtures(root) {
   }
 }
 
-/** 页内采样:拖起时记指针在组头里的位置;松手后**排在落位那一帧之后**(setTimeout 0 再 rAF)逐帧记组头 / 它那块会话的视口上沿与计算样式。 */
+/** 页内采样:拖起时记指针在组头里的位置;松手后逐帧(rAF)记组头 / 它那块会话的视口上沿与计算样式。 */
 const INSTALL_SAMPLER = () => {
   const w = window
   w.__dl = { grabY: null, dropY: null, key: null, samples: [], pausedAt: null, pauseAt: w.__dlPauseAt ?? null }
@@ -56,7 +56,9 @@ const INSTALL_SAMPLER = () => {
     d.dropY = e.clientY
     const t0 = performance.now()
     const sel = `.t2s-group[data-workspace-key="${CSS.escape(d.key)}"]`
-    setTimeout(() => {
+    // 在 drop 里直接排第一帧:落位的反向位移在 React 提交后的微任务里就写上了,过渡在同一帧稍后的 rAF 里起跑,
+    // 所以第一帧量到的就是画出来的松手处(排到 setTimeout 之后的话,第一帧可能已经错过)
+    {
       const tick = () => {
         const head = document.querySelector(sel)
         if (!head) return
@@ -76,7 +78,7 @@ const INSTALL_SAMPLER = () => {
         if (t < 320) requestAnimationFrame(tick)
       }
       requestAnimationFrame(tick)
-    }, 0)
+    }
   }, true)
 }
 

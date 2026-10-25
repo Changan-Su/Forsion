@@ -2441,8 +2441,8 @@ if (new URLSearchParams(location.search).has('dock')) {
       onDrop: (payload, target) => {
         probe.drops.push({ items: payload.items, to: target.item?.key, position: target.position })
         // reorder 开着时真的挪(像真插件那样写完再重渲,晚 60ms):松手落位(LCL land)要等这一行换了地方才落
-        if (!probe.reorder || !target.item) return
-        const key = payload.items[0], to = target.item
+        if (!probe.reorder || !target.item || !payload.items?.length) return
+        const key = payload.items?.[0], to = target.item
         window.setTimeout(() => {
           const moving = rows.find((r) => r.key === key)
           if (!moving) return

@@ -1781,11 +1781,11 @@ export const usePluginStore = create<PluginState>((set, get) => {
         let alive = true
         // 落位:还在等重渲的、正在飞的,停用 / 重载那一刻一起收(内联样式还回去)
         const waits = new Set<() => void>()
-        const flying = new Set<HTMLElement>()
+        const flying = new Map<HTMLElement, number>() // 元素 → 收尾计时(同一行再落一次就换成新的那个)
         const dispose = scope.own('mount', () => {
           alive = false; ind.destroy()
           for (const w of waits) w()
-          for (const el of flying) landCancel(el)
+          for (const [el, t] of flying) { window.clearTimeout(t); landCancel(el) }
           waits.clear(); flying.clear()
         }, 'dropIndicator')
         const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
@@ -1801,9 +1801,9 @@ export const usePluginStore = create<PluginState>((set, get) => {
             if (!Number.isFinite(o.x) || !Number.isFinite(o.y)) return
             const at = { x: o.x as number, y: o.y as number }
             const fly = (el: HTMLElement): void => {
-              if (!landDrop(el, at)) return
-              flying.add(el)
-              window.setTimeout(() => flying.delete(el), 400)
+              if (!alive || !landDrop(el, at)) return
+              window.clearTimeout(flying.get(el))
+              flying.set(el, window.setTimeout(() => flying.delete(el), 400))
             }
             if (target instanceof HTMLElement) { fly(target); return }
             if (typeof target !== 'function') return
@@ -1811,7 +1811,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
             let stop = (): void => {}
             stop = landWhenMoved(find, at, { onMoved: (el) => { waits.delete(stop); fly(el) } })
             waits.add(stop)
-            window.setTimeout(() => waits.delete(stop), 1500)
+            window.setTimeout(() => { stop(); waits.delete(stop) }, 1500)
           },
           dispose,
         }
