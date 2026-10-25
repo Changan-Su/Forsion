@@ -154,6 +154,8 @@ async function run() {
         return { cols: rows.map(col), labels: rows.map((b) => b.textContent.trim()), sections }
       })
     }
+    // 5.11 侧栏过滤胶囊 + 对话 / 画布胶囊,亮 / 暗各一张
+    await win.mouse.move(700, 300); await shot('5.11-tangu-light'); await setDark(true); await win.mouse.move(700, 300); await shot('5.11-tangu-dark'); await setDark(false)
     const zh = await modeMenu()
     const uniq = (k) => [...new Set(zh.cols.map((c) => c[k]))]
     check('5.13 模式菜单每行图标同一列、同尺寸、文字同一列', zh.cols.length >= 7 && uniq('ic').length === 1 && uniq('icw').length === 1 && uniq('tx').length === 1, JSON.stringify(zh.cols))
