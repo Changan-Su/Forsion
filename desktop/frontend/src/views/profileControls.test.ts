@@ -27,6 +27,9 @@ describe('运行设置的选项', () => {
     expect(approvalOptions(t).map((o) => o.label)).toEqual(['跟随默认（替我批准）', '询问我批准', '替我批准', '完全放行', '自定义（config.json）'])
     expect(approvalOptions(t).map((o) => o.value)).toEqual(['', 'readonly', 'auto-edit', 'full-auto', 'custom'])
     expect(thinkingOptions(t)[0]).toEqual({ value: '', label: '跟随默认（Medium）' })
+    // 缺省取决于场合(团队临时成员)时不编一个括号
+    expect(approvalOptions(t, { knownDefault: false })[0].label).toBe('跟随默认设置')
+    expect(thinkingOptions(t, { knownDefault: false })[0].label).toBe('跟随默认设置')
   })
   it('英文界面同样成对,没有残留中文', () => {
     // translateIn 的回退链会把漏掉的 en 原样渲染成中文,这里逐项看有没有汉字。

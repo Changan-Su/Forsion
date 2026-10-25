@@ -362,7 +362,7 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
   const hostEmpty = hostListEmpty(src)
   const activeSpaceId = useSpaceStore((s) => s.activeSpaceId)
   const emptyRow = query ? <div className="t2sw-empty">{t('wsview.noMatches')}</div>
-    : hostEmpty && !activeGroup && flat ? <EmptyState icon={hostEmpty.icon} title={hostEmpty.title()} line={hostEmpty.line?.()} data-state="empty" />
+    : hostEmpty && !activeGroup && flat && (hostEmpty.ready?.() ?? true) ? <EmptyState icon={hostEmpty.icon} title={hostEmpty.title()} line={hostEmpty.line?.()} data-state="empty" />
       : hostEmpty && !activeGroup && activeSpaceId === hostEmpty.space ? null
         : <div className="t2sw-empty">{t('wsview.empty')}</div>
   // 已经开着时再点一次搜索钮:状态没变,效果不会重跑,所以这里直接把光标放回去(键盘被收起之后还能再叫出来)

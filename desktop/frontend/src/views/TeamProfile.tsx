@@ -263,8 +263,9 @@ function TempMember({ agent, onChange, onBack }: { agent: NormalAgentDef; onChan
   return <div className="team-temp-member"><header className="agent-character-hero"><div className="agent-portrait small"><AgentAvatar name={agent.name} fill /></div><h2>{agent.name}</h2></header><p className="agent-profile-muted">{t('teamProfile.tempScope')}</p><div className="agent-config-fields">
     {(['name', 'description'] as const).map((key) => <label className="agent-field" key={key}>{t(`agentProfile.${key}`)}<input value={agent[key]} maxLength={key === 'name' ? 120 : key === 'description' ? 300 : undefined} onChange={(e) => onChange({ [key]: e.target.value })} /></label>)}
     <ProfileModelField models={models || []} value={agent.model} label={t('agentProfile.model')} onChange={(model) => onChange({ model })} />
-    <ProfileSelectField field="thinking" label={t('agentProfile.thinking')} value={agent.thinkingLevel || ''} options={thinkingOptions(t)} onChange={(v) => onChange({ thinkingLevel: v as NormalAgentDef['thinkingLevel'] })} />
-    <ProfileSelectField field="approval" label={t('agentProfile.approval')} value={agent.approvalMode || ''} options={approvalOptions(t)} onChange={(v) => onChange({ approvalMode: v as NormalAgentDef['approvalMode'] })} />
+    {/* 临时成员的缺省跟着团队 / 会话走,不是全局那一档 → 「跟随默认」不写括号(Codex 10-25 评审) */}
+    <ProfileSelectField field="thinking" label={t('agentProfile.thinking')} value={agent.thinkingLevel || ''} options={thinkingOptions(t, { knownDefault: false })} onChange={(v) => onChange({ thinkingLevel: v as NormalAgentDef['thinkingLevel'] })} />
+    <ProfileSelectField field="approval" label={t('agentProfile.approval')} value={agent.approvalMode || ''} options={approvalOptions(t, { knownDefault: false })} onChange={(v) => onChange({ approvalMode: v as NormalAgentDef['approvalMode'] })} />
     <label className="agent-field">{t('agentProfile.maxIterations')}<input type="number" min={1} max={200} value={agent.maxIterations ?? ''} onChange={(e) => onChange({ maxIterations: e.target.value ? Math.min(200, Math.max(1, Math.floor(Number(e.target.value)))) : null })} /></label>
     <ProfileTextEditor label={t('agentProfile.prompt')} rows={8} value={agent.systemPrompt} maxLength={100000} onChange={(systemPrompt) => onChange({ systemPrompt })} />
     <button onClick={onBack}>{t('teamProfile.backToSave')}</button>

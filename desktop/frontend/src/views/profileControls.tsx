@@ -106,16 +106,17 @@ type Translate = (key: string, vars?: Record<string, string | number>) => string
 export const followDefaultLabel = (t: Translate, current?: string): string =>
   current ? t('agentProfile.defaultWith', { value: current }) : t('agentProfile.default')
 
-/** 思考档位的选项。缺省档 = 引擎的会话缺省(sessionDefaults.DEFAULT_THINKING,agentLoop 同值)。 */
-export function thinkingOptions(t: Translate): ProfileSelectOption[] {
-  return [{ value: '', label: followDefaultLabel(t, thinkingLabel(DEFAULT_THINKING as ThinkingLevel, t)) },
+/** 思考档位的选项。缺省档 = 引擎的会话缺省(sessionDefaults.DEFAULT_THINKING,agentLoop 同值)。
+ *  `knownDefault: false`:缺省取决于所在的场合(团队临时成员跟着团队 / 会话的档),括号不写,只写「跟随默认设置」。 */
+export function thinkingOptions(t: Translate, opts: { knownDefault?: boolean } = {}): ProfileSelectOption[] {
+  return [{ value: '', label: followDefaultLabel(t, opts.knownDefault === false ? undefined : thinkingLabel(DEFAULT_THINKING as ThinkingLevel, t)) },
     ...THINKING_LEVELS.map((lv) => ({ value: lv, label: thinkingLabel(lv, t) }))]
 }
 
 /** 审批模式的选项:名字用输入框模式菜单那一套(approvalReason.MODE_KEY 单源)。缺省档 = 本机会话的起步档
  *  (sessionDefaults.DEFAULT_APPROVAL「替我批准」;Agent 定义只作用于本机会话,云沙箱会话不读这一项)。 */
-export function approvalOptions(t: Translate): ProfileSelectOption[] {
-  return [{ value: '', label: followDefaultLabel(t, t(MODE_KEY[DEFAULT_APPROVAL])) },
+export function approvalOptions(t: Translate, opts: { knownDefault?: boolean } = {}): ProfileSelectOption[] {
+  return [{ value: '', label: followDefaultLabel(t, opts.knownDefault === false ? undefined : t(MODE_KEY[DEFAULT_APPROVAL])) },
     ...APPROVAL_MODE_ORDER.map((mode) => ({ value: mode, label: t(MODE_KEY[mode]) }))]
 }
 

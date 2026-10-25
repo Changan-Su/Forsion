@@ -202,6 +202,7 @@ export const inboxListSource: ListSourceContribution = {
 setHostListEmpty(inboxListSource, {
   space: 'inbox', icon: Inbox,
   title: () => translate('inbox.reader.emptyTitle'), line: () => translate('inbox.reader.emptyLine'),
+  ready: () => useInbox.getState().listLoaded,
 })
 
 /** 宿主内置源直接进插件仓的 listSources(工作区视图只认那一处);幂等 —— HMR / 重复装配不叠第二份。

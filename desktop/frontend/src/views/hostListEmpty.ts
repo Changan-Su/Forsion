@@ -15,6 +15,8 @@ export interface HostListEmpty {
   icon: LucideIcon
   title: () => string
   line?: () => string
+  /** 数据真拉到过才算「空」(没拉到之前的空数组只是还没拉):不给 = 一直算拉到了。没拉到时手机列表照旧写「暂无内容」。 */
+  ready?: () => boolean
 }
 
 const HOST_EMPTY = new WeakMap<object, HostListEmpty>()

@@ -60,7 +60,7 @@ async function main() {
     console.log(`  not settled — ${label}: ${JSON.stringify(seen)}`); return false
   }
   const toProjects = async () => { await win.locator('.ims-back').click(); await win.waitForSelector('.ims-launch') }
-  const newProject = async () => { await win.locator('.ims-launch').getByRole('button', { name: /^(新建项目|New project)$/ }).click(); await win.waitForSelector('.ims') }
+  const newProject = async () => { await win.locator('.ims-launch .csl-catalog-actions').getByRole('button', { name: /^(新建项目|New project)$/ }).click(); await win.waitForSelector('.ims') }
   const projectCard = id => win.locator(`.ims-launch-card[data-project-id="${id}"]`)
   const openProjectId = async id => { await toProjects(); await projectCard(id).click(); await win.waitForSelector('.ims') }
   const mode = async value => {
