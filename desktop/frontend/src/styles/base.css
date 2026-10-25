@@ -5318,6 +5318,8 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
   --flash-duration: 1100ms; /* 跳转落点双闪 */
   --roll-enter-duration: 150ms; /* 过程行滚动替换:新行进 */
   --roll-exit-duration: 100ms; /* 过程行滚动替换:旧行出 */
+  --reader-step-duration: 170ms; /* 画布阅读栏:翻上一轮 / 下一轮 */
+  --reader-close-duration: 200ms; /* 画布阅读栏关闭淡出,与 ChatCanvas READ_CLOSE_MS 同 */
   --switch-edge-duration: 120ms; /* 开关旋钮左右两条边各自的时长 */
   --switch-edge-lag: 30ms; /* 开关旋钮后沿晚出发多久(离开时拉长、落地时回缩) */
   --draw-duration: 600ms; /* 描线 */

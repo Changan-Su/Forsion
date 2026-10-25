@@ -4,6 +4,7 @@
  */
 import { useState } from 'react'
 import { Download, Flag, FlaskConical, RotateCcw, X } from 'lucide-react'
+import { OverlayAt } from '@lcl/engine'
 import { registerMessages, useI18n } from '../i18n'
 import { sandboxSelf } from './sandboxWindow'
 import './sandbox.css'
@@ -31,6 +32,7 @@ export function SandboxChrome() {
   const self = sandboxSelf()
   const [note, setNote] = useState(() => { try { return !localStorage.getItem(NOTE_KEY) } catch { return true } })
   const [reporting, setReporting] = useState(false)
+  const [at, setAt] = useState({ x: 0, y: 0 })
   const [text, setText] = useState('')
   if (!self) return null
   const act = (a: 'report' | 'install' | 'reset', n?: string) => void window.tangu?.sandbox?.action(a, n)
@@ -41,15 +43,15 @@ export function SandboxChrome() {
       <div className="sbx-chrome-row">
         <span className="sbx-pill"><FlaskConical size={13} />{t('sandbox.pill')}<span>· {self.name} {self.version}</span></span>
         <button type="button" className="sbx-cbtn" title={t('sandbox.resetTip')} onClick={() => act('reset')}><RotateCcw size={12} />{t('sandbox.reset')}</button>
-        <button type="button" className="sbx-cbtn" title={t('sandbox.reportTip')} aria-expanded={reporting} onClick={() => setReporting((v) => !v)}><Flag size={12} />{t('sandbox.report')}</button>
+        <button type="button" className="sbx-cbtn" title={t('sandbox.reportTip')} aria-expanded={reporting} onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setAt({ x: r.right - 320, y: r.bottom + 6 }); setReporting((v) => !v) }}><Flag size={12} />{t('sandbox.report')}</button>
         <button type="button" className="sbx-cbtn primary" onClick={() => act('install')}><Download size={12} />{t('sandbox.install')}</button>
       </div>
       {reporting && (
-        <div className="sbx-pop ui-popover">
+        <OverlayAt x={at.x} y={at.y} className="sbx-pop ui-popover">
           <textarea autoFocus value={text} placeholder={t('sandbox.reportPlaceholder')} onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) send(); if (e.key === 'Escape') setReporting(false) }} />
           <div className="sbx-pop-actions"><button type="button" className="sbx-cbtn primary" onClick={send}>{t('sandbox.reportSend')}</button></div>
-        </div>
+        </OverlayAt>
       )}
       {note && !reporting && (
         <div className="sbx-note">

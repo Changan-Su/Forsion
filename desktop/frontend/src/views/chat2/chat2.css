@@ -1498,11 +1498,11 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
   position: absolute; z-index: 5; box-sizing: border-box; pointer-events: none;
   border: 1px solid var(--border); border-radius: 12px; background: var(--bg-card, var(--bg)); box-shadow: var(--card-shadow);
 }
-.t2cv-read-b[data-dir="1"] { animation: t2cvReadInDown 170ms cubic-bezier(.2,.8,.2,1); }
-.t2cv-read-b[data-dir="-1"] { animation: t2cvReadInUp 170ms cubic-bezier(.2,.8,.2,1); }
+.t2cv-read-b[data-dir="1"] { animation: t2cvReadInDown var(--reader-step-duration) cubic-bezier(.2,.8,.2,1); }
+.t2cv-read-b[data-dir="-1"] { animation: t2cvReadInUp var(--reader-step-duration) cubic-bezier(.2,.8,.2,1); }
 @keyframes t2cvReadInDown { from { opacity: 0; transform: translateY(8px); } }
 @keyframes t2cvReadInUp { from { opacity: 0; transform: translateY(-8px); } }
-.t2cv-read[data-out] { pointer-events: none; animation: t2cvReadOut 200ms cubic-bezier(.4,0,1,1) forwards; }
+.t2cv-read[data-out] { pointer-events: none; animation: t2cvReadOut var(--reader-close-duration) cubic-bezier(.4,0,1,1) forwards; }
 @keyframes t2cvReadOut { to { opacity: 0; transform: translateX(18px); } }
 /* 左边缘拖宽:原来那条 6px 看不见,加一截看得见的拖手 */
 .t2cv-read-grip { width: 9px; }

@@ -44,10 +44,7 @@
 .sbx-cbtn.primary { border-color: transparent; background: var(--action-fill); color: var(--on-action); }
 .sbx-cbtn.primary:hover { filter: brightness(1.06); }
 .sbx-pop {
-  position: fixed;
-  top: 34px;
-  right: 132px;
-  width: 320px;
+  width: 320px; /* 位置由 OverlayAt 按「反馈」按钮给出 */
   padding: 10px;
   display: flex;
   flex-direction: column;
