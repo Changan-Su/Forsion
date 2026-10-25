@@ -1997,6 +1997,9 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .cm-advanced-list .cm-row { padding-inline: 6px; font-size: var(--t2c-font-control, 12px); }
 .cm-row--static { cursor: default; }
 .cm-row--static:hover { background: transparent; color: var(--text-light); }
+/* Fast 行:说明写在标签下 —— 「约 2 倍出字速度，额度消耗更快」放在右侧一行放不下,截断会先吃掉最要紧的额度提示。 */
+.cm-fast-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.cm-fast-note { color: var(--text-faint); font-size: var(--t2c-font-meta, 11px); line-height: 1.35; }
 .cm-row-v.is-max,
 .cm-effort.is-max .cm-effort-value {
   color: #a77bff;
@@ -2438,6 +2441,19 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .att-tile:hover .att-tile-x, .att-tile-x:focus-visible { opacity: 1; }
 @media (hover: none) { .att-tile-x { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .att-tile { transition: none; } }
+/* 上传中 / 失败(附件上传进度方案 r2):缩略图上压一层纱 + 环;文件条底边内侧一根细条(不贴着文字,免得像下划线);
+   失败只垫红、不描边。环 / 条本身是 @lcl/components 的 UploadRing / UploadBar,前 300ms 不显示(快的不闪)。 */
+.att-tile-veil { position: absolute; inset: 0; border-radius: var(--radius-sm); background: color-mix(in srgb, var(--bg-card) 58%, transparent); pointer-events: none; }
+.att-tile > .lcl-upring { position: absolute; inset: 0; margin: auto; pointer-events: none; }
+.att-tile--file > .lcl-upbar { position: absolute; left: 7px; right: 7px; bottom: 4px; }
+.att-tile.is-failed .att-tile-sub { color: var(--danger); }
+.att-tile.is-failed .att-tile-badge { background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); }
+.att-tile--file.is-failed { cursor: pointer; }
+.att-tile-retry {
+  position: absolute; inset: 0; margin: auto; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 50%;
+  display: grid; place-items: center; background: var(--bg-card); color: var(--danger); cursor: pointer;
+}
+.att-tile-retry:focus-visible { outline: var(--focus-ring) solid var(--signal-line); outline-offset: 1px; }
 /* 引用磁贴(10-23,views/chat2/QuoteTile.tsx):文件条同一副身材,色块里是引号(强调色墨);整条是一颗按钮(看全文 / 跳回原文)。 */
 .att-tile--quote { padding: 0; width: 220px; }
 .att-tile-open {
@@ -3819,6 +3835,9 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .file-row .file-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .file-row .file-size { color: var(--text-faint); font-size: var(--ui-font-caption, 11px); }
 .file-row { cursor: pointer; }
+.file-row--uploading { cursor: default; } /* 正在传的那一行:环在右边,传完换成真行 */
+.file-row--uploading:hover { background: none; }
+.file-row--uploading.is-failed, .file-row--uploading.is-failed .file-size { color: var(--danger); }
 .file-row .file-act { opacity: 0; display: inline-flex; gap: 2px; }
 .file-row:hover .file-act { opacity: 1; }
 .file-row.active { background: var(--accent-light); }
@@ -5411,6 +5430,32 @@ html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .
 }
 /* 替身里的子元素不重放自己的进场(命令面板 / ⌘P 的面板本身除外:它跟着遮罩一起退,见 engine.css)。 */
 [data-lcl-exit] :not(.cmd-panel, .amx-qf) { animation: none !important; }
+
+/* 统一入场(2026-10-25,DESIGN §3「动效」):宿主与插件同一份,写在标准写法上,插件不用自己做动画。
+   - data-motion="enter":「用户刚点了才出现」的内容(点开的清单、展开的分区、换出来的那一版)。只给刚发生的(规矩 6),
+     新建 / 恢复 / 滚进视口的别写。动独立的 translate,不碰 transform(各处靠内联 transform 定位)。
+   - 原生 <details>:内容区淡入淡出,不补间高度(规矩 7:聊天流里也有 <details>);自己写了 ::details-content 过渡的照旧。
+   - 原生 <dialog> / popover 打开时与命令面板同一档进场。
+   全是 :where() 零特异性:组件自己写了 animation / transition 就以组件为准。减少动态效果由上面的全局规则一并收掉。 */
+@keyframes ui-enter { from { opacity: 0; translate: 0 4px; } }
+@keyframes ui-fade-in { from { opacity: 0; } }
+:where([data-motion~='enter']) { animation: ui-enter var(--menu-enter-duration) var(--ease-surface) backwards; }
+:where(details)::details-content {
+  opacity: 0;
+  transition: opacity var(--menu-exit-duration) var(--ease-exit), content-visibility var(--menu-exit-duration) allow-discrete;
+}
+:where(details[open])::details-content {
+  opacity: 1;
+  transition-duration: var(--menu-enter-duration);
+  transition-timing-function: var(--ease-surface);
+}
+:where(dialog[open], [popover]:popover-open) { animation: ui-menu-enter var(--palette-enter-duration) var(--ease-surface); }
+:where(dialog[open])::backdrop { animation: ui-fade-in var(--palette-enter-duration) var(--ease-calm); }
+/* 上面全局的减少动态效果只管元素与 ::before / ::after,这两个伪元素得点名 */
+@media (prefers-reduced-motion: reduce) {
+  :where(details)::details-content { transition: none; }
+  :where(dialog[open])::backdrop { animation: none; }
+}
 
 /* uiux-c: 全局键盘焦点环(U-43)。
    原来唯一的「全局」规则是 .am-app :focus-visible(amadeus/styles.css),Ribbon、标签条、侧栏行、状态栏都不在它的作用域里,

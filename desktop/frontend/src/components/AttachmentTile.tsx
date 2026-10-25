@@ -5,10 +5,21 @@
  * 方案页:docs/ToBeImproved/借鉴Claude设计系统方案_2026-10-17/round2.html
  */
 import { useState } from 'react'
-import { X } from 'lucide-react'
+import { CircleAlert, RotateCw, X } from 'lucide-react'
 import { reducedMotion } from '@lcl/engine'
+import { UploadBar, UploadRing } from '@lcl/components'
 import { extOf, fmtSize } from '../services/fileKinds'
+import { retryUpload, uploadBusy, uploadBytesLabel, uploadFraction, useUploads } from '../services/uploads'
+import { registerMessages, useI18n } from '../i18n'
 import { viewableProps } from './ImageViewer'
+
+registerMessages({
+  'atttile.queued': { zh: '等待中', en: 'Waiting' },
+  'atttile.reading': { zh: '读取中', en: 'Reading' },
+  'atttile.uploading': { zh: '上传中', en: 'Uploading' },
+  'atttile.failed': { zh: '上传失败 · 点按重试', en: 'Upload failed · Click to retry' },
+  'atttile.retry': { zh: '重试上传', en: 'Retry upload' },
+})
 
 export interface TileFile { name: string; mimeType: string; data?: string; size?: number }
 
@@ -39,8 +50,14 @@ export function splitName(name: string): [string, string] {
   return [chars.slice(0, -4).join(''), chars.slice(-4).join('') + name.slice(base.length)]
 }
 
-export function AttachmentTile({ file, onRemove, removeTitle, note, view }: {
+export function AttachmentTile({ file, onRemove, removeTitle, note, view, uploadId, preview, sending }: {
   file: TileFile
+  /** 上传台账里的那条(输入卡里刚加进来的附件):读 / 传期间画进度,失败画重试。 */
+  uploadId?: string
+  /** 还没读完时的本地预览(objectURL);读完就用 data。 */
+  preview?: string
+  /** 新对话按了发送、文件随建会话一起上传:画成上传中(报不了字节,条在走)。 */
+  sending?: boolean
   /** 图片方块点开看图(A2);输入卡里待发的不开 */
   view?: boolean
   /** 不传 = 只读(已发消息里) */
@@ -49,14 +66,24 @@ export function AttachmentTile({ file, onRemove, removeTitle, note, view }: {
   /** 第二行末尾的补充说明(如「到工作区」);带说明的图片也排成文件条(缩略图当色块),方块里写不下这句话 */
   note?: string
 }) {
+  const { t } = useI18n()
   const [leaving, setLeaving] = useState(false)
   const [broken, setBroken] = useState(false)
-  const isImage = file.mimeType?.startsWith('image/') && !!file.data && !broken
+  const up = useUploads((all) => (uploadId ? all[uploadId] : undefined))
+  const busy = uploadBusy(up) || !!sending
+  const failed = up?.phase === 'failed'
+  const src = file.data ? `data:${file.mimeType};base64,${file.data}` : preview
+  const isImage = file.mimeType?.startsWith('image/') && !!src && !broken
   const square = isImage && !note
   const ext = extOf(file.name)
   const label = (ext || (file.mimeType?.startsWith('image/') ? 'img' : 'file')).slice(0, 4).toUpperCase()
   const [head, tail] = splitName(file.name)
-  const sub = [label, file.size ? fmtSize(file.size) : '', note].filter(Boolean).join(' · ')
+  const sub = failed ? t('atttile.failed')
+    : up && uploadBusy(up) ? (up.phase === 'queued' ? t('atttile.queued') : `${t(up.phase === 'reading' ? 'atttile.reading' : 'atttile.uploading')} · ${uploadBytesLabel(up)}`)
+    : sending ? t('atttile.uploading')
+    : [label, file.size ? fmtSize(file.size) : '', note].filter(Boolean).join(' · ')
+  const fraction = up && uploadBusy(up) ? uploadFraction(up) : null
+  const retry = (): void => { if (uploadId && failed) retryUpload(uploadId) }
   const remove = (): void => {
     if (!onRemove || leaving) return
     if (reducedMotion()) { onRemove(); return }
@@ -65,22 +92,36 @@ export function AttachmentTile({ file, onRemove, removeTitle, note, view }: {
     window.setTimeout(onRemove, 130)
   }
   return (
-    <span className={`att-tile${square ? ' att-tile--img' : ' att-tile--file'}${leaving ? ' is-leaving' : ''}`} title={file.name}>
+    <span
+      className={`att-tile${square ? ' att-tile--img' : ' att-tile--file'}${leaving ? ' is-leaving' : ''}${failed ? ' is-failed' : ''}`}
+      title={file.name}
+      onClick={!square && failed ? retry : undefined}
+    >
       {square ? (
-        <img src={`data:${file.mimeType};base64,${file.data}`} alt={file.name} draggable={false} onError={() => setBroken(true)} {...(view ? viewableProps({ name: file.name }) : {})} />
+        <img src={src} alt={file.name} draggable={false} onError={() => setBroken(true)} {...(view && !busy ? viewableProps({ name: file.name }) : {})} />
       ) : (
         <>
-          {isImage
-            ? <img className="att-tile-badge" src={`data:${file.mimeType};base64,${file.data}`} alt="" draggable={false} onError={() => setBroken(true)} />
+          {failed
+            ? <span className="att-tile-badge" aria-hidden><CircleAlert size={16} /></span>
+            : isImage
+            ? <img className="att-tile-badge" src={src} alt="" draggable={false} onError={() => setBroken(true)} />
             : <span className="att-tile-badge" data-kind={KIND[ext] || 'other'} aria-hidden>{label}</span>}
           <span className="att-tile-meta">
             <span className="att-tile-name"><span className="att-tile-head">{head}</span>{tail && <span className="att-tile-tail">{tail}</span>}</span>
             <span className="att-tile-sub">{sub}</span>
           </span>
+          {busy && <UploadBar value={fraction} />}
         </>
       )}
+      {square && (busy || failed) && <span className="att-tile-veil lcl-up-late" aria-hidden />}
+      {square && busy && <UploadRing value={fraction} />}
+      {square && failed && (
+        <button type="button" className="att-tile-retry" title={t('atttile.retry')} aria-label={`${t('atttile.retry')} ${file.name}`} onClick={retry}>
+          <RotateCw size={13} strokeWidth={2.25} />
+        </button>
+      )}
       {onRemove && (
-        <button type="button" className="att-tile-x" title={removeTitle} aria-label={removeTitle ? `${removeTitle} ${file.name}` : file.name} onClick={remove}>
+        <button type="button" className="att-tile-x" title={removeTitle} aria-label={removeTitle ? `${removeTitle} ${file.name}` : file.name} onClick={(e) => { e.stopPropagation(); remove() }}>
           <X size={11} strokeWidth={2.5} />
         </button>
       )}

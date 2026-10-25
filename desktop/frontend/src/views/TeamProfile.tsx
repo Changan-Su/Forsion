@@ -266,7 +266,7 @@ function TempMember({ agent, onChange, onBack }: { agent: NormalAgentDef; onChan
     {/* 临时成员的缺省跟着团队 / 会话走,不是全局那一档 → 「跟随默认」不写括号(Codex 10-25 评审) */}
     <ProfileSelectField field="thinking" label={t('agentProfile.thinking')} value={agent.thinkingLevel || ''} options={thinkingOptions(t, { knownDefault: false })} onChange={(v) => onChange({ thinkingLevel: v as NormalAgentDef['thinkingLevel'] })} />
     <ProfileSelectField field="approval" label={t('agentProfile.approval')} value={agent.approvalMode || ''} options={approvalOptions(t, { knownDefault: false })} onChange={(v) => onChange({ approvalMode: v as NormalAgentDef['approvalMode'] })} />
-    <label className="agent-field">{t('agentProfile.maxIterations')}<input type="number" min={1} max={200} value={agent.maxIterations ?? ''} onChange={(e) => onChange({ maxIterations: e.target.value ? Math.min(200, Math.max(1, Math.floor(Number(e.target.value)))) : null })} /></label>
+    <label className="agent-field">{t('agentProfile.maxIterations')}<input type="number" min={1} value={agent.maxIterations ?? ''} onChange={(e) => onChange({ maxIterations: e.target.value ? Math.max(1, Math.floor(Number(e.target.value))) : null })} /></label>
     <ProfileTextEditor label={t('agentProfile.prompt')} rows={8} value={agent.systemPrompt} maxLength={100000} onChange={(systemPrompt) => onChange({ systemPrompt })} />
     <button onClick={onBack}>{t('teamProfile.backToSave')}</button>
   </div></div>

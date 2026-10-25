@@ -60,6 +60,7 @@
  *                                                              结果以 <child_sessions_update> 送回主会话并自动接着做一轮、汇总点对三个坏文件;再问一句须先问用户的事 → 问句收尾置「等你」、下一句清掉(或走 ask_user,台架照用户原话答)。
  *                                                              改 services/childSessions.ts / tools/builtin/childSessions.ts 的措辞后跑
  *   npm run live:harness -- --only ultra --model xai/grok-4.7  # Ultra 档(09-27):改 ULTRA_SECTION / delegate 描述 / 子代理成本闸后跑:可并行的题一轮派 ≥2 个且真并行、琐碎题 0 个、不开 Ultra 的对照只记数
+ *   npm run live:harness -- --only fast --model codex/gpt-6-luna  # Fast 档(10-25,对标 Codex /fast):开了的会话 llm-debug 行带 service_tier=priority 且答题照常,没开的不带(改 Fast 下发 / Codex 目录解析后跑;只对目录列了 Fast 的 Codex 订阅模型有意义)
  *   TANGU_CONTEXT_WINDOW_TOKENS=100000 npm run live:harness -- --only ultra --model codex/gpt-5.6-luna  # Ultra 拉满上下文(09-27):上限压到 100k,族表 272k 的模型 Ultra 两跑窗口须 272k、对照 100k
  *   npm run live:harness -- --only churn                     # 同会话 6 连发的后续调用命中画像(不设命中率阈值,六个 run 须跑完)
  *   npm run live:harness -- --only ttft --ttft-rounds 5      # 首 token 延迟:preset(chat|work)× 思考档(off|medium)2×2,每格 N 会话 × 2 轮(冷/热缓存),交错跑
@@ -219,7 +220,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'parkedask', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'imgtools', 'account', 'webpublish', 'nested', 'branch', 'musedm', 'humandims', 'pluginsandbox'];
+const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'parkedask', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'imgtools', 'account', 'webpublish', 'nested', 'branch', 'musedm', 'humandims', 'pluginsandbox'];
 KEYS.push('bluebird');
 KEYS.push('signals');
 KEYS.push('musechat');
@@ -264,7 +265,7 @@ const GIT_PREFIX = 'livetest/'; const GIT_TAG = '[LIVE]';
 // opt-in:缺省全量跑里**不带**这几个 —— cache 7 个 run / churn 6 个 run(都慢),cache 与 recall-unprompted
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
-const OPT_IN = new Set(['pluginsandbox', 'humandims', 'nested', 'branch', 'musedm', 'realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'parkedask', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'appsettings', 'control', 'phone']);
+const OPT_IN = new Set(['pluginsandbox', 'humandims', 'nested', 'branch', 'musedm', 'realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'parkedask', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'appsettings', 'control', 'phone']);
 OPT_IN.add('bluebird'); // --only bluebird --plugin-src <bundle>: real instruction-following on supplied transcripts
 OPT_IN.add('signals');
 OPT_IN.add('musechat');
@@ -1267,6 +1268,8 @@ const child = spawn(process.execPath, [
   // --window:只钉台架模型的窗口(contextBudget 的 env 覆盖表,最高优先级),别的模型不受影响
   ...(WINDOW ? { TANGU_MODEL_CONTEXT_WINDOWS: JSON.stringify({ [MODEL]: WINDOW }) } : {}),
   ...(ONLY.has('officedoc') ? { TANGU_OFFICE_KIT: OFFICE_KIT } : {}),
+  // fast:wire 上带没带 service_tier 只有 llm-debug 那行看得见(响应里的 service_tier 恒回 default,判不了)
+  ...(ONLY.has('fast') ? { TANGU_LLM_DEBUG: '1' } : {}),
   // cumusic / cusend:Jev 每次请求的图和回答落进产物目录(不含密钥),场景跑完挪进自己的 <key>-evidence/jev/
   ...(CU_JEV ? { TANGU_JEV_EVIDENCE_DIR: join(OUT, JEV_REQUESTS_DIR) } : {}),
   ...(ONLY.has('selfschedule') || ONLY.has('selfmodel') ? { FORSION_AMADEUS_VAULT: SELF_SCHED_VAULT } : {}),
@@ -5534,6 +5537,30 @@ Then reply with only the command output.`,
       toolCalls: [...evUltra.toolCalls, ...evTrivial.toolCalls, ...evPlain.toolCalls],
       ultraDelegates: { ultra: delegates(evUltra), trivial: delegates(evTrivial), plain: delegates(evPlain) },
       ttftMs: ttft(evUltra), tokens: (tokensOf(evUltra) || 0) + (tokensOf(evTrivial) || 0) + (tokensOf(evPlain) || 0) || null,
+    };
+  });
+
+  // ── fast:Fast 档(10-25,对标 Codex /fast = 请求体顶层 service_tier:"priority")──
+  // 同一道题两腿:① 会话开 fast → 本腿的 llm-debug 行里有 service_tier "priority",回答照常;② 不开 → 没有。
+  // 判据只看 wire(响应回报的 service_tier 恒为 default,Codex CLI 自己的请求也一样);速度只记 ms,不判。
+  await scenario('fast', 'fast Fast 档:开了的会话请求带 service_tier=priority,答题照常;没开的不带', async () => {
+    const debugLines = () => readFileSync(engineLog, 'utf8').split('\n').filter((l) => l.includes('[llm-debug]'));
+    const leg = async (fast) => {
+      const before = debugLines().length;
+      const ev = await run(`live-fast-${fast ? 'on' : 'off'}-${Date.now()}`, '用一句话回答:7 乘以 8 等于多少?', 180_000, fast ? { fast: true } : {});
+      const lines = debugLines().slice(before);
+      return { ev, lines, tier: lines.some((l) => l.includes('"service_tier":"priority"')), ms: lines.map((l) => / ms=(\d+)/.exec(l)?.[1]).filter(Boolean).join('/') };
+    };
+    const on = await leg(true);
+    const off = await leg(false);
+    const right = (ev) => /56/.test(ev.content || '');
+    const fmt = (x) => `llm-debug ${x.lines.length} 行;service_tier ${x.tier ? 'priority' : '无'};答 ${right(x.ev) ? '对' : '错'};ms ${x.ms || '-'}${x.ev.error ? ';' + x.ev.error : ''}`;
+    return {
+      ok: !on.ev.error && !off.ev.error && on.lines.length > 0 && on.tier && !off.tier && right(on.ev) && right(off.ev),
+      detail: `【开 Fast】${fmt(on)} 【对照·不开】${fmt(off)}${on.lines.length ? '' : '(没有 llm-debug 行:TANGU_LLM_DEBUG 没传进引擎?)'}`,
+      output: `【开 Fast】${on.ev.content}\n${on.lines.join('\n')}\n\n【对照·不开】${off.ev.content}\n${off.lines.join('\n')}`,
+      toolCalls: [...on.ev.toolCalls, ...off.ev.toolCalls],
+      ttftMs: ttft(on.ev), tokens: (tokensOf(on.ev) || 0) + (tokensOf(off.ev) || 0) || null,
     };
   });
 

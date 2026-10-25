@@ -384,15 +384,18 @@ export function createPluginSandbox(deps: SandboxDeps) {
     return start(dir, sessionId)
   }
 
-  /** origin.deadline = 引擎给这次动作的期限(本机时钟);排队排过了就不做了 —— 引擎那边已按「可能发生了」兑现。 */
-  async function exec(op: string, args: Record<string, unknown>, origin: { sessionId?: string; deadline?: number } = {}): Promise<SandboxResult> {
+  /**
+   * origin.deadline = 引擎给这次动作的期限(本机时钟);排队排过了就不做了 —— 引擎那边已按「可能发生了」兑现。
+   * origin.reveal = 用户在界面上点的(卡片 / Coding Studio):起好后把沙箱窗口叫到前面。agent 起的不叫,不抢用户前台。
+   */
+  async function exec(op: string, args: Record<string, unknown>, origin: { sessionId?: string; deadline?: number; reveal?: boolean } = {}): Promise<SandboxResult> {
     const expired = (): boolean => typeof origin.deadline === 'number' && Date.now() > origin.deadline
     const queued = (fn: () => Promise<SandboxResult>): Promise<SandboxResult> =>
       serial(() => (expired() ? Promise.resolve({ ok: false, code: 'error', error: 'timed out waiting for another sandbox action' }) : fn().catch(fail)))
     try {
-      if (op === 'start') return await queued(() => start(typeof args.dir === 'string' ? args.dir : '', origin.sessionId))
+      if (op === 'start') return await revealed(queued(() => start(typeof args.dir === 'string' ? args.dir : '', origin.sessionId)), origin.reveal)
       if (op === 'stop') return await queued(async () => { await stop(); return { ok: true, text: JSON.stringify({ stopped: true }) } })
-      if (op === 'reset') return await queued(reset)
+      if (op === 'reset') return await revealed(queued(reset), origin.reveal)
       const c = child && !child.exited ? child : null
       if (!c || !c.sock) return { ok: false, code: 'no_sandbox', error: 'no sandbox is running' }
       c.lastUsed = Date.now()
@@ -413,6 +416,13 @@ export function createPluginSandbox(deps: SandboxDeps) {
   }
 
   /** 把沙箱窗口叫到前面(卡片 / Coding Studio 的「打开沙箱窗口」)。 */
+  /** 新起的沙箱窗口压在所有窗口之下(子进程是静默模式):用户自己点出来的起 / 重置,成功了就叫到前面。 */
+  async function revealed(p: Promise<SandboxResult>, reveal?: boolean): Promise<SandboxResult> {
+    const r = await p
+    if (reveal && r.ok) await show()
+    return r
+  }
+
   async function show(): Promise<boolean> {
     const c = child && !child.exited ? child : null
     if (!c) return false
@@ -485,7 +495,8 @@ export function createPluginSandbox(deps: SandboxDeps) {
     exec,
     show,
     stop: () => serial(stop),
-    reset: () => serial(() => reset().catch(fail)),
+    // 直接调的重置都是用户点的(卡片 / Coding Studio / 沙箱窗口自己的按钮);agent 的走 exec
+    reset: () => revealed(serial(() => reset().catch(fail)), true),
     install: (expect: { pluginId?: string; dir?: string }) => serial(() => install(expect)),
     state: publicState,
     dispose: () => { disposed = true; clearInterval(idle); return serial(stop) },

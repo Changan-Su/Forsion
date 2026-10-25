@@ -286,7 +286,7 @@ export const AgentsTab: React.FC<{ cfg: TanguDesktopConfig; onEditingChange?: (e
           <div className="field">
             <label>{t('settings.agents.maxIter')}</label>
             {/* min=10 与引擎 AGENT_MAX_ITERATIONS_MIN 同步:低于下限引擎会忽略并 400,别让用户填得进去 */}
-            <input type="number" min={10} max={200} value={editing.maxIterations}
+            <input type="number" min={10} value={editing.maxIterations}
               onChange={(e) => setEditing({ ...editing, maxIterations: e.target.value })} />
           </div>
           <div className="field">

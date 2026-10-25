@@ -321,6 +321,34 @@ The host's buttons, sidebar rows and Ribbon share one tooltip (LCL `hoverSurface
 
 For your own motion use the host's motion tokens instead of literal durations: `--ease-surface` (enter), `--ease-exit` (leave, accelerating), `--ease-calm`, `--ease-drawer`, `--menu-enter-duration` 180ms / `--menu-exit-duration` 80ms, `--tip-enter` / `--tip-exit`, `--hovercard-enter` / `--hovercard-exit`. Leaving is shorter than entering; interruptible states use `transition`, not `keyframes`; things that are created, restored or scrolled into view don't animate in; with reduced motion keep colour and opacity changes and drop translation and scale.
 
+### 宿主自动给的动效 / Motion the host applies for you (2026-10-25)
+
+插件视图和宿主在同一个页面里，下面这几样用标准写法就自动是 Forsion 的动效，不用自己写关键帧、不用读 token。宿主这几条都是零特异性（`:where()`），你自己给同一个元素写了 `animation` / `transition` 就以你的为准；系统开了「减少动态效果」时宿主一并收掉。iframe / webview 里的页面拿不到。
+
+- **原生 `<details>`**：展开时内容淡入（180ms），收起时淡出（80ms，加速离开）。只动透明度、不补间高度，放在会滚动的列表里也不抖。
+- **原生 `<dialog>`（`showModal()`）和 `popover`**：打开时与命令面板同一档进场（120ms，淡入并从 0.985 放大到 1），遮罩一起淡入。
+- **`data-motion="enter"`**：给「用户刚点了才出现」的那块内容写上这个属性（点开的清单、展开的分区、换出来的另一版），它挂上时淡入并从下方 4px 上来（180ms）。只写在刚发生的东西上：一打开视图就有的、从存档恢复的、滚进视口的不要写。动的是独立的 `translate` 属性，不会打乱你用 `transform` 做的定位。
+- 菜单、提示框、落点提示、Chat Box 用宿主的组件就自带进退场（见上文和下一节），不要自己再包一层动画。
+
+```js
+const more = document.createElement('div')
+more.dataset.motion = 'enter'        // 用户点了「展开」才挂上
+list.after(more)
+```
+
+The plugin view lives in the same page as the host, so the following get Forsion motion from standard markup alone, with no keyframes of your own and no tokens to read. All of these host rules have zero specificity (`:where()`): an `animation` / `transition` you write on the same element wins, and the host turns them off under reduced motion. Pages inside an iframe / webview don't get them.
+
+- **Native `<details>`**: the content fades in when opened (180ms) and out when closed (80ms, accelerating). Only opacity moves, height is not tweened, so it stays steady inside scrolling lists.
+- **Native `<dialog>` (`showModal()`) and `popover`**: they open like the command palette (120ms, fade in while scaling from 0.985 to 1) and the backdrop fades in with them.
+- **`data-motion="enter"`**: put it on content that appears because the user just did something (a list they opened, a section they expanded, the other version they switched to); it fades in and rises 4px when it mounts (180ms). Only for what just happened: not for what is there when the view opens, is restored, or scrolls into view. It animates the separate `translate` property, so positioning you do with `transform` is left alone.
+- Menus, tooltips, drop indicators and the Chat Box carry their own enter / leave motion when you use the host's components (see above and the next section); don't wrap them in another animation.
+
+```js
+const more = document.createElement('div')
+more.dataset.motion = 'enter'        // mounted only after the user clicks "Show more"
+list.after(more)
+```
+
 ### 落点提示 / Drop indicators (2026-10-24)
 
 拖动排序、拖进文件夹时那根「会落在这里」的线和那圈「放进去」的描边，宿主各处用的是同一个（LCL `dropIndicator`）：颜色是主题的 `--signal-line`；换落点时旧的在原地淡出（90ms）、新的在新位置淡入并从近端展开（130ms）；同一个落点只是跟着滚动挪了坐标，就直接跟过去、不重播；系统开了「减少动态效果」就不做动画。不要自己画线：

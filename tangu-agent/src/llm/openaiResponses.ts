@@ -118,6 +118,9 @@ export function openaiToResponsesBody(payload: any): any {
   }
   // GPT-5 系 verbosity(coding 预设下发 low,对齐 codex 模型默认;省可见正文的输出量)。
   if (payload.text_verbosity) body.text = { verbosity: payload.text_verbosity };
+  // Fast 档(multiBrain 只在 Codex 订阅 + 目录列了 Fast 时写):Codex CLI 同款顶层字段。响应里的 service_tier 恒回 default,
+  // 别拿它判断生效与否(10-25 抓 Codex CLI 自己的请求,同样回 default)。
+  if (payload.service_tier) body.service_tier = payload.service_tier;
   // 官方 Responses(BYOK)支持 max_output_tokens;**订阅私有端点直接 400 拒**("Unsupported parameter")
   // ——未知端点绝不发未知字段。实证:self_brainstorm 真机首跑三席全灭、compaction 传 maxTokens 同病(07-31)。
   const cap = payload.max_completion_tokens ?? payload.max_tokens;

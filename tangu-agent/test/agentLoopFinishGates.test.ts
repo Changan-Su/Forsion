@@ -469,3 +469,33 @@ describe('凭证失效续期(反馈 6a239e58:xAI 订阅 token 过期,502 被当�
     expect(refreshed).toBe(0);
   }, 20_000);
 });
+
+describe('轮数上限(10-25:交互 run 默认不限)', () => {
+  // 95 轮工具调用再收尾:旧默认 90 会在第 90 次调用剥掉工具、追加耗尽提示(用户 10-25 导出:48 分钟、113 次调用的正常任务被截)。
+  const longScript = () => [
+    ...Array.from({ length: 95 }, () => todoWriteStep([{ content: '任务A', status: 'completed' }])), // todo 全完成,隔离完成度审计
+    finalStep('全部完成。'),
+  ];
+  const finalText = async () => {
+    const rows = await query<any[]>(`SELECT role, content FROM chat_messages WHERE session_id = 'S'`);
+    return String(rows.filter((r) => r.role === 'model').pop()?.content ?? '');
+  };
+
+  it('会话 / Agent 都没设上限 → 跑满 95 轮工具后自然收尾,没有末轮提示与耗尽提示', async () => {
+    script = longScript();
+    const run = await runToSettled();
+    expect(run.status).toBe('done');
+    expect(llmPayloads.length).toBe(96);
+    expect(llmPayloads.some((p) => userTexts(p).includes('final iteration'))).toBe(false);
+    expect(await finalText()).not.toContain('最大循环轮数');
+  }, 30_000);
+
+  it('负对照:显式 /loop 90 照旧在第 90 次调用收尾并点名来源', async () => {
+    script = longScript();
+    const run = await runToSettled({ maxIterations: 90 });
+    expect(run.status).toBe('done');
+    expect(llmPayloads.length).toBe(90);
+    expect(userTexts(llmPayloads[89])).toContain('final iteration');
+    expect(await finalText()).toContain('已达到最大循环轮数(90 轮,来自本会话 /loop 设置)');
+  }, 30_000);
+});

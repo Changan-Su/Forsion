@@ -1768,6 +1768,16 @@ export interface PluginContext {
   desk?: {
     registerCompanion(def: import('./deskCompanion').DeskCompanionContribution): import('./deskCompanion').DeskCompanionHandle
   }
+  /** 摘要栏插件卡(2026-10-25+,**只在桌面 Tangu 上存在**,同 `ctx.desk`)。往聊天右侧的摘要栏加一张卡,与内置卡
+   *  (进度 / 后台 / 产物 / 来源 / 工作范围 / Agent Desk)同一个栈:用户可折叠、拖动排序,收起状态与顺序由宿主按卡记住;
+   *  插件卡按注册顺序排在 Agent Desk 前面。`title` 给 `{ zh, en }` 跟随界面语言;`defaultCollapsed` 缺省 false。
+   *  `mount(el, host)` 每个会话的摘要栏各挂一份(换会话 = 卸载重挂,`host.sessionId` 恒定;同屏两个聊天面板挂两份),
+   *  返回卸载函数;正文高度上限 240px,超出宿主内滚。`host.update({ count, hidden })` 只改这一份:卡头计数(null = 不显示)、
+   *  先不画这张卡(仍挂着,之后可再亮出)。返回 handle 的 `dispose()` 撤卡;禁用 / 重载宿主统一收。
+   *  旧宿主:`ctx.summary?.registerCard(…)`。 */
+  summary?: {
+    registerCard(def: import('./summaryCards').SummaryCardContribution): import('./summaryCards').SummaryCardHandle
+  }
   /** agent 自建 Space 读写自家数据(2026-09-27+)。**只在 agent 自建的 Space 插件上存在** —— `<tangu>/agents/<slug>/Space/`
    *  装成的 `agent-<slug>`,只能碰它自己这个 agent;别的插件、以及没有数据源的 agent(今天只有 Muse 有),整个没有 `ctx.agent`。
    *  - 拉取式:`status()` / `todos()` / `schedule()` / `library.list()` / `library.read(path)`(Library 内文本文件,

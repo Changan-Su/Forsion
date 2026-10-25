@@ -15,6 +15,7 @@ import runsRouter from './routes/runs.js';
 import workspaceRouter from './routes/workspace.js';
 import approvalsRouter from './routes/approvals.js';
 import remoteRouter from './routes/remote.js'; // P1-K2 远程活动 / 急停 / 解锁(本机专用)
+import processesRouter from './routes/processes.js'; // 后台进程给摘要栏看 / 用户点停止(2026-10-25)
 import sessionsRouter from './routes/sessions.js';
 import modelsRouter from './routes/models.js';
 import visionRouter from './routes/vision.js';
@@ -117,6 +118,7 @@ export function createTanguModule(d: TanguDeps): TanguModule {
   dataRouter.use(inlineRouter); // 正文生成式 AI(G3-07):POST /agent/inline
   dataRouter.use(linkPreviewRouter); // Chat 链接悬停卡的富卡数据:GET /agent/link-preview
   dataRouter.use(remoteRouter);
+  dataRouter.use(processesRouter);
 
   const startBackgroundTasks = (opts?: { recoverRuns?: boolean; historian?: boolean; sandbox?: boolean; profilePolling?: boolean; eventRetention?: boolean }): void => {
     // 进程重启自愈:陈旧行标 failed → 余下在飞行按持有者处理(别的活进程的不碰、跑到一半的标中断、排队的认领后入队;见 recoverQueuedRuns)。

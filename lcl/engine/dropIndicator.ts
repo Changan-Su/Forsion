@@ -113,12 +113,15 @@ export interface DropIndicator {
   destroy(): void
 }
 
-/** 能给后代 `position: fixed` 当包含块的祖先(transform / filter / contain…),坐标要相对它算。 */
+/** 能给后代 `position: fixed` 当包含块的祖先(transform 及独立的 scale / translate / rotate、filter、contain…),坐标要相对它算。
+ *  ⚠️ `container-type` **不算**(2026-10-25 实测 Chromium 149 / Electron 40:`container-type: size` 里的 fixed 元素仍按视口定位)。
+ *  原来把它算进来,宿主挂在聊天列(.t2-chat-col 是 size 容器)里的落点线整条偏出一个列的左上角(摘要栏拖卡片时看到的)。 */
 function fixedOrigin(el: HTMLElement): { x: number; y: number } {
   for (let p = el.parentElement; p; p = p.parentElement) {
     const cs = getComputedStyle(p)
     const cb = cs.transform !== 'none' || cs.perspective !== 'none' || cs.filter !== 'none'
-      || (!!cs.backdropFilter && cs.backdropFilter !== 'none') || (!!cs.containerType && cs.containerType !== 'normal')
+      || (!!cs.backdropFilter && cs.backdropFilter !== 'none')
+      || (!!cs.scale && cs.scale !== 'none') || (!!cs.translate && cs.translate !== 'none') || (!!cs.rotate && cs.rotate !== 'none')
       || /\b(layout|paint|strict|content)\b/.test(cs.contain ?? '') || /\b(transform|perspective|filter|backdrop-filter|contain)\b/.test(cs.willChange ?? '')
     if (cb) {
       const r = p.getBoundingClientRect()

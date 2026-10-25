@@ -12,10 +12,12 @@
  *   7 安装到我的 Forsion(确认框在台架里自动点「安装」)→ plugins/<id> 出现,不带 node_modules
  *   8 停止 → 子进程退出;再关父进程不留孤儿
  *   9 负对照:非插件文件夹 → invalid_args,不起进程
+ *  10 (`--focus`,仅 macOS,会真把窗口叫到前面几秒)「打开沙箱窗口」第一次、以及被别的窗口盖住之后再点一次,
+ *     沙箱窗口都排在屏幕最前(读系统窗口列表的前后顺序)
  *
  * ⚠️ 量的是 out/ 里的产物,源码改了没 `npm run build` 就是白测。
  * 跑:node .claude/hooks/devlock.cjs run --vehicle=e2e --what="plugin sandbox" -- npm run check:pluginsandbox
- * `SHOT_DIR=<目录>` 额外落沙箱窗口截图(子进程自己截的那张)与对话卡截图。
+ * `SHOT_DIR=<目录>` 额外落沙箱窗口截图(子进程自己截的那张)与对话卡截图;`-- --focus` 加跑第 10 项(会抢几秒前台)。
  */
 const fs = require('fs')
 const os = require('os')
@@ -64,6 +66,12 @@ async function until(read, timeout = 20_000) {
 /** 只比文件:用户那份打开对话时自己会在智库里建空的 Sessions/ 目录,与沙箱无关。 */
 const listFiles = (dir) => listTree(dir).filter((p) => fs.statSync(path.join(dir, p)).isFile())
 const listTree = (dir) => { const out = []; const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); out.push(path.relative(dir, p)); if (e.isDirectory()) walk(p) } }; if (fs.existsSync(dir)) walk(dir); return out.sort() }
+const FOCUS = process.argv.includes('--focus') && process.platform === 'darwin'
+/** 屏幕上普通层级(0)的大窗口,从前到后的属主 pid(CGWindowList 本来就按前后排;只读层级与尺寸,不要屏幕录制权限)。 */
+const JXA_FRONT = `ObjC.import('CoreGraphics'); function run() { return JSON.stringify(ObjC.deepUnwrap(ObjC.castRefToObject($.CGWindowListCopyWindowInfo($.kCGWindowListOptionOnScreenOnly | $.kCGWindowListExcludeDesktopElements, 0))).filter((w) => w.kCGWindowLayer == 0 && w.kCGWindowBounds.Width > 300 && w.kCGWindowBounds.Height > 200).map((w) => String(w.kCGWindowOwnerPID))) }`
+const frontPids = () => JSON.parse(execFileSync('osascript', ['-l', 'JavaScript', '-e', JXA_FRONT]).toString())
+/** 把某个进程真的变成前台 App(像用户点了它的窗口),再读前台是谁。只排窗口不够:前台 App 不让,后台进程的 focus 会被系统拒掉。 */
+const activatePid = (pid) => execFileSync('osascript', ['-l', 'JavaScript', '-e', `ObjC.import('AppKit'); function run(a) { $.NSRunningApplication.runningApplicationWithProcessIdentifier(Number(a[0])).activateWithOptions($.NSApplicationActivateAllWindows); delay(0.6); return String($.NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier) }`, String(pid)]).toString().trim()
 const sandboxPids = () => { try { return execFileSync('pgrep', ['-f', path.join(SBX, 'userdata')], { encoding: 'utf8' }).trim().split('\n').filter(Boolean) } catch { return [] } }
 const saveShot = (name, dataUrl) => { if (SHOT_DIR && dataUrl) { fs.mkdirSync(SHOT_DIR, { recursive: true }); fs.writeFileSync(path.join(SHOT_DIR, name), Buffer.from(dataUrl.split(',')[1], 'base64')) } }
 
@@ -194,6 +202,29 @@ async function main() {
     const notPlugin = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-plugsbx-not-'))
     const bad = await exec('start', { dir: notPlugin })
     check('9 负对照:不是插件的文件夹 → invalid_args;原来那个沙箱照旧在', bad.ok === false && bad.code === 'invalid_args' && (await status())?.pluginId === PLUGIN_ID, JSON.stringify(bad))
+
+    // ── 10 打开沙箱窗口:第一次 + 被盖住之后再点一次 ──
+    if (FOCUS) {
+      await win.evaluate(() => window.tangu.pluginSandbox.show())
+      await win.waitForTimeout(1000)
+      const first = frontPids()
+      // 像用户回到自己那份 Forsion:父窗抬回普通层、排到最前,盖住沙箱窗口
+      await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows().find((x) => !x.isDestroyed() && x.isVisible()); w.setAlwaysOnTop(false); w.showInactive() })
+      const activeApp = activatePid(app.process().pid)
+      await win.waitForTimeout(800)
+      const covered = frontPids()
+      await win.evaluate(() => window.tangu.pluginSandbox.show())
+      await win.waitForTimeout(1000)
+      const again = frontPids()
+      const pids = sandboxPids(), parent = String(app.process().pid)
+      check('10a 打开沙箱窗口(第一次)→ 沙箱窗口在屏幕最前', pids.includes(first[0]), JSON.stringify({ front: first.slice(0, 3), pids }))
+      check('10b 被盖住之后再点一次 → 还是回到最前', covered[0] !== again[0] && pids.includes(again[0]), JSON.stringify({ activeApp, covered: covered.slice(0, 3), again: again.slice(0, 3), parent, pids }))
+      // 用户在界面上点「重置数据」(卡片 / Coding Studio / 沙箱窗口):新起的那份要出现在最前,不能压在所有窗口下面
+      await win.evaluate(() => window.tangu.pluginSandbox.reset())
+      await win.waitForTimeout(1500)
+      const afterReset = frontPids(), pids2 = sandboxPids()
+      check('10c 界面上点了重置 → 新起的沙箱窗口在最前', pids2.includes(afterReset[0]), JSON.stringify({ front: afterReset.slice(0, 3), pids: pids2 }))
+    }
 
     // ── 8 停止 ──
     await win.evaluate(() => window.tangu.pluginSandbox.stop())

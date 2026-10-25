@@ -156,6 +156,18 @@ describe('控制通道', () => {
     await sbx.dispose()
   })
 
+  it('叫到前面:用户在界面上点的启动 / 重置起好后 show;agent 起的不叫', async () => {
+    const f = fakeSpawn({ states: ['running'] })
+    const sbx = sandbox(tmp(), f); const dir = pluginDir()
+    await sbx.exec('start', { dir })
+    expect(f.ops).not.toContain('show')
+    await sbx.exec('start', { dir }, { reveal: true })
+    expect(f.ops.filter((o) => o === 'show')).toHaveLength(1)
+    await sbx.reset() // 卡片 / Coding Studio / 沙箱窗口自己的按钮
+    expect(f.ops.filter((o) => o === 'show')).toHaveLength(2)
+    await sbx.dispose()
+  })
+
   it('起停排队:start 还在路上就点了 stop → 最后是停着的,不留一个起来的', async () => {
     const f = fakeSpawn({ states: ['running'] })
     const sbx = sandbox(tmp(), f)

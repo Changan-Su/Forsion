@@ -425,6 +425,7 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
         teamRunId: runId, teamSessionId: sessionId, userId, appId: p.appId, modelId,
         member: agent, inlineDef: inlineSlugs.has(slug), delta, cycle, roster, teamDoc: teamDocFor(agent),
         execMode: p.execMode, cwd: p.cwd, extraRoots: p.extraRoots, wsProject: p.wsProject, approvalMode, followSessionMode: p.followSessionMode, signal,
+        maxIterations: memberLoopCap(p.agentConfig.maxIterations),
         remote: effectiveRemote({ remote: p.remote, runId }),
         onStarted: (ids) => {
           childId = ids.runId; childRuns.set(slug, ids.runId);
@@ -649,6 +650,12 @@ async function account(p: GroupChatParams, res: StreamResult, effModelId: string
   return cost;
 }
 
+/** 团队 run 的轮数上限传给成员单次发言;非正数 / 非数 = 没设。 */
+function memberLoopCap(v: unknown): number | undefined {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : undefined;
+}
+
 /** 显式 groupMaxRounds(内部调用方:讨论 / Historian 辅助)钳 1..MAX;没传 = 兜底天花板本身,不是缺省上限。 */
 function roundCap(v: any): number {
   const n = Math.floor(Number(v));
@@ -699,7 +706,7 @@ export function sanitizeTempAgents(raw: any): NormalAgentDef[] {
       model: String(r.model || '').trim(),
       tools: Array.isArray(r.tools) ? r.tools.filter((t: any) => typeof t === 'string' && t.trim()).slice(0, 100) : [],
       thinkingLevel: THINK_LEVELS.includes(r.thinkingLevel) ? r.thinkingLevel : '',
-      maxIterations: Number.isFinite(maxIter) && maxIter > 0 ? Math.min(200, Math.floor(maxIter)) : null,
+      maxIterations: Number.isFinite(maxIter) && maxIter > 0 ? Math.floor(maxIter) : null,
       // H5 fail-closed:空 / 纯空白 / 缺席 = ''(跟随会话);未知非空值 → readonly 并告警(旧口径静默写 '' = 放宽)。
       // 首尾空白先剥(与 projectContext / agentRegistry 同口径)。
       // 'custom' 现在照收 —— 与 agentRegistry 落盘口径一致(旧白名单漏了它,自定义档的临时成员被悄悄抹成跟随会话)。

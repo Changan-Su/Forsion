@@ -1,7 +1,9 @@
 import { Image as CoverImageIcon, Smile as PageSmileIcon } from 'lucide-react'
 import { Lock as LockIcon } from 'lucide-react'
 import { History as HistoryIcon } from 'lucide-react'
-import { ALargeSmall, Check, MoveHorizontal, Type } from 'lucide-react'
+import { ALargeSmall, Check, MoveHorizontal, Type, CircleAlert, RotateCw, X as XIcon } from 'lucide-react'
+import { UploadRing } from '@lcl/components'
+import { forgetUpload, retryUpload, uploadFraction, useUploads } from './services/uploads'
 /** Amadeus Space 的引擎视图 —— 外壳用 Tangu 原生 UI 重建(复刻侧栏 t2s- 视觉 + base.css 的 .ctx-menu),
  *  只复用 Amadeus 的数据层(pageStore)与块编辑器内核(PageView/Milkdown)。
  *  左 笔记库 / 主 编辑器 / 右 大纲·反链。除编辑器(块组件用 Amadeus 契约 token,需 .am-app+bridge)外,
@@ -38,7 +40,7 @@ import { NoteCover, CoverPicker, IconPicker, randomEmoji, useActiveCover, UNTITL
 import { routeNote, type RouteDecision } from '@amadeus/unified/router'
 import { upgradeV4Enabled } from '@amadeus/lib/upgradeV4'
 import { cursorFromSource, setModeCursor, sourceOffsetFor, takeModeCursor } from '@amadeus/lib/modeCursor'
-import { importToPage, importToFolder, pasteImagesToPage, filesFromHostPaths } from './amadeusImport'
+import { importToPage, importToFolder, pasteImagesToPage, filesFromHostPaths, useFolderUploads } from './amadeusImport'
 import { usePluginStore, findFileType, matchFileType, fileTypeBaseName } from '@amadeus/plugins/pluginStore'
 import { normalizePluginRename } from '@amadeus/plugins/pluginExt'
 import { resolveIcon } from '@amadeus/components/icons'
@@ -97,8 +99,11 @@ import { FILE_VIEW_PARAM } from './viewFileMatch'
 import { windowKind } from './windowKind'
 import { registerMessages, translate, useI18n } from './i18n'
 import { useVaultRelParam } from './views/vaultRelParam'
+import { AnimatedCollapse } from './components/AnimatedUI'
 
 registerMessages({
+  'amxv.upload.retry': { zh: '重试', en: 'Retry' },
+  'amxv.upload.remove': { zh: '移除', en: 'Remove' },
   'amxv.renameFailed': { zh: '重命名失败：{e}', en: 'Rename failed: {e}' },
   'amxv.newBaseFailed': { zh: '新建 Base 失败：{e}', en: 'Could not create the base: {e}' },
   'amxv.copyFailed': { zh: '复制失败：{e}', en: 'Copy failed: {e}' },
@@ -426,6 +431,34 @@ const isNotePath = (p: string): boolean => /\.md$/i.test(p)
 const isDbPath = (p: string): boolean => /\.db$/i.test(p)
 const isPdfPath = (p: string): boolean => /\.pdf$/i.test(p)
 const isImagePath = (p: string): boolean => /\.(png|jpe?g|gif|webp|svg|avif|bmp|ico)$/i.test(p)
+
+/** 拖进某个文件夹、正在传的文件:树里先有这一行,行尾一颗小环;传完由真行接上;失败的给重试 / 移除(amadeusImport.importToFolder)。 */
+function FolderUploadRows({ folder, depth }: { folder: string; depth: number }) {
+  const ids = useFolderUploads((all) => all[folder])
+  return ids?.length ? <>{ids.map((id) => <FolderUploadRow key={id} id={id} depth={depth} />)}</> : null
+}
+function FolderUploadRow({ id, depth }: { id: string; depth: number }) {
+  const { t } = useI18n()
+  const e = useUploads((all) => all[id])
+  if (!e || e.phase === 'done') return null
+  const failed = e.phase === 'failed'
+  return (
+    <SidebarRow
+      className={`amx-uprow${failed ? ' is-failed' : ''}`}
+      depth={depth}
+      title={failed ? e.error : e.name}
+      lead={failed ? <CircleAlert className="t2s-lead-icon" /> : isImagePath(e.name) ? <FileImage className="t2s-lead-icon t2s-dim" /> : <Paperclip className="t2s-lead-icon t2s-dim" />}
+      trailing={failed ? (
+        <>
+          <span className="t2s-srow-menu" role="button" title={t('amxv.upload.retry')} onClick={() => retryUpload(id)}><RotateCw size={13} /></span>
+          <span className="t2s-srow-menu" role="button" title={t('amxv.upload.remove')} onClick={() => forgetUpload(id)}><XIcon size={13} /></span>
+        </>
+      ) : <UploadRing value={uploadFraction(e)} size={14} className="amx-uprow-ring" />}
+    >
+      <span className="t2s-srow-title">{e.name}</span>
+    </SidebarRow>
+  )
+}
 const dbBaseName = (p: string): string => (p.split(/[\\/]/).pop() || p).replace(/\.db$/i, '')
 
 /** 回收站(桌面端 .trash):树底入口 + 浮层(恢复/彻底删/清空)。缺 API 的端(web/mobile)不渲染。 */
@@ -532,7 +565,7 @@ function PrefsSections({ row, pages }: { row: (path: string) => ReactNode; pages
             <span className="t2s-count">{items.length}</span>
           </span>
         </button>
-        {open && <div className="t2s-group-sessions">{items.map((p) => row(p))}</div>}
+        <AnimatedCollapse open={open}>{open && <div className="t2s-group-sessions">{items.map((p) => row(p))}</div>}</AnimatedCollapse>
       </div>
     )
   )
@@ -549,7 +582,7 @@ function PrefsSections({ row, pages }: { row: (path: string) => ReactNode; pages
               <span className="t2s-count">{collections.length}</span>
             </span>
           </button>
-          {openColl && (
+          <AnimatedCollapse open={openColl}>{openColl && (
             <div className="t2s-group-sessions">
               {collections.map((c) => (
                 <div
@@ -573,7 +606,7 @@ function PrefsSections({ row, pages }: { row: (path: string) => ReactNode; pages
                 </div>
               ))}
             </div>
-          )}
+          )}</AnimatedCollapse>
         </div>
       )}
     </>
@@ -658,7 +691,7 @@ function SideSection({ id, defaultOpen, label, count, extra, dropProps, dropActi
           {extra}
         </span>
       </button>
-      {open && <div className="t2s-group-sessions">{children}</div>}
+      <AnimatedCollapse open={open}><div className="t2s-group-sessions">{children}</div></AnimatedCollapse>
     </div>
   )
 }
@@ -1535,7 +1568,7 @@ export function AmadeusPagesView() {
       return (
         <div key={node.path}>
           {row(node.path, depth, { fd, open, count: node.children.filter((c) => c.kind === 'file').length })}
-          {open && (
+          <AnimatedCollapse open={open}>{open && (
             <div
               className={`t2s-group-sessions${dragOver === fd ? ' amx-drop-into' : ''}`}
               onDragOver={(e) => mergedDragOver(e, node.path, fd)}
@@ -1544,7 +1577,7 @@ export function AmadeusPagesView() {
             >
               {node.children.map((c) => renderNode(c, depth + 1))}
             </div>
-          )}
+          )}</AnimatedCollapse>
         </div>
       )
     }
@@ -1590,7 +1623,7 @@ export function AmadeusPagesView() {
           <button className="t2s-group-add" title={t('amxv.folder.newNoteHere')} onClick={() => { setExpanded((prev) => new Set([...prev, ...prefixesOf(folder)])); void ps().createPageInFolder(folder) }}><Plus size={14} /></button>
         </div>
         {/* 展开的文件夹内部(含其中的笔记行)也是该文件夹的落点——与文件管理器语义一致。 */}
-        {!isCol && (
+        <AnimatedCollapse open={!isCol}>{!isCol && (
           <div
             className={`t2s-group-sessions${dragOver === folder ? ' amx-drop-into' : ''}`}
             onDragOver={folderDragOver}
@@ -1598,8 +1631,9 @@ export function AmadeusPagesView() {
             onDrop={(e) => { if (filesDrop(e, folder)) return; e.preventDefault(); e.stopPropagation(); dropTo(folder) }}
           >
             {node.children.map((c) => renderNode(c, depth + 1))}
+            <FolderUploadRows folder={folder} depth={depth + 1} />
           </div>
-        )}
+        )}</AnimatedCollapse>
       </div>
     )
   }
@@ -1661,11 +1695,12 @@ export function AmadeusPagesView() {
           }}
         >
           {tree.children.map((n) => renderNode(n, 0))}
+          <FolderUploadRows folder="" depth={0} />
         </div>
       )}
     </div>
   ) : (
-    <>{tree.children.map((n) => renderNode(n, 0))}</>
+    <>{tree.children.map((n) => renderNode(n, 0))}<FolderUploadRows folder="" depth={0} /></>
   )
 
   const foot = (

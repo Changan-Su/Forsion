@@ -1744,8 +1744,8 @@ export const SettingsModal: React.FC<{
                         </div>
                         {(modeExpanded || modePending) && (
                           <>
-                            <p className="settings-mode-desc">{t('settings.backend.modeDescription')}</p>
-                            <div className="settings-choice-grid" role="radiogroup" aria-label={t('settings.backend.modeLabel')} onKeyDown={onRadioGroupKeyDown}>
+                            <p className="settings-mode-desc" data-motion="enter">{t('settings.backend.modeDescription')}</p>
+                            <div className="settings-choice-grid" data-motion="enter" role="radiogroup" aria-label={t('settings.backend.modeLabel')} onKeyDown={onRadioGroupKeyDown}>
                               <button type="button" role="radio" aria-checked={viewMode === 'managed'} tabIndex={radioTabIndex(viewMode === 'managed', 0, true)} className={`settings-choice-card${viewMode === 'managed' ? ' active' : ''}`} disabled={runtimeSaving} onClick={() => pickModeDraft('managed')}>
                                 <span className="settings-choice-icon"><Settings2 size={17} /></span>
                                 <span><strong>{t('settings.backend.modeManaged')}</strong><small>{t('settings.backend.modeManagedDescription')}</small></span>
@@ -2204,7 +2204,7 @@ export const SettingsModal: React.FC<{
                     onClick={() => { setCloudAdvancedOpen(!(activeSub === 'f-conn' || cloudAdvancedOpen)); if (activeSub === 'f-conn') pickSub('f-sync') }}>
                     <ChevronRight size={14} aria-hidden="true" />{t('settingsmodal.cloudAdvancedConnection')}
                   </button>}
-                  {(!groupedCloud || activeSub === 'f-conn' || cloudAdvancedOpen) && <div id="settings-cloud-connection"><SettingsPanel anchor="cloud-url" icon={<Globe2 size={16} />} title={t('settings.forsion.cloudUrlLabel')} description={t(cloudUrlLocked ? 'settingsmodal.cloudUrl.lockedHint' : 'settings.forsion.cloudUrlHint')}>
+                  {(!groupedCloud || activeSub === 'f-conn' || cloudAdvancedOpen) && <div id="settings-cloud-connection" data-motion={cloudAdvancedOpen ? 'enter' : undefined}><SettingsPanel anchor="cloud-url" icon={<Globe2 size={16} />} title={t('settings.forsion.cloudUrlLabel')} description={t(cloudUrlLocked ? 'settingsmodal.cloudUrl.lockedHint' : 'settings.forsion.cloudUrlHint')}>
                     <div className="settings-control-list">
                       <SettingsRow label={t('settings.forsionCloud.address')}>
                         <div className="settings-inline-row settings-row-wide-control">

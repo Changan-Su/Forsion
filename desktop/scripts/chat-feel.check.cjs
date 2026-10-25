@@ -170,6 +170,92 @@ async function main() {
     r.check('1c 流完 300ms 内高亮清空', p.cleared === true, String(p.cleared))
     const lingering = await win.evaluate(() => document.querySelectorAll('.tool-roll-item.is-out').length)
     r.check('2b 放完后旧行拆掉', lingering === 0, String(lingering))
+
+    // ── 5. 插话等待区不透明 + 6. 任务清单展开 / 收起有入场 ──
+    // 10-25 用户报「插话面板变成透明的」:它悬浮在正文之上,原来垫的是 0.04 的 --overlay-light。
+    ctx.stub.script([
+      { type: 'todo', payload: { todos: [{ content: 'Read the lexer', status: 'completed' }, { content: 'Split the parser', status: 'in_progress' }, { content: 'Add tests', status: 'pending' }] } },
+      { type: 'token', payload: { delta: 'Working on it. ' } },
+      { type: '__hold' },
+    ])
+    await ta.fill('拆一下解析器')
+    await win.keyboard.press('Enter')
+    await win.locator('.t2c-stop').first().waitFor({ timeout: 10_000 })
+    await ta.fill('顺便看下 tokenizer')
+    await win.keyboard.press('Enter')
+    const steer = win.locator('.t2c-steer').first()
+    await steer.waitFor({ timeout: 5000 })
+    await win.addStyleTag({ content: '.ach-toast{display:none!important}' }) // 首条消息的成就浮层会盖住等待区(同 e2e:queue)
+    const steerBg = await steer.evaluate((el) => getComputedStyle(el).backgroundColor)
+    const alpha = (c) => { const m = c.match(/rgba?\(([^)]+)\)/); const p = m ? m[1].split(/[ ,/]+/).filter(Boolean) : []; return p.length > 3 ? parseFloat(p[3]) : m ? 1 : 0 }
+    r.check('5a 插话等待区底色不透明', alpha(steerBg) === 1, steerBg)
+    // 正文滚到等待区底下再拍:透不透一眼可见
+    await win.evaluate(() => { const s = document.querySelector('.t2-stream'); if (s) s.scrollTop = Math.max(0, s.scrollHeight - s.clientHeight - 90) })
+    await sleep(250)
+    await win.screenshot({ path: path.join(dir, 'steer-over-text.png') })
+
+    const animOf = (sel) => win.evaluate((sel) => { const el = document.querySelector(sel); return el ? el.getAnimations().map((a) => a.animationName) : null }, sel)
+    const strip = win.locator('.t2-tail .todo-strip').first()
+    await strip.waitFor({ timeout: 5000 })
+    r.check('6a 任务清单刚出现不放入场(新建 / 恢复不动)', !(await animOf('.t2-tail .todo-strip'))?.includes('ui-enter'), JSON.stringify(await animOf('.t2-tail .todo-strip')))
+    await strip.click()
+    const cardAnim = await animOf('.t2-tail .todo-card')
+    r.check('6b 点开:整张清单放入场', !!cardAnim?.includes('ui-enter'), JSON.stringify(cardAnim))
+    await sleep(60)
+    await win.screenshot({ path: path.join(dir, 'todo-opening.png') })
+    await sleep(300)
+    await win.locator('.t2-tail .todo-fold').first().click()
+    const stripAnim = await animOf('.t2-tail .todo-strip')
+    r.check('6c 收起:那一行放入场', !!stripAnim?.includes('ui-enter'), JSON.stringify(stripAnim))
+    ctx.stub.finish(ctx.stub.seen.runs.at(-1).runId)
+
+    // ── 7. 宿主自动给的动效(插件同一个页面,标准写法即得;base.css「统一入场」)──
+    const auto = await win.evaluate(async () => {
+      const box = document.createElement('div')
+      box.style.cssText = 'position:fixed;left:40px;top:80px;z-index:99999;background:var(--bg-card);padding:8px'
+      box.innerHTML = '<details id="fx-d"><summary>More</summary><p>Hidden body</p></details><div id="fx-slot"></div>'
+      document.body.appendChild(box)
+      const d = box.querySelector('#fx-d')
+      const frame = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
+      await frame()
+      // ::details-content 上的过渡 getAnimations() 不报(Chromium 144 实测),逐帧读透明度
+      const op = () => Number(getComputedStyle(d, '::details-content').opacity)
+      const closed = op()
+      d.open = true
+      const ramp = []
+      for (let i = 0; i < 4; i++) { await new Promise((r) => requestAnimationFrame(r)); ramp.push(Math.round(op() * 100) / 100) }
+      const reveal = document.createElement('div'); reveal.dataset.motion = 'enter'; reveal.textContent = 'revealed'
+      box.querySelector('#fx-slot').appendChild(reveal)
+      const enter = reveal.getAnimations().map((a) => a.animationName)
+      const dlg = document.createElement('dialog'); dlg.textContent = 'dialog'; document.body.appendChild(dlg); dlg.showModal()
+      const dialog = dlg.getAnimations().map((a) => a.animationName)
+      dlg.close(); dlg.remove(); box.remove()
+      return { closed, ramp, enter, dialog }
+    })
+    r.check('7a 原生 <details> 展开:内容区淡入(只动透明度)', auto.closed === 0 && auto.ramp.some((v) => v > 0 && v < 1), JSON.stringify({ closed: auto.closed, ramp: auto.ramp }))
+    r.check('7b data-motion="enter" 挂上即入场', auto.enter.includes('ui-enter'), JSON.stringify(auto.enter))
+    r.check('7c 原生 <dialog> 打开:命令面板那档进场', auto.dialog.includes('ui-menu-enter'), JSON.stringify(auto.dialog))
+
+    // ── 8. 侧栏「已归档」展开与会话分组同一个折叠动效(AnimatedCollapse) ──
+    const archived = win.locator('.t2s-archived-toggle').first()
+    if (await archived.count()) {
+      await archived.click()
+      const mid = await win.evaluate(() => new Promise((res) => requestAnimationFrame(() => requestAnimationFrame(() => {
+        const wrap = document.querySelector('.t2s-archived-toggle')?.nextElementSibling
+        res(wrap ? { h: wrap.getBoundingClientRect().height, full: wrap.scrollHeight, overflow: getComputedStyle(wrap).overflow } : null)
+      }))))
+      r.check('8a 点「已归档」:列表从 0 长出来(不是一下子出现)', !!mid && mid.overflow === 'hidden' && mid.h < mid.full, JSON.stringify(mid))
+      await sleep(400)
+      const settled = await win.evaluate(() => { const w = document.querySelector('.t2s-archived-toggle')?.nextElementSibling; return w ? getComputedStyle(w).overflow : null })
+      r.check('8b 长完就不再裁切(拖动落点线探出行外也看得见)', settled === 'visible', String(settled))
+      await win.screenshot({ path: path.join(dir, 'sidebar-archived.png') })
+      await archived.click()
+      const closing = await win.evaluate(() => new Promise((res) => requestAnimationFrame(() => requestAnimationFrame(() => {
+        const w = document.querySelector('.t2s-archived-toggle')?.nextElementSibling
+        res(w ? { h: w.getBoundingClientRect().height, overflow: getComputedStyle(w).overflow } : null)
+      }))))
+      r.check('8c 收起途中照样裁切(不往下溢出)', !!closing && closing.overflow === 'hidden' && closing.h > 0, JSON.stringify(closing))
+    } else r.note('8 跳过', '夹具里没有已归档会话')
     r.note('截图', dir)
   } finally {
     await ctx.close()

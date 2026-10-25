@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.69.0
+  version: 1.70.0
   author: Forsion
   category: Forsion
 ---
@@ -29,7 +29,7 @@ Forsion / Tangu 的扩展**默认按捆绑包(bundle)形态发行**(2026-07-25 �
 Tool results are capped, so this skill keeps long, API-by-API details in `references/` next to it. When a section below says 见下「…」 or names an API listed here, read that file before writing code:
 
 - [references/host-ui-mounts.md](references/host-ui-mounts.md): 可复用 UI 组件：ctx.ui.mountChatBox; 原生 Markdown 编辑器 ctx.ui.mountMarkdownEditor; 原生悬浮目录 ctx.ui.mountFloatingToc; View modes: ctx.ui.setViewModes; Tooltips and motion tokens: ctx.ui.attachTooltip; Selection bar: ctx.ui.mountSelectionBar and registerSelectionAction scopes; Settings parts: ctx.ui.mountSettingsPage / mountSettingsItem; 白板层 ctx.ui.mountBoard / ctx.ui.boardToSvg; 仪表盘 ctx.dashboard; 原生多维表 ctx.table.mount
-- [references/tangu-host-apis.md](references/tangu-host-apis.md): 当前模型与当前 Space:ctx.tangu; Agent 状态:agentStatus / subscribeAgentStatus; Agent 名册:agents; 开新对话:startChat; 把对话挂进自己的视图:mountChat; 新对话输入区:mountComposer; 正文 AI:ctx.tangu.complete 与 registerSelectionAction; 翻译:ctx.tangu.translate; Agent Desk 伴随面:ctx.desk; 自动化规则播种:ctx.automation
+- [references/tangu-host-apis.md](references/tangu-host-apis.md): 当前模型与当前 Space:ctx.tangu; Agent 状态:agentStatus / subscribeAgentStatus; Agent 名册:agents; 开新对话:startChat; 把对话挂进自己的视图:mountChat; 新对话输入区:mountComposer; 正文 AI:ctx.tangu.complete 与 registerSelectionAction; 翻译:ctx.tangu.translate; Agent Desk 伴随面:ctx.desk; 摘要栏插件卡:ctx.summary; 自动化规则播种:ctx.automation
 - [references/work-folder-migration.md](references/work-folder-migration.md): one-time upgrade of old plugin data into the working folder (Identity and destination; Request and result; Upgrade sequence; Acceptance cases; Ordinary writes after upgrade)
 
 ## Troubleshooting an installed plugin: Space missing, view blank, "stopped working after an update" (2026-10-10)
@@ -549,6 +549,7 @@ ctx.registerCommand({
 | `ctx.getLocale / subscribeLocale` | 跟随宿主中英切换 | 见下「双语」 |
 | `ctx.tangu` | 当前模型 / 模型目录 / 当前 Space / 会话用量 / **agent 此刻在干什么**(只读)+ `agents()` 用户的 Agent 名册 + `startChat` 用指定 Agent 开一个可见的新对话 + `mountChat` 把原生对话挂进自己的视图(2026-10-04 起)+ `mountComposer` 把「新对话」输入区整块挂进来、发送归宿主(2026-10-18 起)+ `complete` 一次性文本补全(2026-09-28 起) | ⚠️**非 Tangu 宿主上整个不存在** → 一律 `ctx.tangu?.`;`agentStatus` / `subscribeAgentStatus` / `startChat` 是 2026-09-19 起、`agents` 是 2026-09-20 起的可选方法 → `ctx.tangu?.startChat?.(…)`;见下「当前模型」「Agent 状态」「Agent 名册」「开新对话」 |
 | `ctx.desk` | Tangu 聊天右侧 **Agent Desk** 里挂一块自绘区(`registerCompanion`,典型:跟着 agent 状态做反应的 3D 形象) | 2026-09-19 起;⚠️**只在桌面 Tangu 上存在**(web / 移动端 / 纯 Amadeus 壳整个没有)→ `ctx.desk?.`;两种模式 `idle` / `always`,见下「Agent Desk 伴随面」 |
+| `ctx.summary` | Tangu 聊天右侧**摘要栏**加一张卡(`registerCard`,和进度 / 后台 / 产物 / Agent Desk 同一个栈,用户可折叠、拖动排序) | 2026-10-25 起;⚠️**只在桌面 Tangu 上存在**(同 `ctx.desk`)→ `ctx.summary?.`;见下「摘要栏插件卡」 |
 | `ctx.automation` | 播种多维表自动化规则(`ensure(rules)`) | 2026-09-02 起;⚠️**非 Tangu 宿主上整个不存在** → `void ctx.automation?.ensure(…)`;id 宿主加 `plugin:<id>:` 前缀;见下「自动化」 |
 | `ctx.calendar` | 把插件种的表登记进 Calendar Space(`ensureMember`,人人有)+ 叠加源与日历设置(`subscribe` / `setColor` / `setHidden` / `setDefault` / `setMember` / `removeMember`)+ .ics 订阅管理(`ics.add` / `importText` / `rename` / `remove` / `refresh`) | `ensureMember` 2026-09-02 起;其余 2026-10-17 起,⚠️**声明 `"calendar"` 才有**(没声明时这几个成员不存在,不是空壳)→ `ctx.calendar?.subscribe`;见下「日历叠加源与设置」 |
 | `ctx.spaces` | Space 列表 / 打开 / 图标 / 近况那一行 + 商店、成就两格 + Ribbon 上区的收纳架(顺序、收纳夹) | 2026-10-18 起;⚠️**声明 `"spaces"` 才存在**(收纳架改的是用户的 Ribbon);见下「Space 与 Ribbon 收纳架」 |
@@ -603,6 +604,8 @@ createPage / listPages / listFiles / searchVault / reveal / trash`)都要求一�
   `ctx.ui.mountMarkdownEditor` / `ctx.app.mountBlocks` / `ctx.tangu.mountChat` 挂出来的正文是宿主画的,自动跟随。
 - **视图根上不加自己的入场动画**:切主视图时宿主已经做了一次淡入,再加一层会叠成两段。视图里的悬停、展开过渡用宿主的
   `--duration-fast` / `--duration-slow` / `--ease-out`,不写死毫秒;`prefers-reduced-motion` 下关掉。
+- **展开 / 弹出先用标准写法,宿主自动给动效**(2026-10-25 起):原生 `<details>`、`<dialog>` / `popover` 自带 Forsion 的进出场;
+  「用户点了才出现」的那块写 `data-motion="enter"` 就淡入上来。细则见 references/host-ui-mounts.md「Motion the host applies for you」。
 - **这三个开关是用户的**:不读、不写 `forsion_calm_*` 与 `<html data-calm-*>`,不提供同类的私有开关,也不在自己的视图里用 `:hover`
   去点亮或压暗宿主的外围。iframe / webview 里的页面拿不到宿主变量、不会跟着淡,导航类内容别装进 iframe 再放到左栏。
 
@@ -842,7 +845,7 @@ ctx.registerToolResultRenderer?.({
 
 ## Tangu host APIs: read references/tangu-host-apis.md
 
-`ctx.tangu` (current model, agent status, agent roster, startChat, mountChat, mountComposer, complete, translate), `ctx.desk` and `ctx.automation` are documented in [references/tangu-host-apis.md](references/tangu-host-apis.md). None of them exist on non-Tangu hosts, so always use optional chaining. When the table above says 见下「…」 for one of them, read that section there:
+`ctx.tangu` (current model, agent status, agent roster, startChat, mountChat, mountComposer, complete, translate), `ctx.desk`, `ctx.summary` and `ctx.automation` are documented in [references/tangu-host-apis.md](references/tangu-host-apis.md). None of them exist on non-Tangu hosts, so always use optional chaining. When the table above says 见下「…」 for one of them, read that section there:
 
 - 当前模型与当前 Space:ctx.tangu(2026-08-29 起)
 - Agent 状态:agentStatus / subscribeAgentStatus(2026-09-19 起)
@@ -853,6 +856,7 @@ ctx.registerToolResultRenderer?.({
 - 正文 AI:ctx.tangu.complete 与 registerSelectionAction(2026-09-28 起)
 - 翻译:ctx.tangu.translate(2026-10-13 起)
 - Agent Desk 伴随面:ctx.desk(2026-09-19 起)
+- 摘要栏插件卡:ctx.summary(2026-10-25 起)
 - 自动化规则播种:ctx.automation(2026-09-02 起)
 
 

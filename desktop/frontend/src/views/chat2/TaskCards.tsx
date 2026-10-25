@@ -253,7 +253,7 @@ export function TaskCards({ tasks, ownerId, onTask, noHere = false, todoStatus, 
             <button className="t2-taskcard-toggle" onClick={() => setTaskOpen((p) => ({ ...p, [key]: !open }))} aria-expanded={open}>
               {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />} {t(open ? 'chat.task.hidePrompt' : 'chat.task.showPrompt')}
             </button>
-            {open && <pre className="t2-taskcard-prompt">{c.prompt}</pre>}
+            {open && <pre className="t2-taskcard-prompt" data-motion="enter">{c.prompt}</pre>}
             {gone
               ? <div className="t2-taskcard-done">{gone === 'expired' ? t('chat.task.expired') : `${t('chat.task.withdrawn')}${withdrawn.get(c.id!) ? ` · ${withdrawn.get(c.id!)}` : ''}`}</div>
               : done
