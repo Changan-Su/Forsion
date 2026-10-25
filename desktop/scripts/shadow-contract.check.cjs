@@ -82,6 +82,7 @@ const INTERACTION_EXCEPTIONS = new Map([
   ['frontend/src/views/dashCanvas.css|.dash2-card[data-interact]|box-shadow', '仪表盘交互期间抬起反馈'],
   ['frontend/src/views/dashCanvas.css|.dash2-card[data-dragging]|box-shadow', '仪表盘拖拽反馈'],
   ['frontend/src/views/dashGrid.css|.dash3-card--lift|box-shadow', '网格仪表盘 DragOverlay 跟手壳抬起反馈(只在浮层这一层,不落到格子里的卡)'],
+  ['frontend/src/views/chat2/chat2.css|.t2-card-lifted|box-shadow', '摘要卡片栈拖拽排序时的抬起反馈(只在拖动期间)'],
 ])
 
 /* LCL 历史展示页保留自己的 token 契约。 */
