@@ -164,7 +164,7 @@ describe('checkBuiltinUpdates', () => {
     expect(reg.calls.filter((u) => u.endsWith('.tgz'))).toEqual([tarballUrl(R2, PKG, '0.5.6'), tarballUrl(R1, PKG, '0.5.6')])
   })
 
-  it('latest 是预发布版:不下载(cmpVersion 会把它排在同号正式版之上,进了暂存区正式版就永远换不上);镜像开关决定 registry 顺序', async () => {
+  it('latest 是预发布版:不下载(自动更新只装正式版);镜像开关决定 registry 顺序', async () => {
     const reg = registry(serve(R1, '0.5.6-rc.1', tgz(pkgFiles('0.5.6-rc.1'))))
     expect(await check(reg.fetch)).toEqual([])
     expect(reg.calls.filter((u) => u.endsWith('.tgz'))).toEqual([])

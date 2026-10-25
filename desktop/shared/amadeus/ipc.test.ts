@@ -8,9 +8,25 @@ describe('cmpVersion', () => {
     expect(cmpVersion('v2.0', '2.0.0')).toBe(0)
     expect(cmpVersion('2.0.1', '2.0')).toBe(1)
   })
+
+  it('预发布排在同号正式版之前,预发布段按 semver 比', () => {
+    const order = ['2.13.7', '2.13.8-alpha', '2.13.8-alpha.1', '2.13.8-beta', '2.13.8-beta.1', '2.13.8-beta.2', '2.13.8-beta.11', '2.13.8-rc.1', '2.13.8', '2.13.8.1', '2.13.9-beta.1', '2.13.9']
+    for (let i = 0; i < order.length; i++) {
+      for (let j = 0; j < order.length; j++) expect(cmpVersion(order[i], order[j]), `${order[i]} vs ${order[j]}`).toBe(Math.sign(i - j))
+    }
+    expect(cmpVersion('v2.13.8-beta.1', '2.13.8-beta.1')).toBe(0)
+    expect(cmpVersion('1.0.0+build.5', '1.0.0')).toBe(0)
+    expect(cmpVersion('1.0.0-1', '1.0.0-alpha')).toBe(-1) // 纯数字段在字母段之前
+    expect(cmpVersion('0.7.2-jev.6', '0.7.2')).toBe(-1) // 本机开发版会被同号正式版换掉
+  })
 })
 
 describe('gatePluginManifest', () => {
+  it('minAppVersion 与预发布宿主:2.13.8-beta.1 挡在 2.13.8-beta.2 外,正式版 2.13.8 放行(之前反了)', () => {
+    expect(gatePluginManifest({ minAppVersion: '2.13.8-beta.2' }, '2.13.8-beta.1')).toBe('minApp')
+    expect(gatePluginManifest({ minAppVersion: '2.13.8-beta.2' }, '2.13.8')).toBeNull()
+    expect(gatePluginManifest({ minAppVersion: '2.13.8' }, '2.13.8-beta.1')).toBe('minApp')
+  })
   it('缺 apiVersion 视为 1 → 放行(存量插件全兼容)', () => {
     expect(gatePluginManifest({}, '2.0.0')).toBeNull()
   })

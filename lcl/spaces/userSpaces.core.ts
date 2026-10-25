@@ -72,13 +72,29 @@ export type ParseResult =
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,63}$/
 
-/** 语义化版本比较(数值逐段,缺段=0;非数字段按 0):a<b → -1, a==b → 0, a>b → 1。 */
+/** 语义化版本比较:数值逐段(缺段=0,非数字段按 0,前导 v 忽略);同号时预发布排在正式版之前(2.13.8-beta.1 < 2.13.8-beta.2 < 2.13.8),
+ *  预发布段按 semver 比;+build 忽略。a<b → -1, a==b → 0, a>b → 1。desktop/shared/amadeus/ipc.ts 有一份拷贝,两处同改。 */
 export function cmpVersion(a: string, b: string): number {
-  const pa = a.replace(/^v/i, '').split('.')
-  const pb = b.replace(/^v/i, '').split('.')
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const x = parseInt(pa[i] ?? '0', 10) || 0
-    const y = parseInt(pb[i] ?? '0', 10) || 0
+  const parse = (v: string) => {
+    const [core, pre] = String(v).trim().replace(/^v/i, '').split('+')[0].split(/-(.*)/s) // +build 不参与比较
+    return { core: core.split('.').map((x) => parseInt(x, 10) || 0), pre: pre ? pre.split('.') : [] }
+  }
+  const pa = parse(a)
+  const pb = parse(b)
+  for (let i = 0; i < Math.max(pa.core.length, pb.core.length); i++) {
+    const d = (pa.core[i] || 0) - (pb.core[i] || 0)
+    if (d) return d < 0 ? -1 : 1
+  }
+  // 同号:带预发布的排在正式版之前(旧版只认数字段,把 2.13.8-beta.1 当成 2.13.8.1、排到 2.13.8 之上)
+  if (!pa.pre.length || !pb.pre.length) return pa.pre.length === pb.pre.length ? 0 : pa.pre.length ? -1 : 1
+  for (let i = 0; i < Math.max(pa.pre.length, pb.pre.length); i++) {
+    const x = pa.pre[i]
+    const y = pb.pre[i]
+    if (x === undefined || y === undefined) return x === undefined ? -1 : 1 // 前缀相同,段少的在前
+    const nx = /^\d+$/.test(x)
+    const ny = /^\d+$/.test(y)
+    if (nx && ny) { if (Number(x) !== Number(y)) return Number(x) < Number(y) ? -1 : 1; continue }
+    if (nx !== ny) return nx ? -1 : 1 // 纯数字段排在字母段之前
     if (x !== y) return x < y ? -1 : 1
   }
   return 0
