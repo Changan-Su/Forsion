@@ -150,7 +150,6 @@
 .unitset-list { max-height: none; padding: 2px 8px 8px; }
 .unitset-rows:empty { display: none; }
 .unitset-page .unitsw-row.on { background: var(--accent-light); }
-.unitset-page .settings-panel-icon .unitsw-dot { width: 8px; height: 8px; }
 .unitset-hint { user-select: text; }
 .unitset-paired { padding: 2px 8px 8px; }
 .unitset-paired .unitsw-paired-row { padding: 4px 9px; }

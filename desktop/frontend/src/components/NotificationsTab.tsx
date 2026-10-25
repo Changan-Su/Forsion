@@ -33,7 +33,7 @@ export function sendTestNotification(): void {
 }
 
 /** 第一页换成设置零件的整页描述(2026-10-17):和插件的 ctx.ui.mountSettingsPage 同一份画法,手机上开关留在右边。 */
-export function NotificationsTab() {
+export function NotificationsTab({ onOpenInbox }: { onOpenInbox?: () => void } = {}) {
   const { t } = useI18n()
   const prefs = useNotifications((s) => s.prefs)
   const setEnabled = useNotifications((s) => s.setEnabled)
@@ -53,6 +53,8 @@ export function NotificationsTab() {
       items: [
         { type: 'switch', id: 'enabled', title: t('ntf.enable'), value: prefs.enabled, onChange: setEnabled },
         { type: 'switch', id: 'os', title: t('ntf.osEnable'), desc: t('ntf.osEnableHint'), value: prefs.osEnabled, disabled: off, onChange: setOsEnabled },
+        // 收件箱另有一个开关(走查续五 W-76):指过去,点得动
+        ...(onOpenInbox ? [{ type: 'button' as const, id: 'inbox-xref', title: t('ntf.inboxXref'), buttons: [{ label: `${t('settings.tab.general')} › ${t('settings.inbox.title')}`, onClick: onOpenInbox }] }] : []),
       ],
     },
     {

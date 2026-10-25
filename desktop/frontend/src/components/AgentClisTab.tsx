@@ -5,7 +5,7 @@
  * 经 PUT /agent/engines/:id 持久化到 ~/.tangu/engine-prefs.json。未检测到的引擎只显示安装提示。
  */
 import React, { useEffect, useState } from 'react'
-import { Loader2 } from 'lucide-react'
+import { Loader2, RefreshCw } from 'lucide-react'
 import { useI18n } from '../i18n'
 import {
   listEngines,
@@ -29,6 +29,8 @@ export const AgentClisTab: React.FC<{ cfg: TanguDesktopConfig }> = ({ cfg }) => 
   const [caps, setCaps] = useState<Record<string, Caps | 'loading'>>({})
   const [assets, setAssets] = useState<Record<string, EngineAssets | 'loading'>>({})
   const [busy, setBusy] = useState('') // `${id}:${kind}:${name}`
+  // 「重新检测」:原地重拉,列表不先清空;failed = 上一次检测抛错(空态那一行改写「检测失败 · 重试」)
+  const [detect, setDetect] = useState({ seq: 0, checking: false, failed: false })
 
   useEffect(() => {
     let alive = true
@@ -36,6 +38,7 @@ export const AgentClisTab: React.FC<{ cfg: TanguDesktopConfig }> = ({ cfg }) => 
       .then((list) => {
         if (!alive) return
         setEngines(list)
+        setDetect((d) => ({ ...d, checking: false, failed: false }))
         // 为已检测到的引擎拉模型 + 已装资产(逐个 loading;首次 spawn 略慢,后端缓存)。
         for (const e of list.filter((x) => x.available)) {
           setCaps((p) => ({ ...p, [e.id]: 'loading' }))
@@ -49,12 +52,14 @@ export const AgentClisTab: React.FC<{ cfg: TanguDesktopConfig }> = ({ cfg }) => 
         }
       })
       .catch(() => {
-        if (alive) setEngines([])
+        if (!alive) return
+        setEngines([])
+        setDetect((d) => ({ ...d, checking: false, failed: true }))
       })
     return () => {
       alive = false
     }
-  }, [cfg])
+  }, [cfg, detect.seq])
 
   const onPickModel = (id: string, modelId: string): void => {
     setEngines((list) => (list || []).map((e) => (e.id === id ? { ...e, defaultModel: modelId || undefined } : e)))
@@ -90,10 +95,16 @@ export const AgentClisTab: React.FC<{ cfg: TanguDesktopConfig }> = ({ cfg }) => 
 
   return (
     <div className="field">
-      <div className="settings-section-title">{t('settings.agentClis.title')}</div>
+      {/* 「重新检测」常驻:接口也会列出未安装 / 需登录的引擎,列表非空时同样要能重拉 */}
+      <div className="settings-inline-row agent-clis-head">
+        <div className="settings-section-title">{t('settings.agentClis.title')}</div>
+        <button type="button" className="btn ghost sm agent-clis-recheck" disabled={detect.checking} onClick={() => setDetect((d) => ({ seq: d.seq + 1, checking: true, failed: d.failed }))}>
+          <RefreshCw size={12} className={detect.checking ? 'spin' : undefined} aria-hidden="true" />{t(detect.failed ? 'common.retry' : 'settings.agentClis.recheck')}
+        </button>
+      </div>
       <div className="hint" style={{ marginBottom: 12 }}>{t('settings.agentClis.hint')}</div>
       {engines === null && <div className="hint">{t('common.loading')}</div>}
-      {engines?.length === 0 && <div className="hint">{t('settings.agentClis.empty')}</div>}
+      {engines?.length === 0 && <div className="hint agent-clis-empty">{t(detect.failed ? 'settings.agentClis.detectFailed' : 'settings.agentClis.empty')}</div>}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         {(engines || []).map((e) => {
           const c = caps[e.id]

@@ -3016,6 +3016,11 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   width: auto !important;
   min-width: 0;
 }
+/* 设置页之间互指的路径(收件箱 ↔ 通知):文字链,不是按钮 */
+.settings-xref-link { padding: 0; border: 0; background: none; color: var(--accent-ink); font: inherit; cursor: pointer; }
+.settings-xref-link:hover { text-decoration: underline; }
+/* 本机 Agent CLI:标题靠左、「重新检测」靠右 */
+.agent-clis-head { justify-content: space-between; }
 .settings-inline-row > .btn {
   flex: 0 0 auto;
   white-space: nowrap;
@@ -3065,6 +3070,8 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .settings-panel-actions .btn { width: 30px; height: 30px; padding: 0; justify-content: center; }
 .settings-panel-actions--wide { align-items: center; }
 .settings-panel-actions--wide .btn { width: auto; padding: 0 10px; }
+/* 图标按钮堆里带字的那颗(外观 › 重载主题,走查续五 5.7) */
+.settings-panel-actions .btn.settings-panel-btn--text { width: auto; gap: 4px; padding: 0 10px; white-space: nowrap; }
 
 /* 常规页先给出系统结论,再进入具体设置。左侧是判断,右侧是可扫描的状态清单。 */
 .settings-overview {
