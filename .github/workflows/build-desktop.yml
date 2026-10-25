@@ -261,9 +261,10 @@ jobs:
           now=$(node -p "require('./desktop/package.json').dependencies['@forsion/extend'] || ''")
           prev_tag=''; prev=''
           if [ "$EVENT" = push ]; then
-            # 列表按创建时间倒序。本 tag 的 Release 还没建(首跑)→ 取最新一个;已建(重跑旧 tag)→ 取排在它后面的那个,
-            # 不然重跑 beta.1 会拿更新的 beta.2 当「上一版」而误判没换钉。
-            prev_tag=$(gh api "repos/$GH_REPO/releases?per_page=30" --jq "[.[] | select(.tag_name | startswith(\"v\"))] as \$r | ([\$r[].tag_name] | index(\"$TAG\")) as \$i | if \$i == null then (\$r[0].tag_name // \"\") else (\$r[\$i + 1].tag_name // \"\") end" 2>/dev/null || true)
+            # 全量、去掉草稿(草稿不算已发,Codex 评审 10-25),按创建时间倒序。本 tag 的 Release 还没建(首跑)→ 取最新一个;
+            # 已建(重跑旧 tag)→ 取排在它后面的那个,不然重跑 beta.1 会拿更新的 beta.2 当「上一版」而误判没换钉。
+            prev_tag=$(gh release list --repo "$GH_REPO" --exclude-drafts --limit 1000 --json tagName \
+              --jq "[.[].tagName | select(startswith(\"v\"))] as \$r | (\$r | index(\"$TAG\")) as \$i | if \$i == null then (\$r[0] // \"\") else (\$r[\$i + 1] // \"\") end" 2>/dev/null || true)
           fi
           if [ -n "$prev_tag" ]; then
             prev=$(gh api "repos/$GH_REPO/contents/desktop/package.json?ref=$prev_tag" --jq .content 2>/dev/null \
