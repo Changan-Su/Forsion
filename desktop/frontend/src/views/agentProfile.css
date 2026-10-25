@@ -72,12 +72,13 @@
 .profile-expand { flex-shrink: 0; align-self: flex-start; display: grid; place-items: center; width: 30px; height: 30px; padding: 0; background: transparent; border: 0; border-radius: var(--radius-sm, 8px); color: var(--text-muted); cursor: pointer; }
 .profile-expand:hover { background: var(--overlay-medium); color: var(--text); }
 .agent-section-nav { --profile-nav-gap: 4px; --profile-nav-padding: 5px; position: relative; isolation: isolate; display: flex; gap: var(--profile-nav-gap); padding: var(--profile-nav-padding); background: var(--overlay-light); border-radius: var(--radius-md, 12px); min-width: 0; }
-.agent-section-nav::before { content: ""; position: absolute; z-index: -1; pointer-events: none; inset-block: var(--profile-nav-padding); left: var(--profile-nav-padding); width: calc((100% - 2 * var(--profile-nav-padding) - (var(--profile-tab-count, 5) - 1) * var(--profile-nav-gap)) / var(--profile-tab-count, 5)); border-radius: var(--radius-sm, 8px); background: var(--bg); box-shadow: var(--btn-shadow); transform: translateX(calc(var(--profile-tab-index, 0) * (100% + var(--profile-nav-gap)))); transition: transform 200ms cubic-bezier(.2,.8,.2,1); }
-.agent-section-nav button { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 36px; padding: 8px 10px; border: 0; background: transparent; color: var(--text-muted); border-radius: var(--radius-sm, 8px); cursor: pointer; white-space: nowrap; font-size: var(--ui-font-meta, 12px); transition: background 160ms ease, color 160ms ease; }
+.agent-section-nav button { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 36px; padding: 8px 10px; border: 0; background: transparent; color: var(--text-muted); border-radius: var(--radius-sm, 8px); cursor: pointer; white-space: nowrap; font-size: var(--ui-font-meta, 12px); transition: background 160ms ease, color 160ms ease; }
 .agent-section-nav button svg { flex-shrink: 0; }
 .agent-section-nav button span { overflow: hidden; text-overflow: ellipsis; }
 .agent-section-nav button:hover { color: var(--text); background: var(--overlay-medium); }
 .agent-section-nav button.selected { color: var(--accent-ink); background: transparent; }
+/* 选中底画在选中格自己身上(标签按字数分宽,不再是等分的轨道 ::before);换选中时由 useSectionNavSlide 从上一格的矩形滑过来(FLIP)。 */
+.agent-section-nav button.selected::before { content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none; border-radius: inherit; background: var(--bg); box-shadow: var(--btn-shadow); }
 .agent-profile-content { min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 24px 2px; scrollbar-width: thin; }
 .agent-profile-content:focus { outline: none; }
 .agent-profile-content:focus-visible { outline: var(--focus-ring) solid var(--signal-line); outline-offset: -2px; }
@@ -205,7 +206,7 @@ div.agent-equipment-item > label { display: flex; align-items: flex-start; gap: 
 .compact .agent-portrait-badge { right: 3px; bottom: 3px; width: 18px; height: 18px; }
 .compact .agent-portrait-remove { top: -5px; right: -5px; width: 17px; height: 17px; }
 .compact .agent-section-nav { --profile-nav-gap: 2px; --profile-nav-padding: 4px; }
-.compact .agent-section-nav button { flex-direction: column; gap: 5px; font-size: var(--ui-font-caption, 11px); padding: 7px 2px; }
+.compact .agent-section-nav button { flex: 1 1 0; flex-direction: column; gap: 5px; font-size: var(--ui-font-caption, 11px); padding: 7px 2px; }
 .compact .agent-profile-content { padding-block: 18px; }
 .compact .agent-current-session { padding: 12px; }
 .agent-profile-team { padding: 12px 18px; }
@@ -327,7 +328,7 @@ div.agent-equipment-item > label { display: flex; align-items: flex-start; gap: 
 .harness-candidate-actions .profile-text-action:hover:not(:disabled) { text-decoration: underline; text-underline-offset: 3px; }
 .harness-candidates > small { display: block; margin-top: 8px; font-size: var(--ui-font-caption, 11px); line-height: 1.6; color: var(--text-muted); }
 /* 「进化」标签角标:待复盘候选数。绝对定位在按钮右上角 —— 紧凑模式下按钮是竖排(图标 / 文字),作为第三行会把整条标签栏撑高。 */
-.agent-section-nav button { position: relative; }
+.agent-section-nav button { position: relative; } /* 不隔离:选中底(z-index:-1)落在 nav 的层叠上下文里,滑过别的格时压在所有标签字下面 */
 .profile-tab-badge { position: absolute; top: 2px; right: 2px; display: inline-grid; place-items: center; min-width: 14px; height: 14px; padding: 0 3px; font-size: var(--ui-font-caption, 11px); font-style: normal; font-weight: 600; line-height: 1; color: var(--accent-ink); background: var(--overlay-medium); border-radius: var(--radius-pill, 999px); }
 .harness-history > h3 { margin: 10px 0 12px; font-size: var(--ui-font-meta, 12px); font-weight: 500; color: var(--text-muted); }
 .harness-history > ol { list-style: none; display: grid; gap: 12px; margin: 0 0 0 4px; padding: 0 0 0 14px; border-left: 1px solid var(--border); }
@@ -344,7 +345,7 @@ div.agent-equipment-item > label { display: flex; align-items: flex-start; gap: 
 @media (hover: none) { .agents-roster-more { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) {
   .profile-section-enter, .profile-model-options { animation: none; }
-  .agent-section-nav::before, .agent-section-nav button, .agent-equipment-item, .profile-segment > button, .equipment-group > summary::before, .profile-model-trigger svg, .agent-portrait-badge, .agent-portrait-remove, .agent-character-name, .agent-character-desc { transition: none; }
+  .agent-section-nav button, .agent-equipment-item, .profile-segment > button, .equipment-group > summary::before, .profile-model-trigger svg, .agent-portrait-badge, .agent-portrait-remove, .agent-character-name, .agent-character-desc { transition: none; }
 }
 
 /* The roster is a native docked panel. Detail width follows its own host, never the window. */
@@ -369,9 +370,12 @@ div.agent-equipment-item > label { display: flex; align-items: flex-start; gap: 
   .agent-character-hero { gap: 12px; padding-block: 16px; }
   .agent-portrait { width: 48px; height: 54px; }
   .agent-character-name { font-size: var(--ui-font-title); }
-  .agent-section-nav { --profile-nav-gap: 2px; --profile-nav-padding: 4px; }
-  .agent-section-nav button { flex-direction: column; gap: 5px; padding: 7px 2px; font-size: var(--ui-font-meta); }
   .agent-profile-content { padding-block: 18px; }
+}
+/* 5.16 B:标签条放不下一行全名(英文六格约 600px)就换成图标在上、字在下的等分排法,和详情栏 / 项目详情 / 手机同一套。 */
+@container agent-detail (max-width: 639px) {
+  .agent-section-nav { --profile-nav-gap: 2px; --profile-nav-padding: 4px; }
+  .agent-section-nav button { flex: 1 1 0; flex-direction: column; gap: 5px; padding: 7px 2px; font-size: var(--ui-font-meta); }
 }
 /* 三张分段卡在窄栏里(Tangu 详情约 280–300px)每张只有八十像素上下:去掉图标、收紧内距,英文「Evolution」才放得下。
    角标在这里缩成右上角的一个点,不带数字(数字在上面「成长」标签上已经有了):带数字的角标会压到「Evolution」的最后一个字母。

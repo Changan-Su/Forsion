@@ -161,7 +161,7 @@ async function main() {
     check('M1 点 Muse 行 → 聊天面换到它的私聊,没有被带去 Muse Space', entered && !/muse/.test(spaceAfterClick), JSON.stringify({ entered, spaceAfterClick }))
     let d = await desk(MUSE_ID)
     const msgCount = await win.locator(`${chat(MUSE_ID)} .t2-stream [data-message-id], ${chat(MUSE_ID)} .t2-msg`).count().catch(() => 0)
-    const isHomeCard = (x) => !x.open && x.card && !x.cardGone && x.cardMuse && x.cardTitle === 'Muse Space'
+    const isHomeCard = (x) => !x.open && x.card && !x.cardGone && x.cardMuse && x.cardTitle === 'Muse'
     check('M2 没发消息,右侧已有一张小卡,里面是 Muse Space;侧板没有自己展开',
       msgCount === 0 && isHomeCard(d), JSON.stringify({ msgCount, ...d, panelText: d.panelText.slice(0, 60) }))
     check('M2b 小卡里文件库只留文件列表(预览栏不挤进来),列表占满卡宽', !d.cardPreview && d.cardListW > d.cardW * 0.7, JSON.stringify({ cardPreview: d.cardPreview, cardListW: d.cardListW, cardW: d.cardW }))

@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { BookOpen, NotebookPen, UserRound } from 'lucide-react'
 import { useApp } from '../stores/appStore'
 import { useI18n } from '../i18n'
@@ -9,6 +9,7 @@ import type { HumanFile, HumanJump } from '../services/humanCollaboration'
 import '../components/humanMessages'
 import './agentProfile.css'
 import '../components/humanCollaboration.css'
+import { useSectionNavSlide } from './profileControls'
 
 // ponytail: 方案 ⑨ 的五个标签只做了有文件撑着的三个;日历(CALENDAR.db 搬家)和权限(「Agent 可以改」开关)等引擎那两步落地再加
 type Section = 'collab' | 'portrait' | 'memory'
@@ -30,6 +31,7 @@ export function HumanProfile({ jump }: { jump?: HumanJump }) {
   const cfg = useApp((s) => s.cfg)
   const me = useMeIdentity()
   const [section, setSection] = useState<Section>('collab')
+  const navRef = useSectionNavSlide(section)
   // 离开「协作说明」就把跳转令牌放掉:面板随标签重挂,留着它回来会再开一次编辑框 / 修改记录
   const [liveJump, setLiveJump] = useState(jump)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -42,7 +44,7 @@ export function HumanProfile({ jump }: { jump?: HumanJump }) {
       <div className="agent-portrait-slot"><span className="agent-portrait"><AgentAvatar name={me.name} url={me.avatar} fill /></span></div>
       <div className="agent-character-identity"><h2 className="agent-character-name">{me.name}</h2><p className="agent-character-desc">{t('human.me.caption')}</p></div>
     </header>
-    <nav className="agent-section-nav" style={{ '--profile-tab-count': SECTIONS.length, '--profile-tab-index': index } as CSSProperties} aria-label={t('human.me.sections')} role="tablist" onKeyDown={(e) => {
+    <nav ref={navRef} className="agent-section-nav" aria-label={t('human.me.sections')} role="tablist" onKeyDown={(e) => {
       if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return
       e.preventDefault()
       const next = e.key === 'Home' ? 0 : e.key === 'End' ? SECTIONS.length - 1 : (index + (e.key === 'ArrowRight' ? 1 : -1) + SECTIONS.length) % SECTIONS.length

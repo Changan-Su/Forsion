@@ -350,6 +350,7 @@
     "shot:walk": "node scripts/uiux-walk.shot.cjs",
     "check:agentprofile": "node scripts/agent-profile.check.cjs",
     "check:emptystates": "node scripts/empty-states.check.cjs",
+    "check:r5narrow": "node scripts/r5-names-narrow.check.cjs",
     "check:humanprofile": "node scripts/human-profile.check.cjs",
     "check:projectdetails": "node scripts/project-details.check.cjs",
     "check:creationcard": "node scripts/creation-card.check.cjs",

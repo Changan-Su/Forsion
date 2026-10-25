@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ChangeEvent, type ReactNode, type CSSProperties } from 'react'
+import { useEffect, useMemo, useState, type ChangeEvent, type ReactNode } from 'react'
 import { ArrowDown, ArrowLeft, ArrowUp, ChevronRight, ImageUp, Loader2, Plus, Search, Settings2, Smile, Trash2, Users, X } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 import { useApp } from '../stores/appStore'
@@ -6,7 +6,7 @@ import { useI18n } from '../i18n'
 import { deleteTeamAvatar, getTeam, patchSessionConfig, patchTeam, updateSession, uploadTeamAvatar } from '../services/backendService'
 import type { AgentConfig, ModelInfo, NormalAgentDef, SessionRecord, TeamDef, ThinkingLevel } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { isTeamImageAvatar, THINKING_LEVELS } from '../../../../tangu-agent/src/contracts/clientTypes'
-import { ProfileModelField, ProfileSelectField, ProfileTextEditor, approvalOptions, thinkingOptions } from './profileControls'
+import { ProfileModelField, ProfileSelectField, ProfileTextEditor, approvalOptions, thinkingOptions, useSectionNavSlide } from './profileControls'
 import { AvatarStack } from '../components/AvatarStack'
 import { ModelSelect } from '../components/ModelSelect'
 import { moveTeamMember, teamDraft, teamSessionConfig, teamSessionPatch, type MemberTuning, type TeamDraft } from './teamProfileState'
@@ -35,6 +35,7 @@ export function TeamProfile({ session, config, renderMember }: Props) {
   const [loadError, setLoadError] = useState('')
   const [retry, setRetry] = useState(0)
   const [tab, setTab] = useState<'lineup' | 'settings'>('lineup')
+  const navRef = useSectionNavSlide(tab)
   const [selected, setSelected] = useState('')
   const [opened, setOpened] = useState<string[]>([])
   const [picker, setPicker] = useState(false)
@@ -176,7 +177,7 @@ export function TeamProfile({ session, config, renderMember }: Props) {
           <span className={`agent-state${s.running ? ' working' : ''}`}><i />{t(!s.connected ? 'agentProfile.offline' : s.running ? 'agentProfile.working' : 'agentProfile.standby')}<span>· {draft.members.length} {t('teamProfile.members')}</span></span></div>
       </header>
       {(session?.project_name || config.cwd) && <p className="team-profile-location" title={config.cwd}>{session?.project_name || (config.teamSlug ? t('teamProfile.library') : config.cwd?.replace(/\\/g, '/').split('/').filter(Boolean).pop() || config.cwd)}</p>}
-      <nav className="agent-section-nav" style={{ '--profile-tab-count': 2, '--profile-tab-index': tab === 'lineup' ? 0 : 1 } as CSSProperties} aria-label={t('teamProfile.navigation')}>
+      <nav ref={navRef} className="agent-section-nav" aria-label={t('teamProfile.navigation')}>
         <button className={tab === 'lineup' ? 'selected' : ''} aria-pressed={tab === 'lineup'} onClick={() => setTab('lineup')}><Users size={14} />{t('teamProfile.lineup')}</button>
         <button className={tab === 'settings' ? 'selected' : ''} aria-pressed={tab === 'settings'} onClick={() => setTab('settings')}><Settings2 size={14} />{t('teamProfile.settings')}</button>
       </nav>

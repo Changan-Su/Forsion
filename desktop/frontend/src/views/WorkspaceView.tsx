@@ -12,6 +12,7 @@ import { amadeusAvailable, sessionsAvailable } from '../features/runtime'
 import { Fragment, useMemo, useState, useEffect, useReducer, useRef, type ReactNode } from 'react'
 import { useWorkspace, activeMainPanel, useSpaceStore, getView, useListFirst, useNativeChromeExtras, startOpenDrag, mainOpensBeside, dragGrab, landWhenMoved, releasePoint, type LandPoint } from '@lcl/engine'
 import type { ViewProps } from '@lcl/engine'
+import { tooltipProps } from '@lcl/components'
 import { ChevronDown, ChevronRight, FileText, Folder, FolderOpen, ListFilter, MoreHorizontal, Pencil, Plus, Search, X } from 'lucide-react'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
 import type { ListAction, ListDropTarget, ListItem, ListSourceContribution } from '@amadeus/plugins/types'
@@ -728,6 +729,7 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
     menuOpener.current = null
     setMenu({ x: at.x, y: at.y, items: secondary.map((action) => ({ label: action.label, danger: action.danger, run: action.run })) })
   }
+  const primaryLabelRef = useRef<HTMLSpanElement>(null)
   const fabIcon = ((): ReactNode => { const icon = resolveIcon(primary?.icon); return icon && typeof icon !== 'string' ? icon : <Plus /> })()
 
   return (
@@ -740,7 +742,10 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
       {flat && src.search && (searching || !!query) && <div className="t2sw-plug-toolbar">{searchField(true)}</div>}
       {!flat && (src.search || primary || secondary.length > 0) && <div className="t2sw-plug-toolbar">
         {src.search && searchField(false)}
-        {primary && <button type="button" className="t2sw-plug-btn" title={primary.label} onClick={() => primary.run()}>{primary.label}</button>}
+        {/* 工具栏窄于 260px 只留图标(5.17),提示照应用里的 .lcl-tip 给全名;字露着时不弹。 */}
+        {primary && <button type="button" className="t2sw-plug-btn" aria-label={primary.label} onClick={() => primary.run()}
+          {...tooltipProps(() => primaryLabelRef.current?.offsetParent ? null : [primary.label], { side: 'bottom' })}>
+          <span className="t2sw-plug-btn-ic" aria-hidden="true">{fabIcon}</span><span ref={primaryLabelRef} className="t2sw-plug-btn-label">{primary.label}</span></button>}
         {!!secondary.length && <CapabilityMenu label={t('wsview.actions', { source: src.title })} className="t2sw-plug-overflow"
           items={secondary.map((action) => ({ id: action.id, label: action.label, danger: action.danger, onSelect: action.run }))}><MoreHorizontal size={15} /></CapabilityMenu>}
       </div>}

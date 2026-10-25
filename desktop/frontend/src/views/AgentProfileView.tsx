@@ -1,6 +1,6 @@
 import { agentDescription, isStockAgent } from '../components/builtinAgentDescriptions'
-import { useEffect, useId, useMemo, useRef, useState, type ChangeEvent, type CSSProperties } from 'react'
-import { BookOpen, Bot, CalendarClock, Check, ChevronRight, ExternalLink, ArrowUp, ArrowDown, ImageUp, Loader2, MoreHorizontal, Plus, Plug, ScrollText, Search, Settings2, Sparkles, Sprout, Star, Trash2, X } from 'lucide-react'
+import { useEffect, useId, useMemo, useRef, useState, type ChangeEvent } from 'react'
+import { BookOpen, Bot, CalendarClock, Check, ChevronDown, ChevronRight, ExternalLink, ArrowUp, ArrowDown, ImageUp, Loader2, MoreHorizontal, Plus, Plug, ScrollText, Search, Settings2, Sparkles, Sprout, Star, Trash2, X } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 import { activeMainPanel, startOpenDrag, useListFirst, useWorkspace } from '@lcl/engine'
 import { ListFab } from '../components/phoneList'
@@ -18,7 +18,7 @@ import { humanRewritable, type HumanJump } from '../services/humanCollaboration'
 import { AgentHarnessPanel } from '../components/AgentHarnessPanel'
 import { AgentSchedulePanel } from '../components/AgentSchedulePanel'
 import type { AgentConfig, NormalAgentDef, SessionRecord, SkillInfo, ToolsResponse } from '../../../../tangu-agent/src/contracts/clientTypes'
-import { ProfileGroup, ProfileModelField, ProfileSelectField, ProfileTextEditor, approvalOptions, thinkingOptions } from './profileControls'
+import { ProfileGroup, ProfileModelField, ProfileSelectField, ProfileTextEditor, approvalOptions, thinkingOptions, useSectionNavSlide } from './profileControls'
 import { TeamProfile } from './TeamProfile'
 import { ProjectProfile, useProjectSubject, useProjectWorkspace } from './ProjectProfile'
 import { AgentSkillsPanel, moveAgentSkillsDraft } from './AgentSkillsPanel'
@@ -254,6 +254,7 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
   const rewriteHuman = rewriteSid && humanRewritable(s.rewriteConfig) && (s.rewriteConfig!.agentSlug || s.rewriteConfig!.soloAgentSlug || s.defaultSlug) === agent.slug
     ? () => { void useApp.getState().send(t('human.rewrite.agentPrompt'), [], undefined, undefined, undefined, rewriteSid) } : null
   const [section, setSection] = useState<Section>(humanJump ? 'human' : evolutionJumpAt ? 'growth' : 'config')
+  const navRef = useSectionNavSlide(section)
   const [growth, setGrowth] = useState<Growth>(evolutionJumpAt ? 'evolution' : 'memory')
   const [visitedMemory, setVisitedMemory] = useState(false)
   const [visitedLog, setVisitedLog] = useState(false)
@@ -460,20 +461,28 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
     const row = (entry: Entry) => <EquipmentRow key={entry.id} name={entry.name} description={entry.description} checked={on(entry)} tinted
       chip={entry.origin === 'agent' ? t('settings.agents.selfAuthored') : entry.shared ? t('settings.agents.sharedSkill') : undefined}
       onChange={(checked) => { const ids = selected || entries.map((x) => x.id); patch({ [key]: checked ? [...new Set([...ids, entry.id])] : ids.filter((x) => x !== entry.id) }) }} />
+    // 与技能标签同一颗「自动 ⌄」+ 同一行说明(5.16);空列表不给批量按钮。关闭 = 空名单。
+    const mode = !selected ? 'auto' : selected.length ? 'selected' : 'off'
     return <>
       <div className="profile-list-toolbar">
         <div className="profile-list-controls">
           <label className="profile-search"><Search size={14} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('agentProfile.searchEquipment')} aria-label={t('agentProfile.searchEquipment')} /></label>
-          <select aria-label={t('agentProfile.loadoutMode')} title={t('agentProfile.loadoutHint')} disabled={loading || !!loadError} value={selected ? 'selected' : 'all'} onChange={(e) => patch({ [key]: e.target.value === 'all' ? undefined : entries.map((x) => x.id) })}><option value="all">{t('agentProfile.all')}</option><option value="selected">{t('agentProfile.selected')}</option></select>
+          {/* 没加载完 / 加载失败时 entries 是空的:这时选「自选」会把名单落成空 = 关闭,所以和原来的下拉一样先禁用。 */}
+          <CapabilityMenu label={t('agentProfile.mcpPolicy')} selection disabled={loading || !!loadError} items={([
+            ['auto', 'agentProfile.skillAuto'], ['selected', 'agentProfile.skillSelected'], ['off', 'agentProfile.skillOff'],
+          ] as const).map(([id, k]) => ({ id, label: t(k), selected: mode === id, onSelect: () => patch({ [key]: id === 'auto' ? undefined : id === 'off' ? [] : entries.map((x) => x.id) }) }))}>
+            <span>{t(mode === 'auto' ? 'agentProfile.skillAuto' : mode === 'selected' ? 'agentProfile.skillSelected' : 'agentProfile.skillOff')}</span><ChevronDown size={13} />
+          </CapabilityMenu>
         </div>
-        <div className="profile-list-summary">
-          <span>{selected ? t('agentProfile.selectedCount', { count: selected.length, total: entries.length }) : t('agentProfile.allSelectionHint')}</span>
+        <p className="agent-skills-policy-hint">{t(`agentProfile.mcpPolicy.${mode}`)}</p>
+        {entries.length > 0 && <div className="profile-list-summary">
+          <span>{selected ? t('agentProfile.selectedCount', { count: selected.length, total: entries.length }) : null}</span>
           <span className="profile-list-actions">
             {selected && <button className="profile-text-action" aria-pressed={enabledOnly} onClick={() => setEnabledOnly(!enabledOnly)}>{t('agentProfile.enabledOnly')}</button>}
             <button className="profile-text-action" disabled={loading || !!loadError} onClick={() => patch({ [key]: entries.map((x) => x.id) })}>{t('agentProfile.selectAll')}</button>
             <button className="profile-text-action" disabled={loading || !!loadError} onClick={() => patch({ [key]: [] })}>{t('agentProfile.clearAll')}</button>
           </span>
-        </div>
+        </div>}
       </div>
       {loading && <p className="agent-profile-muted" role="status"><Loader2 size={14} className="spin" /> {t('agentProfile.loading')}</p>}
       {loadError && <div className="agent-profile-error" role="alert">{loadError}<button onClick={() => setRetry((v) => v + 1)}>{t('agentProfile.retry')}</button></div>}
@@ -482,7 +491,7 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
         <summary><span>{t('agentProfile.builtinSkills')}</span><small>{t('agentProfile.selectedCount', { count: stock.filter(on).length, total: stock.length })}</small></summary>
         <div className="agent-equipment-list">{stock.map(row)}</div>
       </details>}
-      {!loading && !loadError && !filtered.length && <p className="profile-empty">{t(entries.length ? 'agentProfile.noResults' : 'agentProfile.none')}</p>}
+      {!loading && !loadError && !filtered.length && <p className="agent-profile-muted">{t(entries.length ? 'agentProfile.noResults' : 'agentProfile.noMcp')}</p>}
       <button className="agent-profile-link" onClick={() => useApp.getState().openSettings(kind === 'skills' ? 'skills' : 'mcp')}>{t(kind === 'skills' ? 'agentProfile.manageSkills' : 'agentProfile.manageMcp')}<ExternalLink size={13} /></button>
     </>
   }
@@ -531,7 +540,7 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
         <span className={`agent-state${s.running ? ' working' : ''}`}><i />{t(!s.connected ? 'agentProfile.offline' : s.running ? 'agentProfile.working' : 'agentProfile.standby')}</span></div>
       {compact && <button className="profile-expand" title={t('agentProfile.full')} aria-label={t('agentProfile.full')} onClick={() => openAgentProfile(agent.slug)}><ExternalLink size={15} /></button>}
     </header>
-    <nav className="agent-section-nav" style={{ '--profile-tab-count': SECTIONS.length, '--profile-tab-index': SECTIONS.findIndex((item) => item.id === section) } as CSSProperties} aria-label={t('agentProfile.currentSection')} role="tablist" onKeyDown={(e) => {
+    <nav ref={navRef} className="agent-section-nav" aria-label={t('agentProfile.currentSection')} role="tablist" onKeyDown={(e) => {
       if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return
       e.preventDefault()
       const index = SECTIONS.findIndex((x) => x.id === section)

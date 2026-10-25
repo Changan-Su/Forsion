@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { Check, ChevronDown, Search } from 'lucide-react'
 import { useI18n } from '../i18n'
 import { Markdown } from '../components/Markdown'
@@ -8,8 +8,28 @@ import { DEFAULT_APPROVAL, DEFAULT_THINKING } from '../../../../tangu-agent/src/
 import { thinkingLabel } from '../components/thinkingLabel'
 import { APPROVAL_MODE_ORDER, MODE_KEY } from '../approvalReason'
 import { isCoarsePointer } from '../touch'
+import { zoomOf } from '@lcl/engine'
 import './agentProfileMessages'
 import './profileControls.css'
+
+/** 标签条(`.agent-section-nav`)选中底的滑动:选中底画在选中格自己的 ::before 上(标签按字数分宽),
+ *  换选中时从上一格的矩形滑过来(FLIP,WAAPI 动伪元素)。第一次渲染、上一格已不在、减弱动效时直接切。返回值挂到 nav 的 ref 上。 */
+export function useSectionNavSlide<T extends HTMLElement = HTMLElement>(selected: string) {
+  const ref = useRef<T>(null)
+  const prev = useRef<HTMLElement | null>(null)
+  useLayoutEffect(() => {
+    const cur = ref.current?.querySelector<HTMLElement>(':scope > .selected') ?? null
+    const old = prev.current
+    prev.current = cur
+    if (!cur || !old || old === cur || !old.isConnected || matchMedia('(prefers-reduced-motion: reduce)').matches) return
+    // 矩形是视口 px(含界面缩放),动画写的是元素自己的 CSS px:按累计 zoom 换算,否则 120% 下会冲过头再一跳
+    const z = zoomOf(cur), from = old.getBoundingClientRect(), to = cur.getBoundingClientRect()
+    if (!to.width) return
+    cur.animate([{ transform: `translate(${(from.left - to.left) / z}px, ${(from.top - to.top) / z}px)`, width: `${from.width / z}px`, height: `${from.height / z}px` },
+      { transform: 'none', width: `${to.width / z}px`, height: `${to.height / z}px` }], { duration: 200, easing: 'cubic-bezier(.2,.8,.2,1)', pseudoElement: '::before' })
+  }, [selected])
+  return ref
+}
 
 /** 选项列表的方向键 / Home / End(模型与普通下拉共用一份;落在搜索框里时 Home / End 留给输入框)。 */
 function moveOptionFocus(e: KeyboardEvent<HTMLDivElement>): void {

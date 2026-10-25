@@ -59,6 +59,7 @@ let harnessReads = 0
 //  - 团队主会话 Atlas team 的活动流**从第一次轮询起就带**一条提名 → 那是历史,不许弹(负对照;弹了会盖住右栏,后面的点击全被拦);
 //  - Research notes 的活动流只在 nominate 置真后才出现提名 → 必须弹一张卡;点「复盘」就地往该会话发 /refine;同 id 不弹第二张。
 const LONG_DESC = 'Use when the task needs this capability. '.repeat(8).trim()
+let mcpServers = [{ server: 'documents', status: 'connected', transport: 'stdio', tools: [{ name: 'read', description: 'Read documents' }] }]
 const skillCatalog = [
   { key: 'agent:research:research', id: 'local:research', slug: 'research', name: 'Research notebook', description: 'Gather and cite evidence', scope: 'agent', owner: 'research', provenance: 'agent', readOnly: false, path: path.join(home, 'research', 'skills', 'research'), content: 'Gather evidence first.' },
   { key: 'agent:research:writing', id: 'local:writing', slug: 'writing', name: 'Writing', description: 'Write clear reports', scope: 'agent', owner: 'research', provenance: 'agent', readOnly: false, path: path.join(home, 'research', 'skills', 'writing'), content: 'Write clearly.' },
@@ -190,7 +191,7 @@ async function run() {
     if (p === '/agent/special/muse/triggers' && method === 'GET') return { triggers: [
       { id: 'tr-mine', desc: 'Weekly source sweep', cond: { type: 'daily_at', time: '08:30' }, cooldownHours: 0, lastFiredAt: null, enabled: true, createdAt: '2026-09-01', actions: [{ type: 'agent_run', agentSlug: 'research', prompt: 'sweep' }], nextRunAt: null },
       { id: 'tr-other', desc: 'Someone else rule', cond: { type: 'daily_at', time: '07:00' }, cooldownHours: 0, lastFiredAt: null, enabled: true, createdAt: '2026-09-01', actions: [{ type: 'agent_run', agentSlug: 'xyra', prompt: 'x' }], nextRunAt: null }] }
-    if (p === '/agent/tools') return { builtins: [], custom: [], mcp: [{ server: 'documents', status: 'connected', transport: 'stdio', tools: [{ name: 'read', description: 'Read documents' }] }] }
+    if (p === '/agent/tools') return { builtins: [], custom: [], mcp: mcpServers }
     if (p === '/agent/agents/research/avatar' && method === 'POST') { avatarWrites++; agents.find((a) => a.slug === 'research').avatar = 'avatar.png'; return { ok: true, avatar: 'avatar.png' } }
     if (p === '/agent/agents/research/avatar' && method === 'DELETE') { avatarDeletes++; delete agents.find((a) => a.slug === 'research').avatar; return { ok: true } }
     if (p.startsWith('/agent/agents/') && method === 'PATCH') { saved = await body(); const slug = p.split('/')[3]; const i = agents.findIndex((a) => a.slug === slug); agents[i] = { ...agents[i], ...saved }; return { agent: agents[i] } }
@@ -660,7 +661,8 @@ async function run() {
     await win.emulateMedia({ reducedMotion: 'reduce' })
     await compact.getByRole('tab', { name: '配置', exact: true }).click()
     assert.equal(await compact.locator('.profile-section-enter').evaluate((el) => getComputedStyle(el).animationName), 'none')
-    assert.equal(await compact.locator('.agent-section-nav').evaluate((el) => getComputedStyle(el, '::before').transitionProperty), 'none')
+    // 选中底在选中格自己的 ::before 上,换格时由 FLIP 滑过来;减弱动效下不起这段动画
+    assert.equal(await compact.locator('.agent-section-nav button.selected').evaluate((el) => el.getAnimations({ subtree: true }).length), 0)
     await win.emulateMedia({ reducedMotion: 'no-preference' })
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1500, 1000))
 
@@ -826,7 +828,7 @@ async function run() {
     await win.reload()
     await win.locator('[data-agents-space]').waitFor()
     await win.locator('.agents-roster-item').filter({ hasText: 'Research' }).click()
-    await profile.getByRole('tab', { name: 'Settings', exact: true }).click()
+    await profile.getByRole('tab', { name: 'Configuration', exact: true }).click()
     await profile.getByRole('textbox', { name: 'Instructions', exact: true }).waitFor()
     assert.equal(await profile.evaluate((el) => el.scrollWidth > el.clientWidth + 1), false)
     await win.waitForTimeout(220)
@@ -838,9 +840,35 @@ async function run() {
       await win.screenshot({ path: path.join(home, shot) })
       assert.equal(await profile.evaluate((el) => el.scrollWidth > el.clientWidth + 1), false, `${tab} must not overflow in English`)
     }
+    // 5.16:标签按字数分宽;标签条窄于 640 换成图标在上、字在下的等分排法(B)。两种排法下英文六个全名都不许截。
+    const navShape = () => profile.locator('.agent-section-nav').evaluate((nav) => ({ width: nav.getBoundingClientRect().width, tabs: Array.from(nav.querySelectorAll('button')).map((b) => { const t = b.querySelector('span'); return { dir: getComputedStyle(b).flexDirection, cut: t.scrollWidth > t.clientWidth + 1, w: Math.round(b.getBoundingClientRect().width), text: t.textContent } }) }))
+    const narrowNav = await navShape()
+    assert.ok(narrowNav.width < 640 && narrowNav.tabs.every((b) => b.dir === 'column' && !b.cut), `Narrow tab bar stacks icon over label with full names: ${JSON.stringify(narrowNav)}`)
+    assert.equal(narrowNav.tabs[0].text, 'Configuration')
+    // MCP 标签:和技能标签同一颗「自动 ⌄」+ 说明;空列表不给批量按钮,左对齐一行空态。
+    await profile.getByRole('tab', { name: 'MCP', exact: true }).click()
+    await profile.locator('.profile-list-controls .capability-menu-trigger').waitFor()
+    assert.equal(await profile.locator('.profile-list-controls select').count(), 0, 'MCP tab uses the same trigger as the skills tab, not a native select')
+    assert.match(await profile.locator('.profile-list-toolbar .agent-skills-policy-hint').innerText(), /MCP servers|servers only/)
+    mcpServers = []
+    await win.locator('.agents-roster-item').filter({ hasText: 'Xyra' }).click()
+    await win.locator('.agents-roster-item').filter({ hasText: 'Research' }).click()
+    await profile.getByRole('tab', { name: 'MCP', exact: true }).click()
+    const emptyMcp = profile.locator('.agent-profile-muted').filter({ hasText: 'No MCP servers yet.' })
+    await emptyMcp.waitFor()
+    assert.equal(await profile.locator('.profile-list-summary').count(), 0, 'No batch buttons on an empty MCP list')
+    assert.match(await emptyMcp.evaluate((el) => getComputedStyle(el).textAlign), /^(start|left)$/)
+    await win.waitForTimeout(260)
+    await win.screenshot({ path: path.join(home, 'agents-english-mcp-empty.png') })
+    mcpServers = [{ server: 'documents', status: 'connected', transport: 'stdio', tools: [{ name: 'read', description: 'Read documents' }] }]
     // 面板模式 × 英文:分段卡的说明最容易在 300px 的右栏里被截成「Methods it has lea…」。回到会话 Space 看右栏详情。
     const tanguButton = win.locator('[data-ribbon-id="space:tangu"], [data-id="space:tangu"]').first()
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1500, 1000)) // 右栏回到常见宽度(上一步把窗口缩到了 820)
+    await win.waitForTimeout(250)
+    const wideNav = await navShape()
+    assert.ok(wideNav.width >= 640 && wideNav.tabs.every((b) => b.dir === 'row' && !b.cut), `Wide tab bar is one row, sized by label, nothing truncated: ${JSON.stringify(wideNav)}`)
+    assert.ok(wideNav.tabs.find((b) => b.text === 'Collaboration').w > wideNav.tabs.find((b) => b.text === 'MCP').w, 'Tabs are sized by their labels, not split evenly')
+    await win.screenshot({ path: path.join(home, 'agents-english-wide-tabs.png') })
     await tanguButton.click()
     // 开场(英文界面):新对话的输入卡上方一行;点「View」算看过,这一行就没了;本机的「上次看到哪」被推到现在。
     const opening = win.locator('[data-self-opening]')
