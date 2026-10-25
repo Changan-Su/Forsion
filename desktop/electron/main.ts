@@ -444,6 +444,8 @@ interface TanguStoredConfig {
   lastChatThinkingLevel: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | ''
   /** 上次在 work 会话里停在 Ultra 档(与 lastThinkingLevel='max' 同写;纯渲染层 UI 记忆)。 */
   lastUltra: boolean
+  /** 上次的 Fast 开关(新会话照它起步;纯渲染层 UI 记忆)。 */
+  lastFast: boolean
   cloudUrl: string // managed:传给 tangu-server 的 Forsion 云端
   sandbox: 'auto' | 'docker' | 'none'
   hostSandbox?: HostSandboxConfig
@@ -544,6 +546,7 @@ const DEFAULT_CONFIG: TanguStoredConfig = {
   lastThinkingLevel: '',
   lastChatThinkingLevel: '',
   lastUltra: false,
+  lastFast: false,
   cloudUrl: '',
   sandbox: 'auto',
   hostSandbox: { mode: 'off', network: 'deny' },
@@ -617,7 +620,7 @@ const SHELL_KEYS: Array<keyof TanguStoredConfig> = [
   'agentDeskEnabled', // 桌面专属(Agent Desk 演出面板开关,纯渲染层 UI)
   'summaryOpenIn', // 桌面专属(任务概览的文件打开去处,纯渲染层 UI)
   'disabledBundles', // 桌面专属(内置包主进程半身由 main 开机装载)
-  'lastApprovalMode', 'lastThinkingLevel', 'lastChatThinkingLevel', 'lastUltra', // 桌面专属(新会话起步档位的记忆,纯渲染层 UI;chat 单独一槽)
+  'lastApprovalMode', 'lastThinkingLevel', 'lastChatThinkingLevel', 'lastUltra', 'lastFast', // 桌面专属(新会话起步档位的记忆,纯渲染层 UI;chat 单独一槽)
 ]
 // 文件名是与引擎的契约(电脑历史第二道闸经 FORSION_DESKTOP_CONFIG 读它,见 shared/computerHistory.ts),改名三处同步
 const configPath = (): string => join(app.getPath('userData'), COMPUTER_HISTORY_DESKTOP_CONFIG_FILE)

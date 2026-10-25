@@ -66,6 +66,11 @@ describe('openaiToResponsesBody', () => {
     expect(plain.text).toBeUndefined();
   });
 
+  it('Fast 档:service_tier 原样上顶层(Codex CLI 同款),没写就不出现', () => {
+    expect(openaiToResponsesBody({ model: 'm', messages: [], service_tier: 'priority' }).service_tier).toBe('priority');
+    expect('service_tier' in openaiToResponsesBody({ model: 'm', messages: [] })).toBe(false);
+  });
+
   it('reasoning 延续性:assistant 带 providerItems → 原样回灌,不再由文本重建', () => {
     const items = [
       { type: 'reasoning', id: 'rs_1', summary: [], encrypted_content: 'ENC' },

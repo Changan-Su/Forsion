@@ -14,8 +14,8 @@ export const DEFAULT_THINKING = 'medium' as const
  *  只吐 AgentConfig 的键,好让调用方直接展开进 init;模型不在此(走 cfg.modelId 老路)。
  *  **云沙箱会话不带审批档**:引擎那边 approvalMode 缺席才等于 full-auto,写死 auto-edit 会让
  *  云会话的 MCP 调用开始逐个弹审批(gateToolCall 对 mcp__ 工具非 host 也过闸)。 */
-export function stickyDefaults(dc: StoredDesktopConfig | null, host: boolean, preset?: AgentConfig['preset']): Pick<AgentConfig, 'approvalMode' | 'thinkingLevel' | 'ultra'> {
-  const out: Pick<AgentConfig, 'approvalMode' | 'thinkingLevel' | 'ultra'> = {}
+export function stickyDefaults(dc: StoredDesktopConfig | null, host: boolean, preset?: AgentConfig['preset']): Pick<AgentConfig, 'approvalMode' | 'thinkingLevel' | 'ultra' | 'fast'> {
+  const out: Pick<AgentConfig, 'approvalMode' | 'thinkingLevel' | 'ultra' | 'fast'> = {}
   if (host) out.approvalMode = dc?.lastApprovalMode || DEFAULT_APPROVAL
   // 思考档按 preset **分槽**(D36):chat 只读 chat 槽、缺省 DEFAULT_THINKING(dc 为 null 的 web/mobile 同);work 沿用 lastThinkingLevel,
   // 没记过就不指定 —— 交给 Agent 自己的档位,再回落引擎的会话缺省(都是中)。
@@ -23,6 +23,8 @@ export function stickyDefaults(dc: StoredDesktopConfig | null, host: boolean, pr
   else if (dc?.lastThinkingLevel) out.thinkingLevel = dc.lastThinkingLevel
   // Ultra 只延续到本机 work 会话(delegate 只在本机引擎有;云端 / chat 会话带上它药丸也显示不出来),且只跟 max 同在。
   if (host && preset !== 'chat' && dc?.lastUltra && out.thinkingLevel === 'max') out.ultra = true
+  // Fast 不分槽:它是「这台机器上我要快」,chat / work 都一样;没有 Fast 档的模型由引擎不发。
+  if (dc?.lastFast) out.fast = true
   return out
 }
 

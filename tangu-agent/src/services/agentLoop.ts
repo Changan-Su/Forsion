@@ -2889,6 +2889,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         toolChoice: lastIter ? undefined : 'auto',
         attachments: [],
         thinkingLevel,
+        // Fast 档只给主循环:压缩 / Historian / 子代理等后台调用不跟(多数模型的 Fast 额度消耗更快)。
+        fast: agentConfig.fast === true,
         stream: true,
         cacheKey: sessionId, // OpenAI prompt_cache_key:同会话粘同机,提升自动前缀缓存命中(P2)
         // B4 两个实验闸的身份载体(缺省档两者都不读它们,行为零变化):

@@ -295,6 +295,9 @@ export interface AgentConfig {
   /** Ultra 档(对标 Codex Ultra):思考恒 max + 主动把可并行的活拆给 delegate 子代理。会话键,与 thinkingLevel 分开存 ——
    *  塞进 thinkingLevel 的话,读回时会被引擎的 normalizeThinkingLevel 归成 max,开关静默消失。只有本机非 chat 会话给入口。 */
   ultra?: boolean
+  /** Fast 档(对标 Codex /fast):请求带 service_tier=priority,换更快的出字速度、多数模型额度消耗更快。会话键,与思考档无关。
+   *  引擎只在模型目录声明了这一档(ModelInfo.fastTier)时上 wire,其余模型开着也不发;只作用于主循环,后台调用不跟。 */
+  fast?: boolean
   enabledSkillIds?: string[]
   /** 本条消息经 /skill 显式点选的技能 id(per-message,加性:并入可用集 + 强制使用;不持久化、不收窄目录)。 */
   requestedSkillIds?: string[]
@@ -443,6 +446,9 @@ export interface ModelInfo {
   supportsVision?: boolean
   /** 该模型真正支持的思考档(引擎能力表下发;仅 llm)。思考菜单据此把不支持的档标灰。缺省=不知道,全可选。 */
   thinkingLevels?: string[]
+  /** 模型目录给的 Fast 档说明原文(Codex `/models` 的 service_tiers,如「1.5x speed」「2x speed, increased usage」)。
+   *  缺席 = 这个模型没有 Fast 档,界面不露开关。 */
+  fastTier?: string
 }
 
 export interface ModelsResponse {
@@ -980,6 +986,8 @@ export interface StoredDesktopConfig extends TanguDesktopConfig {
   lastChatThinkingLevel?: ThinkingLevel
   /** 上次在 work 会话里停在 Ultra 档(与 lastThinkingLevel='max' 同写;chat 槽没有 Ultra)。 */
   lastUltra?: boolean
+  /** 上次的 Fast 开关(新会话照它起步;模型没有 Fast 档时引擎不发,药丸也不显示)。 */
+  lastFast?: boolean
   backendState?: BackendStatusInfo
   /** 主进程附带的用户主目录(本机模式 cwd 兜底)。 */
   homeDir?: string

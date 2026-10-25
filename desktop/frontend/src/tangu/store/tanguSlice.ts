@@ -1001,6 +1001,8 @@ export interface TanguState {
   /** remember=false:本次切换是「跟随 agent 预设」而非用户主动挑,不动新会话的起步默认。 */
   setSessionModel(modelId: string, sessionId?: string | null, remember?: boolean): void
   setSessionThinking(level: NonNullable<AgentConfig['thinkingLevel']>, sessionId?: string | null, remember?: boolean, ultra?: boolean): void
+  /** Fast 档开关(对标 Codex /fast):写会话键 fast,并记成新会话的起步值。 */
+  setSessionFast(fast: boolean, sessionId?: string | null): void
   /** 本机某模型的上下文窗口覆盖(tokens;null = 交还自动识别,即缺省上限 272k)。模型菜单「上下文上限」写这里,与设置页
    *  输入框是同一份 modelOverrides;只在本机引擎可用(云端 worker 404)。写完重拉模型列表并作废该模型的 context_info,
    *  进度环当场换分母。失败只 toast。 */
@@ -3269,6 +3271,14 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     if (!sid) { set((s) => ({ newChatCfg: { ...s.newChatCfg, thinkingLevel: level, ...(nextUltra !== undefined ? { ultra: nextUltra } : {}) } })); return }
     // 已有会话:关 = 删键(PATCH 里 undefined 上线为 null)。
     get().patchSessionConfig({ thinkingLevel: level, ...(nextUltra !== undefined ? { ultra: nextUltra || undefined } : {}) }, sid)
+  },
+
+  setSessionFast: (fast, targetSessionId) => {
+    const sid = targetSessionId === undefined ? get().activeId : targetSessionId
+    rememberDefaults({ lastFast: fast })
+    // 草稿里显式记 false(同 Ultra):建会话时 sticky 只补缺席的键,删掉的话上次的 Fast 会被补回来。
+    if (!sid) { set((s) => ({ newChatCfg: { ...s.newChatCfg, fast } })); return }
+    get().patchSessionConfig({ fast: fast || undefined }, sid)
   },
 
   setModelContextWindow: async (modelId, tokens) => {

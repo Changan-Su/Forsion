@@ -13,7 +13,7 @@ import { freshOAuthCred } from '../../llm/providerOAuth.js';
 import { isAuthExpiredLlmError } from '../../llm/retry.js';
 import { LlmError } from '../../core/types.js';
 import { loadLocalWebSearchConfig, hasLocalSearchProvider, runLocalSearch } from './localSearch.js';
-import { buildOpenAiCompatPayload, tuneOpenAiDirectPayload, streamOpenAiCompat, DIRECT_MARK, PROTOCOL_MARK } from '../../llm/openaiCompat.js';
+import { buildOpenAiCompatPayload, tuneOpenAiDirectPayload, streamOpenAiCompat, DIRECT_MARK, PROTOCOL_MARK, ACCOUNT_MARK } from '../../llm/openaiCompat.js';
 import { streamAnthropicMessages } from '../../llm/anthropicMessages.js';
 import { streamOpenAiResponses } from '../../llm/openaiResponses.js';
 import WebSocket from 'ws';
@@ -241,7 +241,7 @@ export function createMultiBrain(httpBrain: CloudBrainServices, registry: Provid
       ...httpBrain.models,
       // 直连 provider 目录(模型选择器/Providers 页用;剥掉 apiKey,baseUrl 仅供 UI 展示)。
       listDirectProviders: () =>
-        registry.list().map((p) => ({ providerId: p.providerId, baseUrl: p.baseUrl, modelIds: p.modelIds, imageModelIds: p.imageModelIds, ttsModelIds: p.ttsModelIds, noVisionModelIds: p.noVisionModelIds })),
+        registry.list().map((p) => ({ providerId: p.providerId, baseUrl: p.baseUrl, modelIds: p.modelIds, imageModelIds: p.imageModelIds, ttsModelIds: p.ttsModelIds, noVisionModelIds: p.noVisionModelIds, ...(p.fastTiers ? { fastTiers: p.fastTiers } : {}) })),
       hasDirectModel: (modelId: string) => registry.has(modelId),
     },
     images: {
@@ -325,11 +325,17 @@ export function createMultiBrain(httpBrain: CloudBrainServices, registry: Provid
             provider: (opts.model as any).provider,
             apiModelId: resolved?.apiModelId,
           });
+          // Fast 档:只在 Codex 订阅(带 account 标记、走 Responses)且目录给这个模型列了 Fast 时发 —— 与 Codex CLI /fast 同一个 wire
+          // (顶层 service_tier:"priority")。BYOK 官方 API / 别的网关不发:没核实过它们认哪个值,未知端点不发未知字段。
+          if (opts.fast && payload[ACCOUNT_MARK] && payload[PROTOCOL_MARK] === 'openai-responses') {
+            const provider = registry.list().find((p) => p.providerId === (opts.model as any).provider);
+            if (resolved?.apiModelId && provider?.fastTiers?.[resolved.apiModelId]) payload.service_tier = 'priority';
+          }
           // 仪器:TANGU_LLM_DEBUG=1 时记下这次调用要的档位、夹紧后的档位和实际写进请求的思考字段(发出后再补用量与耗时)。
           // 不传 thinkingLevel = 关思考且不报错,后台调用质量差时先看这一行(docs/direct-model-calls.md)。
           if (process.env.TANGU_LLM_DEBUG === '1') {
             const sys = (opts.messages as any[]).find((m) => m?.role === 'system')?.content;
-            llmDebug.set(payload, `model=${resolved?.apiModelId || payload.model} tools=${opts.tools?.length || 0} asked=${opts.thinkingLevel ?? '(unset)'} effective=${effective} wire=${JSON.stringify({ reasoning_effort: payload.reasoning_effort, thinking: payload.thinking, reasoning: payload.reasoning, enable_thinking: payload.enable_thinking })} maxTokens=${opts.maxTokens ?? '(unset)'} system=${JSON.stringify(String(typeof sys === 'string' ? sys : '').slice(0, 48))}`);
+            llmDebug.set(payload, `model=${resolved?.apiModelId || payload.model} tools=${opts.tools?.length || 0} asked=${opts.thinkingLevel ?? '(unset)'} effective=${effective} wire=${JSON.stringify({ reasoning_effort: payload.reasoning_effort, thinking: payload.thinking, reasoning: payload.reasoning, enable_thinking: payload.enable_thinking, service_tier: payload.service_tier })} maxTokens=${opts.maxTokens ?? '(unset)'} system=${JSON.stringify(String(typeof sys === 'string' ? sys : '').slice(0, 48))}`);
           }
           return payload;
         }

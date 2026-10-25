@@ -27,6 +27,8 @@ export interface DirectProvider {
   noVisionModelIds?: string[];
   protocol?: DirectProviderProtocol; // 缺省 'openai';订阅登录据此切到原生端点
   accountId?: string; // Codex 订阅:chatgpt-account-id 头取值
+  /** Codex 订阅:模型 → Fast 档说明(来自 /models 目录,见 fetchProviderCatalog)。不在表里的模型开了 Fast 也不发 service_tier。 */
+  fastTiers?: Record<string, string>;
   /** 由订阅登录(provider-auth.json)派生:apiKey 是会过期的 access_token,调用前要续期(multiBrain)。显式配置的同名 provider 不带它。 */
   oauth?: boolean;
 }

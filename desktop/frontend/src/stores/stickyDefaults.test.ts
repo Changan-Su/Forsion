@@ -39,6 +39,14 @@ describe('stickyDefaults', () => {
     expect(stickyDefaults(cfg({ lastThinkingLevel: 'high', lastUltra: true }), true).ultra).toBeUndefined()
   })
 
+  it('Fast 记住了就带上(chat / work、本机 / 云端都一样);没记过不带键', () => {
+    for (const [host, preset] of [[true, undefined], [false, undefined], [true, 'chat']] as const) {
+      expect(stickyDefaults(cfg({ lastFast: true }), host, preset).fast).toBe(true)
+    }
+    expect('fast' in stickyDefaults(cfg({ lastFast: false }), true)).toBe(false)
+    expect('fast' in stickyDefaults(null, true)).toBe(false)
+  })
+
   it('建会话三层次序下 Ultra 只跟 max 同在:项目默认 / 草稿显式改过档就不带上次的 Ultra', () => {
     const sticky = { thinkingLevel: 'max' as const, ultra: true }
     expect(newSessionConfig(sticky, {}).ultra).toBe(true)

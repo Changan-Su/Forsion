@@ -973,6 +973,9 @@ if (new URLSearchParams(location.search).has('dock')) {
     // ?running 起步就在跑;右下角「运行」按钮来回切,看流星渐快 / 渐慢
     const [running, setRunning] = useState(modelPillParams.has('running'))
     const [defaults, setDefaults] = useState({ backgroundModelId: '', imageModelId: '', visionModelId: '' })
+    // ?fast[=<目录说明>] 露出 Fast 行(缺省扮「2x speed, increased usage」那一类),?fast&faston 起步就开着
+    const [fast, setFast] = useState(modelPillParams.has('faston'))
+    const fastProps = modelPillParams.has('fast') ? { fast, fastTier: modelPillParams.get('fast') || '2x speed, increased usage', onFastChange: setFast } : {}
     // 「上下文上限」行:GLM-4.7 扮 1M 模型(缺省封在 272k);选「最大」= 本机覆盖成 1M(与真 store 同形)
     const [ctxOverride, setCtxOverride] = useState<number | null>(new URLSearchParams(location.search).has('ctxmax') ? 1_000_000 : null)
     const modelsResponse = {
@@ -1002,6 +1005,7 @@ if (new URLSearchParams(location.search).has('dock')) {
             defaultModelIds={defaults}
             onDefaultModelChange={(slot, modelId) => setDefaults((d) => ({ ...d, [slot]: modelId }))}
             onContextWindowChange={(_id, tokens) => setCtxOverride(tokens)}
+            {...fastProps}
           />
         </div>
       </div>

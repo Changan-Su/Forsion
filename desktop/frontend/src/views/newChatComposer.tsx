@@ -64,6 +64,7 @@ export function NewChatComposer({ onDispatch, onStartCall, onInputModeChange, li
     setSessionModel: state.setSessionModel,
     setNewChatCfg: state.setNewChatCfg,
     setSessionThinking: state.setSessionThinking,
+    setSessionFast: state.setSessionFast,
     setDefaultModel: state.setDefaultModel,
     setModelContextWindow: state.setModelContextWindow,
     setVoiceMode: state.setVoiceMode,
@@ -170,6 +171,8 @@ export function NewChatComposer({ onDispatch, onStartCall, onInputModeChange, li
         thinkingLevel={config.thinkingLevel}
         ultra={config.ultra}
         onThinkingChange={(level, ultra) => s.setSessionThinking(level, null, undefined, ultra)}
+        fast={config.fast}
+        onFastChange={(on) => s.setSessionFast(on, null)}
         defaultModelIds={{
           backgroundModelId: s.desktopConfig?.backgroundModelId || '',
           imageModelId: s.cfg.imageModelId || '',
