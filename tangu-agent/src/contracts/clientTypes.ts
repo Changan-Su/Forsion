@@ -290,7 +290,8 @@ export interface AgentConfig {
   engineId?: string
   /** 为外部引擎选的模型(经 ACP setSessionModel 应用);空=用引擎默认。 */
   engineModelId?: string
-  maxIterations?: number
+  /** 会话循环上限;null = 清掉(PATCH 删键),回到 Agent 定义 / 默认不限。 */
+  maxIterations?: number | null
   thinkingLevel?: ThinkingLevel
   /** Ultra 档(对标 Codex Ultra):思考恒 max + 主动把可并行的活拆给 delegate 子代理。会话键,与 thinkingLevel 分开存 ——
    *  塞进 thinkingLevel 的话,读回时会被引擎的 normalizeThinkingLevel 归成 max,开关静默消失。只有本机非 chat 会话给入口。 */
@@ -693,7 +694,7 @@ export interface CtxInfo {
   thinkingRequested?: string
   thinkingEffective?: string
   /** 本 run 生效的最大循环轮数与来源('session' /loop | 'agent' 定义 | 'default'):/status、/loop 提示据此,
-   *  别再只看会话配置 —— Agent 定义里的 3 轮曾显示成 90。 */
+   *  别再只看会话配置 —— Agent 定义里的 3 轮曾显示成 90。缺省 = 不限轮数(默认即不限,source 为 'default')。 */
   maxIterations?: number
   maxIterationsSource?: 'session' | 'agent' | 'default' | 'automation' | 'muse'
   /** 事件按哪个模型算的:切模型后 SSE 重放会复活旧事件,消费方据此丢弃不匹配的。 */

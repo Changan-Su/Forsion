@@ -1007,7 +1007,7 @@ export interface TanguState {
    *  输入框是同一份 modelOverrides;只在本机引擎可用(云端 worker 404)。写完重拉模型列表并作废该模型的 context_info,
    *  进度环当场换分母。失败只 toast。 */
   setModelContextWindow(modelId: string, tokens: number | null): Promise<void>
-  setSessionMaxIterations(n: number, sessionId?: string | null): void
+  setSessionMaxIterations(n: number | null, sessionId?: string | null): void
   setSessionPlanMode(on: boolean, sessionId?: string | null): void
   /** 语音消息(按 agent,单一真源=voice-message 插件设置)。 */
   refreshVoiceMode(slug?: string | null): Promise<void>

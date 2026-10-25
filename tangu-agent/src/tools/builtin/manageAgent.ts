@@ -11,7 +11,7 @@
  * (旧口径从锁外预读的 existing 补省略项,预读到落盘之间用户在设置里的改动会被写回去)。
  */
 import type { ToolProvider } from '../toolRegistry.js';
-import { listAgents, getAgent, saveAgent, patchAgent, deleteAgent, slugify, isValidSlug, AGENT_MAX_ITERATIONS_MIN, DEFAULT_MAX_ITERATIONS, KEEP_APPROVAL_MODE, type AgentPatch, type NormalAgentDef } from '../../agents/agentRegistry.js';
+import { listAgents, getAgent, saveAgent, patchAgent, deleteAgent, slugify, isValidSlug, AGENT_MAX_ITERATIONS_MIN, KEEP_APPROVAL_MODE, type AgentPatch, type NormalAgentDef } from '../../agents/agentRegistry.js';
 import { THINKING_LEVELS } from '../../llm/modelCapabilities.js';
 import { currentAgentSlug, currentDisplayAgentSlug } from '../../seams/runContext.js';
 import { effectiveRemote, remoteManagementDenied } from '../../services/remoteOrigin.js';
@@ -107,15 +107,15 @@ export const manageAgentProvider: ToolProvider = {
               if (args.max_iterations != null) {
                 const want = Number(args.max_iterations);
                 if (!Number.isFinite(want) || want < AGENT_MAX_ITERATIONS_MIN) return `max_iterations must be at least ${AGENT_MAX_ITERATIONS_MIN} (got ${args.max_iterations}).`;
-                const now = cur?.maxIterations ?? DEFAULT_MAX_ITERATIONS;
-                if (isSelf(slug, ctx) && want < now) return `an agent may not lower its own max_iterations (current ${now}, requested ${want}). Keep it or raise it; only the user can lower it in Settings.`;
+                const now = cur?.maxIterations ?? Infinity; // 没设 = 不限:给自己加任何上限都算调低
+                if (isSelf(slug, ctx) && want < now) return `an agent may not lower its own max_iterations (current ${Number.isFinite(now) ? now : 'no limit'}, requested ${want}). Keep it or raise it; only the user can lower it in Settings.`;
               }
               return null;
             };
             const refused = guard(existing);
             if (refused) return `Error: ${refused}`;
             // 只放模型**传了**的字段:省略 ≠ 清空(H2)—— buildAgentDef 对 description / model / tools / thinkingLevel 的省略项写空;
-            // 轮数省略也得保留,否则 update 只改 model 就把自己的 150 降回默认 90,「不许自降」守卫形同虚设(Codex 09-13 #1)。
+            // 轮数省略也得保留,否则 update 只改 model 就把自己的 150 清回默认,「不许自降」守卫形同虚设(Codex 09-13 #1)。
             // 省略的字段**不**从上面的预读 existing 补:从那次读到落盘之间用户可能刚在设置里收窄了工具 / 换了模型,传旧值会把它写回去
             // (09-25 审批档那条 P1 的同类窗口)。覆盖已有的走 patchAgent:在按 slug 串行化的保存里现读、只改传了的字段。
             const fields: AgentPatch = {

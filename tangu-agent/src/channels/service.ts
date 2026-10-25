@@ -35,7 +35,7 @@ import { remoteLocked } from '../services/remoteLock.js';
 import { resolveInquiry } from '../services/inquiries.js';
 import { patchSessionAgentConfig, readSessionSettings, requestRunThinking, setSessionModelId } from '../services/sessionSettings.js';
 import { chatModels, listModelCatalog } from '../services/modelCatalog.js';
-import { readAgentsMeta, listAgents, getAgent, agentCapOf, DEFAULT_MAX_ITERATIONS } from '../agents/agentRegistry.js';
+import { readAgentsMeta, listAgents, getAgent, agentCapOf } from '../agents/agentRegistry.js';
 import { resolveReplySegment, splitMessage, segmentDelayMs } from '../services/replySegment.js';
 import { resolveVoiceMessage, synthesizeVoiceWav, VOICE_MESSAGE_PLUGIN_ID } from '../services/voiceMessage.js';
 import { setPluginEnabled, setScopeSettings } from '../plugins/settingsStore.js';
@@ -1223,7 +1223,6 @@ export class ChannelService {
       listAgents: () => listAgents(),
       getAgent: (slug) => getAgent(slug),
       agentLoopCap: (def) => agentCapOf(def),
-      defaultLoopCap: DEFAULT_MAX_ITERATIONS,
       newSession: async (title) => {
         live();
         const sid = await this.createChannelSession(userId, undefined, title);

@@ -57,7 +57,7 @@ import {
 } from './compaction.js';
 import { compactionSettingsFor, type CompactionSettings } from './compactionSettings.js';
 import { isContextOverflowError } from './contextWindowStore.js';
-import { getAgent, isValidSlug, DEFAULT_MAX_ITERATIONS, libDirOf, MUSE_AGENT_SLUG, type NormalAgentDef } from '../agents/agentRegistry.js';
+import { getAgent, isValidSlug, libDirOf, MUSE_AGENT_SLUG, type NormalAgentDef } from '../agents/agentRegistry.js';
 import { loadHarness, shelvedOf, renderHarnessSection, isRefineInvocation, REFINE_DIRECTIVE, consumeHarnessCandidates, renderPendingHarnessCandidates } from '../agents/harnessStore.js';
 import { loadSchedule, entriesOf, upcomingScheduleLines } from './agentSchedule.js';
 import { agentIdentitySection, applyAgentActivation } from './agentActivation.js';
@@ -1076,12 +1076,12 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     ac.signal.throwIfAborted();
     if (prepared.status === 'failed') throw new Error('Agent files could not be hydrated. Check sync access and retry; the run was not started with another Agent.');
   }
-  // run 级轮数(桌面/TUI /loop、自动化、Muse)先归一化一次:"0"/0/null/"abc" 删键交给 Agent 定义或默认;2.5 之类取整钳 1–200
+  // run 级轮数(桌面/TUI /loop、自动化、Muse)先归一化一次:"0"/0/null/"abc" 删键交给 Agent 定义或默认(不限);2.5 之类取整,至少 1
   // (否则 iteration === maxIterations-1 永不成立,末轮永远不来;"0" 还会跑成 1 轮 —— Codex 09-13 #6)。
   // 归一化后再抓一次会话值,用来标注上限来源(收尾提示 + context_info 都要说清是谁定的)。
   {
     const n = Number(agentConfig.maxIterations);
-    if (Number.isFinite(n) && n > 0) agentConfig.maxIterations = Math.min(200, Math.max(1, Math.floor(n)));
+    if (Number.isFinite(n) && n > 0) agentConfig.maxIterations = Math.max(1, Math.floor(n));
     else delete agentConfig.maxIterations;
   }
   const sessionMaxIterations: number | null = agentConfig.maxIterations ?? null;
@@ -1106,10 +1106,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   // ~/.tangu/agents/<slug>/;未选择时使用默认 Agent，无效身份已在上面拒绝。enterWith 覆盖整个异步子树。
   // memScopeSlug=共用默认时落 DEFAULT,否则该 agent 自己——保证「每个 agent 只写自己的(或显式共用默认的)」。
   enterRunContext(userId, runId, memScopeSlug, activeAgentSlug);
-  // 默认 90(原 20):重试型模型/多步任务很容易把少量轮数耗光被迫收尾;可经会话级 agentConfig.maxIterations
-  // (桌面/TUI 的 /loop 指令)调节,安全上限 200 防失控。Agent 定义里的 max_iterations 已在 applyAgentActivation
-  // 套过下限(AGENT_MAX_ITERATIONS_MIN)并入;来源三选一,收尾提示与 context_info 据此点名。
-  const maxIterations = Math.min(Math.max(1, agentConfig.maxIterations || DEFAULT_MAX_ITERATIONS), 200);
+  // 默认不限轮数(20 → 90 → 不限,10-25):轮数分不出「长任务」和「失控」,默认 90 截断过 48 分钟、113 次调用的正常任务。
+  // 停下来靠模型收尾、额度 / TANGU_MAX_RUN_COST 成本闸、同参连败守卫与用户停止(Codex / Pi 同款)。显式上限照旧生效:
+  // 会话 /loop、Agent 定义的 max_iterations(applyAgentActivation 已套下限并入)、自动化 / Muse 自带的上限;不再有 200 硬顶。
+  // Infinity:末轮判定 iteration === maxIterations-1 永不成立;对外(context_info / run 状态)一律换成「缺省 / null」,别直接序列化。
+  const maxIterations = agentConfig.maxIterations || Infinity;
   // 来源:内部调用方(automation / muse)自报,其余按「run 级显式值 → Agent 定义 → 默认」推断。
   type MaxIterationsSource = 'session' | 'agent' | 'default' | 'automation' | 'muse';
   const maxIterationsSource: MaxIterationsSource =
@@ -1144,7 +1145,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     role: 'user',
     content: '[System] Tool calls have failed three consecutive times with unchanged arguments and the same error. Tools are unavailable for this final response. Explain the failure and what remains incomplete in the user\'s language. Do not claim the failed operation succeeded, call tools, or write tool calls as text.',
   };
-  // 截断恢复独立预算:模型对同一大输出反复顶到 max_tokens 时,不许拿整个 maxIterations(默认 90)空转。
+  // 截断恢复独立预算:模型对同一大输出反复顶到 max_tokens 时,不许拿整个 maxIterations(默认不限)空转。
   const MAX_TRUNCATION_RECOVERY = 3;
   let truncationRecoveryUsed = 0;
   // 未显式设置的会话默认思考·中(2026-07-16 产品拍板);显式 'off' 仍关。UI 显示默认须同步(ModelPill)。
@@ -1997,7 +1998,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       thinkingRequested: thinkingLevel,
       thinkingEffective,
       // 本 run 生效的循环上限与来源:桌面 /status、/loop 提示据此显示,别再只看会话配置(Agent 定义的 3 曾显示成 90)。
-      maxIterations,
+      ...(Number.isFinite(maxIterations) ? { maxIterations } : {}), // 缺省 = 不限(Infinity 进 JSON 会变 null)
       maxIterationsSource,
       // 事件按什么模型算的:客户端据此丢弃「切模型后 SSE 重放复活的旧 context_info」
       modelId,
@@ -2306,7 +2307,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         runId, sessionId, modelId, thinkingLevel,
         startedAt: runStartedAt,
         iteration: runStat.iteration,
-        maxIterations,
+        maxIterations: Number.isFinite(maxIterations) ? maxIterations : null,
         llmCalls: runStat.llmCalls,
         tokens: { prompt: runStat.prompt, completion: runStat.completion, cached: runStat.cached, total: runStat.prompt + runStat.completion },
         context: {

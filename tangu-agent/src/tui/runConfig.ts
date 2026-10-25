@@ -22,7 +22,7 @@ export interface MutableConfig {
   tokenBudget?: number;
   thinkingLevel: ThinkingLevel;
   seedSystem?: string;
-  /** 最大循环轮数(/loop 调节;缺省由后端取默认 90,后端 clamp 1-200)。 */
+  /** 最大循环轮数(/loop 调节;缺省 = 不限轮数)。 */
   maxIterations?: number;
   /** 计划模式(/plan 切换):只读工具集 + exit_plan_mode,批准后自动关闭。 */
   planMode?: boolean;
@@ -57,7 +57,7 @@ export const needsFullAutoConfirm = (current: ApprovalMode, next: ApprovalMode):
 /** 引擎会话存值里的轮数 → 合法值(与 agentLoop 归一同口径);非法 / 缺省 → undefined(走默认)。 */
 export const storedMaxIterations = (v: unknown): number | undefined => {
   const n = Number(v);
-  return Number.isFinite(n) && n > 0 ? Math.min(200, Math.max(1, Math.floor(n))) : undefined;
+  return Number.isFinite(n) && n > 0 ? Math.max(1, Math.floor(n)) : undefined;
 };
 
 /** `/effort high` → { cmd: '/think', rest: 'high' }。别名归一在这里做,runSlash 只认正名。 */

@@ -45,6 +45,9 @@ export interface MemberActivation {
   extraRoots?: string[];
   wsProject?: string | null;
   approvalMode?: string;
+  /** 团队 run 的轮数上限(会话 /loop,或后台讨论 / Historian 协助的 BACKGROUND_MAX_ITERATIONS),套到每个成员的单次发言;
+   *  没有 = 成员按自己的 Agent 定义,再没有就不限。 */
+  maxIterations?: number;
   /** 团队 run 的审批档来自团队会话的设置(客户端发起):成员子 run 在审批时现读团队会话此刻的档(用户中途切档当场生效)。 */
   followSessionMode?: boolean;
   /** 远程污点(契约 C5):成员子 run 的 input.remote 照抄 —— 否则远端经团队模式就能让成员按会话存的完全通行跑。 */
@@ -115,6 +118,7 @@ export function memberRunConfig(a: MemberActivation): Record<string, unknown> {
     // 团队会话的档优先,成员定义只在会话没设时由 applyAgentActivation 补(与主循环「会话显式值优先」同口径)。
     // 反过来(旧 runGroupTurn 口径)= 会话选了完全通行、成员 config.toml 里一句 auto-edit 照样逐次弹;会话选自动编辑、成员写 full-auto 则被它自己提权。
     approvalMode: a.approvalMode || undefined,
+    maxIterations: a.maxIterations || undefined,
     thinkingLevel: a.member.thinkingLevel || undefined,
     preset: null,
     teamMember: {
