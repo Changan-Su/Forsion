@@ -10,6 +10,7 @@ import { create } from 'zustand'
 import type { MuseStarter } from '../../types'
 import { getMuseStarters, patchMuseStarter } from '../../services/backendService'
 import { homeTarget } from '../../services/engine/targets'
+import { onSend } from './freshLayout'
 
 const CACHE_KEY = 'forsion_muse_starters'
 const REFRESH_MS = 60_000
@@ -79,3 +80,6 @@ export function splitStarter(s: Pick<MuseStarter, 'text' | 'source'>): { pre: st
   if (at < 0) return { pre: s.text, link: '', post: '' }
   return { pre: s.text.slice(0, at), link: s.source.label, post: s.text.slice(at + s.source.label.length) }
 }
+
+// 常驻监听,不挂在组件上:新对话发出第一句后行列跟着卸载,受理通知(sent)那时才到。只认受理 —— 没发出去的不算采纳。
+if (typeof window !== 'undefined') onSend((d) => { if (d.phase === 'sent') consumeStarterOnSend(d.key) })

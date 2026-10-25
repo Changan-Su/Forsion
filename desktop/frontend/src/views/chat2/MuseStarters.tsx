@@ -16,8 +16,7 @@ import { CtxMenuButtons } from '../../components/CtxMenuButtons'
 import type { MuseStarter } from '../../types'
 import { refChipOf, type RefChip } from './Composer2'
 import { setDraftField, useComposerDrafts } from './composerDrafts'
-import { onSend } from './freshLayout'
-import { consumeStarterOnSend, dismissStarter, noteStarterFilled, refreshMuseStarters, splitStarter, useMuseStarters } from './museStarterStore'
+import { dismissStarter, noteStarterFilled, refreshMuseStarters, splitStarter, useMuseStarters } from './museStarterStore'
 import '../../tangu/messages'
 
 /** 草稿 key → 点行时挂上的那枚引用芯片的 token(模块级:草稿本身也是模块级的,切会话回来还对得上)。 */
@@ -75,8 +74,6 @@ export function MuseStarters({ draftKey, centered }: { draftKey: string; centere
     window.addEventListener('focus', onFocus)
     return () => window.removeEventListener('focus', onFocus)
   }, [])
-  // 这份草稿真的发出去了(受理之后,不是按下那一刻 —— 没发出去的不算采纳):来自哪一条就回写 used
-  useEffect(() => onSend((d) => { if (d.phase === 'sent') consumeStarterOnSend(d.key) }), [])
 
   const fill = (s: MuseStarter): void => {
     setDraftField(draftKey, 'text', s.text)
