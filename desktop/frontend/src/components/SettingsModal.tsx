@@ -2455,6 +2455,7 @@ export const SettingsModal: React.FC<{
                     语音通话 = 空输入框的发送键 / 本地语音识别 = 麦克风键 / 朗读 = 回复的朗读(TTS:OpenAI 兼容 /audio/speech)。 */}
                 {tab === 'model' && isDesktop && activeSub === 'm-voice' && (
                   <VoiceSettingsPage cfg={p.cfg} stored={stored} setStored={setStored} providers={customProviders}
+                    remoteExternal={stored?.mode === 'external' && !(stored?.backendUrl || '').includes('localhost') && !(stored?.backendUrl || '').includes('127.0.0.1')}
                     cloudModel={models?.realtimeModel} cloudAccount={cloudAccount} signedIn={realtimeSignedIn}
                     edit={edit} commitEdits={commitEdits} commitErrorHint={commitErrorHint}
                     onOpen={(target) => {
