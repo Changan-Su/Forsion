@@ -5391,6 +5391,11 @@ html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .
 }
 :where(dialog[open], [popover]:popover-open) { animation: ui-menu-enter var(--palette-enter-duration) var(--ease-surface); }
 :where(dialog[open])::backdrop { animation: ui-fade-in var(--palette-enter-duration) var(--ease-calm); }
+/* 上面全局的减少动态效果只管元素与 ::before / ::after,这两个伪元素得点名 */
+@media (prefers-reduced-motion: reduce) {
+  :where(details)::details-content { transition: none; }
+  :where(dialog[open])::backdrop { animation: none; }
+}
 
 /* uiux-c: 全局键盘焦点环(U-43)。
    原来唯一的「全局」规则是 .am-app :focus-visible(amadeus/styles.css),Ribbon、标签条、侧栏行、状态栏都不在它的作用域里,

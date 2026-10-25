@@ -578,7 +578,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
   const renderNode = (n: TreeNode<SessionRecord>) => !n.kids.length ? renderItem(n.s) : (
     <React.Fragment key={n.s.id}>
       {renderItem(n.s, { kids: n.kids })}
-      <AnimatedCollapse open={!kidsCollapsed.has(n.s.id)}>{n.kids.map((k, i) => renderItem(k, { kidLast: i === n.kids.length - 1 }))}</AnimatedCollapse>
+      <AnimatedCollapse open={!kidsCollapsed.has(n.s.id)}>{!kidsCollapsed.has(n.s.id) && n.kids.map((k, i) => renderItem(k, { kidLast: i === n.kids.length - 1 }))}</AnimatedCollapse>
     </React.Fragment>
   )
 
@@ -597,7 +597,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
             <span className="t2s-srow-title t2s-faint">{t('sidebar.archived')}</span>
             <span className="t2s-count">{p.archivedSessions.length}</span>
           </button>
-          <AnimatedCollapse open={showArchived}>{p.archivedSessions.map((x) => renderItem(x))}</AnimatedCollapse>
+          <AnimatedCollapse open={showArchived}>{showArchived && p.archivedSessions.map((x) => renderItem(x))}</AnimatedCollapse>
         </>
       )}
     </div>

@@ -624,11 +624,11 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
         <span className="t2sw-plug-gname"><span className="t2o-name">{it.title}</span><span className={`t2s-chev${isOpen ? ' open' : ''}`}><ChevronRight size={12} /></span></span>
         {it.hint && <span className="t2s-count">{it.hint}</span>}
       </button>
-      <AnimatedCollapse open={isOpen}><div className="t2s-group-sessions">
+      <AnimatedCollapse open={isOpen}>{isOpen && <div className="t2s-group-sessions">
         {shown.map((child) => node(child, 2, true))}
         {shown.length < n.children.length && <button type="button" className="t2s-viewmore" style={flat ? undefined : { marginLeft: nameLeft(2) - 6 }}
           onClick={() => setMore((prev) => new Set(prev).add(it.key))}>{t('sidebar.viewMore')} · {n.children.length - shown.length}</button>}
-      </div></AnimatedCollapse>
+      </div>}</AnimatedCollapse>
     </div>
   }
   // 文件夹行:与笔记树的文件夹同一套结构与类名(前导槽里图标 ↔ 悬停换箭头,行尾「更多」和「+」)。
@@ -659,7 +659,7 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
           onClick={() => { open.setOpen('f:' + it.key, true); add.run() }}><Plus size={14} /></button>}
       </div>
       {/* 展开着的文件夹,「排在它后面」的线画在它整块的下沿 */}
-      <AnimatedCollapse open={isOpen}><div className={cls('t2s-group-sessions', at === 'after' && 'drag-over-end')}>{n.children.map((child) => node(child, depth + 1))}</div></AnimatedCollapse>
+      <AnimatedCollapse open={isOpen}>{isOpen && <div className={cls('t2s-group-sessions', at === 'after' && 'drag-over-end')}>{n.children.map((child) => node(child, depth + 1))}</div>}</AnimatedCollapse>
     </div>
   }
   const node = (n: ListNode, depth: number, inGroup = false): ReactNode =>
@@ -675,7 +675,7 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
         <span className="t2sw-plug-sec-name"><span className="t2s-group-label">{g}</span><span className={`t2s-chev${isOpen ? ' open' : ''}`}><ChevronRight size={12} /></span></span>
         <span className="t2s-count">{leafCount(list)}</span>
       </button>
-      <AnimatedCollapse open={isOpen}>{list.map((n) => node(n, 1))}</AnimatedCollapse>
+      <AnimatedCollapse open={isOpen}>{isOpen && list.map((n) => node(n, 1))}</AnimatedCollapse>
     </div>
   }
 

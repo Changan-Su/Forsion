@@ -218,19 +218,21 @@ async function main() {
       const d = box.querySelector('#fx-d')
       const frame = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
       await frame()
-      const before = document.getAnimations().length
+      // ::details-content 上的过渡 getAnimations() 不报(Chromium 144 实测),逐帧读透明度
+      const op = () => Number(getComputedStyle(d, '::details-content').opacity)
+      const closed = op()
       d.open = true
-      await frame()
-      const detailsAnims = document.getAnimations().filter((a) => a.effect?.pseudoElement === '::details-content').map((a) => a.transitionProperty)
+      const ramp = []
+      for (let i = 0; i < 4; i++) { await new Promise((r) => requestAnimationFrame(r)); ramp.push(Math.round(op() * 100) / 100) }
       const reveal = document.createElement('div'); reveal.dataset.motion = 'enter'; reveal.textContent = 'revealed'
       box.querySelector('#fx-slot').appendChild(reveal)
       const enter = reveal.getAnimations().map((a) => a.animationName)
       const dlg = document.createElement('dialog'); dlg.textContent = 'dialog'; document.body.appendChild(dlg); dlg.showModal()
       const dialog = dlg.getAnimations().map((a) => a.animationName)
       dlg.close(); dlg.remove(); box.remove()
-      return { before, detailsAnims, enter, dialog }
+      return { closed, ramp, enter, dialog }
     })
-    r.check('7a 原生 <details> 展开:内容区淡入(只动透明度)', auto.detailsAnims.includes('opacity'), JSON.stringify(auto.detailsAnims))
+    r.check('7a 原生 <details> 展开:内容区淡入(只动透明度)', auto.closed === 0 && auto.ramp.some((v) => v > 0 && v < 1), JSON.stringify({ closed: auto.closed, ramp: auto.ramp }))
     r.check('7b data-motion="enter" 挂上即入场', auto.enter.includes('ui-enter'), JSON.stringify(auto.enter))
     r.check('7c 原生 <dialog> 打开:命令面板那档进场', auto.dialog.includes('ui-menu-enter'), JSON.stringify(auto.dialog))
 
@@ -244,7 +246,15 @@ async function main() {
       }))))
       r.check('8a 点「已归档」:列表从 0 长出来(不是一下子出现)', !!mid && mid.overflow === 'hidden' && mid.h < mid.full, JSON.stringify(mid))
       await sleep(400)
+      const settled = await win.evaluate(() => { const w = document.querySelector('.t2s-archived-toggle')?.nextElementSibling; return w ? getComputedStyle(w).overflow : null })
+      r.check('8b 长完就不再裁切(拖动落点线探出行外也看得见)', settled === 'visible', String(settled))
       await win.screenshot({ path: path.join(dir, 'sidebar-archived.png') })
+      await archived.click()
+      const closing = await win.evaluate(() => new Promise((res) => requestAnimationFrame(() => requestAnimationFrame(() => {
+        const w = document.querySelector('.t2s-archived-toggle')?.nextElementSibling
+        res(w ? { h: w.getBoundingClientRect().height, overflow: getComputedStyle(w).overflow } : null)
+      }))))
+      r.check('8c 收起途中照样裁切(不往下溢出)', !!closing && closing.overflow === 'hidden' && closing.h > 0, JSON.stringify(closing))
     } else r.note('8 跳过', '夹具里没有已归档会话')
     r.note('截图', dir)
   } finally {

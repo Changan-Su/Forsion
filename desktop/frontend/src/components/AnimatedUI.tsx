@@ -17,15 +17,24 @@ export function useEnterMotion(): readonly ['enter' | undefined, () => void] {
  *  尊重系统的「减少动态效果」(reduced motion → 瞬时)。 */
 export const AnimatedCollapse: React.FC<{ open: boolean; children: React.ReactNode }> = ({ open, children }) => {
   const rm = useReducedMotion()
+  const ref = React.useRef<HTMLDivElement>(null)
+  const clip = (on: boolean): void => { if (ref.current) ref.current.style.overflow = on ? 'hidden' : '' }
   return (
     <AnimatePresence initial={false}>
       {open && (
+        // 只在长出 / 收起途中裁切;展开好了放开,否则行上探出去的拖动落点线(top:-4px 之类)被裁掉(10-25 Codex 评审)。
+        // 直接改元素:退场时 AnimatePresence 画的是留下的那一帧,改 props 够不着;framer 的 transitionEnd 实测不落地。
+        // flow-root 保住原来 overflow:hidden 带来的块级格式化上下文,外边距不会在动画结束那一下改折叠方式而跳一下。
+        // 调用处请写成 open={x}>{x && …}:收起时不必把整棵子树算一遍,退场用的是 AnimatePresence 留下的那一帧。
         <motion.div
-          initial={{ height: 0, opacity: 0 }}
+          ref={ref}
+          initial={{ height: 0, opacity: 0, overflow: 'hidden' }}
           animate={{ height: 'auto', opacity: 1 }}
           exit={{ height: 0, opacity: 0 }}
           transition={{ duration: rm ? 0 : 0.24, ease: [0.2, 0.8, 0.3, 1] }}
-          style={{ overflow: 'hidden' }}
+          onAnimationStart={() => clip(true)}
+          onAnimationComplete={(def) => clip((def as { height?: unknown }).height !== 'auto')}
+          style={{ display: 'flow-root' }}
         >
           {children}
         </motion.div>
