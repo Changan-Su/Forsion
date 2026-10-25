@@ -3289,17 +3289,17 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   height: 14px;
   border-radius: var(--radius-pill, 999px);
   background: var(--bg-card);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.22);
+  box-shadow: var(--btn-shadow);
   transition: left var(--switch-edge-duration) var(--ease-surface), right var(--switch-edge-duration) var(--ease-surface) var(--switch-edge-lag), background var(--duration-fast);
 }
-/* 「关」(走查续五 5.1 A,10-25):轨道用文字色实底(浅 15% / 暗 24%)、不描边,只比卡面深一档、不带主题色;旋钮加一层软阴影。
+/* 「关」(走查续五 5.1 A,10-25):轨道用文字色实底(浅 15% / 暗 24%)、不描边,只比卡面深一档、不带主题色;旋钮阴影走 --btn-shadow(扁平模式清零,check:shadowcontract)。
  * 暗色旋钮若仍是 --bg-card 会与卡面同色,改用背景族的 --text-light(随 data-bg 走;方案写的 --text-muted 在 24% 轨道上只有 2.5–2.9:1),
  * 旋钮对轨道 ≥ 3:1(WCAG 1.4.11)。
  * 外观页旧的 .switch(LCL gallery 也在用)关态同一套。仪器:check:themecontrast 的 switch-off 探针(轨道对卡面 / 旋钮对轨道)。 */
 .settings-switch:not(.active) { border-color: transparent; }
 .settings-switch:not(.active), .switch:not(.on) { background: color-mix(in srgb, var(--text) 15%, transparent); }
 :root[data-mode='dark'] .settings-switch:not(.active), :root[data-mode='dark'] .switch:not(.on) { background: color-mix(in srgb, var(--text) 24%, transparent); }
-:root[data-mode='dark'] .settings-switch:not(.active) > span, :root[data-mode='dark'] .switch:not(.on)::after { background: var(--text-light); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.45); }
+:root[data-mode='dark'] .settings-switch:not(.active) > span, :root[data-mode='dark'] .switch:not(.on)::after { background: var(--text-light); }
 .settings-switch.active { border-color: var(--signal-mark); background: var(--signal-mark); }
 .settings-switch.active > span {
   left: calc(100% - 16px); right: 2px; background: var(--bg-card);
@@ -3636,7 +3636,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   border-radius: 50%;
   background: var(--bg-card);
   transform: translateY(-50%);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.22);
+  box-shadow: var(--btn-shadow);
   transition: left var(--duration-fast);
 }
 .switch.on { background: var(--signal-mark); border-color: var(--signal-mark); }
