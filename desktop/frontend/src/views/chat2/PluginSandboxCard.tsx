@@ -77,7 +77,7 @@ export function PluginSandboxCard({ event }: { event: ToolEvent }) {
         else if (!r.cancelled && r.error) setNote(r.error)
       } else {
         // 不带主题键:主进程用上次带来的那份(工具调用每次都带)
-        const r = what === 'reset' ? await api.reset() : await api.exec('start', { dir: saved.dir }, {})
+        const r = what === 'reset' ? await api.reset() : await api.exec('start', { dir: saved.dir }, { reveal: true })
         if (!r.ok && r.error) setNote(r.error)
       }
     } finally { setBusy(null) }
