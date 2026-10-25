@@ -1403,7 +1403,7 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 /* 空白处的几句说明:头行下面,淡一档;有卡挪进来就让开 */
 .t2cv-hints {
   position: absolute; left: 16px; top: 44px; display: flex; flex-direction: column; gap: 3px; pointer-events: none;
-  font-size: var(--ui-font-caption, 11px); line-height: 1.5; color: var(--text-faint); transition: opacity 160ms ease;
+  font-size: var(--ui-font-caption, 11px); line-height: 1.5; color: var(--text-faint); transition: opacity var(--canvas-switch-hud) ease;
 }
 .t2cv-hints[data-covered] { opacity: 0; }
 /* 阅读栏:画布右边一栏,对话页那套排版;开着时缩放胶囊 / 缩略图挪到它左边 */
@@ -1529,11 +1529,11 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 .t2-chat-view[data-canvas]:has(.t2cv[data-switch="enter"]) > .t2-chat-col > .t2-chat-body { visibility: visible; }
 @keyframes t2cv-in { from { opacity: 0; } }
 @keyframes t2cv-out { to { opacity: 0; } }
-.t2cv[data-switch="enter"] { animation: t2cv-in 140ms var(--ease-out, ease-out) both; }
-.t2cv[data-switch="enter"] .t2cv-turn:not([data-anchor]), .t2cv[data-switch="enter"] .t2cv-edges { animation: t2cv-in 220ms 120ms var(--ease-out, ease-out) both; }
-.t2cv[data-switch="enter"] .amx-stage-hud, .t2cv[data-switch="enter"] .amx-stage-minimap, .t2cv[data-switch="enter"] .t2cv-hints { animation: t2cv-in 160ms 280ms var(--ease-out, ease-out) both; }
-.t2cv[data-switch="exit"] { animation: t2cv-out 140ms 220ms ease-in both; pointer-events: none; }
+.t2cv[data-switch="enter"] { animation: t2cv-in var(--canvas-switch-fade) var(--ease-out, ease-out) both; }
+.t2cv[data-switch="enter"] .t2cv-turn:not([data-anchor]), .t2cv[data-switch="enter"] .t2cv-edges { animation: t2cv-in var(--canvas-switch-cards) var(--canvas-switch-lag) var(--ease-out, ease-out) both; }
+.t2cv[data-switch="enter"] .amx-stage-hud, .t2cv[data-switch="enter"] .amx-stage-minimap, .t2cv[data-switch="enter"] .t2cv-hints { animation: t2cv-in var(--canvas-switch-hud) var(--canvas-switch-hud-lag) var(--ease-out, ease-out) both; }
+.t2cv[data-switch="exit"] { animation: t2cv-out var(--canvas-switch-fade) var(--canvas-switch-cards) ease-in both; pointer-events: none; }
 .t2cv[data-switch="exit"] .t2cv-turn:not([data-anchor]), .t2cv[data-switch="exit"] .t2cv-edges, .t2cv[data-switch="exit"] .amx-stage-hud,
-.t2cv[data-switch="exit"] .amx-stage-minimap, .t2cv[data-switch="exit"] .t2cv-hints, .t2cv[data-switch="exit"] .t2cv-read { animation: t2cv-out 140ms ease-in both; }
+.t2cv[data-switch="exit"] .amx-stage-minimap, .t2cv[data-switch="exit"] .t2cv-hints, .t2cv[data-switch="exit"] .t2cv-read { animation: t2cv-out var(--canvas-switch-fade) ease-in both; }
 /* 右边车道:刚切到画布那一下卡片收起(走它们自己的离场过渡:缩小 + 往右),收完 ChatView 再卸掉它 */
 .t2-rail[data-off] .t2-tsum, .t2-rail[data-off] .agent-desk-card { display: none; opacity: 0; scale: 0.8; translate: 100% 0; }
