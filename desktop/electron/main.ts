@@ -51,7 +51,7 @@ import { checkForUpdates, downloadUpdate, installUpdate, canInstallUpdate, betaC
 import { parseSourcePref } from '../shared/updateSource'
 import { fetchWebsiteReleases } from './websiteReleases'
 import { createRestartGuard, readRestartActivity } from './restartGuard'
-import { createTray, refreshTrayMenu, setTrayIndicator, trayLang } from './tray'
+import { createTray, MINI_ACCELERATOR, mergeTrayReports, refreshTrayMenu, sanitizeTraySessions, setTrayIndicator, setTraySessions, traySessions, trayLang } from './tray'
 import { initMainLocale, mainLocale, mt } from './mainI18n'
 import { createQuitGuards } from './quitGuard'
 import { createUiLocaleSync, UI_LOCALE_FILE } from './uiLocaleSync' // P1-KF:主进程文案跟渲染层的生效语言
@@ -2825,6 +2825,24 @@ app.whenReady().then(async () => {
     }
     keepAwake.report(id, Number.isSafeInteger(count) && (count as number) > 0)
   })
+  // 托盘 / 菜单栏的在跑 / 等你会话(借鉴 Comma 2.6):会话名册在渲染层。主窗 / Mini / 独立窗各有自己的名册,在哪个窗口里起的 run
+  // 只有那个窗口先知道 —— 所以各窗口各报一份、按窗口记,并起来再给托盘(mergeTrayReports)。窗口销毁 / 渲染进程崩溃 / 重载时
+  // 丢掉它那份(同 power:running 的清法),新页面装好会话列表后会重新报。
+  const trayReports = new Map<number, ReturnType<typeof sanitizeTraySessions>>()
+  const pushTrayReports = (): void => setTraySessions(mergeTrayReports(trayReports.values()))
+  ipcMain.on('tray:sessions', (e, raw: unknown) => {
+    if (!isTrustedSender(e) || !e.senderFrame) return // senderFrame 为空 = 旧文档导航后才到的迟到上报,丢弃
+    const wc = e.sender
+    const id = wc.id
+    if (!trayReports.has(id)) {
+      const forget = (): void => { if (trayReports.delete(id)) pushTrayReports() }
+      wc.once('destroyed', forget)
+      wc.on('render-process-gone', forget)
+      wc.on('did-navigate', forget)
+    }
+    trayReports.set(id, sanitizeTraySessions(raw))
+    pushTrayReports()
+  })
   // Windows 在用户主动睡眠时终止电源请求,唤醒后手里的 id 已失效 → 重新申请(macOS 断言跨睡眠保留,重申无害)。
   // 设备互联通道:合盖期间的出站长连多半已是半开连接(不报错也收不到东西)→ 唤醒即重拨,别等 45s 读看门狗。
   // 睡眠会让「暂停到点」的计时器迟到 → keepAwake 重排;电脑历史采集器重新核一次状态。
@@ -3553,7 +3571,7 @@ app.whenReady().then(async () => {
     if (!audio.length) throw new Error('空音频')
     // 本地优先:选了本地且模型就绪 → 离线转写(不联网)。
     if (asrBackendFor(cfg.asrBackend, req.backend, localModelReady()) === 'local') {
-      return transcribeLocal(audio, { timestamps: req?.timestamps })
+      return transcribeLocal(audio, { timestamps: req?.timestamps, language: req?.language })
     }
     // 云端:自带 provider(<provider>/<model> 命中 providers.json)→ 主进程直连上游;否则走 Forsion 托管(计费)。
     const modelId = (req?.modelId || cfg.asrModelId || '').trim()
@@ -4359,7 +4377,7 @@ app.whenReady().then(async () => {
     return { routed: true }
   })
   // mini 全局快捷键(默认 ⌘/Ctrl+⇧+M;register 返回 false=被占用,吞掉不阻塞启动)。
-  const MINI_ACCEL = 'CommandOrControl+Shift+M'
+  const MINI_ACCEL = MINI_ACCELERATOR // 托盘菜单「新建 Mini 对话」显示的是同一个
   const registerMiniShortcut = (): void => { try { globalShortcut.register(MINI_ACCEL, () => toggleMiniWindow()) } catch { /* 快捷键冲突 */ } }
   if (!SANDBOX) registerMiniShortcut()
   if (!SANDBOX) globalHotkeyPause.add({ pause: () => globalShortcut.unregister(MINI_ACCEL), resume: registerMiniShortcut })
@@ -4404,6 +4422,16 @@ app.whenReady().then(async () => {
       resume: () => { void ch.resume().catch(() => {}) },
     } : undefined,
     remote: PRODUCT.agentBackend ? remoteSafety.trayHandlers(openRemoteSafetySettings) : undefined, // P1-K2:远程会话运行中 · 设备名 / 停止全部 / 解锁
+    // 借鉴 Comma 2.6:在跑 / 等你的会话(清单由各窗口经 tray:sessions 报上来、并成一份);点一条 = 显示主窗并打开它(同审批通知点击那条 approval:open)
+    sessions: PRODUCT.agentBackend ? {
+      list: traySessions,
+      open: (sessionId) => { showMainWindow(); if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(APPROVAL_OPEN_CHANNEL, { sessionId }) },
+    } : undefined,
+    // 「随处说一句」= Mini 窗:已经开着就提到前面(热键是开合切换,菜单项不该把开着的 Mini 藏掉)
+    newMini: {
+      open: () => { if (miniWindow && !miniWindow.isDestroyed() && miniWindow.isVisible()) present(miniWindow); else toggleMiniWindow() },
+      accelerator: () => (globalShortcut.isRegistered(MINI_ACCEL) ? MINI_ACCEL : null),
+    },
   })
   // Amadeus Space:装载 vault IPC(暴露给 window.amadeus)+ 资产协议(指向当前 vault 根)。
   const { getVaultRoot, restartSync, stopSync, readExternalPlugins, vaultFace } = registerAmadeusIpc(() => mainWindow, amadeusSyncFactory)
