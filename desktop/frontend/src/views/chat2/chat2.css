@@ -690,11 +690,11 @@
     transition-duration: 0.45s, var(--duration-fast, 0.15s), var(--duration-fast, 0.15s);
   }
   /* .gone(展开侧板期间)不算在场:否则侧板占位 + 车道让位双重挤压正文 */
-  .t2-chat-view:has(.t2-tsum.show, .agent-desk-card:not(.gone)) .t2-stream { padding-right: var(--tsum-w); }
-  .t2-chat-view:has(.t2-tsum.show, .agent-desk-card:not(.gone)) .composer-anchor { padding-right: var(--tsum-w); }
+  .t2-chat-view:has(.t2-rail:not([data-off]) :is(.t2-tsum.show, .agent-desk-card:not(.gone))) .t2-stream { padding-right: var(--tsum-w); }
+  .t2-chat-view:has(.t2-rail:not([data-off]) :is(.t2-tsum.show, .agent-desk-card:not(.gone))) .composer-anchor { padding-right: var(--tsum-w); }
   /* 欢迎区与输入框共用可用宽度和让位动效,避免 Logo 仍以包含右侧车道的整列居中。 */
-  .t2-chat-view:has(.t2-tsum.show, .agent-desk-card:not(.gone)) .t2-chat-col > .t2-empty { right: var(--tsum-w); }
-  .t2-chat-view:has(.t2-tsum.show, .agent-desk-card:not(.gone)) .t2-jump { right: calc(var(--tsum-w) + 22px); }
+  .t2-chat-view:has(.t2-rail:not([data-off]) :is(.t2-tsum.show, .agent-desk-card:not(.gone))) .t2-chat-col > .t2-empty { right: var(--tsum-w); }
+  .t2-chat-view:has(.t2-rail:not([data-off]) :is(.t2-tsum.show, .agent-desk-card:not(.gone))) .t2-jump { right: calc(var(--tsum-w) + 22px); }
 }
 /* 退场那一刻卡片还没 display:none(等动画跑完),但已经不该吃点击 */
 @container (max-width: 759.9px) {
@@ -1354,8 +1354,8 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
   color: var(--text-sec); font: inherit; font-size: var(--ui-font-meta, 12px); cursor: pointer;
 }
 .t2cv-readbtn:hover { color: var(--accent-ink); border-color: var(--accent-ink); }
-/* 卡里的消息:不画头像 / 署名 / 时刻,也不画「从这里分出」块(分支在画布上已经是卡);操作条只留两个动词(接着问 / 顺便问) */
-.t2cv-card .t2-avatar, .t2cv-card .t2-name, .t2cv-card .t2-childs, .t2cv-card .t2-msgtime { display: none; }
+/* 卡里的消息:不画头像 / 署名 / 时刻;「从这里分出」块由 ChatCanvas 画在卡底、不列分支(分支在画布上已经是卡,ForkScope);操作条只留两个动词(接着问 / 顺便问) */
+.t2cv-card .t2-avatar, .t2cv-card .t2-name, .t2cv-card .t2-msgtime { display: none; }
 .t2cv-card .t2-asst { display: block; }
 .t2cv-card .t2-content { max-width: none; }
 .t2cv-card .t2-actions > :not([data-testid="msg-branch"]):not([data-testid="msg-aside"]) { display: none; }
@@ -1419,7 +1419,7 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 }
 .t2cv-read-t > span { font-size: var(--ui-font-caption, 11px); color: var(--text-muted); }
 .t2cv-read-b { flex: 1; min-height: 0; overflow: auto; padding: 4px 22px 22px; }
-.t2cv-read-b .t2-avatar, .t2cv-read-b .t2-name, .t2cv-read-b .t2-childs, .t2cv-read-b .t2-msgtime { display: none; }
+.t2cv-read-b .t2-avatar, .t2cv-read-b .t2-name, .t2cv-read-b .t2-msgtime { display: none; }
 .t2cv-read-b .t2-asst { display: block; }
 .t2cv-read-b .t2-content { max-width: none; }
 .t2cv-empty {
@@ -1512,3 +1512,25 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 }
 /* 空白处拖着平移(左键 / 右键):握紧的抓手 */
 .t2cv-stage[data-panning] { cursor: grabbing; }
+/* ── 胶囊 A(方案 画布交互统一方案_2026-10-24 unify.html §1):− % + ⤢ 后面是「视图 ▾」和「?」 ── */
+.t2cv-am.am-app .amx-stage-hud button.t2cv-hud-view { gap: 2px; padding: 2px 4px 2px 6px; font: inherit; }
+/* 「?」点开的那几行说明:同菜单的卡面(base.css .ctx-menu) */
+.t2cv-helppop {
+  position: fixed; z-index: 100; display: flex; flex-direction: column; gap: 4px; width: 280px; box-sizing: border-box; padding: 10px 12px;
+  background: var(--bg-card); border: var(--border-width, 1px) solid var(--border); border-radius: var(--radius-md, 10px); box-shadow: var(--card-shadow);
+  font-size: var(--ui-font-meta, 12px); line-height: 1.5; color: var(--text-sec, var(--text-muted)); animation: fade-up var(--duration-fast) var(--ease-out);
+}
+
+/* 对话 ↔ 画布(motion.html §1 A 镜头拉远,ChatCanvas data-switch):进场时对话流先不藏,画布在它上面 140ms 淡入;
+   对齐的那张卡(data-anchor)跟着画布一起出来,别的卡和线 120ms 后浮现,胶囊 / 说明最后出来。退场反过来:别的先淡掉,镜头推回那一条,最后整层淡出。 */
+.t2-chat-view[data-canvas]:has(.t2cv[data-switch="enter"]) > .t2-chat-col > .t2-chat-body { visibility: visible; }
+@keyframes t2cv-in { from { opacity: 0; } }
+@keyframes t2cv-out { to { opacity: 0; } }
+.t2cv[data-switch="enter"] { animation: t2cv-in 140ms var(--ease-out, ease-out) both; }
+.t2cv[data-switch="enter"] .t2cv-turn:not([data-anchor]), .t2cv[data-switch="enter"] .t2cv-edges { animation: t2cv-in 220ms 120ms var(--ease-out, ease-out) both; }
+.t2cv[data-switch="enter"] .amx-stage-hud, .t2cv[data-switch="enter"] .amx-stage-minimap, .t2cv[data-switch="enter"] .t2cv-hints { animation: t2cv-in 160ms 280ms var(--ease-out, ease-out) both; }
+.t2cv[data-switch="exit"] { animation: t2cv-out 140ms 220ms ease-in both; pointer-events: none; }
+.t2cv[data-switch="exit"] .t2cv-turn:not([data-anchor]), .t2cv[data-switch="exit"] .t2cv-edges, .t2cv[data-switch="exit"] .amx-stage-hud,
+.t2cv[data-switch="exit"] .amx-stage-minimap, .t2cv[data-switch="exit"] .t2cv-hints, .t2cv[data-switch="exit"] .t2cv-read { animation: t2cv-out 140ms ease-in both; }
+/* 右边车道:刚切到画布那一下卡片收起(走它们自己的离场过渡:缩小 + 往右),收完 ChatView 再卸掉它 */
+.t2-rail[data-off] .t2-tsum, .t2-rail[data-off] .agent-desk-card { display: none; opacity: 0; scale: 0.8; translate: 100% 0; }

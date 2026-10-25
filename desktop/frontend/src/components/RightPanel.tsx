@@ -111,7 +111,8 @@ function useSelection(orderedPaths: string[]) {
 }
 
 export interface CtxItem { label: string; icon?: React.ReactNode; danger?: boolean; disabled?: boolean; separatorBefore?: boolean; shortcut?: string; run: () => void }
-export type CtxMenu = { x: number; y: number; items: CtxItem[] } | null
+/** anchorTop:从一颗按钮弹出时给按钮上沿 —— 下面放不下就翻到它上面(而不是盖住按钮);右键菜单不用给。 */
+export type CtxMenu = { x: number; y: number; anchorTop?: number; items: CtxItem[] } | null
 
 /** 右键浮层菜单(portal 到 body;任意点击/右键/Esc/失焦关闭)。
  *  Android 装了原生半屏宿主(lcl nativeSheet)时改由原生菜单呈现,本组件不渲染 DOM;宿主缺席或呈现失败
@@ -160,6 +161,7 @@ export const ContextMenu: React.FC<{ menu: NonNullable<CtxMenu>; onClose: () => 
       role="menu"
       x={menu.x}
       y={menu.y}
+      anchorTop={menu.anchorTop}
       onPointerDown={(e) => e.stopPropagation()}
       onContextMenu={(e) => { e.preventDefault(); e.stopPropagation() }}
       onKeyDown={(e) => {
