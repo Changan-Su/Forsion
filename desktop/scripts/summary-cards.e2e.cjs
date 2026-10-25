@@ -65,8 +65,17 @@ const procs = [
 ]
 const kills = []
 const view = ({ output, ...p }) => p // eslint-disable-line no-unused-vars
+// 子代理行:委派给有头像的 Agent(标题 = 它的 name)要画头像;通用子代理(标题「Subagent」,配置里的 agentSlug 是父会话的回落)仍画 Bot
+const AGENTS = [{ slug: 'ava', name: 'Ava', description: 'Research agent', createdBy: 'user', avatar: 'avatar.png', instructions: '', skills: [] }]
+const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64')
+const subRows = [
+  { sessionId: 'd-ava', kind: 'delegate', title: 'Ava', createdAt: new Date(now - 30_000).toISOString(), runId: null, runStatus: 'running', agentSlug: 'ava' },
+  { sessionId: 'd-gen', kind: 'delegate', title: 'Subagent', createdAt: new Date(now - 90_000).toISOString(), runId: null, runStatus: 'completed', agentSlug: 'ava' },
+]
 function override({ path: p, method }) {
   if (p === '/agent/processes' && method === 'GET') return { processes: procs.map(view) }
+  if (p === '/agent/sessions/s-main/background' && method === 'GET') return { background: subRows }
+  if (p === '/agent/agents/ava/avatar' && method === 'GET') return { __buffer: PNG, contentType: 'image/png' }
   const m = p.match(/^\/agent\/sessions\/([^/]+)\/processes\/([^/]+)\/(output|kill)$/)
   if (!m) return undefined
   const proc = procs.find((x) => x.sessionId === m[1] && x.id === m[2])
@@ -80,7 +89,7 @@ function override({ path: p, method }) {
 }
 
 async function main() {
-  const fixtures = { agents: [], sessions: [
+  const fixtures = { agents: AGENTS, sessions: [
     { ...base, updated_at: at(12), project_path: '__P__', project_name: 'Launch', projectless: false, id: 's-main', title: 'Launch 落地页' },
     { ...base, updated_at: at(5), projectless: true, id: 's-2', title: '周末去杭州的行程' },
   ] }
@@ -141,6 +150,16 @@ async function main() {
     // 3 左栏行尾
     const mark = await ev(() => document.querySelector('.t2s-srow[data-sel-id="s-main"] .t2s-bg')?.textContent ?? null)
     check('3 左栏会话行尾绿点 + 在跑个数', mark === '2', `mark=${mark}`)
+
+    // 3b 子代理行的头像(10-25 用户报:有头像的 Agent 跑子代理时只画了 Bot)
+    await win.locator('[data-subchat-status] .t2o-desk-row').nth(1).waitFor({ timeout: 10000 })
+    const subs = await ev(() => [...document.querySelectorAll('[data-subchat-status] .t2o-desk-row')].map((r) => {
+      const img = r.querySelector('img[data-subagent-avatar]')
+      return { name: r.querySelector('.t2o-desk-name')?.textContent, img: img ? { slug: img.dataset.subagentAvatar, blob: img.src.startsWith('blob:'), loaded: img.naturalWidth > 0, working: img.classList.contains('is-working'), w: img.getBoundingClientRect().width } : null, bot: !!r.querySelector('svg.lucide-bot') }
+    }))
+    const ava = subs.find((x) => x.name === 'Ava'), gen = subs.find((x) => x.name === 'Subagent')
+    check('3b 委派给有头像的 Agent:行首是它的头像(在跑带工作环)', !!ava?.img && ava.img.slug === 'ava' && ava.img.blob && ava.img.loaded && ava.img.working && !ava.bot, subs)
+    check('3b 通用子代理仍画 Bot,不借父会话 / 回落 slug 的头像', !!gen && !gen.img && gen.bot, subs)
     await shot('light')
 
     // 大窗口:Desk 卡不被拉长(先在 Desk 上放东西,看 1250 高下的样子)
@@ -217,7 +236,8 @@ async function main() {
     const deskBox = await win.locator('.t2-tsum > [data-card="desk"]').boundingBox()
     check('8 拖动时落点线画在栈里、最后一张卡下沿', !!line && line.x >= stackBox.x && line.x + line.width <= stackBox.x + stackBox.width + 1
       && Math.abs(line.y - (deskBox.y + deskBox.height)) <= 12, { line, stack: stackBox, deskBottom: deskBox && deskBox.y + deskBox.height })
-    await shot('drag')
+    // 拖动中拍图不能走 shot():它先把指针挪到 (150,640),会把落点改掉
+    await win.screenshot({ path: path.join(OUT, 'drag.png'), scale: 'css' }); console.log('shot drag')
     await win.mouse.up(); await win.waitForTimeout(600)
     const afterDrag = await cardIds()
     check('8 拖动块把「后台」拖到最下', afterDrag[afterDrag.length - 1] === 'bg', afterDrag)
