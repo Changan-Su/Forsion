@@ -6,7 +6,7 @@
  * 样式全在 sidebar2.css(t2s- 前缀,token 驱动);右键菜单复用 base.css 的 .ctx-menu。
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { Plus, MoreHorizontal, Pencil, Archive, ArchiveRestore, Trash2, ChevronRight, Folder, FolderOpen, Cloud, FolderPlus, SquarePen, Smartphone, Send, MessagesSquare, MessageSquare, GitBranch, Pin, PinOff, Info, NotebookPen, Smile } from 'lucide-react'
+import { Plus, MoreHorizontal, Pencil, Archive, ArchiveRestore, Trash2, ChevronRight, Folder, FolderOpen, Cloud, FolderPlus, SquarePen, Smartphone, Send, MessagesSquare, MessageSquare, Bot, GitBranch, Pin, PinOff, Info, NotebookPen, Smile } from 'lucide-react'
 import { SessionIcon, SessionIconPicker } from '../../components/SessionIcon'
 import { folderPadLeft, rowPadLeft } from '@amadeus/lib/treeIndent'
 import { SidebarRow } from '../../components/SidebarRow'
@@ -35,7 +35,9 @@ import { formatRowTime } from '../../format/time'
 import { ListSection, PullHint, SwipeRow, closeOtherSwipes, dayBucket, usePullToSearch, withSections, type SwipeAction } from '../../components/phoneList'
 import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
-const CHANNEL_ICONS: Record<ChannelKind, typeof Smartphone> = { wechat: Smartphone, telegram: Send, qq: MessagesSquare }
+const CHANNEL_ICONS: Partial<Record<ChannelKind, typeof Smartphone>> = { wechat: Smartphone, telegram: Send, qq: MessagesSquare }
+/** 插件通道没有专属图标,统一用 Bot。 */
+const channelIcon = (kind: ChannelKind): typeof Smartphone => CHANNEL_ICONS[kind] ?? Bot
 
 registerMessages({
   'sidebar.openInNewTab': { zh: '在新标签页打开', en: 'Open in new tab' },
@@ -375,7 +377,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
     // 通道会话 → 「设为正在连接」(该通道的入站消息改走此会话)。
     const chWs = s?.project_path ? p.workspaces.find((w) => w.kind === 'channel' && w.key === s.project_path) : null
     if (s && chWs?.channel) {
-      const Ic = CHANNEL_ICONS[chWs.channel]
+      const Ic = channelIcon(chWs.channel)
       items.push({
         id: 'channel-connect', label: t('sidebar.channel.setAsConnected'), icon: <Ic size={13} />,
         run: () => {
@@ -442,7 +444,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
    *  本地工作区用 Folder/FolderOpen 表达展开态 —— 箭头默认不显,总得有东西担起「展开了没」。
    *  Project 设了图标(PROJECT 详情里换的 emoji / 图片)就换成它:展开态只剩 hover 箭头表达,与笔记树带 emoji 的文件夹同理。 */
   const wsLead = (ws: WorkspaceDescriptor, collapsed: boolean) => {
-    const Ic = ws.kind === 'channel' ? CHANNEL_ICONS[ws.channel || 'wechat'] : ws.kind === 'cloud' ? Cloud : ws.kind === 'rootless' ? MessagesSquare : collapsed ? Folder : FolderOpen
+    const Ic = ws.kind === 'channel' ? channelIcon(ws.channel || 'wechat') : ws.kind === 'cloud' ? Cloud : ws.kind === 'rootless' ? MessagesSquare : collapsed ? Folder : FolderOpen
     return (
       <span className="t2s-lead">
         {isProjectWorkspace(ws) ? <ProjectIcon path={ws.path} className="amx-page-emoji t2s-project-icon" fallback={<Ic className="t2s-lead-icon" />} /> : <Ic className="t2s-lead-icon" />}

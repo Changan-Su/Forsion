@@ -5,7 +5,7 @@
  *
  * 占位符 `{var}` zh/en 逐字一致;新增键两边都要写(本文件是纯表,漏写 en 由 messages.test 钉住)。
  */
-import type { ChannelKind } from './types.js';
+import type { BuiltinChannelKind, ChannelKind } from './types.js';
 
 export type ChannelLocale = 'zh' | 'en';
 
@@ -247,7 +247,7 @@ export function channelMsg(locale: ChannelLocale, key: ChannelMessageKey, vars?:
   return vars ? text.replace(/\{(\w+)\}/g, (m, k: string) => (k in vars ? String(vars[k]) : m)) : text;
 }
 
-export const CHANNEL_NAME: Record<ChannelKind, Pair> = {
+export const CHANNEL_NAME: Record<BuiltinChannelKind, Pair> = {
   wechat: { zh: '微信', en: 'WeChat' },
   telegram: { zh: ' Telegram ', en: 'Telegram' },
   qq: { zh: ' QQ ', en: 'QQ' },

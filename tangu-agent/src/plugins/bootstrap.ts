@@ -34,6 +34,8 @@ import { registerToolProvider, unregisterToolProvider, listToolProviders } from 
 import { registerPlugin, getPluginMeta, pluginsNeedingRestart, setPluginDormant, unregisterPlugin } from './registry.js';
 import * as pluginStore from './settingsStore.js';
 import { wechatRemote } from '../services/wechatRemote.js';
+import { channelHub } from '../channels/hub.js';
+import { channelSettings } from '../channels/config.js';
 import { createTanguModule } from '../index.js';
 import { createHttpBrain } from '../adapters/standalone/httpBrain.js';
 import { createNoopBilling } from '../adapters/standalone/noopBilling.js';
@@ -75,6 +77,7 @@ const sdk: Omit<TanguSdk, 'runs' | 'engines' | 'workspaces' | 'automation'> = {
   createProfileStore,
   pluginStore,
   sendWechatMedia: (userId, sessionId, buffer, opts, signal) => wechatRemote.sendMediaForSession(userId, sessionId, buffer, opts, signal),
+  channelSettings,
 };
 
 /** 一次激活的效果台账。停用时据此逐条撤销;撤销后 disposed=true,旧 ctx 的迟到注册一律忽略。 */
@@ -199,6 +202,9 @@ function makeContext(d: DiscoveredPlugin, inst: Instance): TanguPluginContext {
         r.userRouter.use(`/extensions/${owner}/${id}`, router);
       });
       if (inst.activated) mountRoutes(id, inst);
+    },
+    registerChannel: (spec) => {
+      if (live('通道')) inst.runtimeDisposers.push(channelHub.registerChannel(spec)); // 停用时 stopEntry 跑 runtimeDisposers 摘掉
     },
     sdk: { ...sdk, runs: { ...runs, start: p => runs.start({ ...p, ...(p.toolNames ? { toolNames: p.toolNames.map(translateTool) } : {}) }) }, engines: pluginEngines,
       automation: { ...automation, save: (key, input) => automation.save(key, { ...input, tool: translateTool(input.tool) }) },

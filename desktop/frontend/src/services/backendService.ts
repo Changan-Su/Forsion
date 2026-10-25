@@ -656,7 +656,7 @@ export const setWechatSessionAgent = (t: EngineTarget, sessionId: string, agentS
 export const createWechatSession = (t: EngineTarget, title?: string) =>
   request<{ sessionId: string }>(t, '/agent/wechat/sessions/new', { method: 'POST', body: JSON.stringify({ title }) }).then((r) => r.sessionId)
 
-// ── 多通道(Channels:微信/Telegram/QQ;本地后端)──
+// ── 多通道(Channels:微信/Telegram/QQ + 插件通道;本地后端)──
 export type { ChannelKind } from '../types'
 
 export interface ChannelStatus {
@@ -677,6 +677,12 @@ export interface ChannelStatus {
   accountId: string | null
   peerBound: boolean
   workspace: string
+  /** 插件通道(引擎插件 ctx.registerChannel)的卡片声明:显示名 / 提示 / 凭据字段。内置通道没有。 */
+  plugin?: {
+    name: { zh: string; en: string }
+    hint: { zh: string; en: string } | null
+    fields: Array<{ key: 'appId' | 'appSecret' | 'botToken'; label: { zh: string; en: string }; secret: boolean }>
+  }
 }
 
 export interface ChannelConfigPatch {

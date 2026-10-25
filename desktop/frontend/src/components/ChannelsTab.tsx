@@ -1,11 +1,12 @@
 /**
- * 设置 → 通道(Channels):微信 / Telegram / QQ 一卡一通道。
+ * 设置 → 通道(Channels):微信 / Telegram / QQ + 引擎插件贡献的通道(企业微信等),一卡一通道。
+ * 插件通道的卡头名 / 凭据输入 / 提示按它在 /agent/channels 里自报的 plugin 声明画,其余部分与内置同一套。
  * 布局:卡头 = 图标 + 名称 + 状态点 + 启用开关(不展开也能启停);卡体 = 凭据/扫码 + 每通道默认
  * (Agent / LLM / 画图 / 语音模型 / 审批)+ 通道会话开关 + 收件箱转发(与会话独立)。
  * 刻意不展示历史绑定列表(旧版乱源);连接语义 = 连接即新会话。
  */
 import React, { useEffect, useState } from 'react'
-import { MessageCircle, Send, MessagesSquare, Loader2, RefreshCw } from 'lucide-react'
+import { MessageCircle, Send, MessagesSquare, Bot, Loader2, RefreshCw } from 'lucide-react'
 import { useI18n } from '../i18n'
 import { useApp } from '../stores/appStore'
 import { useChannels, type ChannelStatus } from '../stores/channelsStore'
@@ -15,7 +16,7 @@ import type { ChannelKind, TanguDesktopConfig } from '../types'
 import { SettingsState } from './SettingsPrimitives'
 import { homeTarget } from '../services/engine/targets'
 
-const ICONS: Record<ChannelKind, React.ReactNode> = {
+const ICONS: Partial<Record<ChannelKind, React.ReactNode>> = {
   wechat: <MessageCircle size={16} />,
   telegram: <Send size={16} />,
   qq: <MessagesSquare size={16} />,
@@ -24,7 +25,7 @@ const ICONS: Record<ChannelKind, React.ReactNode> = {
 const KINDS: ChannelKind[] = ['wechat', 'telegram', 'qq']
 
 export function ChannelsTab(p: { cfg: TanguDesktopConfig }) {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const channels = useChannels((s) => s.channels)
   const available = useChannels((s) => s.available)
   const loaded = useChannels((s) => s.loaded)
@@ -144,7 +145,7 @@ export function ChannelsTab(p: { cfg: TanguDesktopConfig }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       <div className="hint">{t('channels.intro')}</div>
-      {KINDS.map((kind) => {
+      {[...KINDS, ...channels.filter((c) => c.plugin).map((c) => c.kind)].map((kind) => {
         const ch = channels.find((c) => c.kind === kind)
         if (!ch) return null
         const st = statusOf(ch)
@@ -155,8 +156,8 @@ export function ChannelsTab(p: { cfg: TanguDesktopConfig }) {
         return (
           <div key={kind} className="field chan-card">
             <button type="button" className="chan-head" onClick={() => setExpanded(open ? null : kind)}>
-              {ICONS[kind]}
-              <span className="chan-name">{t(`channel.name.${kind}`)}</span>
+              {ICONS[kind] ?? <Bot size={16} />}
+              <span className="chan-name">{ch.plugin ? ch.plugin.name[locale] : t(`channel.name.${kind}`)}</span>
               <span className="chan-status">
                 <span className={`mini-dot${st.on ? ' ok' : ''}`} />
                 {st.text}
@@ -220,6 +221,37 @@ export function ChannelsTab(p: { cfg: TanguDesktopConfig }) {
                   </>
                 )}
                 {kind === 'telegram' && <div className="hint">{t('channels.botTokenHint')}</div>}
+                {ch.plugin && (
+                  <>
+                    <div className="chan-row">
+                      {ch.plugin.fields.map((f) => {
+                        const ck = `${kind}.${f.key}`
+                        // 状态只回显 appId 明文;其余已保存的只给布尔 → 占位提示「已保存」。
+                        const echo = !f.secret && f.key === 'appId' ? ch.credentials.appId : ''
+                        const isSet = f.key === 'botToken' ? ch.credentials.botTokenSet : f.key === 'appId' ? ch.credentials.appIdSet : ch.credentials.appSecretSet
+                        return (
+                          <React.Fragment key={f.key}>
+                            <label>{f.label[locale]}</label>
+                            <input
+                              type={f.secret ? 'password' : 'text'}
+                              style={{ flex: 1, minWidth: 140 }}
+                              value={creds[ck] ?? echo}
+                              placeholder={!echo && isSet ? t('channels.secretSaved') : ''}
+                              onChange={(e) => setCreds((c) => ({ ...c, [ck]: e.target.value }))}
+                              onBlur={() => {
+                                const v = (creds[ck] || '').trim()
+                                if (!v || v === echo) return
+                                save(kind, { [f.key]: v })
+                                if (f.secret) setCreds((c) => ({ ...c, [ck]: '' }))
+                              }}
+                            />
+                          </React.Fragment>
+                        )
+                      })}
+                    </div>
+                    {ch.plugin.hint && <div className="hint">{ch.plugin.hint[locale]}</div>}
+                  </>
+                )}
 
                 <div className="chan-row">
                   {!bound && (
