@@ -387,6 +387,16 @@
 }
 .t2s-group:hover .t2s-group-add { opacity: 0.7; }
 .t2s-group-add:hover { opacity: 1; background: var(--overlay-light, rgba(127, 127, 127, 0.12)); color: var(--text); }
+/* 5.17:行尾按钮平时不占位(浮在行尾、透明),组名用满宽;悬停 / 键盘聚焦 / 菜单开着时组头让出右边距,名字才收短。
+ * 不用 display:none —— 台架与读屏都要能直接点到它。触屏常显,照旧占位。 */
+@media (hover: hover) {
+  .t2s-group > .t2s-group-add { position: absolute; top: 50%; right: 0; translate: 0 -50%; }
+  .t2s-group > .t2s-group-add:nth-last-child(2) { right: 25.5px; }
+  .t2s-group > .t2s-group-add:nth-last-child(3) { right: 51px; } /* 文件面板展开且可写时三颗:新建文件 / 新建文件夹 / 刷新 */
+  .t2s-group:has(> .t2s-group-add):is(:hover, :focus-within, :has(> .t2s-group-add[aria-expanded=true])) { padding-right: 25.5px; }
+  .t2s-group:has(> .t2s-group-add + .t2s-group-add):is(:hover, :focus-within, :has(> .t2s-group-add[aria-expanded=true])) { padding-right: 51px; }
+  .t2s-group:has(> .t2s-group-add + .t2s-group-add + .t2s-group-add):is(:hover, :focus-within, :has(> .t2s-group-add[aria-expanded=true])) { padding-right: 76.5px; }
+}
 
 /* 会话行 */
 .t2s-group-sessions { position: relative; display: flex; flex-direction: column; gap: 1px; padding-bottom: 1.5px; transition: box-shadow var(--lcl-drop-fade); } /* relative:组尾那条落点线(::after)常驻 */
@@ -566,7 +576,17 @@
   border: 0; border-radius: var(--radius-sm, 6px); background: transparent; color: var(--text-light);
   font: inherit; font-size: var(--ui-font-meta, 12px); cursor: pointer;
 }
-.t2sw-plug-btn { display: block; max-width: 42%; padding: 3px 8px; flex: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
+.t2sw-plug-btn { max-width: 42%; padding: 3px 8px; flex: none; white-space: nowrap; overflow: hidden; color: var(--text); }
+.t2sw-plug-btn-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.t2sw-plug-btn-ic { display: none; }
+.t2sw-plug-btn-ic > svg { width: 15px; height: 15px; }
+/* 5.17:工具栏窄于 260px(880 窗下的自动化侧栏)主动作只留图标,不再被省略成「New auto…」像个输入框;全名在悬停提示里。 */
+.t2sw-plug-toolbar { container: plug-toolbar / inline-size; }
+@container plug-toolbar (max-width: 259px) {
+  .t2sw-plug-btn { width: 26px; padding: 0; }
+  .t2sw-plug-btn-label { display: none; }
+  .t2sw-plug-btn-ic { display: inline-flex; }
+}
 .t2sw-plug-overflow, .t2sw-plug-reset { flex: none; width: 26px; padding: 0; }
 .t2sw-plug-filterbar { display: flex; align-items: center; gap: 2px; padding: 3px 8px 5px; flex-shrink: 0; min-width: 0; }
 .t2sw-plug-filter { justify-content: flex-start; min-width: 0; max-width: 75%; padding: 3px 5px; }

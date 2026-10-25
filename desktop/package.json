@@ -352,6 +352,7 @@
     "check:agentprofile": "node scripts/agent-profile.check.cjs",
     "check:r5views": "node scripts/r5-views.check.cjs",
     "check:emptystates": "node scripts/empty-states.check.cjs",
+    "check:r5narrow": "node scripts/r5-names-narrow.check.cjs",
     "check:settingscontrols": "node scripts/settings-controls.check.cjs",
     "check:humanprofile": "node scripts/human-profile.check.cjs",
     "check:projectdetails": "node scripts/project-details.check.cjs",

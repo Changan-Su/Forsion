@@ -3046,8 +3046,8 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
           </div>
           <ul className="amx-welcome-tips">
             <li><span className="amx-kbd">[[</span> {t('amxv.welcome.tip1')}</li>
-            <li><Paperclip size={13} /> {t('amxv.welcome.tip2')}</li>
-            <li><Code2 size={13} /> {t('amxv.welcome.tip3')}</li>
+            <li><Paperclip size={14} /> {t('amxv.welcome.tip2')}</li>
+            <li><Code2 size={14} /> {t('amxv.welcome.tip3')}</li>
           </ul>
         </div>
         )

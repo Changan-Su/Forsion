@@ -193,7 +193,9 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .amx-welcome-btn.ghost { background: transparent; border-color: var(--border); color: var(--text-muted); }
 .amx-welcome-btn.ghost:hover { background: var(--bg-hover); filter: none; }
 .amx-welcome-tips { list-style: none; margin: 24px 0 0; padding: 0; display: flex; flex-direction: column; gap: 11px; }
-.amx-welcome-tips li { display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); line-height: 1.5; }
+.amx-welcome-tips li { display: grid; grid-template-columns: 26px minmax(0, 1fr); align-items: center; column-gap: 8px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); line-height: 1.5; }
+/* 首列固定 26px(「[[」芯片、回形针、</> 三种宽度不一,5.18):图标居中,三行文字起点对齐。 */
+.amx-welcome-tips li > :first-child { justify-self: center; }
 .amx-kbd {
   font-family: var(--font-mono, ui-monospace, monospace); background: rgba(127, 127, 127, .14);
   border: 1px solid var(--border, rgba(127, 127, 127, .28)); border-radius: 4px;

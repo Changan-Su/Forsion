@@ -193,7 +193,7 @@ async function main() {
     await openLauncher(win)
     const carded = await clickCard(win, ['日历', 'Calendar'])
     const planted = await win.evaluate(SNAP)
-    await enterSpace(win, ['笔记', 'Note'], 'amadeus')
+    await enterSpace(win, ['笔记', 'Notes'], 'amadeus')
     await win.evaluate(toggle(false))
     await win.waitForTimeout(1500)
     errs.length = 0
@@ -215,7 +215,7 @@ async function main() {
     // 6 侧栏面板那半:把引擎刚存下的 space:calendar 布局(10-16 起左 calendar-config / 右 calendar-side)
     //   搬进 space:tangu 的命名槽 —— 真实 blob,不手搓;再关插件、切回 Tangu 让 applyNamed 吃它。
     await enterCalendar(win)
-    await enterSpace(win, ['笔记', 'Note'], 'amadeus') // 切走 = saveNamed('space:calendar')
+    await enterSpace(win, ['笔记', 'Notes'], 'amadeus') // 切走 = saveNamed('space:calendar')
     const cloned = await win.evaluate(`(() => {
       const KEY = 'tangu2_named_layouts'
       const m = JSON.parse(localStorage.getItem(KEY) || '{}')
@@ -260,7 +260,7 @@ async function main() {
     await win.waitForTimeout(1200)
     await win.click('.dv-edge-right') // 收右栏 → calendar-side 入 stash
     await win.waitForTimeout(1200)
-    await enterSpace(win, ['笔记', 'Note'], 'amadeus') // 切走 = saveNamed('space:calendar')
+    await enterSpace(win, ['笔记', 'Notes'], 'amadeus') // 切走 = saveNamed('space:calendar')
     await win.evaluate(`(() => {
       const KEY = 'tangu2_named_layouts'
       const m = JSON.parse(localStorage.getItem(KEY) || '{}')
@@ -276,7 +276,7 @@ async function main() {
       }
     })()`)
     await win.waitForTimeout(1500)
-    await enterSpace(win, ['笔记', 'Note'], 'amadeus')
+    await enterSpace(win, ['笔记', 'Notes'], 'amadeus')
     const stashFix = await win.evaluate(`(() => {
       const KEY = 'tangu2_named_layouts'
       const m = JSON.parse(localStorage.getItem(KEY) || '{}')

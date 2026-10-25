@@ -347,6 +347,7 @@ export function AgentSkillsPanel({ cfg, agentSlug, surface, selectedIds, onSelec
     {canImportLocalFolder && <button type="button" className="agent-profile-link" disabled={!!busyKey} onClick={() => void importFolder()}><FolderInput size={14} />{t('agentProfile.importAgentSkill')}</button>}
     <div className="agent-skill-section-head"><div><h3>{t('agentProfile.inheritedSkills')}</h3><p>{t('agentProfile.inheritedSkillsHint')}</p></div></div>
     {global.length > 0 ? <div className="agent-skill-list">{global.map(row)}</div> : !loading && !error && <p className="agent-profile-muted">{t(query ? 'agentProfile.noResults' : 'agentProfile.noGlobalSkills')}</p>}
+    <button className="agent-profile-link" data-act="manage-skills" onClick={() => useApp.getState().openSettings('skills')}>{t('agentProfile.manageSkills')}<ExternalLink size={13} /></button>
     {!loading && (extraVisible.length > 0 || missingVisible.length > 0) && <>
       <div className="agent-skill-section-head"><div><h3>{t('agentProfile.otherSkills')}</h3><p>{t('agentProfile.otherSkillsHint')}</p></div></div>
       <div className="agent-skill-list">{extraVisible.map((entry) => {
