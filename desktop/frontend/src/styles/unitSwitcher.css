@@ -87,8 +87,12 @@
 .unitsw-dot.wait { background: var(--text-faint); }
 .unitsw-dot.live { background: var(--green); }
 /* 迷你开关(纯 CSS 药丸):data-on 时滑块右移 + accent 填充。 */
-.unitsw-switch { flex: none; width: 26px; height: 15px; border-radius: var(--radius-pill, 999px); background: var(--overlay-strong); position: relative; transition: background 0.15s ease; }
-.unitsw-switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 11px; height: 11px; border-radius: 50%; background: var(--bg-card); transition: transform 0.15s ease; }
+/* 关态与设置页开关同一套(走查续五 5.1):文字色实底轨道(浅 15% / 暗 24%)、旋钮软阴影,暗色旋钮 --text-light;菜单里尺寸照旧小一号。 */
+.unitsw-switch { flex: none; width: 26px; height: 15px; border-radius: var(--radius-pill, 999px); background: color-mix(in srgb, var(--text) 15%, transparent); position: relative; transition: background 0.15s ease; }
+.unitsw-switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 11px; height: 11px; border-radius: 50%; background: var(--bg-card); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.22); transition: transform 0.15s ease; }
+:root[data-mode='dark'] .unitsw-switch { background: color-mix(in srgb, var(--text) 24%, transparent); }
+:root[data-mode='dark'] .unitsw-switch::after { background: var(--text-light); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.45); }
+:root[data-mode='dark'] [data-on] .unitsw-switch::after { background: var(--bg-card); }
 .unitsw-hosttoggle[data-on] .unitsw-switch { background: var(--signal-mark); }
 .unitsw-hosttoggle[data-on] .unitsw-switch::after { transform: translateX(11px); }
 .unitsw-foot-hint { display: flex; align-items: center; gap: 6px; padding: 0 9px 4px; font-size: var(--ui-font-caption, 11px); color: var(--text-faint); user-select: text; }

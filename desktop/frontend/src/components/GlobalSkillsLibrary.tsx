@@ -9,6 +9,7 @@ import type { NormalAgentDef, SkillCatalogEntry, SkillInfo, TanguDesktopConfig }
 import { registerMessages, useI18n } from '../i18n'
 import { CapabilityMenu } from './CapabilityMenu'
 import { Markdown } from './Markdown'
+import { EmptyState } from './EmptyState'
 import './globalSkillsLibrary.css'
 import { homeTarget } from '../services/engine/targets'
 
@@ -35,6 +36,8 @@ registerMessages({
   'globalSkills.remoteHost': { zh: '当前目录位于连接的后端。此设备的文件夹选择器不能访问它；可直接管理该后端已有的技能。', en: 'This library is on the connected backend. This device’s folder picker cannot access it; you can manage skills already on that backend.' },
   'globalSkills.localHost': { zh: '本机技能保存在当前后端的用户目录；具体路径以右侧详情为准。', en: 'Host skills live in the current backend’s user directory. See each skill’s details for its exact path.' },
   'globalSkills.empty': { zh: '这里还没有技能。', en: 'No skills here yet.' },
+  'globalSkills.emptyTitle': { zh: '还没有技能', en: 'No skills yet' },
+  'globalSkills.emptyLine': { zh: '技能是写给 Agent 的一份做事说明。自己写一份，或把 Claude Code、Codex 里已有的导进来。', en: 'A skill is a short how-to written for your agents. Write one, or bring in the ones you already have in Claude Code or Codex.' },
   'globalSkills.noResults': { zh: '没有匹配的技能。', en: 'No matching skills.' },
   'globalSkills.pick': { zh: '选择一项技能查看内容和管理选项。', en: 'Select a skill to see its contents and management options.' },
   'globalSkills.loading': { zh: '正在读取技能…', en: 'Loading skills…' },
@@ -298,7 +301,7 @@ export function GlobalSkillsLibrary({ cfg, localHost, initialSkillKey, onImportC
         {catalog !== null && showMine && <section className="gsk-group"><div className="gsk-group-head"><strong>{t('globalSkills.mine')}</strong><span>{mine.length}</span></div>{mine.length ? mine.map(catalogRow) : !lowerQuery && <p className="gsk-empty">{t('globalSkills.empty')}</p>}</section>}
         {catalog !== null && showPackaged && !!shownPackaged.length && <section className="gsk-group"><button className="gsk-group-head gsk-group-toggle" type="button" aria-expanded={packagedOpen || !!lowerQuery || filter !== 'all'} onClick={() => setPackagedOpen((open) => !open)}><strong>{t('globalSkills.packaged')}</strong><span>{shownPackaged.length}</span>{packagedOpen || !!lowerQuery || filter !== 'all' ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button>{(packagedOpen || !!lowerQuery || filter !== 'all') && shownPackaged.map(catalogRow)}</section>}
         {showCloud && !!cloudMatches.length && <section className="gsk-group"><div className="gsk-group-head"><strong>{t('globalSkills.cloud')}</strong><span>{cloudMatches.length}</span></div>{cloudMatches.map((skill) => <button type="button" key={skill.id} className={`gsk-row${selected?.kind === 'cloud' && selected.id === skill.id ? ' selected' : ''}`} onClick={() => choose({ kind: 'cloud', id: skill.id })} aria-pressed={selected?.kind === 'cloud' && selected.id === skill.id}><span className="gsk-row-icon"><UploadCloud size={15} /></span><span className="gsk-row-copy"><strong>{skill.name}</strong><small>{skill.description || skill.id}</small></span><ChevronRight size={14} className="gsk-chevron" /></button>)}</section>}
-        {!loading && catalog !== null && !anyMatches && <p className="gsk-list-message">{t(lowerQuery ? 'globalSkills.noResults' : 'globalSkills.empty')}</p>}
+        {!loading && catalog !== null && !anyMatches && (lowerQuery || !showMine) && <p className="gsk-list-message">{t(lowerQuery ? 'globalSkills.noResults' : 'globalSkills.empty')}</p>}
       </div>
       <div className="gsk-detail" key={editor ? `editor:${editor.kind}` : JSON.stringify(selected)}>
         {editor ? <>
@@ -336,7 +339,11 @@ export function GlobalSkillsLibrary({ cfg, localHost, initialSkillKey, onImportC
           <div className="gsk-detail-head"><div><span>{t('globalSkills.cloud')}</span><h3>{selectedCloud.name}</h3><p>{selectedCloud.description}</p></div></div>
           <p className="gsk-cloud-note">{t('globalSkills.cloudExplanation')}</p><p className="gsk-cloud-note">{t('globalSkills.cloudPreview')}</p>
           <div className="gsk-actions"><button className="btn ghost sm" type="button" disabled={busy} onClick={() => { if (window.confirm(t('globalSkills.deleteCloudConfirm', { name: selectedCloud.name }))) void run(() => deleteUserCloudSkill(homeTarget(), selectedCloud.id), t('globalSkills.cloudDeleted'), null) }}><Trash2 size={13} />{t('globalSkills.delete')}</button></div>
-        </> : <div className="gsk-placeholder"><Sparkles size={22} /><p>{t('globalSkills.pick')}</p></div>}
+        </> : catalog !== null && !catalog.length && !cloud.length
+          ? <EmptyState icon={Sparkles} title={t('globalSkills.emptyTitle')} line={t('globalSkills.emptyLine')} data-gsk-empty=""
+              action={{ label: t('globalSkills.add'), icon: Plus, action: 'create', onClick: () => setEditor({ kind: 'create', name: '', slug: '', slugEdited: false, description: '', content: '' }) }}
+              secondary={onImportCli && <button type="button" className="btn ghost sm" onClick={onImportCli}>{t('settings.discovery.label')}</button>} />
+          : <div className="gsk-placeholder"><Sparkles size={22} /><p>{t('globalSkills.pick')}</p></div>}
       </div>
     </div>
     {message && <p className="gsk-message" role="status">{message}</p>}

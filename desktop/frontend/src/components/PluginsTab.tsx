@@ -11,6 +11,7 @@ import { usePluginStore } from '@amadeus/plugins/pluginStore'
 import type { TanguDesktopConfig } from '../types'
 import { useI18n } from '../i18n'
 import { PluginLogo } from './PluginLogo'
+import { SettingsSwitch } from './SettingsPrimitives'
 import { homeTarget } from '../services/engine/targets'
 import { dependentsOf, unmetDependencies } from '@amadeus/plugins/pluginDeps'
 
@@ -193,7 +194,7 @@ export const PluginsTab: React.FC<{
               const blocked = !p.enabled && missingFor(p).length > 0 // 关着、前置又没齐 → 开不了
               return (
                 <span title={blocked ? t('settings.plugins.needsDepsToEnable', { list: missingFor(p).map(label).join(sep) }) : undefined}>
-                  <input type="checkbox" checked={p.enabled} disabled={blocked} onChange={() => void toggle(p)} style={{ cursor: blocked ? 'not-allowed' : 'pointer' }} />
+                  <SettingsSwitch checked={p.enabled} disabled={blocked} label={nm(p)} onChange={() => void toggle(p)} />
                 </span>
               )
             })()}

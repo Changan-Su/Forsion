@@ -82,3 +82,8 @@
   .gsk-detail { animation: none; }
   .gsk-row, .gsk-row-icon, .gsk-group-toggle, .gsk-group-toggle svg, .gsk-search { transition: none; }
 }
+/* 工具栏四件同高(走查续五 5.2):搜索框、来源下拉、添加技能、刷新(34 × 34 的方块)。 */
+.gsk-toolbar > .gsk-search,
+.gsk-toolbar > .capability-menu-trigger,
+.gsk-toolbar > .btn { box-sizing: border-box; height: var(--settings-control-h, 34px); min-height: var(--settings-control-h, 34px); padding-block: 0; }
+.gsk-toolbar > .icon-btn { box-sizing: border-box; width: var(--settings-control-h, 34px); height: var(--settings-control-h, 34px); }
