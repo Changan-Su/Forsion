@@ -102,7 +102,8 @@ async function run() {
       const out = {
         vault: pair(host.querySelector('.t2s-vaultseg'), css(host.querySelector('.t2s-vaultseg-thumb')), host.querySelector('.t2s-vaultseg button.on')),
         vmode: pair(host.querySelector('.lcl-vmode-pill'), css(host.querySelector('.lcl-vmode-thumb')), host.querySelector('.lcl-vmode-pill button.on')),
-        agent: pair(nav, css(nav, '::before'), nav.querySelector('button.selected')),
+        // 滑块两种形态都认:整条等分的 nav::before,或 5.16 之后按钮自带的 button.selected::before
+        agent: (() => { const sel = nav.querySelector('button.selected'); const own = getComputedStyle(sel, '::before').content !== 'none'; return pair(nav, css(own ? sel : nav, '::before'), sel) })(),
         text: getComputedStyle(document.body).color,
       }
       host.remove(); return out

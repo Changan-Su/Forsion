@@ -72,15 +72,13 @@
 .agent-state.working i { background: var(--signal-mark); }
 .profile-expand { flex-shrink: 0; align-self: flex-start; display: grid; place-items: center; width: 30px; height: 30px; padding: 0; background: transparent; border: 0; border-radius: var(--radius-sm, 8px); color: var(--text-muted); cursor: pointer; }
 .profile-expand:hover { background: var(--overlay-medium); color: var(--text); }
-/* 分段标签条:与侧栏 .t2s-vaultseg、LCL 看法胶囊同一种选中态(凸起滑块 --seg-thumb)、同一档圆角(pill)—— 10-25 走查 5.11 A。 */
-.agent-section-nav { --profile-nav-gap: 4px; --profile-nav-padding: 5px; position: relative; isolation: isolate; display: flex; gap: var(--profile-nav-gap); padding: var(--profile-nav-padding); background: var(--overlay-light); border-radius: var(--radius-pill, 999px); min-width: 0; }
-.agent-section-nav::before { content: ""; position: absolute; z-index: -1; pointer-events: none; inset-block: var(--profile-nav-padding); left: var(--profile-nav-padding); width: calc((100% - 2 * var(--profile-nav-padding) - (var(--profile-tab-count, 5) - 1) * var(--profile-nav-gap)) / var(--profile-tab-count, 5)); border-radius: var(--radius-pill, 999px); background: var(--seg-thumb); box-shadow: var(--seg-thumb-shadow); transform: translateX(calc(var(--profile-tab-index, 0) * (100% + var(--profile-nav-gap)))); transition: transform 200ms cubic-bezier(.2,.8,.2,1); }
-.agent-section-nav button { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 36px; padding: 8px 10px; border: 0; background: transparent; color: var(--text-muted); border-radius: var(--radius-pill, 999px); cursor: pointer; white-space: nowrap; font-size: var(--ui-font-meta, 12px); transition: background 160ms ease, color 160ms ease; }
+.agent-section-nav { --profile-nav-gap: 4px; --profile-nav-padding: 5px; position: relative; isolation: isolate; display: flex; gap: var(--profile-nav-gap); padding: var(--profile-nav-padding); background: var(--overlay-light); border-radius: var(--radius-md, 12px); min-width: 0; }
+.agent-section-nav::before { content: ""; position: absolute; z-index: -1; pointer-events: none; inset-block: var(--profile-nav-padding); left: var(--profile-nav-padding); width: calc((100% - 2 * var(--profile-nav-padding) - (var(--profile-tab-count, 5) - 1) * var(--profile-nav-gap)) / var(--profile-tab-count, 5)); border-radius: var(--radius-sm, 8px); background: var(--bg); box-shadow: var(--btn-shadow); transform: translateX(calc(var(--profile-tab-index, 0) * (100% + var(--profile-nav-gap)))); transition: transform 200ms cubic-bezier(.2,.8,.2,1); }
+.agent-section-nav button { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 36px; padding: 8px 10px; border: 0; background: transparent; color: var(--text-muted); border-radius: var(--radius-sm, 8px); cursor: pointer; white-space: nowrap; font-size: var(--ui-font-meta, 12px); transition: background 160ms ease, color 160ms ease; }
 .agent-section-nav button svg { flex-shrink: 0; }
 .agent-section-nav button span { overflow: hidden; text-overflow: ellipsis; }
-/* 悬停只提字色,不铺底:暗色下 --overlay-medium 的底和凸起滑块几乎一样亮,会看成两格选中(同 .t2s-vaultseg) */
-.agent-section-nav button:hover { color: var(--text); }
-.agent-section-nav button.selected { color: var(--text); background: transparent; }
+.agent-section-nav button:hover { color: var(--text); background: var(--overlay-medium); }
+.agent-section-nav button.selected { color: var(--accent-ink); background: transparent; }
 .agent-profile-content { min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 24px 2px; scrollbar-width: thin; }
 .agent-profile-content:focus { outline: none; }
 .agent-profile-content:focus-visible { outline: var(--focus-ring) solid var(--signal-line); outline-offset: -2px; }
@@ -410,3 +408,11 @@ div.agent-equipment-item > label { display: flex; align-items: flex-start; gap: 
 /* 「查看」落点(对话里的留痕 / 更新卡 / 通知 → 详情里的那一条):短暂垫一层底,渐隐回原样。只写中间帧,起止都回到元素自己的底色 */
 @keyframes record-flash { 25%, 60% { background: var(--overlay-strong); } }
 [data-record-flash] { animation: record-flash 1.8s ease; }
+
+/* 5.11 A(10-25 用户定):分段标签条与侧栏 .t2s-vaultseg、LCL 看法胶囊同一种选中态 —— 凸起滑块 --seg-thumb + --seg-thumb-shadow,
+   选中字 --text —— 和同一档圆角(pill)。悬停只提字色、不铺底:暗色下 --overlay-medium 的底和滑块几乎一样亮,会看成两格选中。
+   放文件末尾:同特异性压过上面的基础规则(DESIGN §7)。滑块写两种形态:整条等分的 nav::before 与按钮自带的 button.selected::before。 */
+.agent-section-nav, .agent-section-nav button { border-radius: var(--radius-pill, 999px); }
+.agent-section-nav::before, .agent-section-nav button.selected::before { border-radius: var(--radius-pill, 999px); background: var(--seg-thumb); box-shadow: var(--seg-thumb-shadow); }
+.agent-section-nav button:hover { background: transparent; }
+.agent-section-nav button.selected { color: var(--text); }
