@@ -3,6 +3,7 @@ import { RefreshCw } from 'lucide-react'
 import { registerMessages, useI18n } from '../i18n'
 import type { CorePluginUpdate, CorePluginUpdates as UpdateState } from '../../../shared/corePlugins'
 import { ipcErrorText } from '../ipcError'
+import { SettingsPanel } from './SettingsPrimitives'
 import './pluginManagement.css'
 
 registerMessages({
@@ -74,18 +75,24 @@ export function CorePluginUpdates({ controls = false }: { controls?: boolean }) 
   const [error, setError] = useState('')
   if (!state.items.length) return null
   const restart = state.items.some((item) => item.phase === 'staged' || !!item.pendingVersion && item.pendingVersion !== item.installedVersion)
-  return <section className="core-plugin-updates" aria-label={t('plugins.core.updates')}>
-    <div className="plugin-section-heading"><strong>{t('plugins.core.updates')}</strong>
-      {controls && <button className="btn ghost sm" disabled={state.checking} onClick={() => { setError(''); void window.tangu?.checkForUpdates?.().catch((e) => setError(ipcErrorText(e))) }}>
-        <RefreshCw size={13} className={state.checking ? 'spin' : undefined} /> {t('plugins.core.check')}
-      </button>}
+  // 收进一张设置卡(走查续五 5.8):卡头带「检查所有更新」,每个插件一行,和其他设置行同一个内边距;About 页同一份
+  return <SettingsPanel
+    className="core-plugin-updates"
+    title={t('plugins.core.updates')}
+    description={t('plugins.core.updateHint')}
+    actions={controls && <button className="btn ghost sm" disabled={state.checking} onClick={() => { setError(''); void window.tangu?.checkForUpdates?.().catch((e) => setError(ipcErrorText(e))) }}>
+      <RefreshCw size={13} className={state.checking ? 'spin' : undefined} /> {t('plugins.core.check')}
+    </button>}
+  >
+    <div className="settings-control-list">
+      {state.items.map((item) => <div className="settings-control-row core-plugin-update-row" key={item.id}>
+        <span>{item.id === 'forsion-extend' ? 'Forsion Extend' : item.id === 'tangu-computer-use' ? 'Computer Use' : item.id === 'tangu-engine' ? 'Tangu' : item.packageName}</span>
+        <CorePluginUpdateStatus item={item} />
+      </div>)}
+      {(error || restart && window.tangu?.relaunchApp) && <div className="settings-control-row core-plugin-update-row">
+        {error ? <div role="alert" className="hint">{error}</div> : <span />}
+        {restart && window.tangu?.relaunchApp && <button className="btn sm" onClick={() => { setError(''); void (window.tangu!.restartForUpdate?.() ?? window.tangu!.relaunchApp!()).catch((e) => setError(ipcErrorText(e))) }}><RefreshCw size={13} />{t('plugins.core.restart')}</button>}
+      </div>}
     </div>
-    <div className="hint">{t('plugins.core.updateHint')}</div>
-    {state.items.map((item) => <div className="core-plugin-update-row" key={item.id}>
-      <span>{item.id === 'forsion-extend' ? 'Forsion Extend' : item.id === 'tangu-computer-use' ? 'Computer Use' : item.id === 'tangu-engine' ? 'Tangu' : item.packageName}</span>
-      <CorePluginUpdateStatus item={item} />
-    </div>)}
-    {error && <div role="alert" className="hint">{error}</div>}
-    {restart && window.tangu?.relaunchApp && <button className="btn sm" onClick={() => { setError(''); void (window.tangu!.restartForUpdate?.() ?? window.tangu!.relaunchApp!()).catch((e) => setError(ipcErrorText(e))) }}><RefreshCw size={13} />{t('plugins.core.restart')}</button>}
-  </section>
+  </SettingsPanel>
 }

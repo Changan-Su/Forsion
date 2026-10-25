@@ -199,8 +199,8 @@ export function DesktopPermissions({ mode, only, onSnapshot, onBusyChange, embed
 
   return (
     <div className={`desktop-permissions${embedded ? ' desktop-permissions--embedded' : ''}`}>
-      {!embedded && <div className="desktop-permissions-toolbar">
-        {!only && <p>{t('desktopPermissions.optional')}</p>}
+      {/* 设置页里不再重复「都可稍后设置」(走查续五 W-39),刷新留在右边;引导里(带 only)照旧靠左 */}
+      {!embedded && <div className={`desktop-permissions-toolbar${only ? '' : ' desktop-permissions-toolbar--end'}`}>
         <button type="button" className="btn ghost sm" disabled={refreshing || !!busy} onClick={() => void refresh()}>
           <RefreshCw size={13} className={refreshing ? 'spin' : undefined} aria-hidden="true" />{t('desktopPermissions.refresh')}
         </button>
