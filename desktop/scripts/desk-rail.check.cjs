@@ -1,12 +1,13 @@
 /**
  * Agent Desk 卡片态的垂直几何契约检查(真 Chromium 断言)。
  *
- * 为什么存在:「严格上下 50/50 + 卡片钉底」全挂在几条纯 CSS 前提上,肉眼推演容易想当然:
- *  ① `.t2-rail:has(.agent-desk-card) .t2-tsum.show { flex: 0 0 calc(50% - 5px) }` —— 百分比
- *     flex-basis 在列向容器里按**车道高**解析,车道是 inset 定位才有确定高;
- *  ② `.agent-desk-card { margin-top: auto }` —— 概览不在场时靠 auto margin 吸掉上方空间钉底,
- *     概览在场时两个半高 + gap 恰好占满、auto 归零;这两种状态都得真浏览器量过才算数;
- *  ③ 容器查询按 `.t2-chat-col`(nearest container)求值,不是 `.t2-chat-view`——层级错了阈值就错。
+ * 为什么存在:摘要栏卡片栈(2026-10-25 用户改为多卡片,方案 A)的几何全挂在几条纯 CSS 前提上:
+ *  ① 卡片 hug 内容、Desk 展开固定 380 —— 原来两卡写死 calc(50% - 5px),大窗口下 Desk 被拉得很长(用户报);
+ *     这里在 900 高与 1400 高两档各量一次,Desk 卡高必须一样;
+ *  ② 空着的 Desk 收起只剩卡头;.gone(侧板展开)隐身且不触发让位;只有 Desk 时栈照样出现(:has 判);
+ *  ③ 卡片多了整栈在车道里滚,不顶出车道;
+ *  ④ 容器查询按 `.t2-chat-col`(nearest container)求值,不是 `.t2-chat-view`——层级错了阈值就错。
+ *  (2026-10-25 之前钉的是「严格 50/50 + Desk 卡底与输入框底线同线」,随用户改判撤掉。)
  *
  * 页面注入仓里**真实的 base.css + chat2.css**(不复制样式),DOM 复刻 ChatView 真实层级
  * (t2-chat-view row → t2-chat-col → t2-chat-body → t2-stream + t2-rail)。
@@ -68,14 +69,16 @@ const HTML = `<!doctype html><html><head><meta charset="utf-8"><style>
       </div>
       <div class="composer-anchor" style="height:120px">输入框</div>
       <div class="t2-rail" id="rail">
-        <aside class="t2-tsum show" id="tsum"><div class="t2-tsum-in" id="tsumin">
-          <div class="t2-tsum-state done">已完成</div>
-          <div class="t2-tsum-sub">短内容</div>
-        </div></aside>
-        <div class="agent-desk-card" id="card">
-          <div class="agent-desk-card-head">Agent Desk</div>
-          <div class="agent-desk-card-body"><div class="agent-desk-card-empty">空态</div></div>
-        </div>
+        <aside class="t2-tsum show" id="tsum">
+          <details class="t2-card t2-tsum-in" id="tsumin" open>
+            <summary class="t2-card-head"><span class="t2-card-title"><span class="t2-tsum-state done">已完成</span></span><span class="t2-card-end"><svg class="t2-tsum-chev" width="12" height="12"></svg></span></summary>
+            <div class="t2-card-body"><div class="t2-tsum-sub">短内容</div></div>
+          </details>
+          <details class="t2-card agent-desk-card" id="card" open>
+            <summary class="t2-card-head"><span class="t2-card-title"><span>Agent Desk</span></span><span class="t2-card-end"><svg class="t2-tsum-chev" width="12" height="12"></svg></span></summary>
+            <div class="t2-card-body agent-desk-card-frame act" id="frame"><div class="agent-desk-card-body"><div class="agent-desk-card-empty">内容</div></div></div>
+          </details>
+        </aside>
       </div>
     </div>
   </div>
@@ -83,20 +86,20 @@ const HTML = `<!doctype html><html><head><meta charset="utf-8"><style>
 
 const measure = () => {
   const r = (id) => document.getElementById(id).getBoundingClientRect()
-  const rail = r('rail'); const card = r('card'); const col = r('col')
-  const tsum = document.getElementById('tsum')
-  const shown = getComputedStyle(tsum).display !== 'none'
-  const cardShown = getComputedStyle(document.getElementById('card')).display !== 'none'
+  const disp = (id) => getComputedStyle(document.getElementById(id)).display !== 'none'
   const rs = getComputedStyle(document.getElementById('rail'))
+  const tsumShown = disp('tsum'); const cardShown = disp('card')
+  const stack = document.getElementById('tsum')
   return {
-    railH: rail.height, railBottom: rail.bottom, colBottom: col.bottom,
+    railH: r('rail').height, railBottom: r('rail').bottom,
     // 车道上下内边距实测而非写死:改 .t2-rail padding 时这条断言该跟着走,不该变成假红。
-    railPadY: parseFloat(rs.paddingTop) + parseFloat(rs.paddingBottom),
-    railPadTop: parseFloat(rs.paddingTop),
-    railPadBottom: parseFloat(rs.paddingBottom),
-    cardShown, cardTop: card.top, cardBottom: card.bottom, cardH: card.height,
-    tsumShown: shown, tsumH: shown ? r('tsum').height : 0, tsumBottom: shown ? r('tsum').bottom : 0, tsumInH: shown ? r('tsumin').height : 0,
-    marginTop: getComputedStyle(document.getElementById('card')).marginTop,
+    railPadTop: parseFloat(rs.paddingTop), railPadBottom: parseFloat(rs.paddingBottom),
+    tsumShown, stackH: tsumShown ? r('tsum').height : 0, stackBottom: tsumShown ? r('tsum').bottom : 0,
+    stackScroll: tsumShown ? stack.scrollHeight - stack.clientHeight : 0,
+    progH: tsumShown ? r('tsumin').height : 0,
+    cardShown, cardH: cardShown ? r('card').height : 0,
+    frameH: cardShown && document.getElementById('frame') ? r('frame').height : 0,
+    streamPad: parseFloat(getComputedStyle(document.getElementById('stream')).paddingRight),
   }
 }
 
@@ -105,7 +108,8 @@ async function companionFill(p, withClass) {
   await p.evaluate((withClass) => {
     document.getElementById('view').style.width = '1400px'
     document.getElementById('tsum').className = 't2-tsum show'
-    document.getElementById('card').className = 'agent-desk-card'
+    document.getElementById('card').className = 't2-card agent-desk-card'
+    document.getElementById('card').open = true
     const body = document.querySelector('#card .agent-desk-card-body')
     body.className = withClass ? 'agent-desk-card-body companion' : 'agent-desk-card-body'
     body.innerHTML = '<div class="agent-desk-pane agent-desk-companion"><div class="agent-desk-companion-slot" id="slot"'
@@ -149,7 +153,7 @@ const DRAFT_HTML = `<!doctype html><html><head><meta charset="utf-8"><style>
         <div class="t2c"><div class="t2c-inner" id="t2cinner"><div class="t2-composer" style="height:80px"></div></div></div>
       </div>
       <div class="t2-rail" id="rail">
-        <aside class="t2-tsum" id="tsum"><div class="t2-tsum-in"></div></aside>
+        <aside class="t2-tsum" id="tsum"></aside>
       </div>
     </div>
   </div>
@@ -176,13 +180,14 @@ async function draftAt(p, width) {
   })
 }
 
-async function at(p, width, tsumCls, cardCls = 'agent-desk-card') {
-  await p.evaluate(({ width, tsumCls, cardCls }) => {
+async function at(p, width, tsumCls, cardCls = 't2-card agent-desk-card', cardOpen = true) {
+  await p.evaluate(({ width, tsumCls, cardCls, cardOpen }) => {
     document.getElementById('view').style.width = width + 'px'
     document.getElementById('tsum').className = tsumCls
     document.getElementById('card').className = cardCls
-  }, { width, tsumCls, cardCls })
-  await p.waitForTimeout(500)
+    document.getElementById('card').open = cardOpen
+  }, { width, tsumCls, cardCls, cardOpen })
+  await p.waitForTimeout(700) // 进场 0.3s + 折叠 0.25s
   return p.evaluate(measure)
 }
 
@@ -191,35 +196,48 @@ async function at(p, width, tsumCls, cardCls = 'agent-desk-card') {
   const p = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1600, height: 900 } })
   await p.setContent(HTML)
 
-  // ① 概览在场:两卡高度固定 50/50(概览卡撑满上半、内容内滚);Desk 卡底缘=列底-16=输入框底线
+  // ① 卡片 hug 内容:进度卡只有自己那点高,Desk 展开正文固定 380,栈高 = 两卡 + gap + 投影留白
   const both = await at(p, 1400, 't2-tsum show')
-  // 用户口径:概览卡顶到聊天区上缘 == Desk 卡底到聊天区下缘。两者就是车道的上下内边距,必须同值。
-  // 我自己在 2026-07-30 把顶部单独调成 4 过一次,肉眼看不出来,靠这条钉住。
-  check('⚠️车道上下留白同值(两卡到聊天区上/下缘等距)', both.railPadTop === both.railPadBottom,
-    `上=${both.railPadTop} 下=${both.railPadBottom}`)
-  const half = (both.railH - both.railPadY - 10) / 2 // (车道内容高 − gap) / 2
-  check('⚠️两卡高度固定各半', Math.abs(both.tsumH - half) <= 2 && Math.abs(both.cardH - half) <= 2,
-    `tsum=${both.tsumH.toFixed(1)} card=${both.cardH.toFixed(1)} 期望=${half.toFixed(1)}`)
-  check('⚠️概览卡撑满上半(stretch,非 hug)', Math.abs(both.tsumInH - both.tsumH) <= 2,
-    `卡=${both.tsumInH.toFixed(1)} 车道半格=${both.tsumH.toFixed(1)}`)
-  check('⚠️卡片底缘与输入框底线同线(列底-16)', Math.abs(both.cardBottom - (both.colBottom - 16)) <= 1,
-    `cardBottom=${both.cardBottom.toFixed(1)} 期望=${(both.colBottom - 16).toFixed(1)}`)
-  check('两卡间只隔 gap,无空带', Math.abs(both.cardTop - (both.tsumBottom + 10)) <= 2,
-    `cardTop=${both.cardTop.toFixed(1)} 概览底+gap=${(both.tsumBottom + 10).toFixed(1)}`)
+  // 用户口径(07-30 起):卡栈顶到聊天区上缘 == 车道底到聊天区下缘,车道上下内边距同值。
+  check('⚠️车道上下留白同值', both.railPadTop === both.railPadBottom, `上=${both.railPadTop} 下=${both.railPadBottom}`)
+  check('⚠️进度卡 hug 内容(不被拉高)', both.progH < 120, `progH=${both.progH.toFixed(1)}`)
+  check('⚠️Desk 展开正文固定 380', Math.abs(both.frameH - 380) <= 1, `frameH=${both.frameH.toFixed(1)}`)
+  check('⚠️栈 hug 两卡(不撑满车道)', Math.abs(both.stackH - (both.progH + both.cardH + 10 + 20)) <= 2 && both.stackH < both.railH - 100,
+    `stack=${both.stackH.toFixed(1)} 两卡+gap+留白=${(both.progH + both.cardH + 30).toFixed(1)} rail=${both.railH.toFixed(1)}`)
 
-  // ② 概览不在场(无 .show):卡片仍固定下半、钉底
+  // ② 大窗口(1400 高):Desk 卡高与 900 高时一样(原来 50/50 会被拉到 ~690)
+  await p.setViewportSize({ width: 1600, height: 1400 })
+  const tall = await at(p, 1400, 't2-tsum show')
+  check('⚠️大窗口下 Desk 不被拉长', Math.abs(tall.cardH - both.cardH) <= 1, `900 高=${both.cardH.toFixed(1)} 1400 高=${tall.cardH.toFixed(1)}`)
+  await p.setViewportSize({ width: 1600, height: 900 })
+
+  // ③ 空着的 Desk 收起只剩卡头
+  const shut = await at(p, 1400, 't2-tsum show', 't2-card agent-desk-card empty', false)
+  check('⚠️收起的 Desk 只剩卡头', shut.cardShown && shut.cardH < 60, `cardH=${shut.cardH.toFixed(1)}`)
+
+  // ④ 只有 Desk(无 .show)时栈照样出现、照样让位
   const solo = await at(p, 1400, 't2-tsum')
-  check('⚠️概览不在场:卡片仍半高钉底', Math.abs(solo.cardH - half) <= 2 && Math.abs(solo.cardBottom - (solo.colBottom - 16)) <= 1,
-    `card=${solo.cardH.toFixed(1)} 期望=${half.toFixed(1)}`)
+  check('⚠️只有 Desk 时栈仍出现并让位', solo.tsumShown && solo.cardShown && solo.streamPad > 100, `stack=${solo.tsumShown} pad=${solo.streamPad}`)
 
-  // ③ .gone(侧板展开期间):卡片隐身且不再触发让位/概览减半(:has(:not(.gone)))
-  const gone = await at(p, 1400, 't2-tsum show', 'agent-desk-card gone')
-  check('⚠️gone 卡隐身且概览拿回 hug', !gone.cardShown && gone.tsumInH <= gone.tsumH + 1 && gone.tsumH < half,
-    `cardShown=${gone.cardShown} tsum=${gone.tsumH.toFixed(1)}(hug)`)
+  // ⑤ .gone(侧板展开期间):Desk 隐身;没有别的卡时整栈收起、不让位(否则侧板 + 车道双重挤正文)
+  const gone = await at(p, 1400, 't2-tsum show', 't2-card agent-desk-card gone')
+  check('gone 的 Desk 隐身,进度卡照常', !gone.cardShown && gone.tsumShown, `card=${gone.cardShown} stack=${gone.tsumShown}`)
+  const goneSolo = await at(p, 1400, 't2-tsum', 't2-card agent-desk-card gone')
+  check('⚠️只剩 gone 的 Desk:栈收起且不让位', !goneSolo.tsumShown && goneSolo.streamPad === 0, `stack=${goneSolo.tsumShown} pad=${goneSolo.streamPad}`)
 
-  // ④ 窄容器(<760,按 .t2-chat-col 求值)→ 卡片整个不显示
+  // ⑥ 卡片多到超出车道:整栈在车道里滚,不顶出车道底
+  await p.evaluate(() => {
+    const tpl = document.getElementById('tsumin')
+    for (let i = 0; i < 6; i++) { const c = tpl.cloneNode(true); c.id = `extra${i}`; c.querySelector('.t2-card-body').innerHTML = '<div class="t2-tsum-row">row</div>'.repeat(8); document.getElementById('tsum').insertBefore(c, tpl) }
+  })
+  const many = await at(p, 1400, 't2-tsum show')
+  check('⚠️卡片多了整栈内滚、不出车道', many.stackScroll > 0 && many.stackBottom <= many.railBottom - many.railPadBottom + 1,
+    `可滚=${many.stackScroll.toFixed(0)} 栈底=${many.stackBottom.toFixed(1)} 车道内容底=${(many.railBottom - many.railPadBottom).toFixed(1)}`)
+  await p.evaluate(() => { for (let i = 0; i < 6; i++) document.getElementById(`extra${i}`).remove() })
+
+  // ⑦ 窄容器(<760,按 .t2-chat-col 求值)→ 整栈不显示
   const narrow = await at(p, 700, 't2-tsum show')
-  check('窄容器卡片收掉', !narrow.cardShown, `display=${narrow.cardShown ? 'flex' : 'none'}`)
+  check('窄容器整栈收掉', !narrow.tsumShown, `display=${narrow.tsumShown ? 'flex' : 'none'}`)
 
   // ⑥ 伴随面撑满(卡片正文 .companion → zoom 1;挂载槽铺满正文内容盒)
   const fill = await companionFill(p, true)
@@ -246,7 +264,7 @@ async function at(p, width, tsumCls, cardCls = 'agent-desk-card') {
   }
   // 负对照:把 pickers 挪回 anchor 外(07-27 当时的结构)—— 拿不到让位,中线必须分叉,否则上面那组没有分辨力
   await p.evaluate(() => {
-    document.getElementById('rail').insertAdjacentHTML('beforeend', '<div class="agent-desk-card" id="card"><div class="agent-desk-card-head">Agent Desk</div><div class="agent-desk-card-body"></div></div>')
+    document.getElementById('tsum').insertAdjacentHTML('beforeend', '<details class="t2-card agent-desk-card" id="card" open><summary class="t2-card-head">Agent Desk</summary><div class="t2-card-body agent-desk-card-frame"><div class="agent-desk-card-body"></div></div></details>')
     const pk = document.getElementById('pickers')
     document.getElementById('col').insertBefore(pk, document.getElementById('anchor'))
   })

@@ -42,6 +42,7 @@ import { inRunWindow } from '../stores/runStats'
 import { EmptyState2 } from './chat2/EmptyState2'
 import { FloatingToc } from './chat2/FloatingToc'
 import { TaskSummary } from './chat2/TaskSummary'
+import { BgStrip } from './chat2/BackgroundProcs'
 import { useApp, activeChatModelId } from '../stores/appStore'
 import { stickyDefaults, withAmadeusWorkspace, applyPreset } from '../../../../tangu-agent/src/contracts/sessionDefaults'
 import { newSessionPreset, amadeusLandingRoot } from '../tangu/store/tanguSlice'
@@ -922,6 +923,8 @@ export function ChatView({ leaf, params }: ViewProps) {
           </div>
         )}
 
+        {/* 窄窗(摘要栏收起)时后台进程退到这一行;摘要栏在场时 CSS 藏掉(chat2.css .t2-bgstrip) */}
+        {activeId && !params.childSurface && hasMessages && <BgStrip sessionId={activeId} />}
         <AnimatePresence>
           {s.filePreview && (
             <WorkspaceFilePreview key={s.filePreview.name} target={s.filePreview} onClose={() => s.setFilePreview(null)} />
@@ -1060,12 +1063,14 @@ export function ChatView({ leaf, params }: ViewProps) {
           onSteerNow={activeId ? () => { void s.steerNow(activeId) } : undefined}
         />
       </div>
-      {/* 右侧车道:任务概览卡 + Agent Desk 卡片态。锚在整列(.t2-chat-col,含输入框区)——
-        * Desk 卡底缘与输入框底缘同一条线(都是列底 -16px);滚动条仍在最右缘
-        * (卡片右侧留 --tsum-gut 让 thumb 落位)。够宽才显示(容器查询),见 chat2.css .t2-rail */}
+      {/* 右侧车道:摘要栏卡片栈(进度 / 后台 / 产物 / 来源 / 工作范围 / 插件卡 / Agent Desk 卡片态,2026-10-25 多卡片)。
+        * 锚在整列(.t2-chat-col,含输入框区);滚动条仍在最右缘(卡片右侧留 --tsum-gut 让 thumb 落位)。
+        * 够宽才显示(容器查询),见 chat2.css .t2-rail */}
       {/* 画布模式下右侧车道收起,舞台铺满(刚切过去那 450ms 留着播卡片往右收);切回对话原样回来 */}
       {!params.childSurface && (!canvasOn || railOut) && <div className="t2-rail" data-off={canvasOn ? '' : undefined}>
         <TaskSummary
+          sessionId={activeId}
+          desk={deskEnabled && activeId ? <DeskCard key="desk" sessionId={activeId} /> : null}
           teamStatus={activeId ? <>
             {teamDesk && <TeamStatus sessionId={activeId} />}
             <SubChatStatus sessionId={activeId} />
@@ -1106,7 +1111,6 @@ export function ChatView({ leaf, params }: ViewProps) {
             openWsFile(targetFor(f, s.cfg, activeId || '', mvCfg.execMode))
           }}
         />
-        {deskEnabled && activeId ? <DeskCard sessionId={activeId} /> : null}
       </div>}
       </div>
       {deskEnabled && activeId && !childSelections[activeId] && !canvasOn ? <AgentDesk sessionId={activeId} onQuote={deskQuote} /> : null}

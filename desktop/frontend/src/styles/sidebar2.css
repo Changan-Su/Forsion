@@ -463,6 +463,12 @@
 }
 .t2s-kids > svg { width: 11px; height: 11px; }
 .t2s-kids:hover { color: var(--text-muted); background: var(--overlay-light, rgba(127, 127, 127, 0.12)); }
+/* 会话行尾:还有进程在后台跑(静止绿点 + 个数;转圈留给 Agent 在干活的 StatusMark) */
+.t2s-bg {
+  flex: none; display: inline-flex; align-items: center; gap: 3px; padding: 0 2px;
+  font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted)); font-variant-numeric: tabular-nums;
+}
+.t2s-bg > i { width: 5px; height: 5px; border-radius: 50%; background: var(--green); }
 /* 父子会话的树线:竖线落在主会话图标的中线上(--kid-pad = 主会话的左内边距,槽宽 = --t2s-icon + 1.5);
  * 最后一个子会话那里拐一个圆角弯进它的图标。子会话图标淡一档。 */
 .t2s-srow.t2s-has-kids::after, .t2s-srow.t2s-kid::after {

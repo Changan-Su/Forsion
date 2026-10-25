@@ -1,10 +1,11 @@
-import { MessageCircle, MessageCircleQuestion, BookOpen, FolderOpen, Bot, Users } from 'lucide-react'
+import { MessageCircle, MessageCircleQuestion, BookOpen, FolderOpen, Bot, Users, Terminal } from 'lucide-react'
 import { addCommand, registerView, useWorkspace } from '@lcl/engine'
 import { activeChatModelId, useApp } from '../stores/appStore'
 import { TANGU_SLICE } from '../tangu/store/tanguSlice'
 import { translate } from '../i18n'
 import { ChatView } from '../views/ChatView'
 import { ChatPreview } from '../views/chat2/ChatPreview'
+import { ProcessLogView } from '../views/chat2/BackgroundProcs'
 import { BtwHost, BtwPanel, BtwSideView } from '../views/chat2/BtwPanel'
 import { btwSeedOf, btwWebVisible, openBtw, quoteInMainChat, useBtw } from '../views/chat2/btwStore'
 import { FilesPanel, bumpDir } from '../views/chat2/FilesPanel'
@@ -127,6 +128,8 @@ export function registerTanguViews(): void {
   // 右栏视图(可关,可重开)
   registerView({ type: 'memory', kind: 'aux', displayName: () => app().tr('panel.tab.memory'), icon: BookOpen, factory: () => <MemoryPanelView />, singleton: true })
   registerView({ type: 'subchats', kind: 'aux', displayName: () => app().tr('panel.tab.subchats'), icon: MessageCircle, factory: () => <SubchatsView />, singleton: true })
+  // 后台进程的输出(摘要栏「后台」卡点行 → Desk 里开;Desk 不收文件时开标签页)
+  registerView({ type: 'process-log', kind: 'page', displayName: () => translate('bg.view'), icon: Terminal, factory: (props) => <ProcessLogView {...props} />, closable: true, singleton: false })
   registerView({ type: 'session-files', kind: 'aux', displayName: () => app().tr('panel.tab.workspace'), icon: FolderOpen, factory: () => <SessionFilesView />, singleton: true })
   // 主区特殊视图(按需从侧栏打开,不进默认布局)。旧 'wechat' 视图已退役:恢复布局时未注册类型被引擎自动剔除。
   registerView({ type: 'agents-detail', kind: 'page', displayName: () => app().tr('special.agents.title'), icon: Bot, factory: () => <AgentsDetailSpecialView />, singleton: true })

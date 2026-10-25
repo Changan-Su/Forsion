@@ -228,6 +228,12 @@ A plugin with an engine half can give the tools it registers a result card: afte
 
 A card sits in the chat by default, with "Open in Desk" at its top right. A plugin can also ask for a card to go straight into the Agent Desk (for whiteboards and boards that need room); the chat then keeps a placeholder that says "Showing in Desk", and "Back to chat" moves it back. The ⋯ menu at the top of the Desk has "Move back to chat" too. The plugin keeps state such as zoom and scroll position across moves. On phones, with the Agent Desk turned off, or when the window is too narrow for the Desk, cards always show in the chat. A card can quote part of its content above the chat input, the same as selecting text in a reply and quoting it, and you decide whether to send it; cards cannot write files or send messages for you. For the API, see the "Tool result cards" section of the plugin development skill.
 
+## 摘要栏卡片 / Summary panel cards
+
+Tangu 聊天右侧的摘要栏(2.13.8-beta.1 之后的桌面版本)是一叠卡片:进度、后台、产物、来源、工作范围和 Agent Desk。插件可以用 `ctx.summary?.registerCard({ id, title: { zh, en }, defaultCollapsed, mount(el, host) })` 加一张卡,和内置卡在同一个栈里:用户能折叠、拖动排序,收起状态和顺序由宿主记住;插件卡默认排在 Agent Desk 前面。`mount` 在每个会话的摘要栏里各调用一次(换会话会卸载重挂),`host.sessionId` 是这份所在的会话;`host.update({ count, hidden })` 改卡头的计数、或者先不显示这张卡。正文最高 240px,超出由宿主滚动。只有桌面 Tangu 有摘要栏,所以用可选链;更早的版本没有 `ctx.summary`。接口细节见插件开发技能「摘要栏插件卡」一节。
+
+The summary panel on the right of a Tangu chat (desktop versions after 2.13.8-beta.1) is a stack of cards: Progress, Background, Outputs, Sources, Scope and the Agent Desk. A plugin adds a card with `ctx.summary?.registerCard({ id, title: { zh, en }, defaultCollapsed, mount(el, host) })`. It sits in the same stack as the built-in cards: people can collapse it and drag it to a new place, and the host remembers both; plugin cards start out above the Agent Desk. `mount` runs once per chat's summary panel (switching chats unmounts and mounts again), and `host.sessionId` is the chat it belongs to. `host.update({ count, hidden })` sets the count in the card header or hides the card for now. The body is at most 240px tall and the host scrolls anything longer. Only desktop Tangu has the summary panel, so use optional chaining; earlier versions have no `ctx.summary`. For the API, see the "摘要栏插件卡" section of the plugin development skill.
+
 ## Intelligent UI 卡片 / Intelligent UI cards
 
 插件可以把已有的列表源开放成对话里的原生卡片：在 `registerListSource` 上加一个 `intelligent` 声明即可。列表由宿主渲染，数据与跳转仍只有 `items` / `subscribe` / `open` 这一份实现（示例见下方代码）。

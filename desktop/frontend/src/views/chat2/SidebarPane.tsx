@@ -28,6 +28,7 @@ import '../../styles/sidebar2.css'
 import { OverlayAt, nativeSheetPresenter, presentNativePrompt, useNativeChromeSpaces, useNativeSheetMenu, type SheetMenuItem } from '@lcl/engine'
 import { CtxMenuButtons } from '../../components/CtxMenuButtons'
 import { AttentionDot, StatusMark } from './AttentionDot'
+import { SessionBgMark } from './BackgroundProcs'
 import { mergeStatus, nestSessions, rowStatus, type RowStatus, type TreeNode } from './sessionTree'
 import { homeTarget } from '../../services/engine/targets'
 import { canTurnChatIntoNote, turnChatIntoNote } from './chatToNote'
@@ -518,6 +519,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
             <MessagesSquare />{kids.length}
           </span>
         )}
+        <SessionBgMark sessionId={s.id} />
         {att && st === 'wait' && !kidsHidden ? <AttentionDot n={att.n} localOnly={att.localOnly} /> : <StatusMark status={st} />}
         <span className="t2s-srow-time">{formatRowTime(s.updated_at)}</span>
         <span className="t2s-srow-menu" onClick={(e) => openMenu(e as React.MouseEvent, s)}><MoreHorizontal size={14} /></span>

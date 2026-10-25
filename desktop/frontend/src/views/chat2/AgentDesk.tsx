@@ -22,6 +22,8 @@ import { openDb, openNote } from '../../amadeusNav'
 import type { CtxItem } from '../../components/RightPanel'
 import { DeskChromeContext, DeskMenuButton, DeskMoreButton, type DeskChrome } from './deskChrome'
 import { DeskToolCardPane } from './DeskToolCardPane'
+import { CardAction, SummaryCard } from './TaskSummary'
+import { setCardOpen, useSummaryPrefs } from './summaryPrefs'
 import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 registerMessages({
@@ -30,6 +32,7 @@ registerMessages({
   'desk.expand': { zh: '展开', en: 'Expand' },
   'desk.collapse': { zh: '收起为卡片', en: 'Collapse to card' },
   'desk.empty': { zh: 'Agent 会在这里展示成果', en: 'Agent will present work here' },
+  'desk.idle': { zh: '空着', en: 'Empty' },
   'desk.clear': { zh: '清空 Desk', en: 'Clear Desk' },
   'desk.more': { zh: '更多', en: 'More' },
   'desk.switch': { zh: '切换 Desk 上的内容', en: 'Switch Desk item' },
@@ -390,10 +393,12 @@ export function deskCardPlan(o: { mode: string | undefined; itemCount: number; c
   }
 }
 
-/** 卡片态(默认态):Pin Summary 下方的常驻预览小卡,上下各占右侧车道一半(严格 50/50)。
- *  正文 pointer-events:none —— 卡片是"预览",点整卡=放大成侧板;交互(编辑/按钮)只在 open 态。
- *  卡片不可关闭(用户裁决):已开始会话里的零条目空态也常驻当预览位,收/放只在卡片↔侧板之间切。
- *  (09-25 UIUX 评审 U-18 曾把零条目卡缩成 72px 小坞、输入框不再让位;09-26 用户看过后改判撤回 —— 空态照旧整卡,勿再提。)
+/** 卡片态(默认态):摘要栏栈里的一张卡(2026-10-25 用户改为多卡片栈,方案 A:Desk 和别的卡一起排序、可折叠,
+ *  展开时正文固定 380px —— 原来上下各占车道一半(严格 50/50),大窗口下被拉得很长,用户嫌不好看)。
+ *  正文 pointer-events:none —— 卡片是"预览",点正文=放大成侧板;点卡头 = 折叠,卡头的放大钮是键盘入口。
+ *  卡片不可关闭(用户裁决),但 **2026-10-25 用户改为空着时折叠**(09-26 撤回过的「零条目缩成小坞」那条不再适用):
+ *  零条目且无伴随面 = 收起只剩卡头,点开看空态;有新条目上台(顶格 key 变了)自动展开,换会话不算。
+ *  收起状态按卡片种类全局记(summaryPrefs 'desk')。
  *  ChatView 在首条消息出现后才挂载本组件;切换已开始的会话不挂 key,伴随面按自己的 key 挂载。 */
 export function DeskCard({ sessionId }: { sessionId: string }) {
   const { t } = useI18n()
@@ -409,45 +414,62 @@ export function DeskCard({ sessionId }: { sessionId: string }) {
   const gone = plan.gone
   const expand = plan.expandable ? () => useApp.getState().patchDesk(sessionId, { mode: 'open' }) : undefined
   const companion = plan.showCompanion ? comp : null
+  const hasContent = items.length > 0 || !!companion
+  const pref = useSummaryPrefs((s) => s.open.desk)
+  const [peek, setPeek] = useState(false) // 空着时手动点开看一眼;不记
+  const top = own[0]?.key ?? null
+  const seen = useRef({ sessionId, top })
+  useEffect(() => {
+    const s = seen.current
+    if (s.sessionId !== sessionId) { seen.current = { sessionId, top }; return }
+    if (top && top !== s.top) setCardOpen('desk', true)
+    s.top = top
+  }, [sessionId, top])
+  useEffect(() => { if (hasContent) setPeek(false) }, [hasContent])
+  const open = hasContent ? pref !== false : peek
 
   return (
-    <div data-desk-session={sessionId} className={`agent-desk-card${expand ? ' act' : ''}${gone ? ' gone' : ''}`} onClick={expand} title={expand ? t('desk.expand') : undefined}>
-      <div className="agent-desk-card-head">
-        <Sparkles size={12} className="agent-desk-spark" />
-        <span className="agent-desk-card-title">{companion ? t('desk.title') : items[0]?.name || t('desk.title')}</span>
-        {plan.clearable && (
-          <button className="icon-btn" title={t('desk.clear')} onClick={(e) => { e.stopPropagation(); clearDesk(sessionId) }}>
-            <Eraser size={13} />
-          </button>
-        )}
-        {/* 键盘可达的放大入口(整卡 onClick 只服务鼠标) */}
-        {expand && (
-          <button className="icon-btn" title={t('desk.expand')} onClick={(e) => { e.stopPropagation(); expand() }}>
-            <Maximize2 size={13} />
-          </button>
-        )}
-      </div>
-      <div className={`agent-desk-card-body${companion ? ' companion' : ''}`}>
-        {gone ? null : companion ? (
-          <div className="agent-desk-pane agent-desk-companion">
-            <DeskCompanionHost key={companion.key} entry={companion} surface="desk-card" sessionId={draft ? null : sessionId} />
-          </div>
-        ) : items.length ? (
-          items.map((it) => (
-            <div className="agent-desk-pane" key={it.key}>
-              {it.live ? <DeskLivePane sessionId={sessionId} item={it} />
-                : it.tool ? <DeskToolCardPane sessionId={sessionId} callId={it.tool.callId} />
-                : it.view ? <DeskShimView type={it.view.type} params={it.view.params ?? {}} k={`desk-view:${it.key}`} />
-                  : <DeskFilePane item={it} allowNative={it.key === claimKey} />}
+    <SummaryCard
+      id="desk"
+      className={`agent-desk-card${gone ? ' gone' : ''}${hasContent ? '' : ' empty'}`}
+      rootProps={{ 'data-desk-session': sessionId }}
+      open={open}
+      onToggle={(o) => (hasContent ? setCardOpen('desk', o) : setPeek(o))}
+      head={<>
+        <Sparkles size={13} className="agent-desk-spark" />
+        <span>{t('desk.title')}</span>
+        {!companion && <span className="t2-card-hint agent-desk-card-title">{items[0]?.name || t('desk.idle')}</span>}
+      </>}
+      actions={<>
+        {plan.clearable && <CardAction className="icon-btn" icon={<Eraser size={13} />} label={t('desk.clear')} run={() => clearDesk(sessionId)} />}
+        {expand && <CardAction className="icon-btn" icon={<Maximize2 size={13} />} label={t('desk.expand')} run={expand} />}
+      </>}
+      bodyClassName={`agent-desk-card-frame${expand ? ' act' : ''}`}
+      bodyProps={{ onClick: expand, title: expand ? t('desk.expand') : undefined }}
+    >
+      {open && !gone && (
+        <div className={`agent-desk-card-body${companion ? ' companion' : ''}`}>
+          {companion ? (
+            <div className="agent-desk-pane agent-desk-companion">
+              <DeskCompanionHost key={companion.key} entry={companion} surface="desk-card" sessionId={draft ? null : sessionId} />
             </div>
-          ))
-        ) : (
-          <div className="agent-desk-card-empty">
-            <Sparkles size={18} />
-            <span>{t('desk.empty')}</span>
-          </div>
-        )}
-      </div>
-    </div>
+          ) : items.length ? (
+            items.map((it) => (
+              <div className="agent-desk-pane" key={it.key}>
+                {it.live ? <DeskLivePane sessionId={sessionId} item={it} />
+                  : it.tool ? <DeskToolCardPane sessionId={sessionId} callId={it.tool.callId} />
+                  : it.view ? <DeskShimView type={it.view.type} params={it.view.params ?? {}} k={`desk-view:${it.key}`} />
+                    : <DeskFilePane item={it} allowNative={it.key === claimKey} />}
+              </div>
+            ))
+          ) : (
+            <div className="agent-desk-card-empty">
+              <Sparkles size={18} />
+              <span>{t('desk.empty')}</span>
+            </div>
+          )}
+        </div>
+      )}
+    </SummaryCard>
   )
 }
