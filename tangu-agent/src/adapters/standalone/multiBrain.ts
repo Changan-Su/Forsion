@@ -203,7 +203,7 @@ export function createMultiBrain(httpBrain: CloudBrainServices, registry: Provid
     const p = registry.list().find((x) => x.providerId === providerId);
     if (!p?.oauth) return undefined;
     const cred = await freshOAuthCred(providerId, force).catch(() => undefined);
-    if (cred && (cred.access_token !== p.apiKey || cred.account_id !== p.accountId)) registry.setCreds(providerId, cred.access_token, cred.account_id);
+    if (cred && (cred.access_token !== p.apiKey || cred.account_id !== p.accountId)) registry.setCreds(providerId, cred.access_token, cred.account_id, cred.fastTiers);
     return cred?.access_token;
   };
   /** 图像 / 语音:直接拿 provider 的 key 发请求,不经 resolveModelAndKey。订阅登录的 provider 在这里补上对话那条路的同一套续期 ——
