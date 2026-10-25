@@ -36,6 +36,8 @@ import { ListChips, ListFab, ListHint, PullHint, SwipeRow, closeOtherSwipes, use
 import { ContextMenu, type CtxMenu } from '../components/RightPanel'
 import { resolveIcon } from '@amadeus/components/icons'
 import { ensureAmadeusReady } from '../amadeusPlugins'
+import { EmptyState } from '../components/EmptyState'
+import { hostListEmpty } from './hostListEmpty'
 
 registerMessages({
   'wsview.all': { zh: '全部', en: 'All' },
@@ -356,6 +358,13 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
   const flatHeld = useRef(flatNow)
   if (!renaming) flatHeld.current = flatNow
   const flat = flatHeld.current
+  // 宿主源登记过空态(hostListEmpty):主区已经讲清楚了就不再写「暂无内容」;手机整屏列表里直接画那份空态。
+  const hostEmpty = hostListEmpty(src)
+  const activeSpaceId = useSpaceStore((s) => s.activeSpaceId)
+  const emptyRow = query ? <div className="t2sw-empty">{t('wsview.noMatches')}</div>
+    : hostEmpty && !activeGroup && flat ? <EmptyState icon={hostEmpty.icon} title={hostEmpty.title()} line={hostEmpty.line?.()} data-state="empty" />
+      : hostEmpty && !activeGroup && activeSpaceId === hostEmpty.space ? null
+        : <div className="t2sw-empty">{t('wsview.empty')}</div>
   // 已经开着时再点一次搜索钮:状态没变,效果不会重跑,所以这里直接把光标放回去(键盘被收起之后还能再叫出来)
   const openSearch = (): void => { setSearching(true); searchRef.current?.focus() }
   useEffect(() => { if (searching) searchRef.current?.focus() }, [searching])
@@ -769,7 +778,7 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
         {flat && src.search && <PullHint />}
         {flat && phoneHint && <ListHint id={`list:${src.id}`}>{phoneHint}</ListHint>}
         {sections ? sections.map(([g, list]) => section(g, list)) : roots.map((n) => node(n, 1))}
-        {items.length === 0 && <div className="t2sw-empty">{query ? t('wsview.noMatches') : t('wsview.empty')}</div>}
+        {items.length === 0 && emptyRow}
         {hidden > 0 && <div className="t2sw-plug-hidden">{t('wsview.hiddenByFilters', { count: hidden })}</div>}
       </div>
       {/* 手机:源的常用动作是右下角的主按钮,其余动作在它的长按菜单里 */}

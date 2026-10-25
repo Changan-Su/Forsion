@@ -11,20 +11,29 @@
  * 按当前 vault 解析。远程图片一律先换成占位文本 —— agent 写的 md 里一个 `![](https://…)` 就是追踪像素。非 .md 文本仍走轻量 Markdown。
  */
 import React, { Suspense, useEffect, useMemo, useRef, useState } from 'react'
-import { FolderOpen, FileText, RefreshCw, ExternalLink, Sparkles } from 'lucide-react'
+import { FolderOpen, FileText, RefreshCw, ExternalLink, Settings, Sparkles } from 'lucide-react'
 import { useWorkspace } from '@lcl/engine'
 import type { ViewProps } from '@lcl/engine/types'
 import './museLibrary.css'
 import { Markdown } from '../components/Markdown'
 import { lazyRetry } from '../lazyRetry'
-import { getMuseLibrary } from '../services/backendService'
+import { getMuseLibrary, getMuseStatus } from '../services/backendService'
 import { useApp } from '../stores/appStore'
-import { useI18n } from '../i18n'
+import { registerMessages, useI18n } from '../i18n'
+import { EmptyState } from '../components/EmptyState'
 import type { MuseLibraryEntry } from '../types'
 import { homeTarget } from '../services/engine/targets'
 
 /** 真 Amadeus 只读渲染(懒加载:Milkdown 很重,不进 Muse Space 不付这笔账)。 */
 const UnifiedPageLazy = lazyRetry(() => import('@amadeus/unified/UnifiedPage').then((m) => ({ default: m.UnifiedPage })))
+
+registerMessages({
+  'muse.lib.offTitle': { zh: 'Muse 还没开', en: 'Muse is off' },
+  'muse.lib.offLine': { zh: '开启后，它会在后台读你的笔记和对话，写草稿、提待办，每天留一份工作日志。', en: 'Once on, it reads your notes and chats in the background, drafts, suggests to-dos and keeps a daily log.' },
+  'muse.lib.turnOn': { zh: '开启 Muse', en: 'Turn on Muse' },
+  'muse.lib.emptyTitle': { zh: 'Muse 还没写任何东西', en: 'Muse has not written anything yet' },
+  'muse.lib.emptyLine': { zh: '它的笔记、草稿和每日工作日志会出现在这里。', en: 'Its notes, drafts and daily journal show up here.' },
+})
 
 const TEXT_EXT = /\.(md|markdown|txt|json|yaml|yml|toml|csv|log)$/i
 const POLL_MS = 5000
@@ -63,6 +72,8 @@ export const MuseLibraryView: React.FC<ViewProps> = () => {
   const [sel, setSel] = useState('')
   const [text, setText] = useState('')
   const [err, setErr] = useState('')
+  /** 库是空的时候才问一次 Muse 开没开(中间那栏的空态分「没开」和「开了还没写」);null = 还不知道。 */
+  const [enabled, setEnabled] = useState<boolean | null>(null)
   const selRef = useRef('')
   /** 上次**成功**读到的 {path, mtime}:只在成功后记,失败下一轮自然重试。 */
   const loadedRef = useRef<{ path: string; mtime: number } | null>(null)
@@ -92,6 +103,7 @@ export const MuseLibraryView: React.FC<ViewProps> = () => {
       setFiles(files)
       setErr('')
       const list = orderFiles(files)
+      if (!list.length) void getMuseStatus(homeTarget()).then((st) => setEnabled(!!st?.enabled), () => {})
       const cur = list.find((f) => f.path === selRef.current)
       if (cur) {
         const done = loadedRef.current
@@ -158,7 +170,13 @@ export const MuseLibraryView: React.FC<ViewProps> = () => {
           <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={sel ? `${root}/${sel}` : ''}>{sel}</span>
           {sel && <button className="btn ghost sm" onClick={openInEditor}><ExternalLink size={12} /> {t('muse.lib.openEditor')}</button>}
         </div>
-        <div style={{ overflowY: 'auto', flex: 1, padding: '14px 24px 40px' }}>
+        {/* 库是空的:中间那栏不留白,用公共空态说清这里会出现什么;Muse 没开就直接给「开启 Muse」(设置 › Agent › 后台 Agent)。 */}
+        {ordered.length === 0 && !err ? <div className="muse-lib-empty" style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, overflowY: 'auto' }}>
+          {enabled === false
+            ? <EmptyState icon={Sparkles} title={t('muse.lib.offTitle')} line={t('muse.lib.offLine')} data-state="off"
+              action={{ label: t('muse.lib.turnOn'), icon: Settings, action: 'muse-settings', onClick: () => useApp.getState().openSettings('agents/ag-special') }} />
+            : enabled === true ? <EmptyState icon={Sparkles} title={t('muse.lib.emptyTitle')} line={t('muse.lib.emptyLine')} data-state="empty" /> : null}
+        </div> : <div style={{ overflowY: 'auto', flex: 1, padding: '14px 24px 40px' }}>
           {err && <div className="hint" style={{ color: 'var(--danger)' }}>{err}</div>}
           {sel && shown && (/\.md$/i.test(sel) ? (
             <div className="am-app tangu-lovable amx-pane amx-editor" data-muse-lib-preview="amadeus">
@@ -168,7 +186,7 @@ export const MuseLibraryView: React.FC<ViewProps> = () => {
             </div>
           ) : <Markdown content={shown} />)}
           {sel && !shown && !err && <div className="hint">{sel}</div>}
-        </div>
+        </div>}
       </div>
     </div>
   )
