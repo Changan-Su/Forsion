@@ -139,20 +139,32 @@ export async function removeLocalModel(): Promise<void> {
 }
 
 let recognizerP: Promise<OfflineRecognizer> | null = null
+let recognizerLang = ''
+/** SenseVoice 认的语言;别的(或没给)= 自动判断。 */
+const SENSEVOICE_LANGS = new Set(['zh', 'en', 'ja', 'ko', 'yue'])
 
-/** 懒建 recognizer 并缓存(首次加载 ~230MB 模型有秒级延迟,用 async 工厂不阻塞主进程)。 */
-function getRecognizer(): Promise<OfflineRecognizer> {
+/**
+ * 懒建 recognizer 并缓存(首次加载 ~230MB 模型有秒级延迟,用 async 工厂不阻塞主进程)。
+ * 语言钉在 recognizer 上(sherpa 没有按句给语言的口子)。⚠️自动判断会逐句判:远场的英文课被判成粤语 / 日语 / 中文,
+ * 出一堆乱码(2026-10-25 谛听实录),所以调用方知道说的是什么语言就要传进来。
+ * ponytail: 只缓存一个,换语言就重建(一两秒);两路不同语言同时转写会来回重建,真遇到了再按语言各留一个(每个 ~250MB 内存)。
+ */
+function getRecognizer(language = ''): Promise<OfflineRecognizer> {
+  const lang = SENSEVOICE_LANGS.has(language) ? language : ''
+  if (recognizerP && recognizerLang !== lang) recognizerP = null
   if (!recognizerP) {
-    recognizerP = loadSherpa().OfflineRecognizer.createAsync({
+    recognizerLang = lang
+    const p: Promise<OfflineRecognizer> = loadSherpa().OfflineRecognizer.createAsync({
       featConfig: { sampleRate: 16000, featureDim: 80 },
       modelConfig: {
-        senseVoice: { model: modelFile(), language: '', useInverseTextNormalization: 1 },
+        senseVoice: { model: modelFile(), language: lang, useInverseTextNormalization: 1 },
         tokens: tokensFile(),
         numThreads: 2,
         provider: 'cpu',
         debug: 0,
       },
-    }).catch((e) => { recognizerP = null; throw e })
+    }).catch((e) => { if (recognizerP === p) recognizerP = null; throw e })
+    recognizerP = p
   }
   return recognizerP
 }
@@ -175,9 +187,9 @@ export { wavToSamples, splitOnSilence } // 纯函数真身在 asrAudio.ts(那边
  * 不要时间戳且音频短(≤30s,语音输入的情形)→ 老路径原样一次解码。
  * 要时间戳、或音频长 → 按静音切段逐段解码(长音频不切等于结果不可用)。
  */
-export async function transcribeLocal(wav: Buffer, opts?: { timestamps?: boolean }): Promise<string | { text: string; segments?: LocalSegment[] }> {
+export async function transcribeLocal(wav: Buffer, opts?: { timestamps?: boolean; language?: string }): Promise<string | { text: string; segments?: LocalSegment[] }> {
   if (!localModelReady()) throw new Error('本地语音模型未下载')
-  const rec = await getRecognizer()
+  const rec = await getRecognizer(opts?.language)
   const { samples, sampleRate } = wavToSamples(wav)
   const short = samples.length <= sampleRate * 30
   if (!opts?.timestamps && short) return decodeSlice(rec, samples, sampleRate)
