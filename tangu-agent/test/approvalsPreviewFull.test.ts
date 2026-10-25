@@ -215,7 +215,7 @@ describe('approvalPreview · 按落盘值渲染,截断明说', () => {
     expect(p2).not.toContain('CORRECTION');
     expect(p2).toContain(`tools → [${tools.slice(0, 100).join(', ')}]`);
     expect(p2).not.toContain('t100');
-    expect(p2).toContain('max_iterations → 200'); // 落盘封顶 200
+    expect(p2).toContain('max_iterations → 500'); // 10-25(#215)撤了 200 硬顶,按原值落盘
   });
 
   it('校验不过(工具会报错、什么都不存)→ 按原始参数渲染,不丢内容', () => {

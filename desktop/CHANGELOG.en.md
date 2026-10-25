@@ -2,6 +2,30 @@
 
 <!-- English edition of CHANGELOG.md: same "## <version> (<date>)" headings, one bullet per Chinese bullet. Add both when releasing. -->
 
+## 2.13.8-beta.2 (2026-10-25)
+
+Preview release: only offered to people who chose the preview channel; stable users won't get it.
+
+- **Agent runs**:
+  - Interactive chats no longer stop at turn 90, so long tasks can run through to delivery. A run ends when the model wraps up, the cost limit is reached or you stop it.
+  - Codex subscription models can use the Fast tier for quicker answers (billed at that tier).
+  - While a child session runs, a status pill sits above the composer; the tray lists sessions that are running or waiting for you.
+  - When an admin disables the background model, Forsion switches back to one that works instead of failing.
+- **Summary panel**: Progress, Background, Outputs, Sources, Scope, plugin cards and Agent Desk are now collapsible cards, and each card remembers whether it's collapsed. Running background processes get a card of their own.
+- **Browser**: pick an element on a web page and send it straight to the chat.
+- **Side question**: add images and files (＋, paste or drop); the panel header lists the threads saved on that answer.
+- **Upload progress**: uploads in the composer, Files panel, note body, database cells, covers and the file tree show progress in place, with cancel and retry.
+- **Canvas**: the selection bar works inside chat canvas cards, and side questions sit at the bottom of the card. On the note canvas and whiteboard, right-drag on blank space pans; zooming is animated.
+- **Interface**:
+  - The steer queue now has a solid background; the to-do toggle and enter animations are consistent everywhere, and plugin content picks them up automatically.
+  - When you reorder by dragging, the dropped row glides from where you let go into its new slot.
+  - Ribbon right-click menus match the app's other menus: icons, and no "(Spaces)" style qualifiers.
+  - Empty pages such as Muse and the inbox share one empty state that suggests a next step. Agent run settings use one dropdown style, and approval levels use the composer's names (Ask for approval / Approve for me / Full access).
+  - Settings: shortcut and Space appearance rows line up; the voice page uses settings cards.
+- **Plugins**: the plugin sandbox window reliably comes to the front; engine plugins can add messaging channels (such as WeCom).
+- **Voice**: on-device SenseVoice speech recognition follows the language you picked.
+- **Engine 2.13.11**, bundled Forsion Extend 0.9.4.
+
 ## 2.13.8-beta.1 (2026-10-25)
 
 Preview release: only offered to people who chose the preview channel; stable users won't get it.

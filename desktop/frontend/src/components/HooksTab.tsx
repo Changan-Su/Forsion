@@ -8,8 +8,11 @@ import React, { useCallback, useEffect, useState } from 'react'
 import { getHooks, saveHooks, trustHookReq, enableHookReq, type HooksData, type HookDiscovered } from '../services/backendService'
 import type { TanguDesktopConfig } from '../types'
 import { registerMessages, useI18n } from '../i18n'
-import { Loader2, RefreshCw, Webhook } from 'lucide-react'
-import { SettingsState } from './SettingsPrimitives'
+import { Loader2, Plus, RefreshCw, Webhook } from 'lucide-react'
+import { SettingsPanel, SettingsState, SettingsSwitch } from './SettingsPrimitives'
+
+/** 文案里反引号包住的片段画成 <code>(偶数段是正文)。 */
+const codeSpans = (text: string): React.ReactNode[] => text.split('`').map((part, i) => (i % 2 ? <code key={i}>{part}</code> : part))
 import { homeTarget } from '../services/engine/targets'
 
 registerMessages({
@@ -25,9 +28,14 @@ registerMessages({
   'hookstab.ev.Stop': { zh: 'run 结束 / 失败 · 通知 / webhook / 强制续跑', en: 'Run ends / fails · notify / webhook / force-continue' },
   'hookstab.ev.SubagentStart': { zh: '子代理开始（委派 / 讨论）', en: 'Subagent starts (delegate / discussion)' },
   'hookstab.ev.SubagentStop': { zh: '子代理结束', en: 'Subagent stops' },
-  'hookstab.intro': {
-    zh: 'Hook 在 Agent 循环的固定生命周期点跑你自己的 shell 命令 —— 模型绕不过去的确定性护栏（就像 git pre-commit）。仅本地生效，云端从不运行。脚本从 stdin 收 JSON；exit 2 或 {"decision":"block"} 即拦截。',
-    en: 'Hooks run your own shell commands at fixed points in the agent loop — deterministic guardrails the model cannot skip (like a git pre-commit hook). Host-only; never runs in the cloud. Scripts get JSON on stdin; exit 2 or {"decision":"block"} blocks.',
+  'hookstab.lead': {
+    zh: '在 Agent 运行的固定节点跑你自己的 shell 命令，像 git pre-commit 一样拦得住模型。只在本机生效，云端不运行。',
+    en: 'Run your own shell command at fixed points in the agent loop, a guardrail the model can’t skip, like git pre-commit. Runs on this computer only.',
+  },
+  // 反引号里的片段画成代码样式(见 codeSpans)
+  'hookstab.protocol': {
+    zh: '脚本从 `stdin` 收到 JSON；`exit 2` 或输出 `{"decision":"block"}` 就拦下这一步。',
+    en: 'Your script gets JSON on `stdin`. `exit 2` or print `{"decision":"block"}` to block the step.',
   },
   'hookstab.loadFailed': { zh: '无法加载 Hooks', en: 'Could not load hooks' },
   'hookstab.retry': { zh: '重试', en: 'Retry' },
@@ -35,7 +43,7 @@ registerMessages({
   'hookstab.loadingDesc': { zh: '正在读取本机生命周期自动化配置。', en: 'Reading local lifecycle automation.' },
   'hookstab.saveFailed': { zh: '保存失败', en: 'Save failed' },
   'hookstab.confirmDelete': { zh: '删除此 hook?', en: 'Delete this hook?' },
-  'hookstab.newHook': { zh: '＋ 新建 hook', en: '＋ New hook' },
+  'hookstab.newHook': { zh: '新建 Hook', en: 'New hook' },
   'hookstab.event': { zh: '事件', en: 'Event' },
   'hookstab.matcher': { zh: '匹配器', en: 'Matcher' },
   'hookstab.command': { zh: '命令（shell）', en: 'Command (shell)' },
@@ -144,15 +152,16 @@ export const HooksTab: React.FC<{ cfg: TanguDesktopConfig }> = ({ cfg }) => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <div className="hint" style={{ fontSize: 'var(--ui-font-meta, 12px)' }}>
-        {t('hookstab.intro')}
-      </div>
-
-      {!draft && (
-        <button className="btn sm" onClick={() => { setEditKey(null); setDraft({ event: 'PreToolUse', matcher: '', command: '', timeout: '' }) }}>
-          {t('hookstab.newHook')}
-        </button>
-      )}
+      <SettingsPanel icon={<Webhook size={16} />} title={t('settingsmodal.tab.hooks')} description={t('hookstab.lead')} className="hooks-intro">
+        <div className="hooks-intro-body">
+          <p className="hint">{codeSpans(t('hookstab.protocol'))}</p>
+          {!draft && (
+            <button className="btn ghost sm" onClick={() => { setEditKey(null); setDraft({ event: 'PreToolUse', matcher: '', command: '', timeout: '' }) }}>
+              <Plus size={13} /> {t('hookstab.newHook')}
+            </button>
+          )}
+        </div>
+      </SettingsPanel>
 
       {draft && (
         <div style={{ border: 'var(--border-width) solid var(--border)', borderRadius: 'var(--radius-lg, 10px)', padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -215,7 +224,7 @@ export const HooksTab: React.FC<{ cfg: TanguDesktopConfig }> = ({ cfg }) => {
                     <>
                       <button className="btn ghost sm" onClick={() => startEdit({ ...h, event })}>{t('hookstab.edit')}</button>
                       <button className="btn ghost sm" onClick={() => void del(h.key)}>{t('hookstab.delete')}</button>
-                      <input type="checkbox" checked={h.enabled} onChange={() => void toggle({ ...h, event })} style={{ cursor: 'pointer' }} />
+                      <SettingsSwitch checked={h.enabled} label={h.command} onChange={() => void toggle({ ...h, event })} />
                     </>
                   )}
                 </div>

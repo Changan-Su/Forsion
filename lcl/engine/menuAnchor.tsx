@@ -211,16 +211,20 @@ export function useEdgeNudge(
     if (!el) return
     const apply = (): void => {
       const z = zoomOf(el)
-      // 先撤掉上一次的推移再量,否则每次都在已推过的位置上再推一遍(自我叠加,菜单会一路飞出去)。
-      const prev = el.style.translate
+      // 先撤掉上一次的推移和收窄再量,否则每次都在已推过的位置上再推一遍(自我叠加,菜单会一路飞出去);
+      // 收窄不撤的话,量到的是收窄后的宽 → 判「放得下」→ 撤掉收窄 → 变宽又放不下,ResizeObserver 来回翻(边界比浮层窄时闪)。
+      const prev = el.style.translate, prevMax = el.style.maxWidth
       el.style.translate = ''
+      el.style.maxWidth = ''
       const r = el.getBoundingClientRect()
+      const ow = el.offsetWidth
       el.style.translate = prev
+      el.style.maxWidth = prevMax
       // ⚠️ 这里跑在 useLayoutEffect,而入场动画 `@keyframes pop` 正 `scale(0.97)` 着 —— rect 会**偏窄**,
       // 于是刚好溢出的菜单被判成「放得下」,dx=0,动画结束一还原就露在屏幕外(实测:390 屏上模式菜单
       // 量到 357 宽判定通过,实际 368 宽、右缘 387.5 已经出界)。offsetWidth 不吃 transform,是未缩放的
       // 真实宽(局部 px,×zoom 换到视口 px);pop 只有 translateY,缩放中心横向不动,故用 rect 中线还原左缘。
-      const w = el.offsetWidth * z
+      const w = ow * z
       const boundary = boundarySelector ? el.closest(boundarySelector)?.getBoundingClientRect() : undefined
       const boundaryLeft = boundary?.left ?? 0
       const boundaryRight = boundary?.right ?? window.innerWidth

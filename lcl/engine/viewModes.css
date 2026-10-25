@@ -1,6 +1,6 @@
 /* 看法胶囊 + 视图头行(viewModes.tsx)。
- * 外观照抄 `.t2s-vaultseg`(desktop styles/sidebar2.css,本地 | 云端那颗):轨道恒比所在面板暗一档,滑块次强调色,
- * 选中字 --accent-ink。那边改了明暗关系这边要跟着改。自带一份是因为 sidebar2.css 不是全局加载的,插件视图可能先于它渲染。 */
+ * 外观照抄 `.t2s-vaultseg`(desktop styles/sidebar2.css,本地 | 云端那颗):轨道恒比所在面板暗一档,滑块凸起
+ * (--seg-thumb / --seg-thumb-shadow,宿主 base.css 定义,10-25 走查 5.11 A),选中字 --text。那边改了明暗关系这边要跟着改。自带一份是因为 sidebar2.css 不是全局加载的,插件视图可能先于它渲染。 */
 
 .lcl-vmode { display: inline-flex; align-items: center; flex-shrink: 0; min-width: 0; -webkit-app-region: no-drag; }
 
@@ -24,7 +24,8 @@
   left: 2px;
   width: calc((100% - 4px) / var(--seg-n, 2));
   border-radius: var(--radius-pill, 999px);
-  background: var(--accent-light, var(--overlay-light, rgba(127, 127, 127, 0.12)));
+  background: var(--seg-thumb, var(--bg-card, #fff));
+  box-shadow: var(--seg-thumb-shadow, 0 1px 2px rgba(0, 0, 0, 0.08));
   transition: transform 0.3s cubic-bezier(0.32, 1.25, 0.5, 1);
   transform: translateX(calc(var(--seg-i, 0) * 100%));
 }
@@ -59,7 +60,7 @@
   transition: color 0.25s var(--ease-out, ease);
 }
 .lcl-vmode .lcl-vmode-pill > button:hover { background: none; color: var(--text-muted, var(--text)); }
-.lcl-vmode .lcl-vmode-pill > button.on { color: var(--accent-ink, var(--accent, var(--text))); }
+.lcl-vmode .lcl-vmode-pill > button.on { color: var(--text); }
 /* 宽时只显示文字;图标留给窄档 */
 .lcl-vmode .lcl-vmode-ic { display: none; flex-shrink: 0; }
 

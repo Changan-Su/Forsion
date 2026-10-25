@@ -266,7 +266,7 @@ const check = (name, ok, detail) => {
         bg: lum(`rgb(${bgC})`), track: lum(`rgb(${trackC})`), thumb: lum(`rgb(${thumbC})`),
         trackRaw: getComputedStyle(seg).backgroundColor,
         onColor: getComputedStyle(onBtn).color,
-        accentInk: tokenRgb('--accent-ink', 'color'),
+        text: tokenRgb('--text', 'color'),
       }
     }
     root.classList.add('dark')
@@ -321,10 +321,10 @@ const check = (name, ok, detail) => {
     }
   })
   const isBlackWash = (c) => { const m = c.match(/[\d.]+/g).map(Number); return m[0] === 0 && m[1] === 0 && m[2] === 0 && (m[3] ?? 1) > 0 }
-  check('E1 深色:轨道比面板深(凹),选中滑块比两者都浅', e.dark.track < e.dark.bg && e.dark.thumb > e.dark.bg + 8, `track=${e.dark.track.toFixed(0)} bg=${e.dark.bg.toFixed(0)} thumb=${e.dark.thumb.toFixed(0)}`)
-  check('E2 浅色:反之 —— 轨道仍凹,选中滑块比两者都深', e.light.track < e.light.bg && e.light.thumb < e.light.bg - 8, `track=${e.light.track.toFixed(0)} bg=${e.light.bg.toFixed(0)} thumb=${e.light.thumb.toFixed(0)}`)
+  check('E1 深色:轨道比面板深(凹),选中滑块比两者都浅(凸起)', e.dark.track < e.dark.bg && e.dark.thumb > e.dark.bg + 8, `track=${e.dark.track.toFixed(0)} bg=${e.dark.bg.toFixed(0)} thumb=${e.dark.thumb.toFixed(0)}`)
+  check('E2 浅色:轨道仍凹,选中滑块是凸起的卡面色 —— 比轨道亮(10-25 走查 5.11 A 推翻 08-13「浅色选中更深」)', e.light.track < e.light.bg && e.light.thumb > e.light.track + 4, `track=${e.light.track.toFixed(0)} bg=${e.light.bg.toFixed(0)} thumb=${e.light.thumb.toFixed(0)}`)
   check('E3 ⚠️ 轨道是**黑色**叠层(凹);用 --overlay-light 会在深色下提亮 = 把关系做反', isBlackWash(e.dark.trackRaw) && isBlackWash(e.light.trackRaw), `dark=${e.dark.trackRaw} light=${e.light.trackRaw}`)
-  check('E4 选中态用**次强调色**(--accent-light 底 + --accent-ink 字),不是纯 accent 实底', e.dark.onColor === e.dark.accentInk && e.light.onColor === e.light.accentInk, `${e.dark.onColor} / ${e.light.onColor}`)
+  check('E4 选中字用正文色 --text,不用强调色(10-25 走查 5.11 A)', e.dark.onColor === e.dark.text && e.light.onColor === e.light.text, `${e.dark.onColor} / ${e.light.onColor}`)
   check('E5 抽屉底栏与面板同底色(不再是 --bg-card 那块补丁)', !!e.footBg && e.footBg === e.drawerBg, `foot=${e.footBg} drawer=${e.drawerBg}`)
   // bottom:100% 会被解析成用值(= 底栏自身高度的 px),别拿字符串 '100%' 去比。
   check('E6 交界改渐隐(硬分割线已去 + ::before 渐变浮在底栏上沿之外)', e.footBorderTop === '0px' && /gradient/.test(e.fadeImg || '') && parseFloat(e.fadeBottom) > 20, `border=${e.footBorderTop} img=${(e.fadeImg || '').slice(0, 24)} bottom=${e.fadeBottom}`)

@@ -480,7 +480,7 @@ async function main() {
     await sp2.keyboard.up('ShiftLeft')
     await sp2.waitForTimeout(300)
     const recorded = await row.locator('.shortcut-key').textContent().catch(() => null)
-    check('设置里录快捷键:左右 ⇧ 一起按,录成「⇧ + ⇧」', recorded === '⇧ + ⇧', recorded)
+    check('设置里录快捷键:左右 ⇧ 一起按,录成「⇧⇧」', recorded === '⇧⇧', recorded)
     await sp2.screenshot({ path: path.join(SHOT_DIR, `shortcut-shiftpair${tag}.png`) })
     await (await app.browserWindow(sp2)).evaluate((w) => w.close()).catch(() => {})
     for (let i = 0; i < 50 && !helper.hotkeySubs.slice(subsBefore).some((x) => x.msg.gesture === 'shiftPair'); i++) await win.waitForTimeout(100)
