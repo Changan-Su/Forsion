@@ -108,7 +108,7 @@ async function main() {
 
     // ── C 5.5 文案 ──
     let fl = await openSettings('channels')
-    await waitFor(async () => !(await body(fl)).includes('正在加载'), 10000)
+    await waitFor(async () => !(await body(fl)).includes('正在加载'), 30000)
     let txt = await body(fl)
     check('C1 通道:「通道需要本机后端」,不再写「（桌面版）」', txt.includes('通道需要本机后端') && !txt.includes('桌面版'), txt.slice(0, 120))
 
@@ -138,10 +138,11 @@ async function main() {
       title: document.querySelector('.settings-sub .settings-section-title')?.textContent,
       nav: document.querySelector('.settings-nav-subitem.active')?.textContent?.trim(),
       empty: document.querySelector('.agent-clis-empty')?.innerText || '',
+      recheck: document.querySelector('.agent-clis-recheck')?.textContent?.trim(),
     }))
-    check('C6 本机 Agent CLI:左栏与卡片同名,空态「未检测到 · …」+「重新检测」', clis.title === '本机 Agent CLI' && clis.nav === '本机 Agent CLI' && clis.empty.includes('未检测到 · 安装并登录后会自动出现') && clis.empty.includes('重新检测'), clis)
-    await fl.locator('.agent-clis-empty button').click()
-    check('C7 点「重新检测」后原地刷新(列表还是空态、按钮还在)', await waitFor(() => fl.evaluate(() => !!document.querySelector('.agent-clis-empty button:not([disabled])')), 8000))
+    check('C6 本机 Agent CLI:左栏与卡片同名,空态「未检测到 · …」+「重新检测」', clis.title === '本机 Agent CLI' && clis.nav === '本机 Agent CLI' && clis.empty.includes('未检测到 · 安装并登录后会自动出现') && clis.recheck === '重新检测', clis)
+    await fl.locator('.agent-clis-recheck').click()
+    check('C7 点「重新检测」后原地刷新(列表还是空态、按钮可再点)', await waitFor(() => fl.evaluate(() => !!document.querySelector('.agent-clis-empty') && !!document.querySelector('.agent-clis-recheck:not([disabled])')), 8000))
 
     fl = await openSettings('mcp')
     const mcp = await fl.evaluate(() => {

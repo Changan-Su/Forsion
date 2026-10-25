@@ -2757,9 +2757,9 @@ export const SettingsModal: React.FC<{
                           )}
                         />
                         <SettingsRow label={t('settings.browser.timeout')} description={t('settings.browser.timeoutHint')} control={(
-                          // 界面按秒(1–600),存盘仍是毫秒
+                          // 界面按秒(5–600:引擎 commandTimeout 低于 5000ms 会回落默认 30s),存盘仍是毫秒
                           <span className="settings-inline-row">
-                            <input className="settings-number-input" type="number" min={1} max={600} step={1} aria-label={t('settings.browser.timeout')} value={Math.round((stored.browserCommandTimeoutMs || 30000) / 1000)} onChange={(e) => edit({ browserCommandTimeoutMs: Math.min(600, Math.max(1, Math.round(Number(e.target.value) || 30))) * 1000 })} />
+                            <input className="settings-number-input" type="number" min={5} max={600} step={1} aria-label={t('settings.browser.timeout')} value={Math.round((stored.browserCommandTimeoutMs || 30000) / 1000)} onChange={(e) => edit({ browserCommandTimeoutMs: Math.min(600, Math.max(5, Math.round(Number(e.target.value) || 30))) * 1000 })} />
                             <span className="hint">{t('settings.browser.timeoutUnit')}</span>
                           </span>
                         )} />

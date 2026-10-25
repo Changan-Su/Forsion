@@ -95,17 +95,16 @@ export const AgentClisTab: React.FC<{ cfg: TanguDesktopConfig }> = ({ cfg }) => 
 
   return (
     <div className="field">
-      <div className="settings-section-title">{t('settings.agentClis.title')}</div>
+      {/* 「重新检测」常驻:接口也会列出未安装 / 需登录的引擎,列表非空时同样要能重拉 */}
+      <div className="settings-inline-row agent-clis-head">
+        <div className="settings-section-title">{t('settings.agentClis.title')}</div>
+        <button type="button" className="btn ghost sm agent-clis-recheck" disabled={detect.checking} onClick={() => setDetect((d) => ({ seq: d.seq + 1, checking: true, failed: d.failed }))}>
+          <RefreshCw size={12} className={detect.checking ? 'spin' : undefined} aria-hidden="true" />{t(detect.failed ? 'common.retry' : 'settings.agentClis.recheck')}
+        </button>
+      </div>
       <div className="hint" style={{ marginBottom: 12 }}>{t('settings.agentClis.hint')}</div>
       {engines === null && <div className="hint">{t('common.loading')}</div>}
-      {engines?.length === 0 && (
-        <div className="settings-inline-row agent-clis-empty">
-          <span className="hint">{t(detect.failed ? 'settings.agentClis.detectFailed' : 'settings.agentClis.empty')}</span>
-          <button type="button" className="btn ghost sm" disabled={detect.checking} onClick={() => setDetect((d) => ({ seq: d.seq + 1, checking: true, failed: d.failed }))}>
-            <RefreshCw size={12} className={detect.checking ? 'spin' : undefined} aria-hidden="true" />{t(detect.failed ? 'common.retry' : 'settings.agentClis.recheck')}
-          </button>
-        </div>
-      )}
+      {engines?.length === 0 && <div className="hint agent-clis-empty">{t(detect.failed ? 'settings.agentClis.detectFailed' : 'settings.agentClis.empty')}</div>}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         {(engines || []).map((e) => {
           const c = caps[e.id]
