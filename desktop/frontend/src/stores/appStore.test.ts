@@ -1313,3 +1313,20 @@ describe('moveSessionToProject', () => {
     unlockSessionMove('m1')
   })
 })
+
+describe('新对话默认模型:记住的模型已从目录消失(10-25 admin 停用 deepseek-v4-flash)', () => {
+  const st = (modelId: string, models: string[] | null, status: 'ok' | 'error' = 'ok') => ({
+    newChatModel: null, cfg: { modelId } as AppState['cfg'],
+    modelsResp: models && ({ models: models.map((id) => ({ id })), defaultModelId: 'auto', directProviders: [], forsion: { status, detail: null } } as unknown as AppState['modelsResp']),
+  })
+  it('不在目录里 → 落到目录默认', () => {
+    expect(newChatModelId(st('deepseek-v4-flash', ['auto', 'gpt']))).toBe('auto')
+  })
+  it('还在 → 照用', () => {
+    expect(newChatModelId(st('gpt', ['auto', 'gpt']))).toBe('gpt')
+  })
+  it('目录没到 / 云端不可达 → 照用,不误杀', () => {
+    expect(newChatModelId(st('deepseek-v4-flash', null))).toBe('deepseek-v4-flash')
+    expect(newChatModelId(st('deepseek-v4-flash', ['local-direct'], 'error'))).toBe('deepseek-v4-flash')
+  })
+})

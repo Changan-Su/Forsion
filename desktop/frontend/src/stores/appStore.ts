@@ -237,7 +237,13 @@ export function writeFocusModel(ref: TargetRef, modelId: string): void {
 /** 新会话的「默认模型」(newChatModelId / activeChatModelId / send 的回退链共用):home = cfg.modelId(不变);
  *  unit 焦点 = 按设备记的那个 → 手机偏好 → 都不在那台电脑的模型表里就不给(回落目标的 defaultModelId)。 */
 export function defaultModelOf(s: Pick<AppState, 'cfg' | 'modelsResp'> & { focusModelId?: string }, ref: TargetRef = focusRef()): string | undefined {
-  if (ref.kind === 'home') return s.cfg.modelId || undefined
+  if (ref.kind === 'home') {
+    // 记住的模型已不在目录里(admin 停用 / 下架,10-25 deepseek-v4-flash)→ 不再拿它开新对话,落到目录默认。
+    // 目录没到 / 云端不可达(forsion.status=error,云端模型整段缺席)时照用,别误杀。
+    const cat = sameRef(ref, focusRef()) ? s.modelsResp : catalogFor(targetKeyOf(ref))?.models
+    const gone = !!s.cfg.modelId && !!cat?.models?.length && cat.forsion?.status !== 'error' && !cat.models.some((m) => m.id === s.cfg.modelId)
+    return gone ? undefined : s.cfg.modelId || undefined
+  }
   // P1-K6 S4:会话可能在一台已经不是焦点的电脑上 —— 用那台的目录缓存与按设备记的模型(顶层 modelsResp / focusModelId 只属于焦点)
   const onFocus = sameRef(ref, focusRef())
   const models = onFocus ? s.modelsResp?.models : catalogFor(targetKeyOf(ref))?.models?.models
