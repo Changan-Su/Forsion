@@ -152,6 +152,12 @@ export const ShortcutsTab: React.FC = () => {
                 {others.length === 1 ? t('settings.shortcuts.conflictWith', { name: others[0].title }) : t('settings.shortcuts.conflictWithMany', { count: others.length })}
               </span>
             )}
+            {/* 「恢复默认」排在键帽左边、× 那一格没有也留着(走查续 W-41):键帽右缘一整列对齐,不随有没有绑定 / 改没改过错位 */}
+            {isCustomized(r) && recId !== r.id && !held && (
+              <button type="button" className="icon-btn" style={{ width: 26, height: 26 }} title={t('settings.shortcuts.reset')} onClick={() => clearOverride(r.id)}>
+                <RotateCcw size={13} />
+              </button>
+            )}
             {recId === r.id ? (
               <input
                 className="shortcut-capture" autoFocus readOnly
@@ -165,16 +171,11 @@ export const ShortcutsTab: React.FC = () => {
                 {eff ? fmt(eff) : <span className="shortcut-unbound">{t('settings.shortcuts.unbound')}</span>}
               </button>
             )}
-            {isCustomized(r) && recId !== r.id && !held && (
-              <button type="button" className="icon-btn" style={{ width: 26, height: 26 }} title={t('settings.shortcuts.reset')} onClick={() => clearOverride(r.id)}>
-                <RotateCcw size={13} />
-              </button>
-            )}
-            {eff && recId !== r.id && !held && (
+            {eff && recId !== r.id && !held ? (
               <button type="button" className="icon-btn" style={{ width: 26, height: 26 }} title={t('settings.shortcuts.clear')} onClick={() => setOverride(r.id, '')}>
                 <X size={13} />
               </button>
-            )}
+            ) : <span className="shortcut-slot" aria-hidden="true" />}
           </div>
         </div>
         {held && pendingRow(held)}
@@ -243,7 +244,7 @@ export const ShortcutsTab: React.FC = () => {
                 <>
                   <div className="shortcut-row">
                     <span className="shortcut-name">{t(keyEditor)}<span className="shortcut-layer">{t('settings.shortcuts.layerEditor')}</span></span>
-                    <div className="shortcut-controls"><span className="shortcut-key is-static">{fmt(keyQuery)}</span></div>
+                    <div className="shortcut-controls"><span className="shortcut-key is-static">{fmt(keyQuery)}</span><span className="shortcut-slot" aria-hidden="true" /></div>
                   </div>
                   <div className="shortcut-pending shortcut-pending--info"><Info size={14} /><span>{t('settings.shortcuts.editorHint', { key: fmt(keyQuery), action: t(keyEditor) })}</span></div>
                 </>
@@ -251,7 +252,7 @@ export const ShortcutsTab: React.FC = () => {
               {keySystem && (
                 <div className="shortcut-row">
                   <span className="shortcut-name">{t(keySystem)}<span className="shortcut-layer">{t('settings.shortcuts.layerSystem')}</span></span>
-                  <div className="shortcut-controls"><span className="shortcut-key is-static">{fmt(keyQuery)}</span></div>
+                  <div className="shortcut-controls"><span className="shortcut-key is-static">{fmt(keyQuery)}</span><span className="shortcut-slot" aria-hidden="true" /></div>
                 </div>
               )}
             </>

@@ -124,11 +124,18 @@ async function main() {
     await sp.locator('.settings-nav').getByRole('button', { name: '模型', exact: true }).first().click()
     await sp.waitForTimeout(500)
     await sp.locator('.settings-nav-subitem', { hasText: '语音' }).first().click()
+    // 10-25 起音色工作室收在「朗读」卡「复刻 / 设计音色」一行下面,点「展开」才出来(换页回来又是收着的)
+    const openStudio = async () => {
+      const tg = sp.locator('.tts-studio-toggle')
+      await tg.waitFor({ timeout: 10_000 })
+      if ((await tg.getAttribute('aria-expanded')) !== 'true') await tg.click()
+    }
+    await openStudio()
     const sel = sp.locator('select.tts-clone-model')
     await sel.waitFor({ timeout: 10_000 })
     await sel.scrollIntoViewIfNeeded()
     // 朗读工作室这一块(「语音通话」那边的复刻面板缺省收着,整页只有这一个录音区)
-    const studio = sp.locator('.field', { has: sel })
+    const studio = sp.locator('.tts-voice-studio', { has: sel })
     const go = studio.locator('.tts-clone-go')
     const file = studio.locator('input[type="file"][accept="audio/*"]')
     const reportEl = studio.locator('.voice-sample-report')
@@ -279,7 +286,7 @@ async function main() {
     const toggle = sp.locator('.realtime-clone-toggle')
     await toggle.waitFor({ timeout: 8000 })
     await toggle.click()
-    const callBox = sp.locator('.field', { has: toggle })
+    const callBox = sp.locator('.settings-voice-call', { has: toggle })
     const callGo = callBox.locator('.realtime-clone-go')
     const callIdle = await callGo.isDisabled()
     const callPick = async () => {
@@ -303,6 +310,7 @@ async function main() {
       JSON.stringify({ 选了可点: armed, 收起后还可点: stale, targetModel: c4.targetModel, wav: w4, realtimeVoice: callCfg?.realtimeVoice, ttsVoice: callCfg?.ttsVoice }))
 
     // 16 kHz 的 m4a:提醒音质偏低,交出去的是重编码的 24 kHz WAV(原样交会被百炼的采样率下限拒掉)
+    await openStudio()
     await sel.scrollIntoViewIfNeeded()
     await file.setInputFiles(lowM4a)
     const lowText = await until(async () => { const s = await report(); return /low\.m4a/.test(s) ? s : null }, 8000) || ''

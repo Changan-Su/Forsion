@@ -201,14 +201,14 @@ export function DefaultModelsPage(p: {
         onChange: (id) => void save(id === LOCAL_ASR ? { asrBackend: 'local' } : { asrBackend: 'cloud', asrModelId: id }),
         chip: asrValue === LOCAL_ASR ? <OriginTag origin="local" /> : tag(cat.asr, followOrValue(asrValue, models?.asrModelId)),
       })} />}
-      <SettingsRow label={t('dm.tts')} description={t('dm.ttsHint')} control={slot({
+      <SettingsRow anchor="default-tts" label={t('dm.tts')} description={t('dm.ttsHint')} control={slot({
         value: ttsValue, onChange: (id) => void save({ ttsModelId: id }), models: ttsList.map(asInfo), icon: <Volume2 size={13} />, label: t('dm.tts'), kind: 'tts',
         defaultLabel: t('dm.off'), chip: tag(ttsList, ttsValue), resettable: false,
       })} />
       {ttsValue && <SettingsRow className="model-slot-sub" label={t('dm.voiceSpeed')} control={
         <button className="btn ghost sm model-slot-link" onClick={() => p.onOpen('m-voice')}>{stored.ttsVoice || t('dm.voiceDefault')} · {stored.ttsSpeed ?? 1}×<ChevronRight size={12} /></button>
       } />}
-      <SettingsRow label={t('dm.call')} description={callValue ? t(find(callList, callValue)?.source === 'forsion' ? 'settings.realtime.billingCloud' : 'settings.realtime.billing') : t('dm.callHint')} control={slot({
+      <SettingsRow anchor="default-call" label={t('dm.call')} description={callValue ? t(find(callList, callValue)?.source === 'forsion' ? 'settings.realtime.billingCloud' : 'settings.realtime.billing') : t('dm.callHint')} control={slot({
         value: callValue, models: callList.map(asInfo), icon: <Phone size={13} />, label: t('dm.call'), kind: 'realtime', defaultLabel: t('dm.off'), resettable: false,
         disabled: !callList.length, chip: tag(callList, callValue),
         onChange: (id) => void saveRealtimeModel(id, stored, models?.realtimeModel).then(p.onStored),

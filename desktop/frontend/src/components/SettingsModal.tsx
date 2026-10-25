@@ -12,7 +12,7 @@ import { BrowserExtensionPanel } from './BrowserExtensionPanel'
  * 在 Desktop 主界面内替换 Chat/Inspector 区域，而不是覆盖式弹窗。
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { X, Droplets, Shapes, ArrowLeft, Undo2, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2, CircleUserRound, Scaling, Coffee, MonitorCheck, History, MonitorSmartphone, Laptop, Cloud, SunDim, AlignLeft, Wind, TextSelect, MousePointerClick } from 'lucide-react'
+import { X, Droplets, Shapes, ArrowLeft, Undo2, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2, CircleUserRound, Scaling, Coffee, MonitorCheck, History, MonitorSmartphone, Laptop, Cloud, SunDim, AlignLeft, Wind, TextSelect, MousePointerClick } from 'lucide-react'
 import { ThemeCard } from './ThemeCard'
 import { ThemeSettingsPanel } from './ThemeSettingsPanel'
 import { StartupAppearanceSettings } from './StartupAppearanceSettings'
@@ -56,16 +56,14 @@ import { Markdown } from './Markdown'
 import { UpdateActions, UpdateSourceNote } from './UpdateActions'
 import { ChangelogEntries, releaseNotesFor } from '../views/ChangelogView'
 import { openWhatsNew } from './WhatsNewDialog'
-import { AsrModelChoice } from './AsrModelChoice'
 import { DefaultModelsPage } from './DefaultModelsPage'
+import { VoiceSettingsPage } from './VoiceSettingsPage'
 import { catalogByKind, FETCH_ENABLE_LIMIT, guessProviderModelKind, mergeFetched, providerFieldsFromRows, rowsFromProvider, type ModelKind, type ProviderModelKind, type ProviderModelRow } from './modelKinds'
 import { realtimeCandidates } from './RealtimeVoiceSettings'
 import { AgentSettingsOverview } from './AgentSettingsOverview'
 import { GlobalSkillsLibrary } from './GlobalSkillsLibrary'
 import { openAgentProfile } from '../views/agentProfileNav'
 import { SpecialAgentsTab } from './SpecialAgentsTab'
-import { TtsVoiceStudio } from './TtsVoiceStudio'
-import { previewTts } from '../services/ttsService'
 import { ShortcutsTab } from './ShortcutsTab'
 import { PluginsTab } from './PluginsTab'
 import { CorePluginUpdates } from './CorePluginUpdates'
@@ -90,7 +88,6 @@ import { UnitSettings } from './UnitSwitcher'
 import { debugFireToast } from '../achievements/store'
 import { useTheme } from '../stores/themeStore'
 import { setMobileUiCommand, MOBILE_UI_KEY } from '../mobileUiCommand'
-import { RealtimeVoiceSettings } from './RealtimeVoiceSettings'
 import {
   FORSION_PRIVACY_URL,
   FORSION_TERMS_URL,
@@ -175,10 +172,6 @@ registerMessages({
   'modelsettings.providersHint': { zh: '模型从哪里来：Forsion 云端、订阅账号，或你自己的 API key。', en: 'Where models come from: Forsion Cloud, subscription accounts or your own API keys.' },
   'modelsettings.searchHint': { zh: '配置联网搜索的服务与凭据。', en: 'Configure web search services and credentials.' },
   'modelsettings.voiceHint': { zh: '音色、语速和本地语音识别。用哪个模型在「默认模型」里选。', en: 'Voices, speed and on-device speech recognition. Choose the models under Default models.' },
-  'settings.tts.off': { zh: '朗读没开。在「默认模型 → 朗读」里选一个模型就开了。', en: 'Read-aloud is off. Pick a model under Default models → Read aloud to turn it on.' },
-  'settings.voice.secCall': { zh: '语音通话', en: 'Voice call' },
-  'settings.voice.secInput': { zh: '语音输入', en: 'Voice input' },
-  'settings.voice.secRead': { zh: '朗读', en: 'Read aloud' },
   'modelsettings.answerForm': { zh: '回答形式', en: 'Answer format' },
   'modelsettings.noModels': { zh: '暂无可用模型。可在提供方中配置连接，然后刷新模型。', en: 'No models available. Configure a provider connection, then refresh models.' },
   'prov.cloud': { zh: 'Forsion 云端', en: 'Forsion Cloud' },
@@ -329,23 +322,6 @@ const TAB_ICONS: Partial<Record<Tab, React.ReactNode>> = {
   'computer-use': <MousePointerClick size={14} />,
   plugins: <Blocks size={14} />,
 }
-
-// 系统音色候选(datalist 可输可选;百炼无音色列表 API,静态维护常用项;全量见百炼「Qwen-TTS 音色列表」文档)。
-// ⚠️ 表在模块作用域,只能存**文案 key**:写死字面量会在模块加载时冻结,切语言不会更新。
-// 第一列是音色 id(发给接口的标识符,永不翻译),第二列是显示名的 key,渲染时 t() 解析。
-const TTS_VOICE_SUGGESTIONS: Array<[string, string]> = [
-  ['Cherry', 'settingsmodal.tts.voice.cherry'], ['Serena', 'settingsmodal.tts.voice.serena'],
-  ['Ethan', 'settingsmodal.tts.voice.ethan'], ['Chelsie', 'settingsmodal.tts.voice.chelsie'],
-  ['Nofish', 'settingsmodal.tts.voice.nofish'], ['Jennifer', 'settingsmodal.tts.voice.jennifer'],
-  ['Ryan', 'settingsmodal.tts.voice.ryan'], ['Katerina', 'settingsmodal.tts.voice.katerina'],
-  ['Dylan', 'settingsmodal.tts.voice.dylan'], ['Jada', 'settingsmodal.tts.voice.jada'],
-  ['Sunny', 'settingsmodal.tts.voice.sunny'], ['Rocky', 'settingsmodal.tts.voice.rocky'],
-  ['Kiki', 'settingsmodal.tts.voice.kiki'], ['Marcus', 'settingsmodal.tts.voice.marcus'],
-  ['Roy', 'settingsmodal.tts.voice.roy'], ['Peter', 'settingsmodal.tts.voice.peter'],
-  ['alloy', 'settingsmodal.tts.voice.openai'], ['echo', 'settingsmodal.tts.voice.openai'],
-  ['fable', 'settingsmodal.tts.voice.openai'], ['onyx', 'settingsmodal.tts.voice.openai'],
-  ['nova', 'settingsmodal.tts.voice.openai'], ['shimmer', 'settingsmodal.tts.voice.openai'],
-]
 
 const ECO_LABEL: Record<string, string> = {
   'claude-code': 'Claude Code',
@@ -699,9 +675,6 @@ export const SettingsModal: React.FC<{
   const [editProvider, setEditProvider] = useState<(DirectProviderConfig & { rows: ProviderModelRow[]; isNew?: boolean; original?: string; base: Partial<DirectProviderConfig>; editId: number }) | null>(null)
   const [manualModel, setManualModel] = useState('')
   // 语速输入的编辑态缓冲(null=未在编辑,显示已存值):清空/打半截时不反弹,blur 时非法则恢复旧值。
-  const [ttsSpeedText, setTtsSpeedText] = useState<string | null>(null)
-  const [ttsTesting, setTtsTesting] = useState(false)
-  const [ttsTestMsg, setTtsTestMsg] = useState('')
   const [providerTestMsg, setProviderTestMsg] = useState('')
   const [providerTesting, setProviderTesting] = useState(false)
   const providerTestAbort = useRef<AbortController | null>(null) // 供「测试连接」取消用
@@ -2478,99 +2451,17 @@ export const SettingsModal: React.FC<{
                   <WebSearchSettings target={homeTarget()} cfg={wsRed} setCfg={setWsRed} />
                 )}
 
-                {/* 语音页分三节,各管输入框上的一个键(10-02 用户报「通话音色和朗读混在一起、很误导」):
-                    语音通话 = 空输入框的发送键 / 语音输入 = 麦克风键 / 朗读 = 回复的朗读(TTS:OpenAI 兼容 /audio/speech)。 */}
+                {/* 语音页三张卡(10-25 走查续 4.5),各管输入框上的一个键(10-02 用户报「通话音色和朗读混在一起、很误导」):
+                    语音通话 = 空输入框的发送键 / 本地语音识别 = 麦克风键 / 朗读 = 回复的朗读(TTS:OpenAI 兼容 /audio/speech)。 */}
                 {tab === 'model' && isDesktop && activeSub === 'm-voice' && (
-                  <>
-                    {stored && (
-                      <>
-                        <div className="settings-sec">{t('settings.voice.secCall')}</div>
-                        <RealtimeVoiceSettings stored={stored} providers={customProviders} onSaved={setStored}
-                          cloudModel={models?.realtimeModel} cloudAccount={cloudAccount} signedIn={realtimeSignedIn} />
-                      </>
-                    )}
-                    <div className={`settings-sec${stored ? ' settings-sec--gap' : ''}`}>{t('settings.voice.secInput')}</div>
-                    <AsrModelChoice onSaved={setStored} />
-                    {stored && (
-                      <>
-                        <div className="settings-sec settings-sec--gap">{t('settings.voice.secRead')}</div>
-                        {!(stored.ttsModelId || '').trim() && <div className="hint">{t('settings.tts.off')}</div>}
-                        <div className="field">
-                          <label>{t('settings.tts.voice')}</label>
-                          <input
-                            type="text"
-                            list="tts-voice-options"
-                            value={stored.ttsVoice ?? ''}
-                            onChange={(e) => edit({ ttsVoice: e.target.value })}
-                            onBlur={() => void commitEdits(['ttsVoice'], (v) => ({ ttsVoice: (v.ttsVoice || '').trim() }))}
-                            placeholder={t('settings.tts.voicePlaceholder')}
-                          />
-                          {commitErrorHint('ttsVoice')}
-                          {/* 系统音色候选(可输可选;百炼无音色列表 API,静态表);复刻/设计音色经下方工作室「使用」自动填入 */}
-                          <datalist id="tts-voice-options">
-                            {TTS_VOICE_SUGGESTIONS.map(([v, labelKey]) => <option key={v} value={v} label={t(labelKey)} />)}
-                          </datalist>
-                        </div>
-                        <div className="field">
-                          <label>{t('settings.tts.speed')}</label>
-                          <input
-                            type="number"
-                            min={0.5}
-                            max={2}
-                            step={0.1}
-                            style={{ width: 90 }}
-                            value={ttsSpeedText ?? String(stored.ttsSpeed ?? 1)}
-                            onChange={(e) => setTtsSpeedText(e.target.value)}
-                            onBlur={() => {
-                              const n = Number(ttsSpeedText)
-                              const v = ttsSpeedText !== null && Number.isFinite(n) && n > 0 ? Math.min(Math.max(n, 0.5), 2) : (stored.ttsSpeed ?? 1)
-                              setTtsSpeedText(null)
-                              void window.tangu!.setConfig({ ttsSpeed: v }).then(setStored)
-                            }}
-                          />
-                        </div>
-                        <div className="field">
-                          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                            <button
-                              className="btn ghost sm"
-                              disabled={ttsTesting || !(stored.ttsModelId || '').trim()}
-                              onClick={() => {
-                                setTtsTesting(true); setTtsTestMsg('')
-                                previewTts(homeTarget(), { model: (stored.ttsModelId || '').trim(), voice: (stored.ttsVoice || '').trim() || undefined, speed: stored.ttsSpeed }, t('settings.tts.testText'))
-                                  .then(() => setTtsTestMsg(`✓ ${t('settings.tts.testOk')}`))
-                                  .catch((e: any) => setTtsTestMsg(`✗ ${e?.message || e}`))
-                                  .finally(() => setTtsTesting(false))
-                              }}
-                            >
-                              {ttsTesting ? <Loader2 size={12} className="spin" /> : <Play size={12} />} {t('settings.tts.testBtn')}
-                            </button>
-                            <span style={{ fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-muted)' }}>{ttsTestMsg}</span>
-                          </div>
-                        </div>
-                        <div className="field">
-                          <label className="inline-check" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                            <input
-                              type="checkbox"
-                              checked={stored.ttsAutoSpeak === true}
-                              onChange={(e) => void window.tangu!.setConfig({ ttsAutoSpeak: e.target.checked }).then(setStored)}
-                            />
-                            {t('settings.tts.autoSpeak')}
-                          </label>
-                          <div className="hint">{t('settings.tts.autoSpeakHint')}</div>
-                        </div>
-                        {(() => {
-                          // 百炼音色工作室:有指向阿里云百炼的 provider 才可用(域名判定与后端 isDashScopeBase 一致)。
-                          // 非本地 external 后端不渲染:本地 providers 文件到不了远端 registry,采用的音色无法合成(判定同上方 externalWarning)。
-                          const remoteExternal = stored?.mode === 'external' && !(stored?.backendUrl || '').includes('localhost') && !(stored?.backendUrl || '').includes('127.0.0.1')
-                          if (remoteExternal) return null
-                          const ds = customProviders.find((cp) => /dashscope|aliyuncs\.com/i.test(cp.baseUrl))
-                          return ds
-                            ? <TtsVoiceStudio cfg={p.cfg} provider={ds} onApplied={() => void window.tangu!.getConfig().then(setStored)} />
-                            : <div className="hint">{t('settings.tts.studio.needProvider')}</div>
-                        })()}
-                      </>
-                    )}
-                  </>
+                  <VoiceSettingsPage cfg={p.cfg} stored={stored} setStored={setStored} providers={customProviders}
+                    cloudModel={models?.realtimeModel} cloudAccount={cloudAccount} signedIn={realtimeSignedIn}
+                    edit={edit} commitEdits={commitEdits} commitErrorHint={commitErrorHint}
+                    onOpen={(target) => {
+                      if (target === 'providers') { openSubPage('model', 'm-providers'); return }
+                      openSubPage('model', 'm-models')
+                      setFlashAnchor({ id: target === 'tts-model' ? 'default-tts' : 'default-call', seq: Date.now() })
+                    }} />
                 )}
 
                 {tab === 'mcp' && (
