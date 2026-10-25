@@ -1585,11 +1585,23 @@ export interface PluginContext {
      *  one; `zone({ x, y, w, h })` the outline for "drop into this". Pass `key` (your row / slot id) so a scroll is
      *  not mistaken for a new drop point. `hide()` on dragleave / drop / dragend; `dispose()` when your view goes
      *  away — the host also disposes it on disable / reload. `opts.host` defaults to `document.body`.
-     *  Feature-detect on older hosts: `ctx.ui?.dropIndicator`. */
+     *  Feature-detect on older hosts: `ctx.ui?.dropIndicator`.
+     *
+     *  `land(target, from)` (2026-10-25+, feature-detect `drop.land`) is the release half: after a drop moves a row, the
+     *  moved row glides from where it was let go into its new place (160ms, decelerating, its lift shadow fading out)
+     *  instead of appearing there; neighbours don't move. `from` is the viewport top-left the row should start from —
+     *  normally where the drag image was: at dragstart keep `grab = { x: e.clientX - r.left, y: e.clientY - r.top }`
+     *  (r = the row's getBoundingClientRect()), at drop `from = { x: e.clientX - grab.x, y: e.clientY - grab.y }`.
+     *  Pass the row element if you have already re-rendered it in its new place; pass a function that finds it
+     *  (`() => list.querySelector('[data-id="…"]')`) if your re-render comes later — the host then waits up to ~1.2s
+     *  for that element to be re-mounted or to change its parent / previous sibling, and lands it before it is painted
+     *  there. It writes only the row's inline `transform` / `transition` / `box-shadow` for the flight and restores them.
+     *  With reduced motion the row simply appears in place. */
     dropIndicator?(opts?: { host?: HTMLElement }): {
       line(rect: { x: number; y: number; w?: number; h?: number }, opts?: { key?: string; axis?: 'h' | 'v' }): void
       zone(rect: { x: number; y: number; w: number; h: number }, opts?: { key?: string }): void
       hide(): void
+      land?(target: HTMLElement | (() => HTMLElement | null | undefined), from: { x: number; y: number }): void
       dispose(): void
     }
     /** A transparent layer of the host whiteboard over your own content (2026-10-10+): the same engine,

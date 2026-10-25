@@ -1141,7 +1141,8 @@ button.t2-bg-url:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.
 /* 头像那一列不在时(竖长窄列 / 手机原生外壳,见上面两处 .t2-avatar 隐藏)不缩进;放在基础规则之后,同特异性才压得住 */
 @container (aspect-ratio < 9 / 16) { .t2-tail { padding-left: 0; } }
 @container (max-width: 520px) { .mb-shell[data-native-chrome] .t2-tail { padding-left: 0; } }
-.t2-deckpill-row { display: flex; justify-content: center; margin-bottom: 8px; pointer-events: none; }
+.t2-deckpill-row { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-bottom: 8px; pointer-events: none; }
+.t2-deckpill-row:empty { display: none; }
 .t2-deckpill {
   pointer-events: auto; display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; cursor: pointer;
   border: var(--border-width, 1px) solid var(--border); border-radius: 999px;
@@ -1150,6 +1151,8 @@ button.t2-bg-url:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.
 }
 .t2-deckpill > svg { color: var(--accent-ink); flex: none; }
 .t2-deckpill-sep { color: var(--text-faint, var(--text-muted)); }
+/* 子会话药丸(借鉴 Comma 2.2):在跑 / 等你两种点直接用会话行尾的 .t2s-st(在跑 = 主题色转圈,等你 = 警示色点) */
+.t2-childpill .t2s-st { width: 12px; height: 12px; margin-right: -2px; }
 .t2-taskcard.busy .t2-taskcard-actions > button { opacity: .6; cursor: progress; }
 .t2-taskcard-toggle {
   align-self: flex-start; border: none; background: transparent; padding: 0; cursor: pointer;

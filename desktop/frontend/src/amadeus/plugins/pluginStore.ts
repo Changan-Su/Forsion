@@ -48,7 +48,7 @@ import { registerSummaryCard, revokeSummaryCards, type SummaryCardContribution, 
 import { currentPlatform } from '../../services/agentRunService'
 import { UI_MODE } from '@lcl/engine/uiMode'
 import { attachTooltip } from '@lcl/engine/hoverSurface'
-import { createDropIndicator } from '@lcl/engine/dropIndicator'
+import { createDropIndicator, land as landDrop, landCancel, landWhenMoved } from '@lcl/engine/dropIndicator'
 import { setActiveSpace, useCommandStore, useSpaceStore, nativeHaptic, nativeHapticAvailable, claimNativeChrome, nativeChromeInstalled } from '@lcl/engine'
 import { AUTO_WORK_FOLDER_KEY, pluginDisplayName } from './display'
 // 自动化播种 / 禁用即关规则:backendService 依赖图干净(http / agentRunService / localInbox,均不引 appStore),
@@ -1776,11 +1776,19 @@ export const usePluginStore = create<PluginState>((set, get) => {
       },
       // 落点提示:LCL 那一份(dropIndicator.ts),换落点原地淡出淡入、颜色跟主题;插件停用 / 重载时统一收掉。同步可用。
       dropIndicator: (opts = {}) => {
-        if (!ctxAlive()) return { line() {}, zone() {}, hide() {}, dispose() {} }
+        if (!ctxAlive()) return { line() {}, zone() {}, hide() {}, land() {}, dispose() {} }
         const host = opts && typeof opts === 'object' && opts.host instanceof HTMLElement ? opts.host : undefined
         const ind = createDropIndicator({ host })
         let alive = true
-        const dispose = scope.own('mount', () => { alive = false; ind.destroy() }, 'dropIndicator')
+        // 落位:还在等重渲的、正在飞的,停用 / 重载那一刻一起收(内联样式还回去)
+        const waits = new Set<() => void>()
+        const flying = new Map<HTMLElement, number>() // 元素 → 收尾计时(同一行再落一次就换成新的那个)
+        const dispose = scope.own('mount', () => {
+          alive = false; ind.destroy()
+          for (const w of waits) w()
+          for (const [el, t] of flying) { window.clearTimeout(t); landCancel(el) }
+          waits.clear(); flying.clear()
+        }, 'dropIndicator')
         const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
         const rect = (r: unknown) => { const o = (r && typeof r === 'object' ? r : {}) as Record<string, unknown>; return { x: num(o.x), y: num(o.y), w: num(o.w), h: num(o.h) } }
         const key = (o: unknown): string | undefined => { const k = (o as { key?: unknown } | undefined)?.key; return typeof k === 'string' || typeof k === 'number' ? String(k) : undefined }
@@ -1788,6 +1796,24 @@ export const usePluginStore = create<PluginState>((set, get) => {
           line: (r, o) => { if (alive) ind.line(rect(r), { key: key(o), axis: (o as { axis?: unknown } | undefined)?.axis === 'v' ? 'v' : 'h' }) },
           zone: (r, o) => { if (alive) ind.zone(rect(r), { key: key(o) }) },
           hide: () => { if (alive) ind.hide() },
+          land: (target, from) => {
+            if (!alive) return
+            const o = (from && typeof from === 'object' ? from : {}) as Record<string, unknown>
+            if (!Number.isFinite(o.x) || !Number.isFinite(o.y)) return
+            const at = { x: o.x as number, y: o.y as number }
+            const fly = (el: HTMLElement): void => {
+              if (!alive || !landDrop(el, at)) return
+              window.clearTimeout(flying.get(el))
+              flying.set(el, window.setTimeout(() => flying.delete(el), 400))
+            }
+            if (target instanceof HTMLElement) { fly(target); return }
+            if (typeof target !== 'function') return
+            const find = (): HTMLElement | null => { try { const el = target(); return el instanceof HTMLElement ? el : null } catch { return null } }
+            let stop = (): void => {}
+            stop = landWhenMoved(find, at, { onMoved: (el) => { waits.delete(stop); fly(el) } })
+            waits.add(stop)
+            window.setTimeout(() => { stop(); waits.delete(stop) }, 1500)
+          },
           dispose,
         }
       },
