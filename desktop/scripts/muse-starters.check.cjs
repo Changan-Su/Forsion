@@ -107,12 +107,15 @@ const emptyFaded = (win) => win.evaluate(() => window.__anims.some(({ el, k }) =
     check('② 空对话:空状态 + 输入区整块居中', !!g.translate && Math.abs(topGap - bottomGap) <= 4, { topGap, bottomGap, translate: g.translate })
 
     // ③
-    const before = g.card.top
+    const before = g
     await win.locator('.t2-starter').nth(1).click()
-    await sleep(300)
+    await sleep(600)
     g = await geom(win)
     check('③ 点一行 = 整句填进输入框,焦点在输入框', g.ta === STARTERS[1].text && g.focused, { ta: g.ta, focused: g.focused })
-    check('③ 三行淡出但居中的那一块不动', g.hidden === true && Math.abs(g.card.top - before) <= 1, { hidden: g.hidden, before, now: g.card.top })
+    // 三行只淡出、高度留着;卡片因挂上笔记引用变高,整块按新高度重新居中 = 上移卡片增高的一半(别的都不该动)
+    const grew = g.card.height - before.card.height
+    check('③ 三行淡出但留着高度,整块只因卡片变高重新居中', g.hidden === true && Math.abs(g.starters.height - before.starters.height) <= 1 && Math.abs((before.card.top - g.card.top) - grew / 2) <= 2,
+      { hidden: g.hidden, rows: [before.starters.height, g.starters.height], cardGrew: grew, moved: before.card.top - g.card.top })
     await win.locator('.composer-anchor .t2c-ta').first().fill('')
     await sleep(300)
     g = await geom(win)
@@ -125,6 +128,17 @@ const emptyFaded = (win) => win.evaluate(() => window.__anims.some(({ el, k }) =
     g = await geom(win)
     check('④ × = 拿掉 + 回写 dismissed', g.rows.length === 2 && patches.some((x) => x.id === 's1' && x.status === 'dismissed'), { rows: g.rows.length, patches })
 
+    if (process.env.SHOTS) {
+      await win.locator('.t2-starter').nth(0).hover()
+      await sleep(300)
+      await win.screenshot({ path: `${process.env.SHOTS}/real-rest.png`, scale: 'css' })
+      for (const mode of ['dark']) {
+        await win.evaluate((m) => { const r = document.documentElement; r.dataset.mode = m; r.classList.toggle('dark', m === 'dark') }, mode)
+        await sleep(300)
+        await win.screenshot({ path: `${process.env.SHOTS}/real-${mode}.png`, scale: 'css' })
+        await win.evaluate(() => { const r = document.documentElement; r.dataset.mode = 'light'; r.classList.remove('dark') })
+      }
+    }
     // ⑤
     await win.locator('.t2-starter').first().click() // s2(笔记)
     await sleep(200)
@@ -163,7 +177,9 @@ const emptyFaded = (win) => win.evaluate(() => window.__anims.some(({ el, k }) =
     await win.keyboard.press('Enter')
     await sleep(1500)
     g = await geom(win)
-    check('⑦ 没发出去:输入区留在底部,空状态淡回来,草稿还在', !g.translate && g.emptyOpacity === '1' && g.ta === '这句发不出去', { translate: g.translate, emptyOpacity: g.emptyOpacity, ta: g.ta })
+    // 新对话的第一句没发出去:会话已经建好,现有的失败处理把那句留成失败气泡(或放回输入框)—— 不再是空对话;输入区留在底部、不回升
+    const kept = await win.evaluate(() => [...document.querySelectorAll('.t2-chat-col')].some((c) => c.textContent.includes('这句发不出去')) || [...document.querySelectorAll('.t2c-ta')].some((t) => t.value.includes('这句发不出去')))
+    check('⑦ 没发出去:输入区留在底部,那句话还在(失败气泡或输入框里)', !g.translate && kept, { translate: g.translate, kept, empty: g.emptyOpacity })
     stub.state.failRuns = false
     await win.locator('.composer-anchor .t2c-ta').first().fill('')
 

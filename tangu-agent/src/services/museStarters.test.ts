@@ -12,7 +12,8 @@ vi.mock('../core/db.js', () => ({
     if (s.startsWith('SELECT id, text, source_kind')) return db.rows.filter((r) => r.user_id === p[0] && r.status === 'active').sort((a, b) => a.seq - b.seq);
     if (s.startsWith("SELECT text FROM muse_starters WHERE user_id = ? AND status = 'dismissed'")) return db.rows.filter((r) => r.user_id === p[0] && r.status === 'dismissed' && r.updated_at >= p[1]);
     if (s.startsWith("SELECT text FROM muse_starters WHERE id = ?")) return db.rows.filter((r) => r.id === p[0] && r.user_id === p[1] && r.status === 'active');
-    if (s.startsWith("UPDATE muse_starters SET status = 'replaced'")) { db.rows.filter((r) => r.id === p[0] && r.user_id === p[1]).forEach((r) => { r.status = 'replaced' }); return [] }
+    if (s.startsWith('SELECT status FROM muse_starters WHERE id = ?')) return db.rows.filter((r) => r.id === p[0] && r.user_id === p[1]);
+    if (s.startsWith("UPDATE muse_starters SET status = 'replaced'")) { if (!s.includes("AND status = 'active'")) throw new Error('replace must be CAS on active'); db.rows.filter((r) => r.id === p[0] && r.user_id === p[1] && r.status === 'active').forEach((r) => { r.status = 'replaced' }); return [] }
     if (s.startsWith('UPDATE muse_starters SET status = ?')) { db.rows.filter((r) => r.id === p[1] && r.user_id === p[2] && r.status === 'active').forEach((r) => { r.status = p[0]; r.updated_at = new Date().toISOString().slice(0, 19).replace('T', ' ') }); return [] }
     if (s.startsWith('INSERT INTO muse_starters')) { db.rows.push({ id: p[0], user_id: p[1], text: p[2], source_kind: p[3], source_label: p[4], source_ref: p[5], status: 'active', seq: db.clock++, updated_at: '' }); return [] }
     throw new Error(`unexpected SQL in test: ${s}`);
@@ -104,6 +105,23 @@ describe('setStarters / markStarter', () => {
     const again = await put([{ ...cal, text: `${cal.text.replace(/。$/, '')}!` }, note]);
     expect(again.refused).toHaveLength(1);
     expect(again.shown.map((s) => s.text)).toEqual([note.text]);
+  });
+
+  it('替换时用户恰好 × 掉了一条:不被改回 replaced(30 天拒收照旧)', async () => {
+    const { shown } = await put([cal, note]);
+    // 模拟「读快照之后、写之前」用户点了 ×
+    const orig = db.rows.find((r) => r.id === shown[0].id);
+    const v = validateStarters([note]);
+    const pending = setStarters('u1', (v as any).starters);
+    orig.status = 'dismissed';
+    await pending;
+    expect(orig.status).toBe('dismissed');
+  });
+
+  it('31 条 × 过的也全拦(拒收不截断)', async () => {
+    for (let i = 0; i < 31; i++) db.rows.push({ id: `d${i}`, user_id: 'u1', text: `Old idea ${i} about 产品周会`, source_kind: 'calendar', source_label: '产品周会', source_ref: null, status: 'dismissed', seq: -1, updated_at: '9999' });
+    const r = await put([{ text: 'Old idea 0 about 产品周会', source: { kind: 'calendar', label: '产品周会' } }]);
+    expect(r.refused).toHaveLength(1);
   });
 
   it('× / 用过只认 active 的那条:点两下只算一次,别人的不算', async () => {

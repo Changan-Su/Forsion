@@ -40,7 +40,11 @@ export function refreshMuseStarters(force = false): Promise<void> {
   return inflight
 }
 
-function setList(list: MuseStarter[]): void {
+/** 这次启动里 × 掉 / 用掉的:在途的刷新若带着旧快照回来,不许把它们放回眼前(回写引擎可能还没落地)。 */
+const gone = new Set<string>()
+
+function setList(next: MuseStarter[]): void {
+  const list = next.filter((s) => !gone.has(s.id))
   const cur = useMuseStarters.getState().list
   const same = cur.length === list.length && cur.every((s, i) => s.id === list[i].id && s.text === list[i].text)
   if (!same) useMuseStarters.setState({ list })
@@ -49,6 +53,7 @@ function setList(list: MuseStarter[]): void {
 
 /** × / 右键「不感兴趣」「别再推这类」。 */
 export function dismissStarter(id: string, mute = false): void {
+  gone.add(id)
   setList(useMuseStarters.getState().list.filter((s) => s.id !== id))
   for (const [k, v] of filledBy) if (v === id) filledBy.delete(k)
   void patchMuseStarter(homeTarget(), id, 'dismissed', mute).catch(() => {})
@@ -58,11 +63,12 @@ export function dismissStarter(id: string, mute = false): void {
 const filledBy = new Map<string, string>()
 export function noteStarterFilled(draftKey: string, id: string): void { filledBy.set(draftKey, id) }
 
-/** 那份草稿按了发送:回写 used,并从眼前拿掉(它已经变成一条真对话了)。 */
+/** 那份草稿发出去了(引擎受理):回写 used,并从眼前拿掉(它已经变成一条真对话了)。没发出去的不算。 */
 export function consumeStarterOnSend(draftKey: string): void {
   const id = filledBy.get(draftKey)
   if (!id) return
   filledBy.delete(draftKey)
+  gone.add(id)
   setList(useMuseStarters.getState().list.filter((s) => s.id !== id))
   void patchMuseStarter(homeTarget(), id, 'used').catch(() => {})
 }

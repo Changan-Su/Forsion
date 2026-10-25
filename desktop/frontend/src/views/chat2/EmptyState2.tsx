@@ -27,6 +27,7 @@ export function EmptyState2({ title, subtitle, compact = false, center = false, 
     let lift = 0
     let lastTop: number | null = null
     let fades: Animation[] = []
+    let motion: Animation | null = null // 升起 / 挪位那段(落底那段不记:卸载时它该接着跑完)
     let leaving = false
     const rising = center && riseRef.current && !still
     riseRef.current = false
@@ -37,10 +38,13 @@ export function EmptyState2({ title, subtitle, compact = false, center = false, 
       const from = lift
       lift = next
       composer.style.translate = next ? `0 ${-next}px` : ''
+      motion?.cancel()
+      motion = null
       if (how === 'none' || still || typeof composer.animate !== 'function') return
-      composer.animate([{ translate: `0 ${-from}px` }, { translate: `0 ${-next}px` }], how === 'drop'
+      const a = composer.animate([{ translate: `0 ${-from}px` }, { translate: `0 ${-next}px` }], how === 'drop'
         ? { duration: DROP_MS, easing: DROP_EASE }
         : { duration: SETTLE_MS, easing: SETTLE_EASE })
+      if (how !== 'drop') motion = a
     }
     const place = (): void => {
       empty.style.bottom = 'auto'
@@ -114,6 +118,7 @@ export function EmptyState2({ title, subtitle, compact = false, center = false, 
     return () => {
       observer.disconnect()
       off()
+      motion?.cancel() // 升到一半就换走了:别让它带着输入区在消息上面接着往上飘
       for (const a of fades) a.cancel()
       for (const el of composer.querySelectorAll<HTMLElement>(':scope > *')) el.style.opacity = ''
       // 卸载 = 第一条消息上屏了(落底动画若还在跑,它跑在输入区自己身上,接着跑完)/ 换走了:不留抬升

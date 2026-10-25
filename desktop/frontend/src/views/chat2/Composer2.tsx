@@ -1496,6 +1496,7 @@ export const Composer2: React.FC<{
         if (known && shown !== sentKey && !known.has(shown)) moveDraft(sentKey, shown)
         return false
       }
+      announceSend('sent', sentKey, taRef.current)
       if (!override && draftKeyRef.current === sentKey) fadeOutDraft(taRef.current) // 输入框里的字上移淡出,再清空
       // 发送途中又加进来的附件不跟着这条清掉(它们不在这次发出去的里面)
       const sent = new Set([...sentAtts, ...sentWs])

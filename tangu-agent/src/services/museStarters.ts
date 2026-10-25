@@ -90,9 +90,10 @@ export async function listActiveStarters(userId: string): Promise<Starter[]> {
   return (rows || []).map(rowToStarter);
 }
 
+/** 30 天内被 × 掉的。拒收用全量(截了就会漏掉更早的);简报只列最近的几条。 */
 async function recentlyDismissed(userId: string): Promise<string[]> {
   const rows = await query<any[]>(
-    `SELECT text FROM muse_starters WHERE user_id = ? AND status = 'dismissed' AND updated_at >= ? ORDER BY updated_at DESC LIMIT 30`,
+    `SELECT text FROM muse_starters WHERE user_id = ? AND status = 'dismissed' AND updated_at >= ? ORDER BY updated_at DESC`,
     [userId, cutoff(DISMISS_DAYS)],
   );
   return (rows || []).map((r) => String(r.text));
@@ -114,7 +115,8 @@ export async function setStarters(userId: string, next: StarterInput[]): Promise
     toInsert.push(s);
   }
   for (const a of active) {
-    if (!keep.has(a.id)) await query(`UPDATE muse_starters SET status = 'replaced', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?`, [a.id, userId]);
+    // 只顶掉仍是 active 的:读快照之后用户刚 × 掉的那条不能被改回 replaced(× 就白点了,30 天的拒收也跟着丢)
+    if (!keep.has(a.id)) await query(`UPDATE muse_starters SET status = 'replaced', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ? AND status = 'active'`, [a.id, userId]);
   }
   for (const s of toInsert) {
     await query(
@@ -131,7 +133,9 @@ export async function markStarter(userId: string, id: string, status: 'dismissed
   const text = rows?.[0]?.text;
   if (!text) return null;
   await query(`UPDATE muse_starters SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ? AND status = 'active'`, [status, id, userId]);
-  return String(text);
+  // 方言无关的 CAS 收口:回读一次,不是自己写的那个状态 = 同时有别的请求先改了它(这次不算、不写反馈)
+  const after = await query<any[]>(`SELECT status FROM muse_starters WHERE id = ? AND user_id = ?`, [id, userId]);
+  return after?.[0]?.status === status ? String(text) : null;
 }
 
 /** 周期简报里的那一段(纯函数,单测钉):正在显示的(让 Muse 决定留还是换)+ 最近被 × 掉的(别再提)。 */
@@ -145,7 +149,7 @@ export function buildStarterHint(active: Array<Pick<Starter, 'text' | 'source'>>
 
 export async function starterHint(userId: string): Promise<string> {
   try {
-    return buildStarterHint(await listActiveStarters(userId), await recentlyDismissed(userId));
+    return buildStarterHint(await listActiveStarters(userId), (await recentlyDismissed(userId)).slice(0, 15));
   } catch {
     return '';
   }

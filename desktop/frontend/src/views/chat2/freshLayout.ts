@@ -22,11 +22,12 @@ export function freshPlacement(colH: number, emptyH: number, anchorTop: number, 
   return { emptyTop: top, lift: Math.max(0, Math.round(anchorTop - anchorAt)) }
 }
 
-export type SendPhase = 'press' | 'drop'
+/** press = 按下发送;drop = 没发出去;sent = 引擎受理了(这句真的成了一条对话)。 */
+export type SendPhase = 'press' | 'drop' | 'sent'
 const EVENT = 't2-fresh-send'
 export interface FreshSendDetail { phase: SendPhase; key: string; ta: HTMLTextAreaElement | null }
 
-/** Composer2 在按下发送(noteSend 旁)与没发出去(dropSend 旁)时调。只广播:听的人按 ta 所在的列认领。 */
+/** Composer2 在按下发送(noteSend 旁)、没发出去(dropSend 旁)、受理之后调。只广播:听的人按 ta 所在的列 / 草稿 key 认领。 */
 export function announceSend(phase: SendPhase, key: string, ta: HTMLTextAreaElement | null): void {
   if (typeof window === 'undefined') return
   window.dispatchEvent(new CustomEvent<FreshSendDetail>(EVENT, { detail: { phase, key, ta } }))

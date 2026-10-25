@@ -3,6 +3,7 @@
  *  点行 = 整句填进输入框(不发;笔记 / 会话同时挂成引用芯片);点链接 = 只打开那个东西;× = 不感兴趣(告诉 Muse)。
  *  有草稿就收起:居中时只淡出、留着高度 —— 收掉高度会让居中的那一块在第一个字时整体跳一下。 */
 import React, { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { ArrowUpRight, BellOff, CalendarDays, FileText, Globe, ListTodo, MessagesSquare, Settings, Sparkles, X } from 'lucide-react'
 import { OverlayAt, setActiveSpace, useNativeSheetMenu, type SheetMenuItem } from '@lcl/engine'
 import { useI18n } from '../../i18n'
@@ -74,8 +75,8 @@ export function MuseStarters({ draftKey, centered }: { draftKey: string; centere
     window.addEventListener('focus', onFocus)
     return () => window.removeEventListener('focus', onFocus)
   }, [])
-  // 这份草稿真的按了发送:来自哪一条就回写 used
-  useEffect(() => onSend((d) => { if (d.phase === 'press') consumeStarterOnSend(d.key) }), [])
+  // 这份草稿真的发出去了(受理之后,不是按下那一刻 —— 没发出去的不算采纳):来自哪一条就回写 used
+  useEffect(() => onSend((d) => { if (d.phase === 'sent') consumeStarterOnSend(d.key) }), [])
 
   const fill = (s: MuseStarter): void => {
     setDraftField(draftKey, 'text', s.text)
@@ -156,10 +157,12 @@ export function MuseStarters({ draftKey, centered }: { draftKey: string; centere
           </div>
         )
       })}
-      {menu && webMenu && (
+      {/* 挂到 body:居中时输入区带着 translate,会成为 fixed 浮层的包含块,菜单按视口坐标就偏到别处去了 */}
+      {menu && webMenu && createPortal(
         <OverlayAt className="ctx-menu t2-starters-menu" x={menu.x} y={menu.y} onClick={(e) => e.stopPropagation()}>
           <CtxMenuButtons items={menuItems(menu.id)} />
-        </OverlayAt>
+        </OverlayAt>,
+        document.body,
       )}
     </div>
   )
