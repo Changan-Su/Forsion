@@ -5357,6 +5357,12 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
   --roll-exit-duration: 100ms; /* 过程行滚动替换:旧行出 */
   --reader-step-duration: 170ms; /* 画布阅读栏:翻上一轮 / 下一轮 */
   --reader-close-duration: 200ms; /* 画布阅读栏关闭淡出,与 ChatCanvas READ_CLOSE_MS 同 */
+  /* 对话 ↔ 画布(ChatCanvas data-switch):进场整层 → 别的卡和线 → 胶囊 / 说明依次淡入,退场反过来;排在 ENTER_MS 420 / EXIT_MS 360 里 */
+  --canvas-switch-fade: 140ms; /* 整层淡入、退场每一层淡出 */
+  --canvas-switch-lag: 120ms; /* 进场:别的卡和线晚多久 */
+  --canvas-switch-cards: 220ms; /* 进场:别的卡和线淡入多久;退场:整层晚多久才淡出 */
+  --canvas-switch-hud-lag: 280ms; /* 进场:胶囊 / 说明晚多久 */
+  --canvas-switch-hud: 160ms; /* 进场:胶囊 / 说明淡入多久;空白处说明被卡盖住时让开 */
   --switch-edge-duration: 120ms; /* 开关旋钮左右两条边各自的时长 */
   --switch-edge-lag: 30ms; /* 开关旋钮后沿晚出发多久(离开时拉长、落地时回缩) */
   --draw-duration: 600ms; /* 描线 */

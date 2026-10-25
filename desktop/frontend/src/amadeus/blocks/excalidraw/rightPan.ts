@@ -67,6 +67,7 @@ function hitsElement(el: SceneEl, x: number, y: number, pad: number): boolean {
   const y0 = Math.min(el.y, el.y + el.height)
   const y1 = Math.max(el.y, el.y + el.height)
   if (lx < x0 - pad || lx > x1 + pad || ly < y0 - pad || ly > y1 + pad) return false
+  // webhost-ok: 'iframe' 是白板元素类型的比较(命中测试),这里不创建任何宿体
   const solid = el.type === 'text' || el.type === 'image' || el.type === 'embeddable' || el.type === 'iframe'
     || (!!el.backgroundColor && el.backgroundColor !== 'transparent')
   if (solid) return true
