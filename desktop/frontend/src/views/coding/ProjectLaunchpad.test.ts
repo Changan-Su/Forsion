@@ -101,7 +101,7 @@ describe('project launchpad', () => {
     listDir.mockRejectedValue(new Error('permission denied'))
     await mount()
     expect(host.querySelector('[role="alert"]')?.textContent).toContain('无法读取项目目录')
-    expect(host.querySelector('.csl-empty')).toBeNull()
+    expect(host.querySelector('.empty-state')).toBeNull()
   })
   it('keeps the brief on a create failure', async () => {
     mkdirHost.mockRejectedValueOnce(new Error('permission denied'))

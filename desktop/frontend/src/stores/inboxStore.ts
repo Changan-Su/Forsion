@@ -59,6 +59,8 @@ interface InboxState {
    *  (2026-09-11:旧版全局 filter + 列表源在渲染期切档,两个实例选不同分组会无限互拉)。 */
   archived: InboxMessage[]
   archivedLoaded: boolean
+  /** 未归档那份拉成功过一次:「收件箱是空的」只在这之后才说(之前的空数组只是还没拉)。 */
+  listLoaded: boolean
   selectedId: string | null
   unreadCount: number
   loading: boolean
@@ -101,6 +103,7 @@ export const useInbox = create<InboxState>((set, get) => ({
   messages: [],
   archived: [],
   archivedLoaded: false,
+  listLoaded: false,
   selectedId: null,
   unreadCount: 0,
   loading: false,
@@ -109,7 +112,7 @@ export const useInbox = create<InboxState>((set, get) => ({
     set({ loading: true })
     try {
       const messages = await listInbox(homeTarget(), 'all')
-      set({ messages })
+      set({ messages, listLoaded: true })
     } catch { /* 静默:断连/老后端 404 */ } finally {
       set({ loading: false })
     }
@@ -131,7 +134,7 @@ export const useInbox = create<InboxState>((set, get) => ({
           const msgs = await listInbox(homeTarget(), 'all')
           // 拉列表这会儿本地又动过(点开 / 标记 / 删除,或别处刚刷过):这份快照是旧的,盖回去会吃掉那次改动 —— 丢掉,重跑一遍。
           if (get().messages !== held) { unreadAgain = true; return }
-          set({ messages: msgs })
+          set({ messages: msgs, listLoaded: true })
           const m = latestChanged && r.count > had ? msgs.find((x) => x.id === r.latestId) : undefined
           // 收件箱新消息 → 统一通知入口(应用内卡片 + 系统通知由 notifyApp 一并发,受通知设置门控;
           // 不再单发 notifyInbox,避免与统一系统通知重复)。

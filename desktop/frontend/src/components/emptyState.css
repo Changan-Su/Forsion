@@ -1,0 +1,52 @@
+/* EmptyState:主区空态的唯一一份样子(源自 Coding 启动台的 .csl-catalog .csl-empty)。
+   外层占满父容器剩下的高度并居中;父容器是 flex 列就自动撑开,不是就至少 300px 高。 */
+.empty-state {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  box-sizing: border-box;
+  min-height: 300px;
+  padding: 35px;
+  text-align: center;
+  color: var(--text-faint);
+}
+.empty-state-icon { flex: none; color: var(--text-faint); }
+.empty-state-title {
+  color: var(--text);
+  font-size: var(--ui-font-heading);
+  line-height: var(--ui-line-heading);
+  font-weight: 550;
+}
+.empty-state-line {
+  max-width: 320px;
+  margin: 0;
+  color: var(--text-faint);
+  font-size: var(--ui-font-caption);
+  line-height: 1.7;
+}
+.empty-state-actions { display: flex; flex-wrap: wrap; align-items: stretch; justify-content: center; gap: 8px; margin-top: 4px; }
+.empty-state-action {
+  min-height: 35px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 8px 13px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--action-fill);
+  color: var(--on-action);
+  font-size: var(--ui-font-meta);
+  font-weight: 550;
+  box-shadow: var(--btn-shadow);
+}
+.empty-state-action:not(:disabled):hover { background: var(--action-fill-hover); }
+.empty-state-action:disabled { opacity: .5; cursor: default; }
+/* 次要动作(最多一颗、描边):行里 stretch,和主按钮同高、不高低错开(台架 check:emptystates B″ 量着)。 */
+.empty-state-actions > .btn { display: inline-flex; align-items: center; min-height: 35px; }
+
+/* 手机壳:同一份,只是不居中到正中 —— 往上提,落在拇指够得着、眼睛先看到的那一段。 */
+.mb-shell .empty-state { justify-content: flex-start; padding-top: 10vh; }

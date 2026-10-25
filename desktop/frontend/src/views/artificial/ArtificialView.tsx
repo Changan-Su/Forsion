@@ -16,6 +16,7 @@ import type { ProductSummary } from '../../../../shared/products'
 import { useApp } from '../../stores/appStore'
 import { useCodeStudio } from '../../stores/codeStudioStore'
 import { useI18n } from '../../i18n'
+import { EmptyState } from '../../components/EmptyState'
 import { CapabilityMenu, type CapabilityMenuItem } from '../../components/CapabilityMenu'
 import { useProducts } from './productsStore'
 import { groupProducts, kindRow, shortcutToast } from './productKinds'
@@ -182,13 +183,8 @@ export function ArtificialView() {
           </div>
         )}
         {status === 'ready' && !groups.length && (
-          <div className="art-state" data-state="empty">
-            <div className="art-state-title">{t('artificial.empty.title')}</div>
-            <p>{t('artificial.empty.body')}</p>
-            {canEdit && (
-              <button className="btn primary sm" data-action="go-coding" onClick={() => setActiveSpace('coding')}>{t('artificial.empty.cta')}</button>
-            )}
-          </div>
+          <EmptyState icon={Blocks} title={t('artificial.empty.title')} line={t('artificial.empty.body')} data-state="empty"
+            action={canEdit ? { label: t('artificial.empty.cta'), icon: Code2, action: 'go-coding', onClick: () => setActiveSpace('coding') } : null} />
         )}
         {status === 'ready' && groups.length > 0 && (
           <div className={fadeIn ? 'sk-fade-in' : undefined}>

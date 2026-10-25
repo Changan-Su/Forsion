@@ -69,6 +69,8 @@ export function VoiceSettingsPage(p: {
   commitEdits: (keys: Array<keyof StoredDesktopConfig>, norm?: (v: Partial<StoredDesktopConfig>) => Partial<StoredDesktopConfig>) => Promise<void>
   commitErrorHint: (key: keyof StoredDesktopConfig) => ReactNode
   onOpen: (target: VoiceSettingsTarget) => void
+  /** 非本地 external 后端:由 SettingsModal 按连接表单算好传入(引擎基址只许在白名单文件里读,见 engineTargetGuard)。 */
+  remoteExternal: boolean
 }) {
   const { stored, setStored } = p
   return (
@@ -95,7 +97,7 @@ function ReadAloudPanel(p: Parameters<typeof VoiceSettingsPage>[0] & { stored: S
 
   // 百炼音色工作室:有指向阿里云百炼的 provider 才可用(域名判定与后端 isDashScopeBase 一致)。
   // 非本地 external 后端整行不出:本地 providers 文件到不了远端 registry,采用的音色无法合成(判定同上方 externalWarning)。
-  const remoteExternal = stored.mode === 'external' && !(stored.backendUrl || '').includes('localhost') && !(stored.backendUrl || '').includes('127.0.0.1')
+  const { remoteExternal } = p
   const ds = p.providers.find((cp) => /dashscope|aliyuncs\.com/i.test(cp.baseUrl))
 
   const test = (): void => {

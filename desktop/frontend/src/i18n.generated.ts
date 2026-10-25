@@ -59,6 +59,10 @@ registerMessages({
     "zh": "完全放行",
     "en": "Full access"
   },
+  "input.approval.custom": {
+    "zh": "自定义（config.json）",
+    "en": "Custom (config.json)"
+  },
   "input.thinking.off": {
     "zh": "思考 · Off",
     "en": "Thinking · Off"

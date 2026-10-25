@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from 'react'
-import { FolderOpen, Images, Plus, Search } from 'lucide-react'
+import { FolderOpen, Image as ImageIcon, Images, Plus, Search, SearchX } from 'lucide-react'
 import { useI18n } from '../../i18n'
+import { EmptyState } from '../../components/EmptyState'
 import { formatListTime } from '../../format/time'
 import { useImageStudio } from '../../stores/imageStudioStore'
 import { ImageThumbnail } from './LayerPreview'
@@ -8,7 +9,7 @@ import { importProject } from './files'
 import { boardItems, coverImages, imageSize, type ImageBoard } from './model'
 import './messages'
 import './imageStudio.css'
-import '../coding/launchpad.css' // 页头、搜索、空态与 Coding 的启动台同一份(csl-*);只有封面网格是这里自己的
+import '../coding/launchpad.css' // 页头、搜索与 Coding 的启动台同一份(csl-*);空态是公共的 EmptyState;只有封面网格是这里自己的
 
 const COVER_RATIO = 4 / 3
 const COVER_GAP = 0.05 // 两张图之间留框宽的 5%(与 .ims-cover-in 的 gap 一致)
@@ -56,7 +57,9 @@ export function ImageLaunchpad() {
         <BoardCover board={board} />
         <span className="ims-launch-meta"><strong>{board.name}</strong><small>{t('imageStudio.itemCount', { count: boardItems(board).length })} · {formatListTime(board.updatedAt, { locale })}</small></span>
       </button>)}</div>
-      : <div className="csl-empty"><strong>{t(all.length ? 'imageStudio.launch.noMatch' : 'imageStudio.launch.empty')}</strong>{!all.length && <p>{t('imageStudio.launch.emptyHint')}</p>}</div>}
+      : all.length ? <EmptyState icon={SearchX} title={t('imageStudio.launch.noMatch')} data-state="no-match" />
+        : <EmptyState icon={ImageIcon} title={t('imageStudio.launch.empty')} line={t('imageStudio.launch.emptyHint')} data-state="empty"
+          action={{ label: t('imageStudio.new'), icon: Plus, action: 'new-project', onClick: () => useImageStudio.getState().create(t('imageStudio.untitled')) }} />}
     <input ref={picker} type="file" accept=".json" hidden onChange={e => { const file = e.target.files?.[0]; e.target.value = ''; if (file) void restore(file) }} />
   </main></div></div>
 }

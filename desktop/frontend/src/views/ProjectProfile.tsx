@@ -30,6 +30,7 @@ import { AgentAvatar } from '../components/AgentAvatar'
 import { ProjectIcon } from '../components/ProjectIcon'
 import { IconPicker } from '@amadeus/chrome/pageChrome'
 import { thinkingLabel } from '../components/thinkingLabel'
+import { APPROVAL_MODE_ORDER, MODE_KEY } from '../approvalReason'
 import { freshJump, revealRecords, type RecordJump } from '../services/recordJump'
 import { homeTarget } from '../services/engine/targets'
 
@@ -779,7 +780,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
             </select></label>
             <label className="project-field">{t('agentProfile.approval')}<select value={settingsDraft.approvalMode || ''} onChange={(e) => patchSettings({ approvalMode: (e.target.value || undefined) as ProjectSettings['approvalMode'] })}>
               <option value="">{t('projectProfile.inherit')}</option>
-              {([['readonly', 'readonly'], ['auto-edit', 'autoEdit'], ['full-auto', 'fullAuto'], ['custom', 'custom']] as const).map(([v, k]) => <option key={v} value={v}>{t(`agentProfile.${k}`)}</option>)}
+              {APPROVAL_MODE_ORDER.map((mode) => <option key={mode} value={mode}>{t(MODE_KEY[mode])}</option>)}
             </select></label>
             <ProfileModelField models={(s.models || []).filter((m) => (m.modelType || 'llm') === 'llm')} value={settingsDraft.model || ''} label={t('agentProfile.model')} onChange={(model) => patchSettings({ model: model || undefined })} />
             <label className="project-field">{t('agentProfile.thinking')}<select value={settingsDraft.thinkingLevel || ''} onChange={(e) => patchSettings({ thinkingLevel: (e.target.value || undefined) as ProjectSettings['thinkingLevel'] })}>

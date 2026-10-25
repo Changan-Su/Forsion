@@ -52,6 +52,7 @@ async function render(stored: Partial<StoredDesktopConfig> | null, over: Partial
     commitEdits: vi.fn(async () => {}),
     commitErrorHint: () => null,
     onOpen: vi.fn(),
+    remoteExternal: false,
     ...over,
   }
   await act(async () => { root.render(createElement(VoiceSettingsPage, props)) })
@@ -134,7 +135,7 @@ describe('语音页(设置卡片)', () => {
     await click(read.querySelector('.tts-studio-toggle'))
     expect(read.querySelector('.tts-voice-studio')).toBe(studio)
     expect((studio!.parentElement as HTMLElement).hidden).toBe(true)
-    await render({ mode: 'external', backendUrl: 'https://remote.example' }, { providers: [ds] })
+    await render({ mode: 'external', backendUrl: 'https://remote.example' }, { providers: [ds], remoteExternal: true })
     await flush()
     expect(panel('settings-voice-read').querySelectorAll('.settings-control-row').length).toBe(3)
   })

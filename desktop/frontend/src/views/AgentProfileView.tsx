@@ -18,8 +18,7 @@ import { humanRewritable, type HumanJump } from '../services/humanCollaboration'
 import { AgentHarnessPanel } from '../components/AgentHarnessPanel'
 import { AgentSchedulePanel } from '../components/AgentSchedulePanel'
 import type { AgentConfig, NormalAgentDef, SessionRecord, SkillInfo, ToolsResponse } from '../../../../tangu-agent/src/contracts/clientTypes'
-import { THINKING_LEVELS } from '../../../../tangu-agent/src/contracts/clientTypes'
-import { ProfileGroup, ProfileModelField, ProfileTextEditor } from './profileControls'
+import { ProfileGroup, ProfileModelField, ProfileSelectField, ProfileTextEditor, approvalOptions, thinkingOptions } from './profileControls'
 import { TeamProfile } from './TeamProfile'
 import { ProjectProfile, useProjectSubject, useProjectWorkspace } from './ProjectProfile'
 import { AgentSkillsPanel, moveAgentSkillsDraft } from './AgentSkillsPanel'
@@ -30,7 +29,6 @@ import type { RecordJump } from '../services/recordJump'
 import './agentProfileMessages'
 import './agentProfile.css'
 import { AgentAvatar } from '../components/AgentAvatar'
-import { thinkingLabel } from '../components/thinkingLabel'
 import { homeTarget } from '../services/engine/targets'
 import { track } from '../achievements/store'
 import '../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
@@ -489,9 +487,10 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
     </>
   }
   const runSettings = <>
-    <ProfileModelField models={s.models || []} value={draft.model || ''} label={t('agentProfile.model')} onChange={(model) => patch({ model })} />
-    <label className="agent-field">{t('agentProfile.thinking')}<select aria-label={t('agentProfile.thinking')} value={draft.thinkingLevel} onChange={(e) => patch({ thinkingLevel: e.target.value as NormalAgentDef['thinkingLevel'] })}><option value="">{t('agentProfile.default')}</option>{THINKING_LEVELS.map((v) => <option key={v} value={v}>{thinkingLabel(v, t)}</option>)}</select></label>
-    <label className="agent-field">{t('agentProfile.approval')}<select aria-label={t('agentProfile.approval')} value={draft.approvalMode} onChange={(e) => patch({ approvalMode: e.target.value as NormalAgentDef['approvalMode'] })}>{[['', 'default'], ['readonly', 'readonly'], ['auto-edit', 'autoEdit'], ['full-auto', 'fullAuto'], ['custom', 'custom']].map(([v, k]) => <option key={v} value={v}>{t(`agentProfile.${k}`)}</option>)}</select></label>
+    <ProfileModelField field="model" models={s.models || []} value={draft.model || ''} label={t('agentProfile.model')} onChange={(model) => patch({ model })} />
+    {/* 三个同级下拉一种控件(10-25 第四轮 4.3):模型那颗触发器 + 就地展开;审批档的名字与输入框模式菜单同一套。 */}
+    <ProfileSelectField field="thinking" label={t('agentProfile.thinking')} value={draft.thinkingLevel || ''} options={thinkingOptions(t)} onChange={(v) => patch({ thinkingLevel: v as NormalAgentDef['thinkingLevel'] })} />
+    <ProfileSelectField field="approval" label={t('agentProfile.approval')} value={draft.approvalMode || ''} options={approvalOptions(t)} onChange={(v) => patch({ approvalMode: v as NormalAgentDef['approvalMode'] })} />
     {/* Muse 有两个档:这里的只管和它聊天时;后台周期按「权限档」(设置 › Agent › 后台 Agent)。两处互相指路(10-13 用户反馈「放权了还要批」)。 */}
     {agent.slug === 'muse' && <button type="button" className="agent-profile-link" data-act="muse-tier-link" onClick={() => useApp.getState().openSettings('agents')}>{t('agentProfile.museApprovalScope')}<ExternalLink size={13} /></button>}
   </>
