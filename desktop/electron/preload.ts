@@ -260,6 +260,8 @@ const api = {
   activeWindow: (): Promise<ActiveWindowSample | null> => ipcRenderer.invoke('system:activeWindow'),
   /** 本窗口订阅着的在飞 run 数(「有会话运行时不休眠」,开关与判定在主进程 keepAwake.ts)。 */
   reportRunningSessions: (count: number): void => ipcRenderer.send('power:running', count),
+  /** 在跑 / 等你的会话(托盘 / 菜单栏列出,借鉴 Comma 2.6);各窗口各报一份、主进程按窗口并起来,清洗在 tray.ts sanitizeTraySessions。 */
+  setTraySessions: (rows: Array<{ id: string; title: string; state: 'run' | 'wait' }>): void => ipcRenderer.send('tray:sessions', rows),
   /** 拖入文件 → 绝对路径(Electron≥32 File.path 已移除,必须 webUtils 在渲染层取)。 */
   getPathForFile: (file: File): string => webUtils.getPathForFile(file),
   /** 本机工作区文件浏览:列目录 / 读文件(主进程 fs)。 */
@@ -709,5 +711,32 @@ const CLOUD_KEYS: Record<string, string> = {
 }
 for (const [k, channel] of Object.entries(CLOUD_KEYS)) if (!cloudPresent().has(channel)) delete (api as Record<string, unknown>)[k]
 if (!cloudPresent().size) delete (api as Record<string, unknown>).cloudInvoke
+
+// 插件沙箱(electron/pluginSandbox.ts / sandboxChild.ts):用户那份 Forsion 拿控制面 pluginSandbox;沙箱那份拿 sandbox(自身信息 +
+// 沙箱条按钮)。两者互斥:沙箱里不能再起沙箱。主进程两种身份都答 pluginSandbox:self(普通实例答 null),同步问一次就分得清。
+const sandboxSelf: unknown = ipcRenderer.sendSync('pluginSandbox:self')
+const on = <T,>(channel: string) => (cb: (v: T) => void): (() => void) => {
+  const listener = (_e: unknown, v: T) => cb(v)
+  ipcRenderer.on(channel, listener)
+  return () => { ipcRenderer.removeListener(channel, listener) }
+}
+if (sandboxSelf) {
+  (api as Record<string, unknown>).sandbox = {
+    self: sandboxSelf,
+    action: (a: string, note?: string) => ipcRenderer.invoke('pluginSandbox:childAction', a, note),
+    changed: () => ipcRenderer.send('pluginSandbox:changed'),
+  }
+} else {
+  (api as Record<string, unknown>).pluginSandbox = {
+    exec: (op: string, args: Record<string, unknown>, origin: unknown) => ipcRenderer.invoke('pluginSandbox:exec', op, args, origin),
+    state: () => ipcRenderer.invoke('pluginSandbox:state'),
+    show: () => ipcRenderer.invoke('pluginSandbox:show'),
+    stop: () => ipcRenderer.invoke('pluginSandbox:stop'),
+    reset: () => ipcRenderer.invoke('pluginSandbox:reset'),
+    install: () => ipcRenderer.invoke('pluginSandbox:install'),
+    onChanged: on('pluginSandbox:changed'),
+    onReport: on('pluginSandbox:report'),
+  }
+}
 
 contextBridge.exposeInMainWorld('tangu', api)

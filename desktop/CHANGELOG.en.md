@@ -2,6 +2,38 @@
 
 <!-- English edition of CHANGELOG.md: same "## <version> (<date>)" headings, one bullet per Chinese bullet. Add both when releasing. -->
 
+## 2.13.8-beta.1 (2026-10-25)
+
+Preview release: only offered to people who chose the preview channel; stable users won't get it.
+
+- **Plugin sandbox**: try a plugin in an isolated Forsion before installing it. It can't touch your vault, account or installed plugins; afterwards install it or throw it away.
+- **Chat**:
+  - Reply to a quote in place; quoted text becomes a small tile that jumps back to its source.
+  - A count shows new messages below the fold; long pastes collapse into a tile; answer an agent's question from the keyboard; failed sends stay in place so you can retry.
+  - More than 3 images in one message stack into a deck you can page through.
+  - Hover a link for a preview card, with richer cards for GitHub pull requests and issues.
+  - Streaming answers fade in at the tail, and the process line, switches and the selection bar move more smoothly.
+  - Canvas mode adds a reading pane, and dragging with the right mouse button on empty space pans the canvas.
+  - In narrow windows and on phones, the agent picker opens as a popover or bottom sheet, and as a native list on Android.
+  - The agent switch flyout shows avatars.
+- **Quick find**: searches conversation text with a preview pane; ⌘↵ jumps straight to the match.
+- **Approvals and inbox**:
+  - An agent's question no longer blocks the running task; it waits among your pending items.
+  - Pending cards follow the latest content, with task cards and a one-line to-do list at the end.
+  - Approval previews for account changes and web publishing follow the interface language.
+  - An approval letter you deleted or read comes back when the agent asks again.
+  - Broadcasts have English versions, shown when the interface is in English.
+- **Web publishing**: Tangu can publish a web page or a static folder to Forsion Connect; manage published pages under Forsion Cloud → My web pages.
+- **Agent memory**: view and edit an agent's memory on the web and on phones; desktop sync merges memory line by line, so edits on two devices no longer drop lines.
+- **Penzor Cloud**: the first sign-in sync card has four categories; the sync page turns each category on or off and syncs it to all devices, this computer only, or one other device; new ruyi-cloud icon.
+- **Store submissions**: skills can keep their version in `metadata.version`; the submission page is a split view where you check before submitting, request updates for GitHub and npm items, and edit store details without a new package.
+- **Notes**: on the web and on phones, Copy copies the image itself, and the block menu has Copy image; the ⌘[ / ⌘] indent shortcuts are gone; a Tab-indented paragraph turned into a list keeps the gap before its text.
+- **Interface**: drop indicators fade between drop points; tooltips and overlays animate in and out. The workspace list says how many rows filters are hiding.
+- **Computer Use**: one-click repair when permissions stop working.
+- **Windows**: the Mini window docks again after you resize it and its scrollbar stays reachable; the image viewer clears the caption buttons; tabs in a narrow right sidebar are no longer pushed under the caption buttons.
+- **Calendar**: fixed adding or subtracting time on daylight-saving days; the bundled calendar plugin is 0.1.1, which fixes saving events on phones.
+- **Bundled Forsion Extend 0.9.4**, engine 2.13.9.
+
 ## 2.13.7 (2026-10-22)
 
 - **Tangu canvas and chat branches**:

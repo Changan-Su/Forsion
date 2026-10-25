@@ -252,6 +252,14 @@ export function useCanvasGestures(
       }
 
       const key = A().hitKey(target)
+      // 中键拖:卡上也是平移(三种画布同一条约定);卡里的控件(链接、按钮)照常归它们
+      if (e.button === 1 && key && !target.closest?.(CARD_CTL)) {
+        e.preventDefault()
+        const vp = V().vpRef.current
+        try { host.setPointerCapture(e.pointerId) } catch { /* 合成事件可没有有效 id */ }
+        drag = { kind: 'pan', id: e.pointerId, who: whoNow(), x0: e.clientX, y0: e.clientY, vx: vp.x, vy: vp.y, live: false }
+        return
+      }
       // ⚠️ 让路判定**必须在 preventDefault 之前**(08-21:一 preventDefault 就不补发 mousedown/click)。
       //    交互态那张卡、以及任何卡内的可交互控件,一律直接放行。
       if (key && (A().isEditing?.(key) || target.closest?.(CARD_CTL))) return

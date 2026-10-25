@@ -127,7 +127,8 @@ async function extendAcceptance() {
   const localHash = () => adb('shell', `run-as ${PKG} sha256sum files/${LEGACY_PATH}`).trim().split(/\s+/)[0]
   check('Extend: old local note bytes remain after sign-in', localHash() === hash)
   const actual = await js(`const p = (await window.amadeus.listPlugins()).find(p => p.id === 'forsion-extend'); return { version: p?.version, locked: p?.locked, mobile: window.tangu.extendMobile, pages: await window.amadeus.listPages(), last: localStorage.getItem('amadeus_last_page') }`)
-  check('Extend: signed0.9.3 loaded in APK with local vault selection preserved', actual.version === '0.9.3' && actual.locked && actual.mobile && actual.pages.includes('legacy-extend-fixture.md') && actual.last === 'legacy-extend-fixture.md', actual)
+  const pinned = require('../extend-bundle.json').version
+  check(`Extend: signed ${pinned} loaded in APK with local vault selection preserved`, actual.version === pinned && actual.locked && actual.mobile && actual.pages.includes('legacy-extend-fixture.md') && actual.last === 'legacy-extend-fixture.md', actual)
   const name = `${RUN}-extend-native.txt`
   const saved = await js(`const r = await window.tangu.account.request('/mobile-extend/legacy-content'); return window.tangu.account.saveDownload(await r.blob(), ${JSON.stringify(name)})`)
   check('Extend: account download reaches native MediaStore with exact bytes', saved?.ok && sha(name) === require('node:crypto').createHash('sha256').update('Existing native account bytes').digest('hex'), saved)

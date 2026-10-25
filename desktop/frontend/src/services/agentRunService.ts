@@ -322,6 +322,24 @@ export async function sendUiAck(
   return outcome
 }
 
+/**
+ * 客户端动作(`client_cmd`)的 claim / result 电文(契约 tangu-agent/docs/phone-control.md §3.2)。目前只有桌面的插件沙箱
+ * 在 JS 里回执(services/pluginSandboxSurface.ts);手机那边由原生自己发。网络异常 / 5xx 重试一次,4xx(含 410)是终局。
+ * 返回响应体(2xx)或 null(其余一切)。
+ */
+export async function postClientAction(t: EngineTarget, runId: string, ackId: string, body: Record<string, unknown>): Promise<Record<string, unknown> | null> {
+  const path = `/agent/runs/${encodeURIComponent(runId)}/inquiries/${encodeURIComponent(ackId)}`
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const r = await engineRequest(t, path, { method: 'POST', body: JSON.stringify(body) })
+      if (r.ok) return await r.json().catch(() => ({}))
+      if (r.status < 500) return null
+    } catch { /* 网络异常 → 重试一次 */ }
+    if (attempt === 0) await delay(400)
+  }
+  return null
+}
+
 /** 兑现一次 Agent Desk 截屏请求(desk_screenshot)。失败也要发——引擎那头在等,不发就是干等超时。
  *  网络异常吞掉:重试没意义(引擎 8s 就超时了),这是纯附加能力,不该冒泡打断会话。 */
 export async function sendDeskCapture(

@@ -185,12 +185,15 @@ export function isSubAgentDenied(ctx: Pick<ToolContext, 'subAgentDepth' | 'subAg
   return SUB_AGENT_DENY_TOOLS.has(canonical) && !ctx.subAgentGrants?.has(canonical);
 }
 
-/** 客户端能力工具只给**发起端自己**的 run:今天 = 手机端(远程驱动阶段再放宽这一个常量)。 */
-const CLIENT_CAPABILITY_CLIENT_RE = /^mobile\//;
+/** 客户端能力工具只给**发起端自己**的 run,按能力的命名空间认端:缺省 = 手机端(phone.* 与插件挂的别的命名空间,
+ *  远程驱动阶段再放宽);列在 CLIENT_FOR_NS 里的另认 —— plugin.*(插件沙箱,契约 tangu-agent/docs/plugin-sandbox.md)= 桌面端。
+ *  按命名空间而不是放宽成「手机或桌面」:桌面端带着 phone.* 能力来的 run 照旧一个 phone_* 都看不到。 */
+const MOBILE_CLIENT_RE = /^mobile\//;
+const CLIENT_FOR_NS: Readonly<Record<string, RegExp>> = { plugin: /^desktop\// };
 
 /**
  * 客户端能力工具(ToolDef.clientCapability)的中央闸,default-deny。四条同时满足才可见:
- *   ① ctx.client 是手机端(Muse / 自动化是 muse/*、automation/*;团队 / 讨论成员继承 client tag 但不继承能力);
+ *   ① ctx.client 是这个命名空间认的那一端(缺省手机端,CLIENT_FOR_NS 另列;Muse / 自动化是 muse/*、automation/*,哪个都不认;团队 / 讨论成员继承 client tag 但不继承能力);
  *   ② 本 run 声明了该能力(routes/runs normalizeClientCapabilities → input.clientCapabilities);
  *   ③ 非子代理 / 计划模式 / 通道会话 / 讨论成员(与 uiSurfaceEnabledFor 同一组排除,理由同:没有人在那台手机前);
  *   ④ 工具名以 `<ns>_` 开头(phone.intents → phone_*):插件拿一个叫 write_file 的工具挂能力混不进来。
@@ -205,8 +208,9 @@ export function clientCapabilityAllowed(
   if (t.clientCapability === undefined) return true;
   const cap = t.clientCapability;
   const ns = typeof cap === 'string' ? cap.split('.')[0] : '';
+  const clientRe = Object.prototype.hasOwnProperty.call(CLIENT_FOR_NS, ns) ? CLIENT_FOR_NS[ns] : MOBILE_CLIENT_RE;
   return (
-    CLIENT_CAPABILITY_CLIENT_RE.test(ctx.client || '')
+    clientRe.test(ctx.client || '')
     && Array.isArray(ctx.clientCapabilities) && ctx.clientCapabilities.includes(cap)
     && !((ctx.subAgentDepth ?? 0) >= 1)
     && !ctx.planMode

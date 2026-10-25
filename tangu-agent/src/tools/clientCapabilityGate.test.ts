@@ -55,6 +55,17 @@ describe('clientCapabilityAllowed(纯判定)', () => {
     }
     expect(clientCapabilityAllowed(t, { client: 'mobile/1', clientCapabilities: ['phone.intents'] })).toBe(true);
   });
+  it('plugin.* 只认桌面端:plugin_sandbox 在桌面放行,手机 / web / Muse 拒;桌面端带 phone.* 照旧拒', () => {
+    const sbx = { name: 'plugin_sandbox', clientCapability: 'plugin.sandbox' };
+    expect(clientCapabilityAllowed(sbx, { client: 'desktop/2.14.0', clientCapabilities: ['plugin.sandbox'] })).toBe(true);
+    for (const client of ['mobile/2.14.0', 'web/2.14.0', 'cli/1', 'tui/1', 'muse/1', 'automation/1', '', undefined]) {
+      expect(clientCapabilityAllowed(sbx, { client, clientCapabilities: ['plugin.sandbox'] }), String(client)).toBe(false);
+    }
+    expect(clientCapabilityAllowed(sbx, { client: 'desktop/2.14.0', clientCapabilities: ['phone.intents'] })).toBe(false);
+    expect(clientCapabilityAllowed(t, { client: 'desktop/2.14.0', clientCapabilities: ['phone.intents', 'plugin.sandbox'] })).toBe(false);
+    // 原型链上的键不算登记过的命名空间(按缺省 = 手机端处理)
+    expect(clientCapabilityAllowed({ name: 'constructor_x', clientCapability: 'constructor.x' }, { client: 'desktop/1', clientCapabilities: ['constructor.x'] })).toBe(false);
+  });
   it('能力未声明 / 别的能力 / 空数组 → 拒', () => {
     for (const caps of [undefined, [], ['phone.ui'], ['phone.intents2']]) {
       expect(clientCapabilityAllowed(t, { client: 'mobile/1', clientCapabilities: caps })).toBe(false);

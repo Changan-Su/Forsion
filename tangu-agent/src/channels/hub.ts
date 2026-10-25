@@ -1,5 +1,5 @@
 /**
- * ChannelHub:三通道(微信/Telegram/QQ)的注册表与生命周期编排 + 收件箱转发。
+ * ChannelHub:通道(内置微信/Telegram/QQ + 插件经 registerChannel 贡献的)的注册表与生命周期编排 + 收件箱转发。
  * host/standalone-only(闸门 = profile.capabilities.hostExec,与 WeChat Remote 历史一致)。
  */
 import { query } from '../core/db.js';
@@ -8,8 +8,8 @@ import { ChannelService } from './service.js';
 import { WechatChannel } from './wechat.js';
 import { TelegramChannel } from './telegram.js';
 import { QQChannel } from './qq.js';
-import { channelHasCredentials, channelSettings, saveChannelSettings } from './config.js';
-import type { ChannelKind, ChannelSettings, SendResult } from './types.js';
+import { CHANNEL_DIR_NAME, channelHasCredentials, channelSettings, saveChannelSettings } from './config.js';
+import type { ChannelKind, ChannelSettings, PluginChannelSpec, SendResult } from './types.js';
 import { CHANNEL_KINDS } from './types.js';
 
 class ChannelHub {
@@ -17,6 +17,7 @@ class ChannelHub {
   readonly telegramDriver = new TelegramChannel();
   readonly qqDriver = new QQChannel();
   private readonly services = new Map<ChannelKind, ChannelService>();
+  private readonly plugins = new Map<string, PluginChannelSpec>();
   private started = false;
 
   constructor() {
@@ -47,6 +48,49 @@ class ChannelHub {
     if (!this.available()) throw new Error('Channels are disabled or unavailable in this profile');
   }
 
+  /** 全部通道:内置在前,插件按注册序。 */
+  kinds(): ChannelKind[] { return [...CHANNEL_KINDS, ...this.plugins.keys()]; }
+
+  has(kind: string): boolean { return this.services.has(kind); }
+
+  /** 插件通道的声明(内置通道 → undefined)。 */
+  pluginChannel(kind: string): PluginChannelSpec | undefined { return this.plugins.get(kind); }
+
+  /** 插件把这个凭据键声明成 secret:状态与保存回执都不回显它(appId 内置是明文回显的)。 */
+  isSecretField(kind: string, key: 'appId' | 'appSecret' | 'botToken'): boolean {
+    return !!this.plugins.get(kind)?.fields.some((f) => f.key === key && f.secret);
+  }
+
+  /** 凭据是否齐全:插件通道 = 声明的字段全有值;内置走 config.channelHasCredentials。 */
+  private hasCredentials(kind: ChannelKind, st: ChannelSettings): boolean {
+    const p = this.plugins.get(kind);
+    return p ? p.fields.every((f) => !!st[f.key]) : channelHasCredentials(kind, st);
+  }
+
+  /**
+   * 插件贡献一个通道(ctx.registerChannel)。返回撤销函数:停用插件时完全停止该通道(兑现挂起)并移除。
+   * 绑定表里的行原样保留 —— 插件再启用、点「连接」或第一条消息到达时照旧接上原会话。
+   */
+  registerChannel(spec: PluginChannelSpec): () => void {
+    const kind = String(spec?.driver?.kind || '');
+    if (!/^[a-z][a-z0-9-]{1,15}$/.test(kind)) throw new Error(`invalid channel kind "${kind}": lowercase [a-z0-9-], 2-16 chars, starting with a letter`);
+    if (this.services.has(kind)) throw new Error(`channel "${kind}" is already registered`);
+    // `<kind>bot` 是工作区目录:不许落到内置通道的目录上(we → webot、tg → tgbot 会共用微信 / Telegram 的会话);
+    // config 段按 kind 当对象键读写,原型上的名字(constructor)不收。
+    if (Object.values(CHANNEL_DIR_NAME).includes(`${kind}bot`) || kind in Object.prototype) throw new Error(`channel kind "${kind}" is reserved`);
+    if (typeof spec.driver.verify !== 'function') throw new Error(`channel "${kind}": driver.verify() is required`);
+    this.plugins.set(kind, spec);
+    this.services.set(kind, new ChannelService({ kind, driver: spec.driver, inboxDirName: `${kind}-inbox`, sessionTitle: spec.name.en, name: spec.name }));
+    // 引擎已起(运行期启用 / 重扫)→ 现在就按设置启动;还没起 → startAll 会带上它。
+    if (this.started) void this.bootChannel(kind);
+    return () => {
+      if (this.plugins.get(kind) !== spec) return;
+      this.stopChannel(kind);
+      this.services.delete(kind);
+      this.plugins.delete(kind);
+    };
+  }
+
   service(kind: string): ChannelService {
     const s = this.services.get(kind as ChannelKind);
     if (!s) throw new Error(`unknown channel: ${kind}`);
@@ -57,19 +101,22 @@ class ChannelHub {
   async startAll(): Promise<void> {
     if (this.started || !this.available()) return;
     this.started = true;
-    for (const kind of CHANNEL_KINDS) {
-      // 修复前改过审批档的老绑定还停在旧档(只在建绑定时写过一次):启动时按设置对齐一次 —— 只收紧不放宽。
-      // 启动不是用户动作,设置值还可能来自兜底链(微信 legacy env / 旧段 / 缺省 auto-edit),不能借它把老绑定放宽。
-      await this.service(kind).syncApprovalMode(channelSettings(kind).approvalMode, { narrowOnly: true })
-        .catch((e: any) => console.warn(`[channels] ${kind} 审批档同步失败:`, e?.message || e));
-      if (channelSettings(kind).enabled) {
-        await this.startChannel(kind).catch((e: any) => console.warn(`[channels] ${kind} 启动失败:`, e?.message || e));
-      }
+    for (const kind of this.kinds()) await this.bootChannel(kind);
+  }
+
+  private async bootChannel(kind: ChannelKind): Promise<void> {
+    if (!this.available() || !this.services.has(kind)) return;
+    // 修复前改过审批档的老绑定还停在旧档(只在建绑定时写过一次):启动时按设置对齐一次 —— 只收紧不放宽。
+    // 启动不是用户动作,设置值还可能来自兜底链(微信 legacy env / 旧段 / 缺省 auto-edit),不能借它把老绑定放宽。
+    await this.service(kind).syncApprovalMode(channelSettings(kind).approvalMode, { narrowOnly: true })
+      .catch((e: any) => console.warn(`[channels] ${kind} 审批档同步失败:`, e?.message || e));
+    if (channelSettings(kind).enabled && this.services.has(kind)) {
+      await this.startChannel(kind).catch((e: any) => console.warn(`[channels] ${kind} 启动失败:`, e?.message || e));
     }
   }
 
   stopAll(): void {
-    for (const kind of CHANNEL_KINDS) this.stopChannel(kind);
+    for (const kind of this.kinds()) this.stopChannel(kind);
     this.started = false;
   }
 
@@ -119,7 +166,7 @@ class ChannelHub {
       || (patch.appSecret !== undefined && patch.appSecret !== before.appSecret);
     // 凭据被清空 = 完全停止,不是重启:驱动 start 见不到凭据直接早退(传输层就此停着),不 releasePending 的话
     // 挂着的询问永远等、审批要干等 10 分钟才超时拒绝、run 的结果无处可发。
-    if (!after.enabled || (credsChanged && !channelHasCredentials(kind, after))) {
+    if (!after.enabled || (credsChanged && !this.hasCredentials(kind, after))) {
       this.stopChannel(kind);
     } else if (!before.enabled || credsChanged) {
       await this.restartChannel(kind).catch((e: any) => console.warn(`[channels] ${kind} 启动失败:`, e?.message || e));
@@ -130,8 +177,10 @@ class ChannelHub {
   /** 各通道状态汇总(供设置 UI;secrets 不回显,只给布尔)。 */
   async statusAll(userId: string): Promise<any[]> {
     const out: any[] = [];
-    for (const kind of CHANNEL_KINDS) {
+    for (const kind of this.kinds()) {
+      if (!this.services.has(kind)) continue; // 插件通道在上一轮 await 期间被停用
       const svc = this.service(kind);
+      const plugin = this.plugins.get(kind);
       const st = channelSettings(kind);
       const binding = await svc.activeBinding(userId).catch(() => null);
       out.push({
@@ -150,7 +199,7 @@ class ChannelHub {
           botTokenSet: !!st.botToken,
           appIdSet: !!st.appId,
           appSecretSet: !!st.appSecret,
-          appId: st.appId || '',
+          appId: this.isSecretField(kind, 'appId') ? '' : st.appId || '',
         },
         runtime: svc.driver.status(),
         connectedSessionId: binding?.session_id || null,
@@ -158,6 +207,8 @@ class ChannelHub {
         accountId: binding?.account_id || null,
         peerBound: !!binding?.peer_id,
         workspace: svc.workspaceDir(),
+        // 插件通道:设置卡按它画(名称 / 提示 / 凭据字段);内置通道没有这项。
+        ...(plugin ? { plugin: { name: plugin.name, hint: plugin.hint ?? null, fields: plugin.fields.map((f) => ({ key: f.key, label: f.label, secret: !!f.secret })) } } : {}),
       });
     }
     return out;
@@ -201,7 +252,7 @@ class ChannelHub {
     if (!this.available()) return;
     const senderKey = input.senderKind === 'agent' ? (input.senderId || '') : input.senderKind;
     const text = [`📥 ${input.title}`, (input.body || '').trim()].filter(Boolean).join('\n\n').slice(0, 3500);
-    for (const kind of CHANNEL_KINDS) {
+    for (const kind of this.kinds()) {
       const st = channelSettings(kind);
       if (!st.enabled || !st.inboxForward.enabled) continue;
       if (st.inboxForward.senders !== 'all' && !st.inboxForward.senders.includes(senderKey)) continue;

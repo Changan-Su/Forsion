@@ -7,7 +7,7 @@ description: 在 View 与插件中复用 Chat Box，明确草稿、模型选择�
 
 Space 组织布局，View 是可独立打开的功能面，UI component 是 View 内可组合的部件。此处不使用 Amadeus 的文档 Block 或仪表盘 Card 作为组件名称。工程分层及维护规则见 [LCL](../../lcl/README.md)。
 
-Chat Box 的卡面、输入、操作栏和提交按钮由 `@lcl/components` 维护。聊天与首页通过 `Composer2` 接会话行为；Coding 的新建项目通过 `components/chatbox` 接模型目录，并在创建完成后传递选定模型与思考档。项目详情与 Forsion 能力选择是宿主插槽。
+Chat Box 的卡面、输入、操作栏和提交按钮由 `@lcl/components` 维护。聊天与首页通过 `Composer2` 接会话行为；Coding 的新建项目通过 `components/chatbox` 接模型目录，并在创建完成后传递选定模型与思考档。项目详情与 Forsion 能力选择是宿主插槽。顺便问面板也用 `components/chatbox`，可选插槽 `leadingControls` 把附件「+」放在模型药丸前面；这个插槽只给内置宿主，插件的 `ctx.ui.mountChatBox` 仍不带附件。
 
 ## 插件使用
 
@@ -74,6 +74,8 @@ Space 切换在 Android 上是原生底部导航栏（宿主声明 `spaces: true
 移动端外部插件加载的支持情况需独立确认，详见 [Android 试点与验收](../../mobile/README.md)。
 
 ## English API notes
+
+Built-in prompt hosts (Coding's new-project box, the aside panel) use the `components/chatbox` wrapper. Its optional `leadingControls` slot renders before the model pill, which is where the aside panel puts its attach "+". The slot is host-only: `ctx.ui.mountChatBox` still has no attachments.
 
 Use `ctx.ui?.mountChatBox?.(element, options)` inside a plugin View. The host supplies the same input surface and model picker used by built-in Views; the plugin supplies localized labels and owns submission. `onSubmit` receives `{ text, modelId, thinkingLevel }`: return true to clear the submitted text, or false to keep it. Rejected submissions keep the draft and show a retryable error. Model and effort choices remain local, without changing the active conversation or global defaults.
 
@@ -260,7 +262,7 @@ The small parts used by settings and store pages are open to plugins: group pane
 
 `ctx.ui?.mountModelPicker?.(el, { kind, value, label, followLabel, scopeKey, onChange })` mounts the existing native ModelPill menu without a prompt input. `kind` is `asr` or `translation`; `value: ''` follows that global slot, while ASR `value: 'local'` selects on-device SenseVoice. It reads the home engine catalog, includes dedicated translation models, and follows native model sorting and grouping preferences. Selection is a local draft delivered through `onChange`; the host never changes global settings or starts a model call. Use `{ update(patch), dispose() }`, change `scopeKey` when switching recordings, and feature-detect together with `ctx.tangu.modelCatalog`. Unready on-device models are explained and cannot become selected; download them through Settings → Voice. The host disposes the picker and aborts an open menu when the plugin is disabled or reloaded.
 
-`ctx.tangu?.modelCatalog?.(kind)` returns `{ models, defaultModelId }` from the same home target used by desktop ASR and inline AI. Each model has `id`, `name`, `provider`, `source`, `available`, and `supportsCorrection`; dedicated machine-translation models set `supportsCorrection: false`. No credentials are returned. `ctx.tangu.complete` and `ctx.tangu.translate` accept optional `modelId` overrides and return optional `model: { id, name, mt? }` provenance. An explicit override never writes the global model slot. When it is omitted, the existing global-slot behavior remains available. Desktop `window.tangu.transcribeAudio` accepts per-call `backend: 'local' | 'cloud'` as well as `modelId`; explicit offline ASR never falls through to a cloud Provider when the local model is unavailable.
+`ctx.tangu?.modelCatalog?.(kind)` returns `{ models, defaultModelId }` from the same home target used by desktop ASR and inline AI. Each model has `id`, `name`, `provider`, `source`, `available`, and `supportsCorrection`; dedicated machine-translation models set `supportsCorrection: false`. No credentials are returned. `ctx.tangu.complete` and `ctx.tangu.translate` accept optional `modelId` overrides and return optional `model: { id, name, mt? }` provenance. An explicit override never writes the global model slot. When it is omitted, the existing global-slot behavior remains available. Desktop `window.tangu.transcribeAudio` accepts per-call `backend: 'local' | 'cloud'` as well as `modelId`; explicit offline ASR never falls through to a cloud Provider when the local model is unavailable. Pass `language` (`zh`, `en`, `ja`, `ko`, `yue`, …) when you know what is spoken: the on-device model otherwise guesses the language per utterance and can turn far-field English into Chinese or Japanese text; cloud models receive it as a hint. Omit it for mixed-language audio.
 
 这组接口复用原生模型选择器，选择保持为插件的局部草稿；模型调用和记录级持久化仍由插件负责。空值跟随全局设置，ASR 的 `local` 代表本机 SenseVoice。目录来自实际执行调用的 home 引擎；专用翻译模型通过 `supportsCorrection` 标明只支持翻译。切换记录更新 `scopeKey`，通过 `dispose()` 收回宿主挂载；插件禁用或重载也会自动清理。旧宿主没有这些可选方法时，保留跟随全局设置的界面，不显示无法兑现的记录级覆盖。
 
@@ -337,5 +339,23 @@ list.addEventListener('dragover', (e) => {
 list.addEventListener('dragleave', (e) => { if (!list.contains(e.relatedTarget)) drop?.hide() })
 list.addEventListener('drop', () => drop?.hide())
 ```
+
+**松手落位（2026-10-25）**：松手后被拖的那一个从松手的位置（拖影所在处）滑进新位置，160ms 减速（曲线同落点线 `--lcl-drop-ease`，时长 token `--land-duration`），一路带着淡下去的阴影；邻居不让位；「减少动态效果」下直接到位。宿主的 Tangu 会话档项目组、插件列表的行、内置待办视图换组都用它（主页卡片是 dnd-kit 排序，不走这里；日历插件自带的待办视图要它自己调 `drop.land`）。
+
+- 原生视图：拖起时 `grab = dragGrab(el, e)`，松手时 `from = releasePoint(e, grab)`；重渲之后（绘制之前：`useLayoutEffect` / `requestAnimationFrame`）调 `land(el, from, { with?, unclip? })`——`with` 是跟着同一段位移走的元素（展开的组底下那块），`unclip` 是飞行时临时放开裁剪的折叠容器。数据要过一会儿才重渲（写盘、插件回调之后）就用 `landWhenMoved(() => 找到那一行, from, opts)`：每次 DOM 有增删就问一次，等它重新挂载或换了父节点 / 前一个兄弟才落，1.2 秒没动就作罢。只写被拖元素自己的内联 `transform` / `transition` / `box-shadow`，飞完原样还回去；动的是 `transition`，不是关键帧。
+- 插件：句柄上的 `drop.land?.(target, from)`。`target` 是已经重渲到新位置的那一行；还没重渲就传一个找它的函数，宿主等它换了地方再落。`from` 同上（视口 px 的左上角）。旧宿主没有 `land`：照旧瞬时到位。
+
+```js
+let grab = null
+list.addEventListener('dragstart', (e) => { const r = e.target.getBoundingClientRect(); grab = { x: e.clientX - r.left, y: e.clientY - r.top } })
+list.addEventListener('drop', async (e) => {
+  drop?.hide()
+  const from = grab && { x: e.clientX - grab.x, y: e.clientY - grab.y }
+  await moveRow(id, target)             // 你自己的挪动 + 重渲
+  if (from) drop?.land?.(() => list.querySelector(`[data-row="${id}"]`), from)
+})
+```
+
+After a drop, `land` makes the moved item glide from where it was let go (where the drag image was) into its new place: 160ms, decelerating (the drop line's `--lcl-drop-ease`; duration token `--land-duration`), its lift shadow fading out; neighbours don't make room; with reduced motion it simply appears there. The host uses it for project groups in the Tangu sessions list, plugin list rows and the built-in to-do view's group changes (homepage tiles sort with dnd-kit and don't; the Calendar plugin's own to-do view has to call `drop.land` itself). Native views keep `grab = dragGrab(el, e)` at dragstart and `from = releasePoint(e, grab)` at drop, then after re-rendering (before paint: `useLayoutEffect` / `requestAnimationFrame`) call `land(el, from, { with?, unclip? })` — `with` lists elements that move by the same offset (an expanded group's rows), `unclip` folding containers whose clipping is lifted for the flight. When the re-render comes later (after a write or a plugin callback), `landWhenMoved(() => findRow(), from, opts)` checks on every DOM change (a MutationObserver, before paint) and lands once the row is re-mounted or has a new parent / previous sibling, giving up after 1.2s. Only the item's own inline `transform` / `transition` / `box-shadow` are written for the flight and restored afterwards; it is a `transition`, not keyframes. Plugins call `drop.land?.(target, from)` on the handle: `target` is the row already in its new place, or a function that finds it once your re-render lands; `from` as above, a viewport top-left. Older hosts lack `land`: rows simply appear in place.
 
 The line that says "it will land here" while dragging to reorder, and the outline for "drop into this", are one thing across the host (LCL `dropIndicator`): coloured with the theme's `--signal-line`; moving to another drop point fades the old one out where it is (90ms) and fades the new one in where it lands, unfolding from its near end (130ms); the same drop point merely moving with a scroll follows without replaying; with reduced motion nothing animates. Don't draw your own. Native views use `createDropIndicator({ host?, className? })` from `@lcl/components` (handle: `line(rect, { key?, axis? })`, `zone(rect, { key? })`, `hide()`, `destroy()`, viewport px); places that already own an indicator element call `dropRetarget(el, key, { axis? })` **before** writing the new position and `dropHide(el)` before hiding it; lists that draw a pseudo-element line per row keep it always present and transparent and let the drop class light it up with `--lcl-drop-enter` / `--lcl-drop-leave` (see the head of `lcl/engine/dropIndicator.css`), and outline or background highlights use `transition: box-shadow var(--lcl-drop-fade)`. Plugins call `ctx.ui?.dropIndicator?.({ host? })`: `line({ x, y, w })` is a horizontal line whose top edge is at `y`, `line({ x, y, h }, { axis: 'v' })` a vertical one, `zone({ x, y, w, h })` the outline. Pass a `key` (your row or slot id) so a scroll is not taken for a new drop point. Call `hide()` on dragleave / drop / dragend and `dispose()` when the view goes away; the host disposes it on disable or reload. Older hosts lack the method: keep your own line there.

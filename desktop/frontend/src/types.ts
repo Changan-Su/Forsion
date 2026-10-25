@@ -374,6 +374,41 @@ export interface AuthStatusInfo {
   backendState?: 'stopped' | 'starting' | 'ready' | 'crashed' | null
 }
 
+/** 插件沙箱(electron/pluginSandbox.ts;契约 tangu-agent/docs/plugin-sandbox.md)。 */
+export interface PluginSandboxResult { ok: boolean; code?: string; error?: string; text?: string; image?: string }
+/** 带给沙箱首屏的界面状态:语言(zh / en)+ 主题那几把 localStorage 键。 */
+export interface PluginSandboxUi { locale: string; storage: Record<string, string> }
+export interface PluginSandboxState {
+  running: boolean
+  pluginId?: string
+  name?: string
+  version?: string
+  dir?: string
+  sessionId?: string
+  status?: import('../../../tangu-agent/src/contracts/pluginSandbox').SandboxStatus | null
+}
+export interface PluginSandboxReport { note: string; sessionId?: string; pluginId: string; name: string }
+export interface PluginSandboxApi {
+  /** ui.storage = 本窗的主题键(沙箱首屏照着画);语言由主进程按自己的界面语言给。deadline = 引擎给这次动作的期限(Date.now() 毫秒),排队排过了主进程就不做了。 */
+  exec(op: string, args: Record<string, unknown>, origin: { sessionId?: string; deadline?: number; ui?: { storage: Record<string, string> } }): Promise<PluginSandboxResult>
+  state(): Promise<PluginSandboxState>
+  show(): Promise<boolean>
+  stop(): Promise<void>
+  reset(): Promise<PluginSandboxResult>
+  /** 「安装到我的 Forsion」:主进程先弹确认框;用户取消 = cancelled。 */
+  install(): Promise<{ ok: boolean; pluginId?: string; error?: string; cancelled?: boolean }>
+  onChanged(cb: (s: PluginSandboxState) => void): () => void
+  onReport(cb: (r: PluginSandboxReport) => void): () => void
+}
+export interface PluginSandboxSelf {
+  pluginId: string
+  name: string
+  version: string
+  dir: string
+  appVersion: string
+  ui?: PluginSandboxUi
+}
+
 /** preload 注入的 window.tangu(浏览器内调试时缺省,backend/auth 能力按需探测)。 */
 declare global {
   interface Window {
@@ -390,6 +425,10 @@ declare global {
       desktopPermissionRepair?(id: DesktopPermissionId, options?: DesktopPermissionRequestOptions): Promise<DesktopPermissionsSnapshot>
       /** 离开权限页关闭指导窗;main 同时处理尚未完成的 request 取消竞态。 */
       desktopPermissionsCloseGuide?(): Promise<void>
+      /** 插件沙箱的控制面:只有用户那份桌面 Forsion 有(沙箱自己、web、mobile 都没有)。 */
+      pluginSandbox?: PluginSandboxApi
+      /** 本进程就是插件沙箱:自身信息 + 沙箱条上的按钮(报告问题 / 安装 / 重置)转给父进程。普通实例没有这个键。 */
+      sandbox?: { self: PluginSandboxSelf; action(a: 'report' | 'install' | 'reset', note?: string): Promise<boolean>; changed(): void }
       /** 电脑历史(主进程 electron/computerHistory.ts);无 agent 后端的产品形态没有这个键。 */
       computerHistory?: ComputerHistoryApi
       /** Tangu Web(浏览器云端客户端)标志:由 web 垫片注入;共享组件据此解闸云端可用特性(如技能)。 */
@@ -581,6 +620,8 @@ declare global {
       activeWindow?(): Promise<ActiveWindowSample | null>
       /** 本窗口订阅着的在飞 run 数 → 主进程「有会话运行时不休眠」(keepAwakeReport.ts 上报)。 */
       reportRunningSessions?(count: number): void
+      /** 在跑 / 等你的会话 → 托盘 / 菜单栏(借鉴 Comma 2.6;trayReport.ts)。 */
+      setTraySessions?(rows: Array<{ id: string; title: string; state: 'run' | 'wait' }>): void
       /** 拖入文件 → 绝对路径(本机模式粘贴路径用)。 */
       getPathForFile?(file: File): string
       /** 本机工作区文件浏览(host cwd)。 */
