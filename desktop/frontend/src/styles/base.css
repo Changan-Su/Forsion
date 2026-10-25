@@ -5320,6 +5320,12 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
   --roll-exit-duration: 100ms; /* 过程行滚动替换:旧行出 */
   --reader-step-duration: 170ms; /* 画布阅读栏:翻上一轮 / 下一轮 */
   --reader-close-duration: 200ms; /* 画布阅读栏关闭淡出,与 ChatCanvas READ_CLOSE_MS 同 */
+  /* 对话 ↔ 画布(ChatCanvas data-switch):进场整层 → 别的卡和线 → 胶囊 / 说明依次淡入,退场反过来;排在 ENTER_MS 420 / EXIT_MS 360 里 */
+  --canvas-switch-fade: 140ms; /* 整层淡入、退场每一层淡出 */
+  --canvas-switch-lag: 120ms; /* 进场:别的卡和线晚多久 */
+  --canvas-switch-cards: 220ms; /* 进场:别的卡和线淡入多久;退场:整层晚多久才淡出 */
+  --canvas-switch-hud-lag: 280ms; /* 进场:胶囊 / 说明晚多久 */
+  --canvas-switch-hud: 160ms; /* 进场:胶囊 / 说明淡入多久;空白处说明被卡盖住时让开 */
   --switch-edge-duration: 120ms; /* 开关旋钮左右两条边各自的时长 */
   --switch-edge-lag: 30ms; /* 开关旋钮后沿晚出发多久(离开时拉长、落地时回缩) */
   --draw-duration: 600ms; /* 描线 */
@@ -5364,6 +5370,27 @@ html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .
 }
 /* 替身里的子元素不重放自己的进场(命令面板 / ⌘P 的面板本身除外:它跟着遮罩一起退,见 engine.css)。 */
 [data-lcl-exit] :not(.cmd-panel, .amx-qf) { animation: none !important; }
+
+/* 统一入场(2026-10-25,DESIGN §3「动效」):宿主与插件同一份,写在标准写法上,插件不用自己做动画。
+   - data-motion="enter":「用户刚点了才出现」的内容(点开的清单、展开的分区、换出来的那一版)。只给刚发生的(规矩 6),
+     新建 / 恢复 / 滚进视口的别写。动独立的 translate,不碰 transform(各处靠内联 transform 定位)。
+   - 原生 <details>:内容区淡入淡出,不补间高度(规矩 7:聊天流里也有 <details>);自己写了 ::details-content 过渡的照旧。
+   - 原生 <dialog> / popover 打开时与命令面板同一档进场。
+   全是 :where() 零特异性:组件自己写了 animation / transition 就以组件为准。减少动态效果由上面的全局规则一并收掉。 */
+@keyframes ui-enter { from { opacity: 0; translate: 0 4px; } }
+@keyframes ui-fade-in { from { opacity: 0; } }
+:where([data-motion~='enter']) { animation: ui-enter var(--menu-enter-duration) var(--ease-surface) backwards; }
+:where(details)::details-content {
+  opacity: 0;
+  transition: opacity var(--menu-exit-duration) var(--ease-exit), content-visibility var(--menu-exit-duration) allow-discrete;
+}
+:where(details[open])::details-content {
+  opacity: 1;
+  transition-duration: var(--menu-enter-duration);
+  transition-timing-function: var(--ease-surface);
+}
+:where(dialog[open], [popover]:popover-open) { animation: ui-menu-enter var(--palette-enter-duration) var(--ease-surface); }
+:where(dialog[open])::backdrop { animation: ui-fade-in var(--palette-enter-duration) var(--ease-calm); }
 
 /* uiux-c: 全局键盘焦点环(U-43)。
    原来唯一的「全局」规则是 .am-app :focus-visible(amadeus/styles.css),Ribbon、标签条、侧栏行、状态栏都不在它的作用域里,

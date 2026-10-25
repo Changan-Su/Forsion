@@ -295,7 +295,7 @@ export function DeviceSessionSections(p: Props): React.ReactElement | null {
         </button>
       </div>,
     )
-    if (offlineExpanded) sections.push(...offlineUnits.map(renderDevice))
+    sections.push(<AnimatedCollapse key="offline-units" open={offlineExpanded}>{offlineUnits.map(renderDevice)}</AnimatedCollapse>)
   }
 
   return (

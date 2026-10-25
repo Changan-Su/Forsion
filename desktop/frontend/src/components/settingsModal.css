@@ -151,4 +151,5 @@
   text-align: start;
   cursor: pointer;
 }
+.settings-cloud-advanced-toggle > svg { transition: transform var(--duration-fast); }
 .settings-cloud-advanced-toggle[aria-expanded='true'] > svg { transform: rotate(90deg); }

@@ -24,6 +24,7 @@ import type { MessageHandlers } from './EditorialMessage'
 import { ApprovalCard as MuseApprovalCard } from '../inbox/InboxBody'
 import { MuseTodoCards, museApprovalSettled, type MuseApprovalItem } from './MuseDm'
 import '../../tangu/messages'
+import { useEnterMotion } from '../../components/AnimatedUI'
 
 registerMessages({
   'approval.tray.title': { zh: '等你批准 · {n}', en: 'Waiting for your approval · {n}' },
@@ -103,6 +104,7 @@ export function ApprovalTray({ items, onDecide, onAnswer, onTask, sessionId }: {
   // 锁按会话放在模块里:画布模式切换会把托盘在流尾与输入框上方之间挪(= 重挂),组件里的 ref 会跟着丢(Codex 10-23)
   const sent = sentLocks(sessionId)
   const [, rerender] = useState(0)
+  const [motion, touch] = useEnterMotion() // 托盘一出现时整张一起进;之后展开、翻页、答完换上来的那张,卡体单独淡入上来
   // 兑现离开托盘的不再占着。放在提交后的 effect 里,不在 render 里改 ref:并发渲染可能丢弃一次 render,
   // 那次若先把锁删了,屏幕上仍在的旧项就又能送一次(Codex 09-27 第三轮)。
   useEffect(() => {
@@ -111,6 +113,7 @@ export function ApprovalTray({ items, onDecide, onAnswer, onTask, sessionId }: {
   const submit = (id: string, send: () => Sent): void => {
     // 冷却期内一律不送:CSS 的 pointer-events 只挡鼠标,这里连键盘(回车提交)一起挡,也让冷却可测
     if (armedId !== id || sent.has(id)) return
+    touch()
     sent.add(id)
     rerender((n) => n + 1)
     const unlock = (): void => { sent.delete(id); rerender((n) => n + 1) }
@@ -120,7 +123,7 @@ export function ApprovalTray({ items, onDecide, onAnswer, onTask, sessionId }: {
   const busy = sent.has(cur.id)
   const title = items.every((i) => countKind(i) === 'approval') ? 'approval.tray.title' : 'approval.tray.titleAny'
   const idx = items.indexOf(cur)
-  const go = (d: number): void => setOpenId(items[(idx + d + items.length) % items.length].id)
+  const go = (d: number): void => { touch(); setOpenId(items[(idx + d + items.length) % items.length].id) }
   const rest = items.filter((i) => i !== cur)
   const more = (['approval', 'inquiry', 'plan', 'task', 'human', 'creation'] as const)
     .map((k) => [k, rest.filter((i) => countKind(i) === k).length] as const)
@@ -130,7 +133,7 @@ export function ApprovalTray({ items, onDecide, onAnswer, onTask, sessionId }: {
   return (
     <div className="t2c-apv" role="region" aria-label={t('approval.tray.label')} data-approval-tray={items.length} data-tray-msgs={items.map((i) => i.messageId).join(' ')} data-peek={Math.min(rest.length, 2) || undefined}>
       <div className="t2c-apv-top">
-        <button type="button" className="t2c-apv-head" aria-expanded={!collapsed} onClick={() => setCollapsed((c) => !c)}>
+        <button type="button" className="t2c-apv-head" aria-expanded={!collapsed} onClick={() => { touch(); setCollapsed((c) => !c) }}>
           <ShieldQuestion size={13} className="t2c-apv-ic" />
           <span className="t2c-apv-title">{t(title, { n: items.length })}</span>
           {more && <span className="t2c-apv-more">{t('approval.tray.more', { list: more })}</span>}
@@ -144,6 +147,8 @@ export function ApprovalTray({ items, onDecide, onAnswer, onTask, sessionId }: {
       </div>
       {!collapsed && (
         <div
+          key={cur.id}
+          data-motion={motion}
           className={`t2c-apv-body${armedId === curId ? '' : ' is-arming'}${busy ? ' is-sent' : ''}`}
           data-tray-kind={cur.kind}
           data-tray-msg={cur.messageId}

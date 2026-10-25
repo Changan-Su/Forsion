@@ -97,6 +97,7 @@ import { FILE_VIEW_PARAM } from './viewFileMatch'
 import { windowKind } from './windowKind'
 import { registerMessages, translate, useI18n } from './i18n'
 import { useVaultRelParam } from './views/vaultRelParam'
+import { AnimatedCollapse } from './components/AnimatedUI'
 
 registerMessages({
   'amxv.renameFailed': { zh: '重命名失败：{e}', en: 'Rename failed: {e}' },
@@ -532,7 +533,7 @@ function PrefsSections({ row, pages }: { row: (path: string) => ReactNode; pages
             <span className="t2s-count">{items.length}</span>
           </span>
         </button>
-        {open && <div className="t2s-group-sessions">{items.map((p) => row(p))}</div>}
+        <AnimatedCollapse open={open}><div className="t2s-group-sessions">{items.map((p) => row(p))}</div></AnimatedCollapse>
       </div>
     )
   )
@@ -549,7 +550,7 @@ function PrefsSections({ row, pages }: { row: (path: string) => ReactNode; pages
               <span className="t2s-count">{collections.length}</span>
             </span>
           </button>
-          {openColl && (
+          <AnimatedCollapse open={openColl}>
             <div className="t2s-group-sessions">
               {collections.map((c) => (
                 <div
@@ -573,7 +574,7 @@ function PrefsSections({ row, pages }: { row: (path: string) => ReactNode; pages
                 </div>
               ))}
             </div>
-          )}
+          </AnimatedCollapse>
         </div>
       )}
     </>
@@ -658,7 +659,7 @@ function SideSection({ id, defaultOpen, label, count, extra, dropProps, dropActi
           {extra}
         </span>
       </button>
-      {open && <div className="t2s-group-sessions">{children}</div>}
+      <AnimatedCollapse open={open}><div className="t2s-group-sessions">{children}</div></AnimatedCollapse>
     </div>
   )
 }
@@ -1535,7 +1536,7 @@ export function AmadeusPagesView() {
       return (
         <div key={node.path}>
           {row(node.path, depth, { fd, open, count: node.children.filter((c) => c.kind === 'file').length })}
-          {open && (
+          <AnimatedCollapse open={open}>
             <div
               className={`t2s-group-sessions${dragOver === fd ? ' amx-drop-into' : ''}`}
               onDragOver={(e) => mergedDragOver(e, node.path, fd)}
@@ -1544,7 +1545,7 @@ export function AmadeusPagesView() {
             >
               {node.children.map((c) => renderNode(c, depth + 1))}
             </div>
-          )}
+          </AnimatedCollapse>
         </div>
       )
     }
@@ -1590,7 +1591,7 @@ export function AmadeusPagesView() {
           <button className="t2s-group-add" title={t('amxv.folder.newNoteHere')} onClick={() => { setExpanded((prev) => new Set([...prev, ...prefixesOf(folder)])); void ps().createPageInFolder(folder) }}><Plus size={14} /></button>
         </div>
         {/* 展开的文件夹内部(含其中的笔记行)也是该文件夹的落点——与文件管理器语义一致。 */}
-        {!isCol && (
+        <AnimatedCollapse open={!isCol}>
           <div
             className={`t2s-group-sessions${dragOver === folder ? ' amx-drop-into' : ''}`}
             onDragOver={folderDragOver}
@@ -1599,7 +1600,7 @@ export function AmadeusPagesView() {
           >
             {node.children.map((c) => renderNode(c, depth + 1))}
           </div>
-        )}
+        </AnimatedCollapse>
       </div>
     )
   }

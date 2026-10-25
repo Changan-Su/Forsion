@@ -129,6 +129,14 @@ exportBtn.setAttribute('aria-label', 'Export')               // the tooltip does
   `--tip-enter` / `--tip-exit`, `--hovercard-enter` / `--hovercard-exit`. Leaving is shorter than entering;
   interruptible states use `transition`, not `keyframes`; created / restored / scrolled-in content doesn't animate in;
   under reduced motion keep colour and opacity, drop translation and scale.
+- Motion the host applies for you (2026-10-25+, same page, standard markup, no keyframes or tokens needed): native
+  `<details>` fades its content in (180ms) / out (80ms) — opacity only, height is not tweened; native `<dialog>`
+  (`showModal()`) and `popover` open like the command palette (120ms fade + 0.985 → 1 scale, backdrop fades in);
+  `data-motion="enter"` on content that appears because the user just did something (a list they opened, a section
+  they expanded) fades it in and lifts it 4px when it mounts (180ms). Don't put `data-motion` on what is there when the
+  view opens, is restored or scrolls in. It animates the separate `translate` property, so your `transform` positioning
+  is untouched. These host rules have zero specificity: your own `animation` / `transition` on the element wins; the
+  host turns them off under reduced motion. Pages inside an iframe / webview don't get them.
 
 ### Drop indicators: ctx.ui.dropIndicator (2026-10-24+)
 

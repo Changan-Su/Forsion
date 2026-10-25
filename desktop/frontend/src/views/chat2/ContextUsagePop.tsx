@@ -129,7 +129,7 @@ export function ContextUsagePop({ open, contextWindow, ctxTokens, sessionTokens,
         <span className="t2c-ctxinfo-src">{t('ctx.windowCapped', { max: fmtTokens(ctxInfo.ctxWindowMax!), n: fmtTokens(ctxInfo.ctxWindow) })}</span>
       )}
       {detail && (
-        <span className="t2c-cu-detail">
+        <span className="t2c-cu-detail" data-motion="enter">
           <span className="t2c-cu-legend">
             {segs.map((s) => (
               <Fragment key={s.id}>
