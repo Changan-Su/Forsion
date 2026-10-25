@@ -165,6 +165,26 @@ list.addEventListener('drop', () => drop?.hide())
   so a scroll would replay the fade.
 - Older hosts lack the method: keep your own line there.
 
+**Landing after the drop (2026-10-25+, `drop.land`)**: after your drop handler has moved the row, let the host glide it
+from where it was let go into its new place (160ms, decelerating, its lift shadow fading out; neighbours don't move;
+reduced motion = it just appears). Record the grab point at dragstart and turn it into the release point at drop:
+
+```js
+let grab = null
+list.addEventListener('dragstart', (e) => { const r = e.target.getBoundingClientRect(); grab = { x: e.clientX - r.left, y: e.clientY - r.top } })
+list.addEventListener('drop', async (e) => {
+  drop?.hide()
+  const from = grab && { x: e.clientX - grab.x, y: e.clientY - grab.y }   // viewport top-left of the drag image
+  await moveRow(id, target)                                               // your move + re-render
+  if (from) drop?.land?.(() => list.querySelector(`[data-row="${id}"]`), from)
+})
+```
+
+- `target` is the row element already in its new place, or a function that finds it: the host then checks on every DOM change (a MutationObserver, before paint)
+  for up to ~1.2s and lands it once it is re-mounted or has a new parent / previous sibling (before it is painted there).
+- Only the row's inline `transform` / `transition` / `box-shadow` are touched for the flight, then restored; disabling
+  the plugin cancels pending and in-flight landings. Feature-detect `drop.land` — older hosts lack it.
+
 ### Selection bar: ctx.ui.mountSelectionBar and registerSelectionAction scopes (2026-10-13+)
 
 The **selection bar** is the strip that appears over selected text. Chat, notes and any plugin view that opts in

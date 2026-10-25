@@ -13,9 +13,12 @@
   --lcl-drop-leave: opacity var(--lcl-drop-out) ease-out, scale 0s linear var(--lcl-drop-out), top 0s linear var(--lcl-drop-out);
   /* 描边 / 底色类的落点(box-shadow、background 亮起来)用这一条 */
   --lcl-drop-fade: var(--lcl-drop-in) var(--lcl-drop-ease);
+  /* 松手落位(dropIndicator.ts 的 land()):被拖的那一个从松手处滑进新位置,与落点线同一条减速曲线。
+     宿主的值在 base.css :root 的 --land-duration,这里只写同值兜底 */
+  --lcl-land: var(--land-duration, 160ms);
 }
 @media (prefers-reduced-motion: reduce) {
-  :root { --lcl-drop-in: 0ms; --lcl-drop-out: 0ms; }
+  :root { --lcl-drop-in: 0ms; --lcl-drop-out: 0ms; --lcl-land: 0ms; }
 }
 
 .lcl-drop-ind {

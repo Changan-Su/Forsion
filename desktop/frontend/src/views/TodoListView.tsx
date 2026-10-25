@@ -40,7 +40,7 @@ import { EventCard, type Anchor, type CardTarget } from './calendar/EventCard'
 import { rescheduleCalendarRow, rescheduleNoteTask } from './calendar/eventActions'
 import { todoDueMeta } from './calendar/todoMeta'
 import { BUCKET_LABEL, COLLAPSED_BY_DEFAULT, ORDER, VIEWS, bucketOf, dropDay, inView, moveToDay, sortTimeOf, type TodoBucket, type TodoView } from './calendar/todoGroups'
-import { zoomOf, type Leaf } from '@lcl/engine'
+import { dragGrab, landWhenMoved, releasePoint, zoomOf, type LandPoint, type Leaf } from '@lcl/engine'
 import { registerMessages, useI18n } from '../i18n'
 import { track } from '../achievements/store'
 
@@ -174,6 +174,8 @@ export function TodoListView({ params, leaf }: { params?: Record<string, unknown
   const [addTo, setAddTo] = useState<string | null>(null)
   const [dropAt, setDropAt] = useState<TodoBucket | null>(null)
   const dragRow = useRef<Row | null>(null)
+  /** 拖起时指针在行里的位置:换组之后那一行从松手处滑进新组(LCL land),不是在新位置凭空出现。 */
+  const dragGrabAt = useRef<LandPoint | null>(null)
   // 拖着一行时,「今天 / 明天 / 未排期」即使是空桶也把组头亮出来当落点(空桶平时不渲染)
   const [dragging, setDragging] = useState<Row | null>(null)
   // 拖进日历后那一行换了组(换父节点重挂),原元素收不到 dragend:任何地方一放下 / 拖动一结束就收尾,
@@ -360,10 +362,12 @@ export function TodoListView({ params, leaf }: { params?: Record<string, unknown
       <li
         className="amx-todo-item"
         key={r.key}
+        data-todo-key={r.key}
         draggable={drag || undefined}
         title={drag ? t(toCal ? 'todolist.dragHint' : 'todolist.dragHintGroups') : undefined}
         onDragStart={drag ? (e) => {
           dragRow.current = r
+          dragGrabAt.current = dragGrab(e.currentTarget, e)
           // 下一帧再亮出空组头:同一帧改 DOM 会让 Chromium 当场取消这次拖动
           requestAnimationFrame(() => setDragging(r))
           // 多维表行能拖进日历:时间格 = 排时段(30 分钟),全天行 = 只改日期(CalendarView 接)。正文任务只在本视图里挪。
@@ -427,7 +431,21 @@ export function TodoListView({ params, leaf }: { params?: Record<string, unknown
       onDragOver: (e: DragEvent) => { if (ours(e) && canDrop(dragRow.current, bucket)) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; if (dropAt !== bucket) setDropAt(bucket) } },
       onDragLeave: () => setDropAt((b) => (b === bucket ? null : b)),
       // 放下后这一行换了组(换了父节点 → 重新挂载),原来那个元素收不到 dragend:收尾在这里也做一遍
-      onDrop: (e: DragEvent) => { e.preventDefault(); const r = dragRow.current; dragRow.current = null; setDragging(null); setDropAt(null); if (r && ours(e) && sameRow(e, r) && canDrop(r, bucket)) reschedule(r, bucket) },
+      onDrop: (e: DragEvent) => {
+        e.preventDefault()
+        const r = dragRow.current, grab = dragGrabAt.current
+        dragRow.current = null; dragGrabAt.current = null; setDragging(null); setDropAt(null)
+        if (!(r && ours(e) && sameRow(e, r) && canDrop(r, bucket))) return
+        // 落位:写回笔记 / 表格之后这一行才重挂进新组;等它出现在新组里,从松手处滑过去(组的折叠容器是 clip,飞行时放开)
+        if (grab) {
+          const sel = `li[data-todo-key="${CSS.escape(r.key)}"]`
+          landWhenMoved(() => rootRef.current?.querySelector<HTMLElement>(sel), releasePoint(e, grab), {
+            timeout: 1500,
+            unclip: (el) => [el.closest<HTMLElement>('.amx-todo-reveal-in')],
+          })
+        }
+        reschedule(r, bucket)
+      },
     } : {}
     return (
       <section className="amx-todo-group" key={key}>

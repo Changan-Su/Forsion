@@ -205,13 +205,12 @@ export function DeckPill({ rootRef, count, todos, onClick }: { rootRef: RefObjec
   }, [rootRef, count])
   if (!away) return null
   const done = todos?.filter((x) => x.status === 'completed').length ?? 0
+  // 外面那一排 .t2-deckpill-row 由 ChatView 包(和子会话药丸同排)
   return (
-    <div className="t2-deckpill-row">
-      <button type="button" className="t2-deckpill" data-deck-pill={count} onClick={onClick}>
-        <ArrowDown size={13} />
-        <span>{t('approval.pill', { n: count })}</span>
-        {!!todos?.length && <><span className="t2-deckpill-sep">·</span><span>{t('inquiry.todoList')} {done}/{todos.length}</span></>}
-      </button>
-    </div>
+    <button type="button" className="t2-deckpill" data-deck-pill={count} onClick={onClick}>
+      <ArrowDown size={13} />
+      <span>{t('approval.pill', { n: count })}</span>
+      {!!todos?.length && <><span className="t2-deckpill-sep">·</span><span>{t('inquiry.todoList')} {done}/{todos.length}</span></>}
+    </button>
   )
 }

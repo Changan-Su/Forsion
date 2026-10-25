@@ -10,7 +10,7 @@ import { amadeusAvailable, sessionsAvailable } from '../features/runtime'
  * 主视图硬规则 → 本 Space 的默认档(SpaceDefinition.autoWorkspaceMode);右栏恒为文件。
  */
 import { Fragment, useMemo, useState, useEffect, useReducer, useRef, type ReactNode } from 'react'
-import { useWorkspace, activeMainPanel, useSpaceStore, getView, useListFirst, useNativeChromeExtras, startOpenDrag, mainOpensBeside } from '@lcl/engine'
+import { useWorkspace, activeMainPanel, useSpaceStore, getView, useListFirst, useNativeChromeExtras, startOpenDrag, mainOpensBeside, dragGrab, landWhenMoved, releasePoint, type LandPoint } from '@lcl/engine'
 import type { ViewProps } from '@lcl/engine'
 import { ChevronDown, ChevronRight, FileText, Folder, FolderOpen, ListFilter, MoreHorizontal, Pencil, Plus, Search, X } from 'lucide-react'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
@@ -434,6 +434,11 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
   // ── 行在列表里拖动('items')。宿主只判落点、画提示,真正的移动由插件在 onDrop 里做。──
   const takesItems = !!src.drop?.accepts.includes('items')
   const endDrag = (): void => { dragKeys.current = null; setDragging(null); setDropAt(null) }
+  /** 拖起时指针在那一整块(行 / 组 / 文件夹连同展开的子项)里的位置:松手落位从拖影所在处滑进新位置。 */
+  const dragGrabAt = useRef<LandPoint | null>(null)
+  /** 一行在列表里的「整块」:叶子行 = .t2sw-plug-item;组头 = 整个 .t2sw-plug-group;文件夹 = 组头连同展开的子项那层。 */
+  const unitOf = (row: Element | null): HTMLElement | null => (row?.closest<HTMLElement>('.t2sw-plug-item')
+    ?? (row?.classList.contains('t2sw-plug-ghead') ? row.parentElement : row?.closest('.t2s-group')?.parentElement)) ?? null
   /** 搜索时列表是压平的,前后关系没有意义,不让拖;正在改名的那一行也不拖。 */
   const dragProps = (it: ListItem): Record<string, unknown> =>
     takesItems && it.draggable && !query && renaming !== it.key
@@ -447,6 +452,8 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
             const r = e.currentTarget.getBoundingClientRect()
             e.dataTransfer.setDragImage(e.currentTarget, e.clientX - r.left, e.clientY - r.top)
             dragKeys.current = [it.key]
+            const unit = unitOf(e.currentTarget)
+            dragGrabAt.current = unit ? dragGrab(unit, e) : null
             setDragging(it.key)
           },
           onDragEnd: endDrag,
@@ -505,9 +512,16 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
         const keys = dragKeys.current
         if (!keys) { outer.onDrop?.(e); return }
         const to = landing(e, it)
+        const grab = dragGrabAt.current
+        dragGrabAt.current = null
         endDrag()
         if (!to) return
         e.preventDefault(); e.stopPropagation()
+        // 松手落位:真正的挪动在插件的 onDrop 里(常常写完盘才重渲),等那一行换了地方再从松手处滑进去
+        if (grab && keys.length === 1) {
+          const sel = `[data-row-key="${CSS.escape(keys[0])}"]`
+          landWhenMoved(() => unitOf(listRef.current?.querySelector(sel) ?? null), releasePoint(e, grab))
+        }
         void src.drop!.onDrop({ items: keys }, to)
       },
     }
