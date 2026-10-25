@@ -54,7 +54,7 @@ export const CHANNEL_DIR_NAME: Record<BuiltinChannelKind, string> = { wechat: 'w
 
 /** 插件通道的目录名 = `<kind>bot`(kind 已由 hub 校验为 `[a-z0-9-]`)。 */
 export function channelWorkspaceDir(kind: ChannelKind): string {
-  return path.join(defaultWorkspaceDir(), CHANNEL_DIR_NAME[kind as BuiltinChannelKind] ?? `${kind}bot`);
+  return path.join(defaultWorkspaceDir(), Object.hasOwn(CHANNEL_DIR_NAME, kind) ? CHANNEL_DIR_NAME[kind as BuiltinChannelKind] : `${kind}bot`);
 }
 
 function normForward(v: any): ChannelSettings['inboxForward'] {

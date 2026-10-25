@@ -8,7 +8,7 @@ import { ChannelService } from './service.js';
 import { WechatChannel } from './wechat.js';
 import { TelegramChannel } from './telegram.js';
 import { QQChannel } from './qq.js';
-import { channelHasCredentials, channelSettings, saveChannelSettings } from './config.js';
+import { CHANNEL_DIR_NAME, channelHasCredentials, channelSettings, saveChannelSettings } from './config.js';
 import type { ChannelKind, ChannelSettings, PluginChannelSpec, SendResult } from './types.js';
 import { CHANNEL_KINDS } from './types.js';
 
@@ -56,6 +56,11 @@ class ChannelHub {
   /** 插件通道的声明(内置通道 → undefined)。 */
   pluginChannel(kind: string): PluginChannelSpec | undefined { return this.plugins.get(kind); }
 
+  /** 插件把这个凭据键声明成 secret:状态与保存回执都不回显它(appId 内置是明文回显的)。 */
+  isSecretField(kind: string, key: 'appId' | 'appSecret' | 'botToken'): boolean {
+    return !!this.plugins.get(kind)?.fields.some((f) => f.key === key && f.secret);
+  }
+
   /** 凭据是否齐全:插件通道 = 声明的字段全有值;内置走 config.channelHasCredentials。 */
   private hasCredentials(kind: ChannelKind, st: ChannelSettings): boolean {
     const p = this.plugins.get(kind);
@@ -70,6 +75,9 @@ class ChannelHub {
     const kind = String(spec?.driver?.kind || '');
     if (!/^[a-z][a-z0-9-]{1,15}$/.test(kind)) throw new Error(`invalid channel kind "${kind}": lowercase [a-z0-9-], 2-16 chars, starting with a letter`);
     if (this.services.has(kind)) throw new Error(`channel "${kind}" is already registered`);
+    // `<kind>bot` 是工作区目录:不许落到内置通道的目录上(we → webot、tg → tgbot 会共用微信 / Telegram 的会话);
+    // config 段按 kind 当对象键读写,原型上的名字(constructor)不收。
+    if (Object.values(CHANNEL_DIR_NAME).includes(`${kind}bot`) || kind in Object.prototype) throw new Error(`channel kind "${kind}" is reserved`);
     if (typeof spec.driver.verify !== 'function') throw new Error(`channel "${kind}": driver.verify() is required`);
     this.plugins.set(kind, spec);
     this.services.set(kind, new ChannelService({ kind, driver: spec.driver, inboxDirName: `${kind}-inbox`, sessionTitle: spec.name.en, name: spec.name }));
@@ -191,7 +199,7 @@ class ChannelHub {
           botTokenSet: !!st.botToken,
           appIdSet: !!st.appId,
           appSecretSet: !!st.appSecret,
-          appId: st.appId || '',
+          appId: this.isSecretField(kind, 'appId') ? '' : st.appId || '',
         },
         runtime: svc.driver.status(),
         connectedSessionId: binding?.session_id || null,

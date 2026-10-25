@@ -42,6 +42,7 @@ vi.mock('../core/db.js', () => ({ query: vi.fn(async () => []) }));
 vi.mock('../seams/runtime.js', () => ({ deps: () => ({ profile: { capabilities: { hostExec: true } } }) }));
 vi.mock('./config.js', async (importOriginal) => ({
   channelHasCredentials: (await importOriginal<typeof import('./config.js')>()).channelHasCredentials, // 纯函数,用真的
+  CHANNEL_DIR_NAME: (await importOriginal<typeof import('./config.js')>()).CHANNEL_DIR_NAME,
   channelSettings: (kind: string) => state.settings[kind],
   saveChannelSettings: (kind: string, patch: any) => (state.settings[kind] = { ...state.settings[kind], ...patch }),
 }));
@@ -154,6 +155,14 @@ describe('插件通道(ctx.registerChannel)', () => {
   it('kind 非法或撞名直接抛错', () => {
     expect(() => channelHub.registerChannel({ ...spec(), driver: { ...spec().driver, kind: 'WeCom' } })).toThrow(/invalid channel kind/);
     expect(() => channelHub.registerChannel(spec('qq'))).toThrow(/already registered/);
+    for (const k of ['we', 'tg', 'constructor']) expect(() => channelHub.registerChannel(spec(k))).toThrow(/reserved/); // Codex 评审 10-25
+  });
+
+  it('插件把 appId 声明成 secret:状态里不回显', async () => {
+    const s = spec();
+    offs.push(channelHub.registerChannel({ ...s, fields: [{ key: 'appId' as const, label: { zh: 'K', en: 'K' }, secret: true }] }));
+    const st = (await channelHub.statusAll('u1')).find((c) => c.kind === 'wecom');
+    expect(st.credentials).toMatchObject({ appId: '', appIdSet: true });
   });
 
   it('引擎起之前注册:startAll 带上它;状态里带卡片声明', async () => {

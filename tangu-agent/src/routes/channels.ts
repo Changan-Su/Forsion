@@ -53,8 +53,8 @@ router.put('/agent/channels/:kind/config', authMiddleware, async (req: AuthReque
   try {
     const kind = kindOf(req.params.kind);
     const settings = await channelHub.applySettings(kind, settingsPatch(req.body || {}));
-    const { botToken, appSecret, ...safe } = settings;
-    res.json({ ok: true, settings: { ...safe, botTokenSet: !!botToken, appSecretSet: !!appSecret } });
+    const { botToken, appSecret, appId, ...safe } = settings;
+    res.json({ ok: true, settings: { ...safe, ...(channelHub.isSecretField(kind, 'appId') ? {} : { appId }), botTokenSet: !!botToken, appSecretSet: !!appSecret } });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'channel config failed' });
   }
@@ -76,6 +76,7 @@ router.post('/agent/channels/:kind/connect', authMiddleware, async (req: AuthReq
     if (plugin) {
       ({ accountId, label } = await plugin.driver.verify());
       if (!accountId) throw new Error(`${kind}: verify() returned no accountId`);
+      if (channelHub.pluginChannel(kind) !== plugin) throw new Error(`${kind}: the plugin was disabled while connecting`); // 校验期间插件被停用:别再写绑定 / 设置
     } else if (kind === 'telegram') {
       const me = await channelHub.telegramDriver.verify();
       accountId = `tg:${me.id}`;
