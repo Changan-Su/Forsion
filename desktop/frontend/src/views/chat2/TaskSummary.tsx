@@ -10,7 +10,7 @@
  */
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, ArrowDownToLine, ArrowUpToLine, CheckCircle2, ChevronRight, CircleStop, FileText, FolderOpen, Globe, GripVertical, Pencil, Plus, RotateCcw, Search, X, XCircle } from 'lucide-react'
-import { createDropIndicator } from '@lcl/engine'
+import { createDropIndicator, land, landWhenMoved } from '@lcl/engine'
 import { describeTool } from '../../components/ToolGroup'
 import { ContextMenu, type CtxMenu } from '../../components/RightPanel'
 import { humanizeRunError, ReloginChip } from './EditorialMessage'
@@ -122,8 +122,8 @@ export function CardAction({ icon, label, run, className = 't2-tsum-secact' }: {
 }
 
 /** 拖卡片换位:真卡跟着指针走(独立 translate 属性,不碰布局),落点线走 LCL createDropIndicator(--signal-line,
- *  换落点原地淡入淡出 —— DESIGN §6 拖入提示那条)。线挂在车道上:栈带着 scale(进场动画)会成为 fixed 的包含块,
- *  而 fixedOrigin 只认 transform、认不出独立的 scale 属性。
+ *  换落点原地淡入淡出 —— DESIGN §6 拖入提示那条)。线挂在车道上,不挂在会滚动的栈里。
+ *  松手落位走 LCL land:卡从松手处滑进新位置(换了位置等重排后再落);原地放下 / 取消也从松手处滑回去,不硬跳。
  *  ponytail: 栈超出车道时拖到边上不自动滚;真有人卡在这再加。 */
 function dragCard(stack: HTMLElement | null, id: string, e: React.PointerEvent, drop: (before: string | null) => void): (() => void) | undefined {
   if (!stack || e.button !== 0) return
@@ -157,9 +157,16 @@ function dragCard(stack: HTMLElement | null, id: string, e: React.PointerEvent, 
     window.removeEventListener('keydown', esc, true)
     window.removeEventListener('blur', cancel)
     card.classList.remove('t2-card-lifted')
+    // 真卡就是拖影:撤掉拿起时的 scale、还带着拖动位移时的左上角 = 落位起点(带 scale 量会横向偏 2px)
+    const r = card.getBoundingClientRect()
+    const from = { x: r.left, y: r.top }
     card.style.translate = ''
     ind.destroy()
-    if (commit && before !== undefined && before !== after) drop(before)
+    if (commit && before !== undefined && before !== after) {
+      // 在重排提交之前布置:等这张卡换了前一个兄弟再落,新位置一帧都不先画出来
+      landWhenMoved(() => [...stack.children].find((c) => (c as HTMLElement).dataset.card === id) as HTMLElement | undefined, from, { timeout: 400 })
+      drop(before)
+    } else land(card, from)
   }
   const up = (): void => end(true)
   const cancel = (): void => end(false)

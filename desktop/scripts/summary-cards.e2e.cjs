@@ -238,9 +238,28 @@ async function main() {
       && Math.abs(line.y - (deskBox.y + deskBox.height)) <= 12, { line, stack: stackBox, deskBottom: deskBox && deskBox.y + deskBox.height })
     // 拖动中拍图不能走 shot():它先把指针挪到 (150,640),会把落点改掉
     await win.screenshot({ path: path.join(OUT, 'drag.png'), scale: 'css' }); console.log('shot drag')
+    // 松手落位(LCL land,同左栏组头):逐帧记下「后台」卡的计算 transform(land 只在第一帧写内联 translate,
+    // 之后是 CSS transition 把它过渡回原样 —— 只看内联样式只看得到一帧)。应有多帧位移、一路收小、落定后为 none。
+    await ev(() => {
+      const w = window; w.__land = []; const t0 = performance.now()
+      const tick = () => {
+        const c = document.querySelector('.t2-tsum > [data-card="bg"]')
+        const m = c ? new DOMMatrixReadOnly(getComputedStyle(c).transform === 'none' ? undefined : getComputedStyle(c).transform) : null
+        w.__land.push(m ? [Math.round(m.m41 * 10) / 10, Math.round(m.m42 * 10) / 10] : null)
+        if (performance.now() - t0 < 1500) requestAnimationFrame(tick)
+      }
+      requestAnimationFrame(tick)
+    })
     await win.mouse.up(); await win.waitForTimeout(600)
     const afterDrag = await cardIds()
     check('8 拖动块把「后台」拖到最下', afterDrag[afterDrag.length - 1] === 'bg', afterDrag)
+    const landS = await ev(() => {
+      const a = (window.__land || []).filter(Boolean); const fly = a.filter(([x, y]) => x || y)
+      const ys = fly.map(([, y]) => Math.abs(y))
+      return { frames: a.length, fly: fly.length, first: fly[0] || null, dxMax: Math.max(0, ...fly.map(([x]) => Math.abs(x))), shrinking: ys.every((y, i) => i === 0 || y <= ys[i - 1] + 0.5), last: a[a.length - 1] }
+    })
+    check('8 松手后从松手处滑进新位置(多帧位移一路收小、不横向漂、落定归零)',
+      landS.fly >= 3 && landS.shrinking && landS.dxMax < 1 && landS.last && !landS.last[0] && !landS.last[1], landS)
     await ev(() => localStorage.removeItem('forsion.summaryCards'))
 
     // 暗色 / 英文
