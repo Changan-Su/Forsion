@@ -34,7 +34,7 @@ import { deps } from '../seams/runtime.js';
 import type { ChatMessage, ThinkingLevel } from '../core/types.js';
 import { loadSpecialAgentsConfig, DEFAULT_HISTORIAN_PROMPT, resolveBackgroundModelId, type HistorianConfig } from './specialAgentsConfig.js';
 import { enterRunContext, currentAgentSlug } from '../seams/runContext.js';
-import { getAgent, resolveMemorySlug, isValidSlug, agentNotesOff } from '../agents/agentRegistry.js';
+import { getAgent, resolveMemorySlug, isValidSlug, agentNotesOff, BACKGROUND_MAX_ITERATIONS } from '../agents/agentRegistry.js';
 import { branchSession } from './sessionBranch.js';
 import { createRun } from './runStore.js';
 import { DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
@@ -1021,6 +1021,7 @@ async function startAssistDiscussion(opts: {
           groupMaxConcurrent: 1, // 评估 → 定夺有先后,不并行(拍板 ⑯:内部调用方退化成顺序)
           groupNoSummary: true, // 结论=主 Agent 的工具动作,无需主持人总结
           groupSeedHistory: true, // 参与者看得到 branch 继承来的对话上下文
+          maxIterations: BACKGROUND_MAX_ITERATIONS, // 后台无人值守:每个成员单次发言仍有轮数上限(交互默认已不限)
           execMode: 'sandbox', // 讨论不需要 host FS;sandbox+full-auto → 后台绝不卡审批
           approvalMode: 'full-auto',
         },

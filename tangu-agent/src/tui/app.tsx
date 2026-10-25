@@ -855,7 +855,7 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
       case '/loop': {
         if (/^(off|default|reset)$/i.test(rest)) {
           setCfg((c) => ({ ...c, maxIterations: undefined }));
-          notice('已恢复默认：不限轮数', 'success');
+          notice('已清除会话循环上限（Agent 定义了上限就按 Agent 的，否则不限）', 'success');
         } else if (/^\d+$/.test(rest)) {
           const n = Math.max(1, parseInt(rest, 10));
           setCfg((c) => ({ ...c, maxIterations: n }));

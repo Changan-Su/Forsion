@@ -38,6 +38,9 @@ import type { ThinkingLevel } from '../core/types.js';
  *  三处同口径:激活时忽略并告警(agentActivation)、保存时清空并告警(buildAgentDef)、路由与 manage_agent 显式拒绝。
  *  会话级 /loop 不套下限:那是用户显式意图(/loop 1 单发)。桌面 AgentsTab 的 min 与此同步。 */
 export const AGENT_MAX_ITERATIONS_MIN = 10;
+/** 无人值守的后台群聊(Historian 协助、@讨论)里每个成员单次发言的轮数上限:没人看着、也没人点停止,沿用原默认 90。
+ *  经团队 run 的 maxIterations → teamRuns.memberRunConfig 传给成员子 run(Codex 评审 10-25 #1)。 */
+export const BACKGROUND_MAX_ITERATIONS = 90;
 
 /** agent 定义里的思考档位。`''` = 未声明(跟随会话默认),其余同 core 的 ThinkingLevel 七档。 */
 export type ThinkLevel = ThinkingLevel | '';

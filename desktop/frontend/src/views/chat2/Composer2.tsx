@@ -764,6 +764,14 @@ export const Composer2: React.FC<{
   const agentDef = engineId ? undefined : agents?.find((a) => a.slug === currentAgentSlug)
   const approval = execConfig.approvalMode || agentDef?.approvalMode || 'auto-edit'
   const thinkingLevel = sessionThinkingLevel || (groupChat ? undefined : agentDef?.thinkingLevel) || undefined
+  // 下一 run 的循环上限与来源:会话值 → 引擎上次报的生效值(会话来源的那份可能已被 /loop off 清掉,不认)→ Agent 定义(≥10 才生效,
+  // 同引擎 AGENT_MAX_ITERATIONS_MIN)→ 默认不限。session 传 null 用于「刚清掉、状态还没回来」的那一刻。
+  const loopCap = (session: number | null | undefined = maxIterations): [number | string, string] => {
+    if (session) return [session, 'session']
+    if (ctxInfo?.maxIterations && ctxInfo.maxIterationsSource && ctxInfo.maxIterationsSource !== 'session') return [ctxInfo.maxIterations, ctxInfo.maxIterationsSource]
+    if ((agentDef?.maxIterations ?? 0) >= 10) return [agentDef!.maxIterations!, 'agent']
+    return [t('input.slash.loopUnlimited'), 'default']
+  }
   // Ultra 入口只给真拿得到 delegate 的会话:本机(host)、非 chat、非外部引擎、非团队模式(团队成员各跑各的档)。
   const allowUltra = isHost && !isChat && !engineId && !groupChat
   // 与发送侧 settleUltra 同口径:只跟 max 同在(陈旧的「ultra + 别的档」不显示 Ultra,发送时也不带)
@@ -979,8 +987,7 @@ export const Composer2: React.FC<{
             // 与引擎同一公式(agentLoop:会话 → Agent 定义 → host 替我批准 / 沙箱完全放行);药丸的 approval 只画 host,沙箱缺省不在它里面
             `approval=${execConfig.approvalMode || agentDef?.approvalMode || (execConfig.execMode === 'host' ? 'auto-edit' : 'full-auto')} (${execConfig.approvalMode ? 'session' : agentDef?.approvalMode ? 'agent' : 'default'})`,
             `cwd=${execConfig.cwd || '-'}`,
-            // 会话值(下一 run 必用)优先;没有再看引擎报的生效值(Agent 定义);都没有 = 默认不限轮数。
-            `loop=${maxIterations || ctxInfo?.maxIterations || t('input.slash.loopUnlimited')} (${maxIterations ? 'session' : ctxInfo?.maxIterationsSource || 'default'})`,
+            `loop=${loopCap().join(' (')})`,
             `verify=${verifyCommand || '-'}`,
             `tokens=${(sessionTokens ?? 0).toLocaleString()}`,
             `cost=${runCost != null ? Math.round(runCost).toLocaleString() : '-'}${costLimit != null && costLimit > 0 ? `/${costLimit.toLocaleString()}` : ''}`,
@@ -1348,9 +1355,9 @@ export const Composer2: React.FC<{
         setHint(t('input.slash.loopSet', { n }))
       } else if (loopMatch[1]) {
         onMaxIterationsChange(null)
-        setHint(t('input.slash.loopCleared'))
+        setHint(t('input.slash.loopCleared', { current: loopCap(null)[0] }))
       } else {
-        setHint(t('input.slash.loop', { current: maxIterations || ctxInfo?.maxIterations || t('input.slash.loopUnlimited') }))
+        setHint(t('input.slash.loop', { current: loopCap()[0] }))
       }
       setDraft('')
       requestAnimationFrame(autoGrow)

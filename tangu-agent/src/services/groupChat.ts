@@ -425,6 +425,7 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
         teamRunId: runId, teamSessionId: sessionId, userId, appId: p.appId, modelId,
         member: agent, inlineDef: inlineSlugs.has(slug), delta, cycle, roster, teamDoc: teamDocFor(agent),
         execMode: p.execMode, cwd: p.cwd, extraRoots: p.extraRoots, wsProject: p.wsProject, approvalMode, followSessionMode: p.followSessionMode, signal,
+        maxIterations: memberLoopCap(p.agentConfig.maxIterations),
         remote: effectiveRemote({ remote: p.remote, runId }),
         onStarted: (ids) => {
           childId = ids.runId; childRuns.set(slug, ids.runId);
@@ -647,6 +648,12 @@ async function account(p: GroupChatParams, res: StreamResult, effModelId: string
   meter.cost += cost;
   await publish(p.runId, 'usage', { prompt: promptT, completion: compT, cached, cost, total: meter.tokens, costTotal: meter.cost, costLimit: meter.limit, agentId: agentSlug }).catch(() => {});
   return cost;
+}
+
+/** 团队 run 的轮数上限传给成员单次发言;非正数 / 非数 = 没设。 */
+function memberLoopCap(v: unknown): number | undefined {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : undefined;
 }
 
 /** 显式 groupMaxRounds(内部调用方:讨论 / Historian 辅助)钳 1..MAX;没传 = 兜底天花板本身,不是缺省上限。 */

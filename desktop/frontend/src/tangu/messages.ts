@@ -71,7 +71,7 @@ registerMessages({
   'tool.verb.sketched': { zh: '画了', en: 'Drew' },
   'input.slash.loop': { zh: '最大循环轮数：/loop <轮数>（当前 {current}；/loop off 恢复默认不限）', en: 'Max loop iterations: /loop <n> (currently {current}; /loop off goes back to no limit)' },
   'input.slash.loopSet': { zh: '最大循环轮数已设为 {n} 轮', en: 'Max loop iterations set to {n}' },
-  'input.slash.loopCleared': { zh: '已清除本会话的循环上限，恢复默认（不限轮数）', en: 'Loop cap cleared for this session; back to the default (no limit)' },
+  'input.slash.loopCleared': { zh: '已清除本会话的循环上限（现在：{current}）', en: 'Session loop cap cleared (now: {current})' },
   'input.slash.loopUnlimited': { zh: '不限', en: 'no limit' },
   'input.ctxLabel': { zh: '上下文', en: 'Context' },
   'input.sessionTokens': { zh: '本会话 {n} tokens', en: 'Session {n} tokens' },
