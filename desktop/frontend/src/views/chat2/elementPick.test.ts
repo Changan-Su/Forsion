@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { describe, expect, it } from 'vitest'
-import { composeElements, elementImages, formatElementBlock, hostOf, selectorTail, tileExcerpt, type ElementPick } from './elementPick'
+import { ELEMENT_EVENT, ELEMENT_TARGET_ATTR, composeElements, deliverElementPick, elementImages, formatElementBlock, hostOf, markComposerUsed, pickTargetCard, selectorTail, tileExcerpt, type ElementPick } from './elementPick'
 import { translate } from '../../i18n'
 import './QuoteTile' // 登记 element.* 文案
 
@@ -56,5 +56,47 @@ describe('elementPick', () => {
     expect(out.split('[Web element').length - 1).toBe(2)
     expect(composeElements('', [pick()]).startsWith('[Web element')).toBe(true)
     expect(elementImages(els)).toEqual([pick().image])
+  })
+})
+
+describe('element delivery target', () => {
+  const card = (parent: Element = document.body): HTMLElement => {
+    const el = document.createElement('div')
+    el.setAttribute(ELEMENT_TARGET_ATTR, '')
+    el.getClientRects = () => [{}] as unknown as DOMRectList // happy-dom 没有布局:当它可见
+    parent.appendChild(el)
+    return el
+  }
+
+  it('prefers the chat that hosts the Agent Desk the browser sits in', () => {
+    document.body.innerHTML = ''
+    const other = card()
+    const view = document.createElement('div'); view.className = 't2-chat-view'; document.body.appendChild(view)
+    const desk = document.createElement('div'); desk.className = 'agent-desk'; view.appendChild(desk)
+    const browser = document.createElement('div'); desk.appendChild(browser)
+    const own = card(view)
+    markComposerUsed(other)
+    expect(pickTargetCard(browser)).toBe(own)
+  })
+
+  it('otherwise the most recently used visible composer', async () => {
+    document.body.innerHTML = ''
+    const a = card(), b = card()
+    markComposerUsed(a)
+    await new Promise((r) => setTimeout(r, 5))
+    markComposerUsed(b)
+    expect(pickTargetCard(null)).toBe(b)
+  })
+
+  it('a cancelled wait never lands in a composer that shows up later', async () => {
+    document.body.innerHTML = ''
+    const ac = new AbortController()
+    const p = deliverElementPick(pick(), null, ac.signal)
+    ac.abort()
+    const late = card()
+    let got = false
+    late.addEventListener(ELEMENT_EVENT, () => { got = true })
+    expect(await p).toBe(false)
+    expect(got).toBe(false)
   })
 })

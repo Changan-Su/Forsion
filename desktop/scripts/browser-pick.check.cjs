@@ -50,6 +50,7 @@ async function main() {
   const { check, note } = rep
   const dir = shotDir('browserpick')
   const srv = http.createServer((req, res) => {
+    if (req.url.startsWith('/slow')) return // 永不应答:测「导航被中止」
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
     res.end(req.url.startsWith('/dark') ? PAGE.replace('background: #f6f4ef; color: #222', 'background: #121212; color: #eee') : PAGE)
   })
@@ -205,6 +206,16 @@ async function main() {
     let left = await tiles()
     for (let i = 0; i < 30 && left.length; i++) { await sleep(100); left = await tiles() }
     check('P6c 发完磁贴清掉', left.length === 0, JSON.stringify(left))
+
+    // ── P9:点选途中开始导航又被中止(旧文档留着)→ 按取消收场,旧页面上的罩子 / 监听也收掉(Codex P2)
+    await win.click('[data-press="pick"]')
+    for (let i = 0; i < 20 && (await label()) === null; i++) await sleep(100)
+    await app.evaluate(({ webContents }, a) => { void webContents.fromId(a.id).loadURL(a.url).catch(() => {}) }, { id: g.id, url: `${base}/slow` })
+    await sleep(500)
+    await app.evaluate(({ webContents }, id) => webContents.fromId(id).stop(), g.id)
+    await sleep(500)
+    const p9 = await inGuest('({ url: location.pathname, overlay: !!document.querySelector("forsion-pick") })')
+    check('P9 导航开始后被中止:按钮弹起、旧页面上的高亮罩撤掉', p9.url === '/page.html' && !p9.overlay && (await pressed()) === 'false', JSON.stringify({ ...p9, pressed: await pressed() }))
 
     // ── P8:宿主缩放 110%(用户 dev 的设置,body 上的 CSS zoom)下点选,截图仍对准元素
     await win.evaluate(() => { document.body.style.zoom = '1.1'; window.dispatchEvent(new Event('resize')) })

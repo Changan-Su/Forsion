@@ -7,7 +7,7 @@
  * 落点:浏览器开在某个对话的 Agent Desk 里 → 那个对话的输入框;否则最近用过的那张可见输入框;都没有 → 打开右侧对话面板
  * (跟着当前会话 = 这个 Space 最近的那个对话),再没有就开新会话。
  */
-import { useCommandStore } from '@lcl/engine'
+import { getActiveSpace, useCommandStore } from '@lcl/engine'
 import type { Attachment } from '../../../../../tangu-agent/src/contracts/clientTypes'
 
 export interface ElementPick {
@@ -90,23 +90,27 @@ export function pickTargetCard(from: Element | null): HTMLElement | undefined {
   return shown.reduce((a, b) => ((lastUsed.get(b) ?? 0) > (lastUsed.get(a) ?? 0) ? b : a))
 }
 
-let finding: Promise<HTMLElement | undefined> | null = null
-async function openTarget(): Promise<HTMLElement | undefined> {
+/** 屏上没有输入卡时:先开右侧对话面板(跟着当前会话 = 这个 Space 最近的对话),摆不出来再开新会话,最多等 5 秒。
+ *  等的途中换了 Space、浏览器标签被关掉或调用方作废(signal) → 不送了:别让元素落进后来随便哪个冒出来的输入框(Codex P2)。 */
+async function openTarget(from: Element | null, signal?: AbortSignal): Promise<HTMLElement | undefined> {
   const run = useCommandStore.getState().run
+  const space = getActiveSpace()?.id
+  const gone = (): boolean => !!signal?.aborted || getActiveSpace()?.id !== space || (!!from && !from.isConnected)
   for (let i = 0; i < 50; i++) {
+    if (gone()) return undefined
     const hit = cards().find(visible)
     if (hit) return hit
-    if (i === 0) run('show-chat-panel') // 右侧对话面板跟着当前会话走 = 这个 Space 最近的对话
-    if (i === 25) run('new-chat') // 面板摆不出来(这个 Space 没有对话面板):开新会话
+    if (i === 0) run('show-chat-panel')
+    if (i === 25) run('new-chat') // 这个 Space 没有对话面板
     await new Promise((r) => setTimeout(r, 100))
   }
   return undefined
 }
 
-/** 把点选结果送进输入框。返回是否找到了输入框。 */
-export async function deliverElementPick(pick: ElementPick, from: Element | null): Promise<boolean> {
-  const target = pickTargetCard(from) ?? await (finding ??= openTarget().finally(() => { finding = null }))
-  if (!target) return false
+/** 把点选结果送进输入框。返回是否送到了。 */
+export async function deliverElementPick(pick: ElementPick, from: Element | null, signal?: AbortSignal): Promise<boolean> {
+  const target = pickTargetCard(from) ?? await openTarget(from, signal)
+  if (!target || signal?.aborted) return false
   target.dispatchEvent(new CustomEvent<ElementPick>(ELEMENT_EVENT, { detail: pick }))
   return true
 }

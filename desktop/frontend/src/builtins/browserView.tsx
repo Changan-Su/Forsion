@@ -99,8 +99,12 @@ export const BrowserView: React.FC<ViewProps> = ({ leaf, params }) => {
   // 点选元素(shared/browserPick.ts):picking = 进行中那次的 guest id。只有桌面宿主有 browserPick。
   const pickApi = window.tangu?.browserPick
   const [picking, setPicking] = useState<number | null>(null)
+  const [pickMsg, setPickMsg] = useState<string | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   const barRef = useRef<HTMLDivElement>(null)
+  // 送进输入框那一步可能要等对话面板摆出来:视图卸载了就别再送
+  const delivery = useRef<AbortController | null>(null)
+  useEffect(() => () => delivery.current?.abort(), [])
 
   // 导航落点回写 leaf:标题进 tab、url 进 params(随布局持久化 → 重启回到同一页)。
   useEffect(() => {
@@ -193,6 +197,7 @@ export const BrowserView: React.FC<ViewProps> = ({ leaf, params }) => {
     let id: number
     try { id = el.getWebContentsId() } catch { return } // guest 还没挂上
     setPicking(id)
+    setPickMsg(null)
     el.focus() // 键盘要落进 guest:Esc / ⌥ 由页面里的点选脚本接
     try {
       const res = await pickApi.start(id)
@@ -206,7 +211,10 @@ export const BrowserView: React.FC<ViewProps> = ({ leaf, params }) => {
           mimeType: res.image.mimeType, data: res.image.data, size: Math.floor(res.image.data.length * 3 / 4),
         } : null,
       }
-      if (!await deliverElementPick(item, rootRef.current)) setErr(t('browser.pick.noChat'))
+      delivery.current?.abort()
+      const ac = new AbortController()
+      delivery.current = ac
+      if (!await deliverElementPick(item, rootRef.current, ac.signal) && !ac.signal.aborted) setPickMsg(t('browser.pick.noChat'))
     } catch { /* 主进程那头出错 = 这次不算 */ } finally {
       setPicking((cur) => (cur === id ? null : cur))
     }
@@ -286,6 +294,7 @@ export const BrowserView: React.FC<ViewProps> = ({ leaf, params }) => {
         </div>
       )}
       {err && <div style={{ padding: '6px 10px', fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--danger, #c0392b)' }}>{t('browser.failed', { msg: err })}</div>}
+      {pickMsg && !err && <div role="status" style={{ padding: '6px 10px', fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-muted)' }}>{pickMsg}</div>}
       <Webview
         ref={ref as unknown as React.Ref<HTMLElement>}
         src={initial.current}

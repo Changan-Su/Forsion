@@ -55,35 +55,39 @@ async function shoot(guest: WebContents, pick: NonNullable<ReturnType<typeof san
   return { mimeType: 'image/jpeg', data: img.toJPEG(82).toString('base64'), width: final.width, height: final.height }
 }
 
-/** 等 guest 里的点选兑现;期间页面跳走 / guest 销毁 / 被顶掉 → 按取消收场。 */
-function runPick(guest: WebContents): Promise<unknown> {
+/** 一场点选:从注入到截完图,导航 / 销毁 / 取消守卫一直挂着(截图途中页面跳走,也不能把 A 页的元素配上 B 页的图,Codex P2)。
+ *  result 在点下 / 取消时兑现;stale() = 这场已作废;release() 收掉监听。 */
+interface PickRun { result: Promise<unknown>; stale: () => boolean; release: () => void }
+
+function startPick(guest: WebContents): PickRun {
   const id = guest.id
   active.get(id)?.()
-  return new Promise((resolve) => {
-    let settled = false
-    const finish = (v: unknown): void => {
-      if (settled) return
-      settled = true
-      guest.removeListener('did-start-navigation', onNav)
-      guest.removeListener('destroyed', onGone)
-      guest.removeListener('render-process-gone', onGone)
-      if (active.get(id) === cancel) active.delete(id)
-      resolve(v)
-    }
-    const cancel = (): void => {
-      if (!guest.isDestroyed()) void guest.executeJavaScriptInIsolatedWorld(PICK_WORLD_ID, [{ code: pickControlSource('cancel') }]).catch(() => {})
-      finish(null)
-    }
-    const onNav = (details: { isMainFrame?: boolean; isSameDocument?: boolean }): void => {
-      if (details?.isMainFrame !== false && !details?.isSameDocument) finish(null)
-    }
-    const onGone = (): void => finish(null)
-    active.set(id, cancel)
-    guest.on('did-start-navigation', onNav)
-    guest.once('destroyed', onGone)
-    guest.once('render-process-gone', onGone)
-    guest.executeJavaScriptInIsolatedWorld(PICK_WORLD_ID, [{ code: pickerSource() }]).then(finish, () => finish(null))
-  })
+  let dead = false
+  let settle: (v: unknown) => void = () => {}
+  const result = new Promise<unknown>((r) => { settle = r })
+  // 作废:guest 里那场也收掉(导航被中止时旧文档还在,不收的话罩子和监听留在页面上,Codex P2)
+  const cancel = (): void => {
+    if (dead) return
+    dead = true
+    if (!guest.isDestroyed()) void guest.executeJavaScriptInIsolatedWorld(PICK_WORLD_ID, [{ code: pickControlSource('cancel') }]).catch(() => {})
+    settle(null)
+  }
+  const onNav = (details: { isMainFrame?: boolean; isSameDocument?: boolean }): void => {
+    if (details?.isMainFrame !== false && !details?.isSameDocument) cancel()
+  }
+  const onGone = (): void => { dead = true; settle(null) }
+  const release = (): void => {
+    guest.removeListener('did-start-navigation', onNav)
+    guest.removeListener('destroyed', onGone)
+    guest.removeListener('render-process-gone', onGone)
+    if (active.get(id) === cancel) active.delete(id)
+  }
+  active.set(id, cancel)
+  guest.on('did-start-navigation', onNav)
+  guest.once('destroyed', onGone)
+  guest.once('render-process-gone', onGone)
+  guest.executeJavaScriptInIsolatedWorld(PICK_WORLD_ID, [{ code: pickerSource() }]).then((v) => settle(v), () => settle(null))
+  return { result, stale: () => dead || guest.isDestroyed(), release }
 }
 
 export function registerBrowserPickIpc(isTrusted: (e: IpcMainInvokeEvent) => boolean): void {
@@ -91,12 +95,19 @@ export function registerBrowserPickIpc(isTrusted: (e: IpcMainInvokeEvent) => boo
     if (!isTrusted(e)) return { ok: false, error: 'untrusted' }
     const guest = ownGuest(e, raw)
     if (!guest) return { ok: false, error: 'no-guest' }
-    const picked = sanitizePick(await runPick(guest))
-    if (!picked || guest.isDestroyed()) return { ok: true, cancelled: true }
-    // 跨文档跳转在 runPick 里已按取消收场;同文档换 hash / pushState 不打断点选,URL 取点下这一刻的
-    const url = guest.getURL()
-    const image = await shoot(guest, picked).catch(() => null)
-    return { ok: true, pick: { ...picked, url, title: guest.getTitle().slice(0, 200) }, image }
+    const run = startPick(guest)
+    try {
+      const picked = sanitizePick(await run.result)
+      if (!picked || run.stale()) return { ok: true, cancelled: true }
+      // 同文档换 hash / pushState 不打断点选,URL 取点下这一刻的;跨文档跳转会让 run 作废
+      const url = guest.getURL()
+      const title = guest.getTitle().slice(0, 200)
+      const image = await shoot(guest, picked).catch(() => null)
+      if (run.stale()) return { ok: true, cancelled: true }
+      return { ok: true, pick: { ...picked, url, title }, image }
+    } finally {
+      run.release()
+    }
   })
   ipcMain.handle('browserPick:control', async (e, raw: unknown, action: unknown): Promise<boolean> => {
     if (!isTrusted(e)) return false
