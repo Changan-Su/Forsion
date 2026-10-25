@@ -208,17 +208,5 @@
 }
 .ibx-fb-link:hover { color: var(--text); background: var(--overlay-light, rgba(127, 127, 127, 0.08)); }
 
-/* ── 没选中信时的空态 ── */
-.ibx-reader-empty {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  color: var(--text-faint);
-  font-size: var(--ui-font-body, 13px);
-}
-.ibx-reader-empty-title { color: var(--text); font-size: var(--ui-font-heading, 14px); font-weight: 600; }
-.ibx-reader-empty-hint { font-size: var(--ui-font-meta, 12px); }
-.ibx-reader-empty-actions { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
+/* ── 没选中信时的空态:公共 EmptyState(components/emptyState.css),这里只让它占满阅读面板 ── */
+.ibx-reader.ibx-reader--empty { display: flex; flex-direction: column; }

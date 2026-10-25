@@ -24,6 +24,8 @@ import { homeTarget, targetForSession } from '../services/engine/targets'
 import { previewNeedsScrollHint } from './approvalText'
 
 registerMessages({
+  'special.muse.off': { zh: '未开启', en: 'Off' },
+  'special.muse.goSettings': { zh: '去设置', en: 'Settings' },
   'special.muse.sleeping': { zh: '休眠至 {time}', en: 'Sleeping until {time}' },
   'special.muse.sleepingTitle': {
     zh: 'Muse 判断暂时没事可做，跳过心跳到这个时刻；你一有动作、规则命中或日程到期都会提前叫醒它。理由：{reason}',
@@ -183,15 +185,18 @@ export const MuseView: React.FC<{
           <span className="conn-pill" style={{ fontSize: 'var(--ui-font-meta, 12px)', fontWeight: 400 }} title={t('special.muse.modeLabel')}>{modeLabel(status.mode).split(/[（(]/)[0]}</span>
         )}
         {pendingN > 0 && <span className="conn-pill" style={{ fontSize: 'var(--ui-font-meta, 12px)', fontWeight: 400, color: 'var(--accent-ink)' }}>{t('special.muse.pending', { n: pendingN })}</span>}
-        <span
+        {/* 没开:一行「未开启 · 去设置」,不再是一颗两行的长胶囊(10-25 第四轮 4.1);status 还没回来时不说话。 */}
+        {status && !status.enabled ? <span className="muse-off-line" data-state="disabled">
+          {t('special.muse.off')} · <button type="button" className="muse-off-link" data-action="muse-settings" onClick={() => useApp.getState().openSettings('agents/ag-special')}>{t('special.muse.goSettings')}</button>
+        </span> : status && <span
           className="conn-pill"
-          data-state={!status?.enabled ? 'disabled' : running ? 'running' : sleepUntil ? 'sleeping' : 'idle'}
+          data-state={running ? 'running' : sleepUntil ? 'sleeping' : 'idle'}
           style={{ fontSize: 'var(--ui-font-meta, 12px)' }}
-          title={status?.enabled && sleepUntil ? t('special.muse.sleepingTitle', { reason: status.sleepReason || '—' }) : undefined}
+          title={sleepUntil ? t('special.muse.sleepingTitle', { reason: status.sleepReason || '—' }) : undefined}
         >
           <span className="dot" style={{ background: running ? 'var(--accent-ink)' : 'var(--text-muted)' }} />
-          {!status?.enabled ? t('special.muse.disabled') : running ? t('special.muse.running') : sleepUntil ? t('special.muse.sleeping', { time: hhmm(sleepUntil) }) : t('special.muse.idle')}
-        </span>
+          {running ? t('special.muse.running') : sleepUntil ? t('special.muse.sleeping', { time: hhmm(sleepUntil) }) : t('special.muse.idle')}
+        </span>}
         <button className="icon-btn" title={t('muse.openLibrary')} onClick={() => useWorkspace.getState().openView('muse-files', {}, 'main', { newTab: true })}><FolderOpen size={13} /></button>
         <button className="icon-btn" onClick={() => void load()}><RefreshCw size={13} /></button>
       </div>
@@ -228,7 +233,7 @@ export const MuseView: React.FC<{
           fontSize: 'var(--ui-font-body, 13px)', lineHeight: 1.6, whiteSpace: 'pre-wrap', maxHeight: 220, overflowY: 'auto',
           background: 'var(--bg-card)', border: 'var(--border-width) solid var(--border)', borderRadius: 'var(--radius-sm)', padding: 10,
         }}>
-          {thinking || <span className="hint">{status?.enabled ? '…' : t('special.muse.disabled')}</span>}
+          {thinking || <span className="hint">…</span>}
         </div>
       </div>}
 
