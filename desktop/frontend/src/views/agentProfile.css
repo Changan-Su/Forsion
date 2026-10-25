@@ -78,7 +78,8 @@
 .agent-section-nav button { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 36px; padding: 8px 10px; border: 0; background: transparent; color: var(--text-muted); border-radius: var(--radius-pill, 999px); cursor: pointer; white-space: nowrap; font-size: var(--ui-font-meta, 12px); transition: background 160ms ease, color 160ms ease; }
 .agent-section-nav button svg { flex-shrink: 0; }
 .agent-section-nav button span { overflow: hidden; text-overflow: ellipsis; }
-.agent-section-nav button:hover { color: var(--text); background: var(--overlay-medium); }
+/* 悬停只提字色,不铺底:暗色下 --overlay-medium 的底和凸起滑块几乎一样亮,会看成两格选中(同 .t2s-vaultseg) */
+.agent-section-nav button:hover { color: var(--text); }
 .agent-section-nav button.selected { color: var(--text); background: transparent; }
 .agent-profile-content { min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 24px 2px; scrollbar-width: thin; }
 .agent-profile-content:focus { outline: none; }
