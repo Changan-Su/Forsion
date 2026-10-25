@@ -458,6 +458,11 @@ const api = {
   appDockCandidates: (): Promise<{ windows: import('../shared/appDock').DockCandidate[]; error?: string }> => ipcRenderer.invoke('appDock:candidates'),
   appDockAttach: (target: import('../shared/appDock').DockWindow): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('appDock:attach', target),
   appDockDetach: (): Promise<void> => ipcRenderer.invoke('appDock:detach'),
+  /** 内置浏览器点选元素(契约见 shared/browserPick.ts):guestId = <webview>.getWebContentsId()。start 在点下 / 取消时兑现。 */
+  browserPick: {
+    start: (guestId: number): Promise<import('../shared/browserPick').PickResponse> => ipcRenderer.invoke('browserPick:start', guestId),
+    control: (guestId: number, action: 'cancel' | 'parent'): Promise<boolean> => ipcRenderer.invoke('browserPick:control', guestId, action),
+  },
   /** 应用 / 窗口引用(macOS 与 Windows;别的平台列表为空;契约见 shared/appRefs.ts)。 */
   appRefs: {
     list: (): Promise<import('../shared/appRefs').AppRefList> => ipcRenderer.invoke('appRefs:list'),

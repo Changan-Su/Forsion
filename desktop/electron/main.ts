@@ -36,6 +36,7 @@ import { execFile, execFileSync, spawn } from 'child_process'
 import { homedir, hostname, networkInterfaces } from 'os'
 import { randomUUID } from 'crypto'
 import { BackendManager, bundledPythonBin, resolveBundledGit, resolveBundledNode, type BackendStatus } from './backendManager'
+import { registerBrowserPickIpc } from './browserPick'
 import { CLIP_ORIGIN, browserControlCode, registerClipExtensionIpc, startClipVersionSync } from './clipExtension'
 import { envWithFullPath, pathKeyOf, withBundledGit } from './envPath'
 import { findGit } from './gitHistory'
@@ -3747,6 +3748,9 @@ app.whenReady().then(async () => {
       return jpeg ? { mimeType: 'image/jpeg', data: jpeg.toString('base64') } : null
     } catch { return null }
   })
+
+  // 内置浏览器「点选元素发进对话」:点选脚本由主进程注入 guest 的独立 JS 世界,guest 无 preload / 无 IPC(electron/browserPick.ts)
+  registerBrowserPickIpc(isTrustedSender)
 
   // ── Computer Use:最近被操控窗口的一帧画面(只读,不启动 helper;详见 electron/computerUse.ts)──
   ipcMain.handle('computerUse:liveView', (_e, opts?: { maxDimension?: number; quality?: number; activeWithinMs?: number; image?: boolean }) =>

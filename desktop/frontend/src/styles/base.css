@@ -2442,7 +2442,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 }
 .att-tile--quote:hover { background: color-mix(in srgb, var(--overlay-light) 60%, var(--bg-card)); }
 .att-tile-open:focus-visible { outline: var(--focus-ring) solid var(--signal-line); outline-offset: 1px; }
-.att-tile-badge[data-kind='quote'], .att-tile-badge[data-kind='paste'] { color: var(--accent-ink); }
+.att-tile-badge[data-kind='quote'], .att-tile-badge[data-kind='paste'], .att-tile-badge[data-kind='element'] { color: var(--accent-ink); }
 /* 划选「引用」的就地回复框(ReplyPopover):外壳 = .ui-popover(与划线条同一套);上面引文两行收起带竖线,下面一行回应 + 加进输入框。
    挂在 body 下:只用根上的 token。 */
 .quote-reply { z-index: 100; width: min(380px, calc((100vw - 16px) / var(--uiz, 1))); padding: 10px 10px 8px; -webkit-app-region: no-drag; }
