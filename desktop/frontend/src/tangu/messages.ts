@@ -271,7 +271,6 @@ registerMessages({
   'input.approval.readonlyDesc': { zh: '改文件、跑命令前都先问我', en: 'Asks before editing files or running commands' },
   'input.approval.autoEditDesc': { zh: '工作区内可直接改文件，跑命令、写工作区外才问我', en: 'Edits files in the workspace freely; asks before running commands or writing outside it' },
   'input.approval.fullAutoDesc': { zh: '不受限地访问网络和你电脑上的任何文件', en: 'Unrestricted access to the internet and any file on your computer' },
-  'input.approval.custom': { zh: '自定义（config.json）', en: 'Custom (config.json)' },
   'input.approval.customDesc': { zh: '按 config.json 的 approval 段（allow / ask / deny）判定', en: 'Uses permissions defined in config.json' },
   'chat.emptyTitle': { zh: '纸上得来终觉浅，绝知此事要躬行。', en: 'What\'s learned on paper stays shallow; true knowing comes from doing.' },
   'chat.emptyHint': { zh: '输入一句话，让 Tangu 开始干活。', en: 'Type a message to put Tangu to work.' },
