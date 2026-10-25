@@ -2424,7 +2424,7 @@ if (new URLSearchParams(location.search).has('dock')) {
     ]
     // 当前行藏在收起的文件夹里:宿主要自己把它上面的文件夹展开
     let active = 'a1'
-    const probe = { opened: [] as string[], drops: [] as unknown[], renames: [] as unknown[], adds: [] as string[], refuse: '' }
+    const probe = { opened: [] as string[], drops: [] as unknown[], renames: [] as unknown[], adds: [] as string[], refuse: '', reorder: false }
     ;(window as any).__treeProbe = probe
     SRC.subscribe = (cb) => { listeners.add(cb); return () => { listeners.delete(cb) } }
     SRC.items = (f) => rows.filter((item) => !f?.query || item.title.includes(f.query))
@@ -2438,7 +2438,22 @@ if (new URLSearchParams(location.search).has('dock')) {
       accepts: ['items'],
       // 文件夹不能放进文件夹(宿主被拒后改问「排在前 / 后」);probe.refuse 那一行什么都不收
       canDrop: (payload, target) => !(rows.find((r) => r.key === payload.items[0])?.kind === 'folder' && target.position === 'into') && target.item?.key !== probe.refuse,
-      onDrop: (payload, target) => { probe.drops.push({ items: payload.items, to: target.item?.key, position: target.position }) },
+      onDrop: (payload, target) => {
+        probe.drops.push({ items: payload.items, to: target.item?.key, position: target.position })
+        // reorder 开着时真的挪(像真插件那样写完再重渲,晚 60ms):松手落位(LCL land)要等这一行换了地方才落
+        if (!probe.reorder || !target.item) return
+        const key = payload.items[0], to = target.item
+        window.setTimeout(() => {
+          const moving = rows.find((r) => r.key === key)
+          if (!moving) return
+          const rest = rows.filter((r) => r.key !== key)
+          const at = rest.findIndex((r) => r.key === to.key)
+          const moved = { ...moving, parent: target.position === 'into' ? to.key : to.parent, group: to.group }
+          rest.splice(target.position === 'after' ? at + 1 : target.position === 'into' ? at + 1 : at, 0, moved)
+          rows = rest
+          emit()
+        }, 60)
+      },
     }
   }
   // 组头(folderStyle: 'group')、行尾的悬停图标钮、「查看更多」(2026-10-14):收件箱按发信人的那一种列表。
