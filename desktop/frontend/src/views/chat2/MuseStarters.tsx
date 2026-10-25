@@ -19,6 +19,9 @@ import { onSend } from './freshLayout'
 import { consumeStarterOnSend, dismissStarter, noteStarterFilled, refreshMuseStarters, splitStarter, useMuseStarters } from './museStarterStore'
 import '../../tangu/messages'
 
+/** 草稿 key → 点行时挂上的那枚引用芯片的 token(模块级:草稿本身也是模块级的,切会话回来还对得上)。 */
+const starterChips = new Map<string, string>()
+
 const ICON: Record<MuseStarter['source']['kind'], typeof FileText> = {
   calendar: CalendarDays, note: FileText, todo: ListTodo, session: MessagesSquare, web: Globe, muse: Sparkles,
 }
@@ -50,10 +53,18 @@ export function MuseStarters({ draftKey, centered }: { draftKey: string; centere
   const { t } = useI18n()
   const list = useMuseStarters((st) => st.list)
   const vaultRoot = usePageStore((st) => st.vaultRoot)
+  // 点行时挂上的那枚引用芯片是这条建议的一部分:不算「用户在写」,文字删空时一起摘掉(三行才回得来)
+  const ownChip = starterChips.get(draftKey)
+  const text = useComposerDrafts((all) => all[draftKey]?.text ?? '')
   const drafting = useComposerDrafts((all) => {
     const d = all[draftKey]
-    return !!d && (!!d.text.trim() || d.attachments.length > 0 || d.wsFiles.length > 0 || d.refChips.length > 0 || d.pastes.length > 0)
+    return !!d && (!!d.text.trim() || d.attachments.length > 0 || d.wsFiles.length > 0 || d.pastes.length > 0 || d.elements.length > 0 || d.refChips.some((c) => c.token !== ownChip))
   })
+  useEffect(() => {
+    if (text.trim() || !ownChip) return
+    starterChips.delete(draftKey)
+    setDraftField(draftKey, 'refChips', (prev) => prev.filter((c) => c.token !== ownChip))
+  }, [text, ownChip, draftKey])
   const boxRef = useRef<HTMLDivElement>(null)
   const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null)
 
@@ -73,7 +84,15 @@ export function MuseStarters({ draftKey, centered }: { draftKey: string; centere
     const chip: RefChip | null = s.source.kind === 'note' && s.source.ref
       ? (rel && root ? refChipOf({ kind: 'note', path: rel }, root) : refChipOf({ kind: 'file', path: s.source.ref }, root))
       : s.source.kind === 'session' && s.source.ref ? refChipOf({ kind: 'session', id: s.source.ref, title: s.source.label }, root) : null
-    if (chip) setDraftField(draftKey, 'refChips', (prev) => (prev.some((c) => c.token === chip.token) ? prev : [...prev, chip]))
+    // 换一条建议:先摘掉上一条挂的芯片
+    const prevChip = starterChips.get(draftKey)
+    starterChips.delete(draftKey)
+    setDraftField(draftKey, 'refChips', (prev) => {
+      const rest = prev.filter((c) => c.token !== prevChip)
+      if (!chip || rest.some((c) => c.token === chip.token)) return rest
+      starterChips.set(draftKey, chip.token)
+      return [...rest, chip]
+    })
     noteStarterFilled(draftKey, s.id)
     requestAnimationFrame(() => {
       const ta = boxRef.current?.closest('.composer-anchor')?.querySelector<HTMLTextAreaElement>('.t2c-ta')
