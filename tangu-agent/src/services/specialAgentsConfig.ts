@@ -307,28 +307,60 @@ export function applySpecialAgentEnableMigration(): SpecialAgentsConfig {
  * 用户显式配置 > 本地 `~/.tangu/config.json` 的 `models.background`(桌面设置/引导写) >
  * admin 的 app 级「辅助模型」槽 > app 级对话默认 > profile 静态默认。
  * 用户没手动选模型时跟随云端(admin 改了下次解析即生效);选过即脱离跟随。
+ * 选过的托管模型若已被 admin 停用,顺次回落到下一档,不再原样返回 —— 否则 Historian / 项目记忆 / Muse
+ * 每轮都吃上游「Model 'x' is disabled」静默失败(2026-10-25 用户反馈)。直连模型不受云端约束,也不等云端;
+ * 拉不到目录(断网 / 未登录)时一律放行,宁可沿用旧选择也不误判。
  * 60s 缓存(Historian 每轮触发,避免连环拉模型列表)。
  */
-let bgSlotCache: { at: number; bg: string; def: string } | null = null;
-export async function resolveBackgroundModelId(explicit: string): Promise<string> {
-  if (explicit) return explicit;
-  const local = String((getRawSection('models') as any)?.background || '').trim();
-  if (local) return local;
+let bgSlotCache: { at: number; bg: string; def: string; enabled: Set<string> | null } | null = null;
+const staleWarned = new Set<string>();
+async function backgroundCatalog(): Promise<NonNullable<typeof bgSlotCache>> {
   const now = Date.now();
-  if (!bgSlotCache || now - bgSlotCache.at > 60_000) {
-    let bg = '';
-    let def = '';
-    try {
-      const list = deps().brain.models.listModelsForProject;
-      if (list) {
-        const r = await list(deps().profile.appId);
+  if (bgSlotCache && now - bgSlotCache.at <= 60_000) return bgSlotCache;
+  const m = deps().brain.models;
+  let bg = '';
+  let def = '';
+  let enabled: Set<string> | null = null;
+  await Promise.all([
+    (async () => {
+      try {
+        const r = await m?.listModelsForProject?.(deps().profile.appId);
         bg = String(r?.backgroundModelId || '');
         def = String(r?.defaultModelId || '');
-      }
-    } catch { /* 云端不可达 → 落 profile 静态默认 */ }
-    bgSlotCache = { at: now, bg, def };
+      } catch { /* 云端不可达 → 落 profile 静态默认 */ }
+    })(),
+    (async () => {
+      // 停用判定按全局 enabled 列表,不按 profile.appId 的应用目录:云端 worker 的 appId 是基线应用,按它筛会误伤
+      // 别的应用的合法选择。id 与上游名(apiModelId)都算 —— 云端解析模型时两种都认。
+      try {
+        const all = await m?.listGlobalModels?.();
+        if (all?.length) enabled = new Set(all.flatMap((x: any) => [x?.id, x?.apiModelId]).filter(Boolean).map(String));
+      } catch { /* 同上:拉不到 → 不判 */ }
+    })(),
+  ]);
+  return (bgSlotCache = { at: now, bg, def, enabled });
+}
+
+export async function resolveBackgroundModelId(explicit: string): Promise<string> {
+  const local = String((getRawSection('models') as any)?.background || '').trim();
+  const picks = [() => explicit, () => local, async () => (await backgroundCatalog()).bg, async () => (await backgroundCatalog()).def];
+  for (const pick of picks) {
+    const id = await pick();
+    if (!id) continue;
+    if (deps().brain.models?.hasDirectModel?.(id)) return id;
+    const { enabled } = await backgroundCatalog();
+    if (!enabled || enabled.has(id)) return id;
+    if (!staleWarned.has(id)) {
+      staleWarned.add(id);
+      console.warn(`[specialAgents] 后台模型 ${id} 已被停用或下架,回落下一档`);
+    }
   }
-  return bgSlotCache.bg || bgSlotCache.def || deps().profile.defaultModelId || '';
+  return deps().profile.defaultModelId || '';
+}
+
+export function __resetBackgroundSlotCacheForTests(): void {
+  bgSlotCache = null;
+  staleWarned.clear();
 }
 
 /** 当前设备本地时是否在运行时段内（activeHours=null → 恒 true；支持跨夜）。 */
