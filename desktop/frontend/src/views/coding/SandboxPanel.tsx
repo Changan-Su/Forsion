@@ -83,7 +83,7 @@ function IsolatedSandbox({ root, product, onPrompt, tiers }: SandboxPanelProps &
     if (busy) return
     setBusy(what); setError('')
     try {
-      const r = what === 'start' ? await api.exec('start', { dir: root }, { ui: { storage: sandboxUiStorage() } })
+      const r = what === 'start' ? await api.exec('start', { dir: root }, { reveal: true, ui: { storage: sandboxUiStorage() } })
         : what === 'reset' ? await api.reset()
           : what === 'install' ? await api.install()
             : (await api.stop(), { ok: true })

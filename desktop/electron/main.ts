@@ -4465,7 +4465,7 @@ async function installFromSandbox(): Promise<{ ok: boolean; pluginId?: string; e
 if (pluginSandbox) {
   ipcMain.handle('pluginSandbox:exec', (e, op: unknown, args: unknown, origin: unknown) => {
     if (!isTrustedSender(e)) return { ok: false, code: 'error', error: 'untrusted sender' }
-    const o = (origin && typeof origin === 'object' ? origin : {}) as { sessionId?: unknown; deadline?: unknown; ui?: { storage?: unknown } }
+    const o = (origin && typeof origin === 'object' ? origin : {}) as { sessionId?: unknown; deadline?: unknown; reveal?: unknown; ui?: { storage?: unknown } }
     const storage = o.ui?.storage
     if (storage && typeof storage === 'object') {
       sandboxStorage = Object.fromEntries(Object.entries(storage as Record<string, unknown>)
@@ -4474,6 +4474,7 @@ if (pluginSandbox) {
     return pluginSandbox.exec(String(op), args && typeof args === 'object' ? args as Record<string, unknown> : {}, {
       sessionId: typeof o.sessionId === 'string' ? o.sessionId : undefined,
       deadline: typeof o.deadline === 'number' && Number.isFinite(o.deadline) ? o.deadline : undefined,
+      reveal: o.reveal === true,
     })
   })
   ipcMain.handle('pluginSandbox:state', (e) => (isTrustedSender(e) ? pluginSandbox.state() : { running: false }))

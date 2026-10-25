@@ -389,8 +389,8 @@ export interface PluginSandboxState {
 }
 export interface PluginSandboxReport { note: string; sessionId?: string; pluginId: string; name: string }
 export interface PluginSandboxApi {
-  /** ui.storage = 本窗的主题键(沙箱首屏照着画);语言由主进程按自己的界面语言给。deadline = 引擎给这次动作的期限(Date.now() 毫秒),排队排过了主进程就不做了。 */
-  exec(op: string, args: Record<string, unknown>, origin: { sessionId?: string; deadline?: number; ui?: { storage: Record<string, string> } }): Promise<PluginSandboxResult>
+  /** ui.storage = 本窗的主题键(沙箱首屏照着画);语言由主进程按自己的界面语言给。deadline = 引擎给这次动作的期限(Date.now() 毫秒),排队排过了主进程就不做了。reveal = 用户在界面上点的,起好后把沙箱窗口叫到前面。 */
+  exec(op: string, args: Record<string, unknown>, origin: { sessionId?: string; deadline?: number; reveal?: boolean; ui?: { storage: Record<string, string> } }): Promise<PluginSandboxResult>
   state(): Promise<PluginSandboxState>
   show(): Promise<boolean>
   stop(): Promise<void>
