@@ -220,7 +220,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'parkedask', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'imgtools', 'account', 'webpublish', 'nested', 'branch', 'musedm', 'humandims', 'pluginsandbox'];
+const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'parkedask', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'imgtools', 'account', 'webpublish', 'nested', 'branch', 'musedm', 'humandims', 'pluginsandbox', 'musestarters'];
 KEYS.push('bluebird');
 KEYS.push('signals');
 KEYS.push('musechat');
@@ -269,6 +269,7 @@ const OPT_IN = new Set(['pluginsandbox', 'humandims', 'nested', 'branch', 'mused
 OPT_IN.add('bluebird'); // --only bluebird --plugin-src <bundle>: real instruction-following on supplied transcripts
 OPT_IN.add('signals');
 OPT_IN.add('musechat');
+OPT_IN.add('musestarters'); // --only musestarters:一个 Muse 周期之后,新对话页有没有它放上的开场建议(--starters-off = 负对照:开关关掉,工具不给)
 OPT_IN.add('cmdreads');
 OPT_IN.add('imgwindow');
 OPT_IN.add('viewimage');
@@ -4636,6 +4637,63 @@ Then reply with only the command output.`,
     ].join(';');
     const output = `${museSays}\n\n=== 私聊里主动发的 ===\n${said.map((m) => `[${m.origin}] ${m.content}`).join('\n---\n')}`;
     return { ok, detail, output, status: done };
+  });
+  // ── musestarters(10-25,opt-in,单独跑:`--only musestarters`):Muse 给新对话页的开场建议(方案 docs/ToBeImproved/Muse预制提示词方案_2026-10-25,用户选 A)。
+  // 种一份具体的上下文(授权文件夹里「明天 10:00 产品周会、议程还没写」的笔记 + 开发日志 + 今天编辑过它们的活动行),起一个周期;
+  // 判据读引擎真状态:set_chat_starters 真被调过(agent_run_events)、GET /agent/special/muse/starters 有 ≥1 条、每条的 label 都在句子里。
+  // 只记不判:句子用不用用户的语言(种子是中文)、来源种类。--starters-off = 负对照(开场建议关掉:工具不给、接口回空 → 这条必须红)。
+  await scenario('musestarters', `musestarters Muse 开场建议(${MUSE_MODE}${argv.includes('--starters-off') ? ',关掉的负对照' : ''})`, async () => {
+    const seeded = await until(() => existsSync(join(home, 'agents', 'muse', 'config.toml')), 30_000, 500);
+    if (!seeded) return { ok: false, detail: '30s 内没播种出 Muse(agents/muse/config.toml)' };
+    const status = () => api('/agent/special/muse/status').then((x) => (x && typeof x.status === 'object' ? x.status : x));
+    if (!(await until(async () => !(await status()).running, 600_000, 5000))) return { ok: false, detail: '前一个场景的 Muse 周期 600s 没收尾' };
+    const tomorrow = new Date(Date.now() + 86_400_000);
+    const day = `${tomorrow.getFullYear()}-${pad2(tomorrow.getMonth() + 1)}-${pad2(tomorrow.getDate())}`;
+    writeFileSync(join(workspace, '产品周会.md'), [
+      '# 产品周会',
+      `- 时间:${day} 10:00`,
+      '- 议程:**还没写**(上周是我临时口头过的,这周想提前发出去)',
+      '- 参会:设计、前端、后端各一人',
+      '',
+    ].join('\n'));
+    writeFileSync(join(workspace, '开发日志.md'), [
+      '# 本周开发日志',
+      '- 周一:附件上传进度条合进 main',
+      '- 周二:日历双击新建、默认 30 分钟',
+      '- 周三:蓬洲云同步页简化,还剩三项待定(冲突提示文案、离线标记、首次同步的进度)',
+      '- 周四:白板手写笔修补',
+      '',
+    ].join('\n'));
+    for (let i = 3; i >= 1; i--) appendUserActivity(new Date(Date.now() - i * 20 * 60_000), `note.edit f="${join(workspace, i % 2 ? '开发日志.md' : '产品周会.md')}" l=${i}`);
+    const off = argv.includes('--starters-off');
+    const t0 = Date.now();
+    await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ muse: { enabled: true, modelId: MODEL, mode: MUSE_MODE, heartbeatMinutes: 60, supervisorPollMinutes: 1, maxIterationsPerCycle: 14, maxRestartsPerWindow: 3, allowedFolders: [workspace], notify: 'immediate', chatStarters: !off } }) });
+    const started = await until(async () => { const x = await status(); return x.running || Number(x.lastCycleAt) >= t0 - 5000 ? x : null; }, 120_000, 3000);
+    if (!started) return { ok: false, detail: `120s 未起周期;[muse] 日志:${museLogTail() || '(无)'}` };
+    const done = await until(async () => { const x = await status(); return !x.running && Number(x.lastCycleAt) > 0 ? x : null; }, 600_000, 5000);
+    if (!done) return { ok: false, detail: '周期 600s 未收尾' };
+    const runFail = (readFileSync(engineLog, 'utf8').match(/run [0-9a-f-]+ failed: [^\n]*/g) || []).slice(-1)[0];
+    if (done.lastError || runFail) return { ok: false, detail: `周期没跑成(模型调用失败):${done.lastError || runFail}` };
+    await sleep(1500);
+    const { default: Database } = await import('better-sqlite3');
+    const db = new Database(join(home, 'state.db'), { readonly: true, fileMustExist: true });
+    let calls = [];
+    try {
+      calls = db.prepare(`SELECT e.payload AS p FROM agent_run_events e JOIN agent_runs r ON r.id = e.run_id JOIN chat_sessions s ON s.id = r.session_id
+        WHERE s.kind = 'muse' AND e.type = 'tool_call' AND json_extract(e.payload, '$.name') = 'set_chat_starters'`).all().map((x) => x.p);
+    } finally { db.close(); }
+    const starters = asList(await api('/agent/special/muse/starters').catch(() => []), 'starters');
+    const labelsOk = starters.every((x) => String(x.text || '').includes(String(x.source?.label || '\u0000')));
+    const zh = starters.filter((x) => /[\u4e00-\u9fff]/.test(x.text)).length;
+    const ok = calls.length > 0 && starters.length > 0 && labelsOk;
+    const museSays = done.sessionId ? asList(await api(`/agent/sessions/${done.sessionId}/messages`).catch(() => []), 'messages').filter((m) => m.role === 'assistant' || m.role === 'model').map((m) => String(m.content || '')).join('\n---\n') : '';
+    const detail = [
+      `set_chat_starters 调了 ${calls.length} 次${calls.length ? '' : ' ← 红'}`,
+      `新对话页 ${starters.length} 条${starters.length ? '' : ' ← 红'}${labelsOk ? '' : ';有 label 不在句子里 ← 红'}`,
+      `中文 ${zh}/${starters.length}(只记)`,
+      starters.map((x) => `[${x.source?.kind}「${x.source?.label}」${x.source?.ref ? ` → ${x.source.ref}` : ''}] ${x.text}`).join(' | '),
+    ].join(';');
+    return { ok, detail, output: `${museSays}\n\n=== 开场建议 ===\n${starters.map((x) => `- ${x.text}`).join('\n')}`, status: done };
   });
   // ── musewake(09-24,opt-in,单独跑:`--only musewake`):「用户睡了、没事可做」时 Muse 会不会自己 set_next_wake,
   // 引擎会不会真的跳过心跳,用户一动能不能立刻醒。作息按**当前钟点**播:活跃窗口 = 现在 +6h 起 10 个小时(每天每小时一行,
