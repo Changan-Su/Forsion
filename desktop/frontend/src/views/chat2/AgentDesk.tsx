@@ -419,14 +419,29 @@ export function DeskCard({ sessionId }: { sessionId: string }) {
   const [peek, setPeek] = useState(false) // 空着时手动点开看一眼;不记
   const top = own[0]?.key ?? null
   const seen = useRef({ sessionId, top })
+  const reveal = useRef(false) // 新条目到了、还没把卡露出来
   useEffect(() => {
     const s = seen.current
-    if (s.sessionId !== sessionId) { seen.current = { sessionId, top }; return }
-    if (top && top !== s.top) setCardOpen('desk', true)
+    if (s.sessionId !== sessionId) { seen.current = { sessionId, top }; reveal.current = false; return }
+    if (top && top !== s.top) { setCardOpen('desk', true); reveal.current = true }
     s.top = top
   }, [sessionId, top])
   useEffect(() => { if (hasContent) setPeek(false) }, [hasContent])
   const open = hasContent ? pref !== false : peek
+  // 新条目自动展开后,卡在栈底时那 380px 落在栈的下沿外:等它真画出来(侧板开着时卡是 gone)、展开过渡走完,
+  // 只滚栈本身把它露出来(scrollIntoView 会连带滚 overflow:hidden 的祖先)
+  useEffect(() => {
+    if (!reveal.current || gone || !open) return
+    reveal.current = false
+    const id = window.setTimeout(() => {
+      const el = document.querySelector(`[data-desk-session="${CSS.escape(sessionId)}"]`)
+      const st = el?.closest('.t2-tsum')
+      if (!el || !st) return
+      const below = el.getBoundingClientRect().bottom - st.getBoundingClientRect().bottom
+      if (below > 0) st.scrollBy({ top: below + 20, behavior: 'smooth' })
+    }, 320)
+    return () => window.clearTimeout(id)
+  }, [gone, open, sessionId, top])
 
   return (
     <SummaryCard

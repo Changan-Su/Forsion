@@ -157,9 +157,12 @@ async function main() {
     const card = await ev(() => {
       const c = document.querySelector('.t2-tsum > [data-card="desk"]')
       const f = c?.querySelector('.agent-desk-card-frame')
-      return { open: !!c?.open, frameH: f ? f.getBoundingClientRect().height / (document.body.currentCSSZoom || 1) : 0, hint: c?.querySelector('.t2-card-hint')?.textContent }
+      const st = document.querySelector('.t2-tsum')
+      return { open: !!c?.open, frameH: f ? f.getBoundingClientRect().height / (document.body.currentCSSZoom || 1) : 0, hint: c?.querySelector('.t2-card-hint')?.textContent,
+        below: c && st ? Math.round(c.getBoundingClientRect().bottom - st.getBoundingClientRect().bottom) : null }
     })
     check('4 收回侧板后 Desk 卡因新条目自动展开,正文 380', card.open && Math.abs(card.frameH - 380) <= 2, card)
+    check('4 自动展开后栈滚到 Desk 卡露出下沿', card.below !== null && card.below <= 1, card)
     await win.setViewportSize({ width: 1512, height: 1250 }); await win.waitForTimeout(800)
     const tall = await ev(() => document.querySelector('.t2-tsum > [data-card="desk"]').getBoundingClientRect().height)
     await shot('big')
@@ -208,6 +211,12 @@ async function main() {
     await win.mouse.move(g.gx, g.gy); await win.mouse.down()
     for (let i = 1; i <= 12; i++) { await win.mouse.move(g.gx, g.gy + (g.ly - g.gy) * i / 12); await win.waitForTimeout(30) }
     await win.waitForTimeout(150)
+    // 落点线必须落在栈里(10-25 首轮截图里它偏出一个聊天列的左上角:LCL fixedOrigin 把 container-type 当成 fixed 包含块)
+    const line = await win.locator('.lcl-drop-ind').boundingBox()
+    const stackBox = await win.locator('.t2-tsum').boundingBox()
+    const deskBox = await win.locator('.t2-tsum > [data-card="desk"]').boundingBox()
+    check('8 拖动时落点线画在栈里、最后一张卡下沿', !!line && line.x >= stackBox.x && line.x + line.width <= stackBox.x + stackBox.width + 1
+      && Math.abs(line.y - (deskBox.y + deskBox.height)) <= 12, { line, stack: stackBox, deskBottom: deskBox && deskBox.y + deskBox.height })
     await shot('drag')
     await win.mouse.up(); await win.waitForTimeout(600)
     const afterDrag = await cardIds()
