@@ -369,8 +369,9 @@ export const Composer2: React.FC<{
   onDefaultModelChange?: (slot: DefaultModelSlot, modelId: string) => void
   /** 模型菜单「上下文上限」:写本机该模型的窗口覆盖(null = 交还默认 272k)。只在本机引擎下传。 */
   onContextWindowChange?: (modelId: string, tokens: number | null) => void
-  maxIterations?: number
-  onMaxIterationsChange?: (n: number) => void
+  maxIterations?: number | null
+  /** null = 清掉会话上限,回到 Agent 定义 / 默认(不限)。 */
+  onMaxIterationsChange?: (n: number | null) => void
   /** 验证回路(/verify,host-only):收尾前引擎自动跑的命令;空=未配置。 */
   verifyCommand?: string
   onVerifyCommandChange?: (cmd: string) => void
@@ -978,8 +979,8 @@ export const Composer2: React.FC<{
             // 与引擎同一公式(agentLoop:会话 → Agent 定义 → host 替我批准 / 沙箱完全放行);药丸的 approval 只画 host,沙箱缺省不在它里面
             `approval=${execConfig.approvalMode || agentDef?.approvalMode || (execConfig.execMode === 'host' ? 'auto-edit' : 'full-auto')} (${execConfig.approvalMode ? 'session' : agentDef?.approvalMode ? 'agent' : 'default'})`,
             `cwd=${execConfig.cwd || '-'}`,
-            // 会话值(下一 run 必用)优先;没有再看引擎报的生效值(Agent 定义 / 默认),别把 Agent 定义的 3 显示成 90。
-            `loop=${maxIterations || ctxInfo?.maxIterations || 90} (${maxIterations ? 'session' : ctxInfo?.maxIterationsSource || 'default'})`,
+            // 会话值(下一 run 必用)优先;没有再看引擎报的生效值(Agent 定义);都没有 = 默认不限轮数。
+            `loop=${maxIterations || ctxInfo?.maxIterations || t('input.slash.loopUnlimited')} (${maxIterations ? 'session' : ctxInfo?.maxIterationsSource || 'default'})`,
             `verify=${verifyCommand || '-'}`,
             `tokens=${(sessionTokens ?? 0).toLocaleString()}`,
             `cost=${runCost != null ? Math.round(runCost).toLocaleString() : '-'}${costLimit != null && costLimit > 0 ? `/${costLimit.toLocaleString()}` : ''}`,
@@ -1339,14 +1340,17 @@ export const Composer2: React.FC<{
       requestAnimationFrame(autoGrow)
       return
     }
-    const loopMatch = /^\/loop(?:\s+(\d+))?$/i.exec(cmd)
+    const loopMatch = /^\/loop(?:\s+(\d+|off|default|reset))?$/i.exec(cmd)
     if (loopMatch && onMaxIterationsChange) {
-      if (loopMatch[1]) {
-        const n = Math.min(Math.max(1, parseInt(loopMatch[1], 10)), 200)
+      if (loopMatch[1] && /^\d+$/.test(loopMatch[1])) {
+        const n = Math.max(1, parseInt(loopMatch[1], 10))
         onMaxIterationsChange(n)
         setHint(t('input.slash.loopSet', { n }))
+      } else if (loopMatch[1]) {
+        onMaxIterationsChange(null)
+        setHint(t('input.slash.loopCleared'))
       } else {
-        setHint(t('input.slash.loop', { current: maxIterations || ctxInfo?.maxIterations || 90 }))
+        setHint(t('input.slash.loop', { current: maxIterations || ctxInfo?.maxIterations || t('input.slash.loopUnlimited') }))
       }
       setDraft('')
       requestAnimationFrame(autoGrow)

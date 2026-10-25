@@ -85,7 +85,7 @@ const CHANNEL_ARG: Record<string, { zh: string; en: string } | null> = {
   '/approval': null,
   '/resume': { zh: '<序号|id>', en: '<number|id>' },
   '/think': { zh: '[档位]', en: '[level]' },
-  '/loop': { zh: '[1-200]', en: '[1-200]' },
+  '/loop': { zh: '[轮数|default]', en: '[n|default]' },
 };
 /** 目录参数提示是中文的,英文界面换成这些。 */
 const ARG_EN: Record<string, string> = {
@@ -145,7 +145,6 @@ export interface ChannelCommandRuntime {
   getAgent(slug: string): Promise<NormalAgentDef | null>;
   /** Agent 定义里生效的轮数上限(套过下限;null = 没设或被忽略)。 */
   agentLoopCap(def: NormalAgentDef): number | null;
-  defaultLoopCap: number;
   newSession(title?: string): Promise<void>;
   listSessions(): Promise<Array<{ id: string; title: string; connected: boolean }>>;
   connectSession(sessionId: string): Promise<void>;
@@ -183,7 +182,7 @@ function requestedThinking(cfg: Record<string, unknown>, def: NormalAgentDef | n
 /** 会话级轮数(与 agentLoop 同样的归一:非正数 / 非数 = 没设)。 */
 function sessionLoop(cfg: Record<string, unknown>): number | null {
   const n = Number(cfg.maxIterations);
-  return Number.isFinite(n) && n > 0 ? Math.min(200, Math.max(1, Math.floor(n))) : null;
+  return Number.isFinite(n) && n > 0 ? Math.max(1, Math.floor(n)) : null;
 }
 
 const modelLabel = (m: CatalogModel): string => (m.source === 'direct' ? `${m.name || m.id} [${m.provider}]` : m.name || m.id);
@@ -340,7 +339,7 @@ export class ChannelCommandCenter {
       channelMsg(L, 'statusModel', { v: !modelId ? channelMsg(L, 'statusModelUnset') : m && m.name && m.name !== modelId ? `${modelLabel(m)} (${modelId})` : modelId }),
       channelMsg(L, 'statusThink', { v: `${req}${eff !== req ? channelMsg(L, 'thinkEff', { eff }) : ''}` }),
       channelMsg(L, 'statusApproval', { v: `${a.label} — ${a.desc}` }),
-      channelMsg(L, 'statusLoop', { v: `${loop.n} (${loop.source})` }),
+      channelMsg(L, 'statusLoop', { v: `${loop.v} (${loop.source})` }),
       channelMsg(L, 'statusCwd', { v: str(cfg.cwd) || rt.workspaceDir() }),
       ...(usage ? [channelMsg(L, 'statusUsage', { v: Math.round(usage.tokens).toLocaleString('en-US') })] : []),
       channelMsg(L, 'statusState', { v: state }),
@@ -454,13 +453,15 @@ export class ChannelCommandCenter {
 
   // ── /loop ──
 
-  private loopInfo(rt: ChannelCommandRuntime, cfg: Record<string, unknown>, def: NormalAgentDef | null): { n: number; source: string } {
+  /** v = 显示用的上限(「50 轮」/「不限」)。默认不限轮数,与 agentLoop 同口径。 */
+  private loopInfo(rt: ChannelCommandRuntime, cfg: Record<string, unknown>, def: NormalAgentDef | null): { v: string; source: string } {
     const L = rt.locale;
+    const v = (n: number) => channelMsg(L, 'loopRounds', { n });
     const own = sessionLoop(cfg);
-    if (own != null) return { n: own, source: channelMsg(L, 'loopSrcSession') };
+    if (own != null) return { v: v(own), source: channelMsg(L, 'loopSrcSession') };
     const cap = def ? rt.agentLoopCap(def) : null;
-    if (cap != null) return { n: Math.min(200, cap), source: channelMsg(L, 'loopSrcAgent', { slug: def!.slug }) };
-    return { n: rt.defaultLoopCap, source: channelMsg(L, 'loopSrcDefault') };
+    if (cap != null) return { v: v(cap), source: channelMsg(L, 'loopSrcAgent', { slug: def!.slug }) };
+    return { v: channelMsg(L, 'loopUnlimited'), source: channelMsg(L, 'loopSrcDefault') };
   }
 
   private async cmdLoop(rt: ChannelCommandRuntime, arg: string): Promise<string> {
@@ -470,14 +471,14 @@ export class ChannelCommandCenter {
     const def = await safeGetAgent(rt, currentAgentSlug(rt, s.agentConfig));
     if (!arg) {
       const info = this.loopInfo(rt, s.agentConfig, def);
-      return channelMsg(L, 'loopShow', { n: info.n, source: info.source });
+      return channelMsg(L, 'loopShow', { v: info.v, source: info.source });
     }
     if (/^(default|reset|off|默认|恢复默认)$/i.test(arg)) {
       await rt.patchConfig({ maxIterations: null });
-      return channelMsg(L, 'loopReset', { n: this.loopInfo(rt, {}, def).n });
+      return channelMsg(L, 'loopReset', { v: this.loopInfo(rt, {}, def).v });
     }
     const n = Number(arg);
-    if (!Number.isInteger(n) || n < 1 || n > 200) return channelMsg(L, 'loopInvalid');
+    if (!Number.isInteger(n) || n < 1) return channelMsg(L, 'loopInvalid');
     await rt.patchConfig({ maxIterations: n });
     return channelMsg(L, 'loopSet', { n });
   }

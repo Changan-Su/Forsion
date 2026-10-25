@@ -699,7 +699,7 @@ export function sanitizeTempAgents(raw: any): NormalAgentDef[] {
       model: String(r.model || '').trim(),
       tools: Array.isArray(r.tools) ? r.tools.filter((t: any) => typeof t === 'string' && t.trim()).slice(0, 100) : [],
       thinkingLevel: THINK_LEVELS.includes(r.thinkingLevel) ? r.thinkingLevel : '',
-      maxIterations: Number.isFinite(maxIter) && maxIter > 0 ? Math.min(200, Math.floor(maxIter)) : null,
+      maxIterations: Number.isFinite(maxIter) && maxIter > 0 ? Math.floor(maxIter) : null,
       // H5 fail-closed:空 / 纯空白 / 缺席 = ''(跟随会话);未知非空值 → readonly 并告警(旧口径静默写 '' = 放宽)。
       // 首尾空白先剥(与 projectContext / agentRegistry 同口径)。
       // 'custom' 现在照收 —— 与 agentRegistry 落盘口径一致(旧白名单漏了它,自定义档的临时成员被悄悄抹成跟随会话)。

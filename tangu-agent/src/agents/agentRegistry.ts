@@ -32,11 +32,11 @@ import { normalizeCompactionLayer } from '../services/compactionSettings.js';
 import { normalizeApprovalMode } from '../services/approvals.js';
 import type { ThinkingLevel } from '../core/types.js';
 
-/** 循环轮数缺省(会话/Agent 都没给时 agentLoop 用它)与 **Agent 级下限**:Agent 定义里低于下限的 max_iterations
- *  视为误设 —— 一个写了 3 的 agent,每回合两次工具调用就被迫收尾,用户只看到「空话空转」(09-13 用户导出实证)。
+/** **Agent 级轮数下限**:会话 / Agent 都没给上限时交互 run 不限轮数(10-25 用户定:默认 90 截断了 48 分钟、113 次调用的
+ *  正常长任务;Codex / Pi 主循环同样不计轮数,靠模型收尾 + 额度 / 成本闸 + 用户停止)。自动化与 Muse 各自带上限。
+ *  Agent 定义里低于下限的 max_iterations 视为误设 —— 一个写了 3 的 agent,每回合两次工具调用就被迫收尾,用户只看到「空话空转」(09-13 用户导出实证)。
  *  三处同口径:激活时忽略并告警(agentActivation)、保存时清空并告警(buildAgentDef)、路由与 manage_agent 显式拒绝。
  *  会话级 /loop 不套下限:那是用户显式意图(/loop 1 单发)。桌面 AgentsTab 的 min 与此同步。 */
-export const DEFAULT_MAX_ITERATIONS = 90;
 export const AGENT_MAX_ITERATIONS_MIN = 10;
 
 /** agent 定义里的思考档位。`''` = 未声明(跟随会话默认),其余同 core 的 ThinkingLevel 七档。 */
@@ -179,7 +179,7 @@ export function parseAgentFile(slug: string, raw: string): NormalAgentDef {
     enabledSkillIds: Array.isArray(meta.enabled_skill_ids) ? meta.enabled_skill_ids.filter((v: unknown) => typeof v === 'string') : undefined,
     enabledMcpServers: Array.isArray(meta.enabled_mcp_servers) ? meta.enabled_mcp_servers.filter((v: unknown) => typeof v === 'string') : undefined,
     thinkingLevel: thinking,
-    maxIterations: Number.isFinite(maxIter) && maxIter > 0 ? Math.min(200, Math.floor(maxIter)) : null,
+    maxIterations: Number.isFinite(maxIter) && maxIter > 0 ? Math.floor(maxIter) : null,
     approvalMode: approval,
     createdBy: meta.created_by === 'agent' ? 'agent' : 'user',
     createdAt: meta.created_at || '',
@@ -240,7 +240,7 @@ export function parseAgentConfig(slug: string, tomlRaw: string, soul: string): N
     enabledSkillIds: Array.isArray(meta.enabled_skill_ids) ? meta.enabled_skill_ids.filter((v: unknown) => typeof v === 'string') : undefined,
     enabledMcpServers: Array.isArray(meta.enabled_mcp_servers) ? meta.enabled_mcp_servers.filter((v: unknown) => typeof v === 'string') : undefined,
     thinkingLevel: think,
-    maxIterations: Number.isFinite(maxIter) && maxIter > 0 ? Math.min(200, Math.floor(maxIter)) : null,
+    maxIterations: Number.isFinite(maxIter) && maxIter > 0 ? Math.floor(maxIter) : null,
     approvalMode: approval,
     createdBy: meta.created_by === 'agent' ? 'agent' : meta.created_by === 'system' ? 'system' : 'user',
     createdAt: str(meta.created_at),
@@ -812,10 +812,10 @@ function clampAgentMaxIterations(slug: string, v: number | string | null | undef
   const n = typeof v === 'string' ? Number(v) : v; // REST 客户端可能传 "50":路由校验用 Number 放行、这里再按非数清空就成了静默丢值(Codex 09-13 #7)
   if (n == null || !Number.isFinite(n) || n <= 0) return null;
   if (n < AGENT_MAX_ITERATIONS_MIN) {
-    console.warn(`[tangu] agent ${slug}: max_iterations=${n} 低于下限 ${AGENT_MAX_ITERATIONS_MIN},已清空(回落默认 ${DEFAULT_MAX_ITERATIONS})`);
+    console.warn(`[tangu] agent ${slug}: max_iterations=${n} 低于下限 ${AGENT_MAX_ITERATIONS_MIN},已清空(回落默认:不限轮数)`);
     return null;
   }
-  return Math.min(200, Math.floor(n));
+  return Math.floor(n);
 }
 
 /** 用户在这个 agent 的工具名单里关掉了 manage_harness(文档里写的「不想让它自己改笔记」的办法)。
@@ -831,7 +831,7 @@ export function agentCapOf(def: Pick<NormalAgentDef, 'slug' | 'maxIterations'>):
   const v = def.maxIterations;
   if (v == null || !(v > 0)) return null;
   if (v < AGENT_MAX_ITERATIONS_MIN) {
-    console.warn(`[tangu] agent ${def.slug}: config.toml max_iterations=${v} 低于下限 ${AGENT_MAX_ITERATIONS_MIN},忽略(回落默认 ${DEFAULT_MAX_ITERATIONS})`);
+    console.warn(`[tangu] agent ${def.slug}: config.toml max_iterations=${v} 低于下限 ${AGENT_MAX_ITERATIONS_MIN},忽略(回落默认:不限轮数)`);
     return null;
   }
   return v;
