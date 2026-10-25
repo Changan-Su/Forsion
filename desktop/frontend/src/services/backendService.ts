@@ -23,9 +23,11 @@ registerMessages({
 
 /** P1-K6:基址与鉴权头都归目标(头与改造前的 `headers(cfg.token)` 同形同序)。S3 起所有服务函数只收解析层给的
  *  EngineTarget(homeTarget / targetForSession / focusTarget / connectionTarget),本文件不读 cfg(棘轮 R1 + 品牌类型钉住)。 */
-export async function request<T>(t: EngineTarget, path: string, init?: RequestInit, opts?: { timeoutMs?: number }): Promise<T> {
+export async function request<T>(t: EngineTarget, path: string, init?: RequestInit, opts?: { timeoutMs?: number; onUploadProgress?: (sent: number, total: number) => void }): Promise<T> {
   // home 目标的第三参与改造前逐字一致(opts 原样,可能是 undefined);非 home 恒带 target(401 分流,K6 §3.5)。
-  const r = await authFetch(`${t.base}${path}`, { ...init, headers: await t.headers(true) }, t.key === 'home' ? opts : fetchOpts(t, opts?.timeoutMs))
+  // onUploadProgress(上传进度)两边都带上:authFetch 见到它改走 XHR。
+  const o = t.key === 'home' ? opts : fetchOpts(t, opts?.timeoutMs)
+  const r = await authFetch(`${t.base}${path}`, { ...init, headers: await t.headers(true) }, opts?.onUploadProgress && t.key !== 'home' ? { ...o, onUploadProgress: opts.onUploadProgress } : o)
   if (!r.ok) {
     let detail = `HTTP ${r.status}`
     let code: string | undefined
@@ -1179,11 +1181,20 @@ export const UNIT_UPLOAD_BATCH_BYTES = 9 * 1024 * 1024
 /** 一个文件在上传 JSON 里大约占多少字节(内容是 base64 / 纯文本,都是 ASCII 或按 UTF-8 计)。 */
 const uploadBytes = (f: UploadFile): number => new TextEncoder().encode(JSON.stringify(f)).length + 8
 
-export const uploadWorkspaceFiles = async (t: EngineTarget, sessionId: string, files: UploadFile[]): Promise<UploadResult> => {
-  const post = (batch: UploadFile[]): Promise<UploadResult> => request<UploadResult>(t, '/agent/workspace/upload', {
-    method: 'POST',
-    body: JSON.stringify({ sessionId, files: batch }),
-  })
+/** progress:已发出的请求体占全部请求体的比例(0..1,分批时按批累计);signal:中止(移除附件 / 取消)。 */
+export const uploadWorkspaceFiles = async (t: EngineTarget, sessionId: string, files: UploadFile[], opts?: { onProgress?: (fraction: number) => void; signal?: AbortSignal }): Promise<UploadResult> => {
+  const totalBytes = opts?.onProgress ? files.reduce((n, f) => n + uploadBytes(f), 0) || 1 : 1
+  let doneBytes = 0
+  const post = (batch: UploadFile[]): Promise<UploadResult> => {
+    const batchBytes = batch.reduce((n, f) => n + uploadBytes(f), 0)
+    const onProgress = opts?.onProgress
+    return request<UploadResult>(t, '/agent/workspace/upload', {
+      method: 'POST',
+      body: JSON.stringify({ sessionId, files: batch }),
+      ...(opts?.signal ? { signal: opts.signal } : {}),
+    }, onProgress ? { onUploadProgress: (sent, total) => onProgress(Math.min(1, (doneBytes + (total ? (sent / total) * batchBytes : 0)) / totalBytes)) } : undefined)
+      .finally(() => { doneBytes += batchBytes })
+  }
   if (t.via !== 'unit') return post(files)
   // unit 目标(K6 §3.7):按单次 ≤ 9MB 分批;单个文件本身就超 → 前端直接拒(不白传一趟换个 413)
   const tooLarge = (): Error => Object.assign(new Error(translate('engine.target.tooLarge')), { status: 413, code: 'UNIT_BODY_TOO_LARGE' })

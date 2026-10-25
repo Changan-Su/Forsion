@@ -2437,6 +2437,19 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .att-tile:hover .att-tile-x, .att-tile-x:focus-visible { opacity: 1; }
 @media (hover: none) { .att-tile-x { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .att-tile { transition: none; } }
+/* 上传中 / 失败(附件上传进度方案 r2):缩略图上压一层纱 + 环;文件条底边内侧一根细条(不贴着文字,免得像下划线);
+   失败只垫红、不描边。环 / 条本身是 @lcl/components 的 UploadRing / UploadBar,前 300ms 不显示(快的不闪)。 */
+.att-tile-veil { position: absolute; inset: 0; border-radius: var(--radius-sm); background: color-mix(in srgb, var(--bg-card) 58%, transparent); pointer-events: none; }
+.att-tile > .lcl-upring { position: absolute; inset: 0; margin: auto; pointer-events: none; }
+.att-tile--file > .lcl-upbar { position: absolute; left: 7px; right: 7px; bottom: 4px; }
+.att-tile.is-failed .att-tile-sub { color: var(--danger); }
+.att-tile.is-failed .att-tile-badge { background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); }
+.att-tile--file.is-failed { cursor: pointer; }
+.att-tile-retry {
+  position: absolute; inset: 0; margin: auto; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 50%;
+  display: grid; place-items: center; background: var(--bg-card); color: var(--danger); cursor: pointer;
+}
+.att-tile-retry:focus-visible { outline: var(--focus-ring) solid var(--signal-line); outline-offset: 1px; }
 /* 引用磁贴(10-23,views/chat2/QuoteTile.tsx):文件条同一副身材,色块里是引号(强调色墨);整条是一颗按钮(看全文 / 跳回原文)。 */
 .att-tile--quote { padding: 0; width: 220px; }
 .att-tile-open {
@@ -3818,6 +3831,9 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .file-row .file-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .file-row .file-size { color: var(--text-faint); font-size: var(--ui-font-caption, 11px); }
 .file-row { cursor: pointer; }
+.file-row--uploading { cursor: default; } /* 正在传的那一行:环在右边,传完换成真行 */
+.file-row--uploading:hover { background: none; }
+.file-row--uploading.is-failed, .file-row--uploading.is-failed .file-size { color: var(--danger); }
 .file-row .file-act { opacity: 0; display: inline-flex; gap: 2px; }
 .file-row:hover .file-act { opacity: 1; }
 .file-row.active { background: var(--accent-light); }

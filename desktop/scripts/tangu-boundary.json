@@ -194,6 +194,7 @@
       "desktop/frontend/src/services/runOnDevice.ts",
       "desktop/frontend/src/services/selfUpdates.ts",
       "desktop/frontend/src/services/ttsService.ts",
+      "desktop/frontend/src/services/uploads.ts",
       "desktop/frontend/src/sessionNav.ts",
       "desktop/frontend/src/sessionTitle.ts",
       "desktop/frontend/src/stores/appStore.ts",

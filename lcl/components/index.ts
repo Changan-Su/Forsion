@@ -15,3 +15,5 @@ export type { TooltipContent, TooltipLines, TooltipOptions, HoverCardOptions, Ho
  *  (真身在引擎 dropIndicator.ts)。插件走 ctx.ui.dropIndicator(句柄上的 land)。 */
 export { createDropIndicator, dropRetarget, dropHide, land, landCancel, landWhenMoved, dragGrab, releasePoint } from '../engine/dropIndicator'
 export type { DropIndicator, DropRect, DropShape, DropRetargetOptions, LandPoint, LandOptions } from '../engine/dropIndicator'
+
+export { UploadRing, UploadBar, createUploadRing, createUploadBar } from './UploadProgress'

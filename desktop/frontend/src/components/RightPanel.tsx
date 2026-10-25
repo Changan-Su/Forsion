@@ -7,8 +7,10 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
   FolderOpen, Folder, List, BookOpen, Download, Trash2, Upload, RefreshCw, FileText, Image as ImageIcon, Loader2, CornerLeftUp,
-  FolderPlus, Pencil, ExternalLink, Check, X, Eye, MessageCircle, ChevronDown, ChevronRight,
+  FolderPlus, Pencil, ExternalLink, Check, X, Eye, MessageCircle, ChevronDown, ChevronRight, RotateCw, CircleAlert,
 } from 'lucide-react'
+import { UploadRing } from '@lcl/components'
+import { cancelUpload, forgetUpload, readAsBase64, retryUpload, startUpload, uploadBusy, uploadBytesLabel, uploadFraction, useUploads } from '../services/uploads'
 import type { AgentConfig, SubChat, TanguDesktopConfig, UiMessage, WorkspaceFileMeta } from '../types'
 import { DEFAULT_AGENT_SLUG } from '../types'
 import * as api from '../services/backendService'
@@ -19,7 +21,44 @@ import { OverlayAt, nativeSheetPresenter, pickNativeCtxItem } from '@lcl/engine'
 import { SubChatsTab } from './SubChatsTab'
 import type { PreviewTarget } from './WorkspaceFilePreview'
 import { fmtSize, b64ToBytes } from '../services/fileKinds'
-import { useI18n } from '../i18n'
+import { registerMessages, useI18n } from '../i18n'
+
+registerMessages({
+  'panel.upload.failed': { zh: '上传失败', en: 'Upload failed' },
+  'panel.upload.retry': { zh: '重试', en: 'Retry' },
+  'panel.upload.remove': { zh: '移除', en: 'Remove' },
+  'panel.upload.waiting': { zh: '等待中', en: 'Waiting' },
+})
+
+/** 会话文件面板里正在传的那几行(按会话):面板卸载 / 切会话再回来,行和进度还在(上传本身在台账里不停)。 */
+const panelUploads = new Map<string, string[]>()
+
+/** 正在传的一行:名字 + 进度环 + 已传 / 总共;失败给重试 / 移除。传完由上传本身收尾(面板关着也收)。 */
+const UploadingRow: React.FC<{ id: string; onRemove: (id: string) => void }> = ({ id, onRemove }) => {
+  const { t } = useI18n()
+  const e = useUploads((all) => all[id])
+  if (!e || e.phase === 'done') return null
+  const failed = e.phase === 'failed'
+  return (
+    <div className={`file-row file-row--uploading${failed ? ' is-failed' : ''}`} role="status" title={failed ? e.error : e.name}>
+      {failed ? <CircleAlert size={13} /> : <FileText size={13} />}
+      <span className="file-name">{e.name}</span>
+      {failed ? (
+        <>
+          <span className="file-size">{t('panel.upload.failed')}</span>
+          <button type="button" className="icon-btn" style={{ width: 20, height: 20 }} title={t('panel.upload.retry')} onClick={() => retryUpload(id)}><RotateCw size={12} /></button>
+          <button type="button" className="icon-btn" style={{ width: 20, height: 20 }} title={t('panel.upload.remove')} onClick={() => onRemove(id)}><X size={12} /></button>
+        </>
+      ) : (
+        <>
+          <span className="file-size">{e.phase === 'queued' ? t('panel.upload.waiting') : uploadBytesLabel(e)}</span>
+          {uploadBusy(e) && <UploadRing value={uploadFraction(e)} size={14} />}
+          <button type="button" className="icon-btn" style={{ width: 20, height: 20 }} title={t('panel.upload.remove')} onClick={() => onRemove(id)}><X size={12} /></button>
+        </>
+      )}
+    </div>
+  )
+}
 import { homeTarget, targetForSession } from '../services/engine/targets'
 
 type Tab = 'workspace' | 'toc' | 'memory' | 'subchats'
@@ -494,23 +533,39 @@ const SandboxFilesTab: React.FC<{
     try { for (const p of paths) await api.deleteWorkspaceFile(targetForSession(sessionId), sessionId, p); sel.clear(); void refresh() }
     catch (err: any) { onToast(err.message, true) }
   }
-  const upload = async (list: FileList | null) => {
+  // 正在传的行:一选文件就出来,传完换成列表里的真行;失败的留着给重试 / 移除(不再只弹一条「已上传」)
+  const [uploads, setUploads] = useState<string[]>(() => panelUploads.get(sessionId) ?? [])
+  useEffect(() => { setUploads(panelUploads.get(sessionId) ?? []) }, [sessionId])
+  const setSessionUploads = useCallback((fn: (prev: string[]) => string[]) => {
+    const next = fn(panelUploads.get(sessionId) ?? [])
+    if (next.length) panelUploads.set(sessionId, next)
+    else panelUploads.delete(sessionId)
+    setUploads(next)
+  }, [sessionId])
+  const uploadDone = useCallback((id: string) => {
+    forgetUpload(id)
+    setSessionUploads((prev) => prev.filter((x) => x !== id))
+    void refresh()
+  }, [setSessionUploads, refresh])
+  const uploadRemove = useCallback((id: string) => {
+    cancelUpload(id)
+    setSessionUploads((prev) => prev.filter((x) => x !== id))
+  }, [setSessionUploads])
+  const upload = (list: FileList | null) => {
     if (!list?.length) return
-    const payload = await Promise.all(
-      Array.from(list).map(async (f) => {
-        const buf = new Uint8Array(await f.arrayBuffer())
-        let bin = ''
-        for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000))
-        return { path: f.name, content: btoa(bin), encoding: 'base64' as const, mimeType: f.type }
-      }),
-    )
-    try {
-      const r = await api.uploadWorkspaceFiles(targetForSession(sessionId), sessionId, payload)
-      onToast(t('panel.toast.uploaded', { saved: r.saved, total: r.total }))
-      void refresh()
-    } catch (e: any) {
-      onToast(t('panel.toast.uploadFail', { err: e?.message || e }), true)
-    }
+    const target = targetForSession(sessionId)
+    const ids = Array.from(list).map((f) => {
+      const id: string = startUpload(f.name, f.size, async ({ stage, progress, signal }) => {
+        const content = await readAsBase64(f, progress, signal)
+        stage('uploading')
+        const r = await api.uploadWorkspaceFiles(target, sessionId, [{ path: f.name, content, encoding: 'base64', mimeType: f.type }],
+          { onProgress: (x) => progress(x * f.size), signal })
+        if (!r.success || !r.saved) throw new Error(r.errors?.[0] || t('panel.upload.failed'))
+        uploadDone(id) // 在这里收尾而不是等行挂着:面板关着时传完,台账与行表也不留着它
+      })
+      return id
+    })
+    setSessionUploads((prev) => [...prev, ...ids])
   }
 
   const openMenu = (e: React.MouseEvent, f: WorkspaceFileMeta) => {
@@ -532,19 +587,20 @@ const SandboxFilesTab: React.FC<{
     <div
       onClick={(e) => { if (e.target === e.currentTarget) sel.clear() }}
       onDragOver={(e) => e.preventDefault()}
-      onDrop={(e) => { e.preventDefault(); void upload(e.dataTransfer.files) }}
+      onDrop={(e) => { e.preventDefault(); upload(e.dataTransfer.files) }}
     >
       <div style={{ display: 'flex', gap: 4, marginBottom: 6 }}>
         <span className="panel-section-title" style={{ flex: 1, padding: 0 }}>{t('panel.sessionFiles')}</span>
         <label className="icon-btn" style={{ width: 24, height: 24 }} title={t('panel.action.uploadFile')}>
           <Upload size={13} />
-          <input type="file" multiple hidden onChange={(e) => { void upload(e.target.files); e.target.value = '' }} />
+          <input type="file" multiple hidden onChange={(e) => { upload(e.target.files); e.target.value = '' }} />
         </label>
         <button className="icon-btn" style={{ width: 24, height: 24 }} onClick={() => void refresh()} title={t('panel.action.refresh')}>
           {loading ? <Loader2 size={13} className="spin" /> : <RefreshCw size={13} />}
         </button>
       </div>
-      {files.length === 0 && <div className="panel-note">{t('panel.noFilesYet')}</div>}
+      {uploads.map((id) => <UploadingRow key={id} id={id} onRemove={uploadRemove} />)}
+      {files.length === 0 && !uploads.length && <div className="panel-note">{t('panel.noFilesYet')}</div>}
       {files.map((f) => {
         const isSel = sel.selected.has(f.path)
         return (

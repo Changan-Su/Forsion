@@ -32,6 +32,10 @@
 /* 引用卡:可以挂多段,每段一张;多了在这一格里滚,不把输入卡一路顶高 */
 
 .t2c-hint { font-size: var(--ui-font-caption, 11px); color: var(--danger, #e0564b); margin-bottom: 6px; }
+/* 附件还在读 / 传(或传失败)时底排那句话:发送键为什么灰着。窄了就省略,不挤掉右边的控件 */
+.t2c-upstatus { min-width: 0; display: inline-flex; align-items: center; gap: 4px; margin-right: 6px; font-size: var(--ui-font-caption, 11px); color: var(--text-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.t2c-upstatus[data-failed] { color: var(--danger, #e0564b); }
+.t2c-upstatus > svg { flex: none; }
 .t2c-chiprow { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
 /* 芯片入场(10-17):新加进来的引用 / 附件淡入放大;一次加好几枚时依次晚 30ms(不认 sibling-index() 的环境就一起出) */
 .t2c-chiprow > * { animation: t2c-chip-in var(--duration-fast, .15s) var(--ease-out, ease-out) backwards; }
