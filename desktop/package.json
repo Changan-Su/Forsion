@@ -368,6 +368,7 @@
     "check:cssvar": "node scripts/css-var-override.check.cjs",
     "check:shadowcontract": "node scripts/shadow-contract.check.cjs",
     "check:motion": "node scripts/motion.check.cjs",
+    "check:dropland": "node scripts/drop-land.check.cjs",
     "check:shadowsurface": "node scripts/shadow-surface.check.cjs",
     "check:calendarui": "node scripts/calendar-ui.check.cjs",
     "check:calendar-actions": "node scripts/calendar-actions.check.cjs",
