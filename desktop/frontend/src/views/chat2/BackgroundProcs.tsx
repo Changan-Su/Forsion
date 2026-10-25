@@ -3,7 +3,7 @@
  *  - ProcessLogView:进程输出视图(type 'process-log',Desk 里开;Desk 不收文件时开标签页)
  *  - BgStrip:窄窗(摘要栏收起)时输入框上方那一行,点开向上弹清单
  *  口径(方案页「我替你定的细节」,用户 10-25 选 A):在跑 = 静止绿点(转圈留给 Agent 在干活);用户点停止直接停、
- *  不走审批(审批只拦 Agent 的 kill_process);手机上不给「打开」(手机上的 localhost 不是那台电脑)。 */
+ *  不走审批(审批只拦 Agent 的 kill_process);进程不在这台电脑上时不给「打开」(engineHere:手机 / 别处的引擎,localhost 不是那台机器)。 */
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ArrowUpRight, ChevronDown, ChevronUp, Copy, Square } from 'lucide-react'
@@ -12,7 +12,7 @@ import { registerMessages, useI18n } from '../../i18n'
 import { useApp } from '../../stores/appStore'
 import { deskAcceptsFiles } from '../../amadeus/plugins/deskCompanion'
 import { engineProcessOutput, stopEngineProcess, type EngineProcess } from '../../services/backendService'
-import { targetForSession } from '../../services/engine/targets'
+import { hostDesktopMode, targetForSession } from '../../services/engine/targets'
 import { refreshProcesses, useProcessPolling, useRunningCount, useSessionProcesses } from './processStore'
 
 registerMessages({
@@ -44,6 +44,16 @@ export const rowState = (p: Pick<EngineProcess, 'status' | 'exitCode'>): RowStat
 const shortUrl = (u: string): string => u.replace(/^https?:\/\//, '').replace(/\/$/, '')
 const stLabel = (t: (k: string, v?: Record<string, unknown>) => string, p: Pick<EngineProcess, 'status' | 'exitCode'>): string =>
   t(`bg.st.${rowState(p)}`, { code: p.exitCode ?? '?' })
+
+/** 进程跑在这台电脑上才给「打开」:地址是那台机器的 localhost,在别的电脑上打开会开到不相干的服务(手机、
+ *  外部模式连着别处的引擎、经 hub 的「我的电脑」会话都算别处)。外部模式连本机地址(自己起的 dev 引擎)算本机。 */
+export function engineHere(sessionId: string): boolean {
+  if (window.tangu?.mobile) return false
+  const t = targetForSession(sessionId)
+  if (t.via !== 'local') return false
+  if (hostDesktopMode() === 'managed') return true
+  try { return ['localhost', '127.0.0.1', '[::1]'].includes(new URL(t.base).hostname) } catch { return false }
+}
 
 /** 这个会话的 Desk 收文件、而且真挂在 DOM 上(判据同 ChatWikiLink 的 openWebCitation)。 */
 const deskHere = (sessionId: string): boolean =>
@@ -77,7 +87,7 @@ export function BgRow({ p, sessionId, onOpen }: { p: EngineProcess; sessionId: s
   const { t } = useI18n()
   const st = rowState(p)
   const tag = p.origin === 'unattended' ? t('bg.origin.unattended') : p.origin === 'remote' || p.origin === 'channel' ? t('bg.origin.remote') : null
-  const canOpen = !window.tangu?.mobile
+  const canOpen = engineHere(sessionId)
   return (
     <div className="t2-tsum-row t2-bg-row" data-st={st}>
       <button type="button" className="t2-bg-main" title={`${p.command}\n${t('bg.openLog')}`} aria-label={`${p.command} — ${stLabel(t, p)}`}
@@ -190,7 +200,7 @@ export function BgStrip({ sessionId }: { sessionId: string }) {
           <span>{t('bg.strip', { n: running.length })}</span>
           {open ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
         </button>
-        {url && !window.tangu?.mobile && (
+        {url && engineHere(sessionId) && (
           <button type="button" className="t2-bg-url" title={t('bg.openUrl')} onClick={() => openProcessUrl(sessionId, url)}>
             {shortUrl(url)}<ArrowUpRight size={12} />
           </button>

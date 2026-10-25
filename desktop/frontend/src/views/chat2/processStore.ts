@@ -13,6 +13,9 @@ export const useProcesses = create<{ bySession: Record<string, EngineProcess[]> 
 
 const FAST_MS = 3000
 const SLOW_MS = 15000
+const TIMEOUT_MS = 8000
+const withTimeout = <T>(p: Promise<T>, ms: number): Promise<T> =>
+  Promise.race([p, new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), ms))])
 let users = 0
 let timer: ReturnType<typeof setTimeout> | null = null
 let inflight: Promise<void> | null = null
@@ -26,7 +29,8 @@ async function poll(): Promise<void> {
     const t = targetForSession(sid)
     if (t.key !== targets[0].key) targets.push(t)
   }
-  const lists = await Promise.all(targets.map((t) => listEngineProcesses(t).catch(() => null)))
+  // 每台限时:一台挂住不回(隧道断了半截)不许把整轮卡死 —— 否则 inflight 永不清、再也不排下一轮
+  const lists = await Promise.all(targets.map((t) => withTimeout(listEngineProcesses(t), TIMEOUT_MS).catch(() => null)))
   if (lists.every((l) => l === null)) return // 全都没连上:留着上一份,别把绿点闪没
   const bySession: Record<string, EngineProcess[]> = {}
   for (const l of lists) for (const p of l ?? []) (bySession[p.sessionId] ??= []).push(p)

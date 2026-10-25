@@ -684,7 +684,7 @@ async function main() {
     const card = document.querySelector('.t2c-card')
     out['t2c-card'] = card ? alphaOf(getComputedStyle(card).borderTopColor) : null
     // 这些块要有真实消息才渲染 → 插同类名探针,量的是规则本身
-    for (const cls of ['t2-tool', 't2-todo', 't2-panelcard', 't2-tsum-in', 'agent-desk-card', 'tool-card', 'tool-group']) {
+    for (const cls of ['t2-tool', 't2-todo', 't2-panelcard', 't2-card', 'agent-desk-card', 'tool-card', 'tool-group']) { // 10-25 起摘要栏每段一张 .t2-card
       const p = document.createElement('div')
       p.className = cls
       col.appendChild(p)

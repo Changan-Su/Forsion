@@ -68,5 +68,6 @@ export function revokeSummaryCards(pluginId: string): void {
 
 export const useSummaryCards = (): SummaryCardEntry[] => useCards((s) => s.list)
 
-/** 仅供单测复位。 */
+/** 仅供单测:复位 / 读当前名册。 */
 export const __resetSummaryCards = (): void => useCards.setState({ list: [] })
+export const __summaryCardKeys = (): string[] => useCards.getState().list.map((e) => e.key)

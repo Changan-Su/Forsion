@@ -79,6 +79,11 @@ describe('detectLocalUrl / lastLine', () => {
     expect(detectLocalUrl('listening on http://127.0.0.1:8080')).toBe('http://localhost:8080');
     expect(detectLocalUrl('see https://example.com')).toBeNull();
   });
+  it('streamed output: an address cut off mid-port or mid-colour-code is not taken yet', () => {
+    expect(detectLocalUrl('Local: http://localhost:', true)).toBeNull();
+    expect(detectLocalUrl('Local: http://0.0.0.0:\x1b[1', true)).toBeNull();
+    expect(detectLocalUrl('Local: http://localhost:5173/\n', true)).toBe('http://localhost:5173/');
+  });
   it('last non-empty line, carriage-return progress split', () => {
     expect(lastLine('a\nb\n\n')).toBe('b');
     expect(lastLine('10%\r50%\r\x1b[32m100%\x1b[0m')).toBe('100%');

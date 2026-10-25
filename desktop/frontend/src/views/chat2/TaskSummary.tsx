@@ -125,7 +125,7 @@ export function CardAction({ icon, label, run, className = 't2-tsum-secact' }: {
  *  换落点原地淡入淡出 —— DESIGN §6 拖入提示那条)。线挂在车道上:栈带着 scale(进场动画)会成为 fixed 的包含块,
  *  而 fixedOrigin 只认 transform、认不出独立的 scale 属性。
  *  ponytail: 栈超出车道时拖到边上不自动滚;真有人卡在这再加。 */
-function dragCard(stack: HTMLElement | null, id: string, e: React.PointerEvent, drop: (before: string | null) => void): void {
+function dragCard(stack: HTMLElement | null, id: string, e: React.PointerEvent, drop: (before: string | null) => void): (() => void) | undefined {
   if (!stack || e.button !== 0) return
   const card = [...stack.children].find((c) => (c as HTMLElement).dataset.card === id) as HTMLElement | undefined
   if (!card) return
@@ -147,11 +147,15 @@ function dragCard(stack: HTMLElement | null, id: string, e: React.PointerEvent, 
     const y = next ? next.getBoundingClientRect().top - 6 * z : others[others.length - 1].getBoundingClientRect().bottom + 4 * z
     ind.line({ x: s.left + 10 * z, y, w: s.width - 20 * z }, { key: String(before) })
   }
+  let done = false
   const end = (commit: boolean): void => {
+    if (done) return
+    done = true
     window.removeEventListener('pointermove', move)
     window.removeEventListener('pointerup', up)
     window.removeEventListener('pointercancel', cancel)
     window.removeEventListener('keydown', esc, true)
+    window.removeEventListener('blur', cancel)
     card.classList.remove('t2-card-lifted')
     card.style.translate = ''
     ind.destroy()
@@ -160,11 +164,14 @@ function dragCard(stack: HTMLElement | null, id: string, e: React.PointerEvent, 
   const up = (): void => end(true)
   const cancel = (): void => end(false)
   const esc = (ev: KeyboardEvent): void => { if (ev.key === 'Escape') { ev.preventDefault(); end(false) } }
-  if (!others.length) return end(false)
+  if (!others.length) { end(false); return }
   window.addEventListener('pointermove', move)
   window.addEventListener('pointerup', up)
   window.addEventListener('pointercancel', cancel)
   window.addEventListener('keydown', esc, true)
+  // 松手在窗口外 / 切走窗口:pointerup 到不了,按取消收
+  window.addEventListener('blur', cancel)
+  return cancel
 }
 
 /** 插件卡:换会话 = 卸载重挂(mount 拿到的 sessionId 恒定)。update({count, hidden}) 只改这一份,状态由栈托管
@@ -292,7 +299,6 @@ export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, 
   if (hasFacts(f) || teamStatus) {
     cards.progress = (
       <SummaryCard key="progress" id="progress" className="t2-tsum-in" open={isOpen('progress', true)} onToggle={toggle('progress')}
-        rootProps={{ 'aria-busy': f.state === 'running' }}
         head={showState ? (
           <span className={`t2-tsum-state ${f.state}`} role="status" aria-live="polite">
             {StateIcon && <StateIcon size={14} />}
@@ -436,12 +442,18 @@ export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, 
   const defaultsRef = useRef(defaults)
   defaultsRef.current = defaults
   const [menu, setMenu] = useState<CtxMenu>(null)
+  // 拖到一半摘要栏没了(关对话 / 切画布 / 插件卡被撤):收掉窗口上的监听,别留着拖一张已脱离的卡
+  const dragOff = useRef<(() => void) | undefined>(undefined)
+  useEffect(() => () => dragOff.current?.(), [])
   const orderedRef = useRef(ordered)
   orderedRef.current = ordered
   const api = useMemo<RailApi>(() => {
     const seq = (): string[] => fullOrder(defaultsRef.current, useSummaryPrefs.getState().order)
     return {
-      grip: (id, e) => dragCard(stackRef.current, id, e, (before) => setCardOrder(moveCard(seq(), id, before))),
+      grip: (id, e) => {
+        dragOff.current?.()
+        dragOff.current = dragCard(stackRef.current, id, e, (before) => setCardOrder(moveCard(seq(), id, before)))
+      },
       menu: (id, e) => {
         e.preventDefault(); e.stopPropagation()
         const vis = orderedRef.current
@@ -462,7 +474,7 @@ export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, 
 
   return (
     <RailCtx.Provider value={api}>
-      <aside ref={stackRef} className={`t2-tsum${show ? ' show' : ''}`} aria-hidden={!show && !desk} aria-label={t('tsum.title')}>
+      <aside ref={stackRef} className={`t2-tsum${show ? ' show' : ''}`} aria-hidden={!show && !desk} aria-busy={f.state === 'running'} aria-label={t('tsum.title')}>
         {ordered.map((k) => cards[k])}
       </aside>
       {menu && <ContextMenu menu={menu} onClose={() => setMenu(null)} autoFocus />}

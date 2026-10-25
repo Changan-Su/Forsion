@@ -47,10 +47,15 @@ export interface BackgroundProcess {
 const ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
 export const stripAnsi = (text: string): string => text.replace(ANSI, '');
 const LOCAL_URL = /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(?::\d{2,5})?(?:\/[^\s'"<>)\]]*)?/;
-/** 文本里第一个本机地址;vite 等会给地址上色,先剥色码。0.0.0.0 / 127.0.0.1 / [::1] 归一成 localhost(浏览器打得开、看着一致)。 */
-export function detectLocalUrl(text: string): string | null {
-  const m = stripAnsi(text).match(LOCAL_URL);
-  return m ? m[0].replace(/\/\/(?:127\.0\.0\.1|0\.0\.0\.0|\[::1\])/, '//localhost') : null;
+/** 文本里第一个本机地址;vite 等会给地址上色,先剥色码。0.0.0.0 / 127.0.0.1 / [::1] 归一成 localhost(浏览器打得开、看着一致)。
+ *  complete:地址后面必须已经跟着空白 / 引号 / 括号 —— 流式输出可能停在 `http://localhost:` 或半截色码上,
+ *  这时先不认(否则缓存成没端口的地址,之后再也不改);下一块输出到了再判。 */
+export function detectLocalUrl(text: string, complete = false): string | null {
+  const t = stripAnsi(text);
+  const m = t.match(LOCAL_URL);
+  if (!m) return null;
+  if (complete && !/[\s'"<>)\]]/.test(t.charAt((m.index ?? 0) + m[0].length))) return null;
+  return m[0].replace(/\/\/(?:127\.0\.0\.1|0\.0\.0\.0|\[::1\])/, '//localhost');
 }
 /** 最后一个非空行(剥色码;`\r` 刷新的进度行也拆开),截 160。 */
 export function lastLine(output: string): string {
@@ -132,7 +137,7 @@ function append(p: BackgroundProcess, chunk: string): void {
   }
   if (!p.url) {
     // 多看前面 200 字:地址可能被切在两个 chunk 之间
-    const url = detectLocalUrl(p.output.slice(-(chunk.length + 200)));
+    const url = detectLocalUrl(p.output.slice(-(chunk.length + 200)), true);
     if (url) { p.url = url; emitChange(); }
   }
 }
