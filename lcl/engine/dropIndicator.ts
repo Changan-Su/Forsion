@@ -7,6 +7,7 @@
  * - 已经自己画落点元素的地方(Amadeus 编辑器、标签条):定位前调 `dropRetarget(el, key)`,藏之前调 `dropHide(el)`。
  * - 新代码 / 插件:`createDropIndicator()` 拿一个句柄,传视口坐标即可(fixed 包含块与祖先 zoom 都在里面补偿)。
  * - 每行自己用伪元素画线的列表:不走这里,用 dropIndicator.css 的 `--lcl-drop-enter` / `--lcl-drop-leave`(纯 CSS 同一手感)。
+ * - 松手之后:`land(el, from)` 让被拖的那一个从松手处滑进新位置(见文件末尾「松手落位」)。
  *
  * ⚠️ 入场只动 `opacity` 和独立的 `scale` 属性,不碰 `transform`:各处的线靠内联 transform 定位,
  * 关键帧里写 transform 会压过它,线先跳回原点再弹回来(08-15 编辑器那次)。
@@ -172,4 +173,148 @@ export function createDropIndicator(opts: { host?: HTMLElement; className?: stri
       el.remove(); el = null
     },
   }
+}
+
+// ───────────────────────── 松手落位(借鉴 Comma 方案 2.5,2026-10-25) ─────────────────────────
+// 拖动排序松手后,被拖的那一个从松手的位置(拖影所在处)滑进新位置:160ms 减速、阴影一路变淡,邻居不动(不让位,
+// 让位那半是落点方案 D,用户选了 B)。FLIP:量新位置 → 内联 transform 反向位移到松手处 → 下一拍 transition 回 0。
+// ⚠️ 只用 transition,不写动 transform 的关键帧(08-15 线跳回原点那次);减少动态效果 = 直接到位。
+
+/** 与 base.css 的 --land-duration 同值(兜底计时用)。 */
+export const LAND_MS = 160
+const LAND_TRANSITION = 'transform var(--lcl-land, 160ms) var(--lcl-drop-ease, cubic-bezier(.2,.8,.2,1)), box-shadow var(--lcl-land, 160ms) var(--lcl-drop-ease, cubic-bezier(.2,.8,.2,1))'
+
+/** 视口坐标的左上角(DOMRect 直接能传)。 */
+export interface LandPoint { x: number; y: number }
+
+/** 从 `to`(现在的位置)看回 `from`(松手处)要的位移。两边都是视口 px,translate 写的是元素自己的局部 px,
+ *  所以除以元素的有效缩放(`currentCSSZoom`;用户 dev 常年 110%)。 */
+export function landOffset(from: LandPoint, to: LandPoint, zoom = 1): { dx: number; dy: number } {
+  const z = zoom > 0 && Number.isFinite(zoom) ? zoom : 1
+  return { dx: (from.x - to.x) / z, dy: (from.y - to.y) / z }
+}
+
+/** 拖起来那一下记下指针在元素里的位置;松手时 `releasePoint(e, grab)` 就是拖影的左上角 = 落位的起点。 */
+export function dragGrab(el: Element, e: { clientX: number; clientY: number }): LandPoint {
+  const r = el.getBoundingClientRect()
+  return { x: e.clientX - r.left, y: e.clientY - r.top }
+}
+export function releasePoint(e: { clientX: number; clientY: number }, grab: LandPoint): LandPoint {
+  return { x: e.clientX - grab.x, y: e.clientY - grab.y }
+}
+
+const landing = new WeakMap<HTMLElement, () => void>()
+
+/** 停掉某个元素还在飞的落位,内联样式原样还回去。 */
+export function landCancel(el: HTMLElement | null | undefined): void {
+  if (el) landing.get(el)?.()
+}
+
+export interface LandOptions {
+  /** 和它一起搬的元素(展开着的组底下那块会话):同一段视口位移,不带阴影。 */
+  with?: Array<HTMLElement | null | undefined>
+  /** 飞行期间临时放开裁剪的祖先(overflow: clip / hidden 的折叠容器,不然从组外飞进来的那一段被裁掉)。 */
+  unclip?: Array<HTMLElement | null | undefined>
+}
+
+interface Flight { go(): void; restore(): void }
+
+/** 一个元素的一次飞行:先瞬时反向位移到松手处(lead 还带上「被拿起来」的阴影),go() 再过渡回原样。 */
+function flight(el: HTMLElement, dx: number, dy: number, lead: boolean): Flight {
+  const s = el.style
+  const prev = { transform: s.transform, transition: s.transition, boxShadow: s.boxShadow, zIndex: s.zIndex }
+  const base = prev.transform && prev.transform !== 'none' ? ` ${prev.transform}` : ''
+  s.transition = 'none'
+  s.transform = `translate(${dx}px, ${dy}px)${base}`
+  if (lead) {
+    s.boxShadow = 'var(--card-shadow)'
+    // 定位元素彼此按文档序叠:让飞着的那个压在邻居上面。不定位的元素有 transform 就画在普通流之上,不用管。
+    if (getComputedStyle(el).position !== 'static') s.zIndex = '1'
+  }
+  return {
+    // 回到它自己原来的样子(内联原值;没有就交还样式表),阴影也是淡回它自己的那份,不是硬写 none
+    go() { s.transition = LAND_TRANSITION; s.transform = prev.transform; if (lead) s.boxShadow = prev.boxShadow },
+    restore() { s.transition = prev.transition; s.transform = prev.transform; s.boxShadow = prev.boxShadow; s.zIndex = prev.zIndex },
+  }
+}
+
+/**
+ * 落位:`el` 已经在新位置上了(重渲之后、绘制之前调最好:useLayoutEffect / requestAnimationFrame),
+ * `from` 是它看上去该出发的地方(视口 px 的左上角,通常 = `releasePoint(dropEvent, grab)`)。
+ * 返回用掉的位移(局部 px);没动画(减少动态效果、元素不在文档里或没有尺寸、位移不到 1px)返回 null。
+ */
+export function land(el: HTMLElement | null | undefined, from: LandPoint | null | undefined, opts: LandOptions = {}): { dx: number; dy: number } | null {
+  if (!el || !from || !el.isConnected || reducedMotion()) return null
+  landCancel(el)
+  const to = el.getBoundingClientRect()
+  if (!to.width || !to.height) return null
+  const viewDx = from.x - to.left, viewDy = from.y - to.top
+  if (Math.abs(viewDx) < 1 && Math.abs(viewDy) < 1) return null
+  const { dx, dy } = landOffset(from, { x: to.left, y: to.top }, zoomOf(el))
+  const flights: Flight[] = [flight(el, dx, dy, true)]
+  const movers: HTMLElement[] = [el]
+  for (const w of opts.with ?? []) {
+    if (!w || movers.includes(w) || !w.isConnected) continue
+    landCancel(w)
+    const o = landOffset({ x: viewDx, y: viewDy }, { x: 0, y: 0 }, zoomOf(w))
+    flights.push(flight(w, o.dx, o.dy, false))
+    movers.push(w)
+  }
+  const unclips: Array<() => void> = []
+  for (const u of opts.unclip ?? []) {
+    if (!u) continue
+    const prev = u.style.overflow
+    u.style.overflow = 'visible'
+    unclips.push(() => { u.style.overflow = prev })
+  }
+  void el.getBoundingClientRect() // 先把反向位移落定,下面的 transition 才有起点
+  let timer = 0
+  const done = (): void => {
+    window.clearTimeout(timer)
+    el.removeEventListener('transitionend', onEnd)
+    for (const m of movers) landing.delete(m)
+    for (const f of flights) f.restore()
+    for (const u of unclips) u()
+  }
+  const onEnd = (e: TransitionEvent): void => { if (e.target === el && e.propertyName === 'transform') done() }
+  for (const m of movers) landing.set(m, done)
+  for (const f of flights) f.go()
+  el.addEventListener('transitionend', onEnd)
+  timer = window.setTimeout(done, LAND_MS + 80) // transitionend 不一定来(被打断、元素被摘、主题把时长改成 0)
+  return { dx, dy }
+}
+
+/**
+ * 数据要过一会儿才重渲(插件 / 写盘之后才换组)时用:每帧问一次 `find()`,等它返回的元素**换了地方**
+ * (换了元素 —— 重新挂载;或换了父节点 / 前一个兄弟 —— 被挪动)就落位;`timeout` 内没动就作罢。
+ * 在绘制之前的那一帧里落,不会先闪一下新位置。返回取消函数。
+ */
+export function landWhenMoved(
+  find: () => HTMLElement | null | undefined,
+  from: LandPoint,
+  opts: {
+    timeout?: number
+    with?: (el: HTMLElement) => LandOptions['with']
+    unclip?: (el: HTMLElement) => LandOptions['unclip']
+    /** 换了地方之后由调用方自己落(插件接缝要记账);缺省 = land(el, from, { with, unclip })。 */
+    onMoved?: (el: HTMLElement) => void
+  } = {},
+): () => void {
+  if (reducedMotion() || typeof requestAnimationFrame !== 'function') return () => {}
+  const was = find() ?? null
+  const parent = was?.parentElement ?? null
+  const prev = was?.previousElementSibling ?? null
+  const until = performance.now() + (opts.timeout ?? 1200)
+  let raf = 0
+  const tick = (): void => {
+    const el = find()
+    if (el && (el !== was || el.parentElement !== parent || el.previousElementSibling !== prev)) {
+      if (opts.onMoved) opts.onMoved(el)
+      else land(el, from, { with: opts.with?.(el), unclip: opts.unclip?.(el) })
+      return
+    }
+    if (performance.now() < until) raf = requestAnimationFrame(tick)
+  }
+  raf = requestAnimationFrame(tick)
+  return () => cancelAnimationFrame(raf)
 }

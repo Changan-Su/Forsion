@@ -343,6 +343,29 @@ it('ctx.ui.dropIndicator:线 / 描边按视口坐标落位,停用插件即收,�
   expect(errors).toEqual([])
 })
 
+// 松手落位(2026-10-25):句柄上的 land 是 LCL 那一份;给元素就落,给查找函数就等它换了地方再落;停用时飞着的、等着的一起收。
+it('ctx.ui.dropIndicator().land:落位写内联过渡、停用即还原,之后是哑的', async () => {
+  const { usePluginStore } = await import('./pluginStore')
+  let ctx!: import('./types').PluginContext
+  usePluginStore.setState({ initialized: false, plugins: [], activeIds: [], disabledIds: [], disposers: {}, selectionActions: [] })
+  usePluginStore.getState().init([{ id: 'lander', name: 'lander', version: '0', setup: (c) => { ctx = c } }])
+  const row = document.createElement('div')
+  document.body.appendChild(row)
+  row.getBoundingClientRect = () => ({ left: 0, top: 100, x: 0, y: 100, width: 200, height: 28, right: 200, bottom: 128, toJSON() {} }) as DOMRect
+  const d = ctx.ui!.dropIndicator!()
+  expect(typeof d.land).toBe('function')
+  d.land!(row, { x: 0, y: 40 })
+  expect(row.style.transition, '在飞').toContain('transform')
+  d.land!(row, { x: Number.NaN, y: 0 } as { x: number; y: number }) // 坏坐标:不抛、不动
+  d.land!(() => { throw new Error('boom') }, { x: 0, y: 0 }) // 查找函数抛错:吞掉
+  await act(async () => { usePluginStore.getState().disable('lander') })
+  expect(row.style.transition, '停用即还原').toBe('')
+  d.land!(row, { x: 0, y: 40 })
+  expect(row.style.transition, '句柄已哑').toBe('')
+  row.remove()
+  expect(errors).toEqual([])
+})
+
 // 提示框(2026-10-23):ctx.ui.attachTooltip 用的是宿主那一份(LCL hoverSurface),插件元素里不加节点;停用插件即收、句柄变哑。
 // 负对照(实跑):pluginStore 里那份不进 scope.own → 「停用即收」红。
 it('ctx.ui.attachTooltip:悬停出宿主提示框、不往插件元素里加节点;停用插件即收,之后句柄是哑的', async () => {
