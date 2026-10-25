@@ -1088,12 +1088,20 @@ registerMessages({
     "en": "Other"
   },
   "settings.discovery.label": {
-    "zh": "从其他 Agent 导入（Claude Code / Codex / Hermes）",
-    "en": "Import from other agents (Claude Code / Codex / Hermes)"
+    "zh": "从其他 Agent 导入",
+    "en": "Import from other agents"
+  },
+  "settings.discovery.pageDescription": {
+    "zh": "扫描这台电脑上 Claude Code、Codex、Hermes 的技能和 MCP 配置，勾选后导入。",
+    "en": "Scan Claude Code, Codex and Hermes on this computer for skills and MCP settings, then pick what to import."
+  },
+  "settings.discovery.sources": {
+    "zh": "来源：Claude Code · Codex · Hermes",
+    "en": "Sources: Claude Code · Codex · Hermes"
   },
   "settings.discovery.hint": {
-    "zh": "扫描本机 ~/.claude、~/.codex、~/.hermes 的技能与 MCP 配置，勾选后导入 ~/.forsion。导入的 MCP 一律默认停用，不会自动运行外来命令。",
-    "en": "Scans local ~/.claude, ~/.codex, ~/.hermes for skills and MCP configs; selected items are imported into ~/.forsion. Imported MCP servers are always disabled by default and won't auto-run external commands."
+    "zh": "扫描 ~/.claude、~/.codex、~/.hermes 里的技能和 MCP 配置，勾选后导入。导入的 MCP 默认停用，不会自动运行外来命令。",
+    "en": "Looks in ~/.claude, ~/.codex and ~/.hermes for skills and MCP settings, then imports what you pick. Imported MCP servers start turned off and never run outside commands on their own."
   },
   "settings.discovery.scan": {
     "zh": "扫描本机",

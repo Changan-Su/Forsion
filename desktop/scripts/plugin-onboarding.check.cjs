@@ -133,9 +133,9 @@ async function main() {
     check('B 说明插件(无 requires)不挂徽标', !(await badgeOn(guideCard)))
 
     // H:老的自证标志不许再让一道真闸闭嘴(删 __setupDone 之后的迁移回归)
-    await legacyCard.locator('input[type="checkbox"]').click() // 关
+    await legacyCard.locator('[role="switch"]').click() // 关
     await pause(300)
-    await legacyCard.locator('input[type="checkbox"]').click() // 开 → 重测
+    await legacyCard.locator('[role="switch"]').click() // 开 → 重测
     check('H 老用户点过的 __setupDone=1 不再让未满足的闸闭嘴',
       await waitFor(() => badgeOn(legacyCard), 10000))
     const legacyPopped = await waitFor(() => fl.locator('.plugin-onboarding-card').count().then((n) => n === 1), 10000)
@@ -156,7 +156,7 @@ async function main() {
     await fl.waitForSelector(`[data-plugin-id="${GATE}"]`, { timeout: 10000 })
 
     // D:关掉再打开 = 手动启用 → 检查卡自己弹
-    const box = gateCard.locator('input[type="checkbox"]')
+    const box = gateCard.locator('[role="switch"]')
     await box.click() // 关
     await pause(300)
     await box.click() // 开

@@ -17,6 +17,7 @@ import { Blocks, CalendarDays, Globe, House, Images, Sparkles, TerminalSquare, t
 import { registerView, unregisterView, addCommand, removeCommand, useWorkspace, getView, Skeleton } from '@lcl/engine'
 import { lazyRetry } from '../lazyRetry'
 import { registerMessages, useI18n } from '../i18n'
+import { SettingsSwitch } from '../components/SettingsPrimitives'
 import { useApp } from '../stores/appStore'
 import { useUnitRemote } from '../components/UnitSwitcher'
 import { windowKind } from '../windowKind'
@@ -322,16 +323,16 @@ export const BuiltinPluginsSection: React.FC = () => {
               <b style={{ fontSize: 'var(--ui-font-body, 13px)' }}>{b.name()}</b>
               <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)', marginTop: 2 }}>{b.description()}</div>
             </div>
-            <input type="checkbox" checked={!!enabled[b.id]} onChange={(e) => toggle(b.id, e.target.checked)} style={{ cursor: 'pointer' }} />
+            <SettingsSwitch checked={!!enabled[b.id]} label={b.name()} onChange={(on) => toggle(b.id, on)} />
           </div>
           {b.id === 'home' && enabled.home && homeClaimed && (
             <div style={{ marginTop: 8, fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-muted)' }}>{t('home.claimed')}</div>
           )}
           {b.id === 'browser' && enabled.browser && (
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8, fontSize: 'var(--ui-font-meta, 12px)', cursor: 'pointer' }}>
-              <input type="checkbox" checked={inAppLinks} onChange={(e) => setInAppLinks(e.target.checked)} />
-              {t('browser.inAppLinks')}
-            </label>
+            <div className="plugin-card-subrow">
+              <span>{t('browser.inAppLinks')}</span>
+              <SettingsSwitch checked={inAppLinks} label={t('browser.inAppLinks')} onChange={setInAppLinks} />
+            </div>
           )}
         </div>
       ))}

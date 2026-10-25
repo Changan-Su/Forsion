@@ -342,14 +342,7 @@ function CalmRow({ k, anchor, icon, label, hint }: { k: CalmKey; anchor: string;
   return (
     <div className="settings-control-row" data-setting-anchor={anchor}>
       <div className="settings-control-copy">{icon}<span><strong>{label}</strong><small>{hint}</small></span></div>
-      <button
-        type="button"
-        role="switch"
-        aria-checked={on}
-        aria-label={label}
-        className={`switch${on ? ' on' : ''}`}
-        onClick={() => { setCalmOn(k, !on); setOn(!on) }}
-      />
+      <SettingsSwitch checked={on} label={label} onChange={(next) => { setCalmOn(k, next); setOn(next) }} />
     </div>
   )
 }
@@ -1627,8 +1620,8 @@ export const SettingsModal: React.FC<{
         </div>
         <div className="settings-main-head">
           <div className="settings-main-copy">
-            <div className="settings-main-title">{tab === 'forsion' ? cloudPageLabel || activeTabLabel : tab === 'model' || (tab === 'skills' && activeSub === 'k-library') ? activeSubLabel || activeTabLabel : activeTabLabel}</div>
-            {tab === 'forsion' ? <p>{cloudDescription ? t(cloudDescription) : t('settings.tab.forsionCloud')}</p> : tab === 'model' ? <p>{t(modelSubDescriptions[activeSub] || 'settings.page.modelDescription')}</p> : activeTabDescription && <p>{activeTabDescription}</p>}
+            <div className="settings-main-title">{tab === 'forsion' ? cloudPageLabel || activeTabLabel : tab === 'model' || (tab === 'skills' && (activeSub === 'k-library' || activeSub === 'k-discovery')) ? activeSubLabel || activeTabLabel : activeTabLabel}</div>
+            {tab === 'forsion' ? <p>{cloudDescription ? t(cloudDescription) : t('settings.tab.forsionCloud')}</p> : tab === 'model' ? <p>{t(modelSubDescriptions[activeSub] || 'settings.page.modelDescription')}</p> : tab === 'skills' && activeSub === 'k-discovery' ? <p>{t('settings.discovery.pageDescription')}</p> : activeTabDescription && <p>{activeTabDescription}</p>}
           </div>
         </div>
         {/* 设置住在独立浮窗(桌面)/ 覆盖层(web)里,全局通知两处都看不见 —— 插件装卸、重扫、Space 卸载等结果画在这条上。 */}
@@ -1873,14 +1866,7 @@ export const SettingsModal: React.FC<{
                           <div className="field" data-setting-anchor="mirror">
                             <label>{t('settings.mirror.label')}</label>
                             <div className="switch-row" style={{ minHeight: 30 }}>
-                              <button
-                                type="button"
-                                role="switch"
-                                aria-checked={(stored.mirror || 'default') === 'china'}
-                                aria-label={t('settings.mirror.toggle')}
-                                className={`switch${(stored.mirror || 'default') === 'china' ? ' on' : ''}`}
-                                onClick={() => edit({ mirror: (stored.mirror || 'default') === 'china' ? 'default' : 'china' })}
-                              />
+                              <SettingsSwitch checked={(stored.mirror || 'default') === 'china'} label={t('settings.mirror.toggle')} onChange={(on) => edit({ mirror: on ? 'china' : 'default' })} />
                               <span>{t('settings.mirror.toggle')}</span>
                             </div>
                           </div>
@@ -1976,21 +1962,16 @@ export const SettingsModal: React.FC<{
                 {/* 收件箱(Inbox Space):系统通知开关。非 managedKeys,保存即生效不重启后端。 */}
                 {tab === 'general' && isDesktop && stored && activeSub === 'g-inbox' && (
                   <>
-                    <div className="field" data-setting-anchor="inbox-notify">
-                      <label className="inline-check" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                        <input
-                          type="checkbox"
-                          checked={stored.inboxNotifyEnabled !== false}
-                          onChange={(e) => void window.tangu!.setConfig({ inboxNotifyEnabled: e.target.checked }).then(setStored)}
-                        />
-                        {t('settings.inbox.notifyLabel')}
-                      </label>
-                      <div className="hint">{t('settings.inbox.notifyHint')}</div>
+                    <section className="settings-panel">
+                      <div className="settings-control-list">
+                        <SettingsRow anchor="inbox-notify" fit="inline" label={t('settings.inbox.notifyLabel')} description={t('settings.inbox.notifyHint')}
+                          control={<SettingsSwitch checked={stored.inboxNotifyEnabled !== false} label={t('settings.inbox.notifyLabel')} onChange={(on) => void window.tangu!.setConfig({ inboxNotifyEnabled: on }).then(setStored)} />} />
+                      </div>
                       {/* 所有通知的总开关在另一页(走查续五 W-76);路径跟着左栏分组名走 */}
                       <div className="hint">{t('settings.inbox.notifyXref').split('{path}').map((part, i) => i === 0 ? part : (
                         <span key={i}><button type="button" className="settings-xref-link" onClick={() => goTab('notifications')}>{t('settings.group.appearance')} › {t('settings.tab.notifications')}</button>{part}</span>
                       ))}</div>
-                    </div>
+                    </section>
                   </>
                 )}
 
@@ -3034,42 +3015,21 @@ export const SettingsModal: React.FC<{
                         </div>
                         <div className="settings-control-row" data-setting-anchor="home-motion">
                           <div className="settings-control-copy"><ImageIcon size={14} /><span><strong>{t('settings.theme.homeMotion')}</strong><small>{t('settings.theme.homeMotionHint')}</small></span></div>
-                          <button
-                            type="button"
-                            role="switch"
-                            aria-checked={homeMotion}
-                            aria-label={t('settings.theme.homeMotion')}
-                            className={`switch${homeMotion ? ' on' : ''}`}
-                            onClick={() => { setHomeMotion(!homeMotion); setHomepageWallpaperMotion(!homeMotion) }}
-                          />
+                          <SettingsSwitch checked={homeMotion} label={t('settings.theme.homeMotion')} onChange={() => { setHomeMotion(!homeMotion); setHomepageWallpaperMotion(!homeMotion) }} />
                         </div>
                         {/* 直接读写 themeStore(同背景轴,不走 props 链 → 三端自动到位)。毛玻璃关着时这行照样在:
                             设置搜索的落点不能时有时无,开关本身只是记下偏好。 */}
                         <div className="settings-control-row" data-setting-anchor="ambient">
                           <div className="settings-control-copy"><Droplets size={14} /><span><strong>{t('settings.theme.ambient')}</strong><small>{t('settings.theme.ambientHint')}</small></span></div>
-                          <button
-                            type="button"
-                            role="switch"
-                            aria-checked={ambientOn}
-                            aria-label={t('settings.theme.ambient')}
-                            className={`switch${ambientOn ? ' on' : ''}`}
-                            onClick={() => useTheme.getState().setAmbient(!ambientOn)}
-                          />
+                          <SettingsSwitch checked={ambientOn} label={t('settings.theme.ambient')} onChange={() => useTheme.getState().setAmbient(!ambientOn)} />
                         </div>
                         <div className="settings-control-row" data-setting-anchor="smooth-caret">
                           <div className="settings-control-copy"><MousePointer2 size={14} /><span><strong>{t('settings.theme.smoothCaret')}</strong><small>{t('settings.theme.smoothCaretHint')}</small></span></div>
-                          <button
-                            type="button"
-                            role="switch"
-                            aria-checked={smoothCaret}
-                            aria-label={t('settings.theme.smoothCaret')}
-                            className={`switch${smoothCaret ? ' on' : ''}`}
-                            onClick={() => {
+                          <SettingsSwitch checked={smoothCaret} label={t('settings.theme.smoothCaret')} onChange={() => {
                               const on = !smoothCaret
                               setSmoothCaret(on)
                               persistSmoothCaret(on)
-                            }}
-                          />
+                            }} />
                         </div>
                         <div className="settings-control-row" data-setting-anchor="selection-bar">
                           <div className="settings-control-copy"><TextSelect size={14} /><span><strong>{t('settingsmodal.selectionBar')}</strong><small>{t('settingsmodal.selectionBarHint')}</small></span></div>
@@ -3084,18 +3044,11 @@ export const SettingsModal: React.FC<{
                         </div>
                         {tanguPrefs && <div className="settings-control-row" data-setting-anchor="chat-avatars">
                           <div className="settings-control-copy"><CircleUserRound size={14} /><span><strong>{t('settings.theme.chatAvatars')}</strong><small>{t('settings.theme.chatAvatarsHint')}</small></span></div>
-                          <button
-                            type="button"
-                            role="switch"
-                            aria-checked={chatAvatars}
-                            aria-label={t('settings.theme.chatAvatars')}
-                            className={`switch${chatAvatars ? ' on' : ''}`}
-                            onClick={() => {
+                          <SettingsSwitch checked={chatAvatars} label={t('settings.theme.chatAvatars')} onChange={() => {
                               const on = !chatAvatars
                               setChatAvatars(on)
                               tanguPrefs.chatAvatars.set(on)
-                            }}
-                          />
+                            }} />
                         </div>}
                         {/* 「呼吸感」三项(theme/calm.ts)。「外围淡出」靠悬停恢复:没有悬停的设备上样式本来就不生效,开关也不摆出来。 */}
                         {hoverCapable && (
@@ -3106,18 +3059,11 @@ export const SettingsModal: React.FC<{
                         {!mobileSettings && (
                           <div className="settings-control-row" data-setting-anchor="ribbon-auto-home">
                             <div className="settings-control-copy"><Undo2 size={14} /><span><strong>{t('settings.theme.ribbonAutoHome')}</strong><small>{t('settings.theme.ribbonAutoHomeHint')}</small></span></div>
-                            <button
-                              type="button"
-                              role="switch"
-                              aria-checked={ribbonAutoHome}
-                              aria-label={t('settings.theme.ribbonAutoHome')}
-                              className={`switch${ribbonAutoHome ? ' on' : ''}`}
-                              onClick={() => {
+                            <SettingsSwitch checked={ribbonAutoHome} label={t('settings.theme.ribbonAutoHome')} onChange={() => {
                                 const on = !ribbonAutoHome
                                 setRibbonAutoHomeOn(on)
                                 setRibbonAutoHome(on)
-                              }}
-                            />
+                              }} />
                           </div>
                         )}
                         {!mobileSettings && (
@@ -3203,7 +3149,7 @@ export const SettingsModal: React.FC<{
                   <>
                     {isDesktop && !!window.tangu?.discoveryScan && (
                       <div className="field">
-                        <label>{t('settings.discovery.label')}</label>
+                        <label>{t('settings.discovery.sources')}</label>
                         <div className="hint" style={{ marginBottom: 8 }}>
                           {t('settings.discovery.hint')}
                         </div>
@@ -3288,16 +3234,8 @@ export const SettingsModal: React.FC<{
                   <>
                     {isDesktop && (
                       <div className="field">
-                        <label>{t('settings.mcpServer.label')}</label>
-                        <div className="hint" style={{ marginBottom: 8 }}>{t('settings.mcpServer.hint')}</div>
-                        <label className="inline-check">
-                          <input
-                            type="checkbox"
-                            checked={!!stored?.mcpEnabled}
-                            onChange={(e) => void window.tangu!.setConfig({ mcpEnabled: e.target.checked }).then(setStored)}
-                          />
-                          {t('settings.mcpServer.enable')}
-                        </label>
+                        <SettingsRow fit="inline" label={t('settings.mcpServer.label')} description={t('settings.mcpServer.hint')}
+                          control={<SettingsSwitch checked={!!stored?.mcpEnabled} label={t('settings.mcpServer.enable')} onChange={(on) => void window.tangu!.setConfig({ mcpEnabled: on }).then(setStored)} />} />
 
                         {stored?.mcpEnabled && stored.forsionMcp?.running && stored.forsionMcp.url && (() => {
                           const url = stored.forsionMcp.url
@@ -3369,19 +3307,11 @@ export const SettingsModal: React.FC<{
 
                     {isDesktop && (
                       <div className="field" style={{ marginTop: 14 }}>
-                        <label>{t('settings.advanced.agentDesk')}</label>
-                        <div className="hint" style={{ marginBottom: 8 }}>{t('settings.advanced.agentDeskHint')}</div>
-                        <label className="inline-check">
-                          <input
-                            type="checkbox"
-                            checked={!!stored?.agentDeskEnabled}
-                            onChange={(e) => void window.tangu!.setConfig({ agentDeskEnabled: e.target.checked }).then((c) => {
-                              setStored(c)
-                              useApp.setState({ desktopConfig: c })
-                            })}
-                          />
-                          {t('settings.advanced.agentDeskEnable')}
-                        </label>
+                        <SettingsRow fit="inline" label={t('settings.advanced.agentDesk')} description={t('settings.advanced.agentDeskHint')}
+                          control={<SettingsSwitch checked={!!stored?.agentDeskEnabled} label={t('settings.advanced.agentDeskEnable')} onChange={(on) => void window.tangu!.setConfig({ agentDeskEnabled: on }).then((c) => {
+                            setStored(c)
+                            useApp.setState({ desktopConfig: c })
+                          })} />} />
                         {/* 「开在 Agent Desk」只有 Desk 开着才成立;关着时新标签页是唯一去处,不必露这个选择。 */}
                         {stored?.agentDeskEnabled && (
                           <div style={{ marginTop: 10 }}>
@@ -3406,16 +3336,8 @@ export const SettingsModal: React.FC<{
                         有悬停的设备上摆出来;与 promptSuggest.ts 的 supported() 同一道闸。 */}
                     {tanguPrefs && isDesktop && !unitPage && hoverCapable && !mobileSettings && (
                       <div className="field" style={{ marginTop: 14 }} data-setting-anchor="prompt-suggest">
-                        <label>{t('settings.promptSuggest')}</label>
-                        <div className="hint" style={{ marginBottom: 8 }}>{t('settings.promptSuggestHint')}</div>
-                        <label className="inline-check">
-                          <input
-                            type="checkbox"
-                            checked={promptSuggest}
-                            onChange={(e) => { setPromptSuggest(e.target.checked); tanguPrefs.promptSuggest.set(e.target.checked) }}
-                          />
-                          {t('settings.promptSuggestEnable')}
-                        </label>
+                        <SettingsRow fit="inline" label={t('settings.promptSuggest')} description={t('settings.promptSuggestHint')}
+                          control={<SettingsSwitch checked={promptSuggest} label={t('settings.promptSuggestEnable')} onChange={(on) => { setPromptSuggest(on); tanguPrefs.promptSuggest.set(on) }} />} />
                       </div>
                     )}
 
@@ -3538,36 +3460,18 @@ export const SettingsModal: React.FC<{
                       <div className="hint">{t('settings.developer.relaunchHint')}</div>
                     </div>
                     <div className="field">
-                      <label className="inline-check">
-                        <input
-                          type="checkbox"
-                          checked={showSysPrompt}
-                          onChange={(e) => {
-                            const on = e.target.checked
+                      <SettingsRow fit="inline" label={t('settings.developer.showSystemPrompt')} description={t('settings.developer.showSystemPromptHint')} control={<SettingsSwitch checked={showSysPrompt} label={t('settings.developer.showSystemPrompt')} onChange={(on) => {
                             setShowSysPrompt(on)
                             try { localStorage.setItem(SHOW_SYSTEM_PROMPT_KEY, on ? '1' : '0') } catch { /* ignore */ }
-                          }}
-                        />
-                        {t('settings.developer.showSystemPrompt')}
-                      </label>
-                      <div className="hint">{t('settings.developer.showSystemPromptHint')}</div>
+                      }} />} />
                     </div>
                     <div className="field">
-                      <label className="inline-check">
-                        <input
-                          type="checkbox"
-                          checked={mobileUiCmd}
-                          onChange={(e) => {
-                            const on = e.target.checked
+                      <SettingsRow fit="inline" label={t('settings.developer.mobileUiPreview')} description={t('settings.developer.mobileUiPreviewHint')} control={<SettingsSwitch checked={mobileUiCmd} label={t('settings.developer.mobileUiPreview')} onChange={(on) => {
                             setMobileUiCmd(on)
                             try { localStorage.setItem(MOBILE_UI_KEY, on ? '1' : '0') } catch { /* ignore */ }
                             setMobileUiCommand(on)   // 设置画在主窗里的形态(web/mobile)
                             requestDevCommandsSync() // 设置在浮窗里的形态:命令表各窗一份,得让主窗重算
-                          }}
-                        />
-                        {t('settings.developer.mobileUiPreview')}
-                      </label>
-                      <div className="hint">{t('settings.developer.mobileUiPreviewHint')}</div>
+                      }} />} />
                     </div>
                     <div className="field">
                       <label>{t('settings.developer.testUpdateLabel')}</label>
@@ -3602,51 +3506,26 @@ export const SettingsModal: React.FC<{
                         >
                           <FileDown size={12} /> {t('settings.developer.activityExport')}
                         </button>
-                        <label className="inline-check" style={{ margin: 0 }}>
-                          <input
-                            type="checkbox"
-                            checked={stored?.activityLogEnabled !== false}
-                            onChange={(e) => void window.tangu!.setConfig({ activityLogEnabled: e.target.checked }).then(setStored)}
-                          />
-                          {t('settings.developer.activityEnable')}
-                        </label>
                       </div>
-                      <div className="hint">{t('settings.developer.activityHint')}</div>
+                      <SettingsRow fit="inline" label={t('settings.developer.activityEnable')} description={t('settings.developer.activityHint')}
+                        control={<SettingsSwitch checked={stored?.activityLogEnabled !== false} label={t('settings.developer.activityEnable')} onChange={(on) => void window.tangu!.setConfig({ activityLogEnabled: on }).then(setStored)} />} />
                     </div>
                     <div className="field">
-                      <label className="inline-check">
-                        <input
-                          type="checkbox"
-                          checked={activityViewCmd}
-                          onChange={(e) => {
-                            const on = e.target.checked
+                      <SettingsRow fit="inline" label={t('settings.developer.activityViewCmd')} description={t('settings.developer.activityViewCmdHint')} control={<SettingsSwitch checked={activityViewCmd} label={t('settings.developer.activityViewCmd')} onChange={(on) => {
                             setActivityViewCmd(on)
                             try { localStorage.setItem(ACTIVITY_VIEW_KEY, on ? '1' : '0') } catch { /* ignore */ }
                             setActivityViewCommand(on)
                             requestDevCommandsSync()
-                          }}
-                        />
-                        {t('settings.developer.activityViewCmd')}
-                      </label>
-                      <div className="hint">{t('settings.developer.activityViewCmdHint')}</div>
+                      }} />} />
                     </div>
                     <div className="field">
-                      <label className="inline-check">
-                        <input
-                          type="checkbox"
-                          checked={!!stored?.activeWindowEnabled}
-                          onChange={(e) => {
-                            const on = e.target.checked
+                      <SettingsRow fit="inline" label={t('settings.developer.activeWindow')} description={t('settings.developer.activeWindowHint')} control={<SettingsSwitch checked={!!stored?.activeWindowEnabled} label={t('settings.developer.activeWindow')} onChange={(on) => {
                             // 真源在主进程配置(默认拒的实现点就在那儿);⌘K 入口同步增删,免 reload。
                             // 主窗那份由**主进程**在 config:set 落盘后推(见 main.ts):这里 .then 里通知的话,
                             // 「拨完立刻关掉设置窗」会连同这个渲染进程一起没掉,主窗就永远不知道。
                             void window.tangu!.setConfig({ activeWindowEnabled: on }).then(setStored)
                             setActiveWindowCommand(on)
-                          }}
-                        />
-                        {t('settings.developer.activeWindow')}
-                      </label>
-                      <div className="hint">{t('settings.developer.activeWindowHint')}</div>
+                      }} />} />
                     </div>
                     <div className="field">
                       <button
@@ -3738,19 +3617,11 @@ export const SettingsModal: React.FC<{
                     ) : null}
                     {window.tangu?.setUpdateBeta ? (
                       <div className="field">
-                        <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-                          <input
-                            type="checkbox"
-                            checked={betaChannel}
-                            onChange={(e) => {
-                              const on = e.target.checked
-                              setBetaChannel(on) // 先动 UI:落盘是异步的,等它回来勾选框会慢一拍
-                              void window.tangu?.setUpdateBeta?.(on).then(() => window.tangu?.checkForUpdates?.())
-                            }}
-                          />
-                          {t('about.update.beta')}
-                        </label>
-                        <div className="hint" style={{ marginTop: 4 }}>{t('about.update.betaHint')}</div>
+                        <SettingsRow fit="inline" label={t('about.update.beta')} description={t('about.update.betaHint')}
+                          control={<SettingsSwitch checked={betaChannel} label={t('about.update.beta')} onChange={(on) => {
+                            setBetaChannel(on) // 先动 UI:落盘是异步的,等它回来开关会慢一拍
+                            void window.tangu?.setUpdateBeta?.(on).then(() => window.tangu?.checkForUpdates?.())
+                          }} />} />
                       </div>
                     ) : null}
                     {window.tangu?.setUpdateSource ? (

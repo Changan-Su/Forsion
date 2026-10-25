@@ -2,7 +2,7 @@ import { agentDescription, isStockAgent } from '../components/builtinAgentDescri
 import { useEffect, useId, useMemo, useRef, useState, type ChangeEvent, type CSSProperties } from 'react'
 import { BookOpen, Bot, CalendarClock, Check, ChevronRight, ExternalLink, ArrowUp, ArrowDown, ImageUp, Loader2, MoreHorizontal, Plus, Plug, ScrollText, Search, Settings2, Sparkles, Sprout, Star, Trash2, X } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
-import { activeMainPanel, startOpenDrag, useListFirst, useWorkspace } from '@lcl/engine'
+import { activeMainPanel, startOpenDrag, useListFirst, useWorkspace, ViewErrorBoundary } from '@lcl/engine'
 import { ListFab } from '../components/phoneList'
 import type { ViewProps } from '@lcl/engine/types'
 import { useApp } from '../stores/appStore'
@@ -544,7 +544,9 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
     })}</nav>
     <div ref={scrollRef} className="agent-profile-content" id={`${id}-content`} role="tabpanel" aria-labelledby={`${id}-${section}`} tabIndex={0}>
       <fieldset className="profile-edit-fields" disabled={busy}>
-      <div key={section} className="profile-section-enter">
+      {/* 只塌这一格:头部和标签条在边界外,换个标签就换回来(key = 标签,走查 5.10) */}
+      <ViewErrorBoundary key={section} name={t(`agentProfile.${section}`)}>
+      <div className="profile-section-enter">
       {section === 'config' && <>
         {s.session && <section className="agent-current-session"><small>{t('agentProfile.session')}</small><strong>{s.session.title}</strong>{(s.session.project_name || s.config?.cwd) && <span>{s.session.project_name || s.config?.cwd}</span>}
           <ProfileModelField models={s.models || []} value={s.session.model_id || ''} label={t('agentProfile.sessionModel')} onChange={(model) => useApp.getState().setSessionModel(model, sessionId, false)} />
@@ -570,14 +572,15 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
       </>}
       {section === 'schedule' && <AgentSchedulePanel cfg={s.cfg} slug={agent.slug} running={s.running} />}
       </div>
+      </ViewErrorBoundary>
       {/* Memory owns independent drafts. Keep it mounted when switching the parent tabs. */}
       {visitedMemory && <div className="profile-growth-memory" hidden={section !== 'growth' || growth !== 'memory'}>
-        <AgentMemoryPanel cfg={s.cfg} slug={agent.slug} shareDefaultMemory={agent.shareDefaultMemory} organized />
+        <ViewErrorBoundary name={t('agentProfile.memory')} resetKey={section === 'growth' && growth === 'memory'}><AgentMemoryPanel cfg={s.cfg} slug={agent.slug} shareDefaultMemory={agent.shareDefaultMemory} organized /></ViewErrorBoundary>
         <details className="profile-disclosure"><summary>{t('agentProfile.memoryScope')}</summary><label className="agent-equipment-item"><input type="checkbox" checked={!!draft.shareDefaultMemory} onChange={(e) => patch({ shareDefaultMemory: e.target.checked })} />{t('agentProfile.sharedMemory')}</label><p className="agent-profile-muted">{t('agentProfile.memoryScopeHint')}</p></details>
         <button className="agent-profile-link" onClick={() => setLibrary(true)}>{t('agentProfile.library')}<ExternalLink size={13} /></button>
       </div>}
       {visitedLog && <div className="profile-growth-log" hidden={section !== 'growth' || growth !== 'log'}>
-        <AgentLogPanel cfg={s.cfg} slug={agent.slug} active={section === 'growth' && growth === 'log'} />
+        <ViewErrorBoundary name={t('agentProfile.log')} resetKey={section === 'growth' && growth === 'log'}><AgentLogPanel cfg={s.cfg} slug={agent.slug} active={section === 'growth' && growth === 'log'} /></ViewErrorBoundary>
       </div>}
       </fieldset>
     </div>

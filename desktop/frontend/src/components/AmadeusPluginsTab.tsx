@@ -21,6 +21,7 @@ import { registerMessages, useI18n } from '../i18n'
 import { PRODUCT } from '../product'
 import { pluginDisplayName, pluginDisplayDescription, resolvePluginDetail, localizedOnboarding, isPlacedSettingsView } from '../amadeus/plugins/display'
 import { Markdown } from './Markdown'
+import { SettingsSwitch } from './SettingsPrimitives'
 import { KNOWN_APPS } from '../../../shared/knownApps'
 import { rescanPlugins, setPluginEnabled, type PluginInfo } from '../services/backendService'
 import { loadUserSpaces, pluginOfSpace } from '../userSpaces'
@@ -195,7 +196,7 @@ const PluginSwitch: React.FC<{ p: AmadeusPlugin; onFlip: () => void }> = ({ p, o
   const stuck = !!p.blocked || unmet.length > 0
   return (
     <span title={unmet.length ? t('settings.amadeusPlugins.needsDepsToEnable', { list: unmet.map((u) => depName(u.dep, plugins, locale)).join(t('common.listSep')) }) : undefined} onClick={(e) => e.stopPropagation()}>
-      <input type="checkbox" data-plugin-switch checked={wanted && !p.blocked} disabled={stuck} onChange={onFlip} style={{ cursor: stuck ? 'not-allowed' : 'pointer' }} />
+      <SettingsSwitch data-plugin-switch="" checked={wanted && !p.blocked} disabled={stuck} label={pluginDisplayName(p, locale)} onChange={onFlip} />
     </span>
   )
 }
@@ -359,7 +360,7 @@ export const SettingRow: React.FC<{ pluginId: string; def: SettingContribution }
         {def.description && <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)' }}>{def.description}</div>}
       </div>
       {def.type === 'boolean' ? (
-        <input type="checkbox" checked={val === 'true'} onChange={(e) => write(e.target.checked ? 'true' : 'false')} />
+        <SettingsSwitch checked={val === 'true'} label={def.label} onChange={(on) => write(on ? 'true' : 'false')} />
       ) : def.type === 'number' ? (
         <input
           type="number" value={val} min={def.min} max={def.max}
@@ -384,7 +385,7 @@ const PluginSyncRow: React.FC<{ p: AmadeusPlugin }> = ({ p }) => {
         <div style={{ fontSize: 'var(--ui-font-meta, 12px)' }}>{t('settings.amadeusPlugins.syncData')}</div>
         <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)' }}>{t('settings.amadeusPlugins.syncDataHint')}</div>
       </div>
-      <input type="checkbox" data-plugin-sync checked={on} onChange={(e) => { setPluginDataSyncUserOff(p.id, !e.target.checked); setOn(e.target.checked) }} />
+      <SettingsSwitch data-plugin-sync="" checked={on} label={t('settings.amadeusPlugins.syncData')} onChange={(next) => { setPluginDataSyncUserOff(p.id, !next); setOn(next) }} />
     </div>
   )
 }
@@ -561,6 +562,7 @@ const PluginGuide: React.FC<{ plugin: AmadeusPlugin }> = ({ plugin: p }) => {
 /** 带主进程半身的内置包(Forsion Extend)的开关:那一半开窗前就装好、没法热卸,开关改的是**下次开机**装不装。
  *  读主进程的状态,不看渲染半身的 activeIds —— 本机 localStorage 里可能留着旧开关拨下的「关」,主进程半身其实在跑。 */
 const BundleSwitch: React.FC<{ p: AmadeusPlugin }> = ({ p }) => {
+  const { locale } = useI18n()
   const [busy, setBusy] = useState(false)
   const flip = async (on: boolean): Promise<void> => {
     setBusy(true)
@@ -577,15 +579,9 @@ const BundleSwitch: React.FC<{ p: AmadeusPlugin }> = ({ p }) => {
     }
   }
   return (
-    <input
-      type="checkbox"
-      data-bundle-switch
-      checked={!p.bundleOff}
-      disabled={busy || !!p.blocked}
-      onClick={(e) => e.stopPropagation()}
-      onChange={(e) => void flip(e.target.checked)}
-      style={{ cursor: busy || p.blocked ? 'not-allowed' : 'pointer' }}
-    />
+    <span onClick={(e) => e.stopPropagation()}>
+      <SettingsSwitch data-bundle-switch="" checked={!p.bundleOff} disabled={busy || !!p.blocked} label={pluginDisplayName(p, locale)} onChange={(on) => void flip(on)} />
+    </span>
   )
 }
 
