@@ -239,10 +239,13 @@ export function writeFocusModel(ref: TargetRef, modelId: string): void {
 export function defaultModelOf(s: Pick<AppState, 'cfg' | 'modelsResp'> & { focusModelId?: string }, ref: TargetRef = focusRef()): string | undefined {
   if (ref.kind === 'home') {
     // 记住的模型已不在目录里(admin 停用 / 下架,10-25 deepseek-v4-flash)→ 不再拿它开新对话,落到目录默认。
-    // 目录没到 / 云端不可达(forsion.status=error,云端模型整段缺席)时照用,别误杀。
+    // 目录没到 / 云端不可达(forsion.status=error,云端模型整段缺席)/ 直连供应商的(目录不枚举全)时照用,别误杀;
+    // 回落用这个目标自己的默认,不交给调用方读顶层 modelsResp(焦点在别的设备时那是别人的)。
+    const id = s.cfg.modelId
     const cat = sameRef(ref, focusRef()) ? s.modelsResp : catalogFor(targetKeyOf(ref))?.models
-    const gone = !!s.cfg.modelId && !!cat?.models?.length && cat.forsion?.status !== 'error' && !cat.models.some((m) => m.id === s.cfg.modelId)
-    return gone ? undefined : s.cfg.modelId || undefined
+    const direct = !!id && !!cat?.directProviders?.some((p) => id.startsWith(`${p.providerId}/`) || p.modelIds?.includes(id))
+    const gone = !!id && !direct && !!cat?.models?.length && cat.forsion?.status !== 'error' && !cat.models.some((m) => m.id === id)
+    return (gone && cat?.defaultModelId) || id || undefined
   }
   // P1-K6 S4:会话可能在一台已经不是焦点的电脑上 —— 用那台的目录缓存与按设备记的模型(顶层 modelsResp / focusModelId 只属于焦点)
   const onFocus = sameRef(ref, focusRef())
