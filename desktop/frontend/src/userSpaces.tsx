@@ -11,6 +11,7 @@ import {
   FileText, Star, Heart, Home, Target, Zap, Globe, Music, Image, Video, Code, Terminal, LayoutGrid, Sparkles,
   Boxes, ListTree, ListTodo, Server, ServerCog, Cloud,
 } from 'lucide-react'
+import { Trash2 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import {
   registerSpace, unregisterSpace, addRibbonIcon, removeRibbonIcon, setActiveSpace, useSpaceStore,
@@ -206,6 +207,8 @@ function installUserSpace(spec: SpaceSpec, dirSlug: string = spec.id, iconUrl?: 
     // 右键项(Ribbon 把「在新窗口中打开」排在它前面)。原先是右键直接弹删除确认,现在先过一层菜单。
     menu: () => [{
       label: app().tr('spaces.delete'),
+      icon: Trash2,
+      danger: true,
       onClick: () => { if (window.confirm(app().tr('spaces.deleteConfirm', { name: label(def.name) }))) void deleteUserSpace(spec.id) },
     }],
   })

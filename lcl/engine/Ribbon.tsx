@@ -8,7 +8,7 @@
  *  - 左面板收起时,指针停在 Space 图标上 → 右侧浮出那个 Space 的左面板(SpacePeek),可直接操作;移开即收。 */
 import { useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { ChevronDown, ChevronUp, ChevronsLeft, ChevronsRight, Folder as FolderIcon, MoreHorizontal, Plus, Zap } from 'lucide-react'
+import { AppWindow, ChevronDown, ChevronUp, ChevronsLeft, ChevronsRight, CircleMinus, Folder as FolderIcon, FolderMinus, FolderOutput, FolderPlus, LayoutGrid, MoreHorizontal, Pencil, Plus, Shapes, Zap } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { useRibbonStore, useDotted, rankIds, reorderBase, unionOrder, moveTo, slotIndexAt, ribbonActions, isRibbonAutoHome, recentRoom, type RibbonZone, type RibbonFolder } from './ribbonRegistry'
 import { RIBBON_ICON_NAMES, iconByName } from './ribbonIcons'
@@ -21,7 +21,7 @@ import { beginRibbonPointerDrag } from './ribbonPointerDrag'
 import { effectiveHotkey, formatHotkey, isMacPlatform, useShortcuts } from './shortcutStore'
 import { engineTr, useEngineI18n } from './i18nSeam'
 import { label } from './types'
-import type { Command, RibbonItem } from './types'
+import type { Command, RibbonItem, RibbonMenuEntry } from './types'
 import { OverlayAt, UI_ZOOM_EVENT, zoomOf } from './menuAnchor'
 import { delegateTooltips, hideTooltip } from './hoverSurface'
 import { useWorkspace } from './workspaceStore'
@@ -39,7 +39,9 @@ type Entry =
 interface DragState { id: string; zone: RibbonZone; from: string | null } // from = 所在收纳夹 id
 // 收纳夹浮层只存夹 id,内容每次 render 从 live store 派生(存快照会在拖出/重排后诈尸,见 codex#1)。
 interface FlyState { key: string; zone: RibbonZone; folderId?: string; top: number }
-interface MenuState { x: number; y: number; entries: { label: string; onClick(): void }[] }
+/** opener = 发起这个菜单的那一格的 key(槽 = 条目 id,收纳夹浮层行 = 所在收纳夹 id,最近使用 = `recent:<id>`,＋ = `plus:<区>`);菜单开着时那一格挂
+ *  data-menu-open(底色 --overlay-medium,同会话行右键时的样子),关了就掉。空白处 / 整条右键没有发起格。 */
+interface MenuState { x: number; y: number; entries: RibbonMenuEntry[]; opener?: string }
 /** 一个区切出来的样子:露出的一窗 + 其余(进「…」);start = 窗口在整区里的起点,max = 滚轮最多挪几格。 */
 interface Part { shown: Entry[]; tail: Entry[]; start: number; max: number }
 
@@ -538,6 +540,20 @@ export function Ribbon() {
     const over = el.getBoundingClientRect().bottom - (window.innerHeight - 8)
     if (over > 0) setFly({ ...fly, top: Math.max(8, fly.top - over) })
   }, [fly?.key, flyFolder?.items.length]) // eslint-disable-line react-hooks/exhaustive-deps
+  // 右键 / ＋ 菜单与图标选择器:Esc 关。捕获阶段先接住并截停 —— 一次 Esc 只关最上面这层菜单,
+  // 不顺带收掉它底下的收纳夹浮层 /「…」展开(那两层各自在冒泡阶段听 Esc)。
+  const overlayOpen = !!menu || !!iconPick
+  useEffect(() => {
+    if (!overlayOpen) return
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape') return
+      e.stopPropagation()
+      setMenu(null)
+      setIconPick(null)
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [overlayOpen])
   // 键盘开的浮层没有「鼠标移开」这条退路(scheduleClose 只挂在 mouseleave)→ 补 Esc / 点别处关。
   const flyOpen = !!fly
   useEffect(() => {
@@ -808,9 +824,10 @@ export function Ribbon() {
     })
   }
   const zoneMenu = (zone: RibbonZone): MenuState['entries'] => [
-    ...(zone === 'top' && ribbonActions.newSpace ? [{ label: t('lcl.ribbon.newSpace'), onClick: ribbonActions.newSpace }] : []),
-    ...(zone === 'bottom' ? [{ label: t('lcl.ribbon.addCommand'), onClick: () => openCommandPicker((id) => st().addCommandItem(id)) }] : []),
-    { label: t(zone === 'top' ? 'lcl.ribbon.newFolderSpaces' : 'lcl.ribbon.newFolderCommands'), onClick: () => createFolder(zone) },
+    ...(zone === 'top' && ribbonActions.newSpace ? [{ label: t('lcl.ribbon.newSpace'), icon: LayoutGrid, onClick: ribbonActions.newSpace }] : []),
+    ...(zone === 'bottom' ? [{ label: t('lcl.ribbon.addCommand'), icon: Plus, onClick: () => openCommandPicker((id) => st().addCommandItem(id)) }] : []),
+    // 不再写「(Space 区)/(命令区)」:点的是哪个区的 ＋ / 哪个区的空白,本来就知道(W-55)。
+    { label: t('lcl.ribbon.newFolder'), icon: FolderPlus, onClick: () => createFolder(zone) },
   ]
   const onZoneCtx = (zone: RibbonZone) => (e: React.MouseEvent): void => {
     if (e.defaultPrevented) return // 图标级菜单(用户 Space 删除/收纳夹/命令)优先
@@ -821,7 +838,8 @@ export function Ribbon() {
     // 预览卡在 Ribbon 的 React 树里,卡里(含它挂到 body 的菜单)的右键会冒到这儿:那是 View 自己的事,不弹 Ribbon 的区菜单。
     if (e.defaultPrevented || e.nativeEvent === peekCtx.current) return
     e.preventDefault()
-    setMenu({ x: e.clientX, y: e.clientY, entries: [...zoneMenu('top'), ...zoneMenu('bottom')] })
+    // 两区合起来的菜单里只留一个「新建收纳夹」(建在 Space 区):去掉限定词后两行会一模一样。命令区的收纳夹从命令区的 ＋ / 空白右键建。
+    setMenu({ x: e.clientX, y: e.clientY, entries: [...zoneMenu('top'), ...zoneMenu('bottom').slice(0, -1)] })
   }
   // 菜单项点开图标选择器:关掉菜单、在原位弹网格。current 高亮当前图标,apply 落库。
   const pickIcon = (x: number, y: number, current: string | undefined, apply: (name: string) => void): void => {
@@ -833,10 +851,10 @@ export function Ribbon() {
     e.stopPropagation()
     const x = e.clientX, y = e.clientY
     setMenu({
-      x, y, entries: [
-        { label: t('lcl.ribbon.changeIcon'), onClick: () => pickIcon(x, y, f.icon, (name) => st().setFolderIcon(f.id, name)) },
-        { label: t('lcl.ribbon.rename'), onClick: () => { void ask(t('lcl.ribbon.renameFolder'), f.name).then((v) => { const n = v?.trim(); if (n) st().renameFolder(f.id, n) }) } },
-        { label: t('lcl.ribbon.dissolveFolder'), onClick: () => st().removeFolder(f.id) },
+      x, y, opener: f.id, entries: [
+        { label: t('lcl.ribbon.changeIcon'), icon: Shapes, onClick: () => pickIcon(x, y, f.icon, (name) => st().setFolderIcon(f.id, name)) },
+        { label: t('lcl.ribbon.rename'), icon: Pencil, onClick: () => { void ask(t('lcl.ribbon.renameFolder'), f.name).then((v) => { const n = v?.trim(); if (n) st().renameFolder(f.id, n) }) } },
+        { label: t('lcl.ribbon.dissolveFolder'), icon: FolderMinus, onClick: () => st().removeFolder(f.id) },
       ],
     })
   }
@@ -846,27 +864,29 @@ export function Ribbon() {
     const sid = spaceIdOf(item.id)
     const open = getDetachApi()?.openSpace
     return [
-      ...(sid && open ? [{ label: t('lcl.ribbon.openInNewWindow'), onClick: () => open(sid) }] : []),
+      ...(sid && open ? [{ label: t('lcl.ribbon.openInNewWindow'), icon: AppWindow, onClick: () => open(sid) }] : []),
       ...(item.menu?.() ?? []),
     ]
   }
-  const itemCtx = (item: RibbonItem) => (e: React.MouseEvent): void => {
+  const itemCtx = (item: RibbonItem, opener: string = item.id) => (e: React.MouseEvent): void => {
     if (e.defaultPrevented) return // 组件自己接了右键(主位槽)
     const entries = itemMenu(item)
     if (!entries.length) return // 没有自己的项 → 放它冒泡到区菜单
     e.preventDefault()
     e.stopPropagation()
-    setMenu({ x: e.clientX, y: e.clientY, entries })
+    setMenu({ x: e.clientX, y: e.clientY, entries, opener })
   }
-  const cmdCtx = (cmdId: string) => (e: React.MouseEvent): void => {
+  const cmdCtx = (cmdId: string, opener: string = `cmd:${cmdId}`) => (e: React.MouseEvent): void => {
     e.preventDefault()
     e.stopPropagation()
     const x = e.clientX, y = e.clientY
-    setMenu({ x, y, entries: [
-      { label: t('lcl.ribbon.setIcon'), onClick: () => pickIcon(x, y, st().commandIcons[cmdId], (name) => st().setCommandIcon(cmdId, name)) },
-      { label: t('lcl.ribbon.removeCommand'), onClick: () => st().removeCommandItem(cmdId) },
+    setMenu({ x, y, opener, entries: [
+      { label: t('lcl.ribbon.setIcon'), icon: Shapes, onClick: () => pickIcon(x, y, st().commandIcons[cmdId], (name) => st().setCommandIcon(cmdId, name)) },
+      { label: t('lcl.ribbon.removeCommand'), icon: CircleMinus, onClick: () => st().removeCommandItem(cmdId) },
     ] })
   }
+
+  const menuOpenFor = (e: Entry): '' | undefined => (menu?.opener === e.id ? '' : undefined)
 
   // ---- 渲染件(一律「渲染函数」而非组件:内部组件每次 setState 都是新引用 → React remount 整个子树,
   //      拖拽被打断、dragging/drag-over 的 CSS 过渡从头来 = 动画/落点预览「没了」。函数调用则内联进树按位置 diff。) ----
@@ -934,6 +954,7 @@ export function Ribbon() {
         key={e.id}
         data-id={e.id} /* 落点 e2e 用(scripts/ribbon-dnd.e2e.cjs) */
         className={`rb-slot${drag?.id === e.id ? ' dragging' : ''}${line ? ' drag-over' : ''}`}
+        data-menu-open={menuOpenFor(e)}
         style={to !== i ? { transform: `translateY(${(to - i) * slotH}px)` } : undefined}
         draggable={nativeDraggable(e.id)}
         onPointerDown={(ev) => pointerDown(ev, e.id, zone, null)}
@@ -953,11 +974,12 @@ export function Ribbon() {
   const renderPlusBtn = (zone: RibbonZone): React.ReactNode => (
     <button
       className="rb-btn rb-plus"
+      data-menu-open={menu?.opener === `plus:${zone}` ? '' : undefined}
       aria-label={plusName(zone)}
       data-rb-tip={expanded ? undefined : plusName(zone)}
       onClick={(e) => {
         const r = e.currentTarget.getBoundingClientRect()
-        setMenu({ x: r.right + 6, y: r.top, entries: zoneMenu(zone) })
+        setMenu({ x: r.right + 6, y: r.top, entries: zoneMenu(zone), opener: `plus:${zone}` })
       }}
     >
       <Plus size={16} />
@@ -1019,10 +1041,11 @@ export function Ribbon() {
       onDragLeave={() => { if (overId === e.id) setOverId(null) }}
       onDrop={(ev) => { ev.preventDefault(); ev.stopPropagation(); dropIntoFolder(folder, at) }}
       onDragEnd={finishDrag}
-      onContextMenu={e.kind === 'cmd' ? cmdCtx(e.cmd.id) : (ev) => {
+      // 发起格记成收纳夹本身:菜单的遮罩一盖上,指针离开浮层,浮层 150ms 后就收了,留在条上的只有夹图标。
+      onContextMenu={e.kind === 'cmd' ? cmdCtx(e.cmd.id, folder.id) : (ev) => {
         ev.preventDefault()
         ev.stopPropagation()
-        setMenu({ x: ev.clientX, y: ev.clientY, entries: [...(e.kind === 'item' ? itemMenu(e.item) : []), { label: t('lcl.ribbon.moveOut'), onClick: () => { st().moveOutOfFolder(e.id); const persisted = folder.zone === 'top' ? st().order : st().bottomOrder; st().setZoneOrder(folder.zone, [...reorderBase(persisted, (folder.zone === 'top' ? topE : botE).map((x) => x.id), e.id), e.id]) } }] })
+        setMenu({ x: ev.clientX, y: ev.clientY, opener: folder.id, entries: [...(e.kind === 'item' ? itemMenu(e.item) : []), { label: t('lcl.ribbon.moveOut'), icon: FolderOutput, onClick: () => { st().moveOutOfFolder(e.id); const persisted = folder.zone === 'top' ? st().order : st().bottomOrder; st().setZoneOrder(folder.zone, [...reorderBase(persisted, (folder.zone === 'top' ? topE : botE).map((x) => x.id), e.id), e.id]) } }] })
       }}
     >
       {renderEntry(e, true)}
@@ -1077,7 +1100,7 @@ export function Ribbon() {
       {recentItems.length > 0 && (
         <div className="rb-group rb-recent" role="group" aria-label={t('lcl.ribbon.recentSpaces')}>
           {recentItems.map((i) => (
-            <div key={i.id} className="rb-recent-slot" data-recent-id={i.id} /* 不叫 data-id:台架按它认上区的格子 */ onContextMenu={itemCtx(i)}>
+            <div key={i.id} className="rb-recent-slot" data-recent-id={i.id} /* 不叫 data-id:台架按它认上区的格子 */ data-menu-open={menu?.opener === `recent:${i.id}` ? '' : undefined} onContextMenu={itemCtx(i, `recent:${i.id}`)}>
               <RibbonItemView item={i} expanded={expanded} />
             </div>
           ))}
@@ -1129,7 +1152,8 @@ export function Ribbon() {
         <div className="rb-menu-backdrop" onMouseDown={() => setMenu(null)} onContextMenu={(e) => { e.preventDefault(); setMenu(null) }}>
           <OverlayAt className="rb-menu" x={menu.x} y={menu.y} onMouseDown={(e) => e.stopPropagation()}>
             {menu.entries.map((en, i) => (
-              <button key={i} onClick={() => { setMenu(null); en.onClick() }}>{en.label}</button>
+              // 标签保持裸文本节点:台架按 `button:text-is(…)` 认行(space-window.e2e)。
+              <button key={i} type="button" className={en.danger ? 'danger' : undefined} onClick={() => { setMenu(null); en.onClick() }}>{en.icon && <en.icon size={13} aria-hidden="true" />}{en.label}</button>
             ))}
           </OverlayAt>
         </div>

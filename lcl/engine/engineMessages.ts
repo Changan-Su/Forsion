@@ -22,8 +22,6 @@ export const LCL_MESSAGES: Record<string, { zh: string; en: string }> = {
   'lcl.ribbon.newSpace': { zh: '新建 Space', en: 'New Space' },
   'lcl.ribbon.newFolder': { zh: '新建收纳夹', en: 'New folder' },
   'lcl.ribbon.folderDefaultName': { zh: '收纳夹', en: 'Folder' },
-  'lcl.ribbon.newFolderSpaces': { zh: '新建收纳夹（Space 区）', en: 'New folder (Spaces)' },
-  'lcl.ribbon.newFolderCommands': { zh: '新建收纳夹（命令区）', en: 'New folder (commands)' },
   'lcl.ribbon.changeIcon': { zh: '更换图标', en: 'Change icon' },
   'lcl.ribbon.rename': { zh: '重命名', en: 'Rename' },
   'lcl.ribbon.renameFolder': { zh: '重命名收纳夹', en: 'Rename folder' },

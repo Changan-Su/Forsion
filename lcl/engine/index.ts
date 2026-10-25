@@ -10,6 +10,7 @@ export type {
   Leaf,
   Command,
   RibbonItem,
+  RibbonMenuEntry,
   StatusItem,
   PluginContext,
   SpaceDefinition,
