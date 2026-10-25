@@ -162,6 +162,8 @@ describe('slug 工具', () => {
     expect(cmpVersion('2.13.8-beta.2', '2.13.8')).toBe(-1)
     expect(cmpVersion('2.13.8', '2.13.8-rc.1')).toBe(1)
     expect(cmpVersion('2.13.8-beta.11', '2.13.8-beta.2')).toBe(1)
+    expect(cmpVersion('2.13.7+build.10', '2.13.7+build.2')).toBe(1)
+    expect(cmpVersion('2.13.7', '2.13.7+build.1')).toBe(-1)
   })
 })
 

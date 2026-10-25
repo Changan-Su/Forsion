@@ -1,6 +1,7 @@
 /** Amadeus 插件 manifest 门禁单测:cmpVersion 排序 + gatePluginManifest 四种情形 + sanitizeOnboarding 消毒。 */
 import { describe, it, expect } from 'vitest'
 import { cmpVersion, gatePluginManifest, sanitizeOnboarding, requirementKey, AMADEUS_PLUGIN_API } from './ipc'
+import { compareReleaseVersions, parseReleaseVersion } from '../releaseVersion.mjs'
 
 describe('cmpVersion', () => {
   it('数值逐段比较,缺段=0,前导 v 忽略', () => {
@@ -9,15 +10,24 @@ describe('cmpVersion', () => {
     expect(cmpVersion('2.0.1', '2.0')).toBe(1)
   })
 
-  it('预发布排在同号正式版之前,预发布段按 semver 比', () => {
-    const order = ['2.13.7', '2.13.8-alpha', '2.13.8-alpha.1', '2.13.8-beta', '2.13.8-beta.1', '2.13.8-beta.2', '2.13.8-beta.11', '2.13.8-rc.1', '2.13.8', '2.13.8.1', '2.13.9-beta.1', '2.13.9']
+  it('与 docs/reference/release-versions.md 同序:预发布在正式版前,+build.N 修订号最后比', () => {
+    const order = ['2.13.7', '2.13.7+build.1', '2.13.7+build.10', '2.13.8-alpha', '2.13.8-alpha.1', '2.13.8-beta', '2.13.8-beta.1', '2.13.8-beta.2', '2.13.8-beta.11', '2.13.8-rc.1', '2.13.8-rc.1+build.2', '2.13.8', '2.13.8+build.1', '2.13.8.1', '2.13.9-beta.1', '2.13.9']
     for (let i = 0; i < order.length; i++) {
       for (let j = 0; j < order.length; j++) expect(cmpVersion(order[i], order[j]), `${order[i]} vs ${order[j]}`).toBe(Math.sign(i - j))
     }
     expect(cmpVersion('v2.13.8-beta.1', '2.13.8-beta.1')).toBe(0)
-    expect(cmpVersion('1.0.0+build.5', '1.0.0')).toBe(0)
+    expect(cmpVersion('1.0.0+sha.abc', '1.0.0')).toBe(0) // 非 build.N 的元数据不参与比较
+    expect(cmpVersion('1.0.0-9007199254740992.alpha', '1.0.0-9007199254740993.1')).toBe(-1) // 超出 Number 精度的数字段
     expect(cmpVersion('1.0.0-1', '1.0.0-alpha')).toBe(-1) // 纯数字段在字母段之前
     expect(cmpVersion('0.7.2-jev.6', '0.7.2')).toBe(-1) // 本机开发版会被同号正式版换掉
+  })
+
+  it('正典能解析的版本号上,与 contracts/releaseVersion.mjs 的 compareReleaseVersions 逐对一致(防两边漂移)', () => {
+    const vs = ['1.0.0', '1.0.0-0', '1.0.0-1', '1.0.0-alpha', '1.0.0-alpha.1', '1.0.0-alpha.beta', '1.0.0-beta.2', '1.0.0-beta.11',
+      '1.0.0-rc.1', '1.0.0-rc.1+build.3', '1.0.0+build.1', '1.0.0+build.10', '1.0.0+sha.5', '1.0.1-x', '1.1.0', 'v2.0.0', '10.0.0']
+    for (const a of vs) for (const b of vs) {
+      if (parseReleaseVersion(a) && parseReleaseVersion(b)) expect(cmpVersion(a, b), `${a} vs ${b}`).toBe(compareReleaseVersions(a, b))
+    }
   })
 })
 
