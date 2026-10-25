@@ -121,7 +121,8 @@ async function run() {
     await setDark(false)
 
     // ── 5.14 命令面板 ──
-    await win.keyboard.press('Meta+k'); await win.locator('.cmd-panel').waitFor()
+    await win.waitForTimeout(500) // 刚切完明暗,面板的退场残影还在
+    await win.keyboard.press('Meta+k'); await win.locator('.cmd-panel').waitFor(); await win.locator('.cmd-panel .cmd-input').last().fill(''); await win.waitForTimeout(200)
     const pal = await win.evaluate(() => {
       const items = [...document.querySelectorAll('.cmd-item')]
       const textX = items.map((it) => { const t = it.querySelector('.cmd-title'); const r = document.createRange(); const node = [...t.childNodes].find((n) => n.nodeType === 3 && n.textContent.trim()); if (!node) return null; r.selectNodeContents(node); return Math.round(r.getBoundingClientRect().left * 2) / 2 }).filter((x) => x != null)
