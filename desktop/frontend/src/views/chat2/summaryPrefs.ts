@@ -1,0 +1,66 @@
+/** 摘要栏(右侧车道多卡片,2026-10-25 用户选方案 A)的两份全局偏好:卡片顺序、每种卡片的折叠状态。
+ *  按卡片种类记、不按会话记(用户定);存 localStorage,读不到 / 写不进就当没有偏好(隐私窗口、配额满)。 */
+import { create } from 'zustand'
+
+const KEY = 'forsion.summaryCards'
+
+interface Prefs {
+  /** 用户拖过才有;没有 = 默认顺序。只记 id,不在场的卡片也留在序列里,换会话回来位置不丢。 */
+  order?: string[]
+  /** 用户点过才有;没有 = 卡片自己的默认(见 SummaryRail 的 defaultOpen)。 */
+  open: Record<string, boolean>
+}
+
+function load(): Prefs {
+  try {
+    const raw = JSON.parse(localStorage.getItem(KEY) || '{}')
+    return {
+      order: Array.isArray(raw.order) ? raw.order.filter((k: unknown) => typeof k === 'string') : undefined,
+      open: raw.open && typeof raw.open === 'object' ? raw.open : {},
+    }
+  } catch { return { open: {} } }
+}
+
+export const useSummaryPrefs = create<Prefs>(load)
+
+const save = (next: Prefs): void => {
+  useSummaryPrefs.setState(next, true)
+  try { localStorage.setItem(KEY, JSON.stringify(next)) } catch { /* 存不进就只在本次有效 */ }
+}
+
+export const setCardOpen = (id: string, open: boolean): void => {
+  const s = useSummaryPrefs.getState()
+  if (s.open[id] !== open) save({ ...s, open: { ...s.open, [id]: open } })
+}
+
+/** undefined = 恢复默认顺序。 */
+export const setCardOrder = (order: string[] | undefined): void => save({ ...useSummaryPrefs.getState(), order })
+
+/** 完整序列:保存过的在前(去重),缺的按默认顺序插到「默认里排它前面、已在序列里」的最后一个之后,
+ *  一个都没有就放最前 —— 新出现的插件卡落在它的默认位置(Desk 前面),不会被追加到 Desk 后头。 */
+export function fullOrder(defaults: string[], saved: string[] = []): string[] {
+  const seq = saved.filter((k, i) => saved.indexOf(k) === i)
+  for (let d = 0; d < defaults.length; d++) {
+    const k = defaults[d]
+    if (seq.includes(k)) continue
+    let at = 0
+    for (let p = d - 1; p >= 0; p--) {
+      const i = seq.indexOf(defaults[p])
+      if (i >= 0) { at = i + 1; break }
+    }
+    seq.splice(at, 0, k)
+  }
+  return seq
+}
+
+/** 在场的卡片按序排好。defaults 要包含全部在场的 id(插件卡由调用方按注册顺序拼进去)。 */
+export const orderCards = (present: string[], defaults: string[], saved?: string[]): string[] =>
+  fullOrder(defaults, saved).filter((k) => present.includes(k))
+
+/** 把 id 挪到 before 前面(before = null → 最后),返回新的完整序列。 */
+export function moveCard(seq: string[], id: string, before: string | null): string[] {
+  const rest = seq.filter((k) => k !== id)
+  const at = before === null ? rest.length : rest.indexOf(before)
+  rest.splice(at < 0 ? rest.length : at, 0, id)
+  return rest
+}

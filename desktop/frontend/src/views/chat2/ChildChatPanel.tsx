@@ -3,6 +3,7 @@ import { Bot, ChevronRight, Loader2, MessageCircleQuestion, X } from 'lucide-rea
 import type { Leaf } from '@lcl/engine/types'
 import { listActiveRuns } from '../../services/agentRunService'
 import { useApp } from '../../stores/appStore'
+import { AgentAvatar } from '../../components/AgentAvatar'
 import { recordToUi } from '../../tangu/store/tanguSlice'
 import { useChildChat } from '../../stores/childChatStore'
 import { getBackgroundSessions, getSessionDetail, listMessages, openTeamMemberSession, type BackgroundSessionInfo } from '../../services/backendService'
@@ -22,6 +23,16 @@ registerMessages({
   'childchat.legacy': { zh: '这条旧子任务没有保存独立会话。新任务会保留完整记录。', en: 'This older task has no saved child conversation. New tasks retain their full history.' },
   'childchat.retry': { zh: '重新载入', en: 'Reload' },
 })
+
+/** 委派给具名 Agent 的子会话标题就是它的 name(引擎 label = def.name),按名反查头像 —— 同 ChatView 消息头像的口径;
+ *  通用子代理 / 头脑风暴座位查不到,仍画 Bot(Bot 专属 Tangu 本体)。团队成员行直接带 slug。
+ *  ponytail: 同名 Agent 取第一个;要精确就让引擎在 subchat 事件里带 agentSlug(旧引擎照样只能按名认)。 */
+function SubAgentGlyph({ title, slug, working }: { title: string; slug?: string; working?: boolean }) {
+  const def = useApp((s) => s.agentDefs.find((a) => (slug ? a.slug === slug : a.name === title)))
+  const url = useApp((s) => (def ? s.agentAvatars[def.slug] : undefined))
+  if (!def) return <Bot size={16} />
+  return <AgentAvatar name={def.name} url={url} size={18} className={`t2o-bar-avatar${working ? ' is-working' : ''}`} initialClassName="t2o-bar-avatar-text" data-subagent-avatar={def.slug} />
+}
 
 /** Both persisted background work and live delegate events appear in the same compact list. */
 export function SubChatStatus({ sessionId }: { sessionId: string }) {
@@ -47,7 +58,7 @@ export function SubChatStatus({ sessionId }: { sessionId: string }) {
   if (!rows.length) return null
   return <div className="t2o-team-status" data-subchat-status>
     {rows.map((r) => <button key={r.id} type="button" className="t2o-desk-row" onClick={() => useChildChat.getState().open(sessionId, r)}>
-      <Bot size={16} /><span className="t2o-desk-name">{r.title}</span>
+      <SubAgentGlyph title={r.title} working={r.streaming} /><span className="t2o-desk-name">{r.title}</span>
       <span className="t2o-desk-activity">{t(r.streaming ? 'teamdesk.status.working' : 'teamdesk.status.done')}</span>
       <ChevronRight size={12} />
     </button>)}
@@ -150,7 +161,7 @@ export function ChildChatPanel({ parentId }: { parentId: string }) {
   return <div ref={root} className="agent-desk open child-chat-panel" data-team-desk="panel" style={{ '--desk-w': `${fraction * 100}%` } as React.CSSProperties}>
     <div className="agent-desk-grip" onPointerDown={grip} />
     <div className="agent-desk-inner">
-      <div className="agent-desk-head"><Bot size={15} /><strong className="agent-desk-title">{target.title}</strong><span className="agent-desk-note">{t('childchat.title')}</span><button className="icon-btn" aria-label={t('teamdesk.collapse')} onClick={leaf.close}><X size={16} /></button></div>
+      <div className="agent-desk-head"><SubAgentGlyph title={target.title} slug={target.slug} /><strong className="agent-desk-title">{target.title}</strong><span className="agent-desk-note">{t('childchat.title')}</span><button className="icon-btn" aria-label={t('teamdesk.collapse')} onClick={leaf.close}><X size={16} /></button></div>
       <div className="child-chat-hint">{t('childchat.hint')}</div>
       {error ? <div className="child-chat-placeholder" role="alert">{error}<button onClick={() => setRetry((v) => v + 1)}>{t('childchat.retry')}</button></div>
         : !sessionId ? <div className="child-chat-placeholder">{t(target.slug ? 'childchat.notStarted' : 'childchat.legacy')}</div>

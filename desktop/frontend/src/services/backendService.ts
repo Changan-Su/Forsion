@@ -357,6 +357,34 @@ export const restoreCheckpoint = (t: EngineTarget, sessionId: string, at: number
     { method: 'POST', body: JSON.stringify({ at }) },
   )
 
+/** run_background 起的后台进程(引擎 routes/processes.ts,2026-10-25):url = 输出里认出的本机地址(只在跑着时给),last = 最后一行。 */
+export interface EngineProcess {
+  id: string
+  sessionId: string
+  command: string
+  status: 'running' | 'exited' | 'killed' | 'error'
+  exitCode: number | null
+  startedAt: number
+  endedAt: number | null
+  origin: 'remote' | 'channel' | 'unattended' | 'local'
+  url: string | null
+  last: string
+}
+
+/** 本人各会话的后台进程。老引擎没有这个路由(404)→ 当作没有。 */
+export const listEngineProcesses = (t: EngineTarget) =>
+  request<{ processes: EngineProcess[] }>(t, '/agent/processes').then((r) => r.processes || [], (e) => {
+    if (e?.status === 404) return [] as EngineProcess[]
+    throw e
+  })
+
+const processPath = (sessionId: string, pid: string) => `/agent/sessions/${encodeURIComponent(sessionId)}/processes/${encodeURIComponent(pid)}`
+export const engineProcessOutput = (t: EngineTarget, sessionId: string, pid: string) =>
+  request<EngineProcess & { output: string; truncated: boolean }>(t, `${processPath(sessionId, pid)}/output`)
+/** 用户自己点停止:引擎直接停整棵进程树,不走审批。 */
+export const stopEngineProcess = (t: EngineTarget, sessionId: string, pid: string) =>
+  request<EngineProcess>(t, `${processPath(sessionId, pid)}/kill`, { method: 'POST' })
+
 export const getSessionConfig = (t: EngineTarget, sessionId: string) =>
   request<{ agent_config: AgentConfig }>(
     t, `/agent/sessions/${encodeURIComponent(sessionId)}/config`,

@@ -106,6 +106,10 @@ export const CLASSIFICATION = {
   'GET /agent/sessions/search': [A, 'session search'],
   'POST /agent/sessions/:id/branch': [A, 'branch a session (remote taint propagates, C5)'],
   'GET /agent/sessions/:id/background': [A, 'background child sessions'],
+  // processes.ts:摘要栏「后台」卡(2026-10-25)。归属按 chat_sessions.user_id 过滤;停止 = 用户点的、只会停(同 runs/:id/abort,基础档)
+  'GET /agent/processes': [A, 'list own background processes (read; ownership-filtered)'],
+  'GET /agent/sessions/:id/processes/:pid/output': [A, 'tail of a background process output (read)'],
+  'POST /agent/sessions/:id/processes/:pid/kill': [A, 'user stops a background process (only stops; base tier like runs/:id/abort)'],
   'POST /agent/sessions/:id/team-members/:slug': [A, 'open a team member child session (taint propagates, C5)'],
   'POST /agent/sessions/:id/children': [A, 'task card starts a visible child session; remote taint is copied onto its first run and stored marker (C5)'],
   'GET /agent/sessions/:id/detail': [A, 'session detail'],

@@ -43,6 +43,7 @@ import { panelToast } from '../../components/PanelNotice'
 import { currentLocale, registerMessages, subscribeLocale, translate } from '../../i18n'
 import { idleAgentStatus, readTangu, type TanguAgentStatus, type TanguCompleteRequest, type TanguStartChatResult } from './tanguSeam'
 import { registerDeskCompanion, revokeDeskCompanions, type DeskCompanionContribution, type DeskCompanionHandle } from './deskCompanion'
+import { registerSummaryCard, revokeSummaryCards, type SummaryCardContribution, type SummaryCardHandle } from './summaryCards'
 // ctx.desk 的宿主闸:端判定单源(currentPlatform)+ UI 模式(叶子模块,不经 @lcl/engine barrel)。
 import { currentPlatform } from '../../services/agentRunService'
 import { UI_MODE } from '@lcl/engine/uiMode'
@@ -2235,6 +2236,18 @@ export const usePluginStore = create<PluginState>((set, get) => {
                 update: (patch) => { if (ctxAlive()) h.update(patch) },
                 dispose: () => { if (ctxAlive()) h.dispose() },
               }
+            },
+          },
+          // 摘要栏插件卡(2026-10-25):同一道门(只有桌面 Tangu 有摘要栏)。登记即记账,关账统一 revokeSummaryCards。
+          summary: {
+            registerCard: (def: SummaryCardContribution): SummaryCardHandle => {
+              if (!ctxAlive()) {
+                console.warn(`[amadeus] 插件 ${pluginId} 已停用,ctx.summary.registerCard 被忽略`)
+                return { dispose: () => {} }
+              }
+              const h = registerSummaryCard(pluginId, def)
+              scope.ownOnce('summaryCards', () => revokeSummaryCards(pluginId))
+              return { dispose: () => { if (ctxAlive()) h.dispose() } }
             },
           },
         }

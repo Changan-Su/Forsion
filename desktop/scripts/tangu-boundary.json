@@ -111,6 +111,7 @@
       "desktop/frontend/src/amadeus/plugins/deskCompanion.ts",
       "desktop/frontend/src/amadeus/plugins/display.ts",
       "desktop/frontend/src/amadeus/plugins/pluginStore.ts",
+      "desktop/frontend/src/amadeus/plugins/summaryCards.ts",
       "desktop/frontend/src/amadeus/plugins/tanguSeam.ts",
       "desktop/frontend/src/amadeus/plugins/types.ts",
       "desktop/frontend/src/amadeus/store/pageStore.ts",
