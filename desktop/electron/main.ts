@@ -3552,7 +3552,7 @@ app.whenReady().then(async () => {
     if (!audio.length) throw new Error('空音频')
     // 本地优先:选了本地且模型就绪 → 离线转写(不联网)。
     if (asrBackendFor(cfg.asrBackend, req.backend, localModelReady()) === 'local') {
-      return transcribeLocal(audio, { timestamps: req?.timestamps })
+      return transcribeLocal(audio, { timestamps: req?.timestamps, language: req?.language })
     }
     // 云端:自带 provider(<provider>/<model> 命中 providers.json)→ 主进程直连上游;否则走 Forsion 托管(计费)。
     const modelId = (req?.modelId || cfg.asrModelId || '').trim()
