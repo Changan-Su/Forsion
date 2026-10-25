@@ -6,7 +6,8 @@
 .agents-roster-heading small { font-size: var(--ui-font-caption, 11px); color: var(--text-faint); }
 .agents-roster-heading > button { display: grid; place-items: center; width: 24px; height: 24px; margin: -4px 0; border: 0; border-radius: var(--radius-sm, 8px); background: transparent; color: var(--text-muted); cursor: pointer; }
 .agents-roster-heading > button:hover { background: var(--overlay-medium); color: var(--text); }
-.agents-search, .profile-search { display: flex; align-items: center; gap: 8px; padding: 9px 10px; border-radius: var(--radius-sm, 8px); background: var(--overlay-light); color: var(--text-muted); }
+/* 搜索框一个形状(走查 5.12):同侧栏 .t2s-search 的 32px 胶囊。 */
+.agents-search, .profile-search { display: flex; align-items: center; gap: 8px; box-sizing: border-box; height: 32px; padding: 0 10px; border-radius: var(--radius-pill, 999px); background: var(--overlay-light); color: var(--text-muted); }
 .agents-search input, .profile-search input { width: 100%; min-width: 0; border: 0; background: transparent; outline: none; padding: 0; box-shadow: none; font-size: var(--ui-font-meta, 12px); color: var(--text); }
 /* 环画在框内:正文滚动区左右只有 2px 内边距,外扩的环会被裁掉两条竖边 */
 .profile-search:focus-within { outline: var(--focus-ring) solid var(--signal-line); outline-offset: -2px; }
@@ -407,3 +408,11 @@ div.agent-equipment-item > label { display: flex; align-items: flex-start; gap: 
 /* 「查看」落点(对话里的留痕 / 更新卡 / 通知 → 详情里的那一条):短暂垫一层底,渐隐回原样。只写中间帧,起止都回到元素自己的底色 */
 @keyframes record-flash { 25%, 60% { background: var(--overlay-strong); } }
 [data-record-flash] { animation: record-flash 1.8s ease; }
+
+/* 5.11 A(10-25 用户定):分段标签条与侧栏 .t2s-vaultseg、LCL 看法胶囊同一种选中态 —— 凸起滑块 --seg-thumb + --seg-thumb-shadow,
+   选中字 --text —— 和同一档圆角(pill)。悬停只提字色、不铺底:暗色下 --overlay-medium 的底和滑块几乎一样亮,会看成两格选中。
+   放文件末尾:同特异性压过上面的基础规则(DESIGN §7)。滑块写两种形态:整条等分的 nav::before 与按钮自带的 button.selected::before。 */
+.agent-section-nav, .agent-section-nav button { border-radius: var(--radius-pill, 999px); }
+.agent-section-nav::before, .agent-section-nav button.selected::before { border-radius: var(--radius-pill, 999px); background: var(--seg-thumb); box-shadow: var(--seg-thumb-shadow); }
+.agent-section-nav button:hover { background: transparent; }
+.agent-section-nav button.selected { color: var(--text); }
