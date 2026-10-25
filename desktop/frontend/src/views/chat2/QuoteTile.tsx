@@ -7,11 +7,12 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { ClipboardList, MessageSquarePlus, Quote, X } from 'lucide-react'
+import { ClipboardList, MessageSquarePlus, MousePointerClick, Quote, X } from 'lucide-react'
 import { OverlayAt } from '@lcl/engine'
 import { WikiText } from '../../components/ChatWikiLink'
 import { registerMessages, useI18n } from '../../i18n'
 import { pasteTitle } from './quotes'
+import { selectorTail, tileExcerpt, type ElementPick } from './elementPick'
 
 registerMessages({
   'quote.tile.kind': { zh: '引用', en: 'Quote' },
@@ -27,6 +28,10 @@ registerMessages({
   'paste.tile.sub': { zh: '粘贴 · {lines} 行 · {chars} 字', en: 'Pasted · {lines} lines · {chars} chars' },
   'paste.preview.title': { zh: '粘贴的内容', en: 'Pasted text' },
   'paste.preview.restore': { zh: '放回输入框', en: 'Put back in the text field' },
+  'element.tile.title': { zh: '「{text}」', en: '“{text}”' },
+  'element.tile.sub': { zh: '网页元素 · {selector} · {host}', en: 'Element · {selector} · {host}' },
+  'element.tile.open': { zh: '点一下看发给模型的内容', en: 'Click to see what the model gets' },
+  'element.preview.title': { zh: '网页元素', en: 'Web element' },
 })
 
 const squash = (s: string): string => s.replace(/\s+/g, '')
@@ -80,7 +85,7 @@ export function QuoteTile({ text, note, onOpen, onRemove, removeTitle, title }: 
 }
 
 /** 引用全文(Claude 点引用卡出的那个窗)。外壳复用 Amadeus 的 .dialog-*(同 RemoveDialog 的挂法)。 */
-export function QuotePreview({ text, note, onNote, onClose, paste, onRestore }: {
+export function QuotePreview({ text, note, onNote, onClose, paste, onRestore, title: heading }: {
   text: string
   note?: string
   /** 给了 = 回应可改(输入框里的卡);不给 = 只读(已发的) */
@@ -90,9 +95,12 @@ export function QuotePreview({ text, note, onNote, onClose, paste, onRestore }: 
   paste?: boolean
   /** 给了 = 窗底一颗「放回输入框」 */
   onRestore?: () => void
+  /** 窗标题(已翻译);不给按用途取 */
+  title?: string
 }) {
   const { t } = useI18n()
-  const title = paste ? 'paste.preview.title' : onNote || note ? 'quote.preview.reply' : 'quote.preview.title'
+  const titleKey = paste ? 'paste.preview.title' : onNote || note ? 'quote.preview.reply' : 'quote.preview.title'
+  const title = heading ?? t(titleKey)
   const box = useRef<HTMLDivElement>(null)
   // 关了把焦点还给点开它的那颗磁贴。在渲染时记:effect 跑的时候 autoFocus 已经把焦点挪到关闭钮上了
   const opener = useRef(document.activeElement as HTMLElement | null)
@@ -115,9 +123,9 @@ export function QuotePreview({ text, note, onNote, onClose, paste, onRestore }: 
   return createPortal(
     <div className="am-app tangu-lovable" style={{ display: 'contents' }}>
       <div className="dialog-overlay" onMouseDown={onClose}>
-        <div ref={box} className="dialog quote-preview" role="dialog" aria-modal="true" aria-label={t(title)} onMouseDown={(e) => e.stopPropagation()}>
+        <div ref={box} className="dialog quote-preview" role="dialog" aria-modal="true" aria-label={title} onMouseDown={(e) => e.stopPropagation()}>
           <div className="quote-preview-head">
-            <div className="dialog-title">{t(title)}</div>
+            <div className="dialog-title">{title}</div>
             <button type="button" className="quote-preview-x" title={t('quote.preview.close')} aria-label={t('quote.preview.close')} autoFocus onClick={onClose}><X size={16} /></button>
           </div>
           {paste
@@ -195,5 +203,31 @@ export function ReplyPopover({ text, rect, onAdd, onClose }: {
       </div>
     </OverlayAt>,
     document.body,
+  )
+}
+
+/** 网页元素磁贴(内置浏览器点选,elementPick.ts):和引用、粘贴磁贴同一副身材。标题 = 元素文字前 20 字(没字用标签名),
+ *  副行「网页元素 · 选择器 · 域名」。截图只给模型,磁贴上只放图标;点一下看发给模型的那段。 */
+export function ElementTile({ pick, onOpen, onRemove, removeTitle }: {
+  pick: Pick<ElementPick, 'text' | 'tag' | 'selector' | 'host' | 'url'>
+  onOpen: () => void
+  onRemove: () => void
+  removeTitle: string
+}) {
+  const { t } = useI18n()
+  const excerpt = tileExcerpt(pick.text)
+  return (
+    <span className="att-tile att-tile--file att-tile--quote att-tile--element">
+      <button type="button" className="att-tile-open" title={`${pick.selector}\n${pick.url}\n${t('element.tile.open')}`} onClick={onOpen}>
+        <span className="att-tile-badge" data-kind="element" aria-hidden><MousePointerClick size={16} /></span>
+        <span className="att-tile-meta">
+          <span className="att-tile-name"><span className="att-tile-head">{excerpt ? t('element.tile.title', { text: excerpt }) : pick.tag}</span></span>
+          <span className="att-tile-sub">{t('element.tile.sub', { selector: selectorTail(pick.selector), host: pick.host })}</span>
+        </span>
+      </button>
+      <button type="button" className="att-tile-x" title={removeTitle} aria-label={removeTitle} onClick={onRemove}>
+        <X size={11} strokeWidth={2.5} />
+      </button>
+    </span>
   )
 }
