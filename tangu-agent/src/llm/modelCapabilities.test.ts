@@ -308,6 +308,12 @@ describe('applyThinking — 各家线上形态', () => {
     expect(payload.output_config).toEqual({ effort: 'max' });
   });
 
+  it('Claude 自适应:未给 max_tokens 时补足上限(否则 8192 缺省被 max 档思考吃光),给了就不动', () => {
+    const target = { baseUrl: 'https://api.anthropic.com', modelId: 'claude-opus-5-5' };
+    expect(apply(target, 'max').payload.max_tokens).toBe(32000);
+    expect(apply(target, 'low', { max_tokens: 1600 }).payload.max_tokens).toBe(1600);
+  });
+
   it('gpt-5.6 起 effort 有真 max;5.5 到 xhigh 为止;两代都没有 minimal', () => {
     const oa = (m: string, lv: Parameters<typeof apply>[1]) =>
       apply({ baseUrl: 'https://api.openai.com/v1', modelId: m }, lv).payload;

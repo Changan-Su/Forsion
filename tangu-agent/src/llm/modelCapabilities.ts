@@ -874,7 +874,7 @@ export function clampThinkingLevel(cap: ModelCapability, level: ThinkingLevel): 
 
 /** Claude 预算思考:留给正文的最小输出额度。 */
 const MIN_OUTPUT_TOKENS = 1024;
-/** 未指定 max_tokens 时,为预算思考补的上限(取所有 Claude 型号都吃得下的保守值)。 */
+/** 未指定 max_tokens 时,为预算 / 自适应思考补的上限(取所有 Claude 型号都吃得下的保守值)。 */
 const CLAUDE_MAX_TOKENS_CEILING = 32000;
 
 /** prefix 兜底的系统提示(英文——模型提示一律英文)。 */
@@ -945,6 +945,9 @@ export function applyThinking(
         // 也改走思考块 → 不要 summarized,UI 在工具间一片静默(官方 Opus 5.5 迁移指南)。计费与 display 无关。
         payload.thinking = { type: 'adaptive', display: 'summarized' };
         if (typeof wire === 'string') payload.output_config = { effort: wire };
+        // max_tokens 同时封顶思考 + 正文。调用方没给就落到转换器的 8192 缺省,xhigh / max 档一轮思考就能吃光,
+        // 上游 stop_reason=max_tokens 且零正文 →「Upstream output limit reached」(2026-10-25 用户反馈,Opus 5.5 max 档)。
+        if (!(typeof payload.max_tokens === 'number' && payload.max_tokens > 0)) payload.max_tokens = CLAUDE_MAX_TOKENS_CEILING;
       }
       break;
 
