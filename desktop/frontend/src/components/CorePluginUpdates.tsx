@@ -16,6 +16,7 @@ registerMessages({
   'plugins.editorExtensions': { zh: '编辑器扩展', en: 'Editor extensions' },
   'plugins.bundledFeatures': { zh: '内置功能', en: 'Built-in features' },
   'plugins.core.extend': { zh: '账号、云同步、设备互联与 Connect。', en: 'Account, cloud sync, device connections and Connect.' },
+  'plugins.core.calendar': { zh: '日历和待办：快捷添加、安排日期、完成与撤销。', en: 'Calendar and tasks: quick add, scheduling, complete and undo.' },
   'plugins.core.computerUse': { zh: '通过 Agent 操作电脑上的应用。', en: 'Let agents operate apps on your computer.' },
   'plugins.core.amadeus': { zh: '笔记、编辑器与多维表。', en: 'Notes, editor and databases.' },
   'plugins.core.tangu': { zh: '本地 Agent 引擎与工具运行能力。', en: 'Local agent engine and tool runtime.' },

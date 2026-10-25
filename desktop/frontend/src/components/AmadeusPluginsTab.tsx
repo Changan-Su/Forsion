@@ -145,6 +145,13 @@ registerMessages({
 
 /** 启停后的捆绑包级联:内嵌 Space 显隐同步 + 刷新引擎插件列表。内嵌引擎插件的开关**不在这里写** —— 这里多半是设置浮窗,
  *  它的运行态未必等于主窗的;由主窗收到偏好 / 开启戳后在 syncBundleEngines 里统一串行写(Codex 10-02)。 */
+/** 核心插件卡:说明各自一条(别再落到电脑操作那条上)。 */
+const CORE_DESCRIPTIONS: Record<string, string> = {
+  'forsion-extend': 'plugins.core.extend',
+  'tangu-computer-use': 'plugins.core.computerUse',
+  'forsion-calendar': 'plugins.core.calendar',
+}
+
 function cascadeAfterToggle(p: AmadeusPlugin, onEngineReload?: () => void): void {
   void loadUserSpaces() // 无 bundle 时幂等无害
   if (p.bundle?.enginePlugins?.length) onEngineReload?.()
@@ -896,7 +903,7 @@ export const AmadeusPluginsTab: React.FC<{
               <RunBadge p={p} />
               <BundleChips p={p} />
             </div>
-            {pluginDisplayDescription(p, locale) && <div className="plugin-card-description">{isCorePlugin(p) ? t(p.id === 'forsion-extend' ? 'plugins.core.extend' : 'plugins.core.computerUse') : pluginDisplayDescription(p, locale)}</div>}
+            {pluginDisplayDescription(p, locale) && <div className="plugin-card-description">{isCorePlugin(p) ? t(CORE_DESCRIPTIONS[p.id] ?? 'plugins.core.computerUse') : pluginDisplayDescription(p, locale)}</div>}
             {p.locked && <RestartPending p={p} />}
           </div>
           {/* 带主进程半身的内置包:同详情页,开关管下次开机装不装那一半 */}
