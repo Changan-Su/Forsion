@@ -97,6 +97,8 @@ interface GuardProps {
   name?: string
   /** 视图类型,只进「复制详情」。 */
   type?: string
+  /** 变了且正处于错误态 → 清掉错误重渲(常驻挂载、只是藏起来的面板,再次露出时给它一次重来的机会;健康的不受影响)。 */
+  resetKey?: unknown
 }
 
 /** 错误态(走查 5.10):样子同宿主的 EmptyState —— 图标、一句标题、一句话、「重试」+「复制详情」,原始异常默认折起。 */
@@ -137,6 +139,9 @@ export class ViewErrorBoundary extends Component<GuardProps, GuardState> {
   state: GuardState = { err: null, n: 0 }
   static getDerivedStateFromError(err: Error): Partial<GuardState> {
     return { err }
+  }
+  componentDidUpdate(prev: GuardProps) {
+    if (this.state.err && prev.resetKey !== this.props.resetKey) this.setState((s) => ({ err: null, n: s.n + 1 }))
   }
   render() {
     const { err, n } = this.state

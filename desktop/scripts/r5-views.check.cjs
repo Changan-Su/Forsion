@@ -165,6 +165,16 @@ async function run() {
     check('5.13 上下文浮层不越出输入卡', ctxZh.pr <= ctxZh.cr + 0.5 && ctxZh.pl >= ctxZh.cl - 0.5, JSON.stringify(ctxZh))
     await shot('5.13-ctx-light')
     await win.locator('.t2c-ctxring-btn').first().click(); await win.waitForTimeout(200)
+    // 输入卡比浮层(300)还窄:浮层收进卡里、宽度稳定(Codex 评审:useEdgeNudge 量到收窄后的宽会来回翻)
+    await win.evaluate(() => { const c = document.querySelector('.t2c-card'); c.dataset.r5w = c.style.width; c.style.width = '260px' })
+    await win.waitForTimeout(300)
+    await win.locator('.t2c-ctxring-btn').first().click()
+    const widths = []
+    for (let i = 0; i < 6; i++) { await win.waitForTimeout(120); widths.push(await win.evaluate(() => { const p = document.querySelector('.t2c-ctxring-pop').getBoundingClientRect(), c = document.querySelector('.t2c-card').getBoundingClientRect(); return [Math.round(p.width), Math.round(p.left - c.left), Math.round(c.right - p.right)] })) }
+    const stable = new Set(widths.map((w) => w.join(','))).size === 1
+    check('5.13 输入卡比浮层窄:浮层收进卡里、不来回闪', stable && widths[0][1] >= 0 && widths[0][2] >= 0, JSON.stringify(widths))
+    await win.locator('.t2c-ctxring-btn').first().click(); await win.waitForTimeout(200)
+    await win.evaluate(() => { const c = document.querySelector('.t2c-card'); c.style.width = c.dataset.r5w || ''; delete c.dataset.r5w })
 
     // ── 英文 ──
     await reloadInto('tangu', 'en')

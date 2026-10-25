@@ -575,12 +575,12 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
       </ViewErrorBoundary>
       {/* Memory owns independent drafts. Keep it mounted when switching the parent tabs. */}
       {visitedMemory && <div className="profile-growth-memory" hidden={section !== 'growth' || growth !== 'memory'}>
-        <ViewErrorBoundary name={t('agentProfile.memory')}><AgentMemoryPanel cfg={s.cfg} slug={agent.slug} shareDefaultMemory={agent.shareDefaultMemory} organized /></ViewErrorBoundary>
+        <ViewErrorBoundary name={t('agentProfile.memory')} resetKey={section === 'growth' && growth === 'memory'}><AgentMemoryPanel cfg={s.cfg} slug={agent.slug} shareDefaultMemory={agent.shareDefaultMemory} organized /></ViewErrorBoundary>
         <details className="profile-disclosure"><summary>{t('agentProfile.memoryScope')}</summary><label className="agent-equipment-item"><input type="checkbox" checked={!!draft.shareDefaultMemory} onChange={(e) => patch({ shareDefaultMemory: e.target.checked })} />{t('agentProfile.sharedMemory')}</label><p className="agent-profile-muted">{t('agentProfile.memoryScopeHint')}</p></details>
         <button className="agent-profile-link" onClick={() => setLibrary(true)}>{t('agentProfile.library')}<ExternalLink size={13} /></button>
       </div>}
       {visitedLog && <div className="profile-growth-log" hidden={section !== 'growth' || growth !== 'log'}>
-        <ViewErrorBoundary name={t('agentProfile.log')}><AgentLogPanel cfg={s.cfg} slug={agent.slug} active={section === 'growth' && growth === 'log'} /></ViewErrorBoundary>
+        <ViewErrorBoundary name={t('agentProfile.log')} resetKey={section === 'growth' && growth === 'log'}><AgentLogPanel cfg={s.cfg} slug={agent.slug} active={section === 'growth' && growth === 'log'} /></ViewErrorBoundary>
       </div>}
       </fieldset>
     </div>

@@ -283,6 +283,7 @@ html:root[data-mode][data-flat='1'] {
   --card-shadow: none;
   --btn-shadow: none;
   --icon-shadow: none;
+  --seg-thumb-shadow: none;
 }
 
 /* color-scheme 按 LCL 的 data-mode 声明:滚动条/原生控件随明暗,且 astryx 传送到 body 的浮层
