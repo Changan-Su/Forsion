@@ -204,17 +204,23 @@ async function maybeConsolidate(userId: string, slug: string | undefined, modelI
 }
 
 /** 从模型输出里提取首个 JSON 对象(容忍代码围栏 / 前后噪声)。失败 → null。 */
-function parseJudgement(raw: string): { title?: string; summary?: string; log?: string; memory?: string; emoji?: string } | null {
+export function parseJudgement(raw: string): { title?: string; summary?: string; log?: string; memory?: string; emoji?: string } | null {
   let s = String(raw || '').trim().replace(/^```(?:json)?/i, '').replace(/```$/i, '').trim();
   const i = s.indexOf('{');
   const j = s.lastIndexOf('}');
   if (i >= 0 && j > i) s = s.slice(i, j + 1);
-  try {
-    const o = JSON.parse(s);
-    return o && typeof o === 'object' ? o : null;
-  } catch {
-    return null;
+  // 数学 / 物理对话里模型会把 LaTeX 原样写进 JSON 串(`\(Y_{lm}\)`),裸 `\(` 是非法转义,整份判断连标题一起丢
+  // (2026-10-24 用户反馈「Historian 跑了但标题没变」)。第二次把非法转义的反斜杠补成 `\\` 再解。
+  // ponytail: \theta / \nu / \frac 这类恰好以合法转义字母开头的会被吞成控制字符 —— 文字略脏,但判断不再整份作废。
+  // 合法转义成对吃掉(`\\alpha` 的第二个反斜杠不能再补),只补落单的那个。
+  const repaired = s.replace(/\\(["\\/bfnrt]|u[0-9a-fA-F]{4})?/g, (m, ok) => (ok ? m : '\\\\'));
+  for (const text of [s, repaired]) {
+    try {
+      const o = JSON.parse(text);
+      return o && typeof o === 'object' ? o : null;
+    } catch { /* 下一种 */ }
   }
+  return null;
 }
 
 /** 纯判定:第 roundN 轮是否触发(首轮可强制 + 每 every 轮)。roundN<1 不触发。 */
