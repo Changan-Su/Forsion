@@ -18,6 +18,7 @@ export interface OAuthTokens {
   modelIds?: string[]; // 登录时从 provider /models 端点拉取并缓存(空或 stale 时启动懒刷;失败回退硬编提示)
   modelIdsAt?: number; // modelIds 拉取时刻 epoch ms(TTL 判 stale 用)
   modelIdsClientVersion?: string; // Codex 目录按客户端版本过滤;版本变化立即重拉(旧文件缺字段同样重拉)
+  fastTiers?: Record<string, string>; // 与 modelIds 同一趟拉的:模型 → Fast 档说明原文(Codex service_tiers 里 id=priority 那条);{}=拉过、都没有
 }
 
 const file = (): string => providerAuthFile(); // 共享域(home=…/tangu 时为其父目录)

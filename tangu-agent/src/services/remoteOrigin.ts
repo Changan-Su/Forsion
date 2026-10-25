@@ -170,14 +170,14 @@ export const REMOTE_STRIPPED_CONFIG_KEYS = [
  * 契约 C7:远程**写会话配置**(PUT|PATCH /agent/sessions/:id/config、远程 POST /agent/sessions 的初始配置)只收这些键;
  * 其余一律保留存值 —— 存值是本机下一次 run 会照抄的东西,远端改不了、也删不掉。白名单而不是黑名单:明天新加的配置键缺省就远端不可写。
  *   agentSlug —— 选 Agent(其定义的审批档经激活时再钳,C3);
- *   modelId / model —— 模型;thinkingLevel / ultra / effort / reasoningEffort —— 思考档一类;
+ *   modelId / model —— 模型;thinkingLevel / ultra / effort / reasoningEffort —— 思考档一类;fast —— 出字速度档;
  *   title / name —— 标题一类;
  *   approvalMode —— 钳到上限(C3),custom 不收(见 applyRemoteConfigWrite)。
  * ⚠️ 远端新建的会话因此只存这几个键(execMode / preset / cwd 等不落库):远端那一轮不受影响(run 用请求里的 agent_config),
  * 只是本机日后打开这个会话时看到的是缺省值。与桌面 unitWeb 路由表(engineRoutes.generated.ts)那条注释同一口径。
  */
 export const REMOTE_WRITABLE_CONFIG_KEYS: ReadonlySet<string> = new Set([
-  'agentSlug', 'modelId', 'model', 'thinkingLevel', 'ultra', 'effort', 'reasoningEffort', 'title', 'name', 'approvalMode',
+  'agentSlug', 'modelId', 'model', 'thinkingLevel', 'ultra', 'fast', 'effort', 'reasoningEffort', 'title', 'name', 'approvalMode',
 ]);
 
 /** 远程请求带来的 agent_config(起 run 用):剥掉受保护键、审批档钳到上限。返回新对象,不改入参。cwd 不在这里动 —— 由路由按 C8 校验、拒整条请求。 */

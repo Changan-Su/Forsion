@@ -1993,6 +1993,9 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .cm-advanced-list .cm-row { padding-inline: 6px; font-size: var(--t2c-font-control, 12px); }
 .cm-row--static { cursor: default; }
 .cm-row--static:hover { background: transparent; color: var(--text-light); }
+/* Fast 行:说明写在标签下 —— 「约 2 倍出字速度，额度消耗更快」放在右侧一行放不下,截断会先吃掉最要紧的额度提示。 */
+.cm-fast-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.cm-fast-note { color: var(--text-faint); font-size: var(--t2c-font-meta, 11px); line-height: 1.35; }
 .cm-row-v.is-max,
 .cm-effort.is-max .cm-effort-value {
   color: #a77bff;

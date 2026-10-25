@@ -259,3 +259,43 @@ describe('朗读分发:直连没命中走云端', () => {
     await expect(createMultiBrain({ llm: {}, assets: {} } as any, registry()).tts!.synthesize({ model: 'reader', text: 'hi' })).rejects.toThrow('未找到 TTS 模型');
   });
 });
+
+describe('Fast 档:只在 Codex 订阅且目录列了这一档时发 service_tier', () => {
+  const build = (fast: boolean | undefined, modelId: string, providers?: any[]) => {
+    const registry = createProviderRegistry(providers ?? [
+      { providerId: 'codex', baseUrl: 'https://chatgpt.com/backend-api/codex', apiKey: 'tok', accountId: 'acct', protocol: 'openai-responses', fastTiers: { 'gpt-6-luna': '1.5x speed' } },
+      { providerId: 'openai', baseUrl: 'https://api.openai.com/v1', apiKey: 'sk-user' },
+    ]);
+    const brain = createMultiBrain({ llm: {}, assets: {} } as any, registry);
+    const r = registry.resolve(modelId)!;
+    return brain.llm.buildProviderPayload({ model: r.model, apiModelId: r.apiModelId, messages: [{ role: 'user', content: 'hi' }], thinkingLevel: 'low', fast });
+  };
+
+  it('开了 + Codex 目录有 Fast → priority', async () => {
+    expect((await build(true, 'codex/gpt-6-luna')).service_tier).toBe('priority');
+  });
+
+  it('别的进程换号登录:Fast 目录跟着换成新账号那份,不拿旧账号的目录给新账号发 priority', async () => {
+    const registry = createProviderRegistry([
+      { providerId: 'codex', baseUrl: 'https://chatgpt.com/backend-api/codex', apiKey: 'tok-a', accountId: 'acct-a', protocol: 'openai-responses', oauth: true, fastTiers: { 'gpt-6-luna': '1.5x speed' } },
+    ]);
+    const brain = createMultiBrain({ llm: {}, assets: {} } as any, registry);
+    const payloadFor = async () => {
+      const r = (await brain.llm.resolveModelAndKey('codex/gpt-6-luna'))!;
+      return brain.llm.buildProviderPayload({ model: r.model, apiModelId: r.apiModelId, messages: [{ role: 'user', content: 'hi' }], thinkingLevel: 'low', fast: true });
+    };
+    vi.mocked(freshOAuthCred).mockResolvedValue({ access_token: 'tok-b', account_id: 'acct-b' } as any); // B 的盘上没有目录
+    expect((await payloadFor()).service_tier).toBeUndefined();
+    vi.mocked(freshOAuthCred).mockResolvedValue({ access_token: 'tok-c', account_id: 'acct-c', fastTiers: { 'gpt-6-luna': '1.5x speed' } } as any);
+    expect((await payloadFor()).service_tier).toBe('priority');
+    vi.mocked(freshOAuthCred).mockResolvedValue({ access_token: 'tok-c2', account_id: 'acct-c' } as any); // 同账号续期:目录不动
+    expect((await payloadFor()).service_tier).toBe('priority');
+  });
+
+  it('没开、目录里没有这个模型、或不是 Codex 订阅 → 不发', async () => {
+    expect((await build(false, 'codex/gpt-6-luna')).service_tier).toBeUndefined();
+    expect((await build(undefined, 'codex/gpt-6-luna')).service_tier).toBeUndefined();
+    expect((await build(true, 'codex/gpt-5.5')).service_tier).toBeUndefined();
+    expect((await build(true, 'openai/gpt-6-luna')).service_tier).toBeUndefined();
+  });
+});

@@ -30,7 +30,7 @@ const EXPECTED = [
   'setDefaultModel', 'setDetailWsKey', 'setExecConfig', 'setFilePreview', 'setJumpTarget', 'setModelContextWindow',
   'setNewChatCfg', 'setNewChatModel', 'setNewChatWs', 'setOnboarding', 'setPendingChatQuote', 'setPendingDraft',
   'setPendingShare', 'setSeedOnce', 'setSessionEmoji', 'setSessionEngine', 'setSessionEngineModel',
-  'setSessionGroup', 'setSessionMaxIterations', 'setSessionMode', 'setSessionModel', 'setSessionPlanMode',
+  'setSessionFast', 'setSessionGroup', 'setSessionMaxIterations', 'setSessionMode', 'setSessionModel', 'setSessionPlanMode',
   'setSessionThinking', 'setTr', 'setUpdateAvailable', 'setVoiceMode', 'settingsNonce', 'settingsOpen',
   'settingsSkillKey', 'settingsTab', 'skillsList', 'specialEnabled', 'steerNow', 'steerPendingBySession',
   'steerRestoreBySession', 'steerSentBySession', 'stop', 'stoppingBySession', 'subChatsBySession', 'subscribeRun',

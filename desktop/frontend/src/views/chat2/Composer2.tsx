@@ -366,6 +366,9 @@ export const Composer2: React.FC<{
   onThinkingChange?: (level: NonNullable<AgentConfig['thinkingLevel']>, ultra?: boolean) => void
   /** 会话的 Ultra 开关(对标 Codex Ultra:max + 主动并行派子代理)。 */
   ultra?: boolean
+  /** 会话的 Fast 开关(对标 Codex /fast);药丸只在当前模型目录有 Fast 档时露出。 */
+  fast?: boolean
+  onFastChange?: (fast: boolean) => void
   defaultModelIds?: Partial<Record<DefaultModelSlot, string>>
   onDefaultModelChange?: (slot: DefaultModelSlot, modelId: string) => void
   /** 模型菜单「上下文上限」:写本机该模型的窗口覆盖(null = 交还默认 272k)。只在本机引擎下传。 */
@@ -458,7 +461,7 @@ export const Composer2: React.FC<{
   sessionId, advisory, approvalTray, autoFocus, disabled, disabledPlaceholder, running, execConfig, teamApproval,
   models, modelsResponse, modelId, onModelChange, engines, engineId,
   engineModels, engineModelId, onEngineModelChange, engineCommands,
-  thinkingLevel: sessionThinkingLevel, onThinkingChange, ultra,
+  thinkingLevel: sessionThinkingLevel, onThinkingChange, ultra, fast, onFastChange,
   defaultModelIds, onDefaultModelChange, onContextWindowChange,
   maxIterations, onMaxIterationsChange,
   verifyCommand, onVerifyCommandChange,
@@ -2197,6 +2200,9 @@ export const Composer2: React.FC<{
                 ultra={ultraOn}
                 running={running}
                 supportedThinking={isEngine ? undefined : models?.find((m) => m.id === modelId)?.thinkingLevels}
+                fast={fast}
+                fastTier={isEngine ? undefined : models?.find((m) => m.id === modelId)?.fastTier}
+                onFastChange={isEngine ? undefined : onFastChange}
                 effectiveThinking={
                   // 只在 requested 与当前选档一致时才显示生效档——刚改档还没跑新 run 时,旧 effective 不对应当前选择
                   isEngine ? undefined : (ctxInfo?.thinkingRequested === (thinkingLevel || 'medium') ? ctxInfo?.thinkingEffective : undefined)

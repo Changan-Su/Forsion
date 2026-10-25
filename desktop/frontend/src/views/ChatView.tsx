@@ -225,6 +225,7 @@ export function ChatView({ leaf, params }: ViewProps) {
     setNewChatModel: state.setNewChatModel,
     setSessionEngineModel: state.setSessionEngineModel,
     setSessionThinking: state.setSessionThinking,
+    setSessionFast: state.setSessionFast,
     setDefaultModel: state.setDefaultModel,
     setModelContextWindow: state.setModelContextWindow,
     setSessionMaxIterations: state.setSessionMaxIterations,
@@ -982,6 +983,8 @@ export function ChatView({ leaf, params }: ViewProps) {
           thinkingLevel={mvCfg.thinkingLevel}
           ultra={mvCfg.ultra}
           onThinkingChange={(lv, ultra) => s.setSessionThinking(lv, activeId, !params.childSurface, ultra)}
+          fast={mvCfg.fast}
+          onFastChange={(on) => s.setSessionFast(on, activeId)}
           defaultModelIds={{
             backgroundModelId: s.desktopConfig?.backgroundModelId || '',
             imageModelId: s.cfg.imageModelId || '',

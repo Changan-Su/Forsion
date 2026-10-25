@@ -21,6 +21,8 @@ export interface CatalogModel {
   maxContextWindow?: number;
   supportsVision: boolean;
   thinkingLevels?: ThinkingLevel[];
+  /** Fast 档说明原文(只有 Codex 订阅目录给);缺席 = 没有 Fast 档。 */
+  fastTier?: string;
   groupId?: string | null;
   groupName?: string | null;
   groupSortOrder?: number;
@@ -107,7 +109,7 @@ export async function listModelCatalog(profile: AppProfile): Promise<ModelCatalo
     for (const mid of p.modelIds ?? []) {
       const id = `${p.providerId}/${mid}`;
       const win = effectiveContextWindowInfo(id);
-      models.push({ id, name: mid, provider: p.providerId, source: 'direct', modelType: 'llm', contextWindow: win.tokens, contextWindowSource: win.source, maxContextWindow: win.max, supportsVision: modelSupportsVision(mid, noVision.has(mid) ? false : undefined), thinkingLevels: thinkLv(p.providerId, mid, p.baseUrl) });
+      models.push({ id, name: mid, provider: p.providerId, source: 'direct', modelType: 'llm', contextWindow: win.tokens, contextWindowSource: win.source, maxContextWindow: win.max, supportsVision: modelSupportsVision(mid, noVision.has(mid) ? false : undefined), thinkingLevels: thinkLv(p.providerId, mid, p.baseUrl), ...(p.fastTiers?.[mid] ? { fastTier: p.fastTiers[mid] } : {}) });
     }
     for (const mid of p.imageModelIds ?? []) {
       models.push({ id: `${p.providerId}/${mid}`, name: mid, provider: p.providerId, source: 'direct', modelType: 'image_gen', contextWindow: 0, contextWindowSource: 'default', supportsVision: false });
