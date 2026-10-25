@@ -40,7 +40,26 @@ export interface BackgroundProcess {
   /** P1 · K2:起它那一刻的来源标签(之后不变)。 */
   origin: ProcessOrigin;
   /** P1 · G5:起它时套了远程 shell 写保护(macOS,宿主沙箱关 + 远程污点)。没套的进程不收远程 run 的 stdin。 */
-  remoteSeatbelt?: boolean;
+  remoteSeatbelt?: boolean;  /** 输出里第一次出现的本机地址(dev server 之类),归一成 localhost;摘要栏「后台」卡据此把这一行当服务。 */
+  url?: string;
+}
+
+const ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
+export const stripAnsi = (text: string): string => text.replace(ANSI, '');
+const LOCAL_URL = /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(?::\d{2,5})?(?:\/[^\s'"<>)\]]*)?/;
+/** 文本里第一个本机地址;vite 等会给地址上色,先剥色码。0.0.0.0 / 127.0.0.1 / [::1] 归一成 localhost(浏览器打得开、看着一致)。 */
+export function detectLocalUrl(text: string): string | null {
+  const m = stripAnsi(text).match(LOCAL_URL);
+  return m ? m[0].replace(/\/\/(?:127\.0\.0\.1|0\.0\.0\.0|\[::1\])/, '//localhost') : null;
+}
+/** 最后一个非空行(剥色码;`\r` 刷新的进度行也拆开),截 160。 */
+export function lastLine(output: string): string {
+  const lines = stripAnsi(output).split(/\r\n|\n|\r/);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const l = lines[i].trim();
+    if (l) return l.slice(0, 160);
+  }
+  return '';
 }
 
 /**
@@ -111,6 +130,11 @@ function append(p: BackgroundProcess, chunk: string): void {
     p.output = p.output.slice(p.output.length - OUTPUT_CAP);
     p.truncated = true;
   }
+  if (!p.url) {
+    // 多看前面 200 字:地址可能被切在两个 chunk 之间
+    const url = detectLocalUrl(p.output.slice(-(chunk.length + 200)));
+    if (url) { p.url = url; emitChange(); }
+  }
 }
 
 export function startBackgroundProcess(sessionId: string, command: string, cwd: string, ctx?: ToolContext): BackgroundProcess | string {
@@ -162,6 +186,11 @@ export function startBackgroundProcess(sessionId: string, command: string, cwd: 
   ensureReaper();
   emitChange();
   return p;
+}
+
+/** 所有会话的进程(摘要栏按用户归属自己筛)。 */
+export function listAllProcesses(): BackgroundProcess[] {
+  return [...procs.values()];
 }
 
 export function listProcesses(sessionId: string): BackgroundProcess[] {
