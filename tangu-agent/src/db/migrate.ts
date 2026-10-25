@@ -114,6 +114,23 @@ export async function runMigration(): Promise<void> {
   `));
   await query(`CREATE INDEX IF NOT EXISTS idx_muse_todos_user ON muse_todos(user_id, status)`);
 
+  // Muse 给新对话页的开场建议(set_chat_starters 整组替换;本地特性,云端建空表零写入,同 muse_todos 纪律)。
+  // status:active = 正在显示;replaced = 被下一组顶掉;dismissed = 用户点了 ×(30 天内不许再提);used = 点过并发出去了。
+  await query(ddl(`
+    CREATE TABLE IF NOT EXISTS muse_starters (
+      id VARCHAR(36) PRIMARY KEY,
+      user_id VARCHAR(36) NOT NULL,
+      text TEXT NOT NULL,
+      source_kind VARCHAR(16) NOT NULL,
+      source_label TEXT NOT NULL,
+      source_ref TEXT,
+      status VARCHAR(16) NOT NULL DEFAULT 'active',
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `));
+  await query(`CREATE INDEX IF NOT EXISTS idx_muse_starters_user ON muse_starters(user_id, status)`);
+
   // 无人值守 run 的**异步审批**清单(2026-09-10,Muse 权限档 ask/agent):越界写 / 跑命令不再卡死 run,
   // 而是落这里 → 用户(或代批 agent)裁决 → 引擎按**原参数**直接执行(services/pendingApprovals.ts)。
   // 本地特性,云端建空表零写入(同 muse_todos 纪律)。args=工具参数 JSON 原文;cwd=当时的工作目录(相对路径同解)。

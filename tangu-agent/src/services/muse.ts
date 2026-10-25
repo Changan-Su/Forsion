@@ -33,6 +33,7 @@ import { deps } from '../seams/runtime.js';
 import { createRun, setRunTerminalListener } from './runStore.js';
 import { enqueueRun } from './agentLoop.js';
 import { loadSpecialAgentsConfig, legacyMusePrompt, isWithinActiveHours, buildTodoDedupHint, resolveBackgroundModelId, type MuseConfig } from './specialAgentsConfig.js';
+import { starterHint } from './museStarters.js';
 import { MUSE_AGENT_SLUG, ensureMuseAgent, getAgent, listAgents, resolveMemorySlug } from '../agents/agentRegistry.js';
 import { runWithAgentSlug } from '../seams/runContext.js';
 import { DEFAULT_AGENT_SLUG, agentsDir, checkpointsDir, tanguHome } from '../core/tanguHome.js';
@@ -720,6 +721,7 @@ export function buildCycleMessages(
     'If that context ends with a computer-history block, it is what the user was actually doing on this computer outside Forsion: treat it as your most direct signal of what they are working on. ' +
     tierKickoff(cfg) + ' ' +
     `Avoid the "TODOs you have already proposed" below; use add_muse_todo only for genuinely new, high-value todos (at most ${cfg.maxTodosPerWindow} this period — spend the quota sparingly). ` +
+    (cfg.chatStarters ? 'Keep the new-chat starters below useful via set_chat_starters; change one only when something more timely comes up. ' : '') +
     'Use manage_schedule to plan your own follow-ups (auto=true entries wake you up when due; remove them when done). ' +
     'Pace yourself — every cycle spends the user\'s background budget: when nothing needs you soon (the user is away, or it is outside their usual hours per the user rhythm below), ' +
     'finish briefly and call set_next_wake to sleep until they are likely back; their activity ends the sleep, and your rules and due schedule still wake you meanwhile. ' +
@@ -755,6 +757,7 @@ async function startCycle(cfg: MuseConfig, extraKickoff = '', trigger = 'heartbe
     (await recentSessionTitles(userId)) +
     (await folderHint(cfg.allowedFolders)) +
     (await existingTodoHint(userId)) +
+    (cfg.chatStarters ? await starterHint(userId) : '') +
     (await museDmHint(userId)) +
     (await rhythmHint());
   const pending = await countPendingApprovals(userId).catch(() => 0);

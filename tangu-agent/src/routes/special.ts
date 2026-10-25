@@ -27,6 +27,8 @@
  *   GET      /agent/special/muse/library                Muse Library 目录树(桌面 Agent Space 左栏;含子目录)
  *   GET      /agent/special/muse/library/file?path=     读 Library 里一个文本文件(Muse 自建 Space 的 ctx.agent.library.read)
  *   POST     /agent/special/muse/feedback { text }      往 Muse 的 LOG 追加一条 [feedback] 行(任务卡落点回执等)
+ *   GET      /agent/special/muse/starters               新对话页的开场建议(Muse 关着 / chatStarters 关着 → 空)
+ *   PATCH    /agent/special/muse/starters/:id { status: dismissed|used, mute? }  用户点了 × / 点行发出去了(只认 active,写回 Muse 的 LOG)
  *
  * 本地特性：profile.capabilities.hostExec=false（云端）一律 404；例外 = /agent/special/config(云端返回每用户的按轮 Historian 设置)。
  * 远程来源(x-forsion-remote)读 /agent/special/config 只拿最小投影(开关 + 两个节奏值,remote:true;P1 · K10b)。
@@ -44,6 +46,7 @@ import { enqueueRun } from '../services/agentLoop.js';
 import { loadSpecialAgentsConfig, saveSpecialAgentsConfig, DEFAULT_HISTORIAN_PROMPT, legacyMusePrompt, SPECIAL_AGENTS_DEFAULTS, type SpecialAgentsConfig } from '../services/specialAgentsConfig.js';
 import { loadUserHistorianConfig, saveUserHistorianConfig, type UserHistorianConfig } from '../services/historianConfig.js';
 import { museStatus, kickMuse, getAutomationNotices } from '../services/muse.js';
+import { listActiveStarters, markStarter } from '../services/museStarters.js';
 import { loadTriggers, removeTrigger, validateTriggerInput, upsertTrigger, nextRunAt, isPluginTriggerId, precheckWatchCols, needsWatchColPrecheck, type DbLike } from '../services/museTriggers.js';
 import { readDbOrNull } from '../services/amadeusDb.js';
 import { dropCursors } from '../services/dbCursors.js';
@@ -624,6 +627,36 @@ router.post('/agent/special/muse/feedback', authMiddleware, async (req: AuthRequ
   if (!text) return res.status(400).json({ detail: 'text required' });
   await appendMuseFeedback(req.user!.userId, `[feedback] ${text}`);
   res.json({ ok: true });
+});
+
+// ── 新对话页的开场建议(muse_starters;方案 docs/ToBeImproved/Muse预制提示词方案_2026-10-25) ──
+router.get('/agent/special/muse/starters', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    const m = loadSpecialAgentsConfig().muse;
+    if (!m.enabled || !m.chatStarters) return res.json({ starters: [] });
+    res.json({ starters: await listActiveStarters(req.user!.userId) });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'starters failed' });
+  }
+});
+
+router.patch('/agent/special/muse/starters/:id', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  const status = req.body?.status;
+  if (status !== 'dismissed' && status !== 'used') return res.status(400).json({ detail: 'status must be dismissed or used' });
+  try {
+    const userId = req.user!.userId;
+    const text = await markStarter(userId, String(req.params.id), status);
+    if (text === null) return res.status(409).json({ detail: 'starter is not active' });
+    const quoted = `"${text.replace(/\s+/g, ' ').slice(0, 200)}"`;
+    void appendMuseFeedback(userId, status === 'used'
+      ? `[feedback] chat starter ${quoted} used by user`
+      : `[feedback] chat starter ${quoted} dismissed by user${req.body?.mute ? '; the user asked not to be suggested this kind of thing again' : ''}`);
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'starter update failed' });
+  }
 });
 
 // ── 异步审批(pending_approvals;Muse ask/agent 档的越界动作) ──────────────
