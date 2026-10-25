@@ -6,8 +6,12 @@
  * set_chat_starters 整组替换:句子与来源都没变的那条保留原 id(桌面不闪、用户的 × 不白点);被顶掉的记 replaced。
  * 用户点 × = dismissed,30 天内同一句不许再提;点行并发出去 = used。两种都写进 Muse 的 LOG([feedback] 行,下周期 read_log 看得到)。
  */
+import { existsSync, statSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { v4 as uuidv4 } from 'uuid';
 import { query } from '../core/db.js';
+import { amadeusVaultPath } from '../tools/builtin/amadeus.js';
 
 export const STARTER_KINDS = ['calendar', 'note', 'todo', 'session', 'web', 'muse'] as const;
 export type StarterKind = typeof STARTER_KINDS[number];
@@ -46,6 +50,27 @@ export function validateStarters(raw: unknown): { starters: StarterInput[] } | {
     if (seen.has(key)) return { error: `${at}: duplicate of an earlier starter` };
     seen.add(key);
     out.push({ text, source: { kind, label, ...(ref ? { ref: ref.slice(0, 1000) } : {}) } });
+  }
+  return { starters: out };
+}
+
+/** 笔记来源的路径落到磁盘上真有的那个文件(绝对路径照用,`~/` 展开,相对路径按笔记库算),返回绝对路径;没有 → null。
+ *  10-25 live:模型会把笔记库缺省路径和文件名拼成一个不存在的路径(种子笔记其实在授权文件夹里)—— 存进去就是一个点了打不开的链接。 */
+export function resolveNoteRef(ref: string, vault: string = amadeusVaultPath()): string | null {
+  const raw = ref.trim().replace(/^~(?=[\\/])/, os.homedir());
+  const abs = path.isAbsolute(raw) ? path.normalize(raw) : path.join(vault, raw);
+  try { return existsSync(abs) && statSync(abs).isFile() ? abs : null; } catch { return null; }
+}
+
+/** 逐条把笔记来源换成真实的绝对路径;有找不到的就整组不收(和 validateStarters 同一纪律)。 */
+export function resolveNoteRefs(list: StarterInput[], vault?: string): { starters: StarterInput[] } | { error: string } {
+  const out: StarterInput[] = [];
+  for (let i = 0; i < list.length; i++) {
+    const s = list[i];
+    if (s.source.kind !== 'note') { out.push(s); continue; }
+    const abs = resolveNoteRef(s.source.ref || '', vault);
+    if (!abs) return { error: `starter ${i + 1}: note "${s.source.ref}" does not exist — pass the path of a file you actually read (absolute, or relative to the notes vault)` };
+    out.push({ ...s, source: { ...s.source, ref: abs } });
   }
   return { starters: out };
 }

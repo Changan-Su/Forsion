@@ -4,7 +4,7 @@
  */
 import type { ToolProvider } from '../toolRegistry.js';
 import { loadSpecialAgentsConfig } from '../../services/specialAgentsConfig.js';
-import { MAX_STARTERS, STARTER_KINDS, setStarters, validateStarters } from '../../services/museStarters.js';
+import { MAX_STARTERS, STARTER_KINDS, resolveNoteRefs, setStarters, validateStarters } from '../../services/museStarters.js';
 
 const startersOn = (): boolean => {
   try { return loadSpecialAgentsConfig().muse.chatStarters; } catch { return true; }
@@ -46,7 +46,7 @@ export const museStartersProvider: ToolProvider = {
                       properties: {
                         kind: { type: 'string', enum: [...STARTER_KINDS] },
                         label: { type: 'string', description: 'The name of the thing, exactly as it appears in text (becomes the link)' },
-                        ref: { type: 'string', description: 'note: its path in the vault; session: the session id; web: the URL; calendar: the date (YYYY-MM-DD); otherwise omit' },
+                        ref: { type: 'string', description: 'note: the path of the file you read (absolute, or relative to the notes vault); session: the session id; web: the URL; calendar: the date (YYYY-MM-DD); otherwise omit' },
                       },
                       required: ['kind', 'label'],
                     },
@@ -62,8 +62,10 @@ export const museStartersProvider: ToolProvider = {
       execute: async (args, ctx) => {
         const v = validateStarters(args.starters);
         if ('error' in v) return `Error: ${v.error}. Nothing was changed.`;
+        const r = resolveNoteRefs(v.starters);
+        if ('error' in r) return `Error: ${r.error}. Nothing was changed.`;
         try {
-          const { shown, refused } = await setStarters(ctx.userId, v.starters);
+          const { shown, refused } = await setStarters(ctx.userId, r.starters);
           const now = shown.length ? `Now shown: ${shown.map((s) => `"${s.text}"`).join('; ')}.` : 'No starters are shown now.';
           return refused.length
             ? `${now} Not added because the user dismissed them recently: ${refused.map((t) => `"${t}"`).join('; ')}.`

@@ -10,6 +10,7 @@ import { useApp } from '../../stores/appStore'
 import { usePageStore } from '../../amadeus/store/pageStore'
 import { openNote } from '../../amadeusNav'
 import { openSession } from '../../sessionNav'
+import { hostTargetFor, openWsFile } from '../wsFileNav'
 import { CtxMenuButtons } from '../../components/CtxMenuButtons'
 import type { MuseStarter } from '../../types'
 import { refChipOf, type RefChip } from './Composer2'
@@ -22,18 +23,21 @@ const ICON: Record<MuseStarter['source']['kind'], typeof FileText> = {
   calendar: CalendarDays, note: FileText, todo: ListTodo, session: MessagesSquare, web: Globe, muse: Sparkles,
 }
 
-/** Muse 给的笔记路径可能是绝对路径:落在笔记库里就换成库内相对路径,否则原样(openNote / 引用都按库内相对认)。 */
-const vaultRel = (path: string, root: string | null | undefined): string => {
+/** 笔记来源的路径引擎已解析成磁盘上真有的绝对路径(services/museStarters.ts resolveNoteRef)。落在本地笔记库里 → 库内相对路径;
+ *  库外(授权文件夹里的 .md)→ null,按库外文件开、按文件挂引用。 */
+const vaultRel = (path: string, root: string | null | undefined): string | null => {
   const p = path.replace(/\\/g, '/')
   const r = (root || '').replace(/\\/g, '/').replace(/\/+$/, '')
-  return r && p.startsWith(`${r}/`) ? p.slice(r.length + 1) : p
+  if (!/^(\/|[A-Za-z]:\/)/.test(p)) return p // 老数据里的库内相对路径
+  return r && p.startsWith(`${r}/`) ? p.slice(r.length + 1) : null
 }
 
 function openSource(s: MuseStarter, vaultRoot: string | null | undefined): void {
   const ref = s.source.ref
   switch (s.source.kind) {
-    case 'note': if (ref) void openNote(vaultRel(ref, vaultRoot)); return
-    case 'session': if (ref) openSession(ref); return
+    // 新标签打开:就地换掉的会是眼前这个新对话
+    case 'note': if (ref) { const rel = vaultRel(ref, vaultRoot); if (rel) void openNote(rel, { newTab: true }); else openWsFile(hostTargetFor(ref, ref.split(/[/\\]/).pop() || ref), { newTab: true }) } return
+    case 'session': if (ref) openSession(ref, { newTab: true }); return
     case 'web': if (ref && /^https?:\/\//i.test(ref)) { if (window.tangu?.openExternal) void window.tangu.openExternal(ref); else window.open(ref, '_blank', 'noopener') } return
     case 'calendar': case 'todo': setActiveSpace('calendar'); return
     default:
@@ -65,8 +69,9 @@ export function MuseStarters({ draftKey, centered }: { draftKey: string; centere
   const fill = (s: MuseStarter): void => {
     setDraftField(draftKey, 'text', s.text)
     const root = vaultRoot || ''
-    const chip: RefChip | null = s.source.kind === 'note' && s.source.ref && root
-      ? refChipOf({ kind: 'note', path: vaultRel(s.source.ref, root) }, root)
+    const rel = s.source.kind === 'note' && s.source.ref ? vaultRel(s.source.ref, root) : null
+    const chip: RefChip | null = s.source.kind === 'note' && s.source.ref
+      ? (rel && root ? refChipOf({ kind: 'note', path: rel }, root) : refChipOf({ kind: 'file', path: s.source.ref }, root))
       : s.source.kind === 'session' && s.source.ref ? refChipOf({ kind: 'session', id: s.source.ref, title: s.source.label }, root) : null
     if (chip) setDraftField(draftKey, 'refChips', (prev) => (prev.some((c) => c.token === chip.token) ? prev : [...prev, chip]))
     noteStarterFilled(draftKey, s.id)

@@ -68,11 +68,13 @@ const emptyFaded = (win) => win.evaluate(() => window.__anims.some(({ el, k }) =
 
 ;(async () => {
   const patches = []
+  const gets = []
   const { app, win, stub, close } = await U.launch({
     tag: 'musestarters',
     messages: MESSAGES,
     stubOverride: async ({ path: p, method, body }) => {
       if (p === '/agent/special/muse/starters' && method === 'GET') {
+        gets.push(Date.now())
         const gone = new Set(patches.map((x) => x.id))
         return { starters: STARTERS.filter((s) => !gone.has(s.id)) }
       }
@@ -84,7 +86,17 @@ const emptyFaded = (win) => win.evaluate(() => window.__anims.some(({ el, k }) =
   try {
     await U.boot(app, win, { space: 'tangu', width: 1400, height: 900 })
     await win.evaluate(HOOK)
-    await win.waitForSelector('.t2-starter', { timeout: 15_000 })
+    // 有夹具会话时启动会落在某个会话里:先开一个新对话
+    await win.getByRole('button', { name: /^新会话$|^新对话$/ }).first().click({ timeout: 10_000 })
+    await win.waitForSelector('.t2-starter', { timeout: 15_000 }).catch(async (e) => {
+      const dom = await win.evaluate(() => ({
+        anchor: [...document.querySelectorAll('.composer-anchor > *')].map((x) => x.className),
+        opening: !!document.querySelector('.newchat-projectbar'),
+        cache: localStorage.getItem('forsion_muse_starters'),
+      }))
+      console.log('DIAG', JSON.stringify({ gets: gets.length, dom }))
+      throw e
+    })
     await sleep(600)
 
     // ① ②

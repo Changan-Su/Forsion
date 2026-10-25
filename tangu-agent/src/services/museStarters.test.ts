@@ -19,7 +19,10 @@ vi.mock('../core/db.js', () => ({
   }),
 }));
 
-import { validateStarters, setStarters, markStarter, listActiveStarters, buildStarterHint, starterKey, MAX_STARTERS } from './museStarters.js';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { validateStarters, setStarters, markStarter, listActiveStarters, buildStarterHint, starterKey, resolveNoteRefs, MAX_STARTERS } from './museStarters.js';
 
 const cal = { text: '明天 10:00 的「产品周会」还没有议程。按本周开发日志起一份议程。', source: { kind: 'calendar', label: '产品周会', ref: '2026-10-26' } };
 const note = { text: '「蓬洲云同步简化方案」三天没动了。把剩下的待定项列成清单。', source: { kind: 'note', label: '蓬洲云同步简化方案', ref: 'Projects/蓬洲云同步简化方案.md' } };
@@ -47,6 +50,29 @@ describe('validateStarters', () => {
   ])('拒:%s', (_name, raw, msg) => {
     const v = validateStarters(raw);
     expect('error' in v && v.error).toMatch(msg);
+  });
+});
+
+describe('resolveNoteRefs:笔记来源必须是真有的文件(10-25 live:模型拼出过不存在的库内路径)', () => {
+  const vault = mkdtempSync(path.join(os.tmpdir(), 'starters-vault-'));
+  mkdirSync(path.join(vault, 'Projects'));
+  writeFileSync(path.join(vault, 'Projects', 'plan.md'), '# plan');
+  const outside = path.join(mkdtempSync(path.join(os.tmpdir(), 'starters-ws-')), '产品周会.md');
+  writeFileSync(outside, '# 产品周会');
+  const n = (ref: string) => ({ text: 'Review plan', source: { kind: 'note' as const, label: 'plan', ref } });
+
+  it('库内相对路径 → 绝对路径;库外的绝对路径照用', () => {
+    const r = resolveNoteRefs([n('Projects/plan.md'), { ...n(outside), text: 'Review 产品周会', source: { kind: 'note', label: '产品周会', ref: outside } }], vault);
+    expect('starters' in r && r.starters.map((s) => s.source.ref)).toEqual([path.join(vault, 'Projects', 'plan.md'), outside]);
+  });
+  it('不存在的(含目录)整组不收,报哪一条', () => {
+    for (const ref of [path.join(vault, '产品周会.md'), 'Projects']) {
+      const r = resolveNoteRefs([cal as any, n(ref)], vault);
+      expect('error' in r && r.error).toMatch(/starter 2: note .* does not exist/);
+    }
+  });
+  it('别的来源不碰', () => {
+    expect(resolveNoteRefs([cal as any], vault)).toEqual({ starters: [cal] });
   });
 });
 
