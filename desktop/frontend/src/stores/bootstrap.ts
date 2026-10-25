@@ -85,7 +85,7 @@ export function useBootstrap(): void {
     return () => off?.()
   }, [])
 
-  // 借鉴 Comma 2.6:在跑 / 等你的会话报给托盘 / 菜单栏(仅桌面壳有这个 IPC;主进程只认主窗那份)。语言变了重装,标题跟着换。
+  // 借鉴 Comma 2.6:在跑 / 等你的会话报给托盘 / 菜单栏(仅桌面壳有这个 IPC;各窗口各报一份,主进程并起来)。语言变了重装,标题跟着换。
   useEffect(() => installTraySessionsReport((k) => t(k)), [t])
 
   // 快捷键:全部由引擎 installHotkeys 统一分发(命令 new-chat=mod+n、命令面板=mod+k 等),

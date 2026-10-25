@@ -242,12 +242,10 @@ function childBlocks(root: HTMLElement, ids: string[]): HTMLElement[] {
 
 /** 输入框上方那一排(和「N 件等你」同排)的子会话药丸(方案「借鉴 Comma」第三轮 2.2):本会话有子会话在跑 / 等你、
  *  并且画着它们的块都不在视野里时才露;点了滚回那块并闪两下(等你的那块优先)。都做完了就没有了。
- *  视野判定同 DeckPill:IntersectionObserver,看得见的范围扣掉压在悬浮输入区后面那一截。块还没渲染出来(没有可滚回的地方)不露。 */
-export function ChildSessionsPill({ rootRef, sessionId, renderKey, onJump }: {
+ *  看得见的范围扣掉压在悬浮输入区后面那一截(同 DeckPill)。块还没渲染出来(没有可滚回的地方)不露。 */
+export function ChildSessionsPill({ rootRef, sessionId, onJump }: {
   rootRef: RefObject<HTMLElement | null>
   sessionId: string | null | undefined
-  /** 流里的消息变了(新渲染出块)时重新找块。 */
-  renderKey?: unknown
   onJump: (el: HTMLElement) => void
 }) {
   const { t } = useI18n()
@@ -255,28 +253,49 @@ export function ChildSessionsPill({ rootRef, sessionId, renderKey, onJump }: {
   const running = useApp((s) => s.runningBySession)
   const unread = useApp((s) => s.unread)
   const attention = useSessionAttention()
-  const { ids, run, wait } = childPillCounts(sessionId, sessions, (k) => rowStatus(k, !!attention.get(k.id), !!running[k.id], unread.has(k.id)))
+  const statusById = new Map<string, RowStatus>()
+  const { ids, run, wait } = childPillCounts(sessionId, sessions, (k) => {
+    const st = rowStatus(k, !!attention.get(k.id), !!running[k.id], unread.has(k.id))
+    statusById.set(k.id, st)
+    return st
+  })
   const idsKey = ids.join(',')
   const [away, setAway] = useState(false)
+  // 不用 IntersectionObserver:它的 rootMargin 定死在建的那一刻,输入区变高(多行草稿 / 附件 / 这颗药丸本身)后就不准;
+  // 块也可能晚于会话列表才渲染出来(工具结果后到、任务卡原地变块)。所以滚动 / 流里增删节点 / 输入区高度变了都重量一次,一帧最多一次。
   useEffect(() => {
     const root = rootRef.current
-    const blocks = root && idsKey ? childBlocks(root, idsKey.split(',')) : []
-    if (!root || !blocks.length) { setAway(false); return }
-    const cover = parseFloat(getComputedStyle(root).getPropertyValue('--t2-composer-h')) || 96
-    const seen = new Map<Element, boolean>()
-    const io = new IntersectionObserver((entries) => {
-      for (const e of entries) seen.set(e.target, e.isIntersecting)
-      setAway(![...seen.values()].some(Boolean))
-    }, { root, rootMargin: `0px 0px -${Math.round(cover)}px 0px` })
-    for (const b of blocks) io.observe(b)
-    return () => io.disconnect()
-  }, [rootRef, idsKey, renderKey])
+    if (!root || !idsKey) { setAway(false); return }
+    const list = idsKey.split(',')
+    let raf = 0
+    const check = (): void => {
+      raf = 0
+      const blocks = childBlocks(root, list)
+      if (!blocks.length) { setAway(false); return } // 没有可滚回的地方:不露
+      const rr = root.getBoundingClientRect()
+      const cover = parseFloat(getComputedStyle(root).getPropertyValue('--t2-composer-h')) || 96 // 压在悬浮输入区后面那一截不算看得见
+      const bottom = rr.bottom - cover
+      setAway(!blocks.some((b) => { const r = b.getBoundingClientRect(); return r.height > 0 && r.bottom > rr.top && r.top < bottom }))
+    }
+    const schedule = (): void => { if (!raf) raf = requestAnimationFrame(check) }
+    root.addEventListener('scroll', schedule, { passive: true })
+    const mo = new MutationObserver(schedule)
+    mo.observe(root, { childList: true, subtree: true })
+    const col = root.closest('.t2-chat-col') // --t2-composer-h 写在这一层的 style 上(ChatView 量输入区实高)
+    if (col) mo.observe(col, { attributes: true, attributeFilter: ['style'] })
+    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(schedule)
+    ro?.observe(root)
+    check()
+    return () => { root.removeEventListener('scroll', schedule); mo.disconnect(); ro?.disconnect(); if (raf) cancelAnimationFrame(raf) }
+  }, [rootRef, idsKey])
   if (!away || !(run + wait)) return null
   const jump = (): void => {
     const root = rootRef.current
     if (!root) return
     const blocks = childBlocks(root, ids)
-    const target = [...blocks].reverse().find((b) => b.querySelector('.t2-child-row[data-status="wait"]')) || blocks[blocks.length - 1]
+    // 等你的那块优先;只认本会话数进来的子会话行(块里同排的分支也可能在等你,不算)
+    const waitIds = ids.filter((id) => statusById.get(id) === 'wait')
+    const target = [...blocks].reverse().find((b) => waitIds.some((id) => b.querySelector(`.t2-child-row[data-child-session="${CSS.escape(id)}"]`))) || blocks[blocks.length - 1]
     if (target) onJump(target)
   }
   return (

@@ -1,7 +1,7 @@
 /**
  * 托盘 / 菜单栏「在跑 / 等你」的渲染层一半(方案「借鉴 Comma」第三轮 2.6):会话名册在渲染层,主进程没有。
  * 会话列表 / 运行中 / 未读 / 待批索引一变,就(去抖后)把在跑 / 等你的会话精简成 {id,title,state}[] 经 tray:sessions 报给主进程;
- * 内容没变不发。主进程只认主窗报上来的那份,菜单与菜单栏的数在 electron/tray.ts。web / 移动端没有这个接缝 → no-op。
+ * 内容没变不发。主进程按窗口记、并起来(在 Mini / 独立窗里起的 run 先只有那个窗口知道),菜单与菜单栏的数在 electron/tray.ts。web / 移动端没有这个接缝 → no-op。
  * 状态与侧栏行尾、子会话块同一个 rowStatus(等你 = 审批 / 询问在等,或模型说它在等回答;在跑 = 订阅着的 run 或引擎报 busy)。
  */
 import type { SessionRecord } from '../../../tangu-agent/src/contracts/clientTypes'

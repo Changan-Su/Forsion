@@ -41,6 +41,8 @@ const filler = (prefix, n) => Array.from({ length: n }, (_, i) => [
   { id: `${prefix}a${i}`, role: 'model', timestamp: T + (i + 2) * 60_000 + 30_000, content: `第 ${i + 1} 轮的回答。块级合并按段落三方比对,标题和列表的标记跟着段落走,不会单独丢。\n\n- 段落内的行内格式按字符区间合并\n- 两边都改了同一段就两份都留,标出冲突\n- 表格按单元格合并,结构变了退回整表两份` },
 ]).flat()
 const parentMsgs = [
+  // 前面先垫几轮:块要能被滚到可见区底边附近(P6)
+  ...filler('pre', 3).map((m, i) => ({ ...m, timestamp: T - (10 - i) * 60_000 })),
   { id: 'u1', role: 'user', timestamp: T, content: '帮我查一下 Obsidian、Notion、Logseq 这三家怎么处理离线编辑和冲突。' },
   { id: 'a1', role: 'model', timestamp: T + 60_000,
     tool_calls: K.map((_, i) => call(`s${i}`, 'start_session', { title: `t${i}`, message: 'brief' })),
@@ -162,6 +164,28 @@ async function main() {
 
     await scrollTo('bottom')
     r.check('P4 再滚到底 → 药丸又在', await pill.count() === 1, '')
+
+    // P6 输入区变高把块压住 → 药丸露出;草稿清掉、块又露出来 → 收起(可见范围跟着输入区实高走,不是建观察器那一刻的值)
+    await win.evaluate(() => {
+      const block = document.querySelector('#tocmsg-a1 .t2-childs')
+      let el = block
+      while (el && !(el.scrollHeight > el.clientHeight + 4 && /(auto|scroll)/.test(getComputedStyle(el).overflowY))) el = el.parentElement
+      const cover = parseFloat(getComputedStyle(el).getPropertyValue('--t2-composer-h')) || 96
+      const rr = el.getBoundingClientRect(), br = block.getBoundingClientRect()
+      el.scrollTop += br.top - (rr.bottom - cover) + 40 // 块只露出顶上 40px,其余在输入区后面
+    })
+    await sleep(500)
+    const beforeGrow = await pill.count()
+    const g0 = await win.evaluate(() => (() => { const block = document.querySelector('#tocmsg-a1 .t2-childs'); let el = block; while (el && !(el.scrollHeight > el.clientHeight + 4 && /(auto|scroll)/.test(getComputedStyle(el).overflowY))) el = el.parentElement; const rr = el.getBoundingClientRect(), br = block.getBoundingClientRect(); return { h: getComputedStyle(el).getPropertyValue('--t2-composer-h'), top: Math.round(br.top - rr.top), bottom: Math.round(br.bottom - rr.top), rootH: Math.round(rr.height), st: Math.round(el.scrollTop) } })())
+    await win.locator('.t2c-ta').first().fill('多行草稿\n'.repeat(8))
+    await sleep(600)
+    const grown = await pill.count()
+    const g1 = await win.evaluate(() => (() => { const block = document.querySelector('#tocmsg-a1 .t2-childs'); let el = block; while (el && !(el.scrollHeight > el.clientHeight + 4 && /(auto|scroll)/.test(getComputedStyle(el).overflowY))) el = el.parentElement; const rr = el.getBoundingClientRect(), br = block.getBoundingClientRect(); return { h: getComputedStyle(el).getPropertyValue('--t2-composer-h'), top: Math.round(br.top - rr.top), bottom: Math.round(br.bottom - rr.top), rootH: Math.round(rr.height), st: Math.round(el.scrollTop) } })())
+    await win.locator('.t2c-ta').first().fill('')
+    await sleep(600)
+    r.check('P6 块只露一角时不露;输入区变高把它压住 → 药丸露出', beforeGrow === 0 && grown === 1, `${beforeGrow} → ${grown} ${JSON.stringify(g0)} ${JSON.stringify(g1)}`)
+    r.check('P6b 草稿清掉、块又露出来 → 药丸收起', await pill.count() === 0, String(await pill.count()))
+    await scrollTo('bottom')
 
     // 暗色截图
     await win.evaluate(() => { const e = document.documentElement; e.dataset.mode = 'dark'; e.classList.add('dark') })

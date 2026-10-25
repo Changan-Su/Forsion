@@ -9,7 +9,7 @@
  * 别的包往托盘加的段(远程活动等)文案走各自的 defineMainMessages 片段,不往 COPY 里加键。
  * 电脑历史开着时多一行状态 + 「暂停 1 小时 / 恢复」(全机采集开着,关闭入口不能只藏在设置页里);
  * 状态变化由 main 调 refreshTrayMenu() 重建菜单。
- * 在跑 / 等你的会话(借鉴 Comma 第三轮 2.6):会话名册在渲染层,主窗经 tray:sessions 报上来一份精简清单(setTraySessions);
+ * 在跑 / 等你的会话(借鉴 Comma 第三轮 2.6):会话名册在渲染层,各窗口经 tray:sessions 各报一份精简清单,main 并起来(mergeTrayReports → setTraySessions);
  * 菜单顶上列出(等你在前、最多 5 条,多的一行「还有 n 个…」),mac 菜单栏图标旁写个数(Windows 托盘不支持标题文字,只有菜单)。
  */
 import { app, Tray, Menu, nativeImage } from 'electron'
@@ -145,6 +145,21 @@ export function remoteTrayItems(r: NonNullable<TrayHandlers['remote']>, lang: Tr
   if (v.locked) items.push({ label: m('locked'), enabled: false }, { label: m('unlock'), click: () => r.unlock() })
   if (v.capable && !v.hotkey.registered) items.push({ label: m('hotkeyUnavailable'), enabled: false }, { label: m('changeHotkey'), click: () => r.openSettings() })
   return items.length ? [...items, { type: 'separator' }] : []
+}
+
+/** 各窗口各报一份(主窗 / Mini / 独立窗各有自己的会话名册,在哪个窗口里起的 run 只有那个窗口先知道):按 id 并起来,
+ *  任一窗口说「等你」就算等你;顺序 = 先报的窗口在前、同窗口内照原序,等你的整体排前。 */
+export function mergeTrayReports(reports: Iterable<readonly TraySessionRow[]>): TraySessionRow[] {
+  const byId = new Map<string, TraySessionRow>()
+  for (const rows of reports) {
+    for (const r of rows) {
+      const cur = byId.get(r.id)
+      if (!cur) byId.set(r.id, r)
+      else if (cur.state === 'run' && r.state === 'wait') byId.set(r.id, { ...r, title: cur.title || r.title })
+    }
+  }
+  const all = [...byId.values()]
+  return [...all.filter((r) => r.state === 'wait'), ...all.filter((r) => r.state === 'run')]
 }
 
 /** Windows 菜单把 & 当助记符:标题里的 & 要写成 &&(mac 原样显示两个,所以只在 Windows 转义)。 */

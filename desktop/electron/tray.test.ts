@@ -147,7 +147,7 @@ describe('tray 远程段(P1-K2)', () => {
 })
 
 // 借鉴 Comma 2.6:在跑 / 等你的会话段 + 新建 Mini 对话 + 菜单栏标题拼接
-import { composeTrayTitle, sanitizeTraySessions, setTrayIndicator, setTraySessions, traySessionItems, traySessions, type TraySessionRow } from './tray'
+import { composeTrayTitle, mergeTrayReports, sanitizeTraySessions, setTrayIndicator, setTraySessions, traySessionItems, traySessions, type TraySessionRow } from './tray'
 describe('tray 在跑 / 等你段(借鉴 Comma 2.6)', () => {
   const rows = (w: number, r: number): TraySessionRow[] => [
     ...Array.from({ length: w }, (_, i) => ({ id: `w${i}`, title: `等 ${i}`, state: 'wait' as const })),
@@ -217,6 +217,18 @@ describe('tray 在跑 / 等你段(借鉴 Comma 2.6)', () => {
       { id: 'd', title: '', state: 'run' },
     ])
     expect(sanitizeTraySessions('nope')).toEqual([])
+  })
+
+  it('各窗口的清单按 id 并起来:任一窗口说等你就算等你,等你的排前;别的窗口独有的 run 也在', () => {
+    const main: TraySessionRow[] = [{ id: 'a', title: 'A', state: 'run' }, { id: 'b', title: 'B', state: 'wait' }]
+    const mini: TraySessionRow[] = [{ id: 'a', title: 'A2', state: 'wait' }, { id: 'm', title: 'M', state: 'run' }]
+    expect(mergeTrayReports([main, mini])).toEqual([
+      { id: 'a', title: 'A', state: 'wait' },
+      { id: 'b', title: 'B', state: 'wait' },
+      { id: 'm', title: 'M', state: 'run' },
+    ])
+    expect(mergeTrayReports([])).toEqual([])
+    expect(mergeTrayReports([[], main])).toEqual([main[1], main[0]])
   })
 
   it('菜单栏标题:会话数在前、远程指示在后;都没有 = 空串', () => {

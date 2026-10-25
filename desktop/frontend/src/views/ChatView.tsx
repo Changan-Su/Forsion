@@ -943,7 +943,7 @@ export function ChatView({ leaf, params }: ViewProps) {
           approvalTray={canvasOn ? (deck ?? undefined) : (
             <div className="t2-deckpill-row">
               {deck && <DeckPill key={activeId ?? ''} rootRef={chatScrollRef} count={deckItems.length} todos={tailTodo?.todos} onClick={() => scrollToBottom(true)} />}
-              <ChildSessionsPill key={`child-${activeId ?? ''}`} rootRef={chatScrollRef} sessionId={activeId} renderKey={shownMessages.length} onJump={jumpToChildBlock} />
+              <ChildSessionsPill key={`child-${activeId ?? ''}`} rootRef={chatScrollRef} sessionId={activeId} onJump={jumpToChildBlock} />
             </div>
           )}
           advisory={!params.childSurface ? (

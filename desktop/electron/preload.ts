@@ -260,7 +260,7 @@ const api = {
   activeWindow: (): Promise<ActiveWindowSample | null> => ipcRenderer.invoke('system:activeWindow'),
   /** 本窗口订阅着的在飞 run 数(「有会话运行时不休眠」,开关与判定在主进程 keepAwake.ts)。 */
   reportRunningSessions: (count: number): void => ipcRenderer.send('power:running', count),
-  /** 在跑 / 等你的会话(托盘 / 菜单栏列出,借鉴 Comma 2.6);主进程只认主窗报的那份,清洗在 tray.ts sanitizeTraySessions。 */
+  /** 在跑 / 等你的会话(托盘 / 菜单栏列出,借鉴 Comma 2.6);各窗口各报一份、主进程按窗口并起来,清洗在 tray.ts sanitizeTraySessions。 */
   setTraySessions: (rows: Array<{ id: string; title: string; state: 'run' | 'wait' }>): void => ipcRenderer.send('tray:sessions', rows),
   /** 拖入文件 → 绝对路径(Electron≥32 File.path 已移除,必须 webUtils 在渲染层取)。 */
   getPathForFile: (file: File): string => webUtils.getPathForFile(file),

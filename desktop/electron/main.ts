@@ -50,7 +50,7 @@ import { checkForUpdates, downloadUpdate, installUpdate, canInstallUpdate, betaC
 import { parseSourcePref } from '../shared/updateSource'
 import { fetchWebsiteReleases } from './websiteReleases'
 import { createRestartGuard, readRestartActivity } from './restartGuard'
-import { createTray, MINI_ACCELERATOR, refreshTrayMenu, sanitizeTraySessions, setTrayIndicator, setTraySessions, traySessions, trayLang } from './tray'
+import { createTray, MINI_ACCELERATOR, mergeTrayReports, refreshTrayMenu, sanitizeTraySessions, setTrayIndicator, setTraySessions, traySessions, trayLang } from './tray'
 import { initMainLocale, mainLocale, mt } from './mainI18n'
 import { createQuitGuards } from './quitGuard'
 import { createUiLocaleSync, UI_LOCALE_FILE } from './uiLocaleSync' // P1-KF:主进程文案跟渲染层的生效语言
@@ -2824,21 +2824,23 @@ app.whenReady().then(async () => {
     }
     keepAwake.report(id, Number.isSafeInteger(count) && (count as number) > 0)
   })
-  // 托盘 / 菜单栏的在跑 / 等你会话(借鉴 Comma 2.6):会话名册在渲染层,只认**主窗**报上来的(Mini / 独立窗 / Dock 也跑同一份
-  // bootstrap,各报各的会互相覆盖)。主窗销毁 / 渲染进程崩溃 / 重载时清空,新页面装好会话列表后会重新报。
-  let traySessionsWc = -1
+  // 托盘 / 菜单栏的在跑 / 等你会话(借鉴 Comma 2.6):会话名册在渲染层。主窗 / Mini / 独立窗各有自己的名册,在哪个窗口里起的 run
+  // 只有那个窗口先知道 —— 所以各窗口各报一份、按窗口记,并起来再给托盘(mergeTrayReports)。窗口销毁 / 渲染进程崩溃 / 重载时
+  // 丢掉它那份(同 power:running 的清法),新页面装好会话列表后会重新报。
+  const trayReports = new Map<number, ReturnType<typeof sanitizeTraySessions>>()
+  const pushTrayReports = (): void => setTraySessions(mergeTrayReports(trayReports.values()))
   ipcMain.on('tray:sessions', (e, raw: unknown) => {
-    if (!isTrustedSender(e) || !e.senderFrame) return
-    if (!mainWindow || mainWindow.isDestroyed() || e.sender !== mainWindow.webContents) return
+    if (!isTrustedSender(e) || !e.senderFrame) return // senderFrame 为空 = 旧文档导航后才到的迟到上报,丢弃
     const wc = e.sender
-    if (traySessionsWc !== wc.id) {
-      traySessionsWc = wc.id
-      const clear = (): void => { if (traySessionsWc === wc.id) setTraySessions([]) }
-      wc.once('destroyed', () => { clear(); if (traySessionsWc === wc.id) traySessionsWc = -1 })
-      wc.on('render-process-gone', clear)
-      wc.on('did-navigate', clear)
+    const id = wc.id
+    if (!trayReports.has(id)) {
+      const forget = (): void => { if (trayReports.delete(id)) pushTrayReports() }
+      wc.once('destroyed', forget)
+      wc.on('render-process-gone', forget)
+      wc.on('did-navigate', forget)
     }
-    setTraySessions(sanitizeTraySessions(raw))
+    trayReports.set(id, sanitizeTraySessions(raw))
+    pushTrayReports()
   })
   // Windows 在用户主动睡眠时终止电源请求,唤醒后手里的 id 已失效 → 重新申请(macOS 断言跨睡眠保留,重申无害)。
   // 设备互联通道:合盖期间的出站长连多半已是半开连接(不报错也收不到东西)→ 唤醒即重拨,别等 45s 读看门狗。
@@ -4416,7 +4418,7 @@ app.whenReady().then(async () => {
       resume: () => { void ch.resume().catch(() => {}) },
     } : undefined,
     remote: PRODUCT.agentBackend ? remoteSafety.trayHandlers(openRemoteSafetySettings) : undefined, // P1-K2:远程会话运行中 · 设备名 / 停止全部 / 解锁
-    // 借鉴 Comma 2.6:在跑 / 等你的会话(清单由主窗经 tray:sessions 报上来);点一条 = 显示主窗并打开它(同审批通知点击那条 approval:open)
+    // 借鉴 Comma 2.6:在跑 / 等你的会话(清单由各窗口经 tray:sessions 报上来、并成一份);点一条 = 显示主窗并打开它(同审批通知点击那条 approval:open)
     sessions: PRODUCT.agentBackend ? {
       list: traySessions,
       open: (sessionId) => { showMainWindow(); if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(APPROVAL_OPEN_CHANNEL, { sessionId }) },
