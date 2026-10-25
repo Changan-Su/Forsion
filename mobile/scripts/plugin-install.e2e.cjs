@@ -581,8 +581,8 @@ async function main() {
     const viewBefore = await page.locator('[data-e2e-plugin-view]').count()
     check(viewBefore > 0, '关之前插件视图仍挂着(防空过)', `有 ${viewBefore}`)
     const spaceBefore = await spaceListed() // 防空过:关之前它得在条上
-    await tap(row.locator('input[type="checkbox"]'), '插件开关')
-    const offChecked = await row.locator('input[type="checkbox"]').first().isChecked().catch(() => null)
+    await tap(row.locator('[role="switch"]'), '插件开关')
+    const offChecked = await row.locator('[role="switch"]').first().isChecked().catch(() => null)
     check(offChecked === false, '设置里关掉插件')
     const stillView = await page.locator('[data-e2e-plugin-view]').count()
     check(stillView === 0, '关掉后插件视图被撤下', `剩 ${stillView}`)

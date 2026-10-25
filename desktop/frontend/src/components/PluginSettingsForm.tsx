@@ -10,6 +10,7 @@ import {
   type PluginField, type PluginFile,
 } from '../services/backendService'
 import type { TanguDesktopConfig } from '../types'
+import { SettingsRow, SettingsSwitch } from './SettingsPrimitives'
 import { useI18n } from '../i18n'
 import { homeTarget } from '../services/engine/targets'
 
@@ -110,11 +111,8 @@ export const PluginSettingsForm: React.FC<{
     if (f.type === 'toggle') {
       return (
         <div className="field" key={f.key}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', userSelect: 'none' }}>
-            <input type="checkbox" checked={!!values[f.key]} onChange={(e) => void persist({ ...values, [f.key]: e.target.checked })} />
-            {lbl(f)}
-          </label>
-          {f.help && <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)', marginTop: 2 }}>{lbl({ label: f.help, labelEn: f.helpEn })}</div>}
+          <SettingsRow fit="inline" label={lbl(f)} description={f.help ? lbl({ label: f.help, labelEn: f.helpEn }) : undefined}
+            control={<SettingsSwitch checked={!!values[f.key]} label={lbl(f)} onChange={(on) => void persist({ ...values, [f.key]: on })} />} />
         </div>
       )
     }

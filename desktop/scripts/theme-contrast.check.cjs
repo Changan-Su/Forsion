@@ -382,9 +382,11 @@ function filesUnder(dir, out = []) {
           for (const el of document.querySelectorAll('.highlight-fg [data-hlc], .highlight-bg [data-hl]')) {
             out.push({ id: `rich-text/${el.dataset.hlc || `mark-${el.dataset.hl}`}`, ratio: textRatio(el) })
           }
-          // 设置开关「关」:旋钮对(半透明轨道合成到卡面后的)轨道色 —— 非文字 UI,WCAG 1.4.11 的 3:1;只钉暗色(浅色靠旋钮阴影成形,不在本契约内)
+          // 设置开关「关」(走查续五 5.1 A):轨道(文字色实底合成到卡面后)对卡面 ≥ 1.6、旋钮对轨道 ≥ 3(非文字 UI,WCAG 1.4.11);
+          // 只钉暗色(浅色靠旋钮阴影成形,白旋钮对浅轨道本来到不了 3:1,不在本契约内)
           if (document.documentElement.dataset.mode === 'dark') {
             const knob = document.querySelector('.surface-card .settings-switch > span')
+            out.push({ id: 'switch-off/track-vs-card', min: 1.6, ratio: contrast(surfaceUnder(knob.parentElement), surfaceUnder(knob.parentElement.parentElement)) })
             out.push({ id: 'switch-off/knob-vs-track', min: 3, ratio: contrast(surfaceUnder(knob), surfaceUnder(knob.parentElement)) })
           }
 

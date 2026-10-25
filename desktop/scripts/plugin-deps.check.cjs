@@ -147,8 +147,8 @@ async function main() {
     const eng = (id) => fl.locator(`[data-engine-plugin="${id}"]`)
     await fl.waitForSelector('[data-engine-plugin="eng-user"]', { timeout: 15000 })
     check('F 引擎插件开着却休眠 → 挂「等待前置插件」', await waitFor(() => eng('eng-user').locator('[data-plugin-waiting]').count().then((n) => n === 1)))
-    check('F 引擎插件关着、前置没装 → 开关灰掉', await waitFor(() => eng('eng-off').locator('input[type="checkbox"]').isDisabled()))
-    check('F 对照:关着但没声明前置的照常可开', !(await eng('eng-base').locator('input[type="checkbox"]').isDisabled()))
+    check('F 引擎插件关着、前置没装 → 开关灰掉', await waitFor(() => eng('eng-off').locator('[role="switch"]').isDisabled()))
+    check('F 对照:关着但没声明前置的照常可开', !(await eng('eng-base').locator('[role="switch"]').isDisabled()))
     check('F 上一次启停还在收尾 → 挂「正在收尾」,不是「加载失败」', await waitFor(async () =>
       (await eng('eng-settling').locator('[data-plugin-settling]').count()) === 1 && (await eng('eng-settling').locator('[data-plugin-failed]').count()) === 0))
     await pause(300) // 子页入场动画:没跑完就截是半透明的中间帧

@@ -303,6 +303,8 @@ body {
 }
 button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
 input, textarea, select { font: inherit; color: var(--text); }
+/* 多选的勾选框(状态栏条目、导入勾选、待办完成…)跟主题的墨色走,不用系统蓝;二态设置一律是 SettingsSwitch(走查续五 5.1)。 */
+input[type='checkbox'] { accent-color: var(--accent-ink); }
 /* form-baseline:start —— 下面两块由 npm run check:formbase 整体抽出来做 A/B,别删这对标记。 */
 /* 表单控件基线:任何**没被更具体规则接管**的 input / select / textarea 都走主题,
  * 而不是掉回 Chromium 默认的方角灰框(用户实报:设置里那种「很原始」的输入框)。
@@ -2972,6 +2974,8 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   border-radius: var(--radius-md);
   padding: 10px 12px;
 }
+/* 卡内子选项(内置浏览器「应用内打开链接」):一行文案 + 开关,开关与卡头那颗右缘对齐、文案与卡名对齐(走查续五 5.1)。 */
+.plugin-card-subrow { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 8px; padding-left: 50px; font-size: var(--ui-font-meta, 12px); color: var(--text-muted); }
 .plugin-card--link { cursor: pointer; }
 .plugin-card--blocked { opacity: 0.6; }
 .plugin-logo {
@@ -3009,6 +3013,12 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   flex: 0 0 auto;
   white-space: nowrap;
 }
+/* 同一行的输入框 / 下拉 / 按钮一个高度(走查续五 5.2):34 = 设置页下拉本来的高;技能库工具栏(globalSkillsLibrary.css)同用。
+ * 卡头里的 btn sm(29)不和输入框同行,不归这条管。 */
+:root { --settings-control-h: 34px; }
+.settings-inline-row > input,
+.settings-inline-row > select,
+.settings-inline-row > .btn { box-sizing: border-box; height: var(--settings-control-h); min-height: var(--settings-control-h); padding-block: 0; }
 
 /* 具体设置页共用的分组面板:一个主题只用一个外轮廓,内部设置靠行分隔,避免每个字段都变成卡片。 */
 .settings-panel {
@@ -3227,6 +3237,13 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 
 /* 设置页统一行语言:左侧解释、右侧即时操作。开关、集合、筛选和页脚均只保留必要边线。 */
 .settings-setting-row { justify-content: space-between; }
+/* Hooks 页头卡(走查续五 5.4):卡头一句人话;协议细节降到说明字号、代码用代码样式;左对齐描边按钮,同 MCP 页「添加 MCP 服务器」。 */
+.hooks-intro { margin-bottom: 0; }
+.hooks-intro-body { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; padding: 12px 15px 15px; }
+.hooks-intro-body .hint { margin: 0; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); line-height: 1.6; }
+.hooks-intro-body code { padding: 1px 5px; border-radius: var(--radius-xs, 5px); background: var(--overlay-light); font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.92em; }
+/* 旧的 .field 块里换上的开关行(走查续五 5.1):行贴着 .field 的边,不再自带内衬。 */
+.field > .settings-control-row { min-height: 0; padding: 0; }
 .settings-row-control {
   flex: 0 1 260px;
   display: flex;
@@ -3275,10 +3292,14 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   box-shadow: var(--btn-shadow);
   transition: left var(--switch-edge-duration) var(--ease-surface), right var(--switch-edge-duration) var(--ease-surface) var(--switch-edge-lag), background var(--duration-fast);
 }
-/* 暗色的「关」:旋钮若仍是 --bg-card,与卡面同色、与半透明轨道只差一丝(≈1.3:1),开关看不出状态。
- * 改用背景族的 --text-faint(随 data-bg 走,不碰主题色轴),旋钮对轨道 ≥ 3:1(WCAG 1.4.11);「开」与浅色不变。
- * 仪器:check:themecontrast 的 switch-off 探针(全部语言 × 配色 × 暗色)。 */
-:root[data-mode='dark'] .settings-switch:not(.active) > span { background: var(--text-faint); }
+/* 「关」(走查续五 5.1 A,10-25):轨道用文字色实底(浅 15% / 暗 24%)、不描边,只比卡面深一档、不带主题色;旋钮阴影走 --btn-shadow(扁平模式清零,check:shadowcontract)。
+ * 暗色旋钮若仍是 --bg-card 会与卡面同色,改用背景族的 --text-light(随 data-bg 走;方案写的 --text-muted 在 24% 轨道上只有 2.5–2.9:1),
+ * 旋钮对轨道 ≥ 3:1(WCAG 1.4.11)。
+ * 外观页旧的 .switch(LCL gallery 也在用)关态同一套。仪器:check:themecontrast 的 switch-off 探针(轨道对卡面 / 旋钮对轨道)。 */
+.settings-switch:not(.active) { border-color: transparent; }
+.settings-switch:not(.active), .switch:not(.on) { background: color-mix(in srgb, var(--text) 15%, transparent); }
+:root[data-mode='dark'] .settings-switch:not(.active), :root[data-mode='dark'] .switch:not(.on) { background: color-mix(in srgb, var(--text) 24%, transparent); }
+:root[data-mode='dark'] .settings-switch:not(.active) > span, :root[data-mode='dark'] .switch:not(.on)::after { background: var(--text-light); }
 .settings-switch.active { border-color: var(--signal-mark); background: var(--signal-mark); }
 .settings-switch.active > span {
   left: calc(100% - 16px); right: 2px; background: var(--bg-card);
@@ -3591,7 +3612,8 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .seg button + button { border-left: var(--border-width) solid var(--overlay-medium, rgba(127, 127, 127, 0.12)); }
 .seg button.active { background: var(--accent-tint); color: var(--text); }
 
-/* ── 开关(Switch):通用二态开关,<button role="switch" class="switch [on]">;文案配 .switch-row ── */
+/* ── 开关(Switch):旧的通用二态开关,<button role="switch" class="switch [on]">;文案配 .switch-row。
+ * 应用里已全部换成 SettingsSwitch(.settings-switch,走查续五 5.1),这份只剩 LCL gallery 在用;关态与它同一套(见 .settings-switch)。 ── */
 .switch {
   position: relative;
   width: 36px;

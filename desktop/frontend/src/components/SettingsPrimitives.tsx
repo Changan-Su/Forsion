@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import type { ButtonHTMLAttributes, ReactNode } from 'react'
 
 export function SettingsPanel(props: {
   icon?: ReactNode
@@ -51,21 +51,23 @@ export function SettingsRow(props: {
   )
 }
 
-export function SettingsSwitch(props: {
+/** 二态设置的唯一一种开关(走查续五 5.1:复选框、外观页旧 .switch 都换成它)。其余按钮属性(data-*、title…)原样落在按钮上。 */
+export function SettingsSwitch({ checked, onChange, label, disabled, ...rest }: {
   checked: boolean
   onChange: (checked: boolean) => void
   label: string
   disabled?: boolean
-}) {
+} & Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'onChange' | 'onClick' | 'role' | 'type'>) {
   return (
     <button
+      {...rest}
       type="button"
       role="switch"
-      aria-checked={props.checked}
-      aria-label={props.label}
-      className={`settings-switch${props.checked ? ' active' : ''}`}
-      disabled={props.disabled}
-      onClick={() => props.onChange(!props.checked)}
+      aria-checked={checked}
+      aria-label={label}
+      className={`settings-switch${checked ? ' active' : ''}`}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
     >
       <span />
     </button>
