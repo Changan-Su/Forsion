@@ -119,6 +119,7 @@
     "check:chatscrollhold": "node scripts/chat-scroll-hold.check.cjs",
     "check:chatcanvasjump": "node scripts/chat-canvas-jump.check.cjs",
     "check:sendflight": "node scripts/send-flight.check.cjs",
+    "check:musestarters": "node scripts/muse-starters.check.cjs",
     "check:sessionemoji": "node scripts/session-emoji.check.cjs",
     "check:messageactions": "node scripts/chat-message-actions.check.cjs",
     "check:approval": "node scripts/approval-menu.check.cjs",

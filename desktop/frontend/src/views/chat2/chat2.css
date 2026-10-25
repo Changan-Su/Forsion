@@ -486,14 +486,54 @@
    小窗(lcl/engine/miniCard.css 的 .mini-card-shell .newchat-projectbar,(0,2,0))照旧压过这里。仪器:npm run e2e:projectbar。
    折行朝上(wrap-reverse):放不下的(额外文件夹、开场那一行)排到上一行去,项目胶囊始终贴着输入卡。
    上内边距放在 inner 上:栏里什么都没有(只等开场那一行、而它没东西可说)时 inner 为空,整栏不占高度。 */
-.newchat-projectbar { max-width: 880px; width: 100%; margin: 0 auto; box-sizing: border-box; padding: 0 28px; }
+.newchat-projectbar, .t2-starters { max-width: 880px; width: 100%; margin: 0 auto; box-sizing: border-box; padding: 0 28px; }
 .newchat-projectbar-inner { display: flex; align-items: center; flex-wrap: wrap-reverse; gap: 6px; padding-top: 6px; }
 .newchat-projectbar-inner:empty { display: none; }
 @media (max-width: 1040px) {
-  .newchat-projectbar { padding-inline: 18px; }
+  .newchat-projectbar, .t2-starters { padding-inline: 18px; }
 }
 @container (max-width: 520px) {
-  .newchat-projectbar { padding-inline: 10px; }
+  .newchat-projectbar, .t2-starters { padding-inline: 10px; }
+}
+/* ── Muse 的开场建议(MuseStarters.tsx;方案 docs/ToBeImproved/Muse预制提示词方案_2026-10-25):Chat Box 正下方最多三行 ──
+   盒子同上面那一栏(和输入卡左缘对齐);行不描边,悬停只垫一层底。链接用 --accent-ink(强调色只给落点与链接),悬停才下划线。
+   有草稿时收起:居中时只淡出、留着高度(收掉高度,居中的那一块在第一个字时整体跳一下);不居中(手机)才真收掉。 */
+.t2-starters { display: flex; flex-direction: column; gap: 2px; padding-top: 10px; padding-bottom: 6px; transition: opacity var(--duration-fast, .15s); }
+.t2-starters[data-hidden] { opacity: 0; pointer-events: none; }
+.t2-starters[data-hidden]:not([data-centered]) { display: none; }
+.t2-starter {
+  display: flex; align-items: center; gap: 12px; min-width: 0;
+  padding: 8px 12px; border-radius: var(--radius-md, 10px);
+  font-family: var(--font-ui); font-size: var(--ui-font-body, 13px); line-height: 1.45; color: var(--text);
+  cursor: pointer; outline: none;
+  transition: background var(--duration-fast, .15s);
+}
+.t2-starter:hover, .t2-starter:focus-visible { background: var(--overlay-light, rgba(127,127,127,.08)); }
+.t2-starter-ic { flex: none; color: var(--text-muted); }
+.t2-starter[data-kind="muse"] .t2-starter-ic { color: var(--accent-ink); }
+.t2-starter-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.t2-starter-link { color: var(--accent-ink); font-weight: 500; text-decoration: none; text-underline-offset: 2px; cursor: pointer; }
+.t2-starter-link > svg { display: inline; vertical-align: -1px; margin-left: 1px; opacity: .75; }
+.t2-starter-link:hover { text-decoration: underline; }
+.t2-starter-link[data-static] { cursor: inherit; }
+.t2-starter-link[data-static]:hover { text-decoration: none; }
+.t2-starter-x {
+  flex: none; width: 24px; height: 24px; padding: 0; border: none; background: transparent;
+  border-radius: var(--radius-sm, 6px); color: var(--text-muted); cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  visibility: hidden;
+}
+.t2-starter:hover .t2-starter-x, .t2-starter:focus-visible .t2-starter-x { visibility: visible; }
+.t2-starter-x:hover { background: var(--overlay-medium, rgba(127,127,127,.14)); color: var(--text); }
+/* 窄栏 / 手机:每条最多两行,别把「为什么」那半句省略掉 */
+@container (max-width: 520px) {
+  .t2-starter { align-items: flex-start; }
+  .t2-starter-text { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+}
+/* 触屏:没有悬停,× 常驻;一点输入框(键盘起来)就收起 */
+@media (hover: none) {
+  .t2-starter-x { visibility: visible; }
+  .composer-anchor:focus-within > .t2-starters { display: none; }
 }
 .t2-composer-wrap { padding: 8px 28px 18px; max-width: 880px; margin: 0 auto; width: 100%; box-sizing: border-box; display: flex; flex-direction: column; gap: 8px; }
 .t2-composer {
