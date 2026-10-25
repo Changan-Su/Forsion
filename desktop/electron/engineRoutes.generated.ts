@@ -222,6 +222,8 @@ export const ENGINE_ROUTES: readonly EngineRoute[] = [
   { method: 'POST', path: '/agent/special/muse/feedback', access: 'deny-remote', src: 'routes/special.ts', why: 'appends to Muse LOG (memory write into an autonomous Agent)' },
   { method: 'GET', path: '/agent/special/muse/library', access: 'allow', src: 'routes/special.ts', why: 'Muse library' },
   { method: 'GET', path: '/agent/special/muse/library/file', access: 'allow', src: 'routes/special.ts', why: 'Muse library file (read-only, realpath-bounded to the Library)' },
+  { method: 'GET', path: '/agent/special/muse/starters', access: 'allow', src: 'routes/special.ts', why: 'Muse chat starters shown under the new-chat composer (read-only)' },
+  { method: 'PATCH', path: '/agent/special/muse/starters/:id', access: 'deny-remote', src: 'routes/special.ts', why: 'marks a starter used / dismissed and appends [feedback] to Muse LOG (memory write into an autonomous Agent)' },
   { method: 'GET', path: '/agent/special/muse/status', access: 'allow', src: 'routes/special.ts', why: 'Muse status; remote callers get the fields the Muse view / Space read, no absolute paths, budgets or last error (P1-M1A projection)' },
   { method: 'GET', path: '/agent/special/muse/todos', access: 'allow', src: 'routes/special.ts', why: 'Muse todos' },
   { method: 'GET', path: '/agent/special/muse/todos/:id', access: 'allow', src: 'routes/special.ts', why: 'Muse todo' },
