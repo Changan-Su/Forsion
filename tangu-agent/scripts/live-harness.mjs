@@ -37,6 +37,7 @@
  *   npm run live:harness -- --only storename                 # 改名「商店」(10-05):改 skills/forsion-plugin / forsion-connect 里的商店叫法后跑;两问不点名技能,须装载技能并用新名字指路
  *   npm run live:harness -- --only plugin                    # 引擎插件热插拔(10-02):夹具插件开着调得到、停用后调不到、再启用回来(改 plugins/bootstrap 生命周期后跑)
  *   npm run live:harness -- --only btw                       # 旁聊 /btw(09-22):带主会话上下文答题外话、追问带前轮、不写回、主 run 在飞也能问;改 services/aside.ts 提示词后跑
+ *                                                           #   10-24 起含附件:图里的随机数字 / txt 里的口令 / PDF 里的编码要答得出,落库只留记录。--btw-no-attach = 负对照(同样的问题不带附件,必须红)
  *   npm run live:harness -- --only suggest                   # 输入建议(10-10):一轮结束后猜用户下一句。须是一句短话、跟用户的语言、一轮只调一次,且那次调用吃到主循环的前缀缓存;改 services/promptSuggestion.ts 或主循环收尾处的快照后跑
  *   npm run live:harness -- --only realuse --rounds 2 --model xai/grok-4.7   # 真实使用模拟(10-04):消息不点名任何库 / 工具;改 manage_harness / 装备层 / 工作笔记注入 / Muse 巡检后跑。
  *                                                           #   --usage-db <抽取库>:再用真实用量跑一遍 Muse 巡检 → 当场替默认 agent 收起(抽取库先用 scripts/usage-extract.mjs 生成)
@@ -988,6 +989,24 @@ function digitsPng(text, noisePx = 0, { scale = 10, width = 0, height = 0 } = {}
     const on = cx >= 0 && cy >= 0 && cy < 7 && i < text.length && col < 5 && FONT[text[i]][cy][col] === '1';
     return on ? [10, 30, 140] : [255, 255, 255];
   });
+}
+/** 单页文本 PDF(Helvetica 一行字,xref 偏移算准)。btw 场景当附件发,引擎用 LiteParse 抽字。line 里别放括号 / 反斜杠。 */
+function textPdf(line) {
+  const content = `BT /F1 18 Tf 20 100 Td (${line}) Tj ET`;
+  const objs = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 420 144] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>',
+    `<< /Length ${content.length} >>\nstream\n${content}\nendstream`,
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+  ];
+  let out = '%PDF-1.4\n';
+  const offs = [];
+  objs.forEach((o, i) => { offs.push(out.length); out += `${i + 1} 0 obj\n${o}\nendobj\n`; });
+  const xref = out.length;
+  out += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n${offs.map((o) => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}`;
+  out += `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return Buffer.from(out, 'latin1');
 }
 // imgwindow(10-07,反馈 96ecce8c):连续截图。每调一次回一张**不同**数字的图,图底一条噪点把体积撑到 ~50KB(真截图的量级),
 // 请求体的涨幅才量得出来:修前每轮多带一张(末轮 6 张),修后封顶在最近 3 张。数字各不相同 → 读出最后一张才算最新的图到了。
@@ -3816,7 +3835,7 @@ Then reply with only the command output.`,
       for await (const chunk of r.body) { text += Buffer.from(chunk).toString('utf8'); if (firstMs == null && text.includes('"type":"delta"')) firstMs = Date.now() - t0; }
       const evs = text.split('\n').filter((l) => l.startsWith('data:')).map((l) => { try { return JSON.parse(l.slice(5)); } catch { return null; } }).filter(Boolean);
       const done = evs.find((e) => e.type === 'done');
-      return { content: String(done?.content || ''), deltas: evs.filter((e) => e.type === 'delta').length, toolCallText: !!done?.toolCallText, error: evs.find((e) => e.type === 'error')?.error || (done ? null : 'SSE 无 done'), ms: Date.now() - t0, firstMs };
+      return { content: String(done?.content || ''), deltas: evs.filter((e) => e.type === 'delta').length, toolCallText: !!done?.toolCallText, attached: done?.attached || null, error: evs.find((e) => e.type === 'error')?.error || (done ? null : 'SSE 无 done'), ms: Date.now() - t0, firstMs };
     };
     const count = async () => asList(await api(`/agent/sessions/${sid}/messages`), 'messages').length;
     const before = await count();
@@ -3831,6 +3850,28 @@ Then reply with only the command output.`,
     const mainBusy = asList(await api(`/agent/runs?session_id=${sid}`).catch(() => []), 'runs').some((r) => r.status === 'running' || r.status === 'queued');
     const a4 = await aside({ question: 'Quick side question: what was the project codename again?' });
     const mainEv = await main;
+    // 附件(10-24):只给这一问。判「真到了模型」只能靠附件里的**随机内容**(颜色可猜,随机数字 / 口令猜不中,见 mcp 场景的教训):
+    // ⑥图里画的四位数 ⑦txt 里的口令 ⑧PDF 里印的编码(引擎用 LiteParse 抽字)⑨落库那一轮只留记录(名字 / 缩略图),不留内容。
+    // --btw-no-attach = 负对照:同样三问不带附件,⑥⑦⑧⑨必须红(证明判据靠的是附件,不是模型瞎猜或主会话里有答案)。
+    const noAttach = argv.includes('--btw-no-attach');
+    const imgDigits = randDigits();
+    const fileWord = `PASS-${Math.random().toString(36).slice(2, 7).toUpperCase()}`;
+    const pdfWord = `PDF${Math.random().toString(36).slice(2, 7).toUpperCase()}`;
+    const pngB64 = digitsPng(imgDigits).toString('base64');
+    // 缩略图另画一张小的(别拿原图当缩略图 —— 那样判不出「原图内容没落库」)
+    const thumbB64 = digitsPng(imgDigits, 0, { scale: 2 }).toString('base64');
+    const notesText = `Meeting notes, 24 October\nThe passphrase for the staging box is ${fileWord}.\nNothing else to report.\n`;
+    const notesB64 = Buffer.from(notesText).toString('base64');
+    const pdfB64 = textPdf(`Release code: ${pdfWord}`).toString('base64');
+    const with_ = (attachments) => (noAttach ? {} : { attachments });
+    const a5 = await aside({ question: 'What 4-digit number is shown in the attached image? Reply with just the number.', ...with_([{ name: 'number.png', mimeType: 'image/png', data: pngB64, thumb: `data:image/png;base64,${thumbB64}` }]) });
+    const a6 = await aside({ question: 'What is the passphrase written in the attached notes.txt? Reply with just the passphrase.', ...with_([{ name: 'notes.txt', mimeType: 'text/plain', data: notesB64 }]) });
+    const a7 = await aside({ question: 'What code is printed in the attached PDF? Reply with just the code.', ...with_([{ name: 'code.pdf', mimeType: 'application/pdf', data: pdfB64 }]) });
+    const saved = asList(await api(`/agent/sessions/${sid}/asides`).catch(() => []), 'asides');
+    const savedTurn = saved.flatMap((a) => a.turns || []).find((t) => String(t.question).startsWith('What 4-digit number'));
+    const savedJson = JSON.stringify(saved);
+    // 落库只留记录:原图 / txt / PDF 的内容一个字节都不该在 chat_asides 里(回答里出现口令是正常的,那是模型答的)
+    const leaked = [pngB64.slice(0, 120), notesB64.slice(0, 40), 'Meeting notes, 24 October', pdfB64.slice(0, 120)].filter((s) => savedJson.includes(s)).length;
     const back = (x) => x.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
     const reversed = back(CODE).split('').reverse().join('');
     const checks = {
@@ -3839,13 +3880,17 @@ Then reply with only the command output.`,
       noWrite: after === before,
       noFakeTool: !a3.error && !a3.toolCallText,
       inFlight: !a4.error && a4.content.includes(CODE) && !/\b1\s*\n\s*2\s*\n\s*3\b/.test(a4.content),
+      attachImage: !a5.error && a5.content.replace(/\D/g, '').includes(imgDigits) && a5.attached?.images === 1,
+      attachFile: !a6.error && back(a6.content).includes(back(fileWord)) && a6.attached?.files?.includes('notes.txt'),
+      attachPdf: !a7.error && back(a7.content).includes(pdfWord) && a7.attached?.files?.includes('code.pdf'),
+      savedMeta: savedTurn?.attachments?.[0]?.name === 'number.png' && savedTurn.attachments[0].thumb === `data:image/png;base64,${thumbB64}` && !('data' in savedTurn.attachments[0]) && leaked === 0,
     };
     const ok = Object.values(checks).every(Boolean) && !a1.error && !a2.error && !mainEv.error;
     return {
       ok,
-      detail: `${Object.entries(checks).map(([k, v]) => `${k}${v ? '✓' : '✗'}`).join(' ')};主会话 ${before}→${after} 行;发问时主 run ${mainBusy ? '在跑' : '已结束(未判到并发)'};流式 ${a1.deltas} 帧;首帧/总 ${[a1, a2, a3, a4].map((a) => `${a.firstMs == null ? '-' : (a.firstMs / 1000).toFixed(1)}/${(a.ms / 1000).toFixed(1)}s`).join(' ')}${a1.error ? `;a1 错:${a1.error}` : ''}`,
+      detail: `${Object.entries(checks).map(([k, v]) => `${k}${v ? '✓' : '✗'}`).join(' ')}${noAttach ? '(负对照:不带附件)' : ''};主会话 ${before}→${after} 行;发问时主 run ${mainBusy ? '在跑' : '已结束(未判到并发)'};流式 ${a1.deltas} 帧;图里 ${imgDigits} / 口令 ${fileWord} / PDF ${pdfWord};attached ${JSON.stringify([a5.attached, a6.attached, a7.attached])};落库 ${saved.length} 段,那一轮附件 ${JSON.stringify((savedTurn?.attachments || []).map((a) => ({ name: a.name, thumb: (a.thumb || '').length, data: 'data' in a })))},内容泄进库 ${leaked} 处;首帧/总 ${[a1, a2, a3, a4, a5, a6, a7].map((a) => `${a.firstMs == null ? '-' : (a.firstMs / 1000).toFixed(1)}/${(a.ms / 1000).toFixed(1)}s`).join(' ')}${a1.error ? `;a1 错:${a1.error}` : ''}`,
       inconclusive: ok && !mainBusy,
-      output: [a1, a2, a3, a4].map((a, i) => `[${i + 1}] ${a.error ? `ERROR ${a.error}` : a.content}`).join('\n\n'),
+      output: [a1, a2, a3, a4, a5, a6, a7].map((a, i) => `[${i + 1}] ${a.error ? `ERROR ${a.error}` : a.content}`).join('\n\n'),
     };
   });
 

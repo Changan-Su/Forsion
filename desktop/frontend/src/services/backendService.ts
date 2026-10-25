@@ -228,7 +228,7 @@ export const branchSession = (t: EngineTarget, sessionId: string, messageId: str
   ).then((r) => r.session)
 
 /** 存下来的顺便问(挂在某条消息上;引擎 chat_asides)。 */
-export interface SavedAside { id: string; message_id: string | null; turns: Array<{ question: string; quote?: string; answer: string }>; created_at: string; updated_at: string }
+export interface SavedAside { id: string; message_id: string | null; turns: Array<{ question: string; quote?: string; answer: string; attachments?: Array<{ name: string; mimeType: string; size?: number; thumb?: string }> }>; created_at: string; updated_at: string }
 
 export const listAsides = (t: EngineTarget, sessionId: string) =>
   request<{ asides: SavedAside[] }>(t, `/agent/sessions/${encodeURIComponent(sessionId)}/asides`).then((r) => r.asides || [])
