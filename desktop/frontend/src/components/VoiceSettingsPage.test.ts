@@ -129,6 +129,11 @@ describe('语音页(设置卡片)', () => {
     expect(read.querySelector('.tts-voice-studio')).toBeNull()
     await click(read.querySelector('.tts-studio-toggle'))
     expect(read.querySelector('.tts-voice-studio select.tts-clone-model')).not.toBeNull()
+    // 收起只是藏起来:工作室实例(进行中的请求、忙碌锁、填了一半的表单)留着
+    const studio = read.querySelector('.tts-voice-studio')
+    await click(read.querySelector('.tts-studio-toggle'))
+    expect(read.querySelector('.tts-voice-studio')).toBe(studio)
+    expect((studio!.parentElement as HTMLElement).hidden).toBe(true)
     await render({ mode: 'external', backendUrl: 'https://remote.example' }, { providers: [ds] })
     await flush()
     expect(panel('settings-voice-read').querySelectorAll('.settings-control-row').length).toBe(3)

@@ -90,6 +90,7 @@ function ReadAloudPanel(p: Parameters<typeof VoiceSettingsPage>[0] & { stored: S
   const [testing, setTesting] = useState(false)
   const [testMsg, setTestMsg] = useState('')
   const [studioOpen, setStudioOpen] = useState(false)
+  const [studioMounted, setStudioMounted] = useState(false)
   const model = (stored.ttsModelId || '').trim()
 
   // 百炼音色工作室:有指向阿里云百炼的 provider 才可用(域名判定与后端 isDashScopeBase 一致)。
@@ -162,12 +163,16 @@ function ReadAloudPanel(p: Parameters<typeof VoiceSettingsPage>[0] & { stored: S
         {!remoteExternal && (
           <SettingsRow fit="inline" label={t('settings.tts.studio.row')} description={t(ds ? 'settings.tts.studio.rowHint' : 'settings.tts.studio.rowNeedProvider')} control={
             ds
-              ? <button type="button" className="btn ghost sm tts-studio-toggle" aria-expanded={studioOpen} onClick={() => setStudioOpen((o) => !o)}>{t(studioOpen ? 'settings.voice.collapse' : 'settings.tts.studio.open')}</button>
+              ? <button type="button" className="btn ghost sm tts-studio-toggle" aria-expanded={studioOpen} onClick={() => { setStudioMounted(true); setStudioOpen((o) => !o) }}>{t(studioOpen ? 'settings.voice.collapse' : 'settings.tts.studio.open')}</button>
               : <button type="button" className="btn ghost sm" onClick={() => p.onOpen('providers')}>{t('settings.voice.addProvider')}</button>
           } />
         )}
-        {!remoteExternal && ds && studioOpen && (
-          <TtsVoiceStudio cfg={p.cfg} provider={ds} onApplied={() => void window.tangu!.getConfig().then(setStored)} />
+        {/* 第一次展开以后一直挂着,收起只是藏起来(Codex 评审 P2):工作室里有进行中的复刻 / 设计请求和忙碌锁,
+            卸载会丢掉锁,收起再展开就能再发一次,先发的那个晚回来会把新音色覆盖掉。 */}
+        {!remoteExternal && ds && studioMounted && (
+          <div className="settings-voice-studio-wrap" hidden={!studioOpen}>
+            <TtsVoiceStudio cfg={p.cfg} provider={ds} onApplied={() => void window.tangu!.getConfig().then(setStored)} />
+          </div>
         )}
       </div>
     </SettingsPanel>
