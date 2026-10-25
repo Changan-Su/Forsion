@@ -172,7 +172,7 @@ list.addEventListener('drop', async (e) => {
 })
 ```
 
-- `target` is the row element already in its new place, or a function that finds it: the host then checks each frame
+- `target` is the row element already in its new place, or a function that finds it: the host then checks on every DOM change (a MutationObserver, before paint)
   for up to ~1.2s and lands it once it is re-mounted or has a new parent / previous sibling (before it is painted there).
 - Only the row's inline `transform` / `transition` / `box-shadow` are touched for the flight, then restored; disabling
   the plugin cancels pending and in-flight landings. Feature-detect `drop.land` — older hosts lack it.
