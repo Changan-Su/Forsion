@@ -28,11 +28,11 @@ export const AnimatedCollapse: React.FC<{ open: boolean; children: React.ReactNo
         // 调用处请写成 open={x}>{x && …}:收起时不必把整棵子树算一遍,退场用的是 AnimatePresence 留下的那一帧。
         <motion.div
           ref={ref}
-          initial={{ height: 0, opacity: 0, overflow: 'hidden' }}
+          initial={rm ? false : { height: 0, opacity: 0, overflow: 'hidden' }} // 减少动态效果:直接出现、不裁切(瞬时动画不回调完成,裁了就放不开)
           animate={{ height: 'auto', opacity: 1 }}
           exit={{ height: 0, opacity: 0 }}
           transition={{ duration: rm ? 0 : 0.24, ease: [0.2, 0.8, 0.3, 1] }}
-          onAnimationStart={() => clip(true)}
+          onAnimationStart={() => clip(!rm)}
           onAnimationComplete={(def) => clip((def as { height?: unknown }).height !== 'auto')}
           style={{ display: 'flow-root' }}
         >

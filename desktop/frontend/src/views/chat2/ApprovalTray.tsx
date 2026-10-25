@@ -8,7 +8,7 @@
  * 交互卡片(要你点 / 答的)一律进这里,内容卡片(Intelligent UI、白板、清单、插件结果卡)留在产出它的那条消息上;
  * Muse 私聊里它后台排队的审批与它提的待办也在这里(10-23)。
  */
-import { useEffect, useRef, useState, type RefObject } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react'
 import { ArrowDown, ChevronDown, ChevronLeft, ChevronRight, ShieldQuestion } from 'lucide-react'
 import type { TodoItem } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { ApprovalCard } from '../../components/ApprovalCard'
@@ -105,6 +105,13 @@ export function ApprovalTray({ items, onDecide, onAnswer, onTask, sessionId }: {
   const sent = sentLocks(sessionId)
   const [, rerender] = useState(0)
   const [motion, touch] = useEnterMotion() // 托盘一出现时整张一起进;之后展开、翻页、答完换上来的那张,卡体单独淡入上来
+  // 答完的那张离开、下一张顶上来也算刚发生。layout effect:下一张第一帧就带着入场;别在 submit 里给 ——
+  // 那时正在答的那张还在(同一个 key),补上属性会当场重放它的入场(10-25 评审)。
+  const prevCur = useRef(curId)
+  useLayoutEffect(() => {
+    if (prevCur.current && curId && prevCur.current !== curId && !items.some((i) => i.id === prevCur.current)) touch()
+    prevCur.current = curId
+  }, [curId])
   // 兑现离开托盘的不再占着。放在提交后的 effect 里,不在 render 里改 ref:并发渲染可能丢弃一次 render,
   // 那次若先把锁删了,屏幕上仍在的旧项就又能送一次(Codex 09-27 第三轮)。
   useEffect(() => {
@@ -113,7 +120,6 @@ export function ApprovalTray({ items, onDecide, onAnswer, onTask, sessionId }: {
   const submit = (id: string, send: () => Sent): void => {
     // 冷却期内一律不送:CSS 的 pointer-events 只挡鼠标,这里连键盘(回车提交)一起挡,也让冷却可测
     if (armedId !== id || sent.has(id)) return
-    touch()
     sent.add(id)
     rerender((n) => n + 1)
     const unlock = (): void => { sent.delete(id); rerender((n) => n + 1) }
