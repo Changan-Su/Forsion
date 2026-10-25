@@ -3,8 +3,11 @@
  * 统一由 channels/service.ts 的通道无关管线驱动;每种通道只实现 ChannelDriver(传输层)。
  */
 
-export type ChannelKind = 'wechat' | 'telegram' | 'qq';
-export const CHANNEL_KINDS: ChannelKind[] = ['wechat', 'telegram', 'qq'];
+export type BuiltinChannelKind = 'wechat' | 'telegram' | 'qq';
+/** 内置三通道 + 插件经 ctx.registerChannel 贡献的(kind 由插件定,见 hub.registerChannel 的校验)。 */
+export type ChannelKind = BuiltinChannelKind | (string & {});
+/** 内置通道;全部通道(含插件的)用 channelHub.kinds()。 */
+export const CHANNEL_KINDS: BuiltinChannelKind[] = ['wechat', 'telegram', 'qq'];
 
 export type ApprovalMode = 'readonly' | 'auto-edit' | 'full-auto';
 
@@ -66,4 +69,25 @@ export interface ChannelSettings {
   /** QQ 开放平台凭据。 */
   appId?: string;
   appSecret?: string;
+}
+
+/** 插件通道在设置卡上的一句双语文案。 */
+export interface ChannelText { zh: string; en: string }
+
+/**
+ * 插件贡献的通道(ctx.registerChannel)。复用内置通道的整条管线:连接即新会话、审批、slash 命令、收件箱转发、
+ * 侧栏工作区、设置 → 通道里的卡片(宿主按 fields 画凭据输入)。
+ */
+export interface PluginChannelSpec {
+  /** driver.kind 即通道 kind:小写字母开头、`[a-z0-9-]`、2–16 字符(绑定表 channel 列 VARCHAR(16)),不得与内置撞。 */
+  driver: ChannelDriver & {
+    /** 「连接」按钮:校验凭据(失败抛错,文案给用户看),返回绑定用的账号 id 与卡片上的显示名。 */
+    verify(): Promise<{ accountId: string; label: string }>;
+  };
+  /** 设置卡与侧栏文件夹的显示名。 */
+  name: ChannelText;
+  /** 凭据下方的一句提示(去哪儿拿凭据)。 */
+  hint?: ChannelText;
+  /** 设置卡要填的凭据,键复用通道设置的 appId / appSecret / botToken;secret 的不回显。全部填齐才算有凭据。 */
+  fields: Array<{ key: 'appId' | 'appSecret' | 'botToken'; label: ChannelText; secret?: boolean }>;
 }

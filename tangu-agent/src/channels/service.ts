@@ -42,7 +42,7 @@ import { setPluginEnabled, setScopeSettings } from '../plugins/settingsStore.js'
 import { channelSettings, channelWorkspaceDir, saveChannelSettings } from './config.js';
 import { ChannelCommandCenter, normalizeChannelText, parseChannelCommand, stopReply, type ChannelCommandRuntime, type ChannelUsage } from './commands.js';
 import { CHANNEL_NAME, CHANNEL_REPLY_MAX, channelMsg, clipReply, resolveChannelLocale, type ChannelLocale } from './messages.js';
-import type { ApprovalMode, ChannelDriver, ChannelInbound, ChannelKind, SendResult } from './types.js';
+import type { ApprovalMode, BuiltinChannelKind, ChannelDriver, ChannelInbound, ChannelKind, SendResult } from './types.js';
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 const RUN_REPLY_TIMEOUT_MS = 180_000;
@@ -192,6 +192,8 @@ export interface ChannelServiceOpts {
   inboxDirName: string;
   /** 新会话默认标题。 */
   sessionTitle: string;
+  /** 回复文案里的通道名(插件通道传;内置按 messages.CHANNEL_NAME)。 */
+  name?: { zh: string; en: string };
   /**
    * 承载本通道引擎的客户端面标识(desktop/2.9.9)。通常由 Desktop spawn 时经
    * TANGU_HOST_CLIENT 注入;显式值仅供其它宿主/测试注入。
@@ -613,7 +615,7 @@ export class ChannelService {
       // TODO(messages.ts):换成专用的「连接已重置,本次命令未生效,请重发」键;expired(「该请求已过期,或已在别处处理」)是
       // 暂用的真话 —— 命令确实因为别处的重新接入而失效
       if (now.some((r) => !r.peer_id || r.peer_id === b.peer_id)) throw new Error(channelMsg(L, 'expired'));
-      throw new Error(this.opts.unboundHint ?? channelMsg(L, 'unbound', { channel: CHANNEL_NAME[this.kind][L] })); // ③
+      throw new Error(this.opts.unboundHint ?? channelMsg(L, 'unbound', { channel: (this.opts.name ?? CHANNEL_NAME[this.kind as BuiltinChannelKind])[L] })); // ③
     }
     return { ok: true };
   }
@@ -727,7 +729,7 @@ export class ChannelService {
     // 命令 / 数字选模型自己还有 await,由 commandRuntime 的写操作闸 + 下面命令返回后的再查兜住(Codex 三轮 b #1 与复核 #2)。
     // 代数检查才是不变量,不靠按账号查绑定锁(FIFO)碰巧的排队顺序。
     if (channelGone()) return '';
-    if (!binding) return this.opts.unboundHint ?? channelMsg(L, 'unbound', { channel: CHANNEL_NAME[this.kind][L] });
+    if (!binding) return this.opts.unboundHint ?? channelMsg(L, 'unbound', { channel: (this.opts.name ?? CHANNEL_NAME[this.kind as BuiltinChannelKind])[L] });
 
     // Channel Session 关闭时不驱动 agent 会话(收件箱转发独立于此,仍可能在推送)。
     if (!this.settings().sessions) return channelMsg(L, 'sessionsOff');

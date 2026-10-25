@@ -352,8 +352,8 @@ export interface AgentConfig {
 export const isIndependentOrbitConfig = (config: AgentConfig | null | undefined): boolean =>
   !!(config?.soloAgentSlug || config?.soloEngineId || config?.teamSlug)
 
-/** 通道类型(微信/Telegram/QQ;与引擎 channels/types.ts 对齐)。 */
-export type ChannelKind = 'wechat' | 'telegram' | 'qq'
+/** 通道类型:内置微信/Telegram/QQ + 插件注册的(与引擎 channels/types.ts 对齐)。 */
+export type ChannelKind = 'wechat' | 'telegram' | 'qq' | (string & {})
 
 /** 侧栏工作区:Cloud Project、本地目录、通道目录或不绑定项目的无根会话组。 */
 export interface WorkspaceDescriptor {

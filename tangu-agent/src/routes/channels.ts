@@ -5,12 +5,12 @@
 import { Router } from 'express';
 import { authMiddleware, AuthRequest } from '../core/http.js';
 import { channelHub } from '../channels/hub.js';
-import { CHANNEL_KINDS, type ChannelKind, type ChannelSettings } from '../channels/types.js';
+import type { ChannelKind, ChannelSettings } from '../channels/types.js';
 
 const router = Router();
 
 function kindOf(v: any): ChannelKind {
-  if (!CHANNEL_KINDS.includes(v)) throw new Error(`unknown channel: ${v}`);
+  if (typeof v !== 'string' || !channelHub.has(v)) throw new Error(`unknown channel: ${v}`);
   return v as ChannelKind;
 }
 
@@ -61,7 +61,7 @@ router.put('/agent/channels/:kind/config', authMiddleware, async (req: AuthReque
 });
 
 /**
- * 连接通道(telegram/qq:校验凭据 → 启动 → **新建全新会话**并绑定;连接即新会话)。
+ * 连接通道(telegram/qq/插件通道:校验凭据 → 启动 → **新建全新会话**并绑定;连接即新会话)。
  * 微信走 /agent/wechat/login/*(扫码)。
  */
 router.post('/agent/channels/:kind/connect', authMiddleware, async (req: AuthRequest, res) => {
@@ -72,7 +72,11 @@ router.post('/agent/channels/:kind/connect', authMiddleware, async (req: AuthReq
     const svc = channelHub.service(kind);
     let accountId = '';
     let label = '';
-    if (kind === 'telegram') {
+    const plugin = channelHub.pluginChannel(kind);
+    if (plugin) {
+      ({ accountId, label } = await plugin.driver.verify());
+      if (!accountId) throw new Error(`${kind}: verify() returned no accountId`);
+    } else if (kind === 'telegram') {
       const me = await channelHub.telegramDriver.verify();
       accountId = `tg:${me.id}`;
       label = me.username ? `@${me.username}` : String(me.id);

@@ -7,7 +7,7 @@ import path from 'node:path';
 import { homedir } from 'node:os';
 import { getRawSection, updateSection } from '../core/config.js';
 import { tanguHome } from '../core/tanguHome.js';
-import type { ApprovalMode, ChannelKind, ChannelSettings } from './types.js';
+import type { ApprovalMode, BuiltinChannelKind, ChannelKind, ChannelSettings } from './types.js';
 
 const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
 
@@ -50,10 +50,11 @@ export function defaultWorkspaceDir(): string {
 }
 
 /** 每通道专属工作区目录名(微信沿用历史 webot;桌面侧栏按 project_path 归组)。 */
-export const CHANNEL_DIR_NAME: Record<ChannelKind, string> = { wechat: 'webot', telegram: 'tgbot', qq: 'qqbot' };
+export const CHANNEL_DIR_NAME: Record<BuiltinChannelKind, string> = { wechat: 'webot', telegram: 'tgbot', qq: 'qqbot' };
 
+/** 插件通道的目录名 = `<kind>bot`(kind 已由 hub 校验为 `[a-z0-9-]`)。 */
 export function channelWorkspaceDir(kind: ChannelKind): string {
-  return path.join(defaultWorkspaceDir(), CHANNEL_DIR_NAME[kind]);
+  return path.join(defaultWorkspaceDir(), CHANNEL_DIR_NAME[kind as BuiltinChannelKind] ?? `${kind}bot`);
 }
 
 function normForward(v: any): ChannelSettings['inboxForward'] {
