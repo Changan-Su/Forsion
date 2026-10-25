@@ -51,3 +51,8 @@
 .amx-db-numfmt-cfg label { display: flex; align-items: center; gap: 8px; padding: 2px 0; }
 .amx-db-numfmt-cfg label > span { flex: none; width: 44px; font-size: var(--ui-font-meta, 12px); color: var(--text-faint, var(--text-muted)); }
 .amx-db-numfmt-cfg .amx-db-pop-input { flex: 1; min-width: 0; margin: 0; }
+/* 在传的附件芯片(附件上传进度方案 r2):小环跟在后面;失败的文件名变红、重试 / 不传了常亮 */
+.amx-db-file--up { gap: 4px; }
+.amx-db-file--up .amx-db-filethumb { opacity: 0.6; cursor: default; }
+.amx-db-file--up.is-failed .amx-db-wikilink { color: var(--danger); }
+.amx-db-file--up.is-failed .amx-db-edit { opacity: 1; }

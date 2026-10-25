@@ -58,7 +58,9 @@ import { renameDb } from '../../lib/dbFileOps'
 import { useNoteViewStore } from '../../store/noteViewStore'
 import { usePageStore, useScopedPageStore } from '../../store/pageStore'
 import { amadeus } from '../../api'
-import { Settings2, ExternalLink, Plus, Paperclip, ArrowRightLeft, ChevronRight, Download } from 'lucide-react'
+import { Settings2, ExternalLink, Plus, Paperclip, ArrowRightLeft, ChevronRight, Download, RotateCw } from 'lucide-react'
+import { UploadRing } from '@lcl/components'
+import { abandonFailures, forgetUpload, oneSaveAtATime, onBatchSettled, retryUpload, startUpload, uploadBusy, uploadFraction, useUploads } from '../../../services/uploads'
 import { openDb } from '../../../amadeusNav'
 import { newTabOf } from '../../../views/itemSelect'
 import { registerMessages, useI18n } from '../../../i18n'
@@ -197,6 +199,8 @@ registerMessages({
   'dbembed.uploadFail': { zh: '上传失败：{msg}', en: 'Upload failed: {msg}' },
   'dbembed.uploadAttachment': { zh: '上传附件（可多选）', en: 'Upload attachments (multiple allowed)' },
   'dbembed.appendAttachment': { zh: '追加附件', en: 'Add another attachment' },
+  'dbembed.retryUpload': { zh: '重试上传', en: 'Retry upload' },
+  'dbembed.dropUpload': { zh: '不传了', en: 'Discard upload' },
   'dbembed.removeAttachment': { zh: '移除该附件（不删文件）', en: 'Remove this attachment (the file stays)' },
   // 选项弹层
   'dbembed.optMulti': { zh: '多选（点击切换）', en: 'Multi-select (click to toggle)' },
@@ -2568,15 +2572,36 @@ function FileCell({ row, col, env, setCell }: {
   // 多附件:cell 是 `string`(旧单值)或 `string[]`,读端两形态都认(纯逻辑 shared/db/fileCell.ts)。
   // 旧单值不迁移:只有用户再次编辑这一格才升格成数组。
   const refs = fileRefs(row.cells[col.id])
-  const up = async (files: File[]): Promise<void> => {
-    // ⚠️ 全部传完再写一次:逐个 setCell 会各自读到同一份陈旧 row.cells,最后只剩一个附件。
-    const rels: string[] = []
-    for (const f of files) rels.push(await amadeus.saveAsset(env.dbPath, f.name, new Uint8Array(await f.arrayBuffer())))
-    setCell(row.id, col.id, addFileRefs(row.cells[col.id], rels))
+  // 在传的附件:选完立刻出一枚芯片(图片带本地预览)+ 小环;失败的芯片变红,给重试 / 不传了(附件上传进度方案 r2)。
+  const [pend, setPend] = useState<PendingFile[]>([])
+  const rowRef = useRef(row)
+  rowRef.current = row
+  const pendRef = useRef(pend)
+  pendRef.current = pend
+  // 格子卸载:还挂着的(和之后才失败的)失败项没人点得到了,放弃它们,好让同一批里传成功的照样写进格子
+  useEffect(() => () => abandonFailures(pendRef.current.map((p) => p.id)), [])
+  const up = (files: File[]): void => {
+    const items = files.map((f): PendingFile => {
+      const item: PendingFile = { id: '', name: f.name, preview: IMG_EXT_RE.test(f.name) ? URL.createObjectURL(f) : null, rel: null }
+      item.id = startUpload(f.name, f.size, async ({ stage, progress }) => {
+        stage('uploading')
+        const bytes = new Uint8Array(await f.arrayBuffer())
+        item.rel = await oneSaveAtATime(() => amadeus.saveAsset(env.dbPath, f.name, bytes, (sent, total) => progress(total > 0 ? (sent / total) * f.size : null)))
+      })
+      return item
+    })
+    setPend((p) => [...p, ...items])
+    // ⚠️ 全部落定再写一次:逐个 setCell 会各自读到同一份陈旧 row.cells,最后只剩一个附件。
+    onBatchSettled(items.map((i) => i.id), (done) => {
+      const rels = items.filter((i) => done.includes(i.id) && i.rel).map((i) => i.rel!)
+      if (rels.length) setCell(rowRef.current.id, col.id, addFileRefs(rowRef.current.cells[col.id], rels))
+      for (const i of items) if (i.preview) URL.revokeObjectURL(i.preview)
+      setPend((p) => p.filter((x) => !items.includes(x)))
+    })
   }
   const pick = (e: ReactChangeEvent<HTMLInputElement>): void => {
     const files = [...(e.target.files ?? [])]
-    if (files.length) void up(files).catch((err: unknown) => window.alert(t('dbembed.uploadFail', { msg: err instanceof Error ? err.message : String(err) })))
+    if (files.length) up(files)
     e.target.value = ''
   }
   const addBtn = (label: string): ReactNode => (
@@ -2587,7 +2612,7 @@ function FileCell({ row, col, env, setCell }: {
     </label>
     )
   )
-  if (!refs.length) return addBtn(t('dbembed.type.file'))
+  if (!refs.length && !pend.length) return addBtn(t('dbembed.type.file'))
   const openFile = (ref: string): void => {
     if (/^https?:\/\//i.test(ref)) window.open(ref, '_blank', 'noreferrer')
     else void amadeus.openAttachment(env.dbPath, ref)
@@ -2608,8 +2633,32 @@ function FileCell({ row, col, env, setCell }: {
           </span>
         )
       })}
+      {pend.map((p) => <PendingFileChip key={p.id} file={p} />)}
       {addBtn('')}
     </div>
+  )
+}
+
+interface PendingFile { id: string; name: string; preview: string | null; rel: string | null }
+
+/** 在传的那枚附件芯片:外形同已有的(缩略图 / 文件名),后面一颗小环;失败的变红,给重试 / 不传了。 */
+function PendingFileChip({ file }: { file: PendingFile }) {
+  const { t } = useI18n()
+  const e = useUploads((all) => all[file.id])
+  if (!e) return null
+  const failed = e.phase === 'failed'
+  return (
+    <span className={`amx-db-file amx-db-file--up${failed ? ' is-failed' : ''}`} role="status" title={failed ? e.error : file.name}>
+      {file.preview
+        ? <img className="amx-db-filethumb" src={file.preview} alt={file.name} />
+        : <span className="amx-db-wikilink"><Paperclip size={12} /> {file.name}</span>}
+      {failed ? (
+        <>
+          <button className="amx-db-edit" onClick={() => retryUpload(file.id)} title={t('dbembed.retryUpload')} aria-label={t('dbembed.retryUpload')}><RotateCw size={11} /></button>
+          <button className="amx-db-edit" onClick={() => forgetUpload(file.id)} title={t('dbembed.dropUpload')} aria-label={t('dbembed.dropUpload')}>✕</button>
+        </>
+      ) : uploadBusy(e) && <UploadRing value={uploadFraction(e)} size={12} />}
+    </span>
   )
 }
 

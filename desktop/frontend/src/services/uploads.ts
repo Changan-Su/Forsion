@@ -98,6 +98,43 @@ export function forgetUpload(id: string): void {
   }, true)
 }
 
+/** 一批上传都落定(完成;或失败 / 在传的被移除、从台账里拿掉了)时回调一次,给出完成了的那几条 id,随后把它们从台账里拿掉。
+ *  给「全部传完再写一次」的调用方:数据库附件格逐个写,会各自读到同一份陈旧的格值,最后只剩一个附件。 */
+export function onBatchSettled(ids: string[], cb: (done: string[]) => void): void {
+  const check = (): void => {
+    const all = useUploads.getState()
+    if (ids.some((id) => all[id] && all[id].phase !== 'done')) return
+    unsub()
+    const done = ids.filter((id) => all[id]?.phase === 'done')
+    cb(done)
+    done.forEach(forgetUpload)
+  }
+  const unsub = useUploads.subscribe(check)
+  check()
+}
+
+/** 界面没了(格子卸载、正文占位随换页被拆):这几条以后失败就直接放弃 —— 没人点得到「重试 / 移除」了,
+ *  别让同一批里传成功的一直等着它(onBatchSettled 等的就是它们落定)。 */
+export function abandonFailures(ids: string[]): void {
+  const check = (): void => {
+    const all = useUploads.getState()
+    const live = ids.filter((id) => all[id])
+    for (const id of live) if (all[id].phase === 'failed') forgetUpload(id)
+    if (!live.some((id) => uploadBusy(all[id]))) unsub()
+  }
+  const unsub = useUploads.subscribe(check)
+  check()
+}
+
+let saveChain: Promise<unknown> = Promise.resolve()
+/** 一次只让一个落盘调用在跑(Amadeus 的附件 / 资源)。宿主的「挑一个不撞名的文件名」是先查后写:两个同名文件并发落盘会
+ *  挑中同一个名字、后写的盖掉先写的(此前是逐个 await,天然串行)。读文件、排队照旧并发,只有这一步排队。 */
+export function oneSaveAtATime<T>(save: () => Promise<T>): Promise<T> {
+  const run = saveChain.then(save, save)
+  saveChain = run.catch(() => {})
+  return run
+}
+
 /** 还在路上(排队 / 读取 / 上传)。 */
 export const uploadBusy = (e: UploadEntry | undefined): boolean => !!e && (e.phase === 'queued' || e.phase === 'reading' || e.phase === 'uploading')
 
