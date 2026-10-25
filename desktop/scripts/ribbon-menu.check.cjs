@@ -48,9 +48,16 @@ const readMenu = (win) => win.evaluate(() => {
 })
 const openerCount = (win) => win.evaluate(() => document.querySelectorAll('.rb [data-menu-open]').length)
 const hasOpen = (win, sel) => win.evaluate((s) => !!document.querySelector(s)?.hasAttribute('data-menu-open'), sel)
+/** 发起钮的实际底色 + 同一处解析出的 --overlay-medium(探针元素挂在 .rb 里,吃同一套 token)+ 是不是当前 Space(强调底不让位)。 */
 const bgOf = (win, sel) => win.evaluate((s) => {
   const el = document.querySelector(s)
-  return el ? getComputedStyle(el).backgroundColor : null
+  if (!el) return null
+  const probe = document.createElement('div')
+  probe.style.background = 'var(--overlay-medium)'
+  document.querySelector('.rb').appendChild(probe)
+  const want = getComputedStyle(probe).backgroundColor
+  probe.remove()
+  return { got: getComputedStyle(el).backgroundColor, want, active: el.matches('.rb-space.on') }
 }, sel)
 
 async function center(win, sel) {
@@ -87,7 +94,8 @@ async function center(win, sel) {
           r.check(`${c.id} ${name}: 发起格挂 data-menu-open`, await hasOpen(win, openerSel), `全条共 ${await openerCount(win)} 处`)
           r.check(`${c.id} ${name}: 只有一处 data-menu-open`, (await openerCount(win)) === 1)
           const btnSel = openerSel.endsWith('.rb-plus') ? openerSel : `${openerSel} > .rb-btn`
-          r.note(`${c.id} ${name}: 发起钮底色`, await bgOf(win, btnSel))
+          const bg = await bgOf(win, btnSel)
+          r.check(`${c.id} ${name}: 发起钮底色 = --overlay-medium`, !!bg && (bg.active || (bg.got === bg.want && bg.want !== 'rgba(0, 0, 0, 0)')), JSON.stringify(bg))
         } else {
           r.check(`${c.id} ${name}: 空白处发起 → 没有 data-menu-open`, (await openerCount(win)) === 0)
         }
@@ -119,6 +127,10 @@ async function center(win, sel) {
       const cmdSel = '.rb-bottom .rb-slot[data-id="cmd:quick-find"]'
       if (await center(win, cmdSel)) await probe('cmd-ctx', rightClick(cmdSel), cmdSel, { shot: c.id === 'light-zh' })
       else r.check(`${c.id}: 命令区有种进去的命令格`, false)
+      // 没有自己菜单项的内置图标(设置等):右键冒到区菜单,那一格照样要亮。
+      const plainId = await win.evaluate(() => [...document.querySelectorAll('.rb-bottom .rb-slot[data-id]')].map((x) => x.dataset.id).find((id) => !/^(cmd|folder|space):/.test(id)) || null)
+      if (plainId) await probe('builtin-item-ctx', rightClick(`.rb-bottom .rb-slot[data-id="${plainId}"]`), `.rb-bottom .rb-slot[data-id="${plainId}"]`)
+      else r.check(`${c.id}: 命令区有内置图标格`, false)
       const folderSel = '.rb-bottom .rb-slot[data-id="folder:probe"]'
       if (await center(win, folderSel)) await probe('folder-ctx', rightClick(folderSel), folderSel)
       else r.check(`${c.id}: 命令区有种进去的收纳夹`, false)
@@ -150,8 +162,18 @@ async function center(win, sel) {
         }
         return null
       })
-      if (gap) await probe('root-ctx', async () => { await win.mouse.click(gap.x, gap.y, { button: 'right' }); return true }, null)
-      else r.note(`${c.id}: 两区之间找不到裸露的 .rb 空白,跳过 root-ctx`)
+      // 空当被「最近使用」占满时,直接在 .rb 根上派一发右键(target = .rb,走同一个 onRootCtx);两条路都不许静默跳过。
+      await probe('root-ctx', async () => {
+        if (gap) { await win.mouse.click(gap.x, gap.y, { button: 'right' }); return true }
+        return win.evaluate(() => {
+          const rb = document.querySelector('.rb')
+          if (!rb) return false
+          const r = rb.getBoundingClientRect()
+          rb.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, button: 2 }))
+          return true
+        })
+      }, null)
+      if (!gap) r.note(`${c.id}: 两区之间没有裸露的 .rb 空白,root-ctx 改走派发事件`)
     }
   } finally {
     await close()

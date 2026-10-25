@@ -190,6 +190,8 @@ export function Ribbon() {
   const peekOpenTimer = useRef<number | undefined>(undefined)
   const peekCloseTimer = useRef<number | undefined>(undefined)
   const peekCtx = useRef<Event | null>(null) // 从卡里(含它挂到 body 的菜单)冒上来的那次右键
+  // 没有自己菜单项的图标(内置命令、设置……)右键会冒到区 / 整条菜单:记下是哪一格、哪一次右键,让那一格照样亮(Codex 评审 P2)。
+  const ctxOpener = useRef<{ ev: Event; key: string } | null>(null)
   const [, relayPeek] = useReducer((n: number) => n + 1, 0) // 窗口大小 / 缩放变了:重算卡片几何
   const cancelPeekClose = (): void => { window.clearTimeout(peekCloseTimer.current); peekCloseTimer.current = undefined }
   const closePeek = (): void => {
@@ -832,14 +834,19 @@ export function Ribbon() {
   const onZoneCtx = (zone: RibbonZone) => (e: React.MouseEvent): void => {
     if (e.defaultPrevented) return // 图标级菜单(用户 Space 删除/收纳夹/命令)优先
     e.preventDefault()
-    setMenu({ x: e.clientX, y: e.clientY, entries: zoneMenu(zone) })
+    setMenu({ x: e.clientX, y: e.clientY, entries: zoneMenu(zone), opener: bubbledOpener(e) })
+  }
+  const bubbledOpener = (e: React.MouseEvent): string | undefined => {
+    const o = ctxOpener.current
+    ctxOpener.current = null
+    return o && o.ev === e.nativeEvent ? o.key : undefined
   }
   const onRootCtx = (e: React.MouseEvent): void => {
     // 预览卡在 Ribbon 的 React 树里,卡里(含它挂到 body 的菜单)的右键会冒到这儿:那是 View 自己的事,不弹 Ribbon 的区菜单。
     if (e.defaultPrevented || e.nativeEvent === peekCtx.current) return
     e.preventDefault()
     // 两区合起来的菜单里只留一个「新建收纳夹」(建在 Space 区):去掉限定词后两行会一模一样。命令区的收纳夹从命令区的 ＋ / 空白右键建。
-    setMenu({ x: e.clientX, y: e.clientY, entries: [...zoneMenu('top'), ...zoneMenu('bottom').slice(0, -1)] })
+    setMenu({ x: e.clientX, y: e.clientY, entries: [...zoneMenu('top'), ...zoneMenu('bottom').slice(0, -1)], opener: bubbledOpener(e) })
   }
   // 菜单项点开图标选择器:关掉菜单、在原位弹网格。current 高亮当前图标,apply 落库。
   const pickIcon = (x: number, y: number, current: string | undefined, apply: (name: string) => void): void => {
@@ -871,7 +878,7 @@ export function Ribbon() {
   const itemCtx = (item: RibbonItem, opener: string = item.id) => (e: React.MouseEvent): void => {
     if (e.defaultPrevented) return // 组件自己接了右键(主位槽)
     const entries = itemMenu(item)
-    if (!entries.length) return // 没有自己的项 → 放它冒泡到区菜单
+    if (!entries.length) { ctxOpener.current = { ev: e.nativeEvent, key: opener }; return } // 没有自己的项 → 放它冒泡到区菜单,发起格照记
     e.preventDefault()
     e.stopPropagation()
     setMenu({ x: e.clientX, y: e.clientY, entries, opener })
