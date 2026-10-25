@@ -10,7 +10,7 @@
  */
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, ArrowDownToLine, ArrowUpToLine, CheckCircle2, ChevronRight, CircleStop, FileText, FolderOpen, Globe, GripVertical, Pencil, Plus, RotateCcw, Search, X, XCircle } from 'lucide-react'
-import { createDropIndicator } from '@lcl/engine/dropIndicator'
+import { createDropIndicator } from '@lcl/engine'
 import { describeTool } from '../../components/ToolGroup'
 import { ContextMenu, type CtxMenu } from '../../components/RightPanel'
 import { humanizeRunError, ReloginChip } from './EditorialMessage'
