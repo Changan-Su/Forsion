@@ -156,7 +156,7 @@ async function main() {
     await win.evaluate(() => window.tangu.openFloatingPanel({ id: 'settings', title: 'Settings', builtin: 'settings', params: { tab: 'advanced/a-ui' } }))
     let fl
     await waitFor(async () => { fl = app.windows().find((w) => w.url().includes('window=floating')); return !!fl }, 15000)
-    const box = fl ? fl.locator('[data-setting-anchor="prompt-suggest"] input[type="checkbox"]').first() : null
+    const box = fl ? fl.locator('[data-setting-anchor="prompt-suggest"] [role="switch"]').first() : null
     const found = !!box && await box.waitFor({ timeout: 30000 }).then(() => true, () => false)
     check('设置 → 高级 → 界面与会话里有「输入建议」,缺省勾着', found && await box.isChecked())
     if (found) {
