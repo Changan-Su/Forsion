@@ -204,16 +204,18 @@ export function pickerProgram(makeSelector: (el: Element) => string): Promise<un
       paint()
     }
     const swallow = (e: Event): void => { e.preventDefault(); e.stopImmediatePropagation() }
-    const onMove = (e: MouseEvent): void => { swallow(e); track(e.clientX, e.clientY) }
+    // 只认真输入:页面脚本 dispatchEvent 出来的合成事件(isTrusted=false)也会传到这个世界的监听上,不认就能替用户「点」任意元素
+    const onMove = (e: MouseEvent): void => { swallow(e); if (e.isTrusted) track(e.clientX, e.clientY) }
     const onScroll = (): void => { if (px >= 0) track(px, py) }
     const onKey = (e: KeyboardEvent): void => {
+      if (!e.isTrusted) return
       if (e.key === 'Escape') { swallow(e); finish(null); return }
       if (e.key === 'Alt') { swallow(e); if (!e.repeat) parent() }
     }
     const parent = (): void => { if (base) { depth++; lift(); paint() } }
     const onClick = (e: MouseEvent): void => {
       swallow(e)
-      if (e.button !== 0) return
+      if (!e.isTrusted || e.button !== 0) return
       if (!target) track(e.clientX, e.clientY)
       if (!target) return
       const r = target.getBoundingClientRect()

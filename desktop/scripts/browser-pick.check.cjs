@@ -156,6 +156,23 @@ async function main() {
     await sleep(400)
     check('P5c 再按一次点选键 = 取消', (await label()) === null && (await pressed()) === 'false')
 
+    // ── P7b:页面脚本伪造的点击 / 按键不算数(isTrusted=false)
+    await win.click('[data-press="pick"]')
+    for (let i = 0; i < 20 && (await label()) === null; i++) await sleep(100)
+    await send({ type: 'mouseMove', x: cx, y: cy })
+    await sleep(150)
+    const n7 = (await tiles()).length
+    await inGuest(`(() => {
+      const o = { bubbles: true, cancelable: true, clientX: ${cx}, clientY: ${cy}, button: 0 }
+      window.dispatchEvent(new MouseEvent('click', o))
+      document.querySelector('forsion-pick')?.dispatchEvent(new MouseEvent('click', o))
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    })()`)
+    await sleep(500)
+    check('P7b 页面合成的 click / Esc 不触发点选也不取消', (await tiles()).length === n7 && (await pressed()) === 'true' && (await label()) !== null, `tiles=${(await tiles()).length} pressed=${await pressed()}`)
+    await send({ type: 'keyDown', keyCode: 'Escape' })
+    await sleep(400)
+
     // ── P6:发出去
     const runsBefore = stub.seen.runs.length
     const sent = await win.evaluate(() => {
