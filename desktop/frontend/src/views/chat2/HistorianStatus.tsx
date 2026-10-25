@@ -180,9 +180,9 @@ export function HistorianStatus({ sessionId }: { sessionId: string }) {
       <span className="t2o-desk-name">Historian</span>
       <span className="t2o-desk-dot" data-status={status} />
       <span className="t2o-desk-activity">{t(failed ? 'historian.status.unavailable' : data?.running ? 'historian.status.working' : 'historian.status.ready')}</span>
-      <ChevronRight size={12} style={{ transform: open ? 'rotate(90deg)' : undefined }} />
+      <ChevronRight size={12} style={{ transform: open ? 'rotate(90deg)' : undefined, transition: 'transform var(--duration-fast)' }} />
     </button>
-    {open && <div className="t2o-desk-work" data-historian-work>
+    {open && <div className="t2o-desk-work" data-historian-work data-motion="enter">
       {records.map((r) => <Markdown key={r.id} content={r.content} />)}
       {(data?.activity || []).map((item) => <div className="t2o-historian-event" key={item.id}>{item.detail}</div>)}
       {!records.length && !data?.activity.length && <div className="panel-note">{t('historian.status.empty')}</div>}

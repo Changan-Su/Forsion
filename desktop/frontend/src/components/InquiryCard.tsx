@@ -9,6 +9,7 @@ import type { InquiryRequest, TodoItem } from '../../../../tangu-agent/src/contr
 import { Markdown } from './Markdown'
 import { useI18n, registerMessages } from '../i18n'
 import '../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
+import { useEnterMotion } from './AnimatedUI'
 
 registerMessages({
   'plan.approveGo': { zh: '批准并开始执行', en: 'Approve & start' },
@@ -214,6 +215,7 @@ export const PlanDecision: React.FC<{
       {editing && (
         <textarea
           className="approval-edit plan-edit"
+          data-motion="enter"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           spellCheck={false}
@@ -235,7 +237,7 @@ export const PlanDecision: React.FC<{
       </div>
       {showFeedback && (
         // 打回必须带反馈:光说「需要修改」模型拿不到可操作信息,下一版大概率照旧。
-        <div className="inquiry-input">
+        <div className="inquiry-input" data-motion="enter">
           <input
             type="text"
             className="inline-input"
@@ -264,11 +266,13 @@ export const PlanDecision: React.FC<{
 export const TodoList: React.FC<{ todos: TodoItem[]; live?: boolean; folded?: boolean }> = ({ todos, live = false, folded = false }) => {
   const { t: tr } = useI18n()
   const [open, setOpen] = useState(false)
+  const [motion, touch] = useEnterMotion() // 挂上 / 恢复时直接出现,点开 / 收起换出来的那一版淡入上来
+  const toggle = (next: boolean) => { touch(); setOpen(next) }
   const done = todos.filter((t) => t.status === 'completed').length
   if (folded && !open) {
     const cur = todos.find((t) => t.status === 'in_progress') ?? todos.find((t) => t.status === 'pending')
     return (
-      <button type="button" className="todo-strip" aria-expanded={false} onClick={() => setOpen(true)} data-todo-strip={live ? 'live' : 'idle'}>
+      <button type="button" className="todo-strip" aria-expanded={false} onClick={() => toggle(true)} data-todo-strip={live ? 'live' : 'idle'} data-motion={motion}>
         {live && cur ? <Loader2 size={13} className="spin" /> : cur ? <SquareDot size={13} /> : <CheckSquare size={13} />}
         <b>{tr('inquiry.todoList')} {done}/{todos.length}</b>
         <span className="todo-strip-bar"><i style={{ width: `${Math.round((done / todos.length) * 100)}%` }} /></span>
@@ -278,10 +282,10 @@ export const TodoList: React.FC<{ todos: TodoItem[]; live?: boolean; folded?: bo
     )
   }
   return (
-    <div className="todo-card">
+    <div className="todo-card" data-motion={motion}>
       <div className="tg-card-title">
         ✓ {tr('inquiry.todoList')} <span className="tg-count">({done}/{todos.length})</span>
-        {folded && <button type="button" className="todo-fold" aria-expanded title={tr('inquiry.todoFold')} aria-label={tr('inquiry.todoFold')} onClick={() => setOpen(false)}><ChevronDown size={13} /></button>}
+        {folded && <button type="button" className="todo-fold" aria-expanded title={tr('inquiry.todoFold')} aria-label={tr('inquiry.todoFold')} onClick={() => toggle(false)}><ChevronDown size={13} /></button>}
       </div>
       <div className="todo-rows">
         {todos.map((t, i) => (

@@ -194,7 +194,7 @@ export function AmadeusOverlays() {
       <NewDrawingHost />
       <CloudSyncDialogHost />
       <AutomationBuilderHost />
-      {toast && <div className="amx-toast">{toast}</div>}
+      {toast && <div key={toast} className="amx-toast" data-motion="enter">{toast}</div>}
     </>
   )
 }

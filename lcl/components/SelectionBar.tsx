@@ -159,7 +159,7 @@ export function SelectionBar({ tools, actions, more, moreHeading, moreLabel, ord
         {order === 'tools' ? <>{toolEls}{sep}{actionEls}</> : <>{actionEls}{sep}{toolEls}</>}
       </div>
       {open && hasMore && (
-        <div className="selbar-panel" role="menu" aria-label={moreLabel} data-testid="selbar-more" ref={panelRef} onKeyDown={onNav}>
+        <div className="selbar-panel" role="menu" aria-label={moreLabel} data-testid="selbar-more" ref={panelRef} onKeyDown={onNav} data-motion="enter">
           {moreHeading && <div className="selbar-head">{moreHeading}</div>}
           {more!.map((item) => (
             <button key={item.id} type="button" className="selbar-menu-item" role="menuitem" tabIndex={-1} data-ai={item.id} title={item.title} {...press(() => { setOpen(false); item.onRun() })}>

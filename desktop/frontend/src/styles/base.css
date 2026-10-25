@@ -5409,6 +5409,32 @@ html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .
 /* 替身里的子元素不重放自己的进场(命令面板 / ⌘P 的面板本身除外:它跟着遮罩一起退,见 engine.css)。 */
 [data-lcl-exit] :not(.cmd-panel, .amx-qf) { animation: none !important; }
 
+/* 统一入场(2026-10-25,DESIGN §3「动效」):宿主与插件同一份,写在标准写法上,插件不用自己做动画。
+   - data-motion="enter":「用户刚点了才出现」的内容(点开的清单、展开的分区、换出来的那一版)。只给刚发生的(规矩 6),
+     新建 / 恢复 / 滚进视口的别写。动独立的 translate,不碰 transform(各处靠内联 transform 定位)。
+   - 原生 <details>:内容区淡入淡出,不补间高度(规矩 7:聊天流里也有 <details>);自己写了 ::details-content 过渡的照旧。
+   - 原生 <dialog> / popover 打开时与命令面板同一档进场。
+   全是 :where() 零特异性:组件自己写了 animation / transition 就以组件为准。减少动态效果由上面的全局规则一并收掉。 */
+@keyframes ui-enter { from { opacity: 0; translate: 0 4px; } }
+@keyframes ui-fade-in { from { opacity: 0; } }
+:where([data-motion~='enter']) { animation: ui-enter var(--menu-enter-duration) var(--ease-surface) backwards; }
+:where(details)::details-content {
+  opacity: 0;
+  transition: opacity var(--menu-exit-duration) var(--ease-exit), content-visibility var(--menu-exit-duration) allow-discrete;
+}
+:where(details[open])::details-content {
+  opacity: 1;
+  transition-duration: var(--menu-enter-duration);
+  transition-timing-function: var(--ease-surface);
+}
+:where(dialog[open], [popover]:popover-open) { animation: ui-menu-enter var(--palette-enter-duration) var(--ease-surface); }
+:where(dialog[open])::backdrop { animation: ui-fade-in var(--palette-enter-duration) var(--ease-calm); }
+/* 上面全局的减少动态效果只管元素与 ::before / ::after,这两个伪元素得点名 */
+@media (prefers-reduced-motion: reduce) {
+  :where(details)::details-content { transition: none; }
+  :where(dialog[open])::backdrop { animation: none; }
+}
+
 /* uiux-c: 全局键盘焦点环(U-43)。
    原来唯一的「全局」规则是 .am-app :focus-visible(amadeus/styles.css),Ribbon、标签条、侧栏行、状态栏都不在它的作用域里,
    Tab 过去看不出焦点在哪。:where() 零特异性 —— 任何组件自己写了 :focus-visible 都照样压得过它;
