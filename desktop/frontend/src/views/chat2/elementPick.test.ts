@@ -1,6 +1,8 @@
 // @vitest-environment happy-dom
 import { describe, expect, it } from 'vitest'
-import { ELEMENT_EVENT, ELEMENT_TARGET_ATTR, composeElements, deliverElementPick, elementImages, formatElementBlock, hostOf, markComposerUsed, pickTargetCard, selectorTail, tileExcerpt, type ElementPick } from './elementPick'
+import { ELEMENT_EVENT, ELEMENT_TARGET_ATTR, ELEMENT_USED_ATTR, composeElements, elementImages, formatElementBlock, markComposerUsed, selectorTail, tileExcerpt, type ElementPick } from './elementPick'
+import * as host from '../../builtins/elementPickDelivery'
+const { deliverElementPick, hostOf, pickTargetCard } = host
 import { translate } from '../../i18n'
 import './QuoteTile' // 登记 element.* 文案
 
@@ -60,6 +62,10 @@ describe('elementPick', () => {
 })
 
 describe('element delivery target', () => {
+  it('host and composer agree on the DOM contract', () => {
+    expect([host.ELEMENT_EVENT, host.ELEMENT_TARGET_ATTR, host.ELEMENT_USED_ATTR]).toEqual([ELEMENT_EVENT, ELEMENT_TARGET_ATTR, ELEMENT_USED_ATTR])
+  })
+
   const card = (parent: Element = document.body): HTMLElement => {
     const el = document.createElement('div')
     el.setAttribute(ELEMENT_TARGET_ATTR, '')
@@ -85,6 +91,7 @@ describe('element delivery target', () => {
     markComposerUsed(a)
     await new Promise((r) => setTimeout(r, 5))
     markComposerUsed(b)
+    expect(Number(b.getAttribute(ELEMENT_USED_ATTR))).toBeGreaterThan(0)
     expect(pickTargetCard(null)).toBe(b)
   })
 

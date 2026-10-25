@@ -13,7 +13,8 @@ import { ArrowLeft, ArrowRight, ExternalLink, MousePointerClick, RotateCw, X } f
 import type { ViewProps } from '@lcl/engine'
 import { BROWSER_PARTITION } from '../../../shared/browser'
 import { registerMessages, useI18n } from '../i18n'
-import { deliverElementPick, hostOf, type ElementPick } from '@tangu/ui/views/chat2/elementPick'
+import type { ElementPick } from '@tangu/ui/views/chat2/elementPick'
+import { deliverElementPick, hostOf } from './elementPickDelivery'
 
 registerMessages({
   'browser.pick': { zh: '点选元素发进对话', en: 'Pick an element to send to chat' },

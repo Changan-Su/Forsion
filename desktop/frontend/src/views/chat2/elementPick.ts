@@ -4,10 +4,8 @@
  * 不另开消息通道,走已有的两条:
  *  - 文字:发送时接在正文后面一小段(同长粘贴磁贴 composePastes),模型读到 URL、选择器和元素里的字;
  *  - 截图:发送时并进这条消息的图片附件(同「引用窗口」的截图)—— 磁贴上只放图标,截图只给模型。
- * 落点:浏览器开在某个对话的 Agent Desk 里 → 那个对话的输入框;否则最近用过的那张可见输入框;都没有 → 打开右侧对话面板
- * (跟着当前会话 = 这个 Space 最近的那个对话),再没有就开新会话。
+ * 找落点、送事件的那一半在宿主:builtins/elementPickDelivery.ts。
  */
-import { getActiveSpace, useCommandStore } from '@lcl/engine'
 import type { Attachment } from '../../../../../tangu-agent/src/contracts/clientTypes'
 
 export interface ElementPick {
@@ -23,18 +21,11 @@ export interface ElementPick {
   image: Attachment | null
 }
 
+/** 宿主(内置浏览器)→ 输入卡的事件与输入卡身上的标记。宿主侧 builtins/elementPickDelivery.ts 写同样的字面值
+ *  (宿主只许经入口用 Tangu 模块,check:tanguboundary),两边相等由 elementPick.test.ts 钉住。 */
 export const ELEMENT_EVENT = 'forsion:element-add'
 export const ELEMENT_TARGET_ATTR = 'data-element-target'
 export const TILE_TITLE_MAX = 20
-
-/** 地址 → 副行里的「域名」:网页取 host(带端口,本机服务分得清),file: 取文件名。 */
-export function hostOf(url: string): string {
-  try {
-    const u = new URL(url)
-    if (u.protocol === 'file:') return decodeURIComponent(u.pathname.split('/').pop() || '') || 'file'
-    return u.host || u.protocol.replace(/:$/, '')
-  } catch { return '' }
-}
 
 /** 磁贴标题里那段字:元素文字前 20 字;没有字 → null(调用方退回标签名)。按码点截,别把表情劈成半个。 */
 export function tileExcerpt(text: string): string | null {
@@ -70,47 +61,6 @@ export function elementImages(elements: readonly ElementPick[]): Attachment[] {
   return elements.flatMap((e) => (e.image ? [e.image] : []))
 }
 
-// ── 落点 ─────────────────────────────────────────────
-
-/** 输入卡最近一次被用(获得焦点)的时刻:多张可见时挑最近用过的那张。 */
-const lastUsed = new WeakMap<Element, number>()
-export const markComposerUsed = (card: Element): void => { lastUsed.set(card, Date.now()) }
-
-const cards = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>(`[${ELEMENT_TARGET_ATTR}]`)]
-const visible = (el: Element | null | undefined): el is HTMLElement => !!el && el.getClientRects().length > 0
-
-/** 挑落点(不开新东西)。from = 点选按钮所在的浏览器视图。 */
-export function pickTargetCard(from: Element | null): HTMLElement | undefined {
-  // 浏览器开在某个对话的 Agent Desk 里:就是那个对话
-  const desk = from?.closest('.agent-desk')
-  const own = desk?.closest('.t2-chat-view')?.querySelector<HTMLElement>(`[${ELEMENT_TARGET_ATTR}]`)
-  if (visible(own)) return own
-  const shown = cards().filter(visible)
-  if (!shown.length) return undefined
-  return shown.reduce((a, b) => ((lastUsed.get(b) ?? 0) > (lastUsed.get(a) ?? 0) ? b : a))
-}
-
-/** 屏上没有输入卡时:先开右侧对话面板(跟着当前会话 = 这个 Space 最近的对话),摆不出来再开新会话,最多等 5 秒。
- *  等的途中换了 Space、浏览器标签被关掉或调用方作废(signal) → 不送了:别让元素落进后来随便哪个冒出来的输入框(Codex P2)。 */
-async function openTarget(from: Element | null, signal?: AbortSignal): Promise<HTMLElement | undefined> {
-  const run = useCommandStore.getState().run
-  const space = getActiveSpace()?.id
-  const gone = (): boolean => !!signal?.aborted || getActiveSpace()?.id !== space || (!!from && !from.isConnected)
-  for (let i = 0; i < 50; i++) {
-    if (gone()) return undefined
-    const hit = cards().find(visible)
-    if (hit) return hit
-    if (i === 0) run('show-chat-panel')
-    if (i === 25) run('new-chat') // 这个 Space 没有对话面板
-    await new Promise((r) => setTimeout(r, 100))
-  }
-  return undefined
-}
-
-/** 把点选结果送进输入框。返回是否送到了。 */
-export async function deliverElementPick(pick: ElementPick, from: Element | null, signal?: AbortSignal): Promise<boolean> {
-  const target = pickTargetCard(from) ?? await openTarget(from, signal)
-  if (!target || signal?.aborted) return false
-  target.dispatchEvent(new CustomEvent<ElementPick>(ELEMENT_EVENT, { detail: pick }))
-  return true
-}
+/** 输入卡获得焦点时盖上的时刻(毫秒):屏上同时有几张时,宿主那边挑最近用过的那张(builtins/elementPickDelivery.ts)。 */
+export const ELEMENT_USED_ATTR = 'data-element-used-at'
+export const markComposerUsed = (card: Element): void => { card.setAttribute(ELEMENT_USED_ATTR, String(Date.now())) }
