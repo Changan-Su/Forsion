@@ -620,6 +620,8 @@ declare global {
       activeWindow?(): Promise<ActiveWindowSample | null>
       /** 本窗口订阅着的在飞 run 数 → 主进程「有会话运行时不休眠」(keepAwakeReport.ts 上报)。 */
       reportRunningSessions?(count: number): void
+      /** 在跑 / 等你的会话 → 托盘 / 菜单栏(借鉴 Comma 2.6;trayReport.ts)。 */
+      setTraySessions?(rows: Array<{ id: string; title: string; state: 'run' | 'wait' }>): void
       /** 拖入文件 → 绝对路径(本机模式粘贴路径用)。 */
       getPathForFile?(file: File): string
       /** 本机工作区文件浏览(host cwd)。 */

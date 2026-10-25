@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
 
 const menus = vi.hoisted(() => [] as unknown[])
+const titles = vi.hoisted(() => [] as string[])
 vi.mock('electron', () => ({
   app: { getPreferredSystemLanguages: () => ['zh-Hans-CN'], isPackaged: false },
   // 托盘桩:只记下每次 setContextMenu 收到的模板(Menu.buildFromTemplate 原样回传),供「切语言重建菜单」断言
-  Tray: class { setToolTip(): void {} setContextMenu(m: unknown): void { menus.push(m) } on(): void {} },
+  Tray: class { setToolTip(): void {} setTitle(t: string): void { titles.push(t) } setContextMenu(m: unknown): void { menus.push(m) } on(): void {} },
   Menu: { buildFromTemplate: (t: unknown) => t }, nativeImage: { createFromPath: () => ({ isEmpty: () => true }) },
 }))
 
@@ -142,5 +143,103 @@ describe('tray 远程段(P1-K2)', () => {
   it('view 抛异常 → 不出远程段(菜单照常)', () => {
     expect(labels(trayMenuTemplate({ ...base, remote: { view: () => { throw new Error('x') }, stopAll: vi.fn(), unlock: vi.fn(), openSettings: vi.fn() } }, 'en')))
       .toEqual(['Show Forsion', 'Check for updates', 'Quit Forsion'])
+  })
+})
+
+// 借鉴 Comma 2.6:在跑 / 等你的会话段 + 新建 Mini 对话 + 菜单栏标题拼接
+import { composeTrayTitle, sanitizeTraySessions, setTrayIndicator, setTraySessions, traySessionItems, traySessions, type TraySessionRow } from './tray'
+describe('tray 在跑 / 等你段(借鉴 Comma 2.6)', () => {
+  const rows = (w: number, r: number): TraySessionRow[] => [
+    ...Array.from({ length: w }, (_, i) => ({ id: `w${i}`, title: `等 ${i}`, state: 'wait' as const })),
+    ...Array.from({ length: r }, (_, i) => ({ id: `r${i}`, title: `跑 ${i}`, state: 'run' as const })),
+  ]
+  const sess = (list: TraySessionRow[]) => ({ list: () => list, open: vi.fn() })
+
+  it('没有在跑 / 等你:不出这一段,基础菜单原样', () => {
+    expect(labels(trayMenuTemplate({ ...base, sessions: sess([]) }, 'zh'))).toEqual(['显示 Forsion', '检查更新', '退出 Forsion'])
+  })
+
+  it('等你在前、在跑在后,小标题带个数;后跟分隔线,再是显示 Forsion', () => {
+    const s = sess(rows(1, 2))
+    const items = trayMenuTemplate({ ...base, sessions: s }, 'zh')
+    expect(labels(items).slice(0, 6)).toEqual(['等你 · 1', '等 0', '在跑 · 2', '跑 0', '跑 1', '显示 Forsion'])
+    expect(items[0].enabled).toBe(false)
+    expect(items[2].enabled).toBe(false)
+    expect(items[5]).toEqual({ type: 'separator' })
+    ;(items[3].click as () => void)()
+    expect(s.open).toHaveBeenCalledWith('r0')
+    expect(labels(trayMenuTemplate({ ...base, sessions: sess(rows(1, 2)) }, 'en')).slice(0, 2)).toEqual(['Needs you · 1', '等 0'])
+    expect(labels(trayMenuTemplate({ ...base, sessions: sess(rows(0, 1)) }, 'en')).slice(0, 1)).toEqual(['Running · 1'])
+  })
+
+  it('最多 5 条,等你的先占;小标题写总数;多的一行「还有 n 个…」点了显示主窗', () => {
+    const show = vi.fn()
+    const items = trayMenuTemplate({ ...base, show, sessions: sess(rows(3, 4)) }, 'zh')
+    expect(labels(items).slice(0, 8)).toEqual(['等你 · 3', '等 0', '等 1', '等 2', '在跑 · 4', '跑 0', '跑 1', '还有 2 个…'])
+    ;(items[7].click as () => void)()
+    expect(show).toHaveBeenCalled()
+    // 等你的就超过 5 条:在跑的一条都不列、也不出在跑小标题
+    const many = labels(trayMenuTemplate({ ...base, sessions: sess(rows(6, 2)) }, 'en'))
+    expect(many.slice(0, 7)).toEqual(['Needs you · 6', '等 0', '等 1', '等 2', '等 3', '等 4', '3 more…'])
+  })
+
+  it('没标题写「未命名会话」;Windows 上 & 转义成 &&', () => {
+    const list: TraySessionRow[] = [{ id: 'a', title: '', state: 'run' }, { id: 'b', title: 'R&D', state: 'run' }]
+    expect(labels(traySessionItems(sess(list), vi.fn(), 'zh', 'darwin'))).toEqual(['在跑 · 2', '未命名会话', 'R&D'])
+    expect(labels(traySessionItems(sess(list), vi.fn(), 'en', 'win32'))).toEqual(['Running · 2', 'Untitled session', 'R&&D'])
+  })
+
+  it('新建 Mini 对话排在显示 Forsion 后面;热键注册上了才显示 ⌘⇧M(只显示不注册)', () => {
+    const open = vi.fn()
+    const items = trayMenuTemplate({ ...base, newMini: { open, accelerator: () => 'CommandOrControl+Shift+M' } }, 'zh')
+    expect(labels(items)).toEqual(['显示 Forsion', '新建 Mini 对话', '检查更新', '退出 Forsion'])
+    expect(items[1]).toMatchObject({ label: '新建 Mini 对话', accelerator: 'CommandOrControl+Shift+M', registerAccelerator: false })
+    ;(items[1].click as () => void)()
+    expect(open).toHaveBeenCalled()
+    const en = trayMenuTemplate({ ...base, newMini: { open, accelerator: () => null } }, 'en')
+    expect(en[1].label).toBe('New Mini chat')
+    expect(en[1].accelerator).toBeUndefined()
+  })
+
+  it('清洗:形状不对的行丢掉、重复 id 只留一条、标题压成一行并截短', () => {
+    const long = 'x'.repeat(80)
+    expect(sanitizeTraySessions([
+      { id: 'a', title: ' 两行\n标题 ', state: 'run' },
+      { id: 'a', title: '重复', state: 'wait' },
+      { id: 'b', title: long, state: 'wait' },
+      { id: 'c', title: 't', state: 'done' },
+      { id: '', title: 't', state: 'run' },
+      { id: 'y'.repeat(65), title: 't', state: 'run' },
+      null, 'str', { id: 'd', state: 'run' },
+    ])).toEqual([
+      { id: 'a', title: '两行 标题', state: 'run' },
+      { id: 'b', title: `${'x'.repeat(47)}…`, state: 'wait' },
+      { id: 'd', title: '', state: 'run' },
+    ])
+    expect(sanitizeTraySessions('nope')).toEqual([])
+  })
+
+  it('菜单栏标题:会话数在前、远程指示在后;都没有 = 空串', () => {
+    expect(composeTrayTitle(0, '')).toBe('')
+    expect(composeTrayTitle(3, '')).toBe(' 3')
+    expect(composeTrayTitle(0, ' 远程')).toBe(' 远程')
+    expect(composeTrayTitle(2, ' 已锁定')).toBe(' 2 已锁定')
+  })
+
+  it.runIf(process.platform === 'darwin')('setTraySessions 与远程指示各改各的那段,拼进同一个菜单栏标题;同一份清单不重建菜单', () => {
+    createTray(base) // 已建过则沿用
+    setTrayIndicator(' 远程', 'tip')
+    expect(titles[titles.length - 1]).toBe(' 远程')
+    setTraySessions([{ id: 'a', title: 'A', state: 'run' }, { id: 'b', title: 'B', state: 'wait' }])
+    expect(titles[titles.length - 1]).toBe(' 2 远程')
+    expect(traySessions()).toHaveLength(2)
+    const n = menus.length
+    setTraySessions([{ id: 'a', title: 'A', state: 'run' }, { id: 'b', title: 'B', state: 'wait' }])
+    expect(menus.length).toBe(n)
+    setTrayIndicator('', '')
+    expect(titles[titles.length - 1]).toBe(' 2')
+    setTraySessions([])
+    expect(titles[titles.length - 1]).toBe('')
+    expect(menus.length).toBe(n + 1)
   })
 })

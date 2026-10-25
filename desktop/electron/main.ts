@@ -50,7 +50,7 @@ import { checkForUpdates, downloadUpdate, installUpdate, canInstallUpdate, betaC
 import { parseSourcePref } from '../shared/updateSource'
 import { fetchWebsiteReleases } from './websiteReleases'
 import { createRestartGuard, readRestartActivity } from './restartGuard'
-import { createTray, refreshTrayMenu, setTrayIndicator, trayLang } from './tray'
+import { createTray, MINI_ACCELERATOR, refreshTrayMenu, sanitizeTraySessions, setTrayIndicator, setTraySessions, traySessions, trayLang } from './tray'
 import { initMainLocale, mainLocale, mt } from './mainI18n'
 import { createQuitGuards } from './quitGuard'
 import { createUiLocaleSync, UI_LOCALE_FILE } from './uiLocaleSync' // P1-KF:主进程文案跟渲染层的生效语言
@@ -2824,6 +2824,22 @@ app.whenReady().then(async () => {
     }
     keepAwake.report(id, Number.isSafeInteger(count) && (count as number) > 0)
   })
+  // 托盘 / 菜单栏的在跑 / 等你会话(借鉴 Comma 2.6):会话名册在渲染层,只认**主窗**报上来的(Mini / 独立窗 / Dock 也跑同一份
+  // bootstrap,各报各的会互相覆盖)。主窗销毁 / 渲染进程崩溃 / 重载时清空,新页面装好会话列表后会重新报。
+  let traySessionsWc = -1
+  ipcMain.on('tray:sessions', (e, raw: unknown) => {
+    if (!isTrustedSender(e) || !e.senderFrame) return
+    if (!mainWindow || mainWindow.isDestroyed() || e.sender !== mainWindow.webContents) return
+    const wc = e.sender
+    if (traySessionsWc !== wc.id) {
+      traySessionsWc = wc.id
+      const clear = (): void => { if (traySessionsWc === wc.id) setTraySessions([]) }
+      wc.once('destroyed', () => { clear(); if (traySessionsWc === wc.id) traySessionsWc = -1 })
+      wc.on('render-process-gone', clear)
+      wc.on('did-navigate', clear)
+    }
+    setTraySessions(sanitizeTraySessions(raw))
+  })
   // Windows 在用户主动睡眠时终止电源请求,唤醒后手里的 id 已失效 → 重新申请(macOS 断言跨睡眠保留,重申无害)。
   // 设备互联通道:合盖期间的出站长连多半已是半开连接(不报错也收不到东西)→ 唤醒即重拨,别等 45s 读看门狗。
   // 睡眠会让「暂停到点」的计时器迟到 → keepAwake 重排;电脑历史采集器重新核一次状态。
@@ -4355,7 +4371,7 @@ app.whenReady().then(async () => {
     return { routed: true }
   })
   // mini 全局快捷键(默认 ⌘/Ctrl+⇧+M;register 返回 false=被占用,吞掉不阻塞启动)。
-  const MINI_ACCEL = 'CommandOrControl+Shift+M'
+  const MINI_ACCEL = MINI_ACCELERATOR // 托盘菜单「新建 Mini 对话」显示的是同一个
   const registerMiniShortcut = (): void => { try { globalShortcut.register(MINI_ACCEL, () => toggleMiniWindow()) } catch { /* 快捷键冲突 */ } }
   if (!SANDBOX) registerMiniShortcut()
   if (!SANDBOX) globalHotkeyPause.add({ pause: () => globalShortcut.unregister(MINI_ACCEL), resume: registerMiniShortcut })
@@ -4400,6 +4416,16 @@ app.whenReady().then(async () => {
       resume: () => { void ch.resume().catch(() => {}) },
     } : undefined,
     remote: PRODUCT.agentBackend ? remoteSafety.trayHandlers(openRemoteSafetySettings) : undefined, // P1-K2:远程会话运行中 · 设备名 / 停止全部 / 解锁
+    // 借鉴 Comma 2.6:在跑 / 等你的会话(清单由主窗经 tray:sessions 报上来);点一条 = 显示主窗并打开它(同审批通知点击那条 approval:open)
+    sessions: PRODUCT.agentBackend ? {
+      list: traySessions,
+      open: (sessionId) => { showMainWindow(); if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(APPROVAL_OPEN_CHANNEL, { sessionId }) },
+    } : undefined,
+    // 「随处说一句」= Mini 窗:已经开着就提到前面(热键是开合切换,菜单项不该把开着的 Mini 藏掉)
+    newMini: {
+      open: () => { if (miniWindow && !miniWindow.isDestroyed() && miniWindow.isVisible()) present(miniWindow); else toggleMiniWindow() },
+      accelerator: () => (globalShortcut.isRegistered(MINI_ACCEL) ? MINI_ACCEL : null),
+    },
   })
   // Amadeus Space:装载 vault IPC(暴露给 window.amadeus)+ 资产协议(指向当前 vault 根)。
   const { getVaultRoot, restartSync, stopSync, readExternalPlugins, vaultFace } = registerAmadeusIpc(() => mainWindow, amadeusSyncFactory)

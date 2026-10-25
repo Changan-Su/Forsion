@@ -7,8 +7,8 @@
  *    (行就是上面子会话那一行的样子)。点分支 = 主区就地换成那一支(⌘ 开新标签);点顺便问 / 子会话 = 右边那块子会话面板。
  *  - ChildFromLine:子会话顶上「来自 主会话」;分支顶上「从 X 分出」。
  */
-import React, { createContext, useContext, useEffect, useState } from 'react'
-import { ChevronRight, CornerDownRight, CornerUpLeft, GitBranch, MessageCircleQuestion, MessageSquare, Sparkles } from 'lucide-react'
+import React, { createContext, useContext, useEffect, useState, type RefObject } from 'react'
+import { ChevronRight, CornerDownRight, CornerUpLeft, GitBranch, MessageCircleQuestion, MessageSquare, Sparkles, Split } from 'lucide-react'
 import type { SessionRecord, ToolEvent } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { useApp } from '../../stores/appStore'
 import { useSessionAttention } from '../../stores/attentionStore'
@@ -45,6 +45,10 @@ registerMessages({
   'fork.aside': { zh: '顺便问', en: 'Aside' },
   'fork.branchFrom': { zh: '从', en: 'Branched from' },
   'fork.branchFromTail': { zh: '分出 · 分叉之前的对话和它一样', en: '· the conversation up to the fork is the same' },
+  'childs.pill.run': { zh: '{n} 个在跑', en: '{n} running' },
+  'childs.pill.wait': { zh: '{n} 个等你', en: '{n} need you' },
+  'childs.pill.waitOne': { zh: '{n} 个等你', en: '{n} needs you' },
+  'childs.pill.title': { zh: '回到子会话', en: 'Back to child sessions' },
 })
 
 export const CHILD_UPDATE_OPEN = '<child_sessions_update>'
@@ -207,6 +211,81 @@ export function ForkBlock({ sessionId, messageId, childIds, onSuggest }: { sessi
       {asides.map((a) => <AsideRow key={a.id} sessionId={sessionId} aside={a} />)}
       {kids.map((k, i) => <ChildRow key={k.id} parentId={host ?? sessionId} s={k} status={st[i]} onSuggest={onSuggest} />)}
     </div>
+  )
+}
+
+/** 本会话的子会话(start_session / 任务卡开出的;分支不算)在跑 / 等你各几个。状态与 ForkBlock 每行同一个 rowStatus。 */
+export function childPillCounts(
+  sessionId: string | null | undefined,
+  sessions: SessionRecord[],
+  statusOf: (s: SessionRecord) => RowStatus,
+): { ids: string[]; run: number; wait: number } {
+  const ids: string[] = []
+  let run = 0, wait = 0
+  if (!sessionId) return { ids, run, wait }
+  for (const s of sessions) {
+    if (s.parent_session_id !== sessionId || s.fork_message_id || s.id === sessionId) continue
+    const st = statusOf(s)
+    if (st === 'run') { run++; ids.push(s.id) } else if (st === 'wait') { wait++; ids.push(s.id) }
+  }
+  return { ids, run, wait }
+}
+
+/** 页面里画着这些子会话行的块(ForkBlock / 任务卡原地变成的子会话块)。 */
+function childBlocks(root: HTMLElement, ids: string[]): HTMLElement[] {
+  const out: HTMLElement[] = []
+  for (const el of root.querySelectorAll<HTMLElement>('.t2-childs[data-child-sessions]')) {
+    if (ids.some((id) => el.querySelector(`.t2-child-row[data-child-session="${CSS.escape(id)}"]`))) out.push(el)
+  }
+  return out
+}
+
+/** 输入框上方那一排(和「N 件等你」同排)的子会话药丸(方案「借鉴 Comma」第三轮 2.2):本会话有子会话在跑 / 等你、
+ *  并且画着它们的块都不在视野里时才露;点了滚回那块并闪两下(等你的那块优先)。都做完了就没有了。
+ *  视野判定同 DeckPill:IntersectionObserver,看得见的范围扣掉压在悬浮输入区后面那一截。块还没渲染出来(没有可滚回的地方)不露。 */
+export function ChildSessionsPill({ rootRef, sessionId, renderKey, onJump }: {
+  rootRef: RefObject<HTMLElement | null>
+  sessionId: string | null | undefined
+  /** 流里的消息变了(新渲染出块)时重新找块。 */
+  renderKey?: unknown
+  onJump: (el: HTMLElement) => void
+}) {
+  const { t } = useI18n()
+  const sessions = useApp((s) => s.sessions)
+  const running = useApp((s) => s.runningBySession)
+  const unread = useApp((s) => s.unread)
+  const attention = useSessionAttention()
+  const { ids, run, wait } = childPillCounts(sessionId, sessions, (k) => rowStatus(k, !!attention.get(k.id), !!running[k.id], unread.has(k.id)))
+  const idsKey = ids.join(',')
+  const [away, setAway] = useState(false)
+  useEffect(() => {
+    const root = rootRef.current
+    const blocks = root && idsKey ? childBlocks(root, idsKey.split(',')) : []
+    if (!root || !blocks.length) { setAway(false); return }
+    const cover = parseFloat(getComputedStyle(root).getPropertyValue('--t2-composer-h')) || 96
+    const seen = new Map<Element, boolean>()
+    const io = new IntersectionObserver((entries) => {
+      for (const e of entries) seen.set(e.target, e.isIntersecting)
+      setAway(![...seen.values()].some(Boolean))
+    }, { root, rootMargin: `0px 0px -${Math.round(cover)}px 0px` })
+    for (const b of blocks) io.observe(b)
+    return () => io.disconnect()
+  }, [rootRef, idsKey, renderKey])
+  if (!away || !(run + wait)) return null
+  const jump = (): void => {
+    const root = rootRef.current
+    if (!root) return
+    const blocks = childBlocks(root, ids)
+    const target = [...blocks].reverse().find((b) => b.querySelector('.t2-child-row[data-status="wait"]')) || blocks[blocks.length - 1]
+    if (target) onJump(target)
+  }
+  return (
+    <button type="button" className="t2-deckpill t2-childpill" data-child-pill={`${run}:${wait}`} title={t('childs.pill.title')} onClick={jump}>
+      <Split size={13} />
+      <span>{t('childs.head')}</span>
+      {run > 0 && <><span className="t2-deckpill-sep">·</span><StatusMark status="run" /><span>{t('childs.pill.run', { n: run })}</span></>}
+      {wait > 0 && <><span className="t2-deckpill-sep">·</span><StatusMark status="wait" /><span>{t(wait === 1 ? 'childs.pill.waitOne' : 'childs.pill.wait', { n: wait })}</span></>}
+    </button>
   )
 }
 

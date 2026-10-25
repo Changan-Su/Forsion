@@ -9,6 +9,7 @@ import { maybeAutoOpenWhatsNew } from '../components/WhatsNewDialog'
 import { setUnauthorizedHandler } from '../services/http'
 import { useAttention } from './attentionStore'
 import { openSessionFromApproval } from './attentionOpen'
+import { installTraySessionsReport } from '../trayReport'
 
 // 任意请求(含轮询/SSE)返回 401 → 集中触发登录过期处理(在 React 外注册一次)。
 // P1-K6 S2:带上是哪台引擎回的 —— 经 hub 的「我的电脑」回 401 绝不重启本机引擎 / 误登出(appStore.handleAuthExpired)。
@@ -83,6 +84,9 @@ export function useBootstrap(): void {
     const off = window.tangu?.onApprovalOpen?.(({ sessionId }) => { void openSessionFromApproval(sessionId) })
     return () => off?.()
   }, [])
+
+  // 借鉴 Comma 2.6:在跑 / 等你的会话报给托盘 / 菜单栏(仅桌面壳有这个 IPC;主进程只认主窗那份)。语言变了重装,标题跟着换。
+  useEffect(() => installTraySessionsReport((k) => t(k)), [t])
 
   // 快捷键:全部由引擎 installHotkeys 统一分发(命令 new-chat=mod+n、命令面板=mod+k 等),
   // 且支持设置→快捷键里自定义。此处不再单独监听(原 ⌘N 处理与 new-chat 命令重复,已移除)。

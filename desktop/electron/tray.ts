@@ -9,6 +9,8 @@
  * 别的包往托盘加的段(远程活动等)文案走各自的 defineMainMessages 片段,不往 COPY 里加键。
  * 电脑历史开着时多一行状态 + 「暂停 1 小时 / 恢复」(全机采集开着,关闭入口不能只藏在设置页里);
  * 状态变化由 main 调 refreshTrayMenu() 重建菜单。
+ * 在跑 / 等你的会话(借鉴 Comma 第三轮 2.6):会话名册在渲染层,主窗经 tray:sessions 报上来一份精简清单(setTraySessions);
+ * 菜单顶上列出(等你在前、最多 5 条,多的一行「还有 n 个…」),mac 菜单栏图标旁写个数(Windows 托盘不支持标题文字,只有菜单)。
  */
 import { app, Tray, Menu, nativeImage } from 'electron'
 import { join } from 'path'
@@ -28,6 +30,16 @@ export interface TrayHandlers {
     pauseHour: () => void
     resume: () => void
   }
+  /** 在跑 / 等你的会话(可选:无 agent 后端的产品形态不传)。list 是渲染层报上来的清单;open = 显示主窗并打开那条会话。 */
+  sessions?: {
+    list: () => readonly TraySessionRow[]
+    open: (sessionId: string) => void
+  }
+  /** 「新建 Mini 对话」(同全局快捷键 ⌘/Ctrl+⇧+M;可选)。accelerator = 热键真注册上了才给(菜单里只显示,不重复注册)。 */
+  newMini?: {
+    open: () => void
+    accelerator: () => string | null
+  }
   /** P1-K2 远程活动 / 急停(可选:无 agent 后端的产品形态不传)。文案走 main.remoteSafety.tray.*,不进 COPY 表(R-23)。 */
   remote?: {
     view: () => RemoteTrayView
@@ -38,19 +50,46 @@ export interface TrayHandlers {
 }
 void REMOTE_SAFETY_MESSAGES // 片段随 import 登记(mtFor 取得到)
 
+/** 渲染层报上来的一条会话(标题已按界面语言显示好)。 */
+export interface TraySessionRow { id: string; title: string; state: 'run' | 'wait' }
+/** 菜单顶上最多列几条(等你的排前)。 */
+export const TRAY_SESSION_ROWS = 5
+/** Mini 窗全局快捷键(main.ts 注册的那一个;菜单里只显示,不重复注册)。 */
+export const MINI_ACCELERATOR = 'CommandOrControl+Shift+M'
+const MAX_REPORTED_ROWS = 200
+
+/** 渲染层经 IPC 送来的清单:形状不对的行丢掉,标题截短(菜单行太长会把整张菜单撑宽)。 */
+export function sanitizeTraySessions(raw: unknown): TraySessionRow[] {
+  if (!Array.isArray(raw)) return []
+  const out: TraySessionRow[] = []
+  const seen = new Set<string>()
+  for (const r of raw.slice(0, MAX_REPORTED_ROWS)) {
+    if (!r || typeof r !== 'object') continue
+    const o = r as Record<string, unknown>
+    if (typeof o.id !== 'string' || !o.id || o.id.length > 64 || seen.has(o.id)) continue
+    if (o.state !== 'run' && o.state !== 'wait') continue
+    const title = typeof o.title === 'string' ? o.title.replace(/\s+/g, ' ').trim() : ''
+    seen.add(o.id)
+    out.push({ id: o.id, title: title.length > 48 ? `${title.slice(0, 47)}…` : title, state: o.state })
+  }
+  return out
+}
+
 let tray: Tray | null = null
 let handlers: TrayHandlers | null = null
 
 const COPY = {
   zh: {
-    show: '显示 Forsion', checkUpdates: '检查更新', quit: '退出 Forsion',
+    show: '显示 Forsion', checkUpdates: '检查更新', quit: '退出 Forsion', newMini: '新建 Mini 对话',
+    sessWait: '等你 · {n}', sessRun: '在跑 · {n}', sessMore: '还有 {n} 个…', sessUntitled: '未命名会话',
     chPause: '暂停电脑历史 1 小时', chResume: '恢复电脑历史',
     chRecording: '电脑历史：记录中', chPausedUntil: '电脑历史：已暂停至 {time}',
     chDisconnected: '电脑历史：未连接', chNoPermission: '电脑历史：需要辅助功能权限',
     chHelperMissing: '电脑历史：未安装辅助程序', chHelperOutdated: '电脑历史：辅助程序需要更新',
   },
   en: {
-    show: 'Show Forsion', checkUpdates: 'Check for updates', quit: 'Quit Forsion',
+    show: 'Show Forsion', checkUpdates: 'Check for updates', quit: 'Quit Forsion', newMini: 'New Mini chat',
+    sessWait: 'Needs you · {n}', sessRun: 'Running · {n}', sessMore: '{n} more…', sessUntitled: 'Untitled session',
     chPause: 'Pause computer history for 1 hour', chResume: 'Resume computer history',
     chRecording: 'Computer history: recording', chPausedUntil: 'Computer history: paused until {time}',
     chDisconnected: 'Computer history: not connected', chNoPermission: 'Computer history: needs Accessibility access',
@@ -108,12 +147,50 @@ export function remoteTrayItems(r: NonNullable<TrayHandlers['remote']>, lang: Tr
   return items.length ? [...items, { type: 'separator' }] : []
 }
 
+/** Windows 菜单把 & 当助记符:标题里的 & 要写成 &&(mac 原样显示两个,所以只在 Windows 转义)。 */
+const menuText = (s: string, platform: NodeJS.Platform): string => (platform === 'win32' ? s.replace(/&/g, '&&') : s)
+
+/**
+ * 在跑 / 等你段(插在最前面):「等你 · n」「在跑 · n」两个禁用小标题,各自下面是会话行(点了打开那条会话);
+ * 一共最多 TRAY_SESSION_ROWS 条、等你的先占,小标题上的 n 是这一类的总数;列不下的写一行「还有 n 个…」,点了显示主窗。
+ */
+export function traySessionItems(s: NonNullable<TrayHandlers['sessions']>, show: () => void, lang: TrayLang, platform: NodeJS.Platform = process.platform): Electron.MenuItemConstructorOptions[] {
+  let rows: readonly TraySessionRow[]
+  try { rows = s.list() } catch { return [] }
+  if (!rows.length) return []
+  const t = COPY[lang]
+  const wait = rows.filter((r) => r.state === 'wait')
+  const run = rows.filter((r) => r.state === 'run')
+  const shownWait = wait.slice(0, TRAY_SESSION_ROWS)
+  const shownRun = run.slice(0, TRAY_SESSION_ROWS - shownWait.length)
+  const row = (r: TraySessionRow): Electron.MenuItemConstructorOptions => ({ label: menuText(r.title || t.sessUntitled, platform), click: () => s.open(r.id) })
+  const items: Electron.MenuItemConstructorOptions[] = []
+  if (wait.length) items.push({ label: t.sessWait.replace('{n}', String(wait.length)), enabled: false }, ...shownWait.map(row))
+  if (shownRun.length) items.push({ label: t.sessRun.replace('{n}', String(run.length)), enabled: false }, ...shownRun.map(row))
+  const rest = rows.length - shownWait.length - shownRun.length
+  if (rest > 0) items.push({ label: t.sessMore.replace('{n}', String(rest)), click: () => show() })
+  return [...items, { type: 'separator' }]
+}
+
+function newMiniItem(m: NonNullable<TrayHandlers['newMini']>, label: string): Electron.MenuItemConstructorOptions {
+  let acc: string | null = null
+  try { acc = m.accelerator() } catch { /* 当没注册 */ }
+  return { label, click: () => m.open(), ...(acc ? { accelerator: acc, registerAccelerator: false } : {}) }
+}
+
+/** 菜单栏图标旁的数(在跑 + 等你);0 = 不写。 */
+export function traySessionCount(rows: readonly TraySessionRow[]): number {
+  return rows.length
+}
+
 /** 纯函数:菜单模板(单测直接断言)。 */
-export function trayMenuTemplate(h: TrayHandlers, lang: TrayLang, now = Date.now()): Electron.MenuItemConstructorOptions[] {
+export function trayMenuTemplate(h: TrayHandlers, lang: TrayLang, now = Date.now(), platform: NodeJS.Platform = process.platform): Electron.MenuItemConstructorOptions[] {
   const t = COPY[lang]
   const items: Electron.MenuItemConstructorOptions[] = [
+    ...(h.sessions ? traySessionItems(h.sessions, () => h.show(), lang, platform) : []),
     ...(h.remote ? remoteTrayItems(h.remote, lang) : []), // P1-K2
     { label: t.show, click: () => h.show() },
+    ...(h.newMini ? [newMiniItem(h.newMini, t.newMini)] : []),
     { label: t.checkUpdates, click: () => h.checkUpdates() },
   ]
   const ch = h.computerHistory
@@ -159,13 +236,46 @@ export function createTray(h: TrayHandlers): void {
 // 界面语言变了 → 重建菜单(托盘还没建时 refreshTrayMenu 自己是空操作)。
 onMainLocaleChange(() => refreshTrayMenu())
 
-/** P1-K2:菜单栏标题(仅 mac 显示文字:' 远程' / ' 已锁定')+ 所有平台的 tooltip。托盘还没建就什么都不做。 */
-export function setTrayIndicator(title: string, tooltip: string): void {
+// 菜单栏标题由两段拼成:在跑 / 等你的会话数(本文件)+ 远程指示(remoteSafety 经 setTrayIndicator 设)。各自只改自己那段。
+let indicatorTitle = ''
+let indicatorTooltip = ''
+let sessionRows: TraySessionRow[] = []
+let sessionSig = ''
+
+/** 两段拼成的菜单栏标题:' 3' + ' 远程' → ' 3 远程';都没有 = ''。 */
+export function composeTrayTitle(count: number, indicator: string): string {
+  return `${count > 0 ? ` ${count}` : ''}${indicator}`
+}
+
+function applyTitle(): void {
   if (!tray) return
   try {
-    if (process.platform === 'darwin') tray.setTitle(title)
-    tray.setToolTip(tooltip || 'Forsion')
+    if (process.platform === 'darwin') tray.setTitle(composeTrayTitle(traySessionCount(sessionRows), indicatorTitle))
+    tray.setToolTip(indicatorTooltip || 'Forsion')
   } catch { /* 托盘已销毁 */ }
+}
+
+/** P1-K2:菜单栏标题(仅 mac 显示文字:' 远程' / ' 已锁定')+ 所有平台的 tooltip。托盘还没建就什么都不做。
+ *  只换远程那段;会话数那段照旧拼在前面。 */
+export function setTrayIndicator(title: string, tooltip: string): void {
+  indicatorTitle = title || ''
+  indicatorTooltip = tooltip || ''
+  applyTitle()
+}
+
+/** 渲染层报上来的在跑 / 等你清单(已清洗)。没变就什么都不做;变了重建菜单 + 更新菜单栏的数。 */
+export function setTraySessions(rows: TraySessionRow[]): void {
+  const sig = JSON.stringify(rows)
+  if (sig === sessionSig) return
+  sessionSig = sig
+  sessionRows = rows
+  applyTitle()
+  refreshTrayMenu()
+}
+
+/** 菜单的 sessions.list 读这里。 */
+export function traySessions(): readonly TraySessionRow[] {
+  return sessionRows
 }
 
 /** 电脑历史状态变了 → 重建菜单(托盘还没建就什么都不做)。 */

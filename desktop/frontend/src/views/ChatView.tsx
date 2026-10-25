@@ -33,7 +33,7 @@ import { creationCardsSupported, useSessionCreation } from './chat2/CreationCard
 import { TodoList } from '../components/InquiryCard'
 import { useMusePendingApprovals, useMusePendingTodos } from './chat2/MuseDm'
 import { APPROVAL_UPDATE_OPEN, INQUIRY_UPDATE_OPEN, pendingPromptsOf } from './chat2/approvalQueue'
-import { CHILD_UPDATE_OPEN, ChildFromLine } from './chat2/ChildSessions'
+import { CHILD_UPDATE_OPEN, ChildFromLine, ChildSessionsPill } from './chat2/ChildSessions'
 import { RunStatsLine } from './chat2/RunStatsLine'
 import { SessionTraceLines, useSessionTraces } from '../components/SessionTraces'
 import { SessionOpening } from '../components/SessionOpening'
@@ -446,6 +446,15 @@ export function ChatView({ leaf, params }: ViewProps) {
     s.clearJumpTarget()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [s.jumpTarget?.seq, activeId, historyLoading, activeMessages.length])
+
+  // 子会话药丸(2.2)点了:滚回那块子会话块、到位后闪两下(同搜索跳转的落点双闪,闪的是块本身不是整条消息)
+  const jumpToChildBlock = useCallback((el: HTMLElement): void => {
+    const root = chatScrollRef.current
+    const flash = (): void => { el.classList.add('t2-jump-flash'); window.setTimeout(() => el.classList.remove('t2-jump-flash'), 1100) }
+    if (!root) { flash(); return }
+    stickToBottom.current = false
+    scrollToElement(root, el, 24, flash)
+  }, [])
 
   const scrollToBottom = useCallback((smooth = false): void => {
     const el = chatScrollRef.current
@@ -930,7 +939,13 @@ export function ChatView({ leaf, params }: ViewProps) {
         <Composer2
           sessionId={activeId}
           // 卡片堆在对话末尾时这里只放「↓ N 件等你」药丸(滚出视野才露);画布模式下卡片堆本身回到这里。
-          approvalTray={canvasOn ? (deck ?? undefined) : deck ? <DeckPill key={activeId ?? ''} rootRef={chatScrollRef} count={deckItems.length} todos={tailTodo?.todos} onClick={() => scrollToBottom(true)} /> : undefined}
+          // 「N 件等你」与子会话药丸(借鉴 Comma 2.2)同一排;两颗都不露时这一排是空的(CSS :empty 收掉)
+          approvalTray={canvasOn ? (deck ?? undefined) : (
+            <div className="t2-deckpill-row">
+              {deck && <DeckPill key={activeId ?? ''} rootRef={chatScrollRef} count={deckItems.length} todos={tailTodo?.todos} onClick={() => scrollToBottom(true)} />}
+              <ChildSessionsPill key={`child-${activeId ?? ''}`} rootRef={chatScrollRef} sessionId={activeId} renderKey={shownMessages.length} onJump={jumpToChildBlock} />
+            </div>
+          )}
           advisory={!params.childSurface ? (
             // P1-K6:焦点在「我的电脑」且连不上时,顶上这一段换成连接态提示(同一段语汇,两条不叠放)。
             // ⚠️ 本文件的状态条 / disabled 归 K7(INTEGRATION §2.2,合入顺序 K6-S4 → K7):K7 的 RemoteSessionStrip(§3.8)落地时
