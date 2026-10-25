@@ -50,7 +50,8 @@ import { appRefToken, type AppRef, type AppRefList } from '../../../../shared/ap
 import { AppRefIcon } from '../../components/appRefs'
 import { useCapsuleSlide } from '../../components/capsuleTabs'
 import { PASTE_TILE_MIN, composePastes, composeQuotes, noteOf } from './quotes'
-import { PasteTile, QuotePreview, QuoteTile } from './QuoteTile'
+import { ElementTile, PasteTile, QuotePreview, QuoteTile } from './QuoteTile'
+import { ELEMENT_EVENT, ELEMENT_TARGET_ATTR, composeElements, elementImages, formatElementBlock, markComposerUsed, type ElementPick } from './elementPick'
 import { NEW_CHAT_DRAFT, clearDraft, moveDraft, setDraftField, useComposerDrafts, useDraftField } from './composerDrafts'
 import { dropSend, fadeOutDraft, noteSend } from './sendFlight'
 import { ContextUsagePop } from './ContextUsagePop'
@@ -486,6 +487,9 @@ export const Composer2: React.FC<{
   // 长粘贴磁贴(借 Comma):跟着这个会话的草稿走;previewPaste = 正在看全文的那张的下标(按下标删:同一段贴两次是两张,删一张只删一张)
   const [pastes, setPastes] = useDraftField(draftKey, 'pastes')
   const [previewPaste, setPreviewPaste] = useState<number | null>(null)
+  // 内置浏览器点选的网页元素(elementPick.ts):同样跟着草稿走;previewElement = 正在看「发给模型的那段」的那张的 id
+  const [elements] = useDraftField(draftKey, 'elements')
+  const [previewElement, setPreviewElement] = useState<string | null>(null)
   const quotedNote = quotes.some((q) => !!noteOf(quoteNotes, q)?.trim())
   // 触屏(Android 壳 / 手机浏览器)没有 ⌘、悬停和拖拽,只留与指针无关的几条。
   const [touchUi] = useState(() => !!window.tangu?.mobile || !!window.matchMedia?.('(hover: none)').matches)
@@ -1330,7 +1334,7 @@ export const Composer2: React.FC<{
     }
     // 只挂引用不写字也算一条消息:芯片化之前拖引用会往草稿塞文本,所以「拖完直接回车」是能发的;
     // 不放行的话按回车毫无反应 = 哑火(评审 M2)。斜杠命令那几段都要求 text,故只在这之后判空。
-    if (!text && !allRefChips.length && !quotedNote && !pastes.length) return // 引用卡带了回应也算写了话
+    if (!text && !allRefChips.length && !quotedNote && !pastes.length && !elements.length) return // 引用卡带了回应也算写了话;只挂了网页元素也能发
     // /compact [focus]:带关注点时不能走弹层菜单(那条只认裸命令),在这里直接派发
     const compactMatch = /^\/compact(?:\s+([\s\S]+))?$/i.exec(cmd)
     if (compactMatch && onCompact) {
@@ -1409,7 +1413,7 @@ export const Composer2: React.FC<{
     if (disabled) return
     // 通话中:纯文字送进电话(实时模型听到、用语音回);带附件 / 引用 / 技能的照常交给 Tangu。
     // Mini 没确认(崩了 / 刚挂)就改走普通发送并提示 —— 打的字不能丢。override(兜底重发、听写)不再进这条。
-    if (inCall && !override && text && text.length <= CALL_TEXT_MAX && !attachments.length && !wsFiles.length && !allRefChips.length && !quotes.length && !pastes.length && !pinnedSkills.length) {
+    if (inCall && !override && text && text.length <= CALL_TEXT_MAX && !attachments.length && !wsFiles.length && !allRefChips.length && !quotes.length && !pastes.length && !elements.length && !pinnedSkills.length) {
       setDraft(''); setHistPos(0); setHint(null)
       requestAnimationFrame(autoGrow)
       return sendTextToCall(activeSessionId!, text).then(async (ok) => {
@@ -1425,7 +1429,7 @@ export const Composer2: React.FC<{
     // 句子里已经写了的引用不再进这一行(否则模型看到两遍、气泡也画两遍)。
     const leadChips = allRefChips.filter((c) => !(c.run && inlined?.used.has(c.run)))
     const refs = leadChips.length ? leadChips.map((c) => c.token).join(' ') + '\n' : ''
-    const outgoing = composeOutgoing(refs, quoted, composePastes(text, pastes))
+    const outgoing = composeOutgoing(refs, quoted, composeElements(composePastes(text, pastes), elements))
     if (outgoing.length > MAX_INPUT_CHARS) {
       setHint(t('input.tooLong', { len: outgoing.length.toLocaleString(), max: MAX_INPUT_CHARS.toLocaleString() }))
       return
@@ -1441,7 +1445,7 @@ export const Composer2: React.FC<{
     const sentKey = draftKey
     const known = sentKey === NEW_CHAT_DRAFT ? new Set(useApp.getState().sessions.map((x) => x.id)) : null
     noteSend(outgoing, taRef.current) // 发送动效:气泡从这一行升上去(sendFlight.ts)
-    return onSend(outgoing, attachments.filter((a) => !isLeaving(a)), wsFiles.filter((a) => !isLeaving(a)), pinnedSkills.map((s) => s.id), mentions).then((accepted) => {
+    return onSend(outgoing, [...attachments.filter((a) => !isLeaving(a)), ...elementImages(elements)], wsFiles.filter((a) => !isLeaving(a)), pinnedSkills.map((s) => s.id), mentions).then((accepted) => {
       if (!accepted) {
         dropSend(outgoing)
         // 新对话的第一句没发出去,而输入框已经换到刚建的会话上:那份输入跟过去,留在眼前可以重发(那边有草稿就不动)。
@@ -1602,6 +1606,26 @@ export const Composer2: React.FC<{
     return () => { card.removeEventListener(APPREF_EVENT, onRef); card.removeAttribute(APPREF_TARGET_ATTR) }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps -- addRefChips 的写入口是稳定的(useDraftField 按当前草稿键写)
 
+  // 内置浏览器点选的元素(elementPick.ts):浏览器视图找到落点输入卡,把元素送到这里挂成磁贴。截图超过附件上限就只留文字。
+  // focusin 记「最近用过」:屏上同时有几张输入卡时,元素进最近用过的那张。
+  useEffect(() => {
+    const card = cardRef.current
+    if (!card) return
+    card.setAttribute(ELEMENT_TARGET_ATTR, '')
+    const onUse = (): void => markComposerUsed(card)
+    const onPick = (e: Event): void => {
+      const pick = (e as CustomEvent<ElementPick>).detail
+      if (!pick?.id) return
+      const image = pick.image && pick.image.size <= MAX_ATTACH_BYTES ? pick.image : null
+      setDraftField(draftKeyRef.current, 'elements', (prev) => (prev.some((x) => x.id === pick.id) ? prev : [...prev, { ...pick, image }]))
+      markComposerUsed(card)
+      requestAnimationFrame(() => taRef.current?.focus())
+    }
+    card.addEventListener('focusin', onUse)
+    card.addEventListener(ELEMENT_EVENT, onPick)
+    return () => { card.removeEventListener('focusin', onUse); card.removeEventListener(ELEMENT_EVENT, onPick); card.removeAttribute(ELEMENT_TARGET_ATTR) }
+  }, [])
+
   const addContentReference = (ref: AddContentReference): void => {
     addRefChips([ref.kind === 'view' ? viewChip(ref.type, ref.title) : refChipOf(ref, vaultRoot || '')])
     requestAnimationFrame(() => taRef.current?.focus())
@@ -1709,12 +1733,12 @@ export const Composer2: React.FC<{
   // 发送 / 停止 / 通话键:桌面在底排末尾,手机在输入框右边(见上)。录音时两处都不出(录音条自带停止和发送)。
   const submitKeys = running ? (
     <>
-      {(!!draft.trim() || allRefChips.length > 0 || quotedNote || pastes.length > 0) && (
+      {(!!draft.trim() || allRefChips.length > 0 || quotedNote || pastes.length > 0 || elements.length > 0) && (
         <ChatBoxSubmit onClick={send} disabled={disabled} title={t('input.send')} aria-label={t('input.send')} />
       )}
       <button className="t2c-stop" onClick={onStop} title={t('input.stop')} aria-label={t('input.stop')}><Square size={10} /><span className="t2c-stop-label">{t('input.stop')}</span></button>
     </>
-  ) : callable && !draft.trim() && !allRefChips.length && !attachments.length && !wsFiles.length && !quotes.length && !pastes.length && !pinnedSkills.length ? (
+  ) : callable && !draft.trim() && !allRefChips.length && !attachments.length && !wsFiles.length && !quotes.length && !pastes.length && !elements.length && !pinnedSkills.length ? (
     // 照 ChatGPT:输入框空着时发送键就是通话键,打了字变回发送。通话中再按 = 叫回 Mini 卡片(不重拨)。
     <ChatBoxSubmit
       className="t2c-live-control"
@@ -1727,7 +1751,7 @@ export const Composer2: React.FC<{
     </ChatBoxSubmit>
   ) : (
     // 只挂了引用、一个字没写也可发(与 send() 的放行条件同源;不同步的话按钮灰着 = 哑火)
-    <ChatBoxSubmit onClick={send} disabled={disabled || (!draft.trim() && !allRefChips.length && !quotedNote && !pastes.length)} title={t('input.send')} aria-label={t('input.send')} />
+    <ChatBoxSubmit onClick={send} disabled={disabled || (!draft.trim() && !allRefChips.length && !quotedNote && !pastes.length && !elements.length)} title={t('input.send')} aria-label={t('input.send')} />
   )
 
   return (
@@ -1790,7 +1814,7 @@ export const Composer2: React.FC<{
               ))}
             </div>
           )}
-          {(quotes.length > 0 || pastes.length > 0 || attachments.length > 0 || wsFiles.length > 0) && (
+          {(quotes.length > 0 || pastes.length > 0 || elements.length > 0 || attachments.length > 0 || wsFiles.length > 0) && (
             // 附件磁贴(B2):随消息发的与「到工作区」的排在同一行。删按对象认、写回点删那一刻的草稿(draftKey 闭包),
             // 淡出那 130ms 里删了别的、切了会话都不会删错;发送时跳过正在淡出的(isLeaving)。
             // 引用磁贴(10-23)排在最前:点一下看全文,发出去照旧是正文前的引用块(quotes.ts)。
@@ -1800,6 +1824,9 @@ export const Composer2: React.FC<{
               ))}
               {pastes.map((p, i) => (
                 <PasteTile key={i} text={p} title={t('quote.tile.preview')} onOpen={() => setPreviewPaste(i)} removeTitle={t('input.remove')} onRemove={() => setDraftField(draftKey, 'pastes', (prev) => prev.filter((_, j) => j !== i))} />
+              ))}
+              {elements.map((el) => (
+                <ElementTile key={el.id} pick={el} onOpen={() => setPreviewElement(el.id)} removeTitle={t('input.remove')} onRemove={() => setDraftField(draftKey, 'elements', (prev) => prev.filter((x) => x.id !== el.id))} />
               ))}
               {attachments.map((a) => (
                 <AttachmentTile key={tileKey(a)} file={a} removeTitle={t('input.remove')} onRemove={() => setDraftField(draftKey, 'attachments', (prev) => prev.filter((x) => x !== a))} />
@@ -2214,6 +2241,10 @@ export const Composer2: React.FC<{
             }}
           />
         )}
+        {(() => {
+          const el = previewElement !== null ? elements.find((x) => x.id === previewElement) : undefined
+          return el ? <QuotePreview text={formatElementBlock(el)} paste title={t('element.preview.title')} onClose={() => setPreviewElement(null)} /> : null
+        })()}
         {previewQuote !== null && <QuotePreview text={previewQuote} note={noteOf(quoteNotes, previewQuote)} onNote={onQuoteNote ? (note) => onQuoteNote(previewQuote, note) : undefined} onClose={() => setPreviewQuote(null)} />}
       </div>
       {rulesOpen && <ApprovalRulesModal cfg={liveCfg} onClose={() => setRulesOpen(false)} />}

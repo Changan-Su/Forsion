@@ -1401,7 +1401,7 @@ registerMessages({
   "settings.tts.model": { "zh": "朗读模型", "en": "Read-aloud model" },
   "settings.tts.modelPlaceholder": { "zh": "如 siliconflow/FunAudioLLM/CosyVoice2-0.5B 或 openai/tts-1", "en": "e.g. siliconflow/FunAudioLLM/CosyVoice2-0.5B or openai/tts-1" },
   "settings.tts.voice": { "zh": "朗读音色", "en": "Read-aloud voice" },
-  "settings.tts.voicePlaceholder": { "zh": "provider 特定音色 id，如 alloy;OpenAI 等部分服务必填，留空则不传该参数", "en": "Provider-specific voice id, e.g. alloy; required by some providers (OpenAI), omitted when empty" },
+  "settings.tts.voicePlaceholder": { "zh": "如 alloy", "en": "e.g. alloy" },
   "settings.tts.speed": { "zh": "语速（0.5–2）", "en": "Speed (0.5–2)" },
   "settings.tts.autoSpeak": { "zh": "新回复完成后自动朗读", "en": "Auto-read new replies" },
   "settings.tts.autoSpeakHint": { "zh": "仅当前打开的会话；后台会话完成不会出声。", "en": "Only the currently open session; background sessions stay silent." },

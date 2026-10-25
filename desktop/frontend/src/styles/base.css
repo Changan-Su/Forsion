@@ -2446,7 +2446,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 }
 .att-tile--quote:hover { background: color-mix(in srgb, var(--overlay-light) 60%, var(--bg-card)); }
 .att-tile-open:focus-visible { outline: var(--focus-ring) solid var(--signal-line); outline-offset: 1px; }
-.att-tile-badge[data-kind='quote'], .att-tile-badge[data-kind='paste'] { color: var(--accent-ink); }
+.att-tile-badge[data-kind='quote'], .att-tile-badge[data-kind='paste'], .att-tile-badge[data-kind='element'] { color: var(--accent-ink); }
 /* 划选「引用」的就地回复框(ReplyPopover):外壳 = .ui-popover(与划线条同一套);上面引文两行收起带竖线,下面一行回应 + 加进输入框。
    挂在 body 下:只用根上的 token。 */
 .quote-reply { z-index: 100; width: min(380px, calc((100vw - 16px) / var(--uiz, 1))); padding: 10px 10px 8px; -webkit-app-region: no-drag; }
@@ -3014,6 +3014,9 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .settings-panel-head > div:not(.settings-panel-actions) { min-width: 0; flex: 1; }
 .settings-panel-head strong { display: block; color: var(--text); font-size: var(--ui-font-body, 13px); font-weight: 650; }
 .settings-panel-head p { margin: 3px 0 0; color: var(--text-faint); font-size: var(--ui-font-caption, 11px); line-height: 1.45; }
+/* 卡里直接挂的补充说明(.settings-panel > .hint)和卡头那句说明同一档:同字号、同灰(走查续 W-23;此前继承正文字号,比卡头还醒目)。
+ * 写成 :where(…) = 零特异性:各处带类名的提示(.settings-commit-error 的危险色、.model-catalog-error …)照样压得过它,只替掉「继承正文」。 */
+:where(.settings-panel > .hint) { color: var(--text-faint); font-size: var(--ui-font-caption, 11px); line-height: 1.45; }
 .settings-panel-icon,
 .settings-choice-icon,
 .settings-overview-icon {
@@ -3451,6 +3454,38 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   .settings-panel--parts .settings-panel-actions .btn { min-height: 36px; }
   .settings-control-row[data-fit] .settings-stepper { height: 36px; }
   .settings-control-row[data-fit] .settings-stepper > button { width: 38px; }
+}
+/* Space 页:同一张卡里的下拉一样宽、右缘对齐(走查续 W-26)。主题色 / 背景色的下拉包在 .space-appearance-color 里,
+ * 直接子代的 220px 规则够不着它们 → 宽窄不一。窄屏沿用设置页既有的 ≤820 换行断点撑满(行在那里已经换到下一行,另起 760 会出现
+ * 「标签在上、下拉 200px 靠左」的一段)。 */
+.settings-sub--spaces .settings-row-control select { flex: 0 0 auto; width: 200px; }
+.settings-sub--spaces .space-appearance-color { justify-content: flex-end; }
+@media (max-width: 820px) {
+  .settings-sub--spaces .settings-row-control select { flex: 1 1 auto; width: 100%; }
+}
+/* 设置 → 模型 → 语音(走查续 4.5):三张卡 + 行。展开块(复刻录音区 / 音色工作室)挂在它那一行下面,同行线分隔;
+ * 说明一律是行里的小字那一档,不再藏在占位符里。 */
+.settings-voice-call .settings-control-list > * + .settings-control-row,
+.settings-voice-read .settings-control-list > * + .settings-control-row { border-top: var(--border-width) solid var(--border); }
+.settings-voice-block { display: grid; gap: 8px; padding: 12px 15px 14px; border-top: var(--border-width) solid var(--border); }
+.settings-voice-block .hint,
+.settings-voice-note { margin: 0; color: var(--text-faint); font-size: var(--ui-font-caption, 11px); line-height: 1.45; }
+.settings-voice-error { margin: 0; color: var(--danger); font-size: var(--ui-font-caption, 11px); line-height: 1.45; }
+.settings-voice-inline { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.settings-voice-tts { flex-wrap: nowrap; }
+.settings-voice-tts > .btn { flex: 0 0 auto; white-space: nowrap; }
+.settings-voice-block .settings-voice-inline { justify-content: flex-start; }
+.settings-voice-tts > input { flex: 0 1 200px; width: 200px; min-width: 0; }
+/* 音色那一行右边是输入框 + 试听:比缺省的 260 宽一点,两样排在一行(窄屏另由 ≤820 的换行规则接) */
+@media (min-width: 821px) { .settings-voice-tts-row > .settings-row-control { flex-basis: 300px; } }
+.settings-row-control > .settings-voice-speed { width: 90px; }
+.settings-voice-ready { display: inline-flex; align-items: center; gap: 4px; margin-right: 5px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); white-space: nowrap; }
+.settings-voice-progress { display: inline-flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.settings-voice-progress-track { width: 96px; height: 4px; overflow: hidden; border-radius: var(--radius-pill, 999px); background: var(--overlay-medium); }
+.settings-voice-progress-track > span { display: block; height: 100%; border-radius: inherit; background: var(--action-fill); transition: width var(--duration-fast); }
+@media (max-width: 820px) {
+  .settings-control-row[data-fit='wrap'] .settings-voice-inline { width: 100%; justify-content: flex-start; }
+  .settings-control-row[data-fit='wrap'] .settings-voice-tts > input { flex: 1 1 auto; width: auto; }
 }
 
 /* 移动预览手机框内的通用二级界面兜底。SettingsModal 会在文件末尾用
@@ -4101,6 +4136,8 @@ html.dark .brand-logo--dark { display: inline-block; }
 .shortcut-row:last-child { border-bottom: none; }
 .shortcut-name { font-size: var(--ui-font-body, 13px); color: var(--text); }
 .shortcut-controls { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+/* 没有 ×(未绑定 / 录制中 / 按键查找的只读行)时占住那一格:键帽右缘一整列对齐(走查续 W-41)。宽同 × 的 26px。 */
+.shortcut-slot { flex: 0 0 26px; width: 26px; height: 26px; }
 .shortcut-key, .shortcut-capture {
   font-family: var(--font-mono); font-size: var(--ui-font-meta, 12px); min-width: 76px; text-align: center;
   padding: 4px 10px; border-radius: var(--radius-sm);
@@ -5323,6 +5360,12 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
   --roll-exit-duration: 100ms; /* 过程行滚动替换:旧行出 */
   --reader-step-duration: 170ms; /* 画布阅读栏:翻上一轮 / 下一轮 */
   --reader-close-duration: 200ms; /* 画布阅读栏关闭淡出,与 ChatCanvas READ_CLOSE_MS 同 */
+  /* 对话 ↔ 画布(ChatCanvas data-switch):进场整层 → 别的卡和线 → 胶囊 / 说明依次淡入,退场反过来;排在 ENTER_MS 420 / EXIT_MS 360 里 */
+  --canvas-switch-fade: 140ms; /* 整层淡入、退场每一层淡出 */
+  --canvas-switch-lag: 120ms; /* 进场:别的卡和线晚多久 */
+  --canvas-switch-cards: 220ms; /* 进场:别的卡和线淡入多久;退场:整层晚多久才淡出 */
+  --canvas-switch-hud-lag: 280ms; /* 进场:胶囊 / 说明晚多久 */
+  --canvas-switch-hud: 160ms; /* 进场:胶囊 / 说明淡入多久;空白处说明被卡盖住时让开 */
   --switch-edge-duration: 120ms; /* 开关旋钮左右两条边各自的时长 */
   --switch-edge-lag: 30ms; /* 开关旋钮后沿晚出发多久(离开时拉长、落地时回缩) */
   --draw-duration: 600ms; /* 描线 */
