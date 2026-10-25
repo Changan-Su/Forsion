@@ -21,9 +21,10 @@ const { check, note, summary } = makeReporter()
 
 // 收件箱:按阶段换内容(第一阶段一封都没有;第二阶段一封已读的)
 const inbox = { messages: [] }
+const muse = { enabled: false }
 const letter = (id, read) => ({ id, title: `Weekly digest ${id}`, body: 'Here is what happened this week.', sender_kind: 'server', sender_id: null, created_at: '2026-10-25 09:00:00', read_at: read ? '2026-10-25 09:05:00' : null, archived_at: null })
 const stubOverride = ({ path: p, url }) => {
-  if (p === '/agent/special/muse/status') return { status: { enabled: false } }
+  if (p === '/agent/special/muse/status') return { status: { enabled: muse.enabled } }
   if (p === '/agent/special/muse/library') return { root: '', files: [] }
   if (p === '/agent/inbox' && url.searchParams.get('filter') === 'archived') return { messages: [] }
   if (p === '/agent/inbox') return { messages: inbox.messages }
@@ -79,6 +80,16 @@ async function main() {
     check('A「开启 Muse」打开设置 › 后台 Agent', !!fl)
     if (fl) { await fl.close().catch(() => {}); await sleep(400) }
 
+    // ── A' Muse 开着、库还是空的 → 中性的「还没写东西」,不给按钮 ──
+    muse.enabled = true
+    await win.reload({ waitUntil: 'domcontentloaded' }); await win.waitForSelector('.dv-groupview', { timeout: 30_000 }); await sleep(1800)
+    await enterSpace(win, 'muse')
+    const museOn = '[data-muse-space="empty"] .muse-lib-preview .empty-state[data-state="empty"]'
+    await win.locator(museOn).waitFor({ timeout: 15_000 }).catch(() => {})
+    check('A\' Muse 开着但库是空的 →「Muse 还没写任何东西」、没有按钮', (await text(win, `${museOn} .empty-state-title`)) === 'Muse 还没写任何东西' && (await win.locator(`${museOn} .empty-state-action`).count()) === 0, await text(win, museOn))
+    check('A\' 右栏不再说「未开启」', (await win.locator('.muse-off-line').count()) === 0)
+    muse.enabled = false
+
     // ── B 收件箱:一封都没有 ──
     check('B 进入收件箱', await enterSpace(win, 'inbox'))
     const ibxEmpty = '.ibx-reader .empty-state'
@@ -96,6 +107,18 @@ async function main() {
     await enterSpace(win, 'inbox')
     await win.locator(`${ibxEmpty}[data-state="caught-up"]`).waitFor({ timeout: 10_000 }).catch(() => {})
     check('B\' 有信都读过 → 「没有未读消息」+ 选一封读', (await text(win, `${ibxEmpty} .empty-state-title`)) === '没有未读消息' && (await text(win, `${ibxEmpty} .empty-state-line`)) === '选择一封消息开始阅读', await text(win, ibxEmpty))
+
+    // ── B″ 有未读 → 「n 封未读」+ 实心「阅读最新一封」+ 描边「全部已读」,两颗并排同高 ──
+    inbox.messages = [letter('m2', false)]
+    await win.reload({ waitUntil: 'domcontentloaded' }); await win.waitForSelector('.dv-groupview', { timeout: 30_000 }); await sleep(1800)
+    await enterSpace(win, 'inbox')
+    await win.evaluate(() => document.querySelectorAll('.ntf, .ach-toast').forEach((t) => t.remove()))
+    const unread = `${ibxEmpty}[data-state="unread"]`
+    await win.locator(unread).waitFor({ timeout: 10_000 }).catch(() => {})
+    const btns = await win.evaluate((q) => [...document.querySelectorAll(`${q} .empty-state-actions > button`)].map((b) => ({ t: b.textContent.trim(), h: Math.round(b.getBoundingClientRect().height), y: Math.round(b.getBoundingClientRect().top), primary: b.classList.contains('empty-state-action') })), unread)
+    check('B″ 有未读 →「1 封未读」+ 实心「阅读最新一封」+ 描边「全部已读」', (await text(win, `${unread} .empty-state-title`)) === '1 封未读' && btns.length === 2 && btns[0].primary && btns[0].t === '阅读最新一封' && !btns[1].primary && btns[1].t === '全部已读', JSON.stringify(btns))
+    check('B″ 两颗按钮同高、同一行', btns.length === 2 && btns[0].h === btns[1].h && btns[0].y === btns[1].y, JSON.stringify(btns))
+    await shoot(win, 'inbox-unread')
     inbox.messages = []
 
     // ── C 图像工作室 ──

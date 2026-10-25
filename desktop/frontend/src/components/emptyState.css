@@ -27,7 +27,7 @@
   font-size: var(--ui-font-caption);
   line-height: 1.7;
 }
-.empty-state-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px; margin-top: 4px; }
+.empty-state-actions { display: flex; flex-wrap: wrap; align-items: stretch; justify-content: center; gap: 8px; margin-top: 4px; }
 .empty-state-action {
   min-height: 35px;
   display: inline-flex;
@@ -45,8 +45,8 @@
 }
 .empty-state-action:not(:disabled):hover { background: var(--action-fill-hover); }
 .empty-state-action:disabled { opacity: .5; cursor: default; }
-/* 次要动作(最多一颗、描边):和主按钮同高,并排时不高低错开。 */
-.empty-state-actions > .btn { min-height: 35px; }
+/* 次要动作(最多一颗、描边):行里 stretch,和主按钮同高、不高低错开(台架 check:emptystates B″ 量着)。 */
+.empty-state-actions > .btn { display: inline-flex; align-items: center; min-height: 35px; }
 
 /* 手机壳:同一份,只是不居中到正中 —— 往上提,落在拇指够得着、眼睛先看到的那一段。 */
 .mb-shell .empty-state { justify-content: flex-start; padding-top: 10vh; }

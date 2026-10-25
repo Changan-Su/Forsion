@@ -103,7 +103,8 @@ export const MuseLibraryView: React.FC<ViewProps> = () => {
       setFiles(files)
       setErr('')
       const list = orderFiles(files)
-      if (!list.length) void getMuseStatus(homeTarget()).then((st) => setEnabled(!!st?.enabled), () => {})
+      // 状态拉不到(老引擎 / 一时断连)就退到中性的那句「还没写东西」:不留白,也不谎报「没开」。
+      if (!list.length) void getMuseStatus(homeTarget()).then((st) => setEnabled(!!st?.enabled), () => setEnabled((v) => v ?? true))
       const cur = list.find((f) => f.path === selRef.current)
       if (cur) {
         const done = loadedRef.current
