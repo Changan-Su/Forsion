@@ -825,11 +825,11 @@ export function Ribbon() {
       if (name) st().addFolder(zone, name)
     })
   }
-  const zoneMenu = (zone: RibbonZone): MenuState['entries'] => [
+  const zoneMenu = (zone: RibbonZone, withFolder = true): MenuState['entries'] => [
     ...(zone === 'top' && ribbonActions.newSpace ? [{ label: t('lcl.ribbon.newSpace'), icon: LayoutGrid, onClick: ribbonActions.newSpace }] : []),
     ...(zone === 'bottom' ? [{ label: t('lcl.ribbon.addCommand'), icon: Plus, onClick: () => openCommandPicker((id) => st().addCommandItem(id)) }] : []),
     // 不再写「(Space 区)/(命令区)」:点的是哪个区的 ＋ / 哪个区的空白,本来就知道(W-55)。
-    { label: t('lcl.ribbon.newFolder'), icon: FolderPlus, onClick: () => createFolder(zone) },
+    ...(withFolder ? [{ label: t('lcl.ribbon.newFolder'), icon: FolderPlus, onClick: () => createFolder(zone) }] : []),
   ]
   const onZoneCtx = (zone: RibbonZone) => (e: React.MouseEvent): void => {
     if (e.defaultPrevented) return // 图标级菜单(用户 Space 删除/收纳夹/命令)优先
@@ -846,7 +846,7 @@ export function Ribbon() {
     if (e.defaultPrevented || e.nativeEvent === peekCtx.current) return
     e.preventDefault()
     // 两区合起来的菜单里只留一个「新建收纳夹」(建在 Space 区):去掉限定词后两行会一模一样。命令区的收纳夹从命令区的 ＋ / 空白右键建。
-    setMenu({ x: e.clientX, y: e.clientY, entries: [...zoneMenu('top'), ...zoneMenu('bottom').slice(0, -1)], opener: bubbledOpener(e) })
+    setMenu({ x: e.clientX, y: e.clientY, entries: [...zoneMenu('top'), ...zoneMenu('bottom', false)], opener: bubbledOpener(e) })
   }
   // 菜单项点开图标选择器:关掉菜单、在原位弹网格。current 高亮当前图标,apply 落库。
   const pickIcon = (x: number, y: number, current: string | undefined, apply: (name: string) => void): void => {
