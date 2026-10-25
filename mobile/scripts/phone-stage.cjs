@@ -690,7 +690,7 @@ const SCENES = {
     const box = await page.evaluate((q) => { const el = document.querySelector(q); if (!el) return null; const cs = getComputedStyle(el); const r = el.getBoundingClientRect(); return { jc: cs.justifyContent, pt: cs.paddingTop, top: r.top, h: r.height, parent: getComputedStyle(el.parentElement).display, ph: el.parentElement.getBoundingClientRect().height } }, `${LIST} .empty-state`)
     await page.screenshot({ path: path.join(OUT, `inbox-empty-list${DARK ? '-dark' : ''}.png`) })
     return [
-      ['an empty inbox says what lands here, with the shared empty state in the list', words[0] === '收件箱是空的' && !!words[1] && !bare.length, JSON.stringify({ words, bare })],
+      ['an empty inbox says what lands here, with the shared empty state in the list', words[0] === '收件箱是空的' && words[1] === 'Agent 的汇报和等你批准的请求会送到这里。' && !bare.length, JSON.stringify({ words, bare })],
       ['it sits above the middle of the screen, below the capsules, centred across', !!title && title.y > LAYOUT.top && title.y + title.h / 2 < SCREEN.height / 2 && near(title.x + title.w / 2, SCREEN.width / 2, 24), JSON.stringify({ title, box })],
     ]
   },

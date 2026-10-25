@@ -152,7 +152,9 @@ export const MuseLibraryView: React.FC<ViewProps> = () => {
           <button className="icon-btn" title={t('muse.lib.refresh')} onClick={() => void load()}><RefreshCw size={13} /></button>
         </div>
         <div style={{ overflowY: 'auto', flex: 1, padding: '0 6px 8px' }}>
-          {ordered.length === 0 && <div className="hint" style={{ padding: '4px 6px' }}>{err || t('muse.lib.empty')}</div>}
+          {/* 中间那栏在讲空(空态已画出来)时,列表这句不再重复一遍(同收件箱,DESIGN §6 空态);
+              窄容器里中间那栏整个藏起来,这句照旧在(museLibrary.css 的容器查询)。出错时照旧写错误。 */}
+          {ordered.length === 0 && <div className={`hint${!err && enabled !== null ? ' muse-lib-empty-hint' : ''}`} style={{ padding: '4px 6px' }}>{err || t('muse.lib.empty')}</div>}
           {ordered.map((f) => (
             <div
               key={f.path}

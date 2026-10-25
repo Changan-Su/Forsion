@@ -68,6 +68,8 @@ async function main() {
     check('A 空态只有一颗主按钮「开启 Muse」', (await win.locator(`${museEmpty} .empty-state-action`).count()) === 1 && (await text(win, `${museEmpty} .empty-state-action`)) === '开启 Muse')
     const ma = await centred(win, museEmpty, '.muse-lib-preview')
     check('A 空态在中间那栏里水平居中', ma.ok, JSON.stringify(ma))
+    const listLine = await win.evaluate(() => [...document.querySelectorAll('[data-muse-space="empty"] .muse-lib-list .hint')].filter((h) => h.getBoundingClientRect().height > 0).map((h) => h.textContent.trim()))
+    check('A 左栏列表不再重复「Muse 还没写任何东西…」(中间那栏在讲)', listLine.length === 0, JSON.stringify(listLine))
     const off = win.locator('.muse-off-line').first()
     await off.waitFor({ timeout: 10_000 }).catch(() => {})
     const offBox = await off.boundingBox().catch(() => null)
@@ -95,6 +97,7 @@ async function main() {
     const ibxEmpty = '.ibx-reader .empty-state'
     await win.locator(`${ibxEmpty}[data-state="empty"]`).waitFor({ timeout: 10_000 }).catch(() => {})
     check('B 一封都没有 → 主区「收件箱是空的」', (await text(win, `${ibxEmpty} .empty-state-title`)) === '收件箱是空的', await text(win, `${ibxEmpty} .empty-state-title`))
+    check('B 一句话说清这里会收到什么(两端同一句,不单点 Muse)', (await text(win, `${ibxEmpty} .empty-state-line`)) === 'Agent 的汇报和等你批准的请求会送到这里。', await text(win, `${ibxEmpty} .empty-state-line`))
     check('B 不再自相矛盾:没有「选择一封消息开始阅读」', !(await win.locator('.ibx-reader').first().textContent()).includes('选择一封消息开始阅读'))
     check('B 列表不再重复「暂无内容」', (await win.locator('.t2sw-empty').filter({ hasText: '暂无内容' }).count()) === 0)
     const ib = await centred(win, `${ibxEmpty}`, '.ibx-reader')

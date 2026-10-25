@@ -3,5 +3,6 @@ import { registerMessages } from '../../i18n'
 
 registerMessages({
   'inbox.reader.emptyTitle': { zh: '收件箱是空的', en: 'Your inbox is empty' },
-  'inbox.reader.emptyLine': { zh: 'Agent 的汇报、等你批准的请求和 Muse 的信会送到这里。', en: 'Agent reports, requests waiting for your approval and letters from Muse land here.' },
+  // 两端都一样、不单点 Muse(Muse 也是 Agent;手机上没有 Muse)。
+  'inbox.reader.emptyLine': { zh: 'Agent 的汇报和等你批准的请求会送到这里。', en: 'Reports from your agents and requests waiting for your approval land here.' },
 })
