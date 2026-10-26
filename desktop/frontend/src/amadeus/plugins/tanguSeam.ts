@@ -257,7 +257,7 @@ export interface TanguFimResult {
   model?: { id: string; name: string }
 }
 
-/** 正文 AI 的动作(与引擎 services/inlineAi.ts 的 INLINE_ACTIONS 同表)。改写类(前六个)必须带 selection。 */
+/** 正文 AI 的动作(与引擎 services/inlineAi.ts 的 INLINE_ACTIONS 同表,只差 'fim' —— 那一档走 TanguProbe.fim,不进 complete)。改写类(前六个)必须带 selection。 */
 export type TanguInlineAction = 'improve' | 'fix' | 'shorter' | 'longer' | 'summarize' | 'translate' | 'continue' | 'custom'
 export interface TanguCompleteRequest {
   action: TanguInlineAction
