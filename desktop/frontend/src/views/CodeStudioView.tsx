@@ -26,7 +26,7 @@ import { reloadDevPlugin } from '@amadeus/plugins/devSandbox'
 import { collectStudioWrites, inflightStudioWrite, issuePrompt, elementPrompt, joinProjectPath, projectName, projectRelative, normPath, normalizeDevUrl, type StudioIssue, type SelectedElement, type PreviewDevice } from './coding/studioModel'
 import { useStudioTools } from './coding/useStudioTools'
 import { StudioReveal } from './coding/StudioReveal'
-import { FilesPanel } from './chat2/FilesPanel'
+import { readTanguShell } from '../amadeus/plugins/tanguSeam'
 import { requestTerminalFocus } from '../builtins/terminalFocus'
 import { registerStudioCommands } from './coding/studioCommands'
 import type { UiMessage } from '../types'
@@ -347,6 +347,7 @@ function ProjectStudio({ root, extendView, onActivate, briefSaveError, retryBrie
   }
   // 「文件」= 这个项目自己的树(根就是项目目录),和「验收」一样走工作室工具面板;再点一次收起。
   const openFiles = () => { if (panel === 'files') tools.close(); else openTool('files') }
+  const FilesPanel = readTanguShell()?.FilesPanel // 工作区文件树是 Tangu 交进来的外壳件;台架页没激活 Tangu 就不画
   return <div className="csx csu" data-mode={mode}>
     <header className="csx-head csu-head">
       <button className="csu-project" title={t('coding.switchProject')} onClick={() => useCodeStudio.getState().closeProject()}><ArrowLeft size={15} /><span>{projectName(root)}</span></button>
@@ -407,7 +408,7 @@ function ProjectStudio({ root, extendView, onActivate, briefSaveError, retryBrie
       <div className="csu-tool-placement"><span>{projectName(root)}</span><div role="group" aria-label={t('studio.panelPosition')}>
         {([['left', PanelLeft], ['bottom', PanelBottom], ['right', PanelRight]] as const).map(([next, Icon]) => <button key={next} aria-label={t(`studio.move.${next}`)} title={t(`studio.move.${next}`)} aria-pressed={side === next} onClick={() => openTool(tool, next)}><Icon size={13} /></button>)}
       </div></div>
-        {tool === 'files' && <FilesPanel workspaces={[{ key: `studio:${root}`, name: projectName(root), kind: 'local', path: root }]} activeWorkspaceKey={`studio:${root}`} pinnedWorkspaceKey={`studio:${root}`} onOpenPreview={target => { if (target.path) useCodeStudio.getState().openFile(target.path) }} tagFor={path => entry && projectRelative(root, path) === entry ? t('studio.entryTag') : undefined} emptyText={t('studio.filesEmpty')} />}
+        {tool === 'files' && FilesPanel && <FilesPanel workspaces={[{ key: `studio:${root}`, name: projectName(root), kind: 'local', path: root }]} activeWorkspaceKey={`studio:${root}`} pinnedWorkspaceKey={`studio:${root}`} onOpenPreview={target => { if (target.path) useCodeStudio.getState().openFile(target.path) }} tagFor={path => entry && projectRelative(root, path) === entry ? t('studio.entryTag') : undefined} emptyText={t('studio.filesEmpty')} />}
         {tool === 'brief' && <BriefPanel root={root} onPrompt={onPrompt} />}
         {tool === 'checks' && <ChecksPanel root={root} onPrompt={text => onPrompt(text, true)} />}
         {tool === 'history' && <HistoryPanel root={root} running={running} onRestored={refreshForChange} refreshNonce={historyNonce} />}
