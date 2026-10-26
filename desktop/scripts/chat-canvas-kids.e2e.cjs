@@ -20,6 +20,7 @@ const F1 = '6d1e0a52-0000-4000-8000-0000000000f1'
 const T = Date.now() - 60 * 60_000
 const T1 = '查 Obsidian Sync 怎么处理冲突', T2 = '数一数笔记库里的大文件'
 
+let k1Bump = false // 主会话再派给 K1 一轮(send_to_session):K1 的 updated_at 变了、多两条消息
 function sessions(dir) {
   const base = { summary: '', archived: false, model_id: 'm1', agent_config: null, project_path: dir, project_name: 'Forsion', projectless: false }
   const at = (m) => new Date(Date.now() - m * 60_000).toISOString().replace('T', ' ').slice(0, 19)
@@ -27,7 +28,7 @@ function sessions(dir) {
   return [
     row(R, 'Amadeus 离线同步怎么做', 1),
     row(B1, '如果用 CRDT', 2, { parent_session_id: R, fork_message_id: 'a1', fork_session_id: R, created_at: at(20) }),
-    row(K1, T1, 3, { parent_session_id: R, created_at: at(16) }),
+    row(K1, T1, k1Bump ? 0 : 3, { parent_session_id: R, created_at: at(16) }),
     row(K2, T2, 4, { parent_session_id: R, created_at: at(15), awaiting_user: true }),
     row(F1, '桌面端冷启动慢了 0.8 秒', 6),
   ]
@@ -53,6 +54,7 @@ const k1Msgs = [
   msg('k1u2', 'user', 6, '附件那条有没有被抱怨过丢数据?'),
   msg('k1a2', 'model', 7, '有,官方的回答是去版本历史里找回。'),
 ]
+const k1More = [msg('k1u3', 'user', 20, '再查一下 Obsidian 的版本历史保留多久。'), msg('k1a3', 'model', 21, '官方说保留一年。')]
 const k2Msgs = [
   msg('k2u1', 'user', 3.3, '数一下当前笔记库里超过 2 MB 的笔记和附件各有多少。只读,别动任何文件。'),
   msg('k2a1', 'model', 4.5, '超过 2 MB 的:笔记 3 篇、附件 41 个。录屏这 6 个要算进同步范围吗?'),
@@ -68,7 +70,7 @@ async function main() {
     stubOverride: async ({ path: p, method }) => {
       if (p === '/agent/sessions' && method === 'GET') return { sessions: sessions(projectDir) }
       let m = /^\/agent\/sessions\/([^/]+)\/messages$/.exec(p)
-      if (m && method === 'GET') return { messages: { [R]: rootMsgs, [B1]: b1Msgs, [K1]: k1Msgs, [K2]: k2Msgs }[m[1]] || [] }
+      if (m && method === 'GET') return { messages: { [R]: rootMsgs, [B1]: b1Msgs, [K1]: k1Bump ? [...k1Msgs, ...k1More] : k1Msgs, [K2]: k2Msgs }[m[1]] || [] }
       m = /^\/agent\/sessions\/([^/]+)\/asides$/.exec(p)
       if (m && method === 'GET') return { asides: [] }
       m = /^\/agent\/sessions\/([^/]+)\/detail$/.exec(p)
@@ -180,6 +182,30 @@ async function main() {
     await on.click()
     await turn(K2, 'k2u1').waitFor({ timeout: 5_000 })
     r.check('KD12 再开回来:子会话的卡回来', (await win.locator('.t2cv-turn[data-kid]').count()) === 3, '')
+
+    // ── 阅读栏:从子会话第一轮按「上一轮」到主线那张,主区不被切回主会话,「下一轮」回到子会话 ──
+    await turn(K1, 'k1u1').locator('.t2cv-q').click()
+    await win.waitForTimeout(400)
+    await turn(K1, 'k1u1').locator('.t2cv-q').dblclick()
+    await win.locator('[data-testid="cv-read"]').waitFor({ timeout: 5_000 })
+    await win.keyboard.press('ArrowUp')
+    await win.waitForTimeout(500)
+    const up = { active: await active(), key: await win.locator('[data-testid="cv-read"]').getAttribute('data-cv-read') }
+    await win.keyboard.press('ArrowDown')
+    await win.waitForTimeout(500)
+    const down = await win.locator('[data-testid="cv-read"]').getAttribute('data-cv-read')
+    const branchDis = await win.locator('[data-testid="cv-read-branch"]').evaluate((b) => b.disabled).catch(() => 'none')
+    r.check('KD14 阅读栏:子会话第一轮按 ↑ 到主线那张,主区还是子会话;↓ 回到子会话;子会话的轮里「从这里分支」不可用',
+      up.active === K1 && up.key === `${R}:u2` && down === `${K1}:k1u1` && branchDis === true, JSON.stringify({ up, down, branchDis }))
+    await win.keyboard.press('Escape')
+    await win.waitForTimeout(300)
+    // ── 主会话开着时,子会话在后台又跑了一轮:画布跟着长出来 ──
+    await row(R).click() // 左栏点主会话(镜头这时可能把主线那几张挪到左栏后面去了)
+    await win.waitForTimeout(600)
+    const a4 = await active()
+    k1Bump = true
+    const grew = await turn(K1, 'k1u3').waitFor({ timeout: 20_000 }).then(() => true).catch(() => false)
+    r.check('KD15 正看着主会话时子会话后台又跑一轮:新的一轮出现在画布上', a4 === R && grew, JSON.stringify({ a4, grew }))
 
     // ── 没有子会话的对话:这项置灰 ──
     await row(F1).click()

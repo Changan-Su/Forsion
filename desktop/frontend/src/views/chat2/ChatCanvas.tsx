@@ -26,6 +26,9 @@ import { useShallow } from 'zustand/react/shallow'
 import type { SessionRecord, UiMessage } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { useApp } from '../../stores/appStore'
 import { useSessionAttention } from '../../stores/attentionStore'
+import { recordToUi } from '../../tangu/store/tanguSlice'
+import { listMessages } from '../../services/backendService'
+import { targetForSession } from '../../services/engine/targets'
 import { registerMessages, useI18n } from '../../i18n'
 import { useChatWaitDetailsEnabled } from '../../chatWaitDetails'
 import {
@@ -306,6 +309,25 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onChat, exiting, onEx
   const execModes = useApp(useShallow((s) => Object.fromEntries(ids.map((id) => [id, s.configBySession[id]?.execMode]))))
   // 分支的历史不在内存里(只看过主线):画布一开就把整棵树拉齐;拉到一支画一支
   useEffect(() => { for (const id of ids) void useApp.getState().loadSessionHistory(id) }, [ids])
+  // 子会话在后台又跑了一轮(主会话 send_to_session 等):它不是当前会话,没人轮询它的历史(pollSession 只管 activeId)。
+  // 会话列表里它的 updated_at / 在跑 / 等你一变就重拉一次,并进 store(同 ChildChatPanel 那份合并);正在跑 / 正看着的由流和轮询管
+  const kidSig = kids.map((k) => `${k.id}:${k.updated_at}:${k.busy ? 1 : 0}:${k.awaiting_user ? 1 : 0}`).join(',')
+  const kidSeen = useRef(new Map<string, string>())
+  useEffect(() => {
+    for (const k of kids) {
+      const sig = `${k.updated_at}:${k.busy ? 1 : 0}:${k.awaiting_user ? 1 : 0}`
+      const prev = kidSeen.current.get(k.id)
+      kidSeen.current.set(k.id, sig)
+      const st = useApp.getState()
+      if (prev === undefined || prev === sig || st.activeId === k.id || st.runningBySession[k.id]) continue
+      void listMessages(targetForSession(k.id), k.id).then((records) => useApp.setState((state) => {
+        const restored = records.map((r) => recordToUi(r, undefined, (slug) => state.agentDefs.find((a) => a.slug === slug)?.name))
+        const got = new Set(restored.map((m) => m.id))
+        return { messagesBySession: { ...state.messagesBySession, [k.id]: [...restored, ...(state.messagesBySession[k.id] || []).filter((m) => !got.has(m.id))].sort((a, b) => a.timestamp - b.timestamp) } }
+      })).catch(() => {})
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kidSig])
   const kidSpecs = useMemo<KidSpec[]>(() => kids.map((k) => {
     const from = k.parent_session_id!
     // 开出它的那条回答:start_session 的工具结果里有它的 id(同卡底那块的认法);认不到 = 挂在那一支最后一张卡下
@@ -422,7 +444,8 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onChat, exiting, onEx
     if (!c) return
     setSel({ key, part })
     setExpanded((s) => (s.size && !s.has(key) ? new Set() : s)) // 刚写完还展开着的那张:选了别的卡就收回预览
-    if (!c.at[activeId]) useApp.getState().setActiveId(c.sid) // 不在当前这一支上:主区就地换成它那一支
+    // 不在当前这一支上:主区就地换成它那一支。子会话那一支经过的主线卡没有它的副本(at 里没有它),按路径认,别被切回主会话
+    if (!c.at[activeId] && !activePath.includes(key)) useApp.getState().setActiveId(c.sid)
     if (reading && reading !== key) { // 阅读栏开着:跟着换成这一张,正文按先后从下 / 上滑进来
       const p = tree.paths[activeId] ?? [], i0 = p.indexOf(reading), i1 = p.indexOf(key)
       setReadDir(i0 >= 0 && i1 >= 0 ? Math.sign(i1 - i0) || 1 : 1)
@@ -680,7 +703,8 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onChat, exiting, onEx
   }, [dir])
 
   // ── 自动跟随:当前这一支上那张在生成的卡 ──
-  const streamKey = activePath.find((k) => tree.cards.get(k)!.answers.some((m) => m.status === 'streaming')) ?? null
+  // 取这一支上最靠后的那张:子会话那一支里,开出它的主线回答和子会话自己可能同时在写,跟的是正看着的子会话
+  const streamKey = [...activePath].reverse().find((k) => tree.cards.get(k)!.answers.some((m) => m.status === 'streaming')) ?? null
   const lastStream = useRef<string | null>(null)
   useLayoutEffect(() => {
     // 这一支上新冒出一张在生成的卡(= 刚发出去一句):重新跟上
@@ -1326,7 +1350,7 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onChat, exiting, onEx
             {paneTail
               ? <button type="button" className="t2-iconbtn t2-textbtn" data-testid="cv-read-follow" onClick={() => followUp(paneCard.key, paneTail)}><CornerDownRight size={14} />{t('chatcanvas.add.follow')}</button>
               : (
-                <button type="button" className="t2-iconbtn t2-textbtn" data-testid="cv-read-branch" disabled={!paneCard.answers.length} onClick={() => openDraft(paneCard.key, kidsOf(paneCard.key).filter((k) => k !== DRAFT).length)}>
+                <button type="button" className="t2-iconbtn t2-textbtn" data-testid="cv-read-branch" disabled={!paneCard.answers.length || kidSet.has(paneCard.sid)} onClick={() => openDraft(paneCard.key, kidsOf(paneCard.key).filter((k) => k !== DRAFT).length)}>
                   <GitBranch size={14} />{t('chatcanvas.add.next')}
                 </button>
               )}
