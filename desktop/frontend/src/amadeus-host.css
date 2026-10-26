@@ -1632,6 +1632,7 @@ html.dark .amx-cal-chip-ev, html.dark .amx-cal-event {
 .amx-cal-card-title { flex: 1; min-width: 0; border: none; background: transparent; color: var(--text); font: inherit; font-size: var(--ui-font-title, 16px); line-height: 22px; font-weight: 600; outline: none; padding: 2px; border-radius: 4px; }
 .amx-cal-card-title::placeholder { color: var(--text-faint, var(--text-muted)); font-weight: 500; }
 .amx-cal-card-title:focus { background: var(--bg-hover, var(--overlay-light)); }
+textarea.amx-cal-card-title { display: block; resize: none; field-sizing: content; max-height: calc(4lh + 4px); overflow-y: auto; overflow-wrap: anywhere; }
 
 /* 行基座(时间/属性共用):图标 + 内容 */
 .amx-cal-card-row { display: flex; gap: 8px; padding: 6px; border-radius: var(--radius-sm, 6px); }
@@ -2273,3 +2274,14 @@ html.dark .amx-cal-chip-ev, html.dark .amx-cal-event {
 .amx-uprow-ring { margin-left: auto; margin-right: 6px; }
 .amx-uprow.is-failed .t2s-srow-title, .amx-uprow.is-failed .t2s-lead-icon { color: var(--danger); }
 .amx-uprow.is-failed .t2s-srow-menu { opacity: 0.7; }
+/* 日历 · 走查续七(与插件 @forsion/calendar 的 calendar.css 同步)。放文件末尾:和 .dragging / .selected 同特异性,靠先后。
+ * 7.10 A:重叠的事件阶梯错开(eventLayout),后一条压在前一条上;1px 卡片底色的零模糊描边把两块分开(不算高程阴影)。悬停浮上来,选中仍在最上。 */
+.amx-cal-event.stacked { box-shadow: 0 0 0 1px var(--bg-card, var(--bg)); }
+.amx-cal-event:hover { z-index: 3; }
+.amx-cal-event.selected { z-index: 4; }
+.amx-cal-event.stacked.selected { box-shadow: 0 0 0 1px var(--bg-card, var(--bg)), 0 2px 8px color-mix(in srgb, var(--amx-event-color) 35%, transparent); }
+.amx-cal-event.dragging { box-shadow: 0 4px 14px color-mix(in srgb, var(--amx-event-color) 30%, transparent); z-index: 50; }
+/* 7.11:暗色那条(0,2,1)压过了选中(0,2,0),选中又变回浅色块 —— 选中在暗色下同样实心 + 白字。 */
+html.dark .amx-cal-chip-ev.selected, html.dark .amx-cal-event.selected { --amx-ev-fill: var(--amx-event-color); color: #fff; }
+/* 7.12:月视图跨天条在一周一行里只在头一段写标题(当周第一格例外),后面的段只画色块。 */
+.amx-cal-mcell:not(:first-child) > .amx-cal-chip-ev.continues-left:not(.amx-cal-draft) { color: transparent; }

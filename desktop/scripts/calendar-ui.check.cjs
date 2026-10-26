@@ -22,6 +22,8 @@ const pad = (n) => String(n).padStart(2, '0')
 const ymd = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
 const addDays = (d, n) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n)
 const readRows = (file) => JSON.parse(fs.readFileSync(file, 'utf8')).rows
+/** 「产品深度工作」中间被后一条压着(走查续七 7.10 阶梯,后一条右移 14px):点它左上露出来的那块。 */
+const FOCUS_A_GRAB = { x: 7, y: 8 }
 const MOD = process.platform === 'darwin' ? 'Meta' : 'Control'
 /** 某天某刻在屏幕上的点(含页面 CSS zoom);min 落在那一刻往下 4px 的格子里,免得浮点误差落到上一格。 */
 async function slotPoint(win, iso, min) {
@@ -356,9 +358,12 @@ async function main() {
       const b = document.querySelector('.amx-cal-event[aria-label^="设计评审"]')?.getBoundingClientRect()
       const cal = document.querySelector('.amx-cal')
       const ev = document.querySelector('.amx-cal-event[aria-label^="产品深度工作"]')
-      return a && b && cal && ev ? { ax: a.left, bx: b.left, aw: a.width, bw: b.width, color: getComputedStyle(ev).color, text: getComputedStyle(cal).color, border: getComputedStyle(ev).borderTopWidth } : null
+      // 两条的标题点上最上面的是不是它自己(被压住的只能是后半截)
+      const shows = (sel) => { const e = document.querySelector(sel), t = e?.querySelector('.amx-cal-event-title')?.getBoundingClientRect(); return !!t && document.elementFromPoint(t.left + 6, t.top + t.height / 2)?.closest('.amx-cal-event') === e }
+      return a && b && cal && ev ? { ax: a.left, bx: b.left, aw: a.width, bw: b.width, zoom: ev.currentCSSZoom || 1, titles: shows('.amx-cal-event[aria-label^="产品深度工作"]') && shows('.amx-cal-event[aria-label^="设计评审"]'), color: getComputedStyle(ev).color, text: getComputedStyle(cal).color, border: getComputedStyle(ev).borderTopWidth } : null
     })
-    check('重叠事件并排分栏，不再互相覆盖', overlaps && Math.abs(overlaps.ax - overlaps.bx) > 20 && overlaps.aw < 100 && overlaps.bw < 100, JSON.stringify(overlaps))
+    // 走查续七 7.10 A(10-26):重叠改阶梯 —— 后一条右移 14px、宽少 14px,两条标题都露在外面(原来是并排分栏)
+    check('重叠事件阶梯错开:后一条右移 14px、宽少 14px,两条的标题都露着', overlaps && Math.abs(overlaps.bx - overlaps.ax - 14 * overlaps.zoom) < 1.5 && Math.abs(overlaps.aw - overlaps.bw - 14 * overlaps.zoom) < 1.5 && overlaps.titles, JSON.stringify(overlaps))
     check('方向 1:事件块不描边,字是事件色压深(不是白字,也不是正文色)', overlaps && overlaps.border === '0px' && overlaps.color !== 'rgb(255, 255, 255)' && overlaps.color !== overlaps.text, overlaps && `${overlaps.border} ${overlaps.color} / ${overlaps.text}`)
     check('跨日事件使用连续条首尾样式', (await win.locator('.amx-cal-allday2 .continues-left.continues-right').count()) >= 1)
     const allDayNames = await win.evaluate(() => [...new Set([...document.querySelectorAll('.amx-cal-allday2 .amx-cal-chip-ev')].map((e) => e.textContent.trim()))])
@@ -386,7 +391,7 @@ async function main() {
     await win.waitForFunction(() => document.querySelectorAll(':popover-open').length === 0, null, { timeout: 5000 })
 
     const event = win.locator('.amx-cal-event[aria-label^="产品深度工作"]').first()
-    await event.click()
+    await event.click({ position: FOCUS_A_GRAB })
     const card = win.locator('.amx-cal-cardwrap[role="dialog"]')
     await card.waitFor({ timeout: 5000 })
     await win.waitForTimeout(150) // 卡片下一帧才把焦点放进标题框
@@ -640,7 +645,7 @@ async function main() {
       const hourPx = parseFloat(getComputedStyle(timerow).getPropertyValue('--amx-hour-px')) || 44
       const grab = sr.height / 2
       return {
-        from: { x: sr.left + sr.width / 2, y: sr.top + grab },
+        from: { x: sr.left + 7 * zoom, y: sr.top + grab }, // 左边露出的那一条(中间被后一条压着,7.10 阶梯)
         to: { x: tr.left + tr.width / 2, y: tr.top + 14 * hourPx * zoom + grab },
       }
     })
@@ -670,7 +675,7 @@ async function main() {
     // ① 松手那一下没送到(之后的移动报「没按键」):按松手收尾,不留淡影 / 浮着的块
     const lost = await win.evaluate(() => {
       const s = document.querySelector('.amx-cal-event[aria-label^="产品深度工作"]')?.getBoundingClientRect()
-      return s ? { x: s.left + s.width / 2, y: s.top + s.height / 2 } : null
+      return s ? { x: s.left + 7, y: s.top + s.height / 2 } : null
     })
     const lostTo = await slotPoint(win, d1, 14 * 60)
     await win.mouse.move(lost.x, lost.y)
@@ -747,7 +752,7 @@ async function main() {
 
     await win.setViewportSize({ width: 1440, height: 900 })
     await win.waitForTimeout(800)
-    await win.locator('.amx-cal-event[aria-label^="产品深度工作"]').click()
+    await win.locator('.amx-cal-event[aria-label^="产品深度工作"]').click({ position: FOCUS_A_GRAB })
     for (const close of await win.locator('.ntf-close').all()) await close.click().catch(() => {})
     await win.waitForTimeout(500)
     await win.screenshot({ path: path.join(OUT, 'calendar-ui-light.png') })
@@ -768,7 +773,7 @@ async function main() {
     await win.waitForTimeout(200)
 
     await forceMode(win, 'dark')
-    await win.locator('.amx-cal-event[aria-label^="产品深度工作"]').click()
+    await win.locator('.amx-cal-event[aria-label^="产品深度工作"]').click({ position: FOCUS_A_GRAB })
     await win.waitForTimeout(400)
     await win.screenshot({ path: path.join(OUT, 'calendar-ui-dark.png') })
     await win.keyboard.press('Escape')

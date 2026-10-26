@@ -54,7 +54,7 @@ import { clearCalendarClipboard, cloneCalendarEvent, copyCalendarEvent, pasteCal
 import { notifyApp } from '../stores/notificationStore'
 import { DraftCard } from './calendar/DraftCard'
 import { MODE_ITEMS, classifyCalKey } from './calendar/calKeys'
-import { layoutTimedEvents } from './calendar/eventLayout'
+import { agendaOrder, byStart, layoutMonthWeek, layoutTimedEvents } from './calendar/eventLayout'
 import { calendarScope, deleteCalendarRow, rescheduleCalendarRow, undoLastCalendarEdit, redoLastCalendarEdit } from './calendar/eventActions'
 import { TODO_DRAG_MIME, draftRange, draftValue, pickDraftDb } from './calendar/draft'
 import {
@@ -1385,24 +1385,24 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
             }}
           >
             {(() => {
-              const dayEvents = events.filter((e) => !e.allDay && sameDay(e.start, d))
+              const dayEvents = events.filter((e) => !e.allDay && sameDay(e.start, d)).sort(byStart) // 后开始的画在上面
               const layouts = layoutTimedEvents(dayEvents)
               return dayEvents.map((e) => {
                 const box = eventBox(e.start, e.end, hourPx)
-                const layout = layouts.get(e.key) ?? { leftPct: 0, widthPct: 100, lane: 0, laneCount: 1 }
+                const layout = layouts.get(e.key) ?? { depth: 0, indentPx: 0, col: 0, cols: 1 }
                 const short = box.height < SHORT_PX
                 const past = (e.end ?? e.start).getTime() < nowTs
                 return (
                   <button
                     key={e.key}
                     data-key={e.key}
-                    className={`amx-cal-event${e.readonly ? ' readonly' : ''}${cutKey === e.key ? ' cut' : ''}${selectedKey === e.key ? ' selected' : ''}${short ? ' short' : ''}${past ? ' past' : ''}${e.check ? ' todo' : ''}${e.done ? ' done' : ''}`}
+                    className={`amx-cal-event${e.readonly ? ' readonly' : ''}${cutKey === e.key ? ' cut' : ''}${selectedKey === e.key ? ' selected' : ''}${short ? ' short' : ''}${past ? ' past' : ''}${e.check ? ' todo' : ''}${e.done ? ' done' : ''}${layout.depth ? ' stacked' : ''}`}
                     style={{
                       ...eventColorStyle(e.color),
                       top: box.top,
                       height: Math.max(14, box.height),
-                      left: `calc(${layout.leftPct}% + 2px)`,
-                      width: `calc(${layout.widthPct}% - 4px)`,
+                      left: `calc(${layout.indentPx}px + (100% - ${layout.indentPx}px) * ${layout.col / layout.cols} + 2px)`,
+                      width: `calc((100% - ${layout.indentPx}px) / ${layout.cols} - 4px)`,
                     }}
                     aria-label={e.end
                       ? t('calview.a11yEventRange', { title: e.title, start: hhmm(e.start), end: hhmm(e.end) })
@@ -1427,7 +1427,7 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
                     )}
                     <span className="amx-cal-event-title">{e.title}</span>
                     <span className="amx-cal-event-t">{short || !e.end ? hhmm(e.start) : `${hhmm(e.start)}–${hhmm(e.end)}`}</span>
-                    {!DESK && selectedKey === e.key && !e.readonly && colw * layout.widthPct / 100 >= 88 && <>
+                    {!DESK && selectedKey === e.key && !e.readonly && (colw - layout.indentPx) / layout.cols >= 88 && <>
                       <span className="amx-cal-handle start" aria-label={t('calview.resizeStart')} onPointerDown={(pe) => down(e, pe, 'start')} />
                       <span className="amx-cal-handle end" aria-label={t('calview.resizeEnd')} onPointerDown={(pe) => down(e, pe, 'end')} />
                     </>}
@@ -1624,11 +1624,17 @@ export const MonthScroll = forwardRef<CalApi, MonthProps>(function MonthScroll({
       <div className="amx-cal-mweeks" onPointerDown={gridDown} onPointerMove={gridMove} onPointerUp={gridUp} onPointerCancel={gridCancel}>
         {weeks.map((ws) => (
           <div key={+ws} className="amx-cal-mweek" style={{ height: rowH }}>
-            {daysRange(ws, 7).map((day) => {
+            {(() => {
+              const days = daysRange(ws, 7)
+              const slotsOf = layoutMonthWeek(events, days)
+              return days.map((day, di) => {
               const dayIso = iso(day)
-              const dayEvents = events.filter((e) => coversDay(e.start, e.end, day))
+              const slots = slotsOf[di]
+              const dayEvents = slots.filter((e): e is CalEvent => !!e)
               const drafted = !!draftAt && dayIso >= draftAt[0] && dayIso <= draftAt[1]
               const room = drafted ? 2 : 3
+              const shown = slots.slice(0, room)
+              const hidden = dayEvents.length - shown.filter(Boolean).length
               return (
                 <div
                   key={+day}
@@ -1642,7 +1648,7 @@ export const MonthScroll = forwardRef<CalApi, MonthProps>(function MonthScroll({
                 >
                   <div className="amx-cal-mnum">{day.getDate() === 1 ? t('calview.monthFirst', { m: day.getMonth() + 1 }) : day.getDate()}</div>
                   {drafted && <DraftChip day={day} colorOf={colorOf} />}
-                  {dayEvents.slice(0, room).map((e) => (
+                  {shown.map((e, i) => e ? (
                     <button
                       key={e.key}
                       data-key={e.key}
@@ -1659,19 +1665,20 @@ export const MonthScroll = forwardRef<CalApi, MonthProps>(function MonthScroll({
                     >
                       {!e.allDay && sameDay(e.start, day) && <span className="amx-cal-chip-t">{hhmm(e.start)}</span>} {e.title}
                     </button>
-                  ))}
-                  {dayEvents.length > room && (
+                  ) : <span key={`gap${i}`} className="amx-cal-chip-gap" />)}
+                  {hidden > 0 && (
                     <button
                       className="amx-cal-more"
                       aria-label={t('calview.a11yMoreEvents', { m: day.getMonth() + 1, d: day.getDate(), n: dayEvents.length })}
                       onClick={(e) => setAgenda({ day, events: dayEvents, at: rectOf(e) })}
                     >
-                      {t('calview.moreItems', { n: dayEvents.length - room })}
+                      {t('calview.moreItems', { n: hidden })}
                     </button>
                   )}
                 </div>
               )
-            })}
+            })
+            })()}
           </div>
         ))}
       </div>
@@ -1737,7 +1744,7 @@ function DayAgendaPopover({
           <button onClick={onClose} aria-label={t('calview.closeAgenda')}>×</button>
         </header>
         <div className="amx-cal-agenda-list">
-          {events.map((ev) => (
+          {agendaOrder(events).map((ev) => (
             <button key={ev.key} style={eventColorStyle(ev.color)} onClick={(e) => onPick(ev.key, rectOf(e))}>
               <span className="amx-cal-agenda-time">{ev.allDay ? t('calview.allDay') : hhmm(ev.start)}</span>
               <span>{ev.title}</span>

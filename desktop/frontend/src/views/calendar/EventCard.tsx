@@ -228,12 +228,17 @@ export function RecordFields({ db, row, colId, title = row.name, raw, lock = fal
       {/* 标题 */}
       <div className="amx-cal-card-head">
         {titleEditable ? (
-          <input
+          // 走查续七 7.15:长标题折行、自己长高(CSS field-sizing),最多 4 行后内部滚动。标题不该有换行:
+          // Enter 不换行(和原来的单行框一样什么也不做),粘贴进来的换行换成空格。
+          // ponytail: 只靠 field-sizing(Chromium 123+,Electron 与安卓 WebView 都够),没写 scrollHeight 兜底
+          <textarea
             className="amx-cal-card-title"
+            rows={1}
             aria-label={t('evcard.name')}
             value={title}
             placeholder={t('evcard.untitled')}
-            onChange={(e) => setAggName(db, row.rowId, e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) e.preventDefault() }}
+            onChange={(e) => setAggName(db, row.rowId, e.target.value.replace(/\r?\n/g, ' '))}
           />
         ) : (
           <div className="amx-cal-card-title amx-cal-card-title-ro">{title || t('evcard.untitled')}</div>

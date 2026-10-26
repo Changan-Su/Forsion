@@ -36,6 +36,9 @@ export interface NotifyInput {
   /** 这条提示离开屏幕(到期、点 ×、点动作钮、全部清除)时调一次。撤销型回执靠它决定「到点才真做」:
    *  停留从真正上屏才开始计、悬停会暂停,都跟着这条提示走(排队中 / 悬停时不会提前落定)。去重合并时新值覆盖旧值。 */
   onClose?: () => void
+  /** 收尾:把同 dedupeKey 的那条原地换成操作的结果(如日历撤销后的「已撤销」)—— 不算重复(计数回 1),
+   *  到点淡出而不是滑走。动作钮要拿掉就同时显式给 `action: undefined`。 */
+  settle?: boolean
 }
 
 export interface AppNotification {
@@ -53,6 +56,7 @@ export interface AppNotification {
   /** 自定义停留时长(见 NotifyInput.durationMs);缺省按 level。补位 / 去重重置停留时都用它。 */
   durationMs?: number
   onClose?: () => void
+  settle?: boolean
 }
 
 /** 内置事件注册表(设置页开关列表的数据源;插件事件 plugin:<id> 动态出现,默认开)。 */
@@ -181,7 +185,7 @@ export const useNotifications = create<NtfState>((set, get) => {
         if (found) {
           const visible = st.items.some((n) => n.id === found.id)
           const upd: AppNotification = {
-            ...found, text, title: title ?? found.title, level, count: found.count + 1,
+            ...found, text, title: title ?? found.title, level, count: input.settle ? 1 : found.count + 1, settle: input.settle,
             createdAt: Date.now(), sticky: sticky || found.sticky, action: 'action' in input ? input.action : found.action, // 显式给了(含 undefined)就换,没给才沿用
             durationMs: durationMs ?? found.durationMs, onClose: input.onClose ?? found.onClose,
           }
@@ -200,7 +204,7 @@ export const useNotifications = create<NtfState>((set, get) => {
       const n: AppNotification = {
         id: `ntf-${++seq}-${Date.now()}`, text, title, level, event,
         sourceLabel: input.sourceLabel, createdAt: Date.now(), sticky, count: 1,
-        dedupeKey: input.dedupeKey, action: input.action, durationMs, onClose: input.onClose,
+        dedupeKey: input.dedupeKey, action: input.action, durationMs, onClose: input.onClose, settle: input.settle,
       }
       // 系统通知:与应用内通知同步发(所有事件,不止收件箱);仅窗口在后台时(前台已有卡片,免重复横幅);
       // osEnabled 门控。web 无 window.tangu.notify → 可选链忽略(安卓有:mobile/src/liveIsland.ts)。dedupe 合并不重发(上面已 return)。
