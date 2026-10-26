@@ -476,6 +476,13 @@ describe('appStore.reduceEvent', () => {
     emit('status', { phase: 'compacted', forced: true, reason: 'threshold', persisted: false, iteration: 6 })
     msgs = useApp.getState().messagesBySession.s1
     expect(msgs[msgs.length - 1].content).toBe('ctx.compacted.forced')
+    // 10-26:摘要失败后兜底丢了最早的几条 → 照实说丢了几条;压缩后仍超成本封顶、按真实窗口照发 → 说费用会更高
+    emit('status', { phase: 'compacted', forced: true, fallback: true, savedChars: 0, trimmed: 7, iteration: 7 })
+    msgs = useApp.getState().messagesBySession.s1
+    expect(msgs[msgs.length - 1].content).toBe('ctx.compacted.trimmed')
+    emit('status', { phase: 'context_over_budget', warning: 'context_over_budget', estTokens: 290_000, budgetTokens: 272_000, windowTokens: 1_000_000, iteration: 8 })
+    msgs = useApp.getState().messagesBySession.s1
+    expect(msgs[msgs.length - 1].content).toBe('ctx.overBudget')
 
     // 压缩后的占用当场落到进度环(09-20:此前要等压缩后那次模型调用跑完才来 usage,环停在压缩前);没变小 → 不动;下一条 usage 用实测值校正
     emit('usage', { prompt: 36_956, total: 100 })

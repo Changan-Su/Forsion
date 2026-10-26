@@ -1841,12 +1841,17 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
         }
         // 自动压缩提示(H4):此前 ctx% 突然回落零提示,与手动 /compact 的明确回执反差。
         // 只认 'compacted'(forced 路径先发 'compacting' 再发 'compacted',避免一次压缩两条)。
-        if (pl.phase === 'compacted') {
-          // forced+fallback = 摘要失败退回机械折叠 → 用机械折叠措辞,不许谎称「已生成摘要」;
+        // context_over_budget(10-26):压缩后仍超成本封顶,引擎按模型真实窗口照发 —— 说一句费用会更高,每 run 一次。
+        if (pl.phase === 'compacted' || pl.phase === 'context_over_budget') {
+          // forced+fallback = 摘要失败退回机械折叠 → 用机械折叠措辞,不许谎称「已生成摘要」;trimmed = 兜底丢了最早的几条;
           // reason=overflow = 上游拒收超长输入后压缩重试(09-15),措辞说明这一轮重发过。
-          const line = pl.forced && !pl.fallback
-            ? get().tr(pl.reason === 'overflow' ? 'ctx.compacted.overflow' : 'ctx.compacted.forced')
-            : get().tr('ctx.compacted.auto', { saved: (Number(pl.savedChars) || 0).toLocaleString() })
+          const line = pl.phase === 'context_over_budget'
+            ? get().tr('ctx.overBudget', { budget: (Number(pl.budgetTokens) || 0).toLocaleString() })
+            : Number(pl.trimmed) > 0
+              ? get().tr('ctx.compacted.trimmed', { n: Number(pl.trimmed) })
+              : pl.forced && !pl.fallback
+                ? get().tr(pl.reason === 'overflow' ? 'ctx.compacted.overflow' : 'ctx.compacted.forced')
+                : get().tr('ctx.compacted.auto', { saved: (Number(pl.savedChars) || 0).toLocaleString() })
           set((s) => ({
             messagesBySession: { ...s.messagesBySession, [sessionId]: [...(s.messagesBySession[sessionId] || []), {
               // id 掺 seq(per-run 单调):中流断线恢复会 iteration-1 重进同一迭代号,纯 iteration 会撞 React key

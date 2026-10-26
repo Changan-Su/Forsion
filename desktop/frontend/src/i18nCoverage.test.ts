@@ -442,6 +442,7 @@ describe('i18n 覆盖', () => {
       'tangu/store/tanguSlice.ts  Math.round(runCost)': [1, '单次运行费用(数字千分位)'],
       'tangu/store/tanguSlice.ts  costLimit': [1, '费用上限(数字)'],
       'tangu/store/tanguSlice.ts  (Number(pl.savedChars) || 0)': [1, '压缩省下的字数(数字)'],
+      'tangu/store/tanguSlice.ts  (Number(pl.budgetTokens) || 0)': [1, '上下文预算 token 数(数字)'],
       'components/FeedbackModal.tsx  text.trim().length': [1, '反馈字数(数字)'],
       'components/FeedbackModal.tsx  FEEDBACK_TEXT_LIMIT': [1, '字数上限常量(数字)'],
       'components/ModelPickerSettings.tsx  model.maxContextWindow!': [1, '上下文窗口上限(token 数)'],

@@ -12,6 +12,8 @@ import {
   estimateMessageTokens,
   estimateMessagesTokens,
   compactContext,
+  trimOldestToFit,
+  pinMessage,
   capToolResult,
   capHistoryContent,
 } from './contextBudget.js';
@@ -332,3 +334,56 @@ describe('770k-token incident gate math', () => {
     expect(estimateTokensRough(small)).toBeLessThan(CONTEXT_WINDOW_TOKENS * INPUT_WARN_RATIO);
   });
 });
+
+describe('trimOldestToFit — 摘要失败后的最后兜底:从最旧处成段丢到放得下', () => {
+  const m = (role: string, content: string, extra: any = {}) => ({ role, content, ...extra }) as any;
+  const big = (tag: string) => tag + ' ' + 'x'.repeat(4_000); // ≈1k token
+  const convo = () => [
+    m('system', 'SYS'),
+    m('user', big('OLD-ASK')),
+    m('assistant', big('A1'), { tool_calls: [{ id: 't1' }] }), m('tool', big('R1'), { tool_call_id: 't1' }),
+    m('assistant', big('A2')),
+    m('user', big('CURRENT-ASK')),
+    m('assistant', big('A3'), { tool_calls: [{ id: 't3' }] }), m('tool', big('R3'), { tool_call_id: 't3' }),
+  ];
+
+  it('丢最旧的段直到估算 ≤ 目标;工具调用与结果一起丢,不留孤立 tool;留标记', () => {
+    const msgs = convo();
+    expect(trimOldestToFit(msgs, 3_500)).toEqual({ dropped: 4 });
+    const text = msgs.map((x: any) => String(x.content).split(' ')[0]);
+    expect(text).toEqual(['SYS', '[Context', 'CURRENT-ASK', 'A3', 'R3']);
+    expect(String(msgs[1].content)).toContain('4 earlier messages were dropped');
+    expect(msgs.some((x: any, i: number) => x.role === 'tool' && msgs[i - 1]?.role !== 'assistant')).toBe(false);
+  });
+
+  it('最近一条 user、最后一段、锚定消息都不丢;放不下就停在那里', () => {
+    const msgs = convo();
+    pinMessage(msgs[4]);
+    expect(trimOldestToFit(msgs, 0)).toEqual({ dropped: 3 });
+    expect(msgs.map((x: any) => String(x.content).split(' ')[0])).toEqual(['SYS', '[Context', 'A2', 'CURRENT-ASK', 'A3', 'R3']);
+  });
+
+  it('已在目标内 → 不动;再丢一次 → 只改标记里的计数,不叠第二条标记', () => {
+    const msgs = convo();
+    expect(trimOldestToFit(msgs, 1_000_000)).toEqual({ dropped: 0 });
+    expect(msgs).toHaveLength(8);
+    trimOldestToFit(msgs, 6_500); // 丢 OLD-ASK
+    msgs.splice(2, 0, m('assistant', big('LATER'))); // 标记之后又来了旧内容
+    expect(trimOldestToFit(msgs, 4_500)).toEqual({ dropped: 3 }); // LATER + A1/R1
+    const markers = msgs.filter((x: any) => String(x.content).startsWith('[Context trimmed'));
+    expect(markers).toHaveLength(1);
+    expect(String(markers[0].content)).toMatch(/^\[Context trimmed: \d+ earlier/);
+    expect(Number(/\d+/.exec(String(markers[0].content))![0])).toBe(4);
+  });
+
+  it('「最近一条 user」只认真消息:工具截图之类的合成 user 不顶替任务本身', () => {
+    const real = new Set<any>();
+    const msgs = [m('system', 'SYS'), m('user', big('HUMAN-ASK')),
+      m('assistant', big('A1'), { tool_calls: [{ id: 't1' }] }), m('tool', big('R1'), { tool_call_id: 't1' }),
+      m('user', big('SCREENSHOT'))];
+    real.add(msgs[1]);
+    trimOldestToFit(msgs, 0, 0, (x) => real.has(x));
+    expect(msgs.map((x: any) => String(x.content).split(' ')[0])).toEqual(['SYS', '[Context', 'HUMAN-ASK', 'SCREENSHOT']);
+  });
+});
+
