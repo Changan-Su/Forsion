@@ -42,7 +42,9 @@ export function SelectField({ label, ariaLabel, value, options, onChange, disabl
   const choose = (next: string): void => { if (next !== value) onChange(next); setOpen(false); trigger.current?.focus() }
   // 没有可见标签时也用 labelledby 拼「字段名 + 当前值」,不能只给 aria-label(会把当前值从可访问名里盖掉)
   const labelledBy = label || ariaLabel ? `${id}-label ${id}-value` : undefined
-  return <div className="profile-model-field profile-select-field agent-field" data-profile-field={field} data-size={size}>
+  // 宿主可能把它包在 <label> 里(图像工作室):点选项后 click 冒泡到 label,label 会再「点」一次触发器把列表重新打开。
+  // 在这层取消默认动作就拦住 label 的转发;按钮自己的 onClick 不受影响。
+  return <div className="profile-model-field profile-select-field agent-field" data-profile-field={field} data-size={size} onClick={(e) => e.preventDefault()}>
     {label ? <span id={`${id}-label`}>{label}</span> : ariaLabel && <span id={`${id}-label`} hidden>{ariaLabel}</span>}
     <button ref={trigger} type="button" className="profile-model-trigger" disabled={disabled || single} aria-haspopup="listbox" aria-labelledby={labelledBy} aria-expanded={open} aria-controls={`${id}-options`}
       onClick={() => setOpen(!open)}
