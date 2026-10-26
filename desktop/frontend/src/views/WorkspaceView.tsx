@@ -15,7 +15,8 @@ import type { ViewProps } from '@lcl/engine'
 import { tooltipProps } from '@lcl/components'
 import { ChevronDown, ChevronRight, FileText, Folder, FolderOpen, ListFilter, MoreHorizontal, Pencil, Plus, Search, X } from 'lucide-react'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
-import type { ListAction, ListDropTarget, ListItem, ListSourceContribution } from '@amadeus/plugins/types'
+import type { ListDropTarget, ListItem } from '@amadeus/plugins/types'
+import type { HostListAction as ListAction, HostListSource } from '@amadeus/plugins/pluginText'
 import { LIST_ROW_MIME, ancestorsOf, buildListTree, dropCandidates, fitsPhoneList, flattenLeaves, groupFold, hiddenByFilter, isFolder, isGroupHead, leafCount, type GroupFold, type ListDropPosition, type ListNode } from '@amadeus/plugins/listTree'
 import { folderPadLeft, nameLeft } from '@amadeus/lib/treeIndent'
 import { initialFor } from '../components/agentInitial'
@@ -38,7 +39,7 @@ import { ContextMenu, type CtxMenu } from '../components/RightPanel'
 import { resolveIcon } from '@amadeus/components/icons'
 import { ensureAmadeusReady } from '../amadeusPlugins'
 import { EmptyState } from '../components/EmptyState'
-import { hostListEmpty } from './hostListEmpty'
+import { hostListEmpty, isEmptySpace } from './hostListEmpty'
 import { AnimatedCollapse } from '../components/AnimatedUI'
 
 registerMessages({
@@ -291,7 +292,7 @@ const cls = (...parts: Array<string | false | null | undefined>): string | undef
 const NAV_ROWS = '.t2s-srow, .t2s-folder-row, .t2sw-plug-ghead, .t2sw-plug-sec'
 
 /** stateKey:开合记忆按它分开存(WorkspaceView 给 `plugin:<插件>:<源>`);不给就用源自己的 id。 */
-export function PluginListBody({ src, stateKey }: { src: ListSourceContribution; stateKey?: string }) {
+export function PluginListBody({ src, stateKey }: { src: HostListSource; stateKey?: string }) {
   const { t } = useI18n()
   const [, force] = useReducer((x: number) => x + 1, 0)
   // ⚠️vault 懒引导 × 插件在启动期激活 = 列表源恒空(2026-08-28 用户实报,青鸟收藏夹):
@@ -364,8 +365,8 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
   const hostEmpty = hostListEmpty(src)
   const activeSpaceId = useSpaceStore((s) => s.activeSpaceId)
   const emptyRow = query ? <div className="t2sw-empty">{t('wsview.noMatches')}</div>
-    : hostEmpty && !activeGroup && flat && (hostEmpty.ready?.() ?? true) ? <EmptyState icon={hostEmpty.icon} title={hostEmpty.title()} line={hostEmpty.line?.()} data-state="empty" />
-      : hostEmpty && !activeGroup && activeSpaceId === hostEmpty.space ? null
+    : hostEmpty && !activeGroup && flat && (hostEmpty.ready?.() ?? true) ? <EmptyState icon={hostEmpty.icon} title={hostEmpty.title()} line={hostEmpty.line?.()} action={hostEmpty.action?.()} data-state="empty" />
+      : hostEmpty && !activeGroup && isEmptySpace(hostEmpty, activeSpaceId) ? null
         : <div className="t2sw-empty">{t('wsview.empty')}</div>
   // 已经开着时再点一次搜索钮:状态没变,效果不会重跑,所以这里直接把光标放回去(键盘被收起之后还能再叫出来)
   const openSearch = (): void => { setSearching(true); searchRef.current?.focus() }
