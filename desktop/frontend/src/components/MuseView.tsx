@@ -24,7 +24,6 @@ import { deleteWithUndo, isPendingDelete } from '../views/automation/automationL
 import { homeTarget, targetForSession } from '../services/engine/targets'
 import { previewNeedsScrollHint } from './approvalText'
 import { SelectField } from './SelectField'
-import { approvalReasonText, sanitizeApprovalReason } from '../approvalReason'
 
 registerMessages({
   'special.muse.off': { zh: '未开启', en: 'Off' },
@@ -47,10 +46,15 @@ const arr = <T,>(v: unknown): T[] => (Array.isArray(v) ? v : [])
 
 /** 改文件的工具:标题写「Muse 请求写入文件」,其余写工具名。 */
 const WRITE_TOOLS: ReadonlySet<string> = new Set(['write_file', 'edit_file', 'multi_edit', 'apply_patch'])
-/** pending_approvals.reason 是引擎 JSON.stringify 的 ApprovalReason;坏串 / 旧行 → 不写「为什么问你」。 */
-const parseReason = (raw: string | null): ReturnType<typeof sanitizeApprovalReason> => {
-  if (!raw) return undefined
-  try { return sanitizeApprovalReason(JSON.parse(raw)) } catch { return undefined }
+/** pending_approvals.reason 是引擎 JSON.stringify 的 ApprovalReason → 「为什么问你」那行。坏串 / 旧行 / 认不出的 kind → 不写。
+ *  ponytail: 没用 approvalReason.ts 的 approvalReasonText —— 那是 Tangu 界面文件,宿主不许直连(check:tanguboundary);
+ *  这里只照抄 kind → 词条的映射,mode 档不写(Muse 的档位不是聊天那套,套聊天档名会说错)。 */
+const reasonText = (raw: string | null, t: (k: string, v?: Record<string, string>) => string): string => {
+  let r: { kind?: unknown; rule?: unknown } | null = null
+  try { r = raw ? JSON.parse(raw) : null } catch { return '' }
+  if (r?.kind === 'custom-ask') return t('approval.why.customAsk', { rule: String(r.rule ?? '').slice(0, 200) })
+  if (r?.kind === 'escalate' || r?.kind === 'protected' || r?.kind === 'control' || r?.kind === 'always') return t(`approval.why.${r.kind}`)
+  return ''
 }
 
 export const MuseView: React.FC<{
@@ -220,7 +224,7 @@ export const MuseView: React.FC<{
           <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}><ShieldCheck size={13} /> {t('special.muse.approvals')}</label>
           {approvals.length === 0 && <div className="hint">{t('special.muse.approvalsEmpty')}</div>}
           {approvals.map((a) => {
-            const why = approvalReasonText(parseReason(a.reason), t as (k: string, v?: Record<string, unknown>) => string)
+            const why = reasonText(a.reason, t)
             return (
               // 7.18:和聊天里的 ApprovalCard 同一套 approval-* 排法(标题 → 为什么问你 → 预览占满宽 → 一行说明 → 按钮一排)。
               // 不直接挂 ApprovalCard:它吃的是 approval_request 事件,还会给「总允许」,Muse 的队列兑现不了。
