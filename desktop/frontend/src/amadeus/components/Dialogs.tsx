@@ -4,6 +4,7 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { nativeSheetPresenter, presentNativeConfirm } from '@lcl/engine'
 import { registerMessages, useI18n } from '../../i18n'
+import { DialogOverlay } from './DialogOverlay'
 
 registerMessages({
   'amdlg.delete': { zh: '删除', en: 'Delete' },
@@ -65,7 +66,7 @@ export function ConfirmDialog({
   }, [web, title, message, confirmText, cancelText, danger])
   if (!web) return null
   return (
-    <div className="dialog-overlay" onMouseDown={onClose}>
+    <DialogOverlay onMouseDown={onClose}>
       <div className="dialog" role="dialog" aria-modal="true" aria-labelledby={titleId} onMouseDown={(e) => e.stopPropagation()}>
         <div className="dialog-title" id={titleId}>{title}</div>
         {message && <div className="dialog-msg">{message}</div>}
@@ -88,7 +89,7 @@ export function ConfirmDialog({
           </button>
         </div>
       </div>
-    </div>
+    </DialogOverlay>
   )
 }
 
@@ -121,7 +122,7 @@ export function PromptDialog({
     onClose()
   }
   return (
-    <div className="dialog-overlay" onMouseDown={onClose}>
+    <DialogOverlay onMouseDown={onClose}>
       <div className="dialog" onMouseDown={(e) => e.stopPropagation()}>
         <div className="dialog-title">{title}</div>
         {label && <div className="dialog-msg">{label}</div>}
@@ -153,7 +154,7 @@ export function PromptDialog({
           </button>
         </div>
       </div>
-    </div>
+    </DialogOverlay>
   )
 }
 
@@ -174,7 +175,7 @@ export function FolderPickerDialog({
   const { t } = useI18n()
   const options = ['', ...folders].filter((f) => f !== currentFolder)
   return (
-    <div className="dialog-overlay" onMouseDown={onClose}>
+    <DialogOverlay onMouseDown={onClose}>
       <div className="dialog" onMouseDown={(e) => e.stopPropagation()}>
         <div className="dialog-title">{title}</div>
         <div className="dialog-list">
@@ -198,6 +199,6 @@ export function FolderPickerDialog({
           </button>
         </div>
       </div>
-    </div>
+    </DialogOverlay>
   )
 }

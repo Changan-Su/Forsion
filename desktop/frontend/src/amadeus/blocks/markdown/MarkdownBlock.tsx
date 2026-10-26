@@ -1885,6 +1885,7 @@ export function MilkdownInner({
           shape={toolbar.shape}
           fg={toolbar.fg}
           bg={toolbar.bg}
+          dir={toolbar.dir}
           onAct={onToolbarAct}
           onColor={(v) => runCmd(applyColorCommand.key, v || undefined)}
           onBg={(v) => runCmd(applyBgCommand.key, v || undefined)}

@@ -2,7 +2,8 @@
  * 父子会话 + 任务卡(方案 docs/ToBeImproved/子会话与任务卡方案_2026-10-17,左栏 A + 对话里 B)的真 Electron 台架:
  * 桩引擎回一份带 parent_session_id / busy / awaiting_user 的会话名册和一段「开了三个子会话 → 回来了 → 接着做 + 任务卡」的对话。
  * 断言:左栏树(子会话紧跟主会话、最后一个拐弯、个数、收起后状态冒上来)、行尾状态(在跑 / 等你 / 做完了)、对话里子会话块、
- * <child_sessions_update> 系统行、任务卡(有效期、先问卡、撤回、过期)、点「开个子会话」后卡原地变成子会话行。截图自己看。
+ * <child_sessions_update> 系统行、任务卡(有效期、先问卡、撤回、过期)、点「开个子会话」后卡原地变成子会话行、
+ * 主区被挤窄时子会话面板不消失(720 并排 / 600 顶掉聊天列)。截图自己看。
  * 量的是 out/ 产物:改了源码先 `npx electron-vite build`。
  *   node ../.claude/hooks/devlock.cjs run --vehicle=e2e --what="父子会话台架" --eta=3 -- node scripts/nested-sessions.e2e.cjs
  *   SHOT_DIR=… 指定截图目录;LANG_EN=1 拍英文;DARK=1 拍深色
@@ -158,7 +159,8 @@ async function main() {
     await win.screenshot({ path: path.join(dir, 'cards.png') })
 
     // 点「开个子会话」→ 卡原地变成子会话行
-    await win.locator('#tocmsg-a2 .t2-taskcard[data-task-state="open"] .t2-taskcard-actions button.primary').click()
+    // 点不到也别中断整轮:下面 C4 照样记红,D 段(子会话面板)继续跑
+    await win.locator('#tocmsg-a2 .t2-taskcard[data-task-state="open"] .t2-taskcard-actions button.primary').click({ timeout: 10_000 }).catch(() => {})
     await win.locator(`#tocmsg-a2 .t2-tasks .t2-childs .t2-child-row[data-child-session="${NEWKID}"]`).waitFor({ timeout: 10_000 }).catch(() => {})
     r.check('C4 点「开个子会话」后卡原地变成子会话行', await win.locator(`#tocmsg-a2 .t2-child-row[data-child-session="${NEWKID}"]`).count() === 1, '')
     r.check('C5 新开的子会话进了左栏、挂在主会话下面', await row(NEWKID).evaluate((e) => e.classList.contains('t2s-kid')).catch(() => false), '')
@@ -169,6 +171,20 @@ async function main() {
     await win.locator('.child-chat-panel .t2-child-from').waitFor({ timeout: 15_000 }).catch(() => {})
     r.check('D1 子会话面板顶上写着来自主会话', await win.locator('.child-chat-panel .t2-child-from').count() === 1, '')
     await win.screenshot({ path: path.join(dir, 'child-panel.png') })
+    // 主区被右栏挤窄(10-26 录屏):<760 时 Desk 规则曾把子会话面板一起藏掉,≤700 又藏了聊天列 → 整块空白
+    const narrow = async (w) => win.evaluate((w) => {
+      const v = document.querySelector('.t2-chat-view:has(> .child-chat-panel)')
+      v.style.flex = 'none'; v.style.width = `${w}px`
+      const vis = (e) => !!e && getComputedStyle(e).display !== 'none' && e.getBoundingClientRect().width > 50
+      return { col: vis(v.querySelector(':scope > .t2-chat-col')), panel: vis(v.querySelector(':scope > .child-chat-panel')) }
+    }, w)
+    await narrow(720); await win.waitForTimeout(600) // 等 flex-basis 过渡走完再量
+    const n720 = await narrow(720)
+    r.check('D2 主区 720px:聊天列和子会话面板都在', n720.col && n720.panel, JSON.stringify(n720))
+    await narrow(600); await win.waitForTimeout(600)
+    const n600 = await narrow(600)
+    r.check('D3 主区 600px:子会话面板顶掉聊天列,不是整块空白', !n600.col && n600.panel, JSON.stringify(n600))
+    await win.evaluate(() => { const v = document.querySelector('.t2-chat-view:has(> .child-chat-panel)'); v.style.flex = ''; v.style.width = '' })
     const panel = await win.locator('.child-chat-panel').boundingBox()
     if (panel) await win.screenshot({ path: path.join(dir, 'child-panel-zoom.png'), clip: { x: panel.x, y: panel.y, width: panel.width, height: Math.min(panel.height, 560) } })
     console.log(`截图:${dir}`)

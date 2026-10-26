@@ -84,6 +84,8 @@
 .ibx-reader-body .ibx-amadeus .page-view.unified-body { padding-top: 0; }
 /* 编辑器尾部的 40px 是给笔记留的点击缓冲;信是只读的,末尾的卡要贴着正文(16px,见下)。 */
 .ibx-reader-body .ibx-amadeus.amx-editor { padding-bottom: 0; }
+/* 滚动只归 .ibx-reader 一层:.amx-pane 自带 overflow:auto(给独立笔记页的),嵌在信里会多吃 ~24px 的内层滚动,滚轮先滚它再滚外层(10-26)。 */
+.ibx-reader-body .ibx-amadeus.amx-pane { height: auto; overflow: visible; }
 /* 纸面(标题容器 .amx-doc 与块画布 .page-view.unified-body)的 48px 左右内边距是给编辑态的块把手留的;
    只读的收件箱里正文要跟标题 / 末尾卡片对齐(实测缩进来自 .page-view,见 09-11 Log)。 */
 .ibx-reader-body .ibx-amadeus .amx-doc,

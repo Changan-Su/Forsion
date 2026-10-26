@@ -1423,17 +1423,11 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .amx-db-pop-input { border: 1px solid var(--border); border-radius: var(--radius-sm, 6px); outline: none; background: transparent; color: var(--text); font: inherit; font-size: var(--ui-font-meta, 12px); padding: 5px 7px; margin: 4px 2px 2px; }
 .amx-db-pop-input:focus { border-color: var(--accent-ink, var(--accent, #6c5ce7)); }
 
-/* ── 微动效:笔记库树(箭头旋转 + 展开子树滑入;跟随 base.css 动效 token) ── */
-.amx-tree .t2s-chev { transition: transform var(--duration-fast, 0.15s) var(--ease-out, ease); }
+/* ── 微动效:笔记库树的箭头与子树展开同一个 --collapse-*(8.10;子树的展开是 AnimatedCollapse,原来那条 slide-in 关键帧已删) ── */
+.amx-tree .t2s-chev { transition: transform var(--collapse-duration) var(--collapse-ease); }
 .amx-tree .t2s-chev.open { transform: rotate(90deg); }
-.amx-tree .t2s-group-sessions { animation: amx-slide-in 0.16s var(--ease-out, ease); }
-@keyframes amx-slide-in {
-  from { opacity: 0; transform: translateY(-3px); }
-  to { opacity: 1; transform: none; }
-}
 @media (prefers-reduced-motion: reduce) {
   .amx-tree .t2s-chev { transition: none; }
-  .amx-tree .t2s-group-sessions { animation: none; }
 }
 
 /* ── 导出 PDF:打印时只呈现 #amx-print-root(编辑器克隆,恒浅色纸面),隐藏整个应用壳。
@@ -1636,6 +1630,9 @@ html.dark .amx-cal-chip-ev, html.dark .amx-cal-event {
  * 刻意不套 astryx Card/Scope —— 那会把整卡盖成 astryx 中性灰、与 app 暖色主题不搭。
  * 视觉对标 Notion Calendar 事件 peek:图标引导的行、时段大标题 + 时长徽章、值右对齐可就地编辑。 */
 .amx-cal-cardwrap { position: fixed; width: 360px; max-height: 80vh; overflow-y: auto; transform-origin: top left; animation: amx-cal-cardin 0.16s cubic-bezier(0.22, 0.61, 0.36, 1); background: var(--bg-card, var(--bg)); border-radius: var(--radius-md, 12px); outline: 0.5px solid var(--border); outline-offset: -0.5px; box-shadow: var(--card-shadow); }
+/* 关掉(Esc / 点外面)时卸载留下的替身(EventCard 的 useExitGhost)放菜单那一档退场(走查续八 8.4);手机底部抽屉只淡出。 */
+html:root .amx-cal-cardwrap[data-lcl-exit] { animation: ui-menu-exit var(--menu-exit-duration) var(--ease-exit) forwards; }
+html:root .amx-cal-cardwrap.amx-cal-drawer[data-lcl-exit] { animation-name: ui-fade-out; }
 .amx-cal-cardin { display: flex; flex-direction: column; padding: 6px; gap: 2px; }
 @keyframes amx-cal-cardin { from { opacity: 0; transform: scale(0.97) translateY(-6px); } to { opacity: 1; transform: none; } }
 

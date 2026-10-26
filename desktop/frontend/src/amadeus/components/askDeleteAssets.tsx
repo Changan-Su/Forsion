@@ -6,6 +6,7 @@ import { useState } from 'react'
 import { create } from 'zustand'
 import { useEscape } from './Dialogs'
 import { registerMessages, useI18n } from '../../i18n'
+import { DialogOverlay } from './DialogOverlay'
 
 registerMessages({
   'delassets.blockTitle': { zh: '引用块已删除', en: 'Reference block deleted' },
@@ -86,7 +87,7 @@ function Dialog({ req }: { req: Req }) {
   useEscape(() => settle(null))
   const shown = req.assets.slice(0, 6)
   return (
-    <div className="dialog-overlay" onMouseDown={() => settle(null)}>
+    <DialogOverlay onMouseDown={() => settle(null)}>
       <div className="dialog" onMouseDown={(e) => e.stopPropagation()}>
         <div className="dialog-title">{req.block ? t('delassets.blockTitle') : t('delassets.noteTitle', { name: req.note })}</div>
         <div className="dialog-msg">
@@ -116,6 +117,6 @@ function Dialog({ req }: { req: Req }) {
           <button className="dialog-btn" data-danger autoFocus={!req.block} onClick={() => settle('with')}>{t('delassets.deleteAll')}</button>
         </div>
       </div>
-    </div>
+    </DialogOverlay>
   )
 }
