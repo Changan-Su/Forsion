@@ -88,8 +88,12 @@ export async function fimModelChoice(modelId?: string): Promise<{ id: string; na
   const nameOf = (id: string): string => cat?.fimModels?.find((m) => m.id === id)?.name || cat?.models.find((m) => m.id === id)?.name || id
   if (modelId) return { id: modelId, name: nameOf(modelId) }
   const slot = (await window.tangu?.getConfig?.().catch(() => null))?.fimModelId
-  if (slot && (!cat || cat.fimModels?.some((m) => m.id === slot))) return { id: slot, name: nameOf(slot) }
+  // 云端目录这次没拉成(status error,fimModels 空)≠ 没有补全模型:先信槽;槽也没有就报可重试的错,
+  // 别抛 fim_unavailable —— 插件会据此整场会话落回 complete,网好了也不回来。
+  const cloudDown = cat?.forsion?.status === 'error'
+  if (slot && (!cat || cloudDown || cat.fimModels?.some((m) => m.id === slot))) return { id: slot, name: nameOf(slot) }
   const first = cat?.fimModels?.[0]
+  if (!first && cloudDown) throw new Error('fim_catalog_unreachable')
   return first ? { id: first.id, name: first.name || first.id } : null
 }
 

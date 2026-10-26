@@ -288,6 +288,21 @@ describe('fim(行内补全)', () => {
     }
     expect(billing.consumeTokenPoints).not.toHaveBeenCalled();
   });
+  it('一个字没出就失败(解析模型 / 上游拒绝)不结算;出过字再失败按已出的结算', async () => {
+    const l = await llm();
+    const orig = l.fimCompletion;
+    billing.consumeTokenPoints.mockClear();
+    try {
+      l.fimCompletion = async () => { throw new Error('model not found'); };
+      await expect(completeInline({ userId: 'u1', modelId: 'fim1', appId: 'tangu', input: normalizeInlineInput({ action: 'fim', before: 'x' })!, signal: new AbortController().signal, onToken: () => {} })).rejects.toThrow('model not found');
+      expect(billing.consumeTokenPoints).not.toHaveBeenCalled();
+      l.fimCompletion = async (o: any) => { o.onToken('ab'); throw new Error('upstream reset'); };
+      await expect(completeInline({ userId: 'u1', modelId: 'fim1', appId: 'tangu', input: normalizeInlineInput({ action: 'fim', before: 'x' })!, signal: new AbortController().signal, onToken: () => {} })).rejects.toThrow('upstream reset');
+      expect(billing.consumeTokenPoints).toHaveBeenCalledTimes(1);
+    } finally {
+      l.fimCompletion = orig;
+    }
+  });
   it('路由:model_id 必填(不落回 profile 的聊天默认);前后文都空 400;成功时 done 带原文', async () => {
     expect((await post({ action: 'fim', before: 'x' })).status).toBe(400);
     expect((await post({ action: 'fim', model_id: 'fim1' })).status).toBe(400);

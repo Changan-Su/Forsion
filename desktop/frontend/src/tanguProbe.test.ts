@@ -244,6 +244,12 @@ describe('「补全」模型槽(ctx.tangu.fim 的模型)', () => {
     expect(await fimModelChoice()).toBeNull()
     home({ models: [], fimModels: [] })
     expect(await fimModelChoice()).toBeNull()
+     // 云端这次没拉成(fimModels 空)≠ 没有补全模型:信槽;槽也空 → 可重试的错,不是 fim_unavailable
+    home({ models: FIMS.models, fimModels: [], forsion: { status: 'error', detail: 'timeout' } })
+    withSlot('cs')
+    expect(await fimModelChoice()).toEqual({ id: 'cs', name: 'cs' })
+    withSlot('')
+    await expect(fimModelChoice()).rejects.toThrow('fim_catalog_unreachable')
   })
 
   it('目录还没拉到先拉一次;拉不到才先信槽', async () => {

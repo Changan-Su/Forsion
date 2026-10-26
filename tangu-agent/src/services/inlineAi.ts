@@ -177,7 +177,7 @@ interface InlineOpts {
 /**
  * fim:prefix = before、suffix = after,**无系统提示、无消息包装**,交给 brain.llm.fimCompletion;返回模型原文(不 trim、不剥围栏)。
  * brain 没有这个方法 / 模型或云端做不了 → 抛 fim_unsupported(路由写成 SSE error,插件据此落回 complete)。
- * 额度与记账同其它动作:按 prefix+suffix 的粗估预检,结束(含中止 / 出错)按用量结算;fim_unsupported 是开流前就被拒,不结算。
+ * 额度与记账同其它动作:按 prefix+suffix 的粗估预检,结束按用量结算;中止 / 出错只在已出过字时按估算结算;fim_unsupported 是开流前就被拒,不结算。
  * standalone 的 billing 是 no-op(云端那条路由自己扣),进程内(server 托管引擎)才真扣 —— 与聊天同一口径。
  */
 async function completeFim(opts: InlineOpts): Promise<InlineAnswer> {
@@ -210,7 +210,9 @@ async function completeFim(opts: InlineOpts): Promise<InlineAnswer> {
       onToken: (d: string) => { streamed += d; opts.onToken(d); },
     });
   } catch (e: any) {
-    if (!isFimUnsupported(e)) {
+    // 一个字没出就失败(解析模型 / 钥匙、上游拒绝、刚发就被掐)拿不到用量,不按估算扣 —— 与 server 聊天那条同口径;
+    // 出过字的才按已出的估算结算。
+    if (!isFimUnsupported(e) && streamed) {
       const reason = opts.signal.aborted ? 'aborted' : String(e?.message || e || 'error').slice(0, 200);
       await settle(promptEst, estimateTokensRough(streamed), 0, reason).catch(() => {});
     }
