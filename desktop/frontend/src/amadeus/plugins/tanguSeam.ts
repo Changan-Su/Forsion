@@ -233,6 +233,28 @@ export interface TanguProbe {
    *  `action: 'translate'` 没点名模型时先取「翻译」模型槽(设置 → 模型 → 翻译)。
    *  可选:纯 Amadeus 壳 / 台架假探针不给 = 编辑器里没有 AI 入口、插件那边没有 `ctx.tangu.complete`。 */
   complete?(req: TanguCompleteRequest, opts?: TanguCompleteOptions): Promise<TanguCompleteResult>
+  /** 行内补全(FIM,2026-10-26+):引擎 `/agent/inline` 的 `fim` 动作,光标前后文原样交给补全模型,无提示词。
+   *  模型:`req.modelId` → 「补全」模型槽(还在目录里)→ 目录 fimModels 第一个 → 都没有 reject `Error('fim_unavailable')`;
+   *  引擎 / 云端回 fim_unsupported 也 reject 成 `fim_unavailable`(插件据此落回 `complete`)。只在给得出 `complete` 的宿主上有。 */
+  fim?(req: TanguFimRequest, opts?: TanguCompleteOptions): Promise<TanguFimResult>
+}
+
+export interface TanguFimRequest {
+  /** 光标前的正文(引擎留尾 16k 字符)。 */
+  before: string
+  /** 光标后的正文(引擎留头 8k 字符)。 */
+  after?: string
+  /** 输出上限,引擎夹到 1..512,缺省 64。 */
+  maxTokens?: number
+  /** 停止串,引擎留前 4 个、每个前 32 字符。 */
+  stop?: string[]
+  /** 不给 = 「补全」模型槽 / 目录里第一个补全模型。 */
+  modelId?: string
+}
+export interface TanguFimResult {
+  /** 模型原文(不 trim、不剥围栏)。 */
+  text: string
+  model?: { id: string; name: string }
 }
 
 /** 正文 AI 的动作(与引擎 services/inlineAi.ts 的 INLINE_ACTIONS 同表)。改写类(前六个)必须带 selection。 */

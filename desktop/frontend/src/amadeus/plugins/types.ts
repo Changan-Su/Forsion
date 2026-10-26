@@ -1959,6 +1959,16 @@ export interface PluginContext {
      *  (与 `complete` 合计),超出回 429 → 自己排队。停用时在飞的请求被中止并 reject。
      *  旧宿主没有:`ctx.tangu?.translate ?? 退回 complete`。 */
     translate?(req: { text: string; language: string; before?: string; signal?: AbortSignal; modelId?: string; onDelta?: (delta: string) => void }): Promise<{ text: string; model?: { id: string; name: string; mt?: boolean } }>
+    /** 行内补全 / Inline completion (FIM, fill-in-the-middle; 2026-10-26+). 光标前后文原样交给**补全模型**,没有提示词、没有指令:
+     *  `before` = 光标前的正文(引擎留最后 16k 字符),`after` = 光标后的正文(留前 8k);两者至少一个非空。返回 `text` = 模型原文
+     *  (不 trim、不剥围栏,空白与换行照原样),另带实际模型 `model`。`maxTokens` 夹到 1..512(缺省 64);`stop` 最多 4 个、每个 ≤32 字符。
+     *  The text before / after the cursor goes to a completion model verbatim — no prompt, no instruction. Returns the raw model text.
+     *  模型 / Model:`modelId` → 用户在「设置 → 模型 → 补全」选的那个 → 账号里第一个补全模型。都没有、或模型 / 引擎 / 云端做不了 FIM →
+     *  reject `Error('fim_unavailable')`:这时退回 `complete` 自己写指令,并在本次会话里记住别再试。
+     *  When no FIM model is available it rejects with `Error('fim_unavailable')`; fall back to `complete` and remember that for the session.
+     *  与 `complete` / `translate` 合计每用户同时最多 3 个请求(超出 429);每次按键前请先 abort 上一次(`signal`)。
+     *  插件被停用时在飞的请求被中止并 reject。旧宿主 / 非 Tangu 宿主没有:`ctx.tangu?.fim`。 */
+    fim?(req: { before: string; after?: string; maxTokens?: number; stop?: string[]; modelId?: string; signal?: AbortSignal; onDelta?: (delta: string) => void }): Promise<{ text: string; model?: { id: string; name: string } }>
   }
   /** Agent Desk 伴随面(2026-09-19+,**只在有 Agent Desk 的宿主上存在** —— 桌面 Tangu;web / 移动端 / 纯 Amadeus 壳
    *  整个没有 `ctx.desk`)。往聊天右侧的 Agent Desk 挂一块自绘区域,典型用法是跟着 agent 状态做反应的形象。

@@ -5,7 +5,8 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { useSpaceStore, useWorkspace } from '@lcl/engine'
-import { installTanguProbe, START_CHAT_MAX_PROMPT, translateModelChoice, modelCatalog } from './tanguProbe'
+import { installTanguProbe, START_CHAT_MAX_PROMPT, translateModelChoice, fimModelChoice, modelCatalog } from './tanguProbe'
+import * as inlineAiService from './services/inlineAi'
 import { readTangu } from './amadeus/plugins/tanguSeam'
 import { useApp } from './stores/appStore'
 import { resolveNewSessionWorkspace } from './tangu/store/tanguSlice'
@@ -215,6 +216,61 @@ describe('「翻译」模型槽(translate 动作的模型)', () => {
   it('读配置失败不抛', async () => {
     vi.stubGlobal('window', { tangu: { getConfig: async () => { throw new Error('ipc down') } } })
     expect(await translateModelId()).toBeUndefined()
+  })
+})
+
+describe('「补全」模型槽(ctx.tangu.fim 的模型)', () => {
+  const withSlot = (id: string | undefined): void => { vi.stubGlobal('window', { tangu: { getConfig: async () => ({ fimModelId: id }) } }) }
+  const home = (models: object | null): void => { useTargetCatalogs.setState({ byKey: {} }); if (models) rememberCatalog('home', { models: models as never }) }
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); useTargetCatalogs.setState({ byKey: {} }) })
+  const FIMS = { models: [{ id: 'chat', name: 'Chat', provider: 'x', source: 'forsion' }], fimModels: [{ id: 'ds', name: 'DeepSeek FIM' }, { id: 'cs', name: 'Codestral' }] }
+
+  it('次序:点名的 → 槽(还在 fimModels 里)→ fimModels 第一个 → null', async () => {
+    home(FIMS)
+    withSlot('cs')
+    expect(await fimModelChoice('explicit')).toEqual({ id: 'explicit', name: 'explicit' })
+    expect(await fimModelChoice('ds')).toEqual({ id: 'ds', name: 'DeepSeek FIM' })
+    expect(await fimModelChoice()).toEqual({ id: 'cs', name: 'Codestral' })
+    // 槽里的模型下架了 / 是个聊天模型(不在 fimModels):跳过它,用第一个
+    withSlot('gone')
+    expect(await fimModelChoice()).toEqual({ id: 'ds', name: 'DeepSeek FIM' })
+    withSlot('chat')
+    expect(await fimModelChoice()).toEqual({ id: 'ds', name: 'DeepSeek FIM' })
+    withSlot('')
+    expect(await fimModelChoice()).toEqual({ id: 'ds', name: 'DeepSeek FIM' })
+    // 目录里没有补全模型(老云端 / 没配):没有
+    home({ models: FIMS.models })
+    withSlot('cs')
+    expect(await fimModelChoice()).toBeNull()
+    home({ models: [], fimModels: [] })
+    expect(await fimModelChoice()).toBeNull()
+  })
+
+  it('目录还没拉到先拉一次;拉不到才先信槽', async () => {
+    home(null)
+    withSlot('')
+    const ensure = vi.spyOn(catalogService, 'ensureCatalog').mockResolvedValueOnce({ models: FIMS, agents: [], defaultAgentSlug: '', skills: [], at: Date.now() } as never)
+    expect(await fimModelChoice()).toEqual({ id: 'ds', name: 'DeepSeek FIM' })
+    expect(ensure).toHaveBeenCalledWith('home')
+    ensure.mockResolvedValueOnce(null)
+    withSlot('cs')
+    expect(await fimModelChoice()).toEqual({ id: 'cs', name: 'cs' })
+    ensure.mockResolvedValueOnce(null)
+    withSlot('')
+    expect(await fimModelChoice()).toBeNull()
+  })
+
+  it('探针 fim:没有模型 → fim_unavailable(不发请求);有 → 带上模型回执', async () => {
+    installTanguProbe()
+    const p = readTangu()!
+    const send = vi.spyOn(inlineAiService, 'fimInline').mockResolvedValue({ text: ' world' })
+    home({ models: [], fimModels: [] })
+    withSlot('')
+    await expect(p.fim!({ before: 'hello' })).rejects.toThrow('fim_unavailable')
+    expect(send).not.toHaveBeenCalled()
+    home(FIMS)
+    expect(await p.fim!({ before: 'hello', maxTokens: 16 })).toEqual({ text: ' world', model: { id: 'ds', name: 'DeepSeek FIM' } })
+    expect(send).toHaveBeenCalledWith({ before: 'hello', maxTokens: 16 }, 'ds', {})
   })
 })
 
