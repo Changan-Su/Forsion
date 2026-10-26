@@ -248,16 +248,17 @@ export function ViewModeSwitch(props: SwitchProps): React.ReactElement | null {
   )
 }
 
-/** 视图头行(32px,在纸里、不随正文滚):左端是登记的看法胶囊,右边放视图自己的按钮。两样都没有就不占位。
+/** 视图头行(32px,在纸里、不随正文滚):左端是登记的看法胶囊(再往右是可选的 `title`),右边放视图自己的按钮。都没有就不占位。
  *  已经有自己顶栏的视图(Amadeus `.amx-toolbar`、日历 `.amx-cal-bar`)不用它,直接在顶栏最左放 `<ViewModeSwitch leafId>`,
  *  并给顶栏加 `container: lcl-viewhead / inline-size`,窄时的退化才认得那一行的宽度。 */
-export function ViewHead({ leafId, children, className, testId }: { leafId: string | null | undefined; children?: ReactNode; className?: string; testId?: string }): React.ReactElement | null {
+export function ViewHead({ leafId, children, className, testId, title }: { leafId: string | null | undefined; children?: ReactNode; className?: string; testId?: string; title?: string }): React.ReactElement | null {
   const spec = useViewModesOf(leafId)
   const showSwitch = !!spec && spec.modes.length > 1 && !inSingleColumnShell()
-  if (!showSwitch && !children) return null
+  if (!showSwitch && !children && !title) return null
   return (
     <div className={`lcl-viewhead${className ? ` ${className}` : ''}`}>
       {showSwitch ? <ViewModeSwitch leafId={leafId} testId={testId} /> : null}
+      {title ? <span className="lcl-viewhead-title">{title}</span> : null}
       <div className="lcl-viewhead-actions">{children}</div>
     </div>
   )

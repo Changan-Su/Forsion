@@ -1,0 +1,87 @@
+/* 宿主替插件画的零件(走查续八 8.14–8.19,2026-10-26):菜单行的图标 / 勾、工具栏下拉、对话框、弹出层。
+ * 只吃语义 token(明暗、配色同一份 CSS);外壳复用 .ctx-menu / .ui-popover / .btn,这里只补零件自己的那几行。 */
+
+/* 菜单:图标 13px 次要色;有一项带图标,没图标的留同宽空位(.plugin-menu-ic 是空 span) */
+.ctx-menu.plugin-menu .plugin-menu-ic { flex: none; width: 13px; height: 13px; color: var(--text-muted); }
+.ctx-menu.plugin-menu button.danger .plugin-menu-ic { color: inherit; }
+.ctx-menu.plugin-menu .plugin-menu-label { flex: 1 1 auto; min-width: 0; }
+.ctx-menu.plugin-menu .plugin-menu-check { flex: none; padding-left: 8px; box-sizing: content-box; color: var(--accent-ink); }
+
+/* 工具栏下拉:28px 文字钮 + ▾,无描边,悬停 --overlay-light(同日历工具条的钮) */
+.plugin-tbsel {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  max-width: 100%;
+  padding: 0 6px 0 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--ui-font-meta, 12px);
+  white-space: nowrap;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+.plugin-tbsel:hover:not(:disabled), .plugin-tbsel[aria-expanded='true'] { background: var(--overlay-light); color: var(--text); }
+.plugin-tbsel:disabled { opacity: 0.5; cursor: default; }
+.plugin-tbsel > span { overflow: hidden; text-overflow: ellipsis; }
+.plugin-tbsel > svg { flex: none; }
+.ctx-menu.plugin-listbox:focus { outline: none; }
+.ctx-menu.plugin-listbox [role='option'][aria-selected='true'] .plugin-menu-check { opacity: 1; }
+.ctx-menu.plugin-listbox .plugin-menu-check { opacity: 0; }
+.ctx-menu.plugin-listbox .plugin-lb-search {
+  display: block;
+  width: 100%;
+  height: 28px;
+  margin: 0 0 4px;
+  padding: 0 var(--menu-item-pad-inline);
+  box-sizing: border-box;
+  border: 0;
+  border-bottom: var(--border-width) solid var(--border);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--menu-text-size);
+  outline: none;
+}
+.ctx-menu.plugin-listbox .plugin-lb-empty { padding: var(--menu-item-pad-block) var(--menu-item-pad-inline); color: var(--text-faint); font-size: var(--menu-text-size); }
+
+/* 对话框:原生 <dialog> + showModal(焦点圈、Esc、遮罩、宿主进出场都是原生的);外观同笔记的确认框 */
+dialog.plugin-dialog {
+  width: min(420px, calc(100vw - 32px));
+  max-height: calc(100vh - 64px);
+  margin: auto;
+  padding: 20px;
+  box-sizing: border-box;
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-card);
+  color: var(--text);
+  box-shadow: var(--card-shadow);
+  font-family: var(--font-ui);
+  font-size: var(--ui-font-body, 13px);
+  overflow: auto;
+}
+dialog.plugin-dialog[data-width='md'] { width: min(560px, calc(100vw - 32px)); }
+dialog.plugin-dialog[open] { display: flex; flex-direction: column; gap: 12px; }
+dialog.plugin-dialog::backdrop { background: var(--overlay-scrim); }
+dialog.plugin-dialog .plugin-dialog-title { margin: 0; font-size: var(--ui-font-heading, 14px); font-weight: 600; color: var(--text); }
+dialog.plugin-dialog .plugin-dialog-body { margin: 0; color: var(--text-muted); line-height: 1.5; white-space: pre-wrap; }
+dialog.plugin-dialog .plugin-dialog-content:empty { display: none; }
+dialog.plugin-dialog .plugin-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+dialog.plugin-dialog .btn.primary[data-danger] { background: var(--danger); color: var(--on-danger); }
+
+/* 弹出层:宿主 .ui-popover 外壳(与菜单同材质,Glass 主题的材质表认这个类) */
+.ui-popover.plugin-popover {
+  z-index: 100;
+  min-width: var(--menu-action-min);
+  max-width: min(360px, calc(100vw - 16px));
+  max-height: min(70vh, 520px);
+  overflow: auto;
+  padding: var(--menu-shell-padding);
+  box-sizing: border-box;
+}
+.plugin-ctl-off { display: inline-flex; opacity: 0.5; }
