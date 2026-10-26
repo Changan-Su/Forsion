@@ -127,6 +127,7 @@ export const BrowserView: React.FC<ViewProps> = ({ leaf, params }) => {
   const [loading, setLoading] = useState(false)
   const [nav, setNav] = useState({ back: false, forward: false })
   const [err, setErr] = useState<LoadFail | null>(null)
+  const failedLoad = useRef(false)
   // 打不开的地址也记进 params:失败的加载不会 did-navigate,不记的话重启 / 重载后这个标签恢复成一张空白页。
   // url 一并改:下面「外部改 params.url 就跟着走」那条 effect 看到两边相等,不会把失败的地址再拉一遍。
   const remember = useCallback((failed: string) => { setUrl(failed); if (leaf.params.url !== failed) leaf.setParams({ ...leaf.params, url: failed }) }, [leaf])
@@ -159,9 +160,11 @@ export const BrowserView: React.FC<ViewProps> = ({ leaf, params }) => {
       const title = (e as Event & { title?: string }).title
       if (title) leaf.setTitle(title)
     }
-    const onStart = (): void => { setLoading(true) }
     // 失败的空态只在一趟加载**顺利跑完**时才撤:重试时换成加载中,再失败 / 点了停止都原样留着,不闪回空白页。
-    const onFinish = (): void => { setErr(null) }
+    // ⚠️ 失败的那趟 Electron 也会补一个 did-finish-load(给错误页),所以要记着这一趟失败过。
+    //    记在 ref 里:失败时 remember() 改 params,这条 effect 会在 fail 与 finish 之间重订阅。
+    const onStart = (): void => { failedLoad.current = false; setLoading(true) }
+    const onFinish = (): void => { if (!failedLoad.current) setErr(null) }
     // insertCSS 随文档走(换页就没了)→ 每次 dom-ready 补一次。同文档只换 fragment(引用条点第二条
     // 引语)不触发 dom-ready,那时样式还在,正好不用重注。
     const onDomReady = (): void => { void el.insertCSS(TARGET_TEXT_CSS).catch(() => {}) }
@@ -176,6 +179,7 @@ export const BrowserView: React.FC<ViewProps> = ({ leaf, params }) => {
       const d = e as Event & { errorCode?: number; errorDescription?: string; validatedURL?: string; isMainFrame?: boolean }
       // -3 = ERR_ABORTED(用户点停/被新导航取代),不是错误。
       if (d.isMainFrame === false || d.errorCode === -3) return
+      failedLoad.current = true
       setLoading(false)
       const fail = loadFail(d.validatedURL || el.getURL(), d.errorDescription || '', d.errorCode)
       setErr(fail)
