@@ -290,8 +290,66 @@ return () => page?.dispose()
 - Every group and item needs a stable `id`. `update(schema)` replaces the whole description; rows keep their identity by id.
 - Values: a defined `value` you pass is applied on every `update()`. Leave an `input` / `stepper` `value` out to keep what the user typed; pass `value: ''` to clear it. Callbacks may return a promise: buttons stay disabled until it settles; a rejected switch / segmented / select flips back.
 - No colors, no text from the host: every label comes from you (both languages). `icon` takes vocabulary names; settings pages gained `bell`, `gauge`, `coins`, `clock`, `gift`, `user`, `shield`, `package`, `activity`, `message`, `plug`, `list-checks`.
-- Layout is the host's: on phones (≤820 px) switches, values, codes and single buttons stay at the right of the title; inputs, selects, steppers and two or more buttons move under it and fill the row; touch targets grow to 36 px. On Android the choice sheet is native; on the mobile web it is the host's sheet.
+- Layout is the host's: in a narrow pane switches, values, codes and single buttons stay at the right of the title; inputs, selects, steppers and two or more buttons move under it and fill the row; touch targets grow to 36 px on phones. Hosts before the round-8 fix decide this by **window** width (≤820 px), so in a 280 px right panel of a wide window the title is squeezed to one character per line — test your page in a narrow side panel. On Android the choice sheet is native; on the mobile web it is the host's sheet.
+- Settings parts are rows (56 px with padding). Don't put them in a toolbar or a view head — use `ctx.ui.mountControl` there (next section). Their schema stays plain strings (it crosses to the native half-sheet): call `update(schema)` from `ctx.subscribeLocale` to follow a language switch.
 - Lifecycle: same mount protocol as the other `ctx.ui.mount*` (element returned to you after `dispose()`, one mount per element, host disposes on disable / reload, callbacks stop after that). Malformed calls throw `TypeError` synchronously.
+
+### Host parts: dialogs, toolbar controls, menus, popovers, empty states, icons, view head, i18n (2026-10-26+)
+
+The host draws these for you so a plugin looks native without copying host CSS, hand-placing overlays or freezing strings. All of them are feature-detected (`ctx.ui?.confirm`, …), stop calling you after disable / reload, are cleaned up by the host on disable / reload, and throw `TypeError` synchronously on malformed input. Text fields take **PluginText**: a string, `() => string` (evaluated whenever the host draws) or `{ zh, en }` — the last two follow a language switch at once.
+
+```js
+const t = ctx.i18n.define({ zh: { title: '清单', newItem: '新建条目', del: '删除', delQ: '删除全部条目?' },
+                            en: { title: 'Items', newItem: 'New item', del: 'Delete', delQ: 'Delete all items?' } })
+const T = (k) => () => t(k)                               // a PluginText that follows the language
+ctx.addStyle(`.my-card { border-radius: var(--radius-md); background: var(--bg-card); }`)   // removed on disable / reload
+
+ctx.registerListSource({ id: 'items', title: T('title'), /* … */
+  empty: { icon: 'list-checks', title: T('empty'), line: T('emptyLine'), action: { label: T('newItem'), icon: 'plus', run: add } },
+  actions: [{ id: 'new', label: T('newItem'), icon: 'plus', primary: true, run: add }] })
+
+ctx.registerView({ id: 'main', title: { zh: '清单', en: 'Items' }, mount(el) {
+  const head = ctx.ui.setViewHead(el, { title: T('title') })           // the 32 px head row, title left, buttons right
+  const body = el.appendChild(document.createElement('div'))
+  const seg = document.createElement('span'), sort = document.createElement('span')
+  ctx.ui.mountControl(seg, { type: 'segmented', value: 'all', onChange: setFilter,
+    options: [{ value: 'all', label: T('all') }, { value: 'open', label: T('open') }] })
+  ctx.ui.mountControl(sort, { type: 'select', value: 'new', label: T('sort'), onChange: setSort,
+    options: [{ value: 'new', label: T('newest') }, { value: 'name', label: T('name') }] })
+  const more = document.createElement('button')
+  more.append(ctx.ui.icon('more', { size: 16 }))
+  more.onclick = () => ctx.ui.contextMenu({ anchor: more, align: 'end' }, [
+    { section: T('item') },
+    { label: T('rename'), icon: 'pencil', shortcut: 'F2', run: rename },
+    { separator: true },
+    { label: T('del'), icon: 'trash-2', danger: true, run: async () => {
+      if (await ctx.ui.confirm({ title: T('delQ'), danger: true })) removeAll() } },
+  ])
+  head.actions.append(seg, sort, more)
+  // empty main area: the same empty state as the list source's
+  const empty = ctx.ui.mountEmptyState(body, { icon: 'list-checks', title: T('empty'), line: T('emptyLine'),
+    action: { label: T('newItem'), icon: 'plus', run: add } })
+  return () => { empty.dispose(); head.dispose() }
+} })
+```
+
+- **Dialogs.** `ctx.ui.confirm({ title, body?, ok?, cancel?, danger? })` → `Promise<boolean>` (true only for the main button; Escape, the backdrop, Cancel and plugin disable are false). `ctx.ui.openDialog({ title, body?, mount?(el), actions?, width?: 'sm' | 'md', onClose? })` → `{ update, close, dispose }`: 420 / 560 px, centered, the host's card surface and buttons (main one rightmost; `danger` + `primary` = red). Enter presses the main button (not from a textarea / another button / IME composition); focus starts on it, or on Cancel for `danger`. An action's `run` may return `false` (or a promise of it) to keep the dialog open; no `run` = just close. `mount(el)` returns a cleanup that runs when the dialog closes. On Android `confirm` is the native confirm sheet. Replaces `window.confirm` and hand-made `<dialog>`s (if you still use your own `<dialog>`: append it to `document.body`, and on hosts before the round-8 fix set `margin: auto` yourself or it opens in the top-left corner).
+- **Toolbar controls.** `ctx.ui.mountControl(el, { type: 'segmented' | 'select', size?: 'toolbar', value, options: [{ value, label, icon? }], onChange, label?, disabled? })` → `{ update, dispose }`. Segmented = the same pill as view modes (2–5 options, 24 px). Select = a 28 px text button + ▾ without a border; it opens a listbox in the menu shell (current option ticked in `--accent-ink`, ↑↓ / Home / End / Enter / Escape, a search field from 6 options on); Android opens the native sheet. Picking moves the control at once and then calls `onChange`; `update({ value })` sets it from your side. Settings parts are not for toolbars.
+- **Menus.** `ctx.ui.contextMenu(x, y, entries, opts?)` or `ctx.ui.contextMenu({ anchor, align?: 'start' | 'end', side?: 'bottom' | 'top' }, entries, opts?)`. Entries: rows `{ label, run, icon?, shortcut?, checked?, disabled?, danger? }`, `{ separator: true }`, `{ section: 'Heading' }`. Icons are 13 px and muted; once any row has one, rows without keep the gap. Leading / trailing / doubled separators and headings with no rows under them are dropped. `opts.onClose` runs once however it closed; clicking the anchor again closes it. Android shows the same entries as the native bottom sheet (sections become its groups; `keepOpen` / `update` don't apply there). Before 2026-10-26 the host dropped every field but label / run / checked / disabled / danger, and took only (x, y).
+- **Popovers.** `ctx.ui.popover(anchor, { mount(el), side?, align?, label?, onClose? })` → `{ update, dispose }`: the host's `.ui-popover` surface (same material as menus, including the Glass theme), placed under / above the anchor, kept on screen, UI zoom handled, Escape / click outside / window blur close it, one open at a time. `update()` re-measures the anchor. Don't position overlays yourself: `OverlayAt` / `clampMenu` are host internals a plugin can't import.
+- **Icons.** One vocabulary (`PluginIconName` in the types) for Spaces (`space.json` `icon`), list rows and actions, menus, settings groups, view tabs, view modes, toolbar controls, empty states and `ctx.ui.icon(name, { size })`, which returns a fresh `<svg>` in `currentColor`. It now includes the Space names (`bot`, `inbox`, `book-open`, `calendar-days`, `file-text`, `folder-open`, `layout-grid`, `sparkles`, `boxes`, `list-todo`, `server`, …) and `pencil`, `trash-2`, `download`, `upload`, `search`, `check`, `x`, `settings`, `external-link`. An unknown name falls back where it is used and is reported once per plugin in the console (`[my-plugin] unknown icon "list-check" (did you mean list-checks?)`). Before 2026-10-26 `space.json` only knew 30 names of its own and fell back to a stack of boxes silently.
+- **Empty states.** `ListSourceContribution.empty = { icon?, title, line?, action?: { label, icon?, run } }`: on a desktop the sidebar then writes nothing while one of your Spaces is open (your main view explains it — draw the same with `ctx.ui.mountEmptyState(el, { icon?, title, line?, action?, secondary?: { label, run } })`); on a phone, where the list is the whole page, the host draws this empty state in the list. Without it the sidebar says "Nothing here yet". Don't borrow the host's `.empty-state` class names: they only look right when some host view happened to load that CSS first.
+- **View head.** `ctx.ui.setViewHead(el, { title?, actions? })` → `{ update, actions, dispose }`: the same 32 px row `setViewModes` draws, without needing view modes. Title left (after the mode switch if any), your buttons right (`handle.actions` or `actions: [el, …]`). Both can be used together; the switch comes first.
+- **Styles.** `ctx.addStyle(css)` → `{ update(css), dispose }` instead of `document.head.append(style)`: removed on disable / reload.
+- **Messages.** `ctx.i18n.define({ zh, en })` → `t(key, vars)`: current language → Chinese → the key (the host's chain), `{name}` placeholders from `vars`; keys present in `zh` but missing in `en` are reported once. Pass `() => t('key')` wherever a PluginText is taken; read `t()` in your own drawing code and redraw from `ctx.subscribeLocale`. Before 2026-10-26 list-source titles, action names and view titles took strings only, frozen at registration.
+- **React / Vue plugins: `ctx.ui.mount(name, el, props)`** → `{ update(patch), dispose() }` for `'menu' | 'popover' | 'dialog' | 'segmented' | 'select' | 'emptyState' | 'icon'`, with props typed by `PluginUiParts`. Mount on a ref and dispose in the effect cleanup:
+
+  ```tsx
+  const ref = useRef<HTMLSpanElement>(null)
+  useEffect(() => { const h = ctx.ui.mount('select', ref.current!, { value, options, onChange }); return () => h.dispose() }, [])
+  ```
+
+  `'menu'` / `'popover'` open anchored at `el` (or `props.anchor`) while mounted; `'dialog'` ignores `el`. Plugins never get the host's React components (a second React can't share the host's instance): don't bundle copies of the host's menus, overlays, dialogs, icons or i18n — they freeze at the day you copied them and miss later fixes (exit motion, materials, edge clamping).
 
 ### 白板层 ctx.ui.mountBoard / ctx.ui.boardToSvg(2026-10-10 起)
 
