@@ -40,15 +40,16 @@ export function SelectField({ label, ariaLabel, value, options, onChange, disabl
   }, [open])
   useEffect(() => { if (disabled) setOpen(false) }, [disabled])
   const choose = (next: string): void => { if (next !== value) onChange(next); setOpen(false); trigger.current?.focus() }
-  const labelledBy = label ? `${id}-label ${id}-value` : undefined
+  // 没有可见标签时也用 labelledby 拼「字段名 + 当前值」,不能只给 aria-label(会把当前值从可访问名里盖掉)
+  const labelledBy = label || ariaLabel ? `${id}-label ${id}-value` : undefined
   return <div className="profile-model-field profile-select-field agent-field" data-profile-field={field} data-size={size}>
-    {label && <span id={`${id}-label`}>{label}</span>}
-    <button ref={trigger} type="button" className="profile-model-trigger" disabled={disabled || single} aria-haspopup="listbox" aria-labelledby={labelledBy} aria-label={label ? undefined : ariaLabel} aria-expanded={open} aria-controls={`${id}-options`}
+    {label ? <span id={`${id}-label`}>{label}</span> : ariaLabel && <span id={`${id}-label`} hidden>{ariaLabel}</span>}
+    <button ref={trigger} type="button" className="profile-model-trigger" disabled={disabled || single} aria-haspopup="listbox" aria-labelledby={labelledBy} aria-expanded={open} aria-controls={`${id}-options`}
       onClick={() => setOpen(!open)}
       onKeyDown={(e) => { if (!open && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) { e.preventDefault(); setOpen(true) } }}>
       <span id={`${id}-value`}>{current?.label}</span>{!single && <ChevronDown size={15} />}
     </button>
-    {open && <div ref={box} className="profile-model-options profile-select-options" id={`${id}-options`} role="listbox" aria-labelledby={label ? `${id}-label` : undefined} aria-label={label ? undefined : ariaLabel} onKeyDown={(e) => {
+    {open && <div ref={box} className="profile-model-options profile-select-options" id={`${id}-options`} role="listbox" aria-labelledby={label || ariaLabel ? `${id}-label` : undefined} onKeyDown={(e) => {
       // Esc:收起、回到触发器。Tab:先把焦点交回触发器再收起,浏览器的 Tab 从触发器接着往下走(不掉回 body)。
       if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); trigger.current?.focus(); setOpen(false); return }
       if (e.key === 'Tab') { trigger.current?.focus(); setOpen(false); return }

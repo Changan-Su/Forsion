@@ -752,8 +752,9 @@ function GridInner({ leaf }: ViewProps) {
       screenReaderInstructions: { draggable: t('dashgrid.a11y.instructions') },
       announcements: {
         onDragStart: ({ active }) => t('dashgrid.a11y.pickedUp', { card: card(active.id) }),
-        onDragOver: ({ active, over }) => over ? t('dashgrid.a11y.over', { card: card(active.id), n: pos(over.id) }) : undefined,
-        onDragEnd: ({ active, over }) => t('dashgrid.a11y.dropped', { card: card(active.id), n: pos(over?.id ?? active.id) }),
+        // 位置报被拖那张自己在预览序里的格子:预览序已经让过位,over 可能是被挤开的邻居
+        onDragOver: ({ active, over }) => over ? t('dashgrid.a11y.over', { card: card(active.id), n: pos(active.id) }) : undefined,
+        onDragEnd: ({ active }) => t('dashgrid.a11y.dropped', { card: card(active.id), n: pos(active.id) }),
         onDragCancel: ({ active }) => t('dashgrid.a11y.cancelled', { card: card(active.id) }),
       } satisfies Announcements,
     }
@@ -800,7 +801,7 @@ function GridInner({ leaf }: ViewProps) {
     return present
   })()
 
-  a11yRef.current = { seq: displaySeq, name: (id: string) => cardOf(id).title || t('dashgrid.a11y.untitled') }
+  a11yRef.current = { seq: displaySeq, name: (id: string) => { const c = cardOf(id); return c.title || c.widget?.opts.title || c.widget?.opts.label || t('dashgrid.a11y.untitled') } }
 
   const effPins = previewPins ?? pins
   const composedRows = layoutDash3Rows(displaySeq.map((id) => {
