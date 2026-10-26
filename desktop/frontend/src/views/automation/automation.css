@@ -130,7 +130,7 @@
 .auto-properties { margin-top: 18px; font-size: var(--ui-font-meta); }
 .auto-properties summary { cursor: pointer; color: var(--text-light); padding-block: 6px; }
 /* 7.22:不用浏览器画的 ▾,前面一枚 lucide 箭头,展开转 90°(和笔记折叠块、左栏分组同一种) */
-.auto-properties summary { list-style: none; display: flex; align-items: center; gap: 4px; width: fit-content; }
+.auto-properties summary { list-style: none; display: flex; align-items: center; gap: 4px; }
 .auto-properties summary::-webkit-details-marker { display: none; }
 .auto-properties summary > svg { flex-shrink: 0; color: var(--text-muted); transition: transform 160ms ease; }
 .auto-properties[open] > summary > svg { transform: rotate(90deg); }
