@@ -96,6 +96,40 @@ describe('ctx.tangu.translate', () => {
   })
 })
 
+describe('ctx.tangu.fim', () => {
+  const okComplete = async () => ({ text: '', toolCallText: false })
+  it('探针有 complete 但没 fim → 不注入;没有 complete 时即便有 fim 也不注入', () => {
+    setTanguProbe(baseProbe({ complete: okComplete }))
+    expect(ctxOf('p-f0').tangu?.fim).toBeUndefined()
+    setTanguProbe(baseProbe({ fim: async () => ({ text: 'x' }) }))
+    expect(ctxOf('p-f1').tangu?.fim).toBeUndefined()
+  })
+  it('前后文原样(不 trim)交给探针、stop 只留字符串;两边都空拒;停用即中止', async () => {
+    const seen: unknown[] = []
+    let signal: AbortSignal | undefined
+    setTanguProbe(baseProbe({
+      complete: okComplete,
+      fim: (req, opts) => {
+        seen.push(req)
+        if (req.before !== 'hang') { opts?.onDelta?.(' wor'); return Promise.resolve({ text: ' world\n', model: { id: 'ds', name: 'DS' } }) }
+        signal = opts?.signal
+        return new Promise((_res, rej) => opts?.signal?.addEventListener('abort', () => rej(new DOMException('aborted', 'AbortError'))))
+      },
+    }))
+    const ctx = ctxOf('p-fim')
+    const deltas: string[] = []
+    expect(await ctx.tangu!.fim!({ before: '  hello', after: ' \n', maxTokens: 16, stop: ['\n', 3 as never, ''], onDelta: (d) => deltas.push(d) })).toEqual({ text: ' world\n', model: { id: 'ds', name: 'DS' } })
+    expect(seen[0]).toEqual({ before: '  hello', after: ' \n', maxTokens: 16, stop: ['\n'] })
+    expect(deltas).toEqual([' wor'])
+    await expect(ctx.tangu!.fim!({ before: '' })).rejects.toThrow(/before or after/)
+    const p = ctx.tangu!.fim!({ before: 'hang' })
+    usePluginStore.getState().disable('p-fim')
+    await expect(p).rejects.toThrow()
+    expect(signal?.aborted).toBe(true)
+    await expect(ctx.tangu!.fim!({ before: 'x' })).rejects.toThrow(/plugin disabled/)
+  })
+})
+
 describe('ctx.registerSelectionAction', () => {
   beforeEach(() => setTanguProbe(baseProbe()))
 
