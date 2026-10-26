@@ -141,10 +141,15 @@
   --db-page-line-height: 26px;
   --duration-instant: 0.1s;
   --duration-fast: 0.15s;
+  --duration-base: 0.2s; /* 8.11 新加的唯一一档:折叠、布局类补间 */
   --duration-slow: 0.25s;
-  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
-  /* 「agent 切换」同款灵动曲线(轻微过冲);用于展开/弹出等微动效,全局统一 taste */
-  --ease-spring: cubic-bezier(0.2, 0.8, 0.3, 1);
+  /* 弃用别名(8.11,DESIGN §3「动效 token」别名表):保留一个小版本后删,check:motion 禁新用。
+     --ease-spring 没有回弹、名字误导;--ease-out 与 --ease-surface 肉眼分不出;--ease-apple / --dur-* 原来各处同名不同值。 */
+  --ease-out: var(--ease-surface);
+  --ease-spring: var(--ease-surface);
+  --ease-apple: var(--ease-calm);
+  --dur-fast: var(--duration-fast);
+  --dur-normal: var(--duration-slow);
   /* ── 空间高程 token（明暗统一材质见下方 html:root 规则） ── */
   --on-accent: #fbfbfa;
   --on-accent-ink: var(--on-accent);
@@ -5426,6 +5431,8 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
   --press-recoil-duration: 150ms;
   --menu-exit-duration: 80ms; /* 菜单、二级面板、命令面板退场 */
   --palette-enter-duration: 120ms; /* 命令面板、⌘P 进场 */
+  --collapse-duration: var(--duration-base); /* 折叠展开 / 收起同长度(不算浮层退场,不缩短),箭头同一份 */
+  --collapse-ease: var(--ease-drawer);
   --tip-delay: 300ms; /* 提示框首次出现 */
   --tip-handoff: 80ms; /* 离开后多久再收(期间移到相邻触发点 = 接力) */
   --tip-enter: 150ms;
@@ -5518,13 +5525,26 @@ html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .
 :where([data-motion~='toast'][data-lcl-exit]) { animation: ui-toast-out var(--toast-exit-duration) var(--ease-exit) forwards; }
 :where(details)::details-content {
   opacity: 0;
-  transition: opacity var(--menu-exit-duration) var(--ease-exit), content-visibility var(--menu-exit-duration) allow-discrete;
+  transition: opacity var(--collapse-duration) var(--collapse-ease), content-visibility var(--collapse-duration) allow-discrete;
 }
-:where(details[open])::details-content {
-  opacity: 1;
-  transition-duration: var(--menu-enter-duration);
-  transition-timing-function: var(--ease-surface);
+:where(details[open])::details-content { opacity: 1; }
+/* 折叠(8.10):宿主与插件同一份。外层 data-motion="collapse" + data-open="true|false",里面**只套一层**;
+   grid-template-rows 0fr ↔ 1fr 过渡(打断接着走、不量高度),内容淡入与展开同时,收起同长度;收着时 visibility:hidden
+   (过渡期间保持可见、收完才藏,Tab 走不进去)。箭头写 data-motion="chevron" + 同一个 data-open,开着转 90°(朝右的箭头)。
+   展开完了里层仍裁切(CSS 不知道过渡何时完);要放开就在外层挂 data-settled —— React 壳 AnimatedCollapse 自己会挂。 */
+:where([data-motion~='collapse']) {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  visibility: hidden;
+  transition: grid-template-rows var(--collapse-duration) var(--collapse-ease), opacity var(--collapse-duration) var(--collapse-ease),
+    visibility var(--collapse-duration);
 }
+:where([data-motion~='collapse'][data-open='true']) { grid-template-rows: 1fr; opacity: 1; visibility: visible; }
+:where([data-motion~='collapse']) > * { min-height: 0; min-width: 0; overflow: hidden; } /* min-width:放开裁切后长标题照样省略,不撑宽侧栏 */
+:where([data-motion~='collapse'][data-settled]) > * { overflow: visible; }
+:where([data-motion~='chevron']) { transition: transform var(--collapse-duration) var(--collapse-ease); }
+:where([data-motion~='chevron'][data-open='true']) { transform: rotate(90deg); }
 :where(dialog[open], [popover]:popover-open) { animation: ui-menu-enter var(--palette-enter-duration) var(--ease-surface); }
 :where(dialog[open])::backdrop { animation: ui-fade-in var(--palette-enter-duration) var(--ease-calm); }
 /* 上面全局的减少动态效果只管元素与 ::before / ::after,这两个伪元素得点名 */

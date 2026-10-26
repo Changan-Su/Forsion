@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.70.0
+  version: 1.73.0
   author: Forsion
   category: Forsion
 ---
@@ -603,9 +603,10 @@ createPage / listPages / listFiles / searchVault / reveal / trash`)都要求一�
   (兜底值就是开关关着时的数)。只用于文章、说明、预览这类长文;列表、表单、卡片、表格是界面文字,不用这两个 token,也不跟这个开关。
   `ctx.ui.mountMarkdownEditor` / `ctx.app.mountBlocks` / `ctx.tangu.mountChat` 挂出来的正文是宿主画的,自动跟随。
 - **视图根上不加自己的入场动画**:切主视图时宿主已经做了一次淡入,再加一层会叠成两段。视图里的悬停、展开过渡用宿主的
-  `--duration-fast` / `--duration-slow` / `--ease-out`,不写死毫秒;`prefers-reduced-motion` 下关掉。
+  `--duration-fast` / `--duration-base` / `--duration-slow` / `--ease-surface`,不写死毫秒、不写 `transition: all`;`prefers-reduced-motion` 下关掉。
 - **展开 / 弹出先用标准写法,宿主自动给动效**(2026-10-25 起):原生 `<details>`、`<dialog>` / `popover` 自带 Forsion 的进出场;
-  「用户点了才出现」的那块写 `data-motion="enter"` 就淡入上来。细则见 references/host-ui-mounts.md「Motion the host applies for you」。
+  「用户点了才出现」的那块写 `data-motion="enter"` 就淡入上来;能开合的一块写 `data-motion="collapse"` + `data-open`
+  (里面只套一层,箭头 `data-motion="chevron"`,React 用 `@lcl/components` 的 `AnimatedCollapse`),别自己量高度补间。细则见 references/host-ui-mounts.md「Motion the host applies for you」。
 - **这三个开关是用户的**:不读、不写 `forsion_calm_*` 与 `<html data-calm-*>`,不提供同类的私有开关,也不在自己的视图里用 `:hover`
   去点亮或压暗宿主的外围。iframe / webview 里的页面拿不到宿主变量、不会跟着淡,导航类内容别装进 iframe 再放到左栏。
 

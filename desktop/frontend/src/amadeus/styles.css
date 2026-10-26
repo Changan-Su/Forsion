@@ -129,7 +129,8 @@
   border-radius: var(--radius-sm);
   padding: 5px 10px;
   font-size: var(--ui-font-meta, 12px);
-  transition: all var(--dur-fast) var(--ease-apple);
+  transition: background-color var(--duration-fast) var(--ease-calm), color var(--duration-fast) var(--ease-calm),
+    border-color var(--duration-fast) var(--ease-calm), box-shadow var(--duration-fast) var(--ease-calm);
 }
 .am-app .btn-ghost:hover,
 .am-app .btn-new:hover {
@@ -158,7 +159,8 @@
   font-size: var(--ui-font-body, 13px);
   display: grid;
   place-items: center;
-  transition: all var(--dur-fast) var(--ease-apple);
+  transition: background-color var(--duration-fast) var(--ease-calm), color var(--duration-fast) var(--ease-calm),
+    border-color var(--duration-fast) var(--ease-calm), box-shadow var(--duration-fast) var(--ease-calm);
 }
 .am-app .icon-btn:hover {
   border-color: var(--border-strong);
@@ -698,7 +700,8 @@
   border-radius: var(--radius-sm);
   padding: 6px 14px;
   font-size: var(--ui-font-body, 13px);
-  transition: all var(--dur-fast) var(--ease-apple);
+  transition: background-color var(--duration-fast) var(--ease-calm), color var(--duration-fast) var(--ease-calm),
+    border-color var(--duration-fast) var(--ease-calm), box-shadow var(--duration-fast) var(--ease-calm);
 }
 .am-app .add-block:hover {
   border-color: var(--primary);
@@ -1210,7 +1213,7 @@ body.amx-marquee-active * {
   user-select: none;
   transition: background 0.12s ease, color 0.12s ease;
 }
-.am-app .callout-chevron svg { transform: rotate(90deg); transition: transform 0.12s ease; }
+.am-app .callout-chevron svg { transform: rotate(90deg); transition: transform var(--collapse-duration) var(--collapse-ease); }
 .am-app .callout-chevron.collapsed svg { transform: rotate(0deg); }
 /* PM 更新 Markdown marker 时会重建按钮；起始样式让新 SVG 仍从上一方向旋转入位。
    只认正在切换的那一块(data-fold-animating,直属标题行):别的原因重建按钮(撤销、回灌…)不许转一下。 */
@@ -1228,10 +1231,20 @@ body.amx-marquee-active * {
   interpolate-size: allow-keywords;
   height: auto;
   overflow: hidden;
+  /* 时长 / 曲线与宿主折叠同一对 --collapse-*(8.10)。块是编辑器的 DOM、没法再套一层,所以这里仍补间高度,不走 data-motion="collapse" */
   transition:
-    height 0.2s cubic-bezier(0.32, 0.72, 0, 1),
-    opacity 0.16s ease,
-    margin-block 0.2s cubic-bezier(0.32, 0.72, 0, 1);
+    height var(--collapse-duration) var(--collapse-ease),
+    opacity var(--collapse-duration) var(--collapse-ease),
+    margin-block var(--collapse-duration) var(--collapse-ease);
+}
+/* 统一编辑器里上面这条被「块选中淡底」那条 .am-app .unified-body .ProseMirror :is(p, …) 的 background-color 过渡
+   以 (0,4,0) 压掉了,折叠一直是硬切(10-26 实测,main 上同样);这里再高一档,把那条淡底过渡一并带上。 */
+.am-app .unified-body .ProseMirror .callout > *:not(:first-child) {
+  transition:
+    height var(--collapse-duration) var(--collapse-ease),
+    opacity var(--collapse-duration) var(--collapse-ease),
+    margin-block var(--collapse-duration) var(--collapse-ease),
+    background-color var(--duration-slow) var(--ease-calm);
 }
 .am-app .callout.callout-collapsed > *:not(:first-child) {
   height: 0;
@@ -2447,7 +2460,8 @@ body.amx-marquee-active * {
   border-radius: var(--radius-sm);
   padding: 7px 16px;
   font-size: var(--ui-font-body, 13px);
-  transition: all var(--dur-fast) var(--ease-apple);
+  transition: background-color var(--duration-fast) var(--ease-calm), color var(--duration-fast) var(--ease-calm),
+    border-color var(--duration-fast) var(--ease-calm), box-shadow var(--duration-fast) var(--ease-calm);
 }
 .am-app .dialog-btn:hover {
   border-color: var(--border-strong);
@@ -2643,7 +2657,8 @@ body.amx-marquee-active * {
   border-radius: var(--radius-pill);
   padding: 6px 18px;
   font-size: var(--ui-font-body, 13px);
-  transition: all var(--dur-fast) var(--ease-apple);
+  transition: background-color var(--duration-fast) var(--ease-calm), color var(--duration-fast) var(--ease-calm),
+    border-color var(--duration-fast) var(--ease-calm), box-shadow var(--duration-fast) var(--ease-calm);
 }
 .am-app .seg-btn[data-active] {
   background: var(--primary);
@@ -2707,7 +2722,8 @@ body.amx-marquee-active * {
   border-radius: var(--radius-sm);
   padding: 7px 14px;
   font-size: var(--ui-font-meta, 12px);
-  transition: all var(--dur-fast) var(--ease-apple);
+  transition: background-color var(--duration-fast) var(--ease-calm), color var(--duration-fast) var(--ease-calm),
+    border-color var(--duration-fast) var(--ease-calm), box-shadow var(--duration-fast) var(--ease-calm);
 }
 .am-app .settings-btn:hover {
   border-color: var(--border-strong);
@@ -2801,7 +2817,8 @@ body.amx-marquee-active * {
   color: var(--text-sec);
   border-radius: var(--radius-pill);
   font-size: var(--ui-font-body, 13px);
-  transition: all var(--dur-fast) var(--ease-apple);
+  transition: background-color var(--duration-fast) var(--ease-calm), color var(--duration-fast) var(--ease-calm),
+    border-color var(--duration-fast) var(--ease-calm), box-shadow var(--duration-fast) var(--ease-calm);
 }
 .am-app .theme-chip:hover {
   border-color: var(--border-strong);

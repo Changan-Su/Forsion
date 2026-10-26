@@ -57,6 +57,7 @@ import { appRefToken } from '../../../../shared/appRefs'
 import { syncSmoothCaretToLayout } from '../../smoothCaret'
 import { noteMemoryId } from './viewMemory'
 import { registerMessages, translate, useI18n } from '../../i18n'
+import { motion } from '../../theme/motionTokens'
 
 registerMessages({
   'canvasstage.textTitle.connector': { zh: '连线标签', en: 'Connector label' },
@@ -2473,7 +2474,7 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
         const end: Keyframe = key === MAIN_KEY
           ? { marginLeft: `${to.x}px`, marginTop: `${to.y}px`, width: `${to.w}px`, height: `${to.h}px` }
           : { left: `${to.x}px`, top: `${to.y}px`, width: `${to.w}px`, height: `${to.h}px` }
-        const animation = el.animate([start, end], { duration: 220, easing: 'cubic-bezier(0.2, 0.78, 0.28, 1)', fill: 'none' })
+        const animation = el.animate([start, end], { duration: motion.ms('base'), easing: motion.css('surface'), fill: 'none' })
         animation.id = 'amx-card-snap'
         repelAnimations.push(animation)
         const done = (): void => { repelAnimations = repelAnimations.filter((a) => a !== animation) }
