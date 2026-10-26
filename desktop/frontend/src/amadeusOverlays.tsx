@@ -1,7 +1,7 @@
 /** Amadeus 全局浮层(Root 级挂载):左栏折叠会卸载面板,浮层不能住在面板/侧栏里。
  *  复用 engine 命令面板的 cmd-* 外观;cmd-row/cmd-path 两个补充类在 amadeus-host.css。
  *  组件随 overlay 状态整体卸载 → 每次打开都是干净的输入态,无需重置。 */
-import { useEffect, useMemo, useState, type KeyboardEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { chatToastDock } from './lib/chatToastDock'
 import { usePageStore } from '@amadeus/store/pageStore'
@@ -22,6 +22,7 @@ import { useUiOverlay, type TemplateCtx } from './amadeusOverlayStore'
 import { linkTarget, pageKey, resolvePageName } from '@amadeus-shared/links'
 import { fuzzyRank } from '@lcl/engine/fuzzy'
 import { isImeKeyEvent } from '@lcl/engine/ime'
+import { useExitGhost } from '@lcl/engine'
 import { openDb, openDrawing, openFile, openNote } from './amadeusNav'
 import { WikiLinkMenuHost } from './amadeusLinkMenu'
 import { insertTemplate, listTemplates } from './amadeusTemplates'
@@ -62,7 +63,6 @@ export function AmadeusOverlays() {
   const toast = useUiStore((s) => s.toast) // 插件 notify / 字数统计等的全局吐司(自动 2.6s 消失)
   // 聊天列可见时挂到输入卡上方(走查续六 6.5,见 lib/chatToastDock);每条新吐司查一次落点
   const toastDock = useMemo(() => (toast ? chatToastDock() : null), [toast])
-  const toastEl = <div key={toast} className="amx-toast" data-motion="enter">{toast}</div>
   // 斜杠菜单「模板」经 CustomEvent 解耦触发(vendored MarkdownBlock 不 import 桌面 store)。
   useEffect(() => {
     const onPick = (e: Event): void => {
@@ -199,7 +199,7 @@ export function AmadeusOverlays() {
       <NewDrawingHost />
       <CloudSyncDialogHost />
       <AutomationBuilderHost />
-      {toast && (toastDock ? createPortal(toastEl, toastDock) : toastEl)}
+      {toast && (toastDock ? createPortal(<BottomToast key={toast} text={toast} />, toastDock) : <BottomToast key={toast} text={toast} />)}
     </>
   )
 }
@@ -294,3 +294,9 @@ function TemplatePicker({ ctx }: { ctx: TemplateCtx }) {
   )
 }
 
+/** 底部居中的轻吐司:进退场是 base.css 的 data-motion="toast"(走查续八 8.5 A),卸载时留替身放完退场。 */
+function BottomToast({ text }: { text: string }) {
+  const ref = useRef<HTMLDivElement>(null)
+  useExitGhost(ref)
+  return <div ref={ref} className="amx-toast" data-motion="toast">{text}</div>
+}

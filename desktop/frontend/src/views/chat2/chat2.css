@@ -1126,7 +1126,9 @@ button.t2-bg-url:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.
 
 /* 聊天 leaf 整体太窄(相对外层 .t2-chat-view 容器)→ 整个面板隐藏,聊天列拿回全宽。
  * 阈值与卡片的 760 对齐:错开会出现「侧板已藏、卡片又因 mode=open 不渲染」的内容消失带(Codex #3)。 */
-@container (max-width: 759.9px) { .agent-desk { display: none; } }
+/* 子会话 / 顺便问面板借了 .agent-desk 的壳,但不跟 Desk 一起藏:窄了由 childChat.css 让它顶掉聊天列(≤700),
+ * 一起藏就是「开右栏后主区整块空白」(10-26)。 */
+@container (max-width: 759.9px) { .agent-desk:not(.child-chat-panel) { display: none; } }
 
 /* ====== 卡片一律不描边(2026-08-14 用户要求)—— 必须留在文件最末 ==================
  * 输入卡(在 composer2.css 里就地改了)/ 任务概览 / Agent Desk / 工具调用等折叠块:

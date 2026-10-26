@@ -412,7 +412,8 @@ html.rb-pointer-dragging, html.rb-pointer-dragging * { cursor: grabbing !importa
 .sb .sb-click:hover { color: var(--text); background: var(--overlay-light, rgba(127, 127, 127, 0.1)); }
 
 /* ===== 视图容器 ===== */
-.wb-view { width: 100%; height: 100%; display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: auto; }
+/* container-type:窗格里的零件按窗格宽排(设置零件见 desktop base.css 的 @container 420),不看窗口宽。 */
+.wb-view { width: 100%; height: 100%; display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: auto; container-type: inline-size; }
 /* 状态栏让位:right panel(无圆角纸卡的图标侧栏)直接缩内容容器高度让出状态栏高(--sb-h,由 DesktopStatusBar
    mount 时设;未设=0 → 满高)。left 会话侧栏不缩(用户方向:只抬 main+right)。用 height 缩而非 padding →
    滚动内容不进让位区,状态栏不重叠。main 主区是圆角纸卡,让位改由纸卡外框(.dv-content-container)底 padding 完成,见下。 */

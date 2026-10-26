@@ -30,6 +30,7 @@ import { useEscape } from '../../components/Dialogs'
 import { getAutomationBridge, type AutomationRuleInfo } from './automationBridge'
 import { registerMessages, useI18n } from '../../../i18n'
 import type { ButtonSpec } from './format'
+import { DialogOverlay } from '../../components/DialogOverlay'
 
 registerMessages({
   'btnblock.running': { zh: '⏳ 执行中…', en: '⏳ Running…' },
@@ -204,7 +205,7 @@ const ButtonConfig: React.FC<{
 
   return (
     <OverlayPortal>
-      <div className="dialog-overlay" onMouseDown={onClose}>
+      <DialogOverlay onMouseDown={onClose}>
         <div className="dialog" onMouseDown={(e) => e.stopPropagation()}>
           <div className="dialog-title">{t('btnblock.dialogTitle')}</div>
           <div className="dialog-msg">
@@ -221,7 +222,7 @@ const ButtonConfig: React.FC<{
             <button className="dialog-btn" data-primary onClick={commit}>{t('btnblock.save')}</button>
           </div>
         </div>
-      </div>
+      </DialogOverlay>
     </OverlayPortal>
   )
 }

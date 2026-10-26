@@ -12,7 +12,7 @@ import { modelPickerPresenter, pickerChanges, type ModelPickerRequest, type Mode
 import React, { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronDown, ChevronRight, Bot, Search } from 'lucide-react'
-import { nestedPanelPlacement, nestedPanelTop, UI_ZOOM_EVENT, zoomOf, useEdgeNudge, OverlayAt, NATIVE_MENU_MAX_ITEMS, nativeSheetPresenter, runNativeSheetMenu } from '@lcl/engine'
+import { nestedPanelPlacement, nestedPanelTop, UI_ZOOM_EVENT, zoomOf, useEdgeNudge, useExitGhost, OverlayAt, NATIVE_MENU_MAX_ITEMS, nativeSheetPresenter, runNativeSheetMenu } from '@lcl/engine'
 import type { NestedPanelPlacement, SheetMenu, SheetMenuItem } from '@lcl/engine'
 import { registerMessages, useI18n } from '../i18n'
 import { THINKING_LEVELS } from '../types'
@@ -198,6 +198,9 @@ function ModelMenuSurface({ portal, anchorRef, innerRef, style, children }: {
   children: React.ReactNode
 }) {
   const [anchor, setAnchor] = useState({ x: 0, y: 0, top: 0 })
+  // 内嵌那一版关掉时留替身放 80ms 退场(走查续八 8.4);portal 那一版走 OverlayAt,自带。
+  const ghostRef = useRef<HTMLDivElement | null>(null)
+  useExitGhost(ghostRef, !portal)
   useLayoutEffect(() => {
     if (!portal) return
     const update = () => {
@@ -220,7 +223,7 @@ function ModelMenuSurface({ portal, anchorRef, innerRef, style, children }: {
       ro.disconnect()
     }
   }, [portal, anchorRef])
-  if (!portal) return <div ref={innerRef} className="composer-menu composer-menu--model" style={style}>{children}</div>
+  if (!portal) return <div ref={(el) => { ghostRef.current = el; innerRef(el) }} className="composer-menu composer-menu--model" style={style}>{children}</div>
   return createPortal(<div className="ui-popover-backdrop" style={{ pointerEvents: 'none' }} data-cmenu>
     <OverlayAt x={anchor.x} y={anchor.y} anchorTop={anchor.top} prefer="above" innerRef={innerRef}
       className="composer-menu composer-menu--model composer-menu--portal">{children}</OverlayAt>

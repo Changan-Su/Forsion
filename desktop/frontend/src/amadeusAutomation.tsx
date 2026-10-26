@@ -19,6 +19,7 @@ import { fireAutomationTrigger, getMuseTriggers, kickAutomation } from './servic
 import { registerMessages, translate, useI18n } from './i18n'
 import type { MuseTriggerInfo } from './types'
 import { homeTarget } from './services/engine/targets'
+import { DialogOverlay } from './amadeus/components/DialogOverlay'
 
 registerMessages({
   'amauto.noBackend': { zh: '后端未连接', en: 'Backend not connected' },
@@ -89,7 +90,7 @@ export function AutomationBuilderHost() {
   }
   return (
     <div className="am-app tangu-lovable" style={{ display: 'contents' }}>
-      <div className="dialog-overlay" onMouseDown={() => finish(null)}>
+      <DialogOverlay onMouseDown={() => finish(null)}>
         <div className="dialog amx-btnblock-dialog" onMouseDown={(e) => e.stopPropagation()}>
           <Suspense fallback={<div className="dialog-msg">{t('amauto.loadingBuilder')}</div>}>
             <AutomationBuilder
@@ -100,7 +101,7 @@ export function AutomationBuilderHost() {
             />
           </Suspense>
         </div>
-      </div>
+      </DialogOverlay>
     </div>
   )
 }
