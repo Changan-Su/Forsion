@@ -34,7 +34,7 @@ export const cardEligible = (ev: ToolEvent): boolean => ev.done && !ev.isError &
 
 /** 引擎插件 id → 名下工具名。loaded 之前与拉失败时都是空表(不认领)。
  *  toolOwner:工具名 → 所属引擎插件的显示名(过程行把插件工具写成「插件名 · 工具」,走查续六 6.4)。 */
-export const useEngineTools = create<{ byEngine: Record<string, string[]>; toolOwner: Record<string, { name: string; nameEn?: string }> }>(() => ({ byEngine: {}, toolOwner: {} }))
+export const useEngineTools = create<{ byEngine: Record<string, string[]>; toolOwner: Record<string, { name: string; nameEn?: string }>; loaded?: boolean }>(() => ({ byEngine: {}, toolOwner: {} }))
 
 let inflight: Promise<void> | null = null
 let again = false
@@ -45,17 +45,19 @@ export function refreshEngineTools(): Promise<void> {
     // 拉不到(后端没起、请求失败)就清空:引擎重载后工具可能换了主人,留着旧表 = 让旧插件接着认领(Codex 评审)
     let byEngine: Record<string, string[]> = {}
     const toolOwner: Record<string, { name: string; nameEn?: string }> = {}
+    let loaded = false
     try {
       const cfg = await readTangu()?.waitBackend?.(15_000)
       if (cfg) {
         const list = (await listPlugins(homeTarget())).filter((p) => p.enabled && p.active !== false && p.tools?.length)
         byEngine = Object.fromEntries(list.map((p) => [p.id, p.tools!]))
         for (const p of list) for (const tool of p.tools!) toolOwner[tool] = { name: p.name, nameEn: p.nameEn }
+        loaded = true
       }
     } catch (e) {
       console.warn('[amadeus] 拉引擎插件名下工具失败', e)
     } finally {
-      useEngineTools.setState({ byEngine, toolOwner })
+      useEngineTools.setState((s) => ({ byEngine, toolOwner, loaded: s.loaded || loaded }))
       inflight = null
       if (again) { again = false; void refreshEngineTools() }
     }
@@ -104,10 +106,11 @@ export function useToolCardOf(): (ev: ToolEvent) => ToolCardClaim | undefined {
   )
 }
 
-/** 过程行见到认不出主人的工具时补拉一次名单(名单平时只在有插件结果卡片时才拉);同 STALE_GAP_MS 节流。 */
+/** 过程行见到认不出主人的工具时补拉名单(名单平时只在有插件结果卡片时才拉)。只补到第一次拉成功为止:之后认不出的
+ *  多半是核心工具(ask_user、delegate…),不为它们反复打 /agent/plugins;会话中途才启用的插件等下一次后端就绪再认。 */
 let ownerKick = 0
 export function kickToolOwners(): void {
-  if (Date.now() - ownerKick < STALE_GAP_MS) return
+  if (useEngineTools.getState().loaded || Date.now() - ownerKick < STALE_GAP_MS) return
   ownerKick = Date.now()
   void refreshEngineTools()
 }
@@ -146,5 +149,5 @@ export const __resetToolCards = (): void => {
   cardStates.clear()
   lastStaleKick = 0
   ownerKick = 0
-  useEngineTools.setState({ byEngine: {}, toolOwner: {} })
+  useEngineTools.setState({ byEngine: {}, toolOwner: {}, loaded: false })
 }

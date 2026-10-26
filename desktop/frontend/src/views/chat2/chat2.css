@@ -128,11 +128,13 @@
 .t2-content blockquote { margin: .5em 0 .8em; padding-left: .9em; position: relative; color: var(--text-muted); }
 .t2-content blockquote::before { content: ''; position: absolute; left: 0; top: 10%; bottom: 10%; width: 2px; border-radius: 2px; background: var(--border); }
 .t2-content li.task-list-item { list-style: none; }
-.t2-content li.task-list-item > :is(input, p:first-child > input)[type='checkbox'] {
+.t2-content li.task-list-item > input[type='checkbox'],
+.t2-content li.task-list-item > p:first-child > input[type='checkbox'] {
   appearance: none; box-sizing: border-box; width: 14px; height: 14px; margin: 0 8px 0 -22px; vertical-align: -2px;
   border: 1.5px solid var(--text-ghost); border-radius: 4px; background: var(--bg-card); opacity: 1;
 }
-.t2-content li.task-list-item > :is(input, p:first-child > input)[type='checkbox']:checked {
+.t2-content li.task-list-item > input[type='checkbox']:checked,
+.t2-content li.task-list-item > p:first-child > input[type='checkbox']:checked {
   border-color: transparent;
   background: var(--signal-mark) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E") center / 10px no-repeat;
 }
