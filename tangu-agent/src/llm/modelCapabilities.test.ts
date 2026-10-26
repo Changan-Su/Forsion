@@ -116,6 +116,14 @@ describe('resolveModelCapability — 路由矩阵', () => {
     ['DeepSeek V4 视觉实验版', { baseUrl: 'https://api.deepseek.com/v1', modelId: 'deepseek-v4-flash-vision-exp' }, 'deepseek-v4'],
     ['Kimi thinking', { baseUrl: 'https://api.moonshot.cn/v1', modelId: 'kimi-k2-thinking' }, 'moonshot-thinking'],
     ['Kimi K3', { baseUrl: 'https://api.moonshot.ai/v1', modelId: 'kimi-k3' }, 'moonshot-k3'],
+    ['Kimi K3.1 Pro', { baseUrl: 'https://api.moonshot.ai/v1', modelId: 'kimi-k3.1-pro-highspeed' }, 'moonshot-k3'],
+    // 生产 Kimi 行走百炼专属 maas 域名 / 硅基;此前落到 gateway-generic
+    ['百炼 Kimi K3.1 Pro', { baseUrl: 'https://llm-x.cn-beijing.maas.aliyuncs.com/compatible-mode/v1', modelId: 'kimi/kimi-k3.1-pro' }, 'gateway-kimi-k3'],
+    ['百炼 Kimi K2.8 Preview', { baseUrl: 'https://llm-x.cn-beijing.maas.aliyuncs.com/compatible-mode/v1', modelId: 'kimi/kimi-k2.8-preview' }, 'gateway-kimi-k3'],
+    ['百炼标准域名 Kimi(不许被 dashscope-qwen 吞)', { baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', modelId: 'kimi/kimi-k3.1-pro' }, 'dashscope-kimi-k3'],
+    ['硅基 Kimi K3', { baseUrl: 'https://api.siliconflow.cn/v1', modelId: 'moonshotai/Kimi-K3' }, 'gateway-kimi-k3'],
+    // K2.7-code 不在本规则(思考字段是 thinking:{type},不是 reasoning_effort)
+    ['硅基 Kimi K2.7 Code', { baseUrl: 'https://api.siliconflow.cn/v1', modelId: 'moonshotai/Kimi-K2.7-Code' }, 'gateway-generic'],
     ['StepFun Step 5', { baseUrl: 'https://api.stepfun.com/v1', modelId: 'step-5-preview' }, 'stepfun'],
     ['StepFun 3.7 flash', { baseUrl: 'https://api.stepfun.com/v1', modelId: 'step-3.7-flash' }, 'stepfun'],
     ['StepFun 3.5 flash 2603(只收 low/high)', { baseUrl: 'https://api.stepfun.com/v1', modelId: 'step-3.5-flash-2603' }, 'stepfun-35-flash-2603'],
@@ -342,6 +350,16 @@ describe('applyThinking — 各家线上形态', () => {
     expect(k3('off').effective).toBe('minimal'); // 关不掉 → 夹到最弱档
     // K2 线仍然一个字段都不发(它们不认这个参数)
     expect(apply({ baseUrl: 'https://api.moonshot.cn/v1', modelId: 'kimi-k2-thinking' }, 'max').payload).toEqual({});
+  });
+
+  it('网关上的 Kimi K3 系:只发 low/high/max,不给关,不发 temperature', () => {
+    const q = { baseUrl: 'https://llm-x.cn-beijing.maas.aliyuncs.com/compatible-mode/v1', modelId: 'kimi/kimi-k3.1-pro' };
+    const k = (lv: Parameters<typeof apply>[1]) => apply(q, lv, { temperature: 0.7 }).payload;
+    expect(k('off').reasoning_effort).toBe('low'); // 不发 'none'
+    expect(k('medium').reasoning_effort).toBe('high'); // 不发 'medium'
+    expect(k('max').reasoning_effort).toBe('max'); // 不再被夹成 high
+    expect(k('high').temperature).toBeUndefined();
+    expect(supportedThinkingLevels(cap(q))).not.toContain('off');
   });
 
   it('Grok 4.5+:reasoning_effort 回来了;grok-4 与 4.20 变体仍然什么都不发', () => {
