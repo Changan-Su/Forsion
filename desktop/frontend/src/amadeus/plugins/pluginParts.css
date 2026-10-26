@@ -29,6 +29,7 @@
 .plugin-tbsel:disabled { opacity: 0.5; cursor: default; }
 .plugin-tbsel > span { overflow: hidden; text-overflow: ellipsis; }
 .plugin-tbsel > svg { flex: none; }
+.ctx-menu.plugin-listbox:focus { outline: none; }
 .ctx-menu.plugin-listbox [role='option'][aria-selected='true'] .plugin-menu-check { opacity: 1; }
 .ctx-menu.plugin-listbox .plugin-menu-check { opacity: 0; }
 .ctx-menu.plugin-listbox .plugin-lb-search {
@@ -67,7 +68,7 @@ dialog.plugin-dialog {
 dialog.plugin-dialog[data-width='md'] { width: min(560px, calc(100vw - 32px)); }
 dialog.plugin-dialog[open] { display: flex; flex-direction: column; gap: 12px; }
 dialog.plugin-dialog::backdrop { background: var(--overlay-scrim); }
-dialog.plugin-dialog .plugin-dialog-title { margin: 0; font-size: var(--ui-font-heading, 15px); font-weight: 600; color: var(--text); }
+dialog.plugin-dialog .plugin-dialog-title { margin: 0; font-size: var(--ui-font-heading, 14px); font-weight: 600; color: var(--text); }
 dialog.plugin-dialog .plugin-dialog-body { margin: 0; color: var(--text-muted); line-height: 1.5; white-space: pre-wrap; }
 dialog.plugin-dialog .plugin-dialog-content:empty { display: none; }
 dialog.plugin-dialog .plugin-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }

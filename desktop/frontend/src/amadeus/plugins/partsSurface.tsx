@@ -133,7 +133,7 @@ function ToolbarSelect({ c, pick }: { c: PluginToolbarControl; pick(v: string): 
   const { t } = useI18n() // 也让切语言时重画
   const btn = useRef<HTMLButtonElement>(null)
   const menuRef = useRef<HTMLDivElement | null>(null)
-  const [at, setAt] = useState<{ x: number; y: number; top: number } | null>(null)
+  const [at, setAt] = useState<{ x: number; y: number; top: number; kb: boolean } | null>(null)
   const [q, setQ] = useState('')
   const cur = c.options.find((o) => o.value === c.value) ?? c.options[0]
   const label = (o: PluginControlOption | undefined): string => (o ? pluginText(o.label) : '')
@@ -146,19 +146,21 @@ function ToolbarSelect({ c, pick }: { c: PluginToolbarControl; pick(v: string): 
     window.addEventListener('pointerdown', outside, true)
     window.addEventListener('blur', blur)
     const m = menuRef.current
-    ;(m?.querySelector<HTMLElement>('.plugin-lb-search') ?? m?.querySelector<HTMLElement>('[aria-selected="true"]') ?? m?.querySelector<HTMLElement>('[role="option"]'))?.focus()
+    // 键盘打开:焦点落当前项;鼠标打开:落在菜单本身(方向键照样能走,不在当前项上画焦点框)
+    ;(m?.querySelector<HTMLElement>('.plugin-lb-search') ?? (at.kb ? m?.querySelector<HTMLElement>('[aria-selected="true"]') ?? m?.querySelector<HTMLElement>('[role="option"]') : m))?.focus({ preventScroll: true })
     return () => { window.removeEventListener('pointerdown', outside, true); window.removeEventListener('blur', blur) }
   }, [at])
-  const openMenu = (): void => {
+  const openMenu = (e: React.MouseEvent): void => {
+    const kb = e.detail === 0
     if (at) { setAt(null); return }
     if (nativeSheetPresenter()) {
       void runNativeSheetMenu({ ...(c.label ? { title: pluginText(c.label) } : {}), sections: [{ items: c.options.map((o) => { const G = vocabIcon(o.icon); return { id: o.value, label: label(o), ...(G ? { icon: <G size={16} /> } : {}), checked: o.value === c.value, run: () => pick(o.value) } }) }] })
-        .then((shown) => { if (!shown) place() })
+        .then((shown) => { if (!shown) place(kb) })
       return
     }
-    place()
+    place(kb)
   }
-  const place = (): void => { const r = btn.current?.getBoundingClientRect(); if (r) { setQ(''); setAt({ x: r.left, y: r.bottom + 4, top: r.top - 4 }) } }
+  const place = (kb: boolean): void => { const r = btn.current?.getBoundingClientRect(); if (r) { setQ(''); setAt({ x: r.left, y: r.bottom + 4, top: r.top - 4, kb }) } }
   const done = (v?: string): void => { setAt(null); btn.current?.focus(); if (v !== undefined && v !== c.value) pick(v) }
   const keys = (e: React.KeyboardEvent<HTMLDivElement>): void => {
     const items = [...e.currentTarget.querySelectorAll<HTMLElement>('[role="option"]')]
@@ -181,7 +183,7 @@ function ToolbarSelect({ c, pick }: { c: PluginToolbarControl; pick(v: string): 
       </button>
       {at && createPortal(
         <OverlayAt className="ctx-menu ctx-menu-scroll plugin-menu plugin-listbox" x={at.x} y={at.y} anchorTop={at.top} innerRef={(el) => { menuRef.current = el }}
-          role="listbox" aria-label={c.label ? pluginText(c.label) : undefined} onKeyDown={keys}>
+          role="listbox" tabIndex={-1} aria-label={c.label ? pluginText(c.label) : undefined} onKeyDown={keys}>
           {searchable ? <input className="plugin-lb-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder={t('pluginparts.search')} aria-label={t('pluginparts.search')} /> : null}
           {shown.map((o) => { const I = vocabIcon(o.icon); return (
             <button key={o.value} type="button" role="option" aria-selected={o.value === c.value} onClick={() => done(o.value)}>

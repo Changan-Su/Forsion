@@ -58,27 +58,47 @@ export function checkPluginIcon(pluginId: string, name: unknown, where = 'icon')
 
 const markup = new Map<string, string>()
 const SVG_NS = 'http://www.w3.org/2000/svg'
-/** 词表图标 → 一枚新的 `<svg>`(跟 currentColor,width/height = size)。查不到 → null。 */
+/** 渲染一枚词表图标拿 svg 的 HTML。React 正在提交(插件的 mount 跑在宿主视图的 effect 里)时 flushSync 不落地 → 返回 ''。 */
+function render(name: string): string {
+  const host = document.createElement('div')
+  const root = createRoot(host)
+  const Glyph = PLUGIN_ICONS[name] as ComponentType<SVGProps<SVGSVGElement>>
+  try { flushSync(() => root.render(<Glyph />)) } catch { /* 见上 */ }
+  const html = host.querySelector('svg')?.outerHTML ?? ''
+  root.unmount()
+  if (html) markup.set(name, html)
+  return html
+}
+/** 把渲染好的那枚抄进(调用方已拿到的)svg:属性(尺寸、类名除外)和子节点。 */
+function fill(svg: SVGSVGElement, html: string): void {
+  const t = document.createElement('template')
+  t.innerHTML = html
+  const src = t.content.firstElementChild
+  if (!src) return
+  for (const a of Array.from(src.attributes)) if (!['width', 'height', 'class', 'aria-hidden'].includes(a.name)) svg.setAttribute(a.name, a.value)
+  svg.replaceChildren(...Array.from(src.childNodes))
+}
+const later = new Map<string, SVGSVGElement[]>()
+/** 词表图标 → 一枚新的 `<svg>`(跟 currentColor,width/height = size)。查不到 → null。
+ *  第一次在 React 提交期间要某个名字时,先给一枚空壳,下一拍补上内容(元素身份不变,插件已经 append 的照样生效)。 */
 export function pluginIconElement(name: string, size = 16): SVGSVGElement | null {
   if (!hasPluginIcon(name)) return null
-  let html = markup.get(name)
-  if (html === undefined) {
-    const host = document.createElement('div')
-    const root = createRoot(host)
-    const Glyph = PLUGIN_ICONS[name] as ComponentType<SVGProps<SVGSVGElement>>
-    try { flushSync(() => root.render(<Glyph />)) } catch { /* 正在渲染里被调:下面拿不到就给空 svg */ }
-    html = host.querySelector('svg')?.outerHTML ?? ''
-    root.unmount()
-    if (html) markup.set(name, html)
-  }
-  let svg: SVGSVGElement
-  if (html) {
-    const t = document.createElement('template')
-    t.innerHTML = html
-    svg = t.content.firstElementChild as SVGSVGElement
-  } else {
-    svg = document.createElementNS(SVG_NS, 'svg')
-    svg.setAttribute('viewBox', '0 0 24 24')
+  const html = markup.get(name) ?? render(name)
+  const svg = document.createElementNS(SVG_NS, 'svg') as SVGSVGElement
+  svg.setAttribute('viewBox', '0 0 24 24')
+  if (html) fill(svg, html)
+  else {
+    const q = later.get(name)
+    if (q) q.push(svg)
+    else {
+      later.set(name, [svg])
+      window.setTimeout(() => {
+        const list = later.get(name) ?? []
+        later.delete(name)
+        const h = markup.get(name) ?? render(name)
+        if (h) for (const el of list) fill(el, h)
+      }, 0)
+    }
   }
   const px = Number.isFinite(size) && size > 0 ? Math.min(size, 128) : 16
   svg.setAttribute('width', String(px))
