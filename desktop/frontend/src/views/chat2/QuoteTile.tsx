@@ -13,6 +13,7 @@ import { WikiText } from '../../components/ChatWikiLink'
 import { registerMessages, useI18n } from '../../i18n'
 import { pasteTitle } from './quotes'
 import { selectorTail, tileExcerpt, type ElementPick } from './elementPick'
+import { DialogOverlay } from '../../amadeus/components/DialogOverlay'
 
 registerMessages({
   'quote.tile.kind': { zh: '引用', en: 'Quote' },
@@ -122,7 +123,7 @@ export function QuotePreview({ text, note, onNote, onClose, paste, onRestore, ti
   }, [onClose])
   return createPortal(
     <div className="am-app tangu-lovable" style={{ display: 'contents' }}>
-      <div className="dialog-overlay" onMouseDown={onClose}>
+      <DialogOverlay onMouseDown={onClose}>
         <div ref={box} className="dialog quote-preview" role="dialog" aria-modal="true" aria-label={title} onMouseDown={(e) => e.stopPropagation()}>
           <div className="quote-preview-head">
             <div className="dialog-title">{title}</div>
@@ -136,7 +137,7 @@ export function QuotePreview({ text, note, onNote, onClose, paste, onRestore, ti
             ? <textarea className="quote-preview-note" rows={3} value={note ?? ''} placeholder={t('quote.preview.notePlaceholder')} onChange={(e) => onNote(e.target.value)} />
             : note && <div className="quote-preview-said"><WikiText text={note} /></div>}
         </div>
-      </div>
+      </DialogOverlay>
     </div>,
     document.body,
   )

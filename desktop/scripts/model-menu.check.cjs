@@ -2,8 +2,8 @@
  * 模型 / Effort 菜单的几何契约 —— 全是 CSS 层面的、改样式会静默塌掉的东西:
  *
  *  A 打开时药丸撑到与菜单同宽、右缘对齐(用户要的「展开对齐」)。
- *  B 展开走的是**可插值**属性:width:auto→224px 不可插值、动画根本不跑,故必须是 min-width。
- *    钉法是查 transition 是否真的产生了一条 min-width 的 CSSTransition,不是查声明字符串。
+ *  B 开合不补宽度(走查续八 8.4,规矩 3):药丸直接到位、只换底色 —— 以前补 180ms,菜单 80ms 退完了药丸还在收。
+ *    钉法:开 / 收各采样一遍宽度轨迹,头一帧之后不许停在中间宽度上。
  *  C 子面板不被菜单裁掉:.composer-menu 通用规则带 overflow-y:auto,变体必须改回 visible,
  *    否则子面板整块被裁 → 表现为「点了行没反应」。用 elementFromPoint 打命中,裁切会漏出来。
  *  D 主面板固定为「高级 → 模型 → Effort」且 Effort 是可拖动 range；Max 有独立渐变 / 星点层。
@@ -104,9 +104,7 @@ const box = (sel) => {
   const p = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1000, height: 700 } })
   await p.setContent(PAGE)
 
-  // ── B:开 / 收**各采样一遍宽度轨迹**。只查「有没有过渡对象」是不够的:min-width 那版
-  //    getAnimations() 照样报 min-width 在动,但可见区间只占动画区间的一小段,收起来是瞬变的。
-  //    钉的必须是「中途真的停在中间某个宽度上」。 ──
+  // ── B:开 / 收**各采样一遍宽度轨迹**,中途不许停在两端之间(不补宽度,走查续八 8.4)。 ──
   const closedW = (await p.evaluate(box, '.model-pill-btn')).w
   const trace = (openIt) => p.evaluate((on) => new Promise((res) => {
     const el = document.querySelector('.model-pill-btn')
@@ -121,17 +119,16 @@ const box = (sel) => {
     }
     requestAnimationFrame(tick)
   }), openIt)
-  const midOf = (tr, lo, hi) => tr.filter(([t]) => t > 40 && t < 140).filter(([, w]) => w > lo + 8 && w < hi - 8).length
+  const midOf = (tr, lo, hi) => tr.filter(([, w]) => w > lo + 2 && w < hi - 2).length
 
   const opening = await trace(true)
   const openW = opening[opening.length - 1][1]
-  check('展开有动画:中途停在自然宽与终宽之间(不是瞬变)', midOf(opening, closedW, openW) >= 3,
+  check('展开不补宽度:直接到位,没有中间帧', openW > closedW + 8 && midOf(opening, closedW, openW) === 0,
     `${closedW.toFixed(1)} → ${openW.toFixed(1)},中间帧 ${midOf(opening, closedW, openW)}`)
   await p.evaluate(() => document.querySelector('.model-pill-btn').classList.add('is-open'))
 
   const closing = await trace(false)
-  check('⚠️收回也有动画:min-width 那版这里是瞬变(可见区间只占动画区间的一小截)',
-    midOf(closing, closedW, openW) >= 3,
+  check('收回不补宽度:直接到位,没有中间帧', midOf(closing, closedW, openW) === 0,
     `${openW.toFixed(1)} → ${closedW.toFixed(1)},中间帧 ${midOf(closing, closedW, openW)}`)
 
   // 复位到打开态,继续量几何

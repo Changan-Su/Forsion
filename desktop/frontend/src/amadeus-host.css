@@ -1613,6 +1613,9 @@ html.dark .amx-cal-chip-ev, html.dark .amx-cal-event {
  * 刻意不套 astryx Card/Scope —— 那会把整卡盖成 astryx 中性灰、与 app 暖色主题不搭。
  * 视觉对标 Notion Calendar 事件 peek:图标引导的行、时段大标题 + 时长徽章、值右对齐可就地编辑。 */
 .amx-cal-cardwrap { position: fixed; width: 360px; max-height: 80vh; overflow-y: auto; transform-origin: top left; animation: amx-cal-cardin 0.16s cubic-bezier(0.22, 0.61, 0.36, 1); background: var(--bg-card, var(--bg)); border-radius: var(--radius-md, 12px); outline: 0.5px solid var(--border); outline-offset: -0.5px; box-shadow: var(--card-shadow); }
+/* 关掉(Esc / 点外面)时卸载留下的替身(EventCard 的 useExitGhost)放菜单那一档退场(走查续八 8.4);手机底部抽屉只淡出。 */
+html:root .amx-cal-cardwrap[data-lcl-exit] { animation: ui-menu-exit var(--menu-exit-duration) var(--ease-exit) forwards; }
+html:root .amx-cal-cardwrap.amx-cal-drawer[data-lcl-exit] { animation-name: ui-fade-out; }
 .amx-cal-cardin { display: flex; flex-direction: column; padding: 6px; gap: 2px; }
 @keyframes amx-cal-cardin { from { opacity: 0; transform: scale(0.97) translateY(-6px); } to { opacity: 1; transform: none; } }
 

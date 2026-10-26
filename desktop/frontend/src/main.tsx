@@ -1,5 +1,6 @@
 import './sandbox/seed' // 插件沙箱首屏的语言 / 主题:必须排第一,store 一被 import 就读 localStorage(普通实例 no-op)
 import { createRoot } from 'react-dom/client'
+import { MotionConfig } from 'framer-motion'
 import { Root } from './Root'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import './styles/base.css'
@@ -98,10 +99,13 @@ function PreviewChat() {
 }
 
 // 不用 React.StrictMode:其开发期 double-invoke 会重复初始化 Amadeus Space 的 Milkdown 编辑器。
+// framer 也跟系统「减少动态效果」(走查续八 8.3):位移 / 缩放 / 布局动画停,只留透明度;CSS 那半在 styles/base.css。
 createRoot(document.getElementById('root')!).render(
   <LocaleProvider>
-    <ErrorBoundary>
-      {isPreview ? <PreviewChat /> : kind === 'mini' ? <MiniRoot /> : kind === 'floating' ? <FloatingRoot /> : kind === 'detached' ? <DetachedRoot /> : <Root />}
-    </ErrorBoundary>
+    <MotionConfig reducedMotion="user">
+      <ErrorBoundary>
+        {isPreview ? <PreviewChat /> : kind === 'mini' ? <MiniRoot /> : kind === 'floating' ? <FloatingRoot /> : kind === 'detached' ? <DetachedRoot /> : <Root />}
+      </ErrorBoundary>
+    </MotionConfig>
   </LocaleProvider>,
 )

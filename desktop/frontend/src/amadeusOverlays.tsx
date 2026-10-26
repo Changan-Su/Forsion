@@ -1,7 +1,7 @@
 /** Amadeus 全局浮层(Root 级挂载):左栏折叠会卸载面板,浮层不能住在面板/侧栏里。
  *  复用 engine 命令面板的 cmd-* 外观;cmd-row/cmd-path 两个补充类在 amadeus-host.css。
  *  组件随 overlay 状态整体卸载 → 每次打开都是干净的输入态,无需重置。 */
-import { useEffect, useState, type KeyboardEvent } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { useUiStore } from '@amadeus/store/uiStore'
 import { ConfirmDialog } from '@amadeus/components/Dialogs'
@@ -20,6 +20,7 @@ import { useUiOverlay, type TemplateCtx } from './amadeusOverlayStore'
 import { linkTarget, pageKey, resolvePageName } from '@amadeus-shared/links'
 import { fuzzyRank } from '@lcl/engine/fuzzy'
 import { isImeKeyEvent } from '@lcl/engine/ime'
+import { useExitGhost } from '@lcl/engine'
 import { openDb, openDrawing, openFile, openNote } from './amadeusNav'
 import { WikiLinkMenuHost } from './amadeusLinkMenu'
 import { insertTemplate, listTemplates } from './amadeusTemplates'
@@ -194,7 +195,7 @@ export function AmadeusOverlays() {
       <NewDrawingHost />
       <CloudSyncDialogHost />
       <AutomationBuilderHost />
-      {toast && <div key={toast} className="amx-toast" data-motion="enter">{toast}</div>}
+      {toast && <BottomToast key={toast} text={toast} />}
     </>
   )
 }
@@ -289,3 +290,9 @@ function TemplatePicker({ ctx }: { ctx: TemplateCtx }) {
   )
 }
 
+/** 底部居中的轻吐司:进退场是 base.css 的 data-motion="toast"(走查续八 8.5 A),卸载时留替身放完退场。 */
+function BottomToast({ text }: { text: string }) {
+  const ref = useRef<HTMLDivElement>(null)
+  useExitGhost(ref)
+  return <div ref={ref} className="amx-toast" data-motion="toast">{text}</div>
+}
