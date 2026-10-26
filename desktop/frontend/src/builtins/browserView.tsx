@@ -9,19 +9,49 @@
  * 重渲染都重新加载整页。
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { ArrowLeft, ArrowRight, ExternalLink, MousePointerClick, RotateCw, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, ExternalLink, GlobeLock, Loader2, MousePointerClick, RotateCw, X } from 'lucide-react'
 import type { ViewProps } from '@lcl/engine'
 import { BROWSER_PARTITION } from '../../../shared/browser'
 import { registerMessages, useI18n } from '../i18n'
 import type { ElementPick } from '@tangu/ui/views/chat2/elementPick'
 import { deliverElementPick, hostOf } from './elementPickDelivery'
+import { EmptyState } from '../components/EmptyState'
+import './browserView.css'
 
 registerMessages({
   'browser.pick': { zh: '点选元素发进对话', en: 'Pick an element to send to chat' },
   'browser.pick.hint': { zh: '点一下要发的元素', en: 'Click the element to send' },
   'browser.pick.keys': { zh: ' · Esc 取消 · {alt} 选上一层', en: ' · Esc cancel · {alt} parent' },
   'browser.pick.noChat': { zh: '没找到可以放进去的对话', en: 'No chat to send it to' },
+  'browser.fail.title': { zh: '打不开这个网页', en: 'Can’t open this page' },
+  'browser.fail.loading': { zh: '正在打开…', en: 'Opening…' },
+  'browser.fail.refused': { zh: '{host} 拒绝了连接。检查地址是否写对，或者这个本地服务有没有启动。', en: '{host} refused to connect. Check the address, or whether this local server is running.' },
+  'browser.fail.host': { zh: '找不到 {host}。', en: 'Can’t find {host}.' },
+  'browser.fail.offline': { zh: '现在没有网络。', en: 'You’re offline.' },
+  'browser.fail.cert': { zh: '这个网站的证书有问题。', en: 'This site’s certificate has a problem.' },
+  'browser.fail.timeout': { zh: '等了太久没有响应。', en: 'The page took too long to respond.' },
+  'browser.fail.port': { zh: '出于安全，这个端口不允许打开。', en: 'This port is blocked for safety.' },
+  'browser.fail.other': { zh: '这个网页现在打不开。', en: 'This page can’t be opened right now.' },
+  'browser.fail.retry': { zh: '重试', en: 'Retry' },
 })
+
+/** 加载失败的人话分档(走查续七 7.9):按 Chromium 的网络错误码 / 错误名归类,其余一律 other。 */
+export type LoadFailKind = 'refused' | 'host' | 'offline' | 'cert' | 'timeout' | 'port' | 'other'
+export interface LoadFail { url: string; code: string; kind: LoadFailKind }
+/** raw:did-fail-load 的 errorDescription,或 loadURL 拒绝时的整句(「…ERR_CONNECTION_REFUSED (-102) loading '…'」)。 */
+export function loadFail(url: string, raw: string, errorCode?: number): LoadFail {
+  const name = raw.match(/ERR_[A-Z0-9_]+/)?.[0] ?? ''
+  const num = errorCode ?? Number(raw.match(/\((-\d+)\)/)?.[1] ?? NaN)
+  const kind: LoadFailKind =
+    num === -102 || /CONNECTION_REFUSED/.test(name) ? 'refused'
+    : num === -105 || num === -137 || /NAME_NOT_RESOLVED|NAME_RESOLUTION_FAILED/.test(name) ? 'host'
+    : num === -106 || /INTERNET_DISCONNECTED/.test(name) ? 'offline'
+    : (num <= -200 && num > -300) || /CERT|SSL/.test(name) ? 'cert'
+    : num === -7 || num === -118 || /TIMED_OUT/.test(name) ? 'timeout'
+    : num === -312 || /UNSAFE_PORT/.test(name) ? 'port'
+    : 'other'
+  return { url, code: name || (Number.isFinite(num) ? String(num) : raw), kind }
+}
 
 const ALT_KEY = typeof navigator !== 'undefined' && /Mac|iP(hone|ad)/.test(navigator.platform || navigator.userAgent) ? '⌥' : 'Alt'
 
@@ -96,7 +126,10 @@ export const BrowserView: React.FC<ViewProps> = ({ leaf, params }) => {
   const [url, setUrl] = useState(initial.current)
   const [loading, setLoading] = useState(false)
   const [nav, setNav] = useState({ back: false, forward: false })
-  const [err, setErr] = useState<string | null>(null)
+  const [err, setErr] = useState<LoadFail | null>(null)
+  // 这一趟加载有没有失败过:失败的空态只在一趟加载**顺利跑完**时才撤(did-stop-loading 且没失败),
+  // 重试时空态换成加载中、同一个错误再来一次就原样留着,不闪回空白页。
+  const failedThisLoad = useRef(false)
   // 点选元素(shared/browserPick.ts):picking = 进行中那次的 guest id。只有桌面宿主有 browserPick。
   const pickApi = window.tangu?.browserPick
   const [picking, setPicking] = useState<number | null>(null)
@@ -116,7 +149,6 @@ export const BrowserView: React.FC<ViewProps> = ({ leaf, params }) => {
       const next = (e as Event & { url?: string }).url || el.getURL()
       setUrl(next)
       setAddr(next === HOME_URL ? '' : next)
-      setErr(null)
       leaf.setParams({ ...leaf.params, url: next })
       // 真标题优先(锚点内跳转不会再触发 page-title-updated/did-stop-loading,不能把标题打回主机名);
       // 拿不到才用主机名/文件名兜底,好歹让多个浏览器 tab 分得清。
@@ -127,23 +159,25 @@ export const BrowserView: React.FC<ViewProps> = ({ leaf, params }) => {
       const title = (e as Event & { title?: string }).title
       if (title) leaf.setTitle(title)
     }
-    const onStart = (): void => { setLoading(true); setErr(null) }
+    const onStart = (): void => { setLoading(true); failedThisLoad.current = false }
     // insertCSS 随文档走(换页就没了)→ 每次 dom-ready 补一次。同文档只换 fragment(引用条点第二条
     // 引语)不触发 dom-ready,那时样式还在,正好不用重注。
     const onDomReady = (): void => { void el.insertCSS(TARGET_TEXT_CSS).catch(() => {}) }
     // 补一次标题:page-title-updated 可能早于本 effect 挂载(file:// 之类瞬时加载)就已经烧过了。
     const onStop = (): void => {
       setLoading(false)
+      if (!failedThisLoad.current) setErr(null)
       sync()
       const t = el.getTitle()
       if (t) leaf.setTitle(t)
     }
     const onFail = (e: Event): void => {
-      const d = e as Event & { errorCode?: number; errorDescription?: string; isMainFrame?: boolean }
+      const d = e as Event & { errorCode?: number; errorDescription?: string; validatedURL?: string; isMainFrame?: boolean }
       // -3 = ERR_ABORTED(用户点停/被新导航取代),不是错误。
       if (d.isMainFrame === false || d.errorCode === -3) return
+      failedThisLoad.current = true
       setLoading(false)
-      setErr(d.errorDescription || String(d.errorCode))
+      setErr(loadFail(d.validatedURL || el.getURL(), d.errorDescription || '', d.errorCode))
     }
     el.addEventListener('dom-ready', onDomReady)
     el.addEventListener('did-start-loading', onStart)
@@ -232,12 +266,21 @@ export const BrowserView: React.FC<ViewProps> = ({ leaf, params }) => {
     return () => { window.removeEventListener('keydown', onKey, true); void pickApi.control(picking, 'cancel') }
   }, [picking, pickApi])
 
+  const load = useCallback((next: string) => {
+    void ref.current?.loadURL(next).catch((e) => {
+      const msg = String(e?.message || e)
+      if (/ERR_ABORTED|\(-3\)/.test(msg)) return // 被新导航取代,不算失败
+      failedThisLoad.current = true
+      setLoading(false)
+      setErr(loadFail(next, msg))
+    })
+  }, [])
   const go = useCallback((raw: string) => {
     const next = normalizeAddress(raw)
-    if (!next) return
-    setErr(null)
-    void ref.current?.loadURL(next).catch((e) => setErr(String(e?.message || e)))
-  }, [])
+    if (next) load(next)
+  }, [load])
+  // 打不开时「刷新」= 重试那个地址:reload() 重载的是 Chromium 的错误页,什么都不会发生(空白)。
+  const retry = useCallback(() => { if (err) load(err.url) }, [err, load])
 
   return (
     <div ref={rootRef} style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, position: 'relative' }}>
@@ -247,7 +290,7 @@ export const BrowserView: React.FC<ViewProps> = ({ leaf, params }) => {
         <button
           className="btn ghost sm"
           data-press={loading ? undefined : 'reload'}
-          onClick={() => (loading ? ref.current?.stop() : ref.current?.reload())}
+          onClick={() => (loading ? ref.current?.stop() : err ? retry() : ref.current?.reload())}
           title={loading ? t('browser.stop') : t('browser.reload')}
         >
           {loading ? <X size={14} /> : <RotateCw size={14} />}
@@ -279,7 +322,7 @@ export const BrowserView: React.FC<ViewProps> = ({ leaf, params }) => {
             <MousePointerClick size={14} />
           </button>
         )}
-        <button className="btn ghost sm" onClick={() => window.tangu?.openExternal?.(url)} title={t('browser.openExternal')}><ExternalLink size={14} /></button>
+        <button className="btn ghost sm" onClick={() => window.tangu?.openExternal?.(err?.url ?? url)} title={t('browser.openExternal')}><ExternalLink size={14} /></button>
       </div>
       {picking !== null && (
         <div
@@ -294,8 +337,8 @@ export const BrowserView: React.FC<ViewProps> = ({ leaf, params }) => {
           {t('browser.pick.hint')}<span style={{ color: 'var(--text-muted)' }}>{t('browser.pick.keys', { alt: ALT_KEY })}</span>
         </div>
       )}
-      {err && <div style={{ padding: '6px 10px', fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--danger, #c0392b)' }}>{t('browser.failed', { msg: err })}</div>}
       {pickMsg && !err && <div role="status" style={{ padding: '6px 10px', fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-muted)' }}>{pickMsg}</div>}
+      <div className="browser-stage">
       <Webview
         ref={ref as unknown as React.Ref<HTMLElement>}
         src={initial.current}
@@ -305,6 +348,21 @@ export const BrowserView: React.FC<ViewProps> = ({ leaf, params }) => {
         allowpopups="true"
         style={{ flex: 1, minHeight: 0, border: 'none', background: '#fff' }}
       />
+      {/* 打不开:盖在 webview 上的居中空态(webview 留着,重试 / 改地址照常走它)。地址栏不动,用户能直接改。 */}
+      {err && (
+        <div className="browser-fail" data-loading={loading || undefined} role="alert">
+          {loading
+            ? <EmptyState icon={Loader2} title={t('browser.fail.loading')} />
+            : <EmptyState
+                icon={GlobeLock}
+                title={t('browser.fail.title')}
+                line={<>{t(`browser.fail.${err.kind}`, { host: hostOf(err.url) || err.url })}<span className="browser-fail-code">{err.code}</span></>}
+                action={{ label: t('browser.fail.retry'), icon: RotateCw, onClick: retry, action: 'retry' }}
+                secondary={window.tangu?.openExternal && <button type="button" className="btn" data-action="open-external" onClick={() => void window.tangu?.openExternal?.(err.url)}><ExternalLink size={14} />{t('browser.openExternal')}</button>}
+              />}
+        </div>
+      )}
+      </div>
     </div>
   )
 }

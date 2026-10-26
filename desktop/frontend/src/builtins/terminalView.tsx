@@ -29,6 +29,15 @@ function themeFromCss(): Record<string, string> {
   return out
 }
 
+/** 用户刚打开 / 切过来(有新鲜的用户手势)且没有别的输入框正拿着焦点 → 终端该拿焦点。
+ *  布局恢复(开机没有手势)和后台起终端(用户正在聊天框里打字)都不抢。 */
+function userWantsFocus(el: HTMLElement): boolean {
+  if (!(navigator as Navigator & { userActivation?: { isActive: boolean } }).userActivation?.isActive) return false
+  const a = document.activeElement as HTMLElement | null
+  if (!a || a === document.body || el.contains(a)) return true
+  return !(a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName))
+}
+
 export const TerminalView: React.FC<ViewProps> = ({ params, leaf }) => {
   const { t } = useI18n()
   const host = useRef<HTMLDivElement>(null)
@@ -65,6 +74,12 @@ export const TerminalView: React.FC<ViewProps> = ({ params, leaf }) => {
     term.current = tm
     const safeFit = (): void => { try { if (el.clientWidth > 0 && el.clientHeight > 0) fit.fit() } catch { /* 0 尺寸/已卸载 */ } }
     safeFit()
+    // 等一帧再判:命令面板之类的入口要先关掉、把焦点还给 body。
+    const focusIfAsked = (): void => { requestAnimationFrame(() => { if (!disposed && userWantsFocus(el)) tm.focus() }) }
+    focusIfAsked()
+    // shell 起来之前打的字先攒着,起来后一次写进去(否则「打开就打字」的头几个字会丢)。
+    let early: string[] | null = []
+    offs.push(tm.onData((d) => { early?.push(d) }).dispose)
 
     // ⚠️不要写成 `window.tangu?.pty?.spawn(…).then(…)`:pty 缺席时可选链只短路到 spawn(…),
     //   整条链求值成 undefined,再 .then 就是 TypeError(web/移动端跑同一套渲染层时必炸)。
@@ -112,6 +127,8 @@ export const TerminalView: React.FC<ViewProps> = ({ params, leaf }) => {
           try { cur.onExit({ cmd, cwd, code, output: lines.join('\n') }) } catch { /* 回传失败不影响终端 */ }
         }))
         offs.push(tm.onData((d) => api.write(id, d)).dispose)
+        if (early?.length) api.write(id, early.join(''))
+        early = null
         safeFit()
         api.resize(id, tm.cols, tm.rows)
       }).catch((e) => {
@@ -120,7 +137,12 @@ export const TerminalView: React.FC<ViewProps> = ({ params, leaf }) => {
       })
     }
 
+    // 切到已开着的终端标签 / 展开底部面板:从 0 尺寸变可见 = 用户切过来了。
+    let shown = el.clientWidth > 0 && el.clientHeight > 0
     const ro = new ResizeObserver(() => {
+      const nowShown = el.clientWidth > 0 && el.clientHeight > 0
+      if (nowShown && !shown) focusIfAsked()
+      shown = nowShown
       safeFit()
       if (ptyId) window.tangu?.pty?.resize(ptyId, tm.cols, tm.rows)
     })

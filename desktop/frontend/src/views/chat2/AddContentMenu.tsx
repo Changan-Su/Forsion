@@ -93,9 +93,11 @@ export const AddContentMenu: React.FC<{
   onPickPaths: (items: Array<{ path: string; isDirectory: boolean }>) => void | Promise<void>
   onPickFiles: (files: FileList | null) => void | Promise<void>
   onAddReference: (ref: AddContentReference) => void
+  /** 窄输入卡把上下文圆环收进来:菜单最后一行,点它 = 原来点圆环。 */
+  ctxItem?: { label: string; icon: React.ReactNode; run: () => void }
 }> = ({
   open, disabled, activeSessionId, canUsePathPicker, onOpenChange, onNewSession, onAddAgent,
-  onPickPaths, onPickFiles, onAddReference,
+  onPickPaths, onPickFiles, onAddReference, ctxItem,
 }) => {
   const { t } = useI18n()
   const [pane, setPane] = useState<'conversation' | 'view' | 'app' | null>(null)
@@ -421,7 +423,9 @@ export const AddContentMenu: React.FC<{
               <ChevronRight size={13} />
             </button>
           )}
-
+          {ctxItem && <button className="menu-item add-menu-section-gap" data-add-ctx onPointerEnter={() => setPane(null)} onClick={ctxItem.run}>
+            {ctxItem.icon}<span className="grow">{ctxItem.label}</span>
+          </button>}
         </div>
       )}
 

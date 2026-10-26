@@ -26,6 +26,7 @@ import { reloadDevPlugin } from '@amadeus/plugins/devSandbox'
 import { collectStudioWrites, inflightStudioWrite, issuePrompt, elementPrompt, joinProjectPath, projectName, projectRelative, normPath, normalizeDevUrl, type StudioIssue, type SelectedElement, type PreviewDevice } from './coding/studioModel'
 import { useStudioTools } from './coding/useStudioTools'
 import { StudioReveal } from './coding/StudioReveal'
+import { FilesPanel } from './chat2/FilesPanel'
 import { registerStudioCommands } from './coding/studioCommands'
 import type { UiMessage } from '../types'
 import type { ProductSummary } from '../../../shared/products'
@@ -341,7 +342,8 @@ function ProjectStudio({ root, extendView, onActivate, briefSaveError, retryBrie
     if (projectsRoot && !projectRelative(projectsRoot, root)) { useApp.getState().toast(t('studio.publishImported'), true); return }
     setShowPublish(true)
   }
-  const openFiles = () => useWorkspace.getState().openView('workspace', {}, 'right')
+  // 「文件」= 这个项目自己的树(根就是项目目录),和「验收」一样走工作室工具面板;再点一次收起。
+  const openFiles = () => { if (panel === 'files') tools.close(); else openTool('files') }
   return <div className="csx csu" data-mode={mode}>
     <header className="csx-head csu-head">
       <button className="csu-project" title={t('coding.switchProject')} onClick={() => useCodeStudio.getState().closeProject()}><ArrowLeft size={15} /><span>{projectName(root)}</span></button>
@@ -386,7 +388,7 @@ function ProjectStudio({ root, extendView, onActivate, briefSaveError, retryBrie
           .filter(([kind]) => (kind !== 'history' || !!window.tangu?.codeStudioGitStatus || !!window.tangu?.codeStudioVersions) && (kind !== 'sandbox' || canSandbox))
           .map(([kind, Icon, key]) => <button key={kind} data-studio-tool={kind} aria-label={t(key)} title={t(key)} aria-pressed={panel === kind} onClick={() => openTool(kind)}><Icon size={14} /><span>{t(key)}</span></button>)}
         <span className="csu-tool-divider" />
-        <button title={t('studio.files')} aria-label={t('studio.files')} onClick={openFiles}><FolderTree size={14} /><span>{t('studio.filesShort')}</span></button>
+        <button data-studio-tool="files" title={t('studio.files')} aria-label={t('studio.files')} aria-pressed={panel === 'files'} onClick={openFiles}><FolderTree size={14} /><span>{t('studio.filesShort')}</span></button>
         {!!getView('terminal') && <button title={t('studio.terminal')} aria-label={t('studio.terminal')} onClick={openTerminal}><TerminalSquare size={14} /></button>}
         {!!window.tangu?.revealHostPath && <button title={t('studio.reveal')} aria-label={t('studio.reveal')} onClick={() => void window.tangu!.revealHostPath!(root)}><Folder size={14} /></button>}
       </nav>
@@ -402,6 +404,7 @@ function ProjectStudio({ root, extendView, onActivate, briefSaveError, retryBrie
       <div className="csu-tool-placement"><span>{projectName(root)}</span><div role="group" aria-label={t('studio.panelPosition')}>
         {([['left', PanelLeft], ['bottom', PanelBottom], ['right', PanelRight]] as const).map(([next, Icon]) => <button key={next} aria-label={t(`studio.move.${next}`)} title={t(`studio.move.${next}`)} aria-pressed={side === next} onClick={() => openTool(tool, next)}><Icon size={13} /></button>)}
       </div></div>
+        {tool === 'files' && <FilesPanel workspaces={[{ key: `studio:${root}`, name: projectName(root), kind: 'local', path: root }]} activeWorkspaceKey={`studio:${root}`} pinnedWorkspaceKey={`studio:${root}`} onOpenPreview={target => { if (target.path) useCodeStudio.getState().openFile(target.path) }} tagFor={path => entry && projectRelative(root, path) === entry ? t('studio.entryTag') : undefined} emptyText={t('studio.filesEmpty')} />}
         {tool === 'brief' && <BriefPanel root={root} onPrompt={onPrompt} />}
         {tool === 'checks' && <ChecksPanel root={root} onPrompt={text => onPrompt(text, true)} />}
         {tool === 'history' && <HistoryPanel root={root} running={running} onRestored={refreshForChange} refreshNonce={historyNonce} />}

@@ -39,7 +39,8 @@ registerMessages({
   'drawembed.loadingEditor': { zh: '加载画板编辑器…', en: 'Loading drawing editor…' },
 })
 
-export function ExcalidrawEmbed({ target, pagePath, readOnly = false }: { target: string; pagePath: string; readOnly?: boolean }): React.JSX.Element {
+/** preview:Desk 磁贴的只读缩略(整张适配、引擎界面全收);同样一笔不写。 */
+export function ExcalidrawEmbed({ target, pagePath, readOnly = false, preview = false }: { target: string; pagePath: string; readOnly?: boolean; preview?: boolean }): React.JSX.Element {
   const entry = useDrawStore((s) => s.entries[target])
   const generation = useDrawStore((s) => s.gen)
   const { t } = useI18n()
@@ -71,13 +72,13 @@ export function ExcalidrawEmbed({ target, pagePath, readOnly = false }: { target
       </div>
     )
   }
-  return <Board key={`${generation}:${target}`} target={target} settings={entry.settings} generation={generation} readOnly={readOnly} />
+  return <Board key={`${generation}:${target}`} target={target} settings={entry.settings} generation={generation} readOnly={readOnly || preview} preview={preview} />
 }
 
 /** 只在 entry 成 ok 后挂载,好把 initialData 一次性定种:<Excalidraw> 挂载后自持编辑态,
  *  initialData 之后再变它也不看。种子必须取 seedFor(最新落盘态,含防抖窗内的 pending)——
  *  取初次载入的旧 scene 就是「白板关掉重开回到旧内容」,旧种子再画一笔还会盖掉磁盘新内容。 */
-function Board({ target, settings, generation, readOnly = false }: { target: string; settings: BoardSettings; generation: number; readOnly?: boolean }): React.JSX.Element {
+function Board({ target, settings, generation, readOnly = false, preview = false }: { target: string; settings: BoardSettings; generation: number; readOnly?: boolean; preview?: boolean }): React.JSX.Element {
   const [seed] = useState(() => useDrawStore.getState().seedFor(target) ?? {})
   // 卸载即冲刷:防抖里的最后一笔立即落盘,scene 种子随之推进,下次挂载才拿得到最新内容。
   // 只读(分享页)一笔都没写过,不冲刷也不接任何写回调 —— 桥的 writeDrawing 本就会拒,这里在源头就不发。
@@ -97,6 +98,7 @@ function Board({ target, settings, generation, readOnly = false }: { target: str
           langCode={locale === 'zh' ? 'zh-CN' : 'en'}
           settings={settings}
           viewMode={readOnly}
+          preview={preview}
           onSettings={(patch) => { if (!readOnly && useDrawStore.getState().gen === generation) void useDrawStore.getState().setSettings(target, patch) }}
           onSceneChange={(sceneJson) => { if (!readOnly && useDrawStore.getState().gen === generation) useDrawStore.getState().save(target, sceneJson) }}
           registerApplier={(fn) => useDrawStore.getState().gen === generation ? registerDrawingApplier(target, fn) : () => {}}

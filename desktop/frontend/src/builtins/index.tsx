@@ -48,7 +48,6 @@ registerMessages({
   'browser.stop': { zh: '停止', en: 'Stop' },
   'browser.placeholder': { zh: '输入网址或搜索词', en: 'Enter a URL or search' },
   'browser.openExternal': { zh: '用系统浏览器打开', en: 'Open in system browser' },
-  'browser.failed': { zh: '加载失败：{msg}', en: 'Load failed: {msg}' },
   'browser.inAppLinks': { zh: '应用内链接用内置浏览器打开', en: 'Open in-app links in the built-in browser' },
   'terminal.title': { zh: '终端', en: 'Terminal' },
   'terminal.desc': { zh: '应用内的真终端（登录 shell，支持 vim/top/ssh）。', en: 'A real terminal inside the app (login shell; vim/top/ssh work).' },

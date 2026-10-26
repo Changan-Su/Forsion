@@ -546,3 +546,14 @@
 
 /* 发送动效:输入框里的字影子上移淡出那 200ms 先不露占位提示,两行字不叠(views/chat2/sendFlight.ts) */
 .t2c-ta[data-send-ghost]::placeholder { color: transparent; }
+
+/* 卡宽 ≤ 260(编码侧栏这类窄栏):两颗药丸去 ▾ 只留图标(点开仍是同一份菜单),上下文圆环退出底排、改由「+」菜单最后一行打开
+   (Composer2 的 narrowCard 同阈值)。圆环本体缩成卡左上角一个 0×0 锚点,详情浮层照旧挂在它上面。放文件末尾:要压过上面同特异性的药丸内边距。 */
+@container (max-width: 260px) {
+  .t2c-row .t2c-ctxring { position: absolute; left: 0; top: 0; width: 0; height: 0; }
+  .t2c-row .t2c-ctxring-btn { display: none; }
+  .t2c-row .t2c-pill.mode-pill-btn:not(.is-open) > svg:last-child,
+  .t2c-row .composer-chip.model-pill-btn:not(.is-open) > svg:last-child { display: none; }
+  .t2c-row .t2c-pill.mode-pill-btn:not(.is-open),
+  .t2c-row .composer-chip.model-pill-btn:not(.is-open) { padding-inline: 7px; min-width: 0; }
+}

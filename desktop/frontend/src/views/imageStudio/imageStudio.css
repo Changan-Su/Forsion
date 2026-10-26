@@ -122,8 +122,9 @@
 .ims-properties label.ims-checkbox { flex-direction: row; align-items: center; gap: 7px; }
 .ims-properties label.ims-checkbox { white-space: nowrap; }
 .ims-checkbox input[type='checkbox'] { width: 14px; height: 14px; flex: 0 0 14px; accent-color: var(--signal-mark); }
-/* Transparency paper is image content, not UI chrome: it stays neutral in either theme. */
-.ims-preview, .ims-layer-thumb { background: repeating-conic-gradient(#e2e2e2 0 25%, #ffffff 0 50%) 0 / 16px 16px; }
+/* 留白一律浅底;只有带透明像素的图(LayerFrame 写 data-alpha)才在图后面画棋盘格,用 token 叠卡片色、12px 一格,亮暗自动跟(走查续七 7.8)。 */
+.ims-preview, .ims-layer-thumb { background: var(--overlay-light); }
+.ims-preview[data-alpha], .ims-layer-thumb[data-alpha] { background: repeating-conic-gradient(var(--overlay-medium) 0 25%, transparent 0 50%) 0 / 12px 12px, var(--bg-card); }
 .ims-button-row { display: flex; align-items: center; gap: 5px; margin-top: 12px; }
 .ims-transform { margin-top: 0; }
 .ims-transform button { flex: 1; }

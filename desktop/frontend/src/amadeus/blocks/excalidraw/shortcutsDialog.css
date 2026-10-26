@@ -1,0 +1,22 @@
+/* 白板快捷键表(ShortcutsDialog.tsx):外壳是 Amadeus 的 .dialog,这里只加宽、分组和键帽。
+   键帽浅底不描边(走查续七 7.4),分组卡 --radius-md。 */
+.am-app .dialog.amx-keys { width: min(760px, 92vw); max-height: min(640px, 86vh); gap: 14px; }
+.amx-keys-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.amx-keys-close {
+  display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0;
+  border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-muted); cursor: pointer;
+}
+.amx-keys-close:hover { background: var(--overlay-light); color: var(--text); }
+.amx-keys-groups {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); align-items: start; gap: 10px;
+  min-height: 0; overflow-y: auto;
+}
+.amx-keys-group { display: flex; flex-direction: column; gap: 1px; padding: 8px 10px 10px; border-radius: var(--radius-md); background: var(--overlay-light); }
+.amx-keys-group h3 { margin: 0 0 4px; font-size: var(--ui-font-meta, 12px); font-weight: 600; color: var(--text-muted); }
+.amx-keys-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 26px; font-size: var(--ui-font-body, 13px); color: var(--text); }
+.amx-keys-caps { display: inline-flex; flex-shrink: 0; gap: 4px; }
+.amx-keys-caps kbd {
+  min-width: 20px; padding: 1px 6px; box-sizing: border-box; text-align: center;
+  border-radius: 5px; background: var(--overlay-light); color: var(--text-muted);
+  font-family: var(--font-ui); font-size: var(--ui-font-meta, 12px); line-height: 18px;
+}

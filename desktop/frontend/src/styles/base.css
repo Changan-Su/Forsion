@@ -551,6 +551,8 @@ a:hover { color: var(--accent-ink); }
   background: var(--overlay-medium);
 }
 .project-pill > svg { justify-self: center; flex: none; color: var(--text-faint); }
+/* 编码工作室的新对话:项目固定,只显示不可点的那枚(ChatView 的 data-studio-project),图标与字照样隔开。 */
+.project-pill[data-studio-project] { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
 .project-pill-name { min-width: 0; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-pill.is-open .project-pill-name { width: 100%; max-width: none; text-align: center; }
 /* 额外文件夹:项目胶囊后面的「添加文件夹」和加进来的那几枚(components/ExtraFolders.tsx)。外形就是项目胶囊;

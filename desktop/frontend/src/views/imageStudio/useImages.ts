@@ -17,6 +17,41 @@ export function useBlobUrl(blob: Blob): string {
   }, [blob])
   return url
 }
+/** 图里有没有透明像素(走查续七 7.8:只有带透明的图才在后面画棋盘格)。每个 blob 解码一次、记在 WeakMap 里,
+ *  不在重绘时算。JPEG 没有 alpha 通道,不解码直接 false。
+ *  ponytail: 会话内缓存、不落进图层元数据 —— 免得改项目的存盘格式;真要跨会话省这一次解码再挪进 makeImage。 */
+const alphaCache = new WeakMap<Blob, Promise<boolean>>()
+export function blobHasAlpha(blob: Blob): Promise<boolean> {
+  let hit = alphaCache.get(blob)
+  if (!hit) {
+    hit = /jpe?g/i.test(blob.type) ? Promise.resolve(false) : (async () => {
+      const bitmap = await createImageBitmap(blob)
+      try {
+        // 长边压到 512 采样:透明角 / 抠图边缘这种成片的透明压不掉,大图也不卡。
+        const scale = Math.min(1, 512 / Math.max(bitmap.width, bitmap.height))
+        const w = Math.max(1, Math.round(bitmap.width * scale)), h = Math.max(1, Math.round(bitmap.height * scale))
+        const ctx = new OffscreenCanvas(w, h).getContext('2d')
+        if (!ctx) return false
+        ctx.drawImage(bitmap, 0, 0, w, h)
+        const data = ctx.getImageData(0, 0, w, h).data
+        for (let i = 3; i < data.length; i += 4) if (data[i] < 250) return true
+        return false
+      } finally { bitmap.close() }
+    })().catch(() => false)
+    alphaCache.set(blob, hit)
+  }
+  return hit
+}
+export function useHasAlpha(blob: Blob | null): boolean {
+  const [alpha, setAlpha] = useState(false)
+  useEffect(() => {
+    if (!blob) { setAlpha(false); return }
+    let alive = true
+    void blobHasAlpha(blob).then(value => { if (alive) setAlpha(value) })
+    return () => { alive = false }
+  }, [blob])
+  return alpha
+}
 export function useCollectImages(board: ImageBoard, onError: (message: string) => void, retry: number): void {
   const messages = useApp(s => board.sessionId ? s.messagesBySession[board.sessionId] || EMPTY : EMPTY)
   const running = useApp(s => !!(board.sessionId && s.runningBySession[board.sessionId]))
