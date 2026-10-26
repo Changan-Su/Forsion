@@ -84,3 +84,4 @@ dialog.plugin-dialog .btn.primary[data-danger] { background: var(--danger); colo
   padding: var(--menu-shell-padding);
   box-sizing: border-box;
 }
+.plugin-ctl-off { display: inline-flex; opacity: 0.5; }

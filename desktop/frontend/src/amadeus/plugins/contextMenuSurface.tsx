@@ -22,6 +22,11 @@ export type PluginMenuHandle = (() => void) & { update(items: readonly PluginMen
 let current: (() => void) | null = null
 
 /** 锚在元素上:菜单默认在元素下方 4px,`side: 'top'` 先试上方;放不下翻到另一侧。 */
+/** 浮层挂哪:锚点在开着的模态对话框里 → 挂进那个 <dialog>(挂 body 会在顶层之下、还是 inert,点不到)。 */
+export function overlayLayer(anchor?: Element | null): HTMLElement {
+  return (anchor?.closest('dialog[open]') as HTMLElement | null) ?? document.body
+}
+
 export function anchorPoint(at: PluginMenuAt): { x: number; y: number; anchorTop?: number; prefer?: 'below' | 'above'; alignEnd?: boolean } {
   if (!('anchor' in at)) return at
   const r = at.anchor.getBoundingClientRect()
@@ -52,19 +57,20 @@ export function openPluginContextMenu(
   current?.()
   if (nativeSheetPresenter()) {
     const ctl = new AbortController()
-    let open = true
+    let open = true, fallback: PluginMenuHandle | null = null
     const close = (): void => { if (!open) return; open = false; if (current === close) current = null; ctl.abort(); onClosed?.() }
     current = close
     void runNativeSheetMenu({ sections: toSheet(items, guard) }, { signal: ctl.signal, onClose: () => { if (open) { open = false; if (current === close) current = null; onClosed?.() } } })
-      .then((shown) => { if (!shown && open) { open = false; if (current === close) current = null; webMenu(at, items, guard, onClosed, opts) } })
-    return Object.assign(close, { update: () => {} })
+      .then((shown) => { if (!shown && open) { open = false; if (current === close) current = null; fallback = webMenu(at, items, guard, onClosed, opts) } })
+    // 原生没画出来、落回网页菜单时,关 / 更新都交给那一份(否则停用插件关不掉它)
+    return Object.assign(() => (fallback ? fallback() : close()), { update: (next: readonly PluginMenuEntry[]) => fallback?.update(next) })
   }
   return webMenu(at, items, guard, onClosed, opts)
 }
 
 function webMenu(at: PluginMenuAt, items: readonly PluginMenuEntry[], guard: (run: () => void) => void, onClosed: (() => void) | undefined, opts: PluginMenuOptions): PluginMenuHandle {
   const host = document.createElement('div')
-  document.body.append(host)
+  overlayLayer('anchor' in at ? at.anchor : document.elementFromPoint?.(at.x, at.y)).append(host)
   const root = createRoot(host)
   let open = true
   const close = (): void => {
@@ -88,7 +94,7 @@ function webMenu(at: PluginMenuAt, items: readonly PluginMenuEntry[], guard: (ru
     }
     close()
   }
-  const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') { e.stopPropagation(); close() } }
+  const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close() } }
   document.addEventListener('pointerdown', onDown, true)
   document.addEventListener('keydown', onKey, true)
   window.addEventListener('blur', close)

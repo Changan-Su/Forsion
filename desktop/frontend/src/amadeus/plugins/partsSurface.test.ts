@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { setLocaleGlobal as setLocale } from '../../i18n'
 import { hostListSource, defineMessages, pluginText } from './pluginText'
 import { hostListEmpty } from '../../views/hostListEmpty'
+import type { ListAction, ListSourceContribution } from './types'
 
 vi.mock('../api', () => ({ amadeus: undefined }))
 const { usePluginStore } = await import('./pluginStore')
@@ -51,11 +52,20 @@ describe('8.20 文案', () => {
       actions: [{ id: 'n', label: () => (pluginText({ zh: '新建', en: 'New' })), run() {} }] })
     expect(src.title).toBe('清单')
     expect(src.actions![0].label).toBe('新建')
-    const same = src.actions
     setLocale('en')
     expect(src.title).toBe('Items')
     expect(src.actions![0].label).toBe('New')
-    expect(src.actions).toBe(same) // 动作数组身份稳定
+    // 冻结的源 / 类实例(私有字段)照样能读;插件 push 进来的动作宿主读得到;run 照原对象调用
+    class Src { #n = 0; id = 'c'; title = 'C'; items() { return [] } subscribe() { return () => {} } open() { this.#n++ } get n() { return this.#n } }
+    const inst = new Src()
+    const acts: ListAction[] = [{ id: 'a', label: 'A', run() {} }]
+    const c = hostListSource(Object.freeze(Object.assign(inst, { actions: acts })) as unknown as ListSourceContribution)
+    expect(c.actions![0].label).toBe('A')
+    c.open(undefined as never); expect(inst.n).toBe(1)
+    let ran: unknown
+    acts.push({ id: 'b', label: 'B', run() { ran = this } })
+    expect(c.actions!.map((a) => a.id)).toEqual(['a', 'b'])
+    c.actions![1].run(); expect(ran).toBe(acts[1])
     const { ctx } = ctxOf('p-list')
     ctx.registerListSource!({ id: 'x', title: 'X', items: () => [], subscribe: () => () => {}, open() {}, empty: { icon: 'list-checks', title: { zh: '还没有', en: 'None yet' } } })
     const stored = usePluginStore.getState().listSources.find((o) => o.pluginId === 'p-list')!.item
@@ -150,10 +160,12 @@ describe('8.14 对话框', () => {
     expect(btn()).toBeNull()
     expect(cleanup).toHaveBeenCalledTimes(1)
     expect(onClose).toHaveBeenCalledTimes(1)
-    ui.openDialog!({ title: 'again' })
+    const c2 = vi.fn()
+    ui.openDialog!({ title: 'again', mount: () => c2 })
     await settle()
     act(() => disable())
     expect(document.querySelector('dialog.plugin-dialog')).toBeNull()
+    expect(c2).toHaveBeenCalledTimes(1) // 停用时 ctx 先死,清理照样要跑
   })
 })
 
@@ -201,13 +213,20 @@ describe('8.15 / 8.18 / 8.19 / 8.22', () => {
     expect(document.querySelector('.ui-popover.plugin-popover')).toBeNull()
     expect(cleanup).toHaveBeenCalledTimes(1)
     const slot = document.createElement('span'); document.body.append(slot)
-    ui.mount!('icon', slot, { name: 'plus' })
+    const ic = ui.mount!('icon', slot, { name: 'plus' })
     expect(slot.querySelector('svg')).not.toBeNull()
+    ic.dispose(); ic.update({ name: 'check' })
+    expect(slot.querySelector('svg')).toBeNull() // 摘掉之后 update 不复活
+    ui.mount!('icon', slot, { name: 'plus' })
+    const c3 = vi.fn()
+    ui.popover!(btn, { mount: () => c3 })
+    await settle()
     const st = ctx.addStyle!('.x{color:red}')
     expect(document.querySelector('style[data-plugin="p-pop"]')!.textContent).toBe('.x{color:red}')
     st.update('.x{color:blue}')
     expect(document.querySelector('style[data-plugin="p-pop"]')!.textContent).toBe('.x{color:blue}')
     act(() => disable())
+    expect(c3).toHaveBeenCalledTimes(1)
     expect(slot.querySelector('svg')).toBeNull()
     expect(document.querySelector('style[data-plugin="p-pop"]')).toBeNull()
     expect(() => ui.mount!('nope' as never, slot, {} as never)).toThrow(TypeError)

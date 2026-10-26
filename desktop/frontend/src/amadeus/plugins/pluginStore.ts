@@ -1344,6 +1344,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       void import('./partsSurface').then((m) => {
         if (cancelled) return
         surf = m.openPluginDialog(pending, guard, () => { dispose.forget(); if (typeof pending.onClose === 'function') guard(pending.onClose) })
+        if (cancelled) surf.close() // mount 里同步停用了插件 / 关了:那时 surf 还没赋值
       }).catch((e) => console.error(`[amadeus] plugin "${pluginId}" dialog failed`, e))
       return {
         update(patch) { if (cancelled || !patch || typeof patch !== 'object') return; Object.assign(pending, patch); surf?.update(patch) },
@@ -1397,6 +1398,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       void import('./partsSurface').then((m) => {
         if (cancelled) return
         pop = m.openPluginPopover(anchor, o, guard, () => { dispose.forget(); if (typeof o.onClose === 'function') guard(o.onClose) })
+        if (cancelled) pop.close()
       }).catch((e) => console.error(`[amadeus] plugin "${pluginId}" popover failed`, e))
       return { update: () => pop?.update(), dispose: () => dispose() }
     }
@@ -1435,8 +1437,9 @@ export const usePluginStore = create<PluginState>((set, get) => {
           const draw = (q: Record<string, unknown>): void => { svg?.remove(); svg = uiIcon(String(q.name ?? ''), { size: q.size as number }); if (svg) el.append(svg) }
           let cur = p
           draw(cur)
-          const dispose = scope.own('mount', () => { svg?.remove(); svg = null }, 'icon')
-          return { update: (patch) => { if (ctxAlive()) { cur = { ...cur, ...patch }; draw(cur) } }, dispose: () => dispose() }
+          let gone = false
+          const dispose = scope.own('mount', () => { gone = true; svg?.remove(); svg = null }, 'icon')
+          return { update: (patch) => { if (!gone && ctxAlive()) { cur = { ...cur, ...patch }; draw(cur) } }, dispose: () => dispose() }
         }
         default: throw new TypeError(`ctx.ui.mount: unknown part "${String(name)}" (menu, popover, dialog, segmented, select, emptyState, icon)`)
       }

@@ -12,6 +12,7 @@ import { HostLocaleProvider, registerMessages, subscribeLocale, translate, useI1
 import { EmptyState } from '../../components/EmptyState'
 import { pluginText } from './pluginText'
 import { vocabIcon } from './pluginIcon'
+import { overlayLayer } from './contextMenuSurface'
 import type { PluginConfirmOptions, PluginControlOption, PluginDialogAction, PluginDialogOptions, PluginEmptyState, PluginPopoverOptions, PluginToolbarControl } from './types'
 import './pluginParts.css'
 
@@ -26,6 +27,12 @@ registerMessages({
 type Guard = <T>(fn: () => T) => T | undefined
 
 // ── 对话框 ───────────────────────────────────────────────────────────────
+
+/** 插件 mount 返回的清理:插件已停用也要跑(停用时 ctx 先死,走 guard 会被跳过 → 订阅 / 计时器漏掉),只隔离异常。 */
+function runCleanup(fn: unknown): void {
+  if (typeof fn !== 'function') return
+  try { (fn as () => void)() } catch (e) { console.error('[amadeus] plugin cleanup failed', e) }
+}
 
 export interface DialogSurface { update(patch: Partial<PluginDialogOptions>): void; close(): void }
 
@@ -80,14 +87,14 @@ export function openPluginDialog(opts: PluginDialogOptions, guard: Guard, onClos
     if (!open) return
     open = false
     unsub()
-    if (typeof cleanup === 'function') guard(cleanup as () => void)
+    runCleanup(cleanup)
     if (dlg.open) dlg.close()
     dlg.remove()
     onClosed()
   }
-  dlg.addEventListener('cancel', (e) => { e.preventDefault(); if (!busy) close() }) // Esc
+  dlg.addEventListener('cancel', (e) => { e.preventDefault(); close() }) // Esc(动作还在跑也能关:卡住的请求不能把人关在模态框里;press 见 !open 就不再收尾)
   dlg.addEventListener('click', (e) => { // 点遮罩(dialog 自己的盒子之外)
-    if (e.target !== dlg || busy) return
+    if (e.target !== dlg) return
     const r = dlg.getBoundingClientRect()
     if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) close()
   })
@@ -115,6 +122,7 @@ export function confirmPlugin(o: PluginConfirmOptions, guard: Guard, signal: Abo
   const ok = o.ok ?? (() => translate(o.danger ? 'pluginparts.delete' : 'pluginparts.ok'))
   const cancel = o.cancel ?? (() => translate('pluginparts.cancel'))
   const web = (): Promise<boolean> => new Promise((resolve) => {
+    if (signal.aborted) { resolve(false); return }
     let answer = false
     const d = openPluginDialog({
       title: o.title, body: o.body,
@@ -122,6 +130,7 @@ export function confirmPlugin(o: PluginConfirmOptions, guard: Guard, signal: Abo
     }, guard, () => resolve(answer), o.danger ? 'cancel' : 'primary')
     signal.addEventListener('abort', () => d.close(), { once: true })
   })
+  if (signal.aborted) return Promise.resolve(false)
   if (!nativeSheetPresenter()) return web()
   return presentNativeConfirm({ title: pluginText(o.title), ...(o.body ? { message: pluginText(o.body) } : {}), confirm: pluginText(ok), cancel: pluginText(cancel), danger: !!o.danger }, signal)
     .then((out) => (out.handled ? !!out.value && !signal.aborted : web()))
@@ -194,7 +203,7 @@ function ToolbarSelect({ c, pick }: { c: PluginToolbarControl; pick(v: string): 
           ) })}
           {!shown.length ? <div className="plugin-lb-empty">{t('pluginparts.noMatch')}</div> : null}
         </OverlayAt>,
-        document.body,
+        overlayLayer(btn.current),
       )}
     </>
   )
@@ -203,6 +212,7 @@ function ToolbarSelect({ c, pick }: { c: PluginToolbarControl; pick(v: string): 
 function Control({ c, pick }: { c: PluginToolbarControl; pick(v: string): void }): ReactElement | null {
   useI18n()
   if (c.type === 'select') return <ToolbarSelect c={c} pick={pick} />
+  if (c.disabled) return <span inert className="plugin-ctl-off"><ViewModeSwitch spec={{ modes: c.options.map((o) => ({ value: o.value, label: pluginText(o.label), icon: vocabIcon(o.icon) as never })), value: c.value, onChange: () => {} }} /></span>
   return <ViewModeSwitch spec={{
     modes: c.options.map((o) => ({ value: o.value, label: pluginText(o.label), icon: vocabIcon(o.icon) as never })),
     value: c.value, onChange: pick, ...(c.label ? { ariaLabel: pluginText(c.label) } : {}),
@@ -212,7 +222,7 @@ function Control({ c, pick }: { c: PluginToolbarControl; pick(v: string): void }
 /** 半受控:用户点了先自己挪过去再告诉插件(插件不回 update 也不会卡在旧值);插件 update 的 value 为准。 */
 export function mountPluginControl(el: HTMLElement, control: PluginToolbarControl, guard: Guard): { update(patch: Partial<PluginToolbarControl>): void; dispose(): void } {
   let c = control
-  const pick = (v: string): void => { c = { ...c, value: v }; m.render(tree()); guard(() => c.onChange(v)) }
+  const pick = (v: string): void => { if (c.disabled) return; c = { ...c, value: v }; m.render(tree()); guard(() => c.onChange(v)) }
   const tree = (): ReactElement => <HostLocaleProvider><Control c={c} pick={pick} /></HostLocaleProvider>
   const m = mountHostReact(el, tree())
   return { update(patch) { c = { ...c, ...patch, type: c.type }; m.render(tree()) }, dispose: m.dispose }
@@ -251,7 +261,7 @@ export function openPluginPopover(anchor: HTMLElement, opts: PluginPopoverOption
   el.dataset.motion = 'enter'
   if (opts.label) el.setAttribute('aria-label', pluginText(opts.label))
   el.style.visibility = 'hidden'
-  document.body.append(el)
+  overlayLayer(anchor).append(el)
   let open = true
   let cleanup: unknown
   const place = (): void => {
@@ -275,7 +285,7 @@ export function openPluginPopover(anchor: HTMLElement, opts: PluginPopoverOption
     window.removeEventListener('blur', onBlur)
     window.removeEventListener('resize', place)
     window.removeEventListener(UI_ZOOM_EVENT, place)
-    if (typeof cleanup === 'function') guard(cleanup as () => void)
+    runCleanup(cleanup)
     el.remove()
     onClosed()
   }
@@ -288,7 +298,7 @@ export function openPluginPopover(anchor: HTMLElement, opts: PluginPopoverOption
     }
     close()
   }
-  const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape' && !e.isComposing) { e.stopPropagation(); close(); anchor.focus?.() } }
+  const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape' && !e.isComposing) { e.preventDefault(); e.stopPropagation(); close(); anchor.focus?.() } }
   // 失焦 = 切到别的窗口;焦点只是进了弹出层里的 iframe / webview 不算
   const onBlur = (): void => { window.setTimeout(() => { if (!el.contains(document.activeElement)) close() }, 0) }
   document.addEventListener('pointerdown', onDown, true)

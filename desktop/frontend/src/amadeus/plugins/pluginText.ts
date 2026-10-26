@@ -31,26 +31,32 @@ export type HostListSource = Omit<ListSourceContribution, 'title' | 'actions' | 
   itemMenu?(item: ListItem): HostListAction[]
 }
 
-const hostAction = (a: ListAction): HostListAction => new Proxy(a, {
-  get: (t, k, r) => (k === 'label' ? pluginText(t.label) : Reflect.get(t, k, r)),
-}) as unknown as HostListAction
+/** 普通对象拷贝(不是 Proxy:冻结的动作对象上,Proxy 改写只读的 label 会抛 TypeError);函数照原对象调用(保住 this)。 */
+const hostAction = (a: ListAction): HostListAction => {
+  const o: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(a)) o[k] = typeof v === 'function' ? (...x: unknown[]) => (v as (...y: unknown[]) => unknown).apply(a, x) : v
+  o.label = pluginText(a.label)
+  return o as unknown as HostListAction
+}
+const list = (arr: ListAction[] | undefined): HostListAction[] | undefined => (Array.isArray(arr) ? arr.filter(Boolean).map(hostAction) : arr)
 
-/** 包一层:title / 动作名换成 getter;动作数组按原数组缓存(身份稳定,不让依赖它的 memo 每次都重算)。 */
+/** 包一层:title / 动作名在读的那一刻求值;动作数组每次读都按插件当前的数组重拷(插件 push / splice 后通知,宿主看到的是新的)。
+ *  目标是空对象而不是 src:冻结的源、类实例的私有字段都不受影响(方法照 src 调用,绑定后的函数按原函数缓存,身份稳定)。 */
 export function hostListSource(src: ListSourceContribution): HostListSource {
-  const wrapped = new WeakMap<object, HostListAction[]>()
-  const list = (arr: ListAction[] | undefined): HostListAction[] | undefined => {
-    if (!Array.isArray(arr)) return arr
-    let w = wrapped.get(arr)
-    if (!w) { w = arr.map(hostAction); wrapped.set(arr, w) }
-    return w
-  }
-  return new Proxy(src, {
-    get(t, k, r) {
-      if (k === 'title') return pluginText(t.title)
-      if (k === 'actions' || k === 'groupActions') return list(t[k])
-      if (k === 'itemMenu') return typeof t.itemMenu === 'function' ? (item: ListItem) => (t.itemMenu!(item) ?? []).map(hostAction) : undefined
-      return Reflect.get(t, k, r)
+  const bound = new WeakMap<object, unknown>()
+  const s = src as unknown as Record<PropertyKey, unknown>
+  return new Proxy({}, {
+    get(_t, k) {
+      if (k === 'title') return pluginText(src.title)
+      if (k === 'actions' || k === 'groupActions') return list(src[k])
+      if (k === 'itemMenu') return typeof src.itemMenu === 'function' ? (item: ListItem) => list(src.itemMenu!(item) ?? []) ?? [] : undefined
+      const v = s[k]
+      if (typeof v !== 'function') return v
+      let f = bound.get(v)
+      if (!f) { f = (v as (...y: unknown[]) => unknown).bind(src); bound.set(v, f) }
+      return f
     },
+    has: (_t, k) => k in src,
   }) as unknown as HostListSource
 }
 
