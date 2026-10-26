@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { gatePluginManifest } from '../../shared/amadeus/ipc'
-import { APP_VERSION, CHANGELOG, CHANGELOG_EN, changelogFor, latestReleasedVersion, parseChangelog } from './changelog'
+import { APP_VERSION, CHANGELOG, CHANGELOG_EN, changelogFor, changelogMarkdown, latestReleasedVersion, parseChangelog } from './changelog'
 import { version } from '../../package.json'
 import { startupAppearanceHtml } from '../startupAppearancePlugin'
 
@@ -46,5 +46,13 @@ describe('English changelog (W-11)', () => {
     const enVersions = new Set(CHANGELOG_EN.map((e) => e.version))
     expect(CHANGELOG.filter((e) => !enVersions.has(e.version)).map((e) => e.version)).toEqual([])
     for (const e of CHANGELOG_EN) expect(e.lines.join('\n'), `${e.version} 的英文版里还有汉字`).not.toMatch(/[\u4e00-\u9fa5]/)
+  })
+})
+
+describe('nested bullets (walkthrough 6.17)', () => {
+  it('keeps one level of nesting through parse → markdown, instead of flattening sub-items', () => {
+    const [entry] = parseChangelog('## 9.9.9 (2026-10-26)\n- **Chat**:\n  - first\n  - second\n- Other\n')
+    expect(entry.lines).toEqual(['**Chat**:', '  first', '  second', 'Other'])
+    expect(changelogMarkdown(entry.lines)).toBe('- **Chat**:\n  - first\n  - second\n- Other')
   })
 })

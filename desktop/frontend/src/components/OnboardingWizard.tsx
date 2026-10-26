@@ -3,7 +3,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { MotionConfig, motion } from 'framer-motion'
 import {
   ArrowRight, ArrowLeft, Bot, Check, ChevronRight, Cloud, Flag, KeyRound, Loader2, LogIn, ExternalLink,
-  MonitorCog, FolderOpen, Sun, Moon, X, FileText, RefreshCw, Palette, ShieldCheck, Sparkles, Wrench, Globe2, Zap, BookOpen,
+  MonitorCog, FolderOpen, Sun, Moon, X, FileText, RefreshCw, Palette, ShieldCheck, Sparkles, Wrench, Globe2, Zap, BookOpen, CircleAlert, RotateCcw,
 } from 'lucide-react'
 import { listModels, testProviderConnection } from '../services/backendService'
 import { DesktopPermissions, hasDesktopPermissions } from './DesktopPermissions'
@@ -30,6 +30,7 @@ import { isSupportedPlatform } from './computerHistoryModel'
 import { stepOrder, updateOrder, type PermissionTab, type Step } from './onboardingFlow'
 import { useApp } from '../stores/appStore'
 import { EnvProbeSection } from './EnvProbeSection'
+import { ErrorBoundary } from './ErrorBoundary'
 import './onboardingMessages'
 import './onboarding.css'
 import { connectionTarget } from '../services/engine/targets'
@@ -425,6 +426,11 @@ export const OnboardingWizard: React.FC<{
         {step !== 'done' && <button type="button" className="ob-skip" disabled={navLocked} onClick={finish}>{t('onboarding.nav.skip')}</button>}
       </header>
       <div className="ob-content" key={step}>
+        {/* 每一步的内容区各自兜底:某一步渲染出错只换掉这一块，左栏、步骤标题和底栏照常(走查续六 6.19) */}
+        <ErrorBoundary fallback={(error, retry) => <StepErrorCard step={step} error={error} onRetry={retry}
+          onSkip={() => { if (stepIdx + 1 < STEP_ORDER.length) go(STEP_ORDER[stepIdx + 1]); else finish() }} />}>
+        {/* 经 StepRender 求值:各步 JSX 里的表达式(例 models?.models…)在边界之内执行，抛错才接得住(Codex 评审 P2) */}
+        <StepRender render={() => <>
         {step === 'welcome' && updateMode && <div className="ob-update-notes changelog"><ChangelogEntries /></div>}
         {step === 'welcome' && !updateMode && <div className="ob-welcome-layout">
           <div className="ob-welcome-story"><BrandLogo size={64} />
@@ -781,6 +787,8 @@ export const OnboardingWizard: React.FC<{
               <button type="button" className="btn ghost sm" disabled={navLocked} onClick={() => { finish(); setActiveSpace(GUIDE_SPACE_ID) }}>{t('onboarding.guide.openGuide')}</button></div>}
           </div>
         </div>}
+        </>} />
+        </ErrorBoundary>
       </div>
       <footer className="ob-footer">
         {saveError && <div className="ob-save-error" role="alert">{saveError}</div>}
@@ -803,5 +811,22 @@ export const OnboardingWizard: React.FC<{
         <ChangelogEntries />
       </div>
     </dialog>
+  </div>
+}
+
+/** 在子组件的渲染里执行 render:组件类型稳定(不会每次重挂),抛错落在外层 ErrorBoundary 之内。 */
+function StepRender({ render }: { render: () => React.ReactNode }) { return render() }
+
+/** 某一步内容区崩了时的错误卡:「重试」重新挂载这一步;「跳过这一步」= 去下一步、不保存这一步。堆栈收进「错误详情」。 */
+function StepErrorCard({ step, error, onRetry, onSkip }: { step: Step; error: Error; onRetry: () => void; onSkip: () => void }) {
+  const { t } = useI18n()
+  return <div className="ob-step-error" role="alert" data-step-error={step}>
+    <strong><CircleAlert size={16} />{t('onboarding.stepError.title')}</strong>
+    <p>{t(step === 'background' ? 'onboarding.stepError.background' : 'onboarding.stepError.body')}</p>
+    <div className="ob-step-error-actions">
+      <button type="button" className="btn sm" onClick={onRetry}><RotateCcw size={13} />{t('onboarding.stepError.retry')}</button>
+      <button type="button" className="btn ghost sm" onClick={onSkip}>{t('onboarding.stepError.skip')}</button>
+    </div>
+    <details><summary>{t('onboarding.stepError.details')}</summary><pre>{`${error.message}\n\n${error.stack || ''}`.trim()}</pre></details>
   </div>
 }

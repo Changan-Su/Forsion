@@ -67,9 +67,11 @@ export function ListChips<T extends string>({ label, items, value, onChange }: {
 
 /** 悬浮主按钮:点 = 这一页最常用的那个新建;长按(Android WebView 的 contextmenu,自带触感)= 其余的新建。 */
 export function ListFab({ label, icon, onClick, onMenu }: { label: string; icon: ReactNode; onClick(): void; onMenu?(at: { x: number; y: number }): void }) {
+  const ref = useRef<HTMLButtonElement>(null)
+  useFabAway(ref)
   return (
     <button
-      type="button" className="pl-fab" data-act="list-fab" aria-label={label} onClick={onClick}
+      ref={ref} type="button" className="pl-fab" data-act="list-fab" aria-label={label} onClick={onClick}
       onContextMenu={onMenu && ((e) => {
         e.preventDefault(); e.stopPropagation()
         const r = e.currentTarget.getBoundingClientRect()
@@ -77,6 +79,35 @@ export function ListFab({ label, icon, onClick, onMenu }: { label: string; icon:
       })}
     >{icon}</button>
   )
+}
+
+/** 往下滑超过 8px 主按钮让开(data-away),往上滑超过 8px 或回到顶部回来(走查续六 6.20 A,Material 的 FAB 随滚动隐藏)。
+ *  按钮锚在 .mb-drawer-body,滚动器因页而异:在它上面捕获阶段听 scroll(scroll 不冒泡、但走捕获)。
+ *  只在状态翻转时写一次属性，滚动的每一帧只做几次减法 —— 不给列表滚动添卡顿(project_phone_jank_measurement)。
+ *  横向滚动(分类胶囊)scrollTop 不变，不算;左滑一行是 transform,不发 scroll。 */
+function useFabAway(ref: RefObject<HTMLButtonElement | null>): void {
+  useEffect(() => {
+    const fab = ref.current
+    const host = fab?.closest('.mb-drawer-body')
+    if (!fab || !host) return
+    const last = new WeakMap<EventTarget, number>()
+    let away = false
+    let anchor = 0 // 当前方向上的极值:显示时记最高处(最小 scrollTop),隐藏时记最低处
+    const onScroll = (e: Event): void => {
+      const el = e.target as HTMLElement
+      const y = el.scrollTop
+      // 只认能竖着滚的(分类胶囊那种横向滚动 scrollTop 恒 0,会把按钮叫回来、把锚点归零 —— Codex 评审 P3)
+      if (typeof y !== 'number' || el.scrollHeight <= el.clientHeight || last.get(el) === y) return
+      last.set(el, y)
+      const next = y <= 0 ? false : away ? anchor - y <= 8 : y - anchor > 8
+      if (away ? y > anchor : y < anchor) anchor = y
+      if (next === away) return
+      away = next; anchor = y
+      fab.toggleAttribute('data-away', away)
+    }
+    host.addEventListener('scroll', onScroll, { capture: true, passive: true })
+    return () => host.removeEventListener('scroll', onScroll, { capture: true })
+  }, [ref])
 }
 
 /** `label` 不画出来(用户 2026-10-10:滑出来的图标不要带文字):它是读屏标签。所以图标自己要说得清 ——

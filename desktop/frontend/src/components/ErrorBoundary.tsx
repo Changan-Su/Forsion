@@ -5,7 +5,11 @@
  */
 import React from 'react'
 
-type Props = { children: React.ReactNode }
+type Props = {
+  children: React.ReactNode
+  /** 自定义兜底(例:引导某一步坏了只换掉那一步的内容区);reset = 清掉错误、重新挂载 children */
+  fallback?: (error: Error, reset: () => void) => React.ReactNode
+}
 type State = { error: Error | null }
 
 export class ErrorBoundary extends React.Component<Props, State> {
@@ -17,6 +21,7 @@ export class ErrorBoundary extends React.Component<Props, State> {
   render() {
     const { error } = this.state
     if (!error) return this.props.children
+    if (this.props.fallback) return this.props.fallback(error, () => this.setState({ error: null }))
     const zh = (document.documentElement.lang || '').startsWith('zh')
     const detail = `${error.message}\n\n${error.stack || ''}`.trim()
     return (

@@ -73,6 +73,10 @@
   -webkit-touch-callout: none; user-select: none;
 }
 .mb-shell[data-list-first] .pl-fab:active { transform: scale(0.95); }
+/* 往下滑时让开、往上滑回来(phoneList.tsx 的 useFabAway 挂 data-away):下移 = 自身高度 + 24dp,只动 transform / opacity(合成层,不重排) */
+.mb-shell[data-list-first] .pl-fab { transition: transform 160ms var(--ease-out), opacity 160ms var(--ease-out); }
+.mb-shell[data-list-first] .pl-fab[data-away] { transform: translateY(calc(100% + 24 * var(--pl-dp))); opacity: 0; pointer-events: none; }
+@media (prefers-reduced-motion: reduce) { .mb-shell[data-list-first] .pl-fab { transition: none; } }
 .mb-shell[data-list-first] .pl-fab > svg { width: calc(24 * var(--pl-dp)); height: calc(24 * var(--pl-dp)); }
 .mb-shell[data-list-first] .mb-drawer:has([data-under-dock]) .pl-fab { bottom: calc(var(--pl-bottom) + 8 * var(--pl-dp)); }
 /* 按钮压住右下角一块:列表多留一段,最后一行(和它的操作)滚得出来。从 Dock 底下穿过去的滚动器把这段并进让位;

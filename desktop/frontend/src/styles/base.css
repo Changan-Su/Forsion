@@ -4820,7 +4820,7 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
 .mk-icon-img { display: block; width: 100%; height: 100%; object-fit: contain; border-radius: inherit; }
 .mk-featured-art .mk-icon-img { width: 96px; height: 96px; border-radius: var(--radius-lg); }
 .mk-card-content { min-width: 0; display: flex; flex-direction: column; }
-.mk-card-eyeline { min-height: 17px; display: flex; align-items: center; gap: 8px; color: var(--text-faint); font-size: var(--ui-font-caption, 11px); font-weight: 620; }
+.mk-card-eyeline { min-height: 17px; display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; color: var(--text-faint); font-size: var(--ui-font-caption, 11px); font-weight: 620; }
 .mk-installed-badge { display: inline-flex; align-items: center; gap: 3px; color: var(--accent-ink); }
 /* 「仅桌面」:信息位,不抢「已安装」的强调色。 */
 .mk-desktop-badge { display: inline-flex; align-items: center; gap: 3px; color: var(--text-light); white-space: nowrap; }

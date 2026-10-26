@@ -32,8 +32,10 @@ async function main() {
   const originalConfig = structuredClone(specialConfig)
   const specialWrites = []
   let failSpecialSave = false
+  let incompleteSpecial = false // 走查续六 6.19:桩引擎回不全(没有 config)时,引导曾整个崩成错误页
   const stub = await startStubEngine({ models, override: async ({ path: p, method, body }) => {
     if (p !== '/agent/special/config') return undefined
+    if (incompleteSpecial && method !== 'POST') return {}
     if (method === 'POST') {
       const patch = await body(); specialWrites.push(patch)
       if (failSpecialSave) return { __code: 503, body: { error: 'simulated save failure' } }
@@ -196,6 +198,16 @@ async function main() {
           assert.deepEqual(specialConfig.historian, { ...originalConfig.historian, enabled: false })
           assert.deepEqual(specialConfig.muse, { ...originalConfig.muse, enabled: false })
           await geometry(`${prefix}-background-disabled`)
+          // 读到的配置不全:只有这一步给「读不到 + 重试」,左栏、步骤标题和底栏照常，不是整页错误
+          incompleteSpecial = true
+          await prev(); await next()
+          await win.waitForSelector('.ob-background-error')
+          const broken = await win.evaluate(() => ({ boundary: !!document.querySelector('[data-error-boundary]'), rail: document.querySelectorAll('.ob-progress-item').length, footer: !!document.querySelector('.ob-footer .btn.primary') }))
+          assert.deepEqual({ boundary: broken.boundary, footer: broken.footer, hasRail: broken.rail > 0 }, { boundary: false, footer: true, hasRail: true }, `incomplete config breaks only this step: ${JSON.stringify(broken)}`)
+          await geometry(`${prefix}-background-incomplete`)
+          incompleteSpecial = false
+          await win.locator('.ob-background-error button').click()
+          await win.waitForFunction(() => !document.querySelector('.ob-background-error') && document.querySelector('[aria-label="Historian"][role="switch"]')?.getAttribute('aria-checked') === 'false')
         } else {
           assert.equal(await historian.getAttribute('aria-checked'), 'false', 're-entering preserves Historian opt-out')
           assert.equal(await muse.getAttribute('aria-checked'), 'false', 're-entering preserves Muse opt-out')

@@ -29,7 +29,7 @@ export function OnboardingBackgroundAgents({ resolveTarget, onBusyChange, onStat
   const onStateRef = useRef(onState)
   onStateRef.current = onState
   useEffect(() => {
-    if (response) onStateRef.current?.({ historian: response.config.historian.enabled, muse: response.config.muse.enabled })
+    if (response?.config?.historian && response.config.muse) onStateRef.current?.({ historian: !!response.config.historian.enabled, muse: !!response.config.muse.enabled })
   }, [response])
 
   const load = async () => {
@@ -39,6 +39,8 @@ export function OnboardingBackgroundAgents({ resolveTarget, onBusyChange, onStat
       const nextTarget = await resolveTarget()
       const next = await getSpecialConfig(nextTarget)
       if (request !== generation.current) return
+      // 桩引擎 / 老引擎可能回不全(走查续六 6.19:读 historian 时是 undefined,整个引导崩成错误页):当读取失败，给重试
+      if (!next?.config?.historian || !next.config.muse) throw new Error('special config incomplete')
       target.current = nextTarget
       setResponse(next)
     } catch {
@@ -62,6 +64,7 @@ export function OnboardingBackgroundAgents({ resolveTarget, onBusyChange, onStat
       // Preserve model, rhythm, permissions, folders and all other existing preferences.
       const config = await saveSpecialConfig(target.current, { [agent]: { enabled } })
       if (request !== generation.current) return
+      if (!config?.historian || !config.muse) throw new Error('special config incomplete')
       setResponse({ ...response, config })
       const app = useApp.getState()
       void app.refreshSpecialEnabled(app.cfg)
@@ -78,7 +81,7 @@ export function OnboardingBackgroundAgents({ resolveTarget, onBusyChange, onStat
       {(['historian', 'muse'] as const).map((agent) => {
         const Icon = agent === 'historian' ? History : Sparkles
         const name = agent === 'historian' ? 'Historian' : 'Muse'
-        const enabled = response?.config[agent].enabled ?? false
+        const enabled = response?.config?.[agent]?.enabled ?? false
         const unavailable = agent === 'muse' && response?.cloud
         return <section className="ob-background-agent" key={agent} data-agent={agent}>
           <Icon size={22} className="ob-background-icon" />

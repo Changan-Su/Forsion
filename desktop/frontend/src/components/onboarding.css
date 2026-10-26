@@ -383,3 +383,13 @@ button.ob-progress-item:focus-visible { outline: var(--focus-ring) solid var(--s
 /* 「连接」那步登录后的「同步到蓬洲云」三个勾(云同步开启方案 2026-10-20) */
 .ob-sync-title { margin-top: 12px; font-weight: 600; font-size: var(--ui-font-body); }
 .ob-sync-row { display: flex; gap: 8px; align-items: center; padding: 4px 0; }
+
+/* 某一步内容区出错时的错误卡(走查续六 6.19):只占内容区，左栏与底栏照常 */
+.ob-step-error { max-width: 520px; padding: 20px 22px; display: flex; flex-direction: column; align-items: flex-start; gap: 10px; border-radius: var(--radius-md); background: var(--bg-card); box-shadow: var(--card-shadow); }
+.ob-step-error strong { display: flex; align-items: center; gap: 8px; color: var(--text); font-size: var(--ui-font-heading, 14px); font-weight: 600; }
+.ob-step-error strong svg { color: var(--danger); }
+.ob-step-error p { margin: 0; color: var(--text-muted); font-size: var(--ui-font-body, 13px); line-height: 1.7; }
+.ob-step-error-actions { margin-top: 4px; display: flex; gap: 8px; }
+.ob-step-error-actions .btn { display: inline-flex; align-items: center; gap: 6px; }
+.ob-step-error details { color: var(--text-faint); font-size: var(--ui-font-meta, 12px); }
+.ob-step-error pre { max-height: 200px; margin: 8px 0 0; padding: 10px; overflow: auto; white-space: pre-wrap; border-radius: var(--radius-sm); background: var(--overlay-light); color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
