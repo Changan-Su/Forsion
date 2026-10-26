@@ -213,6 +213,9 @@ async function visualReview() {
   await win.mouse.click(1, 1)
   await win.locator('.ctx-menu').waitFor({ state: 'detached' })
   await checkToolbar('Light / 1440')
+  // 走查续六 6.11 A:没挑颜色的选项按选项池顺序取色 —— 计划中灰(c8)、进行中蓝(c5)、已完成绿(c3),不再是名字哈希出来的红。
+  const chipColors = await table.evaluate((el) => Object.fromEntries([...el.querySelectorAll('.amx-db-chip')].map((c) => [c.textContent, [...c.classList].find((k) => k.startsWith('amx-chip-c'))])))
+  verify('Option chips take default colors in option order (grey, blue, green)', chipColors.Planned === 'amx-chip-c8' && chipColors['In progress'] === 'amx-chip-c5' && chipColors.Done === 'amx-chip-c3', chipColors)
   await shoot('visual-light-table')
   await table.locator('.amx-db-head').hover()
   await pause()
@@ -331,6 +334,15 @@ async function visualReview() {
   await title.locator('.amx-db-rowopen').click()
   await win.waitForSelector('.amx-db-peek-body .ProseMirror')
   await shoot('visual-light-peek')
+  // 走查续六 6.14:标题列就是记录页的大标题(它自己的编辑框),属性里不再重复一行「任务名称」。
+  const peekTitle = await win.locator('.amx-db-peek').evaluate((el) => ({
+    h1: !!el.querySelector('h1.amx-db-peek-title'),
+    title: !!el.querySelector('.amx-db-rowed-title [data-db-cell="name"]'),
+    first: el.querySelector('.amx-db-roweditor > .amx-db-rowed-field')?.classList.contains('amx-db-rowed-title') ?? false,
+    labels: [...el.querySelectorAll('.amx-db-rowed-label')].map((n) => n.textContent.trim()),
+    size: parseFloat(getComputedStyle(el.querySelector('.amx-db-rowed-title .amx-db-value-display') ?? el).fontSize),
+  }))
+  verify('Record page title is the title column itself, not repeated as a property', !peekTitle.h1 && peekTitle.title && peekTitle.first && !peekTitle.labels.some((l) => l.includes('任务名称')) && peekTitle.size >= 20, peekTitle)
   const prop = win.locator('.amx-db-peek [data-db-cell="name"]')
   await prop.locator('.amx-db-value-display').click()
   await prop.locator('input').waitFor()
@@ -360,6 +372,9 @@ async function visualReview() {
     await resize(width)
     await table.locator('.amx-db-viewbar').scrollIntoViewIfNeeded()
     await checkToolbar(`Dark / ${width}`)
+    // 走查续六 6.12:横向放不下时右缘淡出(滚动驱动 mask),放得下就没有。
+    const edge = await table.locator('.amx-db-scroll').evaluate((el) => ({ overflow: el.scrollWidth > el.clientWidth + 1, mask: getComputedStyle(el).maskImage, fadeR: getComputedStyle(el).getPropertyValue('--amx-db-fade-r').trim() }))
+    verify(`Dark / ${width}: overflowing table fades its right edge`, edge.overflow ? edge.mask !== 'none' && edge.fadeR === '64px' : edge.fadeR === '0px', edge)
     await shoot(`visual-dark-${width}-table`)
     await table.locator('[aria-label="view settings"]').click()
     await checkMenu(`Dark / ${width} view menu`)

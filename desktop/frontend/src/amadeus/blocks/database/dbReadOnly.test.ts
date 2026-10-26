@@ -356,3 +356,13 @@ describe('自适应列宽', () => {
     expect(button.getAttribute('aria-pressed')).toBe('true')
   })
 })
+
+describe('选项缺省色(走查续六 6.11 A)', () => {
+  it('按选项池顺序取色:灰 → 蓝 → 绿 … 红排第 9;池外的值照旧哈希', async () => {
+    const { chipClass } = await import('./DatabaseEmbed')
+    const opts = ['计划中', '进行中', '已完成', '4', '5', '6', '7', '8', '9', '10']
+    expect(opts.map((o) => chipClass(o, opts))).toEqual(['c8', 'c5', 'c3', 'c2', 'c6', 'c1', 'c4', 'c7', 'c0', 'c8'].map((c) => `amx-chip-${c}`))
+    expect(chipClass('已完成', ['已完成'])).toBe('amx-chip-c8') // 只看顺序,不认字
+    expect(chipClass('不在池里', opts)).toBe(chipClass('不在池里'))
+  })
+})

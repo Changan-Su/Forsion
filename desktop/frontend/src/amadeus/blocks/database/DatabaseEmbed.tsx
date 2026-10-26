@@ -414,9 +414,15 @@ const kindOfIn = (cols: DbColumn[]) => (colId: string): ColumnType | null => {
   return isDateish(c) ? 'date' : resolveBaseType(c.type)
 }
 
-/** chip 色板类:label 简单字符串哈希 → 'amx-chip-c0'..'amx-chip-c9',同名恒同色。
- *  色板是内容色(区分选项)而非主题色,10 色定义在 amadeus-host.css 的 .amx-db 段。 */
-const chipClass = (label: string): string => {
+/** 选项缺省色的取色顺序(走查续六 6.11 A,用户定):灰 → 蓝 → 绿 → 黄 → 紫 → 橙 → 青 → 粉 → 红(第 9 个才用到红)。
+ *  下标是 amadeus-host.css 里 .amx-chip-c* 的编号(c0 红 c1 橙 c2 黄 c3 绿 c4 青 c5 蓝 c6 紫 c7 粉 c8 灰;c9 透明不进来)。 */
+const CHIP_ORDER = [8, 5, 3, 2, 6, 1, 4, 7, 0]
+/** chip 色板类。select / 多选:按选项在列选项池里的**顺序**取色(第一个选项一般是起点「计划中 / 待办」,给中性灰);
+ *  拖动选项顺序就换色。不在池里的值(老数据、关联行标题)照旧按 label 字符串哈希 → 同名恒同色。
+ *  色板是内容色(区分选项)而非主题色,定义在 amadeus-host.css 的 .amx-db 段;宿主给了 meta.tone 的不走这里。 */
+export const chipClass = (label: string, options?: readonly string[]): string => {
+  const i = options ? options.indexOf(label) : -1
+  if (i >= 0) return `amx-chip-c${CHIP_ORDER[i % CHIP_ORDER.length]}`
   let h = 0
   for (let i = 0; i < label.length; i++) h = (h * 31 + label.charCodeAt(i)) | 0
   return `amx-chip-c${Math.abs(h) % 10}`
@@ -635,6 +641,8 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
   // 不走 .db rows;列(视图定义)仍存 .db。首列恒为不可删的 Name 身份列(普通表=text,笔记视图=page)。
   const noteFolder = db.source?.folder
   const isNoteView = noteFolder !== undefined
+  /** 记录页里当大标题编辑的列:首列是文本才行(笔记视图的首列是 page 链接,照旧标题 + 属性行)。 */
+  const peekTitleCol = db.columns[0] && resolveBaseType(db.columns[0].type) === 'text' ? db.columns[0].id : undefined
   const nv = (): ReturnType<typeof useNoteViewStore.getState> => useNoteViewStore.getState()
   const nvProps = useNoteViewStore((s) => (isNoteView ? s.folders[noteFolder as string]?.props : undefined))
   useEffect(() => {
@@ -1760,7 +1768,7 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
                     aria-expanded={!collapsed}
                   >
                     <span className="amx-db-groupcaret" data-open={!collapsed || undefined}>▸</span>
-                    <span className={g.value === null ? 'amx-db-lane-none' : `amx-db-chip ${chipClass(groupLabel(g))}`}>{groupLabel(g)}</span>
+                    <span className={g.value === null ? 'amx-db-lane-none' : `amx-db-chip ${typeof g.value === 'string' ? chipClass(g.value, tableGroupCol?.options) : chipClass(groupLabel(g))}`}>{groupLabel(g)}</span>
                     <span className="amx-db-lane-count">{g.rows.length}</span>
                   </button>
                   {!collapsed && renderFolded(g.rows)}
@@ -1954,7 +1962,7 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
       )}
       {pop && pop.kind === 'row' && popRow && (
         <RowPeek
-          title={rowTitle(popRow)} databaseName={db.name} bodyKey={popRow.id}
+          title={rowTitle(popRow)} titleInProperties={!!peekTitleCol} databaseName={db.name} bodyKey={popRow.id}
           mode={view.openMode ?? (['gallery', 'calendar'].includes(view.type) ? 'center' : 'side')}
           onModeChange={(openMode) => patchView(view.id, { openMode })}
           onClose={() => setPop(null)}
@@ -1966,7 +1974,7 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
         >
           <RowEditor key={popRow.id}
             db={db} row={popRow} pagePath={pagePath} env={cellEnv} setCell={setCell}
-            createOption={createOption} readOnly={readOnly}
+            createOption={createOption} readOnly={readOnly} titleColId={peekTitleCol}
             onDelete={() => { delRow(popRow.id); setPop(null) }}
           />
         </RowPeek>
@@ -2202,7 +2210,7 @@ function Cell({
       const s = v as string
       return (
         <button className="amx-db-cellbtn" onClick={openOptions}>
-          {s ? <span className={`amx-db-chip ${chipClass(s)}`}>{s}</span> : <span className="amx-db-blank">{t('dbembed.blank')}</span>}
+          {s ? <span className={`amx-db-chip ${chipClass(s, col.options)}`}>{s}</span> : <span className="amx-db-blank">{t('dbembed.blank')}</span>}
         </button>
       )
     }
@@ -2210,7 +2218,7 @@ function Cell({
       const arr = v as string[]
       return (
         <button className="amx-db-cellbtn" onClick={openOptions}>
-          {arr.length ? arr.map((tag) => <span key={tag} className={`amx-db-chip ${chipClass(tag)}`}>{tag}</span>) : <span className="amx-db-blank">{t('dbembed.blank')}</span>}
+          {arr.length ? arr.map((tag) => <span key={tag} className={`amx-db-chip ${chipClass(tag, col.options)}`}>{tag}</span>) : <span className="amx-db-blank">{t('dbembed.blank')}</span>}
         </button>
       )
     }
@@ -2266,7 +2274,8 @@ function ReadOnlyCell({ row, col, env, meta, pagePath }: {
   const raw = row.cells[col.id]
   const v = coerceForDisplay(raw, base)
   const blank = <span className="amx-db-blank">{t('dbembed.blank')}</span>
-  const chips = (arr: string[]): ReactNode => arr.map((x) => <span key={x} className={`amx-db-chip ${chipClass(x)}`}>{x}</span>)
+  // options:select / 多选按选项池顺序取色(chipClass);关联行标题不传,照旧哈希。
+  const chips = (arr: string[], options?: readonly string[]): ReactNode => arr.map((x) => <span key={x} className={`amx-db-chip ${chipClass(x, options)}`}>{x}</span>)
 
   const body = ((): ReactNode => {
     // select 芯片:meta.text 只换文案(option 的 label),不换形态 —— 放在下面那条短路之前,否则「显示 label」把芯片压成裸文本。
@@ -2274,7 +2283,9 @@ function ReadOnlyCell({ row, col, env, meta, pagePath }: {
     if (base === 'select') {
       const label = meta?.text !== undefined ? String(meta.text) : (v as string)
       if (!label) return blank
-      return meta?.tone ? <span className={`amx-db-chip amx-db-chip--${meta.tone}`}>{label}</span> : chips([label])
+      if (meta?.tone) return <span className={`amx-db-chip amx-db-chip--${meta.tone}`}>{label}</span>
+      // 取色按存的选项值(meta.text 只换文案),换了显示名颜色不跟着变。
+      return <span className={`amx-db-chip ${chipClass((v as string) || label, col.options)}`}>{label}</span>
     }
     // meta.text 压过一切:复合格(cell 里放的是排序键)的显示只能由宿主给。
     if (meta?.text !== undefined) return String(meta.text)
@@ -2303,7 +2314,7 @@ function ReadOnlyCell({ row, col, env, meta, pagePath }: {
       const plain = col.precision == null && !col.unitPrefix && !col.unitSuffix
       return plain && typeof v === 'number' ? v.toLocaleString() : formatNumber(v as number, col)
     }
-    if (base === 'multiselect') return (v as string[]).length ? chips(v as string[]) : blank
+    if (base === 'multiselect') return (v as string[]).length ? chips(v as string[], col.options) : blank
     if (base === 'date') {
       if (meta?.format) return fmtMetaDate(raw, meta.format) || blank
       if (col.type === 'calendarDate') return fmtCalDateL(parseCalDate(typeof raw === 'string' ? raw : '')) || blank
@@ -2751,7 +2762,7 @@ function OptionPopover({
           aria-selected={selected.includes(option)} data-active={active === index || undefined}
           onMouseEnter={() => setActive(index)} onMouseDown={(event) => event.preventDefault()} onClick={() => choose(index)}>
           {multi && <span className="amx-db-opt-check" aria-hidden>{dbIcon(selected.includes(option) ? 'checked' : 'unchecked')}</span>}
-          <span className={`amx-db-chip ${chipClass(option)}`}>{option}</span>
+          <span className={`amx-db-chip ${chipClass(option, col.options)}`}>{option}</span>
           {!multi && selected.includes(option) && <span className="amx-db-opt-check">{dbIcon('check')}</span>}
         </button>)}
         {canCreate && <button className="amx-db-opt" data-active={active === filtered.length || undefined}
@@ -3646,7 +3657,7 @@ function FilterRowsEditor({ filters, mode, columns, kindOf, targetOf, onChange, 
 }
 
 /** 行详情编辑:全列纵排,复用表格同款 Cell(看板/日历/画廊点卡即编辑);select 选项开嵌套弹层。 */
-function RowEditor({ db, row, pagePath, env, setCell, createOption, readOnly, onDelete }: {
+function RowEditor({ db, row, pagePath, env, setCell, createOption, readOnly, titleColId, onDelete }: {
   db: DbFile
   row: DbRow
   pagePath: string
@@ -3655,19 +3666,24 @@ function RowEditor({ db, row, pagePath, env, setCell, createOption, readOnly, on
   createOption: (colId: string, label: string) => void
   /** 只读挂载:格子换只读渲染 + 砍掉删除行(只读表若没给 onRowOpen,卡片视图仍会开到这里)。 */
   readOnly?: boolean
+  /** 记录页(走查续六 6.14):这一列就是页面大标题 —— 排第一、不写列名,标题本身就是它的编辑框(不再在属性里重复一行)。
+   *  仍是 roweditor 里的一格(data-db-cell 照旧),Tab / 方向键从标题走到下一个属性。 */
+  titleColId?: string
   onDelete: () => void
 }) {
   const { t } = useI18n()
   const [opt, setOpt] = useState<{ colId: string; x: number; y: number } | null>(null)
   const optCol = opt ? db.columns.find((c) => c.id === opt.colId) : undefined
+  const titleCol = titleColId ? db.columns.find((c) => c.id === titleColId) : undefined
+  const cols = titleCol ? [titleCol, ...db.columns.filter((c) => c !== titleCol)] : db.columns
   return (
     <div className="amx-db-roweditor">
-      {db.columns.map((col) => (
-        <div key={col.id} className="amx-db-rowed-field" data-coltype={resolveBaseType(col.type)}>
-          <span className="amx-db-rowed-label">
+      {cols.map((col) => (
+        <div key={col.id} className={col === titleCol ? 'amx-db-rowed-field amx-db-rowed-title' : 'amx-db-rowed-field'} data-coltype={resolveBaseType(col.type)}>
+          {col !== titleCol && <span className="amx-db-rowed-label">
             <span className="amx-db-th-icon" aria-hidden>{colMeta(col.type).icon}</span>
             {col.name}
-          </span>
+          </span>}
           <div className="amx-db-rowed-cell" data-db-cell={readOnly ? undefined : col.id}
             tabIndex={readOnly ? undefined : 0} onKeyDown={readOnly ? undefined : gridCellKeyDown}>
             {readOnly ? <ReadOnlyCell row={row} col={col} env={env} pagePath={pagePath} /> : (
@@ -3702,10 +3718,10 @@ function cellPreview(col: DbColumn, v: CellValue | undefined): ReactNode | null 
   const base = resolveBaseType(col.type)
   const d = coerceForDisplay(v, base)
   if (base === 'checkbox') return d === true ? <span className="amx-db-card-check">✓ {col.name}</span> : null
-  if (base === 'select') return d ? <span className={`amx-db-chip ${chipClass(d as string)}`}>{d as string}</span> : null
+  if (base === 'select') return d ? <span className={`amx-db-chip ${chipClass(d as string, col.options)}`}>{d as string}</span> : null
   if (base === 'multiselect') {
     const arr = d as string[]
-    return arr.length ? <>{arr.map((t) => <span key={t} className={`amx-db-chip ${chipClass(t)}`}>{t}</span>)}</> : null
+    return arr.length ? <>{arr.map((t) => <span key={t} className={`amx-db-chip ${chipClass(t, col.options)}`}>{t}</span>)}</> : null
   }
   let s = Array.isArray(d) ? d.join(', ') : d == null ? '' : String(d)
   if (col.type === 'calendarDate') s = fmtCalDateL(parseCalDate(s)) || s
@@ -3735,7 +3751,13 @@ function RowCard({ db, row, title, onClick, cols, skipColId, max = 3, draggable,
     if (previews.length >= max) break
     if (col.id === skipColId) continue
     const node = cellPreview(col, row.cells[col.id])
-    if (node) previews.push(<div className="amx-db-card-prop" key={col.id}>{node}</div>)
+    if (!node) continue
+    // 每行前面写列名(走查续六 6.10):「苏 / 8 / 2026-10-28」得知道是哪一列。彩色选项本身就是标签、勾选已写列名,不再加。
+    const base = resolveBaseType(col.type)
+    const named = base !== 'select' && base !== 'multiselect' && base !== 'checkbox'
+    previews.push(<div className="amx-db-card-prop" key={col.id} data-named={named || undefined}>
+      {named && <span className="amx-db-card-key" title={col.name}>{col.name}</span>}{node}
+    </div>)
   }
   return (
     <div {...(attrs ?? {})} className="amx-db-card" role="button" tabIndex={0} draggable={draggable} onDragStart={onDragStart} onClick={onClick}>
@@ -3791,7 +3813,7 @@ function KanbanBody({ db, rows, view, visCols, setCell, addRow, openRow, rowTitl
         return (
           <div key={opt ?? '__none'} className="amx-db-lane" onDragOver={readOnly ? undefined : (e) => e.preventDefault()} onDrop={readOnly ? undefined : onDrop(opt)}>
             <div className="amx-db-lane-head">
-              {opt ? <span className={`amx-db-chip ${chipClass(opt)}`}>{opt}</span> : <span className="amx-db-lane-none">{t('dbembed.laneNone')}</span>}
+              {opt ? <span className={`amx-db-chip ${chipClass(opt, groupCol.options)}`}>{opt}</span> : <span className="amx-db-lane-none">{t('dbembed.laneNone')}</span>}
               <span className="amx-db-lane-count">{cards.length}</span>
             </div>
             <div className="amx-db-lane-cards">

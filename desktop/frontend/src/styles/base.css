@@ -947,6 +947,9 @@ a:hover { color: var(--accent-ink); }
 }
 .ctx-menu button > svg { flex-shrink: 0; } /* 折行时图标别被挤成小点 */
 .ctx-menu button:hover { background: var(--menu-hover); color: var(--text); }
+/* 键盘可走的菜单(role=menu,文件树右键 6.9):键盘焦点那一档 = 选中底 + 2px 焦点线;打开时焦点就在第一项。
+   鼠标一动就退出这一档(data-kbd 由 TreeMenu 摘掉),悬停仍是上面那层淡底;再按方向键回来。 */
+.ctx-menu[role='menu'][data-kbd] button[role='menuitem']:focus { outline: calc(2 * var(--focus-ring)) solid var(--sel-line); outline-offset: calc(-2 * var(--focus-ring)); background: var(--overlay-medium); color: var(--text); }
 .ctx-menu button.danger { color: var(--danger); }
 .ctx-menu button.danger:hover { background: var(--danger-light); }
 .ctx-menu button:disabled { opacity: .4; cursor: default; background: transparent; }
