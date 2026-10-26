@@ -8,12 +8,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ClipboardList, MessageSquarePlus, MousePointerClick, Quote, X } from 'lucide-react'
-import { OverlayAt } from '@lcl/engine'
+import { OverlayAt, useExitGhost } from '@lcl/engine'
 import { WikiText } from '../../components/ChatWikiLink'
 import { registerMessages, useI18n } from '../../i18n'
 import { pasteTitle } from './quotes'
 import { selectorTail, tileExcerpt, type ElementPick } from './elementPick'
-import { DialogOverlay } from '../../amadeus/components/DialogOverlay'
 
 registerMessages({
   'quote.tile.kind': { zh: '引用', en: 'Quote' },
@@ -103,6 +102,8 @@ export function QuotePreview({ text, note, onNote, onClose, paste, onRestore, ti
   const titleKey = paste ? 'paste.preview.title' : onNote || note ? 'quote.preview.reply' : 'quote.preview.title'
   const title = heading ?? t(titleKey)
   const box = useRef<HTMLDivElement>(null)
+  const overlay = useRef<HTMLDivElement>(null)
+  useExitGhost(overlay) // 关掉时留替身放 80ms 退场(同 DialogOverlay;Tangu 这边不引宿主模块,走查续八 8.4)
   // 关了把焦点还给点开它的那颗磁贴。在渲染时记:effect 跑的时候 autoFocus 已经把焦点挪到关闭钮上了
   const opener = useRef(document.activeElement as HTMLElement | null)
   useEffect(() => () => { const el = opener.current; if (el?.isConnected) el.focus() }, [])
@@ -123,7 +124,7 @@ export function QuotePreview({ text, note, onNote, onClose, paste, onRestore, ti
   }, [onClose])
   return createPortal(
     <div className="am-app tangu-lovable" style={{ display: 'contents' }}>
-      <DialogOverlay onMouseDown={onClose}>
+      <div ref={overlay} className="dialog-overlay" onMouseDown={onClose}>
         <div ref={box} className="dialog quote-preview" role="dialog" aria-modal="true" aria-label={title} onMouseDown={(e) => e.stopPropagation()}>
           <div className="quote-preview-head">
             <div className="dialog-title">{title}</div>
@@ -137,7 +138,7 @@ export function QuotePreview({ text, note, onNote, onClose, paste, onRestore, ti
             ? <textarea className="quote-preview-note" rows={3} value={note ?? ''} placeholder={t('quote.preview.notePlaceholder')} onChange={(e) => onNote(e.target.value)} />
             : note && <div className="quote-preview-said"><WikiText text={note} /></div>}
         </div>
-      </DialogOverlay>
+      </div>
     </div>,
     document.body,
   )
