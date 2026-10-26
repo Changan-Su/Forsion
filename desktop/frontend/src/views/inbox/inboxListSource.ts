@@ -21,7 +21,8 @@
  */
 import { useWorkspace } from '@lcl/engine'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
-import type { ListGroup, ListItem, ListSourceContribution } from '@amadeus/plugins/types'
+import type { ListGroup, ListItem } from '@amadeus/plugins/types'
+import type { HostListSource } from '@amadeus/plugins/pluginText'
 import { translate } from '../../i18n'
 import { formatListTime } from '../../format/time'
 import { useApp } from '../../stores/appStore'
@@ -143,7 +144,7 @@ function grouped(list: InboxMessage[]): ListItem[] {
   return out
 }
 
-export const inboxListSource: ListSourceContribution = {
+export const inboxListSource: HostListSource = {
   id: SOURCE_ID,
   get title() { return translate('space.inbox') },
   search: true,

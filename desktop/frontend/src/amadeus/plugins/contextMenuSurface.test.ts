@@ -7,10 +7,12 @@ vi.mock('../api', () => ({ amadeus: undefined }))
 const { usePluginStore } = await import('./pluginStore')
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
-const open = (items: Parameters<typeof openPluginContextMenu>[2], guard = (run: () => void) => run(), opts?: Parameters<typeof openPluginContextMenu>[5]) => {
+type Row = { label: string; run(): void; checked?: boolean; danger?: boolean }
+const K = (list: Row[]) => list.map((o) => ({ kind: 'item' as const, ...o }))
+const open = (items: Row[], guard = (run: () => void) => run(), opts?: Parameters<typeof openPluginContextMenu>[4]) => {
   let menu!: ReturnType<typeof openPluginContextMenu>
-  act(() => { menu = openPluginContextMenu(10, 20, items, guard, undefined, opts) })
-  return menu
+  act(() => { menu = openPluginContextMenu({ x: 10, y: 20 }, K(items), guard, undefined, opts) })
+  return { close: () => menu(), update: (next: Row[]) => menu.update(K(next)) }
 }
 const buttons = () => [...document.querySelectorAll<HTMLButtonElement>('.ctx-menu button')]
 const ticks = () => buttons().map((b) => b.querySelector('svg')?.style.opacity)
@@ -22,6 +24,7 @@ describe('ctx.ui.contextMenu(主页插件化 S7)', () => {
     expect(document.querySelector('.ctx-menu')!.classList.contains('ctx-menu-scroll')).toBe(true)
     expect(buttons().map((b) => b.textContent?.trim())).toEqual(['Rename', 'Dissolve'])
     expect(buttons()[1]!.className).toBe('danger')
+    expect(buttons()[0]!.getAttribute('role')).toBe('menuitem')
     act(() => buttons()[0]!.click())
     expect(run).toHaveBeenCalledTimes(1)
     expect(document.querySelector('.ctx-menu')).toBeNull()
@@ -57,7 +60,7 @@ describe('ctx.ui.contextMenu(主页插件化 S7)', () => {
     act(() => buttons()[0]!.click())
     expect(second).toHaveBeenCalledTimes(1)
     expect(first).toHaveBeenCalledTimes(1) // 旧 run 不再被调
-    act(() => menu())
+    act(() => menu.close())
     act(() => menu.update([{ label: 'Z', run() {} }]))
     expect(document.querySelector('.ctx-menu')).toBeNull()
   })

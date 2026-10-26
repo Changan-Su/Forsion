@@ -3,7 +3,7 @@
  *  刻意不装 npm 依赖:渲染层三端共享(desktop/web/mobile),本地文件零外部解析。
  *  增补图标照原样从 @blocksuite/icons 摘录,保持 currentColor 不带死色。 */
 import type { ComponentType, ReactElement, ReactNode, SVGProps } from 'react'
-import { Activity, Archive, ArchiveRestore, AudioLines, Bell, Bot, Circle, CircleCheck, Clock, Cloud, Coins, Copy, Gauge, Gift, HardDrive, Highlighter, ListChecks, Lock, Mail, MailOpen, MessageSquare, NotebookPen, Package, Plug, RefreshCw, Shield, StickyNote, Strikethrough, TextQuote, Trash2, Underline, User, Workflow, type LucideIcon, type LucideProps } from 'lucide-react'
+import { Activity, Archive, ArchiveRestore, AudioLines, Bell, BookOpen, Bot, Boxes, Briefcase, CalendarDays, Check, Circle, CircleCheck, Clock, Cloud, Coins, Copy, Download, ExternalLink, FileText, FolderOpen, Gauge, Gift, Globe, HardDrive, Heart, Highlighter, Home, Inbox, LayoutGrid, ListChecks, ListTodo, ListTree, Lock, Mail, MailOpen, MessageCircle, MessageSquare, Music, NotebookPen, NotebookText, Package, Pencil, Plug, RefreshCw, Search, Server, ServerCog, Settings, Shield, Sparkles, Star, StickyNote, Strikethrough, Target, Terminal, TextQuote, Trash2, Underline, Upload, User, Video, Workflow, X, Zap, type LucideIcon, type LucideProps } from 'lucide-react'
 
 const I = (children: ReactElement) => (props: SVGProps<SVGSVGElement>) => (
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="1em" height="1em" fill="none" aria-hidden {...props}>
@@ -180,6 +180,43 @@ export const PLUGIN_ICONS: Record<string, ComponentType<SVGProps<SVGSVGElement>>
   message: L(MessageSquare),
   plug: L(Plug),
   'list-checks': L(ListChecks),
+  // 一张词表(走查续八 8.17,2026-10-26):space.json 的 icon 认的那 30 个名字并进来,Space / 列表 / 菜单 / 设置 / 视图标签 /
+  // ctx.ui.icon 从此同一份名字。同名的(folder / image / code / mail / cloud)Space 那边照旧画它自己那枚 lucide,别处画这里的。
+  bot: L(Bot),
+  inbox: L(Inbox),
+  'notebook-text': L(NotebookText),
+  'book-open': L(BookOpen),
+  briefcase: L(Briefcase),
+  'calendar-days': L(CalendarDays),
+  'message-circle': L(MessageCircle),
+  'folder-open': L(FolderOpen),
+  'file-text': L(FileText),
+  star: L(Star),
+  heart: L(Heart),
+  home: L(Home),
+  target: L(Target),
+  zap: L(Zap),
+  globe: L(Globe),
+  music: L(Music),
+  video: L(Video),
+  terminal: L(Terminal),
+  'layout-grid': L(LayoutGrid),
+  sparkles: L(Sparkles),
+  boxes: L(Boxes),
+  'list-tree': L(ListTree),
+  'list-todo': L(ListTodo),
+  server: L(Server),
+  'server-cog': L(ServerCog),
+  // 插件按钮 / 菜单常用的几枚(8.16 菜单图标、8.17 插件自己的按钮):以前插件只能手抄 lucide 路径
+  pencil: L(Pencil),
+  'trash-2': L(Trash2),
+  download: L(Download),
+  upload: L(Upload),
+  search: L(Search),
+  check: L(Check),
+  x: L(X),
+  settings: L(Settings),
+  'external-link': L(ExternalLink),
 }
 
 /** 词表键的形状。**未命中词表但长成这样**的字符串 = 插件在叫一个本宿主还不认识的名字。 */
