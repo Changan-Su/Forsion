@@ -1,5 +1,7 @@
 /* 白板快捷键表(ShortcutsDialog.tsx):外壳是 Amadeus 的 .dialog,这里只加宽、分组和键帽。
    键帽浅底不描边(走查续七 7.4),分组卡 --radius-md。 */
+/* 全屏白板是 z-index 2000(viewIsland.css),表要压在它上面。 */
+.am-app .dialog-overlay.amx-keys-overlay { z-index: 2100; }
 .am-app .dialog.amx-keys { width: min(760px, 92vw); max-height: min(640px, 86vh); gap: 14px; }
 .amx-keys-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .amx-keys-close {

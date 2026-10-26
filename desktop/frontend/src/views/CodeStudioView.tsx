@@ -27,6 +27,7 @@ import { collectStudioWrites, inflightStudioWrite, issuePrompt, elementPrompt, j
 import { useStudioTools } from './coding/useStudioTools'
 import { StudioReveal } from './coding/StudioReveal'
 import { FilesPanel } from './chat2/FilesPanel'
+import { requestTerminalFocus } from '../builtins/terminalFocus'
 import { registerStudioCommands } from './coding/studioCommands'
 import type { UiMessage } from '../types'
 import type { ProductSummary } from '../../../shared/products'
@@ -327,7 +328,9 @@ function ProjectStudio({ root, extendView, onActivate, briefSaveError, retryBrie
   }
   const reload = () => { setPendingChanges(false); setIssues([]); setScanNonce(n => n + 1); setFileRevision(n => n + 1); useCodeStudio.getState().reload() }
   const openTerminal = () => {
-    if (getView('terminal')) useWorkspace.getState().openView('terminal', { cwd: root, reuseKey: `studio:${root}` }, 'bottom')
+    if (!getView('terminal')) return
+    requestTerminalFocus()
+    useWorkspace.getState().openView('terminal', { cwd: root, reuseKey: `studio:${root}` }, 'bottom')
   }
   const publish = async () => {
     const saved = await flushStudioEditors(root)

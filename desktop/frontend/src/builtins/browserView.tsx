@@ -127,9 +127,6 @@ export const BrowserView: React.FC<ViewProps> = ({ leaf, params }) => {
   const [loading, setLoading] = useState(false)
   const [nav, setNav] = useState({ back: false, forward: false })
   const [err, setErr] = useState<LoadFail | null>(null)
-  // 这一趟加载有没有失败过:失败的空态只在一趟加载**顺利跑完**时才撤(did-stop-loading 且没失败),
-  // 重试时空态换成加载中、同一个错误再来一次就原样留着,不闪回空白页。
-  const failedThisLoad = useRef(false)
   // 点选元素(shared/browserPick.ts):picking = 进行中那次的 guest id。只有桌面宿主有 browserPick。
   const pickApi = window.tangu?.browserPick
   const [picking, setPicking] = useState<number | null>(null)
@@ -159,14 +156,15 @@ export const BrowserView: React.FC<ViewProps> = ({ leaf, params }) => {
       const title = (e as Event & { title?: string }).title
       if (title) leaf.setTitle(title)
     }
-    const onStart = (): void => { setLoading(true); failedThisLoad.current = false }
+    const onStart = (): void => { setLoading(true) }
+    // 失败的空态只在一趟加载**顺利跑完**时才撤:重试时换成加载中,再失败 / 点了停止都原样留着,不闪回空白页。
+    const onFinish = (): void => { setErr(null) }
     // insertCSS 随文档走(换页就没了)→ 每次 dom-ready 补一次。同文档只换 fragment(引用条点第二条
     // 引语)不触发 dom-ready,那时样式还在,正好不用重注。
     const onDomReady = (): void => { void el.insertCSS(TARGET_TEXT_CSS).catch(() => {}) }
     // 补一次标题:page-title-updated 可能早于本 effect 挂载(file:// 之类瞬时加载)就已经烧过了。
     const onStop = (): void => {
       setLoading(false)
-      if (!failedThisLoad.current) setErr(null)
       sync()
       const t = el.getTitle()
       if (t) leaf.setTitle(t)
@@ -175,13 +173,13 @@ export const BrowserView: React.FC<ViewProps> = ({ leaf, params }) => {
       const d = e as Event & { errorCode?: number; errorDescription?: string; validatedURL?: string; isMainFrame?: boolean }
       // -3 = ERR_ABORTED(用户点停/被新导航取代),不是错误。
       if (d.isMainFrame === false || d.errorCode === -3) return
-      failedThisLoad.current = true
       setLoading(false)
       setErr(loadFail(d.validatedURL || el.getURL(), d.errorDescription || '', d.errorCode))
     }
     el.addEventListener('dom-ready', onDomReady)
     el.addEventListener('did-start-loading', onStart)
     el.addEventListener('did-stop-loading', onStop)
+    el.addEventListener('did-finish-load', onFinish)
     el.addEventListener('did-navigate', onNavigate)
     el.addEventListener('did-navigate-in-page', onNavigate)
     el.addEventListener('page-title-updated', onTitle)
@@ -190,6 +188,7 @@ export const BrowserView: React.FC<ViewProps> = ({ leaf, params }) => {
       el.removeEventListener('dom-ready', onDomReady)
       el.removeEventListener('did-start-loading', onStart)
       el.removeEventListener('did-stop-loading', onStop)
+      el.removeEventListener('did-finish-load', onFinish)
       el.removeEventListener('did-navigate', onNavigate)
       el.removeEventListener('did-navigate-in-page', onNavigate)
       el.removeEventListener('page-title-updated', onTitle)
@@ -270,7 +269,6 @@ export const BrowserView: React.FC<ViewProps> = ({ leaf, params }) => {
     void ref.current?.loadURL(next).catch((e) => {
       const msg = String(e?.message || e)
       if (/ERR_ABORTED|\(-3\)/.test(msg)) return // 被新导航取代,不算失败
-      failedThisLoad.current = true
       setLoading(false)
       setErr(loadFail(next, msg))
     })

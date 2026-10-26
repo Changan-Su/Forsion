@@ -14,6 +14,7 @@ import type { ViewProps } from '@lcl/engine'
 import { useVisualTheme as useTheme } from '../stores/themeStore'
 import { useI18n } from '../i18n'
 import { takePendingRun, type PendingRun } from './runCommand'
+import { takeTerminalFocus } from './terminalFocus'
 
 /** 从当前主题的 CSS 变量取终端配色(主题切换后重取);取不到就交给 xterm 默认值。 */
 function themeFromCss(): Record<string, string> {
@@ -29,10 +30,8 @@ function themeFromCss(): Record<string, string> {
   return out
 }
 
-/** 用户刚打开 / 切过来(有新鲜的用户手势)且没有别的输入框正拿着焦点 → 终端该拿焦点。
- *  布局恢复(开机没有手势)和后台起终端(用户正在聊天框里打字)都不抢。 */
-function userWantsFocus(el: HTMLElement): boolean {
-  if (!(navigator as Navigator & { userActivation?: { isActive: boolean } }).userActivation?.isActive) return false
+/** 没有别的输入框正拿着焦点(用户正在聊天框里打字时终端在后台起来,不抢)。 */
+function noOtherInput(el: HTMLElement): boolean {
   const a = document.activeElement as HTMLElement | null
   if (!a || a === document.body || el.contains(a)) return true
   return !(a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName))
@@ -75,8 +74,10 @@ export const TerminalView: React.FC<ViewProps> = ({ params, leaf }) => {
     const safeFit = (): void => { try { if (el.clientWidth > 0 && el.clientHeight > 0) fit.fit() } catch { /* 0 尺寸/已卸载 */ } }
     safeFit()
     // 等一帧再判:命令面板之类的入口要先关掉、把焦点还给 body。
-    const focusIfAsked = (): void => { requestAnimationFrame(() => { if (!disposed && userWantsFocus(el)) tm.focus() }) }
-    focusIfAsked()
+    const focusIfFree = (): void => { requestAnimationFrame(() => { if (!disposed && noOtherInput(el)) tm.focus() }) }
+    // 用户刚从入口打开(terminalFocus 的标记)才拿;布局恢复出来的不拿。
+    if (takeTerminalFocus()) focusIfFree()
+    const mountedAt = performance.now()
     // shell 起来之前打的字先攒着,起来后一次写进去(否则「打开就打字」的头几个字会丢)。
     let early: string[] | null = []
     offs.push(tm.onData((d) => { early?.push(d) }).dispose)
@@ -137,11 +138,13 @@ export const TerminalView: React.FC<ViewProps> = ({ params, leaf }) => {
       })
     }
 
-    // 切到已开着的终端标签 / 展开底部面板:从 0 尺寸变可见 = 用户切过来了。
+    // 切到已开着的终端标签 / 展开底部面板:从 0 尺寸变可见 + 有新鲜的用户手势 = 用户切过来了。
+    // 挂载后头一秒的 0→可见是布局在落位(恢复布局时也会有),不算。
     let shown = el.clientWidth > 0 && el.clientHeight > 0
     const ro = new ResizeObserver(() => {
       const nowShown = el.clientWidth > 0 && el.clientHeight > 0
-      if (nowShown && !shown) focusIfAsked()
+      const gesture = (navigator as Navigator & { userActivation?: { isActive: boolean } }).userActivation?.isActive
+      if (nowShown && !shown && gesture && performance.now() - mountedAt > 1000) focusIfFree()
       shown = nowShown
       safeFit()
       if (ptyId) window.tangu?.pty?.resize(ptyId, tm.cols, tm.rows)

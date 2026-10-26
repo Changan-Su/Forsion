@@ -101,6 +101,7 @@ html .excalidraw.amx-board-portal {
 
 /* 走查续七 7.4:引擎自带的帮助框(上游文档 / YouTube / 提交问题外链)不出现 —— ? 键和欢迎页提示改开应用的快捷键表
    (ExcalidrawCanvas 在 onChange 里把 openDialog=help 转过去,这里防它闪一帧),右下角的「?」按钮也不要。 */
-.excalidraw .Modal:has(.HelpDialog),
-.excalidraw .help-icon { display: none; }
+/* 前缀压过引擎样式表(它在运行时 <link> 进来、排在后面)。 */
+html .excalidraw .Modal:has(.HelpDialog),
+html .excalidraw .help-icon { display: none; }
 

@@ -1,6 +1,7 @@
 /** 白板「快捷键」(走查续七 7.4):替掉引擎自带的帮助框(上游文档 / YouTube / 提交问题外链 + Cmd / Option 键名)。
  *  只有一张表,键位取自引擎帮助框的键表(这一版 fork 的真键位),挑常用的;键名 mac 写符号(boardText.formatShortcut)。
- *  挂在引擎根外面(portal 到 body),只用应用 token。 */
+ *  挂在引擎根外面(portal 到 body),只用应用 token。打开时焦点进对话框:引擎的键盘处理挂在画布容器上,
+ *  焦点离开画布,⌫ 之类就不会落到底下选中的元素上。 */
 import { createPortal } from 'react-dom'
 import { X } from 'lucide-react'
 import { registerMessages, useI18n } from '../../../i18n'
@@ -22,7 +23,6 @@ registerMessages({
   'boardkeys.line': { zh: '线条', en: 'Line' },
   'boardkeys.freedraw': { zh: '自由书写', en: 'Draw' },
   'boardkeys.text': { zh: '文字', en: 'Text' },
-  'boardkeys.image': { zh: '插入图片', en: 'Insert image' },
   'boardkeys.eraser': { zh: '橡皮', en: 'Eraser' },
   'boardkeys.frame': { zh: '框架', en: 'Frame' },
   'boardkeys.laser': { zh: '激光笔', en: 'Laser pointer' },
@@ -57,9 +57,10 @@ registerMessages({
 type Row = [label: string, ...keys: string[]]
 const GROUPS: Array<[title: string, rows: Row[]]> = [
   ['boardkeys.tools', [
-    ['boardkeys.selection', 'V', '1'], ['boardkeys.hand', 'H'], ['boardkeys.rectangle', 'R', '2'], ['boardkeys.diamond', 'D', '3'],
-    ['boardkeys.ellipse', 'O', '4'], ['boardkeys.arrow', 'A', '5'], ['boardkeys.line', 'L', '6'], ['boardkeys.freedraw', 'P', '7'],
-    ['boardkeys.text', 'T', '8'], ['boardkeys.image', '9'], ['boardkeys.eraser', 'E', '0'], ['boardkeys.frame', 'F'],
+    // 数字键跟着自建工具条的排序走(toolbarOrder,用户能拖),这里只列字母键。
+    ['boardkeys.selection', 'V'], ['boardkeys.hand', 'H'], ['boardkeys.rectangle', 'R'], ['boardkeys.diamond', 'D'],
+    ['boardkeys.ellipse', 'O'], ['boardkeys.arrow', 'A'], ['boardkeys.line', 'L'], ['boardkeys.freedraw', 'P'],
+    ['boardkeys.text', 'T'], ['boardkeys.eraser', 'E'], ['boardkeys.frame', 'F'],
     ['boardkeys.laser', 'K'], ['boardkeys.lock', 'Q'],
   ]],
   ['boardkeys.view', [
@@ -81,11 +82,11 @@ export function ShortcutsDialog({ onClose }: { onClose: () => void }) {
   const keyText = (spec: string): string => formatShortcut(spec.replace('@drag', t('boardkeys.drag')))
   return createPortal(
     <div className="am-app tangu-lovable" style={{ display: 'contents' }}>
-      <div className="dialog-overlay" onMouseDown={onClose}>
+      <div className="dialog-overlay amx-keys-overlay" onMouseDown={onClose}>
         <div className="dialog amx-keys" role="dialog" aria-modal="true" aria-label={t('boardkeys.title')} data-board-shortcuts onMouseDown={(e) => e.stopPropagation()}>
           <div className="amx-keys-head">
             <div className="dialog-title">{t('boardkeys.title')}</div>
-            <button type="button" className="amx-keys-close" aria-label={t('common.close')} title={t('common.close')} onClick={onClose}><X size={16} /></button>
+            <button type="button" className="amx-keys-close" autoFocus aria-label={t('common.close')} title={t('common.close')} onClick={onClose}><X size={16} /></button>
           </div>
           <div className="amx-keys-groups">
             {GROUPS.map(([title, rows]) => (

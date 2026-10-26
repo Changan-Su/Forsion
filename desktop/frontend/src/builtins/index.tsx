@@ -1,3 +1,4 @@
+import { requestTerminalFocus } from './terminalFocus'
 import { hasNativeFeature } from '../features/runtime'
 import { PRODUCT } from '../product'
 /**
@@ -241,6 +242,7 @@ export function openBrowser(url?: string): void {
 /** 开一个内置终端标签(cwd 可选:调用方有工作目录就传,否则家目录)。 */
 export function openTerminal(cwd?: string): void {
   if (!getView('terminal')) return
+  requestTerminalFocus()
   useWorkspace.getState().openView('terminal', cwd ? { cwd } : {}, 'main', { newTab: true })
 }
 

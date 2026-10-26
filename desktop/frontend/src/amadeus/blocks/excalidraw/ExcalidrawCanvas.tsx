@@ -550,7 +550,8 @@ export default function ExcalidrawCanvas({
       const els = a.getSceneElements()
       const b = elementBounds(els)
       const page = pageRect(settings, pageRange(settings, b).min)
-      if (!page) {
+      // Desk 磁贴要整张(纸张模式也不止第一页),按全部内容适配。
+      if (!page || preview) {
         if (els.length) fitInsets(a, host, st)
         return
       }
@@ -562,7 +563,7 @@ export default function ExcalidrawCanvas({
         captureUpdate: CaptureUpdateAction.NEVER,
       })
     },
-    [settings],
+    [settings, preview],
   )
 
   // Desk 磁贴(preview):缩略图永远是整张 —— 磁贴尺寸变了、或者远端改动让内容范围变了,就重新适配一次。
@@ -761,10 +762,9 @@ export default function ExcalidrawCanvas({
         }}
       >
         {/* 自带菜单从 0.18.1 的 DefaultMainMenu 删减:去掉 Socials 与帮助(上游外链);打开 / 保存到 / 重置画布也去掉 ——
-            白板就是库里的一个文件,打开 / 另存 / 删除走 Forsion 的文件管理(走查续七 7.6)。
+            白板就是库里的一个文件,打开 / 另存 / 删除走 Forsion 的文件管理(走查续七 7.6;「保存到…」就是 Export 那项)。
             末尾接上本 App 的纸张/网格面板 —— 用户要它跟「画布背景」在同一处。 */}
         <MainMenu>
-          <MainMenu.DefaultItems.Export />
           <MainMenu.DefaultItems.SaveAsImage />
           <MainMenu.DefaultItems.SearchMenu />
           {!phone && (
