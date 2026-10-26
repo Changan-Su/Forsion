@@ -18,7 +18,7 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { gunzipSync } from 'node:zlib'
 import { cmpVersion, gatePluginManifest } from '@amadeus-shared/ipc'
-import { installedDirFor, pendingDirFor, readManifest, type BuiltinSource, type BundleManifest } from './builtinPlugins'
+import { installedDirFor, pendingDirFor, readManifest, withPendingLock, type BuiltinSource, type BundleManifest } from './builtinPlugins'
 import { verifyBundleSignature } from './bundleSignature'
 import { downloadZip, GZIP_MAGIC } from './marketInstall'
 import { stripTopDir, untar } from './minitar'
@@ -152,28 +152,31 @@ export async function checkBuiltinUpdates(o: BuiltinUpdateOpts): Promise<string[
       // 绝不原地递归删:删到一半被杀会留下「manifest 还在、文件缺了」的半截目录,下次启动会被当成完整更新换上。
       const staging = path.join(path.dirname(pendingPath), `.${path.basename(pendingPath)}.staging-${process.pid}`)
       const retired = `${staging}.old`
-      await fs.rm(staging, { recursive: true, force: true })
-      try {
-        for (const e of entries) {
-          const dest = safeJoin(staging, e.path)
-          await fs.mkdir(path.dirname(dest), { recursive: true })
-          await fs.writeFile(dest, e.data)
-          if (e.mode && process.platform !== 'win32') await fs.chmod(dest, e.mode) // helper 可执行位
-        }
-        // 带主进程半身的包:落暂存区之前就验签,坏发布连暂存区都不进(播种时还会再核一次)。
-        if (source.desktop) {
-          const v = await verifyBundleSignature(staging, source.desktop.signingKey, [source.desktop.entry, 'manifest.json'])
-          if (!v.ok) throw new Error(`signature: ${v.reason}`)
-        }
-        await fs.rm(retired, { recursive: true, force: true })
-        await fs.rename(pendingPath, retired).catch((err: NodeJS.ErrnoException) => {
-          if (err.code !== 'ENOENT') throw err
-        })
-        await fs.rename(staging, pendingPath)
-      } finally {
+      // 写暂存区与播种互斥(builtinPlugins.withPendingLock):首次启动预取超时后,这里可能和播种同时发生。
+      await withPendingLock(async () => {
         await fs.rm(staging, { recursive: true, force: true })
-        await fs.rm(retired, { recursive: true, force: true })
-      }
+        try {
+          for (const e of entries) {
+            const dest = safeJoin(staging, e.path)
+            await fs.mkdir(path.dirname(dest), { recursive: true })
+            await fs.writeFile(dest, e.data)
+            if (e.mode && process.platform !== 'win32') await fs.chmod(dest, e.mode) // helper 可执行位
+          }
+          // 带主进程半身的包:落暂存区之前就验签,坏发布连暂存区都不进(播种时还会再核一次)。
+          if (source.desktop) {
+            const v = await verifyBundleSignature(staging, source.desktop.signingKey, [source.desktop.entry, 'manifest.json'])
+            if (!v.ok) throw new Error(`signature: ${v.reason}`)
+          }
+          await fs.rm(retired, { recursive: true, force: true })
+          await fs.rename(pendingPath, retired).catch((err: NodeJS.ErrnoException) => {
+            if (err.code !== 'ENOENT') throw err
+          })
+          await fs.rename(staging, pendingPath)
+        } finally {
+          await fs.rm(staging, { recursive: true, force: true })
+          await fs.rm(retired, { recursive: true, force: true })
+        }
+      })
       staged.push(`${bundled.id}@${latest.version}`)
       report({ phase: 'staged', pendingVersion: latest.version })
       log(`[builtin-updates] ${bundled.id} ${have} → ${latest.version} 已下载,下次启动生效`)
