@@ -7,7 +7,7 @@
  *
  * 「Forsion 只是其中一个 provider」即在此体现:Forsion 是兜底的托管面,直连 provider 与其平级。
  */
-import { imageMimeOf, type CloudBrainServices, type BuildPayloadOpts, type StreamOpts, type ImageGenRequest, type ImageEditRequest, type ImageGenResult, type SpeechRequest, type SpeechResult } from '../../seams/cloudBrain.js';
+import { imageMimeOf, fimUnsupportedError, type FimCompletionOpts, type CloudBrainServices, type BuildPayloadOpts, type StreamOpts, type ImageGenRequest, type ImageEditRequest, type ImageGenResult, type SpeechRequest, type SpeechResult } from '../../seams/cloudBrain.js';
 import type { ProviderRegistry } from '../../llm/providerRegistry.js';
 import { freshOAuthCred } from '../../llm/providerOAuth.js';
 import { isAuthExpiredLlmError } from '../../llm/retry.js';
@@ -356,6 +356,11 @@ export function createMultiBrain(httpBrain: CloudBrainServices, registry: Provid
           return res;
         }
         return httpBrain.llm.streamProviderCompletion(opts);
+      },
+      // FIM 只有 Forsion 云端能做(按模型的 fimProtocol 走 completions / Codestral);直连 / 订阅模型没有这条路 → 不支持。
+      fimCompletion: async (opts: FimCompletionOpts) => {
+        if (registry.resolve(opts.modelId) || !httpBrain.llm.fimCompletion) throw fimUnsupportedError();
+        return httpBrain.llm.fimCompletion(opts);
       },
     },
   };
