@@ -1964,8 +1964,8 @@ export interface PluginContext {
      *  (不 trim、不剥围栏,空白与换行照原样),另带实际模型 `model`。`maxTokens` 夹到 1..512(缺省 64);`stop` 最多 4 个、每个 ≤32 字符。
      *  The text before / after the cursor goes to a completion model verbatim — no prompt, no instruction. Returns the raw model text.
      *  模型 / Model:`modelId` → 用户在「设置 → 模型 → 补全」选的那个 → 账号里第一个补全模型。都没有、或模型 / 引擎 / 云端做不了 FIM →
-     *  reject `Error('fim_unavailable')`:这时退回 `complete` 自己写指令,并在本次会话里记住别再试。
-     *  When no FIM model is available it rejects with `Error('fim_unavailable')`; fall back to `complete` and remember that for the session.
+     *  reject `Error('fim_unavailable')`:这时退回 `complete` 自己写指令,并在本次会话里记住别再试;云端目录没拉到 → `Error('fim_catalog_unreachable')`,临时错误,下次照常试。
+     *  When no FIM model is available it rejects with `Error('fim_unavailable')`; fall back to `complete` and remember that for the session. `Error('fim_catalog_unreachable')` (cloud catalog fetch failed) is transient: try `fim` again next time.
      *  与 `complete` / `translate` 合计每用户同时最多 3 个请求(超出 429);每次按键前请先 abort 上一次(`signal`)。
      *  插件被停用时在飞的请求被中止并 reject。旧宿主 / 非 Tangu 宿主没有:`ctx.tangu?.fim`。 */
     fim?(req: { before: string; after?: string; maxTokens?: number; stop?: string[]; modelId?: string; signal?: AbortSignal; onDelta?: (delta: string) => void }): Promise<{ text: string; model?: { id: string; name: string } }>

@@ -244,6 +244,7 @@ async function suggest(before, after, signal) {
 - 返回 `{ text, model }`:`text` 是模型原文(不 trim、不剥围栏),`model` = 实际用的 `{ id, name }`。`modelId` 可点名本次用哪个(不改槽)。
 - `maxTokens` 夹到 1..512(缺省 64);`stop` 最多 4 个、每个 ≤32 字符。行内补全一般 32–64 就够。
 - 账号里没有补全模型、选的模型做不了 FIM、引擎 / 云端太老 → reject `Error('fim_unavailable')`。这时退回 `complete`,并**记住整场会话别再试**
+- 云端目录这次没拉到 → reject `Error('fim_catalog_unreachable')`:临时错误,**别**据此落回 complete,下次照常试 `fim`。
   (上面的 `fimOff`),否则每敲一个键都白打一次。
 - 和 `complete` / `translate` 合计每个用户同时最多 3 个请求(超出 429):每次按键先 `abort` 上一次的 `signal`,停顿一会儿(200–400ms)再发。
 - 额度与用量按所用模型照常扣、记;插件被停用时在飞的请求被中止并 reject。旧宿主 / 非 Tangu 宿主没有:`ctx.tangu?.fim`,不要为它抬 `minAppVersion`。
