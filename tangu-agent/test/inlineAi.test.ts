@@ -24,6 +24,8 @@ import inlineRouter from '../src/routes/inline.js';
 let home = '';
 let payloads: any[] = [];
 let reply = 'A clearer sentence.';
+let fimCalls: any[] = [];
+let fimReply = '  return a + b;\n';
 let server: Server;
 let base = '';
 const billing = {
@@ -48,6 +50,11 @@ beforeAll(async () => {
           payloads.push(o.payload);
           for (const piece of reply.match(/[\s\S]{1,6}/g) || []) o.onToken?.(piece);
           return { content: reply, reasoning: '', toolCalls: [], usage: { prompt_tokens: 9, completion_tokens: 4 } };
+        },
+        fimCompletion: async (o: any) => {
+          fimCalls.push({ ...o, signal: undefined, onToken: undefined });
+          for (const piece of fimReply.match(/[\s\S]{1,4}/g) || []) o.onToken?.(piece);
+          return { content: fimReply, reasoning: '', toolCalls: [], usage: { prompt_tokens: 20, completion_tokens: 5 } };
         },
       },
       users: { getUserById: async () => ({ id: 'u1', username: 'u' }) },
@@ -230,5 +237,62 @@ describe('POST /agent/inline', () => {
     billing.canConsumeTokenPoints.mockResolvedValueOnce({ ok: false } as any);
     const evs = await sse(await post({ action: 'fix', selection: 'x', model_id: 'm1' }));
     expect(evs.at(-1)).toEqual({ type: 'error', error: 'token_quota_exceeded' });
+  });
+});
+
+describe('fim(行内补全)', () => {
+  const llm = async () => (await import('../src/seams/runtime.js')).deps().brain.llm as any;
+  it('normalize:前文留尾、后文留头、不 trim;两边都空才拒;max_tokens 夹 1..512 缺省 64;stop ≤4×≤32', () => {
+    expect(normalizeInlineInput({ action: 'fim' })).toBeNull();
+    expect(normalizeInlineInput({ action: 'fim', before: '', after: '' })).toBeNull();
+    // 只有空白也是合法前文(缩进是补全的依据)
+    expect(normalizeInlineInput({ action: 'fim', before: '    ' })).toEqual({ action: 'fim', before: '    ', maxTokens: 64 });
+    const big = normalizeInlineInput({ action: 'fim', before: 'H' + 'x'.repeat(20_000) + 'TAIL', after: 'HEAD' + 'y'.repeat(20_000) })!;
+    expect(big.before!.length).toBe(16_000);
+    expect(big.before!.endsWith('TAIL')).toBe(true);
+    expect(big.after!.length).toBe(8_000);
+    expect(big.after!.startsWith('HEAD')).toBe(true);
+    expect(normalizeInlineInput({ action: 'fim', before: 'a', max_tokens: 9999 })!.maxTokens).toBe(512);
+    expect(normalizeInlineInput({ action: 'fim', before: 'a', max_tokens: 0 })!.maxTokens).toBe(1);
+    expect(normalizeInlineInput({ action: 'fim', before: 'a', max_tokens: 'nope' })!.maxTokens).toBe(64);
+    expect(normalizeInlineInput({ action: 'fim', before: 'a', max_tokens: 12.7 })!.maxTokens).toBe(12);
+    const stop = normalizeInlineInput({ action: 'fim', before: 'a', stop: ['\n\n', 3, '', 'z'.repeat(40), 'b', 'c', 'd'] })!.stop!;
+    expect(stop).toEqual(['\n\n', 'z'.repeat(32), 'b', 'c']);
+  });
+  it('无系统提示:prefix / suffix 原样交给 fimCompletion,输出原文(不 trim、不剥围栏),按用量结算', async () => {
+    fimCalls = [];
+    payloads = [];
+    fimReply = '```\n  return a + b;\n```\n';
+    billing.consumeTokenPoints.mockClear();
+    const deltas: string[] = [];
+    const r = await completeInline({ userId: 'u1', modelId: 'fim1', appId: 'tangu', client: 'desktop', input: normalizeInlineInput({ action: 'fim', before: 'function add(a, b) {\n', after: '\n}', max_tokens: 32, stop: ['\n\n'] })!, signal: new AbortController().signal, onToken: (d) => deltas.push(d) });
+    expect(r).toEqual({ content: fimReply, toolCallText: false });
+    expect(deltas.join('')).toBe(fimReply);
+    expect(payloads).toEqual([]); // 没走聊天那条(没有系统提示 / 消息)
+    expect(fimCalls).toHaveLength(1);
+    expect(fimCalls[0]).toMatchObject({ modelId: 'fim1', prefix: 'function add(a, b) {\n', suffix: '\n}', maxTokens: 32, stop: ['\n\n'], client: 'desktop', usageSource: 'tangu' });
+    expect(JSON.stringify(fimCalls[0])).not.toContain('writing assistant');
+    expect(billing.consumeTokenPoints).toHaveBeenCalledTimes(1);
+  });
+  it('brain 没有 fimCompletion / 抛 fim_unsupported → 路由回 SSE error fim_unsupported,不结算', async () => {
+    const l = await llm();
+    const orig = l.fimCompletion;
+    billing.consumeTokenPoints.mockClear();
+    try {
+      delete l.fimCompletion;
+      expect((await sse(await post({ action: 'fim', before: 'x', model_id: 'fim1' }))).at(-1)).toEqual({ type: 'error', error: 'fim_unsupported' });
+      l.fimCompletion = async () => { throw Object.assign(new Error('fim_unsupported'), { code: 'fim_unsupported' }); };
+      expect((await sse(await post({ action: 'fim', before: 'x', model_id: 'chat' }))).at(-1)).toEqual({ type: 'error', error: 'fim_unsupported' });
+    } finally {
+      l.fimCompletion = orig;
+    }
+    expect(billing.consumeTokenPoints).not.toHaveBeenCalled();
+  });
+  it('路由:model_id 必填(不落回 profile 的聊天默认);前后文都空 400;成功时 done 带原文', async () => {
+    expect((await post({ action: 'fim', before: 'x' })).status).toBe(400);
+    expect((await post({ action: 'fim', model_id: 'fim1' })).status).toBe(400);
+    fimReply = ' world';
+    const evs = await sse(await post({ action: 'fim', before: 'hello', model_id: 'fim1' }));
+    expect(evs.at(-1)).toEqual({ type: 'done', content: ' world', toolCallText: false, modelId: 'fim1' });
   });
 });
