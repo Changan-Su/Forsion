@@ -3679,7 +3679,8 @@ function RowEditor({ db, row, pagePath, env, setCell, createOption, readOnly, ti
   return (
     <div className="amx-db-roweditor">
       {cols.map((col) => (
-        <div key={col.id} className={col === titleCol ? 'amx-db-rowed-field amx-db-rowed-title' : 'amx-db-rowed-field'} data-coltype={resolveBaseType(col.type)}>
+        <div key={col.id} className={col === titleCol ? 'amx-db-rowed-field amx-db-rowed-title' : 'amx-db-rowed-field'} data-coltype={resolveBaseType(col.type)}
+          {...(col === titleCol ? { role: 'heading', 'aria-level': 1 } : {})}>
           {col !== titleCol && <span className="amx-db-rowed-label">
             <span className="amx-db-th-icon" aria-hidden>{colMeta(col.type).icon}</span>
             {col.name}

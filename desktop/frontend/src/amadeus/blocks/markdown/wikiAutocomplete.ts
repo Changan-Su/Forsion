@@ -268,10 +268,20 @@ function selectionCenterX(view: EditorView, from: number, to: number, pane: DOMR
     const bottom = pane?.bottom ?? window.innerHeight
     let l = Infinity
     let r = -Infinity
-    for (const rc of Array.from(range.getClientRects())) {
-      if (!rc.width || rc.bottom <= top || rc.top >= bottom) continue
-      l = Math.min(l, rc.left)
-      r = Math.max(r, rc.right)
+    // 只量文字本身:整个被选中的段落,range.getClientRects() 会把段落的整块盒子也算进来(满宽),几段短行就被拉到中间。
+    const root = range.commonAncestorContainer
+    const walk = document.createTreeWalker(root.nodeType === Node.TEXT_NODE ? root.parentNode ?? root : root, NodeFilter.SHOW_TEXT)
+    const part = document.createRange()
+    for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+      if (!range.intersectsNode(n)) continue
+      part.selectNodeContents(n)
+      if (n === range.startContainer) part.setStart(n, range.startOffset)
+      if (n === range.endContainer) part.setEnd(n, range.endOffset)
+      for (const rc of Array.from(part.getClientRects())) {
+        if (!rc.width || rc.bottom <= top || rc.top >= bottom) continue
+        l = Math.min(l, rc.left)
+        r = Math.max(r, rc.right)
+      }
     }
     return r > l ? (l + r) / 2 : null
   } catch {

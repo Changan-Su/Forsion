@@ -68,3 +68,5 @@
    只是不要列名、字号换成页面标题;左右收回格子的内边距,字头和下面的列名对齐。放在文件末尾:要压过上一条同特异性的字号。 */
 .amx-db-peek-properties .amx-db-rowed-field.amx-db-rowed-title { display: block; margin: 0 -10px 16px; }
 .amx-db-peek .amx-db-rowed-title .amx-db-rowed-cell :is(.amx-db-input, .amx-db-value-display, .amx-db-cellbtn) { font-size: var(--db-page-title-size); font-weight: 600; line-height: 1.3; overflow-wrap: anywhere; }
+/* 标题长了照旧折行(格子里的值缺省单行省略)。 */
+.amx-db-peek .amx-db-rowed-title .amx-db-value-text { white-space: normal; overflow: visible; text-overflow: clip; }

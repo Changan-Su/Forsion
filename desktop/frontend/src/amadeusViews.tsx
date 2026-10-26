@@ -425,8 +425,8 @@ export function Breadcrumb({ path, hideLoneLeaf }: { path?: string; hideLoneLeaf
 // ─────────────────────────────── 左:笔记库(原生 t2s 外壳) ───────────────────────────────
 
 /** 最近一次右键落在哪个元素上:右键不一定把焦点给到那一行(文件夹行是 div),菜单关掉时靠它把焦点还回去。 */
-let lastContextTarget: Element | null = null
-if (typeof window !== 'undefined') window.addEventListener('contextmenu', (e) => { lastContextTarget = e.target instanceof Element ? e.target : null }, true)
+let lastContextTarget: { el: Element | null; at: number } = { el: null, at: 0 }
+if (typeof window !== 'undefined') window.addEventListener('contextmenu', (e) => { lastContextTarget = { el: e.target instanceof Element ? e.target : null, at: Date.now() } }, true)
 
 /** 文件树右键菜单外壳(走查续六 6.9):`role="menu"`,打开时焦点进第一项,↑↓ / Home / End 走、回车执行(按钮原生),
  *  Esc 关菜单并把焦点还给那一行 —— 只关菜单,不往下传(别连带清掉树里的选中);点菜单外面也关。
@@ -436,9 +436,11 @@ function TreeMenu({ x, y, onClose, children }: { x: number; y: number; onClose: 
   const close = useRef(onClose)
   close.current = onClose
   useEffect(() => {
+    // 右键打开的:还给右键的那一行(焦点可能还在编辑器里);点「⋯」打开的:还给那颗按钮(它就是当前焦点)。
+    const ctx = Date.now() - lastContextTarget.at < 1000 ? lastContextTarget.el : null
     const active = document.activeElement
-    const back = active instanceof HTMLElement && active !== document.body ? active
-      : lastContextTarget?.closest<HTMLElement>('button, [tabindex]') ?? lastContextTarget?.querySelector<HTMLElement>('button') ?? null
+    const back = ctx ? ctx.closest<HTMLElement>('button, [tabindex]') ?? ctx.querySelector<HTMLElement>('button')
+      : active instanceof HTMLElement && active !== document.body ? active : null
     const items = (): HTMLButtonElement[] => Array.from(ref.current?.querySelectorAll<HTMLButtonElement>(':scope > button') ?? [])
     for (const b of items()) b.setAttribute('role', 'menuitem')
     items().find((b) => !b.disabled)?.focus({ preventScroll: true })
