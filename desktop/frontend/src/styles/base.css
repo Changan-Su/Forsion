@@ -294,6 +294,9 @@ html:root[data-mode][data-flat='1'] {
 
 /* ─── 重置 ─── */
 * { box-sizing: border-box; margin: 0; padding: 0; }
+/* 上一行把 UA 给模态 <dialog> 的 margin:auto 也清了 → 插件 showModal() 的对话框贴在左上角(走查续八 8.13)。
+ * :where 零特异性:只压过 *,组件 / 插件自己写了 margin 就以它为准。非模态 show() 不管。 */
+:where(dialog:modal) { margin: auto; }
 html, body, #root { height: 100%; }
 body {
   font-family: var(--font-ui);
@@ -3496,6 +3499,23 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   .settings-control-row[data-fit='wrap'] .settings-inline-actions { justify-content: stretch; }
   .settings-control-row[data-fit='wrap'] .settings-inline-actions > .btn { flex: 1 1 0; }
   .settings-meters { grid-template-columns: 1fr; gap: 16px; }
+}
+/* 设置零件放进窄窗格(右栏 / 左栏,窗口仍宽)也得换行(走查续八 8.13):上面 ≤820 那段里设置行的规则,按窗格宽再写一份。
+ * 窗格 = .wb-view(lcl/engine/engine.css 给了 container-type)。≤820 那段不能搬走:设置弹窗挂在 body 上,不在任何窗格里。 */
+@container (max-width: 420px) {
+  .settings-control-row { align-items: flex-start; flex-direction: column; }
+  .settings-row-control,
+  .settings-row-wide-control { width: 100%; flex-basis: auto; justify-content: flex-start; min-width: 0; }
+  .settings-row-control > select,
+  .settings-row-control > input { width: 100%; max-width: none; }
+  .settings-control-row[data-fit='inline'] { flex-direction: row; flex-wrap: wrap; align-items: center; row-gap: 8px; }
+  .settings-control-row[data-fit='inline'] > .settings-control-copy { flex: 1 1 0; min-width: 120px; }
+  .settings-control-row[data-fit='inline'] > .settings-row-control { width: auto; flex: 0 0 auto; justify-content: flex-end; }
+  .settings-control-row[data-fit='wrap'] .settings-parts-inline,
+  .settings-control-row[data-fit='wrap'] .settings-inline-actions { width: 100%; }
+  .settings-control-row[data-fit='wrap'] .settings-parts-inline > input { flex: 1; width: auto; }
+  .settings-control-row[data-fit='wrap'] .settings-inline-actions { justify-content: stretch; }
+  .settings-control-row[data-fit='wrap'] .settings-inline-actions > .btn { flex: 1 1 0; }
 }
 /* 触屏上设置零件的按钮、输入框、步进器加高到 36(手指好点)。只认零件画的行与面板,没换过来的旧页面不动。 */
 @media (pointer: coarse) {
