@@ -2,9 +2,6 @@
  * owns its own palette, radii and UI font; Origin (the default) also defines the :root
  * radii/font fallback, and themes override via :root[data-theme='id'] / [data-theme='id']. */
 :root {
-  --ease-apple: cubic-bezier(0.25, 0.1, 0.25, 1);
-  --dur-fast: 180ms;
-  --dur-normal: 300ms;
   --radius-pill: 9999px;
   --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
 }

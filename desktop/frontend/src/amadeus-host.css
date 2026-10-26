@@ -1400,17 +1400,11 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .amx-db-pop-input { border: 1px solid var(--border); border-radius: var(--radius-sm, 6px); outline: none; background: transparent; color: var(--text); font: inherit; font-size: var(--ui-font-meta, 12px); padding: 5px 7px; margin: 4px 2px 2px; }
 .amx-db-pop-input:focus { border-color: var(--accent-ink, var(--accent, #6c5ce7)); }
 
-/* ── 微动效:笔记库树(箭头旋转 + 展开子树滑入;跟随 base.css 动效 token) ── */
-.amx-tree .t2s-chev { transition: transform var(--duration-fast, 0.15s) var(--ease-out, ease); }
+/* ── 微动效:笔记库树的箭头与子树展开同一个 --collapse-*(8.10;子树的展开是 AnimatedCollapse,原来那条 slide-in 关键帧已删) ── */
+.amx-tree .t2s-chev { transition: transform var(--collapse-duration) var(--collapse-ease); }
 .amx-tree .t2s-chev.open { transform: rotate(90deg); }
-.amx-tree .t2s-group-sessions { animation: amx-slide-in 0.16s var(--ease-out, ease); }
-@keyframes amx-slide-in {
-  from { opacity: 0; transform: translateY(-3px); }
-  to { opacity: 1; transform: none; }
-}
 @media (prefers-reduced-motion: reduce) {
   .amx-tree .t2s-chev { transition: none; }
-  .amx-tree .t2s-group-sessions { animation: none; }
 }
 
 /* ── 导出 PDF:打印时只呈现 #amx-print-root(编辑器克隆,恒浅色纸面),隐藏整个应用壳。

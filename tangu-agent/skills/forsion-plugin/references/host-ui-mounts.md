@@ -125,18 +125,27 @@ exportBtn.setAttribute('aria-label', 'Export')               // the tooltip does
 - `side`: `top` (default) / `bottom` / `left` / `right`; it flips when there is no room. Drop `title` on elements
   that have a host tooltip, or two tooltips stack.
 - Your own motion: use the host tokens, not literal durations — `--ease-surface` (enter), `--ease-exit` (leave,
-  accelerating), `--ease-calm`, `--ease-drawer`, `--menu-enter-duration` 180ms / `--menu-exit-duration` 80ms,
+  accelerating), `--ease-calm`, `--ease-drawer`, `--duration-instant` / `fast` / `base` / `slow` (100 / 150 / 200 / 250ms),
+  `--collapse-duration` / `--collapse-ease`, `--menu-enter-duration` 180ms / `--menu-exit-duration` 80ms,
   `--tip-enter` / `--tip-exit`, `--hovercard-enter` / `--hovercard-exit`. Leaving is shorter than entering;
-  interruptible states use `transition`, not `keyframes`; created / restored / scrolled-in content doesn't animate in;
+  interruptible states use `transition`, not `keyframes`; don't tween width / height / padding / margin (use the collapse
+  below or `transform`) and don't write `transition: all`; created / restored / scrolled-in content doesn't animate in;
   under reduced motion keep colour and opacity, drop translation and scale.
 - Motion the host applies for you (2026-10-25+, same page, standard markup, no keyframes or tokens needed): native
-  `<details>` fades its content in (180ms) / out (80ms) — opacity only, height is not tweened; native `<dialog>`
+  `<details>` fades its content in / out (200ms, the collapse tokens) — opacity only, height is not tweened; native `<dialog>`
   (`showModal()`) and `popover` open like the command palette (120ms fade + 0.985 → 1 scale, backdrop fades in);
   `data-motion="enter"` on content that appears because the user just did something (a list they opened, a section
   they expanded) fades it in and lifts it 4px when it mounts (180ms). Don't put `data-motion` on what is there when the
   view opens, is restored or scrolls in. It animates the separate `translate` property, so your `transform` positioning
   is untouched. These host rules have zero specificity: your own `animation` / `transition` on the element wins; the
   host turns them off under reduced motion. Pages inside an iframe / webview don't get them.
+- Collapse (2026-10-26+): `data-motion="collapse"` + `data-open="true|false"` on the outer element, content in exactly
+  one inner element. The host animates `grid-template-rows` 0fr ↔ 1fr with a fade (200ms both ways, interruptible, no
+  height measuring); closed content is `visibility: hidden`. A chevron with `data-motion="chevron"` + the same
+  `data-open` turns 90° when open (use a right-pointing one). The inner element clips while open; add `data-settled` to
+  release it. React: `import { AnimatedCollapse } from '@lcl/components'`, `<AnimatedCollapse open={open}>{open && …}
+  </AnimatedCollapse>` — keeps the last content while closing, unmounts after, skips the animation on first mount, sets
+  `data-settled` itself. Don't measure `scrollHeight` and tween `height`.
 
 ### Drop indicators: ctx.ui.dropIndicator (2026-10-24+)
 

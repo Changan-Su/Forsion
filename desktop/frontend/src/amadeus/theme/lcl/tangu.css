@@ -16,7 +16,7 @@
   --font-ui: 'Hanken Grotesk', ui-sans-serif, system-ui, -apple-system, sans-serif;
   --font-body: var(--font-ui); --font-mono: ui-monospace, 'SF Mono', Menlo, monospace;
   --user-bg: rgba(28,28,28,0.04); --tool-bg: rgba(28,28,28,0.03); --tool-text: #5f5f5d; --panel-blur: none;
-  --duration-instant: 0.1s; --duration-fast: 0.15s; --duration-slow: 0.25s; --ease-out: cubic-bezier(0.16,1,0.3,1);
+  --duration-instant: 0.1s; --duration-fast: 0.15s; --duration-slow: 0.25s;
   --inset: rgba(255,255,255,0.2) 0 0.5px 0 0 inset, rgba(0,0,0,0.2) 0 0 0 0.5px inset, rgba(0,0,0,0.05) 0 1px 2px 0;
   --focus: rgba(0,0,0,0.1) 0 4px 12px;
   /* elevation tokens — soft shadows replace borders, so cards lift instead of being outlined */
