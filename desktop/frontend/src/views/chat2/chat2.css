@@ -738,7 +738,7 @@
    * 这个区分是必须的:曾经无差别挂 250ms 过渡,开右栏时正文列宽 820→564→820 折返,
    * 补间停了 padding 还在动 44px —— 就是用户报的「面板停了字还在窜」。别把它挪出容器查询。
    * 曲线取苹果那条低回弹 spring 的贝塞尔近似;比卡片自身的 0.3s 慢一档(布局比卡片重)。 */
-  .t2-stream, .composer-anchor, .t2-chat-col > .t2-empty, .t2-jump {
+  .t2-stream, .composer-anchor, .t2-chat-col > .t2-empty, .t2-jump, .t2-toast-dock {
     transition-property: padding-right, right;
     transition-duration: 0.45s;
     transition-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
@@ -754,6 +754,8 @@
   /* 欢迎区与输入框共用可用宽度和让位动效,避免 Logo 仍以包含右侧车道的整列居中。 */
   .t2-chat-view:has(.t2-rail:not([data-off]) :is(.t2-tsum.show, .agent-desk-card:not(.gone))) .t2-chat-col > .t2-empty { right: var(--tsum-w); }
   .t2-chat-view:has(.t2-rail:not([data-off]) :is(.t2-tsum.show, .agent-desk-card:not(.gone))) .t2-jump { right: calc(var(--tsum-w) + 22px); }
+  /* toast 落点跟输入卡同一条中线(走查续六 6.5) */
+  .t2-chat-view:has(.t2-rail:not([data-off]) :is(.t2-tsum.show, .agent-desk-card:not(.gone))) .t2-toast-dock { right: var(--tsum-w); }
 }
 /* 退场那一刻卡片还没 display:none(等动画跑完),但已经不该吃点击 */
 @container (max-width: 759.9px) {
