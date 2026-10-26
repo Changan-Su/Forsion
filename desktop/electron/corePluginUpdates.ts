@@ -11,6 +11,7 @@ export function createCorePluginUpdater(options: {
   let items = options.items.map((item) => ({ ...item, phase: options.enabled ? item.phase : 'development' as const }))
   let running: Promise<void> | undefined
   let checking = false
+  let generation = 0 // reset() 加一:之前开跑的那一轮拍下的已装 / 暂存版本,播种之后就过时了
   const snapshot = (): CorePluginUpdates => ({ checking, items: items.map((item) => ({ ...item })) })
   const emit = (): void => options.broadcast(snapshot())
   const check = (): Promise<void> => {
@@ -19,21 +20,27 @@ export function createCorePluginUpdater(options: {
     checking = true
     items = items.map((item) => ({ ...item, phase: 'checking', error: undefined }))
     emit()
+    const gen = generation
     running = Promise.resolve().then(() => options.run((item) => {
+      if (gen !== generation) return
       items = items.map((before) => before.id === item.id ? { ...before, ...item } : before)
       emit()
     })).then(() => undefined).catch((error: unknown) => {
+      if (gen !== generation) return
       items = items.map((item) => item.phase === 'checking' || item.phase === 'downloading'
         ? { ...item, phase: 'error', error: error instanceof Error ? error.message : String(error) } : item)
     }).finally(() => {
       checking = false
       running = undefined
       emit()
+      if (gen !== generation) void check() // 过时的那一轮结束了:按现在磁盘上的状态重查一遍
     })
     return running
   }
-  /** 回到「尚未检查」:首次启动预取之后,刚播种的、下次拉起引擎就用上的那份不该再显示「重启并启用更新」;下一次检查重新填。 */
+  /** 回到「尚未检查」:首次启动预取之后,刚播种的、下次拉起引擎就用上的那份不该再显示「重启并启用更新」;下一次检查重新填。
+   *  预取超时后还在跑的那一轮,之后的回报一律不收,它跑完自动再查一遍。 */
   const reset = (): void => {
+    generation++
     items = items.map((item) => ({ id: item.id, packageName: item.packageName, phase: options.enabled ? 'idle' : 'development' }))
     emit()
   }

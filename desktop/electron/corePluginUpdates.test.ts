@@ -85,4 +85,18 @@ describe('first-boot prefetch', () => {
     updater.reset()
     expect(updater.snapshot().items).toEqual([{ id: 'x', packageName: 'x', phase: 'idle' }])
   })
+  it('drops reports from a run that started before reset, then re-checks from current disk state', async () => {
+    let finish!: () => void
+    const wait = new Promise<void>((resolve) => { finish = resolve })
+    const run = vi.fn()
+      .mockImplementationOnce(async (report) => { await wait; report({ id: 'x', packageName: 'x', phase: 'staged', installedVersion: '1.0.0', pendingVersion: '1.1.0' }) })
+      .mockImplementationOnce(async (report) => { report({ id: 'x', packageName: 'x', phase: 'current', installedVersion: '1.1.0' }) })
+    const updater = createCorePluginUpdater({ items: [{ id: 'x', packageName: 'x', phase: 'idle' }], enabled: true, broadcast: () => {}, run })
+    const stale = updater.check() // first-boot prefetch timed out; seeding applied 1.1.0 meanwhile
+    updater.reset()
+    finish(); await stale
+    expect(updater.snapshot().items[0].phase).not.toBe('staged')
+    await vi.waitFor(() => expect(updater.snapshot()).toMatchObject({ checking: false, items: [{ phase: 'current', installedVersion: '1.1.0' }] }))
+    expect(run).toHaveBeenCalledTimes(2)
+  })
 })

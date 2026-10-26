@@ -315,15 +315,15 @@ export class BackendManager {
     }
     const s = this.settings!
     this.setState('starting', null)
-    // 经启动器拉起时记下它会挑中哪一版(同一个判定函数),起不来好知道该停用谁。
-    let selected: string | null = null
-    try { selected = launch.length > 1 ? this.overlay?.active() ?? null : null } catch { /* 当作没有 */ }
-    if (selected !== this.overlayVersion) this.overlayExits = 0 // 意外退出的次数是按版本记的
-    this.overlayVersion = selected
-
     for (let attempt = 0; attempt < 3; attempt++) {
       this.port = await freePort()
       if (gen !== this.gen) return
+      // 经启动器拉起时记下它会挑中哪一版(同一个判定函数),起不来好知道该停用谁。每次尝试都重取:更新器可能在两次尝试之间
+      // 落位了新版(首次启动的预取超时后还在后台下),只在开头取一次会把新版的失败记成自带那份的,停用不了它。
+      let selected: string | null = null
+      try { selected = launch.length > 1 ? this.overlay?.active() ?? null : null } catch { /* 当作没有 */ }
+      if (selected !== this.overlayVersion) this.overlayExits = 0 // 意外退出的次数是按版本记的
+      this.overlayVersion = selected
       const args = [
         ...launch,
         '--port', String(this.port),
