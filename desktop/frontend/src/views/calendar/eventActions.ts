@@ -13,6 +13,7 @@ registerMessages({
   'calevtact.untitled': { zh: '未命名', en: 'Untitled' },
   'calevtact.undo': { zh: '撤销', en: 'Undo' },
   'calevtact.undone': { zh: '已撤销', en: 'Undone' },
+  'calevtact.redone': { zh: '已重做', en: 'Redone' },
   'calevtact.conflict': { zh: '事件已发生变化，未覆盖后续编辑。', en: 'The event changed. Later edits were kept.' },
 })
 
@@ -30,7 +31,7 @@ export function undoLastCalendarEdit(): boolean {
   if (!edit.undo()) { conflict(); return false }
   if (edit.redo) future.push(edit)
   // 走查续七 7.13:撤销成功(⌘Z、提示上的按钮、插件 ctx.events.undo 都走这里)→ 同一条提示原地换成「已撤销」,去掉按钮,1.2 秒后淡出
-  notifyApp({ level: 'info', text: translate('calevtact.undone'), dedupeKey: UNDO_KEY, action: undefined, durationMs: 1200, settle: true })
+  settled(translate('calevtact.undone'))
   return true
 }
 export function redoLastCalendarEdit(): boolean {
@@ -39,9 +40,11 @@ export function redoLastCalendarEdit(): boolean {
   future.pop()
   if (!edit.redo?.()) { conflict(); return false }
   past.push(edit)
+  settled(translate('calevtact.redone')) // 不然「已撤销」还挂着,和刚重做回来的状态对不上
   return true
 }
 const UNDO_KEY = 'calendar-undo'
+const settled = (text: string): void => { notifyApp({ level: 'info', text, dedupeKey: UNDO_KEY, action: undefined, durationMs: 1200, settle: true }) }
 // 冲突同样换掉那条「撤销」提示(不再留一个点了也没用的按钮)
 const conflict = (): void => { notifyApp({ level: 'warning', text: translate('calevtact.conflict'), dedupeKey: UNDO_KEY, action: undefined, settle: true }) }
 export function calendarScope(): string { return vaultKey() }

@@ -69,8 +69,7 @@ export function layoutMonthWeek<T extends MonthLayoutInput>(events: T[], days: D
   const span = (e: T): [number, number] => [startOfDay(e.start).getTime(), startOfDay(e.end ?? e.start).getTime()]
   const multi = (e: T): boolean => span(e)[1] > span(e)[0]
   const inRow = events.filter((e) => { const [s, t] = span(e); return t >= dayMs[0] && s <= dayMs[dayMs.length - 1] })
-  const bars = inRow.filter((e) => e.allDay || multi(e)).sort((a, b) =>
-    Number(multi(b)) - Number(multi(a)) || span(a)[0] - span(b)[0] || span(b)[1] - span(a)[1] || byStart(a, b))
+  const bars = inRow.filter(multi).sort((a, b) => span(a)[0] - span(b)[0] || span(b)[1] - span(a)[1] || byStart(a, b))
 
   const lanes: Array<Array<T | undefined>> = days.map(() => [])
   for (const e of bars) {
@@ -83,6 +82,8 @@ export function layoutMonthWeek<T extends MonthLayoutInput>(events: T[], days: D
 
   return dayMs.map((d, i) => [
     ...Array.from(lanes[i], (e) => e ?? null),
+    // 单日的不分行、不补跨天条留下的空位:补进去就排到了跨天条上面
+    ...inRow.filter((e) => e.allDay && !multi(e) && span(e)[0] === d).sort(byStart),
     ...inRow.filter((e) => !e.allDay && !multi(e) && span(e)[0] === d).sort(byStart),
   ])
 }

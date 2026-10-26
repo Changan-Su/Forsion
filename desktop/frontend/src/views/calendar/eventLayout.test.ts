@@ -74,9 +74,15 @@ describe('layoutMonthWeek', () => {
     const rows = layoutMonthWeek([a, b], days)
     expect(rows[0].map((e) => e?.key)).toEqual(['b', 'a'])
     expect(rows[2].map((e) => e?.key)).toEqual(['b'])
+  })
+
+  it('单日全天不补跨天条的空位(不排到跨天条上面)', () => {
+    const a = ev('a', day(25), day(26), true)
+    const b = ev('b', day(26), day(27), true)
     const c = ev('c', day(27), null, true)
-    const rows2 = layoutMonthWeek([a, b, c], days)
-    expect(rows2[2].map((e) => e?.key)).toEqual(['b', 'c']) // c 补进 a 结束后空出来的那一行
+    const rows = layoutMonthWeek([c, b, a], days)
+    expect(rows[1].map((e) => e?.key)).toEqual(['a', 'b'])
+    expect(rows[2].map((e) => e?.key ?? null)).toEqual([null, 'b', 'c'])
   })
 
   it('从上一周延续过来的条也进这一行;跨天的定时事件按条画', () => {
