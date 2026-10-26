@@ -3,16 +3,25 @@
  *  这里不答(undefined)就走引擎原路。**必须在引擎脚本执行前装好**(forkRuntime 顶上 import):
  *  引擎有几张快捷键表是模块初始化时就格式化好的。 */
 
+import { registerMessages, translateFor } from '../../../i18n'
+
+// 与快捷键表(ShortcutsDialog)共用这几条。
+registerMessages({
+  'boardkeys.copy': { zh: '复制', en: 'Copy' },
+  'boardkeys.duplicate': { zh: '创建副本', en: 'Duplicate' },
+  'boardkeys.copyStyles': { zh: '复制样式', en: 'Copy styles' },
+  'boardkeys.stylesCopied': { zh: '样式已复制。', en: 'Copied styles.' },
+})
+
 const IS_MAC = /Mac/.test(navigator.userAgent) && !('ontouchend' in document)
 
-/** 「复制」在图像工作室是 copy、「创建副本」是 duplicate;引擎中文包里这两个是「拷贝 / 复制」,正好反着。 */
-const LABELS: Record<string, Record<string, string>> = {
-  'zh-CN': {
-    'labels.copy': '复制',
-    'labels.duplicateSelection': '创建副本',
-    'labels.copyStyles': '复制样式',
-    'toast.copyStyles': '样式已复制。',
-  },
+/** 「复制」在图像工作室是 copy、「创建副本」是 duplicate;引擎中文包里这两个是「拷贝 / 复制」,正好反着。
+ *  只改简体中文包(英文包本来就是 Copy / Duplicate),译文取应用词典的中文那份。 */
+const LABELS: Record<string, string> = {
+  'labels.copy': 'boardkeys.copy',
+  'labels.duplicateSelection': 'boardkeys.duplicate',
+  'labels.copyStyles': 'boardkeys.copyStyles',
+  'toast.copyStyles': 'boardkeys.stylesCopied',
 }
 
 const MODS: Record<string, string> = { ctrl: '⌘', cmd: '⌘', command: '⌘', ctrlorcmd: '⌘', mod: '⌘', alt: '⌥', opt: '⌥', option: '⌥', shift: '⇧' }
@@ -43,7 +52,7 @@ declare global {
 }
 
 globalThis.__forsionBoardText = {
-  label: (key, lang) => LABELS[lang]?.[key],
+  label: (key, lang) => (lang === 'zh-CN' && LABELS[key] ? translateFor('zh', LABELS[key]) : undefined),
   // 钩子在引擎 gA 最开头:拿到的是原始写法(`CtrlOrCmd+Shift+E`),还没换成语言包里的 Cmd / Option。
   shortcut: (spec) => (IS_MAC ? formatShortcut(spec) : undefined),
 }
