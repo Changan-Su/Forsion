@@ -425,3 +425,22 @@ The line that says "it will land here" while dragging to reorder, and the outlin
 生命周期同其它 `ctx.ui.mount*`:插件停用 / 重载 / setup 失败时宿主统一收,回调此后不再调;形态错同步抛 `TypeError`。仪器:`desktop/frontend/src/amadeus/plugins/partsSurface.test.ts`(单测)、`desktop/scripts/r8dx-shots.cjs`(真 Electron:装样例插件 `scripts/fixtures/r8dx-sample-v2`,明 / 暗 / 现场切英文 / 窄窗格拍图并量几何)。
 
 The host draws these parts for plugins, which never get its React components. Text fields take PluginText (string, `() => string` or `{ zh, en }`) and follow a language switch. Menus gained icons, shortcut hints, separators, section headings, anchoring to a button and the Android bottom sheet; dialogs, toolbar controls, popovers, empty states, the view head, one icon vocabulary (`ctx.ui.icon`), `ctx.addStyle` and `ctx.i18n.define` are new, and `ctx.ui.mount(name, el, props)` is the typed entry point for React / Vue plugins. Before 2026-10-26 `ctx.ui.contextMenu` kept only `label` / `run` / `checked` / `disabled` / `danger` and dropped every other field silently.
+
+### 样式契约 / Style contract (2026-10-26)
+
+插件可以依赖的宿主类名和 CSS 变量发布在 forsion-plugin 技能的 `tools/plugin-contract.json`（每个带用途，随 `apiVersion` 升级）；清单外的宿主类名和变量随时可能改名或删掉。
+
+- 公开类名：`.btn`（`.primary` / `.ghost` / `.danger` / `.sm`）、`.ctx-menu` 外壳（直接子 `<button>` 是菜单项，另有 `button.danger`、`.ctx-separator`、`.ctx-shortcut`、`.ctx-head`、`.ctx-menu-scroll`）、`.empty-state` / `.empty-title`。不要借用 `.amx-*`、`.fc-*`、`.t2-*` 这些宿主私有类名。
+- 公开 token：色、圆角 `--radius-*`、阴影、菜单尺寸 `--menu-*`、界面字号 `--ui-font-*` / `--ui-line-*`、动效 `--duration-*` / `--ease-*`，以及 `--focus-ring`。只列名字不列值，值跟着设计语言、主题色和背景色变。`--ease-out`、`--ease-spring`、`--ease-apple`、`--dur-*` 已弃用。
+- 不写兜底：写 `var(--radius-md)`，不写 `var(--radius-md, 10px)`。只有 token 比插件的 `minAppVersion` 新（契约里的 `since` 表）时才给老宿主留兜底；`--reading-line-height` / `--reading-paragraph-gap` 本来就带兜底。
+- 不写死颜色、阴影和圆角：浅底用 `color-mix(in srgb, var(--green) 14%, transparent)`。画面本身要固定的颜色（视频黑边、压在画面上的白字）写关键字 `black` / `white`。
+- 检查：`node check-plugin.mjs <插件目录> --style` 扫 `main.js` 和目录里的 `.css`，报私有类名、清单外或已弃用的 token、多余兜底、写死的颜色、4px 及以上的圆角和带颜色的阴影。只报告，不改变退出码。给另一份文档用的 CSS（iframe 里的页面、导出文件）在同一行写 `/* forsion-style: off */` 跳过。
+
+The host class names and CSS custom properties a plugin can rely on are published in the forsion-plugin skill's `tools/plugin-contract.json` (each with its purpose, versioned with `apiVersion`). Host class names and variables outside that list can be renamed or removed in any release.
+
+- Public classes: `.btn` (`.primary` / `.ghost` / `.danger` / `.sm`), the `.ctx-menu` shell (its direct `<button>` children are the items; also `button.danger`, `.ctx-separator`, `.ctx-shortcut`, `.ctx-head` and `.ctx-menu-scroll`), and `.empty-state` / `.empty-title`. Do not borrow host-private classes such as `.amx-*`, `.fc-*` or `.t2-*`.
+- Public tokens: colors, radii `--radius-*`, shadows, menu sizes `--menu-*`, interface type `--ui-font-*` / `--ui-line-*`, motion `--duration-*` / `--ease-*`, and `--focus-ring`. The contract lists names, not values: values follow the design language, accent and background. `--ease-out`, `--ease-spring`, `--ease-apple` and `--dur-*` are deprecated.
+- No fallbacks: write `var(--radius-md)`, not `var(--radius-md, 10px)`. Keep a fallback only for a token newer than your `minAppVersion` (the contract's `since` table); `--reading-line-height` and `--reading-paragraph-gap` take one by design.
+- No hard-coded colors, shadows or radii: for a wash use `color-mix(in srgb, var(--green) 14%, transparent)`. A color that is fixed on purpose because it belongs to the artwork (a video letterbox, white text over a frame) is written as a keyword: `black` / `white`.
+- Check: `node check-plugin.mjs <plugin folder> --style` scans `main.js` and the folder's `.css` files and reports private classes, tokens that are not public or are deprecated, needless fallbacks, hard-coded colors, radii of 4px or more, and shadows with a hard-coded color. It only reports and does not change the exit code. CSS meant for another document (a page inside an iframe, an exported file) is skipped by putting `/* forsion-style: off */` on the same line.
+
