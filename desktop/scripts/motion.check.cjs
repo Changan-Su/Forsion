@@ -92,7 +92,7 @@ const splitTop = (v, sep) => {
   if (cur.trim()) out.push(cur.trim())
   return out
 }
-const NOT_PROP = /^(?:(?:\d+\.?\d*|\.\d+)m?s|ease|ease-in|ease-out|ease-in-out|linear|step-start|step-end|allow-discrete|normal|(?:cubic-bezier|steps|linear|var)\(.*\))$/
+const NOT_PROP = /^(?:[-+]?(?:\d+\.?\d*|\.\d+)m?s|ease|ease-in|ease-out|ease-in-out|linear|step-start|step-end|allow-discrete|normal|(?:cubic-bezier|steps|linear|var)\(.*\))$/
 // transition 每一段里的属性名;没写属性 = all。整段只有 var() 的认不出,跳过
 const transitionProps = (d) => splitTop(d.value, /,/).flatMap((seg) => {
   if (d.prop === 'transition-property') return [seg]

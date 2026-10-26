@@ -5501,7 +5501,7 @@ html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .
     visibility var(--collapse-duration);
 }
 :where([data-motion~='collapse'][data-open='true']) { grid-template-rows: 1fr; opacity: 1; visibility: visible; }
-:where([data-motion~='collapse']) > * { min-height: 0; overflow: hidden; }
+:where([data-motion~='collapse']) > * { min-height: 0; min-width: 0; overflow: hidden; } /* min-width:放开裁切后长标题照样省略,不撑宽侧栏 */
 :where([data-motion~='collapse'][data-settled]) > * { overflow: visible; }
 :where([data-motion~='chevron']) { transition: transform var(--collapse-duration) var(--collapse-ease); }
 :where([data-motion~='chevron'][data-open='true']) { transform: rotate(90deg); }
