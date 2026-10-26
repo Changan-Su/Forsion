@@ -1,10 +1,10 @@
 /**
  * Muse 工作区：状态 pill(权限档 / 待批数)→ 待批准(ask/agent 档越界动作,批准=引擎按原参数代执行)→
- * 当前思考 → 追踪中(Muse 自己 SCHEDULE.db 的 auto 条目=自触发/Track)→ 盯任务 → TODO 清单
+ * 当前思考 → 追踪中(Muse 自己 SCHEDULE.db 的 auto 条目=自触发/Track)→ 盯任务 → 待办清单
  * (注入已有会话 / 新会话执行)。嵌在「后台智能体」视图(AgentsDetailView)与 Muse Space 右栏使用,外层容器负责 padding/滚动。
  */
 import React, { useEffect, useState } from 'react'
-import { Sparkles, RefreshCw, Play, Check, XCircle, Crosshair, Trash2, ShieldCheck, ShieldX, MessageSquarePlus, Repeat, FolderOpen } from 'lucide-react'
+import { Sparkles, RefreshCw, Play, Check, X, XCircle, Crosshair, Trash2, ShieldCheck, ShieldQuestion, MessageSquarePlus, Repeat, FolderOpen } from 'lucide-react'
 import { setActiveSpace, useWorkspace } from '@lcl/engine'
 import { syncAgentSpace } from '../builtins/agentSpaceSync'
 import {
@@ -16,16 +16,21 @@ import { openNewChat } from '../sessionNav'
 import type { AgentScheduleEntry, MuseStatusInfo, MuseTodo, MuseTriggerInfo, PendingApprovalInfo, SessionRecord, TanguDesktopConfig } from '../types'
 import { registerMessages, useI18n } from '../i18n'
 import { formatDateTime } from '../format/time'
+import { formatRepeat } from '../format/repeat'
 import { fmtCalDateYL } from '@amadeus/lib/calDateFmt'
 import { parseCalDate } from '@amadeus-shared/db/calDate'
 import { useAutomation } from '../stores/automationStore'
 import { deleteWithUndo, isPendingDelete } from '../views/automation/automationListSource'
 import { homeTarget, targetForSession } from '../services/engine/targets'
 import { previewNeedsScrollHint } from './approvalText'
+import { SelectField } from './SelectField'
+import { approvalReasonText, sanitizeApprovalReason } from '../approvalReason'
 
 registerMessages({
   'special.muse.off': { zh: '未开启', en: 'Off' },
   'special.muse.goSettings': { zh: '去设置', en: 'Settings' },
+  'special.muse.approvalWrite': { zh: 'Muse 请求写入文件', en: 'Muse wants to write a file' },
+  'special.muse.approvalRun': { zh: 'Muse 请求执行 {tool}', en: 'Muse wants to run {tool}' },
   'special.muse.sleeping': { zh: '休眠至 {time}', en: 'Sleeping until {time}' },
   'special.muse.sleepingTitle': {
     zh: 'Muse 判断暂时没事可做，跳过心跳到这个时刻；你一有动作、规则命中或日程到期都会提前叫醒它。理由：{reason}',
@@ -39,6 +44,14 @@ const hhmm = (ms: number): string => {
 }
 
 const arr = <T,>(v: unknown): T[] => (Array.isArray(v) ? v : [])
+
+/** 改文件的工具:标题写「Muse 请求写入文件」,其余写工具名。 */
+const WRITE_TOOLS: ReadonlySet<string> = new Set(['write_file', 'edit_file', 'multi_edit', 'apply_patch'])
+/** pending_approvals.reason 是引擎 JSON.stringify 的 ApprovalReason;坏串 / 旧行 → 不写「为什么问你」。 */
+const parseReason = (raw: string | null): ReturnType<typeof sanitizeApprovalReason> => {
+  if (!raw) return undefined
+  try { return sanitizeApprovalReason(JSON.parse(raw)) } catch { return undefined }
+}
 
 export const MuseView: React.FC<{
   cfg: TanguDesktopConfig
@@ -167,7 +180,7 @@ export const MuseView: React.FC<{
           : tg.cond.type === 'at'
             ? tg.cond.datetime.replace('T', ' ')
             : tg.cond.type === 'every'
-              ? `every ${tg.cond.interval}`
+              ? formatRepeat(t, tg.cond.interval)
               : '—'
   const modeLabel = (m: MuseStatusInfo['mode']): string =>
     m === 'auto' ? t('settings.special.m.modeAuto') : m === 'agent' ? t('settings.special.m.modeAgent') : t('settings.special.m.modeAsk')
@@ -206,23 +219,35 @@ export const MuseView: React.FC<{
         <div className="field">
           <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}><ShieldCheck size={13} /> {t('special.muse.approvals')}</label>
           {approvals.length === 0 && <div className="hint">{t('special.muse.approvalsEmpty')}</div>}
-          {approvals.map((a) => (
-            <div key={a.id} className="file-row" style={{ cursor: 'default', alignItems: 'flex-start' }}>
-              <span className="file-name" style={{ flex: 1, whiteSpace: 'normal' }}>
+          {approvals.map((a) => {
+            const why = approvalReasonText(parseReason(a.reason), t as (k: string, v?: Record<string, unknown>) => string)
+            return (
+              // 7.18:和聊天里的 ApprovalCard 同一套 approval-* 排法(标题 → 为什么问你 → 预览占满宽 → 一行说明 → 按钮一排)。
+              // 不直接挂 ApprovalCard:它吃的是 approval_request 事件,还会给「总允许」,Muse 的队列兑现不了。
+              <div key={a.id} className="approval-card muse-approval" data-muse-approval={a.id} style={{ marginTop: 6 }}>
+                <div className="approval-title">
+                  <ShieldQuestion size={15} style={{ color: 'var(--accent-ink)' }} />
+                  {WRITE_TOOLS.has(a.tool) ? t('special.muse.approvalWrite') : t('special.muse.approvalRun', { tool: a.tool })}
+                </div>
+                {why && <div className="approval-why">{why}</div>}
                 {/* 批准 = 引擎按原参数直接执行:预览必须多行原样(`# 注释\nrm` 折成一行会像注释),超长给滚动与提示 */}
-                <b style={{ display: 'block', fontFamily: 'var(--font-mono, monospace)', fontSize: 'var(--ui-font-meta, 12px)', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: 240, overflow: 'auto' }}>{a.preview}</b>
-                {previewNeedsScrollHint(a.preview) && <div className="hint">{t('approval.previewScrollHint')}</div>}
-                <div style={{ color: 'var(--text-muted)', fontSize: 'var(--ui-font-meta, 12px)', marginTop: 2 }}>
+                <div className="approval-preview" style={{ maxHeight: 240, overflow: 'auto', overflowWrap: 'anywhere' }}>{a.preview}</div>
+                {previewNeedsScrollHint(a.preview) && <div className="approval-why">{t('approval.previewScrollHint')}</div>}
+                <div className="approval-why">
                   {a.tool}{a.cwd ? ` · ${a.cwd}` : ''} · {String(a.created_at).replace('T', ' ').slice(5, 16)}
                   {a.note && <div>{t('special.muse.approvalNote', { note: a.note })}</div>}
                 </div>
-              </span>
-              <button className="btn primary sm" disabled={busy === a.id} title={t('special.muse.approve')} onClick={() => void decide(a, 'approve')}>
-                <ShieldCheck size={12} /> {t('special.muse.approve')}
-              </button>
-              <button className="icon-btn" disabled={busy === a.id} title={t('special.muse.reject')} onClick={() => void decide(a, 'reject')}><ShieldX size={13} /></button>
-            </div>
-          ))}
+                <div className="approval-actions">
+                  <button className="btn primary sm" disabled={busy === a.id} onClick={() => void decide(a, 'approve')}>
+                    <Check size={13} /> {t('special.muse.approve')}
+                  </button>
+                  <button className="btn danger sm" disabled={busy === a.id} onClick={() => void decide(a, 'reject')}>
+                    <X size={13} /> {t('special.muse.reject')}
+                  </button>
+                </div>
+              </div>
+            )
+          })}
         </div>
       )}
 
@@ -246,7 +271,7 @@ export const MuseView: React.FC<{
             <span className="file-name" style={{ flex: 1, whiteSpace: 'normal' }}>
               <b>{e.name}</b>
               <div style={{ color: 'var(--text-muted)', fontSize: 'var(--ui-font-meta, 12px)', marginTop: 2 }}>
-                {fmtCalDateYL(parseCalDate(e.date)) || e.date}{e.repeat ? ` · ${t('automation.schedule.every', { ivl: e.repeat })}` : ''}{e.lastRun ? ` · ${t('special.muse.trigFired', { t: formatDateTime(e.lastRun) })}` : ''}
+                {fmtCalDateYL(parseCalDate(e.date)) || e.date}{e.repeat ? ` · ${formatRepeat(t, e.repeat)}` : ''}{e.lastRun ? ` · ${t('special.muse.trigFired', { t: formatDateTime(e.lastRun) })}` : ''}
                 {e.description && <div>{e.description}</div>}
               </div>
             </span>
@@ -309,10 +334,10 @@ export const MuseView: React.FC<{
       {/* 注入区:已有会话 / 新会话 */}
       {todos.length > 0 && (
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <select value={target} onChange={(e) => setTarget(e.target.value)} style={{ maxWidth: 240 }}>
-            <option value="">{t('special.muse.pickSession')}</option>
-            {sessions.map((s) => <option key={s.id} value={s.id}>{s.title || s.id.slice(0, 8)}</option>)}
-          </select>
+          <div style={{ flex: '1 1 100%', maxWidth: 320, minWidth: 0 }}>
+            <SelectField size="sm" field="muse-target" ariaLabel={t('special.muse.pickSession')} value={target} onChange={setTarget}
+              options={[{ value: '', label: t('special.muse.pickSession') }, ...sessions.map((s) => ({ value: s.id, label: s.title || s.id.slice(0, 8) }))]} />
+          </div>
           <button className="btn primary sm" disabled={!target || !sel.size} onClick={() => void inject()}>
             <Play size={12} /> {t('special.muse.inject')}
           </button>

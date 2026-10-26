@@ -10,6 +10,7 @@ import { setActiveSpace, useSpaceStore } from '@lcl/engine'
 import { deleteAgentScheduleEntry, getAgentSchedules, getMuseTriggers } from '../services/backendService'
 import { useApp } from '../stores/appStore'
 import { useI18n } from '../i18n'
+import { formatRepeat } from '../format/repeat'
 import { condText, fmtTime, isFinishedTrigger } from '../views/automation/lib'
 import { nextOccurrence, triggerWakes } from './agentScheduleLib'
 import type { AgentScheduleEntry, MuseTriggerInfo, TanguDesktopConfig } from '../../../../tangu-agent/src/contracts/clientTypes'
@@ -64,10 +65,10 @@ const AgentScheduleBody: React.FC<Props> = ({ cfg, slug, running }) => {
       <button type="button" className="harness-undo" disabled={busy} title={t('common.delete')} aria-label={t('common.delete')} onClick={() => void remove(entry)}><Trash2 size={13} /></button>
     </div>
     <div className="schedule-when">
-      {/* 到点自动执行 = accent 芯片;只是给自己排的计划 = 灰芯片。重复间隔原样显示引擎的写法(1d / 3h),两种语言都读得懂。 */}
+      {/* 到点自动执行 = accent 芯片;只是给自己排的计划 = 灰芯片。重复间隔经 formatRepeat 说成人话(1d → 每天,10-26 第七轮 7.19)。 */}
       <span className={`harness-kind${entry.auto ? ' recipe' : ''}`}>{t(entry.auto ? 'agentProfile.scheduleAuto' : 'agentProfile.schedulePlan')}</span>
       <time>{next ? fmtTime(next.getTime()) : entry.date ? entry.date.split('/')[0].replace('T', ' ') : t('agentProfile.scheduleNoDate')}</time>
-      {entry.repeat && <span>{t('automation.schedule.every', { ivl: entry.repeat })}</span>}
+      {entry.repeat && <span>{formatRepeat(t, entry.repeat)}</span>}
     </div>
     {(entry.prompt || entry.description) && <p title={entry.prompt || entry.description}>{entry.prompt || entry.description}</p>}
     {entry.lastRun && <small className="harness-meta">{t('agentProfile.scheduleLastRun', { time: fmtTime(entry.lastRun) })}</small>}

@@ -23,6 +23,7 @@ import { ensureAmadeusReady } from '../../amadeusPlugins'
 import type { ExtendViewController } from '@lcl/engine'
 import { ArrowLeft, HelpCircle, Plus } from 'lucide-react'
 import { CapabilityMenu } from '../../components/CapabilityMenu'
+import { SelectField } from '../../components/SelectField'
 import { AutomationExtension } from './AutomationExtension'
 import type { MuseTriggerInfo } from '../../types'
 import { starterSteps, stepIssue, type Starter } from './experience'
@@ -477,12 +478,8 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
               <>
                 <div className="field">
                   <label>{t('automation.builder.runner')}</label>
-                  <select value={s.agentSlug} onChange={(e) => patchStep(s.key, { agentSlug: e.target.value })}>
-                    <option value="">{t('automation.builder.runnerPick')}</option>
-                    {agentDefs.filter((d) => d.slug !== 'muse').map((d) => (
-                      <option key={d.slug} value={d.slug}>{d.name}</option>
-                    ))}
-                  </select>
+                  <SelectField size="sm" field="automation-runner" ariaLabel={t('automation.builder.runner')} value={s.agentSlug} onChange={(agentSlug) => patchStep(s.key, { agentSlug })}
+                    options={[{ value: '', label: t('automation.builder.runnerPick') }, ...agentDefs.filter((d) => d.slug !== 'muse').map((d) => ({ value: d.slug, label: d.name }))]} />
                 </div>
                 <div className="field">
                   <label>{t('automation.builder.prompt')}</label>

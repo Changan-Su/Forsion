@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react'
 import { useI18n } from '../../i18n'
+import { SelectField } from '../../components/SelectField'
 import { type StudioImage, validCrop } from './model'
 import type { Box } from '../../amadeus/unified/canvasKit/geometry'
 import { useBlobUrl } from './useImages'
@@ -7,6 +8,7 @@ import { useBlobUrl } from './useImages'
 export function CropEditor({ image, onApply, onCancel }: { image: StudioImage; onApply(crop: Box): void; onCancel(): void }) {
   const { t } = useI18n(), src = useBlobUrl(image.blob)
   const [crop, setCrop] = useState<Box>(image.crop || { x: 0, y: 0, w: image.width, h: image.height })
+  const [ratioPick, setRatioPick] = useState('')
   const drag = useRef<{ pointer: number; x: number; y: number; base: Box; edge: string; sx: number; sy: number } | null>(null)
   const host = useRef<HTMLDivElement>(null)
   const clamp = (b: Box): Box => {
@@ -37,11 +39,15 @@ export function CropEditor({ image, onApply, onCancel }: { image: StudioImage; o
         {['nw', 'ne', 'sw', 'se'].map(edge => <span key={edge} data-edge={edge} className={`ims-crop-handle ${edge}`} />)}
       </div>
     </div>
-    <select aria-label={t('imageStudio.cropRatio')} defaultValue="" onChange={e => {
-      const ratio = Number(e.target.value) || image.width / image.height
+    {/* 比例是「套一下」的动作,不是持久值:选中的项只用来显示;空串是占位,选它不动裁剪框。 */}
+    <SelectField size="sm" field="ims-crop-ratio" ariaLabel={t('imageStudio.cropRatio')} value={ratioPick} onChange={v => {
+      if (!v) return
+      setRatioPick(v)
+      const ratio = Number(v) || image.width / image.height
       const w = Math.min(image.width, image.height * ratio), h = w / ratio
       setCrop(clamp({ x: (image.width - w) / 2, y: (image.height - h) / 2, w, h }))
-    }}><option value="" disabled>{t('imageStudio.cropRatio')}</option><option value="0">{t('imageStudio.original')}</option>{[[1, '1:1'], [.8, '4:5'], [2 / 3, '2:3'], [16 / 9, '16:9'], [9 / 16, '9:16']].map(([value, name]) => <option key={name} value={value}>{name}</option>)}</select>
+    }} options={[{ value: '', label: t('imageStudio.cropRatio') }, { value: '0', label: t('imageStudio.original') },
+      ...([[1, '1:1'], [.8, '4:5'], [2 / 3, '2:3'], [16 / 9, '16:9'], [9 / 16, '9:16']] as const).map(([value, name]) => ({ value: String(value), label: name }))]} />
     <div className="ims-fields">{(['x', 'y', 'w', 'h'] as const).map(key => <label key={key}>{t(`imageStudio.${key}`)}<input type="number" aria-label={t(`imageStudio.crop.${key}`)} value={crop[key]} min={key === 'x' || key === 'y' ? 0 : 1} max={key === 'x' || key === 'w' ? image.width : image.height} onChange={e => setCrop(clamp({ ...crop, [key]: Number(e.target.value) || 0 }))} /></label>)}</div>
     <div className="ims-button-row"><button onClick={onCancel}>{t('imageStudio.cancel')}</button><button className="ims-primary" disabled={!validCrop(crop, image.width, image.height)} onClick={() => onApply(crop)}>{t('imageStudio.applyCrop')}</button></div>
   </div>

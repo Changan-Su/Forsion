@@ -124,12 +124,16 @@ async function main() {
       await panel.getByRole('button', { name: mode, exact: true }).click()
       await panel.getByRole('textbox').fill(text)
       if (mode === '改图') {
-        await panel.getByRole('combobox', { name: '输入内容', exact: true }).selectOption('original')
+        await panel.getByRole('button', { name: '输入内容', exact: true }).click()
+        await panel.getByRole('option', { name: '原始文件', exact: true }).click()
         check('edit: original ratio and untouched source are available to the real run',
-          await panel.getByRole('combobox', { name: '结果比例', exact: true }).inputValue() === 'original'
-          && await panel.getByRole('combobox', { name: '输入内容', exact: true }).inputValue() === 'original')
+          (await panel.getByRole('button', { name: '结果比例', exact: true }).innerText()).startsWith('原图比例')
+          && (await panel.getByRole('button', { name: '输入内容', exact: true }).innerText()) === '原始文件')
       }
-      if (mode === '扩展画面') await panel.getByRole('combobox', { name: '结果比例', exact: true }).selectOption('16:9')
+      if (mode === '扩展画面') {
+        await panel.getByRole('button', { name: '结果比例', exact: true }).click()
+        await panel.getByRole('option', { name: '16:9', exact: true }).click()
+      }
       const before = await win.locator('.ims-image').count()
       const response = win.waitForResponse(r => r.url().endsWith('/agent/runs') && r.request().method() === 'POST', { timeout: 45000 })
       await panel.getByRole('button', { name: '生成新版本', exact: true }).click()
