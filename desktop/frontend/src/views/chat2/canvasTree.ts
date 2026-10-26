@@ -67,9 +67,13 @@ function sameTurn(b: Turn, src: Turn): boolean {
   return b.answers.every((m, i) => norm(m) === norm(src.answers[i]))
 }
 
+/** 画进树里的子会话(方案「画布子会话显示」10-26 A):from = 开出它的会话(树根或某一支),at = 开出它的那条回答(认不到 = 挂在那一支最后一张卡下)。 */
+export interface KidSpec { sid: string; from: string; at?: string }
+
 /** @param branches 树根下面 fork_message_id 有值的会话(分支的分支也挂树根,见引擎 routes/sessions.ts)
- *  @param rowsOf 会话已拉到的消息;undefined = 还没拉,先不画它(拉到后重算) */
-export function buildTurnTree(rootId: string, branches: readonly SessionRecord[], rowsOf: (sid: string) => readonly UiMessage[] | undefined): TurnTree {
+ *  @param rowsOf 会话已拉到的消息;undefined = 还没拉,先不画它(拉到后重算)
+ *  @param kids 子会话:整份对话都是它自己的轮次(第一句是简报,和来源对不上,没有复制段),排在主线、分支之后,按传进来的顺序 */
+export function buildTurnTree(rootId: string, branches: readonly SessionRecord[], rowsOf: (sid: string) => readonly UiMessage[] | undefined, kids: readonly KidSpec[] = []): TurnTree {
   const cards = new Map<string, TurnCard>()
   const roots: string[] = []
   const paths: Record<string, string[]> = {}
@@ -119,6 +123,17 @@ export function buildTurnTree(rootId: string, branches: readonly SessionRecord[]
       cards.get(srcPath[k])!.at[b.id] = { first: turns[i].first, last: turns[i].last }
     }
     grow(b.id, turns.slice(n), srcPath.slice(0, end + 1), seen)
+  }
+  // 只画一层:子会话自己开的子会话不进来(调用方只传 from 在树里的);from 还没拉到历史的先不画
+  for (const k of kids) {
+    const rows = rowsOf(k.sid)
+    const srcPath = paths[k.from]
+    const turns = rows ? splitTurns(rows) : []
+    if (!turns.length || !srcPath?.length || paths[k.sid]) continue // 还没拉到 / 一轮都没有:不画(也不算画上了,卡底那块照列)
+    const srcTurns = turnsOf[k.from]
+    const i = k.at ? srcTurns.findIndex((t) => t.ids.has(k.at!)) : -1
+    const end = i >= 0 ? i : srcPath.length - 1
+    grow(k.sid, turns, srcPath.slice(0, end + 1), srcTurns.slice(0, end + 1))
   }
   return { cards, roots, paths }
 }

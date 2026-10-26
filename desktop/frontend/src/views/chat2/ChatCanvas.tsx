@@ -13,16 +13,19 @@
  *    那张卡出了可读区就出一颗箭头(同「回到底部」),点了飞回去并恢复跟随。
  *  - 镜头只有一个写手:逐帧追目标(每帧走剩下的 18%,和帧率无关,单帧位移封顶)。跟随、箭头、阅读让位、草稿露出都走它。
  *  - 右键:回答卡 / 提问卡 / 空白处各一份菜单(现成 ContextMenu);卡下面的子树能收起,收起后挂一颗「+N」。
+ *  - 子会话(方案 docs/ToBeImproved/画布子会话显示方案_2026-10-26,A):「视图」里一项开关,开着时 start_session 开出的子会话
+ *    整支挂在开出它的回答卡下(主线、分支之后),第一张是简报卡;只画一层。开出它的那块「从这里分出」就不再列它。
  */
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 import {
   Archive, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, BookOpen, ChevronDown, ChevronUp, CircleHelp, ChevronsDownUp, ChevronsUpDown, Copy, CornerDownRight, GitBranch,
-  Hand, ListTree, Locate, Map as MapIcon, Maximize2, MessageCircleQuestion, MessageSquare, MoveDown, MoveRight, Pencil, PenLine, X,
+  Hand, ListTree, Locate, Map as MapIcon, Maximize2, MessageCircleQuestion, MessageSquare, MoveDown, MoveRight, Pencil, PenLine, Sparkles, Split, X,
 } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
-import type { UiMessage } from '../../../../../tangu-agent/src/contracts/clientTypes'
+import type { SessionRecord, UiMessage } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { useApp } from '../../stores/appStore'
+import { useSessionAttention } from '../../stores/attentionStore'
 import { registerMessages, useI18n } from '../../i18n'
 import { useChatWaitDetailsEnabled } from '../../chatWaitDetails'
 import {
@@ -33,9 +36,11 @@ import { OverlayAt } from '@lcl/engine'
 import { EditorialMessage, type FileCtx, type MessageHandlers } from './EditorialMessage'
 import { openBtw } from './btwStore'
 import { ForkBlock, ForkScope, childIdsOf, type ForkScopeValue } from './ChildSessions'
+import { StatusMark } from './AttentionDot'
+import { rowStatus, type RowStatus } from './sessionTree'
 import { splitLeadingRefs } from './RefChipView'
 import { splitLeadingQuotes } from './quotes'
-import { buildTurnTree, readSteps, type TurnTree } from './canvasTree'
+import { buildTurnTree, readSteps, type KidSpec, type TurnTree } from './canvasTree'
 import { ContextMenu, type CtxItem, type CtxMenu } from '../../components/RightPanel'
 import { SELBAR_VIEWPORT_MOVED } from '../../components/selectionBar/ViewSelectionBar'
 
@@ -84,6 +89,10 @@ registerMessages({
   'chatcanvas.menu.showAll': { zh: '看全部分支', en: 'Show all branches' },
   'chatcanvas.menu.miniOn': { zh: '显示缩略图', en: 'Show minimap' },
   'chatcanvas.menu.miniOff': { zh: '隐藏缩略图', en: 'Hide minimap' },
+  'chatcanvas.menu.kidsOn': { zh: '显示子会话', en: 'Show child sessions' },
+  'chatcanvas.menu.kidsOff': { zh: '隐藏子会话', en: 'Hide child sessions' },
+  'chatcanvas.kid': { zh: '子会话', en: 'Child session' },
+  'chatcanvas.kid.brief': { zh: '简报 · Tangu 写的', en: 'Brief · written by Tangu' },
   'chatcanvas.rename.aria': { zh: '这一支的名字', en: 'Branch name' },
   'chatcanvas.read.resize': { zh: '拖动调整阅读栏宽度', en: 'Drag to resize the reader' },
   'chatcanvas.read.turns': { zh: '这一支的每一轮', en: 'Turns on this branch' },
@@ -99,6 +108,18 @@ registerMessages({
 const MINI_KEY = 'tangu.chatCanvas.minimap'
 const miniPref = (): boolean => { try { return localStorage.getItem(MINI_KEY) === '1' } catch { return false } }
 const setMiniPref = (on: boolean): void => { try { localStorage.setItem(MINI_KEY, on ? '1' : '0') } catch { /* 隐私模式:本次照样生效 */ } }
+// 子会话进不进画布:全局一份(同缩略图),缺省开;对话页(认树根)和画布(画不画)都要跟着变,所以是个小外部 store
+const KIDS_KEY = 'tangu.chatCanvas.children'
+const kidsSubs = new Set<() => void>()
+const kidsPref = (): boolean => { try { return localStorage.getItem(KIDS_KEY) !== '0' } catch { return true } }
+let kidsNow = kidsPref()
+const setKidsPref = (on: boolean): void => {
+  kidsNow = on
+  try { localStorage.setItem(KIDS_KEY, on ? '1' : '0') } catch { /* 隐私模式:本次照样生效 */ }
+  for (const f of kidsSubs) f()
+}
+export const useCanvasKids = (): boolean => useSyncExternalStore((f) => { kidsSubs.add(f); return () => { kidsSubs.delete(f) } }, () => kidsNow)
+
 // 左上那几行说明:前几次打开画布时露出来,之后收进胶囊上的「?」
 const HINTS_KEY = 'tangu.chatCanvas.hintsSeen', HINTS_TIMES = 3
 const hintsSeen = (): number => { try { return Number(localStorage.getItem(HINTS_KEY)) || 0 } catch { return HINTS_TIMES } }
@@ -119,6 +140,7 @@ export interface CanvasPref {
 const PREF_KEY = 'tangu.chatCanvas'
 const NO_ORDER: Record<string, string[]> = Object.freeze({}) as Record<string, string[]>
 const NO_FOLD: string[] = Object.freeze([]) as unknown as string[]
+const NO_KIDS: SessionRecord[] = []
 const PREF_CAP = 200 // ponytail: 只留最近 200 棵树,超出按写入先后丢
 type SavedPref = Partial<Omit<CanvasPref, 'draft'>> & { draft?: CanvasDraft | null }
 function readPrefs(): Record<string, SavedPref> {
@@ -269,17 +291,40 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onChat, exiting, onEx
   const showWaitDetails = useChatWaitDetailsEnabled()
   const sessions = useApp((s) => s.sessions)
   const branches = useMemo(() => sessions.filter((x) => x.parent_session_id === rootId && !!x.fork_message_id), [sessions, rootId])
-  const ids = useMemo(() => [rootId, ...branches.map((b) => b.id)], [rootId, branches])
+  // 子会话:父会话是树根或某一支、自己不是分支(只画一层,孙会话不进);按开出的先后
+  const kidsOn = useCanvasKids()
+  const allKids = useMemo(() => {
+    const inTree = new Set([rootId, ...branches.map((b) => b.id)])
+    return sessions.filter((x) => !x.fork_message_id && x.id !== rootId && !!x.parent_session_id && inTree.has(x.parent_session_id))
+      .sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')))
+  }, [sessions, rootId, branches])
+  const kids = kidsOn ? allKids : NO_KIDS
+  const ids = useMemo(() => [rootId, ...branches.map((b) => b.id), ...kids.map((k) => k.id)], [rootId, branches, kids])
   const msgs = useApp(useShallow((s) => Object.fromEntries(ids.map((id) => [id, s.messagesBySession[id]])) as Record<string, UiMessage[] | undefined>))
   const loading = useApp((s) => !!s.historyLoading[rootId])
   const cfg = useApp((s) => s.cfg)
   const execModes = useApp(useShallow((s) => Object.fromEntries(ids.map((id) => [id, s.configBySession[id]?.execMode]))))
   // 分支的历史不在内存里(只看过主线):画布一开就把整棵树拉齐;拉到一支画一支
   useEffect(() => { for (const id of ids) void useApp.getState().loadSessionHistory(id) }, [ids])
-  const tree = useMemo(() => buildTurnTree(rootId, branches, (sid) => msgs[sid]), [rootId, branches, msgs])
+  const kidSpecs = useMemo<KidSpec[]>(() => kids.map((k) => {
+    const from = k.parent_session_id!
+    // 开出它的那条回答:start_session 的工具结果里有它的 id(同卡底那块的认法);认不到 = 挂在那一支最后一张卡下
+    const at = msgs[from]?.find((m) => childIdsOf(m.toolEvents).includes(k.id))?.id
+    return { sid: k.id, from, at }
+  }), [kids, msgs])
+  const tree = useMemo(() => buildTurnTree(rootId, branches, (sid) => msgs[sid], kidSpecs), [rootId, branches, msgs, kidSpecs])
+  const kidSet = useMemo(() => new Set(kidSpecs.filter((k) => tree.paths[k.sid]).map((k) => k.sid)), [kidSpecs, tree])
   const [pref, setPref] = useChatCanvasPref(rootId)
-  const cardForks = useMemo<ForkScopeValue>(() => ({ inline: false, hideBranches: true, host: activeId }), [activeId])
-  const readForks = useMemo<ForkScopeValue>(() => ({ inline: true, hideBranches: true, host: activeId }), [activeId])
+  const cardForks = useMemo<ForkScopeValue>(() => ({ inline: false, hideBranches: true, host: activeId, hideKids: kidSet }), [activeId, kidSet])
+  const readForks = useMemo<ForkScopeValue>(() => ({ inline: true, hideBranches: true, host: activeId, hideKids: kidSet }), [activeId, kidSet])
+  // 子会话卡上的状态(同左栏 / 卡底那行的 rowStatus)
+  const running = useApp((s) => s.runningBySession)
+  const unread = useApp((s) => s.unread)
+  const attention = useSessionAttention()
+  const kidStatus = (sid: string): RowStatus => {
+    const k = kids.find((x) => x.id === sid)
+    return k ? rowStatus(k, !!attention.get(sid), !!running[sid], unread.has(sid)) : ''
+  }
   const draft = pref.draft && tree.cards.has(pref.draft.parent) ? pref.draft : null
 
   // ── 量格子高(布局用)、回答卡在格子里的偏移(横排的线用)、正文是否超长(预览用):一个 ResizeObserver ──
@@ -863,12 +908,12 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onChat, exiting, onEx
   }
   const handlerCache = useRef(new Map<string, MessageHandlers>())
   const handlersFor = (sid: string, id: string): MessageHandlers => {
-    const k = `${sid}:${id}`
+    const k = `${sid}:${id}:${kidSet.has(sid) ? 'kid' : ''}`
     let h = handlerCache.current.get(k)
     if (!h) {
       h = {
         onCopy: (text) => { try { void navigator.clipboard.writeText(text) } catch { /* ignore */ } },
-        onBranch: () => void useApp.getState().branchFromMessage(id, sid),
+        onBranch: kidSet.has(sid) ? undefined : () => void useApp.getState().branchFromMessage(id, sid),
         onAside: () => {
           const s = useApp.getState().sessions.find((x) => x.id === sid)
           openBtw({ sessionId: sid, title: s?.title, modelId: s?.model_id || undefined, messageId: id })
@@ -915,17 +960,24 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onChat, exiting, onEx
         { label: t(dir === 'v' ? 'chatcanvas.horizontal' : 'chatcanvas.vertical'), icon: dir === 'v' ? <MoveRight size={14} /> : <MoveDown size={14} />, separatorBefore: true, run: () => onDir(dir === 'v' ? 'h' : 'v') },
         { label: t(focus ? 'chatcanvas.menu.showAll' : 'chatcanvas.focus'), icon: <ListTree size={14} />, run: () => setFocus((v) => !v) },
         { label: t(mini ? 'chatcanvas.menu.miniOff' : 'chatcanvas.menu.miniOn'), icon: <MapIcon size={14} />, run: () => { setMini(!mini); setMiniPref(!mini) } },
+        { label: t(kidsOn ? 'chatcanvas.menu.kidsOff' : 'chatcanvas.menu.kidsOn'), icon: <Split size={14} />, disabled: !allKids.length, run: () => {
+          // 正看着某个子会话时关掉:先回到开出它的那一支,不然这棵树里没有它了,画布会被换成它自己的对话
+          const from = kidsOn ? kids.find((k) => k.id === activeId)?.parent_session_id : undefined
+          if (from) useApp.getState().setActiveId(from)
+          setKidsPref(!kidsOn)
+        } },
         { label: t(hand ? 'chatcanvas.menu.handOff' : 'chatcanvas.menu.handOn'), icon: <Hand size={14} />, run: () => setHand((v) => !v) },
       ]
     }
     const sibs = c.parent ? kidsOf(c.parent).filter((k) => k !== DRAFT) : []
     const me = sibs.indexOf(c.key)
+    const kid = kidSet.has(c.sid)
     if (part === 'q' && c.user) {
       const q = questionText(c.user)
       const head = isHead(c)
       return [
-        { label: t('chatcanvas.add.sibling'), icon: <GitBranch size={14} />, disabled: !c.parent || me < 0, run: () => openDraft(c.parent!, me + 1) },
-        { label: t('chatcanvas.menu.rewrite'), icon: <PenLine size={14} />, disabled: !c.parent || me < 0, run: () => openDraft(c.parent!, me + 1, q) },
+        { label: t('chatcanvas.add.sibling'), icon: <GitBranch size={14} />, disabled: kid || !c.parent || me < 0, run: () => openDraft(c.parent!, me + 1) },
+        { label: t('chatcanvas.menu.rewrite'), icon: <PenLine size={14} />, disabled: kid || !c.parent || me < 0, run: () => openDraft(c.parent!, me + 1, q) },
         { label: t('chatcanvas.menu.copyQuestion'), icon: <Copy size={14} />, run: () => copy(q) },
         ...(head ? [
           { label: t('chatcanvas.menu.rename'), icon: <Pencil size={14} />, separatorBefore: true, run: () => setRenaming(c.key) },
@@ -939,7 +991,7 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onChat, exiting, onEx
     const folded = folds.has(c.key)
     const onPath = activePath.includes(c.key) && activePath[activePath.length - 1] !== c.key
     return [
-      { label: t(tailSid ? 'chatcanvas.add.follow' : 'chatcanvas.add.next'), icon: <GitBranch size={14} />, disabled: !c.answers.length,
+      { label: t(tailSid ? 'chatcanvas.add.follow' : 'chatcanvas.add.next'), icon: <GitBranch size={14} />, disabled: !c.answers.length || (kid && !tailSid),
         run: () => { if (tailSid) followUp(c.key, tailSid); else openDraft(c.key, kidsOf(c.key).filter((k) => k !== DRAFT).length) } },
       { label: t('chatcanvas.menu.copyAnswer'), icon: <Copy size={14} />, disabled: !c.answers.length, run: () => copy(c.answers.map((m) => m.content).join('\n\n')) },
       { label: t('chatcanvas.menu.aside'), icon: <MessageCircleQuestion size={14} />, disabled: !last, run: () => { if (last) handlersFor(c.sid, last.id).onAside?.() } },
@@ -1078,7 +1130,7 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onChat, exiting, onEx
               const a = pk ? boxes.get(pk) : undefined
               const b = boxes.get(k)
               if (!a || !b || !pk) return null
-              return <path key={k} className={k === DRAFT ? 'draft' : hot.has(k) ? 'hot' : undefined} d={edgePath(a, b, dir, aTops.get(pk) ?? 0)} />
+              return <path key={k} className={k === DRAFT ? 'draft' : hot.has(k) ? 'hot' : kidSet.has(tree.cards.get(k)?.sid ?? '') ? 'kid' : undefined} d={edgePath(a, b, dir, aTops.get(pk) ?? 0)} />
             })}
           </svg>
           {[...tree.cards.values()].map((c) => {
@@ -1095,12 +1147,18 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onChat, exiting, onEx
             const sibs = c.parent ? kidsOf(c.parent).filter((k) => k !== DRAFT) : []
             const me = sibs.indexOf(c.key)
             const tailSid = c.answers.length ? tailOf(c.key) : null
+            // 子会话的卡:不从这里分支 / 换个问法(第一句是简报,分支也不在这棵树里),只在这一支末尾接着问(= 去回复)
+            const kid = kidSet.has(c.sid)
+            const kidHead = kid && isHead(c)
+            const kidSt = kid ? kidStatus(c.sid) : ''
+            const kidWait = kid && kidSt === 'wait' && tree.paths[c.sid]?.at(-1) === c.key && !!tailSid
             return (
               <div
                 key={c.key}
                 ref={track}
                 className="t2cv-turn"
                 data-cv-node={c.key}
+                data-kid={kidHead ? 'head' : kid ? '' : undefined}
                 data-anchor={c.key === switching?.key ? '' : undefined}
                 data-dim={dim ? '' : undefined}
                 data-hot={hot.has(c.key) ? '' : undefined}
@@ -1128,9 +1186,17 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onChat, exiting, onEx
                         }}
                         onBlur={(e) => commitRename(c.key, e.currentTarget.value)}
                       />
+                    ) : kidHead ? (
+                      <div className="t2cv-qlabel t2cv-kidlabel" data-testid="cv-kid-label">
+                        <span className="t2cv-kidtag"><MessageSquare size={12} /><b>{t('chatcanvas.kid')}</b><span className="t2cv-kidtitle">{sessions.find((x) => x.id === c.sid)?.title || ''}</span>
+                          {kidSt && kidSt !== 'done' && <span className="t2cv-kidst" data-st={kidSt}>{t(kidSt === 'run' ? 'childs.st.run' : 'childs.st.wait')}<StatusMark status={kidSt} /></span>}
+                          {(kidSt === 'done' || !kidSt) && <span className="t2cv-kidst" data-st="done">{t('childs.st.done')}</span>}
+                        </span>
+                        <span className="t2cv-kidbrief">{t('chatcanvas.kid.brief')}</span>
+                      </div>
                     ) : <div className="t2cv-qlabel">{t('chatcanvas.you')}</div>}
                     <div className="t2cv-q" title={t('chatcanvas.readHint')}>{questionText(c.user)}</div>
-                    {adds && c.parent && me >= 0 && (<>
+                    {adds && !kid && c.parent && me >= 0 && (<>
                       <button type="button" className="t2cv-add" data-add="before" title={t('chatcanvas.add.sibling')} aria-label={t('chatcanvas.add.sibling')} onClick={() => openDraft(c.parent!, me)}>+</button>
                       <button type="button" className="t2cv-add" data-add="after" title={t('chatcanvas.add.sibling')} aria-label={t('chatcanvas.add.sibling')} onClick={() => openDraft(c.parent!, me + 1)}>+</button>
                     </>)}
@@ -1151,7 +1217,16 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onChat, exiting, onEx
                     )}
                     {/* 顺便问 / 子会话:对话页那块「从这里分出」,挨着卡底(在正文外面,折起不裁它) */}
                     {c.answers.map((m) => <ForkBlock key={m.id} sessionId={c.sid} messageId={m.id} childIds={childIdsOf(m.toolEvents)} />)}
-                    {adds && !foldN && (
+                    {kidWait && (
+                      <div className="t2-taskcard-actions t2cv-kidacts">
+                        <button type="button" className="primary" onClick={() => followUp(c.key, tailSid!)}><CornerDownRight size={12} /> {t('childs.reply')}</button>
+                        <button type="button" onClick={() => {
+                          const k = kids.find((x) => x.id === c.sid)
+                          if (k?.parent_session_id) void useApp.getState().send(t('childs.letAnswerMsg', { title: k.title || '' }), [], undefined, undefined, undefined, k.parent_session_id)
+                        }}><Sparkles size={12} /> {t('childs.letAnswer')}</button>
+                      </div>
+                    )}
+                    {adds && !foldN && (!kid || tailSid) && (
                       <button
                         type="button" className="t2cv-add" data-add="next"
                         title={t(tailSid ? 'chatcanvas.add.follow' : 'chatcanvas.add.next')} aria-label={t(tailSid ? 'chatcanvas.add.follow' : 'chatcanvas.add.next')}

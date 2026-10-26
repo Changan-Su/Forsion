@@ -180,12 +180,13 @@ const NO_ASIDES: SavedAside[] = []
 /** 「从这里分出」画在哪:对话页 = 消息里、分支也列;画布卡 = 分支已经是卡,不列;卡里还要挪到正文外面(长卡的正文会被折起,块不能跟着被裁),
  *  所以 inline:false = 消息里不画,由 ChatCanvas 画在卡底;阅读栏不折,照常画在消息里、只藏分支。 */
 /** host:子会话面板挂在哪个会话下(主区正开着的那一支)。画布里共享的祖先卡属于树根,不传就开在树根下、主区看不见 */
-export interface ForkScopeValue { inline: boolean; hideBranches: boolean; host?: string }
+/** hideKids:画布开着「显示子会话」时已经画成卡的子会话,这块就不再列它们(顺便问照列) */
+export interface ForkScopeValue { inline: boolean; hideBranches: boolean; host?: string; hideKids?: ReadonlySet<string> }
 export const ForkScope = createContext<ForkScopeValue>({ inline: true, hideBranches: false })
 
 export function ForkBlock({ sessionId, messageId, childIds, onSuggest }: { sessionId: string; messageId: string; childIds: string[]; onSuggest?: (text: string) => void }) {
   const { t } = useI18n()
-  const { hideBranches, host } = useContext(ForkScope)
+  const { hideBranches, host, hideKids } = useContext(ForkScope)
   const sessions = useApp((s) => s.sessions)
   const running = useApp((s) => s.runningBySession)
   const unread = useApp((s) => s.unread)
@@ -194,7 +195,7 @@ export function ForkBlock({ sessionId, messageId, childIds, onSuggest }: { sessi
   useEffect(() => { useBtw.getState().loadSaved(sessionId) }, [sessionId])
   const branches = hideBranches ? [] : sessions.filter((x) => x.fork_message_id === messageId).sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')))
   const asides = saved.filter((a) => a.message_id === messageId)
-  const kids = childIds.map((id) => sessions.find((x) => x.id === id)).filter((x): x is SessionRecord => !!x)
+  const kids = childIds.filter((id) => !hideKids?.has(id)).map((id) => sessions.find((x) => x.id === id)).filter((x): x is SessionRecord => !!x)
   const n = branches.length + asides.length + kids.length
   if (!n) return null
   const stOf = (k: SessionRecord): RowStatus => rowStatus(k, !!attention.get(k.id), !!running[k.id], unread.has(k.id))

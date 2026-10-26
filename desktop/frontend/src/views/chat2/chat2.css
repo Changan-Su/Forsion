@@ -1497,6 +1497,20 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 }
 .t2cv-send:disabled { background: var(--overlay-medium, rgba(127, 127, 127, 0.16)); color: var(--text-faint); cursor: default; }
 .t2cv-edges path.draft { opacity: 0.45; }
+/* 子会话(方案「画布子会话显示」A):连过去的线换中性灰(分支照旧强调色;在当前这条路上时照 hot 加深);
+   简报卡不染强调色(不是你写的),标签行「子会话 · 标题 · 状态」+「简报 · Tangu 写的」 */
+.t2cv-edges path.kid { stroke: color-mix(in srgb, var(--text-muted) 45%, transparent); }
+.t2cv-turn[data-kid]:not([data-hot]) > .t2cv-link { background: color-mix(in srgb, var(--text-muted) 45%, transparent); }
+.t2cv-turn[data-kid="head"] > .t2cv-qcard { background: var(--bg-card, var(--bg)); }
+.t2cv-kidlabel { margin-bottom: 4px; }
+.t2cv-kidtag { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.t2cv-kidtag > svg { flex: none; }
+.t2cv-kidtag > b { flex: none; font-weight: 600; color: var(--text); }
+.t2cv-kidtitle { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-sec); }
+.t2cv-kidst { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.t2cv-kidst[data-st="wait"] { color: var(--warning); }
+.t2cv-kidbrief { display: block; margin-top: 3px; }
+.t2cv-kidacts { margin-top: 8px; }
 /* 抓手:拖到哪都是平移(卡里的字也不选了) */
 .t2cv[data-hand] .t2cv-stage { cursor: grab; }
 .t2cv[data-hand] .t2cv-turn { user-select: none; cursor: grab; }
