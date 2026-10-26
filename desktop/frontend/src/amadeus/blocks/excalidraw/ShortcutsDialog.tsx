@@ -83,10 +83,10 @@ export function ShortcutsDialog({ onClose }: { onClose: () => void }) {
   return createPortal(
     <div className="am-app tangu-lovable" style={{ display: 'contents' }}>
       <div className="dialog-overlay amx-keys-overlay" onMouseDown={onClose}>
-        <div className="dialog amx-keys" role="dialog" aria-modal="true" aria-label={t('boardkeys.title')} data-board-shortcuts onMouseDown={(e) => e.stopPropagation()}>
+        <div className="dialog amx-keys" role="dialog" aria-modal="true" tabIndex={-1} ref={(el) => { if (el && !el.contains(document.activeElement)) el.focus({ preventScroll: true }) }} aria-label={t('boardkeys.title')} data-board-shortcuts onMouseDown={(e) => e.stopPropagation()}>
           <div className="amx-keys-head">
             <div className="dialog-title">{t('boardkeys.title')}</div>
-            <button type="button" className="amx-keys-close" autoFocus aria-label={t('common.close')} title={t('common.close')} onClick={onClose}><X size={16} /></button>
+            <button type="button" className="amx-keys-close" aria-label={t('common.close')} title={t('common.close')} onClick={onClose}><X size={16} /></button>
           </div>
           <div className="amx-keys-groups">
             {GROUPS.map(([title, rows]) => (

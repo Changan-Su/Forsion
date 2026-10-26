@@ -127,6 +127,9 @@ export const BrowserView: React.FC<ViewProps> = ({ leaf, params }) => {
   const [loading, setLoading] = useState(false)
   const [nav, setNav] = useState({ back: false, forward: false })
   const [err, setErr] = useState<LoadFail | null>(null)
+  // 打不开的地址也记进 params:失败的加载不会 did-navigate,不记的话重启 / 重载后这个标签恢复成一张空白页。
+  // url 一并改:下面「外部改 params.url 就跟着走」那条 effect 看到两边相等,不会把失败的地址再拉一遍。
+  const remember = useCallback((failed: string) => { setUrl(failed); if (leaf.params.url !== failed) leaf.setParams({ ...leaf.params, url: failed }) }, [leaf])
   // 点选元素(shared/browserPick.ts):picking = 进行中那次的 guest id。只有桌面宿主有 browserPick。
   const pickApi = window.tangu?.browserPick
   const [picking, setPicking] = useState<number | null>(null)
@@ -174,7 +177,9 @@ export const BrowserView: React.FC<ViewProps> = ({ leaf, params }) => {
       // -3 = ERR_ABORTED(用户点停/被新导航取代),不是错误。
       if (d.isMainFrame === false || d.errorCode === -3) return
       setLoading(false)
-      setErr(loadFail(d.validatedURL || el.getURL(), d.errorDescription || '', d.errorCode))
+      const fail = loadFail(d.validatedURL || el.getURL(), d.errorDescription || '', d.errorCode)
+      setErr(fail)
+      remember(fail.url)
     }
     el.addEventListener('dom-ready', onDomReady)
     el.addEventListener('did-start-loading', onStart)
@@ -271,8 +276,9 @@ export const BrowserView: React.FC<ViewProps> = ({ leaf, params }) => {
       if (/ERR_ABORTED|\(-3\)/.test(msg)) return // 被新导航取代,不算失败
       setLoading(false)
       setErr(loadFail(next, msg))
+      remember(next)
     })
-  }, [])
+  }, [remember])
   const go = useCallback((raw: string) => {
     const next = normalizeAddress(raw)
     if (next) load(next)

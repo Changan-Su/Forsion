@@ -932,7 +932,8 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 /* Desk 白板磁贴(走查续七 7.7 A,AmadeusDrawingView 的 params.preview):只画图 —— 引擎的工具条 / 菜单 / 提示 / 缩放栏全收,
    上面盖一层挡住选中、拖动和滚轮平移(双击 = 在白板中打开),右下角一颗「在白板中打开」。 */
 .amx-drawview:has(> .amx-drawpreview-shield) { position: relative; }
-.amx-boardhost[data-preview] .excalidraw .layer-ui__wrapper { display: none; }
+.amx-boardhost[data-preview] .excalidraw .layer-ui__wrapper,
+.amx-boardhost[data-preview] .excalidraw .LoadingMessage { display: none; }
 .amx-drawpreview-shield { position: absolute; inset: 0; z-index: 4; }
 .amx-drawpreview-open {
   position: absolute; right: 12px; bottom: 12px; z-index: 5;
