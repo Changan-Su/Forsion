@@ -10,11 +10,9 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 const contract = JSON.parse(readFileSync(join(ROOT, 'tangu-agent/skills/forsion-plugin/tools/plugin-contract.json'), 'utf8'));
-const css = ['desktop/frontend/src', 'lcl'].flatMap((dir) =>
-  (readdirSync(join(ROOT, dir), { recursive: true }) as string[])
-    .filter((f) => f.endsWith('.css') && !f.includes('node_modules'))
-    .map((f) => readFileSync(join(ROOT, dir, f), 'utf8')),
-).join('\n');
+const cssOf = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+  e.name === 'node_modules' ? [] : e.isDirectory() ? cssOf(join(dir, e.name)) : e.name.endsWith('.css') ? [readFileSync(join(dir, e.name), 'utf8')] : []);
+const css = ['desktop/frontend/src', 'lcl'].flatMap((dir) => cssOf(join(ROOT, dir))).join('\n');
 const tokens: string[] = Object.values(contract.tokens as Record<string, Record<string, string>>).flatMap(Object.keys);
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
