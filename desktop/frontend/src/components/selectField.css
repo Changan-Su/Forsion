@@ -15,11 +15,13 @@
 .profile-model-results svg { flex-shrink: 0; color: var(--accent-ink); }
 @keyframes select-field-enter { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
 
-/* size="sm":窄属性面板(图像工作室、自动化节点、Muse 右栏)里和旁边的输入框同高 */
+/* size="sm":窄属性面板(图像工作室、自动化节点、Muse 右栏)里和旁边的输入框同高。
+ * 宿主常有 `.ims button` 这类 (0,1,1) 的通用按钮样式,这里把外观整组写全、特异性抬到 (0,3,x),不靠源码顺序。 */
 .profile-select-field[data-size=sm] { min-width: 0; }
-.profile-select-field[data-size=sm] .profile-model-trigger { min-height: 34px; padding: 6px 10px; font-size: var(--ui-font-body, 13px); }
+.profile-select-field[data-size=sm] .profile-model-trigger { justify-content: flex-start; gap: 10px; min-height: 34px; padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm, 8px); background: var(--bg-input, var(--bg)); color: var(--text); font: inherit; font-size: var(--ui-font-body, 13px); }
 .profile-select-field[data-size=sm] .profile-select-options { margin-top: 4px; padding: 4px; }
-.profile-select-field[data-size=sm] .profile-model-results button { min-height: 32px; padding: 6px 8px; }
+.profile-select-field[data-size=sm] .profile-model-results button { justify-content: flex-start; gap: 8px; min-height: 32px; padding: 6px 8px; border: 0; background: transparent; color: var(--text); font: inherit; font-size: var(--menu-text-size); line-height: var(--menu-line-height); }
+.profile-select-field[data-size=sm] .profile-model-results button:is(:hover, [aria-selected=true]) { background: var(--overlay-medium); }
 @media (pointer: coarse) {
   .profile-select-field[data-size=sm] .profile-model-trigger, .profile-select-field[data-size=sm] .profile-model-results button { min-height: 44px; }
 }
