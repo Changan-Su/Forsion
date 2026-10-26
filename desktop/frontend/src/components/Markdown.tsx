@@ -16,8 +16,8 @@ import { toJsxRuntime } from 'hast-util-to-jsx-runtime'
 import { Fragment, jsx, jsxs } from 'react/jsx-runtime'
 import rehypeKatex from 'rehype-katex'
 import 'katex/dist/katex.min.css'
-import { Copy, Check, Play } from 'lucide-react'
-import { useI18n } from '../i18n'
+import { Copy, Check, Play, ImageOff } from 'lucide-react'
+import { registerMessages, useI18n } from '../i18n'
 import { isShellLang, runInTerminal, stripPrompt, type RunResult } from '../builtins/runCommand'
 import { normalizeMath } from '../services/mathNormalize'
 import { remarkWiki } from './wikiChat'
@@ -29,6 +29,22 @@ import { whenNear } from '../lib/nearViewport'
 /** 网页链接的悬停预览卡(ChatLinkCard)。⚠️ 缺省关、只由聊天回答开:本组件还给市场 README / 收件箱 / 更新日志渲第三方文本,
  *  那里的链接不该一悬停就让引擎去问 GitHub。 */
 const LinkCardContext = React.createContext(false)
+
+/** 代码块细表头(语言 + 复制,走查续六 6.2 A)。⚠️ 缺省关、只由聊天回答开:别处的代码块各有自己的底色,表头的样式只写在 .t2-content 里。 */
+const CodeHeadContext = React.createContext(false)
+
+registerMessages({
+  'code.copy': { zh: '复制', en: 'Copy' },
+  'code.copied': { zh: '已复制', en: 'Copied' },
+  'code.plainText': { zh: '文本', en: 'Text' },
+  'md.imageBroken': { zh: '图片无法显示 · {alt}', en: 'Image unavailable · {alt}' },
+})
+/** 表头上的语言名:常见几种写全称,其余照 fence 原样。 */
+const LANG_NAMES: Record<string, string> = {
+  ts: 'TypeScript', typescript: 'TypeScript', tsx: 'TSX', js: 'JavaScript', javascript: 'JavaScript', jsx: 'JSX',
+  py: 'Python', python: 'Python', sh: 'Shell', bash: 'Shell', zsh: 'Shell', shell: 'Shell', json: 'JSON',
+  html: 'HTML', css: 'CSS', md: 'Markdown', markdown: 'Markdown', yaml: 'YAML', yml: 'YAML', sql: 'SQL',
+}
 
 // [[双链]] 经 remarkWiki 变成 #wiki= 链接,在这里拦下渲染;http(s) 走网页引用条(Desk 内置浏览器
 // + 链接文字当引语定位;聊天回答里另带悬停预览卡);其余(mailto/相对/锚点)维持默认 <a>。
@@ -96,8 +112,12 @@ const CodeBlock: React.FC<React.HTMLAttributes<HTMLPreElement> & { node?: unknow
   const preRef = React.useRef<HTMLPreElement>(null)
   const highlighted = useHighlighted(preRef, node)
   const runCtx = useContext(RunContext)
+  const lang = fenceLang(node)
   // Run 键靠 window.tangu.pty 门控:web/移动端没有 PTY,自然不露。
-  const runnable = runCtx?.allowRun !== false && isShellLang(fenceLang(node)) && !!window.tangu?.pty
+  const runnable = runCtx?.allowRun !== false && isShellLang(lang) && !!window.tangu?.pty
+  // 表头只给「有语言或超过 3 行」且不止两行的块;一两行的命令仍是角上的图标键(pre 右边留出位置,不压字)。
+  const lines = hastText((node as HastNode | undefined)?.children?.find((n) => n.tagName === 'code')).replace(/\n$/, '').split('\n').length
+  const head = useContext(CodeHeadContext) && lines > 2 && (!!lang || lines > 3)
   const copy = () => {
     const text = preRef.current?.innerText ?? ''
     navigator.clipboard.writeText(text).then(() => {
@@ -109,8 +129,24 @@ const CodeBlock: React.FC<React.HTMLAttributes<HTMLPreElement> & { node?: unknow
     const cmd = stripPrompt(preRef.current?.innerText ?? '')
     if (cmd) runInTerminal(cmd, { cwd: runCtx?.cwd, onExit: runCtx?.onRun })
   }
+  if (head) {
+    return (
+      <div className="code-box" data-code-head="">
+        <div className="code-head">
+          <span className="code-head-lang">{lang ? LANG_NAMES[lang.toLowerCase()] ?? lang : t('code.plainText')}</span>
+          <span className="code-head-acts">
+            {runnable && <button type="button" className="code-head-btn" onClick={run} title={t('terminal.runTitle')} aria-label={t('terminal.runTitle')} data-testid="code-run"><Play size={13} /></button>}
+            <button type="button" className="code-head-btn" onClick={copy} title={t('common.copyCode')}>
+              {copied ? <Check size={13} /> : <Copy size={13} />}{t(copied ? 'code.copied' : 'code.copy')}
+            </button>
+          </span>
+        </div>
+        <pre ref={preRef} {...props}>{highlighted ?? children}</pre>
+      </div>
+    )
+  }
   return (
-    <div style={{ position: 'relative' }}>
+    <div className="code-box" data-run={runnable || undefined} style={{ position: 'relative' }}>
       <pre ref={preRef} {...props}>{highlighted ?? children}</pre>
       {runnable && (
         <button
@@ -135,6 +171,23 @@ const CodeBlock: React.FC<React.HTMLAttributes<HTMLPreElement> & { node?: unknow
   )
 }
 
+/** 图片打不开:换成一块说明(走查续六 6.7),不留浏览器的破图标。alt 是用户内容,不翻;点它试着用系统浏览器开原地址。 */
+const MdImage = ({ node: _node, src, alt, ...rest }: any) => {
+  const { t } = useI18n()
+  const [broken, setBroken] = useState(false)
+  useEffect(() => setBroken(false), [src])
+  if (!broken) return <img src={src} alt={alt} {...rest} onError={() => setBroken(true)} />
+  const open = typeof src === 'string' && /^https?:\/\//i.test(src)
+    // 外面包着链接(README 徽章之类)时只开图片地址这一下,别再冒泡给外层链接
+    ? (e: React.MouseEvent) => { e.preventDefault(); e.stopPropagation(); void (window.tangu?.openExternal?.(src) ?? window.open(src, '_blank', 'noopener')) }
+    : undefined
+  return (
+    <button type="button" className="md-img-broken" title={typeof src === 'string' ? src : undefined} onClick={open} disabled={!open}>
+      <ImageOff size={18} /><span>{t('md.imageBroken', { alt: alt || '' })}</span>
+    </button>
+  )
+}
+
 /** 手机上宽表格在自己的框里横向滑(chat2.css 末尾):一行放得下的格子不折行,放不下的照常折 ——
  *  CSS 数不了字,这里把后一种标出来(约 13 个汉字宽:汉字算 1,其余算半个多一点)。别处没有样式认这个标记。 */
 const cellEm = (n: any): number => n?.type === 'text'
@@ -148,9 +201,9 @@ const Th = tableCell('th')
  * anchorPrefix:传入时给 h1/h2/h3 渲染稳定 id(`${anchorPrefix}-${第n个标题}`)+ data-toc-level,
  * 供右侧「目录」扫描跳转。不传则零影响(记忆/日志面板等普通渲染)。
  */
-export const Markdown: React.FC<{ content: string; anchorPrefix?: string; /** shell 代码块「运行」的回传与工作目录(聊天消息给;缺省=只跑不回传)。 */ run?: { onRun?: (r: RunResult) => void; cwd?: string }; /** 只读文档可隐藏运行入口，仍保留复制代码。 */ allowRun?: boolean; /** 开内联嵌入(独占一段的 `![[…]]`);缺省关,见 EmbedContext。 */ embeds?: EmbedCtx; /** 网页链接悬停出预览卡;缺省关,见 LinkCardContext。 */ linkCards?: boolean }> = React.memo(
-  ({ content, anchorPrefix, run, allowRun = true, embeds, linkCards = false }) => {
-    const components: Record<string, any> = { pre: CodeBlock, a: WikiAnchor, p: Para, td: Td, th: Th }
+export const Markdown: React.FC<{ content: string; anchorPrefix?: string; /** shell 代码块「运行」的回传与工作目录(聊天消息给;缺省=只跑不回传)。 */ run?: { onRun?: (r: RunResult) => void; cwd?: string }; /** 只读文档可隐藏运行入口，仍保留复制代码。 */ allowRun?: boolean; /** 开内联嵌入(独占一段的 `![[…]]`);缺省关,见 EmbedContext。 */ embeds?: EmbedCtx; /** 网页链接悬停出预览卡;缺省关,见 LinkCardContext。 */ linkCards?: boolean; /** 代码块细表头;缺省关,见 CodeHeadContext。 */ codeHead?: boolean }> = React.memo(
+  ({ content, anchorPrefix, run, allowRun = true, embeds, linkCards = false, codeHead = false }) => {
+    const components: Record<string, any> = { pre: CodeBlock, a: WikiAnchor, p: Para, td: Td, th: Th, img: MdImage }
     if (anchorPrefix) {
       const counter = { i: 0 }
       const heading = (level: 1 | 2 | 3) => {
@@ -169,6 +222,7 @@ export const Markdown: React.FC<{ content: string; anchorPrefix?: string; /** sh
       <RunContext.Provider value={{ ...run, allowRun }}>
         <EmbedContext.Provider value={embeds}>
           <LinkCardContext.Provider value={linkCards}>
+          <CodeHeadContext.Provider value={codeHead}>
             <ReactMarkdown
               remarkPlugins={[remarkMath, remarkGfm, remarkCjkFriendly, remarkCjkFriendlyStrikethrough, remarkWiki]}
               rehypePlugins={[[rehypeKatex, { throwOnError: false }]]}
@@ -176,6 +230,7 @@ export const Markdown: React.FC<{ content: string; anchorPrefix?: string; /** sh
             >
               {normalizeMath(content)}
             </ReactMarkdown>
+          </CodeHeadContext.Provider>
           </LinkCardContext.Provider>
         </EmbedContext.Provider>
       </RunContext.Provider>

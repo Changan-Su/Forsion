@@ -30,13 +30,14 @@ registerMessages({
   'approval.tray.title': { zh: '等你批准 · {n}', en: 'Waiting for your approval · {n}' },
   'approval.tray.titleAny': { zh: '等你处理 · {n}', en: 'Waiting for you · {n}' },
   'approval.tray.label': { zh: '等你处理的事项', en: 'Items waiting for you' },
-  'approval.tray.more': { zh: '还有 {list}', en: 'Also {list}' },
-  'approval.tray.kApproval': { zh: '审批 {n}', en: 'approvals: {n}' },
-  'approval.tray.kInquiry': { zh: '提问 {n}', en: 'questions: {n}' },
-  'approval.tray.kPlan': { zh: '计划 {n}', en: 'plans: {n}' },
-  'approval.tray.kTask': { zh: '任务卡 {n}', en: 'task cards: {n}' },
-  'approval.tray.kHuman': { zh: '协作请求 {n}', en: 'requests: {n}' },
-  'approval.tray.kCreation': { zh: '作品卡 {n}', en: 'creation cards: {n}' },
+  // 只在种类混着时出现(走查续六 6.6):只有一种时表头的「· n」已经说全了
+  'approval.tray.more': { zh: '还有 {list}', en: '{list}' },
+  'approval.tray.kApproval': { zh: '{n} 个审批', en: '{n} more approval(s)' },
+  'approval.tray.kInquiry': { zh: '{n} 个提问', en: '{n} more question(s)' },
+  'approval.tray.kPlan': { zh: '{n} 个计划', en: '{n} more plan(s)' },
+  'approval.tray.kTask': { zh: '{n} 张任务卡', en: '{n} more task card(s)' },
+  'approval.tray.kHuman': { zh: '{n} 个协作请求', en: '{n} more request(s)' },
+  'approval.tray.kCreation': { zh: '{n} 张作品卡', en: '{n} more creation card(s)' },
   'approval.tray.prev': { zh: '上一件', en: 'Previous' },
   'approval.tray.next': { zh: '下一件', en: 'Next' },
   'approval.pill': { zh: '{n} 件等你', en: '{n} waiting for you' },
@@ -131,7 +132,9 @@ export function ApprovalTray({ items, onDecide, onAnswer, onTask, sessionId }: {
   const idx = items.indexOf(cur)
   const go = (d: number): void => { touch(); setOpenId(items[(idx + d + items.length) % items.length].id) }
   const rest = items.filter((i) => i !== cur)
+  // 「还有」只报和眼前这件不同种的:同种的件数表头和「1 / 3」已经说了
   const more = (['approval', 'inquiry', 'plan', 'task', 'human', 'creation'] as const)
+    .filter((k) => k !== countKind(cur))
     .map((k) => [k, rest.filter((i) => countKind(i) === k).length] as const)
     .filter(([, n]) => n)
     .map(([k, n]) => t(`approval.tray.k${k[0].toUpperCase()}${k.slice(1)}`, { n }))

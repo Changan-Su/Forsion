@@ -39,7 +39,7 @@
 .t2-chat-body { position: relative; flex: 1; min-height: 0; display: flex; }
 /* ── 输入卡悬浮:正文铺满整列,从胶囊底下穿过去(2026-08-14 用户草图)──────────────
  * 高度不定(芯片行 / 多行草稿 / steer 队列都会长高),ChatView 用 ResizeObserver 把实测高写进
- * .t2-chat-col 的 --t2-composer-h;**底部留白、渐隐止点、回到底按钮三处共用它**,改一处就得想全三处。
+ * .t2-chat-col 的 --t2-composer-h;**底部留白、渐隐止点、回到底按钮、toast 落点(.t2-toast-dock)四处共用它**,改一处就得想全四处。
  * 渐隐用 mask 而不是铺一条背景色渐变:聊天区自己没有底色(主区透纸卡、侧栏透玻璃面),
  * 铺色必然在某个主题/某一侧对不上;mask 是把内容本身淡成透明,与背景是什么无关。
  *
@@ -117,8 +117,27 @@
 .t2-content > :last-child { margin-bottom: 0; }
 .t2-content p { margin: 0 0 var(--chat-paragraph-gap, .7em); }
 /* 列表:缺省项与项、列表与下一段之间都不留空(全局 reset);宽松正文时各留一点。只管顶层列表,嵌套的不加底边距。 */
-.t2-content li { margin-block: var(--chat-item-gap, 0); }
+.t2-content li { margin-block: var(--chat-item-gap, .15em); }
 .t2-content > :is(ul, ol) { margin-bottom: var(--chat-list-after, 0); }
+/* 列表 / 引用 / 任务清单照笔记编辑器的画法(走查续六 6.1):缩进 1.4em、二级空心圆、标记淡一档;
+   引用块左边 2px 圆头竖线(上下各缩 10%,border-left 做不了);任务项只留自绘复选框,勾上的那条变淡划线。 */
+.t2-content :is(ul, ol) { padding-left: 1.4em; }
+.t2-content li > :is(ul, ol) { margin-block: .15em .1em; }
+.t2-content ul ul { list-style-type: circle; }
+.t2-content li::marker { color: var(--text-muted); }
+.t2-content blockquote { margin: .5em 0 .8em; padding-left: .9em; position: relative; color: var(--text-muted); }
+.t2-content blockquote::before { content: ''; position: absolute; left: 0; top: 10%; bottom: 10%; width: 2px; border-radius: 2px; background: var(--border); }
+.t2-content li.task-list-item { list-style: none; }
+.t2-content li.task-list-item > :is(input, p:first-child > input)[type='checkbox'] {
+  appearance: none; box-sizing: border-box; width: 14px; height: 14px; margin: 0 8px 0 -22px; vertical-align: -2px;
+  border: 1.5px solid var(--text-ghost); border-radius: 4px; background: var(--bg-card); opacity: 1;
+}
+.t2-content li.task-list-item > :is(input, p:first-child > input)[type='checkbox']:checked {
+  border-color: transparent;
+  background: var(--signal-mark) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E") center / 10px no-repeat;
+}
+/* 松散列表(项间空行)里复选框包在 <p> 里,两种都认 */
+.t2-content li.task-list-item:has(> input:checked, > p:first-child > input:checked) { color: var(--text-muted); text-decoration: line-through; text-decoration-color: var(--text-ghost); }
 /* 标题节奏(10-02 用户拍板 a5,与笔记同一口径):半粗、上远下近。原来没有这组规则,走浏览器默认的 700。
    首块的上边距由上面 > :first-child 清零(特异性更高)。 */
 .t2-content :is(h1, h2, h3, h4, h5, h6) { font-weight: 600; line-height: 1.35; margin: 1.3em 0 var(--chat-heading-after, 0.4em); }
@@ -148,7 +167,26 @@
    (流本身不会被顶宽:它 overflow-y:auto ⇒ 是滚动容器 ⇒ flex 自动最小尺寸恒为 0,不必写 min-width:0。)
    仪器:npm run check:chatside 的 16/17。 */
 /* 底色与内边距和笔记代码块同一份(10-02 a5:原来透明底,代码像没包起来)。 */
-.t2-content pre { border-radius: var(--radius-md, 12px); max-width: 100%; overflow-x: auto; background: var(--bg-card); padding: 12px 14px; }
+/* 字体照笔记代码块(--font-mono、约 12.9px、行高 1.6、小圆角;走查续六 6.2)。没表头的短块(一两行命令)右边让出角上的复制键,
+   有 Run 键再让一颗;有表头的块(Markdown.tsx 的 CodeBlock 决定)底色挪到外框,复制 / 运行在表头里,永远不压字。 */
+.t2-content pre {
+  border-radius: var(--radius-sm); max-width: 100%; overflow-x: auto; background: var(--bg-card); padding: 12px 44px 12px 14px;
+  font-family: var(--font-mono); font-size: .92em; line-height: 1.6;
+}
+.t2-content pre code { font-family: inherit; }
+.t2-content .code-box[data-run] > pre { padding-right: 72px; }
+.t2-content .code-box[data-code-head] { background: var(--bg-card); border-radius: var(--radius-sm); overflow: hidden; margin: 0 0 var(--chat-paragraph-gap, .7em); }
+.t2-content .code-box[data-code-head] > pre { border-radius: 0; background: transparent; padding: 2px 14px 12px; margin: 0; }
+.t2-content .code-head {
+  display: flex; align-items: center; justify-content: space-between; height: 30px; padding: 0 6px 0 14px;
+  font-size: var(--ui-font-caption, 11px); line-height: 1; color: var(--text-muted);
+}
+.t2-content .code-head-acts { display: inline-flex; align-items: center; gap: 2px; }
+.t2-content .code-head-btn {
+  display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 8px; border: 0; border-radius: var(--radius-sm);
+  background: transparent; color: var(--text-muted); font: inherit; cursor: pointer;
+}
+.t2-content .code-head-btn:hover { background: var(--overlay-light); color: var(--text); }
 /* 分割线 ---:比正文边框更淡的发丝线 + 上下留白 */
 .t2-content hr {
   border: none;
@@ -311,6 +349,16 @@
   transition: background var(--duration-fast, .15s);
 }
 .t2-tool .t2-relogin { align-self: center; } /* 聊天错误条是 row flex + align-items:center,跟着居中 */
+/* 失败那一行下面「重试 · 复制错误」(走查续六 6.3):和回答下那排操作同一种文字按钮,不带主题色;左缘对齐错误条里的字。
+   右栏失败卡同一颗(.t2-tsum-retry)。 */
+.t2-retry-row { display: flex; align-items: center; gap: 2px; margin: -2px 0 0 -8px; }
+.t2-retry-btn {
+  display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 8px; border: 0; border-radius: var(--radius-sm);
+  background: transparent; color: var(--text-muted); font: inherit; font-size: var(--ui-font-meta, 12px); cursor: pointer;
+}
+.t2-retry-btn.lead { color: var(--text); }
+.t2-retry-btn:hover { background: var(--overlay-light); }
+.t2-tsum-retry { margin: 6px 0 0 -8px; }
 .t2-relogin:hover { background: color-mix(in srgb, var(--danger) 12%, transparent); }
 .t2-tool-name { font-weight: 600; color: var(--text); }
 .t2-tool-hint { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
@@ -471,6 +519,13 @@
 /* ⚠️ pointer-events 是**继承**属性:悬浮层置 none 之后,里面的东西不点名就一起哑了。
    簇内各块(选择器条 / 输入卡 …)一律收回 auto。 */
 .t2-chat-col > .composer-anchor > * { pointer-events: auto; }
+/* 聊天里弹的 toast 落点(lib/chatToastDock.ts):输入卡上方 12px,托盘出现 / 输入卡变高时跟着上移;两张叠着放、间隔 8px。
+   toast 自己的 fixed + 整窗居中在这里换成跟着落点走;列窄时收到列宽减 32px。 */
+.t2-toast-dock {
+  position: absolute; left: 0; right: 0; bottom: calc(var(--t2-composer-h, 96px) + 12px); z-index: 11;
+  display: flex; flex-direction: column; align-items: center; gap: 8px; pointer-events: none;
+}
+.t2-toast-dock > :is(.ach-toast, .amx-toast) { position: relative; left: auto; bottom: auto; transform: none; max-width: calc(100% - 32px); box-sizing: border-box; }
 /* 唯独 .t2c 例外:它铺满整宽,可有内容的只有中间那 880px(.t2c-inner)。让它自己不吃事件,
    胶囊两侧的空当就把滚轮/框选交还给底下的正文。`:not(.t2c-inner)` 兜住卡外的浮层(群聊设置弹窗等)。 */
 .t2-chat-col > .composer-anchor > .t2c { pointer-events: none; }
@@ -1390,6 +1445,9 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 .mb-shell[data-native-chrome] .tool-group-head { position: relative; }
 .mb-shell[data-native-chrome] .tool-group-head::after { content: ''; position: absolute; inset: -11px 0; }
 .mb-shell[data-native-chrome] .t2-content pre ~ .icon-btn::after { content: ''; position: absolute; inset: -9px; }
+.mb-shell[data-native-chrome] :is(.t2-retry-btn, .t2-content .code-head-btn) { position: relative; }
+.mb-shell[data-native-chrome] .t2-retry-btn::after { content: ''; position: absolute; inset: -9px 0; }
+.mb-shell[data-native-chrome] .t2-content .code-head-btn::after { content: ''; position: absolute; inset: -10px 0; }
 
 /* ====== 长会话:离视口远的消息跳过样式 / 排版 / 绘制 ======
    content-visibility:auto(docs/ToBeImproved/长内容渲染机制方案_2026-10-16 的 A):离得远的消息只占一个高度 —— auto = 画过一次

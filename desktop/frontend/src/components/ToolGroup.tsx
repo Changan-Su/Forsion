@@ -6,7 +6,7 @@
  * 复用 .tool-card-body/.label 样式;+增/-删 best-effort(算不出就只显目标)。
  */
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { ChevronRight, ChevronDown, XCircle, PauseCircle, Sparkles, FilePlus2, Pencil, Terminal, FileText, Search, Globe, Wrench, type LucideIcon } from 'lucide-react'
+import { ChevronRight, ChevronDown, XCircle, PauseCircle, Sparkles, FilePlus2, Pencil, Terminal, FileText, Search, Globe, Wrench, MessagesSquare, type LucideIcon } from 'lucide-react'
 import { AnimatedCollapse } from './AnimatedUI'
 import { DiffView } from './DiffView'
 import { toolDiffText } from './toolDiff'
@@ -15,6 +15,7 @@ import type { ApprovalRequest, ToolEvent } from '../../../../tangu-agent/src/con
 import { ImageGenerationLoader } from '../views/chat2/ImageGenerationLoader'
 import { isSelfWriteReceipt } from '../services/selfUpdates'
 import '../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
+import { kickToolOwners, useEngineTools } from '../amadeus/plugins/toolResultCards'
 
 registerMessages({
   'tool.parked.waiting': { zh: '已挂起，等你批准。Agent 先做别的，拍板后结果会补在这里。', en: 'Parked until you approve it. The agent carries on meanwhile; the result lands here once you decide.' },
@@ -29,6 +30,8 @@ registerMessages({
   'tool.thoughtMin': { zh: '思考 {m} 分 {s} 秒', en: 'Thought for {m}m {s}s' },
   'tool.step': { zh: '第 {n} 步', en: 'Step {n}' },
   'tool.sumN': { zh: '{n} 个工具', en: '{n} tool calls' },
+  'tool.verb.session': { zh: '子会话', en: 'Sub-session' },
+  'tool.sum.sessions': { zh: '开了 {n} 个子会话', en: 'Started {n} sub-session(s)' },
   'tool.computerHistory.notSaved': {
     zh: '电脑历史摘录已交给模型，不会保存在对话记录里。',
     en: 'The computer history excerpt was passed to the model and isn’t saved in the conversation.',
@@ -48,8 +51,20 @@ function toolResultText(ev: ToolEvent, t: (key: string) => string): string {
 /** 这两个工具就是「问你」本身:调用挂着 = 在等你在托盘里答,不是在跑,别用流光装忙。 */
 const ASKS_YOU = new Set(['ask_user', 'exit_plan_mode'])
 
-type Kind = 'write' | 'edit' | 'run' | 'read' | 'search' | 'browse' | 'other'
-interface Desc { kind: Kind; verbKey: string; target: string; adds?: number; dels?: number; isFile: boolean }
+type Kind = 'write' | 'edit' | 'run' | 'read' | 'search' | 'browse' | 'session' | 'other'
+/** verbKey 空时 label 是现成的人话名字(MCP / 插件工具);两个都没有就退回原工具名。unowned = 插件名单里还没认出主人。 */
+interface Desc { kind: Kind; verbKey: string; label?: string; unowned?: boolean; target: string; adds?: number; dels?: number; isFile: boolean }
+
+/** 过程行里的动作名:内置工具走词条,MCP / 插件工具走人话名字,都取不到就是原名(不猜)。 */
+export function toolVerb(d: Desc, ev: ToolEvent, t: (key: string) => string): string {
+  return d.verbKey ? t(d.verbKey) : d.label || ev.name
+}
+const words = (s: string): string => s.replace(/[_-]+/g, ' ').trim()
+/** 参数里第一个非空字符串(过程行的目标);取不到就是参数 JSON 的前 60 个字。 */
+function firstString(a: any, raw: string | undefined): string {
+  if (a && typeof a === 'object') for (const v of Object.values(a)) if (typeof v === 'string' && v.trim()) return v.split('\n')[0]
+  return (raw || '').slice(0, 60)
+}
 
 /** 行数(末尾空行不计)。 */
 function lineCount(s: string): number {
@@ -68,8 +83,9 @@ function diffStat(patch: string): { adds: number; dels: number } {
 }
 const baseName = (p: string): string => p.split(/[/\\]/).filter(Boolean).pop() || p
 
-/** 把一次工具调用描述成「动作 + 目标(+增/-删)」,供分组摘要与逐行展示。 */
-export function describeTool(ev: ToolEvent): Desc {
+/** 把一次工具调用描述成「动作 + 目标(+增/-删)」,供分组摘要与逐行展示。
+ *  pluginName:工具名 → 所属插件的显示名(ToolGroup 从引擎插件名单里取;不给 = 插件工具照原名)。 */
+export function describeTool(ev: ToolEvent, pluginName?: (tool: string) => string | undefined): Desc {
   let a: any = {}
   try { a = ev.arguments ? JSON.parse(ev.arguments) : {} } catch { /* keep {} */ }
   const path = typeof a.path === 'string' ? a.path : ''
@@ -109,6 +125,10 @@ export function describeTool(ev: ToolEvent): Desc {
       return { kind: 'read', verbKey: 'tool.verb.listed', target: baseName(path || '.'), isFile: true }
     case 'search_files': case 'glob_files':
       return { kind: 'search', verbKey: 'tool.verb.searched', target: String(a.query ?? a.pattern ?? a.glob ?? ''), isFile: false }
+    case 'grep':
+      return { kind: 'search', verbKey: 'tool.verb.searched', target: String(a.pattern ?? a.query ?? ''), isFile: false }
+    case 'start_session':
+      return { kind: 'session', verbKey: 'tool.verb.session', target: String(a.title ?? ''), isFile: false }
     case 'web_search':
       return { kind: 'search', verbKey: 'tool.verb.searched', target: String(a.query ?? ''), isFile: false }
     case 'web_fetch':
@@ -117,7 +137,15 @@ export function describeTool(ev: ToolEvent): Desc {
       return { kind: 'read', verbKey: 'tool.verb.readComputerHistory', target: String(a.query ?? a.app ?? ''), isFile: false }
     default:
       if (ev.name.startsWith('browser_')) return { kind: 'browse', verbKey: 'tool.verb.browsed', target: String(a.url ?? a.text ?? ev.name.replace('browser_', '')), isFile: false }
-      return { kind: 'other', verbKey: '', target: typeof a.command === 'string' ? a.command : typeof a.path === 'string' ? a.path : typeof a.query === 'string' ? a.query : (ev.arguments || '').slice(0, 80), isFile: false }
+      {
+        const target = typeof a.command === 'string' ? a.command : typeof a.path === 'string' ? a.path : typeof a.query === 'string' ? a.query : firstString(a, ev.arguments)
+        // mcp__github__search_issues → 「Github · search issues」:服务名首字母大写,不另猜品牌写法
+        const mcp = /^mcp__(.+?)__(.+)$/.exec(ev.name)
+        if (mcp) return { kind: 'other', verbKey: '', label: `${mcp[1].charAt(0).toUpperCase()}${words(mcp[1]).slice(1)} · ${words(mcp[2])}`, target, isFile: false }
+        // 插件工具:插件显示名 + 工具名(去掉插件自己加的 `xxx__` 前缀);名单里没有就原名
+        const owner = pluginName?.(ev.name)
+        return { kind: 'other', verbKey: '', label: owner ? `${owner} · ${words(ev.name.split('__').pop() || ev.name)}` : undefined, unowned: !!pluginName && !owner, target, isFile: false }
+      }
   }
 }
 
@@ -131,7 +159,7 @@ const Stat: React.FC<{ d: Desc }> = ({ d }) =>
     </span>
   ) : null
 
-const KIND_ICON: Record<Kind, LucideIcon> = { write: FilePlus2, edit: Pencil, run: Terminal, read: FileText, search: Search, browse: Globe, other: Wrench }
+const KIND_ICON: Record<Kind, LucideIcon> = { write: FilePlus2, edit: Pencil, run: Terminal, read: FileText, search: Search, browse: Globe, session: MessagesSquare, other: Wrench }
 
 /** 正在进行的那一步:三个小点(纯 CSS,减少动态效果时静止)。 */
 const Dots: React.FC = () => <span className="proc-dots" aria-hidden="true"><i /><i /><i /></span>
@@ -184,7 +212,7 @@ const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc; running: boolean; waiting: 
   const [open, setOpen] = useState(false)
   // 只在展开时构造 diff(P1:文件修改类工具详情渲染 diff 而非裸 JSON)
   const diff = useMemo(() => (open ? toolDiffText(ev.name, ev.arguments) : null), [open, ev.name, ev.arguments])
-  const verb = desc.verbKey ? t(desc.verbKey) : ev.name
+  const verb = toolVerb(desc, ev, t)
   // 工具结果帧可能在用户停止 run 时来不及抵达。此时 ev.done 仍为 false，
   // 但父消息已不再运行，不能继续显示「正在执行」的流光或 busy 语义。
   const active = running && !ev.done && !asking
@@ -229,6 +257,13 @@ const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc; running: boolean; waiting: 
   )
 }
 
+/** 工具名 → 插件显示名(按当前语言),供 describeTool。 */
+function usePluginToolName(): (tool: string) => string | undefined {
+  const owners = useEngineTools((s) => s.toolOwner)
+  const { locale } = useI18n()
+  return useMemo(() => (tool: string) => { const o = owners[tool]; return o && (locale === 'en' ? o.nameEn || o.name : o.name) }, [owners, locale])
+}
+
 export const ToolGroup: React.FC<{
   events: ToolEvent[]
   running?: boolean
@@ -244,27 +279,33 @@ export const ToolGroup: React.FC<{
 }> = ({ events: allEvents, running, approvals, awaitingAnswer, reasoning, reasoningMs, thinking: thinkingProp }) => {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
+  const pluginName = usePluginToolName()
   // Agent 自己写成了的记忆 / 进化记录 / 协作说明,由回复下面的回执行和请求卡呈现,这里不再重复列一行(没写成的照旧留着)。
   // 唯一不带回执行的调用方是外观预览(ChatPreview),它的样例消息里没有这三种调用。
   const events = allEvents.filter((ev) => !isSelfWriteReceipt(ev))
+  // 有认不出主人的插件工具 → 补拉一次引擎插件名单(放在提前 return 之前:hook 不能有条件)
+  const unowned = events.some((ev) => describeTool(ev, pluginName).unowned)
+  useEffect(() => { if (unowned) kickToolOwners() }, [unowned])
   if (!events.length && !reasoning) return null
 
   // generate_image gets a full-size dot field while the request is in flight. Completed calls return
   // to the ordinary audit trail; only the active row is replaced, so mixed/parallel tool groups keep context.
   const activeImageJobs = running ? events.filter((event) => (event.name === 'generate_image' || event.name === 'edit_image') && !event.done) : []
   const groupedEvents = activeImageJobs.length ? events.filter((event) => !activeImageJobs.includes(event)) : events
-  const descs = groupedEvents.map(describeTool)
-  const counts = { write: 0, edit: 0, run: 0, read: 0, search: 0, browse: 0, other: 0 } as Record<Kind, number>
+  const descs = groupedEvents.map((ev) => describeTool(ev, pluginName))
+  const counts = { write: 0, edit: 0, run: 0, read: 0, search: 0, browse: 0, session: 0, other: 0 } as Record<Kind, number>
   descs.forEach((d) => { counts[d.kind]++ })
   const SUM: Record<Kind, string> = {
     write: 'tool.sum.wrote', edit: 'tool.sum.edited', run: 'tool.sum.ran', read: 'tool.sum.read',
-    search: 'tool.sum.searched', browse: 'tool.sum.browsed', other: 'tool.sum.other',
+    search: 'tool.sum.searched', browse: 'tool.sum.browsed', session: 'tool.sum.sessions', other: 'tool.sum.other',
   }
-  const order: Kind[] = ['write', 'edit', 'run', 'read', 'search', 'browse', 'other']
+  const order: Kind[] = ['write', 'edit', 'run', 'read', 'search', 'browse', 'session', 'other']
   const thinking = !!running && !!thinkingProp && !!reasoning
   const thinkLabel = reasoning ? (thinking ? t('tool.thinkingNow') : thoughtLabel(t, reasoningMs)) : ''
   const summary = [...(thinking ? [] : [thinkLabel]), ...order.filter((k) => counts[k] > 0).map((k) => t(SUM[k], { n: counts[k] }))].filter(Boolean).join(' · ')
-  const shortSummary = [...(thinking ? [] : [thinkLabel]), groupedEvents.length ? t('tool.sumN', { n: groupedEvents.length }) : ''].filter(Boolean).join(' · ') || thinkLabel
+  // 窄列的短摘要只报个数;整组都是开子会话时照样说「开了 N 个子会话」(那一句就是这组在干什么)
+  const allSessions = groupedEvents.length > 0 && counts.session === groupedEvents.length
+  const shortSummary = [...(thinking ? [] : [thinkLabel]), groupedEvents.length ? t(allSessions ? 'tool.sum.sessions' : 'tool.sumN', { n: groupedEvents.length }) : ''].filter(Boolean).join(' · ') || thinkLabel
 
   // 挂起的 ask_user(托盘 run,10-23)已经有占位结果(done),仍在等你答 —— 它那一段可能已经收尾(切段),不看 running
   const asksYou = (e: ToolEvent): boolean => !!awaitingAnswer && ASKS_YOU.has(e.name) && (!!e.parked || (!!running && !e.done))
@@ -281,7 +322,7 @@ export const ToolGroup: React.FC<{
   const active = !!running && groupedEvents.length > 0 && !allDone && !curAsks
   const busy = active || thinking
   const curDesc = curIdx >= 0 ? descs[curIdx] : null
-  const curVerb = curDesc ? (curDesc.verbKey ? t(curDesc.verbKey) : groupedEvents[curIdx].name) : ''
+  const curVerb = curDesc ? toolVerb(curDesc, groupedEvents[curIdx], t) : ''
   const showList = !!reasoning || groupedEvents.length > 0
 
   return (
