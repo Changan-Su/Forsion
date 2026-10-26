@@ -119,7 +119,7 @@ describe('resolveModelCapability — 路由矩阵', () => {
     ['Kimi K3.1 Pro', { baseUrl: 'https://api.moonshot.ai/v1', modelId: 'kimi-k3.1-pro-highspeed' }, 'moonshot-k3'],
     // 生产 Kimi 行走百炼专属 maas 域名 / 硅基;此前落到 gateway-generic
     ['百炼 Kimi K3.1 Pro', { baseUrl: 'https://llm-x.cn-beijing.maas.aliyuncs.com/compatible-mode/v1', modelId: 'kimi/kimi-k3.1-pro' }, 'gateway-kimi-k3'],
-    ['百炼 Kimi K2.8 Preview', { baseUrl: 'https://llm-x.cn-beijing.maas.aliyuncs.com/compatible-mode/v1', modelId: 'kimi/kimi-k2.8-preview' }, 'gateway-kimi-k3'],
+    ['百炼 Kimi K2.8 Preview', { baseUrl: 'https://llm-x.cn-beijing.maas.aliyuncs.com/compatible-mode/v1', modelId: 'kimi/kimi-k2.8-preview' }, 'gateway-kimi-k28'],
     ['百炼标准域名 Kimi(不许被 dashscope-qwen 吞)', { baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', modelId: 'kimi/kimi-k3.1-pro' }, 'dashscope-kimi-k3'],
     ['硅基 Kimi K3', { baseUrl: 'https://api.siliconflow.cn/v1', modelId: 'moonshotai/Kimi-K3' }, 'gateway-kimi-k3'],
     // K2.7-code 不在本规则(思考字段是 thinking:{type},不是 reasoning_effort)
@@ -360,6 +360,13 @@ describe('applyThinking — 各家线上形态', () => {
     expect(k('max').reasoning_effort).toBe('max'); // 不再被夹成 high
     expect(k('high').temperature).toBeUndefined();
     expect(supportedThinkingLevels(cap(q))).not.toContain('off');
+  });
+
+  it('网关上的 Kimi K2.8 Preview:同词表但能关(百炼实测 none → 不思考)', () => {
+    const q = { baseUrl: 'https://llm-x.cn-beijing.maas.aliyuncs.com/compatible-mode/v1', modelId: 'kimi/kimi-k2.8-preview' };
+    expect(apply(q, 'off').payload.reasoning_effort).toBe('none');
+    expect(apply(q, 'max').payload.reasoning_effort).toBe('max');
+    expect(supportedThinkingLevels(cap(q))).toContain('off');
   });
 
   it('Grok 4.5+:reasoning_effort 回来了;grok-4 与 4.20 变体仍然什么都不发', () => {

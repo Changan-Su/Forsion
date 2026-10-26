@@ -103,7 +103,7 @@ const FAMILY_WINDOWS: Array<[RegExp, number]> = [
   [/claude|sonnet|opus|haiku/i, 200_000],
   [/gemini-[23]/i, 1_000_000], // 只认主线 2.x/3 聊天族;其余 gemini 变体窗口不一,留 128k 保守值
   [/deepseek-v4/i, 1_000_000], // V4 flash/pro 都是 1M;老 chat/reasoner 线窗口小得多,不收
-  [/kimi-k3/i, 1_000_000], // K3 官方 1M(K2 线 256k 以下,不收)
+  [/kimi-k(3|2\.8)/i, 1_000_000], // K3 官方 1M;K2.8 Preview 1M(10-26 百炼实测 30 万 token 输入 200)。K2.7 及更早 256k,不收
   [/glm-5\.3/i, 1_000_000], // 官方 GLM-5.3 页写 1M(5.3-flash 同族);GLM-5 是 200k,故不扩到整族
   // 百炼「推荐模型」表里 qwen3.8-max = 1M。3.8 的小尺寸变体窗口未核实,故刻意只收 -max:
   // 窗口报大了会跳过折叠、直接撞 provider 溢出,比 128k 默认的早折叠更糟。

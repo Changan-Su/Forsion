@@ -268,13 +268,23 @@ interface Rule {
 }
 
 /**
- * Kimi K3 / K3.1 Pro(-highspeed)/ K2.8 Preview:思考常开,顶层 reasoning_effort 只收 low/high/max(缺省 max);
+ * Kimi K3 / K3.1 Pro(-highspeed):思考常开,顶层 reasoning_effort 只收 low/high/max(缺省 max);
  * temperature / top_p 固定、不传;带工具的多轮要把完整 assistant message(含 reasoning_content)原样回传。
+ * 10-26 百炼实测:K3.1 Pro 收到 'none' 回 400(「only 0.6 is allowed」),所以关思考夹到 low。
  */
 const KIMI_K3_CAP: Omit<ModelCapability, 'rule'> = {
   format: 'openai-effort', levels: EFFORT_LHM, maxTokensField: 'max_tokens', dropTemperature: true, replayReasoning: true,
 };
-const KIMI_K3_MODEL = /(^|\/)kimi-k(3|2\.8)/i;
+/** K2.8 Preview:同 K3 词表,但能关 —— 10-26 百炼实测 'none' 200 且 reasoning_content 为空。 */
+const KIMI_K28_CAP: Omit<ModelCapability, 'rule'> = { ...KIMI_K3_CAP, levels: { ...EFFORT_LHM, off: 'none' } };
+
+/** 网关转售的 Kimi(`kimi/kimi-k3.1-pro`、`moonshotai/Kimi-K3…`):K2.8 一条、K3 系一条。 */
+function kimiGatewayRules(idPrefix: string, host: RegExp): Rule[] {
+  return [
+    { id: `${idPrefix}-kimi-k28`, host, model: /(^|\/)kimi-k2\.8/i, cap: KIMI_K28_CAP },
+    { id: `${idPrefix}-kimi-k3`, host, model: /(^|\/)kimi-k3/i, cap: KIMI_K3_CAP },
+  ];
+}
 
 /**
  * 已知「宽松」网关:允许在其上按**模型族**下发厂商私有字段(enable_thinking 等)。
@@ -633,14 +643,9 @@ const RULES: Rule[] = [
     host: /(^|\.)(bigmodel\.cn|z\.ai)$/,
     cap: { format: 'zai', levels: TOGGLE, maxTokensField: 'max_tokens' },
   },
-  {
-    // 百炼标准域名上的 Kimi:下面三条 dashscope 规则只看 host,不先截走会被发 Qwen 的 enable_thinking +
-    // thinking_budget。maas 专属域名与其他网关走后面的 gateway-kimi-k3。
-    id: 'dashscope-kimi-k3',
-    host: /(^|\.)(dashscope\.aliyuncs\.com|dashscope-intl\.aliyuncs\.com|bailian\.aliyuncs\.com)$/,
-    model: KIMI_K3_MODEL,
-    cap: KIMI_K3_CAP,
-  },
+  // 百炼标准域名上的 Kimi:下面三条 dashscope 规则只看 host,不先截走会被发 Qwen 的 enable_thinking +
+  // thinking_budget。maas 专属域名与其他网关走后面的 gateway-kimi-*。
+  ...kimiGatewayRules('dashscope', /(^|\.)(dashscope\.aliyuncs\.com|dashscope-intl\.aliyuncs\.com|bailian\.aliyuncs\.com)$/),
   {
     // 百炼上的**纯思考**模型(官方:「纯思考模型无此参数」)—— qwen3.7-max 的两支 preview 快照,
     // 以及带 -thinking 后缀的型号。给它们发 enable_thinking 是发未知字段,一律什么都不发。
@@ -799,15 +804,9 @@ const RULES: Rule[] = [
     model: /glm-/i,
     cap: { format: 'zai', levels: TOGGLE, maxTokensField: 'max_tokens' },
   },
-  {
-    // 网关转售的 Kimi K3 / K3.1 Pro / K2.8 Preview(百炼 `kimi/kimi-k3.1-pro`、硅基 `moonshotai/Kimi-K3…`):
-    // 同 moonshot-k3。此前落到 gateway-generic,关思考发 'none'、中档发 'medium',两个都不在 low/high/max
-    // 词表里,max 档还被夹成 high。K2.8 Preview 官方没写能不能关(Kimi Code 上是 low/high/max)→ 同样不给关。
-    id: 'gateway-kimi-k3',
-    host: KNOWN_GATEWAY,
-    model: KIMI_K3_MODEL,
-    cap: KIMI_K3_CAP,
-  },
+  // 网关上的 Kimi K3 / K3.1 Pro / K2.8 Preview:此前落到 gateway-generic,关思考发 'none'(K3.1 Pro 回 400)、
+  // max 档被夹成 high。
+  ...kimiGatewayRules('gateway', KNOWN_GATEWAY),
   {
     id: 'gateway-self-reasoning',
     host: KNOWN_GATEWAY,
