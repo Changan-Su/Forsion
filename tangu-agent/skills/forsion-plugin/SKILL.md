@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.75.0
+  version: 1.76.0
   author: Forsion
   category: Forsion
 ---
@@ -29,7 +29,7 @@ Forsion / Tangu 的扩展**默认按捆绑包(bundle)形态发行**(2026-07-25 �
 Tool results are capped, so this skill keeps long, API-by-API details in `references/` next to it. When a section below says 见下「…」 or names an API listed here, read that file before writing code:
 
 - [references/host-ui-mounts.md](references/host-ui-mounts.md): 可复用 UI 组件：ctx.ui.mountChatBox; 原生 Markdown 编辑器 ctx.ui.mountMarkdownEditor; 原生悬浮目录 ctx.ui.mountFloatingToc; View modes: ctx.ui.setViewModes; Tooltips and motion tokens: ctx.ui.attachTooltip; Selection bar: ctx.ui.mountSelectionBar and registerSelectionAction scopes; Host parts (dialogs, toolbar controls, menus, popovers, empty states, icons, view head, i18n): ctx.ui.confirm / openDialog / mountControl / contextMenu / popover / mountEmptyState / icon / setViewHead / mount, ctx.addStyle, ctx.i18n.define; Settings parts: ctx.ui.mountSettingsPage / mountSettingsItem; 白板层 ctx.ui.mountBoard / ctx.ui.boardToSvg; 仪表盘 ctx.dashboard; 原生多维表 ctx.table.mount
-- [references/tangu-host-apis.md](references/tangu-host-apis.md): 当前模型与当前 Space:ctx.tangu; Agent 状态:agentStatus / subscribeAgentStatus; Agent 名册:agents; 开新对话:startChat; 把对话挂进自己的视图:mountChat; 新对话输入区:mountComposer; 正文 AI:ctx.tangu.complete 与 registerSelectionAction; 翻译:ctx.tangu.translate; Agent Desk 伴随面:ctx.desk; 摘要栏插件卡:ctx.summary; 自动化规则播种:ctx.automation
+- [references/tangu-host-apis.md](references/tangu-host-apis.md): 当前模型与当前 Space:ctx.tangu; Agent 状态:agentStatus / subscribeAgentStatus; Agent 名册:agents; 开新对话:startChat; 把对话挂进自己的视图:mountChat; 新对话输入区:mountComposer; 正文 AI:ctx.tangu.complete 与 registerSelectionAction; 翻译:ctx.tangu.translate; 行内补全:ctx.tangu.fim; Agent Desk 伴随面:ctx.desk; 摘要栏插件卡:ctx.summary; 自动化规则播种:ctx.automation
 - [references/work-folder-migration.md](references/work-folder-migration.md): one-time upgrade of old plugin data into the working folder (Identity and destination; Request and result; Upgrade sequence; Acceptance cases; Ordinary writes after upgrade)
 
 ## Troubleshooting an installed plugin: Space missing, view blank, "stopped working after an update" (2026-10-10)
@@ -876,7 +876,7 @@ ctx.registerToolResultRenderer?.({
 
 ## Tangu host APIs: read references/tangu-host-apis.md
 
-`ctx.tangu` (current model, agent status, agent roster, startChat, mountChat, mountComposer, complete, translate), `ctx.desk`, `ctx.summary` and `ctx.automation` are documented in [references/tangu-host-apis.md](references/tangu-host-apis.md). None of them exist on non-Tangu hosts, so always use optional chaining. When the table above says 见下「…」 for one of them, read that section there:
+`ctx.tangu` (current model, agent status, agent roster, startChat, mountChat, mountComposer, complete, translate, fim), `ctx.desk`, `ctx.summary` and `ctx.automation` are documented in [references/tangu-host-apis.md](references/tangu-host-apis.md). None of them exist on non-Tangu hosts, so always use optional chaining. When the table above says 见下「…」 for one of them, read that section there:
 
 - 当前模型与当前 Space:ctx.tangu(2026-08-29 起)
 - Agent 状态:agentStatus / subscribeAgentStatus(2026-09-19 起)
@@ -886,6 +886,7 @@ ctx.registerToolResultRenderer?.({
 - 新对话输入区:mountComposer(2026-10-18 起)
 - 正文 AI:ctx.tangu.complete 与 registerSelectionAction(2026-09-28 起)
 - 翻译:ctx.tangu.translate(2026-10-13 起)
+- 行内补全:ctx.tangu.fim(2026-10-26 起)
 - Agent Desk 伴随面:ctx.desk(2026-09-19 起)
 - 摘要栏插件卡:ctx.summary(2026-10-25 起)
 - 自动化规则播种:ctx.automation(2026-09-02 起)
