@@ -297,6 +297,9 @@ async function main() {
     await openMessage(win, '请审批')
     // 块编辑器挂在 .unified-page 的兄弟容器里,探针以 .ibx-amadeus(整个只读页宿主)为根。
     await win.waitForSelector('.ibx-reader-body .ibx-amadeus table', { timeout: 20_000 }).catch(() => {})
+    // 10-26:内嵌的 .amx-pane 自带 overflow:auto,会在阅读面板里多出一层纵向滚动(滚轮先滚它再滚外层)
+    const paneOy = await win.locator('.ibx-reader-body .ibx-amadeus').first().evaluate((el) => getComputedStyle(el).overflowY).catch(() => '')
+    check('阅读面板只有一层纵向滚动:内嵌正文宿主 .ibx-amadeus 不自己滚', paneOy === 'visible', paneOy)
     const dom = await win.evaluate(() => {
       const host = document.querySelector('.ibx-reader-body .ibx-amadeus')
       const text = host?.textContent || ''
