@@ -2369,9 +2369,8 @@ export const usePluginStore = create<PluginState>((set, get) => {
               ? (() => {
                   type OneShot = { signal?: AbortSignal; modelId?: string; onDelta?: (delta: string) => void }
                   const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined)
-                  const oneShot = async (what: 'complete' | 'translate', body: TanguCompleteRequest, req: OneShot): Promise<{ text: string; model?: { id: string; name: string; mt?: boolean } }> => {
-                    const probe = readTangu()
-                    if (!probe?.complete) throw new Error(`${what} is not available on this host`)
+                  /** 在飞请求记进插件的账:停用 / 重载即中止;插件自己的 signal 也能中止。回调只在插件还活着时转发。 */
+                  const scoped = async <T,>(what: string, req: OneShot, run: (o: { signal: AbortSignal; onDelta: (d: string) => void }) => Promise<T>): Promise<T> => {
                     const ac = new AbortController()
                     const stop = scope.own('request', () => ac.abort(), what)
                     const outer = req.signal
@@ -2379,18 +2378,44 @@ export const usePluginStore = create<PluginState>((set, get) => {
                     outer?.addEventListener('abort', onOuter)
                     if (outer?.aborted) ac.abort()
                     try {
-                      const r = await probe.complete(body, {
+                      const r = await run({
                         signal: ac.signal,
                         onDelta: (d) => { if (ctxAlive()) { try { req.onDelta?.(d) } catch { /* 插件回调抛错不打断流 */ } } },
                       })
                       if (!ctxAlive()) throw new Error('plugin disabled')
-                      return { text: r.text, ...(r.model ? { model: r.model } : body.modelId ? { model: { id: body.modelId, name: body.modelId } } : {}) }
+                      return r
                     } finally {
                       outer?.removeEventListener('abort', onOuter)
                       stop.forget()
                     }
                   }
+                  const oneShot = async (what: 'complete' | 'translate', body: TanguCompleteRequest, req: OneShot): Promise<{ text: string; model?: { id: string; name: string; mt?: boolean } }> => {
+                    const probe = readTangu()
+                    if (!probe?.complete) throw new Error(`${what} is not available on this host`)
+                    const r = await scoped(what, req, (o) => probe.complete!(body, o))
+                    return { text: r.text, ...(r.model ? { model: r.model } : body.modelId ? { model: { id: body.modelId, name: body.modelId } } : {}) }
+                  }
                   return {
+                    // 行内补全(FIM,2026-10-26+):与 complete 同一道门、同一套关账;模型解析与 fim_unavailable 在探针里。
+                    ...(readTangu()?.fim
+                      ? {
+                          fim: async (req: OneShot & { before: string; after?: string; maxTokens?: number; stop?: string[] }): Promise<{ text: string; model?: { id: string; name: string } }> => {
+                            if (!ctxAlive()) throw new Error('plugin disabled')
+                            const probe = readTangu()
+                            if (!probe?.fim) throw new Error('fim_unavailable')
+                            const before = typeof req?.before === 'string' ? req.before : ''
+                            const after = typeof req?.after === 'string' ? req.after : ''
+                            if (!before && !after) throw new Error('ctx.tangu.fim: before or after is required')
+                            const stop = Array.isArray(req?.stop) ? req.stop.filter((x): x is string => typeof x === 'string' && x.length > 0) : []
+                            const maxTokens = typeof req?.maxTokens === 'number' && Number.isFinite(req.maxTokens) ? req.maxTokens : undefined
+                            const r = await scoped('fim', req, (o) => probe.fim!({
+                              before, ...(after ? { after } : {}), ...(maxTokens != null ? { maxTokens } : {}), ...(stop.length ? { stop } : {}),
+                              ...(str(req.modelId) ? { modelId: str(req.modelId) } : {}),
+                            }, o))
+                            return { text: r.text, ...(r.model ? { model: r.model } : {}) }
+                          },
+                        }
+                      : {}),
                     complete: async (req: OneShot & { prompt: string; selection?: string; before?: string; after?: string }): Promise<{ text: string; model?: { id: string; name: string; mt?: boolean } }> => {
                       if (!ctxAlive()) throw new Error('plugin disabled')
                       const prompt = typeof req?.prompt === 'string' ? req.prompt.trim() : ''

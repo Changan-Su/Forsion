@@ -1,11 +1,12 @@
 import type { DirectProviderConfig, ModelInfo, ModelsResponse } from '../types'
 
 /**
- * 模型的六类,与后台 admin 的 modelType 同名同序(设置 → 模型 → 模型库的标签页就按这个排)。
- * 引擎目录里对话 / 生图 / 识别在 models 里,朗读 / 通话 / 翻译是三个单独字段 —— 这里统一拼成一张表,不改协议。
+ * 模型的七类,与后台 admin 的 modelType 同名同序(设置 → 模型 → 模型库的标签页就按这个排)。
+ * 引擎目录里对话 / 生图 / 识别在 models 里,朗读 / 通话 / 翻译 / 补全是四个单独字段 —— 这里统一拼成一张表,不改协议。
+ * 补全(fim)= 能做 FIM 的模型:只做补全的 + 标了 FIM 协议的聊天模型(后者在 llm 里也有一份)。
  */
-export type ModelKind = 'llm' | 'image_gen' | 'asr' | 'tts' | 'realtime' | 'mt'
-export const MODEL_KINDS: ModelKind[] = ['llm', 'image_gen', 'asr', 'tts', 'realtime', 'mt']
+export type ModelKind = 'llm' | 'image_gen' | 'asr' | 'tts' | 'realtime' | 'mt' | 'fim'
+export const MODEL_KINDS: ModelKind[] = ['llm', 'image_gen', 'asr', 'tts', 'realtime', 'mt', 'fim']
 
 export interface CatalogItem {
   id: string
@@ -13,7 +14,7 @@ export interface CatalogItem {
   source: 'forsion' | 'direct'
   /** 直连:连接名;云端:后台的分组名或 provider。 */
   provider: string
-  /** 来自 models 的才有(能隐藏、能改窗口);朗读 / 通话 / 翻译的候选没有。 */
+  /** 来自 models 的才有(能隐藏、能改窗口);朗读 / 通话 / 翻译 / 补全的候选没有。 */
   model?: ModelInfo
 }
 
@@ -29,6 +30,7 @@ export function catalogByKind(models: ModelsResponse | null, directRealtime: Arr
     tts: [...(models?.ttsModels || []).map((m) => ({ id: m.id, name: m.name, source: 'forsion' as const, provider: 'forsion' })), ...directTts],
     realtime: [...(models?.realtimeModel ? [{ id: models.realtimeModel.id, name: models.realtimeModel.name, source: 'forsion' as const, provider: 'forsion' }] : []), ...directRealtime.map((m) => ({ ...m, source: 'direct' as const }))],
     mt: (models?.translateModels || []).map((m) => ({ id: m.id, name: m.name, source: 'forsion' as const, provider: m.provider || 'forsion' })),
+    fim: (models?.fimModels || []).map((m) => ({ id: m.id, name: m.name, source: 'forsion' as const, provider: m.provider || 'forsion' })),
   }
 }
 

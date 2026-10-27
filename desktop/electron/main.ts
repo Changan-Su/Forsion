@@ -434,6 +434,8 @@ interface TanguStoredConfig {
   visionMode: 'auto' | 'always' | 'off'
   /** 辅助模型 · 翻译(笔记里的「翻译」与插件 ctx.tangu.translate 用;落 config.json models.translate;缺省=跟聊天当前模型)。 */
   translateModelId: string
+  /** 辅助模型 · 补全(插件 ctx.tangu.fim 的行内补全用;落 config.json models.fim;缺省 = 目录里第一个补全模型)。 */
+  fimModelId: string
   /** 默认语音识别模型 id(语音输入转写用;持久化到 config.json asr.modelId;缺省=跟随 app 级 asr 默认)。 */
   asrModelId: string
   /** 语音输入偏好后端:local=本地 SenseVoice(需下载);cloud=自带-key/Forsion 云端。缺省 cloud。 */
@@ -541,6 +543,7 @@ const DEFAULT_CONFIG: TanguStoredConfig = {
   visionModelId: '',
   visionMode: 'auto',
   translateModelId: '',
+  fimModelId: '',
   asrModelId: '',
   asrBackend: 'cloud',
   lastApprovalMode: 'auto-edit',
@@ -789,6 +792,7 @@ async function loadConfig(): Promise<TanguStoredConfig> {
       backgroundModelId: auxModels.background || '',
       visionModelId: auxModels.vision || '',
       translateModelId: auxModels.translate || '',
+      fimModelId: auxModels.fim || '',
       visionMode: auxModels.visionMode === 'always' || auxModels.visionMode === 'off' ? auxModels.visionMode : 'auto',
     } : {}),
   }
@@ -861,6 +865,7 @@ function applyHomePatch(home: Record<string, any>, patch: Partial<TanguStoredCon
   if ('visionModelId' in patch) { auxModels.vision = patch.visionModelId; mT = true }
   if ('visionMode' in patch) { auxModels.visionMode = patch.visionMode; mT = true }
   if ('translateModelId' in patch) { auxModels.translate = patch.translateModelId; mT = true }
+  if ('fimModelId' in patch) { auxModels.fim = patch.fimModelId; mT = true }
   if ('sandbox' in patch) { home.sandbox = patch.sandbox; oT = true }
   if ('hostSandbox' in patch) { home.hostSandbox = normalizeHostSandboxConfig(patch.hostSandbox); oT = true }
   if ('defaultWorkspaceDir' in patch) { home.workspace = patch.defaultWorkspaceDir; oT = true }
