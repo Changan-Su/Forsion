@@ -877,16 +877,16 @@ registerMessages({
     "en": "⚠ Currently in external backend mode: this edits the local ~/.forsion/providers.json, which the remote tangu-server won't read."
   },
   "settings.mcp.label": {
-    "zh": "MCP Server（配置存 ~/.forsion/mcp.json；保存后托管后端重启重连）",
-    "en": "MCP Server (config stored in ~/.forsion/mcp.json; managed backend restarts and reconnects after saving)"
+    "zh": "MCP 服务器",
+    "en": "MCP servers"
   },
-  "settings.mcp.introPrefix": {
-    "zh": "工具以 ",
-    "en": "Tools appear as "
+  "settings.mcp.intro": {
+    "zh": "配置保存在 {path}，保存后自动重连。工具名形如 {tool}，改动对新对话生效。",
+    "en": "Saved in {path} and reconnected on save. Tools appear as {tool}; changes apply to new chats."
   },
-  "settings.mcp.introSuffix": {
-    "zh": " 出现；server 集在后端启动时冻结，变更只对重启后的新对话生效（上下文缓存会重建一次）。",
-    "en": "; the server set is frozen when the backend starts, so changes only take effect for new conversations after a restart (the context cache is rebuilt once)."
+  "settings.mcp.toolPattern": {
+    "zh": "mcp__服务器__工具",
+    "en": "mcp__server__tool"
   },
   "settings.mcp.statusDisabled": {
     "zh": "未启用",
@@ -929,7 +929,7 @@ registerMessages({
     "en": "Deleted"
   },
   "settings.mcp.add": {
-    "zh": "添加 MCP Server",
+    "zh": "添加 MCP 服务器",
     "en": "Add MCP server"
   },
   "settings.mcp.nameLabel": {
@@ -1457,7 +1457,7 @@ registerMessages({
   "settings.notes.cloudSyncPendingDel": { "zh": "删除保护：{n} 项批量删除已被拦下，确认后才会执行", "en": "Deletion guard: {n} bulk deletion(s) held, confirm to proceed" },
   "settings.notes.cloudSyncConfirmDel": { "zh": "确认删除", "en": "Confirm deletions" },
   "settings.remotesync.label": { "zh": "本地智库远程同步", "en": "Vault remote sync" },
-  "settings.remotesync.hint": { "zh": "把本地智库同步到你自己的存储（Dropbox / S3 / WebDAV / 文件夹），手动或定时，非实时；与在线同步（云端智库）互不相干。删除有防误删闸，冲突两版都保留。", "en": "Sync your local vault to your own storage (Dropbox / S3 / WebDAV / folder), manually or on a schedule. Independent from Online sync (Cloud Vault) above. Mass-delete guard and conflict copies keep data safe." },
+  "settings.remotesync.hint": { "zh": "把本地智库同步到你自己的存储（Dropbox / S3 / WebDAV / 文件夹），手动或定时，非实时。删除有防误删闸，冲突两版都保留。", "en": "Sync your local vault to your own storage (Dropbox / S3 / WebDAV / folder), manually or on a schedule. Mass-delete guard and conflict copies keep data safe." },
   "settings.remotesync.service": { "zh": "远程服务", "en": "Remote service" },
   "settings.remotesync.schedule": { "zh": "同步计划", "en": "Sync schedule" },
   "settings.remotesync.scheduleHint": { "zh": "按固定间隔在后台自动同步；任何时候都可以手动「立即同步」。", "en": "Runs automatically in the background at the chosen interval; you can always sync manually." },

@@ -122,7 +122,7 @@ The editor accepts `previewBaseUrl` to resolve relative public media when mounte
 - 文字与线性图标只用 `var(--text)`、`--text-light`、`--text-muted`、`--text-faint`，不写死颜色，也不自己叠 `opacity` 表示次要。左侧栏的淡出是宿主调淡这几个变量实现的；状态（未读、出错、进行中）用 `--accent-ink`、`--danger` 这类语义色，它们不淡。
 - 左侧栏列表的选中行用 `aria-selected="true"` 或 `aria-current` 标出来（类名 `.active` / `.on` / `.is-on` 也认），宿主让它保持全亮。别把 `.on` 挂在包着整块面板的容器上，否则里面的内容都不会退后。`registerListSource` 的行由宿主画，不用处理。
 - 整段阅读的正文用 `line-height: var(--reading-line-height, 1.6)` 和段间距 `var(--reading-paragraph-gap, 0.3em)`，兜底值是开关关着时的数。列表、表单、卡片、表格属于界面文字，不用这两个 token。`ctx.ui.mountMarkdownEditor`、`ctx.app.mountBlocks`、`ctx.tangu.mountChat` 挂出来的正文自动跟随。
-- 视图根上不加自己的入场动画（宿主切主视图时已经淡入一次）；视图内的过渡用 `--duration-fast`、`--duration-slow`、`--ease-out`，并在 `prefers-reduced-motion` 下关闭。
+- 视图根上不加自己的入场动画（宿主切主视图时已经淡入一次）；视图内的过渡用 `--duration-fast`、`--duration-base`、`--duration-slow`、`--ease-surface`，并在 `prefers-reduced-motion` 下关闭。
 - 这三个开关属于用户：不读写 `forsion_calm_*` 与 `<html data-calm-*>`，不做同类的私有开关。iframe 或 webview 里的页面拿不到宿主变量，不会跟着淡。
 
 Settings → Appearance has three switches the user turns on or off one by one ("Relaxed text" and "Gentle transitions" are on by default, "Dim surroundings" is off by default; never assume which are on): "Dim surroundings" (ribbon icons, inactive tabs and left-sidebar text fade while the user works, and return on pointer or keyboard focus), "Relaxed text" (looser line and paragraph spacing in note and chat bodies), and "Gentle transitions" (a slower view fade and a slower return of the surroundings). A plugin calls no API for these; it follows them by writing its styles this way:
@@ -130,7 +130,7 @@ Settings → Appearance has three switches the user turns on or off one by one (
 - Use `var(--text)`, `--text-light`, `--text-muted` and `--text-faint` for text and line icons. Do not hard-code colors or add your own `opacity` to mark secondary content: the host fades the left sidebar by fading those variables. Use semantic colors such as `--accent-ink` and `--danger` for state (unread, error, running); they do not fade.
 - Mark the selected row of a left-sidebar list with `aria-selected="true"` or `aria-current` (the `.active`, `.on` and `.is-on` classes also work) so the host keeps it at full strength. Do not put `.on` on a container that wraps a whole panel, or nothing inside it will dim. Rows from `registerListSource` are drawn by the host and need nothing.
 - For long-form reading text, use `line-height: var(--reading-line-height, 1.6)` and a paragraph gap of `var(--reading-paragraph-gap, 0.3em)`; the fallbacks are the values with the switch off. Lists, forms, cards and tables are interface text and do not use these tokens. Content mounted through `ctx.ui.mountMarkdownEditor`, `ctx.app.mountBlocks` or `ctx.tangu.mountChat` follows automatically.
-- Do not add an entrance animation on the view root (the host already fades the main view in once). Use `--duration-fast`, `--duration-slow` and `--ease-out` for transitions inside the view, and disable them under `prefers-reduced-motion`.
+- Do not add an entrance animation on the view root (the host already fades the main view in once). Use `--duration-fast`, `--duration-base`, `--duration-slow` and `--ease-surface` for transitions inside the view, and disable them under `prefers-reduced-motion`.
 - The switches belong to the user: do not read or write `forsion_calm_*` or `<html data-calm-*>`, and do not ship a private switch of the same kind. Pages inside an iframe or webview cannot see host variables and will not fade.
 
 ### 盖在自己内容上的白板层 / A whiteboard layer over your own content (2026-10-10)
@@ -315,17 +315,18 @@ if (!tip) exportBtn.title = '导出'
 tip?.dispose()
 ```
 
-自己写动效时用宿主的动效 token，不写死时长（宿主的 `check:motion` 对内置样式按这条把关）：`--ease-surface`（进场）/ `--ease-exit`（退场，加速离开）/ `--ease-calm` / `--ease-drawer`，`--menu-enter-duration` 180ms / `--menu-exit-duration` 80ms，`--tip-enter` / `--tip-exit`，`--hovercard-enter` / `--hovercard-exit`。退场比进场短；会被打断的状态用 `transition` 不用 `keyframes`；新建、恢复、滚进视口的东西不做入场；减少动态效果时留颜色和透明度、去掉位移和缩放。
+自己写动效时用宿主的动效 token，不写死时长（宿主的 `check:motion` 对内置样式按这条把关）：`--ease-surface`（进场）/ `--ease-exit`（退场，加速离开）/ `--ease-calm` / `--ease-drawer`，`--duration-instant` / `--duration-fast` / `--duration-base` / `--duration-slow`（100 / 150 / 200 / 250ms），折叠用 `--collapse-duration` / `--collapse-ease`，`--menu-enter-duration` 180ms / `--menu-exit-duration` 80ms，`--tip-enter` / `--tip-exit`，`--hovercard-enter` / `--hovercard-exit`。退场比进场短；会被打断的状态用 `transition` 不用 `keyframes`；不要补间宽高和内外边距（尺寸变化用下面的折叠或 `transform`）；不要写 `transition: all`；新建、恢复、滚进视口的东西不做入场；减少动态效果时留颜色和透明度、去掉位移和缩放。
 
 The host's buttons, sidebar rows and Ribbon share one tooltip (LCL `hoverSurface`): it appears after 300ms of hovering; while one is showing, moving to a neighbouring element that also has one hands the same tooltip over without replaying its animation; it closes 80ms after you leave (coming back within that window keeps it); keyboard focus (`:focus-visible`) shows it at once without animation; pressing or scrolling hides it. Native views spread `tooltipProps(content, { side })` from `@lcl/components` onto the trigger (one line, several lines — the first is the title — or a function evaluated when it is due, may be async, `null` = don't show), use `attachTooltip(el, content, opts)` for DOM, and `hideTooltip()` to close it. `useHoverCard(content, opts)` is the React-content variant (returns `triggerProps` and `portal`, timed by `--hovercard-*`); with `opts.longPress` a half-second press on a touch screen shows it at once and lifting the finger closes it (phones). Plugins call `ctx.ui?.attachTooltip?.(el, content, { side })` with a string or an array of strings; `side` is `top` (default), `bottom`, `left` or `right` and flips when there is no room. The handle has `update(content)` and `dispose()`; the host disposes everything on disable or reload. The tooltip does not name the element: keep `aria-label` on icon buttons and drop their `title` so two tooltips don't stack. Older hosts lack the method: keep `title` there.
 
-For your own motion use the host's motion tokens instead of literal durations: `--ease-surface` (enter), `--ease-exit` (leave, accelerating), `--ease-calm`, `--ease-drawer`, `--menu-enter-duration` 180ms / `--menu-exit-duration` 80ms, `--tip-enter` / `--tip-exit`, `--hovercard-enter` / `--hovercard-exit`. Leaving is shorter than entering; interruptible states use `transition`, not `keyframes`; things that are created, restored or scrolled into view don't animate in; with reduced motion keep colour and opacity changes and drop translation and scale.
+For your own motion use the host's motion tokens instead of literal durations: `--ease-surface` (enter), `--ease-exit` (leave, accelerating), `--ease-calm`, `--ease-drawer`, `--duration-instant` / `--duration-fast` / `--duration-base` / `--duration-slow` (100 / 150 / 200 / 250ms), `--collapse-duration` / `--collapse-ease` for collapsing, `--menu-enter-duration` 180ms / `--menu-exit-duration` 80ms, `--tip-enter` / `--tip-exit`, `--hovercard-enter` / `--hovercard-exit`. Leaving is shorter than entering; interruptible states use `transition`, not `keyframes`; don't tween width, height, padding or margin (use the collapse below or `transform` for size changes); don't write `transition: all`; things that are created, restored or scrolled into view don't animate in; with reduced motion keep colour and opacity changes and drop translation and scale.
 
 ### 宿主自动给的动效 / Motion the host applies for you (2026-10-25)
 
 插件视图和宿主在同一个页面里，下面这几样用标准写法就自动是 Forsion 的动效，不用自己写关键帧、不用读 token。宿主这几条都是零特异性（`:where()`），你自己给同一个元素写了 `animation` / `transition` 就以你的为准；系统开了「减少动态效果」时宿主一并收掉。iframe / webview 里的页面拿不到。
 
-- **原生 `<details>`**：展开时内容淡入（180ms），收起时淡出（80ms，加速离开）。只动透明度、不补间高度，放在会滚动的列表里也不抖。
+- **原生 `<details>`**：展开时内容淡入、收起时淡出，与下面的折叠同一对时长和曲线（200ms）。只动透明度、不补间高度，放在会滚动的列表里也不抖。
+- **折叠 `data-motion="collapse"`**（2026-10-26 起）：可以开合的一块（文件夹的子项、展开的详情）外层写 `data-motion="collapse"`，开着写 `data-open="true"`、收着写 `"false"`，**里面只套一层**元素放内容。宿主用 `grid-template-rows` 让它从 0 长到内容高、同时淡入，收起同样 200ms；中途反悔会从当前位置接着走，不用量高度。收着时内容 `visibility: hidden`，Tab 走不进去。旁边的箭头写 `data-motion="chevron"` 加同一个 `data-open`，开着转 90°（用朝右的箭头），和内容一起开始、一起停。展开好了里层仍会裁切探出去的内容；需要放开就在外层加 `data-settled`（React 用宿主的 `AnimatedCollapse`，它自己处理：从 `@lcl/components` 导入，`<AnimatedCollapse open={open}>{open && …}</AnimatedCollapse>`，收起时放完动画再卸载）。不要自己量 `scrollHeight` 补间 `height`。
 - **原生 `<dialog>`（`showModal()`）和 `popover`**：打开时与命令面板同一档进场（120ms，淡入并从 0.985 放大到 1），遮罩一起淡入。
 - **`data-motion="enter"`**：给「用户刚点了才出现」的那块内容写上这个属性（点开的清单、展开的分区、换出来的另一版），它挂上时淡入并从下方 4px 上来（180ms）。只写在刚发生的东西上：一打开视图就有的、从存档恢复的、滚进视口的不要写。动的是独立的 `translate` 属性，不会打乱你用 `transform` 做的定位。
 - 菜单、提示框、落点提示、Chat Box 用宿主的组件就自带进退场（见上文和下一节），不要自己再包一层动画。
@@ -336,9 +337,18 @@ more.dataset.motion = 'enter'        // 用户点了「展开」才挂上
 list.after(more)
 ```
 
+```js
+// 折叠:外层一个属性,里面只套一层
+section.innerHTML = '<button class="head"><span data-motion="chevron" data-open="false">›</span> 详情</button>' +
+  '<div data-motion="collapse" data-open="false"><div class="body">…</div></div>'
+const box = section.querySelector('[data-motion="collapse"]'), chev = section.querySelector('[data-motion="chevron"]')
+section.querySelector('.head').onclick = () => { const open = box.dataset.open !== 'true'; box.dataset.open = chev.dataset.open = String(open) }
+```
+
 The plugin view lives in the same page as the host, so the following get Forsion motion from standard markup alone, with no keyframes of your own and no tokens to read. All of these host rules have zero specificity (`:where()`): an `animation` / `transition` you write on the same element wins, and the host turns them off under reduced motion. Pages inside an iframe / webview don't get them.
 
-- **Native `<details>`**: the content fades in when opened (180ms) and out when closed (80ms, accelerating). Only opacity moves, height is not tweened, so it stays steady inside scrolling lists.
+- **Native `<details>`**: the content fades in when opened and out when closed, with the same duration and curve as the collapse below (200ms). Only opacity moves, height is not tweened, so it stays steady inside scrolling lists.
+- **Collapse, `data-motion="collapse"`** (2026-10-26+): on a block that opens and closes (a folder's children, an expanded detail) write `data-motion="collapse"` on the outer element, `data-open="true"` when open and `"false"` when closed, and put the content in **exactly one** inner element. The host grows it from zero to its content height with `grid-template-rows` while fading it in, and closes it in the same 200ms; changing your mind halfway continues from where it is, and nothing measures heights. While closed the content is `visibility: hidden`, so Tab can't reach it. Give the chevron next to it `data-motion="chevron"` with the same `data-open`: it turns 90° when open (use a right-pointing chevron) and starts and stops with the content. Once open, the inner element still clips anything that sticks out; add `data-settled` on the outer element to release it (in React use the host's `AnimatedCollapse` from `@lcl/components`, which does this for you: `<AnimatedCollapse open={open}>{open && …}</AnimatedCollapse>`, and on close it plays the animation before unmounting). Don't measure `scrollHeight` and tween `height` yourself.
 - **Native `<dialog>` (`showModal()`) and `popover`**: they open like the command palette (120ms, fade in while scaling from 0.985 to 1) and the backdrop fades in with them.
 - **`data-motion="enter"`**: put it on content that appears because the user just did something (a list they opened, a section they expanded, the other version they switched to); it fades in and rises 4px when it mounts (180ms). Only for what just happened: not for what is there when the view opens, is restored, or scrolls into view. It animates the separate `translate` property, so positioning you do with `transform` is left alone.
 - Menus, tooltips, drop indicators and the Chat Box carry their own enter / leave motion when you use the host's components (see above and the next section); don't wrap them in another animation.
@@ -347,6 +357,14 @@ The plugin view lives in the same page as the host, so the following get Forsion
 const more = document.createElement('div')
 more.dataset.motion = 'enter'        // mounted only after the user clicks "Show more"
 list.after(more)
+```
+
+```js
+// Collapse: one attribute on the outer element, exactly one inner element
+section.innerHTML = '<button class="head"><span data-motion="chevron" data-open="false">›</span> Details</button>' +
+  '<div data-motion="collapse" data-open="false"><div class="body">…</div></div>'
+const box = section.querySelector('[data-motion="collapse"]'), chev = section.querySelector('[data-motion="chevron"]')
+section.querySelector('.head').onclick = () => { const open = box.dataset.open !== 'true'; box.dataset.open = chev.dataset.open = String(open) }
 ```
 
 ### 落点提示 / Drop indicators (2026-10-24)
@@ -387,3 +405,42 @@ list.addEventListener('drop', async (e) => {
 After a drop, `land` makes the moved item glide from where it was let go (where the drag image was) into its new place: 160ms, decelerating (the drop line's `--lcl-drop-ease`; duration token `--land-duration`), its lift shadow fading out; neighbours don't make room; with reduced motion it simply appears there. The host uses it for project groups in the Tangu sessions list, plugin list rows and the built-in to-do view's group changes (homepage tiles sort with dnd-kit and don't; the Calendar plugin's own to-do view has to call `drop.land` itself). Native views keep `grab = dragGrab(el, e)` at dragstart and `from = releasePoint(e, grab)` at drop, then after re-rendering (before paint: `useLayoutEffect` / `requestAnimationFrame`) call `land(el, from, { with?, unclip? })` — `with` lists elements that move by the same offset (an expanded group's rows), `unclip` folding containers whose clipping is lifted for the flight. When the re-render comes later (after a write or a plugin callback), `landWhenMoved(() => findRow(), from, opts)` checks on every DOM change (a MutationObserver, before paint) and lands once the row is re-mounted or has a new parent / previous sibling, giving up after 1.2s. Only the item's own inline `transform` / `transition` / `box-shadow` are written for the flight and restored afterwards; it is a `transition`, not keyframes. Plugins call `drop.land?.(target, from)` on the handle: `target` is the row already in its new place, or a function that finds it once your re-render lands; `from` as above, a viewport top-left. Older hosts lack `land`: rows simply appear in place.
 
 The line that says "it will land here" while dragging to reorder, and the outline for "drop into this", are one thing across the host (LCL `dropIndicator`): coloured with the theme's `--signal-line`; moving to another drop point fades the old one out where it is (90ms) and fades the new one in where it lands, unfolding from its near end (130ms); the same drop point merely moving with a scroll follows without replaying; with reduced motion nothing animates. Don't draw your own. Native views use `createDropIndicator({ host?, className? })` from `@lcl/components` (handle: `line(rect, { key?, axis? })`, `zone(rect, { key? })`, `hide()`, `destroy()`, viewport px); places that already own an indicator element call `dropRetarget(el, key, { axis? })` **before** writing the new position and `dropHide(el)` before hiding it; lists that draw a pseudo-element line per row keep it always present and transparent and let the drop class light it up with `--lcl-drop-enter` / `--lcl-drop-leave` (see the head of `lcl/engine/dropIndicator.css`), and outline or background highlights use `transition: box-shadow var(--lcl-drop-fade)`. Plugins call `ctx.ui?.dropIndicator?.({ host? })`: `line({ x, y, w })` is a horizontal line whose top edge is at `y`, `line({ x, y, h }, { axis: 'v' })` a vertical one, `zone({ x, y, w, h })` the outline. Pass a `key` (your row or slot id) so a scroll is not taken for a new drop point. Call `hide()` on dragleave / drop / dragend and `dispose()` when the view goes away; the host disposes it on disable or reload. Older hosts lack the method: keep your own line there.
+
+### 宿主替插件画的零件 / Host-drawn parts (2026-10-26)
+
+插件拿不到宿主的 React 组件(一份 React 不跨插件共享),所以宿主把常用零件做成 `ctx.ui` 上的挂载,插件只传数据和回调。文案字段都收 PluginText(字符串 / `() => string` / `{ zh, en }`),宿主在画的那一刻求值,切语言自动重算。宿主侧实现都在 `desktop/frontend/src/amadeus/plugins/`(`partsSurface.tsx`、`contextMenuSurface.tsx`、`pluginIcon.tsx`、`pluginText.ts`、`pluginParts.css`),复用的是原生那一份:
+
+| 接口 | 宿主那一份 | 约定 |
+| --- | --- | --- |
+| `ctx.ui.contextMenu(x, y \| { anchor, align, side }, entries, opts?)` | `.ctx-menu` 外壳 + `OverlayAt`(Android:`runNativeSheetMenu`) | 行 `{ label, run, icon?, shortcut?, checked?, disabled?, danger? }`、`{ separator: true }`、`{ section }`;有一项带图标,没图标的留同宽空位;首尾 / 相邻分隔与空小节自动去掉;`opts.keepOpen` + 句柄 `update(entries)`;`opts.onClose`。 |
+| `ctx.ui.confirm(opts)` / `ctx.ui.openDialog(opts)` | 原生 `<dialog>` + `showModal`,外观同笔记的 ConfirmDialog(420 / 560px、`--radius-lg`、卡片底、`--card-shadow`);Android 确认走 `presentNativeConfirm` | 主按钮在右,`danger` 时红、焦点落「取消」;Enter = 主按钮;Esc / 遮罩 = 取消;`run` 返回 `false` 不关;`mount(el)` 的清理在关闭时跑。 |
+| `ctx.ui.mountControl(el, { type, size: 'toolbar', … })` | 分段 = `ViewModeSwitch`(看法胶囊);下拉 = 28px 文字钮 + `.ctx-menu` listbox(Android 原生抽屉) | 分段 2–5 项;下拉 6 项起带搜索;点了先挪过去再回调 `onChange`,`update({ value })` 以插件为准。 |
+| `ctx.ui.popover(anchor, { mount, side, align })` | `.ui-popover` 外壳,`clampMenu` + `zoomOf` 落位 | 锚定、夹边、界面缩放、Esc / 点外面 / 失焦关;同一时刻一个。 |
+| `ctx.ui.icon(name, { size })` | `PLUGIN_ICONS` 词表(Space 那 30 个名字已并入) | 返回新 `<svg>`;词表外 → null + 控制台警告一次(插件 id + 名字,带近似名);Space / 列表照旧回落(方块堆 / 文件)。 |
+| `ctx.ui.mountEmptyState(el, …)`、`ListSourceContribution.empty` | `components/EmptyState`;列表源经 `views/hostListEmpty.ts` 登记 | 桌面:插件自己的 Space 里侧栏不写「暂无内容」;手机整屏列表画同一份空态。 |
+| `ctx.ui.setViewHead(el, { title, actions })` | `ViewHead`(`title` 插槽)+ `plugin-viewhead-actions` | 与 `setViewModes` 并存:胶囊、标题、两份按钮。 |
+| `ctx.ui.mount(name, el, props)` | 上面这些的同一入口(`PluginUiParts` 类型) | 给 React / Vue 插件在 ref 上挂;返回 `{ update, dispose }`。 |
+| `ctx.addStyle(css)`、`ctx.i18n.define({ zh, en })` | `<style data-plugin>`、`pluginText.ts` 的 `defineMessages` | 停用 / 重载时摘掉;回退链 当前语言 → zh → key,缺 en 键警告一次。 |
+
+生命周期同其它 `ctx.ui.mount*`:插件停用 / 重载 / setup 失败时宿主统一收,回调此后不再调;形态错同步抛 `TypeError`。仪器:`desktop/frontend/src/amadeus/plugins/partsSurface.test.ts`(单测)、`desktop/scripts/r8dx-shots.cjs`(真 Electron:装样例插件 `scripts/fixtures/r8dx-sample-v2`,明 / 暗 / 现场切英文 / 窄窗格拍图并量几何)。
+
+The host draws these parts for plugins, which never get its React components. Text fields take PluginText (string, `() => string` or `{ zh, en }`) and follow a language switch. Menus gained icons, shortcut hints, separators, section headings, anchoring to a button and the Android bottom sheet; dialogs, toolbar controls, popovers, empty states, the view head, one icon vocabulary (`ctx.ui.icon`), `ctx.addStyle` and `ctx.i18n.define` are new, and `ctx.ui.mount(name, el, props)` is the typed entry point for React / Vue plugins. Before 2026-10-26 `ctx.ui.contextMenu` kept only `label` / `run` / `checked` / `disabled` / `danger` and dropped every other field silently.
+
+### 样式契约 / Style contract (2026-10-26)
+
+插件可以依赖的宿主类名和 CSS 变量发布在 forsion-plugin 技能的 `tools/plugin-contract.json`（每个带用途，随 `apiVersion` 升级）；清单外的宿主类名和变量随时可能改名或删掉。
+
+- 公开类名：`.btn`（`.primary` / `.ghost` / `.danger` / `.sm`）、`.ctx-menu` 外壳（直接子 `<button>` 是菜单项，另有 `button.danger`、`.ctx-separator`、`.ctx-shortcut`、`.ctx-head`、`.ctx-menu-scroll`）、`.empty-state` / `.empty-title`。不要借用 `.amx-*`、`.fc-*`、`.t2-*` 这些宿主私有类名。
+- 公开 token：色、圆角 `--radius-*`、阴影、菜单尺寸 `--menu-*`、界面字号 `--ui-font-*` / `--ui-line-*`、动效 `--duration-*` / `--ease-*`，以及 `--focus-ring`。只列名字不列值，值跟着设计语言、主题色和背景色变。`--ease-out`、`--ease-spring`、`--ease-apple`、`--dur-*` 已弃用。
+- 不写兜底：写 `var(--radius-md)`，不写 `var(--radius-md, 10px)`。只有 token 比插件的 `minAppVersion` 新（契约里的 `since` 表）时才给老宿主留兜底；`--reading-line-height` / `--reading-paragraph-gap` 本来就带兜底。
+- 不写死颜色、阴影和圆角：浅底用 `color-mix(in srgb, var(--green) 14%, transparent)`。画面本身要固定的颜色（视频黑边、压在画面上的白字）写关键字 `black` / `white`。
+- 检查：`node check-plugin.mjs <插件目录> --style` 扫 `main.js` 和目录里的 `.css`，报私有类名、清单外或已弃用的 token、多余兜底、写死的颜色、4px 及以上的圆角和带颜色的阴影。只报告，不改变退出码。给另一份文档用的 CSS（iframe 里的页面、导出文件）在同一行写 `/* forsion-style: off */` 跳过。
+
+The host class names and CSS custom properties a plugin can rely on are published in the forsion-plugin skill's `tools/plugin-contract.json` (each with its purpose, versioned with `apiVersion`). Host class names and variables outside that list can be renamed or removed in any release.
+
+- Public classes: `.btn` (`.primary` / `.ghost` / `.danger` / `.sm`), the `.ctx-menu` shell (its direct `<button>` children are the items; also `button.danger`, `.ctx-separator`, `.ctx-shortcut`, `.ctx-head` and `.ctx-menu-scroll`), and `.empty-state` / `.empty-title`. Do not borrow host-private classes such as `.amx-*`, `.fc-*` or `.t2-*`.
+- Public tokens: colors, radii `--radius-*`, shadows, menu sizes `--menu-*`, interface type `--ui-font-*` / `--ui-line-*`, motion `--duration-*` / `--ease-*`, and `--focus-ring`. The contract lists names, not values: values follow the design language, accent and background. `--ease-out`, `--ease-spring`, `--ease-apple` and `--dur-*` are deprecated.
+- No fallbacks: write `var(--radius-md)`, not `var(--radius-md, 10px)`. Keep a fallback only for a token newer than your `minAppVersion` (the contract's `since` table); `--reading-line-height` and `--reading-paragraph-gap` take one by design.
+- No hard-coded colors, shadows or radii: for a wash use `color-mix(in srgb, var(--green) 14%, transparent)`. A color that is fixed on purpose because it belongs to the artwork (a video letterbox, white text over a frame) is written as a keyword: `black` / `white`.
+- Check: `node check-plugin.mjs <plugin folder> --style` scans `main.js` and the folder's `.css` files and reports private classes, tokens that are not public or are deprecated, needless fallbacks, hard-coded colors, radii of 4px or more, and shadows with a hard-coded color. It only reports and does not change the exit code. CSS meant for another document (a page inside an iframe, an exported file) is skipped by putting `/* forsion-style: off */` on the same line.
+

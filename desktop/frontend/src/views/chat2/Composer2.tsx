@@ -18,7 +18,7 @@ import { THINKING_LEVELS } from '../../../../../tangu-agent/src/contracts/client
 
 // context 视图已知注入段 key(与引擎 agentLoop ctxMark 调用一一对应);未知 key 显示原样
 import type { AgentConfig, Attachment, CtxInfo, DefaultModelSlot, MessageRecord, ModelInfo, ModelsResponse, NormalAgentDef, SkillInfo } from '../../../../../tangu-agent/src/contracts/clientTypes'
-import { nativeHaptic, nativeSheetPresenter, openNativeSheetMenu, useEdgeNudge, useNativeChromeInstalled, useWorkspace, type SheetMenuItem, type SheetMenuSection } from '@lcl/engine'
+import { nativeHaptic, nativeSheetPresenter, openNativeSheetMenu, useEdgeNudge, useExitGhost, useNativeChromeInstalled, useWorkspace, type SheetMenuItem, type SheetMenuSection } from '@lcl/engine'
 import { ModelPill, contextRingWindow, type ModelPillGroup } from '../../components/ModelPill'
 import { UltraConfirmDialog, ultraConfirmSkipped } from './UltraConfirmDialog'
 import { registerMessages, useI18n } from '../../i18n'
@@ -37,7 +37,7 @@ import { AttachmentTile, isLeaving, tileKey } from '../../components/AttachmentT
 import { useUploads } from '../../services/uploads'
 import { addDraftFile, isInWorkspace, previewOf, release, removeDraftFile, uploadIdOf } from './composerUploads'
 import { commandsFor } from '../../commandCatalog'
-import { getCustomCommands, expandCustomCommand, listAllMessages, type CustomCommandInfo } from '../../services/backendService'
+import { getCustomCommands, expandCustomCommand, getModelQuota, listAllMessages, type CustomCommandInfo } from '../../services/backendService'
 import { AddContentMenu, type AddContentReference } from './AddContentMenu'
 import { NormalModeItem, normalModeItems } from './NormalModeItem'
 import { mainReferenceKey } from './mainReference'
@@ -58,9 +58,10 @@ import { NEW_CHAT_DRAFT, clearDraft, moveDraft, setDraftField, useComposerDrafts
 import { dropSend, fadeOutDraft, noteSend } from './sendFlight'
 import { announceSend } from './freshLayout'
 import { ContextUsagePop } from './ContextUsagePop'
+import { isDirectModelId } from '../chatModelCatalog'
 import { usePromptSuggest } from './promptSuggest'
 import './composer2.css'
-import { homeTarget, targetForSession, targetKeyOf, useComposerRef } from '../../services/engine/targets'
+import { focusTarget, homeTarget, targetForSession, targetKeyOf, useComposerRef } from '../../services/engine/targets'
 import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 registerMessages({
@@ -308,6 +309,7 @@ export function pickRecall(hist: string[], pos: number, older: boolean, stash: s
 }
 
 export { fmtTokens } from './ContextUsagePop'
+
 
 /** 发出的正文:引用 token 行 + 引文 + 正文(上下文在前)。例外:/refine 必须留在最前 —— 引擎只认开头的 /refine
  *  (isRefineInvocation);开着「自动引用当前笔记」时几乎每条都带引用行,前置会让 /refine 静默失效。 */
@@ -822,6 +824,7 @@ export const Composer2: React.FC<{
   // 视口兜底:这些菜单是 absolute-in-relative + 固定宽度,窄屏时仍可能被边缘夹住。
   // mode 的外层会先占住 224px 最终宽度,避免胶囊展开时 right:0 锚点横移。见 menuAnchor.useEdgeNudge。
   const modeFix = useEdgeNudge(openMenu === 'mode', { boundary: '.t2-chat-view' })
+  useExitGhost(modeFix.ref, openMenu === 'mode') // 关掉时留替身放 80ms 退场(走查续八 8.4)
   // 上下文占比的详情浮层:同款 absolute + 固定宽,窄屏也会捅出边缘。
   // 右边缘贴输入卡右边缘,不越出输入卡(走查 5.13):边界 = 输入卡、边距 0。
   const ctxPopFix = useEdgeNudge(openMenu === 'ctx', { boundary: '.t2c-card', margin: 0 })
@@ -2219,6 +2222,9 @@ export const Composer2: React.FC<{
                       costLimit={costLimit}
                       ctxInfo={ringCtxInfo}
                       onCompact={onCompact ? () => { onCompact(); setOpenMenu(null) } : undefined}
+                      directModel={!isEngine && modelId && isDirectModelId(modelId, models, modelsResponse)
+                        // 新对话还没会话:按焦点设备查(新对话就跑在那里,模型目录也来自那里),别固定问本机
+                        ? { id: modelId, load: () => getModelQuota(sessionId ? targetForSession(sessionId) : focusTarget(), modelId).then((r) => r.quota) } : undefined}
                     />
                   </span>
                 </span>

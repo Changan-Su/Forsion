@@ -140,6 +140,7 @@ export const CLASSIFICATION = {
   'GET /agent/commands': [A, 'slash command catalog'],
   'POST /agent/commands/:name/expand': [A, 'expand a custom slash command template (read-only)'],
   'GET /agent/models': [A, 'model list'],
+  'GET /agent/models/quota': [A, 'provider quota (read-only)'],
   'PUT /agent/models/overrides': [D, 'model overrides config'],
   'POST /agent/vision/describe': [A, 'describe an image for a non-vision model'],
 

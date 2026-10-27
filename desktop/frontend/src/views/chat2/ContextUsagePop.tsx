@@ -1,14 +1,14 @@
 /**
  * 输入框上下文环的详情弹层(09-26,对标 Claude 的 Context window 面板):
  * 头部「已用 / 窗口 tokens(%)」+ 分段条 + 自动压缩线;点头部展开分项、窗口来源与指令文件;
- * 登录 Forsion 再列今日 / 本周托管额度。
+ * 登录 Forsion 再列今日 / 本周托管额度;当前模型是直连模型(订阅 / 自带 key)时改列该来源的额度或余额(来源支持查询才有)。
  *
  * 分项口径:引擎 context_info 只给系统提示各段与历史消息的**估算**,工具定义不单列 → 真实占用减去两者的余数
  * 记作「工具与本轮」。按「系统段 → 历史 → 余数」依次截断:压缩后占用回落、分项仍是 run 开始时的值,也不会出负数。
  */
 import { Fragment, useEffect, useRef, useState } from 'react'
 import { ChevronRight } from 'lucide-react'
-import type { CtxInfo } from '../../../../../tangu-agent/src/contracts/clientTypes'
+import type { CtxInfo, ProviderQuota } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { registerMessages, useI18n } from '../../i18n'
 import { useApp } from '../../stores/appStore'
 import { TierBadge } from '../../components/TierBadge'
@@ -33,6 +33,12 @@ registerMessages({
   'ctx.limit.resetsIn': { zh: '{h} 小时 {m} 分钟后重置', en: 'Resets in {h} hr {m} min' },
   'ctx.limit.resetsAt': { zh: '{when} 重置', en: 'Resets {when}' },
   'ctx.limit.used': { zh: '已用 {pct}%', en: '{pct}% used' },
+  'ctx.quota.title': { zh: '{provider} 额度', en: '{provider} usage limits' },
+  'ctx.quota.5h': { zh: '5 小时', en: '5 hours' },
+  'ctx.quota.week': { zh: '本周', en: 'This week' },
+  'ctx.quota.hours': { zh: '{n} 小时', en: '{n} hours' },
+  'ctx.quota.days': { zh: '{n} 天', en: '{n} days' },
+  'ctx.quota.balance': { zh: '余额', en: 'Balance' },
 })
 
 /** token 计数进位:满千 k、满百万 M,一位小数。截断而非四舍五入 —— 999,999 是 999.9k,不是 1000k。 */
@@ -100,9 +106,12 @@ interface Props {
   costLimit?: number
   ctxInfo?: CtxInfo | null
   onCompact?: () => void
+  /** 当前模型是直连模型(订阅 / 自带 key)时传:弹层底部改列这个来源的额度,不列 Forsion 托管额度。
+   *  load 由调用方拼好(Composer2 → getModelQuota),本组件不碰引擎目标,台架可以直接塞假数据。 */
+  directModel?: { id: string; load: () => Promise<ProviderQuota | null> }
 }
 
-export function ContextUsagePop({ open, contextWindow, ctxTokens, sessionTokens, runCost, costLimit, ctxInfo, onCompact }: Props) {
+export function ContextUsagePop({ open, contextWindow, ctxTokens, sessionTokens, runCost, costLimit, ctxInfo, onCompact, directModel }: Props) {
   const { t } = useI18n()
   const [detail, setDetail] = useState(false)
   const used = ctxTokens || 0
@@ -168,7 +177,7 @@ export function ContextUsagePop({ open, contextWindow, ctxTokens, sessionTokens,
       {runCost != null && costLimit != null && costLimit > 0 && (
         <span className="t2c-ctxinfo-src" data-warn={runCost >= costLimit * 0.8 || undefined}>{t('input.runCost', { used: Math.round(runCost).toLocaleString(), limit: costLimit.toLocaleString() })}</span>
       )}
-      <QuotaLimits open={open} />
+      {directModel ? <ProviderLimits open={open} model={directModel} /> : <QuotaLimits open={open} />}
     </>
   )
 }
@@ -227,6 +236,59 @@ function QuotaLimits({ open }: { open: boolean }) {
           )}
         </span>
       ))}
+    </span>
+  )
+}
+
+/** 直连来源的额度:订阅按窗口列「已用 %」+ 条(画法同上面的 Forsion 额度),自带 key 列余额。查不到不显示。 */
+function ProviderLimits({ open, model }: { open: boolean; model: { id: string; load: () => Promise<ProviderQuota | null> } }) {
+  const { t, locale } = useI18n()
+  const [quota, setQuota] = useState<ProviderQuota | null>(null)
+  // load 每次渲染都是新函数:放 ref 里,别进依赖(进了就是开着弹层时每渲染一次请求一次)
+  const load = useRef(model.load)
+  load.current = model.load
+  useEffect(() => { setQuota(null) }, [model.id])
+  useEffect(() => {
+    if (!open) return
+    let alive = true
+    // 引擎按来源缓存 5 分钟,每次打开都问一遍不会打穿上游
+    void load.current().then((q) => { if (alive) setQuota(q) }).catch(() => {})
+    return () => { alive = false }
+  }, [open, model.id])
+  if (!quota || (!quota.windows?.length && !quota.balance)) return null
+  const winName = (s: number): string =>
+    s === 18000 ? t('ctx.quota.5h') : s === 604800 ? t('ctx.quota.week') : s % 86400 === 0 ? t('ctx.quota.days', { n: s / 86400 }) : t('ctx.quota.hours', { n: Math.round(s / 3600) })
+  const resetText = (at?: number): string => {
+    if (!at) return ''
+    const left = Math.max(0, at - Date.now())
+    return left < 86400e3
+      ? t('ctx.limit.resetsIn', { h: Math.floor(left / 3600e3), m: Math.floor((left % 3600e3) / 60e3) })
+      : t('ctx.limit.resetsAt', { when: formatDateTime(new Date(at), { locale }) })
+  }
+  const money = (b: { currency: string; amount: number }): string => {
+    try { return new Intl.NumberFormat(locale === 'zh' ? 'zh-CN' : 'en-US', { style: 'currency', currency: b.currency }).format(b.amount) } catch { return `${b.amount} ${b.currency}` }
+  }
+  return (
+    <span className="t2c-cu-limits">
+      <span className="t2c-cu-limits-title">{t('ctx.quota.title', { provider: quota.providerId })}</span>
+      {quota.windows?.map((w) => (
+        <span key={w.seconds} className="t2c-cu-limit" data-limit={`w${w.seconds}`}>
+          <span className="t2c-cu-limit-line">
+            <span className="t2c-cu-limit-name">{winName(w.seconds)}</span>
+            <span className="t2c-cu-limit-reset">{resetText(w.resetAt)}</span>
+            <span>{t('ctx.limit.used', { pct: Math.round(w.usedPercent) })}</span>
+          </span>
+          <span className="t2c-cu-bar" data-warn={w.usedPercent >= 85 || undefined} aria-hidden="true"><span style={{ width: `${w.usedPercent}%` }} /></span>
+        </span>
+      ))}
+      {quota.balance && (
+        <span className="t2c-cu-limit" data-limit="balance">
+          <span className="t2c-cu-limit-line">
+            <span className="t2c-cu-limit-name">{t('ctx.quota.balance')}</span>
+            <span>{money(quota.balance)}</span>
+          </span>
+        </span>
+      )}
     </span>
   )
 }

@@ -1,6 +1,6 @@
 import { HumanCollaborationPanel } from '../components/HumanCollaborationPanel'
 import { humanRewritable, type HumanJump } from '../services/humanCollaboration'
-import { useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { AppWindow, ArrowLeft, Check, ChevronRight, Copy, Download, ExternalLink, FileText, Folder, FolderGit2, FolderInput, FolderOpen, GitBranch, GitBranchPlus, GitCommitHorizontal, ImageUp, Link2, Loader2, MessageSquarePlus, Plus, RefreshCw, Search, Settings2, Smile, Sparkles, Star, TerminalSquare, Upload, UserRound, Users, X } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
@@ -14,7 +14,7 @@ import { addToCreations } from './chat2/CreationCards'
 import { setActiveSpace } from '@lcl/engine'
 import type { AgentConfig, GitIdentity, NormalAgentDef, ProjectContext, ProjectSettings, SessionRecord, TeamDef } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { isTeamImageAvatar, sessionWorkspaceKey, THINKING_LEVELS } from '../../../../tangu-agent/src/contracts/clientTypes'
-import { ProfileModelField, ProfileTextEditor } from './profileControls'
+import { ProfileModelField, ProfileTextEditor, useSectionNavSlide } from './profileControls'
 import { AvatarStack } from '../components/AvatarStack'
 import { openSpecial } from './SpecialViews'
 import { openTerminal, routeExternalUrl } from '../builtins'
@@ -119,6 +119,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
   const [loadError, setLoadError] = useState('')
   const [reloadAt, setReloadAt] = useState(0)
   const [tab, setTab] = useState<Tab>(humanJump ? 'human' : freshJump(recordJump) ? 'settings' : 'agents')
+  const navRef = useSectionNavSlide(tab)
   useEffect(() => { if (humanJump?.at) setTab('human') }, [humanJump?.at])
   // 落点要等「设置」页连同项目记忆画出来:引擎回来之前 ctx 是 null。已经开着这个项目时手里的 ctx 可能是旧的(后台刚记下的那条还没读到):
   // 令牌一变先重读,读回来的那份才拿来落。点开着的执行者详情会盖住主区,一并收起(同「返回」)。
@@ -671,7 +672,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
         {inCreations
           ? <button type="button" className="project-creation-action" data-project-creation="done" onClick={() => setActiveSpace('artificial')}><AppWindow size={12} />{t('creation.card.openCreations')}</button>
           : canAdopt && <button type="button" className="project-creation-action" data-project-creation="add" title={t('projectProfile.creation.addHint')} disabled={!!busy} onClick={() => void joinCreations()}>{busy === 'adopt' ? <Loader2 size={12} className="spin" /> : <FolderInput size={12} />}{t('creation.card.add')}</button>}</p>
-      <nav className="agent-section-nav" style={{ '--profile-tab-count': TABS.length, '--profile-tab-index': TABS.findIndex((item) => item.id === tab) } as CSSProperties} aria-label={t('projectProfile.navigation')} role="tablist" onKeyDown={(e) => {
+      <nav ref={navRef} className="agent-section-nav" aria-label={t('projectProfile.navigation')} role="tablist" onKeyDown={(e) => {
         if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return
         e.preventDefault()
         const index = TABS.findIndex((x) => x.id === tab)

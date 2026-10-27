@@ -23,6 +23,8 @@ import {
   type TanguComposerOptions,
   type TanguCompleteRequest,
   type TanguCompleteResult,
+  type TanguFimRequest,
+  type TanguFimResult,
   type TanguModelInfo,
   type TanguSessionInfo,
   type TanguStartChatOptions,
@@ -35,7 +37,7 @@ import { usePluginChat } from './stores/pluginChatStore'
 import type { TanguDesktopConfig } from './types'
 import { getSessionDetail, getAgentSchedules, getMuseLibrary, getMuseLibraryFile, getMuseStatus, getMuseTodos, patchMuseTodo } from './services/backendService'
 import { hasNativeFeature } from './features/runtime'
-import { completeInline } from './services/inlineAi'
+import { completeInline, fimInline, FIM_UNAVAILABLE } from './services/inlineAi'
 import { submitDocumentTask } from './services/documentTasks'
 import { openSession } from './sessionNav'
 import { connectionTarget } from './services/engine/targets'
@@ -75,6 +77,32 @@ async function translateInline(req: TanguCompleteRequest, opts: TanguCompleteOpt
     if (!pick.auto || streamed || !chat || opts.signal?.aborted) throw e
     return by(await completeInline({ ...req, modelId: chat }, chat, opts), chat)
   }
+}
+
+/** 行内补全(ctx.tangu.fim)用哪个模型:点名的 → 「补全」模型槽(config.json models.fim,且还在**本机引擎**目录的 fimModels 里)
+ *  → fimModels 第一个 → null(调用方 reject fim_unavailable)。目录按 home 验(与 translateModelChoice 同理:正文 AI 只打本机)。
+ *  目录还没拉到就先拉一次 —— 冷启动时直接判「没有」会让插件整场会话落回 complete;拉不到(引擎没起来)才先信槽。 */
+export async function fimModelChoice(modelId?: string): Promise<{ id: string; name: string } | null> {
+  const cached = catalogFor('home')?.models
+  const cat = cached ?? (await ensureCatalog('home').catch(() => null))?.models ?? null
+  const nameOf = (id: string): string => cat?.fimModels?.find((m) => m.id === id)?.name || cat?.models.find((m) => m.id === id)?.name || id
+  if (modelId) return { id: modelId, name: nameOf(modelId) }
+  const slot = (await window.tangu?.getConfig?.().catch(() => null))?.fimModelId
+  // 云端目录这次没拉成(status error,fimModels 空)≠ 没有补全模型:先信槽;槽也没有就报可重试的错,
+  // 别抛 fim_unavailable —— 插件会据此整场会话落回 complete,网好了也不回来。
+  const cloudDown = cat?.forsion?.status === 'error'
+  if (slot && (!cat || cloudDown || cat.fimModels?.some((m) => m.id === slot))) return { id: slot, name: nameOf(slot) }
+  const first = cat?.fimModels?.[0]
+  if (!first && cloudDown) throw new Error('fim_catalog_unreachable')
+  return first ? { id: first.id, name: first.name || first.id } : null
+}
+
+async function fimViaProbe(req: TanguFimRequest, opts: TanguCompleteOptions = {}): Promise<TanguFimResult> {
+  const pick = await fimModelChoice(req.modelId)
+  if (!pick) throw new Error(FIM_UNAVAILABLE)
+  opts.signal?.throwIfAborted()
+  const r = await fimInline(req, pick.id, opts)
+  return { text: r.text, model: pick }
 }
 
 function readActiveModel(): TanguModelInfo | null {
@@ -508,6 +536,8 @@ export function installTanguProbe(fromTangu: Pick<TanguProbe, 'askInChat'> = {})
     // 例外:translate 动作先看「翻译」模型槽(编辑器的翻译与插件 ctx.tangu.translate 同一个口子)。
     // 与「问 Tangu」同一门控:没有 Tangu 产品能力的档案(automation-only)不出 AI 入口、插件也拿不到 complete。
     ...(hasNativeFeature('tangu') ? { complete: async (req, opts) => (req.action === 'translate' && !req.modelId ? translateInline(req, opts) : completeInline(req, readActiveModel()?.id ?? null, opts)) } : {}),
+    // 行内补全(FIM,2026-10-26+):同一门控、同一条 /agent/inline;模型取 fimModelChoice(),做不了一律 fim_unavailable。
+    ...(hasNativeFeature('tangu') ? { fim: fimViaProbe } : {}),
     // ⚠️只在 (模型 id, Space id) 这对值**真变了**时才回调。useApp 在流式回答期间每收一个
     // SSE 增量就 set 一次 state,裸转发 = 把每个订阅插件按帧敲一遍(浮层类插件会当场掉帧)。
     subscribe: (cb) => {

@@ -11,7 +11,7 @@
 import { useEffect, useRef, useState, type ReactElement, type RefObject, type SVGProps, type ReactNode, type MouseEvent } from 'react'
 import { HUMAN_CAL } from '../../amadeus/store/humanCalendarIo'
 import { ExternalLink, MoreHorizontal, ChevronUp } from 'lucide-react'
-import { UI_MODE, useNativeChromeClaim } from '@lcl/engine'
+import { UI_MODE, useExitGhost, useNativeChromeClaim } from '@lcl/engine'
 import { coerceForDisplay, type CellValue, type DbColumn } from '@amadeus-shared/db/schema'
 import { CalDateFields } from '../../amadeus/blocks/database/propertyTypes.builtins'
 import { getPropertyType, isStamped, resolveBaseType } from '../../amadeus/blocks/database/propertyTypes'
@@ -93,6 +93,7 @@ export function EventCard({ ev, at, onClose, maxRight, calendar = false, onActio
   const mobile = calendar && (UI_MODE === 'mobile' || !!window.tangu?.mobile)
   const pos = cardPos(at, { maxRight })
   const dialogRef = useRef<HTMLDivElement>(null)
+  useExitGhost(dialogRef) // 关掉(卸载)时留替身放 80ms 退场(走查续八 8.4)
   const closeRef = useRef<HTMLButtonElement>(null)
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose

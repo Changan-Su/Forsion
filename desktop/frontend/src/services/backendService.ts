@@ -3,7 +3,7 @@
  * 统一 Bearer + JSON 错误,错误信息抛 Error(detail)。
  */
 import type {
-  AgentConfig, AgentScheduleEntry, AgentScheduleEntryUpsert, AgentScheduleInfo, AgentsMeta, AutomationActionCatalogItem, AutomationExecutionInfo, AutomationRunInfo, AutomationSessionInfo, ChannelKind, HistorianActivityItem, MessageRecord, ModelsResponse, MuseLibraryEntry, MuseStarter, MuseStatusInfo, MuseTodo, MuseTriggerInfo, MuseTriggerUpsert, PendingApprovalInfo,
+  AgentConfig, AgentScheduleEntry, AgentScheduleEntryUpsert, AgentScheduleInfo, AgentsMeta, AutomationActionCatalogItem, AutomationExecutionInfo, AutomationRunInfo, AutomationSessionInfo, ChannelKind, HistorianActivityItem, MessageRecord, ModelsResponse, ProviderQuota, MuseLibraryEntry, MuseStarter, MuseStatusInfo, MuseTodo, MuseTriggerInfo, MuseTriggerUpsert, PendingApprovalInfo,
   GitIdentity, GitSettings, NormalAgentDef, ProjectContext, ProjectMemoryView, ProjectSettings, ProjectSkillInfo, SessionRecord, SkillInfo, SkillCatalogEntry, SpecialAgentsConfig,
   ToolsResponse, WorkspaceFileMeta, TeamDef } from '../types'
 import { authFetch } from './http'
@@ -450,6 +450,10 @@ export const compactSession = (t: EngineTarget, sessionId: string, modelId?: str
 // 列表/默认模型与 run 的记账 app 对不上(见 tangu-agent routes/models.ts)。
 export const listModels = (t: EngineTarget) =>
   request<ModelsResponse>(t, `/agent/models?app_id=${encodeURIComponent(AGENT_APP_ID)}`)
+
+/** 直连模型所属来源的额度 / 余额(输入框上下文环弹层);来源查不到时 quota 为 null。 */
+export const getModelQuota = (t: EngineTarget, modelId: string) =>
+  request<{ quota: ProviderQuota | null }>(t, `/agent/models/quota?model=${encodeURIComponent(modelId)}`)
 
 /** 本机 per-model 覆盖:上下文窗口(tokens;null = 清除,交还自动识别)。落引擎 config.json 的 modelOverrides 段,对下一条消息生效。 */
 export const setModelContextWindow = (t: EngineTarget, modelId: string, contextWindow: number | null) =>

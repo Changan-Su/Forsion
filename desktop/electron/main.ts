@@ -63,7 +63,7 @@ import { createUnitRelay } from './unitRelay' // 桌面作为调用方:把会话
 import './editContextMenu' // 编辑区系统右键菜单(评审 G4-08):导入即给每个应用窗口挂 context-menu,逻辑全在模块里
 import { readThemesDir, seedDefaultThemes } from './themes'
 import { builtinBundleSources, builtinPluginIds, bundleOff, bundleRestartPending, initBundleSwitches, lockedPluginIds, seedBuiltinBundles, setBundleOff } from './builtinPlugins'
-import { createCorePluginUpdater } from './corePluginUpdates'
+import { createCorePluginUpdater, prefetchOnFirstBoot } from './corePluginUpdates'
 import { createMarketPluginUpdater, type MarketUpdateItem } from './marketPluginUpdates'
 import { BUILTIN_BUNDLES } from './builtinPlugins'
 import { checkBuiltinUpdates, NPM_OFFICIAL, registryOrder } from './builtinUpdates'
@@ -434,6 +434,8 @@ interface TanguStoredConfig {
   visionMode: 'auto' | 'always' | 'off'
   /** 辅助模型 · 翻译(笔记里的「翻译」与插件 ctx.tangu.translate 用;落 config.json models.translate;缺省=跟聊天当前模型)。 */
   translateModelId: string
+  /** 辅助模型 · 补全(插件 ctx.tangu.fim 的行内补全用;落 config.json models.fim;缺省 = 目录里第一个补全模型)。 */
+  fimModelId: string
   /** 默认语音识别模型 id(语音输入转写用;持久化到 config.json asr.modelId;缺省=跟随 app 级 asr 默认)。 */
   asrModelId: string
   /** 语音输入偏好后端:local=本地 SenseVoice(需下载);cloud=自带-key/Forsion 云端。缺省 cloud。 */
@@ -541,6 +543,7 @@ const DEFAULT_CONFIG: TanguStoredConfig = {
   visionModelId: '',
   visionMode: 'auto',
   translateModelId: '',
+  fimModelId: '',
   asrModelId: '',
   asrBackend: 'cloud',
   lastApprovalMode: 'auto-edit',
@@ -789,6 +792,7 @@ async function loadConfig(): Promise<TanguStoredConfig> {
       backgroundModelId: auxModels.background || '',
       visionModelId: auxModels.vision || '',
       translateModelId: auxModels.translate || '',
+      fimModelId: auxModels.fim || '',
       visionMode: auxModels.visionMode === 'always' || auxModels.visionMode === 'off' ? auxModels.visionMode : 'auto',
     } : {}),
   }
@@ -861,6 +865,7 @@ function applyHomePatch(home: Record<string, any>, patch: Partial<TanguStoredCon
   if ('visionModelId' in patch) { auxModels.vision = patch.visionModelId; mT = true }
   if ('visionMode' in patch) { auxModels.visionMode = patch.visionMode; mT = true }
   if ('translateModelId' in patch) { auxModels.translate = patch.translateModelId; mT = true }
+  if ('fimModelId' in patch) { auxModels.fim = patch.fimModelId; mT = true }
   if ('sandbox' in patch) { home.sandbox = patch.sandbox; oT = true }
   if ('hostSandbox' in patch) { home.hostSandbox = normalizeHostSandboxConfig(patch.hostSandbox); oT = true }
   if ('defaultWorkspaceDir' in patch) { home.workspace = patch.defaultWorkspaceDir; oT = true }
@@ -1723,9 +1728,12 @@ function loadRendererWith(win: BrowserWindow, params: Record<string, string>): v
   }
 }
 
+// 启动流程建主窗之前不建窗:那时 IPC 还没登记完、内置包可能还没播种(首次启动的 npm 预取最多等 10 秒,
+// 用户这时多半会再点一次图标 → second-instance)。主窗由启动流程自己建,唤起请求那时自然满足。
+let startupWindowGate = true
 /** 召回主窗:隐藏则显示、最小化则还原、销毁则重建。托盘/通知/单实例/activate 共用。 */
 function showMainWindow(): void {
-  if (!mainWindow || mainWindow.isDestroyed()) { createWindow(); return }
+  if (!mainWindow || mainWindow.isDestroyed()) { if (!startupWindowGate) createWindow(); return }
   if (mainWindow.isMinimized()) mainWindow.restore()
   present(mainWindow)
 }
@@ -2590,11 +2598,49 @@ app.whenReady().then(async () => {
     restartSync: () => restartAmadeusSync?.(),
     log: (m) => console.error(m),
   })
+  // Manual checks and background checks share state and a single in-flight run.
+  const corePluginUpdater = createCorePluginUpdater({
+    items: [
+      ...(PRODUCT.agentBackend ? [{ id: ENGINE_UPDATE_ID, packageName: ENGINE_PACKAGE, phase: 'idle' as const }] : []),
+      ...bundleSources.map((s) => ({ id: s.id, packageName: s.pkg, phase: 'idle' as const })),
+    ],
+    enabled: app.isPackaged,
+    broadcast: (status) => {
+      for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('updater:core-status', status)
+    },
+    run: async (onStatus) => {
+      const stored = await loadConfig()
+      const registries = registryOrder(stored.mirror)
+      const registryFetch = (url: string, init: { signal: AbortSignal; headers?: Record<string, string> }): Promise<Response> =>
+        url.startsWith(NPM_OFFICIAL) ? net.fetch(url, init) : fetch(url, init)
+      await initEngineOverlay()
+      const engine = engineOverlay
+      // 两条通道各查各的、各报各的状态,谁也不等谁;两边内部都吞错。
+      await Promise.all([
+        checkBuiltinUpdates({
+          pluginsRoot: join(forsionHomeDir(), 'plugins'), sources: bundleSources,
+          appVersion: app.getVersion(), registries, onStatus, fetch: registryFetch,
+        }),
+        !PRODUCT.agentBackend ? undefined
+          : engine
+            ? checkEngineUpdate({
+                engineRoot: engine.root, bundledRoot: engine.bundledRoot, api: engine.api, registries, fetch: registryFetch,
+                runningVersion: backend.engineOverlayVersion(), onStatus,
+              })
+            : onStatus({ id: ENGINE_UPDATE_ID, packageName: ENGINE_PACKAGE, phase: 'current' }),
+      ])
+    },
+  })
+  // 装好 / 升级后第一次启动:先限时查一次 npm,查到的新版这一次就播种 / 拉起;超时照常用安装包那份(见 prefetchOnFirstBoot)。
+  const firstBootPrefetch = app.isPackaged && !SANDBOX
+    ? await prefetchOnFirstBoot({ markerFile: join(app.getPath('userData'), 'core-prefetch-version'), version: app.getVersion(), timeoutMs: 10_000, check: corePluginUpdater.check })
+    : 'skipped'
   // 全档案都播种 / 装载(2026-09-28 起):Amadeus / basic 单品也跑云同步、penzor、登录态续期,这些都住在 Extend 里;
   // 只在 agent 后端才有意义的包(电脑操作)由清单 requires 挡在 bundleSources 之外。
   {
     await seedBuiltinBundles(join(forsionHomeDir(), 'plugins'), bundleSources, { appVersion: app.getVersion() })
       .catch((e) => console.warn('[builtin-plugins] 播种失败(忽略):', (e as Error)?.message))
+    if (firstBootPrefetch !== 'skipped') corePluginUpdater.reset()
     const host: CloudHost = {
       getCloud: async () => {
         const stored = await loadConfig()
@@ -2724,39 +2770,6 @@ app.whenReady().then(async () => {
   ipcMain.handle('updater:restart', (e) => {
     if (!isTrustedSender(e)) throw new Error('forbidden')
     return guardedRestart(canInstallUpdate() && getUpdaterStatus().phase === 'downloaded')
-  })
-  // Manual checks and background checks share state and a single in-flight run.
-  const corePluginUpdater = createCorePluginUpdater({
-    items: [
-      ...(PRODUCT.agentBackend ? [{ id: ENGINE_UPDATE_ID, packageName: ENGINE_PACKAGE, phase: 'idle' as const }] : []),
-      ...bundleSources.map((s) => ({ id: s.id, packageName: s.pkg, phase: 'idle' as const })),
-    ],
-    enabled: app.isPackaged,
-    broadcast: (status) => {
-      for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('updater:core-status', status)
-    },
-    run: async (onStatus) => {
-      const stored = await loadConfig()
-      const registries = registryOrder(stored.mirror)
-      const registryFetch = (url: string, init: { signal: AbortSignal; headers?: Record<string, string> }): Promise<Response> =>
-        url.startsWith(NPM_OFFICIAL) ? net.fetch(url, init) : fetch(url, init)
-      await initEngineOverlay()
-      const engine = engineOverlay
-      // 两条通道各查各的、各报各的状态,谁也不等谁;两边内部都吞错。
-      await Promise.all([
-        checkBuiltinUpdates({
-          pluginsRoot: join(forsionHomeDir(), 'plugins'), sources: bundleSources,
-          appVersion: app.getVersion(), registries, onStatus, fetch: registryFetch,
-        }),
-        !PRODUCT.agentBackend ? undefined
-          : engine
-            ? checkEngineUpdate({
-                engineRoot: engine.root, bundledRoot: engine.bundledRoot, api: engine.api, registries, fetch: registryFetch,
-                runningVersion: backend.engineOverlayVersion(), onStatus,
-              })
-            : onStatus({ id: ENGINE_UPDATE_ID, packageName: ENGINE_PACKAGE, phase: 'current' }),
-      ])
-    },
   })
   // 定时 / 唤醒触发的检查:下载中别插一脚(下载完 checkForUpdates 自己会原样返回)。
   const checkAppUpdateQuietly = (): void => { if (getUpdaterStatus().phase !== 'downloading') void checkForUpdates() }
@@ -4410,6 +4423,7 @@ app.whenReady().then(async () => {
     })
     app.on('browser-window-focus', (_e, w) => { if (w !== autoMiniWindow) lastFocusedWindow = w; miniAutoPanel?.refresh() })
   }
+  startupWindowGate = false
   createWindow()
   if (SANDBOX) startSandboxChild(SANDBOX, { getWindow: () => mainWindow, quit: () => { isQuitting = true; app.quit() }, log: (m) => console.log(m) })
   void restoreDetachedWindows() // 恢复上次退出时的独立窗(位置/尺寸 + 各窗自恢复布局)

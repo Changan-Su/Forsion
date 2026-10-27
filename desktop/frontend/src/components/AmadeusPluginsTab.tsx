@@ -10,7 +10,8 @@ import { NativeFeaturesSection } from '../features/NativeFeaturesSection'
  * 数据源是 vendored 的 usePluginStore(与 Amadeus Space 同一单例);样式照 PluginsTab 的 hint/btn 约定。
  */
 import React, { useEffect, useRef, useState } from 'react'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeft, Bot, CalendarDays, Cloud, NotebookText, type LucideIcon } from 'lucide-react'
+import { useSpaceStore } from '@lcl/engine'
 import { pluginFootprint, pluginWanted, runningDependents, unmetPluginDeps, usePluginStore } from '@amadeus/plugins/pluginStore'
 import { amadeus } from '@amadeus/api'
 import { installAmadeusPlugins, reloadPluginsAndAnnounce } from '../amadeusPlugins'
@@ -23,7 +24,7 @@ import { Markdown } from './Markdown'
 import { SettingsSwitch } from './SettingsPrimitives'
 import { KNOWN_APPS } from '../../../shared/knownApps'
 import { rescanPlugins, setPluginEnabled, type PluginInfo } from '../services/backendService'
-import { loadUserSpaces } from '../userSpaces'
+import { loadUserSpaces, pluginOfSpace } from '../userSpaces'
 import { hiddenSpaceName, hiddenSpaceReason, useHiddenSpacesOf } from '../pluginSpaceHealth'
 import { BuiltinPluginsSection } from '../builtins'
 import { useApp } from '../stores/appStore'
@@ -146,6 +147,14 @@ registerMessages({
 
 /** 启停后的捆绑包级联:内嵌 Space 显隐同步 + 刷新引擎插件列表。内嵌引擎插件的开关**不在这里写** —— 这里多半是设置浮窗,
  *  它的运行态未必等于主窗的;由主窗收到偏好 / 开启戳后在 syncBundleEngines 里统一串行写(Codex 10-02)。 */
+/** 核心插件卡:说明各自一条(别再落到电脑操作那条上),没有 logo 时的图标 = Ribbon / Space 里那个。 */
+const CORE_DESCRIPTIONS: Record<string, string> = {
+  'forsion-extend': 'plugins.core.extend',
+  'tangu-computer-use': 'plugins.core.computerUse',
+  'forsion-calendar': 'plugins.core.calendar',
+}
+const CORE_ICONS: Record<string, LucideIcon> = { 'forsion-extend': Cloud, 'forsion-calendar': CalendarDays }
+
 function cascadeAfterToggle(p: AmadeusPlugin, onEngineReload?: () => void): void {
   void loadUserSpaces() // 无 bundle 时幂等无害
   if (p.bundle?.enginePlugins?.length) onEngineReload?.()
@@ -831,6 +840,7 @@ export const AmadeusPluginsTab: React.FC<{
   const openFolder = usePluginStore((s) => s.openPluginsFolder)
   const scaffold = usePluginStore((s) => s.scaffoldSample)
   usePluginOnboarding((s) => s.version) // 「待引导」徽标随实测结果即时变化
+  const spaces = useSpaceStore((s) => s.spaces)
   const [detail, setDetail] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   useEffect(() => { setDetail(null); setQuery('') }, [section])
@@ -863,6 +873,9 @@ export const AmadeusPluginsTab: React.FC<{
   const builtins = plugins.filter((p) => p.builtin && !isCorePlugin(p) && matches(p))
   const externals = plugins.filter((p) => !p.builtin && !isCorePlugin(p) && matches(p))
 
+  /** 没有 logo 的插件卡:核心插件用它在 Ribbon 里的图标,其余用它注册的第一个 Space 的图标,再没有才是拼图(走查续五 5.8)。 */
+  const fallbackIcon = (p: AmadeusPlugin) => CORE_ICONS[p.id] ?? spaces.find((s) => pluginOfSpace(s.id) === p.id)?.icon
+
   /** 一张插件卡:内置区与外置区同款(区标题已说明归属,卡上不再重复挂「内置/外置」小标签)。 */
   const renderCard = (p: AmadeusPlugin): React.ReactNode => {
     return (
@@ -877,7 +890,7 @@ export const AmadeusPluginsTab: React.FC<{
         onClick={() => setDetail(p.id)}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <PluginLogo url={p.iconUrl} />
+          <PluginLogo url={p.iconUrl} icon={fallbackIcon(p)} />
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
               <b style={{ fontSize: 'var(--ui-font-body, 13px)' }}>{isCorePlugin(p) && p.id === 'forsion-extend' ? 'Forsion Extend' : pluginDisplayName(p, locale)}</b>
@@ -892,7 +905,7 @@ export const AmadeusPluginsTab: React.FC<{
               <RunBadge p={p} />
               <BundleChips p={p} />
             </div>
-            {pluginDisplayDescription(p, locale) && <div className="plugin-card-description">{isCorePlugin(p) ? t(p.id === 'forsion-extend' ? 'plugins.core.extend' : 'plugins.core.computerUse') : pluginDisplayDescription(p, locale)}</div>}
+            {pluginDisplayDescription(p, locale) && <div className="plugin-card-description">{isCorePlugin(p) ? t(CORE_DESCRIPTIONS[p.id] ?? 'plugins.core.computerUse') : pluginDisplayDescription(p, locale)}</div>}
             {p.locked && <RestartPending p={p} />}
           </div>
           {/* 带主进程半身的内置包:同详情页,开关管下次开机装不装那一半 */}
@@ -908,12 +921,12 @@ export const AmadeusPluginsTab: React.FC<{
     <div className="plugin-management" data-plugin-section="core">
       <div className="hint">{t('plugins.core.hint')}</div>
       {!managedFeatures && hasNativeFeature('amadeus') && <div className="plugin-card plugin-core-native" data-plugin-id="amadeus-core">
-        <PluginLogo />
+        <PluginLogo icon={NotebookText} />
         <div className="plugin-core-native-copy"><strong>Amadeus</strong><div className="hint">{t('plugins.core.amadeus')}</div></div>
         <span className="hint">v{APP_VERSION} · {t('plugins.core.withApp')}</span>
       </div>}
       {!managedFeatures && PRODUCT.agentBackend && <div className="plugin-card plugin-core-native" data-plugin-id="tangu-core">
-        <PluginLogo />
+        <PluginLogo icon={Bot} />
         <div className="plugin-core-native-copy"><strong>Tangu</strong><div className="hint">{t('plugins.core.tangu')}</div></div>
         <EngineVersionHint />
       </div>}

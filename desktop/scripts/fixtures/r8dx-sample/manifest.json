@@ -1,0 +1,10 @@
+{
+  "id": "r8dx-sample",
+  "name": "R8 开发者体验样例",
+  "nameEn": "R8 DX sample",
+  "version": "0.1.0",
+  "apiVersion": 1,
+  "description": "走查续八:只用公开接口拼一个看起来像原生的插件界面。",
+  "descriptionEn": "Round 8 recon: a plugin UI built from public APIs only.",
+  "main": "main.js"
+}

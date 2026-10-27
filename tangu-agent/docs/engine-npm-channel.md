@@ -21,6 +21,9 @@ npm  @forsion/tangu-agent@2.13.5          ~/.forsion/engine/2.13.5/        安�
   需要 `module.registerHooks`(Node ≥ 22.15;安装包自带的是 Electron 的 Node 24)。
 - **新版起不来会自动退回。** 装不起来(缺文件、语法错)由启动器记成坏版本;连续 3 次起不来、或就绪后一再崩溃,由桌面记成坏版本。
   坏版本记在 `~/.forsion/engine/bad.json`,启动器跳过它,更新器不再下它。
+- **装好 / 升级后第一次启动先查一次。** 这一次在拉起引擎、播种内置插件之前先跑一遍检查(和 Extend / 电脑操作 / 日历同一次),
+  最多等 10 秒:下完的这一次启动就用上,刚装好的人不会一打开就看到「重启并启用更新」;超时就跑自带的,没下完的接着在后台下、
+  下次生效。每个桌面版本只做一次(记号 `<userData>/core-prefetch-version`),实现在 `desktop/electron/corePluginUpdates.ts` 的 `prefetchOnFirstBoot`。
 - **关掉:** 环境变量 `TANGU_ENGINE_OVERLAY=off` 只跑自带的;`=verbose` 让终端里的 `tangu` 也把挑选过程打出来。
 
 ## 什么样的新版会被收下

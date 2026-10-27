@@ -1967,6 +1967,10 @@ export const SettingsModal: React.FC<{
                         <SettingsRow anchor="inbox-notify" fit="inline" label={t('settings.inbox.notifyLabel')} description={t('settings.inbox.notifyHint')}
                           control={<SettingsSwitch checked={stored.inboxNotifyEnabled !== false} label={t('settings.inbox.notifyLabel')} onChange={(on) => void window.tangu!.setConfig({ inboxNotifyEnabled: on }).then(setStored)} />} />
                       </div>
+                      {/* 所有通知的总开关在另一页(走查续五 W-76);路径跟着左栏分组名走 */}
+                      <div className="hint">{t('settings.inbox.notifyXref').split('{path}').map((part, i) => i === 0 ? part : (
+                        <span key={i}><button type="button" className="settings-xref-link" onClick={() => goTab('notifications')}>{t('settings.group.appearance')} › {t('settings.tab.notifications')}</button>{part}</span>
+                      ))}</div>
                     </section>
                   </>
                 )}
@@ -1979,14 +1983,16 @@ export const SettingsModal: React.FC<{
                           anchor="notes-attachments"
                           label={t('settings.notes.modeLabel')}
                           description={t('settings.notes.modeHint')}
-                          control={(
-                            <select value={stored.notesAttachmentMode || 'attachments'} onChange={(e) => void window.tangu!.setConfig({ notesAttachmentMode: e.target.value as StoredDesktopConfig['notesAttachmentMode'] }).then(setStored)}>
+                        >
+                          {/* 和下面「日记文件夹」输入框同一列宽(走查续五 5.7),220px 放不下整句 */}
+                          <div className="settings-inline-row settings-row-wide-control">
+                            <select value={stored.notesAttachmentMode || 'attachments'} onChange={(e) => void window.tangu!.setConfig({ notesAttachmentMode: e.target.value as StoredDesktopConfig['notesAttachmentMode'] }).then(setStored)} aria-label={t('settings.notes.modeLabel')}>
                               <option value="attachments">{t('settings.notes.modeAttachments')}</option>
                               <option value="same">{t('settings.notes.modeSame')}</option>
                               <option value="vault">{t('settings.notes.modeVault')}</option>
                             </select>
-                          )}
-                        />
+                          </div>
+                        </SettingsRow>
                         {(stored.notesAttachmentMode || 'attachments') === 'vault' && (
                           <SettingsRow label={t('settings.notes.folderLabel')} description={t('settings.notes.folderHint')}>
                             <div className="settings-inline-row settings-row-wide-control">
@@ -2451,7 +2457,7 @@ export const SettingsModal: React.FC<{
                     <div className="field">
                       <label>{t('settings.mcp.label')}</label>
                       <div className="hint" style={{ marginBottom: 8 }}>
-                        {t('settings.mcp.introPrefix')}<code>mcp__server__tool</code>{t('settings.mcp.introSuffix')}
+                        {t('settings.mcp.intro').split(/(\{path\}|\{tool\})/).map((part, i) => part === '{path}' ? <code key={i}>~/.forsion/mcp.json</code> : part === '{tool}' ? <code key={i}>{t('settings.mcp.toolPattern')}</code> : part)}
                       </div>
                       {Object.keys(mcpServers).length > 0 && (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 10 }}>
@@ -2672,7 +2678,7 @@ export const SettingsModal: React.FC<{
                   </>
                 )}
                 {tab === 'spaces' && <SpacesTab phone={phoneShell} />}
-                {tab === 'notifications' && <NotificationsTab />}
+                {tab === 'notifications' && <NotificationsTab onOpenInbox={isDesktop && stored ? () => openSubPage('general', 'g-inbox') : undefined} />}
                 {tab === 'statusbar' && <StatusBarTab />}
                 {/* 左栏点进来的 Forsion 插件设置页 = 插件页的详情面,受控于 tab(不再是卡片列表的内部 state)。 */}
                 {tab.startsWith('fplugin:') && (
@@ -2731,7 +2737,13 @@ export const SettingsModal: React.FC<{
                             </select>
                           )}
                         />
-                        <SettingsRow label={t('settings.browser.timeout')} description={t('settings.browser.timeoutHint')} control={<input className="settings-number-input" type="text" value={String(stored.browserCommandTimeoutMs || 30000)} onChange={(e) => edit({ browserCommandTimeoutMs: Number(e.target.value.replace(/[^\d]/g, '')) || 30000 })} />} />
+                        <SettingsRow label={t('settings.browser.timeout')} description={t('settings.browser.timeoutHint')} control={(
+                          // 界面按秒(5–600:引擎 commandTimeout 低于 5000ms 会回落默认 30s),存盘仍是毫秒
+                          <span className="settings-inline-row">
+                            <input className="settings-number-input" type="number" min={5} max={600} step={1} aria-label={t('settings.browser.timeout')} value={Math.round((stored.browserCommandTimeoutMs || 30000) / 1000)} onChange={(e) => edit({ browserCommandTimeoutMs: Math.min(600, Math.max(5, Math.round(Number(e.target.value) || 30))) * 1000 })} />
+                            <span className="hint">{t('settings.browser.timeoutUnit')}</span>
+                          </span>
+                        )} />
                         <SettingsRow label={t('settings.browser.allowPrivate')} description={t('settings.browser.allowPrivateHint')} control={<SettingsSwitch checked={!!stored.browserAllowPrivateUrls} onChange={(on) => edit({ browserAllowPrivateUrls: on })} label={t('settings.browser.allowPrivate')} />} />
                       </div>
                       {/* 同为 managedKeys:改动先是草稿,吸底栏显式「保存」(保存会重启后端)。 */}
@@ -2771,7 +2783,7 @@ export const SettingsModal: React.FC<{
                           </button>
                           <button
                             type="button"
-                            className="btn ghost sm"
+                            className="btn ghost sm settings-panel-btn--text"
                             title={t('settings.theme.reload')}
                             disabled={themesReloading}
                             onClick={async () => {
@@ -2779,7 +2791,7 @@ export const SettingsModal: React.FC<{
                               try { await p.onReloadThemes?.() } finally { setThemesReloading(false) }
                             }}
                           >
-                            <RefreshCw size={13} className={themesReloading ? 'spin' : ''} />
+                            <RefreshCw size={13} className={themesReloading ? 'spin' : ''} /> {t('settings.theme.reload')}
                           </button>
                         </div>
                       </div>

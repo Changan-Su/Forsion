@@ -7,7 +7,7 @@
 .project-profile-path > .project-creation-action:disabled { opacity: .45; cursor: default; }
 /* 三个标签在 215–300px 的右栏里排不下「图标 + 文字」一行(Agents 会被截成 Agen…):照紧凑 Agent 详情(.compact)的做法,图标上、文字下。 */
 .project-profile .agent-section-nav { --profile-nav-gap: 2px; --profile-nav-padding: 4px; }
-.project-profile .agent-section-nav button { flex-direction: column; gap: 5px; font-size: var(--ui-font-caption, 11px); padding: 7px 2px; }
+.project-profile .agent-section-nav button { flex: 1 1 0; flex-direction: column; gap: 5px; font-size: var(--ui-font-caption, 11px); padding: 7px 2px; }
 /* 分支是状态行里的一枚芯片:换行时自成一段,不靠前面的「·」分隔。 */
 .project-branch { display: inline-flex; align-items: center; gap: 3px; min-width: 0; max-width: 100%; padding: 1px 7px; border-radius: 999px; background: var(--overlay-medium); }
 .project-branch > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

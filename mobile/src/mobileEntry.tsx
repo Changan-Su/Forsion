@@ -4,6 +4,7 @@
  * 在移动端 M0 自然不注册),但渲染 MobileRoot(单列 MobileShell)而非 desktop 的 Dockview Root。
  */
 import { createRoot } from 'react-dom/client'
+import { MotionConfig } from 'framer-motion'
 import { MobileRoot } from './MobileRoot'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import '@/styles/base.css'
@@ -95,10 +96,13 @@ try {
   recordError('init', err) // 同 desktop main.tsx:被 catch 吞掉的启动错误不派发 window 'error'
 }
 
+// framer 也跟系统「减少动态效果」(走查续八 8.3):位移 / 缩放 / 布局动画停,只留透明度;CSS 那半在 styles/base.css。
 createRoot(document.getElementById('root')!).render(
   <LocaleProvider>
-    <ErrorBoundary>
-      <MobileRoot />
-    </ErrorBoundary>
+    <MotionConfig reducedMotion="user">
+      <ErrorBoundary>
+        <MobileRoot />
+      </ErrorBoundary>
+    </MotionConfig>
   </LocaleProvider>,
 )

@@ -472,6 +472,10 @@ html[data-glass='off'] .hp-root .hp-composer .project-pill::before {
 }
 .hp-pinned-zone .hp-tile,
 .hp-space-main .hp-tile { width: 64px; min-height: 60px; flex: 0 0 64px; gap: 5px; padding: 6px 3px; }
+/* 5.17 A:坞上的名字最多两行、只在词间折;一个词放不下(Achievements)这一格按词宽放开(min-content),不从词中间断。中文五字以内一行。 */
+.hp-pinned-zone .hp-tile,
+.hp-space-main .hp-tile { width: min-content; min-width: 64px; flex: 0 0 auto; }
+.hp-space-row .hp-tile-name { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; white-space: normal; line-height: 1.25; overflow-wrap: normal; word-break: normal; }
 .hp-space-row .hp-tile-icon { width: 30px; height: 30px; background: transparent; }
 .hp-space-row .hp-tile:hover .hp-tile-icon { background: transparent; }
 .hp-space-row .hp-tile-icon > svg { width: 18px; height: 18px; }

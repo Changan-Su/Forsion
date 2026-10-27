@@ -6,6 +6,7 @@ import { gitCloneRepo, listGitRepos, type GitRemoteRepo } from '../services/back
 import { homeTarget } from '../services/engine/targets'
 import { useEscape } from '../amadeus/components/Dialogs'
 import { formatRelative } from '../format/time'
+import { DialogOverlay } from '../amadeus/components/DialogOverlay'
 import './gitCloneDialog.css'
 
 registerMessages({
@@ -126,7 +127,7 @@ function GitCloneDialog({ onDone }: { onDone: (v: { path: string; name: string }
   const listing = tab === 'url' ? null : lists[tab]
 
   return (
-    <div className="dialog-overlay" onMouseDown={close}>
+    <DialogOverlay onMouseDown={close}>
       <div className="dialog git-clone-dialog" role="dialog" aria-modal="true" aria-label={t('gitClone.title')} data-git-clone onMouseDown={(e) => e.stopPropagation()}>
         <div>
           <div className="dialog-title">{t('gitClone.title')}</div>
@@ -164,6 +165,6 @@ function GitCloneDialog({ onDone }: { onDone: (v: { path: string; name: string }
           <button className="dialog-btn" data-primary data-git-clone-confirm disabled={busy || !url.trim() || !name.trim() || !parent} onClick={() => void clone()}>{busy && <Loader2 size={13} className="spin" />}{t(busy ? 'gitClone.cloning' : 'gitClone.confirm')}</button>
         </div>
       </div>
-    </div>
+    </DialogOverlay>
   )
 }
