@@ -7,7 +7,7 @@
  *
  * 「Forsion 只是其中一个 provider」即在此体现:Forsion 是兜底的托管面,直连 provider 与其平级。
  */
-import { imageMimeOf, type CloudBrainServices, type BuildPayloadOpts, type StreamOpts, type ImageGenRequest, type ImageEditRequest, type ImageGenResult, type SpeechRequest, type SpeechResult } from '../../seams/cloudBrain.js';
+import { imageMimeOf, fimUnsupportedError, type FimCompletionOpts, type CloudBrainServices, type BuildPayloadOpts, type StreamOpts, type ImageGenRequest, type ImageEditRequest, type ImageGenResult, type SpeechRequest, type SpeechResult } from '../../seams/cloudBrain.js';
 import type { ProviderRegistry } from '../../llm/providerRegistry.js';
 import { freshOAuthCred } from '../../llm/providerOAuth.js';
 import { isAuthExpiredLlmError } from '../../llm/retry.js';
@@ -16,6 +16,7 @@ import { loadLocalWebSearchConfig, hasLocalSearchProvider, runLocalSearch } from
 import { buildOpenAiCompatPayload, tuneOpenAiDirectPayload, streamOpenAiCompat, DIRECT_MARK, PROTOCOL_MARK, ACCOUNT_MARK } from '../../llm/openaiCompat.js';
 import { streamAnthropicMessages } from '../../llm/anthropicMessages.js';
 import { streamOpenAiResponses } from '../../llm/openaiResponses.js';
+import { fetchProviderQuota } from '../../llm/providerQuota.js';
 import WebSocket from 'ws';
 import { randomUUID } from 'node:crypto';
 
@@ -243,6 +244,15 @@ export function createMultiBrain(httpBrain: CloudBrainServices, registry: Provid
       listDirectProviders: () =>
         registry.list().map((p) => ({ providerId: p.providerId, baseUrl: p.baseUrl, modelIds: p.modelIds, imageModelIds: p.imageModelIds, ttsModelIds: p.ttsModelIds, noVisionModelIds: p.noVisionModelIds, ...(p.fastTiers ? { fastTiers: p.fastTiers } : {}) })),
       hasDirectModel: (modelId: string) => registry.has(modelId),
+      providerQuota: async (modelId: string) => {
+        const pid = registry.resolve(modelId)?.model.provider;
+        if (!pid) return null;
+        // 订阅登录的 token 照对话那条路续期;account id 要和续完的 token 成对,所以回调里再读一次注册表
+        return withFreshKey(pid, async () => {
+          const p = registry.list().find((x) => x.providerId === pid);
+          return p ? fetchProviderQuota(p) : null;
+        });
+      },
     },
     images: {
       edit: async (req: ImageEditRequest) => {
@@ -356,6 +366,11 @@ export function createMultiBrain(httpBrain: CloudBrainServices, registry: Provid
           return res;
         }
         return httpBrain.llm.streamProviderCompletion(opts);
+      },
+      // FIM 只有 Forsion 云端能做(按模型的 fimProtocol 走 completions / Codestral);直连 / 订阅模型没有这条路 → 不支持。
+      fimCompletion: async (opts: FimCompletionOpts) => {
+        if (registry.resolve(opts.modelId) || !httpBrain.llm.fimCompletion) throw fimUnsupportedError();
+        return httpBrain.llm.fimCompletion(opts);
       },
     },
   };

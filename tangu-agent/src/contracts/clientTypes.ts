@@ -452,6 +452,24 @@ export interface ModelInfo {
   fastTier?: string
 }
 
+/** GET /agent/models/quota 的 quota:直连来源的额度 / 余额(口径见 llm/providerQuota.ts)。 */
+export interface QuotaWindow {
+  /** 窗口长度(秒):18000 = 5 小时,604800 = 每周。客户端据此起名。 */
+  seconds: number;
+  usedPercent: number;
+  /** 重置时刻(毫秒时间戳)。 */
+  resetAt?: number;
+}
+
+export interface ProviderQuota {
+  providerId: string;
+  /** 订阅套餐名(Codex 的 plan_type),原样透传。 */
+  plan?: string;
+  windows?: QuotaWindow[];
+  balance?: { currency: string; amount: number };
+  fetchedAt: number;
+}
+
 export interface ModelsResponse {
   models: ModelInfo[]
   directProviders: Array<{ providerId: string; baseUrl?: string; modelIds?: string[]; imageModelIds?: string[]; ttsModelIds?: string[]; asrModelIds?: string[]; noVisionModelIds?: string[] }>
@@ -470,6 +488,8 @@ export interface ModelsResponse {
   translateModels?: Array<{ id: string; name: string; provider?: string; apiModelId?: string | null }>
   /** Forsion 云端的朗读模型(设置页「语音朗读」模型框的候选;老引擎不给 = 没有) */
   ttsModels?: Array<{ id: string; name: string; apiModelId?: string | null }>
+  /** Forsion 云端的补全(FIM)模型(设置页「补全」模型槽与插件 ctx.tangu.fim 的候选;只做补全的不在 models 里)。没有 = 云端没配 / 没登录 / 老引擎。 */
+  fimModels?: Array<{ id: string; name: string; provider?: string; apiModelId?: string | null }>
   /** 引擎的缺省上下文上限(272k):自动识别出的窗口超过它就封顶,本机覆盖才开更大。 */
   contextWindowCap?: number
   /** 该引擎能不能写本机模型覆盖(PUT /agent/models/overrides 同一道 hostExec 门)。false / 缺省 = 不露「上下文上限」。 */
@@ -979,6 +999,8 @@ export interface StoredDesktopConfig extends TanguDesktopConfig {
   visionModelId?: string
   /** 辅助模型 · 翻译:笔记里的「翻译」与插件 ctx.tangu.translate 用;空=跟聊天当前模型。 */
   translateModelId?: string
+  /** 辅助模型 · 补全:插件 ctx.tangu.fim(行内补全)用;只能选补全(FIM)模型;空 = 目录里第一个补全模型。 */
+  fimModelId?: string
   /** 上次用的审批档 / 思考档:**新会话据此起步**(模型走 modelId,已是全局键)。
    *  在任意会话里改这三样都会写回这里 —— 用户的口径是「换过一次就一直是它」,不是每建一个会话重设一次。 */
   lastApprovalMode?: 'readonly' | 'auto-edit' | 'full-auto' | 'custom'

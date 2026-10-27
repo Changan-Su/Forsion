@@ -98,14 +98,12 @@
 .t2c-pill-label { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* 模式胶囊与 ModelPill 共用同一展开契约:224px、三列居中、菜单右缘对齐。
-   模式胶囊在底栏左侧:若外层跟着按钮逐帧变宽,绑 right:0 的菜单会横移百余 px,
-   看起来像从侧面滑入。打开时外层先占住最终宽度,按钮仍在槽内平滑展开,菜单锚点不动。 */
+   模式胶囊在底栏左侧:打开时外层先占住最终宽度,菜单锚点不动;按钮开合直接到位、只换底色(走查续八 8.4)。 */
 .mode-pill-wrap { position: relative; display: inline-flex; }
 .t2c-pill.mode-pill-btn {
   min-width: 0;
-  interpolate-size: allow-keywords;
   width: fit-content;
-  transition: background var(--duration-fast, 0.15s), width 0.18s var(--ease-spring);
+  transition: background var(--duration-fast, 0.15s); /* 开合不补宽度,同「+」(走查续八 8.4) */
 }
 .t2c-pill.mode-pill-btn.is-open {
   display: grid;
@@ -131,13 +129,8 @@
   padding: 0;
   overflow: hidden;
   color: var(--text-muted);
-  transition:
-    background var(--duration-fast, 0.15s),
-    color var(--duration-fast, 0.15s),
-    width 0.18s var(--ease-spring),
-    grid-template-columns 0.18s var(--ease-spring),
-    gap 0.18s var(--ease-spring),
-    padding 0.18s var(--ease-spring);
+  /* 开合只换底色和字色、不补尺寸(走查续八 8.4,规矩 3):以前宽度 / 列宽 / 内边距补 180ms,菜单早没了药丸还在收。 */
+  transition: background var(--duration-fast, 0.15s), color var(--duration-fast, 0.15s);
 }
 .t2c-pill.add-pill-btn.is-open {
   grid-template-columns: 16px minmax(0, 1fr) 16px;

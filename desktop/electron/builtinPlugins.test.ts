@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { seedBuiltinBundles, builtinPluginIds, builtinBundleSources, activeBundleDir, pendingDirFor, _resetBuiltinIdsForTest, BUILTIN_BUNDLES, type BuiltinSource, initBundleSwitches, setBundleOff, bundleOff, bundleRestartPending } from './builtinPlugins'
+import { seedBuiltinBundles, builtinPluginIds, builtinBundleSources, activeBundleDir, pendingDirFor, _resetBuiltinIdsForTest, BUILTIN_BUNDLES, type BuiltinSource, initBundleSwitches, setBundleOff, bundleOff, bundleRestartPending, withPendingLock } from './builtinPlugins'
 import { signDir, testKeyPair } from './bundleSignature.testutil'
 
 const write = async (dir: string, files: Record<string, string>): Promise<void> => {
@@ -182,6 +182,21 @@ describe('npm 暂存区(.pending)', () => {
       expect(await read(path.join(root, 'tangu-computer-use', 'main.js')), name).toBe('v0.5.0')
       expect(await fs.readdir(root), name).toEqual(['tangu-computer-use'])
     }
+  })
+  it('首次启动预取超时后还在写暂存区:播种等它写完再读,不和写入交错', async () => {
+    let release!: () => void
+    const writing = withPendingLock(async () => {
+      await new Promise<void>((resolve) => { release = resolve })
+      await write(pend(), { 'manifest.json': manifest('tangu-computer-use', '0.6.0'), 'main.js': 'v0.6.0' })
+    })
+    const seeding = seedAt('2.11.5')
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(await read(path.join(root, 'tangu-computer-use', 'main.js'))).toBeNull() // 写入没做完,播种还没开始
+    release()
+    await writing
+    await seeding
+    expect(await read(path.join(root, 'tangu-computer-use', 'main.js'))).toBe('v0.6.0')
+    expect(await fs.readdir(root)).toEqual(['tangu-computer-use'])
   })
 })
 

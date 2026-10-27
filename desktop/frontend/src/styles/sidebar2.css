@@ -86,7 +86,7 @@
 :is(.t2s-side, .t2sw-plug) .t2s-lead .t2s-lead-chev {
   position: absolute; inset: 0; margin: 0;
   align-items: center; justify-content: center;
-  transition: opacity var(--duration-fast, 0.15s), transform var(--duration-fast, 0.15s) var(--ease-out, ease);
+  transition: opacity var(--duration-fast, 0.15s), transform var(--collapse-duration) var(--collapse-ease);
 }
 /* 箭头默认恒隐;hover 可展开行才现、图标让位(只让「后面跟着箭头」的兄弟让位,不可展开的行图标恒亮)。
  * ⚠️ 写成 `.t2s-lead:has(.t2s-lead-chev) > :not(…)`(:has 不在最后一段 + 通配结尾)会让整页每插入一个元素多 15–25ms
@@ -102,7 +102,7 @@
   :is(.t2s-side, .t2sw-plug) .t2s-srow:hover .t2s-lead > :has(~ .t2s-lead-chev),
   :is(.t2s-side, .t2sw-plug) .t2s-folder-row:hover .t2s-lead > :has(~ .t2s-lead-chev) { opacity: 0; }
 }
-:is(.t2s-side, .t2sw-plug) .t2s-chev { transition: transform var(--duration-fast, 0.15s) var(--ease-out, ease); }
+:is(.t2s-side, .t2sw-plug) .t2s-chev { transition: transform var(--collapse-duration) var(--collapse-ease); } /* 与 AnimatedCollapse 同一份(8.10) */
 :is(.t2s-side, .t2sw-plug) .t2s-chev.open { transform: rotate(90deg); }
 /* 树的「文件夹/工作区」组头:去掉 .t2s-group-toggle 那套「分区标题」装(11.5px/全大写/字间距)——
  * 它是给**真**分区头(收藏/最近/集合)用的,树的组头应与行同档 13px(用户拍板)。
