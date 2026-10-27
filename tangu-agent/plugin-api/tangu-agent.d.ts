@@ -108,6 +108,9 @@ export interface ToolCapabilities {
   automationSafe?: boolean;
   /** Explicitly expose this plugin tool through Desktop MCP. Writes require native approval. */
   externalMcp?: boolean;
+  /** 审批卡文案(同步,收到本次调用的参数)。**只对官方签名捆绑包里的插件生效**,第三方插件写了也被忽略(卡上照旧是整份参数)。
+   *  抛错或返回非字符串 → 退回整份参数。 */
+  approvalPreview?: (args: any) => string;
 }
 
 export interface ToolDef {
@@ -249,6 +252,14 @@ export interface TanguPluginContext {
   sdk: TanguSdk;
   log(msg: string): void;
   paths: { pluginDir: string; dataDir: string };
+  /**
+   * 以用户的 Forsion 账号请求云端。**只有官方签名捆绑包里的插件有**,第三方插件恒为 undefined。
+   * 路径白名单:`GET /api/market/mine`、`POST /api/market/mine/<id>/update`(可带 `?dryRun=1`);其余 → `{ status: 403, error: 'path_not_allowed' }`。
+   * 没有云端 → `{ status: 0, error: 'no_cloud' }`。令牌由宿主带、插件拿不到;永不抛。
+   */
+  cloud?: {
+    request(req: { path: string; method?: 'GET' | 'POST'; body?: unknown; timeoutMs?: number; signal?: AbortSignal }): Promise<{ status: number; json?: any; error?: string }>;
+  };
   /** 发用户活动事件(宿主强制加 `plugin:<id>:` 前缀)——自动化 event_seen 可盯;云端 worker no-op。 */
   activity: { append(event: string, detail?: Record<string, unknown>): void };
 }

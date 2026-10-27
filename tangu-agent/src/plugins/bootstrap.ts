@@ -48,6 +48,7 @@ import {
 } from './loader.js';
 import { appendActivityLine } from '../services/userActivity.js';
 import { seedBundleAgents } from './bundles.js';
+import { createOfficialCloud, isOfficialEnginePlugin } from './official.js';
 import { attachPluginMcp } from '../mcp/pluginServers.js';
 import { attachPluginHooks } from '../hooks/pluginHooks.js';
 import type {
@@ -119,7 +120,7 @@ function newInstance(metaIds: Set<string> = new Set()): Instance {
   };
 }
 
-function makeContext(d: DiscoveredPlugin, inst: Instance): TanguPluginContext {
+function makeContext(d: DiscoveredPlugin, inst: Instance, official = false): TanguPluginContext {
   const id = d.manifest.id;
   const toolAliases = new Map<string, string>();
   const metaAliases = new Map<string, string>();
@@ -147,7 +148,7 @@ function makeContext(d: DiscoveredPlugin, inst: Instance): TanguPluginContext {
       p = scopedProvider(p);
       inst.providerIds.add(p.id);
       providerOwner.set(p.id, id);
-      registerToolProvider({ ...p, origin: 'plugin' }); // 全局注册表,append 在核心 builtin 之后;打 plugin 标(chat 正向面只认核心 provider)
+      registerToolProvider({ ...p, origin: 'plugin', official }); // 全局注册表,append 在核心 builtin 之后;打 plugin 标(chat 正向面只认核心 provider)
     },
     // folder 插件进统一注册表；图标只信宿主读到的包根 icon.png。
     // 捆绑包内嵌的引擎插件默认跟随捆绑包(桌面上捆绑包缺省即启用,且只给捆绑包一个开关、拨动时级联):
@@ -159,6 +160,8 @@ function makeContext(d: DiscoveredPlugin, inst: Instance): TanguPluginContext {
         if (!metaAliases.has(meta.id)) metaAliases.set(meta.id, metaAliases.size === 0 || meta.id === d.packageId ? id : `market-${createHash('sha256').update(id + ':' + meta.id).digest('hex').slice(0, 48)}`);
         meta = { ...meta, id: metaAliases.get(meta.id)!, ...(meta.toolProvider ? { toolProvider: scopedProvider(meta.toolProvider) } : {}) };
       }
+      // official 只认宿主的判定:插件自己在 provider 上写的值一律盖掉(registry.registerPlugin 展开 toolProvider 时保留它)。
+      if (meta.toolProvider) meta = { ...meta, toolProvider: { ...meta.toolProvider, official } };
       inst.metaIds.add(meta.id);
       if (meta.toolProvider) { // registry 顺带注册的 provider 也进台账
         inst.providerIds.add(meta.toolProvider.id);
@@ -203,6 +206,8 @@ function makeContext(d: DiscoveredPlugin, inst: Instance): TanguPluginContext {
     sdk: { ...sdk, runs: { ...runs, start: p => runs.start({ ...p, ...(p.toolNames ? { toolNames: p.toolNames.map(translateTool) } : {}) }) }, engines: pluginEngines,
       automation: { ...automation, save: (key, input) => automation.save(key, { ...input, tool: translateTool(input.tool) }) },
       workspaces: createPluginWorkspaces(id, path.join(tanguHome(), 'plugin-data', id), () => !inst.disposed) },
+    // 只有官方插件(签名捆绑包,./official.ts)有这个键;其余插件的 ctx 上根本没有它(不是一个返回错误的空壳)。
+    ...(official ? { cloud: createOfficialCloud(() => !inst.disposed) } : {}),
     log: (msg) => console.log(`[plugin:${id}] ${msg}`),
     paths: { pluginDir: d.dir, dataDir: path.join(tanguHome(), 'plugin-data', id) },
     activity: {
@@ -404,9 +409,12 @@ async function startEntry(e: Entry): Promise<boolean> {
   const id = e.d.manifest.id;
   const inst = newInstance(e.metaIds);
   e.inst = inst;
+  let official = false;
   try {
     // import 与 activate 一起限时:吊死的连接 / 顶层 await 不许堵住整条生命周期链(重扫、开关、卸载全排在它后面)
     await withDeadline(e, 'activate', lifecycleTimeouts.activateMs, async () => {
+      // 官方判定每次激活现做,且在首次 import 之前(升级 / 重扫换了代码就重新核;核不过照常加载,只是不当官方)。
+      official = await isOfficialEnginePlugin(e.d);
       if (e.plugin) {
         assertNativePluginsAllowed(); // 复用已 import 的模块对象也要过沙箱闸
       } else {
@@ -415,7 +423,7 @@ async function startEntry(e: Entry): Promise<boolean> {
         e.plugin = await loadPlugin(e.d, e.gen);
       }
       inst.plugin = e.plugin;
-      await e.plugin.activate(makeContext(e.d, inst));
+      await e.plugin.activate(makeContext(e.d, inst, official));
     });
     inst.activated = true;
     e.failed = false;

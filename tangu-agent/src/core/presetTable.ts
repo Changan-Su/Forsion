@@ -28,6 +28,8 @@ export interface PresetSpec {
     hostDiskHidden: ReadonlySet<string>;
     /** 情境 deferred:仍列「Additional Tools」目录、load_tools 可解锁,只是不占常驻 defs。 */
     deferred: ReadonlySet<string>;
+    /** face 里允许由**官方插件**(签名捆绑包,plugins/official.ts)提供的工具名;其余插件工具同名也拒。空 = 插件工具一律拒。 */
+    officialPlugin: ReadonlySet<string>;
   };
   /** 默认 agent 的陪伴人格(systemPrompt/SOUL/HARNESS)是否抑制。 */
   persona: 'keep' | 'suppress';
@@ -92,7 +94,13 @@ export const CHAT_PRESET_DEFERRED: ReadonlySet<string> = new Set([
   // 手机操控 T1(clientCapability 中央闸另管可见性;带能力的工具在 chat 面按能力放行,这里列名是让内置五件按需装载)
   'phone_open', 'phone_navigate', 'phone_compose', 'phone_system', 'phone_control',
   'get_marketplace_plugin', // 商店条目详情:搜完拿到 ID、用户追问才用(搜索结果通常够推荐),不常驻
+  // 商店投稿更新(官方 Forsion Extend 捆绑包里的引擎插件提供,见 CHAT_PRESET_OFFICIAL_PLUGIN):查 / 提交作者自己条目的新版本。
+  // 提交那件每次由用户在卡上确认(approval:'always');定义与目录行文案(英文)在插件里。
+  'store_check_update', 'store_submit_update',
 ]);
+
+/** chat 面里由官方插件(而不是核心)提供的工具。第三方插件注册同名工具照旧被 chat 面拒。 */
+export const CHAT_PRESET_OFFICIAL_PLUGIN: ReadonlySet<string> = new Set(['store_check_update', 'store_submit_update']);
 
 /** D11 形态:chat 落在 host execMode 时(桌面 standalone 的 rootless 会话仍是 sandbox,这里是纵深防御),
  *  search_files/glob_files 按 cwd 爬用户真实磁盘且由模型发起 → 一并拒;generate_image 是 mode:'both' 却在 host 下
@@ -112,7 +120,7 @@ const WORK_DEFERRED: ReadonlySet<string> = new Set(['read_document']);
 
 /** work(preset 缺省)= 今天的行为,除 WORK_DEFERRED 这一份按需装载名单外零变化。 */
 const WORK: PresetSpec = {
-  toolFace: { face: EMPTY, rejectHostMode: false, hostDiskHidden: EMPTY, deferred: WORK_DEFERRED },
+  toolFace: { face: EMPTY, rejectHostMode: false, hostDiskHidden: EMPTY, deferred: WORK_DEFERRED, officialPlugin: EMPTY },
   persona: 'keep',
   persistence: true,
   noPreamble: false,
@@ -127,7 +135,7 @@ const WORK: PresetSpec = {
 
 export const PRESET_TABLE: Record<Preset, PresetSpec> = {
   coding: {
-    toolFace: { face: EMPTY, rejectHostMode: false, hostDiskHidden: EMPTY, deferred: CODING_PRESET_DEFERRED },
+    toolFace: { face: EMPTY, rejectHostMode: false, hostDiskHidden: EMPTY, deferred: CODING_PRESET_DEFERRED, officialPlugin: EMPTY },
     persona: 'suppress',
     persistence: true,
     noPreamble: true,
@@ -146,6 +154,7 @@ export const PRESET_TABLE: Record<Preset, PresetSpec> = {
       rejectHostMode: true,
       hostDiskHidden: CHAT_HOST_DISK_HIDDEN,
       deferred: CHAT_PRESET_DEFERRED,
+      officialPlugin: CHAT_PRESET_OFFICIAL_PLUGIN,
     },
     persona: 'keep',
     persistence: false,
