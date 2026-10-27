@@ -452,6 +452,24 @@ export interface ModelInfo {
   fastTier?: string
 }
 
+/** GET /agent/models/quota 的 quota:直连来源的额度 / 余额(口径见 llm/providerQuota.ts)。 */
+export interface QuotaWindow {
+  /** 窗口长度(秒):18000 = 5 小时,604800 = 每周。客户端据此起名。 */
+  seconds: number;
+  usedPercent: number;
+  /** 重置时刻(毫秒时间戳)。 */
+  resetAt?: number;
+}
+
+export interface ProviderQuota {
+  providerId: string;
+  /** 订阅套餐名(Codex 的 plan_type),原样透传。 */
+  plan?: string;
+  windows?: QuotaWindow[];
+  balance?: { currency: string; amount: number };
+  fetchedAt: number;
+}
+
 export interface ModelsResponse {
   models: ModelInfo[]
   directProviders: Array<{ providerId: string; baseUrl?: string; modelIds?: string[]; imageModelIds?: string[]; ttsModelIds?: string[]; asrModelIds?: string[]; noVisionModelIds?: string[] }>
