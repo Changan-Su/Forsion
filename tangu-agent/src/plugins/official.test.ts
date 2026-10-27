@@ -38,9 +38,9 @@ function signBundle(root: string, opts: { only?: string[]; key?: import('node:cr
   writeFileSync(path.join(root, 'SIGNATURE'), JSON.stringify({ alg: 'ed25519', files, sig }));
 }
 
-function pluginSource(pid: string, tools: Array<{ name: string; tag: string; preview?: string }>): string {
+function pluginSource(pid: string, tools: Array<{ name: string; tag: string; preview?: string; cap?: string }>): string {
   const defs = tools.map((t) => `{
-    name: '${t.name}',
+    name: '${t.name}',${t.cap ? ` clientCapability: '${t.cap}',` : ''}
     definition: { type: 'function', function: { name: '${t.name}', description: 'x', parameters: { type: 'object', properties: {} } } },
     capabilities: { approval: 'always'${t.preview ? `, approvalPreview: ${t.preview}` : ''} },
     execute: () => '${t.tag}',
@@ -235,9 +235,9 @@ describe('接进宿主(bootstrap)', () => {
     const stub: any = new Proxy({}, { get: () => () => { throw new Error('stub'); } });
     configureTangu({ host: stub, brain: { cloud: { request: async () => ({ status: 200, json: [] }) } } as any, billing: stub, profile });
     await boot.activateAllPlugins();
-    const resolve = (preset?: 'chat') => tools.resolveTools(profile, { userId: 'u1', sessionId: 's1', appId: profile.appId, profile, execMode: 'host', cwd: tmp, preset } as any);
-    const preview = (name: string) => approvals.approvalPreview({ id: 'c1', type: 'function', function: { name, arguments: JSON.stringify({ id: 'item-1' }) } } as any);
-    return { resolve, preview };
+    const resolve = (preset?: 'chat', extra: Record<string, unknown> = {}) => tools.resolveTools(profile, { userId: 'u1', sessionId: 's1', appId: profile.appId, profile, execMode: 'host', cwd: tmp, preset, ...extra } as any);
+    const preview = (name: string, runProfile?: any) => approvals.approvalPreview({ id: 'c1', type: 'function', function: { name, arguments: JSON.stringify({ id: 'item-1' }) } } as any, runProfile ? { profile: runProfile } : {});
+    return { resolve, preview, boot, profile };
   }
 
   it('官方插件拿得到 ctx.cloud、工具进 chat 面、卡面文案生效;第三方插件同样写法三样都没有', async () => {
@@ -289,6 +289,54 @@ describe('接进宿主(bootstrap)', () => {
     expect(h.preview('store_submit_update')).toContain('store_submit_update');
     expect(h.preview('store_check_update')).not.toContain('‮');
     expect(h.preview('store_check_update')).toContain('ok');
+  });
+
+  it('被篡改时 import 的模块:文件恢复成签名那份后停用再启用(不重扫、复用缓存模块)也不升成官方', async () => {
+    const signed = pluginSource('store-tools', [{ name: 'store_submit_update', tag: 'official', preview: PREVIEW }]);
+    const official = writeBundle(path.join(tmp, 'b'), 'test-official', 'store-tools', signed);
+    signBundle(official);
+    const entry = path.join(official, 'tangu-plugins/store-tools/dist/index.js');
+    writeFileSync(entry, pluginSource('store-tools', [{ name: 'store_submit_update', tag: 'tampered', preview: PREVIEW }]));
+    const h = await boot([official]);
+    expect((globalThis as any).__official['store-tools'].hasCloud).toBe(false);
+    writeFileSync(entry, signed); // 盘面又对得上签名了
+    await h.boot.setPluginEnabledLive('store-tools', false);
+    await h.boot.setPluginEnabledLive('store-tools', true);
+    expect((globalThis as any).__official['store-tools'].hasCloud).toBe(false);
+    expect(h.resolve('chat').has('store_submit_update')).toBe(false);
+  });
+
+  it('对照:签名完好的官方插件停用再启用仍是官方', async () => {
+    const official = writeBundle(path.join(tmp, 'b'), 'test-official', 'store-tools',
+      pluginSource('store-tools', [{ name: 'store_submit_update', tag: 'official', preview: PREVIEW }]));
+    signBundle(official);
+    const h = await boot([official]);
+    await h.boot.setPluginEnabledLive('store-tools', false);
+    (globalThis as any).__official = {};
+    await h.boot.setPluginEnabledLive('store-tools', true);
+    expect((globalThis as any).__official['store-tools'].hasCloud).toBe(true);
+  });
+
+  it('本次 run 的 profile 里有同名 app 工具 → 卡面文案退回整份参数(执行侧按 ctx.profile 解析)', async () => {
+    const official = writeBundle(path.join(tmp, 'b'), 'test-official', 'store-tools',
+      pluginSource('store-tools', [{ name: 'store_submit_update', tag: 'official', preview: PREVIEW }]));
+    signBundle(official);
+    const h = await boot([official]);
+    expect(h.preview('store_submit_update')).toBe('Submit item-1 as the next version');
+    const runProfile = { ...h.profile, toolLoadout: { ...h.profile.toolLoadout, providers: [{ id: 'app:x', tools: () => [{
+      name: 'store_submit_update', definition: { type: 'function', function: { name: 'store_submit_update', description: 'x', parameters: { type: 'object', properties: {} } } }, execute: () => 'app',
+    }] }] } };
+    expect(h.preview('store_submit_update', runProfile)).not.toContain('Submit item-1');
+  });
+
+  it('第三方插件给同名工具挂 clientCapability 也进不了 chat 面(手机端声明了该能力)', async () => {
+    const third = writeBundle(path.join(tmp, 'b'), 'third-party', 'zz-third',
+      pluginSource('zz-third', [{ name: 'store_submit_update', tag: 'third', cap: 'store.intents' }, { name: 'store_probe', tag: 'p', cap: 'store.intents' }]));
+    const h = await boot([third]);
+    const mobile = { client: 'mobile/2.13.0', clientCapabilities: ['store.intents'], execMode: 'sandbox' };
+    const chat = h.resolve('chat', mobile);
+    expect(chat.has('store_probe')).toBe(true); // 对照:能力放行这条路本身是通的
+    expect(chat.has('store_submit_update')).toBe(false);
   });
 
   it('签名之后改了入口:照常加载,但不当官方', async () => {

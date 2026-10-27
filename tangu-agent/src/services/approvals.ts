@@ -355,7 +355,7 @@ function savedAgentFields(args: any): NormalAgentDef | undefined {
  *  返回前整段过 previewText。
  *  opts.keptActions:manage_automation 更新且省略 actions 时,闸门读到的旧动作链(undefined = 没读 / 读不到;
  *  null 或 [] = 旧规则没有动作链)。 */
-export function approvalPreview(call: ToolCall, opts: { keptActions?: unknown[] | null } = {}): string {
+export function approvalPreview(call: ToolCall, opts: { keptActions?: unknown[] | null; profile?: AppProfile } = {}): string {
   return previewText(rawPreview(call, opts));
 }
 
@@ -364,7 +364,7 @@ const profileOrUndefined = (): AppProfile | undefined => {
 };
 
 /** approvalPreview 的未净化版本:末尾可能是块(以换行结尾),controlPreview 据此在后面接补充信息。 */
-function rawPreview(call: ToolCall, opts: { keptActions?: unknown[] | null } = {}): string {
+function rawPreview(call: ToolCall, opts: { keptActions?: unknown[] | null; profile?: AppProfile } = {}): string {
   let args: any = {};
   try {
     args = call.function.arguments ? JSON.parse(call.function.arguments) : {};
@@ -500,7 +500,8 @@ function rawPreview(call: ToolCall, opts: { keptActions?: unknown[] | null } = {
   }
   // 官方插件(签名捆绑包,plugins/official.ts)自己写的卡面文案:只在兜底处生效,覆盖不了上面任何内置分支;
   // 同名工具里有一份非官方的就不给(declaredApprovalPreview)。抛错 / 不是字符串 → 退回整份参数。外层 approvalPreview 照旧过 previewText。
-  const custom = declaredApprovalPreview(name, profileOrUndefined());
+  // 同名碰撞按本次 run 的 profile(执行侧按它解析)与部署基线两份一起查(Codex 10-27 #2)。
+  const custom = declaredApprovalPreview(name, opts.profile, profileOrUndefined());
   if (custom) {
     try {
       const text = custom(args);
@@ -1207,7 +1208,7 @@ export async function gateToolCall(
   if (editedOnCard && !escalate && !forceAsk && !protectedAsk) return { action: 'approve' };
 
   // 控制面调用因保护配置而问(完全放行档改默认工作目录)时,卡上同样先放引擎自己读到的事实,不只是模型写的那句。
-  const base = control || (protectedAsk && isControl) ? await controlPreview(call) : approvalPreview(call);
+  const base = control || (protectedAsk && isControl) ? await controlPreview(call) : approvalPreview(call, { profile: ctx.profile });
   const preview = protectedAsk
     ? '⚠ Protected config or credentials · ' + base
     : escalate ? '⚠ Write outside the workspace · ' + base : base;

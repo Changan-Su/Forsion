@@ -390,6 +390,8 @@ export function resolveTools(profile: AppProfile, ctx: ToolContext, origins?: Ma
     // 而 chat 恰是手机端的常用形态;内置 phone_* 另在 CHAT_PRESET_DEFERRED 里(按需装载)。
     const face = presetOf(ctx.preset).toolFace;
     if (face.rejectHostMode && m === 'host') return;
+    // 点名给官方插件的名字先核来源,放在 clientCapability 的按能力放行之前:第三方插件给同名工具挂个能力也混不进来(Codex 10-27 #3)。
+    if (face.face.size && face.officialPlugin.has(t.name) && !(isBuiltin && fromPlugin && official)) return;
     // 官方插件(签名捆绑包,plugins/official.ts)只放 toolFace.officialPlugin 点名的那几件;第三方插件同名照旧拒。
     if (face.face.size && t.clientCapability === undefined
       && (!isBuiltin || !face.face.has(t.name) || (fromPlugin && !(official && face.officialPlugin.has(t.name))))) return;
@@ -461,11 +463,11 @@ export function declaredPersistPlaceholder(name: string): string | undefined {
 /**
  * 插件自己写的审批卡文案(capabilities.approvalPreview)。只认官方插件(provider.official,宿主打的标):
  * 同名工具只要有一份来自非官方 provider(第三方插件、核心、app 工具)就不给 —— 卡上的字必须出自真正会执行的那份。
- * 与 declaredApproval 同款遍历(全局 provider + profile 的 app provider),取最后一份。
+ * 与 declaredApproval 同款遍历(全局 provider + 各 profile 的 app provider:调用方传本次 run 的 ctx.profile 与部署基线),取最后一份。
  */
-export function declaredApprovalPreview(name: string, profile?: Pick<AppProfile, 'toolLoadout'>): ((args: any) => string) | undefined {
+export function declaredApprovalPreview(name: string, ...profiles: Array<Pick<AppProfile, 'toolLoadout'> | undefined>): ((args: any) => string) | undefined {
   let found: ((args: any) => string) | undefined;
-  for (const p of [...providers, ...(profile?.toolLoadout?.providers ?? [])]) {
+  for (const p of [...providers, ...profiles.flatMap((pr) => pr?.toolLoadout?.providers ?? [])]) {
     for (const t of providerTools(p)) {
       if (t.name !== name) continue;
       if (p.origin !== 'plugin' || p.official !== true || !providers.includes(p)) return undefined;
