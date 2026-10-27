@@ -75,6 +75,9 @@ export interface ToolProvider {
   /** 'plugin' = 插件注册(plugins/bootstrap、plugins/registry 打标)。chat 正向面只认核心 provider:
    *  插件同名 web_search/write_file 也进不了 chat 面(creview 09-07 E6);work/coding 面为空,不受影响。 */
   origin?: 'plugin';
+  /** 宿主打的标(plugins/bootstrap 按 plugins/official.ts 的判定现填,插件自己写的值一律被覆盖):官方签名捆绑包里的引擎插件。
+   *  只开两扇门:chat 预设的 toolFace.officialPlugin 点名的工具、capabilities.approvalPreview。 */
+  official?: boolean;
 }
 
 // 各 preset 的情境 deferred 集合住 core/presetTable.ts(单源);这里 re-export 保持既有 import 路径。
@@ -362,7 +365,7 @@ export function resolveTools(profile: AppProfile, ctx: ToolContext, origins?: Ma
     if (hasDeferred) builtins = [...builtins, 'load_tools'];
   }
   const out = new Map<string, ToolDef>();
-  const add = (t: ToolDef, isBuiltin: boolean, fromPlugin = false): void => {
+  const add = (t: ToolDef, isBuiltin: boolean, fromPlugin = false, official = false): void => {
     // 子代理硬闸放在**最前**:defs / 目录 / load_tools 的可解锁集 / executeTool 的按名解析
     // 全经本函数,一处拒=四处都没有。放在 deferBypass 之前(Muse/自动化的子代理也一样拒)。
     if (isSubAgentDenied(ctx, t.name)) return;
@@ -391,7 +394,9 @@ export function resolveTools(profile: AppProfile, ctx: ToolContext, origins?: Ma
     // 而 chat 恰是手机端的常用形态;内置 phone_* 另在 CHAT_PRESET_DEFERRED 里(按需装载)。
     const face = presetOf(ctx.preset).toolFace;
     if (face.rejectHostMode && m === 'host') return;
-    if (face.face.size && t.clientCapability === undefined && (!isBuiltin || fromPlugin || !face.face.has(t.name))) return;
+    // 官方插件(签名捆绑包,plugins/official.ts)只放 toolFace.officialPlugin 点名的那几件;第三方插件同名照旧拒。
+    if (face.face.size && t.clientCapability === undefined
+      && (!isBuiltin || !face.face.has(t.name) || (fromPlugin && !(official && face.officialPlugin.has(t.name))))) return;
     if (host && face.hostDiskHidden.has(t.name)) return;
     if (isBuiltin && builtins !== 'all' && !builtins.includes(t.name)) return;
     // 每-agent 内置工具黑白名单(config.toml tools_mode/tools_list):只约束**无门禁**的内置工具(外加 LOADOUT_GATED)——
@@ -406,7 +411,7 @@ export function resolveTools(profile: AppProfile, ctx: ToolContext, origins?: Ma
     out.set(t.name, t);
     origins?.set(t.name, fromPlugin ? 'plugin' : 'core');
   };
-  for (const p of providers) for (const t of providerTools(p)) add(t, true, p.origin === 'plugin');
+  for (const p of providers) for (const t of providerTools(p)) add(t, true, p.origin === 'plugin', p.origin === 'plugin' && p.official === true);
   for (const p of profile.toolLoadout.providers ?? []) for (const t of providerTools(p)) add(t, false, p.origin === 'plugin');
   return out;
 }
@@ -452,6 +457,23 @@ export function declaredPersistPlaceholder(name: string): string | undefined {
   for (const p of providers) {
     for (const t of providerTools(p)) {
       if (t.name === name && typeof t.capabilities?.persistPlaceholder === 'string') found = t.capabilities.persistPlaceholder;
+    }
+  }
+  return found;
+}
+
+/**
+ * 插件自己写的审批卡文案(capabilities.approvalPreview)。只认官方插件(provider.official,宿主打的标):
+ * 同名工具只要有一份来自非官方 provider(第三方插件、核心、app 工具)就不给 —— 卡上的字必须出自真正会执行的那份。
+ * 与 declaredApproval 同款遍历(全局 provider + profile 的 app provider),取最后一份。
+ */
+export function declaredApprovalPreview(name: string, profile?: Pick<AppProfile, 'toolLoadout'>): ((args: any) => string) | undefined {
+  let found: ((args: any) => string) | undefined;
+  for (const p of [...providers, ...(profile?.toolLoadout?.providers ?? [])]) {
+    for (const t of providerTools(p)) {
+      if (t.name !== name) continue;
+      if (p.origin !== 'plugin' || p.official !== true || !providers.includes(p)) return undefined;
+      if (typeof t.capabilities?.approvalPreview === 'function') found = t.capabilities.approvalPreview;
     }
   }
   return found;

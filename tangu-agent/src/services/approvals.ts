@@ -24,7 +24,7 @@ import { WRITE_TOOLS, writeTargetsOf } from '../tools/writeTargets.js';
 import type { ToolCall } from '../core/types.js';
 import { runHooks } from '../hooks/index.js';
 import { currentAgentSlug } from '../seams/runContext.js';
-import { canonicalToolName, declaredApproval, toolNameSpellings } from '../tools/toolRegistry.js';
+import { canonicalToolName, declaredApproval, declaredApprovalPreview, toolNameSpellings } from '../tools/toolRegistry.js';
 import { USER_BROWSER_ACTIONS, userBrowserActionGated } from '../tools/builtin/browserTools.js';
 import { getRawSection } from '../core/config.js';
 import { deps } from '../seams/runtime.js';
@@ -369,6 +369,10 @@ export function approvalPreviewI18n(call: ToolCall): ApprovalPreviewI18n | undef
   return { key: p.key, vars: Object.fromEntries(Object.entries(p.vars).map(([k, v]) => [k, typeof v === 'number' ? v : previewText(v)])) };
 }
 
+const profileOrUndefined = (): AppProfile | undefined => {
+  try { return deps().profile; } catch { return undefined; }
+};
+
 /** approvalPreview 的未净化版本:末尾可能是块(以换行结尾),controlPreview 据此在后面接补充信息。 */
 function rawPreview(call: ToolCall, opts: { keptActions?: unknown[] | null } = {}): string {
   let args: any = {};
@@ -504,6 +508,15 @@ function rawPreview(call: ToolCall, opts: { keptActions?: unknown[] | null } = {
           : keeps && opts.keptActions === undefined ? '(actions unchanged)' : 'wake Muse';
     const off = args.enabled !== undefined && !args.enabled ? ' (disabled)' : '';
     return joinParts([`manage_automation set ${args.id ? full(args.id) : '(new)'}${off}: "${full(args.desc)}"`, `when ${when || '?'}`, steps]);
+  }
+  // 官方插件(签名捆绑包,plugins/official.ts)自己写的卡面文案:只在兜底处生效,覆盖不了上面任何内置分支;
+  // 同名工具里有一份非官方的就不给(declaredApprovalPreview)。抛错 / 不是字符串 → 退回整份参数。外层 approvalPreview 照旧过 previewText。
+  const custom = declaredApprovalPreview(name, profileOrUndefined());
+  if (custom) {
+    try {
+      const text = custom(args);
+      if (typeof text === 'string') return text;
+    } catch { /* 退回整份参数 */ }
   }
   // 兜底(mcp__ 任意能力、插件声明 command 档的工具):整份参数,不在 200 字处截断(Codex 09-25 三轮 #3);多行字符串排成块(#6)
   return withArgs(name, args);
