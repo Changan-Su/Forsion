@@ -265,6 +265,9 @@ interface Entry {
   d: DiscoveredPlugin;
   /** 已 import 的模块对象:停用→启用复用,不重 import(ESM 模块永不卸载)。原地升级时清空并换新 gen。 */
   plugin?: TanguPlugin;
+  /** plugin 这个模块对象 import 之前那次官方判定过没过。复用缓存模块时要它与当次判定**同时**为真:
+   *  被篡改时 import 的模块,文件恢复原样后再启用也不能升成官方(Codex 10-27 #1)。 */
+  pluginOfficial?: boolean;
   /** 入口破缓存代号(0 = 原始 URL)。 */
   gen: number;
   /** 当前实例;undefined = 休眠。 */
@@ -420,13 +423,16 @@ async function startEntry(e: Entry): Promise<boolean> {
     // import 与 activate 一起限时:吊死的连接 / 顶层 await 不许堵住整条生命周期链(重扫、开关、卸载全排在它后面)
     await withDeadline(e, 'activate', lifecycleTimeouts.activateMs, async () => {
       // 官方判定每次激活现做,且在首次 import 之前(升级 / 重扫换了代码就重新核;核不过照常加载,只是不当官方)。
-      official = await isOfficialEnginePlugin(e.d);
+      const verified = await isOfficialEnginePlugin(e.d);
       if (e.plugin) {
         assertNativePluginsAllowed(); // 复用已 import 的模块对象也要过沙箱闸
+        official = verified && e.pluginOfficial === true;
       } else {
+        official = verified;
         if (!e.gen && importedUrls.has(e.d.entryUrl)) e.gen = ++genSeq; // 卸载后同路径重装:破入口缓存
         importedUrls.add(e.d.entryUrl);
         e.plugin = await loadPlugin(e.d, e.gen);
+        e.pluginOfficial = verified;
       }
       inst.plugin = e.plugin;
       await e.plugin.activate(makeContext(e.d, inst, official));
@@ -637,7 +643,7 @@ export function rescanPlugins(): Promise<{ addedIds: string[]; reloadedIds: stri
     for (const id of removedIds) dropEntry(id);
     for (const e of reloading) {
       const d = found.get(e.d.manifest.id)!;
-      Object.assign(e, { d, plugin: undefined, gen: ++genSeq, failed: false, lastError: undefined, leaving: false });
+      Object.assign(e, { d, plugin: undefined, pluginOfficial: undefined, gen: ++genSeq, failed: false, lastError: undefined, leaving: false });
       pluginsNeedingRestart.delete(d.manifest.id);
     }
     const fresh = new Set<string>();
