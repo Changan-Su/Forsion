@@ -133,7 +133,24 @@ async function main() {
       const win = BrowserWindow.getAllWindows().find((item) => item.webContents.getURL().includes('window=floating'))
       return { minimizable: win.isMinimizable(), closable: win.isClosable(), resizable: win.isResizable(), parent: !!win.getParentWindow() }
     })
-    check('native window is movable-family, minimizable, closable and resizable', native.minimizable && native.closable && native.resizable && native.parent, JSON.stringify(native))
+    check('native window is minimizable, closable, resizable and independent (no parent)', native.minimizable && native.closable && native.resizable && !native.parent, JSON.stringify(native))
+    // 独立窗:主窗最小化 / 关到托盘(hide)时设置窗得留在桌面上 —— 否则「拖扩展文件夹进 Chrome」时设置窗跟着主窗一起没了
+    const survives = await app.evaluate(async ({ BrowserWindow }, how) => {
+      const all = BrowserWindow.getAllWindows()
+      const floating = all.find((w) => w.webContents.getURL().includes('window=floating'))
+      const main = all.find((w) => !/[?&]window=/.test(w.webContents.getURL()))
+      const out = {}
+      for (const step of how) {
+        if (step === 'minimize') main.minimize(); else main.hide()
+        await new Promise((r) => setTimeout(r, 800))
+        out[step] = { visible: floating.isVisible(), minimized: floating.isMinimized() }
+        if (step === 'minimize') main.restore(); else main.show()
+        await new Promise((r) => setTimeout(r, 500))
+      }
+      return out
+    }, ['minimize', 'hide'])
+    check('settings window stays visible while the main window is minimized or hidden to tray',
+      survives.minimize.visible && !survives.minimize.minimized && survives.hide.visible && !survives.hide.minimized, JSON.stringify(survives))
     // 切界面语言后标题栏(macOS 自绘 .floating-native-chrome)与原生窗口标题跟着变:开窗时传来的 title 是开窗那一刻的语言,
     // 内置面板必须渲染期按 key 现译(此前只有旁聊这么做,设置切到英文仍挂着「设置」)。截图留在 SHOTS 供人工看。
     const SHOTS = path.join(os.tmpdir(), 'forsion-floating-panel-shots')
