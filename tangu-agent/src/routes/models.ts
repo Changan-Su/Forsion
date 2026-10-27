@@ -7,6 +7,7 @@
  *       defaultModelId,
  *       forsion: { status: 'ok'|'empty'|'error', detail }               // 云端托管面诊断(空列表不再静默)
  *     }
+ *   GET /agent/models/quota?model=<id> → { quota }(直连来源的额度 / 余额,见 llm/providerQuota.ts)
  * forsion 部分经 deps().brain.models(microserver 进程内直连 / standalone 走 brain-api);
  * 优先 listModelsForProject(profile.appId) 遵守 admin「应用模型配置」,旧 brain 回退 listGlobalModels。
  * profile 按查询参数 `app_id` 解析(与 run 的 resolveProfile 同源),缺省才回退本进程基线。
@@ -99,6 +100,18 @@ export function applyModelOverride(body: any, hostExec: boolean): { code: number
   }
   return { code: 200, body: { overrides: setModelContextWindow(modelId, tokens) } };
 }
+
+// GET /agent/models/quota?model=<id> → { quota: ProviderQuota | null }:直连模型所属来源的额度 / 余额(上下文环弹层)。
+// 云端部署没有直连 provider → 恒 null;查不到也是 null(不报错,客户端不显示)。
+router.get('/agent/models/quota', authMiddleware, async (req, res) => {
+  try {
+    const modelId = String(req.query.model || '');
+    const quota = modelId ? await deps().brain.models.providerQuota?.(modelId) ?? null : null;
+    res.json({ quota });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'quota lookup failed' });
+  }
+});
 
 router.put('/agent/models/overrides', authMiddleware, async (req, res) => {
   try {

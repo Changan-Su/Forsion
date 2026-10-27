@@ -37,7 +37,7 @@ import { AttachmentTile, isLeaving, tileKey } from '../../components/AttachmentT
 import { useUploads } from '../../services/uploads'
 import { addDraftFile, isInWorkspace, previewOf, release, removeDraftFile, uploadIdOf } from './composerUploads'
 import { commandsFor } from '../../commandCatalog'
-import { getCustomCommands, expandCustomCommand, listAllMessages, type CustomCommandInfo } from '../../services/backendService'
+import { getCustomCommands, expandCustomCommand, getModelQuota, listAllMessages, type CustomCommandInfo } from '../../services/backendService'
 import { AddContentMenu, type AddContentReference } from './AddContentMenu'
 import { NormalModeItem, normalModeItems } from './NormalModeItem'
 import { mainReferenceKey } from './mainReference'
@@ -57,9 +57,10 @@ import { ELEMENT_EVENT, ELEMENT_TARGET_ATTR, composeElements, elementImages, for
 import { NEW_CHAT_DRAFT, clearDraft, moveDraft, setDraftField, useComposerDrafts, useDraftField } from './composerDrafts'
 import { dropSend, fadeOutDraft, noteSend } from './sendFlight'
 import { ContextUsagePop } from './ContextUsagePop'
+import { isDirectModelId } from '../chatModelCatalog'
 import { usePromptSuggest } from './promptSuggest'
 import './composer2.css'
-import { homeTarget, targetForSession, targetKeyOf, useComposerRef } from '../../services/engine/targets'
+import { focusTarget, homeTarget, targetForSession, targetKeyOf, useComposerRef } from '../../services/engine/targets'
 import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 registerMessages({
@@ -307,6 +308,7 @@ export function pickRecall(hist: string[], pos: number, older: boolean, stash: s
 }
 
 export { fmtTokens } from './ContextUsagePop'
+
 
 /** 发出的正文:引用 token 行 + 引文 + 正文(上下文在前)。例外:/refine 必须留在最前 —— 引擎只认开头的 /refine
  *  (isRefineInvocation);开着「自动引用当前笔记」时几乎每条都带引用行,前置会让 /refine 静默失效。 */
@@ -2216,6 +2218,9 @@ export const Composer2: React.FC<{
                       costLimit={costLimit}
                       ctxInfo={ringCtxInfo}
                       onCompact={onCompact ? () => { onCompact(); setOpenMenu(null) } : undefined}
+                      directModel={!isEngine && modelId && isDirectModelId(modelId, models, modelsResponse)
+                        // 新对话还没会话:按焦点设备查(新对话就跑在那里,模型目录也来自那里),别固定问本机
+                        ? { id: modelId, load: () => getModelQuota(sessionId ? targetForSession(sessionId) : focusTarget(), modelId).then((r) => r.quota) } : undefined}
                     />
                   </span>
                 </span>

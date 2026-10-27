@@ -198,6 +198,11 @@ export interface ModelsBrain {
    */
   hasDirectModel?(modelId: string): boolean;
   /**
+   * modelId 所属直连 provider 的额度 / 余额(输入框上下文环弹层用);不是直连模型、或该来源查不到 → null。
+   * 可选:仅 standalone 的 multiBrain 实现。口径见 llm/providerQuota.ts。
+   */
+  providerQuota?(modelId: string): Promise<import('../contracts/clientTypes.js').ProviderQuota | null>;
+  /**
    * 按应用过滤的模型列表(遵守 Forsion admin「应用模型配置」project_model_configs)。
    * 可选:旧版云端/brain 未实现 → 调用方回退 listGlobalModels。
    * 语义:project 无配置行 → 等价全局列表(优雅降级);有配置行 → 严格遵守。

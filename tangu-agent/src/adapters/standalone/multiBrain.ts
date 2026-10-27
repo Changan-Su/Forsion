@@ -16,6 +16,7 @@ import { loadLocalWebSearchConfig, hasLocalSearchProvider, runLocalSearch } from
 import { buildOpenAiCompatPayload, tuneOpenAiDirectPayload, streamOpenAiCompat, DIRECT_MARK, PROTOCOL_MARK, ACCOUNT_MARK } from '../../llm/openaiCompat.js';
 import { streamAnthropicMessages } from '../../llm/anthropicMessages.js';
 import { streamOpenAiResponses } from '../../llm/openaiResponses.js';
+import { fetchProviderQuota } from '../../llm/providerQuota.js';
 import WebSocket from 'ws';
 import { randomUUID } from 'node:crypto';
 
@@ -243,6 +244,15 @@ export function createMultiBrain(httpBrain: CloudBrainServices, registry: Provid
       listDirectProviders: () =>
         registry.list().map((p) => ({ providerId: p.providerId, baseUrl: p.baseUrl, modelIds: p.modelIds, imageModelIds: p.imageModelIds, ttsModelIds: p.ttsModelIds, noVisionModelIds: p.noVisionModelIds, ...(p.fastTiers ? { fastTiers: p.fastTiers } : {}) })),
       hasDirectModel: (modelId: string) => registry.has(modelId),
+      providerQuota: async (modelId: string) => {
+        const pid = registry.resolve(modelId)?.model.provider;
+        if (!pid) return null;
+        // 订阅登录的 token 照对话那条路续期;account id 要和续完的 token 成对,所以回调里再读一次注册表
+        return withFreshKey(pid, async () => {
+          const p = registry.list().find((x) => x.providerId === pid);
+          return p ? fetchProviderQuota(p) : null;
+        });
+      },
     },
     images: {
       edit: async (req: ImageEditRequest) => {
