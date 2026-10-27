@@ -163,13 +163,18 @@ router.get('/agent/sessions/attention', authMiddleware, async (req: AuthRequest,
   }
 });
 
-// 用户打开了这个会话:读到现在(只动 last_read_at,不动 updated_at —— 读一下不该把会话顶到列表最上面)。
+// 用户打开了这个会话:读到现在,收尾问句的「等你」也算看过(10-27:只清未读时点进去黄点不灭,要回一句才灭)。
+// 不动 updated_at —— 读一下不该把会话顶到列表最上面。真在等的审批 / 询问另有来源,不受影响。
+// 回报还没送回主会话的子会话(report_run_id)留着:送达时靠它告诉主会话 waiting_for_user(childSessions.deliverNow)。
 router.post('/agent/sessions/:id/read', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const s = await getOwnSession(req.params.id, req.user!.userId);
     if (!s) return res.status(404).json({ detail: 'Session not found' });
-    await query(`UPDATE chat_sessions SET last_read_at = ? WHERE id = ?`, [Date.now(), s.id]);
-    res.json({ ok: true });
+    await query(
+      `UPDATE chat_sessions SET last_read_at = ?, awaiting_user = CASE WHEN report_run_id IS NULL THEN FALSE ELSE awaiting_user END WHERE id = ?`,
+      [Date.now(), s.id]);
+    const [r] = await query<any[]>(`SELECT awaiting_user FROM chat_sessions WHERE id = ?`, [s.id]);
+    res.json({ ok: true, awaiting: !!r?.awaiting_user });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'mark read failed' });
   }
