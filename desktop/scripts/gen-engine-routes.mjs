@@ -246,6 +246,9 @@ export const CLASSIFICATION = {
   'DELETE /agent/project-context/memory': [D, 'project memory delete (host-only store; the route itself also refuses remote origin)'],
   'POST /agent/project-context/memory/candidate': [D, 'adopt / dismiss one pending project-memory candidate (host-only store; the route itself also refuses remote origin)'],
   'POST /agent/project-context/memory/restore': [D, 'put back one sentence removed by a project-memory compaction (host-only store; the route itself also refuses remote origin)'],
+  'GET /agent/project-context/missing': [D, 'which local project folders are gone: stats host paths (host-only; the route answers an empty list to remote origins)'],
+  'GET /agent/project-context/relink': [D, 'relink dialog data: probes same-name folders and their git remotes on the host (the route itself also refuses remote origin)'],
+  'POST /agent/project-context/relink': [D, 'point a moved project to its new folder: rewrites chat rows, project memory and project settings (host-only; the route itself also refuses remote origin)'],
   // PROJECT 详情「Git」页:写仓库、跑提交钩子、信任仓库自带的可执行配置、带凭据推送 —— 只许本机
   'POST /agent/project-context/git/init': [D, 'git repository write'],
   'POST /agent/project-context/git/trust': [D, 'trusts repo-provided executable git config'],
