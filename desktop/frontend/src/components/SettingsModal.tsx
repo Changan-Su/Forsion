@@ -121,6 +121,7 @@ import { connectionTarget, homeTarget } from '../services/engine/targets'
 
 // 本文件自带的文案片段(命名空间 `settingsmodal.*`,不与 i18n.generated.ts 的 `settings.*` 相交)。
 registerMessages({
+  'settingsmodal.configRecovered': { zh: '上次的设置文件损坏，已恢复到 {time} 的版本', en: 'Your settings file was damaged. Restored the version from {time}.' },
   'settingsmodal.mcp.fromPlugin': { zh: '来自插件「{name}」', en: 'From plugin "{name}"' },
   'settingsmodal.mcp.fromPluginHint': { zh: '这个 server 随插件启用和停用；要关掉它，请在插件设置里停用这个插件。', en: 'This server starts and stops with its plugin. To turn it off, disable the plugin in plugin settings.' },
   'settingsmodal.selectionBar': { zh: '划线菜单', en: 'Selection menu' },
@@ -1645,6 +1646,7 @@ export const SettingsModal: React.FC<{
         </div>
         {/* 设置住在独立浮窗(桌面)/ 覆盖层(web)里,全局通知两处都看不见 —— 插件装卸、重扫、Space 卸载等结果画在这条上。 */}
         <PanelNotice />
+        <ConfigRecoveryNotice />
         <div className="settings-body">
           {cloudTabs.length > 0 && <div className="settings-cloud-tabs" role="tablist" aria-label={cloudPageLabel}>
             {cloudTabs.map((view, index) => {
@@ -3733,6 +3735,22 @@ export const SettingsModal: React.FC<{
           </ErrorBoundary>
         </div>
       </section>
+    </div>
+  )
+}
+
+/** config.json / provider-auth.json 读坏后从 .bak 恢复过(引擎或主进程写的恢复标记):提示一次,点掉删标记(坏文件与备份都留着)。 */
+function ConfigRecoveryNotice() {
+  const { t } = useI18n()
+  const [notice, setNotice] = useState<{ at: number; version: number } | null>(null)
+  useEffect(() => { void window.tangu?.configRecoveryNotice?.().then(setNotice).catch(() => {}) }, [])
+  if (!notice) return null
+  const time = formatDateTime(notice.version)
+  return (
+    <div className="mk-notice" role="status" data-config-recovered>
+      <Info size={15} />
+      <div className="mk-notice-body"><span>{t('settingsmodal.configRecovered', { time })}</span></div>
+      <button className="mk-notice-close" onClick={() => { setNotice(null); void window.tangu?.clearConfigRecoveryNotice?.().catch(() => {}) }} aria-label={t('common.close')}><X size={13} /></button>
     </div>
   )
 }
