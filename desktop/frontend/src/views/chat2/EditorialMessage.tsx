@@ -27,7 +27,7 @@ import { InlineFiles } from '../../components/InlineFiles'
 import { IntelligentUi } from '../../components/IntelligentUi'
 import { SketchCards } from '../../components/SketchCard'
 import { PluginToolCard, useToolCardOf, type ToolCardClaim } from '../../components/PluginToolCard'
-import { HostWebCard, planWebCards, useSessionCwd, webCardsHere, type WebCardSpec } from './WebCards'
+import { HostWebCard, LocalWebCard, isHtmlFile, planWebCards, useSessionCwd, webCardsHere, type WebCardSpec } from './WebCards'
 import { sketchFence } from '../../amadeus/blocks/sketch/format'
 import { streamingArgString } from '../streamingWrite'
 import { SystemPromptBlock } from '../../components/SystemPromptBlock'
@@ -836,9 +836,16 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
         {msg.teamDone && msg.status !== 'streaming' && (
           <div className="t2-dim t2-team-done" data-team-done="1">✓ {t('chat.team.done')}</div>
         )}
-        {!!msg.displayFiles?.length && fileCtx && (
-          <InlineFiles files={msg.displayFiles} cfg={fileCtx.cfg} sessionId={fileCtx.sessionId} execMode={fileCtx.execMode} onOpenPreview={fileCtx.onOpenPreview} onAsk={handlers?.onSuggest} />
-        )}
+        {!!msg.displayFiles?.length && fileCtx && (() => {
+          // 网页卡片第二轮 1:本机会话里展示一个 .html = 本地网页卡,代替文件名小卡(在 Vite 这类项目里退回小卡)
+          const isWeb = (f: NonNullable<UiMessage['displayFiles']>[number]): boolean => webHere && !f.sourceSessionId && isHtmlFile(f.path)
+          const files = (list: NonNullable<UiMessage['displayFiles']>) => <InlineFiles files={list} cfg={fileCtx.cfg} sessionId={fileCtx.sessionId} execMode={fileCtx.execMode} onOpenPreview={fileCtx.onOpenPreview} />
+          const rest = msg.displayFiles.filter((f) => !isWeb(f))
+          return <>
+            {!!rest.length && files(rest)}
+            {msg.displayFiles.filter(isWeb).map((f) => <LocalWebCard key={f.path} sessionId={fileCtx.sessionId} path={f.path!} onAsk={handlers?.onSuggest} fallback={files([f])} />)}
+          </>
+        })()}
         {(msg.toolEvents || []).filter(ev => isMarketplaceTool(ev) && !inlineToolIds.has(ev.id)).map(ev => <MarketPluginCards key={`market-${ev.id}`} event={ev} />)}
         {(msg.toolEvents || []).filter(ev => isSandboxCardTool(ev) && !inlineToolIds.has(ev.id)).map(ev => <PluginSandboxCard key={`sandbox-${ev.id}`} event={ev} />)}
         {(() => { const gitEvs = (msg.toolEvents || []).filter(ev => isGitTool(ev) && ev.done && !inlineToolIds.has(ev.id)); return gitEvs.length ? <GitToolCard key={`git-${gitEvs[0].id}`} events={gitEvs} sessionId={runSid} /> : null })()}

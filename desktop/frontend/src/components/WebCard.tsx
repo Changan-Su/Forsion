@@ -6,6 +6,7 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { FileText, Globe, Monitor, MoreHorizontal } from 'lucide-react'
 import { registerMessages, useI18n } from '../i18n'
+import { openPluginContextMenu, type PluginMenuEntry } from '../amadeus/plugins/contextMenuSurface'
 import './WebCard.css'
 
 registerMessages({ 'webcard.more': { zh: '更多', en: 'More' } })
@@ -19,6 +20,9 @@ export interface WebCardAction {
   onClick(): void
 }
 
+/** ⋯ 菜单的一行(宿主菜单的形状):{ kind: 'item', label, run, icon? } / { kind: 'sep' } / { kind: 'head', label } */
+export type WebCardMenuEntry = PluginMenuEntry
+
 export interface WebCardProps {
   layout?: 'card' | 'row'
   name: string
@@ -30,7 +34,10 @@ export interface WebCardProps {
   actions?: WebCardAction[]
   trailing?: WebCardAction[]
   moreLabel?: string
-  onMore?(anchor: HTMLElement): void
+  /** ⋯ 菜单;空 / 不给 = 不画 ⋯ */
+  menu?: WebCardMenuEntry[]
+  /** 菜单项怎么跑(插件那份经 guard:停用后不再调它) */
+  guard?: (run: () => void) => void
   /** 出图时读到的页面 <title>(本地卡 / 服务卡拿它当名字) */
   onTitle?(title: string): void
 }
@@ -69,9 +76,9 @@ export function WebCard(p: WebCardProps) {
   useEffect(() => { if (title) p.onTitle?.(title) }, [title]) // eslint-disable-line react-hooks/exhaustive-deps
   const row = p.layout === 'row'
   const AddrIcon = p.address?.icon === 'file' ? FileText : Globe
-  const more = p.onMore ? (
+  const more = p.menu?.length ? (
     <button type="button" className="btn sm wc-more" data-act="web-card-more" aria-label={moreLabel} title={moreLabel}
-      onClick={(e) => p.onMore!(e.currentTarget)}>
+      onClick={(e) => { openPluginContextMenu({ anchor: e.currentTarget, align: 'end' }, p.menu!, p.guard ?? ((run) => run())) }}>
       <MoreHorizontal size={14} />
     </button>
   ) : null

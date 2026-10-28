@@ -103,6 +103,11 @@ describe('ctx.ui.mountWebCard', () => {
     expect(run).toHaveBeenCalledTimes(1)
     act(() => h.update({ thumbnail: { url: 'https://forsion.net/apps/lin/tea/' }, menu: [{ label: '下线', run }] }))
     expect(el.querySelector('[data-act="web-card-more"]')).not.toBeNull()
+    await act(async () => { (el.querySelector('[data-act="web-card-more"]') as HTMLButtonElement).click(); await import('../../amadeus/plugins/contextMenuSurface') })
+    const item = [...document.querySelectorAll('button, [role="menuitem"]')].find((n) => n.textContent?.trim() === '下线') as HTMLElement | undefined
+    expect(item, '⋯ 打开了宿主菜单,里面有「下线」').toBeTruthy()
+    act(() => item!.click())
+    expect(run).toHaveBeenCalledTimes(2)
     // Extend 每次 update 整张卡传:带了键、值是 undefined / [] / null = 清掉(已下线那张靠这个去掉 ⋯ 和按钮)
     act(() => h.update({ status: { label: '已下线', tone: 'muted' }, actions: null as never, trailing: [], menu: undefined, thumbnail: null }))
     expect(el.querySelector('.wc-pill.muted')!.textContent).toBe('已下线')

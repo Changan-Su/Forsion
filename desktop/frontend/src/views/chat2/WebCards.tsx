@@ -10,12 +10,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import { PanelRight } from 'lucide-react'
 import type { ToolEvent } from '../../types'
-import { WebCard, type WebCardAction, type WebCardProps } from '../../components/WebCard'
+import { WebCard, type WebCardAction, type WebCardMenuEntry, type WebCardProps } from '../../components/WebCard'
 import { registerMessages, useI18n } from '../../i18n'
 import { formatTime } from '../../format/time'
 import { useApp } from '../../stores/appStore'
 import { agentWriteTargets, resolveDeskPath } from '../../stores/deskPlan'
-import { openPluginContextMenu, type PluginMenuEntry } from '../../amadeus/plugins/contextMenuSurface'
 import { engineHere, openProcessLog, openProcessUrl, rowState, stopProcess } from './BackgroundProcs'
 import { useProcessPolling, useSessionProcesses } from './processStore'
 import '../../components/PluginToolCard.css'
@@ -179,7 +178,6 @@ function CardShell({ kind, title, onDesk, children }: { kind: 'local' | 'service
   )
 }
 
-const menuAt = (anchor: HTMLElement, items: PluginMenuEntry[]): void => { openPluginContextMenu({ anchor, align: 'end' }, items, (run) => run()) }
 const copy = (text: string): void => { void navigator.clipboard?.writeText(text).catch(() => {}) }
 
 /** fallback:文件在 Vite 这类项目里(不出卡)时画什么 —— display_file 那张传文件小卡,别让附件凭空消失。 */
@@ -196,7 +194,7 @@ export function LocalWebCard({ sessionId, path, onAsk, fallback = null }: { sess
   const gone = file.state === 'gone'
   const fileName = path.split(/[\\/]/).pop() || path
   const preview = (): void => { if (url) openProcessUrl(sessionId, url) }
-  const menu: PluginMenuEntry[] = [
+  const menu: WebCardMenuEntry[] = [
     ...(window.tangu?.revealHostPath && !gone ? [{ kind: 'item' as const, label: t(IS_MAC ? 'webcard.reveal' : 'webcard.revealWin'), icon: 'folder', run: () => { void window.tangu!.revealHostPath!(path) } }] : []),
     { kind: 'item', label: t('webcard.copyPath'), icon: 'copy', run: () => copy(path) },
   ]
@@ -213,7 +211,7 @@ export function LocalWebCard({ sessionId, path, onAsk, fallback = null }: { sess
     address: { text: shortPath(path), icon: 'file', struck: gone },
     note: gone ? undefined : live ? t('webcard.local.publishedNote', { url: shortUrl(live) }) : t('webcard.local.note'),
     thumbnail: !gone && url ? { url, version: String(file.mtime) } : null,
-    actions, trailing, onMore: (a) => menuAt(a, menu), onTitle: setTitle,
+    actions, trailing, menu, onTitle: setTitle,
   }
   return <CardShell kind="local" title={t('webcard.local.title')} onDesk={gone || !url ? undefined : preview}><WebCard {...props} /></CardShell>
 }
@@ -233,7 +231,7 @@ export function ServiceWebCard({ sessionId, processId, command, onAsk }: { sessi
   const st = rowState(p)
   const cmd = p.command || command
   const running = st === 'running'
-  const menu: PluginMenuEntry[] = [
+  const menu: WebCardMenuEntry[] = [
     { kind: 'item', label: t('webcard.copyUrl'), icon: 'copy', run: () => copy(url) },
     ...(onAsk ? [{ kind: 'item' as const, label: t('webcard.buildPublish'), icon: 'globe', run: () => onAsk(t('webcard.ask.buildPublish', { command: cmd })) }] : []),
   ]
@@ -264,7 +262,7 @@ export function ServiceWebCard({ sessionId, processId, command, onAsk }: { sessi
       : running ? t('webcard.service.note', { command: cmd })
       : `${cmd} · ${formatTime(p.startedAt)}${ended}`,
     thumbnail: running && here ? { url, version: String(p.startedAt) } : null,
-    actions, trailing, onMore: (a) => menuAt(a, menu), onTitle: setTitle,
+    actions, trailing, menu, onTitle: setTitle,
   }
   return <CardShell kind="service" title={t('webcard.service.title')} onDesk={running && here ? () => openProcessUrl(sessionId, url) : undefined}><WebCard {...props} /></CardShell>
 }

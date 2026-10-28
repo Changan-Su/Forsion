@@ -13,7 +13,7 @@ import { EmptyState } from '../../components/EmptyState'
 import { WebCard, type WebCardAction } from '../../components/WebCard'
 import { pluginText } from './pluginText'
 import { vocabIcon } from './pluginIcon'
-import { openPluginContextMenu, overlayLayer, type PluginMenuEntry } from './contextMenuSurface'
+import { overlayLayer, type PluginMenuEntry } from './contextMenuSurface'
 import type { PluginConfirmOptions, PluginControlOption, PluginDialogAction, PluginDialogOptions, PluginEmptyState, PluginPopoverOptions, PluginToolbarControl, PluginWebCard, PluginWebCardAction } from './types'
 import './pluginParts.css'
 
@@ -268,7 +268,7 @@ function PluginWebCardView({ c, guard }: { c: HostWebCard; guard: Guard }): Reac
       address={c.address} note={c.note ? pluginText(c.note) : undefined} thumbnail={c.thumbnail ?? null}
       placeholder={Ph ? <Ph size={c.layout === 'row' ? 16 : 22} strokeWidth={1.6} /> : undefined}
       actions={c.actions?.map(act)} trailing={c.trailing?.map(act)}
-      onMore={menu ? (anchor) => { openPluginContextMenu({ anchor, align: 'end' }, menu, (run) => { guard(run) }) } : undefined} />
+      menu={menu ?? undefined} guard={(run) => { guard(run) }} />
   )
 }
 
