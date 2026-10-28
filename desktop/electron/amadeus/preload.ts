@@ -110,7 +110,7 @@ const api: AmadeusApi = {
   writeDatabase: (dbPath, data) => ipcRenderer.invoke(IPC.dbWrite, dbPath, data),
   writeDatabaseCas: (dbPath, data, baseVersion) => ipcRenderer.invoke(IPC.dbWriteCas, dbPath, data, baseVersion),
   readDrawing: (pagePath, ref) => ipcRenderer.invoke(IPC.drawingRead, pagePath, ref),
-  writeDrawing: (drawingPath, source) => ipcRenderer.invoke(IPC.drawingWrite, drawingPath, source),
+  writeDrawing: (drawingPath, source, base) => ipcRenderer.invoke(IPC.drawingWrite, drawingPath, source, base),
   readTextFile: (filePath) => ipcRenderer.invoke(IPC.readTextFile, filePath),
   writeTextFile: (filePath, text, opts) => ipcRenderer.invoke(IPC.writeTextFile, filePath, text, opts),
   scopedTextWrites: true,

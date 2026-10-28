@@ -273,12 +273,15 @@ html[data-glass='off'] * {
  * The html:root specificity also wins over older installed first-party theme CSS. */
 html:root[data-mode='light'] {
   --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.025), 0 8px 24px -6px rgba(0, 0, 0, 0.05);
+  /* 半浮:住在纸里、身下没有正文的卡(摘要栏卡片缺省)。影子收近收淡,让输入卡做唯一的主浮(2026-10-28 用户定) */
+  --card-shadow-low: 0 1px 2px rgba(0, 0, 0, 0.025), 0 4px 10px -6px rgba(0, 0, 0, 0.07);
   --btn-shadow: none;
   --icon-shadow: none;
 }
 /* 暗色同一档「淡」:层次主要靠底色小台阶,阴影只在浮层边缘留一点(10-03 用户定 d3;.35/.6 + 顶边微光被否「太重」,别往重里调)。 */
 html:root[data-mode='dark'] {
   --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.10), 0 8px 24px -6px rgba(0, 0, 0, 0.18);
+  --card-shadow-low: 0 1px 2px rgba(0, 0, 0, 0.12), 0 4px 10px -6px rgba(0, 0, 0, 0.22);
   --btn-shadow: none;
   --icon-shadow: none;
 }
@@ -286,6 +289,7 @@ html:root[data-mode='dark'] {
 /* Flat only clears decorative elevation; focus, selection and menu motion stay intact. */
 html:root[data-mode][data-flat='1'] {
   --card-shadow: none;
+  --card-shadow-low: none;
   --btn-shadow: none;
   --icon-shadow: none;
   --seg-thumb-shadow: none;

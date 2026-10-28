@@ -209,6 +209,7 @@ import { plantNotebookPlugin, notebookLive, notebookSelftest } from './lib/noteb
 import { cuVisionSetup, cuVisionLive, defaultFixture as cuDefaultFixture } from './lib/cu-vision-live.mjs';
 import { CU_JEV_KEYS, JEV_REQUESTS_DIR, cuJevSetup, cuJevConfig, cuJevLive } from './lib/cu-jev-live.mjs';
 import { appRefLive, appRefSelftest } from './lib/app-ref-live.mjs';
+import { taskOutcomesLive } from './lib/task-outcomes-live.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const entry = process.env.TANGU_LIVE_ENGINE_ENTRY || join(root, 'dist', 'standalone', 'main.js');
@@ -266,6 +267,7 @@ const GIT_PREFIX = 'livetest/'; const GIT_TAG = '[LIVE]';
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
 const OPT_IN = new Set(['pluginsandbox', 'humandims', 'nested', 'branch', 'musedm', 'realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'parkedask', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'appsettings', 'control', 'phone']);
+KEYS.push('taskoutcomes'); OPT_IN.add('taskoutcomes'); // --only taskoutcomes: actual hashes / approval identity / duplicate writes, classified separately from model narration.
 OPT_IN.add('bluebird'); // --only bluebird --plugin-src <bundle>: real instruction-following on supplied transcripts
 OPT_IN.add('signals');
 OPT_IN.add('musechat');
@@ -329,6 +331,10 @@ KEYS.push('marketplace', 'marketplacechat');
 KEYS.push('pluginext');
 OPT_IN.add('pluginext'); // 夹具插件在 tangu-plugin.json 里声明 stdio MCP + Stop hook(10-17);只在动 mcp/pluginServers、hooks/pluginHooks、bootstrap 的 attachManifestExtras 时跑
 OPT_IN.add('marketplace'); OPT_IN.add('marketplacechat'); // marketplacechat:同一判据跑在 chat 预设(详情工具要先 load_tools)
+// storeupdate(10-27):Tangu 替作者提交商店更新 —— 官方签名 Extend 包里的引擎插件(ctx.cloud / approvalPreview / chat 准入)。
+//   --extend-plugin <npm pack 解出来的、已签名的 Extend 目录> + TANGU_LIVE_CLOUD_URL=<server scripts/marketplace-fixture.ts>
+//   + TANGU_LIVE_CLOUD_TOKEN=<payload {"userId":"owner"} 的假 JWT>。负对照:给一份改过一个字节的包 → 插件拿不到 ctx.cloud、工具不出现 → 红。
+KEYS.push('storeupdate', 'storeupdatechat'); OPT_IN.add('storeupdate'); OPT_IN.add('storeupdatechat');
 const ONLY = new Set(opt('only', process.env.TANGU_LIVE_ONLY || KEYS.filter((k) => !OPT_IN.has(k)).join(',')).split(',').map((s) => s.trim()).filter(Boolean));
 const TTFT_ROUNDS = Number(opt('ttft-rounds', process.env.TANGU_LIVE_TTFT_ROUNDS || 5));
 const SELF_ROUNDS = Number(opt('rounds', 3)); // selfmodel:每轮一个新 agent,出通过率
@@ -933,6 +939,11 @@ if (BLUEBIRD_SRC) {
   cpSync(BLUEBIRD_SRC, join(shared, 'plugins/bluebird'), { recursive: true, filter: p => !p.split('/').some(x => ['.git','node_modules','outputs','__pycache__'].includes(x)) });
 }
 
+if (ONLY.has('storeupdate') || ONLY.has('storeupdatechat')) {
+  const bundle = opt('extend-plugin', '');
+  if (!bundle || !existsSync(join(bundle, 'tangu-plugins/store-update/tangu-plugin.json')) || !existsSync(join(bundle, 'SIGNATURE'))) throw new Error('--extend-plugin must point to a signed, packed Forsion Extend bundle with tangu-plugins/store-update');
+  cpSync(bundle, join(shared, 'plugins/forsion-extend'), { recursive: true });
+}
 if (ONLY.has('dispatch')) {
   const bundle = opt('dispatch-plugin', '');
   if (!bundle || !existsSync(join(bundle, 'tangu-plugins/dispatch-core/dist/index.mjs'))) throw new Error('--dispatch-plugin must point to a built Dispatch bundle');
@@ -1493,7 +1504,7 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
           else if (e.type === 'system_prompt') { ev.systemPrompt = String(p.content || ''); ev.recalled = String(p.recalled || ''); }
           else if (e.type === 'approval_request') {
             ev.approvals += 1;
-            ev.approvalList.push({ name: p.name, reason: p.reason?.kind, mode: p.reason?.mode, agent: p.agentSlug, args: String(p.arguments || '').slice(0, 300), remote: p.remote ?? null, previewI18n: p.previewI18n ?? null });
+            ev.approvalList.push({ name: p.name, reason: p.reason?.kind, mode: p.reason?.mode, agent: p.agentSlug, args: String(p.arguments || '').slice(0, 300), remote: p.remote ?? null, previewI18n: p.previewI18n ?? null, preview: String(p.preview || '').slice(0, 800) });
             const decision = onApproval ? await onApproval(p) : undefined;
             const action = approvalActionOf(decision);
             const id = p.approvalId || p.id || p.approval_id;
@@ -2332,6 +2343,25 @@ try {
       output: `【改名】\n${ev.content}\n【参数纠正】\n${ev2.content}\n【版本号抄错】\n${ev3.content}`, ttftMs: ttft(ev), tokens: tokensOf(ev) + tokensOf(ev2) + tokensOf(ev3), toolCalls: [...ev.toolCalls, ...ev2.toolCalls, ...ev3.toolCalls] };
   });
 
+  // 两个场景各改一个条目(第一个提交后那条就有待审更新,第二个再改会被 market_update_pending 拦)。
+  for (const [key, cfg, item] of [['storeupdate', {}, 'PDF Notes'], ['storeupdatechat', { preset: 'chat' }, 'Future PDF']]) await scenario(key, `Tangu submits a Store details update${cfg.preset ? ' (chat preset)' : ''}`, async () => {
+    const cloud = process.env.TANGU_LIVE_CLOUD_URL;
+    if (!cloud) return { ok: false, detail: '要 TANGU_LIVE_CLOUD_URL 指向 server scripts/marketplace-fixture.ts、TANGU_LIVE_CLOUD_TOKEN = owner 的假 JWT' };
+    const summary = `${item} 简介 ${Date.now().toString(36)}`;
+    const ev = await run(`live-${key}-${Date.now()}`, `我在商店里有一个叫「${item}」的投稿，帮我把它的简介改成「${summary}」，然后提交这次商店信息更新。`, 300000, cfg, 'desktop/2.13.7');
+    const names = ev.toolCalls;
+    const ap = ev.approvalList.find((a) => a.name === 'store_submit_update');
+    const officialText = !!ap && /review/i.test(ap.preview) && !ap.preview.trimStart().startsWith('{'); // 插件自写的审批说明,不是参数 JSON
+    const always = ap?.reason === 'always';
+    const submitted = ev.toolResults.some((r) => r.name === 'store_submit_update' && !r.isError);
+    const mine = await fetch(`${cloud}/api/market/mine`, { headers: { authorization: `Bearer ${TOKEN}` } }).then((r) => r.json()).catch(() => ({ items: [] }));
+    const row = (mine.items || []).find((i) => i.name === item);
+    const staged = row?.pendingUpdate?.kind === 'info' && row.pendingUpdate.summary === summary;
+    const ok = !ev.error && ev.done && names.indexOf('store_check_update') >= 0 && names.indexOf('store_check_update') < names.indexOf('store_submit_update') && officialText && always && submitted && staged;
+    writeFileSync(join(OUT, `${key}-evidence.json`), JSON.stringify({ ev, approval: ap, item: row }, null, 2));
+    return { ok, detail: `calls=${names.join('>')}; approval always=${always} officialText=${officialText}; submitted=${submitted}; staged=${staged}`, output: `${ev.content}\n\n[approval preview]\n${ap?.preview || '(none)'}`, toolCalls: ev.toolCalls, ttftMs: ttft(ev), tokens: tokensOf(ev) };
+  });
+
   for (const [key, cfg] of [['marketplace', {}], ['marketplacechat', { preset: 'chat' }]]) await scenario(key, `Forsion marketplace native plugin cards${cfg.preset ? ' (chat preset)' : ''}`, async () => {
     const sessionId = `live-${key}-${Date.now()}`;
     const ev = await run(sessionId, '我想在 Forsion 里整理 PDF 阅读笔记，请帮我在商店找合适的插件，推荐两个候选，并说明 Forsion 版本要求。我会自己决定是否安装。', 240000, cfg, 'desktop/2.13.4', undefined, undefined, undefined, { clientCapabilities: ['marketplace-cards.v1'] });
@@ -2657,6 +2687,9 @@ try {
     const anchors = anchorsOk(ev);
     return { ok: !ev.error && ev.toolCalls.length > 0 && hit && anchors, detail: ev.error || `工具 ${ev.toolCalls.join(',') || '无'};标记${hit ? '命中' : '未命中'};done 锚点${anchors ? '对齐' : `不对齐(${JSON.stringify(ev.toolOffsets)})`}${ev.approvals ? `;代批 ${ev.approvals}${ev.approveError ? '(失败:' + ev.approveError + ')' : ''}` : ''}`, output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
   });
+
+  await scenario('taskoutcomes', 'taskoutcomes actual artifacts, rejected approvals and repeat delivery', () =>
+    taskOutcomesLive({ workspace, out: OUT, run, model: MODEL, tokensOf }));
 
   await scenario('cmdreads', 'cmdreads Windows 只读组合免审批,混入写入仍要批', async () => {
     if (process.platform !== 'win32') return { skipped: true, detail: 'Windows-only cmd.exe execution' };

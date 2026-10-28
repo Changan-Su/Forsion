@@ -1479,7 +1479,7 @@ let engineOverlayInit: Promise<void> | null = null
 function initEngineOverlay(): Promise<void> {
   return (engineOverlayInit ??= (async () => {
     if (!app.isPackaged || !PRODUCT.agentBackend) return
-    engineOverlay = await setupEngineOverlay({ bundledRoot: join(process.resourcesPath, 'tangu-server'), forsionHome: forsionHomeDir(), log: (m) => console.log(m) })
+    engineOverlay = await setupEngineOverlay({ bundledRoot: join(process.resourcesPath, 'tangu-server'), forsionHome: forsionHomeDir(), desktopVersion: app.getVersion(), log: (m) => console.log(m) })
     if (engineOverlay) backend.setEngineOverlay(engineOverlay.control)
   })().catch((e) => console.warn('[engine-updates] 初始化失败(忽略,引擎照常跑自带的):', (e as Error)?.message)))
 }
@@ -2624,7 +2624,7 @@ app.whenReady().then(async () => {
         !PRODUCT.agentBackend ? undefined
           : engine
             ? checkEngineUpdate({
-                engineRoot: engine.root, bundledRoot: engine.bundledRoot, api: engine.api, registries, fetch: registryFetch,
+                engineRoot: engine.root, bundledRoot: engine.bundledRoot, api: engine.api, desktopVersion: app.getVersion(), registries, fetch: registryFetch,
                 runningVersion: backend.engineOverlayVersion(), onStatus,
               })
             : onStatus({ id: ENGINE_UPDATE_ID, packageName: ENGINE_PACKAGE, phase: 'current' }),

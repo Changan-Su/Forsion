@@ -3,6 +3,8 @@
 
 import { promises as fs, lstatSync } from 'node:fs'
 import path from 'node:path'
+import { createHash, randomUUID } from 'node:crypto'
+import { withTrashLock } from './trashLock'
 import type { CompilerIO } from '@amadeus-shared/compiler'
 import { isDrawingPath } from '@amadeus-shared/excalidraw/format'
 import { attachmentPaths } from './attachmentPaths'
@@ -17,13 +19,18 @@ export interface VaultManagerHost {
 }
 
 /** 自写账本里的一笔。对象本身就是凭据:同一路径每写一次换一个。 */
-export type SelfWrite = { readonly content: string }
+export type SelfWrite = { readonly fingerprint: string; readonly generation: number }
+const fingerprint = (text: string): string => createHash('sha256').update(text).digest('hex')
+// A bounded cache: evicted echoes may trigger a harmless reread, never hide an edit.
+const MAX_SELF_WRITES = 2048
+const trashTransactions = new Map<string, Promise<unknown>>()
 
 export class VaultManager {
   constructor(private readonly host: VaultManagerHost = {}) {}
   private root: string | null = null
   private counter = 0
-  /** absolutePath -> last content WE wrote, used to suppress echo events in the watcher.
+  private rootGeneration = 0
+  /** absolutePath -> fingerprint of the last content WE wrote, used to suppress echo events in the watcher.
    *  每次写都换一个新对象:监听器拿对象本身当「读盘前是哪一笔账」的凭据(见 wasSelfWrite)。 */
   private lastWritten = new Map<string, SelfWrite>()
   /** 插件声明的文件类型扩展名(小写;经 listPlugins → setPluginFileExtensions 注入)。这些 .md 文件
@@ -81,13 +88,14 @@ export class VaultManager {
   }
 
   setRoot(p: string): void {
+    if (this.root !== p) { this.rootGeneration++; this.lastWritten.clear() }
     this.root = p
   }
 
   async openDialog(): Promise<string | null> {
     const selected = await this.host.openDirectory?.()
     if (!selected) return null
-    this.root = selected
+    this.setRoot(selected)
     return this.root
   }
 
@@ -196,9 +204,23 @@ export class VaultManager {
    *  多报只是让订阅方多重读一遍;不报,则可能漏掉这段时间里别人那次改动的唯一通知(chokidar 会丢掉 50ms 内的后续事件)。 */
   wasSelfWrite(abs: string, content: string, seen: SelfWrite | undefined): boolean {
     const entry = this.lastWritten.get(abs)
-    if (entry?.content === content) return true
+    if (entry?.generation === this.rootGeneration && entry.fingerprint === fingerprint(content)) return true
     if (entry && entry === seen) this.lastWritten.delete(abs)
     return false
+  }
+
+  private rememberWrite(abs: string, text: string, generation: number): void {
+    if (generation !== this.rootGeneration) return
+    this.lastWritten.delete(abs)
+    this.lastWritten.set(abs, { fingerprint: fingerprint(text), generation })
+    while (this.lastWritten.size > MAX_SELF_WRITES) this.lastWritten.delete(this.lastWritten.keys().next().value!)
+  }
+
+  private forgetTree(abs: string): void {
+    for (const key of this.lastWritten.keys()) {
+      const rel = path.relative(abs, key)
+      if (!rel || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel))) this.lastWritten.delete(key)
+    }
   }
 
   absPath(pagePath: string): string {
@@ -206,6 +228,7 @@ export class VaultManager {
   }
 
   private async atomicWrite(abs: string, data: string): Promise<void> {
+    const generation = this.rootGeneration
     // 仪器(2026-09-06):凭空出现的文件(本地库里的 `<云名>/X.md`、改名后复活的旧名空白页)全是
     // 应用自己写出来的 0 字节/骨架文件,但活动日志只记 note.create/note.edit,看不见「谁在往一个不存在
     // 的路径写」。这里对**新建**(写前不存在)记一条 file.create f=… b=字节数,下次不用再推演世界。
@@ -214,7 +237,7 @@ export class VaultManager {
     const tmp = `${abs}.tmp-${process.pid}-${Date.now()}-${this.counter++}`
     await fs.writeFile(tmp, data, 'utf8')
     await renameAtomic(tmp, abs)
-    this.lastWritten.set(abs, { content: data })
+    this.rememberWrite(abs, data, generation)
     if (!existed && this.root) this.host.logActivity?.('file.create', { f: path.relative(this.root, abs), b: Buffer.byteLength(data) })
     this.emitMutate(abs, 'write')
   }
@@ -223,10 +246,11 @@ export class VaultManager {
    *  `wx` 独占创建由内核保证原子 —— 同名的两发(两个窗口 / 两个进程)只有一个建得成,另一个拿到 EEXIST;
    *  「先查在不在、再写」那种两步做法在两步之间会被别人抢先,后写的整份盖掉先写的。 */
   async createTextFile(rel: string, text: string): Promise<void> {
+    const generation = this.rootGeneration
     const abs = this.resolveInVault(rel)
     await fs.mkdir(path.dirname(abs), { recursive: true })
     await fs.writeFile(abs, text, { encoding: 'utf8', flag: 'wx' })
-    this.lastWritten.set(abs, { content: text })
+    this.rememberWrite(abs, text, generation)
     if (this.root) this.host.logActivity?.('file.create', { f: path.relative(this.root, abs), b: Buffer.byteLength(text) })
     this.emitMutate(abs, 'write')
   }
@@ -288,12 +312,24 @@ export class VaultManager {
     const absDir = this.resolveInVault(destDirRel || '.')
     await fs.mkdir(absDir, { recursive: true })
 
-    const base = await this.uniqueName(absDir, safeName)
-    const { fileVaultRel, pageRel } = attachmentPaths(pagePath, base, opts)
-    const abs = this.resolveInVault(fileVaultRel) // 越界钳制
-    await fs.writeFile(abs, bytes)
-    this.emitMutate(abs, 'write')
-    return { pageRel, base }
+    for (;;) {
+      const base = await this.uniqueName(absDir, safeName)
+      const { pageRel } = attachmentPaths(pagePath, base, opts)
+      const abs = path.join(absDir, base)
+      let handle: Awaited<ReturnType<typeof fs.open>>
+      try { handle = await fs.open(abs, 'wx') }
+      catch (error: any) { if (error?.code === 'EEXIST') continue; throw error }
+      try {
+        await handle.writeFile(bytes)
+        await handle.close()
+      } catch (error) {
+        await handle.close().catch(() => {})
+        await fs.unlink(abs).catch(() => {}) // Only remove the file exclusively created by this call.
+        throw error
+      }
+      this.emitMutate(abs, 'write')
+      return { pageRel, base }
+    }
   }
 
   /** Resolve an attachment ref (page-relative path OR bare basename) to an absolute path, vault-clamped. */
@@ -307,7 +343,10 @@ export class VaultManager {
     // mac/linux 上 '\' 是合法文件名字符,不当分隔符。
     const looksLikePath = r.includes('/') || (process.platform === 'win32' && r.includes('\\'))
     if (looksLikePath) {
-      const pageDirAbs = path.resolve(root, path.dirname(pagePath))
+      // Standalone views and CAS rereads pass the resolved path twice. This is
+      // an exact vault identity, even when A/A/file also happens to exist.
+      const pageDirAbs = pagePath.replace(/\\/g, '/') === r.replace(/\\/g, '/')
+        ? root : path.resolve(root, path.dirname(pagePath))
       abs = path.resolve(pageDirAbs, safeDecode(r))
       // 页相对解析落空 → 回退按 vault 根解析:dbAggregateStore/独立 db 视图传的是完整 vault 相对路径
       // (pagePath=dbPath 时页相对会双拼目录,子文件夹 .db 曾因此静默 missing)。
@@ -447,7 +486,7 @@ export class VaultManager {
     const finishMove = this.onBeforeMove?.(srcRel, dstRel)
     try {
     await fs.rename(srcAbs, dstAbs)
-    this.lastWritten.delete(srcAbs)
+    this.forgetTree(srcAbs)
     if (this.onMove && this.root) {
       const from = path.relative(this.root, srcAbs)
       const to = path.relative(this.root, dstAbs)
@@ -471,12 +510,29 @@ export class VaultManager {
     const abs = this.resolveInVault(rel)
     if (abs === this.requireRoot()) throw new Error('Refusing to remove the vault root')
     await fs.rm(abs, { recursive: true, force: true })
-    this.lastWritten.delete(abs)
+    this.forgetTree(abs)
     this.emitMutate(abs, 'remove')
   }
 
   // ── 回收站(.trash):删除默认可恢复。点开头目录被扫描/索引天然跳过 → 树/搜索/链接全免疫。
   //    布局:扁平存放(撞名加 " (N)")+ .meta.json 记原相对路径与删除时间,恢复按 meta 回原位。 ──
+
+  /** All trash operations share a vault transaction, including independent hosts.
+   * The lock lives outside .trash so emptyTrash cannot delete a held lock. */
+  private trashTransaction<T>(fn: () => Promise<T>): Promise<T> {
+    const root = this.requireRoot()
+    return this.structural(async () => {
+      const key = await fs.realpath(root)
+      const previous = trashTransactions.get(key) ?? Promise.resolve()
+      const run = previous.catch(() => {}).then(() => withTrashLock(key, async () => {
+        if (this.root !== root) throw new Error('Vault changed before trash operation')
+        return fn()
+      }))
+      trashTransactions.set(key, run)
+      try { return await run }
+      finally { if (trashTransactions.get(key) === run) trashTransactions.delete(key) }
+    })
+  }
 
   private trashDir(): string {
     return this.resolveInVault('.trash')
@@ -494,14 +550,22 @@ export class VaultManager {
     try {
       const raw = JSON.parse(await fs.readFile(path.join(this.trashDir(), '.meta.json'), 'utf8')) as unknown
       return raw && typeof raw === 'object' ? (raw as Record<string, { original: string; deletedAt: number }>) : {}
-    } catch {
-      return {}
+    } catch (error: any) {
+      if (error?.code === 'ENOENT') return {}
+      throw error // Corrupt/unreadable metadata must never be replaced with an empty index.
     }
   }
 
   private async writeTrashMeta(meta: Record<string, { original: string; deletedAt: number }>): Promise<void> {
     await fs.mkdir(this.trashDir(), { recursive: true })
-    await fs.writeFile(path.join(this.trashDir(), '.meta.json'), `${JSON.stringify(meta, null, 2)}\n`)
+    const dest = path.join(this.trashDir(), '.meta.json')
+    const temp = `${dest}.${randomUUID()}.tmp`
+    try {
+      const handle = await fs.open(temp, 'wx')
+      try { await handle.writeFile(`${JSON.stringify(meta, null, 2)}\n`); await handle.sync() }
+      finally { await handle.close() }
+      await renameAtomic(temp, dest)
+    } finally { await fs.unlink(temp).catch(() => {}) }
   }
 
   /** 撞名找空位:在扩展名前追加 " (N)"。probe 返回 true = 已占用。 */
@@ -515,30 +579,28 @@ export class VaultManager {
   }
 
   /** 移入回收站(文件或文件夹)。 */
-  trashEntry(rel: string): Promise<void> { return this.structural(() => this.performTrashEntry(rel)) }
+  trashEntry(rel: string): Promise<void> { return this.trashTransaction(() => this.performTrashEntry(rel)) }
 
   private async performTrashEntry(rel: string): Promise<void> {
     const srcAbs = this.resolveInVault(rel)
     if (srcAbs === this.requireRoot()) throw new Error('Refusing to trash the vault root')
     await fs.mkdir(this.trashDir(), { recursive: true })
-    const exists = async (n: string): Promise<boolean> => {
-      try {
-        await fs.access(this.trashItemAbs(n))
-        return true
-      } catch {
-        return false
-      }
-    }
-    const name = await this.freeName(path.basename(rel), exists)
-    await fs.rename(srcAbs, this.trashItemAbs(name))
-    this.lastWritten.delete(srcAbs)
-    this.emitMutate(srcAbs, 'remove')
+    const name = randomUUID()
     const meta = await this.readTrashMeta()
+    // Write-ahead identity: even termination immediately after rename preserves
+    // the original path. A prepared record without a file is harmless/invisible.
     meta[name] = { original: rel.replace(/\\/g, '/'), deletedAt: Date.now() }
     await this.writeTrashMeta(meta)
+    await fs.rename(srcAbs, this.trashItemAbs(name))
+    this.forgetTree(srcAbs)
+    this.emitMutate(srcAbs, 'remove')
   }
 
-  async listTrash(): Promise<Array<{ name: string; original: string; deletedAt: number; dir: boolean }>> {
+  listTrash(): Promise<Array<{ name: string; original: string; deletedAt: number; dir: boolean }>> {
+    return this.trashTransaction(() => this.performListTrash())
+  }
+
+  private async performListTrash(): Promise<Array<{ name: string; original: string; deletedAt: number; dir: boolean }>> {
     let entries
     try {
       entries = await fs.readdir(this.trashDir(), { withFileTypes: true })
@@ -548,7 +610,7 @@ export class VaultManager {
     const meta = await this.readTrashMeta()
     const out: Array<{ name: string; original: string; deletedAt: number; dir: boolean }> = []
     for (const e of entries) {
-      if (e.name === '.meta.json') continue
+      if (e.name.startsWith('.meta.json')) continue
       // 无 meta 的孤儿(外部塞进来的)也可见可恢复,原位视为 vault 根同名
       out.push({ name: e.name, original: meta[e.name]?.original ?? e.name, deletedAt: meta[e.name]?.deletedAt ?? 0, dir: e.isDirectory() })
     }
@@ -557,7 +619,7 @@ export class VaultManager {
   }
 
   /** 恢复:回 meta 记录的原位(父目录补建);原位被占在文件名后加 " (N)"。返回恢复后的相对路径。 */
-  restoreTrash(name: string): Promise<string> { return this.structural(() => this.performRestoreTrash(name)) }
+  restoreTrash(name: string): Promise<string> { return this.trashTransaction(() => this.performRestoreTrash(name)) }
 
   private async performRestoreTrash(name: string): Promise<string> {
     const root = this.requireRoot()
@@ -585,7 +647,9 @@ export class VaultManager {
   }
 
   /** 彻底删除单条。 */
-  async deleteTrashEntry(name: string): Promise<void> {
+  deleteTrashEntry(name: string): Promise<void> { return this.trashTransaction(() => this.performDeleteTrashEntry(name)) }
+
+  private async performDeleteTrashEntry(name: string): Promise<void> {
     await fs.rm(this.trashItemAbs(name), { recursive: true, force: true })
     const meta = await this.readTrashMeta()
     if (meta[name]) {
@@ -595,8 +659,8 @@ export class VaultManager {
   }
 
   /** 清空回收站。 */
-  async emptyTrash(): Promise<void> {
-    await fs.rm(this.trashDir(), { recursive: true, force: true })
+  emptyTrash(): Promise<void> {
+    return this.trashTransaction(() => fs.rm(this.trashDir(), { recursive: true, force: true }))
   }
 
   /** A CompilerIO bound to a page's folder (paths are relative to that folder). */
@@ -646,6 +710,7 @@ export class VaultManager {
       removeDir: async (rel) => {
         try {
           await fs.rm(within(rel), { recursive: true, force: true })
+          this.forgetTree(within(rel))
           this.emitMutate(within(rel), 'remove')
         } catch {
           /* already gone */

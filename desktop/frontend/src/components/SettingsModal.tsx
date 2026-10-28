@@ -287,6 +287,9 @@ export type Tab = StaticTab | `plugin:${string}` | `fplugin:${string}`
 export type SettingsTarget = Tab | 'wechat' | `${StaticTab}/${string}`
 
 const DEV_MODE_KEY = 'forsion_tangu_dev_mode'
+/** 摘要栏卡片立体感(开发者选项)。读的一方是 Tangu 的 views/chat2/summaryPrefs,宿主不 import 它(Tangu 边界):
+ *  写同一个 key,再在本窗口派一次 storage 事件 —— 设置开在独立窗口时浏览器自己给主窗派,和主窗同窗时靠这一次。 */
+const SUMMARY_ELEVATION_KEY = 'forsion.summaryElevation'
 /** 「Forsion 云端 → 账号」:Extend 渲染半身自绘的子页(registerSettingsView category 'forsion',id 'account')。 */
 const ACCOUNT_SUB = 'fx:forsion-extend:account'
 /** 引擎插件「电脑操作」的 id:它的设置页是固定的一级页 'computer-use'。 */
@@ -473,6 +476,15 @@ export const SettingsModal: React.FC<{
     setFonts((f) => ({ ...f, [slot]: v }))
     writeFont(slot, v)
     applyUiFonts()
+  }
+  // 开发者「摘要栏卡片立体感」(见 SUMMARY_ELEVATION_KEY)。
+  const [summaryElevation, setSummaryElevationState] = useState<string>(() => {
+    try { const v = localStorage.getItem(SUMMARY_ELEVATION_KEY); return v === 'float' || v === 'flat' ? v : 'half' } catch { return 'half' }
+  })
+  const setSummaryElevation = (v: string) => {
+    setSummaryElevationState(v)
+    try { localStorage.setItem(SUMMARY_ELEVATION_KEY, v) } catch { /* 存不进就不同步 */ }
+    window.dispatchEvent(new StorageEvent('storage', { key: SUMMARY_ELEVATION_KEY }))
   }
   // 开发者「移动端 UI 预览命令」开关(localStorage;bootstrapEngine 启动时据此注册 switch-ui-mode 命令)。
   const [mobileUiCmd, setMobileUiCmd] = useState<boolean>(() => {
@@ -3472,6 +3484,14 @@ export const SettingsModal: React.FC<{
                             setMobileUiCommand(on)   // 设置画在主窗里的形态(web/mobile)
                             requestDevCommandsSync() // 设置在浮窗里的形态:命令表各窗一份,得让主窗重算
                       }} />} />
+                    </div>
+                    <div className="field">
+                      <SettingsRow fit="wrap" label={t('settings.developer.summaryElevation')} description={t('settings.developer.summaryElevationHint')} control={
+                        <div className="seg" role="group" aria-label={t('settings.developer.summaryElevation')}>
+                          {([['float', t('settings.developer.summaryElevationFloat')], ['half', t('settings.developer.summaryElevationHalf')], ['flat', t('settings.developer.summaryElevationFlat')]] as const).map(([v, label]) => (
+                            <button key={v} type="button" aria-pressed={summaryElevation === v} className={summaryElevation === v ? 'active' : ''} onClick={() => setSummaryElevation(v)}>{label}</button>
+                          ))}
+                        </div>} />
                     </div>
                     <div className="field">
                       <label>{t('settings.developer.testUpdateLabel')}</label>

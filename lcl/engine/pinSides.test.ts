@@ -28,6 +28,45 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals() })
 
 describe('pinSides / repinSides / captureSideWidths(抽风集成:R1 + R3)', () => {
+  it.each(['link', 'command'] as const)('%s: Main 分屏不重分配侧栏,也不把系统宽度记成用户偏好', (route) => {
+    type Constraints = { minimumWidth?: number; maximumWidth?: number }
+    const mk = (id: string, loc: string, width: number) => ({
+      id, title: id, params: { __loc: loc, __type: 'probe' }, api: {},
+      group: { id, element: { getBoundingClientRect: () => ({ left: loc === 'main' ? 345 : 0, top: 0, bottom: 900, width }) },
+        api: { width, location: { type: 'grid' }, constraints: {} as Constraints,
+          setConstraints(c: Constraints) { this.constraints = c } } },
+    })
+    const panels = [mk('left', 'left', 345), mk('note', 'main', 955), mk('right', 'right', 300)]
+    const api = { width: 1600, panels, activePanel: panels[1], toJSON: () => ({}),
+      getPanel: (id: string) => panels.find(p => p.id === id),
+      addPanel(options: { id: string; params: Record<string, string> }) {
+        // Dockview's default Sizing.Distribute includes the sidebars. Its layout event
+        // then reaches captureSideWidths, which used to persist this redistribution.
+        for (const p of panels) if (p.group.api.constraints.minimumWidth !== p.group.api.constraints.maximumWidth
+          || p.group.api.constraints.minimumWidth == null) p.group.api.width = 400
+        const added = mk(options.id, 'main', 400)
+        panels.push(added)
+        captureSideWidths(api as unknown as DockviewApi)
+        return added
+      },
+    }
+    const ws = useWorkspace.getState()
+    ws.setApi(api as unknown as DockviewApi)
+    ws.setSideProfile('split-probe', {}, {})
+    useWorkspace.setState({ sideWidths: { left: 345, right: null, bottom: null } })
+    if (route === 'link') ws.openView('probe', {}, 'main', { split: true })
+    else ws.splitActive('right')
+    expect(panels).toHaveLength(4)
+    expect(panels[0].group.api.width).toBe(345)
+    expect(panels[2].group.api.width).toBe(300)
+    expect(localStorage.getItem('lcl.sideWidth2.split-probe')).toBeNull()
+    vi.runAllTimers()
+    expect(panels[0].group.api.constraints.minimumWidth).toBe(0)
+    panels[0].group.api.width = 410 // after settling, a real user drag is still captured
+    captureSideWidths(api as unknown as DockviewApi)
+    expect(JSON.parse(localStorage.getItem('lcl.sideWidth2.split-probe')!).left).toBe(410)
+  })
+
   it('侧栏宽度记忆缺省两侧全开(resizableSides 变 opt-out)', () => {
     // 2026-08-14 用户实报「手动调宽后一折一开就打回原形」:此前只有声明过 resizableSides 的那侧
     // 记宽,其余被 pinSides 钉回黄金分割。缺省翻成 free 之后,显式 false 才是钉宽档。
