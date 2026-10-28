@@ -237,3 +237,6 @@ export const Markdown: React.FC<{ content: string; anchorPrefix?: string; /** sh
     )
   },
 )
+
+/** 代码块与 run 上下文也给 Intelligent UI 的 markdown 用(IntelligentUi.tsx RichText),免得那边再写一份。 */
+export { CodeBlock, RunContext }

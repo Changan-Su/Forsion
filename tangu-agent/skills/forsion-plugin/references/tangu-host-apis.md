@@ -219,6 +219,36 @@ const tr = ctx.tangu?.translate
 - 旧宿主没有这个方法,先特性探测再退回 `complete`(上面的写法);不要为它抬 `minAppVersion`。
 - 额度与用量按所用模型照常扣、记;插件被停用时在飞的请求被中止并 reject。
 
+### 行内补全:ctx.tangu.fim(2026-10-26 起)
+
+边打字边给灰字建议(ghost text)这类**按光标补中间**的活用 `fim`:光标前后的正文原样交给**补全模型**(FIM,fill-in-the-middle),
+没有提示词、没有指令,比 `complete` 快、便宜,也不会回一段「好的,以下是……」。模型取用户在「设置 → 模型 → 补全」选的那个,
+没选就用账号里第一个补全模型:
+
+```js
+let fimOff = false                                     // 本次会话里 fim 不可用过一次就别再试
+async function suggest(before, after, signal) {
+  if (ctx.tangu?.fim && !fimOff) {
+    try {
+      return (await ctx.tangu.fim({ before, after, maxTokens: 64, stop: ['\n\n'], signal })).text   // 模型原文,别 trim
+    } catch (e) {
+      if (e?.message !== 'fim_unavailable') throw e
+      fimOff = true
+    }
+  }
+  return (await ctx.tangu.complete({ prompt: 'Continue the text at the cursor. Output only the continuation.', before, after, signal })).text
+}
+```
+
+- `before` = 光标前的正文(引擎只留最后 16k 字符),`after` = 光标后的(只留前 8k);至少一个非空。空白、缩进、换行都是补全的依据,**别 trim**。
+- 返回 `{ text, model }`:`text` 是模型原文(不 trim、不剥围栏),`model` = 实际用的 `{ id, name }`。`modelId` 可点名本次用哪个(不改槽)。
+- `maxTokens` 夹到 1..512(缺省 64);`stop` 最多 4 个、每个 ≤32 字符。行内补全一般 32–64 就够。
+- 账号里没有补全模型、选的模型做不了 FIM、引擎 / 云端太老 → reject `Error('fim_unavailable')`。这时退回 `complete`,并**记住整场会话别再试**
+- 云端目录这次没拉到 → reject `Error('fim_catalog_unreachable')`:临时错误,**别**据此落回 complete,下次照常试 `fim`。
+  (上面的 `fimOff`),否则每敲一个键都白打一次。
+- 和 `complete` / `translate` 合计每个用户同时最多 3 个请求(超出 429):每次按键先 `abort` 上一次的 `signal`,停顿一会儿(200–400ms)再发。
+- 额度与用量按所用模型照常扣、记;插件被停用时在飞的请求被中止并 reject。旧宿主 / 非 Tangu 宿主没有:`ctx.tangu?.fim`,不要为它抬 `minAppVersion`。
+
 ## Agent Desk 伴随面:ctx.desk(2026-09-19 起)
 
 往 Tangu 聊天右侧的 **Agent Desk**(右栏那张卡片 + 展开后的侧板)里挂一块自绘区域,典型用法是会跟着 agent 状态做反应的 3D 形象:

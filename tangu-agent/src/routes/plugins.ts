@@ -38,6 +38,7 @@ function pluginView(m: ReturnType<typeof listPluginMetas>[number], st: PluginSta
     ...(st.lastError ? { lastError: st.lastError } : {}),
     ...(st.settling ? { settling: true } : {}),
     ...(st.tools ? { tools: st.tools } : {}),
+    ...(st.official ? { official: true } : {}),
   };
 }
 

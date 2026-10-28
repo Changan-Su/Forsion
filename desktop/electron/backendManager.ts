@@ -181,6 +181,19 @@ export class BackendManager {
     return () => this.listeners.delete(cb)
   }
 
+  private exitListeners = new Set<(exit: { code: number | null; signal: string | null; uptimeMs: number }) => void>()
+  /** 引擎进程**意外**退出(不是 stop() 收尾)时回调一次,带退出码 / 信号与这条进程活了多久。遥测的 engine crash 用(telemetryHost.ts)。
+   *  onStatus 替不了它:就绪后崩溃先报 starting(排重启),连续失败三次才到 crashed。 */
+  onUnexpectedExit(cb: (exit: { code: number | null; signal: string | null; uptimeMs: number }) => void): () => void {
+    this.exitListeners.add(cb)
+    return () => this.exitListeners.delete(cb)
+  }
+
+  /** 正在跑的引擎自己在 /health 里报的版本号(还没就绪过 / 没报 = null)。 */
+  engineVersion(): string | null {
+    return this.healthVersion
+  }
+
   /** dev:dist 入口 mtime 晚于子进程启动 → 包根重新 build 过,跑的是旧代码。 */
   private isDistStale(): boolean {
     if (app.isPackaged || !this.spawnedEntry || this.state !== 'ready') return false
@@ -315,15 +328,15 @@ export class BackendManager {
     }
     const s = this.settings!
     this.setState('starting', null)
-    // 经启动器拉起时记下它会挑中哪一版(同一个判定函数),起不来好知道该停用谁。
-    let selected: string | null = null
-    try { selected = launch.length > 1 ? this.overlay?.active() ?? null : null } catch { /* 当作没有 */ }
-    if (selected !== this.overlayVersion) this.overlayExits = 0 // 意外退出的次数是按版本记的
-    this.overlayVersion = selected
-
     for (let attempt = 0; attempt < 3; attempt++) {
       this.port = await freePort()
       if (gen !== this.gen) return
+      // 经启动器拉起时记下它会挑中哪一版(同一个判定函数),起不来好知道该停用谁。每次尝试都重取:更新器可能在两次尝试之间
+      // 落位了新版(首次启动的预取超时后还在后台下),只在开头取一次会把新版的失败记成自带那份的,停用不了它。
+      let selected: string | null = null
+      try { selected = launch.length > 1 ? this.overlay?.active() ?? null : null } catch { /* 当作没有 */ }
+      if (selected !== this.overlayVersion) this.overlayExits = 0 // 意外退出的次数是按版本记的
+      this.overlayVersion = selected
       const args = [
         ...launch,
         '--port', String(this.port),
@@ -496,6 +509,7 @@ export class BackendManager {
     }
     this.lastError = `后端退出(code=${code} signal=${signal})`
     this.pushLog(`[manager] ${this.lastError}`)
+    for (const cb of this.exitListeners) { try { cb({ code, signal, uptimeMs: Date.now() - this.spawnedAt }) } catch { /* 观察者出错不影响重启 */ } }
     // 还在 spawnOnce 的就绪等待里:它自己会换端口重试。这里再排一次重启 = 两条 spawn 链并行,
     // 后起的顶掉 this.child,先起的那个成了没人管的孤儿引擎(2.11.2 反馈日志里 5 行启动对 1 行退出就是它)。
     if (this.state === 'starting') return

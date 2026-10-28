@@ -289,7 +289,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
         timeout: 400,
         with: (el) => {
           const n = el.nextElementSibling as HTMLElement | null
-          return n && n.querySelector(':scope > .t2s-group-sessions') ? [n] : []
+          return n && n.querySelector(':scope > * > .t2s-group-sessions') ? [n] : [] // AnimatedCollapse 外层 > 里层 > 会话列表
         },
       })
     }

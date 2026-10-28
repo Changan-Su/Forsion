@@ -24,6 +24,10 @@ registerMessages({
   // 不写「在输入框上方」:紧挨着的指路行 / 计划卡 / 团队 work 行已经说了在哪答,这里再写一遍是重复
   'tool.waitingYou': { zh: '等你回复', en: 'Waiting for your reply' },
   'tool.verb.readComputerHistory': { zh: '读取电脑历史', en: 'Read computer history' },
+  'tool.verb.gitStatus': { zh: '查看 Git 状况', en: 'Checked Git status' },
+  'tool.verb.gitCommit': { zh: '提交', en: 'Committed' },
+  'tool.verb.gitPush': { zh: '推送', en: 'Pushed' },
+  'tool.verb.gitPull': { zh: '拉取', en: 'Pulled' },
   'tool.thought': { zh: '思考过程', en: 'Thought process' },
   'tool.thinkingNow': { zh: '思考中', en: 'Thinking' },
   'tool.thoughtSec': { zh: '思考 {n} 秒', en: 'Thought for {n}s' },
@@ -133,6 +137,15 @@ export function describeTool(ev: ToolEvent, pluginName?: (tool: string) => strin
       return { kind: 'search', verbKey: 'tool.verb.searched', target: String(a.query ?? ''), isFile: false }
     case 'web_fetch':
       return { kind: 'browse', verbKey: 'tool.verb.browsed', target: String(a.url ?? ''), isFile: false }
+    // 当前项目的 git(tangu-agent tools/builtin/git.ts):提交那行带信息首行,推送那行带「只推这一次」的远端名
+    case 'git_status':
+      return { kind: 'read', verbKey: 'tool.verb.gitStatus', target: '', isFile: false }
+    case 'git_commit':
+      return { kind: 'run', verbKey: 'tool.verb.gitCommit', target: String(a.message ?? '').split('\n')[0], isFile: false }
+    case 'git_push':
+      return { kind: 'run', verbKey: 'tool.verb.gitPush', target: typeof a.remote === 'string' ? a.remote : '', isFile: false }
+    case 'git_pull':
+      return { kind: 'run', verbKey: 'tool.verb.gitPull', target: '', isFile: false }
     case COMPUTER_HISTORY_TOOL:
       return { kind: 'read', verbKey: 'tool.verb.readComputerHistory', target: String(a.query ?? a.app ?? ''), isFile: false }
     default:

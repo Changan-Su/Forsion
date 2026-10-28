@@ -5,6 +5,10 @@
  * 认领只认「本插件捆绑包里的引擎插件此刻名下注册的工具」:名单来自引擎 /agent/plugins 每项的 tools
  * (引擎已剔掉和核心工具撞名的)。名单没拉到 / 拉失败一律不认(fail closed),那时照旧是通用工具记录。
  * 认的是工具名,不是事件里的来源字段 —— 历史消息由 tool_calls 行还原,没有来源;按名现查,重载后的历史照样有卡。
+ *
+ * 例外(网页卡片方案 A + D,10-28):CORE_TOOL_CARDS 里写死的官方插件可以给少数核心工具画卡,前提是它捆绑包里有一个
+ * 引擎插件此刻过了官方签名判定(引擎 /agent/plugins 的 official,判定见 tangu-agent plugins/official.ts)。
+ * 渲染器的 match(call) 再按参数收窄(forsion_account 只认 web_pages 那一节);返回 false / 抛错 = 不认。
  */
 import { useEffect, useMemo } from 'react'
 import { create } from 'zustand'
@@ -18,15 +22,29 @@ import { homeTarget } from '../../services/engine/targets'
 interface OwnedRenderer { pluginId: string; item: ToolResultRendererContribution }
 export interface ToolCardClaim { pluginId: string; item: ToolResultRendererContribution }
 
-/** toolName 归哪个渲染器:渲染器所属插件的 bundle.enginePlugins 里,有一个引擎插件此刻名下注册了它。注册序先到先得。 */
+/** 官方插件(桌面插件 id)→ 它可以画的核心工具。名单只在这里,插件加不了。 */
+export const CORE_TOOL_CARDS: Readonly<Record<string, readonly string[]>> = {
+  'forsion-extend': ['publish_web_page', 'forsion_account'],
+}
+
+/** toolName 归哪个渲染器:渲染器所属插件的 bundle.enginePlugins 里,有一个引擎插件此刻名下注册了它;或者是 CORE_TOOL_CARDS
+ *  放行的核心工具、且捆绑包里有官方引擎插件在跑。再过渲染器自己的 match。注册序先到先得。 */
 export function claimToolCard(
   renderers: readonly OwnedRenderer[],
   plugins: readonly Pick<AmadeusPlugin, 'id' | 'bundle'>[],
   engineTools: Readonly<Record<string, readonly string[]>>,
   toolName: string,
+  o: { official?: readonly string[]; args?: unknown } = {},
 ): OwnedRenderer | undefined {
-  return renderers.find((r) => r.item.tool === toolName
-    && (plugins.find((p) => p.id === r.pluginId)?.bundle?.enginePlugins ?? []).some((e) => engineTools[e]?.includes(toolName)))
+  return renderers.find((r) => {
+    if (r.item.tool !== toolName) return false
+    const engines = plugins.find((p) => p.id === r.pluginId)?.bundle?.enginePlugins ?? []
+    const owns = engines.some((e) => engineTools[e]?.includes(toolName))
+    const core = !owns && !!CORE_TOOL_CARDS[r.pluginId]?.includes(toolName) && engines.some((e) => o.official?.includes(e))
+    if (!owns && !core) return false
+    if (typeof r.item.match !== 'function') return true
+    try { return r.item.match({ tool: toolName, args: o.args }) === true } catch { return false }
+  })
 }
 
 /** 只有跑完且成功的调用画卡片;运行中、出错、挂起等审批的都留通用记录。历史里中断的调用也是 done,但没有结果 —— 不画。 */
@@ -34,7 +52,7 @@ export const cardEligible = (ev: ToolEvent): boolean => ev.done && !ev.isError &
 
 /** 引擎插件 id → 名下工具名。loaded 之前与拉失败时都是空表(不认领)。
  *  toolOwner:工具名 → 所属引擎插件的显示名(过程行把插件工具写成「插件名 · 工具」,走查续六 6.4)。 */
-export const useEngineTools = create<{ byEngine: Record<string, string[]>; toolOwner: Record<string, { name: string; nameEn?: string }>; loaded?: boolean }>(() => ({ byEngine: {}, toolOwner: {} }))
+export const useEngineTools = create<{ byEngine: Record<string, string[]>; official: string[]; toolOwner: Record<string, { name: string; nameEn?: string }>; loaded?: boolean }>(() => ({ byEngine: {}, official: [], toolOwner: {} }))
 
 let inflight: Promise<void> | null = null
 let again = false
@@ -44,20 +62,22 @@ export function refreshEngineTools(): Promise<void> {
   inflight = (async () => {
     // 拉不到(后端没起、请求失败)就清空:引擎重载后工具可能换了主人,留着旧表 = 让旧插件接着认领(Codex 评审)
     let byEngine: Record<string, string[]> = {}
+    let official: string[] = []
     const toolOwner: Record<string, { name: string; nameEn?: string }> = {}
     let loaded = false
     try {
       const cfg = await readTangu()?.waitBackend?.(15_000)
       if (cfg) {
-        const list = (await listPlugins(homeTarget())).filter((p) => p.enabled && p.active !== false && p.tools?.length)
-        byEngine = Object.fromEntries(list.map((p) => [p.id, p.tools!]))
-        for (const p of list) for (const tool of p.tools!) toolOwner[tool] = { name: p.name, nameEn: p.nameEn }
+        const list = (await listPlugins(homeTarget())).filter((p) => p.enabled && p.active !== false)
+        byEngine = Object.fromEntries(list.filter((p) => p.tools?.length).map((p) => [p.id, p.tools!]))
+        official = list.filter((p) => p.official === true).map((p) => p.id)
+        for (const p of list) for (const tool of p.tools ?? []) toolOwner[tool] = { name: p.name, nameEn: p.nameEn }
         loaded = true
       }
     } catch (e) {
       console.warn('[amadeus] 拉引擎插件名下工具失败', e)
     } finally {
-      useEngineTools.setState((s) => ({ byEngine, toolOwner, loaded: s.loaded || loaded }))
+      useEngineTools.setState((s) => ({ byEngine, official, toolOwner, loaded: s.loaded || loaded }))
       inflight = null
       if (again) { again = false; void refreshEngineTools() }
     }
@@ -84,9 +104,9 @@ function wire(): void {
   if (usePluginStore.getState().toolResultRenderers.length) void refreshEngineTools()
 }
 
-function cardOf(renderers: readonly OwnedRenderer[], plugins: readonly AmadeusPlugin[], byEngine: Record<string, string[]>, ev: ToolEvent): ToolCardClaim | undefined {
+function cardOf(renderers: readonly OwnedRenderer[], plugins: readonly AmadeusPlugin[], byEngine: Record<string, string[]>, official: readonly string[], ev: ToolEvent): ToolCardClaim | undefined {
   if (!cardEligible(ev)) return undefined
-  const hit = claimToolCard(renderers, plugins, byEngine, ev.name)
+  const hit = claimToolCard(renderers, plugins, byEngine, ev.name, { official, args: parseToolArgs(ev.arguments) })
   if (!hit && renderers.some((r) => r.item.tool === ev.name) && Date.now() - lastStaleKick > STALE_GAP_MS) {
     lastStaleKick = Date.now()
     void refreshEngineTools()
@@ -99,10 +119,11 @@ export function useToolCardOf(): (ev: ToolEvent) => ToolCardClaim | undefined {
   const renderers = usePluginStore((s) => s.toolResultRenderers)
   const plugins = usePluginStore((s) => s.plugins)
   const byEngine = useEngineTools((s) => s.byEngine)
+  const official = useEngineTools((s) => s.official)
   useEffect(wire, [])
   return useMemo(
-    () => (renderers.length ? (ev: ToolEvent) => cardOf(renderers, plugins, byEngine, ev) : () => undefined),
-    [renderers, plugins, byEngine],
+    () => (renderers.length ? (ev: ToolEvent) => cardOf(renderers, plugins, byEngine, official, ev) : () => undefined),
+    [renderers, plugins, byEngine, official],
   )
 }
 
@@ -118,7 +139,8 @@ export function kickToolOwners(): void {
 /** 非渲染期(工具结果到达时决定要不要直接进 Desk)。 */
 export function toolCardOf(ev: ToolEvent): ToolCardClaim | undefined {
   const s = usePluginStore.getState()
-  return s.toolResultRenderers.length ? cardOf(s.toolResultRenderers, s.plugins, useEngineTools.getState().byEngine, ev) : undefined
+  const e = useEngineTools.getState()
+  return s.toolResultRenderers.length ? cardOf(s.toolResultRenderers, s.plugins, e.byEngine, e.official, ev) : undefined
 }
 
 // 挪位置(对话 ↔ Desk)= 新位置重新 mount、旧位置先清理;视图状态按调用 id 存在这里交还。
@@ -149,5 +171,5 @@ export const __resetToolCards = (): void => {
   cardStates.clear()
   lastStaleKick = 0
   ownerKick = 0
-  useEngineTools.setState({ byEngine: {}, toolOwner: {}, loaded: false })
+  useEngineTools.setState({ byEngine: {}, official: [], toolOwner: {}, loaded: false })
 }

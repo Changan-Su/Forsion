@@ -282,6 +282,8 @@ const api = {
   codePreviewServePath: (filePath: string): Promise<{ url: string }> => ipcRenderer.invoke('codePreview:servePath', filePath),
   /** 无本机路径的 HTML(云沙箱/对话内联):把文本挂到令牌根,同样拿到真实源。 */
   codePreviewServeHtml: (html: string): Promise<{ url: string }> => ipcRenderer.invoke('codePreview:serveHtml', html),
+  /** 网页卡片的缩略图:主进程离屏截一张 http(s) 页面(见 electron/pageThumb.ts);拍不到 → null。 */
+  pageThumb: (url: string, version?: string): Promise<{ dataUrl: string; title: string } | null> => ipcRenderer.invoke('pageThumb:capture', url, version),
   /** Coding Space 项目根 ~/Forsion/Project(确保存在)。 */
   codeProjectsRoot: (): Promise<string> => ipcRenderer.invoke('codeProjects:root'),
   codeStudioWatch: (root: string | null) => ipcRenderer.invoke('codeStudio:watch', root),
@@ -604,6 +606,11 @@ const api = {
     typeof channel === 'string' && cloudPresent().has(channel)
       ? ipcRenderer.invoke(channel, ...args)
       : Promise.reject(new Error(`not a Forsion Extend channel: ${String(channel)}`)),
+  /** 帮助改进 Forsion(2.13.8 起):渲染层的崩溃 / 功能使用 / 长任务计数报给主进程,主进程整形后经 CloudHost.telemetry 转给 Extend。
+   *  只进不出、没有读接口。键在不在 = Extend 有没有注册 telemetry:get(见下方 CLOUD_KEYS):没有 Extend 遥测就没人收,
+   *  渲染层也拿它做同步判断(引导第 7 步「帮助改进」在本机有没有)。 */
+  telemetryReport: (kind: 'crash' | 'feature' | 'longtasks', props: Record<string, unknown>): void =>
+    ipcRenderer.send('host-telemetry:report', kind, props),
 
   // ── 屏幕共享 ────────────────────────────────────────────────────────────────
   /** 可共享的屏幕/窗口(带 dataURL 缩略图)。选源 UI 由调用方自己画 —— 宿主不提供选择器。 */
@@ -713,6 +720,8 @@ const CLOUD_KEYS: Record<string, string> = {
   connectListingApply: 'connect:listingApply', connectListingWithdraw: 'connect:listingWithdraw', connectStore: 'connect:store',
   // 设备名册(0.6 起):没有 Extend 就不列账号名下的其他设备;unitHostStatus / 局域网探针 / 已配对设备 / P2P 留宿主,局域网直连照常。
   unitsList: 'units:list', unitsUpdate: 'units:update', unitsRemove: 'units:remove', unitsOpenInBrowser: 'units:openInBrowser',
+  // 帮助改进(2.13.8 起):通道是宿主自己的 host-telemetry:report,但只在 Extend 接得住(注册了 telemetry:get)时才留
+  telemetryReport: 'telemetry:get',
 }
 for (const [k, channel] of Object.entries(CLOUD_KEYS)) if (!cloudPresent().has(channel)) delete (api as Record<string, unknown>)[k]
 if (!cloudPresent().size) delete (api as Record<string, unknown>).cloudInvoke

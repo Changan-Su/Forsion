@@ -83,6 +83,8 @@ export interface ToolContext {
   muse?: boolean;
   /** 本会话属于一个本机项目(agentLoop 按会话存档的 project_path 定;可信,模型给不了)。remember 据此露出「项目级」。 */
   projectScoped?: boolean;
+  /** 同上那个项目的 canonical 目录(git_* 工具只在这里动手,不认 cwd:运行目录可被别处改,而 Git 页 / 卡片 / 审批卡读的是项目)。 */
+  projectPath?: string;
   /** 无人值守 run 的异步审批档(仅引擎内部按 run 来源设定;delegate 子代理从父 ctx 继承,否则子代理越界会挂在同步审批上)。 */
   approvalDeferral?: 'queue' | 'agent';
 
@@ -275,6 +277,10 @@ export interface ToolCapabilities {
    *  给数据自带保留期 / 清除语义的工具(read_computer_history:7 天 + 用户清除)—— 落库副本会绕过它。
    *  出错结果照常落库(不含数据)。agentLoop 经 declaredPersistPlaceholder(name) 读,不走 ctx 门禁。 */
   persistPlaceholder?: string;
+  /** 审批卡文案(同步,收到的是本次调用解析后的参数)。**只对官方插件的工具生效**(plugins/official.ts):
+   *  其余工具(含第三方插件)一律忽略,卡上照旧是整份参数。返回值过同一道 previewText;抛错或不是字符串 → 退回整份参数。
+   *  内置工具有自己的预览分支,这里覆盖不了它们。 */
+  approvalPreview?: (args: any) => string;
 }
 
 export interface ToolImpl {
