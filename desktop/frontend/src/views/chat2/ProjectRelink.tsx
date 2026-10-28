@@ -56,21 +56,25 @@ const enabled = (): boolean => currentPlatform() === 'desktop' && !!window.tangu
 
 const useMissing = create<{ paths: ReadonlySet<string> }>(() => ({ paths: new Set() }))
 let inflight = false
+let again = false
 let wired = false
-/** 问一次引擎哪些项目不在原处。同时只发一个。 */
+/** 问一次引擎哪些项目不在原处。同时只发一个;在途时又要问 → 等它回来再问一次(不丢)。 */
 export function refreshMissingProjects(): void {
-  if (!enabled() || inflight) return
+  if (!enabled()) return
+  if (inflight) { again = true; return }
   inflight = true
   void getMissingProjects(homeTarget())
     .then((list) => useMissing.setState({ paths: new Set(list) }), () => { /* 老引擎 / 云端引擎没有这个端点:不标 */ })
-    .finally(() => { inflight = false })
+    .finally(() => { inflight = false; if (again) { again = false; refreshMissingProjects() } })
 }
-/** 不在原处的项目路径(= 左栏本地项目的分组键)。挂上时问一次(= 进 Tangu),之后窗口每次重新获得焦点再问一次。 */
-export function useMissingProjects(): ReadonlySet<string> {
+/** 不在原处的项目路径(= 左栏本地项目的分组键)。挂上时问一次(= 进 Tangu),之后窗口每次重新获得焦点再问一次。
+ *  projectKeys = 左栏现有的本地项目:它变了(会话从引擎拉回来了 / 加了项目)也再问一次 —— 刚启动挂上那一下,
+ *  桌面配置可能还没读到,请求发去了缺省地址(真 Electron 台架里实测),只靠焦点的话要等用户切走再切回来才标得出。 */
+export function useMissingProjects(projectKeys: string): ReadonlySet<string> {
   useEffect(() => {
-    refreshMissingProjects()
     if (!wired && enabled()) { wired = true; window.addEventListener('focus', refreshMissingProjects) }
   }, [])
+  useEffect(() => { if (projectKeys) refreshMissingProjects() }, [projectKeys])
   return useMissing((s) => s.paths)
 }
 
@@ -125,14 +129,19 @@ export function ProjectRelinkDialog({ ws, sessionId, onClose }: { ws: WorkspaceD
       if (!r.ok) { setConflict(r.name); return }
       const from = ws.key
       const to = r.path
-      // 本地会话配置是 local-wins(loadHistory 拿它盖服务端的值):不换成引擎改好的值,下一条消息又把旧目录发回引擎
+      // 本地会话配置是 local-wins(loadHistory 拿它盖服务端的值):不换成引擎改好的值,下一条消息又把旧目录发回引擎。
+      // 库里没存 cwd 的会话,缓存里那份是打开时按旧 project_path 补的,引擎不会回它 —— 照旧路径换(Codex 评审)。
       useApp.setState((s) => {
         const configBySession = { ...s.configBySession }
-        for (const [id, next] of Object.entries(r.configs || {})) {
+        for (const id of r.sessionIds) {
           const c = configBySession[id]
-          if (c) configBySession[id] = { ...c, ...next }
+          if (!c) continue
+          const next = r.configs?.[id]
+          configBySession[id] = next ? { ...c, ...next } : c.cwd === from ? { ...c, cwd: to } : c
         }
-        return { configBySession, activeWorkspaceKey: s.activeWorkspaceKey === from ? to : s.activeWorkspaceKey, openWorkspaceKeys: swapKey(s.openWorkspaceKeys, from, to) }
+        // 新对话正选着这个项目:换成新位置,不然发出去又建一个落在旧目录的会话(Codex 评审)
+        const draft = s.newChatWs?.key === from ? { ...s.newChatWs, key: to, path: to, name: r.name ?? s.newChatWs.name } : s.newChatWs
+        return { configBySession, newChatWs: draft, activeWorkspaceKey: s.activeWorkspaceKey === from ? to : s.activeWorkspaceKey, openWorkspaceKeys: swapKey(s.openWorkspaceKeys, from, to) }
       })
       window.dispatchEvent(new CustomEvent(RELINKED, { detail: { from, to } }))
       const app = useApp.getState()

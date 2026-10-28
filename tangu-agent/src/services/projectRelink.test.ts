@@ -18,7 +18,7 @@ import { toSqliteDDL } from '../core/dialectDDL.js';
 import { STANDALONE_SCHEMA } from '../db/schemaStandalone.js';
 import { runMigration } from '../db/migrate.js';
 import { query } from '../core/db.js';
-import { openProjectMemory, refOf, PROJECT_MEMORY_CHAR_BUDGET } from './projectMemory.js';
+import { addProjectFact, openProjectMemory, refOf, PROJECT_MEMORY_CHAR_BUDGET } from './projectMemory.js';
 import { projectSettingsFile, readProjectSettings, rememberProjectRemote, writeProjectSettings } from './projectContext.js';
 import { missingProjectPaths, oldPathKeys, rebasePath, relinkInfo, relinkProject, remoteIdentity } from './projectRelink.js';
 
@@ -143,6 +143,20 @@ describe('relinkProject', () => {
     expect(existsSync(refOf(old).dir)).toBe(false);
     expect(readdirSync(memoryRoot()).filter((x) => x.includes('.'))).toEqual([]); // 不留 .relink- / .before- 中间目录
     expect(await readProjectSettings(moved)).toEqual({ defaultAgent: 'muse' });
+  });
+
+  it('合并时旧项目里删过的那句也带着墓碑过去:后台不能在合并后的项目里把它记回来', async () => {
+    const { old, moved } = await movedAway('m/Docs', 'n/Docs');
+    await session(old, 'Docs');
+    await session(moved, 'Docs 2');
+    await remember(moved, ['Target note']);
+    const repo = await openProjectMemory(refOf(old));
+    const gone = repo.mutate({ action: 'add', fact: 'Never publish the private build command', cap: PROJECT_MEMORY_CHAR_BUDGET, source: { kind: 'manual' } })
+      .entries.find((e) => e.content.startsWith('Never'))!;
+    repo.mutate({ action: 'forget', id: gone.id });
+    await relinkProject('u1', old, moved, { merge: true });
+    expect(factsAt(moved)).not.toContain('Never publish the private build command');
+    expect(await addProjectFact(refOf(moved), 'Never publish the private build command', 'historian-s')).toBe('duplicate');
   });
 
   it('合并途中失败:那之间别处写进来的记忆和默认项留着,旧项目那份放回原处', async () => {

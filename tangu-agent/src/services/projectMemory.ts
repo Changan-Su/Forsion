@@ -401,6 +401,15 @@ function mergeProjectMemory(src: string, into: string): void {
     if (forgotten.has(memoryFactFingerprint(e.content)) || coveringProjectEntry(repo.snapshot().entries, e.content)) continue;
     repo.mutate({ action: 'add', fact: e.content, source: e.source, evidenceIds: e.evidenceIds, cap: MERGE_CAP }); // 一字不差的由 mutate 自己去重
   }
+  // 旧项目里用户删过的那几句,墓碑也带过去(Codex 评审):不然合并后后台又能把它记回来。目标里留着同一句的不动(那边的用户没删)。
+  // 仓库没有「只立墓碑」的接口:记一下再删,删除的证据(会话记号)随 evidenceIds 进墓碑。
+  const kept = new Set(repo.snapshot().entries.map((e) => memoryFactFingerprint(e.content)));
+  for (const t of from.tombstones.filter(isMemoryTombstoneActive)) {
+    if (forgotten.has(t.fingerprint) || kept.has(t.fingerprint)) continue;
+    const added = repo.mutate({ action: 'add', fact: t.content, source: { kind: 'migration' }, evidenceIds: t.evidenceIds, cap: MERGE_CAP });
+    const entry = added.entries.find((e) => memoryFactFingerprint(e.content) === t.fingerprint);
+    if (entry) repo.mutate({ action: 'forget', id: entry.id });
+  }
   const fromRef = { project: '', name: '', dir: src };
   const intoRef = { project: '', name: '', dir: into };
   const mine = readPending(intoRef);
@@ -440,13 +449,15 @@ export function rehomeProjectMemory(fromKeys: readonly string[], to: string): Pr
   try { mergeProjectMemory(src, staging); renameSync(dst, keptDst); } catch (e) { drop(staging); throw e; }
   try { renameSync(staging, dst); } catch (e) { renameSync(keptDst, dst); drop(staging); throw e; }
   try { renameSync(src, keptSrc); } catch (e) { drop(dst); renameSync(keptDst, dst); throw e; }
-  const swapped = createMemoryRepository(dst).snapshot().version;
+  // 记忆版本之外,待确认候选与压缩记录也算「被写过」(后台排进一条候选不改版本号)
+  const stamp = (): string => [createMemoryRepository(dst).snapshot().version, readMemoryFile(dst, PENDING), readMemoryFile(dst, COMPACTED)].join('\0');
+  const swapped = stamp();
   return {
     kind: 'merged',
     // 换上去之后、会话库写成之前,那个项目自己的会话可能又往合并后的这份里记了一条(Codex 评审):那时就不换回去 ——
     // 留着合并后的(多出来的只是旧项目的几条),只把旧项目那份放回原处,谁的写入都不丢。
     undo() {
-      if (createMemoryRepository(dst).snapshot().version === swapped) { drop(dst); renameSync(keptDst, dst); } else drop(keptDst);
+      if (stamp() === swapped) { drop(dst); renameSync(keptDst, dst); } else drop(keptDst);
       renameSync(keptSrc, src);
     },
     commit() { drop(keptDst); drop(keptSrc); },

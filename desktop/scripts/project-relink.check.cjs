@@ -3,7 +3,8 @@
 //   B 项目 ⋯ / 右键菜单第一项「重新指向文件夹…」,其余菜单项照旧;在原处的项目没有这一项;
 //   C 对话框:远端对上的同名文件夹预选,列出会一起改的三样;
 //   D 重新指向 → 「已经是项目」→ 合并:请求体先 merge:false 再 merge:true,成功后小标消失、会话落到新分组;
-//   E 判失效只在挂上和窗口重新获得焦点时问,不轮询。
+//   E 判失效只在挂上和窗口重新获得焦点时问,不轮询;
+//   F 库里没存 cwd 的会话(打开时按旧 project_path 补进缓存):重新指向后发一条,run 带的是新目录(Codex 评审)。
 // 引擎那半(三处一起改 / 中途失败回滚 / 合并去重 / 外接盘没挂上只标记)在 tangu-agent/src/services/projectRelink.test.ts。
 //   node <仓根>/.claude/hooks/devlock.cjs run --vehicle=e2e --what="重新指向界面钉" --eta=5 -- node scripts/project-relink.check.cjs
 // SHOT=<目录> 存三张截图(左栏小标 / 菜单 / 对话框;浅色 110% 缩放,和方案图同口径)。
@@ -13,7 +14,7 @@ const { launch, boot, sleep, makeReporter } = require('./lib/uiux-electron.cjs')
 const OLD = '/Users/demo/Site', NEW = '/Users/demo/Projects/Site', HERE = '/Users/demo/Notes'
 const at = (m) => new Date(Date.now() - m * 60_000).toISOString().replace('T', ' ').slice(0, 19)
 const row = (id, title, mins, dir, name) => ({ id, title, summary: '', archived: false, model_id: 'm1', agent_config: { cwd: dir, execMode: 'host' }, project_path: dir, project_name: name, projectless: false, created_at: at(mins + 60), updated_at: at(mins) })
-const SESSIONS = [row('rl-1', '首页文案改版', 5, OLD, '官网'), row('rl-2', '下载页加 Windows 包', 9, OLD, '官网'), row('rl-3', '整理读书摘录', 20, HERE, '读书笔记')]
+const SESSIONS = [row('rl-1', '首页文案改版', 5, OLD, '官网'), { ...row('rl-2', '下载页加 Windows 包', 9, OLD, '官网'), agent_config: null }, row('rl-3', '整理读书摘录', 20, HERE, '读书笔记')]
 
 async function main() {
   const r = makeReporter()
@@ -33,7 +34,7 @@ async function main() {
         const b = await body(); posts.push(b)
         if (!b.merge) return { ok: false, error: 'already_project', path: NEW, name: '官网 2' }
         merged = true
-        return { ok: true, path: NEW, name: '官网 2', sessionIds: ['rl-1', 'rl-2'], memory: 'merged', configs: { 'rl-1': { cwd: NEW }, 'rl-2': { cwd: NEW } } }
+        return { ok: true, path: NEW, name: '官网 2', sessionIds: ['rl-1', 'rl-2'], memory: 'merged', configs: { 'rl-1': { cwd: NEW } } } // rl-2 库里没有 cwd,引擎不回它
       }
       return undefined
     },
@@ -48,6 +49,7 @@ async function main() {
     await group(OLD).waitFor({ timeout: 30_000 })
     await w.locator(`.t2s-group[data-workspace-key="${OLD}"] .t2s-missing`).waitFor({ timeout: 10_000 }).catch(() => {})
 
+    r.check('A0 启动后不用切窗口就问过一次(挂上那一下配置可能还没读到,会话到了要再问)', missingGets >= 1, `GET missing × ${missingGets}`)
     // A
     const a = await w.evaluate(({ OLD, HERE }) => {
       const g = (k) => document.querySelector(`.t2s-group[data-workspace-key="${k}"]`)
@@ -77,7 +79,10 @@ async function main() {
     r.check('B3 其余菜单项照旧(查看详情 / 重命名 / 移除)', ['查看详情', '重命名', '移除'].every((x) => items.slice(1).some((i) => i.includes(x))), items.join(' | '))
     await shot('relink-menu', { ...side, width: side.width + 260 })
 
-    // C
+    // C(先打开一下 rl-2:它的 cwd 是打开时按旧 project_path 补进缓存的,F 要用)
+    await w.keyboard.press('Escape'); await w.mouse.click(5, 5); await sleep(200)
+    await w.locator('.t2s-srow[data-sel-id="rl-2"]').first().click(); await sleep(1500)
+    await group(OLD).click({ button: 'right' })
     await w.locator('.ctx-menu button').first().click()
     await w.locator('.relink-dialog .relink-opt').first().waitFor({ timeout: 10_000 })
     const c = await w.evaluate(() => {
@@ -104,13 +109,23 @@ async function main() {
     const d = await w.evaluate(({ OLD, NEW }) => ({ dialog: !!document.querySelector('.relink-dialog'), old: !!document.querySelector(`.t2s-group[data-workspace-key="${OLD}"]`), next: !!document.querySelector(`.t2s-group[data-workspace-key="${NEW}"]`), badges: document.querySelectorAll('.t2s-missing').length }), { OLD, NEW })
     r.check('D3 合并后对话框关掉、会话落到新分组、小标消失', !d.dialog && !d.old && d.next && d.badges === 0, JSON.stringify(d))
 
-    // E
+    // E(合并后左栏的项目变了会再问一次,等它落定再量)
+    await sleep(1500)
     const before = missingGets
     await sleep(3000)
     r.check('E1 不轮询:3 秒内没再问', missingGets === before, `${before} → ${missingGets}`)
     await w.evaluate(() => window.dispatchEvent(new Event('focus')))
     await sleep(800)
     r.check('E2 窗口重新获得焦点时再问一次', missingGets === before + 1, `${before} → ${missingGets}`)
+
+    // F
+    await w.locator('.t2s-srow[data-sel-id="rl-2"]').first().click(); await sleep(1200)
+    const ta = w.locator('.t2c-ta').first()
+    for (let i = 0; i < 40 && !(await ta.isEnabled().catch(() => false)); i++) await sleep(500)
+    const runsBefore = ctx.stub.seen.runs.length
+    await ta.click(); await ta.fill('再跑一次'); await w.keyboard.press('Enter'); await sleep(2000)
+    const run = ctx.stub.seen.runs.at(-1)
+    r.check('F1 库里没存 cwd 的会话:重新指向后发出的 run 带新目录', ctx.stub.seen.runs.length > runsBefore && run?.sessionId === 'rl-2' && run?.agentConfig?.cwd === NEW, JSON.stringify({ n: ctx.stub.seen.runs.length - runsBefore, sid: run?.sessionId, cwd: run?.agentConfig?.cwd }))
   } finally {
     await ctx.close()
   }

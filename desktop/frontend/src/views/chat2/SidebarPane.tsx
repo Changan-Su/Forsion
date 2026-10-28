@@ -210,7 +210,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
   })
   const [wsOrder, setWsOrder] = useState<string[]>(loadWsOrder)
   // 文件夹不在原处的本地项目(借鉴 magpie 9):只标记,菜单第一项「重新指向文件夹…」
-  const missingProjects = useMissingProjects()
+  const missingProjects = useMissingProjects(p.workspaces.filter((w) => w.kind === 'local' && !w.system).map((w) => w.key).sort().join('\n'))
   const isMissing = (ws: WorkspaceDescriptor): boolean => ws.kind === 'local' && !ws.system && missingProjects.has(ws.key)
   const [relinking, setRelinking] = useState<{ ws: WorkspaceDescriptor; sessionId: string } | null>(null)
   useEffect(() => onProjectRelinked((from, to) => {
