@@ -54,6 +54,12 @@ describe('maskPayload / restore', () => {
     const r = maskPayload({ messages: [{ content: `the db password is ${PW} btw` }] }, ON);
     expect(r.payload.messages[0].content).toBe(`the db password is ${placeholderFor('PASSWORD', PW)} btw`);
   });
+  it('masks a JSON tool argument even when the same value was already hit in an earlier message', () => {
+    const args = JSON.stringify({ command: `curl -H "Authorization: Bearer ${KEY}" https://x.test`, note: 'tools' });
+    const r = maskPayload({ messages: [{ content: ENV }, { tool_calls: [{ function: { arguments: args } }] }, { content: JSON.stringify({ id: KEY, tools: [KEY] }) }] }, ON);
+    expect(JSON.parse(r.payload.messages[1].tool_calls[0].function.arguments).command).toContain(placeholderFor('API_KEY', KEY));
+    expect(r.payload.messages[2].content).not.toContain(KEY); // 跳过的字段名只在 payload 结构上认,工具结果 JSON 里的 id / tools 照样遮
+  });
   it('leaves vendor-signed thinking blocks as written', () => {
     const block = { type: 'thinking', thinking: `key ${KEY}`, signature: 'sig' };
     expect(maskPayload({ messages: [{ content: [block] }] }, ON).payload.messages[0].content[0]).toBe(block);

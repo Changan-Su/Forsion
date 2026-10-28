@@ -1461,7 +1461,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .t2-mask-foot .grow { flex: 1; }
 .t2-mask-foot button { padding: 0; color: var(--accent-ink); font: inherit; background: none; border: 0; cursor: pointer; }
 .t2-mask-done { color: var(--text-faint); white-space: nowrap; }
-.mask-settings-list { padding: 0 0 6px; }
+.mask-settings-list { padding: 0 15px 12px; } /* 同 .settings-row-notes:跟行的左右边距对齐 */
 .mask-settings-group + .mask-settings-group { margin-top: 8px; }
 .mask-settings-group-head { display: flex; align-items: baseline; gap: 8px; padding: 4px 0; }
 .mask-settings-group-head small, .mask-settings-item small { color: var(--text-faint); }

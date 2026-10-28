@@ -22,6 +22,8 @@
  *   npm run live:harness -- --only selfschedule             # 自己的日程 vs 用户的日历(10-02):人设 agent 答应的约定进 SCHEDULE.db、用户日历不动;负对照「记进我的日历」须走 amadeus。改 Personal Folder 段 / 日程·日历工具措辞后跑
  *                                                           #   额度用完时先跑离线接线证据:node scripts/rename-identity.smoke.mjs(假模型端点,截获系统提示词)
  *   npm run live:harness -- --only chat,tool,muse            # 子集(historian→dream→recall 三连有先后依赖)
+ *   npm run live:harness -- --only mask [--mask-off]          # 发给模型前脱敏(10-28,借鉴 magpie 方案 1):读 .env → run_bash 带 key 的 curl 打台架里的回显服务 → 问模型看到的值是不是 sk-proj- 开头、是不是占位符。
+ *                                                           #   判据:回显服务收到真 key(工具参数换回了)、模型答「不是 sk-proj- 开头 / 是占位符」、engine.log 有 [mask]。--mask-off = 负对照(config 里关掉,须红)。改 llm/outboundMask.ts 后跑
  *   npm run live:harness -- --only chat,tool,loop            # loop = 轮数耗尽末轮收尾(改 agentLoop 末轮/收尾提示后跑)
  *   npm run live:harness -- --only imageedit                 # edit_image 图源(10-19,改图跨轮取图方案 B1 + B2):同会话三轮 —— 附两张图先别动 → 不带附件让它合成 → 改刚合成的那张;假生图后端核上传的是哪几张。改 imageEdit.ts / hydrate 的带图消息 / 展示文件 source 后跑
  *   npm run live:harness -- --only skillpick,settingsnav     # 反馈 6a239e58(10-04):指定技能清单只列目录、正文经 use_skill 取(改 services/skillLoadout.ts 后跑);
@@ -328,6 +330,7 @@ OPT_IN.add('webcardsreal'); KEYS.push('webcardsreal');
 OPT_IN.add('realuse'); // 真实使用模拟:每轮 12 个 run(--rounds),--usage-db 再加一个 Muse 周期;单独跑。
 OPT_IN.add('suggest'); // 三个 run + 三次建议调用;只在动 services/promptSuggestion.ts(提示词 / 前缀对齐)或主循环收尾处的快照时才有信息量。
 OPT_IN.add('humanreal'); // 协作说明写成什么样:每轮 6 个 run + 1 次判官(--rounds);只在动 HUMAN_GUIDANCE / manage_human 时才有信息量。
+OPT_IN.add('mask'); KEYS.push('mask'); // 两个 run + 本地回显服务;只在动 llm/outboundMask.ts(发给模型前脱敏)时才有信息量。
 OPT_IN.add('appref'); // 四个 run;只在动 APP_REF_SECTION(应用 / 窗口引用那一段提示词)时才有信息量。
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 KEYS.push('marketplace', 'marketplacechat');
@@ -1495,7 +1498,7 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
           // `full` 留**未截断**的原文:bigread 要判的截断标记落在第 4000 字符附近,先截到 4000 就永远看不见
           // (评审 #7)。内存有界 —— 引擎侧 capToolResult 已把单条结果封在 48k。
           else if (e.type === 'desk_present') (ev.deskPresents ||= []).push({ at: Date.now(), spec: p });
-          else if (e.type === 'tool_result') { const full = String(p.result || ''); ev.toolResults.push({ id: p.id, name: p.name || '?', isError: !!p.isError, result: full.slice(0, 4000), fullLength: full.length, full, at: Date.now() }); }
+          else if (e.type === 'tool_result') { const full = String(p.result || ''); ev.toolResults.push({ id: p.id, name: p.name || '?', isError: !!p.isError, result: full.slice(0, 4000), fullLength: full.length, full, at: Date.now(), ...(p.masked ? { masked: p.masked } : {}) }); }
           // 子代理自己的工具调用**不进** tool_call(subAgent.ts 把它们包成 'subagent' 事件发在父 run 上)——
           // 要证「子代理用上了 read_document」只能在这儿收。isError/preview 也要留:只存工具名的话,
           // 子代理 read_document 报错、再用 read_file 兜出答案也照样全绿(评审 #5)。
@@ -1545,7 +1548,7 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
           else if (e.type === 'team_member') (p.phase === 'start' ? ev.group.starts : ev.group.ends).push({ slug: String(p.slug || '?'), seq: e.seq, runId: p.runId || null, sessionId: p.sessionId || null, messageId: p.messageId });
           else if (e.type === 'cache_probe') ev.probes.push(p); // 双闸开着才有(TANGU_CACHE_PROBE=1 + agentConfig.cacheProbe)
           // 只收压缩相关的 status(llm_call/generating 每帧都发,全收会把 ev 撑大);autocompact 场景据此判「压了、落库了」
-          else if (e.type === 'status' && ['context_info', 'compacting', 'compacted', 'compaction_budget', 'compaction_skipped', 'tool_failure_loop', 'action_delivery_nudge', 'sketch_delivery_nudge', 'ui_document_recovery', 'describing_images'].includes(p.phase)) ev.statuses.push(p);
+          else if (e.type === 'status' && ['context_info', 'compacting', 'compacted', 'compaction_budget', 'compaction_skipped', 'tool_failure_loop', 'action_delivery_nudge', 'sketch_delivery_nudge', 'ui_document_recovery', 'describing_images', 'masked'].includes(p.phase)) ev.statuses.push(p);
           else if (e.type === 'done') { ev.done = true; ev.content = String(p.content || ''); ev.toolOffsets = p.toolOffsets ?? null; break outer; }
           else if (e.type === 'error') { ev.error = String(p.error || 'error'); ev.errorReason = p.reason ?? null; break outer; } // P1-K2:急停 / 锁定的终态原因
         }
@@ -2695,6 +2698,50 @@ try {
     const hit = ev.content.includes(MARKER);
     const anchors = anchorsOk(ev);
     return { ok: !ev.error && ev.toolCalls.length > 0 && hit && anchors, detail: ev.error || `工具 ${ev.toolCalls.join(',') || '无'};标记${hit ? '命中' : '未命中'};done 锚点${anchors ? '对齐' : `不对齐(${JSON.stringify(ev.toolOffsets)})`}${ev.approvals ? `;代批 ${ev.approvals}${ev.approveError ? '(失败:' + ev.approveError + ')' : ''}` : ''}`, output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
+  });
+
+  // mask(10-28,借鉴 magpie 方案 1 · 发给模型前脱敏):真模型拿到的是占位符,但照样能把 key 用对。
+  //   ① 读 .env、用 run_bash 把 key 原样写进 curl 打台架里的回显服务 → 回显服务收到的必须是**真 key**(工具参数在执行前换回了);
+  //   ② 同一会话不带工具问:你看到的 DEMO_API_KEY 是不是 sk-proj- 开头、是不是双花括号占位符 —— 脱敏开着须答「不是 / 是」(模型从没见过原值)。
+  //   问开头 / 是否占位符而不让它复述字符:不碰「别泄露 key」的拒答,负对照(--mask-off,config 里关掉)才分得开。engine.log 须有 [mask] 行。
+  await scenario('mask', 'mask 发给模型前脱敏:读 .env → 带 key 的命令 → 模型看到的是占位符', async () => {
+    const dir = join(workspace, 'mask-live');
+    mkdirSync(dir, { recursive: true });
+    const alnum = () => randomUUID().replace(/-/g, '');
+    const key = `sk-proj-${alnum().slice(0, 12)}Q${alnum().slice(0, 23)}`;
+    const pw = `Pw${alnum().slice(0, 14)}`;
+    writeFileSync(join(dir, '.env'), `DEMO_API_KEY=${key}\nDATABASE_URL=postgres://app:${pw}@db.internal:5432/app\nLOG_LEVEL=debug\n`);
+    if (argv.includes('--mask-off')) {
+      const cfg = join(shared, 'config.json');
+      const cur = existsSync(cfg) ? JSON.parse(readFileSync(cfg, 'utf8')) : {};
+      writeFileSync(cfg, JSON.stringify({ ...cur, masking: { secrets: false, personal: false } }, null, 2));
+    }
+    const got = [];
+    const echo = await new Promise((resolve) => {
+      const srv = createHttpServer((req, res) => { got.push(String(req.headers.authorization || '')); res.end(`echo-ok received ${String(req.headers.authorization || '').length} chars`); });
+      srv.listen(0, '127.0.0.1', () => resolve(srv));
+    });
+    const port = echo.address().port;
+    const logBefore = existsSync(engineLog) ? readFileSync(engineLog, 'utf8').length : 0;
+    const sid = `live-mask-${Date.now()}`;
+    let a, b;
+    try {
+      a = await run(sid, `Read the file ${join(dir, '.env')} with a tool. Then use run_bash to run this command once, writing the DEMO_API_KEY value from that file literally in place of KEY (no shell variables, do not source the file): curl -s -H "Authorization: Bearer KEY" http://127.0.0.1:${port}/echo — then tell me what the server answered.`, 240_000, { cwd: dir });
+      b = await run(sid, 'Without using any tools, answer two questions about the DEMO_API_KEY value exactly as it appeared in the file content you were given. 1) Does it start with the characters sk-proj- ? 2) Is it a placeholder wrapped in double curly braces? Reply in exactly this form and nothing else: "1: yes|no; 2: yes|no".', 120_000, { cwd: dir });
+    } finally { echo.close(); }
+    const log = existsSync(engineLog) ? readFileSync(engineLog, 'utf8').slice(logBefore) : '';
+    const maskLine = /\[mask\] mask \d+ value\(s\) before sending: [A-Z_,]*API_KEY/.test(log);
+    const realKeySent = got.some((h) => h === `Bearer ${key}`);
+    const ans = (b.content || '').toLowerCase().replace(/\s+/g, '');
+    const sawPlaceholder = /1:no;?2:yes/.test(ans);
+    const spans = a.toolResults.flatMap((t) => t.masked || []);
+    const evidence = { key: `${key.slice(0, 8)}…(${key.length})`, got: got.map((h) => `${h.slice(0, 15)}…(${h.length})`), answer: b.content, spans, statuses: [...a.statuses, ...b.statuses].filter((x) => x.phase === 'masked'), maskLine, toolArgs: a.toolArgs.map((t) => ({ name: t.name, args: t.args.replace(key, '<KEY>') })) };
+    writeFileSync(join(OUT, 'mask-evidence.json'), JSON.stringify(evidence, null, 2));
+    return {
+      ok: !a.error && !b.error && realKeySent && sawPlaceholder && maskLine && spans.length > 0,
+      detail: a.error || b.error || `回显服务收到真 key:${realKeySent ? '是' : '否'};模型答「${b.content.trim()}」→ ${sawPlaceholder ? '看到的是占位符' : '看到的不是占位符(原值到了模型)'};engine.log [mask]:${maskLine ? '有' : '无'};工具结果标注 ${spans.length} 处`,
+      output: `${a.content}\n---\n${b.content}`, tokens: tokensOf(a) + tokensOf(b), toolCalls: [...a.toolCalls, ...b.toolCalls],
+    };
   });
 
   await scenario('taskoutcomes', 'taskoutcomes actual artifacts, rejected approvals and repeat delivery', () =>
@@ -3880,7 +3927,7 @@ Then reply with only the command output.`,
   // ⚠️ ENTRY 与 desktop/frontend/src/bootstrapEngine.tsx 的 open-settings 目录项同文(description + params);TARGETS 那一行由
   //    desktop 的 settingsTarget.test.ts 逐字钉住(设置页 / 搜索索引一改,那条单测就红,照它的输出改这里)。
   await scenario('settingsnav', 'settingsnav 「语音在哪设置」:界面命令直达设置页,不用电脑操控', async () => {
-    const TARGETS = 'Pages: general, forsion, model, mcp, hooks, skills, agents, amadeus-plugins, browser, computer-use, channels, notes, sync, spaces, theme, shortcuts, notifications, statusbar, permissions, units, remote-sessions, computer-history, advanced, developer, about. Settings: workspace-dir, keep-awake, backend-mode, sandbox, python, mirror, external-backend, forsion-account, forsion-submissions, cloud-url, memory-sync, inbox-notify, default-models, model-providers, web-search, voice, theme-language, startup-appearance, palette, color-mode, ui-zoom, glass, home-motion, ambient, visuals, smooth-caret, selection-bar, prompt-suggest, chat-avatars, calm-dim, calm-reading, calm-motion, ribbon-auto-home, fonts, notes-attachments, daily-notes, agent-browser, strict-background, jev, units-switch, units-host, remote-sessions-switch, remote-approval-cap, remote-trusted-devices, remote-safety, computer-history, mcp-server, reset-layout, clear-data, language.';
+    const TARGETS = 'Pages: general, forsion, model, mcp, hooks, skills, agents, amadeus-plugins, browser, computer-use, channels, notes, sync, spaces, theme, shortcuts, notifications, statusbar, permissions, units, remote-sessions, computer-history, advanced, developer, about. Settings: workspace-dir, keep-awake, backend-mode, sandbox, python, mirror, external-backend, forsion-account, forsion-submissions, cloud-url, memory-sync, inbox-notify, default-models, model-providers, masking, web-search, voice, theme-language, startup-appearance, palette, color-mode, ui-zoom, glass, home-motion, ambient, visuals, smooth-caret, selection-bar, prompt-suggest, chat-avatars, calm-dim, calm-reading, calm-motion, ribbon-auto-home, fonts, notes-attachments, daily-notes, agent-browser, strict-background, jev, units-switch, units-host, remote-sessions-switch, remote-approval-cap, remote-trusted-devices, remote-safety, computer-history, mcp-server, reset-layout, clear-data, language.';
     const ENTRY = { id: 'open-settings',
       description: "Open Forsion's settings window, optionally at one page or at the page holding one specific setting. To answer 'where/how do I set X', open that page and say which page you opened; these settings are not documented on the web, so do not search for them. Unknown targets are rejected.",
       params: { type: 'object', properties: { tab: { type: 'string', description: `A page id or a setting id. Omit for the default page. ${TARGETS}` } } } };

@@ -232,62 +232,76 @@ export interface MaskResult { payload: any; hits: MaskHit[]; map: Map<string, st
 
 /** 把整包里的敏感值换成占位符。warn 档只找不换。不改入参(消息对象可能和 agentLoop 的历史共用引用)。 */
 export function maskPayload(payload: any, settings: MaskSettings): MaskResult {
-  const allow = new Set(readAllowList().map((e) => e.hash));
+  const allowSet = new Set(readAllowList().map((e) => e.hash));
+  const allowedMemo = new Map<string, boolean>();
+  const allowed = (v: string): boolean => {
+    let r = allowedMemo.get(v);
+    if (r === undefined) allowedMemo.set(v, (r = allowSet.has(allowHash(v))));
+    return r;
+  };
   const hits = new Map<string, MaskHit>();
   const map = new Map<string, string>();
   const replace = settings.action !== 'warn';
-  const note = (value: string, kind: string): string | null => {
-    if (allow.has(allowHash(value))) return null;
-    const ph = placeholderFor(kind, value);
-    remember(value, kind, ph);
-    map.set(ph, value);
-    if (!hits.has(ph)) hits.set(ph, { kind, ph, head: value.slice(0, 4), len: value.length });
-    return ph;
-  };
-  const maskString = (s: string): string => {
-    if (s.length < 8 || s.startsWith('data:') || isBlob(s)) return s;
-    // 工具参数 / JSON 结果:按叶子脱敏再序列化,占位符对应的总是原值(不是 JSON 转义后的样子),换回时才对得上
-    if (/^\s*[{[]/.test(s)) {
-      const parsed = tryJson(s);
-      if (parsed !== undefined) {
-        const before = hits.size;
-        const leaves = walk(parsed, maskString);
-        return hits.size > before ? JSON.stringify(leaves) : s;
+  let replaced = 0;
+  /** 整包里每个字符串过一遍 fn。JSON 文本(工具参数 / JSON 结果)按叶子过、改了才重新序列化:占位符对应的总是原值,
+   *  不是 JSON 转义后的样子,换回时才对得上。跳过的字段与签过名的块只在 payload 本身的结构上认,不在 JSON 文本里认。 */
+  const each = (v: any, fn: (s: string) => string, inner = false): any => {
+    if (typeof v === 'string') {
+      if (v.length < 8 || v.startsWith('data:') || isBlob(v)) return v;
+      if (/^\s*[{[]/.test(v)) {
+        const parsed = tryJson(v);
+        if (parsed && typeof parsed === 'object') {
+          const before = replaced;
+          const leaves = each(parsed, fn, true);
+          return replaced > before ? JSON.stringify(leaves) : v;
+        }
       }
+      return fn(v);
     }
-    let out = '';
-    let last = 0;
-    for (const sp of findSensitive(s, settings)) {
-      const ph = note(sp.value, sp.kind);
-      if (!ph) continue;
-      out += s.slice(last, sp.start) + (replace ? ph : sp.value);
-      last = sp.end;
-    }
-    return last ? out + s.slice(last) : s;
-  };
-  const walk = (v: any, fn: (s: string) => string): any => {
-    if (typeof v === 'string') return fn(v);
-    if (Array.isArray(v)) return v.map((x) => walk(x, fn));
+    if (Array.isArray(v)) return v.map((x) => each(x, fn, inner));
     if (!v || typeof v !== 'object' || ArrayBuffer.isView(v)) return v;
-    if (SEALED_TYPES.has(v.type) && (v.signature || v.encrypted_content || v.type === 'redacted_thinking')) return v;
+    if (!inner && SEALED_TYPES.has(v.type) && (v.signature || v.encrypted_content || v.type === 'redacted_thinking')) return v;
     const o: any = {};
-    for (const [k, x] of Object.entries(v)) o[k] = SKIP_KEYS.has(k) ? x : walk(x, fn);
+    for (const [k, x] of Object.entries(v)) o[k] = !inner && SKIP_KEYS.has(k) ? x : each(x, fn, inner);
     return o;
   };
-  let out = walk(payload, maskString);
-  // 第二遍:之前任何一处认出的值(≥8 字符),整包里原样出现的地方都换 —— 模型回复里复述的密码下一轮没有上下文规则认不出来
-  const knownNow = [...known.entries()].filter(([value]) => !allow.has(allowHash(value)));
-  if (knownNow.length) {
-    const re = new RegExp(knownNow.map(([v]) => v).sort((a, b) => b.length - a.length).map((v) => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'g');
-    const byValue = new Map(knownNow);
-    out = walk(out, (s) => s.length < KNOWN_MIN_LEN ? s : s.replace(re, (v) => {
-      const k = byValue.get(v)!;
-      note(v, k.kind);
-      return replace ? k.ph : v;
-    }));
+  // 第一遍:只认,不换 —— 认出的值进 known,第二遍整包里原样出现的地方都换(模型回复里复述的密码没有上下文,规则认不出来)
+  each(payload, (s) => {
+    for (const sp of findSensitive(s, settings)) if (!allowed(sp.value)) remember(sp.value, sp.kind, placeholderFor(sp.kind, sp.value));
+    return s;
+  });
+  const knownNow = [...known.entries()].filter(([value]) => !allowed(value));
+  const byValue = new Map(knownNow);
+  const knownRe = knownNow.length ? valuesRe(knownNow.map(([v]) => v)) : null;
+  const out = each(payload, (s) => {
+    const spans: Array<{ start: number; end: number; kind: string; value: string }> = findSensitive(s, settings).filter((sp) => !allowed(sp.value));
+    if (knownRe) for (const m of s.matchAll(knownRe)) {
+      const start = m.index!, end = start + m[0].length;
+      if (!spans.some((x) => start < x.end && end > x.start)) spans.push({ start, end, kind: byValue.get(m[0])!.kind, value: m[0] });
+    }
+    if (!spans.length) return s;
+    spans.sort((a, b) => a.start - b.start);
+    let res = '', last = 0;
+    for (const sp of spans) {
+      const ph = placeholderFor(sp.kind, sp.value);
+      remember(sp.value, sp.kind, ph);
+      map.set(ph, sp.value);
+      if (!hits.has(ph)) hits.set(ph, { kind: sp.kind, ph, head: sp.value.slice(0, 4), len: sp.value.length });
+      res += s.slice(last, sp.start) + (replace ? ph : sp.value);
+      last = sp.end;
+    }
+    if (replace) replaced++;
+    return res + s.slice(last);
+  });
+  // 兜底自检:遮住档下,整包里不许再出现任何一个被遮的原值(≥8 字符;短值可能是普通词)。查到 = 脱敏有漏洞,宁可拦下这一轮
+  const long = [...map.values()].filter((v) => v.length >= KNOWN_MIN_LEN);
+  if (replace && long.length) {
+    const re = valuesRe(long, ''); // 不带 g:test() 不留 lastIndex
+    each(out, (s) => { if (re.test(s)) throw new Error('a masked value is still in the request'); return s; });
   }
   return { payload: out, hits: [...hits.values()], map };
 }
+const valuesRe = (values: string[], flags = 'g') => new RegExp(values.sort((a, b) => b.length - a.length).map((v) => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), flags);
 
 /** 界面用:一段工具参数 / 结果里,发出时会被遮住的值在哪(不含原值,界面从自己手里的文本按位置取)。规则 + 之前认出过的值。 */
 export interface MaskSpan { kind: string; ph: string; s: number; e: number }
@@ -364,7 +378,8 @@ export function withOutboundMasking(llm: LlmBrain, settings: () => MaskSettings 
           throw new LlmError(400, `${MASKING_BLOCKED}: ${masked.hits.length} ${h.kind} ${h.head}… (${h.len})`);
         }
       }
-      if (s.action === 'warn' || !masked.map.size) return llm.streamProviderCompletion({ ...opts, payload: masked.payload });
+      // 没遮任何东西(或只提醒):原 payload 原样发,不换副本
+      if (s.action === 'warn' || !masked.map.size) return llm.streamProviderCompletion(opts);
       // 保留原 payload 的引用:multiBrain 的 TANGU_LLM_DEBUG 按 payload 对象挂标签
       Object.defineProperty(masked.payload, MASKED_FROM, { value: opts.payload, enumerable: false });
       const map = masked.map;

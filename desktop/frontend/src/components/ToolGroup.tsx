@@ -210,7 +210,7 @@ const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc; running: boolean; waiting: 
         <span className="tool-row-copy">
           <span className={`tool-row-copy-text${active ? ' chat-run-shimmer-text' : ''}`}>
             <span className="tool-row-verb">{verb}</span>
-            <span className={`tool-row-target${desc.isFile ? ' file' : ''}`}>{desc.target}</span>
+            <span className={`tool-row-target${desc.isFile ? ' file' : ''}`}><MaskedText text={desc.target} masked={masked} /></span>
           </span>
         </span>
         <Stat d={desc} />
