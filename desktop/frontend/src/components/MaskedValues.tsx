@@ -10,13 +10,17 @@ import { OverlayAt } from '@lcl/engine'
 import { registerMessages, useI18n } from '../i18n'
 import type { ToolEvent } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { addMaskAllow } from '../services/backendService'
-import { homeTarget } from '../services/engine/targets'
+import { targetForSession } from '../services/engine/targets'
 import { useApp } from '../stores/appStore'
 
 registerMessages({
   'mask.tag': { zh: '发给模型前遮住 {n} 个值', en: '{n} values masked before sending' },
   'mask.tag1': { zh: '发给模型前遮住 1 个值', en: '1 value masked before sending' },
   'mask.got': { zh: '模型收到的是 {ph}', en: 'The model got {ph}' },
+  'mask.warnTag': { zh: '{n} 个敏感值原样发给了模型', en: '{n} sensitive values sent as-is' },
+  'mask.warnTag1': { zh: '1 个敏感值原样发给了模型', en: '1 sensitive value sent as-is' },
+  'mask.gotRaw': { zh: '原样发给了模型（只提醒）', en: 'Sent to the model as-is (warn only)' },
+  'mask.sentAsIs': { zh: '原样', en: 'As-is' },
   'mask.popTitle': { zh: '这一轮发给模型提供方之前', en: 'Before this turn went to the provider' },
   'mask.col.kind': { zh: '类型', en: 'Kind' },
   'mask.col.local': { zh: '本机（只在这台电脑）', en: 'On this computer' },
@@ -37,7 +41,8 @@ registerMessages({
   'mask.kind.BANK_CARD': { zh: '银行卡号', en: 'Card number' },
 })
 
-export interface MaskedValue { kind: string; ph: string; value: string }
+/** warn:「只提醒」档,原样发出了,不能说成遮住。 */
+export interface MaskedValue { kind: string; ph: string; value: string; warn?: boolean }
 
 /** 一组工具调用里会被遮住的值(按占位符去重,按出现顺序)。 */
 export function collectMasked(events: ToolEvent[]): MaskedValue[] {
@@ -45,7 +50,7 @@ export function collectMasked(events: ToolEvent[]): MaskedValue[] {
   for (const ev of events) for (const m of ev.masked || []) {
     const src = m.at === 'args' ? ev.arguments : ev.result
     const value = src && m.e <= src.length ? src.slice(m.s, m.e) : ''
-    if (value && !out.has(m.ph)) out.set(m.ph, { kind: m.kind, ph: m.ph, value })
+    if (value && !out.has(m.ph)) out.set(m.ph, { kind: m.kind, ph: m.ph, value, ...(m.warn ? { warn: true } : {}) })
   }
   return [...out.values()]
 }
@@ -74,11 +79,11 @@ export function MaskedText({ text, masked }: { text: string; masked: MaskedValue
     return last ? [...out, text.slice(last)] : null
   }, [text, masked])
   if (!parts) return <>{text}</>
-  return <>{parts.map((p, i) => typeof p === 'string' ? p : <span key={i} className="t2-masked" title={t('mask.got', { ph: p.ph })}>{p.value}</span>)}</>
+  return <>{parts.map((p, i) => typeof p === 'string' ? p : <span key={i} className="t2-masked" title={p.warn ? t('mask.gotRaw') : t('mask.got', { ph: p.ph })}>{p.value}</span>)}</>
 }
 
 /** 工具组标题后面那一句;点开是对照表。在 tool-group-head 这个 button 里面,所以自己是 span[role=button]、不冒泡。 */
-export function MaskTag({ masked }: { masked: MaskedValue[] }) {
+export function MaskTag({ masked, sessionId }: { masked: MaskedValue[]; sessionId?: string }) {
   const { t } = useI18n()
   const ref = useRef<HTMLSpanElement>(null)
   const [at, setAt] = useState<{ x: number; y: number; top: number } | null>(null)
@@ -90,12 +95,13 @@ export function MaskTag({ masked }: { masked: MaskedValue[] }) {
     const r = ref.current!.getBoundingClientRect()
     setAt({ x: r.left - 6, y: r.bottom + 6, top: r.top })
   }
-  const allow = (m: MaskedValue) => void addMaskAllow(homeTarget(), m.value, m.kind).then(() => setAllowed((s) => new Set(s).add(m.ph))).catch(() => {})
+  const warned = masked.every((m) => m.warn)
+  const allow = (m: MaskedValue) => void addMaskAllow(targetForSession(sessionId), m.value, m.kind).then(() => setAllowed((s) => new Set(s).add(m.ph))).catch(() => {})
   return (
     <>
       <span ref={ref} role="button" tabIndex={0} className={`t2-mask-tag${at ? ' open' : ''}`} onClick={toggle}
         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(e) } }}>
-        <ShieldCheck size={13} />{masked.length === 1 ? t('mask.tag1') : t('mask.tag', { n: masked.length })}
+        <ShieldCheck size={13} />{masked.length === 1 ? t(warned ? 'mask.warnTag1' : 'mask.tag1') : t(warned ? 'mask.warnTag' : 'mask.tag', { n: masked.length })}
       </span>
       {at && createPortal(
         <div className="ui-popover-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) { setAt(null); setPicking(false) } }}>
@@ -105,14 +111,14 @@ export function MaskTag({ masked }: { masked: MaskedValue[] }) {
               <thead><tr><th>{t('mask.col.kind')}</th><th>{t('mask.col.local')}</th><th>{t('mask.col.sent')}</th>{picking && <th />}</tr></thead>
               <tbody>{masked.map((m) => (
                 <tr key={m.ph}>
-                  <td>{maskKindLabel(t, m.kind)}</td><td><code>{maskPreview(m.value)}</code></td><td><code>{m.ph}</code></td>
+                  <td>{maskKindLabel(t, m.kind)}</td><td><code>{maskPreview(m.value)}</code></td><td>{m.warn ? t('mask.sentAsIs') : <code>{m.ph}</code>}</td>
                   {picking && <td>{allowed.has(m.ph) ? <span className="t2-mask-done">{t('mask.neverMasked')}</span>
                     : <button type="button" className="btn ghost sm" onClick={() => allow(m)}>{t('mask.neverMaskThis')}</button>}</td>}
                 </tr>
               ))}</tbody>
             </table>
             <div className="t2-mask-foot">
-              <span>{t('mask.putBack')}</span>
+              {!warned && <span>{t('mask.putBack')}</span>}
               <span className="grow" />
               {!picking && <button type="button" onClick={() => setPicking(true)}>{t('mask.neverMask')}</button>}
               <button type="button" onClick={() => { setAt(null); useApp.getState().openSettings('model/m-providers') }}>{t('mask.settings')}</button>

@@ -255,7 +255,9 @@ export const ToolGroup: React.FC<{
   reasoningMs?: number
   /** 思考正在进行(这一行是消息里最后一块时才传 true)。 */
   thinking?: boolean
-}> = ({ events: allEvents, running, approvals, awaitingAnswer, reasoning, reasoningMs, thinking: thinkingProp }) => {
+  /** 这组调用所在的会话(「从不遮住」写进跑这个会话的那台引擎)。 */
+  sessionId?: string
+}> = ({ events: allEvents, running, approvals, awaitingAnswer, reasoning, reasoningMs, thinking: thinkingProp, sessionId }) => {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
   // Agent 自己写成了的记忆 / 进化记录 / 协作说明,由回复下面的回执行和请求卡呈现,这里不再重复列一行(没写成的照旧留着)。
@@ -328,7 +330,7 @@ export const ToolGroup: React.FC<{
               </span>
             )}
             </RollLine>
-            {masked.length > 0 && <MaskTag masked={masked} />}
+            {masked.length > 0 && <MaskTag masked={masked} sessionId={sessionId} />}
             <span className="tool-group-status">
               {anyParked ? (parkedAsk
                 ? <PauseCircle size={13} style={{ color: 'var(--accent-ink)' }} data-waiting-you="1" aria-label={t('tool.waitingYou')}><title>{t('tool.waitingYou')}</title></PauseCircle>

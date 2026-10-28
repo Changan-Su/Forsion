@@ -1473,7 +1473,7 @@ export const setGitSettings = (t: EngineTarget, patch: { [K in keyof GitSettings
   request<{ settings: GitSettings }>(t, '/agent/git-settings', { method: 'PUT', body: JSON.stringify(patch) }).then((r) => r.settings)
 /** 「设置 → 模型 → 提供方 → 发给模型之前」(引擎 routes/masking.ts)。writable=false = 引擎不在这台电脑上,不显示这一节。 */
 export interface MaskingSettings { secrets: boolean; personal: boolean; action: 'mask' | 'warn' | 'block' }
-export interface MaskAllowEntry { hash: string; kind: string; head: string; len: number; at: number }
+export interface MaskAllowEntry { hash: string; kind: string; len: number; at: number }
 export interface MaskingState { writable: boolean; settings?: MaskingSettings; allow?: MaskAllowEntry[]; recent?: { values: number; sessions: number } }
 export interface MaskLogLine { t: number; sid: string; action: MaskingSettings['action']; hits: Array<{ kind: string; ph: string; head: string; len: number }> }
 export const getMasking = (t: EngineTarget) => request<MaskingState>(t, '/agent/masking')

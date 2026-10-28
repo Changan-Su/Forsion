@@ -36,8 +36,9 @@ export function maskSettings(): MaskSettings {
 }
 
 // ── 规则(magpie internal/redact/redact.go 里密钥 / 个人信息那两组的子集)──────────────────────────
-const TOKEN_CH = 'A-Za-z0-9_-';
-const ALNUM = 'A-Za-z0-9';
+// 两侧不许挨着的字符集(字面字符,不是正则字符类)
+const ALNUM = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+const TOKEN_CH = ALNUM + '_-';
 const SECRET_CH = '[A-Za-z0-9_\\-./+=~!@#%^&*]';
 const QUOTE = `(?:\\\\?["'])?`;
 const SECRET_NAMES = 'password|passwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|credential';
@@ -90,14 +91,14 @@ const RULES: Rule[] = [
   // Authorization: Bearer <token>
   { kind: 'TOKEN', re: R('\\b[Bb]earer[ \\t]+([A-Za-z0-9._~+/-]{16,}=*)'), ok: secretValue },
   // user:password@host 里的 password(Redis 那种 :password@host 也算)
-  { kind: 'PASSWORD', re: R(`[A-Za-z][A-Za-z0-9+.-]*://[^\\s:@/?#"'<>]*:([^\\s@/?#"'<>]{3,})@`), ok: notAVariable },
+  { kind: 'PASSWORD', re: R(`[A-Za-z][A-Za-z0-9+.-]{0,30}://[^\\s:@/?#"'<>]{0,256}:([^\\s@/?#"'<>]{3,256})@`), ok: notAVariable },
   // .env / 配置里的 DB_PASSWORD=… / "apiKey": "…"
-  { kind: 'SECRET', re: R(`[A-Za-z0-9_.-]*(?:${SECRET_NAMES})[A-Za-z0-9_.-]*${QUOTE}[ \\t]*[:=][ \\t]*${QUOTE}(${SECRET_CH}{8,})`, 'gi'), ok: secretValue },
+  { kind: 'SECRET', re: R(`[A-Za-z0-9_.-]{0,40}(?:${SECRET_NAMES})[A-Za-z0-9_.-]{0,40}${QUOTE}[ \\t]*[:=][ \\t]*${QUOTE}(${SECRET_CH}{8,512})`, 'gi'), ok: secretValue },
   // 中文里说出来的:密码：786kih / 密钥为 …
   { kind: 'PASSWORD', re: R(`(?:密码|密碼|口令)[ \\t]*(?:[:：=]|[为為是][ \\t]*[:：]?)[ \\t]*["'“「]?(${SECRET_CH}{4,63})`), ok: notAVariable },
   { kind: 'SECRET', re: R(`(?:密钥|密鑰|令牌|金鑰)[ \\t]*(?:[:：=]|[为為是][ \\t]*[:：]?)[ \\t]*["'“「]?(${SECRET_CH}{6,})`), ok: (v) => notAVariable(v) && (hasLetter(v) || v.length >= 6) },
 
-  { kind: 'EMAIL', re: R('[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\\.[A-Za-z0-9-]+)*\\.[A-Za-z]{2,}'), bound: ALNUM + '_%+-', ok: (v) => !/^git@/i.test(v) && !FILE_EXT.test(v), personal: true },
+  { kind: 'EMAIL', re: R('[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\\.[A-Za-z0-9-]{1,63}){0,8}\\.[A-Za-z]{2,24}'), bound: ALNUM + '_%+-', ok: (v) => !/^git@/i.test(v) && !FILE_EXT.test(v), personal: true },
   { kind: 'ID_CARD', re: R('[1-9]\\d{5}(?:18|19|20)\\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\\d|3[01])\\d{3}[\\dXx]'), bound: ALNUM, ok: chineseId, personal: true },
   // 11 位 1[3-9] 开头既是手机号也是订单号的样子:前面紧挨着 id / 订单号 之类就不算
   { kind: 'PHONE', re: R('(?:\\+?86[- ]?)?1[3-9]\\d{9}'), bound: ALNUM, ok: (_v, s, at) => !/(?:id|order|no\.?|#|号)[\s:：=_-]*$/i.test(s.slice(Math.max(0, at - 12), at)), personal: true },
@@ -105,6 +106,18 @@ const RULES: Rule[] = [
 ];
 
 interface Span { start: number; end: number; kind: string; value: string }
+const PERSONAL_KINDS = new Set(RULES.filter((r) => r.personal).map((r) => r.kind));
+/** JSON 叶子的字段名是密钥的名字(password / apiKey / client_secret / access_token…):解析成叶子后规则看不到「名 = 值」的上下文,
+ *  按字段名认。分页游标之类(next_page_token、cursor)不算。 */
+const SECRET_FIELD = /(?:password|passwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|credential)s?$/i;
+const NOT_SECRET_FIELD = /page|cursor|csrf|count|limit|type|name|id$/i;
+function leafSpans(text: string, opts: Pick<MaskSettings, 'secrets' | 'personal'>, field?: string): Span[] {
+  const spans = findSensitive(text, opts);
+  if (field && opts.secrets && !spans.length && text.length >= 8 && text.length <= 512 && SECRET_FIELD.test(field) && !NOT_SECRET_FIELD.test(field) && secretValue(text)) {
+    spans.push({ start: 0, end: text.length, kind: 'SECRET', value: text });
+  }
+  return spans;
+}
 
 /** 在一段文本里找敏感值(按出现顺序,互不重叠)。 */
 export function findSensitive(text: string, opts: Pick<MaskSettings, 'secrets' | 'personal'> = DEFAULT_MASK_SETTINGS): Span[] {
@@ -116,10 +129,7 @@ export function findSensitive(text: string, opts: Pick<MaskSettings, 'secrets' |
       const value = m[1] ?? m[0];
       const start = m.index + (m[1] != null ? m[0].lastIndexOf(m[1]) : 0);
       const end = start + value.length;
-      if (r.bound) {
-        const b = new RegExp(`[${r.bound}]`);
-        if ((start > 0 && b.test(text[start - 1])) || (end < text.length && b.test(text[end]))) continue;
-      }
+      if (r.bound && ((start > 0 && r.bound.includes(text[start - 1])) || (end < text.length && r.bound.includes(text[end])))) continue;
       if (r.ok && !r.ok(value, text, start)) continue;
       // 规则按优先级排:和前面规则认出的重叠就让(postgres://app:密码@host 里先是密码,不是邮箱)
       if (spans.some((x) => start < x.end && end > x.start)) continue;
@@ -137,12 +147,12 @@ function maskKey(): Buffer {
   if (keyCache?.home === home) return keyCache.key;
   const file = join(maskDir(), 'key');
   let key: Buffer;
-  if (existsSync(file)) key = Buffer.from(readFileSync(file, 'utf8').trim(), 'hex');
-  else {
+  if (!existsSync(file)) {
     mkdirSync(maskDir(), { recursive: true });
-    key = randomBytes(32);
-    writeFileSync(file, key.toString('hex'), { mode: 0o600 });
+    // wx:两个进程同时建,只有一个写得进去;另一个读回它写的那把,两边的占位符才一致
+    try { writeFileSync(file, randomBytes(32).toString('hex'), { mode: 0o600, flag: 'wx' }); } catch (e: any) { if (e?.code !== 'EEXIST') throw e; }
   }
+  key = Buffer.from(readFileSync(file, 'utf8').trim(), 'hex');
   if (key.length < 16) throw new Error('masking key is unreadable');
   keyCache = { home, key };
   return key;
@@ -164,20 +174,21 @@ export function placeholderFor(kind: string, value: string): string {
 export const allowHash = (value: string) => createHmac('sha256', maskKey()).update(`allow\0${value}`).digest('hex');
 
 // ── 从不遮住 ────────────────────────────────────────────────────────────────────────────────────
-export interface AllowEntry { hash: string; kind: string; head: string; len: number; at: number }
+export interface AllowEntry { hash: string; kind: string; len: number; at: number }
 const allowFile = () => join(maskDir(), 'allow.json');
 export function readAllowList(): AllowEntry[] {
   try { const v = JSON.parse(readFileSync(allowFile(), 'utf8')); return Array.isArray(v) ? v : []; } catch { return []; }
 }
 function writeJsonAtomic(file: string, v: unknown): void {
   mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(`${file}.tmp`, JSON.stringify(v), { mode: 0o600 });
-  renameSync(`${file}.tmp`, file);
+  const tmp = `${file}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
+  writeFileSync(tmp, JSON.stringify(v), { mode: 0o600 });
+  renameSync(tmp, file);
 }
-/** 加进「从不遮住」:只存 HMAC + 类型 / 头 4 字符 / 长度(给管理列表看)。值由界面从它手里的工具结果里取。 */
+/** 加进「从不遮住」:只存 HMAC + 类型 / 长度(给管理列表看),不存值的任何字符。值由界面从它手里的工具结果里取。 */
 export function allowValue(value: string, kind: string): AllowEntry {
   const hash = allowHash(value);
-  const entry: AllowEntry = { hash, kind, head: value.slice(0, 4), len: value.length, at: Date.now() };
+  const entry: AllowEntry = { hash, kind, len: value.length, at: Date.now() };
   writeJsonAtomic(allowFile(), [...readAllowList().filter((e) => e.hash !== hash), entry]);
   return entry;
 }
@@ -190,13 +201,14 @@ export interface MaskLogLine { t: number; sid: string; action: MaskAction; hits:
 const logFile = () => join(maskDir(), 'log.jsonl');
 const LOG_DAYS = 7;
 const logged = new Set<string>(); // 同一会话同一个值只记一次(每轮都会重发历史)
-let pruned = false;
+let prunedAt = 0;
 function appendLog(sid: string, action: MaskAction, hits: MaskHit[]): void {
   const fresh = hits.filter((h) => !logged.has(`${sid}\0${h.ph}`));
   if (!fresh.length) return;
   fresh.forEach((h) => logged.add(`${sid}\0${h.ph}`));
   mkdirSync(maskDir(), { recursive: true });
-  if (!pruned) { pruned = true; readMaskLog(); }
+  // 一天修剪一次 7 天前的;去重表跟着清,过期的值再出现时重新记一笔
+  if (Date.now() - prunedAt > 86400_000) { prunedAt = Date.now(); readMaskLog(); logged.clear(); fresh.forEach((h) => logged.add(`${sid}\0${h.ph}`)); }
   appendFileSync(logFile(), JSON.stringify({ t: Date.now(), sid, action, hits: fresh } satisfies MaskLogLine) + '\n', { mode: 0o600 });
 }
 /** 读最近 7 天(顺手把更早的删掉)。 */
@@ -212,21 +224,28 @@ export function readMaskLog(): MaskLogLine[] {
 // ── 出站:整包脱敏 ──────────────────────────────────────────────────────────────────────────────
 /** 不碰的字段:工具定义 / 模型名 / 各种 id / 厂商签过名或加密的内容。签名盖的是厂商写的原文,改一个字就 400。 */
 const SKIP_KEYS = new Set(['tools', 'tool_choice', 'model', 'modelId', 'response_format', 'encrypted_content', 'signature', 'id', 'call_id', 'tool_call_id', 'tool_use_id', 'prompt_cache_key', 'cacheKey']);
-/** 图片的 base64(长、无空白、只有 base64 字符):随机字节里偶尔能凑出 AKIA… 的样子,不扫。 */
-const isBlob = (s: string) => s.length > 2000 && !/[^A-Za-z0-9+/=_-]/.test(s.slice(0, 2000));
+/** 整串都是 base64 的图片 / 文件(可带 data: 头):随机字节里偶尔能凑出 AKIA… 的样子,不扫。只看开头会被「长前缀 + 密钥」绕过,所以整串核。 */
+const BLOB_RE = /^(?:data:[\w/+.-]{1,80};base64,)?[A-Za-z0-9+/=_-]+$/;
+const isBlob = (s: string) => s.length > 2000 && BLOB_RE.test(s);
 const SEALED_TYPES = new Set(['thinking', 'redacted_thinking', 'reasoning']);
 /** 进程内:占位符 → 原值(换回用),原值 → 占位符(之后哪里再出现这个值都换,哪怕没有上下文能让规则认出它)。只在内存。 */
 const phValue = new Map<string, string>();
 const known = new Map<string, { kind: string; ph: string }>();
 const KNOWN_MAX = 2000;
 const KNOWN_MIN_LEN = 8;
+/** 同一个值的类型按第一次认出的算:换了上下文(连接串里的密码 / 配置里的 SECRET)也是同一个占位符,缓存不断、换回对得上。 */
+const canonicalKind = (value: string, kind: string): string => known.get(value)?.kind ?? kind;
 function remember(value: string, kind: string, ph: string): void {
   phValue.set(ph, value);
   if (value.length < KNOWN_MIN_LEN) return;
+  const prev = known.get(value);
   known.delete(value);
-  known.set(value, { kind, ph });
+  known.set(value, prev ?? { kind, ph });
   if (known.size > KNOWN_MAX) known.delete(known.keys().next().value!);
 }
+/** 之前认出的值,按它那一类现在开没开过滤(关掉个人信息后,记住的邮箱不再遮)。 */
+const knownFor = (settings: Pick<MaskSettings, 'secrets' | 'personal'>) =>
+  [...known.entries()].filter(([, k]) => (PERSONAL_KINDS.has(k.kind) ? settings.personal : settings.secrets));
 
 export interface MaskResult { payload: any; hits: MaskHit[]; map: Map<string, string> }
 
@@ -245,9 +264,9 @@ export function maskPayload(payload: any, settings: MaskSettings): MaskResult {
   let replaced = 0;
   /** 整包里每个字符串过一遍 fn。JSON 文本(工具参数 / JSON 结果)按叶子过、改了才重新序列化:占位符对应的总是原值,
    *  不是 JSON 转义后的样子,换回时才对得上。跳过的字段与签过名的块只在 payload 本身的结构上认,不在 JSON 文本里认。 */
-  const each = (v: any, fn: (s: string) => string, inner = false): any => {
+  const each = (v: any, fn: (s: string, field?: string) => string, inner = false, field?: string): any => {
     if (typeof v === 'string') {
-      if (v.length < 8 || v.startsWith('data:') || isBlob(v)) return v;
+      if (v.length < 8 || isBlob(v)) return v;
       if (/^\s*[{[]/.test(v)) {
         const parsed = tryJson(v);
         if (parsed && typeof parsed === 'object') {
@@ -256,25 +275,29 @@ export function maskPayload(payload: any, settings: MaskSettings): MaskResult {
           return replaced > before ? JSON.stringify(leaves) : v;
         }
       }
-      return fn(v);
+      return fn(v, inner ? field : undefined);
     }
-    if (Array.isArray(v)) return v.map((x) => each(x, fn, inner));
+    if (Array.isArray(v)) return v.map((x) => each(x, fn, inner, field));
     if (!v || typeof v !== 'object' || ArrayBuffer.isView(v)) return v;
     if (!inner && SEALED_TYPES.has(v.type) && (v.signature || v.encrypted_content || v.type === 'redacted_thinking')) return v;
     const o: any = {};
-    for (const [k, x] of Object.entries(v)) o[k] = !inner && SKIP_KEYS.has(k) ? x : each(x, fn, inner);
+    for (const [k, x] of Object.entries(v)) o[k] = !inner && SKIP_KEYS.has(k) ? x : each(x, fn, inner, k);
     return o;
   };
   // 第一遍:只认,不换 —— 认出的值进 known,第二遍整包里原样出现的地方都换(模型回复里复述的密码没有上下文,规则认不出来)
-  each(payload, (s) => {
-    for (const sp of findSensitive(s, settings)) if (!allowed(sp.value)) remember(sp.value, sp.kind, placeholderFor(sp.kind, sp.value));
+  each(payload, (s, field) => {
+    for (const sp of leafSpans(s, settings, field)) {
+      if (allowed(sp.value)) continue;
+      const kind = canonicalKind(sp.value, sp.kind);
+      remember(sp.value, kind, placeholderFor(kind, sp.value));
+    }
     return s;
   });
-  const knownNow = [...known.entries()].filter(([value]) => !allowed(value));
+  const knownNow = knownFor(settings).filter(([value]) => !allowed(value));
   const byValue = new Map(knownNow);
   const knownRe = knownNow.length ? valuesRe(knownNow.map(([v]) => v)) : null;
-  const out = each(payload, (s) => {
-    const spans: Array<{ start: number; end: number; kind: string; value: string }> = findSensitive(s, settings).filter((sp) => !allowed(sp.value));
+  const out = each(payload, (s, field) => {
+    const spans = leafSpans(s, settings, field).filter((sp) => !allowed(sp.value)).map((sp) => ({ ...sp, kind: canonicalKind(sp.value, sp.kind) }));
     if (knownRe) for (const m of s.matchAll(knownRe)) {
       const start = m.index!, end = start + m[0].length;
       if (!spans.some((x) => start < x.end && end > x.start)) spans.push({ start, end, kind: byValue.get(m[0])!.kind, value: m[0] });
@@ -304,35 +327,41 @@ export function maskPayload(payload: any, settings: MaskSettings): MaskResult {
 const valuesRe = (values: string[], flags = 'g') => new RegExp(values.sort((a, b) => b.length - a.length).map((v) => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), flags);
 
 /** 界面用:一段工具参数 / 结果里,发出时会被遮住的值在哪(不含原值,界面从自己手里的文本按位置取)。规则 + 之前认出过的值。 */
-export interface MaskSpan { kind: string; ph: string; s: number; e: number }
+/** warn = 「只提醒」档:找到了但原样发出,界面不能说成「遮住」。 */
+export interface MaskSpan { kind: string; ph: string; s: number; e: number; warn?: true }
 export function maskSpans(text: string, settings: MaskSettings = maskSettings()): MaskSpan[] {
   if ((!settings.secrets && !settings.personal) || !text || text.length < 8) return [];
   const allow = new Set(readAllowList().map((e) => e.hash));
   const out: MaskSpan[] = [];
-  const add = (s: number, e: number, kind: string, value: string) => {
+  const add = (s: number, e: number, rawKind: string, value: string) => {
     if (allow.has(allowHash(value)) || out.some((x) => s < x.e && e > x.s)) return;
-    out.push({ kind, ph: placeholderFor(kind, value), s, e });
+    const kind = canonicalKind(value, rawKind);
+    out.push({ kind, ph: placeholderFor(kind, value), s, e, ...(settings.action === 'warn' ? { warn: true as const } : {}) });
   };
   for (const sp of findSensitive(text, settings)) add(sp.start, sp.end, sp.kind, sp.value);
-  for (const [value, k] of known) for (let i = text.indexOf(value); i >= 0; i = text.indexOf(value, i + value.length)) add(i, i + value.length, k.kind, value);
+  for (const [value, k] of knownFor(settings)) for (let i = text.indexOf(value); i >= 0; i = text.indexOf(value, i + value.length)) add(i, i + value.length, k.kind, value);
   return out.sort((a, b) => a.s - b.s);
 }
 
 // ── 回程:换回 ──────────────────────────────────────────────────────────────────────────────────
-const PH_RE = /\{\{\s*([A-Za-z][A-Za-z0-9_]*_[A-Za-z2-7]{8})\s*\}\}/g;
-const PH_MAX = 40;
-export function restoreText(text: string, map: Map<string, string>): string {
+// 模型偶尔在花括号里加个空格、改大小写:认,但空白最多 2 个(和流式留尾的长度对得上)
+const PH_RE = /\{\{\s{0,2}([A-Za-z][A-Za-z0-9_]{0,24}_[A-Za-z2-7]{8})\s{0,2}\}\}/g;
+const PH_MAX = 44;
+/** esc:换回进 JSON 字符串里的值要转义(流式工具参数),否则引号 / 换行把 JSON 弄坏。 */
+export function restoreText(text: string, map: Map<string, string>, esc?: (v: string) => string): string {
   if (!map.size || !text.includes('{')) return text;
   return text.replace(PH_RE, (whole, body: string) => {
     const i = body.lastIndexOf('_');
-    return map.get(`{{${body.slice(0, i).toUpperCase()}_${body.slice(i + 1).toLowerCase()}}}`) ?? whole;
+    const v = map.get(`{{${body.slice(0, i).toUpperCase()}_${body.slice(i + 1).toLowerCase()}}}`);
+    return v == null ? whole : esc ? esc(v) : v;
   });
 }
+const jsonEsc = (v: string) => JSON.stringify(v).slice(1, -1);
 /** 流式文本末尾可能是半个占位符:从最后一个可能是开头的 `{` 起留着,等下一段。 */
 function holdFrom(buf: string): number {
   const from = Math.max(0, buf.length - PH_MAX);
   for (let i = buf.indexOf('{', from); i >= 0; i = buf.indexOf('{', i + 1)) {
-    if (/^\{\{?\s*[A-Za-z0-9_]*\s*\}?$/.test(buf.slice(i))) return i;
+    if (/^\{\{?\s{0,2}[A-Za-z0-9_]*\s{0,2}\}?$/.test(buf.slice(i))) return i;
   }
   return buf.length;
 }
@@ -354,6 +383,12 @@ export function createStreamRestorer(map: Map<string, string>) {
 /** 脱敏没能运行(开着却出错)时抛这个:400 = 不重试;message 带 code 让界面认出来。 */
 export const MASKING_FAILED = 'masking_failed';
 /** 脱敏后的 payload 上挂一个不可枚举的回指(不进请求体):multiBrain 的 TANGU_LLM_DEBUG 按原 payload 对象挂标签。 */
+/** 模型读的:占位符是本机换回的,照抄就能用(magpie 同理)。 */
+export const MASKING_SECTION = '## Masked values\n' +
+  'Before anything reaches you, secrets (and personal details, if the user turned that on) are replaced on the user\'s computer with placeholders such as {{API_KEY_ab12cd34}} or {{PASSWORD_k3v9x2mq}}. ' +
+  'The real value still exists locally. When a task needs it (a command, a config file, an HTTP header, a tool argument), write the placeholder exactly as shown: ' +
+  'it is swapped back to the real value before the tool runs, and the user sees the real value in your reply. ' +
+  'Do not refuse, ask the user for the value, or try to reconstruct it just because it looks hidden.';
 export const MASKED_FROM = '__tangu_masked_from';
 export const MASKING_BLOCKED = 'masking_blocked';
 
@@ -392,7 +427,7 @@ export function withOutboundMasking(llm: LlmBrain, settings: () => MaskSettings 
         onToken: opts.onToken && ((d) => { const r = text.push(d); if (r) opts.onToken!(r); }),
         onReasoning: opts.onReasoning && ((d) => { const r = think.push(d); if (r) opts.onReasoning!(r); }),
         onToolCallDelta: opts.onToolCallDelta && ((info) => {
-          const full = restoreText(info.args.slice(0, holdFrom(info.args)), map);
+          const full = restoreText(info.args.slice(0, holdFrom(info.args)), map, jsonEsc);
           const prev = argsSeen.get(info.id) ?? '';
           argsSeen.set(info.id, full);
           opts.onToolCallDelta!({ ...info, args: full, argsLen: full.length, argsDelta: full.startsWith(prev) ? full.slice(prev.length) : full });
@@ -414,7 +449,7 @@ export function withOutboundMasking(llm: LlmBrain, settings: () => MaskSettings 
 const tryJson = (s: string): any => { try { return JSON.parse(s); } catch { return undefined; } };
 /** 工具参数是 JSON 文本:解析后按叶子换回再序列化,值里的引号 / 换行才不会把 JSON 弄坏。解析不了就按文本换。 */
 export function restoreArgs(args: string, map: Map<string, string>): string {
-  if (!map.size || !args.includes('{{')) return args;
+  if (!map.size || !(args.includes('{{') || /\\u007[bB]/.test(args))) return args;
   const parsed = tryJson(args);
   if (parsed === undefined || typeof parsed !== 'object') return restoreText(args, map);
   const walk = (v: any): any => typeof v === 'string' ? restoreText(v, map)

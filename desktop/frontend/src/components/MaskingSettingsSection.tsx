@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ShieldCheck, Trash2 } from 'lucide-react'
 import { registerMessages, useI18n } from '../i18n'
 import { getMasking, setMasking, removeMaskAllow, getMaskLog, type MaskingState, type MaskingSettings, type MaskLogLine } from '../services/backendService'
@@ -49,6 +49,7 @@ export function MaskingSettingsSection() {
   const [log, setLog] = useState<MaskLogLine[] | null>(null)
   const [error, setError] = useState('')
   const sessions = useApp((s) => s.sessions)
+  const saving = useRef<Promise<unknown>>(Promise.resolve()) // 连点几下按顺序写,别让先发的回包盖住后发的
 
   useEffect(() => {
     let alive = true
@@ -60,8 +61,9 @@ export function MaskingSettingsSection() {
   const s = state.settings
   const save = (patch: Partial<MaskingSettings>) => {
     setState((cur) => (cur?.settings ? { ...cur, settings: { ...cur.settings, ...patch } } : cur))
-    setMasking(homeTarget(), patch).then((settings) => { setState((cur) => (cur ? { ...cur, settings } : cur)); setError('') })
-      .catch((e: any) => setError(e?.message || String(e)))
+    saving.current = saving.current.then(() => setMasking(homeTarget(), patch)
+      .then((settings) => { setState((cur) => (cur ? { ...cur, settings } : cur)); setError('') })
+      .catch((e: any) => setError(e?.message || String(e))))
   }
   const toggleLog = () => {
     if (open === 'log') return setOpen(null)
@@ -94,8 +96,8 @@ export function MaskingSettingsSection() {
     {open === 'allow' && <div className="mask-settings-list">
       {allow.length ? allow.map((e) => (
         <div key={e.hash} className="mask-settings-item">
-          <span>{maskKindLabel(t, e.kind)}</span><code>{e.head}••••</code><small>{t('maskset.len', { n: e.len })}</small><span className="grow" />
-          <button type="button" className="icon-btn" aria-label={`${t('settings.btn.delete')} · ${e.head}`}
+          <span>{maskKindLabel(t, e.kind)}</span><small>{t('maskset.len', { n: e.len })} · {formatDateTime(e.at)}</small><span className="grow" />
+          <button type="button" className="icon-btn" aria-label={`${t('settings.btn.delete')} · ${maskKindLabel(t, e.kind)}`}
             onClick={() => void removeMaskAllow(homeTarget(), e.hash).then((list) => setState((cur) => (cur ? { ...cur, allow: list } : cur)))}><Trash2 size={13} /></button>
         </div>
       )) : <div className="hint">{t('maskset.allowEmpty')}</div>}

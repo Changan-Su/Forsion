@@ -737,7 +737,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
               return parts.length ? (
                 <Fragment key={i}>
                   {parts.map((part, k) => part.t === 'tools'
-                    ? <ToolGroup key={`tools-${part.events.map((ev) => ev.id).join('-')}-${k + skip}`} events={part.events} running={msg.status === 'streaming'} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} />
+                    ? <ToolGroup key={`tools-${part.events.map((ev) => ev.id).join('-')}-${k + skip}`} events={part.events} running={msg.status === 'streaming'} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} sessionId={runSid} />
                     : part.t === 'marketplace'
                       ? <MarketPluginCards key={`market-${part.event.id}`} event={part.event} />
                     : part.t === 'sandbox'
@@ -754,11 +754,11 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
                 </Fragment>
               ) : null
             })
-            const head = (!!msg.reasoning || !!headEvents) && <ToolGroup key="proc-head" events={headEvents || []} running={streaming} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} {...think(nodes.every((n) => n == null))} />
+            const head = (!!msg.reasoning || !!headEvents) && <ToolGroup key="proc-head" events={headEvents || []} running={streaming} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} sessionId={runSid} {...think(nodes.every((n) => n == null))} />
             return <>{head}{nodes}</>
           }
           // 老序:插件卡片挪到尾部(trailingCards),不在这一行里再列一遍
-          const head = (!!msg.reasoning || !!msg.toolEvents?.length) && <ToolGroup key="proc-head" events={(msg.toolEvents || []).filter((ev) => !cardOf(ev))} running={streaming} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} {...think(!body)} />
+          const head = (!!msg.reasoning || !!msg.toolEvents?.length) && <ToolGroup key="proc-head" events={(msg.toolEvents || []).filter((ev) => !cardOf(ev))} running={streaming} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} sessionId={runSid} {...think(!body)} />
           return (
             <>
               {head}

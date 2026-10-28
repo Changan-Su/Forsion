@@ -13,7 +13,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { deps } from '../seams/runtime.js';
 import { resolveProfile } from '../seams/appProfile.js';
 import type { StreamOpts, BuildPayloadOpts } from '../seams/cloudBrain.js';
-import { maskSpans } from '../llm/outboundMask.js';
+import { maskSpans, maskSettings, MASKING_SECTION } from '../llm/outboundMask.js';
 import { LlmError, type ThinkingLevel, type ChatMessage, type ToolCall } from '../core/types.js';
 import { clampThinkingLevel, resolveModelCapability } from '../llm/modelCapabilities.js';
 import { PROTOCOL_MARK } from '../llm/openaiCompat.js';
@@ -1570,6 +1570,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     systemParts.push(TOOL_FAILURE_SECTION, AUTONOMY_SECTION, responseStyleSection(channelSession, ps.noPreamble ? { noPreamble: true } : undefined));
     // 应用 / 窗口引用(`[[app://…]]` / `[[window://…]]`):紧跟输出风格段(它是「标识符进反引号」的例外);通道会话是纯文本,不注入。
     if (!channelSession) systemParts.push(APP_REF_SECTION);
+    // 发给模型前脱敏开着:告诉模型占位符能直接用(否则真模型会拒绝「看不到的 key」,live 台架 10-28 实测)。随设置静态,不碎前缀缓存。
+    { const ms = maskSettings(); if (ms.action === 'mask' && (ms.secrets || ms.personal)) systemParts.push(MASKING_SECTION); }
     // 持久化契约:计划模式不注入(只读工具集与「carry through implementation」矛盾,且计划模式有自己的流程段);
     // chat 不注入(PRESET_TABLE.persistence=false:一轮=一次发言,Conversation Contract 反向要求「答完就停」)。
     if (!planMode && ps.persistence) systemParts.push(PERSISTENCE_SECTION);

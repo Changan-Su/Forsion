@@ -84,6 +84,41 @@ describe('maskPayload / restore', () => {
   });
 });
 
+describe('review fixes', () => {
+  it('stays fast on long unbroken input', () => {
+    const t0 = Date.now();
+    findSensitive('a'.repeat(200_000) + ' ' + 'x@'.repeat(50_000), { secrets: true, personal: true });
+    expect(Date.now() - t0).toBeLessThan(1000);
+  });
+  it('masks a JSON leaf by its field name, and a short data: string', () => {
+    const p = { messages: [{ role: 'tool', content: JSON.stringify({ user: 'app', password: 'AbCd123456', next_page_token: 'Zz9yXx8wVv7u' }) }, { role: 'user', content: `data:text/plain,${KEY}` }] };
+    const out = JSON.stringify(maskPayload(p, ON).payload);
+    expect(out).not.toContain('AbCd123456');
+    expect(out).toContain('Zz9yXx8wVv7u');
+    expect(out).not.toContain(KEY);
+  });
+  it('keeps one placeholder per value and drops remembered personal values when personal is off', () => {
+    const v = 'Qw3rTy7UiOp9';
+    const a = maskPayload({ m: `postgres://u:${v}@h/db` }, ON);
+    const b = maskPayload({ m: `client_secret=${v}` }, ON);
+    expect(a.map.size && [...a.map.keys()]).toEqual([...b.map.keys()]);
+    const mail = 'someone.real@forsion-demo.net';
+    maskPayload({ m: `contact ${mail}` }, { ...ON, personal: true });
+    expect(JSON.stringify(maskPayload({ m: `again ${mail}` }, ON).payload)).toContain(mail);
+    expect(maskSpans(`again ${mail}`, ON)).toEqual([]);
+  });
+  it('flags spans in warn mode', () => {
+    expect(maskSpans(ENV, { ...ON, action: 'warn' }).every((m) => m.warn)).toBe(true);
+    expect(maskSpans(ENV, ON).some((m) => m.warn)).toBe(false);
+  });
+  it('restores \\u007b-escaped placeholders in args', () => {
+    const { map } = maskPayload({ m: KEY }, ON);
+    const ph = [...map.keys()][0];
+    const esc = JSON.stringify({ k: ph }).replace(/\{/g, '\\u007b').replace('\\u007b"k"', '{"k"');
+    expect(JSON.parse(restoreArgs(esc, map)).k).toBe(KEY);
+  });
+});
+
 describe('withOutboundMasking', () => {
   const fake = (capture: (o: StreamOpts) => void, reply: string, args: string): LlmBrain => ({
     resolveModelAndKey: async () => ({}) as any,
