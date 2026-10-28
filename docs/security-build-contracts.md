@@ -93,3 +93,19 @@ publish-engine 在准确 `$GITHUB_SHA` checkout 上执行 npm ci、完整 `npm r
 - 搜索为1k/10k会话、每会话10消息；每条LIKE/FTS各15样本，模型网络完全排除。不要拿局部SQL或浏览器数据推断全应用速度。
 
 单轮评审发现两项并已修复：输出HTML预算漏算标签/UTF-8字节；默认性能报告污染下一轮源码摘要。对应负对照/回归均保留。无本轮提交、推tag或发布行为。
+
+## 2026-10-28 合并后验收补充
+
+以下是后续验收，前文的第一轮证据及当时未覆盖范围保留其时间与源码边界。
+
+- PR #286 已合并为 `c10d469a`，最后候选 `774a3fd6` 的六项 PR 检查全部通过。合并前 Windows 全量 runtime 为 4693 通过、88 失败、125 跳过；desktop 为 7957 通过、71 失败、33 跳过及两个未捕获错误，**不声称全量全绿**。同环境旧 main 对照复现所有 88 个 runtime 失败；desktop 的差异经定向复跑及 Windows rename/socket 负对照分类。人员字段旧测试误数引用/identity 别名；新增重叠消费者测试还发现并修复了真实的重复在途读取，23 项相关测试及 Astra 复核通过。
+- #267/#268：真实 standalone、生产 loop/registry、SQLite/SSE 与完整 Electron 界面串联验证。401/403/404/429/503 的三次失败触发恢复保护，204 空响应成功；服务端已收到 POST 后点击实际 Stop，仅一次请求且不自动重试，当前及刷新后的工具卡保留可能已完成/结果未知提示。模型端点为确定性夹具，未冒称真实模型测试。
+- #272：Windows Electron、生产 Unit Web/Chromium、Android 原 APK 均完成真实系统剪贴板与 trusted paste 事件验证，富文本、表格、链接、任务框、图片落盘；恶意上下文属性输入不执行。
+- #273：隔离 AOSP API35 / WebView124 的原 APK 与 HTTP-enabled 测试配置合计 26 项检查通过；顶层/iframe 代理文档无法取得应用 origin 或原生桥。实际产品 AppUrlOpen 登录回跳处理、Space 深链、外部浏览器及原生本地文件图片预览通过。登录是合成 OS Intent，不代表真实账号/浏览器 OAuth 全链路。变体仅改配置/测试签名，DEX 与第一轮原 APK 相同；没有发布 APK。
+- #271：官方测试 corpus 的 comments stress、XML bomb、quadratic blowup 样本在隔离生产 worker/GUI 中通过；这些是官方通用回归样本，未确证为两项 CVE 的专属 PoC。合法中文多 sheet、日期、公式缓存值与链接显示正常。真实 GUI 发现 WsFileView 漏接工作簿专属错误及取消信号，本次补上 AbortController 和文案分流；两项入口回归先红后绿，相关 14 项、desktop build/typecheck/生成契约通过。实际关闭预览后 532 ms 终止原生 Worker，尚未发送延迟的解析数据；格式/大小/复杂度失败展示可理解提示并保留下载。
+- #279：在干净 `774a3fd6` 及相同 bundle/固定 1k、10k 磁盘语料上，完整 Electron 两轮各 100 次页面生命周期、两次切库，200 次编辑全部落盘、零页面错误。剔除 trace 区间后，第二轮页面周期 p95 相对第一轮为 -3.07%（1k）/-3.34%（10k）。回到 1k 后两轮堆约 49.8 MiB，DOM 19799、主进程句柄 1007；末期堆变化约 2.3%，仍记录 +22–31 KB/轮斜率，不宣称零泄漏。10k 页面周期约 8–9 秒的异常保留 timeline 与 renderer/main heap。此前 80 ms 阻塞负对照属于未改 benchmark 工具的第一轮源码，未冒充新完整 Electron 注入；模型/网络等待与本地 UI 成本分开。
+- #275/#276 非发布候选：[build run 40623862298](https://github.com/Changan-Su/Forsion/actions/runs/40623862298) 精确绑定 `63940707`；三平台 no-extend 包通过内置运行时及真实能力检查，材料记录源码、构建器、源锁清单、输入和产物摘要。默认发行版的云扩展升级验收出现随包 0.9.4 被运行中 0.9.5 替换的状态差异，不能把 no-extend 成功写成六个发行组合全部成功。Windows [clean probe 40625405464](https://github.com/Changan-Su/Forsion/actions/runs/40625405464) 绑定确切 run/job/artifact；一次性 runner 隐藏系统 VC++ DLL 后，包内 Python、Office、Git 探针通过，移除包内 VC++ 的负对照失败。本机系统 DLL 从未修改。
+- 新的 `desktop` 手动构建选项跳过 Android 签名；现有清洁探针改为准确 run/commit/distribution 绑定。默认要求成功构建；只有显式 `candidate_only` 且非发布 workflow_dispatch 才允许整体验收失败但目标打包 job 成功的产物，仍严格核对 SHA、job、唯一未过期 artifact，结果明确 `releaseEligible=false`。
+- #277 仍需管理员设置后台必需检查：准确 context 为 `critical-contracts`、GitHub Actions app 15368；目前 main 未保护、rulesets 空、连接器保护 API 为 403。没有绕过权限。
+- #278 仍保留真实候选 tag 的签名前失败注入验收：本地同步契约正负对照及三平台 packaged overlay E2E 只是部分证据。当前源码的依赖/桌面发行线不构成合法热更新候选；manual workflow 仍会读取生产签名 secret，不能为补验收而随意触发。桌面候选还被 2.13.11 低于已发布 2.13.13 的发行身份门禁拒绝；门禁保留。
+
