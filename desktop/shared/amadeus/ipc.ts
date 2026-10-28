@@ -784,7 +784,7 @@ export interface AmadeusApi {
   /** 卸载 ~/.forsion/plugins 下的一个 Forsion 插件(按 manifest id 定位目录),挪进回收站(30 天可恢复;可选:桌面实现)。
    *  keepSettings:插件设置原地留着;vaultFolder:库里的工作文件夹(相对库根)一起进回收站;prefs:渲染层摘下的 localStorage 偏好,
    *  恢复时原样交回。旧调用只传 id = 文件 + 设置进回收站。 */
-  uninstallPlugin?(id: string, opts?: { keepSettings?: boolean; vaultFolder?: string; prefs?: Record<string, string> }): Promise<{ trashId?: string; dirName?: string } | void>
+  uninstallPlugin?(id: string, opts?: { keepSettings?: boolean; vaultFolder?: string; prefs?: Record<string, string>; engineEnabled?: string[] }): Promise<{ trashId?: string; dirName?: string } | void>
   /** 恢复主进程写的回收站条目(Forsion 插件);extra.prefs 由渲染层写回 localStorage。 */
   trashRestore?(id: string): Promise<{ kind: string; ref: string; extra?: Record<string, unknown> }>
   /** 该 Agent 是不是**这个插件的捆绑包播种的**(引擎新播种时写 agents/<slug>/.bundle-origin = bundle 目录名)。

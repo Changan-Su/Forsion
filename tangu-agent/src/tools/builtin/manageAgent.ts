@@ -79,6 +79,7 @@ export const manageAgentProvider: ToolProvider = {
             if (!(await getAgent(slug))) return `Agent not found: ${slug}`;
             // 与名册删除同一条(services/agentUninstall):进回收站 30 天,私聊归档、移出团队、暂停用到它的自动化。
             const r = await uninstallAgent(ctx.userId, ctx.appId, slug);
+            if (r.busy) return `Error: agent "${slug}" is in a two-member team that is still running; deleting it would remove that team too. Try again once the team run finishes.`;
             return r.ok ? `Deleted agent: ${slug}. It is in the trash for 30 days (the user can restore it in Settings › System › Trash); its direct chats were archived.` : `Error: agent "${slug}" cannot be deleted (the default agent, or Muse while it is on).`;
           }
           if (action === 'create' || action === 'update') {

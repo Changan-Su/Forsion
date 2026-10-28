@@ -117,16 +117,17 @@ export async function restoreSkill(entry: TrashEntry): Promise<{ path: string; r
   const from = entry.items[0]?.from;
   // 还原为内置版本时原处已经重新播种了一份原样的:换回用户改过的那份(原样的随时能再播种)。
   if (extra.reseeded && from && await isUntouchedSeedMirror(from).catch(() => false)) await fs.rm(from, { recursive: true, force: true });
-  const placed = await restoreTrashItems(entry);
-  const at = (from && placed.get(from)) || from || '';
-  const renamed = at !== from;
-  if (!renamed) {
+  let at = from || '', renamed = false;
+  await restoreTrashItems(entry, async (placed) => {
+    at = (from && placed.get(from)) || from || '';
+    renamed = at !== from;
+    if (renamed) return;
     const slug = path.basename(at);
     for (const p of extra.picks ?? []) {
       const a = await getAgent(p.agent);
       if (a && !(a.enabledSkillIds ?? []).includes(p.id)) await patchAgent(p.agent, (cur) => ({ enabledSkillIds: [...(cur.enabledSkillIds ?? []), p.id] })).catch(() => {});
     }
     for (const d of extra.disabled ?? []) await setSkillDisabled(d.target, slug, true, d.agent).catch(() => {});
-  }
+  });
   return { path: at, renamed };
 }

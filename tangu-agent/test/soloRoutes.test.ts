@@ -203,6 +203,25 @@ describe('uninstalling an agent into the trash and restoring it (10-28)', () => 
     expect((await call('GET', '/agent/trash')).body.entries.some((e: any) => e.id === del.body.trashId)).toBe(false);
   });
 
+  it('a two-member team still running blocks the delete (409); once idle its chats are archived along and come back on restore', async () => {
+    await saveAgent({ slug: 'kim', name: 'Kim', description: 'x', systemPrompt: 'x' });
+    await saveAgent({ slug: 'lee', name: 'Lee', description: 'x', systemPrompt: 'x' });
+    await saveTeam({ slug: 'pair', name: 'Pair', members: [{ slug: 'kim' }, { slug: 'lee' }] });
+    const s = (await post('/agent/solo/agent/lee/open')).body.session.id;
+    await query(`UPDATE chat_sessions SET agent_config = ? WHERE id = ?`, [JSON.stringify({ teamSlug: 'pair' }), s]); // 当成团队会话
+    await query(`INSERT INTO agent_runs (id, session_id, user_id, status, input) VALUES ('rp', ?, ?, 'running', '{}')`, [s, USER]);
+    expect((await call('DELETE', '/agent/agents/kim')).status).toBe(409);
+    expect(await getTeam('pair')).not.toBeNull();
+    await query(`UPDATE agent_runs SET status = 'completed' WHERE id = 'rp'`);
+    const del = await call('DELETE', '/agent/agents/kim');
+    expect(del.body.ok).toBe(true);
+    expect(await getTeam('pair')).toBeNull();
+    expect(!!(await row(s)).archived).toBe(true);
+    await call('POST', `/agent/trash/${del.body.trashId}/restore`);
+    expect((await getTeam('pair'))!.members.map((m) => m.slug)).toEqual(['kim', 'lee']);
+    expect(!!(await row(s)).archived).toBe(false);
+  });
+
   it('deleteChats=1 deletes its chats (archived ones too); purge and empty work', async () => {
     await saveAgent({ slug: 'temp', name: 'Temp', description: 'x', systemPrompt: 'x' });
     const a = (await post('/agent/solo/agent/temp/open')).body.session.id;

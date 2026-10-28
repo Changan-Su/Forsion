@@ -11,7 +11,7 @@ import { registerMessages, useI18n } from '../i18n'
 import { useApp } from '../stores/appStore'
 import { homeTarget } from '../services/engine/targets'
 import { emptyTrash, listTrash, purgeTrashEntry, type TrashEntry } from '../services/backendService'
-import { fmtSize, restoreFromTrash } from './UninstallDialog'
+import { fmtSize, restoreErrorText, restoreFromTrash } from './UninstallDialog'
 import './pluginManagement.css'
 
 registerMessages({
@@ -67,7 +67,7 @@ export function TrashSettings() {
     try {
       const r = await restoreFromTrash(e)
       toast(r.renamedTo ? t('uninstall.restoredAs', { name: r.renamedTo }) : t('uninstall.restored', { name: e.name }))
-    } catch (x: any) { toast(t('uninstall.restoreFail', { e: x?.message || x }), true) }
+    } catch (x) { toast(restoreErrorText(x), true) }
     finally { setBusy(null); load() }
   }
   const purge = async (target: TrashEntry | 'all'): Promise<void> => {

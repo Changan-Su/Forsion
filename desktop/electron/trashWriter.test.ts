@@ -32,14 +32,32 @@ it('moves everything in, restores everything back to where it was', async () => 
   expect(existsSync(path.join(env.root, 'tangu', 'trash', e!.id))).toBe(false)
 })
 
-it('a taken path restores beside it as <name>-2 (files keep their extension)', async () => {
+it('a reinstalled plugin is not restored over; a taken settings file lands beside it as <name>-2', async () => {
   const { dir, settings } = await plugin()
   const e = await moveToDesktopTrash({ ref: 'demo', name: 'Demo', paths: [{ path: dir, role: 'files' }, { path: settings, role: 'settings' }] })
-  await fs.mkdir(dir, { recursive: true }); await fs.writeFile(settings, 'new')
+  await fs.mkdir(dir, { recursive: true })
+  await expect(restoreDesktopTrash(e!.id)).rejects.toThrow('plugin-reinstalled')
+  expect(existsSync(path.join(env.root, 'tangu', 'trash', e!.id, 'meta.json'))).toBe(true) // 条目还在,卸掉新装的再恢复
+  await fs.rm(dir, { recursive: true }); await fs.writeFile(settings, 'new')
   await restoreDesktopTrash(e!.id)
-  expect(existsSync(path.join(env.root, 'plugins', 'demo-2', 'manifest.json'))).toBe(true)
+  expect(existsSync(path.join(dir, 'manifest.json'))).toBe(true)
   expect(await fs.readFile(path.join(env.root, 'settings', 'demo-2.json'), 'utf8')).toBe('{"a":1}')
-  expect(await fs.readFile(settings, 'utf8')).toBe('new') // 新装的那份没被盖
+  expect(await fs.readFile(settings, 'utf8')).toBe('new') // 新写的那份没被盖
+})
+
+it('a failed move puts earlier items back; if that also fails the entry stays and restores', async () => {
+  const { dir, settings } = await plugin()
+  const real = fs.rename.bind(fs)
+  const spy = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+    if (String(from) === settings || String(from).endsWith(`items${path.sep}0`)) throw Object.assign(new Error('EIO'), { code: 'EIO' })
+    return real(from, to)
+  })
+  await expect(moveToDesktopTrash({ ref: 'demo', name: 'Demo', paths: [{ path: dir, role: 'files' }, { path: settings, role: 'settings' }] })).rejects.toThrow('EIO')
+  spy.mockRestore()
+  const [id] = await fs.readdir(path.join(env.root, 'tangu', 'trash'))
+  expect(existsSync(dir)).toBe(false) // 没挪回去的那份留在回收站里,不是删了
+  await restoreDesktopTrash(id)
+  expect(existsSync(path.join(dir, 'manifest.json')) && existsSync(settings)).toBe(true)
 })
 
 it('nothing present = no entry; a symlinked trash dir is refused and nothing moves', async () => {

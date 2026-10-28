@@ -208,6 +208,7 @@ router.delete('/agent/agents/:slug', authMiddleware, async (req: AuthRequest, re
     // 进回收站(services/agentUninstall):?deleteChats=1 连私聊一起删,缺省归档。
     // ?keepFiles=1 是旧版桌面的参数:照旧回 keptAt(回收站里那份目录),它勾了「同时删除相关文件」会再移进系统废纸篓。
     const r = await uninstallAgent(req.user!.userId, deps().profile.appId, req.params.slug, { deleteChats: req.query.deleteChats === '1' });
+    if (r.busy) return res.status(409).json({ detail: 'run_active' }); // 一起解散的团队还在跑(同删团队)
     if (!r.ok && req.params.slug === MUSE_AGENT_SLUG) {
       return res.status(400).json({ detail: 'Muse 正在启用中,请先在 设置·后台智能体 关闭 Muse 再删除' });
     }

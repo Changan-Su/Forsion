@@ -31,6 +31,32 @@ export async function archiveSoloSessions(userId: string, appId: string, kind: S
   return ids;
 }
 
+/** 团队会话:agent_config.teamSlug = slug(团队路由与删 Agent 时解散团队共用)。 */
+export function teamSlugPredicate(alias: string): string {
+  const col = `${alias}.agent_config`;
+  return getDbType() === 'sqlite'
+    ? `(${col} IS NOT NULL AND json_valid(${col}) AND json_type(${col}) = 'object' AND json_extract(${col}, '$.teamSlug') = ?)`
+    : `(${col} IS NOT NULL AND jsonb_typeof(${col}) = 'object' AND (${col} ->> 'teamSlug') = ?)`;
+}
+
+/** 团队还有在跑的 run:它的 Library 是 run 的 cwd,挪走 = run 在已删目录上失败。 */
+export async function teamRunActive(userId: string, appId: string, slug: string): Promise<boolean> {
+  return (await query<any[]>(
+    `SELECT 1 FROM agent_runs r JOIN chat_sessions s ON s.id = r.session_id WHERE s.user_id = ? AND s.app_id = ? AND r.status IN ('queued','running') AND ${teamSlugPredicate('s')} LIMIT 1`,
+    [userId, appId, slug],
+  )).length > 0;
+}
+
+/** 归档团队还开着的会话,返回归档了哪些(恢复时取消归档)。 */
+export async function archiveTeamSessions(userId: string, appId: string, slug: string): Promise<string[]> {
+  const ids = (await query<Array<{ id: string }>>(
+    `SELECT id FROM chat_sessions s WHERE s.user_id = ? AND s.app_id = ? AND s.kind = 'user' AND s.archived = ? AND ${teamSlugPredicate('s')}`,
+    [userId, appId, false, slug],
+  )).map((r) => r.id);
+  await setSessionsArchived(userId, ids, true);
+  return ids;
+}
+
 export async function setSessionsArchived(userId: string, ids: string[], archived: boolean): Promise<void> {
   for (const sid of ids) await query(`UPDATE chat_sessions SET archived = ? WHERE id = ? AND user_id = ?`, [archived, sid, userId]);
 }

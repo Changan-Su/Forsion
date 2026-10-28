@@ -10,7 +10,8 @@ import path from 'node:path';
 import { tanguHome } from '../core/tanguHome.js';
 
 export type TrashKind = 'agent' | 'skill' | 'plugin';
-export interface TrashItem { from: string; stored: string; role?: string }
+/** parent:挪走时原处上级目录的真实路径(恢复时上级被换成软链就拒绝,免得挪到链接指向的地方);placed:恢复落到哪(重试时认得改名后的那份)。 */
+export interface TrashItem { from: string; stored: string; role?: string; parent?: string; placed?: string }
 export interface TrashEntry {
   id: string;
   kind: TrashKind;
@@ -29,6 +30,10 @@ export const TRASH_DAYS = 30;
 const DAY = 24 * 60 * 60 * 1000;
 export const trashDir = (): string => path.join(tanguHome(), 'trash');
 const SAFE_ID = /^[a-z]+-[A-Za-z0-9._-]{1,80}-\d+-[0-9a-f]{8}$/;
+const exists = (p: string): Promise<boolean> => fs.lstat(p).then(() => true, () => false);
+/** 回收站根必须是真目录:是软链的话,挪进来 = 挪到链接指向的地方,到期清理 = 删别处的东西。 */
+const realRoot = async (): Promise<boolean> => !!(await fs.lstat(trashDir()).catch(() => null))?.isDirectory();
+const writeMeta = (e: TrashEntry): Promise<void> => fs.writeFile(path.join(trashDir(), e.id, 'meta.json'), JSON.stringify(e, null, 2), 'utf8');
 
 export async function pathSize(p: string): Promise<number> {
   const st = await fs.lstat(p).catch(() => null);
@@ -39,43 +44,46 @@ export async function pathSize(p: string): Promise<number> {
   return n;
 }
 
-/** 同盘 rename;跨盘(笔记库在网盘 / 外接盘)退回复制后删除。 */
+/** 同盘 rename;跨盘(笔记库在网盘 / 外接盘)退回复制后删除。复制失败删掉半份(源还完整);删源失败照样抛,但整份已在 to。 */
 async function move(from: string, to: string): Promise<void> {
   try { await fs.rename(from, to); }
   catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== 'EXDEV') throw e;
-    await fs.cp(from, to, { recursive: true, errorOnExist: true, force: false });
+    if ((e as NodeJS.ErrnoException).code !== 'EXDEV' || await exists(to)) throw e;
+    try { await fs.cp(from, to, { recursive: true, errorOnExist: true, force: false }); }
+    catch (c) { await fs.rm(to, { recursive: true, force: true }).catch(() => {}); throw c; }
     await fs.rm(from, { recursive: true, force: true });
   }
 }
 
-/** 挪进回收站;一件都没挪成就不留条目(返回 null)。中途失败把已挪的挪回去再抛。 */
+/** 挪进回收站;一件都不在就不留条目(返回 null)。先写记录再挪:挪到一半断电 / 跨盘删源失败,条目照样列得出、恢复得了。
+ *  中途失败把已挪的挪回去再抛;有一件没挪回去(或失败那件已整份进来)就留着条目,不删唯一的那份。 */
 export async function moveToTrash(input: { kind: TrashKind; ref: string; name: string; paths: Array<{ path: string; role?: string }>; extra?: Record<string, unknown>; restorer?: 'engine' | 'desktop' }): Promise<TrashEntry | null> {
   const present: Array<{ path: string; role?: string }> = [];
   for (const p of input.paths) if (await fs.lstat(p.path).catch(() => null)) present.push(p);
   if (!present.length) return null;
   const id = `${input.kind}-${input.ref.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 80)}-${Date.now()}-${randomUUID().slice(0, 8)}`;
-  // 回收站要是个软链,卸载就把私有内容挪到链接指向的地方去了:必须是真目录。
   await fs.mkdir(trashDir(), { recursive: true });
-  if (!(await fs.lstat(trashDir())).isDirectory()) throw new Error('Trash is not a regular directory');
+  if (!(await realRoot())) throw new Error('Trash is not a regular directory');
   const dir = path.join(trashDir(), id);
   await fs.mkdir(path.join(dir, 'items'), { recursive: true });
+  let size = 0;
   const items: TrashItem[] = [];
-  let bytes = 0;
+  for (const [i, p] of present.entries()) {
+    size += await pathSize(p.path);
+    const parent = await fs.realpath(path.dirname(p.path)).catch(() => undefined);
+    items.push({ from: path.resolve(p.path), stored: `items/${i}`, ...(p.role ? { role: p.role } : {}), ...(parent ? { parent } : {}) });
+  }
+  const entry: TrashEntry = { id, kind: input.kind, ref: input.ref, name: input.name, deletedAt: Date.now(), size, restorer: input.restorer ?? 'engine', items, ...(input.extra ? { extra: input.extra } : {}) };
+  try { await writeMeta(entry); } catch (e) { await fs.rm(dir, { recursive: true, force: true }).catch(() => {}); throw e; }
+  let moved = 0;
   try {
-    for (const [i, p] of present.entries()) {
-      const stored = `items/${i}`;
-      bytes += await pathSize(p.path);
-      await move(p.path, path.join(dir, stored));
-      items.push({ from: path.resolve(p.path), stored, ...(p.role ? { role: p.role } : {}) });
-    }
+    for (const it of items) { await move(it.from, path.join(dir, it.stored)); moved++; }
   } catch (e) {
-    for (const it of items.reverse()) await move(path.join(dir, it.stored), it.from).catch(() => {});
-    await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+    let safe = !(await exists(path.join(dir, items[moved].stored)));
+    for (let i = moved - 1; i >= 0; i--) await move(path.join(dir, items[i].stored), items[i].from).catch(() => { safe = false; });
+    if (safe) await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
     throw e;
   }
-  const entry: TrashEntry = { id, kind: input.kind, ref: input.ref, name: input.name, deletedAt: Date.now(), size: bytes, restorer: input.restorer ?? 'engine', items, ...(input.extra ? { extra: input.extra } : {}) };
-  await fs.writeFile(path.join(dir, 'meta.json'), JSON.stringify(entry, null, 2), 'utf8');
   return entry;
 }
 
@@ -87,10 +95,9 @@ export async function readTrash(id: string): Promise<TrashEntry | null> {
   } catch { return null; }
 }
 
-const exists = (p: string): Promise<boolean> => fs.lstat(p).then(() => true, () => false);
-
 /** 东西全被别处挪走了(旧版桌面勾「同时删除相关文件」会把条目里的目录再移进系统废纸篓)的条目不列。 */
 export async function listTrash(): Promise<TrashEntry[]> {
+  if (!(await realRoot())) return [];
   const ids = await fs.readdir(trashDir()).catch(() => [] as string[]);
   const out: TrashEntry[] = [];
   for (const id of ids) {
@@ -104,37 +111,43 @@ export async function listTrash(): Promise<TrashEntry[]> {
 export async function setTrashExtra(id: string, extra: Record<string, unknown>): Promise<void> {
   const e = await readTrash(id);
   if (!e) return;
-  await fs.writeFile(path.join(trashDir(), id, 'meta.json'), JSON.stringify({ ...e, extra: { ...e.extra, ...extra } }, null, 2), 'utf8');
+  await writeMeta({ ...e, extra: { ...e.extra, ...extra } });
 }
 
 /** 原位置被占了就落到「原名-2」「原名-3」…(目录名常常就是 slug,不能带空格括号)。返回每件实际落到哪。
- *  中途失败可重试:已经挪回去的那几件在条目里不存在了,跳过。 */
-export async function restoreTrashItems(entry: TrashEntry): Promise<Map<string, string>> {
+ *  finish = 文件放回去之后要接上的(取消归档、写回设置…):它成功了才删条目,失败可整条重试 ——
+ *  已经放回去的那几件在条目里记着落点,重试时跳过、照样交给 finish。 */
+export async function restoreTrashItems(entry: TrashEntry, finish?: (placed: Map<string, string>) => Promise<void>): Promise<Map<string, string>> {
   const dir = path.join(trashDir(), entry.id);
   const placed = new Map<string, string>();
   for (const it of entry.items) {
     if (!/^items\/\d+$/.test(it.stored)) throw new Error('invalid trash item');
     const st = await fs.lstat(path.join(dir, it.stored)).catch(() => null);
-    if (!st) continue;
+    if (!st) { if (it.placed) placed.set(it.from, it.placed); continue; }
     let target = it.from;
     const ext = st.isDirectory() ? '' : path.extname(target), stem = target.slice(0, target.length - ext.length);
     for (let n = 2; await exists(target); n++) target = `${stem}-${n}${ext}`;
     await fs.mkdir(path.dirname(target), { recursive: true });
+    if (it.parent && await fs.realpath(path.dirname(target)) !== it.parent) throw new Error(`The folder ${path.dirname(target)} now points somewhere else; not restoring into it`);
     await move(path.join(dir, it.stored), target);
+    it.placed = target;
     placed.set(it.from, target);
+    await writeMeta(entry).catch(() => {});
   }
+  await finish?.(placed);
   await fs.rm(dir, { recursive: true, force: true });
   return placed;
 }
 
 export async function purgeTrash(id: string): Promise<boolean> {
-  if (!(await readTrash(id))) return false;
+  if (!(await realRoot()) || !(await readTrash(id))) return false;
   await fs.rm(path.join(trashDir(), id), { recursive: true, force: true });
   return true;
 }
 
 /** 全清(含列表里不显示的空壳条目);只认 readTrash 认得的目录名,别的不碰。 */
 export async function emptyTrash(): Promise<number> {
+  if (!(await realRoot())) return 0;
   const ids = (await fs.readdir(trashDir()).catch(() => [] as string[])).filter((id) => SAFE_ID.test(id));
   for (const id of ids) await fs.rm(path.join(trashDir(), id), { recursive: true, force: true });
   return ids.length;
@@ -144,7 +157,9 @@ export async function emptyTrash(): Promise<number> {
  *  没有 meta.json 的目录(挪到一半进程没了)按目录时间同样 30 天后清。 */
 export async function purgeExpiredTrash(now = Date.now()): Promise<number> {
   let n = 0;
+  if (!(await realRoot())) return 0;
   for (const id of await fs.readdir(trashDir()).catch(() => [] as string[])) {
+    if (!SAFE_ID.test(id)) continue;
     const e = await readTrash(id);
     const at = e ? e.deletedAt : (await fs.stat(path.join(trashDir(), id)).catch(() => null))?.mtimeMs ?? now;
     if (now - at >= TRASH_DAYS * DAY) { await fs.rm(path.join(trashDir(), id), { recursive: true, force: true }); n++; }

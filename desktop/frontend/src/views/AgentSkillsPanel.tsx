@@ -301,8 +301,6 @@ export function AgentSkillsPanel({ cfg, agentSlug, surface, selectedIds, onSelec
     const q = query.trim().toLocaleLowerCase()
     const shown = legacy.filter((entry) => !q || `${entry.name} ${entry.description}`.toLocaleLowerCase().includes(q))
     return <section className="agent-skills-panel" aria-label={t('agentProfile.skills')}>
-    {deleting && detail && <SkillUninstallDialog skillKey={detail.key} agentSlug={agentSlug} name={detail.name} onClose={() => setDeleting(false)}
-      onDone={() => { setDetailKey(null); setDetail(null); setEditing(false); emitChange() }} />}
       <div className="profile-list-controls"><label className="profile-search"><Search size={14} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('agentProfile.searchEquipment')} aria-label={t('agentProfile.searchEquipment')} /></label>
         <CapabilityMenu label={t('agentProfile.skillPolicy')} selection items={([
         ['auto', 'agentProfile.skillAuto'], ['selected', 'agentProfile.skillSelected'], ['off', 'agentProfile.skillOff'],
@@ -322,6 +320,8 @@ export function AgentSkillsPanel({ cfg, agentSlug, surface, selectedIds, onSelec
   }
 
   return <section className="agent-skills-panel" aria-label={t('agentProfile.skills')}>
+    {deleting && detail && <SkillUninstallDialog skillKey={detail.key} agentSlug={agentSlug} name={detail.name} onClose={() => setDeleting(false)}
+      onDone={() => { setDetailKey(null); setDetail(null); setEditing(false); emitChange() }} />}
     <div className="profile-list-toolbar"><div className="profile-list-controls">
       <label className="profile-search"><Search size={14} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('agentProfile.searchEquipment')} aria-label={t('agentProfile.searchEquipment')} /></label>
         <CapabilityMenu label={t('agentProfile.skillPolicy')} selection items={([

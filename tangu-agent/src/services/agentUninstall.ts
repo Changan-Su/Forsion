@@ -11,7 +11,7 @@ import { getAgent, trashAgent, agentUndeletableReason, invalidateAgentCache, isV
 import { listTeams, getTeam, saveTeam, teamDirOf, type TeamMember } from '../agents/teamRegistry.js';
 import { loadTriggers, triggerUsesAgent, pauseAgentTriggers, resumeAgentTriggers } from './museTriggers.js';
 import { agentSyncedScopes, forgetAgentRemoval } from './cloudSyncAccount.js';
-import { archiveSoloSessions, deleteSessionCascade, setSessionsArchived, soloSessionIds } from './sessionCleanup.js';
+import { archiveSoloSessions, archiveTeamSessions, deleteSessionCascade, setSessionsArchived, soloSessionIds, teamRunActive } from './sessionCleanup.js';
 import { pathSize, restoreTrashItems, setTrashExtra, type TrashEntry } from './trash.js';
 import { scheduleAgentFilesSync } from './agentFileSync.js';
 
@@ -28,7 +28,7 @@ export interface AgentUninstallPreview {
 }
 
 interface TeamSeat { slug: string; member: TeamMember; index: number; lead: boolean }
-interface AgentExtra { chats?: string[]; triggers?: string[]; teams?: TeamSeat[] }
+interface AgentExtra { chats?: string[]; triggers?: string[]; teams?: TeamSeat[]; teamChats?: Record<string, string[]> }
 
 async function teamsOf(slug: string): Promise<Array<{ slug: string; name: string; dissolve: boolean }>> {
   return (await listTeams()).filter((t) => t.members.some((m) => m.slug === slug))
@@ -50,8 +50,11 @@ export async function agentUninstallPreview(userId: string, appId: string, slug:
   };
 }
 
-export async function uninstallAgent(userId: string, appId: string, slug: string, opts: { deleteChats?: boolean } = {}): Promise<{ ok: boolean; entry?: TrashEntry }> {
+export async function uninstallAgent(userId: string, appId: string, slug: string, opts: { deleteChats?: boolean } = {}): Promise<{ ok: boolean; entry?: TrashEntry; busy?: boolean }> {
   const teams = isValidSlug(slug) ? await teamsOf(slug) : [];
+  const dissolve = teams.filter((t) => t.dissolve);
+  // 要一起进回收站的团队还在跑:它的 Library 是 run 的 cwd(同删团队的 409)
+  for (const t of dissolve) if (await teamRunActive(userId, appId, t.slug)) return { ok: false, busy: true };
   const seats: TeamSeat[] = [];
   for (const t of teams) {
     if (t.dissolve) continue;
@@ -59,32 +62,46 @@ export async function uninstallAgent(userId: string, appId: string, slug: string
     const index = team?.members.findIndex((m) => m.slug === slug) ?? -1;
     if (team && index >= 0) seats.push({ slug: t.slug, member: team.members[index], index, lead: team.lead === slug });
   }
-  const r = await trashAgent(slug, { alsoTrash: teams.filter((t) => t.dissolve).map((t) => ({ path: teamDirOf(t.slug), role: `team:${t.slug}` })) });
+  const r = await trashAgent(slug, { alsoTrash: dissolve.map((t) => ({ path: teamDirOf(t.slug), role: `team:${t.slug}` })) });
   if (!r.ok) return r;
+  // 文件已经进回收站 = 删成了;后面几步尽力做,哪步失败记一笔接着做(不能让界面报「删除失败」而 Agent 其实已经没了)。
+  // 做成了的都记进条目,恢复时才接得回去。
+  const step = <T>(what: string, fn: () => Promise<T>): Promise<T | undefined> => fn().catch((e) => { console.warn(`[uninstall] ${slug}: ${what} failed: ${e?.message || e}`); return undefined; });
   const extra: AgentExtra = {};
   for (const seat of seats) {
-    const team = await getTeam(seat.slug);
+    const team = await step('read team', () => getTeam(seat.slug));
     if (!team) continue;
-    await saveTeam({ slug: team.slug, name: team.name, members: team.members.filter((m) => m.slug !== slug) }).then(() => { (extra.teams ??= []).push(seat); }, () => { /* 没移成就留着:运行时跳过不存在的成员 */ });
+    if (await step('leave team', () => saveTeam({ slug: team.slug, name: team.name, members: team.members.filter((m) => m.slug !== slug) }))) (extra.teams ??= []).push(seat);
   }
-  extra.triggers = await pauseAgentTriggers(slug);
-  if (opts.deleteChats) for (const sid of await soloSessionIds(userId, appId, 'agent', slug)) await deleteSessionCascade(sid);
-  else extra.chats = await archiveSoloSessions(userId, appId, 'agent', slug);
-  if (r.entry) await setTrashExtra(r.entry.id, { ...extra });
+  for (const t of dissolve) { const ids = await step('archive team chats', () => archiveTeamSessions(userId, appId, t.slug)); if (ids) (extra.teamChats ??= {})[t.slug] = ids; } // cwd 没了,同删团队
+  extra.triggers = await step('pause automations', () => pauseAgentTriggers(slug));
+  if (opts.deleteChats) await step('delete chats', async () => { for (const sid of await soloSessionIds(userId, appId, 'agent', slug)) await deleteSessionCascade(sid); });
+  else extra.chats = await step('archive chats', () => archiveSoloSessions(userId, appId, 'agent', slug));
+  if (r.entry) await step('record undo', () => setTrashExtra(r.entry!.id, { ...extra }));
   scheduleAgentFilesSync(userId, slug); // 云端那份现在就删,不等下一轮
   return r;
 }
 
 export async function restoreAgent(userId: string, entry: TrashEntry): Promise<{ slug: string; renamed: boolean }> {
-  const placed = await restoreTrashItems(entry);
-  const dirItem = entry.items.find((i) => i.role === 'dir');
-  const at = dirItem && placed.get(dirItem.from);
-  const slug = at ? path.basename(at) : entry.ref;
-  const renamed = slug !== entry.ref;
-  forgetAgentRemoval(slug); // 改名落位时原名的删除记录不动:那是原名在云端那份的事
-  invalidateAgentCache();
-  const extra = (entry.extra ?? {}) as AgentExtra;
-  if (!renamed) {
+  const out = { slug: entry.ref, renamed: false };
+  await restoreTrashItems(entry, async (placed) => {
+    const dirItem = entry.items.find((i) => i.role === 'dir');
+    const at = dirItem && placed.get(dirItem.from);
+    const slug = at ? path.basename(at) : entry.ref;
+    Object.assign(out, { slug, renamed: slug !== entry.ref });
+    forgetAgentRemoval(slug); // 改名落位时原名的删除记录不动:那是原名在云端那份的事
+    invalidateAgentCache();
+    const extra = (entry.extra ?? {}) as AgentExtra;
+    for (const it of entry.items) {
+      const teamSlug = it.role?.startsWith('team:') && path.basename(placed.get(it.from) ?? it.from);
+      if (!teamSlug) continue;
+      // 一起进回收站的团队:Agent 改名落位就把成员表里的旧名换成新名(旧名现在是别人)
+      const team = out.renamed ? await getTeam(teamSlug) : null;
+      if (team) await saveTeam({ slug: team.slug, name: team.name, members: team.members.map((m) => (m.slug === entry.ref ? { ...m, slug } : m)), ...(team.lead === entry.ref ? { lead: slug } : {}) });
+      const chats = teamSlug === it.role!.slice(5) ? extra.teamChats?.[teamSlug] : undefined; // 团队也改名落位了,会话记的是旧名,不接
+      if (chats?.length) await setSessionsArchived(userId, chats, false);
+    }
+    if (out.renamed) return;
     if (extra.chats?.length) await setSessionsArchived(userId, extra.chats, false);
     if (extra.triggers?.length) await resumeAgentTriggers(extra.triggers);
     for (const seat of extra.teams ?? []) {
@@ -94,7 +111,7 @@ export async function restoreAgent(userId: string, entry: TrashEntry): Promise<{
       members.splice(Math.min(seat.index, members.length), 0, seat.member);
       await saveTeam({ slug: team.slug, name: team.name, members, ...(seat.lead ? { lead: slug } : {}) }).catch(() => { /* 团队改过就不硬塞回去 */ });
     }
-  }
-  scheduleAgentFilesSync(userId, slug); // 整份重新上传(影子已丢)
-  return { slug, renamed };
+  });
+  scheduleAgentFilesSync(userId, out.slug); // 整份重新上传(影子已丢)
+  return out;
 }

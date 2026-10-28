@@ -9,7 +9,7 @@ import { translate } from '../i18n'
 import { ipcErrorText } from '../ipcError'
 import { reloadPluginsAndAnnounce } from '../amadeusPlugins'
 import { loadUserSpaces } from '../userSpaces'
-import { rescanPlugins, setPluginEnabled, uninstallPlugin } from '../services/backendService'
+import { listPlugins, rescanPlugins, setPluginEnabled, uninstallPlugin } from '../services/backendService'
 import { homeTarget } from '../services/engine/targets'
 import { panelToast } from './PanelNotice'
 import { notifyUninstalled } from './UninstallDialog'
@@ -18,13 +18,14 @@ import { notifyUninstalled } from './UninstallDialog'
  *  engine = 引擎连着(内嵌引擎插件要先关、卸完重扫);onGone 在文件已经挪走后调(详情页据此退回列表)。返回 false = 没卸成(已提示)。 */
 export async function uninstallForsionPlugin(p: AmadeusPlugin, name: string, opts: { keepSettings: boolean; moveVault: boolean }, hooks: { engine: boolean; onGone?: () => void; onEngineReload?: () => void }): Promise<boolean> {
   const ids = p.bundle?.enginePlugins ?? []
-  // 先级联关停内嵌引擎插件(尽力):目录一挪设置落点就没了,先关能让工具即刻对模型不可见
+  // 先级联关停内嵌引擎插件(尽力):目录一挪设置落点就没了,先关能让工具即刻对模型不可见。开着的记进条目,恢复时开回来。
+  const engineEnabled = hooks.engine && ids.length ? (await listPlugins(homeTarget())).filter((x) => x.enabled && ids.includes(x.id)).map((x) => x.id) : []
   if (hooks.engine) for (const id of ids) await setPluginEnabled(homeTarget(), id, false).catch(() => {})
   const prefs = opts.keepSettings ? {} : pluginPrefs(p.id)
   const vaultFolder = opts.moveVault ? pluginVaultFolder(p.id, p.name) : null
   let r: { trashId?: string; dirName?: string } | void
   try {
-    r = await amadeus.uninstallPlugin?.(p.id, { keepSettings: opts.keepSettings, ...(vaultFolder ? { vaultFolder } : {}), ...(Object.keys(prefs).length ? { prefs } : {}) })
+    r = await amadeus.uninstallPlugin?.(p.id, { keepSettings: opts.keepSettings, ...(vaultFolder ? { vaultFolder } : {}), ...(Object.keys(prefs).length ? { prefs } : {}), ...(engineEnabled.length ? { engineEnabled } : {}) })
   } catch (e: any) {
     // 主进程的开发副本守卫用机器码开头(见 electron/amadeus/ipc.ts 的 uninstallPlugin):用户真会撞上(开发副本可能是别的窗口 /
     // 上一次会话开的),按当前语言说人话;其余原因码交给 ipcErrorText(它已剥掉 invoke 前缀,不认识的码原样透传)。

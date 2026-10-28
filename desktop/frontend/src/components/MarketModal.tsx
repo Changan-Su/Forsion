@@ -351,8 +351,12 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
         const plugin = usePluginStore.getState().plugins.find((p) => p.bundle?.dir === slug || p.id === slug)
         if (plugin) { setAsking({ kind: 'amadeus-plugin', c, plugin }); return }
       }
-    } catch { /* 找不到对应的那一份:走下面的老路(直接删目录),别让用户卸不掉 */ }
-    await legacyUninstall(c, info)
+    } catch {
+      // 查不了(引擎还没起来等):报错别卸 —— 老路是直接删目录,不进回收站
+      toast(t('uninstall.engineDown'), true)
+      return
+    }
+    await legacyUninstall(c, info) // 查得到列表却没有这一份(目录多半已经不在):走老路撤记录
   }
 
   const legacyUninstall = async (c: MarketCard, info: NonNullable<ReturnType<typeof installedInfo>>): Promise<void> => {

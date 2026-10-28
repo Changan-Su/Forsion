@@ -11,6 +11,7 @@ import { useEscape } from '@amadeus/components/Dialogs'
 import { registerMessages, translate, useI18n } from '../i18n'
 import { useApp } from '../stores/appStore'
 import { panelToast } from './PanelNotice'
+import { ipcErrorText } from '../ipcError'
 import { homeTarget } from '../services/engine/targets'
 import {
   agentUninstallPreview, deleteSkillCatalogEntry, restoreTrashEntry, skillUninstallPreview,
@@ -25,6 +26,10 @@ registerMessages({
   'uninstall.restored': { zh: '已恢复「{name}」', en: 'Restored “{name}”' },
   'uninstall.restoredAs': { zh: '已恢复为「{name}」（原名已被占用）', en: 'Restored as “{name}” (the original name is taken)' },
   'uninstall.restoreFail': { zh: '恢复失败：{e}', en: 'Could not restore: {e}' },
+  'uninstall.engineDown': { zh: '本机引擎还没就绪，稍后再卸载。', en: 'The engine on this device is not ready yet. Try uninstalling again in a moment.' },
+  'uninstall.reinstalled': { zh: '这个插件又装上了。先卸载新装的那份，再从回收站恢复。', en: 'This plugin is installed again. Uninstall that copy first, then restore it from the Trash.' },
+  'uninstall.targetMoved': { zh: '原来的文件夹现在指向别处了，没有恢复进去。', en: 'The original folder now points somewhere else, so nothing was restored into it.' },
+  'uninstall.agent.teamBusy': { zh: '它所在的两人团队还有会话在运行，先停掉再删。', en: 'Its two-member team still has a session running. Stop it before deleting.' },
   'uninstall.close': { zh: '关闭', en: 'Close' },
   'uninstall.delete': { zh: '删除', en: 'Delete' },
   'uninstall.keep': { zh: '保留', en: 'Keep' },
@@ -166,6 +171,13 @@ export async function afterRestore(kind: TrashEntry['kind'], desktopExtra?: Reco
       await reloadPluginsAndAnnounce().catch(() => {})
       void loadUserSpaces()
     }
+    // 卸载时关掉的内嵌引擎插件:文件夹回来后重扫,再按卸载前的开关开回来
+    const engineEnabled = Array.isArray(desktopExtra?.engineEnabled) ? desktopExtra.engineEnabled.filter((x): x is string => typeof x === 'string') : []
+    if (engineEnabled.length) {
+      const { rescanPlugins, setPluginEnabled } = await import('../services/backendService')
+      await rescanPlugins(homeTarget()).catch(() => {})
+      for (const id of engineEnabled) await setPluginEnabled(homeTarget(), id, true).catch(() => {})
+    }
   }
 }
 
@@ -181,6 +193,14 @@ export async function restoreFromTrash(entry: Pick<TrashEntry, 'id' | 'kind' | '
   return r.renamed && r.slug ? { renamedTo: r.slug } : {}
 }
 
+/** 恢复失败说人话:重装过的插件、原处上级被换成软链各有一句,其余带原因。 */
+export function restoreErrorText(e: unknown): string {
+  const m = ipcErrorText(e)
+  if (/plugin[-_]reinstalled|installed again/.test(m)) return translate('uninstall.reinstalled')
+  if (/restore-target-moved|points somewhere else/.test(m)) return translate('uninstall.targetMoved')
+  return translate('uninstall.restoreFail', { e: m })
+}
+
 /** 删完的回执:6 秒内点「撤销」原样放回去。设置浮窗里画在面板提示条上,别处走全局通知(panelToast 自己回落)。
  *  没有 trashId(云端 Agent 等)就只报一句。 */
 export function notifyUninstalled(text: string, name: string, entry: Pick<TrashEntry, 'id' | 'kind' | 'restorer'> | null): void {
@@ -191,7 +211,7 @@ export function notifyUninstalled(text: string, name: string, entry: Pick<TrashE
       label: translate('uninstall.undo'),
       run: () => void restoreFromTrash(entry)
         .then((r) => panelToast(r.renamedTo ? translate('uninstall.restoredAs', { name: r.renamedTo }) : translate('uninstall.restored', { name })))
-        .catch((e: any) => panelToast(translate('uninstall.restoreFail', { e: e?.message || e }), true)),
+        .catch((e: unknown) => panelToast(restoreErrorText(e), true)),
     },
   })
 }
@@ -227,7 +247,7 @@ export function AgentUninstallDialog({ slug, name: fallbackName, onDone, onClose
       const app = useApp.getState()
       void app.removeAgent(slug, { deleteChats: !!checks.deleteChats })
         .then((r) => { notifyUninstalled(t('uninstall.agent.done', { name }), name, r.trashId ? { id: r.trashId, kind: 'agent', restorer: 'engine' } : null); onDone?.() })
-        .catch((e: any) => panelToast(String(e?.message || e), true))
+        .catch((e: any) => panelToast(/run_active/.test(String(e?.message || e)) ? t('uninstall.agent.teamBusy') : String(e?.message || e), true))
     }}
     onClose={onClose}
   />

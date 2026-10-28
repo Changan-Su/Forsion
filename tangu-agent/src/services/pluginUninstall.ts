@@ -4,6 +4,7 @@
  * 首方 / 编进 app / Forsion 插件捆绑包里的,文件不在这里挪(捆绑包的随 Forsion 插件走桌面那条)。
  */
 import path from 'node:path';
+import { promises as fs } from 'node:fs';
 import { pluginsDir } from '../core/tanguHome.js';
 import { discoverPlugins } from '../plugins/loader.js';
 import { takePluginData, restorePluginGlobal } from '../plugins/settingsStore.js';
@@ -23,15 +24,27 @@ export async function trashEnginePlugin(id: string, opts: { files?: boolean; kee
     global = taken.global;
     paths.push(...taken.paths.map((p) => ({ path: p, role: 'settings' })));
   }
-  const entry = await moveToTrash({ kind: 'plugin', ref: id, name: String(d?.manifest.name || id), paths, extra: { engine: true, ...(global !== undefined ? { global } : {}) } });
-  if (!entry && global !== undefined) restorePluginGlobal(id, global); // 没有可挪的文件:设置快照没处放,写回去(等于只清了缓存)
+  let entry: TrashEntry | null;
+  try {
+    entry = await moveToTrash({ kind: 'plugin', ref: id, name: String(d?.manifest.name || id), paths, extra: { engine: true, ...(global !== undefined ? { global } : {}) } });
+  } catch (e) {
+    if (global !== undefined) restorePluginGlobal(id, global); // 没挪成:设置快照写回去,别跟着丢
+    throw e;
+  }
+  // 一件文件都没有(旧版桌面不带 trash=1、设置只在 config 里)= 照旧只清设置,不留空条目
   return { entry, ...(own ? { dirName: path.basename(d!.dir) } : {}) };
 }
 
+/** 重装过的(原处又有同 id 的插件)不恢复:文件会落到 -2 成两份同 id,设置还会盖掉新装那份的。 */
+export class PluginReinstalledError extends Error { code = 'plugin_reinstalled'; }
+
 export async function restoreEnginePlugin(entry: TrashEntry): Promise<{ id: string }> {
-  await restoreTrashItems(entry);
-  const extra = entry.extra ?? {};
-  if ('global' in extra) restorePluginGlobal(entry.ref, extra.global);
+  const files = entry.items.find((i) => i.role === 'files');
+  if (files && !files.placed && (await fs.lstat(files.from).then(() => true, () => false) || discoverPlugins().some((x) => x.manifest.id === entry.ref))) throw new PluginReinstalledError('The plugin is installed again; uninstall that copy first');
+  await restoreTrashItems(entry, async () => {
+    const extra = entry.extra ?? {};
+    if ('global' in extra) restorePluginGlobal(entry.ref, extra.global);
+  });
   const { forgetUninstalled, rescanPlugins } = await import('../plugins/bootstrap.js');
   forgetUninstalled(entry.ref);
   await rescanPlugins();

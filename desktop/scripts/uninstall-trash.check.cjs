@@ -25,24 +25,27 @@ async function main() {
   fs.mkdirSync(SHOTS, { recursive: true })
   const userData = path.join(home, 'userdata')
   const [{ configureTangu }, { createTanguProfile }, { createSqliteHost }, { STANDALONE_SCHEMA }, { toSqliteDDL }, { createLocalMemoryBrain },
-    registry, teams, { default: agentsRouter }, { default: trashRouter }, { default: soloRouter }] = await Promise.all([
+    registry, teams, { default: agentsRouter }, { default: trashRouter }, { default: soloRouter }, { default: assetsRouter }] = await Promise.all([
     load('seams/runtime.js'), load('profiles/index.js'), load('adapters/standalone/sqliteHost.js'), load('db/schemaStandalone.js'), load('core/dialectDDL.js'),
     load('adapters/standalone/localMemoryBrain.js'), load('agents/agentRegistry.js'), load('agents/teamRegistry.js'),
-    load('routes/agents.js'), load('routes/trash.js'), load('routes/solo.js'),
+    load('routes/agents.js'), load('routes/trash.js'), load('routes/solo.js'), load('routes/assets.js'),
   ])
-  const { host, db } = createSqliteHost({ dataDir: 'uninstall', localToken: 'e2e', userId: 'uninstall-instrument' })
+  const { host, db } = createSqliteHost({ dataDir: 'memory', localToken: 'e2e', userId: 'uninstall-instrument' })
   db.exec(toSqliteDDL(STANDALONE_SCHEMA))
   configureTangu({ host, profile: createTanguProfile({ sandboxMode: 'none' }), billing: { calculateCost: async () => 0, logApiUsage: async () => {} },
     brain: { memory: createLocalMemoryBrain(), llm: {}, users: { getUserById: async () => ({ id: 'uninstall-instrument' }) } } })
   for (const [slug, name] of [['scout', 'Scout'], ['helper', 'Helper'], ['writer', 'Writer']]) await registry.saveAgent({ slug, name, description: 'Uninstall instrument', systemPrompt: 'Test agent', createdBy: 'user' })
   await teams.saveTeam({ slug: 'trio', name: 'Trio', members: [{ slug: 'scout', role: '' }, { slug: 'helper', role: '' }, { slug: 'writer', role: '' }], lead: 'helper' })
   fs.writeFileSync(path.join(home, 'agents/scout/MEMORY.md'), '- Scout 的一条记忆\n')
+  const skillDir = path.join(home, 'agents/helper/skills/tidy')
+  fs.mkdirSync(skillDir, { recursive: true })
+  fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '---\nname: tidy\ndescription: Tidy up notes\n---\nKeep notes tidy.\n')
 
   const stub = await startStubEngine()
   const backend = express()
   backend.use(express.json())
   backend.use((req, _res, next) => { req.headers.authorization = 'Bearer e2e'; next() })
-  backend.use(agentsRouter); backend.use(trashRouter); backend.use(soloRouter)
+  backend.use(agentsRouter); backend.use(trashRouter); backend.use(soloRouter); backend.use(assetsRouter)
   backend.use(async (req, res) => {
     try {
       const r = await fetch(`${stub.url}${req.originalUrl}`, { method: req.method, headers: { 'content-type': 'application/json' }, ...(['GET', 'HEAD'].includes(req.method) ? {} : { body: JSON.stringify(req.body || {}) }) })
@@ -147,6 +150,23 @@ async function main() {
       check('回收站页变空', await sp.locator('[data-trash-empty]').waitFor({ timeout: 8000 }).then(() => true, () => false))
       await sp.screenshot({ path: path.join(SHOTS, 'trash-empty.png') })
     }
+
+    // ④ Agent 自己的技能:技能页 → 删除技能 → 确认框 → 进回收站 → 撤销(10-28 评审:这条曾因确认框挂错分支而点了没反应)
+    await win.bringToFront()
+    await win.locator('.agents-roster-item').filter({ hasText: 'Helper' }).first().click()
+    await win.locator('.agent-section-nav [role="tab"][id$="-skills"]').first().click()
+    await win.locator('.agent-skill-row button.agent-skill-summary').filter({ hasText: 'tidy' }).first().click()
+    await win.getByRole('button', { name: '删除技能', exact: true }).first().click()
+    const sdlg = win.locator('[data-uninstall-dialog] .un-dlg')
+    check('技能:删除技能打开确认框', await sdlg.waitFor({ timeout: 8000 }).then(() => true, () => false))
+    await wait(async () => (await sdlg.locator('.un-row').count()) >= 1 && !(await sdlg.textContent()).includes('正在'), 'skill preview rows')
+    check('技能:文件夹 → 回收站', /回收站/.test(await sdlg.textContent()))
+    await sdlg.screenshot({ path: path.join(SHOTS, 'skill-dialog.png') })
+    await sdlg.locator('.dialog-btn[data-danger]').click()
+    check('技能:文件夹进回收站', await wait(() => !fs.existsSync(skillDir) && trashIds().length === 1, 'skill trash'))
+    const stoast = win.locator('.ntf-item, [class*="ntf"]').filter({ has: win.locator('.ntf-action', { hasText: '撤销' }) }).last()
+    await stoast.locator('.ntf-action').click()
+    check('技能:撤销放回原处', await wait(() => fs.existsSync(path.join(skillDir, 'SKILL.md')) && trashIds().length === 0, 'skill undo'))
   } finally {
     await app?.close().catch(() => {})
     server.close(); stub.close?.()

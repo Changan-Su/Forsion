@@ -33,6 +33,7 @@ router.post('/agent/trash/:id/restore', authMiddleware, async (req: AuthRequest,
     if (entry.kind === 'plugin') return res.json({ ok: true, ...(await restoreEnginePlugin(entry)) });
     res.status(400).json({ detail: `cannot restore ${entry.kind}` });
   } catch (e: any) {
+    if (e?.code === 'plugin_reinstalled') return res.status(409).json({ detail: e.message, error: e.code });
     res.status(500).json({ detail: e?.message || 'restore failed' });
   }
 });
