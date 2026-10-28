@@ -221,7 +221,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'parkedask', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'imgtools', 'account', 'webpublish', 'nested', 'branch', 'musedm', 'humandims', 'pluginsandbox'];
+const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'parkedask', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'gitpush', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'imgtools', 'account', 'webpublish', 'nested', 'branch', 'musedm', 'humandims', 'pluginsandbox'];
 KEYS.push('bluebird');
 KEYS.push('signals');
 KEYS.push('musechat');
@@ -266,7 +266,7 @@ const GIT_PREFIX = 'livetest/'; const GIT_TAG = '[LIVE]';
 // opt-in:缺省全量跑里**不带**这几个 —— cache 7 个 run / churn 6 个 run(都慢),cache 与 recall-unprompted
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
-const OPT_IN = new Set(['pluginsandbox', 'humandims', 'nested', 'branch', 'musedm', 'realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'parkedask', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'appsettings', 'control', 'phone']);
+const OPT_IN = new Set(['pluginsandbox', 'humandims', 'nested', 'branch', 'musedm', 'realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'parkedask', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'gitpush', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'appsettings', 'control', 'phone']);
 KEYS.push('taskoutcomes'); OPT_IN.add('taskoutcomes'); // --only taskoutcomes: actual hashes / approval identity / duplicate writes, classified separately from model narration.
 OPT_IN.add('bluebird'); // --only bluebird --plugin-src <bundle>: real instruction-following on supplied transcripts
 OPT_IN.add('signals');
@@ -3664,6 +3664,49 @@ Then reply with only the command output.`,
       ok: !ev.error && ev.done && agentPrefix && agentTag && genTag && landed,
       detail: ev.error || `agent 分支 ${branch}(${agentPrefix ? '带' : '没带'} ${GIT_PREFIX});agent 提交「${subject}」(${agentTag ? '照' : '没照'}提交说明);面板生成「${message.split('\n')[0] || apiErr}」(${genTag ? '照做' : '没照做'});提交接口${landed ? '落盘' : '未落盘'}${apiErr ? `(${apiErr.slice(0, 160)})` : ''};设置${GIT_PREFS ? '已写' : '未写(负对照)'}`,
       output: `${ev.content}\n\n--- 面板生成的提交信息 ---\n${message}`, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls,
+    };
+  });
+
+  // git 工具(10-28,Git 对话卡片方案 B;tools/builtin/git.ts):项目会话里「提交并推送」走 git_commit / git_push,
+  // 审批跟会话档 —— 用户定「有权限就直接做」:完全通行一张卡都不弹、提交推送都落到远端;替我批准(auto-edit)只在推送弹一张(提交同写文件档,不问)。
+  // 远端是本地裸仓(不碰网络、不碰真账号)。判据看远端真收到了提交 + 用的是 git_* 工具而不是 run_bash 里的 git push + 审批卡数与工具名。
+  // 负对照:git.ts 的 git_push 改 approval:'always' → 完全通行那腿红(弹了卡);approvals.ts 去掉 git_commit 的写文件档 → 只读档才会变,本场景不管(单测钉)。
+  await scenario('gitpush', 'git 工具:完全通行直接提交并推送;替我批准只在推送问一次', async () => {
+    const mk = (tag) => {
+      const repo = join(workspace, `gitpush-${tag}-${Date.now()}`);
+      const bare = `${repo}.git`;
+      mkdirSync(repo, { recursive: true });
+      const g = (...a) => execFileSync('git', ['-C', repo, ...a], { encoding: 'utf8' }).trim();
+      execFileSync('git', ['init', '-q', '--bare', bare]);
+      g('init', '-q', '-b', 'main');
+      g('config', 'user.name', 'Live Harness'); g('config', 'user.email', 'live@example.com');
+      writeFileSync(join(repo, 'README.md'), '# Demo\n');
+      g('add', '.'); g('commit', '-qm', 'Initial commit');
+      g('remote', 'add', 'origin', bare); g('push', '-q', '-u', 'origin', 'main');
+      writeFileSync(join(repo, 'greet.js'), 'export const greet = (name) => `Hello, ${name}!`\n');
+      return { repo, bare, g };
+    };
+    const ASK_PUSH = 'Commit the current changes in this project with a short commit message you write, then push them.';
+    const leg = async (tag, approvalMode) => {
+      const { repo, bare, g } = mk(tag);
+      const { session } = await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title: `gitpush ${tag}`, model_id: MODEL, project_path: repo }) });
+      const ev = await run(session.id, ASK_PUSH, 240_000, { cwd: repo, approvalMode });
+      const head = g('rev-parse', 'HEAD');
+      const remoteHead = execFileSync('git', ['-C', bare, 'rev-parse', 'main'], { encoding: 'utf8' }).trim();
+      const bashGit = ev.toolArgs.filter((t) => t.name === 'run_bash' && /\bgit\s+(commit|push)\b/.test(t.args)).length;
+      return { ev, landed: head === remoteHead && g('status', '--porcelain') === '' && g('log', '-1', '--format=%s') !== 'Initial commit',
+        usedTools: ev.toolCalls.includes('git_commit') && ev.toolCalls.includes('git_push'), bashGit, asks: ev.approvalList.map((a) => `${a.name}:${a.reason}`) };
+    };
+    const full = await leg('full', 'full-auto');
+    const auto = await leg('auto', 'auto-edit');
+    const okFull = !full.ev.error && full.landed && full.usedTools && full.bashGit === 0 && full.asks.length === 0;
+    const okAuto = !auto.ev.error && auto.landed && auto.usedTools && auto.asks.length === 1 && auto.asks[0] === 'git_push:mode';
+    const line = (name, l) => `${name}:${l.landed ? '远端收到提交' : '远端没收到'};${l.usedTools ? '用了 git_commit + git_push' : `工具 ${l.ev.toolCalls.join(',') || '无'}`}${l.bashGit ? `;run_bash 里跑了 ${l.bashGit} 次 git commit/push` : ''};审批卡 ${l.asks.length ? l.asks.join(',') : '0 张'}`;
+    return {
+      ok: okFull && okAuto,
+      detail: full.ev.error || auto.ev.error || `${line('完全通行', full)}${okFull ? ' ✓' : ' ✗'} | ${line('替我批准', auto)}${okAuto ? ' ✓' : ' ✗'}`,
+      output: `--- 完全通行 ---\n${full.ev.content}\n\n--- 替我批准 ---\n${auto.ev.content}\n\n--- 推送审批说明 ---\n${auto.ev.approvalList.map((a) => a.preview).join('\n---\n')}`,
+      ttftMs: ttft(full.ev), tokens: tokensOf(full.ev), toolCalls: [...full.ev.toolCalls, '|', ...auto.ev.toolCalls],
     };
   });
 
