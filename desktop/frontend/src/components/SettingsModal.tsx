@@ -19,7 +19,7 @@ import { StartupAppearanceSettings } from './StartupAppearanceSettings'
 import { backgroundSwatch, listLanguages, listSkins, skinSwatch, forcedSchemeForLanguage, SIGNALS } from '../theme/registry'
 import { customAccentVars } from '../theme/lcl/lovableData'
 import { UI_MODE, UI_ZOOM_EVENT, useNativeChromeClaim, useNativeChromeInstalled, useWorkspace } from '@lcl/engine' // 工作区引擎:恢复默认布局 + 移动预览模式;原生顶栏(Android 可选宿主)
-import { useApp } from '../stores/appStore' // Agent Desk 开关改动即时回流(desktopConfig 平时只在 boot/后端就绪时刷新)
+import { useApp, defaultModelOf } from '../stores/appStore' // Agent Desk 开关改动即时回流(desktopConfig 平时只在 boot/后端就绪时刷新)
 import { testConnection } from '../services/agentRunService'
 import { listClientSurfaces } from '../services/clientSurfaces'
 import {
@@ -120,6 +120,12 @@ import { connectionTarget, homeTarget } from '../services/engine/targets'
 
 // 本文件自带的文案片段(命名空间 `settingsmodal.*`,不与 i18n.generated.ts 的 `settings.*` 相交)。
 registerMessages({
+  'settingsmodal.mcp.tokens': { zh: '每个请求约 {n} token', en: '~{n} tokens per request' },
+  'settingsmodal.mcp.notConnected': { zh: '未连接', en: 'Not connected' },
+  'settingsmodal.mcp.total': { zh: 'MCP 工具定义合计每个请求约 {n} token，占当前默认模型窗口的 {pct}%', en: 'MCP tool definitions take ~{n} tokens per request, {pct}% of the default model’s context window' },
+  'settingsmodal.mcp.totalNoWindow': { zh: 'MCP 工具定义合计每个请求约 {n} token', en: 'MCP tool definitions take ~{n} tokens per request' },
+  'settingsmodal.mcp.heavyHint': { zh: '不常用的可以关掉。', en: 'Turn off the ones you rarely use.' },
+  'settingsmodal.mcp.estimateNote': { zh: '按约 4 个字符 = 1 token 估算。', en: 'Estimated at about 4 characters per token.' },
   'settingsmodal.mcp.fromPlugin': { zh: '来自插件「{name}」', en: 'From plugin "{name}"' },
   'settingsmodal.mcp.fromPluginHint': { zh: '这个 server 随插件启用和停用；要关掉它，请在插件设置里停用这个插件。', en: 'This server starts and stops with its plugin. To turn it off, disable the plugin in plugin settings.' },
   'settingsmodal.selectionBar': { zh: '划线菜单', en: 'Selection menu' },
@@ -741,6 +747,8 @@ export const SettingsModal: React.FC<{
   // MCP 配置(~/.tangu/mcp.json)+ 后端实际连接状态(GET /agent/tools 的 mcp 分区)
   const [mcpServers, setMcpServers] = useState<Record<string, McpServerConfigEntry>>({})
   const [mcpStatus, setMcpStatus] = useState<ToolsResponse['mcp']>(undefined)
+  // MCP 页页头合计的分母:新对话会用的那个模型(同 newChatModelId 的回退链,不含本次空态临时选的)
+  const defaultChatModelId = useApp((s) => defaultModelOf(s) || s.modelsResp?.defaultModelId || '')
   const [editMcp, setEditMcp] = useState<{ name: string; isNew: boolean; command: string; argsText: string; url: string; transport: 'auto' | 'stdio' | 'http' | 'sse'; envText: string } | null>(null)
   const [mcpMsg, setMcpMsg] = useState('')
 
@@ -793,6 +801,36 @@ export const SettingsModal: React.FC<{
   const groupedCloud = cloudViews.some((view) => cloudSettingsParent(cloudViews, cloudViewKey(view)) !== cloudViewKey(view))
 
   // 旧「Tangu → 插件」独立入口已并入统一插件页:旧深链/持久化 tab 一律重定向。
+
+  // MCP 页:每个已连接的 server 每个请求约占多少 token(引擎按工具定义 JSON / 4 估),页头合计占默认模型窗口的比例。
+  // 不出金额、不按会话算 —— 只说体量,让人决定关哪个。没连上的不给数字。
+  type McpStatusRow = NonNullable<ToolsResponse['mcp']>[number]
+  const fmtTok = (n: number): string => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n))
+  const mcpStatusLabel = (st: McpStatusRow): string =>
+    st.status === 'connected' ? t('settings.mcp.statusConnected', { count: st.tools.length })
+      : st.status === 'error' ? t('settings.mcp.statusError')
+        : st.status === 'disabled' ? t('settings.mcp.statusDisabled')
+          : t('settingsmodal.mcp.notConnected')
+  const mcpTokensLabel = (st: McpStatusRow | undefined): React.ReactNode =>
+    st?.status === 'connected' && typeof st.approxTokens === 'number'
+      ? <span className="mcp-tokens">{t('settingsmodal.mcp.tokens', { n: fmtTok(st.approxTokens) })}</span>
+      : null
+  const mcpTotalSummary = (): React.ReactNode => {
+    const live = (mcpStatus || []).filter((s) => s.status === 'connected' && typeof s.approxTokens === 'number' && (s.origin || mcpServers[s.server]?.enabled !== false))
+    if (!live.length) return null
+    const total = live.reduce((n, s) => n + s.approxTokens!, 0)
+    const win = models?.models.find((m) => m.id === (defaultChatModelId || models.defaultModelId))?.contextWindow
+    const pct = win ? (total / win) * 100 : undefined
+    return (
+      <div className="mcp-token-summary" data-mcp-token-summary>
+        <Info size={14} />
+        <div>
+          {pct === undefined ? t('settingsmodal.mcp.totalNoWindow', { n: fmtTok(total) }) : t('settingsmodal.mcp.total', { n: fmtTok(total), pct: pct.toFixed(1) })}
+          <small>{pct !== undefined && pct > 5 ? `${t('settingsmodal.mcp.heavyHint')} ` : ''}{t('settingsmodal.mcp.estimateNote')}</small>
+        </div>
+      </div>
+    )
+  }
 
   const refreshMcp = (): void => {
     void window.tangu?.readMcpConfig?.().then((c) => setMcpServers(c.mcpServers)).catch(() => setMcpServers({}))
@@ -1100,7 +1138,7 @@ export const SettingsModal: React.FC<{
   }
 
   useEffect(() => {
-    if (p.open && tab === 'model' && !models && !modelsLoading) void loadModels()
+    if (p.open && (tab === 'model' || tab === 'mcp') && !models && !modelsLoading) void loadModels() // mcp:页头合计要默认模型的窗口
     if (p.open && tab === 'mcp') refreshMcp()
     // appVersion 一打开就取(不只 about tab):高级→导出日志也要带版本号,否则导出里恒为 null。
     if (p.open && !appVersion) void window.tangu?.appVersion?.().then((v) => setAppVersion(v || '')).catch(() => {})
@@ -2473,15 +2511,14 @@ export const SettingsModal: React.FC<{
                       <div className="hint" style={{ marginBottom: 8 }}>
                         {t('settings.mcp.intro').split(/(\{path\}|\{tool\})/).map((part, i) => part === '{path}' ? <code key={i}>~/.forsion/mcp.json</code> : part === '{tool}' ? <code key={i}>{t('settings.mcp.toolPattern')}</code> : part)}
                       </div>
+                      {mcpTotalSummary()}
                       {Object.keys(mcpServers).length > 0 && (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 10 }}>
                           {Object.entries(mcpServers).map(([name, sc]) => {
                             const st = mcpStatus?.find((s) => s.server === name)
                             const stLabel = sc.enabled === false
                               ? t('settings.mcp.statusDisabled')
-                              : st
-                                ? st.status === 'connected' ? t('settings.mcp.statusConnected', { count: st.tools.length }) : st.status === 'error' ? t('settings.mcp.statusError') : st.status
-                                : t('settings.mcp.statusNotLoaded')
+                              : st ? mcpStatusLabel(st) : t('settings.mcp.statusNotLoaded')
                             return (
                               <div key={name} className="file-row" style={{ cursor: 'default' }}>
                                 <span className="file-name">
@@ -2490,6 +2527,7 @@ export const SettingsModal: React.FC<{
                                     {sc.command ? `${sc.command} ${(sc.args || []).join(' ')}` : sc.url}
                                   </span>
                                 </span>
+                                {sc.enabled !== false && mcpTokensLabel(st)}
                                 <span className="file-size" title={st?.error || undefined}>{stLabel}</span>
                                 <button
                                   className="icon-btn"
@@ -2547,9 +2585,8 @@ export const SettingsModal: React.FC<{
                                     {t('settingsmodal.mcp.fromPlugin', { name: st.origin!.pluginName })}
                                   </span>
                                 </span>
-                                <span className="file-size" title={st.error || undefined}>
-                                  {st.status === 'connected' ? t('settings.mcp.statusConnected', { count: st.tools.length }) : st.status === 'error' ? t('settings.mcp.statusError') : st.status}
-                                </span>
+                                {mcpTokensLabel(st)}
+                                <span className="file-size" title={st.error || undefined}>{mcpStatusLabel(st)}</span>
                               </div>
                             ))}
                           </div>
