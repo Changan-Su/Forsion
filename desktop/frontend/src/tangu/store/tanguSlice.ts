@@ -3000,22 +3000,28 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     if (fromIndex < 0 || fromIndex >= list.length) return false
     const removed = list.slice(fromIndex)
     // 编辑重发 / 重新生成 / retry:删之前把整份对话复制成一支「旧版本」分支(方案 docs/ToBeImproved/编辑重发分支与编辑框方案_2026-10-28 ①),
-    // 新的这一版就是主线。复制到最后一条落库的,分叉点在被改那条之前的那条(改第一句时就是它自己 —— 旧那支在画布上成并排的第二棵)。
-    // 被删的里面没有一条成形的回答(失败 / 停掉后 retry)就不留:那一版没有可看的。复制失败 = 这次不改,宁可不改也不丢旧内容。
-    const saved = (m: UiMessage): boolean => m.role !== 'system' && m.status !== 'streaming' && m.status !== 'error' && !m.work
-    if (removed.some((m) => m.role === 'assistant' && saved(m) && !!m.content.trim())) {
-      const last = [...list].reverse().find(saved)
-      const fork = [...list.slice(0, fromIndex)].reverse().find(saved) || list[fromIndex]
-      if (last) {
-        try {
-          const title = (get().sessions.find((x) => x.id === sid)?.title || '').trim() || 'New Chat'
-          const branched = await api.branchSession(targetForSession(sid), sid, last.id, t('chat.oldVersion', { title }), fork.id)
-          if (inheritBinding(branched.id, sid) === 'conflict') throw new Error(t('app.cannotCreateSession'))
-          const keep = withLocation(branched)
-          set((st) => ({ sessions: [keep, ...st.sessions.filter((x) => x.id !== keep.id)] }))
-        } catch (e: any) { get().toast(t('app.keepOldFail', { e: e?.message || e }), true); return false }
+    // 新的这一版就是主线。复制到最后一条落库的,分叉点在被改那条之前落库的那条(改第一句时就是它自己 —— 旧那支在画布上成并排的第二棵)。
+    // 哪些落了库以引擎为准(本地有停掉的空占位、失败后还原回来的已删条、失败但落了半截的回答,都猜不准):先读最新一页。
+    // 被删的里面没有一条落了库、有内容的回答就不留:那一版没有可看的。读失败 / 复制失败 = 这次不改,宁可不改也不丢旧内容。
+    const PAGE = 500
+    try {
+      const records = await api.listMessages(targetForSession(sid), sid, PAGE)
+      const onServer = new Set(records.map((r) => r.id))
+      const removedIds = new Set(removed.map((m) => m.id))
+      const last = records[records.length - 1]
+      if (last && records.some((r) => removedIds.has(r.id) && r.role !== 'user' && !!(r.content || '').trim())) {
+        const before = list.slice(0, fromIndex).reverse()
+        // ponytail: 改的那句比最新一页还早(>500 条之前)时,页外的按「不是占位」猜
+        const fork = before.find((m) => onServer.has(m.id))
+          || (records.length >= PAGE ? before.find((m) => m.role !== 'system' && !m.work && !!m.content.trim()) : undefined)
+          || removed.find((m) => onServer.has(m.id)) || records[0]
+        const title = (get().sessions.find((x) => x.id === sid)?.title || '').trim() || 'New Chat'
+        const branched = await api.branchSession(targetForSession(sid), sid, last.id, t('chat.oldVersion', { title }), fork.id)
+        if (inheritBinding(branched.id, sid) === 'conflict') throw new Error(t('app.cannotCreateSession'))
+        const keep = withLocation(branched)
+        set((st) => ({ sessions: [keep, ...st.sessions.filter((x) => x.id !== keep.id)] }))
       }
-    }
+    } catch (e: any) { get().toast(t('app.keepOldFail', { e: e?.message || e }), true); return false }
     try { await api.deleteMessages(targetForSession(sid), sid, removed.map((m) => m.id)) }
     catch (e: any) { get().toast(t('app.truncateFail', { e: e?.message || e }), true); return false }
     set((s) => ({ messagesBySession: { ...s.messagesBySession, [sid]: (s.messagesBySession[sid] || []).slice(0, fromIndex) } }))

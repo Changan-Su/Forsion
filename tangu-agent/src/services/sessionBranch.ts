@@ -79,12 +79,12 @@ export async function branchSession(input: BranchSessionInput): Promise<{ id: st
   // 4) 复制 timestamp <= 分支点 的消息:新 uuid,保留原 timestamp 与全部字段(lastN → 只取最近 N 条)
   const msgs = lastN && lastN > 0
     ? (await query<any[]>(
-        `SELECT role, content, timestamp, model_id, reasoning, is_error, tool_calls, tool_results, attachments
+        `SELECT role, content, timestamp, model_id, reasoning, is_error, tool_calls, tool_results, attachments, display_files, agent_slug, origin
          FROM chat_messages WHERE session_id = ? AND timestamp <= ? ORDER BY timestamp DESC LIMIT ?`,
         [sourceSessionId, throughTs, Math.floor(lastN)],
       )).reverse()
     : await query<any[]>(
-        `SELECT role, content, timestamp, model_id, reasoning, is_error, tool_calls, tool_results, attachments
+        `SELECT role, content, timestamp, model_id, reasoning, is_error, tool_calls, tool_results, attachments, display_files, agent_slug, origin
          FROM chat_messages WHERE session_id = ? AND timestamp <= ? ORDER BY timestamp ASC`,
         [sourceSessionId, throughTs],
       );
@@ -92,10 +92,11 @@ export async function branchSession(input: BranchSessionInput): Promise<{ id: st
   for (const m of msgs) {
     await query(
       `INSERT INTO chat_messages
-         (id, session_id, role, content, timestamp, model_id, reasoning, is_error, tool_calls, tool_results, attachments)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (id, session_id, role, content, timestamp, model_id, reasoning, is_error, tool_calls, tool_results, attachments, display_files, agent_slug, origin)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [uuidv4(), newId, m.role, m.content, m.timestamp, m.model_id, m.reasoning, m.is_error,
-       asJsonText(m.tool_calls), asJsonText(m.tool_results), asJsonText(m.attachments)],
+       asJsonText(m.tool_calls), asJsonText(m.tool_results), asJsonText(m.attachments), asJsonText(m.display_files),
+       m.agent_slug ?? null, m.origin ?? null],
     );
   }
 

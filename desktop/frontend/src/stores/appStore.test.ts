@@ -639,6 +639,7 @@ const startRunMock = vi.hoisted(() => vi.fn())
 const restoreCpMock = vi.hoisted(() => vi.fn())
 const deleteMsgsMock = vi.hoisted(() => vi.fn())
 const branchMock = vi.hoisted(() => vi.fn())
+const listMsgsMock = vi.hoisted(() => vi.fn())
 const updateSessionMock = vi.hoisted(() => vi.fn((..._a: unknown[]) => Promise.resolve({})))
 const patchConfigMock = vi.hoisted(() => vi.fn((..._a: unknown[]) => Promise.resolve({})))
 vi.mock('../services/backendService', async (orig) => ({
@@ -651,6 +652,7 @@ vi.mock('../services/backendService', async (orig) => ({
   restoreCheckpoint: (...a: unknown[]) => restoreCpMock(...a),
   deleteMessages: (...a: unknown[]) => deleteMsgsMock(...a),
   branchSession: (...a: unknown[]) => branchMock(...a),
+  listMessages: (...a: unknown[]) => listMsgsMock(...a),
 }))
 const resolveApprovalMock = vi.hoisted(() => vi.fn())
 const resolveInquiryMock = vi.hoisted(() => vi.fn())
@@ -1184,6 +1186,8 @@ describe('编辑重发 / 重新生成留旧版本', () => {
     { id: 'u2', role: 'user', content: '第二问', status: 'done', timestamp: 200 },
     { id: 'a2', role: 'assistant', content: '答二', status: 'done', timestamp: 210 },
   ])
+  // 引擎那边落了库的 = 本地这几条(角色是 model)
+  const rec = (ms: UiMessage[]) => ms.map((m) => ({ id: m.id, role: m.role === 'assistant' ? 'model' : m.role, content: m.content, timestamp: m.timestamp }))
   const sendSpy = vi.fn(async () => true)
   beforeEach(() => {
     useApp.setState(initial, true)
@@ -1194,7 +1198,8 @@ describe('编辑重发 / 重新生成留旧版本', () => {
       sessions: [{ id: 's1', title: '离线同步', created_at: '', updated_at: '' } as SessionRecord],
       send: sendSpy as unknown as AppState['send'],
     })
-    deleteMsgsMock.mockReset(); branchMock.mockReset(); sendSpy.mockClear()
+    deleteMsgsMock.mockReset(); branchMock.mockReset(); listMsgsMock.mockReset(); sendSpy.mockClear()
+    listMsgsMock.mockResolvedValue(rec(msgs()))
     deleteMsgsMock.mockResolvedValue({ ok: true, deleted: 2 })
     branchMock.mockResolvedValue({ id: 'v1', title: 'chat.oldVersion:离线同步', parent_session_id: 's1', fork_message_id: 'a1', created_at: '', updated_at: '' })
   })
@@ -1229,11 +1234,46 @@ describe('编辑重发 / 重新生成留旧版本', () => {
 
   it('被删的里面没有成形的回答(失败后重试):不留分支,照旧删了重发', async () => {
     useApp.setState({ messagesBySession: { s1: [...msgs().slice(0, 3), { id: 'e1', role: 'assistant', content: '', status: 'error', error: 'boom', timestamp: 220 }] } })
+    listMsgsMock.mockResolvedValue(rec(msgs().slice(0, 3)))
     useApp.getState().editUserMessage('u2', '再问一次', 's1')
     await flush(); await flush()
     expect(branchMock).not.toHaveBeenCalled()
     expect(deleteMsgsMock).toHaveBeenCalledTimes(1)
     expect(sendSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('停掉的空占位没落库:复制到引擎上最后一条(u3),不拿占位的 id', async () => {
+    useApp.setState({ messagesBySession: { s1: [...msgs(), { id: 'u3', role: 'user', content: '三', status: 'done', timestamp: 300 }, { id: 'p3', role: 'assistant', content: '', status: 'stopped', timestamp: 310 }] } })
+    listMsgsMock.mockResolvedValue(rec([...msgs(), { id: 'u3', role: 'user', content: '三', status: 'done', timestamp: 300 } as UiMessage]))
+    useApp.getState().editUserMessage('u1', '改第一问', 's1')
+    await flush(); await flush()
+    expect(branchMock.mock.calls[0]?.[2]).toBe('u3')
+    expect(sendSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('失败但落了半截的回答:算进旧版本(复制到它)', async () => {
+    const e1 = { id: 'e1', role: 'assistant', content: '写了一半', status: 'error', error: 'boom', timestamp: 220 } as UiMessage
+    useApp.setState({ messagesBySession: { s1: [...msgs().slice(0, 3), e1] } })
+    listMsgsMock.mockResolvedValue(rec([...msgs().slice(0, 3), e1]))
+    useApp.getState().editUserMessage('u2', '再问一次', 's1')
+    await flush(); await flush()
+    expect(branchMock.mock.calls[0]?.slice(1)).toEqual(['s1', 'e1', 'chat.oldVersion:离线同步', 'a1'])
+  })
+
+  it('重发失败后本地还原回来的已删条:下一次不拿它们复制,照旧删了重发', async () => {
+    listMsgsMock.mockResolvedValue(rec(msgs().slice(0, 2))) // u2 / a2 引擎上已经删了
+    useApp.getState().regenerate('a2', 's1')
+    await flush(); await flush()
+    expect(branchMock).not.toHaveBeenCalled()
+    expect(sendSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('读引擎消息失败:不删、不重发', async () => {
+    listMsgsMock.mockRejectedValue(new Error('engine down'))
+    useApp.getState().regenerate('a2', 's1')
+    await flush(); await flush()
+    expect(deleteMsgsMock).not.toHaveBeenCalled()
+    expect(sendSpy).not.toHaveBeenCalled()
   })
 })
 
