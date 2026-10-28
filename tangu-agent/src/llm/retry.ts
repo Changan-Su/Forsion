@@ -9,7 +9,7 @@ export function isRetryableLlmError(err: unknown): boolean {
   if ((err as any)?.name === 'AbortError') return false;
   if (err instanceof LlmError) {
     // 额度 / 配额耗尽常以 429 返回,但要几小时才重置:必须先于状态码判,否则白重试 3 次(PI-DSH 评审 R5,借 pi retry.ts)。
-    if (QUOTA_EXHAUSTED.test(err.message)) return false;
+    if (quotaExhaustedErr(err)) return false;
     const s = err.status;
     return s === 0 || s === 408 || s === 425 || s === 429 || s >= 500;
   }
@@ -23,8 +23,19 @@ export function isAuthExpiredLlmError(err: unknown): boolean {
 }
 const AUTH_EXPIRED = /expired credentials|invalid or expired|token (has |is )?expired|PermissionDenied/i;
 
+/** 订阅额度 / 账单配额用尽(几小时才重置,不是秒级限流)。额度用完接力(llm/quotaRelay.ts)只认这一组。 */
+export function isQuotaExhaustedLlmError(err: unknown): boolean {
+  return err instanceof LlmError && quotaExhaustedErr(err);
+}
 /** 订阅额度 / 账单配额用尽的措辞(不可重试)。「rate limit」是秒级限流,不在此列。 */
 const QUOTA_EXHAUSTED = /usage limit|usage_limit_reached|usage_not_included|insufficient_quota|quota exceeded|exceeded your current quota|out of budget|billing_hard_limit/i;
+/** 写着一分钟以内的窗口、又没提按天 / 余额的「quota exceeded」是限流(Gemini …PerMinute、Vertex requests_per_minute、
+ *  百炼 Allocated quota exceeded 其实是 TPM):照常退避重试,也不触发额度接力(借 magpie d83f887a7)。按天的仍算额度用完。 */
+const SHORT_WINDOW = /per ?minute|perminute|_per_minute|\b[RT]PM\b|per ?second|allocated quota exceeded/i;
+const LONG_WINDOW = /per ?day|perday|_per_day|daily|per ?month|monthly|balance|credit|insufficient_quota|usage_limit_reached|billing_hard_limit/i;
+/** 流里的失败只有 error.code 写着 usage_limit_reached 时，正文可能是一句别的话:code 一起看。 */
+const quotaExhaustedErr = (err: LlmError): boolean => quotaExhaustedText(`${err.message} ${(err as { code?: string }).code || ''}`);
+export const quotaExhaustedText = (msg: string): boolean => QUOTA_EXHAUSTED.test(msg) && !(SHORT_WINDOW.test(msg) && !LONG_WINDOW.test(msg));
 
 export const MODEL_MAX_RETRIES = 3; // 首次 + 至多 3 次重试 = 4 次尝试
 export const MODEL_RETRY_BASE_MS = 1500; // 线性退避 1.5/3/4.5s:扛 Wi-Fi 切换级别的网络抖动(旧 400ms 兜不住真实断网)

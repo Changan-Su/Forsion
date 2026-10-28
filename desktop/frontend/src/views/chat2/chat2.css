@@ -1647,3 +1647,8 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 .t2cv[data-switch="exit"] .amx-stage-minimap, .t2cv[data-switch="exit"] .t2cv-hints, .t2cv[data-switch="exit"] .t2cv-read { animation: t2cv-out var(--canvas-switch-fade) ease-in both; }
 /* 右边车道:刚切到画布那一下卡片收起(走它们自己的离场过渡:缩小 + 往右),收完 ChatView 再卸掉它 */
 .t2-rail[data-off] .t2-tsum, .t2-rail[data-off] .agent-desk-card { display: none; opacity: 0; scale: 0.8; translate: 100% 0; }
+/* 额度用完接力 / 服务端停用模型:回答前面那一行「改用了」(QuotaRelay.tsx) */
+.t2-fallback-line { display: flex; align-items: center; justify-content: center; gap: 6px; }
+.t2-fallback-line > span { color: var(--text-muted); }
+.t2-fallback-line .t2-failed-btn { padding: 1px 6px; color: var(--accent-ink); }
+.t2-name-model { font-weight: 400; color: var(--text-muted); }

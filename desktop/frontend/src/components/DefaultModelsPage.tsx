@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { AudioLines, ChevronRight, Eye, Image as ImageIcon, Info, Languages, MessageCircle, Mic, Phone, RefreshCw, RotateCcw, Sparkles, TextCursorInput, Volume2 } from 'lucide-react'
-import { SettingsPanel, SettingsRow } from './SettingsPrimitives'
+import { ArrowRightLeft, AudioLines, ChevronRight, Eye, Image as ImageIcon, Info, Languages, MessageCircle, Mic, Phone, RefreshCw, RotateCcw, Sparkles, TextCursorInput, Volume2 } from 'lucide-react'
+import { SettingsPanel, SettingsRow, SettingsSwitch } from './SettingsPrimitives'
 import { ModelSelect } from './ModelSelect'
 import { catalogByKind, originOf, type CatalogItem, type ModelKind, type ModelOrigin } from './modelKinds'
 import { realtimeCandidates, saveRealtimeModel } from './RealtimeVoiceSettings'
@@ -24,6 +24,11 @@ registerMessages({
   'dm.chat': { zh: '聊天与任务', en: 'Chats and tasks' },
   'dm.chatHint': { zh: '新会话和内置 Agent 默认用它。', en: 'New chats and built-in agents use it by default.' },
   'dm.background': { zh: '后台任务', en: 'Background tasks' },
+  'dm.quotaFallback': { zh: '额度用完时', en: 'When quota runs out' },
+  'dm.quotaFallbackHint': { zh: '订阅额度或账单配额用完、这一轮还没开始回答时，换成这个模型重发。只换一次，它也用完就停下。', en: 'If a subscription or billing quota runs out before the reply starts, resend the turn with this model. Switches once; stops if this one is out too.' },
+  'dm.quotaFallbackNone': { zh: '不换，停下报错', en: 'Don\'t switch, stop' },
+  'dm.quotaAsk': { zh: '换之前先问我', en: 'Ask before switching' },
+  'dm.quotaAskHint': { zh: '停在失败处，由你选等重置还是改用它。', en: 'Stop at the failed turn and let you choose to wait or switch.' },
   'dm.backgroundHint': { zh: '后台 Agent、摘要与整理。', en: 'Background agents, summaries and tidying up.' },
   'dm.vision': { zh: '图像识别', en: 'Image recognition' },
   'dm.visionHint': { zh: '主模型看不了图时帮它看。', en: "Looks at images when the main model can't." },
@@ -182,6 +187,12 @@ export function DefaultModelsPage(p: {
         value: snap.background, onChange: (id) => void save({ backgroundModelId: id }), models: llms, icon: <Sparkles size={13} />, label: t('dm.background'), kind: 'llm',
         cloudDefaultId: models?.backgroundModelId, chip: tag(cat.llm, followOrValue(snap.background, models?.backgroundModelId)),
       })} />}
+      {stored && <SettingsRow label={t('dm.quotaFallback')} description={t('dm.quotaFallbackHint')} control={slot({
+        value: stored.quotaFallbackModelId || '', onChange: (id) => void save({ quotaFallbackModelId: id }), models: llms, icon: <ArrowRightLeft size={13} />, label: t('dm.quotaFallback'), kind: 'llm',
+        defaultLabel: t('dm.quotaFallbackNone'), chip: stored.quotaFallbackModelId ? tag(cat.llm, stored.quotaFallbackModelId) : undefined,
+      })} />}
+      {stored && <SettingsRow label={t('dm.quotaAsk')} description={t('dm.quotaAskHint')} control={
+        <SettingsSwitch label={t('dm.quotaAsk')} checked={!!stored.quotaFallbackAsk} disabled={!stored.quotaFallbackModelId} onChange={(v) => void save({ quotaFallbackAsk: v })} />} />}
     </SettingsPanel>
 
     <SettingsPanel className="model-defaults-panel" icon={<ImageIcon size={14} />} title={t('dm.panel.image')}>
