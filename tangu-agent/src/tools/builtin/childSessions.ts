@@ -34,17 +34,19 @@ export const childSessionsProvider: ToolProvider = {
             + 'automatically in a <child_sessions_update> message (once no other child is still running) — you never need to poll or wait. '
             + 'Use it for independent pieces of work that take a while (research one option each, try an approach, do a separate change); '
             + 'use delegate instead for a quick lookup whose answer you need right now. One call per independent piece. '
-            + 'By default (context "fresh") the child cannot see this conversation, so the message must be a complete brief. '
-            + 'Pass context "fork" when the task leans on a lot of what was discussed here: the child then also gets this conversation so far as background (the brief still says what to do). '
+            + 'Choose context every time: "fresh" — the child sees only your brief, so the brief must be complete; '
+            + '"fork" — the child also gets this conversation so far as background (the brief still says what to do). '
+            + 'If your brief relies on anything said or read here ("the conversation above", "what we discussed", a file you just read) and does not spell it out, you must use "fork" — a fresh child sees none of it and will guess. '
             + 'The child can message you back with send_to_session.',
           parameters: {
             type: 'object',
             properties: {
               title: { type: 'string', description: 'Short title shown in the session list, in the user\'s language (max ~60 chars).' },
               message: { type: 'string', description: 'The complete brief: goal, the context it needs, constraints, and what done looks like.' },
-              context: { type: 'string', enum: ['fresh', 'fork'], description: '"fresh" (default): the child sees only the brief. "fork": it also gets this conversation so far.' },
+              context: { type: 'string', enum: ['fresh', 'fork'], description: '"fresh": the child sees only the brief. "fork": it also gets this conversation so far. Use "fork" whenever the brief leans on this conversation.' },
             },
-            required: ['title', 'message'],
+            // context 必填(同 Claude 的 start_session):选填时 live 10-28 模型写「根据上面的对话」却不传 fork,子会话照着空气编(2/3)
+            required: ['title', 'message', 'context'],
           },
         },
       },
