@@ -6,7 +6,7 @@ import { deps } from '../seams/runtime.js';
 import { agentsDir, humanDir, tanguHome, userMdFile } from '../core/tanguHome.js';
 import { HUMAN_SYNC_FILES, joinFirstContact, mirrorLegacyHuman } from '../agents/humanFolder.js';
 import { getDeviceId } from '../core/deviceId.js';
-import { getAgent, listAgents, parseAgentConfig, removeAgentKeepFiles, resolveMemorySlug, type NormalAgentDef } from '../agents/agentRegistry.js';
+import { getAgent, listAgents, parseAgentConfig, trashAgent, resolveMemorySlug, type NormalAgentDef } from '../agents/agentRegistry.js';
 import { splitLogBlocks, mergeBlocks, mergeLogHeaders, mergeText3 } from './memorySync.js';
 import { mergeDbFile } from './dbRowMerge.js';
 import { keepLatestRuns, migrateScheduleFile } from './agentSchedule.js';
@@ -234,7 +234,7 @@ async function syncBucket(cloud: AgentFilesBrain, uid: string, slug: string, sco
   // 删除胜:本机没推上去的改动留在 .removed 里能找回,不再拿它把 Agent 推回云端(10-28 Codex 复核)。
   if (cats.has('DEF') && prev.files['config.toml'] && manifest.some((f) => f.relPath === 'config.toml' && f.deleted)) {
     guard();
-    if ((await removeAgentKeepFiles(slug, { record: false })).ok) { result.deleted++; return; }
+    if ((await trashAgent(slug, { record: false })).ok) { result.deleted++; return; }
   }
   const remote = new Map<string, AgentFileMeta>();
   for (const entry of manifest) {

@@ -20,6 +20,7 @@ import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
 import { agentsDir, memoryDir, userMdFile, ensureHumanFolder, humanDir, DEFAULT_AGENT_SLUG, USER_MD_TEMPLATE } from '../core/tanguHome.js';
 import { mirrorLegacyHuman } from './humanFolder.js';
 import { recordAgentRemoval } from '../services/cloudSyncAccount.js';
+import { moveToTrash, type TrashEntry } from '../services/trash.js';
 import { credentialReadTarget } from '../sandbox/hostSandboxProtection.js';
 import { builtinAgentAvatar } from './builtinAvatars.js';
 import { LEGACY_PERSONAS, LEGACY_MUSE_PROMPTS, LEGACY_MUSE_DESCRIPTION } from './legacyPersonas.js';
@@ -984,61 +985,47 @@ export async function patchAgent(slug: string, fields: AgentPatch | ((cur: Norma
   });
 }
 
-function agentDeletable(slug: string): boolean {
-  if (!isValidSlug(slug)) return false;
-  if (slug === DEFAULT_AGENT_SLUG) return false; // 不允许删默认 agent(含其记忆/日志)
+/** 为什么删不了(卸载确认框据此只给关闭):默认 Agent(含其记忆/日志)/ 启用中的 Muse(supervisor 会自愈重建,删了也白删且丢记忆)。 */
+export function agentUndeletableReason(slug: string): 'invalid' | 'default' | 'muse' | null {
+  if (!isValidSlug(slug)) return 'invalid';
+  if (slug === DEFAULT_AGENT_SLUG) return 'default';
   if (slug === MUSE_AGENT_SLUG) {
-    // Muse 启用期间禁删(supervisor 会自愈重建,删了也白删且丢记忆);关闭 Muse 后允许删。
-    try { if (loadSpecialAgentsConfig().muse.enabled) return false; } catch { /* 配置读失败不阻删 */ }
+    try { if (loadSpecialAgentsConfig().muse.enabled) return 'muse'; } catch { /* 配置读失败不阻删 */ }
   }
-  return true;
+  return null;
+}
+const agentDeletable = (slug: string): boolean => !agentUndeletableReason(slug);
+
+/** 删除 Agent = 挪进回收站(trashAgent)。从名册、侧栏消失,30 天内可恢复;私聊、团队、自动化那几样由 services/agentUninstall 一起处理。 */
+export async function deleteAgent(slug: string): Promise<boolean> {
+  return (await trashAgent(slug)).ok;
 }
 
-export async function deleteAgent(slug: string): Promise<boolean> {
-  if (!agentDeletable(slug)) return false;
+/** 整个目录(定义、记忆、Library)连同遗留的扁平 `<slug>.md` 挪进 `<tanguHome>/trash/`(扁平留在原地,下次启动会被迁回来)。
+ *  默认 Agent / 启用中的 Muse 拒删,文件原样不动。本来就不在 → ok 且没有条目。
+ *  record:false = 同步发现别处删了它,云端已经删过,别再记(会误删之后同名新建的)。alsoTrash = 一起进同一条的(只剩它一人的团队)。 */
+export async function trashAgent(slug: string, opts: { record?: boolean; alsoTrash?: Array<{ path: string; role: string }> } = {}): Promise<{ ok: boolean; entry?: TrashEntry }> {
+  if (!agentDeletable(slug)) return { ok: false };
   await ensureAgentsReady(); // 与 saveAgent 同理:入队前跑完首访播种
   return withAgentLock(slug, async () => {
+    const dir = path.join(agentsDir(), slug);
     let undo = (): void => {};
     try {
-      undo = recordAgentRemoval(slug); // 影子跟着目录走,不先记一笔,下次同步会从云端整份拉回来
-      await fs.rm(path.join(agentsDir(), slug), { recursive: true, force: true });
-      await fs.rm(path.join(agentsDir(), `${slug}.md`), { force: true }).catch(() => { /* 清理可能的遗留扁平 */ });
+      const name = (await parseAgentFolder(slug, dir).catch(() => null))?.name || slug;
+      if (opts.record !== false) undo = recordAgentRemoval(slug); // 影子跟着目录走,不先记一笔,下次同步会从云端整份拉回来
+      const entry = await moveToTrash({ kind: 'agent', ref: slug, name, paths: [{ path: dir, role: 'dir' }, { path: path.join(agentsDir(), `${slug}.md`), role: 'flat' }, ...(opts.alsoTrash ?? [])] });
       cache = null;
-      return true;
+      return entry ? { ok: true, entry } : { ok: true };
     } catch {
-      // 没删成(config.toml 还在)就撤掉这次的记录:不然下次同步会删云端、再把本地没动过的文件当成别处删了一起删掉
-      if (existsSync(path.join(agentsDir(), slug, 'config.toml'))) try { undo(); } catch { /* ignore */ }
-      return false;
+      // 没挪走(config.toml 还在)就撤掉这次的记录:不然下次同步会删云端、再把本地没动过的文件当成别处删了一起删掉
+      if (existsSync(path.join(dir, 'config.toml'))) try { undo(); } catch { /* ignore */ }
+      return { ok: false };
     }
   });
 }
 
-/** 移除 Agent 但保留它的文件:整个目录(定义、记忆、Library)挪进 `agents/.removed/<slug>-<时间戳>/` —— 名册只认合法 slug,
- *  点开头的目录不会再被加载。返回挪到的位置:桌面勾了「同时删除相关文件」时再把它移进系统废纸篓
- *  (先挪后删:默认 Agent / 启用中的 Muse 被拒时,文件不会先没了)。 */
-export async function removeAgentKeepFiles(slug: string, opts: { record?: boolean } = {}): Promise<{ ok: boolean; keptAt?: string }> {
-  if (!agentDeletable(slug)) return { ok: false };
-  await ensureAgentsReady();
-  return withAgentLock(slug, async () => {
-  let undo = (): void => {};
-  const dest = path.join(agentsDir(), '.removed', `${slug}-${new Date().toISOString().replace(/[:.]/g, '-')}`);
-  const moved = async (from: string, to: string): Promise<boolean> => fs.rename(from, to).then(() => true, (e: NodeJS.ErrnoException) => { if (e?.code === 'ENOENT') return false; throw e; });
-  try {
-    await fs.mkdir(path.dirname(dest), { recursive: true });
-    if (opts.record !== false) undo = recordAgentRemoval(slug); // record:false = 同步发现别处删了它,云端已经删过,别再记(会误删之后同名新建的)
-    const dir = await moved(path.join(agentsDir(), slug), dest);
-    // 遗留的扁平 <slug>.md 也一起挪走:留在原地下次启动 migrateFlatAgentsOnce 会把这个 Agent 迁回来;只剩它时也不能删
-    if (!dir) await fs.mkdir(dest, { recursive: true });
-    const flat = await moved(path.join(agentsDir(), `${slug}.md`), path.join(dest, `${slug}.md`));
-    cache = null;
-    if (!dir && !flat) { await fs.rmdir(dest).catch(() => { /* ignore */ }); return { ok: true }; } // 本来就不在了
-    return { ok: true, keptAt: dest };
-  } catch {
-    if (existsSync(path.join(agentsDir(), slug, 'config.toml'))) try { undo(); } catch { /* ignore */ } // 没挪走:撤掉这次的记录(同 deleteAgent)
-    return { ok: false };
-  }
-  });
-}
+/** 恢复之后名册重读(目录是回收站挪回来的,不经 saveAgent)。 */
+export function invalidateAgentCache(): void { cache = null; }
 
 // ── 头像(存进该 agent 的 Library/,config.avatar 引用;≤1MB)。常量导出供云端 cloudAgentStore 共用。──
 export const AVATAR_MIME_EXT: Record<string, string> = {

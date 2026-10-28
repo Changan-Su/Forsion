@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+// 删除走 services/agentUninstall(进回收站 + 归档私聊);这里没有库,私聊那半给桩。
+vi.mock('../../services/sessionCleanup.js', () => ({ soloSessionIds: async () => [], archiveSoloSessions: async () => [], setSessionsArchived: async () => {}, deleteSessionCascade: async () => {} }));
 import { manageAgentProvider } from './manageAgent.js';
 import { getAgent, saveAgent, AGENT_MAX_ITERATIONS_MIN } from '../../agents/agentRegistry.js';
 import { agentsDir } from '../../core/tanguHome.js';
