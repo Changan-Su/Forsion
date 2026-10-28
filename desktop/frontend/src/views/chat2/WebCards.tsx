@@ -138,29 +138,34 @@ function useLocalFile(path: string, cwd: string | undefined): { state: 'loading'
   return v
 }
 
-/** 这条会话里之后有没有把这个文件(或它所在的目录)发布出去:有就回线上地址。 */
-function usePublishedUrl(sid: string, path: string): string | null {
-  return useApp((s) => {
-    const cwd = sessionCwd(sid)
-    for (const m of s.messagesBySession[sid] ?? []) {
-      for (const ev of m.toolEvents ?? []) {
-        if (ev.name !== 'publish_web_page' || !succeeded(ev)) continue
-        const a = argsOf(ev)
-        if (a.action === 'unpublish' || typeof a.path !== 'string') continue
-        const target = resolveDeskPath(a.path, cwd)
-        if (target !== path && target !== dirOf(path)) continue
-        const url = /\bat (https?:\/\/\S+?)[\s)]/.exec(ev.result || '')?.[1]
-        if (url) return url
+/** 这条会话里有没有把这个文件(或它所在的目录)发布出去、之后又没在对话里下线:有就回线上地址。
+ *  ponytail: 只看对话里的工具调用;在「我的网页」或卡上下线的,这里不知道(点「去看线上版」会看到下线页)。 */
+export function publishedUrlOf(messages: readonly { toolEvents?: ToolEvent[] }[], path: string, cwd: string | undefined): string | null {
+  let live: { url: string; slug: string } | null = null
+  for (const m of messages) {
+    for (const ev of m.toolEvents ?? []) {
+      if (ev.name !== 'publish_web_page' || !succeeded(ev)) continue
+      const a = argsOf(ev)
+      if (a.action === 'unpublish') {
+        if (live && String(a.slug ?? '').trim().toLowerCase() === live.slug) live = null
+        continue
       }
+      if (typeof a.path !== 'string') continue
+      const target = resolveDeskPath(a.path, cwd)
+      if (target !== path && target !== dirOf(path)) continue
+      const url = /\bat (https?:\/\/\S+?)[\s)]/.exec(ev.result || '')?.[1]
+      if (url) live = { url, slug: url.replace(/\/$/, '').split('/').pop()!.toLowerCase() }
     }
-    return null
-  })
+  }
+  return live?.url ?? null
 }
+const usePublishedUrl = (sid: string, path: string): string | null =>
+  useApp((s) => publishedUrlOf(s.messagesBySession[sid] ?? [], path, sessionCwd(sid)))
 
-function CardShell({ title, onDesk, children }: { title: string; onDesk?: () => void; children: React.ReactNode }) {
+function CardShell({ kind, title, onDesk, children }: { kind: 'local' | 'service'; title: string; onDesk?: () => void; children: React.ReactNode }) {
   const { t } = useI18n()
   return (
-    <div className="sketch-card plugin-tool-card web-card-host" data-web-card-host="">
+    <div className="sketch-card plugin-tool-card web-card-host" data-web-card-host={kind}>
       <div className="sketch-card-head">
         <span className="sketch-card-title">{title}</span>
         {onDesk && !window.tangu?.mobile && (
@@ -177,7 +182,8 @@ function CardShell({ title, onDesk, children }: { title: string; onDesk?: () => 
 const menuAt = (anchor: HTMLElement, items: PluginMenuEntry[]): void => { openPluginContextMenu({ anchor, align: 'end' }, items, (run) => run()) }
 const copy = (text: string): void => { void navigator.clipboard?.writeText(text).catch(() => {}) }
 
-export function LocalWebCard({ sessionId, path, onAsk }: { sessionId: string; path: string; onAsk?: (text: string) => void }) {
+/** fallback:文件在 Vite 这类项目里(不出卡)时画什么 —— display_file 那张传文件小卡,别让附件凭空消失。 */
+export function LocalWebCard({ sessionId, path, onAsk, fallback = null }: { sessionId: string; path: string; onAsk?: (text: string) => void; fallback?: React.ReactNode }) {
   const { t } = useI18n()
   const cwd = useSessionCwd(sessionId)
   const file = useLocalFile(path, cwd)
@@ -185,7 +191,8 @@ export function LocalWebCard({ sessionId, path, onAsk }: { sessionId: string; pa
   const [url, setUrl] = useState<string | null>(null)
   const [title, setTitle] = useState('')
   useEffect(() => { let on = true; void servePath(path).then((u) => { if (on) setUrl(u) }); return () => { on = false } }, [path])
-  if (file.state === 'loading' || file.state === 'project') return null
+  if (file.state === 'loading') return null
+  if (file.state === 'project') return <>{fallback}</>
   const gone = file.state === 'gone'
   const fileName = path.split(/[\\/]/).pop() || path
   const preview = (): void => { if (url) openProcessUrl(sessionId, url) }
@@ -208,7 +215,7 @@ export function LocalWebCard({ sessionId, path, onAsk }: { sessionId: string; pa
     thumbnail: !gone && url ? { url, version: String(file.mtime) } : null,
     actions, trailing, onMore: (a) => menuAt(a, menu), onTitle: setTitle,
   }
-  return <CardShell title={t('webcard.local.title')} onDesk={gone || !url ? undefined : preview}><WebCard {...props} /></CardShell>
+  return <CardShell kind="local" title={t('webcard.local.title')} onDesk={gone || !url ? undefined : preview}><WebCard {...props} /></CardShell>
 }
 
 const knownUrl = new Map<string, string>() // ponytail: 进程结束后引擎不再给 url,记在内存里;重开应用后已结束的服务卡不再出
@@ -259,11 +266,15 @@ export function ServiceWebCard({ sessionId, processId, command, onAsk }: { sessi
     thumbnail: running && here ? { url, version: String(p.startedAt) } : null,
     actions, trailing, onMore: (a) => menuAt(a, menu), onTitle: setTitle,
   }
-  return <CardShell title={t('webcard.service.title')} onDesk={running && here ? () => openProcessUrl(sessionId, url) : undefined}><WebCard {...props} /></CardShell>
+  return <CardShell kind="service" title={t('webcard.service.title')} onDesk={running && here ? () => openProcessUrl(sessionId, url) : undefined}><WebCard {...props} /></CardShell>
 }
 
+/** 这条会话出不出宿主网页卡:引擎在这台电脑上、不是沙箱(沙箱里的路径不是本机路径)。 */
+export const webCardsHere = (sessionId: string | undefined, execMode: string | undefined): boolean =>
+  !!sessionId && execMode !== 'sandbox' && engineHere(sessionId)
+
 export function HostWebCard({ spec, sessionId, onAsk }: { spec: WebCardSpec; sessionId?: string; onAsk?: (text: string) => void }) {
-  if (!sessionId || !engineHere(sessionId)) return null
+  if (!sessionId) return null
   return spec.kind === 'local'
     ? <LocalWebCard sessionId={sessionId} path={spec.path} onAsk={onAsk} />
     : <ServiceWebCard sessionId={sessionId} processId={spec.processId} command={spec.command} onAsk={onAsk} />

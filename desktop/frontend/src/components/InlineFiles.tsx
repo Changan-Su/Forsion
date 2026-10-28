@@ -16,8 +16,7 @@ import { notifyApp } from '../stores/notificationStore'
 import { targetForSession } from '../services/engine/targets'
 import { translate } from '../i18n'
 import { viewableProps } from './ImageViewer'
-import { LocalWebCard, isHtmlFile } from '../views/chat2/WebCards'
-import { engineHere } from '../views/chat2/BackgroundProcs'
+import { LocalWebCard, isHtmlFile, webCardsHere } from '../views/chat2/WebCards'
 
 type ExecMode = 'host' | 'sandbox' | undefined
 
@@ -127,14 +126,12 @@ export const InlineFiles: React.FC<{
   onOpenPreview?: (t: PreviewTarget) => void
   /** 网页卡片的「发布…」:往对话发一句话 */
   onAsk?: (text: string) => void
-  /** 同一条消息里已经出了本地网页卡的路径:这里不再画 */
-  skipPaths?: ReadonlySet<string>
-}> = ({ files, cfg, sessionId, execMode, onOpenPreview, onAsk, skipPaths }) => {
-  const shown = files.filter((f) => !(f.path && skipPaths?.has(f.path)))
+}> = ({ files, cfg, sessionId, execMode, onOpenPreview, onAsk }) => {
+  const shown = files
   if (!shown.length) return null
   const open = (f: DisplayFile) => onOpenPreview?.(targetFor(f, cfg, sessionId, execMode))
   // 网页卡片第二轮 1:本机会话里展示一个 .html = 本地网页卡(代替文件名小卡),排在小卡下面
-  const web = (f: DisplayFile): boolean => !f.sourceSessionId && isHtmlFile(f.path) && engineHere(sessionId)
+  const web = (f: DisplayFile): boolean => !f.sourceSessionId && isHtmlFile(f.path) && webCardsHere(sessionId, execMode)
   const cards = shown.filter((f) => !web(f))
   return (
     <>
@@ -146,7 +143,8 @@ export const InlineFiles: React.FC<{
           })}
         </div>
       )}
-      {shown.filter(web).map((f) => <LocalWebCard key={f.path} sessionId={sessionId} path={f.path!} onAsk={onAsk} />)}
+      {shown.filter(web).map((f) => <LocalWebCard key={f.path} sessionId={sessionId} path={f.path!} onAsk={onAsk}
+        fallback={<div className="inline-file-grid"><FileCard f={f} onClick={() => open(f)} /></div>} />)}
     </>
   )
 }

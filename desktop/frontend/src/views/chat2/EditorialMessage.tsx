@@ -26,7 +26,7 @@ import { InlineFiles } from '../../components/InlineFiles'
 import { IntelligentUi } from '../../components/IntelligentUi'
 import { SketchCards } from '../../components/SketchCard'
 import { PluginToolCard, useToolCardOf, type ToolCardClaim } from '../../components/PluginToolCard'
-import { HostWebCard, planWebCards, useSessionCwd, type WebCardSpec } from './WebCards'
+import { HostWebCard, planWebCards, useSessionCwd, webCardsHere, type WebCardSpec } from './WebCards'
 import { sketchFence } from '../../amadeus/blocks/sketch/format'
 import { streamingArgString } from '../streamingWrite'
 import { SystemPromptBlock } from '../../components/SystemPromptBlock'
@@ -429,9 +429,14 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
   const cardOf = useToolCardOf()
   // 本地网页卡 / 服务卡(网页卡片第二轮 1):整条消息一起排(多个 HTML 只给入口、挂在最后一次写上)
   const webCwd = useSessionCwd(runSid)
-  const webPlan = useMemo(() => planWebCards(msg.toolEvents, webCwd), [msg.toolEvents, webCwd])
+  // 引擎不在这台电脑上 / 沙箱会话不排(卡画不出来就别动工具组和附件);同一路径又 display_file 了 → 那张归附件区画
+  const webHere = webCardsHere(runSid, fileCtx?.execMode)
+  const webPlan = useMemo(() => {
+    if (!webHere) return new Map<string, WebCardSpec>()
+    const shown = new Set((msg.displayFiles ?? []).map((f) => f.path).filter(Boolean))
+    return new Map([...planWebCards(msg.toolEvents, webCwd)].filter(([, w]) => w.kind !== 'local' || !shown.has(w.path)))
+  }, [webHere, msg.toolEvents, msg.displayFiles, webCwd])
   const webOf = useCallback((ev: ToolEvent) => webPlan.get(ev.id), [webPlan])
-  const webLocal = useMemo(() => new Set([...webPlan.values()].flatMap((w) => (w.kind === 'local' ? [w.path] : []))), [webPlan])
   // 待办清单的「进行中」只在这一段还在流式、且会话的 run 还活着时转圈:停止 / 出错 / 断流后的孤儿气泡都不转。
   // ponytail: steer 切段后旧段已 done,run 仍在跑时这份清单也停转;要跟上得在 turn_boundary 把 todos 挪到新段。
   const todoLive = useApp((s) => msg.status === 'streaming' && !!msg.todos?.length && (!runSid || !!s.runningBySession[runSid]))
@@ -820,8 +825,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
           <div className="t2-dim t2-team-done" data-team-done="1">✓ {t('chat.team.done')}</div>
         )}
         {!!msg.displayFiles?.length && fileCtx && (
-          <InlineFiles files={msg.displayFiles} cfg={fileCtx.cfg} sessionId={fileCtx.sessionId} execMode={fileCtx.execMode} onOpenPreview={fileCtx.onOpenPreview} onAsk={handlers?.onSuggest}
-            skipPaths={webLocal} />
+          <InlineFiles files={msg.displayFiles} cfg={fileCtx.cfg} sessionId={fileCtx.sessionId} execMode={fileCtx.execMode} onOpenPreview={fileCtx.onOpenPreview} onAsk={handlers?.onSuggest} />
         )}
         {(msg.toolEvents || []).filter(ev => isMarketplaceTool(ev) && !inlineToolIds.has(ev.id)).map(ev => <MarketPluginCards key={`market-${ev.id}`} event={ev} />)}
         {(msg.toolEvents || []).filter(ev => isSandboxCardTool(ev) && !inlineToolIds.has(ev.id)).map(ev => <PluginSandboxCard key={`sandbox-${ev.id}`} event={ev} />)}

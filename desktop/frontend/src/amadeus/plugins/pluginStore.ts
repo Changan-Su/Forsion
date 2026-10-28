@@ -1380,7 +1380,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     }
     // 网页卡片卡身(10-28,网页卡片 A + D):形状错同步抛;按钮行 / 菜单行整理成宿主形状,update 的补丁同样整理。
     const tidyCardActs = (list: unknown, where: string): import('./types').PluginWebCardAction[] | undefined => {
-      if (list === undefined) return undefined
+      if (list === undefined || list === null) return undefined // null = 清掉
       if (!Array.isArray(list)) throw new TypeError(`mountWebCard ${where} must be an array`)
       return list.filter((a) => a && typeof a === 'object' && isPluginText(a.label) && typeof a.run === 'function').slice(0, 6).map((a) => {
         iconName(a.icon, 'mountWebCard')

@@ -76,7 +76,7 @@ async function main() {
     plugins = (await api('/agent/plugins').catch(() => ({}))).plugins || []
     const off = plugins.filter((p) => p.official).map((p) => p.id)
     leg('引擎把 Extend 的引擎半身判为官方(A / D 卡的前提)', off.length > 0, off.length ? `official: [${off.join(', ')}]` : `✗ 没有 official 的插件;在跑的:[${plugins.map((p) => `${p.id}${p.active ? '' : '(未启用)'}`).join(', ')}]`)
-    const sid = (await api('/agent/sessions', 'POST', { title: 'ZZ-网页卡片真机', model_id: MODEL, project_path: proj, project_name: '网页卡片真机', agent_config: { preset: 'work', execMode: 'host', approvalMode: 'auto-edit' } })).session.id
+    const sid = (await api('/agent/sessions', 'POST', { title: 'ZZ-网页卡片真机', model_id: MODEL, project_path: proj, project_name: '网页卡片真机', agent_config: { execMode: 'host', approvalMode: 'auto-edit' } })).session.id
     step = '启动'
     app = await electron.launch({ args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', ROOT], cwd: ROOT, env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: base }, timeout: 90_000 })
     const win = await app.firstWindow({ timeout: 120_000 }); win.setDefaultTimeout(20_000)
@@ -93,8 +93,10 @@ async function main() {
     step = '点开会话'
     await win.locator(`.t2s-srow[data-sel-id="${sid}"]`).first().click()
     const ta = win.locator('.t2c-ta').first(); await ta.waitFor()
-    const last = () => win.locator('.t2-asst-col').last()
-    const crop = async (name) => { await win.waitForTimeout(600); await last().screenshot({ path: path.join(SHOTS, `${name}.png`), scale: 'device' }).catch(() => {}) }
+    // 要审批的那一步会分成两块回答(批准前那块带着工具调用,批准后续跑的是新的一块):卡在批准前那块里,所以在整段对话里找最新的一张
+    const colOf = (card) => win.locator('.t2-asst-col').filter({ has: card }).last()
+    const crop = async (name, card) => { await win.waitForTimeout(600); await colOf(card).screenshot({ path: path.join(SHOTS, `${name}.png`), scale: 'device' }).catch(() => {}) }
+    const LOCAL = '[data-web-card-host="local"]', SERVICE = '[data-web-card-host="service"]'
 
     /** 发一句话;run 期间出现的审批卡一律在界面上点「批准」(只为让旅程走完,审批本身不是这次要验的)。 */
     const say = async (i) => {
@@ -123,52 +125,52 @@ async function main() {
 
     // ① 本地网页卡
     const e1 = await say(0)
-    const local = last().locator('[data-web-card-host]').first()
+    const local = win.locator(LOCAL).last()
     const localShown = await local.waitFor({ timeout: 10_000 }).then(() => true, () => false)
     const localThumb = localShown && await thumbOf(local)
     const localName = localShown ? (await local.locator('.wc-name').innerText().catch(() => '')).trim() : ''
     const htmlWrite = e1.calls.filter((c) => /write_file|apply_patch|edit_file/.test(c)).length
-    await crop('01-local-card')
+    await crop('01-local-card', win.locator(LOCAL))
     leg('① 写一页 HTML → 本地网页卡:出卡、拍到缩略图、名字取页面标题', localShown && localThumb && !!localName && !/index\.html$/.test(localName),
       `${htmlWrite} 次写文件(${e1.calls.join(', ')});${localShown ? '出了卡' : '✗ 没出卡'};${localThumb ? '有缩略图' : '✗ 没缩略图'};名字「${localName}」`)
 
     // ② 服务卡
     const e2 = await say(1)
-    const svc = last().locator('[data-web-card-host]').first()
+    const svc = win.locator(SERVICE).last()
     const svcShown = await svc.waitFor({ timeout: 20_000 }).then(() => true, () => false)
     const svcThumb = svcShown && await thumbOf(svc)
     const svcPill = svcShown ? (await svc.locator('.wc-pill').innerText().catch(() => '')).trim() : ''
     const svcAddr = svcShown ? (await svc.locator('.wc-link').innerText().catch(() => '')).trim() : ''
-    await crop('02-service-card')
+    await crop('02-service-card', win.locator(SERVICE))
     leg('② run_background 起本地服务 → 服务卡:运行中、地址是这个端口、拍到缩略图', svcShown && svcPill.includes('运行中') && svcAddr.includes(String(PORT)) && svcThumb,
       `工具 ${e2.calls.join(', ')};${svcShown ? `出了卡「${svcPill}」${svcAddr}` : '✗ 没出卡'};${svcThumb ? '有缩略图' : '✗ 没缩略图'}`)
 
     // ③ 发布 → Extend 的「网页」卡
     const e3 = await say(2)
-    const a = last().locator('[data-plugin-tool-card="publish_web_page"]').first()
+    const a = win.locator('[data-plugin-tool-card="publish_web_page"]').last()
     const aShown = await a.waitFor({ timeout: 20_000 }).then(() => true, () => false)
     const aLive = aShown && await a.locator('.wc-pill', { hasText: '已上线' }).waitFor({ timeout: 20_000 }).then(() => true, () => false)
     const aThumb = aShown && await thumbOf(a)
     const aAddr = aShown ? (await a.locator('.wc-link').innerText().catch(() => '')).trim() : ''
-    await crop('03-publish-card')
-    const firstLocal = win.locator('.t2-asst-col').nth(0).locator('[data-web-card-host] .wc-pill')
+    await crop('03-publish-card', win.locator('[data-plugin-tool-card="publish_web_page"]'))
+    const firstLocal = win.locator(`${LOCAL} .wc-pill`).first()
     const nowPublished = await firstLocal.filter({ hasText: '已发布' }).waitFor({ timeout: 10_000 }).then(() => true, () => false)
     leg('③ 发布 → Extend 画的「网页」卡:已上线、线上地址、拍到缩略图;第一句那张本地卡变「已发布」', aShown && aLive && aThumb && /tea-signup/.test(aAddr) && nowPublished,
       `工具 ${e3.calls.join(', ')}(批了 ${runs[2].approved} 张审批卡);${aShown ? `出了卡${aLive ? '「已上线」' : '✗ 不是已上线'} ${aAddr}` : '✗ 没出卡(看第 0 条 official)'};${aThumb ? '有缩略图' : '✗ 没缩略图'};本地卡${nowPublished ? '变「已发布」' : '✗ 没变'}`)
 
     // ④ 问发布了哪些 → Extend 的「我的网页」卡
     const e4 = await say(3)
-    const d = last().locator('[data-plugin-tool-card="forsion_account"]').first()
+    const d = win.locator('[data-plugin-tool-card="forsion_account"]').last()
     const dShown = await d.waitFor({ timeout: 20_000 }).then(() => true, () => false)
     const rows = dShown ? await d.locator('[data-web-card="row"]').count() : 0
     const dText = dShown ? (await d.innerText().catch(() => '')).replace(/\s+/g, ' ').slice(0, 200) : ''
-    await crop('04-list-card')
+    await crop('04-list-card', win.locator('[data-plugin-tool-card="forsion_account"]'))
     leg('④ 问发布了哪些 → Extend 画的「我的网页」卡:列出 tea-signup', dShown && rows >= 1 && /tea-signup/.test(dText),
       `工具 ${e4.calls.join(', ')};${dShown ? `出了卡,${rows} 行「${dText}」` : '✗ 没出卡'}`)
 
     // ⑤ 在服务卡上点「停止」
     step = '停止服务'
-    const svcCard = win.locator('.t2-asst-col').nth(1).locator('[data-web-card-host]').first()
+    const svcCard = win.locator(SERVICE).last()
     await svcCard.scrollIntoViewIfNeeded().catch(() => {})
     await svcCard.locator('[data-act="stop"]').click().catch(() => {})
     const stopped = await svcCard.locator('.wc-pill', { hasText: '已停止' }).waitFor({ timeout: 15_000 }).then(() => true, () => false)

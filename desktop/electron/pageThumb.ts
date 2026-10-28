@@ -3,12 +3,14 @@
  * 为什么在主进程:线上 Connect 页面全站带 X-Frame-Options: SAMEORIGIN,渲染层 iframe 嵌不进来;本机令牌根 / localhost 一并走这里。
  * 窗口:没有 preload、沙箱、独立的非持久分区(不带内置浏览器里的登录态)、静音、不许弹窗、不许跳到 http(s) 以外。
  * 插件和宿主同在一个渲染进程,window.tangu 对插件本来可见,所以这里只把关「是不是 http(s)」,不按来源区分。
- * ponytail: 内存缓存 60 张、同时最多 2 个、单张 10 秒;要跨重启再落盘。
+ * ponytail: 内存缓存 60 张、同时最多 2 个、排队最多 8 个、单张 10 秒;要跨重启再落盘。
+ * 能拍 localhost:渲染层插件本来就拿得到 window.tangu(读本机文件都行),这里不比它多给。
  */
-import { BrowserWindow, ipcMain, type IpcMainInvokeEvent } from 'electron'
+import { BrowserWindow, ipcMain, session, type IpcMainInvokeEvent } from 'electron'
 
 const MAX_CACHE = 60
 const MAX_RUNNING = 2
+const MAX_WAITING = 8 // 排不上的直接回 null(卡上画占位图标),别让一堆请求攒着
 const TIMEOUT_MS = 10_000
 const SETTLE_MS = 700 // 首帧之后等字体 / 图片落定
 const OUT_W = 480
@@ -22,14 +24,19 @@ export function thumbUrlAllowed(raw: unknown): raw is string {
 
 let running = 0
 const waiting: (() => void)[] = []
-async function slot(): Promise<() => void> {
-  if (running >= MAX_RUNNING) await new Promise<void>((r) => waiting.push(r))
+async function slot(): Promise<(() => void) | null> {
+  if (running >= MAX_RUNNING) {
+    if (waiting.length >= MAX_WAITING) return null
+    await new Promise<void>((r) => waiting.push(r))
+  }
   running++
   return () => { running--; waiting.shift()?.() }
 }
 
 async function shoot(url: string): Promise<PageThumb> {
   const release = await slot()
+  if (!release) return null
+  denyPermissions()
   const win = new BrowserWindow({
     show: false, width: 1280, height: 800,
     webPreferences: { offscreen: true, sandbox: true, contextIsolation: true, nodeIntegration: false, partition: 'pagethumb', backgroundThrottling: false },
@@ -59,6 +66,16 @@ async function shoot(url: string): Promise<PageThumb> {
     if (!win.isDestroyed()) win.destroy()
     release()
   }
+}
+
+let denied = false
+/** 截图窗口里的页面一律拿不到麦克风 / 摄像头 / 定位 / 通知这些权限(Electron 缺省是放行)。 */
+function denyPermissions(): void {
+  if (denied) return
+  denied = true
+  const ses = session.fromPartition('pagethumb')
+  ses.setPermissionRequestHandler((_wc, _perm, cb) => cb(false))
+  ses.setPermissionCheckHandler(() => false)
 }
 
 const cache = new Map<string, Promise<PageThumb>>()
