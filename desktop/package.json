@@ -29,6 +29,7 @@
     "check:run-lifecycle": "node scripts/run-lifecycle.check.cjs",
     "check:installer": "node scripts/installer-compile.check.cjs",
     "check:backend-deps": "node scripts/backend-dependencies.check.cjs",
+    "test:cloud-consistency": "vitest run electron/remotesync/engine.test.ts electron/remotesync/uploadConsistency.test.ts frontend/src/services/cloudHttpAccount.test.ts frontend/src/services/cloudHttpBody.test.ts frontend/src/services/cloudBridgeCas.test.ts frontend/src/services/cloudBridgeVanished.test.ts frontend/src/amadeus/store/dbStore.test.ts frontend/src/amadeus/store/dbStore.readFailure.test.ts frontend/src/amadeus/store/drawingStore.test.ts",
     "test:sync": "vitest run electron/amadeus/ipc.move.test.ts electron/amadeus/ipc.account.test.ts electron/amadeus/settings.account.test.ts frontend/src/amadeus/store/pageStore.move-race.test.ts frontend/src/stores/entrySyncStore frontend/src/services/cloudBridgeVanished.test.ts frontend/src/components/ShareCard.race.test.ts frontend/src/amadeusFolderPublish.test.ts",
     "test:accounts": "vitest run forsionAuth accountCore accountTransition AccountCard cloudAccount cloudHttpAccount cloudBridgeCacheAccount contentLayoutAccount settings.account ipc.account collabMain.account appStore.connect engine.lifecycle writeFailures pageStore.vaultswitch dbStore.test drawingStore.test",
     "e2e:automation": "node scripts/automation-space.e2e.cjs",
