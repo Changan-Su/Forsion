@@ -126,6 +126,13 @@ test('a hotfix cut from a beta installer uses that beta as its line and baseline
   f.write('tangu-agent/package.json', f.pkg('2.0.1'))
   runGate(f.root, ['tangu-v2.0.1', 'push'], { GITHUB_OUTPUT: output }, { readPublishedVersion: () => '2.0.0' })
   assert.match(readFileSync(output, 'utf8'), /base=8.1.0-beta.1\n.*publish=true\ndist_tag=desktop-8.1.0-beta.1\n/s)
+  const revision = fixture('8.1.0+build.2', '2.0.0', line), revisionOut = path.join(revision.repo, 'output')
+  revision.write('tangu-agent/package.json', revision.pkg('2.0.1'))
+  runGate(revision.root, ['tangu-v2.0.1', 'push'], { GITHUB_OUTPUT: revisionOut }, { readPublishedVersion: () => '2.0.0' })
+  assert.match(readFileSync(revisionOut, 'utf8'), /base=8.1.0\n.*dist_tag=desktop-8.1.0\n/s) // the original 8.1.0 build must accept it too
+  const prereleaseEngine = fixture('8.1.0-beta.1', '2.0.0-beta.1', line)
+  prereleaseEngine.write('tangu-agent/package.json', prereleaseEngine.pkg('2.0.1'))
+  assert.throws(() => runGate(prereleaseEngine.root, ['tangu-v2.0.1', 'push'], {}, { readPublishedVersion: () => '2.0.0' }), /only replace a stable bundled engine/)
   const legacy = fixture('8.1.0-beta.1')
   legacy.write('tangu-agent/package.json', legacy.pkg('2.0.1'))
   assert.throws(() => runGate(legacy.root, ['tangu-v2.0.1', 'push'], {}, { readPublishedVersion: () => '2.0.0' }), /only reads the latest dist-tag/)

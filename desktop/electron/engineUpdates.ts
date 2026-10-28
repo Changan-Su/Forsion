@@ -166,19 +166,31 @@ export async function checkEngineUpdate(o: EngineUpdateOpts): Promise<string | n
  * 启动时收拾 engine/ 目录:留版本号最高的两份合格新版,别的版本目录、更新器被杀留下的半成品都删掉;
  * bad.json 里不比自带版本新的记录也清掉(安装包升上去之后它们没用了)。吞错。
  *
+ * 不是本线做的(minDesktop 不在这一版桌面的线上)也删:按线分发之后这份安装包只会下本线的,别的线的只能是换装前
+ * 那份安装包留下的 —— 号可能比本线的高,建表碰巧相同时 checkOverlay 也放行,启动器就会挑中它。
+ * 终端里的 tangu 若在换装后、打开桌面之前先跑,还会挑到它一次;这个窗口不管。
+ *
  * 留两份而不是一份:终端里可能还开着一个跑上一版的 tangu,它之后才懒加载的模块还得在原地。
  * 一个终端会话跨过两次引擎更新还开着、又恰好这时才懒加载,这种情况不管。
  */
-export async function cleanEngineOverlays(engineRoot: string, bundledRoot: string, api: EngineOverlayApi, log: (m: string) => void = () => {}): Promise<void> {
+export async function cleanEngineOverlays(engineRoot: string, bundledRoot: string, api: EngineOverlayApi, desktopVersion: string, log: (m: string) => void = () => {}): Promise<void> {
   try {
     const entries = await fs.readdir(engineRoot, { withFileTypes: true }).catch(() => [])
     const bad = api.readBad(engineRoot)
+    const line = engineLineTag(desktopVersion)
+    const lineOf = async (dir: string): Promise<string | null> =>
+      fs.readFile(path.join(dir, 'package.json'), 'utf8').then((t) => engineLineTag(JSON.parse(t).forsion?.minDesktop), () => null)
     const keep = new Set<string>()
     for (const name of entries.map((e) => e.name).filter((n) => RELEASE_VERSION.test(n)).sort((a, b) => api.cmpVersion(b, a))) {
       if (keep.size >= 2 || name in bad) continue
-      const verdict = api.checkOverlay(path.join(engineRoot, name), bundledRoot)
-      if (verdict.ok && verdict.version === name) keep.add(name)
-      else log(`[engine-updates] 清掉 ${name}(${verdict.ok ? 'package' : verdict.code}):${verdict.ok ? `holds version ${verdict.version}` : verdict.reason}`)
+      const dir = path.join(engineRoot, name)
+      const verdict = api.checkOverlay(dir, bundledRoot)
+      const reason = !verdict.ok ? `${verdict.code}:${verdict.reason}`
+        : verdict.version !== name ? `package:holds version ${verdict.version}`
+        : (await lineOf(dir).catch(() => null)) !== line ? `line:built for another Forsion version, not ${line}`
+        : null
+      if (reason) log(`[engine-updates] 清掉 ${name}(${reason})`)
+      else keep.add(name)
     }
     for (const e of entries) {
       if (e.name === 'bad.json' || keep.has(e.name)) continue
@@ -211,13 +223,15 @@ export interface EngineOverlayHandle {
 export async function setupEngineOverlay(o: {
   bundledRoot: string
   forsionHome: string
+  /** 这份安装包的桌面版本(app.getVersion());不是本线的旧引擎在这里清掉。 */
+  desktopVersion: string
   log?: (m: string) => void
   loadApi?: (bundledRoot: string) => Promise<EngineOverlayApi | null>
 }): Promise<EngineOverlayHandle | null> {
   const api = await (o.loadApi ?? loadEngineOverlayApi)(o.bundledRoot)
   if (!api) return null
   const root = engineOverlayRoot(o.forsionHome)
-  await cleanEngineOverlays(root, o.bundledRoot, api, o.log)
+  await cleanEngineOverlays(root, o.bundledRoot, api, o.desktopVersion, o.log)
   return {
     api,
     bundledRoot: o.bundledRoot,

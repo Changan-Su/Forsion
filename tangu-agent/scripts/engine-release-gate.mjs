@@ -104,7 +104,10 @@ export function runGate(root, args, env = process.env, { readPublishedVersion } 
   if (!baseTag) throw new Error('No desktop baseline is contained in this checkout')
   const baseDesktop = baseTag.slice(1)
   const basePkg = manifestAt(baseTag)
-  if (!engineVersion(basePkg.version)) throw new Error(`Invalid bundled engine version at ${baseTag}`)
+  // The launcher (overlay.ts checkOverlay) only replaces a stable bundled engine; a beta installer may bundle a prerelease one.
+  if (!stableEngine(basePkg.version)) throw new Error(`Desktop ${baseDesktop} bundles engine ${basePkg.version}; hot updates only replace a stable bundled engine.`)
+  // The whole line (original build and its +build.N revisions) may take it; checkOverlay still compares schema and dependencies.
+  const minDesktop = baseDesktop.split('+')[0]
   const distTag = hotUpdateDistTag(baseDesktop, !!git('ls-tree', '--full-tree', '--name-only', baseTag, '--', LINE_TAG_MODULE))
   const problems = hotUpdateProblems({ version, baseEngine: basePkg.version, baseDesktop, ref, publish,
     dependenciesMatch: sortedJson(pkg.dependencies) === sortedJson(basePkg.dependencies),
@@ -115,8 +118,8 @@ export function runGate(root, args, env = process.env, { readPublishedVersion } 
   else for (const problem of problems) console.log(`::warning::${problem}`)
   // A manual preview uses the baseline ENGINE number, not the independent desktop number.
   const packVersion = publish ? version : basePkg.version
-  console.log(`${PACKAGE}@${packVersion}, minimum desktop ${baseDesktop}, dist-tag ${distTag ?? '(none)'}; ${publish ? 'will publish' : 'manual preview only, not publishing'}`)
-  if (env.GITHUB_OUTPUT) appendFileSync(env.GITHUB_OUTPUT, `base=${baseDesktop}\nbase_engine=${basePkg.version}\npack_version=${packVersion}\npublish=${publish}\ndist_tag=${distTag ?? ''}\n`)
+  console.log(`${PACKAGE}@${packVersion}, minimum desktop ${minDesktop}, dist-tag ${distTag ?? '(none)'}; ${publish ? 'will publish' : 'manual preview only, not publishing'}`)
+  if (env.GITHUB_OUTPUT) appendFileSync(env.GITHUB_OUTPUT, `base=${minDesktop}\nbase_engine=${basePkg.version}\npack_version=${packVersion}\npublish=${publish}\ndist_tag=${distTag ?? ''}\n`)
 }
 
 if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
