@@ -6,13 +6,13 @@
  *   ② 启用技能(skills_catalog.tools)里自带的 http/javascript 工具。
  *
  * 执行红线：
- *   - HTTP：模板插值 {{arg}} → SSRF 守卫(assertPublicHttpUrl，逐跳校验重定向) → 限时/限大小。
+ *   - HTTP：模板插值 {{arg}} → SSRF 守卫(publicHttp，固定 DNS 地址和逐跳校验重定向) → 限时/限大小。
  *   - JavaScript：丢进 Docker node 沙箱（runNode，--network none）跑，绝不在主进程 eval。
  *     纯计算；需要联网的工具请用 http executor。
  */
 import type { Tool, CustomToolRecord } from '../core/types.js';
 import { deps } from '../seams/runtime.js';
-import { assertPublicHttpUrl } from '../core/util/urlSafety.js';
+import { fetchPublic, httpDeadline, readBodyCapped, type FetchedPage } from '../core/util/publicHttp.js';
 import { runNode } from '../sandbox/dockerProvider.js';
 
 // ── 注入依赖的 lazy 别名(保持下方调用点不变)──
@@ -32,7 +32,7 @@ export interface LoadedCustomTool {
   name: string;
   definition: Tool;
   executor: 'http' | 'javascript';
-  http?: { url: string; method: string; headers: Record<string, string>; bodyTemplate?: string };
+  http?: { url: string; method: string; headers: Record<string, string>; bodyTemplate?: string; allowedStatuses?: number[] };
   code?: string;
   source: string; // 'custom_tools' | 'skill:<id>'
 }
@@ -58,6 +58,7 @@ function makeHttp(
   name: string, description: string, parameters: any,
   url: string, method: string | undefined, headers: any, bodyTemplate: string | undefined,
   source: string,
+  allowedStatuses?: unknown,
 ): LoadedCustomTool {
   return {
     name,
@@ -68,6 +69,7 @@ function makeHttp(
       method: (method || 'GET').toUpperCase(),
       headers: parseJsonMaybe<Record<string, string>>(headers, {}),
       bodyTemplate: bodyTemplate ? String(bodyTemplate) : undefined,
+      allowedStatuses: Array.isArray(allowedStatuses) ? allowedStatuses.filter((n): n is number => Number.isInteger(n) && n >= 200 && n <= 599) : undefined,
     },
     source,
   };
@@ -106,7 +108,7 @@ function fromSkillTool(t: any, skillId: string): LoadedCustomTool | null {
   if (type === 'http') {
     const url = cfg?.url || cfg?.url_template;
     if (!url) return null;
-    return makeHttp(t.name, t.description || '', parameters, url, cfg?.method, cfg?.headers, cfg?.bodyTemplate, `skill:${skillId}`);
+    return makeHttp(t.name, t.description || '', parameters, url, cfg?.method, cfg?.headers, cfg?.bodyTemplate, `skill:${skillId}`, cfg?.allowedStatuses);
   }
   if (type === 'javascript') {
     const code = cfg?.code;
@@ -166,58 +168,38 @@ function interpolate(template: string, args: Record<string, unknown>): string {
   });
 }
 
-/** 单次 fetch + 逐跳重定向 SSRF 复核 + 限时限大小。 */
-async function safeFetch(rawUrl: string, init: RequestInit): Promise<string> {
-  let current = await assertPublicHttpUrl(rawUrl);
-  for (let i = 0; i <= MAX_REDIRECTS; i++) {
-    const res = await fetch(current.toString(), {
-      ...init,
-      redirect: 'manual',
-      signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
-    });
-    if ([301, 302, 303, 307, 308].includes(res.status)) {
-      const loc = res.headers.get('location');
-      if (!loc) return `HTTP ${res.status} (no Location)`;
-      current = await assertPublicHttpUrl(new URL(loc, current).toString());
-      continue;
-    }
-    // 读取并截断
-    const reader = res.body?.getReader();
-    if (!reader) {
-      const txt = await res.text().catch(() => '');
-      return `HTTP ${res.status}\n${txt.slice(0, MAX_RESULT_CHARS)}`;
-    }
-    const chunks: Uint8Array[] = [];
-    let total = 0;
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (!value) continue;
-      const remain = MAX_HTTP_BYTES - total;
-      if (remain <= 0) { await reader.cancel(); break; }
-      if (value.byteLength > remain) { chunks.push(value.slice(0, remain)); await reader.cancel(); break; }
-      total += value.byteLength; chunks.push(value);
-    }
-    const text = Buffer.concat(chunks).toString('utf8');
-    const prefix = res.ok ? '' : `HTTP ${res.status}\n`;
-    return (prefix + text).slice(0, MAX_RESULT_CHARS);
-  }
-  throw new Error('Too many redirects');
-}
-
-async function execHttp(tool: LoadedCustomTool, args: Record<string, unknown>): Promise<string> {
+async function execHttp(tool: LoadedCustomTool, args: Record<string, unknown>, ctx: CustomToolCtx): Promise<string> {
   const cfg = tool.http!;
-  // SSRF 校验在 safeFetch 内逐跳进行（assertPublicHttpUrl：DNS + 私网/保留段拦截）。
+  // Shared transport validates and pins every hop; one deadline includes body consumption.
   const url = interpolate(cfg.url, args);
   const headers: Record<string, string> = { ...cfg.headers };
-  const init: RequestInit = { method: cfg.method, headers };
-  if (cfg.method !== 'GET' && cfg.method !== 'HEAD' && cfg.bodyTemplate) {
+  const init: { method: string; headers: Record<string, string>; body?: string } = { method: cfg.method.toUpperCase(), headers };
+  if (init.method !== 'GET' && init.method !== 'HEAD' && cfg.bodyTemplate) {
     init.body = interpolate(cfg.bodyTemplate, args);
     if (!Object.keys(headers).some((h) => h.toLowerCase() === 'content-type')) {
       headers['Content-Type'] = 'application/json';
     }
   }
-  return safeFetch(url, init);
+  const deadline = httpDeadline(ctx.signal, HTTP_TIMEOUT_MS);
+  let dispatched = false;
+  let page: FetchedPage | undefined;
+  try {
+    page = await fetchPublic(url, { ...init, signal: deadline.signal, maxRedirects: MAX_REDIRECTS, onDispatch: () => { dispatched = true; } });
+    const { buf, truncated } = await readBodyCapped(page, MAX_HTTP_BYTES, deadline.signal);
+    const ok = (page.status >= 200 && page.status < 300) || cfg.allowedStatuses?.includes(page.status);
+    const prefix = ok ? '' : `Error: HTTP ${page.status}\n`;
+    return (prefix + buf.toString('utf8')).slice(0, MAX_RESULT_CHARS) + (truncated ? '\n[Response truncated]' : '');
+  } catch (e: any) {
+    const reason = deadline.signal.aborted ? (deadline.timedOut() ? 'HTTP request timed out' : 'HTTP request cancelled') : String(e?.message || e);
+    const state = !dispatched ? 'Request not sent.'
+      : !['GET', 'HEAD', 'OPTIONS'].includes(init.method)
+        ? 'Upstream outcome unknown: the request may have completed. Cancellation does not roll it back. Check upstream state before retrying; do not automatically repeat this write.'
+        : 'Request sent; response not completed.';
+    return `Error: ${reason}. ${state}`;
+  } finally {
+    page?.destroy();
+    deadline.dispose();
+  }
 }
 
 const JS_SENTINEL = '__TANGU_RESULT__';
@@ -253,7 +235,7 @@ export async function executeCustomTool(
   args: Record<string, unknown>,
   ctx: CustomToolCtx,
 ): Promise<string> {
-  if (tool.executor === 'http') return execHttp(tool, args);
+  if (tool.executor === 'http') return execHttp(tool, args, ctx);
   if (tool.executor === 'javascript') return execJs(tool, args, ctx);
   return `Error: unsupported executor`;
 }

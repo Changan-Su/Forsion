@@ -755,8 +755,8 @@
   display: block; position: relative; flex: 0 0 auto;
   width: 100%; box-sizing: border-box;
   padding: 11px 14px 12px;
-  /* 与并排浮着的输入框同族圆角(都是「聊天区外壳」),别各用各的 */
-  border-radius: var(--radius-chat-surface, 20px);
+  /* 「浮」档与并排浮着的输入框同族圆角;「半浮」降一档(见下方 data-elev),Desk 预览框的下圆角跟着同一个变量 */
+  border-radius: var(--t2-card-r, var(--radius-chat-surface, 20px));
   background: var(--bg-card, var(--bg));
   border: var(--border-width, 1px) solid var(--border);
   box-shadow: var(--card-shadow);
@@ -796,6 +796,12 @@
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06), 0 18px 40px rgba(0, 0, 0, 0.14);
 }
 .t2-card-lifted .t2-card-grip { opacity: 1; cursor: grabbing; }
+/* 立体感三档(开发者选项,summaryPrefs 的 SummaryElevation;2026-10-28 用户定缺省「半浮」):上面 .t2-card 本身就是「浮」。
+ * 半浮:影子收近收淡、圆角降一档,不再和输入卡同族,输入卡做唯一的主浮。平:不投影,只靠卡片色 + 圆角 + 间距。
+ * 摘要栏不做「凹」:两轮方案都被否(底色压暗像深了一块;内影像输入框 / 按钮)。拿起来的那张三档都照旧浮。 */
+.t2-tsum[data-elev='half'] { --t2-card-r: var(--radius-md, 12px); }
+.t2-tsum[data-elev='half'] > .t2-card:not(.t2-card-lifted) { box-shadow: var(--card-shadow-low, var(--card-shadow)); }
+.t2-tsum[data-elev='flat'] > .t2-card:not(.t2-card-lifted) { box-shadow: none; }
 /* 正文:列表卡封顶 240 内滚;底部渐隐只在下面还有没露出来的内容时出现(滚动驱动动画:没溢出时时间线不生效 = 不渐隐,
  * 滚到底渐隐收完)。静态 mask 会在没东西可滚时也把最后一行抹淡。 */
 @property --t2-card-fade { syntax: '<length>'; inherits: false; initial-value: 0px; }
@@ -1004,7 +1010,7 @@ button.desk-cap-pick:hover, button.desk-cap-pick[aria-expanded='true'] { backgro
 .agent-desk-card-frame {
   height: 380px; max-height: none; margin: 8px -14px -12px; gap: 0;
   overflow: hidden; mask-image: none; animation: none;
-  border-radius: 0 0 var(--radius-chat-surface, 20px) var(--radius-chat-surface, 20px);
+  border-radius: 0 0 var(--t2-card-r, var(--radius-chat-surface, 20px)) var(--t2-card-r, var(--radius-chat-surface, 20px));
 }
 .agent-desk-card.empty .agent-desk-card-frame { height: 120px; }
 .agent-desk-card-frame.act { cursor: zoom-in; }
