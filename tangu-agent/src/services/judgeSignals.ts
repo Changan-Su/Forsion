@@ -12,6 +12,7 @@
  * 给判官的句子是英文(模型读的),只含工具名和次数,不带工具报错原文 —— 那是不可信内容,不该进一条能写长期记忆的提示。
  */
 import { MAX_REPEATED_TOOL_FAILURES } from './repeatedToolFailure.js';
+import type { DecisionBrain } from '../seams/cloudBrain.js';
 
 /** 用户按停时,这一轮至少调过这么多次工具才算「折腾了半天没给答案」。 */
 export const STOP_SIGNAL_MIN_TOOL_CALLS = 3;
@@ -65,6 +66,54 @@ export function looksLikeCorrection(text: string): boolean {
   const t = String(text || '').replace(/[’‘]/g, "'").trim().slice(0, 240);
   if (t.length < 2) return false;
   return CORRECTION_ZH.test(t) || CORRECTION_EN.test(t) || CORRECTION_LEAD_EN.test(t);
+}
+
+// ── 决策闸(beta,开发者选项「historian.decisionGate」,缺省关)────────────────────────────────────────────
+// 「这句是不是在纠正上一条回复」改问云端的决策模型(System One noul 题,一次前向,几百毫秒),把上面的词面启发式降成兜底:
+// 词面会漏(「我这边一直是 pnpm 的」)也会误报(「不对称加密是什么」)。P ≥ HI 算纠正、≤ LO 算不是 —— 这两头压过词面;
+// 中间那段(模型自己也拿不准)、超时、没登录、上游报错一律退回词面判定:闸坏了 = 回到原来的行为,不会悄悄不评。
+// 阈值按百炼 decision-model-preview 标定(仪器 scripts/decision-gate-calibrate.mjs);换了模型要重标。
+export const DECISION_HI = 0.7;
+export const DECISION_LO = 0.3;
+const PREV_REPLY_CHARS = 1500; // 上一条回复只带尾巴:纠正针对的多半是结论那几句
+const USER_MESSAGE_CHARS = 600;
+const CORRECTION_QUESTION = {
+  type: 'noul' as const,
+  instructions: 'Is state.user_message the user correcting state.previous_reply: saying it was wrong, missed what they wanted, or should be done differently?',
+};
+
+export interface CorrectionVerdict { correction: boolean; by: 'decision' | 'lexical'; lexical: boolean; noul?: number; error?: string }
+
+/** 绝不抛:任何失败都是 by:'lexical'。 */
+/** 消息内容(字符串或多段)里的文字。 */
+function textOf(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) return content.map((p: any) => (p && typeof p.text === 'string' ? p.text : '')).filter(Boolean).join('\n');
+  return '';
+}
+
+export async function correctionVerdict(brain: DecisionBrain, previousReply: unknown, userMessage: string, signal?: AbortSignal): Promise<CorrectionVerdict> {
+  const lexical = looksLikeCorrection(userMessage);
+  try {
+    const r = await brain.decide({
+      state: { previous_reply: textOf(previousReply).slice(-PREV_REPLY_CHARS), user_message: String(userMessage || '').slice(0, USER_MESSAGE_CHARS) },
+      questions: { correction: CORRECTION_QUESTION },
+      signal,
+    });
+    const p = r?.answers?.correction?.noul;
+    if (typeof p !== 'number' || !(p >= 0 && p <= 1)) return { correction: lexical, by: 'lexical', lexical, error: 'no noul answer' };
+    if (p >= DECISION_HI) return { correction: true, by: 'decision', lexical, noul: p };
+    if (p <= DECISION_LO) return { correction: false, by: 'decision', lexical, noul: p };
+    return { correction: lexical, by: 'lexical', lexical, noul: p };
+  } catch (e: any) {
+    return { correction: lexical, by: 'lexical', lexical, error: String(e?.message || e).slice(0, 200) };
+  }
+}
+
+/** 给日志 / 台架看的一行:决策模型说了多少、词面怎么判、最后听谁的。 */
+export function verdictLine(v: CorrectionVerdict): string {
+  const p = v.noul === undefined ? '无' : v.noul.toFixed(2);
+  return `决策闸 noul=${p} 词面=${v.lexical ? '纠正' : '不是'} → ${v.correction ? '纠正' : '不是'}(${v.by === 'decision' ? '按决策模型' : `退回词面${v.error ? `:${v.error}` : ''}`})`;
 }
 
 /** 写给判官的那一段(放在字段说明之后)。没有要它看的候选类别就不写。 */

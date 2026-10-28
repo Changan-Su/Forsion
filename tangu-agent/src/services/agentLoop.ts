@@ -79,7 +79,8 @@ import { looksLikeToolCallText } from '../llm/textToolCalls.js';
 import { isRetryableLlmError, isAuthExpiredLlmError, withLlmRetry, MODEL_MAX_RETRIES, MODEL_RETRY_BASE_MS, llmRetryBudgetExceeded, sleepOrAbort } from '../llm/retry.js';
 import { runCostCeiling, isOverRunCost } from './runBudget.js';
 import { RepeatedToolFailureGuard, MAX_REPEATED_TOOL_FAILURES } from './repeatedToolFailure.js';
-import { CORRECTION_SIGNAL, NUDGE_SIGNAL, looksLikeCorrection, noteUserStop, takePendingStop, toolLoopSignal } from './judgeSignals.js';
+import { CORRECTION_SIGNAL, NUDGE_SIGNAL, correctionVerdict, looksLikeCorrection, noteUserStop, takePendingStop, toolLoopSignal, verdictLine } from './judgeSignals.js';
+import { loadSpecialAgentsConfig } from './specialAgentsConfig.js';
 import { runGroupChat, sanitizeTempAgents, teamMemberSection } from './groupChat.js';
 import { query } from '../core/db.js';
 import { SELF_OWNER, ownerAlive } from './runOwner.js';
@@ -106,6 +107,8 @@ const consumeTokenPoints = (userId: string, amount: number) => deps().billing.co
 const calculateCost = (modelId: string, tin: number, tout: number, model?: any, cached?: number) =>
   deps().billing.calculateCost(modelId, tin, tout, model, cached);
 const logApiUsage = (...args: any[]) => (deps().billing.logApiUsage as any)(...args);
+/** 决策闸(beta):Historian 开着、开发者选项里打开了 historian.decisionGate。读配置失败 = 关。 */
+const decisionGateOn = (): boolean => { try { const h = loadSpecialAgentsConfig().historian; return h.enabled && !!h.decisionGate; } catch { return false; } };
 const getUserById = (id: string) => deps().brain.users.getUserById(id);
 
 const abortControllers = new Map<string, AbortController>();
@@ -1269,6 +1272,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   // 整个 run 调过的工具名(allToolCalls 在插话边界会清空,这份不清)与本轮攒下的复盘信号(services/judgeSignals.ts)。
   const runToolNames: string[] = [];
   const judgeSignals: string[] = [];
+  let correctionCheck: Promise<void> | null = null; // 决策闸(beta)在问的那一下:收尾交给 Historian 之前等它
   /**
    * Tool calls are stored separately from assistant text. Stamp the finalized-text offset at which
    * each call happened so clients can reconstruct interleaving after reload without a DB migration.
@@ -2740,8 +2744,17 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     }
 
     // 复盘信号:这一轮开头的话像在纠正上一条回复(前面得真有过回复;系统驱动的 run 的开场白不算用户的话)。
-    if (!deferBypass && workingMessages.some((m) => m.role === 'assistant') && looksLikeCorrection(String(input.message || ''))) {
-      judgeSignals.push(CORRECTION_SIGNAL);
+    // 决策闸(beta,开发者选项;Historian 开着才问)开着:改问云端决策模型、词面兜底(judgeSignals.correctionVerdict)。
+    // 不挡主循环:这里只起请求,run 收尾交给 Historian 之前才等它。远程 run 不问:用户原话不经这条路发出去。
+    if (!deferBypass && workingMessages.some((m) => m.role === 'assistant')) {
+      const decision = !remote && decisionGateOn() ? deps().brain.decision : undefined;
+      if (decision) {
+        const prev = [...workingMessages].reverse().find((m) => m.role === 'assistant');
+        correctionCheck = correctionVerdict(decision, prev?.content, String(input.message || '')).then((v) => {
+          try { deps().host.log(`[historian] ${verdictLine(v)}`); } catch { /* 日志不挡信号 */ }
+          if (v.correction) judgeSignals.push(CORRECTION_SIGNAL);
+        });
+      } else if (looksLikeCorrection(String(input.message || ''))) judgeSignals.push(CORRECTION_SIGNAL);
     }
     let usedTools = false; // 本 run 是否真的执行过工具(循环耗尽提示的前提:没用工具的纯聊天/单轮 run 不该报"耗尽")
     let midstreamResumes = 0; // 中流断线恢复次数(整 run 累计上限 MIDSTREAM_MAX_RESUMES,防慢性抖动供应商刷成本)
@@ -3561,7 +3574,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // MEMORY/LOG 必须与 run 内 remember/log_event 落同一文件夹,否则共用默认记忆的 agent 会被写歪。
     // 上一轮被用户按停留下的信号排最前(那句写的是「上一轮」,其余写的是「这一轮」)。
     if (pendingStop) judgeSignals.unshift(pendingStop);
-    void onUserRunDone(sessionId, userId, memScopeSlug, historianSeed, !!(remote || effectiveRemote({ runId })), judgeSignals).finally(() => { if (!inlineMemberDef) scheduleAgentFilesSync(userId, activeAgentSlug); });
+    const runRemote = !!(remote || effectiveRemote({ runId }));
+    void (correctionCheck ?? Promise.resolve()).then(() => onUserRunDone(sessionId, userId, memScopeSlug, historianSeed, runRemote, judgeSignals)).finally(() => { if (!inlineMemberDef) scheduleAgentFilesSync(userId, activeAgentSlug); });
     // 惰性检查点:下个 run 的 hydrate 窗口之外若还有未被摘要覆盖的老行,现在(不占下个 run 首帧)做一份。
     // 登记在飞:下个 run(排队中的可能立刻起跑)hydrate 前先等它,别让窗口起点越过还没落检查点的老行。
     {

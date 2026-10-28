@@ -9,6 +9,7 @@ import type {
   StreamOpts,
   StreamResult,
   FimCompletionOpts,
+  DecisionResult,
 } from '../../seams/cloudBrain.js';
 import { imageMimeOf, fimUnsupportedError, FIM_UNSUPPORTED } from '../../seams/cloudBrain.js';
 import {
@@ -469,6 +470,22 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
           throw new LlmError(r.status, `cloud tts ${r.status}: ${String(j?.detail || '').slice(0, 200)}`);
         }
         return { audio: new Uint8Array(await r.arrayBuffer()), mime: r.headers.get('content-type') || 'audio/mpeg' };
+      },
+    },
+    // 决策模型走云端中转(POST /api/brain/decision):Key 住云端、按次 / 每 1k 输入计费;只发文本。超时短:调用方都有自己的启发式可退。
+    decision: {
+      decide: async (req) => {
+        const r = await fetch(`${base}/api/brain/decision`, {
+          method: 'POST',
+          headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ state: req.state, questions: req.questions, ...(req.modelId ? { modelId: req.modelId } : {}), projectSource: 'tangu' }),
+          signal: req.signal ? AbortSignal.any([req.signal, AbortSignal.timeout(10_000)]) : AbortSignal.timeout(10_000),
+        });
+        if (!r.ok) {
+          const j: any = await r.json().catch(() => ({}));
+          throw new LlmError(r.status, `cloud decision ${r.status}: ${String(j?.detail || '').slice(0, 200)}`);
+        }
+        return (await r.json()) as DecisionResult;
       },
     },
     // 实时语音通话走云端中转(ws /api/brain/realtime):key 住云端、按通话时长计费;帧协议与直连百炼相同,连接与转发仍归 services/realtimeVoice。

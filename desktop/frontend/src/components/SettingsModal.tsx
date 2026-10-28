@@ -30,6 +30,7 @@ import {
   getLocalWebSearch, type LocalWebSearchRedacted,
 } from '../services/backendService'
 import { ChannelsTab } from './ChannelsTab'
+import { DecisionGateField } from './DecisionGateField'
 import { buildSessionLogPayload, sessionLogFilename } from '../services/sessionLog'
 import type {
   AmadeusSyncStatus, AuthStatusInfo, BackendStatusInfo, DirectProviderConfig, DiscoveryResult, McpServerConfigEntry, MirrorTestResult, ModelsResponse,
@@ -3473,6 +3474,7 @@ export const SettingsModal: React.FC<{
                             requestDevCommandsSync() // 设置在浮窗里的形态:命令表各窗一份,得让主窗重算
                       }} />} />
                     </div>
+                    <DecisionGateField />
                     <div className="field">
                       <label>{t('settings.developer.testUpdateLabel')}</label>
                       <div>
