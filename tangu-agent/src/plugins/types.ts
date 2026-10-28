@@ -102,6 +102,18 @@ export interface TanguSdk {
   channelSettings(kind: string): ChannelSettings;
 }
 
+/** ctx.cloud 的一次请求(官方插件专用)。path 原样匹配白名单,不解码。 */
+export interface PluginCloudRequest {
+  path: string;
+  method?: 'GET' | 'POST';
+  body?: unknown;
+  /** 缺省 15s,上限 120s。 */
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}
+/** status 0 = 没发出去或没收到(error 写原因);403 + path_not_allowed = 白名单外,没发。 */
+export interface PluginCloudResponse { status: number; json?: any; error?: string }
+
 /** 插件可挂载额外路由的三组 router（标准/数据/admin）。 */
 export interface PluginRouters {
   userRouter: Router;
@@ -146,6 +158,13 @@ export interface TanguPluginContext {
   log(msg: string): void;
   /** 路径信息。 */
   paths: { pluginDir: string; dataDir: string };
+  /**
+   * 以用户的 Forsion 账号请求云端。**只有官方插件有**(捆绑包 SIGNATURE 用引擎钉的公钥验过,见 ./official.ts),
+   * 其余插件恒为 undefined。路径白名单:`GET /api/market/mine`、`POST /api/market/mine/<id>/update`(可带 `?dryRun=1`),
+   * 别的一律 `{ status: 403, error: 'path_not_allowed' }`、不发;没有云端接缝(内嵌引擎 / 没配云端)= `{ status: 0, error: 'no_cloud' }`。
+   * 令牌由宿主带,插件拿不到;永不抛。
+   */
+  cloud?: { request(req: PluginCloudRequest): Promise<PluginCloudResponse> };
   /**
    * 发用户活动事件(强制 `plugin:<id>:` 前缀,对齐桌面 ctx.activity.log)——自动化 event_seen 可盯,
    * Muse/read_activity 可读。仅本地形态生效(云端 worker 静默 no-op)。detail 值折叠空白截断,勿放敏感原文。

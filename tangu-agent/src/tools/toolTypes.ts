@@ -275,6 +275,10 @@ export interface ToolCapabilities {
    *  给数据自带保留期 / 清除语义的工具(read_computer_history:7 天 + 用户清除)—— 落库副本会绕过它。
    *  出错结果照常落库(不含数据)。agentLoop 经 declaredPersistPlaceholder(name) 读,不走 ctx 门禁。 */
   persistPlaceholder?: string;
+  /** 审批卡文案(同步,收到的是本次调用解析后的参数)。**只对官方插件的工具生效**(plugins/official.ts):
+   *  其余工具(含第三方插件)一律忽略,卡上照旧是整份参数。返回值过同一道 previewText;抛错或不是字符串 → 退回整份参数。
+   *  内置工具有自己的预览分支,这里覆盖不了它们。 */
+  approvalPreview?: (args: any) => string;
 }
 
 export interface ToolImpl {
