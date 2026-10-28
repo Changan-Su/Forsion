@@ -37,7 +37,7 @@ jobs:
       run:
         working-directory: tangu-agent
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # actions/checkout@v7.0.1
         with:
           fetch-depth: 0 # 要找到它所基于的那个桌面 tag
       # ⚠️ 这里刻意不设 registry-url:setup-node 会往 .npmrc 写占位令牌,npm 见到「已配令牌」就不走 OIDC(同 check-unit.yml)。
