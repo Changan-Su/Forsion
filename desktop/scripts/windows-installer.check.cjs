@@ -48,7 +48,10 @@ async function main() {
   const stock = path.join(path.dirname(require.resolve('app-builder-lib/package.json')), 'templates/nsis/include/extractAppPackage.nsh');
   const results = [];
   try {
-    for (const scenario of process.argv.includes('--build-only') ? [] : ['stock', 'move', 'occupied', 'allusers', 'custom']) {
+    const scenarios = process.argv.includes('--build-only') ? []
+      : process.argv.includes('--benchmark-only') ? ['stock', 'move']
+      : ['stock', 'move', 'occupied', 'allusers', 'custom'];
+    for (const scenario of scenarios) {
       clean(target); fs.mkdirSync(target);
       const destination = scenario === 'custom' ? path.join(dir, 'custom') : target;
       fs.mkdirSync(destination, { recursive: true });

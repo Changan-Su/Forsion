@@ -5,6 +5,8 @@ isolated, unregistered fixtures on Windows. It compares the original copy path
 with directory promotion and verifies every payload byte. Nonempty destinations,
 machine scope and custom destinations must retain the copy fallback. An optional
 payload directory is read only: `npm run check:installer-speed -- <directory>`.
+Add `--benchmark-only` to compare just copy versus promotion with a large payload;
+`--build-only` runs the generated installer/new install/upgrade/uninstall chain.
 Results and compiled fixtures remain in the printed temporary evidence directory.
 
 Only an empty destination directly under the current user's LocalAppData/Programs
