@@ -27,8 +27,11 @@ import assetsRouter from './routes/assets.js';
 import agentsRouter from './routes/agents.js';
 import humanRouter from './routes/human.js';
 import soloRouter from './routes/solo.js';
+import trashRouter from './routes/trash.js';
+import { startTrashJanitor, stopTrashJanitor } from './services/trash.js';
 import teamsRouter from './routes/teams.js';
 import projectContextRouter from './routes/projectContext.js';
+import maskingRouter from './routes/masking.js';
 import pluginsRouter from './routes/plugins.js';
 import specialRouter from './routes/special.js';
 import commandsRouter from './routes/commands.js';
@@ -105,8 +108,10 @@ export function createTanguModule(d: TanguDeps): TanguModule {
   dataRouter.use(agentsRouter);
   dataRouter.use(humanRouter);
   dataRouter.use(soloRouter);
+  dataRouter.use(trashRouter);
   dataRouter.use(teamsRouter);
   dataRouter.use(projectContextRouter);
+  dataRouter.use(maskingRouter);
   dataRouter.use(pluginsRouter);
   dataRouter.use(specialRouter);
   dataRouter.use(hooksRouter);
@@ -160,6 +165,8 @@ export function createTanguModule(d: TanguDeps): TanguModule {
     void startChannels().catch((e: any) => console.warn('[tangu] Channels 启动失败:', e?.message || e));
     // Tangu for Chrome 扩展的本机桥:只在本地形态(能碰用户浏览器的地方)起;云端 / worker 不起。
     if (deps().profile.capabilities.hostExec) startBrowserExtensionBridge();
+    // 回收站 30 天到期清理(启动一次 + 每天一次):回收站只在本机。
+    if (deps().profile.capabilities.hostExec) startTrashJanitor();
 
     // 配置驱动 profile:启动 app_profile_overrides 轮询(admin panel 改 → 本进程 ≤刷新窗口收敛)。
     // thin worker 无本地 DB(host.query 抛)→ 传 profilePolling:false,用基线 profile(admin 覆盖暂不下达,后续可经 state-API 取)。
@@ -178,6 +185,7 @@ export function createTanguModule(d: TanguDeps): TanguModule {
     stopInboxPull();
     stopChannels();
     stopBrowserExtensionBridge();
+    stopTrashJanitor();
     deps().profileStore.dispose();
     abortAllRuns();
     disposeAllProcesses(); // run_background 的子进程(防热加载/退出泄漏)

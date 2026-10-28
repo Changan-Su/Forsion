@@ -1359,3 +1359,34 @@ export function buildTriggerKickoff(fired: MuseTrigger[]): string {
     lines.join('\n')
   );
 }
+
+/** 用到这个 Agent 的规则(旧式 agentSlug 或动作链里的 agent_run)。卸载确认框列它们,卸载时暂停。 */
+export const triggerUsesAgent = (t: MuseTrigger, slug: string): boolean =>
+  t.agentSlug === slug || !!t.actions?.some((a) => a.type === 'agent_run' && a.agentSlug === slug);
+
+export const AGENT_UNINSTALLED_REASON = 'agent_uninstalled';
+
+/** 卸载 Agent:暂停用到它的、还开着的规则,返回暂停了哪些(记进回收站条目,恢复时只开回这些)。按用户停用算(插件重放不许松开)。 */
+export async function pauseAgentTriggers(slug: string): Promise<string[]> {
+  return withTriggersLock(async () => {
+    const list = await loadTriggers();
+    const hit = list.filter((t) => t.enabled && triggerUsesAgent(t, slug));
+    for (const t of hit) { t.enabled = false; t.disabledBy = 'user'; t.disabledReason = AGENT_UNINSTALLED_REASON; }
+    if (hit.length) await saveTriggers(list);
+    return hit.map((t) => t.id);
+  });
+}
+
+/** 恢复 Agent:开回卸载时暂停的那几条(之后被用户改过停用原因的不动)。 */
+export async function resumeAgentTriggers(ids: string[]): Promise<void> {
+  if (!ids.length) return;
+  await withTriggersLock(async () => {
+    const list = await loadTriggers();
+    let hit = false;
+    for (const t of list) {
+      if (!ids.includes(t.id) || t.enabled || t.disabledReason !== AGENT_UNINSTALLED_REASON) continue;
+      t.enabled = true; delete t.disabledBy; delete t.disabledReason; hit = true;
+    }
+    if (hit) await saveTriggers(list);
+  });
+}

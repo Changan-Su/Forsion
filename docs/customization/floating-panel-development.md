@@ -2,8 +2,7 @@
 title: Floating Panel 开发
 description: 第六种面板表面、跨端行为与插件 API。
 ---
-
-# Floating Panel 开发 / Development
+# Floating Panel 开发
 
 Floating Panel 是工作区的第六种面板表面，适合设置、商店、成就、反馈和插件的独立工具页。它不参与 Dockview 布局，也不占用主区标签：
 
@@ -13,7 +12,7 @@ Floating Panel 是工作区的第六种面板表面，适合设置、商店、�
 - Web：宿主在当前页面上方显示固定居中的面板，不支持拖动；主工作台仍留在后方。
 - 移动端：不模拟桌面窗口，继续使用全屏二级页面。
 
-插件先用 `ctx.registerView()` 注册普通 DOM 视图，再用相对 view id 打开 Floating Panel。宿主负责添加 `plugin:<pluginId>:` 命名空间，插件不能打开或覆盖其他插件的视图。
+插件先用 `ctx.registerView()` 注册普通 DOM 视图，再用相对 view id 打开 Floating Panel。宿主负责添加 `plugin:<pluginId>:` 命名空间，并负责原生窗口 / 网页浮层的外框，插件不能打开或覆盖其他插件的视图。
 
 ```js
 ctx.registerView({
@@ -47,25 +46,20 @@ ctx.registerCommand({
 | `width` / `height` | 桌面原生窗口的期望尺寸 |
 | `minWidth` / `minHeight` | 桌面原生窗口的最小尺寸 |
 
-`mount(el, view)` 在该表面收到 `view.surface === 'floating'`。`getParams`、`setParams`、`onParamsChanged` 与主面板一致；`showInMainPanel()` 把当前参数交回主工作区。Floating 不提供 `extendView`。窗口关闭或插件停用时，宿主调用 `mount` 返回的清理函数；已打开的插件视图被反注册后，对应窗口/网页浮层自动关闭。
+`mount(el, view)` 在该表面收到 `view.surface === 'floating'`。`getParams`、`setParams`、`onParamsChanged` 与主面板一致；`showInMainPanel()` 把当前参数交回主工作区。Floating 不提供 `extendView`。窗口关闭或插件停用时，宿主调用 `mount` 返回的清理函数，所有订阅都要在这个函数里清掉；已打开的插件视图被反注册后，对应窗口/网页浮层自动关闭。
 
 插件应 feature-detect `ctx.openFloatingPanel?.(...)` 以兼容旧宿主。当前桌面和 Web 都支持 Floating；移动端没有桌面悬浮语义，插件应继续提供正常主视图作为回退。
 
-## 验证 / Verification
+## 验证
 
-- `cd desktop && npm run typecheck`
-- `cd desktop && npm run build && npm run check:floatingpanel`
-- `cd desktop && npm run check:parity && npm run check:cssvar && npm run check:shadowcontract`
+```bash
+cd desktop && npm run typecheck
+cd desktop && npm run build && npm run check:floatingpanel
+cd desktop && npm run check:parity && npm run check:cssvar && npm run check:shadowcontract
+```
 
 真机检查至少覆盖：原生窗口拖动/最小化/关闭、同 id 复用、Web 不可拖动、明暗主题、插件禁用后清理，以及参数通过“在主面板显示”完整交接。
 
-## English contract
+### 从内容里关闭
 
-Register a normal plugin view first, then call `ctx.openFloatingPanel?.(viewId, options)`. The host namespaces the id, owns native-window/Web-overlay chrome, and supplies `surface: 'floating'`. Reopening the same panel id focuses and retargets it. Floating views have live params and `showInMainPanel()`, but no `extendView`. Clean up all subscriptions from the disposer returned by `mount`.
-
-
-### Close from view content / 从内容里关闭
-
-`view.close?.()` closes the mounted view through its owner, including native Floating Panels and Web overlays. The callback is revoked after unmount. Use it for Close, Back and successful confirmation actions; do not call `window.close()` or reach into another window.
-
-插件内容的关闭、返回和确认成功使用 `view.close?.()`，由所属宿主关闭桌面浮窗或网页浮层。卸载后回调失效，不直接调用 `window.close()`。
+插件内容的关闭、返回和确认成功使用 `view.close?.()`，由所属宿主关闭桌面浮窗或网页浮层。卸载后回调失效，不直接调用 `window.close()`，也不去操作别的窗口。

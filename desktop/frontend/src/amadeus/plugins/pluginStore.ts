@@ -242,6 +242,31 @@ const defaultWorkFolder = (pluginId: string): string => {
   return `${PLUGINS_ROOT}/${id}`
 }
 
+/** 卸载确认框用(10-28 手动卸载规范):这个插件在库里的工作文件夹(相对库根),与 ctx.app.workFolder() 同口径 ——
+ *  用户自定义的优先,否则旧的显示名文件夹或按 id 的缺省;库里没有这个文件夹 → null(确认框就不列那一行)。 */
+export function pluginVaultFolder(pluginId: string, name: string): string | null {
+  let v = ''
+  try { v = (localStorage.getItem(`plugin.${pluginId}.workFolder`) || '').trim().replace(/^\/+|\/+$/g, '') } catch { /* ignore */ }
+  const custom = !!v && !v.split('/').some((seg) => !seg.trim() || seg === '.' || seg === '..')
+  const { folders } = usePageStore.getState()
+  return (custom ? [v] : [`${PLUGINS_ROOT}/${sanitizeFolderName(name, pluginId)}`, defaultWorkFolder(pluginId)]).find((f) => folders.includes(f)) ?? null
+}
+
+/** 卸载时插件存在 localStorage 里的偏好(`plugin.<id>.*`)的快照,交给回收站、恢复时原样写回;卸载成功后再 dropPluginPrefs 摘掉。 */
+export function pluginPrefs(pluginId: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i)
+      if (k?.startsWith(`plugin.${pluginId}.`)) out[k] = localStorage.getItem(k) ?? ''
+    }
+  } catch { /* 存储不可用:没有可摘的 */ }
+  return out
+}
+export function dropPluginPrefs(prefs: Record<string, string>): void {
+  for (const k of Object.keys(prefs)) try { localStorage.removeItem(k) } catch { /* ignore */ }
+}
+
 /** 宿主自动塞进每个启用插件的「工作文件夹」设置行(见 enable())。文案在 enable() 那一刻求值,
  *  切语言后由文件末尾的订阅就地重刷 —— 认的是**对象身份**(下面这个 WeakSet)而不是 key:
  *  插件可以用同 key registerSetting 顶掉这一行(见 registerSetting 的去重),按 key 重刷会把
@@ -1378,6 +1403,51 @@ export const usePluginStore = create<PluginState>((set, get) => {
       iconName(e.icon, 'mountEmptyState'); iconName(e.action?.icon, 'mountEmptyState')
       return e
     }
+    // 网页卡片卡身(10-28,网页卡片 A + D):形状错同步抛;按钮行 / 菜单行整理成宿主形状,update 的补丁同样整理。
+    const tidyCardActs = (list: unknown, where: string): import('./types').PluginWebCardAction[] | undefined => {
+      if (list === undefined || list === null) return undefined // null = 清掉
+      if (!Array.isArray(list)) throw new TypeError(`mountWebCard ${where} must be an array`)
+      return list.filter((a) => a && typeof a === 'object' && isPluginText(a.label) && typeof a.run === 'function').slice(0, 6).map((a) => {
+        iconName(a.icon, 'mountWebCard')
+        return { label: a.label, run: a.run, ...(typeof a.icon === 'string' ? { icon: a.icon } : {}), ...(a.variant === 'primary' || a.variant === 'danger' ? { variant: a.variant } : {}), disabled: !!a.disabled }
+      })
+    }
+    const tidyWebCard = (o: Record<string, unknown>, whole: boolean): Partial<import('./partsSurface').HostWebCard> => {
+      const out: Record<string, unknown> = {}
+      if (whole || 'name' in o) { if (!isPluginText(o.name)) throw new TypeError('mountWebCard needs { name }'); out.name = o.name }
+      if ('layout' in o) out.layout = o.layout === 'row' ? 'row' : 'card'
+      if ('status' in o) {
+        const st = o.status as Record<string, unknown> | null | undefined
+        out.status = st && typeof st === 'object' && isPluginText(st.label)
+          ? { label: st.label, ...(['ok', 'muted', 'danger'].includes(st.tone as string) ? { tone: st.tone } : {}), ...(['running', 'stopped', 'failed'].includes(st.dot as string) ? { dot: st.dot } : {}) }
+          : undefined
+      }
+      if ('address' in o) {
+        const a = o.address as Record<string, unknown> | null | undefined
+        out.address = a && typeof a === 'object' && typeof a.text === 'string' && a.text
+          ? { text: a.text.slice(0, 500), icon: a.icon === 'file' ? 'file' : 'globe', struck: !!a.struck, muted: !!a.muted }
+          : undefined
+      }
+      if ('note' in o) out.note = isPluginText(o.note) ? o.note : undefined
+      if ('thumbnail' in o) {
+        const th = o.thumbnail as Record<string, unknown> | null | undefined
+        out.thumbnail = th && typeof th === 'object' && typeof th.url === 'string' && /^https?:\/\//i.test(th.url)
+          ? { url: th.url.slice(0, 2048), ...(typeof th.version === 'string' || typeof th.version === 'number' ? { version: String(th.version).slice(0, 200) } : {}) }
+          : null
+      }
+      if ('placeholderIcon' in o) out.placeholderIcon = iconName(o.placeholderIcon, 'mountWebCard')
+      if ('actions' in o) out.actions = tidyCardActs(o.actions, 'actions')
+      if ('trailing' in o) out.trailing = tidyCardActs(o.trailing, 'trailing')
+      if ('menu' in o) out.menu = o.menu === undefined ? undefined : tidyMenu(o.menu)
+      return out
+    }
+    const uiMountWebCard = (el: HTMLElement, o: import('./types').PluginWebCard): { update(patch: Partial<import('./types').PluginWebCard>): void; dispose(): void } => {
+      if (!ctxAlive()) return { update() {}, dispose() {} }
+      if (!(el instanceof HTMLElement)) throw new TypeError('mountWebCard needs an HTMLElement')
+      if (!o || typeof o !== 'object') throw new TypeError('mountWebCard needs { name }')
+      const h = mountPart('webCard', el, tidyWebCard(o as never, true) as import('./partsSurface').HostWebCard, (m, v) => m.mountPluginWebCard(el, v, guard))
+      return { update: (patch) => { if (patch && typeof patch === 'object') h.update(tidyWebCard(patch as never, false)) }, dispose: h.dispose }
+    }
     const uiMountControl = (el: HTMLElement, c: import('./types').PluginToolbarControl): import('./types').PluginControlHandle => {
       if (!ctxAlive()) return { update() {}, dispose() {} }
       if (!(el instanceof HTMLElement)) throw new TypeError('mountControl needs an HTMLElement')
@@ -1432,6 +1502,8 @@ export const usePluginStore = create<PluginState>((set, get) => {
           return uiMountControl(el, { ...p, type: name } as never) as never
         case 'emptyState':
           return uiMountEmptyState(el, p as never) as never
+        case 'webCard':
+          return uiMountWebCard(el, p as never) as never
         case 'icon': {
           let svg: SVGSVGElement | null = null
           const draw = (q: Record<string, unknown>): void => { svg?.remove(); svg = uiIcon(String(q.name ?? ''), { size: q.size as number }); if (svg) el.append(svg) }
@@ -1441,7 +1513,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
           const dispose = scope.own('mount', () => { gone = true; svg?.remove(); svg = null }, 'icon')
           return { update: (patch) => { if (!gone && ctxAlive()) { cur = { ...cur, ...patch }; draw(cur) } }, dispose: () => dispose() }
         }
-        default: throw new TypeError(`ctx.ui.mount: unknown part "${String(name)}" (menu, popover, dialog, segmented, select, emptyState, icon)`)
+        default: throw new TypeError(`ctx.ui.mount: unknown part "${String(name)}" (menu, popover, dialog, segmented, select, emptyState, webCard, icon)`)
       }
     }
     // agent 自建 Space 读写自家数据(2026-09-27):**只注入给 agent-<slug> 插件**(来源 <tangu>/agents/<slug>/Space/,
@@ -1901,6 +1973,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       popover: uiPopover,
       icon: uiIcon,
       mountEmptyState: uiMountEmptyState,
+      mountWebCard: uiMountWebCard,
       setViewHead: uiSetViewHead,
       mount: uiMount as NonNullable<PluginContext['ui']>['mount'],
       mountChatBox: (el, opts) => {

@@ -1,0 +1,10 @@
+/* 「装给 所有 Agent ▾」:同宿主工具栏下拉(28px 文字钮 + ▾,无描边;见 amadeus/plugins/pluginParts.css 的 .plugin-tbsel) */
+.mk-agents-trigger { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; height: 28px; padding: 0 6px 0 8px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-muted); font: inherit; font-size: var(--ui-font-meta); white-space: nowrap; cursor: pointer; }
+.mk-agents-trigger:hover:not(:disabled), .mk-agents-trigger[aria-expanded='true'] { background: var(--overlay-light); color: var(--text); }
+.mk-agents-trigger:disabled { opacity: .5; cursor: default; }
+.mk-agents-trigger > span { overflow: hidden; text-overflow: ellipsis; }
+.mk-agents-trigger > svg { flex: none; }
+.mk-agent-initial { display: inline-grid; place-items: center; width: 15px; height: 15px; border-radius: 50%; background: var(--overlay-medium); color: var(--text-muted); font-size: 9px; font-weight: 600; line-height: 1; }
+.mk-agents-row { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
+.mk-agents-hint { margin: 0; padding: 0 8px; color: var(--text-faint); font-size: var(--ui-font-caption); line-height: 1.5; }
+.mk-chat-card-actions .mk-agents-trigger { margin-right: auto; margin-left: -8px; }

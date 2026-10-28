@@ -19,6 +19,7 @@
  */
 import type { StreamOpts, StreamResult } from '../seams/cloudBrain.js';
 import { LlmError } from '../core/types.js';
+import { isStreamContextOverflow } from '../services/contextWindowStore.js';
 import { PROTOCOL_MARK } from './openaiCompat.js';
 import { withStreamIdle, type StreamIdleGuard } from './streamIdle.js';
 import { stringifyWellFormed } from './wellFormedJson.js';
@@ -61,6 +62,7 @@ function applyCacheBreakpoints(body: any): void {
 }
 
 /** {baseUrl}(可能带或不带 /v1)→ /v1/messages 完整端点。 */
+const isAnthropicHost = (url: string): boolean => { try { return /(^|\.)anthropic\.com$/i.test(new URL(url).hostname) } catch { return false } };
 export function anthropicMessagesUrl(baseUrl: string): string {
   const base = (baseUrl || 'https://api.anthropic.com').replace(/\/+$/, '');
   return base.endsWith('/v1') ? `${base}/messages` : `${base}/v1/messages`;
@@ -270,6 +272,8 @@ async function runAnthropicStream(opts: StreamOpts, guard: StreamIdleGuard): Pro
         'Content-Type': 'application/json',
         'anthropic-version': ANTHROPIC_VERSION,
         'x-api-key': apiKey,
+        // Claude Code 的中转(ANTHROPIC_AUTH_TOKEN,导入本机配置会带进来)认 Bearer;Anthropic 自家只认 x-api-key,不给它多发
+        ...(isAnthropicHost(url) ? {} : { authorization: `Bearer ${apiKey}` }),
         ...(bind ? { 'anthropic-beta': THINKING_BINDING_BETA } : {}),
       },
       body: stringifyWellFormed(
@@ -387,7 +391,10 @@ async function runAnthropicStream(opts: StreamOpts, guard: StreamIdleGuard): Pro
           break;
         }
         case 'error': {
-          throw new LlmError(502, ev.error?.message || 'Anthropic stream error');
+          // 流里的超长(代理把 400 包进 SSE 时会这样)按 400 抛,同 openaiResponses:压缩后重试,不当 5xx 重发
+          const msg = ev.error?.message || 'Anthropic stream error';
+          const overflow = isStreamContextOverflow(ev.error?.type, msg);
+          throw Object.assign(new LlmError(overflow ? 400 : 502, msg), ev.error?.type ? { code: ev.error.type } : {});
         }
         default:
           break; // ping / message_stop / content_block_stop

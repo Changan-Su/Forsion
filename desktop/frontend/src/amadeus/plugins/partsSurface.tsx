@@ -10,10 +10,11 @@ import { OverlayAt, ViewModeSwitch, clampMenu, nativeSheetPresenter, presentNati
 import { mountHostReact } from '@lcl/components'
 import { HostLocaleProvider, registerMessages, subscribeLocale, translate, useI18n } from '../../i18n'
 import { EmptyState } from '../../components/EmptyState'
+import { WebCard, type WebCardAction } from '../../components/WebCard'
 import { pluginText } from './pluginText'
 import { vocabIcon } from './pluginIcon'
-import { overlayLayer } from './contextMenuSurface'
-import type { PluginConfirmOptions, PluginControlOption, PluginDialogAction, PluginDialogOptions, PluginEmptyState, PluginPopoverOptions, PluginToolbarControl } from './types'
+import { overlayLayer, type PluginMenuEntry } from './contextMenuSurface'
+import type { PluginConfirmOptions, PluginControlOption, PluginDialogAction, PluginDialogOptions, PluginEmptyState, PluginPopoverOptions, PluginToolbarControl, PluginWebCard, PluginWebCardAction } from './types'
 import './pluginParts.css'
 
 registerMessages({
@@ -246,6 +247,36 @@ export function mountPluginEmptyState(el: HTMLElement, opts: PluginEmptyState, g
   const tree = (): ReactElement => <HostLocaleProvider><PluginEmpty o={o} guard={guard} /></HostLocaleProvider>
   const m = mountHostReact(el, tree())
   return { update(patch) { o = { ...o, ...patch }; m.render(tree()) }, dispose: m.dispose }
+}
+
+// ── 网页卡片 ─────────────────────────────────────────────────────────────
+
+/** 菜单行由 pluginStore 先整理成宿主形状(tidyMenu)再交过来。 */
+export type HostWebCard = Omit<PluginWebCard, 'menu'> & { menu?: PluginMenuEntry[] }
+
+function PluginWebCardView({ c, guard }: { c: HostWebCard; guard: Guard }): ReactElement {
+  useI18n()
+  const act = (a: PluginWebCardAction, i: number): WebCardAction => {
+    const Icon = vocabIcon(a.icon)
+    return { key: `p${i}`, label: pluginText(a.label), icon: Icon ? <Icon size={13} /> : undefined, variant: a.variant, disabled: a.disabled, onClick: () => { guard(() => a.run()) } }
+  }
+  const Ph = vocabIcon(c.placeholderIcon)
+  const menu = c.menu?.length ? c.menu : null
+  return (
+    <WebCard layout={c.layout} name={pluginText(c.name)}
+      status={c.status ? { label: pluginText(c.status.label), tone: c.status.tone, dot: c.status.dot } : undefined}
+      address={c.address} note={c.note ? pluginText(c.note) : undefined} thumbnail={c.thumbnail ?? null}
+      placeholder={Ph ? <Ph size={c.layout === 'row' ? 16 : 22} strokeWidth={1.6} /> : undefined}
+      actions={c.actions?.map(act)} trailing={c.trailing?.map(act)}
+      menu={menu ?? undefined} guard={(run) => { guard(run) }} />
+  )
+}
+
+export function mountPluginWebCard(el: HTMLElement, card: HostWebCard, guard: Guard): { update(patch: Partial<HostWebCard>): void; dispose(): void } {
+  let c = card
+  const tree = (): ReactElement => <HostLocaleProvider><PluginWebCardView c={c} guard={guard} /></HostLocaleProvider>
+  const m = mountHostReact(el, tree())
+  return { update(patch) { c = { ...c, ...patch }; m.render(tree()) }, dispose: m.dispose }
 }
 
 // ── 弹出层 ────────────────────────────────────────────────────────────────
