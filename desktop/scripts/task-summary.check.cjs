@@ -222,6 +222,29 @@ async function at(p, width, cls) {
   const hover = await gripOp()
   check('⚠️拖动块平时不露、悬停才露', idle === 0 && hover === 1, `平时=${idle} 悬停=${hover}`)
 
+  // ⑨ 立体感三档(开发者选项,TaskSummary 把 SummaryElevation 写到 .t2-tsum[data-elev];2026-10-28 用户定缺省「半浮」)。
+  //    浮 = 和输入卡同一枚投影 + 同族圆角;半浮 = 低一档的影子 + 圆角小一档;平 = 不投影;拿起来的那张三档都照旧浮。
+  //    摘要栏不做「凹」(两轮被否),这里不给它留档位。
+  const elev = (mode, lifted = false) => p.evaluate(({ mode, lifted }) => {
+    document.documentElement.dataset.mode = 'light'
+    document.getElementById('tsum').dataset.elev = mode
+    const card = document.getElementById('sec'); card.classList.toggle('t2-card-lifted', lifted)
+    const c = getComputedStyle(card)
+    const out = { shadow: c.boxShadow, radius: parseFloat(c.borderTopLeftRadius) }
+    card.classList.remove('t2-card-lifted')
+    return out
+  }, { mode, lifted })
+  const fl = await elev('float'), hf = await elev('half'), ft = await elev('flat')
+  check('「浮」= 输入卡那枚投影 + 同族圆角', fl.shadow !== 'none' && fl.radius === 16, `影=${fl.shadow} 圆角=${fl.radius}`)
+  check('「半浮」影子比「浮」低一档、圆角小一档', hf.shadow !== 'none' && hf.shadow !== fl.shadow && hf.radius === 12, `影=${hf.shadow} 圆角=${hf.radius}`)
+  check('「平」不投影', ft.shadow === 'none', `影=${ft.shadow}`)
+  const liftHalf = await elev('half', true), liftFlat = await elev('flat', true)
+  check('拿起来的那张三档都照旧浮', liftHalf.shadow !== hf.shadow && liftFlat.shadow !== 'none', `半浮拿起=${liftHalf.shadow} 平拿起=${liftFlat.shadow}`)
+  await p.evaluate(() => { document.documentElement.dataset.flat = '1' })
+  const hfFlatToggle = await elev('half')
+  check('外观「扁平」开关下半浮的影子也清掉', hfFlatToggle.shadow === 'none', `影=${hfFlatToggle.shadow}`)
+  await p.evaluate(() => { delete document.documentElement.dataset.flat; delete document.documentElement.dataset.mode })
+
   await browser.close()
   const failed = results.filter((r) => !r.ok).length
   console.log(`\n${results.length - failed}/${results.length} 通过`)
