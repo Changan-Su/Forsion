@@ -23,6 +23,13 @@ export function isAuthExpiredLlmError(err: unknown): boolean {
 }
 const AUTH_EXPIRED = /expired credentials|invalid or expired|token (has |is )?expired|PermissionDenied/i;
 
+/** 回灌的加密推理 / 思考签名被上游拒收(换了账号、组织或厂商签的):拿掉推理条目重发一次就能过,原样重试必败。
+ *  不看状态码 —— Codex 在 HTTP 400 和流里的 response.failed 两条路都会送来(借 magpie affinity.go foreignReasoning)。 */
+export function isForeignReasoningLlmError(err: unknown): boolean {
+  return err instanceof LlmError && FOREIGN_REASONING.test(`${(err as { code?: string }).code || ''} ${err.message}`);
+}
+const FOREIGN_REASONING = /invalid_encrypted_content|encrypted[ _]content.{0,80}could not be (verified|decrypted)|could not (decrypt|verify).{0,40}encrypted[ _]content|invalid `?signature`? in `?thinking`? block/i;
+
 /** 订阅额度 / 账单配额用尽(几小时才重置,不是秒级限流)。额度用完接力(llm/quotaRelay.ts)只认这一组。 */
 export function isQuotaExhaustedLlmError(err: unknown): boolean {
   return err instanceof LlmError && quotaExhaustedErr(err);

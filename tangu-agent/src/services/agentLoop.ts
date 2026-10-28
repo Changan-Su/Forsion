@@ -15,7 +15,7 @@ import { resolveProfile } from '../seams/appProfile.js';
 import type { StreamOpts, BuildPayloadOpts } from '../seams/cloudBrain.js';
 import { LlmError, type ThinkingLevel, type ChatMessage, type ToolCall } from '../core/types.js';
 import { clampThinkingLevel, resolveModelCapability } from '../llm/modelCapabilities.js';
-import { PROTOCOL_MARK } from '../llm/openaiCompat.js';
+import { PROTOCOL_MARK, DIRECT_MARK, ACCOUNT_MARK } from '../llm/openaiCompat.js';
 import { realpathSync } from 'node:fs';
 import { publish, drain, cleanup } from './eventBus.js';
 import { makeUiSettingsUpdater } from './uiAck.js';
@@ -74,9 +74,9 @@ import { fitUserImages, normalizeImageAttachments, toImageParts } from './imageA
 import { describeImages, NO_VISION_NOTE, resolveVisionModelId, shouldDescribeImages, whyNoImages, type NoImagesReason } from './visionService.js';
 import { toolImageMessages, type ToolImage } from './toolImages.js';
 import { dropStaleToolImages } from './toolImageWindow.js';
-import { replayAssistantHistory, stepLlmResponse, loadReplaySteps, dropCoveredCalls } from './historyReplay.js';
+import { replayAssistantHistory, stepLlmResponse, loadReplaySteps, dropCoveredCalls, reasoningAccountKey } from './historyReplay.js';
 import { looksLikeToolCallText } from '../llm/textToolCalls.js';
-import { isRetryableLlmError, isAuthExpiredLlmError, isQuotaExhaustedLlmError, withLlmRetry, MODEL_MAX_RETRIES, MODEL_RETRY_BASE_MS, llmRetryBudgetExceeded, sleepOrAbort } from '../llm/retry.js';
+import { isRetryableLlmError, isAuthExpiredLlmError, isQuotaExhaustedLlmError, isForeignReasoningLlmError, withLlmRetry, MODEL_MAX_RETRIES, MODEL_RETRY_BASE_MS, llmRetryBudgetExceeded, sleepOrAbort } from '../llm/retry.js';
 import { relaySettings, noteQuotaExhausted, quotaExhaustedUntil, quotaResetAt, quotaAskSuffix } from '../llm/quotaRelay.js';
 import { runCostCeiling, isOverRunCost } from './runBudget.js';
 import { RepeatedToolFailureGuard, MAX_REPEATED_TOOL_FAILURES } from './repeatedToolFailure.js';
@@ -841,7 +841,7 @@ export async function hydrateHistory(
   /** 本次 run 的上游模型 + 协议;回放据此判 providerItems 是不是同一个模型、同一个协议下签出来的
    *  (historyReplay 文件头 ①)。protocol 只能取模型上的**静态**标记 —— hydrate 发生在 buildProviderPayload
    *  之前,动态改道(思考开 → Responses)那一档此时还没定,故只会判「不匹配」,不会误判匹配。 */
-  replayFor?: { apiModelId?: string; protocol?: string },
+  replayFor?: { apiModelId?: string; protocol?: string; account?: string },
   /** false = 不等在飞的惰性检查点(旁聊 /btw:一句题外话不值得最多 45s 的等待,窗口外老行少一截可接受)。 */
   waitCheckpoint = true,
 ): Promise<{
@@ -1382,10 +1382,14 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     const replayModelKey = apiModelId || modelId;
     // protocol 这里是模型上的**静态**标记 = 「下一次请求要走的协议」的读侧口径(hydrate 用它)。
     // 写侧不用它:落库点改用 payload[PROTOCOL_MARK](本轮**实际**发出去的协议,可能被 tune 动态改道)。
+    // 账号指纹(只存哈希):直连才有。Codex 用 account_id(token 会续期、account_id 不变),自带 key 的用 key;托管面没有 → undefined
+    const accountKeyOf = (m: any, key: string | undefined): string | undefined =>
+      (m?.[DIRECT_MARK] ? reasoningAccountKey(m[ACCOUNT_MARK] || key) : undefined);
     const stepItemBinding = {
       apiModelId: replayModelKey,
       provider: model?.provider,
       protocol: typeof (model as any)?.[PROTOCOL_MARK] === 'string' ? (model as any)[PROTOCOL_MARK] : undefined,
+      account: accountKeyOf(model, apiKey),
     };
     /** 一次请求**实际**走的协议:multiBrain.streamProviderCompletion 正是按 payload 上这个标记分发
      *  anthropic-messages / openai-responses / 缺省 chat-completions 的 —— 所以它就是「这组 items 是在
@@ -1478,7 +1482,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     const { messages: history, currentUserIndex, checkpointThrough, contextImages } = await hydrateHistory(
       sessionId, run.assistant_message_id || '', describeUserImages,
       typeof input.userMessageId === 'string' ? input.userMessageId : undefined,
-      { apiModelId: replayModelKey, protocol: stepItemBinding.protocol },
+      { apiModelId: replayModelKey, protocol: stepItemBinding.protocol, account: stepItemBinding.account },
     );
     // 本轮没附件(「坚持合成」这类跟进):edit_image 用模型此刻看得见的那批图 —— hydrate 每轮都把它发给对话模型。
     if (!imageInputs.length && contextImages?.images.length) {
@@ -2795,6 +2799,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     const compactAt = compactionThreshold(ctxWindowTokens, compactionCfg.reserveTokens, compactionCfg.thresholdPercent, compactionCfg.keepRecentTokens);
     let hookVetoedCompaction = false; // PreCompact hook 否决过 → 不再按估算拦请求,交给 provider 裁决
     let overflowRecovered = false; // 上游报「输入超窗口」后压缩重试:每 run 一次
+    let reasoningStripped = false; // 回灌的加密推理被拒后拿掉重发:每 run 一次
     let toolsOverhead = 0; // 本轮工具定义头的粗估 token(只在没有实测基准时计入,见 ContextUsageTracker.estimate)
     // 登记给 GET /agent/sessions/:id/status:必须在 contextUsage / compactAt / toolsOverhead 都初始化之后 —— getRunStatus 读它们,
     // 登记早了,run 还在等记忆 / 计费预检的那段时间里来一次请求就是 ReferenceError(Codex 10-10 #6)。
@@ -3050,6 +3055,19 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
             }
             throw err; // 压不动(hook 否决 / 没有可总结的)→ 照常报错
           }
+          // 回灌的加密推理被拒(invalid_encrypted_content / 思考签名无效:多半是换了账号,借 magpie #3887):拿掉本 run 里所有
+          // providerItems 重发本轮,只一次。跨 run 的那半由回放的账号绑定挡(historyReplay 文件头 ①);这里兜绑定判不出的(托管面、同 key 换了组织)。
+          if (!emitted && !reasoningStripped && isForeignReasoningLlmError(err)) {
+            reasoningStripped = true;
+            let dropped = 0;
+            for (const m of workingMessages) if ((m as any).providerItems) { delete (m as any).providerItems; dropped++; }
+            if (!dropped) throw err; // 本来就没带推理:重发一模一样的请求只会再被拒一次
+            console.warn(`[agent-core] run=${runId} 上游拒收回灌的推理,拿掉 ${dropped} 组后重发本轮: ${(err as any)?.message || err}`);
+            void publish(runId, 'status', { phase: 'reasoning_dropped', dropped, iteration });
+            retryIteration = true;
+            iteration -= 1;
+            break;
+          }
           // 中流断线恢复(借 pi 的 session 级重试思想):此前「吐过帧就整 run 报废」对长任务是灾难——
           // 第 40 迭代断一次线,前面全部白跑。改为:已流出的半截正文按「段切分」落库(用户看到的内容
           // 原样保留),回灌上下文 + 一条不落库的续写指令,退避后从下一迭代接着跑。慢失败(idle 超时)
@@ -3095,7 +3113,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
                 // 历史是按原模型 hydrate 的:它签出的 providerItems(加密推理 / 原生条目)不能带给后备;之后的分步落库按后备的身份记
                 for (const m of workingMessages) if ((m as any).providerItems) delete (m as any).providerItems;
                 Object.assign(stepItemBinding, { apiModelId: apiModelId || callModelId, provider: model?.provider,
-                  protocol: typeof (model as any)?.[PROTOCOL_MARK] === 'string' ? (model as any)[PROTOCOL_MARK] : undefined });
+                  protocol: typeof (model as any)?.[PROTOCOL_MARK] === 'string' ? (model as any)[PROTOCOL_MARK] : undefined,
+                  account: accountKeyOf(model, apiKey) });
                 retryIteration = true; iteration -= 1; break;
               }
             }

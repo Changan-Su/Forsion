@@ -471,6 +471,40 @@ describe('凭证失效续期(反馈 6a239e58:xAI 订阅 token 过期,502 被当�
   }, 20_000);
 });
 
+describe('回灌的加密推理被拒(借鉴 magpie 第三轮 19,10-28)', () => {
+  const foreign = () => { throw Object.assign(new LlmError(400, 'The encrypted content for item rs_ could not be verified. Reason: Encrypted content could not be decrypted or parsed.'), { code: 'invalid_encrypted_content' }); };
+  const reasoningToolStep = () => () => ({
+    ...todoWriteStep([{ content: '任务A', status: 'completed' }])(),
+    outputItems: [{ type: 'reasoning', id: 'rs_x', encrypted_content: 'ENC' }, { type: 'function_call', call_id: 'tc1', name: 'todo_write', arguments: '{}' }],
+  });
+  const withItems = (p: any) => (p.messages as any[]).filter((m) => Array.isArray(m.providerItems) && m.providerItems.length).length;
+  const statusOf = (phase: string) => query<any[]>(`SELECT payload FROM agent_run_events WHERE run_id = 'R1' AND type = 'status'`)
+    .then((rows) => rows.map((r) => JSON.parse(r.payload)).filter((p) => p.phase === phase)).catch(() => []);
+
+  it('被拒:拿掉推理条目重发这一轮,成了;发 reasoning_dropped', async () => {
+    script = [reasoningToolStep(), foreign, finalStep('好了')];
+    const run = await runToSettled();
+    expect(run.status).toBe('done');
+    expect(llmPayloads.map(withItems)).toEqual([0, 1, 0]);
+    expect((await statusOf('reasoning_dropped'))[0]).toMatchObject({ dropped: 1 });
+  }, 20_000);
+
+  it('只重发一次:拿掉之后还被拒就停下报错', async () => {
+    script = [reasoningToolStep(), foreign, foreign];
+    const run = await runToSettled();
+    expect(run.status).toBe('failed');
+    expect(llmPayloads.length).toBe(3);
+  }, 20_000);
+
+  it('本来就没带推理:不重发(一模一样的请求只会再被拒)', async () => {
+    script = [foreign];
+    const run = await runToSettled();
+    expect(run.status).toBe('failed');
+    expect(llmPayloads.length).toBe(1);
+    expect(await statusOf('reasoning_dropped')).toEqual([]);
+  }, 20_000);
+});
+
 describe('额度用完接力(借鉴 magpie 方案 2,10-28)', () => {
   const quota = () => { throw Object.assign(new LlmError(429, 'The usage limit has been reached (resets in ~60 min)'), { resetsAt: Date.now() + 3_600_000 }); };
   const setFallback = (models: Record<string, unknown>) => writeFileSync(join(home, 'config.json'), JSON.stringify({ models }));
