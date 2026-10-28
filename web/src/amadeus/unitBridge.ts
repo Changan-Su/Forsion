@@ -271,7 +271,7 @@ export async function createUnitAmadeusBridge(cfg: UnitBridgeCfg): Promise<Amade
     writeDatabase: (dbPath, data) => rpc(IPC.dbWrite, [dbPath, data]),
     writeDatabaseCas: (dbPath, data, baseVersion) => rpc(IPC.dbWriteCas, [dbPath, data, baseVersion]),
     readDrawing: (pagePath, ref) => rpc(IPC.drawingRead, [pagePath, ref]),
-    writeDrawing: (drawingPath, source) => rpc(IPC.drawingWrite, [drawingPath, source]),
+    writeDrawing: (drawingPath, source, base) => rpc(IPC.drawingWrite, [drawingPath, source, base]),
     readTextFile: (filePath) => rpc(IPC.readTextFile, [filePath]),
     // opts 原样转给本机宿主:base(CAS,G1-01)由桌面主进程比对,冲突结果 { ok:false, current } 原样回来。
     writeTextFile: (filePath, text, opts) => rpc(IPC.writeTextFile, opts ? [filePath, text, opts] : [filePath, text]),

@@ -16,12 +16,20 @@
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import performanceSource from '../../desktop/scripts/performance-source.cjs';
 
 const { default: Database } = await import('better-sqlite3');
 
 const args = process.argv.slice(2);
 const flag = (name) => { const i = args.indexOf(name); return i >= 0 ? args.splice(i, 1) && true : false; };
 const flagValues = (name) => { const out = []; for (let i; (i = args.indexOf(name)) >= 0;) { out.push(args[i + 1]); args.splice(i, 2); } return out; };
+const jsonOutput = flagValues('--json')[0];
+if (jsonOutput) performanceSource.assertOutput(jsonOutput);
+const sourceAtStart = performanceSource();
+const measurements = [];
+const datasetHasher = createHash('sha256');
 const synthetic = flag('--synthetic');
 const customQueries = flagValues('--q');
 
@@ -31,12 +39,31 @@ const likeTerm = () => `(LOWER(COALESCE(s.title,'') || ' ' || COALESCE(s.summary
 const ftsTerm = () => `(LOWER(COALESCE(s.title,'') || ' ' || COALESCE(s.summary,'')) LIKE ? ESCAPE '\\' OR s.id IN (SELECT f.session_id FROM chat_messages_fts f WHERE f.chat_messages_fts MATCH ?))`;
 const sessionsSql = (perTerm) => `SELECT s.id FROM chat_sessions s WHERE s.user_id = ? AND s.app_id = ? AND s.kind = 'user' AND ${perTerm} ORDER BY s.updated_at DESC LIMIT 20`;
 
-function timeit(stmt, params, n = 5) {
-  stmt.all(...params);
-  const t = process.hrtime.bigint();
-  let rows;
-  for (let i = 0; i < n; i++) rows = stmt.all(...params);
-  return { ms: Number(process.hrtime.bigint() - t) / 1e6 / n, rows: rows.length };
+function timeit(stmt, params, n = 15) {
+  for (let i = 0; i < 3; i++) stmt.all(...params);
+  const samples = []; let rows;
+  for (let i = 0; i < n; i++) {
+    const t = process.hrtime.bigint(); rows = stmt.all(...params);
+    samples.push(Number(process.hrtime.bigint() - t) / 1e6);
+  }
+  const ordered = [...samples].sort((a,b)=>a-b), mean = samples.reduce((a,b)=>a+b,0)/n;
+  const stddev = Math.sqrt(samples.reduce((a,v)=>a+(v-mean)**2,0)/n);
+  measurements.push({ sql:stmt.source, params, samplesMs:samples, meanMs:mean,
+    p50Ms:ordered[Math.floor(n*.5)], p95Ms:ordered[Math.floor(n*.95)], stddevMs:stddev,
+    coefficientOfVariation:mean ? stddev/mean : 0, rows:rows.length });
+  return { ms:mean, rows:rows.length };
+}
+function writeJson(dataset) {
+  if (!jsonOutput) return;
+  const sourceAtEnd=performanceSource();
+  if(sourceAtEnd.sourceSha256!==sourceAtStart.sourceSha256) throw new Error('Source changed during search measurement');
+  fs.mkdirSync(path.dirname(path.resolve(jsonOutput)), { recursive:true });
+  fs.writeFileSync(jsonOutput, JSON.stringify({ schemaVersion:1, source:sourceAtStart,
+    commit:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),
+    environment:{ node:process.version, platform:process.platform, arch:process.arch, cpu:os.cpus()[0].model },
+    process:'Node/SQLite', warmup:3, modelNetwork:'excluded; synthetic local SQL only',
+    dataset, measurements,
+    limitation:'Benchmark SQL mirrors the application management query; this is not the full app or model-network latency.' },null,2)+'\n');
 }
 
 const DEFAULT_QUERIES = [['记忆'], ['localStorage'], ['插件', 'electron'], ['zzqx不存在的词'], ['压缩的 sqlite 窗口']];
@@ -57,6 +84,7 @@ if (!synthetic) {
     console.log(`  ${JSON.stringify(terms).padEnd(34)} ${r.ms.toFixed(1).padStart(7)} ms  ${r.rows} 行`);
   }
   console.log(`最坏 ${worst.toFixed(1)} ms ${worst < 200 ? '—— 不用动索引' : '—— 超过 200ms,该重看 FTS5(先跑 --synthetic 看代价)'}`);
+  writeJson({ kind:'read-only-existing-database', bytes:fs.statSync(file).size });
   process.exit(0);
 }
 
@@ -76,7 +104,7 @@ const is = db.prepare('INSERT INTO chat_sessions VALUES (?,?,?,?,?,?,?,?)'), im 
 db.transaction(() => {
   for (let s = 0; s < S; s++) {
     is.run(`s${s}`, 'u1', 'tangu', `${pick(zh)}${pick(en)} 话题 ${s}`, pick(zh), 0, 'user', `2026-${String(1 + s % 9).padStart(2, '0')}-${String(1 + s % 27).padStart(2, '0')} 10:00:00`);
-    for (let m = 0; m < M; m++) im.run(`s${s}-m${m}`, `s${s}`, m % 2 ? 'model' : 'user', sentence(), 1e12 + s * 1e5 + m);
+    for (let m = 0; m < M; m++) { const content=sentence(); datasetHasher.update(content); im.run(`s${s}-m${m}`, `s${s}`, m % 2 ? 'model' : 'user', content, 1e12 + s * 1e5 + m); }
   }
 })();
 const sizeMB = () => db.prepare('PRAGMA page_count').get().page_count * db.prepare('PRAGMA page_size').get().page_size / 1e6;
@@ -95,3 +123,6 @@ for (const terms of queries) {
   const short = terms.some((t) => [...t].length < 3);
   console.log(`  ${JSON.stringify(terms).padEnd(34)} 现状 LIKE ${a.ms.toFixed(1).padStart(6)} ms (${a.rows} 行) | FTS5 MATCH ${b.ms.toFixed(1).padStart(6)} ms (${b.rows} 行)${short ? '  ← 含 <3 字的词,trigram 搜不到,得回退 LIKE' : ''}`);
 }
+
+writeJson({ kind:'deterministic-synthetic', seed:7, sessions:S, messagesPerSession:M, sha256:datasetHasher.digest('hex') });
+db.close();
