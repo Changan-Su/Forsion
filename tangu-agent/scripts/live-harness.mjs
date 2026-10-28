@@ -890,7 +890,8 @@ if (argv.includes('--selftest')) {
 const OUT = resolve(opt('out', process.env.TANGU_LIVE_OUT || join(tmpdir(), `tangu-live-${stamp}-${randomUUID().slice(0, 6)}`)));
 // streamoverflow / foreignreasoning:引擎以 --import 载入 lib/llm-fault-preload.mjs,场景往规则文件里写一条,真 Codex 路径上命中的请求换成厂商原文报错
 const FAULT_FILE = ONLY.has('streamoverflow') || ONLY.has('foreignreasoning') ? join(OUT, 'llm-fault.json') : null;
-const armFault = (rule) => writeFileSync(FAULT_FILE, JSON.stringify(rule));
+// 每次布置规则先清掉上一次的记录:同一次台架里 streamoverflow 与 foreignreasoning 共用这份 .log,不清的话后跑的那个会把前一个的「被拒 / 放行」也算进来
+const armFault = (rule) => { rmSync(`${FAULT_FILE}.log`, { force: true }); writeFileSync(FAULT_FILE, JSON.stringify(rule)); };
 const disarmFault = () => rmSync(FAULT_FILE, { force: true });
 const faultLog = () => { try { return readFileSync(`${FAULT_FILE}.log`, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)); } catch { return []; } };
 const TIMEOUT_MS = Number(opt('timeout', process.env.TANGU_LIVE_TIMEOUT_MS || 15 * 60_000));
