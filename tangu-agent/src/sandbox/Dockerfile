@@ -7,17 +7,18 @@
 # 或：    npm run sandbox:build   (见 package.json)
 FROM python:3.12-slim
 
-# 国内机器构建:--build-arg PIP_MIRROR=https://mirrors.aliyun.com/pypi/simple/(直连 PyPI 在 ECS 上常卡住)。
-# 只管构建期;运行时 pip_install 的源由 worker 的 AGENT_SANDBOX_PIP_INDEX_URL 决定。
-ARG PIP_MIRROR
+# 国内机器构建:--build-arg CN_MIRROR=1 → apt / pip 走阿里云(与 worker 的 Dockerfile 同一开关;ECS 直连
+# deb.debian.org / PyPI 常卡住)。只管构建期;运行时 pip_install 的源由 worker 的 AGENT_SANDBOX_PIP_INDEX_URL 决定。
+ARG CN_MIRROR=
 
 # matplotlib / Pillow 的少量系统依赖（多数 wheel 自带，这里补字体与 libgomp 等）
 # fonts-wqy-microhei:中文字体 —— 没有它生成中文 PDF / 图表只出方框(10-28 生产一例模型为此绕了 63 步)。
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN if [ -n "$CN_MIRROR" ]; then sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources; fi \
+    && apt-get update && apt-get install -y --no-install-recommends \
       fonts-dejavu-core fonts-wqy-microhei libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir ${PIP_MIRROR:+--index-url $PIP_MIRROR} \
+RUN pip install --no-cache-dir ${CN_MIRROR:+--index-url https://mirrors.aliyun.com/pypi/simple/} \
       python-docx==1.1.2 \
       python-pptx==1.0.2 \
       openpyxl==3.1.5 \
