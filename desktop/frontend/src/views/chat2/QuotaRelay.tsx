@@ -4,11 +4,15 @@
  * 「先问我」开着时这一轮以 `[quota_fallback_ask:<模型>]` 结尾的错误停下。
  */
 import { useEffect, useState } from 'react'
-import { ArrowRightLeft } from 'lucide-react'
+import { ArrowRightLeft, Bell } from 'lucide-react'
 import { registerMessages, useI18n } from '../../i18n'
 import { useApp } from '../../stores/appStore'
 import { formatDateTime, formatTime } from '../../format/time'
 import type { UiMessage } from '../../types'
+import { getModelQuota } from '../../services/backendService'
+import { targetForSession } from '../../services/engine/targets'
+import { SUB_PROVIDER_LABELS } from '../../components/OnboardingWizard'
+import { reminderResetAt, useQuotaReminders } from '../../tangu/store/quotaReminders'
 
 registerMessages({
   'relay.line.quota': { zh: '{from} 的额度用完了（{time} 重置），这一轮改用 {to}', en: '{from} is out of quota (resets {time}), so this turn used {to}' },
@@ -20,6 +24,13 @@ registerMessages({
   'relay.wait': { zh: '等重置', en: 'Wait for reset' },
   'relay.switch': { zh: '改用 {to}', en: 'Use {to}' },
   'relay.always': { zh: '以后额度用完都改用 {to}', en: 'Always use {to} when quota runs out' },
+  'quotaRemind.button': { zh: '到时提醒我', en: 'Remind me then' },
+  'quotaRemind.set': { zh: '{time} 提醒你', en: 'Reminder set for {time}' },
+  'quotaRemind.cancel': { zh: '取消', en: 'Cancel' },
+  'quotaRemind.cardTitle': { zh: '{provider} 订阅 · 额度回来了', en: '{provider} plan · Limit reset' },
+  'quotaRemind.cardText': { zh: '「{session}」那一轮可以继续了。', en: 'You can continue “{session}” now.' },
+  'quotaRemind.cardTextBare': { zh: '那一轮可以继续了。', en: 'You can continue now.' },
+  'quotaRemind.continue': { zh: '继续', en: 'Continue' },
 })
 
 /** 和引擎 llm/retry.ts 的 quotaExhaustedText 同一条规则:订阅额度 / 账单配额用完(几小时才重置);写着一分钟窗口的是限流。 */
@@ -33,10 +44,14 @@ export const stripQuotaAsk = (raw: string): string => raw.replace(ASK_RE, '')
 /** 重置时刻:今天的只写「19:40」,跨天带日期。 */
 const resetText = (ms: number): string => (new Date(ms).toDateString() === new Date().toDateString() ? formatTime(ms) : formatDateTime(ms))
 /** 引擎报错尾巴「(resets … at 2026-10-28T11:40:00.000Z)」里的重置时刻。 */
-export function quotaResetFromError(raw: string): string {
+export function quotaResetMsFromError(raw: string): number | undefined {
   const m = /\bat (\d{4}-\d{2}-\d{2}T[\d:.]+Z)/.exec(raw)
   const ms = m ? Date.parse(m[1]) : NaN
-  return ms > Date.now() ? resetText(ms) : ''
+  return ms > Date.now() ? ms : undefined
+}
+export function quotaResetFromError(raw: string): string {
+  const ms = quotaResetMsFromError(raw)
+  return ms ? resetText(ms) : ''
 }
 
 function useModelName(): (id?: string) => string {
@@ -94,6 +109,45 @@ export function QuotaChips({ error, messageId, sessionId, modelId }: { error?: s
   return (
     <button type="button" className="t2-failed-btn primary" onClick={() => void window.tangu!.setConfig({ quotaFallbackModelId: cloudDefault }).then(() => { setHidden(true); retry() })}>
       {t('relay.always', { to: name(cloudDefault) })}
+    </button>
+  )
+}
+
+/** 本机订阅来源只在桌面引擎上:网页 / 手机的 window.tangu 是垫片，只能认 UA。 */
+const DESKTOP = typeof navigator !== 'undefined' && /\bElectron\//.test(navigator.userAgent)
+
+/**
+ * 额度用完、没接上后备(没设，或后备也用完)时错误条上的「到时提醒我」(借鉴 magpie 第三轮第 20 条 A)。
+ * 「先问我」那种停下(还有后备可选)不出。重置时刻先认报错里的，没有再用额度显示里满了的窗口;
+ * 来源的额度读不到就不出 —— 到点没法确认回没回来。点了换成「19:40 提醒你 · 取消」。
+ */
+export function QuotaRemindChip({ error, sessionId, modelId }: { error?: string; sessionId?: string; modelId?: string }) {
+  const { t } = useI18n()
+  const reminder = useQuotaReminders((s) => (sessionId ? s.items[sessionId] : undefined))
+  const title = useApp((s) => s.sessions.find((x) => x.id === sessionId)?.title || '')
+  const [found, setFound] = useState<{ resetAt: number; provider: string } | null>(null)
+  const quota = DESKTOP && !!error && isQuotaText(error) && !ASK_RE.test(error)
+  useEffect(() => {
+    setFound(null)
+    if (!quota || !sessionId || !modelId || reminder) return
+    let alive = true
+    void getModelQuota(targetForSession(sessionId), modelId).then(({ quota: q }) => {
+      if (!alive || !q?.windows?.length) return
+      const resetAt = reminderResetAt(quotaResetMsFromError(error!), q.windows, Date.now())
+      if (resetAt) setFound({ resetAt, provider: SUB_PROVIDER_LABELS[q.providerId] || q.providerId })
+    }).catch(() => {})
+    return () => { alive = false }
+  }, [quota, sessionId, modelId, error, !!reminder])
+  if (!quota || !sessionId) return null
+  if (reminder) return (
+    <span className="t2-remind-set">
+      {t('quotaRemind.set', { time: resetText(reminder.resetAt) })} · <button type="button" onClick={() => useQuotaReminders.getState().cancel(sessionId)}>{t('quotaRemind.cancel')}</button>
+    </span>
+  )
+  if (!found || !modelId) return null
+  return (
+    <button type="button" className="t2-relogin" onClick={() => useQuotaReminders.getState().set({ sessionId, modelId, title, ...found })}>
+      <Bell size={12} /> {t('quotaRemind.button')}
     </button>
   )
 }
