@@ -29,7 +29,9 @@ function findNodeModules(name) {
 // [包名, 目录, 要求的版本前缀]
 const LIBS = [['three', 'three@0.186', '0.186.'], ['d3', 'd3@7', '7.'], ['chart.js', 'chart.js@4', '4.'], ['gsap', 'gsap@3', '3.']]
 const nm = findNodeModules('three')
-if (!nm) { console.warn('[iui-libs] 未安装 three 等随包库,跳过'); process.exit(0) }
+// 桌面 postinstall(不带 --out)缺包时放过,和白板引擎那支一样;web / Unit 构建(带 --out)缺包必须失败:
+// 否则产物里没有 iui-lib、客户端却照样报能力,每张 3D 卡静默空白
+if (!nm) { console.warn('[iui-libs] 未安装 three 等随包库' + (argOut > 0 ? '' : ',跳过')); process.exit(argOut > 0 ? 1 : 0) }
 const versions = LIBS.map(([name, dir, want]) => {
   const v = JSON.parse(fs.readFileSync(path.join(nm, name, 'package.json'), 'utf8')).version
   if (!v.startsWith(want)) throw new Error(`[iui-libs] ${name}@${v} 对不上目录 ${dir}:升大版本要新开目录并改 sketchWrapper.ts 的 importmap`)
