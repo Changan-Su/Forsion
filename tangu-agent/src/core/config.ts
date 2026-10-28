@@ -79,7 +79,7 @@ function writeAtomic(file: string, text: string, stillMine: () => boolean): void
     fd = openSync(tmp, 'wx', 0o600);
     writeFileSync(fd, text, 'utf8');
     fsyncSync(fd);
-    closeSync(fd); fd = undefined;
+    const closing = fd; fd = undefined; closeSync(closing); // 先放手再关:close 报错时 catch 里不会再关一次(那个号可能已被别处复用)
     if (!stillMine()) throw new Error(`写锁在持有期间被当作陈旧锁回收(进程被挂起超过 ${LOCK_STALE_MS / 1000}s?),放弃本次写入:${file}`);
     renameSync(tmp, file);
   } catch (e) {
