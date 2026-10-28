@@ -116,6 +116,7 @@ import { dropCommittedEdits, hasDirtyEdits, mergeEdits, pickEdits, withoutKeys, 
 import { onRadioGroupKeyDown, radioTabIndex } from './radioGroupKeys'
 import { SettingsSaveBar } from './SettingsSaveBar'
 import { SecretStorageNotice } from './SecretStorageNotice' // P1-K5
+import { MaskingSettingsSection } from './MaskingSettingsSection'
 import './settingsModal.css'
 import { connectionTarget, homeTarget, HOME_REF } from '../services/engine/targets'
 
@@ -2485,6 +2486,7 @@ export const SettingsModal: React.FC<{
                         {!editProvider?.isNew && <div className="provider-add"><button className="btn ghost sm" onClick={() => startEdit(null)}><Plus size={13} /> {t('prov.add')}</button></div>}
                         {providerSaveMsg && !editProvider && <div className="hint provider-editor-hint">{providerSaveMsg}</div>}
                       </SettingsPanel>
+                      <MaskingSettingsSection />
                     {stored?.mode === 'external' && !(stored?.backendUrl || '').includes('localhost') && !(stored?.backendUrl || '').includes('127.0.0.1') && (
                       <div className="hint" style={{ marginTop: 10 }}>
                         {t('settings.customProvider.externalWarning')}

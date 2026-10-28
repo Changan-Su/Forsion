@@ -238,6 +238,12 @@ export const CLASSIFICATION = {
   'GET /agent/project-context': [A, 'read project context'],
   'POST /agent/project-context/init': [D, 'project instruction write (design appendix C)'],
   'PUT /agent/project-context/doc': [D, 'project instruction write (design appendix C)'],
+  // 发给模型前脱敏(routes/masking.ts):开关、从不遮住名单、记录都是本机的安全设置 / 痕迹,远端一律不碰
+  'GET /agent/masking': [D, 'outbound masking settings (local security setting)'],
+  'PUT /agent/masking': [D, 'outbound masking settings write'],
+  'POST /agent/masking/allow': [D, 'never-mask list write (would let a value leave unmasked)'],
+  'DELETE /agent/masking/allow/:hash': [D, 'never-mask list write'],
+  'GET /agent/masking/log': [D, 'masking log (kinds and value heads)'],
   'GET /agent/project-context/settings': [A, 'read project settings'],
   'PUT /agent/project-context/settings': [D, 'project settings write (design appendix C)'],
   'POST /agent/project-context/skills': [D, 'project skill write (design appendix C)'],

@@ -1441,6 +1441,34 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 }
 .tool-group-status { flex-shrink: 0; display: inline-flex; }
 .tool-group-status:empty { display: none; }
+/* 发给模型前脱敏(借鉴 magpie 方案 A):过程行标题后一句「遮住 N 个值」;展开后被遮的值垫一层主题色底,不画框、不加下划线 */
+.t2-mask-tag {
+  display: inline-flex; align-items: center; gap: 4px; margin-left: 2px; flex-shrink: 0; white-space: nowrap;
+  color: var(--text-muted); font: 400 var(--ui-font-caption)/1.3 var(--font-ui); border-radius: var(--radius-sm); cursor: pointer;
+}
+.t2-mask-tag svg { color: var(--accent-ink); }
+.t2-mask-tag:hover, .t2-mask-tag.open { color: var(--text); }
+.t2-mask-tag:focus-visible { outline: 2px solid var(--focus-ring, var(--accent)); outline-offset: 2px; }
+.t2-masked { background: color-mix(in srgb, var(--accent-ink) 16%, transparent); border-radius: 3px; padding: 0 1px; }
+.t2-mask-pop { width: min(440px, calc(100vw - 24px)); padding: 10px 12px 8px; font: 400 var(--ui-font-caption)/1.45 var(--font-ui); color: var(--text-muted); }
+.t2-mask-pop h4 { margin: 0 0 8px; font: 500 var(--ui-font-meta)/1.3 var(--font-ui); color: var(--text); }
+.t2-mask-pop table { width: 100%; border-collapse: collapse; }
+.t2-mask-pop th { text-align: left; font-weight: 400; color: var(--text-faint); padding: 0 6px 4px 0; }
+.t2-mask-pop td { padding: 5px 6px 5px 0; vertical-align: top; border-top: var(--border-width) solid var(--border); }
+.t2-mask-pop td:first-child { color: var(--text); white-space: nowrap; }
+.t2-mask-pop code { font-family: var(--font-mono); font-size: var(--ui-font-caption); color: var(--text); word-break: break-all; }
+.t2-mask-foot { display: flex; align-items: center; gap: 10px; margin-top: 6px; color: var(--text-faint); }
+.t2-mask-foot .grow { flex: 1; }
+.t2-mask-foot button { padding: 0; color: var(--accent-ink); font: inherit; background: none; border: 0; cursor: pointer; }
+.t2-mask-done { color: var(--text-faint); white-space: nowrap; }
+.mask-settings-list { padding: 0 15px 12px; } /* 同 .settings-row-notes:跟行的左右边距对齐 */
+.mask-settings-group + .mask-settings-group { margin-top: 8px; }
+.mask-settings-group-head { display: flex; align-items: baseline; gap: 8px; padding: 4px 0; }
+.mask-settings-group-head small, .mask-settings-item small { color: var(--text-faint); }
+.mask-settings-item { display: flex; align-items: center; gap: 8px; min-height: 26px; color: var(--text-muted); font-size: var(--ui-font-meta); }
+.mask-settings-item > span:first-child { color: var(--text); min-width: 72px; }
+.mask-settings-item code { font-family: var(--font-mono); }
+.mask-settings-item .grow { flex: 1; }
 .tool-group-list { padding: 4px 0 2px; }
 .tool-row { position: relative; font-size: var(--ui-font-meta, 12px); }
 .tool-row:not(:last-child)::before {

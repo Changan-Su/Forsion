@@ -1500,6 +1500,20 @@ export const getGitSettings = (t: EngineTarget) =>
 /** 逐键改;某键给 null = 恢复缺省。 */
 export const setGitSettings = (t: EngineTarget, patch: { [K in keyof GitSettings]?: GitSettings[K] | null }) =>
   request<{ settings: GitSettings }>(t, '/agent/git-settings', { method: 'PUT', body: JSON.stringify(patch) }).then((r) => r.settings)
+/** 「设置 → 模型 → 提供方 → 发给模型之前」(引擎 routes/masking.ts)。writable=false = 引擎不在这台电脑上,不显示这一节。 */
+export interface MaskingSettings { secrets: boolean; personal: boolean; action: 'mask' | 'warn' | 'block' }
+export interface MaskAllowEntry { hash: string; kind: string; len: number; at: number }
+export interface MaskingState { writable: boolean; settings?: MaskingSettings; allow?: MaskAllowEntry[]; recent?: { values: number; sessions: number } }
+export interface MaskLogLine { t: number; sid: string; action: MaskingSettings['action']; hits: Array<{ kind: string; ph: string; head: string; len: number }> }
+export const getMasking = (t: EngineTarget) => request<MaskingState>(t, '/agent/masking')
+export const setMasking = (t: EngineTarget, patch: Partial<MaskingSettings>) =>
+  request<{ settings: MaskingSettings }>(t, '/agent/masking', { method: 'PUT', body: JSON.stringify(patch) }).then((r) => r.settings)
+/** 加进「从不遮住」:引擎只存这个值的 HMAC。 */
+export const addMaskAllow = (t: EngineTarget, value: string, kind: string) =>
+  request<{ entry: MaskAllowEntry }>(t, '/agent/masking/allow', { method: 'POST', body: JSON.stringify({ value, kind }) }).then((r) => r.entry)
+export const removeMaskAllow = (t: EngineTarget, hash: string) =>
+  request<{ allow: MaskAllowEntry[] }>(t, `/agent/masking/allow/${encodeURIComponent(hash)}`, { method: 'DELETE' }).then((r) => r.allow)
+export const getMaskLog = (t: EngineTarget) => request<{ lines: MaskLogLine[] }>(t, '/agent/masking/log').then((r) => r.lines)
 /** 删一条项目记忆。409 = 记忆在读出之后被别处改过(没有删除);调用方重载后再删。 */
 export const forgetProjectMemory = (t: EngineTarget, sessionId: string, id: string, expectedVersion: string) =>
   request<{ memory: ProjectMemoryView }>(t, '/agent/project-context/memory', { method: 'DELETE', body: JSON.stringify({ sessionId, id, expectedVersion }) }).then((r) => r.memory)

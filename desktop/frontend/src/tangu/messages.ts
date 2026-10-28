@@ -185,6 +185,8 @@ registerMessages({
   'chat.err.timeout': { zh: '请求超时，网络或模型响应过慢', en: 'Request timed out — slow network or model' },
   'chat.err.auth': { zh: '鉴权失败，请检查 API Key 或登录状态', en: 'Authentication failed — check API key or login' },
   'chat.err.rate': { zh: '请求被限流，请稍后重试', en: 'Rate limited — please retry later' },
+  'chat.err.maskFailed': { zh: '发给模型前脱敏没能运行，这一轮没有发出', en: 'Masking could not run, so this turn was not sent' },
+  'chat.err.maskBlocked': { zh: '这一轮里有要遮住的值，按设置拦下了，没有发出（设置 → 模型 → 提供方 → 发给模型之前）', en: 'This turn had values to mask and was blocked as set, so nothing was sent (Settings → Models → Providers → Before sending to a model)' },
   'chat.err.server': { zh: '模型服务端错误，请稍后重试', en: 'Model service error — please retry later' },
   'chat.err.runCost': { zh: '本次运行成本达到上限，已自动停止', en: 'This run hit its cost ceiling and was stopped automatically' },
   'chat.err.inputTooLarge': { zh: '输入内容过长，超出模型可处理范围，请精简后重试', en: 'Input too large for the model — trim it and retry' },

@@ -758,6 +758,8 @@ export interface ToolEvent {
   contentOffset?: number
   /** 审批挂起(托盘 run):调用没跑,agent 先干别的;用户拍板后同一 id 的真结果到达即清掉。落库的占位结果重载后仍带着它。 */
   parked?: boolean
+  /** 发给模型前会被遮住的值(引擎 llm/outboundMask.ts):在 arguments / result 里的位置 + 类型 + 模型收到的占位符,不含原值。 */
+  masked?: Array<{ kind: string; ph: string; s: number; e: number; at: 'args' | 'result'; warn?: true }>
 }
 
 /** 助手一条消息的「顺序段」(直播归约期填充;新历史消息也可由工具锚点重建):
