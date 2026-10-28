@@ -190,3 +190,69 @@ describe('config.json 唯一真源', () => {
     expect(leftovers()).toEqual([]);
   });
 });
+
+describe('写前备份 / 读坏恢复(读失败 = 不知道,不等于空)', () => {
+  const bakDir = (): string => join(dirname(configFile()), 'config-backup');
+  const bak = (): string => join(bakDir(), 'config.json.bak');
+  const marker = (): string => join(bakDir(), 'config.json.recovered');
+  const bads = (): string[] => (existsSync(bakDir()) ? readdirSync(bakDir()).filter((n) => n.startsWith('config.json.bad-')) : []);
+
+  it('第一次写不留 .bak;之后每次写前把上一份原样存成 .bak(0600)', () => {
+    saveSection('cloud', { url: 'u1' });
+    expect(existsSync(bak())).toBe(false);
+    const first = readFileSync(configFile(), 'utf8');
+    saveSection('cloud', { url: 'u2' });
+    expect(readFileSync(bak(), 'utf8')).toBe(first);
+    if (process.platform !== 'win32') expect(statSync(bak()).mode & 0o777).toBe(0o600);
+    expect(readdirSync(bakDir()).filter((n) => n.endsWith('.tmp'))).toEqual([]);
+  });
+
+  for (const [label, broken] of [['零字节', ''], ['半截 JSON', '{"cloud": {"url": "u'], ['不是对象', '[1,2]']] as const) {
+    it(`${label}:读时从 .bak 恢复,坏的另存 .bad-* 不删,记恢复标记`, () => {
+      saveSection('cloud', { url: 'u1' });
+      saveSection('mcp', { mcpServers: {} }); // .bak = 只有 cloud 那份
+      const bakTime = statSync(bak()).mtimeMs;
+      writeFileSync(configFile(), broken, 'utf8');
+      expect(loadRawConfig()).toEqual({ cloud: { url: 'u1' } });
+      expect(JSON.parse(readFileSync(configFile(), 'utf8'))).toEqual({ cloud: { url: 'u1' } }); // 原位换回
+      expect(bads()).toHaveLength(1);
+      expect(readFileSync(join(bakDir(), bads()[0]), 'utf8')).toBe(broken);
+      expect(bads()[0]).not.toContain(':'); // Windows 文件名不许冒号
+      const m = JSON.parse(readFileSync(marker(), 'utf8'));
+      expect(m.version).toBe(bakTime);
+      expect(m.bad).toBe(bads()[0]);
+      expect(existsSync(`${configFile()}.lock`)).toBe(false);
+    });
+  }
+
+  it('坏文件 + 有 .bak:saveSection 在恢复出来的内容上合并(其余段不丢)', () => {
+    saveSection('cloud', { url: 'u1', token: 't' });
+    saveSection('mcp', { mcpServers: { a: { command: 'x' } } });
+    writeFileSync(configFile(), '', 'utf8');
+    saveSection('approval', { base: 'readonly' });
+    expect(loadRawConfig()).toEqual({ cloud: { url: 'u1', token: 't' }, approval: { base: 'readonly' } });
+    expect(bads()).toHaveLength(1);
+  });
+
+  it('.bak 也坏:拒写、一个字节都不动,不留 .bad、不记标记;读返回 null', () => {
+    saveSection('cloud', { url: 'u1' });
+    saveSection('cloud', { url: 'u2' });
+    writeFileSync(bak(), '{"cloud":', 'utf8');
+    writeFileSync(configFile(), '', 'utf8');
+    expect(() => saveSection('approval', { base: 'readonly' })).toThrow(/没有可用的备份/);
+    expect(readFileSync(configFile(), 'utf8')).toBe('');
+    expect(loadRawConfig()).toBeNull();
+    expect(bads()).toEqual([]);
+    expect(existsSync(marker())).toBe(false);
+    expect(existsSync(`${configFile()}.lock`)).toBe(false);
+  });
+
+  it('.bak 不是第二条读路径:config.json 不存在时不拿 .bak 顶上', () => {
+    saveSection('cloud', { url: 'u1' });
+    saveSection('cloud', { url: 'u2' });
+    rmSync(configFile());
+    expect(loadRawConfig()).toBeNull();
+    expect(configExists()).toBe(false);
+    expect(existsSync(configFile())).toBe(false);
+  });
+});

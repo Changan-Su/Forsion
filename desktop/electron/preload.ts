@@ -64,6 +64,8 @@ const api = {
     },
   } satisfies ComputerHistoryApi,
   getConfig: (): Promise<any> => ipcRenderer.invoke('config:get'),
+  configRecoveryNotice: (): Promise<{ at: number; version: number } | null> => ipcRenderer.invoke('config:recoveryNotice'),
+  clearConfigRecoveryNotice: (): Promise<void> => ipcRenderer.invoke('config:clearRecoveryNotice'),
   documentTasks: {
     claim: (key, signature) => ipcRenderer.invoke('documentTasks:claim', key, signature),
     complete: (key, token, sessionId) => ipcRenderer.invoke('documentTasks:complete', key, token, sessionId),

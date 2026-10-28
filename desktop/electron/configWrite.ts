@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
-import { closeSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs'
-import { mkdir, rename, rm, writeFile } from 'node:fs/promises'
-import { dirname } from 'node:path'
+import { chmodSync, closeSync, copyFileSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs'
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { basename, dirname, join } from 'node:path'
 
 /** 串行队列:任务等前一个结束(成功或失败)才开始;失败只抛给自己的调用方,不堵后面的
  *  (别学 ensureChain 整条吞错 —— 写配置的调用方要拿到失败)。 */
@@ -50,10 +50,61 @@ function stealIfStale(lock: string): void {
   } catch { /* 锁刚被释放 / 被别人先偷走:回去重抢 */ }
 }
 
+// ── 写前备份 / 读坏恢复。与 tangu-agent/src/core/config.ts 的 readLockedJson / commitLockedJson 是同一协议,改一边必须改另一边:
+//    `<目录>/config-backup/<名>.bak` = 上一次写盘前那份好的(原样字节,0600);读到坏文件(零字节 / 半截 / 不是对象)且 .bak 有效 →
+//    坏的复制成 `<名>.bad-<时间>` 留着、.bak 原子换回原位、写恢复标记 `<名>.recovered`(设置页据此提示);.bak 也坏 → 什么都不动、拒写。
+//    .bak 只在恢复时读,平时不是第二条读路径。整个目录在引擎的凭据 / 受保护清单里(hostSandboxProtection)。
+/** 某个配置文件的备份目录(与它同目录,rename 不跨盘)。 */
+export const configBackupDir = (file: string): string => join(dirname(file), 'config-backup')
+const backupOf = (file: string): string => join(configBackupDir(file), `${basename(file)}.bak`)
+/** 恢复标记:`{ at: 恢复时刻, version: 恢复到的那份 .bak 的写入时刻, bad: 坏文件留存名 }`(epoch ms)。 */
+export const recoveryMarkerOf = (file: string): string => join(configBackupDir(file), `${basename(file)}.recovered`)
+
+function parseObject(raw: string): Record<string, any> | null {
+  try {
+    const v = JSON.parse(raw)
+    return v && typeof v === 'object' && !Array.isArray(v) ? v : null
+  } catch { return null }
+}
+
+/** 唯一临时名 + 0600 + rename;rename 前核 mine()(同 lockedUpdateJson 的提交纪律)。 */
+function writeAtomicSync(file: string, text: string, mine: () => boolean): void {
+  mkdirSync(dirname(file), { recursive: true })
+  const tmp = `${file}.${process.pid}-${randomUUID()}.tmp`
+  try {
+    writeFileSync(tmp, text, { encoding: 'utf8', mode: 0o600 })
+    if (!mine()) throw new Error(`${file} 的写锁在持有期间被当作陈旧锁回收(进程被挂起超过 ${LOCK_STALE_MS / 1000}s?),放弃本次写入`)
+    renameSync(tmp, file)
+  } catch (e) {
+    try { rmSync(tmp, { force: true }) } catch { /* 清不掉就留着,别盖掉原始错误 */ }
+    throw e
+  }
+}
+
+/** 锁内:.bak 有效 → 坏的复制留存、.bak 换回、记标记,返回恢复后的内容;否则 null 且什么都不动。
+ *  先复制再 rename 换回:中途死掉原位仍是那份坏文件,下次再恢复,原位永远不会变成「不存在」。 */
+function restoreFromBackup(file: string, mine: () => boolean): Record<string, any> | null {
+  const bak = backupOf(file)
+  let bakRaw: string
+  let version: number
+  try { bakRaw = readFileSync(bak, 'utf8'); version = statSync(bak).mtimeMs } catch { return null }
+  const restored = parseObject(bakRaw)
+  if (!restored) return null
+  const bad = join(configBackupDir(file), `${basename(file)}.bad-${new Date().toISOString().replace(/[:.]/g, '-')}`) // Windows 文件名不许冒号
+  copyFileSync(file, bad)
+  try { chmodSync(bad, 0o600) } catch { /* Windows 无此语义 */ }
+  writeAtomicSync(file, bakRaw, mine)
+  try {
+    writeFileSync(recoveryMarkerOf(file), JSON.stringify({ at: Date.now(), version, bad: basename(bad) }), { encoding: 'utf8', mode: 0o600 })
+  } catch { /* 只是提示用的标记,写不进去不影响恢复本身 */ }
+  console.warn(`[config] ${basename(file)} 读到坏文件,已从备份恢复(坏文件留在 ${bad})`)
+  return restored
+}
+
 /** 跨进程读改写一个 JSON 配置文件。抢锁时异步等(不堵主线程);抢到后整段同步 —— 持锁期间不让出事件循环,
  *  主进程被弹框冻住只会发生在两次任务之间,不会冻在持锁时、连带卡住同步写这份文件的引擎。
- *  mutate 恰好执行一次、必须同步;文件不存在给 {},坏 JSON / 非对象抛错(绝不拿空配置覆盖读不出的安全配置);
- *  返回 undefined = 不写。落盘同 writePrivateJson:唯一临时名 + 0600 + rename。
+ *  mutate 恰好执行一次、必须同步;文件不存在给 {},坏 JSON / 非对象先从 .bak 恢复,恢复不了抛错(绝不拿空配置覆盖读不出的安全配置);
+ *  返回 undefined = 不写。落盘同 writePrivateJson:唯一临时名 + 0600 + rename,换上前把旧的好文件存成 .bak。
  *  ponytail: 陈旧判定靠 mtime(墙钟),不查持锁 pid 是否存活;活锁被误偷时靠提交前核 token 兜住(见上),
  *  残余只剩核对到 rename 之间的微秒窗口。 */
 export async function lockedUpdateJson(
@@ -89,20 +140,52 @@ export async function lockedUpdateJson(
   try {
     let raw: string | null = null
     try { raw = readFileSync(file, 'utf8') } catch (e) { if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e }
-    const cur = raw === null ? {} : JSON.parse(raw)
-    if (!cur || typeof cur !== 'object' || Array.isArray(cur)) throw new Error(`Invalid ${file}: expected an object`)
+    let cur = raw === null ? {} : parseObject(raw)
+    if (!cur) {
+      cur = restoreFromBackup(file, mine)
+      if (!cur) throw new Error(`Invalid ${file}: expected an object (no usable backup)`)
+      raw = null // 恢复出来的就是 .bak,不再备份
+    }
     const next = mutate(cur)
     if (next === undefined) return
-    const tmp = `${file}.${process.pid}-${randomUUID()}.tmp`
-    try {
-      writeFileSync(tmp, JSON.stringify(next, null, 2), { encoding: 'utf8', mode: 0o600 })
-      if (!mine()) throw new Error(`${file} 的写锁在持有期间被当作陈旧锁回收(进程被挂起超过 ${LOCK_STALE_MS / 1000}s?),放弃本次写入`)
-      renameSync(tmp, file)
-    } catch (e) {
-      try { rmSync(tmp, { force: true }) } catch { /* 清不掉就留着,别盖掉原始错误 */ }
-      throw e
+    if (raw !== null) {
+      // ponytail: 备份失败(盘满 / 权限)只告警、不拦这次保存 —— 代价是这一轮没有可回退的版本。
+      try { writeAtomicSync(backupOf(file), raw, mine) } catch (e) { console.warn(`[config] 写 ${basename(file)} 的备份失败(这次保存照常):${(e as Error)?.message || e}`) }
     }
+    writeAtomicSync(file, JSON.stringify(next, null, 2), mine)
   } finally {
     try { if (mine()) rmSync(lock, { force: true }) } catch { /* 删不掉(Windows 杀软占着)就留给 stale 回收 */ }
   }
+}
+
+/** 读一份锁写的 JSON 对象文件(config.json):不存在 → {};坏了先在锁内从 .bak 恢复(lockedUpdateJson 的读侧)再读,恢复不了抛。 */
+export async function readJsonRecovering(file: string): Promise<Record<string, any>> {
+  let raw: string
+  try { raw = await readFile(file, 'utf8') } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return {}
+    throw e
+  }
+  const parsed = parseObject(raw)
+  if (parsed) return parsed
+  await lockedUpdateJson(file, () => undefined) // 恢复不了在这里抛(读失败不等于空)
+  const again = parseObject(await readFile(file, 'utf8'))
+  if (!again) throw new Error(`Invalid ${file}: expected an object`)
+  return again
+}
+
+/** 设置页的「上次的设置文件损坏，已恢复」:读几份文件的恢复标记,取最近一次;没有 → null。 */
+export async function readRecoveryNotice(files: string[]): Promise<{ at: number; version: number } | null> {
+  let best: { at: number; version: number } | null = null
+  for (const f of files) {
+    try {
+      const m = JSON.parse(await readFile(recoveryMarkerOf(f), 'utf8'))
+      if (typeof m?.at === 'number' && typeof m?.version === 'number' && (!best || m.at > best.at)) best = { at: m.at, version: m.version }
+    } catch { /* 没恢复过 */ }
+  }
+  return best
+}
+
+/** 点掉提示:删标记(坏文件与 .bak 都留着)。 */
+export async function clearRecoveryNotice(files: string[]): Promise<void> {
+  await Promise.all(files.map((f) => rm(recoveryMarkerOf(f), { force: true })))
 }
