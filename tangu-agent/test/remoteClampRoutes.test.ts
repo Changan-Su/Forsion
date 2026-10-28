@@ -145,6 +145,18 @@ describe('会话路由', () => {
     const again = await send('POST', `/agent/sessions/${remote.body.session.id}/branch`, { message_id: 'b2m' });
     expect(again.body.session.agent_config.remoteOrigin).toMatchObject({ via: 'tunnel' });
   });
+
+  it('分支:fork_message_id 单独给 = 复制到 message_id、分叉点记在 fork_message_id(编辑重发留旧版本);不给 = 两者同一条', async () => {
+    await addSession('E1', {});
+    await query(`INSERT INTO chat_messages (id, session_id, role, content, timestamp) VALUES ('e1', 'E1', 'user', 'q1', 1), ('e2', 'E1', 'model', 'a1', 2), ('e3', 'E1', 'user', 'q2', 3), ('e4', 'E1', 'model', 'a2', 4)`);
+    const keep = await send('POST', '/agent/sessions/E1/branch', { message_id: 'e4', fork_message_id: 'e2', title: 'Earlier version · E1' });
+    expect(keep.status).toBe(200);
+    expect(keep.body.copied).toBe(4);
+    expect(keep.body.session).toMatchObject({ parent_session_id: 'E1', fork_message_id: 'e2', title: 'Earlier version · E1' });
+    const plain = await send('POST', '/agent/sessions/E1/branch', { message_id: 'e2' });
+    expect(plain.body.copied).toBe(2);
+    expect(plain.body.session.fork_message_id).toBe('e2');
+  });
 });
 
 describe('Muse TODO 注入', () => {

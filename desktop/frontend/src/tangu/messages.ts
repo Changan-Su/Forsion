@@ -43,6 +43,8 @@ registerMessages({
   'sidebar.ws.rename': { zh: '重命名项目', en: 'Rename project' },
   'sidebar.ws.remove': { zh: '移除项目', en: 'Remove project' },
   'app.truncateFail': { zh: '截断消息失败：{e}', en: 'Failed to truncate messages: {e}' },
+  'chat.oldVersion': { zh: '旧版本 · {title}', en: 'Earlier version · {title}' },
+  'app.keepOldFail': { zh: '没能保存原来这一版，这次没改：{e}', en: 'Could not keep the current version, so nothing was changed: {e}' },
   'search.jumpOutOfWindow': { zh: '命中的消息在更早的历史里，已打开会话但没能定位到它', en: 'The matched message is further back in history — opened the chat but could not scroll to it' },
   'rewind.busy': { zh: '运行中无法回退，请先停止当前运行', en: 'Cannot rewind while a run is in progress — stop it first' },
   'rewind.noTime': { zh: '这条消息没有时间戳，定位不到回退点', en: 'This message has no timestamp, so there is no point to rewind to' },

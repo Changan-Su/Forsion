@@ -222,11 +222,12 @@ export const updateSession = (
 export const deleteSession = (t: EngineTarget, id: string) =>
   requestCap<{ ok: boolean }>(t, 'hardDeleteSession', `/agent/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' })
 
-/** 从某条消息(含)处分支出新会话:继承到该点为止的历史(区别于空的新会话)。返回新会话。 */
-export const branchSession = (t: EngineTarget, sessionId: string, messageId: string, title?: string) =>
+/** 从某条消息(含)处分支出新会话:继承到该点为止的历史(区别于空的新会话)。返回新会话。
+ *  forkMessageId:分叉点另记在哪条上(缺省 = messageId)。编辑重发留旧版本时复制到最后一条、分叉点在被改那条之前;旧引擎不认这个参数,分叉点落在 messageId 上。 */
+export const branchSession = (t: EngineTarget, sessionId: string, messageId: string, title?: string, forkMessageId?: string) =>
   request<{ session: SessionRecord; copied: number }>(
     t, `/agent/sessions/${encodeURIComponent(sessionId)}/branch`,
-    { method: 'POST', body: JSON.stringify({ message_id: messageId, ...(title ? { title } : {}) }) },
+    { method: 'POST', body: JSON.stringify({ message_id: messageId, ...(title ? { title } : {}), ...(forkMessageId ? { fork_message_id: forkMessageId } : {}) }) },
   ).then((r) => r.session)
 
 /** 存下来的顺便问(挂在某条消息上;引擎 chat_asides)。 */

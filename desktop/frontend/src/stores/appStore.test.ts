@@ -638,6 +638,7 @@ const createSessionMock = vi.hoisted(() => vi.fn())
 const startRunMock = vi.hoisted(() => vi.fn())
 const restoreCpMock = vi.hoisted(() => vi.fn())
 const deleteMsgsMock = vi.hoisted(() => vi.fn())
+const branchMock = vi.hoisted(() => vi.fn())
 const updateSessionMock = vi.hoisted(() => vi.fn((..._a: unknown[]) => Promise.resolve({})))
 const patchConfigMock = vi.hoisted(() => vi.fn((..._a: unknown[]) => Promise.resolve({})))
 vi.mock('../services/backendService', async (orig) => ({
@@ -649,6 +650,7 @@ vi.mock('../services/backendService', async (orig) => ({
   patchSessionConfig: (...a: unknown[]) => patchConfigMock(...a),
   restoreCheckpoint: (...a: unknown[]) => restoreCpMock(...a),
   deleteMessages: (...a: unknown[]) => deleteMsgsMock(...a),
+  branchSession: (...a: unknown[]) => branchMock(...a),
 }))
 const resolveApprovalMock = vi.hoisted(() => vi.fn())
 const resolveInquiryMock = vi.hoisted(() => vi.fn())
@@ -1170,6 +1172,68 @@ describe('appStore.rewindTo', () => {
     await useApp.getState().rewindTo('u2', 'both', 's1')
     expect(restoreCpMock).not.toHaveBeenCalled()
     expect(deleteMsgsMock).not.toHaveBeenCalled()
+  })
+})
+
+// 编辑重发 / 重新生成 / retry 删之前先把整份对话留成一支「旧版本」分支(方案 编辑重发分支与编辑框方案_2026-10-28 ①):
+// 从前直接删,旧回答和后面几轮从库里没了,画布画不出分支。分叉点在被改那条之前;复制失败就不改。
+describe('编辑重发 / 重新生成留旧版本', () => {
+  const msgs = (): UiMessage[] => ([
+    { id: 'u1', role: 'user', content: '第一问', status: 'done', timestamp: 100 },
+    { id: 'a1', role: 'assistant', content: '答一', status: 'done', timestamp: 110 },
+    { id: 'u2', role: 'user', content: '第二问', status: 'done', timestamp: 200 },
+    { id: 'a2', role: 'assistant', content: '答二', status: 'done', timestamp: 210 },
+  ])
+  const sendSpy = vi.fn(async () => true)
+  beforeEach(() => {
+    useApp.setState(initial, true)
+    useApp.setState({
+      tr: ((k: string, v?: Record<string, string>) => (v?.title ? `${k}:${v.title}` : k)) as AppState['tr'],
+      toast: () => {}, activeId: 's1', runningBySession: {},
+      messagesBySession: { s1: msgs() },
+      sessions: [{ id: 's1', title: '离线同步', created_at: '', updated_at: '' } as SessionRecord],
+      send: sendSpy as unknown as AppState['send'],
+    })
+    deleteMsgsMock.mockReset(); branchMock.mockReset(); sendSpy.mockClear()
+    deleteMsgsMock.mockResolvedValue({ ok: true, deleted: 2 })
+    branchMock.mockResolvedValue({ id: 'v1', title: 'chat.oldVersion:离线同步', parent_session_id: 's1', fork_message_id: 'a1', created_at: '', updated_at: '' })
+  })
+  const flush = () => new Promise((r) => setTimeout(r, 0))
+
+  it('重新生成:先复制到最后一条、分叉点在上一条回答,再删、再重发;旧那支进会话列表、不切过去', async () => {
+    useApp.getState().regenerate('a2', 's1')
+    await flush(); await flush()
+    expect(branchMock.mock.calls[0]?.slice(1)).toEqual(['s1', 'a2', 'chat.oldVersion:离线同步', 'a1'])
+    expect(branchMock.mock.invocationCallOrder[0]).toBeLessThan(deleteMsgsMock.mock.invocationCallOrder[0])
+    expect(deleteMsgsMock.mock.calls[0]?.[2]).toEqual(['u2', 'a2'])
+    expect(sendSpy).toHaveBeenCalledTimes(1)
+    expect(useApp.getState().sessions.map((x) => x.id)).toEqual(['v1', 's1'])
+    expect(useApp.getState().activeId).toBe('s1')
+  })
+
+  it('改第一句:分叉点就是它自己(旧那支在画布上成并排的第二棵)', async () => {
+    useApp.getState().editUserMessage('u1', '改过的第一问', 's1')
+    await flush(); await flush()
+    expect(branchMock.mock.calls[0]?.slice(1)).toEqual(['s1', 'a2', 'chat.oldVersion:离线同步', 'u1'])
+    expect(deleteMsgsMock.mock.calls[0]?.[2]).toEqual(['u1', 'a1', 'u2', 'a2'])
+  })
+
+  it('复制失败:不删、不重发,对话原样', async () => {
+    branchMock.mockRejectedValue(new Error('engine down'))
+    useApp.getState().regenerate('a2', 's1')
+    await flush(); await flush()
+    expect(deleteMsgsMock).not.toHaveBeenCalled()
+    expect(sendSpy).not.toHaveBeenCalled()
+    expect(useApp.getState().messagesBySession.s1).toHaveLength(4)
+  })
+
+  it('被删的里面没有成形的回答(失败后重试):不留分支,照旧删了重发', async () => {
+    useApp.setState({ messagesBySession: { s1: [...msgs().slice(0, 3), { id: 'e1', role: 'assistant', content: '', status: 'error', error: 'boom', timestamp: 220 }] } })
+    useApp.getState().editUserMessage('u2', '再问一次', 's1')
+    await flush(); await flush()
+    expect(branchMock).not.toHaveBeenCalled()
+    expect(deleteMsgsMock).toHaveBeenCalledTimes(1)
+    expect(sendSpy).toHaveBeenCalledTimes(1)
   })
 })
 
