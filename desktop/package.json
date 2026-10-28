@@ -346,6 +346,7 @@
     "check:sessionmode": "node scripts/session-mode.check.cjs",
     "check:orbitside": "node scripts/orbitside.check.cjs",
     "check:sidewidth": "node scripts/side-width.check.cjs",
+    "check:mainsplitwidth": "node scripts/main-split-sidewidth.electron.cjs",
     "check:firstclick": "node scripts/first-click.check.cjs",
     "check:firstenter": "node scripts/first-enter.check.cjs",
     "fix:zhpunct": "node scripts/zh-punct.codemod.cjs",
