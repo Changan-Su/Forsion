@@ -119,6 +119,39 @@ describe('review fixes', () => {
   });
 });
 
+describe('误报语料(magpie 第三轮 18)', () => {
+  const ALL = { secrets: true, personal: true };
+  it.each(['tokenizer=cl100k_base', 'next_page_token=AbC123xyz789', 'csrf_token=Ab12Cd34Ef56', 'Started getty@tty1.service.', 'use x@pytest.fixture here', '{"size": 15728640000}', 'wrote 13800138000 bytes'])('原样:%s', (t) => {
+    expect(findSensitive(t, ALL)).toEqual([]);
+  });
+  it.each(['DB_PASSWORD=Xk9vQ2mLp7Rt', 'SECRET_KEY=Qw3rTy7UiOp9', 'JWT_SECRET=a1b2c3d4e5f6', 'refresh_token: Zq81Lm0Pp7Yt', '电话: 13800138000', 'mail ops-oncall@forsion-demo.net'])('遮掉:%s', (t) => {
+    expect(findSensitive(t, ALL).length).toBe(1);
+  });
+});
+
+describe('出口', () => {
+  it('直连本机的模型(Ollama)不出这台电脑:原样发', async () => {
+    let sent: any;
+    const llm = { streamProviderCompletion: async (o: StreamOpts) => { sent = o.payload; return { content: '', reasoning: '', toolCalls: [], usage: { prompt_tokens: 1, completion_tokens: 1 } }; } } as unknown as LlmBrain;
+    await withOutboundMasking(llm, () => ON).streamProviderCompletion({ apiKey: '', baseUrl: 'http://localhost:11434/v1', payload: { __tangu_direct: true, messages: [{ role: 'user', content: ENV }] } } as StreamOpts);
+    expect(JSON.stringify(sent)).toContain(KEY);
+    await withOutboundMasking(llm, () => ON).streamProviderCompletion({ apiKey: '', baseUrl: 'http://localhost:3001/api', payload: { messages: [{ role: 'user', content: ENV }] } } as StreamOpts);
+    expect(JSON.stringify(sent)).not.toContain(KEY); // 本机跑的 Forsion 云端会再转给上游:照遮
+  });
+  it('行内补全(FIM):前后文先遮,补出来的换回', async () => {
+    let got: any;
+    const llm = {
+      streamProviderCompletion: async () => ({}) as any,
+      fimCompletion: async (o: any) => { got = o; const ph = /\{\{API_KEY_[a-z2-7]{8}\}\}/.exec(o.prefix)![0]; o.onToken?.(`use ${ph.slice(0, 5)}`); o.onToken?.(`${ph.slice(5)} ok`); return { content: `use ${ph} ok`, reasoning: '', toolCalls: [], usage: { prompt_tokens: 1, completion_tokens: 1 } }; },
+    } as unknown as LlmBrain;
+    const toks: string[] = [];
+    const r = await withOutboundMasking(llm, () => ON).fimCompletion!({ modelId: 'm', prefix: `const k = "${KEY}";\n`, suffix: '', onToken: (d) => toks.push(d) });
+    expect(got.prefix).not.toContain(KEY);
+    expect(r.content).toBe(`use ${KEY} ok`);
+    expect(toks.join('')).toBe(`use ${KEY} ok`);
+  });
+});
+
 describe('withOutboundMasking', () => {
   const fake = (capture: (o: StreamOpts) => void, reply: string, args: string): LlmBrain => ({
     resolveModelAndKey: async () => ({}) as any,

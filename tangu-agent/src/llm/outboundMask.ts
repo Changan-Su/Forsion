@@ -14,7 +14,8 @@ import { createHmac, randomBytes } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { LlmError, type ToolCall } from '../core/types.js';
-import type { LlmBrain, StreamOpts, StreamResult } from '../seams/cloudBrain.js';
+import type { FimCompletionOpts, LlmBrain, StreamOpts, StreamResult } from '../seams/cloudBrain.js';
+import { DIRECT_MARK } from './openaiCompat.js';
 import { getRawSection } from '../core/config.js';
 import { tanguHome } from '../core/tanguHome.js';
 
@@ -93,15 +94,18 @@ const RULES: Rule[] = [
   // user:password@host 里的 password(Redis 那种 :password@host 也算)
   { kind: 'PASSWORD', re: R(`[A-Za-z][A-Za-z0-9+.-]{0,30}://[^\\s:@/?#"'<>]{0,256}:([^\\s@/?#"'<>]{3,256})@`), ok: notAVariable },
   // .env / 配置里的 DB_PASSWORD=… / "apiKey": "…"
-  { kind: 'SECRET', re: R(`[A-Za-z0-9_.-]{0,40}(?:${SECRET_NAMES})[A-Za-z0-9_.-]{0,40}${QUOTE}[ \\t]*[:=][ \\t]*${QUOTE}(${SECRET_CH}{8,512})`, 'gi'), ok: secretValue },
+  { kind: 'SECRET', re: R(`[A-Za-z0-9_.-]{0,40}(?:${SECRET_NAMES})[A-Za-z0-9_.-]{0,40}${QUOTE}[ \\t]*[:=][ \\t]*${QUOTE}(${SECRET_CH}{8,512})`, 'gi'),
+    ok: (v, s, at) => secretValue(v) && secretName(/([A-Za-z0-9_.-]+)["'`]?[ \t]*[:=][ \t]*["'`]?$/.exec(s.slice(Math.max(0, at - 90), at))?.[1] || '') },
   // 中文里说出来的:密码：786kih / 密钥为 …
   { kind: 'PASSWORD', re: R(`(?:密码|密碼|口令)[ \\t]*(?:[:：=]|[为為是][ \\t]*[:：]?)[ \\t]*["'“「]?(${SECRET_CH}{4,63})`), ok: notAVariable },
   { kind: 'SECRET', re: R(`(?:密钥|密鑰|令牌|金鑰)[ \\t]*(?:[:：=]|[为為是][ \\t]*[:：]?)[ \\t]*["'“「]?(${SECRET_CH}{6,})`), ok: (v) => notAVariable(v) && (hasLetter(v) || v.length >= 6) },
 
-  { kind: 'EMAIL', re: R('[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\\.[A-Za-z0-9-]{1,63}){0,8}\\.[A-Za-z]{2,24}'), bound: ALNUM + '_%+-', ok: (v) => !/^git@/i.test(v) && !FILE_EXT.test(v), personal: true },
+  { kind: 'EMAIL', re: R('[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\\.[A-Za-z0-9-]{1,63}){0,8}\\.[A-Za-z]{2,24}'), bound: ALNUM + '_%+-', ok: (v) => !/^git@/i.test(v) && !FILE_EXT.test(v) && !NOT_TLD.test(v), personal: true },
   { kind: 'ID_CARD', re: R('[1-9]\\d{5}(?:18|19|20)\\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\\d|3[01])\\d{3}[\\dXx]'), bound: ALNUM, ok: chineseId, personal: true },
   // 11 位 1[3-9] 开头既是手机号也是订单号的样子:前面紧挨着 id / 订单号 之类就不算
-  { kind: 'PHONE', re: R('(?:\\+?86[- ]?)?1[3-9]\\d{9}'), bound: ALNUM, ok: (_v, s, at) => !/(?:id|order|no\.?|#|号)[\s:：=_-]*$/i.test(s.slice(Math.max(0, at - 12), at)), personal: true },
+  { kind: 'PHONE', re: R('(?:\\+?86[- ]?)?1[3-9]\\d{9}'), bound: ALNUM, ok: (v, s, at) => !/(?:id|order|no\.?|#|号)[\s:：=_-]*$/i.test(s.slice(Math.max(0, at - 12), at))
+    // JSON 里不带引号的数字(大小 / 时间戳)、后面跟着字节单位的,是数不是手机号
+    && !/"[ \t]*:[ \t]*$/.test(s.slice(Math.max(0, at - 4), at)) && !/^[ \t]*(?:bytes?|B|KB|MB|GB|ms)\b/.test(s.slice(at + v.length, at + v.length + 8)), personal: true },
   { kind: 'BANK_CARD', re: R('[3-6]\\d{3}(?:[ -]?\\d{4}){2,3}(?:[ -]?\\d{1,3})?'), bound: ALNUM, ok: luhn, personal: true },
 ];
 
@@ -109,11 +113,15 @@ interface Span { start: number; end: number; kind: string; value: string }
 const PERSONAL_KINDS = new Set(RULES.filter((r) => r.personal).map((r) => r.kind));
 /** JSON 叶子的字段名是密钥的名字(password / apiKey / client_secret / access_token…):解析成叶子后规则看不到「名 = 值」的上下文,
  *  按字段名认。分页游标之类(next_page_token、cursor)不算。 */
-const SECRET_FIELD = /(?:password|passwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|credential)s?$/i;
-const NOT_SECRET_FIELD = /page|cursor|csrf|count|limit|type|name|id$/i;
+const SECRET_FIELD = /(?:password|passwd|pwd|passphrase|secret|token|credential|api[_-]?key|access[_-]?key|private[_-]?key|(?:^|[_.-])key)s?$/i;
+const NOT_SECRET_FIELD = /page|cursor|csrf|xsrf|continuation/i;
+/** 名字以密钥类词结尾(DB_PASSWORD、SECRET_KEY、client_secret)才算;tokenizer、next_page_token、csrf_token 不算。 */
+const secretName = (name: string): boolean => SECRET_FIELD.test(name) && !NOT_SECRET_FIELD.test(name);
+/** 长得像邮箱的 systemd 单元(getty@tty1.service)、pytest fixture(x@pytest.fixture)、保留域名。 */
+const NOT_TLD = /\.(?:service|socket|target|mount|automount|timer|slice|scope|device|swap|path|fixture|local|localhost|internal|invalid|test|example)$/i;
 function leafSpans(text: string, opts: Pick<MaskSettings, 'secrets' | 'personal'>, field?: string): Span[] {
   const spans = findSensitive(text, opts);
-  if (field && opts.secrets && !spans.length && text.length >= 8 && text.length <= 512 && SECRET_FIELD.test(field) && !NOT_SECRET_FIELD.test(field) && secretValue(text)) {
+  if (field && opts.secrets && !spans.length && text.length >= 8 && text.length <= 512 && secretName(field) && secretValue(text)) {
     spans.push({ start: 0, end: text.length, kind: 'SECRET', value: text });
   }
   return spans;
@@ -392,12 +400,32 @@ export const MASKING_SECTION = '## Masked values\n' +
 export const MASKED_FROM = '__tangu_masked_from';
 export const MASKING_BLOCKED = 'masking_blocked';
 
+/** 直连本机的模型(Ollama / LM Studio 在 localhost):不出这台电脑,不用遮。Forsion 云端在本机跑(开发时)不算 —— 它会再转给上游。 */
+export const isLoopbackUrl = (u?: string): boolean => /^https?:\/\/(?:localhost|127(?:\.\d{1,3}){3}|\[::1\])(?::\d+)?(?:[/?#]|$)/i.test(u || '');
+export const staysOnMachine = (direct: unknown, baseUrl?: string): boolean => !!direct && isLoopbackUrl(baseUrl);
+
 export function withOutboundMasking(llm: LlmBrain, settings: () => MaskSettings = maskSettings): LlmBrain {
   return {
     ...llm,
+    // 行内补全(FIM):前后文里的密钥同样先遮,补出来的再换回
+    ...(llm.fimCompletion ? { fimCompletion: async (opts: FimCompletionOpts): Promise<StreamResult> => {
+      const s = settings();
+      if (!s.secrets && !s.personal) return llm.fimCompletion!(opts);
+      let masked: MaskResult;
+      try { masked = maskPayload({ prefix: opts.prefix, suffix: opts.suffix ?? '' }, s); }
+      catch (e) { throw new LlmError(400, `${MASKING_FAILED}: ${e instanceof Error ? e.message : String(e)}`); }
+      if (masked.hits.length && s.action === 'block') throw new LlmError(400, `${MASKING_BLOCKED}: ${masked.hits.length} ${masked.hits[0].kind}`);
+      if (s.action === 'warn' || !masked.map.size) return llm.fimCompletion!(opts);
+      const text = createStreamRestorer(masked.map);
+      const res = await llm.fimCompletion!({ ...opts, prefix: masked.payload.prefix, ...(opts.suffix != null ? { suffix: masked.payload.suffix } : {}),
+        onToken: opts.onToken && ((d) => { const r = text.push(d); if (r) opts.onToken!(r); }) });
+      const tail = text.flush();
+      if (tail) opts.onToken?.(tail);
+      return { ...res, content: restoreText(res.content, masked.map) };
+    } } : {}),
     streamProviderCompletion: async (opts: StreamOpts): Promise<StreamResult> => {
       const s = settings();
-      if (!s.secrets && !s.personal) return llm.streamProviderCompletion(opts);
+      if ((!s.secrets && !s.personal) || staysOnMachine(opts.payload?.[DIRECT_MARK], opts.baseUrl)) return llm.streamProviderCompletion(opts);
       let masked: MaskResult;
       try {
         masked = maskPayload(opts.payload, s);

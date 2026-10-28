@@ -13,10 +13,10 @@ import { v4 as uuidv4 } from 'uuid';
 import { deps } from '../seams/runtime.js';
 import { resolveProfile } from '../seams/appProfile.js';
 import type { StreamOpts, BuildPayloadOpts } from '../seams/cloudBrain.js';
-import { maskSpans, maskSettings, MASKING_SECTION } from '../llm/outboundMask.js';
+import { maskSpans, maskSettings, MASKING_SECTION, staysOnMachine } from '../llm/outboundMask.js';
 import { LlmError, type ThinkingLevel, type ChatMessage, type ToolCall } from '../core/types.js';
 import { clampThinkingLevel, resolveModelCapability } from '../llm/modelCapabilities.js';
-import { PROTOCOL_MARK } from '../llm/openaiCompat.js';
+import { DIRECT_MARK, PROTOCOL_MARK } from '../llm/openaiCompat.js';
 import { realpathSync } from 'node:fs';
 import { publish, drain, cleanup } from './eventBus.js';
 import { makeUiSettingsUpdater } from './uiAck.js';
@@ -1345,6 +1345,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       ac.signal, // 停止后不再空转退避(resolve 接缝本身没有 signal 位,只能在重试层兜)
     );
     const { model, baseUrl, apiModelId } = resolvedModel;
+    // 本机模型(Ollama 等)不出这台电脑:不遮,界面也别说「遮住了」(outboundMask.staysOnMachine)
+    const maskSkipped = staysOnMachine((model as any)?.[DIRECT_MARK], baseUrl);
     let apiKey = resolvedModel.apiKey; // 订阅登录的 token 可能在 run 中途过期 → 下面的重试圈会续期后换掉它
     let credsRefreshedAt = 0;
     // 分步落库 / 跨 run 回放共用的模型身份键(两侧必须是**同一个表达式**,否则永远对不上)。
@@ -1571,7 +1573,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 应用 / 窗口引用(`[[app://…]]` / `[[window://…]]`):紧跟输出风格段(它是「标识符进反引号」的例外);通道会话是纯文本,不注入。
     if (!channelSession) systemParts.push(APP_REF_SECTION);
     // 发给模型前脱敏开着:告诉模型占位符能直接用(否则真模型会拒绝「看不到的 key」,live 台架 10-28 实测)。随设置静态,不碎前缀缓存。
-    { const ms = maskSettings(); if (ms.action === 'mask' && (ms.secrets || ms.personal)) systemParts.push(MASKING_SECTION); }
+    { const ms = maskSettings(); if (ms.action === 'mask' && (ms.secrets || ms.personal) && !maskSkipped) systemParts.push(MASKING_SECTION); }
     // 持久化契约:计划模式不注入(只读工具集与「carry through implementation」矛盾,且计划模式有自己的流程段);
     // chat 不注入(PRESET_TABLE.persistence=false:一轮=一次发言,Conversation Contract 反向要求「答完就停」)。
     if (!planMode && ps.persistence) systemParts.push(PERSISTENCE_SECTION);
@@ -2552,7 +2554,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       // 出错结果不含数据,照常落库。占位查询不走 ctx 门禁(见 declaredPersistPlaceholder)。
       const stored = (!result.isError && declaredPersistPlaceholder(result.name)) || capped;
       // 发给模型前会被遮住的值在哪(位置 + 占位符,不含原值):界面在工具组上写「遮住 N 个值」并给这些值垫底色
-      const masked = [
+      const masked = maskSkipped ? [] : [
         ...maskSpans(call.function.arguments || '').map((m) => ({ ...m, at: 'args' as const })),
         ...maskSpans(stored).map((m) => ({ ...m, at: 'result' as const })),
       ];
