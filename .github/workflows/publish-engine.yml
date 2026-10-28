@@ -37,13 +37,13 @@ jobs:
       run:
         working-directory: tangu-agent
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # actions/checkout@v4
         with:
           fetch-depth: 0 # 要找到它所基于的那个桌面 tag
       # ⚠️ 这里刻意不设 registry-url:setup-node 会往 .npmrc 写占位令牌,npm 见到「已配令牌」就不走 OIDC(同 check-unit.yml)。
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # actions/setup-node@v4
         with:
-          node-version: 24 # 与桌面安装包自带的 Node 同一大版本;trusted publishing 要 npm ≥ 11.5.1 + Node ≥ 22.14
+          node-version: 24.22.1 # 与桌面安装包自带的 Node 同一大版本;trusted publishing 要 npm ≥ 11.5.1 + Node ≥ 22.14
 
       - name: Independent release policy tests
         run: node --test scripts/engine-release-gate.test.mjs
@@ -52,8 +52,13 @@ jobs:
         id: gate
         run: node scripts/engine-release-gate.mjs "$GITHUB_REF_NAME" "$GITHUB_EVENT_NAME"
 
-      # 与 build-desktop 的 test 门禁同一条安装命令(那边一直用 npm install,这里不另立一套)
-      - run: npm install --no-audit --no-fund
+      - run: npm ci --no-audit --no-fund
+      - name: Validate the exact candidate before signing
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          npm run typecheck
+          npm test
+          git diff --exit-code -- package.json package-lock.json
       - run: npm run build
 
       - name: Sign and pack
@@ -70,11 +75,13 @@ jobs:
       # 用脚本当场生成的测试钥匙;发版私钥与钉死的公钥对不对得上,上一步签完的回验已经核过。
       - name: End-to-end check
         run: node scripts/engine-overlay.e2e.mjs
+      - name: Record signed package materials
+        run: node ../desktop/scripts/release-materials.cjs .engine-pack
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # actions/upload-artifact@v4
         with:
           name: forsion-tangu-agent-npm
-          path: tangu-agent/.engine-pack/forsion-tangu-agent-*.tgz
+          path: tangu-agent/.engine-pack/*
           if-no-files-found: error
           include-hidden-files: true # .engine-pack is intentionally hidden; only the signed tgz is uploaded.
 

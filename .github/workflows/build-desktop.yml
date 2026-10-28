@@ -22,7 +22,7 @@ on:
       - 'v*'
 
 permissions:
-  contents: write   # 让 GITHUB_TOKEN 能创建 Release / 上传资产
+  contents: read
 
 jobs:
   # 门禁:类型检查 + 单测。失败则 release 不执行(build 与它并行,不等它)。
@@ -32,12 +32,12 @@ jobs:
       run:
         working-directory: tangu-agent
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # actions/checkout@v4
         with:
           fetch-depth: 0 # Release identity checks need previous desktop / engine tags.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24.22.1
           cache: npm
           cache-dependency-path: |
             tangu-agent/package-lock.json
@@ -56,7 +56,7 @@ jobs:
           if [ "$RELEASE_EVENT" = push ]; then candidate="$DESKTOP_REF"; fi
           node scripts/engine-release-gate.mjs --desktop-release "$candidate"
 
-      - run: npm install --no-audit --no-fund
+      - run: npm ci --no-audit --no-fund
       - run: npm run typecheck
       - run: npm test
 
@@ -79,7 +79,7 @@ jobs:
       - name: Desktop unit tests
         working-directory: desktop
         run: |
-          npm install --no-audit --no-fund
+          npm ci --no-audit --no-fund
           npm run typecheck
           npm test
 
@@ -88,6 +88,9 @@ jobs:
     name: ${{ matrix.os }} (${{ matrix.distribution }})
     runs-on: ${{ matrix.os }}
     env:
+      FORSION_RELEASE_BUILD: '1'
+      TANGU_REQUIRE_NODE: '1'
+      TANGU_REQUIRE_PYTHON: '1'
       FORSION_BUNDLE_EXTEND: ${{ matrix.bundleExtend }}
     strategy:
       fail-fast: false
@@ -107,12 +110,12 @@ jobs:
             ebargs: --mac --arm64    #   { os: macos-13, ebargs: "--mac --x64" }
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # actions/checkout@v4
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24.22.1
           cache: npm
           cache-dependency-path: |
             tangu-agent/package-lock.json
@@ -122,7 +125,7 @@ jobs:
       - name: Build backend
         working-directory: tangu-agent
         run: |
-          npm install --no-audit --no-fund
+          npm ci --no-audit --no-fund
           npm run build
 
       # ② 桌面壳(renderer/main/preload)→ out/;先出 unit-web-dist(设备页静态壳)——
@@ -134,7 +137,7 @@ jobs:
         #    (2026-08-30 被它误导过两轮)。bash 的 -e 让它当场红在正确的位置。
         shell: bash
         run: |
-          npm install --no-audit --no-fund
+          npm ci --no-audit --no-fund
           npm run build:unitweb
           npm run build
 
@@ -189,6 +192,9 @@ jobs:
         run: node node_modules/@forsion/tangu-computer-use/scripts/keychain-free-install.check.mjs
 
       # GITHUB_TOKEN:beforeBuild 的 fetch-python 调 GitHub API 拉内置 Python,未鉴权在 runner 上会 403 限流。
+      - name: Verify frozen release inputs
+        run: git diff --exit-code -- desktop/package.json desktop/package-lock.json tangu-agent/package.json tangu-agent/package-lock.json
+
       - name: Package installer
         working-directory: desktop
         env:
@@ -291,14 +297,18 @@ jobs:
 
       - name: Upload packaged cloud acceptance evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # actions/upload-artifact@v4
         with:
           name: penzor-acceptance-${{ matrix.os }}-${{ matrix.distribution }}
           path: desktop/outputs/penzor-packaged/
           if-no-files-found: warn
 
+      - name: Record platform build materials
+        shell: bash
+        run: node desktop/scripts/release-materials.cjs desktop/dist "build-${{ runner.os }}-${{ matrix.distribution }}"
+
       - name: Upload installers
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # actions/upload-artifact@v4
         with:
           name: forsion-${{ matrix.os }}-${{ matrix.distribution }}
           path: |
@@ -308,6 +318,8 @@ jobs:
             desktop/dist/latest*.yml
             desktop/dist/beta*.yml
             desktop/dist/*.blockmap
+            desktop/dist/build-*-materials.json
+            desktop/dist/build-*-sbom.json
           if-no-files-found: ignore
 
   # Android APK(Capacitor):随桌面 release 顺便出包。
@@ -317,15 +329,15 @@ jobs:
   build-android:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # actions/checkout@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24.22.1
           cache: npm
           cache-dependency-path: |
             desktop/package-lock.json
             mobile/package-lock.json
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 21
@@ -334,7 +346,7 @@ jobs:
       # (其 postinstall 顺带 link-lcl + 自托管 excalidraw 字体);web 云模块零外部依赖,无需装 web。
       - name: Install desktop deps (aliased renderer)
         working-directory: desktop
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       # ⚠️ 唯一覆盖 mobile/web shim 的类型闸。vite build 用 esbuild 剥类型、**完全不做类型检查**,
       # 所以「desktop 删了个 store 字段 / 给组件加了必填 prop / 给 AmadeusApi 加了方法」这类改动
@@ -344,7 +356,7 @@ jobs:
       - name: Typecheck mobile + web shims
         working-directory: mobile
         run: |
-          npm install --no-audit --no-fund
+          npm ci --no-audit --no-fund
           npm run typecheck
 
       # P1-K8 手机 Unit 身份与原生中继的纯逻辑单测(node + esbuild,不用 build):中继 URL 语法(与 JVM 共用用例表)、
@@ -366,7 +378,7 @@ jobs:
         working-directory: mobile
         run: |
           npm run build
-          npx cap sync android
+          npm run sync:android
 
       # 真把产物在 headless chrome 里跑一遍(登录闸已用假 token + 路由桩越过,否则只测到登录页)。
       # typecheck 挡静态错,这台挡运行期才炸的:v2.7.1 那次三平台桌面包全绿、CI 全绿,
@@ -428,16 +440,26 @@ jobs:
             cp app/build/outputs/apk/debug/app-debug.apk "Forsion-Tangu-${VN}-android-debug.apk"
           fi
 
+      - name: Record Android build materials
+        run: node desktop/scripts/release-materials.cjs mobile/android build-android
+
       - name: Upload APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # actions/upload-artifact@v4
         with:
           name: forsion-android
-          path: mobile/android/Forsion-Tangu-*.apk
+          path: |
+            mobile/android/Forsion-Tangu-*.apk
+            mobile/android/build-android-materials.json
+            mobile/android/build-android-sbom.json
 
   # 仅在打 v* tag 时:收集三平台 × 两种桌面发行版(+APK)→ 创建/更新对应 Release 并附件。
   # APK 是「顺便」:build-android 失败不挡桌面发版(always + 只硬依赖 test、build 成功)。
   # test 与 build 并行,这里是测试唯一的闸:test 不绿,装好的包一件都不发。
   release:
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     needs: [test, build, build-android]
     if: always() && startsWith(github.ref, 'refs/tags/v') && needs.test.result == 'success' && needs.build.result == 'success'
     runs-on: ubuntu-latest
@@ -445,13 +467,20 @@ jobs:
       group: desktop-github-release
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # actions/checkout@v4
       - name: Download all installers
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # actions/download-artifact@v4
         with:
           path: artifacts
           pattern: forsion-*
           merge-multiple: true   # 六个桌面 artifact + APK;安装包和 feed 名均区分发行版,不互相覆盖
+
+      - name: Record release materials
+        run: node desktop/scripts/release-materials.cjs artifacts
+      - name: Attest release artifacts
+        uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
+        with:
+          subject-path: artifacts/*
 
       - name: Create / update GitHub Release
         env:

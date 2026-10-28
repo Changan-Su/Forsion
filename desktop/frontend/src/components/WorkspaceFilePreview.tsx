@@ -19,6 +19,7 @@ import {
 } from '../services/fileKinds'
 import { DiffView } from './DiffView'
 import { useI18n } from '../i18n'
+import { loadWorkbook } from '../services/workbookPreview'
 import { Webview } from '../builtins/browserView'
 import { BROWSER_PARTITION } from '../../../shared/browser'
 // pdf.js worker(?url 走 Vite 资源,单独 asset);PDF 渲染到 canvas,不依赖 Electron PDF 插件。
@@ -105,10 +106,10 @@ export const cm = (props: { value: string; fileName?: string; language?: string;
   <div className="wsfile-cmwrap"><Suspense fallback={<Spinner />}><CodeView {...props} /></Suspense></div>
 )
 
-export const OfficeFail: React.FC<{ t: (k: string, v?: Record<string, unknown>) => string; download?: () => void }> = ({ t, download }) => (
+export const OfficeFail: React.FC<{ t: (k: string, v?: Record<string, unknown>) => string; download?: () => void; workbook?: boolean }> = ({ t, download, workbook }) => (
   <div className="wsfile-center wsfile-fallback">
     <FileWarning size={26} />
-    <div>{t('preview.loadFailed')}</div>
+    <div>{workbook ? t('preview.workbookFailed') : t('preview.loadFailed')}</div>
     {download && <button className="btn ghost sm" onClick={download}><Download size={13} /> {t('preview.download')}</button>}
   </div>
 )
@@ -213,12 +214,8 @@ export const PdfView: React.FC<{ bytes: Uint8Array; download?: () => void }> = (
 
 // ── xlsx / pptx 解析(懒加载重库;浮层与标签页预览共用)──────────────────────────
 export type OfficeRender = { kind: 'xlsx'; sheets: { name: string; html: string }[] } | { kind: 'pptx'; slides: string[] }
-export async function loadOffice(bytes: Uint8Array, kind: 'xlsx' | 'pptx'): Promise<OfficeRender> {
-  if (kind === 'xlsx') {
-    const x: any = await import('xlsx'); const XLSX = x.read ? x : x.default
-    const wb = XLSX.read(bytes, { type: 'array' })
-    return { kind: 'xlsx', sheets: wb.SheetNames.map((name: string) => ({ name, html: XLSX.utils.sheet_to_html(wb.Sheets[name]) })) }
-  }
+export async function loadOffice(bytes: Uint8Array, kind: 'xlsx' | 'pptx', signal?: AbortSignal): Promise<OfficeRender> {
+  if (kind === 'xlsx') return loadWorkbook(bytes, signal)
   const j: any = await import('jszip'); const JSZip = j.loadAsync ? j : (j.default ?? j)
   const zip = await JSZip.loadAsync(bytes)
   const order = (p: string): number => parseInt(p.match(/(\d+)\.xml$/)?.[1] || '0', 10)
@@ -292,14 +289,15 @@ export const WorkspaceFilePreview: React.FC<{ target: PreviewTarget; onClose: ()
     if (!data || (kind !== 'xlsx' && kind !== 'pptx')) { setOffice(null); setOfficeErr(false); return }
     let cancelled = false
     setOffice(null); setOfficeErr(false); setSheetIdx(0)
-    loadOffice(data.bytes, kind)
+    const controller = new AbortController()
+    loadOffice(data.bytes, kind, controller.signal)
       .then((r) => { if (!cancelled) setOffice(r) })
       .catch(() => { if (!cancelled) setOfficeErr(true) })
-    return () => { cancelled = true }
+    return () => { cancelled = true; controller.abort() }
   }, [data, kind])
 
   const officeBody = (): React.ReactNode => {
-    if (officeErr) return <OfficeFail t={t} download={target.download} />
+    if (officeErr) return <OfficeFail t={t} download={target.download} workbook={kind === 'xlsx'} />
     if (!office) return <Spinner />
     if (office.kind === 'xlsx') {
       const cur = office.sheets[sheetIdx] ?? office.sheets[0]
@@ -310,7 +308,7 @@ export const WorkspaceFilePreview: React.FC<{ target: PreviewTarget; onClose: ()
               {office.sheets.map((s, i) => <button key={i} className={i === sheetIdx ? 'active' : ''} onClick={() => setSheetIdx(i)}>{s.name}</button>)}
             </div>
           )}
-          {/* ponytail: SheetJS 输出无脚本受控 HTML,源是用户自己文档,风险可控 */}
+          {/* The worker serializes escaped cell text and permits only http/https/mailto links. */}
           <div className="wsfile-doc wsfile-sheet" dangerouslySetInnerHTML={{ __html: cur?.html ?? '' }} />
         </div>
       )
