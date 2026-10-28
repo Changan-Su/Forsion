@@ -27,6 +27,7 @@ import { listLoadoutTools } from '../tools/toolRegistry.js';
 import { createMemoryRepository, MemoryRepositoryError } from '../services/memoryRepository.js';
 import { createLocalMemoryStore } from '../adapters/standalone/localMemoryBrain.js';
 import { scheduleAgentFilesSync } from '../services/agentFileSync.js';
+import { archiveSoloSessions } from './solo.js';
 import { agentSyncPermission, agentSyncScope, setAgentSyncPermission } from '../services/cloudSyncAccount.js';
 import { loadHarness, readJournal, applyHarnessEdit, peekHarnessCandidates, resolveHarnessCandidate, candidateNeedsUser, candidateAdoptable, HarnessConflict, HarnessCandidateError } from '../agents/harnessStore.js';
 import { renameAgent, AgentRenameError } from '../agents/agentRename.js';
@@ -207,6 +208,10 @@ router.delete('/agent/agents/:slug', authMiddleware, async (req: AuthRequest, re
     const result = req.query.keepFiles === '1' ? await removeAgentKeepFiles(req.params.slug) : { ok: await deleteAgent(req.params.slug) };
     if (!result.ok && req.params.slug === MUSE_AGENT_SLUG) {
       return res.status(400).json({ detail: 'Muse 正在启用中,请先在 设置·后台智能体 关闭 Muse 再删除' });
+    }
+    if (result.ok) {
+      await archiveSoloSessions(req.user!.userId, deps().profile.appId, 'agent', req.params.slug);
+      scheduleAgentFilesSync(req.user!.userId, req.params.slug); // 云端那份现在就删,不等下一轮
     }
     res.json(result);
   } catch (e: any) {

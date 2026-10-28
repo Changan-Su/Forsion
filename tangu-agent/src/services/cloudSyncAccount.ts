@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { agentSyncDir, atomicSyncWrite, assertSyncPath, readSyncBytes } from './agentSyncPaths.js';
 import { join } from 'node:path';
-import { readdirSync } from 'node:fs';
+import { readdirSync, rmdirSync, rmSync } from 'node:fs';
 import { withMemoryDirectoryLock } from './memoryRepository.js';
 import type { AgentFilesBrain } from '../seams/cloudBrain.js';
 import { agentsDir, DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
@@ -177,4 +177,30 @@ export function captureAgentSyncPermission(slug: string, scope: string, shared =
     if (!current.enabled || (shared && !current.shared) || current.revision !== initial.revision) throw new Error('agent sync consent changed');
     agentSyncDir(slug);
   };
+}
+
+/**
+ * 界面 / 工具删掉的 Agent(10-28):目录连同影子、授权一起没了,下次同步会把云端那份当成「别的设备新建的」整份拉回来。
+ * 删之前按账号记一笔 `agents/.cloudsync-deleted/<slug>/<账号>`,同步先把这个账号云端那份删掉(删除胜,和网页删 Agent 一样)再做别的。
+ * 只记真同步过(有影子)、这时还开着同步的账号:关了同步的 Agent,云端那份不归本机管。直接在访达里删文件夹不记,照旧拉回(没有 ≠ 删了)。
+ */
+const REMOVED_DIR = '.cloudsync-deleted';
+const removedDir = (slug: string): string => { agentSyncDir(slug); return assertSyncPath(agentsDir(), join(agentsDir(), REMOVED_DIR, slug)); };
+export function recordAgentRemoval(slug: string): void {
+  let names: string[];
+  try { names = readdirSync(agentSyncDir(slug)); } catch { return; }
+  for (const name of names) {
+    const scope = /^\.cloudsync-([a-f0-9]{64})\.json$/.exec(name)?.[1];
+    if (scope && agentSyncPermission(slug, scope).enabled) atomicSyncWrite(agentsDir(), join(removedDir(slug), scope), String(Date.now()));
+  }
+}
+export function pendingAgentRemovals(scope: string): string[] {
+  let slugs: string[];
+  try { slugs = readdirSync(assertSyncPath(agentsDir(), join(agentsDir(), REMOVED_DIR))); } catch { return []; }
+  return slugs.filter((slug) => { try { return readSyncBytes(agentsDir(), join(removedDir(slug), scope)) !== null; } catch { return false; } });
+}
+export function clearAgentRemoval(slug: string, scope: string): void {
+  const dir = removedDir(slug);
+  rmSync(join(dir, scope), { force: true });
+  try { rmdirSync(dir); } catch { /* 还有别的账号没删完 */ }
 }

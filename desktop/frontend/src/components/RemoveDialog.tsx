@@ -7,7 +7,7 @@ import type { NormalAgentDef } from '../types'
 
 registerMessages({
   'agentRemove.title': { zh: '删除 Agent「{name}」？', en: 'Delete agent "{name}"?' },
-  'agentRemove.msg': { zh: '会从 Agent 名册和侧栏移除，历史私聊保留（只读）。它的记忆与 Library 默认保留在 Tangu 数据目录的 agents/.removed/ 里。', en: 'It is removed from the agent roster and the sidebar; past direct chats are kept (read-only). By default its memory and Library are kept in agents/.removed/ in the Tangu data folder.' },
+  'agentRemove.msg': { zh: '会从 Agent 名册和侧栏移除，历史私聊移进归档（只读）。开着云同步的话，云端这份也一起删除，其他设备下次同步时移除。它的记忆与 Library 默认保留在 Tangu 数据目录的 agents/.removed/ 里。', en: 'It is removed from the agent roster and the sidebar; past direct chats move to the archive (read-only). If it syncs to the cloud, the cloud copy is deleted too and other devices remove it on their next sync. By default its memory and Library are kept in agents/.removed/ in the Tangu data folder.' },
   'agentRemove.msgCloud': { zh: '会从 Agent 名册移除，历史会话保留（只读）。', en: 'It is removed from the agent roster; past sessions are kept (read-only).' },
   'agentRemove.files': { zh: '同时删除相关文件：它的记忆、Library 等，移到废纸篓', en: 'Also delete related files: its memory, Library and the rest, moved to the Trash' },
   'agentRemove.confirm': { zh: '删除', en: 'Delete' },

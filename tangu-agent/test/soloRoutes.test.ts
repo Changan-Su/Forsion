@@ -21,6 +21,7 @@ import { saveAgent, libDirOf } from '../src/agents/agentRegistry.js';
 import { engineLibDir } from '../src/core/tanguHome.js';
 import { validSessionFacts } from '../src/routes/sessions.js';
 import soloRouter from '../src/routes/solo.js';
+import agentsRouter from '../src/routes/agents.js';
 
 const USER = 'u1';
 let srv: Server;
@@ -47,6 +48,7 @@ beforeAll(async () => {
   const app = express();
   app.use(express.json());
   app.use(soloRouter);
+  app.use(agentsRouter);
   srv = app.listen(0);
   base = `http://127.0.0.1:${(srv.address() as any).port}`;
 });
@@ -136,5 +138,18 @@ describe('非 host 形态', () => {
     configureTangu({ host, brain: {} as any, billing: {} as any, profile: createAiStudioProfile() });
     expect((await post('/agent/solo/agent/ario/open')).status).toBe(404);
     configureTangu({ host, brain: {} as any, billing: {} as any, profile: createTanguProfile({ sandboxMode: 'none' }), engines });
+  });
+});
+
+describe('DELETE /agent/agents/:slug archives that agent’s solo chats (10-28)', () => {
+  it('删掉的 Agent 私聊归档(工作区不再留「已删除」那行);别的 Agent 的私聊不动', async () => {
+    await saveAgent({ slug: 'gone-me', name: 'Gone', description: 'x', systemPrompt: 'x' });
+    const mine = (await post('/agent/solo/agent/gone-me/open')).body.session.id;
+    const other = (await post('/agent/solo/agent/ario/open')).body.session.id;
+    const r = await fetch(`${base}/agent/agents/gone-me?keepFiles=1`, { method: 'DELETE', headers: { Authorization: 'Bearer x' } });
+    expect(r.status).toBe(200);
+    expect((await r.json()).ok).toBe(true);
+    expect(!!(await row(mine)).archived).toBe(true);
+    expect(!!(await row(other)).archived).toBe(false);
   });
 });

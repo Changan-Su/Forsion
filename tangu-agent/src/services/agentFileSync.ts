@@ -11,7 +11,7 @@ import { splitLogBlocks, mergeBlocks, mergeLogHeaders, mergeText3 } from './memo
 import { mergeDbFile } from './dbRowMerge.js';
 import { keepLatestRuns, migrateScheduleFile } from './agentSchedule.js';
 import { AgentFileConflictError, type AgentFilesBrain, type AgentFileMeta, type AgentFileContent } from '../seams/cloudBrain.js';
-import { agentSyncDefault, agentSyncPermission, agentSyncScope, setAgentSyncPermission, captureAgentSyncDefault, captureAgentSyncPermission, agentSyncOperationSignal, agentSyncConsentSignal, agentSyncDefaultSignal } from './cloudSyncAccount.js';
+import { agentSyncDefault, agentSyncPermission, agentSyncScope, setAgentSyncPermission, captureAgentSyncDefault, captureAgentSyncPermission, agentSyncOperationSignal, agentSyncConsentSignal, agentSyncDefaultSignal, pendingAgentRemovals, clearAgentRemoval } from './cloudSyncAccount.js';
 import { agentSyncDir, assertSyncPath, atomicSyncWrite, conflictCopyName, readSyncBytes, validSyncPath, validSyncSlug } from './agentSyncPaths.js';
 import { createLocalMemoryStore } from '../adapters/standalone/localMemoryBrain.js';
 import { createMemoryRepository, withMemoryDirectoryLock, type MemoryTombstone } from './memoryRepository.js';
@@ -137,6 +137,21 @@ async function syncAccount(cloud: AgentFilesBrain, userId: string, scope: string
     bySlug.set(item.slug, item.files);
   }
   const known = new Set(agents.map((a) => a.slug));
+  // 本机在界面上删掉的 Agent:先删云端那份(整份删,删除胜),不然下面的发现会当成别的设备新建的拉回来。
+  // 不管本地又有没有同名目录都先删:删完又新建的那个没有影子,先清云端它才是 pushCreate,不会被旧的盖掉。
+  // 没删干净(断网、CAS 撞上别的设备刚写的一份)就留着记录,这一轮不拉它、不同步它,下次再来。
+  const removing = new Set<string>();
+  for (const slug of pendingAgentRemovals(scope)) {
+    if (onlySlug && slug !== onlySlug) continue;
+    try {
+      for (const f of bySlug.get(slug) ?? []) {
+        if (f.deleted || !validSyncPath(f.relPath)) continue;
+        guard(); await cloud.deleteFile(userId, slug, f.relPath, Date.now(), getDeviceId(), typeof f.seq === 'number' ? f.seq : undefined, { signal }); guard();
+        result.deleted++;
+      }
+      bySlug.delete(slug); clearAgentRemoval(slug, scope);
+    } catch (e) { fail(result, e); guard(); removing.add(slug); known.add(slug); }
+  }
   for (const [slug, files] of bySlug) {
     if (!validSyncSlug(slug) || (onlySlug && slug !== onlySlug) || known.has(slug)) continue;
     const dir = agentSyncDir(slug);
@@ -178,6 +193,7 @@ async function syncAccount(cloud: AgentFilesBrain, userId: string, scope: string
     if (agentSyncPermission(agent.slug, scope).shared) shared.push(captureAgentSyncPermission(agent.slug, scope, true));
   }
   for (const [slug, bucket] of buckets) {
+    if (removing.has(slug)) continue;
     const check = (): void => { guard(); for (const consent of bucket.guards) consent(); agentSyncDir(slug); };
     check();
     await syncBucket(cloud, userId, slug, scope, bucket.cats, bySlug.get(slug) ?? [], { human, agentCalendar }, signal, check, result);

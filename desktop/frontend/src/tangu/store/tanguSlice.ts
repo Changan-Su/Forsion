@@ -2568,6 +2568,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       return { agentDefs, defaultAgentSlug: s.defaultAgentSlug === agent.slug ? (agentDefs[0]?.slug || 'xyra') : s.defaultAgentSlug }
     })
     get().refreshAgents()
+    void get().refreshSessions(get().cfg).catch(() => {}) // 引擎已把它的私聊归档:挪进归档区,工作区不留「已删除」那行
     window.dispatchEvent(new Event('forsion:agents-changed'))
     window.tangu?.requestMainAction?.('agents-changed')
   },

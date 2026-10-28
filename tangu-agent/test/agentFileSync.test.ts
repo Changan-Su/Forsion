@@ -7,8 +7,8 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, mkdirSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runAgentFilesSync } from '../src/services/agentFileSync.js';
-import { agentSyncScope, setAgentSyncPermission } from '../src/services/cloudSyncAccount.js';
-import { saveAgent } from '../src/agents/agentRegistry.js';
+import { agentSyncScope, setAgentSyncDefault, setAgentSyncPermission } from '../src/services/cloudSyncAccount.js';
+import { deleteAgent, listAgents, removeAgentKeepFiles, saveAgent } from '../src/agents/agentRegistry.js';
 import { agentsDir } from '../src/core/tanguHome.js';
 import { createHash } from 'node:crypto';
 import { AgentFileConflictError, type AgentFilesBrain } from '../src/seams/cloudBrain.js';
@@ -309,5 +309,97 @@ describe('agentFileSync — size cap', () => {
     const r = await runAgentFilesSync(cloud, 'u');
     expect(r.skipped).toBeGreaterThan(0);
     expect(await cloud.getFile('u', 'tester', 'Library/big.bin')).toBeNull();
+  });
+});
+
+describe('agentFileSync — deleting an agent from the app (10-28)', () => {
+  const live = (cloud: ReturnType<typeof fakeCloud>, slug: string) => [...cloud._rows].filter(([k, r]) => k.startsWith(`${slug}\0`) && !r.deleted).map(([k]) => k.split('\0')[1]);
+  const listed = async (slug: string) => (await listAgents()).some((a) => a.slug === slug);
+
+  for (const [name, del] of [['deleteAgent', (s: string) => deleteAgent(s)], ['removeAgentKeepFiles', (s: string) => removeAgentKeepFiles(s)]] as const) {
+    it(`${name}: the cloud copy is deleted and the agent is not pulled back`, async () => {
+      await saveAgent({ slug: 'tester', name: 'Tester', systemPrompt: 'x', cloudSync: true });
+      writeFileSync(join(tDir('tester'), 'MEMORY.md'), 'mem line');
+      const cloud = fakeCloud(['tester']);
+      await runAgentFilesSync(cloud, 'u');
+      expect(live(cloud, 'tester')).toContain('config.toml');
+      expect((await del('tester')) ? true : false).toBe(true);
+      const r = await runAgentFilesSync(cloud, 'u');
+      expect(r.error ?? '').toBe('');
+      expect(existsSync(tDir('tester'))).toBe(false);
+      expect(await listed('tester')).toBe(false);
+      expect(live(cloud, 'tester')).toEqual([]);
+      expect(existsSync(join(agentsDir(), '.cloudsync-deleted', 'tester'))).toBe(false); // 记录用完就清
+      await runAgentFilesSync(cloud, 'u');
+      expect(existsSync(tDir('tester'))).toBe(false);
+    });
+  }
+
+  it('account-wide switch (no per-agent consent file) is covered too', async () => {
+    await saveAgent({ slug: 'tester', name: 'Tester', systemPrompt: 'x' });
+    const cloud = fakeCloud();
+    setAgentSyncDefault(agentSyncScope(cloud, 'u')!, true);
+    await runAgentFilesSync(cloud, 'u');
+    expect(live(cloud, 'tester')).toContain('config.toml');
+    await deleteAgent('tester');
+    await runAgentFilesSync(cloud, 'u');
+    expect(existsSync(tDir('tester'))).toBe(false);
+    expect(live(cloud, 'tester')).toEqual([]);
+  });
+
+  it('an agent that never synced (or has sync off) leaves no record and touches nothing', async () => {
+    await saveAgent({ slug: 'local-only', name: 'Local', systemPrompt: 'x' });
+    await deleteAgent('local-only');
+    expect(existsSync(join(agentsDir(), '.cloudsync-deleted'))).toBe(false);
+  });
+
+  it('other devices drop the agent on their next sync', async () => {
+    const homeA = home;
+    await saveAgent({ slug: 'tester', name: 'Tester', systemPrompt: 'x', cloudSync: true });
+    const cloud = fakeCloud(['tester']);
+    await runAgentFilesSync(cloud, 'u');
+    const homeB = mkdtempSync(join(tmpdir(), 'tangu-afs-b-'));
+    try {
+      process.env.TANGU_HOME = homeB;
+      await runAgentFilesSync(cloud, 'u'); // B 从云端发现并拉下来
+      expect(await listed('tester')).toBe(true);
+      process.env.TANGU_HOME = homeA;
+      await deleteAgent('tester');
+      await runAgentFilesSync(cloud, 'u');
+      process.env.TANGU_HOME = homeB;
+      const r = await runAgentFilesSync(cloud, 'u');
+      expect(r.error ?? '').toBe('');
+      expect(await listed('tester')).toBe(false);
+    } finally { process.env.TANGU_HOME = homeA; rmSync(homeB, { recursive: true, force: true }); }
+  });
+
+  it('a new agent created under the same slug before the next sync is pushed, not overwritten by the old one', async () => {
+    await saveAgent({ slug: 'tester', name: 'Old', systemPrompt: 'old prompt', cloudSync: true });
+    const cloud = fakeCloud(['tester']);
+    await runAgentFilesSync(cloud, 'u');
+    await deleteAgent('tester');
+    await saveAgent({ slug: 'tester', name: 'New', systemPrompt: 'new prompt', cloudSync: true });
+    setAgentSyncPermission('tester', agentSyncScope(cloud, 'u')!, true, true);
+    const r = await runAgentFilesSync(cloud, 'u');
+    expect(r.error ?? '').toBe('');
+    expect(readFileSync(join(tDir('tester'), 'config.toml'), 'utf8')).toContain('New');
+    expect((await cloud.getFile('u', 'tester', 'config.toml'))!.content).toContain('New');
+  });
+
+  it('a failed cloud delete keeps the record and still does not pull the agent back', async () => {
+    await saveAgent({ slug: 'tester', name: 'Tester', systemPrompt: 'x', cloudSync: true });
+    const cloud = fakeCloud(['tester']);
+    await runAgentFilesSync(cloud, 'u');
+    await deleteAgent('tester');
+    const real = cloud.deleteFile;
+    cloud.deleteFile = async () => { throw new Error('offline'); };
+    const r = await runAgentFilesSync(cloud, 'u');
+    expect(r.ok).toBe(false);
+    expect(existsSync(tDir('tester'))).toBe(false);
+    expect(existsSync(join(agentsDir(), '.cloudsync-deleted', 'tester'))).toBe(true);
+    cloud.deleteFile = real;
+    await runAgentFilesSync(cloud, 'u');
+    expect(existsSync(tDir('tester'))).toBe(false);
+    expect(live(cloud, 'tester')).toEqual([]);
   });
 });

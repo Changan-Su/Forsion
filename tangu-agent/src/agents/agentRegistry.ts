@@ -19,6 +19,7 @@ import path from 'node:path';
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
 import { agentsDir, memoryDir, userMdFile, ensureHumanFolder, humanDir, DEFAULT_AGENT_SLUG, USER_MD_TEMPLATE } from '../core/tanguHome.js';
 import { mirrorLegacyHuman } from './humanFolder.js';
+import { recordAgentRemoval } from '../services/cloudSyncAccount.js';
 import { credentialReadTarget } from '../sandbox/hostSandboxProtection.js';
 import { builtinAgentAvatar } from './builtinAvatars.js';
 import { LEGACY_PERSONAS, LEGACY_MUSE_PROMPTS, LEGACY_MUSE_DESCRIPTION } from './legacyPersonas.js';
@@ -998,6 +999,7 @@ export async function deleteAgent(slug: string): Promise<boolean> {
   await ensureAgentsReady(); // 与 saveAgent 同理:入队前跑完首访播种
   return withAgentLock(slug, async () => {
     try {
+      recordAgentRemoval(slug); // 影子跟着目录走,不先记一笔,下次同步会从云端整份拉回来
       await fs.rm(path.join(agentsDir(), slug), { recursive: true, force: true });
       await fs.rm(path.join(agentsDir(), `${slug}.md`), { force: true }).catch(() => { /* 清理可能的遗留扁平 */ });
       cache = null;
@@ -1019,6 +1021,7 @@ export async function removeAgentKeepFiles(slug: string): Promise<{ ok: boolean;
   const moved = async (from: string, to: string): Promise<boolean> => fs.rename(from, to).then(() => true, (e: NodeJS.ErrnoException) => { if (e?.code === 'ENOENT') return false; throw e; });
   try {
     await fs.mkdir(path.dirname(dest), { recursive: true });
+    recordAgentRemoval(slug);
     const dir = await moved(path.join(agentsDir(), slug), dest);
     // 遗留的扁平 <slug>.md 也一起挪走:留在原地下次启动 migrateFlatAgentsOnce 会把这个 Agent 迁回来;只剩它时也不能删
     if (!dir) await fs.mkdir(dest, { recursive: true });
