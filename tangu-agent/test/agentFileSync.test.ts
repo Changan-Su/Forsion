@@ -3,7 +3,7 @@
  * (seq/hash/CAS 与当前服务端一致)验证 push/pull/LWW/墓碑/LOG 合并/共用记忆去重/5MB 跳过。
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, mkdirSync, utimesSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, mkdirSync, utimesSync, chmodSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runAgentFilesSync } from '../src/services/agentFileSync.js';
@@ -384,6 +384,68 @@ describe('agentFileSync — deleting an agent from the app (10-28)', () => {
     expect(r.error ?? '').toBe('');
     expect(readFileSync(join(tDir('tester'), 'config.toml'), 'utf8')).toContain('New');
     expect((await cloud.getFile('u', 'tester', 'config.toml'))!.content).toContain('New');
+  });
+
+  // 10-28 Codex 复核补的四条
+  it('a failed local removal withdraws its record (no later cloud or local delete)', async () => {
+    await saveAgent({ slug: 'tester', name: 'Tester', systemPrompt: 'x', cloudSync: true });
+    const cloud = fakeCloud(['tester']);
+    await runAgentFilesSync(cloud, 'u');
+    const removed = join(agentsDir(), '.removed');
+    mkdirSync(removed, { recursive: true }); chmodSync(removed, 0o555); // 挪不进去 = rename 失败(Windows 上目录被占用同理)
+    try { expect((await removeAgentKeepFiles('tester')).ok).toBe(false); } finally { chmodSync(removed, 0o755); }
+    expect(existsSync(join(agentsDir(), '.cloudsync-deleted', 'tester'))).toBe(false);
+    await runAgentFilesSync(cloud, 'u');
+    expect(existsSync(join(tDir('tester'), 'config.toml'))).toBe(true);
+    expect(live(cloud, 'tester')).toContain('config.toml');
+  });
+
+  it('another device’s unpushed edit does not bring the agent back; that device keeps its copy in .removed', async () => {
+    const homeA = home;
+    await saveAgent({ slug: 'tester', name: 'Tester', systemPrompt: 'x', cloudSync: true });
+    const cloud = fakeCloud(['tester']);
+    await runAgentFilesSync(cloud, 'u');
+    const homeB = mkdtempSync(join(tmpdir(), 'tangu-afs-b-'));
+    try {
+      process.env.TANGU_HOME = homeB;
+      await runAgentFilesSync(cloud, 'u');
+      writeFileSync(join(agentsDir(), 'tester', 'config.toml'), readFileSync(join(agentsDir(), 'tester', 'config.toml'), 'utf8').replace('Tester', 'Tester edited offline'));
+      process.env.TANGU_HOME = homeA;
+      await deleteAgent('tester'); await runAgentFilesSync(cloud, 'u');
+      process.env.TANGU_HOME = homeB;
+      expect((await runAgentFilesSync(cloud, 'u')).error ?? '').toBe('');
+      expect(await listed('tester')).toBe(false);
+      const kept = readdirSync(join(agentsDir(), '.removed')).filter((n) => n.startsWith('tester-'));
+      expect(readFileSync(join(agentsDir(), '.removed', kept[0], 'config.toml'), 'utf8')).toContain('edited offline');
+      expect(existsSync(join(agentsDir(), '.cloudsync-deleted'))).toBe(false); // 收到的删除不再记(会误删之后同名新建的)
+      process.env.TANGU_HOME = homeA;
+      await runAgentFilesSync(cloud, 'u');
+      expect(existsSync(tDir('tester'))).toBe(false);
+      expect(live(cloud, 'tester')).toEqual([]);
+    } finally { process.env.TANGU_HOME = homeA; rmSync(homeB, { recursive: true, force: true }); }
+  });
+
+  it('deleting before the first sync finished (no shadow yet) still records it', async () => {
+    await saveAgent({ slug: 'tester', name: 'Tester', systemPrompt: 'x', cloudSync: true });
+    const cloud = fakeCloud(['tester']);
+    const config = readFileSync(join(tDir('tester'), 'config.toml'), 'utf8');
+    await cloud.putFile('u', 'tester', 'config.toml', { content: config, isBinary: false, size: config.length, mtimeMs: Date.now(), baseSeq: 0 }); // 上传了一半
+    await deleteAgent('tester');
+    await runAgentFilesSync(cloud, 'u');
+    expect(existsSync(tDir('tester'))).toBe(false);
+    expect(live(cloud, 'tester')).toEqual([]);
+  });
+
+  it('legacy rows without seq are deleted even when their mtime is ahead of this clock', async () => {
+    await saveAgent({ slug: 'tester', name: 'Tester', systemPrompt: 'x', cloudSync: true });
+    const cloud = fakeCloud(['tester']);
+    await runAgentFilesSync(cloud, 'u');
+    await deleteAgent('tester');
+    for (const [k, r] of cloud._rows) if (k.startsWith('tester\0')) cloud._rows.set(k, { ...r, seq: undefined, hash: undefined, mtimeMs: future() });
+    await runAgentFilesSync(cloud, 'u');
+    expect(live(cloud, 'tester')).toEqual([]);
+    await runAgentFilesSync(cloud, 'u');
+    expect(existsSync(tDir('tester'))).toBe(false);
   });
 
   it('a failed cloud delete keeps the record and still does not pull the agent back', async () => {

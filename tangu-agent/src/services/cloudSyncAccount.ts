@@ -182,17 +182,22 @@ export function captureAgentSyncPermission(slug: string, scope: string, shared =
 /**
  * 界面 / 工具删掉的 Agent(10-28):目录连同影子、授权一起没了,下次同步会把云端那份当成「别的设备新建的」整份拉回来。
  * 删之前按账号记一笔 `agents/.cloudsync-deleted/<slug>/<账号>`,同步先把这个账号云端那份删掉(删除胜,和网页删 Agent 一样)再做别的。
- * 只记真同步过(有影子)、这时还开着同步的账号:关了同步的 Agent,云端那份不归本机管。直接在访达里删文件夹不记,照旧拉回(没有 ≠ 删了)。
+ * 只记这时还开着同步的账号(有影子的,加上授权 / 总闸里出现过的 —— 第一次上传还没落影子时就删,也得记上):关了同步的 Agent,云端那份不归本机管。
+ * 直接在访达里删文件夹不记,照旧拉回(没有 ≠ 删了)。返回「撤销」:本地没删成时调用,只撤这一次新记的。
  */
 const REMOVED_DIR = '.cloudsync-deleted';
 const removedDir = (slug: string): string => { agentSyncDir(slug); return assertSyncPath(agentsDir(), join(agentsDir(), REMOVED_DIR, slug)); };
-export function recordAgentRemoval(slug: string): void {
-  let names: string[];
-  try { names = readdirSync(agentSyncDir(slug)); } catch { return; }
-  for (const name of names) {
-    const scope = /^\.cloudsync-([a-f0-9]{64})\.json$/.exec(name)?.[1];
-    if (scope && agentSyncPermission(slug, scope).enabled) atomicSyncWrite(agentsDir(), join(removedDir(slug), scope), String(Date.now()));
+export function recordAgentRemoval(slug: string): () => void {
+  const scopes = new Set([...Object.keys(readPermissions(slug).accounts), ...Object.keys(readDefaults())]);
+  try { for (const name of readdirSync(agentSyncDir(slug))) { const m = /^\.cloudsync-([a-f0-9]{64})\.json$/.exec(name); if (m) scopes.add(m[1]); } } catch { /* 目录已经没了 */ }
+  const added: string[] = [];
+  for (const scope of scopes) {
+    if (!/^[a-f0-9]{64}$/.test(scope) || !agentSyncPermission(slug, scope).enabled) continue;
+    const file = join(removedDir(slug), scope);
+    if (readSyncBytes(agentsDir(), file) === null) added.push(scope);
+    atomicSyncWrite(agentsDir(), file, String(Date.now()));
   }
+  return () => { for (const scope of added) clearAgentRemoval(slug, scope); };
 }
 export function pendingAgentRemovals(scope: string): string[] {
   let slugs: string[];
