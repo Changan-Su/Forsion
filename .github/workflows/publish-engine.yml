@@ -12,6 +12,10 @@ name: publish-engine
 #
 # 桌面与引擎独立编号。引擎更新须高于目标桌面的随包引擎;minDesktop 单独记录目标桌面版本。
 #
+# 按安装包线分发(2026-10-28):一次发布只打一个 dist-tag(trusted publishing 只管 npm publish,不能另跑 npm dist-tag add)。
+#   - 基线桌面带 desktop/shared/engineLine.mjs(它的更新器只查本线)→ 打 desktop-<基线桌面版本>,latest 不动;
+#   - 更早的稳定版安装包只读 latest → 照旧打 latest;更早的预发布安装包(≤ 2.13.8-beta.2)门禁拒发,等下个桌面版。
+#
 # 签名私钥 = 仓库 secret TANGU_ENGINE_SIGNING_KEY(ed25519,PEM 文本)。⚠️ 永不轮换:公钥编在每一份已发出去的安装包里。
 
 on:
@@ -76,4 +80,4 @@ jobs:
 
       - name: Publish to npm
         if: steps.gate.outputs.publish == 'true'
-        run: npm publish ./.engine-pack/forsion-tangu-agent-*.tgz --access public
+        run: npm publish ./.engine-pack/forsion-tangu-agent-*.tgz --access public --tag "${{ steps.gate.outputs.dist_tag }}"

@@ -10,6 +10,8 @@
  *  · 只把签名表里列出的文件写进磁盘 —— tarball 里多带的东西一个都不落地。
  *
  * registry / tarball 地址 / sha512 的口径与 builtinUpdates.ts 相同,直接复用。
+ * 查的不是 latest,而是本安装包线的 dist-tag `desktop-<桌面版本>`(desktop/shared/engineLine.mjs,2026-10-28):
+ * latest 上可能是别的线的引擎,号更高、建表文件碰巧一样时 checkOverlay 也会放行,新壳就跑上了旧线的引擎代码。
  * 模块顶层不 import electron(vitest 直测)。
  */
 import type { CorePluginUpdate } from '../shared/corePlugins'
@@ -18,6 +20,7 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { gunzipSync } from 'node:zlib'
+import { engineLineTag } from '../shared/engineLine.mjs'
 import { resolveLatest, safeJoin, type RegistryFetch } from './builtinUpdates'
 import { downloadZip, GZIP_MAGIC } from './marketInstall'
 import { stripTopDir, untar } from './minitar'
@@ -58,6 +61,8 @@ export interface EngineUpdateOpts {
   /** 安装包里的引擎包根(resources/tangu-server)。 */
   bundledRoot: string
   api: EngineOverlayApi
+  /** 这份安装包的桌面版本(app.getVersion()),决定查哪条线的 dist-tag。 */
+  desktopVersion: string
   registries: string[]
   fetch: RegistryFetch
   /** 正在跑的引擎是哪一版热更新(没在跑热更新的 = null);界面上「当前版本」显示它,而不是磁盘上最新的那份。 */
@@ -85,7 +90,13 @@ export async function checkEngineUpdate(o: EngineUpdateOpts): Promise<string | n
     const have = ready ?? bundled
     report({ installedVersion: installed, pendingVersion: ready && ready !== installed ? ready : undefined })
     const settled = (): CorePluginUpdate['phase'] => (ready && ready !== installed ? 'staged' : 'current')
-    const latest = await resolveLatest(ENGINE_PACKAGE, o.registries, o.fetch)
+    const tag = engineLineTag(o.desktopVersion)
+    const latest = await resolveLatest(ENGINE_PACKAGE, o.registries, o.fetch, tag)
+    if (!latest) {
+      log(`[engine-updates] npm 上还没有 ${tag}(没给这一版桌面发过热更新)`)
+      report({ phase: settled() })
+      return null
+    }
     report({ latestVersion: latest.version })
     if (!RELEASE_VERSION.test(latest.version)) {
       log(`[engine-updates] latest=${latest.version} 不是正式版,跳过`)

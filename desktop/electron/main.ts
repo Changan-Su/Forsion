@@ -2624,7 +2624,7 @@ app.whenReady().then(async () => {
         !PRODUCT.agentBackend ? undefined
           : engine
             ? checkEngineUpdate({
-                engineRoot: engine.root, bundledRoot: engine.bundledRoot, api: engine.api, registries, fetch: registryFetch,
+                engineRoot: engine.root, bundledRoot: engine.bundledRoot, api: engine.api, desktopVersion: app.getVersion(), registries, fetch: registryFetch,
                 runningVersion: backend.engineOverlayVersion(), onStatus,
               })
             : onStatus({ id: ENGINE_UPDATE_ID, packageName: ENGINE_PACKAGE, phase: 'current' }),

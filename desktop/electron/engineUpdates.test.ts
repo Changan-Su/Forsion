@@ -14,6 +14,8 @@ import { tarballUrl, type RegistryFetch } from './builtinUpdates'
 import { _resetEngineUpdatesForTest, checkEngineUpdate, cleanEngineOverlays, engineOverlayRoot, loadEngineOverlayApi, setupEngineOverlay, ENGINE_PACKAGE, ENGINE_UPDATE_ID, type EngineOverlayApi } from './engineUpdates'
 
 const REG = 'https://r1.test'
+const DESKTOP = '2.1.0'
+const LINE = 'desktop-2.1.0'
 const { publicKey, privateKey } = generateKeyPairSync('ed25519')
 const pub = publicKey.export({ type: 'spki', format: 'pem' }) as string
 const api: EngineOverlayApi = {
@@ -77,10 +79,10 @@ function write(root: string, files: Record<string, string>): void {
     writeFileSync(path.join(root, rel), data)
   }
 }
-/** registry 上的 latest 是这份包;integrity 可以故意给错。 */
-function registry(version: string, buf: Buffer, integrity = sri(buf)): RegistryFetch {
+/** registry 上本线标签指向这份包(tags 可以另给);integrity 可以故意给错。 */
+function registry(version: string, buf: Buffer, integrity = sri(buf), tags: Record<string, string> = { [LINE]: version }): RegistryFetch {
   const routes: Record<string, () => Response> = {
-    [`${REG}/@forsion%2ftangu-agent`]: () => new Response(JSON.stringify({ 'dist-tags': { latest: version }, versions: { [version]: { dist: { integrity } } } })),
+    [`${REG}/@forsion%2ftangu-agent`]: () => new Response(JSON.stringify({ 'dist-tags': tags, versions: { [version]: { dist: { integrity } } } })),
     [tarballUrl(REG, ENGINE_PACKAGE, version)]: () => new Response(new Uint8Array(buf)),
   }
   return async (url) => {
@@ -89,7 +91,7 @@ function registry(version: string, buf: Buffer, integrity = sri(buf)): RegistryF
   }
 }
 const run = (fetch: RegistryFetch, runningVersion: string | null = null): Promise<string | null> =>
-  checkEngineUpdate({ engineRoot, bundledRoot, api, registries: [REG], fetch, runningVersion, log: (m) => logs.push(m), onStatus: (s) => statuses.push(s) })
+  checkEngineUpdate({ engineRoot, bundledRoot, api, desktopVersion: DESKTOP, registries: [REG], fetch, runningVersion, log: (m) => logs.push(m), onStatus: (s) => statuses.push(s) })
 const last = (): CorePluginUpdate => statuses[statuses.length - 1]
 const downloads = (): number => calls.filter((u) => u.endsWith('.tgz')).length
 const tree = (dir: string): string[] =>
@@ -206,6 +208,15 @@ describe('checkEngineUpdate', () => {
     expect(await run(registry('2.1.1', tgz(signedPackage('2.1.1'))))).toBe('2.1.1')
     expect(api.selectOverlay(engineRoot, bundledRoot)?.version).toBe('2.1.1')
     expect(readdirSync(engineRoot)).toEqual(['2.1.1'])
+  })
+
+  it('只查本线标签:latest 上号更高的别线引擎不下;本线还没发过 = 已是最新,不报错', async () => {
+    const other = tgz(signedPackage('2.1.5'))
+    expect(await run(registry('2.1.5', other, sri(other), { latest: '2.1.5' }))).toBeNull()
+    expect(last()).toMatchObject({ phase: 'current', installedVersion: '2.1.0' })
+    expect(downloads()).toBe(0)
+    expect(await run(registry('2.1.1', tgz(signedPackage('2.1.1')), undefined, { latest: '2.1.5', [LINE]: '2.1.1' }))).toBe('2.1.1')
+    expect(last()).toMatchObject({ phase: 'staged', latestVersion: '2.1.1' })
   })
 
   it('registry 连不上:报错,不抛', async () => {

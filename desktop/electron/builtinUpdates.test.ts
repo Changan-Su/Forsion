@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { gzipSync } from 'node:zlib'
 import { sign } from 'node:crypto'
-import { checkBuiltinUpdates, registryOrder, tarballUrl, NPM_MIRROR, NPM_OFFICIAL, type RegistryFetch } from './builtinUpdates'
+import { checkBuiltinUpdates, registryOrder, resolveLatest, tarballUrl, NPM_MIRROR, NPM_OFFICIAL, type RegistryFetch } from './builtinUpdates'
 import { seedBuiltinBundles, pendingDirFor, _resetBuiltinIdsForTest, type BuiltinSource } from './builtinPlugins'
 import { canonicalFiles } from './bundleSignature'
 import { testKeyPair } from './bundleSignature.testutil'
@@ -229,4 +229,26 @@ it('reports checking, download, staged, cached pending and per-package failure t
   expect(states.at(-1)?.phase).toBe('staged')
   await check(registry({}).fetch, { onStatus: (s) => states.push(s) })
   expect(states.at(-1)).toMatchObject({ phase: 'error', pendingVersion: '0.5.6' })
+})
+
+describe('resolveLatest 的 dist-tag 参数(引擎按安装包线查)', () => {
+  const doc = (tags: Record<string, string>): (() => Response) => () =>
+    new Response(JSON.stringify({ 'dist-tags': tags, versions: Object.fromEntries(Object.values(tags).map((v) => [v, { dist: { integrity: 'sha512-x' } }])) }))
+  const url = (reg: string): string => `${reg}/@forsion%2ftangu-computer-use`
+  const line = 'desktop-2.0.0'
+
+  it('取指定标签,不取 latest', async () => {
+    const { fetch } = registry({ [url(R1)]: doc({ latest: '1.0.0', [line]: '0.9.1' }) })
+    expect(await resolveLatest(PKG, [R1], fetch, line)).toEqual({ version: '0.9.1', integrity: 'sha512-x', tarballs: [tarballUrl(R1, PKG, '0.9.1')] })
+  })
+
+  it('第一个 registry 还没同步到这个标签:问下一个,tarball 先从有标签的那个下', async () => {
+    const { fetch } = registry({ [url(R1)]: doc({ latest: '1.0.0' }), [url(R2)]: doc({ latest: '1.0.0', [line]: '0.9.1' }) })
+    expect((await resolveLatest(PKG, [R1, R2], fetch, line))?.tarballs).toEqual([tarballUrl(R2, PKG, '0.9.1'), tarballUrl(R1, PKG, '0.9.1')])
+  })
+
+  it('答上的都没有这个标签 → null;一个都没答上才抛', async () => {
+    expect(await resolveLatest(PKG, [R1, R2], registry({ [url(R2)]: doc({ latest: '1.0.0' }) }).fetch, line)).toBeNull()
+    await expect(resolveLatest(PKG, [R1, R2], registry({}).fetch, line)).rejects.toThrow(/r1\.test: HTTP 404 · r2\.test: HTTP 404/)
+  })
 })
