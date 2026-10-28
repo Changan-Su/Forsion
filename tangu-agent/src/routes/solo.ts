@@ -12,7 +12,8 @@ import { Router } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { mkdirSync } from 'node:fs';
 import { authMiddleware, AuthRequest } from '../core/http.js';
-import { query, getDbType } from '../core/db.js';
+import { query } from '../core/db.js';
+import { soloPredicate, type SoloKind } from '../services/sessionCleanup.js';
 import { deps } from '../seams/runtime.js';
 import { getAgent, isValidSlug, libDirOf, resolveMemorySlug } from '../agents/agentRegistry.js';
 import { engineLibDir } from '../core/tanguHome.js';
@@ -23,7 +24,6 @@ import { withKeyLock } from '../core/keyLock.js';
 
 const router = Router();
 const ENGINE_ID_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/i;
-type SoloKind = 'agent' | 'engine';
 
 function ensureLocal(res: any): boolean {
   if (!deps().profile.capabilities.hostExec) {
@@ -60,14 +60,7 @@ async function resolveSolo(kind: string, id: string): Promise<{ kind: SoloKind; 
   return null;
 }
 
-/** 活动私聊会话:未归档 + kind='user' + agent_config 里的轨道身份键等于 id(按方言取 JSON;不写 COALESCE 默认值——
- *  历史会话缺键就是不是私聊,绝不能把它们算进默认 agent 的私聊集合)。 */
-function soloPredicate(kind: SoloKind): string {
-  const key = kind === 'agent' ? 'soloAgentSlug' : 'soloEngineId';
-  return getDbType() === 'sqlite'
-    ? `(agent_config IS NOT NULL AND json_valid(agent_config) AND json_type(agent_config) = 'object' AND json_extract(agent_config, '$.${key}') = ?)`
-    : `(agent_config IS NOT NULL AND jsonb_typeof(agent_config) = 'object' AND (agent_config ->> '${key}') = ?)`;
-}
+/** 活动私聊会话:未归档的那条(谓词见 sessionCleanup.soloPredicate)。 */
 async function activeSolo(userId: string, appId: string, kind: SoloKind, id: string): Promise<any | null> {
   const pred = soloPredicate(kind);
   const rows = await query<any[]>(
@@ -76,11 +69,6 @@ async function activeSolo(userId: string, appId: string, kind: SoloKind, id: str
     [userId, appId, false, id],
   );
   return rows[0] ? rowToSession(rows[0]) : null;
-}
-
-/** 删掉 Agent 后它的私聊照删团队的口径归档(只读,归档区还找得到):留在活动列表里就是工作区那行去不掉的「已删除」。 */
-export async function archiveSoloSessions(userId: string, appId: string, kind: SoloKind, id: string): Promise<void> {
-  await query(`UPDATE chat_sessions SET archived = ? WHERE user_id = ? AND app_id = ? AND archived = ? AND kind = 'user' AND ${soloPredicate(kind)}`, [true, userId, appId, false, id]);
 }
 
 async function hasActiveRun(sessionId: string): Promise<boolean> {

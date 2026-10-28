@@ -131,3 +131,11 @@
 .project-card-head > .project-git-remotes-add { display: inline-flex; width: auto; height: auto; align-items: center; gap: 4px; flex: 0 0 auto; padding: 2px 6px; border: 0; border-radius: var(--radius-sm, 8px); background: transparent; color: var(--text-muted); font: inherit; font-size: var(--ui-font-meta, 12px); cursor: pointer; }
 .project-card-head > .project-git-remotes-add:hover { background: var(--overlay-medium); color: var(--text); }
 .project-git-remotes-empty { margin: 0; }
+
+/* 项目技能行:整行点开 SKILL.md,右侧小删除钮(进回收站,UninstallDialog);悬停 / 聚焦时才显出来。 */
+.project-skill-row { display: flex; align-items: center; gap: 2px; }
+.project-skill-row > .project-row { flex: 1; min-width: 0; }
+.project-skill-del { flex-shrink: 0; width: 26px; height: 26px; display: grid; place-items: center; border: 0; border-radius: var(--radius-sm, 8px); background: transparent; color: var(--text-muted); opacity: 0; cursor: pointer; transition: opacity 160ms ease, background 160ms ease; }
+.project-skill-row:hover .project-skill-del, .project-skill-del:focus-visible { opacity: 1; }
+.project-skill-del:hover { background: var(--overlay-medium); color: var(--danger, #e5484d); }
+@media (hover: none) { .project-skill-del { opacity: 1; } }

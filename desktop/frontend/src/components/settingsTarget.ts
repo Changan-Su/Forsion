@@ -14,7 +14,7 @@ import { SETTINGS_SEARCH_INDEX } from './settingsSearchIndex'
 /** SettingsModal 的一级页 id(StaticTab 的唯一来源)。本端有没有这一页另由 SettingsModal 的 tabItems 门控。 */
 export const SETTINGS_TABS = [
   'general', 'connection', 'forsion', 'model', 'mcp', 'hooks', 'skills', 'agents', 'plugins', 'amadeus-plugins', 'agent-clis', 'browser', 'computer-use', 'channels',
-  'notes', 'sync', 'spaces', 'theme', 'shortcuts', 'notifications', 'statusbar', 'permissions', 'units', 'remote-sessions', 'computer-history', 'advanced', 'developer', 'about',
+  'notes', 'sync', 'spaces', 'theme', 'shortcuts', 'notifications', 'statusbar', 'trash', 'permissions', 'units', 'remote-sessions', 'computer-history', 'advanced', 'developer', 'about',
 ] as const
 
 /** 允许的旧别名 → [一级页, 子页?]。一级页 id 必须是 SettingsModal 的 StaticTab。 */

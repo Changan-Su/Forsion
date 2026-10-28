@@ -19,6 +19,7 @@
     "check:intelligent-ui-setting": "node scripts/intelligent-ui-setting.check.cjs",
     "demo:sketch": "node scripts/sketch-demo.record.cjs",
     "check:version": "node scripts/dev-version.check.cjs",
+    "check:uninstall": "node scripts/uninstall-trash.check.cjs",
     "check:mini-native-windows": "node scripts/mini-native-windows.e2e.cjs",
     "check:clip-native-windows": "node scripts/clip-native-windows.e2e.cjs",
     "build": "electron-vite build",

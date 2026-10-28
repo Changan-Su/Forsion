@@ -187,12 +187,16 @@ export function captureAgentSyncPermission(slug: string, scope: string, shared =
  */
 const REMOVED_DIR = '.cloudsync-deleted';
 const removedDir = (slug: string): string => { agentSyncDir(slug); return assertSyncPath(agentsDir(), join(agentsDir(), REMOVED_DIR, slug)); };
-export function recordAgentRemoval(slug: string): () => void {
+const SHADOW_RE = /^\.cloudsync-([a-f0-9]{64})\.json$/;
+/** 这个 Agent 现在同步到哪些账号(授权、主开关缺省、已有影子三处取并集,再按授权判)。卸载确认框的「云端副本」那行也看它。 */
+export function agentSyncedScopes(slug: string): string[] {
   const scopes = new Set([...Object.keys(readPermissions(slug).accounts), ...Object.keys(readDefaults())]);
-  try { for (const name of readdirSync(agentSyncDir(slug))) { const m = /^\.cloudsync-([a-f0-9]{64})\.json$/.exec(name); if (m) scopes.add(m[1]); } } catch { /* 目录已经没了 */ }
+  try { for (const name of readdirSync(agentSyncDir(slug))) { const m = SHADOW_RE.exec(name); if (m) scopes.add(m[1]); } } catch { /* 目录已经没了 */ }
+  return [...scopes].filter((scope) => /^[a-f0-9]{64}$/.test(scope) && agentSyncPermission(slug, scope).enabled);
+}
+export function recordAgentRemoval(slug: string): () => void {
   const added: string[] = [];
-  for (const scope of scopes) {
-    if (!/^[a-f0-9]{64}$/.test(scope) || !agentSyncPermission(slug, scope).enabled) continue;
+  for (const scope of agentSyncedScopes(slug)) {
     const file = join(removedDir(slug), scope);
     if (readSyncBytes(agentsDir(), file) === null) added.push(scope);
     atomicSyncWrite(agentsDir(), file, String(Date.now()));
@@ -208,4 +212,10 @@ export function clearAgentRemoval(slug: string, scope: string): void {
   const dir = removedDir(slug);
   rmSync(join(dir, scope), { force: true });
   try { rmdirSync(dir); } catch { /* 还有别的账号没删完 */ }
+}
+/** 从回收站恢复后:撤掉删除记录(不然下轮同步把云端再删一遍),丢掉影子(影子记着「这些文件同步过」,云端却是删除标记,
+ *  会被判成别处删了)。授权 .cloudsync-accounts.json 留着:恢复 = 照原样接着同步,下轮整份重新上传。 */
+export function forgetAgentRemoval(slug: string): void {
+  rmSync(removedDir(slug), { recursive: true, force: true });
+  try { for (const name of readdirSync(agentSyncDir(slug))) if (SHADOW_RE.test(name)) rmSync(join(agentSyncDir(slug), name), { force: true }); } catch { /* 没有影子 */ }
 }

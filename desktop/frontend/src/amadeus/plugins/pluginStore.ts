@@ -242,6 +242,31 @@ const defaultWorkFolder = (pluginId: string): string => {
   return `${PLUGINS_ROOT}/${id}`
 }
 
+/** 卸载确认框用(10-28 手动卸载规范):这个插件在库里的工作文件夹(相对库根),与 ctx.app.workFolder() 同口径 ——
+ *  用户自定义的优先,否则旧的显示名文件夹或按 id 的缺省;库里没有这个文件夹 → null(确认框就不列那一行)。 */
+export function pluginVaultFolder(pluginId: string, name: string): string | null {
+  let v = ''
+  try { v = (localStorage.getItem(`plugin.${pluginId}.workFolder`) || '').trim().replace(/^\/+|\/+$/g, '') } catch { /* ignore */ }
+  const custom = !!v && !v.split('/').some((seg) => !seg.trim() || seg === '.' || seg === '..')
+  const { folders } = usePageStore.getState()
+  return (custom ? [v] : [`${PLUGINS_ROOT}/${sanitizeFolderName(name, pluginId)}`, defaultWorkFolder(pluginId)]).find((f) => folders.includes(f)) ?? null
+}
+
+/** 卸载时插件存在 localStorage 里的偏好(`plugin.<id>.*`)的快照,交给回收站、恢复时原样写回;卸载成功后再 dropPluginPrefs 摘掉。 */
+export function pluginPrefs(pluginId: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i)
+      if (k?.startsWith(`plugin.${pluginId}.`)) out[k] = localStorage.getItem(k) ?? ''
+    }
+  } catch { /* 存储不可用:没有可摘的 */ }
+  return out
+}
+export function dropPluginPrefs(prefs: Record<string, string>): void {
+  for (const k of Object.keys(prefs)) try { localStorage.removeItem(k) } catch { /* ignore */ }
+}
+
 /** 宿主自动塞进每个启用插件的「工作文件夹」设置行(见 enable())。文案在 enable() 那一刻求值,
  *  切语言后由文件末尾的订阅就地重刷 —— 认的是**对象身份**(下面这个 WeakSet)而不是 key:
  *  插件可以用同 key registerSetting 顶掉这一行(见 registerSetting 的去重),按 key 重刷会把
