@@ -5444,6 +5444,8 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
 .mk-notice-body small { color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
 .mk-notice-close { flex: 0 0 auto; width: 22px; height: 22px; display: grid; place-items: center; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-muted); cursor: pointer; }
 .mk-notice-close:hover { background: var(--bg-hover); color: var(--text); }
+.mk-notice-action { flex: 0 0 auto; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--accent-ink); font-size: var(--ui-font-meta, 12px); font-weight: 600; padding: 1px 6px; cursor: pointer; }
+.mk-notice-action:hover { background: var(--bg-hover); }
 @media (max-width: 820px) { .mk-notice { width: calc(100% - 32px); } } /* 与 .settings-body 的 16px 内边距对齐(宽度与卡片区同为 max 1120 居中) */
 
 /* Secondary surfaces: short fade with a barely perceptible expansion, sampled from

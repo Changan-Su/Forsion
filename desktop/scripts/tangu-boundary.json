@@ -153,6 +153,7 @@
       "desktop/frontend/src/components/SidebarRow.tsx",
       "desktop/frontend/src/components/SketchCard.tsx",
       "desktop/frontend/src/components/TierBadge.tsx",
+      "desktop/frontend/src/components/UninstallDialog.tsx",
       "desktop/frontend/src/components/WebCard.tsx",
       "desktop/frontend/src/components/WorkspaceFilePreview.tsx",
       "desktop/frontend/src/components/agentInitial.ts",

@@ -35,7 +35,7 @@ import { normalizeSessionEmoji } from '../../../../../tangu-agent/src/contracts/
 import { DEFAULT_APPROVAL, applyPreset, stickyDefaults, withAmadeusWorkspace } from '../../../../../tangu-agent/src/contracts/sessionDefaults'
 export { DEFAULT_APPROVAL, DEFAULT_THINKING, applyPreset, stickyDefaults, withAmadeusWorkspace } from '../../../../../tangu-agent/src/contracts/sessionDefaults'
 import type { StoreApi } from 'zustand'
-import { defaultModelOf, newChatModelId, reloadDesktopConfig, writeFocusModel, type AppState } from '../../stores/appStore'
+import { defaultModelOf, newChatModelId, rememberedModelId, reloadDesktopConfig, writeFocusModel, type AppState } from '../../stores/appStore'
 import '../messages' // Tangu 自己的文案片段(核心插件化 2c)
 import { failReason, landedAnyway, type FailedSend } from './failedSend'
 
@@ -953,8 +953,9 @@ export interface TanguState {
   moveSessionToProject(sessionId: string, dir: string, name: string): Promise<'moved' | 'locked' | 'running' | 'failed'>
   /** deleteFiles = 同时把项目里的 `.tangu/` 移进系统废纸篓(项目文件夹本身不动)。 */
   removeWorkspace(ws: WorkspaceDescriptor, opts?: { deleteFiles?: boolean }): Promise<void>
-  /** 删除 Agent(侧栏 / 名册共用);deleteFiles = 连它的文件(记忆、Library)一起移进系统废纸篓,否则留在引擎的 agents/.removed/。失败抛错。 */
-  removeAgent(agent: NormalAgentDef, deleteFiles: boolean): Promise<void>
+  /** 删除 Agent(卸载确认框;侧栏 / 名册 / 商店共用):本机引擎整份挪进回收站(返回 trashId,撤销 / 回收站页恢复用),
+   *  私聊缺省归档、deleteChats 一并删。失败抛错。 */
+  removeAgent(slug: string, opts?: { deleteChats?: boolean }): Promise<{ trashId?: string }>
   /** holdFailed:没发出去的那条留在会话末尾(借 Comma 的失败气泡)并当作「收下了」返回 true —— 只给输入框里手打的那条用;
    *  其余调用方(编辑重发、插件、文档任务……)靠 false 回滚 / 报错,照旧 toast + false。 */
   send(text: string, attachments: Attachment[], workspaceFiles?: Attachment[], skillIds?: string[], mentions?: { priorityAgent?: string; mentionAgents?: string[]; mentionProjects?: Array<{ name: string; path: string }> }, sessionId?: string | null, fromQueue?: boolean, holdFailed?: boolean): Promise<boolean>
@@ -2555,23 +2556,19 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     }
   },
 
-  removeAgent: async (agent, deleteFiles) => {
+  removeAgent: async (slug, opts) => {
     const t = get().tr
-    // 本机 Agent(有 libraryDir):先让引擎把整个目录挪进 agents/.removed/,勾了「同时删除相关文件」再移进系统废纸篓 ——
-    // 先挪后删,引擎拒删(默认 Agent / 启用中的 Muse)时文件不会先没了;废纸篓失败文件还在 .removed,只提示。
-    // 没有废纸篓接口时退回引擎直接删;云端 Agent 没有本机文件,直接删。
-    const trash = window.tangu?.trashHostPath
-    const keep = !!agent.libraryDir && (!deleteFiles || !!trash)
-    const r = await api.deleteAgentDef(homeTarget(), agent.slug, keep ? { keepFiles: true } : undefined)
+    const r = await api.deleteAgentDef(homeTarget(), slug, opts)
     if (!r?.ok) throw new Error(t('agentProfile.deleteFailed'))
-    if (keep && deleteFiles && r.keptAt) await trash!(r.keptAt).catch(() => get().toast(t('app.agentTrashFail', { path: r.keptAt! }), true))
     set((s) => {
-      const agentDefs = s.agentDefs.filter((a) => a.slug !== agent.slug)
-      return { agentDefs, defaultAgentSlug: s.defaultAgentSlug === agent.slug ? (agentDefs[0]?.slug || 'xyra') : s.defaultAgentSlug }
+      const agentDefs = s.agentDefs.filter((a) => a.slug !== slug)
+      return { agentDefs, defaultAgentSlug: s.defaultAgentSlug === slug ? (agentDefs[0]?.slug || 'xyra') : s.defaultAgentSlug }
     })
     get().refreshAgents()
+    void get().refreshSessions(get().cfg).catch(() => {}) // 引擎已把它的私聊归档:挪进归档区,工作区不留「已删除」那行
     window.dispatchEvent(new Event('forsion:agents-changed'))
     window.tangu?.requestMainAction?.('agents-changed')
+    return { trashId: r.trashId }
   },
 
   // ── Agent Desk:聊天右侧演出面板。会话级快照落 localStorage(persistDeskSoon),
@@ -3252,7 +3249,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       // S4:按会话所在的位置记(空白新对话 = 焦点),不再一律看焦点。
       const where = sid ? refForSession(sid) : focusRef()
       if (where.kind === 'unit') { writeFocusModel(where, modelId); if (sameRef(where, focusRef())) set({ focusModelId: modelId }) }
-      else set((s) => { void window.tangu?.setConfig?.({ modelId }); return { cfg: { ...s.cfg, modelId } } })
+      else set((s) => { const remembered = rememberedModelId(modelId, s.modelsResp); void window.tangu?.setConfig?.({ modelId: remembered }); return { cfg: { ...s.cfg, modelId: remembered } } })
       // 这次选的就是「新会话用哪个模型」的最新答案:空白新对话草稿里更早定下的那个(newChatModel 排在记忆前面,发出去之后也不清)
       // 不能再压着它 —— 否则经归档 / 切 Space / /sessions 回到空白新对话时,药丸还是旧的那个,发出去也是。
       if (sid && sameRef(where, focusRef())) set({ newChatModel: null })

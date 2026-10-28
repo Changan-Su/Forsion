@@ -599,8 +599,15 @@ export const updateSkillCatalogEntry = (t: EngineTarget, key: string, body: { na
 export const setSkillCatalogEntryDisabled = (t: EngineTarget, key: string, disabled: boolean, agentSlug?: string) =>
   request<{ ok: boolean }>(t, `/agent/skills/catalog/${encodeURIComponent(key)}/disabled`, { method: 'PUT', body: JSON.stringify({ disabled, ...(agentSlug ? { agentSlug } : {}) }) })
 
+/** 进回收站;选了它的 Agent 清单与停用记录由引擎一起收尾,改过的内置技能 = 还原为内置版本。 */
 export const deleteSkillCatalogEntry = (t: EngineTarget, key: string, agentSlug?: string) =>
-  request<{ ok: boolean; backupPath?: string }>(t, `/agent/skills/catalog/${encodeURIComponent(key)}${agentSlug ? `?agentSlug=${encodeURIComponent(agentSlug)}` : ''}`, { method: 'DELETE' })
+  request<{ ok: boolean; trashId?: string }>(t, `/agent/skills/catalog/${encodeURIComponent(key)}${agentSlug ? `?agentSlug=${encodeURIComponent(agentSlug)}` : ''}`, { method: 'DELETE' })
+export interface SkillUninstallPreview {
+  key: string; name: string; slug: string; scope: 'user' | 'agent'; owner: string | null; size: number
+  mode: 'delete' | 'restore-builtin' | 'pause' | 'none'; picks: Array<{ slug: string; name: string }>; disabled: boolean
+}
+export const skillUninstallPreview = (t: EngineTarget, key: string, agentSlug?: string) =>
+  request<SkillUninstallPreview>(t, `/agent/skills/catalog/${encodeURIComponent(key)}/uninstall-preview${agentSlug ? `?agentSlug=${encodeURIComponent(agentSlug)}` : ''}`)
 
 export const copySkillCatalogEntry = (t: EngineTarget, key: string, body: { scope: 'user' | 'agent'; agentSlug?: string; slug?: string }, sourceAgentSlug?: string) =>
   request<{ skill: SkillCatalogEntry }>(t, `/agent/skills/catalog/${encodeURIComponent(key)}/copy${sourceAgentSlug ? `?agentSlug=${encodeURIComponent(sourceAgentSlug)}` : ''}`, { method: 'POST', body: JSON.stringify(body) }).then((r) => r.skill)
@@ -778,9 +785,29 @@ export const saveAgentDef = (t: EngineTarget, def: Omit<Partial<NormalAgentDef>,
     { method: slug ? 'PATCH' : 'POST', body: JSON.stringify(def) },
   ).then((r) => r.agent)
 
-/** keepFiles:只从名册移除,本机引擎把整个目录挪进 agents/.removed/ 并返回 keptAt(云端引擎忽略)。 */
-export const deleteAgentDef = (t: EngineTarget, slug: string, opts?: { keepFiles?: boolean }) =>
-  request<{ ok: boolean; keptAt?: string }>(t, `/agent/agents/${encodeURIComponent(slug)}${opts?.keepFiles ? '?keepFiles=1' : ''}`, { method: 'DELETE' })
+/** 本机引擎:整份进回收站(trashId),私聊缺省归档、deleteChats 连私聊一起删;云端引擎直接删、不回 trashId。 */
+export const deleteAgentDef = (t: EngineTarget, slug: string, opts?: { deleteChats?: boolean }) =>
+  request<{ ok: boolean; trashId?: string }>(t, `/agent/agents/${encodeURIComponent(slug)}${opts?.deleteChats ? '?deleteChats=1' : ''}`, { method: 'DELETE' })
+
+/** 卸载确认框逐项列的东西(引擎 services/agentUninstall);blocked 有值 = 不给删。 */
+export interface AgentUninstallPreview {
+  slug: string; name: string; blocked: 'invalid' | 'default' | 'muse' | null; size: number; chats: number; cloud: boolean
+  teams: Array<{ slug: string; name: string; dissolve: boolean }>
+  automations: Array<{ id: string; desc: string }>
+}
+export const agentUninstallPreview = (t: EngineTarget, slug: string) =>
+  request<AgentUninstallPreview>(t, `/agent/agents/${encodeURIComponent(slug)}/uninstall-preview`)
+
+/** 回收站(引擎 <tanguHome>/trash/,30 天;只在本机)。restorer='desktop' 的(Forsion 插件)走主进程 trashRestore。 */
+export interface TrashEntry {
+  id: string; kind: 'agent' | 'skill' | 'plugin'; ref: string; name: string; deletedAt: number; size: number
+  restorer: 'engine' | 'desktop'; items: Array<{ from: string; stored: string; role?: string }>; extra?: Record<string, unknown>
+}
+export const listTrash = (t: EngineTarget) => request<{ entries: TrashEntry[]; days: number }>(t, '/agent/trash')
+export const restoreTrashEntry = (t: EngineTarget, id: string) =>
+  request<{ ok: boolean; slug?: string; renamed?: boolean; path?: string; id?: string }>(t, `/agent/trash/${encodeURIComponent(id)}/restore`, { method: 'POST' })
+export const purgeTrashEntry = (t: EngineTarget, id: string) => request<{ ok: boolean }>(t, `/agent/trash/${encodeURIComponent(id)}`, { method: 'DELETE' })
+export const emptyTrash = (t: EngineTarget) => request<{ ok: boolean; removed: number }>(t, '/agent/trash', { method: 'DELETE' })
 
 /** 改 slug(= 文件夹名)。拒绝时 err.code = 引擎 agentRename.ts 的原因(builtin / exists / cloud_synced / plugin_seeded / busy …)。 */
 export const renameAgentDef = (t: EngineTarget, slug: string, next: string) =>
@@ -943,8 +970,9 @@ export const setPluginEnabled = (t: EngineTarget, id: string, enabled: boolean) 
   request<{ ok: boolean; enabled: boolean; active?: boolean; plugins?: PluginInfo[] }>(t, `/agent/plugins/${encodeURIComponent(id)}/enabled`, { method: 'PUT', body: JSON.stringify({ enabled }) })
 /** 卸载:引擎先停掉在跑的实例(依赖者先休眠)、注销 meta、清设置/blob;文件夹由桌面侧 IPC 删。
  *  restartRequired:false(10-02 起)= 已运行期撤干净,不用重启;旧引擎给 true / 不给。 */
-export const uninstallPlugin = (t: EngineTarget, id: string) =>
-  request<{ ok: boolean; restartRequired: boolean }>(t, `/agent/plugins/${encodeURIComponent(id)}`, { method: 'DELETE' })
+/** opts.trash:插件文件(用户目录里的)也由引擎挪进回收站,回带 dirName 给主进程撤商店记录;keepSettings:设置原地不动。 */
+export const uninstallPlugin = (t: EngineTarget, id: string, opts?: { trash?: boolean; keepSettings?: boolean }) =>
+  request<{ ok: boolean; restartRequired: boolean; trashId?: string; dirName?: string }>(t, `/agent/plugins/${encodeURIComponent(id)}${opts?.trash ? `?trash=1${opts.keepSettings ? '&keepSettings=1' : ''}` : ''}`, { method: 'DELETE' })
 export const getPluginSettings = (t: EngineTarget, id: string, scope: string) =>
   request<{ values: Record<string, any> }>(t, `/agent/plugins/${encodeURIComponent(id)}/settings?scope=${encodeURIComponent(scope)}`).then((r) => r.values)
 export const putPluginSettings = (t: EngineTarget, id: string, scope: string, patch: Record<string, any>) =>
@@ -1503,6 +1531,9 @@ export const putProjectSettings = (t: EngineTarget, sessionId: string, settings:
   request<{ settings: ProjectSettings | null }>(t, '/agent/project-context/settings', { method: 'PUT', body: JSON.stringify({ sessionId, settings }) }).then((r) => r.settings ?? null)
 export const createProjectSkill = (t: EngineTarget, sessionId: string, input: { slug: string; name: string; description: string; content: string }) =>
   request<{ skill: ProjectSkillInfo }>(t, '/agent/project-context/skills', { method: 'POST', body: JSON.stringify({ sessionId, ...input }) }).then((r) => r.skill)
+/** 项目技能整夹进回收站(路径取自 GET 返回的那一行,引擎只认清单里有的)。 */
+export const deleteProjectSkill = (t: EngineTarget, sessionId: string, path: string) =>
+  request<{ trashId: string }>(t, '/agent/project-context/skills', { method: 'DELETE', body: JSON.stringify({ sessionId, path }) })
 /** 图标只经这组端点改(PUT settings 保留 icon 现值)。导入图片:引擎按文件头认类型,写进项目的 `.tangu/icon.<ext>`;返回落盘后的默认项。 */
 export const uploadProjectIcon = (t: EngineTarget, sessionId: string, data: string) =>
   request<{ settings: ProjectSettings | null }>(t, '/agent/project-context/icon', { method: 'POST', body: JSON.stringify({ sessionId, data }) }).then((r) => r.settings ?? null)

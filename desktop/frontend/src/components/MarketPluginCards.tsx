@@ -9,6 +9,7 @@ const postInstall = () => import('../marketPostInstall')
 import { useApp } from '../stores/appStore'
 import { registerMessages, useI18n } from '../i18n'
 import { MarketRequirements, marketPlatform, useMarketVersion } from './MarketRequirements'
+import { SkillAgentPicker, applySkillAgentChoice, skillAgentsSupported, useSkillAgents, type SkillAgentChoice } from './MarketSkillAgents'
 import './MarketUpgrade.css'
 
 registerMessages({
@@ -37,6 +38,8 @@ export function MarketPluginCards({ event }: { event: ToolEvent }) {
   const [error, setError] = useState('')
   const [needsRestart, setNeedsRestart] = useState(false)
   const [canReboot, setCanReboot] = useState(false)
+  const [skillChoice, setSkillChoice] = useState<Record<string, SkillAgentChoice>>({})
+  const skillAgents = useSkillAgents(event.done && !event.isError && marketplaceItemsOf(event.result).some((i) => i.type === 'skill'))
   const refresh = () => listInstalled().then(setInstalled).catch(() => {})
   useEffect(() => { void refresh(); const listener = () => { void refresh() }; window.addEventListener('focus', listener); window.addEventListener('forsion:extensions-changed', listener); const off = onInstallProgress(p => setProgress(p)); return () => { off(); window.removeEventListener('focus', listener); window.removeEventListener('forsion:extensions-changed', listener) } }, [])
   if (event.isError) return null
@@ -48,6 +51,8 @@ export function MarketPluginCards({ event }: { event: ToolEvent }) {
     try {
       const wasInstalled = !!installedMarketItem(item, installed)
       const result = await installMarket(item.id)
+      // 技能:首次安装按卡上的「装给」写各 Agent;分配失败不算装失败,只提示
+      if (result.type === 'skill' && !wasInstalled && skillAgentsSupported()) await applySkillAgentChoice(result.slug || item.installSlug, skillChoice[item.id] ?? null).catch((e) => setError(t('market.skillAgents.applyFailed', { e: e?.message || String(e) })))
       const post = await postInstall()
       const { restart } = await post.afterMarketInstall(result.type, result, wasInstalled, text => setError(text))
       setCanReboot(post.canRestartBackend()); setNeedsRestart(restart); await refresh()
@@ -69,7 +74,7 @@ export function MarketPluginCards({ event }: { event: ToolEvent }) {
         <div className="mk-chat-card-top"><div className="mk-chat-icon"><Puzzle size={22} /></div><div><strong>{item.name}</strong><span>{item.author} · {item.latestVersion ? `v${item.latestVersion}` : '—'}</span></div><MarketRequirements item={item} version={version} /></div>
         <p>{item.summary || item.description}</p>
         {!!item.tags?.length && <div className="mk-tags">{item.tags.slice(0, 4).map(tag => <span key={tag}>{tag}</span>)}</div>}
-        <div className="mk-chat-card-actions"><button className="btn sm" onClick={() => openMarketItem(item)}>{t('market.cardDetails')}</button><button className={`btn sm ${done ? '' : 'primary'}`} disabled={!!busy || (done && !update) || !!unavailable} onClick={() => void install(item)} data-market-card-install={item.id}>
+        <div className="mk-chat-card-actions">{item.type === 'skill' && !done && !unavailable && <SkillAgentPicker agents={skillAgents} choice={skillChoice[item.id] ?? null} disabled={!!busy} onChange={(next) => setSkillChoice((m) => ({ ...m, [item.id]: next }))} />}<button className="btn sm" onClick={() => openMarketItem(item)}>{t('market.cardDetails')}</button><button className={`btn sm ${done ? '' : 'primary'}`} disabled={!!busy || (done && !update) || !!unavailable} onClick={() => void install(item)} data-market-card-install={item.id}>
           {working ? <Loader2 size={13} className="spin" /> : done ? <Check size={13} /> : <Download size={13} />}
           {working ? p?.phase === 'download' && p.total ? `${Math.round((p.received || 0) / p.total * 100)}%` : t(p?.phase === 'install' ? 'market.installPhaseInstall' : 'market.installPhaseResolve') : done && !update ? `${t('market.cardInstalled')}${entry?.version ? ` v${entry.version}` : ''}` : unavailable ? t('market.cardUnavailable') : update ? t('market.update') : t('market.cardInstall')}
         </button></div>

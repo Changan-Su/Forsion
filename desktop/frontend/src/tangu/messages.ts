@@ -61,7 +61,6 @@ registerMessages({
   'app.wsRemoveFail': { zh: '移除项目失败：{e}', en: 'Failed to remove project: {e}' },
   'app.wsRemoved': { zh: '已移除项目「{name}」', en: 'Project "{name}" removed' },
   'app.wsTrashFail': { zh: '会话已删除，但 .tangu 文件夹没能移到废纸篓：{e}', en: 'The sessions were deleted, but the .tangu folder could not be moved to the Trash: {e}' },
-  'app.agentTrashFail': { zh: 'Agent 已删除，但它的文件没能移到废纸篓，还在 {path}', en: 'The agent was deleted, but its files could not be moved to the Trash; they are still in {path}' },
   'quota.exhausted.daily': { zh: '今日 AI 额度已用尽（本次运行已预支跑完；可在「Forsion 云端 → 额度与积分」用额度重置卡立即恢复）', en: 'Today\'s AI quota is used up (this run finished on overdraft; use a quota reset card under Forsion Cloud → Quota & points to restore it now)' },
   'quota.exhausted.weekly': { zh: '本周 AI 额度已用尽（本次运行已预支跑完；可在「Forsion 云端 → 额度与积分」用额度重置卡立即恢复）', en: 'This week\'s AI quota is used up (this run finished on overdraft; use a quota reset card under Forsion Cloud → Quota & points to restore it now)' },
   'sidebar.channel.setAsConnected': { zh: '设为正在连接', en: 'Set as connected' },

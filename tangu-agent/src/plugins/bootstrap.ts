@@ -717,6 +717,9 @@ export function removePluginLive(id: string): Promise<void> {
   });
 }
 
+/** 从回收站放回来的同一份代码:撤掉卸载墓碑,下一次重扫照常加载。 */
+export function forgetUninstalled(id: string): void { uninstalled.delete(id); }
+
 /** 列表用的运行态(同步读,不进串行队列)。没进生命周期的 meta(编进 app 的 builtin 等):active = 启用态,无 version。 */
 export function pluginStatus(id: string): PluginStatus {
   const e = entries.get(id) ?? [...entries.values()].find((x) => x.metaIds.has(id));
