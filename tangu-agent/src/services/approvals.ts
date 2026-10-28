@@ -118,7 +118,8 @@ export function toolNeedsApproval(name: string, rawMode: ApprovalMode | undefine
   let mode = normalizeApprovalMode(rawMode, 'toolNeedsApproval');
   if (mode === 'custom') mode = customRules().base;
   if (!mode || mode === 'full-auto') return false;
-  const writesFiles = name === 'write_file' || name === 'edit_file' || name === 'multi_edit' || name === 'apply_patch';
+  // git_commit 同写文件档:只动本机仓库、可撤回(10-28 用户定「有权限就直接做」;push / pull 经 capabilities.approval:'command' 进跑命令档)
+  const writesFiles = name === 'write_file' || name === 'edit_file' || name === 'multi_edit' || name === 'apply_patch' || name === 'git_commit';
   // 跑命令档(auto-edit 也要批):run_bash / kill_process / MCP 任意能力 / 后台起进程 / 给进程喂 stdin。
   // run_background + write_process_input = 启动任意 shell 进程并向其喂输入,危险性同 run_bash,纳入此档。
   // browser_task = 自主 agent 以用户身份操作已登录网站(点按/提交),危险性同档。
@@ -1231,7 +1232,9 @@ export async function gateToolCall(
   if (editedOnCard && !escalate && !forceAsk && !protectedAsk) return { action: 'approve' };
 
   // 控制面调用因保护配置而问(完全放行档改默认工作目录)时,卡上同样先放引擎自己读到的事实,不只是模型写的那句。
-  const base = control || (protectedAsk && isControl) ? await controlPreview(call) : approvalPreview(call, { profile: ctx.profile });
+  const base = control || (protectedAsk && isControl) ? await controlPreview(call)
+    : name === 'git_commit' || name === 'git_push' || name === 'git_pull' ? await gitPreview(call, ctx.cwd, ctx.profile)
+    : approvalPreview(call, { profile: ctx.profile });
   const preview = protectedAsk
     ? '⚠ Protected config or credentials · ' + base
     : escalate ? '⚠ Write outside the workspace · ' + base : base;
@@ -1280,6 +1283,18 @@ export async function gateToolCall(
   });
   if (ctx.park) return { action: 'park', decided, preview };
   return decided;
+}
+
+/** git_commit / git_push / git_pull 的卡面:提交哪些文件、推到哪个站哪个仓库用谁的账号(tools/builtin/git.ts gitApprovalPreview)。
+ *  限时 3 秒(它挡在审批卡前面),读不到 / 出错退回参数。动态 import:git 工具模块经 registry 回连这里。 */
+async function gitPreview(call: ToolCall, cwd: string | undefined, profile: AppProfile | undefined): Promise<string> {
+  try {
+    const { gitApprovalPreview } = await import('../tools/builtin/git.js');
+    const timeout = new Promise<null>((resolve) => { setTimeout(() => resolve(null), 3000).unref(); });
+    const text = await Promise.race([gitApprovalPreview(call.function.name, parseCallArgs(call), cwd), timeout]);
+    if (text) return previewText(text);
+  } catch { /* 退回参数 */ }
+  return approvalPreview(call, { profile });
 }
 
 /** 这次调用若按上限档 cap 判,需不需要问人(custom 的 allow 规则对远程污点 run 不许越过它)。 */
