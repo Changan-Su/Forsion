@@ -169,6 +169,12 @@ router.delete('/agent/skills/user/:id', authMiddleware, async (req: AuthRequest,
   }
 });
 
+/** 工具定义每个请求大约占多少 token:名字 + 描述 + 参数 schema 序列化成 JSON,按约 4 字符 = 1 token(不调分词器,界面标「约」)。
+ *  MCP 工具今天全量进 defs(getToolDefinitions),没有按需加载的那种 —— 以后给 MCP 加了 deferred,这里要把它们剔掉。 */
+export function approxToolTokens(defs: unknown[]): number {
+  return Math.ceil(defs.reduce<number>((n, d) => n + JSON.stringify(d).length, 0) / 4);
+}
+
 router.get('/agent/tools', authMiddleware, async (req: AuthRequest, res) => {
   try {
     // 走 profileStore(appId 可指定):清单反映 admin 覆盖(tool_builtins 白名单等)后的**生效集**,
@@ -201,17 +207,21 @@ router.get('/agent/tools', authMiddleware, async (req: AuthRequest, res) => {
     // MCP 分区(仅 standalone/TUI 装配了 deps().mcp;server 状态 + 各 server 工具)
     const mcpManager = deps().mcp;
     const mcp = mcpManager
-      ? mcpManager.listStatus().map((s) => ({
-          server: s.name,
-          transport: s.transport,
-          status: s.status,
-          error: s.error || null,
-          ...(s.origin ? { origin: s.origin } : {}),
-          tools: [...mcpManager.toolsForRun([s.name]).values()].map((t) => ({
-            name: t.name,
-            description: t.definition.function.description || '',
-          })),
-        }))
+      ? mcpManager.listStatus().map((s) => {
+          const tools = [...mcpManager.toolsForRun([s.name]).values()];
+          return {
+            server: s.name,
+            transport: s.transport,
+            status: s.status,
+            error: s.error || null,
+            ...(s.origin ? { origin: s.origin } : {}),
+            tools: tools.map((t) => ({
+              name: t.name,
+              description: t.definition.function.description || '',
+            })),
+            approxTokens: approxToolTokens(tools.map((t) => t.definition)),
+          };
+        })
       : [];
 
     res.json({
