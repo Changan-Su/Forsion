@@ -5,8 +5,10 @@ import { getMasking, setMasking, removeMaskAllow, getMaskLog, type MaskingState,
 import { homeTarget } from '../services/engine/targets'
 import { useApp } from '../stores/appStore'
 import { SettingsPanel, SettingsRow, SettingsSwitch } from './SettingsPrimitives'
-import { maskKindLabel } from './MaskedValues'
 import { formatDateTime } from '../format/time'
+
+// 类型名在这里另登一份:对话里的那份(MaskedValues)归 Tangu 界面,设置页是宿主,不能直引它;设置窗口也不加载聊天界面。
+const kindLabel = (t: (k: string) => string, kind: string): string => { const k = `maskset.kind.${kind}`; const s = t(k); return s === k ? kind : s }
 
 registerMessages({
   'maskset.title': { zh: '发给模型之前', en: 'Before sending to a model' },
@@ -36,6 +38,15 @@ registerMessages({
   'maskset.len': { zh: '{n} 个字符', en: '{n} characters' },
   'maskset.warned': { zh: '原样发出', en: 'sent as-is' },
   'maskset.blocked': { zh: '已拦下', en: 'blocked' },
+  'maskset.kind.API_KEY': { zh: 'API 密钥', en: 'API key' },
+  'maskset.kind.TOKEN': { zh: '令牌', en: 'Token' },
+  'maskset.kind.PASSWORD': { zh: '密码', en: 'Password' },
+  'maskset.kind.SECRET': { zh: '密钥', en: 'Secret' },
+  'maskset.kind.PRIVATE_KEY': { zh: '私钥', en: 'Private key' },
+  'maskset.kind.EMAIL': { zh: '邮箱', en: 'Email' },
+  'maskset.kind.PHONE': { zh: '手机号', en: 'Phone number' },
+  'maskset.kind.ID_CARD': { zh: '身份证号', en: 'ID number' },
+  'maskset.kind.BANK_CARD': { zh: '银行卡号', en: 'Card number' },
 })
 
 /**
@@ -96,8 +107,8 @@ export function MaskingSettingsSection() {
     {open === 'allow' && <div className="mask-settings-list">
       {allow.length ? allow.map((e) => (
         <div key={e.hash} className="mask-settings-item">
-          <span>{maskKindLabel(t, e.kind)}</span><small>{t('maskset.len', { n: e.len })} · {formatDateTime(e.at)}</small><span className="grow" />
-          <button type="button" className="icon-btn" aria-label={`${t('settings.btn.delete')} · ${maskKindLabel(t, e.kind)}`}
+          <span>{kindLabel(t, e.kind)}</span><small>{t('maskset.len', { n: e.len })} · {formatDateTime(e.at)}</small><span className="grow" />
+          <button type="button" className="icon-btn" aria-label={`${t('settings.btn.delete')} · ${kindLabel(t, e.kind)}`}
             onClick={() => void removeMaskAllow(homeTarget(), e.hash).then((list) => setState((cur) => (cur ? { ...cur, allow: list } : cur)))}><Trash2 size={13} /></button>
         </div>
       )) : <div className="hint">{t('maskset.allowEmpty')}</div>}
@@ -110,7 +121,7 @@ export function MaskingSettingsSection() {
           <div className="mask-settings-group-head"><strong>{titleOf(sid)}</strong><small>{formatDateTime(g.t)}</small></div>
           {[...g.rows.values()].map((h) => (
             <div key={h.ph} className="mask-settings-item">
-              <span>{maskKindLabel(t, h.kind)}</span><code>{h.head}••••</code><small>{t('maskset.len', { n: h.len })}</small>
+              <span>{kindLabel(t, h.kind)}</span><code>{h.head}••••</code><small>{t('maskset.len', { n: h.len })}</small>
               {h.action !== 'mask' && <small>· {t(h.action === 'warn' ? 'maskset.warned' : 'maskset.blocked')}</small>}
             </div>
           ))}

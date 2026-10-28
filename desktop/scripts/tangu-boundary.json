@@ -43,6 +43,7 @@
       "desktop/frontend/src/components/SystemPromptBlock.tsx",
       "desktop/frontend/src/components/TargetHealthNotice.tsx",
       "desktop/frontend/src/components/TeamEditor.tsx",
+      "desktop/frontend/src/components/MaskedValues.tsx",
       "desktop/frontend/src/components/ToolGroup.tsx",
       "desktop/frontend/src/components/VoiceBubble.tsx",
       "desktop/frontend/src/components/WorkspaceDetailView.tsx",

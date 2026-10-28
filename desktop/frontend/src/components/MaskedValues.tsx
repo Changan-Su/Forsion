@@ -10,7 +10,7 @@ import { OverlayAt } from '@lcl/engine'
 import { registerMessages, useI18n } from '../i18n'
 import type { ToolEvent } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { addMaskAllow } from '../services/backendService'
-import { targetForSession } from '../services/engine/targets'
+import { locationOf, targetForSession } from '../services/engine/targets'
 import { useApp } from '../stores/appStore'
 
 registerMessages({
@@ -96,6 +96,8 @@ export function MaskTag({ masked, sessionId }: { masked: MaskedValue[]; sessionI
     setAt({ x: r.left - 6, y: r.bottom + 6, top: r.top })
   }
   const warned = masked.every((m) => m.warn)
+  // 从不遮住名单是本机的安全设置:别的设备上跑的会话(unitWeb 把这几条路由判成 deny-remote)不给这颗按钮
+  const local = !sessionId || locationOf(sessionId).kind === 'home'
   const allow = (m: MaskedValue) => void addMaskAllow(targetForSession(sessionId), m.value, m.kind).then(() => setAllowed((s) => new Set(s).add(m.ph))).catch(() => {})
   return (
     <>
@@ -120,7 +122,7 @@ export function MaskTag({ masked, sessionId }: { masked: MaskedValue[]; sessionI
             <div className="t2-mask-foot">
               {!warned && <span>{t('mask.putBack')}</span>}
               <span className="grow" />
-              {!picking && <button type="button" onClick={() => setPicking(true)}>{t('mask.neverMask')}</button>}
+              {!picking && local && <button type="button" onClick={() => setPicking(true)}>{t('mask.neverMask')}</button>}
               <button type="button" onClick={() => { setAt(null); useApp.getState().openSettings('model/m-providers') }}>{t('mask.settings')}</button>
             </div>
           </OverlayAt>
