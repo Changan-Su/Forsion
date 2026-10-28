@@ -237,6 +237,19 @@ describe('Anthropic 直连的缓存断点与思考延续性', () => {
     expect(res.usage.cached_tokens).toBeUndefined();
     expect(res.usage.prompt_tokens).toBe(5);
   });
+
+  it('流里的 error 事件:超长按 400(压缩后重试),过载仍是 502', async () => {
+    const { isContextOverflowError } = await import('../services/contextWindowStore.js');
+    const failWith = (error: any) => {
+      const sse = `data: ${JSON.stringify({ type: 'message_start', message: { usage: { input_tokens: 5 } } })}\n` + `data: ${JSON.stringify({ type: 'error', error })}\n`;
+      vi.stubGlobal('fetch', () => Promise.resolve({ ok: true, body: new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(sse)); c.close(); } }) }));
+      return streamAnthropicMessages({ apiKey: 'k', baseUrl: 'https://api.anthropic.com', payload: { model: 'claude-x', messages: [] } } as any).catch((e) => e);
+    };
+    const tooLong = await failWith({ type: 'invalid_request_error', message: 'prompt is too long: 210000 tokens > 200000 maximum' });
+    expect([tooLong.status, isContextOverflowError(tooLong)]).toEqual([400, true]);
+    const overloaded = await failWith({ type: 'overloaded_error', message: 'Overloaded' });
+    expect([overloaded.status, overloaded.code]).toEqual([502, 'overloaded_error']);
+  });
 });
 
 // ── 思考块前缀校验的兜底:接口点名要 block_binding 才带上重发 ─────────────────

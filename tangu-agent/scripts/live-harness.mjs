@@ -331,6 +331,8 @@ OPT_IN.add('realuse'); // 真实使用模拟:每轮 12 个 run(--rounds),--usage
 OPT_IN.add('suggest'); // 三个 run + 三次建议调用;只在动 services/promptSuggestion.ts(提示词 / 前缀对齐)或主循环收尾处的快照时才有信息量。
 OPT_IN.add('humanreal'); // 协作说明写成什么样:每轮 6 个 run + 1 次判官(--rounds);只在动 HUMAN_GUIDANCE / manage_human 时才有信息量。
 OPT_IN.add('mask'); KEYS.push('mask'); // 两个 run + 本地回显服务;只在动 llm/outboundMask.ts(发给模型前脱敏)时才有信息量。
+OPT_IN.add('streamoverflow'); KEYS.push('streamoverflow'); // 注入:真 Codex 路径上流里回 context_length_exceeded(lib/llm-fault-preload.mjs);只在动流内报错归类 / agentLoop 的超长压缩重试时跑
+OPT_IN.add('foreignreasoning'); KEYS.push('foreignreasoning'); // 注入:回灌的加密推理被拒(400 invalid_encrypted_content);只在动 historyReplay 的推理绑定 / agentLoop 的拿掉重发时跑
 OPT_IN.add('relay'); KEYS.push('relay'); // 假提供方只回 429 usage_limit_reached;只在动 llm/quotaRelay.ts / agentLoop 的接力分支时跑。--relay-mode auto|ask|none
 OPT_IN.add('appref'); // 四个 run;只在动 APP_REF_SECTION(应用 / 窗口引用那一段提示词)时才有信息量。
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
@@ -886,6 +888,11 @@ if (argv.includes('--selftest')) {
 }
 
 const OUT = resolve(opt('out', process.env.TANGU_LIVE_OUT || join(tmpdir(), `tangu-live-${stamp}-${randomUUID().slice(0, 6)}`)));
+// streamoverflow / foreignreasoning:引擎以 --import 载入 lib/llm-fault-preload.mjs,场景往规则文件里写一条,真 Codex 路径上命中的请求换成厂商原文报错
+const FAULT_FILE = ONLY.has('streamoverflow') || ONLY.has('foreignreasoning') ? join(OUT, 'llm-fault.json') : null;
+const armFault = (rule) => writeFileSync(FAULT_FILE, JSON.stringify(rule));
+const disarmFault = () => rmSync(FAULT_FILE, { force: true });
+const faultLog = () => { try { return readFileSync(`${FAULT_FILE}.log`, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)); } catch { return []; } };
 const TIMEOUT_MS = Number(opt('timeout', process.env.TANGU_LIVE_TIMEOUT_MS || 15 * 60_000));
 const SANDBOX = opt('sandbox', process.env.TANGU_LIVE_SANDBOX || 'auto');
 const MUSE_MODE = opt('muse-mode', process.env.TANGU_LIVE_MUSE_MODE || 'ask'); // ask | agent | auto(三档权限阶梯,见 museAgentConfig)
@@ -1302,10 +1309,12 @@ if (ONLY.has('notebook') && !NOTEBOOK_NEG) {
 const FAKE_CLOUD = (ONLY.has('account') || ONLY.has('webpublish') || SIM) && !process.env.TANGU_LIVE_CLOUD_URL ? await startFakeCloud(TOKEN, { connect: SIM?.url }) : null;
 
 const child = spawn(process.execPath, [
+  ...(FAULT_FILE ? ['--import', pathToFileURL(join(root, 'scripts', 'lib', 'llm-fault-preload.mjs')).href] : []),
   entry, '--port', String(port), '--host', '127.0.0.1', '--data-dir', join(home, 'state.db'),
   '--sandbox', SANDBOX, '--cloud-url', process.env.TANGU_LIVE_CLOUD_URL || FAKE_CLOUD?.url || 'http://127.0.0.1:9', '--token', TOKEN,
 ], { env: {
   ...process.env, TANGU_HOME: home, TANGU_DEFAULT_WORKSPACE: workspace, TANGU_CACHE_PROBE: '1',
+  ...(FAULT_FILE ? { TANGU_LIVE_FAULT_FILE: FAULT_FILE } : {}),
   TANGU_BROWSER_CDP: userChromeWs || 'off',
   FORSION_DESKTOP_CONFIG: desktopCfg,
   ...(PLUGINDIAG_DIR ? { HOME: FAKE_HOME, ...(process.platform === 'win32' ? { USERPROFILE: FAKE_HOME } : {}) } : {}),
@@ -1571,7 +1580,7 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
           else if (e.type === 'team_member') (p.phase === 'start' ? ev.group.starts : ev.group.ends).push({ slug: String(p.slug || '?'), seq: e.seq, runId: p.runId || null, sessionId: p.sessionId || null, messageId: p.messageId });
           else if (e.type === 'cache_probe') ev.probes.push(p); // 双闸开着才有(TANGU_CACHE_PROBE=1 + agentConfig.cacheProbe)
           // 只收压缩相关的 status(llm_call/generating 每帧都发,全收会把 ev 撑大);autocompact 场景据此判「压了、落库了」
-          else if (e.type === 'status' && ['context_info', 'compacting', 'compacted', 'compaction_budget', 'compaction_skipped', 'tool_failure_loop', 'action_delivery_nudge', 'sketch_delivery_nudge', 'ui_document_recovery', 'describing_images', 'masked', 'model_fallback'].includes(p.phase)) ev.statuses.push(p);
+          else if (e.type === 'status' && ['context_info', 'compacting', 'compacted', 'compaction_budget', 'compaction_skipped', 'tool_failure_loop', 'action_delivery_nudge', 'sketch_delivery_nudge', 'ui_document_recovery', 'describing_images', 'masked', 'model_fallback', 'llm_retry', 'reasoning_dropped'].includes(p.phase)) ev.statuses.push(p);
           else if (e.type === 'done') { ev.done = true; ev.content = String(p.content || ''); ev.toolOffsets = p.toolOffsets ?? null; break outer; }
           else if (e.type === 'error') { ev.error = String(p.error || 'error'); ev.errorReason = p.reason ?? null; break outer; } // P1-K2:急停 / 锁定的终态原因
         }
@@ -2797,6 +2806,31 @@ try {
       detail = `报错:${(a.error || '无').slice(0, 140)};改用 ${fbA.length} 次;假提供方 ${callsA} 次`;
     }
     return { ok, detail, output: [a.content, b?.content].filter(Boolean).join('\n---\n'), tokens: tokensOf(a) + (b ? tokensOf(b) : 0), toolCalls: [] };
+  });
+
+  // streamoverflow(10-28,借鉴 magpie 第三轮 15):Codex 在 HTTP 200 的流里送来 context_length_exceeded(厂商原文,见 lib/llm-fault-preload.mjs)。
+  //   第一轮垫一段大日志(压缩才有东西可总结,总结完请求明显变小);第二轮起注入:体积不小于第一次被拒那份 95% 的请求都回流里的超长(像真实窗口)。
+  //   修好 = 按 400 认出 → 压缩一次 → 变小的请求放行 → 答出口令,只被拒 1 次、没有 llm_retry。
+  //   负对照(--kind base,没修)= 当 502 原样重发,4 次都被拒,这一轮报错收场、也没压缩。
+  await scenario('streamoverflow', 'streamoverflow 流里的超长 → 压缩后重试', async () => {
+    const sid = `live-ovf-${Date.now()}`;
+    const code = `CODE-${randomUUID().slice(0, 6)}`;
+    const tok = `OVF-${randomUUID().slice(0, 6)}`;
+    const filler = Array.from({ length: 1400 }, (_, i) => `${new Date(Date.UTC(2026, 9, 1, 0, 0, i)).toISOString()} worker-${i % 7} processed batch ${i} ok`).join('\n');
+    const a = await run(sid, `Here is a build log for reference. The codeword is ${code}. Reply with just "noted".\n\n${filler}`);
+    armFault({ mode: 'stream_overflow', match: tok });
+    const b = await run(sid, `Reply with exactly this and nothing else: ${tok}`).finally(disarmFault);
+    const log = faultLog().filter((l) => l.match);
+    const fired = log.filter((l) => l.fired);
+    const passed = log.filter((l) => !l.fired && fired.length && l.t > fired[0].t);
+    const compacting = b.statuses.filter((x) => x.phase === 'compacting');
+    const compacted = b.statuses.filter((x) => x.phase === 'compacted');
+    const retries = b.statuses.filter((x) => x.phase === 'llm_retry');
+    writeFileSync(join(OUT, 'streamoverflow-evidence.json'), JSON.stringify({ errA: a.error, errB: b.error, log, statuses: b.statuses, content: b.content }, null, 2));
+    const ok = !a.error && !b.error && b.content.includes(tok) && fired.length === 1 && passed.length >= 1
+      && compacting.some((x) => x.reason === 'overflow') && compacted.length >= 1 && retries.length === 0;
+    const detail = `被拒 ${fired.length} 次(${fired[0]?.bytes ?? '-'}B)、放行 ${passed.length} 次(${passed[0]?.bytes ?? '-'}B);压缩 ${compacting.map((x) => x.reason).join(',') || '无'} → ${compacted.length ? (compacted[0].fallback ? '机械折叠' : `摘要 ${compacted[0].summarized ?? '?'} 条`) : '无'};llm_retry ${retries.length} 次;${b.error ? `报错:${b.error.slice(0, 140)}` : `答${b.content.includes(tok) ? '对' : '错'}`}`;
+    return { ok, detail, output: b.content, tokens: tokensOf(a) + tokensOf(b), toolCalls: b.toolCalls };
   });
 
   await scenario('taskoutcomes', 'taskoutcomes actual artifacts, rejected approvals and repeat delivery', () =>

@@ -13,6 +13,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { StreamOpts, StreamResult } from '../seams/cloudBrain.js';
 import { LlmError } from '../core/types.js';
+import { isStreamContextOverflow } from '../services/contextWindowStore.js';
 import { ACCOUNT_MARK, RUN_MARK } from './openaiCompat.js';
 import { withStreamIdle, type StreamIdleGuard } from './streamIdle.js';
 import { stringifyWellFormed } from './wellFormedJson.js';
@@ -333,7 +334,11 @@ async function runOpenAiResponsesStream(opts: StreamOpts, guard: StreamIdleGuard
         let msg = e.message || 'Codex stream error';
         const resetsAt = Number(e.resets_at) || (Number(e.resets_in_seconds) ? Date.now() / 1000 + Number(e.resets_in_seconds) : 0);
         if (resetsAt) msg += ` (resets in ~${Math.max(1, Math.round((resetsAt * 1000 - Date.now()) / 60_000))} min, at ${new Date(resetsAt * 1000).toISOString()})`;
-        throw Object.assign(new LlmError(502, msg), { code: e.code || (e === ev ? undefined : e.type) }, resetsAt ? { resetsAt: resetsAt * 1000 } : {});
+        const code = e.code || (e === ev ? undefined : e.type);
+        // 超长(HTTP 200 的流里送来 context_length_exceeded,借 magpie #4040)按 400 抛:走 agentLoop 的压缩后重试、学真实上限;
+        // 按 502 抛会被当成网关抖动原样重发 3 次。额度类带着 code 仍是 502(retry.ts 按 code 认),其余照旧 502。
+        const overflow = isStreamContextOverflow(code, msg);
+        throw Object.assign(new LlmError(overflow ? 400 : 502, msg), { code }, resetsAt ? { resetsAt: resetsAt * 1000 } : {});
       }
     }
   }
