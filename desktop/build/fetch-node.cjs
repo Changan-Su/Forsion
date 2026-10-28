@@ -3,9 +3,9 @@
  * → 用户免装 Node/npm。与 fetch-python.cjs 同构(同一套下载/解压/降级纪律)。
  *
  *  - 由 build/beforeBuild.cjs 在打包前按目标 (platform, arch) 调用;也可 `node build/fetch-node.cjs` 手动跑。
- *  - 版本不写死:查 nodejs.org 的 index.json 取最新 LTS。
+ *  - 版本与摘要固定于 runtime-manifest.json。
  *  - 解压:非 Windows 用系统 tar(.tar.gz),Windows 用 .zip(bsdtar 也能解 zip,三平台 runner 自带)。
- *  - **拉取失败不阻断整包构建**(照 Python 的降级纪律:GitHub/nodejs.org 抖动不该毁掉整个发布),
+ *  - 正式构建拉取失败即终止;仅 FORSION_ALLOW_INCOMPLETE_DEV_BUILD=1 允许本地降级。
  *    降级为不打包 → 运行时 resolveBundledNode 返回 null → 回落系统 Node。强制内置设 TANGU_REQUIRE_NODE=1。
  *  - 逃生阀 TANGU_SKIP_FETCH_NODE=1。
  */
@@ -14,7 +14,7 @@ const { execFileSync } = require('node:child_process');
 const path = require('node:path');
 
 /** 国内镜像(与 desktop 的 mirror 开关无关:这是构建机下载,按 env 切)。 */
-const BASE = process.env.NODE_MIRROR || 'https://nodejs.org/dist';
+const { runtimeRequired, assertSkipAllowed, pinnedRuntime, verifyArchive } = require('./runtime-policy.cjs');
 
 /** (platform, arch) → Node 官方发行包的名字片段与后缀。 */
 function targetFor(platformName, archName) {
@@ -29,28 +29,6 @@ const buildDir = () => __dirname;
 const nodeDir = () => path.join(buildDir(), 'node');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-async function fetchJson(url) {
-  let lastErr;
-  for (let i = 0; i < 4; i++) {
-    try {
-      const r = await fetch(url, { headers: { 'User-Agent': 'tangu-build' } });
-      if (r.ok) return r.json();
-      lastErr = new Error(`HTTP ${r.status}`);
-      if (![403, 429, 500, 502, 503].includes(r.status)) break; // 非瞬态 → 不重试
-    } catch (e) { lastErr = e; }
-    await sleep(1500 * (i + 1));
-  }
-  throw new Error(`索引拉取失败 @ ${url}: ${lastErr?.message || lastErr}`);
-}
-
-/** index.json 里最新的 LTS 版本号(形如 v22.14.0);lts 字段是 codename 或 false。 */
-async function latestLts() {
-  const list = await fetchJson(`${BASE}/index.json`);
-  const hit = list.find((v) => v.lts);
-  if (!hit) throw new Error('index.json 里没有 LTS 版本');
-  return hit.version;
-}
 
 /**
  * 瘦身:官方包解压 ~196MB,其中 include/(62MB C++ addon 头文件)+ 文档/man 是纯粹的死重。
@@ -73,12 +51,13 @@ function degrade(dest, reason) {
 
 async function fetchNode({ platformName, archName }) {
   const dest = nodeDir();
-  if (process.env.TANGU_SKIP_FETCH_NODE) return degrade(dest, 'TANGU_SKIP_FETCH_NODE');
+  if (process.env.TANGU_SKIP_FETCH_NODE) { assertSkipAllowed('node', platformName); return degrade(dest, 'TANGU_SKIP_FETCH_NODE'); }
   try {
     const { slug, ext } = targetFor(platformName, archName);
-    const version = await latestLts();
+    const item = pinnedRuntime('node', platformName, archName);
+    const version = item.version;
     const name = `node-${version}-${slug}`;
-    const url = `${BASE}/${version}/${name}.${ext}`;
+    const url = process.env.NODE_MIRROR ? `${process.env.NODE_MIRROR}/${version}/${item.name}` : item.url;
 
     console.log(`[fetch-node] ${name}.${ext}`);
     let buf;
@@ -91,6 +70,7 @@ async function fetchNode({ platformName, archName }) {
       } catch (e) { if (i >= 3) throw e; await sleep(1500 * (i + 1)); }
     }
     const tmp = path.join(buildDir(), `${name}.${ext}`);
+    verifyArchive(buf, item); // Reject before writing or extracting any archive bytes.
     writeFileSync(tmp, buf);
     rmSync(dest, { recursive: true, force: true }); // 换 arch 重跑:先清旧
     // tar 自动识别 gzip 与 zip(Windows runner 的 bsdtar 同样能解 zip)。顶层目录是 node-<ver>-<slug>。
@@ -117,7 +97,7 @@ async function fetchNode({ platformName, archName }) {
     console.log(`[fetch-node] ✓ ${dest} (${version})`);
     return dest;
   } catch (e) {
-    if (process.env.TANGU_REQUIRE_NODE) throw e;
+    if (e.code === 'RUNTIME_INTEGRITY' || runtimeRequired('node', platformName)) throw e;
     return degrade(dest, e.message || String(e));
   }
 }

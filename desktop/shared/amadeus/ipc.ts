@@ -800,7 +800,7 @@ export interface AmadeusApi {
   /** Excalidraw 画板(`.excalidraw.md` / 裸 `.excalidraw`)读原文;ref 与附件同一 basename 语义。 */
   readDrawing(pagePath: string, ref: string): Promise<DrawingReadResult>
   /** 按 `drawing:read` 返回的确切 vault 相对路径原子写回(记自写账本,watcher 不把自己的写当外部改动)。 */
-  writeDrawing(drawingPath: string, source: string): Promise<void>
+  writeDrawing(drawingPath: string, source: string, base?: string): Promise<void | TextWriteResult>
   /** 读取 vault 内确切相对路径的 UTF-8 文本(供插件文件类型);越界/不存在返回 null。 */
   readTextFile(path: string): Promise<string | null>
   /** 原子写回 vault 内确切相对路径的 UTF-8 文本(供插件文件类型;记自写账本,同 writeDrawing)。

@@ -236,7 +236,14 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
         const r = await operation
         if (mayBind && r) rendererRoots.set(e.sender.id, (r as { root: string }).root)
         const ev = casRejected(channel, r) ? undefined : VAULT_WRITE_EVENTS[channel]?.(a, isPagePath) // 被拒的 CAS 没写,不叫人回灌
-        if (ev) emitRemote(ev[0], ev[1], 'host')
+        if (ev) {
+          emitRemote(ev[0], ev[1], 'host')
+          // Drawing echoes are suppressed by the watcher. Other local renderers
+          // need the same committed scene notification as Unit clients.
+          if (channel === IPC.drawingWrite) {
+            for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && w.webContents !== e.sender) w.webContents.send(ev[0], relPayload(ev[0], ev[1]))
+          }
+        }
         return r
       } finally { pendingVaultWrites.delete(operation) }
     })

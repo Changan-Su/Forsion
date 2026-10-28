@@ -1,5 +1,6 @@
 import { MarketPluginCards, isMarketplaceTool } from '../../components/MarketPluginCards'
 import { PluginSandboxCard, isSandboxCardTool } from './PluginSandboxCard'
+import { GitToolCard, gitStatusSuperseded, isGitTool } from './GitToolCard'
 import { HumanUpdateCard } from '../../components/HumanUpdateCard'
 import { humanChanges } from '../../services/humanCollaboration'
 import { SelfUpdateReceipt } from '../../components/SelfUpdateReceipt'
@@ -95,6 +96,7 @@ export type OrderedToolPart =
   | { t: 'sandbox'; event: ToolEvent }
   | { t: 'pluginCard'; event: ToolEvent; claim: ToolCardClaim }
   | { t: 'web'; event: ToolEvent; spec: WebCardSpec }
+  | { t: 'git'; events: ToolEvent[] }
 
 /** 直播中还没收口的 sketch 调用 → 草稿卡(10-09,对标 ChatGPT Intelligent UI 边生成边渲染):tool_stream 已把参数增量
  *  累进 ev.arguments,这里从半截 JSON 里把 html 解出来。只在**直播**里算(live):历史 / 中断的未完成调用照旧不画幻影卡。 */
@@ -120,6 +122,7 @@ export function partitionToolSegment(events: ToolEvent[], sketches?: SketchItem[
   const parts: OrderedToolPart[] = []
   const webs: OrderedToolPart[] = []
   let tools: ToolEvent[] = []
+  let gitRun: ToolEvent[] = []
   const flushTools = (): void => {
     if (tools.length) parts.push({ t: 'tools', events: tools })
     tools = []
@@ -140,6 +143,13 @@ export function partitionToolSegment(events: ToolEvent[], sketches?: SketchItem[
     const claim = cardOf?.(ev)
     if (claim) { flushTools(); parts.push({ t: 'pluginCard', event: ev, claim }); continue }
     if (isSandboxCardTool(ev)) { flushTools(); parts.push({ t: 'sandbox', event: ev }); continue }
+    // git_* 的工具行留着,连续几步 git 跑完后接一张 Git 卡(GitToolCard;下一个不是 git 调用时收口)
+    if (isGitTool(ev)) {
+      tools.push(ev)
+      if (ev.done) gitRun.push(ev)
+      if (gitRun.length && !(events[i + 1] && isGitTool(events[i + 1]))) { flushTools(); parts.push({ t: 'git', events: gitRun }); gitRun = [] }
+      continue
+    }
     tools.push(ev)
     if (isMarketplaceTool(ev) && ev.done && !ev.isError) { flushTools(); parts.push({ t: 'marketplace', event: ev }); continue }
     const web = webOf?.(ev)
@@ -732,6 +742,8 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
                       ? <PluginSandboxCard key={`sandbox-${part.event.id}`} event={part.event} />
                     : part.t === 'web'
                       ? <HostWebCard key={`web-${part.event.id}`} spec={part.spec} sessionId={runSid} onAsk={handlers?.onSuggest} />
+                    : part.t === 'git'
+                      ? (gitStatusSuperseded(part.events, msg.toolEvents) ? null : <GitToolCard key={`git-${part.events[0].id}`} events={part.events} sessionId={runSid} />)
                     : part.t === 'pluginCard'
                       ? <PluginToolCard key={`ptc-${part.event.id}`} event={part.event} claim={part.claim} onQuote={handlers?.onQuote} fallback={<ToolGroup events={[part.event]} />} />
                     : part.t === 'intelligent'
@@ -829,6 +841,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
         )}
         {(msg.toolEvents || []).filter(ev => isMarketplaceTool(ev) && !inlineToolIds.has(ev.id)).map(ev => <MarketPluginCards key={`market-${ev.id}`} event={ev} />)}
         {(msg.toolEvents || []).filter(ev => isSandboxCardTool(ev) && !inlineToolIds.has(ev.id)).map(ev => <PluginSandboxCard key={`sandbox-${ev.id}`} event={ev} />)}
+        {(() => { const gitEvs = (msg.toolEvents || []).filter(ev => isGitTool(ev) && ev.done && !inlineToolIds.has(ev.id)); return gitEvs.length ? <GitToolCard key={`git-${gitEvs[0].id}`} events={gitEvs} sessionId={runSid} /> : null })()}
         {trailingIntelligent.map(ev => <IntelligentUi key={ev.id} event={ev} live={streaming} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} />)}
         {!!trailingSketches.length && <SketchCards items={trailingSketches} actions={sketchActions} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} />}
         {trailingCards.map(({ ev, claim }) => <PluginToolCard key={`ptc-${ev.id}`} event={ev} claim={claim} onQuote={handlers?.onQuote} fallback={<ToolGroup events={[ev]} />} />)}

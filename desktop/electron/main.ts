@@ -70,6 +70,7 @@ import { BUILTIN_BUNDLES } from './builtinPlugins'
 import { checkBuiltinUpdates, NPM_OFFICIAL, registryOrder } from './builtinUpdates'
 import { checkEngineUpdate, setupEngineOverlay, ENGINE_PACKAGE, ENGINE_UPDATE_ID, type EngineOverlayHandle } from './engineUpdates'
 import { loadBuiltinDesktopEntries, type CloudHost } from './cloudHost'
+import { createStartupTracker, createTelemetryHost, crashFromError, engineExitProps, processGoneProps, telemetryPackaged } from './telemetryHost'
 import { npmDownloadCandidates, npmTarballToZip, type NpmInstallSnapshot } from './npmMarketInstall'
 import { extractZipToDir, checkMarketPackage, detectMarketType, MARKET_SUBDIR, MARKET_MANIFEST, isSafeSlug, readInstalledVersion, readInstalledPluginId, readUserPluginDirs, marketItemDir, downloadCandidates, downloadZip, GZIP_MAGIC, ZIP_MAGIC, type DownloadProgress } from './marketInstall'
 import { servePathRoot, serveInlineHtml, stopCodePreview, setForsionPreviewHooks, transpileForServe, MIME } from './codePreview'
@@ -1496,6 +1497,7 @@ function ensureBackend(): Promise<void> {
     // 「允许其他设备连接本机」开着时引擎必须常驻:本机 UI 切去别的 Unit(mode≠managed)
     // 也不能停 —— 停了 = 别的设备那头断服(设备通道与局域网面的转发目标就是这个引擎)。
     if (stored.mode !== 'managed' && !stored.unitHostEnabled) {
+      telemetryStartup.noEngine()
       await backend.stop()
       return
     }
@@ -1536,6 +1538,35 @@ const QUIET_WINDOWS = process.env.TANGU_HARNESS_QUIET
 // _handleAEOpenEvent 里弹 NSAlert 模态框,ready 永不来 → 台架零输出挂死(09-27 多会话同时中招)。注册域只在内存、不落盘;
 // AppKit 在主脚本同步段之后才读这个键(09-28 注入探针实证,仪器 npm run check:persistignore)。
 if (QUIET_WINDOWS && process.platform === 'darwin') systemPreferences.registerDefaults({ ApplePersistenceIgnoreState: true })
+
+// ── 帮助改进 Forsion(匿名遥测)的宿主那一半:只采集、转发给 Extend(CloudHost.telemetry),自己不存不发(telemetryHost.ts)──
+// 模块装载即建:Extend 在 whenReady 里订阅,之前的启动期崩溃先攒着(≤50 条)等它来回放。
+// 台架 = QUIET_WINDOWS(TANGU_HARNESS_QUIET 或 Playwright 起的实例);插件沙箱是另起的一份 Forsion,也不算。
+let telemetryBeta: boolean | null = null
+const refreshTelemetryChannel = (): void => { void betaChannelOn().then((b) => { telemetryBeta = b }, () => {}) }
+const telemetry = createTelemetryHost({
+  packaged: telemetryPackaged({
+    isPackaged: app.isPackaged, harness: QUIET_WINDOWS || !!process.env.TANGU_HARNESS_QUIET, sandbox: !!SANDBOX, env: process.env.FORSION_TELEMETRY,
+  }),
+  sessionId: randomUUID(),
+  // 更新通道现读 config(每次读完更新缓存、先回上一次的值);还没读到时按版本号:预发布号 = beta
+  channel: () => { refreshTelemetryChannel(); return (telemetryBeta ?? app.getVersion().includes('-')) ? 'beta' : 'stable' },
+  coreVersion: () => (PRODUCT.agentBackend ? backend.engineVersion() ?? backend.engineOverlayVersion() : null),
+  log: (m) => console.warn(m),
+})
+refreshTelemetryChannel()
+const uptimeS = (): number => Math.round(process.uptime())
+// 主进程异常:用 uncaughtExceptionMonitor 只旁听,不改 Electron 原本的处理(挂 uncaughtException 会把它吞掉)。
+process.on('uncaughtExceptionMonitor', (err, origin) => {
+  telemetry.emit('crash', crashFromError('main', origin === 'unhandledRejection' ? 'rejection' : 'exception', err, { uptimeS: uptimeS() }))
+})
+// 没人接的 rejection 不另挂 unhandledRejection 监听:挂了 Node 就不再把它转成 uncaughtException,Electron 原本的错误框也没了。
+// 默认 throw 模式下它照样走到上面的 monitor(origin = 'unhandledRejection')。
+/** startup 那条:主窗首帧 + 引擎就绪(进程起来之后的毫秒)。无托管引擎 / 一分钟内没就绪就只带首帧。 */
+const telemetryStartup = createStartupTracker({
+  expectEngine: PRODUCT.agentBackend && !SANDBOX, waitMs: 60_000,
+  emit: (props) => telemetry.emit('perf', props),
+})
 
 function present(win: BrowserWindow): void {
   if (QUIET_WINDOWS) win.showInactive()
@@ -1678,7 +1709,10 @@ function createWindow(): void {
   })
   watchTabTitleBar(mainWindow)
   sinkForHarness(mainWindow)
-  mainWindow.once('ready-to-show', () => { if (mainWindow && !mainWindow.isDestroyed()) present(mainWindow) })
+  mainWindow.once('ready-to-show', () => {
+    telemetryStartup.firstFrame(process.uptime() * 1000) // 只认第一次(主窗被销毁重建时这里会再来)
+    if (mainWindow && !mainWindow.isDestroyed()) present(mainWindow)
+  })
 
   mainWindow.webContents.setWindowOpenHandler(openUrlHandler(mainWindow.webContents))
   hardenNav(mainWindow.webContents)
@@ -2685,6 +2719,8 @@ app.whenReady().then(async () => {
       },
       // ── 0.10 起:退出前问一次(蓬洲云还有文件在传)──
       addQuitGuard: (fn) => quitGuards.add(fn),
+      // ── 2.13.8 起:帮助改进 Forsion 的宿主事件(崩溃 / 性能 / 功能使用),见 telemetryHost.ts ──
+      telemetry: telemetry.seam,
       contentSync: {
         roots: async () => {
           const cfg=await readAmadeusConfig()
@@ -4466,7 +4502,10 @@ app.whenReady().then(async () => {
   app.on('child-process-gone', (_e, d) => {
     console.error('[tangu-desktop] child-process-gone', d.type, d.reason)
     if (d.type === 'GPU' && d.reason !== 'clean-exit') recoverRenderer(`gpu-gone:${d.reason}`)
+    const crash = processGoneProps('other', d, uptimeS())
+    if (crash) telemetry.emit('crash', crash)
   })
+  installHostTelemetry()
 })
 
 // ── 插件沙箱(契约 tangu-agent/docs/plugin-sandbox.md)────────────────────────────────────────
@@ -4533,6 +4572,39 @@ if (pluginSandbox) {
   ipcMain.handle('pluginSandbox:stop', (e) => (isTrustedSender(e) ? pluginSandbox.stop() : undefined))
   ipcMain.handle('pluginSandbox:reset', (e) => (isTrustedSender(e) ? pluginSandbox.reset() : { ok: false }))
   ipcMain.handle('pluginSandbox:install', (e) => (isTrustedSender(e) ? installFromSandbox() : { ok: false }))
+}
+
+/** 遥测的其余接线(whenReady 里调一次):各窗渲染进程崩溃、引擎意外退出 / 首次就绪、每小时的内存与卡顿、渲染层的上报通道。 */
+function installHostTelemetry(): void {
+  // app 级:主窗、独立窗、Mini、浮窗一处都接到(各窗自己的 render-process-gone 只管自愈)
+  app.on('render-process-gone', (_e, _wc, d) => {
+    const crash = processGoneProps('renderer', d, uptimeS())
+    if (crash) telemetry.emit('crash', crash)
+  })
+  if (PRODUCT.agentBackend && !SANDBOX) {
+    const offReady = backend.onStatus((st) => {
+      if (st.state !== 'ready') return
+      telemetryStartup.engineReady(process.uptime() * 1000)
+      offReady()
+    })
+    backend.onUnexpectedExit(({ code, signal, uptimeMs }) => telemetry.emit('crash', engineExitProps(code, signal, Math.round(uptimeMs / 1000))))
+  }
+  setInterval(() => {
+    const { longTasks } = telemetry.takeHour()
+    let rssKb = 0
+    try { for (const m of app.getAppMetrics()) rssKb += m.memory?.workingSetSize ?? 0 } catch { /* 拿不到就记 0 */ }
+    telemetry.emit('perf', {
+      kind: 'hourly',
+      rssMb: Math.round(rssKb / 1024),
+      heapMb: Math.round(process.memoryUsage().heapUsed / 1048576),
+      longTasks,
+    })
+  }, 3_600_000).unref()
+  // preload telemetryReport:渲染层只报 crash / feature / longtasks,整形与封顶在 telemetryHost.shapeRendererReport。只进不出,没有读接口。
+  ipcMain.on('host-telemetry:report', (e, kind: unknown, props: unknown) => {
+    if (!isTrustedSender(e)) return
+    telemetry.report(kind, props)
+  })
 }
 
 app.on('before-quit', (e) => {

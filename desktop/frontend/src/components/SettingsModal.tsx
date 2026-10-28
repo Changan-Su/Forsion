@@ -142,7 +142,8 @@ registerMessages({
   'settings.forsionCloud.connection': { zh: '连接', en: 'Connection' },
   'settingsmodal.cloudAccountDescription': { zh: 'Forsion 云端 · 管理个人主页、登录资料和账号安全。', en: 'Forsion Cloud · Your profile, sign-in details and account security.' },
   'settingsmodal.cloudMembershipDescription': { zh: 'Forsion 云端 · 查看会员、额度、积分与用量记录。', en: 'Forsion Cloud · Membership, quota, points and usage.' },
-  'settingsmodal.cloudHelpDescription': { zh: 'Forsion 云端 · 提交反馈、查看回复与管理诊断数据。', en: 'Forsion Cloud · Feedback, replies and diagnostic data.' },
+  'settingsmodal.cloudHelpDescription': { zh: 'Forsion 云端 · 提交反馈、查看回复。', en: 'Forsion Cloud · Feedback and replies.' },
+  'settingsmodal.cloudPrivacyDescription': { zh: 'Forsion 云端 · 帮助改进 Forsion，管理诊断数据。', en: 'Forsion Cloud · Help improve Forsion and manage diagnostic data.' },
   'settingsmodal.cloudAdvancedConnection': { zh: '高级连接', en: 'Advanced connection' },
   'settings.forsionCloud.noteSyncOn': { zh: '与云端智库同步', en: 'Sync with the cloud vault' },
   'settings.forsionCloud.address': { zh: '地址', en: 'Address' },
@@ -1255,7 +1256,8 @@ export const SettingsModal: React.FC<{
     : subItemsForTab(id).filter(([key]) => cloudSettingsParent(cloudViews, key) === key && (!groupedCloud || key !== 'f-conn'))
   const cloudDescription = cloudNavKey === ACCOUNT_SUB ? 'settingsmodal.cloudAccountDescription'
     : cloudNavKey === 'fx:forsion-extend:quota' ? 'settingsmodal.cloudMembershipDescription'
-      : cloudNavKey === 'fx:forsion-extend:feedback' ? 'settingsmodal.cloudHelpDescription' : ''
+      : cloudNavKey === 'fx:forsion-extend:feedback' ? 'settingsmodal.cloudHelpDescription'
+        : cloudNavKey === 'fx:forsion-extend:privacy' ? 'settingsmodal.cloudPrivacyDescription' : ''
   const activeSubLabel = subItems.find(([k]) => k === activeSub)?.[1] ?? ''
   const modelSubDescriptions: Record<string, string> = { 'm-models': 'modelsettings.defaultsHint', 'm-display': 'modelsettings.displayHint', 'm-providers': 'modelsettings.providersHint', 'm-websearch': 'modelsettings.searchHint', 'm-voice': 'modelsettings.voiceHint' }
   // 换页/换子页面后:①选中项滚到可见；②正文回到顶部 —— ⚠️ 滚动容器是**外层**
