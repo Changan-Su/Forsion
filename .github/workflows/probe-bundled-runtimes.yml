@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       build_run_id:
-        description: Successful build-desktop run that produced the candidate
+        description: Exact build-desktop run that produced the candidate
         type: string
         required: true
       expected_commit:
@@ -16,6 +16,10 @@ on:
         type: choice
         default: default
         options: [default, no-extend]
+      candidate_only:
+        description: Runtime-only candidate check; does not establish release eligibility
+        type: boolean
+        default: false
 permissions:
   contents: read
   actions: read
@@ -33,12 +37,31 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           BUILD_RUN_ID: ${{ inputs.build_run_id }}
           EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          DISTRIBUTION: ${{ inputs.distribution }}
+          CANDIDATE_ONLY: ${{ inputs.candidate_only }}
         run: |
           [[ "$BUILD_RUN_ID" =~ ^[0-9]+$ ]]
           [[ "$EXPECTED_COMMIT" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$BUILD_RUN_ID" > "$RUNNER_TEMP/candidate-run.json"
-          node -e 'const fs=require("node:fs"); const r=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+"/candidate-run.json","utf8")); if(r.head_sha!==process.env.EXPECTED_COMMIT || r.path!==".github/workflows/build-desktop.yml" || r.status!=="completed" || r.conclusion!=="success") throw Error("Candidate run does not match the requested successful build and source commit"); console.log(JSON.stringify({run:r.id,commit:r.head_sha,workflow:r.path}));'
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/runs/$BUILD_RUN_ID/jobs?per_page=100" > "$RUNNER_TEMP/candidate-jobs.json"
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/runs/$BUILD_RUN_ID/artifacts?per_page=100" > "$RUNNER_TEMP/candidate-artifacts.json"
+          node <<'NODE'
+          const fs = require("node:fs");
+          const r = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + "/candidate-run.json", "utf8"));
+          const jobs = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + "/candidate-jobs.json", "utf8")).flatMap(p => p.jobs);
+          const artifacts = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + "/candidate-artifacts.json", "utf8")).flatMap(p => p.artifacts);
+          const candidateOnly = process.env.CANDIDATE_ONLY === "true";
+          if (!["default", "no-extend"].includes(process.env.DISTRIBUTION)) throw Error("Invalid distribution");
+          if (String(r.id) !== process.env.BUILD_RUN_ID || r.head_sha !== process.env.EXPECTED_COMMIT || r.path !== ".github/workflows/build-desktop.yml" || r.status !== "completed") throw Error("Candidate run identity mismatch");
+          if (r.conclusion !== "success" && !(candidateOnly && r.event === "workflow_dispatch" && r.conclusion === "failure")) throw Error("Candidate run is not eligible for this probe mode");
+          const selected = jobs.filter(j => j.name === "windows-2022 (" + process.env.DISTRIBUTION + ")");
+          if (selected.length !== 1 || selected[0].status !== "completed" || selected[0].conclusion !== "success" || selected[0].head_sha !== r.head_sha) throw Error("Exact Windows distribution job did not succeed");
+          const named = artifacts.filter(a => a.name === "forsion-windows-2022-" + process.env.DISTRIBUTION && !a.expired);
+          if (named.length !== 1 || String(named[0].workflow_run?.id) !== process.env.BUILD_RUN_ID || named[0].workflow_run?.head_sha !== r.head_sha) throw Error("Artifact is not uniquely bound to the requested build");
+          console.log(JSON.stringify({run:r.id,commit:r.head_sha,job:selected[0].id,artifact:named[0].id,candidateOnly,releaseEligible:!candidateOnly && r.conclusion === "success"}));
+          if (candidateOnly) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, "Runtime-only candidate verification; this result does not establish release eligibility.\n");
+          NODE
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: forsion-windows-2022-${{ inputs.distribution }}
