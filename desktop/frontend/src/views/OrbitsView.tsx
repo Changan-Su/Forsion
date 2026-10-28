@@ -33,7 +33,7 @@ import { AgentAvatar } from '../components/AgentAvatar'
 import { tipProps, tipT } from '../hoverTip'
 import { formatRelative, formatRowTime } from '../format/time'
 import { TeamEditor } from '../components/TeamEditor'
-import { AgentRemoveDialog } from '../components/RemoveDialog'
+import { AgentUninstallDialog } from '../components/UninstallDialog'
 import { showDetails } from '../stores/detailsSubject'
 import * as api from '../services/backendService'
 import { usePageStore } from '../amadeus/store/pageStore'
@@ -610,7 +610,7 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
       )}
       {agentRemoving && (
         // 删掉的正是当前私聊的 Agent → 换到新对话,别让人继续往已删的 Agent 发消息(同删团队)
-        <AgentRemoveDialog agent={agentRemoving} onClose={() => setAgentRemoving(null)}
+        <AgentUninstallDialog slug={agentRemoving.slug} name={agentRemoving.name} onClose={() => setAgentRemoving(null)}
           onDone={() => { if (s.activeId && s.configBySession[s.activeId]?.soloAgentSlug === agentRemoving.slug) openNewChat() }} />
       )}
       {teamEditor && (

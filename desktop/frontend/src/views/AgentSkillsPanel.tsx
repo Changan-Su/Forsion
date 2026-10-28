@@ -7,11 +7,12 @@ import { Markdown } from '../components/Markdown'
 import { translate, useI18n } from '../i18n'
 import { useApp } from '../stores/appStore'
 import {
-  copySkillCatalogEntry, createSkillCatalogEntry, deleteSkillCatalogEntry, getSkillCatalogEntry,
+  copySkillCatalogEntry, createSkillCatalogEntry, getSkillCatalogEntry,
   importSkillCatalogEntry, listSkillCatalog, listSkills, setSkillCatalogEntryDisabled, updateSkillCatalogEntry,
 } from '../services/backendService'
 import type { SkillCatalogEntry, SkillInfo, TanguDesktopConfig } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { homeTarget } from '../services/engine/targets'
+import { SkillUninstallDialog } from '../components/UninstallDialog'
 import { nextExtraSelection } from './agentSkillSelection'
 
 type Props = {
@@ -251,15 +252,9 @@ export function AgentSkillsPanel({ cfg, agentSlug, surface, selectedIds, onSelec
       setDetail(updated); setEditing(false)
     }, t('agentProfile.skillSaved'))
   }
-  const deleteDetail = async () => {
-    if (!detail || !window.confirm(t('agentProfile.skillDeleteConfirm', { name: detail.name }))) return
-    await mutate(detail.key, async () => {
-      const result = await deleteSkillCatalogEntry(homeTarget(), detail.key, agentSlug) as { ok: boolean; backupPath?: string }
-      if (!result.ok) throw new Error(t('agentProfile.skillDeleteFailed'))
-      setNotice(result.backupPath ? t('agentProfile.skillDeletedBackup', { path: result.backupPath }) : t('agentProfile.skillDeleted'))
-      setDetailKey(null); setDetail(null); setEditing(false)
-    })
-  }
+  // 删除走统一卸载确认框(components/UninstallDialog):进回收站,删完 6 秒内可撤销
+  const [deleting, setDeleting] = useState(false)
+  const deleteDetail = (): void => { if (detail) setDeleting(true) }
   const copyGlobal = async (entry: SkillCatalogEntry) => {
     if (!copySlug.trim()) return
     await mutate(entry.key, async () => {
@@ -289,7 +284,7 @@ export function AgentSkillsPanel({ cfg, agentSlug, surface, selectedIds, onSelec
           <div><button type="button" className="btn ghost sm" onClick={() => { setEditing(false); setName(detail.name); setDescription(detail.description); setContent(detail.content || '') }}>{t('agentProfile.cancel')}</button><button type="submit" className="btn primary sm" disabled={!!busyKey || !name.trim() || !content.trim()}>{t('common.save')}</button></div>
         </form> : <><p>{detail.description}</p><small>{detail.path}</small><div className="agent-skill-content md-body">{detail.content ? <Markdown content={detail.content} allowRun={false} /> : <p>{t('agentProfile.emptyText')}</p>}</div>
           {!!detail.files?.length && <details><summary>{t('agentProfile.skillFiles', { count: detail.files.length })}</summary><ul>{detail.files.map((file) => <li key={file.path}>{file.path}</li>)}</ul></details>}
-          <div className="agent-skill-detail-actions">{detail.scope === 'agent' && !detail.readOnly && <><button className="btn ghost sm" onClick={() => setEditing(true)}>{t('agentProfile.edit')}</button><button className="btn ghost sm danger" disabled={!!busyKey} onClick={() => void deleteDetail()}><Trash2 size={13} />{t('agentProfile.skillDelete')}</button></>}
+          <div className="agent-skill-detail-actions">{detail.scope === 'agent' && !detail.readOnly && <><button className="btn ghost sm" onClick={() => setEditing(true)}>{t('agentProfile.edit')}</button><button className="btn ghost sm danger" disabled={!!busyKey} onClick={deleteDetail}><Trash2 size={13} />{t('agentProfile.skillDelete')}</button></>}
             {(detail.scope === 'user' || legacyDirectory(detail)) && <button className="btn ghost sm" disabled={!!busyKey} onClick={() => { const validSlug = /^[a-z0-9][a-z0-9-]*$/.test(detail.slug) ? detail.slug : detail.slug.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'skill'; setCopySlug(catalog.some((entry) => entry.scope === 'agent' && entry.slug === validSlug) ? `${validSlug}-copy` : validSlug); setCopyOpen(!copyOpen) }}>{t('agentProfile.copyToAgent')}</button>}
             {detail.scope === 'user' && <button className="btn ghost sm" onClick={() => useApp.getState().openSettings('skills', detail.key)}>{t('agentProfile.editGlobalSkill')}<ExternalLink size={13} /></button>}
           </div>
@@ -306,6 +301,8 @@ export function AgentSkillsPanel({ cfg, agentSlug, surface, selectedIds, onSelec
     const q = query.trim().toLocaleLowerCase()
     const shown = legacy.filter((entry) => !q || `${entry.name} ${entry.description}`.toLocaleLowerCase().includes(q))
     return <section className="agent-skills-panel" aria-label={t('agentProfile.skills')}>
+    {deleting && detail && <SkillUninstallDialog skillKey={detail.key} agentSlug={agentSlug} name={detail.name} onClose={() => setDeleting(false)}
+      onDone={() => { setDetailKey(null); setDetail(null); setEditing(false); emitChange() }} />}
       <div className="profile-list-controls"><label className="profile-search"><Search size={14} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('agentProfile.searchEquipment')} aria-label={t('agentProfile.searchEquipment')} /></label>
         <CapabilityMenu label={t('agentProfile.skillPolicy')} selection items={([
         ['auto', 'agentProfile.skillAuto'], ['selected', 'agentProfile.skillSelected'], ['off', 'agentProfile.skillOff'],

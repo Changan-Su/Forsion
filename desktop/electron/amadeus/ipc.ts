@@ -30,6 +30,7 @@ import { cloudVaultDir, isManagedCloudVault, migrateCloudMirrorDir } from './clo
 import type { AmadeusSyncFactory } from './cloudSeam'
 import { readPluginIconDataUrl } from '../pluginIcon'
 import { mt } from '../mainI18n'
+import { moveToDesktopTrash, restoreDesktopTrash } from '../trashWriter'
 import '../mainMessages' // P1-K5:main.dialog.openVault 在这里登记(main.ts 也 import,重复登记同值无害)
 
 const runFile = promisify(execFile)
@@ -841,7 +842,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
   // 卸载 Forsion 插件:按 manifest id 定位目录(id 可与目录名不同;与 listPlugins 同一 pluginIdOf 门禁)整删。
   // 只动 ~/.forsion/plugins;内嵌 agent 已播种进引擎的按「播种一次」语义保留(活体),
   // 内嵌引擎插件需重启引擎后消失(调用方负责提示/重启)。
-  handle(IPC.uninstallPlugin, async (_e, id: string) => {
+  handle(IPC.uninstallPlugin, async (_e, id: string, opts?: { keepSettings?: boolean; vaultFolder?: string; prefs?: Record<string, string> }) => {
     if (typeof id !== 'string' || !SAFE_PLUGIN_ID.test(id)) throw new Error('invalid-plugin-id') // 原因码,渲染层 ipcErrorText 译
     // ⚠️开发副本正遮蔽同 id 的安装版时必须拒绝:这里只扫全局目录,删掉的是**安装版**,而跑着的是开发副本 ——
     // 用户看到「已卸载」,插件却还在;等哪天撤下开发副本,它才凭空消失(且没有任何提示)。先撤开发副本再卸载。
@@ -875,8 +876,31 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
         await fs.writeFile(extTombstonesFile(), JSON.stringify(merged, null, 2), 'utf8')
       }
     } catch { /* manifest 坏/缺 → 无可声明 */ }
-    await fs.rm(target, { recursive: true, force: true })
+    // 进回收站(10-28 手动卸载规范,electron/trashWriter):插件文件 + 设置(勾了「保留设置」就不挪)+ 勾了才挪的库里工作文件夹,
+    // 一条恢复。工作文件夹由渲染层按 ctx.app.workFolder() 同口径算出(相对库根),这里只认库里、不是库根的真目录。
+    const paths: Array<{ path: string; role: string }> = [{ path: target, role: 'files' }]
+    if (!opts?.keepSettings) paths.push({ path: path.join(forsionHomeDir(), 'plugins-data', `${id}.json`), role: 'settings' })
+    const vaultRoot = vault.getRoot()
+    const rel = typeof opts?.vaultFolder === 'string' ? opts.vaultFolder.replace(/^\/+|\/+$/g, '') : ''
+    if (vaultRoot && rel && !rel.split('/').some((seg) => !seg || seg === '.' || seg === '..')) {
+      const abs = path.resolve(vaultRoot, rel)
+      const inside = path.relative(vaultRoot, abs)
+      if (inside && !inside.startsWith('..') && !path.isAbsolute(inside) && (await fs.lstat(abs).catch(() => null))?.isDirectory()) paths.push({ path: abs, role: 'vault' })
+    }
+    const prefs = !opts?.keepSettings && opts?.prefs && typeof opts.prefs === 'object'
+      ? Object.fromEntries(Object.entries(opts.prefs).filter(([k, v]) => typeof k === 'string' && typeof v === 'string')) : undefined
+    let name = id
+    try { name = String((JSON.parse(await fs.readFile(path.join(target, 'manifest.json'), 'utf8')) as { name?: unknown }).name || id) } catch { /* 用 id */ }
+    const entry = await moveToDesktopTrash({ ref: id, name, paths, extra: { pluginId: id, dirName: path.basename(target), ...(prefs && Object.keys(prefs).length ? { prefs } : {}) } })
     vault.setPluginFileExtensions(collectPluginExts()) // 重算(含墓碑):保护不随卸载失效
+    return { ...(entry ? { trashId: entry.id } : {}), dirName: path.basename(target) }
+  })
+
+  // 恢复主进程写的回收站条目(Forsion 插件):文件放回原处,重算扩展名保护;偏好交回渲染层写 localStorage、重载插件。
+  handle(IPC.trashRestore, async (_e, id: string) => {
+    const entry = await restoreDesktopTrash(String(id))
+    vault.setPluginFileExtensions(collectPluginExts())
+    return { kind: entry.kind, ref: entry.ref, ...(entry.extra ? { extra: entry.extra } : {}) }
   })
 
   // ctx.tangu.startChat 的 send:true 归属判定(2026-09-19)。bundle.agents 只说明「插件目录里有 agents/<slug>/」,

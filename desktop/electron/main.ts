@@ -31,6 +31,7 @@ import { ensureCliInstalled } from './cliInstall'
 import { PRODUCT } from './product'
 import { readSpaceIconDataUrl } from './spaceIcon'
 import { bindDevTanguHome, forsionHomeDir, tanguDataDir, migrateForsionHome, migrateEngineData, migratePair, setDevMode, defaultWorkspaceDir as forsionWorkspaceDir } from './forsionHome'
+import { moveToDesktopTrash } from './trashWriter'
 import { privateHostReason } from './netGuard'
 import { execFile, execFileSync, spawn } from 'child_process'
 import { homedir, hostname, networkInterfaces } from 'os'
@@ -4080,12 +4081,24 @@ app.whenReady().then(async () => {
   // ── 后端插件卸载:只动 ~/.tangu/plugins(用户目录);<pkg>/plugins 首方插件结构性安全(不在这里,删不到)。
   // manifest id 可能 ≠ 目录名,须读 manifest 映射。设置清理走后端 DELETE /agent/plugins/:id,重启由前端触发。
   ipcMain.handle('plugins:userInstalled', () => readUserPluginDirs(join(tanguDataDir(), 'plugins')))
-  ipcMain.handle('plugins:uninstall', async (_e, id: string) => marketPluginUpdater.exclusive(async () => {
+  // movedSlug:新版引擎(DELETE ?trash=1)已经把文件夹挪进回收站,这里只撤商店的安装记录。文件夹还在(引擎不在 / 旧引擎)
+  // 也不硬删 —— 确认框说的是进回收站,由主进程挪(restorer=desktop,恢复后需重扫引擎插件)。
+  ipcMain.handle('plugins:uninstall', async (_e, id: string, movedSlug?: string) => marketPluginUpdater.exclusive(async () => {
     if (!isSafeSlug(id)) throw new Error('invalid-plugin-id') // 原因码,渲染层 ipcErrorText 译
     const hit = (await readUserPluginDirs(join(tanguDataDir(), 'plugins'))).find((p) => p.id === id)
-    if (!hit) throw new Error('not-user-plugin') // 内置/首方插件不可卸载
+    if (!hit) {
+      if (typeof movedSlug === 'string' && isSafeSlug(movedSlug)) { await marketPluginUpdater.forget('plugin', movedSlug); return { ok: true } }
+      throw new Error('not-user-plugin') // 内置/首方插件不可卸载
+    }
     await marketPluginUpdater.forget('plugin', hit.slug)
-    await rm(join(tanguDataDir(), 'plugins', hit.slug), { recursive: true, force: true })
+    await moveToDesktopTrash({ ref: id, name: id, paths: [{ path: join(tanguDataDir(), 'plugins', hit.slug), role: 'files' }], extra: { engine: true } })
+    return { ok: true }
+  }))
+  // 卸载走确认框(Agent / 技能 / Forsion 插件进回收站)之后,撤掉商店的安装记录,别让更新器去更新一个已经不在的目录。
+  ipcMain.handle('market:forget', async (e, type: string, slug: string) => marketPluginUpdater.exclusive(async () => {
+    if (!isTrustedSender(e)) throw new Error('Untrusted sender')
+    if (!marketItemDir(tanguHomeDir(), type, slug)) throw new Error('invalid-plugin-id') // 原因码,渲染层 ipcErrorText 译
+    await marketPluginUpdater.forget(type, slug)
     return { ok: true }
   }))
 

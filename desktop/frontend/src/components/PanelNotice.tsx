@@ -11,16 +11,23 @@ import { useEffect } from 'react'
 import { create } from 'zustand'
 import { AlertCircle, Check, X } from 'lucide-react'
 import { useApp } from '../stores/appStore'
+import { notifyApp } from '../stores/notificationStore'
 import { useI18n } from '../i18n'
 
-const useNotice = create<{ notice: { text: string; error: boolean } | null }>(() => ({ notice: null }))
+type PanelAction = { label: string; run(): void }
+const useNotice = create<{ notice: { text: string; error: boolean; action?: PanelAction; durationMs?: number } | null }>(() => ({ notice: null }))
 let hosts = 0
 
 // 后到的覆盖先到的(错误也一样):设置里的动作是一次一个,「最近一次操作的结果」最不误导;
 // 市场那条「成功不顶掉错误」是为并发安装定的,放这里会让上一条旧错误吞掉下一次操作的成功提示。
-export function panelToast(text: string, error = false): void {
-  if (!hosts) { useApp.getState().toast(text, error); return }
-  useNotice.setState({ notice: { text, error } })
+/** opts.action:带一颗动作钮(卸载后的「撤销」);durationMs:停留多久(缺省 4 秒)。没有面板提示条时回落全局通知(动作照带)。 */
+export function panelToast(text: string, error = false, opts?: { action?: PanelAction; durationMs?: number }): void {
+  if (!hosts) {
+    if (opts?.action) notifyApp({ text, level: error ? 'error' : 'info', receipt: true, action: opts.action, ...(opts.durationMs ? { durationMs: opts.durationMs } : {}) })
+    else useApp.getState().toast(text, error)
+    return
+  }
+  useNotice.setState({ notice: { text, error, ...opts } })
 }
 
 export function PanelNotice() {
@@ -30,7 +37,7 @@ export function PanelNotice() {
   useEffect(() => {
     if (!notice || notice.error) return // 错误常驻到手动关 / 被下一条顶掉
     // 只收自己这一条:新提示的 setState 与 effect 清理之间,旧定时器可能先到期,不比对就会误删新来的错误(Codex 评审)。
-    const timer = setTimeout(() => { if (useNotice.getState().notice === notice) useNotice.setState({ notice: null }) }, 4000)
+    const timer = setTimeout(() => { if (useNotice.getState().notice === notice) useNotice.setState({ notice: null }) }, notice.durationMs || 4000)
     return () => clearTimeout(timer)
   }, [notice])
   if (!notice) return null
@@ -38,6 +45,7 @@ export function PanelNotice() {
     <div className={`mk-notice${notice.error ? ' is-error' : ''}`} role={notice.error ? 'alert' : 'status'} data-panel-notice>
       {notice.error ? <AlertCircle size={15} /> : <Check size={15} />}
       <div className="mk-notice-body"><span>{notice.text}</span></div>
+      {notice.action && <button className="mk-notice-action" onClick={() => { useNotice.setState({ notice: null }); notice.action!.run() }}>{notice.action.label}</button>}
       <button className="mk-notice-close" onClick={() => useNotice.setState({ notice: null })} aria-label={t('common.close')}><X size={13} /></button>
     </div>
   )
