@@ -253,6 +253,19 @@ export interface DirectProviderConfig {
   asrModelIds?: string[]
   /** 该 provider 里**没有**多模态的模型(黑名单;默认都算能看图)。命中的模型遇图转交辅助视觉模型。 */
   noVisionModelIds?: string[]
+  /** 推理协议;缺省 OpenAI 兼容 /chat/completions。从 Claude Code / Codex 导入的连接带 anthropic-messages / openai-responses。 */
+  protocol?: 'openai' | 'anthropic-messages' | 'openai-responses'
+}
+
+/** 导入本机配置的一行(主进程给的,不含 key)。 */
+export interface LocalProviderCandidate {
+  id: string
+  source: 'cc-switch' | 'claude-code' | 'codex'
+  name: string
+  host: string
+  keyTail: string
+  models: string[]
+  exists: boolean
 }
 
 /** 「设置 → Git」(引擎 config.json 的 git 段):PROJECT 详情的 git 动作与 agent 自己建分支 / 写提交时都照它。 */
@@ -738,6 +751,9 @@ declare global {
       }
       listProviders?(): Promise<DirectProviderConfig[]>
       saveProvider?(provider: DirectProviderConfig): Promise<DirectProviderConfig[]>
+      /** 本机 CC Switch / Claude Code / Codex 里能导入的连接(electron/discovery/providers.ts;只有 key 末 4 位)。 */
+      scanLocalProviders?(force?: boolean): Promise<LocalProviderCandidate[]>
+      importLocalProviders?(ids: string[]): Promise<DirectProviderConfig[]>
       deleteProvider?(providerId: string): Promise<DirectProviderConfig[]>
       /** 桌面级共享语音转写:音频(base64)→ 文本。任意功能复用;主进程本地/自带-key,不经引擎。 */
       /** timestamps 不传 = 回纯文本(语音输入);传 true = 回 { text, segments }(视频转录要分段时间戳)。 */

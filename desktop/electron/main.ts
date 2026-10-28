@@ -49,6 +49,7 @@ import { randomBytes } from 'node:crypto'
 import { loadTanguCreds, saveTanguCreds, forsionAccountId, loadAccountCloudSettings, saveAccountCloudSettings } from './forsionAuth'
 import { createAccountCore } from './accountCore'
 import { importMcp, importSkills, scanAll } from './discovery'
+import { localProvidersFor, scanLocalProviders, type LocalProviderCandidate } from './discovery/providers'
 import { checkForUpdates, downloadUpdate, installUpdate, canInstallUpdate, betaChannelOn, getUpdaterStatus, updateSourcePref, detectMainland, switchUpdateSource, openUpdateInstaller } from './updater'
 import { parseSourcePref } from '../shared/updateSource'
 import { fetchWebsiteReleases } from './websiteReleases'
@@ -3608,6 +3609,26 @@ app.whenReady().then(async () => {
       else cur.push(provider)
       return cur
     })
+    const stored = await loadConfig()
+    if (stored.mode === 'managed') void ensureBackend()
+    return list
+  })
+  // 导入本机配置(electron/discovery/providers.ts):打开提供方页时查,最多一分钟一次;导入按 id 在主进程重读,key 不经渲染端
+  let localScan: { at: number; list: LocalProviderCandidate[] } | null = null
+  const localScanOpts = async () => { const u = (await loadConfig()).cloudUrl; try { return { skipHosts: u ? [new URL(u).hostname] : [] } } catch { return {} } }
+  ipcMain.handle('providers:scanLocal', async (_e, force?: boolean) => {
+    if (!force && localScan && Date.now() - localScan.at < 60_000) return localScan.list
+    localScan = { at: Date.now(), list: await scanLocalProviders(await readProvidersFile(), await localScanOpts()) }
+    return localScan.list
+  })
+  ipcMain.handle('providers:importLocal', async (_e, ids: string[]) => {
+    const opts = await localScanOpts()
+    const add = await localProvidersFor(Array.isArray(ids) ? ids : [], await readProvidersFile(), opts)
+    localScan = null
+    // 选的那几条在原来的应用里刚改过(指纹变了)或已经加过:一条都没取到就如实报,界面重扫一遍让人重选
+    if (!add.length) throw new Error('import_stale')
+    const list = await updateProvidersFile((cur) => [...cur, ...add.filter((a) => !cur.some((p) => p.providerId === a.providerId))])
+    localScan = null
     const stored = await loadConfig()
     if (stored.mode === 'managed') void ensureBackend()
     return list

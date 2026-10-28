@@ -101,6 +101,19 @@ describe('用户自有 API key 路径', () => {
     expect(seen.Authorization).toBeUndefined();
     expect(seen['anthropic-beta']).toBeUndefined();
   });
+
+  it('Anthropic 以外的地址(Claude Code 中转):x-api-key 之外再带 Bearer;Anthropic 自家仍然只有 x-api-key', async () => {
+    const seen: any[] = [];
+    vi.stubGlobal('fetch', (_u: string, init: any) => {
+      seen.push(init.headers);
+      return Promise.resolve({ ok: false, status: 401, body: null, json: () => Promise.resolve({ error: { message: 'x' } }) });
+    });
+    for (const baseUrl of ['https://relay.example.com', 'https://api.anthropic.com/v1']) {
+      await streamAnthropicMessages({ apiKey: 'sk-relay-1', baseUrl, payload: { model: 'claude-x', messages: [] } } as any).catch(() => {});
+    }
+    expect(seen[0]).toMatchObject({ 'x-api-key': 'sk-relay-1', authorization: 'Bearer sk-relay-1' });
+    expect(seen[1].authorization).toBeUndefined();
+  });
 });
 
 // ── B5:≤4 个 cache_control 断点 + 思考块原样回灌 ─────────────────────────────
