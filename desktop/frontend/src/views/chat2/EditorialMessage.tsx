@@ -1,6 +1,6 @@
 import { MarketPluginCards, isMarketplaceTool } from '../../components/MarketPluginCards'
 import { PluginSandboxCard, isSandboxCardTool } from './PluginSandboxCard'
-import { GitToolCard, isGitTool } from './GitToolCard'
+import { GitToolCard, gitStatusSuperseded, isGitTool } from './GitToolCard'
 import { HumanUpdateCard } from '../../components/HumanUpdateCard'
 import { humanChanges } from '../../services/humanCollaboration'
 import { SelfUpdateReceipt } from '../../components/SelfUpdateReceipt'
@@ -724,7 +724,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
                     : part.t === 'sandbox'
                       ? <PluginSandboxCard key={`sandbox-${part.event.id}`} event={part.event} />
                     : part.t === 'git'
-                      ? <GitToolCard key={`git-${part.events[0].id}`} events={part.events} sessionId={runSid} />
+                      ? (gitStatusSuperseded(part.events, msg.toolEvents) ? null : <GitToolCard key={`git-${part.events[0].id}`} events={part.events} sessionId={runSid} />)
                     : part.t === 'pluginCard'
                       ? <PluginToolCard key={`ptc-${part.event.id}`} event={part.event} claim={part.claim} onQuote={handlers?.onQuote} fallback={<ToolGroup events={[part.event]} />} />
                     : part.t === 'intelligent'

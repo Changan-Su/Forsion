@@ -35,11 +35,14 @@ registerMessages({
   'gitCard.cancel': { zh: '取消', en: 'Cancel' },
   'gitCard.commitDo': { zh: '提交', en: 'Commit' },
   'gitCard.committedTo': { zh: '提交到 {branch} · {count} 个文件', en: 'Committed to {branch} · {count} files' },
+  'gitCard.committedToOne': { zh: '提交到 {branch} · {count} 个文件', en: 'Committed to {branch} · {count} file' },
   'gitCard.pushedTo': { zh: '推送到 {site}', en: 'Pushed to {site}' },
   'gitCard.pushedCommits': { zh: '{count} 个提交', en: '{count} commits' },
+  'gitCard.pushedCommitsOne': { zh: '{count} 个提交', en: '{count} commit' },
   'gitCard.ownCredentials': { zh: '用的是这台电脑自己的 git 凭据', en: 'Used this computer’s own git credentials' },
   'gitCard.pulledFrom': { zh: '从 {upstream} 拉取', en: 'Pulled from {upstream}' },
   'gitCard.pulledCount': { zh: '快进了 {count} 个提交', en: 'Fast-forwarded {count} commits' },
+  'gitCard.pulledCountOne': { zh: '快进了 {count} 个提交', en: 'Fast-forwarded {count} commit' },
   'gitCard.pulledNothing': { zh: '已经是最新的', en: 'Already up to date' },
   'gitCard.commitFailed': { zh: '没提交成功', en: 'Not committed' },
   'gitCard.pushFailed': { zh: '没推上去', en: 'Not pushed' },
@@ -55,12 +58,21 @@ registerMessages({
   'gitCard.apv.pullHint': { zh: '只快进；两边都有新提交时什么都不改。', en: 'Fast-forward only; nothing changes if both sides have new commits.' },
   'gitCard.apv.once': { zh: '只推这一次，推送去向仍是 {remote}', en: 'This once; the push target stays {remote}' },
   'gitCard.apv.commits': { zh: '{count} 个提交', en: '{count} commits' },
+  'gitCard.apv.commitsOne': { zh: '{count} 个提交', en: '{count} commit' },
 })
 
 export const GIT_CARD_TOOLS: ReadonlySet<string> = new Set(['git_status', 'git_commit', 'git_push', 'git_pull'])
 export const isGitTool = (ev: { name: string }): boolean => GIT_CARD_TOOLS.has(ev.name)
+/** 只看过状态的那张卡,在同一条回答里后面又有提交 / 推送 / 拉取时不画:否则卡上的「推送」和等你批准的那次推送并排(后面那张结果卡会写清现状)。 */
+export function gitStatusSuperseded(run: ToolEvent[], all: ToolEvent[] | undefined): boolean {
+  if (!run.length || run.some((e) => e.name !== 'git_status') || !all) return false
+  const at = all.findIndex((e) => e.id === run[run.length - 1].id)
+  return at >= 0 && all.slice(at + 1).some((e) => isGitTool(e) && e.name !== 'git_status')
+}
 
 const FILES_SHOWN = 8
+/** 英文要分单复数的几句(中文同一句):count 为 1 时取 <key>One。 */
+const countKey = (key: string, count: unknown): string => (Number(count) === 1 ? `${key}One` : key)
 
 /** 工具结果:成功是一个 JSON;失败以 `Error:` 开头、第二行起是带机器码的 JSON(tangu-agent tools/builtin/git.ts)。 */
 export function parseGitResult(ev: Pick<ToolEvent, 'result' | 'isError'>): { ok: boolean; data: Record<string, any> } | null {
@@ -194,22 +206,23 @@ function Step({ ev, git, login }: { ev: ToolEvent; git: GitSummary | null | unde
   const r = parseGitResult(ev)
   const d = r?.data || {}
   const ok = !!r?.ok
-  const site = d.site?.site || (ev.name === 'git_push' ? targetRemote(git) && siteName(targetRemote(git)!, t) : '')
+  // 推到哪个远端:成功时结果里有;失败时看参数(「只推这一次」点了名)再退回推送去向
+  const pushed = ev.name === 'git_push' ? git?.remoteList?.find((x) => x.name === (d.remote || argsOf(ev.arguments).remote || git.pushRemote)) : undefined
+  const site = d.site?.site || (pushed ? siteName(pushed, t) : '')
   let title: ReactNode = null
   let sub: ReactNode = null
   if (ev.name === 'git_commit') {
     title = ok ? <><span className="git-card-sha">{d.short}</span><b>{d.subject}</b></> : <b>{t('gitCard.commitFailed')}</b>
-    if (ok) sub = [t('gitCard.committedTo', { branch: d.branch || 'HEAD', count: d.files ?? '?' }), d.author].filter(Boolean).join(' · ')
+    if (ok) sub = [t(countKey('gitCard.committedTo', d.files), { branch: d.branch || 'HEAD', count: d.files ?? '?' }), d.author].filter(Boolean).join(' · ')
   } else if (ev.name === 'git_push') {
     title = <b>{ok ? t('gitCard.pushedTo', { site: site || d.remote }) : site ? t('gitCard.pushFailedTo', { site }) : t('gitCard.pushFailed')}</b>
     if (ok) {
-      const remote = git?.remoteList?.find((x) => x.name === d.remote)
-      sub = [d.site?.repo || remote?.path || d.remote, d.branch, d.commits ? t('gitCard.pushedCommits', { count: d.commits }) : '',
-        remote ? remoteAuthText(remote, login, t) : '', d.ownCredentials ? t('gitCard.ownCredentials') : ''].filter(Boolean).join(' · ')
+      sub = [d.site?.repo || pushed?.path || d.remote, d.branch, d.commits ? t(countKey('gitCard.pushedCommits', d.commits), { count: d.commits }) : '',
+        pushed ? remoteAuthText(pushed, login, t) : '', d.ownCredentials ? t('gitCard.ownCredentials') : ''].filter(Boolean).join(' · ')
     }
   } else if (ev.name === 'git_pull') {
     title = <b>{ok ? t('gitCard.pulledFrom', { upstream: d.upstream }) : t('gitCard.pullFailed')}</b>
-    if (ok) sub = d.updated ? t('gitCard.pulledCount', { count: d.commits }) : t('gitCard.pulledNothing')
+    if (ok) sub = d.updated ? t(countKey('gitCard.pulledCount', d.commits), { count: d.commits }) : t('gitCard.pulledNothing')
   } else {
     title = <b>{t('gitCard.statusFailed')}</b>
   }
@@ -237,6 +250,8 @@ export function GitToolCard({ events, sessionId }: { events: ToolEvent[]; sessio
   const remote = targetRemote(git)
   const lastPush = [...writes].reverse().find((e) => e.name === 'git_push')
   const pushFailed = !!lastPush && !parseGitResult(lastPush)?.ok
+  // 失败的那次若是「只推这一次」到别的远端,重试也推到那里
+  const retryRemote = pushFailed ? (argsOf(lastPush!.arguments).remote as string | undefined) || undefined : undefined
   // 读不到现状时,状态卡退回最后一次 git_status 的结果(手机 / 网页看得到卡,只是不能动手)
   const fromTool = !reach ? parseGitResult([...events].reverse().find((e) => e.name === 'git_status') || { result: '' })?.data : undefined
   const shown: GitSummary | null | undefined = git ?? (fromTool?.repo ? {
@@ -248,7 +263,7 @@ export function GitToolCard({ events, sessionId }: { events: ToolEvent[]; sessio
   const act = (kind: 'push' | 'pull') => {
     if (!sessionId) return
     setBusy(kind); setActErr('')
-    void (kind === 'push' ? gitPushProject(homeTarget(), sessionId) : gitPullProject(homeTarget(), sessionId))
+    void (kind === 'push' ? gitPushProject(homeTarget(), sessionId, false, retryRemote) : gitPullProject(homeTarget(), sessionId))
       .then(reload, (e) => setActErr(errText(e?.code, e?.message))).finally(() => setBusy(''))
   }
   const openDetails = () => {
@@ -334,7 +349,7 @@ export function useGitApproval(name: string, rawArgs: string | undefined, sessio
     title: t('gitCard.apv.push', { site: siteName(r, t) }),
     body: <div className="git-apv" data-git-approval="push">
       <RemoteRow r={r} login={live.login} />
-      <div className="git-card-faint">{[`${r.name} · ${git.branch}`, !once && git.ahead ? t('gitCard.apv.commits', { count: git.ahead }) : '', once && git.pushRemote && once !== git.pushRemote ? t('gitCard.apv.once', { remote: git.pushRemote }) : ''].filter(Boolean).join(' · ')}</div>
+      <div className="git-card-faint">{[`${r.name} · ${git.branch}`, !once && git.ahead ? t(countKey('gitCard.apv.commits', git.ahead), { count: git.ahead }) : '', once && git.pushRemote && once !== git.pushRemote ? t('gitCard.apv.once', { remote: git.pushRemote }) : ''].filter(Boolean).join(' · ')}</div>
       {!!commits.length && <ul className="git-card-commits">{commits.map((c) => <li key={c.sha}><span className="git-card-sha">{c.short}</span>{c.subject}</li>)}</ul>}
     </div>,
   }

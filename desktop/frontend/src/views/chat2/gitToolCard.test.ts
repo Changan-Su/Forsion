@@ -4,7 +4,7 @@
  *   - 工具行:提交那行带信息首行,不再是 `git_commit {"message":…}`
  */
 import { describe, expect, it } from 'vitest'
-import { parseGitResult, isGitTool } from './GitToolCard'
+import { gitStatusSuperseded, parseGitResult, isGitTool } from './GitToolCard'
 import { describeTool } from '../../components/ToolGroup'
 
 describe('Git 卡', () => {
@@ -20,6 +20,14 @@ describe('Git 卡', () => {
   it('没有 JSON 的失败照样是失败,原因取第一行', () => {
     expect(parseGitResult({ result: 'Error: tool timed out' })).toEqual({ ok: false, data: { message: 'tool timed out' } })
     expect(parseGitResult({ result: 'not json' })).toBeNull()
+  })
+
+  it('只看过状态的卡,同一条回答后面又有 git 写动作时不画', () => {
+    const ev = (id: string, name: string) => ({ id, name, done: true })
+    const all = [ev('s', 'git_status'), ev('r', 'read_file'), ev('p', 'git_push')]
+    expect(gitStatusSuperseded([all[0]], all)).toBe(true)
+    expect(gitStatusSuperseded([all[0]], all.slice(0, 2))).toBe(false)
+    expect(gitStatusSuperseded([all[2]], all)).toBe(false) // 结果卡照画
   })
 
   it('认得四个 git 工具,工具行带信息首行', () => {
