@@ -519,7 +519,7 @@ export interface EmbedResolved {
 /** `db:read` 的结果:错误是数据不是异常(前端按 status 分支渲染,不用 try/catch 猜原因)。 */
 /** 写回票据:文件内容的短哈希。渲染端把它随 dbWriteCas 带回,主进程比对不上就拒写 ——
  *  防的是「渲染端 500ms 防抖里握着旧快照,期间引擎/自动化改了同一张表,防抖一落盘把人家整行抹掉」。
- *  云端/移动端桥不提供 version(也没有 dbWriteCas),渲染端据此退回无条件写,行为与从前一致。 */
+ *  云端桥使用所读原文的 seq 作为票据;旧宿主未提供 version 时保留兼容写入路径。 */
 export type DbReadResult =
   | { status: 'ok'; path: string; data: DbFile; version?: string } // path = 解析后的 vault 相对路径,后续写回用它
   | { status: 'missing' }

@@ -30,6 +30,10 @@ vi.mock('../api', () => ({
   },
 }))
 vi.mock('./automationKick', () => ({ kickAutomation: () => {}, setAutomationKick: () => {} }))
+vi.mock('./pageStore', async () => {
+  const { createStore } = await import('zustand/vanilla')
+  return { onNotePathGone: () => () => {}, usePageStore: createStore(() => ({ vaultRoot: null as string | null })) }
+})
 
 const { useDbStore } = await import('./dbStore')
 

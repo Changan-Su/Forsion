@@ -28,8 +28,6 @@ import { joinRel } from '@amadeus-shared/assets'
 import { contentStorageKey } from '@lcl/engine/contentStorageScope'
 import { cloudVaultMarkerPath, cloudVaultNamesFrom, parseCloudVaultMarker, type CloudVaultDevice } from '@amadeus-shared/entrySync'
 import { dbFileSchema, parseDb, serializeDb, type DbFile } from '@amadeus-shared/db/schema'
-import { parseDrawing, withSceneJson } from '@amadeus-shared/excalidraw/format'
-import { mergeScenes, type SceneLike } from '@amadeus-shared/excalidraw/reconcile'
 import { parseFmObject, setFmExtraOnSource } from '@amadeus-shared/db/pageFrontmatter'
 import type {
   AmadeusApi,
@@ -1452,7 +1450,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
         }
         const r = parseDb(f.content)
         return r.ok
-          ? { status: 'ok', path: resolved, data: r.data } // path = 解析后的 vault 相对路径(写回锚点)
+          ? { status: 'ok', path: resolved, data: r.data, version: String(f.seq) } // path = 解析后的 vault 相对路径(写回锚点)
           : { status: 'corrupt', path: resolved, message: r.error }
       }
       return { status: 'missing' }
@@ -1464,16 +1462,22 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
         const parsed = dbFileSchema.parse(data) // 防御性校验:坏数据拒写(抛给 dbStore 静默重试)
         const content = serializeDb(parsed)
         const base = await baseSeqFor(dbPath)
+        await putFile(dbPath, content, base)
+      }),
+    writeDatabaseCas: (dbPath, data, baseVersion) =>
+      enqueue([dbPath], async () => {
+        await ensureVault()
+        if (!/^(0|[1-9]\d*)$/.test(baseVersion) || !Number.isSafeInteger(Number(baseVersion))) {
+          throw new Error('Invalid database version')
+        }
+        const content = serializeDb(dbFileSchema.parse(data))
         try {
-          await putFile(dbPath, content, base)
+          const result = await putFile(dbPath, content, Number(baseVersion))
+          return { ok: true, version: String(result.seq) }
         } catch (e) {
-          if (is409(e)) {
-            // 云端更新在先:采纳服务端版本(拉新 seq),让 dbStore 经 onDbExternalChange 热重载。
-            try { await getFile(dbPath) } catch { /* 拉不到就等 SSE */ }
-            setTimeout(() => fireDb(dbPath), 0)
-            return
-          }
-          throw e
+          if (!is409(e)) throw e
+          // Keep pending operations in dbStore; it reloads and replays them on this version.
+          return { ok: false, version: baseVersion }
         }
       }),
 
@@ -1494,35 +1498,29 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       }
       return { status: 'missing' }
     },
-    writeDrawing: (drawingPath, source) =>
-      enqueue([drawingPath], async () => {
+    writeDrawing: (drawingPath, source, fingerprint) =>
+      enqueue([drawingPath], async (): Promise<TextWriteResult> => {
         await ensureVault()
-        const base = await baseSeqFor(drawingPath)
+        let base: number
+        try {
+          const fresh = await getFile(drawingPath)
+          if (fingerprint !== undefined && textFingerprint(fresh.content) !== fingerprint) {
+            return { ok: false, current: fresh.content }
+          }
+          base = fresh.seq
+        } catch (e) {
+          if (!is404(e)) throw e
+          if (fingerprint !== undefined || everKnown.has(drawingPath)) return { ok: false, current: null }
+          base = 0
+        }
         try {
           await putFile(drawingPath, source, base)
+          return { ok: true }
         } catch (e) {
-          // 真并发(drawingStore 写前已预读,剩毫秒窗):拉服务端最新,元素级合并后按新 seq 重写
-          // —— 不同元素无损并集、同元素 version 高者胜;解析不出(坏档)才回落「后写胜」强写。
           if (!is409(e)) throw e
-          try {
-            const f = await getFile(drawingPath) // noteSeq 顺带对齐
-            const mine = parseDrawing(source)
-            const theirs = parseDrawing(f.content)
-            const mineScene = mine ? (JSON.parse(mine.sceneJson) as SceneLike) : null
-            const theirScene = theirs ? (JSON.parse(theirs.sceneJson) as SceneLike) : null
-            if (mineScene && theirScene) {
-              const next = withSceneJson(f.content, JSON.stringify(mergeScenes(mineScene, theirScene)))
-              if (next) {
-                await putFile(drawingPath, next, f.seq)
-                return
-              }
-            }
-          } catch {
-            /* 合并失败 → 强写兜底 */
-          }
-          const body = (e as HttpError).body as ConflictBody | null
-          if (body && typeof body.seq === 'number') noteSeq(drawingPath, body.seq)
-          await putFile(drawingPath, source, seqMap.get(drawingPath) ?? 0, true)
+          // The shared drawing store owns bounded re-read/merge/retry. Never force stale text.
+          try { return { ok: false, current: (await getFile(drawingPath)).content } }
+          catch (readError) { if (is404(readError)) return { ok: false, current: null }; throw readError }
         }
       }),
 
