@@ -197,9 +197,11 @@ async function runOpenAiResponsesStream(opts: StreamOpts, guard: StreamIdleGuard
   if (!response.ok || !response.body) {
     let detail = '';
     let resetsAtMs = 0;
+    let code = '';
     try {
       const j: any = await response.json();
       detail = j?.error?.message || JSON.stringify(j).slice(0, 300);
+      code = j?.error?.code || j?.error?.type || '';
       // Codex 订阅额度用尽:带上重置时间,否则用户只看到一句「usage limit」不知道等多久(PI-DSH 评审 R5)。
       // 绝对时刻(ISO)也写进去:界面据此说「X 点重置」;额度用完接力据 err.resetsAt 判重置前直接用后备。
       const resetsAt = Number(j?.error?.resets_at) || (Number(j?.error?.resets_in_seconds) ? Date.now() / 1000 + Number(j.error.resets_in_seconds) : 0);
@@ -209,7 +211,7 @@ async function runOpenAiResponsesStream(opts: StreamOpts, guard: StreamIdleGuard
       }
     } catch { /* keep empty */ }
     const status = response.status === 401 || response.status === 403 ? 502 : response.status || 502;
-    throw Object.assign(new LlmError(status, detail || `Codex upstream error ${response.status}`), resetsAtMs ? { resetsAt: resetsAtMs } : {});
+    throw Object.assign(new LlmError(status, detail || `Codex upstream error ${response.status}`), code ? { code } : {}, resetsAtMs ? { resetsAt: resetsAtMs } : {});
   }
 
   let content = '';
@@ -325,7 +327,13 @@ async function runOpenAiResponsesStream(opts: StreamOpts, guard: StreamIdleGuard
           if (typeof rt === 'number') usage.reasoning_tokens = rt;
         }
       } else if (type === 'response.failed' || type === 'error') {
-        throw new LlmError(502, ev.response?.error?.message || ev.error?.message || 'Codex stream error');
+        // 流里的失败(Codex 额度用完也会走这里):code 和重置时刻同 HTTP 429 那条路一样带上，额度接力才认得出、界面才说得出几点重置
+        // 标准 error 事件的 code / message 在顶层(openai-node ResponseErrorEvent);Codex 有时包在 error 里
+        const e = ev.response?.error || ev.error || ev;
+        let msg = e.message || 'Codex stream error';
+        const resetsAt = Number(e.resets_at) || (Number(e.resets_in_seconds) ? Date.now() / 1000 + Number(e.resets_in_seconds) : 0);
+        if (resetsAt) msg += ` (resets in ~${Math.max(1, Math.round((resetsAt * 1000 - Date.now()) / 60_000))} min, at ${new Date(resetsAt * 1000).toISOString()})`;
+        throw Object.assign(new LlmError(502, msg), { code: e.code || (e === ev ? undefined : e.type) }, resetsAt ? { resetsAt: resetsAt * 1000 } : {});
       }
     }
   }

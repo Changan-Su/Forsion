@@ -157,6 +157,28 @@ describe('streamOpenAiResponses SSE parse', () => {
     expect(isRetryableLlmError(err)).toBe(false);
   });
 
+  // 厂商原文(magpie codex_quota_group_test.go):额度用完也可能在 200 的流里以 response.failed / error 事件出现
+  it('流里的额度用完(response.failed / error 事件)认得出，带 code 与重置时刻;按分钟的限流不算', async () => {
+    const { isQuotaExhaustedLlmError, isRetryableLlmError } = await import('./retry.js');
+    const failWith = async (ev: any) => {
+      const sse = `data: ${JSON.stringify({ type: 'response.created', response: { id: 'r0', status: 'in_progress' } })}\n\ndata: ${JSON.stringify(ev)}\n\n`;
+      vi.stubGlobal('fetch', () => Promise.resolve({ ok: true, body: new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(sse)); c.close(); } }) }));
+      return streamOpenAiResponses({ apiKey: 'x', baseUrl: 'https://example/codex', payload: { model: 'gpt-5-codex', messages: [] } } as any).catch((e) => e);
+    };
+    const failed = await failWith({ type: 'response.failed', sequence_number: 1, response: { id: 'r0', status: 'failed', error: { code: 'usage_limit_reached', message: "You've hit your usage limit. Upgrade to Pro, or try again in 2 hours." } } });
+    expect([failed.code, isQuotaExhaustedLlmError(failed), isRetryableLlmError(failed)]).toEqual(['usage_limit_reached', true, false]);
+    const errEv: any = await failWith({ type: 'error', error: { type: 'usage_limit_reached', code: 'usage_limit_reached', message: 'The usage limit has been reached', resets_in_seconds: 7200 } });
+    expect(isQuotaExhaustedLlmError(errEv)).toBe(true);
+    expect(errEv.resetsAt).toBeGreaterThan(Date.now() + 7_000_000);
+    expect(errEv.message).toMatch(/resets in ~120 min/);
+    const codeOnly = await failWith({ type: 'response.failed', response: { id: 'r0', status: 'failed', error: { code: 'insufficient_quota', message: 'Upgrade your plan to continue.' } } });
+    expect(isQuotaExhaustedLlmError(codeOnly)).toBe(true); // 正文没提额度，只有 code 写着
+    const topLevel = await failWith({ type: 'error', code: 'insufficient_quota', message: 'Upgrade your plan', sequence_number: 1, param: null });
+    expect([topLevel.code, isQuotaExhaustedLlmError(topLevel), isRetryableLlmError(topLevel)]).toEqual(['insufficient_quota', true, false]);
+    const rate = await failWith({ type: 'response.failed', response: { id: 'r0', status: 'failed', error: { code: 'rate_limit_exceeded', message: 'Rate limit reached for gpt-5.5 on tokens per min. Please try again in 11.054s.' } } });
+    expect([isQuotaExhaustedLlmError(rate), isRetryableLlmError(rate)]).toEqual([false, true]);
+  });
+
   // 与 openaiCompat 同一条极性契约:两套协议对「没报 / 报了 0」必须给出同一语义。
   it('reasoning_tokens 极性:上游没报 → 整个键缺席;明确报 0 → 键在且为 0', async () => {
     expect(await usageOf({ input_tokens: 10, output_tokens: 5 })).not.toHaveProperty('reasoning_tokens');

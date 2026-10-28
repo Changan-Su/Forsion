@@ -1061,12 +1061,21 @@ const IMGEDIT_PNGS = ONLY.has('imageedit') ? [randDigits(), randDigits()].map((d
 const sha = (buf) => createHash('sha256').update(buf).digest('hex');
 // relay:「下一次模型调用回额度用完」的注入 —— 一个本地提供方,每个请求都回 Codex 订阅额度用完的报文(429 + usage_limit_reached + resets_at)。
 const RELAY_MODE = (() => { const i = argv.indexOf('--relay-mode'); return i >= 0 ? argv[i + 1] : 'auto'; })();
+// --relay-path http|sse:额度用完从哪条路来。报文是厂商原文(magpie codex_quota_group_test.go):http = 429 JSON;sse = 200 流里的 response.failed(走 openai-responses 协议)
+const RELAY_PATH = (() => { const i = argv.indexOf('--relay-path'); return i >= 0 ? argv[i + 1] : 'http'; })();
 const FAKEQ = ONLY.has('relay') ? await new Promise((resolve) => {
   const state = { calls: 0 };
   const srv = createHttpServer(async (req, res) => {
     for await (const _ of req) { /* drain */ }
     state.calls++;
-    res.writeHead(429, { 'content-type': 'application/json' }).end(JSON.stringify({ error: { type: 'usage_limit_reached', message: 'The usage limit has been reached', resets_at: Math.floor(Date.now() / 1000) + 3600 } }));
+    if (RELAY_PATH === 'sse') {
+      res.writeHead(200, { 'content-type': 'text/event-stream' }).end([
+        { type: 'response.created', sequence_number: 0, response: { id: 'r0', status: 'in_progress' } },
+        { type: 'response.failed', sequence_number: 1, response: { id: 'r0', status: 'failed', error: { code: 'usage_limit_reached', message: "You've hit your usage limit. Upgrade to Pro, or try again in 2 hours." } } },
+      ].map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join(''));
+      return;
+    }
+    res.writeHead(429, { 'content-type': 'application/json' }).end(JSON.stringify({ error: { type: 'usage_limit_reached', message: 'The usage limit has been reached', plan_type: 'plus', resets_at: Math.floor(Date.now() / 1000) + 3600, resets_in_seconds: 3600 } }));
   });
   srv.listen(0, '127.0.0.1', () => resolve(Object.assign(state, { port: srv.address().port, server: srv })));
 }) : null;
@@ -1096,7 +1105,7 @@ const IMGEDIT = ONLY.has('imageedit') ? await new Promise((resolve) => {
     realtimeProviders = [{ providerId: 'bailian', baseUrl: p.baseUrl, apiKey: p.apiKey, modelIds: [] }];
   }
   const providers = [...(realtimeProviders || []), ...(IMGEDIT ? [{ providerId: 'fakeimg', baseUrl: `http://127.0.0.1:${IMGEDIT.port}/v1`, apiKey: 'live', modelIds: [], imageModelIds: ['fake-edit'] }] : []),
-    ...(FAKEQ ? [{ providerId: 'fakequota', baseUrl: `http://127.0.0.1:${FAKEQ.port}/v1`, apiKey: 'live', modelIds: ['fake-quota'] }] : [])];
+    ...(FAKEQ ? [{ providerId: 'fakequota', baseUrl: `http://127.0.0.1:${FAKEQ.port}/v1`, apiKey: 'live', modelIds: ['fake-quota'], ...(RELAY_PATH === 'sse' ? { protocol: 'openai-responses' } : {}) }] : [])];
   const relayModels = FAKEQ && RELAY_MODE !== 'none' ? { models: { quotaFallback: MODEL, quotaFallbackAsk: RELAY_MODE === 'ask' } } : {};
   if (COMPACTION_CFG || MCP_CFG || gitCfg || providers.length) writeFileSync(join(shared, 'config.json'), JSON.stringify({ ...(COMPACTION_CFG ? { compaction: COMPACTION_CFG } : {}), ...(MCP_CFG ? { mcp: MCP_CFG } : {}), ...(gitCfg ? { git: gitCfg } : {}), ...(providers.length ? { providers } : {}), ...relayModels }, null, 2));
 }
@@ -2726,7 +2735,7 @@ try {
     const b = RELAY_MODE === 'auto' ? await turn(`${tok}-2`) : null;
     const msgs = asList(await api(`/agent/sessions/${sid}/messages`).catch(() => []), 'messages');
     const asst = msgs.filter((m) => m.role === 'assistant' || m.role === 'model');
-    const evidence = { mode: RELAY_MODE, fakeCalls: FAKEQ.calls, callsA, fbA, fbB: b?.statuses.filter((x) => x.phase === 'model_fallback'), errA: a.error, errB: b?.error, rows: asst.map((m) => ({ origin: m.origin, model_id: m.model_id, content: String(m.content || '').slice(0, 80) })) };
+    const evidence = { mode: RELAY_MODE, path: RELAY_PATH, fakeCalls: FAKEQ.calls, callsA, fbA, fbB: b?.statuses.filter((x) => x.phase === 'model_fallback'), errA: a.error, errB: b?.error, rows: asst.map((m) => ({ origin: m.origin, model_id: m.model_id, content: String(m.content || '').slice(0, 80) })) };
     writeFileSync(join(OUT, 'relay-evidence.json'), JSON.stringify(evidence, null, 2));
     let ok, detail;
     if (RELAY_MODE === 'auto') {
