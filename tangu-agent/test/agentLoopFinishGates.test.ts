@@ -496,6 +496,14 @@ describe('回灌的加密推理被拒(借鉴 magpie 第三轮 19,10-28)', () => 
     expect(llmPayloads.length).toBe(3);
   }, 20_000);
 
+  it('流里来的被拒(502)也只重发一次:拿掉之后再被拒不走网关抖动的三次重试', async () => {
+    const foreign502 = () => { throw Object.assign(new LlmError(502, 'The encrypted content for item rs_ could not be verified.'), { code: 'invalid_encrypted_content' }); };
+    script = [reasoningToolStep(), foreign502, foreign502, finalStep('不该走到这')];
+    const run = await runToSettled();
+    expect(run.status).toBe('failed');
+    expect(llmPayloads.length).toBe(3);
+  }, 20_000);
+
   it('本来就没带推理:不重发(一模一样的请求只会再被拒)', async () => {
     script = [foreign];
     const run = await runToSettled();

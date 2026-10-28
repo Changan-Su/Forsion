@@ -3057,11 +3057,12 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           }
           // 回灌的加密推理被拒(invalid_encrypted_content / 思考签名无效:多半是换了账号,借 magpie #3887):拿掉本 run 里所有
           // providerItems 重发本轮,只一次。跨 run 的那半由回放的账号绑定挡(historyReplay 文件头 ①);这里兜绑定判不出的(托管面、同 key 换了组织)。
-          if (!emitted && !reasoningStripped && isForeignReasoningLlmError(err)) {
-            reasoningStripped = true;
+          // 不论第几次都在这里收口:流里来的被拒是 502,漏到下面会被当网关抖动再重发三次(Codex 评审)。
+          if (!emitted && isForeignReasoningLlmError(err)) {
             let dropped = 0;
-            for (const m of workingMessages) if ((m as any).providerItems) { delete (m as any).providerItems; dropped++; }
-            if (!dropped) throw err; // 本来就没带推理:重发一模一样的请求只会再被拒一次
+            if (!reasoningStripped) for (const m of workingMessages) if ((m as any).providerItems) { delete (m as any).providerItems; dropped++; }
+            reasoningStripped = true;
+            if (!dropped) throw err; // 已经拿掉过 / 本来就没带推理:重发一模一样的请求只会再被拒
             console.warn(`[agent-core] run=${runId} 上游拒收回灌的推理,拿掉 ${dropped} 组后重发本轮: ${(err as any)?.message || err}`);
             void publish(runId, 'status', { phase: 'reasoning_dropped', dropped, iteration });
             retryIteration = true;
