@@ -44,14 +44,11 @@ export const INQUIRY_CHILD_ANSWER =
 export const INQUIRY_SIBLING_ANSWER =
   "[No answer] This turn was started by a message from a sibling session, so ask_user can't reach the user from here. This is a system note, not an answer: do not assume one. If the sender should answer, ask it with send_to_session; otherwise finish what you can and end your turn with the question as your last line.";
 
-// 子会话那一轮短路掉的问题(runId → 问题):收尾送回主会话时一并带上(childSessions.deliverNow 取走)。
+// 子会话那一轮短路掉的问题(runId → 问题):收尾送回主会话时一并带上(childSessions.deliverNow 读,回报落库后清)。
 // ponytail: 只在内存,引擎重启前没送出的问题丢失(回报本身重启后照样补送);要跨重启得落列。
 const childAsked = new Map<string, string[]>();
-export function takeChildQuestions(runId: string): string[] {
-  const q = childAsked.get(runId) || [];
-  childAsked.delete(runId);
-  return q;
-}
+export const peekChildQuestions = (runId: string): string[] => childAsked.get(runId) || [];
+export const clearChildQuestions = (runId: string): void => { childAsked.delete(runId); };
 
 /** 登记一次询问:发事件 + await 用户答案。 */
 export function requestInquiry(

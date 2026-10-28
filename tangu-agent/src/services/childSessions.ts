@@ -31,15 +31,16 @@ import { remoteOriginMarker, type RemoteInfo } from './remoteOrigin.js';
 import { sessionRemoteTainted } from './remoteTaint.js';
 import { buildTranscript } from './compaction.js';
 import { modelContextWindow } from './contextBudget.js';
-import { takeChildQuestions } from './inquiries.js';
+import { clearChildQuestions, peekChildQuestions } from './inquiries.js';
 
 export const CHILD_UPDATE_OPEN = '<child_sessions_update>';
 export const CHILD_UPDATE_CLOSE = '</child_sessions_update>';
 const AUTO_CONTINUE_MAX = 3;
 const MAX_RUNNING_CHILDREN = 4;
 const EXCERPT_CHARS = 1500;
-/** fork 时带给子会话的主会话转写上限(token 粗估;另不超过模型窗口的一半)。 */
-const FORK_MAX_TOKENS = 48_000;
+/** fork 时带给子会话的主会话转写上限(token 粗估;另不超过模型窗口的 1/4)。它当「已有摘要」存,以后压缩时整段保留不裁,所以要小。
+ *  ponytail: 子会话事后换成窗口 < ~4× 种子的模型仍可能撑窗;要彻底得让压缩能重压种子。 */
+const FORK_MAX_TOKENS = 24_000;
 export const SESSION_MESSAGE_OPEN = '<session_message ';
 /** 子会话从主会话的存值里继承的配置键(工作目录、人格、档位);团队 / 私聊引擎 / 计划模式这类会话事实不抄。 */
 const INHERIT_KEYS = ['preset', 'execMode', 'cwd', 'extraRoots', 'workspaceProject', 'agentSlug', 'approvalMode', 'thinkingLevel'];
@@ -66,6 +67,8 @@ export async function startChildSession(p: {
   inherit?: Record<string, unknown>;
   /** true = 带上主会话此刻的对话(context:"fork")。 */
   fork?: boolean;
+  /** 主会话这一轮在飞的工作消息(ctx.getWorkingMessages):这一轮刚读到的东西还没落库,只从库里读会漏(Codex 10-28 P2)。 */
+  parentMessages?: any[];
 }): Promise<{ sessionId: string; runId: string; title: string; forked: boolean }> {
   const [parent] = await query<any[]>(
     `SELECT id, user_id, app_id, kind, parent_session_id, fork_message_id, project_path, project_name, projectless, agent_config, model_id, title FROM chat_sessions WHERE id = ?`,
@@ -92,18 +95,17 @@ export async function startChildSession(p: {
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [sessionId, p.userId, parent.app_id, title, modelId || null, parent.project_path, parent.project_name, !!parent.projectless, JSON.stringify(stored), p.parentId],
   );
-  const forked = p.fork ? await seedForkContext(sessionId, p.parentId, String(parent.title || ''), modelId).catch(() => false) : false;
+  const forked = p.fork ? await seedForkContext(sessionId, p.parentId, String(parent.title || ''), modelId, p.parentMessages).catch(() => false) : false;
   const runId = await queueFromParent({ sessionId, userId: p.userId, appId: parent.app_id, modelId, message: p.message, agentConfig: runConfig, remote: p.remote });
   return { sessionId, runId, title, forked };
 }
 
 /** 主会话此刻的转写 → 子会话的开头摘要(压缩检查点,through_timestamp=1:不覆盖任何一行,hydrateHistory 照样注入)。 */
-async function seedForkContext(childId: string, parentId: string, parentTitle: string, modelId: string): Promise<boolean> {
-  const { hydrateHistory } = await loop();
-  const { messages } = await hydrateHistory(parentId, '', undefined, undefined, undefined, false);
+async function seedForkContext(childId: string, parentId: string, parentTitle: string, modelId: string, inFlight?: any[]): Promise<boolean> {
+  const messages = inFlight?.length ? inFlight : (await (await loop()).hydrateHistory(parentId, '', undefined, undefined, undefined, false)).messages;
   let model: any;
   try { model = (await deps().brain.llm.resolveModelAndKey(modelId))?.model; } catch { /* 窗口按 id 估 */ }
-  const budget = Math.min(FORK_MAX_TOKENS, Math.floor(modelContextWindow(modelId, model) / 2));
+  const budget = Math.min(FORK_MAX_TOKENS, Math.floor(modelContextWindow(modelId, model) / 4));
   const { text } = buildTranscript(messages, { read: new Set(), modified: new Set() }, budget);
   if (!text.trim()) return false;
   const summary = [
@@ -174,17 +176,19 @@ export async function sendSessionMessage(p: { fromId: string; userId: string; to
       + `It is not from the user. Act on it if it fits your task; if they need an answer, reply with send_to_session (session_id "${String(from.id)}"). Do not reply just to acknowledge.`,
   ].join('\n');
   const { activeSessionIds, enqueueRun } = await loop();
-  const queued = activeSessionIds().has(toId);
   const modelId = String(to.model_id || deps().profile.defaultModelId || '');
-  const n = autoRuns.get(toId) || 0;
   const tainted = !p.remote && ((await sessionRemoteTainted(toId)) || (await sessionRemoteTainted(p.fromId)));
-  if (n >= AUTO_CONTINUE_MAX || tainted || !autoContinueEnabled()) {
+  // 异步查询都在上面做完:读计数到加一之间不再 await,并发发来的几条不会读到同一个旧值(Codex 10-28 P2)
+  const queued = activeSessionIds().has(toId);
+  const n = autoRuns.get(toId) || 0;
+  const rowOnly = n >= AUTO_CONTINUE_MAX || tainted || !autoContinueEnabled();
+  if (!rowOnly) autoRuns.set(toId, n + 1);
+  if (rowOnly) {
     // 只写行不起轮(防两个会话来回叫醒;远程污点同 deliverNow):对方下一轮的历史里看得到
     await deps().state.insertUserMessage({ id: uuidv4(), sessionId: toId, content, modelId, attachments: null });
     await query(`UPDATE chat_sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`, [toId]);
     return { title: String(to.title || ''), queued: false, rowOnly: true, relation };
   }
-  autoRuns.set(toId, n + 1);
   const cfg = decode(to.agent_config);
   delete cfg.remoteOrigin;
   const runId = uuidv4();
@@ -315,7 +319,7 @@ async function deliverNow(parentId: string, opts: { rowOnly?: boolean }): Promis
     if (input.remote) remote = remote || input.remote;
     if (input.remoteTainted || (await sessionRemoteTainted(String(k.id)))) tainted = true;
     // 那一轮里 ask_user 短路掉的问题(inquiries.INQUIRY_CHILD_ANSWER):模型之后失败 / 被停 / 没把问题写进收尾,也照样送回(Codex P2)
-    const asked = takeChildQuestions(String(k.report_run_id));
+    const asked = peekChildQuestions(String(k.report_run_id));
     const status = run?.status === 'done' && (k.awaiting_user || asked.length) ? 'waiting_for_user' : STATUS[String(run?.status)] || 'stopped';
     // 只取挂起那一轮自己的回答:之后用户在子会话里(可能从手机)接着聊的不算(Codex 10-17 #1)。
     // ponytail: 那一轮被 steer 拆成几条时只取第一条;要全量得按时间窗取。
@@ -329,7 +333,10 @@ async function deliverNow(parentId: string, opts: { rowOnly?: boolean }): Promis
   // 送达先落库(行 / run),再按 (id, run) 比对清挂起,最后才入队:清早了一失败就永久漏送;按 id 清会吞掉链外新记下的回报(Codex 10-17 #3/#4)。
   // ponytail: 落库与清挂起不在一个事务里,两步之间崩溃 → 重启后补送一行重复的回报;要零重复得包事务。
   const clear = async (): Promise<void> => {
-    for (const [id, run] of delivered) await query(`UPDATE chat_sessions SET report_run_id = NULL WHERE id = ? AND report_run_id = ?`, [id, run]);
+    for (const [id, run] of delivered) {
+      await query(`UPDATE chat_sessions SET report_run_id = NULL WHERE id = ? AND report_run_id = ?`, [id, run]);
+      clearChildQuestions(run); // 回报已落库才清:中途失败重送时问题还在(Codex 10-28 P2)
+    }
   };
   const text = [
     CHILD_UPDATE_OPEN,

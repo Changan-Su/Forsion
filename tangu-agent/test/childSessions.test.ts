@@ -19,6 +19,7 @@ import { LlmError } from '../src/core/types.js';
 import { createRun } from '../src/services/runStore.js';
 import { enqueueRun, activeSessionIds } from '../src/services/agentLoop.js';
 import { childSessionsProvider } from '../src/tools/builtin/childSessions.js';
+import { branchSession } from '../src/services/sessionBranch.js';
 import { CHILD_UPDATE_OPEN, deliverPendingChildReports, endsWithQuestion, markAwaitingUser } from '../src/services/childSessions.js';
 
 let home: string | null = null;
@@ -293,5 +294,39 @@ describe('child sessions', () => {
     await idle();
     expect(String(await tool('send_to_session').execute({ session_id: b, message: 'm4' }, ctx(a)))).toMatch(/^Sent to "B"/);
     await idle();
+  });
+
+  it('fork 用主会话这一轮在飞的消息(还没落库的工具结果也带上);从 fork 子会话分支,背景跟着走', async () => {
+    await setup();
+    const inflight = [
+      { role: 'system', content: 'SYSTEM PROMPT' },
+      { role: 'user', content: 'Implement the ledger schema' },
+      { role: 'assistant', content: '', tool_calls: [{ id: 't1', type: 'function', function: { name: 'read_file', arguments: '{"path":"db/ledger.sql"}' } }] },
+      { role: 'tool', tool_call_id: 't1', content: 'CREATE TABLE ledger_entries (amount_cents BIGINT)' },
+    ];
+    const f = idOf(String(await tool('start_session').execute({ title: 'F', message: 'SID:inflight Write it', context: 'fork' }, { ...ctx(), getWorkingMessages: () => inflight })));
+    await idle();
+    const [cp] = await query<any[]>(`SELECT summary FROM session_summaries WHERE session_id = ?`, [f]);
+    expect(cp.summary).toContain('ledger_entries');
+    expect(cp.summary).not.toContain('SYSTEM PROMPT');
+    const [m] = await query<any[]>(`SELECT id FROM chat_messages WHERE session_id = ? AND role = 'model' LIMIT 1`, [f]);
+    const br = await branchSession({ sourceSessionId: f, userId: 'u1', appId: 'tangu', messageId: m.id });
+    const [bcp] = await query<any[]>(`SELECT summary, through_timestamp FROM session_summaries WHERE session_id = ?`, [br!.id]);
+    expect(Number(bcp.through_timestamp)).toBe(1);
+    expect(bcp.summary).toContain('ledger_entries');
+  });
+
+  it('防回环:并发发来的几条不会一起越过上限', async () => {
+    await setup();
+    const a = idOf(String(await tool('start_session').execute({ title: 'A', message: 'a' }, ctx())));
+    const b = idOf(String(await tool('start_session').execute({ title: 'B', message: 'b' }, ctx())));
+    const c = idOf(String(await tool('start_session').execute({ title: 'C', message: 'c' }, ctx())));
+    await idle();
+    for (let i = 0; i < 2; i++) { await tool('send_to_session').execute({ session_id: c, message: `m${i}` }, ctx(a)); await idle(); }
+    const before = (await runsOf(c)).length;
+    const outs = await Promise.all([a, b, a].map((from, i) => tool('send_to_session').execute({ session_id: c, message: `x${i}` }, ctx(from))));
+    expect(outs.filter((o) => /^Sent to/.test(String(o)))).toHaveLength(1);
+    await idle();
+    expect((await runsOf(c)).length).toBe(before + 1);
   });
 });

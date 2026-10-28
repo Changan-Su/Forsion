@@ -56,6 +56,7 @@ export const childSessionsProvider: ToolProvider = {
           const r = await startChildSession({
             parentId: ctx.sessionId, userId: ctx.userId, modelId: ctx.modelId || ctx.profile?.defaultModelId || '',
             title: String(args.title ?? ''), message, remote: effectiveRemote(ctx), fork: args.context === 'fork',
+            parentMessages: args.context === 'fork' ? ctx.getWorkingMessages?.() : undefined,
             inherit: { execMode: ctx.execMode, cwd: ctx.cwd, extraRoots: ctx.extraRoots, workspaceProject: ctx.wsProject ?? undefined, approvalMode: ctx.approvalMode, agentSlug: ctx.agentSlug, preset: ctx.preset, thinkingLevel: ctx.thinkingLevel },
           });
           // 侧栏刷新(同 start_project_session 的 session_created;nested = 子会话,不弹「已派往项目」提示)
