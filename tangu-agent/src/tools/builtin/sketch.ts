@@ -305,6 +305,8 @@ const intelligentUiComputedFor = (ctx: ToolContext): boolean => !!ctx.clientCapa
 // 力导图那半句同理:只写「d3 suits force layouts」时 3 次全是 SVG + requestAnimationFrame 手写力模拟。
 // 不再写「canvas/WebGL 颜色用 getComputedStyle 取 --fs-*」:17 次里模型照做的 4 次全没用 three(改走 canvas 2D / SVG),
 // 用了 three 的 13 次一次没照做 —— 只拉偏、没收益。主题色仍由下面 THEME 那句管。
+// 点名两句别合成通则:试过「When one already does the hard part (3D rendering, force physics, treemap…), import it — never
+// re-implement it by hand」,3 次里 3D 掉到 2/3、力导图 1/3(树状图也只 1/3)。按库点名、动词式禁止才压得住。
 export const IUI_LIBS_CAP = 'intelligent-ui-libs.v1';
 const NO_LIBS = 'no external scripts/styles/fonts or charting libraries (draw with inline SVG or divs)';
 const WITH_LIBS = 'no external scripts/styles/fonts. Bundled libraries (still no network): a <script type="module"> may import ' +
