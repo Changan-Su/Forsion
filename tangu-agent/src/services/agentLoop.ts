@@ -13,6 +13,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { deps } from '../seams/runtime.js';
 import { resolveProfile } from '../seams/appProfile.js';
 import type { StreamOpts, BuildPayloadOpts } from '../seams/cloudBrain.js';
+import { maskSpans } from '../llm/outboundMask.js';
 import { LlmError, type ThinkingLevel, type ChatMessage, type ToolCall } from '../core/types.js';
 import { clampThinkingLevel, resolveModelCapability } from '../llm/modelCapabilities.js';
 import { PROTOCOL_MARK } from '../llm/openaiCompat.js';
@@ -2548,6 +2549,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       // 在这里分叉:声明了 persistPlaceholder 的工具(read_computer_history)只落占位,全文只进本轮 workingMessages。
       // 出错结果不含数据,照常落库。占位查询不走 ctx 门禁(见 declaredPersistPlaceholder)。
       const stored = (!result.isError && declaredPersistPlaceholder(result.name)) || capped;
+      // 发给模型前会被遮住的值在哪(位置 + 占位符,不含原值):界面在工具组上写「遮住 N 个值」并给这些值垫底色
+      const masked = [
+        ...maskSpans(call.function.arguments || '').map((m) => ({ ...m, at: 'args' as const })),
+        ...maskSpans(stored).map((m) => ({ ...m, at: 'result' as const })),
+      ];
       const payload = {
         id: call.id,
         name: wireToolName(result.name), // 执行层回正典名;往外发跟这次调用一样叫线上的名字(HTML 卡叫 sketch)
@@ -2559,6 +2565,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         parallelGroup,
         artifactPath,
         metadata: result.metadata,
+        ...(masked.length ? { masked } : {}),
       };
       await publish(runId, 'tool_result', payload);
 
@@ -2590,6 +2597,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           parallelGroup,
           artifactPath,
           metadata: result.metadata,
+          ...(masked.length ? { masked } : {}),
         },
         toolMessage: { role: 'tool', content: toolMsgContent, tool_call_id: call.id } as ChatMessage,
       };
@@ -2961,6 +2969,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
             payload,
             provider: (model as any)?.provider, // anthropic → 原生 /v1/messages(in-process 面;httpBrain 面由 brain-api 解析)
             signal: sampling.signal,
+            maskScope: sessionId,
+            onMasked: (hits, action) => { void publish(runId, 'status', { phase: 'masked', iteration, action, n: hits.length, kinds: [...new Set(hits.map((h) => h.kind))] }); },
             onResponseStart: () => {
               if (sampling.signal.aborted) return;
               acceptedAt = Date.now();

@@ -29,6 +29,7 @@ import humanRouter from './routes/human.js';
 import soloRouter from './routes/solo.js';
 import teamsRouter from './routes/teams.js';
 import projectContextRouter from './routes/projectContext.js';
+import maskingRouter from './routes/masking.js';
 import pluginsRouter from './routes/plugins.js';
 import specialRouter from './routes/special.js';
 import commandsRouter from './routes/commands.js';
@@ -107,6 +108,7 @@ export function createTanguModule(d: TanguDeps): TanguModule {
   dataRouter.use(soloRouter);
   dataRouter.use(teamsRouter);
   dataRouter.use(projectContextRouter);
+  dataRouter.use(maskingRouter);
   dataRouter.use(pluginsRouter);
   dataRouter.use(specialRouter);
   dataRouter.use(hooksRouter);

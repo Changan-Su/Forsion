@@ -14,6 +14,7 @@ import { createSqliteHost } from '../adapters/standalone/sqliteHost.js';
 import { createEmbeddedHost } from '../adapters/standalone/embeddedHost.js';
 import { createHttpBrain } from '../adapters/standalone/httpBrain.js';
 import { createMultiBrain } from '../adapters/standalone/multiBrain.js';
+import { withOutboundMasking } from '../llm/outboundMask.js';
 import { createLocalAssets } from '../adapters/standalone/localAssetsBrain.js';
 import { createLocalMemoryBrain } from '../adapters/standalone/localMemoryBrain.js';
 import { setSyncSources } from '../services/memorySyncService.js';
@@ -126,7 +127,8 @@ export function buildBrain(cfg: StandaloneConfig): { brain: CloudBrainServices; 
   const providers = loadProviders(cfg);
   const base = providers.length ? createMultiBrain(httpBrain, createProviderRegistry(providers)) : httpBrain;
   const localMemory = createLocalMemoryBrain();
-  const brain = { ...base, assets: createLocalAssets(base.assets), memory: localMemory };
+  // 发给模型前脱敏:包在出站唯一的口子上,直连 / 订阅 / Forsion 云端一视同仁(llm/outboundMask.ts)
+  const brain = { ...base, llm: withOutboundMasking(base.llm), assets: createLocalAssets(base.assets), memory: localMemory };
   // 同步源:云端 httpBrain(有 agentFiles 每-agent 镜像 + memory 旧全局端点)。每-agent 桶在 syncNow 内
   // 按 cloudSync + 固定 baseDir 解析,不再依赖单 store/ALS(根治「只同步 xyra」bug)。
   setSyncSources({ brain: httpBrain });

@@ -150,6 +150,7 @@ export function recordToUi(r: any, resolveGroup?: (name: string) => { slug?: str
       return {
         id: c.id, name: c.function?.name || c.name || 'tool', arguments: c.function?.arguments,
         result: res ? String(res.content ?? '') : undefined, isError: res?.isError || false,
+        ...(Array.isArray(res?.masked) && res.masked.length ? { masked: res.masked } : {}),
         startedAt: res?.startedAt, elapsedMs: res?.elapsedMs, outputChars: res?.outputChars,
         parallelGroup: res?.parallelGroup, artifactPath: res?.artifactPath, done: true,
         ...(res?.parked === true ? { parked: true } : {}),
@@ -1287,6 +1288,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
               startedAt: pl.startedAt ?? evs[i].startedAt, elapsedMs: pl.elapsedMs, outputChars: pl.outputChars,
               parallelGroup: pl.parallelGroup ?? evs[i].parallelGroup, artifactPath: pl.artifactPath,
               parked: pl.parked === true || undefined,
+              masked: Array.isArray(pl.masked) && pl.masked.length ? pl.masked : undefined,
             }
             // sketch 完成即上卡(挂 tool_result 不挂 tool_call:引擎尺寸闸拒掉的不画;callId 去重防 SSE 重放双画)
             const sk = sketchFromToolEvent(evs[i])
