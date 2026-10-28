@@ -359,6 +359,9 @@ const api = {
   // ── 直连 provider 管理(~/.tangu/providers.json;managed 模式保存后自动重启后端加载)──
   listProviders: (): Promise<any[]> => ipcRenderer.invoke('providers:list'),
   saveProvider: (provider: Record<string, any>): Promise<any[]> => ipcRenderer.invoke('providers:save', provider),
+  /** 本机 CC Switch / Claude Code / Codex 里能导入的连接(只有 key 末 4 位)。 */
+  scanLocalProviders: (force?: boolean): Promise<any[]> => ipcRenderer.invoke('providers:scanLocal', force),
+  importLocalProviders: (ids: string[]): Promise<any[]> => ipcRenderer.invoke('providers:importLocal', ids),
   deleteProvider: (providerId: string): Promise<any[]> => ipcRenderer.invoke('providers:delete', providerId),
   // ── MCP server 管理(~/.tangu/mcp.json;保存后托管后端重启重连)──
   readMcpConfig: (): Promise<{ mcpServers: Record<string, any> }> => ipcRenderer.invoke('mcp:read'),
@@ -684,7 +687,7 @@ const AGENT_KEYS = [
   'connectMeta', 'connectList', 'connectPublish', 'connectUnpublish',
   'connectListingApply', 'connectListingWithdraw', 'connectStore',
   'submitFeedback',
-  'listProviders', 'saveProvider', 'deleteProvider',
+  'listProviders', 'saveProvider', 'deleteProvider', 'scanLocalProviders', 'importLocalProviders',
   'readMcpConfig', 'writeMcpConfig',
   'discoveryScan', 'discoveryImportSkills', 'discoveryImportMcp',
   'openAgentDir', 'openSkillsDir',

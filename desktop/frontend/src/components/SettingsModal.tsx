@@ -116,6 +116,7 @@ import { onRadioGroupKeyDown, radioTabIndex } from './radioGroupKeys'
 import { SettingsSaveBar } from './SettingsSaveBar'
 import { SecretStorageNotice } from './SecretStorageNotice' // P1-K5
 import './settingsModal.css'
+import { LocalProviderImport } from './LocalProviderImport'
 import { connectionTarget, homeTarget } from '../services/engine/targets'
 
 // 本文件自带的文案片段(命名空间 `settingsmodal.*`,不与 i18n.generated.ts 的 `settings.*` 相交)。
@@ -2359,6 +2360,7 @@ export const SettingsModal: React.FC<{
                               baseUrl: ep.baseUrl.replace(/\/+$/, ''),
                               apiKey: ep.apiKey || undefined,
                               ...providerFieldsFromRows(ep.rows, ep.base),
+                              ...(ep.base.protocol ? { protocol: ep.base.protocol } : {}), // 导入的 Anthropic / Responses 连接:编辑器不画协议,保存时留住
                             }).then((list) => {
                               // 改了名字 = 另存一条,旧的留着(与旧表单一致):各处存着的「旧名/模型」引用不会一下子全失效
                               setCustomProviders(list)
@@ -2434,7 +2436,11 @@ export const SettingsModal: React.FC<{
                           </React.Fragment>
                         })}
                         {editProvider?.isNew && editor}
-                        {!editProvider?.isNew && <div className="provider-add"><button className="btn ghost sm" onClick={() => startEdit(null)}><Plus size={13} /> {t('prov.add')}</button></div>}
+                        {!editProvider?.isNew && <LocalProviderImport providers={customProviders} onManual={() => startEdit(null)} onImported={(list) => {
+                          setCustomProviders(list)
+                          void loadModels()
+                          setProviderSaveMsg(t('settings.customProvider.savedReloading'))
+                        }} />}
                         {providerSaveMsg && !editProvider && <div className="hint provider-editor-hint">{providerSaveMsg}</div>}
                       </SettingsPanel>
                     {stored?.mode === 'external' && !(stored?.backendUrl || '').includes('localhost') && !(stored?.backendUrl || '').includes('127.0.0.1') && (
