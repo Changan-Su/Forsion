@@ -1652,3 +1652,8 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 .t2-fallback-line > span { color: var(--text-muted); }
 .t2-fallback-line .t2-failed-btn { padding: 1px 6px; color: var(--accent-ink); }
 .t2-name-model { font-weight: 400; color: var(--text-muted); }
+
+/* 「到时提醒我」点了之后:错误条里一行灰字「19:40 提醒你 · 取消」(借鉴 magpie 第三轮第 20 条) */
+.t2-remind-set { flex: none; color: var(--text-muted); font-family: var(--font-ui); font-size: var(--ui-font-caption, 11px); }
+.t2-remind-set button { border: 0; background: none; padding: 0; color: inherit; font: inherit; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.t2-remind-set button:hover { color: var(--text); }

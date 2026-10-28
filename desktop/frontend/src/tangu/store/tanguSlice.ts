@@ -38,6 +38,7 @@ import type { StoreApi } from 'zustand'
 import { defaultModelOf, newChatModelId, rememberedModelId, reloadDesktopConfig, writeFocusModel, type AppState } from '../../stores/appStore'
 import '../messages' // Tangu 自己的文案片段(核心插件化 2c)
 import { failReason, landedAnyway, type FailedSend } from './failedSend'
+import { cancelQuotaReminder } from './quotaReminders'
 
 
 // 本文件自带的词条片段(命名空间 `appstore.*`,与其它文件不重叠)。
@@ -1913,6 +1914,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     if (subscribedRuns.has(runId)) return
     subscribedRuns.add(runId)
     clearSuggestion(sessionId) // 输入建议只活到下一轮起跑;在这里作废,不看这个会话的输入框此刻挂没挂着
+    cancelQuotaReminder(sessionId) // 这个会话又跑了一轮(重试 / 接着聊 / 别的窗口发的):「到时提醒我」挂的那一轮已不是最后失败的那轮
     const ac = new AbortController()
     runAborts.set(runId, ac)
     const assistantRef = { current: assistantId }
