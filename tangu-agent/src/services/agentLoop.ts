@@ -24,7 +24,7 @@ import { takeRunThinking } from './sessionSettings.js';
 import { registerLiveRun, unregisterLiveRun, type RunStatus } from './runStatus.js';
 import { makeClientActionRequester } from './clientAck.js';
 import { runHooks, type HookRunContext, type HookVerdict } from '../hooks/index.js';
-import { enterRunContext, currentDisplayAgentSlug, setRunClientTag, setRunCwd } from '../seams/runContext.js';
+import { enterRunContext, currentDisplayAgentSlug, currentRunId, setRunClientTag, setRunCwd } from '../seams/runContext.js';
 import path from 'node:path';
 import { agentsDir, DEFAULT_AGENT_SLUG, engineLibDir } from '../core/tanguHome.js';
 import { renderAboutHuman } from '../agents/humanFolder.js';
@@ -76,7 +76,8 @@ import { toolImageMessages, type ToolImage } from './toolImages.js';
 import { dropStaleToolImages } from './toolImageWindow.js';
 import { replayAssistantHistory, stepLlmResponse, loadReplaySteps, dropCoveredCalls } from './historyReplay.js';
 import { looksLikeToolCallText } from '../llm/textToolCalls.js';
-import { isRetryableLlmError, isAuthExpiredLlmError, withLlmRetry, MODEL_MAX_RETRIES, MODEL_RETRY_BASE_MS, llmRetryBudgetExceeded, sleepOrAbort } from '../llm/retry.js';
+import { isRetryableLlmError, isAuthExpiredLlmError, isQuotaExhaustedLlmError, withLlmRetry, MODEL_MAX_RETRIES, MODEL_RETRY_BASE_MS, llmRetryBudgetExceeded, sleepOrAbort } from '../llm/retry.js';
+import { relaySettings, noteQuotaExhausted, quotaExhaustedUntil, quotaResetAt, quotaAskSuffix } from '../llm/quotaRelay.js';
 import { runCostCeiling, isOverRunCost } from './runBudget.js';
 import { RepeatedToolFailureGuard, MAX_REPEATED_TOOL_FAILURES } from './repeatedToolFailure.js';
 import { CORRECTION_SIGNAL, NUDGE_SIGNAL, looksLikeCorrection, noteUserStop, takePendingStop, toolLoopSignal } from './judgeSignals.js';
@@ -194,6 +195,9 @@ export function cancelSteer(runId: string, msgId: string): boolean {
  *  用户主动切断的、任务多半没完 —— 否则历史里只有一条无解释的半截助手消息,模型会当它已经收尾,
  *  「打断之后忘记继续之前的任务」的病根就在这。措辞按 Codex 经验保持**告警式**(部分执行风险),
  *  续任务的压力放在系统提示 PERSISTENCE_SECTION 里,标记本身不下指令。 */
+/** 额度用完换了后备模型的 run → 实际模型与落库标记(finalizeAssistantMessage 读;run 结束即删)。 */
+const modelSwaps = new Map<string, { modelId: string; origin: string }>();
+
 export const TURN_INTERRUPTED_MARKER =
   '<turn_interrupted>\n' +
   'The user interrupted this turn on purpose. Any tool calls that were aborted may have partially executed; the task above is likely unfinished.\n' +
@@ -1343,9 +1347,32 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         console.warn(`[agent-core] run=${runId} resolve 瞬时失败,${wait}ms 后重试 ${attempt}/${MODEL_MAX_RETRIES}: ${(err as any)?.message || err}`),
       ac.signal, // 停止后不再空转退避(resolve 接缝本身没有 signal 位,只能在重试层兜)
     );
-    const { model, baseUrl, apiModelId } = resolvedModel;
+    let { model, baseUrl, apiModelId } = resolvedModel; // 额度用完接力会换成后备模型(relayModel)
     let apiKey = resolvedModel.apiKey; // 订阅登录的 token 可能在 run 中途过期 → 下面的重试圈会续期后换掉它
     let credsRefreshedAt = 0;
+    // 额度用完接力(llm/quotaRelay.ts):这一轮实际在用的模型。只换一次,换了之后后备也用完就停下报错。
+    let callModelId = modelId;
+    let quotaRelayed = false;
+    const relayModel = async (target: string, until: number): Promise<boolean> => {
+      const r = await resolveModelAndKey(target).catch((e: any) => { console.warn(`[agent-core] run=${runId} 额度用完的后备模型 ${target} 解析失败: ${e?.message || e}`); return null; });
+      if (!r) return false;
+      const from = callModelId;
+      ({ model, baseUrl, apiModelId } = r);
+      apiKey = r.apiKey;
+      callModelId = target;
+      quotaRelayed = true;
+      modelSwaps.set(runId, { modelId: target, origin: 'fallback:quota' });
+      console.warn(`[agent-core] run=${runId} ${from} 额度用完(到 ${new Date(until).toISOString()}),这一轮改用 ${target}`);
+      // 与服务端停用模型的提示(phase:model_fallback)同一种事件,界面画同一种「改用了」行;reason 区分原因
+      void publish(runId, 'status', { phase: 'model_fallback', reason: 'quota', from, to: target, toName: (r.model as any)?.name, resetsAt: until });
+      return true;
+    };
+    // 上一轮刚换过、重置时间还没到:直接用后备,省一次必败的请求(「先问我」开着时照旧先试原模型,撞上了再问)
+    {
+      const until = quotaExhaustedUntil(modelId);
+      const rs = until ? relaySettings() : null;
+      if (until && rs?.fallback && !rs.ask && rs.fallback !== modelId) await relayModel(rs.fallback, until);
+    }
     // 分步落库 / 跨 run 回放共用的模型身份键(两侧必须是**同一个表达式**,否则永远对不上)。
     // apiModelId 缺省时退回内部 modelId —— 只要求稳定可比,不要求是上游真名(同 resolveModelCapability 的口径)。
     const replayModelKey = apiModelId || modelId;
@@ -1365,7 +1392,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 400k 族在 64k 就机械折叠会绞碎上下文+打断前缀缓存,长任务正确率与 token 双输(WB-Bench 取证)。
     // 09-22 起自动识别的窗口封顶 272k,更大的窗口只由人填的覆盖打开(effectiveContextWindowInfo)。
     // Ultra(09-27)不封顶:模型本身能到多大就用多大;人填的覆盖照旧(覆盖可能正是在纠正报大了的目录值)。
-    const { tokens: ctxWindowTokens, source: ctxWindowSource, max: ctxWindowMax } = effectiveContextWindowInfo(modelId, model, ultraRequested);
+    const { tokens: ctxWindowTokens, source: ctxWindowSource, max: ctxWindowMax } = effectiveContextWindowInfo(callModelId, model, ultraRequested);
 
     // 入站预算闸门(Hermes 式窗口相对预算;2026-06-10 的 77 万 token 事故防线):
     // 估算超窗口 50% 直接失败(消息不落库,会话不被毒化),超 25% 放行但发警告事件。
@@ -3051,8 +3078,19 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           // 凭证失效(xAI 用 502 包装,按状态码看像网络抖动):同一个 token 再试必败。订阅登录的 provider 强制续期一次、
           // 拿到新 token 立刻重试;续不了(API key、托管面、refresh_token 也失效)就直接抛,不白等三轮退避。
           // 一分钟内只续一次:刚续的 token 仍被拒就别再续;跑过下一个有效期的长 run 到时还能再续。
+          // 额度用完(订阅 / 账单配额,几小时才重置):设了后备模型且这一次还没吐字 → 换后备重进本轮;「先问我」开着 → 这一轮停下,
+          // 报错带上后备模型,界面画「等重置 / 改用 X」。只换一次:后备也用完就照常报错,不往下找。秒级限流、凭证失效不走这里。
+          if (!emitted && isQuotaExhaustedLlmError(err)) {
+            const until = noteQuotaExhausted(callModelId, quotaResetAt(err));
+            const rs = quotaRelayed ? null : relaySettings();
+            if (rs?.fallback && rs.fallback !== callModelId) {
+              if (rs.ask) throw Object.assign(new LlmError((err as any).status || 429, `${(err as Error).message}${quotaAskSuffix(rs.fallback)}`), { resetsAt: until });
+              if (await relayModel(rs.fallback, until)) { retryIteration = true; iteration -= 1; break; }
+            }
+            throw err;
+          }
           if (!emitted && isAuthExpiredLlmError(err)) {
-            const fresh = Date.now() - credsRefreshedAt < 60_000 ? null : await deps().brain.llm.refreshModelKey?.(modelId).catch(() => null);
+            const fresh = Date.now() - credsRefreshedAt < 60_000 ? null : await deps().brain.llm.refreshModelKey?.(callModelId).catch(() => null);
             credsRefreshedAt = Date.now();
             if (!fresh || fresh === apiKey) throw err;
             apiKey = fresh;
@@ -3108,7 +3146,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         probe = buildProbe(inputs, probePrevSegments);
         probePrevSegments = probe.segments;
       }
-      const cost = await calculateCost(modelId, res.usage.prompt_tokens, res.usage.completion_tokens, undefined, cachedTokens);
+      const cost = await calculateCost(callModelId, res.usage.prompt_tokens, res.usage.completion_tokens, undefined, cachedTokens);
       tokensTotal += (res.usage.prompt_tokens || 0) + (res.usage.completion_tokens || 0);
       runStat.llmCalls += 1;
       runStat.prompt += res.usage.prompt_tokens || 0;
@@ -3166,7 +3204,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       }
       const consumed = await consumeTokenPoints(user.id, cost).catch(() => ({ ok: true } as any));
       await logApiUsage(
-        user.username, modelId, model.name, model.provider,
+        user.username, callModelId, model.name, model.provider,
         res.usage.prompt_tokens, res.usage.completion_tokens, true, undefined, appId, cost,
         cachedTokens, clientTag,
       ).catch(() => {});
@@ -3618,6 +3656,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     setApprovalTray(runId, false);
     unregisterLiveRun(runId);
     abortControllers.delete(runId);
+    modelSwaps.delete(runId);
     steerQueue.delete(runId); // 丢弃尚未注入的转向消息(run 已终结)
     immediateSteers.delete(runId);
     steerWakeups.delete(runId);
@@ -3641,9 +3680,12 @@ async function finalizeAssistantMessage(
   toolResults: any[],
   displayFiles?: DisplayFileItem[],
 ): Promise<void> {
+  // 额度用完换了后备:这一轮的回答记实际用的模型,并标 origin(重开会话时界面据此还原「改用了」那一行)
+  const swap = modelSwaps.get(currentRunId() || '');
   await deps().state.finalizeAssistantMessage({
-    messageId, sessionId, modelId, content, reasoning, toolCalls, toolResults, displayFiles,
+    messageId, sessionId, modelId: swap?.modelId ?? modelId, content, reasoning, toolCalls, toolResults, displayFiles,
     agentSlug: currentDisplayAgentSlug(),
+    ...(swap ? { origin: swap.origin } : {}),
   });
 }
 

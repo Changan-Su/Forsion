@@ -23,6 +23,10 @@ export function isAuthExpiredLlmError(err: unknown): boolean {
 }
 const AUTH_EXPIRED = /expired credentials|invalid or expired|token (has |is )?expired|PermissionDenied/i;
 
+/** 订阅额度 / 账单配额用尽(几小时才重置,不是秒级限流)。额度用完接力(llm/quotaRelay.ts)只认这一组。 */
+export function isQuotaExhaustedLlmError(err: unknown): boolean {
+  return err instanceof LlmError && QUOTA_EXHAUSTED.test(err.message);
+}
 /** 订阅额度 / 账单配额用尽的措辞(不可重试)。「rate limit」是秒级限流,不在此列。 */
 const QUOTA_EXHAUSTED = /usage limit|usage_limit_reached|usage_not_included|insufficient_quota|quota exceeded|exceeded your current quota|out of budget|billing_hard_limit/i;
 

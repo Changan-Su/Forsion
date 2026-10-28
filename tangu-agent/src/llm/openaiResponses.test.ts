@@ -152,7 +152,8 @@ describe('streamOpenAiResponses SSE parse', () => {
     }));
     const err: any = await streamOpenAiResponses({ apiKey: 'x', baseUrl: 'https://example/codex', payload: { model: 'gpt-5-codex', messages: [] } } as any).catch((e) => e);
     expect(err.status).toBe(429);
-    expect(err.message).toMatch(/usage limit has been reached \(resets in ~(9|10) min\)/);
+    expect(err.message).toMatch(/usage limit has been reached \(resets in ~(9|10) min, at \d{4}-\d\d-\d\dT[\d:.]+Z\)/);
+    expect(err.resetsAt).toBeGreaterThan(Date.now() + 500_000);
     expect(isRetryableLlmError(err)).toBe(false);
   });
 
