@@ -418,6 +418,7 @@ The line that says "it will land here" while dragging to reorder, and the outlin
 | `ctx.ui.popover(anchor, { mount, side, align })` | `.ui-popover` 外壳,`clampMenu` + `zoomOf` 落位 | 锚定、夹边、界面缩放、Esc / 点外面 / 失焦关;同一时刻一个。 |
 | `ctx.ui.icon(name, { size })` | `PLUGIN_ICONS` 词表(Space 那 30 个名字已并入) | 返回新 `<svg>`;词表外 → null + 控制台警告一次(插件 id + 名字,带近似名);Space / 列表照旧回落(方块堆 / 文件)。 |
 | `ctx.ui.mountEmptyState(el, …)`、`ListSourceContribution.empty` | `components/EmptyState`;列表源经 `views/hostListEmpty.ts` 登记 | 桌面:插件自己的 Space 里侧栏不写「暂无内容」;手机整屏列表画同一份空态。 |
+| `ctx.ui.mountWebCard(el, …)` | `components/WebCard`(宿主自己的本地网页卡 / 服务卡 `views/chat2/WebCards.tsx` 也用它);缩略图走主进程 `electron/pageThumb.ts` | 只收 http(s) 缩略图,按 url + version 缓存;`layout: 'row'` 是列表一行;update 带了键、值为 undefined / [] / null = 清掉。 |
 | `ctx.ui.setViewHead(el, { title, actions })` | `ViewHead`(`title` 插槽)+ `plugin-viewhead-actions` | 与 `setViewModes` 并存:胶囊、标题、两份按钮。 |
 | `ctx.ui.mount(name, el, props)` | 上面这些的同一入口(`PluginUiParts` 类型) | 给 React / Vue 插件在 ref 上挂;返回 `{ update, dispose }`。 |
 | `ctx.addStyle(css)`、`ctx.i18n.define({ zh, en })` | `<style data-plugin>`、`pluginText.ts` 的 `defineMessages` | 停用 / 重载时摘掉;回退链 当前语言 → zh → key,缺 en 键警告一次。 |

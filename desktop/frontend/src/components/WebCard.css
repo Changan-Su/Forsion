@@ -33,7 +33,7 @@
 .wc-row .wc-more.btn.sm { align-self: center; height: 28px; }
 
 /* 窄栏:缩略图叠到上面 */
-@container (max-width: 480px) {
+@container (max-width: 680px) {
   .wc { flex-direction: column; }
   .wc-thumb { flex-basis: auto; width: 100%; height: 132px; }
   .wc-row .wc-thumb { width: 76px; height: 48px; }

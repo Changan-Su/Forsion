@@ -92,6 +92,11 @@ export const useSessionCwd = (sid: string | undefined): string | undefined =>
 
 const dirOf = (p: string): string => p.replace(/[\\/][^\\/]*$/, '')
 const tilde = (p: string): string => p.replace(/^(\/Users\/[^/]+|\/home\/[^/]+|[A-Za-z]:\\Users\\[^\\]+)(?=[\\/])/, '~')
+/** 地址行放得下的路径:家目录换成 ~,太长就只留开头一段和最后两段(文件名不被省略号吃掉,全路径在悬停提示里)。 */
+export function shortPath(p: string): string {
+  const parts = tilde(p).split(/[\\/]/)
+  return parts.length > 4 ? [parts[0] || '', '…', ...parts.slice(-2)].join('/') : parts.join('/')
+}
 const shortUrl = (u: string): string => u.replace(/^https?:\/\//, '').replace(/\/$/, '')
 const IS_MAC = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform)
 
@@ -198,7 +203,7 @@ export function LocalWebCard({ sessionId, path, onAsk }: { sessionId: string; pa
   const props: WebCardProps = {
     name: title || fileName,
     status: gone ? { label: t('webcard.local.gone'), tone: 'muted' } : live ? { label: t('webcard.local.published'), tone: 'ok' } : { label: t('webcard.local.pill'), tone: 'muted' },
-    address: { text: tilde(path), icon: 'file', struck: gone },
+    address: { text: shortPath(path), icon: 'file', struck: gone },
     note: gone ? undefined : live ? t('webcard.local.publishedNote', { url: shortUrl(live) }) : t('webcard.local.note'),
     thumbnail: !gone && url ? { url, version: String(file.mtime) } : null,
     actions, trailing, onMore: (a) => menuAt(a, menu), onTitle: setTitle,

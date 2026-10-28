@@ -112,11 +112,13 @@ function draftSketchOf(ev: ToolEvent): SketchItem | undefined {
  * live=消息还在直播:没收口的 sketch 调用也出一张草稿卡(同 callId,终稿到达原地换成正式卡)。
  * cardOf=插件结果卡片的认领(toolResultCards.useToolCardOf):认领了的调用画卡片**代替**通用记录(同原生文档),
  * 前后的工具各成一组;没认领的(运行中、出错、插件停用 / 重载)照旧是通用记录。
- * webOf=本地网页卡 / 服务卡(WebCards.planWebCards):工具行留着,卡紧跟其后(同商店卡)。
+ * webOf=本地网页卡 / 服务卡(WebCards.planWebCards):工具行留着,卡排在这一段工具的最后 —— 不切开工具组,
+ * 卡自己判定不画时(文件在 Vite 项目里、地址还没认出、不是本机会话)不留下两截工具组。
  */
 export function partitionToolSegment(events: ToolEvent[], sketches?: SketchItem[], live = false, cardOf?: (ev: ToolEvent) => ToolCardClaim | undefined, webOf?: (ev: ToolEvent) => WebCardSpec | undefined): OrderedToolPart[] {
   const sketchByCall = new Map((sketches || []).map((item) => [item.callId, item]))
   const parts: OrderedToolPart[] = []
+  const webs: OrderedToolPart[] = []
   let tools: ToolEvent[] = []
   const flushTools = (): void => {
     if (tools.length) parts.push({ t: 'tools', events: tools })
@@ -141,14 +143,14 @@ export function partitionToolSegment(events: ToolEvent[], sketches?: SketchItem[
     tools.push(ev)
     if (isMarketplaceTool(ev) && ev.done && !ev.isError) { flushTools(); parts.push({ t: 'marketplace', event: ev }); continue }
     const web = webOf?.(ev)
-    if (web) { flushTools(); parts.push({ t: 'web', event: ev, spec: web }); continue }
+    if (web) webs.push({ t: 'web', event: ev, spec: web })
     const sketch = sketchByCall.get(ev.id) ?? (live ? draftSketchOf(ev) : undefined)
     if (!sketch) continue
     flushTools()
     parts.push({ t: 'sketch', item: sketch })
   }
   flushTools()
-  return parts
+  return webs.length ? [...parts, ...webs] : parts
 }
 
 /** 头像回退:无图时取昵称首字(支持 CJK/emoji),对齐 desktop1.0。 */

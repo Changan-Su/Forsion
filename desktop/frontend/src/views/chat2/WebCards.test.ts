@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { ToolEvent } from '../../types'
 
 vi.mock('../../amadeus/api', () => ({ amadeus: undefined }))
-const { planWebCards } = await import('./WebCards')
+const { planWebCards, shortPath } = await import('./WebCards')
 const { partitionToolSegment } = await import('./EditorialMessage')
 const { usePluginStore } = await import('../../amadeus/plugins/pluginStore')
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -46,14 +46,18 @@ describe('planWebCards', () => {
   })
 })
 
-describe('分段:网页卡跟在工具行后面', () => {
-  it('写文件那行留在工具组,卡紧跟其后,后面的工具另起一组', () => {
+it('地址行的路径:~ 起头,太长只留首段和末两段', () => {
+  expect(shortPath('/Users/lin/Forsion/tea/index.html')).toBe('~/Forsion/tea/index.html')
+  expect(shortPath('/var/folders/tw/x/T/proj/tea/index.html')).toBe('/…/tea/index.html')
+})
+
+describe('分段:网页卡排在这一段工具的最后', () => {
+  it('写文件那行留在工具组,工具组不被切开,卡在整段之后', () => {
     const a = ev('a', 'read_file', {}), w = ev('w', 'write_file', { path: 'index.html', content: 'x' }), b = ev('b', 'run_bash', {})
     const spec = { kind: 'local' as const, path: '/w/index.html' }
     expect(partitionToolSegment([a, w, b], [], false, undefined, (e) => (e.id === 'w' ? spec : undefined))).toEqual([
-      { t: 'tools', events: [a, w] },
+      { t: 'tools', events: [a, w, b] },
       { t: 'web', event: w, spec },
-      { t: 'tools', events: [b] },
     ])
   })
 })
@@ -84,8 +88,14 @@ describe('ctx.ui.mountWebCard', () => {
     expect([...el.querySelectorAll('.wc-acts .btn')].map((b) => b.textContent)).toEqual(['打开', '申请上架'])
     act(() => (el.querySelector('.wc-acts .btn') as HTMLButtonElement).click())
     expect(run).toHaveBeenCalledTimes(1)
-    act(() => h.update({ status: { label: '已下线', tone: 'muted' }, actions: [] }))
+    act(() => h.update({ thumbnail: { url: 'https://forsion.net/apps/lin/tea/' }, menu: [{ label: '下线', run }] }))
+    expect(el.querySelector('[data-act="web-card-more"]')).not.toBeNull()
+    // Extend 每次 update 整张卡传:带了键、值是 undefined / [] / null = 清掉(已下线那张靠这个去掉 ⋯ 和按钮)
+    act(() => h.update({ status: { label: '已下线', tone: 'muted' }, actions: [], trailing: [], menu: undefined, thumbnail: null }))
     expect(el.querySelector('.wc-pill.muted')!.textContent).toBe('已下线')
+    expect(el.querySelector('[data-act="web-card-more"]')).toBeNull()
+    expect(el.querySelectorAll('.wc-acts .btn').length).toBe(0)
+    expect(el.querySelector('.wc-thumb.ph')).not.toBeNull()
     act(() => disable())
     expect(el.querySelector('[data-web-card]')).toBeNull()
   })

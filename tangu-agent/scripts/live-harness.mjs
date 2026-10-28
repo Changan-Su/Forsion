@@ -320,6 +320,9 @@ OPT_IN.add('webpublish'); // --only webpublish:三个 run,同用 account 那个�
 // 但 Connect 换成本地真 server(scripts/connect-local.mts:PGlite + 真 Connect 模块,文件走 bytea、不经蓬洲);给了 --extend-pkg 再加一段
 // 真 Electron 旅程(desktop/scripts/webpages-real.live.cjs):聊天里发布 → 界面点批准 → 我的网页里上架 / 下架 / 下线。
 OPT_IN.add('webpublishreal'); KEYS.push('webpublishreal');
+// --only webcardsreal --connect-server <server 检出> --extend-pkg <签好的 Extend 包目录>(10-28):只跑真 Electron 那段 ——
+// 同一个本机项目会话里写页 / 起服务 / 发布 / 问列表,看本地网页卡、服务卡和 Extend 画的「网页」「我的网页」卡(desktop/scripts/webcards-real.live.cjs)。
+OPT_IN.add('webcardsreal'); KEYS.push('webcardsreal');
 OPT_IN.add('realuse'); // 真实使用模拟:每轮 12 个 run(--rounds),--usage-db 再加一个 Muse 周期;单独跑。
 OPT_IN.add('suggest'); // 三个 run + 三次建议调用;只在动 services/promptSuggestion.ts(提示词 / 前缀对齐)或主循环收尾处的快照时才有信息量。
 OPT_IN.add('humanreal'); // 协作说明写成什么样:每轮 6 个 run + 1 次判官(--rounds);只在动 HUMAN_GUIDANCE / manage_human 时才有信息量。
@@ -942,6 +945,12 @@ if (ONLY.has('storeupdate') || ONLY.has('storeupdatechat')) {
   if (!bundle || !existsSync(join(bundle, 'tangu-plugins/store-update/tangu-plugin.json')) || !existsSync(join(bundle, 'SIGNATURE'))) throw new Error('--extend-plugin must point to a signed, packed Forsion Extend bundle with tangu-plugins/store-update');
   cpSync(bundle, join(shared, 'plugins/forsion-extend'), { recursive: true });
 }
+// 网页卡片的 A / D 卡要引擎把 Extend 的引擎半身判成官方:签好的包装进引擎的插件目录(同 storeupdate)
+if (ONLY.has('webcardsreal')) {
+  const bundle = opt('extend-pkg', process.env.TANGU_LIVE_EXTEND_PKG || '');
+  if (!bundle || !existsSync(join(bundle, 'SIGNATURE'))) throw new Error('--only webcardsreal needs --extend-pkg <signed, unpacked Forsion Extend package>');
+  cpSync(bundle, join(shared, 'plugins/forsion-extend'), { recursive: true });
+}
 if (ONLY.has('dispatch')) {
   const bundle = opt('dispatch-plugin', '');
   if (!bundle || !existsSync(join(bundle, 'tangu-plugins/dispatch-core/dist/index.mjs'))) throw new Error('--dispatch-plugin must point to a built Dispatch bundle');
@@ -1184,7 +1193,7 @@ const SEED_PAD = `${PAD_TOKEN} Archival filler row for prefix-budget testing; it
   + Array.from({ length: 8 }, (_, i) => `Note ${i + 1}: the coastal survey team logged tidal range, wind bearing and cloud cover at six-hour intervals along the northern estuary terraces.`).join(' ');
 if (SEED_PAD.length < 1000) { console.error(`填充行只有 ${SEED_PAD.length} 字,吃不掉 §1 的 1000 字预算`); process.exit(2); }
 // webpublishreal:本地真 Connect 发的用户令牌就是引擎带给云端的令牌,所以在 TOKEN 之前起;台架退出时一并关掉。
-const SIM = ONLY.has('webpublishreal') ? await startConnectLocal(opt('connect-server', process.env.TANGU_LIVE_CONNECT_SERVER || '')).catch((e) => { console.error(`webpublishreal:${e.message}`); process.exit(2); }) : null;
+const SIM = ONLY.has('webpublishreal') || ONLY.has('webcardsreal') ? await startConnectLocal(opt('connect-server', process.env.TANGU_LIVE_CONNECT_SERVER || '')).catch((e) => { console.error(`webpublishreal:${e.message}`); process.exit(2); }) : null;
 if (SIM) process.on('exit', () => SIM.stop());
 const TOKEN = SIM?.token || process.env.TANGU_LIVE_CLOUD_TOKEN || randomUUID(); // 引擎的 --token 同时是它带给 Forsion 云端的登录令牌:走云端的场景(realtime 云端线路)传真令牌。缺省每次随机:撞上别的台架/引擎也只会 401,不会串到别人的引擎上报绿
 const port = await new Promise((r) => { const srv = createServer(); srv.listen(0, '127.0.0.1', () => { const p = srv.address().port; srv.close(() => r(p)); }); });
@@ -6717,6 +6726,24 @@ Then reply with only the command output.`,
       const row = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : { ok: false, detail: String(failure?.message || 'Missing evidence').split('\n')[0] };
       record('webpagesui', name, { ...row, ...(failure ? { ok: false } : {}) }, row.ms || 0);
     }
+  }
+  if (ONLY.has('webcardsreal')) {
+    const name = 'webcardsui 真机:本地网页卡 / 服务卡 / Extend 的「网页」「我的网页」卡(本地真 Connect)';
+    let failure;
+    try {
+      const job = promisify(execFile)(process.execPath, [join(root, '../desktop/scripts/webcards-real.live.cjs')], {
+        cwd: join(root, '../desktop'), timeout: 20 * 60_000, maxBuffer: 4 * 1024 * 1024,
+        env: { ...process.env, TANGU_BACKEND_URL: base, TANGU_WP_TOKEN: TOKEN, TANGU_WP_CLOUD: FAKE_CLOUD.url,
+          TANGU_WP_PKG: resolve(opt('extend-pkg', process.env.TANGU_LIVE_EXTEND_PKG || '')), TANGU_WP_OUT: OUT, TANGU_WP_MODEL: MODEL },
+      });
+      const stopUi = () => { try { job.child.kill('SIGTERM'); } catch { /* gone */ } };
+      process.on('exit', stopUi);
+      const ui = await job.finally(() => process.off('exit', stopUi));
+      writeFileSync(join(OUT, 'webcardsui.log'), ui.stdout + ui.stderr);
+    } catch (e) { failure = e; writeFileSync(join(OUT, 'webcardsui.log'), String(e.stdout || '') + String(e.stderr || '') + String(e.message)); }
+    const path = join(OUT, 'webcardsui-evidence.json');
+    const row = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : { ok: false, detail: String(failure?.message || 'Missing evidence').split('\n')[0] };
+    record('webcardsui', name, { ...row, ...(failure ? { ok: false } : {}) }, row.ms || 0);
   }
   await finish();
 } catch (e) {
