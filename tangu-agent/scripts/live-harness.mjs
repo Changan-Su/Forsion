@@ -2761,6 +2761,31 @@ try {
     return { ok, detail, output: [a.content, b?.content].filter(Boolean).join('\n---\n'), tokens: tokensOf(a) + (b ? tokensOf(b) : 0), toolCalls: [] };
   });
 
+  // streamoverflow(10-28,借鉴 magpie 第三轮 15):Codex 在 HTTP 200 的流里送来 context_length_exceeded(厂商原文,见 lib/llm-fault-preload.mjs)。
+  //   第一轮垫一段大日志(压缩才有东西可总结,总结完请求明显变小);第二轮起注入:体积不小于第一次被拒那份 95% 的请求都回流里的超长(像真实窗口)。
+  //   修好 = 按 400 认出 → 压缩一次 → 变小的请求放行 → 答出口令,只被拒 1 次、没有 llm_retry。
+  //   负对照(--kind base,没修)= 当 502 原样重发,4 次都被拒,这一轮报错收场、也没压缩。
+  await scenario('streamoverflow', 'streamoverflow 流里的超长 → 压缩后重试', async () => {
+    const sid = `live-ovf-${Date.now()}`;
+    const code = `CODE-${randomUUID().slice(0, 6)}`;
+    const tok = `OVF-${randomUUID().slice(0, 6)}`;
+    const filler = Array.from({ length: 1400 }, (_, i) => `${new Date(Date.UTC(2026, 9, 1, 0, 0, i)).toISOString()} worker-${i % 7} processed batch ${i} ok`).join('\n');
+    const a = await run(sid, `Here is a build log for reference. The codeword is ${code}. Reply with just "noted".\n\n${filler}`);
+    armFault({ mode: 'stream_overflow', match: tok });
+    const b = await run(sid, `Reply with exactly this and nothing else: ${tok}`).finally(disarmFault);
+    const log = faultLog().filter((l) => l.match);
+    const fired = log.filter((l) => l.fired);
+    const passed = log.filter((l) => !l.fired && fired.length && l.t > fired[0].t);
+    const compacting = b.statuses.filter((x) => x.phase === 'compacting');
+    const compacted = b.statuses.filter((x) => x.phase === 'compacted');
+    const retries = b.statuses.filter((x) => x.phase === 'llm_retry');
+    writeFileSync(join(OUT, 'streamoverflow-evidence.json'), JSON.stringify({ errA: a.error, errB: b.error, log, statuses: b.statuses, content: b.content }, null, 2));
+    const ok = !a.error && !b.error && b.content.includes(tok) && fired.length === 1 && passed.length >= 1
+      && compacting.some((x) => x.reason === 'overflow') && compacted.length >= 1 && retries.length === 0;
+    const detail = `被拒 ${fired.length} 次(${fired[0]?.bytes ?? '-'}B)、放行 ${passed.length} 次(${passed[0]?.bytes ?? '-'}B);压缩 ${compacting.map((x) => x.reason).join(',') || '无'} → ${compacted.length ? (compacted[0].fallback ? '机械折叠' : `摘要 ${compacted[0].summarized ?? '?'} 条`) : '无'};llm_retry ${retries.length} 次;${b.error ? `报错:${b.error.slice(0, 140)}` : `答${b.content.includes(tok) ? '对' : '错'}`}`;
+    return { ok, detail, output: b.content, tokens: tokensOf(a) + tokensOf(b), toolCalls: b.toolCalls };
+  });
+
   await scenario('taskoutcomes', 'taskoutcomes actual artifacts, rejected approvals and repeat delivery', () =>
     taskOutcomesLive({ workspace, out: OUT, run, model: MODEL, tokensOf }));
 

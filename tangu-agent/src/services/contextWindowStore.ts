@@ -81,8 +81,13 @@ const OVERFLOW_HINTS: readonly RegExp[] = [
 export function isContextOverflowError(err: unknown): boolean {
   if (!(err instanceof LlmError)) return false;
   if (err.status !== 400 && err.status !== 413) return false;
-  const text = String(err.message || '');
-  return parseContextLimit(text) !== undefined || OVERFLOW_HINTS.some((re) => re.test(text));
+  return isContextOverflowText(`${(err as { code?: string }).code || ''} ${err.message || ''}`);
+}
+
+/** 只看文案(含 error.code):流里来的失败没有状态码,客户端据此决定按 400 抛还是按 502 抛。 */
+export function isContextOverflowText(text: string | undefined): boolean {
+  const t = String(text || '');
+  return parseContextLimit(t) !== undefined || OVERFLOW_HINTS.some((re) => re.test(t));
 }
 
 /** 从上游错误文案里抠出真实上限;认不出返回 undefined(认不出是安全的,乱认才危险)。 */

@@ -179,6 +179,33 @@ describe('streamOpenAiResponses SSE parse', () => {
     expect([isQuotaExhaustedLlmError(rate), isRetryableLlmError(rate)]).toEqual([false, true]);
   });
 
+  // 厂商原文(magpie overflow_stream_test.go,ChatGPT 后端 2026-10-13 实拍):超长在 200 的流里先来 error 再来 response.failed
+  it('流里的超长按 400 抛(压缩后重试认得出),额度仍带 code、其余仍是 502', async () => {
+    const { isRetryableLlmError, isQuotaExhaustedLlmError } = await import('./retry.js');
+    const { isContextOverflowError, resetContextWindowStoreForTest, learnedWindow } = await import('../services/contextWindowStore.js');
+    resetContextWindowStoreForTest();
+    const failWith = async (ev: any) => {
+      const sse = `data: ${JSON.stringify({ type: 'response.created', response: { id: 'r0', status: 'in_progress' } })}\n\ndata: ${JSON.stringify(ev)}\n\n`;
+      vi.stubGlobal('fetch', () => Promise.resolve({ ok: true, body: new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(sse)); c.close(); } }) }));
+      return streamOpenAiResponses({ apiKey: 'x', baseUrl: 'https://example/codex', payload: { model: 'gpt-5-codex', messages: [] } } as any).catch((e) => e);
+    };
+    const overflow = { type: 'invalid_request_error', code: 'context_length_exceeded', message: 'Your input exceeds the context window of this model. Please adjust your input and try again.', param: 'input' };
+    for (const ev of [{ type: 'error', error: overflow, sequence_number: 2 }, { type: 'response.failed', response: { id: 'r0', status: 'failed', error: overflow } }]) {
+      const err = await failWith(ev);
+      expect([err.status, err.code, isContextOverflowError(err), isRetryableLlmError(err)]).toEqual([400, 'context_length_exceeded', true, false]);
+    }
+    // 只有 code 写着超长、正文是别的话:照样认
+    const codeOnly = await failWith({ type: 'response.failed', response: { status: 'failed', error: { code: 'context_length_exceeded', message: 'Request rejected.' } } });
+    expect(isContextOverflowError(codeOnly)).toBe(true);
+    // 正文写明上限的:学下来(同 HTTP 400 那条路)
+    await failWith({ type: 'error', error: { code: 'context_length_exceeded', message: "This model's maximum context length is 128000 tokens." } });
+    expect(learnedWindow('gpt-5-codex')).toBe(128000);
+    const quota = await failWith({ type: 'response.failed', response: { status: 'failed', error: { code: 'usage_limit_reached', message: "You've hit your usage limit." } } });
+    expect([quota.status, isQuotaExhaustedLlmError(quota)]).toEqual([502, true]);
+    const other = await failWith({ type: 'response.failed', response: { status: 'failed', error: { code: 'server_error', message: 'An error occurred while processing your request.' } } });
+    expect([other.status, isContextOverflowError(other), isRetryableLlmError(other)]).toEqual([502, false, true]);
+  });
+
   // 与 openaiCompat 同一条极性契约:两套协议对「没报 / 报了 0」必须给出同一语义。
   it('reasoning_tokens 极性:上游没报 → 整个键缺席;明确报 0 → 键在且为 0', async () => {
     expect(await usageOf({ input_tokens: 10, output_tokens: 5 })).not.toHaveProperty('reasoning_tokens');
