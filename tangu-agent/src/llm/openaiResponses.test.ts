@@ -182,8 +182,7 @@ describe('streamOpenAiResponses SSE parse', () => {
   // 厂商原文(magpie overflow_stream_test.go,ChatGPT 后端 2026-10-13 实拍):超长在 200 的流里先来 error 再来 response.failed
   it('流里的超长按 400 抛(压缩后重试认得出),额度仍带 code、其余仍是 502', async () => {
     const { isRetryableLlmError, isQuotaExhaustedLlmError } = await import('./retry.js');
-    const { isContextOverflowError, resetContextWindowStoreForTest, learnedWindow } = await import('../services/contextWindowStore.js');
-    resetContextWindowStoreForTest();
+    const { isContextOverflowError } = await import('../services/contextWindowStore.js');
     const failWith = async (ev: any) => {
       const sse = `data: ${JSON.stringify({ type: 'response.created', response: { id: 'r0', status: 'in_progress' } })}\n\ndata: ${JSON.stringify(ev)}\n\n`;
       vi.stubGlobal('fetch', () => Promise.resolve({ ok: true, body: new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(sse)); c.close(); } }) }));
@@ -197,17 +196,23 @@ describe('streamOpenAiResponses SSE parse', () => {
     // 只有 code 写着超长、正文是别的话:照样认
     const codeOnly = await failWith({ type: 'response.failed', response: { status: 'failed', error: { code: 'context_length_exceeded', message: 'Request rejected.' } } });
     expect(isContextOverflowError(codeOnly)).toBe(true);
-    // 正文写明上限的:学下来(同 HTTP 400 那条路)
-    await failWith({ type: 'error', error: { code: 'context_length_exceeded', message: "This model's maximum context length is 128000 tokens." } });
-    expect(learnedWindow('gpt-5-codex')).toBe(128000);
     const quota = await failWith({ type: 'response.failed', response: { status: 'failed', error: { code: 'usage_limit_reached', message: "You've hit your usage limit." } } });
     expect([quota.status, isQuotaExhaustedLlmError(quota)]).toEqual([502, true]);
-    // 限流 / 日额度的措辞会撞上超长表(「too many tokens」「N tokens > M maximum」):不许判成超长,更不许学成窗口(Codex 评审)
-    const tpm = await failWith({ type: 'response.failed', response: { status: 'failed', error: { code: 'rate_limit_exceeded', message: 'Too many tokens per minute. Please try again in 8s.' } } });
-    expect([tpm.status, isRetryableLlmError(tpm)]).toEqual([502, true]);
-    const daily = await failWith({ type: 'error', error: { code: 'usage_limit_reached', message: 'Daily token quota exceeded: 12000 tokens > 10000 maximum' } });
-    expect([daily.status, isContextOverflowError(daily)]).toEqual([502, false]);
-    expect(learnedWindow('gpt-5-codex')).toBe(128000); // 没被那句日额度改小
+    // 限流 / 额度 / 服务端错的正文会撞上超长表(「too many tokens」「N tokens > M maximum」「exceeds the limit of N」):不许判成超长(Codex 评审)
+    const notOverflow = [
+      { code: 'rate_limit_exceeded', message: 'Too many tokens per minute. Please try again in 8s.' },
+      { code: 'usage_limit_reached', message: 'Daily token quota exceeded: 12000 tokens > 10000 maximum' },
+      { code: 'billing_hard_limit_reached', message: 'Monthly token budget exceeded: 12000 tokens > 10000 maximum' },
+      { code: 'server_error', message: 'Request exceeds the limit of 5000 concurrent requests' },
+      { message: 'Too many tokens per minute, slow down' }, // 没 code 只有正文
+    ];
+    for (const error of notOverflow) {
+      const err = await failWith({ type: 'response.failed', response: { status: 'failed', error } });
+      expect([err.status, isContextOverflowError(err)], JSON.stringify(error)).toEqual([502, false]);
+    }
+    // invalid_request_error + 超长正文(Anthropic 风格的 code)照样认
+    const typed = await failWith({ type: 'error', error: { type: 'invalid_request_error', message: "This model's maximum context length is 128000 tokens." } });
+    expect([typed.status, isContextOverflowError(typed)]).toEqual([400, true]);
     const other = await failWith({ type: 'response.failed', response: { status: 'failed', error: { code: 'server_error', message: 'An error occurred while processing your request.' } } });
     expect([other.status, isContextOverflowError(other), isRetryableLlmError(other)]).toEqual([502, false, true]);
   });

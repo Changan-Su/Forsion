@@ -19,7 +19,7 @@
  */
 import type { StreamOpts, StreamResult } from '../seams/cloudBrain.js';
 import { LlmError } from '../core/types.js';
-import { isStreamContextOverflow, learnFromUpstreamError } from '../services/contextWindowStore.js';
+import { isStreamContextOverflow } from '../services/contextWindowStore.js';
 import { PROTOCOL_MARK } from './openaiCompat.js';
 import { withStreamIdle, type StreamIdleGuard } from './streamIdle.js';
 import { stringifyWellFormed } from './wellFormedJson.js';
@@ -391,7 +391,6 @@ async function runAnthropicStream(opts: StreamOpts, guard: StreamIdleGuard): Pro
           // 流里的超长(代理把 400 包进 SSE 时会这样)按 400 抛,同 openaiResponses:压缩后重试,不当 5xx 重发
           const msg = ev.error?.message || 'Anthropic stream error';
           const overflow = isStreamContextOverflow(ev.error?.type, msg);
-          if (overflow) learnFromUpstreamError(body.model, 400, msg);
           throw Object.assign(new LlmError(overflow ? 400 : 502, msg), ev.error?.type ? { code: ev.error.type } : {});
         }
         default:

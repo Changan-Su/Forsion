@@ -56,7 +56,7 @@ import {
   tagMessageSource, messageSource, persistCheckpoint, messageTimestamp, type CompactBoundary,
 } from './compaction.js';
 import { compactionSettingsFor, type CompactionSettings } from './compactionSettings.js';
-import { isContextOverflowError } from './contextWindowStore.js';
+import { isContextOverflowError, learnFromUpstreamError } from './contextWindowStore.js';
 import { getAgent, isValidSlug, libDirOf, MUSE_AGENT_SLUG, type NormalAgentDef } from '../agents/agentRegistry.js';
 import { loadHarness, shelvedOf, renderHarnessSection, isRefineInvocation, REFINE_DIRECTIVE, consumeHarnessCandidates, renderPendingHarnessCandidates } from '../agents/harnessStore.js';
 import { loadSchedule, entriesOf, upcomingScheduleLines } from './agentSchedule.js';
@@ -3038,10 +3038,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           }
           if (err instanceof AbortLikeError) throw err;
           // 输入超出窗口被拒(估算偏小 / 窗口猜大了):强制压缩一次后重进本轮(借 pi 的 overflow
-          // compact-and-retry;每 run 一次,免得估算与上游两边永远对不上时空转)。上游报错里的真实上限
-          // 已由 learnFromUpstreamError 学下来,下个 run 起触发线按真值算。
+          // compact-and-retry;每 run 一次,免得估算与上游两边永远对不上时空转)。上游报错里写明的真实上限在这里学下来,
+          // 键用本轮的模型 id —— 预算按它查(effectiveContextWindowInfo(callModelId));客户端手里只有上游真名(codex/x 发出去是 x),记在那儿查不到。
           if (!emitted && !overflowRecovered && isContextOverflowError(err)) {
             overflowRecovered = true;
+            learnFromUpstreamError(callModelId, (err as LlmError).status, (err as Error).message);
             console.warn(`[agent-core] run=${runId} 上游拒收超长输入,压缩后重试本轮: ${(err as any)?.message || err}`);
             if (await runCompaction('overflow', contextUsage.estimate(workingMessages, toolsOverhead), iteration)) {
               retryIteration = true;

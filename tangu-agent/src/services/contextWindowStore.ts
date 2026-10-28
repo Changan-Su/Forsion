@@ -26,6 +26,7 @@ import { readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tanguHome } from '../core/tanguHome.js';
 import { LlmError } from '../core/types.js';
+import { quotaExhaustedText } from '../llm/retry.js';
 
 const file = (): string => join(tanguHome(), 'context-windows.json');
 
@@ -89,18 +90,23 @@ function isContextOverflowText(text: string | undefined): boolean {
   return parseContextLimit(t) !== undefined || OVERFLOW_HINTS.some((re) => re.test(t));
 }
 
-/** 限流 / 额度的措辞:「Too many tokens per minute」「Daily token quota exceeded: N tokens > M maximum」会撞上超长表。 */
-const NOT_OVERFLOW = /rate[_ ]?limit|quota|usage[_ ]?limit|insufficient|per[ _]?(?:minute|min|second|hour|day)\b|\b[RT]PM\b/i;
+/** 限流 / 额度 / 预算的措辞:「Too many tokens per minute」「Monthly token budget exceeded: N tokens > M maximum」会撞上超长表。 */
+const NOT_OVERFLOW = /rate[_ ]?limit|quota|budget|billing|usage[_ ]?limit|insufficient|concurrent|per[ _]?(?:minute|min|second|hour|day|month)\b|daily|monthly|\b[RT]PM\b/i;
 
 /**
  * 流里来的失败(Responses 的 error / response.failed、Anthropic 的 error 事件)是不是输入超长 —— 客户端据此按 400 抛
- * (agentLoop 压缩后重试、学真实上限)还是按 502 抛。没有状态码可看,所以 code 写明超长的直接认;
- * 写着限流 / 额度的先排除(否则 429 类会被压缩、日额度会被学成窗口);其余按措辞表。
+ * (agentLoop 压缩后重试、学真实上限)还是按 502 抛。没有状态码可看,只能靠 code 和正文:
+ *  - code 写明超长 → 是;
+ *  - 别的 code(server_error / overloaded_error / rate_limit_* / billing_* / usage_limit_reached …)→ 不是,不看正文
+ *    (「Request exceeds the limit of 5000 concurrent requests」这类正文会撞上措辞表);只有 invalid_request(_error) 或没 code 才往下看;
+ *  - 正文写着限流 / 额度 / 预算的 → 不是(否则会被压缩、那个数字会被学成窗口);其余按措辞表。
  */
 export function isStreamContextOverflow(code: string | undefined, message: string | undefined): boolean {
-  if (/^(?:context_length_exceeded|request_too_large|model_context_window_exceeded)$/i.test(String(code || ''))) return true;
-  const t = `${code || ''} ${message || ''}`;
-  return !NOT_OVERFLOW.test(t) && isContextOverflowText(t);
+  const c = String(code || '');
+  if (/^(?:context_length_exceeded|request_too_large|model_context_window_exceeded)$/i.test(c)) return true;
+  if (c && !/^invalid_request(?:_error)?$/i.test(c)) return false;
+  const t = `${c} ${message || ''}`;
+  return !NOT_OVERFLOW.test(t) && !quotaExhaustedText(t) && isContextOverflowText(t);
 }
 
 /** 从上游错误文案里抠出真实上限;认不出返回 undefined(认不出是安全的,乱认才危险)。 */
