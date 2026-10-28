@@ -116,7 +116,7 @@ import { onRadioGroupKeyDown, radioTabIndex } from './radioGroupKeys'
 import { SettingsSaveBar } from './SettingsSaveBar'
 import { SecretStorageNotice } from './SecretStorageNotice' // P1-K5
 import './settingsModal.css'
-import { connectionTarget, homeTarget } from '../services/engine/targets'
+import { connectionTarget, homeTarget, HOME_REF } from '../services/engine/targets'
 
 // 本文件自带的文案片段(命名空间 `settingsmodal.*`,不与 i18n.generated.ts 的 `settings.*` 相交)。
 registerMessages({
@@ -747,8 +747,9 @@ export const SettingsModal: React.FC<{
   // MCP 配置(~/.tangu/mcp.json)+ 后端实际连接状态(GET /agent/tools 的 mcp 分区)
   const [mcpServers, setMcpServers] = useState<Record<string, McpServerConfigEntry>>({})
   const [mcpStatus, setMcpStatus] = useState<ToolsResponse['mcp']>(undefined)
-  // MCP 页页头合计的分母:新对话会用的那个模型(同 newChatModelId 的回退链,不含本次空态临时选的)
-  const defaultChatModelId = useApp((s) => defaultModelOf(s) || s.modelsResp?.defaultModelId || '')
+  // MCP 页页头合计的分母:本机新对话会用的那个模型(MCP 状态与 models 都来自本机引擎;焦点在别的电脑时也按本机算),
+  // 没选过就落到本机目录的 defaultModelId(渲染处)
+  const defaultChatModelId = useApp((s) => defaultModelOf(s, HOME_REF) || '')
   const [editMcp, setEditMcp] = useState<{ name: string; isNew: boolean; command: string; argsText: string; url: string; transport: 'auto' | 'stdio' | 'http' | 'sse'; envText: string } | null>(null)
   const [mcpMsg, setMcpMsg] = useState('')
 
@@ -816,7 +817,8 @@ export const SettingsModal: React.FC<{
       ? <span className="mcp-tokens">{t('settingsmodal.mcp.tokens', { n: fmtTok(st.approxTokens) })}</span>
       : null
   const mcpTotalSummary = (): React.ReactNode => {
-    const live = (mcpStatus || []).filter((s) => s.status === 'connected' && typeof s.approxTokens === 'number' && (s.origin || mcpServers[s.server]?.enabled !== false))
+    // 插件自带的照算;mcp.json 里的要还在、且没停用(刚删 / 刚停的,状态快照在页面刷新前还是 connected)
+    const live = (mcpStatus || []).filter((s) => s.status === 'connected' && typeof s.approxTokens === 'number' && (s.origin || (mcpServers[s.server] && mcpServers[s.server].enabled !== false)))
     if (!live.length) return null
     const total = live.reduce((n, s) => n + s.approxTokens!, 0)
     const win = models?.models.find((m) => m.id === (defaultChatModelId || models.defaultModelId))?.contextWindow
