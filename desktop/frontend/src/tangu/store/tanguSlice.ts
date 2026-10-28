@@ -35,7 +35,7 @@ import { normalizeSessionEmoji } from '../../../../../tangu-agent/src/contracts/
 import { DEFAULT_APPROVAL, applyPreset, stickyDefaults, withAmadeusWorkspace } from '../../../../../tangu-agent/src/contracts/sessionDefaults'
 export { DEFAULT_APPROVAL, DEFAULT_THINKING, applyPreset, stickyDefaults, withAmadeusWorkspace } from '../../../../../tangu-agent/src/contracts/sessionDefaults'
 import type { StoreApi } from 'zustand'
-import { defaultModelOf, newChatModelId, reloadDesktopConfig, writeFocusModel, type AppState } from '../../stores/appStore'
+import { defaultModelOf, newChatModelId, rememberedModelId, reloadDesktopConfig, writeFocusModel, type AppState } from '../../stores/appStore'
 import '../messages' // Tangu 自己的文案片段(核心插件化 2c)
 import { failReason, landedAnyway, type FailedSend } from './failedSend'
 
@@ -3250,7 +3250,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       // S4:按会话所在的位置记(空白新对话 = 焦点),不再一律看焦点。
       const where = sid ? refForSession(sid) : focusRef()
       if (where.kind === 'unit') { writeFocusModel(where, modelId); if (sameRef(where, focusRef())) set({ focusModelId: modelId }) }
-      else set((s) => { void window.tangu?.setConfig?.({ modelId }); return { cfg: { ...s.cfg, modelId } } })
+      else set((s) => { const remembered = rememberedModelId(modelId, s.modelsResp); void window.tangu?.setConfig?.({ modelId: remembered }); return { cfg: { ...s.cfg, modelId: remembered } } })
       // 这次选的就是「新会话用哪个模型」的最新答案:空白新对话草稿里更早定下的那个(newChatModel 排在记忆前面,发出去之后也不清)
       // 不能再压着它 —— 否则经归档 / 切 Space / /sessions 回到空白新对话时,药丸还是旧的那个,发出去也是。
       if (sid && sameRef(where, focusRef())) set({ newChatModel: null })
