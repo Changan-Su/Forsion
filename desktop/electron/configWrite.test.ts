@@ -5,7 +5,8 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { clearRecoveryNotice, configBackupDir, createSerialQueue, lockedUpdateJson, readJsonRecovering, readRecoveryNotice, writePrivateJson } from './configWrite'
 
-const fsFault = vi.hoisted(() => ({ writeSyncENOSPC: false }))
+// fsyncFail:fsync 一律抛 EIO(断电前刷不下去)
+const fsFault = vi.hoisted(() => ({ writeSyncENOSPC: false, fsyncFail: false }))
 vi.mock('node:fs', async (importOriginal) => {
   const real = await importOriginal<typeof import('node:fs')>()
   return {
@@ -14,6 +15,10 @@ vi.mock('node:fs', async (importOriginal) => {
       if (fsFault.writeSyncENOSPC) throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' })
       return real.writeSync(...args)
     }) as typeof real.writeSync,
+    fsyncSync: ((fd: number) => {
+      if (fsFault.fsyncFail) throw Object.assign(new Error('EIO: i/o error, fsync'), { code: 'EIO' })
+      return real.fsyncSync(fd)
+    }) as typeof real.fsyncSync,
   }
 })
 
@@ -222,6 +227,19 @@ describe('写前备份 / 读坏恢复(与引擎 core/config.ts 同一协议)', (
     await writeFile(configBackupDir(file), 'not a dir')
     await expect(lockedUpdateJson(file, () => ({ a: 2 }))).rejects.toThrow()
     expect(await readFile(file, 'utf8')).toBe(before)
+  })
+
+  it('fsync 失败(magpie #1505)→ 拒写:文件原样,不留临时文件与锁', async () => {
+    const file = join(await fresh(), 'config.json')
+    await lockedUpdateJson(file, () => ({ a: 1 }))
+    const before = await readFile(file, 'utf8')
+    fsFault.fsyncFail = true
+    try {
+      await expect(lockedUpdateJson(file, () => ({ a: 2 }))).rejects.toThrow(/EIO/)
+    } finally { fsFault.fsyncFail = false }
+    expect(await readFile(file, 'utf8')).toBe(before)
+    const all = [...await readdir(dir), ...await readdir(configBackupDir(file)).catch(() => [] as string[])]
+    expect(all.filter((n) => n.endsWith('.tmp') || n.endsWith('.lock'))).toEqual([])
   })
 
   it('.bak 不是第二条读路径:文件不存在时读到 {},不拿 .bak 顶上', async () => {

@@ -7,7 +7,8 @@ import { configExists, loadRawConfig, getRawSection, saveSection, updateSection,
 import { configFile } from './tanguHome.js';
 import { loadMcpConfig } from '../mcp/config.js';
 
-const fsFault = vi.hoisted(() => ({ writeSyncENOSPC: false }));
+// fsyncFailAt:第 N 次 fsync 抛 EIO(0 = 不注入;每次注入后自增计数)
+const fsFault = vi.hoisted(() => ({ writeSyncENOSPC: false, fsyncFailAt: 0, fsyncCalls: 0 }));
 vi.mock('node:fs', async (importOriginal) => {
   const real = await importOriginal<typeof import('node:fs')>();
   return {
@@ -16,6 +17,10 @@ vi.mock('node:fs', async (importOriginal) => {
       if (fsFault.writeSyncENOSPC) throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' });
       return real.writeSync(...args);
     }) as typeof real.writeSync,
+    fsyncSync: ((fd: number) => {
+      if (fsFault.fsyncFailAt && ++fsFault.fsyncCalls === fsFault.fsyncFailAt) throw Object.assign(new Error('EIO: i/o error, fsync'), { code: 'EIO' });
+      return real.fsyncSync(fd);
+    }) as typeof real.fsyncSync,
   };
 });
 
@@ -254,6 +259,25 @@ describe('写前备份 / 读坏恢复(读失败 = 不知道,不等于空)', () =
     expect(() => saveSection('cloud', { url: 'u2' })).toThrow();
     expect(readFileSync(configFile(), 'utf8')).toBe(before);
     expect(existsSync(`${configFile()}.lock`)).toBe(false);
+  });
+
+  it('fsync 失败(断电前刷不下去,magpie #1505)→ 整次拒写:config.json 与 .bak 原样,两个目录都不留临时文件', () => {
+    saveSection('cloud', { url: 'u1' });
+    saveSection('cloud', { url: 'u2' });
+    const before = readFileSync(configFile(), 'utf8');
+    const bakBefore = readFileSync(bak(), 'utf8');
+    const tmps = (): string[] => [...readdirSync(dirname(configFile())), ...readdirSync(bakDir())].filter((n) => n.endsWith('.tmp'));
+    for (const at of [1, 2]) { // 1 = 写 .bak 那次,2 = 写 config.json 那次
+      fsFault.fsyncCalls = 0; fsFault.fsyncFailAt = at;
+      try {
+        expect(() => saveSection('cloud', { url: 'u3' })).toThrow(/EIO/);
+      } finally { fsFault.fsyncFailAt = 0; }
+      expect(readFileSync(configFile(), 'utf8')).toBe(before);
+      expect(tmps()).toEqual([]);
+      expect(existsSync(`${configFile()}.lock`)).toBe(false);
+    }
+    expect(readFileSync(bak(), 'utf8')).toBe(before); // 第 2 轮 .bak 已写成功:= 当前那份,仍可恢复
+    expect(bakBefore).not.toBe(before);
   });
 
   it('连续两次恢复各留一份 .bad-*,不互相覆盖', () => {

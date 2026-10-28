@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { chmodSync, closeSync, constants as fsConstants, copyFileSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs'
+import { chmodSync, closeSync, constants as fsConstants, copyFileSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 
@@ -16,7 +16,8 @@ export function createSerialQueue(): <T>(task: () => Promise<T>) => Promise<T> {
 
 /** 配置 JSON 原子落盘:唯一临时名 + rename,临时文件建出来就是 0600(含 token / apiKey / 配对密钥)。
  *  截断直写、或几个写者共用一个 `.tmp`,并发时会拼出半截 JSON(2026-09-17 真 Electron 实测两份配置都被写坏)。
- *  ponytail: 不 fsync —— 断电瞬间那次写可能留下空文件,与原 writeHomeConfig 同;要防就照 hostTextWrite 加 sync。 */
+ *  ponytail: 不 fsync —— 断电瞬间那次写可能留下空文件,与原 writeHomeConfig 同;要防就照 hostTextWrite 加 sync。
+ *  (config.json 不走这里:lockedUpdateJson 用 writeAtomicSync,fsync + .bak。) */
 export async function writePrivateJson(file: string, data: unknown): Promise<void> {
   await mkdir(dirname(file), { recursive: true })
   const tmp = `${file}.${process.pid}-${randomUUID()}.tmp`
@@ -67,15 +68,22 @@ function parseObject(raw: string): Record<string, any> | null {
   } catch { return null }
 }
 
-/** 唯一临时名 + 0600 + rename;rename 前核 mine()(同 lockedUpdateJson 的提交纪律)。 */
+/** 唯一临时名 + 0600 + fsync + rename;rename 前核 mine()(同 lockedUpdateJson 的提交纪律)。
+ *  rename 前 fsync 临时文件:断电后不会留下长度对、内容全 0 的 config.json(magpie #1505);同引擎 core/config.ts 的 writeAtomic。
+ *  ponytail: 不 fsync 目录 —— 断电丢的是这次 rename,原位仍是上一份好的。 */
 function writeAtomicSync(file: string, text: string, mine: () => boolean): void {
   mkdirSync(dirname(file), { recursive: true })
   const tmp = `${file}.${process.pid}-${randomUUID()}.tmp`
+  let fd: number | undefined
   try {
-    writeFileSync(tmp, text, { encoding: 'utf8', mode: 0o600 })
+    fd = openSync(tmp, 'wx', 0o600)
+    writeFileSync(fd, text, 'utf8')
+    fsyncSync(fd)
+    closeSync(fd); fd = undefined
     if (!mine()) throw new Error(`${file} 的写锁在持有期间被当作陈旧锁回收(进程被挂起超过 ${LOCK_STALE_MS / 1000}s?),放弃本次写入`)
     renameSync(tmp, file)
   } catch (e) {
+    if (fd !== undefined) try { closeSync(fd) } catch { /* ignore */ }
     try { rmSync(tmp, { force: true }) } catch { /* 清不掉就留着,别盖掉原始错误 */ }
     throw e
   }

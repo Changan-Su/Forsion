@@ -20,7 +20,7 @@
  * 「读 → 改 → 写临时文件 → rename」;读不加锁(rename 原子替换,读者看不到半截 JSON)。
  * 段级读改写用 `updateSection(name, fn)`(fn 在锁内拿最新段值);锁外读段、改完再 saveSection 会盖掉别的进程同时的改动。
  */
-import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, statSync, rmSync, openSync, closeSync, writeSync, copyFileSync, chmodSync, constants as fsConstants } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, statSync, rmSync, openSync, closeSync, writeSync, copyFileSync, chmodSync, fsyncSync, constants as fsConstants } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { basename, dirname, join } from 'node:path';
 import {
@@ -68,15 +68,22 @@ const backupOf = (file: string): string => join(configBackupDir(file), `${basena
 /** 恢复标记:`{ at: 恢复时刻, version: 恢复到的那份 .bak 的写入时刻, bad: 坏文件留存名 }`(epoch ms)。 */
 export const recoveryMarkerOf = (file: string): string => join(configBackupDir(file), `${basename(file)}.recovered`);
 
-/** 唯一临时名 + 0600 + rename;commit 之前核 stillMine(同 updateConfigFile 的提交纪律)。 */
+/** 唯一临时名 + 0600 + fsync + rename;commit 之前核 stillMine(同 updateConfigFile 的提交纪律)。
+ *  rename 前先 fsync 临时文件:不刷盘的话断电后可能留下长度对、内容全是 0x00 的文件(magpie #1505,Windows)。
+ *  .bak 管坏了能恢复,fsync 管尽量不坏。ponytail: 不 fsync 目录 —— 断电丢的是这次 rename,原位仍是上一份好的。 */
 function writeAtomic(file: string, text: string, stillMine: () => boolean): void {
   mkdirSync(dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}-${randomUUID()}.tmp`;
+  let fd: number | undefined;
   try {
-    writeFileSync(tmp, text, { encoding: 'utf8', mode: 0o600 });
+    fd = openSync(tmp, 'wx', 0o600);
+    writeFileSync(fd, text, 'utf8');
+    fsyncSync(fd);
+    closeSync(fd); fd = undefined;
     if (!stillMine()) throw new Error(`写锁在持有期间被当作陈旧锁回收(进程被挂起超过 ${LOCK_STALE_MS / 1000}s?),放弃本次写入:${file}`);
     renameSync(tmp, file);
   } catch (e) {
+    if (fd !== undefined) try { closeSync(fd); } catch { /* ignore */ }
     try { rmSync(tmp, { force: true }); } catch { /* 清不掉就留着,别盖掉原始错误 */ }
     throw e;
   }
