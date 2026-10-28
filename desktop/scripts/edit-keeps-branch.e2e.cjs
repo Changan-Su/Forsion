@@ -3,7 +3,7 @@
  * 桩引擎记下 UI 发来的「分支 / 删消息 / 起 run」,并像真引擎一样维护主会话的消息(删掉的不再回、新跑的那轮补上)。
  * 断言:点「重新生成」= 先复制整份成一支(复制到最后一条、分叉点在上一条回答、标题「旧版本 · 原标题」),再删、再重发;
  * 主区还是主会话,左栏多一行旧版本;对话页上一条回答下「从这里分出」列它;画布里新的一轮和旧的一支是同一张卡下的两个孩子。
- * 再「编辑重发」一次:又多一支,三个孩子。
+ * 再「编辑重发」一次:编辑框是那条提问原地可改(方案 ②A),又多一支,三个孩子。
  * 量的是 out/ 产物:改了源码先 `npm run build`。
  *   node ../.claude/hooks/devlock.cjs run --vehicle=e2e --what="编辑留分支台架" --eta=2 -- node scripts/edit-keeps-branch.e2e.cjs
  */
@@ -112,10 +112,35 @@ async function main() {
     await win.screenshot({ path: path.join(dir, 'chat.png') })
 
     // ── 编辑重发新的那句 ──
+    // 编辑框(方案 A):先开一次按 Esc 取消,再开来改
     await hoverClick('#tocmsg-u-r1', '编辑')
     const ta = win.locator('.t2-edit textarea').first()
     await ta.waitFor({ timeout: 5_000 })
+    await win.keyboard.press('Escape')
+    await win.waitForTimeout(200)
+    const escClosed = await win.locator('.t2-edit').count() === 0
+    await hoverClick('#tocmsg-u-r1', '编辑')
+    await ta.waitFor({ timeout: 5_000 })
+    const look = await win.evaluate(() => {
+      const ed = document.querySelector('.t2-edit'), t = ed?.querySelector('textarea'), bub = ed?.querySelector('.t2-edit-bubble')
+      const ref = document.querySelector('#tocmsg-u1 .t2-user'), wrap = ed?.closest('.t2-userwrap')
+      const cs = t && getComputedStyle(t), bs = bub && getComputedStyle(bub), rs = ref && getComputedStyle(ref)
+      const send = [...(ed?.querySelectorAll('.t2-btn') || [])].find((b) => b.classList.contains('primary'))
+      const wr = wrap?.getBoundingClientRect(), rr = ref?.closest('.t2-userwrap')?.getBoundingClientRect()
+      return {
+        noBorder: cs?.borderTopWidth === '0px' && cs?.outlineStyle === 'none', font: cs?.fontSize,
+        sameBg: !!bs && bs.backgroundColor === rs?.backgroundColor, sameRadius: bs?.borderRadius === rs?.borderRadius,
+        avatar: !!wrap?.querySelector('.t2-user-avatar'),
+        hint: ed?.querySelector('.t2-edit-hint')?.textContent, send: send?.textContent, sendOff: !!send?.disabled,
+        caretEnd: !!t && t.selectionStart === t.value.length && document.activeElement === t,
+        rightAligned: !!wr && !!rr && Math.abs(wr.right - rr.right) < 2,
+      }
+    })
+    r.check('EB7 编辑框 = 那条提问原地可改:同气泡底色圆角、无描边、14px、头像、右边对齐、光标在末尾;Esc 取消', escClosed && look.noBorder && look.font === '14px' && look.sameBg && look.sameRadius && look.avatar && look.rightAligned && look.caretEnd, JSON.stringify({ escClosed, ...look }))
+    r.check('EB8 下面一行:提示「原来这一版会留成一支分支」+「发送」;没改时发送置灰', look.hint === '原来这一版会留成一支分支' && look.send === '发送' && look.sendOff, JSON.stringify(look))
     await ta.fill('只列第一版必须做的模块')
+    await win.waitForTimeout(150)
+    await win.screenshot({ path: path.join(dir, 'edit.png') })
     await win.keyboard.press(process.platform === 'darwin' ? 'Meta+Enter' : 'Control+Enter')
     await win.getByText('新的回答 r2').first().waitFor({ timeout: 15_000 })
     await win.waitForTimeout(800)

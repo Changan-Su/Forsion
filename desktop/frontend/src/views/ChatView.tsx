@@ -26,6 +26,7 @@ import { useDeskAcceptsFiles } from '../amadeus/plugins/deskCompanion'
 import { ToolCardDeskContext, toolCardDeskFor } from '../components/PluginToolCard'
 import { ErrorBoundary } from '../components/ErrorBoundary'
 import { EditorialMessage, type MessageHandlers } from './chat2/EditorialMessage'
+import { EditBubble } from './chat2/EditBubble'
 import { ApprovalTray, DeckPill, type DeckItem } from './chat2/ApprovalTray'
 import { pendingCreationCardsOf, pendingHumanCardsOf, pendingTaskCardsOf, tasksOf, useTaskHandledVersion } from './chat2/pendingTasks'
 import { useHumanAckVersion } from '../components/HumanUpdateCard'
@@ -556,7 +557,7 @@ export function ChatView({ leaf, params }: ViewProps) {
     })
   }
   const startEdit = (id: string, content: string): void => { setEditingId(id); setEditText(content) }
-  const saveEdit = (): void => { if (editingId && editText.trim()) { s.editUserMessage(editingId, editText.trim(), activeId) } setEditingId(null) }
+  const saveEdit = (text: string): void => { if (editingId && text.trim()) { s.editUserMessage(editingId, text.trim(), activeId) } setEditingId(null) }
 
   // 传给每条消息的对象要稳住,EditorialMessage 的 memo 才挡得住「流式每来一段字,整段对话的消息都重渲一遍」。
   // handlers 按「会话 + 哪几个按钮在」整组缓存、组里按消息 id 各一份;函数体经 handlerEnv 取当下的值(提交后才会被点到),不会拿到旧闭包。
@@ -755,19 +756,8 @@ export function ChatView({ leaf, params }: ViewProps) {
               shownMessages.map((m) => {
                 if (isHiddenInList(m)) return null
                 if (m.role === 'user' && m.id === editingId) {
-                  return (
-                    <div key={m.id} className="t2-userwrap">
-                      <div className="t2-edit">
-                        <textarea className="t2-edit-ta" value={editText} autoFocus
-                          onChange={(e) => setEditText(e.target.value)}
-                          onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) saveEdit(); if (e.key === 'Escape') setEditingId(null) }} />
-                        <div className="t2-btnrow">
-                          <button className="t2-btn primary" onClick={saveEdit}>{t('chat.edit.saveResend')}</button>
-                          <button className="t2-btn ghost" onClick={() => setEditingId(null)}>{t('common.cancel')}</button>
-                        </div>
-                      </div>
-                    </div>
-                  )
+                  return <EditBubble key={m.id} original={m.content} value={editText} onChange={setEditText} userName={userName} userAvatar={userAvatar}
+                    onSend={saveEdit} onCancel={() => setEditingId(null)} />
                 }
                 return (
                   <EditorialMessage
