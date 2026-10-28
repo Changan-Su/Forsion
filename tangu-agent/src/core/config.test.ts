@@ -247,6 +247,25 @@ describe('写前备份 / 读坏恢复(读失败 = 不知道,不等于空)', () =
     expect(existsSync(`${configFile()}.lock`)).toBe(false);
   });
 
+  it('备份写不进去(备份目录被占成文件)→ 整次拒写,config.json 一个字节不动', () => {
+    saveSection('cloud', { url: 'u1' });
+    const before = readFileSync(configFile(), 'utf8');
+    writeFileSync(bakDir(), 'not a dir', 'utf8');
+    expect(() => saveSection('cloud', { url: 'u2' })).toThrow();
+    expect(readFileSync(configFile(), 'utf8')).toBe(before);
+    expect(existsSync(`${configFile()}.lock`)).toBe(false);
+  });
+
+  it('连续两次恢复各留一份 .bad-*,不互相覆盖', () => {
+    saveSection('cloud', { url: 'u1' });
+    saveSection('cloud', { url: 'u2' });
+    writeFileSync(configFile(), '', 'utf8');
+    expect(loadRawConfig()).toEqual({ cloud: { url: 'u1' } });
+    writeFileSync(configFile(), '{', 'utf8');
+    expect(loadRawConfig()).toEqual({ cloud: { url: 'u1' } });
+    expect(bads().map((n) => readFileSync(join(bakDir(), n), 'utf8')).sort()).toEqual(['', '{']);
+  });
+
   it('.bak 不是第二条读路径:config.json 不存在时不拿 .bak 顶上', () => {
     saveSection('cloud', { url: 'u1' });
     saveSection('cloud', { url: 'u2' });

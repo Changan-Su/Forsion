@@ -28,6 +28,10 @@ export function canonicalFuturePath(input: string, hops = 0): string {
     }
   }
 }
+/** provider-auth.json 的备份目录:providerCreds 在真身旁边落位(文件可能是软链,live 台架链到开发环境那份)。 */
+function providerAuthBackupDir(): string {
+  return configBackupDir(canonicalFuturePath(path.join(forsionSharedDir(), 'provider-auth.json')));
+}
 /** Model-controlled execution must not change the next run's security config or runtime code. */
 export function protectedHostPaths(): string[] {
   const original = [
@@ -37,7 +41,9 @@ export function protectedHostPaths(): string[] {
     path.join(forsionSharedDir(), 'engine'), ...(process.env.TANGU_BUNDLED_ROOT ? [process.env.TANGU_BUNDLED_ROOT] : []),
     `${configFile()}.lock`, // config.json 的跨进程写锁(core/config.ts):被模型进程占住 = 用户的设置(含收紧审批)都存不进去
     path.join(forsionSharedDir(), 'auth.json'), path.join(forsionSharedDir(), 'provider-auth.json'),
-    configBackupDir(configFile()), // config.json / provider-auth.json 的 .bak 与读坏时留下的 .bad-*(core/config.ts):改了 = 下次恢复成模型写的版本
+    // config.json / provider-auth.json 的 .bak 与读坏时留下的 .bad-*(core/config.ts):改了 = 下次恢复成模型写的版本。
+    // provider-auth.json 可能是软链,备份落在真身旁边。
+    configBackupDir(configFile()), providerAuthBackupDir(),
     ...['.env', 'plugins', 'mcp.json', 'engines.json', 'engine-prefs.json', 'providers.json', 'muse-state.json'].map((name) => path.join(tanguHome(), name)),
   ];
   for (const slug of new Set([currentAgentSlug() || DEFAULT_AGENT_SLUG, currentDisplayAgentSlug()].filter(Boolean))) {
@@ -110,9 +116,9 @@ export function credentialPaths(): string[] {
     out.push(...CREDENTIAL_FILE_NAMES.map((n) => path.join(d, n)), path.join(d, 'secrets'), path.join(d, 'config.json'), configBackupDir(path.join(d, 'config.json')));
   }
   // 引擎配置 config.json(provider key、MCP headers / env 都在里面)不一定在共享域:纯 standalone 形态它就在 ~/.tangu 里。
-  out.push(configFile(), configBackupDir(configFile()));
+  out.push(configFile(), configBackupDir(configFile()), providerAuthBackupDir());
   for (const h of tanguHomes()) {
-    out.push(path.join(h, 'worker-key'), ...TANGU_SECRET_NAMES.map((n) => path.join(h, n)));
+    out.push(path.join(h, 'worker-key'), ...TANGU_SECRET_NAMES.map((n) => path.join(h, n)), configBackupDir(path.join(h, 'config.json')));
     // 通道令牌(微信 iLink bot token 只存在这里)与 Agent 自带浏览器的登录态(cookie jar)。09-27 终审 P2。
     out.push(path.join(h, 'wechat'), path.join(h, 'browser-use', 'chrome-profile'));
   }
@@ -159,7 +165,8 @@ export function procTreeTouched(abs: string): boolean {
 export function forsionConfigPaths(): string[] {
   const out: string[] = [];
   for (const d of forsionDomains()) out.push(path.join(d, 'config.json'), path.join(d, 'config.json.lock'), configBackupDir(path.join(d, 'config.json')));
-  for (const h of tanguHomes()) out.push(...TANGU_CONFIG_NAMES.map((n) => path.join(h, n)));
+  for (const h of tanguHomes()) out.push(...TANGU_CONFIG_NAMES.map((n) => path.join(h, n)), configBackupDir(path.join(h, 'config.json')));
+  out.push(providerAuthBackupDir());
   return withCanonical(out);
 }
 

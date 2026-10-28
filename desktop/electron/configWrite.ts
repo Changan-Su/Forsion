@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { chmodSync, closeSync, copyFileSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs'
+import { chmodSync, closeSync, constants as fsConstants, copyFileSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 
@@ -51,8 +51,8 @@ function stealIfStale(lock: string): void {
 }
 
 // ── 写前备份 / 读坏恢复。与 tangu-agent/src/core/config.ts 的 readLockedJson / commitLockedJson 是同一协议,改一边必须改另一边:
-//    `<目录>/config-backup/<名>.bak` = 上一次写盘前那份好的(原样字节,0600);读到坏文件(零字节 / 半截 / 不是对象)且 .bak 有效 →
-//    坏的复制成 `<名>.bad-<时间>` 留着、.bak 原子换回原位、写恢复标记 `<名>.recovered`(设置页据此提示);.bak 也坏 → 什么都不动、拒写。
+//    `<目录>/config-backup/<名>.bak` = 上一次写盘前那份好的(原样字节,0600;写不进去整次拒写);读到坏文件(零字节 / 半截 / 不是对象)且 .bak 有效 →
+//    坏的复制成 `<名>.bad-<时间>-<随机>` 留着、.bak 原子换回原位、写恢复标记 `<名>.recovered`(设置页据此提示);.bak 也坏 → 什么都不动、拒写。
 //    .bak 只在恢复时读,平时不是第二条读路径。整个目录在引擎的凭据 / 受保护清单里(hostSandboxProtection)。
 /** 某个配置文件的备份目录(与它同目录,rename 不跨盘)。 */
 export const configBackupDir = (file: string): string => join(dirname(file), 'config-backup')
@@ -90,8 +90,9 @@ function restoreFromBackup(file: string, mine: () => boolean): Record<string, an
   try { bakRaw = readFileSync(bak, 'utf8'); version = statSync(bak).mtimeMs } catch { return null }
   const restored = parseObject(bakRaw)
   if (!restored) return null
-  const bad = join(configBackupDir(file), `${basename(file)}.bad-${new Date().toISOString().replace(/[:.]/g, '-')}`) // Windows 文件名不许冒号
-  copyFileSync(file, bad)
+  // Windows 文件名不许冒号;EXCL + 随机后缀:同一毫秒两次恢复也不会盖掉前一份坏文件
+  const bad = join(configBackupDir(file), `${basename(file)}.bad-${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID().slice(0, 8)}`)
+  copyFileSync(file, bad, fsConstants.COPYFILE_EXCL)
   try { chmodSync(bad, 0o600) } catch { /* Windows 无此语义 */ }
   writeAtomicSync(file, bakRaw, mine)
   try {
@@ -148,10 +149,8 @@ export async function lockedUpdateJson(
     }
     const next = mutate(cur)
     if (next === undefined) return
-    if (raw !== null) {
-      // ponytail: 备份失败(盘满 / 权限)只告警、不拦这次保存 —— 代价是这一轮没有可回退的版本。
-      try { writeAtomicSync(backupOf(file), raw, mine) } catch (e) { console.warn(`[config] 写 ${basename(file)} 的备份失败(这次保存照常):${(e as Error)?.message || e}`) }
-    }
+    // 备份写不进去(盘满 / 备份目录没权限)就整次拒写:.bak 缺了或停在更旧的版本,下次读坏时救不回 / 救回更旧的
+    if (raw !== null) writeAtomicSync(backupOf(file), raw, mine)
     writeAtomicSync(file, JSON.stringify(next, null, 2), mine)
   } finally {
     try { if (mine()) rmSync(lock, { force: true }) } catch { /* 删不掉(Windows 杀软占着)就留给 stale 回收 */ }

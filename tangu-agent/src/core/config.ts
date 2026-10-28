@@ -20,7 +20,7 @@
  * 「读 → 改 → 写临时文件 → rename」;读不加锁(rename 原子替换,读者看不到半截 JSON)。
  * 段级读改写用 `updateSection(name, fn)`(fn 在锁内拿最新段值);锁外读段、改完再 saveSection 会盖掉别的进程同时的改动。
  */
-import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, statSync, rmSync, openSync, closeSync, writeSync, copyFileSync, chmodSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, statSync, rmSync, openSync, closeSync, writeSync, copyFileSync, chmodSync, constants as fsConstants } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { basename, dirname, join } from 'node:path';
 import {
@@ -58,7 +58,7 @@ function parseObject(raw: string): Record<string, any> | null {
 }
 
 // ── 写前备份 / 读坏恢复(借 magpie:读失败 = 不知道,不等于空)。与 desktop/electron/configWrite.ts 同一协议,改一边必须改另一边。
-//    `<目录>/config-backup/<名>.bak` = 上一次写盘前那份好的(原样字节,0600);`<名>.bad-<时间>` = 读坏时留下的坏文件(不删);
+//    `<目录>/config-backup/<名>.bak` = 上一次写盘前那份好的(原样字节,0600;写不进去整次拒写);`<名>.bad-<时间>-<随机>` = 读坏时留下的坏文件(不删);
 //    `<名>.recovered` = 恢复标记,桌面设置页读它提示「已恢复到 {时间} 的版本」、点掉就删。
 //    整个目录进凭据 / 受保护清单(hostSandboxProtection):provider-auth.json 的备份同样带 token。
 //    .bak 只在恢复时读,平时不是第二条读路径(config.json 仍是唯一真源)。
@@ -82,19 +82,13 @@ function writeAtomic(file: string, text: string, stillMine: () => boolean): void
   }
 }
 
-/** 锁内、换上新内容之前:把这次读到的那份好的原样存成 .bak。
- *  ponytail: 备份失败(盘满 / 权限)只告警、不拦这次保存 —— 备份写不进去不该连用户的设置也存不进去;代价是这一轮没有可回退的版本。 */
-function keepBackup(file: string, raw: string, stillMine: () => boolean): void {
-  try { writeAtomic(backupOf(file), raw, stillMine); } catch (e) {
-    console.warn(`[config] 写 ${basename(file)} 的备份失败(这次保存照常):${(e as Error)?.message || e}`);
-  }
-}
-
-/** 坏文件原样另存到 `config-backup/<名>.bad-<时间>`(复制,不挪走 —— 原位一直有东西),返回留存路径。 */
+/** 坏文件原样另存到 `config-backup/<名>.bad-<时间>-<随机>`(复制,不挪走 —— 原位一直有东西;EXCL + 随机后缀,同一毫秒两次恢复
+ *  也不会盖掉前一份坏文件),返回留存路径。 */
 function keepBadCopy(file: string): string {
-  const bad = join(configBackupDir(file), `${basename(file)}.bad-${new Date().toISOString().replace(/[:.]/g, '-')}`); // Windows 文件名不许冒号
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-'); // Windows 文件名不许冒号
+  const bad = join(configBackupDir(file), `${basename(file)}.bad-${stamp}-${randomUUID().slice(0, 8)}`);
   mkdirSync(dirname(bad), { recursive: true });
-  copyFileSync(file, bad);
+  copyFileSync(file, bad, fsConstants.COPYFILE_EXCL);
   try { chmodSync(bad, 0o600); } catch { /* Windows 无此语义 */ }
   return bad;
 }
@@ -142,10 +136,11 @@ export function readLockedJson(file: string, stillMine: () => boolean, label: st
   throw new Error(`${label} 解析失败且没有可用的备份,拒绝写入(以免其余配置被整份覆盖):${file}`);
 }
 
-/** 锁内提交:旧的好文件先存成 .bak(坏文件先另存 .bad-*),再原子换上新内容。 */
+/** 锁内提交:旧的好文件先存成 .bak(坏文件先另存 .bad-*),再原子换上新内容。备份失败 = 整次失败,原文件不动。 */
 export function commitLockedJson(file: string, next: unknown, read: LockedRead, stillMine: () => boolean): void {
   if (read.broken) keepBadCopy(file);
-  if (read.raw !== null) keepBackup(file, read.raw, stillMine);
+  // 备份写不进去(盘满 / 备份目录没权限)就整次拒写:.bak 缺了或停在更旧的版本,下次读坏时就救不回 / 救回更旧的,丢的比协议承诺的多。
+  if (read.raw !== null) writeAtomic(backupOf(file), read.raw, stillMine);
   writeAtomic(file, JSON.stringify(next, null, 2), stillMine);
 }
 

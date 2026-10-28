@@ -215,6 +215,15 @@ describe('写前备份 / 读坏恢复(与引擎 core/config.ts 同一协议)', (
     expect(await readRecoveryNotice([file])).toBeNull()
   })
 
+  it('备份写不进去(备份目录被占成文件)→ 整次拒写,文件一个字节不动', async () => {
+    const file = join(await fresh(), 'config.json')
+    await lockedUpdateJson(file, () => ({ a: 1 }))
+    const before = await readFile(file, 'utf8')
+    await writeFile(configBackupDir(file), 'not a dir')
+    await expect(lockedUpdateJson(file, () => ({ a: 2 }))).rejects.toThrow()
+    expect(await readFile(file, 'utf8')).toBe(before)
+  })
+
   it('.bak 不是第二条读路径:文件不存在时读到 {},不拿 .bak 顶上', async () => {
     const file = join(await fresh(), 'config.json')
     await lockedUpdateJson(file, () => ({ a: 1 }))
