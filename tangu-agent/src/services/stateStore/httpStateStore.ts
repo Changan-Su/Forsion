@@ -157,7 +157,8 @@ export function createHttpStateStore(cfg: HttpStateStoreConfig): StateStore {
     const r = await fetch(`${base}${path}`, {
       method,
       headers: headers(token),
-      body: body === undefined ? undefined : JSON.stringify(body),
+      // 去掉字符串里的 U+0000:server 落 PG,jsonb 不收 \u0000 → 整批事件 / 终稿 500(10-27 生产两例)。
+      body: body === undefined ? undefined : JSON.stringify(body, (_k, v) => (typeof v === 'string' ? v.replaceAll('\u0000', '') : v)),
       // 调用方(run 取消)的 signal 与超时二选一先到;老 Node 没有 AbortSignal.any 时只保留超时。
       signal: signal && typeof AbortSignal.any === 'function' ? AbortSignal.any([signal, timeout]) : timeout,
     });
