@@ -50,7 +50,7 @@ import { githubRepoName, publishToGithub } from '../services/githubPublish.js';
 import { gitClone, listForsionGitRepos, listGithubRepos } from '../services/gitClone.js';
 import { credentialOrigin } from '../services/gitCredentials.js';
 import { forsionGit } from '../services/forsionGit.js';
-import { forsionIdentity, resolveGitIdentity, type IdentityDefaults } from '../services/gitIdentity.js';
+import { accountIdentityDefaults as identityDefaults, resolveGitIdentity } from '../services/gitIdentity.js';
 
 const router = Router();
 
@@ -345,15 +345,6 @@ router.get('/agent/git/repos', authMiddleware, async (req: AuthRequest, res) => 
     gitFail(res, e, 'list repositories failed');
   }
 });
-
-/** 由 Forsion 账号推出来的缺省提交身份(services/gitIdentity.ts)。走一趟云端,所以限时:它挡在用户点的「提交」前面。没登录 / 够不着 → null。 */
-async function identityDefaults(userId: string): Promise<IdentityDefaults | null> {
-  const timeout = new Promise<null>((resolve) => { setTimeout(() => resolve(null), 5000).unref(); });
-  const user = await Promise.race([deps().brain.users.getUserById(userId).catch(() => null), timeout]);
-  if (!user || !user.username || user.username === 'local') return null;
-  const site = await forsionGit()?.hosting().catch(() => null);
-  return forsionIdentity(user, site ? new URL(site.origin).hostname : null);
-}
 
 /** 「设置 → Git」的「账号」:推送 / 拉取时用哪个身份、提交署谁的名。只读状态,不取凭据。
  *  forsionGit = 这里有 Forsion Git 且发凭据 → 站点地址(账号跟着 Forsion 账号走,不用绑定);github = 云端开了绑定时,绑没绑;

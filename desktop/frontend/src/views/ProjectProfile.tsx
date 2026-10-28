@@ -23,7 +23,7 @@ import { projectExecutors, shortenPath, type ProjectExecutor } from './projectPr
 import { formatRelative } from '../format/time'
 import { ProjectGitRemotes, siteName } from './ProjectGitRemotes'
 import { askAddRemote } from '../components/GitAddRemoteDialog'
-import './projectProfileMessages'
+import { GIT_ERROR_CODES } from './projectProfileMessages'
 import './teamProfile.css'
 import './projectProfile.css'
 import { AgentAvatar } from '../components/AgentAvatar'
@@ -47,6 +47,8 @@ type Props = {
   humanJump?: HumanJump
   /** 对话里「复盘时记进项目记忆」之类的留痕点「查看」:落到「设置 › 项目记忆」里那几条。 */
   recordJump?: RecordJump
+  /** 对话里的 Git 卡点「在项目详情中打开」:落到「Git」页(值是一次性令牌,变了就再落一次)。 */
+  gitJump?: number
   currentSessionId?: string | null
 }
 
@@ -83,15 +85,6 @@ export function useProjectSubject(path: string | null): { workspace: ProjectWork
   }, [signature])
 }
 
-/** 引擎 git 动作的机器码(services/gitActions.ts);有词条的按当前语言说,没有的回落引擎原文。 */
-const GIT_ERROR_CODES = new Set([
-  'git_unavailable', 'git_timeout', 'git_failed', 'not_repo', 'already_repo', 'nothing_to_commit', 'empty_message', 'message_too_long',
-  'embedded_repo', 'too_many_files', 'large_files', 'no_identity', 'invalid_branch', 'detached', 'no_remote', 'ambiguous_remote', 'no_model', 'quota_exceeded',
-  'shared_workspace', 'nested_repo', 'untrusted_config', 'credential_files', 'git_too_old', 'changes_changed', 'hook_changed_commit',
-  'no_upstream', 'diverged', 'dirty_worktree', 'untrusted_transport', 'forsion_git_needs_setup', 'forsion_git_rate_limited', 'forsion_git_unavailable',
-  'has_remote', 'invalid_repo_name', 'no_commits', 'github_not_linked', 'github_relink_required', 'github_unavailable',
-  'github_repo_exists', 'github_api_failed', 'github_unreachable', 'invalid_remote_url', 'remote_unreachable', 'credential_denied',
-])
 /** link = 这条失败要用户去的网页(Forsion Git 还没开通 → 站点地址);只收 https,交给统一的外链出口。
  *  linkGithub = 这条失败的出路是去账户中心绑定 / 重新绑定 GitHub 账号。 */
 type GitErr = { message: string; info?: string; retry?: () => void; link?: string; linkGithub?: boolean }
@@ -105,7 +98,7 @@ const githubRepoPage = (remote?: string | null): string | null => {
 /** PROJECT 详情:骨架与 TEAM 详情同一套(头部即基本信息 / 滑块导航 / 一个滚动体 / 底部保存栏),内容换成项目的三面:
  *  Agents(谁在这里工作过)/ 配置(指令文件 · 项目技能 · 计划 · 本机默认项)/ Git(现场 + 用户点的建仓 / 提交 / 建分支 / 拉取 / 推送)。数据全部来自引擎的 project-context,
  *  它读到什么就显示什么 —— 这个面板存在的意义就是回答「Tangu 到底看没看见这个项目的约定」。 */
-export function ProjectProfile({ session, config, workspace, renderAgent, renderTeam, currentSessionId, humanJump, recordJump }: Props) {
+export function ProjectProfile({ session, config, workspace, renderAgent, renderTeam, currentSessionId, humanJump, recordJump, gitJump }: Props) {
   const { t, locale } = useI18n()
   const s = useApp(useShallow((a) => ({
     cfg: a.cfg, agents: a.agentDefs, avatars: a.agentAvatars, teams: a.teams, teamAvatars: a.teamAvatars, engines: a.engines, models: a.modelsResp?.models,
@@ -118,9 +111,10 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
   const [ctx, setCtx] = useState<ProjectContext | null>(null)
   const [loadError, setLoadError] = useState('')
   const [reloadAt, setReloadAt] = useState(0)
-  const [tab, setTab] = useState<Tab>(humanJump ? 'human' : freshJump(recordJump) ? 'settings' : 'agents')
+  const [tab, setTab] = useState<Tab>(gitJump ? 'git' : humanJump ? 'human' : freshJump(recordJump) ? 'settings' : 'agents')
   const navRef = useSectionNavSlide(tab)
   useEffect(() => { if (humanJump?.at) setTab('human') }, [humanJump?.at])
+  useEffect(() => { if (gitJump) setTab('git') }, [gitJump])
   // 落点要等「设置」页连同项目记忆画出来:引擎回来之前 ctx 是 null。已经开着这个项目时手里的 ctx 可能是旧的(后台刚记下的那条还没读到):
   // 令牌一变先重读,读回来的那份才拿来落。点开着的执行者详情会盖住主区,一并收起(同「返回」)。
   const rootRef = useRef<HTMLElement>(null)
