@@ -87,7 +87,7 @@
     "nanoid": "^5.1.16",
     "node-diff3": "^3.2.1",
     "path-browserify": "^1.0.1",
-    "pdfjs-dist": "^5.7.284",
+    "pdfjs-dist": "^6.4.299",
     "qrcode": "^1.5.4",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
