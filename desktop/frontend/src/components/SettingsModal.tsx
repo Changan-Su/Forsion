@@ -124,7 +124,7 @@ registerMessages({
   'settingsmodal.mcp.notConnected': { zh: '未连接', en: 'Not connected' },
   'settingsmodal.mcp.total': { zh: 'MCP 工具定义合计每个请求约 {n} token，占当前默认模型窗口的 {pct}%', en: 'MCP tool definitions take ~{n} tokens per request, {pct}% of the default model’s context window' },
   'settingsmodal.mcp.totalNoWindow': { zh: 'MCP 工具定义合计每个请求约 {n} token', en: 'MCP tool definitions take ~{n} tokens per request' },
-  'settingsmodal.mcp.heavyHint': { zh: '不常用的可以关掉。', en: 'Turn off the ones you rarely use.' },
+  'settingsmodal.mcp.heavyNote': { zh: '不常用的可以关掉。按约 4 个字符 = 1 token 估算。', en: 'Turn off the ones you rarely use. Estimated at about 4 characters per token.' },
   'settingsmodal.mcp.estimateNote': { zh: '按约 4 个字符 = 1 token 估算。', en: 'Estimated at about 4 characters per token.' },
   'settingsmodal.mcp.fromPlugin': { zh: '来自插件「{name}」', en: 'From plugin "{name}"' },
   'settingsmodal.mcp.fromPluginHint': { zh: '这个 server 随插件启用和停用；要关掉它，请在插件设置里停用这个插件。', en: 'This server starts and stops with its plugin. To turn it off, disable the plugin in plugin settings.' },
@@ -826,7 +826,7 @@ export const SettingsModal: React.FC<{
         <Info size={14} />
         <div>
           {pct === undefined ? t('settingsmodal.mcp.totalNoWindow', { n: fmtTok(total) }) : t('settingsmodal.mcp.total', { n: fmtTok(total), pct: pct.toFixed(1) })}
-          <small>{pct !== undefined && pct > 5 ? `${t('settingsmodal.mcp.heavyHint')} ` : ''}{t('settingsmodal.mcp.estimateNote')}</small>
+          <small>{t(pct !== undefined && pct > 5 ? 'settingsmodal.mcp.heavyNote' : 'settingsmodal.mcp.estimateNote')}</small>
         </div>
       </div>
     )
