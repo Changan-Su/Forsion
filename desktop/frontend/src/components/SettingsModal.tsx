@@ -3735,11 +3735,11 @@ export const SettingsModal: React.FC<{
 
 /** config.json / provider-auth.json 读坏后从 .bak 恢复过(引擎或主进程写的恢复标记):提示一次,点掉删标记(坏文件与备份都留着)。 */
 function ConfigRecoveryNotice() {
-  const { t, locale } = useI18n()
+  const { t } = useI18n()
   const [notice, setNotice] = useState<{ at: number; version: number } | null>(null)
   useEffect(() => { void window.tangu?.configRecoveryNotice?.().then(setNotice).catch(() => {}) }, [])
   if (!notice) return null
-  const time = new Date(notice.version).toLocaleString(locale === 'zh' ? 'zh-CN' : 'en-US', { dateStyle: 'medium', timeStyle: 'short' })
+  const time = formatDateTime(notice.version)
   return (
     <div className="mk-notice" role="status" data-config-recovered>
       <Info size={15} />
