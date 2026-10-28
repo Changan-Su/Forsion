@@ -62,7 +62,7 @@ jobs:
           console.log(JSON.stringify({run:r.id,commit:r.head_sha,job:selected[0].id,artifact:named[0].id,candidateOnly,releaseEligible:!candidateOnly && r.conclusion === "success"}));
           if (candidateOnly) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, "Runtime-only candidate verification; this result does not establish release eligibility.\n");
           NODE
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: forsion-windows-2022-${{ inputs.distribution }}
           run-id: ${{ inputs.build_run_id }}
