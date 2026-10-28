@@ -133,10 +133,11 @@ export async function purgeTrash(id: string): Promise<boolean> {
   return true;
 }
 
+/** 全清(含列表里不显示的空壳条目);只认 readTrash 认得的目录名,别的不碰。 */
 export async function emptyTrash(): Promise<number> {
-  const all = await listTrash();
-  for (const e of all) await fs.rm(path.join(trashDir(), e.id), { recursive: true, force: true });
-  return all.length;
+  const ids = (await fs.readdir(trashDir()).catch(() => [] as string[])).filter((id) => SAFE_ID.test(id));
+  for (const id of ids) await fs.rm(path.join(trashDir(), id), { recursive: true, force: true });
+  return ids.length;
 }
 
 /** 到期的(删了满 30 天)静默清掉,不弹提示。引擎启动时和之后每天一次。

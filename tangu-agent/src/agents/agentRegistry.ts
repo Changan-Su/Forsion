@@ -985,10 +985,11 @@ export async function patchAgent(slug: string, fields: AgentPatch | ((cur: Norma
   });
 }
 
-/** 为什么删不了(卸载确认框据此只给关闭):默认 Agent(含其记忆/日志)/ 启用中的 Muse(supervisor 会自愈重建,删了也白删且丢记忆)。 */
+/** 为什么删不了(卸载确认框据此只给关闭):默认 Agent(内置 xyra 与用户设的默认,同桌面名册「删除」置灰的口径)/
+ *  启用中的 Muse(supervisor 会自愈重建,删了也白删且丢记忆)。 */
 export function agentUndeletableReason(slug: string): 'invalid' | 'default' | 'muse' | null {
   if (!isValidSlug(slug)) return 'invalid';
-  if (slug === DEFAULT_AGENT_SLUG) return 'default';
+  if (slug === DEFAULT_AGENT_SLUG || slug === readAgentsMeta().defaultSlug) return 'default';
   if (slug === MUSE_AGENT_SLUG) {
     try { if (loadSpecialAgentsConfig().muse.enabled) return 'muse'; } catch { /* 配置读失败不阻删 */ }
   }
