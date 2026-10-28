@@ -19,7 +19,7 @@ import type { DisplayFile, UiMessage } from '../../../../../tangu-agent/src/cont
 import { findLiveEdit } from '../../stores/deskPlan'
 import { hasFacts, summarizeTask } from './taskFacts'
 import { ChatWebLink } from '../../components/ChatWikiLink'
-import { fullOrder, moveCard, orderCards, setCardOpen, setCardOrder, useSummaryPrefs } from './summaryPrefs'
+import { fullOrder, moveCard, orderCards, setCardOpen, setCardOrder, useSummaryElevation, useSummaryPrefs } from './summaryPrefs'
 import { useSummaryCards, type SummaryCardEntry } from '../../amadeus/plugins/summaryCards'
 import { refreshProcesses, useProcessPolling, useSessionProcesses } from './processStore'
 import { BgRow, PROCESS_CAP } from './BackgroundProcs'
@@ -449,6 +449,7 @@ export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, 
   const show = ordered.some((k) => k !== 'desk' && !pluginState[k]?.hidden)
 
   const stackRef = useRef<HTMLElement>(null)
+  const elevation = useSummaryElevation((st) => st.elevation)
   // 8.9(DESIGN §3 动效规矩 6):挂上 / 换会话之后、用户还没动过之前,栈与 Desk 卡直接到位 ——
   // ⌘J 开底栏会把聊天视图整个重挂一次,不能让摘要栏「又进场一遍」。用户在这个会话里点过 / 按过键之后,
   // 因内容出现的栈、新到的卡才进场。草稿发出第一条变成会话不算换会话。
@@ -537,7 +538,7 @@ export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, 
 
   return (
     <RailCtx.Provider value={api}>
-      <aside ref={stackRef} className={`t2-tsum${show ? ' show' : ''}`} data-still={still || undefined} aria-hidden={!show && !desk} aria-busy={f.state === 'running'} aria-label={t('tsum.title')}>
+      <aside ref={stackRef} className={`t2-tsum${show ? ' show' : ''}`} data-elev={elevation} data-still={still || undefined} aria-hidden={!show && !desk} aria-busy={f.state === 'running'} aria-label={t('tsum.title')}>
         {ordered.map((k) => cards[k])}
       </aside>
       {menu && <ContextMenu menu={menu} onClose={() => setMenu(null)} autoFocus />}

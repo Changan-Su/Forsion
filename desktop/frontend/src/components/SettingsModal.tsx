@@ -115,6 +115,7 @@ import { dropCommittedEdits, hasDirtyEdits, mergeEdits, pickEdits, withoutKeys, 
 import { onRadioGroupKeyDown, radioTabIndex } from './radioGroupKeys'
 import { SettingsSaveBar } from './SettingsSaveBar'
 import { SecretStorageNotice } from './SecretStorageNotice' // P1-K5
+import { setSummaryElevation, useSummaryElevation } from '../views/chat2/summaryPrefs'
 import './settingsModal.css'
 import { connectionTarget, homeTarget } from '../services/engine/targets'
 
@@ -475,6 +476,7 @@ export const SettingsModal: React.FC<{
     applyUiFonts()
   }
   // 开发者「移动端 UI 预览命令」开关(localStorage;bootstrapEngine 启动时据此注册 switch-ui-mode 命令)。
+  const summaryElevation = useSummaryElevation((st) => st.elevation)
   const [mobileUiCmd, setMobileUiCmd] = useState<boolean>(() => {
     try { return localStorage.getItem(MOBILE_UI_KEY) === '1' } catch { return false }
   })
@@ -3472,6 +3474,14 @@ export const SettingsModal: React.FC<{
                             setMobileUiCommand(on)   // 设置画在主窗里的形态(web/mobile)
                             requestDevCommandsSync() // 设置在浮窗里的形态:命令表各窗一份,得让主窗重算
                       }} />} />
+                    </div>
+                    <div className="field">
+                      <SettingsRow fit="wrap" label={t('settings.developer.summaryElevation')} description={t('settings.developer.summaryElevationHint')} control={
+                        <div className="seg" role="group" aria-label={t('settings.developer.summaryElevation')}>
+                          {([['float', t('settings.developer.summaryElevationFloat')], ['half', t('settings.developer.summaryElevationHalf')], ['flat', t('settings.developer.summaryElevationFlat')]] as const).map(([v, label]) => (
+                            <button key={v} type="button" aria-pressed={summaryElevation === v} className={summaryElevation === v ? 'active' : ''} onClick={() => setSummaryElevation(v)}>{label}</button>
+                          ))}
+                        </div>} />
                     </div>
                     <div className="field">
                       <label>{t('settings.developer.testUpdateLabel')}</label>
