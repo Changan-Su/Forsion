@@ -100,6 +100,16 @@ async function main() {
     check('确认钮叫「删除」', (await dlg.locator('.dialog-btn[data-danger]').textContent()).trim() === '删除')
     await dlg.screenshot({ path: path.join(SHOTS, 'agent-dialog.png') })
     await win.screenshot({ path: path.join(SHOTS, 'agent-dialog-window.png') })
+    // 手机上是底部抽屉(window.tangu.mobile 判定;这里只验样式:手动挂上 un-sheet。窗口有最小宽度,实际停在 880,不是真手机宽)
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(390, 844))
+    await win.evaluate(() => document.querySelector('[data-uninstall-dialog] .dialog-overlay')?.classList.add('un-sheet'))
+    await win.waitForTimeout(400)
+    const box = await dlg.boundingBox(), vh = await win.evaluate(() => innerHeight), vw = await win.evaluate(() => innerWidth)
+    check('抽屉样式:贴底、占满宽', !!box && Math.abs(box.y + box.height - vh) <= 1 && box.width >= vw - 1)
+    await win.screenshot({ path: path.join(SHOTS, 'agent-sheet.png') })
+    await win.evaluate(() => document.querySelector('[data-uninstall-dialog] .dialog-overlay')?.classList.remove('un-sheet'))
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 900))
+    await win.waitForTimeout(300)
 
     // ② 删除 → 撤销提示 6 秒 → 撤销
     await dlg.locator('.dialog-btn[data-danger]').click()
