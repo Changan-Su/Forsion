@@ -47,7 +47,8 @@ export const useQuotaReminders = create<QuotaReminderState>((set, get) => ({
 export const sameReminder = (a: QuotaReminder | undefined, b: QuotaReminder | undefined): boolean =>
   !!a && !!b && a.sessionId === b.sessionId && a.modelId === b.modelId && a.resetAt === b.resetAt
 
-if (typeof window !== 'undefined') window.addEventListener('storage', (e) => { if (e.key === KEY) useQuotaReminders.setState({ items: read() }) })
+// 只认真浏览器窗口:单测会把 window 换成空对象再 import 本模块(notificationWiring.test),那时没有 addEventListener
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') window.addEventListener('storage', (e) => { if (e.key === KEY) useQuotaReminders.setState({ items: read() }) })
 
 export const cancelQuotaReminder = (sessionId: string) => useQuotaReminders.getState().cancel(sessionId)
 
