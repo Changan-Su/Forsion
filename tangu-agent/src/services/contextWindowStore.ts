@@ -84,10 +84,23 @@ export function isContextOverflowError(err: unknown): boolean {
   return isContextOverflowText(`${(err as { code?: string }).code || ''} ${err.message || ''}`);
 }
 
-/** 只看文案(含 error.code):流里来的失败没有状态码,客户端据此决定按 400 抛还是按 502 抛。 */
-export function isContextOverflowText(text: string | undefined): boolean {
+function isContextOverflowText(text: string | undefined): boolean {
   const t = String(text || '');
   return parseContextLimit(t) !== undefined || OVERFLOW_HINTS.some((re) => re.test(t));
+}
+
+/** 限流 / 额度的措辞:「Too many tokens per minute」「Daily token quota exceeded: N tokens > M maximum」会撞上超长表。 */
+const NOT_OVERFLOW = /rate[_ ]?limit|quota|usage[_ ]?limit|insufficient|per[ _]?(?:minute|min|second|hour|day)\b|\b[RT]PM\b/i;
+
+/**
+ * 流里来的失败(Responses 的 error / response.failed、Anthropic 的 error 事件)是不是输入超长 —— 客户端据此按 400 抛
+ * (agentLoop 压缩后重试、学真实上限)还是按 502 抛。没有状态码可看,所以 code 写明超长的直接认;
+ * 写着限流 / 额度的先排除(否则 429 类会被压缩、日额度会被学成窗口);其余按措辞表。
+ */
+export function isStreamContextOverflow(code: string | undefined, message: string | undefined): boolean {
+  if (/^(?:context_length_exceeded|request_too_large|model_context_window_exceeded)$/i.test(String(code || ''))) return true;
+  const t = `${code || ''} ${message || ''}`;
+  return !NOT_OVERFLOW.test(t) && isContextOverflowText(t);
 }
 
 /** 从上游错误文案里抠出真实上限;认不出返回 undefined(认不出是安全的,乱认才危险)。 */

@@ -202,6 +202,12 @@ describe('streamOpenAiResponses SSE parse', () => {
     expect(learnedWindow('gpt-5-codex')).toBe(128000);
     const quota = await failWith({ type: 'response.failed', response: { status: 'failed', error: { code: 'usage_limit_reached', message: "You've hit your usage limit." } } });
     expect([quota.status, isQuotaExhaustedLlmError(quota)]).toEqual([502, true]);
+    // 限流 / 日额度的措辞会撞上超长表(「too many tokens」「N tokens > M maximum」):不许判成超长,更不许学成窗口(Codex 评审)
+    const tpm = await failWith({ type: 'response.failed', response: { status: 'failed', error: { code: 'rate_limit_exceeded', message: 'Too many tokens per minute. Please try again in 8s.' } } });
+    expect([tpm.status, isRetryableLlmError(tpm)]).toEqual([502, true]);
+    const daily = await failWith({ type: 'error', error: { code: 'usage_limit_reached', message: 'Daily token quota exceeded: 12000 tokens > 10000 maximum' } });
+    expect([daily.status, isContextOverflowError(daily)]).toEqual([502, false]);
+    expect(learnedWindow('gpt-5-codex')).toBe(128000); // 没被那句日额度改小
     const other = await failWith({ type: 'response.failed', response: { status: 'failed', error: { code: 'server_error', message: 'An error occurred while processing your request.' } } });
     expect([other.status, isContextOverflowError(other), isRetryableLlmError(other)]).toEqual([502, false, true]);
   });
