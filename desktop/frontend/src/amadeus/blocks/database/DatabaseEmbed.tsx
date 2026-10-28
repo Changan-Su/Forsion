@@ -1,3 +1,4 @@
+import { fileReferenceKey } from '../../store/fileIdentity'
 /** Database 嵌入(![[xxx.db]]):Notion 式可编辑表格,数据存 vault 内独立 .db JSON 文件。
  *  数据经 dbStore 按 ref 共享 → 同一 db 的多处嵌入(同页多块/多标签)实时互通、写穿防抖落盘。
  *  排序仅视图态不写盘(文件 rows 顺序即规范顺序);列类型切换非破坏(coerceForDisplay 宽容显示)。
@@ -551,7 +552,7 @@ function StoreDatabaseEmbed({ target, pagePath, initialView, onViewChange, ...su
   onViewChange?: (viewName: string | null) => void
 } & Omit<DbSurfaceProps, 'db'>) {
   const { t } = useI18n()
-  const entry = useDbStore((s) => s.entries[target])
+  const entry = useDbStore((s) => s.entries[fileReferenceKey(pagePath, target)])
   // gen:缓存被整片作废(切库 / 启动时 vault 落地)后重读 —— 见 dbStore 的 gen 注释。
   const gen = useDbStore((s) => s.gen)
   useEffect(() => {
@@ -582,7 +583,7 @@ function StoreDatabaseEmbed({ target, pagePath, initialView, onViewChange, ...su
       </div>
     )
   }
-  return <DbTable {...surface} dbRef={target} db={entry.data} pagePath={pagePath} initialView={initialView} onViewChange={onViewChange} />
+  return <DbTable {...surface} dbRef={entry.identity ?? fileReferenceKey(pagePath, target)} db={entry.data} pagePath={pagePath} initialView={initialView} onViewChange={onViewChange} />
 }
 
 /** initialSort 只作用在**首个视图**上(内存表恒一个视图;真文件挂只读时也只可能看首个)。 */

@@ -424,7 +424,11 @@
     "check:permissions": "node scripts/permissions.check.cjs",
     "check:mininative": "node scripts/mini-auto.check.cjs --native-helper",
     "e2e:notemove:handoff": "node scripts/note-move-handoff.e2e.cjs",
-    "e2e:contentsync": "GENESIS_DESKTOP=. node scripts/content-sync.e2e.cjs"
+    "e2e:contentsync": "GENESIS_DESKTOP=. node scripts/content-sync.e2e.cjs",
+    "test:security-deps": "node --test scripts/dependency-security.test.cjs build/runtime-policy.test.cjs scripts/release-security.test.cjs",
+    "check:critical": "node scripts/critical-contracts.cjs",
+    "bench:baseline": "node scripts/e2e-editor.cjs --script=performance-baseline.check.cjs",
+    "check:vault-integrity": "node scripts/vault-integrity.electron.cjs"
   },
   "dependencies": {
     "@astryxdesign/core": "^0.1.4",
@@ -443,7 +447,7 @@
     "@milkdown/plugin-math": "^7.5.9",
     "@milkdown/react": "^7.21.2",
     "@milkdown/theme-nord": "^7.21.2",
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "1.32.0",
     "@stylexjs/stylex": "^0.18.3",
     "@uiw/react-codemirror": "^4.25.2",
     "@xterm/addon-fit": "^0.10.0",
@@ -485,7 +489,7 @@
     "unified": "^11.0.5",
     "unist-util-visit": "^5.1.0",
     "webdav": "^5.10.0",
-    "xlsx": "^0.18.5",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "zod": "^4.4.3",
     "zustand": "^5.0.2"
   },
@@ -517,5 +521,8 @@
   },
   "optionalDependencies": {
     "node-pty": "^1.1.0"
+  },
+  "overrides": {
+    "prosemirror-view": "1.42.3"
   }
 }
