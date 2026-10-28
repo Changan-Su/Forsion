@@ -74,7 +74,7 @@ import { formatDateTime, formatMessageTime } from '../../format/time'
 
 import { TaskCards, TaskTraces, type TaskLanding } from './TaskCards'
 import { MuseApprovalLine, MuseTodoCards, MuseTodoTraces, ProactiveMark, isProactive } from './MuseDm'
-import { FallbackLine, FallbackModelName, QuotaChips, QUOTA_RE, quotaResetFromError, stripQuotaAsk } from './QuotaRelay'
+import { FallbackLine, FallbackModelName, QuotaChips, QUOTA_RE, isQuotaText, quotaResetFromError, stripQuotaAsk } from './QuotaRelay'
 import { CHILD_UPDATE_OPEN, ChildUpdateLine, ForkBlock, ForkScope, childIdsOf } from './ChildSessions'
 import { APPROVAL_UPDATE_OPEN, INQUIRY_UPDATE_OPEN, approvalForCall, parseApprovalUpdate, parseInquiryUpdate, pickPlanInquiry, type ApprovalOutcome } from './approvalQueue'
 import { isRemoteApprover, wasDecidedHere } from '../../components/ApprovalCard'
@@ -191,13 +191,13 @@ const ERR_RULES: Array<[RegExp, string]> = [
   [/terminated|ECONNRESET|socket hang up|premature close/i, 'chat.err.dropped'],
   [/ETIMEDOUT|timed? ?out/i, 'chat.err.timeout'],
   [/(^|\D)(401|403)(\D|$)|unauthorized|invalid[ _-]?api[ _-]?key/i, 'chat.err.auth'],
-  [/(^|\D)429(\D|$)|rate[ _-]?limit/i, 'chat.err.rate'],
+  [/(^|\D)429(\D|$)|rate[ _-]?limit|per ?minute|allocated quota exceeded/i, 'chat.err.rate'],
   [/(^|\D)5\d\d(\D|$)|bad gateway|overloaded/i, 'chat.err.server'],
 ]
 export function humanizeRunError(raw: string | undefined, t: (k: string, v?: Record<string, unknown>) => string): string {
   if (!raw) return t('chat.error')
   raw = stripQuotaAsk(raw)
-  const hit = ERR_RULES.find(([re]) => re.test(raw))
+  const hit = ERR_RULES.find(([re, key]) => re.test(raw) && (key !== 'chat.err.quotaUsed' || isQuotaText(raw)))
   if (hit?.[1] === 'chat.err.quotaUsed') {
     const time = quotaResetFromError(raw)
     return `${t(time ? 'chat.err.quotaUsedAt' : 'chat.err.quotaUsed', { time })}(${raw})`

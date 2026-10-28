@@ -64,6 +64,10 @@ describe('额度用完 ≠ 限流', () => {
     expect(humanizeRunError('429 insufficient_quota: You exceeded your current quota', tv)).toMatch(/^chat\.err\.quotaUsed\(/)
     expect(humanizeRunError('429 Too Many Requests: rate limit', tv)).toMatch(/^chat\.err\.rate\(/)
   })
+  it('一分钟窗口的「quota exceeded」是限流', () => {
+    expect(humanizeRunError('429 Quota exceeded for aiplatform.googleapis.com/online_prediction_requests_per_minute_per_base_model', tv)).toMatch(/^chat\.err\.rate\(/)
+    expect(humanizeRunError('Allocated quota exceeded, please increase your quota limit.', tv)).toMatch(/^chat\.err\.rate\(/)
+  })
   it('「先问我」的尾巴不给人看', () => {
     expect(humanizeRunError('usage_limit_reached [quota_fallback_ask:forsion/auto]', tv)).not.toContain('quota_fallback_ask')
   })

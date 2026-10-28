@@ -22,8 +22,11 @@ registerMessages({
   'relay.always': { zh: '以后额度用完都改用 {to}', en: 'Always use {to} when quota runs out' },
 })
 
-/** 和引擎 llm/retry.ts 的 QUOTA_EXHAUSTED 同一组:订阅额度 / 账单配额用完(几小时才重置,不是限流)。 */
+/** 和引擎 llm/retry.ts 的 quotaExhaustedText 同一条规则:订阅额度 / 账单配额用完(几小时才重置);写着一分钟窗口的是限流。 */
 export const QUOTA_RE = /usage limit|usage_limit_reached|usage_not_included|insufficient_quota|quota exceeded|exceeded your current quota|out of budget|billing_hard_limit/i
+const SHORT_WINDOW = /per ?minute|perminute|_per_minute|\b[RT]PM\b|per ?second|allocated quota exceeded/i
+const LONG_WINDOW = /per ?day|perday|_per_day|daily|per ?month|monthly|balance|credit|insufficient_quota|usage_limit_reached|billing_hard_limit/i
+export const isQuotaText = (raw: string): boolean => QUOTA_RE.test(raw) && !(SHORT_WINDOW.test(raw) && !LONG_WINDOW.test(raw))
 const ASK_RE = /\s*\[quota_fallback_ask:([^\]\s]+)\]/
 export const stripQuotaAsk = (raw: string): string => raw.replace(ASK_RE, '')
 
@@ -70,7 +73,7 @@ export function QuotaChips({ error, messageId, sessionId, modelId }: { error?: s
   const cloudDefault = useApp((s) => s.modelsResp?.defaultModelId)
   const [hidden, setHidden] = useState(false)
   const [fallbackSet, setFallbackSet] = useState<boolean | null>(null)
-  const quota = !!error && QUOTA_RE.test(error)
+  const quota = !!error && isQuotaText(error)
   const ask = error ? ASK_RE.exec(error)?.[1] : undefined
   useEffect(() => {
     if (!quota || ask || !window.tangu?.getConfig) return

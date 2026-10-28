@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { isRetryableLlmError, isAuthExpiredLlmError, withLlmRetry, llmRetryBudgetExceeded, sleepOrAbort, MODEL_MAX_RETRIES, MODEL_RETRY_BASE_MS, SLOW_FAIL_NO_RETRY_MS } from './retry.js';
+import { isRetryableLlmError, isAuthExpiredLlmError, withLlmRetry, llmRetryBudgetExceeded, sleepOrAbort, MODEL_MAX_RETRIES, MODEL_RETRY_BASE_MS, SLOW_FAIL_NO_RETRY_MS, isQuotaExhaustedLlmError } from './retry.js';
 import { LlmError } from '../core/types.js';
 
 describe('isRetryableLlmError', () => {
@@ -24,6 +24,20 @@ describe('isRetryableLlmError', () => {
       expect(isRetryableLlmError(new LlmError(429, m))).toBe(false);
     }
     expect(isRetryableLlmError(new LlmError(429, 'Rate limit reached for requests'))).toBe(true);
+  });
+
+  it('一分钟窗口的「quota exceeded」是限流:照常重试、不算额度用完;按天的仍算(magpie d83f887a7)', () => {
+    const perMinute = [
+      'You exceeded your current quota, please check your plan and billing details. Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 15, model: gemini-2.0-flash. QuotaFailure: GenerateRequestsPerMinutePerProjectPerModel-FreeTier',
+      'Quota exceeded for aiplatform.googleapis.com/online_prediction_requests_per_minute_per_base_model with base model: gemini-2.5-pro.',
+      'Allocated quota exceeded, please increase your quota limit.',
+    ];
+    for (const m of perMinute) {
+      expect(isRetryableLlmError(new LlmError(429, m))).toBe(true);
+      expect(isQuotaExhaustedLlmError(new LlmError(429, m))).toBe(false);
+    }
+    const perDay = 'Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests. QuotaFailure: GenerateRequestsPerDayPerProjectPerModel-FreeTier';
+    expect(isQuotaExhaustedLlmError(new LlmError(429, perDay))).toBe(true);
   });
 
   it('does not retry user abort', () => {
