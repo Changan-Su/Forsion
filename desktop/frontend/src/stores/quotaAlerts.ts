@@ -4,13 +4,14 @@
  *  - 按周或更长的窗口快重置了还剩很多(续期前 24 小时、已用不到 85%)时提醒 —— Codex 的 5 小时窗口不算,否则每 5 小时弹一次。
  * 数据复用引擎的来源额度缓存(GET /agent/models/quota,按来源缓存 5 分钟,上下文环弹层同一份),不另起轮询:
  * 启动拿到模型目录、窗口回到前台、一轮 run 结束时各判一次(notificationWiring F 段)。只问本机的直连 / 订阅来源;
- * Forsion 云端额度另有提示。同一来源、同一窗口、同一次重置只提醒一次(重置时刻差 ±10 分钟算同一次),记录落盘;
- * 读失败 / 旧读数既不判断、也不清记录。
+ * Forsion 云端额度另有提示。同一来源、同一窗口、同一次重置只提醒一次(两种提醒合起来算;重置时刻差 ±10 分钟算同一次),
+ * 记录落盘;读失败 / 旧读数 / 去重记录读不出来既不判断、也不清记录。
  */
 import { registerMessages, translate } from '../i18n'
 import { formatDayTime } from '../format/time'
 import { getModelQuota } from '../services/backendService'
-import { focusRef, homeTarget } from '../services/engine/targets'
+import { focusRef, homeTarget, HOME_REF, targetKeyOf } from '../services/engine/targets'
+import { catalogFor } from '../services/engine/catalog'
 import { useApp } from './appStore'
 import { notifyApp } from './notificationStore'
 import type { ProviderQuota, QuotaWindow } from '../../../../tangu-agent/src/contracts/clientTypes'
@@ -22,7 +23,7 @@ registerMessages({
   'ntf.quota.usedHint': { zh: '每个窗口每次重置只提醒一次。', en: 'Once per window, per reset.' },
   'ntf.quota.off': { zh: '关', en: 'Off' },
   'ntf.quota.left': { zh: '每周额度快重置了还剩很多时提醒', en: 'Alert when a weekly limit is about to reset with plenty left' },
-  'ntf.quota.leftHint': { zh: '续期前 24 小时、已用不到 85% 时提醒一次；只看按周或更长的窗口。', en: 'Once, 24 hours before the reset, if less than 85% is used. Weekly or longer windows only.' },
+  'ntf.quota.leftHint': { zh: '重置前 24 小时内、已用不到 85% 时提醒一次；只看 24 小时或更长的窗口。', en: 'Once, within 24 hours of the reset, if less than 85% is used. Only windows of 24 hours or longer.' },
   'ntf.quota.plan': { zh: '{name} 订阅', en: '{name} plan' },
   'ntf.quota.msgUsedWeek': { zh: '{source}本周额度已用 {pct}%，{when} 重置', en: '{source}: {pct}% of this week used, resets {when}' },
   'ntf.quota.msgUsedOther': { zh: '{source}的 {window}额度已用 {pct}%，{when} 重置', en: '{source}: {pct}% of the {window} limit used, resets {when}' },
@@ -58,25 +59,18 @@ export function writeQuotaPrefs(p: QuotaAlertPrefs): void {
 
 export interface QuotaAlert { key: string; kind: 'used' | 'left'; window: QuotaWindow & { resetAt: number } }
 
-/** 这一份读数里该提醒的(纯函数)。seen = 去重记录(键 → 上次提醒时那一轮的重置时刻)。 */
+/** 这一份读数里该提醒的(纯函数)。seen = 去重记录(`来源:窗口秒数` → 上次提醒时那一轮的重置时刻)。
+ *  一个窗口一轮只提醒一次:两种都够格时说「用到了」(已经用到档位,再说「还剩很多」自相矛盾)。 */
 export function pendingQuotaAlerts(q: ProviderQuota | null, prefs: QuotaAlertPrefs, now: number, seen: Record<string, number>): QuotaAlert[] {
   if (!q?.windows?.length || now - q.fetchedAt > STALE_MS) return []
   const out: QuotaAlert[] = []
   for (const w of q.windows) {
     if (!w.resetAt || w.resetAt <= now) continue // 没有重置时刻就没法按「同一次重置」去重
+    const key = `${q.providerId}:${w.seconds}`
+    if (seen[key] !== undefined && Math.abs(seen[key] - w.resetAt) <= SAME_RESET_MS) continue
     const win = w as QuotaAlert['window']
-    const fresh = (kind: QuotaAlert['kind']): string | null => {
-      const key = `${q.providerId}:${w.seconds}:${kind}`
-      return seen[key] !== undefined && Math.abs(seen[key] - w.resetAt!) <= SAME_RESET_MS ? null : key
-    }
-    if (prefs.threshold && w.usedPercent >= prefs.threshold) {
-      const key = fresh('used')
-      if (key) out.push({ key, kind: 'used', window: win })
-    }
-    if (prefs.weeklyLeft && w.seconds >= DAY / 1000 && w.resetAt - now <= LEFT_BEFORE_MS && w.usedPercent < LEFT_MAX_USED) {
-      const key = fresh('left')
-      if (key) out.push({ key, kind: 'left', window: win })
-    }
+    if (prefs.threshold && w.usedPercent >= prefs.threshold) out.push({ key, kind: 'used', window: win })
+    else if (prefs.weeklyLeft && w.seconds >= DAY / 1000 && w.resetAt - now <= LEFT_BEFORE_MS && w.usedPercent < LEFT_MAX_USED) out.push({ key, kind: 'left', window: win })
   }
   return out
 }
@@ -93,21 +87,28 @@ export function quotaAlertText(q: ProviderQuota, a: QuotaAlert, now: number): st
   return translate(key, { source, window, pct, when: formatDayTime(a.window.resetAt, { now }) })
 }
 
-function readSeen(): Record<string, number> {
-  try { return JSON.parse(localStorage.getItem(SEEN_KEY) || '{}') || {} } catch { return {} }
+/** 去重记录;读不出来(损坏 / 存储不可用)= null,这一轮不判 —— 当空往下走会重复提醒、还会把旧记录整份盖掉。 */
+function readSeen(): Record<string, number> | null {
+  try {
+    const v = JSON.parse(localStorage.getItem(SEEN_KEY) || '{}')
+    return v && typeof v === 'object' && !Array.isArray(v) ? v : null
+  } catch { return null }
 }
+/** 本次运行里已经提醒过的(落盘失败时靠它兜住,别每次判都再弹一遍)。 */
+const sentThisRun: Record<string, number> = {}
 
 let lastCheck = 0
 let inFlight = false
 /** 判一次本机直连 / 订阅来源的额度。60s 内重复调用只算一次(引擎那边本来就按来源缓存 5 分钟)。 */
 export async function checkQuotaAlerts(now = Date.now()): Promise<void> {
-  const prefs = readQuotaPrefs()
-  if (!prefs.threshold && !prefs.weeklyLeft) return
+  const prefs0 = readQuotaPrefs()
+  if (!prefs0.threshold && !prefs0.weeklyLeft) return
   if (inFlight || now - lastCheck < MIN) return
-  // 只认本机:焦点在别的电脑时 modelsResp 是那台的目录;Forsion 云端模型不在 directProviders 里
-  if (focusRef().kind !== 'home') return
-  const providers = useApp.getState().modelsResp?.directProviders ?? []
-  const probes = providers.map((p) => p.modelIds?.[0]).filter((id): id is string => !!id)
+  // 只认本机引擎的目录:焦点在别的电脑时顶层 modelsResp 是那台的,改用本机目录缓存(本机的 run 照样在跑、照样花额度)。
+  // Forsion 云端模型不在 directProviders 里。
+  const home = focusRef().kind === 'home' ? useApp.getState().modelsResp : catalogFor(targetKeyOf(HOME_REF))?.models
+  // 按 `<来源>/<模型>` 问:裸模型名两家都有时引擎会解析到第一家,另一家的额度就永远问不到
+  const probes = (home?.directProviders ?? []).filter((p) => p.modelIds?.[0]).map((p) => `${p.providerId}/${p.modelIds![0]}`)
   if (!probes.length) return
   lastCheck = now
   inFlight = true
@@ -115,16 +116,19 @@ export async function checkQuotaAlerts(now = Date.now()): Promise<void> {
     for (const modelId of probes) {
       const q = await getModelQuota(homeTarget(), modelId).then((r) => r.quota).catch(() => null)
       if (!q) continue // 读失败:不判、不清记录
-      const seen = readSeen()
-      const alerts = pendingQuotaAlerts(q, prefs, Date.now(), seen)
-      if (!alerts.length) continue
+      const prefs = readQuotaPrefs() // 等回包期间可能在设置里改了档位 / 关了
+      const stored = readSeen()
+      if (!stored) continue
+      const seen = { ...stored, ...sentThisRun }
+      const t = Date.now()
+      const delivered = pendingQuotaAlerts(q, prefs, t, seen).filter((a) =>
+        // 通知被总开关关掉时 notifyApp 返回 null:不记,重新打开通知后还能提醒
+        notifyApp({ event: 'quota.alert', level: a.kind === 'used' ? 'warning' : 'info', text: quotaAlertText(q, a, t), dedupeKey: `quota:${a.key}` }) !== null)
+      if (!delivered.length) continue
       const next = { ...seen }
-      for (const a of alerts) next[a.key] = a.window.resetAt
-      for (const [k, at] of Object.entries(next)) if (at < Date.now() - 7 * DAY) delete next[k] // 早过期的轮次不留
-      try { localStorage.setItem(SEEN_KEY, JSON.stringify(next)) } catch { /* 记不下顶多再提醒一次 */ }
-      for (const a of alerts) {
-        notifyApp({ event: 'quota.alert', level: a.kind === 'used' ? 'warning' : 'info', text: quotaAlertText(q, a, Date.now()), dedupeKey: `quota:${a.key}` })
-      }
+      for (const a of delivered) next[a.key] = sentThisRun[a.key] = a.window.resetAt
+      for (const [k, at] of Object.entries(next)) if (at < t - 7 * DAY) delete next[k] // 早过期的轮次不留
+      try { localStorage.setItem(SEEN_KEY, JSON.stringify(next)) } catch { /* 记不下:本次运行靠 sentThisRun 兜住 */ }
     }
   } finally { inFlight = false }
 }
