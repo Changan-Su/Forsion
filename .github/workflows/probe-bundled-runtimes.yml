@@ -1,13 +1,21 @@
-# 干净 Windows(藏掉 VC++ 运行库)上验随包 Python / LibreOffice(09-26)。
-# GitHub runner 自带 VC++,build-desktop 里 afterPack 的两道闸测不出「用户机器没装 VC++ 运行库」。
-# 测的是**本提交或最近祖先提交**成功的 build-desktop 产物(forsion-windows-2022):先对该提交跑 build-desktop,再触发这里。
-# 触发:合入 main 后 Actions 里手动跑;合入前推一个 probe/bundled-runtimes* 分支(workflow_dispatch 只认默认分支上的文件)。
-# 细节见 desktop/scripts/bundled-runtimes.windows-probe.cjs 头注释。
+# Existing disposable Windows probe; never run its System32 DLL manipulation on a developer host.
 name: probe-bundled-runtimes
 on:
   workflow_dispatch:
-  push:
-    branches: ['probe/bundled-runtimes*']
+    inputs:
+      build_run_id:
+        description: Successful build-desktop run that produced the candidate
+        type: string
+        required: true
+      expected_commit:
+        description: Exact 40-character source commit of that build
+        type: string
+        required: true
+      distribution:
+        description: Installer distribution to probe
+        type: choice
+        default: default
+        options: [default, no-extend]
 permissions:
   contents: read
   actions: read
@@ -16,24 +24,25 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          fetch-depth: 30
-      - name: Find nearest commit with a successful build-desktop run
-        id: build
+          ref: ${{ inputs.expected_commit }}
+      - name: Verify exact build provenance before downloading
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          BUILD_RUN_ID: ${{ inputs.build_run_id }}
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
         run: |
-          for sha in $(git log --format=%H -n 30); do
-            id=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow build-desktop.yml --commit "$sha" --status success -L 1 --json databaseId -q '.[0].databaseId')
-            if [ -n "$id" ]; then echo "run=$id" >> "$GITHUB_OUTPUT"; echo "测 $sha 的 build-desktop run $id"; exit 0; fi
-          done
-          echo "::error::最近 30 个提交都没有成功的 build-desktop 产物,先跑 build-desktop"; exit 1
-      - uses: actions/download-artifact@v4
+          [[ "$BUILD_RUN_ID" =~ ^[0-9]+$ ]]
+          [[ "$EXPECTED_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$BUILD_RUN_ID" > "$RUNNER_TEMP/candidate-run.json"
+          node -e 'const fs=require("node:fs"); const r=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+"/candidate-run.json","utf8")); if(r.head_sha!==process.env.EXPECTED_COMMIT || r.path!==".github/workflows/build-desktop.yml" || r.status!=="completed" || r.conclusion!=="success") throw Error("Candidate run does not match the requested successful build and source commit"); console.log(JSON.stringify({run:r.id,commit:r.head_sha,workflow:r.path}));'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: forsion-windows-2022
-          run-id: ${{ steps.build.outputs.run }}
+          name: forsion-windows-2022-${{ inputs.distribution }}
+          run-id: ${{ inputs.build_run_id }}
           github-token: ${{ github.token }}
           path: art
       - name: Probe bundled runtimes without VC++ runtime
