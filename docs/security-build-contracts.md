@@ -25,11 +25,15 @@ ProseMirror override 是为消除 Milkdown 传递树中的受影响版本；退�
 
 完整原生验收需要 JDK 21、Android SDK 35、模拟器或真机：
 
-1. `cd mobile/android && ./gradlew assembleDebug testDebugUnitTest --no-daemon`；记录 APK SHA256，解包检查 `assets/public/forsion-native-materials.json`。材料清单只能证明构建输入，不能替代下一步行为验证。
+1. `cd mobile/android && ./gradlew assembleDebug -PnativePreview --no-daemon`（Windows 用 `gradlew.bat`）生成包名 `com.forsion.tangu.nativepreview` 的并装 debug 包；记录 APK SHA256，解包检查 `assets/public/forsion-native-materials.json`。完整 JVM 单测另运行 `./gradlew testDebugUnitTest --no-daemon`。材料清单只能证明构建输入，不能替代下一步行为验证。
 2. 安装到隔离测试设备，以自有测试服务器提供只写测试标志的页面。测试顶层与 iframe 导航到 `https://localhost/_capacitor_http_interceptor_?u=<encoded-test-url>`，以及关闭/启用 CapacitorHttp 的情况。远程脚本不得在 app origin 执行或获得 native bridge。修复版 `WebViewLocalServer` 会排除 document 请求。
 3. 再验外部浏览器打开、`tangu://auth-callback` 登录回跳、已注册深链接、本地文件预览。不要为测试改变正式 appId 或签名身份。
 
-本次初始环境有 Java 25 和 adb，但未发现 JDK 21、完整 SDK 或连接设备；web 构建与 cap sync 已运行。用户已授权在独立 work/android-toolchain 安装 JDK 21/SDK、接受 SDK 许可并构建 debug APK，此独立验证在性能采样结束后执行；APK 最终结果及设备导航按其独立证据记录，不能从 npm/sync 成功推断。旧 APK 必须重新构建分发后才得到原生修复。
+本次已在用户授权的独立 `work/android-toolchain` 安装并校验 Microsoft JDK 21.0.13.0.2、Android SDK 35/Build Tools 34.0.0、Gradle 8.11.1，接受 SDK 许可；环境变量、Gradle 缓存和 debug 密钥均限于本次工作区。整合主分支后的干净源码 `8dc00f5a9f665aee42e9e0a64f1f543b4e0fd25e` 重新完成 mobile build/sync，再运行 `gradlew.bat assembleDebug -PnativePreview --no-daemon --max-workers=2 --console=plain`，234 个任务执行成功（3 分 34 秒）。构建起止源码摘要一致：`d5c768aebc9425f0d87f9b23657ce74011b77ed4f833069499aa8d31f0e8f8ec`。
+
+已交付 `forsion-nativepreview-debug-8dc00f5a.apk`（54,536,275 字节），SHA256 `7b42edfe991cbf628d5abd97f83b246acd74860491d895855ed957af0e6e096b`；`apksigner` 验证本地 Android Debug 证书/v2 签名通过，minSdk 26、target/compileSdk 35。内嵌 native 材料与同步资产逐字一致，三个 Capacitor 包为 7.6.9。`apkanalyzer dex code` 检查最终 APK：`Bridge.launchIntent` 在插件覆盖前拒绝代理前缀；`WebViewLocalServer.shouldInterceptRequest` 在 HTTP 代理前检查启用标志并排除文档；文档判定包含顶层请求和大小写无关的 `Upgrade-Insecure-Requests` 分支。另直接调用本次编译后的原生文档判定方法，5 个确定性输入均通过；该探针绕过 Android 服务构造，**不等于设备 WebView 行为测试**。APK 旁 `forsion-android-debug-validation.json` 保存工具链摘要、签名、DEX 反汇编、源码身份和边界。
+
+尚无模拟器/真机验收，未运行完整 `testDebugUnitTest` 集合；顶层/iframe 实际导航、远程脚本/native bridge、登录回跳、深链接和本地文件预览仍需按上述步骤验证。产物仅为 debug 并装预览，未签生产包或发布；旧 APK 必须重新构建分发后才得到原生修复。
 
 ## 完整发行包与固定运行时
 
@@ -71,7 +75,7 @@ publish-engine 在准确 `$GITHUB_SHA` checkout 上执行 npm ci、完整 `npm r
 | --- | --- | --- |
 | #271 | 三端固定 SheetJS；worker 大小/时间/输出预算；7 个解析/生命周期/预算回归 | 厂商攻击样本、三端完整 GUI |
 | #272 | 三根安装树与真实 EditorView pasteHTML 默认/自定义路径；合法富文本样本 | 三端真实用户 UI 粘贴 |
-| #273 | 7.6.9 三包同步；mobile build/sync/native材料；独立 debug APK 构建已授权 | 设备导航/原生桥攻击回归；APK结果另记 |
+| #273 | 7.6.9 三包同步；mobile build/sync；隔离 debug APK 构建及签名/内嵌材料/真实 DEX 检查；5 个编译后文档判定输入通过 | 真机/模拟器导航、原生桥攻击和完整 JVM 单测集合 |
 | #274 | 两份 SDK 锁与安装树 1.32.0；HTTP/MCP 契约由对应实现包提供 | 没有将 stdio 写为受公告影响 |
 | #275 | 默认完整、显式dev降级、发行拒skip；三下载器故障/skip/篡改注入 | 三平台完整新安装包在干净设备的能力探针 |
 | #276 | 固定16资产/来源/摘要；npm ci；最小权限；每构建机材料、源锁SBOM与provenance配置 | 真正发布执行及完整二进制SBOM；不声称逐字节可重现 |
