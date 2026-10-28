@@ -186,6 +186,8 @@ registerMessages({
   'chat.err.timeout': { zh: '请求超时，网络或模型响应过慢', en: 'Request timed out — slow network or model' },
   'chat.err.auth': { zh: '鉴权失败，请检查 API Key 或登录状态', en: 'Authentication failed — check API key or login' },
   'chat.err.rate': { zh: '请求被限流，请稍后重试', en: 'Rate limited — please retry later' },
+  'chat.err.quotaUsed': { zh: '这个模型的额度用完了', en: 'This model is out of quota' },
+  'chat.err.quotaUsedAt': { zh: '这个模型的额度用完了，{time} 重置', en: 'This model is out of quota, resets {time}' },
   'chat.err.server': { zh: '模型服务端错误，请稍后重试', en: 'Model service error — please retry later' },
   'chat.err.runCost': { zh: '本次运行成本达到上限，已自动停止', en: 'This run hit its cost ceiling and was stopped automatically' },
   'chat.err.inputTooLarge': { zh: '输入内容过长，超出模型可处理范围，请精简后重试', en: 'Input too large for the model — trim it and retry' },

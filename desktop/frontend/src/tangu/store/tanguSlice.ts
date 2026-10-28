@@ -141,6 +141,7 @@ export function recordToUi(r: any, resolveGroup?: (name: string) => { slug?: str
     ...(teamSummary ? { teamSummary: true } : {}),
     // Muse 自己开口发进私聊的(引擎 museDm.ts:proactive / proactive:todo / proactive:approval):消息头上画「主动发来 · 时间」。
     ...(role === 'assistant' && typeof r.origin === 'string' && r.origin.startsWith('proactive') ? { origin: r.origin } : {}),
+    ...(role === 'assistant' && r.origin === 'fallback:quota' && r.model_id ? { fallback: { to: String(r.model_id), reason: 'quota' } } : {}),
   }
   if (role === 'assistant' && Array.isArray(r.tool_calls) && r.tool_calls.length) {
     const results = new Map<string, any>((Array.isArray(r.tool_results) ? r.tool_results : []).map((t: any) => [t.tool_call_id, t]))
@@ -300,6 +301,9 @@ function agentStamp(s: Pick<AppState, 'engines' | 'agentDefs' | 'defaultAgentSlu
 
 const runAborts = new Map<string, AbortController>()
 const subscribedRuns = new Set<string>()
+/** 「换之前先问我」卡上点了「改用 X」:regenerate 过了门槛才记,紧接着那一次 send 带上 quota_fallback(引擎这一轮直接用后备)。
+ *  只认几秒内的:重发半路失败没走到 send,也不会漏到之后哪条消息上。 */
+const quotaFallbackNext = new Map<string, number>()
 const stoppedRuns = new Set<string>()
 const stopRequests = new Map<string, Promise<boolean>>()
 const stopTerminals = new Map<string, { assistantId: string; event: AgentRunEvent }>()
@@ -969,7 +973,7 @@ export interface TanguState {
   /** /retry:重跑最后一条用户消息。运行中 / 有排队项时排到本轮结束后,到时再取「最后一条」。 */
   retry(sessionId?: string | null, fromQueue?: boolean): Promise<boolean>
   editUserMessage(messageId: string, newText: string, sessionId?: string | null): void
-  regenerate(messageId: string, sessionId?: string | null): void
+  regenerate(messageId: string, sessionId?: string | null, opts?: { quotaFallback?: boolean }): void
   /** 返回新分支的会话 id;没建成(没有可分的回答 / 引擎拒绝)= null,已 toast。 */
   branchFromMessage(messageId?: string, sessionId?: string | null): Promise<string | null>
   /** 回退到某条消息的时刻(借 Claude Code rewind):'code'=只回滚 agent 写工具改过的文件,
@@ -1875,6 +1879,14 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
               ...(pl.uploadMs != null && Number(pl.uploadMs) >= 0 ? { uploadMs: Number(pl.uploadMs) } : {}),
             },
           }))
+          break
+        }
+        // 这一轮换了模型(额度用完接力 / 服务端停用):回答前面画「改用了」那一行
+        if (pl.phase === 'model_fallback' && pl.to) {
+          patchMessage(sessionId, assistantId, (m) => ({ ...m, fallback: {
+            to: String(pl.to), ...(pl.toName ? { toName: String(pl.toName) } : {}), ...(pl.from ? { from: String(pl.from) } : {}),
+            ...(pl.reason ? { reason: String(pl.reason) } : {}), ...(Number(pl.resetsAt) > 0 ? { resetsAt: Number(pl.resetsAt) } : {}),
+          } }))
           break
         }
         // 引擎的其余 status(generating 进度等)对桌面 UI 无用,只取网络重试提示。
@@ -2896,8 +2908,10 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     const sessionModelId = wasNewChat
       ? (implicitModelId || newChatModelId(get()))
       : (get().sessions.find((s) => s.id === sessionId)?.model_id || useChildChat.getState().sessions[sessionId]?.model_id || defaultModelOf(get(), refForSession(sessionId)) || get().modelsResp?.defaultModelId || undefined)
+    const quotaFallback = Date.now() - (quotaFallbackNext.get(sessionId) ?? 0) < 15_000
+    quotaFallbackNext.delete(sessionId)
     try {
-      const r = await startRun(targetForSession(sessionId), { sessionId, message: text, modelId: sessionModelId, attachments, agentConfig })
+      const r = await startRun(targetForSession(sessionId), { sessionId, message: text, modelId: sessionModelId, attachments, agentConfig, ...(quotaFallback ? { quotaFallback } : {}) })
       uiActionOwnedRuns.add(r.runId) // G2:本窗口是这条 run 的发起者 → 只有本窗口执行它的界面动作
       if (seedFrom) set((st) => { const next = { ...st.seedOnceBySession }; delete next[sessionId]; return { seedOnceBySession: next } })
       // 助手身份盖章:外部引擎名 / Normal Agent / 群聊由 group_speaker 逐发言人盖(见 agentStamp)。
@@ -3038,7 +3052,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     void get().truncateAndResend(idx, newText, list[idx].attachments || [], sid)
   },
 
-  regenerate: (messageId, targetSessionId) => {
+  regenerate: (messageId, targetSessionId, opts) => {
     const t = get().tr
     const sid = targetSessionId === undefined ? get().activeId : targetSessionId
     if (!sid || get().runningBySession[sid]) return
@@ -3048,6 +3062,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     let u = idx - 1
     while (u >= 0 && list[u].role !== 'user') u--
     if (u < 0) { get().toast(t('app.regenNoUser'), true); return }
+    if (opts?.quotaFallback) quotaFallbackNext.set(sid, Date.now())
     void get().truncateAndResend(u, list[u].content, list[u].attachments || [], sid)
   },
 

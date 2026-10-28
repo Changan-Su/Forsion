@@ -1353,7 +1353,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 额度用完接力(llm/quotaRelay.ts):这一轮实际在用的模型。只换一次,换了之后后备也用完就停下报错。
     let callModelId = modelId;
     let quotaRelayed = false;
-    const relayModel = async (target: string, until: number): Promise<boolean> => {
+    // 这一轮已经开始回答(吐过字 / 推理 / 工具调用):之后撞上额度用完也不换,免得一段回答拼了两个模型
+    let turnStarted = false;
+    const relayModel = async (target: string, until?: number): Promise<boolean> => {
       const r = await resolveModelAndKey(target).catch((e: any) => { console.warn(`[agent-core] run=${runId} 额度用完的后备模型 ${target} 解析失败: ${e?.message || e}`); return null; });
       if (!r) return false;
       const from = callModelId;
@@ -1362,16 +1364,18 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       callModelId = target;
       quotaRelayed = true;
       modelSwaps.set(runId, { modelId: target, origin: 'fallback:quota' });
-      console.warn(`[agent-core] run=${runId} ${from} 额度用完(到 ${new Date(until).toISOString()}),这一轮改用 ${target}`);
+      console.warn(`[agent-core] run=${runId} ${from} 额度用完${until ? `(到 ${new Date(until).toISOString()})` : ''},这一轮改用 ${target}`);
       // 与服务端停用模型的提示(phase:model_fallback)同一种事件,界面画同一种「改用了」行;reason 区分原因
-      void publish(runId, 'status', { phase: 'model_fallback', reason: 'quota', from, to: target, toName: (r.model as any)?.name, resetsAt: until });
+      void publish(runId, 'status', { phase: 'model_fallback', reason: 'quota', from, to: target, toName: (r.model as any)?.name, ...(until ? { resetsAt: until } : {}) });
       return true;
     };
-    // 上一轮刚换过、重置时间还没到:直接用后备,省一次必败的请求(「先问我」开着时照旧先试原模型,撞上了再问)
+    // 上一轮刚换过、重置时间还没到:直接用后备,省一次必败的请求(「先问我」开着时照旧先试原模型,撞上了再问)。
+    // 「先问我」卡上点了「改用 X」(input.quotaFallbackNow):这一轮直接用后备。
     {
-      const until = quotaExhaustedUntil(modelId);
-      const rs = until ? relaySettings() : null;
-      if (until && rs?.fallback && !rs.ask && rs.fallback !== modelId) await relayModel(rs.fallback, until);
+      const until = quotaExhaustedUntil(modelId) ?? undefined;
+      const now = input.quotaFallbackNow === true;
+      const rs = until || now ? relaySettings() : null;
+      if (rs?.fallback && rs.fallback !== modelId && (now || !rs.ask)) await relayModel(rs.fallback, until);
     }
     // 分步落库 / 跨 run 回放共用的模型身份键(两侧必须是**同一个表达式**,否则永远对不上)。
     // apiModelId 缺省时退回内部 modelId —— 只要求稳定可比,不要求是上游真名(同 resolveModelCapability 的口径)。
@@ -2811,7 +2815,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       // 换算比例只认 provider 实测(上游拒收时下界 = 窗口);纯粗估不冒充实测。越线本身已成立,故一律 force。
       const measured = contextUsage.measured(workingMessages);
       const cr = compactionCfg.enabled
-        ? await compactWorkingMessages(workingMessages, modelId, appId, ac.signal, {
+        ? await compactWorkingMessages(workingMessages, callModelId, appId, ac.signal, {
           settings: compactionCfg, runThinking: thinkingLevel, windowTokens: ctxWindowTokens, force: true,
           overheadTokens: toolsOverhead,
           measuredTokens: reason === 'overflow' ? Math.max(measured ?? 0, ctxWindowTokens) : measured,
@@ -2993,11 +2997,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
               acceptedAt = Date.now();
               void publish(runId, 'status', { phase: 'llm_call', stage: 'accepted', iteration, bytes: requestBytes, uploadMs: acceptedAt - attemptStart });
             },
-            onToken: (d) => { if (sampling.signal.aborted) return; emitted = true; markFrame(); partialText += d; void publish(runId, 'token', { delta: d }); },
-            onReasoning: (d) => { if (sampling.signal.aborted) return; emitted = true; markFrame(); void publish(runId, 'reasoning', { delta: d }); },
+            onToken: (d) => { if (sampling.signal.aborted) return; emitted = turnStarted = true; markFrame(); partialText += d; void publish(runId, 'token', { delta: d }); },
+            onReasoning: (d) => { if (sampling.signal.aborted) return; emitted = turnStarted = true; markFrame(); void publish(runId, 'reasoning', { delta: d }); },
             onToolCallDelta: (info) => {
               if (sampling.signal.aborted) return;
-              emitted = true;
+              emitted = turnStarted = true;
               markFrame();
               // Stream the raw arg delta so the client can render a live "writing
               // file" preview (it reassembles per tool-call id and extracts path/content).
@@ -3017,6 +3021,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
             ...(firstFrameAt ? { ttftMs: firstFrameAt - attemptStart } : {}),
             ...(acceptedAt ? { uploadMs: acceptedAt - attemptStart } : {}),
           };
+          turnStarted = true;
           break;
         } catch (err) {
           if (ac.signal.aborted) throw err;
@@ -3081,11 +3086,18 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           // 额度用完(订阅 / 账单配额,几小时才重置):设了后备模型且这一次还没吐字 → 换后备重进本轮;「先问我」开着 → 这一轮停下,
           // 报错带上后备模型,界面画「等重置 / 改用 X」。只换一次:后备也用完就照常报错,不往下找。秒级限流、凭证失效不走这里。
           if (!emitted && isQuotaExhaustedLlmError(err)) {
+            if (turnStarted) throw err;
             const until = noteQuotaExhausted(callModelId, quotaResetAt(err));
             const rs = quotaRelayed ? null : relaySettings();
             if (rs?.fallback && rs.fallback !== callModelId) {
               if (rs.ask) throw Object.assign(new LlmError((err as any).status || 429, `${(err as Error).message}${quotaAskSuffix(rs.fallback)}`), { resetsAt: until });
-              if (await relayModel(rs.fallback, until)) { retryIteration = true; iteration -= 1; break; }
+              if (await relayModel(rs.fallback, until)) {
+                // 历史是按原模型 hydrate 的:它签出的 providerItems(加密推理 / 原生条目)不能带给后备;之后的分步落库按后备的身份记
+                for (const m of workingMessages) if ((m as any).providerItems) delete (m as any).providerItems;
+                Object.assign(stepItemBinding, { apiModelId: apiModelId || callModelId, provider: model?.provider,
+                  protocol: typeof (model as any)?.[PROTOCOL_MARK] === 'string' ? (model as any)[PROTOCOL_MARK] : undefined });
+                retryIteration = true; iteration -= 1; break;
+              }
             }
             throw err;
           }
@@ -3520,7 +3532,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         // 60s 缓存/单次调用,不在热路径上放大开销。
         // 已中止就整段跳过:这里有两三次不吃 run signal 的云请求(目录/解析),中止后还去排队等
         // 60s 会把「停止」拖成肉眼可见的卡顿(2026-07-27 Codex 评审)。
-        const needDescribe = !ac.signal.aborted && (await shouldDescribeImages(modelId, appId, agentConfig.visionMode as string | undefined));
+        const needDescribe = !ac.signal.aborted && (await shouldDescribeImages(callModelId, appId, agentConfig.visionMode as string | undefined));
         const firstToolImageTurn = workingMessages.length;
         // ⚠️ 这一行被 toolImages.test.ts 按源码文本钉住(物化的装配没有可跑的测试路径)。
         let transcribed = false;
@@ -3605,7 +3617,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 惰性检查点:下个 run 的 hydrate 窗口之外若还有未被摘要覆盖的老行,现在(不占下个 run 首帧)做一份。
     // 登记在飞:下个 run(排队中的可能立刻起跑)hydrate 前先等它,别让窗口起点越过还没落检查点的老行。
     {
-      const task: Promise<void> = checkpointRowsOutsideWindow(sessionId, modelId, appId, compactionCfg, thinkingLevel)
+      const task: Promise<void> = checkpointRowsOutsideWindow(sessionId, callModelId, appId, compactionCfg, thinkingLevel)
         .catch((e) => console.warn(`[agent-core] session=${sessionId} 窗口外老行压缩失败:`, e?.message || e))
         .finally(() => { if (lazyCheckpoints.get(sessionId) === task) lazyCheckpoints.delete(sessionId); });
       lazyCheckpoints.set(sessionId, task);

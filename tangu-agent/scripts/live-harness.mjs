@@ -328,6 +328,7 @@ OPT_IN.add('webcardsreal'); KEYS.push('webcardsreal');
 OPT_IN.add('realuse'); // 真实使用模拟:每轮 12 个 run(--rounds),--usage-db 再加一个 Muse 周期;单独跑。
 OPT_IN.add('suggest'); // 三个 run + 三次建议调用;只在动 services/promptSuggestion.ts(提示词 / 前缀对齐)或主循环收尾处的快照时才有信息量。
 OPT_IN.add('humanreal'); // 协作说明写成什么样:每轮 6 个 run + 1 次判官(--rounds);只在动 HUMAN_GUIDANCE / manage_human 时才有信息量。
+OPT_IN.add('relay'); KEYS.push('relay'); // 假提供方只回 429 usage_limit_reached;只在动 llm/quotaRelay.ts / agentLoop 的接力分支时跑。--relay-mode auto|ask|none
 OPT_IN.add('appref'); // 四个 run;只在动 APP_REF_SECTION(应用 / 窗口引用那一段提示词)时才有信息量。
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 KEYS.push('marketplace', 'marketplacechat');
@@ -1058,6 +1059,17 @@ const MCP_CFG = ONLY.has('mcp') || ONLY.has('imgwindow') || ONLY.has('novision')
 // 每次回一张不同数字的 PNG 并记下它的 sha256 —— 场景据此判「上传的就是那两张附件」「改的就是上一张产出」。
 const IMGEDIT_PNGS = ONLY.has('imageedit') ? [randDigits(), randDigits()].map((d) => digitsPng(d, 6)) : [];
 const sha = (buf) => createHash('sha256').update(buf).digest('hex');
+// relay:「下一次模型调用回额度用完」的注入 —— 一个本地提供方,每个请求都回 Codex 订阅额度用完的报文(429 + usage_limit_reached + resets_at)。
+const RELAY_MODE = (() => { const i = argv.indexOf('--relay-mode'); return i >= 0 ? argv[i + 1] : 'auto'; })();
+const FAKEQ = ONLY.has('relay') ? await new Promise((resolve) => {
+  const state = { calls: 0 };
+  const srv = createHttpServer(async (req, res) => {
+    for await (const _ of req) { /* drain */ }
+    state.calls++;
+    res.writeHead(429, { 'content-type': 'application/json' }).end(JSON.stringify({ error: { type: 'usage_limit_reached', message: 'The usage limit has been reached', resets_at: Math.floor(Date.now() / 1000) + 3600 } }));
+  });
+  srv.listen(0, '127.0.0.1', () => resolve(Object.assign(state, { port: srv.address().port, server: srv })));
+}) : null;
 const IMGEDIT = ONLY.has('imageedit') ? await new Promise((resolve) => {
   const state = { calls: [], outputs: [] };
   const srv = createHttpServer(async (req, res) => {
@@ -1083,8 +1095,10 @@ const IMGEDIT = ONLY.has('imageedit') ? await new Promise((resolve) => {
     if (!p) { console.error(`realtime:${src} 里没有带 key 的百炼 provider`); process.exit(2); }
     realtimeProviders = [{ providerId: 'bailian', baseUrl: p.baseUrl, apiKey: p.apiKey, modelIds: [] }];
   }
-  const providers = [...(realtimeProviders || []), ...(IMGEDIT ? [{ providerId: 'fakeimg', baseUrl: `http://127.0.0.1:${IMGEDIT.port}/v1`, apiKey: 'live', modelIds: [], imageModelIds: ['fake-edit'] }] : [])];
-  if (COMPACTION_CFG || MCP_CFG || gitCfg || providers.length) writeFileSync(join(shared, 'config.json'), JSON.stringify({ ...(COMPACTION_CFG ? { compaction: COMPACTION_CFG } : {}), ...(MCP_CFG ? { mcp: MCP_CFG } : {}), ...(gitCfg ? { git: gitCfg } : {}), ...(providers.length ? { providers } : {}) }, null, 2));
+  const providers = [...(realtimeProviders || []), ...(IMGEDIT ? [{ providerId: 'fakeimg', baseUrl: `http://127.0.0.1:${IMGEDIT.port}/v1`, apiKey: 'live', modelIds: [], imageModelIds: ['fake-edit'] }] : []),
+    ...(FAKEQ ? [{ providerId: 'fakequota', baseUrl: `http://127.0.0.1:${FAKEQ.port}/v1`, apiKey: 'live', modelIds: ['fake-quota'] }] : [])];
+  const relayModels = FAKEQ && RELAY_MODE !== 'none' ? { models: { quotaFallback: MODEL, quotaFallbackAsk: RELAY_MODE === 'ask' } } : {};
+  if (COMPACTION_CFG || MCP_CFG || gitCfg || providers.length) writeFileSync(join(shared, 'config.json'), JSON.stringify({ ...(COMPACTION_CFG ? { compaction: COMPACTION_CFG } : {}), ...(MCP_CFG ? { mcp: MCP_CFG } : {}), ...(gitCfg ? { git: gitCfg } : {}), ...(providers.length ? { providers } : {}), ...relayModels }, null, 2));
 }
 // cumusic / cusend:隔离 config 里打开 Jev(合并写,所以在上面那次整份写之后)
 if (CU_JEV) cuJevConfig({ shared, mode: opt('cu-jev-mode', 'auto'), threshold: opt('cu-jev-threshold', '') });
@@ -1545,7 +1559,7 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
           else if (e.type === 'team_member') (p.phase === 'start' ? ev.group.starts : ev.group.ends).push({ slug: String(p.slug || '?'), seq: e.seq, runId: p.runId || null, sessionId: p.sessionId || null, messageId: p.messageId });
           else if (e.type === 'cache_probe') ev.probes.push(p); // 双闸开着才有(TANGU_CACHE_PROBE=1 + agentConfig.cacheProbe)
           // 只收压缩相关的 status(llm_call/generating 每帧都发,全收会把 ev 撑大);autocompact 场景据此判「压了、落库了」
-          else if (e.type === 'status' && ['context_info', 'compacting', 'compacted', 'compaction_budget', 'compaction_skipped', 'tool_failure_loop', 'action_delivery_nudge', 'sketch_delivery_nudge', 'ui_document_recovery', 'describing_images'].includes(p.phase)) ev.statuses.push(p);
+          else if (e.type === 'status' && ['context_info', 'compacting', 'compacted', 'compaction_budget', 'compaction_skipped', 'tool_failure_loop', 'action_delivery_nudge', 'sketch_delivery_nudge', 'ui_document_recovery', 'describing_images', 'model_fallback'].includes(p.phase)) ev.statuses.push(p);
           else if (e.type === 'done') { ev.done = true; ev.content = String(p.content || ''); ev.toolOffsets = p.toolOffsets ?? null; break outer; }
           else if (e.type === 'error') { ev.error = String(p.error || 'error'); ev.errorReason = p.reason ?? null; break outer; } // P1-K2:急停 / 锁定的终态原因
         }
@@ -2695,6 +2709,38 @@ try {
     const hit = ev.content.includes(MARKER);
     const anchors = anchorsOk(ev);
     return { ok: !ev.error && ev.toolCalls.length > 0 && hit && anchors, detail: ev.error || `工具 ${ev.toolCalls.join(',') || '无'};标记${hit ? '命中' : '未命中'};done 锚点${anchors ? '对齐' : `不对齐(${JSON.stringify(ev.toolOffsets)})`}${ev.approvals ? `;代批 ${ev.approvals}${ev.approveError ? '(失败:' + ev.approveError + ')' : ''}` : ''}`, output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
+  });
+
+  // relay(10-28,借鉴 magpie 方案 2 · 额度用完接力):会话模型 = 台架的假提供方(每次都回额度用完),后备 = 真模型。
+  //   auto:这一轮换到后备答出口令、只打假提供方一次、发一条 model_fallback、落库 origin=fallback:quota + 实际模型;
+  //         第二轮重置时间没到 → 直接用后备,假提供方不再被打。
+  //   ask:停下,报错尾巴带 [quota_fallback_ask:<后备>],不换。none(负对照):不设后备,照旧报额度用完,不换。
+  await scenario('relay', `relay 额度用完接力(${RELAY_MODE})`, async () => {
+    const sid = `live-relay-${Date.now()}`;
+    const tok = `RELAY-${randomUUID().slice(0, 6)}`;
+    const fake = 'fakequota/fake-quota';
+    const turn = (msg) => run(sid, `Reply with exactly this and nothing else: ${msg}`, 120_000, {}, undefined, undefined, undefined, undefined, { model: fake });
+    const a = await turn(tok);
+    const callsA = FAKEQ.calls;
+    const fbA = a.statuses.filter((x) => x.phase === 'model_fallback');
+    const b = RELAY_MODE === 'auto' ? await turn(`${tok}-2`) : null;
+    const msgs = asList(await api(`/agent/sessions/${sid}/messages`).catch(() => []), 'messages');
+    const asst = msgs.filter((m) => m.role === 'assistant' || m.role === 'model');
+    const evidence = { mode: RELAY_MODE, fakeCalls: FAKEQ.calls, callsA, fbA, fbB: b?.statuses.filter((x) => x.phase === 'model_fallback'), errA: a.error, errB: b?.error, rows: asst.map((m) => ({ origin: m.origin, model_id: m.model_id, content: String(m.content || '').slice(0, 80) })) };
+    writeFileSync(join(OUT, 'relay-evidence.json'), JSON.stringify(evidence, null, 2));
+    let ok, detail;
+    if (RELAY_MODE === 'auto') {
+      const row = asst.find((m) => String(m.content || '').includes(tok));
+      ok = !a.error && a.content.includes(tok) && fbA.length === 1 && fbA[0].reason === 'quota' && fbA[0].to === MODEL && callsA === 1
+        && row?.origin === 'fallback:quota' && row?.model_id === MODEL
+        && !b.error && b.content.includes(`${tok}-2`) && FAKEQ.calls === 1 && b.statuses.some((x) => x.phase === 'model_fallback');
+      detail = a.error || b?.error || `第一轮:改用 ${fbA[0]?.to || '无'}、假提供方 ${callsA} 次、落库 ${row?.origin || '无'} / ${row?.model_id || '无'};第二轮:假提供方累计 ${FAKEQ.calls} 次、${b.statuses.some((x) => x.phase === 'model_fallback') ? '直接走后备' : '没走后备'}`;
+    } else {
+      const askTail = /\[quota_fallback_ask:[^\]]+\]/.test(a.error || '');
+      ok = !!a.error && /usage limit/i.test(a.error) && fbA.length === 0 && callsA === 1 && (RELAY_MODE === 'ask' ? askTail : !askTail);
+      detail = `报错:${(a.error || '无').slice(0, 140)};改用 ${fbA.length} 次;假提供方 ${callsA} 次`;
+    }
+    return { ok, detail, output: [a.content, b?.content].filter(Boolean).join('\n---\n'), tokens: tokensOf(a) + (b ? tokensOf(b) : 0), toolCalls: [] };
   });
 
   await scenario('taskoutcomes', 'taskoutcomes actual artifacts, rejected approvals and repeat delivery', () =>

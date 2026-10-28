@@ -50,3 +50,21 @@ describe('远程设备驱动外部引擎(契约 C6)', () => {
     expect(humanizeRunError('engine_unavailable:codex', t)).not.toContain('chat.err.engineRemote')
   })
 })
+
+describe('额度用完 ≠ 限流', () => {
+  // 引擎 openaiResponses 把 Codex usage_limit_reached 拼成这样(真实报文没有「429」字样)
+  const CODEX = 'The usage limit has been reached (resets in ~45 min, at 2099-10-28T11:40:00.000Z)'
+  const tv = (k: string, v?: Record<string, unknown>) => (v?.time ? `${k}[${v.time}]` : k)
+  it('Codex 订阅额度用完:说额度用完并带重置时刻,不说限流', () => {
+    const out = humanizeRunError(CODEX, tv)
+    expect(out).toMatch(/^chat\.err\.quotaUsedAt\[/)
+    expect(out).not.toContain('chat.err.rate')
+  })
+  it('账单配额(insufficient_quota)也是额度用完;秒级 429 仍是限流', () => {
+    expect(humanizeRunError('429 insufficient_quota: You exceeded your current quota', tv)).toMatch(/^chat\.err\.quotaUsed\(/)
+    expect(humanizeRunError('429 Too Many Requests: rate limit', tv)).toMatch(/^chat\.err\.rate\(/)
+  })
+  it('「先问我」的尾巴不给人看', () => {
+    expect(humanizeRunError('usage_limit_reached [quota_fallback_ask:forsion/auto]', tv)).not.toContain('quota_fallback_ask')
+  })
+})

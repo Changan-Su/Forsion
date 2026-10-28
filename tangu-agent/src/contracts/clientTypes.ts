@@ -865,6 +865,9 @@ export interface UiMessage {
   content: string
   /** Muse 主动发进私聊的(引擎 chat_messages.origin):proactive / proactive:todo / proactive:approval。 */
   origin?: string
+  /** 这一轮换了模型(引擎 status model_fallback;重载时从 origin 'fallback:quota' + model_id 还原):画「改用了」那一行。
+   *  reason 'quota' = 额度用完接力;缺省 = 服务端停用模型。重载后只剩 to。 */
+  fallback?: { to: string; toName?: string; from?: string; reason?: string; resetsAt?: number }
   reasoning?: string
   /** 思考累计用时(ms)与本段思考的起点:只在本次运行里由 appStore 记(引擎不落库),渲染成「思考 N 秒」。 */
   reasoningMs?: number
@@ -1001,6 +1004,10 @@ export interface StoredDesktopConfig extends TanguDesktopConfig {
   translateModelId?: string
   /** 辅助模型 · 补全:插件 ctx.tangu.fim(行内补全)用;只能选补全(FIM)模型;空 = 目录里第一个补全模型。 */
   fimModelId?: string
+  /** 额度用完时改用的模型(config.json models.quotaFallback);空 = 停下报错。 */
+  quotaFallbackModelId?: string
+  /** 换之前先问我(models.quotaFallbackAsk)。 */
+  quotaFallbackAsk?: boolean
   /** 上次用的审批档 / 思考档:**新会话据此起步**(模型走 modelId,已是全局键)。
    *  在任意会话里改这三样都会写回这里 —— 用户的口径是「换过一次就一直是它」,不是每建一个会话重设一次。 */
   lastApprovalMode?: 'readonly' | 'auto-edit' | 'full-auto' | 'custom'

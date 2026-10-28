@@ -103,10 +103,10 @@ const userTexts = (payload: any): string => (payload.messages as any[])
   .map((m) => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content)))
   .join('\n---\n');
 
-async function runToSettled(agentConfig: Record<string, any> = {}, msg = '干活', client?: string, clientCapabilities?: string[]): Promise<any> {
+async function runToSettled(agentConfig: Record<string, any> = {}, msg = '干活', client?: string, clientCapabilities?: string[], extraInput: Record<string, unknown> = {}): Promise<any> {
   await createRun({
     id: 'R1', sessionId: 'S', userId: USER, appId: 'tangu', modelId: 'm1', assistantMessageId: 'A1',
-    input: { message: msg, userMessageId: 'U1', attachments: [], agentConfig, ...(client ? { client } : {}), ...(clientCapabilities ? { clientCapabilities } : {}) },
+    input: { message: msg, userMessageId: 'U1', attachments: [], agentConfig, ...(client ? { client } : {}), ...(clientCapabilities ? { clientCapabilities } : {}), ...extraInput },
   });
   enqueueRun('S', 'R1');
   const t0 = Date.now();
@@ -525,6 +525,28 @@ describe('额度用完接力(借鉴 magpie 方案 2,10-28)', () => {
     await query(`DELETE FROM agent_run_events WHERE run_id = 'R1'`).catch(() => {});
     expect((await runToSettled()).status).toBe('done');
     expect(keys).toEqual(['kfb']);
+  }, 20_000);
+
+  it('这一轮已经答过一步(工具轮)再撞上额度:不换,免得一段回答拼了两个模型', async () => {
+    setFallback({ quotaFallback: 'fb' });
+    const keys: string[] = [];
+    script = [(o) => { keys.push(o.apiKey); return todoWriteStep([{ content: '任务A', status: 'completed' }])(); }, (o) => { keys.push(o.apiKey); return quota(); }];
+    const run = await runToSettled();
+    expect(run.status).toBe('failed');
+    expect(keys).toEqual(['k', 'k']);
+    expect(await statusOf('model_fallback')).toEqual([]);
+  }, 20_000);
+
+  it('「先问我」卡上点了「改用 X」(quotaFallbackNow):这一轮直接用后备,照样发事件、记来由', async () => {
+    setFallback({ quotaFallback: 'fb', quotaFallbackAsk: true });
+    const keys: string[] = [];
+    script = [(o) => { keys.push(o.apiKey); return finalStep('用后备答完了')(); }];
+    const run = await runToSettled({}, '干活', undefined, undefined, { quotaFallbackNow: true });
+    expect(run.status).toBe('done');
+    expect(keys).toEqual(['kfb']);
+    expect((await statusOf('model_fallback'))[0]).toMatchObject({ reason: 'quota', to: 'fb' });
+    const rows = await query<any[]>(`SELECT model_id, origin FROM chat_messages WHERE session_id = 'S' AND role = 'model'`);
+    expect(rows.at(-1)).toMatchObject({ model_id: 'fb', origin: 'fallback:quota' });
   }, 20_000);
 
   it('负对照:秒级限流(rate limit)照旧退避重试,不换模型', async () => {
