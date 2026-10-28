@@ -16,6 +16,8 @@ import { notifyApp } from '../stores/notificationStore'
 import { targetForSession } from '../services/engine/targets'
 import { translate } from '../i18n'
 import { viewableProps } from './ImageViewer'
+import { LocalWebCard, isHtmlFile } from '../views/chat2/WebCards'
+import { engineHere } from '../views/chat2/BackgroundProcs'
 
 type ExecMode = 'host' | 'sandbox' | undefined
 
@@ -123,15 +125,28 @@ export const InlineFiles: React.FC<{
   sessionId: string
   execMode: ExecMode
   onOpenPreview?: (t: PreviewTarget) => void
-}> = ({ files, cfg, sessionId, execMode, onOpenPreview }) => {
-  if (!files.length) return null
+  /** 网页卡片的「发布…」:往对话发一句话 */
+  onAsk?: (text: string) => void
+  /** 同一条消息里已经出了本地网页卡的路径:这里不再画 */
+  skipPaths?: ReadonlySet<string>
+}> = ({ files, cfg, sessionId, execMode, onOpenPreview, onAsk, skipPaths }) => {
+  const shown = files.filter((f) => !(f.path && skipPaths?.has(f.path)))
+  if (!shown.length) return null
   const open = (f: DisplayFile) => onOpenPreview?.(targetFor(f, cfg, sessionId, execMode))
+  // 网页卡片第二轮 1:本机会话里展示一个 .html = 本地网页卡(代替文件名小卡),排在小卡下面
+  const web = (f: DisplayFile): boolean => !f.sourceSessionId && isHtmlFile(f.path) && engineHere(sessionId)
+  const cards = shown.filter((f) => !web(f))
   return (
-    <div className="inline-file-grid">
-      {files.map((f, i) => {
-        if (isImage(f)) return <Thumb key={i} f={f} cfg={cfg} sessionId={sessionId} execMode={execMode} onClick={() => open(f)} />
-        return <FileCard key={i} f={f} onClick={() => open(f)} />
-      })}
-    </div>
+    <>
+      {!!cards.length && (
+        <div className="inline-file-grid">
+          {cards.map((f, i) => {
+            if (isImage(f)) return <Thumb key={i} f={f} cfg={cfg} sessionId={sessionId} execMode={execMode} onClick={() => open(f)} />
+            return <FileCard key={i} f={f} onClick={() => open(f)} />
+          })}
+        </div>
+      )}
+      {shown.filter(web).map((f) => <LocalWebCard key={f.path} sessionId={sessionId} path={f.path!} onAsk={onAsk} />)}
+    </>
   )
 }

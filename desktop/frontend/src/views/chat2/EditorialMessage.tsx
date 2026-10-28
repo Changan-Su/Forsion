@@ -26,6 +26,7 @@ import { InlineFiles } from '../../components/InlineFiles'
 import { IntelligentUi } from '../../components/IntelligentUi'
 import { SketchCards } from '../../components/SketchCard'
 import { PluginToolCard, useToolCardOf, type ToolCardClaim } from '../../components/PluginToolCard'
+import { HostWebCard, planWebCards, useSessionCwd, type WebCardSpec } from './WebCards'
 import { sketchFence } from '../../amadeus/blocks/sketch/format'
 import { streamingArgString } from '../streamingWrite'
 import { SystemPromptBlock } from '../../components/SystemPromptBlock'
@@ -93,6 +94,7 @@ export type OrderedToolPart =
   | { t: 'marketplace'; event: ToolEvent }
   | { t: 'sandbox'; event: ToolEvent }
   | { t: 'pluginCard'; event: ToolEvent; claim: ToolCardClaim }
+  | { t: 'web'; event: ToolEvent; spec: WebCardSpec }
 
 /** 直播中还没收口的 sketch 调用 → 草稿卡(10-09,对标 ChatGPT Intelligent UI 边生成边渲染):tool_stream 已把参数增量
  *  累进 ev.arguments,这里从半截 JSON 里把 html 解出来。只在**直播**里算(live):历史 / 中断的未完成调用照旧不画幻影卡。 */
@@ -110,8 +112,9 @@ function draftSketchOf(ev: ToolEvent): SketchItem | undefined {
  * live=消息还在直播:没收口的 sketch 调用也出一张草稿卡(同 callId,终稿到达原地换成正式卡)。
  * cardOf=插件结果卡片的认领(toolResultCards.useToolCardOf):认领了的调用画卡片**代替**通用记录(同原生文档),
  * 前后的工具各成一组;没认领的(运行中、出错、插件停用 / 重载)照旧是通用记录。
+ * webOf=本地网页卡 / 服务卡(WebCards.planWebCards):工具行留着,卡紧跟其后(同商店卡)。
  */
-export function partitionToolSegment(events: ToolEvent[], sketches?: SketchItem[], live = false, cardOf?: (ev: ToolEvent) => ToolCardClaim | undefined): OrderedToolPart[] {
+export function partitionToolSegment(events: ToolEvent[], sketches?: SketchItem[], live = false, cardOf?: (ev: ToolEvent) => ToolCardClaim | undefined, webOf?: (ev: ToolEvent) => WebCardSpec | undefined): OrderedToolPart[] {
   const sketchByCall = new Map((sketches || []).map((item) => [item.callId, item]))
   const parts: OrderedToolPart[] = []
   let tools: ToolEvent[] = []
@@ -137,6 +140,8 @@ export function partitionToolSegment(events: ToolEvent[], sketches?: SketchItem[
     if (isSandboxCardTool(ev)) { flushTools(); parts.push({ t: 'sandbox', event: ev }); continue }
     tools.push(ev)
     if (isMarketplaceTool(ev) && ev.done && !ev.isError) { flushTools(); parts.push({ t: 'marketplace', event: ev }); continue }
+    const web = webOf?.(ev)
+    if (web) { flushTools(); parts.push({ t: 'web', event: ev, spec: web }); continue }
     const sketch = sketchByCall.get(ev.id) ?? (live ? draftSketchOf(ev) : undefined)
     if (!sketch) continue
     flushTools()
@@ -420,6 +425,11 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
   const { t } = useI18n()
   // 插件结果卡片的认领(订阅渲染器 / 名单:插件晚加载或被停用时这条消息跟着重渲)
   const cardOf = useToolCardOf()
+  // 本地网页卡 / 服务卡(网页卡片第二轮 1):整条消息一起排(多个 HTML 只给入口、挂在最后一次写上)
+  const webCwd = useSessionCwd(runSid)
+  const webPlan = useMemo(() => planWebCards(msg.toolEvents, webCwd), [msg.toolEvents, webCwd])
+  const webOf = useCallback((ev: ToolEvent) => webPlan.get(ev.id), [webPlan])
+  const webLocal = useMemo(() => new Set([...webPlan.values()].flatMap((w) => (w.kind === 'local' ? [w.path] : []))), [webPlan])
   // 待办清单的「进行中」只在这一段还在流式、且会话的 run 还活着时转圈:停止 / 出错 / 断流后的孤儿气泡都不转。
   // ponytail: steer 切段后旧段已 done,run 仍在跑时这份清单也停转;要跟上得在 turn_boundary 把 todos 挪到新段。
   const todoLive = useApp((s) => msg.status === 'streaming' && !!msg.todos?.length && (!runSid || !!s.runningBySession[runSid]))
@@ -692,7 +702,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
             const firstIdx = msg.segments.findIndex((s2) => s2.t === 'tools' || !!s2.text.trim())
             const evsOf = (ids: string[]) => ids.map((id) => msg.toolEvents?.find((e) => e.id === id)).filter(Boolean) as ToolEvent[]
             const first = msg.segments[firstIdx]
-            const firstParts = first?.t === 'tools' ? partitionToolSegment(evsOf(first.ids), msg.sketches, streaming, cardOf) : []
+            const firstParts = first?.t === 'tools' ? partitionToolSegment(evsOf(first.ids), msg.sketches, streaming, cardOf, webOf) : []
             const headEvents = firstParts[0]?.t === 'tools' ? firstParts[0].events : undefined
             const nodes = msg.segments.map((seg, i) => {
               if (seg.t === 'text') {
@@ -704,7 +714,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
                   : null
               }
               const skip = i === firstIdx && headEvents ? 1 : 0
-              const parts = (i === firstIdx ? firstParts : partitionToolSegment(evsOf(seg.ids), msg.sketches, streaming, cardOf)).slice(skip)
+              const parts = (i === firstIdx ? firstParts : partitionToolSegment(evsOf(seg.ids), msg.sketches, streaming, cardOf, webOf)).slice(skip)
               return parts.length ? (
                 <Fragment key={i}>
                   {parts.map((part, k) => part.t === 'tools'
@@ -713,6 +723,8 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
                       ? <MarketPluginCards key={`market-${part.event.id}`} event={part.event} />
                     : part.t === 'sandbox'
                       ? <PluginSandboxCard key={`sandbox-${part.event.id}`} event={part.event} />
+                    : part.t === 'web'
+                      ? <HostWebCard key={`web-${part.event.id}`} spec={part.spec} sessionId={runSid} onAsk={handlers?.onSuggest} />
                     : part.t === 'pluginCard'
                       ? <PluginToolCard key={`ptc-${part.event.id}`} event={part.event} claim={part.claim} onQuote={handlers?.onQuote} fallback={<ToolGroup events={[part.event]} />} />
                     : part.t === 'intelligent'
@@ -806,7 +818,8 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
           <div className="t2-dim t2-team-done" data-team-done="1">✓ {t('chat.team.done')}</div>
         )}
         {!!msg.displayFiles?.length && fileCtx && (
-          <InlineFiles files={msg.displayFiles} cfg={fileCtx.cfg} sessionId={fileCtx.sessionId} execMode={fileCtx.execMode} onOpenPreview={fileCtx.onOpenPreview} />
+          <InlineFiles files={msg.displayFiles} cfg={fileCtx.cfg} sessionId={fileCtx.sessionId} execMode={fileCtx.execMode} onOpenPreview={fileCtx.onOpenPreview} onAsk={handlers?.onSuggest}
+            skipPaths={webLocal} />
         )}
         {(msg.toolEvents || []).filter(ev => isMarketplaceTool(ev) && !inlineToolIds.has(ev.id)).map(ev => <MarketPluginCards key={`market-${ev.id}`} event={ev} />)}
         {(msg.toolEvents || []).filter(ev => isSandboxCardTool(ev) && !inlineToolIds.has(ev.id)).map(ev => <PluginSandboxCard key={`sandbox-${ev.id}`} event={ev} />)}
