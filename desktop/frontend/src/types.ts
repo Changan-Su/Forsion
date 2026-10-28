@@ -542,6 +542,9 @@ declare global {
       termsAgree?(version: string): Promise<{ status: number; json?: any }>
       /** Forsion Extend 渲染半身调它自己主进程半身注册的通道;宿主通道一律拒。没装载 Extend 就没有这个键。 */
       cloudInvoke?(channel: string, ...args: unknown[]): Promise<unknown>
+      /** 帮助改进 Forsion(2.13.8 起):渲染层的崩溃 / 功能使用 / 长任务计数报给主进程(整形后转给 Extend;只进不出)。
+       *  只有 Extend 注册了 telemetry:get 才有这个键 —— 引导第 7 步「帮助改进」页签据此同步判断本机有没有这一页。 */
+      telemetryReport?(kind: 'crash' | 'feature' | 'longtasks', props: Record<string, unknown>): void
       /** 提交反馈到 Forsion 反馈中心(会话日志 JSON 随附为附件;token 留主进程)。 */
       submitFeedback?(input: { description: string; sessionLogJson?: string; sessionLogName?: string }): Promise<{ ok: boolean; id?: string | null; error?: string; attachmentSkipped?: boolean }>
       appVersion?(): Promise<string>

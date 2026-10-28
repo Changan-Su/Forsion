@@ -25,9 +25,10 @@ import { applyUiFonts, readFont, writeFont } from '../uiFont'
 import { OnboardingModelChoice } from './OnboardingModelChoice'
 import { OnboardingBackgroundAgents } from './OnboardingBackgroundAgents'
 import { OnboardingComputerHistory, OnboardingHistoryStatus } from './OnboardingComputerHistory'
+import { OnboardingImprove, improveOnThisHost, readTelemetry, type TelemetryView } from './OnboardingImprove'
 import { computerHistoryApi } from './useComputerHistory'
 import { isSupportedPlatform } from './computerHistoryModel'
-import { stepOrder, updateOrder, type PermissionTab, type Step } from './onboardingFlow'
+import { permissionTabList, permissionsNewHere, stepOrder, updateOrder, type PermissionTab, type Step } from './onboardingFlow'
 import { useApp } from '../stores/appStore'
 import { EnvProbeSection } from './EnvProbeSection'
 import './onboardingMessages'
@@ -56,7 +57,7 @@ const onboardingTarget = async () => {
   const c = await window.tangu.getConfig()
   return connectionTarget({ backendUrl: c.backendUrl, token: c.token, modelId: '' })
 }
-const permissionSets: Record<Exclude<PermissionTab, 'history'>, DesktopPermissionId[]> = {
+const permissionSets: Record<Exclude<PermissionTab, 'history' | 'improve'>, DesktopPermissionId[]> = {
   computer: ['computerAccessibility', 'computerScreen'], media: ['microphone', 'camera', 'screen'],
 }
 const fullOrder = (): Step[] => stepOrder({
@@ -83,7 +84,8 @@ export const OnboardingWizard: React.FC<{
   const historyHost = historyOnThisHost() && !historyGone
   const FULL_ORDER = fullOrder()
   // 短引导有哪几步在挂载时定死:走到一半再少一步,当前步会掉出序列(之后只可能是少一页分页,不会少一步)。
-  const [updateSteps] = useState(() => updateOrder(fullOrder(), storedVersion(), (s) => s !== 'permissions' || historyOnThisHost()))
+  // 「权限与数据」算不算新:有电脑历史或有帮助改进(后者同步只能看 Extend 有没有遥测通道,真读不到时页签不出现、这一步只剩权限页)。
+  const [updateSteps] = useState(() => updateOrder(fullOrder(), storedVersion(), (s) => s !== 'permissions' || permissionsNewHere({ history: historyOnThisHost(), improve: improveOnThisHost() })))
   const STEP_ORDER = updateMode ? updateSteps : FULL_ORDER
   const stepIdx = STEP_ORDER.indexOf(step)
   /** 到过的最远一步:左栏上它之前的都能点(往回是回看,往前是回到已经到过的地方)。 */
@@ -92,7 +94,11 @@ export const OnboardingWizard: React.FC<{
   const lastStep = stepIdx === STEP_ORDER.length - 1
   const isHost = FULL_ORDER.includes('connect')
   const [appearanceTab, setAppearanceTab] = useState<'style' | 'colors' | 'font'>('style')
-  const [permissionTab, setPermissionTab] = useState<PermissionTab>(updateMode ? 'history' : 'computer')
+  // 进第 7 步缺省落在「帮助改进」(完整引导与升级短引导都是,契约 §5);没有这一页时照旧。完成页点回来的 go(step, tab) 仍然优先。
+  const [permissionTab, setPermissionTab] = useState<PermissionTab>(() => improveOnThisHost() ? 'improve' : updateMode ? 'history' : 'computer')
+  /** 帮助改进(匿名遥测)的开关视图,存在 Extend:null = 还在读;false = 本机没有这一页(没有带遥测的 Extend / 读失败)。 */
+  const [improve, setImprove] = useState<TelemetryView | null | false>(() => (improveOnThisHost() ? null : false))
+  const [improveSaving, setImproveSaving] = useState(false)
   /** null = 还没读到设备权限快照:分页条等读到再画,免得「操作电脑」先画出来又消失。 */
   const [computerAvailable, setComputerAvailable] = useState<boolean | null>(null)
   const [saving, setSaving] = useState(false)
@@ -119,6 +125,15 @@ export const OnboardingWizard: React.FC<{
       if (live && (view.state.status === 'unsupported' || !isSupportedPlatform(view.state.platform))) setHistoryGone(true)
     }).catch(() => { /* 读不到不等于不支持:那一页自己会报读取失败并给重试 */ })
     return () => { live = false }
+  }, [])
+
+  // 帮助改进:挂载时读一次 Extend 的 telemetry:get;答不上 available 就整页不出现(Extend 停用 / 老版本)。
+  useEffect(() => {
+    if (improve !== null) return
+    let live = true
+    void readTelemetry().then((view) => { if (live) setImprove(view ?? false) })
+    return () => { live = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // ── 欢迎与更新日志对话框 ──
@@ -334,7 +349,7 @@ export const OnboardingWizard: React.FC<{
   const advance = (): Promise<void> => forward(STEP_ORDER[stepIdx + 1])
   const connectReady = loggedIn || byokSaved || subLoggedIn
   /** 有开关 / 配置正在落盘:上一步、下一步、跳过、左栏和完成页的回跳都等它存完。 */
-  const navLocked = saving || mirrorSaving || backgroundSaving || historySaving
+  const navLocked = saving || mirrorSaving || backgroundSaving || historySaving || improveSaving
   const primaryDisabled = navLocked || (step === 'model' && modelsLoading)
   const primary = lastStep ? finish : () => void advance()
   // 回车 = 右下角的主按钮。焦点在输入框、按钮、开关这类自己要吃回车的控件上,或有弹窗开着时不接。
@@ -364,18 +379,22 @@ export const OnboardingWizard: React.FC<{
     return () => { live = false }
   }, [step, computerAvailable])
   const historyTab = historyHost && computerAvailable !== false
-  const permissionTabs: PermissionTab[] = [...(computerAvailable ? ['computer' as const] : []), ...(historyTab ? ['history' as const] : []), 'media']
-  const shownTab = permissionTabs.includes(permissionTab) ? permissionTab : permissionTabs[0]
+  const permissionTabs = permissionTabList({ computer: !!computerAvailable, history: historyTab, improve: !!improve })
+  /** 这一步除了设备权限还有「数据」类的页(电脑历史 / 帮助改进):标题与左栏叫「权限与数据」。还在读帮助改进时先按有算,免得名字一闪。 */
+  const dataStep = historyHost || improve !== false
+  // 选中的页不在(比如帮助改进最后没读到):升级短引导回到电脑历史(那一步新加的另一样),否则第一页。
+  const shownTab = permissionTabs.includes(permissionTab) ? permissionTab
+    : updateMode && permissionTabs.includes('history') ? 'history' : permissionTabs[0]
   const iconFor = { welcome: FileText, connect: Cloud, model: Bot, background: Sparkles, theme: Palette, workspace: FolderOpen, env: Wrench, permissions: ShieldCheck, done: Flag }
   const railLabel = (s: Step): string => s === 'welcome' ? t('onboarding.update.rail')
-    : s === 'permissions' && historyHost ? t('onboarding.guide.permissionsData') : t(`onboarding.guide.${s}`)
+    : s === 'permissions' && dataStep ? t('onboarding.guide.permissionsData') : t(`onboarding.guide.${s}`)
   const version = appVer || APP_VERSION
   const title = step === 'welcome' ? (updateMode ? t('onboarding.update.title', { version }) : t('onboarding.guide.intro'))
     : step === 'done' ? t('onboarding.guide.doneTitle')
-      : step === 'permissions' ? t(historyHost ? 'onboarding.step.permissions.title' : 'desktopPermissions.title') : t(`onboarding.step.${step}.title`)
+      : step === 'permissions' ? t(dataStep ? 'onboarding.step.permissions.title' : 'desktopPermissions.title') : t(`onboarding.step.${step}.title`)
   const description = step === 'welcome' ? (updateMode ? t(lastStep ? 'onboarding.update.description' : 'onboarding.update.descriptionNew') : t('onboarding.guide.welcome'))
     : step === 'done' ? t('onboarding.guide.doneBody')
-      : step === 'permissions' ? t(historyHost ? 'onboarding.step.permissions.description' : 'desktopPermissions.optional')
+      : step === 'permissions' ? t(improve !== false ? 'onboarding.step.permissions.descriptionImprove' : historyHost ? 'onboarding.step.permissions.description' : 'desktopPermissions.optional')
         : step === 'theme' ? t('onboarding.guide.appearanceDescription') : t(`onboarding.step.${step}.description`)
   const kicker = updateMode ? t(step === 'welcome' ? 'onboarding.update.kicker' : 'onboarding.update.newKicker')
     : step === 'welcome' ? t('onboarding.guide.essentials') : t('onboarding.guide.stepOf', { n: stepIdx, total: STEP_ORDER.length - 1 })
@@ -390,6 +409,8 @@ export const OnboardingWizard: React.FC<{
     ...(backgroundState && STEP_ORDER.includes('background') ? [{ step: 'background' as const, label: t('onboarding.guide.background'),
       value: `Historian ${t(backgroundState.historian ? 'settings.special.on' : 'settings.special.off')} · Muse ${t(backgroundState.muse ? 'settings.special.on' : 'settings.special.off')}` }] : []),
     ...(historyTab && STEP_ORDER.includes('permissions') ? [{ step: 'permissions' as const, tab: 'history' as const, label: t('onboarding.guide.history'), value: <OnboardingHistoryStatus /> }] : []),
+    ...(improve && STEP_ORDER.includes('permissions') ? [{ step: 'permissions' as const, tab: 'improve' as const, label: t('onboarding.guide.improve'),
+      value: t(improve.enabled ? 'onboarding.improve.on' : 'onboarding.improve.off') }] : []),
   ]
 
   return <div className="ob-shell ob-flow" data-step={step} data-dir={dir} data-mode={updateMode ? 'update' : 'full'}>
@@ -745,7 +766,7 @@ export const OnboardingWizard: React.FC<{
               key=probeKey:换源存盘后重挂,安装命令按新源重算(main.ts runEnvCheck 在检测时读 mirror)。 */}
           <div className="ob-env-tools"><EnvProbeSection key={probeKey} locked={mirrorSaving} onLeave={finish} /></div>
         </div>}
-        {step === 'permissions' && (computerAvailable === null
+        {step === 'permissions' && (computerAvailable === null || improve === null
           ? <p className="ob-muted" role="status">{t('desktopPermissions.loading')}</p>
           : <div className="ob-permission-layout">
               <div className="seg ob-sections">
@@ -754,9 +775,11 @@ export const OnboardingWizard: React.FC<{
               </div>
               {/* 操作电脑 ↔ 语音与媒体 是同一个权限卡实例换 only:切这两页不卸载,进行中的授权 / 安装不被打断(卸载会关掉系统授权引导)。
                   快照持续回报:进这一步时那一次读失败了,之后卡片重试 / 轮询成功,「操作电脑」和电脑历史还能回来。 */}
-              <div className="ob-permission-pane" key={shownTab === 'history' ? 'history' : 'device'}>
+              <div className="ob-permission-pane" key={shownTab === 'history' || shownTab === 'improve' ? shownTab : 'device'}>
                 {shownTab === 'history'
                   ? <OnboardingComputerHistory mode={themeMode} onBusyChange={setHistorySaving} onUnsupported={() => setHistoryGone(true)} />
+                  : shownTab === 'improve'
+                  ? improve && <OnboardingImprove view={improve} onChange={setImprove} onBusyChange={setImproveSaving} />
                   : <DesktopPermissions mode={themeMode} only={permissionSets[shownTab]}
                       onSnapshot={(snapshot) => setComputerAvailable(snapshot.computerUseAvailable && isSupportedPlatform(snapshot.platform))} />}
               </div>
