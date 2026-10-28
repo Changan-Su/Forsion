@@ -59,6 +59,8 @@
  *   npm run live:harness -- --only nested                     # 父子会话(10-17,方案「子会话与任务卡」):让它分头开子会话查三个模块 → start_session ≥2、子会话各自跑完、
  *                                                              结果以 <child_sessions_update> 送回主会话并自动接着做一轮、汇总点对三个坏文件;再问一句须先问用户的事 → 问句收尾置「等你」、下一句清掉(或走 ask_user,台架照用户原话答)。
  *                                                              改 services/childSessions.ts / tools/builtin/childSessions.ts 的措辞后跑
+ *   npm run live:harness -- --only nestedmsg                  # 会话互通(10-28,对齐 Claude):① 主会话先聊出一个事实 → 开 context fork 的子会话,子会话答得出那个事实;
+ *                                                              ② 两个兄弟子会话,一个读口令后 send_to_session 发给另一个,另一个收到 <session_message> 后把口令写进文件。改会话互发 / fork 后跑
  *   npm run live:harness -- --only ultra --model xai/grok-4.7  # Ultra 档(09-27):改 ULTRA_SECTION / delegate 描述 / 子代理成本闸后跑:可并行的题一轮派 ≥2 个且真并行、琐碎题 0 个、不开 Ultra 的对照只记数
  *   npm run live:harness -- --only fast --model codex/gpt-6-luna  # Fast 档(10-25,对标 Codex /fast):开了的会话 llm-debug 行带 service_tier=priority 且答题照常,没开的不带(改 Fast 下发 / Codex 目录解析后跑;只对目录列了 Fast 的 Codex 订阅模型有意义)
  *   TANGU_CONTEXT_WINDOW_TOKENS=100000 npm run live:harness -- --only ultra --model codex/gpt-5.6-luna  # Ultra 拉满上下文(09-27):上限压到 100k,族表 272k 的模型 Ultra 两跑窗口须 272k、对照 100k
@@ -220,7 +222,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'parkedask', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'imgtools', 'account', 'webpublish', 'nested', 'branch', 'musedm', 'humandims', 'pluginsandbox'];
+const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'parkedask', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'imgtools', 'account', 'webpublish', 'nested', 'nestedmsg', 'branch', 'musedm', 'humandims', 'pluginsandbox'];
 KEYS.push('bluebird');
 KEYS.push('signals');
 KEYS.push('musechat');
@@ -265,7 +267,7 @@ const GIT_PREFIX = 'livetest/'; const GIT_TAG = '[LIVE]';
 // opt-in:缺省全量跑里**不带**这几个 —— cache 7 个 run / churn 6 个 run(都慢),cache 与 recall-unprompted
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
-const OPT_IN = new Set(['pluginsandbox', 'humandims', 'nested', 'branch', 'musedm', 'realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'parkedask', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'appsettings', 'control', 'phone']);
+const OPT_IN = new Set(['pluginsandbox', 'humandims', 'nested', 'nestedmsg', 'branch', 'musedm', 'realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'parkedask', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'appsettings', 'control', 'phone']);
 OPT_IN.add('bluebird'); // --only bluebird --plugin-src <bundle>: real instruction-following on supplied transcripts
 OPT_IN.add('signals');
 OPT_IN.add('musechat');
@@ -5445,7 +5447,9 @@ Then reply with only the command output.`,
     const found3 = ['sumLineItems_v2', 'isWeekend_v2', 'capitalize_v2'].every((f) => after.includes(f));
     const parentRow = (await api('/agent/sessions?limit=500')).sessions.find((x) => x.id === parent);
     const midWait = midKidsBusy && !!midRow?.awaiting_user;
-    const ok1 = !ev1.error && starts >= 2 && kids.length >= 2 && settled && updates.length >= 1 && found3 && !midWait;
+    // 主会话不许拿会话互发去查 / 催还在跑的子会话(live 10-28:列表带状态时它轮询了一遍又挨个发消息)
+    const pokes = ev1.toolCalls.filter((n) => n === 'list_linked_sessions' || n === 'send_to_session').length;
+    const ok1 = !ev1.error && starts >= 2 && kids.length >= 2 && settled && updates.length >= 1 && found3 && !midWait && !pokes;
 
     // ② 要先问用户的事:模型以问句收尾 → 列表「等你」;用户回一句,那一轮开始就清掉。走 ask_user(阻塞询问,界面按 attention 画等你)也算,台架照用户原话答
     const ask = `live-nested-ask-${Date.now()}`;
@@ -5461,11 +5465,70 @@ Then reply with only the command output.`,
 
     return {
       ok: ok1 && ok2,
-      detail: `【分头查】start_session ×${starts}(工具序列 ${ev1.toolCalls.join(' → ') || '无'});子会话 ${kids.length} 个;${settled ? '都收尾' : '8 分钟没收完!'};回报行 ${updates.length} 条;汇总${found3 ? '三个坏文件都点对' : '没点全!'};子会话在跑时主会话「等你」${midWait ? '误置!' : midKidsBusy ? '没置' : '(没赶上子会话在跑)'};收尾后${parentRow?.awaiting_user ? '等你(汇总以问句结尾)' : '没等'}`
+      detail: `【分头查】start_session ×${starts}(工具序列 ${ev1.toolCalls.join(' → ') || '无'});子会话 ${kids.length} 个;${settled ? '都收尾' : '8 分钟没收完!'};回报行 ${updates.length} 条;汇总${found3 ? '三个坏文件都点对' : '没点全!'};子会话在跑时主会话「等你」${midWait ? '误置!' : midKidsBusy ? '没置' : '(没赶上子会话在跑)'};收尾后${parentRow?.awaiting_user ? '等你(汇总以问句结尾)' : '没等'};${pokes ? `查 / 催子会话 ×${pokes}!` : '没去查 / 催子会话'}`
         + ` 【先问用户】${viaAsk ? 'ask_user 询问(台架照原话答)' : `问句收尾,列表「等你」${row2?.awaiting_user ? '在' : '没有!'}`};回答后${row3?.awaiting_user ? '还在!' : '清掉了'}${usedAnswer ? ',标题用上了回答' : ''}`,
       output: `【① 主会话第一轮】${ev1.content}\n\n【回报行】${updates.map((m) => String(m.content).slice(0, 1200)).join('\n---\n')}\n\n【接着做那一轮】${after}\n\n【② 先问】${ev2.content}\n\n【③ 用户回答后】${ev3.content}`,
       toolCalls: [...ev1.toolCalls, ...ev2.toolCalls, ...ev3.toolCalls],
       ttftMs: ttft(ev1), tokens: (tokensOf(ev1) || 0) + (tokensOf(ev2) || 0) + (tokensOf(ev3) || 0) || null,
+    };
+  });
+
+  await scenario('nestedmsg', 'nestedmsg 会话互通:fork 子会话带上主会话的对话;兄弟子会话用 send_to_session 传话', async () => {
+    const root = join(workspace, 'nestedmsg');
+    mkdirSync(root, { recursive: true });
+    const SECRET = `HERON-${Math.floor(1000 + Math.random() * 9000)}`;
+    writeFileSync(join(root, 'secret.txt'), `${SECRET}\n`);
+    const sessionsOf = async () => (await api('/agent/sessions?limit=500')).sessions;
+    // 主会话和它名下都不 busy(最多 ms);回报可能还在送的路上,再看一眼
+    const settle = async (parent, ms) => {
+      const t0 = Date.now();
+      while (Date.now() - t0 < ms) {
+        await new Promise((r) => setTimeout(r, 5000));
+        const ss = await sessionsOf();
+        const kids = ss.filter((x) => x.parent_session_id === parent);
+        if (kids.length && !ss.find((x) => x.id === parent)?.busy && kids.every((k) => !k.busy)) {
+          await new Promise((r) => setTimeout(r, 4000));
+          const again = await sessionsOf();
+          if (!again.find((x) => x.id === parent)?.busy && again.filter((x) => x.parent_session_id === parent).every((k) => !k.busy)) return again.filter((x) => x.parent_session_id === parent);
+        }
+      }
+      return null;
+    };
+    const lastModel = async (sid) => ((await api(`/agent/sessions/${sid}/messages?limit=200`)).messages || []).filter((m) => m.role === 'model').map((m) => String(m.content || '')).join('\n');
+
+    // ① fork:事实只在主会话的对话里,简报里不许重复
+    const F = `live-nestedmsg-fork-${Date.now()}`;
+    const ev1 = await run(F, '记一下:这个项目的内部代号是「蓝鹭」,对外发布日期定在 11 月 14 日。只回「记下了」,不用工具。', 180_000, { approvalMode: 'full-auto' });
+    const ev2 = await run(F, '开一个子会话,让它带上我们这段对话的上下文,用一句话写出发布公告的标题(要包含代号和日期)。简报里不要重复代号和日期,让它自己从对话里找。', 240_000, { approvalMode: 'full-auto' });
+    const startArgs = (ev2.toolArgs || []).filter((t) => t.name === 'start_session').map((t) => toolArgsText(t.arguments));
+    const forkUsed = startArgs.some((a) => /"context"\s*:\s*"fork"/.test(a));
+    const briefLeak = startArgs.some((a) => a.includes('蓝鹭'));
+    const fKids = await settle(F, 300_000);
+    const childText = fKids?.[0] ? await lastModel(fKids[0].id) : '';
+    const childKnows = childText.includes('蓝鹭') && /11\s*月\s*14/.test(childText);
+    const ok1 = !ev1.error && !ev2.error && forkUsed && !!fKids && childKnows;
+
+    // ② 兄弟传话
+    const S = `live-nestedmsg-peer-${Date.now()}`;
+    const TASK = '开两个子会话,同时开。第一个叫「读口令」:读 nestedmsg/secret.txt 里的口令,用 list_linked_sessions 找到另一个叫「写口令」的子会话,用 send_to_session 把口令发给它,然后结束。'
+      + '第二个叫「写口令」:先什么都别做、直接结束这一轮;等「读口令」把口令发来以后,把口令原样写进 nestedmsg/got.txt。两个都做完以后告诉我 got.txt 里是什么。';
+    const ev3 = await run(S, TASK, 300_000, { approvalMode: 'full-auto' });
+    const sKids = await settle(S, 480_000);
+    let got = '';
+    try { got = readFileSync(join(root, 'got.txt'), 'utf8').trim(); } catch { /* 没写 */ }
+    const writer = (sKids || []).find((k) => String(k.title || '').includes('写'));
+    const wMsgs = writer ? ((await api(`/agent/sessions/${writer.id}/messages?limit=200`)).messages || []) : [];
+    const gotMsg = wMsgs.some((m) => m.role === 'user' && String(m.content).startsWith('<session_message '));
+    const ok2 = !ev3.error && !!sKids && got.includes(SECRET) && gotMsg;
+    const pAfter = await lastModel(S);
+
+    return {
+      ok: ok1 && ok2,
+      detail: `【fork】start_session ${startArgs.length ? `×${startArgs.length},context ${forkUsed ? 'fork' : '不是 fork!'}` : '没调!'};简报${briefLeak ? '里重复了代号(仍算过,只记)' : '没重复代号'};子会话${fKids ? '收尾' : '没收完!'};${childKnows ? '答出代号和日期' : '答不出代号 / 日期!'}`
+        + ` 【兄弟传话】子会话 ${sKids ? sKids.length : '没收完!'} 个;「写口令」${gotMsg ? '收到 <session_message>' : '没收到消息!'};got.txt ${got ? (got.includes(SECRET) ? '是口令' : `内容不对:${got.slice(0, 40)}`) : '没写!'}`,
+      output: `【fork 子会话】${childText}\n\n【start_session 参数】${startArgs.join('\n')}\n\n【兄弟 · 主会话】${ev3.content}\n---\n${pAfter}\n\n【写口令 收到的】${wMsgs.filter((m) => m.role === 'user').map((m) => String(m.content).slice(0, 600)).join('\n---\n')}`,
+      toolCalls: [...ev1.toolCalls, ...ev2.toolCalls, ...ev3.toolCalls],
+      ttftMs: ttft(ev2), tokens: [ev1, ev2, ev3].reduce((n, e) => n + (tokensOf(e) || 0), 0) || null,
     };
   });
 

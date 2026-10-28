@@ -63,7 +63,7 @@ import { loadSchedule, entriesOf, upcomingScheduleLines } from './agentSchedule.
 import { agentIdentitySection, applyAgentActivation } from './agentActivation.js';
 import { clampApprovalMode, clearRunRemoteTaint, effectiveRemote, remoteApprovalCap, remoteOf, REMOTE_WRITABLE_CONFIG_KEYS } from './remoteOrigin.js';
 import { remoteLocked, remoteLockedBody } from './remoteLock.js'; // P1-K2
-import { isChildBriefRun, isUnattendedRun, registerRun, runCategory, unregisterRun, type RunCategory } from './remoteActivity.js'; // P1-K2
+import { isChildBriefRun, isSiblingMessageRun, isUnattendedRun, registerRun, runCategory, unregisterRun, type RunCategory } from './remoteActivity.js'; // P1-K2
 import { requestInquiry } from './inquiries.js';
 import { askUserPayload, formatInquiryResult, isSystemAnswer, normalizeInquiryAnswer } from '../tools/builtin/interaction.js';
 import { loadProjectDocSafe, wrapProjectDoc } from './projectDoc.js';
@@ -1202,7 +1202,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   const modeSessionId = profile.capabilities.hostExec
     // 父子会话的派生轮(start_session / send_to_session 起的子会话轮、回报后自动接着做的主会话轮)也跟本会话现档:中途收紧当场生效(Codex 10-17 #6)。
     // 这两个字段只由引擎内部 createRun 写,POST /agent/runs 按字段名组装 input、客户端塞不进来。
-    ? approvalModeSessionId({ fromClient: input.origin === 'client' || input.fromParent === true || input.childReport === true, sessionId, teamSessionId: verifiedTeamSessionId, followSessionMode: teamMember.followSessionMode === true })
+    ? approvalModeSessionId({ fromClient: input.origin === 'client' || input.fromParent === true || input.childReport === true || !!input.fromSession, sessionId, teamSessionId: verifiedTeamSessionId, followSessionMode: teamMember.followSessionMode === true })
     : undefined;
   // 无人值守的异步审批(Muse ask/agent 档):**只信引擎内部起的 run** —— input.background 由 muse.ts 直接写进
   // createRun 的 input,/agent/runs 路由按字段名组装 input、客户端塞不进来;agentConfig 是请求体可控的,
@@ -1300,8 +1300,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     await updateRunStatus(runId, 'running');
     await publish(runId, 'status', { state: 'running' });
     // Historian 首帧标题:只看用户消息,与模型回复并行;放在群聊分支前,两条路都覆盖。落库后推事件让侧栏立刻刷新。
-    // 子会话回报那一轮(childReport)的「用户消息」是机器写的 <child_sessions_update>,不拿它起标题
-    if (!input.childReport) onUserRunStart(sessionId, userId, String(input.message || ''), input.userMessageId,
+    // 子会话回报那一轮(childReport)/ 会话消息那一轮(fromSession)的「用户消息」是机器写的,不拿它起标题
+    if (!input.childReport && !input.fromSession) onUserRunStart(sessionId, userId, String(input.message || ''), input.userMessageId,
       (title) => { void publish(runId, 'session_title', { sessionId, title }).catch(() => {}); });
     // 经工作区上传进来的附件(手机 / 桌面原生选择器读成工作区附件的文件)落在会话沙箱目录,host 工具的 cwd 是工作区 —— 按桌面本机附件
     // 同一格式(正文第一行的路径 token)把它们的绝对路径拼进**落库**的这条用户消息:模型这一轮与之后每一轮回放都看得见。
@@ -2476,7 +2476,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
 
       // 托盘 run 的 ask_user 也挂起(10-23 方案「待确认卡片」B):问题照发进对话末尾的卡片堆、不等,先给模型占位结果;
       // 用户答了,在迭代边界把答案放回原工具消息 + 一行 <inquiry_update>。子会话 / 无人值守照旧走工具里的当场代答;计划审阅不挂(只读模式下没别的可做)。
-      const ask = approvalTray && effCall.function.name === 'ask_user' && !isChildBriefRun(runId) && !isUnattendedRun(runId)
+      const ask = approvalTray && effCall.function.name === 'ask_user' && !isChildBriefRun(runId) && !isSiblingMessageRun(runId) && !isUnattendedRun(runId)
         ? askUserPayload(safeParse(effCall.function.arguments)) : null;
       if (ask) {
         const entry: ParkedCall = { call, effCall, preview: ask.question, preCtxText, parallelGroup };
