@@ -924,6 +924,8 @@ export type PluginInfo = {
   settling?: boolean
   /** 此刻名下注册的工具名(10-19 起的引擎才给;和核心工具撞名的已剔掉)。插件结果卡片只认这里列出的。 */
   tools?: string[]
+  /** 在跑的实例过了官方签名判定(10-28 起的引擎才给)。toolResultCards 据此放行官方插件给少数核心工具画卡。 */
+  official?: boolean
 }
 /** 重扫 / 安装的结果。reloadedIds 有 = 引擎会热插拔(10-02 起):原地升级即生效,needsRestart 只剩「没法热换」那几种(见 needsRestart);
  *  旧引擎不给 reloadedIds,只激活全新 id,原地更新一律得重启。 */

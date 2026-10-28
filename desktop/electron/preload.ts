@@ -282,6 +282,8 @@ const api = {
   codePreviewServePath: (filePath: string): Promise<{ url: string }> => ipcRenderer.invoke('codePreview:servePath', filePath),
   /** 无本机路径的 HTML(云沙箱/对话内联):把文本挂到令牌根,同样拿到真实源。 */
   codePreviewServeHtml: (html: string): Promise<{ url: string }> => ipcRenderer.invoke('codePreview:serveHtml', html),
+  /** 网页卡片的缩略图:主进程离屏截一张 http(s) 页面(见 electron/pageThumb.ts);拍不到 → null。 */
+  pageThumb: (url: string, version?: string): Promise<{ dataUrl: string; title: string } | null> => ipcRenderer.invoke('pageThumb:capture', url, version),
   /** Coding Space 项目根 ~/Forsion/Project(确保存在)。 */
   codeProjectsRoot: (): Promise<string> => ipcRenderer.invoke('codeProjects:root'),
   codeStudioWatch: (root: string | null) => ipcRenderer.invoke('codeStudio:watch', root),
