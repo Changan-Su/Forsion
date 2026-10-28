@@ -20,6 +20,7 @@ import path from 'node:path';
 import { tanguHome, WORKSPACE_DIR_NAME } from '../core/tanguHome.js';
 import { PROJECT_DOC_FILENAMES, isPlainFileUnder, loadProjectDocSafe } from './projectDoc.js';
 import { listProjectSkills } from '../skills/localSkills.js';
+import { moveToTrash } from './trash.js';
 import { runGit } from './runtimeContext.js';
 import { isRepoTrusted, repoConfigRisks } from './gitTrust.js';
 import { REMOTES_LISTED, describeRemote, pushRemoteOf, type GitRemoteInfo } from './gitRemotes.js';
@@ -369,6 +370,18 @@ export async function createProjectSkill(cwd: string, input: { slug?: unknown; n
   // 值一律 JSON 双引号串(合法 YAML 标量),parseFrontmatter 会剥掉引号;冒号 / 井号在裸值里会被别的解析器读歪。
   await writeNew(path.join(dir, 'SKILL.md'), `---\nname: ${JSON.stringify(name)}\ndescription: ${JSON.stringify(description)}\n---\n\n${body}\n`);
   return { id: `local:${slug}`, name, description, path: dir, legacy: false };
+}
+
+/** 删一个项目技能(项目详情里那一行;10-28 手动卸载规范):整个文件夹进回收站,30 天内可在设置里恢复。
+ *  只认这个项目自己列出来的技能文件夹(含旧位置 .forsion/skills),路径一律由服务端从清单里取。 */
+export async function deleteProjectSkill(cwd: string, skillPath: unknown): Promise<{ trashId: string }> {
+  const skill = (await projectSkills(cwd)).find((s) => s.path === skillPath);
+  if (!skill) throw new Error('skill not found in this project');
+  const rel = path.relative(cwd, skill.path).split(path.sep).join('/');
+  await assertSafeChain(cwd, rel, false);
+  const entry = await moveToTrash({ kind: 'skill', ref: `project:${path.basename(skill.path)}`, name: skill.name, paths: [{ path: skill.path, role: 'dir' }], extra: { project: cwd } });
+  if (!entry) throw new Error('skill not found in this project');
+  return { trashId: entry.id };
 }
 
 // ── 项目图标 ───────────────────────────────────────────────────────────────
