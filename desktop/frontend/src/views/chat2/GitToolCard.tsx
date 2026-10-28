@@ -86,11 +86,11 @@ export function parseGitResult(ev: Pick<ToolEvent, 'result' | 'isError'>): { ok:
     return failed ? { ok: false, data: { message: raw.replace(/^Error:\s*/, '').split('\n')[0] } } : null
   }
 }
-const argsOf = (raw?: string): Record<string, any> => { try { return raw ? JSON.parse(raw) : {} } catch { return {} } }
+const argsOf = (raw?: string): Record<string, any> => { try { const v = raw ? JSON.parse(raw) : null; return v && typeof v === 'object' ? v : {} } catch { return {} } }
 
-/** 这张卡能不能现读 / 能不能动手:只有这台电脑上的桌面端、会话在本机引擎上。 */
+/** 这张卡能不能现读 / 能不能动手:只有这台电脑上的桌面端、会话在本机引擎上(设备页远程连进来的不算:写接口拒远端)。 */
 function canReach(sessionId: string | null | undefined): boolean {
-  return !!sessionId && UI_MODE !== 'mobile' && !window.tangu?.mobile && refForSession(sessionId).kind !== 'unit'
+  return !!sessionId && UI_MODE !== 'mobile' && !window.tangu?.mobile && !window.tangu?.remoteCaller && refForSession(sessionId).kind !== 'unit'
 }
 
 interface Live { git: GitSummary | null; login: string | null | undefined; name: string }
@@ -260,17 +260,24 @@ export function GitToolCard({ events, sessionId }: { events: ToolEvent[]; sessio
     changes: fromTool.changes?.files, changesTotal: fromTool.changes?.total,
   } as GitSummary : null)
   const canAct = reach && !!git?.repo && !git.nested && !git.detached && !!sessionId
-  const act = (kind: 'push' | 'pull') => {
+  const act = async (kind: 'push' | 'pull') => {
     if (!sessionId) return
     setBusy(kind); setActErr('')
-    void (kind === 'push' ? gitPushProject(homeTarget(), sessionId, false, retryRemote) : gitPullProject(homeTarget(), sessionId))
-      .then(reload, (e) => setActErr(errText(e?.code, e?.message))).finally(() => setBusy(''))
+    try {
+      // 按钮上写着推到哪:Git 页在这张卡露面之后改过推送去向,就先刷新标签、不推(再点一次推到新写的那里)
+      if (kind === 'push' && !retryRemote && (await getProjectContext(homeTarget(), sessionId))?.git?.pushRemote !== git?.pushRemote) { reload(); return }
+      await (kind === 'push' ? gitPushProject(homeTarget(), sessionId, false, retryRemote) : gitPullProject(homeTarget(), sessionId))
+      reload()
+    } catch (e: any) { setActErr(errText(e?.code, e?.message)) } finally { setBusy('') }
   }
   const openDetails = () => {
     const path = useApp.getState().sessions.find((x) => x.id === sessionId)?.project_path
     if (path) showDetails({ kind: 'project', path, git: Date.now() })
   }
   const openPage = (url: string) => { void import('../../builtins').then((m) => m.routeExternalUrl(url)) }
+  // 推成功后的「打开仓库网页」去刚推到的那个远端(只推这一次的不是缺省去向)
+  const pushed = lastPush && !pushFailed ? parseGitResult(lastPush)?.data : undefined
+  const pushedWeb: string | undefined = pushed?.site?.web ?? (pushed?.remote === remote?.name ? remote?.web : undefined)
   const total = git?.changesTotal ?? git?.changes?.length ?? 0
   const synced = !!git?.repo && !total && !git.ahead && !git.behind && !!git.upstream
   return <div className="git-card-wrap" data-git-card={writes.length ? 'result' : 'status'}>
@@ -287,14 +294,14 @@ export function GitToolCard({ events, sessionId }: { events: ToolEvent[]; sessio
         {actErr && <p className="git-card-err">{actErr}</p>}
         {form && canAct && sessionId ? <CommitForm sessionId={sessionId} onCancel={() => setForm(false)} onDone={() => { setForm(false); reload() }} /> : (reach || writes.length > 0) && <div className="git-card-acts">
           {canAct && !!total && <button type="button" className="btn sm primary" data-git-card-act="commit" onClick={() => setForm(true)}><GitCommitHorizontal size={13} />{t('projectProfile.git.commit')}</button>}
-          {canAct && remote && (!!git?.ahead || pushFailed || !git?.upstream) && <button type="button" className="btn sm" data-git-card-act="push" disabled={!!busy} onClick={() => act('push')}>
+          {canAct && remote && (!!git?.ahead || pushFailed || !git?.upstream) && <button type="button" className="btn sm" data-git-card-act="push" disabled={!!busy} onClick={() => void act('push')}>
             {busy === 'push' ? <Loader2 size={13} className="spin" /> : <Upload size={13} />}
             {pushFailed ? t('gitCard.retryPush') : git?.ahead ? t('gitCard.pushToCount', { site: siteName(remote, t), count: git.ahead }) : t('gitCard.pushTo', { site: siteName(remote, t) })}
           </button>}
-          {canAct && !!git?.behind && <button type="button" className="btn sm" data-git-card-act="pull" disabled={!!busy} onClick={() => act('pull')}>
+          {canAct && !!git?.behind && <button type="button" className="btn sm" data-git-card-act="pull" disabled={!!busy} onClick={() => void act('pull')}>
             {busy === 'pull' ? <Loader2 size={13} className="spin" /> : <ArrowDownToLine size={13} />}{t('projectProfile.git.pullCount', { count: git.behind })}
           </button>}
-          {writes.length > 0 && !pushFailed && remote?.web && lastPush && <button type="button" className="btn sm" onClick={() => openPage(remote.web!)}><ExternalLink size={13} />{t('gitCard.openPage')}</button>}
+          {writes.length > 0 && pushedWeb && <button type="button" className="btn sm" onClick={() => openPage(pushedWeb)}><ExternalLink size={13} />{t('gitCard.openPage')}</button>}
           {reach && <button type="button" className="btn sm ghost git-card-end" data-git-card-act="details" onClick={openDetails}><ExternalLink size={13} />{t('gitCard.openDetails')}</button>}
         </div>}
       </div></div>

@@ -983,6 +983,8 @@ export function customVerdict(call: ToolCall, rules: CustomApprovalRules): 'allo
 
 export interface GateCtx {
   sessionId: string; execMode?: string; approvalMode?: ApprovalMode; cwd?: string; extraRoots?: string[]; profile?: AppProfile;
+  /** 会话所属项目的目录(git_* 的审批说明按它读,和执行同一个目录)。 */
+  projectPath?: string;
   /** 审批档跟这个会话**此刻**存的设置走(run 中途在输入区切档当场生效;团队成员 = 团队会话);没存才用 approvalMode 快照。
    *  只给「档位本就来自会话设置」的 run(见 agentLoop.approvalModeSessionId),通道 / Muse / 自动化各自定档,不给。 */
   modeSessionId?: string;
@@ -1233,7 +1235,7 @@ export async function gateToolCall(
 
   // 控制面调用因保护配置而问(完全放行档改默认工作目录)时,卡上同样先放引擎自己读到的事实,不只是模型写的那句。
   const base = control || (protectedAsk && isControl) ? await controlPreview(call)
-    : name === 'git_commit' || name === 'git_push' || name === 'git_pull' ? await gitPreview(call, ctx.cwd, ctx.profile)
+    : name === 'git_commit' || name === 'git_push' || name === 'git_pull' ? await gitPreview(call, ctx.projectPath, ctx.profile)
     : approvalPreview(call, { profile: ctx.profile });
   const preview = protectedAsk
     ? '⚠ Protected config or credentials · ' + base

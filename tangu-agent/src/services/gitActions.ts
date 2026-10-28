@@ -548,6 +548,7 @@ export async function gitCreateBranch(cwd: string, name: unknown, trust?: boolea
 export async function gitPush(cwd: string, trust?: boolean, /** 给了 = 就推到这个远端的同名分支并把它设成上游,不看分支上原有的上游设置(「发布」用:刚加的远端才是目的地)。 */ to?: string,
   /** once = 只推这一次(「远端」卡片的「只推送这一次」、加第二个远端但不改去向时的发布):推到 to 的同名分支,**不动**分支的上游设置。 */
   opts: { once?: boolean } = {}): Promise<{ remote: string; branch: string; target: string; output: string; ownCredentials?: boolean }> {
+  await assertNotSharedWorkspace(cwd);
   await requireRepoRoot(cwd);
   const head = must(await readGit(cwd, ['rev-parse', '--abbrev-ref', 'HEAD']), 'rev-parse').stdout.trim();
   if (!head || head === 'HEAD') throw new GitActionError('detached', 'HEAD is detached; switch to a branch before pushing');
@@ -670,6 +671,7 @@ export interface PullResult {
  *  ponytail: 检出到一半失败(过滤器报错 / 超时被杀)时已经写出去的文件不回滚 —— 与终端里的 git 一样,HEAD 没动,
  *    `git status` 看得到;要做成原子的得自己备份工作区,不值。超时放宽到几分钟,别在大仓库的检出中途动手。 */
 export async function gitPull(cwd: string, trust?: boolean): Promise<PullResult> {
+  await assertNotSharedWorkspace(cwd);
   await requireRepoRoot(cwd);
   const head = must(await readGit(cwd, ['rev-parse', '--abbrev-ref', 'HEAD']), 'rev-parse').stdout.trim();
   if (!head || head === 'HEAD') throw new GitActionError('detached', 'HEAD is detached; switch to a branch before pulling');

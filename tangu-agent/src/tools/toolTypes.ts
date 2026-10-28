@@ -83,6 +83,8 @@ export interface ToolContext {
   muse?: boolean;
   /** 本会话属于一个本机项目(agentLoop 按会话存档的 project_path 定;可信,模型给不了)。remember 据此露出「项目级」。 */
   projectScoped?: boolean;
+  /** 同上那个项目的 canonical 目录(git_* 工具只在这里动手,不认 cwd:运行目录可被别处改,而 Git 页 / 卡片 / 审批卡读的是项目)。 */
+  projectPath?: string;
   /** 无人值守 run 的异步审批档(仅引擎内部按 run 来源设定;delegate 子代理从父 ctx 继承,否则子代理越界会挂在同步审批上)。 */
   approvalDeferral?: 'queue' | 'agent';
 

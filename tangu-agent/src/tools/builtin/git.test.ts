@@ -25,7 +25,7 @@ let root: string;
 const savedEnv = { ...process.env };
 const git = (cwd: string, ...args: string[]): string => execFileSync('git', ['-C', cwd, ...args], { stdio: 'pipe', encoding: 'utf8' }).trim();
 const tools = new Map<string, ToolDef>(gitToolsProvider.tools().map((t) => [t.name, t]));
-const ctxOf = (cwd: string): ToolContext => ({ userId: 'u1', sessionId: 's1', appId: 'tangu', execMode: 'host', cwd, projectScoped: true } as ToolContext);
+const ctxOf = (cwd: string): ToolContext => ({ userId: 'u1', sessionId: 's1', appId: 'tangu', execMode: 'host', cwd, projectScoped: true, projectPath: cwd } as ToolContext);
 const run = async (name: string, cwd: string, args: Record<string, unknown> = {}): Promise<string> => String(await tools.get(name)!.execute(args, ctxOf(cwd)));
 const json = (out: string): any => JSON.parse(out.startsWith('Error:') ? out.slice(out.indexOf('\n') + 1) : out);
 
@@ -62,8 +62,7 @@ describe('git 工具', () => {
   it('只在属于本机项目的会话里出现', () => {
     const t = tools.get('git_status')!;
     expect(t.mode).toBe('host');
-    expect(t.isEnabledFor!({} as never, { ...ctxOf('/tmp'), projectScoped: undefined })).toBe(false);
-    expect(t.isEnabledFor!({} as never, { ...ctxOf('/tmp'), cwd: undefined })).toBe(false);
+    expect(t.isEnabledFor!({} as never, { ...ctxOf('/tmp'), projectScoped: undefined, projectPath: undefined })).toBe(false);
     expect(t.isEnabledFor!({} as never, ctxOf('/tmp'))).toBe(true);
   });
 
@@ -135,6 +134,27 @@ describe('git 工具', () => {
     }
   });
 
+  it('只在会话的项目里动手:运行目录指向别处也一样;run 停了就不动手', async () => {
+    const { cwd } = project('scoped');
+    const { cwd: other } = project('other');
+    writeFileSync(path.join(cwd, 'p.txt'), 'p'); writeFileSync(path.join(other, 'o.txt'), 'o');
+    const c = json(String(await tools.get('git_commit')!.execute({ message: 'scoped' }, { ...ctxOf(cwd), cwd: other })));
+    expect(git(cwd, 'rev-parse', 'HEAD')).toBe(c.sha);
+    expect(git(other, 'status', '--porcelain')).toBe('?? o.txt');
+    const ac = new AbortController(); ac.abort();
+    const out = String(await tools.get('git_commit')!.execute({ message: 'late' }, { ...ctxOf(other), signal: ac.signal }));
+    expect(out.startsWith('Error:')).toBe(true);
+    expect(git(other, 'log', '-1', '--format=%s')).toBe('base');
+  });
+
+  it('默认工作区:推 / 拉照样拒(和提交同一道闸)', async () => {
+    const { cwd } = project('shared');
+    process.env.TANGU_DEFAULT_WORKSPACE = cwd;
+    expect(json(await run('git_push', cwd)).error).toBe('shared_workspace');
+    expect(json(await run('git_pull', cwd)).error).toBe('shared_workspace');
+    delete process.env.TANGU_DEFAULT_WORKSPACE;
+  });
+
   it('审批说明写出提交哪些文件、推到哪个远端', async () => {
     const { cwd } = project('preview');
     writeFileSync(path.join(cwd, 'c.txt'), 'c');
@@ -144,5 +164,7 @@ describe('git 工具', () => {
     const push = await gitApprovalPreview('git_push', {}, cwd);
     expect(push).toMatch(/^push main to .*\(origin\)\nwith this computer's own git credentials\n0 commits ahead of origin\/main$/);
     expect(await gitApprovalPreview('git_status', {}, cwd)).toBeNull();
+    git(cwd, 'remote', 'set-url', '--push', 'origin', path.join(root, 'elsewhere.git'));
+    expect(await gitApprovalPreview('git_push', {}, cwd)).toMatch(/^⚠ origin pushes to .*elsewhere\.git, not to the address/);
   });
 });

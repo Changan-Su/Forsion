@@ -11,13 +11,13 @@
  * 审批档(approvals.toolNeedsApproval;10-28 用户定「有权限就直接做」):status 不问;commit 同写文件(只读档问);
  * push / pull 同跑命令(capabilities.approval:'command':只读、替我批准问,完全通行直接做,「本会话总是允许」有效)。不用 'always'。
  *
- * 可见性:host 模式 + 会话属于一个本机项目(ctx.projectScoped,按会话存档的 project_path 定,模型给不了)。开着宿主沙箱时
+ * 可见性:host 模式 + 会话属于一个本机项目(ctx.projectPath,按会话存档的 project_path 定,模型给不了;只在这个目录动手,不认 cwd)。开着宿主沙箱时
  * 不在 hostSandboxPolicy 的放行名单里(git 子进程不进沙箱)→ 看不到,模型照旧在沙箱里用 run_bash。
  */
 import type { ToolDef, ToolProvider } from '../toolRegistry.js';
 import type { ToolContext } from '../toolTypes.js';
-import { GitActionError, gitCommit, gitPending, gitPull, gitPush, serialized } from '../../services/gitActions.js';
-import { canonicalProjectPath, gitSummary, type GitSummary } from '../../services/projectContext.js';
+import { GitActionError, gitCommit, gitPending, gitPull, gitPush, readGit, serialized } from '../../services/gitActions.js';
+import { canonicalProjectPath, gitSummary, maskRemoteUrl, type GitSummary } from '../../services/projectContext.js';
 import { githubLinkInfo } from '../../services/githubGit.js';
 import { accountIdentityDefaults, resolveGitIdentity } from '../../services/gitIdentity.js';
 import type { GitRemoteInfo } from '../../services/gitRemotes.js';
@@ -28,7 +28,7 @@ const FILES_LISTED = 20;
 const COMMITS_LISTED = 5;
 
 function enabledFor(_p: unknown, ctx: ToolContext): boolean {
-  return !!ctx.projectScoped && !!ctx.cwd;
+  return !!ctx.projectPath;
 }
 
 /** 绑定的 GitHub 账号(远端行的「用谁的账号」)。走一趟云端,限时;读不到 = undefined(只说「绑定的 GitHub 账号」)。 */
@@ -49,8 +49,11 @@ export function describeRemote(r: GitRemoteInfo, pushRemote: string | null | und
 }
 
 async function projectDir(ctx: ToolContext): Promise<string> {
-  return canonicalProjectPath(ctx.cwd);
+  return canonicalProjectPath(ctx.projectPath);
 }
+
+/** 排到队里时用户可能已经停了这次 run(卡上的按钮正占着队):轮到了先看一眼,停了就不动手。 */
+const stillWanted = (ctx: ToolContext): void => { ctx.signal?.throwIfAborted(); };
 
 /** git_status 的结果:分支、上下游、改动清单、远端(全部列出,标出推送去向)、最近几个提交。 */
 export function renderStatus(s: GitSummary, login: string | null | undefined): Record<string, unknown> {
@@ -108,7 +111,7 @@ function failure(action: string, e: unknown): string {
  * 审批说明(英文;TUI / 通道 / 收件箱 / 代批判官读它,桌面卡另按参数和现场画结构化卡身)。模型给的参数里没有「提交哪些文件」
  * 「推到哪个站、用谁的账号」,只有闸门读得到 —— approvals.gateToolCall 限时调它,读不到退回参数。不是 git 工具 → null。
  */
-export async function gitApprovalPreview(name: string, args: any, cwd: string | undefined): Promise<string | null> {
+export async function gitApprovalPreview(name: string, args: any, /** 会话所属项目的目录(ctx.projectPath) */ cwd: string | undefined): Promise<string | null> {
   if (!cwd || !(GIT_TOOL_NAMES as readonly string[]).includes(name) || name === 'git_status') return null;
   const dir = await canonicalProjectPath(cwd);
   if (name === 'git_commit') {
@@ -127,8 +130,13 @@ export async function gitApprovalPreview(name: string, args: any, cwd: string | 
   const r = to ? s.remoteList?.find((x) => x.name === to) : undefined;
   const d = r ? describeRemote(r, s.pushRemote, login) : null;
   const where = d ? `${d.site} ${d.repo ?? r!.url} (${d.name})` : to ? `remote ${to}` : 'the default remote';
+  // 站点 / 账号按取回地址认;配了单独的推送地址(pushurl / pushInsteadOf)时提交实际去那里 → 以 ⚠ 开头写出来(桌面卡见 ⚠ 就照登这段原文)
+  const [fetchUrl, pushUrl] = to && !to.startsWith('-') ? await Promise.all([readGit(dir, ['remote', 'get-url', to]), readGit(dir, ['remote', 'get-url', '--push', to])]) : [];
+  const first = (out: string): string => out.split('\n')[0].trim();
+  const elsewhere = fetchUrl?.code === 0 && pushUrl?.code === 0 && first(pushUrl.stdout) !== first(fetchUrl.stdout) ? maskRemoteUrl(first(pushUrl.stdout)) : null;
+  const warn = elsewhere ? `⚠ ${to} pushes to ${elsewhere}, not to the address the site below is read from\n` : '';
   const ahead = !once && s.upstream ? `\n${s.ahead ?? 0} commit${s.ahead === 1 ? '' : 's'} ahead of ${s.upstream}` : '';
-  return `push ${s.branch ?? 'HEAD'} to ${where}${d ? `\nwith ${d.account}` : ''}${ahead}${once && s.pushRemote && once !== s.pushRemote ? `\nthis once; the default push target stays ${s.pushRemote}` : ''}`;
+  return `${warn}push ${s.branch ?? 'HEAD'} to ${where}${d ? `\nwith ${d.account}` : ''}${ahead}${once && s.pushRemote && once !== s.pushRemote ? `\nthis once; the default push target stays ${s.pushRemote}` : ''}`;
 }
 
 const project = {
@@ -170,6 +178,7 @@ export const gitToolsProvider: ToolProvider = {
         try {
           const cwd = await projectDir(ctx);
           return await serialized(cwd, async () => {
+            stillWanted(ctx);
             const who = await resolveGitIdentity(() => accountIdentityDefaults(ctx.userId), cwd);
             const pending = await gitPending(cwd);
             const r = await gitCommit(cwd, args?.message, undefined, pending.token, who.env);
@@ -195,6 +204,7 @@ export const gitToolsProvider: ToolProvider = {
           const cwd = await projectDir(ctx);
           const to = typeof args?.remote === 'string' && args.remote.trim() ? args.remote.trim() : undefined;
           return await serialized(cwd, async () => {
+            stillWanted(ctx);
             const [before, login] = await Promise.all([gitSummary(cwd), githubLogin()]);
             const r = to ? await gitPush(cwd, undefined, to, { once: true }) : await gitPush(cwd);
             const info = before.remoteList?.find((x) => x.name === r.remote);
@@ -216,7 +226,7 @@ export const gitToolsProvider: ToolProvider = {
       async (_args, ctx) => {
         try {
           const cwd = await projectDir(ctx);
-          return await serialized(cwd, async () => JSON.stringify({ action: 'pull', ...(await gitPull(cwd)) }));
+          return await serialized(cwd, async () => { stillWanted(ctx); return JSON.stringify({ action: 'pull', ...(await gitPull(cwd)) }); });
         } catch (e) { return failure('pull', e); }
       },
       { capabilities: { sideEffect: 'network', approval: 'command' } }),
