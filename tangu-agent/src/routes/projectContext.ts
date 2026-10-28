@@ -9,6 +9,7 @@
  *   GET  /agent/project-context/settings?sessionId=|cwd= → { settings }(桌面建会话前的轻量预取;cwd 形态给没有会话可借的项目)
  *   PUT  /agent/project-context/settings        { sessionId, settings }                    → 用户侧项目默认项
  *   POST /agent/project-context/skills          { sessionId, slug, name, description, content } → 建项目技能
+ *   DELETE /agent/project-context/skills        { sessionId, path }                        → 项目技能整夹进回收站,返回 { trashId }
  *   POST   /agent/project-context/icon          { sessionId, data } | { sessionId, emoji } → 导入图片进 .tangu/ 或设 emoji,返回 { settings }
  *          (图标只经这组端点改;PUT settings 保留 icon 现值)
  *   GET    /agent/project-context/icon?sessionId=|cwd=                                    → 图标图片二进制(settings.icon 是 emoji / 空 → 404)
@@ -37,7 +38,7 @@ import { authMiddleware, AuthRequest } from '../core/http.js';
 import { deps } from '../seams/runtime.js';
 import { query } from '../core/db.js';
 import {
-  canonicalProjectPath, createProjectSkill, deleteProjectIcon, initProjectWorkspace, projectContext, readProjectIcon, readProjectSettings,
+  canonicalProjectPath, createProjectSkill, deleteProjectSkill, deleteProjectIcon, initProjectWorkspace, projectContext, readProjectIcon, readProjectSettings,
   saveProjectIcon, setProjectIconEmoji, writeProjectDoc, writeProjectSettings,
 } from '../services/projectContext.js';
 import { forgetProjectMemory, projectMemoryView, resolveProjectCandidate, restoreCompactedFact } from '../services/projectMemory.js';
@@ -192,6 +193,16 @@ router.post('/agent/project-context/skills', authMiddleware, async (req: AuthReq
     res.json({ skill: await createProjectSkill(cwd, req.body || {}) });
   } catch (e: any) {
     fail(res, e, 'create project skill failed');
+  }
+});
+
+router.delete('/agent/project-context/skills', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const cwd = await projectDirOf(req, res, req.body?.sessionId);
+    if (!cwd) return;
+    res.json(await deleteProjectSkill(cwd, req.body?.path));
+  } catch (e: any) {
+    fail(res, e, 'delete project skill failed');
   }
 });
 

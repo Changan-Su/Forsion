@@ -2,6 +2,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { uninstallSkillByKey } from '../services/skillUninstall.js';
+import { trashDir } from '../services/trash.js';
 
 describe('user and Agent skill catalog', () => {
   let base: string;
@@ -32,7 +34,7 @@ describe('user and Agent skill catalog', () => {
     const bundle = (await api.listSkillCatalog()).find((row) => row.slug === 'catalog-sample' && row.provenance === 'bundle');
     expect(bundle).toMatchObject({ scope: 'user', readOnly: true, availability: 'available' });
     await expect(api.updateCatalogSkill(bundle!.key, { content: 'changed' })).rejects.toMatchObject({ status: 403 });
-    await expect(api.deleteCatalogSkill(bundle!.key)).rejects.toMatchObject({ status: 403 });
+    await expect(uninstallSkillByKey(bundle!.key)).rejects.toMatchObject({ status: 403 });
 
     const user = await api.createCatalogSkill({ scope: 'user', slug: 'catalog-sample', name: 'Writing: #playbook', description: 'When: "foo" # bar', content: 'User body' });
     expect(user).toMatchObject({ name: 'Writing: #playbook', description: 'When: "foo" # bar', content: 'User body' });
@@ -82,7 +84,8 @@ describe('user and Agent skill catalog', () => {
     const edited = await api.updateCatalogSkill(imported.key, { name: 'Imported: revised', content: 'Revised body' });
     expect(edited.content).toBe('Revised body');
     expect(await fs.readFile(path.join(edited.path, 'scripts', 'run.sh'), 'utf8')).toContain('echo ready');
-    const { backupPath } = await api.deleteCatalogSkill(edited.key);
+    const entry = await uninstallSkillByKey(edited.key);
+    const backupPath = path.join(trashDir(), entry.id, entry.items[0].stored);
     expect(await fs.readFile(path.join(backupPath, 'SKILL.md'), 'utf8')).toContain('Revised body');
     expect(await fs.readFile(path.join(backupPath, 'scripts', 'run.sh'), 'utf8')).toContain('echo ready');
     await expect(fs.lstat(edited.path)).rejects.toMatchObject({ code: 'ENOENT' });
@@ -107,7 +110,7 @@ describe('user and Agent skill catalog', () => {
       expect(entry).toMatchObject({ scope: 'user', compatibility: 'legacy-slug', readOnly: true });
       expect((await api.getSkillCatalogDetail(entry!.key)).content).toBe('Legacy body');
       await expect(api.updateCatalogSkill(entry!.key, { content: 'Changed' })).rejects.toMatchObject({ status: 403 });
-      await expect(api.deleteCatalogSkill(entry!.key)).rejects.toMatchObject({ status: 403 });
+      await expect(uninstallSkillByKey(entry!.key)).rejects.toMatchObject({ status: 403 });
       await expect(api.setCatalogSkillDisabled(entry!.key, true)).rejects.toMatchObject({ status: 403 });
       await expect(api.copyCatalogSkill(entry!.key, { scope: 'user' })).rejects.toMatchObject({ status: 400 });
       const copy = await api.copyCatalogSkill(entry!.key, { scope: 'user', slug: `legacy-copy-${legacyName === '中文技能' ? 'zh' : 'en'}` });
@@ -120,7 +123,7 @@ describe('user and Agent skill catalog', () => {
     await fs.writeFile(path.join(agentLegacy, 'SKILL.md'), '---\nname: Agent legacy\n---\nAgent body\n');
     const agentEntry = (await api.listSkillCatalog('coding')).find((row) => row.slug === 'Agent_Skill');
     expect(agentEntry).toMatchObject({ scope: 'agent', owner: 'coding', compatibility: 'legacy-slug', readOnly: true });
-    await expect(api.deleteCatalogSkill(agentEntry!.key, 'coding')).rejects.toMatchObject({ status: 403 });
+    await expect(uninstallSkillByKey(agentEntry!.key, 'coding')).rejects.toMatchObject({ status: 403 });
   });
 
   it('does not expose an in-progress publish stage to the runtime or catalog', async () => {

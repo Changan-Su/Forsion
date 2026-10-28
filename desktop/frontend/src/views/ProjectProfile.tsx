@@ -2,12 +2,12 @@ import { HumanCollaborationPanel } from '../components/HumanCollaborationPanel'
 import { humanRewritable, type HumanJump } from '../services/humanCollaboration'
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { AppWindow, ArrowLeft, Check, ChevronRight, Copy, Download, ExternalLink, FileText, Folder, FolderGit2, FolderInput, FolderOpen, GitBranch, GitBranchPlus, GitCommitHorizontal, ImageUp, Link2, Loader2, MessageSquarePlus, Plus, RefreshCw, Search, Settings2, Smile, Sparkles, Star, TerminalSquare, Upload, UserRound, Users, X } from 'lucide-react'
+import { AppWindow, ArrowLeft, Check, ChevronRight, Copy, Download, ExternalLink, FileText, Folder, FolderGit2, FolderInput, FolderOpen, GitBranch, GitBranchPlus, GitCommitHorizontal, ImageUp, Link2, Loader2, MessageSquarePlus, Plus, RefreshCw, Search, Settings2, Smile, Sparkles, Star, TerminalSquare, Trash2, Upload, UserRound, Users, X } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 import { useApp } from '../stores/appStore'
 import { usePageStore } from '../amadeus/store/pageStore'
 import { useI18n } from '../i18n'
-import { createProjectSkill, deleteProjectIcon, forgetProjectMemory, generateGitCommitMessage, getGitHosting, type GitHosting, getGitSettings, getProjectContext, gitCommitProject, gitCreateProjectBranch, gitInitProject, gitConnectRemoteProject, gitPendingProject, gitPublishGithubProject, gitPublishProject, gitPullProject, gitPushProject, gitSetPushTargetProject, gitTrustProject, initProjectContext, putProjectDoc, putProjectSettings, setProjectIconEmoji, uploadProjectIcon, resolveProjectCandidate, restoreProjectMemoryFact } from '../services/backendService'
+import { createProjectSkill, deleteProjectSkill, deleteProjectIcon, forgetProjectMemory, generateGitCommitMessage, getGitHosting, type GitHosting, getGitSettings, getProjectContext, gitCommitProject, gitCreateProjectBranch, gitInitProject, gitConnectRemoteProject, gitPendingProject, gitPublishGithubProject, gitPublishProject, gitPullProject, gitPushProject, gitSetPushTargetProject, gitTrustProject, initProjectContext, putProjectDoc, putProjectSettings, setProjectIconEmoji, uploadProjectIcon, resolveProjectCandidate, restoreProjectMemoryFact } from '../services/backendService'
 import { askString } from '../amadeus/components/askString'
 import { normPath } from './coding/studioModel'
 import { addToCreations } from './chat2/CreationCards'
@@ -28,6 +28,7 @@ import './teamProfile.css'
 import './projectProfile.css'
 import { AgentAvatar } from '../components/AgentAvatar'
 import { ProjectIcon } from '../components/ProjectIcon'
+import { UninstallDialog, notifyUninstalled } from '../components/UninstallDialog'
 import { IconPicker } from '@amadeus/chrome/pageChrome'
 import { thinkingLabel } from '../components/thinkingLabel'
 import { APPROVAL_MODE_ORDER, MODE_KEY } from '../approvalReason'
@@ -142,6 +143,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
   const [settingsDraft, setSettingsDraft] = useState<ProjectSettings>({})
   const [settingsDirty, setSettingsDirty] = useState(false)
   const [skillForm, setSkillForm] = useState<{ slug: string; name: string; description: string; content: string } | null>(null)
+  const [deletingSkill, setDeletingSkill] = useState<ProjectContext['skills'][number] | null>(null)
   const [iconPick, setIconPick] = useState<{ x: number; y: number } | null>(null)
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
@@ -723,9 +725,14 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
               </>}
           </section>
           <section className="project-card" data-project-skills>
+            {deletingSkill && <UninstallDialog title={t('uninstall.skill.title', { name: deletingSkill.name })} confirmLabel={t('uninstall.delete')} note={t('uninstall.note')}
+              rows={[{ icon: <Folder size={15} strokeWidth={1.8} />, title: t('uninstall.skill.folder'), sub: shortenPath(deletingSkill.path, s.homeDir), dest: t('uninstall.trash30') }]}
+              onClose={() => setDeletingSkill(null)}
+              onConfirm={() => { const sk = deletingSkill; void deleteProjectSkill(homeTarget(), session.id, sk.path).then((r) => { notifyUninstalled(t('uninstall.skill.done', { name: sk.name }), sk.name, { id: r.trashId, kind: 'skill', restorer: 'engine' }); return getProjectContext(homeTarget(), session.id).then(setCtx) }).catch((e: any) => setError(String(e?.message || e))) }} />}
             <div className="project-card-head"><div><h3><Sparkles size={13} style={{ verticalAlign: -2, marginRight: 5 }} />{t('projectProfile.skills')}</h3><small>{t('projectProfile.skillsHint', { dir: skillsDir })}</small></div>
               <button type="button" title={t('projectProfile.openSkills')} aria-label={t('projectProfile.openSkills')} onClick={() => void (ctx.skills.length || busy ? Promise.resolve() : initProjectContext(homeTarget(), session.id).then((r) => setCtx(r.context))).then(() => reveal(`${ctx.workspaceDir}/skills`))}><FolderOpen size={14} /></button></div>
-            {ctx.skills.length ? <div className="project-list">{ctx.skills.map((skill) => <button type="button" key={`${skill.id}:${skill.legacy}`} className="project-row" title={skill.path} onClick={() => reveal(`${skill.path}/SKILL.md`)}><strong>{skill.name}</strong>{skill.legacy && <small className="project-chip warn">{t('projectProfile.legacySkill')}</small>}<span style={{ gridColumn: '1 / -1' }}>{skill.description || skill.id}</span></button>)}</div>
+            {ctx.skills.length ? <div className="project-list">{ctx.skills.map((skill) => <div key={`${skill.id}:${skill.legacy}`} className="project-skill-row"><button type="button" className="project-row" title={skill.path} onClick={() => reveal(`${skill.path}/SKILL.md`)}><strong>{skill.name}</strong>{skill.legacy && <small className="project-chip warn">{t('projectProfile.legacySkill')}</small>}<span style={{ gridColumn: '1 / -1' }}>{skill.description || skill.id}</span></button>
+              <button type="button" className="project-skill-del" title={t('uninstall.delete')} aria-label={t('uninstall.delete')} disabled={!!busy} onClick={() => setDeletingSkill(skill)}><Trash2 size={13} /></button></div>)}</div>
               : <p className="agent-profile-muted">{t('projectProfile.noSkills')}</p>}
             {skillForm ? <form className="project-skill-form" onSubmit={(e) => { e.preventDefault(); void submitSkill() }}>
               <label>{t('projectProfile.skillFolder')}<input required autoFocus pattern="[a-z0-9][a-z0-9-]*" placeholder="my-skill" value={skillForm.slug} onChange={(e) => setSkillForm({ ...skillForm, slug: e.target.value })} /></label>

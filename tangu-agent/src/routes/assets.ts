@@ -18,9 +18,10 @@ import { isValidSlug } from '../agents/agentRegistry.js';
 import { listSharedAgentSkills } from '../skills/localSkills.js';
 import {
   SkillCatalogError, listSkillCatalog, getSkillCatalogDetail, createCatalogSkill,
-  updateCatalogSkill, setCatalogSkillDisabled, deleteCatalogSkill, copyCatalogSkill,
+  updateCatalogSkill, setCatalogSkillDisabled, copyCatalogSkill,
   importCatalogSkill,
 } from '../skills/catalog.js';
+import { skillUninstallPreview, uninstallSkillByKey } from '../services/skillUninstall.js';
 
 const router = Router();
 
@@ -72,7 +73,13 @@ router.put('/agent/skills/catalog/:key/disabled', authMiddleware, async (req: Au
 });
 router.delete('/agent/skills/catalog/:key', authMiddleware, async (req: AuthRequest, res) => {
   if (!localSkillsOnly(res)) return;
-  try { res.json({ ok: true, ...await deleteCatalogSkill(req.params.key, agentSlugArg(req)) }); }
+  // 进回收站(services/skillUninstall):顺手从 Agent 清单移除、清掉停用记录;改过的内置技能 = 还原为内置版本。
+  try { res.json({ ok: true, trashId: (await uninstallSkillByKey(req.params.key, agentSlugArg(req))).id }); }
+  catch (e) { catalogError(res, e); }
+});
+router.get('/agent/skills/catalog/:key/uninstall-preview', authMiddleware, async (req: AuthRequest, res) => {
+  if (!localSkillsOnly(res)) return;
+  try { res.json(await skillUninstallPreview(req.params.key, agentSlugArg(req))); }
   catch (e) { catalogError(res, e); }
 });
 router.post('/agent/skills/catalog/:key/copy', authMiddleware, async (req: AuthRequest, res) => {
