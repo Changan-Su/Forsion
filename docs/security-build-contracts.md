@@ -108,4 +108,3 @@ publish-engine 在准确 `$GITHUB_SHA` checkout 上执行 npm ci、完整 `npm r
 - 新的 `desktop` 手动构建选项跳过 Android 签名；现有清洁探针改为准确 run/commit/distribution 绑定。默认要求成功构建；只有显式 `candidate_only` 且非发布 workflow_dispatch 才允许整体验收失败但目标打包 job 成功的产物，仍严格核对 SHA、job、唯一未过期 artifact，结果明确 `releaseEligible=false`。
 - #277 仍需管理员设置后台必需检查：准确 context 为 `critical-contracts`、GitHub Actions app 15368；目前 main 未保护、rulesets 空、连接器保护 API 为 403。没有绕过权限。
 - #278 仍保留真实候选 tag 的签名前失败注入验收：本地同步契约正负对照及三平台 packaged overlay E2E 只是部分证据。当前源码的依赖/桌面发行线不构成合法热更新候选；manual workflow 仍会读取生产签名 secret，不能为补验收而随意触发。桌面候选还被 2.13.11 低于已发布 2.13.13 的发行身份门禁拒绝；门禁保留。
-
