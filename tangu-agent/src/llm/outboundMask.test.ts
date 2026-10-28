@@ -121,10 +121,11 @@ describe('review fixes', () => {
 
 describe('误报语料(magpie 第三轮 18)', () => {
   const ALL = { secrets: true, personal: true };
-  it.each(['tokenizer=cl100k_base', 'next_page_token=AbC123xyz789', 'csrf_token=Ab12Cd34Ef56', 'Started getty@tty1.service.', 'use x@pytest.fixture here', '{"size": 15728640000}', 'wrote 13800138000 bytes'])('原样:%s', (t) => {
+  it.each(['tokenizer=cl100k_base', 'next_page_token=AbC123xyz789', 'csrf_token=Ab12Cd34Ef56', 'Started getty@tty1.service.', 'use x@pytest.fixture here', '{"size": 15728640000}', 'wrote 13800138000 bytes',
+    '{"next_page_token": "CAEQAAx9"}', '{"element_token": "el_4f9a2b7c"}', 'Started systemd-fsck@dev-disk.service.', 'ssh user@host.local', 'bytes 13900000000'])('原样:%s', (t) => {
     expect(findSensitive(t, ALL)).toEqual([]);
   });
-  it.each(['DB_PASSWORD=Xk9vQ2mLp7Rt', 'SECRET_KEY=Qw3rTy7UiOp9', 'JWT_SECRET=a1b2c3d4e5f6', 'refresh_token: Zq81Lm0Pp7Yt', '电话: 13800138000', 'mail ops-oncall@forsion-demo.net'])('遮掉:%s', (t) => {
+  it.each(['DB_PASSWORD=Xk9vQ2mLp7Rt', 'SECRET_KEY=Qw3rTy7UiOp9', 'JWT_SECRET=a1b2c3d4e5f6', 'refresh_token: Zq81Lm0Pp7Yt', '电话: 13800138000', 'mail ops-oncall@forsion-demo.net', '{"element_api_key": "Zq81Lm0Pp7Yt"}', 'PAGERDUTY_TOKEN=Qw3rTy7UiOp9'])('遮掉:%s', (t) => {
     expect(findSensitive(t, ALL).length).toBe(1);
   });
 });
@@ -198,5 +199,20 @@ describe('withOutboundMasking', () => {
     expect(maskSpans(ENV).map((x) => ENV.slice(x.s, x.e))).toEqual([PW]);
     expect(maskPayload({ m: ENV }, ON).payload.m).toContain(KEY);
     expect(readFileSync(join(home, 'masking', 'allow.json'), 'utf8')).not.toContain(KEY);
+  });
+});
+
+describe('每个出站入口都包住了', () => {
+  // LlmBrain 新加一个会把内容发出去的方法时这里先红:要么在 withOutboundMasking 里包上，要么写明它不带内容
+  const WRAPPED = ['streamProviderCompletion', 'fimCompletion'];
+  const NO_CONTENT = ['resolveModelAndKey', 'buildProviderPayload' /* 惰性描述符，零网络;stream 时才发 */, 'refreshModelKey'];
+  it('LlmBrain 的方法都归了类，包住的那几个确实换了实现', () => {
+    const src = readFileSync(new URL('../seams/cloudBrain.ts', import.meta.url), 'utf8');
+    const body = src.slice(src.indexOf('export interface LlmBrain'), src.indexOf('\n}', src.indexOf('export interface LlmBrain')));
+    const methods = [...body.matchAll(/^\s{2}(\w+)\??\(/gm)].map((m) => m[1]);
+    expect(methods.sort()).toEqual([...WRAPPED, ...NO_CONTENT].sort());
+    const raw = Object.fromEntries(methods.map((k) => [k, async () => ({})])) as unknown as LlmBrain;
+    const wrapped = withOutboundMasking(raw, () => DEFAULT_MASK_SETTINGS);
+    for (const k of WRAPPED) expect((wrapped as any)[k]).not.toBe((raw as any)[k]);
   });
 });

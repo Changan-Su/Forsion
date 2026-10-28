@@ -104,8 +104,9 @@ const RULES: Rule[] = [
   { kind: 'ID_CARD', re: R('[1-9]\\d{5}(?:18|19|20)\\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\\d|3[01])\\d{3}[\\dXx]'), bound: ALNUM, ok: chineseId, personal: true },
   // 11 位 1[3-9] 开头既是手机号也是订单号的样子:前面紧挨着 id / 订单号 之类就不算
   { kind: 'PHONE', re: R('(?:\\+?86[- ]?)?1[3-9]\\d{9}'), bound: ALNUM, ok: (v, s, at) => !/(?:id|order|no\.?|#|号)[\s:：=_-]*$/i.test(s.slice(Math.max(0, at - 12), at))
-    // JSON 里不带引号的数字(大小 / 时间戳)、后面跟着字节单位的,是数不是手机号
-    && !/"[ \t]*:[ \t]*$/.test(s.slice(Math.max(0, at - 4), at)) && !/^[ \t]*(?:bytes?|B|KB|MB|GB|ms)\b/.test(s.slice(at + v.length, at + v.length + 8)), personal: true },
+    // JSON 里不带引号的数字(大小 / 时间戳)、前后挨着字节单位的,是数不是手机号
+    && !/"[ \t]*:[ \t]*$/.test(s.slice(Math.max(0, at - 4), at)) && !/^[ \t]*(?:bytes?|B|KB|MB|GB|ms)\b/.test(s.slice(at + v.length, at + v.length + 8))
+    && !/\b(?:bytes?|size)[\s:=]*$/i.test(s.slice(Math.max(0, at - 8), at)), personal: true },
   { kind: 'BANK_CARD', re: R('[3-6]\\d{3}(?:[ -]?\\d{4}){2,3}(?:[ -]?\\d{1,3})?'), bound: ALNUM, ok: luhn, personal: true },
 ];
 
@@ -114,7 +115,8 @@ const PERSONAL_KINDS = new Set(RULES.filter((r) => r.personal).map((r) => r.kind
 /** JSON 叶子的字段名是密钥的名字(password / apiKey / client_secret / access_token…):解析成叶子后规则看不到「名 = 值」的上下文,
  *  按字段名认。分页游标之类(next_page_token、cursor)不算。 */
 const SECRET_FIELD = /(?:password|passwd|pwd|passphrase|secret|token|credential|api[_-]?key|access[_-]?key|private[_-]?key|(?:^|[_.-])key)s?$/i;
-const NOT_SECRET_FIELD = /page|cursor|csrf|xsrf|continuation/i;
+// 只豁免「分页 / 防 CSRF / 元素句柄」那几种 token 本身(next_page_token、csrf_token、element_token);pagerduty_token、element_api_key 照遮
+const NOT_SECRET_FIELD = /(?:page|cursor|csrf|xsrf|continuation|element)[_.-]?tokens?$/i;
 /** 名字以密钥类词结尾(DB_PASSWORD、SECRET_KEY、client_secret)才算;tokenizer、next_page_token、csrf_token 不算。 */
 const secretName = (name: string): boolean => SECRET_FIELD.test(name) && !NOT_SECRET_FIELD.test(name);
 /** 长得像邮箱的 systemd 单元(getty@tty1.service)、pytest fixture(x@pytest.fixture)、保留域名。 */
