@@ -93,6 +93,32 @@ describe('Unit visitor Account adapter', () => {
     expect(pageEvents.mock.calls.some(([event]) => event === 'storage')).toBe(false)
   })
 
+  it('recovers through a reload when another tab changes the login while this one is still starting', async () => {
+    shared.set(tokenKey, 'token-a')
+    fetcher.mockResolvedValueOnce(json({}, 503))
+    await expect(installUnitAccount({ ...meta, inheritWebAccount: true }, base)).rejects.toThrow()
+    const onStorage = pageEvents.mock.calls.find(([event]) => event === 'storage')?.[1]
+    onStorage({ key: tokenKey, oldValue: 'token-a', newValue: null })
+    expect(browserLocation.reload).toHaveBeenCalledOnce()
+  })
+
+  it('still signs in, for this tab only, when localStorage is full', async () => {
+    const official = { ...meta, inheritWebAccount: true }
+    shared.set(tokenKey, 'token-a')
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => shared.get(key) ?? null,
+      setItem: () => { throw new DOMException('Quota exceeded', 'QuotaExceededError') },
+      removeItem: (key: string) => { shared.delete(key) },
+    })
+    values.set(stateKey, 'once')
+    browserLocation.href = base.href + '?token=token-b&account_state=once'
+    expect((await installUnitAccount(official, base)).account.getIdentity()?.userId).toBe('b')
+    expect(shared.has(tokenKey)).toBe(false)
+    expect(values.get(tokenKey)).toBe('token-b')
+    browserLocation.href = base.href
+    expect((await installUnitAccount(official, base)).account.getIdentity()?.userId).toBe('b')
+  })
+
   it.each(['owned', 'shared', 'unrelated'])('restores only a server-authorized old vault selection (%s)', async (kind) => {
     const legacy = shared
     for (const [k, v] of [['forsion_token', 'token-b'], ['amadeus.cloudVaultId', 'previous-vault'], ['amadeus_tree_snap', 'private old cache']]) legacy.set(k, v)

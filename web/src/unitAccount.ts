@@ -9,9 +9,26 @@ export async function installUnitAccount(meta: {
 }, base: URL) {
   // The official public entry keeps its login across tabs and browser restarts, as the old Web did;
   // other entries stay tab-scoped. The key is this Unit's own: /auth never reads or forwards it.
-  let storage: Storage = sessionStorage
-  if (meta.inheritWebAccount) { try { storage = localStorage } catch { /* storage denied: tab-scoped */ } }
   const tokenKey = `unit:${meta.instanceId}:account`
+  let storage: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> = sessionStorage
+  if (meta.inheritWebAccount) {
+    try {
+      const shared = localStorage
+      storage = {
+        getItem: (key) => shared.getItem(key) ?? sessionStorage.getItem(key),
+        // A full localStorage must not block sign-in: that login then stays in this tab only.
+        setItem: (key, value) => {
+          try { shared.setItem(key, value); sessionStorage.removeItem(key) }
+          catch { shared.removeItem(key); sessionStorage.setItem(key, value) }
+        },
+        removeItem: (key) => { shared.removeItem(key); sessionStorage.removeItem(key) },
+      }
+      // Another tab can replace or clear the shared login, also while this one is still starting.
+      window.addEventListener('storage', (event) => {
+        if (event.key === tokenKey && event.oldValue !== event.newValue) location.reload()
+      })
+    } catch { /* storage denied: tab-scoped */ }
+  }
   const account = createBrowserAccount({ apiBase: new URL(meta.account.apiBase, location.origin).href,
     storage, tokenKey,
     identityUrl: new URL('unit/account', base).href, allowedPaths: [new URL('unit', base).pathname] })
@@ -82,10 +99,6 @@ export async function installUnitAccount(meta: {
   }
   account.subscribe(emit)
   window.addEventListener('pageshow', (event) => { if (event.persisted) location.reload() })
-  // A shared login can be replaced or cleared by another tab without this tab's hooks.
-  if (storage !== sessionStorage) window.addEventListener('storage', (event) => {
-    if (event.key === tokenKey && event.oldValue !== event.newValue) location.reload()
-  })
   const login = async () => {
     try {
       for (const listener of prepare) await listener()
