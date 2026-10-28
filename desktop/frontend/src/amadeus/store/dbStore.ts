@@ -153,7 +153,9 @@ export const useDbStore = create<DbStoreState>((set, get) => ({
   async load(pagePath, ref) {
     const key = fileReferenceKey(pagePath, ref)
     const cur = get().entries[key]
-    if (cur && cur.status !== 'missing' && (pagePath !== ref || cur.path === ref)) return
+    // Loading placeholders have no resolved path yet; the same reference key
+    // already owns that read even for standalone load(path, path) consumers.
+    if (cur?.status === 'loading' || (cur && cur.status !== 'missing' && (pagePath !== ref || cur.path === ref))) return
     await get().reload(pagePath, ref, true)
   },
 
