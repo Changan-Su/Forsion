@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  BUFFER_CAP, HOURLY_CAP, MESSAGE_CAP, STACK_CAP,
+  BUFFER_CAP, HOURLY_CAP, STACK_CAP,
   createStartupTracker, createTelemetryHost, crashFromError, engineExitProps, processGoneProps, publicPluginId, shapeRendererReport, telemetryPackaged,
   type HostTelemetryEvent,
 } from './telemetryHost'
@@ -19,21 +19,21 @@ describe('shapeRendererReport:渲染层上报的整形与校验', () => {
     expect(shapeRendererReport('feature', { name: 'setting_change', key: 'theme' })).toBeNull() // 这一版不采
   })
 
-  it('crash:原文照传但封顶 message ≤ 2000、stack ≤ 8000;错误名只留合法字符', () => {
+  it('crash:报错原文不转发,stack 封顶 8000;错误名只留合法字符', () => {
     const r = shapeRendererReport('crash', { reason: 'rejection', errorName: 'Type Error<script>', message: 'm'.repeat(5000), stack: 's'.repeat(20000), extra: 'dropped' })
     expect(r).not.toBeNull()
     const props = (r as { props: Record<string, unknown> }).props
     expect(props.process).toBe('renderer')
     expect(props.reason).toBe('rejection')
     expect(props.errorName).toBe('Type-Errorscript')
-    expect((props.message as string).length).toBe(MESSAGE_CAP)
+    expect(props).not.toHaveProperty('message')
     expect((props.stack as string).length).toBe(STACK_CAP)
     expect(props).not.toHaveProperty('extra')
     expect(shapeRendererReport('crash', { message: '' })).toBeNull() // 什么都没有就不报
   })
 
   it('crash 的 pluginId:只有内置 / 商店的原样,其余 local', () => {
-    const pid = (pluginId: unknown, pluginOfficial: unknown) => (shapeRendererReport('crash', { message: 'x', pluginId, pluginOfficial }) as { props: Record<string, unknown> }).props.pluginId
+    const pid = (pluginId: unknown, pluginOfficial: unknown) => (shapeRendererReport('crash', { errorName: 'Error', pluginId, pluginOfficial }) as { props: Record<string, unknown> }).props.pluginId
     expect(pid('forsion-extend', true)).toBe('forsion-extend')
     expect(pid('my-secret-plugin', false)).toBe('local')
     expect(pid('x'.repeat(65), true)).toBe('local') // 白名单 max 64
@@ -76,12 +76,12 @@ describe('shapeRendererReport:渲染层上报的整形与校验', () => {
 })
 
 describe('宿主事件的形状', () => {
-  it('主进程异常 → crash(main),原文封顶', () => {
+  it('主进程异常 → crash(main),报错原文不转发', () => {
     const e = new RangeError('x'.repeat(3000))
     const p = crashFromError('main', 'exception', e, { uptimeS: 12 })
     expect(p).toMatchObject({ process: 'main', reason: 'exception', errorName: 'RangeError', uptimeS: 12 })
-    expect((p.message as string).length).toBe(MESSAGE_CAP)
-    expect(crashFromError('main', 'rejection', 'plain string')).toMatchObject({ process: 'main', reason: 'rejection', errorName: 'string', message: 'plain string' })
+    expect(p).not.toHaveProperty('message')
+    expect(crashFromError('main', 'rejection', 'plain string')).toEqual({ process: 'main', reason: 'rejection', errorName: 'string' })
   })
 
   it('引擎意外退出:退出码 / 信号映射;Windows NTSTATUS 超出 int 记进 errorName', () => {
@@ -135,10 +135,10 @@ describe('createTelemetryHost:缓冲、回放、上限', () => {
     expect(got).toHaveLength(0)
     expect(h.takeHour()).toEqual({ longTasks: 7 })
     expect(h.takeHour()).toEqual({ longTasks: 0 })
-    for (let i = 0; i < HOURLY_CAP.crash + 5; i++) h.report('crash', { message: `e${i}` })
+    for (let i = 0; i < HOURLY_CAP.crash + 5; i++) h.report('crash', { errorName: 'Error', stack: `    at e${i}` })
     expect(got.filter((e) => e.event === 'crash')).toHaveLength(HOURLY_CAP.crash)
     h.takeHour()
-    h.report('crash', { message: 'next hour' })
+    h.report('crash', { errorName: 'Error' })
     expect(got.filter((e) => e.event === 'crash')).toHaveLength(HOURLY_CAP.crash + 1)
   })
 
@@ -186,5 +186,13 @@ describe('createStartupTracker', () => {
     const b = tracker(false)
     b.t.firstFrame(700)
     expect(b.out).toEqual([{ kind: 'startup', startupMs: 700 }])
+  })
+  it('启动后才知道不拉起引擎(外接引擎):首帧在前在后都不空等', () => {
+    const a = tracker(true)
+    a.t.firstFrame(600); a.t.noEngine()
+    expect(a.out).toEqual([{ kind: 'startup', startupMs: 600 }])
+    const b = tracker(true)
+    b.t.noEngine(); b.t.firstFrame(650)
+    expect(b.out).toEqual([{ kind: 'startup', startupMs: 650 }])
   })
 })

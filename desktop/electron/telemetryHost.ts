@@ -19,7 +19,6 @@ export type RendererReportKind = 'crash' | 'feature' | 'longtasks'
 
 export const BUFFER_CAP = 50
 /** 跨 IPC 的原文封顶(Extend 再按白名单截到 300 / 4000)。 */
-export const MESSAGE_CAP = 2000
 export const STACK_CAP = 8000
 /** 每小时每类事件的上限:渲染层报错死循环 / 来回切 View 不能把队列灌满。超出的直接丢。 */
 export const HOURLY_CAP: Record<'crash' | 'feature', number> = { crash: 60, feature: 600 }
@@ -63,13 +62,13 @@ export function goneReason(reason: unknown): string | null {
 
 /** 一个 Error(或随便什么 throw 出来的东西)→ crash props。 */
 export function crashFromError(proc: string, reason: 'exception' | 'rejection', err: unknown, extra: Record<string, unknown> = {}): Record<string, unknown> {
-  const e = err as { name?: unknown; message?: unknown; stack?: unknown } | null
+  // 报错原文不转发(里面什么都可能有:库内路径、笔记标题);只给错误名 + 调用栈,栈头那几行原文由 Extend 剥掉
+  const e = err as { name?: unknown; stack?: unknown } | null
   const isObj = !!e && typeof e === 'object'
   return compact({
     process: proc,
     reason,
     errorName: errorName(isObj ? e!.name : typeof err),
-    message: cap(isObj ? e!.message : String(err), MESSAGE_CAP),
     stack: cap(isObj ? e!.stack : undefined, STACK_CAP),
     ...extra,
   })
@@ -118,12 +117,11 @@ export function shapeRendererReport(kind: unknown, raw: unknown):
       process: 'renderer',
       reason,
       errorName: errorName(p.errorName),
-      message: cap(p.message, MESSAGE_CAP),
-      stack: cap(p.stack, STACK_CAP),
+      stack: cap(p.stack, STACK_CAP), // 报错原文不转发,同 crashFromError
       // 插件宿主分得出是哪个插件时才带;同样只给内置 / 商店的 id
       pluginId: p.pluginId === undefined ? undefined : publicPluginId(p.pluginId, p.pluginOfficial, 64),
     })
-    return props.message || props.stack || props.errorName ? { event: 'crash', props } : null
+    return props.stack || props.errorName ? { event: 'crash', props } : null
   }
   if (kind === 'feature') {
     if (p.name === 'space_open') {
@@ -235,6 +233,7 @@ export type TelemetryHostHandle = ReturnType<typeof createTelemetryHost>
  */
 export function createStartupTracker(o: { expectEngine: boolean; waitMs: number; emit: (props: Record<string, unknown>) => void; setTimer?: (fn: () => void, ms: number) => unknown }) {
   const setTimer = o.setTimer ?? ((fn: () => void, ms: number) => { const t = setTimeout(fn, ms); (t as { unref?: () => void }).unref?.(); return t })
+  let expectEngine = o.expectEngine
   let startupMs: number | undefined
   let engineReadyMs: number | undefined
   let done = false
@@ -247,13 +246,18 @@ export function createStartupTracker(o: { expectEngine: boolean; waitMs: number;
     firstFrame(ms: number): void {
       if (startupMs !== undefined || done) return
       startupMs = Math.max(0, Math.round(ms))
-      if (!o.expectEngine || engineReadyMs !== undefined) flush()
+      if (!expectEngine || engineReadyMs !== undefined) flush()
       else setTimer(flush, o.waitMs)
     },
     engineReady(ms: number): void {
       if (engineReadyMs !== undefined || done) return
       engineReadyMs = Math.max(0, Math.round(ms))
       if (startupMs !== undefined) flush()
+    },
+    /** 这次启动不拉起托管引擎(外接引擎、也没开设备互联):首帧到了就发,不空等。 */
+    noEngine(): void {
+      expectEngine = false
+      flush()
     },
   }
 }

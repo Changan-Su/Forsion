@@ -33,6 +33,7 @@
     "test:accounts": "vitest run forsionAuth accountCore accountTransition AccountCard cloudAccount cloudHttpAccount cloudBridgeCacheAccount contentLayoutAccount settings.account ipc.account collabMain.account appStore.connect engine.lifecycle writeFailures pageStore.vaultswitch dbStore.test drawingStore.test",
     "e2e:automation": "node scripts/automation-space.e2e.cjs",
     "e2e:editor": "node scripts/e2e-editor.cjs",
+    "e2e:telemetry": "node scripts/e2e-telemetry.cjs",
     "e2e:dnd": "node scripts/block-dnd.e2e.cjs",
     "e2e:sidebardrop": "node scripts/sidebar-drop.e2e.cjs",
     "e2e:notemove": "node scripts/note-move-assets.e2e.cjs",

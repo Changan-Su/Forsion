@@ -1496,6 +1496,7 @@ function ensureBackend(): Promise<void> {
     // 「允许其他设备连接本机」开着时引擎必须常驻:本机 UI 切去别的 Unit(mode≠managed)
     // 也不能停 —— 停了 = 别的设备那头断服(设备通道与局域网面的转发目标就是这个引擎)。
     if (stored.mode !== 'managed' && !stored.unitHostEnabled) {
+      telemetryStartup.noEngine()
       await backend.stop()
       return
     }
@@ -1558,11 +1559,8 @@ const uptimeS = (): number => Math.round(process.uptime())
 process.on('uncaughtExceptionMonitor', (err, origin) => {
   telemetry.emit('crash', crashFromError('main', origin === 'unhandledRejection' ? 'rejection' : 'exception', err, { uptimeS: uptimeS() }))
 })
-// 主进程里没人接的 rejection 本来只打一条警告、不退出;挂上监听会吞掉那条警告,所以这里照样打出来。
-process.on('unhandledRejection', (reason) => {
-  console.error('[tangu-desktop] unhandledRejection:', reason)
-  telemetry.emit('crash', crashFromError('main', 'rejection', reason, { uptimeS: uptimeS() }))
-})
+// 没人接的 rejection 不另挂 unhandledRejection 监听:挂了 Node 就不再把它转成 uncaughtException,Electron 原本的错误框也没了。
+// 默认 throw 模式下它照样走到上面的 monitor(origin = 'unhandledRejection')。
 /** startup 那条:主窗首帧 + 引擎就绪(进程起来之后的毫秒)。无托管引擎 / 一分钟内没就绪就只带首帧。 */
 const telemetryStartup = createStartupTracker({
   expectEngine: PRODUCT.agentBackend && !SANDBOX, waitMs: 60_000,

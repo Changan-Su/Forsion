@@ -53,7 +53,7 @@ export function installTelemetryReport(): void {
     const message = typeof e?.message === 'string' ? e.message : fallback ?? (err === undefined ? '' : String(err))
     if (!e && !message) return
     if (NOISE.test(message)) return
-    send('crash', { reason, errorName: e?.name, message, stack: e?.stack })
+    send('crash', { reason, errorName: e?.name, stack: e?.stack }) // 报错原文只用来滤噪音,不上报
   }
   window.addEventListener('error', (ev) => crash('exception', ev.error, ev.message))
   window.addEventListener('unhandledrejection', (ev) => crash('rejection', ev.reason))

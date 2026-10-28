@@ -770,7 +770,8 @@ export const OnboardingWizard: React.FC<{
           ? <p className="ob-muted" role="status">{t('desktopPermissions.loading')}</p>
           : <div className="ob-permission-layout">
               <div className="seg ob-sections">
-                {permissionTabs.map((tab) => <button key={tab} aria-pressed={shownTab === tab} className={shownTab === tab ? 'active' : ''}
+                {/* 有写入在途时锁住页签:切走会卸掉那张卡,它的写入队列 / 报错就没人等了 */}
+                {permissionTabs.map((tab) => <button key={tab} aria-pressed={shownTab === tab} className={shownTab === tab ? 'active' : ''} disabled={navLocked}
                   onClick={() => setPermissionTab(tab)}>{t(`onboarding.guide.${tab}`)}</button>)}
               </div>
               {/* 操作电脑 ↔ 语音与媒体 是同一个权限卡实例换 only:切这两页不卸载,进行中的授权 / 安装不被打断(卸载会关掉系统授权引导)。
