@@ -256,7 +256,8 @@ export async function readFileLocal(baseDir: string, sub: string, offset?: numbe
  */
 function textOf(buf: Buffer, name: string): string {
   if (!buf.subarray(0, 8192).includes(0)) return buf.toString('utf-8');
-  const docx = /\.docx$/i.test(name) ? docxText(buf) : '';
+  let docx = '';
+  try { if (/\.docx$/i.test(name)) docx = docxText(buf); } catch { /* 坏 zip:按普通二进制报错 */ }
   if (docx) return docx;
   throw new Error(`${name} is a binary file (${buf.length} bytes); read_file only returns text. Use run_python to process it (e.g. python-docx / openpyxl / pypdf).`);
 }

@@ -168,6 +168,9 @@ describe('read_file(sandbox):二进制不再按文本硬解', () => {
     expect(docx).not.toContain('\u0000');
     expect(docx).toContain('| 指标 | 取值 |');
     await expect(readFileLocal(dir, 'b.bin')).rejects.toThrow(/binary file \(7 bytes\).*run_python/);
+    // 坏 docx(中央目录偏移越界,docxText 会抛 RangeError)也落到同一句指引
+    writeFileSync(join(dir, 'bad.docx'), Buffer.concat([Buffer.from([0]), Buffer.from('PK\x05\x06'), Buffer.alloc(18, 0xff)]));
+    await expect(readFileLocal(dir, 'bad.docx')).rejects.toThrow(/binary file .*run_python/);
     expect(await readFileLocal(dir, 'c.txt')).toContain('第二行');
   });
 });
