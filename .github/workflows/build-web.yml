@@ -127,7 +127,7 @@ jobs:
           echo '::error::Neither official base-image registry is available; no image was published'
           exit 1
       # context 必须是仓根:web 复用 desktop/frontend + desktop/shared + lcl 源码(同 web/README 的坑 1)。
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v7
         with:
           context: .
           file: web/Dockerfile
