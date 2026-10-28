@@ -13,6 +13,11 @@
  *    对不上就照常重建交错、只是不带 items —— **不**因此退回扁平(交错本身与模型/协议都无关)。
  *    provider 一并存,只供事后定位,不参与判定。两侧的「没有协议」(托管面 / chat-completions 直连 /
  *    升级前的旧行)统一归一成 '',见 protocolKey。
+ *    **账号**同样参与判定(10-28,借鉴 magpie #3887):加密推理由**签出它的那个账号 / 组织**才解得开,同一个
+ *    模型换了登录(ChatGPT 换号、换成另一个组织的 key)照样回灌,上游回 400 invalid_encrypted_content、
+ *    此后每个 run 都炸。写侧存 account = 账号标识(Codex 的 account_id,没有就用 key)的**哈希**,不存原值;
+ *    读侧对不上就不带 items,同对不上模型。托管面没有直连账号 → 两侧都是 ''。升级前的旧行没有 account,
+ *    对着直连的当前账号一律判不匹配:每个会话有**一次**不带旧推理(一次 cache miss),之后稳定 —— 同协议键上线那次。
  * ② **只落回放真用得上的类型**:reasoning / thinking / redacted_thinking + message + function_call。
  *    function_call 不是可选项 —— openaiToResponsesBody 见到 providerItems 就**整组替代**正文与
  *    tool_calls,少了它,紧随其后的 function_call_output 找不到父项,上游 400 且整个会话此后每个 run 都炸。
@@ -31,6 +36,7 @@
  *    这一档(自带 key 的 gpt-5 族)写侧记 'openai-responses'、读侧要 '' → 永远对不上,items 白存。
  *    **只会假不匹配,不会假匹配**(静态有标记的 Codex/Anthropic 直连两侧恒相等),所以是丢优化不是丢正确性;
  *    真要救它,得把 tuneOpenAiDirectPayload 在 hydrate 前对着空 payload 探一次,别在这里手抄一份 viaResponses 判据。 */
+import { createHash } from 'node:crypto';
 import type { ChatMessage, ToolCall } from '../core/types.js';
 import { deps } from '../seams/runtime.js';
 import { capToolResult, capHistoryContent } from './contextBudget.js';
@@ -44,13 +50,22 @@ export const STEP_ITEMS_MAX_BYTES = 64 * 1024;
 /** 见文件头 ②③:白名单,只此五类。 */
 const REPLAYABLE_ITEM_TYPES = new Set(['reasoning', 'thinking', 'redacted_thinking', 'message', 'function_call']);
 
-/** 产出这批 items 的模型身份。**判定键 = apiModelId + protocol**(见文件头 ①);provider 只供定位。 */
+/** 产出这批 items 的模型身份。**判定键 = apiModelId + protocol + account**(见文件头 ①);provider 只供定位。 */
 export interface StepItemBinding {
   apiModelId?: string;
   provider?: string;
   /** 本轮 payload **实际**发出去的协议(openai-responses / anthropic-messages / 缺省 = chat-completions
    *  或托管面)。必须取自 payload,不是模型上的静态标记 —— 那两者会因动态改道而不一致。 */
   protocol?: string;
+  /** 签出这批 items 的账号的指纹(reasoningAccountKey),不是账号本身。缺省 = 托管面 / 升级前的旧行。 */
+  account?: string;
+}
+
+/** 账号指纹:sha256 前 16 位。原值(account_id / API key)不落库;认不出账号(托管面)→ undefined。
+ *  ponytail: 没有 account_id 的订阅登录(xAI)只能拿会续期的 access token 算,续一次期旧推理就判不匹配 ——
+ *  丢的是延续性不是正确性;今天产出 providerItems 的只有 Codex(有 account_id)和自带 key 的直连。 */
+export function reasoningAccountKey(identity: unknown): string | undefined {
+  return typeof identity === 'string' && identity ? createHash('sha256').update(identity).digest('hex').slice(0, 16) : undefined;
 }
 
 /** 协议判定键:两侧同一把尺 —— 缺省(托管面 / chat-completions 直连 / 升级前的旧行)一律归一成 ''。 */
@@ -108,6 +123,7 @@ export function stepLlmResponse(
       apiModelId,
       ...(binding?.provider ? { provider: binding.provider } : {}),
       ...(binding?.protocol ? { protocol: binding.protocol } : {}),
+      ...(binding?.account ? { account: binding.account } : {}),
     },
   };
 }
@@ -219,7 +235,7 @@ export function replayAssistantHistory(
   steps?: ReplayStep[],
   /** 本次 run 的上游模型 + **下一次请求要走的协议**。缺省 / 对不上 → 重建交错但不挂 providerItems
    *  (见文件头 ①)。protocol 取模型上的静态标记(hydrate 时 payload 还没造),故只会假不匹配。 */
-  replayFor?: { apiModelId?: string; protocol?: string },
+  replayFor?: { apiModelId?: string; protocol?: string; account?: string },
 ): ChatMessage[] {
   const calls = sanitizeCalls(row.tool_calls);
   const content = capHistoryContent(row.content || '');
@@ -230,8 +246,9 @@ export function replayAssistantHistory(
   const wantModel = typeof (replayFor as any)?.apiModelId === 'string' && (replayFor as any).apiModelId
     ? String((replayFor as any).apiModelId) : null;
   const wantProtocol = protocolKey((replayFor as any)?.protocol);
+  const wantAccount = protocolKey((replayFor as any)?.account);
   const interleaved = Array.isArray(steps)
-    ? interleave(row.content || '', calls, results, steps, wantModel, wantProtocol) : null;
+    ? interleave(row.content || '', calls, results, steps, wantModel, wantProtocol, wantAccount) : null;
   return interleaved ?? [
     { role: 'assistant', content, tool_calls: calls },
     ...calls.map((c) => flatToolMessage(c, results)),
@@ -271,7 +288,7 @@ export function dropCoveredCalls(messages: ChatMessage[], toolCallId: string): C
 /** 重建交错;三道闸任一不过返回 null(调用方退回扁平)。 */
 function interleave(
   raw: string, calls: ToolCall[], results: Map<string, any>, steps: ReplayStep[],
-  wantModel: string | null, wantProtocol: string,
+  wantModel: string | null, wantProtocol: string, wantAccount: string,
 ): ChatMessage[] | null {
   // 闸⓪(毒化硬帽):整行超过 capHistoryContent 的阈值就不拆 —— 拆开后每段各自不超帽、总量却能是
   // 原来的 N 倍,等于把「单条巨型消息永久毒化会话」那道防线捅开。这类行维持原来的确定性截断。
@@ -288,12 +305,13 @@ function interleave(
     // 纠错轮的正文压根没进 finalContent。两者都交给下面的尾巴逻辑,不参与拼接。
     if (!stepCalls.length) continue;
     ids.push(...stepCalls.map((c) => c.id));
-    // 模型 + 协议绑定闸(文件头 ①):对不上就这一轮不带 items,**交错照常重建** —— 不是第四道退回扁平的闸。
+    // 模型 + 协议 + 账号绑定闸(文件头 ①):对不上就这一轮不带 items,**交错照常重建** —— 不是第四道退回扁平的闸。
     // outputItemsJson 是本版的落库形态(字符串,jsonb 保序);outputItems 是升级前那批行,一并认。
     const stepItems = pickReplayItems(res?.outputItemsJson ?? res?.outputItems);
     const boundTo = typeof res?.outputItemsModel?.apiModelId === 'string' ? res.outputItemsModel.apiModelId : '';
     const usable = !!wantModel && boundTo === wantModel
       && protocolKey(res?.outputItemsModel?.protocol) === wantProtocol
+      && protocolKey(res?.outputItemsModel?.account) === wantAccount
       && itemsCoverCalls(stepItems, stepCalls);
     turns.push({
       content: typeof res?.content === 'string' ? res.content : '',

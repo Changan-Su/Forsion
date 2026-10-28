@@ -2776,6 +2776,32 @@ try {
     };
   });
 
+  // foreignreasoning(10-28,借鉴 magpie 第三轮 19):换了账号,旧会话回灌的加密推理被上游以 400 invalid_encrypted_content 拒掉(厂商原文,见 lib/llm-fault-preload.mjs)。
+  //   第一轮让模型用一次工具(跨 run 回灌的只有工具轮的推理);第二轮起注入:带着第一轮那批 encrypted_content 的请求一律 400(像换了号:旧推理全被拒,新产出的照常可用)。
+  //   修好 = 认出 → 拿掉推理重发,只被拒 1 次、发 reasoning_dropped、重发里不再带旧推理、答出口令。负对照(--kind base,没修)= 400 不可重试,这一轮报错收场。
+  //   ⚠️ 只验「被拒 → 拿掉重发」那半;「落库带账号指纹、换号后一开始就不带」那半真换不了号,只有单测(test/historyReplayHydration.test.ts)。
+  await scenario('foreignreasoning', 'foreignreasoning 回灌的推理被拒 → 拿掉重发', async () => {
+    const sid = `live-fr-${Date.now()}`;
+    const tok = `FR-${randomUUID().slice(0, 6)}`;
+    const file = join(workspace, `fr-${tok}.txt`);
+    // 要有推理条目可回灌,且它得排在工具调用**之前**(跨 run 回灌的只有工具轮的条目):先心算、再用工具写结果。
+    // 10-28 前两次只让它读文件(medium / high 都试了),Luna 直接调工具、不出 reasoning 条目,注入无从触发。
+    const cfg = { thinkingLevel: 'high' };
+    const a = await run(sid, `Without using any tool for the arithmetic, work out 48271 × 9317. Then use a tool to write just that number into the file ${file}. Finally reply with ${tok}-A and the number.`, 240_000, cfg);
+    armFault({ mode: 'invalid_encrypted_content', match: `${tok}-B` });
+    const b = await run(sid, `Reply with exactly this and nothing else: ${tok}-B`, 240_000, cfg).finally(disarmFault);
+    const log = faultLog().filter((l) => l.match);
+    const fired = log.filter((l) => l.fired);
+    const resent = log.filter((l) => !l.fired && fired.length && l.t > fired[0].t);
+    const dropped = b.statuses.filter((x) => x.phase === 'reasoning_dropped');
+    writeFileSync(join(OUT, 'foreignreasoning-evidence.json'), JSON.stringify({ errA: a.error, toolsA: a.toolCalls, errB: b.error, log, statuses: b.statuses, content: b.content }, null, 2));
+    const ok = !a.error && a.toolCalls.length > 0 && fired.length === 1 && fired[0].encrypted > 0
+      && resent.length >= 1 && resent[0].encrypted === 0 && dropped.length === 1 && dropped[0].dropped > 0
+      && !b.error && b.content.includes(`${tok}-B`);
+    const detail = `第一轮工具 ${a.toolCalls.join(',') || '无'}${a.error ? `(报错:${a.error.slice(0, 80)})` : ''};被拒 ${fired.length} 次(带旧推理 ${fired[0]?.encrypted ?? 0} 份)、重发 ${resent.length} 次(带 ${resent[0]?.encrypted ?? '-'} 份);reasoning_dropped ${dropped.map((x) => x.dropped).join(',') || '无'};${b.error ? `报错:${b.error.slice(0, 140)}` : `答${b.content.includes(`${tok}-B`) ? '对' : '错'}`}`;
+    return { ok, detail, output: [a.content, b.content].join('\n---\n'), tokens: tokensOf(a) + tokensOf(b), toolCalls: [...a.toolCalls, ...b.toolCalls] };
+  });
+
   // relay(10-28,借鉴 magpie 方案 2 · 额度用完接力):会话模型 = 台架的假提供方(每次都回额度用完),后备 = 真模型。
   //   auto:这一轮换到后备答出口令、只打假提供方一次、发一条 model_fallback、落库 origin=fallback:quota + 实际模型;
   //         第二轮重置时间没到 → 直接用后备,假提供方不再被打。
