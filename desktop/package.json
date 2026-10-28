@@ -466,7 +466,7 @@
     "lucide-react": "^1.17.0",
     "lz-string": "^1.5.0",
     "micromark-util-classify-character": "^2.0.1",
-    "nanoid": "^5.1.11",
+    "nanoid": "^6.0.2",
     "node-diff3": "^3.2.1",
     "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^5.7.284",
