@@ -31,37 +31,7 @@ import { remoteLockGuard } from './remoteLockGuard.js'; // P1-K2
 import { drainRunsForExit } from '../services/agentLoop.js';
 import { attachRealtimeVoice } from '../services/realtimeVoice.js';
 
-/** --print-config:打印生效配置(config.json + env 叠加),token/apiKey 脱敏(仅留尾 4 位)。 */
-function maskSecret(s?: string): string {
-  if (!s) return '';
-  return s.length <= 8 ? '***' : `***${s.slice(-4)}`;
-}
-function printEffectiveConfig(cfg: StandaloneConfig): void {
-  const providers = loadProviders(cfg).map((p) => ({
-    providerId: p.providerId, baseUrl: p.baseUrl, apiKey: maskSecret(p.apiKey),
-    modelIds: p.modelIds, imageModelIds: p.imageModelIds, ttsModelIds: p.ttsModelIds, protocol: p.protocol,
-  }));
-  const mcp = Object.entries(loadMcpConfig().mcpServers).map(([name, s]: [string, any]) => ({
-    name, transport: s.transport || (s.command ? 'stdio' : 'http'), enabled: s.enabled !== false,
-  }));
-  const special = loadSpecialAgentsConfig();
-  const out = {
-    configFile: configFile(),
-    cloud: { url: cfg.cloudUrl, token: maskSecret(cfg.token), defaultModel: cfg.defaultModelId || '' },
-    database: { url: cfg.databaseUrl, dataDir: cfg.dataDir },
-    server: { port: cfg.port, host: cfg.host, userId: cfg.userId },
-    sandbox: cfg.sandbox,
-    providers,
-    mcp,
-    engines: loadEngines().map((e) => ({ id: e.id, name: e.name, command: e.command })),
-    enginePrefs: loadEnginePrefs(),
-    specialAgents: {
-      historian: { enabled: special.historian.enabled, modelId: special.historian.modelId },
-      muse: { enabled: special.muse.enabled, modelId: special.muse.modelId },
-    },
-  };
-  process.stdout.write(JSON.stringify(out, null, 2) + '\n');
-}
+import { printEffectiveConfig } from './diagnostics.js';
 
 /** 引擎版本标识:优先构建注入的 TANGU_WORKER_VERSION(git sha / build id,见 Dockerfile.standalone),
  *  回退 package.json 版本(发版随产品同步 bump,「引擎桌面同版发」)。/health 与 --version 共用。 */

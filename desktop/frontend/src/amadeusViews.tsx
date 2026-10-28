@@ -510,7 +510,7 @@ function TrashSection() {
                 <div key={it.name} className="amx-trash-row">
                   <span className="amx-trash-ic">{it.dir ? <Folder /> : <FileText />}</span>
                   <span className="amx-trash-name" title={t('amxv.trash.origin', { path: it.original })}>
-                    {it.name}
+                    {it.original.split('/').pop() ?? it.name}
                     <span className="amx-trash-orig">{dirOfOrig(it.original)}</span>
                   </span>
                   <button
