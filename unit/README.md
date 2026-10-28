@@ -9,7 +9,7 @@ Unit is the independently runnable Forsion framework, sharing the Genesis Deskto
 已有后台 Unit 可在同一个 listener 上增加 `webEntries`，每个入口声明自己的 `basePath`、`plugins` 和 `defaultSpace`。
 主入口仍按原 `publish` 设置发布；附加入口只能列出其显式插件及依赖，不能读取主机文件或公开后台插件。
 两者共用同一份后端生命周期和账号存储。更新插件时会重新校验所有入口，避免一次热更新留下无法重启的配置。
-`inheritWebAccount: true` 仅供同源官方 Web 迁移：先经 Unit 验证旧登录，再恢复经权限核对的智库选择，不复制无归属的内容缓存。
+`inheritWebAccount: true` 仅供同源官方 Web 迁移：先经 Unit 验证旧登录，再恢复经权限核对的智库选择，不复制无归属的内容缓存。该入口的登录存在 Unit 自己的 `localStorage` 键里，跨标签页、重启浏览器都保持（与旧 Web 一致，`/auth` 页不读也不转发这个键）；其余入口仍按标签页隔离。
 官方 Extend 在装载及更新时必须通过桌面同一固定公钥验签；自建的普通插件仍由运营方安装并列入允许清单。
 
 An existing Unit can add explicit `webEntries` on the same listener while retaining its original Admin projection.

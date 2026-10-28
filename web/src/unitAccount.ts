@@ -7,8 +7,13 @@ const randomId = () => Array.from(crypto.getRandomValues(new Uint8Array(24)), (n
 export async function installUnitAccount(meta: {
   instanceId: string; account: { apiBase: string; loginPath: string }; inheritWebAccount?: boolean
 }, base: URL) {
+  // The official public entry keeps its login across tabs and browser restarts, as the old Web did;
+  // other entries stay tab-scoped. The key is this Unit's own: /auth never reads or forwards it.
+  let storage: Storage = sessionStorage
+  if (meta.inheritWebAccount) { try { storage = localStorage } catch { /* storage denied: tab-scoped */ } }
+  const tokenKey = `unit:${meta.instanceId}:account`
   const account = createBrowserAccount({ apiBase: new URL(meta.account.apiBase, location.origin).href,
-    storage: sessionStorage, tokenKey: `unit:${meta.instanceId}:account`,
+    storage, tokenKey,
     identityUrl: new URL('unit/account', base).href, allowedPaths: [new URL('unit', base).pathname] })
   const url = new URL(location.href)
   const stateKey = `unit:${meta.instanceId}:login-state`
@@ -77,6 +82,10 @@ export async function installUnitAccount(meta: {
   }
   account.subscribe(emit)
   window.addEventListener('pageshow', (event) => { if (event.persisted) location.reload() })
+  // A shared login can be replaced or cleared by another tab without this tab's hooks.
+  if (storage !== sessionStorage) window.addEventListener('storage', (event) => {
+    if (event.key === tokenKey && event.oldValue !== event.newValue) location.reload()
+  })
   const login = async () => {
     try {
       for (const listener of prepare) await listener()

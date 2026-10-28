@@ -8,6 +8,7 @@ const tokenKey = 'unit:unit-one:account'
 const stateKey = 'unit:unit-one:login-state'
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status })
 let values: Map<string, string>
+let shared: Map<string, string>
 let fetcher: ReturnType<typeof vi.fn<typeof fetch>>
 let browserLocation: { origin: string; href: string; assign: ReturnType<typeof vi.fn>; reload: ReturnType<typeof vi.fn> }
 let pageEvents: ReturnType<typeof vi.fn>
@@ -30,6 +31,12 @@ beforeEach(() => {
     setItem: (key: string, value: string) => { values.set(key, value) },
     removeItem: (key: string) => { values.delete(key) },
   })
+  shared = new Map()
+  vi.stubGlobal('localStorage', {
+    getItem: (key: string) => shared.get(key) ?? null,
+    setItem: (key: string, value: string) => { shared.set(key, value) },
+    removeItem: (key: string) => { shared.delete(key) },
+  })
   vi.stubGlobal('location', browserLocation)
   vi.stubGlobal('history', { replaceState: vi.fn((_state, _title, url) => { browserLocation.href = String(url) }) })
   vi.stubGlobal('fetch', fetcher)
@@ -39,32 +46,56 @@ afterEach(() => vi.unstubAllGlobals())
 
 describe('Unit visitor Account adapter', () => {
   it('inherits an existing Web login only for the configured official entry, after Unit verification', async () => {
-    const legacy = new Map([['forsion_token', 'token-b'], ['old-note-cache', 'keep']])
-    vi.stubGlobal('localStorage', { getItem: (key: string) => legacy.get(key) ?? null })
+    shared.set('forsion_token', 'token-b')
+    shared.set('old-note-cache', 'keep')
     await installUnitAccount(meta, base)
     expect(fetcher).not.toHaveBeenCalled()
     const inherited = await installUnitAccount({ ...meta, inheritWebAccount: true }, base)
     expect(inherited.account.getIdentity()?.userId).toBe('b')
-    expect(values.get(tokenKey)).toBe('token-b')
-    expect(legacy.get('old-note-cache')).toBe('keep')
-    expect(legacy.get('forsion_token')).toBe('token-b')
+    expect(shared.get(tokenKey)).toBe('token-b')
+    expect(shared.get('old-note-cache')).toBe('keep')
+    expect(shared.get('forsion_token')).toBe('token-b')
     expect(fetcher.mock.calls[0][0]).toBe('https://forsion.test/admin/unit/account')
   })
 
-  it('keeps an existing tab account instead of replacing it with another old Web login', async () => {
-    values.set(tokenKey, 'token-a')
-    vi.stubGlobal('localStorage', { getItem: () => 'token-b' })
+  it('keeps the entry account instead of replacing it with another old Web login', async () => {
+    shared.set(tokenKey, 'token-a')
+    shared.set('forsion_token', 'token-b')
     const inherited = await installUnitAccount({ ...meta, inheritWebAccount: true }, base)
     expect(inherited.account.getIdentity()?.userId).toBe('a')
-    expect(values.get(tokenKey)).toBe('token-a')
+    expect(shared.get(tokenKey)).toBe('token-a')
+  })
+
+  it('keeps the official entry signed in across tabs while other entries stay tab-scoped', async () => {
+    const official = { ...meta, inheritWebAccount: true }
+    await (await installUnitAccount(official, base)).login()
+    const callback = new URL(new URL(browserLocation.assign.mock.calls[0][0]).searchParams.get('redirect')!)
+    callback.searchParams.set('token', 'token-b')
+    browserLocation.href = callback.href
+    await installUnitAccount(official, base)
+    expect(shared.get(tokenKey)).toBe('token-b')
+    values.clear() // a new tab or a restarted browser starts with empty sessionStorage
+    browserLocation.href = base.href
+    expect((await installUnitAccount(official, base)).account.getIdentity()?.userId).toBe('b')
+    expect((await installUnitAccount(meta, base)).account.getIdentity()).toBeNull()
+  })
+
+  it('reloads the official entry when another tab replaces or clears its login', async () => {
+    shared.set(tokenKey, 'token-a')
+    await installUnitAccount({ ...meta, inheritWebAccount: true }, base)
+    const onStorage = pageEvents.mock.calls.find(([event]) => event === 'storage')?.[1]
+    onStorage({ key: 'other', oldValue: null, newValue: 'x' })
+    expect(browserLocation.reload).not.toHaveBeenCalled()
+    onStorage({ key: tokenKey, oldValue: 'token-a', newValue: null })
+    expect(browserLocation.reload).toHaveBeenCalledOnce()
+    pageEvents.mockClear()
+    await installUnitAccount(meta, base)
+    expect(pageEvents.mock.calls.some(([event]) => event === 'storage')).toBe(false)
   })
 
   it.each(['owned', 'shared', 'unrelated'])('restores only a server-authorized old vault selection (%s)', async (kind) => {
-    const legacy = new Map([['forsion_token', 'token-b'], ['amadeus.cloudVaultId', 'previous-vault'], ['amadeus_tree_snap', 'private old cache']])
-    vi.stubGlobal('localStorage', {
-      getItem: (key: string) => legacy.get(key) ?? null,
-      setItem: (key: string, value: string) => { legacy.set(key, value) },
-    })
+    const legacy = shared
+    for (const [k, v] of [['forsion_token', 'token-b'], ['amadeus.cloudVaultId', 'previous-vault'], ['amadeus_tree_snap', 'private old cache']]) legacy.set(k, v)
     const authority = fetcher.getMockImplementation()!
     fetcher.mockImplementation(async (input, init) => {
       const path = new URL(String(input)).pathname
@@ -79,35 +110,37 @@ describe('Unit visitor Account adapter', () => {
   })
 
   it('does not adopt a rejected old credential or overwrite its storage', async () => {
-    vi.stubGlobal('localStorage', { getItem: () => 'invalid-old-token' })
+    shared.set('forsion_token', 'invalid-old-token')
     const inherited = await installUnitAccount({ ...meta, inheritWebAccount: true }, base)
     expect(inherited.account.getIdentity()).toBeNull()
-    expect(values.has(tokenKey)).toBe(false)
+    expect(shared.has(tokenKey)).toBe(false)
+    expect(shared.get('forsion_token')).toBe('invalid-old-token')
   })
 
   it('preserves credentials and surfaces temporary authority failures during migration', async () => {
-    vi.stubGlobal('localStorage', { getItem: () => 'token-b' })
+    shared.set('forsion_token', 'token-b')
     fetcher.mockResolvedValueOnce(json({}, 503))
     await expect(installUnitAccount({ ...meta, inheritWebAccount: true }, base)).rejects.toMatchObject({ status: 503 })
-    expect(values.has(tokenKey)).toBe(false)
+    expect(shared.has(tokenKey)).toBe(false)
   })
 
   it('retries an interrupted vault-pointer migration with the already adopted tab identity', async () => {
-    const legacy = new Map([['forsion_token', 'token-b'], ['amadeus.cloudVaultId', 'previous-vault']])
-    vi.stubGlobal('localStorage', { getItem: (k: string) => legacy.get(k) ?? null, setItem: (k: string, v: string) => { legacy.set(k, v) } })
+    const legacy = shared
+    legacy.set('forsion_token', 'token-b')
+    legacy.set('amadeus.cloudVaultId', 'previous-vault')
     const authority = fetcher.getMockImplementation()!
     let available = false
     fetcher.mockImplementation(async (input, init) => new URL(String(input)).pathname === '/api/amadeus/vaults'
       ? json({ vaults: [{ id: 'previous-vault' }] }, available ? 200 : 503) : authority(input, init))
     await expect(installUnitAccount({ ...meta, inheritWebAccount: true }, base)).rejects.toMatchObject({ status: 503 })
-    expect(values.get(tokenKey)).toBe('token-b')
+    expect(shared.get(tokenKey)).toBe('token-b')
     available = true
     await installUnitAccount({ ...meta, inheritWebAccount: true }, base)
     expect(legacy.get(contentStorageKey('amadeus.cloudVaultId'))).toBe('previous-vault')
   })
 
   it('discards an old uncorrelated URL callback and inherits only the independently verified stored user', async () => {
-    vi.stubGlobal('localStorage', { getItem: () => 'token-a' })
+    shared.set('forsion_token', 'token-a')
     browserLocation.href = base.href + '?token=token-b'
     const inherited = await installUnitAccount({ ...meta, inheritWebAccount: true }, base)
     expect(inherited.account.getIdentity()?.userId).toBe('a')
