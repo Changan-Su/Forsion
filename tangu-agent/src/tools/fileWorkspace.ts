@@ -15,6 +15,7 @@ import { createHash } from 'node:crypto';
 import { cancellableRead, throwIfReadAborted } from '../utils/readCancellation.js';
 import { anchoredRoot, mkdirConfined, readConfined, writeConfined } from '../sandbox/confinedFs.js';
 import { pageInstructionsForFile } from '../services/pageInstructions.js';
+import { docxText } from './documentPages.js';
 
 // ── 注入依赖的 lazy 别名:把 Penzor cloudStorageService 收敛到 brain.storage(保持调用点不变)──
 const cloudStorageService = {
@@ -174,7 +175,7 @@ export async function readFile(userId: string, appId: string, scope: WsScope, pa
   const file = items.find((i) => i.name === name && i.fileType === 'file');
   if (!file) throw new Error(`file not found: ${path}`);
   const { content } = await cloudStorageService.getFileContent(file.id, userId);
-  const text = content.toString('utf-8');
+  const text = textOf(content, path);
   return pageInstructionsForFile(text, path) + paginateText(text, offset, limit);
 }
 
@@ -244,8 +245,20 @@ export async function readFileLocal(baseDir: string, sub: string, offset?: numbe
   if (!segs.length) throw new Error('invalid path');
   const abs = path.join(baseDir, ...segs);
   const buf = await fs.readFile(abs).catch(() => { throw new Error(`file not found: ${sub}`); });
-  const text = buf.toString('utf-8');
+  const text = textOf(buf, sub);
   return pageInstructionsForFile(text, sub) + paginateText(text, offset, limit);
+}
+
+/**
+ * read_file 的解码:二进制按 UTF-8 硬解会把 NUL 和乱码整段塞给模型,云端写 PG(jsonb 拒收 \u0000)
+ * 还会让整批事件与终稿落库失败(10-27 生产两例)。docx 抽正文,其余二进制报错指路 run_python。
+ * ponytail: 首 8KB 有 NUL 即二进制(git 同款判据);UTF-16 文本也会被当二进制,真遇到再按 BOM 解。
+ */
+function textOf(buf: Buffer, name: string): string {
+  if (!buf.subarray(0, 8192).includes(0)) return buf.toString('utf-8');
+  const docx = /\.docx$/i.test(name) ? docxText(buf) : '';
+  if (docx) return docx;
+  throw new Error(`${name} is a binary file (${buf.length} bytes); read_file only returns text. Use run_python to process it (e.g. python-docx / openpyxl / pypdf).`);
 }
 
 /** 读取本地工作区某文件的**完整**文本(不分页,供 apply_patch 应用补丁);不存在返回 null。 */
