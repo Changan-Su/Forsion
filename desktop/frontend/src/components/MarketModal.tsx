@@ -33,6 +33,7 @@ import { PluginSettingsView } from './AmadeusPluginsTab'
 import { isPlacedSettingsView } from '../amadeus/plugins/display'
 import { MarketPluginAutoUpdate, useMarketPluginUpdates } from './MarketPluginAutoUpdate'
 import { compareMarketVersions } from '../../../shared/marketPluginUpdates'
+import { SkillAgentPicker, applySkillAgentChoice, skillAgentsSupported, useSkillAgents, type SkillAgentChoice } from './MarketSkillAgents'
 
 registerMessages({
   'market.submissionsDescription': { zh: '投稿内容，查看审核结果并管理版本更新。', en: 'Submit your work, view review results and manage version updates.' },
@@ -285,6 +286,9 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
     useApp.getState().openSettings(`${info.realType === 'amadeus-plugin' ? 'fplugin' : 'plugin'}:${info.entry.id ?? c.installSlug}`)
   }
 
+  // 技能「装给哪些 Agent」:按条目记,缺省 null = 所有 Agent;只在首次安装时生效
+  const [skillChoice, setSkillChoice] = useState<Record<string, SkillAgentChoice>>({})
+  const skillAgents = useSkillAgents(true)
   const onInstall = async (c: MarketCard, version?: string): Promise<void> => {
     setInstalling((m) => ({ ...m, [c.id]: true }))
     setProgress((m) => omit(m, c.id))
@@ -294,6 +298,10 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
     try {
       const res = await installMarket(c.id, version)
       const effectiveType = ((res?.type as MarketType) || c.type)
+      if (effectiveType === 'skill' && !wasInstalled && skillAgentsSupported()) {
+        await applySkillAgentChoice(res?.slug || c.installSlug, skillChoice[c.id] ?? null)
+          .catch((e) => toast(t('market.skillAgents.applyFailed', { e: e?.message || String(e) }), true))
+      }
       track('market.install')
       act('market.install', { id: c.id })
       // 本窗热重载 + 通知主窗等其余窗口(市场是独立浮窗)+ 判断要不要重启后端,与插件引导卡共用。
@@ -641,6 +649,7 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
                 </main>
                 <aside className="mk-detail-sidebar">
                   <div className="mk-detail-actions">{installBtn(detail, 'mk-wide-btn')}{uninstallBtn(detail, true)}{canOpenSettings(detail) && <button className="btn sm mk-wide-btn" onClick={() => openPluginSettings(detail)}><Settings size={13} />{t('market.openSettings')}</button>}{autoUpdate(detail)}</div>
+                  {detail.type === 'skill' && !isInstalled(detail) && <SkillAgentPicker hint agents={skillAgents} choice={skillChoice[detail.id] ?? null} disabled={!!installing[detail.id]} onChange={(next) => setSkillChoice((m) => ({ ...m, [detail.id]: next }))} />}
                   <div className="mk-trust-row"><ShieldCheck size={17} /><div><strong>{t('market.reviewed')}</strong><span>{t('market.reviewedHint')}</span></div></div>
                   <MarketRequirements item={detail} version={appVersion} /><dl className="mk-facts"><div><dt>{t('market.forsionVersion')}</dt><dd>{requirementsText(detail)}</dd></div><div><dt>ID</dt><dd className="mk-id-value">{detail.id}<button className="btn sm ghost" onClick={() => void navigator.clipboard.writeText(detail.id)}>{t('market.copyId')}</button></dd></div>{!!detail.platforms?.length && <div><dt>{t('market.platform')}</dt><dd>{detail.platforms.join(' · ')}</dd></div>}<div><dt>{t('market.type')}</dt><dd>{kindLabel[detail.type]}</dd></div><div><dt>{t('market.version')}</dt><dd>{detail.latestVersion ? `v${detail.latestVersion}` : t('market.unknown')}</dd></div>{isDesktopOnlyItem(detail) && <div><dt>{t('market.platform')}</dt><dd>{t('market.desktopOnly')}</dd></div>}<div><dt>{t('market.source')}</dt><dd>{detail.source === 'github' ? 'GitHub' : detail.source === 'npm' ? 'npm' : t('market.sourceUpload')}</dd></div>{!!formatDate(detail.updatedAt || detail.createdAt) && <div><dt>{t('market.updated')}</dt><dd>{formatDate(detail.updatedAt || detail.createdAt)}</dd></div>}</dl>
                   {detail.npmPackage && <a className="mk-repo-link" href={`https://www.npmjs.com/package/${encodeURIComponent(detail.npmPackage)}`} target="_blank" rel="noreferrer"><Package size={14} />{detail.npmPackage}<ExternalLink size={12} /></a>}

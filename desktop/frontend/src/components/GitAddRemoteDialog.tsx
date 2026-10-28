@@ -4,6 +4,7 @@ import { Check } from 'lucide-react'
 import { registerMessages, useI18n } from '../i18n'
 import { useEscape } from '../amadeus/components/Dialogs'
 import { RemoteHostIcon } from '../views/ProjectGitRemotes'
+import { DialogOverlay } from '../amadeus/components/DialogOverlay'
 import './gitCloneDialog.css'
 
 registerMessages({
@@ -98,7 +99,7 @@ function GitAddRemoteDialog({ load, onDone }: { load: () => Promise<AddRemoteOpt
     </button>
 
   return (
-    <div className="dialog-overlay" onMouseDown={close}>
+    <DialogOverlay onMouseDown={close}>
       <div className="dialog git-clone-dialog git-add-remote-dialog" role="dialog" aria-modal="true" aria-label={t('gitAddRemote.title')} data-git-add-remote-dialog onMouseDown={(e) => e.stopPropagation()}>
         <div>
           <div className="dialog-title">{t('gitAddRemote.title')}</div>
@@ -129,6 +130,6 @@ function GitAddRemoteDialog({ load, onDone }: { load: () => Promise<AddRemoteOpt
           <button className="dialog-btn" data-primary data-git-add-remote-confirm disabled={!ready} onClick={submit}>{t(kind === 'url' ? 'gitAddRemote.connect' : 'gitAddRemote.create')}</button>
         </div>
       </div>
-    </div>
+    </DialogOverlay>
   )
 }

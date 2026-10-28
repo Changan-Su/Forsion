@@ -105,6 +105,7 @@
   pointer-events: none;
 }
 .lcl-viewhead > * { pointer-events: auto; }
+.lcl-viewhead-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--ui-font-body, 13px); font-weight: 500; color: var(--text); }
 .lcl-viewhead-actions { margin-left: auto; display: flex; align-items: center; gap: 2px; min-width: 0; }
 .lcl-viewhead-actions:empty { display: none; }
 

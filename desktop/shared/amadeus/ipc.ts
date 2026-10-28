@@ -519,7 +519,7 @@ export interface EmbedResolved {
 /** `db:read` 的结果:错误是数据不是异常(前端按 status 分支渲染,不用 try/catch 猜原因)。 */
 /** 写回票据:文件内容的短哈希。渲染端把它随 dbWriteCas 带回,主进程比对不上就拒写 ——
  *  防的是「渲染端 500ms 防抖里握着旧快照,期间引擎/自动化改了同一张表,防抖一落盘把人家整行抹掉」。
- *  云端/移动端桥不提供 version(也没有 dbWriteCas),渲染端据此退回无条件写,行为与从前一致。 */
+ *  云端桥使用所读原文的 seq 作为票据;旧宿主未提供 version 时保留兼容写入路径。 */
 export type DbReadResult =
   | { status: 'ok'; path: string; data: DbFile; version?: string } // path = 解析后的 vault 相对路径,后续写回用它
   | { status: 'missing' }
@@ -800,7 +800,7 @@ export interface AmadeusApi {
   /** Excalidraw 画板(`.excalidraw.md` / 裸 `.excalidraw`)读原文;ref 与附件同一 basename 语义。 */
   readDrawing(pagePath: string, ref: string): Promise<DrawingReadResult>
   /** 按 `drawing:read` 返回的确切 vault 相对路径原子写回(记自写账本,watcher 不把自己的写当外部改动)。 */
-  writeDrawing(drawingPath: string, source: string): Promise<void>
+  writeDrawing(drawingPath: string, source: string, base?: string): Promise<void | TextWriteResult>
   /** 读取 vault 内确切相对路径的 UTF-8 文本(供插件文件类型);越界/不存在返回 null。 */
   readTextFile(path: string): Promise<string | null>
   /** 原子写回 vault 内确切相对路径的 UTF-8 文本(供插件文件类型;记自写账本,同 writeDrawing)。

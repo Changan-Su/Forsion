@@ -6,6 +6,10 @@ describe('clampMenu', () => {
   it('放得下时原样落在锚点', () => {
     expect(clampMenu(100, 100, 200, 300, 1000, 800)).toEqual({ left: 100, top: 100 })
   })
+  it('alignEnd → 右缘对齐 x(「⋯」按钮下方往左展开),左边越界照样收进视口', () => {
+    expect(clampMenu(600, 100, 200, 300, 1000, 800, { alignEnd: true }).left).toBe(400)
+    expect(clampMenu(100, 100, 200, 300, 1000, 800, { alignEnd: true }).left).toBe(8)
+  })
   it('横向溢出→左移收进视口', () => {
     // x=900 → right=1100>1000,应左移到 1000-200-8=792
     expect(clampMenu(900, 100, 200, 300, 1000, 800).left).toBe(792)

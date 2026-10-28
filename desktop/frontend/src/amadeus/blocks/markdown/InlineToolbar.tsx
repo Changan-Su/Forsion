@@ -160,6 +160,7 @@ export function InlineToolbar({
   shape = FULL_SHAPE,
   fg,
   bg,
+  dir,
   onAct,
   onColor,
   onBg,
@@ -184,6 +185,8 @@ export function InlineToolbar({
   /** 选区处处相同的文字色 / 背景色:A▾ 上显示当前颜色。 */
   fg?: string
   bg?: string
+  /** 拖选方向(selectionToolbarPlugin 报):有就顺着方向滑进,没有(双击 / 键盘)走菜单进场。只认挂上那一刻的,之后改格式重报不跟着变。 */
+  dir?: 'forward' | 'backward'
   onAct: (a: ToolbarAction) => void
   onColor: (v: string) => void // '' = 清除文字色
   onBg: (v: string) => void // '' = 清除背景色
@@ -197,6 +200,7 @@ export function InlineToolbar({
   ai?: { items: ToolbarAiItem[]; translate?: boolean; more?: ToolbarAiItem[]; onPick: (id: string) => void }
 }) {
   const { t } = useI18n()
+  const [enterDir] = useState(dir)
   const [panel, setPanel] = useState<'color' | 'turn' | 'ai' | 'more' | null>(null)
   const rootRef = useRef<HTMLDivElement | null>(null)
   /** 子面板是键盘打开的 → 打开后把焦点送进第一项(鼠标打开的不动焦点,编辑器选区照旧)。 */
@@ -295,7 +299,7 @@ export function InlineToolbar({
     // 摆位一律交给 OverlayAt:默认浮在选区上方,上面没地方才翻到下方(同 slash)。
     // ⚠️别改回「CSS transform: translate(-50%,-100%)」那套 —— pop-in 动画也动 transform,
     // 会把摆位覆盖掉 120ms:工具栏先出现在选区右下、动画结束才跳到文字上方(用户实报)。
-    <OverlayAt className="inline-toolbar" x={left} y={bottom + 8} anchorTop={top - 8} prefer="above" center role="toolbar" aria-label={t('itb.aria')} data-testid="inline-toolbar" data-order={actionsFirst ? 'actions' : 'tools'} innerRef={(el) => { rootRef.current = el }} onKeyDown={onNav}>
+    <OverlayAt className="inline-toolbar" x={left} y={bottom + 8} anchorTop={top - 8} prefer="above" center role="toolbar" aria-label={t('itb.aria')} data-testid="inline-toolbar" data-dir={enterDir} data-order={actionsFirst ? 'actions' : 'tools'} innerRef={(el) => { rootRef.current = el }} onKeyDown={onNav}>
       <div className="itb-row">
         {actionsFirst && actionZone && <>{actionZone}<span className="itb-sep" /></>}
         {ai && ai.items.length > 0 && (

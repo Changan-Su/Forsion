@@ -639,6 +639,8 @@
     translate 0.3s var(--ease-spring, ease),
     display 0.3s allow-discrete;
 }
+/* 8.9:挂上 / 换会话后用户还没动过(data-still)、或主区 DOM 刚被 dockview 搬家(data-moved,⌘J 开底栏)→ 栈与 Desk 卡直接到位,不重放进场 */
+.t2-tsum:is([data-still], [data-moved]), .t2-tsum:is([data-still], [data-moved]) > .agent-desk-card { transition: none; }
 /* ⚠️正文/输入框给车道让的位**不加过渡**,且用连续函数随容器宽自适应 —— 见下方 --tsum-shift。
  * 加过渡会让「让位」和右栏的 JS 补间(dockviewStore.tweenGroupWidth,200ms)各跑各的,
  * 正文列宽先窄后宽地折返,滚动锚定追不上 → 聊天区上下抽动(实测最大帧间跳变 217px)。 */
@@ -713,8 +715,8 @@
   display: block; position: relative; flex: 0 0 auto;
   width: 100%; box-sizing: border-box;
   padding: 11px 14px 12px;
-  /* 与并排浮着的输入框同族圆角(都是「聊天区外壳」),别各用各的 */
-  border-radius: var(--radius-chat-surface, 20px);
+  /* 「浮」档与并排浮着的输入框同族圆角;「半浮」降一档(见下方 data-elev),Desk 预览框的下圆角跟着同一个变量 */
+  border-radius: var(--t2-card-r, var(--radius-chat-surface, 20px));
   background: var(--bg-card, var(--bg));
   border: var(--border-width, 1px) solid var(--border);
   box-shadow: var(--card-shadow);
@@ -754,6 +756,12 @@
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06), 0 18px 40px rgba(0, 0, 0, 0.14);
 }
 .t2-card-lifted .t2-card-grip { opacity: 1; cursor: grabbing; }
+/* 立体感三档(开发者选项,summaryPrefs 的 SummaryElevation;2026-10-28 用户定缺省「半浮」):上面 .t2-card 本身就是「浮」。
+ * 半浮:影子收近收淡、圆角降一档,不再和输入卡同族,输入卡做唯一的主浮。平:不投影,只靠卡片色 + 圆角 + 间距。
+ * 摘要栏不做「凹」:两轮方案都被否(底色压暗像深了一块;内影像输入框 / 按钮)。拿起来的那张三档都照旧浮。 */
+.t2-tsum[data-elev='half'] { --t2-card-r: var(--radius-md, 12px); }
+.t2-tsum[data-elev='half'] > .t2-card:not(.t2-card-lifted) { box-shadow: var(--card-shadow-low, var(--card-shadow)); }
+.t2-tsum[data-elev='flat'] > .t2-card:not(.t2-card-lifted) { box-shadow: none; }
 /* 正文:列表卡封顶 240 内滚;底部渐隐只在下面还有没露出来的内容时出现(滚动驱动动画:没溢出时时间线不生效 = 不渐隐,
  * 滚到底渐隐收完)。静态 mask 会在没东西可滚时也把最后一行抹淡。 */
 @property --t2-card-fade { syntax: '<length>'; inherits: false; initial-value: 0px; }
@@ -962,7 +970,7 @@ button.desk-cap-pick:hover, button.desk-cap-pick[aria-expanded='true'] { backgro
 .agent-desk-card-frame {
   height: 380px; max-height: none; margin: 8px -14px -12px; gap: 0;
   overflow: hidden; mask-image: none; animation: none;
-  border-radius: 0 0 var(--radius-chat-surface, 20px) var(--radius-chat-surface, 20px);
+  border-radius: 0 0 var(--t2-card-r, var(--radius-chat-surface, 20px)) var(--t2-card-r, var(--radius-chat-surface, 20px));
 }
 .agent-desk-card.empty .agent-desk-card-frame { height: 120px; }
 .agent-desk-card-frame.act { cursor: zoom-in; }
@@ -1067,7 +1075,9 @@ button.t2-bg-url:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.
 
 /* 聊天 leaf 整体太窄(相对外层 .t2-chat-view 容器)→ 整个面板隐藏,聊天列拿回全宽。
  * 阈值与卡片的 760 对齐:错开会出现「侧板已藏、卡片又因 mode=open 不渲染」的内容消失带(Codex #3)。 */
-@container (max-width: 759.9px) { .agent-desk { display: none; } }
+/* 子会话 / 顺便问面板借了 .agent-desk 的壳,但不跟 Desk 一起藏:窄了由 childChat.css 让它顶掉聊天列(≤700),
+ * 一起藏就是「开右栏后主区整块空白」(10-26)。 */
+@container (max-width: 759.9px) { .agent-desk:not(.child-chat-panel) { display: none; } }
 
 /* ====== 卡片一律不描边(2026-08-14 用户要求)—— 必须留在文件最末 ==================
  * 输入卡(在 composer2.css 里就地改了)/ 任务概览 / Agent Desk / 工具调用等折叠块:

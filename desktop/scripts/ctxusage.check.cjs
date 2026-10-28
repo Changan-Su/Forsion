@@ -110,6 +110,33 @@ async function main() {
     await page.close()
   }
 
+  // ── 直连模型:列该来源的额度 / 余额,不列 Forsion 托管额度 ──
+  for (const lang of ['zh', 'en']) {
+    page = await open(`direct=codex${lang === 'en' ? '&lang=en' : ''}`, lang === 'en' ? 'en-US' : 'zh-CN')
+    await page.waitForSelector('.t2c-cu-limit')
+    s = await info(page)
+    const zh = lang === 'zh'
+    check(`直连 codex(${lang}):标题是 codex 的额度、没有 Forsion 额度`, (zh ? /codex 额度/ : /codex usage limits/).test(s.text) && !/Forsion/.test(s.text), s.text)
+    check(`直连 codex(${lang}):5 小时已用 38% + 倒计时,本周已用 91% + 预警色`,
+      s.limits[0]?.key === 'w18000' && (zh ? /5 小时[\s\S]*小时 \d+ 分钟后重置[\s\S]*已用 38%/ : /5 hours[\s\S]*Resets in 2 hr \d+ min[\s\S]*38% used/).test(s.limits[0].text) && !s.limits[0].warn
+      && s.limits[1]?.key === 'w604800' && (zh ? /本周[\s\S]*重置[\s\S]*已用 91%/ : /This week[\s\S]*Resets[\s\S]*91% used/).test(s.limits[1].text) && s.limits[1].warn, s.limits)
+    if (!zh) check('直连 codex(en):无汉字', !/[一-鿿]/.test(s.text), s.text)
+    check(`直连 codex(${lang}):无横向溢出`, s.overflowX <= 0, s.overflowX)
+    if (SHOT) await page.locator('.t2c-ctxring-pop').screenshot({ path: path.join(OUT, `direct-codex-${lang}.png`) })
+    await page.close()
+  }
+  page = await open('direct=deepseek&dark')
+  await page.waitForSelector('.t2c-cu-limit')
+  s = await info(page)
+  check('直连 deepseek:余额 ¥42.18、没有进度条', s.limits.length === 1 && s.limits[0].key === 'balance' && /余额[\s\S]*¥42\.18/.test(s.limits[0].text) && !(await page.locator('.t2c-cu-limit .t2c-cu-bar').count()), s.limits)
+  if (SHOT) await page.locator('.t2c-ctxring-pop').screenshot({ path: path.join(OUT, 'direct-deepseek-dark.png') })
+  await page.close()
+  page = await open('direct=none')
+  await page.waitForTimeout(400)
+  s = await info(page)
+  check('直连但来源查不到:额度区整块不显示(也不回退成 Forsion 额度)', s.limits.length === 0 && !/额度/.test(s.text), s.text)
+  await page.close()
+
   // ── genesis-glass:它的 theme.css 对 .t2c-ctxring-pop 有材质覆盖,看一眼别被盖花 ──
   if (SHOT) {
     page = await open('theme=genesis-glass')

@@ -51,7 +51,7 @@ import { OverlayAt } from '@lcl/engine'
 import { NoteFloatingToc } from './amadeus/unified/NoteFloatingToc'
 import { AmxMobileBar, NoteTabIcon, pageStyleSheetActions } from './amadeusViews'
 import { OutlineView, PluginListBody } from './views/WorkspaceView'
-import type { ListItem, ListSourceContribution, TableSpec } from '@amadeus/plugins/types'
+import type { ListItem, TableSpec } from '@amadeus/plugins/types'
 import { SidebarRow } from './components/SidebarRow'
 import { FileText as FileTextIcon, Copy as CopyIcon } from 'lucide-react'
 import { noteMarkdownBody } from './amadeus/unified/copyMarkdown'
@@ -2390,7 +2390,7 @@ if (new URLSearchParams(location.search).has('dock')) {
     activeKey: () => 'a',
     open: () => {},
     subscribe: () => () => {},
-  } as unknown as ListSourceContribution
+  } as unknown as import("@amadeus/plugins/pluginText").HostListSource
   // Optional shared-toolbar probe: old plugin actions and drag contracts still work without a new API.
   if (new URLSearchParams(location.search).has('controls')) {
     const listeners = new Set<() => void>()

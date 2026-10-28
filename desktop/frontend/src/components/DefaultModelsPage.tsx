@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { AudioLines, ChevronRight, Eye, Image as ImageIcon, Info, Languages, MessageCircle, Mic, Phone, RefreshCw, RotateCcw, Sparkles, Volume2 } from 'lucide-react'
+import { AudioLines, ChevronRight, Eye, Image as ImageIcon, Info, Languages, MessageCircle, Mic, Phone, RefreshCw, RotateCcw, Sparkles, TextCursorInput, Volume2 } from 'lucide-react'
 import { SettingsPanel, SettingsRow } from './SettingsPrimitives'
 import { ModelSelect } from './ModelSelect'
 import { catalogByKind, originOf, type CatalogItem, type ModelKind, type ModelOrigin } from './modelKinds'
@@ -10,10 +10,10 @@ import type { DirectProviderConfig, ModelInfo, ModelsResponse, StoredDesktopConf
 
 /**
  * 设置 → 模型 → 默认模型(10-17 用户定方案 C,方案页 docs/ToBeImproved/模型设置整理方案_2026-10-17/):
- * 每个用途调哪个模型都在这一页,按后台的类型分四张卡(对话 / 图像 / 语音 / 翻译),全部用同一个 ModelSelect。
+ * 每个用途调哪个模型都在这一页,按后台的类型分五张卡(对话 / 图像 / 语音 / 翻译 / 补全),全部用同一个 ModelSelect。
  * 留空 = 跟随后台的项目默认;选择器标出实际调到的模型从哪来(云端 / 自带 key / 订阅 / 本机),自选的行尾可「恢复跟随」。
  * 朗读、语音通话没有「跟随」,留空 = 未开启。音色、语速等旋钮在「语音」页。
- * 只有本机引擎才有的槽(后台、看图、语音、翻译)在网页 / 手机上不出现(stored 为空)。
+ * 只有本机引擎才有的槽(后台、看图、语音、翻译、补全)在网页 / 手机上不出现(stored 为空)。
  */
 
 registerMessages({
@@ -52,6 +52,11 @@ registerMessages({
   'dm.translate': { zh: '翻译', en: 'Translation' },
   'dm.translateHint': { zh: '划线菜单、笔记和插件里的翻译。', en: 'Translation in the selection menu, notes and plugins.' },
   'dm.translateChat': { zh: '跟随聊天模型', en: 'Same as chat' },
+  'dm.panel.fim': { zh: '补全', en: 'Completion' },
+  'dm.fim': { zh: '补全', en: 'Completion' },
+  'dm.fimHint': { zh: '插件的行内补全用它，只列出支持补全（FIM）的模型。', en: 'Used by plugins for inline completion. Only models that support fill-in-the-middle (FIM) are listed.' },
+  'dm.fimNone': { zh: '没有可用的补全模型', en: 'No completion models' },
+  'dm.fimEmptyHint': { zh: '当前账号还没有支持补全（FIM）的模型。行内补全插件会改用聊天模型。', en: 'No model on this account supports fill-in-the-middle (FIM) yet. Inline completion plugins fall back to the chat model.' },
   'dm.off': { zh: '未开启', en: 'Off' },
   'dm.auto': { zh: '自动', en: 'Auto' },
   'dm.reset': { zh: '恢复跟随', en: 'Use default' },
@@ -81,7 +86,7 @@ export function OriginTag({ origin, mt }: { origin: ModelOrigin | null; mt?: boo
 /** 候选项喂给 ModelSelect 要长成 ModelInfo;朗读 / 通话 / 翻译 / 本地识别这些候选没有 ModelInfo,就地补一个。 */
 const asInfo = (c: CatalogItem): ModelInfo => c.model || { id: c.id, name: c.name, provider: c.provider, source: c.source }
 
-type Snapshot = { chat: string; image: string; background: string; vision: string; translate: string; asrBackend: 'local' | 'cloud'; asrModelId: string }
+type Snapshot = { chat: string; image: string; background: string; vision: string; translate: string; fim: string; asrBackend: 'local' | 'cloud'; asrModelId: string }
 
 export function DefaultModelsPage(p: {
   models: ModelsResponse | null
@@ -129,17 +134,17 @@ export function DefaultModelsPage(p: {
   // ── 各槽当前值 ──
   const snap: Snapshot = {
     chat: p.chatModelId, image: p.imageModelId,
-    background: stored?.backgroundModelId || '', vision: stored?.visionModelId || '', translate: stored?.translateModelId || '',
+    background: stored?.backgroundModelId || '', vision: stored?.visionModelId || '', translate: stored?.translateModelId || '', fim: stored?.fimModelId || '',
     asrBackend: stored?.asrBackend === 'local' ? 'local' : 'cloud', asrModelId: stored?.asrModelId || '',
   }
   const asrValue = snap.asrBackend === 'local' && localReady ? LOCAL_ASR : snap.asrModelId
-  const custom = [snap.chat, snap.image, ...(stored ? [snap.background, snap.vision, snap.translate, asrValue] : [])].filter(Boolean).length
+  const custom = [snap.chat, snap.image, ...(stored ? [snap.background, snap.vision, snap.translate, snap.fim, asrValue] : [])].filter(Boolean).length
   const restore = (s: Snapshot) => {
     p.onChat(s.chat); p.onImage(s.image)
-    if (stored) void save({ backgroundModelId: s.background, visionModelId: s.vision, translateModelId: s.translate, asrBackend: s.asrBackend, asrModelId: s.asrModelId })
+    if (stored) void save({ backgroundModelId: s.background, visionModelId: s.vision, translateModelId: s.translate, fimModelId: s.fim, asrBackend: s.asrBackend, asrModelId: s.asrModelId })
   }
   const resetAll = () => {
-    restore({ chat: '', image: '', background: '', vision: '', translate: '', asrBackend: 'cloud', asrModelId: '' })
+    restore({ chat: '', image: '', background: '', vision: '', translate: '', fim: '', asrBackend: 'cloud', asrModelId: '' })
     setUndo({ snap, count: custom })
     if (undoTimer.current) clearTimeout(undoTimer.current)
     undoTimer.current = setTimeout(() => setUndo(null), 8000)
@@ -153,6 +158,9 @@ export function DefaultModelsPage(p: {
   const callList = stored ? realtimeCandidates(stored, p.providers, models?.realtimeModel, p.realtimeSignedIn) : []
   const autoMt = cat.mt[0]?.id
   const translators = [...llms, ...cat.mt.map(asInfo)]
+  // 补全槽只列能做 FIM 的(目录 fimModels);不选 = 第一个(tanguProbe.fimModelChoice 同一条规则)。选过的下架了,行里照样显示它,探针会自动跳过。
+  const autoFim = cat.fim[0]?.id
+  const fimList = snap.fim && !find(cat.fim, snap.fim) ? [...cat.fim, { id: snap.fim, name: snap.fim, provider: 'forsion', source: 'forsion' as const }] : cat.fim
   const followOrValue = (v: string, def?: string | null) => v || def || ''
 
   return <>
@@ -221,6 +229,14 @@ export function DefaultModelsPage(p: {
         value: snap.translate, onChange: (id) => void save({ translateModelId: id }), models: translators, icon: <Languages size={13} />, label: t('dm.translate'), kind: 'mt',
         cloudDefaultId: autoMt, defaultLabel: t(autoMt ? 'dm.auto' : 'dm.translateChat'),
         chip: find(cat.mt, followOrValue(snap.translate, autoMt)) ? tag(cat.mt, followOrValue(snap.translate, autoMt)) : tag(cat.llm, snap.translate),
+      })} />
+    </SettingsPanel>}
+
+    {stored && <SettingsPanel className="model-defaults-panel" icon={<TextCursorInput size={14} />} title={t('dm.panel.fim')}>
+      <SettingsRow label={t('dm.fim')} description={t(fimList.length ? 'dm.fimHint' : 'dm.fimEmptyHint')} control={slot({
+        value: snap.fim, onChange: (id) => void save({ fimModelId: id }), models: fimList.map(asInfo), icon: <TextCursorInput size={13} />, label: t('dm.fim'), kind: 'fim',
+        cloudDefaultId: autoFim, defaultLabel: t(autoFim ? 'dm.auto' : 'dm.fimNone'), disabled: !fimList.length,
+        chip: tag(fimList, followOrValue(snap.fim, autoFim)),
       })} />
     </SettingsPanel>}
 

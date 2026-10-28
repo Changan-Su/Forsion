@@ -256,6 +256,14 @@ export function defaultModelOf(s: Pick<AppState, 'cfg' | 'modelsResp'> & { focus
 export function newChatModelId(s: Pick<AppState, 'newChatModel' | 'cfg' | 'modelsResp'> & { focusModelId?: string }): string | undefined {
   return s.newChatModel || defaultModelOf(s) || s.modelsResp?.defaultModelId || undefined
 }
+/** 写进 cfg.modelId 的值:点选的正好是云端默认 → 记成「跟随」(''),后台以后换默认,新对话跟着走
+ *  (10-28:后台把 Auto 换成 Auto-Flash,点过一次药丸的老账号一直钉在 Auto)。只认云端托管模型:
+ *  没登录时目录里的默认是引擎回显的本机记忆(profile.defaultModelId = config 里的上次选择),记成 '' 会把它清掉。
+ *  只给模型药丸的点选(setSessionModel)用:设置页 / 新手引导自带「跟随」项,且撤销 / 回填走同一个回调,套上会把已存的值改掉(Codex 10-28)。 */
+export function rememberedModelId(modelId: string, resp: Pick<ModelsResponse, 'models' | 'defaultModelId'> | null | undefined): string {
+  const def = resp?.defaultModelId
+  return def && modelId === def && resp.models?.some((m) => m.id === def && m.source === 'forsion') ? '' : modelId
+}
 /** 主区聊天此刻**实际会用**的模型 id(有会话 → 会话的;空白新对话 → newChatModelId)。
  *  = 输入栏药丸显示的那个(ChatView 的 mvModelId)。插件接缝 `ctx.tangu.activeModel()` 也读它 ——
  *  这条回退链已经被就地展开过三份、出过「发出去药丸跳回默认」的 bug,**别再抄第四份**。 */

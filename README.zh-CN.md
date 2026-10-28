@@ -122,7 +122,7 @@ Forsion（扶桑）是一个**本地优先的 AI 第二大脑**。用 Notion 风
 - **复用做事方法。** Skills 保存任务方法，MCP 接入外部工具与数据，插件扩展笔记块、视图和工作空间。
 - **建立专属环境。** 从商店安装插件、Agent、技能、Space、主题和网页应用；也可以让 Agent 借助内置扩展开发技能创建自己的扩展。
 
-[插件体系](./docs/customization/plugins.md) · [商店](./docs/customization/market.md) · [Skills](./docs/agents/skills.md)
+[插件体系](./docs/customization/plugins.md) · [插件开发](./docs/customization/plugin-development.md) · [商店](./docs/customization/market.md) · [Skills](./docs/agents/skills.md)
 
 ## 从几份资料，到一份能继续推进的研究分享
 

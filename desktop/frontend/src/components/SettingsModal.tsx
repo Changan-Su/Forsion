@@ -142,7 +142,8 @@ registerMessages({
   'settings.forsionCloud.connection': { zh: '连接', en: 'Connection' },
   'settingsmodal.cloudAccountDescription': { zh: 'Forsion 云端 · 管理个人主页、登录资料和账号安全。', en: 'Forsion Cloud · Your profile, sign-in details and account security.' },
   'settingsmodal.cloudMembershipDescription': { zh: 'Forsion 云端 · 查看会员、额度、积分与用量记录。', en: 'Forsion Cloud · Membership, quota, points and usage.' },
-  'settingsmodal.cloudHelpDescription': { zh: 'Forsion 云端 · 提交反馈、查看回复与管理诊断数据。', en: 'Forsion Cloud · Feedback, replies and diagnostic data.' },
+  'settingsmodal.cloudHelpDescription': { zh: 'Forsion 云端 · 提交反馈、查看回复。', en: 'Forsion Cloud · Feedback and replies.' },
+  'settingsmodal.cloudPrivacyDescription': { zh: 'Forsion 云端 · 帮助改进 Forsion，管理诊断数据。', en: 'Forsion Cloud · Help improve Forsion and manage diagnostic data.' },
   'settingsmodal.cloudAdvancedConnection': { zh: '高级连接', en: 'Advanced connection' },
   'settings.forsionCloud.noteSyncOn': { zh: '与云端智库同步', en: 'Sync with the cloud vault' },
   'settings.forsionCloud.address': { zh: '地址', en: 'Address' },
@@ -287,6 +288,9 @@ export type Tab = StaticTab | `plugin:${string}` | `fplugin:${string}`
 export type SettingsTarget = Tab | 'wechat' | `${StaticTab}/${string}`
 
 const DEV_MODE_KEY = 'forsion_tangu_dev_mode'
+/** 摘要栏卡片立体感(开发者选项)。读的一方是 Tangu 的 views/chat2/summaryPrefs,宿主不 import 它(Tangu 边界):
+ *  写同一个 key,再在本窗口派一次 storage 事件 —— 设置开在独立窗口时浏览器自己给主窗派,和主窗同窗时靠这一次。 */
+const SUMMARY_ELEVATION_KEY = 'forsion.summaryElevation'
 /** 「Forsion 云端 → 账号」:Extend 渲染半身自绘的子页(registerSettingsView category 'forsion',id 'account')。 */
 const ACCOUNT_SUB = 'fx:forsion-extend:account'
 /** 引擎插件「电脑操作」的 id:它的设置页是固定的一级页 'computer-use'。 */
@@ -473,6 +477,15 @@ export const SettingsModal: React.FC<{
     setFonts((f) => ({ ...f, [slot]: v }))
     writeFont(slot, v)
     applyUiFonts()
+  }
+  // 开发者「摘要栏卡片立体感」(见 SUMMARY_ELEVATION_KEY)。
+  const [summaryElevation, setSummaryElevationState] = useState<string>(() => {
+    try { const v = localStorage.getItem(SUMMARY_ELEVATION_KEY); return v === 'float' || v === 'flat' ? v : 'half' } catch { return 'half' }
+  })
+  const setSummaryElevation = (v: string) => {
+    setSummaryElevationState(v)
+    try { localStorage.setItem(SUMMARY_ELEVATION_KEY, v) } catch { /* 存不进就不同步 */ }
+    window.dispatchEvent(new StorageEvent('storage', { key: SUMMARY_ELEVATION_KEY }))
   }
   // 开发者「移动端 UI 预览命令」开关(localStorage;bootstrapEngine 启动时据此注册 switch-ui-mode 命令)。
   const [mobileUiCmd, setMobileUiCmd] = useState<boolean>(() => {
@@ -1243,7 +1256,8 @@ export const SettingsModal: React.FC<{
     : subItemsForTab(id).filter(([key]) => cloudSettingsParent(cloudViews, key) === key && (!groupedCloud || key !== 'f-conn'))
   const cloudDescription = cloudNavKey === ACCOUNT_SUB ? 'settingsmodal.cloudAccountDescription'
     : cloudNavKey === 'fx:forsion-extend:quota' ? 'settingsmodal.cloudMembershipDescription'
-      : cloudNavKey === 'fx:forsion-extend:feedback' ? 'settingsmodal.cloudHelpDescription' : ''
+      : cloudNavKey === 'fx:forsion-extend:feedback' ? 'settingsmodal.cloudHelpDescription'
+        : cloudNavKey === 'fx:forsion-extend:privacy' ? 'settingsmodal.cloudPrivacyDescription' : ''
   const activeSubLabel = subItems.find(([k]) => k === activeSub)?.[1] ?? ''
   const modelSubDescriptions: Record<string, string> = { 'm-models': 'modelsettings.defaultsHint', 'm-display': 'modelsettings.displayHint', 'm-providers': 'modelsettings.providersHint', 'm-websearch': 'modelsettings.searchHint', 'm-voice': 'modelsettings.voiceHint' }
   // 换页/换子页面后:①选中项滚到可见；②正文回到顶部 —— ⚠️ 滚动容器是**外层**
@@ -3472,6 +3486,14 @@ export const SettingsModal: React.FC<{
                             setMobileUiCommand(on)   // 设置画在主窗里的形态(web/mobile)
                             requestDevCommandsSync() // 设置在浮窗里的形态:命令表各窗一份,得让主窗重算
                       }} />} />
+                    </div>
+                    <div className="field">
+                      <SettingsRow fit="wrap" label={t('settings.developer.summaryElevation')} description={t('settings.developer.summaryElevationHint')} control={
+                        <div className="seg" role="group" aria-label={t('settings.developer.summaryElevation')}>
+                          {([['float', t('settings.developer.summaryElevationFloat')], ['half', t('settings.developer.summaryElevationHalf')], ['flat', t('settings.developer.summaryElevationFlat')]] as const).map(([v, label]) => (
+                            <button key={v} type="button" aria-pressed={summaryElevation === v} className={summaryElevation === v ? 'active' : ''} onClick={() => setSummaryElevation(v)}>{label}</button>
+                          ))}
+                        </div>} />
                     </div>
                     <div className="field">
                       <label>{t('settings.developer.testUpdateLabel')}</label>

@@ -1,6 +1,7 @@
 /**
  * 正文里的生成式 AI(评审 G3-07):`POST /agent/inline` —— 编辑器选区改写 / 续写 / 自定义指令的一次性补全,
  * 也是插件 `ctx.tangu.complete` 的落点(收编此前插件直连 `/agent/runs` 的做法)。
+ * action 'fim'(行内补全):model_id 必填,前后文原样交给补全模型,不可补全 → SSE error `fim_unsupported`。
  * SSE:delta* → done | error(同旁聊 /aside)。不落库、无工具、不排 run 的队;客户端断开即中止上游请求。
  * 单独成文件(sessions.ts 被多个在途分支改着),在 index.ts 的注册处一行接入。
  */
@@ -20,7 +21,9 @@ router.post('/agent/inline', authMiddleware, async (req: AuthRequest, res) => {
   const userId = req.user!.userId;
   const input = normalizeInlineInput(req.body);
   if (!input) return res.status(400).json({ detail: 'invalid inline request: unknown action, or missing selection / instruction' });
-  const modelId = (typeof req.body?.model_id === 'string' && req.body.model_id) || resolveProfile(typeof req.body?.app_id === 'string' ? req.body.app_id : undefined)?.defaultModelId || '';
+  // fim 不落回 profile 的默认模型:那是聊天模型,必然做不了补全(只会换来一句含糊的 fim_unsupported)。
+  const explicit = (typeof req.body?.model_id === 'string' && req.body.model_id) || '';
+  const modelId = explicit || (input.action === 'fim' ? '' : resolveProfile(typeof req.body?.app_id === 'string' ? req.body.app_id : undefined)?.defaultModelId || '');
   if (!modelId) return res.status(400).json({ detail: 'model_id required' });
   const n = inFlight.get(userId) || 0;
   if (n >= INLINE_MAX_IN_FLIGHT) return res.status(429).json({ detail: 'Too many inline requests in flight' });

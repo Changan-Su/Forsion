@@ -8,7 +8,7 @@
  * 插件经 ctx.summary.registerCard 加卡(amadeus/plugins/summaryCards.ts)。
  * 出现/收起仍是纯 CSS(容器查询 + 过渡,见 chat2.css `.t2-tsum`);窄了整栈收掉,后台进程退到输入框上方那一行。
  */
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, ArrowDownToLine, ArrowUpToLine, CheckCircle2, ChevronRight, CircleStop, FileText, FolderOpen, Globe, GripVertical, Pencil, Plus, RotateCcw, Search, X, XCircle } from 'lucide-react'
 import { createDropIndicator, land, landWhenMoved } from '@lcl/engine'
 import { describeTool } from '../../components/ToolGroup'
@@ -19,7 +19,7 @@ import type { DisplayFile, UiMessage } from '../../../../../tangu-agent/src/cont
 import { findLiveEdit } from '../../stores/deskPlan'
 import { hasFacts, summarizeTask } from './taskFacts'
 import { ChatWebLink } from '../../components/ChatWikiLink'
-import { fullOrder, moveCard, orderCards, setCardOpen, setCardOrder, useSummaryPrefs } from './summaryPrefs'
+import { fullOrder, moveCard, orderCards, setCardOpen, setCardOrder, useSummaryElevation, useSummaryPrefs } from './summaryPrefs'
 import { useSummaryCards, type SummaryCardEntry } from '../../amadeus/plugins/summaryCards'
 import { refreshProcesses, useProcessPolling, useSessionProcesses } from './processStore'
 import { BgRow, PROCESS_CAP } from './BackgroundProcs'
@@ -56,6 +56,9 @@ registerMessages({
   'tsum.card.bottom': { zh: '移到最下', en: 'Move to bottom' },
   'tsum.card.reset': { zh: '恢复默认顺序', en: 'Reset order' },
 })
+
+/** dockview 搬完主区 DOM 后多久才放开摘要栏的进出场:盖住新分栏 setSize + 右栏补间(200 ms)。 */
+const MOVE_HOLD_MS = 600
 
 /** 来源图标按类别分:文件 / 目录 / 网页 / 搜索。 */
 const SRC_ICON = { file: FileText, dir: FolderOpen, web: Globe, search: Search } as const
@@ -446,6 +449,60 @@ export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, 
   const show = ordered.some((k) => k !== 'desk' && !pluginState[k]?.hidden)
 
   const stackRef = useRef<HTMLElement>(null)
+  const elevation = useSummaryElevation((st) => st.elevation)
+  // 8.9(DESIGN §3 动效规矩 6):挂上 / 换会话之后、用户还没动过之前,栈与 Desk 卡直接到位 ——
+  // ⌘J 开底栏会把聊天视图整个重挂一次,不能让摘要栏「又进场一遍」。用户在这个会话里点过 / 按过键之后,
+  // 因内容出现的栈、新到的卡才进场。草稿发出第一条变成会话不算换会话。
+  const sessKey = sessionId ?? ''
+  const [movedIn, setMovedIn] = useState<string | null>(null)
+  if (movedIn === '' && sessKey) setMovedIn(sessKey)
+  const still = movedIn !== sessKey
+  useEffect(() => {
+    if (!still) return
+    const on = (): void => setMovedIn(sessKey)
+    window.addEventListener('pointerdown', on, true)
+    window.addEventListener('keydown', on, true)
+    return () => { window.removeEventListener('pointerdown', on, true); window.removeEventListener('keydown', on, true) }
+  }, [still, sessKey])
+  // 第一次 ⌘J 开底栏:dockview 把主区 DOM 整个搬进新分栏(React 实例不换,上面的 still 拦不住),新分栏先按旧尺寸挂、
+  // 随后才 setSize,容器查询跨 760 来回一次,栈按 @starting-style 又进场一遍(实测在搬家后 2 帧之外)。
+  // 在 MutationObserver 回调里(渲染之前)挂 data-moved 压掉,搬家停下 MOVE_HOLD_MS 后摘掉。
+  // ponytail: 盯整个 body 的子树增删,每批只对新增节点做一次 contains;真成了热点再收窄到 dockview 根
+  useEffect(() => {
+    const stack = stackRef.current
+    if (!stack) return
+    let t = 0
+    const mo = new MutationObserver((recs) => {
+      if (!recs.some((r) => Array.prototype.some.call(r.addedNodes, (n: Node) => n.contains(stack)))) return
+      stack.setAttribute('data-moved', '')
+      window.clearTimeout(t)
+      t = window.setTimeout(() => stack.removeAttribute('data-moved'), MOVE_HOLD_MS)
+    })
+    mo.observe(document.body, { childList: true, subtree: true })
+    return () => { mo.disconnect(); window.clearTimeout(t) }
+  }, [])
+  // 栈已在场时新到的卡:错开 20 ms 淡入上来(第 6 张起与第 5 张同时),已经在的不动;整栈刚出现时随栈一起进。
+  const prevCards = useRef<{ keys: Set<string>; show: boolean } | null>(null)
+  useLayoutEffect(() => {
+    const prev = prevCards.current
+    prevCards.current = { keys: new Set(ordered), show }
+    if (still || !prev?.show || !show) return
+    let i = 0
+    for (const k of ordered) {
+      if (prev.keys.has(k) || k === 'desk') continue // Desk 卡有自己的进出场
+      const el = stackRef.current?.querySelector<HTMLElement>(`:scope > [data-card="${CSS.escape(k)}"]`)
+      if (!el) continue
+      el.style.animationDelay = `${Math.min(i++, 4) * 20}ms`
+      el.dataset.motion = 'enter'
+      const done = (e: AnimationEvent): void => {
+        if (e.target !== el) return
+        el.removeEventListener('animationend', done)
+        delete el.dataset.motion
+        el.style.animationDelay = ''
+      }
+      el.addEventListener('animationend', done)
+    }
+  })
   const defaultsRef = useRef(defaults)
   defaultsRef.current = defaults
   const [menu, setMenu] = useState<CtxMenu>(null)
@@ -481,7 +538,7 @@ export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, 
 
   return (
     <RailCtx.Provider value={api}>
-      <aside ref={stackRef} className={`t2-tsum${show ? ' show' : ''}`} aria-hidden={!show && !desk} aria-busy={f.state === 'running'} aria-label={t('tsum.title')}>
+      <aside ref={stackRef} className={`t2-tsum${show ? ' show' : ''}`} data-elev={elevation} data-still={still || undefined} aria-hidden={!show && !desk} aria-busy={f.state === 'running'} aria-label={t('tsum.title')}>
         {ordered.map((k) => cards[k])}
       </aside>
       {menu && <ContextMenu menu={menu} onClose={() => setMenu(null)} autoFocus />}

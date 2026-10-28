@@ -111,6 +111,7 @@ export const ENGINE_ROUTES: readonly EngineRoute[] = [
   { method: 'PUT', path: '/agent/agents/:slug/memory/dream', access: 'deny-remote', src: 'routes/memoryMaintenance.ts', why: 'memory maintenance config' },
   { method: 'GET', path: '/agent/models', access: 'allow', src: 'routes/models.ts', why: 'model list' },
   { method: 'PUT', path: '/agent/models/overrides', access: 'deny-remote', src: 'routes/models.ts', why: 'model overrides config' },
+  { method: 'GET', path: '/agent/models/quota', access: 'allow', src: 'routes/models.ts', why: 'provider quota (read-only)' },
   { method: 'GET', path: '/agent/plugins', access: 'deny-remote', src: 'routes/plugins.ts', why: 'engine plugins are local-only' },
   { method: 'DELETE', path: '/agent/plugins/:id', access: 'deny-remote', src: 'routes/plugins.ts', why: 'engine plugins are local-only' },
   { method: 'PUT', path: '/agent/plugins/:id/enabled', access: 'deny-remote', src: 'routes/plugins.ts', why: 'engine plugins are local-only' },
