@@ -31,8 +31,6 @@ Forsion 的插件分两类,设置里统一成一页管理,**内置**与**外置*
 
 每个插件自动带一个「工作文件夹」设置,指定它把产物放在哪。缺省是笔记库里的 `Plugins/<英文插件 ID>`:所有插件的产物都收在 `Plugins` 这一个文件夹下,库根目录留给你自己的笔记。带设置项的插件在**详情页**提供表单,改完即生效,不用改配置文件。
 
-Every plugin gets a *Working folder* setting that decides where its output goes. By default it is `Plugins/<plugin ID>` inside your vault, so all plugin output sits under one `Plugins` folder and the vault root stays yours. Plugins with settings show a form on their **detail page**; changes apply immediately.
-
 ## 安装渠道
 
 - **商店**(推荐)— 一键安装,更新统一管理,桌面插件与引擎插件按真实类型自动装到正确的位置,见[商店](market.md);
