@@ -235,7 +235,8 @@ export async function listProjectPlans(cwd: string, limit = 30): Promise<Project
 // ── 项目默认项(用户侧)──────────────────────────────────────────────────────
 
 export const projectSettingsFile = (): string => path.join(tanguHome(), 'project-settings.json');
-interface SettingsFile { version: 1; projects: Record<string, ProjectSettings> }
+/** remotes = 项目最近一次看到的 origin 地址(遮过凭据),按 realpath。只给「文件夹搬走后重新指向」比对同名文件夹用:旧文件夹没了就读不到它的远端了。 */
+interface SettingsFile { version: 1; projects: Record<string, ProjectSettings>; remotes?: Record<string, string> }
 
 /** 白名单收窄:Agent / Team 二选一(Agent 优先)、模型 id 长度封顶、思考档只认已知枚举、审批档未知非空按 readonly。没有一个有效键 → null(= 删除)。 */
 export function sanitizeProjectSettings(input: unknown): ProjectSettings | null {
@@ -264,7 +265,8 @@ async function readSettingsFile(): Promise<SettingsFile> {
   try {
     const parsed = JSON.parse(await fs.readFile(projectSettingsFile(), 'utf8')) as Partial<SettingsFile>;
     if (parsed && typeof parsed === 'object' && parsed.projects && typeof parsed.projects === 'object') {
-      return { version: 1, projects: parsed.projects as Record<string, ProjectSettings> };
+      const remotes = parsed.remotes && typeof parsed.remotes === 'object' && !Array.isArray(parsed.remotes) ? parsed.remotes as Record<string, string> : undefined;
+      return { version: 1, projects: parsed.projects as Record<string, ProjectSettings>, ...(remotes ? { remotes } : {}) };
     }
   } catch { /* 没有文件 / 坏 JSON → 空表;写回时整份重写 */ }
   return { version: 1, projects: {} };
@@ -301,12 +303,65 @@ export function updateProjectSettings(cwd: string, next: (current: ProjectSettin
     const clean = sanitizeProjectSettings(next(sanitizeProjectSettings(file.projects[key])));
     if (clean) file.projects[key] = clean;
     else delete file.projects[key];
-    const target = projectSettingsFile();
-    await fs.mkdir(path.dirname(target), { recursive: true });
-    const tmp = `${target}.${process.pid}.${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}.tmp`; // 每笔各写各的临时文件,rename 才是原子点
-    await fs.writeFile(tmp, JSON.stringify(file, null, 2) + '\n', 'utf8');
-    await fs.rename(tmp, target);
+    await writeSettingsFile(file);
     return clean;
+  });
+}
+
+async function writeSettingsFile(file: SettingsFile): Promise<void> {
+  const target = projectSettingsFile();
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  const tmp = `${target}.${process.pid}.${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}.tmp`; // 每笔各写各的临时文件,rename 才是原子点
+  await fs.writeFile(tmp, JSON.stringify(file, null, 2) + '\n', 'utf8');
+  await fs.rename(tmp, target);
+}
+
+/** 记下项目的 origin(PROJECT 详情读 git 时顺手;没变不写)。 */
+export function rememberProjectRemote(real: string, remote: string): Promise<void> {
+  return serialized(projectSettingsFile(), async () => {
+    const file = await readSettingsFile();
+    if (file.remotes?.[real] === remote) return;
+    file.remotes = { ...file.remotes, [real]: remote };
+    await writeSettingsFile(file);
+  });
+}
+
+/** 旧项目在设置文件里的那一项与远端记录(keys 是旧路径的几种写法,取第一个有的)。 */
+export async function projectSettingsAt(keys: readonly string[]): Promise<{ settings: ProjectSettings | null; remote: string | null }> {
+  const file = await readSettingsFile();
+  const key = keys.find((k) => file.projects[k]);
+  return { settings: key ? sanitizeProjectSettings(file.projects[key]) : null, remote: keys.map((k) => file.remotes?.[k]).find(Boolean) ?? null };
+}
+
+/** 重新指向:把旧路径名下的默认项与远端记录挪到 to。keepTarget = 合并进已有项目,那边已有的默认项保留;否则旧的盖过去。
+ *  返回 undo(把这两把键写回改之前的样子)。旧路径名下什么都没有 → 不写文件。 */
+export function rekeyProjectSettings(fromKeys: readonly string[], to: string, keepTarget: boolean): Promise<() => Promise<void>> {
+  return serialized(projectSettingsFile(), async () => {
+    const file = await readSettingsFile();
+    const touched = [...new Set([...fromKeys, to])].filter((k) => k === to || file.projects[k] || file.remotes?.[k]);
+    if (!touched.some((k) => k !== to)) return async () => {};
+    const before = Object.fromEntries(touched.map((k) => [k, { project: file.projects[k], remote: file.remotes?.[k] }]));
+    const moved = fromKeys.map((k) => file.projects[k]).find(Boolean);
+    const remote = fromKeys.map((k) => file.remotes?.[k]).find(Boolean);
+    const remotes = { ...file.remotes };
+    for (const k of fromKeys) { if (k === to) continue; delete file.projects[k]; delete remotes[k]; }
+    if (moved && !(keepTarget && file.projects[to])) file.projects[to] = moved;
+    if (remote && !(keepTarget && remotes[to])) remotes[to] = remote;
+    file.remotes = remotes;
+    await writeSettingsFile(file);
+    const same = (a: unknown, b: unknown): boolean => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+    const after = Object.fromEntries(touched.map((k) => [k, { project: file.projects[k], remote: remotes[k] }]));
+    // 撤销只把「还是我写的那个值」的键改回去:这之间别处又改过的(另一个窗口存了默认项、记了远端)留着它的(Codex 评审)
+    return () => serialized(projectSettingsFile(), async () => {
+      const now = await readSettingsFile();
+      const back = { ...now.remotes };
+      for (const [k, v] of Object.entries(before)) {
+        if (same(now.projects[k], after[k].project)) { if (v.project) now.projects[k] = v.project; else delete now.projects[k]; }
+        if (same(back[k], after[k].remote)) { if (v.remote) back[k] = v.remote; else delete back[k]; }
+      }
+      now.remotes = back;
+      await writeSettingsFile(now);
+    });
   });
 }
 
@@ -556,5 +611,6 @@ export async function projectContext(cwd: string): Promise<ProjectContext> {
     readProjectSettings(canonical).catch(() => null),
     gitSummary(canonical).catch((): GitSummary => ({ available: false, repo: false })),
   ]);
+  if (git.repo && git.remote) void rememberProjectRemote(canonical, git.remote).catch(() => {});
   return { cwd: canonical, workspaceDir: path.join(canonical, WORKSPACE_DIR_NAME), workspaceDirName: WORKSPACE_DIR_NAME, doc, skills, plans, settings, git };
 }

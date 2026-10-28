@@ -16,6 +16,7 @@ import { localInbox, localizeInboxMessage } from './localInbox' // 移动端(win
 import { registerMessages, translate } from '../i18n'
 import { LOCAL_ONLY_CODE, localOnlyMessage, remoteRefusalMessage } from './localOnly'
 import { saveResponseAs } from './nativeDownload'
+import type { RelinkInfo, RelinkResult } from '../../../../tangu-agent/src/contracts/clientTypes'
 
 registerMessages({
   'backendsvc.downloadFailed': { zh: '下载失败 ({status})', en: 'Download failed ({status})' },
@@ -1480,6 +1481,15 @@ export const resolveProjectCandidate = (t: EngineTarget, sessionId: string, id: 
 /** 把写满压缩时合并 / 去掉的一句原样记回项目记忆。404 = 那一句已经不在记录里;放不下 → err.code 'MEMORY_FULL'。 */
 export const restoreProjectMemoryFact = (t: EngineTarget, sessionId: string, id: string) =>
   request<{ memory: ProjectMemoryView }>(t, '/agent/project-context/memory/restore', { method: 'POST', body: JSON.stringify({ sessionId, id }) }).then((r) => r.memory)
+// ── 项目文件夹搬走后重新指向(引擎 services/projectRelink.ts;只在本机引擎上,手机 / 网页拿到的是空表)──
+/** 本人会话里出现过、现在不在原处的本地项目路径(外接盘没挂上也算 —— 只拿来打标记)。 */
+export const getMissingProjects = (t: EngineTarget) =>
+  request<{ missing: string[] }>(t, '/agent/project-context/missing').then((r) => (Array.isArray(r?.missing) ? r.missing : []))
+/** 旧路径只从会话行取(sessionId = 这个项目里的任一会话)。 */
+export const getRelinkInfo = (t: EngineTarget, sessionId: string) =>
+  request<RelinkInfo>(t, `/agent/project-context/relink?sessionId=${encodeURIComponent(sessionId)}`)
+export const relinkProject = (t: EngineTarget, sessionId: string, path: string, merge = false) =>
+  request<RelinkResult>(t, '/agent/project-context/relink', { method: 'POST', body: JSON.stringify({ sessionId, path, merge }) })
 export const initProjectContext = (t: EngineTarget, sessionId: string) =>
   request<{ createdDir: boolean; createdDoc: boolean; context: ProjectContext }>(t, '/agent/project-context/init', { method: 'POST', body: JSON.stringify({ sessionId }) }).then((r) => ({ ...r, context: projectContextShape(r.context) }))
 /** 409 = 文件在读出之后被别处改过(没有写入);调用方提示用户重载。 */

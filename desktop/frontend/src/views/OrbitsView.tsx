@@ -43,6 +43,7 @@ import { isHomeSession, isIndependentOrbitConfig, isTeamImageAvatar, sessionWork
 import { runLocationsAvailable } from '../features/runtime'
 import { DeviceSessionSections, attentionBadge } from './chat2/DeviceSessionSections' // P1-K7a
 import { isOrbitPinned, readOrbitPins, toggleOrbitPin, touchOrbitPin, writeOrbitPins, type OrbitPinTimes } from './chat2/orbitPins'
+import { onProjectRelinked } from './chat2/ProjectRelink'
 import './chat2/orbits.css'
 import { homeTarget, useRemoteCapability } from '../services/engine/targets'
 
@@ -172,6 +173,15 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
     })
   }
   const togglePinned = (entryKey: string): void => updatePins((prev) => toggleOrbitPin(prev, entryKey))
+  // 项目重新指向了新文件夹:置顶按分组键存,跟着换键(新键已置顶 = 合并进了一个置顶的项目,留它的)
+  useEffect(() => onProjectRelinked((from, to) => updatePins((prev) => {
+    const was = prev[`ws:${from}`]
+    if (was === undefined) return prev
+    const next = { ...prev }
+    delete next[`ws:${from}`]
+    if (next[`ws:${to}`] === undefined) next[`ws:${to}`] = was
+    return next
+  })), [])
   const activatePinned = (entryKey: string): void => updatePins((prev) => touchOrbitPin(prev, entryKey))
   /** 非 Project 一级行共用同一份菜单状态；`…` 锚到按钮下方，右键锚到指针位置。 */
   const showRowMenu = (at: MenuAt, kind: RowMenu['kind'], slug: string, entryKey: string): void => {

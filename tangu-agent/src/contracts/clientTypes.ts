@@ -512,6 +512,25 @@ export interface ProjectSettings {
   icon?: string
 }
 
+/** 项目文件夹搬走后重新指向(引擎 services/projectRelink.ts)。同名文件夹候选:remoteMatch = 记下过的旧项目 git 远端对上了(界面只预选这种);
+ *  project = 这个文件夹已经是本人的哪个项目(重新指向过去要合并)。 */
+export interface RelinkCandidate { path: string; remote: string | null; remoteMatch: boolean; project: string | null }
+/** 重新指向对话框要的:会一起改的三样(几个会话、几条项目记忆、哪些默认项)和同名文件夹。 */
+export interface RelinkInfo {
+  from: string
+  sessions: number
+  memoryEntries: number
+  settings: Array<keyof ProjectSettings>
+  remote: string | null
+  candidates: RelinkCandidate[]
+}
+/** ok = 改好了(path = 会话现在的分组键;并进已有项目时 name = 那个项目名);already_project = 新位置已是项目 name,带 merge 再来才合并。 */
+export type RelinkResult =
+  | { ok: true; path: string; name: string | null; sessionIds: string[]; memory: 'none' | 'moved' | 'merged'
+      /** 改过的会话配置里那两项的新值(桌面拿它盖本地缓存:缓存是 local-wins,不换掉会把旧目录发回引擎)。 */
+      configs: Record<string, { cwd?: string; extraRoots?: string[] }> }
+  | { ok: false; error: 'already_project'; path: string; name: string }
+
 export const isProjectIconFile = (icon?: string): boolean => /^icon\.(png|jpe?g|gif|webp)$/i.test(icon || '')
 
 export interface ProjectDocInfo {
