@@ -93,7 +93,7 @@ describe('computed documents (intelligent-ui.v2)', () => {
       expect(plain).toContain('no external scripts/styles/fonts or charting libraries')
       expect(libs).toContain('may import three')
       expect(libs).not.toContain('charting libraries')
-      expect(libs.replace(/no external scripts\/styles\/fonts[^\n]*?getPropertyValue\('--fs-…'\)/, '')).toBe(plain.replace(/no external scripts\/styles\/fonts or charting libraries \(draw with inline SVG or divs\)/, ''))
+      expect(libs.replace(/no external scripts\/styles\/fonts[^\n]*?for your script to replace/, '')).toBe(plain.replace(/no external scripts\/styles\/fonts or charting libraries \(draw with inline SVG or divs\)/, ''))
     }
     expect(sketchTurnSignalFor('做一个房贷计算器，可以调利率', 'auto', true, false)?.section).not.toContain('computed')
   })
