@@ -40,6 +40,8 @@ export interface BuildPayloadOpts {
   toolChoice?: 'auto' | 'none' | { type: 'function'; function: { name: string } };
   attachments?: any[];
   thinkingLevel?: ThinkingLevel;
+  /** Fast 档(会话键 fast):直连 Codex 订阅且模型目录声明了这一档时,请求带 service_tier=priority。托管面忽略。 */
+  fast?: boolean;
   stream?: boolean;
   /** 缓存路由键(传 sessionId):OpenAI 官方 API 的 prompt_cache_key,同会话请求粘到同一推理机提升前缀缓存命中。 */
   cacheKey?: string;
@@ -95,6 +97,10 @@ export interface StreamOpts {
   signal?: AbortSignal;
   /** 模型 provider:anthropic/claude 时 server 侧走原生 /v1/messages;httpBrain 路径由 brain-api 自行解析,可省略。 */
   provider?: string;
+  /** 发给模型前脱敏(llm/outboundMask.ts):记录归到哪个会话;不传 = 后台调用,只记不报。 */
+  maskScope?: string;
+  /** 这一轮发出前遮住了哪些值(不含原值)。action = warn 时是「找到了、原样发出」。 */
+  onMasked?: (hits: Array<{ kind: string; ph: string; head: string; len: number }>, action: 'mask' | 'warn' | 'block') => void;
 }
 
 export interface LlmBrain {
@@ -103,7 +109,33 @@ export interface LlmBrain {
   streamProviderCompletion(opts: StreamOpts): Promise<StreamResult>;
   /** 上游报凭证失效时强制续期,返回新 key;该模型的凭证续不了(API key、托管面)返回 null。仅订阅登录的直连 provider 实现。 */
   refreshModelKey?(modelId: string): Promise<string | null>;
+  /**
+   * FIM(fill-in-the-middle,按光标前后文补中间;行内补全用,2026-10-26+)。无系统提示、无消息包装:prefix / suffix 原样交给
+   * 模型,返回的 content 是模型原文。帧与计费同 streamProviderCompletion(httpBrain 走云端 /api/brain/llm/fim-stream)。
+   * 可选:老 brain 没有 = 不支持。模型 / 服务端做不了 FIM → 抛 fimUnsupportedError()(`.code === 'fim_unsupported'`)。
+   */
+  fimCompletion?(opts: FimCompletionOpts): Promise<StreamResult>;
 }
+
+export interface FimCompletionOpts {
+  modelId: string;
+  prefix: string;
+  suffix?: string;
+  maxTokens?: number;
+  stop?: string[];
+  client?: string;
+  /** 用量归属(记账的应用来源;httpBrain 上云时作 projectSource)。 */
+  usageSource?: string;
+  signal?: AbortSignal;
+  onToken?: (delta: string) => void;
+}
+
+export const FIM_UNSUPPORTED = 'fim_unsupported';
+/** 模型 / 服务端 / brain 做不了 FIM:统一的错误形状(message 与 code 都是 'fim_unsupported')。 */
+export function fimUnsupportedError(): Error & { code: string } {
+  return Object.assign(new Error(FIM_UNSUPPORTED), { code: FIM_UNSUPPORTED });
+}
+export const isFimUnsupported = (e: unknown): boolean => (e as any)?.code === FIM_UNSUPPORTED;
 
 // ── 其余子接口 ──────────────────────────────────────────────────────────────
 export interface UsersBrain {
@@ -164,13 +196,18 @@ export interface ModelsBrain {
    * 本地直连 provider 列表(BYO-key,桌面/TUI 模型选择器用;绝不含 apiKey,baseUrl 仅供 UI 展示)。
    * 可选:仅 standalone 的 multiBrain 实现;forsionSeams/httpBrain 不实现 → 调用方跳过。
    */
-  listDirectProviders?(): Array<{ providerId: string; baseUrl?: string; modelIds?: string[]; imageModelIds?: string[]; ttsModelIds?: string[]; noVisionModelIds?: string[] }>;
+  listDirectProviders?(): Array<{ providerId: string; baseUrl?: string; modelIds?: string[]; imageModelIds?: string[]; ttsModelIds?: string[]; noVisionModelIds?: string[]; fastTiers?: Record<string, string> }>;
   /**
    * modelId 是否命中本地直连 provider(`<providerId>/<模型>` 或 modelIds 精确匹配)。
    * 可选:仅 standalone 的 multiBrain 实现。agentLoop 据此在云端不可达(未登录 Forsion)时
    * 对 BYOK/订阅模型降级放行(用户探针/计费本就 no-op),云端部署无此方法 → 行为不变。
    */
   hasDirectModel?(modelId: string): boolean;
+  /**
+   * modelId 所属直连 provider 的额度 / 余额(输入框上下文环弹层用);不是直连模型、或该来源查不到 → null。
+   * 可选:仅 standalone 的 multiBrain 实现。口径见 llm/providerQuota.ts。
+   */
+  providerQuota?(modelId: string): Promise<import('../contracts/clientTypes.js').ProviderQuota | null>;
   /**
    * 按应用过滤的模型列表(遵守 Forsion admin「应用模型配置」project_model_configs)。
    * 可选:旧版云端/brain 未实现 → 调用方回退 listGlobalModels。
@@ -193,6 +230,8 @@ export interface ModelsBrain {
     translateModels?: Array<{ id: string; name: string; provider?: string; apiModelId?: string | null }>;
     /** 云端的朗读模型(不在 models 里 —— 它们只合成语音;桌面「语音朗读」的模型框列它们)。老云端不给 = 没有。 */
     ttsModels?: Array<{ id: string; name: string; apiModelId?: string | null }>;
+    /** 云端的补全(FIM)模型:只做补全的不在 models 里;标了 FIM 协议的聊天模型两边都在。客户端「补全」模型槽列它们。老云端不给 = 没有。 */
+    fimModels?: Array<{ id: string; name: string; provider?: string; apiModelId?: string | null }>;
     /** 这次目录是真读到了,还是被降级填的空?未实现此字段的实现留 undefined(调用方回落长度启发式)。
      *  空列表有两种成因(未登录/断网 vs admin 真没授权),分不清就会把掉线用户支去设置页空等。 */
     reachable?: boolean;

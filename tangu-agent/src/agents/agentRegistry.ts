@@ -19,6 +19,8 @@ import path from 'node:path';
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
 import { agentsDir, memoryDir, userMdFile, ensureHumanFolder, humanDir, DEFAULT_AGENT_SLUG, USER_MD_TEMPLATE } from '../core/tanguHome.js';
 import { mirrorLegacyHuman } from './humanFolder.js';
+import { recordAgentRemoval } from '../services/cloudSyncAccount.js';
+import { moveToTrash, type TrashEntry } from '../services/trash.js';
 import { credentialReadTarget } from '../sandbox/hostSandboxProtection.js';
 import { builtinAgentAvatar } from './builtinAvatars.js';
 import { LEGACY_PERSONAS, LEGACY_MUSE_PROMPTS, LEGACY_MUSE_DESCRIPTION } from './legacyPersonas.js';
@@ -32,12 +34,15 @@ import { normalizeCompactionLayer } from '../services/compactionSettings.js';
 import { normalizeApprovalMode } from '../services/approvals.js';
 import type { ThinkingLevel } from '../core/types.js';
 
-/** 循环轮数缺省(会话/Agent 都没给时 agentLoop 用它)与 **Agent 级下限**:Agent 定义里低于下限的 max_iterations
- *  视为误设 —— 一个写了 3 的 agent,每回合两次工具调用就被迫收尾,用户只看到「空话空转」(09-13 用户导出实证)。
+/** **Agent 级轮数下限**:会话 / Agent 都没给上限时交互 run 不限轮数(10-25 用户定:默认 90 截断了 48 分钟、113 次调用的
+ *  正常长任务;Codex / Pi 主循环同样不计轮数,靠模型收尾 + 额度 / 成本闸 + 用户停止)。自动化与 Muse 各自带上限。
+ *  Agent 定义里低于下限的 max_iterations 视为误设 —— 一个写了 3 的 agent,每回合两次工具调用就被迫收尾,用户只看到「空话空转」(09-13 用户导出实证)。
  *  三处同口径:激活时忽略并告警(agentActivation)、保存时清空并告警(buildAgentDef)、路由与 manage_agent 显式拒绝。
  *  会话级 /loop 不套下限:那是用户显式意图(/loop 1 单发)。桌面 AgentsTab 的 min 与此同步。 */
-export const DEFAULT_MAX_ITERATIONS = 90;
 export const AGENT_MAX_ITERATIONS_MIN = 10;
+/** 无人值守的后台群聊(Historian 协助、@讨论)里每个成员单次发言的轮数上限:没人看着、也没人点停止,沿用原默认 90。
+ *  经团队 run 的 maxIterations → teamRuns.memberRunConfig 传给成员子 run(Codex 评审 10-25 #1)。 */
+export const BACKGROUND_MAX_ITERATIONS = 90;
 
 /** agent 定义里的思考档位。`''` = 未声明(跟随会话默认),其余同 core 的 ThinkingLevel 七档。 */
 export type ThinkLevel = ThinkingLevel | '';
@@ -179,7 +184,7 @@ export function parseAgentFile(slug: string, raw: string): NormalAgentDef {
     enabledSkillIds: Array.isArray(meta.enabled_skill_ids) ? meta.enabled_skill_ids.filter((v: unknown) => typeof v === 'string') : undefined,
     enabledMcpServers: Array.isArray(meta.enabled_mcp_servers) ? meta.enabled_mcp_servers.filter((v: unknown) => typeof v === 'string') : undefined,
     thinkingLevel: thinking,
-    maxIterations: Number.isFinite(maxIter) && maxIter > 0 ? Math.min(200, Math.floor(maxIter)) : null,
+    maxIterations: Number.isFinite(maxIter) && maxIter > 0 ? Math.floor(maxIter) : null,
     approvalMode: approval,
     createdBy: meta.created_by === 'agent' ? 'agent' : 'user',
     createdAt: meta.created_at || '',
@@ -240,7 +245,7 @@ export function parseAgentConfig(slug: string, tomlRaw: string, soul: string): N
     enabledSkillIds: Array.isArray(meta.enabled_skill_ids) ? meta.enabled_skill_ids.filter((v: unknown) => typeof v === 'string') : undefined,
     enabledMcpServers: Array.isArray(meta.enabled_mcp_servers) ? meta.enabled_mcp_servers.filter((v: unknown) => typeof v === 'string') : undefined,
     thinkingLevel: think,
-    maxIterations: Number.isFinite(maxIter) && maxIter > 0 ? Math.min(200, Math.floor(maxIter)) : null,
+    maxIterations: Number.isFinite(maxIter) && maxIter > 0 ? Math.floor(maxIter) : null,
     approvalMode: approval,
     createdBy: meta.created_by === 'agent' ? 'agent' : meta.created_by === 'system' ? 'system' : 'user',
     createdAt: str(meta.created_at),
@@ -812,10 +817,10 @@ function clampAgentMaxIterations(slug: string, v: number | string | null | undef
   const n = typeof v === 'string' ? Number(v) : v; // REST 客户端可能传 "50":路由校验用 Number 放行、这里再按非数清空就成了静默丢值(Codex 09-13 #7)
   if (n == null || !Number.isFinite(n) || n <= 0) return null;
   if (n < AGENT_MAX_ITERATIONS_MIN) {
-    console.warn(`[tangu] agent ${slug}: max_iterations=${n} 低于下限 ${AGENT_MAX_ITERATIONS_MIN},已清空(回落默认 ${DEFAULT_MAX_ITERATIONS})`);
+    console.warn(`[tangu] agent ${slug}: max_iterations=${n} 低于下限 ${AGENT_MAX_ITERATIONS_MIN},已清空(回落默认:不限轮数)`);
     return null;
   }
-  return Math.min(200, Math.floor(n));
+  return Math.floor(n);
 }
 
 /** 用户在这个 agent 的工具名单里关掉了 manage_harness(文档里写的「不想让它自己改笔记」的办法)。
@@ -831,7 +836,7 @@ export function agentCapOf(def: Pick<NormalAgentDef, 'slug' | 'maxIterations'>):
   const v = def.maxIterations;
   if (v == null || !(v > 0)) return null;
   if (v < AGENT_MAX_ITERATIONS_MIN) {
-    console.warn(`[tangu] agent ${def.slug}: config.toml max_iterations=${v} 低于下限 ${AGENT_MAX_ITERATIONS_MIN},忽略(回落默认 ${DEFAULT_MAX_ITERATIONS})`);
+    console.warn(`[tangu] agent ${def.slug}: config.toml max_iterations=${v} 低于下限 ${AGENT_MAX_ITERATIONS_MIN},忽略(回落默认:不限轮数)`);
     return null;
   }
   return v;
@@ -980,54 +985,48 @@ export async function patchAgent(slug: string, fields: AgentPatch | ((cur: Norma
   });
 }
 
-function agentDeletable(slug: string): boolean {
-  if (!isValidSlug(slug)) return false;
-  if (slug === DEFAULT_AGENT_SLUG) return false; // 不允许删默认 agent(含其记忆/日志)
+/** 为什么删不了(卸载确认框据此只给关闭):默认 Agent(内置 xyra 与用户设的默认,同桌面名册「删除」置灰的口径)/
+ *  启用中的 Muse(supervisor 会自愈重建,删了也白删且丢记忆)。 */
+export function agentUndeletableReason(slug: string): 'invalid' | 'default' | 'muse' | null {
+  if (!isValidSlug(slug)) return 'invalid';
+  if (slug === DEFAULT_AGENT_SLUG || slug === readAgentsMeta().defaultSlug) return 'default';
   if (slug === MUSE_AGENT_SLUG) {
-    // Muse 启用期间禁删(supervisor 会自愈重建,删了也白删且丢记忆);关闭 Muse 后允许删。
-    try { if (loadSpecialAgentsConfig().muse.enabled) return false; } catch { /* 配置读失败不阻删 */ }
+    try { if (loadSpecialAgentsConfig().muse.enabled) return 'muse'; } catch { /* 配置读失败不阻删 */ }
   }
-  return true;
+  return null;
+}
+const agentDeletable = (slug: string): boolean => !agentUndeletableReason(slug);
+
+/** 删除 Agent = 挪进回收站(trashAgent)。从名册、侧栏消失,30 天内可恢复;私聊、团队、自动化那几样由 services/agentUninstall 一起处理。 */
+export async function deleteAgent(slug: string): Promise<boolean> {
+  return (await trashAgent(slug)).ok;
 }
 
-export async function deleteAgent(slug: string): Promise<boolean> {
-  if (!agentDeletable(slug)) return false;
+/** 整个目录(定义、记忆、Library)连同遗留的扁平 `<slug>.md` 挪进 `<tanguHome>/trash/`(扁平留在原地,下次启动会被迁回来)。
+ *  默认 Agent / 启用中的 Muse 拒删,文件原样不动。本来就不在 → ok 且没有条目。
+ *  record:false = 同步发现别处删了它,云端已经删过,别再记(会误删之后同名新建的)。alsoTrash = 一起进同一条的(只剩它一人的团队)。 */
+export async function trashAgent(slug: string, opts: { record?: boolean; alsoTrash?: Array<{ path: string; role: string }> } = {}): Promise<{ ok: boolean; entry?: TrashEntry }> {
+  if (!agentDeletable(slug)) return { ok: false };
   await ensureAgentsReady(); // 与 saveAgent 同理:入队前跑完首访播种
   return withAgentLock(slug, async () => {
+    const dir = path.join(agentsDir(), slug);
+    let undo = (): void => {};
     try {
-      await fs.rm(path.join(agentsDir(), slug), { recursive: true, force: true });
-      await fs.rm(path.join(agentsDir(), `${slug}.md`), { force: true }).catch(() => { /* 清理可能的遗留扁平 */ });
+      const name = (await parseAgentFolder(slug, dir).catch(() => null))?.name || slug;
+      if (opts.record !== false) undo = recordAgentRemoval(slug); // 影子跟着目录走,不先记一笔,下次同步会从云端整份拉回来
+      const entry = await moveToTrash({ kind: 'agent', ref: slug, name, paths: [{ path: dir, role: 'dir' }, { path: path.join(agentsDir(), `${slug}.md`), role: 'flat' }, ...(opts.alsoTrash ?? [])] });
       cache = null;
-      return true;
+      return entry ? { ok: true, entry } : { ok: true };
     } catch {
-      return false;
+      // 没挪走(config.toml 还在)就撤掉这次的记录:不然下次同步会删云端、再把本地没动过的文件当成别处删了一起删掉
+      if (existsSync(path.join(dir, 'config.toml'))) try { undo(); } catch { /* ignore */ }
+      return { ok: false };
     }
   });
 }
 
-/** 移除 Agent 但保留它的文件:整个目录(定义、记忆、Library)挪进 `agents/.removed/<slug>-<时间戳>/` —— 名册只认合法 slug,
- *  点开头的目录不会再被加载。返回挪到的位置:桌面勾了「同时删除相关文件」时再把它移进系统废纸篓
- *  (先挪后删:默认 Agent / 启用中的 Muse 被拒时,文件不会先没了)。 */
-export async function removeAgentKeepFiles(slug: string): Promise<{ ok: boolean; keptAt?: string }> {
-  if (!agentDeletable(slug)) return { ok: false };
-  await ensureAgentsReady();
-  return withAgentLock(slug, async () => {
-  const dest = path.join(agentsDir(), '.removed', `${slug}-${new Date().toISOString().replace(/[:.]/g, '-')}`);
-  const moved = async (from: string, to: string): Promise<boolean> => fs.rename(from, to).then(() => true, (e: NodeJS.ErrnoException) => { if (e?.code === 'ENOENT') return false; throw e; });
-  try {
-    await fs.mkdir(path.dirname(dest), { recursive: true });
-    const dir = await moved(path.join(agentsDir(), slug), dest);
-    // 遗留的扁平 <slug>.md 也一起挪走:留在原地下次启动 migrateFlatAgentsOnce 会把这个 Agent 迁回来;只剩它时也不能删
-    if (!dir) await fs.mkdir(dest, { recursive: true });
-    const flat = await moved(path.join(agentsDir(), `${slug}.md`), path.join(dest, `${slug}.md`));
-    cache = null;
-    if (!dir && !flat) { await fs.rmdir(dest).catch(() => { /* ignore */ }); return { ok: true }; } // 本来就不在了
-    return { ok: true, keptAt: dest };
-  } catch {
-    return { ok: false };
-  }
-  });
-}
+/** 恢复之后名册重读(目录是回收站挪回来的,不经 saveAgent)。 */
+export function invalidateAgentCache(): void { cache = null; }
 
 // ── 头像(存进该 agent 的 Library/,config.avatar 引用;≤1MB)。常量导出供云端 cloudAgentStore 共用。──
 export const AVATAR_MIME_EXT: Record<string, string> = {

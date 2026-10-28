@@ -4,8 +4,11 @@
 .muse-lib { container-type: inline-size; }
 .muse-lib-list { width: 240px; flex: none; border-right: var(--border-width, 1px) solid var(--border); }
 .muse-lib-preview { display: flex; }
+/* 库是空的、中间那栏已经画了空态:列表那句不重复(宽容器);窄容器只剩列表,那句要留着。 */
+.muse-lib-empty-hint { display: none; }
 
 @container (max-width: 460px) {
   .muse-lib-list { width: auto; flex: 1; min-width: 0; border-right: 0; }
   .muse-lib-preview { display: none; }
+  .muse-lib-empty-hint { display: block; }
 }

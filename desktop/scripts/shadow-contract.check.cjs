@@ -1,8 +1,8 @@
 /**
  * Genesis 阴影契约静态闸门。
  *
- * 空间高程只能消费 --card-shadow / --btn-shadow / --icon-shadow（Amadeus 内部可经
- * --shadow-panel 桥接）；立体使用淡阴影，扁平通过全局 token 清零。零模糊描边、focus/drop
+ * 空间高程只能消费 --card-shadow / --btn-shadow / --icon-shadow / --seg-thumb-shadow（分段控件的凸起滑块,
+ * 走查 5.11 A）（Amadeus 内部可经 --shadow-panel 桥接）；立体使用淡阴影，扁平通过全局 token 清零。零模糊描边、focus/drop
  * 反馈及少量有明确语义的动效不属于空间高程，可保留，但必须落在下面的精确例外中。
  *
  * 跑：npm run check:shadowcontract
@@ -13,7 +13,7 @@ const postcss = require('postcss')
 
 const DESKTOP = path.resolve(__dirname, '..')
 const ROOTS = [path.join(DESKTOP, 'frontend/src'), path.join(DESKTOP, '../lcl')]
-const CANONICAL = /^var\(--(?:card-shadow|btn-shadow|icon-shadow|shadow-panel)\b[\s\S]*\)$/
+const CANONICAL = /^var\(--(?:card-shadow|btn-shadow|icon-shadow|seg-thumb-shadow|shadow-panel)\b[\s\S]*\)$/
 
 const norm = (value) => String(value).replace(/\\/g, '/').replace(/\s+/g, ' ').trim()
 const rel = (file) => norm(path.relative(DESKTOP, file))
@@ -82,6 +82,7 @@ const INTERACTION_EXCEPTIONS = new Map([
   ['frontend/src/views/dashCanvas.css|.dash2-card[data-interact]|box-shadow', '仪表盘交互期间抬起反馈'],
   ['frontend/src/views/dashCanvas.css|.dash2-card[data-dragging]|box-shadow', '仪表盘拖拽反馈'],
   ['frontend/src/views/dashGrid.css|.dash3-card--lift|box-shadow', '网格仪表盘 DragOverlay 跟手壳抬起反馈(只在浮层这一层,不落到格子里的卡)'],
+  ['frontend/src/views/chat2/chat2.css|.t2-card-lifted|box-shadow', '摘要卡片栈拖拽排序时的抬起反馈(只在拖动期间)'],
 ])
 
 /* LCL 历史展示页保留自己的 token 契约。 */

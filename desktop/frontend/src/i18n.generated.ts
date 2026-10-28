@@ -59,6 +59,10 @@ registerMessages({
     "zh": "完全放行",
     "en": "Full access"
   },
+  "input.approval.custom": {
+    "zh": "自定义（config.json）",
+    "en": "Custom (config.json)"
+  },
   "input.thinking.off": {
     "zh": "思考 · Off",
     "en": "Thinking · Off"
@@ -873,16 +877,16 @@ registerMessages({
     "en": "⚠ Currently in external backend mode: this edits the local ~/.forsion/providers.json, which the remote tangu-server won't read."
   },
   "settings.mcp.label": {
-    "zh": "MCP Server（配置存 ~/.forsion/mcp.json；保存后托管后端重启重连）",
-    "en": "MCP Server (config stored in ~/.forsion/mcp.json; managed backend restarts and reconnects after saving)"
+    "zh": "MCP 服务器",
+    "en": "MCP servers"
   },
-  "settings.mcp.introPrefix": {
-    "zh": "工具以 ",
-    "en": "Tools appear as "
+  "settings.mcp.intro": {
+    "zh": "配置保存在 {path}，保存后自动重连。工具名形如 {tool}，改动对新对话生效。",
+    "en": "Saved in {path} and reconnected on save. Tools appear as {tool}; changes apply to new chats."
   },
-  "settings.mcp.introSuffix": {
-    "zh": " 出现；server 集在后端启动时冻结，变更只对重启后的新对话生效（上下文缓存会重建一次）。",
-    "en": "; the server set is frozen when the backend starts, so changes only take effect for new conversations after a restart (the context cache is rebuilt once)."
+  "settings.mcp.toolPattern": {
+    "zh": "mcp__服务器__工具",
+    "en": "mcp__server__tool"
   },
   "settings.mcp.statusDisabled": {
     "zh": "未启用",
@@ -925,7 +929,7 @@ registerMessages({
     "en": "Deleted"
   },
   "settings.mcp.add": {
-    "zh": "添加 MCP Server",
+    "zh": "添加 MCP 服务器",
     "en": "Add MCP server"
   },
   "settings.mcp.nameLabel": {
@@ -1084,12 +1088,20 @@ registerMessages({
     "en": "Other"
   },
   "settings.discovery.label": {
-    "zh": "从其他 Agent 导入（Claude Code / Codex / Hermes）",
-    "en": "Import from other agents (Claude Code / Codex / Hermes)"
+    "zh": "从其他 Agent 导入",
+    "en": "Import from other agents"
+  },
+  "settings.discovery.pageDescription": {
+    "zh": "扫描这台电脑上 Claude Code、Codex、Hermes 的技能和 MCP 配置，勾选后导入。",
+    "en": "Scan Claude Code, Codex and Hermes on this computer for skills and MCP settings, then pick what to import."
+  },
+  "settings.discovery.sources": {
+    "zh": "来源：Claude Code · Codex · Hermes",
+    "en": "Sources: Claude Code · Codex · Hermes"
   },
   "settings.discovery.hint": {
-    "zh": "扫描本机 ~/.claude、~/.codex、~/.hermes 的技能与 MCP 配置，勾选后导入 ~/.forsion。导入的 MCP 一律默认停用，不会自动运行外来命令。",
-    "en": "Scans local ~/.claude, ~/.codex, ~/.hermes for skills and MCP configs; selected items are imported into ~/.forsion. Imported MCP servers are always disabled by default and won't auto-run external commands."
+    "zh": "扫描 ~/.claude、~/.codex、~/.hermes 里的技能和 MCP 配置，勾选后导入。导入的 MCP 默认停用，不会自动运行外来命令。",
+    "en": "Looks in ~/.claude, ~/.codex and ~/.hermes for skills and MCP settings, then imports what you pick. Imported MCP servers start turned off and never run outside commands on their own."
   },
   "settings.discovery.scan": {
     "zh": "扫描本机",
@@ -1397,7 +1409,7 @@ registerMessages({
   "settings.tts.model": { "zh": "朗读模型", "en": "Read-aloud model" },
   "settings.tts.modelPlaceholder": { "zh": "如 siliconflow/FunAudioLLM/CosyVoice2-0.5B 或 openai/tts-1", "en": "e.g. siliconflow/FunAudioLLM/CosyVoice2-0.5B or openai/tts-1" },
   "settings.tts.voice": { "zh": "朗读音色", "en": "Read-aloud voice" },
-  "settings.tts.voicePlaceholder": { "zh": "provider 特定音色 id，如 alloy;OpenAI 等部分服务必填，留空则不传该参数", "en": "Provider-specific voice id, e.g. alloy; required by some providers (OpenAI), omitted when empty" },
+  "settings.tts.voicePlaceholder": { "zh": "如 alloy", "en": "e.g. alloy" },
   "settings.tts.speed": { "zh": "语速（0.5–2）", "en": "Speed (0.5–2)" },
   "settings.tts.autoSpeak": { "zh": "新回复完成后自动朗读", "en": "Auto-read new replies" },
   "settings.tts.autoSpeakHint": { "zh": "仅当前打开的会话；后台会话完成不会出声。", "en": "Only the currently open session; background sessions stay silent." },
@@ -1445,7 +1457,7 @@ registerMessages({
   "settings.notes.cloudSyncPendingDel": { "zh": "删除保护：{n} 项批量删除已被拦下，确认后才会执行", "en": "Deletion guard: {n} bulk deletion(s) held, confirm to proceed" },
   "settings.notes.cloudSyncConfirmDel": { "zh": "确认删除", "en": "Confirm deletions" },
   "settings.remotesync.label": { "zh": "本地智库远程同步", "en": "Vault remote sync" },
-  "settings.remotesync.hint": { "zh": "把本地智库同步到你自己的存储（Dropbox / S3 / WebDAV / 文件夹），手动或定时，非实时；与在线同步（云端智库）互不相干。删除有防误删闸，冲突两版都保留。", "en": "Sync your local vault to your own storage (Dropbox / S3 / WebDAV / folder), manually or on a schedule. Independent from Online sync (Cloud Vault) above. Mass-delete guard and conflict copies keep data safe." },
+  "settings.remotesync.hint": { "zh": "把本地智库同步到你自己的存储（Dropbox / S3 / WebDAV / 文件夹），手动或定时，非实时。删除有防误删闸，冲突两版都保留。", "en": "Sync your local vault to your own storage (Dropbox / S3 / WebDAV / folder), manually or on a schedule. Mass-delete guard and conflict copies keep data safe." },
   "settings.remotesync.service": { "zh": "远程服务", "en": "Remote service" },
   "settings.remotesync.schedule": { "zh": "同步计划", "en": "Sync schedule" },
   "settings.remotesync.scheduleHint": { "zh": "按固定间隔在后台自动同步；任何时候都可以手动「立即同步」。", "en": "Runs automatically in the background at the chosen interval; you can always sync manually." },

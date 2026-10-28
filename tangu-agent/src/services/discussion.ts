@@ -15,7 +15,7 @@ import { query } from '../core/db.js';
 import { createRun, getRun } from './runStore.js';
 import type { RemoteInfo } from './remoteOrigin.js';
 import { subscribe } from './eventBus.js';
-import { getAgent } from '../agents/agentRegistry.js';
+import { getAgent, BACKGROUND_MAX_ITERATIONS } from '../agents/agentRegistry.js';
 // enqueueRun 走动态 import(见 startDiscussion):静态 import 会成环 discussion←discuss←registry←agentLoop,
 // 令 registry 初始化时 discussProvider 尚未定义而崩。仅运行时调用,延迟加载无碍(muse 可静态因它不在 registry 环上)。
 
@@ -104,6 +104,7 @@ export async function startDiscussion(p: StartDiscussionParams): Promise<string>
         groupMaxRounds: p.maxRounds,
         groupMaxConcurrent: 1, // 讨论是两人交替(对象先回应话题,分身再接),不并行(拍板 ⑯:内部调用方退化成顺序)
         groupAutoSummary: true, // 后台无交互用户 → 直接出主持人总结作结论(不问 ask_user)
+        maxIterations: BACKGROUND_MAX_ITERATIONS, // 后台无人值守:每个成员单次发言仍有轮数上限(交互默认已不限)
         _discussion: true, // 标记:此 run 内禁再起讨论(防递归)
         execMode: 'host',
       },

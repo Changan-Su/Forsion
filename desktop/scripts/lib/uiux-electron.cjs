@@ -157,8 +157,9 @@ async function boot(app, win, { space = 'tangu', width = 1440, height = 900 } = 
 /** Space id → 显示名(zh/en;id 找不到时的后备)。 */
 const SPACE_NAMES = {
   tangu: ['Tangu'],
+  home: ['主页', 'Home'],
   inbox: ['收件箱', 'Inbox'],
-  amadeus: ['笔记', 'Note', 'Amadeus'],
+  amadeus: ['笔记', 'Notes', 'Amadeus'],
   calendar: ['日历', 'Calendar'],
   artificial: ['造物', 'Creations'],
 }

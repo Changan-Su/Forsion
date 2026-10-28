@@ -7,7 +7,7 @@
 .project-profile-path > .project-creation-action:disabled { opacity: .45; cursor: default; }
 /* 三个标签在 215–300px 的右栏里排不下「图标 + 文字」一行(Agents 会被截成 Agen…):照紧凑 Agent 详情(.compact)的做法,图标上、文字下。 */
 .project-profile .agent-section-nav { --profile-nav-gap: 2px; --profile-nav-padding: 4px; }
-.project-profile .agent-section-nav button { flex-direction: column; gap: 5px; font-size: var(--ui-font-caption, 11px); padding: 7px 2px; }
+.project-profile .agent-section-nav button { flex: 1 1 0; flex-direction: column; gap: 5px; font-size: var(--ui-font-caption, 11px); padding: 7px 2px; }
 /* 分支是状态行里的一枚芯片:换行时自成一段,不靠前面的「·」分隔。 */
 .project-branch { display: inline-flex; align-items: center; gap: 3px; min-width: 0; max-width: 100%; padding: 1px 7px; border-radius: 999px; background: var(--overlay-medium); }
 .project-branch > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -131,3 +131,11 @@
 .project-card-head > .project-git-remotes-add { display: inline-flex; width: auto; height: auto; align-items: center; gap: 4px; flex: 0 0 auto; padding: 2px 6px; border: 0; border-radius: var(--radius-sm, 8px); background: transparent; color: var(--text-muted); font: inherit; font-size: var(--ui-font-meta, 12px); cursor: pointer; }
 .project-card-head > .project-git-remotes-add:hover { background: var(--overlay-medium); color: var(--text); }
 .project-git-remotes-empty { margin: 0; }
+
+/* 项目技能行:整行点开 SKILL.md,右侧小删除钮(进回收站,UninstallDialog);悬停 / 聚焦时才显出来。 */
+.project-skill-row { display: flex; align-items: center; gap: 2px; }
+.project-skill-row > .project-row { flex: 1; min-width: 0; }
+.project-skill-del { flex-shrink: 0; width: 26px; height: 26px; display: grid; place-items: center; border: 0; border-radius: var(--radius-sm, 8px); background: transparent; color: var(--text-muted); opacity: 0; cursor: pointer; transition: opacity 160ms ease, background 160ms ease; }
+.project-skill-row:hover .project-skill-del, .project-skill-del:focus-visible { opacity: 1; }
+.project-skill-del:hover { background: var(--overlay-medium); color: var(--danger, #e5484d); }
+@media (hover: none) { .project-skill-del { opacity: 1; } }

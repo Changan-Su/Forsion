@@ -12,3 +12,21 @@ export async function renameAtomic(from: string, to: string, platform: NodeJS.Pl
     }
   }
 }
+
+/** 写临时文件 → fsync → renameAtomic。不刷盘就 rename,断电 / 死机后可能留下长度还在、字节全是 0x00 的文件(magpie #1505)。
+ *  tmp 由调用方给(watcher 按名字认自写临时文件),必须是不存在的唯一名:`wx` 独占创建,名字被占就抛 EEXIST、不碰那个文件。
+ *  建出临时文件之后任何一步失败都删掉它、原文件不动。
+ *  ponytail: 不 fsync 目录 —— 断电丢的是这次 rename,原位仍是上一份完整的。 */
+export async function writeFileDurable(abs: string, tmp: string, data: string | Uint8Array): Promise<void> {
+  let handle: Awaited<ReturnType<typeof fs.open>> | undefined = await fs.open(tmp, 'wx') // 在 try 外:没建成就没有要清的
+  try {
+    await handle.writeFile(data)
+    await handle.sync()
+    const closing = handle; handle = undefined; await closing.close() // 先放手再关:close 报错时 catch 里不会再关一次
+    await renameAtomic(tmp, abs)
+  } catch (error) {
+    if (handle) await handle.close().catch(() => {})
+    await fs.rm(tmp, { force: true }).catch(() => {})
+    throw error
+  }
+}

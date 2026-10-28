@@ -11,7 +11,8 @@
  * (旧口径从锁外预读的 existing 补省略项,预读到落盘之间用户在设置里的改动会被写回去)。
  */
 import type { ToolProvider } from '../toolRegistry.js';
-import { listAgents, getAgent, saveAgent, patchAgent, deleteAgent, slugify, isValidSlug, AGENT_MAX_ITERATIONS_MIN, DEFAULT_MAX_ITERATIONS, KEEP_APPROVAL_MODE, type AgentPatch, type NormalAgentDef } from '../../agents/agentRegistry.js';
+import { uninstallAgent } from '../../services/agentUninstall.js';
+import { listAgents, getAgent, saveAgent, patchAgent, slugify, isValidSlug, AGENT_MAX_ITERATIONS_MIN, KEEP_APPROVAL_MODE, type AgentPatch, type NormalAgentDef } from '../../agents/agentRegistry.js';
 import { THINKING_LEVELS } from '../../llm/modelCapabilities.js';
 import { currentAgentSlug, currentDisplayAgentSlug } from '../../seams/runContext.js';
 import { effectiveRemote, remoteManagementDenied } from '../../services/remoteOrigin.js';
@@ -75,8 +76,11 @@ export const manageAgentProvider: ToolProvider = {
             if (isSelf(slug, ctx)) return 'Error: you cannot delete yourself (the active agent). Ask the user to do it in Settings.';
             // 用户给它设过审批档 → 不许删:删了再 create 同 slug = 新定义没有档,激活时回落会话档,等于把用户的收紧洗掉(Codex 09-27)。
             if ((await getAgent(slug))?.approvalMode) return `Error: agent "${slug}" has an approval level set by the user, so only the user can delete it in Settings.`;
-            const ok = await deleteAgent(slug);
-            return ok ? `Deleted agent: ${slug}` : `Agent not found: ${slug}`;
+            if (!(await getAgent(slug))) return `Agent not found: ${slug}`;
+            // 与名册删除同一条(services/agentUninstall):进回收站 30 天,私聊归档、移出团队、暂停用到它的自动化。
+            const r = await uninstallAgent(ctx.userId, ctx.appId, slug);
+            if (r.busy) return `Error: agent "${slug}" is in a two-member team that is still running; deleting it would remove that team too. Try again once the team run finishes.`;
+            return r.ok ? `Deleted agent: ${slug}. It is in the trash for 30 days (the user can restore it in Settings › System › Trash); its direct chats were archived.` : `Error: agent "${slug}" cannot be deleted (the default agent, or Muse while it is on).`;
           }
           if (action === 'create' || action === 'update') {
             // 审批档只归用户(H2):schema 里已删,模型照旧传 → 报错且不落盘(同 update_session_settings 的先例)。
@@ -107,15 +111,15 @@ export const manageAgentProvider: ToolProvider = {
               if (args.max_iterations != null) {
                 const want = Number(args.max_iterations);
                 if (!Number.isFinite(want) || want < AGENT_MAX_ITERATIONS_MIN) return `max_iterations must be at least ${AGENT_MAX_ITERATIONS_MIN} (got ${args.max_iterations}).`;
-                const now = cur?.maxIterations ?? DEFAULT_MAX_ITERATIONS;
-                if (isSelf(slug, ctx) && want < now) return `an agent may not lower its own max_iterations (current ${now}, requested ${want}). Keep it or raise it; only the user can lower it in Settings.`;
+                const now = cur?.maxIterations ?? Infinity; // 没设 = 不限:给自己加任何上限都算调低
+                if (isSelf(slug, ctx) && want < now) return `an agent may not lower its own max_iterations (current ${Number.isFinite(now) ? now : 'no limit'}, requested ${want}). Keep it or raise it; only the user can lower it in Settings.`;
               }
               return null;
             };
             const refused = guard(existing);
             if (refused) return `Error: ${refused}`;
             // 只放模型**传了**的字段:省略 ≠ 清空(H2)—— buildAgentDef 对 description / model / tools / thinkingLevel 的省略项写空;
-            // 轮数省略也得保留,否则 update 只改 model 就把自己的 150 降回默认 90,「不许自降」守卫形同虚设(Codex 09-13 #1)。
+            // 轮数省略也得保留,否则 update 只改 model 就把自己的 150 清回默认,「不许自降」守卫形同虚设(Codex 09-13 #1)。
             // 省略的字段**不**从上面的预读 existing 补:从那次读到落盘之间用户可能刚在设置里收窄了工具 / 换了模型,传旧值会把它写回去
             // (09-25 审批档那条 P1 的同类窗口)。覆盖已有的走 patchAgent:在按 slug 串行化的保存里现读、只改传了的字段。
             const fields: AgentPatch = {

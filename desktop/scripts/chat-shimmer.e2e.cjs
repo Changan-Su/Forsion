@@ -191,7 +191,8 @@ async function main() {
         groupTextWidth: groupText?.getBoundingClientRect().width ?? -1,
         groupHeadWidth: groupHead?.getBoundingClientRect().width ?? -1,
         taskTextWidth: taskText?.getBoundingClientRect().width ?? -1,
-        taskWidth: task?.getBoundingClientRect().width ?? -1,
+        // 10-25 起状态是进度卡卡头里收缩的一段,「整行」= 卡头
+        taskWidth: (task?.closest('.t2-card-head') ?? task)?.getBoundingClientRect().width ?? -1,
         groupBusy: group?.querySelector('.tool-group-head')?.getAttribute('aria-busy'),
         taskBusy: document.querySelector('.t2-tsum')?.getAttribute('aria-busy'),
         taskRole: task?.getAttribute('role'),

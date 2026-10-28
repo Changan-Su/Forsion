@@ -1,8 +1,8 @@
 import { agentDescription, isStockAgent } from '../components/builtinAgentDescriptions'
-import { useEffect, useId, useMemo, useRef, useState, type ChangeEvent, type CSSProperties } from 'react'
-import { BookOpen, Bot, CalendarClock, Check, ChevronRight, ExternalLink, ArrowUp, ArrowDown, ImageUp, Loader2, MoreHorizontal, Plus, Plug, ScrollText, Search, Settings2, Sparkles, Sprout, Star, Trash2, X } from 'lucide-react'
+import { useEffect, useId, useMemo, useRef, useState, type ChangeEvent } from 'react'
+import { BookOpen, Bot, CalendarClock, Check, ChevronDown, ChevronRight, ExternalLink, ArrowUp, ArrowDown, ImageUp, Loader2, MoreHorizontal, Plus, Plug, ScrollText, Search, Settings2, Sparkles, Sprout, Star, Trash2, X } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
-import { activeMainPanel, startOpenDrag, useListFirst, useWorkspace } from '@lcl/engine'
+import { activeMainPanel, startOpenDrag, useListFirst, useWorkspace, ViewErrorBoundary } from '@lcl/engine'
 import { ListFab } from '../components/phoneList'
 import type { ViewProps } from '@lcl/engine/types'
 import { useApp } from '../stores/appStore'
@@ -18,19 +18,17 @@ import { humanRewritable, type HumanJump } from '../services/humanCollaboration'
 import { AgentHarnessPanel } from '../components/AgentHarnessPanel'
 import { AgentSchedulePanel } from '../components/AgentSchedulePanel'
 import type { AgentConfig, NormalAgentDef, SessionRecord, SkillInfo, ToolsResponse } from '../../../../tangu-agent/src/contracts/clientTypes'
-import { THINKING_LEVELS } from '../../../../tangu-agent/src/contracts/clientTypes'
-import { ProfileGroup, ProfileModelField, ProfileTextEditor } from './profileControls'
+import { ProfileGroup, ProfileModelField, ProfileSelectField, ProfileTextEditor, approvalOptions, thinkingOptions, useSectionNavSlide } from './profileControls'
 import { TeamProfile } from './TeamProfile'
 import { ProjectProfile, useProjectSubject, useProjectWorkspace } from './ProjectProfile'
 import { AgentSkillsPanel, moveAgentSkillsDraft } from './AgentSkillsPanel'
 import { CapabilityMenu } from '../components/CapabilityMenu'
-import { AgentRemoveDialog } from '../components/RemoveDialog'
+import { AgentUninstallDialog } from '../components/UninstallDialog'
 import { useDetailsSubject } from '../stores/detailsSubject'
 import type { RecordJump } from '../services/recordJump'
 import './agentProfileMessages'
 import './agentProfile.css'
 import { AgentAvatar } from '../components/AgentAvatar'
-import { thinkingLabel } from '../components/thinkingLabel'
 import { homeTarget } from '../services/engine/targets'
 import { track } from '../achievements/store'
 import '../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
@@ -86,7 +84,7 @@ export function TanguDetailsView({ extendView }: Pick<ViewProps, 'extendView'>) 
     <div className="agent-profile-panel-title">{t('agentProfile.title')}
       {viewing && <button type="button" className="profile-text-action" data-act="details-back" onClick={() => useDetailsSubject.setState({ subject: null })}>{t('agentProfile.backToCurrent')}</button>}</div>
     {viewing === 'project' && subjectProject && carrier ? <ProjectProfile key={`subject:${subjectProject.workspace.path}`} session={carrier} config={carrierConfig || carrier.agent_config || EMPTY_CONFIG}
-        workspace={subjectProject.workspace} humanJump={subject?.human} recordJump={subject?.records} currentSessionId={sessionId} renderAgent={renderMember} renderTeam={renderTeam} />
+        workspace={subjectProject.workspace} humanJump={subject?.human} recordJump={subject?.records} gitJump={subject?.git} currentSessionId={sessionId} renderAgent={renderMember} renderTeam={renderTeam} />
       : viewing === 'agent' && subjectAgent ? <AgentProfile key={`subject:${subjectAgent.slug}`} agent={subjectAgent} compact extendView={extendView} humanJump={subject?.human} evolutionJumpAt={subject?.evolution || 0} recordJump={subject?.records} rewriteSessionId={sessionId} />
       : project && s.session ? <ProjectProfile key={project.path} session={s.session} config={config} workspace={project} renderAgent={renderMember} renderTeam={renderTeam} />
       : config.groupChat || config.teamSlug ? <TeamProfile key={`${sessionId}:${config.teamSlug || ''}`} session={s.session} config={config} renderMember={renderMember} /> : config.engineId || config.soloEngineId ? <section className="agent-profile-team"><h3>{s.engines.find((e) => e.id === (config.engineId || config.soloEngineId))?.name || config.engineId || config.soloEngineId}</h3><div className="agent-current-session"><strong>{s.session?.title}</strong><span>{s.session?.project_name || config.cwd}</span></div></section> : agent ? <AgentProfile key={agent.slug} agent={agent} compact sessionId={sessionId} extendView={extendView} /> : <p className="agent-profile-muted">{t('agentProfile.noAgent')}</p>}
@@ -196,7 +194,7 @@ export function AgentsRosterView() {
       emitAgentsChange()
     } catch (error: any) { setRosterError(String(error?.message || error)) } finally { setRosterBusy(false); setDragSlug(null) }
   }
-  // 删除走与侧栏同一个确认(同时删除相关文件的勾选项 + store.removeAgent);删掉的是正在看的那个 → 换到名册第一个
+  // 删除走与侧栏同一个卸载确认框(逐项写去向、进回收站);删掉的是正在看的那个 → 换到名册第一个
   const [removing, setRemoving] = useState<NormalAgentDef | null>(null)
   return <aside className="agents-roster">
       {/* 创建入口只留底部那一个(评审 U-25:标题行的 ＋ 与底部链接重复)。 */}
@@ -223,7 +221,7 @@ export function AgentsRosterView() {
       {phone
         ? <ListFab label={t('agentProfile.create')} icon={<Plus />} onClick={() => { setCreating(); setRosterError('') }} />
         : <button className="agent-profile-link agents-roster-create" data-guide-anchor="agent-new" onClick={() => { setCreating(); setRosterError('') }}><Plus size={14} />{t('agentProfile.create')}</button>}
-      {removing && <AgentRemoveDialog agent={removing} onClose={() => setRemoving(null)}
+      {removing && <AgentUninstallDialog slug={removing.slug} name={removing.name} onClose={() => setRemoving(null)}
         onDone={() => { if (agent?.slug === removing.slug) selectAgent(useApp.getState().agentDefs[0]?.slug || '') }} />}
     </aside>
 }
@@ -256,6 +254,7 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
   const rewriteHuman = rewriteSid && humanRewritable(s.rewriteConfig) && (s.rewriteConfig!.agentSlug || s.rewriteConfig!.soloAgentSlug || s.defaultSlug) === agent.slug
     ? () => { void useApp.getState().send(t('human.rewrite.agentPrompt'), [], undefined, undefined, undefined, rewriteSid) } : null
   const [section, setSection] = useState<Section>(humanJump ? 'human' : evolutionJumpAt ? 'growth' : 'config')
+  const navRef = useSectionNavSlide(section)
   const [growth, setGrowth] = useState<Growth>(evolutionJumpAt ? 'evolution' : 'memory')
   const [visitedMemory, setVisitedMemory] = useState(false)
   const [visitedLog, setVisitedLog] = useState(false)
@@ -462,20 +461,28 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
     const row = (entry: Entry) => <EquipmentRow key={entry.id} name={entry.name} description={entry.description} checked={on(entry)} tinted
       chip={entry.origin === 'agent' ? t('settings.agents.selfAuthored') : entry.shared ? t('settings.agents.sharedSkill') : undefined}
       onChange={(checked) => { const ids = selected || entries.map((x) => x.id); patch({ [key]: checked ? [...new Set([...ids, entry.id])] : ids.filter((x) => x !== entry.id) }) }} />
+    // 与技能标签同一颗「自动 ⌄」+ 同一行说明(5.16);空列表不给批量按钮。关闭 = 空名单。
+    const mode = !selected ? 'auto' : selected.length ? 'selected' : 'off'
     return <>
       <div className="profile-list-toolbar">
         <div className="profile-list-controls">
           <label className="profile-search"><Search size={14} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('agentProfile.searchEquipment')} aria-label={t('agentProfile.searchEquipment')} /></label>
-          <select aria-label={t('agentProfile.loadoutMode')} title={t('agentProfile.loadoutHint')} disabled={loading || !!loadError} value={selected ? 'selected' : 'all'} onChange={(e) => patch({ [key]: e.target.value === 'all' ? undefined : entries.map((x) => x.id) })}><option value="all">{t('agentProfile.all')}</option><option value="selected">{t('agentProfile.selected')}</option></select>
+          {/* 没加载完 / 加载失败时 entries 是空的:这时选「自选」会把名单落成空 = 关闭,所以和原来的下拉一样先禁用。 */}
+          <CapabilityMenu label={t('agentProfile.mcpPolicy')} selection disabled={loading || !!loadError} items={([
+            ['auto', 'agentProfile.skillAuto'], ['selected', 'agentProfile.skillSelected'], ['off', 'agentProfile.skillOff'],
+          ] as const).map(([id, k]) => ({ id, label: t(k), selected: mode === id, onSelect: () => patch({ [key]: id === 'auto' ? undefined : id === 'off' ? [] : entries.map((x) => x.id) }) }))}>
+            <span>{t(mode === 'auto' ? 'agentProfile.skillAuto' : mode === 'selected' ? 'agentProfile.skillSelected' : 'agentProfile.skillOff')}</span><ChevronDown size={13} />
+          </CapabilityMenu>
         </div>
-        <div className="profile-list-summary">
-          <span>{selected ? t('agentProfile.selectedCount', { count: selected.length, total: entries.length }) : t('agentProfile.allSelectionHint')}</span>
+        <p className="agent-skills-policy-hint">{t(`agentProfile.mcpPolicy.${mode}`)}</p>
+        {entries.length > 0 && <div className="profile-list-summary">
+          <span>{selected ? t('agentProfile.selectedCount', { count: selected.length, total: entries.length }) : null}</span>
           <span className="profile-list-actions">
             {selected && <button className="profile-text-action" aria-pressed={enabledOnly} onClick={() => setEnabledOnly(!enabledOnly)}>{t('agentProfile.enabledOnly')}</button>}
             <button className="profile-text-action" disabled={loading || !!loadError} onClick={() => patch({ [key]: entries.map((x) => x.id) })}>{t('agentProfile.selectAll')}</button>
             <button className="profile-text-action" disabled={loading || !!loadError} onClick={() => patch({ [key]: [] })}>{t('agentProfile.clearAll')}</button>
           </span>
-        </div>
+        </div>}
       </div>
       {loading && <p className="agent-profile-muted" role="status"><Loader2 size={14} className="spin" /> {t('agentProfile.loading')}</p>}
       {loadError && <div className="agent-profile-error" role="alert">{loadError}<button onClick={() => setRetry((v) => v + 1)}>{t('agentProfile.retry')}</button></div>}
@@ -484,14 +491,15 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
         <summary><span>{t('agentProfile.builtinSkills')}</span><small>{t('agentProfile.selectedCount', { count: stock.filter(on).length, total: stock.length })}</small></summary>
         <div className="agent-equipment-list">{stock.map(row)}</div>
       </details>}
-      {!loading && !loadError && !filtered.length && <p className="profile-empty">{t(entries.length ? 'agentProfile.noResults' : 'agentProfile.none')}</p>}
+      {!loading && !loadError && !filtered.length && <p className="agent-profile-muted">{t(entries.length ? 'agentProfile.noResults' : 'agentProfile.noMcp')}</p>}
       <button className="agent-profile-link" onClick={() => useApp.getState().openSettings(kind === 'skills' ? 'skills' : 'mcp')}>{t(kind === 'skills' ? 'agentProfile.manageSkills' : 'agentProfile.manageMcp')}<ExternalLink size={13} /></button>
     </>
   }
   const runSettings = <>
-    <ProfileModelField models={s.models || []} value={draft.model || ''} label={t('agentProfile.model')} onChange={(model) => patch({ model })} />
-    <label className="agent-field">{t('agentProfile.thinking')}<select aria-label={t('agentProfile.thinking')} value={draft.thinkingLevel} onChange={(e) => patch({ thinkingLevel: e.target.value as NormalAgentDef['thinkingLevel'] })}><option value="">{t('agentProfile.default')}</option>{THINKING_LEVELS.map((v) => <option key={v} value={v}>{thinkingLabel(v, t)}</option>)}</select></label>
-    <label className="agent-field">{t('agentProfile.approval')}<select aria-label={t('agentProfile.approval')} value={draft.approvalMode} onChange={(e) => patch({ approvalMode: e.target.value as NormalAgentDef['approvalMode'] })}>{[['', 'default'], ['readonly', 'readonly'], ['auto-edit', 'autoEdit'], ['full-auto', 'fullAuto'], ['custom', 'custom']].map(([v, k]) => <option key={v} value={v}>{t(`agentProfile.${k}`)}</option>)}</select></label>
+    <ProfileModelField field="model" models={s.models || []} value={draft.model || ''} label={t('agentProfile.model')} onChange={(model) => patch({ model })} />
+    {/* 三个同级下拉一种控件(10-25 第四轮 4.3):模型那颗触发器 + 就地展开;审批档的名字与输入框模式菜单同一套。 */}
+    <ProfileSelectField field="thinking" label={t('agentProfile.thinking')} value={draft.thinkingLevel || ''} options={thinkingOptions(t)} onChange={(v) => patch({ thinkingLevel: v as NormalAgentDef['thinkingLevel'] })} />
+    <ProfileSelectField field="approval" label={t('agentProfile.approval')} value={draft.approvalMode || ''} options={approvalOptions(t)} onChange={(v) => patch({ approvalMode: v as NormalAgentDef['approvalMode'] })} />
     {/* Muse 有两个档:这里的只管和它聊天时;后台周期按「权限档」(设置 › Agent › 后台 Agent)。两处互相指路(10-13 用户反馈「放权了还要批」)。 */}
     {agent.slug === 'muse' && <button type="button" className="agent-profile-link" data-act="muse-tier-link" onClick={() => useApp.getState().openSettings('agents')}>{t('agentProfile.museApprovalScope')}<ExternalLink size={13} /></button>}
   </>
@@ -508,7 +516,7 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
       <label className="agent-equipment-item"><input type="checkbox" checked={!!draft.activityAccess} onChange={(e) => patch({ activityAccess: e.target.checked })} />{t('agentProfile.activityAccess')}</label>
     </div></details>
     <details className="profile-disclosure"><summary>{t('agentProfile.advanced')}</summary><div className="agent-config-fields">
-      <label className="agent-field">{t('agentProfile.maxIterations')}<input type="number" min="1" max="1000" placeholder={t('agentProfile.default')} value={draft.maxIterations ?? ''} onChange={(e) => patch({ maxIterations: e.target.value ? Math.min(1000, Math.max(1, Math.floor(Number(e.target.value)))) : null })} /></label>
+      <label className="agent-field">{t('agentProfile.maxIterations')}<input type="number" min="1" placeholder={t('agentProfile.default')} value={draft.maxIterations ?? ''} onChange={(e) => patch({ maxIterations: e.target.value ? Math.max(1, Math.floor(Number(e.target.value))) : null })} /></label>
       {!!window.tangu?.authStatus && <label className="agent-equipment-item"><input type="checkbox" checked={!!draft.cloudSync} onChange={(e) => patch({ cloudSync: e.target.checked })} />{t('agentProfile.cloudSync')}</label>}
     </div></details>
   </>
@@ -532,7 +540,7 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
         <span className={`agent-state${s.running ? ' working' : ''}`}><i />{t(!s.connected ? 'agentProfile.offline' : s.running ? 'agentProfile.working' : 'agentProfile.standby')}</span></div>
       {compact && <button className="profile-expand" title={t('agentProfile.full')} aria-label={t('agentProfile.full')} onClick={() => openAgentProfile(agent.slug)}><ExternalLink size={15} /></button>}
     </header>
-    <nav className="agent-section-nav" style={{ '--profile-tab-count': SECTIONS.length, '--profile-tab-index': SECTIONS.findIndex((item) => item.id === section) } as CSSProperties} aria-label={t('agentProfile.currentSection')} role="tablist" onKeyDown={(e) => {
+    <nav ref={navRef} className="agent-section-nav" aria-label={t('agentProfile.currentSection')} role="tablist" onKeyDown={(e) => {
       if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return
       e.preventDefault()
       const index = SECTIONS.findIndex((x) => x.id === section)
@@ -545,7 +553,9 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
     })}</nav>
     <div ref={scrollRef} className="agent-profile-content" id={`${id}-content`} role="tabpanel" aria-labelledby={`${id}-${section}`} tabIndex={0}>
       <fieldset className="profile-edit-fields" disabled={busy}>
-      <div key={section} className="profile-section-enter">
+      {/* 只塌这一格:头部和标签条在边界外,换个标签就换回来(key = 标签,走查 5.10) */}
+      <ViewErrorBoundary key={section} name={t(`agentProfile.${section}`)}>
+      <div className="profile-section-enter">
       {section === 'config' && <>
         {s.session && <section className="agent-current-session"><small>{t('agentProfile.session')}</small><strong>{s.session.title}</strong>{(s.session.project_name || s.config?.cwd) && <span>{s.session.project_name || s.config?.cwd}</span>}
           <ProfileModelField models={s.models || []} value={s.session.model_id || ''} label={t('agentProfile.sessionModel')} onChange={(model) => useApp.getState().setSessionModel(model, sessionId, false)} />
@@ -571,14 +581,15 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
       </>}
       {section === 'schedule' && <AgentSchedulePanel cfg={s.cfg} slug={agent.slug} running={s.running} />}
       </div>
+      </ViewErrorBoundary>
       {/* Memory owns independent drafts. Keep it mounted when switching the parent tabs. */}
       {visitedMemory && <div className="profile-growth-memory" hidden={section !== 'growth' || growth !== 'memory'}>
-        <AgentMemoryPanel cfg={s.cfg} slug={agent.slug} shareDefaultMemory={agent.shareDefaultMemory} organized />
+        <ViewErrorBoundary name={t('agentProfile.memory')} resetKey={section === 'growth' && growth === 'memory'}><AgentMemoryPanel cfg={s.cfg} slug={agent.slug} shareDefaultMemory={agent.shareDefaultMemory} organized /></ViewErrorBoundary>
         <details className="profile-disclosure"><summary>{t('agentProfile.memoryScope')}</summary><label className="agent-equipment-item"><input type="checkbox" checked={!!draft.shareDefaultMemory} onChange={(e) => patch({ shareDefaultMemory: e.target.checked })} />{t('agentProfile.sharedMemory')}</label><p className="agent-profile-muted">{t('agentProfile.memoryScopeHint')}</p></details>
         <button className="agent-profile-link" onClick={() => setLibrary(true)}>{t('agentProfile.library')}<ExternalLink size={13} /></button>
       </div>}
       {visitedLog && <div className="profile-growth-log" hidden={section !== 'growth' || growth !== 'log'}>
-        <AgentLogPanel cfg={s.cfg} slug={agent.slug} active={section === 'growth' && growth === 'log'} />
+        <ViewErrorBoundary name={t('agentProfile.log')} resetKey={section === 'growth' && growth === 'log'}><AgentLogPanel cfg={s.cfg} slug={agent.slug} active={section === 'growth' && growth === 'log'} /></ViewErrorBoundary>
       </div>}
       </fieldset>
     </div>

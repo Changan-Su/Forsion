@@ -15,3 +15,8 @@ export type { TooltipContent, TooltipLines, TooltipOptions, HoverCardOptions, Ho
  *  (真身在引擎 dropIndicator.ts)。插件走 ctx.ui.dropIndicator(句柄上的 land)。 */
 export { createDropIndicator, dropRetarget, dropHide, land, landCancel, landWhenMoved, dragGrab, releasePoint } from '../engine/dropIndicator'
 export type { DropIndicator, DropRect, DropShape, DropRetargetOptions, LandPoint, LandOptions } from '../engine/dropIndicator'
+
+/** 折叠:宿主 base.css 的 data-motion="collapse" 的 React 壳(收起放完再卸载、首次挂上不播、展开完放开裁切)。
+ *  插件不用 React 就直接写 data-motion="collapse" + data-open,箭头写 data-motion="chevron"。 */
+export { AnimatedCollapse } from './Collapse'
+export { UploadRing, UploadBar, createUploadRing, createUploadBar } from './UploadProgress'

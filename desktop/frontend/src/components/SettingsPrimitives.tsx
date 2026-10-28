@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import type { ButtonHTMLAttributes, ReactNode } from 'react'
 
 export function SettingsPanel(props: {
   icon?: ReactNode
@@ -33,7 +33,7 @@ export function SettingsRow(props: {
   className?: string
   /** 设置搜索的落点(settingsSearchIndex.ts 的 anchor)。 */
   anchor?: string
-  /** 窄屏(≤820)排法:`inline` = 开关、数值、单个按钮这类紧凑控件留在右边(放不下才换行);`wrap` = 输入框、步进器、
+  /** 窄屏(≤820)或窄窗格(≤420,如右栏)排法:`inline` = 开关、数值、单个按钮这类紧凑控件留在右边(放不下才换行);`wrap` = 输入框、步进器、
    *  两个以上的按钮换到下一行并占满。不给 = 旧行为(一律换到下一行),没换过来的旧页面保持原样。 */
   fit?: 'inline' | 'wrap'
 }) {
@@ -51,21 +51,23 @@ export function SettingsRow(props: {
   )
 }
 
-export function SettingsSwitch(props: {
+/** 二态设置的唯一一种开关(走查续五 5.1:复选框、外观页旧 .switch 都换成它)。其余按钮属性(data-*、title…)原样落在按钮上。 */
+export function SettingsSwitch({ checked, onChange, label, disabled, ...rest }: {
   checked: boolean
   onChange: (checked: boolean) => void
   label: string
   disabled?: boolean
-}) {
+} & Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'onChange' | 'onClick' | 'role' | 'type'>) {
   return (
     <button
+      {...rest}
       type="button"
       role="switch"
-      aria-checked={props.checked}
-      aria-label={props.label}
-      className={`settings-switch${props.checked ? ' active' : ''}`}
-      disabled={props.disabled}
-      onClick={() => props.onChange(!props.checked)}
+      aria-checked={checked}
+      aria-label={label}
+      className={`settings-switch${checked ? ' active' : ''}`}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
     >
       <span />
     </button>

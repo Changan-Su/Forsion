@@ -47,15 +47,15 @@ describe('provider rows', () => {
 })
 
 describe('catalogByKind', () => {
-  it('folds the side lists into six kinds', () => {
+  it('folds the side lists into seven kinds', () => {
     const c = catalogByKind({
       models: [{ id: 'a', name: 'A', provider: 'forsion', source: 'forsion' }, { id: 'i', name: 'I', provider: 'forsion', source: 'forsion', modelType: 'image_gen' }, { id: 's', name: 'S', provider: 'p', source: 'direct', modelType: 'asr' }],
       directProviders: [{ providerId: 'bailian', ttsModelIds: ['qwen3-tts-flash'] }],
       defaultModelId: null,
-      ttsModels: [{ id: 'tts1', name: 'TTS' }], translateModels: [{ id: 'mt1', name: 'MT' }], realtimeModel: { id: 'rt', name: 'RT' },
+      ttsModels: [{ id: 'tts1', name: 'TTS' }], translateModels: [{ id: 'mt1', name: 'MT' }], realtimeModel: { id: 'rt', name: 'RT' }, fimModels: [{ id: 'fim1', name: 'FIM' }],
     }, [{ id: 'bailian/omni', name: 'omni', provider: 'bailian' }])
     expect(Object.fromEntries(Object.entries(c).map(([k, v]) => [k, v.map((x) => x.id)]))).toEqual({
-      llm: ['a'], image_gen: ['i'], asr: ['s'], tts: ['tts1', 'bailian/qwen3-tts-flash'], realtime: ['rt', 'bailian/omni'], mt: ['mt1'],
+      llm: ['a'], image_gen: ['i'], asr: ['s'], tts: ['tts1', 'bailian/qwen3-tts-flash'], realtime: ['rt', 'bailian/omni'], mt: ['mt1'], fim: ['fim1'],
     })
   })
 })

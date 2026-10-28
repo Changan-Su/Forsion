@@ -9,10 +9,14 @@ import type { ViewProps } from '@lcl/engine'
 import { askString } from '@amadeus/components/askString'
 import { registerMessages, useI18n } from '../i18n'
 import { useApp } from '../stores/appStore'
+import { EmptyState } from '../components/EmptyState'
 
 registerMessages({
   'publicview.opFailed': { zh: '操作失败', en: 'Something went wrong' },
   'publicview.unpublishFailed': { zh: '下架失败', en: 'Could not unpublish' },
+  'publicview.signedOutTitle': { zh: '登录后，这里列出你发布过的东西', en: 'Sign in to see what you have published' },
+  'publicview.signedOutLine': { zh: '发布过的网站和笔记都在这里，可以随时更新或下线。', en: 'Published sites and notes show up here; update or unpublish them any time.' },
+  'publicview.signIn': { zh: '登录 Forsion', en: 'Sign in to Forsion' },
 })
 
 interface Row {
@@ -240,10 +244,8 @@ export function PublicView(_: ViewProps) {
         <button className="icon-btn" title={t('public.refresh')} onClick={refresh}><RotateCw size={15} /></button>
       </div>
       {/* 没登录 = 不知道有没有发布过:别把三个分区画成「0 · 暂无内容」,给一个登录入口(W-02) */}
-      {needLogin && sites?.length === 0 && <div className="pv-notice">
-        {t('public.needLogin')}
-        {!!window.tangu?.forsionLogin && <button className="btn sm" onClick={() => useApp.getState().openSettings('forsion')}><LogIn size={13} />{t('sidebar.account.login')}</button>}
-      </div>}
+      {needLogin && sites?.length === 0 && <EmptyState icon={Rocket} title={t('publicview.signedOutTitle')} line={t('publicview.signedOutLine')} data-state="signed-out"
+        action={window.tangu?.forsionLogin ? { label: t('publicview.signIn'), icon: LogIn, action: 'sign-in', onClick: () => useApp.getState().openSettings('forsion') } : null} />}
       {!(needLogin && sites?.length === 0) && <div className="pv-body">
         <Section
           icon={<Globe size={15} />} title={t('public.sites')} desc={t('public.sitesDesc')}

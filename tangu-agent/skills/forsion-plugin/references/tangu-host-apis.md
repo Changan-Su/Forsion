@@ -1,6 +1,6 @@
-# Tangu host APIs: ctx.tangu, ctx.desk, ctx.automation
+# Tangu host APIs: ctx.tangu, ctx.desk, ctx.summary, ctx.automation
 
-Split out of the forsion-plugin SKILL.md (1.63.0) because the model only sees the head and tail of a long tool result (capToolResult keeps 34k + 12k of anything over 48k chars). All of these are missing on non-Tangu hosts: always use optional chaining (`ctx.tangu?.`, `ctx.desk?.`, `ctx.automation?.`). A 见「…」 that is not in this file points back to SKILL.md.
+Split out of the forsion-plugin SKILL.md (1.63.0) because the model only sees the head and tail of a long tool result (capToolResult keeps 34k + 12k of anything over 48k chars). All of these are missing on non-Tangu hosts: always use optional chaining (`ctx.tangu?.`, `ctx.desk?.`, `ctx.summary?.`, `ctx.automation?.`). A 见「…」 that is not in this file points back to SKILL.md.
 
 ## 当前模型与当前 Space:ctx.tangu(2026-08-29 起)
 
@@ -219,6 +219,36 @@ const tr = ctx.tangu?.translate
 - 旧宿主没有这个方法,先特性探测再退回 `complete`(上面的写法);不要为它抬 `minAppVersion`。
 - 额度与用量按所用模型照常扣、记;插件被停用时在飞的请求被中止并 reject。
 
+### 行内补全:ctx.tangu.fim(2026-10-26 起)
+
+边打字边给灰字建议(ghost text)这类**按光标补中间**的活用 `fim`:光标前后的正文原样交给**补全模型**(FIM,fill-in-the-middle),
+没有提示词、没有指令,比 `complete` 快、便宜,也不会回一段「好的,以下是……」。模型取用户在「设置 → 模型 → 补全」选的那个,
+没选就用账号里第一个补全模型:
+
+```js
+let fimOff = false                                     // 本次会话里 fim 不可用过一次就别再试
+async function suggest(before, after, signal) {
+  if (ctx.tangu?.fim && !fimOff) {
+    try {
+      return (await ctx.tangu.fim({ before, after, maxTokens: 64, stop: ['\n\n'], signal })).text   // 模型原文,别 trim
+    } catch (e) {
+      if (e?.message !== 'fim_unavailable') throw e
+      fimOff = true
+    }
+  }
+  return (await ctx.tangu.complete({ prompt: 'Continue the text at the cursor. Output only the continuation.', before, after, signal })).text
+}
+```
+
+- `before` = 光标前的正文(引擎只留最后 16k 字符),`after` = 光标后的(只留前 8k);至少一个非空。空白、缩进、换行都是补全的依据,**别 trim**。
+- 返回 `{ text, model }`:`text` 是模型原文(不 trim、不剥围栏),`model` = 实际用的 `{ id, name }`。`modelId` 可点名本次用哪个(不改槽)。
+- `maxTokens` 夹到 1..512(缺省 64);`stop` 最多 4 个、每个 ≤32 字符。行内补全一般 32–64 就够。
+- 账号里没有补全模型、选的模型做不了 FIM、引擎 / 云端太老 → reject `Error('fim_unavailable')`。这时退回 `complete`,并**记住整场会话别再试**
+- 云端目录这次没拉到 → reject `Error('fim_catalog_unreachable')`:临时错误,**别**据此落回 complete,下次照常试 `fim`。
+  (上面的 `fimOff`),否则每敲一个键都白打一次。
+- 和 `complete` / `translate` 合计每个用户同时最多 3 个请求(超出 429):每次按键先 `abort` 上一次的 `signal`,停顿一会儿(200–400ms)再发。
+- 额度与用量按所用模型照常扣、记;插件被停用时在飞的请求被中止并 reject。旧宿主 / 非 Tangu 宿主没有:`ctx.tangu?.fim`,不要为它抬 `minAppVersion`。
+
 ## Agent Desk 伴随面:ctx.desk(2026-09-19 起)
 
 往 Tangu 聊天右侧的 **Agent Desk**(右栏那张卡片 + 展开后的侧板)里挂一块自绘区域,典型用法是会跟着 agent 状态做反应的 3D 形象:
@@ -248,8 +278,9 @@ const h = ctx.desk?.registerCompanion({
 - ⚠️**两个挂载点、可能同时多份**:卡片与侧板是两次独立的 `mount`,收起/展开在两者间切换;主区、右侧 chat-panel、分屏钉住的
   会话各有一张卡片。重资源(解析好的模型、贴图)**缓存在模块级**,每次 mount 只建自己的 renderer;卸载时
   `renderer.dispose()` + `renderer.forceContextLoss()` —— Chromium 同时存活的 WebGL 上下文上限约 16 个。
-- **卡片正文是 `zoom: 0.75` + `pointer-events: none`**:卡片里收不到任何指针事件(只有整卡点击展开),旋转视角 / 戳模型这类交互只能
-  放在 `desk-panel`。卡片宽约 280px、高约「聊天列高的一半」,圆角裁切。
+- **卡片正文是 `zoom: 0.75` + `pointer-events: none`**:卡片里收不到任何指针事件(点正文 = 展开侧板),旋转视角 / 戳模型这类交互只能
+  放在 `desk-panel`。卡片宽约 280px、正文高 380px(2026-10-25 起 Desk 是摘要栏栈里的一张卡,原来是「聊天列高的一半」),底部圆角裁切。
+- **卡片可以被用户收起**(2026-10-25 起):收起时 `desk-card` 挂载点**卸载**,再展开重挂 —— 和换会话、换面板一样,别假设卡片一直挂着。
 - **WebGL 尺寸(zoom 下最容易错)**:canvas 的 CSS 保持 `width/height:100%`,绘图缓冲按**视觉尺寸**设:
   `renderer.setPixelRatio(devicePixelRatio); renderer.setSize(rect.width, rect.height, false)`,`rect = el.getBoundingClientRect()`。
   ⚠️第三个参数 **必须 `false`**:three 默认会把 278 这种视觉像素写回 style,在 zoom 0.75 里只铺满约 75%;用 `clientWidth`
@@ -259,6 +290,34 @@ const h = ctx.desk?.registerCompanion({
 - **隐身但仍挂载**:聊天列窄于 760px 时卡片 `display:none`,组件却还在 —— canvas 变 0×0 而 rAF 照跑。尺寸为 0 / IntersectionObserver
   不相交 / `document.hidden` 时暂停渲染循环;`prefers-reduced-motion` 下减弱待机动画。
 - 贴图 / glTF 的 CSP 注意事项见下「库内二进制资源」。
+
+## 摘要栏插件卡:ctx.summary(2026-10-25 起)
+
+Tangu 聊天右侧的**摘要栏**是一叠卡片:进度、后台(后台进程)、产物、来源、工作范围、Agent Desk。插件可以加一张卡,和内置卡同一个栈 ——
+用户能折叠、拖动排序(悬停露拖动块,右键卡头有「移到最上 / 最下 / 恢复默认」),收起状态和顺序由宿主按卡片记住。插件卡按注册顺序排在 Agent Desk 前面。
+
+```js
+const h = ctx.summary?.registerCard({
+  id: 'today',                               // 宿主拼成 plugin:<pluginId>:today,收起状态与顺序按它记
+  title: { zh: '今天', en: 'Today' },        // 跟随界面语言;也可以给一个字符串
+  defaultCollapsed: false,                   // 用户没点过时收不收;缺省展开
+  mount(el, host) {                          // 每个会话的摘要栏各挂一份,返回卸载函数
+    // host.sessionId: 这份挂在哪个会话(恒定:换会话 = 卸载重挂);host.cwd: 会话默认目录或 null
+    // host.update({ count, hidden }): 只改这一份 —— 卡头计数(null = 不显示)、hidden = 先不画这张卡(仍挂着,之后可再亮出)
+    const render = (events) => { el.replaceChildren(...events.map(rowOf)); host.update({ count: events.length, hidden: !events.length }) }
+    const off = subscribeToday(render)
+    return () => off()
+  },
+})
+// 撤卡:h?.dispose()。禁用 / 重载时宿主统一收。
+```
+
+- **只在桌面 Tangu 上存在**(同 `ctx.desk`):web / 移动端 / 纯 Amadeus 壳整个没有 `ctx.summary`,一律可选链。
+- **挂载次数**:每个会话的摘要栏一份;同屏两个聊天面板(主区 + 右侧 chat-panel)就是两份;换会话卸载重挂。新对话草稿(还没有会话)不挂插件卡。
+- **正文高度上限 240px**,超出宿主内滚,底部自动渐隐;宽约 252px(卡宽 280 减内边距)。别在正文里再套一层滚动。
+- **没内容就藏起来**:`host.update({ hidden: true })` 不画这张卡(栈里不留空位),有内容了再 `hidden: false`。不要靠渲染空 div 让卡片「消失」。
+- 摘要栏只在聊天列够宽(≥ 760px)时出现;窄了整栈收起,但你的 `mount` 仍挂着 —— 别在不可见时跑重活(`IntersectionObserver` 判)。
+- 正文是普通 DOM:用宿主的 CSS 变量(`--text` / `--text-muted` / `--ui-font-meta` …),行样式可以借 `.t2-tsum-row`(图标 + 文字的一行)。
 
 ## 自动化规则播种:ctx.automation(2026-09-02 起)
 

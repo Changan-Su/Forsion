@@ -14,8 +14,8 @@ import {
   type WorkspaceMeta, type WsScope,
 } from '../tools/fileWorkspace.js';
 import { getSessionDir, markSessionDirty, type SessionKey } from '../sandbox/sessionSandbox.js';
-import { listConfined, readConfined, writeConfined, unlinkConfined } from '../sandbox/confinedFs.js';
-import { noteWorkspaceUpload } from '../services/workspaceUploads.js';
+import { listConfined, readConfined, writeConfined, unlinkConfined, anchoredRoot, joinInside } from '../sandbox/confinedFs.js';
+import { noteWorkspaceUpload, forgetWorkspaceUpload } from '../services/workspaceUploads.js';
 import { parseRemoteOrigin } from '../services/remoteOrigin.js';
 
 const router = Router();
@@ -168,8 +168,14 @@ router.post('/agent/workspace/delete', authMiddleware, async (req: AuthRequest, 
       ok = await deleteWorkspaceFile(userId, r.appId, r.scope, p);
     } else {
       // 父目录按真实路径钳(父目录是软链 → unlink 删的是外面的文件);末段是软链本身没关系,unlink 只删链接。
-      ok = await unlinkConfined(await getSessionDir(r.key), String(p));
-      if (ok) markSessionDirty(r.key);
+      const dir = await getSessionDir(r.key);
+      ok = await unlinkConfined(dir, String(p));
+      if (ok) {
+        markSessionDirty(r.key);
+        const root = await anchoredRoot(dir); // 与上传登记同一算法(writeConfined 回的就是 joinInside(根真实路径, rel))
+        const abs = root && joinInside(root, String(p));
+        if (abs) forgetWorkspaceUpload(r.key.sessionId, abs);
+      }
     }
     res.json({ ok });
   } catch (e: any) {

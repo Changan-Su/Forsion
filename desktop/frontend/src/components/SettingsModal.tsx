@@ -12,14 +12,14 @@ import { BrowserExtensionPanel } from './BrowserExtensionPanel'
  * 在 Desktop 主界面内替换 Chat/Inspector 区域，而不是覆盖式弹窗。
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { X, Droplets, Shapes, ArrowLeft, Undo2, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2, CircleUserRound, Scaling, Coffee, MonitorCheck, History, MonitorSmartphone, Laptop, Cloud, SunDim, AlignLeft, Wind, TextSelect, MousePointerClick } from 'lucide-react'
+import { X, Droplets, Shapes, ArrowLeft, Undo2, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2, CircleUserRound, Scaling, Coffee, MonitorCheck, History, MonitorSmartphone, Laptop, Cloud, SunDim, AlignLeft, Wind, TextSelect, MousePointerClick } from 'lucide-react'
 import { ThemeCard } from './ThemeCard'
 import { ThemeSettingsPanel } from './ThemeSettingsPanel'
 import { StartupAppearanceSettings } from './StartupAppearanceSettings'
 import { backgroundSwatch, listLanguages, listSkins, skinSwatch, forcedSchemeForLanguage, SIGNALS } from '../theme/registry'
 import { customAccentVars } from '../theme/lcl/lovableData'
 import { UI_MODE, UI_ZOOM_EVENT, useNativeChromeClaim, useNativeChromeInstalled, useWorkspace } from '@lcl/engine' // 工作区引擎:恢复默认布局 + 移动预览模式;原生顶栏(Android 可选宿主)
-import { useApp } from '../stores/appStore' // Agent Desk 开关改动即时回流(desktopConfig 平时只在 boot/后端就绪时刷新)
+import { useApp, defaultModelOf } from '../stores/appStore' // Agent Desk 开关改动即时回流(desktopConfig 平时只在 boot/后端就绪时刷新)
 import { testConnection } from '../services/agentRunService'
 import { listClientSurfaces } from '../services/clientSurfaces'
 import {
@@ -56,16 +56,14 @@ import { Markdown } from './Markdown'
 import { UpdateActions, UpdateSourceNote } from './UpdateActions'
 import { ChangelogEntries, releaseNotesFor } from '../views/ChangelogView'
 import { openWhatsNew } from './WhatsNewDialog'
-import { AsrModelChoice } from './AsrModelChoice'
 import { DefaultModelsPage } from './DefaultModelsPage'
+import { VoiceSettingsPage } from './VoiceSettingsPage'
 import { catalogByKind, FETCH_ENABLE_LIMIT, guessProviderModelKind, mergeFetched, providerFieldsFromRows, rowsFromProvider, type ModelKind, type ProviderModelKind, type ProviderModelRow } from './modelKinds'
 import { realtimeCandidates } from './RealtimeVoiceSettings'
 import { AgentSettingsOverview } from './AgentSettingsOverview'
 import { GlobalSkillsLibrary } from './GlobalSkillsLibrary'
 import { openAgentProfile } from '../views/agentProfileNav'
 import { SpecialAgentsTab } from './SpecialAgentsTab'
-import { TtsVoiceStudio } from './TtsVoiceStudio'
-import { previewTts } from '../services/ttsService'
 import { ShortcutsTab } from './ShortcutsTab'
 import { PluginsTab } from './PluginsTab'
 import { CorePluginUpdates } from './CorePluginUpdates'
@@ -85,12 +83,12 @@ import { likelyMainlandChina } from './OnboardingWizard'
 import { EnvProbeSection } from './EnvProbeSection'
 import { DesktopPermissions, hasDesktopPermissions } from './DesktopPermissions'
 import { ComputerHistorySettings, computerHistoryApi } from './ComputerHistorySettings'
+import { TrashSettings } from './TrashSettings'
 import { RemoteSessionsSettings, remoteSessionsApi } from './RemoteSessionsSettings' // P1-K4
 import { UnitSettings } from './UnitSwitcher'
 import { debugFireToast } from '../achievements/store'
 import { useTheme } from '../stores/themeStore'
 import { setMobileUiCommand, MOBILE_UI_KEY } from '../mobileUiCommand'
-import { RealtimeVoiceSettings } from './RealtimeVoiceSettings'
 import {
   FORSION_PRIVACY_URL,
   FORSION_TERMS_URL,
@@ -118,11 +116,20 @@ import { dropCommittedEdits, hasDirtyEdits, mergeEdits, pickEdits, withoutKeys, 
 import { onRadioGroupKeyDown, radioTabIndex } from './radioGroupKeys'
 import { SettingsSaveBar } from './SettingsSaveBar'
 import { SecretStorageNotice } from './SecretStorageNotice' // P1-K5
+import { MaskingSettingsSection } from './MaskingSettingsSection'
 import './settingsModal.css'
-import { connectionTarget, homeTarget } from '../services/engine/targets'
+import { LocalProviderImport } from './LocalProviderImport'
+import { connectionTarget, homeTarget, HOME_REF } from '../services/engine/targets'
 
 // 本文件自带的文案片段(命名空间 `settingsmodal.*`,不与 i18n.generated.ts 的 `settings.*` 相交)。
 registerMessages({
+  'settingsmodal.configRecovered': { zh: '上次的设置文件损坏，已恢复到 {time} 的版本', en: 'Your settings file was damaged. Restored the version from {time}.' },
+  'settingsmodal.mcp.tokens': { zh: '每个请求约 {n} token', en: '~{n} tokens per request' },
+  'settingsmodal.mcp.notConnected': { zh: '未连接', en: 'Not connected' },
+  'settingsmodal.mcp.total': { zh: 'MCP 工具定义合计每个请求约 {n} token，占当前默认模型窗口的 {pct}%', en: 'MCP tool definitions take ~{n} tokens per request, {pct}% of the default model’s context window' },
+  'settingsmodal.mcp.totalNoWindow': { zh: 'MCP 工具定义合计每个请求约 {n} token', en: 'MCP tool definitions take ~{n} tokens per request' },
+  'settingsmodal.mcp.heavyNote': { zh: '不常用的可以关掉。按约 4 个字符 = 1 token 估算。', en: 'Turn off the ones you rarely use. Estimated at about 4 characters per token.' },
+  'settingsmodal.mcp.estimateNote': { zh: '按约 4 个字符 = 1 token 估算。', en: 'Estimated at about 4 characters per token.' },
   'settingsmodal.mcp.fromPlugin': { zh: '来自插件「{name}」', en: 'From plugin "{name}"' },
   'settingsmodal.mcp.fromPluginHint': { zh: '这个 server 随插件启用和停用；要关掉它，请在插件设置里停用这个插件。', en: 'This server starts and stops with its plugin. To turn it off, disable the plugin in plugin settings.' },
   'settingsmodal.selectionBar': { zh: '划线菜单', en: 'Selection menu' },
@@ -145,7 +152,8 @@ registerMessages({
   'settings.forsionCloud.connection': { zh: '连接', en: 'Connection' },
   'settingsmodal.cloudAccountDescription': { zh: 'Forsion 云端 · 管理个人主页、登录资料和账号安全。', en: 'Forsion Cloud · Your profile, sign-in details and account security.' },
   'settingsmodal.cloudMembershipDescription': { zh: 'Forsion 云端 · 查看会员、额度、积分与用量记录。', en: 'Forsion Cloud · Membership, quota, points and usage.' },
-  'settingsmodal.cloudHelpDescription': { zh: 'Forsion 云端 · 提交反馈、查看回复与管理诊断数据。', en: 'Forsion Cloud · Feedback, replies and diagnostic data.' },
+  'settingsmodal.cloudHelpDescription': { zh: 'Forsion 云端 · 提交反馈、查看回复。', en: 'Forsion Cloud · Feedback and replies.' },
+  'settingsmodal.cloudPrivacyDescription': { zh: 'Forsion 云端 · 帮助改进 Forsion，管理诊断数据。', en: 'Forsion Cloud · Help improve Forsion and manage diagnostic data.' },
   'settingsmodal.cloudAdvancedConnection': { zh: '高级连接', en: 'Advanced connection' },
   'settings.forsionCloud.noteSyncOn': { zh: '与云端智库同步', en: 'Sync with the cloud vault' },
   'settings.forsionCloud.address': { zh: '地址', en: 'Address' },
@@ -175,10 +183,6 @@ registerMessages({
   'modelsettings.providersHint': { zh: '模型从哪里来：Forsion 云端、订阅账号，或你自己的 API key。', en: 'Where models come from: Forsion Cloud, subscription accounts or your own API keys.' },
   'modelsettings.searchHint': { zh: '配置联网搜索的服务与凭据。', en: 'Configure web search services and credentials.' },
   'modelsettings.voiceHint': { zh: '音色、语速和本地语音识别。用哪个模型在「默认模型」里选。', en: 'Voices, speed and on-device speech recognition. Choose the models under Default models.' },
-  'settings.tts.off': { zh: '朗读没开。在「默认模型 → 朗读」里选一个模型就开了。', en: 'Read-aloud is off. Pick a model under Default models → Read aloud to turn it on.' },
-  'settings.voice.secCall': { zh: '语音通话', en: 'Voice call' },
-  'settings.voice.secInput': { zh: '语音输入', en: 'Voice input' },
-  'settings.voice.secRead': { zh: '朗读', en: 'Read aloud' },
   'modelsettings.answerForm': { zh: '回答形式', en: 'Answer format' },
   'modelsettings.noModels': { zh: '暂无可用模型。可在提供方中配置连接，然后刷新模型。', en: 'No models available. Configure a provider connection, then refresh models.' },
   'prov.cloud': { zh: 'Forsion 云端', en: 'Forsion Cloud' },
@@ -294,6 +298,9 @@ export type Tab = StaticTab | `plugin:${string}` | `fplugin:${string}`
 export type SettingsTarget = Tab | 'wechat' | `${StaticTab}/${string}`
 
 const DEV_MODE_KEY = 'forsion_tangu_dev_mode'
+/** 摘要栏卡片立体感(开发者选项)。读的一方是 Tangu 的 views/chat2/summaryPrefs,宿主不 import 它(Tangu 边界):
+ *  写同一个 key,再在本窗口派一次 storage 事件 —— 设置开在独立窗口时浏览器自己给主窗派,和主窗同窗时靠这一次。 */
+const SUMMARY_ELEVATION_KEY = 'forsion.summaryElevation'
 /** 「Forsion 云端 → 账号」:Extend 渲染半身自绘的子页(registerSettingsView category 'forsion',id 'account')。 */
 const ACCOUNT_SUB = 'fx:forsion-extend:account'
 /** 引擎插件「电脑操作」的 id:它的设置页是固定的一级页 'computer-use'。 */
@@ -313,6 +320,7 @@ const TAB_ICONS: Partial<Record<Tab, React.ReactNode>> = {
   sync: <RefreshCw size={14} />,
   'amadeus-plugins': <Puzzle size={14} />,
   advanced: <Wrench size={14} />,
+  trash: <Trash2 size={14} />,
   permissions: <MonitorCog size={14} />,
   units: <Laptop size={14} />,
   'remote-sessions': <MonitorSmartphone size={14} />, // P1-K4
@@ -329,23 +337,6 @@ const TAB_ICONS: Partial<Record<Tab, React.ReactNode>> = {
   'computer-use': <MousePointerClick size={14} />,
   plugins: <Blocks size={14} />,
 }
-
-// 系统音色候选(datalist 可输可选;百炼无音色列表 API,静态维护常用项;全量见百炼「Qwen-TTS 音色列表」文档)。
-// ⚠️ 表在模块作用域,只能存**文案 key**:写死字面量会在模块加载时冻结,切语言不会更新。
-// 第一列是音色 id(发给接口的标识符,永不翻译),第二列是显示名的 key,渲染时 t() 解析。
-const TTS_VOICE_SUGGESTIONS: Array<[string, string]> = [
-  ['Cherry', 'settingsmodal.tts.voice.cherry'], ['Serena', 'settingsmodal.tts.voice.serena'],
-  ['Ethan', 'settingsmodal.tts.voice.ethan'], ['Chelsie', 'settingsmodal.tts.voice.chelsie'],
-  ['Nofish', 'settingsmodal.tts.voice.nofish'], ['Jennifer', 'settingsmodal.tts.voice.jennifer'],
-  ['Ryan', 'settingsmodal.tts.voice.ryan'], ['Katerina', 'settingsmodal.tts.voice.katerina'],
-  ['Dylan', 'settingsmodal.tts.voice.dylan'], ['Jada', 'settingsmodal.tts.voice.jada'],
-  ['Sunny', 'settingsmodal.tts.voice.sunny'], ['Rocky', 'settingsmodal.tts.voice.rocky'],
-  ['Kiki', 'settingsmodal.tts.voice.kiki'], ['Marcus', 'settingsmodal.tts.voice.marcus'],
-  ['Roy', 'settingsmodal.tts.voice.roy'], ['Peter', 'settingsmodal.tts.voice.peter'],
-  ['alloy', 'settingsmodal.tts.voice.openai'], ['echo', 'settingsmodal.tts.voice.openai'],
-  ['fable', 'settingsmodal.tts.voice.openai'], ['onyx', 'settingsmodal.tts.voice.openai'],
-  ['nova', 'settingsmodal.tts.voice.openai'], ['shimmer', 'settingsmodal.tts.voice.openai'],
-]
 
 const ECO_LABEL: Record<string, string> = {
   'claude-code': 'Claude Code',
@@ -366,14 +357,7 @@ function CalmRow({ k, anchor, icon, label, hint }: { k: CalmKey; anchor: string;
   return (
     <div className="settings-control-row" data-setting-anchor={anchor}>
       <div className="settings-control-copy">{icon}<span><strong>{label}</strong><small>{hint}</small></span></div>
-      <button
-        type="button"
-        role="switch"
-        aria-checked={on}
-        aria-label={label}
-        className={`switch${on ? ' on' : ''}`}
-        onClick={() => { setCalmOn(k, !on); setOn(!on) }}
-      />
+      <SettingsSwitch checked={on} label={label} onChange={(next) => { setCalmOn(k, next); setOn(next) }} />
     </div>
   )
 }
@@ -505,6 +489,15 @@ export const SettingsModal: React.FC<{
     writeFont(slot, v)
     applyUiFonts()
   }
+  // 开发者「摘要栏卡片立体感」(见 SUMMARY_ELEVATION_KEY)。
+  const [summaryElevation, setSummaryElevationState] = useState<string>(() => {
+    try { const v = localStorage.getItem(SUMMARY_ELEVATION_KEY); return v === 'float' || v === 'flat' ? v : 'half' } catch { return 'half' }
+  })
+  const setSummaryElevation = (v: string) => {
+    setSummaryElevationState(v)
+    try { localStorage.setItem(SUMMARY_ELEVATION_KEY, v) } catch { /* 存不进就不同步 */ }
+    window.dispatchEvent(new StorageEvent('storage', { key: SUMMARY_ELEVATION_KEY }))
+  }
   // 开发者「移动端 UI 预览命令」开关(localStorage;bootstrapEngine 启动时据此注册 switch-ui-mode 命令)。
   const [mobileUiCmd, setMobileUiCmd] = useState<boolean>(() => {
     try { return localStorage.getItem(MOBILE_UI_KEY) === '1' } catch { return false }
@@ -570,6 +563,8 @@ export const SettingsModal: React.FC<{
     ['notifications', t('settings.tab.notifications')],
     ...(phoneShell ? [] : ([['statusbar', t('settings.tab.statusbar')]] as Array<[Tab, string]>)),
     ['advanced', t('settings.tab.advanced')],
+    // 回收站(卸载的 Agent / 技能 / 插件放 30 天):只在本机引擎有,手机原生外壳同一页;放「系统」组、设备权限上面。
+    ...(isDesktop || window.tangu?.mobile ? ([['trash', t('trash.tab')]] as Array<[Tab, string]>) : []),
     ...(hasDesktopPermissions() ? ([['permissions', t('desktopPermissions.title')]] as Array<[Tab, string]>) : []),
     // 设置 › 设备(原 Ribbon 胶囊菜单,10-17 搬进来):只在有 Unit 主进程桥的真桌面列。
     ...(window.tangu?.unitHostStatus || window.tangu?.unitsList ? ([['units', t('unit.tab')]] as Array<[Tab, string]>) : []),
@@ -699,9 +694,6 @@ export const SettingsModal: React.FC<{
   const [editProvider, setEditProvider] = useState<(DirectProviderConfig & { rows: ProviderModelRow[]; isNew?: boolean; original?: string; base: Partial<DirectProviderConfig>; editId: number }) | null>(null)
   const [manualModel, setManualModel] = useState('')
   // 语速输入的编辑态缓冲(null=未在编辑,显示已存值):清空/打半截时不反弹,blur 时非法则恢复旧值。
-  const [ttsSpeedText, setTtsSpeedText] = useState<string | null>(null)
-  const [ttsTesting, setTtsTesting] = useState(false)
-  const [ttsTestMsg, setTtsTestMsg] = useState('')
   const [providerTestMsg, setProviderTestMsg] = useState('')
   const [providerTesting, setProviderTesting] = useState(false)
   const providerTestAbort = useRef<AbortController | null>(null) // 供「测试连接」取消用
@@ -762,6 +754,9 @@ export const SettingsModal: React.FC<{
   // MCP 配置(~/.tangu/mcp.json)+ 后端实际连接状态(GET /agent/tools 的 mcp 分区)
   const [mcpServers, setMcpServers] = useState<Record<string, McpServerConfigEntry>>({})
   const [mcpStatus, setMcpStatus] = useState<ToolsResponse['mcp']>(undefined)
+  // MCP 页页头合计的分母:本机新对话会用的那个模型(MCP 状态与 models 都来自本机引擎;焦点在别的电脑时也按本机算),
+  // 没选过就落到本机目录的 defaultModelId(渲染处)
+  const defaultChatModelId = useApp((s) => defaultModelOf(s, HOME_REF) || '')
   const [editMcp, setEditMcp] = useState<{ name: string; isNew: boolean; command: string; argsText: string; url: string; transport: 'auto' | 'stdio' | 'http' | 'sse'; envText: string } | null>(null)
   const [mcpMsg, setMcpMsg] = useState('')
 
@@ -814,6 +809,37 @@ export const SettingsModal: React.FC<{
   const groupedCloud = cloudViews.some((view) => cloudSettingsParent(cloudViews, cloudViewKey(view)) !== cloudViewKey(view))
 
   // 旧「Tangu → 插件」独立入口已并入统一插件页:旧深链/持久化 tab 一律重定向。
+
+  // MCP 页:每个已连接的 server 每个请求约占多少 token(引擎按工具定义 JSON / 4 估),页头合计占默认模型窗口的比例。
+  // 不出金额、不按会话算 —— 只说体量,让人决定关哪个。没连上的不给数字。
+  type McpStatusRow = NonNullable<ToolsResponse['mcp']>[number]
+  const fmtTok = (n: number): string => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n))
+  const mcpStatusLabel = (st: McpStatusRow): string =>
+    st.status === 'connected' ? t('settings.mcp.statusConnected', { count: st.tools.length })
+      : st.status === 'error' ? t('settings.mcp.statusError')
+        : st.status === 'disabled' ? t('settings.mcp.statusDisabled')
+          : t('settingsmodal.mcp.notConnected')
+  const mcpTokensLabel = (st: McpStatusRow | undefined): React.ReactNode =>
+    st?.status === 'connected' && typeof st.approxTokens === 'number'
+      ? <span className="mcp-tokens">{t('settingsmodal.mcp.tokens', { n: fmtTok(st.approxTokens) })}</span>
+      : null
+  const mcpTotalSummary = (): React.ReactNode => {
+    // 插件自带的照算;mcp.json 里的要还在、且没停用(刚删 / 刚停的,状态快照在页面刷新前还是 connected)
+    const live = (mcpStatus || []).filter((s) => s.status === 'connected' && typeof s.approxTokens === 'number' && (s.origin || (mcpServers[s.server] && mcpServers[s.server].enabled !== false)))
+    if (!live.length) return null
+    const total = live.reduce((n, s) => n + s.approxTokens!, 0)
+    const win = models?.models.find((m) => m.id === (defaultChatModelId || models.defaultModelId))?.contextWindow
+    const pct = win ? (total / win) * 100 : undefined
+    return (
+      <div className="mcp-token-summary" data-mcp-token-summary>
+        <Info size={14} />
+        <div>
+          {pct === undefined ? t('settingsmodal.mcp.totalNoWindow', { n: fmtTok(total) }) : t('settingsmodal.mcp.total', { n: fmtTok(total), pct: pct.toFixed(1) })}
+          <small>{t(pct !== undefined && pct > 5 ? 'settingsmodal.mcp.heavyNote' : 'settingsmodal.mcp.estimateNote')}</small>
+        </div>
+      </div>
+    )
+  }
 
   const refreshMcp = (): void => {
     void window.tangu?.readMcpConfig?.().then((c) => setMcpServers(c.mcpServers)).catch(() => setMcpServers({}))
@@ -1121,7 +1147,7 @@ export const SettingsModal: React.FC<{
   }
 
   useEffect(() => {
-    if (p.open && tab === 'model' && !models && !modelsLoading) void loadModels()
+    if (p.open && (tab === 'model' || tab === 'mcp') && !models && !modelsLoading) void loadModels() // mcp:页头合计要默认模型的窗口
     if (p.open && tab === 'mcp') refreshMcp()
     // appVersion 一打开就取(不只 about tab):高级→导出日志也要带版本号,否则导出里恒为 null。
     if (p.open && !appVersion) void window.tangu?.appVersion?.().then((v) => setAppVersion(v || '')).catch(() => {})
@@ -1187,6 +1213,7 @@ export const SettingsModal: React.FC<{
     'computer-use': 'settings.page.computerUseDescription',
     'amadeus-plugins': PRODUCT.nativeFeatures !== undefined ? 'settings.amadeusPlugins.unitIntro' : 'settings.page.pluginsDescription',
     advanced: 'settings.page.advancedDescription',
+    trash: 'trash.page',
     permissions: 'desktopPermissions.description',
     units: 'unit.page',
     'remote-sessions': 'remoteSessions.page', // P1-K4
@@ -1277,7 +1304,8 @@ export const SettingsModal: React.FC<{
     : subItemsForTab(id).filter(([key]) => cloudSettingsParent(cloudViews, key) === key && (!groupedCloud || key !== 'f-conn'))
   const cloudDescription = cloudNavKey === ACCOUNT_SUB ? 'settingsmodal.cloudAccountDescription'
     : cloudNavKey === 'fx:forsion-extend:quota' ? 'settingsmodal.cloudMembershipDescription'
-      : cloudNavKey === 'fx:forsion-extend:feedback' ? 'settingsmodal.cloudHelpDescription' : ''
+      : cloudNavKey === 'fx:forsion-extend:feedback' ? 'settingsmodal.cloudHelpDescription'
+        : cloudNavKey === 'fx:forsion-extend:privacy' ? 'settingsmodal.cloudPrivacyDescription' : ''
   const activeSubLabel = subItems.find(([k]) => k === activeSub)?.[1] ?? ''
   const modelSubDescriptions: Record<string, string> = { 'm-models': 'modelsettings.defaultsHint', 'm-display': 'modelsettings.displayHint', 'm-providers': 'modelsettings.providersHint', 'm-websearch': 'modelsettings.searchHint', 'm-voice': 'modelsettings.voiceHint' }
   // 换页/换子页面后:①选中项滚到可见；②正文回到顶部 —— ⚠️ 滚动容器是**外层**
@@ -1312,7 +1340,7 @@ export const SettingsModal: React.FC<{
       { key: 'appearance', label: t('settings.group.appearance'), tabs: ['theme', 'shortcuts', 'notifications', 'statusbar'] },
       { key: 'ai', label: t('settings.group.ai'), tabs: ['model', 'agents', 'skills', 'mcp', 'hooks', 'channels', 'browser', 'computer-use'] },
       { key: 'extensions', label: t('settings.group.extensions'), tabs: ['amadeus-plugins'] },
-      { key: 'system', label: t('settings.group.system'), tabs: ['permissions', 'units', 'remote-sessions', 'computer-history', 'advanced', 'developer', 'about'] },
+      { key: 'system', label: t('settings.group.system'), tabs: ['trash', 'permissions', 'units', 'remote-sessions', 'computer-history', 'advanced', 'developer', 'about'] },
     ] },
   ]
   const navItemsForGroup = (grp: { key: string; tabs: Tab[] }): Array<[Tab, string]> => {
@@ -1654,12 +1682,13 @@ export const SettingsModal: React.FC<{
         </div>
         <div className="settings-main-head">
           <div className="settings-main-copy">
-            <div className="settings-main-title">{tab === 'forsion' ? cloudPageLabel || activeTabLabel : tab === 'model' || (tab === 'skills' && activeSub === 'k-library') ? activeSubLabel || activeTabLabel : activeTabLabel}</div>
-            {tab === 'forsion' ? <p>{cloudDescription ? t(cloudDescription) : t('settings.tab.forsionCloud')}</p> : tab === 'model' ? <p>{t(modelSubDescriptions[activeSub] || 'settings.page.modelDescription')}</p> : activeTabDescription && <p>{activeTabDescription}</p>}
+            <div className="settings-main-title">{tab === 'forsion' ? cloudPageLabel || activeTabLabel : tab === 'model' || (tab === 'skills' && (activeSub === 'k-library' || activeSub === 'k-discovery')) ? activeSubLabel || activeTabLabel : activeTabLabel}</div>
+            {tab === 'forsion' ? <p>{cloudDescription ? t(cloudDescription) : t('settings.tab.forsionCloud')}</p> : tab === 'model' ? <p>{t(modelSubDescriptions[activeSub] || 'settings.page.modelDescription')}</p> : tab === 'skills' && activeSub === 'k-discovery' ? <p>{t('settings.discovery.pageDescription')}</p> : activeTabDescription && <p>{activeTabDescription}</p>}
           </div>
         </div>
         {/* 设置住在独立浮窗(桌面)/ 覆盖层(web)里,全局通知两处都看不见 —— 插件装卸、重扫、Space 卸载等结果画在这条上。 */}
         <PanelNotice />
+        <ConfigRecoveryNotice />
         <div className="settings-body">
           {cloudTabs.length > 0 && <div className="settings-cloud-tabs" role="tablist" aria-label={cloudPageLabel}>
             {cloudTabs.map((view, index) => {
@@ -1680,6 +1709,7 @@ export const SettingsModal: React.FC<{
           {/* 每个子页一个崩溃兜底:一页渲染抛错只占正文区,左侧导航照常能切走(原先只有整窗那一层,一页崩了整个设置窗就废了)。 */}
           <ErrorBoundary key={`${tab}:${activeSub}`}>
           <div key={`${tab}:${activeSub}`} className={`settings-sub settings-sub--${tab}`} id={cloudTabs.length ? 'settings-cloud-panel' : undefined} role={cloudTabs.length ? 'tabpanel' : undefined} aria-labelledby={cloudTabs.length ? `settings-cloud-tab-${activeSub}` : undefined} data-dir={subDir} data-settings-sub={activeSub || undefined}>
+                {tab === 'trash' && <TrashSettings />}
                 {tab === 'permissions' && hasDesktopPermissions() && <DesktopPermissions mode={p.themeMode} />}
                 {tab === 'computer-history' && <ComputerHistorySettings mode={p.themeMode} anchor="computer-history" />}
                 {tab === 'units' && <UnitSettings />}
@@ -1771,8 +1801,8 @@ export const SettingsModal: React.FC<{
                         </div>
                         {(modeExpanded || modePending) && (
                           <>
-                            <p className="settings-mode-desc">{t('settings.backend.modeDescription')}</p>
-                            <div className="settings-choice-grid" role="radiogroup" aria-label={t('settings.backend.modeLabel')} onKeyDown={onRadioGroupKeyDown}>
+                            <p className="settings-mode-desc" data-motion="enter">{t('settings.backend.modeDescription')}</p>
+                            <div className="settings-choice-grid" data-motion="enter" role="radiogroup" aria-label={t('settings.backend.modeLabel')} onKeyDown={onRadioGroupKeyDown}>
                               <button type="button" role="radio" aria-checked={viewMode === 'managed'} tabIndex={radioTabIndex(viewMode === 'managed', 0, true)} className={`settings-choice-card${viewMode === 'managed' ? ' active' : ''}`} disabled={runtimeSaving} onClick={() => pickModeDraft('managed')}>
                                 <span className="settings-choice-icon"><Settings2 size={17} /></span>
                                 <span><strong>{t('settings.backend.modeManaged')}</strong><small>{t('settings.backend.modeManagedDescription')}</small></span>
@@ -1900,14 +1930,7 @@ export const SettingsModal: React.FC<{
                           <div className="field" data-setting-anchor="mirror">
                             <label>{t('settings.mirror.label')}</label>
                             <div className="switch-row" style={{ minHeight: 30 }}>
-                              <button
-                                type="button"
-                                role="switch"
-                                aria-checked={(stored.mirror || 'default') === 'china'}
-                                aria-label={t('settings.mirror.toggle')}
-                                className={`switch${(stored.mirror || 'default') === 'china' ? ' on' : ''}`}
-                                onClick={() => edit({ mirror: (stored.mirror || 'default') === 'china' ? 'default' : 'china' })}
-                              />
+                              <SettingsSwitch checked={(stored.mirror || 'default') === 'china'} label={t('settings.mirror.toggle')} onChange={(on) => edit({ mirror: on ? 'china' : 'default' })} />
                               <span>{t('settings.mirror.toggle')}</span>
                             </div>
                           </div>
@@ -2003,17 +2026,16 @@ export const SettingsModal: React.FC<{
                 {/* 收件箱(Inbox Space):系统通知开关。非 managedKeys,保存即生效不重启后端。 */}
                 {tab === 'general' && isDesktop && stored && activeSub === 'g-inbox' && (
                   <>
-                    <div className="field" data-setting-anchor="inbox-notify">
-                      <label className="inline-check" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                        <input
-                          type="checkbox"
-                          checked={stored.inboxNotifyEnabled !== false}
-                          onChange={(e) => void window.tangu!.setConfig({ inboxNotifyEnabled: e.target.checked }).then(setStored)}
-                        />
-                        {t('settings.inbox.notifyLabel')}
-                      </label>
-                      <div className="hint">{t('settings.inbox.notifyHint')}</div>
-                    </div>
+                    <section className="settings-panel">
+                      <div className="settings-control-list">
+                        <SettingsRow anchor="inbox-notify" fit="inline" label={t('settings.inbox.notifyLabel')} description={t('settings.inbox.notifyHint')}
+                          control={<SettingsSwitch checked={stored.inboxNotifyEnabled !== false} label={t('settings.inbox.notifyLabel')} onChange={(on) => void window.tangu!.setConfig({ inboxNotifyEnabled: on }).then(setStored)} />} />
+                      </div>
+                      {/* 所有通知的总开关在另一页(走查续五 W-76);路径跟着左栏分组名走 */}
+                      <div className="hint">{t('settings.inbox.notifyXref').split('{path}').map((part, i) => i === 0 ? part : (
+                        <span key={i}><button type="button" className="settings-xref-link" onClick={() => goTab('notifications')}>{t('settings.group.appearance')} › {t('settings.tab.notifications')}</button>{part}</span>
+                      ))}</div>
+                    </section>
                   </>
                 )}
 
@@ -2025,14 +2047,16 @@ export const SettingsModal: React.FC<{
                           anchor="notes-attachments"
                           label={t('settings.notes.modeLabel')}
                           description={t('settings.notes.modeHint')}
-                          control={(
-                            <select value={stored.notesAttachmentMode || 'attachments'} onChange={(e) => void window.tangu!.setConfig({ notesAttachmentMode: e.target.value as StoredDesktopConfig['notesAttachmentMode'] }).then(setStored)}>
+                        >
+                          {/* 和下面「日记文件夹」输入框同一列宽(走查续五 5.7),220px 放不下整句 */}
+                          <div className="settings-inline-row settings-row-wide-control">
+                            <select value={stored.notesAttachmentMode || 'attachments'} onChange={(e) => void window.tangu!.setConfig({ notesAttachmentMode: e.target.value as StoredDesktopConfig['notesAttachmentMode'] }).then(setStored)} aria-label={t('settings.notes.modeLabel')}>
                               <option value="attachments">{t('settings.notes.modeAttachments')}</option>
                               <option value="same">{t('settings.notes.modeSame')}</option>
                               <option value="vault">{t('settings.notes.modeVault')}</option>
                             </select>
-                          )}
-                        />
+                          </div>
+                        </SettingsRow>
                         {(stored.notesAttachmentMode || 'attachments') === 'vault' && (
                           <SettingsRow label={t('settings.notes.folderLabel')} description={t('settings.notes.folderHint')}>
                             <div className="settings-inline-row settings-row-wide-control">
@@ -2231,7 +2255,7 @@ export const SettingsModal: React.FC<{
                     onClick={() => { setCloudAdvancedOpen(!(activeSub === 'f-conn' || cloudAdvancedOpen)); if (activeSub === 'f-conn') pickSub('f-sync') }}>
                     <ChevronRight size={14} aria-hidden="true" />{t('settingsmodal.cloudAdvancedConnection')}
                   </button>}
-                  {(!groupedCloud || activeSub === 'f-conn' || cloudAdvancedOpen) && <div id="settings-cloud-connection"><SettingsPanel anchor="cloud-url" icon={<Globe2 size={16} />} title={t('settings.forsion.cloudUrlLabel')} description={t(cloudUrlLocked ? 'settingsmodal.cloudUrl.lockedHint' : 'settings.forsion.cloudUrlHint')}>
+                  {(!groupedCloud || activeSub === 'f-conn' || cloudAdvancedOpen) && <div id="settings-cloud-connection" data-motion={cloudAdvancedOpen ? 'enter' : undefined}><SettingsPanel anchor="cloud-url" icon={<Globe2 size={16} />} title={t('settings.forsion.cloudUrlLabel')} description={t(cloudUrlLocked ? 'settingsmodal.cloudUrl.lockedHint' : 'settings.forsion.cloudUrlHint')}>
                     <div className="settings-control-list">
                       <SettingsRow label={t('settings.forsionCloud.address')}>
                         <div className="settings-inline-row settings-row-wide-control">
@@ -2385,6 +2409,7 @@ export const SettingsModal: React.FC<{
                               baseUrl: ep.baseUrl.replace(/\/+$/, ''),
                               apiKey: ep.apiKey || undefined,
                               ...providerFieldsFromRows(ep.rows, ep.base),
+                              ...(ep.base.protocol ? { protocol: ep.base.protocol } : {}), // 导入的 Anthropic / Responses 连接:编辑器不画协议,保存时留住
                             }).then((list) => {
                               // 改了名字 = 另存一条,旧的留着(与旧表单一致):各处存着的「旧名/模型」引用不会一下子全失效
                               setCustomProviders(list)
@@ -2460,9 +2485,14 @@ export const SettingsModal: React.FC<{
                           </React.Fragment>
                         })}
                         {editProvider?.isNew && editor}
-                        {!editProvider?.isNew && <div className="provider-add"><button className="btn ghost sm" onClick={() => startEdit(null)}><Plus size={13} /> {t('prov.add')}</button></div>}
+                        {!editProvider?.isNew && <LocalProviderImport providers={customProviders} onManual={() => startEdit(null)} onImported={(list) => {
+                          setCustomProviders(list)
+                          void loadModels()
+                          setProviderSaveMsg(t('settings.customProvider.savedReloading'))
+                        }} />}
                         {providerSaveMsg && !editProvider && <div className="hint provider-editor-hint">{providerSaveMsg}</div>}
                       </SettingsPanel>
+                      <MaskingSettingsSection />
                     {stored?.mode === 'external' && !(stored?.backendUrl || '').includes('localhost') && !(stored?.backendUrl || '').includes('127.0.0.1') && (
                       <div className="hint" style={{ marginTop: 10 }}>
                         {t('settings.customProvider.externalWarning')}
@@ -2478,99 +2508,18 @@ export const SettingsModal: React.FC<{
                   <WebSearchSettings target={homeTarget()} cfg={wsRed} setCfg={setWsRed} />
                 )}
 
-                {/* 语音页分三节,各管输入框上的一个键(10-02 用户报「通话音色和朗读混在一起、很误导」):
-                    语音通话 = 空输入框的发送键 / 语音输入 = 麦克风键 / 朗读 = 回复的朗读(TTS:OpenAI 兼容 /audio/speech)。 */}
+                {/* 语音页三张卡(10-25 走查续 4.5),各管输入框上的一个键(10-02 用户报「通话音色和朗读混在一起、很误导」):
+                    语音通话 = 空输入框的发送键 / 本地语音识别 = 麦克风键 / 朗读 = 回复的朗读(TTS:OpenAI 兼容 /audio/speech)。 */}
                 {tab === 'model' && isDesktop && activeSub === 'm-voice' && (
-                  <>
-                    {stored && (
-                      <>
-                        <div className="settings-sec">{t('settings.voice.secCall')}</div>
-                        <RealtimeVoiceSettings stored={stored} providers={customProviders} onSaved={setStored}
-                          cloudModel={models?.realtimeModel} cloudAccount={cloudAccount} signedIn={realtimeSignedIn} />
-                      </>
-                    )}
-                    <div className={`settings-sec${stored ? ' settings-sec--gap' : ''}`}>{t('settings.voice.secInput')}</div>
-                    <AsrModelChoice onSaved={setStored} />
-                    {stored && (
-                      <>
-                        <div className="settings-sec settings-sec--gap">{t('settings.voice.secRead')}</div>
-                        {!(stored.ttsModelId || '').trim() && <div className="hint">{t('settings.tts.off')}</div>}
-                        <div className="field">
-                          <label>{t('settings.tts.voice')}</label>
-                          <input
-                            type="text"
-                            list="tts-voice-options"
-                            value={stored.ttsVoice ?? ''}
-                            onChange={(e) => edit({ ttsVoice: e.target.value })}
-                            onBlur={() => void commitEdits(['ttsVoice'], (v) => ({ ttsVoice: (v.ttsVoice || '').trim() }))}
-                            placeholder={t('settings.tts.voicePlaceholder')}
-                          />
-                          {commitErrorHint('ttsVoice')}
-                          {/* 系统音色候选(可输可选;百炼无音色列表 API,静态表);复刻/设计音色经下方工作室「使用」自动填入 */}
-                          <datalist id="tts-voice-options">
-                            {TTS_VOICE_SUGGESTIONS.map(([v, labelKey]) => <option key={v} value={v} label={t(labelKey)} />)}
-                          </datalist>
-                        </div>
-                        <div className="field">
-                          <label>{t('settings.tts.speed')}</label>
-                          <input
-                            type="number"
-                            min={0.5}
-                            max={2}
-                            step={0.1}
-                            style={{ width: 90 }}
-                            value={ttsSpeedText ?? String(stored.ttsSpeed ?? 1)}
-                            onChange={(e) => setTtsSpeedText(e.target.value)}
-                            onBlur={() => {
-                              const n = Number(ttsSpeedText)
-                              const v = ttsSpeedText !== null && Number.isFinite(n) && n > 0 ? Math.min(Math.max(n, 0.5), 2) : (stored.ttsSpeed ?? 1)
-                              setTtsSpeedText(null)
-                              void window.tangu!.setConfig({ ttsSpeed: v }).then(setStored)
-                            }}
-                          />
-                        </div>
-                        <div className="field">
-                          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                            <button
-                              className="btn ghost sm"
-                              disabled={ttsTesting || !(stored.ttsModelId || '').trim()}
-                              onClick={() => {
-                                setTtsTesting(true); setTtsTestMsg('')
-                                previewTts(homeTarget(), { model: (stored.ttsModelId || '').trim(), voice: (stored.ttsVoice || '').trim() || undefined, speed: stored.ttsSpeed }, t('settings.tts.testText'))
-                                  .then(() => setTtsTestMsg(`✓ ${t('settings.tts.testOk')}`))
-                                  .catch((e: any) => setTtsTestMsg(`✗ ${e?.message || e}`))
-                                  .finally(() => setTtsTesting(false))
-                              }}
-                            >
-                              {ttsTesting ? <Loader2 size={12} className="spin" /> : <Play size={12} />} {t('settings.tts.testBtn')}
-                            </button>
-                            <span style={{ fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-muted)' }}>{ttsTestMsg}</span>
-                          </div>
-                        </div>
-                        <div className="field">
-                          <label className="inline-check" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                            <input
-                              type="checkbox"
-                              checked={stored.ttsAutoSpeak === true}
-                              onChange={(e) => void window.tangu!.setConfig({ ttsAutoSpeak: e.target.checked }).then(setStored)}
-                            />
-                            {t('settings.tts.autoSpeak')}
-                          </label>
-                          <div className="hint">{t('settings.tts.autoSpeakHint')}</div>
-                        </div>
-                        {(() => {
-                          // 百炼音色工作室:有指向阿里云百炼的 provider 才可用(域名判定与后端 isDashScopeBase 一致)。
-                          // 非本地 external 后端不渲染:本地 providers 文件到不了远端 registry,采用的音色无法合成(判定同上方 externalWarning)。
-                          const remoteExternal = stored?.mode === 'external' && !(stored?.backendUrl || '').includes('localhost') && !(stored?.backendUrl || '').includes('127.0.0.1')
-                          if (remoteExternal) return null
-                          const ds = customProviders.find((cp) => /dashscope|aliyuncs\.com/i.test(cp.baseUrl))
-                          return ds
-                            ? <TtsVoiceStudio cfg={p.cfg} provider={ds} onApplied={() => void window.tangu!.getConfig().then(setStored)} />
-                            : <div className="hint">{t('settings.tts.studio.needProvider')}</div>
-                        })()}
-                      </>
-                    )}
-                  </>
+                  <VoiceSettingsPage cfg={p.cfg} stored={stored} setStored={setStored} providers={customProviders}
+                    remoteExternal={stored?.mode === 'external' && !(stored?.backendUrl || '').includes('localhost') && !(stored?.backendUrl || '').includes('127.0.0.1')}
+                    cloudModel={models?.realtimeModel} cloudAccount={cloudAccount} signedIn={realtimeSignedIn}
+                    edit={edit} commitEdits={commitEdits} commitErrorHint={commitErrorHint}
+                    onOpen={(target) => {
+                      if (target === 'providers') { openSubPage('model', 'm-providers'); return }
+                      openSubPage('model', 'm-models')
+                      setFlashAnchor({ id: target === 'tts-model' ? 'default-tts' : 'default-call', seq: Date.now() })
+                    }} />
                 )}
 
                 {tab === 'mcp' && (
@@ -2578,17 +2527,16 @@ export const SettingsModal: React.FC<{
                     <div className="field">
                       <label>{t('settings.mcp.label')}</label>
                       <div className="hint" style={{ marginBottom: 8 }}>
-                        {t('settings.mcp.introPrefix')}<code>mcp__server__tool</code>{t('settings.mcp.introSuffix')}
+                        {t('settings.mcp.intro').split(/(\{path\}|\{tool\})/).map((part, i) => part === '{path}' ? <code key={i}>~/.forsion/mcp.json</code> : part === '{tool}' ? <code key={i}>{t('settings.mcp.toolPattern')}</code> : part)}
                       </div>
+                      {mcpTotalSummary()}
                       {Object.keys(mcpServers).length > 0 && (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 10 }}>
                           {Object.entries(mcpServers).map(([name, sc]) => {
                             const st = mcpStatus?.find((s) => s.server === name)
                             const stLabel = sc.enabled === false
                               ? t('settings.mcp.statusDisabled')
-                              : st
-                                ? st.status === 'connected' ? t('settings.mcp.statusConnected', { count: st.tools.length }) : st.status === 'error' ? t('settings.mcp.statusError') : st.status
-                                : t('settings.mcp.statusNotLoaded')
+                              : st ? mcpStatusLabel(st) : t('settings.mcp.statusNotLoaded')
                             return (
                               <div key={name} className="file-row" style={{ cursor: 'default' }}>
                                 <span className="file-name">
@@ -2597,6 +2545,7 @@ export const SettingsModal: React.FC<{
                                     {sc.command ? `${sc.command} ${(sc.args || []).join(' ')}` : sc.url}
                                   </span>
                                 </span>
+                                {sc.enabled !== false && mcpTokensLabel(st)}
                                 <span className="file-size" title={st?.error || undefined}>{stLabel}</span>
                                 <button
                                   className="icon-btn"
@@ -2654,9 +2603,8 @@ export const SettingsModal: React.FC<{
                                     {t('settingsmodal.mcp.fromPlugin', { name: st.origin!.pluginName })}
                                   </span>
                                 </span>
-                                <span className="file-size" title={st.error || undefined}>
-                                  {st.status === 'connected' ? t('settings.mcp.statusConnected', { count: st.tools.length }) : st.status === 'error' ? t('settings.mcp.statusError') : st.status}
-                                </span>
+                                {mcpTokensLabel(st)}
+                                <span className="file-size" title={st.error || undefined}>{mcpStatusLabel(st)}</span>
                               </div>
                             ))}
                           </div>
@@ -2799,7 +2747,7 @@ export const SettingsModal: React.FC<{
                   </>
                 )}
                 {tab === 'spaces' && <SpacesTab phone={phoneShell} />}
-                {tab === 'notifications' && <NotificationsTab />}
+                {tab === 'notifications' && <NotificationsTab onOpenInbox={isDesktop && stored ? () => openSubPage('general', 'g-inbox') : undefined} />}
                 {tab === 'statusbar' && <StatusBarTab />}
                 {/* 左栏点进来的 Forsion 插件设置页 = 插件页的详情面,受控于 tab(不再是卡片列表的内部 state)。 */}
                 {tab.startsWith('fplugin:') && (
@@ -2858,7 +2806,13 @@ export const SettingsModal: React.FC<{
                             </select>
                           )}
                         />
-                        <SettingsRow label={t('settings.browser.timeout')} description={t('settings.browser.timeoutHint')} control={<input className="settings-number-input" type="text" value={String(stored.browserCommandTimeoutMs || 30000)} onChange={(e) => edit({ browserCommandTimeoutMs: Number(e.target.value.replace(/[^\d]/g, '')) || 30000 })} />} />
+                        <SettingsRow label={t('settings.browser.timeout')} description={t('settings.browser.timeoutHint')} control={(
+                          // 界面按秒(5–600:引擎 commandTimeout 低于 5000ms 会回落默认 30s),存盘仍是毫秒
+                          <span className="settings-inline-row">
+                            <input className="settings-number-input" type="number" min={5} max={600} step={1} aria-label={t('settings.browser.timeout')} value={Math.round((stored.browserCommandTimeoutMs || 30000) / 1000)} onChange={(e) => edit({ browserCommandTimeoutMs: Math.min(600, Math.max(5, Math.round(Number(e.target.value) || 30))) * 1000 })} />
+                            <span className="hint">{t('settings.browser.timeoutUnit')}</span>
+                          </span>
+                        )} />
                         <SettingsRow label={t('settings.browser.allowPrivate')} description={t('settings.browser.allowPrivateHint')} control={<SettingsSwitch checked={!!stored.browserAllowPrivateUrls} onChange={(on) => edit({ browserAllowPrivateUrls: on })} label={t('settings.browser.allowPrivate')} />} />
                       </div>
                       {/* 同为 managedKeys:改动先是草稿,吸底栏显式「保存」(保存会重启后端)。 */}
@@ -2898,7 +2852,7 @@ export const SettingsModal: React.FC<{
                           </button>
                           <button
                             type="button"
-                            className="btn ghost sm"
+                            className="btn ghost sm settings-panel-btn--text"
                             title={t('settings.theme.reload')}
                             disabled={themesReloading}
                             onClick={async () => {
@@ -2906,7 +2860,7 @@ export const SettingsModal: React.FC<{
                               try { await p.onReloadThemes?.() } finally { setThemesReloading(false) }
                             }}
                           >
-                            <RefreshCw size={13} className={themesReloading ? 'spin' : ''} />
+                            <RefreshCw size={13} className={themesReloading ? 'spin' : ''} /> {t('settings.theme.reload')}
                           </button>
                         </div>
                       </div>
@@ -3130,42 +3084,21 @@ export const SettingsModal: React.FC<{
                         </div>
                         <div className="settings-control-row" data-setting-anchor="home-motion">
                           <div className="settings-control-copy"><ImageIcon size={14} /><span><strong>{t('settings.theme.homeMotion')}</strong><small>{t('settings.theme.homeMotionHint')}</small></span></div>
-                          <button
-                            type="button"
-                            role="switch"
-                            aria-checked={homeMotion}
-                            aria-label={t('settings.theme.homeMotion')}
-                            className={`switch${homeMotion ? ' on' : ''}`}
-                            onClick={() => { setHomeMotion(!homeMotion); setHomepageWallpaperMotion(!homeMotion) }}
-                          />
+                          <SettingsSwitch checked={homeMotion} label={t('settings.theme.homeMotion')} onChange={() => { setHomeMotion(!homeMotion); setHomepageWallpaperMotion(!homeMotion) }} />
                         </div>
                         {/* 直接读写 themeStore(同背景轴,不走 props 链 → 三端自动到位)。毛玻璃关着时这行照样在:
                             设置搜索的落点不能时有时无,开关本身只是记下偏好。 */}
                         <div className="settings-control-row" data-setting-anchor="ambient">
                           <div className="settings-control-copy"><Droplets size={14} /><span><strong>{t('settings.theme.ambient')}</strong><small>{t('settings.theme.ambientHint')}</small></span></div>
-                          <button
-                            type="button"
-                            role="switch"
-                            aria-checked={ambientOn}
-                            aria-label={t('settings.theme.ambient')}
-                            className={`switch${ambientOn ? ' on' : ''}`}
-                            onClick={() => useTheme.getState().setAmbient(!ambientOn)}
-                          />
+                          <SettingsSwitch checked={ambientOn} label={t('settings.theme.ambient')} onChange={() => useTheme.getState().setAmbient(!ambientOn)} />
                         </div>
                         <div className="settings-control-row" data-setting-anchor="smooth-caret">
                           <div className="settings-control-copy"><MousePointer2 size={14} /><span><strong>{t('settings.theme.smoothCaret')}</strong><small>{t('settings.theme.smoothCaretHint')}</small></span></div>
-                          <button
-                            type="button"
-                            role="switch"
-                            aria-checked={smoothCaret}
-                            aria-label={t('settings.theme.smoothCaret')}
-                            className={`switch${smoothCaret ? ' on' : ''}`}
-                            onClick={() => {
+                          <SettingsSwitch checked={smoothCaret} label={t('settings.theme.smoothCaret')} onChange={() => {
                               const on = !smoothCaret
                               setSmoothCaret(on)
                               persistSmoothCaret(on)
-                            }}
-                          />
+                            }} />
                         </div>
                         <div className="settings-control-row" data-setting-anchor="selection-bar">
                           <div className="settings-control-copy"><TextSelect size={14} /><span><strong>{t('settingsmodal.selectionBar')}</strong><small>{t('settingsmodal.selectionBarHint')}</small></span></div>
@@ -3180,18 +3113,11 @@ export const SettingsModal: React.FC<{
                         </div>
                         {tanguPrefs && <div className="settings-control-row" data-setting-anchor="chat-avatars">
                           <div className="settings-control-copy"><CircleUserRound size={14} /><span><strong>{t('settings.theme.chatAvatars')}</strong><small>{t('settings.theme.chatAvatarsHint')}</small></span></div>
-                          <button
-                            type="button"
-                            role="switch"
-                            aria-checked={chatAvatars}
-                            aria-label={t('settings.theme.chatAvatars')}
-                            className={`switch${chatAvatars ? ' on' : ''}`}
-                            onClick={() => {
+                          <SettingsSwitch checked={chatAvatars} label={t('settings.theme.chatAvatars')} onChange={() => {
                               const on = !chatAvatars
                               setChatAvatars(on)
                               tanguPrefs.chatAvatars.set(on)
-                            }}
-                          />
+                            }} />
                         </div>}
                         {/* 「呼吸感」三项(theme/calm.ts)。「外围淡出」靠悬停恢复:没有悬停的设备上样式本来就不生效,开关也不摆出来。 */}
                         {hoverCapable && (
@@ -3202,18 +3128,11 @@ export const SettingsModal: React.FC<{
                         {!mobileSettings && (
                           <div className="settings-control-row" data-setting-anchor="ribbon-auto-home">
                             <div className="settings-control-copy"><Undo2 size={14} /><span><strong>{t('settings.theme.ribbonAutoHome')}</strong><small>{t('settings.theme.ribbonAutoHomeHint')}</small></span></div>
-                            <button
-                              type="button"
-                              role="switch"
-                              aria-checked={ribbonAutoHome}
-                              aria-label={t('settings.theme.ribbonAutoHome')}
-                              className={`switch${ribbonAutoHome ? ' on' : ''}`}
-                              onClick={() => {
+                            <SettingsSwitch checked={ribbonAutoHome} label={t('settings.theme.ribbonAutoHome')} onChange={() => {
                                 const on = !ribbonAutoHome
                                 setRibbonAutoHomeOn(on)
                                 setRibbonAutoHome(on)
-                              }}
-                            />
+                              }} />
                           </div>
                         )}
                         {!mobileSettings && (
@@ -3299,7 +3218,7 @@ export const SettingsModal: React.FC<{
                   <>
                     {isDesktop && !!window.tangu?.discoveryScan && (
                       <div className="field">
-                        <label>{t('settings.discovery.label')}</label>
+                        <label>{t('settings.discovery.sources')}</label>
                         <div className="hint" style={{ marginBottom: 8 }}>
                           {t('settings.discovery.hint')}
                         </div>
@@ -3384,16 +3303,8 @@ export const SettingsModal: React.FC<{
                   <>
                     {isDesktop && (
                       <div className="field">
-                        <label>{t('settings.mcpServer.label')}</label>
-                        <div className="hint" style={{ marginBottom: 8 }}>{t('settings.mcpServer.hint')}</div>
-                        <label className="inline-check">
-                          <input
-                            type="checkbox"
-                            checked={!!stored?.mcpEnabled}
-                            onChange={(e) => void window.tangu!.setConfig({ mcpEnabled: e.target.checked }).then(setStored)}
-                          />
-                          {t('settings.mcpServer.enable')}
-                        </label>
+                        <SettingsRow fit="inline" label={t('settings.mcpServer.label')} description={t('settings.mcpServer.hint')}
+                          control={<SettingsSwitch checked={!!stored?.mcpEnabled} label={t('settings.mcpServer.enable')} onChange={(on) => void window.tangu!.setConfig({ mcpEnabled: on }).then(setStored)} />} />
 
                         {stored?.mcpEnabled && stored.forsionMcp?.running && stored.forsionMcp.url && (() => {
                           const url = stored.forsionMcp.url
@@ -3465,19 +3376,11 @@ export const SettingsModal: React.FC<{
 
                     {isDesktop && (
                       <div className="field" style={{ marginTop: 14 }}>
-                        <label>{t('settings.advanced.agentDesk')}</label>
-                        <div className="hint" style={{ marginBottom: 8 }}>{t('settings.advanced.agentDeskHint')}</div>
-                        <label className="inline-check">
-                          <input
-                            type="checkbox"
-                            checked={!!stored?.agentDeskEnabled}
-                            onChange={(e) => void window.tangu!.setConfig({ agentDeskEnabled: e.target.checked }).then((c) => {
-                              setStored(c)
-                              useApp.setState({ desktopConfig: c })
-                            })}
-                          />
-                          {t('settings.advanced.agentDeskEnable')}
-                        </label>
+                        <SettingsRow fit="inline" label={t('settings.advanced.agentDesk')} description={t('settings.advanced.agentDeskHint')}
+                          control={<SettingsSwitch checked={!!stored?.agentDeskEnabled} label={t('settings.advanced.agentDeskEnable')} onChange={(on) => void window.tangu!.setConfig({ agentDeskEnabled: on }).then((c) => {
+                            setStored(c)
+                            useApp.setState({ desktopConfig: c })
+                          })} />} />
                         {/* 「开在 Agent Desk」只有 Desk 开着才成立;关着时新标签页是唯一去处,不必露这个选择。 */}
                         {stored?.agentDeskEnabled && (
                           <div style={{ marginTop: 10 }}>
@@ -3502,16 +3405,8 @@ export const SettingsModal: React.FC<{
                         有悬停的设备上摆出来;与 promptSuggest.ts 的 supported() 同一道闸。 */}
                     {tanguPrefs && isDesktop && !unitPage && hoverCapable && !mobileSettings && (
                       <div className="field" style={{ marginTop: 14 }} data-setting-anchor="prompt-suggest">
-                        <label>{t('settings.promptSuggest')}</label>
-                        <div className="hint" style={{ marginBottom: 8 }}>{t('settings.promptSuggestHint')}</div>
-                        <label className="inline-check">
-                          <input
-                            type="checkbox"
-                            checked={promptSuggest}
-                            onChange={(e) => { setPromptSuggest(e.target.checked); tanguPrefs.promptSuggest.set(e.target.checked) }}
-                          />
-                          {t('settings.promptSuggestEnable')}
-                        </label>
+                        <SettingsRow fit="inline" label={t('settings.promptSuggest')} description={t('settings.promptSuggestHint')}
+                          control={<SettingsSwitch checked={promptSuggest} label={t('settings.promptSuggestEnable')} onChange={(on) => { setPromptSuggest(on); tanguPrefs.promptSuggest.set(on) }} />} />
                       </div>
                     )}
 
@@ -3634,36 +3529,26 @@ export const SettingsModal: React.FC<{
                       <div className="hint">{t('settings.developer.relaunchHint')}</div>
                     </div>
                     <div className="field">
-                      <label className="inline-check">
-                        <input
-                          type="checkbox"
-                          checked={showSysPrompt}
-                          onChange={(e) => {
-                            const on = e.target.checked
+                      <SettingsRow fit="inline" label={t('settings.developer.showSystemPrompt')} description={t('settings.developer.showSystemPromptHint')} control={<SettingsSwitch checked={showSysPrompt} label={t('settings.developer.showSystemPrompt')} onChange={(on) => {
                             setShowSysPrompt(on)
                             try { localStorage.setItem(SHOW_SYSTEM_PROMPT_KEY, on ? '1' : '0') } catch { /* ignore */ }
-                          }}
-                        />
-                        {t('settings.developer.showSystemPrompt')}
-                      </label>
-                      <div className="hint">{t('settings.developer.showSystemPromptHint')}</div>
+                      }} />} />
                     </div>
                     <div className="field">
-                      <label className="inline-check">
-                        <input
-                          type="checkbox"
-                          checked={mobileUiCmd}
-                          onChange={(e) => {
-                            const on = e.target.checked
+                      <SettingsRow fit="inline" label={t('settings.developer.mobileUiPreview')} description={t('settings.developer.mobileUiPreviewHint')} control={<SettingsSwitch checked={mobileUiCmd} label={t('settings.developer.mobileUiPreview')} onChange={(on) => {
                             setMobileUiCmd(on)
                             try { localStorage.setItem(MOBILE_UI_KEY, on ? '1' : '0') } catch { /* ignore */ }
                             setMobileUiCommand(on)   // 设置画在主窗里的形态(web/mobile)
                             requestDevCommandsSync() // 设置在浮窗里的形态:命令表各窗一份,得让主窗重算
-                          }}
-                        />
-                        {t('settings.developer.mobileUiPreview')}
-                      </label>
-                      <div className="hint">{t('settings.developer.mobileUiPreviewHint')}</div>
+                      }} />} />
+                    </div>
+                    <div className="field">
+                      <SettingsRow fit="wrap" label={t('settings.developer.summaryElevation')} description={t('settings.developer.summaryElevationHint')} control={
+                        <div className="seg" role="group" aria-label={t('settings.developer.summaryElevation')}>
+                          {([['float', t('settings.developer.summaryElevationFloat')], ['half', t('settings.developer.summaryElevationHalf')], ['flat', t('settings.developer.summaryElevationFlat')]] as const).map(([v, label]) => (
+                            <button key={v} type="button" aria-pressed={summaryElevation === v} className={summaryElevation === v ? 'active' : ''} onClick={() => setSummaryElevation(v)}>{label}</button>
+                          ))}
+                        </div>} />
                     </div>
                     <div className="field">
                       <label>{t('settings.developer.testUpdateLabel')}</label>
@@ -3698,51 +3583,26 @@ export const SettingsModal: React.FC<{
                         >
                           <FileDown size={12} /> {t('settings.developer.activityExport')}
                         </button>
-                        <label className="inline-check" style={{ margin: 0 }}>
-                          <input
-                            type="checkbox"
-                            checked={stored?.activityLogEnabled !== false}
-                            onChange={(e) => void window.tangu!.setConfig({ activityLogEnabled: e.target.checked }).then(setStored)}
-                          />
-                          {t('settings.developer.activityEnable')}
-                        </label>
                       </div>
-                      <div className="hint">{t('settings.developer.activityHint')}</div>
+                      <SettingsRow fit="inline" label={t('settings.developer.activityEnable')} description={t('settings.developer.activityHint')}
+                        control={<SettingsSwitch checked={stored?.activityLogEnabled !== false} label={t('settings.developer.activityEnable')} onChange={(on) => void window.tangu!.setConfig({ activityLogEnabled: on }).then(setStored)} />} />
                     </div>
                     <div className="field">
-                      <label className="inline-check">
-                        <input
-                          type="checkbox"
-                          checked={activityViewCmd}
-                          onChange={(e) => {
-                            const on = e.target.checked
+                      <SettingsRow fit="inline" label={t('settings.developer.activityViewCmd')} description={t('settings.developer.activityViewCmdHint')} control={<SettingsSwitch checked={activityViewCmd} label={t('settings.developer.activityViewCmd')} onChange={(on) => {
                             setActivityViewCmd(on)
                             try { localStorage.setItem(ACTIVITY_VIEW_KEY, on ? '1' : '0') } catch { /* ignore */ }
                             setActivityViewCommand(on)
                             requestDevCommandsSync()
-                          }}
-                        />
-                        {t('settings.developer.activityViewCmd')}
-                      </label>
-                      <div className="hint">{t('settings.developer.activityViewCmdHint')}</div>
+                      }} />} />
                     </div>
                     <div className="field">
-                      <label className="inline-check">
-                        <input
-                          type="checkbox"
-                          checked={!!stored?.activeWindowEnabled}
-                          onChange={(e) => {
-                            const on = e.target.checked
+                      <SettingsRow fit="inline" label={t('settings.developer.activeWindow')} description={t('settings.developer.activeWindowHint')} control={<SettingsSwitch checked={!!stored?.activeWindowEnabled} label={t('settings.developer.activeWindow')} onChange={(on) => {
                             // 真源在主进程配置(默认拒的实现点就在那儿);⌘K 入口同步增删,免 reload。
                             // 主窗那份由**主进程**在 config:set 落盘后推(见 main.ts):这里 .then 里通知的话,
                             // 「拨完立刻关掉设置窗」会连同这个渲染进程一起没掉,主窗就永远不知道。
                             void window.tangu!.setConfig({ activeWindowEnabled: on }).then(setStored)
                             setActiveWindowCommand(on)
-                          }}
-                        />
-                        {t('settings.developer.activeWindow')}
-                      </label>
-                      <div className="hint">{t('settings.developer.activeWindowHint')}</div>
+                      }} />} />
                     </div>
                     <div className="field">
                       <button
@@ -3834,19 +3694,11 @@ export const SettingsModal: React.FC<{
                     ) : null}
                     {window.tangu?.setUpdateBeta ? (
                       <div className="field">
-                        <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-                          <input
-                            type="checkbox"
-                            checked={betaChannel}
-                            onChange={(e) => {
-                              const on = e.target.checked
-                              setBetaChannel(on) // 先动 UI:落盘是异步的,等它回来勾选框会慢一拍
-                              void window.tangu?.setUpdateBeta?.(on).then(() => window.tangu?.checkForUpdates?.())
-                            }}
-                          />
-                          {t('about.update.beta')}
-                        </label>
-                        <div className="hint" style={{ marginTop: 4 }}>{t('about.update.betaHint')}</div>
+                        <SettingsRow fit="inline" label={t('about.update.beta')} description={t('about.update.betaHint')}
+                          control={<SettingsSwitch checked={betaChannel} label={t('about.update.beta')} onChange={(on) => {
+                            setBetaChannel(on) // 先动 UI:落盘是异步的,等它回来开关会慢一拍
+                            void window.tangu?.setUpdateBeta?.(on).then(() => window.tangu?.checkForUpdates?.())
+                          }} />} />
                       </div>
                     ) : null}
                     {window.tangu?.setUpdateSource ? (
@@ -3930,6 +3782,22 @@ export const SettingsModal: React.FC<{
           </ErrorBoundary>
         </div>
       </section>
+    </div>
+  )
+}
+
+/** config.json / provider-auth.json 读坏后从 .bak 恢复过(引擎或主进程写的恢复标记):提示一次,点掉删标记(坏文件与备份都留着)。 */
+function ConfigRecoveryNotice() {
+  const { t } = useI18n()
+  const [notice, setNotice] = useState<{ at: number; version: number } | null>(null)
+  useEffect(() => { void window.tangu?.configRecoveryNotice?.().then(setNotice).catch(() => {}) }, [])
+  if (!notice) return null
+  const time = formatDateTime(notice.version)
+  return (
+    <div className="mk-notice" role="status" data-config-recovered>
+      <Info size={15} />
+      <div className="mk-notice-body"><span>{t('settingsmodal.configRecovered', { time })}</span></div>
+      <button className="mk-notice-close" onClick={() => { setNotice(null); void window.tangu?.clearConfigRecoveryNotice?.().catch(() => {}) }} aria-label={t('common.close')}><X size={13} /></button>
     </div>
   )
 }

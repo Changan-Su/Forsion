@@ -1,5 +1,5 @@
 /**
- * 百炼音色工作室(声音复刻 + 声音设计;SettingsModal「语音朗读」组内挂载)。
+ * 百炼音色工作室(声音复刻 + 声音设计;挂在语音页「朗读」卡的「复刻 / 设计音色」一行下面,点开才展开)。
  * 前提:存在 baseUrl 指向阿里云百炼(dashscope/aliyuncs 域名)的直连 provider。
  * 铁律:百炼音色只能配 enrollment/design 时的 target_model 合成 → 「使用」音色时联动改写
  * ttsModelId=<providerId>/<targetModel> 与 ttsVoice,避免用户手配错配。
@@ -108,9 +108,9 @@ export function TtsVoiceStudio({ cfg, provider, onApplied }: { cfg: TanguDesktop
   }
 
   return (
-    <div className="field">
-      <label>{t('settings.tts.studio.title')}</label>
-      <div className="hint" style={{ marginBottom: 8 }}>{t('settings.tts.studio.hint')}</div>
+    // 挂在「朗读」卡「复刻 / 设计音色」那一行下面展开(走查续 4.5):标题在行上,这里只留说明和表单。
+    <div className="settings-voice-block tts-voice-studio">
+      <p className="settings-voice-note">{t('settings.tts.studio.hint')}</p>
 
       {/* 复刻:上传 10-20s 干净人声样本 → voice id,创建成功即自动采用 */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 12 }}>

@@ -7,7 +7,7 @@ import type { DesktopPermissionId, DesktopPermissionRequestOptions, DesktopPermi
 import type { ComputerHistoryApi } from '../../shared/computerHistory'
 export type { DesktopPermissionId, DesktopPermissionRequestOptions, DesktopPermissionsSnapshot, DesktopPermissionState } from '../../shared/desktopPermissions'
 // 核心插件化第 2b 步:与 Tangu 共用的数据形状搬进了契约(tangu-agent/src/contracts/clientTypes.ts),这里原样转出,宿主的 import 方不动。
-export type { ThinkingLevel, DefaultModelSlot, VisionMode, TanguDesktopConfig, AgentRunEvent, SubChatSeg, SubChat, SessionRecord, PendingApprovalInfo, HistorianActivityItem, AutomationActionSpec, AutomationWhere, MuseTriggerInfo, AgentScheduleEntry, TeamDef, NormalAgentDef, AgentConfig, ChannelKind, WorkspaceDescriptor, MessageRecord, ModelInfo, ModelsResponse, ProjectSettings, ProjectDocInfo, ProjectSkillInfo, ProjectPlanInfo, GitRemoteInfo, GitCommitInfo, GitChangeInfo, GitSummary, GitIdentity, ProjectContext, ProjectMemoryView, SkillInfo, SkillCatalogEntry, ToolsResponse, WorkspaceFileMeta, Attachment, DisplayFile, CtxInfo, ToolEvent, MsgSeg, ApprovalRequest, AnswerBy, ApprovalRemote, ApprovalReason, ApprovalPreviewI18n, InquiryRequest, SketchItem, TodoItem, TeamWork, LiveWait, UiMessage, BackendStatusInfo, StoredDesktopConfig, UnitInfo } from '../../../tangu-agent/src/contracts/clientTypes'
+export type { ThinkingLevel, DefaultModelSlot, VisionMode, TanguDesktopConfig, AgentRunEvent, SubChatSeg, SubChat, SessionRecord, PendingApprovalInfo, HistorianActivityItem, AutomationActionSpec, AutomationWhere, MuseTriggerInfo, AgentScheduleEntry, TeamDef, NormalAgentDef, AgentConfig, ChannelKind, WorkspaceDescriptor, MessageRecord, ModelInfo, ModelsResponse, ProviderQuota, ProjectSettings, ProjectDocInfo, ProjectSkillInfo, ProjectPlanInfo, GitRemoteInfo, GitCommitInfo, GitChangeInfo, GitSummary, GitIdentity, ProjectContext, ProjectMemoryView, SkillInfo, SkillCatalogEntry, ToolsResponse, WorkspaceFileMeta, Attachment, DisplayFile, CtxInfo, ToolEvent, MsgSeg, ApprovalRequest, AnswerBy, ApprovalRemote, ApprovalReason, ApprovalPreviewI18n, InquiryRequest, SketchItem, TodoItem, TeamWork, LiveWait, UiMessage, BackendStatusInfo, StoredDesktopConfig, UnitInfo } from '../../../tangu-agent/src/contracts/clientTypes'
 export { THINKING_LEVELS, isHomeSession, SHOW_SYSTEM_PROMPT_KEY, isTeamImageAvatar, isIndependentOrbitConfig, CLOUD_WORKSPACE_KEY, ROOTLESS_WORKSPACE_KEY, DEFAULT_LOCAL_WORKSPACE_KEY, DEFAULT_CLOUD_PROJECT, cloudProjectKey, sessionWorkspaceKey, isProjectIconFile } from '../../../tangu-agent/src/contracts/clientTypes'
 import type { AgentScheduleEntry, AutomationActionSpec, AutomationWhere, BackendStatusInfo, StoredDesktopConfig, UnitInfo } from '../../../tangu-agent/src/contracts/clientTypes'
 
@@ -253,6 +253,19 @@ export interface DirectProviderConfig {
   asrModelIds?: string[]
   /** 该 provider 里**没有**多模态的模型(黑名单;默认都算能看图)。命中的模型遇图转交辅助视觉模型。 */
   noVisionModelIds?: string[]
+  /** 推理协议;缺省 OpenAI 兼容 /chat/completions。从 Claude Code / Codex 导入的连接带 anthropic-messages / openai-responses。 */
+  protocol?: 'openai' | 'anthropic-messages' | 'openai-responses'
+}
+
+/** 导入本机配置的一行(主进程给的,不含 key)。 */
+export interface LocalProviderCandidate {
+  id: string
+  source: 'cc-switch' | 'claude-code' | 'codex'
+  name: string
+  host: string
+  keyTail: string
+  models: string[]
+  exists: boolean
 }
 
 /** 「设置 → Git」(引擎 config.json 的 git 段):PROJECT 详情的 git 动作与 agent 自己建分支 / 写提交时都照它。 */
@@ -389,8 +402,8 @@ export interface PluginSandboxState {
 }
 export interface PluginSandboxReport { note: string; sessionId?: string; pluginId: string; name: string }
 export interface PluginSandboxApi {
-  /** ui.storage = 本窗的主题键(沙箱首屏照着画);语言由主进程按自己的界面语言给。deadline = 引擎给这次动作的期限(Date.now() 毫秒),排队排过了主进程就不做了。 */
-  exec(op: string, args: Record<string, unknown>, origin: { sessionId?: string; deadline?: number; ui?: { storage: Record<string, string> } }): Promise<PluginSandboxResult>
+  /** ui.storage = 本窗的主题键(沙箱首屏照着画);语言由主进程按自己的界面语言给。deadline = 引擎给这次动作的期限(Date.now() 毫秒),排队排过了主进程就不做了。reveal = 用户在界面上点的,起好后把沙箱窗口叫到前面。 */
+  exec(op: string, args: Record<string, unknown>, origin: { sessionId?: string; deadline?: number; reveal?: boolean; ui?: { storage: Record<string, string> } }): Promise<PluginSandboxResult>
   state(): Promise<PluginSandboxState>
   show(): Promise<boolean>
   stop(): Promise<void>
@@ -456,6 +469,9 @@ declare global {
       /** Verified Extend renderer is bundled with the mobile host. */
       extendMobile?: boolean
       getConfig(): Promise<StoredDesktopConfig>
+      /** config.json / provider-auth.json 读坏后从 .bak 恢复过:最近一次的时刻与恢复到的版本时刻(epoch ms);没有 = null。 */
+      configRecoveryNotice?(): Promise<{ at: number; version: number } | null>
+      clearConfigRecoveryNotice?(): Promise<void>
       documentTasks?: import('../../shared/documentTasks').DocumentTaskClaimsApi
       setConfig(patch: Partial<StoredDesktopConfig>): Promise<StoredDesktopConfig>
       backendStatus?(): Promise<BackendStatusInfo>
@@ -542,6 +558,9 @@ declare global {
       termsAgree?(version: string): Promise<{ status: number; json?: any }>
       /** Forsion Extend 渲染半身调它自己主进程半身注册的通道;宿主通道一律拒。没装载 Extend 就没有这个键。 */
       cloudInvoke?(channel: string, ...args: unknown[]): Promise<unknown>
+      /** 帮助改进 Forsion(2.13.8 起):渲染层的崩溃 / 功能使用 / 长任务计数报给主进程(整形后转给 Extend;只进不出)。
+       *  只有 Extend 注册了 telemetry:get 才有这个键 —— 引导第 7 步「帮助改进」页签据此同步判断本机有没有这一页。 */
+      telemetryReport?(kind: 'crash' | 'feature' | 'longtasks', props: Record<string, unknown>): void
       /** 提交反馈到 Forsion 反馈中心(会话日志 JSON 随附为附件;token 留主进程)。 */
       submitFeedback?(input: { description: string; sessionLogJson?: string; sessionLogName?: string }): Promise<{ ok: boolean; id?: string | null; error?: string; attachmentSkipped?: boolean }>
       appVersion?(): Promise<string>
@@ -644,6 +663,8 @@ declare global {
       codePreviewServePath?(filePath: string): Promise<{ url: string }>
       /** 无本机路径的 HTML(云沙箱/对话内联):把文本挂到令牌根,同样拿到真实源。 */
       codePreviewServeHtml?(html: string): Promise<{ url: string }>
+      /** 网页卡片的缩略图:主进程离屏截一张 http(s) 页面;拍不到 → null。 */
+      pageThumb?(url: string, version?: string): Promise<{ dataUrl: string; title: string } | null>
       codePreviewStop?(): Promise<{ ok: boolean }>
       /** Coding Space 项目根 ~/Forsion/Project(确保存在)。 */
       codeProjectsRoot?(): Promise<string>
@@ -730,6 +751,9 @@ declare global {
       }
       listProviders?(): Promise<DirectProviderConfig[]>
       saveProvider?(provider: DirectProviderConfig): Promise<DirectProviderConfig[]>
+      /** 本机 CC Switch / Claude Code / Codex 里能导入的连接(electron/discovery/providers.ts;只有 key 末 4 位)。 */
+      scanLocalProviders?(force?: boolean): Promise<LocalProviderCandidate[]>
+      importLocalProviders?(ids: string[]): Promise<DirectProviderConfig[]>
       deleteProvider?(providerId: string): Promise<DirectProviderConfig[]>
       /** 桌面级共享语音转写:音频(base64)→ 文本。任意功能复用;主进程本地/自带-key,不经引擎。 */
       /** timestamps 不传 = 回纯文本(语音输入);传 true = 回 { text, segments }(视频转录要分段时间戳)。 */
@@ -803,12 +827,14 @@ declare global {
       onMarketInstallProgress?(cb: (ev: MarketInstallProgress) => void): () => void
       marketInstalled?(): Promise<Record<string, Array<{ slug: string; version: string | null; id?: string }>>>
       marketUninstall?(type: string, slug: string): Promise<{ ok: boolean; path: string; type: string; id?: string }>
+      /** 卸载走确认框之后撤掉商店的安装记录(文件已经由回收站那条路挪走)。 */
+      marketForget?(type: string, slug: string): Promise<{ ok: boolean }>
       /** 本宿主能装的市场类型(缺省 = 全部)。Android App 没有本机引擎 / 主题目录 / Space 目录,只声明 ['amadeus-plugin'];
        *  MarketModal 只列这些类型,其余在发现页一句话说明去桌面端装。 */
       marketTypes?: readonly string[]
       /** 后端插件卸载:列用户目录已装(manifest id→目录名)/ 按 id 删目录(仅 ~/.tangu/plugins,首方插件删不到)。 */
       pluginsUserInstalled?(): Promise<Array<{ id: string; slug: string }>>
-      pluginsUninstall?(id: string): Promise<{ ok: boolean }>
+      pluginsUninstall?(id: string, movedSlug?: string): Promise<{ ok: boolean }>
       /** 用户自定义 Space:~/.tangu/spaces/<slug>/space.json(数据化布局配方;market type='space' 同目录)。 */
       spacesList?(): Promise<Array<{ slug: string; json: string; plugin?: string; iconUrl?: string }>>
       spacesSave?(slug: string, json: string): Promise<{ ok: boolean }>

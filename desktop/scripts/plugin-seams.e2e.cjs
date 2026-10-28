@@ -134,9 +134,9 @@ async function openDetail(win, name) {
   return true
 }
 
-/** 详情页的启用勾选框(唯一一个 checkbox)。 */
+/** 详情页的启用开关(唯一一个 role=switch)。 */
 async function setEnabled(win, want) {
-  const cb = win.locator('input[type="checkbox"]').first()
+  const cb = win.locator('[role="switch"]').first()
   if (!(await cb.count().catch(() => 0))) return false
   if ((await cb.isChecked().catch(() => null)) !== want) {
     await cb.click()

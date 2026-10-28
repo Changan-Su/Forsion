@@ -8,7 +8,7 @@
  * 交互卡片(要你点 / 答的)一律进这里,内容卡片(Intelligent UI、白板、清单、插件结果卡)留在产出它的那条消息上;
  * Muse 私聊里它后台排队的审批与它提的待办也在这里(10-23)。
  */
-import { useEffect, useRef, useState, type RefObject } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react'
 import { ArrowDown, ChevronDown, ChevronLeft, ChevronRight, ShieldQuestion } from 'lucide-react'
 import type { TodoItem } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { ApprovalCard } from '../../components/ApprovalCard'
@@ -24,6 +24,7 @@ import type { MessageHandlers } from './EditorialMessage'
 import { ApprovalCard as MuseApprovalCard } from '../inbox/InboxBody'
 import { MuseTodoCards, museApprovalSettled, type MuseApprovalItem } from './MuseDm'
 import '../../tangu/messages'
+import { useEnterMotion } from '../../components/AnimatedUI'
 
 registerMessages({
   'approval.tray.title': { zh: '等你批准 · {n}', en: 'Waiting for your approval · {n}' },
@@ -103,6 +104,14 @@ export function ApprovalTray({ items, onDecide, onAnswer, onTask, sessionId }: {
   // 锁按会话放在模块里:画布模式切换会把托盘在流尾与输入框上方之间挪(= 重挂),组件里的 ref 会跟着丢(Codex 10-23)
   const sent = sentLocks(sessionId)
   const [, rerender] = useState(0)
+  const [motion, touch] = useEnterMotion() // 托盘一出现时整张一起进;之后展开、翻页、答完换上来的那张,卡体单独淡入上来
+  // 答完的那张离开、下一张顶上来也算刚发生。layout effect:下一张第一帧就带着入场;别在 submit 里给 ——
+  // 那时正在答的那张还在(同一个 key),补上属性会当场重放它的入场(10-25 评审)。
+  const prevCur = useRef(curId)
+  useLayoutEffect(() => {
+    if (prevCur.current && curId && prevCur.current !== curId && !items.some((i) => i.id === prevCur.current)) touch()
+    prevCur.current = curId
+  }, [curId])
   // 兑现离开托盘的不再占着。放在提交后的 effect 里,不在 render 里改 ref:并发渲染可能丢弃一次 render,
   // 那次若先把锁删了,屏幕上仍在的旧项就又能送一次(Codex 09-27 第三轮)。
   useEffect(() => {
@@ -120,7 +129,7 @@ export function ApprovalTray({ items, onDecide, onAnswer, onTask, sessionId }: {
   const busy = sent.has(cur.id)
   const title = items.every((i) => countKind(i) === 'approval') ? 'approval.tray.title' : 'approval.tray.titleAny'
   const idx = items.indexOf(cur)
-  const go = (d: number): void => setOpenId(items[(idx + d + items.length) % items.length].id)
+  const go = (d: number): void => { touch(); setOpenId(items[(idx + d + items.length) % items.length].id) }
   const rest = items.filter((i) => i !== cur)
   const more = (['approval', 'inquiry', 'plan', 'task', 'human', 'creation'] as const)
     .map((k) => [k, rest.filter((i) => countKind(i) === k).length] as const)
@@ -130,7 +139,7 @@ export function ApprovalTray({ items, onDecide, onAnswer, onTask, sessionId }: {
   return (
     <div className="t2c-apv" role="region" aria-label={t('approval.tray.label')} data-approval-tray={items.length} data-tray-msgs={items.map((i) => i.messageId).join(' ')} data-peek={Math.min(rest.length, 2) || undefined}>
       <div className="t2c-apv-top">
-        <button type="button" className="t2c-apv-head" aria-expanded={!collapsed} onClick={() => setCollapsed((c) => !c)}>
+        <button type="button" className="t2c-apv-head" aria-expanded={!collapsed} onClick={() => { touch(); setCollapsed((c) => !c) }}>
           <ShieldQuestion size={13} className="t2c-apv-ic" />
           <span className="t2c-apv-title">{t(title, { n: items.length })}</span>
           {more && <span className="t2c-apv-more">{t('approval.tray.more', { list: more })}</span>}
@@ -144,6 +153,8 @@ export function ApprovalTray({ items, onDecide, onAnswer, onTask, sessionId }: {
       </div>
       {!collapsed && (
         <div
+          key={cur.id}
+          data-motion={motion}
           className={`t2c-apv-body${armedId === curId ? '' : ' is-arming'}${busy ? ' is-sent' : ''}`}
           data-tray-kind={cur.kind}
           data-tray-msg={cur.messageId}

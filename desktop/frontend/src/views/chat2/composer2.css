@@ -32,6 +32,10 @@
 /* 引用卡:可以挂多段,每段一张;多了在这一格里滚,不把输入卡一路顶高 */
 
 .t2c-hint { font-size: var(--ui-font-caption, 11px); color: var(--danger, #e0564b); margin-bottom: 6px; }
+/* 附件还在读 / 传(或传失败)时底排那句话:发送键为什么灰着。窄了就省略,不挤掉右边的控件 */
+.t2c-upstatus { min-width: 0; display: inline-flex; align-items: center; gap: 4px; margin-right: 6px; font-size: var(--ui-font-caption, 11px); color: var(--text-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.t2c-upstatus[data-failed] { color: var(--danger, #e0564b); }
+.t2c-upstatus > svg { flex: none; }
 .t2c-chiprow { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
 /* 芯片入场(10-17):新加进来的引用 / 附件淡入放大;一次加好几枚时依次晚 30ms(不认 sibling-index() 的环境就一起出) */
 .t2c-chiprow > * { animation: t2c-chip-in var(--duration-fast, .15s) var(--ease-out, ease-out) backwards; }
@@ -94,14 +98,12 @@
 .t2c-pill-label { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* 模式胶囊与 ModelPill 共用同一展开契约:224px、三列居中、菜单右缘对齐。
-   模式胶囊在底栏左侧:若外层跟着按钮逐帧变宽,绑 right:0 的菜单会横移百余 px,
-   看起来像从侧面滑入。打开时外层先占住最终宽度,按钮仍在槽内平滑展开,菜单锚点不动。 */
+   模式胶囊在底栏左侧:打开时外层先占住最终宽度,菜单锚点不动;按钮开合直接到位、只换底色(走查续八 8.4)。 */
 .mode-pill-wrap { position: relative; display: inline-flex; }
 .t2c-pill.mode-pill-btn {
   min-width: 0;
-  interpolate-size: allow-keywords;
   width: fit-content;
-  transition: background var(--duration-fast, 0.15s), width 0.18s var(--ease-spring);
+  transition: background var(--duration-fast, 0.15s); /* 开合不补宽度,同「+」(走查续八 8.4) */
 }
 .t2c-pill.mode-pill-btn.is-open {
   display: grid;
@@ -127,13 +129,8 @@
   padding: 0;
   overflow: hidden;
   color: var(--text-muted);
-  transition:
-    background var(--duration-fast, 0.15s),
-    color var(--duration-fast, 0.15s),
-    width 0.18s var(--ease-spring),
-    grid-template-columns 0.18s var(--ease-spring),
-    gap 0.18s var(--ease-spring),
-    padding 0.18s var(--ease-spring);
+  /* 开合只换底色和字色、不补尺寸(走查续八 8.4,规矩 3):以前宽度 / 列宽 / 内边距补 180ms,菜单早没了药丸还在收。 */
+  transition: background var(--duration-fast, 0.15s), color var(--duration-fast, 0.15s);
 }
 .t2c-pill.add-pill-btn.is-open {
   grid-template-columns: 16px minmax(0, 1fr) 16px;
@@ -356,16 +353,19 @@
 }
 .t2c-voicestop:hover { background: var(--overlay-medium, rgba(127, 127, 127, 0.2)); }
 
-/* steer 等待区:输入卡上方的「待注入」队列。刻意比正文轻(半透明底、不描边),表达「还没进对话」;
- * 注入(turn_boundary)即整块消失、消息在对话区出现。边线走 overlay(相对表面,勿硬色 --border)。 */
+/* steer 等待区:输入卡上方的「待注入」队列;注入(turn_boundary)即整块消失、消息在对话区出现。
+ * 和审批托盘一样悬浮在正文之上 → 底色必须不透明(10-25 用户报「插话面板变成透明的」:原来垫的是 0.04 的
+ * --overlay-light,正文从底下滚过去就透出来)。「还没进对话」由淡色字表达;内容卡不描边(DESIGN §5)。
+ * glass 主题的磨砂在 genesis-glass/theme.css 3.5 段。 */
 .t2c-steer {
+  position: relative;
   display: flex; flex-direction: column; gap: 2px;
   padding: 6px 10px; border-radius: var(--radius-md, 12px);
-  background: var(--overlay-light, rgba(127, 127, 127, 0.07));
+  background: var(--t2c-card-surface, var(--bg-card, var(--bg)));
   border: 1px solid transparent;
-  animation: t2c-steer-in 0.18s var(--ease-out, ease);
+  box-shadow: var(--card-shadow, 0 6px 22px rgba(0, 0, 0, 0.08));
+  animation: ui-enter var(--menu-enter-duration) var(--ease-surface); /* 同 base.css 的 data-motion="enter" */
 }
-@keyframes t2c-steer-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .t2c-steer { animation: none; } }
 .t2c-steer-item { display: flex; align-items: center; gap: 7px; min-width: 0; padding: 2px 0; }
 .t2c-steer-ic { flex-shrink: 0; color: var(--text-faint, var(--text-muted)); }
@@ -409,7 +409,7 @@
   border: var(--border-width, 1px) solid var(--border);
   border-radius: var(--radius-md, 12px);
   box-shadow: var(--card-shadow, 0 6px 22px rgba(0, 0, 0, 0.08));
-  animation: t2c-steer-in 0.18s var(--ease-out, ease);
+  animation: ui-enter var(--menu-enter-duration) var(--ease-surface);
 }
 @media (prefers-reduced-motion: reduce) { .t2c-apv { animation: none; } }
 .t2c-apv-top { display: flex; align-items: center; gap: 2px; min-width: 0; }

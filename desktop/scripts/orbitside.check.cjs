@@ -427,10 +427,11 @@ async function run(app, win) {
     return near(a.head.left - a.pane.left, 6, .75)
       && near(a.pane.width - a.head.width, 12, 1.25)
       && outerRows.every((r) => near(r.left, a.head.left, .75) && near(r.width, a.head.width, 1.25))
-      && iconColumn.every((r) => near(r.left, a.filters.left, .75))
-      && near(a.pane.width - a.filters.width, 40, 1.25)
+      && iconColumn.every((r) => near(r.left, iconColumn[0].left, .75))
+      // 筛选胶囊左右各 12px(走查第五轮 5.17;原先对齐 20px 图标列,880 窄窗下四格挤成 44px)
+      && near(a.filters.left - a.pane.left, 12, .75) && near(a.pane.width - a.filters.width, 24, 1.25)
   }
-  check('8 一级行共用 6px 点击外框,筛选胶囊对齐 20px 图标列',
+  check('8 一级行共用 6px 点击外框,图标列对齐,筛选胶囊左右 12px',
     alignedToHead(st.alignment), JSON.stringify(st.alignment))
 
   const panelBefore = st.alignment

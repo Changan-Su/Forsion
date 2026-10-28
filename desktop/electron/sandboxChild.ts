@@ -90,8 +90,14 @@ export function startSandboxChild(self: SandboxSelf, opts: { getWindow(): Browse
       case 'reload': await hook('reload()'); return {}
       case 'show': {
         const w = win()
-        // 静默模式把窗口压在普通窗口之下(main.ts sinkForHarness):用户点「打开沙箱窗口」要先抬回普通层
-        if (w) { w.setAlwaysOnTop(false); if (w.isMinimized()) w.restore(); w.show(); w.focus(); if (process.platform === 'darwin') app.focus({ steal: true }) }
+        // 沙箱是后台进程,叫不动前台:Windows 有前台锁(只有前台进程能 SetForegroundWindow,别人调 focus 只闪任务栏),
+        // macOS 是协作式激活。临时置顶再放下只改 z 序、不要前台权,窗口一定排到最前,也顺带把静默模式压到 -1 层
+        // (main.ts sinkForHarness)的窗口抬回普通层;能不能顺带拿到键盘焦点看系统
+        if (w) {
+          if (w.isMinimized()) w.restore()
+          w.setAlwaysOnTop(true); w.show(); w.focus(); w.setAlwaysOnTop(false)
+          if (process.platform === 'darwin') app.focus({ steal: true })
+        }
         return {}
       }
       case 'quit': setImmediate(opts.quit); return {}

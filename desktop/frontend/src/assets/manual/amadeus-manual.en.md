@@ -177,7 +177,7 @@ Each icon in the ribbon's upper zone is a Space: Home, Tangu, Inbox, Amadeus, Co
 - Collapse / expand: the top-most button. Collapsed shows icons only, with the name on hover (tooltip "Expand"); expanded shows icon plus name ("Collapse"), and the first nine also show their shortcut.
 - Home slot: the single centred cell, holding "Home" by default, and also the default startup target. Right-click it → "Space in the home slot" → pick any Space. Whatever you put there disappears from the upper zone, so it never shows twice.
 - The fixed strip at the bottom: "Store", "Achievements", "Toggle light/dark mode", "Command palette (⌘K)", "Settings", and your account card last.
-- Tidying up: drag icons to reorder within their zone (you cannot drag between the two zones); create a folder from the ＋ or right-click menu ("New folder (Spaces)") and then drag icons onto it; when a zone runs out of room the tail collapses into "More". The same menu carries "New Space" and "Add command".
+- Tidying up: drag icons to reorder within their zone (you cannot drag between the two zones); create a folder from the ＋ or right-click menu ("New folder") and then drag icons onto it; when a zone runs out of room the tail collapses into "More". The same menu carries "New Space" and "Add command".
 
 > [!warning]
 > The slot number follows the current order — it is not tied to a Space. Drag an icon, or turn a built-in plugin on or off, and `⌘/Ctrl + N` opens something else; the Space sitting in the home slot takes no number at all. Expand the ribbon to see which number each icon has right now.

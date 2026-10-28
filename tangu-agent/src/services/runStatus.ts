@@ -17,7 +17,8 @@ export interface RunStatus {
   startedAt: number;
   /** 当前第几步(1 起);还没进循环时为 0。 */
   iteration: number;
-  maxIterations: number;
+  /** null = 不限轮数。 */
+  maxIterations: number | null;
   /** 已计入的模型调用次数(重试 / 中流续写不重复计)。 */
   llmCalls: number;
   tokens: { prompt: number; completion: number; cached: number; total: number };
@@ -92,7 +93,7 @@ export function renderRunStatus(s: RunStatus, now = Date.now(), session?: Sessio
       ? `Older turns are summarized automatically once it passes ${n(limit)}, so about ${n(room)} tokens of room remain before that.`
       : `About ${n(room)} tokens of room remain.`),
   );
-  lines.push(`This run: step ${Math.max(1, s.iteration)} of at most ${s.maxIterations} · ${s.llmCalls} model call${s.llmCalls === 1 ? '' : 's'} so far · ${formatDuration(now - s.startedAt)} elapsed`);
+  lines.push(`This run: step ${Math.max(1, s.iteration)}${s.maxIterations != null ? ` of at most ${s.maxIterations}` : ' (no step limit)'} · ${s.llmCalls} model call${s.llmCalls === 1 ? '' : 's'} so far · ${formatDuration(now - s.startedAt)} elapsed`);
   lines.push(`Tokens this run: ${n(s.tokens.prompt)} in${s.tokens.cached > 0 ? ` (${n(s.tokens.cached)} served from cache)` : ''} + ${n(s.tokens.completion)} out = ${n(s.tokens.total)}`);
   // 每步涨多少:头一次到最近一次实测输入之差 ÷ 间隔步数。压缩后会变负 → 不报。
   const steps = s.llmCalls - 1;

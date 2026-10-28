@@ -7,7 +7,7 @@
  * 百炼铁律:复刻音色只能配复刻时的 target_model —— 朗读那边的 cosyvoice / qwen3-tts 音色在这里一律不能用,换模型就得重新复刻。
  */
 import { useEffect, useRef, useState } from 'react'
-import { Loader2, Mic } from 'lucide-react'
+import { Loader2, Mic, Phone } from 'lucide-react'
 import type { DirectProviderConfig, StoredDesktopConfig } from '../types'
 import { defaultVoiceFor, effectiveRealtimeModel, isAudioFamily, type CloudCallModel } from '../services/realtimeModel'
 import { cloneTtsVoice, listTtsVoices } from '../services/backendService'
@@ -15,6 +15,7 @@ import { homeTarget } from '../services/engine/targets'
 import { REALTIME_CFG_BUMP_KEY } from '../services/realtimeCall'
 import { registerMessages, useI18n } from '../i18n'
 import { cloneBusyText, cloneErrorText, VoiceSamplePicker, type VoiceSample } from './VoiceSamplePicker'
+import { SettingsPanel, SettingsRow } from './SettingsPrimitives'
 
 // 两个家族:Qwen-Omni 与 Qwen-Audio。会话协议通用(10-04 实测:同一份 session.update、ask_tangu 照样调),
 // 差在音色 —— 系统音色各一套、互不相认,复刻音色还绑死在具体型号上。qwen-audio-3.0 两个型号没加:用复刻音色实测不出声。
@@ -68,9 +69,11 @@ registerMessages({
   'settings.realtime.voiceCustom': { zh: '自定义音色 ID…', en: 'Custom voice ID…' },
   'settings.realtime.voiceMine': { zh: '我的音色 · {id}', en: 'My voice · {id}' },
   'settings.realtime.voiceIdPlaceholder': { zh: '填百炼音色 ID，回车保存', en: 'Bailian voice ID, press Enter to save' },
-  'settings.realtime.cloneTitle': { zh: '用自己的声音复刻…', en: 'Clone your own voice…' },
   'settings.realtime.cloneHint': { zh: '照着文案录一段，或选一个 10–20 秒的干净人声录音；复刻成功后自动采用。音色只认复刻时的通话模型：换模型后音色回到默认，之前在那个模型上复刻的会列在上面的下拉里。', en: 'Record the passage, or choose a clean 10–20 second voice recording; the clone is applied as soon as it is ready. A cloned voice only works with the call model it was made for: after switching models the voice goes back to the default, and voices you cloned for that model are listed in the menu above.' },
   'settings.realtime.cloneBtn': { zh: '复刻', en: 'Clone' },
+  'settings.realtime.cloneRow': { zh: '复刻自己的声音', en: 'Clone your voice' },
+  'settings.realtime.cloneRowHint': { zh: '录一段或选一段录音，复刻成功后自动采用。', en: 'Record or choose a clip; the clone is applied as soon as it is ready.' },
+  'settings.realtime.cloneBtnOpen': { zh: '开始复刻', en: 'Start' },
   'settings.realtime.cloned': { zh: '已采用复刻音色 {voice}', en: 'Now using cloned voice {voice}' },
   'settings.realtime.voice.Tina': { zh: '甜甜 · 温暖女声', en: 'Warm female' },
   'settings.realtime.voice.Cindy': { zh: '林欣宜 · 台湾腔女声', en: 'Taiwanese-accent female' },
@@ -82,7 +85,7 @@ registerMessages({
   'settings.realtime.voice.Aiden': { zh: '艾登 · 美语男声', en: 'American male' },
 })
 
-export function RealtimeVoiceSettings({ stored, providers, onSaved, cloudModel = null, signedIn = false, cloudAccount = false }: {
+export function RealtimeVoiceSettings({ stored, providers, onSaved, cloudModel = null, signedIn = false, cloudAccount = false, onOpen }: {
   stored: StoredDesktopConfig
   providers: DirectProviderConfig[]
   onSaved: (c: StoredDesktopConfig) => void
@@ -92,6 +95,8 @@ export function RealtimeVoiceSettings({ stored, providers, onSaved, cloudModel =
   signedIn?: boolean
   /** 装了 Forsion Extend(有登录入口):没有可用模型时的提示里才提「登录」。 */
   cloudAccount?: boolean
+  /** 卡头的下一步:去「模型 → 提供方」加百炼连接 / 去「默认模型 → 语音通话」选模型。 */
+  onOpen?: (target: 'providers' | 'call-model') => void
 }) {
   const { t } = useI18n()
   const [customId, setCustomId] = useState<string | null>(null) // 非 null = 正在填自定义音色 ID
@@ -150,46 +155,56 @@ export function RealtimeVoiceSettings({ stored, providers, onSaved, cloudModel =
       .finally(() => setBusy(false))
   }
 
-  if (!model) {
-    const none = !realtimeCandidates(stored, providers, cloudModel, signedIn).length // 没得选:没登录又没百炼连接
-    return <div className="field"><div className="hint">{t(none ? (cloudAccount ? 'settings.realtime.needProviderOrSignIn' : 'settings.realtime.needProvider') : 'settings.realtime.off')}</div></div>
-  }
+  // 卡头(走查续 4.5):没模型时说明为什么、右边给下一步(没得选 =「添加提供方」,有得选没选 =「去选模型」);有模型时说明走哪家、怎么计费。
+  const candidates = realtimeCandidates(stored, providers, cloudModel, signedIn)
+  const desc = model
+    ? t(cloudModel && model === cloudModel.id ? 'settings.realtime.billingCloud' : 'settings.realtime.billing')
+    : t(!candidates.length ? (cloudAccount ? 'settings.realtime.needProviderOrSignIn' : 'settings.realtime.needProvider') : 'settings.realtime.off')
+  const action = !model && onOpen
+    ? !candidates.length
+      ? <button type="button" className="btn ghost sm" onClick={() => onOpen('providers')}>{t('settings.voice.addProvider')}</button>
+      : <button type="button" className="btn ghost sm" onClick={() => onOpen('call-model')}>{t('settings.voice.chooseModel')}</button>
+    : undefined
   return (
-    <>
+    <SettingsPanel className="settings-voice-call" icon={<Phone size={16} />} title={t('settings.realtime.title')} description={desc} actions={action}>
       {model && (
-        <div className="field">
-          <label>{t('settings.realtime.voice')}</label>
-          <select ref={voiceRef} className="realtime-voice" aria-label={t('settings.realtime.voice')} value={customId !== null ? CUSTOM : voice || defaultVoiceFor(model, cloudModel)} onChange={(e) => pickVoice(e.target.value)}>
-            {presets.map((v) => <option key={v} value={v}>{isAudioFamily(model, cloudModel) ? v : `${v} · ${t(`settings.realtime.voice.${v}`)}`}</option>)}
-            {[...new Set([...(voice && !presets.includes(voice) ? [voice] : []), ...mine])].map((v) => <option key={v} value={v}>{t('settings.realtime.voiceMine', { id: v })}</option>)}
-            <option value={CUSTOM}>{t('settings.realtime.voiceCustom')}</option>
-          </select>
+        <div className="settings-control-list">
+          <SettingsRow fit="wrap" label={t('settings.realtime.voice')} description={t('settings.realtime.voiceHint')} control={
+            <select ref={voiceRef} className="realtime-voice" aria-label={t('settings.realtime.voice')} value={customId !== null ? CUSTOM : voice || defaultVoiceFor(model, cloudModel)} onChange={(e) => pickVoice(e.target.value)}>
+              {presets.map((v) => <option key={v} value={v}>{isAudioFamily(model, cloudModel) ? v : `${v} · ${t(`settings.realtime.voice.${v}`)}`}</option>)}
+              {[...new Set([...(voice && !presets.includes(voice) ? [voice] : []), ...mine])].map((v) => <option key={v} value={v}>{t('settings.realtime.voiceMine', { id: v })}</option>)}
+              <option value={CUSTOM}>{t('settings.realtime.voiceCustom')}</option>
+            </select>
+          } />
           {customId !== null && (
-            <input type="text" autoFocus style={{ marginTop: 8 }} value={customId} placeholder={t('settings.realtime.voiceIdPlaceholder')}
-              onChange={(e) => setCustomId(e.target.value)} onBlur={commitCustom}
-              onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { commitCustom(); voiceRef.current?.focus() } }} />
+            <div className="settings-row-notes">
+              <input type="text" className="realtime-voice-custom" autoFocus aria-label={t('settings.realtime.voiceCustom')} value={customId} placeholder={t('settings.realtime.voiceIdPlaceholder')}
+                onChange={(e) => setCustomId(e.target.value)} onBlur={commitCustom}
+                onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { commitCustom(); voiceRef.current?.focus() } }} />
+            </div>
           )}
-          <div className="hint">{t('settings.realtime.voiceHint')}</div>
           {provider && (
-            <>
-              <button className="btn ghost sm realtime-clone-toggle" style={{ marginTop: 10 }} aria-expanded={cloneOpen} onClick={() => { setCloneOpen((o) => !o); setSample(null) }}>{/* 收起 = 录音区卸载,选好的样本一并作废 */}
-                <Mic size={12} /> {t('settings.realtime.cloneTitle')}
+            <SettingsRow fit="inline" label={t('settings.realtime.cloneRow')} description={t('settings.realtime.cloneRowHint')} control={
+              <button type="button" className="btn ghost sm realtime-clone-toggle" aria-expanded={cloneOpen} onClick={() => { setCloneOpen((o) => !o); setSample(null) }}>{/* 收起 = 录音区卸载,选好的样本一并作废 */}
+                <Mic size={12} />{t(cloneOpen ? 'settings.voice.collapse' : 'settings.realtime.cloneBtnOpen')}
               </button>
-              {cloneOpen && (<>
-              <div className="hint" style={{ margin: '8px 0' }}>{t('settings.realtime.cloneHint')}</div>
+            } />
+          )}
+          {provider && cloneOpen && (
+            <div className="settings-voice-block realtime-clone-box">
+              <p className="settings-voice-note">{t('settings.realtime.cloneHint')}</p>
               <VoiceSamplePicker key={pickerKey} onChange={setSample} disabled={busy} />
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }}>
-                <input type="text" style={{ width: 140 }} value={name} placeholder={t('settings.tts.studio.namePlaceholder')} onChange={(e) => setName(e.target.value)} />
-                <button className="btn primary sm realtime-clone-go" disabled={!sample?.ok || busy} onClick={doClone}>
+              <div className="settings-voice-inline">
+                <input type="text" style={{ width: 140 }} value={name} aria-label={t('settings.tts.studio.namePlaceholder')} placeholder={t('settings.tts.studio.namePlaceholder')} onChange={(e) => setName(e.target.value)} />
+                <button type="button" className="btn primary sm realtime-clone-go" disabled={!sample?.ok || busy} onClick={doClone}>
                   {busy ? <Loader2 size={12} className="spin" /> : null} {t('settings.realtime.cloneBtn')}
                 </button>
               </div>
-              </>)}
-              {msg && <div className="hint" style={{ marginTop: 6 }}>{msg}</div>}
-            </>
+            </div>
           )}
+          {provider && msg && <div className="settings-row-notes"><p className="settings-voice-note">{msg}</p></div>}
         </div>
       )}
-    </>
+    </SettingsPanel>
   )
 }

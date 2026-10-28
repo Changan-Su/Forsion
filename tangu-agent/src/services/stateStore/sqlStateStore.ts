@@ -212,9 +212,9 @@ export function createSqlStateStore(): StateStore {
     async finalizeAssistantMessage(m: FinalizeMessageInput) {
       const displayFiles = Array.isArray(m.displayFiles) && m.displayFiles.length ? JSON.stringify(m.displayFiles) : null;
       await query(
-        `INSERT INTO chat_messages (id, session_id, role, content, timestamp, model_id, reasoning, is_error, tool_calls, tool_results, attachments, display_files, agent_slug)
-         VALUES (?, ?, 'model', ?, ?, ?, ?, FALSE, ?, ?, NULL, ?, ?)
-         ON CONFLICT (id) DO UPDATE SET content=EXCLUDED.content, reasoning=EXCLUDED.reasoning, tool_calls=EXCLUDED.tool_calls, tool_results=EXCLUDED.tool_results, display_files=EXCLUDED.display_files, agent_slug=EXCLUDED.agent_slug, updated_at=CURRENT_TIMESTAMP`,
+        `INSERT INTO chat_messages (id, session_id, role, content, timestamp, model_id, reasoning, is_error, tool_calls, tool_results, attachments, display_files, agent_slug, origin)
+         VALUES (?, ?, 'model', ?, ?, ?, ?, FALSE, ?, ?, NULL, ?, ?, ?)
+         ON CONFLICT (id) DO UPDATE SET content=EXCLUDED.content, model_id=CASE WHEN EXCLUDED.origin IS NOT NULL THEN EXCLUDED.model_id ELSE chat_messages.model_id END, reasoning=EXCLUDED.reasoning, tool_calls=EXCLUDED.tool_calls, tool_results=EXCLUDED.tool_results, display_files=EXCLUDED.display_files, agent_slug=EXCLUDED.agent_slug, origin=COALESCE(EXCLUDED.origin, chat_messages.origin), updated_at=CURRENT_TIMESTAMP`,
         [
           m.messageId, m.sessionId, m.content, m.timestamp ?? Date.now(), m.modelId,
           m.reasoning || null,
@@ -222,6 +222,7 @@ export function createSqlStateStore(): StateStore {
           m.toolResults.length ? JSON.stringify(m.toolResults) : null,
           displayFiles,
           m.agentSlug || null,
+          m.origin || null,
         ],
       );
       await query(`UPDATE chat_sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`, [m.sessionId]).catch(() => {});

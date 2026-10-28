@@ -48,7 +48,6 @@ function fake(over: Partial<ChannelCommandRuntime> = {}, session: Partial<Channe
     listAgents: async () => AGENTS,
     getAgent: async (slug) => AGENTS.find((a) => a.slug === slug) ?? null,
     agentLoopCap: (def) => def.maxIterations ?? null,
-    defaultLoopCap: 90,
     newSession: async () => {},
     listSessions: async () => [
       { id: 'sess-1111-aaaa', title: 'First', connected: true },
@@ -242,7 +241,7 @@ describe('/status /approval /loop /agent /compact /cost /stop', () => {
     expect(out).toContain('medium');
     expect(out).toContain(APPROVAL_MODE_META.readonly.zh);
     expect(out).toContain(APPROVAL_MODE_META.readonly.descZh);
-    expect(out).toContain('90');
+    expect(out).toContain('循环上限:不限');
     expect(out).toContain('等你批准');
     expect(out).toContain('/tmp/webot');
   });
@@ -277,10 +276,15 @@ describe('/status /approval /loop /agent /compact /cost /stop', () => {
     const { rt, calls } = fake({}, { agentConfig: { agentSlug: 'coder' } });
     expect(await run(c, rt, '/loop')).toContain('40');
     await run(c, rt, '/loop 50');
-    expect(await run(c, rt, '/loop 0')).toContain('1–200');
-    expect(await run(c, rt, '/loop 201')).toContain('1–200');
+    expect(await run(c, rt, '/loop 0')).toContain('正整数');
+    await run(c, rt, '/loop 500'); // 没有 200 硬顶了
     await run(c, rt, '/loop default');
-    expect(calls.patch).toEqual([{ maxIterations: 50 }, { maxIterations: null }]);
+    expect(calls.patch).toEqual([{ maxIterations: 50 }, { maxIterations: 500 }, { maxIterations: null }]);
+  });
+
+  it('/loop 默认不限轮数(会话、Agent 都没设)', async () => {
+    const { rt } = fake();
+    expect(await run(new ChannelCommandCenter(), rt, '/loop')).toContain('不限');
   });
 
   it('/agent 切人格;定义带模型 → 会话模型一起切(桌面同口径)', async () => {

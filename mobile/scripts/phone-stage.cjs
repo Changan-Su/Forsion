@@ -242,7 +242,7 @@ async function seedNotes(page) {
 }
 
 /** The inbox rows go where the app keeps them on a phone (localStorage), then the store is asked to read them again. */
-async function seedInbox(page) {
+async function seedInbox(page, rows = INBOX) {
   await page.evaluate(async ({ storeUrl, ntfUrl, rows }) => {
     localStorage.setItem('tangu_inbox_msgs', JSON.stringify(rows))
     const { useInbox } = await import(/* @vite-ignore */ storeUrl)
@@ -251,7 +251,7 @@ async function seedInbox(page) {
     // rows that appear after the first poll count as new mail: the app puts a notification card up. Not what is looked at here.
     const { useNotifications } = await import(/* @vite-ignore */ ntfUrl)
     useNotifications.getState().dismissAll()
-  }, { storeUrl: moduleUrl('../desktop/frontend/src/stores/inboxStore.ts'), ntfUrl: moduleUrl('../desktop/frontend/src/stores/notificationStore.ts'), rows: INBOX })
+  }, { storeUrl: moduleUrl('../desktop/frontend/src/stores/inboxStore.ts'), ntfUrl: moduleUrl('../desktop/frontend/src/stores/notificationStore.ts'), rows })
   await page.waitForTimeout(400)
 }
 
@@ -647,6 +647,25 @@ const SCENES = {
     const link = await rect(page, `${LIST} .agents-roster-create`)
     return [['Agents: the roster, and "create" is the main button (no link at the foot)', (await stage.nav(page)) === 'list' && names.length === 2 && !link && !!fab && near(fab.w, 58) && near(SCREEN.width - fab.right, 16) && fab.bottom <= DOCK_TOP - 6, JSON.stringify({ names, link, fab })]]
   },
+  // An agent's run settings on a touch screen (10-25 round 4 · 4.3): no native selects; the approval names are the composer's.
+  'agent-config': async (page) => {
+    if ((await stage.nav(page)) === 'detail') await stage.action(page, 'left')
+    await stage.space(page, 'agents')
+    await page.locator(`${LIST} .agents-roster-item`, { hasText: '研究员' }).first().tap()
+    await page.waitForFunction(() => document.querySelector('.mb-shell')?.getAttribute('data-nav') === 'detail', null, { timeout: 6000 }).catch(() => {})
+    await page.waitForTimeout(500)
+    const nav = await stage.nav(page)
+    const RUN = '.mb-view [data-agent-profile] .profile-config-group'
+    await page.waitForSelector(RUN, { timeout: 8000 }).catch(() => {})
+    const selects = await page.evaluate((q) => document.querySelector(q)?.querySelectorAll('select').length ?? -1, RUN)
+    await page.locator(`${RUN} [data-profile-field="approval"] .profile-model-trigger`).first().tap()
+    await page.waitForTimeout(300)
+    const opts = await texts(page, `${RUN} [data-profile-field="approval"] [role="option"]`)
+    await page.screenshot({ path: path.join(OUT, `agent-config-open${DARK ? '-dark' : ''}.png`) })
+    await page.locator(`${RUN} [data-profile-field="approval"] .profile-model-trigger`).first().tap()
+    await stage.action(page, 'left')
+    return [['run settings (the profile page, one level down): no native selects, approval names are the composer\'s', nav === 'detail' && selects === 0 && opts.join('|') === '跟随默认（替我批准）|询问我批准|替我批准|完全放行|自定义（config.json）', JSON.stringify({ nav, selects, opts })]]
+  },
   'images-list': async (page) => {
     await stage.space(page, 'image-studio')
     await page.waitForSelector(`${LIST} .ims-nav`, { timeout: 15_000 })
@@ -658,6 +677,23 @@ const SCENES = {
   },
   // A call is on. Its bar belongs to the app, not to the chat: it stays up on every page, right under the capsules, so
   // every page starts below it (the shell's top room grows by the bar, see voiceCall.css). Checked page by page.
+  // An empty inbox (10-25 round 4 · 4.1): the list is the page on a phone, so the shared EmptyState sits in the list —
+  // the same component as the desktop's reader, a bit above the middle — instead of a bare "nothing here yet".
+  'inbox-empty': async (page) => {
+    if ((await stage.nav(page)) === 'detail') await stage.action(page, 'left')
+    await seedInbox(page, [])
+    await stage.space(page, 'inbox')
+    await page.waitForSelector(`${LIST} .empty-state`, { timeout: 6000 }).catch(() => {})
+    const title = await rect(page, `${LIST} .empty-state .empty-state-title`)
+    const words = await texts(page, `${LIST} .empty-state .empty-state-title, ${LIST} .empty-state .empty-state-line`)
+    const bare = await texts(page, `${LIST} .t2sw-empty`)
+    const box = await page.evaluate((q) => { const el = document.querySelector(q); if (!el) return null; const cs = getComputedStyle(el); const r = el.getBoundingClientRect(); return { jc: cs.justifyContent, pt: cs.paddingTop, top: r.top, h: r.height, parent: getComputedStyle(el.parentElement).display, ph: el.parentElement.getBoundingClientRect().height } }, `${LIST} .empty-state`)
+    await page.screenshot({ path: path.join(OUT, `inbox-empty-list${DARK ? '-dark' : ''}.png`) })
+    return [
+      ['an empty inbox says what lands here, with the shared empty state in the list', words[0] === '收件箱是空的' && words[1] === 'Agent 的汇报和等你批准的请求会送到这里。' && !bare.length, JSON.stringify({ words, bare })],
+      ['it sits above the middle of the screen, below the capsules, centred across', !!title && title.y > LAYOUT.top && title.y + title.h / 2 < SCREEN.height / 2 && near(title.x + title.w / 2, SCREEN.width / 2, 24), JSON.stringify({ title, box })],
+    ]
+  },
   'inbox-list': async (page) => {
     if ((await stage.nav(page)) === 'detail') await stage.action(page, 'left')
     await seedInbox(page)

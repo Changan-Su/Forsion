@@ -6,6 +6,7 @@ import type { ThemeEntry, ThemeSetting } from '../theme/manifest'
 import { applyThemeSettings, readRaw, writeRaw, resetAll, usableSettings } from '../theme/themeSettings'
 import { broadcastPrefs } from '../uiPrefsBus'
 import { useI18n } from '../i18n'
+import { SettingsSwitch } from './SettingsPrimitives'
 import type { Locale } from '../i18n'
 
 const Row: React.FC<{ def: ThemeSetting; value: string; locale: Locale; onChange: (v: string) => void }> = ({
@@ -30,7 +31,7 @@ const Row: React.FC<{ def: ThemeSetting; value: string; locale: Locale; onChange
         {def.options.map((o) => <option key={o.value} value={o.value}>{locale === 'en' && o.labelEn ? o.labelEn : o.label}</option>)}
       </select>
     ) : def.type === 'boolean' ? (
-      <input type="checkbox" checked={value === 'true'} onChange={(e) => onChange(String(e.target.checked))} />
+      <SettingsSwitch checked={value === 'true'} label={locale === 'en' && def.labelEn ? def.labelEn : def.label} onChange={(on) => onChange(String(on))} />
     ) : (
       <input type="color" value={value} onChange={(e) => onChange(e.target.value)} />
     )}

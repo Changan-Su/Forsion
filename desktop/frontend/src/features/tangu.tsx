@@ -1,10 +1,11 @@
-import { MessageCircle, MessageCircleQuestion, BookOpen, FolderOpen, Bot, Users } from 'lucide-react'
+import { MessageCircle, MessageCircleQuestion, BookOpen, FolderOpen, Bot, Users, Terminal } from 'lucide-react'
 import { addCommand, registerView, useWorkspace } from '@lcl/engine'
 import { activeChatModelId, useApp } from '../stores/appStore'
 import { TANGU_SLICE } from '../tangu/store/tanguSlice'
 import { translate } from '../i18n'
 import { ChatView } from '../views/ChatView'
 import { ChatPreview } from '../views/chat2/ChatPreview'
+import { ProcessLogView } from '../views/chat2/BackgroundProcs'
 import { BtwHost, BtwPanel, BtwSideView } from '../views/chat2/BtwPanel'
 import { btwSeedOf, btwWebVisible, openBtw, quoteInMainChat, useBtw } from '../views/chat2/btwStore'
 import { FilesPanel, bumpDir } from '../views/chat2/FilesPanel'
@@ -23,6 +24,8 @@ import { NewChatComposer, mountNewChatComposer, sendFromNewChat, startNewChatCal
 import { OrbitsView } from '../views/OrbitsView'
 import { SessionsView } from '../views/SessionsView'
 import '../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
+import { startQuotaReminders } from '../views/chat2/quotaReminderScheduler'
+import { windowKind } from '../windowKind'
 /** 对话的右栏组 = 今天 Tangu Space 的右栏那三个(spaces.tsx 的 TANGU_SIDE_VIEWS)。 */
 const CHAT_RIGHT = [{ type: 'tangu-details', params: {} }, { type: 'workspace', params: { mode: 'files' } }, { type: 'outline', params: {} }]
 
@@ -67,6 +70,8 @@ export function activateTangu(host: TanguHost): void {
     host.installProbe(hasNativeFeature('tangu') ? { askInChat: quoteInChatPanel } : {})
   }
   registerTanguCommands()
+  // 「到时提醒我」的定时器只在主窗跑(installEngine 每个窗口都走一遍;外观预览窗也是 main,带 #preview)
+  if (hasNativeFeature('tangu') && typeof location !== 'undefined' && windowKind() === 'main' && location.hash !== '#preview') startQuotaReminders()
 }
 
 /** Tangu 的命令(核心插件化 2e-4,原在 bootstrapEngine)。命令面板 / 快捷键表里这几条挨在一起。 */
@@ -127,6 +132,8 @@ export function registerTanguViews(): void {
   // 右栏视图(可关,可重开)
   registerView({ type: 'memory', kind: 'aux', displayName: () => app().tr('panel.tab.memory'), icon: BookOpen, factory: () => <MemoryPanelView />, singleton: true })
   registerView({ type: 'subchats', kind: 'aux', displayName: () => app().tr('panel.tab.subchats'), icon: MessageCircle, factory: () => <SubchatsView />, singleton: true })
+  // 后台进程的输出(摘要栏「后台」卡点行 → Desk 里开;Desk 不收文件时开标签页)
+  registerView({ type: 'process-log', kind: 'page', displayName: () => translate('bg.view'), icon: Terminal, factory: (props) => <ProcessLogView {...props} />, closable: true, singleton: false })
   registerView({ type: 'session-files', kind: 'aux', displayName: () => app().tr('panel.tab.workspace'), icon: FolderOpen, factory: () => <SessionFilesView />, singleton: true })
   // 主区特殊视图(按需从侧栏打开,不进默认布局)。旧 'wechat' 视图已退役:恢复布局时未注册类型被引擎自动剔除。
   registerView({ type: 'agents-detail', kind: 'page', displayName: () => app().tr('special.agents.title'), icon: Bot, factory: () => <AgentsDetailSpecialView />, singleton: true })

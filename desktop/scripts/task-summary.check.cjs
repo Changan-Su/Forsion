@@ -8,8 +8,10 @@
  *  ② 让位用的是 `.t2-chat-view:has(.t2-tsum.show, .agent-desk-card) .composer-anchor` —— :has() 条件
  *     挂在容器元素本身、而主语是后代,这条能不能在容器查询里落地,只有真浏览器说了算。
  *     不生效的后果不是报错,是正文左移 296px、输入框不动,中线歪掉。
- *  ③ 分区折叠用原生 `<details>`,而 `.t2-tsum-sec` 上写着 `display:flex`。折叠得量**分区自身**
+ *  ③ 卡片折叠用原生 `<details>`(2026-10-25 起每段一张卡,`.t2-card`)。折叠得量**卡片自身**
  *     高度:关闭的 <details> 走 content-visibility:hidden,子元素的 rect 仍报旧尺寸,拿它判必假绿。
+ *  ④ 卡头的计数紧贴折叠箭头靠右(第二轮 demo 两个 margin-left:auto 把计数推到中间,用户点名「太丑」);
+ *     列表卡正文封顶 240 内滚,底部渐隐只在还有没露出来的内容时出现;拖动块悬停才露。
  * 另外钉住:收起时必须真的不占位、且进出确实有过渡(否则是硬闪不是丝滑)。
  *
  * 页面注入仓里**真实的 base.css + chat2.css**(不复制样式),故不会与源码漂移。
@@ -54,13 +56,16 @@ const HTML = `<!doctype html><html><head><meta charset="utf-8"><style>
     <div class="t2-chat-body">
       <div class="t2-stream" id="stream"><div class="t2-stream-inner" id="inner">正文</div></div>
       <div class="t2-rail" id="rail">
-        <aside class="t2-tsum show" id="tsum"><div class="t2-tsum-in">
-          <button class="t2-tsum-attn" id="attn">需要批准</button>
-          <details class="t2-tsum-sec" id="sec" open>
-            <summary class="t2-tsum-sectitle" id="sectitle"><span>来源</span><span class="t2-tsum-count">2</span><svg class="t2-tsum-chev" width="12" height="12" viewBox="0 0 24 24"></svg></summary>
-            <div class="t2-tsum-scroll" id="secbody"><button class="t2-tsum-row act" id="row">a.md</button></div>
+        <aside class="t2-tsum show" id="tsum">
+          <details class="t2-card t2-tsum-in" id="prog" open>
+            <summary class="t2-card-head"><span class="t2-card-title"><span>已完成</span></span><span class="t2-card-end"><svg class="t2-tsum-chev" width="12" height="12" viewBox="0 0 24 24"></svg></span></summary>
+            <div class="t2-card-body"><button class="t2-tsum-attn" id="attn">需要批准</button></div>
           </details>
-        </div></aside>
+          <details class="t2-card" id="sec" open>
+            <summary class="t2-card-head" id="sectitle"><span class="t2-card-grip" id="grip"></span><span class="t2-card-title"><span>来源</span></span><span class="t2-card-end"><span class="t2-tsum-count" id="count">2</span><svg class="t2-tsum-chev" width="12" height="12" viewBox="0 0 24 24"></svg></span></summary>
+            <div class="t2-card-body" id="secbody"><button class="t2-tsum-row act" id="row">a.md</button></div>
+          </details>
+        </aside>
       </div>
       <button class="jump-bottom t2-jump" id="jump">↓</button>
     </div>
@@ -148,9 +153,8 @@ async function at(p, width, cls) {
     ['opacity', 'scale', 'translate', 'display'].every((k) => wide.transProps.includes(k)) && !/^0s/.test(wide.transDur),
     `${wide.transProps} / ${wide.transDur}`)
 
-  // ⑥ 分区折叠:.t2-tsum-sec 是带 display:flex 的原生 <details>,确认关得上、内容真的失活、
-  //    默认 ▸ 没漏出来、chevron 贴右缘、且收起是**过渡**不是硬切。注意量的是**分区自身**高度:
-  //    关闭的 <details> 走 content-visibility:hidden,子元素的 rect 仍报旧尺寸,拿它判折叠必假绿。
+  // ⑥ 卡片折叠:.t2-card 是原生 <details>,确认关得上、内容真的失活、默认 ▸ 没漏出来、chevron 贴右缘、
+  //    计数紧贴 chevron、且收起是**过渡**不是硬切。量的是**卡片自身**高度(见头注 ③)。
   await at(p, 1400, 't2-tsum show')
   const secH = () => p.evaluate(() => document.getElementById('sec').getBoundingClientRect().height)
   const openH = await secH()
@@ -162,29 +166,84 @@ async function at(p, width, cls) {
     const st = getComputedStyle(document.getElementById('sectitle'))
     const title = document.getElementById('sectitle').getBoundingClientRect()
     const chev = document.querySelector('#sectitle .t2-tsum-chev').getBoundingClientRect()
+    const count = document.getElementById('count').getBoundingClientRect()
+    const cs = getComputedStyle(document.getElementById('sec'))
     return {
       closedH: document.getElementById('sec').getBoundingClientRect().height,
       titleH: title.height,
+      padY: parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom) + parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth),
       chevGapToRight: title.right - chev.right,
-      borderTop: getComputedStyle(document.getElementById('sec')).borderTopStyle,
+      countToChev: chev.left - count.right,
       closedFocusable: (document.getElementById('row').focus(), document.activeElement.id === 'row'),
       listStyle: st.listStyleType,
       cursor: st.cursor,
     }
   })
-  // 折叠后除了标题,只应剩标题自己的下边距(3px)——不画分割线、不留内边距
-  check('⚠️折叠真的收起分区内容(除标题外不留高度)',
-    openH > sec.closedH && sec.closedH - sec.titleH <= 8,
-    `展开=${openH.toFixed(1)} 折叠=${sec.closedH.toFixed(1)} 标题=${sec.titleH.toFixed(1)} 余=${(sec.closedH - sec.titleH).toFixed(1)}`)
+  check('⚠️折叠真的收起卡片正文(只剩卡头 + 卡片内边距)',
+    openH > sec.closedH && sec.closedH - sec.titleH - sec.padY <= 1,
+    `展开=${openH.toFixed(1)} 折叠=${sec.closedH.toFixed(1)} 卡头=${sec.titleH.toFixed(1)} 内边距=${sec.padY}`)
   check('⚠️折叠是过渡不是硬切(中途取到中间高度)',
     midH < openH - 1 && midH > sec.closedH + 1,
     `展开=${openH.toFixed(1)} 中途=${midH.toFixed(1)} 折叠=${sec.closedH.toFixed(1)}`)
   check('折叠后行 Tab 不到(内容真的失活,不只是看不见)', !sec.closedFocusable)
-  check('分区标题去掉了原生 ▸ 且是可点样式', sec.listStyle === 'none' && sec.cursor === 'pointer',
+  check('卡头去掉了原生 ▸ 且是可点样式', sec.listStyle === 'none' && sec.cursor === 'pointer',
     `list-style=${sec.listStyle} cursor=${sec.cursor}`)
-  check('chevron 贴标题行右缘', Math.abs(sec.chevGapToRight) <= 1, `距右缘=${sec.chevGapToRight.toFixed(1)}px`)
-  check('分区之间不画分割线', sec.borderTop === 'none', `border-top-style=${sec.borderTop}`)
+  check('chevron 贴卡头右缘', Math.abs(sec.chevGapToRight) <= 1, `距右缘=${sec.chevGapToRight.toFixed(1)}px`)
+  check('⚠️计数紧贴 chevron 靠右(不被推到中间)', sec.countToChev >= 0 && sec.countToChev <= 6, `计数右缘到 chevron=${sec.countToChev.toFixed(1)}px`)
   await p.evaluate(() => { document.getElementById('sec').open = true })
+
+  // ⑦ 列表卡正文封顶 240 内滚;底部渐隐只在下面还有内容时出现(滚到底收掉;没溢出不渐隐)
+  await p.evaluate(() => { document.getElementById('secbody').innerHTML = '<button class="t2-tsum-row act">a.md</button>'.repeat(30) })
+  await p.waitForTimeout(300)
+  const fade = () => p.evaluate(() => {
+    const b = document.getElementById('secbody')
+    return { h: b.getBoundingClientRect().height, scroll: b.scrollHeight - b.clientHeight, fade: getComputedStyle(b).getPropertyValue('--t2-card-fade').trim() }
+  })
+  const long = await fade()
+  check('⚠️列表卡正文封顶 240 且可滚', Math.abs(long.h - 240) <= 1 && long.scroll > 0, `h=${long.h.toFixed(1)} 可滚=${long.scroll}`)
+  check('⚠️有没露出来的内容时底部渐隐', long.fade === '22px', `--t2-card-fade=${long.fade}`)
+  await p.evaluate(() => { const b = document.getElementById('secbody'); b.scrollTop = b.scrollHeight })
+  await p.waitForTimeout(100)
+  const bottom = await fade()
+  check('滚到底渐隐收掉', bottom.fade === '0px', `--t2-card-fade=${bottom.fade}`)
+  await p.evaluate(() => { document.getElementById('secbody').innerHTML = '<button class="t2-tsum-row act" id="row">a.md</button>' })
+  await p.waitForTimeout(300)
+  const short = await fade()
+  check('⚠️没溢出时不渐隐(最后一行不被抹淡)', short.fade === '0px' && short.scroll === 0, `--t2-card-fade=${short.fade} 可滚=${short.scroll}`)
+
+  // ⑧ 拖动块:平时不露,悬停卡片才露
+  const gripOp = () => p.evaluate(() => Number(getComputedStyle(document.getElementById('grip')).opacity))
+  await p.mouse.move(5, 5)
+  await p.waitForTimeout(250)
+  const idle = await gripOp()
+  const box = await p.evaluate(() => { const r = document.getElementById('sec').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + 20 } })
+  await p.mouse.move(box.x, box.y)
+  await p.waitForTimeout(250)
+  const hover = await gripOp()
+  check('⚠️拖动块平时不露、悬停才露', idle === 0 && hover === 1, `平时=${idle} 悬停=${hover}`)
+
+  // ⑨ 立体感三档(开发者选项,TaskSummary 把 SummaryElevation 写到 .t2-tsum[data-elev];2026-10-28 用户定缺省「半浮」)。
+  //    浮 = 和输入卡同一枚投影 + 同族圆角;半浮 = 低一档的影子 + 圆角小一档;平 = 不投影;拿起来的那张三档都照旧浮。
+  //    摘要栏不做「凹」(两轮被否),这里不给它留档位。
+  const elev = (mode, lifted = false) => p.evaluate(({ mode, lifted }) => {
+    document.documentElement.dataset.mode = 'light'
+    document.getElementById('tsum').dataset.elev = mode
+    const card = document.getElementById('sec'); card.classList.toggle('t2-card-lifted', lifted)
+    const c = getComputedStyle(card)
+    const out = { shadow: c.boxShadow, radius: parseFloat(c.borderTopLeftRadius) }
+    card.classList.remove('t2-card-lifted')
+    return out
+  }, { mode, lifted })
+  const fl = await elev('float'), hf = await elev('half'), ft = await elev('flat')
+  check('「浮」= 输入卡那枚投影 + 同族圆角', fl.shadow !== 'none' && fl.radius === 16, `影=${fl.shadow} 圆角=${fl.radius}`)
+  check('「半浮」影子比「浮」低一档、圆角小一档', hf.shadow !== 'none' && hf.shadow !== fl.shadow && hf.radius === 12, `影=${hf.shadow} 圆角=${hf.radius}`)
+  check('「平」不投影', ft.shadow === 'none', `影=${ft.shadow}`)
+  const liftHalf = await elev('half', true), liftFlat = await elev('flat', true)
+  check('拿起来的那张三档都照旧浮', liftHalf.shadow !== hf.shadow && liftFlat.shadow !== 'none', `半浮拿起=${liftHalf.shadow} 平拿起=${liftFlat.shadow}`)
+  await p.evaluate(() => { document.documentElement.dataset.flat = '1' })
+  const hfFlatToggle = await elev('half')
+  check('外观「扁平」开关下半浮的影子也清掉', hfFlatToggle.shadow === 'none', `影=${hfFlatToggle.shadow}`)
+  await p.evaluate(() => { delete document.documentElement.dataset.flat; delete document.documentElement.dataset.mode })
 
   await browser.close()
   const failed = results.filter((r) => !r.ok).length

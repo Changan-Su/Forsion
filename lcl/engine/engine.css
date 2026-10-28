@@ -158,6 +158,10 @@
   transition: background var(--duration-fast, 0.15s), color var(--duration-fast, 0.15s);
 }
 .rb-btn:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.1)); color: var(--text); }
+/* 右键 / ＋ 菜单开着时,发起它的那一格保持按下的底色(同会话行右键时的样子),菜单关了就掉(W-53)。
+   data-menu-open 挂在槽 / 最近使用格上(收纳夹浮层行发起的挂在夹的槽上),＋ 钮挂在自己身上。当前 Space 的强调底(.rb-space.on)不让位。 */
+:is(.rb-slot, .rb-recent-slot)[data-menu-open] > .rb-btn,
+.rb-btn[data-menu-open] { background: var(--overlay-medium, rgba(127, 127, 127, 0.14)); color: var(--text); opacity: 1; }
 /* 折叠/展开切换钮(常驻顶部)+ 顶部图标的拖动槽(可改序)。 */
 /* 【落点丢失的真因】.rb 整条是 -webkit-app-region:drag,只有槽/按钮打了 no-drag 洞 —— 槽之间那 4px
  * 缝和组边缘仍是**窗口拖拽区**,mac 把它当非客户区,dragover/drop 直接被吞:预览还停在最后一次
@@ -320,21 +324,30 @@ html.rb-pointer-dragging, html.rb-pointer-dragging * { cursor: grabbing !importa
   display: flex;
   flex-direction: column;
 }
+/* 行 = 会话 / 项目右键菜单(base.css `.ctx-menu button`)的同一套:13px 图标首列、8px 间距、--menu-* 行高与字号、
+   次要字色、悬停转主字色。宿主没给 token 时(LCL 单独跑)用同值兜底。 */
 .rb-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
   text-align: left;
-  min-height: var(--menu-item-min-height, 28px);
-  padding: var(--menu-item-pad-block, 4px) var(--menu-item-pad-inline, 8px);
+  min-height: var(--menu-item-min-height, 32px);
+  padding: var(--menu-item-pad-block, 6px) var(--menu-item-pad-inline, 8px);
   border: none;
   background: transparent;
-  color: var(--text);
+  color: var(--text-light, var(--text));
   font-family: var(--font-ui);
-  font-size: var(--ui-font-body, 13px);
+  font-size: var(--menu-text-size, var(--ui-font-heading, 13px));
   line-height: 1.4;
   border-radius: var(--radius-sm, 8px);
   cursor: pointer;
   white-space: nowrap;
 }
-.rb-menu button:hover { background: var(--menu-hover, rgba(127, 127, 127, 0.12)); }
+.rb-menu button > svg { flex-shrink: 0; }
+.rb-menu button:hover { background: var(--menu-hover, rgba(127, 127, 127, 0.12)); color: var(--text); }
+.rb-menu button.danger { color: var(--danger, #dc2626); }
+.rb-menu button.danger:hover { background: var(--danger-light, var(--menu-hover, rgba(127, 127, 127, 0.12))); }
 
 /* ===== 图标选择器(收纳夹 / 命令项自定义图标):图标网格浮层,复用菜单卡片观感。 ===== */
 .rb-iconpick {
@@ -366,6 +379,7 @@ html.rb-pointer-dragging, html.rb-pointer-dragging * { cursor: grabbing !importa
 /* 命令面板行首图标(选取模式 + 常规都用)。 */
 .cmd-title { display: inline-flex; align-items: center; gap: 8px; }
 .cmd-icon { flex-shrink: 0; color: var(--text-muted); }
+.cmd-icon-empty { display: inline-block; width: 14px; height: 14px; }
 
 /* ===== 状态栏(悬浮右下 ≈ Obsidian;整体右靠,side 只决定前后段次序) =====
    悬浮不占布局 → ribbon 与 left 会话侧栏都满高不抬;只有 main/right 视图容器 height 缩掉 --sb-h 让位
@@ -398,7 +412,8 @@ html.rb-pointer-dragging, html.rb-pointer-dragging * { cursor: grabbing !importa
 .sb .sb-click:hover { color: var(--text); background: var(--overlay-light, rgba(127, 127, 127, 0.1)); }
 
 /* ===== 视图容器 ===== */
-.wb-view { width: 100%; height: 100%; display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: auto; }
+/* container-type:窗格里的零件按窗格宽排(设置零件见 desktop base.css 的 @container 420),不看窗口宽。 */
+.wb-view { width: 100%; height: 100%; display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: auto; container-type: inline-size; }
 /* 状态栏让位:right panel(无圆角纸卡的图标侧栏)直接缩内容容器高度让出状态栏高(--sb-h,由 DesktopStatusBar
    mount 时设;未设=0 → 满高)。left 会话侧栏不缩(用户方向:只抬 main+right)。用 height 缩而非 padding →
    滚动内容不进让位区,状态栏不重叠。main 主区是圆角纸卡,让位改由纸卡外框(.dv-content-container)底 padding 完成,见下。 */

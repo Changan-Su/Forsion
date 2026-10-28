@@ -1,0 +1,41 @@
+name: critical-contracts
+
+# No path filter: the stable required job must report a conclusion for docs-only PRs too.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: critical-contracts-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  critical-contracts:
+    name: critical-contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.22.1
+          cache: npm
+          cache-dependency-path: |
+            desktop/package-lock.json
+            tangu-agent/package-lock.json
+            web/package-lock.json
+            mobile/package-lock.json
+      - name: Frozen dependency inputs
+        run: |
+          for project in tangu-agent desktop web mobile; do
+            (cd "$project" && npm ci --no-audit --no-fund)
+          done
+          git diff --exit-code -- '*/package.json' '*/package-lock.json'
+      - name: Deterministic data and security contracts
+        run: node desktop/scripts/critical-contracts.cjs

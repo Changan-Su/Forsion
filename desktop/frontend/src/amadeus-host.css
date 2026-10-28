@@ -193,7 +193,9 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .amx-welcome-btn.ghost { background: transparent; border-color: var(--border); color: var(--text-muted); }
 .amx-welcome-btn.ghost:hover { background: var(--bg-hover); filter: none; }
 .amx-welcome-tips { list-style: none; margin: 24px 0 0; padding: 0; display: flex; flex-direction: column; gap: 11px; }
-.amx-welcome-tips li { display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); line-height: 1.5; }
+.amx-welcome-tips li { display: grid; grid-template-columns: 26px minmax(0, 1fr); align-items: center; column-gap: 8px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); line-height: 1.5; }
+/* 首列固定 26px(「[[」芯片、回形针、</> 三种宽度不一,5.18):图标居中,三行文字起点对齐。 */
+.amx-welcome-tips li > :first-child { justify-self: center; }
 .amx-kbd {
   font-family: var(--font-mono, ui-monospace, monospace); background: rgba(127, 127, 127, .14);
   border: 1px solid var(--border, rgba(127, 127, 127, .28)); border-radius: 4px;
@@ -1134,6 +1136,15 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .amx-cover-repo img { touch-action: none; } /* 调位模式:触屏拖动交给 pointer 事件,不让页面滚走(C-11) */
 .amx-cover-hint { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 1; pointer-events: none; font-size: var(--ui-font-caption, 11px); color: var(--text); background: color-mix(in srgb, var(--bg-card) 82%, transparent); border: 1px solid var(--border); border-radius: var(--radius-sm, 6px); padding: 3px 10px; backdrop-filter: blur(8px); box-shadow: var(--btn-shadow); }
 .amx-cover img { width: 100%; height: 100%; object-fit: cover; display: block; user-select: none; -webkit-user-drag: none; }
+/* 在传的封面(附件上传进度方案 r2):本地预览 + 纱 + 环;失败一行红字 + 重试 / 不用了 */
+.amx-cover--up .amx-cover-veil { position: absolute; inset: 0; background: color-mix(in srgb, var(--bg-card) 50%, transparent); }
+.amx-cover--up > .lcl-upring { position: absolute; inset: 0; margin: auto; }
+.amx-cover-upfail {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: flex; align-items: center; gap: 6px;
+  padding: 4px 6px 4px 12px; border-radius: var(--radius-pill); background: var(--bg-card); color: var(--danger); font-size: var(--ui-font-meta, 12px);
+}
+.amx-cover-upfail button { border: 0; background: none; padding: 2px 6px; border-radius: var(--radius-pill); color: var(--text); font: inherit; cursor: pointer; }
+.amx-cover-upfail button:hover { background: var(--menu-hover); }
 /* 底部柔和渐变:从中下部起逐渐融入页面背景色(--bg),与正文自然过渡;克制、不纯色底、无硬分界 */
 .amx-cover-grad { position: absolute; inset: 0; pointer-events: none; border-radius: inherit; background: linear-gradient(to bottom, transparent 52%, color-mix(in srgb, var(--bg) 55%, transparent) 82%, var(--bg) 100%); }
 .amx-cover-tools { position: absolute; right: 14px; bottom: 10px; display: flex; gap: 6px; opacity: 0; transition: opacity 0.15s ease; }
@@ -1389,17 +1400,11 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .amx-db-pop-input { border: 1px solid var(--border); border-radius: var(--radius-sm, 6px); outline: none; background: transparent; color: var(--text); font: inherit; font-size: var(--ui-font-meta, 12px); padding: 5px 7px; margin: 4px 2px 2px; }
 .amx-db-pop-input:focus { border-color: var(--accent-ink, var(--accent, #6c5ce7)); }
 
-/* ── 微动效:笔记库树(箭头旋转 + 展开子树滑入;跟随 base.css 动效 token) ── */
-.amx-tree .t2s-chev { transition: transform var(--duration-fast, 0.15s) var(--ease-out, ease); }
+/* ── 微动效:笔记库树的箭头与子树展开同一个 --collapse-*(8.10;子树的展开是 AnimatedCollapse,原来那条 slide-in 关键帧已删) ── */
+.amx-tree .t2s-chev { transition: transform var(--collapse-duration) var(--collapse-ease); }
 .amx-tree .t2s-chev.open { transform: rotate(90deg); }
-.amx-tree .t2s-group-sessions { animation: amx-slide-in 0.16s var(--ease-out, ease); }
-@keyframes amx-slide-in {
-  from { opacity: 0; transform: translateY(-3px); }
-  to { opacity: 1; transform: none; }
-}
 @media (prefers-reduced-motion: reduce) {
   .amx-tree .t2s-chev { transition: none; }
-  .amx-tree .t2s-group-sessions { animation: none; }
 }
 
 /* ── 导出 PDF:打印时只呈现 #amx-print-root(编辑器克隆,恒浅色纸面),隐藏整个应用壳。
@@ -1602,6 +1607,9 @@ html.dark .amx-cal-chip-ev, html.dark .amx-cal-event {
  * 刻意不套 astryx Card/Scope —— 那会把整卡盖成 astryx 中性灰、与 app 暖色主题不搭。
  * 视觉对标 Notion Calendar 事件 peek:图标引导的行、时段大标题 + 时长徽章、值右对齐可就地编辑。 */
 .amx-cal-cardwrap { position: fixed; width: 360px; max-height: 80vh; overflow-y: auto; transform-origin: top left; animation: amx-cal-cardin 0.16s cubic-bezier(0.22, 0.61, 0.36, 1); background: var(--bg-card, var(--bg)); border-radius: var(--radius-md, 12px); outline: 0.5px solid var(--border); outline-offset: -0.5px; box-shadow: var(--card-shadow); }
+/* 关掉(Esc / 点外面)时卸载留下的替身(EventCard 的 useExitGhost)放菜单那一档退场(走查续八 8.4);手机底部抽屉只淡出。 */
+html:root .amx-cal-cardwrap[data-lcl-exit] { animation: ui-menu-exit var(--menu-exit-duration) var(--ease-exit) forwards; }
+html:root .amx-cal-cardwrap.amx-cal-drawer[data-lcl-exit] { animation-name: ui-fade-out; }
 .amx-cal-cardin { display: flex; flex-direction: column; padding: 6px; gap: 2px; }
 @keyframes amx-cal-cardin { from { opacity: 0; transform: scale(0.97) translateY(-6px); } to { opacity: 1; transform: none; } }
 
@@ -2255,3 +2263,10 @@ html.dark .amx-cal-chip-ev, html.dark .amx-cal-event {
 }
 .amx-sec-device > svg { flex: none; }
 .amx-sec-device-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 120px; }
+
+/* 文件树里正在传的那一行(amadeusViews FolderUploadRow,附件上传进度方案 r2):名字弱一档,行尾一颗小环;失败的红字 + 重试 / 移除常亮 */
+.amx-uprow { cursor: default; }
+.amx-uprow .t2s-srow-title { color: var(--text-muted); }
+.amx-uprow-ring { margin-left: auto; margin-right: 6px; }
+.amx-uprow.is-failed .t2s-srow-title, .amx-uprow.is-failed .t2s-lead-icon { color: var(--danger); }
+.amx-uprow.is-failed .t2s-srow-menu { opacity: 0.7; }

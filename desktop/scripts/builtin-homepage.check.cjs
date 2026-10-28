@@ -581,7 +581,7 @@ async function main() {
     })()`)
     await win.waitForTimeout(1800)
     const planted = await win.evaluate(SNAP)
-    await enterSpace(win, ['笔记', 'Note'], 'amadeus')
+    await enterSpace(win, ['笔记', 'Notes'], 'amadeus')
     await win.evaluate(toggle(false))
     await win.waitForTimeout(1500)
     errs.length = 0

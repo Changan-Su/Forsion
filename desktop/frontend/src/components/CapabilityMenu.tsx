@@ -11,8 +11,10 @@ export type CapabilityMenuItem = {
 }
 
 /** Shared action/selection menu for capability settings, in the same overlay layer as the workbench. */
-export function CapabilityMenu({ label, children, items, className = 'capability-menu-trigger', searchLabel, selection = false, disabled = false, acceptsDrag }: {
-  label: string; children?: ReactNode; items: CapabilityMenuItem[]; className?: string; searchLabel?: string; selection?: boolean; disabled?: boolean; acceptsDrag?: (data: DataTransfer) => boolean
+export function CapabilityMenu({ label, children, items, className = 'capability-menu-trigger', searchLabel, selection = false, multiple = false, disabled = false, acceptsDrag }: {
+  label: string; children?: ReactNode; items: CapabilityMenuItem[]; className?: string; searchLabel?: string; selection?: boolean
+  /** Checkbox rows: picking toggles a row and keeps the menu open. */
+  multiple?: boolean; disabled?: boolean; acceptsDrag?: (data: DataTransfer) => boolean
 }) {
   const id = useId()
   const trigger = useRef<HTMLButtonElement>(null)
@@ -50,7 +52,7 @@ export function CapabilityMenu({ label, children, items, className = 'capability
       {children || <><span>{label}</span><ChevronDown size={13} /></>}
     </button>
     {anchor && createPortal(<div className="ui-popover-backdrop" style={{ pointerEvents: 'none' }}><OverlayAt style={{ pointerEvents: 'auto' }} x={anchor.x} y={anchor.y} anchorTop={anchor.top} innerRef={(el) => { menu.current = el }} id={id}
-      className={`ui-popover capability-menu${selection ? ' capability-menu-selection' : ''}`} role="menu" aria-label={label}
+      className={`ui-popover capability-menu${selection || multiple ? ' capability-menu-selection' : ''}`} role="menu" aria-label={label}
       onKeyDown={(event) => {
         if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(); return }
         if (event.key === 'Tab') { close(); return }
@@ -63,9 +65,9 @@ export function CapabilityMenu({ label, children, items, className = 'capability
         buttons[next]?.focus()
       }}>
       {searchLabel && <label className="capability-menu-search"><Search size={14} /><input aria-label={searchLabel} placeholder={searchLabel} value={query} onChange={(e) => setQuery(e.target.value)} /></label>}
-      <div className="capability-menu-items">{visible.map((item) => <button key={item.id} type="button" role={selection ? 'menuitemradio' : 'menuitem'} aria-label={item.label} aria-checked={selection ? !!item.selected : undefined} disabled={item.disabled} className={`${item.danger ? 'danger' : ''}${item.dropActive ? ' capability-menu-drop' : ''}`}
+      <div className="capability-menu-items">{visible.map((item) => <button key={item.id} type="button" role={multiple ? 'menuitemcheckbox' : selection ? 'menuitemradio' : 'menuitem'} aria-label={item.label} aria-checked={multiple || selection ? !!item.selected : undefined} disabled={item.disabled} className={`${item.danger ? 'danger' : ''}${item.dropActive ? ' capability-menu-drop' : ''}`}
         onDragOver={item.onDragOver} onDragLeave={item.onDragLeave} onDrop={item.onDrop}
-        onClick={() => { close(); item.onSelect() }}><span className="capability-menu-icon">{item.icon}</span><span>{item.label}</span>{item.hint && <small className="capability-menu-hint">{item.hint}</small>}{item.selected && <Check size={14} />}</button>)}</div>
+        onClick={() => { if (!multiple) close(); item.onSelect() }}><span className="capability-menu-icon">{item.icon}</span><span>{item.label}</span>{item.hint && <small className="capability-menu-hint">{item.hint}</small>}{item.selected && <Check size={14} />}</button>)}</div>
     </OverlayAt></div>, document.body)}
   </>
 }

@@ -6,7 +6,7 @@
  * 样式全在 sidebar2.css(t2s- 前缀,token 驱动);右键菜单复用 base.css 的 .ctx-menu。
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { Plus, MoreHorizontal, Pencil, Archive, ArchiveRestore, Trash2, ChevronRight, Folder, FolderOpen, Cloud, FolderPlus, SquarePen, Smartphone, Send, MessagesSquare, MessageSquare, Bot, GitBranch, Pin, PinOff, Info, NotebookPen, Smile } from 'lucide-react'
+import { Plus, MoreHorizontal, Pencil, Archive, ArchiveRestore, Trash2, ChevronRight, Folder, FolderOpen, Cloud, FolderPlus, SquarePen, Smartphone, Send, MessagesSquare, MessageSquare, Bot, GitBranch, Pin, PinOff, Info, NotebookPen, Smile, CircleAlert } from 'lucide-react'
 import { SessionIcon, SessionIconPicker } from '../../components/SessionIcon'
 import { folderPadLeft, rowPadLeft } from '@amadeus/lib/treeIndent'
 import { SidebarRow } from '../../components/SidebarRow'
@@ -28,6 +28,8 @@ import '../../styles/sidebar2.css'
 import { OverlayAt, nativeSheetPresenter, presentNativePrompt, useNativeChromeSpaces, useNativeSheetMenu, type SheetMenuItem } from '@lcl/engine'
 import { CtxMenuButtons } from '../../components/CtxMenuButtons'
 import { AttentionDot, StatusMark } from './AttentionDot'
+import { ProjectRelinkDialog, onProjectRelinked, swapKey, useMissingProjects } from './ProjectRelink'
+import { SessionBgMark } from './BackgroundProcs'
 import { mergeStatus, nestSessions, rowStatus, type RowStatus, type TreeNode } from './sessionTree'
 import { homeTarget } from '../../services/engine/targets'
 import { canTurnChatIntoNote, turnChatIntoNote } from './chatToNote'
@@ -207,6 +209,14 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
     return next
   })
   const [wsOrder, setWsOrder] = useState<string[]>(loadWsOrder)
+  // 文件夹不在原处的本地项目(借鉴 magpie 9):只标记,菜单第一项「重新指向文件夹…」
+  const missingProjects = useMissingProjects(p.workspaces.filter((w) => w.kind === 'local' && !w.system).map((w) => w.key).sort().join('\n'))
+  const isMissing = (ws: WorkspaceDescriptor): boolean => ws.kind === 'local' && !ws.system && missingProjects.has(ws.key)
+  const [relinking, setRelinking] = useState<{ ws: WorkspaceDescriptor; sessionId: string } | null>(null)
+  useEffect(() => onProjectRelinked((from, to) => {
+    setWsOrder((o) => { const next = swapKey(o, from, to); saveWsOrder(next); return next })
+    setCollapsedGroups((c) => { if (!c.has(from)) return c; const next = new Set(swapKey([...c], from, to)); saveCollapsed(next); return next })
+  }), [])
   const [dragKey, setDragKey] = useState<string | null>(null)
   const [dragOverKey, setDragOverKey] = useState<string | null>(null)
   /** 拖起组头时指针在组头里的位置:松手处 = 拖影左上角,落位(LCL land)从那里滑进新位置。 */
@@ -288,7 +298,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
         timeout: 400,
         with: (el) => {
           const n = el.nextElementSibling as HTMLElement | null
-          return n && n.querySelector(':scope > .t2s-group-sessions') ? [n] : []
+          return n && n.querySelector(':scope > * > .t2s-group-sessions') ? [n] : [] // AnimatedCollapse 外层 > 里层 > 会话列表
         },
       })
     }
@@ -425,6 +435,8 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
   }
   const wsMenuItems = (w: NonNullable<typeof wsMenu>): SheetMenuItem[] => {
     const items: SheetMenuItem[] = []
+    const carrier = isMissing(w.ws) ? [...allSessions, ...allArchived].find((s) => s.project_path === w.ws.key && !s.projectless) : undefined
+    if (carrier) items.push({ id: 'ws-relink', act: 'ws-relink', label: t('relink.action'), icon: <FolderOpen size={13} />, run: () => { const ws = w.ws; setWsMenu(null); setRelinking({ ws, sessionId: carrier.id }) } })
     if (p.onTogglePinned) {
       const key = `ws:${w.ws.key}`
       const pinned = isOrbitPinned(p.pinnedEntries || {}, key)
@@ -534,6 +546,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
             <MessagesSquare />{kids.length}
           </span>
         )}
+        <SessionBgMark sessionId={s.id} />
         {att && st === 'wait' && !kidsHidden ? <AttentionDot n={att.n} localOnly={att.localOnly} /> : <StatusMark status={st} />}
         <span className="t2s-srow-time">{formatRowTime(s.updated_at)}</span>
         <span className="t2s-srow-menu" onClick={(e) => openMenu(e as React.MouseEvent, s)}><MoreHorizontal size={14} /></span>
@@ -594,7 +607,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
   const renderNode = (n: TreeNode<SessionRecord>) => !n.kids.length ? renderItem(n.s) : (
     <React.Fragment key={n.s.id}>
       {renderItem(n.s, { kids: n.kids })}
-      {!kidsCollapsed.has(n.s.id) && n.kids.map((k, i) => renderItem(k, { kidLast: i === n.kids.length - 1 }))}
+      <AnimatedCollapse open={!kidsCollapsed.has(n.s.id)}>{!kidsCollapsed.has(n.s.id) && n.kids.map((k, i) => renderItem(k, { kidLast: i === n.kids.length - 1 }))}</AnimatedCollapse>
     </React.Fragment>
   )
 
@@ -613,7 +626,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
             <span className="t2s-srow-title t2s-faint">{t('sidebar.archived')}</span>
             <span className="t2s-count">{p.archivedSessions.length}</span>
           </button>
-          {showArchived && p.archivedSessions.map((x) => renderItem(x))}
+          <AnimatedCollapse open={showArchived}>{showArchived && p.archivedSessions.map((x) => renderItem(x))}</AnimatedCollapse>
         </>
       )}
     </div>
@@ -697,6 +710,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
                     style={{ paddingLeft: folderPadLeft(0) }}
                     {...tipProps(() => [
                       ws.path || '',
+                      isMissing(ws) ? t('relink.missingTip', { path: ws.key }) : '',
                       tipT('tip.sessions', { count: items.length }),
                     ].filter(Boolean))}
                     draggable={manualOrder && wsRenaming !== ws.key}
@@ -738,7 +752,8 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
                       // 已展开再点 = 折叠(toggleGroup 不动 activeWorkspaceKey,不会被联动 effect 弹回);收起时点 = 展开自己。
                       <button className="t2s-group-toggle t2s-folder-row" onClick={() => { p.onActivateEntry?.(en.key); isCollapsed ? enterGroup(ws.key) : toggleGroup(ws.key) }}>
                         {wsLead(ws, isCollapsed)}
-                        <span className="t2s-group-label">{workspaceGroupLabel(ws, t)}</span>
+                        <span className={`t2s-group-label${isMissing(ws) ? ' t2s-missing-name' : ''}`}>{workspaceGroupLabel(ws, t)}</span>
+                        {isMissing(ws) && <span className="t2s-missing"><CircleAlert aria-hidden="true" />{t('relink.missing')}</span>}
                         {pinned && <Pin className="t2o-pin-mark" aria-hidden="true" />}
                       </button>
                     )}
@@ -780,6 +795,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
           <CtxMenuButtons items={wsMenuItems(wsMenu)} />
         </OverlayAt>
       )}
+      {relinking && <ProjectRelinkDialog ws={relinking.ws} sessionId={relinking.sessionId} onClose={() => setRelinking(null)} />}
       {wsRemoving && (
         <RemoveDialog
           title={t('sidebar.ws.removeTitle', { name: wsRemoving.name })}

@@ -21,6 +21,7 @@ export const REMOTE_BASE_TIER_NON_GET: ReadonlyArray<readonly [method: string, p
   ['POST', '/agent/special/approvals/:id/approve'], // 异步审批(D2)
   ['POST', '/agent/special/approvals/:id/reject'],
   ['POST', '/agent/runs/:id/abort'], // 远端停止(§6.1 急停「远端停止额外允许」)
+  ['POST', '/agent/sessions/:id/processes/:pid/kill'], // 停后台进程:同「停止」,只会停(2026-10-25 摘要栏后台卡)
   // Agent Desk 截图回传:回应本机 run 的 desk_screenshot,shotId 随机且绑 run(P0 ②),与答审批同类;
   // 放进会话档会让开关关时看着本机 run 的设备页把这个工具拖到超时。
   ['POST', '/agent/runs/:runId/captures/:shotId'],

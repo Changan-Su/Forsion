@@ -21,13 +21,17 @@
  */
 import { useWorkspace } from '@lcl/engine'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
-import type { ListGroup, ListItem, ListSourceContribution } from '@amadeus/plugins/types'
+import type { ListGroup, ListItem } from '@amadeus/plugins/types'
+import type { HostListSource } from '@amadeus/plugins/pluginText'
 import { translate } from '../../i18n'
 import { formatListTime } from '../../format/time'
 import { useApp } from '../../stores/appStore'
 import { homeAgentAvatars, subscribeHomeAgents } from '../../stores/homeCatalog'
 import { useInbox, inboxDeleteConfirm, isAutomationSender, senderOf, parseUtc, type InboxMessage } from '../../stores/inboxStore'
 import { INBOX_WORKSPACE_MODE } from '../workspaceMode'
+import { setHostListEmpty } from '../hostListEmpty'
+import './inboxEmptyMessages'
+import { Inbox } from 'lucide-react'
 
 // 源身份单源:从工作区模式串 `plugin:<pid>:<srcId>` 拆出来 —— Space 默认档 / workspaceSource / 注册三处永远一致。
 const [, SOURCE_OWNER, SOURCE_ID] = INBOX_WORKSPACE_MODE.split(':')
@@ -140,7 +144,7 @@ function grouped(list: InboxMessage[]): ListItem[] {
   return out
 }
 
-export const inboxListSource: ListSourceContribution = {
+export const inboxListSource: HostListSource = {
   id: SOURCE_ID,
   get title() { return translate('space.inbox') },
   search: true,
@@ -194,6 +198,13 @@ export const inboxListSource: ListSourceContribution = {
     ]
   },
 }
+
+// 一封都没有时,主区阅读面板说「收件箱是空的」(InboxReaderView);列表这边就不再重复「暂无内容」。文案同一份。
+setHostListEmpty(inboxListSource, {
+  space: 'inbox', icon: Inbox,
+  title: () => translate('inbox.reader.emptyTitle'), line: () => translate('inbox.reader.emptyLine'),
+  ready: () => useInbox.getState().listLoaded,
+})
 
 /** 宿主内置源直接进插件仓的 listSources(工作区视图只认那一处);幂等 —— HMR / 重复装配不叠第二份。
  *  ponytail: 源主人名 'inbox' 若与某个外置插件同名,那个插件卸载会顺手摘掉本源;真撞上再给宿主源单开一格。 */

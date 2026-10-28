@@ -24,12 +24,17 @@ export function sanitizeApprovalReason(raw: unknown): ApprovalReason | undefined
 export const alwaysAllowWorks = (r: ApprovalReason | undefined): boolean =>
   r?.kind !== 'escalate' && r?.kind !== 'custom-ask' && r?.kind !== 'protected' && r?.kind !== 'control' && r?.kind !== 'always'
 
-/** 档位 id 是连字符(引擎口径),i18n 键是驼峰(既有) —— 映射写一处,别两边各拼各的。 */
+/** 档位 id 是连字符(引擎口径),i18n 键是驼峰(既有) —— 映射写一处,别两边各拼各的。
+ *  这就是输入框模式菜单的那套名字(询问我批准 / 替我批准 / 完全放行 / 自定义);Agent 档案、团队临时成员、项目设置的
+ *  审批下拉也从这里取(10-25 第四轮 4.3 删掉了 Agent 页自己那套「只读 / 自动编辑 / 完全自动」,不留两份)。 */
 export const MODE_KEY: Record<string, string> = {
   readonly: 'input.approval.readonly',
   'auto-edit': 'input.approval.autoEdit',
   'full-auto': 'input.approval.fullAuto',
+  custom: 'input.approval.custom',
 }
+/** 审批下拉的选项顺序(与输入框模式菜单同序)。值是落盘的档位 id,永不改名。 */
+export const APPROVAL_MODE_ORDER = ['readonly', 'auto-edit', 'full-auto', 'custom'] as const
 
 export function approvalReasonText(r: ApprovalReason | undefined, t: (k: string, v?: Record<string, unknown>) => string): string {
   if (!r) return ''

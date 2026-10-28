@@ -416,7 +416,6 @@ function surfaceUnder(el) {
   check('M 二级详情没有旧横向子栏目且不横向溢出', mobileDetail.oldBars === 0 && mobileDetail.overflow === 0,
     `oldBars=${mobileDetail.oldBars} page-overflow=${mobileDetail.overflow}px`)
 
-  await browser.close()
 
   // ══ F:栏目条上声明的每个 key,正文里都得有**同一个 tab 下的**渲染块 —— 少一个 / 挂错 tab
   //    就是「点得到栏目却一片空白」。纯源码层判定(浏览器里跑不了真组件:SettingsModal 要几十个
@@ -444,7 +443,7 @@ function surfaceUnder(el) {
     ['桌面子页面渲染在总项下方', /className="settings-nav-parent"[\s\S]{0,1200}?className="settings-nav-subitems"/],
     ['正文标题区不再渲染旧横向栏目条', !/className="settings-subbar"/.test(TSX)],
     ['包装层带 key(靠重挂触发入场动画)', /key=\{`\$\{tab\}:\$\{activeSub\}`\}[\s\S]{0,160}?className=\{`settings-sub settings-sub--\$\{tab\}`\}/],
-    ['包装层传了 data-dir(方向)', /className=\{`settings-sub settings-sub--\$\{tab\}`\} data-dir=\{subDir\}/],
+    ['包装层传了 data-dir(方向)', /className=\{`settings-sub settings-sub--\$\{tab\}`\}[^>]{0,400}?data-dir=\{subDir\}/],
     ['切页/切分类后正文回顶部', /\.settings-body'\)[\s\S]{0,120}?scrollTop = 0/],
     ['桌面总项展开时默认打开首个子页面', /const toggleDesktopTab[\s\S]{0,360}?opening[\s\S]{0,180}?openSubPage\(id, items\[0\]\[0\]\)/],
     ['移动总项有独立折叠入口', /if \(expandable\) toggleMobileTab\(id\)/],
@@ -506,6 +505,34 @@ function surfaceUnder(el) {
   check('J 外观页有 80% / 100% / 120% 三档预设，与快捷键共用 uiZoom 真源',
     JSON.stringify(presetValues) === JSON.stringify([0.8, 1, 1.2]) && zoomWiring.every(Boolean),
     `presets=${JSON.stringify(presetValues)} wiring=${zoomWiring.filter(Boolean).length}/${zoomWiring.length}`)
+
+  // ══ K:走查续八 8.13 —— 两处宿主 CSS。窗口 1000 宽(>820,视口断点不生效),只看窗格宽:
+  //    设置行放进 280 宽的 .wb-view 要换行,同样的行放进 700 宽的不换(负对照);插件 showModal() 的 <dialog> 居中。
+  //    窗格的 container-type 来自真 engine.css,不在这里手写替身。 ══
+  const ENGINE = fs.readFileSync(path.join(__dirname, '../../lcl/engine/engine.css'), 'utf8')
+  const row = (fit) => `<div class="settings-control-row settings-setting-row" data-fit="${fit}"><div class="settings-control-copy"><span><strong>卡片密度</strong><small>说明</small></span></div><div class="settings-row-control"><select><option>舒适</option></select></div></div>`
+  const pane = (w) => `<div class="wb-view" style="width:${w}px;height:auto" data-w="${w}"><div class="settings-control-list">${row('wrap')}${row('inline')}</div></div>`
+  const k = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1000, height: 800 } })
+  await k.setContent(`<!doctype html><html><head><meta charset="utf-8"><style>${CSS}\n${ENGINE}</style></head><body>${pane(280)}${pane(700)}<dialog class="probe-dlg" style="width:300px"><p>x</p></dialog></body></html>`)
+  const kr = await k.evaluate(() => {
+    const at = (w, fit) => getComputedStyle(document.querySelector(`[data-w="${w}"] [data-fit="${fit}"]`))
+    const d = document.querySelector('.probe-dlg'); d.showModal(); document.getAnimations().forEach((a) => a.finish())
+    const r = d.getBoundingClientRect()
+    return {
+      cq: getComputedStyle(document.querySelector('.wb-view')).containerType,
+      narrowWrap: at(280, 'wrap').flexDirection, narrowInline: at(280, 'inline').flexDirection + '/' + at(280, 'inline').flexWrap,
+      wideWrap: at(700, 'wrap').flexDirection, wideInline: at(700, 'inline').flexDirection + '/' + at(700, 'inline').flexWrap,
+      dx: Math.round(r.left + r.width / 2 - innerWidth / 2), dy: Math.round(r.top + r.height / 2 - innerHeight / 2),
+    }
+  })
+  await k.close()
+  check('K 窄窗格(280)里设置行按窗格宽换行:wrap 行换到下一行、inline 行留在右边可折行',
+    kr.cq === 'inline-size' && kr.narrowWrap === 'column' && kr.narrowInline === 'row/wrap',
+    `container-type=${kr.cq} wrap=${kr.narrowWrap} inline=${kr.narrowInline}`)
+  check('K 负对照:宽窗格(700)里同样的行不换', kr.wideWrap === 'row' && kr.wideInline === 'row/nowrap', `wrap=${kr.wideWrap} inline=${kr.wideInline}`)
+  check('K 插件 showModal() 的 <dialog> 居中(不被 * { margin:0 } 推到左上角)', Math.abs(kr.dx) <= 2 && Math.abs(kr.dy) <= 2, `偏离中心 dx=${kr.dx} dy=${kr.dy}`)
+
+  await browser.close()
 
   const failed = results.filter((r) => !r.ok)
   console.log(`\n${results.length - failed.length}/${results.length} passed`)

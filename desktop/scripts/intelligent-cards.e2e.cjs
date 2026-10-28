@@ -149,7 +149,7 @@ async function main() {
     assert.ok(panel, 'Settings opens')
     await panel.getByRole('button', { name: '已安装插件', exact: true }).click()
     const plugin = panel.locator('[data-plugin-id="bluebird"]'); await plugin.waitFor()
-    const toggle = plugin.locator('input[data-plugin-switch], input[data-bundle-switch]')
+    const toggle = plugin.locator('[data-plugin-switch], [data-bundle-switch]')
     await toggle.uncheck()
     await win.locator('[data-card-unavailable="plugin:bluebird:library-list"]').waitFor()
     check('禁用青鸟即时撤下现有卡片', await bookmarks.count() === 0)

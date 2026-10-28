@@ -3,7 +3,7 @@
  * 少了这一行,引擎/桌面全套测试与 check:agentprofile(桩里手写 origin)都还是绿的 —— 所以单独钉住。
  */
 import { describe, it, expect } from 'vitest';
-import { skillSummary } from './assets.js';
+import { skillSummary, approxToolTokens } from './assets.js';
 
 describe('skillSummary', () => {
   it('透传 origin:agent;其余(没有 / 伪造成别的值)归 null', () => {
@@ -22,5 +22,14 @@ describe('skillSummary', () => {
   it('共享徽标只在 Agent 技能显式 shared=true 时出现', () => {
     expect(skillSummary({ id: 'local:@coding/pub', name: 'Pub', shared: true }).shared).toBe(true);
     expect(skillSummary({ id: 'local:private', name: 'Private' }).shared).toBe(false);
+  });
+});
+
+describe('approxToolTokens', () => {
+  it('名字 + 描述 + 参数 schema 的 JSON 长度按 4 字符 = 1 token,向上取整;没有工具 = 0', () => {
+    const def = { type: 'function', function: { name: 'mcp__gh__search', description: 'Search issues', parameters: { type: 'object', properties: { q: { type: 'string' } } } } };
+    expect(approxToolTokens([])).toBe(0);
+    expect(approxToolTokens([def])).toBe(Math.ceil(JSON.stringify(def).length / 4));
+    expect(approxToolTokens([def, def])).toBe(Math.ceil((2 * JSON.stringify(def).length) / 4));
   });
 });

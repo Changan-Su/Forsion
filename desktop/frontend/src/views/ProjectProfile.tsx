@@ -1,20 +1,20 @@
 import { HumanCollaborationPanel } from '../components/HumanCollaborationPanel'
 import { humanRewritable, type HumanJump } from '../services/humanCollaboration'
-import { useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { AppWindow, ArrowLeft, Check, ChevronRight, Copy, Download, ExternalLink, FileText, Folder, FolderGit2, FolderInput, FolderOpen, GitBranch, GitBranchPlus, GitCommitHorizontal, ImageUp, Link2, Loader2, MessageSquarePlus, Plus, RefreshCw, Search, Settings2, Smile, Sparkles, Star, TerminalSquare, Upload, UserRound, Users, X } from 'lucide-react'
+import { AppWindow, ArrowLeft, Check, ChevronRight, Copy, Download, ExternalLink, FileText, Folder, FolderGit2, FolderInput, FolderOpen, GitBranch, GitBranchPlus, GitCommitHorizontal, ImageUp, Link2, Loader2, MessageSquarePlus, Plus, RefreshCw, Search, Settings2, Smile, Sparkles, Star, TerminalSquare, Trash2, Upload, UserRound, Users, X } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 import { useApp } from '../stores/appStore'
 import { usePageStore } from '../amadeus/store/pageStore'
 import { useI18n } from '../i18n'
-import { createProjectSkill, deleteProjectIcon, forgetProjectMemory, generateGitCommitMessage, getGitHosting, type GitHosting, getGitSettings, getProjectContext, gitCommitProject, gitCreateProjectBranch, gitInitProject, gitConnectRemoteProject, gitPendingProject, gitPublishGithubProject, gitPublishProject, gitPullProject, gitPushProject, gitSetPushTargetProject, gitTrustProject, initProjectContext, putProjectDoc, putProjectSettings, setProjectIconEmoji, uploadProjectIcon, resolveProjectCandidate, restoreProjectMemoryFact } from '../services/backendService'
+import { createProjectSkill, deleteProjectSkill, deleteProjectIcon, forgetProjectMemory, generateGitCommitMessage, getGitHosting, type GitHosting, getGitSettings, getProjectContext, gitCommitProject, gitCreateProjectBranch, gitInitProject, gitConnectRemoteProject, gitPendingProject, gitPublishGithubProject, gitPublishProject, gitPullProject, gitPushProject, gitSetPushTargetProject, gitTrustProject, initProjectContext, putProjectDoc, putProjectSettings, setProjectIconEmoji, uploadProjectIcon, resolveProjectCandidate, restoreProjectMemoryFact } from '../services/backendService'
 import { askString } from '../amadeus/components/askString'
 import { normPath } from './coding/studioModel'
 import { addToCreations } from './chat2/CreationCards'
 import { setActiveSpace } from '@lcl/engine'
 import type { AgentConfig, GitIdentity, NormalAgentDef, ProjectContext, ProjectSettings, SessionRecord, TeamDef } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { isTeamImageAvatar, sessionWorkspaceKey, THINKING_LEVELS } from '../../../../tangu-agent/src/contracts/clientTypes'
-import { ProfileModelField, ProfileTextEditor } from './profileControls'
+import { ProfileModelField, ProfileTextEditor, useSectionNavSlide } from './profileControls'
 import { AvatarStack } from '../components/AvatarStack'
 import { openSpecial } from './SpecialViews'
 import { openTerminal, routeExternalUrl } from '../builtins'
@@ -23,13 +23,15 @@ import { projectExecutors, shortenPath, type ProjectExecutor } from './projectPr
 import { formatRelative } from '../format/time'
 import { ProjectGitRemotes, siteName } from './ProjectGitRemotes'
 import { askAddRemote } from '../components/GitAddRemoteDialog'
-import './projectProfileMessages'
+import { GIT_ERROR_CODES } from './projectProfileMessages'
 import './teamProfile.css'
 import './projectProfile.css'
 import { AgentAvatar } from '../components/AgentAvatar'
 import { ProjectIcon } from '../components/ProjectIcon'
+import { UninstallDialog, notifyUninstalled } from '../components/UninstallDialog'
 import { IconPicker } from '@amadeus/chrome/pageChrome'
 import { thinkingLabel } from '../components/thinkingLabel'
+import { APPROVAL_MODE_ORDER, MODE_KEY } from '../approvalReason'
 import { freshJump, revealRecords, type RecordJump } from '../services/recordJump'
 import { homeTarget } from '../services/engine/targets'
 
@@ -46,6 +48,8 @@ type Props = {
   humanJump?: HumanJump
   /** 对话里「复盘时记进项目记忆」之类的留痕点「查看」:落到「设置 › 项目记忆」里那几条。 */
   recordJump?: RecordJump
+  /** 对话里的 Git 卡点「在项目详情中打开」:落到「Git」页(值是一次性令牌,变了就再落一次)。 */
+  gitJump?: number
   currentSessionId?: string | null
 }
 
@@ -82,15 +86,6 @@ export function useProjectSubject(path: string | null): { workspace: ProjectWork
   }, [signature])
 }
 
-/** 引擎 git 动作的机器码(services/gitActions.ts);有词条的按当前语言说,没有的回落引擎原文。 */
-const GIT_ERROR_CODES = new Set([
-  'git_unavailable', 'git_timeout', 'git_failed', 'not_repo', 'already_repo', 'nothing_to_commit', 'empty_message', 'message_too_long',
-  'embedded_repo', 'too_many_files', 'large_files', 'no_identity', 'invalid_branch', 'detached', 'no_remote', 'ambiguous_remote', 'no_model', 'quota_exceeded',
-  'shared_workspace', 'nested_repo', 'untrusted_config', 'credential_files', 'git_too_old', 'changes_changed', 'hook_changed_commit',
-  'no_upstream', 'diverged', 'dirty_worktree', 'untrusted_transport', 'forsion_git_needs_setup', 'forsion_git_rate_limited', 'forsion_git_unavailable',
-  'has_remote', 'invalid_repo_name', 'no_commits', 'github_not_linked', 'github_relink_required', 'github_unavailable',
-  'github_repo_exists', 'github_api_failed', 'github_unreachable', 'invalid_remote_url', 'remote_unreachable', 'credential_denied',
-])
 /** link = 这条失败要用户去的网页(Forsion Git 还没开通 → 站点地址);只收 https,交给统一的外链出口。
  *  linkGithub = 这条失败的出路是去账户中心绑定 / 重新绑定 GitHub 账号。 */
 type GitErr = { message: string; info?: string; retry?: () => void; link?: string; linkGithub?: boolean }
@@ -104,7 +99,7 @@ const githubRepoPage = (remote?: string | null): string | null => {
 /** PROJECT 详情:骨架与 TEAM 详情同一套(头部即基本信息 / 滑块导航 / 一个滚动体 / 底部保存栏),内容换成项目的三面:
  *  Agents(谁在这里工作过)/ 配置(指令文件 · 项目技能 · 计划 · 本机默认项)/ Git(现场 + 用户点的建仓 / 提交 / 建分支 / 拉取 / 推送)。数据全部来自引擎的 project-context,
  *  它读到什么就显示什么 —— 这个面板存在的意义就是回答「Tangu 到底看没看见这个项目的约定」。 */
-export function ProjectProfile({ session, config, workspace, renderAgent, renderTeam, currentSessionId, humanJump, recordJump }: Props) {
+export function ProjectProfile({ session, config, workspace, renderAgent, renderTeam, currentSessionId, humanJump, recordJump, gitJump }: Props) {
   const { t, locale } = useI18n()
   const s = useApp(useShallow((a) => ({
     cfg: a.cfg, agents: a.agentDefs, avatars: a.agentAvatars, teams: a.teams, teamAvatars: a.teamAvatars, engines: a.engines, models: a.modelsResp?.models,
@@ -117,8 +112,10 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
   const [ctx, setCtx] = useState<ProjectContext | null>(null)
   const [loadError, setLoadError] = useState('')
   const [reloadAt, setReloadAt] = useState(0)
-  const [tab, setTab] = useState<Tab>(humanJump ? 'human' : freshJump(recordJump) ? 'settings' : 'agents')
+  const [tab, setTab] = useState<Tab>(gitJump ? 'git' : humanJump ? 'human' : freshJump(recordJump) ? 'settings' : 'agents')
+  const navRef = useSectionNavSlide(tab)
   useEffect(() => { if (humanJump?.at) setTab('human') }, [humanJump?.at])
+  useEffect(() => { if (gitJump) setTab('git') }, [gitJump])
   // 落点要等「设置」页连同项目记忆画出来:引擎回来之前 ctx 是 null。已经开着这个项目时手里的 ctx 可能是旧的(后台刚记下的那条还没读到):
   // 令牌一变先重读,读回来的那份才拿来落。点开着的执行者详情会盖住主区,一并收起(同「返回」)。
   const rootRef = useRef<HTMLElement>(null)
@@ -146,6 +143,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
   const [settingsDraft, setSettingsDraft] = useState<ProjectSettings>({})
   const [settingsDirty, setSettingsDirty] = useState(false)
   const [skillForm, setSkillForm] = useState<{ slug: string; name: string; description: string; content: string } | null>(null)
+  const [deletingSkill, setDeletingSkill] = useState<ProjectContext['skills'][number] | null>(null)
   const [iconPick, setIconPick] = useState<{ x: number; y: number } | null>(null)
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
@@ -670,7 +668,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
         {inCreations
           ? <button type="button" className="project-creation-action" data-project-creation="done" onClick={() => setActiveSpace('artificial')}><AppWindow size={12} />{t('creation.card.openCreations')}</button>
           : canAdopt && <button type="button" className="project-creation-action" data-project-creation="add" title={t('projectProfile.creation.addHint')} disabled={!!busy} onClick={() => void joinCreations()}>{busy === 'adopt' ? <Loader2 size={12} className="spin" /> : <FolderInput size={12} />}{t('creation.card.add')}</button>}</p>
-      <nav className="agent-section-nav" style={{ '--profile-tab-count': TABS.length, '--profile-tab-index': TABS.findIndex((item) => item.id === tab) } as CSSProperties} aria-label={t('projectProfile.navigation')} role="tablist" onKeyDown={(e) => {
+      <nav ref={navRef} className="agent-section-nav" aria-label={t('projectProfile.navigation')} role="tablist" onKeyDown={(e) => {
         if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return
         e.preventDefault()
         const index = TABS.findIndex((x) => x.id === tab)
@@ -727,9 +725,14 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
               </>}
           </section>
           <section className="project-card" data-project-skills>
+            {deletingSkill && <UninstallDialog title={t('uninstall.skill.title', { name: deletingSkill.name })} confirmLabel={t('uninstall.delete')} note={t('uninstall.note')}
+              rows={[{ icon: <Folder size={15} strokeWidth={1.8} />, title: t('uninstall.skill.folder'), sub: shortenPath(deletingSkill.path, s.homeDir), dest: t('uninstall.trash30') }]}
+              onClose={() => setDeletingSkill(null)}
+              onConfirm={() => { const sk = deletingSkill; void deleteProjectSkill(homeTarget(), session.id, sk.path).then((r) => { notifyUninstalled(t('uninstall.skill.done', { name: sk.name }), sk.name, { id: r.trashId, kind: 'skill', restorer: 'engine' }); return getProjectContext(homeTarget(), session.id).then(setCtx) }).catch((e: any) => setError(String(e?.message || e))) }} />}
             <div className="project-card-head"><div><h3><Sparkles size={13} style={{ verticalAlign: -2, marginRight: 5 }} />{t('projectProfile.skills')}</h3><small>{t('projectProfile.skillsHint', { dir: skillsDir })}</small></div>
               <button type="button" title={t('projectProfile.openSkills')} aria-label={t('projectProfile.openSkills')} onClick={() => void (ctx.skills.length || busy ? Promise.resolve() : initProjectContext(homeTarget(), session.id).then((r) => setCtx(r.context))).then(() => reveal(`${ctx.workspaceDir}/skills`))}><FolderOpen size={14} /></button></div>
-            {ctx.skills.length ? <div className="project-list">{ctx.skills.map((skill) => <button type="button" key={`${skill.id}:${skill.legacy}`} className="project-row" title={skill.path} onClick={() => reveal(`${skill.path}/SKILL.md`)}><strong>{skill.name}</strong>{skill.legacy && <small className="project-chip warn">{t('projectProfile.legacySkill')}</small>}<span style={{ gridColumn: '1 / -1' }}>{skill.description || skill.id}</span></button>)}</div>
+            {ctx.skills.length ? <div className="project-list">{ctx.skills.map((skill) => <div key={`${skill.id}:${skill.legacy}`} className="project-skill-row"><button type="button" className="project-row" title={skill.path} onClick={() => reveal(`${skill.path}/SKILL.md`)}><strong>{skill.name}</strong>{skill.legacy && <small className="project-chip warn">{t('projectProfile.legacySkill')}</small>}<span style={{ gridColumn: '1 / -1' }}>{skill.description || skill.id}</span></button>
+              <button type="button" className="project-skill-del" title={t('uninstall.delete')} aria-label={t('uninstall.delete')} disabled={!!busy} onClick={() => setDeletingSkill(skill)}><Trash2 size={13} /></button></div>)}</div>
               : <p className="agent-profile-muted">{t('projectProfile.noSkills')}</p>}
             {skillForm ? <form className="project-skill-form" onSubmit={(e) => { e.preventDefault(); void submitSkill() }}>
               <label>{t('projectProfile.skillFolder')}<input required autoFocus pattern="[a-z0-9][a-z0-9-]*" placeholder="my-skill" value={skillForm.slug} onChange={(e) => setSkillForm({ ...skillForm, slug: e.target.value })} /></label>
@@ -779,7 +782,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
             </select></label>
             <label className="project-field">{t('agentProfile.approval')}<select value={settingsDraft.approvalMode || ''} onChange={(e) => patchSettings({ approvalMode: (e.target.value || undefined) as ProjectSettings['approvalMode'] })}>
               <option value="">{t('projectProfile.inherit')}</option>
-              {([['readonly', 'readonly'], ['auto-edit', 'autoEdit'], ['full-auto', 'fullAuto'], ['custom', 'custom']] as const).map(([v, k]) => <option key={v} value={v}>{t(`agentProfile.${k}`)}</option>)}
+              {APPROVAL_MODE_ORDER.map((mode) => <option key={mode} value={mode}>{t(MODE_KEY[mode])}</option>)}
             </select></label>
             <ProfileModelField models={(s.models || []).filter((m) => (m.modelType || 'llm') === 'llm')} value={settingsDraft.model || ''} label={t('agentProfile.model')} onChange={(model) => patchSettings({ model: model || undefined })} />
             <label className="project-field">{t('agentProfile.thinking')}<select value={settingsDraft.thinkingLevel || ''} onChange={(e) => patchSettings({ thinkingLevel: (e.target.value || undefined) as ProjectSettings['thinkingLevel'] })}>

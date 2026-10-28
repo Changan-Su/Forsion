@@ -13,10 +13,11 @@ import { PRODUCT } from '../product'
  */
 import React, { Suspense } from 'react'
 import { create } from 'zustand'
-import { Globe, TerminalSquare } from 'lucide-react'
+import { Blocks, CalendarDays, Globe, House, Images, Sparkles, TerminalSquare, type LucideIcon } from 'lucide-react'
 import { registerView, unregisterView, addCommand, removeCommand, useWorkspace, getView, Skeleton } from '@lcl/engine'
 import { lazyRetry } from '../lazyRetry'
 import { registerMessages, useI18n } from '../i18n'
+import { SettingsSwitch } from '../components/SettingsPrimitives'
 import { useApp } from '../stores/appStore'
 import { useUnitRemote } from '../components/UnitSwitcher'
 import { windowKind } from '../windowKind'
@@ -86,6 +87,8 @@ interface BuiltinDef {
   id: string
   /** 视图注册名(= 命令/Space 引用名);开关时按这份清单清场 + 反注册。 */
   types: string[]
+  /** 设置 › 插件「内置功能」卡上的图标 = 它在 Ribbon / Space 里那个(走查续五 5.8)。 */
+  icon: LucideIcon
   name(): string
   description(): string
   /** 宿主具备所需能力才注册:web/移动端跑同一套渲染层,但既没有 <webview> 也没有 PTY。 */
@@ -99,12 +102,12 @@ interface BuiltinDef {
 
 export const BUILTINS: BuiltinDef[] = [
   {
-    id: 'image-studio', types: ['image-studio', 'image-studio-nav', 'image-studio-chat', 'image-studio-assets', 'image-studio-inspector'],
+    id: 'image-studio', icon: Images, types: ['image-studio', 'image-studio-nav', 'image-studio-chat', 'image-studio-assets', 'image-studio-inspector'],
     name: () => tr('imageStudio.title'), description: () => tr('imageStudio.desc'), available: imageStudioAvailable,
     install: installImageStudioViews, installSpace: installImageStudioSpace, removeSpace: removeImageStudioSpace,
   },
   {
-    id: 'browser',
+    id: 'browser', icon: Globe,
     types: ['browser'],
     name: () => tr('browser.title'),
     description: () => tr('browser.desc'),
@@ -115,7 +118,7 @@ export const BUILTINS: BuiltinDef[] = [
     },
   },
   {
-    id: 'terminal',
+    id: 'terminal', icon: TerminalSquare,
     types: ['terminal'],
     name: () => tr('terminal.title'),
     description: () => tr('terminal.desc'),
@@ -126,7 +129,7 @@ export const BUILTINS: BuiltinDef[] = [
     },
   },
   {
-    id: 'home',
+    id: 'home', icon: House,
     types: ['homepage'],
     name: () => tr('space.home'),
     description: () => tr('home.builtinDesc'),
@@ -136,7 +139,7 @@ export const BUILTINS: BuiltinDef[] = [
     removeSpace: removeHomepageSpace,
   },
   {
-    id: 'calendar',
+    id: 'calendar', icon: CalendarDays,
     types: ['calendar', 'todo-list', 'calendar-config', 'calendar-side'],
     name: () => tr('space.calendar'),
     description: () => tr('calendar.builtinDesc'),
@@ -146,7 +149,7 @@ export const BUILTINS: BuiltinDef[] = [
     removeSpace: removeCalendarSpace,
   },
   {
-    id: 'artificial',
+    id: 'artificial', icon: Blocks,
     types: ['artificial', 'product'],
     name: () => tr('space.artificial'),
     description: () => tr('artificial.builtinDesc'),
@@ -156,7 +159,7 @@ export const BUILTINS: BuiltinDef[] = [
     removeSpace: removeArtificialSpace,
   },
   {
-    id: 'muse',
+    id: 'muse', icon: Sparkles,
     types: ['muse-library', 'muse-files', 'muse-panel'],
     name: () => tr('space.muse'),
     description: () => tr('muse.builtinDesc'),
@@ -315,21 +318,21 @@ export const BuiltinPluginsSection: React.FC = () => {
       {list.map((b) => (
         <div key={b.id} className="plugin-card">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <PluginLogo />
+            <PluginLogo icon={b.icon} />
             <div style={{ flex: 1, minWidth: 0 }}>
               <b style={{ fontSize: 'var(--ui-font-body, 13px)' }}>{b.name()}</b>
               <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)', marginTop: 2 }}>{b.description()}</div>
             </div>
-            <input type="checkbox" checked={!!enabled[b.id]} onChange={(e) => toggle(b.id, e.target.checked)} style={{ cursor: 'pointer' }} />
+            <SettingsSwitch checked={!!enabled[b.id]} label={b.name()} onChange={(on) => toggle(b.id, on)} />
           </div>
           {b.id === 'home' && enabled.home && homeClaimed && (
             <div style={{ marginTop: 8, fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-muted)' }}>{t('home.claimed')}</div>
           )}
           {b.id === 'browser' && enabled.browser && (
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8, fontSize: 'var(--ui-font-meta, 12px)', cursor: 'pointer' }}>
-              <input type="checkbox" checked={inAppLinks} onChange={(e) => setInAppLinks(e.target.checked)} />
-              {t('browser.inAppLinks')}
-            </label>
+            <div className="plugin-card-subrow">
+              <span>{t('browser.inAppLinks')}</span>
+              <SettingsSwitch checked={inAppLinks} label={t('browser.inAppLinks')} onChange={setInAppLinks} />
+            </div>
           )}
         </div>
       ))}

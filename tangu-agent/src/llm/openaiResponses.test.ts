@@ -66,6 +66,11 @@ describe('openaiToResponsesBody', () => {
     expect(plain.text).toBeUndefined();
   });
 
+  it('Fast 档:service_tier 原样上顶层(Codex CLI 同款),没写就不出现', () => {
+    expect(openaiToResponsesBody({ model: 'm', messages: [], service_tier: 'priority' }).service_tier).toBe('priority');
+    expect('service_tier' in openaiToResponsesBody({ model: 'm', messages: [] })).toBe(false);
+  });
+
   it('reasoning 延续性:assistant 带 providerItems → 原样回灌,不再由文本重建', () => {
     const items = [
       { type: 'reasoning', id: 'rs_1', summary: [], encrypted_content: 'ENC' },
@@ -147,8 +152,69 @@ describe('streamOpenAiResponses SSE parse', () => {
     }));
     const err: any = await streamOpenAiResponses({ apiKey: 'x', baseUrl: 'https://example/codex', payload: { model: 'gpt-5-codex', messages: [] } } as any).catch((e) => e);
     expect(err.status).toBe(429);
-    expect(err.message).toMatch(/usage limit has been reached \(resets in ~(9|10) min\)/);
+    expect(err.message).toMatch(/usage limit has been reached \(resets in ~(9|10) min, at \d{4}-\d\d-\d\dT[\d:.]+Z\)/);
+    expect(err.resetsAt).toBeGreaterThan(Date.now() + 500_000);
     expect(isRetryableLlmError(err)).toBe(false);
+  });
+
+  // 厂商原文(magpie codex_quota_group_test.go):额度用完也可能在 200 的流里以 response.failed / error 事件出现
+  it('流里的额度用完(response.failed / error 事件)认得出，带 code 与重置时刻;按分钟的限流不算', async () => {
+    const { isQuotaExhaustedLlmError, isRetryableLlmError } = await import('./retry.js');
+    const failWith = async (ev: any) => {
+      const sse = `data: ${JSON.stringify({ type: 'response.created', response: { id: 'r0', status: 'in_progress' } })}\n\ndata: ${JSON.stringify(ev)}\n\n`;
+      vi.stubGlobal('fetch', () => Promise.resolve({ ok: true, body: new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(sse)); c.close(); } }) }));
+      return streamOpenAiResponses({ apiKey: 'x', baseUrl: 'https://example/codex', payload: { model: 'gpt-5-codex', messages: [] } } as any).catch((e) => e);
+    };
+    const failed = await failWith({ type: 'response.failed', sequence_number: 1, response: { id: 'r0', status: 'failed', error: { code: 'usage_limit_reached', message: "You've hit your usage limit. Upgrade to Pro, or try again in 2 hours." } } });
+    expect([failed.code, isQuotaExhaustedLlmError(failed), isRetryableLlmError(failed)]).toEqual(['usage_limit_reached', true, false]);
+    const errEv: any = await failWith({ type: 'error', error: { type: 'usage_limit_reached', code: 'usage_limit_reached', message: 'The usage limit has been reached', resets_in_seconds: 7200 } });
+    expect(isQuotaExhaustedLlmError(errEv)).toBe(true);
+    expect(errEv.resetsAt).toBeGreaterThan(Date.now() + 7_000_000);
+    expect(errEv.message).toMatch(/resets in ~120 min/);
+    const codeOnly = await failWith({ type: 'response.failed', response: { id: 'r0', status: 'failed', error: { code: 'insufficient_quota', message: 'Upgrade your plan to continue.' } } });
+    expect(isQuotaExhaustedLlmError(codeOnly)).toBe(true); // 正文没提额度，只有 code 写着
+    const topLevel = await failWith({ type: 'error', code: 'insufficient_quota', message: 'Upgrade your plan', sequence_number: 1, param: null });
+    expect([topLevel.code, isQuotaExhaustedLlmError(topLevel), isRetryableLlmError(topLevel)]).toEqual(['insufficient_quota', true, false]);
+    const rate = await failWith({ type: 'response.failed', response: { id: 'r0', status: 'failed', error: { code: 'rate_limit_exceeded', message: 'Rate limit reached for gpt-5.5 on tokens per min. Please try again in 11.054s.' } } });
+    expect([isQuotaExhaustedLlmError(rate), isRetryableLlmError(rate)]).toEqual([false, true]);
+  });
+
+  // 厂商原文(magpie overflow_stream_test.go,ChatGPT 后端 2026-10-13 实拍):超长在 200 的流里先来 error 再来 response.failed
+  it('流里的超长按 400 抛(压缩后重试认得出),额度仍带 code、其余仍是 502', async () => {
+    const { isRetryableLlmError, isQuotaExhaustedLlmError } = await import('./retry.js');
+    const { isContextOverflowError } = await import('../services/contextWindowStore.js');
+    const failWith = async (ev: any) => {
+      const sse = `data: ${JSON.stringify({ type: 'response.created', response: { id: 'r0', status: 'in_progress' } })}\n\ndata: ${JSON.stringify(ev)}\n\n`;
+      vi.stubGlobal('fetch', () => Promise.resolve({ ok: true, body: new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(sse)); c.close(); } }) }));
+      return streamOpenAiResponses({ apiKey: 'x', baseUrl: 'https://example/codex', payload: { model: 'gpt-5-codex', messages: [] } } as any).catch((e) => e);
+    };
+    const overflow = { type: 'invalid_request_error', code: 'context_length_exceeded', message: 'Your input exceeds the context window of this model. Please adjust your input and try again.', param: 'input' };
+    for (const ev of [{ type: 'error', error: overflow, sequence_number: 2 }, { type: 'response.failed', response: { id: 'r0', status: 'failed', error: overflow } }]) {
+      const err = await failWith(ev);
+      expect([err.status, err.code, isContextOverflowError(err), isRetryableLlmError(err)]).toEqual([400, 'context_length_exceeded', true, false]);
+    }
+    // 只有 code 写着超长、正文是别的话:照样认
+    const codeOnly = await failWith({ type: 'response.failed', response: { status: 'failed', error: { code: 'context_length_exceeded', message: 'Request rejected.' } } });
+    expect(isContextOverflowError(codeOnly)).toBe(true);
+    const quota = await failWith({ type: 'response.failed', response: { status: 'failed', error: { code: 'usage_limit_reached', message: "You've hit your usage limit." } } });
+    expect([quota.status, isQuotaExhaustedLlmError(quota)]).toEqual([502, true]);
+    // 限流 / 额度 / 服务端错的正文会撞上超长表(「too many tokens」「N tokens > M maximum」「exceeds the limit of N」):不许判成超长(Codex 评审)
+    const notOverflow = [
+      { code: 'rate_limit_exceeded', message: 'Too many tokens per minute. Please try again in 8s.' },
+      { code: 'usage_limit_reached', message: 'Daily token quota exceeded: 12000 tokens > 10000 maximum' },
+      { code: 'billing_hard_limit_reached', message: 'Monthly token budget exceeded: 12000 tokens > 10000 maximum' },
+      { code: 'server_error', message: 'Request exceeds the limit of 5000 concurrent requests' },
+      { message: 'Too many tokens per minute, slow down' }, // 没 code 只有正文
+    ];
+    for (const error of notOverflow) {
+      const err = await failWith({ type: 'response.failed', response: { status: 'failed', error } });
+      expect([err.status, isContextOverflowError(err)], JSON.stringify(error)).toEqual([502, false]);
+    }
+    // invalid_request_error + 超长正文(Anthropic 风格的 code)照样认
+    const typed = await failWith({ type: 'error', error: { type: 'invalid_request_error', message: "This model's maximum context length is 128000 tokens." } });
+    expect([typed.status, isContextOverflowError(typed)]).toEqual([400, true]);
+    const other = await failWith({ type: 'response.failed', response: { status: 'failed', error: { code: 'server_error', message: 'An error occurred while processing your request.' } } });
+    expect([other.status, isContextOverflowError(other), isRetryableLlmError(other)]).toEqual([502, false, true]);
   });
 
   // 与 openaiCompat 同一条极性契约:两套协议对「没报 / 报了 0」必须给出同一语义。

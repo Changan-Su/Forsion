@@ -35,6 +35,7 @@ export interface OAuthProvider {
 // 后端按版本号 gate 新模型:0.150.0 的目录隐藏 GPT-6 Astra、0.153.4 才返回(09-06 同账号实测);
 // GPT-6 Sol / Luna 同理:0.153.4 拉到的目录没有,0.155.1 才返回(09-22 同账号实测)。
 // GPT-6.1 Sol:0.155.1 仍隐藏,0.159.2 返回(10-01 同账号实测)。
+// GPT-6.1 Terra:0.158.0 隐藏,0.159.0 起返回,无需升版本(10-27 同账号实测;目录里的 minimal_client_version 写 0.153.0,不是实际门槛)。
 // 与缓存版本一起推进,升级后立即重拉,不能复用旧客户端过滤过的 24h 缓存。
 export const CODEX_MODELS_CLIENT_VERSION = '0.159.2';
 
@@ -84,8 +85,8 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProvider> = {
     baseUrl: 'https://chatgpt.com/backend-api/codex',
     protocol: 'openai-responses',
     // 仅兜底提示(实拉 /models 失败时才用),快照会过时——真实列表以 fetchProviderModels 实拉为准。
-    // 2026-10-01 实测 list 集;真实目录仍按当前账号返回,不把兜底提示合并进成功的响应。
-    modelIds: ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5'],
+    // 2026-10-27 实测 list 集;真实目录仍按当前账号返回,不把兜底提示合并进成功的响应。
+    modelIds: ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6.1-terra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5'],
     extraAuthParams: { id_token_add_organizations: 'true', codex_cli_simplified_flow: 'true' },
   },
 };
@@ -134,6 +135,15 @@ function extractChatgptAccountId(tok: any): string | undefined {
  * 失败/离线返回 null,调用方回退到 OAUTH_PROVIDERS 里的硬编提示。
  */
 export async function fetchProviderModels(p: OAuthProvider, accessToken: string, accountId?: string): Promise<string[] | null> {
+  return (await fetchProviderCatalog(p, accessToken, accountId))?.ids ?? null;
+}
+
+/**
+ * 同一趟 `/models`,连 Fast 档一起拿:Codex 目录每个模型带 `service_tiers: [{ id: 'priority', name: 'Fast', description }]`
+ * (10-25 实测 0.159.2 目录九个模型都有;Codex CLI 的 /fast 即请求体 `service_tier: "priority"`,`fast` / `flex` 后端 400)。
+ * fastTiers 只收 id=priority 的那条,值是说明原文(「1.5x speed」/「2x speed, increased usage」),界面据此显示与翻译。
+ */
+export async function fetchProviderCatalog(p: OAuthProvider, accessToken: string, accountId?: string): Promise<{ ids: string[]; fastTiers: Record<string, string> } | null> {
   try {
     const base = p.baseUrl.replace(/\/+$/, '');
     const headers: Record<string, string> = { Authorization: `Bearer ${accessToken}` };
@@ -151,14 +161,20 @@ export async function fetchProviderModels(p: OAuthProvider, accessToken: string,
     if (!res.ok) return null;
     const j: any = await res.json();
     const arr: any[] = Array.isArray(j) ? j : Array.isArray(j?.data) ? j.data : Array.isArray(j?.models) ? j.models : []; // Codex 实测 { models: [...] }
-    const ids = arr
-      .filter((m) => {
-        const v = m?.visibility;
-        return v == null || (v !== 'hide' && v !== 'hidden');
-      })
+    const visible = arr.filter((m) => {
+      const v = m?.visibility;
+      return v == null || (v !== 'hide' && v !== 'hidden');
+    });
+    const ids = visible
       .map((m) => m?.slug || m?.id)
       .filter((s: any): s is string => typeof s === 'string' && s.length > 0);
-    return ids.length ? Array.from(new Set(ids)) : null;
+    const fastTiers: Record<string, string> = {};
+    for (const m of visible) {
+      const slug = m?.slug || m?.id;
+      const tier = Array.isArray(m?.service_tiers) ? m.service_tiers.find((t: any) => t?.id === 'priority') : null;
+      if (typeof slug === 'string' && slug && tier) fastTiers[slug] = String(tier.description || tier.name || 'Fast');
+    }
+    return ids.length ? { ids: Array.from(new Set(ids)), fastTiers } : null;
   } catch {
     return null;
   }
@@ -232,10 +248,11 @@ export async function providerOAuthLogin(p: OAuthProvider): Promise<OAuthTokens>
     if (acct) creds.account_id = acct;
   }
   // 登录即问 /models 拿真实模型列表(失败则后续 load 时再懒补;再不行回退硬编提示)。
-  const models = await fetchProviderModels(p, creds.access_token, creds.account_id);
-  if (models) {
-    creds.modelIds = normalizeProviderModelIds(p.id, models);
+  const catalog = await fetchProviderCatalog(p, creds.access_token, creds.account_id);
+  if (catalog) {
+    creds.modelIds = normalizeProviderModelIds(p.id, catalog.ids);
     creds.modelIdsAt = Date.now();
+    creds.fastTiers = catalog.fastTiers;
     if (p.id === 'codex') creds.modelIdsClientVersion = CODEX_MODELS_CLIENT_VERSION;
   }
   saveProviderCred(p.id, creds);
@@ -339,11 +356,11 @@ export async function loadOAuthDirectProviders(): Promise<DirectProvider[]> {
     // 模型列表懒刷:缓存为空或超过 24h(provider 会上新模型,冻结的缓存=用户「看不到最新模型」)→
     // 拉一次回写;失败保留旧缓存下次再试。
     const stale = !tok.modelIds?.length || (tok.modelIdsAt ?? 0) < Date.now() - 24 * 3600_000
-      || (id === 'codex' && tok.modelIdsClientVersion !== CODEX_MODELS_CLIENT_VERSION);
+      || (id === 'codex' && (tok.modelIdsClientVersion !== CODEX_MODELS_CLIENT_VERSION || !tok.fastTiers)); // 老文件没有 fastTiers:补拉一次
     if (stale) {
-      const models = await fetchProviderModels(cfg, tok.access_token, tok.account_id);
-      if (models) {
-        tok = { ...tok, modelIds: normalizeProviderModelIds(id, models), modelIdsAt: Date.now() };
+      const catalog = await fetchProviderCatalog(cfg, tok.access_token, tok.account_id);
+      if (catalog) {
+        tok = { ...tok, modelIds: normalizeProviderModelIds(id, catalog.ids), modelIdsAt: Date.now(), fastTiers: catalog.fastTiers };
         if (id === 'codex') tok.modelIdsClientVersion = CODEX_MODELS_CLIENT_VERSION;
         changed = true;
       }
@@ -355,7 +372,7 @@ export async function loadOAuthDirectProviders(): Promise<DirectProvider[]> {
       //    —— 换号的话那是另一个账号的目录,补上去还会被当成 24 小时内的新鲜缓存;改用盘上那条来装载,下次启动再拉;
       //  - 期间登出了的不写回来,也不装载。
       const fetchedWith = tok.access_token;
-      const catalogue = Object.fromEntries(Object.entries({ modelIds: tok.modelIds, modelIdsAt: tok.modelIdsAt, modelIdsClientVersion: tok.modelIdsClientVersion }).filter(([, v]) => v !== undefined));
+      const catalogue = Object.fromEntries(Object.entries({ modelIds: tok.modelIds, modelIdsAt: tok.modelIdsAt, modelIdsClientVersion: tok.modelIdsClientVersion, fastTiers: tok.fastTiers }).filter(([, v]) => v !== undefined));
       let onDisk: OAuthTokens | undefined;
       updateProviderCred(id, (cur) => {
         if (!cur) return (onDisk = undefined);
@@ -375,6 +392,7 @@ export async function loadOAuthDirectProviders(): Promise<DirectProvider[]> {
       protocol: cfg.protocol,
       accountId: tok.account_id,
       modelIds: effectiveModelIds?.length ? effectiveModelIds : cfg.modelIds, // 实拉优先,回退提示
+      ...(tok.fastTiers ? { fastTiers: tok.fastTiers } : {}),
     });
   }
   return out;

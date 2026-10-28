@@ -60,7 +60,7 @@ async function main() {
     console.log(`  not settled — ${label}: ${JSON.stringify(seen)}`); return false
   }
   const toProjects = async () => { await win.locator('.ims-back').click(); await win.waitForSelector('.ims-launch') }
-  const newProject = async () => { await win.locator('.ims-launch').getByRole('button', { name: /^(新建项目|New project)$/ }).click(); await win.waitForSelector('.ims') }
+  const newProject = async () => { await win.locator('.ims-launch .csl-catalog-actions').getByRole('button', { name: /^(新建项目|New project)$/ }).click(); await win.waitForSelector('.ims') }
   const projectCard = id => win.locator(`.ims-launch-card[data-project-id="${id}"]`)
   const openProjectId = async id => { await toProjects(); await projectCard(id).click(); await win.waitForSelector('.ims') }
   const mode = async value => {
@@ -87,7 +87,7 @@ async function main() {
     await win.waitForSelector('.dv-groupview', { timeout: 45000 })
     await openStudio()
     await win.waitForSelector('.ims-launch')
-    check('The Space opens on the project list: navigation on the left, right side folded', await eventually('first open', async () => ({ nav: await sideOf('.ims-nav') === 'left', rightFolded: !await rightOpen(), empty: await win.locator('.ims-launch .csl-empty').isVisible() })))
+    check('The Space opens on the project list: navigation on the left, right side folded', await eventually('first open', async () => ({ nav: await sideOf('.ims-nav') === 'left', rightFolded: !await rightOpen(), empty: await win.locator('.ims-launch .empty-state').isVisible() })))
     await screenshot('launchpad-empty')
     await newProject()
     await win.waitForSelector('.ims-empty')
@@ -268,7 +268,7 @@ async function main() {
     await toProjects()
     check('The imported copy is a third project', await win.locator('.ims-launch-card').count() === 3)
     await win.locator('.ims-launch input[type="search"]').fill('zzz')
-    check('Searching the project list can come up empty', await win.locator('.ims-launch-card').count() === 0 && await win.locator('.ims-launch .csl-empty').isVisible())
+    check('Searching the project list can come up empty', await win.locator('.ims-launch-card').count() === 0 && await win.locator('.ims-launch .empty-state').isVisible())
     await win.locator('.ims-launch input[type="search"]').fill('')
     await mode('light'); await screenshot('launchpad-light'); await mode('dark'); await screenshot('launchpad-dark')
     await win.locator('.ims-launch-card').first().click(); await win.waitForSelector('.ims-image:nth-child(2)') // 最近改动的在最前 = 刚导入的那份

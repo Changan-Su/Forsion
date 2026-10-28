@@ -186,12 +186,12 @@ async function main() {
       await sp.waitForTimeout(400)
       if (await goTab(sp, ['开发者选项', 'Developer options'])) {
         const row = sp.locator('.settings-main .field').filter({ hasText: /前台窗口采样|Active window sampling/ }).first()
-        const box = row.locator('input[type="checkbox"]').first()
+        const box = row.locator('[role="switch"]').first()
         if (await box.count().catch(() => 0)) { await box.check().catch(() => {}); uiToggled = true }
         // 顺带拨开「活动日志实时视图命令」:它走的是另一条同步路(真源在 localStorage,靠渲染层通知主窗),
         // 而前台窗口采样那条走主进程 config:set 自推 —— 两条路都得有人盯。
         const logRow = sp.locator('.settings-main .field').filter({ hasText: /活动日志实时视图命令|Activity log live view command/ }).first()
-        const logBox = logRow.locator('input[type="checkbox"]').first()
+        const logBox = logRow.locator('[role="switch"]').first()
         if (await logBox.count().catch(() => 0)) { await logBox.check().catch(() => {}); logToggled = true }
       }
       await sp.waitForTimeout(600)

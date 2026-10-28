@@ -8,8 +8,9 @@ import type {
   BuildPayloadOpts,
   StreamOpts,
   StreamResult,
+  FimCompletionOpts,
 } from '../../seams/cloudBrain.js';
-import { imageMimeOf } from '../../seams/cloudBrain.js';
+import { imageMimeOf, fimUnsupportedError, FIM_UNSUPPORTED } from '../../seams/cloudBrain.js';
 import {
   AMADEUS_MAX_FILE_BYTES,
   AgentFileConflictError,
@@ -206,8 +207,35 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
     return await brainStream('/api/brain/llm/stream', { modelId, payload }, opts, false) as StreamResult;
   }
 
+  // ── FIM(行内补全):POST /api/brain/llm/fim-stream,帧与 /llm/stream 相同,读法复用 brainStream ──
+  // 老服务端没有这条路由(404)/ 模型不能补全(400 detail=fim_unsupported)→ 统一抛 fim_unsupported,调用方据此落回别的路。
+  async function fimCompletion(opts: FimCompletionOpts): Promise<StreamResult> {
+    const body = {
+      modelId: opts.modelId,
+      prefix: opts.prefix,
+      ...(opts.suffix ? { suffix: opts.suffix } : {}),
+      ...(opts.maxTokens != null ? { maxTokens: opts.maxTokens } : {}),
+      ...(opts.stop?.length ? { stop: opts.stop } : {}),
+      ...(opts.client ? { client: opts.client } : {}),
+      ...(opts.usageSource ? { projectSource: opts.usageSource } : {}),
+    };
+    const rejectAs = (status: number, detail: string): Error | null => {
+      if (status === 404) return fimUnsupportedError();
+      if (status === 400) {
+        let code = '';
+        try { code = String(JSON.parse(detail)?.detail ?? ''); } catch { /* 非 JSON */ }
+        if (code === FIM_UNSUPPORTED) return fimUnsupportedError();
+      }
+      return null;
+    };
+    return await brainStream('/api/brain/llm/fim-stream', body,
+      { apiKey: '', baseUrl: base, payload: null, onToken: opts.onToken, signal: opts.signal }, false, rejectAs) as StreamResult;
+  }
+
   async function brainStream(
     path: string, body: unknown, opts: StreamOpts, detect: boolean,
+    /** 非 2xx 时先问一句:返回 Error = 照它抛(FIM 用来认 404 / fim_unsupported);null = 走通用的 LlmError。 */
+    rejectAs?: (status: number, detail: string) => Error | null,
   ): Promise<StreamResult | typeof UNSUPPORTED> {
     // 传输与语义各自计时:server 的 : ping / alive 只续传输;有效正文、思考或工具增量才续语义。
     // 这样持续心跳仍无法掩盖上游无进展,同时保留托管流原有 300s 预算。
@@ -236,6 +264,8 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
       opts.onResponseStart?.(); // 服务端设完 SSE 头即 flush:头到达 = 整份上下文已送达服务端
       if (!r.ok || !r.body) {
         const detail = await r.text().catch(() => '');
+        const special = rejectAs?.(r.status, detail);
+        if (special) throw special;
         throw new LlmError(r.status || 502, friendlyUpstreamError(r.status, detail));
       }
 
@@ -326,6 +356,7 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
         return { [LAZY_MARK]: true, modelId: String((opts.model as any)?.id ?? ''), ...rest };
       },
       streamProviderCompletion,
+      fimCompletion,
     },
     users: {
       getUserById: async (_id: string) => getJson<any>('/api/brain/users/me'),
@@ -416,6 +447,8 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
               .map((m: any) => ({ id: String(m.id), name: String(m.name || m.id), provider: String(m.provider || 'forsion'), apiModelId: m.apiModelId ?? null })),
             ttsModels: (Array.isArray(r?.ttsModels) ? r.ttsModels : []).filter((m: any) => m?.id)
               .map((m: any) => ({ id: String(m.id), name: String(m.name || m.id), apiModelId: m.apiModelId ?? null })),
+            fimModels: (Array.isArray(r?.fimModels) ? r.fimModels : []).filter((m: any) => m?.id)
+              .map((m: any) => ({ id: String(m.id), name: String(m.name || m.id), provider: String(m.provider || 'forsion'), apiModelId: m.apiModelId ?? null })),
             reachable: true,
           };
         } catch {

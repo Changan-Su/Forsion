@@ -7,15 +7,17 @@
  *
  * 「Forsion 只是其中一个 provider」即在此体现:Forsion 是兜底的托管面,直连 provider 与其平级。
  */
-import { imageMimeOf, type CloudBrainServices, type BuildPayloadOpts, type StreamOpts, type ImageGenRequest, type ImageEditRequest, type ImageGenResult, type SpeechRequest, type SpeechResult } from '../../seams/cloudBrain.js';
+import { imageMimeOf, fimUnsupportedError, type FimCompletionOpts, type CloudBrainServices, type BuildPayloadOpts, type StreamOpts, type ImageGenRequest, type ImageEditRequest, type ImageGenResult, type SpeechRequest, type SpeechResult } from '../../seams/cloudBrain.js';
 import type { ProviderRegistry } from '../../llm/providerRegistry.js';
 import { freshOAuthCred } from '../../llm/providerOAuth.js';
 import { isAuthExpiredLlmError } from '../../llm/retry.js';
 import { LlmError } from '../../core/types.js';
 import { loadLocalWebSearchConfig, hasLocalSearchProvider, runLocalSearch } from './localSearch.js';
-import { buildOpenAiCompatPayload, tuneOpenAiDirectPayload, streamOpenAiCompat, DIRECT_MARK, PROTOCOL_MARK } from '../../llm/openaiCompat.js';
+import { buildOpenAiCompatPayload, tuneOpenAiDirectPayload, streamOpenAiCompat, DIRECT_MARK, PROTOCOL_MARK, ACCOUNT_MARK } from '../../llm/openaiCompat.js';
 import { streamAnthropicMessages } from '../../llm/anthropicMessages.js';
 import { streamOpenAiResponses } from '../../llm/openaiResponses.js';
+import { fetchProviderQuota } from '../../llm/providerQuota.js';
+import { MASKED_FROM } from '../../llm/outboundMask.js';
 import WebSocket from 'ws';
 import { randomUUID } from 'node:crypto';
 
@@ -203,7 +205,7 @@ export function createMultiBrain(httpBrain: CloudBrainServices, registry: Provid
     const p = registry.list().find((x) => x.providerId === providerId);
     if (!p?.oauth) return undefined;
     const cred = await freshOAuthCred(providerId, force).catch(() => undefined);
-    if (cred && (cred.access_token !== p.apiKey || cred.account_id !== p.accountId)) registry.setCreds(providerId, cred.access_token, cred.account_id);
+    if (cred && (cred.access_token !== p.apiKey || cred.account_id !== p.accountId)) registry.setCreds(providerId, cred.access_token, cred.account_id, cred.fastTiers);
     return cred?.access_token;
   };
   /** 图像 / 语音:直接拿 provider 的 key 发请求,不经 resolveModelAndKey。订阅登录的 provider 在这里补上对话那条路的同一套续期 ——
@@ -241,8 +243,17 @@ export function createMultiBrain(httpBrain: CloudBrainServices, registry: Provid
       ...httpBrain.models,
       // 直连 provider 目录(模型选择器/Providers 页用;剥掉 apiKey,baseUrl 仅供 UI 展示)。
       listDirectProviders: () =>
-        registry.list().map((p) => ({ providerId: p.providerId, baseUrl: p.baseUrl, modelIds: p.modelIds, imageModelIds: p.imageModelIds, ttsModelIds: p.ttsModelIds, noVisionModelIds: p.noVisionModelIds })),
+        registry.list().map((p) => ({ providerId: p.providerId, baseUrl: p.baseUrl, modelIds: p.modelIds, imageModelIds: p.imageModelIds, ttsModelIds: p.ttsModelIds, noVisionModelIds: p.noVisionModelIds, ...(p.fastTiers ? { fastTiers: p.fastTiers } : {}) })),
       hasDirectModel: (modelId: string) => registry.has(modelId),
+      providerQuota: async (modelId: string) => {
+        const pid = registry.resolve(modelId)?.model.provider;
+        if (!pid) return null;
+        // 订阅登录的 token 照对话那条路续期;account id 要和续完的 token 成对,所以回调里再读一次注册表
+        return withFreshKey(pid, async () => {
+          const p = registry.list().find((x) => x.providerId === pid);
+          return p ? fetchProviderQuota(p) : null;
+        });
+      },
     },
     images: {
       edit: async (req: ImageEditRequest) => {
@@ -325,11 +336,17 @@ export function createMultiBrain(httpBrain: CloudBrainServices, registry: Provid
             provider: (opts.model as any).provider,
             apiModelId: resolved?.apiModelId,
           });
+          // Fast 档:只在 Codex 订阅(带 account 标记、走 Responses)且目录给这个模型列了 Fast 时发 —— 与 Codex CLI /fast 同一个 wire
+          // (顶层 service_tier:"priority")。BYOK 官方 API / 别的网关不发:没核实过它们认哪个值,未知端点不发未知字段。
+          if (opts.fast && payload[ACCOUNT_MARK] && payload[PROTOCOL_MARK] === 'openai-responses') {
+            const provider = registry.list().find((p) => p.providerId === (opts.model as any).provider);
+            if (resolved?.apiModelId && provider?.fastTiers?.[resolved.apiModelId]) payload.service_tier = 'priority';
+          }
           // 仪器:TANGU_LLM_DEBUG=1 时记下这次调用要的档位、夹紧后的档位和实际写进请求的思考字段(发出后再补用量与耗时)。
           // 不传 thinkingLevel = 关思考且不报错,后台调用质量差时先看这一行(docs/direct-model-calls.md)。
           if (process.env.TANGU_LLM_DEBUG === '1') {
             const sys = (opts.messages as any[]).find((m) => m?.role === 'system')?.content;
-            llmDebug.set(payload, `model=${resolved?.apiModelId || payload.model} tools=${opts.tools?.length || 0} asked=${opts.thinkingLevel ?? '(unset)'} effective=${effective} wire=${JSON.stringify({ reasoning_effort: payload.reasoning_effort, thinking: payload.thinking, reasoning: payload.reasoning, enable_thinking: payload.enable_thinking })} maxTokens=${opts.maxTokens ?? '(unset)'} system=${JSON.stringify(String(typeof sys === 'string' ? sys : '').slice(0, 48))}`);
+            llmDebug.set(payload, `model=${resolved?.apiModelId || payload.model} tools=${opts.tools?.length || 0} asked=${opts.thinkingLevel ?? '(unset)'} effective=${effective} wire=${JSON.stringify({ reasoning_effort: payload.reasoning_effort, thinking: payload.thinking, reasoning: payload.reasoning, enable_thinking: payload.enable_thinking, service_tier: payload.service_tier })} maxTokens=${opts.maxTokens ?? '(unset)'} system=${JSON.stringify(String(typeof sys === 'string' ? sys : '').slice(0, 48))}`);
           }
           return payload;
         }
@@ -342,7 +359,7 @@ export function createMultiBrain(httpBrain: CloudBrainServices, registry: Provid
           const send = () => p[PROTOCOL_MARK] === 'anthropic-messages' ? streamAnthropicMessages(opts)
             : p[PROTOCOL_MARK] === 'openai-responses' ? streamOpenAiResponses(opts)
             : streamOpenAiCompat(opts);
-          const tag = llmDebug.get(p);
+          const tag = llmDebug.get(p[MASKED_FROM] ?? p);
           if (!tag) return send();
           const t0 = Date.now();
           const res = await send();
@@ -350,6 +367,11 @@ export function createMultiBrain(httpBrain: CloudBrainServices, registry: Provid
           return res;
         }
         return httpBrain.llm.streamProviderCompletion(opts);
+      },
+      // FIM 只有 Forsion 云端能做(按模型的 fimProtocol 走 completions / Codestral);直连 / 订阅模型没有这条路 → 不支持。
+      fimCompletion: async (opts: FimCompletionOpts) => {
+        if (registry.resolve(opts.modelId) || !httpBrain.llm.fimCompletion) throw fimUnsupportedError();
+        return httpBrain.llm.fimCompletion(opts);
       },
     },
   };

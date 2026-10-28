@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { fetchProviderModels, loadOAuthDirectProviders, freshOAuthCred, OAUTH_PROVIDERS, CODEX_MODELS_CLIENT_VERSION } from './providerOAuth.js';
+import { fetchProviderModels, fetchProviderCatalog, loadOAuthDirectProviders, freshOAuthCred, OAUTH_PROVIDERS, CODEX_MODELS_CLIENT_VERSION } from './providerOAuth.js';
 import { GROK_BUILD_CLIENT_IDENTIFIER, GROK_BUILD_CLIENT_MODE, GROK_BUILD_CLIENT_VERSION } from './grokBuildCompat.js';
 import { loadProviderCreds, saveProviderCred, type OAuthTokens } from '../standalone/providerCreds.js';
 
@@ -42,6 +42,20 @@ describe('fetchProviderModels', () => {
     expect(r).toEqual(['gpt-6.1-sol', 'gpt-6-astra', 'gpt-5.6-sol']);
     // 回归:Codex 后端缺 client_version query 直接 400 → 实拉永远失败,用户被冻结在硬编快照上看不到新模型。
     expect(new URL(calledUrl).searchParams.get('client_version')).toBe('0.159.2'); // 0.155.1 的目录里没有 gpt-6.1-sol
+  });
+
+  it('Codex 目录:各模型的 Fast 档(service_tiers 里 id=priority)连说明原文一起收,隐藏的模型不收', async () => {
+    vi.stubGlobal('fetch', () => Promise.resolve({
+      ok: true,
+      json: () => Promise.resolve({ models: [
+        { slug: 'gpt-6-luna', visibility: 'list', service_tiers: [{ id: 'priority', name: 'Fast', description: '1.5x speed' }] },
+        { slug: 'gpt-6-astra', visibility: 'list', service_tiers: [{ id: 'priority', name: 'Fast', description: '2x speed, increased usage' }] },
+        { slug: 'gpt-5.5', visibility: 'list', service_tiers: [] },
+        { slug: 'codex-auto-review', visibility: 'hide', service_tiers: [{ id: 'priority', name: 'Fast', description: '1.5x speed' }] },
+      ] }),
+    }));
+    const r = await fetchProviderCatalog({ protocol: 'openai-responses', baseUrl: 'https://chatgpt.com/backend-api/codex' } as any, 'tok', 'acct');
+    expect(r).toEqual({ ids: ['gpt-6-luna', 'gpt-6-astra', 'gpt-5.5'], fastTiers: { 'gpt-6-luna': '1.5x speed', 'gpt-6-astra': '2x speed, increased usage' } });
   });
 
   it('returns null on http error (→ caller falls back to curated hints)', async () => {
@@ -94,12 +108,21 @@ describe('Codex 模型目录缓存升级', () => {
   });
 
   it('当前版本的有效缓存不重复拉取,也不把兜底模型强塞进账号目录', async () => {
-    vi.mocked(loadProviderCreds).mockReturnValue({ codex: credential({ modelIdsClientVersion: CODEX_MODELS_CLIENT_VERSION }) });
+    vi.mocked(loadProviderCreds).mockReturnValue({ codex: credential({ modelIdsClientVersion: CODEX_MODELS_CLIENT_VERSION, fastTiers: {} }) });
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
     expect((await loadOAuthDirectProviders())[0].modelIds).toEqual(['gpt-5.6-sol']);
     expect(fetchMock).not.toHaveBeenCalled();
     expect(saveProviderCred).not.toHaveBeenCalled();
+  });
+
+  it('当前版本的新缓存但没有 fastTiers(老文件)→ 补拉一次,把 Fast 档带进 provider', async () => {
+    vi.mocked(loadProviderCreds).mockReturnValue({ codex: credential({ modelIdsClientVersion: CODEX_MODELS_CLIENT_VERSION }) });
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ models: [{ slug: 'gpt-6-luna', visibility: 'list', service_tiers: [{ id: 'priority', description: '1.5x speed' }] }] }) });
+    vi.stubGlobal('fetch', fetchMock);
+    const providers = await loadOAuthDirectProviders();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(providers[0]).toMatchObject({ modelIds: ['gpt-6-luna'], fastTiers: { 'gpt-6-luna': '1.5x speed' } });
   });
 
   it('当前版本缓存超过 24h 仍刷新', async () => {

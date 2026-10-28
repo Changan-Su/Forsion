@@ -120,7 +120,7 @@ async function main() {
     const page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 520, height: 420 } })
     await page.goto(`${BASE}?listsrc&controls`, { waitUntil: 'load' })
     await page.locator('.t2sw-plug-list .t2s-srow').first().waitFor()
-    check('旧插件未声明 primary 也保留首个动作，其余操作收纳', await page.locator('.t2sw-plug-btn').innerText() === '新建条目' && await page.getByRole('button', { name: '导出列表', exact: true }).count() === 0)
+    check('旧插件未声明 primary 也保留首个动作，其余操作收纳', await page.locator('.t2sw-plug-btn').getAttribute('aria-label') === '新建条目' && await page.getByRole('button', { name: '导出列表', exact: true }).count() === 0)
     check('工具区收纳到两行，列表直接可见', await page.locator('.t2sw-plug-list').evaluate((el) => el.getBoundingClientRect().top - el.closest('.t2sw-plug').getBoundingClientRect().top < 90))
     await page.getByRole('button', { name: '台架列表源操作', exact: true }).click()
     await page.getByRole('menuitem', { name: '新建分类', exact: true }).click()

@@ -112,3 +112,18 @@ it('⑤ 卡片堆挪位置(画布模式切换 = 重挂)后,已送出的那项照
   await act(async () => { optionBtn('yes').click() })
   expect(onAnswer).toHaveBeenCalledTimes(1)
 })
+
+it('⑥ 入场只给刚换上来的那张:托盘出现时卡体不单独入场,答的那一下也不重放;答完离开、下一张顶上来才入场', async () => {
+  const onAnswer = vi.fn(() => Promise.resolve(true))
+  vi.useFakeTimers()
+  const q1 = ask('q1', 'm1', 'First'); const q2 = ask('q2', 'm2', 'Second')
+  await render([q1, q2], onAnswer)
+  expect(body().dataset.motion).toBeUndefined()
+  await act(async () => { vi.advanceTimersByTime(400) })
+  await act(async () => { optionBtn('yes').click() })
+  expect(onAnswer).toHaveBeenCalledTimes(1)
+  expect(body().dataset.motion).toBeUndefined() // 正在答的那张还在,不许重放
+  await render([q2], onAnswer) // 引擎收下,它离开
+  expect(body().dataset.trayMsg).toBe('m2')
+  expect(body().dataset.motion).toBe('enter')
+})

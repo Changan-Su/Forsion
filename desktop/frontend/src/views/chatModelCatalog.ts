@@ -1,4 +1,4 @@
-import type { ModelInfo } from '../../../../tangu-agent/src/contracts/clientTypes'
+import type { ModelInfo, ModelsResponse } from '../../../../tangu-agent/src/contracts/clientTypes'
 
 /**
  * 主对话可选模型以当前后端返回的目录为能力真源。
@@ -9,4 +9,12 @@ import type { ModelInfo } from '../../../../tangu-agent/src/contracts/clientType
  */
 export function selectableChatModels(models: ModelInfo[]): ModelInfo[] {
   return models.filter((m) => (m.modelType || 'llm') === 'llm')
+}
+
+/** 当前模型是不是直连模型(订阅 / 自带 key)。目录里有就看它的 source;目录外的(手填 `<provider>/<模型>`、旧会话存的裸 ID)
+ *  照引擎注册表的规则认:前缀是某个直连 provider,或在它的 modelIds 里。 */
+export function isDirectModelId(id: string, models: ModelInfo[] | null | undefined, r: ModelsResponse | null | undefined): boolean {
+  const m = models?.find((x) => x.id === id)
+  if (m) return m.source === 'direct'
+  return !!r?.directProviders?.some((p) => id.startsWith(`${p.providerId}/`) || p.modelIds?.includes(id))
 }
