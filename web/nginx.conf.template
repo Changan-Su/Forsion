@@ -61,6 +61,15 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
+    # Intelligent UI 卡的随包库(desktop/build/copy-iui-libs.cjs)。卡片是无源沙箱 iframe,module 脚本按 CORS 取 → 必须带 ACAO;
+    # 目录只带大版本、小版本原地替换,所以只缓存一天、不写 immutable。这里出现了 add_header,父级那两条不再继承 → nosniff 补回来。
+    location /iui-lib/ {
+        try_files $uri =404;
+        expires 1d;
+        add_header Access-Control-Allow-Origin "*" always;
+        add_header X-Content-Type-Options "nosniff" always;
+    }
+
     # SPA fallback —— 其余路由交给 Tangu Web 自己。
     # ⚠️ 入口页必须每次回源校验。它引的是**内容哈希**文件名,所以它自己一旦被缓存住,
     #    整个应用就永远停在旧版本 —— 用户不 Cmd+Shift+R 就再也看不到新版(2026-08-04 实翻:

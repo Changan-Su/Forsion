@@ -135,7 +135,11 @@ const MAX_CLIENT_CAPS = 16;
 export function normalizeClientCapabilities(v: unknown): string[] | undefined {
   if (!Array.isArray(v)) return undefined;
   const out = new Set<string>();
-  for (const x of v.slice(0, MAX_CLIENT_CAPS)) if (typeof x === 'string' && CLIENT_CAP_RE.test(x)) out.add(x);
+  const dropped: unknown[] = [];
+  for (const x of v.slice(0, MAX_CLIENT_CAPS)) if (typeof x === 'string' && CLIENT_CAP_RE.test(x)) out.add(x); else dropped.push(x);
+  // 丢弃仍然静默(不起不了 run),但留一行日志:10-27 原型把能力名写成两个点,被丢了也没人知道,两条腿拿到同一份说明
+  // 值来自客户端:只记有界摘要,不递归序列化(深层嵌套数组会让 JSON.stringify 抛 RangeError → run 起不来)
+  if (dropped.length || v.length > MAX_CLIENT_CAPS) console.warn('[agent-core] client_capabilities dropped:', dropped.slice(0, 8).map((x) => typeof x === 'string' ? JSON.stringify(x.slice(0, 40)) : typeof x).join(', '), v.length > MAX_CLIENT_CAPS ? `(+${v.length - MAX_CLIENT_CAPS} over the cap)` : '');
   return out.size ? [...out].sort() : undefined;
 }
 

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { computedUiEnabledFor, intelligentUiEnabledFor, intelligentUiProvider, looksLikeLeakedUiDocument } from './builtin/intelligentUi.js'
-import { sketchProvider, sketchTurnSignalFor } from './builtin/sketch.js'
+import { IUI_LIBS_CAP, sketchProvider, sketchTurnSignalFor } from './builtin/sketch.js'
 describe('native renderer handshake', () => {
   const context = { client: 'desktop/2.13.1', clientCapabilities: ['intelligent-ui.v1'] }
   it('is absent on old clients and nonvisual runs', () => {
@@ -87,6 +87,14 @@ describe('computed documents (intelligent-ui.v2)', () => {
     expect(describe(sketch, v2)).toContain('calculators, step guides and other cards that only compute from inputs are intelligent_ui documents')
     expect(describe(sketch, v2)).not.toContain('small interactive widgets')
     expect(sketchTurnSignalFor('做一个房贷计算器，可以调利率', 'auto', true, true)?.section).toContain('computed `intelligent_ui` document')
+    // 随包库:只有报了能力的客户端才把「不许用库」那句换掉;两种 v1 / v2 说明各自换,其余逐字不动
+    for (const ctx of [v1, v2]) {
+      const plain = describe(sketch, ctx), libs = describe(sketch, { ...ctx, clientCapabilities: [...ctx.clientCapabilities, IUI_LIBS_CAP] })
+      expect(plain).toContain('no external scripts/styles/fonts or charting libraries')
+      expect(libs).toContain('may import three')
+      expect(libs).not.toContain('charting libraries')
+      expect(libs.replace(/no external scripts\/styles\/fonts[^\n]*?getPropertyValue\('--fs-…'\)/, '')).toBe(plain.replace(/no external scripts\/styles\/fonts or charting libraries \(draw with inline SVG or divs\)/, ''))
+    }
     expect(sketchTurnSignalFor('做一个房贷计算器，可以调利率', 'auto', true, false)?.section).not.toContain('computed')
   })
 })

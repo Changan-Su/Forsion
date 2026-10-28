@@ -492,6 +492,8 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
       // assets/* 带内容 hash,放心长缓存。
       if (norm === 'index.html') h['Cache-Control'] = 'no-cache'
       else if (/^assets[\\/]/.test(norm)) h['Cache-Control'] = 'public, max-age=31536000, immutable'
+      // Intelligent UI 卡的随包库(build/copy-iui-libs.cjs):卡是无源沙箱 iframe,里面的 module 脚本按 CORS 取
+      else if (/^iui-lib[\\/]/.test(norm)) { h['Access-Control-Allow-Origin'] = '*'; h['Cache-Control'] = 'public, max-age=86400' }
       res.writeHead(200, h)
       res.end(buf)
     } catch {

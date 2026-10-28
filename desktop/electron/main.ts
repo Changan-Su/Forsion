@@ -115,6 +115,7 @@ import { effectivePluginId } from '../shared/products'
 import { BROWSER_PARTITION, GUEST_ALLOWED_PERMISSIONS } from '../shared/browser'
 import { registerPtyIpc } from './pty'
 import { registerAssetSchemes as registerAmadeusAssetSchemes, registerAssetProtocol as registerAmadeusAssetProtocol } from './amadeus/assetProtocol'
+import { registerIuiLibProtocol } from './iuiLibProtocol'
 import { nearestEdge, collapsedBounds, expandedBounds, visibleRect, pointInRect, growRect, resizeFromEdge, type Rect, type Edge } from './windowGeometry'
 import { applyWindowMaterial, parseWindowMaterialRequest } from './windowMaterial'
 import { tabTitleBarOptions, parseTabTitleBar, watchTabTitleBar } from './tabTitleBar'
@@ -4458,6 +4459,7 @@ app.whenReady().then(async () => {
   restartAmadeusSync = restartSync
   stopAmadeusSync = stopSync
   registerAmadeusAssetProtocol(getVaultRoot)
+  registerIuiLibProtocol()
   registerRemoteSync() // 本地库远程同步(remotely-save 式;隔离层见 electron/remotesync/)
   app.on('activate', () => showMainWindow()) // dock/tray 唤起:隐藏则显示,销毁则重建
   // GPU 进程崩溃(Windows 驱动 TDR / 睡眠恢复常见)会级联拖垮渲染器 → 白屏。监听并自愈。

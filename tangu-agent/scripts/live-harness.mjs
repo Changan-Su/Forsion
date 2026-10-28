@@ -299,6 +299,7 @@ OPT_IN.add('visualask'); // --only visualask:卡内按钮回头改答案(forsion
 OPT_IN.add('visualsdial'); // --only visualsdial:可视化档位 less / off(ui_settings 快照):off 工具与段都不在、less 隐式信号不触发;两个 run
 OPT_IN.add('visualplan'); // --only visualplan:统一部件拼一张「可用的工具卡」(滑块 + fs-checklist + copy);改 sketch.ts 的部件表 / SKILL 后跑
 KEYS.push('visualask', 'visualsdial', 'visualplan');
+OPT_IN.add('iuilibs'); KEYS.push('iuilibs'); // --only iuilibs:HTML 卡的随包库(intelligent-ui-libs.v1)同一问 × 不报能力 / 报能力;改 sketch.ts 的库说明 / visualize 技能后跑
 OPT_IN.add('emoji'); // Three real-model rounds; run explicitly when session icons change.
 OPT_IN.add('plugin'); // 隔离 home 里放夹具插件 —— 只在显式跑它时放,别让多出来的工具改了别的场景的工具表。
 OPT_IN.add('dispatch');
@@ -2661,6 +2662,33 @@ try {
     const checklist = /<fs-checklist\b/.test(html);
     const copy = /forsion(?:IntelligentUi|Sketch)\.copy\(/.test(html); // 10-20 改名:新名 forsionIntelligentUi,旧名照样能用
     return { ok: !ev.error && ev.done && success && scale && checklist && copy, detail: ev.error || `cards=${cards.length};scale=${scale};fs-checklist=${checklist};copy=${copy}`, output: ev.content, toolCalls: ev.toolCalls, ttftMs: ttft(ev), tokens: tokensOf(ev) };
+  });
+
+  // iuilibs(10-28,方案页 docs/ToBeImproved/IntelligentUI卡内库方案_2026-10-27):HTML 卡能不能用随包的 three / d3 / chart.js / gsap。
+  // 同一句提问跑两条腿 —— plain = 今天的客户端能力(说明里写着不许用库),libs = 多报 intelligent-ui-libs.v1(说明换成「可 import 这几个」)。
+  // 判据只看成品 html:两条腿都出卡;libs 腿真的 import 了 three;plain 腿没有 import 任何库(没报能力就别指望客户端有库)。
+  // 负对照 = 引擎不认这个能力的旧代码:两条腿拿到同一份「不许用库」的说明,libs 腿不 import → 须红。
+  // fsColors 只记不判:说明要求 WebGL / canvas 颜色取 --fs-*,模型照不照做看报告。
+  await scenario('iuilibs', 'iuilibs 卡内随包库:同一问 × 不报能力 / 报能力', async () => {
+    const Q = '用 3D 给我演示飞机的俯仰、横滚和偏航：每个轴一个滑杆和一个「演示」按钮，能拖动转视角，再给一个复位按钮。';
+    const base = ['marketplace-cards.v1', 'intelligent-ui.v1', 'intelligent-ui.v2'];
+    const rows = [];
+    for (const [leg, caps] of [['plain', base], ['libs', [...base, 'intelligent-ui-libs.v1']]]) {
+      const ev = await run(`live-iuilibs-${leg}-${Date.now()}`, Q, 480_000, {}, 'desktop/2.13.8', undefined, undefined, undefined, { clientCapabilities: caps });
+      const calls = ev.toolArgs.filter((c) => c.name === 'sketch' || c.name === 'intelligent_ui_html');
+      const htmls = calls.map((c) => { try { return JSON.parse(c.arguments || '{}').html || ''; } catch { return ''; } });
+      htmls.forEach((h, i) => writeFileSync(join(OUT, `iuilibs-${leg}-${i}.html`), h));
+      const html = htmls.join('\n');
+      rows.push({ id: leg, q: Q, content: ev.content, done: ev.done, error: ev.error, toolCalls: ev.toolCalls, tokens: tokensOf(ev), wallMs: ev.wallMs, htmlChars: html.length,
+        imports: [...new Set([...html.matchAll(/(?:from\s*|import\(\s*|import\s+)['"]([^'"]+)['"]/g)].map((m) => m[1]))],
+        fsColors: /getComputedStyle[\s\S]{0,400}--fs-|--fs-[\s\S]{0,400}getComputedStyle/.test(html),
+        views: calls.map((c) => ({ id: c.id, name: c.name, offset: Number((ev.toolOffsets || []).find((o) => o.id === c.id)?.offset) || 0, arguments: c.arguments })) });
+    }
+    writeFileSync(join(OUT, 'iuilibs-evidence.json'), JSON.stringify(rows, null, 2));
+    const [plain, libs] = rows;
+    const ok = rows.every((r) => !r.error && r.done && r.views.length) && libs.imports.some((m) => m === 'three' || m.startsWith('three/')) && !plain.imports.some((m) => /^(three|d3|chart\.js|gsap)\b/.test(m));
+    return { ok, detail: rows.map((r) => `${r.id}: 卡 ${r.views.length} 张, html ${r.htmlChars} 字, import [${r.imports.join(', ') || '无'}], 颜色取 --fs-* ${r.fsColors ? '是' : '否'}${r.error ? `, 错误 ${r.error}` : ''}`).join(' | '),
+      output: rows.map((r) => `【${r.id}】工具:${r.toolCalls.join(',') || '无'}\n${r.content}`).join('\n\n'), toolCalls: rows.flatMap((r) => r.toolCalls), tokens: rows.reduce((n, r) => n + (r.tokens || 0), 0) };
   });
 
   // visualsdial(10-09):用户把可视化调到 less / off(渲染端 ui_settings 快照,键 visuals)。off → 工具与段都不在(系统提示里没有
