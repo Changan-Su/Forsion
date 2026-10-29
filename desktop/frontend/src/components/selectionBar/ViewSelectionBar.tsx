@@ -11,7 +11,7 @@
 import { useEffect, useRef, useState, type ReactElement, type ReactNode, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
 import { Languages, MessageSquareQuote } from 'lucide-react'
-import { OverlayAt } from '@lcl/engine'
+import { OverlayAt, mountLineSelection } from '@lcl/engine'
 import { SelectionBar, type SelectionBarAction, type SelectionBarTool } from '@lcl/components'
 import { registerMessages, translate, useI18n } from '../../i18n'
 import { useApp } from '../../stores/appStore'
@@ -100,6 +100,7 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
   useEffect(() => {
     const el = watch?.current
     if (!el) return
+    const paint = mountLineSelection(el)
     // 按在条上的那一下(按钮按下即执行,条随即收起):它的松手可能落回这个元素,那不是一次新的选择,不能把条再弹出来。
     let fromBar = false
     const read = (e: MouseEvent): void => {
@@ -142,6 +143,7 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
     el.addEventListener('scroll', clear, { passive: true, capture: true })
     el.addEventListener(SELBAR_VIEWPORT_MOVED, clear, true)
     return () => {
+      paint.dispose()
       ro.disconnect()
       el.removeEventListener('mouseup', read)
       document.removeEventListener('mouseup', onUp)

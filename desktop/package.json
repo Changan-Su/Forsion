@@ -117,6 +117,7 @@
     "check:childpill": "node scripts/child-pill.check.cjs",
     "check:commapolish": "node scripts/chat-comma-polish.check.cjs",
     "check:selectionbar": "node scripts/selection-bar.check.cjs",
+    "check:selectionlines": "node scripts/selection-lines.check.cjs",
     "check:chatfeel": "node scripts/chat-feel.check.cjs",
     "check:promptsuggest": "node scripts/prompt-suggest.check.cjs",
     "check:chatlayout": "node scripts/chat-layout.check.cjs",

@@ -30,9 +30,9 @@ ctx.registerSelectionAction({id:'translate-rich',title:'Translate via plugin API
 const sse = (text) => ({ __buffer: Buffer.from([...text.matchAll(/[\s\S]{1,3}/g)].map(([text]) => `data: ${JSON.stringify({type:'delta',text})}\n\n`).join('') + `data: ${JSON.stringify({type:'done',content:text})}\n\n`), contentType:'text/event-stream' })
 const results = []
 function check(name, ok, detail = '') { results.push(!!ok); console.log(`${ok ? 'PASS' : 'FAIL'} ${name}${detail ? ' | ' + detail : ''}`) }
-async function dragParagraph(win, root) {
-  const coords = async () => win.evaluate((selector) => {
-    const p = Array.from(document.querySelectorAll(selector + ' p')).find(el => el.textContent.includes('Spin'))
+async function dragParagraph(win, root, needle='Spin') {
+  const coords = async () => win.evaluate(({selector,needle}) => {
+    const p = Array.from(document.querySelectorAll(selector + ' p')).find(el => el.textContent.includes(needle))
     if (!p) throw new Error('Physics paragraph not found: ' + selector)
     p.scrollIntoView({block:'center'})
     const first = p.firstChild; const last = p.lastChild
@@ -41,7 +41,7 @@ async function dragParagraph(win, root) {
     const ar=a.getBoundingClientRect(), br=b.getBoundingClientRect()
     window.getSelection().removeAllRanges()
     return {x0:ar.left+1,y0:ar.top+ar.height/2,x1:br.right-1,y1:br.top+br.height/2}
-  }, root)
+  }, {selector:root,needle})
   await coords(); await win.waitForTimeout(200); const r=await coords()
   await win.mouse.move(r.x0,r.y0); await win.mouse.down(); await win.mouse.move(r.x1,r.y1,{steps:24}); await win.mouse.up()
 }
@@ -88,6 +88,7 @@ async function main() {
     check('chat: exactly three intact source formulas, no duplicated layout',JSON.stringify(chat.tex)===JSON.stringify(INLINE_TEX),JSON.stringify(chat.tex))
     check('chat: request protects source before reaching MT',!requests.at(-1).selection.includes('frac')&&(requests.at(-1).selection.match(/ZXQ\w+?QXZ/g)||[]).length===3)
     await win.locator('[data-testid="inline-ai-panel"] [data-act="copy"]').click()
+    await win.locator('[data-testid="inline-ai-panel"] [data-act="copy"]').filter({hasText:'已复制'}).waitFor()
     const copied=await app.evaluate(({clipboard})=>clipboard.readText())
     check('native clipboard keeps original LaTeX and translated prose',INLINE_TEX.every(tex=>copied.includes('$'+tex+'$'))&&copied.includes('自旋')&&!copied.includes('ZXQ'),copied)
     await shot(win,path.join(shots,'chat-light.png')); await close(win)
@@ -149,4 +150,5 @@ async function main() {
   } catch(e) {if(win)await win.screenshot({path:path.join(home,'rich-failure.png')}).catch(()=>{});throw e}
   finally {if(app)await app.close().catch(()=>{});await stub.close()}
 }
-main().catch(e=>{console.error(e);process.exitCode=1})
+module.exports={SOURCE,PLUGIN,INLINE_TEX,dragParagraph,preview}
+if(require.main===module)main().catch(e=>{console.error(e);process.exitCode=1})
