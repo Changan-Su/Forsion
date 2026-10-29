@@ -72,12 +72,14 @@ export function looksLikeCorrection(text: string): boolean {
 // 「这句是不是在纠正上一条回复」改问云端的决策模型(System One noul 题,一次前向,几百毫秒),把上面的词面启发式降成兜底:
 // 词面会漏(「我这边一直是 pnpm 的」)也会误报(「不对称加密是什么」)。P ≥ HI 算纠正、≤ LO 算不是 —— 这两头压过词面;
 // 中间那段(模型自己也拿不准)、超时、没登录、上游报错一律退回词面判定:闸坏了 = 回到原来的行为,不会悄悄不评。
-// 阈值按百炼 decision-model-preview 标定(仪器 scripts/decision-gate-calibrate.mjs);换了模型要重标。
-export const DECISION_HI = 0.7;
-export const DECISION_LO = 0.3;
+// 阈值按百炼 decision-model-preview 标定(10-29,仪器 scripts/decision-gate-calibrate.mjs,44 条,同一条两次问分毫不差);换了模型 / 问法要重标。
+// 两个阈值各管一边:HI 只改判词面说「不是」的(词面漏的纠正 vs 普通追问,后者最高 0.47),LO 只改判词面说「纠正」的(带关键词的真纠正最低 0.57 vs 误报 ≤0.40)。
+// 各留 0.13 / 0.17 的余量,宁可少改判也不改错:44 条里词面对 19 条、加闸后 37 条、改错 0 条。上一条回复写长了分值会往中间挪(真回复上的纠正多在 0.66–0.74)。
+export const DECISION_HI = 0.6;
+export const DECISION_LO = 0.4;
 const PREV_REPLY_CHARS = 1500; // 上一条回复只带尾巴:纠正针对的多半是结论那几句
 const USER_MESSAGE_CHARS = 600;
-const CORRECTION_QUESTION = {
+export const CORRECTION_QUESTION = {
   type: 'noul' as const,
   instructions: 'Is state.user_message the user correcting state.previous_reply: saying it was wrong, missed what they wanted, or should be done differently?',
 };
@@ -92,11 +94,16 @@ function textOf(content: unknown): string {
   return '';
 }
 
+/** 发给决策模型的 state(标定脚本 scripts/decision-gate-calibrate.mjs 用同一个函数拼)。 */
+export function correctionState(previousReply: unknown, userMessage: string): { previous_reply: string; user_message: string } {
+  return { previous_reply: textOf(previousReply).slice(-PREV_REPLY_CHARS), user_message: String(userMessage || '').slice(0, USER_MESSAGE_CHARS) };
+}
+
 export async function correctionVerdict(brain: DecisionBrain, previousReply: unknown, userMessage: string, signal?: AbortSignal): Promise<CorrectionVerdict> {
   const lexical = looksLikeCorrection(userMessage);
   try {
     const r = await brain.decide({
-      state: { previous_reply: textOf(previousReply).slice(-PREV_REPLY_CHARS), user_message: String(userMessage || '').slice(0, USER_MESSAGE_CHARS) },
+      state: correctionState(previousReply, userMessage),
       questions: { correction: CORRECTION_QUESTION },
       signal,
     });

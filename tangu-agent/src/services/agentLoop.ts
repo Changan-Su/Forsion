@@ -1272,7 +1272,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   // 整个 run 调过的工具名(allToolCalls 在插话边界会清空,这份不清)与本轮攒下的复盘信号(services/judgeSignals.ts)。
   const runToolNames: string[] = [];
   const judgeSignals: string[] = [];
-  let correctionCheck: Promise<void> | null = null; // 决策闸(beta)在问的那一下:收尾交给 Historian 之前等它
+  let correctionCheck: Promise<void> | null = null; // 决策闸(beta)在问的那一下:收尾照常交给 Historian,它数完轮次再等这个
   /**
    * Tool calls are stored separately from assistant text. Stamp the finalized-text offset at which
    * each call happened so clients can reconstruct interleaving after reload without a DB migration.
@@ -2747,7 +2747,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 决策闸(beta,开发者选项;Historian 开着才问)开着:改问云端决策模型、词面兜底(judgeSignals.correctionVerdict)。
     // 不挡主循环:这里只起请求,run 收尾交给 Historian 之前才等它。远程 run 不问:用户原话不经这条路发出去。
     if (!deferBypass && workingMessages.some((m) => m.role === 'assistant')) {
-      const decision = !remote && decisionGateOn() ? deps().brain.decision : undefined;
+      const decision = !effectiveRemote({ remote, runId }) && decisionGateOn() ? deps().brain.decision : undefined;
       if (decision) {
         const prev = [...workingMessages].reverse().find((m) => m.role === 'assistant');
         correctionCheck = correctionVerdict(decision, prev?.content, String(input.message || '')).then((v) => {
@@ -3575,7 +3575,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 上一轮被用户按停留下的信号排最前(那句写的是「上一轮」,其余写的是「这一轮」)。
     if (pendingStop) judgeSignals.unshift(pendingStop);
     const runRemote = !!(remote || effectiveRemote({ runId }));
-    void (correctionCheck ?? Promise.resolve()).then(() => onUserRunDone(sessionId, userId, memScopeSlug, historianSeed, runRemote, judgeSignals)).finally(() => { if (!inlineMemberDef) scheduleAgentFilesSync(userId, activeAgentSlug); });
+    void onUserRunDone(sessionId, userId, memScopeSlug, historianSeed, runRemote, correctionCheck ? correctionCheck.then(() => judgeSignals) : judgeSignals).finally(() => { if (!inlineMemberDef) scheduleAgentFilesSync(userId, activeAgentSlug); });
     // 惰性检查点:下个 run 的 hydrate 窗口之外若还有未被摘要覆盖的老行,现在(不占下个 run 首帧)做一份。
     // 登记在飞:下个 run(排队中的可能立刻起跑)hydrate 前先等它,别让窗口起点越过还没落检查点的老行。
     {

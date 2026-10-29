@@ -171,6 +171,9 @@
  *                                                           #   完全放行档改默认工作目录仍要问(protected),改语速零审批;改 app_settings 两件工具 / 字段表 / 描述后跑
  *   npm run live:harness -- --only signals                 # 后台复盘的触发信号(10-05,方案 E2,services/judgeSignals.ts):用户没说「记下来」只是出言纠正 → 不到点的那一轮也评一次并采到记忆候选;
  *                                                           #   同样的两轮、第二句不是纠正 → 不评(负对照);调了三次以上工具被按停 → 下一轮跑完时带着信号评;改 judgeSignals / 判官触发条件 / 判官提示后跑
+ *   TANGU_LIVE_CLOUD_URL=<带决策模型的 server> TANGU_LIVE_CLOUD_TOKEN=<令牌> npm run live:harness -- --only decisiongate [--decision-gate off]
+ *                                                           # Historian 决策闸(10-29 beta):词面漏的纠正(「我们项目统一用 pnpm。」)由决策模型补上 → 加评 + 记忆候选;
+ *                                                           #   词面误报的追问(「不对称加密…」)放掉 → 不评;--decision-gate off 两腿都该红;改 correctionVerdict / DECISION_HI·LO / 问法后跑
  *   npm run live:harness -- --only control                 # 控制面审批(09-25,e0ad04aa):只读档一句话建「每天 9 点自动写新闻摘要」/ 建 agent 须弹 kind=control 审批卡,台架拒后落盘零新增;
  *                                                           #   完全放行档同一句话零审批真建出来(判完即删);加 --exec-mode sandbox = 沙箱会话的完全放行也得问(C 腿跳过);改 approvals.controlPlaneCall / manage_* 工具后跑
  *                                                           #   ⚠️ host 模式下 run_bash 跑在开发机上:每腿前后快照 crontab / atq / ~/Library/LaunchAgents / ~/.config/systemd/user,变了即红并打印人工还原命令(台架不自动改回)
@@ -223,6 +226,7 @@ const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), 
 const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'parkedask', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'imgtools', 'account', 'webpublish', 'nested', 'branch', 'musedm', 'humandims', 'pluginsandbox'];
 KEYS.push('bluebird');
 KEYS.push('signals');
+KEYS.push('decisiongate');
 KEYS.push('musechat');
 KEYS.push('cmdreads'); // Windows read-only shell shortcut, including the Muse approval screenshot.
 KEYS.push('novision');
@@ -268,6 +272,7 @@ const GIT_PREFIX = 'livetest/'; const GIT_TAG = '[LIVE]';
 const OPT_IN = new Set(['pluginsandbox', 'humandims', 'nested', 'branch', 'musedm', 'realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'parkedask', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'appsettings', 'control', 'phone']);
 OPT_IN.add('bluebird'); // --only bluebird --plugin-src <bundle>: real instruction-following on supplied transcripts
 OPT_IN.add('signals');
+OPT_IN.add('decisiongate'); // --only decisiongate:Historian 决策闸(beta);要 TANGU_LIVE_CLOUD_URL 带决策模型,--decision-gate off = 负对照
 OPT_IN.add('musechat');
 OPT_IN.add('cmdreads');
 OPT_IN.add('imgwindow');
@@ -5927,6 +5932,61 @@ Then reply with only the command output.`,
         + ` | B ${okB ? '✓' : '✗'} 第二句是普通追问:第 2 轮${bQuiet ? '没评' : '被评了'}${b1.error || b2.error ? ` 错 ${b1.error || b2.error}` : ''}`
         + ` | C ${okC ? '✓' : '✗'} 按停:${stopped.ended || stopped.error || '?'},已调工具 ${stopped.tools} 次;中止当场${notAtStop ? '没评' : '评了'};下一轮(第 2 轮,平时轮不到)${cForced ? '被信号叫起来评了' : '没评'};复盘留下的活动 ${cActs.join('/') || '无'}${c0.error || c2.error ? ` 错 ${c0.error || c2.error}` : ''}`,
       output: `【信号评审的日志行】\n${forced().join('\n')}\n\n【.memory-raw.md】\n${rawNow()}`,
+    };
+  });
+  // 10-29 Historian 决策闸(beta,historian.decisionGate,services/judgeSignals.ts 的 correctionVerdict):「这句是不是纠正」改问云端
+  // /api/brain/decision 的决策模型,词面退成兜底。要 TANGU_LIVE_CLOUD_URL 指向带决策模型的 server(或 server 仓 scripts/decision-relay-local.mts:只挂这一条路由的本机中继)。
+  // everyRounds=5,第 2 轮平时轮不到判官:
+  //   D1 词面漏掉的纠正(「我们项目统一用 pnpm。」)→ 决策模型判纠正 → 第 2 轮被加评;
+  //      和 signals C 一样只判「评了」:评出什么由判官定(首跑它提的是工作笔记候选,因为主 agent 当轮已自己写进 MEMORY.md),记在 detail 里。
+  //   D2 词面误报的追问(「不对称加密和对称加密有什么区别?」)→ 决策模型判不是 → 第 2 轮不评。
+  // --decision-gate off = 负对照(闸关着走词面):D1 不评、D2 被评,两腿都该红。
+  await scenario('decisiongate', 'decisiongate Historian 决策闸(决策模型替词面判纠正:漏掉的补上、误报的放掉)', async () => {
+    if (!process.env.TANGU_LIVE_CLOUD_URL) return { ok: false, detail: '要 TANGU_LIVE_CLOUD_URL 指向带决策模型的 server、TANGU_LIVE_CLOUD_TOKEN 为登录令牌' };
+    const gateOn = opt('decision-gate', 'on') !== 'off';
+    await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ historian: { enabled: true, modelId: MODEL, everyRounds: 5, firstRoundTrigger: true, mode: 'independent', decisionGate: gateOn } }) });
+    const stamp = Date.now();
+    const acts = (sid) => api('/agent/special/historian/activity?limit=100').then((a) => (a.activity || []).filter((r) => r.session_ref === sid));
+    const logLines = (re) => (existsSync(engineLog) ? readFileSync(engineLog, 'utf8') : '').split('\n').filter((l) => re.test(l));
+    const forced = () => logLines(/轮触发\(信号加评/);
+    const reviews = () => logLines(/\[historian\] 第 \d+ 轮触发/);
+    const verdicts = () => logLines(/\[historian\] 决策闸 /);
+    const rawNow = () => (existsSync(rawPath) ? readFileSync(rawPath, 'utf8') : '');
+    const harnessRawPath = join(dirname(rawPath), '.harness-raw.md');
+    const harnessNow = () => (existsSync(harnessRawPath) ? readFileSync(harnessRawPath, 'utf8') : '');
+    const settleFirst = async (sid) => { await until(async () => ((await acts(sid)).some((x) => x.action !== 'title_updated') ? true : null), 90_000, 2000); await sleep(1500); };
+    const leg = async (name, first, second) => {
+      const sid = `live-gate-${name}-${stamp}`;
+      const t1 = await run(sid, first);
+      if (t1.error) return { error: `第一轮失败:${t1.error}` };
+      await settleFirst(sid);
+      const before = { acts: (await acts(sid)).length, forced: forced().length, reviews: reviews().length, verdicts: verdicts().length, raw: rawNow(), harness: harnessNow() };
+      const t2 = await run(sid, second);
+      if (t2.error) return { error: `第二轮失败:${t2.error}` };
+      return { sid, t1, t2, before };
+    };
+
+    const d1 = await leg('D1', '给我一条给新项目装依赖的命令,只要命令。', '我们项目统一用 pnpm。');
+    const d1Forced = !d1.error && !!(await until(async () => (forced().length > d1.before.forced ? true : null), 90_000, 2000));
+    if (d1Forced) await until(async () => ((await acts(d1.sid)).length > d1.before.acts ? true : null), 90_000, 3000); // 等加评落下来,好记它评出了什么
+    const d1Verdict = d1.error ? '' : verdicts().slice(d1.before.verdicts)[0] || '';
+    const d1Mem = d1.error ? '' : rawNow().slice(d1.before.raw.length).replace(/\s+/g, ' ').trim();
+    const d1Harness = d1.error ? '' : harnessNow().slice(d1.before.harness.length).replace(/\s+/g, ' ').trim();
+    const okD1 = d1Forced && /→ 纠正\(按决策模型\)/.test(d1Verdict);
+
+    const d2 = await leg('D2', '简单说说什么是 HTTPS,两三句话。', '不对称加密和对称加密有什么区别?');
+    if (!d2.error) await sleep(20_000);
+    const d2Verdict = d2.error ? '' : verdicts().slice(d2.before.verdicts)[0] || '';
+    const d2Quiet = !d2.error && reviews().length === d2.before.reviews && (await acts(d2.sid)).length === d2.before.acts;
+    const okD2 = d2Quiet && /→ 不是\(按决策模型\)/.test(d2Verdict);
+
+    const say = (r) => (r.error ? ` 错 ${r.error}` : `;答「${r.t1.content.replace(/\s+/g, ' ').slice(0, 50)}」→「${r.t2.content.replace(/\s+/g, ' ').slice(0, 40)}」`);
+    return {
+      ok: okD1 && okD2,
+      detail: `闸${gateOn ? '开' : '关(负对照)'}`
+        + ` | D1 ${okD1 ? '✓' : '✗'} 词面漏的纠正:${d1Verdict.replace(/^.*决策闸 /, '') || '无判定行'};第 2 轮${d1Forced ? '被加评' : '没加评'};评出:记忆候选「${d1Mem.slice(0, 80) || '无'}」、工作笔记候选「${d1Harness.slice(0, 80) || '无'}」${say(d1)}`
+        + ` | D2 ${okD2 ? '✓' : '✗'} 词面误报的追问:${d2Verdict.replace(/^.*决策闸 /, '') || '无判定行'};第 2 轮${d2Quiet ? '没评' : '被评了'}${say(d2)}`,
+      output: `【决策闸判定行】\n${verdicts().join('\n')}\n\n【信号评审的日志行】\n${forced().join('\n')}\n\n【.memory-raw.md】\n${rawNow()}\n\n【.harness-raw.md】\n${harnessNow()}`,
     };
   });
   // 09-25 控制面审批(approvals.controlPlaneCall,e0ad04aa):agent 发起的「建出之后无人值守、以完全放行跑」的工作

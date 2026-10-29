@@ -510,7 +510,8 @@ export function historianRoundRemote(sk: { agent_config?: unknown } | undefined,
 /** @param runRemote 刚结束的这条 run 是否来自远端 —— 由 agentLoop 在 run **收尾时**算好传入(input.remote,或远端 steer / 询问 /
  *  截屏 / ui_ 回执给本机 run 打的进程内污点;那张表随 run 收尾清掉,Historian 异步起来时已经查不到)。
  *  @param signals 这一轮攒下的复盘信号(services/judgeSignals.ts;给判官读的英文句子)。有信号时不到点也评一次。 */
-export async function onUserRunDone(sessionId: string, userId: string, memScopeSlug?: string, forkSeed?: HistorianForkSeed, runRemote = false, signals?: readonly string[]): Promise<void> {
+/** signals 可以是 Promise(决策闸还在问):轮次照常在 done 那一刻数、锁照常立刻占,数完轮次才等它 —— 等的工夫里下一轮跑完也不会把这轮的到点挤掉。 */
+export async function onUserRunDone(sessionId: string, userId: string, memScopeSlug?: string, forkSeed?: HistorianForkSeed, runRemote = false, signals?: readonly string[] | Promise<readonly string[]>): Promise<void> {
   if (!isLocal()) return;
   // 会话级互斥:上一轮维护(judge/fork/整固)还在飞 → 整轮跳过(尽力而为,下个到点轮自然补)。
   // 加锁在首个 await 之前,并发 done 只有一个能进。
@@ -547,7 +548,7 @@ async function runHistorianSlot(sessionId: string, fn: () => Promise<void>): Pro
   }
 }
 
-async function runHistorianForSession(sessionId: string, userId: string, memScopeSlug?: string, forkSeed?: HistorianForkSeed, opts?: { force?: boolean; runRemote?: boolean; signals?: readonly string[] }): Promise<void> {
+async function runHistorianForSession(sessionId: string, userId: string, memScopeSlug?: string, forkSeed?: HistorianForkSeed, opts?: { force?: boolean; runRemote?: boolean; signals?: readonly string[] | Promise<readonly string[]> }): Promise<void> {
   // 解析本 run 的记忆域:优先传入的 memScopeSlug;否则(外部引擎等未做激活的路径)从会话 agent_config.agentSlug
   // 兜底读——那存的是 active slug,须经 resolveMemorySlug 折叠 shareDefaultMemory 才与 run 内记忆读写同域。
   // 重注入 Historian 自己的异步上下文 → deps().brain.memory(动态本地库)读写落到该 agent 的文件夹(fire-and-forget
@@ -606,7 +607,7 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
     // 信号轮(E2):这一轮出了值得复盘的事 → 不到点也评一次,但只评记忆 / 进化记录两类候选;
     // 标题 / 摘要 / 日志 / 图标 / 辅助讨论仍只跟到点轮(cadenceDue)。到点轮带着信号 = 照常评,多一段「为什么现在评」。
     const cadenceDue = !!opts?.force || isRoundDue(roundN, cfg.everyRounds, cfg.firstRoundTrigger);
-    const signals = (opts?.signals ?? []).map((x) => String(x || '').trim()).filter(Boolean).slice(0, 4);
+    const signals = ((await opts?.signals) ?? []).map((x) => String(x || '').trim()).filter(Boolean).slice(0, 4);
     const signalDue = !cadenceDue && signals.length > 0 && Date.now() - (lastSignalReview.get(sessionId) ?? 0) >= SIGNAL_REVIEW_COOLDOWN_MS;
     const due = cadenceDue || signalDue;
     if (!due) return;
