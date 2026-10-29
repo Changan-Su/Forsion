@@ -4,8 +4,8 @@
  *   { "mcpServers": { "<name>": { command?, args?, env?, url?, transport?, headers?, timeoutMs?, enabled? } } }
  * 类型推断(同 Agents-Manager):有 command → stdio;有 url → transport 显式 sse 否则 streamable-http。
  *
- * **加载语义(prompt 缓存纪律)**:mcp.json 的 server 集在**后端进程启动时**冻结——manager 启动连一次,
- * 配置变更只对重启后的进程/新 run 生效(desktop 改配置走 ensureBackend 重启链)。
+ * **加载语义(prompt 缓存纪律)**:mcp.json 的 server 集在**每个 run 内**冻结——manager 启动连一次,
+ * 配置变更在活动 run 全部结束后由 manager.reloadConfig 接入,也可重启加载。
  * 绝不在 run 中途增删工具,否则同会话 defs 漂移打爆前缀缓存。插件自带的 server(pluginServers.ts)随插件
  * 启停在 run 之间增删 —— toolsForRun 每 run 取一次快照,与 tools/list_changed 同一条「只对之后的 run 生效」。
  */

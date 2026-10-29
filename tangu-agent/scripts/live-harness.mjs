@@ -269,6 +269,7 @@ const GIT_PREFIX = 'livetest/'; const GIT_TAG = '[LIVE]';
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
 const OPT_IN = new Set(['pluginsandbox', 'humandims', 'nested', 'branch', 'musedm', 'realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'parkedask', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'gitpush', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'appsettings', 'control', 'phone']);
+KEYS.push('mcpsettings'); OPT_IN.add('mcpsettings');
 KEYS.push('taskoutcomes'); OPT_IN.add('taskoutcomes'); // --only taskoutcomes: actual hashes / approval identity / duplicate writes, classified separately from model narration.
 OPT_IN.add('bluebird'); // --only bluebird --plugin-src <bundle>: real instruction-following on supplied transcripts
 OPT_IN.add('signals');
@@ -4043,7 +4044,7 @@ Then reply with only the command output.`,
   // ⚠️ ENTRY 与 desktop/frontend/src/bootstrapEngine.tsx 的 open-settings 目录项同文(description + params);TARGETS 那一行由
   //    desktop 的 settingsTarget.test.ts 逐字钉住(设置页 / 搜索索引一改,那条单测就红,照它的输出改这里)。
   await scenario('settingsnav', 'settingsnav 「语音在哪设置」:界面命令直达设置页,不用电脑操控', async () => {
-    const TARGETS = 'Pages: general, forsion, model, mcp, hooks, skills, agents, amadeus-plugins, browser, computer-use, channels, notes, sync, spaces, theme, shortcuts, notifications, statusbar, trash, permissions, units, remote-sessions, computer-history, advanced, developer, about. Settings: workspace-dir, keep-awake, backend-mode, sandbox, python, mirror, external-backend, forsion-account, forsion-submissions, cloud-url, memory-sync, inbox-notify, default-models, model-providers, masking, web-search, voice, theme-language, startup-appearance, palette, color-mode, ui-zoom, glass, home-motion, ambient, visuals, smooth-caret, selection-bar, prompt-suggest, chat-avatars, calm-dim, calm-reading, calm-motion, ribbon-auto-home, fonts, notes-attachments, daily-notes, agent-browser, strict-background, jev, units-switch, units-host, remote-sessions-switch, remote-approval-cap, remote-trusted-devices, remote-safety, computer-history, mcp-server, reset-layout, clear-data, language.';
+    const TARGETS = 'Pages: general, forsion, model, mcp, hooks, skills, agents, amadeus-plugins, browser, computer-use, channels, notes, sync, spaces, theme, shortcuts, notifications, statusbar, trash, permissions, units, remote-sessions, computer-history, advanced, developer, about. Settings: workspace-dir, keep-awake, backend-mode, sandbox, python, mirror, external-backend, forsion-account, forsion-submissions, cloud-url, memory-sync, inbox-notify, default-models, model-providers, masking, web-search, voice, theme-language, startup-appearance, palette, color-mode, ui-zoom, glass, home-motion, ambient, visuals, smooth-caret, selection-bar, prompt-suggest, chat-avatars, calm-dim, calm-reading, calm-motion, ribbon-auto-home, fonts, notes-attachments, daily-notes, agent-browser, strict-background, jev, units-switch, units-host, remote-sessions-switch, remote-approval-cap, remote-trusted-devices, remote-safety, computer-history, mcp-json, mcp-server, reset-layout, clear-data, language.';
     const ENTRY = { id: 'open-settings',
       description: "Open Forsion's settings window, optionally at one page or at the page holding one specific setting. To answer 'where/how do I set X', open that page and say which page you opened; these settings are not documented on the web, so do not search for them. Unknown targets are rejected.",
       params: { type: 'object', properties: { tab: { type: 'string', description: `A page id or a setting id. Omit for the default page. ${TARGETS}` } } } };
@@ -5984,6 +5985,50 @@ Then reply with only the command output.`,
   //   E 完全放行档改默认工作目录 → 仍弹 protected 卡(台架批)并落盘;同档改语速零审批;
   //   F 改通话音色 → realtimeVoice 不变(只读字段:音色绑在通话模型上)。
   // 收尾把 config.json 还原成场景开始前那份(E 改的默认工作目录不该漏给后面的场景)。
+  await scenario('mcpsettings', 'mcpsettings Agent 添加 JSON、审批、启用连接、调用新 MCP、保留凭据与删除', async () => {
+    const cfgPath = join(shared, 'config.json');
+    const before = existsSync(cfgPath) ? readFileSync(cfgPath, 'utf8') : null;
+    const cfg = () => JSON.parse(readFileSync(cfgPath, 'utf8'));
+    const name = `live-settings-${Date.now()}`;
+    const mark = `MCPCFG-${Math.random().toString(36).slice(2, 9)}`;
+    const secret = `DEMO_SECRET_${Math.random().toString(36).slice(2)}`;
+    const fixture = join(root, 'test/fixtures/fake-mcp-server.mjs');
+    const entry = { command: process.execPath, args: [fixture], env: { FAKE_MCP_TAG: mark, DEMO_TOKEN: secret }, enabled: false };
+    const sessions = [];
+    const sid = leg => { const id = `live-mcp-settings-${leg}-${Date.now()}`; sessions.push(id); return id; };
+    try {
+      const a = await run(sid('add'), `帮我把这个 MCP JSON 添加到 Forsion，保持禁用，不要运行它：${JSON.stringify({ mcpServers: { [name]: entry } })}`, 240_000, { approvalMode: 'auto-edit' });
+      const okA = !a.error && a.done && a.toolCalls.includes('manage_mcp') && a.approvalList.some(x => x.name === 'manage_mcp' && x.reason === 'control') && cfg().mcp?.mcpServers?.[name]?.enabled === false;
+      const b = await run(sid('enable'), `启用 MCP 服务器 ${name}，保存后结束本轮回复，不调用它的工具。`, 240_000, { approvalMode: 'full-auto' });
+      const connected = await until(async () => { const t = await api('/agent/tools'); return t.mcp?.some(x => x.server === name && x.status === 'connected') ? true : null; }, 30_000, 300);
+      const okB = !b.error && b.done && b.toolCalls.includes('manage_mcp') && b.approvals === 0 && !!connected;
+      const tool = `mcp__${name.replace(/[^a-zA-Z0-9_-]/g, '_')}__echo`;
+      const c = await run(sid('call'), `调用 ${tool}，text 参数用 hello，然后告诉我返回的标记。`, 240_000, { approvalMode: 'full-auto' });
+      const okC = !c.error && c.done && c.toolCalls.includes(tool) && c.content.includes(mark);
+      // Simulate an idle desktop/CLI save without polling /agent/tools: admission must reconcile before the very next run.
+      const directName = `${name}-direct`;
+      const directCfg = cfg();
+      directCfg.mcp.mcpServers[directName] = { ...entry, enabled: true, env: { FAKE_MCP_TAG: `${mark}-DIRECT` } };
+      writeFileSync(cfgPath, JSON.stringify(directCfg));
+      const directTool = `mcp__${directName}__echo`;
+      const direct = await run(sid('direct'), `调用 ${directTool}，text 参数用 next-run，告诉我返回的标记。`, 240_000, { approvalMode: 'full-auto' });
+      const okDirect = !direct.error && direct.done && direct.toolCalls.includes(directTool) && direct.content.includes(`${mark}-DIRECT`);
+      const d = await run(sid('update'), `把 MCP 服务器 ${name} 的 timeoutMs 改成 2345，保留其他字段。再检查它的配置，别展示任何密钥。`, 240_000, { approvalMode: 'full-auto' });
+      const stored = cfg().mcp?.mcpServers?.[name];
+      const okD = !d.error && d.done && d.toolCalls.includes('manage_mcp') && stored?.timeoutMs === 2345 && stored?.env?.DEMO_TOKEN === secret && JSON.stringify(stored?.args) === JSON.stringify(entry.args) && !d.content.includes(secret);
+      const e = await run(sid('reject'), `把 MCP 服务器 ${name} 的 timeoutMs 改成 3456。`, 240_000, { approvalMode: 'auto-edit' }, undefined, () => 'reject');
+      const okE = !e.error && e.done && e.approvalList.some(x => x.name === 'manage_mcp' && x.reason === 'control') && cfg().mcp?.mcpServers?.[name]?.timeoutMs === 2345;
+      const f = await run(sid('delete'), `删除 MCP 服务器 ${name} 的配置。`, 240_000, { approvalMode: 'full-auto' });
+      const okF = !f.error && f.done && f.toolCalls.includes('manage_mcp') && !Object.hasOwn(cfg().mcp?.mcpServers ?? {}, name);
+      await api('/agent/tools');
+      const legs = [a, b, c, direct, d, e, f];
+      return { ok: okA && okB && okC && okDirect && okD && okE && okF, detail: `direct-idle-save/next-run=${okDirect} add/control=${okA} enable/connected=${okB} fresh-run-call=${okC} partial-update/secret=${okD} reject/unchanged=${okE} delete=${okF}`, toolCalls: legs.flatMap(x => x.toolCalls), output: legs.map((x, i) => `[${i + 1}] ${x.content}`).join('\n\n') };
+    } finally {
+      if (before === null) rmSync(cfgPath, { force: true }); else writeFileSync(cfgPath, before);
+      await api('/agent/tools').catch(() => {});
+    }
+  });
+
   await scenario('appsettings', 'appsettings agent 读、改本机设置(问得出现值、改得动开放的项、密钥与审批档碰不到)', async () => {
     if (EXEC_MODE !== 'host') return { ok: false, skipped: true, detail: '两件工具只在本机执行形态露出(mode:host)' };
     const cfgPath = join(shared, 'config.json');
