@@ -15,15 +15,19 @@ import { anthropicMessagesUrl } from '../llm/anthropicMessages.js';
 
 const router = Router();
 
-/** 探测请求头:Anthropic 原生协议用 x-api-key + anthropic-version(官方 host 不多发 Bearer,同 anthropicMessages.ts);其余 Bearer。 */
+/** 探测请求头:Anthropic 原生协议用 x-api-key + anthropic-version(官方 host 不多发 Bearer,同 anthropicMessages.ts);其余 Bearer。
+ *  版本头与有没有 key 无关:本地代理自己注入上游凭证时也要它。 */
 function probeHeaders(apiKey: string, protocol: string, baseUrl: string): Record<string, string> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (protocol !== 'anthropic-messages') return apiKey ? { ...headers, Authorization: `Bearer ${apiKey}` } : headers;
+  headers['anthropic-version'] = '2023-06-01';
   if (!apiKey) return headers;
-  if (protocol !== 'anthropic-messages') return { ...headers, Authorization: `Bearer ${apiKey}` };
   let official = false;
   try { official = /(^|\.)anthropic\.com$/i.test(new URL(baseUrl).hostname); } catch { /* 非法 URL:fetch 自己会报 */ }
-  return { ...headers, 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', ...(official ? {} : { Authorization: `Bearer ${apiKey}` }) };
+  return { ...headers, 'x-api-key': apiKey, ...(official ? {} : { Authorization: `Bearer ${apiKey}` }) };
 }
+/** fetch 跟跨域重定向只剥 Authorization、不剥 x-api-key:Anthropic 探测一律不跟重定向,免得 key 被转给别的域。 */
+const probeRedirect = (protocol: string): 'error' | 'follow' => (protocol === 'anthropic-messages' ? 'error' : 'follow');
 
 router.get('/agent/providers', authMiddleware, async (_req, res) => {
   try {
@@ -47,7 +51,7 @@ router.post('/agent/providers/test', authMiddleware, async (req, res) => {
 
     // 策略 1:GET /models(多数 OpenAI 兼容端点支持)
     try {
-      const r = await fetch(`${clean}/models`, { method: 'GET', headers, signal: AbortSignal.timeout(10_000) });
+      const r = await fetch(`${clean}/models`, { method: 'GET', headers, redirect: probeRedirect(protocol), signal: AbortSignal.timeout(10_000) });
       if (r.ok) {
         const data: any = await r.json().catch(() => ({}));
         const n = data?.data?.length || data?.models?.length || 0;
@@ -62,6 +66,7 @@ router.post('/agent/providers/test', authMiddleware, async (req, res) => {
       const r = await fetch(anthropic ? anthropicMessagesUrl(clean) : `${clean}/chat/completions`, {
         method: 'POST',
         headers,
+        redirect: probeRedirect(protocol),
         body: JSON.stringify({ model: modelId, messages: [{ role: 'user', content: 'Hi' }], max_tokens: 1, ...(anthropic ? {} : { stream: false }) }),
         signal: AbortSignal.timeout(20_000),
       });
@@ -123,7 +128,7 @@ router.post('/agent/providers/fetch-models', authMiddleware, async (req, res) =>
         const out: Array<{ id: string; name?: string }> = [];
         let after = '';
         for (let page = 0; page < 20; page++) {
-          const r = await fetch(`${clean}${path}?limit=100${after ? `&after_id=${encodeURIComponent(after)}` : ''}`, { method: 'GET', headers, signal: AbortSignal.timeout(10_000) });
+          const r = await fetch(`${clean}${path}?limit=100${after ? `&after_id=${encodeURIComponent(after)}` : ''}`, { method: 'GET', headers, redirect: 'error', signal: AbortSignal.timeout(10_000) });
           if (!r.ok) return out;
           const data: any = await r.json().catch(() => ({}));
           out.push(...parseModels(data));

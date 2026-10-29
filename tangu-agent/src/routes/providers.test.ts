@@ -9,7 +9,7 @@ const { default: router } = await import('./providers.js');
 let server: Server;
 let base = '';
 const realFetch = globalThis.fetch;
-const calls: Array<{ url: string; headers: Record<string, string>; body?: any }> = [];
+const calls: Array<{ url: string; headers: Record<string, string>; body?: any; redirect?: string }> = [];
 
 beforeAll(async () => {
   const app = express();
@@ -27,7 +27,7 @@ function stubUpstream(reply: (url: string) => { status?: number; json: any }) {
   globalThis.fetch = (async (input: any, init?: any) => {
     const url = String(input);
     if (url.startsWith(base)) return realFetch(input, init);
-    calls.push({ url, headers: { ...(init?.headers || {}) }, body: init?.body ? JSON.parse(init.body) : undefined });
+    calls.push({ url, headers: { ...(init?.headers || {}) }, body: init?.body ? JSON.parse(init.body) : undefined, redirect: init?.redirect });
     const r = reply(url);
     return new Response(JSON.stringify(r.json), { status: r.status ?? 200 });
   }) as typeof fetch;
@@ -45,6 +45,14 @@ describe('provider probe routes', () => {
     expect(calls[0].headers['x-api-key']).toBe('k');
     expect(calls[0].headers['anthropic-version']).toBe('2023-06-01');
     expect(calls[0].headers.Authorization).toBeUndefined();
+    expect(calls[0].redirect).toBe('error'); // x-api-key 跨域重定向不会被剥,不能跟
+  });
+
+  it('Anthropic without a key still sends anthropic-version (local proxies inject credentials)', async () => {
+    stubUpstream(() => ({ json: { data: [] } }));
+    await post('/agent/providers/fetch-models', { baseUrl: 'http://127.0.0.1:9/v1', protocol: 'anthropic-messages' });
+    expect(calls[0].headers['anthropic-version']).toBe('2023-06-01');
+    expect(calls[0].headers['x-api-key']).toBeUndefined();
   });
 
   it('Anthropic test falls back to a 1-token /v1/messages call', async () => {
