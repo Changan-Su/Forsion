@@ -8,8 +8,9 @@
  *  Agent Desk 卡有自己的进出场,插件卡正文是插件自己的 DOM,都不归这里管。 */
 import { LAND_MS } from '@lcl/engine'
 
-/** 会长出 / 缩回的行:卡片正文(和子会话状态块)的直接子元素里,只认这几种 —— 「已运行 m:ss」「正在 xx」这类状态行一直在换,不播。 */
-const ROW = '.t2-tsum-row, .t2-tsum-todo, .t2-tsum-attn, .t2o-desk-row, .t2-tsum-more'
+/** 会长出 / 缩回的行:卡片正文(和子会话状态块)的直接子元素里认这几种。进度卡的「正在 xx」「已运行 m:ss」「正在编辑」
+ *  也算:它们每次工具调用都出现 / 消失一次,不播的话下面每张卡都跟着一下子挪一行(跳变探针抓到过)。换字不重挂,不会反复播。 */
+const ROW = '.t2-tsum-row, .t2-tsum-todo, .t2-tsum-attn, .t2o-desk-row, .t2-tsum-more, .t2-tsum-sub, .t2-tsum-edit'
 /** LCL dropIndicator 落位那条曲线(它没导出,值照抄)。 */
 const LAND_EASE = 'cubic-bezier(.2,.8,.2,1)'
 

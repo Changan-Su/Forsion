@@ -16,6 +16,8 @@
  *  8 右键「工作范围」卡头 → 移到最上;重载后仍在最上;按住「后台」卡头拖到最下,顺序记住;拖完不顺带开合
  *  9 窄窗(<760):整栈收起,输入卡上方出现「N 个在后台跑」,点开列出在跑的行
  * 截图(观感自查用,人看):outputs/summary-cards/ 下亮 / 大窗口 / 暗 / 英文 / 窄窗。
+ * 跳变探针(3c、7):逐帧量栈里每张卡的位置 / 高度,栈里没有在播的过渡、卡却变了 = 跳变(第三轮「没过渡的都补上」)。
+ * MOTION_VIDEO=1 另录一份屏到 outputs/summary-cards/video/(看手感用,ffmpeg 抽帧)。
  *
  * npm run build && node scripts/summary-cards.e2e.cjs
  * 台架上锁:node <仓根>/.claude/hooks/devlock.cjs run --vehicle=e2e --what="summary-cards" --eta=4 -- node scripts/summary-cards.e2e.cjs
@@ -62,6 +64,8 @@ const runPlan = [
 const TODOS2 = [...TODOS, { content: '加一张对比截图', status: 'pending' }]
 const run2 = [
   tok('再看一眼。'),
+  // 先跑一条不算来源的工具,停 900ms:进度卡里「正在 …」那一行出现又消失,别的卡都不动 —— 跳变探针专门看它
+  tc('x0', 'bash', { command: 'ls src' }), { ...tr('x0', 'App.tsx'), delay: 900 },
   tc('s3', 'read_file', { path: 'src/hero.tsx' }), tr('s3', '…'),
   { ...tc('p1', 'todo_write', {}), delay: 1800 }, { type: 'todo', payload: { todos: TODOS2 } }, tr('p1', 'ok'),
   { ...tok('\n\n看完了，补了一项。'), delay: 1800 },
@@ -106,7 +110,8 @@ async function main() {
     { ...base, updated_at: at(12), project_path: '__P__', project_name: 'Launch', projectless: false, id: 's-main', title: 'Launch 落地页' },
     { ...base, updated_at: at(5), projectless: true, id: 's-2', title: '周末去杭州的行程' },
   ] }
-  const ctx = await launch({ tag: 'summary-cards', fixtures, messages: history, stubOverride: override })
+  const ctx = await launch({ tag: 'summary-cards', fixtures, messages: history, stubOverride: override,
+    recordVideo: process.env.MOTION_VIDEO ? { dir: path.join(OUT, 'video'), size: { width: 1512, height: 1250 } } : undefined })
   for (const s of fixtures.sessions) if (s.project_path === '__P__') s.project_path = ctx.projectDir
   const { win, app } = ctx
   const ev = (fn, arg) => win.evaluate(fn, arg)
@@ -131,6 +136,34 @@ async function main() {
   }
   const cardIds = () => ev(() => [...document.querySelectorAll('.t2-tsum > .t2-card')].filter((c) => c.offsetParent).map((c) => c.dataset.card))
   const isOpen = (id) => ev((id) => !!document.querySelector(`.t2-tsum > [data-card="${id}"]`)?.open, id)
+  // 跳变探针:每帧量一次每张卡(相对栈内容的 top、高度,按 body zoom 归一),同时看栈里有没有在播的动画 / 过渡;
+  // 前后两帧都没在播、卡却挪了 / 变了高 = 一下子到位的跳变。过渡开头那帧和结尾落定那帧都算「在播」,不误报。
+  const probeStart = () => ev(() => {
+    const w = window, st = document.querySelector('.t2-tsum'), z = document.body.currentCSSZoom || 1
+    const p = w.__probe = { on: true, jumps: [], frames: 0, prev: null, prevAnim: true, t0: performance.now() }
+    const snap = () => {
+      const sr = st.getBoundingClientRect(), m = {}
+      for (const c of st.children) if (c.dataset && c.dataset.card && c.offsetParent) { const r = c.getBoundingClientRect(); m[c.dataset.card] = [(r.top - sr.top) / z + st.scrollTop, r.height / z] }
+      return m
+    }
+    // 只算会播完的过渡 / 动画:正文的滚动驱动渐隐(t2-card-fade)和「正在运行」的流光是常驻的,算进来就永远「在播」、什么都抓不到
+    const busy = () => document.getAnimations().some((a) => a.playState === 'running' && a.timeline === document.timeline
+      && a.effect && a.effect.target && st.contains(a.effect.target) && Number.isFinite(a.effect.getComputedTiming().endTime))
+    const tick = () => {
+      if (!p.on) return
+      const cur = snap(), anim = busy()
+      p.frames++
+      if (p.prev && !anim && !p.prevAnim) for (const k in cur) {
+        const a = p.prev[k]; if (!a) continue
+        const dt = cur[k][0] - a[0], dh = cur[k][1] - a[1]
+        if (Math.abs(dt) > 1.5 || Math.abs(dh) > 1.5) p.jumps.push({ t: Math.round(performance.now() - p.t0), card: k, dt: Math.round(dt), dh: Math.round(dh) })
+      }
+      p.prev = cur; p.prevAnim = anim
+      requestAnimationFrame(tick)
+    }
+    requestAnimationFrame(tick)
+  })
+  const probeStop = () => ev(() => { const p = window.__probe; p.on = false; return { frames: p.frames, jumps: p.jumps } })
   try {
     await boot(app, win, { space: 'tangu', width: 1512, height: 950 }); await enterSpace(win, 'tangu')
     await ev(() => localStorage.removeItem('forsion.summaryCards'))
@@ -178,6 +211,7 @@ async function main() {
     const fold = await ev(() => ({ rows: [...document.querySelectorAll('[data-subchat-status] .t2o-desk-row')].map((r) => r.querySelector('.t2o-desk-name')?.textContent), more: document.querySelector('[data-subchat-done]')?.textContent }))
     check('3c 跑完的子代理默认收成一行,只列在跑的', JSON.stringify(fold.rows) === '["Ava"]' && /已完成 12 个/.test(fold.more || ''), fold)
     await shot('subfold')
+    await probeStart()
     await win.locator('[data-subchat-done]').click(); await win.waitForTimeout(200)
     const subs = await ev(() => [...document.querySelectorAll('[data-subchat-status] .t2o-desk-row')].map((r) => {
       const img = r.querySelector('img[data-subagent-avatar]')
@@ -191,6 +225,9 @@ async function main() {
     // 收起的行缩回去时留着残影(data-tsum-ghost)播完才摘,不算数
     const folded = await ev(() => document.querySelectorAll('[data-subchat-status] .t2o-desk-row:not([data-tsum-ghost])').length)
     check('3c 再点收起', folded === 1, `rows=${folded}`)
+    await win.waitForTimeout(500)
+    const p3 = await probeStop()
+    check('3c 展开 / 收起已完成的子代理:栈里没有跳变', p3.frames > 20 && p3.jumps.length === 0, p3)
     await shot('light')
 
     // 大窗口:Desk 卡不被拉长(先在 Desk 上放东西,看 1250 高下的样子)
@@ -271,6 +308,7 @@ async function main() {
       w.__rowMo.observe(document.querySelector('.t2-tsum'), { childList: true, subtree: true })
     })
     ctx.stub.script(run2)
+    await probeStart()
     {
       const ta = win.locator('.t2c-ta').first()
       await ta.click(); await ta.fill('再看一眼 hero 组件。'); await win.keyboard.press('Enter')
@@ -286,6 +324,18 @@ async function main() {
     await win.getByText('看完了，补了一项').first().waitFor({ timeout: 8000 })
     await win.locator('.t2-tsum[aria-busy="false"]').waitFor({ timeout: 8000 }); await win.waitForTimeout(600)
     check('7 跑完来源收回去', !(await isOpen('sources')))
+    const p7 = await probeStop()
+    check('7 这一轮从开跑到跑完:栈里没有跳变', p7.frames > 60 && p7.jumps.length === 0, p7)
+    // 探针自检(负对照):往开着的卡里直接塞一段不带过渡的内容,探针必须抓到这一下跳变,否则上面两条「没有跳变」不可信
+    await win.waitForTimeout(400)
+    await probeStart(); await win.waitForTimeout(300)
+    // 插在栈里两张卡之间(正文封顶的卡里插东西高度不变,测不出来):下面的卡一下子挪 40px
+    await ev(() => { const st = document.querySelector('.t2-tsum'); const d = document.createElement('div'); d.style.cssText = 'height:40px;flex:none'; d.id = 'probe-jump'; st.insertBefore(d, st.children[1] || null) })
+    await win.waitForTimeout(300)
+    await ev(() => document.getElementById('probe-jump')?.remove())
+    await win.waitForTimeout(300)
+    const pNeg = await probeStop()
+    check('7 探针自检:不带过渡的变化能抓到', pNeg.jumps.length > 0, pNeg)
     const gone = await ev(() => window.__cardGone)
     check('7 跑的过程中卡片不闪(没有被摘掉又装回)', gone.length === 0, gone)
     await ev(() => window.__rowMo?.disconnect())
