@@ -172,7 +172,7 @@
  *   npm run live:harness -- --only signals                 # 后台复盘的触发信号(10-05,方案 E2,services/judgeSignals.ts):用户没说「记下来」只是出言纠正 → 不到点的那一轮也评一次并采到记忆候选;
  *                                                           #   同样的两轮、第二句不是纠正 → 不评(负对照);调了三次以上工具被按停 → 下一轮跑完时带着信号评;改 judgeSignals / 判官触发条件 / 判官提示后跑
  *   TANGU_LIVE_CLOUD_URL=<带决策模型的 server> TANGU_LIVE_CLOUD_TOKEN=<令牌> npm run live:harness -- --only decisiongate [--decision-gate off]
- *                                                           # Historian 决策闸(10-29 beta):词面漏的纠正(「我们项目统一用 pnpm。」)由决策模型补上 → 加评 + 记忆候选;
+ *                                                           # Historian 决策闸(10-29 beta):词面漏的纠正(「我们项目统一用 pnpm。」)由决策模型补上 → 当轮加评;
  *                                                           #   词面误报的追问(「不对称加密…」)放掉 → 不评;--decision-gate off 两腿都该红;改 correctionVerdict / DECISION_HI·LO / 问法后跑
  *   npm run live:harness -- --only control                 # 控制面审批(09-25,e0ad04aa):只读档一句话建「每天 9 点自动写新闻摘要」/ 建 agent 须弹 kind=control 审批卡,台架拒后落盘零新增;
  *                                                           #   完全放行档同一句话零审批真建出来(判完即删);加 --exec-mode sandbox = 沙箱会话的完全放行也得问(C 腿跳过);改 approvals.controlPlaneCall / manage_* 工具后跑
