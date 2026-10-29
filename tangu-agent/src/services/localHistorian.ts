@@ -480,7 +480,8 @@ export function onUserRunStart(sessionId: string, userId: string, message: strin
       title = cleanTitle(await inConversationLanguage(userId, modelId, title, `${priorT.userText}\n${message.trim()}`));
       if (unusable(title)) return false; // 改写没成 / 改写出来的不像标题 → 交 done 判官兜底(它也过这道核对)
       // CAS:用户这期间手改过标题就不覆盖,也不报「已更新」(query 无 affectedRows,靠 RETURNING 判命中)。
-      const hit = await query<any[]>(`UPDATE chat_sessions SET title = ? WHERE id = ? AND COALESCE(title, '') = ? RETURNING id`, [title, sessionId, current]);
+      // 前端发出第一句后会写占位标题 = 原话前 30 字(tanguSlice renameSession),常落在这次模型调用途中 —— 那不算用户改名,照写(10-29)。
+      const hit = await query<any[]>(`UPDATE chat_sessions SET title = ? WHERE id = ? AND COALESCE(title, '') IN (?, ?) RETURNING id`, [title, sessionId, current, message.slice(0, 30)]);
       if (!hit.length) return true;
       await logActivity(userId, 'title_updated', title, sessionId);
       log(`首帧标题(第 ${round} 轮,只看用户消息): ${title}`);
