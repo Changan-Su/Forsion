@@ -1,3 +1,4 @@
+import { mcpSettingsPreview } from './mcpSettings.js';
 /**
  * 进程内工具审批登记表（host-exec 模式 / TUI 专用）。
  *
@@ -162,6 +163,7 @@ export function controlPlaneCall(
   const a: Record<string, any> = args && typeof args === 'object' ? (args as Record<string, any>) : {};
   const action = String(a.action ?? '');
   if (name === 'manage_agent') return action === 'create' || action === 'update';
+  if (name === 'manage_mcp') return !['list', 'check'].includes(action);
   if (name === 'update_app_settings') return true;
   if (name === 'manage_schedule') {
     if (action !== 'set' || !(a.auto === true || a.auto === 'true')) return false;
@@ -188,7 +190,7 @@ export function controlPlaneCall(
 }
 
 /** controlPlaneCall 可能为真的工具(闸门据此决定要不要为非 host 调用解析参数)。 */
-const CONTROL_PLANE_TOOLS = new Set(['manage_agent', 'manage_schedule', 'manage_automation', 'update_app_settings']);
+const CONTROL_PLANE_TOOLS = new Set(['manage_agent', 'manage_schedule', 'manage_automation', 'update_app_settings', 'manage_mcp']);
 
 /*
  * 审批预览的排版(Codex 09-25 二轮 #2)。控制面审批卡的待批内容**一个字都不省**:无人值守要跑的提示词、tool_call 的参数、
@@ -423,6 +425,7 @@ function rawPreview(call: ToolCall, opts: { keptActions?: unknown[] | null; prof
   }
   if (name === 'forsion_account_action') return accountActionPreview(args);
   if (name === 'publish_web_page') return webPublishPreview(args);
+  if (name === 'manage_mcp') return mcpSettingsPreview(args);
   if (name === 'update_app_settings') {
     const v = args.values && typeof args.values === 'object' && !Array.isArray(args.values) ? (args.values as Record<string, unknown>) : {};
     const parts = Object.entries(v).map(([k, x]) => `${String(args.section ?? '')}.${k} → ${JSON.stringify(x)}`);
