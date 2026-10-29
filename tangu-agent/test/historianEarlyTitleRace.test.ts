@@ -19,13 +19,16 @@ import { onUserRunStart, resetHistorianConsolidationState } from '../src/service
 
 const USER = 'u1';
 const MSG = '[[/Users/me/Notes/Quantum Mechanics 3.md|QM3]] 我在复习升降算符,除了角动量还有别的吗?';
+const SPACED = 'Please explain quantum theory and angular momentum'; // 前 30 字以空格结尾,PATCH 会 trim 掉
 let home: string;
 let midCall: (() => Promise<void>) | null;
+let reply = '升降算符的推广';
 
 beforeEach(async () => {
   home = mkdtempSync(join(tmpdir(), 'tangu-title-race-'));
   process.env.TANGU_HOME = home;
   midCall = null;
+  reply = '升降算符的推广';
   resetHistorianConsolidationState();
   const { host, db } = createSqliteHost({ dataDir: 'memory', localToken: 'x', userId: USER });
   db.exec(toSqliteDDL(STANDALONE_SCHEMA));
@@ -34,7 +37,7 @@ beforeEach(async () => {
       resolveModelAndKey: async () => ({ model: { provider: 'test', name: 'test' }, apiKey: 'k', baseUrl: 'b', apiModelId: 'm' }),
       buildProviderPayload: async (o: any) => ({ messages: o.messages }),
       // 模型还在想的时候,前端把占位标题写进来
-      streamProviderCompletion: async () => { await midCall?.(); return { content: '升降算符的推广', usage: { prompt_tokens: 1, completion_tokens: 1 } }; },
+      streamProviderCompletion: async () => { await midCall?.(); return { content: reply, usage: { prompt_tokens: 1, completion_tokens: 1 } }; },
     },
     users: { getUserById: async () => ({ username: 'u' }) },
     memory: { getMemory: async () => ({ content: '' }), getLog: async () => ({ date: 'd', content: '' }), appendLogEntry: async () => ({ date: 'd', time: 't' }), setMemory: async () => ({}) },
@@ -54,8 +57,8 @@ afterEach(() => {
 });
 
 const title = async () => (await query<any[]>(`SELECT title FROM chat_sessions WHERE id = 'S'`))[0].title;
-const start = () => new Promise<string | null>((resolve) => {
-  onUserRunStart('S', USER, MSG, undefined, (t) => resolve(t));
+const start = (msg = MSG) => new Promise<string | null>((resolve) => {
+  onUserRunStart('S', USER, msg, undefined, (t) => resolve(t));
   setTimeout(() => resolve(null), 1500);
 });
 const renameTo = (t: string) => async () => { await query(`UPDATE chat_sessions SET title = ? WHERE id = 'S'`, [t]); };
@@ -65,6 +68,20 @@ describe('首帧标题 × 前端占位标题', () => {
     midCall = renameTo(MSG.slice(0, 30));
     expect(await start()).toBe('升降算符的推广');
     expect(await title()).toBe('升降算符的推广');
+  });
+
+  it('占位被 PATCH trim 过(前 30 字以空格结尾)→ 也认得', async () => {
+    reply = 'Quantum angular momentum';
+    midCall = renameTo(SPACED.slice(0, 30).trim());
+    expect(await start(SPACED)).toBe('Quantum angular momentum');
+    expect(await title()).toBe('Quantum angular momentum');
+  });
+
+  it('起点已有标题的轮次:用户途中改成与原话前 30 字相同 → 不覆盖', async () => {
+    await query(`UPDATE chat_sessions SET title = '旧标题' WHERE id = 'S'`);
+    midCall = renameTo(MSG.slice(0, 30));
+    expect(await start()).toBeNull();
+    expect(await title()).toBe(MSG.slice(0, 30));
   });
 
   it('用户途中真改了标题 → 不覆盖', async () => {
