@@ -71,6 +71,8 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR
 const subRows = [
   { sessionId: 'd-ava', kind: 'delegate', title: 'Ava', createdAt: new Date(now - 30_000).toISOString(), runId: null, runStatus: 'running', agentSlug: 'ava' },
   { sessionId: 'd-gen', kind: 'delegate', title: 'Subagent', createdAt: new Date(now - 90_000).toISOString(), runId: null, runStatus: 'completed', agentSlug: 'ava' },
+  // 10-25 用户报:跑完的子代理无限列下去,把进度卡撑满 —— 再垫 11 条跑完的历史子会话
+  ...Array.from({ length: 11 }, (_, i) => ({ sessionId: `d-old${i}`, kind: 'delegate', title: `Subagent ${i + 2}`, createdAt: new Date(now - 600_000 - i * 60_000).toISOString(), runId: null, runStatus: 'completed', agentSlug: 'ava' })),
 ]
 function override({ path: p, method }) {
   if (p === '/agent/processes' && method === 'GET') return { processes: procs.map(view) }
@@ -152,7 +154,12 @@ async function main() {
     check('3 左栏会话行尾绿点 + 在跑个数', mark === '2', `mark=${mark}`)
 
     // 3b 子代理行的头像(10-25 用户报:有头像的 Agent 跑子代理时只画了 Bot)
-    await win.locator('[data-subchat-status] .t2o-desk-row').nth(1).waitFor({ timeout: 10000 })
+    await win.locator('[data-subchat-done]').waitFor({ timeout: 10000 })
+    // 3c 跑完的收进一行:默认只列在跑的那条 +「已完成 12 个」,点开才就地展开,再点收起
+    const fold = await ev(() => ({ rows: [...document.querySelectorAll('[data-subchat-status] .t2o-desk-row')].map((r) => r.querySelector('.t2o-desk-name')?.textContent), more: document.querySelector('[data-subchat-done]')?.textContent }))
+    check('3c 跑完的子代理默认收成一行,只列在跑的', JSON.stringify(fold.rows) === '["Ava"]' && /已完成 12 个/.test(fold.more || ''), fold)
+    await shot('subfold')
+    await win.locator('[data-subchat-done]').click(); await win.waitForTimeout(200)
     const subs = await ev(() => [...document.querySelectorAll('[data-subchat-status] .t2o-desk-row')].map((r) => {
       const img = r.querySelector('img[data-subagent-avatar]')
       return { name: r.querySelector('.t2o-desk-name')?.textContent, img: img ? { slug: img.dataset.subagentAvatar, blob: img.src.startsWith('blob:'), loaded: img.naturalWidth > 0, working: img.classList.contains('is-working'), w: img.getBoundingClientRect().width } : null, bot: !!r.querySelector('svg.lucide-bot') }
@@ -160,6 +167,10 @@ async function main() {
     const ava = subs.find((x) => x.name === 'Ava'), gen = subs.find((x) => x.name === 'Subagent')
     check('3b 委派给有头像的 Agent:行首是它的头像(在跑带工作环)', !!ava?.img && ava.img.slug === 'ava' && ava.img.blob && ava.img.loaded && ava.img.working && !ava.bot, subs)
     check('3b 通用子代理仍画 Bot,不借父会话 / 回落 slug 的头像', !!gen && !gen.img && gen.bot, subs)
+    check('3c 点开列出全部 12 条已完成,在跑的仍在最上', subs.length === 13 && subs[0].name === 'Ava', subs.map((x) => x.name))
+    await win.locator('[data-subchat-done]').click(); await win.waitForTimeout(200)
+    const folded = await ev(() => document.querySelectorAll('[data-subchat-status] .t2o-desk-row').length)
+    check('3c 再点收起', folded === 1, `rows=${folded}`)
     await shot('light')
 
     // 大窗口:Desk 卡不被拉长(先在 Desk 上放东西,看 1250 高下的样子)
