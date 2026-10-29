@@ -95,6 +95,10 @@ export interface StreamOpts {
   signal?: AbortSignal;
   /** 模型 provider:anthropic/claude 时 server 侧走原生 /v1/messages;httpBrain 路径由 brain-api 自行解析,可省略。 */
   provider?: string;
+  /** 发给模型前脱敏(llm/outboundMask.ts):记录归到哪个会话;不传 = 后台调用,只记不报。 */
+  maskScope?: string;
+  /** 这一轮发出前遮住了哪些值(不含原值)。action = warn 时是「找到了、原样发出」。 */
+  onMasked?: (hits: Array<{ kind: string; ph: string; head: string; len: number }>, action: 'mask' | 'warn' | 'block') => void;
 }
 
 export interface LlmBrain {

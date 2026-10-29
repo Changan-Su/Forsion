@@ -9,7 +9,7 @@ import { listPluginMetas, getPluginMeta, pluginsNeedingRestart } from '../plugin
 import type { PluginStatus } from '../plugins/bootstrap.js';
 import {
   isPluginEnabledSync, getScopeSettings, setScopeSettings,
-  listPluginFiles, readPluginFile, writePluginFile, deletePluginFile, parseScope, clearPluginData,
+  listPluginFiles, readPluginFile, writePluginFile, deletePluginFile, parseScope,
 } from '../plugins/settingsStore.js';
 import { resolveReplySegment, splitMessage } from '../services/replySegment.js';
 
@@ -38,10 +38,13 @@ function pluginView(m: ReturnType<typeof listPluginMetas>[number], st: PluginSta
     ...(st.lastError ? { lastError: st.lastError } : {}),
     ...(st.settling ? { settling: true } : {}),
     ...(st.tools ? { tools: st.tools } : {}),
+    ...(st.official ? { official: true } : {}),
   };
 }
 
 /** 生命周期函数住 bootstrap:动态 import 避免 index↔bootstrap 早期环引用(bootstrap 顶层的 sdk 在求值期就读 createTanguModule)。 */
+import { trashEnginePlugin } from '../services/pluginUninstall.js';
+
 const lifecycle = () => import('../plugins/bootstrap.js');
 
 async function pluginViews() {
@@ -130,10 +133,10 @@ router.get('/agent/plugins/:id/source', authMiddleware, async (req: AuthRequest,
 router.delete('/agent/plugins/:id', authMiddleware, async (req: AuthRequest, res) => {
   if (!ensureLocal(res)) return;
   try {
-    const { removePluginLive } = await lifecycle();
-    await removePluginLive(req.params.id); // 先注销:清完设置后 isPluginEnabledSync 不会落回 defaultEnabled=true
-    await clearPluginData(req.params.id);
-    res.json({ ok: true, restartRequired: false });
+    // 进回收站(services/pluginUninstall):?trash=1 连用户目录里的插件文件一起挪(新版桌面);缺省只收设置,文件夹由调用方删(旧版桌面)。
+    // ?keepSettings=1 =「保留设置,重装后接着用」。dirName 给桌面撤商店的安装记录用(文件夹已经不在原处了)。
+    const r = await trashEnginePlugin(req.params.id, { files: req.query.trash === '1', keepSettings: req.query.keepSettings === '1' });
+    res.json({ ok: true, restartRequired: false, ...(r.entry ? { trashId: r.entry.id } : {}), ...(r.dirName ? { dirName: r.dirName } : {}) });
   } catch (e: any) { res.status(400).json({ detail: e?.message || 'uninstall failed' }); }
 });
 

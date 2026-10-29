@@ -254,6 +254,9 @@ describe('接进宿主(bootstrap)', () => {
     expect(typeof g['store-tools'].cloud.request).toBe('function');
     expect(await g['store-tools'].cloud.request({ path: '/api/market/mine' })).toEqual({ status: 200, json: [] });
     expect(g['third-tools'].hasCloud).toBe(false);
+    // 插件列表里的 official:桌面据此放行官方插件给核心工具画卡(toolResultCards.ts)
+    expect(h.boot.pluginStatus('store-tools').official).toBe(true);
+    expect(h.boot.pluginStatus('third-tools').official).toBeUndefined();
 
     const work = h.resolve();
     expect(work.has('store_submit_update') && work.has('store_check_update')).toBe(true); // work 面不变:两个都在

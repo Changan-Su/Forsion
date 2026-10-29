@@ -52,7 +52,7 @@ export const VAULT_WRITE_EVENTS: Record<string, (a: unknown[], isPagePath: (rel:
   // ⚠️ 这与 watcher 的分流**不一样**:watcher 对一切 .md(含 .excalidraw.md / 插件 .mindmap.md)都发 externalChange,
   //    只有非 .md 才发 fileChange;这里按笔记判据分,插件自定义 .md 类型走 fileChange。
   [IPC.writeTextFile]: (a, isPagePath) => [typeof a[0] === 'string' && isPagePath(a[0]) ? IPC.externalChange : IPC.fileChange, a[0]],
-  [IPC.drawingWrite]: (a) => [IPC.fileChange, a[0]],
+  [IPC.drawingWrite]: (a) => [IPC.externalChange, a[0]],
   [IPC.saveVaultBytes]: (a) => [IPC.fileChange, a[0]],
   [IPC.dbWrite]: (a) => [IPC.dbChange, a[0]],
   [IPC.dbWriteCas]: (a) => [IPC.dbChange, a[0]],
@@ -79,7 +79,7 @@ export const VAULT_WRITE_EVENTS: Record<string, (a: unknown[], isPagePath: (rel:
  *  VAULT_WRITE_EVENTS 映射的回灌事件 —— 发了就是叫别的编辑器 / 设备去重读一份没变过的盘面(收口 N-9)。
  *  三个派发口共用这一份判据:ipc.ts 的 handle 与 vaultFace.call、unit/localVault 的 call。 */
 export function casRejected(channel: string, result: unknown): boolean {
-  return (channel === IPC.dbWriteCas || channel === IPC.writeTextFile || channel === IPC.restorePageHistory) && (result as { ok?: unknown } | null | undefined)?.ok === false
+  return (channel === IPC.drawingWrite || channel === IPC.dbWriteCas || channel === IPC.writeTextFile || channel === IPC.restorePageHistory) && (result as { ok?: unknown } | null | undefined)?.ok === false
 }
 
 export interface VaultHandlerDependencies {
@@ -368,8 +368,17 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
 
   // 必须走 writeTextFile 而非 saveVaultBytes:后者不记自写账本,而 .excalidraw.md 命中 watcher 的
   // `.md` 分支 → 每次自动保存都会被当成外部改动回弹。
-  handle(IPC.drawingWrite, (_e, drawingPath: string, source: string) =>
-    withPathLock(drawingPath, () => vault.writeTextFile(drawingPath, source)))
+  handle(IPC.drawingWrite, (_e, drawingPath: string, source: string, base?: string) =>
+    withPathLock(drawingPath, async () => {
+      if (typeof base === 'string') {
+        let current: string | null
+        try { current = await fs.readFile(vault.absPath(drawingPath), 'utf8') }
+        catch (error: any) { if (error?.code !== 'ENOENT') throw error; current = null }
+        if (current === null || textFingerprint(current) !== base) return { ok: false, current }
+      }
+      await vault.writeTextFile(drawingPath, source)
+      return { ok: true }
+    }))
 
   // 通用 vault 文本读写(插件文件类型:ctx.app.readFile/writeFile)。读越界即 null;
   // 写同 drawingWrite 走 writeTextFile(记自写账本,插件保存不被 watcher 当外部改动回弹)。

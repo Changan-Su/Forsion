@@ -9,6 +9,8 @@
  *  2. onExternalChange(桌面=watcher/引擎拉回,web=SSE)→ 元素级合并进打开中的画布(appliers);
  *  3. persist 写前预读:文件被别的端改过 → mergeScenes 后再写,不盲盖。 */
 import { create } from 'zustand'
+import { fileReferenceKey, newFileIdentity, publishFileEntry } from './fileIdentity'
+import { textFingerprint } from '@amadeus-shared/writeConflict'
 import type { ExcalidrawInitialDataState } from '@excalidraw/excalidraw/types'
 import { parseDrawing, withSceneJson, isDrawingPath } from '@amadeus-shared/excalidraw/format'
 import { readBoard, writeBoard, DEFAULT_BOARD, type BoardSettings } from '@amadeus-shared/excalidraw/board'
@@ -17,6 +19,7 @@ import { amadeus } from '../api'
 import { onNotePathGone, usePageStore } from './pageStore'
 
 export interface DrawEntry {
+  identity?: string
   status: 'loading' | 'ok' | 'missing' | 'corrupt'
   /** ok/corrupt 时为解析出的 vault 相对路径(写回/reveal 用)。 */
   path: string | null
@@ -37,7 +40,7 @@ interface DrawStoreState {
   /** 幂等加载:已 ok 的 ref 跳过(多处嵌入共用一次载入)。 */
   load(pagePath: string, ref: string): Promise<void>
   /** 强制重读(missing/corrupt 态「重试」)。 */
-  reload(pagePath: string, ref: string): Promise<void>
+  reload(pagePath: string, ref: string, reuse?: boolean): Promise<void>
   /** 记下最新场景并防抖落盘;非 ok 态 no-op(损坏文件绝不回写)。 */
   save(ref: string, sceneJson: string): void
   /** 新挂载画布的种子:优先取还没落盘的 pendingScene(关了秒开、防抖窗内的竞态),否则 entry.scene。 */
@@ -53,9 +56,18 @@ interface DrawStoreState {
 }
 
 let generation = 0
+const identityOf = (ref: string): string => useDrawStore.getState().entries[ref]?.identity ?? ref
+const pendingSettings = new Map<string, Partial<BoardSettings>>()
+function updateEntry(ref: string, patch: Partial<DrawEntry>): void {
+  useDrawStore.setState(s => {
+    const current = s.entries[ref]
+    return current ? { entries: publishFileEntry(s.entries, ref, { ...current, ...patch }) } : s
+  })
+}
 const saveTimers = new Map<string, ReturnType<typeof setTimeout>>()
 /** ref → 待落盘的场景 JSON(只留最后一次)。 */
 const pendingScene = new Map<string, string>()
+const sceneRevisions = new Map<string, number>()
 /** ref → 最近一次「与盘面一致」的场景 JSON(load/persist/外部合并时推进)。save 去重基线。 */
 const lastSceneJson = new Map<string, string>()
 /** 画板的 onChange 是鼠标级高频(拖一根线就几十次)→ 比 dbStore 的 500ms 更宽。 */
@@ -66,6 +78,7 @@ const SAVE_DELAY = 800
 export type DrawingRemoteApplier = (remote: SceneLike) => void
 const appliers = new Map<string, Set<DrawingRemoteApplier>>()
 export function registerDrawingApplier(ref: string, fn: DrawingRemoteApplier): () => void {
+  ref = identityOf(ref)
   let set = appliers.get(ref)
   if (!set) {
     set = new Set()
@@ -103,15 +116,20 @@ async function applyExternal(rawPath: string): Promise<void> {
   const p = rawPath.replace(/\\/g, '/')
   if (!isDrawingPath(p)) return
   const s = useDrawStore.getState()
-  for (const [ref, e] of Object.entries(s.entries)) {
+  const seen = new Set<string>()
+  for (const [alias, e] of Object.entries(s.entries)) {
+    const ref = e.identity ?? alias
+    if (seen.has(ref)) continue
+    seen.add(ref)
     if (!e.path || e.path.replace(/\\/g, '/') !== p) continue
     if (e.status !== 'ok') {
-      void s.reload(p, ref) // corrupt/missing 的文件被外部修好了 → 直接重读
+      void s.reload(p, p) // corrupt/missing 的文件被外部修好了 → 直接重读
       continue
     }
     try {
       const r = await amadeus.readDrawing(e.path, e.path)
       if (gen !== generation) return
+      if (useDrawStore.getState().entries[ref]?.path !== e.path) continue
       if (r.status !== 'ok') continue // 删除/移动交给 structureChange/树
       const parsed = parseDrawing(r.source)
       const remote = parsed ? tryParseScene(parsed.sceneJson) : null
@@ -122,12 +140,7 @@ async function applyExternal(rawPath: string): Promise<void> {
       lastSceneJson.set(ref, parsed.sceneJson)
       // 防抖窗内有未落盘笔画:计划中的那次写升级为合并结果(画布活着时其 onChange 会再覆盖,等价)。
       if (pendingScene.has(ref)) pendingScene.set(ref, JSON.stringify(merged))
-      useDrawStore.setState((st) => {
-        const cur = st.entries[ref]
-        return cur
-          ? { entries: { ...st.entries, [ref]: { ...cur, source: r.source, scene: merged as ExcalidrawInitialDataState, settings: readBoard(r.source) } } }
-          : st
-      })
+      updateEntry(ref, { source: r.source, scene: merged as ExcalidrawInitialDataState, settings: readBoard(r.source) })
       fanoutRemote(ref, remote)
     } catch {
       /* 读失败:保持现状,下次事件再试 */
@@ -155,53 +168,66 @@ function serialize<T>(ref: string, fn: () => Promise<T>): Promise<T> {
   return run
 }
 
-const persist = (ref: string): Promise<void> => serialize(ref, () => persistNow(ref))
+const persist = (ref: string): Promise<void> => { ref = identityOf(ref); return serialize(ref, () => persistNow(ref)) }
 
 async function persistNow(ref: string): Promise<void> {
   const gen = generation
   const queued = pendingScene.get(ref)
+  const revision = sceneRevisions.get(ref)
   const e = useDrawStore.getState().entries[ref]
   if (queued === undefined || !e || e.status !== 'ok' || !e.path || !e.source) return
-  let base = e.source
-  let sceneJson = queued
-  // 写前预读:打开期间文件可能被别的端改过(引擎拉回镜像/云端 seq 前进)。盲写=整文件盖掉对面的
-  // 笔画;读-合并-写把竞态窗缩到毫秒级,web 侧还顺带对齐 CAS seq(readDrawing 会 noteSeq)。
-  try {
-    const fresh = await amadeus.readDrawing(e.path, e.path)
-    if (gen !== generation) return
-    if (fresh.status === 'ok') {
-      base = fresh.source
-      if (fresh.source !== e.source) {
-        const rp = parseDrawing(fresh.source)
-        const remote = rp ? tryParseScene(rp.sceneJson) : null
-        const mine = remote ? tryParseScene(sceneJson) : null
-        if (remote && mine) {
-          sceneJson = JSON.stringify(mergeScenes(mine, remote))
-          fanoutRemote(ref, remote) // 活画布同步吃到远端笔画,别等下一个事件
-        }
-      }
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      const fresh = await amadeus.readDrawing(e.path, e.path)
+      if (gen !== generation || useDrawStore.getState().entries[ref]?.path !== e.path) return
+      if (fresh.status !== 'ok') return // Never recreate a deleted/moved drawing.
+      const parsed = parseDrawing(fresh.source)
+      const remote = parsed ? tryParseScene(parsed.sceneJson) : null
+      const mine = tryParseScene(queued)
+      if (!remote || !mine) return
+      const sceneJson = fresh.source === e.source ? queued : JSON.stringify(mergeScenes(mine, remote))
+      const next = withSceneJson(fresh.source, sceneJson)
+      if (!next) return
+      const result = await amadeus.writeDrawing(e.path, next, textFingerprint(fresh.source))
+      if (gen !== generation || useDrawStore.getState().entries[ref]?.path !== e.path) return
+      if (result?.ok === false) continue
+      lastSceneJson.set(ref, sceneJson)
+      if (sceneRevisions.get(ref) === revision) pendingScene.delete(ref)
+      // Edits added during CAS remain pending and receive the committed remote
+      // elements as well, so their next save cannot regress the merged scene.
+      const remaining = pendingScene.get(ref)
+      const scene = tryParseScene(sceneJson)!
+      if (remaining) pendingScene.set(ref, JSON.stringify(mergeScenes(tryParseScene(remaining) ?? {}, scene)))
+      updateEntry(ref, { source: next, scene: scene as ExcalidrawInitialDataState, settings: readBoard(next) })
+      fanoutRemote(ref, scene)
+      return
+    } catch {
+      return // pending is retained; strict flush reports failure.
     }
-  } catch {
-    /* 预读失败(离线/瞬时):按原样写,旧行为 */
   }
-  if (gen !== generation) return
-  const next = withSceneJson(base, sceneJson)
-  if (!next) return // 定位不到 Drawing 段 → 拒写,绝不把一个不认识的文件覆盖成画板
-  try {
-    await amadeus.writeDrawing(e.path, next)
-    if (gen !== generation) return
-    lastSceneJson.set(ref, sceneJson)
-    if (pendingScene.get(ref) === queued) pendingScene.delete(ref)
-    // 原文与场景种子一起推进:source 供下次换段,scene 供下一次挂载定种(见字段注释)。
-    const scene = tryParseScene(sceneJson)
-    useDrawStore.setState((s) => {
-      const cur = s.entries[ref]
-      return cur
-        ? { entries: { ...s.entries, [ref]: { ...cur, source: next, scene: (scene as ExcalidrawInitialDataState | null) ?? cur.scene, settings: readBoard(next) } } }
-        : s
-    })
-  } catch {
-    /* Keep pendingScene for retry; an account-switch flush must detect failure. */
+}
+
+async function persistSettings(ref: string): Promise<void> {
+  const gen = generation
+  const patch = pendingSettings.get(ref)
+  const e = useDrawStore.getState().entries[ref]
+  if (!patch || !e?.path || e.status !== 'ok') return
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      const fresh = await amadeus.readDrawing(e.path, e.path)
+      if (gen !== generation || useDrawStore.getState().entries[ref]?.path !== e.path) return
+      if (fresh.status !== 'ok') return
+      const source = writeBoard(fresh.source, { ...readBoard(fresh.source), ...patch })
+      const result = source === fresh.source ? undefined : await amadeus.writeDrawing(e.path, source, textFingerprint(fresh.source))
+      if (gen !== generation || useDrawStore.getState().entries[ref]?.path !== e.path) return
+      if (result?.ok === false) continue
+      if (pendingSettings.get(ref) === patch) pendingSettings.delete(ref)
+      const parsed = parseDrawing(source)
+      const scene = parsed ? tryParseScene(parsed.sceneJson) : null
+      updateEntry(ref, { source, settings: readBoard(source), ...(scene ? { scene: scene as ExcalidrawInitialDataState } : {}) })
+      if (scene) fanoutRemote(ref, scene)
+      return
+    } catch { return }
   }
 }
 
@@ -210,50 +236,56 @@ export const useDrawStore = create<DrawStoreState>((set, get) => ({
   gen: generation,
 
   async load(pagePath, ref) {
-    const cur = get().entries[ref]
-    if (cur && cur.status !== 'missing') return
-    await get().reload(pagePath, ref)
+    const key = fileReferenceKey(pagePath, ref)
+    const cur = get().entries[key]
+    if (cur && cur.status !== 'missing' && (pagePath !== ref || cur.path === ref)) return
+    await get().reload(pagePath, ref, true)
   },
 
-  async reload(pagePath, ref) {
+  async reload(pagePath, ref, reuse = false) {
     if (!usePageStore.getState().vaultRoot) return
     const gen = generation
-    set((s) => ({ entries: { ...s.entries, [ref]: { status: 'loading', path: null, source: null, scene: null, settings: DEFAULT_BOARD } } }))
+    const key = fileReferenceKey(pagePath, ref)
+    const previous = get().entries[key]
+    if (!previous) set((s) => ({ entries: { ...s.entries, [key]: { status: 'loading', path: null, source: null, scene: null, settings: DEFAULT_BOARD } } }))
     let entry: DrawEntry = { status: 'missing', path: null, source: null, scene: null, settings: DEFAULT_BOARD }
-    lastSceneJson.delete(ref)
     try {
       const r = await amadeus.readDrawing(pagePath, ref)
       if (gen !== generation) return
       if (r.status === 'ok') {
-        const parsed = parseDrawing(r.source)
-        // 段能定位 ≠ 里面是合法 JSON(手改坏的、被别的工具截断的)→ 一并算 corrupt,只读保护。
-        const scene = parsed ? (tryParseScene(parsed.sceneJson) as ExcalidrawInitialDataState | null) : null
-        const settings = readBoard(r.source)
-        entry = scene
-          ? { status: 'ok', path: r.path, source: r.source, scene, settings }
-          : { status: 'corrupt', path: r.path, source: r.source, scene: null, settings }
-        if (scene && parsed) lastSceneJson.set(ref, parsed.sceneJson)
+        const existing = Object.values(get().entries).find(e => e.path === r.path && e.identity)
+        if (reuse && existing) entry = existing
+        else {
+          const parsed = parseDrawing(r.source)
+          const scene = parsed ? tryParseScene(parsed.sceneJson) as ExcalidrawInitialDataState | null : null
+          const identity = existing?.identity ?? newFileIdentity()
+          entry = { status: scene ? 'ok' : 'corrupt', path: r.path, source: r.source, scene, settings: readBoard(r.source), identity }
+          if (scene && parsed) lastSceneJson.set(identity, parsed.sceneJson)
+        }
       }
     } catch {
-      /* 保持 missing */
+      if (previous) return
     }
     if (gen !== generation) return
-    set((s) => ({ entries: { ...s.entries, [ref]: entry } }))
+    set((s) => ({ entries: publishFileEntry(s.entries, key, entry) }))
   },
 
   save(ref, sceneJson) {
+    ref = identityOf(ref)
     const e = get().entries[ref]
     if (!e || e.status !== 'ok') return
     // 与盘面一致 → 不写。杀掉两类空转:选择/视口级 onChange(serializeAsJSON 会剪掉瞬时态,
     // 序列化结果不变),以及远端合并应用后画布回声的 onChange(无本地增量时)。
-    if (lastSceneJson.get(ref) === sceneJson) return
+    if (lastSceneJson.get(ref) === sceneJson || pendingScene.get(ref) === sceneJson) return
     pendingScene.set(ref, sceneJson)
+    sceneRevisions.set(ref, (sceneRevisions.get(ref) ?? 0) + 1)
     const t = saveTimers.get(ref)
     if (t) clearTimeout(t)
     saveTimers.set(ref, setTimeout(() => { saveTimers.delete(ref); void persist(ref) }, SAVE_DELAY))
   },
 
   seedFor(ref) {
+    ref = identityOf(ref)
     const pending = pendingScene.get(ref)
     if (pending !== undefined) {
       try {
@@ -266,12 +298,14 @@ export const useDrawStore = create<DrawStoreState>((set, get) => ({
   },
 
   async flush(ref) {
+    ref = identityOf(ref)
     const t = saveTimers.get(ref)
     if (t) {
       clearTimeout(t)
       saveTimers.delete(ref)
     }
     await persist(ref)
+    await serialize(ref, () => persistSettings(ref))
   },
 
   async flushAll(strict = false) {
@@ -282,40 +316,16 @@ export const useDrawStore = create<DrawStoreState>((set, get) => ({
     await Promise.all([...writeChain.values()])
     const refs = [...pendingScene.keys()]
     await Promise.all(refs.map((r) => persist(r)))
-    if (strict && pendingScene.size) {
+    await Promise.all([...pendingSettings.keys()].map(ref => serialize(ref, () => persistSettings(ref))))
+    if (strict && (pendingScene.size || pendingSettings.size)) {
       throw new Error(`Drawing changes could not be saved: ${[...pendingScene.keys()].join(', ')}`)
     }
   },
 
   async setSettings(ref, patch) {
-    const gen = generation
-    await get().flush(ref) // 待写的场景先落盘:下面这次写基于 flush 后的原文,不会把笔画倒回去
-    if (gen !== generation) return
-    return serialize(ref, async () => {
-      const e = get().entries[ref]
-      if (!e || e.status !== 'ok' || !e.path || !e.source) return
-      let base = e.source
-      try {
-        const fresh = await amadeus.readDrawing(e.path, e.path)
-        if (fresh.status === 'ok') base = fresh.source // 与 persist 同款预读:别盲盖别的端的改动
-      } catch {
-        /* 预读失败:按内存原文写 */
-      }
-      if (gen !== generation) return
-      // 增量合到**刚读到的盘面**上,而不是调用方手里那份可能已过期的快照
-      const src = writeBoard(base, { ...readBoard(base), ...patch })
-      if (src === base) return // 值没变 / 源没有 frontmatter(writeBoard 原样返回)→ 无可写
-      try {
-        await amadeus.writeDrawing(e.path, src)
-        if (gen !== generation) return
-        set((s) => {
-          const cur = s.entries[ref]
-          return cur ? { entries: { ...s.entries, [ref]: { ...cur, source: src, settings: readBoard(src) } } } : s
-        })
-      } catch {
-        /* 磁盘错误:内存态保留,面板上再点一次即重试 */
-      }
-    })
+    ref = identityOf(ref)
+    pendingSettings.set(ref, { ...pendingSettings.get(ref), ...patch })
+    await get().flush(ref)
   },
 }))
 
@@ -337,6 +347,8 @@ onNotePathGone((from, kind, to) => {
       clearTimeout(saveTimers.get(ref))
       saveTimers.delete(ref)
       pendingScene.delete(ref)
+      sceneRevisions.delete(ref)
+      pendingSettings.delete(ref)
       lastSceneJson.delete(ref)
     }
   }
@@ -344,9 +356,11 @@ onNotePathGone((from, kind, to) => {
     const entries = { ...s.entries }
     for (const ref of refs) {
       const e = entries[ref]
-      entries[ref] = to
+      if (!dead(e.path)) continue
+      const updated: DrawEntry = to
         ? { ...e, path: kind === 'file' ? to : to + e.path!.slice(from.length) }
-        : { status: 'missing', path: null, source: null, scene: null, settings: DEFAULT_BOARD }
+        : { status: 'missing', path: null, source: null, scene: null, settings: DEFAULT_BOARD, identity: e.identity }
+      Object.assign(entries, publishFileEntry(entries, ref, updated))
     }
     return { entries }
   })
@@ -367,6 +381,8 @@ usePageStore.subscribe((next, previous) => {
   for (const timer of saveTimers.values()) clearTimeout(timer)
   saveTimers.clear()
   pendingScene.clear()
+  sceneRevisions.clear()
+  pendingSettings.clear()
   lastSceneJson.clear()
   appliers.clear()
   useDrawStore.setState({ entries: {}, gen: generation })

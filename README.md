@@ -122,7 +122,7 @@ This version turns on Muse and Historian once for anyone who has not enabled the
 - **Reuse a method.** Skills preserve ways of doing tasks, MCP connects external tools and data, and plugins extend note blocks, views, and workspaces.
 - **Build your own environment.** Install plugins, Agents, skills, Spaces, themes, and web apps from the store. Agents can also use built-in extension-development skills to create extensions for you.
 
-[Plugins (中文)](./docs/customization/plugins.md) · [Store (中文)](./docs/customization/market.md) · [Skills (中文)](./docs/agents/skills.md)
+[Plugins (中文)](./docs/customization/plugins.md) · [Plugin development](./docs/customization/plugin-development.md) · [Store (中文)](./docs/customization/market.md) · [Skills (中文)](./docs/agents/skills.md)
 
 ## From a few sources to a research talk you can keep developing
 

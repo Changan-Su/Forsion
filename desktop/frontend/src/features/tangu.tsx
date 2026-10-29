@@ -24,6 +24,8 @@ import { NewChatComposer, mountNewChatComposer, sendFromNewChat, startNewChatCal
 import { OrbitsView } from '../views/OrbitsView'
 import { SessionsView } from '../views/SessionsView'
 import '../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
+import { startQuotaReminders } from '../views/chat2/quotaReminderScheduler'
+import { windowKind } from '../windowKind'
 /** 对话的右栏组 = 今天 Tangu Space 的右栏那三个(spaces.tsx 的 TANGU_SIDE_VIEWS)。 */
 const CHAT_RIGHT = [{ type: 'tangu-details', params: {} }, { type: 'workspace', params: { mode: 'files' } }, { type: 'outline', params: {} }]
 
@@ -68,6 +70,8 @@ export function activateTangu(host: TanguHost): void {
     host.installProbe(hasNativeFeature('tangu') ? { askInChat: quoteInChatPanel } : {})
   }
   registerTanguCommands()
+  // 「到时提醒我」的定时器只在主窗跑(installEngine 每个窗口都走一遍;外观预览窗也是 main,带 #preview)
+  if (hasNativeFeature('tangu') && typeof location !== 'undefined' && windowKind() === 'main' && location.hash !== '#preview') startQuotaReminders()
 }
 
 /** Tangu 的命令(核心插件化 2e-4,原在 bootstrapEngine)。命令面板 / 快捷键表里这几条挨在一起。 */

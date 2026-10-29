@@ -28,7 +28,8 @@ import { startChildSession } from '../services/childSessions.js';
 import { museDmSessionId } from '../services/museDm.js';
 import { getAgent, MUSE_AGENT_SLUG } from '../agents/agentRegistry.js';
 import { branchSession } from '../services/sessionBranch.js';
-import { listCheckpoints, restoreCodeSince, removeSessionCheckpoints } from '../services/checkpoints.js';
+import { listCheckpoints, restoreCodeSince } from '../services/checkpoints.js';
+import { deleteSessionCascade } from '../services/sessionCleanup.js';
 import { searchSessions, splitTerms, dayArg, fmtDate } from '../services/sessionSearch.js';
 import { isValidSlug } from '../agents/agentRegistry.js';
 import { isDelegateActive } from '../services/delegateTranscript.js';
@@ -405,16 +406,7 @@ router.delete('/agent/sessions/:id', authMiddleware, async (req: AuthRequest, re
     const userId = req.user!.userId;
     const s = await getOwnSession(req.params.id, userId);
     if (!s) return res.status(404).json({ detail: 'Session not found' });
-    const sid = req.params.id;
-    // 显式级联(standalone schema 无外键 CASCADE;顺序:叶 → 根)。
-    await query(`DELETE FROM agent_run_events WHERE run_id IN (SELECT id FROM agent_runs WHERE session_id = ?)`, [sid]);
-    await query(`DELETE FROM agent_steps WHERE run_id IN (SELECT id FROM agent_runs WHERE session_id = ?)`, [sid]);
-    await query(`DELETE FROM agent_runs WHERE session_id = ?`, [sid]);
-    await query(`DELETE FROM chat_messages WHERE session_id = ?`, [sid]);
-    await query(`DELETE FROM chat_asides WHERE session_id = ?`, [sid]);
-    await query(`DELETE FROM chat_sessions WHERE id = ?`, [sid]);
-    bumpHistoryRevision(sid); // 在飞的后台摘要落库前会复核版本 → 丢弃
-    await removeSessionCheckpoints(sid); // 代码快照跟着走,否则 home 无界增长
+    await deleteSessionCascade(req.params.id);
     res.json({ ok: true });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'delete session failed' });

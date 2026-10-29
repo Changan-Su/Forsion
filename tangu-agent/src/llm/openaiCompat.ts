@@ -300,9 +300,15 @@ async function runOpenAiCompatStream(opts: StreamOpts, guard: StreamIdleGuard): 
   if (!response.ok || !response.body) {
     const errorText = await response.text().catch(() => '');
     let detail = errorText;
+    let resetsAtMs = 0;
+    let code = '';
     try {
       const j = JSON.parse(errorText);
       detail = j.error?.message || j.message || errorText;
+      code = j.error?.code || j.error?.type || ''; // 正文不写「额度」而 code 写着 insufficient_quota 的，接力靠它认
+      // 转发 Codex / 订阅额度的中转也会带重置时刻:同 openaiResponses,写进报错并挂在 err.resetsAt(额度用完接力用)
+      const resetsAt = Number(j.error?.resets_at) || (Number(j.error?.resets_in_seconds) ? Date.now() / 1000 + Number(j.error.resets_in_seconds) : 0);
+      if (resetsAt) { resetsAtMs = resetsAt * 1000; detail += ` (resets at ${new Date(resetsAtMs).toISOString()})`; }
     } catch {
       /* keep raw */
     }
@@ -310,7 +316,7 @@ async function runOpenAiCompatStream(opts: StreamOpts, guard: StreamIdleGuard): 
     // 只学不拦:学到与否都照常抛错,失败语义一个字不变。
     learnFromUpstreamError(streamPayload?.model, response.status, detail);
     const status = response.status === 401 || response.status === 403 ? 502 : response.status || 502;
-    throw new LlmError(status, detail || `Upstream error ${response.status}`);
+    throw Object.assign(new LlmError(status, detail || `Upstream error ${response.status}`), code ? { code } : {}, resetsAtMs ? { resetsAt: resetsAtMs } : {});
   }
 
   let content = '';
