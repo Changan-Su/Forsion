@@ -317,13 +317,15 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
   }
 
   const localConfig = async (): Promise<AmadeusConfig> => normalizeLocal(await readConfig(), isManagedCloudVault)
-  /** 本地侧换库:先等在途写落盘(晚到的写不能落进新库),再记清单、钉同步库(vaultList.ts)、换根。 */
+  /** 本地侧换库:校验 → 记清单、钉同步库(vaultList.ts)→ 等在途写落盘 → 换根。
+   *  ⚠️ 等写的循环退出到 activateRoot 里的 setRoot 之间不许有 await:否则旧窗口的写能在空档里通过根校验,
+   *  读的是旧库、落盘时根已换成新库(Codex 评审 P0)。setRoot 之后旧窗口的写一律被 handle() 的根校验拒掉。 */
   const switchLocalVault = async (root: string): Promise<Awaited<ReturnType<typeof activateRoot>>> => {
     if (isManagedCloudVault(root)) throw new Error('cloud-vault-forbidden')
     if (!(await fs.stat(root).then((s) => s.isDirectory(), () => false))) throw new Error('vault-missing')
-    while (pendingVaultWrites.size) await Promise.allSettled([...pendingVaultWrites])
     await updateConfig((cfg) => { Object.assign(cfg, switchPatch(normalizeLocal(cfg, isManagedCloudVault), root)) })
-    return activateRoot(root, true)
+    while (pendingVaultWrites.size) await Promise.allSettled([...pendingVaultWrites])
+    return activateRoot(root, true) // 同步跑到 vault.setRoot
   }
 
   handle(IPC.openVault, async () => {

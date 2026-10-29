@@ -25,8 +25,10 @@ async function main() {
   }
   const readCfg = () => cfgFiles.map((f) => { try { return { f, mtime: fs.statSync(f).mtimeMs, v: JSON.parse(fs.readFileSync(f, 'utf8')) } } catch { return null } })
     .filter(Boolean).sort((a, b) => b.mtime - a.mtime)[0].v // 应用写的是其中一份(dev / 正式),取最新那份
-  const env = { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: 'http://127.0.0.1:1', TANGU_HARNESS_QUIET: '1' }
-  const B = path.join(electron.workspaceEnv(env).FORSION_WORKSPACE_DIR, 'Vaults', '工作')
+  // 工作区显式给临时目录:不继承外面的 FORSION_WORKSPACE_DIR,收尾只删自己建的(Codex 评审:继承了会删掉真实工作区)
+  const workspace = `${home}-workspace`
+  const env = { ...process.env, TANGU_HOME: home, FORSION_WORKSPACE_DIR: workspace, TANGU_BACKEND_URL: 'http://127.0.0.1:1', TANGU_HARNESS_QUIET: '1' }
+  const B = path.join(workspace, 'Vaults', '工作')
   const app = await electron.launch({ args: [`--user-data-dir=${ud}`, '--lang=zh-CN', DESK], cwd: DESK, env })
   try {
     const win = await app.firstWindow()
@@ -91,7 +93,7 @@ async function main() {
     await shot('back')
   } finally {
     await app.close().catch(() => {})
-    for (const d of [home, path.dirname(path.dirname(B))]) fs.rmSync(d, { recursive: true, force: true })
+    for (const d of [home, workspace]) fs.rmSync(d, { recursive: true, force: true })
   }
   console.log(failed ? `\n${failed} 项没过` : '\n全部通过', '截图:', SHOTS)
   process.exit(failed ? 1 : 0)

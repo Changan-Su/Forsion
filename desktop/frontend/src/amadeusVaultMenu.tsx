@@ -64,9 +64,10 @@ export function LocalVaultButton({ vaultRoot }: { vaultRoot: string | null }) {
       label: row.name,
       detail: row.exists ? (row.sync ? `${t('vaultMenu.synced')} · ${row.display}` : row.display) : `${t('vaultMenu.missingDetail')} · ${row.display}`,
       icon: row.exists ? <Folder size={15} /> : <FolderX size={15} />,
-      checked: row.current,
+      // 勾 / 跳过按本窗绑的根判,不按全局 current:别的窗口换过库后,本窗点任一行都要能重新绑上(Codex 评审)
+      checked: row.root === vaultRoot,
       run: () => {
-        if (row.current) return
+        if (row.root === vaultRoot) return
         if (!row.exists) return warn(translate('vaultMenu.missing', { name: row.name }))
         void usePageStore.getState().switchLocalVault(row.root).catch((e) => failed(e, row.name))
       },
