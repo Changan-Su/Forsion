@@ -6,7 +6,7 @@
 import { registerMessages, translate } from '../i18n'
 import { engineFetch, homeTarget } from './engine/targets'
 import { AGENT_APP_ID, currentClientId } from './agentRunService'
-import type { TanguCompleteOptions, TanguCompleteRequest, TanguCompleteResult } from '../amadeus/plugins/tanguSeam'
+import type { TanguCompleteOptions, TanguCompleteRequest, TanguCompleteResult, TanguFimRequest } from '../amadeus/plugins/tanguSeam'
 
 registerMessages({
   'inlineai.errUnsupported': { zh: '当前引擎版本不支持正文 AI，请更新 Tangu', en: 'This engine version does not support in-note AI. Update Tangu.' },
@@ -23,6 +23,33 @@ export async function completeInline(req: TanguCompleteRequest, modelId: string 
   const model = req.modelId || modelId
   if (!model) throw new Error(translate('inlineai.errNoModel'))
   const { modelId: _drop, ...body } = req
+  return streamInline(body, model, opts)
+}
+
+/** 引擎 / 云端做不了 FIM(老引擎不认 fim 动作 → 400,没这条路由 → 404,模型不支持 → error 事件 fim_unsupported):
+ *  一律报成机器码 `fim_unavailable`,插件据此落回 complete。 */
+export const FIM_UNAVAILABLE = 'fim_unavailable'
+
+/** 行内补全(FIM):engine `/agent/inline` 的 fim 动作。模型由调用方解析好(tanguProbe.fimModelChoice);返回模型原文。 */
+export async function fimInline(req: TanguFimRequest, modelId: string, opts: TanguCompleteOptions = {}): Promise<{ text: string }> {
+  const body = {
+    action: 'fim',
+    before: req.before,
+    ...(req.after ? { after: req.after } : {}),
+    ...(req.maxTokens != null ? { max_tokens: req.maxTokens } : {}),
+    ...(req.stop?.length ? { stop: req.stop } : {}),
+  }
+  try {
+    return { text: (await streamInline(body, modelId, opts)).text }
+  } catch (e: any) {
+    if (opts.signal?.aborted) throw e
+    if (e?.status === 400 || e?.status === 404 || e?.code === 'fim_unsupported') throw new Error(FIM_UNAVAILABLE)
+    throw e
+  }
+}
+
+/** 发一次 /agent/inline 并读完 SSE。抛出的 Error 带 `status`(HTTP 非 2xx)或 `code`(error 事件的原始机器码)。 */
+async function streamInline(body: object, model: string, opts: TanguCompleteOptions): Promise<TanguCompleteResult> {
   // 本端引擎(P1-K6:基址与鉴权头归目标解析层;正文 AI 只打本机,不跟会话走)
   const r = await engineFetch(homeTarget(), '/agent/inline', {
     method: 'POST',
@@ -34,7 +61,7 @@ export async function completeInline(req: TanguCompleteRequest, modelId: string 
     const raw = await r.text().catch(() => '')
     let detail = ''
     try { detail = String(JSON.parse(raw)?.detail || '') } catch { /* 非 JSON = 老引擎没有这条路由(Express 的 Cannot POST 页) */ }
-    throw new Error(r.status === 404 ? translate('inlineai.errUnsupported') : readable(detail || `HTTP ${r.status}`))
+    throw Object.assign(new Error(r.status === 404 ? translate('inlineai.errUnsupported') : readable(detail || `HTTP ${r.status}`)), { status: r.status })
   }
   const reader = r.body.getReader()
   const decoder = new TextDecoder()
@@ -58,7 +85,7 @@ export async function completeInline(req: TanguCompleteRequest, modelId: string 
     }
   }
   if (buf.startsWith('data:')) { try { onEvent(JSON.parse(buf.slice(5))) } catch { /* 坏尾行 */ } }
-  if (error) throw new Error(readable(error))
+  if (error) throw Object.assign(new Error(readable(error)), { code: error })
   if (!done) throw new Error(translate('inlineai.errEmpty'))
   return done
 }

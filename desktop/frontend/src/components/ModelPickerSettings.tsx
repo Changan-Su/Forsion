@@ -16,6 +16,7 @@ registerMessages({
   'lib.kind.tts': { zh: '朗读', en: 'Read aloud' },
   'lib.kind.realtime': { zh: '语音通话', en: 'Voice call' },
   'lib.kind.mt': { zh: '翻译', en: 'Translation' },
+  'lib.kind.fim': { zh: '补全', en: 'Completion' },
   'lib.kinds': { zh: '模型类型', en: 'Model types' },
   'lib.hint.llm': { zh: '数字是计费倍率；自带 key 的模型可以改上下文窗口。', en: 'Numbers are billing multipliers. Models on your own key can have their context window changed.' },
   'lib.hint.slotOnly': { zh: '这一类只在「默认模型」里可选，不出现在聊天的模型菜单。', en: 'These are only offered under Default models, not in the chat model menu.' },
@@ -96,7 +97,7 @@ export function ModelPickerSettings({ catalog, kind, onKind, subscriptionIds, on
   const q = query.trim().toLowerCase()
   const shown = items.filter((c) => (source === 'all' || c.source === source) && `${c.name} ${c.id} ${c.provider}`.toLowerCase().includes(q))
   const hideable = shown.filter((c) => c.model)
-  const slotOnly = kind === 'tts' || kind === 'realtime' || kind === 'mt'
+  const slotOnly = kind === 'tts' || kind === 'realtime' || kind === 'mt' || kind === 'fim'
   const changeGroup = (id: string, group: string) => {
     const assignments = { ...prefs.assignments }
     if (group === '__provider__') delete assignments[id]

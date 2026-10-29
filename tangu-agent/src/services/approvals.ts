@@ -24,7 +24,7 @@ import { WRITE_TOOLS, writeTargetsOf } from '../tools/writeTargets.js';
 import type { ToolCall } from '../core/types.js';
 import { runHooks } from '../hooks/index.js';
 import { currentAgentSlug } from '../seams/runContext.js';
-import { canonicalToolName, declaredApproval, toolNameSpellings } from '../tools/toolRegistry.js';
+import { canonicalToolName, declaredApproval, declaredApprovalPreview, toolNameSpellings } from '../tools/toolRegistry.js';
 import { USER_BROWSER_ACTIONS, userBrowserActionGated } from '../tools/builtin/browserTools.js';
 import { getRawSection } from '../core/config.js';
 import { deps } from '../seams/runtime.js';
@@ -118,7 +118,8 @@ export function toolNeedsApproval(name: string, rawMode: ApprovalMode | undefine
   let mode = normalizeApprovalMode(rawMode, 'toolNeedsApproval');
   if (mode === 'custom') mode = customRules().base;
   if (!mode || mode === 'full-auto') return false;
-  const writesFiles = name === 'write_file' || name === 'edit_file' || name === 'multi_edit' || name === 'apply_patch';
+  // git_commit 同写文件档:只动本机仓库、可撤回(10-28 用户定「有权限就直接做」;push / pull 经 capabilities.approval:'command' 进跑命令档)
+  const writesFiles = name === 'write_file' || name === 'edit_file' || name === 'multi_edit' || name === 'apply_patch' || name === 'git_commit';
   // 跑命令档(auto-edit 也要批):run_bash / kill_process / MCP 任意能力 / 后台起进程 / 给进程喂 stdin。
   // run_background + write_process_input = 启动任意 shell 进程并向其喂输入,危险性同 run_bash,纳入此档。
   // browser_task = 自主 agent 以用户身份操作已登录网站(点按/提交),危险性同档。
@@ -356,7 +357,7 @@ function savedAgentFields(args: any): NormalAgentDef | undefined {
  *  返回前整段过 previewText。
  *  opts.keptActions:manage_automation 更新且省略 actions 时,闸门读到的旧动作链(undefined = 没读 / 读不到;
  *  null 或 [] = 旧规则没有动作链)。 */
-export function approvalPreview(call: ToolCall, opts: { keptActions?: unknown[] | null } = {}): string {
+export function approvalPreview(call: ToolCall, opts: { keptActions?: unknown[] | null; profile?: AppProfile } = {}): string {
   return previewText(rawPreview(call, opts));
 }
 
@@ -369,8 +370,12 @@ export function approvalPreviewI18n(call: ToolCall): ApprovalPreviewI18n | undef
   return { key: p.key, vars: Object.fromEntries(Object.entries(p.vars).map(([k, v]) => [k, typeof v === 'number' ? v : previewText(v)])) };
 }
 
+const profileOrUndefined = (): AppProfile | undefined => {
+  try { return deps().profile; } catch { return undefined; }
+};
+
 /** approvalPreview 的未净化版本:末尾可能是块(以换行结尾),controlPreview 据此在后面接补充信息。 */
-function rawPreview(call: ToolCall, opts: { keptActions?: unknown[] | null } = {}): string {
+function rawPreview(call: ToolCall, opts: { keptActions?: unknown[] | null; profile?: AppProfile } = {}): string {
   let args: any = {};
   try {
     args = call.function.arguments ? JSON.parse(call.function.arguments) : {};
@@ -504,6 +509,16 @@ function rawPreview(call: ToolCall, opts: { keptActions?: unknown[] | null } = {
           : keeps && opts.keptActions === undefined ? '(actions unchanged)' : 'wake Muse';
     const off = args.enabled !== undefined && !args.enabled ? ' (disabled)' : '';
     return joinParts([`manage_automation set ${args.id ? full(args.id) : '(new)'}${off}: "${full(args.desc)}"`, `when ${when || '?'}`, steps]);
+  }
+  // 官方插件(签名捆绑包,plugins/official.ts)自己写的卡面文案:只在兜底处生效,覆盖不了上面任何内置分支;
+  // 同名工具里有一份非官方的就不给(declaredApprovalPreview)。抛错 / 不是字符串 → 退回整份参数。外层 approvalPreview 照旧过 previewText。
+  // 同名碰撞按本次 run 的 profile(执行侧按它解析)与部署基线两份一起查(Codex 10-27 #2)。
+  const custom = declaredApprovalPreview(name, opts.profile, profileOrUndefined());
+  if (custom) {
+    try {
+      const text = custom(args);
+      if (typeof text === 'string') return text;
+    } catch { /* 退回整份参数 */ }
   }
   // 兜底(mcp__ 任意能力、插件声明 command 档的工具):整份参数,不在 200 字处截断(Codex 09-25 三轮 #3);多行字符串排成块(#6)
   return withArgs(name, args);
@@ -968,6 +983,8 @@ export function customVerdict(call: ToolCall, rules: CustomApprovalRules): 'allo
 
 export interface GateCtx {
   sessionId: string; execMode?: string; approvalMode?: ApprovalMode; cwd?: string; extraRoots?: string[]; profile?: AppProfile;
+  /** 会话所属项目的目录(git_* 的审批说明按它读,和执行同一个目录)。 */
+  projectPath?: string;
   /** 审批档跟这个会话**此刻**存的设置走(run 中途在输入区切档当场生效;团队成员 = 团队会话);没存才用 approvalMode 快照。
    *  只给「档位本就来自会话设置」的 run(见 agentLoop.approvalModeSessionId),通道 / Muse / 自动化各自定档,不给。 */
   modeSessionId?: string;
@@ -1217,7 +1234,9 @@ export async function gateToolCall(
   if (editedOnCard && !escalate && !forceAsk && !protectedAsk) return { action: 'approve' };
 
   // 控制面调用因保护配置而问(完全放行档改默认工作目录)时,卡上同样先放引擎自己读到的事实,不只是模型写的那句。
-  const base = control || (protectedAsk && isControl) ? await controlPreview(call) : approvalPreview(call);
+  const base = control || (protectedAsk && isControl) ? await controlPreview(call)
+    : name === 'git_commit' || name === 'git_push' || name === 'git_pull' ? await gitPreview(call, ctx.projectPath, ctx.profile)
+    : approvalPreview(call, { profile: ctx.profile });
   const preview = protectedAsk
     ? '⚠ Protected config or credentials · ' + base
     : escalate ? '⚠ Write outside the workspace · ' + base : base;
@@ -1266,6 +1285,18 @@ export async function gateToolCall(
   });
   if (ctx.park) return { action: 'park', decided, preview };
   return decided;
+}
+
+/** git_commit / git_push / git_pull 的卡面:提交哪些文件、推到哪个站哪个仓库用谁的账号(tools/builtin/git.ts gitApprovalPreview)。
+ *  限时 3 秒(它挡在审批卡前面),读不到 / 出错退回参数。动态 import:git 工具模块经 registry 回连这里。 */
+async function gitPreview(call: ToolCall, cwd: string | undefined, profile: AppProfile | undefined): Promise<string> {
+  try {
+    const { gitApprovalPreview } = await import('../tools/builtin/git.js');
+    const timeout = new Promise<null>((resolve) => { setTimeout(() => resolve(null), 3000).unref(); });
+    const text = await Promise.race([gitApprovalPreview(call.function.name, parseCallArgs(call), cwd), timeout]);
+    if (text) return previewText(text);
+  } catch { /* 退回参数 */ }
+  return approvalPreview(call, { profile });
 }
 
 /** 这次调用若按上限档 cap 判,需不需要问人(custom 的 allow 规则对远程污点 run 不许越过它)。 */

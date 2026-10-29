@@ -271,10 +271,11 @@ export function WsFileView({ leaf }: ViewProps) {
     if (!data || (kind !== 'xlsx' && kind !== 'pptx')) { setOffice(null); setOfficeErr(false); return }
     let cancelled = false
     setOffice(null); setOfficeErr(false); setSheetIdx(0)
-    loadOffice(data.bytes, kind)
+    const controller = new AbortController()
+    loadOffice(data.bytes, kind, controller.signal)
       .then((r) => { if (!cancelled) setOffice(r) })
       .catch(() => { if (!cancelled) setOfficeErr(true) })
-    return () => { cancelled = true }
+    return () => { cancelled = true; controller.abort() }
   }, [data, kind])
 
   const openWithDefault = (): void => {
@@ -383,7 +384,7 @@ export function WsFileView({ leaf }: ViewProps) {
     : cm({ value: text, language: 'html', wrap, focusLine: focus })
   else if (kind === 'docx') body = <DocxView bytes={data.bytes} download={target.download} />
   else if (kind === 'xlsx' || kind === 'pptx') {
-    body = officeErr ? <OfficeFail t={t} download={target.download} />
+    body = officeErr ? <OfficeFail t={t} download={target.download} workbook={kind === 'xlsx'} />
       : !office ? <Spinner />
       : office.kind === 'xlsx' ? (
         <div className="wsfile-sheetwrap">

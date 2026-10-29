@@ -14,7 +14,7 @@
  * 样式全在 `chat2/orbits.css`(`.t2o-` 前缀,不改 `sidebar2.css` 本体);几何见该文件头注。
  */
 import React, { useEffect, useMemo, useState } from 'react'
-import { Info, MoreHorizontal, Pencil, Pin, PinOff, Plus, SquarePen, Trash2, UserPlus, Users, UsersRound, FolderPlus, MessageSquarePlus } from 'lucide-react'
+import { Archive, Info, MoreHorizontal, Pencil, Pin, PinOff, Plus, SquarePen, Trash2, UserPlus, Users, UsersRound, FolderPlus, MessageSquarePlus } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 import { OverlayAt, setActiveSpace, useCommandStore, useListFirst, useNativeChromeExtras, useNativeSheetMenu, useSpaceStore, type SheetMenuItem } from '@lcl/engine'
 import { CtxMenuButtons } from '../components/CtxMenuButtons'
@@ -33,7 +33,7 @@ import { AgentAvatar } from '../components/AgentAvatar'
 import { tipProps, tipT } from '../hoverTip'
 import { formatRelative, formatRowTime } from '../format/time'
 import { TeamEditor } from '../components/TeamEditor'
-import { AgentRemoveDialog } from '../components/RemoveDialog'
+import { AgentUninstallDialog } from '../components/UninstallDialog'
 import { showDetails } from '../stores/detailsSubject'
 import * as api from '../services/backendService'
 import { usePageStore } from '../amadeus/store/pageStore'
@@ -43,6 +43,7 @@ import { isHomeSession, isIndependentOrbitConfig, isTeamImageAvatar, sessionWork
 import { runLocationsAvailable } from '../features/runtime'
 import { DeviceSessionSections, attentionBadge } from './chat2/DeviceSessionSections' // P1-K7a
 import { isOrbitPinned, readOrbitPins, toggleOrbitPin, touchOrbitPin, writeOrbitPins, type OrbitPinTimes } from './chat2/orbitPins'
+import { onProjectRelinked } from './chat2/ProjectRelink'
 import './chat2/orbits.css'
 import { homeTarget, useRemoteCapability } from '../services/engine/targets'
 
@@ -72,6 +73,7 @@ registerMessages({
   'orbits.gone.agentBadge': { zh: '已删除', en: 'Deleted' },
   'orbits.gone.engineBadge': { zh: '已卸载', en: 'Uninstalled' },
   'orbits.gone.teamBadge': { zh: '已删除', en: 'Deleted' },
+  'orbits.gone.archive': { zh: '归档历史会话', en: 'Archive past chats' },
   'orbits.team.deleteBusy': { zh: '这个团队还有会话在运行，先停掉再删', en: 'This team still has a running session; stop it before deleting' },
   'orbits.row.editAgent': { zh: '编辑 Agent', en: 'Edit agent' },
   'orbits.row.details': { zh: '查看详情', en: 'View details' },
@@ -172,6 +174,15 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
     })
   }
   const togglePinned = (entryKey: string): void => updatePins((prev) => toggleOrbitPin(prev, entryKey))
+  // 项目重新指向了新文件夹:置顶按分组键存,跟着换键(新键已置顶 = 合并进了一个置顶的项目,留它的)
+  useEffect(() => onProjectRelinked((from, to) => updatePins((prev) => {
+    const was = prev[`ws:${from}`]
+    if (was === undefined) return prev
+    const next = { ...prev }
+    delete next[`ws:${from}`]
+    if (next[`ws:${to}`] === undefined) next[`ws:${to}`] = was
+    return next
+  })), [])
   const activatePinned = (entryKey: string): void => updatePins((prev) => touchOrbitPin(prev, entryKey))
   /** 非 Project 一级行共用同一份菜单状态；`…` 锚到按钮下方，右键锚到指针位置。 */
   const showRowMenu = (at: MenuAt, kind: RowMenu['kind'], slug: string, entryKey: string): void => {
@@ -463,6 +474,21 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
         items.push({ id: 'agent-delete', act: 'agent-delete', danger: true, label: t('orbits.row.deleteAgent'), icon: <Trash2 size={13} />, run: () => { const def = agents.find((a) => a.slug === m.slug) || null; setRowMenu(null); setAgentRemoving(def) } })
       }
     }
+    if (m.kind === 'gone') {
+      // 墓碑行只靠活动会话撑着:归档掉它们这行就没了,归档区里照样找得到(删 Agent 时引擎已经这么做,这里给删得早的、别的设备上删的收尾)
+      items.push({
+        id: 'archive-gone', label: t('orbits.gone.archive'), icon: <Archive size={13} />,
+        run: () => {
+          setRowMenu(null)
+          const ident = m.entryKey.replace(/^row:gone:/, '')
+          const ids = s.sessions.filter((x) => {
+            const c = s.configBySession[x.id] || x.agent_config
+            return (c?.soloAgentSlug ? `agent:${c.soloAgentSlug}` : c?.soloEngineId ? `engine:${c.soloEngineId}` : c?.teamSlug ? `team:${c.teamSlug}` : '') === ident
+          }).map((x) => x.id)
+          void (async () => { for (const id of ids) await s.archiveSession(id, true) })()
+        },
+      })
+    }
     if (m.kind === 'engine') {
       items.push({ id: 'new-session', label: t('orbits.row.newSession'), icon: <MessageSquarePlus size={13} />, run: () => { const id = m.slug; setRowMenu(null); rotateSolo('engine', id) } })
     }
@@ -594,7 +620,7 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
       )}
       {agentRemoving && (
         // 删掉的正是当前私聊的 Agent → 换到新对话,别让人继续往已删的 Agent 发消息(同删团队)
-        <AgentRemoveDialog agent={agentRemoving} onClose={() => setAgentRemoving(null)}
+        <AgentUninstallDialog slug={agentRemoving.slug} name={agentRemoving.name} onClose={() => setAgentRemoving(null)}
           onDone={() => { if (s.activeId && s.configBySession[s.activeId]?.soloAgentSlug === agentRemoving.slug) openNewChat() }} />
       )}
       {teamEditor && (

@@ -145,12 +145,13 @@ describe('#4 删除与保存同队', () => {
 
   it('删除先入队、mustExist 的保存后到 → 保存报 agent not found,不新建', async () => {
     await userSave('readonly');
-    const realRm = fsp.rm.bind(fsp) as (...a: any[]) => Promise<void>;
+    // 删除 = 挪进回收站(10-28):卡在把 agents/bot 挪走的那一步,删除这时还持着 slug 锁
+    const realRename = fsp.rename.bind(fsp) as (...a: any[]) => Promise<void>;
     let release!: () => void;
     const gate = new Promise<void>((r) => { release = r; });
-    vi.spyOn(fsp, 'rm').mockImplementation((async (...a: any[]) => {
+    vi.spyOn(fsp, 'rename').mockImplementation((async (...a: any[]) => {
       if (a[0] === path.join(agentsDir(), 'bot')) await gate;
-      return realRm(...a);
+      return realRename(...a);
     }) as any);
     const del = deleteAgent('bot');
     await sleep(20);

@@ -64,3 +64,26 @@ export function moveCard(seq: string[], id: string, before: string | null): stri
   rest.splice(at < 0 ? rest.length : at, 0, id)
   return rest
 }
+
+/** 摘要卡的立体感(开发者选项,2026-10-28 用户定):浮 = 原来那枚和输入卡同档的投影 + 大圆角;
+ *  半浮(缺省)= 影子收近收淡、圆角小一档,让输入卡做唯一的主浮;平 = 不投影。
+ *  写的一方是宿主设置页(不 import 本文件,Tangu 边界;同一个 key 在 SettingsModal 里另写一份):它写完 localStorage
+ *  再派一次 storage 事件,这里只听事件、不导出写函数。 */
+export type SummaryElevation = 'float' | 'half' | 'flat'
+const SUMMARY_ELEVATION_KEY = 'forsion.summaryElevation'
+const ELEVATIONS: SummaryElevation[] = ['float', 'half', 'flat']
+
+function loadElevation(): SummaryElevation {
+  try {
+    const v = localStorage.getItem(SUMMARY_ELEVATION_KEY) as SummaryElevation | null
+    return v && ELEVATIONS.includes(v) ? v : 'half'
+  } catch { return 'half' }
+}
+
+export const useSummaryElevation = create<{ elevation: SummaryElevation }>(() => ({ elevation: loadElevation() }))
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (e) => {
+    if (e.key === SUMMARY_ELEVATION_KEY) useSummaryElevation.setState({ elevation: loadElevation() })
+  })
+}

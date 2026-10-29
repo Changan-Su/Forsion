@@ -35,9 +35,10 @@ import { normalizeSessionEmoji } from '../../../../../tangu-agent/src/contracts/
 import { DEFAULT_APPROVAL, applyPreset, stickyDefaults, withAmadeusWorkspace } from '../../../../../tangu-agent/src/contracts/sessionDefaults'
 export { DEFAULT_APPROVAL, DEFAULT_THINKING, applyPreset, stickyDefaults, withAmadeusWorkspace } from '../../../../../tangu-agent/src/contracts/sessionDefaults'
 import type { StoreApi } from 'zustand'
-import { defaultModelOf, newChatModelId, reloadDesktopConfig, writeFocusModel, type AppState } from '../../stores/appStore'
+import { defaultModelOf, newChatModelId, rememberedModelId, reloadDesktopConfig, writeFocusModel, type AppState } from '../../stores/appStore'
 import '../messages' // Tangu 自己的文案片段(核心插件化 2c)
 import { failReason, landedAnyway, type FailedSend } from './failedSend'
+import { cancelQuotaReminder } from './quotaReminders'
 
 
 // 本文件自带的词条片段(命名空间 `appstore.*`,与其它文件不重叠)。
@@ -141,6 +142,7 @@ export function recordToUi(r: any, resolveGroup?: (name: string) => { slug?: str
     ...(teamSummary ? { teamSummary: true } : {}),
     // Muse 自己开口发进私聊的(引擎 museDm.ts:proactive / proactive:todo / proactive:approval):消息头上画「主动发来 · 时间」。
     ...(role === 'assistant' && typeof r.origin === 'string' && r.origin.startsWith('proactive') ? { origin: r.origin } : {}),
+    ...(role === 'assistant' && r.origin === 'fallback:quota' && r.model_id ? { fallback: { to: String(r.model_id), reason: 'quota' } } : {}),
   }
   if (role === 'assistant' && Array.isArray(r.tool_calls) && r.tool_calls.length) {
     const results = new Map<string, any>((Array.isArray(r.tool_results) ? r.tool_results : []).map((t: any) => [t.tool_call_id, t]))
@@ -150,6 +152,7 @@ export function recordToUi(r: any, resolveGroup?: (name: string) => { slug?: str
       return {
         id: c.id, name: c.function?.name || c.name || 'tool', arguments: c.function?.arguments,
         result: res ? String(res.content ?? '') : undefined, isError: res?.isError || false,
+        ...(Array.isArray(res?.masked) && res.masked.length ? { masked: res.masked } : {}),
         startedAt: res?.startedAt, elapsedMs: res?.elapsedMs, outputChars: res?.outputChars,
         parallelGroup: res?.parallelGroup, artifactPath: res?.artifactPath, done: true,
         ...(res?.parked === true ? { parked: true } : {}),
@@ -300,6 +303,9 @@ function agentStamp(s: Pick<AppState, 'engines' | 'agentDefs' | 'defaultAgentSlu
 
 const runAborts = new Map<string, AbortController>()
 const subscribedRuns = new Set<string>()
+/** 「换之前先问我」卡上点了「改用 X」:regenerate 过了门槛才记,紧接着那一次 send 带上 quota_fallback(引擎这一轮直接用后备)。
+ *  只认几秒内的:重发半路失败没走到 send,也不会漏到之后哪条消息上。 */
+const quotaFallbackNext = new Map<string, number>()
 const stoppedRuns = new Set<string>()
 const stopRequests = new Map<string, Promise<boolean>>()
 const stopTerminals = new Map<string, { assistantId: string; event: AgentRunEvent }>()
@@ -952,8 +958,9 @@ export interface TanguState {
   moveSessionToProject(sessionId: string, dir: string, name: string): Promise<'moved' | 'locked' | 'running' | 'failed'>
   /** deleteFiles = 同时把项目里的 `.tangu/` 移进系统废纸篓(项目文件夹本身不动)。 */
   removeWorkspace(ws: WorkspaceDescriptor, opts?: { deleteFiles?: boolean }): Promise<void>
-  /** 删除 Agent(侧栏 / 名册共用);deleteFiles = 连它的文件(记忆、Library)一起移进系统废纸篓,否则留在引擎的 agents/.removed/。失败抛错。 */
-  removeAgent(agent: NormalAgentDef, deleteFiles: boolean): Promise<void>
+  /** 删除 Agent(卸载确认框;侧栏 / 名册 / 商店共用):本机引擎整份挪进回收站(返回 trashId,撤销 / 回收站页恢复用),
+   *  私聊缺省归档、deleteChats 一并删。失败抛错。 */
+  removeAgent(slug: string, opts?: { deleteChats?: boolean }): Promise<{ trashId?: string }>
   /** holdFailed:没发出去的那条留在会话末尾(借 Comma 的失败气泡)并当作「收下了」返回 true —— 只给输入框里手打的那条用;
    *  其余调用方(编辑重发、插件、文档任务……)靠 false 回滚 / 报错,照旧 toast + false。 */
   send(text: string, attachments: Attachment[], workspaceFiles?: Attachment[], skillIds?: string[], mentions?: { priorityAgent?: string; mentionAgents?: string[]; mentionProjects?: Array<{ name: string; path: string }> }, sessionId?: string | null, fromQueue?: boolean, holdFailed?: boolean): Promise<boolean>
@@ -969,7 +976,7 @@ export interface TanguState {
   /** /retry:重跑最后一条用户消息。运行中 / 有排队项时排到本轮结束后,到时再取「最后一条」。 */
   retry(sessionId?: string | null, fromQueue?: boolean): Promise<boolean>
   editUserMessage(messageId: string, newText: string, sessionId?: string | null): void
-  regenerate(messageId: string, sessionId?: string | null): void
+  regenerate(messageId: string, sessionId?: string | null, opts?: { quotaFallback?: boolean }): void
   /** 返回新分支的会话 id;没建成(没有可分的回答 / 引擎拒绝)= null,已 toast。 */
   branchFromMessage(messageId?: string, sessionId?: string | null): Promise<string | null>
   /** 回退到某条消息的时刻(借 Claude Code rewind):'code'=只回滚 agent 写工具改过的文件,
@@ -1287,6 +1294,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
               startedAt: pl.startedAt ?? evs[i].startedAt, elapsedMs: pl.elapsedMs, outputChars: pl.outputChars,
               parallelGroup: pl.parallelGroup ?? evs[i].parallelGroup, artifactPath: pl.artifactPath,
               parked: pl.parked === true || undefined,
+              masked: Array.isArray(pl.masked) && pl.masked.length ? pl.masked : undefined,
             }
             // sketch 完成即上卡(挂 tool_result 不挂 tool_call:引擎尺寸闸拒掉的不画;callId 去重防 SSE 重放双画)
             const sk = sketchFromToolEvent(evs[i])
@@ -1882,6 +1890,14 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
           }))
           break
         }
+        // 这一轮换了模型(额度用完接力 / 服务端停用):回答前面画「改用了」那一行
+        if (pl.phase === 'model_fallback' && pl.to) {
+          patchMessage(sessionId, assistantId, (m) => ({ ...m, fallback: {
+            to: String(pl.to), ...(pl.toName ? { toName: String(pl.toName) } : {}), ...(pl.from ? { from: String(pl.from) } : {}),
+            ...(pl.reason ? { reason: String(pl.reason) } : {}), ...(Number(pl.resetsAt) > 0 ? { resetsAt: Number(pl.resetsAt) } : {}),
+          } }))
+          break
+        }
         // 引擎的其余 status(generating 进度等)对桌面 UI 无用,只取网络重试提示。
         if (pl.phase === 'llm_retry') {
           set((s) => ({
@@ -1903,6 +1919,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     if (subscribedRuns.has(runId)) return
     subscribedRuns.add(runId)
     clearSuggestion(sessionId) // 输入建议只活到下一轮起跑;在这里作废,不看这个会话的输入框此刻挂没挂着
+    cancelQuotaReminder(sessionId) // 这个会话又跑了一轮(重试 / 接着聊 / 别的窗口发的):「到时提醒我」挂的那一轮已不是最后失败的那轮
     const ac = new AbortController()
     runAborts.set(runId, ac)
     const assistantRef = { current: assistantId }
@@ -2558,23 +2575,19 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     }
   },
 
-  removeAgent: async (agent, deleteFiles) => {
+  removeAgent: async (slug, opts) => {
     const t = get().tr
-    // 本机 Agent(有 libraryDir):先让引擎把整个目录挪进 agents/.removed/,勾了「同时删除相关文件」再移进系统废纸篓 ——
-    // 先挪后删,引擎拒删(默认 Agent / 启用中的 Muse)时文件不会先没了;废纸篓失败文件还在 .removed,只提示。
-    // 没有废纸篓接口时退回引擎直接删;云端 Agent 没有本机文件,直接删。
-    const trash = window.tangu?.trashHostPath
-    const keep = !!agent.libraryDir && (!deleteFiles || !!trash)
-    const r = await api.deleteAgentDef(homeTarget(), agent.slug, keep ? { keepFiles: true } : undefined)
+    const r = await api.deleteAgentDef(homeTarget(), slug, opts)
     if (!r?.ok) throw new Error(t('agentProfile.deleteFailed'))
-    if (keep && deleteFiles && r.keptAt) await trash!(r.keptAt).catch(() => get().toast(t('app.agentTrashFail', { path: r.keptAt! }), true))
     set((s) => {
-      const agentDefs = s.agentDefs.filter((a) => a.slug !== agent.slug)
-      return { agentDefs, defaultAgentSlug: s.defaultAgentSlug === agent.slug ? (agentDefs[0]?.slug || 'xyra') : s.defaultAgentSlug }
+      const agentDefs = s.agentDefs.filter((a) => a.slug !== slug)
+      return { agentDefs, defaultAgentSlug: s.defaultAgentSlug === slug ? (agentDefs[0]?.slug || 'xyra') : s.defaultAgentSlug }
     })
     get().refreshAgents()
+    void get().refreshSessions(get().cfg).catch(() => {}) // 引擎已把它的私聊归档:挪进归档区,工作区不留「已删除」那行
     window.dispatchEvent(new Event('forsion:agents-changed'))
     window.tangu?.requestMainAction?.('agents-changed')
+    return { trashId: r.trashId }
   },
 
   // ── Agent Desk:聊天右侧演出面板。会话级快照落 localStorage(persistDeskSoon),
@@ -2901,8 +2914,10 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     const sessionModelId = wasNewChat
       ? (implicitModelId || newChatModelId(get()))
       : (get().sessions.find((s) => s.id === sessionId)?.model_id || useChildChat.getState().sessions[sessionId]?.model_id || defaultModelOf(get(), refForSession(sessionId)) || get().modelsResp?.defaultModelId || undefined)
+    const quotaFallback = Date.now() - (quotaFallbackNext.get(sessionId) ?? 0) < 15_000
+    quotaFallbackNext.delete(sessionId)
     try {
-      const r = await startRun(targetForSession(sessionId), { sessionId, message: text, modelId: sessionModelId, attachments, agentConfig })
+      const r = await startRun(targetForSession(sessionId), { sessionId, message: text, modelId: sessionModelId, attachments, agentConfig, ...(quotaFallback ? { quotaFallback } : {}) })
       uiActionOwnedRuns.add(r.runId) // G2:本窗口是这条 run 的发起者 → 只有本窗口执行它的界面动作
       if (seedFrom) set((st) => { const next = { ...st.seedOnceBySession }; delete next[sessionId]; return { seedOnceBySession: next } })
       // 助手身份盖章:外部引擎名 / Normal Agent / 群聊由 group_speaker 逐发言人盖(见 agentStamp)。
@@ -3043,7 +3058,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     void get().truncateAndResend(idx, newText, list[idx].attachments || [], sid)
   },
 
-  regenerate: (messageId, targetSessionId) => {
+  regenerate: (messageId, targetSessionId, opts) => {
     const t = get().tr
     const sid = targetSessionId === undefined ? get().activeId : targetSessionId
     if (!sid || get().runningBySession[sid]) return
@@ -3053,6 +3068,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     let u = idx - 1
     while (u >= 0 && list[u].role !== 'user') u--
     if (u < 0) { get().toast(t('app.regenNoUser'), true); return }
+    if (opts?.quotaFallback) quotaFallbackNext.set(sid, Date.now())
     void get().truncateAndResend(u, list[u].content, list[u].attachments || [], sid)
   },
 
@@ -3255,7 +3271,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       // S4:按会话所在的位置记(空白新对话 = 焦点),不再一律看焦点。
       const where = sid ? refForSession(sid) : focusRef()
       if (where.kind === 'unit') { writeFocusModel(where, modelId); if (sameRef(where, focusRef())) set({ focusModelId: modelId }) }
-      else set((s) => { void window.tangu?.setConfig?.({ modelId }); return { cfg: { ...s.cfg, modelId } } })
+      else set((s) => { const remembered = rememberedModelId(modelId, s.modelsResp); void window.tangu?.setConfig?.({ modelId: remembered }); return { cfg: { ...s.cfg, modelId: remembered } } })
       // 这次选的就是「新会话用哪个模型」的最新答案:空白新对话草稿里更早定下的那个(newChatModel 排在记忆前面,发出去之后也不清)
       // 不能再压着它 —— 否则经归档 / 切 Space / /sessions 回到空白新对话时,药丸还是旧的那个,发出去也是。
       if (sid && sameRef(where, focusRef())) set({ newChatModel: null })

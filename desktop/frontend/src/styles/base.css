@@ -141,10 +141,15 @@
   --db-page-line-height: 26px;
   --duration-instant: 0.1s;
   --duration-fast: 0.15s;
+  --duration-base: 0.2s; /* 8.11 新加的唯一一档:折叠、布局类补间 */
   --duration-slow: 0.25s;
-  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
-  /* 「agent 切换」同款灵动曲线(轻微过冲);用于展开/弹出等微动效,全局统一 taste */
-  --ease-spring: cubic-bezier(0.2, 0.8, 0.3, 1);
+  /* 弃用别名(8.11,DESIGN §3「动效 token」别名表):保留一个小版本后删,check:motion 禁新用。
+     --ease-spring 没有回弹、名字误导;--ease-out 与 --ease-surface 肉眼分不出;--ease-apple / --dur-* 原来各处同名不同值。 */
+  --ease-out: var(--ease-surface);
+  --ease-spring: var(--ease-surface);
+  --ease-apple: var(--ease-calm);
+  --dur-fast: var(--duration-fast);
+  --dur-normal: var(--duration-slow);
   /* ── 空间高程 token（明暗统一材质见下方 html:root 规则） ── */
   --on-accent: #fbfbfa;
   --on-accent-ink: var(--on-accent);
@@ -268,12 +273,15 @@ html[data-glass='off'] * {
  * The html:root specificity also wins over older installed first-party theme CSS. */
 html:root[data-mode='light'] {
   --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.025), 0 8px 24px -6px rgba(0, 0, 0, 0.05);
+  /* 半浮:住在纸里、身下没有正文的卡(摘要栏卡片缺省)。影子收近收淡,让输入卡做唯一的主浮(2026-10-28 用户定) */
+  --card-shadow-low: 0 1px 2px rgba(0, 0, 0, 0.025), 0 4px 10px -6px rgba(0, 0, 0, 0.07);
   --btn-shadow: none;
   --icon-shadow: none;
 }
 /* 暗色同一档「淡」:层次主要靠底色小台阶,阴影只在浮层边缘留一点(10-03 用户定 d3;.35/.6 + 顶边微光被否「太重」,别往重里调)。 */
 html:root[data-mode='dark'] {
   --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.10), 0 8px 24px -6px rgba(0, 0, 0, 0.18);
+  --card-shadow-low: 0 1px 2px rgba(0, 0, 0, 0.12), 0 4px 10px -6px rgba(0, 0, 0, 0.22);
   --btn-shadow: none;
   --icon-shadow: none;
 }
@@ -281,6 +289,7 @@ html:root[data-mode='dark'] {
 /* Flat only clears decorative elevation; focus, selection and menu motion stay intact. */
 html:root[data-mode][data-flat='1'] {
   --card-shadow: none;
+  --card-shadow-low: none;
   --btn-shadow: none;
   --icon-shadow: none;
   --seg-thumb-shadow: none;
@@ -294,6 +303,9 @@ html:root[data-mode][data-flat='1'] {
 
 /* ─── 重置 ─── */
 * { box-sizing: border-box; margin: 0; padding: 0; }
+/* 上一行把 UA 给模态 <dialog> 的 margin:auto 也清了 → 插件 showModal() 的对话框贴在左上角(走查续八 8.13)。
+ * :where 零特异性:只压过 *,组件 / 插件自己写了 margin 就以它为准。非模态 show() 不管。 */
+:where(dialog:modal) { margin: auto; }
 html, body, #root { height: 100%; }
 body {
   font-family: var(--font-ui);
@@ -389,12 +401,15 @@ a:hover { color: var(--accent-ink); }
   to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
-/* 无障碍:尊重系统「减少动态效果」,关掉动画/过渡(framer-motion 由 useReducedMotion 各自处理) */
+/* 无障碍:尊重系统「减少动态效果」(DESIGN §3 规矩 8「留反馈,去点缀」,走查续八 8.3):关键帧一律压掉(转圈、骨架屏闪光照旧停);
+   过渡只留颜色 / 底色 / 边色 / 透明度 / 阴影,时长 --duration-fast —— 位移、缩放、尺寸不动,拨开关底色仍渐变过去。
+   framer-motion 由 Root / MobileRoot 根上的 <MotionConfig reducedMotion="user"> 跟系统(只留透明度)。 */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;
-    transition-duration: 0.001ms !important;
+    transition-property: color, background-color, border-color, opacity, box-shadow !important;
+    transition-duration: var(--duration-fast) !important;
     scroll-behavior: auto !important;
   }
 }
@@ -1426,6 +1441,34 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 }
 .tool-group-status { flex-shrink: 0; display: inline-flex; }
 .tool-group-status:empty { display: none; }
+/* 发给模型前脱敏(借鉴 magpie 方案 A):过程行标题后一句「遮住 N 个值」;展开后被遮的值垫一层主题色底,不画框、不加下划线 */
+.t2-mask-tag {
+  display: inline-flex; align-items: center; gap: 4px; margin-left: 2px; flex-shrink: 0; white-space: nowrap;
+  color: var(--text-muted); font: 400 var(--ui-font-caption)/1.3 var(--font-ui); border-radius: var(--radius-sm); cursor: pointer;
+}
+.t2-mask-tag svg { color: var(--accent-ink); }
+.t2-mask-tag:hover, .t2-mask-tag.open { color: var(--text); }
+.t2-mask-tag:focus-visible { outline: 2px solid var(--focus-ring, var(--accent)); outline-offset: 2px; }
+.t2-masked { background: color-mix(in srgb, var(--accent-ink) 16%, transparent); border-radius: 3px; padding: 0 1px; }
+.t2-mask-pop { width: min(440px, calc(100vw - 24px)); padding: 10px 12px 8px; font: 400 var(--ui-font-caption)/1.45 var(--font-ui); color: var(--text-muted); }
+.t2-mask-pop h4 { margin: 0 0 8px; font: 500 var(--ui-font-meta)/1.3 var(--font-ui); color: var(--text); }
+.t2-mask-pop table { width: 100%; border-collapse: collapse; }
+.t2-mask-pop th { text-align: left; font-weight: 400; color: var(--text-faint); padding: 0 6px 4px 0; }
+.t2-mask-pop td { padding: 5px 6px 5px 0; vertical-align: top; border-top: var(--border-width) solid var(--border); }
+.t2-mask-pop td:first-child { color: var(--text); white-space: nowrap; }
+.t2-mask-pop code { font-family: var(--font-mono); font-size: var(--ui-font-caption); color: var(--text); word-break: break-all; }
+.t2-mask-foot { display: flex; align-items: center; gap: 10px; margin-top: 6px; color: var(--text-faint); }
+.t2-mask-foot .grow { flex: 1; }
+.t2-mask-foot button { padding: 0; color: var(--accent-ink); font: inherit; background: none; border: 0; cursor: pointer; }
+.t2-mask-done { color: var(--text-faint); white-space: nowrap; }
+.mask-settings-list { padding: 0 15px 12px; } /* 同 .settings-row-notes:跟行的左右边距对齐 */
+.mask-settings-group + .mask-settings-group { margin-top: 8px; }
+.mask-settings-group-head { display: flex; align-items: baseline; gap: 8px; padding: 4px 0; }
+.mask-settings-group-head small, .mask-settings-item small { color: var(--text-faint); }
+.mask-settings-item { display: flex; align-items: center; gap: 8px; min-height: 26px; color: var(--text-muted); font-size: var(--ui-font-meta); }
+.mask-settings-item > span:first-child { color: var(--text); min-width: 72px; }
+.mask-settings-item code { font-family: var(--font-mono); }
+.mask-settings-item .grow { flex: 1; }
 .tool-group-list { padding: 4px 0 2px; }
 .tool-row { position: relative; font-size: var(--ui-font-meta, 12px); }
 .tool-row:not(:last-child)::before {
@@ -1938,17 +1981,12 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 /* 打开时药丸撑到与菜单同宽、右缘对齐。
    ⚠️ 走 min-width 不走 width:width:auto → 224px 不可插值,动画不会跑;0 → 224px 才行。
    .is-open 三段选择器是为了压过 .t2c-row .composer-chip{min-width:0}(窄屏收缩用)。 */
-/* ⚠️ 动的是 width 且**必须**配 interpolate-size:allow-keywords —— 没有它,fit-content(以及 auto)
-   到 224px 不可插值,过渡根本不跑。
-   ⚠️ 别改回「min-width: 0 → 224px」那版:它开的时候看着对,收的时候几乎瞬变 —— 因为可见区间只有
-   [自然宽, 224],而动画区间是 [0, 224],front-loaded 的 spring 曲线在头 25ms 就跌破了自然宽,
-   剩下 155ms 全动在看不见的地方。实测钉在 scripts/model-menu.check.cjs(开/收各采样)。
-   ponytail: Safari 尚不支持 interpolate-size,那边优雅降级为无动画;真要管 Safari 再改成 JS 量自然宽写 px。 */
+/* 开合直接到位、只换底色(走查续八 8.4,规矩 3:颜色和位移同一时长、同一条曲线):以前宽度补 180ms,菜单 80ms 就退完了、
+   药丸还在收。别把 width 过渡加回来;scripts/model-menu.check.cjs 的 B 钉着「开 / 收都不补宽度」。 */
 .composer-chip.model-pill-btn {
   min-width: 0;
-  interpolate-size: allow-keywords;
   width: fit-content;
-  transition: background var(--duration-fast), width 0.18s var(--ease-spring);
+  transition: background var(--duration-fast);
 }
 .composer-chip.model-pill-btn.is-open {
   display: grid;
@@ -2354,12 +2392,14 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .engine-picker-more:hover { color: var(--text); }
 /* flex-shrink:0 —— 默认可压缩会让 pill 在放不下时被挤扁(内容宽 = 容器宽 → 永远不溢出、⋯ 永不出现),
    要的是保持原尺寸然后横向溢出去翻页。 */
-.engine-pill { display: inline-flex; align-items: center; flex-shrink: 0; cursor: pointer; white-space: nowrap; overflow: hidden; opacity: 0.6; padding: 7px; border-radius: var(--radius-lg, 16px); color: var(--text-muted); transition: opacity 0.2s ease, background-color 0.25s ease-out, color 0.2s ease; }
+/* 选中 / 悬停一个时长、一条曲线(走查续八 8.6):以前五个时长(200 / 250 / 500 / 600 / 400ms),标签 max-width 补到 160px 前 30% 就展开完、
+   后面在空转。标签按实际宽展开(interpolate-size 补 width 0 → auto,上限仍 160px),选中那一下最多鼓 4%、落回 1。 */
+.engine-pill { display: inline-flex; align-items: center; flex-shrink: 0; cursor: pointer; white-space: nowrap; overflow: hidden; opacity: 0.6; padding: 7px; border-radius: var(--radius-lg, 16px); color: var(--text-muted); transition: opacity var(--pill-select-duration) var(--ease-surface), background-color var(--pill-select-duration) var(--ease-surface), color var(--pill-select-duration) var(--ease-surface), padding var(--pill-select-duration) var(--ease-surface); }
 .engine-pill:hover { opacity: 1; }
 .engine-pill:disabled { cursor: default; }
 .engine-pill .engine-pill-icon { display: inline-flex; flex-shrink: 0; }
-.engine-pill .engine-pill-label { max-width: 0; opacity: 0; overflow: hidden; font-size: var(--ui-font-body, 13px); transition: max-width 0.6s cubic-bezier(0.2, 0.8, 0.3, 1), opacity 0.5s cubic-bezier(0.2, 0.8, 0.3, 1) 0.05s, margin 0.6s cubic-bezier(0.2, 0.8, 0.3, 1); }
-.engine-pill:hover .engine-pill-label { max-width: 160px; opacity: 1; margin-left: 6px; }
+.engine-pill .engine-pill-label { interpolate-size: allow-keywords; width: 0; max-width: 160px; opacity: 0; overflow: hidden; font-size: var(--ui-font-body, 13px); transition: width var(--pill-select-duration) var(--ease-surface), opacity var(--pill-select-duration) var(--ease-surface), margin var(--pill-select-duration) var(--ease-surface); }
+.engine-pill:hover .engine-pill-label { width: auto; opacity: 1; margin-left: 6px; }
 /* 触屏长按 = 打开菜单,不该同时选中药丸里的字(Android WebView 会选中并留下选区手柄)。 */
 @media (pointer: coarse) { .engine-pill { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; } }
 /* ── 触屏按压反馈(2026-10-02 真机录屏打回:「点哪儿都有蓝色遮罩」)。
@@ -2375,9 +2415,9 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   :is(button, summary, [role='button'], [role='tab'], [role='menuitem'], [role='option']) { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
   :root:not([data-ripple]) :is(button, a, summary, [role='button'], [role='tab'], [role='menuitem'], [role='option']):not(:disabled):active { box-shadow: inset 0 0 0 100vmax rgba(128, 128, 128, 0.2); }
 }
-.engine-pill.selected { opacity: 1; padding: 7px 13px; background: var(--overlay-light); color: var(--text); animation: agentSelectPop 0.4s ease-out; }
-.engine-pill.selected .engine-pill-label { max-width: 160px; opacity: 1; margin-left: 6px; font-weight: 600; }
-@keyframes agentSelectPop { 0% { transform: scale(1); } 35% { transform: scale(1.12); } 100% { transform: scale(1.02); } }
+.engine-pill.selected { opacity: 1; padding: 7px 13px; background: var(--overlay-light); color: var(--text); animation: agentSelectPop var(--pill-select-duration) var(--ease-surface); }
+.engine-pill.selected .engine-pill-label { width: auto; opacity: 1; margin-left: 6px; font-weight: 600; }
+@keyframes agentSelectPop { 0% { transform: scale(1); } 40% { transform: scale(1.04); } 100% { transform: scale(1); } }
 .engine-picker-hint { font-size: var(--ui-font-caption, 11px); color: var(--text-faint); }
 /* Agent 选择器复用 engine-picker 形态;icon 槽放圆形头像或首字母 */
 .agent-pill-avatar { width: 18px; height: 18px; border-radius: 50%; object-fit: cover; display: block; }
@@ -3290,7 +3330,8 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   border-radius: var(--radius-pill, 999px);
   background: var(--overlay-medium);
   cursor: pointer;
-  transition: border-color var(--duration-fast), background var(--duration-fast);
+  /* 底色、边色与旋钮前沿同一时长、同一条曲线(规矩 3,走查续八 8.7):以前 150ms ease 比旋钮晚到。 */
+  transition: border-color var(--switch-edge-duration) var(--ease-surface), background-color var(--switch-edge-duration) var(--ease-surface);
 }
 /* 旋钮按左右两条边定位(借鉴 Comma 方案 §4「开关拉伸」,10-24):两条边各走 --switch-edge-duration,后沿晚 --switch-edge-lag
  * 出发 —— 离开时拉长、落地时回缩;过渡写在「要去的那一态」上,所以哪条边是后沿跟着方向换。不用 keyframes,中途反悔也接得住。
@@ -3496,6 +3537,23 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   .settings-control-row[data-fit='wrap'] .settings-inline-actions { justify-content: stretch; }
   .settings-control-row[data-fit='wrap'] .settings-inline-actions > .btn { flex: 1 1 0; }
   .settings-meters { grid-template-columns: 1fr; gap: 16px; }
+}
+/* 设置零件放进窄窗格(右栏 / 左栏,窗口仍宽)也得换行(走查续八 8.13):上面 ≤820 那段里设置行的规则,按窗格宽再写一份。
+ * 窗格 = .wb-view(lcl/engine/engine.css 给了 container-type)。≤820 那段不能搬走:设置弹窗挂在 body 上,不在任何窗格里。 */
+@container (max-width: 420px) {
+  .settings-control-row { align-items: flex-start; flex-direction: column; }
+  .settings-row-control,
+  .settings-row-wide-control { width: 100%; flex-basis: auto; justify-content: flex-start; min-width: 0; }
+  .settings-row-control > select,
+  .settings-row-control > input { width: 100%; max-width: none; }
+  .settings-control-row[data-fit='inline'] { flex-direction: row; flex-wrap: wrap; align-items: center; row-gap: 8px; }
+  .settings-control-row[data-fit='inline'] > .settings-control-copy { flex: 1 1 0; min-width: 120px; }
+  .settings-control-row[data-fit='inline'] > .settings-row-control { width: auto; flex: 0 0 auto; justify-content: flex-end; }
+  .settings-control-row[data-fit='wrap'] .settings-parts-inline,
+  .settings-control-row[data-fit='wrap'] .settings-inline-actions { width: 100%; }
+  .settings-control-row[data-fit='wrap'] .settings-parts-inline > input { flex: 1; width: auto; }
+  .settings-control-row[data-fit='wrap'] .settings-inline-actions { justify-content: stretch; }
+  .settings-control-row[data-fit='wrap'] .settings-inline-actions > .btn { flex: 1 1 0; }
 }
 /* 触屏上设置零件的按钮、输入框、步进器加高到 36(手指好点)。只认零件画的行与面板,没换过来的旧页面不动。 */
 @media (pointer: coarse) {
@@ -4384,6 +4442,8 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
   box-shadow: var(--card-shadow, 0 8px 24px var(--shadow));
   color: var(--text);
 }
+/* 退场时 framer 把卡片弹出流、钉住原宽(data-motion-pop-id);max-width:100% 会按变窄的通知区把它夹窄 —— 退场卡不夹(走查续八 8.2)。 */
+.ntf[data-motion-pop-id] { max-width: none; }
 /* 级别只由左侧小图标的颜色传达(无边框高亮) */
 .ntf-icon { flex-shrink: 0; margin-top: 1px; color: var(--text-muted); }
 .ntf-success .ntf-icon { color: var(--green, #34a262); }
@@ -5384,6 +5444,8 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
 .mk-notice-body small { color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
 .mk-notice-close { flex: 0 0 auto; width: 22px; height: 22px; display: grid; place-items: center; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-muted); cursor: pointer; }
 .mk-notice-close:hover { background: var(--bg-hover); color: var(--text); }
+.mk-notice-action { flex: 0 0 auto; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--accent-ink); font-size: var(--ui-font-meta, 12px); font-weight: 600; padding: 1px 6px; cursor: pointer; }
+.mk-notice-action:hover { background: var(--bg-hover); }
 @media (max-width: 820px) { .mk-notice { width: calc(100% - 32px); } } /* 与 .settings-body 的 16px 内边距对齐(宽度与卡片区同为 max 1120 居中) */
 
 /* Secondary surfaces: short fade with a barely perceptible expansion, sampled from
@@ -5403,6 +5465,8 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
   --press-recoil-duration: 150ms;
   --menu-exit-duration: 80ms; /* 菜单、二级面板、命令面板退场 */
   --palette-enter-duration: 120ms; /* 命令面板、⌘P 进场 */
+  --collapse-duration: var(--duration-base); /* 折叠展开 / 收起同长度(不算浮层退场,不缩短),箭头同一份 */
+  --collapse-ease: var(--ease-drawer);
   --tip-delay: 300ms; /* 提示框首次出现 */
   --tip-handoff: 80ms; /* 离开后多久再收(期间移到相邻触发点 = 接力) */
   --tip-enter: 150ms;
@@ -5423,6 +5487,9 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
   --canvas-switch-hud: 160ms; /* 进场:胶囊 / 说明淡入多久;空白处说明被卡盖住时让开 */
   --switch-edge-duration: 120ms; /* 开关旋钮左右两条边各自的时长 */
   --switch-edge-lag: 30ms; /* 开关旋钮后沿晚出发多久(离开时拉长、落地时回缩) */
+  --pill-select-duration: 200ms; /* 新对话 Agent / 引擎药丸选中、标签展开(走查续八 8.6) */
+  --toast-enter-duration: 180ms; /* 两种吐司进场:从贴着的那条边 6px 滑进 + 淡入(走查续八 8.5 A;右上通知卡在 NotificationHost 同值) */
+  --toast-exit-duration: 140ms; /* 底部吐司退场;右上通知卡 160ms 右移 16px(NotificationHost) */
   --draw-duration: 600ms; /* 描线 */
   --land-duration: 160ms; /* 拖动排序松手落位:被拖的那一个从松手处滑进新位置(LCL land(),曲线同落点线 --lcl-drop-ease) */
 }
@@ -5439,7 +5506,7 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
 /* 名单 = 所有「弹出来的菜单」;10-02 去掉匹配不到任何元素的 .add-menu,补上 Chat 的 / @ 菜单、账户菜单、仪表盘添加菜单。 */
 html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .paste-as-menu,
   .project-menu, .composer-menu, .cm-sub, .engine-picker, .add-menu-sub, .unitsw-menu,
-  .rb-menu, .rb-iconpick, .t2c-menu, .account-pop, .dash-add-menu) {
+  .rb-menu, .rb-iconpick, .t2c-menu, .account-pop, .dash-add-menu, .inline-toolbar) {
   animation: ui-menu-enter var(--menu-enter-duration) var(--menu-enter-ease);
   transform-origin: top left;
 }
@@ -5447,25 +5514,33 @@ html:root :is(.project-menu, .composer-menu, .engine-picker, .t2c-menu) { transf
 @media (prefers-reduced-motion: reduce) {
   html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .paste-as-menu,
     .project-menu, .composer-menu, .cm-sub, .engine-picker, .add-menu-sub, .unitsw-menu,
-    .rb-menu, .rb-iconpick, .t2c-menu, .account-pop, .dash-add-menu) { animation: none; }
+    .rb-menu, .rb-iconpick, .t2c-menu, .account-pop, .dash-add-menu, .inline-toolbar) { animation: none; }
 }
 /* 退场:与上面的进场是**同一张名单**(check:motion 钉着)。OverlayAt 卸载时留下的替身(data-lcl-exit,见 menuAnchor.tsx
    useExitGhost)缩到 0.99、淡出、加速离开;不加模糊(filter 会让菜单成为 fixed 后代的包含块,DESIGN §4)。
    不在 OverlayAt 里的菜单关掉照旧立刻消失。减少动态效果时只淡出。 */
 html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .paste-as-menu,
   .project-menu, .composer-menu, .cm-sub, .engine-picker, .add-menu-sub, .unitsw-menu,
-  .rb-menu, .rb-iconpick, .t2c-menu, .account-pop, .dash-add-menu)[data-lcl-exit] {
+  .rb-menu, .rb-iconpick, .t2c-menu, .account-pop, .dash-add-menu, .inline-toolbar)[data-lcl-exit] {
   animation: ui-menu-exit var(--menu-exit-duration) var(--ease-exit) forwards;
 }
 @media (prefers-reduced-motion: reduce) {
   html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .paste-as-menu,
     .project-menu, .composer-menu, .cm-sub, .engine-picker, .add-menu-sub, .unitsw-menu,
-    .rb-menu, .rb-iconpick, .t2c-menu, .account-pop, .dash-add-menu)[data-lcl-exit] {
+    .rb-menu, .rb-iconpick, .t2c-menu, .account-pop, .dash-add-menu, .inline-toolbar)[data-lcl-exit] {
     animation-name: ui-fade-out;
   }
 }
-/* 替身里的子元素不重放自己的进场(命令面板 / ⌘P 的面板本身除外:它跟着遮罩一起退,见 engine.css)。 */
-[data-lcl-exit] :not(.cmd-panel, .amx-qf) { animation: none !important; }
+/* 替身本身缺省不动画(走查续八 8.1):替身是原样克隆,身上的进场 animation 还在 —— 不在退场名单上的(以前的笔记划线条)
+   关掉那一下会把进场再放一遍、「弹」出来一次。这里列的 = 所有写了 [data-lcl-exit] 退场规则的类(上面的菜单名单 + 遮罩 +
+   8.4 补的几处);新加退场规则必须加进来,否则退场被这条吃掉。check:motion 钉着。
+   不写成 html:root :is(…) 开头:那是 check:motion 读进场 / 退场名单的格式。 */
+[data-lcl-exit]:not(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .paste-as-menu,
+  .project-menu, .composer-menu, .cm-sub, .engine-picker, .add-menu-sub, .unitsw-menu,
+  .rb-menu, .rb-iconpick, .t2c-menu, .account-pop, .dash-add-menu, .inline-toolbar,
+  .cmd-overlay, .amx-qf-scrim, .dialog-overlay, .amx-cal-cardwrap, [data-motion~='toast']) { animation: none !important; }
+/* 替身里的子元素不重放自己的进场(命令面板 / ⌘P / 确认框的面板本身除外:它跟着遮罩一起退,见 engine.css / amadeus styles.css)。 */
+[data-lcl-exit] :not(.cmd-panel, .amx-qf, .dialog) { animation: none !important; }
 
 /* 统一入场(2026-10-25,DESIGN §3「动效」):宿主与插件同一份,写在标准写法上,插件不用自己做动画。
    - data-motion="enter":「用户刚点了才出现」的内容(点开的清单、展开的分区、换出来的那一版)。只给刚发生的(规矩 6),
@@ -5476,15 +5551,34 @@ html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .
 @keyframes ui-enter { from { opacity: 0; translate: 0 4px; } }
 @keyframes ui-fade-in { from { opacity: 0; } }
 :where([data-motion~='enter']) { animation: ui-enter var(--menu-enter-duration) var(--ease-surface) backwards; }
+/* data-motion="toast"(走查续八 8.5 A):底部居中的轻吐司(.amx-toast)从下沿 6px 滑进 + 淡入,退场由卸载时的替身(useExitGhost)
+   淡出 + 往下 6px 回去。右上通知卡(NotificationHost,framer)同一套数:进 180ms 6px,出 160ms 右移 16px。 */
+@keyframes ui-toast-in { from { opacity: 0; translate: 0 6px; } }
+@keyframes ui-toast-out { to { opacity: 0; translate: 0 6px; } }
+:where([data-motion~='toast']) { animation: ui-toast-in var(--toast-enter-duration) var(--ease-surface) backwards; }
+:where([data-motion~='toast'][data-lcl-exit]) { animation: ui-toast-out var(--toast-exit-duration) var(--ease-exit) forwards; }
 :where(details)::details-content {
   opacity: 0;
-  transition: opacity var(--menu-exit-duration) var(--ease-exit), content-visibility var(--menu-exit-duration) allow-discrete;
+  transition: opacity var(--collapse-duration) var(--collapse-ease), content-visibility var(--collapse-duration) allow-discrete;
 }
-:where(details[open])::details-content {
-  opacity: 1;
-  transition-duration: var(--menu-enter-duration);
-  transition-timing-function: var(--ease-surface);
+:where(details[open])::details-content { opacity: 1; }
+/* 折叠(8.10):宿主与插件同一份。外层 data-motion="collapse" + data-open="true|false",里面**只套一层**;
+   grid-template-rows 0fr ↔ 1fr 过渡(打断接着走、不量高度),内容淡入与展开同时,收起同长度;收着时 visibility:hidden
+   (过渡期间保持可见、收完才藏,Tab 走不进去)。箭头写 data-motion="chevron" + 同一个 data-open,开着转 90°(朝右的箭头)。
+   展开完了里层仍裁切(CSS 不知道过渡何时完);要放开就在外层挂 data-settled —— React 壳 AnimatedCollapse 自己会挂。 */
+:where([data-motion~='collapse']) {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  visibility: hidden;
+  transition: grid-template-rows var(--collapse-duration) var(--collapse-ease), opacity var(--collapse-duration) var(--collapse-ease),
+    visibility var(--collapse-duration);
 }
+:where([data-motion~='collapse'][data-open='true']) { grid-template-rows: 1fr; opacity: 1; visibility: visible; }
+:where([data-motion~='collapse']) > * { min-height: 0; min-width: 0; overflow: hidden; } /* min-width:放开裁切后长标题照样省略,不撑宽侧栏 */
+:where([data-motion~='collapse'][data-settled]) > * { overflow: visible; }
+:where([data-motion~='chevron']) { transition: transform var(--collapse-duration) var(--collapse-ease); }
+:where([data-motion~='chevron'][data-open='true']) { transform: rotate(90deg); }
 :where(dialog[open], [popover]:popover-open) { animation: ui-menu-enter var(--palette-enter-duration) var(--ease-surface); }
 :where(dialog[open])::backdrop { animation: ui-fade-in var(--palette-enter-duration) var(--ease-calm); }
 /* 上面全局的减少动态效果只管元素与 ::before / ::after,这两个伪元素得点名 */
@@ -5525,3 +5619,27 @@ html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .
 /* 设置 → Git →「提交身份」:正在用的那一级的标签跟着主题色,其余照普通 settings-badge */
 .git-identity-panel .settings-badge[data-state="active"] { color: var(--accent-ink); border-color: currentColor; }
 .git-identity-panel [data-git-identity-level] .settings-badge { margin-right: 6px; }
+
+/* 右下角界面缩放提示(uiZoom.ts 的 showZoomHud,挂在 <html> 上不吃 body zoom):⌘± / ⌘0 时亮出,1.5s 后淡出 */
+.ui-zoom-hud {
+  position: fixed; right: 16px; bottom: 16px; z-index: 2147483000;
+  display: inline-flex; align-items: center; gap: 8px; padding: 5px 5px 5px 12px;
+  font-size: var(--ui-font-meta, 12px); color: var(--text-muted); font-variant-numeric: tabular-nums;
+  background: var(--bg-glass, var(--bg-card)); backdrop-filter: var(--panel-blur, blur(8px));
+  border: var(--border-width, 1px) solid var(--border); border-radius: var(--radius-md, 10px);
+  box-shadow: var(--card-shadow);
+  opacity: 0; translate: 0 6px; pointer-events: none;
+  transition: opacity var(--toast-exit-duration, 140ms) var(--ease-exit, ease-in), translate var(--toast-exit-duration, 140ms) var(--ease-exit, ease-in);
+}
+.ui-zoom-hud[data-open] {
+  opacity: 1; translate: 0 0; pointer-events: auto;
+  transition-duration: var(--toast-enter-duration, 180ms); transition-timing-function: var(--ease-surface, ease-out);
+}
+.ui-zoom-hud-pct { color: var(--text); min-width: 3.2em; text-align: right; }
+.ui-zoom-hud-reset {
+  font: inherit; color: var(--text); padding: 3px 10px; border-radius: var(--radius-sm, 6px);
+  border: 0; background: var(--menu-hover, rgba(127, 127, 127, 0.14)); cursor: pointer;
+}
+.ui-zoom-hud-reset:hover { background: var(--border); }
+.ui-zoom-hud-reset[hidden] { display: none; }
+@media (prefers-reduced-motion: reduce) { .ui-zoom-hud { transition: none; translate: none; } }

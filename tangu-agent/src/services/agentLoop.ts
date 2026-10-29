@@ -13,9 +13,10 @@ import { v4 as uuidv4 } from 'uuid';
 import { deps } from '../seams/runtime.js';
 import { resolveProfile } from '../seams/appProfile.js';
 import type { StreamOpts, BuildPayloadOpts } from '../seams/cloudBrain.js';
+import { maskSpans, maskSettings, MASKING_SECTION, staysOnMachine } from '../llm/outboundMask.js';
 import { LlmError, type ThinkingLevel, type ChatMessage, type ToolCall } from '../core/types.js';
 import { clampThinkingLevel, resolveModelCapability } from '../llm/modelCapabilities.js';
-import { PROTOCOL_MARK } from '../llm/openaiCompat.js';
+import { PROTOCOL_MARK, DIRECT_MARK, ACCOUNT_MARK } from '../llm/openaiCompat.js';
 import { realpathSync } from 'node:fs';
 import { publish, drain, cleanup } from './eventBus.js';
 import { makeUiSettingsUpdater } from './uiAck.js';
@@ -24,7 +25,7 @@ import { takeRunThinking } from './sessionSettings.js';
 import { registerLiveRun, unregisterLiveRun, type RunStatus } from './runStatus.js';
 import { makeClientActionRequester } from './clientAck.js';
 import { runHooks, type HookRunContext, type HookVerdict } from '../hooks/index.js';
-import { enterRunContext, currentDisplayAgentSlug, setRunClientTag, setRunCwd } from '../seams/runContext.js';
+import { enterRunContext, currentDisplayAgentSlug, currentRunId, setRunClientTag, setRunCwd } from '../seams/runContext.js';
 import path from 'node:path';
 import { agentsDir, DEFAULT_AGENT_SLUG, engineLibDir } from '../core/tanguHome.js';
 import { renderAboutHuman } from '../agents/humanFolder.js';
@@ -56,7 +57,7 @@ import {
   tagMessageSource, messageSource, persistCheckpoint, messageTimestamp, type CompactBoundary,
 } from './compaction.js';
 import { compactionSettingsFor, type CompactionSettings } from './compactionSettings.js';
-import { isContextOverflowError } from './contextWindowStore.js';
+import { isContextOverflowError, learnFromUpstreamError } from './contextWindowStore.js';
 import { getAgent, isValidSlug, libDirOf, MUSE_AGENT_SLUG, type NormalAgentDef } from '../agents/agentRegistry.js';
 import { loadHarness, shelvedOf, renderHarnessSection, isRefineInvocation, REFINE_DIRECTIVE, consumeHarnessCandidates, renderPendingHarnessCandidates } from '../agents/harnessStore.js';
 import { loadSchedule, entriesOf, upcomingScheduleLines } from './agentSchedule.js';
@@ -74,9 +75,10 @@ import { fitUserImages, normalizeImageAttachments, toImageParts } from './imageA
 import { describeImages, NO_VISION_NOTE, resolveVisionModelId, shouldDescribeImages, whyNoImages, type NoImagesReason } from './visionService.js';
 import { toolImageMessages, type ToolImage } from './toolImages.js';
 import { dropStaleToolImages } from './toolImageWindow.js';
-import { replayAssistantHistory, stepLlmResponse, loadReplaySteps, dropCoveredCalls } from './historyReplay.js';
+import { replayAssistantHistory, stepLlmResponse, loadReplaySteps, dropCoveredCalls, reasoningAccountKey } from './historyReplay.js';
 import { looksLikeToolCallText } from '../llm/textToolCalls.js';
-import { isRetryableLlmError, isAuthExpiredLlmError, withLlmRetry, MODEL_MAX_RETRIES, MODEL_RETRY_BASE_MS, llmRetryBudgetExceeded, sleepOrAbort } from '../llm/retry.js';
+import { isRetryableLlmError, isAuthExpiredLlmError, isQuotaExhaustedLlmError, isForeignReasoningLlmError, withLlmRetry, MODEL_MAX_RETRIES, MODEL_RETRY_BASE_MS, llmRetryBudgetExceeded, sleepOrAbort } from '../llm/retry.js';
+import { relaySettings, noteQuotaExhausted, quotaExhaustedUntil, quotaResetAt, quotaAskSuffix } from '../llm/quotaRelay.js';
 import { runCostCeiling, isOverRunCost } from './runBudget.js';
 import { RepeatedToolFailureGuard, MAX_REPEATED_TOOL_FAILURES } from './repeatedToolFailure.js';
 import { CORRECTION_SIGNAL, NUDGE_SIGNAL, looksLikeCorrection, noteUserStop, takePendingStop, toolLoopSignal } from './judgeSignals.js';
@@ -194,6 +196,9 @@ export function cancelSteer(runId: string, msgId: string): boolean {
  *  用户主动切断的、任务多半没完 —— 否则历史里只有一条无解释的半截助手消息,模型会当它已经收尾,
  *  「打断之后忘记继续之前的任务」的病根就在这。措辞按 Codex 经验保持**告警式**(部分执行风险),
  *  续任务的压力放在系统提示 PERSISTENCE_SECTION 里,标记本身不下指令。 */
+/** 额度用完换了后备模型的 run → 实际模型与落库标记(finalizeAssistantMessage 读;run 结束即删)。 */
+const modelSwaps = new Map<string, { modelId: string; origin: string }>();
+
 export const TURN_INTERRUPTED_MARKER =
   '<turn_interrupted>\n' +
   'The user interrupted this turn on purpose. Any tool calls that were aborted may have partially executed; the task above is likely unfinished.\n' +
@@ -837,7 +842,7 @@ export async function hydrateHistory(
   /** 本次 run 的上游模型 + 协议;回放据此判 providerItems 是不是同一个模型、同一个协议下签出来的
    *  (historyReplay 文件头 ①)。protocol 只能取模型上的**静态**标记 —— hydrate 发生在 buildProviderPayload
    *  之前,动态改道(思考开 → Responses)那一档此时还没定,故只会判「不匹配」,不会误判匹配。 */
-  replayFor?: { apiModelId?: string; protocol?: string },
+  replayFor?: { apiModelId?: string; protocol?: string; account?: string },
   /** false = 不等在飞的惰性检查点(旁聊 /btw:一句题外话不值得最多 45s 的等待,窗口外老行少一截可接受)。 */
   waitCheckpoint = true,
 ): Promise<{
@@ -1343,18 +1348,52 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         console.warn(`[agent-core] run=${runId} resolve 瞬时失败,${wait}ms 后重试 ${attempt}/${MODEL_MAX_RETRIES}: ${(err as any)?.message || err}`),
       ac.signal, // 停止后不再空转退避(resolve 接缝本身没有 signal 位,只能在重试层兜)
     );
-    const { model, baseUrl, apiModelId } = resolvedModel;
+    let { model, baseUrl, apiModelId } = resolvedModel; // 额度用完接力会换成后备模型(relayModel)
+    // 本机模型(Ollama 等)不出这台电脑:不遮,界面也别说「遮住了」(outboundMask.staysOnMachine)。接力换了模型就跟着重算(见 relayModel)。
+    let maskSkipped = staysOnMachine((model as any)?.[DIRECT_MARK], baseUrl);
     let apiKey = resolvedModel.apiKey; // 订阅登录的 token 可能在 run 中途过期 → 下面的重试圈会续期后换掉它
     let credsRefreshedAt = 0;
+    // 额度用完接力(llm/quotaRelay.ts):这一轮实际在用的模型。只换一次,换了之后后备也用完就停下报错。
+    let callModelId = modelId;
+    let quotaRelayed = false;
+    // 这一轮已经开始回答(吐过字 / 推理 / 工具调用):之后撞上额度用完也不换,免得一段回答拼了两个模型
+    let turnStarted = false;
+    const relayModel = async (target: string, until?: number): Promise<boolean> => {
+      const r = await resolveModelAndKey(target).catch((e: any) => { console.warn(`[agent-core] run=${runId} 额度用完的后备模型 ${target} 解析失败: ${e?.message || e}`); return null; });
+      if (!r) return false;
+      const from = callModelId;
+      ({ model, baseUrl, apiModelId } = r);
+      maskSkipped = staysOnMachine((model as any)?.[DIRECT_MARK], baseUrl); // 出站包装按每次请求判;这里让界面标注跟上实际发往的模型
+      apiKey = r.apiKey;
+      callModelId = target;
+      quotaRelayed = true;
+      modelSwaps.set(runId, { modelId: target, origin: 'fallback:quota' });
+      console.warn(`[agent-core] run=${runId} ${from} 额度用完${until ? `(到 ${new Date(until).toISOString()})` : ''},这一轮改用 ${target}`);
+      // 与服务端停用模型的提示(phase:model_fallback)同一种事件,界面画同一种「改用了」行;reason 区分原因
+      void publish(runId, 'status', { phase: 'model_fallback', reason: 'quota', from, to: target, toName: (r.model as any)?.name, ...(until ? { resetsAt: until } : {}) });
+      return true;
+    };
+    // 上一轮刚换过、重置时间还没到:直接用后备,省一次必败的请求(「先问我」开着时照旧先试原模型,撞上了再问)。
+    // 「先问我」卡上点了「改用 X」(input.quotaFallbackNow):这一轮直接用后备。
+    {
+      const until = quotaExhaustedUntil(modelId) ?? undefined;
+      const now = input.quotaFallbackNow === true;
+      const rs = until || now ? relaySettings() : null;
+      if (rs?.fallback && rs.fallback !== modelId && (now || !rs.ask)) await relayModel(rs.fallback, until);
+    }
     // 分步落库 / 跨 run 回放共用的模型身份键(两侧必须是**同一个表达式**,否则永远对不上)。
     // apiModelId 缺省时退回内部 modelId —— 只要求稳定可比,不要求是上游真名(同 resolveModelCapability 的口径)。
     const replayModelKey = apiModelId || modelId;
     // protocol 这里是模型上的**静态**标记 = 「下一次请求要走的协议」的读侧口径(hydrate 用它)。
     // 写侧不用它:落库点改用 payload[PROTOCOL_MARK](本轮**实际**发出去的协议,可能被 tune 动态改道)。
+    // 账号指纹(只存哈希):直连才有。Codex 用 account_id(token 会续期、account_id 不变),自带 key 的用 key;托管面没有 → undefined
+    const accountKeyOf = (m: any, key: string | undefined): string | undefined =>
+      (m?.[DIRECT_MARK] ? reasoningAccountKey(m[ACCOUNT_MARK] || key) : undefined);
     const stepItemBinding = {
       apiModelId: replayModelKey,
       provider: model?.provider,
       protocol: typeof (model as any)?.[PROTOCOL_MARK] === 'string' ? (model as any)[PROTOCOL_MARK] : undefined,
+      account: accountKeyOf(model, apiKey),
     };
     /** 一次请求**实际**走的协议:multiBrain.streamProviderCompletion 正是按 payload 上这个标记分发
      *  anthropic-messages / openai-responses / 缺省 chat-completions 的 —— 所以它就是「这组 items 是在
@@ -1365,7 +1404,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 400k 族在 64k 就机械折叠会绞碎上下文+打断前缀缓存,长任务正确率与 token 双输(WB-Bench 取证)。
     // 09-22 起自动识别的窗口封顶 272k,更大的窗口只由人填的覆盖打开(effectiveContextWindowInfo)。
     // Ultra(09-27)不封顶:模型本身能到多大就用多大;人填的覆盖照旧(覆盖可能正是在纠正报大了的目录值)。
-    const { tokens: ctxWindowTokens, source: ctxWindowSource, max: ctxWindowMax } = effectiveContextWindowInfo(modelId, model, ultraRequested);
+    const { tokens: ctxWindowTokens, source: ctxWindowSource, max: ctxWindowMax } = effectiveContextWindowInfo(callModelId, model, ultraRequested);
 
     // 入站预算闸门(Hermes 式窗口相对预算;2026-06-10 的 77 万 token 事故防线):
     // 估算超窗口 50% 直接失败(消息不落库,会话不被毒化),超 25% 放行但发警告事件。
@@ -1447,7 +1486,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     const { messages: history, currentUserIndex, checkpointThrough, contextImages } = await hydrateHistory(
       sessionId, run.assistant_message_id || '', describeUserImages,
       typeof input.userMessageId === 'string' ? input.userMessageId : undefined,
-      { apiModelId: replayModelKey, protocol: stepItemBinding.protocol },
+      { apiModelId: replayModelKey, protocol: stepItemBinding.protocol, account: stepItemBinding.account },
     );
     // 本轮没附件(「坚持合成」这类跟进):edit_image 用模型此刻看得见的那批图 —— hydrate 每轮都把它发给对话模型。
     if (!imageInputs.length && contextImages?.images.length) {
@@ -1569,6 +1608,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     systemParts.push(TOOL_FAILURE_SECTION, AUTONOMY_SECTION, responseStyleSection(channelSession, ps.noPreamble ? { noPreamble: true } : undefined));
     // 应用 / 窗口引用(`[[app://…]]` / `[[window://…]]`):紧跟输出风格段(它是「标识符进反引号」的例外);通道会话是纯文本,不注入。
     if (!channelSession) systemParts.push(APP_REF_SECTION);
+    // 发给模型前脱敏开着:告诉模型占位符能直接用(否则真模型会拒绝「看不到的 key」,live 台架 10-28 实测)。随设置静态,不碎前缀缓存。
+    { const ms = maskSettings(); if (ms.action === 'mask' && (ms.secrets || ms.personal) && !maskSkipped) systemParts.push(MASKING_SECTION); }
     // 持久化契约:计划模式不注入(只读工具集与「carry through implementation」矛盾,且计划模式有自己的流程段);
     // chat 不注入(PRESET_TABLE.persistence=false:一轮=一次发言,Conversation Contract 反向要求「答完就停」)。
     if (!planMode && ps.persistence) systemParts.push(PERSISTENCE_SECTION);
@@ -1729,9 +1770,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       ? agentConfig.mentionedProjects.map((p: any) => (p && typeof p.path === 'string' ? safeRealpath(p.path) : '')).filter(Boolean).slice(0, 8)
       : [];
     // 会话属于一个本机项目 → remember 露出「项目级」(定义多一段说明和一个参数);别的会话拿到的是精简定义。
-    const projectScoped = profile.capabilities.hostExec ? !!(await resolveProjectMemory(userId, sessionId)) || undefined : undefined;
+    const projectRef = profile.capabilities.hostExec ? await resolveProjectMemory(userId, sessionId) : null;
+    const projectScoped = projectRef ? true : undefined;
+    const projectPath = projectRef?.project;
     const toolGateCtx = {
-      userId, sessionId, appId, runId, client: clientTag, channelSession, preset, uiCommands, uiSettings, uiCards, clientCapabilities, projectScoped,
+      userId, sessionId, appId, runId, client: clientTag, channelSession, preset, uiCommands, uiSettings, uiCards, clientCapabilities, projectScoped, projectPath,
       visuals: visualsPref, // run 冻结的可视化档位:与上面拼提示用的同一个值,set_ui_setting 中途改了也到下一次 run 才生效
       runOrigin: runCategory(input), // P1-K2:后台进程来源标签取这条 run 自己的来源(channelSession 是会话级旗标)
       dispatchTargets,
@@ -2549,6 +2592,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       // 在这里分叉:声明了 persistPlaceholder 的工具(read_computer_history)只落占位,全文只进本轮 workingMessages。
       // 出错结果不含数据,照常落库。占位查询不走 ctx 门禁(见 declaredPersistPlaceholder)。
       const stored = (!result.isError && declaredPersistPlaceholder(result.name)) || capped;
+      // 发给模型前会被遮住的值在哪(位置 + 占位符,不含原值):界面在工具组上写「遮住 N 个值」并给这些值垫底色
+      const masked = maskSkipped ? [] : [
+        ...maskSpans(call.function.arguments || '').map((m) => ({ ...m, at: 'args' as const })),
+        ...maskSpans(stored).map((m) => ({ ...m, at: 'result' as const })),
+      ];
       const payload = {
         id: call.id,
         name: wireToolName(result.name), // 执行层回正典名;往外发跟这次调用一样叫线上的名字(HTML 卡叫 sketch)
@@ -2560,6 +2608,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         parallelGroup,
         artifactPath,
         metadata: result.metadata,
+        ...(masked.length ? { masked } : {}),
       };
       await publish(runId, 'tool_result', payload);
 
@@ -2591,6 +2640,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           parallelGroup,
           artifactPath,
           metadata: result.metadata,
+          ...(masked.length ? { masked } : {}),
         },
         toolMessage: { role: 'tool', content: toolMsgContent, tool_call_id: call.id } as ChatMessage,
       };
@@ -2766,6 +2816,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     let hookVetoedCompaction = false; // PreCompact hook 否决过 → 不再按估算拦请求,交给 provider 裁决
     let overflowRecovered = false; // 上游报「输入超窗口」后压缩重试:每 run 一次
     let overBudgetNotified = false; // 压缩后仍超成本封顶、按真实窗口照发:每 run 提示一次
+    let reasoningStripped = false; // 回灌的加密推理被拒后拿掉重发:每 run 一次
     let toolsOverhead = 0; // 本轮工具定义头的粗估 token(只在没有实测基准时计入,见 ContextUsageTracker.estimate)
     // 登记给 GET /agent/sessions/:id/status:必须在 contextUsage / compactAt / toolsOverhead 都初始化之后 —— getRunStatus 读它们,
     // 登记早了,run 还在等记忆 / 计费预检的那段时间里来一次请求就是 ReferenceError(Codex 10-10 #6)。
@@ -2786,7 +2837,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       // 换算比例只认 provider 实测(上游拒收时下界 = 窗口);纯粗估不冒充实测。越线本身已成立,故一律 force。
       const measured = contextUsage.measured(workingMessages);
       const cr = compactionCfg.enabled
-        ? await compactWorkingMessages(workingMessages, modelId, appId, ac.signal, {
+        ? await compactWorkingMessages(workingMessages, callModelId, appId, ac.signal, {
           settings: compactionCfg, runThinking: thinkingLevel, windowTokens: ctxWindowTokens, force: true,
           overheadTokens: toolsOverhead,
           measuredTokens: reason === 'overflow' ? Math.max(measured ?? 0, ctxWindowTokens) : measured,
@@ -2986,16 +3037,18 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
             payload,
             provider: (model as any)?.provider, // anthropic → 原生 /v1/messages(in-process 面;httpBrain 面由 brain-api 解析)
             signal: sampling.signal,
+            maskScope: sessionId,
+            onMasked: (hits, action) => { void publish(runId, 'status', { phase: 'masked', iteration, action, n: hits.length, kinds: [...new Set(hits.map((h) => h.kind))] }); },
             onResponseStart: () => {
               if (sampling.signal.aborted) return;
               acceptedAt = Date.now();
               void publish(runId, 'status', { phase: 'llm_call', stage: 'accepted', iteration, bytes: requestBytes, uploadMs: acceptedAt - attemptStart });
             },
-            onToken: (d) => { if (sampling.signal.aborted) return; emitted = true; markFrame(); partialText += d; void publish(runId, 'token', { delta: d }); },
-            onReasoning: (d) => { if (sampling.signal.aborted) return; emitted = true; markFrame(); void publish(runId, 'reasoning', { delta: d }); },
+            onToken: (d) => { if (sampling.signal.aborted) return; emitted = turnStarted = true; markFrame(); partialText += d; void publish(runId, 'token', { delta: d }); },
+            onReasoning: (d) => { if (sampling.signal.aborted) return; emitted = turnStarted = true; markFrame(); void publish(runId, 'reasoning', { delta: d }); },
             onToolCallDelta: (info) => {
               if (sampling.signal.aborted) return;
-              emitted = true;
+              emitted = turnStarted = true;
               markFrame();
               // Stream the raw arg delta so the client can render a live "writing
               // file" preview (it reassembles per tool-call id and extracts path/content).
@@ -3015,6 +3068,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
             ...(firstFrameAt ? { ttftMs: firstFrameAt - attemptStart } : {}),
             ...(acceptedAt ? { uploadMs: acceptedAt - attemptStart } : {}),
           };
+          turnStarted = true;
           break;
         } catch (err) {
           if (ac.signal.aborted) throw err;
@@ -3031,10 +3085,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           }
           if (err instanceof AbortLikeError) throw err;
           // 输入超出窗口被拒(估算偏小 / 窗口猜大了):强制压缩一次后重进本轮(借 pi 的 overflow
-          // compact-and-retry;每 run 一次,免得估算与上游两边永远对不上时空转)。上游报错里的真实上限
-          // 已由 learnFromUpstreamError 学下来,下个 run 起触发线按真值算。
+          // compact-and-retry;每 run 一次,免得估算与上游两边永远对不上时空转)。上游报错里写明的真实上限在这里学下来,
+          // 键用本轮的模型 id —— 预算按它查(effectiveContextWindowInfo(callModelId));客户端手里只有上游真名(codex/x 发出去是 x),记在那儿查不到。
           if (!emitted && !overflowRecovered && isContextOverflowError(err)) {
             overflowRecovered = true;
+            learnFromUpstreamError(callModelId, (err as LlmError).status, (err as Error).message);
             console.warn(`[agent-core] run=${runId} 上游拒收超长输入,压缩后重试本轮: ${(err as any)?.message || err}`);
             if (await runCompaction('overflow', contextUsage.estimate(workingMessages, toolsOverhead), iteration)) {
               retryIteration = true;
@@ -3042,6 +3097,20 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
               break;
             }
             throw err; // 压不动(hook 否决 / 没有可总结的)→ 照常报错
+          }
+          // 回灌的加密推理被拒(invalid_encrypted_content / 思考签名无效:多半是换了账号,借 magpie #3887):拿掉本 run 里所有
+          // providerItems 重发本轮,只一次。跨 run 的那半由回放的账号绑定挡(historyReplay 文件头 ①);这里兜绑定判不出的(托管面、同 key 换了组织)。
+          // 不论第几次都在这里收口:流里来的被拒是 502,漏到下面会被当网关抖动再重发三次(Codex 评审)。
+          if (!emitted && isForeignReasoningLlmError(err)) {
+            let dropped = 0;
+            if (!reasoningStripped) for (const m of workingMessages) if ((m as any).providerItems) { delete (m as any).providerItems; dropped++; }
+            reasoningStripped = true;
+            if (!dropped) throw err; // 已经拿掉过 / 本来就没带推理:重发一模一样的请求只会再被拒
+            console.warn(`[agent-core] run=${runId} 上游拒收回灌的推理,拿掉 ${dropped} 组后重发本轮: ${(err as any)?.message || err}`);
+            void publish(runId, 'status', { phase: 'reasoning_dropped', dropped, iteration });
+            retryIteration = true;
+            iteration -= 1;
+            break;
           }
           // 中流断线恢复(借 pi 的 session 级重试思想):此前「吐过帧就整 run 报废」对长任务是灾难——
           // 第 40 迭代断一次线,前面全部白跑。改为:已流出的半截正文按「段切分」落库(用户看到的内容
@@ -3076,8 +3145,27 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           // 凭证失效(xAI 用 502 包装,按状态码看像网络抖动):同一个 token 再试必败。订阅登录的 provider 强制续期一次、
           // 拿到新 token 立刻重试;续不了(API key、托管面、refresh_token 也失效)就直接抛,不白等三轮退避。
           // 一分钟内只续一次:刚续的 token 仍被拒就别再续;跑过下一个有效期的长 run 到时还能再续。
+          // 额度用完(订阅 / 账单配额,几小时才重置):设了后备模型且这一次还没吐字 → 换后备重进本轮;「先问我」开着 → 这一轮停下,
+          // 报错带上后备模型,界面画「等重置 / 改用 X」。只换一次:后备也用完就照常报错,不往下找。秒级限流、凭证失效不走这里。
+          if (!emitted && isQuotaExhaustedLlmError(err)) {
+            if (turnStarted) throw err;
+            const until = noteQuotaExhausted(callModelId, quotaResetAt(err));
+            const rs = quotaRelayed ? null : relaySettings();
+            if (rs?.fallback && rs.fallback !== callModelId) {
+              if (rs.ask) throw Object.assign(new LlmError((err as any).status || 429, `${(err as Error).message}${quotaAskSuffix(rs.fallback)}`), { resetsAt: until });
+              if (await relayModel(rs.fallback, until)) {
+                // 历史是按原模型 hydrate 的:它签出的 providerItems(加密推理 / 原生条目)不能带给后备;之后的分步落库按后备的身份记
+                for (const m of workingMessages) if ((m as any).providerItems) delete (m as any).providerItems;
+                Object.assign(stepItemBinding, { apiModelId: apiModelId || callModelId, provider: model?.provider,
+                  protocol: typeof (model as any)?.[PROTOCOL_MARK] === 'string' ? (model as any)[PROTOCOL_MARK] : undefined,
+                  account: accountKeyOf(model, apiKey) });
+                retryIteration = true; iteration -= 1; break;
+              }
+            }
+            throw err;
+          }
           if (!emitted && isAuthExpiredLlmError(err)) {
-            const fresh = Date.now() - credsRefreshedAt < 60_000 ? null : await deps().brain.llm.refreshModelKey?.(modelId).catch(() => null);
+            const fresh = Date.now() - credsRefreshedAt < 60_000 ? null : await deps().brain.llm.refreshModelKey?.(callModelId).catch(() => null);
             credsRefreshedAt = Date.now();
             if (!fresh || fresh === apiKey) throw err;
             apiKey = fresh;
@@ -3133,7 +3221,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         probe = buildProbe(inputs, probePrevSegments);
         probePrevSegments = probe.segments;
       }
-      const cost = await calculateCost(modelId, res.usage.prompt_tokens, res.usage.completion_tokens, undefined, cachedTokens);
+      const cost = await calculateCost(callModelId, res.usage.prompt_tokens, res.usage.completion_tokens, undefined, cachedTokens);
       tokensTotal += (res.usage.prompt_tokens || 0) + (res.usage.completion_tokens || 0);
       runStat.llmCalls += 1;
       runStat.prompt += res.usage.prompt_tokens || 0;
@@ -3191,7 +3279,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       }
       const consumed = await consumeTokenPoints(user.id, cost).catch(() => ({ ok: true } as any));
       await logApiUsage(
-        user.username, modelId, model.name, model.provider,
+        user.username, callModelId, model.name, model.provider,
         res.usage.prompt_tokens, res.usage.completion_tokens, true, undefined, appId, cost,
         cachedTokens, clientTag,
       ).catch(() => {});
@@ -3507,7 +3595,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         // 60s 缓存/单次调用,不在热路径上放大开销。
         // 已中止就整段跳过:这里有两三次不吃 run signal 的云请求(目录/解析),中止后还去排队等
         // 60s 会把「停止」拖成肉眼可见的卡顿(2026-07-27 Codex 评审)。
-        const needDescribe = !ac.signal.aborted && (await shouldDescribeImages(modelId, appId, agentConfig.visionMode as string | undefined));
+        const needDescribe = !ac.signal.aborted && (await shouldDescribeImages(callModelId, appId, agentConfig.visionMode as string | undefined));
         const firstToolImageTurn = workingMessages.length;
         // ⚠️ 这一行被 toolImages.test.ts 按源码文本钉住(物化的装配没有可跑的测试路径)。
         let transcribed = false;
@@ -3592,7 +3680,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 惰性检查点:下个 run 的 hydrate 窗口之外若还有未被摘要覆盖的老行,现在(不占下个 run 首帧)做一份。
     // 登记在飞:下个 run(排队中的可能立刻起跑)hydrate 前先等它,别让窗口起点越过还没落检查点的老行。
     {
-      const task: Promise<void> = checkpointRowsOutsideWindow(sessionId, modelId, appId, compactionCfg, thinkingLevel)
+      const task: Promise<void> = checkpointRowsOutsideWindow(sessionId, callModelId, appId, compactionCfg, thinkingLevel)
         .catch((e) => console.warn(`[agent-core] session=${sessionId} 窗口外老行压缩失败:`, e?.message || e))
         .finally(() => { if (lazyCheckpoints.get(sessionId) === task) lazyCheckpoints.delete(sessionId); });
       lazyCheckpoints.set(sessionId, task);
@@ -3643,6 +3731,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     setApprovalTray(runId, false);
     unregisterLiveRun(runId);
     abortControllers.delete(runId);
+    modelSwaps.delete(runId);
     steerQueue.delete(runId); // 丢弃尚未注入的转向消息(run 已终结)
     immediateSteers.delete(runId);
     steerWakeups.delete(runId);
@@ -3666,9 +3755,12 @@ async function finalizeAssistantMessage(
   toolResults: any[],
   displayFiles?: DisplayFileItem[],
 ): Promise<void> {
+  // 额度用完换了后备:这一轮的回答记实际用的模型,并标 origin(重开会话时界面据此还原「改用了」那一行)
+  const swap = modelSwaps.get(currentRunId() || '');
   await deps().state.finalizeAssistantMessage({
-    messageId, sessionId, modelId, content, reasoning, toolCalls, toolResults, displayFiles,
+    messageId, sessionId, modelId: swap?.modelId ?? modelId, content, reasoning, toolCalls, toolResults, displayFiles,
     agentSlug: currentDisplayAgentSlug(),
+    ...(swap ? { origin: swap.origin } : {}),
   });
 }
 

@@ -1,0 +1,10 @@
+{
+  "id": "r8dx-sample",
+  "name": "R8 开发者体验样例",
+  "nameEn": "R8 DX sample",
+  "version": "0.2.0",
+  "apiVersion": 1,
+  "description": "走查续八:只用公开接口(含 2026-10-26 的新 ctx.ui 零件)拼一个原生样子的插件界面。",
+  "descriptionEn": "Round 8: a plugin UI built from public APIs only, using the 2026-10-26 ctx.ui parts.",
+  "main": "main.js"
+}

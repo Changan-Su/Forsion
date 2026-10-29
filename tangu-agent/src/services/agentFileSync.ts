@@ -6,12 +6,12 @@ import { deps } from '../seams/runtime.js';
 import { agentsDir, humanDir, tanguHome, userMdFile } from '../core/tanguHome.js';
 import { HUMAN_SYNC_FILES, joinFirstContact, mirrorLegacyHuman } from '../agents/humanFolder.js';
 import { getDeviceId } from '../core/deviceId.js';
-import { getAgent, listAgents, parseAgentConfig, resolveMemorySlug, type NormalAgentDef } from '../agents/agentRegistry.js';
+import { getAgent, listAgents, parseAgentConfig, trashAgent, resolveMemorySlug, type NormalAgentDef } from '../agents/agentRegistry.js';
 import { splitLogBlocks, mergeBlocks, mergeLogHeaders, mergeText3 } from './memorySync.js';
 import { mergeDbFile } from './dbRowMerge.js';
 import { keepLatestRuns, migrateScheduleFile } from './agentSchedule.js';
 import { AgentFileConflictError, type AgentFilesBrain, type AgentFileMeta, type AgentFileContent } from '../seams/cloudBrain.js';
-import { agentSyncDefault, agentSyncPermission, agentSyncScope, setAgentSyncPermission, captureAgentSyncDefault, captureAgentSyncPermission, agentSyncOperationSignal, agentSyncConsentSignal, agentSyncDefaultSignal } from './cloudSyncAccount.js';
+import { agentSyncDefault, agentSyncPermission, agentSyncScope, setAgentSyncPermission, captureAgentSyncDefault, captureAgentSyncPermission, agentSyncOperationSignal, agentSyncConsentSignal, agentSyncDefaultSignal, pendingAgentRemovals, clearAgentRemoval } from './cloudSyncAccount.js';
 import { agentSyncDir, assertSyncPath, atomicSyncWrite, conflictCopyName, readSyncBytes, validSyncPath, validSyncSlug } from './agentSyncPaths.js';
 import { createLocalMemoryStore } from '../adapters/standalone/localMemoryBrain.js';
 import { createMemoryRepository, withMemoryDirectoryLock, type MemoryTombstone } from './memoryRepository.js';
@@ -137,6 +137,21 @@ async function syncAccount(cloud: AgentFilesBrain, userId: string, scope: string
     bySlug.set(item.slug, item.files);
   }
   const known = new Set(agents.map((a) => a.slug));
+  // 本机在界面上删掉的 Agent:先删云端那份(整份删,删除胜),不然下面的发现会当成别的设备新建的拉回来。
+  // 不管本地又有没有同名目录都先删:删完又新建的那个没有影子,先清云端它才是 pushCreate,不会被旧的盖掉。
+  // 没删干净(断网、CAS 撞上别的设备刚写的一份)就留着记录,这一轮不拉它、不同步它,下次再来。
+  const removing = new Set<string>();
+  for (const slug of pendingAgentRemovals(scope)) {
+    if (onlySlug && slug !== onlySlug) continue;
+    try {
+      for (const f of bySlug.get(slug) ?? []) {
+        if (f.deleted || !validSyncPath(f.relPath)) continue;
+        guard(); await cloud.deleteFile(userId, slug, f.relPath, Math.max(Date.now(), (f.mtimeMs ?? 0) + 1), getDeviceId(), typeof f.seq === 'number' ? f.seq : undefined, { signal }); guard(); // 老行没 seq 按 mtime 守:时间要压过它,别因为时钟偏差静默没删
+        result.deleted++;
+      }
+      bySlug.delete(slug); clearAgentRemoval(slug, scope);
+    } catch (e) { fail(result, e); guard(); removing.add(slug); known.add(slug); }
+  }
   for (const [slug, files] of bySlug) {
     if (!validSyncSlug(slug) || (onlySlug && slug !== onlySlug) || known.has(slug)) continue;
     const dir = agentSyncDir(slug);
@@ -178,6 +193,7 @@ async function syncAccount(cloud: AgentFilesBrain, userId: string, scope: string
     if (agentSyncPermission(agent.slug, scope).shared) shared.push(captureAgentSyncPermission(agent.slug, scope, true));
   }
   for (const [slug, bucket] of buckets) {
+    if (removing.has(slug)) continue;
     const check = (): void => { guard(); for (const consent of bucket.guards) consent(); agentSyncDir(slug); };
     check();
     await syncBucket(cloud, userId, slug, scope, bucket.cats, bySlug.get(slug) ?? [], { human, agentCalendar }, signal, check, result);
@@ -214,6 +230,12 @@ async function syncBucket(cloud: AgentFilesBrain, uid: string, slug: string, sco
   // 先把 SCHEDULE.db 改名成 CALENDAR.db(和引擎读写日程时同一处):清单里才看得到它,也不会拉下别的设备那份后把本机旧名那份晾在一边
   if (cats.has('DEF')) { try { migrateScheduleFile(slug); } catch (e) { fail(result, e); return; } }
   const prev = readPrev(dir, scope);
+  // 别的设备删掉了这个 Agent(config.toml 成了墓碑、本机同步过它):整份挪进 agents/.removed/,不推不拉。
+  // 删除胜:本机没推上去的改动留在 .removed 里能找回,不再拿它把 Agent 推回云端(10-28 Codex 复核)。
+  if (cats.has('DEF') && prev.files['config.toml'] && manifest.some((f) => f.relPath === 'config.toml' && f.deleted)) {
+    guard();
+    if ((await trashAgent(slug, { record: false })).ok) { result.deleted++; return; }
+  }
   const remote = new Map<string, AgentFileMeta>();
   for (const entry of manifest) {
     if (!validSyncPath(entry.relPath)) { fail(result, new Error(`invalid cloud path for ${slug}`)); continue; }

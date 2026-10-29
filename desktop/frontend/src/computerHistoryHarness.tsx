@@ -3,6 +3,7 @@
  * 权限快照都是桩,不连主进程、不碰 helper。?dark / ?lang=en / ?status=<ComputerHistoryStatus> / ?empty(无最近 App 与会话)
  * / ?skin=<cream|coral|teal|lavender|zhi>(主题色与背景色同取这一套;缺省 cream)/ ?platform=win32(Windows 版:无权限卡、Windows 文案)。
  * / ?onboarding(首次引导「权限与数据」里的那一页:真 OnboardingComputerHistory 放在引导的外壳里;?status=off 是它的缺省情形)。
+ * / ?onboarding&improve(同一外壳里的「帮助改进」页签:真 OnboardingImprove,Extend 的 telemetry:get / set 是桩;?improve=off 缺省关)。
  * 截图:浏览器打开 /computer-history-harness.html,或用 Playwright 按上面的参数逐张拍(DESIGN §8:观感改动交付前看真截图)。
  * 引导那一页的几何检查:npm run check:onboardinghistory。
  */
@@ -13,6 +14,8 @@ import './styles/base.css'
 import { applyTheme } from './theme/loader'
 import { ComputerHistorySettings } from './components/ComputerHistorySettings'
 import { OnboardingComputerHistory } from './components/OnboardingComputerHistory'
+import { OnboardingImprove, type TelemetryView } from './components/OnboardingImprove'
+import { useState } from 'react'
 import { translate } from './i18n'
 import './components/onboardingMessages'
 import './components/onboarding.css'
@@ -38,6 +41,12 @@ let pausedUntil: number | null = status === 'paused' ? now + 45 * MIN : null
 let current: ComputerHistoryStatus = status
 
 let rev = 0
+let telemetry: TelemetryView = { available: true, enabled: params.get('improve') !== 'off', noticeSeen: false }
+const improveTab = params.has('improve')
+function ImprovePane() {
+  const [view, setView] = useState(telemetry)
+  return <OnboardingImprove view={view} onChange={setView} onBusyChange={() => {}} />
+}
 const view = (): ComputerHistoryView => ({
   state: { v: 1, enabled, pausedUntil, status: current, since: now - 95 * MIN, updatedAt: now, platform, dataGen: 0 },
   exclude: { apps: [...exclude.apps], domains: [...exclude.domains] },
@@ -107,6 +116,12 @@ window.tangu = {
   desktopPermissionsStatus: async () => snapshot,
   desktopPermissionRequest: async () => snapshot,
   desktopPermissionsCloseGuide: async () => {},
+  // 帮助改进的桩:Extend 的 telemetry:get / set(真通道在 Forsion Extend 里)
+  telemetryReport: () => {},
+  cloudInvoke: async (channel: string, patch?: { enabled?: boolean }) => {
+    if (channel === 'telemetry:set' && typeof patch?.enabled === 'boolean') telemetry = { ...telemetry, enabled: patch.enabled }
+    return telemetry
+  },
 } as unknown as NonNullable<Window['tangu']>
 
 // 引导那一页:外壳、标题区、分页条、底栏照 OnboardingWizard 的标记摆(只为量几何与看观感;流程本身由 check:first-run 在真应用里走)。
@@ -116,15 +131,16 @@ const onboardingPage = (
     <main className="ob-stage">
       <header className="ob-step-head">
         <div className="ob-step-title"><div className="ob-step-kicker">{translate('onboarding.guide.stepOf', { n: 7, total: 8 })}</div>
-          <h1>{translate('onboarding.step.permissions.title')}</h1><p>{translate('onboarding.step.permissions.description')}</p></div>
+          <h1>{translate('onboarding.step.permissions.title')}</h1><p>{translate(improveTab ? 'onboarding.step.permissions.descriptionImprove' : 'onboarding.step.permissions.description')}</p></div>
         <button type="button" className="ob-skip">{translate('onboarding.nav.skip')}</button>
       </header>
       <div className="ob-content">
         <div className="ob-permission-layout">
           <div className="seg ob-sections">
-            <button>{translate('onboarding.guide.computer')}</button><button className="active">{translate('onboarding.guide.history')}</button><button>{translate('onboarding.guide.media')}</button>
+            <button>{translate('onboarding.guide.computer')}</button><button className={improveTab ? '' : 'active'}>{translate('onboarding.guide.history')}</button><button>{translate('onboarding.guide.media')}</button>
+            {improveTab && <button className="active">{translate('onboarding.guide.improve')}</button>}
           </div>
-          <div className="ob-permission-pane"><OnboardingComputerHistory mode={dark ? 'dark' : 'light'} onBusyChange={() => {}} onUnsupported={() => {}} /></div>
+          <div className="ob-permission-pane">{improveTab ? <ImprovePane /> : <OnboardingComputerHistory mode={dark ? 'dark' : 'light'} onBusyChange={() => {}} onUnsupported={() => {}} />}</div>
         </div>
       </div>
       <footer className="ob-footer"><div className="ob-footer-row">

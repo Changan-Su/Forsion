@@ -809,6 +809,30 @@ describe('appStore.send 新会话固化模型', () => {
     vi.unstubAllGlobals()
   })
 
+  // 10-28:后台把云端默认从 Auto 换成 Auto-Flash,点过一次药丸的老账号新对话仍是 Auto。点选的正好是云端默认 → 记成跟随。
+  it('在会话里点选的正好是云端默认 → cfg.modelId 记成跟随(\'\');没登录时引擎回显的本机默认(直连模型)照旧记具体 id', () => {
+    const setConfig = vi.fn(() => Promise.resolve())
+    vi.stubGlobal('window', { tangu: { setConfig } })
+    useApp.setState({
+      activeId: 's1', sessions: [created('s1', 'other')] as unknown as AppState['sessions'],
+      modelsResp: { models: [{ id: 'cloud-default', source: 'forsion' }, { id: 'codex/luna', source: 'direct' }], defaultModelId: 'cloud-default' } as unknown as AppState['modelsResp'],
+    })
+
+    useApp.getState().setSessionModel('cloud-default', 's1')
+    expect(useApp.getState().cfg.modelId).toBe('')
+    expect(setConfig).toHaveBeenLastCalledWith({ modelId: '' })
+    expect(useApp.getState().sessions.find((s) => s.id === 's1')?.model_id).toBe('cloud-default') // 会话本身照旧换成它
+    expect(newChatModelId(useApp.getState())).toBe('cloud-default')
+    // 后台换了默认 → 新对话跟着走
+    useApp.setState((s) => ({ modelsResp: { ...s.modelsResp!, defaultModelId: 'new-cloud-default' } }))
+    expect(newChatModelId(useApp.getState())).toBe('new-cloud-default')
+
+    useApp.setState({ modelsResp: { models: [{ id: 'codex/luna', source: 'direct' }], defaultModelId: 'codex/luna' } as unknown as AppState['modelsResp'] })
+    useApp.getState().setSessionModel('codex/luna', 's1')
+    expect(useApp.getState().cfg.modelId).toBe('codex/luna')
+    vi.unstubAllGlobals()
+  })
+
   it('「不在项目中工作」建立显式无根会话,使用 session 隔离沙箱而非默认 Project', async () => {
     useApp.setState({
       desktopMode: 'managed',

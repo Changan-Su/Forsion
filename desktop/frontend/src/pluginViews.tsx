@@ -19,7 +19,8 @@ import type { ViewContribution } from '@amadeus/plugins/types'
 import { isClaimingHostView } from '../../shared/corePlugins'
 import { PLUGIN_ICONS } from '@amadeus/components/icons'
 import { registerMessages, translate, useI18n } from './i18n'
-import { PLUGIN_VIEW_HOST_ATTR, clearPluginViewModes, pluginViewModesOf, subscribePluginViewModes } from '@amadeus/plugins/pluginViewModes'
+import { PLUGIN_VIEW_HOST_ATTR, clearPluginViewModes, pluginViewHeadOf, pluginViewModesOf, subscribePluginViewModes } from '@amadeus/plugins/pluginViewModes'
+import { pluginText } from '@amadeus/plugins/pluginText'
 import { setPluginCompanions } from './pluginCompanions'
 
 registerMessages({
@@ -39,6 +40,9 @@ export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; plugi
   // 快照取 spec(插件 set / update 都换新对象),登记那份本身换人时也跟着变
   useSyncExternalStore(subscribePluginViewModes, () => pluginViewModesOf(hostEl)?.spec ?? null)
   const modes = pluginViewModesOf(hostEl)
+  useSyncExternalStore(subscribePluginViewModes, () => pluginViewHeadOf(hostEl))
+  const head = pluginViewHeadOf(hostEl)
+  const headTitle = head?.title != null ? pluginText(head.title) : ''
   const { locale } = useI18n()
   useViewModes(leaf.id, modes ? {
     modes: modes.spec.modes.map((m): ViewModeOption => ({ value: m.id, label: locale === 'en' && m.labelEn ? m.labelEn : m.label, icon: modeIcon(m.icon) })),
@@ -132,8 +136,8 @@ export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; plugi
   return (
     <>
       {/* 有头行时挂载点要 position: relative:插件根常是 absolute inset:0(谛听),不然会盖到头行上 */}
-      {modes && <ViewHead leafId={leaf.id}><HostSlot el={modes.actions} /></ViewHead>}
-      <div ref={hostRef} {...{ [PLUGIN_VIEW_HOST_ATTR]: '' }} style={modes ? { height: 'calc(100% - 32px)', overflow: 'auto', position: 'relative' } : { height: '100%', overflow: 'auto' }} />
+      {(modes || head) && <ViewHead leafId={leaf.id} title={headTitle}>{modes && <HostSlot el={modes.actions} />}{head && <HostSlot el={head.actions} />}</ViewHead>}
+      <div ref={hostRef} {...{ [PLUGIN_VIEW_HOST_ATTR]: '' }} style={modes || head ? { height: 'calc(100% - 32px)', overflow: 'auto', position: 'relative' } : { height: '100%', overflow: 'auto' }} />
     </>
   )
 }
@@ -273,7 +277,7 @@ export function syncPluginViews(): void {
       registerView({
         type,
         kind: 'page', // 插件 view 无宿主可信的身份/文件声明,一律 page;embeddable 恒缺省 false(宿主白名单语义)
-        displayName: () => def.title,
+        displayName: () => pluginText(def.title),
         icon: viewIcon(def.icon),
         factory: (props) => <PluginViewHost def={def} pluginId={type.split(':')[1]} {...props} />,
         singleton: def.singleton !== false,

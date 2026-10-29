@@ -22,6 +22,7 @@ import { useVisualTheme as useTheme } from '../stores/themeStore'
 import { requirementKey, type PluginOnboardingRecommend, type PluginRequirement } from '@amadeus-shared/ipc'
 import type { AmadeusPlugin } from '@amadeus/plugins/types'
 import type { MarketCard } from '../types'
+import { DialogOverlay } from '../amadeus/components/DialogOverlay'
 
 /** 一条配套推荐:市场按 installSlug 解析 → 安装/已装/未上架三态;装完副作用与 MarketModal 同款。 */
 const RecommendRow: React.FC<{ rec: PluginOnboardingRecommend; preInstalled: boolean }> = ({ rec, preInstalled }) => {
@@ -161,7 +162,7 @@ const Card: React.FC<{ plugin: AmadeusPlugin }> = ({ plugin: p }) => {
   const close = (): void => usePluginOnboarding.getState().close()
 
   return (
-    <div className="dialog-overlay" onMouseDown={skip}>
+    <DialogOverlay onMouseDown={skip}>
       <div className="dialog plugin-onboarding-card" style={{ width: 'min(520px, 92vw)' }} onMouseDown={(e) => e.stopPropagation()}>
         <div className="dialog-title">{t('plugin.onboarding.title', { name: pluginDisplayName(p, locale) })}</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxHeight: '64vh', overflowY: 'auto', padding: '2px 0' }}>
@@ -267,7 +268,7 @@ const Card: React.FC<{ plugin: AmadeusPlugin }> = ({ plugin: p }) => {
           )}
         </div>
       </div>
-    </div>
+    </DialogOverlay>
   )
 }
 

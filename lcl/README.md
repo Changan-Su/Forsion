@@ -15,7 +15,7 @@ Genesis 当前使用这份 LCL。`apps/Archived/Forsion-LCL` 是早期组合引�
 1. 写 View 前先查公共组件。已有能力缺少插槽时扩展公共组件，不复制 View 内的 JSX / CSS。
 2. 无业务依赖的组件放 `lcl/components`，只从 `@lcl/components` 导出；模型目录等业务适配放应用层。LCL 不反向导入 desktop。
 3. 状态与副作用归宿主：输入值、选择、禁用、提交回调明确传入。不要用活动 View / session 单例作为隐式目标。
-4. 对插件开放采用现有 `ctx.ui` 的 DOM 挂载协议，返回 `update` / `focus` / `dispose`；插件不打包第二份 React，不 import 宿主内部路径。禁用、重载、setup 失败由宿主统一清理。挂载一律走 `mountHostReact`,它返回句柄 `{ render, dispose }`,所有权跟着句柄走:树挂在宿主自己加进 `el` 的一层里(`display:contents`),`dispose` 同步摘掉这一层,`el` 立刻归还插件;原地更新调句柄的 `render`;同一个 `el` 上一份没 dispose 就再挂,前一份被收掉、它的句柄此后无效。挂在树外面的资源收在 `mountHostReact` 的 `onDispose` 里;真正挂载要等动态 import 的入口,调用时先 `claimHostMount(el)`,落地时确认还归自己。
+4. 对插件开放采用现有 `ctx.ui` 的 DOM 挂载协议，返回 `update` / `focus` / `dispose`；插件拿不到宿主的 React 实例和组件，`@lcl/components` 不对外发包(走查续八 8.22 定 A):宿主零件一律经 `ctx.ui.*` / 带类型的 `ctx.ui.mount(name, el, props)` 挂进插件给的元素，插件只传数据；插件不打包宿主组件的替身(菜单、浮层、对话框、图标、i18n),自己的画面若用框架画，React 留给它自己那块，不 import 宿主内部路径。禁用、重载、setup 失败由宿主统一清理。挂载一律走 `mountHostReact`,它返回句柄 `{ render, dispose }`,所有权跟着句柄走:树挂在宿主自己加进 `el` 的一层里(`display:contents`),`dispose` 同步摘掉这一层,`el` 立刻归还插件;原地更新调句柄的 `render`;同一个 `el` 上一份没 dispose 就再挂,前一份被收掉、它的句柄此后无效。挂在树外面的资源收在 `mountHostReact` 的 `onDispose` 里;真正挂载要等动态 import 的入口,调用时先 `claimHostMount(el)`,落地时确认还归自己。
 5. 公共接口变更必须同步类型、作者手册、真实消费者与生命周期测试。CSS 同源，并覆盖明暗、窄容器、输入法和菜单。
 
 ## Chat Box
@@ -66,3 +66,5 @@ Genesis 当前使用这份 LCL。`apps/Archived/Forsion-LCL` 是早期组合引�
 ## English contract
 
 Space owns layout; View owns a navigable feature; UI components compose the inside of a View. Amadeus document Blocks and Dashboard Cards have different responsibilities. Use `@lcl/components` for host-independent primitives and application adapters for services. Inputs and callbacks are explicit; a component must not implicitly target the active session. DOM plugins consume `ctx.ui` mounts, with lifecycle cleanup owned by the host. Settings parts (panels, rows, switches, buttons, inputs, meters, steppers, sheets) currently live in the application layer (`components/SettingsPrimitives`, `components/SettingsPage`) because their CSS source of truth is `base.css`; plugins reach them through `ctx.ui.mountSettingsPage` / `mountSettingsItem`. Keep types, documentation, consumers, and lifecycle coverage together when changing public APIs.
+
+Main splits opened by file links or the split command preserve the current sidebar widths, including user-resized widths, when the split fits; narrow containers allow the sides to yield to the Main groups' minimum widths. Regression: build `desktop`, then run `npm run check:mainsplitwidth` under the repository's `devlock.cjs run --vehicle=e2e`; it clicks real Excalidraw/database links and checks geometry on every frame, saved widths, closing, and subsequent sidebar dragging in an isolated Electron profile. `desktop/frontend/src/mainSplitWidth.test.ts` uses real Dockview to cover narrow containers and overlapping split/sidebar-collapse operations.

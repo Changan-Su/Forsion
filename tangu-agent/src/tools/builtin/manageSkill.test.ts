@@ -128,30 +128,32 @@ describe('manage_skill', () => {
     expect(await run({ action: 'create', name: 'Empty', instructions: '   ' })).toContain('instructions');
   });
 
-  // 技能文件夹里可能带着脚本和资料:删除 = 整夹移进回收目录(与设置页删技能同一处),不是直接删
+  // 技能文件夹里可能带着脚本和资料:删除 = 整夹移进回收站(与设置页删技能同一处 services/skillUninstall),不是直接删
   it('delete moves the whole skill folder to the trash (helper files included), not rm', async () => {
     await fs.mkdir(path.join(home, 'skills', 'deploy-web', 'scripts'), { recursive: true });
     await fs.writeFile(path.join(home, 'skills', 'deploy-web', 'scripts', 'ship.sh'), 'echo ship\n');
     const r = String(await run({ action: 'delete', slug: 'deploy-web' }));
     expect(r).toContain('Deleted skill "deploy-web"');
+    expect(r).toContain('trash');
     expect(await exists(skillMd('deploy-web'))).toBe(false);
-    const kept = (await fs.readdir(path.join(home, 'skill-trash'))).filter((n) => n.startsWith('user-global-deploy-web-'));
+    const { listTrash, trashDir } = await import('../../services/trash.js');
+    const kept = (await listTrash()).filter((e) => e.kind === 'skill' && e.ref === 'local:deploy-web');
     expect(kept).toHaveLength(1);
-    expect(r).toContain(path.join(home, 'skill-trash', kept[0]));
-    expect(await fs.readFile(path.join(home, 'skill-trash', kept[0], 'scripts', 'ship.sh'), 'utf8')).toBe('echo ship\n');
-    expect(await fs.readFile(path.join(home, 'skill-trash', kept[0], 'SKILL.md'), 'utf8')).toContain('new steps');
-    expect(await run({ action: 'list' })).toContain('no user skills');
+    const dir = path.join(trashDir(), kept[0].id, kept[0].items[0].stored);
+    expect(await fs.readFile(path.join(dir, 'scripts', 'ship.sh'), 'utf8')).toBe('echo ship\n');
+    expect(await fs.readFile(path.join(dir, 'SKILL.md'), 'utf8')).toContain('new steps');
+    expect(await run({ action: 'list' })).not.toContain('deploy-web');
   });
 
-  // 回收目录要是个软链,删除会把私有技能的全部内容挪到链接指向的地方 —— 与设置页那条路同一套检查:拒绝,技能原样留着
+  // 回收站要是个软链,删除会把私有技能的全部内容挪到链接指向的地方 —— 与设置页那条路同一套检查:拒绝,技能原样留着
   it('delete refuses when the trash is a symlink; the skill stays where it is', async () => {
     await run({ action: 'create', name: 'Keep Me', instructions: 'x' });
     const elsewhere = await fs.mkdtemp(path.join(os.tmpdir(), 'tangu-elsewhere-'));
-    const trash = path.join(home, 'skill-trash');
+    const trash = path.join(home, 'trash');
     await fs.rename(trash, `${trash}.real`);
     await fs.symlink(elsewhere, trash);
     try {
-      expect(await run({ action: 'delete', slug: 'keep-me' })).toContain('Error: Skill trash is not a regular directory');
+      expect(await run({ action: 'delete', slug: 'keep-me' })).toContain('Error: Trash is not a regular directory');
       expect(await exists(skillMd('keep-me'))).toBe(true);
       expect(await fs.readdir(elsewhere)).toEqual([]);
     } finally {
@@ -160,7 +162,7 @@ describe('manage_skill', () => {
       await fs.rm(elsewhere, { recursive: true, force: true });
     }
     expect(await run({ action: 'delete', slug: 'keep-me' })).toContain('Deleted skill "keep-me"');
-    expect(await run({ action: 'list' })).toContain('no user skills');
+    expect(await run({ action: 'list' })).not.toContain('keep-me');
   });
 
   // 放最后:listLocalSkills 会把包内置技能播种进这个临时家目录,前面「删完为空」的断言会被撞。

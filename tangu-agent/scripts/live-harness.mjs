@@ -22,6 +22,8 @@
  *   npm run live:harness -- --only selfschedule             # 自己的日程 vs 用户的日历(10-02):人设 agent 答应的约定进 SCHEDULE.db、用户日历不动;负对照「记进我的日历」须走 amadeus。改 Personal Folder 段 / 日程·日历工具措辞后跑
  *                                                           #   额度用完时先跑离线接线证据:node scripts/rename-identity.smoke.mjs(假模型端点,截获系统提示词)
  *   npm run live:harness -- --only chat,tool,muse            # 子集(historian→dream→recall 三连有先后依赖)
+ *   npm run live:harness -- --only mask [--mask-off]          # 发给模型前脱敏(10-28,借鉴 magpie 方案 1):读 .env → run_bash 带 key 的 curl 打台架里的回显服务 → 问模型看到的值是不是 sk-proj- 开头、是不是占位符。
+ *                                                           #   判据:回显服务收到真 key(工具参数换回了)、模型答「不是 sk-proj- 开头 / 是占位符」、engine.log 有 [mask]。--mask-off = 负对照(config 里关掉,须红)。改 llm/outboundMask.ts 后跑
  *   npm run live:harness -- --only chat,tool,loop            # loop = 轮数耗尽末轮收尾(改 agentLoop 末轮/收尾提示后跑)
  *   npm run live:harness -- --only imageedit                 # edit_image 图源(10-19,改图跨轮取图方案 B1 + B2):同会话三轮 —— 附两张图先别动 → 不带附件让它合成 → 改刚合成的那张;假生图后端核上传的是哪几张。改 imageEdit.ts / hydrate 的带图消息 / 展示文件 source 后跑
  *   npm run live:harness -- --only skillpick,settingsnav     # 反馈 6a239e58(10-04):指定技能清单只列目录、正文经 use_skill 取(改 services/skillLoadout.ts 后跑);
@@ -209,6 +211,7 @@ import { plantNotebookPlugin, notebookLive, notebookSelftest } from './lib/noteb
 import { cuVisionSetup, cuVisionLive, defaultFixture as cuDefaultFixture } from './lib/cu-vision-live.mjs';
 import { CU_JEV_KEYS, JEV_REQUESTS_DIR, cuJevSetup, cuJevConfig, cuJevLive } from './lib/cu-jev-live.mjs';
 import { appRefLive, appRefSelftest } from './lib/app-ref-live.mjs';
+import { taskOutcomesLive } from './lib/task-outcomes-live.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const entry = process.env.TANGU_LIVE_ENGINE_ENTRY || join(root, 'dist', 'standalone', 'main.js');
@@ -220,7 +223,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'parkedask', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'imgtools', 'account', 'webpublish', 'nested', 'branch', 'musedm', 'humandims', 'pluginsandbox'];
+const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'parkedask', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'gitpush', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'imgtools', 'account', 'webpublish', 'nested', 'branch', 'musedm', 'humandims', 'pluginsandbox'];
 KEYS.push('bluebird');
 KEYS.push('signals');
 KEYS.push('musechat');
@@ -265,7 +268,8 @@ const GIT_PREFIX = 'livetest/'; const GIT_TAG = '[LIVE]';
 // opt-in:缺省全量跑里**不带**这几个 —— cache 7 个 run / churn 6 个 run(都慢),cache 与 recall-unprompted
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
-const OPT_IN = new Set(['pluginsandbox', 'humandims', 'nested', 'branch', 'musedm', 'realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'parkedask', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'appsettings', 'control', 'phone']);
+const OPT_IN = new Set(['pluginsandbox', 'humandims', 'nested', 'branch', 'musedm', 'realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'parkedask', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'gitpush', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'appsettings', 'control', 'phone']);
+KEYS.push('taskoutcomes'); OPT_IN.add('taskoutcomes'); // --only taskoutcomes: actual hashes / approval identity / duplicate writes, classified separately from model narration.
 OPT_IN.add('bluebird'); // --only bluebird --plugin-src <bundle>: real instruction-following on supplied transcripts
 OPT_IN.add('signals');
 OPT_IN.add('musechat');
@@ -320,15 +324,26 @@ OPT_IN.add('webpublish'); // --only webpublish:三个 run,同用 account 那个�
 // 但 Connect 换成本地真 server(scripts/connect-local.mts:PGlite + 真 Connect 模块,文件走 bytea、不经蓬洲);给了 --extend-pkg 再加一段
 // 真 Electron 旅程(desktop/scripts/webpages-real.live.cjs):聊天里发布 → 界面点批准 → 我的网页里上架 / 下架 / 下线。
 OPT_IN.add('webpublishreal'); KEYS.push('webpublishreal');
+// --only webcardsreal --connect-server <server 检出> --extend-pkg <签好的 Extend 包目录>(10-28):只跑真 Electron 那段 ——
+// 同一个本机项目会话里写页 / 起服务 / 发布 / 问列表,看本地网页卡、服务卡和 Extend 画的「网页」「我的网页」卡(desktop/scripts/webcards-real.live.cjs)。
+OPT_IN.add('webcardsreal'); KEYS.push('webcardsreal');
 OPT_IN.add('realuse'); // 真实使用模拟:每轮 12 个 run(--rounds),--usage-db 再加一个 Muse 周期;单独跑。
 OPT_IN.add('suggest'); // 三个 run + 三次建议调用;只在动 services/promptSuggestion.ts(提示词 / 前缀对齐)或主循环收尾处的快照时才有信息量。
 OPT_IN.add('humanreal'); // 协作说明写成什么样:每轮 6 个 run + 1 次判官(--rounds);只在动 HUMAN_GUIDANCE / manage_human 时才有信息量。
+OPT_IN.add('mask'); KEYS.push('mask'); // 两个 run + 本地回显服务;只在动 llm/outboundMask.ts(发给模型前脱敏)时才有信息量。
+OPT_IN.add('streamoverflow'); KEYS.push('streamoverflow'); // 注入:真 Codex 路径上流里回 context_length_exceeded(lib/llm-fault-preload.mjs);只在动流内报错归类 / agentLoop 的超长压缩重试时跑
+OPT_IN.add('foreignreasoning'); KEYS.push('foreignreasoning'); // 注入:回灌的加密推理被拒(400 invalid_encrypted_content);只在动 historyReplay 的推理绑定 / agentLoop 的拿掉重发时跑
+OPT_IN.add('relay'); KEYS.push('relay'); // 假提供方只回 429 usage_limit_reached;只在动 llm/quotaRelay.ts / agentLoop 的接力分支时跑。--relay-mode auto|ask|none
 OPT_IN.add('appref'); // 四个 run;只在动 APP_REF_SECTION(应用 / 窗口引用那一段提示词)时才有信息量。
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 KEYS.push('marketplace', 'marketplacechat');
 KEYS.push('pluginext');
 OPT_IN.add('pluginext'); // 夹具插件在 tangu-plugin.json 里声明 stdio MCP + Stop hook(10-17);只在动 mcp/pluginServers、hooks/pluginHooks、bootstrap 的 attachManifestExtras 时跑
 OPT_IN.add('marketplace'); OPT_IN.add('marketplacechat'); // marketplacechat:同一判据跑在 chat 预设(详情工具要先 load_tools)
+// storeupdate(10-27):Tangu 替作者提交商店更新 —— 官方签名 Extend 包里的引擎插件(ctx.cloud / approvalPreview / chat 准入)。
+//   --extend-plugin <npm pack 解出来的、已签名的 Extend 目录> + TANGU_LIVE_CLOUD_URL=<server scripts/marketplace-fixture.ts>
+//   + TANGU_LIVE_CLOUD_TOKEN=<payload {"userId":"owner"} 的假 JWT>。负对照:给一份改过一个字节的包 → 插件拿不到 ctx.cloud、工具不出现 → 红。
+KEYS.push('storeupdate', 'storeupdatechat'); OPT_IN.add('storeupdate'); OPT_IN.add('storeupdatechat');
 const ONLY = new Set(opt('only', process.env.TANGU_LIVE_ONLY || KEYS.filter((k) => !OPT_IN.has(k)).join(',')).split(',').map((s) => s.trim()).filter(Boolean));
 const TTFT_ROUNDS = Number(opt('ttft-rounds', process.env.TANGU_LIVE_TTFT_ROUNDS || 5));
 const SELF_ROUNDS = Number(opt('rounds', 3)); // selfmodel:每轮一个新 agent,出通过率
@@ -873,6 +888,12 @@ if (argv.includes('--selftest')) {
 }
 
 const OUT = resolve(opt('out', process.env.TANGU_LIVE_OUT || join(tmpdir(), `tangu-live-${stamp}-${randomUUID().slice(0, 6)}`)));
+// streamoverflow / foreignreasoning:引擎以 --import 载入 lib/llm-fault-preload.mjs,场景往规则文件里写一条,真 Codex 路径上命中的请求换成厂商原文报错
+const FAULT_FILE = ONLY.has('streamoverflow') || ONLY.has('foreignreasoning') ? join(OUT, 'llm-fault.json') : null;
+// 每次布置规则先清掉上一次的记录:同一次台架里 streamoverflow 与 foreignreasoning 共用这份 .log,不清的话后跑的那个会把前一个的「被拒 / 放行」也算进来
+const armFault = (rule) => { rmSync(`${FAULT_FILE}.log`, { force: true }); writeFileSync(FAULT_FILE, JSON.stringify(rule)); };
+const disarmFault = () => rmSync(FAULT_FILE, { force: true });
+const faultLog = () => { try { return readFileSync(`${FAULT_FILE}.log`, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)); } catch { return []; } };
 const TIMEOUT_MS = Number(opt('timeout', process.env.TANGU_LIVE_TIMEOUT_MS || 15 * 60_000));
 const SANDBOX = opt('sandbox', process.env.TANGU_LIVE_SANDBOX || 'auto');
 const MUSE_MODE = opt('muse-mode', process.env.TANGU_LIVE_MUSE_MODE || 'ask'); // ask | agent | auto(三档权限阶梯,见 museAgentConfig)
@@ -933,6 +954,17 @@ if (BLUEBIRD_SRC) {
   cpSync(BLUEBIRD_SRC, join(shared, 'plugins/bluebird'), { recursive: true, filter: p => !p.split('/').some(x => ['.git','node_modules','outputs','__pycache__'].includes(x)) });
 }
 
+if (ONLY.has('storeupdate') || ONLY.has('storeupdatechat')) {
+  const bundle = opt('extend-plugin', '');
+  if (!bundle || !existsSync(join(bundle, 'tangu-plugins/store-update/tangu-plugin.json')) || !existsSync(join(bundle, 'SIGNATURE'))) throw new Error('--extend-plugin must point to a signed, packed Forsion Extend bundle with tangu-plugins/store-update');
+  cpSync(bundle, join(shared, 'plugins/forsion-extend'), { recursive: true });
+}
+// 网页卡片的 A / D 卡要引擎把 Extend 的引擎半身判成官方:签好的包装进引擎的插件目录(同 storeupdate)
+if (ONLY.has('webcardsreal')) {
+  const bundle = opt('extend-pkg', process.env.TANGU_LIVE_EXTEND_PKG || '');
+  if (!bundle || !existsSync(join(bundle, 'SIGNATURE'))) throw new Error('--only webcardsreal needs --extend-pkg <signed, unpacked Forsion Extend package>');
+  cpSync(bundle, join(shared, 'plugins/forsion-extend'), { recursive: true });
+}
 if (ONLY.has('dispatch')) {
   const bundle = opt('dispatch-plugin', '');
   if (!bundle || !existsSync(join(bundle, 'tangu-plugins/dispatch-core/dist/index.mjs'))) throw new Error('--dispatch-plugin must point to a built Dispatch bundle');
@@ -1038,6 +1070,26 @@ const MCP_CFG = ONLY.has('mcp') || ONLY.has('imgwindow') || ONLY.has('novision')
 // 每次回一张不同数字的 PNG 并记下它的 sha256 —— 场景据此判「上传的就是那两张附件」「改的就是上一张产出」。
 const IMGEDIT_PNGS = ONLY.has('imageedit') ? [randDigits(), randDigits()].map((d) => digitsPng(d, 6)) : [];
 const sha = (buf) => createHash('sha256').update(buf).digest('hex');
+// relay:「下一次模型调用回额度用完」的注入 —— 一个本地提供方,每个请求都回 Codex 订阅额度用完的报文(429 + usage_limit_reached + resets_at)。
+const RELAY_MODE = (() => { const i = argv.indexOf('--relay-mode'); return i >= 0 ? argv[i + 1] : 'auto'; })();
+// --relay-path http|sse:额度用完从哪条路来。报文是厂商原文(magpie codex_quota_group_test.go):http = 429 JSON;sse = 200 流里的 response.failed(走 openai-responses 协议)
+const RELAY_PATH = (() => { const i = argv.indexOf('--relay-path'); return i >= 0 ? argv[i + 1] : 'http'; })();
+const FAKEQ = ONLY.has('relay') ? await new Promise((resolve) => {
+  const state = { calls: 0 };
+  const srv = createHttpServer(async (req, res) => {
+    for await (const _ of req) { /* drain */ }
+    state.calls++;
+    if (RELAY_PATH === 'sse') {
+      res.writeHead(200, { 'content-type': 'text/event-stream' }).end([
+        { type: 'response.created', sequence_number: 0, response: { id: 'r0', status: 'in_progress' } },
+        { type: 'response.failed', sequence_number: 1, response: { id: 'r0', status: 'failed', error: { code: 'usage_limit_reached', message: "You've hit your usage limit. Upgrade to Pro, or try again in 2 hours." } } },
+      ].map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join(''));
+      return;
+    }
+    res.writeHead(429, { 'content-type': 'application/json' }).end(JSON.stringify({ error: { type: 'usage_limit_reached', message: 'The usage limit has been reached', plan_type: 'plus', resets_at: Math.floor(Date.now() / 1000) + 3600, resets_in_seconds: 3600 } }));
+  });
+  srv.listen(0, '127.0.0.1', () => resolve(Object.assign(state, { port: srv.address().port, server: srv })));
+}) : null;
 const IMGEDIT = ONLY.has('imageedit') ? await new Promise((resolve) => {
   const state = { calls: [], outputs: [] };
   const srv = createHttpServer(async (req, res) => {
@@ -1063,8 +1115,10 @@ const IMGEDIT = ONLY.has('imageedit') ? await new Promise((resolve) => {
     if (!p) { console.error(`realtime:${src} 里没有带 key 的百炼 provider`); process.exit(2); }
     realtimeProviders = [{ providerId: 'bailian', baseUrl: p.baseUrl, apiKey: p.apiKey, modelIds: [] }];
   }
-  const providers = [...(realtimeProviders || []), ...(IMGEDIT ? [{ providerId: 'fakeimg', baseUrl: `http://127.0.0.1:${IMGEDIT.port}/v1`, apiKey: 'live', modelIds: [], imageModelIds: ['fake-edit'] }] : [])];
-  if (COMPACTION_CFG || MCP_CFG || gitCfg || providers.length) writeFileSync(join(shared, 'config.json'), JSON.stringify({ ...(COMPACTION_CFG ? { compaction: COMPACTION_CFG } : {}), ...(MCP_CFG ? { mcp: MCP_CFG } : {}), ...(gitCfg ? { git: gitCfg } : {}), ...(providers.length ? { providers } : {}) }, null, 2));
+  const providers = [...(realtimeProviders || []), ...(IMGEDIT ? [{ providerId: 'fakeimg', baseUrl: `http://127.0.0.1:${IMGEDIT.port}/v1`, apiKey: 'live', modelIds: [], imageModelIds: ['fake-edit'] }] : []),
+    ...(FAKEQ ? [{ providerId: 'fakequota', baseUrl: `http://127.0.0.1:${FAKEQ.port}/v1`, apiKey: 'live', modelIds: ['fake-quota'], ...(RELAY_PATH === 'sse' ? { protocol: 'openai-responses' } : {}) }] : [])];
+  const relayModels = FAKEQ && RELAY_MODE !== 'none' ? { models: { quotaFallback: MODEL, quotaFallbackAsk: RELAY_MODE === 'ask' } } : {};
+  if (COMPACTION_CFG || MCP_CFG || gitCfg || providers.length) writeFileSync(join(shared, 'config.json'), JSON.stringify({ ...(COMPACTION_CFG ? { compaction: COMPACTION_CFG } : {}), ...(MCP_CFG ? { mcp: MCP_CFG } : {}), ...(gitCfg ? { git: gitCfg } : {}), ...(providers.length ? { providers } : {}), ...relayModels }, null, 2));
 }
 // cumusic / cusend:隔离 config 里打开 Jev(合并写,所以在上面那次整份写之后)
 if (CU_JEV) cuJevConfig({ shared, mode: opt('cu-jev-mode', 'auto'), threshold: opt('cu-jev-threshold', '') });
@@ -1175,7 +1229,7 @@ const SEED_PAD = `${PAD_TOKEN} Archival filler row for prefix-budget testing; it
   + Array.from({ length: 8 }, (_, i) => `Note ${i + 1}: the coastal survey team logged tidal range, wind bearing and cloud cover at six-hour intervals along the northern estuary terraces.`).join(' ');
 if (SEED_PAD.length < 1000) { console.error(`填充行只有 ${SEED_PAD.length} 字,吃不掉 §1 的 1000 字预算`); process.exit(2); }
 // webpublishreal:本地真 Connect 发的用户令牌就是引擎带给云端的令牌,所以在 TOKEN 之前起;台架退出时一并关掉。
-const SIM = ONLY.has('webpublishreal') ? await startConnectLocal(opt('connect-server', process.env.TANGU_LIVE_CONNECT_SERVER || '')).catch((e) => { console.error(`webpublishreal:${e.message}`); process.exit(2); }) : null;
+const SIM = ONLY.has('webpublishreal') || ONLY.has('webcardsreal') ? await startConnectLocal(opt('connect-server', process.env.TANGU_LIVE_CONNECT_SERVER || '')).catch((e) => { console.error(`webpublishreal:${e.message}`); process.exit(2); }) : null;
 if (SIM) process.on('exit', () => SIM.stop());
 const TOKEN = SIM?.token || process.env.TANGU_LIVE_CLOUD_TOKEN || randomUUID(); // 引擎的 --token 同时是它带给 Forsion 云端的登录令牌:走云端的场景(realtime 云端线路)传真令牌。缺省每次随机:撞上别的台架/引擎也只会 401,不会串到别人的引擎上报绿
 const port = await new Promise((r) => { const srv = createServer(); srv.listen(0, '127.0.0.1', () => { const p = srv.address().port; srv.close(() => r(p)); }); });
@@ -1256,10 +1310,12 @@ if (ONLY.has('notebook') && !NOTEBOOK_NEG) {
 const FAKE_CLOUD = (ONLY.has('account') || ONLY.has('webpublish') || SIM) && !process.env.TANGU_LIVE_CLOUD_URL ? await startFakeCloud(TOKEN, { connect: SIM?.url }) : null;
 
 const child = spawn(process.execPath, [
+  ...(FAULT_FILE ? ['--import', pathToFileURL(join(root, 'scripts', 'lib', 'llm-fault-preload.mjs')).href] : []),
   entry, '--port', String(port), '--host', '127.0.0.1', '--data-dir', join(home, 'state.db'),
   '--sandbox', SANDBOX, '--cloud-url', process.env.TANGU_LIVE_CLOUD_URL || FAKE_CLOUD?.url || 'http://127.0.0.1:9', '--token', TOKEN,
 ], { env: {
   ...process.env, TANGU_HOME: home, TANGU_DEFAULT_WORKSPACE: workspace, TANGU_CACHE_PROBE: '1',
+  ...(FAULT_FILE ? { TANGU_LIVE_FAULT_FILE: FAULT_FILE } : {}),
   TANGU_BROWSER_CDP: userChromeWs || 'off',
   FORSION_DESKTOP_CONFIG: desktopCfg,
   ...(PLUGINDIAG_DIR ? { HOME: FAKE_HOME, ...(process.platform === 'win32' ? { USERPROFILE: FAKE_HOME } : {}) } : {}),
@@ -1475,7 +1531,7 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
           // `full` 留**未截断**的原文:bigread 要判的截断标记落在第 4000 字符附近,先截到 4000 就永远看不见
           // (评审 #7)。内存有界 —— 引擎侧 capToolResult 已把单条结果封在 48k。
           else if (e.type === 'desk_present') (ev.deskPresents ||= []).push({ at: Date.now(), spec: p });
-          else if (e.type === 'tool_result') { const full = String(p.result || ''); ev.toolResults.push({ id: p.id, name: p.name || '?', isError: !!p.isError, result: full.slice(0, 4000), fullLength: full.length, full, at: Date.now() }); }
+          else if (e.type === 'tool_result') { const full = String(p.result || ''); ev.toolResults.push({ id: p.id, name: p.name || '?', isError: !!p.isError, result: full.slice(0, 4000), fullLength: full.length, full, at: Date.now(), ...(p.masked ? { masked: p.masked } : {}) }); }
           // 子代理自己的工具调用**不进** tool_call(subAgent.ts 把它们包成 'subagent' 事件发在父 run 上)——
           // 要证「子代理用上了 read_document」只能在这儿收。isError/preview 也要留:只存工具名的话,
           // 子代理 read_document 报错、再用 read_file 兜出答案也照样全绿(评审 #5)。
@@ -1493,7 +1549,7 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
           else if (e.type === 'system_prompt') { ev.systemPrompt = String(p.content || ''); ev.recalled = String(p.recalled || ''); }
           else if (e.type === 'approval_request') {
             ev.approvals += 1;
-            ev.approvalList.push({ name: p.name, reason: p.reason?.kind, mode: p.reason?.mode, agent: p.agentSlug, args: String(p.arguments || '').slice(0, 300), remote: p.remote ?? null, previewI18n: p.previewI18n ?? null });
+            ev.approvalList.push({ name: p.name, reason: p.reason?.kind, mode: p.reason?.mode, agent: p.agentSlug, args: String(p.arguments || '').slice(0, 300), remote: p.remote ?? null, previewI18n: p.previewI18n ?? null, preview: String(p.preview || '').slice(0, 800) });
             const decision = onApproval ? await onApproval(p) : undefined;
             const action = approvalActionOf(decision);
             const id = p.approvalId || p.id || p.approval_id;
@@ -1525,7 +1581,7 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
           else if (e.type === 'team_member') (p.phase === 'start' ? ev.group.starts : ev.group.ends).push({ slug: String(p.slug || '?'), seq: e.seq, runId: p.runId || null, sessionId: p.sessionId || null, messageId: p.messageId });
           else if (e.type === 'cache_probe') ev.probes.push(p); // 双闸开着才有(TANGU_CACHE_PROBE=1 + agentConfig.cacheProbe)
           // 只收压缩相关的 status(llm_call/generating 每帧都发,全收会把 ev 撑大);autocompact 场景据此判「压了、落库了」
-          else if (e.type === 'status' && ['context_info', 'compacting', 'compacted', 'compaction_budget', 'compaction_skipped', 'tool_failure_loop', 'action_delivery_nudge', 'sketch_delivery_nudge', 'ui_document_recovery', 'describing_images'].includes(p.phase)) ev.statuses.push(p);
+          else if (e.type === 'status' && ['context_info', 'compacting', 'compacted', 'compaction_budget', 'compaction_skipped', 'tool_failure_loop', 'action_delivery_nudge', 'sketch_delivery_nudge', 'ui_document_recovery', 'describing_images', 'masked', 'model_fallback', 'llm_retry', 'reasoning_dropped'].includes(p.phase)) ev.statuses.push(p);
           else if (e.type === 'done') { ev.done = true; ev.content = String(p.content || ''); ev.toolOffsets = p.toolOffsets ?? null; break outer; }
           else if (e.type === 'error') { ev.error = String(p.error || 'error'); ev.errorReason = p.reason ?? null; break outer; } // P1-K2:急停 / 锁定的终态原因
         }
@@ -2332,6 +2388,25 @@ try {
       output: `【改名】\n${ev.content}\n【参数纠正】\n${ev2.content}\n【版本号抄错】\n${ev3.content}`, ttftMs: ttft(ev), tokens: tokensOf(ev) + tokensOf(ev2) + tokensOf(ev3), toolCalls: [...ev.toolCalls, ...ev2.toolCalls, ...ev3.toolCalls] };
   });
 
+  // 两个场景各改一个条目(第一个提交后那条就有待审更新,第二个再改会被 market_update_pending 拦)。
+  for (const [key, cfg, item] of [['storeupdate', {}, 'PDF Notes'], ['storeupdatechat', { preset: 'chat' }, 'Future PDF']]) await scenario(key, `Tangu submits a Store details update${cfg.preset ? ' (chat preset)' : ''}`, async () => {
+    const cloud = process.env.TANGU_LIVE_CLOUD_URL;
+    if (!cloud) return { ok: false, detail: '要 TANGU_LIVE_CLOUD_URL 指向 server scripts/marketplace-fixture.ts、TANGU_LIVE_CLOUD_TOKEN = owner 的假 JWT' };
+    const summary = `${item} 简介 ${Date.now().toString(36)}`;
+    const ev = await run(`live-${key}-${Date.now()}`, `我在商店里有一个叫「${item}」的投稿，帮我把它的简介改成「${summary}」，然后提交这次商店信息更新。`, 300000, cfg, 'desktop/2.13.7');
+    const names = ev.toolCalls;
+    const ap = ev.approvalList.find((a) => a.name === 'store_submit_update');
+    const officialText = !!ap && /review/i.test(ap.preview) && !ap.preview.trimStart().startsWith('{'); // 插件自写的审批说明,不是参数 JSON
+    const always = ap?.reason === 'always';
+    const submitted = ev.toolResults.some((r) => r.name === 'store_submit_update' && !r.isError);
+    const mine = await fetch(`${cloud}/api/market/mine`, { headers: { authorization: `Bearer ${TOKEN}` } }).then((r) => r.json()).catch(() => ({ items: [] }));
+    const row = (mine.items || []).find((i) => i.name === item);
+    const staged = row?.pendingUpdate?.kind === 'info' && row.pendingUpdate.summary === summary;
+    const ok = !ev.error && ev.done && names.indexOf('store_check_update') >= 0 && names.indexOf('store_check_update') < names.indexOf('store_submit_update') && officialText && always && submitted && staged;
+    writeFileSync(join(OUT, `${key}-evidence.json`), JSON.stringify({ ev, approval: ap, item: row }, null, 2));
+    return { ok, detail: `calls=${names.join('>')}; approval always=${always} officialText=${officialText}; submitted=${submitted}; staged=${staged}`, output: `${ev.content}\n\n[approval preview]\n${ap?.preview || '(none)'}`, toolCalls: ev.toolCalls, ttftMs: ttft(ev), tokens: tokensOf(ev) };
+  });
+
   for (const [key, cfg] of [['marketplace', {}], ['marketplacechat', { preset: 'chat' }]]) await scenario(key, `Forsion marketplace native plugin cards${cfg.preset ? ' (chat preset)' : ''}`, async () => {
     const sessionId = `live-${key}-${Date.now()}`;
     const ev = await run(sessionId, '我想在 Forsion 里整理 PDF 阅读笔记，请帮我在商店找合适的插件，推荐两个候选，并说明 Forsion 版本要求。我会自己决定是否安装。', 240000, cfg, 'desktop/2.13.4', undefined, undefined, undefined, { clientCapabilities: ['marketplace-cards.v1'] });
@@ -2657,6 +2732,136 @@ try {
     const anchors = anchorsOk(ev);
     return { ok: !ev.error && ev.toolCalls.length > 0 && hit && anchors, detail: ev.error || `工具 ${ev.toolCalls.join(',') || '无'};标记${hit ? '命中' : '未命中'};done 锚点${anchors ? '对齐' : `不对齐(${JSON.stringify(ev.toolOffsets)})`}${ev.approvals ? `;代批 ${ev.approvals}${ev.approveError ? '(失败:' + ev.approveError + ')' : ''}` : ''}`, output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
   });
+
+  // mask(10-28,借鉴 magpie 方案 1 · 发给模型前脱敏):真模型拿到的是占位符,但照样能把 key 用对。
+  //   ① 读 .env、用 run_bash 把 key 原样写进 curl 打台架里的回显服务 → 回显服务收到的必须是**真 key**(工具参数在执行前换回了);
+  //   ② 同一会话不带工具问:你看到的 DEMO_API_KEY 是不是 sk-proj- 开头、是不是双花括号占位符 —— 脱敏开着须答「不是 / 是」(模型从没见过原值)。
+  //   问开头 / 是否占位符而不让它复述字符:不碰「别泄露 key」的拒答,负对照(--mask-off,config 里关掉)才分得开。engine.log 须有 [mask] 行。
+  await scenario('mask', 'mask 发给模型前脱敏:读 .env → 带 key 的命令 → 模型看到的是占位符', async () => {
+    const dir = join(workspace, 'mask-live');
+    mkdirSync(dir, { recursive: true });
+    const alnum = () => randomUUID().replace(/-/g, '');
+    const key = `sk-proj-${alnum().slice(0, 12)}Q${alnum().slice(0, 23)}`;
+    const pw = `Pw${alnum().slice(0, 14)}`;
+    writeFileSync(join(dir, '.env'), `DEMO_API_KEY=${key}\nDATABASE_URL=postgres://app:${pw}@db.internal:5432/app\nLOG_LEVEL=debug\n`);
+    if (argv.includes('--mask-off')) {
+      const cfg = join(shared, 'config.json');
+      const cur = existsSync(cfg) ? JSON.parse(readFileSync(cfg, 'utf8')) : {};
+      writeFileSync(cfg, JSON.stringify({ ...cur, masking: { secrets: false, personal: false } }, null, 2));
+    }
+    const got = [];
+    const echo = await new Promise((resolve) => {
+      const srv = createHttpServer((req, res) => { got.push(String(req.headers.authorization || '')); res.end(`echo-ok received ${String(req.headers.authorization || '').length} chars`); });
+      srv.listen(0, '127.0.0.1', () => resolve(srv));
+    });
+    const port = echo.address().port;
+    const logBefore = existsSync(engineLog) ? readFileSync(engineLog, 'utf8').length : 0;
+    const sid = `live-mask-${Date.now()}`;
+    let a, b;
+    try {
+      a = await run(sid, `Read the file ${join(dir, '.env')} with a tool. Then use run_bash to run this command once, writing the DEMO_API_KEY value from that file literally in place of KEY (no shell variables, do not source the file): curl -s -H "Authorization: Bearer KEY" http://127.0.0.1:${port}/echo — then tell me what the server answered.`, 240_000, { cwd: dir });
+      b = await run(sid, 'Without using any tools, answer two questions about the DEMO_API_KEY value exactly as it appeared in the file content you were given. 1) Does it start with the characters sk-proj- ? 2) Is it a placeholder wrapped in double curly braces? Reply in exactly this form and nothing else: "1: yes|no; 2: yes|no".', 120_000, { cwd: dir });
+    } finally { echo.close(); }
+    const log = existsSync(engineLog) ? readFileSync(engineLog, 'utf8').slice(logBefore) : '';
+    const maskLine = /\[mask\] mask \d+ value\(s\) before sending: [A-Z_,]*API_KEY/.test(log);
+    const realKeySent = got.some((h) => h === `Bearer ${key}`);
+    const ans = (b.content || '').toLowerCase().replace(/\s+/g, '');
+    const sawPlaceholder = /1:no;?2:yes/.test(ans);
+    const spans = a.toolResults.flatMap((t) => t.masked || []);
+    const evidence = { key: `${key.slice(0, 8)}…(${key.length})`, got: got.map((h) => `${h.slice(0, 15)}…(${h.length})`), answer: b.content, spans, statuses: [...a.statuses, ...b.statuses].filter((x) => x.phase === 'masked'), maskLine, toolArgs: a.toolArgs.map((t) => ({ name: t.name, args: t.args.replace(key, '<KEY>') })) };
+    writeFileSync(join(OUT, 'mask-evidence.json'), JSON.stringify(evidence, null, 2));
+    return {
+      ok: !a.error && !b.error && realKeySent && sawPlaceholder && maskLine && spans.length > 0,
+      detail: a.error || b.error || `回显服务收到真 key:${realKeySent ? '是' : '否'};模型答「${b.content.trim()}」→ ${sawPlaceholder ? '看到的是占位符' : '看到的不是占位符(原值到了模型)'};engine.log [mask]:${maskLine ? '有' : '无'};工具结果标注 ${spans.length} 处`,
+      output: `${a.content}\n---\n${b.content}`, tokens: tokensOf(a) + tokensOf(b), toolCalls: [...a.toolCalls, ...b.toolCalls],
+    };
+  });
+
+  // foreignreasoning(10-28,借鉴 magpie 第三轮 19):换了账号,旧会话回灌的加密推理被上游以 400 invalid_encrypted_content 拒掉(厂商原文,见 lib/llm-fault-preload.mjs)。
+  //   第一轮让模型用一次工具(跨 run 回灌的只有工具轮的推理);第二轮起注入:带着第一轮那批 encrypted_content 的请求一律 400(像换了号:旧推理全被拒,新产出的照常可用)。
+  //   修好 = 认出 → 拿掉推理重发,只被拒 1 次、发 reasoning_dropped、重发里不再带旧推理、答出口令。负对照(--kind base,没修)= 400 不可重试,这一轮报错收场。
+  //   ⚠️ 只验「被拒 → 拿掉重发」那半;「落库带账号指纹、换号后一开始就不带」那半真换不了号,只有单测(test/historyReplayHydration.test.ts)。
+  await scenario('foreignreasoning', 'foreignreasoning 回灌的推理被拒 → 拿掉重发', async () => {
+    const sid = `live-fr-${Date.now()}`;
+    const tok = `FR-${randomUUID().slice(0, 6)}`;
+    const file = join(workspace, `fr-${tok}.txt`);
+    // 要有推理条目可回灌,且它得排在工具调用**之前**(跨 run 回灌的只有工具轮的条目):先心算、再用工具写结果。
+    // 10-28 前两次只让它读文件(medium / high 都试了),Luna 直接调工具、不出 reasoning 条目,注入无从触发。
+    const cfg = { thinkingLevel: 'high' };
+    const a = await run(sid, `Without using any tool for the arithmetic, work out 48271 × 9317. Then use a tool to write just that number into the file ${file}. Finally reply with ${tok}-A and the number.`, 240_000, cfg);
+    armFault({ mode: 'invalid_encrypted_content', match: `${tok}-B` });
+    const b = await run(sid, `Reply with exactly this and nothing else: ${tok}-B`, 240_000, cfg).finally(disarmFault);
+    const log = faultLog().filter((l) => l.match);
+    const fired = log.filter((l) => l.fired);
+    const resent = log.filter((l) => !l.fired && fired.length && l.t > fired[0].t);
+    const dropped = b.statuses.filter((x) => x.phase === 'reasoning_dropped');
+    writeFileSync(join(OUT, 'foreignreasoning-evidence.json'), JSON.stringify({ errA: a.error, toolsA: a.toolCalls, errB: b.error, log, statuses: b.statuses, content: b.content }, null, 2));
+    const ok = !a.error && a.toolCalls.length > 0 && fired.length === 1 && fired[0].encrypted > 0
+      && resent.length >= 1 && resent[0].encrypted === 0 && dropped.length === 1 && dropped[0].dropped > 0
+      && !b.error && b.content.includes(`${tok}-B`);
+    const detail = `第一轮工具 ${a.toolCalls.join(',') || '无'}${a.error ? `(报错:${a.error.slice(0, 80)})` : ''};被拒 ${fired.length} 次(带旧推理 ${fired[0]?.encrypted ?? 0} 份)、重发 ${resent.length} 次(带 ${resent[0]?.encrypted ?? '-'} 份);reasoning_dropped ${dropped.map((x) => x.dropped).join(',') || '无'};${b.error ? `报错:${b.error.slice(0, 140)}` : `答${b.content.includes(`${tok}-B`) ? '对' : '错'}`}`;
+    return { ok, detail, output: [a.content, b.content].join('\n---\n'), tokens: tokensOf(a) + tokensOf(b), toolCalls: [...a.toolCalls, ...b.toolCalls] };
+  });
+
+  // relay(10-28,借鉴 magpie 方案 2 · 额度用完接力):会话模型 = 台架的假提供方(每次都回额度用完),后备 = 真模型。
+  //   auto:这一轮换到后备答出口令、只打假提供方一次、发一条 model_fallback、落库 origin=fallback:quota + 实际模型;
+  //         第二轮重置时间没到 → 直接用后备,假提供方不再被打。
+  //   ask:停下,报错尾巴带 [quota_fallback_ask:<后备>],不换。none(负对照):不设后备,照旧报额度用完,不换。
+  await scenario('relay', `relay 额度用完接力(${RELAY_MODE})`, async () => {
+    const sid = `live-relay-${Date.now()}`;
+    const tok = `RELAY-${randomUUID().slice(0, 6)}`;
+    const fake = 'fakequota/fake-quota';
+    const turn = (msg) => run(sid, `Reply with exactly this and nothing else: ${msg}`, 120_000, {}, undefined, undefined, undefined, undefined, { model: fake });
+    const a = await turn(tok);
+    const callsA = FAKEQ.calls;
+    const fbA = a.statuses.filter((x) => x.phase === 'model_fallback');
+    const b = RELAY_MODE === 'auto' ? await turn(`${tok}-2`) : null;
+    const msgs = asList(await api(`/agent/sessions/${sid}/messages`).catch(() => []), 'messages');
+    const asst = msgs.filter((m) => m.role === 'assistant' || m.role === 'model');
+    const evidence = { mode: RELAY_MODE, path: RELAY_PATH, fakeCalls: FAKEQ.calls, callsA, fbA, fbB: b?.statuses.filter((x) => x.phase === 'model_fallback'), errA: a.error, errB: b?.error, rows: asst.map((m) => ({ origin: m.origin, model_id: m.model_id, content: String(m.content || '').slice(0, 80) })) };
+    writeFileSync(join(OUT, 'relay-evidence.json'), JSON.stringify(evidence, null, 2));
+    let ok, detail;
+    if (RELAY_MODE === 'auto') {
+      const row = asst.find((m) => String(m.content || '').includes(tok));
+      ok = !a.error && a.content.includes(tok) && fbA.length === 1 && fbA[0].reason === 'quota' && fbA[0].to === MODEL && callsA === 1
+        && row?.origin === 'fallback:quota' && row?.model_id === MODEL
+        && !b.error && b.content.includes(`${tok}-2`) && FAKEQ.calls === 1 && b.statuses.some((x) => x.phase === 'model_fallback');
+      detail = a.error || b?.error || `第一轮:改用 ${fbA[0]?.to || '无'}、假提供方 ${callsA} 次、落库 ${row?.origin || '无'} / ${row?.model_id || '无'};第二轮:假提供方累计 ${FAKEQ.calls} 次、${b.statuses.some((x) => x.phase === 'model_fallback') ? '直接走后备' : '没走后备'}`;
+    } else {
+      const askTail = /\[quota_fallback_ask:[^\]]+\]/.test(a.error || '');
+      ok = !!a.error && /usage limit/i.test(a.error) && fbA.length === 0 && callsA === 1 && (RELAY_MODE === 'ask' ? askTail : !askTail);
+      detail = `报错:${(a.error || '无').slice(0, 140)};改用 ${fbA.length} 次;假提供方 ${callsA} 次`;
+    }
+    return { ok, detail, output: [a.content, b?.content].filter(Boolean).join('\n---\n'), tokens: tokensOf(a) + (b ? tokensOf(b) : 0), toolCalls: [] };
+  });
+
+  // streamoverflow(10-28,借鉴 magpie 第三轮 15):Codex 在 HTTP 200 的流里送来 context_length_exceeded(厂商原文,见 lib/llm-fault-preload.mjs)。
+  //   第一轮垫一段大日志(压缩才有东西可总结,总结完请求明显变小);第二轮起注入:体积不小于第一次被拒那份 95% 的请求都回流里的超长(像真实窗口)。
+  //   修好 = 按 400 认出 → 压缩一次 → 变小的请求放行 → 答出口令,只被拒 1 次、没有 llm_retry。
+  //   负对照(--kind base,没修)= 当 502 原样重发,4 次都被拒,这一轮报错收场、也没压缩。
+  await scenario('streamoverflow', 'streamoverflow 流里的超长 → 压缩后重试', async () => {
+    const sid = `live-ovf-${Date.now()}`;
+    const code = `CODE-${randomUUID().slice(0, 6)}`;
+    const tok = `OVF-${randomUUID().slice(0, 6)}`;
+    const filler = Array.from({ length: 1400 }, (_, i) => `${new Date(Date.UTC(2026, 9, 1, 0, 0, i)).toISOString()} worker-${i % 7} processed batch ${i} ok`).join('\n');
+    const a = await run(sid, `Here is a build log for reference. The codeword is ${code}. Reply with just "noted".\n\n${filler}`);
+    armFault({ mode: 'stream_overflow', match: tok });
+    const b = await run(sid, `Reply with exactly this and nothing else: ${tok}`).finally(disarmFault);
+    const log = faultLog().filter((l) => l.match);
+    const fired = log.filter((l) => l.fired);
+    const passed = log.filter((l) => !l.fired && fired.length && l.t > fired[0].t);
+    const compacting = b.statuses.filter((x) => x.phase === 'compacting');
+    const compacted = b.statuses.filter((x) => x.phase === 'compacted');
+    const retries = b.statuses.filter((x) => x.phase === 'llm_retry');
+    writeFileSync(join(OUT, 'streamoverflow-evidence.json'), JSON.stringify({ errA: a.error, errB: b.error, log, statuses: b.statuses, content: b.content }, null, 2));
+    const ok = !a.error && !b.error && b.content.includes(tok) && fired.length === 1 && passed.length >= 1
+      && compacting.some((x) => x.reason === 'overflow') && compacted.length >= 1 && retries.length === 0;
+    const detail = `被拒 ${fired.length} 次(${fired[0]?.bytes ?? '-'}B)、放行 ${passed.length} 次(${passed[0]?.bytes ?? '-'}B);压缩 ${compacting.map((x) => x.reason).join(',') || '无'} → ${compacted.length ? (compacted[0].fallback ? '机械折叠' : `摘要 ${compacted[0].summarized ?? '?'} 条`) : '无'};llm_retry ${retries.length} 次;${b.error ? `报错:${b.error.slice(0, 140)}` : `答${b.content.includes(tok) ? '对' : '错'}`}`;
+    return { ok, detail, output: b.content, tokens: tokensOf(a) + tokensOf(b), toolCalls: b.toolCalls };
+  });
+
+  await scenario('taskoutcomes', 'taskoutcomes actual artifacts, rejected approvals and repeat delivery', () =>
+    taskOutcomesLive({ workspace, out: OUT, run, model: MODEL, tokensOf }));
 
   await scenario('cmdreads', 'cmdreads Windows 只读组合免审批,混入写入仍要批', async () => {
     if (process.platform !== 'win32') return { skipped: true, detail: 'Windows-only cmd.exe execution' };
@@ -3634,6 +3839,49 @@ Then reply with only the command output.`,
     };
   });
 
+  // git 工具(10-28,Git 对话卡片方案 B;tools/builtin/git.ts):项目会话里「提交并推送」走 git_commit / git_push,
+  // 审批跟会话档 —— 用户定「有权限就直接做」:完全通行一张卡都不弹、提交推送都落到远端;替我批准(auto-edit)只在推送弹一张(提交同写文件档,不问)。
+  // 远端是本地裸仓(不碰网络、不碰真账号)。判据看远端真收到了提交 + 用的是 git_* 工具而不是 run_bash 里的 git push + 审批卡数与工具名。
+  // 负对照:git.ts 的 git_push 改 approval:'always' → 完全通行那腿红(弹了卡);approvals.ts 去掉 git_commit 的写文件档 → 只读档才会变,本场景不管(单测钉)。
+  await scenario('gitpush', 'git 工具:完全通行直接提交并推送;替我批准只在推送问一次', async () => {
+    const mk = (tag) => {
+      const repo = join(workspace, `gitpush-${tag}-${Date.now()}`);
+      const bare = `${repo}.git`;
+      mkdirSync(repo, { recursive: true });
+      const g = (...a) => execFileSync('git', ['-C', repo, ...a], { encoding: 'utf8' }).trim();
+      execFileSync('git', ['init', '-q', '--bare', bare]);
+      g('init', '-q', '-b', 'main');
+      g('config', 'user.name', 'Live Harness'); g('config', 'user.email', 'live@example.com');
+      writeFileSync(join(repo, 'README.md'), '# Demo\n');
+      g('add', '.'); g('commit', '-qm', 'Initial commit');
+      g('remote', 'add', 'origin', bare); g('push', '-q', '-u', 'origin', 'main');
+      writeFileSync(join(repo, 'greet.js'), 'export const greet = (name) => `Hello, ${name}!`\n');
+      return { repo, bare, g };
+    };
+    const ASK_PUSH = 'Commit the current changes in this project with a short commit message you write, then push them.';
+    const leg = async (tag, approvalMode) => {
+      const { repo, bare, g } = mk(tag);
+      const { session } = await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title: `gitpush ${tag}`, model_id: MODEL, project_path: repo }) });
+      const ev = await run(session.id, ASK_PUSH, 240_000, { cwd: repo, approvalMode });
+      const head = g('rev-parse', 'HEAD');
+      const remoteHead = execFileSync('git', ['-C', bare, 'rev-parse', 'main'], { encoding: 'utf8' }).trim();
+      const bashGit = ev.toolArgs.filter((t) => t.name === 'run_bash' && /\bgit\s+(commit|push)\b/.test(t.args)).length;
+      return { ev, landed: head === remoteHead && g('status', '--porcelain') === '' && g('log', '-1', '--format=%s') !== 'Initial commit',
+        usedTools: ev.toolCalls.includes('git_commit') && ev.toolCalls.includes('git_push'), bashGit, asks: ev.approvalList.map((a) => `${a.name}:${a.reason}`) };
+    };
+    const full = await leg('full', 'full-auto');
+    const auto = await leg('auto', 'auto-edit');
+    const okFull = !full.ev.error && full.landed && full.usedTools && full.bashGit === 0 && full.asks.length === 0;
+    const okAuto = !auto.ev.error && auto.landed && auto.usedTools && auto.asks.length === 1 && auto.asks[0] === 'git_push:mode';
+    const line = (name, l) => `${name}:${l.landed ? '远端收到提交' : '远端没收到'};${l.usedTools ? '用了 git_commit + git_push' : `工具 ${l.ev.toolCalls.join(',') || '无'}`}${l.bashGit ? `;run_bash 里跑了 ${l.bashGit} 次 git commit/push` : ''};审批卡 ${l.asks.length ? l.asks.join(',') : '0 张'}`;
+    return {
+      ok: okFull && okAuto,
+      detail: full.ev.error || auto.ev.error || `${line('完全通行', full)}${okFull ? ' ✓' : ' ✗'} | ${line('替我批准', auto)}${okAuto ? ' ✓' : ' ✗'}`,
+      output: `--- 完全通行 ---\n${full.ev.content}\n\n--- 替我批准 ---\n${auto.ev.content}\n\n--- 推送审批说明 ---\n${auto.ev.approvalList.map((a) => a.preview).join('\n---\n')}`,
+      ttftMs: ttft(full.ev), tokens: tokensOf(full.ev), toolCalls: [...full.ev.toolCalls, '|', ...auto.ev.toolCalls],
+    };
+  });
+
   // 进造物(09-27,skills/forsion-creations):Tangu 对话里要做「以后会打开来用的东西」→ 动手前用 forsion-creation 作品卡提议,
   // 用户点了宿主才建文件夹 / 挪会话;只问概念、写一次性脚本 → 不提。判据:正例回复里有合法的卡(name 必填)且出卡前没写文件;
   // 两个负对照都不出卡。措辞与是否先 use_skill 不作判据,原话进报告。
@@ -3795,7 +4043,7 @@ Then reply with only the command output.`,
   // ⚠️ ENTRY 与 desktop/frontend/src/bootstrapEngine.tsx 的 open-settings 目录项同文(description + params);TARGETS 那一行由
   //    desktop 的 settingsTarget.test.ts 逐字钉住(设置页 / 搜索索引一改,那条单测就红,照它的输出改这里)。
   await scenario('settingsnav', 'settingsnav 「语音在哪设置」:界面命令直达设置页,不用电脑操控', async () => {
-    const TARGETS = 'Pages: general, forsion, model, mcp, hooks, skills, agents, amadeus-plugins, browser, computer-use, channels, notes, sync, spaces, theme, shortcuts, notifications, statusbar, permissions, units, remote-sessions, computer-history, advanced, developer, about. Settings: workspace-dir, keep-awake, backend-mode, sandbox, python, mirror, external-backend, forsion-account, forsion-submissions, cloud-url, memory-sync, inbox-notify, default-models, model-providers, web-search, voice, theme-language, startup-appearance, palette, color-mode, ui-zoom, glass, home-motion, ambient, visuals, smooth-caret, selection-bar, prompt-suggest, chat-avatars, calm-dim, calm-reading, calm-motion, ribbon-auto-home, fonts, notes-attachments, daily-notes, agent-browser, strict-background, jev, units-switch, units-host, remote-sessions-switch, remote-approval-cap, remote-trusted-devices, remote-safety, computer-history, mcp-server, reset-layout, clear-data, language.';
+    const TARGETS = 'Pages: general, forsion, model, mcp, hooks, skills, agents, amadeus-plugins, browser, computer-use, channels, notes, sync, spaces, theme, shortcuts, notifications, statusbar, trash, permissions, units, remote-sessions, computer-history, advanced, developer, about. Settings: workspace-dir, keep-awake, backend-mode, sandbox, python, mirror, external-backend, forsion-account, forsion-submissions, cloud-url, memory-sync, inbox-notify, default-models, model-providers, masking, web-search, voice, theme-language, startup-appearance, palette, color-mode, ui-zoom, glass, home-motion, ambient, visuals, smooth-caret, selection-bar, prompt-suggest, chat-avatars, calm-dim, calm-reading, calm-motion, ribbon-auto-home, fonts, notes-attachments, daily-notes, agent-browser, strict-background, jev, units-switch, units-host, remote-sessions-switch, remote-approval-cap, remote-trusted-devices, remote-safety, computer-history, mcp-server, reset-layout, clear-data, language.';
     const ENTRY = { id: 'open-settings',
       description: "Open Forsion's settings window, optionally at one page or at the page holding one specific setting. To answer 'where/how do I set X', open that page and say which page you opened; these settings are not documented on the web, so do not search for them. Unknown targets are rejected.",
       params: { type: 'object', properties: { tab: { type: 'string', description: `A page id or a setting id. Omit for the default page. ${TARGETS}` } } } };
@@ -6689,6 +6937,24 @@ Then reply with only the command output.`,
       const row = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : { ok: false, detail: String(failure?.message || 'Missing evidence').split('\n')[0] };
       record('webpagesui', name, { ...row, ...(failure ? { ok: false } : {}) }, row.ms || 0);
     }
+  }
+  if (ONLY.has('webcardsreal')) {
+    const name = 'webcardsui 真机:本地网页卡 / 服务卡 / Extend 的「网页」「我的网页」卡(本地真 Connect)';
+    let failure;
+    try {
+      const job = promisify(execFile)(process.execPath, [join(root, '../desktop/scripts/webcards-real.live.cjs')], {
+        cwd: join(root, '../desktop'), timeout: 20 * 60_000, maxBuffer: 4 * 1024 * 1024,
+        env: { ...process.env, TANGU_BACKEND_URL: base, TANGU_WP_TOKEN: TOKEN, TANGU_WP_CLOUD: FAKE_CLOUD.url,
+          TANGU_WP_PKG: resolve(opt('extend-pkg', process.env.TANGU_LIVE_EXTEND_PKG || '')), TANGU_WP_OUT: OUT, TANGU_WP_MODEL: MODEL },
+      });
+      const stopUi = () => { try { job.child.kill('SIGTERM'); } catch { /* gone */ } };
+      process.on('exit', stopUi);
+      const ui = await job.finally(() => process.off('exit', stopUi));
+      writeFileSync(join(OUT, 'webcardsui.log'), ui.stdout + ui.stderr);
+    } catch (e) { failure = e; writeFileSync(join(OUT, 'webcardsui.log'), String(e.stdout || '') + String(e.stderr || '') + String(e.message)); }
+    const path = join(OUT, 'webcardsui-evidence.json');
+    const row = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : { ok: false, detail: String(failure?.message || 'Missing evidence').split('\n')[0] };
+    record('webcardsui', name, { ...row, ...(failure ? { ok: false } : {}) }, row.ms || 0);
   }
   await finish();
 } catch (e) {
