@@ -18,6 +18,9 @@ export const IPC = {
   saveAsset: 'asset:save',
   saveVaultBytes: 'vault:save-bytes',
   readVaultBytes: 'vault:read-bytes',
+  readExternalPdf: 'pdf:external-read',
+  exportExternalPdf: 'pdf:external-export',
+  writeExternalPdfAnnotations: 'pdf:external-annotations',
   saveAttachment: 'attachment:save',
   openAttachment: 'attachment:open',
   copyAttachment: 'attachment:copy',
@@ -665,6 +668,10 @@ export interface AmadeusApi {
   /** Read a vault file's raw bytes by vault-relative path (PDF 阅读器 getDocument({data}) 等;避免自定义
    *  scheme 的跨源 XHR 限制——dev 渲染器是 http://localhost 源,XHR 到 amadeus-asset:// 会被 Chromium 拦)。 */
   readVaultBytes(path: string): Promise<Uint8Array>
+  /** Desktop file-view access; external PDFs are read-only, only their annotation sidecar is writable. */
+  readExternalPdf?(path: string, annotations?: boolean): Promise<Uint8Array | null>
+  exportExternalPdf?(path: string, name: string, bytes: Uint8Array): Promise<string | null>
+  writeExternalPdfAnnotations?(path: string, bytes: Uint8Array, backup?: number): Promise<void>
   /** Import a dragged-in file to the configured attachment location (keeps its name, de-duped).
    *  Returns the page-relative path (for `[name](rel)` links) + final basename (for `![[base]]`). */
   saveAttachment(

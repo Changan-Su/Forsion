@@ -895,6 +895,15 @@ export interface ListDropTarget {
  *  process keeps these files out of the note/page list (its compiler would otherwise rewrite = corrupt them).
  *  The host opens one shared engine view (`amadeus-plugin-file`) that re-derives the type from the file path
  *  at mount time — so a plugin loading after boot still works. */
+/** Per-mounted-file access. External PDFs permit reads of the source and reads/writes
+ * of .<filename>.annot.json (plus timestamped .broken-* recovery copies) only. */
+export interface PluginFileIO {
+  /** Native Save As for an annotated copy; cancel returns null. Never overwrites the source. */
+  saveCopy?(name: string, bytes: Uint8Array): Promise<string | null>
+  readBytes(path: string): Promise<Uint8Array | null>
+  writeBytes(path: string, bytes: Uint8Array): Promise<void>
+}
+
 export interface FileTypeContribution {
   /** Type id, unique within the plugin (kebab-case recommended). */
   id: string
@@ -931,6 +940,9 @@ export interface FileTypeContribution {
    *  Other built-in suffixes (`.excalidraw.md`, `.db`, images) cannot be overridden. Older hosts
    *  ignore this field and return `false` from registerFileType — stand down as documented there. */
   override?: boolean
+  /** Opt in to external desktop PDFs. Use file.io for the source and its annotation sidecar;
+   * ctx.app remains vault-scoped. Older hosts ignore this field. */
+  external?: boolean
   /** Build the editor for one file into the host element; called once per opened instance. Return a
    *  cleanup (flush/save-on-close, clear timers here). Read/write the file via ctx.app.readFile/writeFile.
    *  `file.surface` (2026-08-14, when present): a per-view page surface scoped to this tab — prefer it
@@ -943,8 +955,8 @@ export interface FileTypeContribution {
    *  unsubscribe; the host also drops the subscription when the view closes. */
   mount(
     el: HTMLElement,
-    file: { filePath: string; surface?: PluginPageSurface; onGoto?: (cb: (target: FileGotoTarget) => void) => () => void },
-  ): (() => void) | void
+    file: { filePath: string; io?: PluginFileIO; surface?: PluginPageSurface; onGoto?: (cb: (target: FileGotoTarget) => void) => () => void },
+  ): (() => void | Promise<void>) | void
 }
 
 /** A place inside a file that a link or citation points at (`[[x.pdf#page=3]]`). Only PDFs carry one today. */

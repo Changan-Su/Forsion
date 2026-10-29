@@ -398,3 +398,5 @@ color-mix(in srgb, var(--green) 14%, transparent)
 ```
 
 - Check: `node check-plugin.mjs <plugin folder> --style` scans `main.js` and the folder's `.css` files and reports private classes, tokens that are not listed or are deprecated, needless fallbacks, hard-coded colors, radii of 4px or more, and shadows with a color. It only reports and does not change the exit code. CSS meant for another document (a page inside an iframe, an exported file) is skipped by putting `/* forsion-style: off */` on the same line.
+
+DOM popovers opened with `ctx.ui.popover` use the same `ui-menu-exit` animation and tokens as `OverlayAt`. Cleanup runs immediately; only an inert visual copy remains until exit completes. Reduced motion follows host policy.
