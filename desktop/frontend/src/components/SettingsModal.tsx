@@ -30,7 +30,7 @@ import {
   getLocalWebSearch, type LocalWebSearchRedacted,
 } from '../services/backendService'
 import { ChannelsTab } from './ChannelsTab'
-import { DecisionGateField } from './DecisionGateField'
+import { DecisionGateField, disableDecisionGate } from './DecisionGateField'
 import { buildSessionLogPayload, sessionLogFilename } from '../services/sessionLog'
 import type {
   AmadeusSyncStatus, AuthStatusInfo, BackendStatusInfo, DirectProviderConfig, DiscoveryResult, McpServerConfigEntry, MirrorTestResult, ModelsResponse,
@@ -3549,6 +3549,7 @@ export const SettingsModal: React.FC<{
                           // 留着开 = 用户看不见的地方一直在采样,默认拒的信任故事当场破。
                           void window.tangu?.setConfig?.({ activeWindowEnabled: false }).then(setStored)
                           setActiveWindowCommand(false)
+                          disableDecisionGate() // 同理:开关在这一页,藏起来还开着就一直把原话发云端
                           requestDevCommandsSync() // 两个 localStorage 开关已同步清掉;config 那条由主进程自己推
                           setDevMode(false)
                           setDevClicks(0)

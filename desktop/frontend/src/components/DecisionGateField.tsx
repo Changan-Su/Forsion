@@ -25,3 +25,11 @@ export function DecisionGateField() {
     </div>
   )
 }
+
+/** 关开发者模式时一并关:开关藏起来以后,还开着的闸就是用户看不见的「原话发云端」。只动本机引擎、只在开着时写。 */
+// ponytail: 引擎这会儿读不到就不写(读失败 ≠ 关着);下次进开发者选项还能看见、手动关。
+export function disableDecisionGate(): void {
+  void getSpecialConfig(homeTarget())
+    .then((r) => (!r.remote && !r.cloud && r.config.historian.decisionGate ? saveSpecialConfig(homeTarget(), { historian: { decisionGate: false } }) : undefined))
+    .catch(() => { /* 见上 */ })
+}
