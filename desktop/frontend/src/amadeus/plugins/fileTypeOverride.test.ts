@@ -17,7 +17,8 @@
 import { createContext } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-vi.mock('../api', () => ({ amadeus: undefined }))
+const externalBridge = vi.hoisted(() => ({ readExternalPdf: vi.fn() }))
+vi.mock('../api', () => ({ amadeus: externalBridge }))
 vi.mock('../components/BlockHost', () => ({ BlockHost: () => null, BlockSurfaceContext: createContext(null) }))
 vi.mock('../components/PageView', () => ({ PageView: () => null }))
 vi.mock('../chrome/pageChrome', () => ({ NoteCover: () => null }))
@@ -91,6 +92,12 @@ describe('② findFileType:可覆盖后缀只认 override 贡献,其余内置后
   it('库外的 PDF(绝对路径,聊天引用里的本机文件)不归插件:插件只读得到库内路径', () => {
     expect(findFileType([overriding], '/Users/me/Downloads/a.pdf')).toBeUndefined()
     expect(findFileType([overriding], 'C:\\docs\\a.pdf')).toBeUndefined()
+  })
+
+  it('only external-aware plugins can take over absolute PDFs', () => {
+    const capable = { item: { ...ft(['.pdf'], true), external: true } }
+    expect(findFileType([overriding, capable], '/tmp/Paper.pdf')).toBe(capable.item)
+    expect(findFileType([capable], 'C:\\docs\\Paper.pdf')).toBe(capable.item)
   })
 
   it('插件停用 → 同一路径立刻查不到(打开动作回落到内置阅读器)', () => {

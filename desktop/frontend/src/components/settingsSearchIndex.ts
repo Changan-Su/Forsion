@@ -87,6 +87,7 @@ export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchEntry[] = [
   // P1-K2:急停与远程锁定(经 K4 扩展槽挂在远程会话页末尾)
   { id: 'remote-safety', tab: 'remote-sessions', anchor: 'remote-safety', labelKey: 'remoteSafety.title', keywords: '急停 紧急停止 锁定 解锁 快捷键 停止远程任务 emergency stop lock unlock shortcut hotkey stop remote tasks' },
   { id: 'computer-history', tab: 'computer-history', anchor: 'computer-history', labelKey: 'settingsmodal.tab.computerHistory', keywords: '电脑历史 活动记录 隐私 排除 暂停 computer history activity privacy recording exclude pause' },
+  { id: 'mcp-json', tab: 'mcp', labelKey: 'mcpImport.open', keywords: 'JSON 导入 粘贴 配置 MCP import paste config', needs: ['host'] },
   { id: 'mcp-server', tab: 'advanced', sub: 'a-mcp', labelKey: 'settings.sub.mcpServer', keywords: '对外 端点 endpoint mcp' },
   { id: 'reset-layout', tab: 'advanced', sub: 'a-ui', anchor: 'reset-layout', labelKey: 'settingsmodal.advanced.resetLayout', keywords: '布局 恢复 layout reset' },
   { id: 'clear-data', tab: 'advanced', sub: 'a-data', labelKey: 'settings.sub.data', keywords: '清空 卸载 重置 clear reset data' },

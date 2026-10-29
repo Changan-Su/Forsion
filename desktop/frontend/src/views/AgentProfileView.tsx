@@ -8,7 +8,7 @@ import type { ViewProps } from '@lcl/engine/types'
 import { useApp } from '../stores/appStore'
 import { useI18n } from '../i18n'
 import { deleteAgentAvatar, fetchAgentAvatar, getAgentHarness, listAgents, listSkills, listTools, putAgentsMeta, renameAgentDef, saveAgentDef, uploadAgentAvatar } from '../services/backendService'
-import { openAgentProfile, openHumanProfile } from './agentProfileNav'
+import { openAgentCreation, openAgentProfile, openHumanProfile } from './agentProfileNav'
 import { HumanProfile, useMeIdentity } from './HumanProfile'
 import { AgentMemoryPanel } from '../components/AgentMemoryPanel'
 import { AgentLogPanel } from '../components/AgentLogPanel'
@@ -168,7 +168,7 @@ export function AgentsRosterView() {
   const agent = agents.find((a) => a.slug === selected.slug) || agents[0]
   const creating = selected.creating
   const viewing = (slug: string) => !creating && !selected.me && agent?.slug === slug
-  const setCreating = () => useWorkspace.getState().openView('agent-profile', { reuseKey: 'primary', creating: true, me: false }, 'main')
+  const setCreating = openAgentCreation
   const selectAgent = (slug: string) => { setRosterError(''); openAgentProfile(slug) }
   const emitAgentsChange = () => { window.dispatchEvent(new Event('forsion:agents-changed')); window.tangu?.requestMainAction?.('agents-changed') }
   const filtered = useMemo(() => agents.filter((a) => `${a.name} ${agentDescription(a, t)} ${a.slug}`.toLowerCase().includes(query.toLowerCase())), [agents, query, t])

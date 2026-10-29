@@ -306,3 +306,11 @@ Plugins that declare both `databases` and `calendar` receive `human://CALENDAR.d
 ### Shared account
 
 Unit web account hosts and the mobile app may provide `ctx.account`. Check that it exists before using `status()`, `login()`, `logout()`, `request(path, init)` and `subscribe(listener)`. `request` only reaches the account API and accepts no other origin; the host supplies credentials and preserves FormData/Blob file uploads. Switching accounts cancels old requests and makes reads from old response bodies fail; plugins must still cancel their own deferred tasks and clear the previous account's UI. The optional `saveDownload(blob, name)` returns `{ ok, error? }`: Android saves to the system Downloads, and browsers save a download file. Never store, import or forward account tokens.
+
+### External PDF file views (2026-10-29, feature branch)
+
+Set both `external: true` and `override: true` to handle external PDFs opened with the operating system's Open With action on desktop hosts that support this API. Default opener preferences still apply. Cold startup waits for initial plugin loading. Older hosts and plugins without `external` keep the built-in preview.
+
+For an external PDF, `mount(el, file)` receives `file.io`: `readBytes(path)` reads this PDF or its adjacent `.<filename>.annot.json`; `writeBytes(path, bytes)` writes only that annotation sidecar or a `.broken-<timestamp>` recovery copy. The source PDF remains read-only. `saveCopy(name, bytes)` shows the native Save As dialog, returns the saved name or `null` on cancellation, and refuses to overwrite the source. The general `ctx.app` file APIs remain vault-scoped. Surface write failures when the source directory is read-only.
+
+A file-type cleanup may return `Promise<void>`. Closing a tab waits for its final save before revoking `file.io`; disabling the plugin still revokes immediately. When multiple tabs share a document, discard the handle belonging to a closed tab. External files are not imported into a vault or sent through note storage.

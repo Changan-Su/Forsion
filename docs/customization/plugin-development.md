@@ -299,6 +299,14 @@ ctx.app.writeFileScoped?.(path, text, expectedRoot, {create:true})
 
 无 plan 的状态查询可核验上一版显示名目录的迁移日志；旧目标的写入计划仍被拒绝，手动偏好和智库 / 撤销检查照样生效。迁移前按原智库实际解析裸媒体链接，保留用户放在笔记旁边的附件的位置，而不是假定都在 `assets/` 下。
 
+### 库外 PDF 文件视图（2026-10-29，功能分支）
+
+文件类型写 `external: true` 并保留 `override: true`，即可在具备此接口的桌面宿主上接管系统「用 Forsion 打开」的库外 PDF；仍遵循「默认打开方式」。冷启动等插件首次装载后再分流。旧宿主和未声明 `external` 的插件继续使用内置预览。
+
+`mount(el, file)` 的 `file.io` 仅在库外 PDF 上提供：`readBytes(path)` 读取当前 PDF 或同目录的 `.<文件名>.annot.json`，`writeBytes(path, bytes)` 只写该批注文件或 `.broken-<时间戳>` 恢复副本；源 PDF 只读。`saveCopy(name, bytes)` 打开原生另存为，返回保存名称，取消返回 `null`，拒绝覆盖原 PDF。`ctx.app` 的文件接口仍只接受库内路径；不要把绝对路径交给它们。原目录没有写权限时显示保存错误，不把失败当成已保存。
+
+文件类型的清理函数可以返回 `Promise<void>`：普通关标签时宿主等最后一次保存完成再吊销 `file.io`；插件停用时仍立即吊销。多个标签读同一 PDF 时，不要永久保留已关闭标签的句柄。库外文件不导入库，不通过笔记写盘管线。
+
 ### 个人日历（Desktop 2.13.6+）
 
 同时声明 `databases` 与 `calendar` 的插件，在本机引擎提供个人日历时，会收到 `human://CALENDAR.db`。日历成员把它排第一并隐藏旧智库镜像。把该不透明引用原样传给 `ctx.databases`、`ctx.ui.mountRecord` 和用于表结构/名称的 `ctx.app.mutateDb`，不要交给文件系统读写 API。成员与日期/完成列映射由宿主管理，`setMember` / `removeMember` 返回 false；隐藏用 `setHidden`。只有 `databases` 能力的插件不可访问；无此来源的远程或移动宿主不列出。写入复用宿主 CAS 与冲突重放。
