@@ -560,7 +560,7 @@ export const testLocalWebSearch = (
 /** 探测一个 OpenAI 兼容端点(后端代理,避免 CORS):GET /models → 1-token chat。 */
 export const testProviderConnection = (
   t: EngineTarget,
-  probe: { baseUrl: string; apiKey?: string; modelId?: string },
+  probe: { baseUrl: string; apiKey?: string; modelId?: string; protocol?: string },
   signal?: AbortSignal,
 ) =>
   request<{ success: boolean; message: string }>(t, '/agent/providers/test', {
@@ -572,7 +572,7 @@ export const testProviderConnection = (
 /** 后端代拉上游 GET {baseUrl}/models(避 CORS),返回可选模型名列表;软失败回 []。 */
 export const fetchProviderModels = (
   t: EngineTarget,
-  probe: { baseUrl: string; apiKey?: string },
+  probe: { baseUrl: string; apiKey?: string; protocol?: string },
   signal?: AbortSignal,
 ) =>
   request<{ models: Array<{ id: string; name?: string }> }>(t, '/agent/providers/fetch-models', {
