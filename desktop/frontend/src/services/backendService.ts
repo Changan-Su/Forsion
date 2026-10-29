@@ -631,6 +631,12 @@ export const deleteUserCloudSkill = (t: EngineTarget, id: string) =>
 // 服务端 assets.ts 只认 camelCase appId(与 sessions 的 app_id 不同拼法,历史造成)。
 export const listTools = (t: EngineTarget) =>
   request<ToolsResponse>(t, `/agent/tools?appId=${encodeURIComponent(AGENT_APP_ID)}`)
+/** 远端 MCP 的 OAuth 登录:返回授权页地址(交给宿主开浏览器);刷新就成了 = 不带 url。之后引擎在后台等回调、重连。 */
+export const mcpLogin = (t: EngineTarget, name: string) =>
+  request<{ url?: string }>(t, `/agent/mcp/${encodeURIComponent(name)}/login`, { method: 'POST' })
+/** 断开:删掉本机令牌。 */
+export const mcpLogout = (t: EngineTarget, name: string) =>
+  request<Record<string, never>>(t, `/agent/mcp/${encodeURIComponent(name)}/logout`, { method: 'POST' })
 
 // ── WeChat Remote（本地后端）──
 export interface WechatStatusResponse {

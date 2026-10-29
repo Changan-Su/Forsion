@@ -6,8 +6,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, statSync } from 'node:fs';
 import { createServer as createNet } from 'node:net';
-import { createServer as createHttp, type IncomingHttpHeaders } from 'node:http';
-import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createMcpManager, type McpManager } from './manager.js';
@@ -16,6 +14,7 @@ import { hasTokens } from './oauth.js';
 import { connectorAuthFile } from '../core/tanguHome.js';
 import { checkReadPath } from '../tools/fsPolicy.js';
 import { startHttpServer } from '../../test/fixtures/fake-mcp-server.mjs';
+import { startOAuthServer, browse } from '../../test/fixtures/fake-oauth-server.mjs';
 
 const FAST = { reconnectCooldownMs: 0, retryBaseMs: 50, retryMaxMs: 200, connectTimeoutMs: 10_000 };
 let dir: string;
@@ -48,67 +47,9 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-/** 假授权服务器:PKCE S256、DCR(可关)、授权码一次性、refresh_token 用一次就轮换。 */
-async function startAs({ dcr = true } = {}) {
-  const st = {
-    url: '', access: new Set<string>(), refresh: new Set<string>(), n: 0, refreshes: 0, failRefresh: false,
-    seen: [] as Array<{ path: string; headers: IncomingHttpHeaders; body: string }>,
-    authorize: [] as URLSearchParams[],
-    codes: new Map<string, { challenge: string | null; redirect: string | null }>(),
-  };
-  const issue = () => {
-    const n = ++st.n;
-    st.access.add(`at-${n}`);
-    st.refresh.add(`rt-${n}`);
-    return { access_token: `at-${n}`, refresh_token: `rt-${n}`, token_type: 'Bearer', expires_in: 3600 };
-  };
-  const srv = createHttp(async (req, res) => {
-    const chunks: Buffer[] = [];
-    for await (const c of req) chunks.push(c as Buffer);
-    const body = Buffer.concat(chunks).toString();
-    const u = new URL(req.url!, st.url);
-    st.seen.push({ path: u.pathname, headers: req.headers, body });
-    const json = (code: number, obj: unknown) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)); };
-    if (u.pathname === '/.well-known/oauth-authorization-server') {
-      return json(200, {
-        issuer: st.url, authorization_endpoint: `${st.url}/authorize`, token_endpoint: `${st.url}/token`,
-        ...(dcr ? { registration_endpoint: `${st.url}/register` } : {}),
-        response_types_supported: ['code'], grant_types_supported: ['authorization_code', 'refresh_token'],
-        code_challenge_methods_supported: ['S256'], token_endpoint_auth_methods_supported: ['none'],
-      });
-    }
-    if (u.pathname === '/register' && dcr) return json(201, { ...JSON.parse(body), client_id: 'dyn-client' });
-    if (u.pathname === '/authorize') {
-      st.authorize.push(u.searchParams);
-      const code = `code-${++st.n}`;
-      st.codes.set(code, { challenge: u.searchParams.get('code_challenge'), redirect: u.searchParams.get('redirect_uri') });
-      res.writeHead(302, { location: `${u.searchParams.get('redirect_uri')}?code=${code}&state=${encodeURIComponent(u.searchParams.get('state') ?? '')}` });
-      return res.end();
-    }
-    if (u.pathname === '/token') {
-      const f = new URLSearchParams(body);
-      if (f.get('grant_type') === 'authorization_code') {
-        const c = st.codes.get(f.get('code') ?? '');
-        st.codes.delete(f.get('code') ?? '');
-        const pkce = c && createHash('sha256').update(f.get('code_verifier') ?? '').digest('base64url') === c.challenge;
-        return pkce && f.get('redirect_uri') === c!.redirect ? json(200, issue()) : json(400, { error: 'invalid_grant' });
-      }
-      if (f.get('grant_type') === 'refresh_token') {
-        st.refreshes++;
-        const rt = f.get('refresh_token') ?? '';
-        if (st.failRefresh || !st.refresh.delete(rt)) return json(400, { error: 'invalid_grant' });
-        return json(200, issue());
-      }
-    }
-    json(404, {});
-  });
-  await new Promise<void>((r) => srv.listen(0, '127.0.0.1', () => r()));
-  st.url = `http://127.0.0.1:${(srv.address() as any).port}`;
-  stops.push(async () => { srv.closeAllConnections(); await new Promise<void>((r) => srv.close(() => r())); });
-  return st;
-}
 async function setup(entries: (mcpUrl: string) => Record<string, unknown>, asOpts = {}) {
-  const as = await startAs(asOpts);
+  const as = await startOAuthServer(asOpts);
+  stops.push(() => as.stop());
   const hits = { unauthorized: 0 };
   const mcp = await startHttpServer({ tag: 'h', auth: { isValid: (t: string) => as.access.has(t), authServer: as.url, onUnauthorized: () => { hits.unauthorized++; } } });
   stops.push(() => mcp.stop());
@@ -124,11 +65,6 @@ async function waitFor(fn: () => boolean, ms = 5000): Promise<boolean> {
   const end = Date.now() + ms;
   while (Date.now() < end) { if (fn()) return true; await new Promise((r) => setTimeout(r, 25)); }
   return fn();
-}
-/** 「浏览器」:打开授权页(假授权服务器直接 302 回回环)→ 跟到回调。 */
-async function browse(url: string): Promise<number> {
-  const r = await fetch(url, { redirect: 'manual' });
-  return (await fetch(r.headers.get('location')!)).status;
 }
 async function signIn(m: McpManager, name = 'h') {
   const { url } = await m.login(name);
@@ -212,6 +148,16 @@ describe('MCP OAuth', () => {
     expect(statusOf(m).status).toBe('needs-login');
     expect(statusOf(m).signedIn).toBeUndefined();
     expect((await m.callTool(stub(), { text: 'x' })).text).toContain('needs the user to sign in');
+  }, 20_000);
+
+  it('等回调期间改了这条配置:登录完成后,同一地址的新条目照样连上', async () => {
+    const { mcp, m } = await setup((url) => ({ h: { url } }));
+    const { url } = await m.login('h');
+    writeFileSync(join(dir, 'mcp.json'), JSON.stringify({ mcpServers: { h: { url: mcp.url, timeoutMs: 5000 } } }));
+    await m.reloadConfig();
+    expect(await waitFor(() => statusOf(m).status === 'needs-login')).toBe(true);
+    expect(await browse(url!)).toBe(200);
+    expect(await waitFor(() => statusOf(m).status === 'connected')).toBe(true);
   }, 20_000);
 
   it('预注册 client:不走 DCR;授权服务器不开 DCR 又没写 clientId → 说清楚要填什么', async () => {

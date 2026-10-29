@@ -27,7 +27,7 @@ import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/typ
 import { loadRawMcpServers, enabledServers, inferTransport, isReservedServerName, RESERVED_SERVER_ERROR, type McpServerConfig } from './config.js';
 import { bridgeTool, contentToResult, fenceMcpText, sanitizePart, type LoadedMcpTool, type McpImage } from './toolBridge.js';
 import { toolSubprocessEnv } from '../sandbox/credentialEnv.js';
-import { withBearer, loginServer, forgetServer, hasTokens, type AuthHint } from './oauth.js';
+import { withBearer, loginServer, forgetServer, hasTokens, serverKey, type AuthHint } from './oauth.js';
 
 const DEFAULT_CALL_TIMEOUT_MS = 60_000;
 const CONNECT_TIMEOUT_MS = 30_000;
@@ -526,12 +526,13 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
         loginServer(url, entry.cfg.oauth, entry.authHint, (u) => { entry.loginUrl = u; resolve({ url: u }); }, logins.signal)
           .then(async () => {
             entry.loginUrl = undefined;
-            if (!servers.includes(entry)) return resolve({}); // 等回调期间配置改了:新条目自己连
-            entry.needsLogin = false;
-            entry.authHint = undefined;
-            entry.retryAttempt = 0;
             resolve({});
-            await connect(entry);
+            // 令牌按 URL 存:同一地址的条目都放出来重连(等回调期间配置改了,换上来的新条目也算)
+            const key = serverKey(url);
+            const same = servers.filter((s) => !s.origin && s.cfg.url && s.needsLogin && serverKey(s.cfg.url) === key);
+            for (const s of same) { s.needsLogin = false; s.authHint = undefined; s.retryAttempt = 0; }
+            if (servers.includes(entry) && !same.includes(entry) && entry.status === 'logging-in') entry.status = entry.client ? 'connected' : 'error';
+            await Promise.all(same.map((s) => connect(s)));
           })
           .catch((e: any) => {
             entry.loginUrl = undefined;
