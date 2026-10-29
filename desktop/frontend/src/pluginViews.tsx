@@ -46,9 +46,12 @@ export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; plugi
   const head = pluginViewHeadOf(hostEl)
   const headTitle = head?.title != null ? pluginText(head.title) : ''
   const { locale, t } = useI18n()
-  // 挂载失败 → 失败卡(报错首行 +「重试」);重试只重跑这一个视图的 mount,插件本身不重载,同插件别的视图 / 面板不受影响
-  const [failure, setFailure] = useState<string | null>(null)
+  // 挂载失败 → 失败卡(报错首行 +「重试」);重试只重跑这一个视图的 mount,插件本身不重载,同插件别的视图 / 面板不受影响。
+  // 卡只属于出错的那一次挂载:点了重试(attempt 变)或插件换了新代码(def 换人),同一次渲染里它就作废、挂载点不再 hidden ——
+  // 在 effect 里再收就晚了:新的 mount 量到的是 hidden 容器的 0×0(Codex 评审)
   const [attempt, retry] = useReducer((n: number) => n + 1, 0)
+  const [failure, setFailure] = useState<{ def: ViewContribution; attempt: number; line: string } | null>(null)
+  const failed = failure && failure.def === def && failure.attempt === attempt ? failure.line : null
   useViewModes(leaf.id, modes ? {
     modes: modes.spec.modes.map((m): ViewModeOption => ({ value: m.id, label: locale === 'en' && m.labelEn ? m.labelEn : m.label, icon: modeIcon(m.icon) })),
     value: modes.spec.value,
@@ -73,7 +76,6 @@ export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; plugi
   useEffect(() => {
     const el = ref.current
     if (!el) return
-    setFailure(null) // 重试、插件换了新代码(def 换人)都从这里重挂:先把上一次的失败卡收掉
     let cleanup: (() => void) | void
     let alive = true
     const check = (): void => { if (!alive) throw new Error('View has been disposed') }
@@ -89,7 +91,7 @@ export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; plugi
       if (pluginId) recordDevMountError(pluginId, def.id, e)
       onError.current?.(e)
       el.replaceChildren()
-      setFailure(errorLine(e))
+      setFailure({ def, attempt, line: errorLine(e) })
     }
     const runCleanup = (fn: () => void): void => {
       // 也派给窗口 error:agent 自建 Space 的清理抛错由 builtins/agentSpaceSync 按栈帧认领、回写给 agent(别的插件只多一行日志)
@@ -144,9 +146,9 @@ export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; plugi
     <>
       {/* 有头行时挂载点要 position: relative:插件根常是 absolute inset:0(谛听),不然会盖到头行上 */}
       {(modes || head) && <ViewHead leafId={leaf.id} title={headTitle}>{modes && <HostSlot el={modes.actions} />}{head && <HostSlot el={head.actions} />}</ViewHead>}
-      <div ref={hostRef} {...{ [PLUGIN_VIEW_HOST_ATTR]: '' }} hidden={failure != null} style={modes || head ? { height: 'calc(100% - 32px)', overflow: 'auto', position: 'relative' } : { height: '100%', overflow: 'auto' }} />
-      {failure != null && <div data-plugin-view-failed="" style={{ height: modes || head ? 'calc(100% - 32px)' : '100%', display: 'flex', flexDirection: 'column', overflow: 'auto' }}>
-        <EmptyState icon={TriangleAlert} title={t('pluginview.mountFailed')} line={failure || undefined}
+      <div ref={hostRef} {...{ [PLUGIN_VIEW_HOST_ATTR]: '' }} hidden={failed != null} style={modes || head ? { height: 'calc(100% - 32px)', overflow: 'auto', position: 'relative' } : { height: '100%', overflow: 'auto' }} />
+      {failed != null && <div data-plugin-view-failed="" style={{ height: modes || head ? 'calc(100% - 32px)' : '100%', display: 'flex', flexDirection: 'column', overflow: 'auto' }}>
+        <EmptyState icon={TriangleAlert} title={t('pluginview.mountFailed')} line={failed || undefined}
           action={{ label: t('pluginview.retry'), icon: RotateCw, action: 'plugin-view-retry', onClick: retry }} />
       </div>}
     </>

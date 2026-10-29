@@ -431,7 +431,7 @@ el.innerHTML = '<h2>本周</h2><button>新建</button> <input placeholder="搜�
   '<table><thead><tr><th>任务</th><th>状态</th></tr></thead><tbody><tr><td>导出</td><td>进行中</td></tr></tbody></table>'
 ```
 
-- 你写的样式优先：写了 `class` 的元素这一层不管；只写元素选择器（`button { … }`）也压得过它，因为 `ctx.addStyle` 的样式排在宿主后面。从前压得过宿主全局重置的写法，现在照样压得过。
+- 你写的样式优先：写了 `class` 的元素这一层不管；没写 `class` 的，你写的任何规则都压得过它，哪怕是零权重的 `:where(…)`——这一层整条是零权重，`ctx.addStyle` 的样式又排在宿主后面。
 - 主按钮、危险按钮仍写 `.btn.primary` / `.btn.danger`，工具栏小按钮写 `.btn.sm`。视图头（`setViewHead` / `setViewModes`）里的按钮不在挂载点里，不吃这一层。
 - 宿主替你画的零件（`ctx.ui.mount*`、`ctx.table.mount` 等）里面、你自己搭的 `.ctx-menu` 里面不受影响；iframe / webview 里的页面拿不到。
 - 实现在 `desktop/frontend/src/styles/base.css` 末尾的 `plugin-view-base` 一段，只用公开 token（`pluginContract.test.ts` 逐个核对）。仪器：`desktop/scripts/plugin-base-shots.cjs`（真 Electron，装 `scripts/fixtures/plugin-base-sample`，明 / 暗拍图并量计算样式）。

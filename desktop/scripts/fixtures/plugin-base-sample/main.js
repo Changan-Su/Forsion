@@ -2,8 +2,8 @@
 // the host's base layer should make it look native. The "flaky" view throws on mount until window.__pbase.broken
 // is cleared, for the failure card + Retry. Bare setup body; public APIs only. Driven by scripts/plugin-base-shots.cjs.
 
-// The only CSS here is the tie probe: (0,0,1), the same weight as the host's base button rule — the plugin's must win.
-ctx.addStyle(':where(.pb-tie) button { background: var(--danger-light); border-color: var(--danger); }')
+// The only CSS here is the tie probe: zero weight, the same as the host's base layer — the plugin's must still win.
+ctx.addStyle(':where(.pb-tie button) { background: var(--danger-light); border-color: var(--danger); padding: 6px 20px; }')
 
 window.__pbase = { broken: true } // instrumentation only
 

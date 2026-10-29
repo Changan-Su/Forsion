@@ -36,15 +36,18 @@ const measure = () => {
   // 宿主自己的 .btn(插件视图之外)当参照:插件视图里的 .btn 必须一模一样
   const ref = document.body.appendChild(Object.assign(document.createElement('button'), { className: 'btn', textContent: '.btn' }))
   const outside = cs(ref, BTN); ref.remove()
+  // 插件视图之外的裸按钮:全局重置照旧(无边框、透明)
+  const plain = document.body.appendChild(Object.assign(document.createElement('button'), { textContent: 'x' }))
+  const outsideBare = cs(plain, ['borderTopWidth', 'backgroundColor', 'paddingLeft']); plain.remove()
   // 宿主零件那一层里塞一颗裸按钮:不该吃基础样式(还是全局重置的无边框)
   const layer = q('[data-plugin-view-host] [data-pb="part"] [data-host-mount]')
   const probe = layer && layer.appendChild(Object.assign(document.createElement('button'), { textContent: 'x' }))
   const inPart = probe && getComputedStyle(probe).borderTopWidth; probe?.remove()
   const rootCs = getComputedStyle(document.documentElement)
   return {
-    bare: cs(q('[data-pb="b1"]'), BTN), btn: cs(q('[data-pb="btn"]'), BTN), outside,
+    bare: cs(q('[data-pb="b1"]'), BTN), btn: cs(q('[data-pb="btn"]'), BTN), outside, outsideBare,
     disabled: cs(q('[data-pb="b3"]'), ['opacity']).opacity,
-    tie: cs(q('[data-pb="tie"]'), ['backgroundColor', 'borderTopColor']),
+    tie: cs(q('[data-pb="tie"]'), ['backgroundColor', 'borderTopColor', 'paddingLeft']),
     input: cs(q('[data-pb="in"]'), ['borderTopWidth', 'backgroundColor', 'borderTopLeftRadius']),
     select: cs(q('[data-pb="sel"]'), ['borderTopWidth', 'backgroundColor']),
     th: cs(q('[data-pb="table"] th'), ['fontWeight', 'color', 'paddingLeft', 'borderTopWidth', 'textAlign']),
@@ -72,7 +75,8 @@ const diff = (a, b) => a && b ? Object.fromEntries(Object.keys(a).filter((k) => 
       check(`button${tag}: bare <button> draws a 1px outline, no fill`, m.bare?.borderTopWidth === '1px' && m.bare.borderTopStyle === 'solid' && m.bare.backgroundColor === 'rgba(0, 0, 0, 0)', m.bare)
       check(`button${tag}: .btn inside the view is exactly the host .btn`, same(m.btn, m.outside), diff(m.btn, m.outside))
       check(`button${tag}: disabled bare button dims`, m.disabled === '0.5', m.disabled)
-      check(`button${tag}: plugin rule at the same weight wins (ctx.addStyle comes later)`, m.tie && m.tie.backgroundColor !== 'rgba(0, 0, 0, 0)' && m.tie.borderTopColor !== m.bare.borderTopColor, m.tie)
+      check(`button${tag}: a zero-weight plugin rule still wins (ctx.addStyle comes later)`, m.tie && m.tie.backgroundColor !== 'rgba(0, 0, 0, 0)' && m.tie.borderTopColor !== m.bare.borderTopColor && m.tie.paddingLeft === '20px', m.tie)
+      check(`button${tag}: a bare button outside plugin views keeps the host reset`, m.outsideBare?.borderTopWidth === '0px' && m.outsideBare.backgroundColor === 'rgba(0, 0, 0, 0)' && m.outsideBare.paddingLeft === '0px', m.outsideBare)
       check(`form${tag}: <input> / <select> on the theme (1px border, card fill)`, m.input?.borderTopWidth === '1px' && m.input.backgroundColor !== 'rgba(0, 0, 0, 0)' && m.select?.borderTopWidth === '1px', { input: m.input, select: m.select })
       check(`table${tag}: header muted, medium weight, no fill; cells padded with hairlines`, m.th?.fontWeight === '500' && m.th.paddingLeft === '10px' && m.th.textAlign === 'left' && m.td?.borderTopWidth === '1px', { th: m.th, td: m.td })
       check(`heading${tag}: h1 / h2 / h3 on the UI title / heading / body sizes`, m.h1?.fontSize === m.tokens.title && m.h1.fontWeight === '600' && m.h2?.fontSize === m.tokens.heading && m.h3?.fontSize === m.tokens.body, { h1: m.h1, h2: m.h2, h3: m.h3, tokens: m.tokens })

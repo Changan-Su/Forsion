@@ -2,7 +2,7 @@
 /**
  * 插件视图挂载失败 → 失败卡(报错首行 +「重试」);重试只重跑这一个视图的 mount。
  * 负对照(2026-10-29 实跑红过):effect 依赖里去掉 attempt → 点了重试 mount 不再调,「重试后挂上」红;
- * effect 开头不收失败卡 → 挂上了挂载点仍 hidden,同一条红。
+ * 失败卡不绑「出错的那一次」、改回在 effect 开头收 → 新 mount 时挂载点还是 hidden,「重试」与「def 换人」两条红。
  */
 import { act, createElement as h } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
@@ -27,7 +27,9 @@ describe('PluginViewHost 挂载失败卡', () => {
   it('抛错 → 卡上写首行;重试 → 只重跑 mount,好了就挂上', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     let calls = 0
+    const hiddenAtMount: boolean[] = []
     const mount = vi.fn((el: HTMLElement) => {
+      hiddenAtMount.push(el.hidden)
       if (++calls === 1) throw new TypeError('data.items is undefined\n    at mount (main.js:12)')
       el.innerHTML = '<p data-ok>ok</p>'
     })
@@ -40,10 +42,23 @@ describe('PluginViewHost 挂载失败卡', () => {
 
     act(() => box.querySelector<HTMLButtonElement>('[data-action="plugin-view-retry"]')!.click())
     expect(mount).toHaveBeenCalledTimes(2)
+    expect(hiddenAtMount).toEqual([false, false]) // 重试那次 mount 时挂载点已经不是 hidden(量得到尺寸)
     expect(box.querySelector('[data-plugin-view-failed]')).toBeNull()
     const host = box.querySelector<HTMLElement>('[data-plugin-view-host]')!
     expect(host.hidden).toBe(false)
     expect(host.querySelector('[data-ok]')).not.toBeNull()
+  })
+
+  it('失败后插件换了新代码(def 换人):卡作废,新 mount 挂在可见的容器上', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    render({ id: 'v', title: 'V', mount: () => { throw new Error('old') } } as unknown as ViewContribution)
+    expect(box.querySelector('[data-plugin-view-failed]')).not.toBeNull()
+    let hidden: boolean | null = null
+    const leaf = { id: 'leaf-1', type: 'plugin:p:v', params: {}, setParams: vi.fn(), close: vi.fn() }
+    const next = { id: 'v', title: 'V', mount: (el: HTMLElement) => { hidden = el.hidden; el.textContent = 'new' } } as unknown as ViewContribution
+    act(() => root!.render(h(PluginViewHost as never, { def: next, pluginId: 'p', leaf, params: {} })))
+    expect(hidden).toBe(false)
+    expect(box.querySelector('[data-plugin-view-failed]')).toBeNull()
   })
 
   it('async mount reject 同样出卡', async () => {

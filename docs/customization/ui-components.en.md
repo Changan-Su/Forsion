@@ -431,7 +431,7 @@ el.innerHTML = '<h2>This week</h2><button>New</button> <input placeholder="Searc
   '<table><thead><tr><th>Task</th><th>Status</th></tr></thead><tbody><tr><td>Export</td><td>In progress</td></tr></tbody></table>'
 ```
 
-- Your styles win: an element with a `class` is left alone, and even a plain element selector (`button { … }`) beats this layer, because `ctx.addStyle` styles come after the host's. Anything that beat the host's global reset before still beats this layer.
+- Your styles win: an element with a `class` is left alone, and for one without, any rule you write beats this layer, even a zero-weight `:where(…)`: the whole layer has zero specificity and `ctx.addStyle` styles come after the host's.
 - Main and destructive buttons stay `.btn.primary` / `.btn.danger`; small toolbar buttons `.btn.sm`. Buttons in the view head (`setViewHead` / `setViewModes`) are outside the mount element and don't get this layer.
 - Host-drawn parts inside your view (`ctx.ui.mount*`, `ctx.table.mount` and so on) and a `.ctx-menu` you build yourself are not affected; pages inside an iframe or webview don't get it.
 - It lives in the `plugin-view-base` block at the end of `desktop/frontend/src/styles/base.css` and uses public tokens only (`pluginContract.test.ts` checks each one). Instrument: `desktop/scripts/plugin-base-shots.cjs` (real Electron: installs `scripts/fixtures/plugin-base-sample`, shoots light and dark, measures computed styles).
