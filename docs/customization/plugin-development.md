@@ -187,7 +187,7 @@ ctx.registerAppearance?.({ id, label, labelEn, icon, splash })
 
 ## 摘要栏卡片
 
-Tangu 聊天右侧的摘要栏(2.13.8-beta.1 之后的桌面版本)是一叠卡片:进度、后台、产物、来源、工作范围和 Agent Desk。插件可以用 `ctx.summary?.registerCard` 加一张卡,和内置卡在同一个栈里:用户能折叠、拖动排序,收起状态和顺序由宿主记住;插件卡默认排在 Agent Desk 前面。`mount` 在每个会话的摘要栏里各调用一次(换会话会卸载重挂),`host.sessionId` 是这份所在的会话;`host.update({ count, hidden })` 改卡头的计数、或者先不显示这张卡。正文最高 240px,超出由宿主滚动。只有桌面 Tangu 有摘要栏,所以用可选链;更早的版本没有 `ctx.summary`。接口细节见插件开发技能「摘要栏插件卡」一节。
+Tangu 聊天右侧的摘要栏(2.13.8-beta.1 之后的桌面版本)是一叠卡片:进度、后台、产物、来源、工作范围和 Agent Desk。插件可以用 `ctx.summary?.registerCard` 加一张卡,和内置卡在同一个栈里;插件卡默认排在 Agent Desk 前面,用户拖动排的顺序由宿主记住。卡片的开合跟着内容走:`count` 变大就自动展开;用户手动展开或收起只管到这一轮对话结束,不会被记住;`defaultCollapsed` 决定没有新内容时收不收。车道放不下时,宿主会先收起最久没有新内容的卡,或者把最后一张的正文缩短,所以别假定正文一定有 240px。`mount` 在每个会话的摘要栏里各调用一次(换会话会卸载重挂),`host.sessionId` 是这份所在的会话;`host.update({ count, hidden })` 改卡头的计数、或者先不显示这张卡。正文最高 240px(放不下时会更矮),超出由宿主滚动。只有桌面 Tangu 有摘要栏,所以用可选链;更早的版本没有 `ctx.summary`。接口细节见插件开发技能「摘要栏插件卡」一节。
 
 ```js
 ctx.summary?.registerCard({ id, title: { zh, en }, defaultCollapsed, mount(el, host) })
