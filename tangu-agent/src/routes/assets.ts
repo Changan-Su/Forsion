@@ -10,6 +10,7 @@
 import { Router } from 'express';
 import { authMiddleware, AuthRequest } from '../core/http.js';
 import { deps } from '../seams/runtime.js';
+import { parseRemoteOrigin } from '../services/remoteOrigin.js';
 import { resolveTools } from '../tools/toolRegistry.js';
 import type { ToolContext } from '../tools/toolTypes.js';
 
@@ -215,6 +216,7 @@ router.get('/agent/tools', authMiddleware, async (req: AuthRequest, res) => {
             transport: s.transport,
             status: s.status,
             error: s.error || null,
+            ...(s.signedIn ? { signedIn: true } : {}),
             ...(s.origin ? { origin: s.origin } : {}),
             tools: tools.map((t) => ({
               name: t.name,
@@ -239,5 +241,19 @@ router.get('/agent/tools', authMiddleware, async (req: AuthRequest, res) => {
     res.status(500).json({ detail: e?.message || 'list tools failed' });
   }
 });
+
+// MCP OAuth 登录 / 断开(mcp/oauth.ts):只给本机 —— 回调在本机回环上,远端设备完成不了;令牌也只存本机。
+for (const action of ['login', 'logout'] as const) {
+  router.post(`/agent/mcp/:name/${action}`, authMiddleware, async (req: AuthRequest, res) => {
+    if (parseRemoteOrigin(req.headers)) return res.status(403).json({ code: 'LOCAL_ONLY', detail: 'MCP sign-in is only available on the computer running the engine.' });
+    const mcp = deps().mcp;
+    if (!mcp) return res.status(404).json({ detail: 'MCP is not available in this engine' });
+    try {
+      res.json(action === 'login' ? await mcp.login(String(req.params.name)) : (await mcp.logout(String(req.params.name)), {}));
+    } catch (e: any) {
+      res.status(400).json({ detail: String(e?.message || e).slice(0, 500) });
+    }
+  });
+}
 
 export default router;
