@@ -434,7 +434,9 @@
     "test:security-deps": "node --test scripts/dependency-security.test.cjs build/runtime-policy.test.cjs scripts/release-security.test.cjs",
     "check:critical": "node scripts/critical-contracts.cjs",
     "bench:baseline": "node scripts/e2e-editor.cjs --script=performance-baseline.check.cjs",
-    "check:vault-integrity": "node scripts/vault-integrity.electron.cjs"
+    "check:vault-integrity": "node scripts/vault-integrity.electron.cjs",
+    "check:translationrich": "node scripts/translation-rich.check.cjs",
+    "check:translationlive": "node scripts/translation-rich.live.cjs"
   },
   "dependencies": {
     "@astryxdesign/core": "^0.1.4",

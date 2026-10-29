@@ -21,6 +21,7 @@ import { resolveIcon } from '@amadeus/components/icons'
 import { InlineAiPanel, type InlineAiRun } from '@amadeus/unified/InlineAiPanel'
 import { listSelectionActions, runSelectionAction, selectionActionKey, selectionBarOrder, type OwnedSelectionAction } from '../../selectionActions'
 import { translateTargetOf } from '../../translateTarget'
+import { selectionMarkdown } from './selectionMarkdown'
 
 registerMessages({
   'selbar.ask': { zh: '问 Tangu', en: 'Ask Tangu' },
@@ -105,7 +106,8 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
       if (fromBar) return
       const s = window.getSelection()
       if (!s || s.isCollapsed || !s.rangeCount) { setOwn(null); return }
-      const text = s.toString().trim()
+      const content = selectionMarkdown(s, el)
+      const text = content?.text ?? ''
       const range = s.getRangeAt(0)
       const at = range.commonAncestorContainer
       const host = at.nodeType === Node.ELEMENT_NODE ? (at as Element) : at.parentElement
@@ -115,7 +117,7 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
       const back = s.anchorNode === s.focusNode ? s.focusOffset < s.anchorOffset
         : !!(s.anchorNode && s.focusNode && s.anchorNode.compareDocumentPosition(s.focusNode) & Node.DOCUMENT_POSITION_PRECEDING)
       const dir = e.detail > 1 ? undefined : back ? 'backward' : 'forward'
-      setOwn({ text, rect: { left: r.left, right: r.right, top: r.top, bottom: r.bottom }, dir })
+      setOwn({ text, markdown: content?.markdown, rect: { left: r.left, right: r.right, top: r.top, bottom: r.bottom }, dir })
     }
     const onSelection = (): void => { if (window.getSelection()?.isCollapsed) setOwn(null) }
     // 调用方自己报的选区(插件的 show())也跟着收:它是按当时的位置报的,滚了 / 盒子变了就不在那儿了。

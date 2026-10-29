@@ -9,6 +9,7 @@ import { OverlayAt } from '../lib/clampMenu'
 import { registerMessages, useI18n } from '../../i18n'
 import { TRANSLATE_LANGUAGES } from '../../translateTarget'
 import type { AiApply } from './inlineAi'
+import { Markdown } from '../../components/Markdown'
 import './inlineAiPanel.css'
 
 registerMessages({
@@ -216,7 +217,7 @@ export function InlineAiPanel({ x, y, anchorTop, title, hasSelection, askFirst, 
       )}
       {phase !== 'ask' && (
         <>
-          <div className="am-ai-preview" data-testid="inline-ai-preview">{text || (phase === 'running' ? '…' : '')}</div>
+          <div className="am-ai-preview md-body" data-testid="inline-ai-preview"><Markdown content={text || (phase === 'running' ? '…' : '')} allowRun={false} /></div>
           {phase === 'error' && <div className="am-ai-error" role="alert">{error}</div>}
           {toolText && phase === 'done' && <div className="am-ai-error">{t('inlineai.toolText')}</div>}
           <div className="am-ai-actions">
