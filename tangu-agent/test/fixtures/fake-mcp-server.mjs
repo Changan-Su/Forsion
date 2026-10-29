@@ -3,7 +3,7 @@
  * 假 MCP server(src/mcp/manager.test.ts 与 live 台架 `--only mcp` 共用)。两种用法:
  *   - stdio 子进程:`node fake-mcp-server.mjs`(env FAKE_MCP_TAG 区分实例;FAKE_MCP_TOOLS 逗号分隔的工具名覆写 echo 的名字)
  *   - 进程内 HTTP:`import { startHttpServer } from './fake-mcp-server.mjs'`(有状态 / 无状态 Streamable HTTP,可关停后同端口重启)
- *     `auth: { isValid(token), authServer }` = 要 Bearer:没有 / 不对回 401 + resource_metadata,PRM 指向 authServer(src/mcp/oauth.test.ts)
+ *     `auth: { isValid(token|null, body), authServer }` = 要 Bearer:isValid 不认就回 401 + resource_metadata,PRM 指向 authServer(src/mcp/oauth.test.ts)
  * 工具:
  *   echo {text}  → `<tag>:<text>`
  *   pid          → 本进程 pid(测试据此从外面杀掉 stdio server,模拟「中途掉线」)
@@ -69,7 +69,7 @@ export function buildServer({ tag = 'fake', toolNames = ['echo', 'pid', 'image',
  * stop() 关掉监听与所有连接(含 SSE GET 长连接),同一端口可以再 startHttpServer 起来 —— 模拟「server 重启」。
  * failToolCalls={ status, body }:tools/call 一律回这个 HTTP 错误(正文原样,SDK 会把它塞进 StreamableHTTPError 的 message)。
  */
-/** @param {{ port?: number, stateful?: boolean, tag?: string, failToolCalls?: any, auth?: { isValid(token: string): boolean, authServer: string, onUnauthorized?: () => void } | null }} [opts] */
+/** @param {{ port?: number, stateful?: boolean, tag?: string, failToolCalls?: any, auth?: { isValid(token: string | null, body?: any): boolean, authServer: string, onUnauthorized?: () => void } | null }} [opts] */
 export async function startHttpServer({ port = 0, stateful = true, tag = 'http', failToolCalls = null, auth = null } = {}) {
   const sessions = new Map();
   const http = createServer(async (req, res) => {
@@ -85,7 +85,7 @@ export async function startHttpServer({ port = 0, stateful = true, tag = 'http',
           return;
         }
         const m = /^Bearer (.+)$/.exec(req.headers.authorization || '');
-        if (!m || !auth.isValid(m[1])) {
+        if (!auth.isValid(m ? m[1] : null, body)) {
           auth.onUnauthorized?.();
           res.writeHead(401, { 'content-type': 'application/json', 'www-authenticate': `Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource/mcp"` });
           res.end('{"error":"invalid_token"}');

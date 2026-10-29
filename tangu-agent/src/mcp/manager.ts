@@ -271,7 +271,8 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
     }
     if (!cfg.url) throw new Error(`${t} server 缺 url`);
     const url = new URL(cfg.url);
-    const onAuthRequired = (hint: AuthHint) => { entry.needsLogin = true; entry.authHint = hint; };
+    // 任何一处 401(初始化、列工具、调用、后台流)都走完整的「待登录」:关连接、停重试、设置页出登录按钮
+    const onAuthRequired = (hint: AuthHint) => { entry.authHint = hint; markNeedsLogin(entry); };
     const opts = { fetch: withBearer(sameOriginFetch(url), cfg.url, cfg.oauth, onAuthRequired), requestInit: { headers: cfg.headers } };
     return t === 'sse' ? new SSEClientTransport(url, opts) : new StreamableHTTPClientTransport(url, opts);
   }
