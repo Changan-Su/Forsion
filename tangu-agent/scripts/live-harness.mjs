@@ -28,6 +28,7 @@
  *   npm run live:harness -- --only imageedit                 # edit_image 图源(10-19,改图跨轮取图方案 B1 + B2):同会话三轮 —— 附两张图先别动 → 不带附件让它合成 → 改刚合成的那张;假生图后端核上传的是哪几张。改 imageEdit.ts / hydrate 的带图消息 / 展示文件 source 后跑
  *   npm run live:harness -- --only skillpick,settingsnav     # 反馈 6a239e58(10-04):指定技能清单只列目录、正文经 use_skill 取(改 services/skillLoadout.ts 后跑);
  *                                                           #   「语音在哪设置」经界面命令直达设置页、不用电脑操控,网页检索次数只计数(改 desktop open-settings 的 description / params 后跑)
+ *   npm run live:harness -- --only pluginui                  # 改 skills/forsion-plugin 的「Desktop plugin UI」一节 / tools/ui-reinvent.mjs / plugin_sandbox 的界面体检后跑:写一个带 Space 的小插件,下拉 / 菜单 / 确认 / 空状态须用宿主零件
  *   npm run live:harness -- --only pluginlook                # 改 skills/forsion-plugin 的「外观开关:跟着宿主走」一节后跑:须经 use_skill 取回正文并答出那一节的三样
  *   npm run live:harness -- --only plugindiag --plugin-src <插件目录> [--plugin-data <plugins-data 里那份 json>] [--plugindiag-hint] [--plugindiag-host auto|"<宿主报的运行态>"]   # 装着的桌面插件 Space 不出现(10-10):
  *                                                           #   main.js 求值不抛错、但没走到 registerView 的那类;看真模型只凭插件目录和 shell 查不查得出。插件放进假家目录,开发机的 ~/.forsion 不碰
@@ -223,7 +224,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'parkedask', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'gitpush', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'imgtools', 'account', 'webpublish', 'nested', 'branch', 'musedm', 'humandims', 'pluginsandbox'];
+const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'parkedask', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'gitpush', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'imgtools', 'account', 'webpublish', 'nested', 'branch', 'musedm', 'humandims', 'pluginsandbox', 'pluginui'];
 KEYS.push('bluebird');
 KEYS.push('signals');
 KEYS.push('musechat');
@@ -313,6 +314,7 @@ OPT_IN.add('harnessopen'); // 四个 run + 一条探针;只在动 manage_harness
 OPT_IN.add('equip'); // 三个 run;只在动装备层(HARNESS equip → isDeferredIn / 技能目录)时才有信息量。
 OPT_IN.add('musereview'); // 开 Muse 并往隔离库里写用量行:单独跑,别连累别的场景的工具表 / Muse 状态。
 OPT_IN.add('projmem'); // 四个 run、两个 agent 两个项目;只在动项目记忆(services/projectMemory.ts、remember 的 scope)时才有信息量。
+OPT_IN.add('pluginui'); // 一个长 run(写一整个插件,几分钟);只在动 forsion-plugin 的界面纪律、重造检测或沙箱状态里的界面体检时才有信息量。
 OPT_IN.add('pluginlook'); // 一个 run;只在动 skills/forsion-plugin 的「外观开关」一节或 use_skill 时才有信息量。
 OPT_IN.add('plugindiag'); // 一个 run(几分钟);要 --plugin-src 给一份待查的插件,只在量「插件 Space 不出现」的排查能力时才有信息量。
 OPT_IN.add('notebook'); // 两个 run;要 --plugin-src 给构建好的 Jupyter 笔记本插件、--python-bin 给解释器,只在动那个插件的工具说明 / 审批档时才有信息量。
@@ -6944,6 +6946,47 @@ Then reply with only the command output.`,
       const ev = await sbxRun(MSG, { client: 'mobile/live-harness' });
       const calls = sbxCalls(ev);
       return { ok: !ev.error && !calls.length && !ev.clientCmds.length, detail: ev.error || `plugin_sandbox* ${calls.join(',') || '无'};client_cmd ${ev.clientCmds.length}`, ...base(ev) };
+    });
+  }
+  // pluginui(10-29 插件开发体验 1B):照用户口吻要一个带 Space 的小插件(排序下拉、每行 ⋯ 菜单、删除先确认、空的时候有提示),
+  // 不点名任何零件;带上桌面沙箱能力,台架扮桌面(回的状态里 dir 就是模型写的目录,引擎照真的去扫那个目录、附「UI check」)。
+  // 硬判看产物 main.js:四样里至少三样用了宿主零件(mountControl / contextMenu / confirm|openDialog / mountEmptyState 或列表源 empty),
+  // 且 tools/ui-reinvent.mjs 对产物的 dropdown / menu / dialog 三类 0 条。负对照 = 换回 1.80.0 的技能与模板、去掉 ui-reinvent.mjs(--kind neg)。
+  // 留证 pluginui-evidence.json(产物 main.js 原文 + 扫描结果)。
+  if (ONLY.has('pluginui')) {
+    const DIR = join(workspace, 'reading-list');
+    // 状态照模型写出来的文件回(manifest 的 id / 版本、main.js 里 registerView 的 id):对不上时模型会去查「沙箱怎么加载了别的东西」,判据就测偏了
+    const read = (f) => { try { return readFileSync(join(DIR, f), 'utf8'); } catch { return ''; } };
+    const mf = () => { try { return JSON.parse(read('manifest.json')); } catch { return {}; } };
+    const st = () => ({ v: 1, state: 'running', pluginId: mf().id || 'reading-list', name: mf().nameEn || mf().name || 'Reading list', version: mf().version || '0.1.0', dir: DIR,
+      views: [...new Set([...read(mf().main || 'main.js').matchAll(/registerView\(\s*\{\s*id:\s*['"`]([\w-]+)/g)].map((m) => m[1]))], spaces: [], hiddenSpaces: [], setupError: null, blocked: null, mountErrors: [], logs: [], warnCount: 0, errorCount: 0, loads: 1, windowVisible: false });
+    const desktop = { ns: 'plugin', respond: (b) => (b.op === 'stop' ? { ok: true, text: '{"stopped":true}' } : { ok: true, text: JSON.stringify(st()) }) };
+    await scenario('pluginui', 'pluginui 写一个带 Space 的小插件:下拉 / ⋯ 菜单 / 删除确认 / 空状态用宿主零件,不自己画', async () => {
+      const msg = '在当前文件夹里新建一个 reading-list 文件夹,给我写一个 Forsion 桌面插件「阅读清单」:带一个 Space,主视图列出我想读的书;顶上能按「书名 / 添加时间」排序;每一行右边有个 ⋯ 菜单,里面有「删除」,删之前要我确认;清单是空的时候要有提示和一个「添加」按钮。数据用 ctx.saveData 存就行。写完在沙箱里跑一下看看,先别装到我的 Forsion 里。';
+      const ev = await run(`live-pluginui-${Date.now()}`, msg, 900_000, { enabledSkillIds: ['local:forsion-plugin'], skillsConfigured: true }, 'desktop/live-harness', undefined, undefined, undefined, { clientCapabilities: ['plugin.sandbox'], phone: desktop });
+      const tool = join(root, 'skills', 'forsion-plugin', 'tools', 'ui-reinvent.mjs');
+      // 负对照里技能目录没有这份文件(那时还没有):判据照样要用它扫产物,从这份脚本旁边的检出拿一份
+      const ui = await import(pathToFileURL(existsSync(tool) ? tool : join(process.env.PLUGINUI_TOOL || '', 'ui-reinvent.mjs')).href);
+      const files = ui.pluginUiFiles(DIR);
+      const main = files.find(([f]) => /\.m?js$/.test(f))?.[1] || '';
+      const used = {
+        select: /\bui\.mountControl\(|\bui\.mount\(\s*['"]select/.test(main),
+        menu: /\bui\.contextMenu\(|\bui\.mount\(\s*['"]menu/.test(main),
+        dialog: /\bui\.(?:confirm|openDialog)\(|\bui\.mount\(\s*['"]dialog/.test(main),
+        empty: /\bui\.mountEmptyState\(|\bui\.mount\(\s*['"]emptyState|\bempty\s*:\s*\{/.test(main),
+      };
+      const notes = ui.scanUi(files);
+      const bad = notes.filter((g) => ['dropdown', 'menu', 'dialog'].includes(g.kind));
+      const sawCheck = ev.toolResults.some((r) => String(r.name).startsWith('plugin_sandbox') && String(r.full || '').includes('UI check'));
+      const sbx = ev.toolCalls.filter((n) => n.startsWith('plugin_sandbox')).length;
+      writeFileSync(join(OUT, 'pluginui-evidence.json'), JSON.stringify({ used, notes, sawCheck, sandboxCalls: sbx, files: files.map(([f, t]) => ({ f, length: t.length })), main }, null, 2));
+      const nUsed = Object.values(used).filter(Boolean).length;
+      const ok = !ev.error && !!main && nUsed >= 3 && !bad.length;
+      return {
+        ok, detail: ev.error || `${main ? `main.js ${main.split('\n').length} 行` : '✗ 没写出 main.js'};零件 ${Object.entries(used).map(([k, v]) => `${k}${v ? '✓' : '✗'}`).join(' ')}(${nUsed}/4);`
+          + `自画 ${notes.map((g) => `${g.kind}×${g.count}`).join(' ') || '0 条'}${bad.length ? ' ←' : ''};沙箱 ${sbx} 次${sawCheck ? ',看到过 UI check' : ''};工具 ${ev.toolCalls.length} 次`,
+        output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls,
+      };
     });
   }
   // account(10-10):agent 读得到账号额度(只报百分比)与本对话的上下文 / 步数;账号动作在聊天会话 + 完全通行下照样逐次弹卡。判据与负对照见 lib/account-live.mjs。
