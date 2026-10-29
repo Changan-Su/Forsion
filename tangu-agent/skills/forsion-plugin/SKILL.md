@@ -91,7 +91,7 @@ A view that draws its own dropdowns, menus, dialogs or tab bars looks foreign in
 | A title row with buttons | `ctx.ui.setViewHead(el, { title, actions })` | your own header bar |
 | A dropdown (sort, filter, pick one) / 2–5 modes | `ctx.ui.mountControl(el, { type: 'select' })` / `{ type: 'segmented' }` | `<select>`, a listbox you position |
 | A ⋯ or right-click menu | `ctx.ui.contextMenu({ anchor, align: 'end' }, entries)` | a `.my-menu` div |
-| Confirm / ask / a small form | `ctx.ui.confirm({ title, danger })`, `ctx.ui.openDialog({ title, mount, actions })` | `window.confirm`, `<dialog>`, a modal div |
+| Confirm / ask for a name / a small form | `ctx.ui.confirm({ title, danger })`; `ctx.ui.openDialog({ title, mount, actions })` with your input in `mount` | `window.prompt` (does nothing in the desktop app), `window.confirm`, `<dialog>`, a modal div |
 | A panel anchored to a button | `ctx.ui.popover(anchor, { mount })` | `position: fixed` and your own math |
 | Nothing yet | `ctx.ui.mountEmptyState(el, { icon, title, line, action })`; a list source's `empty` | a centered line of text |
 | A sidebar list | `ctx.registerListSource` (见下「统一左栏列表源」) | a list view in the left pane |

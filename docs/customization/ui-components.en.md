@@ -411,7 +411,7 @@ A plugin view that draws its own dropdowns, menus, dialogs or tab bars looks for
 | A title row with buttons | `ctx.ui.setViewHead` | your own header bar |
 | A dropdown / 2–5 modes | `ctx.ui.mountControl({ type: 'select' })` / `{ type: 'segmented' }` | `<select>`, a listbox you position |
 | A ⋯ or right-click menu | `ctx.ui.contextMenu({ anchor })` | a menu div with your own class |
-| Confirm / a small form | `ctx.ui.confirm` / `ctx.ui.openDialog` | `window.confirm`, `<dialog>`, a hand-made backdrop |
+| Confirm / ask for text / a small form | `ctx.ui.confirm`; for input, `ctx.ui.openDialog` with the field in `mount` | `window.prompt` (does nothing in the desktop app), `window.confirm`, `<dialog>`, a hand-made backdrop |
 | A panel anchored to a button | `ctx.ui.popover` | `position: fixed` and your own math |
 | Nothing yet | `ctx.ui.mountEmptyState`, a list source's `empty` | a centered line of text |
 | Buttons | the public `.btn` classes (`.primary` / `.ghost` / `.danger` / `.sm`) | hand-styled `<button>` |

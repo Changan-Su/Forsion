@@ -28,7 +28,7 @@ const RULES = [
     test: (l) => count(l, made('select')) + count(l, /role\s*[=:]\s*['"`]listbox/g) },
   { kind: 'menu', what: 'hand-made menu', use: "ctx.ui.contextMenu({ anchor, align: 'end' }, entries) (rows, { separator: true }, { section })",
     test: (l) => count(l, /role\s*[=:]\s*['"`]menu(?:item)?['"`]/g) + (classesOf(l).some((c) => MENU.test(c)) ? 1 : 0) },
-  { kind: 'dialog', what: 'hand-made dialog', use: 'ctx.ui.confirm({ title, danger }) / ctx.ui.openDialog({ title, mount, actions })',
+  { kind: 'dialog', what: 'hand-made dialog', use: 'ctx.ui.confirm({ title, danger }); to ask for text, ctx.ui.openDialog({ title, mount, actions }) with an input in mount (window.prompt does nothing in the desktop app)',
     test: (l, ctx) => count(l, made('dialog')) + count(l, /\.showModal\(/g) + count(l, /role\s*[=:]\s*['"`](?:alert)?dialog/g)
       + count(l, /\bwindow\.(?:confirm|alert|prompt)\(/g) + (ctx.hostDialogs ? 0 : count(l, /(?<![\w.$]|function\s+)(?:confirm|alert|prompt)\(/g)) },
   { kind: 'tabs', what: 'hand-made tab bar', use: "several views in one panel of space.json (native tabs), or ctx.ui.mountControl(el, { type: 'segmented' }) for 2-5 modes",

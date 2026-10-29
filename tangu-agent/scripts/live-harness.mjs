@@ -6955,7 +6955,11 @@ Then reply with only the command output.`,
   // 留证 pluginui-evidence.json(产物 main.js 原文 + 扫描结果)。
   if (ONLY.has('pluginui')) {
     const DIR = join(workspace, 'reading-list');
-    const st = () => ({ v: 1, state: 'running', pluginId: 'reading-list', name: 'Reading list', version: '0.1.0', dir: DIR, views: ['list'], spaces: [], hiddenSpaces: [], setupError: null, blocked: null, mountErrors: [], logs: [], warnCount: 0, errorCount: 0, loads: 1, windowVisible: false });
+    // 状态照模型写出来的文件回(manifest 的 id / 版本、main.js 里 registerView 的 id):对不上时模型会去查「沙箱怎么加载了别的东西」,判据就测偏了
+    const read = (f) => { try { return readFileSync(join(DIR, f), 'utf8'); } catch { return ''; } };
+    const mf = () => { try { return JSON.parse(read('manifest.json')); } catch { return {}; } };
+    const st = () => ({ v: 1, state: 'running', pluginId: mf().id || 'reading-list', name: mf().nameEn || mf().name || 'Reading list', version: mf().version || '0.1.0', dir: DIR,
+      views: [...new Set([...read(mf().main || 'main.js').matchAll(/registerView\(\s*\{\s*id:\s*['"`]([\w-]+)/g)].map((m) => m[1]))], spaces: [], hiddenSpaces: [], setupError: null, blocked: null, mountErrors: [], logs: [], warnCount: 0, errorCount: 0, loads: 1, windowVisible: false });
     const desktop = { ns: 'plugin', respond: (b) => (b.op === 'stop' ? { ok: true, text: '{"stopped":true}' } : { ok: true, text: JSON.stringify(st()) }) };
     await scenario('pluginui', 'pluginui 写一个带 Space 的小插件:下拉 / ⋯ 菜单 / 删除确认 / 空状态用宿主零件,不自己画', async () => {
       const msg = '在当前文件夹里新建一个 reading-list 文件夹,给我写一个 Forsion 桌面插件「阅读清单」:带一个 Space,主视图列出我想读的书;顶上能按「书名 / 添加时间」排序;每一行右边有个 ⋯ 菜单,里面有「删除」,删之前要我确认;清单是空的时候要有提示和一个「添加」按钮。数据用 ctx.saveData 存就行。写完在沙箱里跑一下看看,先别装到我的 Forsion 里。';

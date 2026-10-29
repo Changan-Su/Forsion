@@ -411,7 +411,7 @@ color-mix(in srgb, var(--green) 14%, transparent)
 | 标题行 + 按钮 | `ctx.ui.setViewHead` | 自己画顶栏 |
 | 下拉 / 2–5 个模式 | `ctx.ui.mountControl({ type: 'select' })` / `{ type: 'segmented' }` | `<select>`、自己摆的 listbox |
 | ⋯ / 右键菜单 | `ctx.ui.contextMenu({ anchor })` | 自定类名的菜单 div |
-| 确认 / 小表单 | `ctx.ui.confirm` / `ctx.ui.openDialog` | `window.confirm`、`<dialog>`、自画遮罩 |
+| 确认 / 问一句话 / 小表单 | `ctx.ui.confirm`;要输入时用 `ctx.ui.openDialog`,输入框放在 `mount` 里 | `window.prompt`(桌面版里不起作用)、`window.confirm`、`<dialog>`、自画遮罩 |
 | 跟着按钮弹出的面板 | `ctx.ui.popover` | `position: fixed` 自己算位置 |
 | 空的时候 | `ctx.ui.mountEmptyState`、列表源的 `empty` | 居中一行字 |
 | 按钮 | 公开类 `.btn`（`.primary` / `.ghost` / `.danger` / `.sm`） | 手写样式的 `<button>` |
