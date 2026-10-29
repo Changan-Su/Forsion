@@ -3,14 +3,17 @@
  * 假引擎经 stubOverride 扮演 GET /agent/processes 与 output / kill 两条路由(真路由由 tangu-agent 的 processRoutes.test.ts 覆盖)。
  *
  * 断言:
- *  1 卡片按默认顺序出现(进度 / 后台 / 产物 / 来源 / 工作范围 / Desk),默认开合对(来源、工作范围收起;空 Desk 收起)
- *  2 后台卡:3 行,计数紧贴折叠箭头靠右;在跑的绿点、结束的淡点;服务行显示地址
+ *  1 卡片按默认顺序出现(进度 / 后台 / 产物 / 来源 / 工作范围 / Desk),跑完后开合对(来源跑完收回、工作范围收起;空 Desk 收起)
+ *  2 后台卡:3 行;卡头 = 标题 → 紧挨的折叠箭头 …… 右缘计数(10-29 卡头 3);在跑的绿点、结束的淡点;服务行显示地址
  *  3 左栏会话行尾:绿点 + 在跑个数 2
  *  4 点地址 → Desk 侧板开出内置浏览器(localhost:5173);收回侧板后 Desk 卡因新条目自动展开,正文 380
+ *  4b 放不下(950 高 + Desk 展开):收掉最久没来新东西的卡(data-squeezed),进度不收;栈不超出车道,或只剩一张可收的且正文缩短
  *  5 悬停露停止,点了假引擎收到 kill(不走审批),行变成「已停止」
  *  6 点行 → Desk 里开进程输出,看得到输出尾巴
- *  7 点卡头折叠「产物」→ 记进 localStorage;重载后仍收起
- *  8 右键「工作范围」卡头 → 移到最上;重载后仍在最上;拖动块把「后台」拖到最下,顺序记住
+ *  7 第二轮(10-29 第三轮方案 A):来了新来源 → 来源卡自己展开、新的那行长出来(WAAPI);这一轮里用户收起的进度卡,
+ *    来了新计划项也不自己开;跑完来源收回去
+ *  7b 点卡头收起「产物」不落盘(localStorage 里没有 open);重载后按内容重新展开(或被限长收着)
+ *  8 右键「工作范围」卡头 → 移到最上;重载后仍在最上;按住「后台」卡头拖到最下,顺序记住;拖完不顺带开合
  *  9 窄窗(<760):整栈收起,输入卡上方出现「N 个在后台跑」,点开列出在跑的行
  * 截图(观感自查用,人看):outputs/summary-cards/ 下亮 / 大窗口 / 暗 / 英文 / 窄窗。
  *
@@ -54,6 +57,14 @@ const runPlan = [
   tc('t1', 'run_background', { command: 'npm run dev' }), tr('t1', 'started background process p1'),
   tc('t3', 'run_background', { command: 'npx vitest --watch' }), tr('t3', 'started background process p2'),
   tok('\n\n起好了:http://localhost:5173/ 。测试在后台 watch 着。'),
+]
+// 第二轮:先读一个新文件(来源 2 → 3),停一下再加一条计划项,再停一下收尾 —— 两段停顿留给断言看「跑着时」的样子
+const TODOS2 = [...TODOS, { content: '加一张对比截图', status: 'pending' }]
+const run2 = [
+  tok('再看一眼。'),
+  tc('s3', 'read_file', { path: 'src/hero.tsx' }), tr('s3', '…'),
+  { ...tc('p1', 'todo_write', {}), delay: 1800 }, { type: 'todo', payload: { todos: TODOS2 } }, tr('p1', 'ok'),
+  { ...tok('\n\n看完了，补了一项。'), delay: 1800 },
 ]
 const VITE_OUT = '> launch@0.1.0 dev\n> vite\n\n  VITE v6.3.5  ready in 412 ms\n\n  ➜  Local:   http://localhost:5173/\n  ➜  Network: use --host to expose'
 const VITEST_OUT = ' ✓ src/App.test.tsx (4 tests) 38ms\n ✓ src/hero.test.tsx (8 tests) 61ms\n\n Test Files  2 passed (2)\n      Tests  12 passed (12)'
@@ -125,28 +136,36 @@ async function main() {
     await ev(() => localStorage.removeItem('forsion.summaryCards'))
     await openSession(true)
     await look('light')
+    // 1250 高放得下全部展开的卡,先看开合策略本身(限长在 4b 单独看);等这一轮真的跑完(来源在跑完时收回)
+    await win.setViewportSize({ width: 1512, height: 1250 })
+    await win.locator('.t2-tsum[aria-busy="false"]').waitFor({ timeout: 15000 }); await win.waitForTimeout(800)
 
     // 1 顺序与默认开合
     const ids = await cardIds()
     check('1 卡片按默认顺序出现', JSON.stringify(ids) === JSON.stringify(['progress', 'bg', 'outputs', 'sources', 'scope', 'desk']), ids)
     const opens = {}; for (const id of ids) opens[id] = await isOpen(id)
-    check('1 默认开合:进度 / 后台 / 产物展开,来源 / 工作范围 / 空 Desk 收起',
+    check('1 跑完后的开合:进度 / 后台(有在跑的)/ 产物展开,来源(跑完收回)/ 工作范围 / 空 Desk 收起',
       opens.progress && opens.bg && opens.outputs && !opens.sources && !opens.scope && !opens.desk, opens)
+    check('1 1250 高放得下,不限长', !(await ev(() => document.querySelector('.t2-tsum [data-squeezed]'))))
 
     // 2 后台卡
     const bg = await ev(() => {
       const c = document.querySelector('.t2-tsum > [data-card="bg"]')
+      const head = c.querySelector('.t2-card-head').getBoundingClientRect()
       const count = c.querySelector('.t2-card-head .t2-tsum-count').getBoundingClientRect()
       const chev = c.querySelector('.t2-card-head .t2-tsum-chev').getBoundingClientRect()
+      const tx = c.querySelector('.t2-card-title > span').getBoundingClientRect()
+      const z = document.body.currentCSSZoom || 1
       const rows = [...c.querySelectorAll('.t2-bg-row')]
       return {
-        n: rows.length, count: c.querySelector('.t2-card-head .t2-tsum-count').textContent, gap: chev.left - count.right,
+        n: rows.length, count: c.querySelector('.t2-card-head .t2-tsum-count').textContent,
+        chevToText: (chev.left - tx.right) / z, countToRight: (head.right - count.right) / z,
         dots: rows.map((r) => r.dataset.st), url: c.querySelector('.t2-bg-url')?.textContent,
         green: getComputedStyle(rows[0].querySelector('.t2-bg-dot')).backgroundColor,
       }
     })
     check('2 后台卡 3 行,计数 3', bg.n === 3 && bg.count === '3', bg)
-    check('2 计数紧贴折叠箭头靠右', bg.gap >= 0 && bg.gap <= 6, `gap=${bg.gap}`)
+    check('2 折叠箭头紧挨标题、计数贴卡头右缘', bg.chevToText >= 2 && bg.chevToText <= 6 && Math.abs(bg.countToRight) <= 1, bg)
     check('2 在跑 / 结束的点与服务地址', JSON.stringify(bg.dots) === '["running","running","done"]' && bg.url === 'localhost:5173', bg)
 
     // 3 左栏行尾
@@ -169,7 +188,8 @@ async function main() {
     check('3b 通用子代理仍画 Bot,不借父会话 / 回落 slug 的头像', !!gen && !gen.img && gen.bot, subs)
     check('3c 点开列出全部 12 条已完成,在跑的仍在最上', subs.length === 13 && subs[0].name === 'Ava', subs.map((x) => x.name))
     await win.locator('[data-subchat-done]').click(); await win.waitForTimeout(200)
-    const folded = await ev(() => document.querySelectorAll('[data-subchat-status] .t2o-desk-row').length)
+    // 收起的行缩回去时留着残影(data-tsum-ghost)播完才摘,不算数
+    const folded = await ev(() => document.querySelectorAll('[data-subchat-status] .t2o-desk-row:not([data-tsum-ghost])').length)
     check('3c 再点收起', folded === 1, `rows=${folded}`)
     await shot('light')
 
@@ -201,6 +221,25 @@ async function main() {
     check('4 大窗口下 Desk 卡不被拉长', Math.abs(tall - short) <= 1, `950 高=${short} 1250 高=${tall}`)
     await shot('desk')
 
+    // 4b 限长:950 高 + Desk 展开放不下
+    const fit = await ev(() => {
+      const st = document.querySelector('.t2-tsum')
+      const cards = [...st.querySelectorAll(':scope > .t2-card')].filter((c) => c.offsetParent && c.dataset.card)
+      return {
+        overflow: st.scrollHeight - st.clientHeight,
+        open: cards.filter((c) => c.open).map((c) => c.dataset.card),
+        squeezed: cards.filter((c) => c.hasAttribute('data-squeezed')).map((c) => c.dataset.card),
+        capped: cards.filter((c) => c.querySelector(':scope > .t2-card-body')?.style.maxHeight).map((c) => c.dataset.card),
+        // 封顶真的生效:正文实际高度不超过写上去的 max-height
+        capHeld: cards.every((c) => { const b = c.querySelector(':scope > .t2-card-body'); return !b?.style.maxHeight || b.offsetHeight <= parseFloat(b.style.maxHeight) + 1 }),
+      }
+    })
+    const sqOpen = fit.open.filter((id) => id !== 'progress' && id !== 'desk')
+    check('4b 放不下时收掉最久没来新东西的卡,进度 / Desk 不收', fit.squeezed.length >= 1 && fit.squeezed.every((id) => ['bg', 'outputs'].includes(id)) && fit.open.includes('progress') && fit.open.includes('desk'), fit)
+    check('4b 栈不超出车道,或只剩一张可收的且正文已缩', fit.capHeld && (fit.overflow <= 1 || (sqOpen.length === 1 && fit.capped.includes(sqOpen[0]))), fit)
+    // 后面要点后台卡里的行:被收着就手动点开(手动开的不再被挤收)
+    if (!(await isOpen('bg'))) { await win.locator('.t2-tsum > [data-card="bg"] > .t2-card-head').click(); await win.waitForTimeout(500) }
+
     // 5 停止
     const row2 = win.locator('.t2-tsum [data-card="bg"] .t2-bg-row').nth(1)
     await row2.hover(); await win.waitForTimeout(300)
@@ -217,12 +256,47 @@ async function main() {
     await ev(() => { const b = [...document.querySelectorAll('.agent-desk button')].find((x) => /收起|Collapse/.test(x.title || x.getAttribute('aria-label') || '')); b?.click() })
     await win.waitForTimeout(1000)
 
-    // 7 折叠记住
-    await win.locator('.t2-tsum > [data-card="outputs"] > .t2-card-head').click()
-    await win.waitForTimeout(500)
+    // 7 第二轮:新来源让来源卡自己开、新行长出来;用户这一轮收起的进度卡不被新计划项顶开;跑完来源收回
+    await ev(() => {
+      const w = window; w.__rowAnim = null; w.__cardGone = []
+      const st = document.querySelector('.t2-tsum')
+      w.__rowMo = new MutationObserver((recs) => {
+        // 跑着的时候卡片不该被摘掉又装回(消息整份重拉会这样),否则每轮开跑都会播一遍缩回 + 长出
+        for (const r of recs) if (r.target === st) for (const n of r.removedNodes) if (n instanceof HTMLElement && n.dataset.card && !n.isConnected) w.__cardGone.push(n.dataset.card)
+        for (const r of recs) for (const n of r.addedNodes) {
+          if (w.__rowAnim || !(n instanceof HTMLElement) || !n.matches('.t2-tsum-row') || !n.closest('.t2-tsum > [data-card="sources"]')) continue
+          w.__rowAnim = { anims: n.getAnimations().length, h0: n.getBoundingClientRect().height }
+        }
+      })
+      w.__rowMo.observe(document.querySelector('.t2-tsum'), { childList: true, subtree: true })
+    })
+    ctx.stub.script(run2)
+    {
+      const ta = win.locator('.t2c-ta').first()
+      await ta.click(); await ta.fill('再看一眼 hero 组件。'); await win.keyboard.press('Enter')
+    }
+    const srcOpened = await win.waitForFunction(() => document.querySelector('.t2-tsum > [data-card="sources"]')?.open, null, { timeout: 2500 }).then(() => true, () => false)
+    const rowAnim = await ev(() => window.__rowAnim)
+    check('7 跑着来了新来源:来源卡自己展开', srcOpened)
+    check('7 新的那行长出来(有过渡,不是一下到位)', !!rowAnim && rowAnim.anims > 0 && rowAnim.h0 < 20, rowAnim)
+    await win.locator('.t2-tsum > [data-card="progress"] > .t2-card-head').click(); await win.mouse.move(150, 640)
+    await win.waitForFunction(() => /\/6$/.test(document.querySelector('.t2-tsum > [data-card="progress"] .t2-tsum-count')?.textContent || ''), null, { timeout: 5000 })
+    await win.waitForTimeout(400)
+    check('7 这一轮里手动收起的进度卡,来了新计划项也不自己开', !(await isOpen('progress')))
+    await win.getByText('看完了，补了一项').first().waitFor({ timeout: 8000 })
+    await win.locator('.t2-tsum[aria-busy="false"]').waitFor({ timeout: 8000 }); await win.waitForTimeout(600)
+    check('7 跑完来源收回去', !(await isOpen('sources')))
+    const gone = await ev(() => window.__cardGone)
+    check('7 跑的过程中卡片不闪(没有被摘掉又装回)', gone.length === 0, gone)
+    await ev(() => window.__rowMo?.disconnect())
+
+    // 7b 手动收起不落盘,重载后按内容重新来
+    await win.locator('.t2-tsum > [data-card="outputs"] > .t2-card-head').click(); await win.waitForTimeout(400)
+    if (await isOpen('outputs')) { await win.locator('.t2-tsum > [data-card="outputs"] > .t2-card-head').click(); await win.waitForTimeout(400) }
     const saved = await ev(() => JSON.parse(localStorage.getItem('forsion.summaryCards') || '{}'))
     await openSession(false)
-    check('7 折叠「产物」记进 localStorage,重载后仍收起', saved.open?.outputs === false && !(await isOpen('outputs')), saved)
+    const outAfter = await ev(() => { const c = document.querySelector('.t2-tsum > [data-card="outputs"]'); return { open: !!c?.open, squeezed: !!c?.hasAttribute('data-squeezed') } })
+    check('7b 手动收起「产物」不落盘;重载后按内容重新展开(或被限长收着)', saved.open === undefined && (outAfter.open || outAfter.squeezed), { saved, outAfter })
 
     // 8 右键移到最上 + 拖动
     await win.locator('.t2-tsum > [data-card="scope"] > .t2-card-head').click({ button: 'right' })
@@ -231,14 +305,20 @@ async function main() {
     await openSession(false)
     const afterTop = await cardIds()
     check('8 右键「移到最上」,重载后仍在最上', afterTop[0] === 'scope', afterTop)
+    // 拖动在 1250 高、Desk 收着时看:放得下就不限长,「拖完不顺带开合」才比得出来
+    await win.setViewportSize({ width: 1512, height: 1250 }); await win.waitForTimeout(600)
+    if (await isOpen('desk')) { await win.locator('.t2-tsum > [data-card="desk"] > .t2-card-head').click(); await win.waitForTimeout(600) }
+    const bgOpenBefore = await isOpen('bg')
     // 坐标一律用 Playwright 的 boundingBox(视口坐标,body zoom 已算进去)
     const head = await win.locator('.t2-tsum > [data-card="bg"] > .t2-card-head').boundingBox()
     const last = await win.locator('.t2-tsum > [data-card="desk"]').boundingBox()
-    await win.mouse.move(head.x + 40, head.y + 10); await win.waitForTimeout(200)
-    const grip = await win.locator('.t2-tsum > [data-card="bg"] .t2-card-grip').boundingBox()
-    const g = { hx: head.x + 40, hy: head.y + 10, gx: grip.x + grip.width / 2, gy: grip.y + grip.height / 2, ly: last.y + last.height - 4 }
-    await win.mouse.move(g.hx, g.hy); await win.waitForTimeout(200)
-    await win.mouse.move(g.gx, g.gy); await win.mouse.down()
+    // 整张卡头都能拖:从卡头中间(标题和计数之间的空处)按下
+    const g = { gx: head.x + head.width / 2, gy: head.y + head.height / 2, ly: last.y + last.height - 4 }
+    await win.mouse.move(g.gx, g.gy); await win.waitForTimeout(200)
+    const slotSwap = await ev(() => { const h = document.querySelector('.t2-tsum > [data-card="bg"] .t2-card-head'); return { grip: Number(getComputedStyle(h.querySelector('.t2-card-grip')).opacity), count: Number(getComputedStyle(h.querySelector('.t2-tsum-count')).opacity) } })
+    check('8 鼠标停在卡头上:计数换成拖动把手', slotSwap.grip === 1 && slotSwap.count === 0, slotSwap)
+    await win.screenshot({ path: path.join(OUT, 'hover-head.png'), scale: 'css' }); console.log('shot hover-head') // 指针得停在卡头上,不走 shot()
+    await win.mouse.down()
     for (let i = 1; i <= 12; i++) { await win.mouse.move(g.gx, g.gy + (g.ly - g.gy) * i / 12); await win.waitForTimeout(30) }
     await win.waitForTimeout(150)
     // 落点线必须落在栈里(10-25 首轮截图里它偏出一个聊天列的左上角:LCL fixedOrigin 把 container-type 当成 fixed 包含块)
@@ -263,7 +343,8 @@ async function main() {
     })
     await win.mouse.up(); await win.waitForTimeout(600)
     const afterDrag = await cardIds()
-    check('8 拖动块把「后台」拖到最下', afterDrag[afterDrag.length - 1] === 'bg', afterDrag)
+    check('8 按住卡头把「后台」拖到最下', afterDrag[afterDrag.length - 1] === 'bg', afterDrag)
+    check('8 拖完不顺带开合(松手那次 click 被吃掉)', (await isOpen('bg')) === bgOpenBefore, { before: bgOpenBefore })
     const landS = await ev(() => {
       const a = (window.__land || []).filter(Boolean); const fly = a.filter(([x, y]) => x || y)
       const ys = fly.map(([, y]) => Math.abs(y))
@@ -272,6 +353,7 @@ async function main() {
     check('8 松手后从松手处滑进新位置(多帧位移一路收小、不横向漂、落定归零)',
       landS.fly >= 3 && landS.shrinking && landS.dxMax < 1 && landS.last && !landS.last[0] && !landS.last[1], landS)
     await ev(() => localStorage.removeItem('forsion.summaryCards'))
+    await win.setViewportSize({ width: 1512, height: 950 })
 
     // 暗色 / 英文
     await openSession(false)

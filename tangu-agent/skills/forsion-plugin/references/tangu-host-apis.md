@@ -294,13 +294,15 @@ const h = ctx.desk?.registerCompanion({
 ## 摘要栏插件卡:ctx.summary(2026-10-25 起)
 
 Tangu 聊天右侧的**摘要栏**是一叠卡片:进度、后台(后台进程)、产物、来源、工作范围、Agent Desk。插件可以加一张卡,和内置卡同一个栈 ——
-用户能折叠、拖动排序(悬停露拖动块,右键卡头有「移到最上 / 最下 / 恢复默认」),收起状态和顺序由宿主按卡片记住。插件卡按注册顺序排在 Agent Desk 前面。
+用户能拖动排序(鼠标停在卡头上,计数那一格换成拖动把手,按住卡头拖;右键卡头有「移到最上 / 最下 / 恢复默认」),顺序由宿主按卡片记住。
+插件卡按注册顺序排在 Agent Desk 前面。**开合跟着内容走(2026-10-29 起)**:`count` 变大 = 来了新东西,卡自己展开;用户手动开 / 收只管到这一轮对话结束,
+不落盘;车道放不下时宿主先收掉最久没来新东西的卡,只剩一张还放不下就缩它的正文封顶。
 
 ```js
 const h = ctx.summary?.registerCard({
-  id: 'today',                               // 宿主拼成 plugin:<pluginId>:today,收起状态与顺序按它记
+  id: 'today',                               // 宿主拼成 plugin:<pluginId>:today,顺序按它记
   title: { zh: '今天', en: 'Today' },        // 跟随界面语言;也可以给一个字符串
-  defaultCollapsed: false,                   // 用户没点过时收不收;缺省展开
+  defaultCollapsed: false,                   // 没有新内容时收不收(切到会话、或卡在 Agent 没跑时出现);count 变大照样自动展开;缺省展开
   mount(el, host) {                          // 每个会话的摘要栏各挂一份,返回卸载函数
     // host.sessionId: 这份挂在哪个会话(恒定:换会话 = 卸载重挂);host.cwd: 会话默认目录或 null
     // host.update({ count, hidden }): 只改这一份 —— 卡头计数(null = 不显示)、hidden = 先不画这张卡(仍挂着,之后可再亮出)
@@ -314,7 +316,8 @@ const h = ctx.summary?.registerCard({
 
 - **只在桌面 Tangu 上存在**(同 `ctx.desk`):web / 移动端 / 纯 Amadeus 壳整个没有 `ctx.summary`,一律可选链。
 - **挂载次数**:每个会话的摘要栏一份;同屏两个聊天面板(主区 + 右侧 chat-panel)就是两份;换会话卸载重挂。新对话草稿(还没有会话)不挂插件卡。
-- **正文高度上限 240px**,超出宿主内滚,底部自动渐隐;宽约 252px(卡宽 280 减内边距)。别在正文里再套一层滚动。
+- **想让卡在有新内容时自己展开,就让 `count` 跟着条数走**:宿主只看「比上一次多」,数字变小不会收起卡。没有计数的卡只按 `defaultCollapsed`。
+- **正文高度上限 240px**(车道放不下时宿主会再缩短,最低约 90px),超出宿主内滚,底部自动渐隐;宽约 252px(卡宽 280 减内边距)。别在正文里再套一层滚动。
 - **没内容就藏起来**:`host.update({ hidden: true })` 不画这张卡(栈里不留空位),有内容了再 `hidden: false`。不要靠渲染空 div 让卡片「消失」。
 - 摘要栏只在聊天列够宽(≥ 760px)时出现;窄了整栈收起,但你的 `mount` 仍挂着 —— 别在不可见时跑重活(`IntersectionObserver` 判)。
 - 正文是普通 DOM:用宿主的 CSS 变量(`--text` / `--text-muted` / `--ui-font-meta` …),行样式可以借 `.t2-tsum-row`(图标 + 文字的一行)。
