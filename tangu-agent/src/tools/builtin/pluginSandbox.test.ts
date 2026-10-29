@@ -2,7 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { createTanguProfile } from '../../profiles/index.js';
 import { listDeferredTools, getToolCapabilities, executeTool, type ToolContext } from '../registry.js';
 import type { ClientActionRequest, ClientActionResult } from '../toolTypes.js';
-import { describeStatus, formatFailure, resolvePluginDir } from './pluginSandbox.js';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { builtinSkillsDir } from '../../skills/localSkills.js';
+import { describeStatus, formatFailure, resolvePluginDir, uiNotes } from './pluginSandbox.js';
 import { SANDBOX_STATUS_BUDGET, embedSandboxStatus, extractSandboxStatus, parseSandboxStatus, type SandboxStatus } from '../../contracts/pluginSandbox.js';
 
 const tangu = createTanguProfile({ sandboxMode: 'none' });
@@ -59,6 +63,22 @@ describe('执行', () => {
     expect(r.result).toMatch(/Running: plugin "Reading log" 0\.1\.0/);
     expect(r.result).toMatch(/screenshot of the sandbox window is attached/i);
     expect(extractSandboxStatus(r.result)?.pluginId).toBe('reading-log');
+  });
+
+  // 10-29 插件开发体验 1B:每次看状态都附「界面体检」(和 check-plugin --style 同一份扫描),agent 改完再看就知道还剩哪些
+  it('状态后附界面体检:插件自画下拉 → 点名 mountControl,写在数据区外;官方模板 0 条;目录读不了不报错', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'sbx-ui-'));
+    writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify({ id: 'reading-log', name: 'Reading log', version: '0.1.0', apiVersion: 1, main: 'main.js' }));
+    writeFileSync(path.join(dir, 'main.js'), "ctx.registerView({ id: 'shelf', title: 'Shelf', mount(el) { el.append(document.createElement('select')) } })\n");
+    const { ctx } = fake(() => ({ ok: true, text: JSON.stringify(status({ dir, setupError: 'boom' })) }));
+    for (const r of [await call('plugin_sandbox', { action: 'start', path: dir }, ctx), await call('plugin_sandbox_inspect', { action: 'status' }, ctx)]) {
+      expect(r.result).toContain('- hand-made dropdown ×1 (main.js:1) → ctx.ui.mountControl');
+      expect(r.result).toContain(`check-plugin.mjs" "${dir}" --style`);
+      // 我们自己的话,不进插件的数据区
+      expect(r.result.indexOf('UI check')).toBeGreaterThan(r.result.indexOf('</sandbox_data>'));
+    }
+    expect(await uiNotes(path.join(builtinSkillsDir(), 'forsion-plugin', 'samples', 'forsion-sample-bundle'))).toBe('');
+    expect(await uiNotes(path.join(dir, 'missing'))).toBe('');
   });
 
   it('桌面回来的不是状态(老桌面)→ 报错,不编造', async () => {

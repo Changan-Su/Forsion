@@ -400,3 +400,23 @@ color-mix(in srgb, var(--green) 14%, transparent)
 - 检查：`node check-plugin.mjs <插件目录> --style` 扫 `main.js` 和目录里的 `.css`，报私有类名、清单外或已弃用的 token、多余兜底、写死的颜色、4px 及以上的圆角和带颜色的阴影。只报告，不改变退出码。给另一份文档用的 CSS（iframe 里的页面、导出文件）在同一行写 `/* forsion-style: off */` 跳过。
 
 `ctx.ui.popover` 的 DOM 外壳关闭时与 `OverlayAt` 共用 `ui-menu-exit` 和退场 token；业务清理立即执行，只有 inert 的视觉副本留到动画结束。减少动态效果遵循宿主规则。
+
+### 宿主有零件的界面别自己画 (2026-10-29)
+
+插件视图里自己画下拉、菜单、对话框、标签栏，在 Forsion 里看着就是外来的，也跟不上用户的主题、语言、界面缩放和宿主之后的修复。先找上面那几样零件，零件管不到的（列表行、卡片、图表这些内容本身）才自己画。
+
+| 要做的 | 用 | 别 |
+| --- | --- | --- |
+| Space 里几栏 / 几个标签 | `space.json` 的原生 Panel；一个 panel 放几个视图就是原生标签 | 在一个视图里画标签栏 |
+| 标题行 + 按钮 | `ctx.ui.setViewHead` | 自己画顶栏 |
+| 下拉 / 2–5 个模式 | `ctx.ui.mountControl({ type: 'select' })` / `{ type: 'segmented' }` | `<select>`、自己摆的 listbox |
+| ⋯ / 右键菜单 | `ctx.ui.contextMenu({ anchor })` | 自定类名的菜单 div |
+| 确认 / 小表单 | `ctx.ui.confirm` / `ctx.ui.openDialog` | `window.confirm`、`<dialog>`、自画遮罩 |
+| 跟着按钮弹出的面板 | `ctx.ui.popover` | `position: fixed` 自己算位置 |
+| 空的时候 | `ctx.ui.mountEmptyState`、列表源的 `empty` | 居中一行字 |
+| 按钮 | 公开类 `.btn`（`.primary` / `.ghost` / `.danger` / `.sm`） | 手写样式的 `<button>` |
+| 样式 | `ctx.addStyle(css)` + 公开 token | 往 `document.head` 塞 `<style>` |
+
+- 检查：`node check-plugin.mjs <插件目录> --style` 在「UI parts」下列出插件还在自己画、而宿主有零件的地方，每类一行，带位置和该换成哪个零件；Tangu 用插件沙箱（`plugin_sandbox`）验插件时，每次回来的状态后面也附同一份。只报告，不改退出码，也不拦安装和上架；界面本身是网页（iframe）的插件照样可以，那份页面的 CSS 在同一行写 `/* forsion-style: off */`。
+- 规则在 `forsion-plugin` 技能的 `tools/ui-reinvent.mjs`，按写法认：`<select>` / `role="listbox"`、自定 `menu` / `dropdown` / `popup` 类名或 `role="menu"`、`<dialog>` / `showModal` / `window.confirm`、`tab` 类名或 `data-tab` / `role="tab"`、`position: fixed`、`<iframe>` / `<webview>`、`document.head.append…`，以及整个插件没用过 `.btn` 时的手写按钮。压缩成一行的库代码（超过 2000 字的行）整行跳过。
+- 捆绑包模板 `samples/forsion-sample-bundle` 的计数器视图是照这张表写的（视图头、工具栏下拉、⋯ 菜单、确认框、空状态、`.btn`），可以照抄。

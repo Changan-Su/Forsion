@@ -358,3 +358,39 @@ void ctx.automation?.ensure([
 - 聊天里的 agent 经 `manage_automation` **不能改/删** `plugin:` 前缀的规则;用户能在自动化 Space 里看、编辑(构建器认得 where / rowFrom / match / skipIfEmpty)。
 - 动作字段速查:`db_row_add.skipIfEmpty`(cells 的一个键,展开为空则跳过本步);`db_row_edit` 目标行 `rowId` > `rowFrom`(触发行的关联列,多值逐行)> `match {column, value}`(目标表全部命中行)> 触发行;
   单元格值支持 `{{row.X}}` / `{{target.X}}` / `{{= 算术 }}`。形状正典 = `desktop/frontend/src/types.ts` 的 `MuseTriggerUpsert` / `AutomationActionSpec`。
+
+### `ctx.agent`:读写你自己的数据(2026-09-27 起,**只有 agent 自建 Space 有**)
+
+Space 应该**从数据渲染**,别把状态、时间、待办写死在 main.js 里、每个周期改一遍 —— 那既浪费你的额度,用户看到的也永远是旧的。
+`ctx.agent` 只在 `agent-<slug>` 插件上存在、只能碰你自己这个 agent(普通插件整个没有;今天只有 Muse 有数据源):
+
+| 成员 | 说明 |
+|---|---|
+| `slug` | 你的 agent slug(如 `'muse'`) |
+| `status()` | `{ running, lastCycleAt, sleepUntil, sleepReason, mode, heartbeatMinutes, pendingApprovals }` 或 null |
+| `todos(status?)` | 你提过的 TODO:`{ id, title, detail, status, createdAt }[]`;`status` 缺省 = 全部(`'pending'` / `'done'` / `'dismissed'` / `'injected'`) |
+| `updateTodo(id, 'done' \| 'dismissed')` | **只在用户刚在你自己的视图里点过之后生效**(在你 Space 上按钮的 click 处理函数里调;宿主只认本视图里 1.5 秒内的真实点击 / 按键),挂载时 / 定时器 / 订阅回调 / 借别处的点击调一律 reject;效果同 Muse 面板的按钮,会以「用户处理了」的 `[feedback]` 回到你的日志;只改仍是 pending 的 |
+| `schedule()` | 你 SCHEDULE.db 的条目:`{ id, name, date, repeat, auto, description, lastRun }[]` |
+| `library.list()` / `library.read(path)` | 你的 Library:目录树 / 读一个文本文件(相对路径如 `'Journal/2026-09-27.md'`,≤1MB;越界、隐藏文件、不存在 → reject) |
+| `subscribe(cb)` | 周期结束、睡醒、待批数或待办数变化、`updateTodo` 之后回调(宿主约 20 秒查一次);返回退订,禁用/重载宿主统一收 |
+
+数据调用(status / todos / schedule / library / updateTodo)是 Promise,后端没就绪会 reject —— 自己画空态,别让 mount 抛错(mount 抛错也会以 `[feedback]` 回到你);`subscribe` 同步返回退订。
+**挂载之后没接住的错也回到你**(2026-09-27 起):宿主给你当前这一版的代码打了 `sourceURL`,异步回调 / 事件处理 / 定时器 / 订阅回调里没接住的错,栈里有你的帧就以 `[feedback]` 回写、带 `main.js` 的行号(同一条只报一次,每版最多 3 条)—— 包括你 `await` 的宿主接口 reject 了你没接(异步栈里有你那一帧,行号落在 `await` 那行)。旧版漏清的定时器在重载后抛的不算。
+手势闸防的是「顺手写个定时器 / 挂载时就标掉」这类失误,**不是安全边界**(插件与宿主同一个渲染进程);审批队列不开放。
+
+```js
+ctx.registerView({ id: 'home', title: 'Muse', mount(el) {
+  const draw = async () => {
+    const [st, todos] = await Promise.all([ctx.agent.status(), ctx.agent.todos('pending')]).catch(() => [null, []])
+    el.replaceChildren()
+    for (const t of todos) {
+      const b = document.createElement('button')
+      b.textContent = `✓ ${t.title}`
+      b.onclick = () => ctx.agent.updateTodo(t.id, 'done').then(draw, () => {}) // 只能在点击里调
+      el.append(b)
+    }
+  }
+  draw()
+  return ctx.agent.subscribe(draw) // 退订函数正好当 disposer
+} })
+```

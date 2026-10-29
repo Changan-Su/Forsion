@@ -400,3 +400,23 @@ color-mix(in srgb, var(--green) 14%, transparent)
 - Check: `node check-plugin.mjs <plugin folder> --style` scans `main.js` and the folder's `.css` files and reports private classes, tokens that are not listed or are deprecated, needless fallbacks, hard-coded colors, radii of 4px or more, and shadows with a color. It only reports and does not change the exit code. CSS meant for another document (a page inside an iframe, an exported file) is skipped by putting `/* forsion-style: off */` on the same line.
 
 DOM popovers opened with `ctx.ui.popover` use the same `ui-menu-exit` animation and tokens as `OverlayAt`. Cleanup runs immediately; only an inert visual copy remains until exit completes. Reduced motion follows host policy.
+
+### Don't hand-draw what the host has a part for (2026-10-29)
+
+A plugin view that draws its own dropdowns, menus, dialogs or tab bars looks foreign in Forsion and doesn't follow the user's theme, language, UI zoom or later host fixes. Reach for the parts above first, and draw only what no part covers (your content itself: rows, cards, charts).
+
+| You need | Use | Not |
+| --- | --- | --- |
+| Several panes or tabs in a Space | native Panels in `space.json`; several views in one panel are native tabs | a tab bar inside one view |
+| A title row with buttons | `ctx.ui.setViewHead` | your own header bar |
+| A dropdown / 2–5 modes | `ctx.ui.mountControl({ type: 'select' })` / `{ type: 'segmented' }` | `<select>`, a listbox you position |
+| A ⋯ or right-click menu | `ctx.ui.contextMenu({ anchor })` | a menu div with your own class |
+| Confirm / a small form | `ctx.ui.confirm` / `ctx.ui.openDialog` | `window.confirm`, `<dialog>`, a hand-made backdrop |
+| A panel anchored to a button | `ctx.ui.popover` | `position: fixed` and your own math |
+| Nothing yet | `ctx.ui.mountEmptyState`, a list source's `empty` | a centered line of text |
+| Buttons | the public `.btn` classes (`.primary` / `.ghost` / `.danger` / `.sm`) | hand-styled `<button>` |
+| Styles | `ctx.addStyle(css)` with public tokens | a `<style>` pushed into `document.head` |
+
+- Check: `node check-plugin.mjs <plugin folder> --style` lists, under "UI parts", what the plugin still draws itself where the host has a part: one line per kind, with locations and the part to switch to. When Tangu verifies a plugin in the plugin sandbox (`plugin_sandbox`), every status it gets back carries the same list. It only reports: the exit code doesn't change, and nothing blocks installing or publishing. Plugins whose UI is a web page in an iframe stay allowed; put `/* forsion-style: off */` on that page's CSS lines.
+- The rules live in the `forsion-plugin` skill's `tools/ui-reinvent.mjs` and go by how the code is written: `<select>` / `role="listbox"`, own `menu` / `dropdown` / `popup` class names or `role="menu"`, `<dialog>` / `showModal` / `window.confirm`, `tab` class names or `data-tab` / `role="tab"`, `position: fixed`, `<iframe>` / `<webview>`, `document.head.append…`, and hand-made buttons when the plugin never uses `.btn`. Library code minified onto one line (lines over 2000 characters) is skipped whole.
+- The bundle template's counter view (`samples/forsion-sample-bundle`) follows this table (view head, toolbar select, ⋯ menu, confirm dialog, empty state, `.btn`); copy from it.
