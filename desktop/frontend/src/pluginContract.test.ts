@@ -23,6 +23,15 @@ describe('plugin-contract.json ↔ 宿主 CSS', () => {
   it('每个公开类名宿主都有规则', () => {
     expect(Object.keys(contract.classes).filter((c) => !new RegExp(`${esc(c)}(?![\\w-])`).test(css))).toEqual([]);
   });
+  it('插件视图的基础样式只用公开 token、不写兜底,且排在全局 button 重置之后', () => {
+    const base = readFileSync(join(ROOT, 'desktop/frontend/src/styles/base.css'), 'utf8');
+    const start = base.indexOf('/* plugin-view-base:start'), end = base.indexOf('/* plugin-view-base:end');
+    expect(start).toBeGreaterThan(base.indexOf('button { font: inherit;'));
+    const block = base.slice(start, end).replace(/\/\*[\s\S]*?\*\//g, '');
+    expect(block).toMatch(/\[data-plugin-view-host\]/);
+    const bad = [...block.matchAll(/var\((--[\w-]+)([^)]*)\)/g)].filter(([, t, rest]) => !tokens.includes(t) || rest.trim()).map((m) => m[0]);
+    expect(bad).toEqual([]);
+  });
   it('since / fallbackAllowed / deprecated 只指向契约里的 token', () => {
     const pub = new Set(tokens);
     expect(Object.keys(contract.since).filter((t) => t !== '$comment' && !pub.has(t))).toEqual([]);
