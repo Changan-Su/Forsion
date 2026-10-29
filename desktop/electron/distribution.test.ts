@@ -12,7 +12,7 @@ mkdirSync(join(app, 'electron'))
 mkdirSync(join(app, 'unit-web-dist'))
 symlinkSync(join(desktop, 'node_modules'), join(app, 'node_modules'), 'junction')
 mkdirSync(join(fixture, 'tangu-agent'))
-for (const file of ['electron-builder.config.cjs', 'build/distribution.cjs', 'build/backend-dependencies.cjs', 'build/dmg-layout.cjs', 'build/file-associations.cjs', 'electron/builtinBundles.json']) {
+for (const file of ['electron-builder.config.cjs', 'build/distribution.cjs', 'build/backend-dependencies.cjs', 'build/dmg-layout.cjs', 'build/file-associations.cjs', 'build/windows-installer.cjs', 'electron/builtinBundles.json']) {
   cpSync(join(desktop, file), join(app, file))
 }
 cpSync(join(desktop, 'products'), join(app, 'products'), { recursive: true })
