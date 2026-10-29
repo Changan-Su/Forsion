@@ -22,10 +22,13 @@
  *   npm run live:harness -- --only selfschedule             # 自己的日程 vs 用户的日历(10-02):人设 agent 答应的约定进 SCHEDULE.db、用户日历不动;负对照「记进我的日历」须走 amadeus。改 Personal Folder 段 / 日程·日历工具措辞后跑
  *                                                           #   额度用完时先跑离线接线证据:node scripts/rename-identity.smoke.mjs(假模型端点,截获系统提示词)
  *   npm run live:harness -- --only chat,tool,muse            # 子集(historian→dream→recall 三连有先后依赖)
+ *   npm run live:harness -- --only mask [--mask-off]          # 发给模型前脱敏(10-28,借鉴 magpie 方案 1):读 .env → run_bash 带 key 的 curl 打台架里的回显服务 → 问模型看到的值是不是 sk-proj- 开头、是不是占位符。
+ *                                                           #   判据:回显服务收到真 key(工具参数换回了)、模型答「不是 sk-proj- 开头 / 是占位符」、engine.log 有 [mask]。--mask-off = 负对照(config 里关掉,须红)。改 llm/outboundMask.ts 后跑
  *   npm run live:harness -- --only chat,tool,loop            # loop = 轮数耗尽末轮收尾(改 agentLoop 末轮/收尾提示后跑)
  *   npm run live:harness -- --only imageedit                 # edit_image 图源(10-19,改图跨轮取图方案 B1 + B2):同会话三轮 —— 附两张图先别动 → 不带附件让它合成 → 改刚合成的那张;假生图后端核上传的是哪几张。改 imageEdit.ts / hydrate 的带图消息 / 展示文件 source 后跑
  *   npm run live:harness -- --only skillpick,settingsnav     # 反馈 6a239e58(10-04):指定技能清单只列目录、正文经 use_skill 取(改 services/skillLoadout.ts 后跑);
  *                                                           #   「语音在哪设置」经界面命令直达设置页、不用电脑操控,网页检索次数只计数(改 desktop open-settings 的 description / params 后跑)
+ *   npm run live:harness -- --only pluginui                  # 改 skills/forsion-plugin 的「Desktop plugin UI」一节 / tools/ui-reinvent.mjs / plugin_sandbox 的界面体检后跑:写一个带 Space 的小插件,下拉 / 菜单 / 确认 / 空状态须用宿主零件
  *   npm run live:harness -- --only pluginlook                # 改 skills/forsion-plugin 的「外观开关:跟着宿主走」一节后跑:须经 use_skill 取回正文并答出那一节的三样
  *   npm run live:harness -- --only plugindiag --plugin-src <插件目录> [--plugin-data <plugins-data 里那份 json>] [--plugindiag-hint] [--plugindiag-host auto|"<宿主报的运行态>"]   # 装着的桌面插件 Space 不出现(10-10):
  *                                                           #   main.js 求值不抛错、但没走到 registerView 的那类;看真模型只凭插件目录和 shell 查不查得出。插件放进假家目录,开发机的 ~/.forsion 不碰
@@ -221,7 +224,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'parkedask', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'gitpush', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'imgtools', 'account', 'webpublish', 'nested', 'branch', 'musedm', 'humandims', 'pluginsandbox', 'musestarters'];
+const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'parkedask', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'gitpush', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'imgtools', 'account', 'webpublish', 'nested', 'branch', 'musedm', 'humandims', 'pluginsandbox', 'musestarters', 'pluginui'];
 KEYS.push('bluebird');
 KEYS.push('signals');
 KEYS.push('musechat');
@@ -267,6 +270,7 @@ const GIT_PREFIX = 'livetest/'; const GIT_TAG = '[LIVE]';
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
 const OPT_IN = new Set(['pluginsandbox', 'humandims', 'nested', 'branch', 'musedm', 'realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'parkedask', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'gitpush', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'appsettings', 'control', 'phone']);
+KEYS.push('mcpsettings'); OPT_IN.add('mcpsettings');
 KEYS.push('taskoutcomes'); OPT_IN.add('taskoutcomes'); // --only taskoutcomes: actual hashes / approval identity / duplicate writes, classified separately from model narration.
 OPT_IN.add('bluebird'); // --only bluebird --plugin-src <bundle>: real instruction-following on supplied transcripts
 OPT_IN.add('signals');
@@ -311,6 +315,7 @@ OPT_IN.add('harnessopen'); // 四个 run + 一条探针;只在动 manage_harness
 OPT_IN.add('equip'); // 三个 run;只在动装备层(HARNESS equip → isDeferredIn / 技能目录)时才有信息量。
 OPT_IN.add('musereview'); // 开 Muse 并往隔离库里写用量行:单独跑,别连累别的场景的工具表 / Muse 状态。
 OPT_IN.add('projmem'); // 四个 run、两个 agent 两个项目;只在动项目记忆(services/projectMemory.ts、remember 的 scope)时才有信息量。
+OPT_IN.add('pluginui'); // 一个长 run(写一整个插件,几分钟);只在动 forsion-plugin 的界面纪律、重造检测或沙箱状态里的界面体检时才有信息量。
 OPT_IN.add('pluginlook'); // 一个 run;只在动 skills/forsion-plugin 的「外观开关」一节或 use_skill 时才有信息量。
 OPT_IN.add('plugindiag'); // 一个 run(几分钟);要 --plugin-src 给一份待查的插件,只在量「插件 Space 不出现」的排查能力时才有信息量。
 OPT_IN.add('notebook'); // 两个 run;要 --plugin-src 给构建好的 Jupyter 笔记本插件、--python-bin 给解释器,只在动那个插件的工具说明 / 审批档时才有信息量。
@@ -323,9 +328,16 @@ OPT_IN.add('webpublish'); // --only webpublish:三个 run,同用 account 那个�
 // 但 Connect 换成本地真 server(scripts/connect-local.mts:PGlite + 真 Connect 模块,文件走 bytea、不经蓬洲);给了 --extend-pkg 再加一段
 // 真 Electron 旅程(desktop/scripts/webpages-real.live.cjs):聊天里发布 → 界面点批准 → 我的网页里上架 / 下架 / 下线。
 OPT_IN.add('webpublishreal'); KEYS.push('webpublishreal');
+// --only webcardsreal --connect-server <server 检出> --extend-pkg <签好的 Extend 包目录>(10-28):只跑真 Electron 那段 ——
+// 同一个本机项目会话里写页 / 起服务 / 发布 / 问列表,看本地网页卡、服务卡和 Extend 画的「网页」「我的网页」卡(desktop/scripts/webcards-real.live.cjs)。
+OPT_IN.add('webcardsreal'); KEYS.push('webcardsreal');
 OPT_IN.add('realuse'); // 真实使用模拟:每轮 12 个 run(--rounds),--usage-db 再加一个 Muse 周期;单独跑。
 OPT_IN.add('suggest'); // 三个 run + 三次建议调用;只在动 services/promptSuggestion.ts(提示词 / 前缀对齐)或主循环收尾处的快照时才有信息量。
 OPT_IN.add('humanreal'); // 协作说明写成什么样:每轮 6 个 run + 1 次判官(--rounds);只在动 HUMAN_GUIDANCE / manage_human 时才有信息量。
+OPT_IN.add('mask'); KEYS.push('mask'); // 两个 run + 本地回显服务;只在动 llm/outboundMask.ts(发给模型前脱敏)时才有信息量。
+OPT_IN.add('streamoverflow'); KEYS.push('streamoverflow'); // 注入:真 Codex 路径上流里回 context_length_exceeded(lib/llm-fault-preload.mjs);只在动流内报错归类 / agentLoop 的超长压缩重试时跑
+OPT_IN.add('foreignreasoning'); KEYS.push('foreignreasoning'); // 注入:回灌的加密推理被拒(400 invalid_encrypted_content);只在动 historyReplay 的推理绑定 / agentLoop 的拿掉重发时跑
+OPT_IN.add('relay'); KEYS.push('relay'); // 假提供方只回 429 usage_limit_reached;只在动 llm/quotaRelay.ts / agentLoop 的接力分支时跑。--relay-mode auto|ask|none
 OPT_IN.add('appref'); // 四个 run;只在动 APP_REF_SECTION(应用 / 窗口引用那一段提示词)时才有信息量。
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 KEYS.push('marketplace', 'marketplacechat');
@@ -880,6 +892,12 @@ if (argv.includes('--selftest')) {
 }
 
 const OUT = resolve(opt('out', process.env.TANGU_LIVE_OUT || join(tmpdir(), `tangu-live-${stamp}-${randomUUID().slice(0, 6)}`)));
+// streamoverflow / foreignreasoning:引擎以 --import 载入 lib/llm-fault-preload.mjs,场景往规则文件里写一条,真 Codex 路径上命中的请求换成厂商原文报错
+const FAULT_FILE = ONLY.has('streamoverflow') || ONLY.has('foreignreasoning') ? join(OUT, 'llm-fault.json') : null;
+// 每次布置规则先清掉上一次的记录:同一次台架里 streamoverflow 与 foreignreasoning 共用这份 .log,不清的话后跑的那个会把前一个的「被拒 / 放行」也算进来
+const armFault = (rule) => { rmSync(`${FAULT_FILE}.log`, { force: true }); writeFileSync(FAULT_FILE, JSON.stringify(rule)); };
+const disarmFault = () => rmSync(FAULT_FILE, { force: true });
+const faultLog = () => { try { return readFileSync(`${FAULT_FILE}.log`, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)); } catch { return []; } };
 const TIMEOUT_MS = Number(opt('timeout', process.env.TANGU_LIVE_TIMEOUT_MS || 15 * 60_000));
 const SANDBOX = opt('sandbox', process.env.TANGU_LIVE_SANDBOX || 'auto');
 const MUSE_MODE = opt('muse-mode', process.env.TANGU_LIVE_MUSE_MODE || 'ask'); // ask | agent | auto(三档权限阶梯,见 museAgentConfig)
@@ -943,6 +961,12 @@ if (BLUEBIRD_SRC) {
 if (ONLY.has('storeupdate') || ONLY.has('storeupdatechat')) {
   const bundle = opt('extend-plugin', '');
   if (!bundle || !existsSync(join(bundle, 'tangu-plugins/store-update/tangu-plugin.json')) || !existsSync(join(bundle, 'SIGNATURE'))) throw new Error('--extend-plugin must point to a signed, packed Forsion Extend bundle with tangu-plugins/store-update');
+  cpSync(bundle, join(shared, 'plugins/forsion-extend'), { recursive: true });
+}
+// 网页卡片的 A / D 卡要引擎把 Extend 的引擎半身判成官方:签好的包装进引擎的插件目录(同 storeupdate)
+if (ONLY.has('webcardsreal')) {
+  const bundle = opt('extend-pkg', process.env.TANGU_LIVE_EXTEND_PKG || '');
+  if (!bundle || !existsSync(join(bundle, 'SIGNATURE'))) throw new Error('--only webcardsreal needs --extend-pkg <signed, unpacked Forsion Extend package>');
   cpSync(bundle, join(shared, 'plugins/forsion-extend'), { recursive: true });
 }
 if (ONLY.has('dispatch')) {
@@ -1050,6 +1074,26 @@ const MCP_CFG = ONLY.has('mcp') || ONLY.has('imgwindow') || ONLY.has('novision')
 // 每次回一张不同数字的 PNG 并记下它的 sha256 —— 场景据此判「上传的就是那两张附件」「改的就是上一张产出」。
 const IMGEDIT_PNGS = ONLY.has('imageedit') ? [randDigits(), randDigits()].map((d) => digitsPng(d, 6)) : [];
 const sha = (buf) => createHash('sha256').update(buf).digest('hex');
+// relay:「下一次模型调用回额度用完」的注入 —— 一个本地提供方,每个请求都回 Codex 订阅额度用完的报文(429 + usage_limit_reached + resets_at)。
+const RELAY_MODE = (() => { const i = argv.indexOf('--relay-mode'); return i >= 0 ? argv[i + 1] : 'auto'; })();
+// --relay-path http|sse:额度用完从哪条路来。报文是厂商原文(magpie codex_quota_group_test.go):http = 429 JSON;sse = 200 流里的 response.failed(走 openai-responses 协议)
+const RELAY_PATH = (() => { const i = argv.indexOf('--relay-path'); return i >= 0 ? argv[i + 1] : 'http'; })();
+const FAKEQ = ONLY.has('relay') ? await new Promise((resolve) => {
+  const state = { calls: 0 };
+  const srv = createHttpServer(async (req, res) => {
+    for await (const _ of req) { /* drain */ }
+    state.calls++;
+    if (RELAY_PATH === 'sse') {
+      res.writeHead(200, { 'content-type': 'text/event-stream' }).end([
+        { type: 'response.created', sequence_number: 0, response: { id: 'r0', status: 'in_progress' } },
+        { type: 'response.failed', sequence_number: 1, response: { id: 'r0', status: 'failed', error: { code: 'usage_limit_reached', message: "You've hit your usage limit. Upgrade to Pro, or try again in 2 hours." } } },
+      ].map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join(''));
+      return;
+    }
+    res.writeHead(429, { 'content-type': 'application/json' }).end(JSON.stringify({ error: { type: 'usage_limit_reached', message: 'The usage limit has been reached', plan_type: 'plus', resets_at: Math.floor(Date.now() / 1000) + 3600, resets_in_seconds: 3600 } }));
+  });
+  srv.listen(0, '127.0.0.1', () => resolve(Object.assign(state, { port: srv.address().port, server: srv })));
+}) : null;
 const IMGEDIT = ONLY.has('imageedit') ? await new Promise((resolve) => {
   const state = { calls: [], outputs: [] };
   const srv = createHttpServer(async (req, res) => {
@@ -1075,8 +1119,10 @@ const IMGEDIT = ONLY.has('imageedit') ? await new Promise((resolve) => {
     if (!p) { console.error(`realtime:${src} 里没有带 key 的百炼 provider`); process.exit(2); }
     realtimeProviders = [{ providerId: 'bailian', baseUrl: p.baseUrl, apiKey: p.apiKey, modelIds: [] }];
   }
-  const providers = [...(realtimeProviders || []), ...(IMGEDIT ? [{ providerId: 'fakeimg', baseUrl: `http://127.0.0.1:${IMGEDIT.port}/v1`, apiKey: 'live', modelIds: [], imageModelIds: ['fake-edit'] }] : [])];
-  if (COMPACTION_CFG || MCP_CFG || gitCfg || providers.length) writeFileSync(join(shared, 'config.json'), JSON.stringify({ ...(COMPACTION_CFG ? { compaction: COMPACTION_CFG } : {}), ...(MCP_CFG ? { mcp: MCP_CFG } : {}), ...(gitCfg ? { git: gitCfg } : {}), ...(providers.length ? { providers } : {}) }, null, 2));
+  const providers = [...(realtimeProviders || []), ...(IMGEDIT ? [{ providerId: 'fakeimg', baseUrl: `http://127.0.0.1:${IMGEDIT.port}/v1`, apiKey: 'live', modelIds: [], imageModelIds: ['fake-edit'] }] : []),
+    ...(FAKEQ ? [{ providerId: 'fakequota', baseUrl: `http://127.0.0.1:${FAKEQ.port}/v1`, apiKey: 'live', modelIds: ['fake-quota'], ...(RELAY_PATH === 'sse' ? { protocol: 'openai-responses' } : {}) }] : [])];
+  const relayModels = FAKEQ && RELAY_MODE !== 'none' ? { models: { quotaFallback: MODEL, quotaFallbackAsk: RELAY_MODE === 'ask' } } : {};
+  if (COMPACTION_CFG || MCP_CFG || gitCfg || providers.length) writeFileSync(join(shared, 'config.json'), JSON.stringify({ ...(COMPACTION_CFG ? { compaction: COMPACTION_CFG } : {}), ...(MCP_CFG ? { mcp: MCP_CFG } : {}), ...(gitCfg ? { git: gitCfg } : {}), ...(providers.length ? { providers } : {}), ...relayModels }, null, 2));
 }
 // cumusic / cusend:隔离 config 里打开 Jev(合并写,所以在上面那次整份写之后)
 if (CU_JEV) cuJevConfig({ shared, mode: opt('cu-jev-mode', 'auto'), threshold: opt('cu-jev-threshold', '') });
@@ -1187,7 +1233,7 @@ const SEED_PAD = `${PAD_TOKEN} Archival filler row for prefix-budget testing; it
   + Array.from({ length: 8 }, (_, i) => `Note ${i + 1}: the coastal survey team logged tidal range, wind bearing and cloud cover at six-hour intervals along the northern estuary terraces.`).join(' ');
 if (SEED_PAD.length < 1000) { console.error(`填充行只有 ${SEED_PAD.length} 字,吃不掉 §1 的 1000 字预算`); process.exit(2); }
 // webpublishreal:本地真 Connect 发的用户令牌就是引擎带给云端的令牌,所以在 TOKEN 之前起;台架退出时一并关掉。
-const SIM = ONLY.has('webpublishreal') ? await startConnectLocal(opt('connect-server', process.env.TANGU_LIVE_CONNECT_SERVER || '')).catch((e) => { console.error(`webpublishreal:${e.message}`); process.exit(2); }) : null;
+const SIM = ONLY.has('webpublishreal') || ONLY.has('webcardsreal') ? await startConnectLocal(opt('connect-server', process.env.TANGU_LIVE_CONNECT_SERVER || '')).catch((e) => { console.error(`webpublishreal:${e.message}`); process.exit(2); }) : null;
 if (SIM) process.on('exit', () => SIM.stop());
 const TOKEN = SIM?.token || process.env.TANGU_LIVE_CLOUD_TOKEN || randomUUID(); // 引擎的 --token 同时是它带给 Forsion 云端的登录令牌:走云端的场景(realtime 云端线路)传真令牌。缺省每次随机:撞上别的台架/引擎也只会 401,不会串到别人的引擎上报绿
 const port = await new Promise((r) => { const srv = createServer(); srv.listen(0, '127.0.0.1', () => { const p = srv.address().port; srv.close(() => r(p)); }); });
@@ -1268,10 +1314,12 @@ if (ONLY.has('notebook') && !NOTEBOOK_NEG) {
 const FAKE_CLOUD = (ONLY.has('account') || ONLY.has('webpublish') || SIM) && !process.env.TANGU_LIVE_CLOUD_URL ? await startFakeCloud(TOKEN, { connect: SIM?.url }) : null;
 
 const child = spawn(process.execPath, [
+  ...(FAULT_FILE ? ['--import', pathToFileURL(join(root, 'scripts', 'lib', 'llm-fault-preload.mjs')).href] : []),
   entry, '--port', String(port), '--host', '127.0.0.1', '--data-dir', join(home, 'state.db'),
   '--sandbox', SANDBOX, '--cloud-url', process.env.TANGU_LIVE_CLOUD_URL || FAKE_CLOUD?.url || 'http://127.0.0.1:9', '--token', TOKEN,
 ], { env: {
   ...process.env, TANGU_HOME: home, TANGU_DEFAULT_WORKSPACE: workspace, TANGU_CACHE_PROBE: '1',
+  ...(FAULT_FILE ? { TANGU_LIVE_FAULT_FILE: FAULT_FILE } : {}),
   TANGU_BROWSER_CDP: userChromeWs || 'off',
   FORSION_DESKTOP_CONFIG: desktopCfg,
   ...(PLUGINDIAG_DIR ? { HOME: FAKE_HOME, ...(process.platform === 'win32' ? { USERPROFILE: FAKE_HOME } : {}) } : {}),
@@ -1487,7 +1535,7 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
           // `full` 留**未截断**的原文:bigread 要判的截断标记落在第 4000 字符附近,先截到 4000 就永远看不见
           // (评审 #7)。内存有界 —— 引擎侧 capToolResult 已把单条结果封在 48k。
           else if (e.type === 'desk_present') (ev.deskPresents ||= []).push({ at: Date.now(), spec: p });
-          else if (e.type === 'tool_result') { const full = String(p.result || ''); ev.toolResults.push({ id: p.id, name: p.name || '?', isError: !!p.isError, result: full.slice(0, 4000), fullLength: full.length, full, at: Date.now() }); }
+          else if (e.type === 'tool_result') { const full = String(p.result || ''); ev.toolResults.push({ id: p.id, name: p.name || '?', isError: !!p.isError, result: full.slice(0, 4000), fullLength: full.length, full, at: Date.now(), ...(p.masked ? { masked: p.masked } : {}) }); }
           // 子代理自己的工具调用**不进** tool_call(subAgent.ts 把它们包成 'subagent' 事件发在父 run 上)——
           // 要证「子代理用上了 read_document」只能在这儿收。isError/preview 也要留:只存工具名的话,
           // 子代理 read_document 报错、再用 read_file 兜出答案也照样全绿(评审 #5)。
@@ -1537,7 +1585,7 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
           else if (e.type === 'team_member') (p.phase === 'start' ? ev.group.starts : ev.group.ends).push({ slug: String(p.slug || '?'), seq: e.seq, runId: p.runId || null, sessionId: p.sessionId || null, messageId: p.messageId });
           else if (e.type === 'cache_probe') ev.probes.push(p); // 双闸开着才有(TANGU_CACHE_PROBE=1 + agentConfig.cacheProbe)
           // 只收压缩相关的 status(llm_call/generating 每帧都发,全收会把 ev 撑大);autocompact 场景据此判「压了、落库了」
-          else if (e.type === 'status' && ['context_info', 'compacting', 'compacted', 'compaction_budget', 'compaction_skipped', 'tool_failure_loop', 'action_delivery_nudge', 'sketch_delivery_nudge', 'ui_document_recovery', 'describing_images'].includes(p.phase)) ev.statuses.push(p);
+          else if (e.type === 'status' && ['context_info', 'compacting', 'compacted', 'compaction_budget', 'compaction_skipped', 'tool_failure_loop', 'action_delivery_nudge', 'sketch_delivery_nudge', 'ui_document_recovery', 'describing_images', 'masked', 'model_fallback', 'llm_retry', 'reasoning_dropped'].includes(p.phase)) ev.statuses.push(p);
           else if (e.type === 'done') { ev.done = true; ev.content = String(p.content || ''); ev.toolOffsets = p.toolOffsets ?? null; break outer; }
           else if (e.type === 'error') { ev.error = String(p.error || 'error'); ev.errorReason = p.reason ?? null; break outer; } // P1-K2:急停 / 锁定的终态原因
         }
@@ -2687,6 +2735,133 @@ try {
     const hit = ev.content.includes(MARKER);
     const anchors = anchorsOk(ev);
     return { ok: !ev.error && ev.toolCalls.length > 0 && hit && anchors, detail: ev.error || `工具 ${ev.toolCalls.join(',') || '无'};标记${hit ? '命中' : '未命中'};done 锚点${anchors ? '对齐' : `不对齐(${JSON.stringify(ev.toolOffsets)})`}${ev.approvals ? `;代批 ${ev.approvals}${ev.approveError ? '(失败:' + ev.approveError + ')' : ''}` : ''}`, output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
+  });
+
+  // mask(10-28,借鉴 magpie 方案 1 · 发给模型前脱敏):真模型拿到的是占位符,但照样能把 key 用对。
+  //   ① 读 .env、用 run_bash 把 key 原样写进 curl 打台架里的回显服务 → 回显服务收到的必须是**真 key**(工具参数在执行前换回了);
+  //   ② 同一会话不带工具问:你看到的 DEMO_API_KEY 是不是 sk-proj- 开头、是不是双花括号占位符 —— 脱敏开着须答「不是 / 是」(模型从没见过原值)。
+  //   问开头 / 是否占位符而不让它复述字符:不碰「别泄露 key」的拒答,负对照(--mask-off,config 里关掉)才分得开。engine.log 须有 [mask] 行。
+  await scenario('mask', 'mask 发给模型前脱敏:读 .env → 带 key 的命令 → 模型看到的是占位符', async () => {
+    const dir = join(workspace, 'mask-live');
+    mkdirSync(dir, { recursive: true });
+    const alnum = () => randomUUID().replace(/-/g, '');
+    const key = `sk-proj-${alnum().slice(0, 12)}Q${alnum().slice(0, 23)}`;
+    const pw = `Pw${alnum().slice(0, 14)}`;
+    writeFileSync(join(dir, '.env'), `DEMO_API_KEY=${key}\nDATABASE_URL=postgres://app:${pw}@db.internal:5432/app\nLOG_LEVEL=debug\n`);
+    if (argv.includes('--mask-off')) {
+      const cfg = join(shared, 'config.json');
+      const cur = existsSync(cfg) ? JSON.parse(readFileSync(cfg, 'utf8')) : {};
+      writeFileSync(cfg, JSON.stringify({ ...cur, masking: { secrets: false, personal: false } }, null, 2));
+    }
+    const got = [];
+    const echo = await new Promise((resolve) => {
+      const srv = createHttpServer((req, res) => { got.push(String(req.headers.authorization || '')); res.end(`echo-ok received ${String(req.headers.authorization || '').length} chars`); });
+      srv.listen(0, '127.0.0.1', () => resolve(srv));
+    });
+    const port = echo.address().port;
+    const logBefore = existsSync(engineLog) ? readFileSync(engineLog, 'utf8').length : 0;
+    const sid = `live-mask-${Date.now()}`;
+    let a, b;
+    try {
+      a = await run(sid, `Read the file ${join(dir, '.env')} with a tool. Then use run_bash to run this command once, writing the DEMO_API_KEY value from that file literally in place of KEY (no shell variables, do not source the file): curl -s -H "Authorization: Bearer KEY" http://127.0.0.1:${port}/echo — then tell me what the server answered.`, 240_000, { cwd: dir });
+      b = await run(sid, 'Without using any tools, answer two questions about the DEMO_API_KEY value exactly as it appeared in the file content you were given. 1) Does it start with the characters sk-proj- ? 2) Is it a placeholder wrapped in double curly braces? Reply in exactly this form and nothing else: "1: yes|no; 2: yes|no".', 120_000, { cwd: dir });
+    } finally { echo.close(); }
+    const log = existsSync(engineLog) ? readFileSync(engineLog, 'utf8').slice(logBefore) : '';
+    const maskLine = /\[mask\] mask \d+ value\(s\) before sending: [A-Z_,]*API_KEY/.test(log);
+    const realKeySent = got.some((h) => h === `Bearer ${key}`);
+    const ans = (b.content || '').toLowerCase().replace(/\s+/g, '');
+    const sawPlaceholder = /1:no;?2:yes/.test(ans);
+    const spans = a.toolResults.flatMap((t) => t.masked || []);
+    const evidence = { key: `${key.slice(0, 8)}…(${key.length})`, got: got.map((h) => `${h.slice(0, 15)}…(${h.length})`), answer: b.content, spans, statuses: [...a.statuses, ...b.statuses].filter((x) => x.phase === 'masked'), maskLine, toolArgs: a.toolArgs.map((t) => ({ name: t.name, args: t.args.replace(key, '<KEY>') })) };
+    writeFileSync(join(OUT, 'mask-evidence.json'), JSON.stringify(evidence, null, 2));
+    return {
+      ok: !a.error && !b.error && realKeySent && sawPlaceholder && maskLine && spans.length > 0,
+      detail: a.error || b.error || `回显服务收到真 key:${realKeySent ? '是' : '否'};模型答「${b.content.trim()}」→ ${sawPlaceholder ? '看到的是占位符' : '看到的不是占位符(原值到了模型)'};engine.log [mask]:${maskLine ? '有' : '无'};工具结果标注 ${spans.length} 处`,
+      output: `${a.content}\n---\n${b.content}`, tokens: tokensOf(a) + tokensOf(b), toolCalls: [...a.toolCalls, ...b.toolCalls],
+    };
+  });
+
+  // foreignreasoning(10-28,借鉴 magpie 第三轮 19):换了账号,旧会话回灌的加密推理被上游以 400 invalid_encrypted_content 拒掉(厂商原文,见 lib/llm-fault-preload.mjs)。
+  //   第一轮让模型用一次工具(跨 run 回灌的只有工具轮的推理);第二轮起注入:带着第一轮那批 encrypted_content 的请求一律 400(像换了号:旧推理全被拒,新产出的照常可用)。
+  //   修好 = 认出 → 拿掉推理重发,只被拒 1 次、发 reasoning_dropped、重发里不再带旧推理、答出口令。负对照(--kind base,没修)= 400 不可重试,这一轮报错收场。
+  //   ⚠️ 只验「被拒 → 拿掉重发」那半;「落库带账号指纹、换号后一开始就不带」那半真换不了号,只有单测(test/historyReplayHydration.test.ts)。
+  await scenario('foreignreasoning', 'foreignreasoning 回灌的推理被拒 → 拿掉重发', async () => {
+    const sid = `live-fr-${Date.now()}`;
+    const tok = `FR-${randomUUID().slice(0, 6)}`;
+    const file = join(workspace, `fr-${tok}.txt`);
+    // 要有推理条目可回灌,且它得排在工具调用**之前**(跨 run 回灌的只有工具轮的条目):先心算、再用工具写结果。
+    // 10-28 前两次只让它读文件(medium / high 都试了),Luna 直接调工具、不出 reasoning 条目,注入无从触发。
+    const cfg = { thinkingLevel: 'high' };
+    const a = await run(sid, `Without using any tool for the arithmetic, work out 48271 × 9317. Then use a tool to write just that number into the file ${file}. Finally reply with ${tok}-A and the number.`, 240_000, cfg);
+    armFault({ mode: 'invalid_encrypted_content', match: `${tok}-B` });
+    const b = await run(sid, `Reply with exactly this and nothing else: ${tok}-B`, 240_000, cfg).finally(disarmFault);
+    const log = faultLog().filter((l) => l.match);
+    const fired = log.filter((l) => l.fired);
+    const resent = log.filter((l) => !l.fired && fired.length && l.t > fired[0].t);
+    const dropped = b.statuses.filter((x) => x.phase === 'reasoning_dropped');
+    writeFileSync(join(OUT, 'foreignreasoning-evidence.json'), JSON.stringify({ errA: a.error, toolsA: a.toolCalls, errB: b.error, log, statuses: b.statuses, content: b.content }, null, 2));
+    const ok = !a.error && a.toolCalls.length > 0 && fired.length === 1 && fired[0].encrypted > 0
+      && resent.length >= 1 && resent[0].encrypted === 0 && dropped.length === 1 && dropped[0].dropped > 0
+      && !b.error && b.content.includes(`${tok}-B`);
+    const detail = `第一轮工具 ${a.toolCalls.join(',') || '无'}${a.error ? `(报错:${a.error.slice(0, 80)})` : ''};被拒 ${fired.length} 次(带旧推理 ${fired[0]?.encrypted ?? 0} 份)、重发 ${resent.length} 次(带 ${resent[0]?.encrypted ?? '-'} 份);reasoning_dropped ${dropped.map((x) => x.dropped).join(',') || '无'};${b.error ? `报错:${b.error.slice(0, 140)}` : `答${b.content.includes(`${tok}-B`) ? '对' : '错'}`}`;
+    return { ok, detail, output: [a.content, b.content].join('\n---\n'), tokens: tokensOf(a) + tokensOf(b), toolCalls: [...a.toolCalls, ...b.toolCalls] };
+  });
+
+  // relay(10-28,借鉴 magpie 方案 2 · 额度用完接力):会话模型 = 台架的假提供方(每次都回额度用完),后备 = 真模型。
+  //   auto:这一轮换到后备答出口令、只打假提供方一次、发一条 model_fallback、落库 origin=fallback:quota + 实际模型;
+  //         第二轮重置时间没到 → 直接用后备,假提供方不再被打。
+  //   ask:停下,报错尾巴带 [quota_fallback_ask:<后备>],不换。none(负对照):不设后备,照旧报额度用完,不换。
+  await scenario('relay', `relay 额度用完接力(${RELAY_MODE})`, async () => {
+    const sid = `live-relay-${Date.now()}`;
+    const tok = `RELAY-${randomUUID().slice(0, 6)}`;
+    const fake = 'fakequota/fake-quota';
+    const turn = (msg) => run(sid, `Reply with exactly this and nothing else: ${msg}`, 120_000, {}, undefined, undefined, undefined, undefined, { model: fake });
+    const a = await turn(tok);
+    const callsA = FAKEQ.calls;
+    const fbA = a.statuses.filter((x) => x.phase === 'model_fallback');
+    const b = RELAY_MODE === 'auto' ? await turn(`${tok}-2`) : null;
+    const msgs = asList(await api(`/agent/sessions/${sid}/messages`).catch(() => []), 'messages');
+    const asst = msgs.filter((m) => m.role === 'assistant' || m.role === 'model');
+    const evidence = { mode: RELAY_MODE, path: RELAY_PATH, fakeCalls: FAKEQ.calls, callsA, fbA, fbB: b?.statuses.filter((x) => x.phase === 'model_fallback'), errA: a.error, errB: b?.error, rows: asst.map((m) => ({ origin: m.origin, model_id: m.model_id, content: String(m.content || '').slice(0, 80) })) };
+    writeFileSync(join(OUT, 'relay-evidence.json'), JSON.stringify(evidence, null, 2));
+    let ok, detail;
+    if (RELAY_MODE === 'auto') {
+      const row = asst.find((m) => String(m.content || '').includes(tok));
+      ok = !a.error && a.content.includes(tok) && fbA.length === 1 && fbA[0].reason === 'quota' && fbA[0].to === MODEL && callsA === 1
+        && row?.origin === 'fallback:quota' && row?.model_id === MODEL
+        && !b.error && b.content.includes(`${tok}-2`) && FAKEQ.calls === 1 && b.statuses.some((x) => x.phase === 'model_fallback');
+      detail = a.error || b?.error || `第一轮:改用 ${fbA[0]?.to || '无'}、假提供方 ${callsA} 次、落库 ${row?.origin || '无'} / ${row?.model_id || '无'};第二轮:假提供方累计 ${FAKEQ.calls} 次、${b.statuses.some((x) => x.phase === 'model_fallback') ? '直接走后备' : '没走后备'}`;
+    } else {
+      const askTail = /\[quota_fallback_ask:[^\]]+\]/.test(a.error || '');
+      ok = !!a.error && /usage limit/i.test(a.error) && fbA.length === 0 && callsA === 1 && (RELAY_MODE === 'ask' ? askTail : !askTail);
+      detail = `报错:${(a.error || '无').slice(0, 140)};改用 ${fbA.length} 次;假提供方 ${callsA} 次`;
+    }
+    return { ok, detail, output: [a.content, b?.content].filter(Boolean).join('\n---\n'), tokens: tokensOf(a) + (b ? tokensOf(b) : 0), toolCalls: [] };
+  });
+
+  // streamoverflow(10-28,借鉴 magpie 第三轮 15):Codex 在 HTTP 200 的流里送来 context_length_exceeded(厂商原文,见 lib/llm-fault-preload.mjs)。
+  //   第一轮垫一段大日志(压缩才有东西可总结,总结完请求明显变小);第二轮起注入:体积不小于第一次被拒那份 95% 的请求都回流里的超长(像真实窗口)。
+  //   修好 = 按 400 认出 → 压缩一次 → 变小的请求放行 → 答出口令,只被拒 1 次、没有 llm_retry。
+  //   负对照(--kind base,没修)= 当 502 原样重发,4 次都被拒,这一轮报错收场、也没压缩。
+  await scenario('streamoverflow', 'streamoverflow 流里的超长 → 压缩后重试', async () => {
+    const sid = `live-ovf-${Date.now()}`;
+    const code = `CODE-${randomUUID().slice(0, 6)}`;
+    const tok = `OVF-${randomUUID().slice(0, 6)}`;
+    const filler = Array.from({ length: 1400 }, (_, i) => `${new Date(Date.UTC(2026, 9, 1, 0, 0, i)).toISOString()} worker-${i % 7} processed batch ${i} ok`).join('\n');
+    const a = await run(sid, `Here is a build log for reference. The codeword is ${code}. Reply with just "noted".\n\n${filler}`);
+    armFault({ mode: 'stream_overflow', match: tok });
+    const b = await run(sid, `Reply with exactly this and nothing else: ${tok}`).finally(disarmFault);
+    const log = faultLog().filter((l) => l.match);
+    const fired = log.filter((l) => l.fired);
+    const passed = log.filter((l) => !l.fired && fired.length && l.t > fired[0].t);
+    const compacting = b.statuses.filter((x) => x.phase === 'compacting');
+    const compacted = b.statuses.filter((x) => x.phase === 'compacted');
+    const retries = b.statuses.filter((x) => x.phase === 'llm_retry');
+    writeFileSync(join(OUT, 'streamoverflow-evidence.json'), JSON.stringify({ errA: a.error, errB: b.error, log, statuses: b.statuses, content: b.content }, null, 2));
+    const ok = !a.error && !b.error && b.content.includes(tok) && fired.length === 1 && passed.length >= 1
+      && compacting.some((x) => x.reason === 'overflow') && compacted.length >= 1 && retries.length === 0;
+    const detail = `被拒 ${fired.length} 次(${fired[0]?.bytes ?? '-'}B)、放行 ${passed.length} 次(${passed[0]?.bytes ?? '-'}B);压缩 ${compacting.map((x) => x.reason).join(',') || '无'} → ${compacted.length ? (compacted[0].fallback ? '机械折叠' : `摘要 ${compacted[0].summarized ?? '?'} 条`) : '无'};llm_retry ${retries.length} 次;${b.error ? `报错:${b.error.slice(0, 140)}` : `答${b.content.includes(tok) ? '对' : '错'}`}`;
+    return { ok, detail, output: b.content, tokens: tokensOf(a) + tokensOf(b), toolCalls: b.toolCalls };
   });
 
   await scenario('taskoutcomes', 'taskoutcomes actual artifacts, rejected approvals and repeat delivery', () =>
@@ -3872,7 +4047,7 @@ Then reply with only the command output.`,
   // ⚠️ ENTRY 与 desktop/frontend/src/bootstrapEngine.tsx 的 open-settings 目录项同文(description + params);TARGETS 那一行由
   //    desktop 的 settingsTarget.test.ts 逐字钉住(设置页 / 搜索索引一改,那条单测就红,照它的输出改这里)。
   await scenario('settingsnav', 'settingsnav 「语音在哪设置」:界面命令直达设置页,不用电脑操控', async () => {
-    const TARGETS = 'Pages: general, forsion, model, mcp, hooks, skills, agents, amadeus-plugins, browser, computer-use, channels, notes, sync, spaces, theme, shortcuts, notifications, statusbar, permissions, units, remote-sessions, computer-history, advanced, developer, about. Settings: workspace-dir, keep-awake, backend-mode, sandbox, python, mirror, external-backend, forsion-account, forsion-submissions, cloud-url, memory-sync, inbox-notify, default-models, model-providers, web-search, voice, theme-language, startup-appearance, palette, color-mode, ui-zoom, glass, home-motion, ambient, visuals, smooth-caret, selection-bar, prompt-suggest, chat-avatars, calm-dim, calm-reading, calm-motion, ribbon-auto-home, fonts, notes-attachments, daily-notes, agent-browser, strict-background, jev, units-switch, units-host, remote-sessions-switch, remote-approval-cap, remote-trusted-devices, remote-safety, computer-history, mcp-server, reset-layout, clear-data, language.';
+    const TARGETS = 'Pages: general, forsion, model, mcp, hooks, skills, agents, amadeus-plugins, browser, computer-use, channels, notes, sync, spaces, theme, shortcuts, notifications, statusbar, trash, permissions, units, remote-sessions, computer-history, advanced, developer, about. Settings: workspace-dir, keep-awake, backend-mode, sandbox, python, mirror, external-backend, forsion-account, forsion-submissions, cloud-url, memory-sync, inbox-notify, default-models, model-providers, masking, web-search, voice, theme-language, startup-appearance, palette, color-mode, ui-zoom, glass, home-motion, ambient, visuals, smooth-caret, selection-bar, prompt-suggest, chat-avatars, calm-dim, calm-reading, calm-motion, ribbon-auto-home, fonts, notes-attachments, daily-notes, agent-browser, strict-background, jev, units-switch, units-host, remote-sessions-switch, remote-approval-cap, remote-trusted-devices, remote-safety, computer-history, mcp-json, mcp-server, reset-layout, clear-data, language.';
     const ENTRY = { id: 'open-settings',
       description: "Open Forsion's settings window, optionally at one page or at the page holding one specific setting. To answer 'where/how do I set X', open that page and say which page you opened; these settings are not documented on the web, so do not search for them. Unknown targets are rejected.",
       params: { type: 'object', properties: { tab: { type: 'string', description: `A page id or a setting id. Omit for the default page. ${TARGETS}` } } } };
@@ -5870,6 +6045,50 @@ Then reply with only the command output.`,
   //   E 完全放行档改默认工作目录 → 仍弹 protected 卡(台架批)并落盘;同档改语速零审批;
   //   F 改通话音色 → realtimeVoice 不变(只读字段:音色绑在通话模型上)。
   // 收尾把 config.json 还原成场景开始前那份(E 改的默认工作目录不该漏给后面的场景)。
+  await scenario('mcpsettings', 'mcpsettings Agent 添加 JSON、审批、启用连接、调用新 MCP、保留凭据与删除', async () => {
+    const cfgPath = join(shared, 'config.json');
+    const before = existsSync(cfgPath) ? readFileSync(cfgPath, 'utf8') : null;
+    const cfg = () => JSON.parse(readFileSync(cfgPath, 'utf8'));
+    const name = `live-settings-${Date.now()}`;
+    const mark = `MCPCFG-${Math.random().toString(36).slice(2, 9)}`;
+    const secret = `DEMO_SECRET_${Math.random().toString(36).slice(2)}`;
+    const fixture = join(root, 'test/fixtures/fake-mcp-server.mjs');
+    const entry = { command: process.execPath, args: [fixture], env: { FAKE_MCP_TAG: mark, DEMO_TOKEN: secret }, enabled: false };
+    const sessions = [];
+    const sid = leg => { const id = `live-mcp-settings-${leg}-${Date.now()}`; sessions.push(id); return id; };
+    try {
+      const a = await run(sid('add'), `帮我把这个 MCP JSON 添加到 Forsion，保持禁用，不要运行它：${JSON.stringify({ mcpServers: { [name]: entry } })}`, 240_000, { approvalMode: 'auto-edit' });
+      const okA = !a.error && a.done && a.toolCalls.includes('manage_mcp') && a.approvalList.some(x => x.name === 'manage_mcp' && x.reason === 'control') && cfg().mcp?.mcpServers?.[name]?.enabled === false;
+      const b = await run(sid('enable'), `启用 MCP 服务器 ${name}，保存后结束本轮回复，不调用它的工具。`, 240_000, { approvalMode: 'full-auto' });
+      const connected = await until(async () => { const t = await api('/agent/tools'); return t.mcp?.some(x => x.server === name && x.status === 'connected') ? true : null; }, 30_000, 300);
+      const okB = !b.error && b.done && b.toolCalls.includes('manage_mcp') && b.approvals === 0 && !!connected;
+      const tool = `mcp__${name.replace(/[^a-zA-Z0-9_-]/g, '_')}__echo`;
+      const c = await run(sid('call'), `调用 ${tool}，text 参数用 hello，然后告诉我返回的标记。`, 240_000, { approvalMode: 'full-auto' });
+      const okC = !c.error && c.done && c.toolCalls.includes(tool) && c.content.includes(mark);
+      // Simulate an idle desktop/CLI save without polling /agent/tools: admission must reconcile before the very next run.
+      const directName = `${name}-direct`;
+      const directCfg = cfg();
+      directCfg.mcp.mcpServers[directName] = { ...entry, enabled: true, env: { FAKE_MCP_TAG: `${mark}-DIRECT` } };
+      writeFileSync(cfgPath, JSON.stringify(directCfg));
+      const directTool = `mcp__${directName}__echo`;
+      const direct = await run(sid('direct'), `调用 ${directTool}，text 参数用 next-run，告诉我返回的标记。`, 240_000, { approvalMode: 'full-auto' });
+      const okDirect = !direct.error && direct.done && direct.toolCalls.includes(directTool) && direct.content.includes(`${mark}-DIRECT`);
+      const d = await run(sid('update'), `把 MCP 服务器 ${name} 的 timeoutMs 改成 2345，保留其他字段。再检查它的配置，别展示任何密钥。`, 240_000, { approvalMode: 'full-auto' });
+      const stored = cfg().mcp?.mcpServers?.[name];
+      const okD = !d.error && d.done && d.toolCalls.includes('manage_mcp') && stored?.timeoutMs === 2345 && stored?.env?.DEMO_TOKEN === secret && JSON.stringify(stored?.args) === JSON.stringify(entry.args) && !d.content.includes(secret);
+      const e = await run(sid('reject'), `把 MCP 服务器 ${name} 的 timeoutMs 改成 3456。`, 240_000, { approvalMode: 'auto-edit' }, undefined, () => 'reject');
+      const okE = !e.error && e.done && e.approvalList.some(x => x.name === 'manage_mcp' && x.reason === 'control') && cfg().mcp?.mcpServers?.[name]?.timeoutMs === 2345;
+      const f = await run(sid('delete'), `删除 MCP 服务器 ${name} 的配置。`, 240_000, { approvalMode: 'full-auto' });
+      const okF = !f.error && f.done && f.toolCalls.includes('manage_mcp') && !Object.hasOwn(cfg().mcp?.mcpServers ?? {}, name);
+      await api('/agent/tools');
+      const legs = [a, b, c, direct, d, e, f];
+      return { ok: okA && okB && okC && okDirect && okD && okE && okF, detail: `direct-idle-save/next-run=${okDirect} add/control=${okA} enable/connected=${okB} fresh-run-call=${okC} partial-update/secret=${okD} reject/unchanged=${okE} delete=${okF}`, toolCalls: legs.flatMap(x => x.toolCalls), output: legs.map((x, i) => `[${i + 1}] ${x.content}`).join('\n\n') };
+    } finally {
+      if (before === null) rmSync(cfgPath, { force: true }); else writeFileSync(cfgPath, before);
+      await api('/agent/tools').catch(() => {});
+    }
+  });
+
   await scenario('appsettings', 'appsettings agent 读、改本机设置(问得出现值、改得动开放的项、密钥与审批档碰不到)', async () => {
     if (EXEC_MODE !== 'host') return { ok: false, skipped: true, detail: '两件工具只在本机执行形态露出(mode:host)' };
     const cfgPath = join(shared, 'config.json');
@@ -6787,6 +7006,47 @@ Then reply with only the command output.`,
       return { ok: !ev.error && !calls.length && !ev.clientCmds.length, detail: ev.error || `plugin_sandbox* ${calls.join(',') || '无'};client_cmd ${ev.clientCmds.length}`, ...base(ev) };
     });
   }
+  // pluginui(10-29 插件开发体验 1B):照用户口吻要一个带 Space 的小插件(排序下拉、每行 ⋯ 菜单、删除先确认、空的时候有提示),
+  // 不点名任何零件;带上桌面沙箱能力,台架扮桌面(回的状态里 dir 就是模型写的目录,引擎照真的去扫那个目录、附「UI check」)。
+  // 硬判看产物 main.js:四样里至少三样用了宿主零件(mountControl / contextMenu / confirm|openDialog / mountEmptyState 或列表源 empty),
+  // 且 tools/ui-reinvent.mjs 对产物的 dropdown / menu / dialog 三类 0 条。负对照 = 换回 1.80.0 的技能与模板、去掉 ui-reinvent.mjs(--kind neg)。
+  // 留证 pluginui-evidence.json(产物 main.js 原文 + 扫描结果)。
+  if (ONLY.has('pluginui')) {
+    const DIR = join(workspace, 'reading-list');
+    // 状态照模型写出来的文件回(manifest 的 id / 版本、main.js 里 registerView 的 id):对不上时模型会去查「沙箱怎么加载了别的东西」,判据就测偏了
+    const read = (f) => { try { return readFileSync(join(DIR, f), 'utf8'); } catch { return ''; } };
+    const mf = () => { try { return JSON.parse(read('manifest.json')); } catch { return {}; } };
+    const st = () => ({ v: 1, state: 'running', pluginId: mf().id || 'reading-list', name: mf().nameEn || mf().name || 'Reading list', version: mf().version || '0.1.0', dir: DIR,
+      views: [...new Set([...read(mf().main || 'main.js').matchAll(/registerView\(\s*\{\s*id:\s*['"`]([\w-]+)/g)].map((m) => m[1]))], spaces: [], hiddenSpaces: [], setupError: null, blocked: null, mountErrors: [], logs: [], warnCount: 0, errorCount: 0, loads: 1, windowVisible: false });
+    const desktop = { ns: 'plugin', respond: (b) => (b.op === 'stop' ? { ok: true, text: '{"stopped":true}' } : { ok: true, text: JSON.stringify(st()) }) };
+    await scenario('pluginui', 'pluginui 写一个带 Space 的小插件:下拉 / ⋯ 菜单 / 删除确认 / 空状态用宿主零件,不自己画', async () => {
+      const msg = '在当前文件夹里新建一个 reading-list 文件夹,给我写一个 Forsion 桌面插件「阅读清单」:带一个 Space,主视图列出我想读的书;顶上能按「书名 / 添加时间」排序;每一行右边有个 ⋯ 菜单,里面有「删除」,删之前要我确认;清单是空的时候要有提示和一个「添加」按钮。数据用 ctx.saveData 存就行。写完在沙箱里跑一下看看,先别装到我的 Forsion 里。';
+      const ev = await run(`live-pluginui-${Date.now()}`, msg, 900_000, { enabledSkillIds: ['local:forsion-plugin'], skillsConfigured: true }, 'desktop/live-harness', undefined, undefined, undefined, { clientCapabilities: ['plugin.sandbox'], phone: desktop });
+      const tool = join(root, 'skills', 'forsion-plugin', 'tools', 'ui-reinvent.mjs');
+      // 负对照里技能目录没有这份文件(那时还没有):判据照样要用它扫产物,从这份脚本旁边的检出拿一份
+      const ui = await import(pathToFileURL(existsSync(tool) ? tool : join(process.env.PLUGINUI_TOOL || '', 'ui-reinvent.mjs')).href);
+      const files = ui.pluginUiFiles(DIR);
+      const main = files.find(([f]) => /\.m?js$/.test(f))?.[1] || '';
+      const used = {
+        select: /\bui\.mountControl\(|\bui\.mount\(\s*['"]select/.test(main),
+        menu: /\bui\.contextMenu\(|\bui\.mount\(\s*['"]menu/.test(main),
+        dialog: /\bui\.(?:confirm|openDialog)\(|\bui\.mount\(\s*['"]dialog/.test(main),
+        empty: /\bui\.mountEmptyState\(|\bui\.mount\(\s*['"]emptyState|\bempty\s*:\s*\{/.test(main),
+      };
+      const notes = ui.scanUi(files);
+      const bad = notes.filter((g) => ['dropdown', 'menu', 'dialog'].includes(g.kind));
+      const sawCheck = ev.toolResults.some((r) => String(r.name).startsWith('plugin_sandbox') && String(r.full || '').includes('UI check'));
+      const sbx = ev.toolCalls.filter((n) => n.startsWith('plugin_sandbox')).length;
+      writeFileSync(join(OUT, 'pluginui-evidence.json'), JSON.stringify({ used, notes, sawCheck, sandboxCalls: sbx, files: files.map(([f, t]) => ({ f, length: t.length })), main }, null, 2));
+      const nUsed = Object.values(used).filter(Boolean).length;
+      const ok = !ev.error && !!main && nUsed >= 3 && !bad.length;
+      return {
+        ok, detail: ev.error || `${main ? `main.js ${main.split('\n').length} 行` : '✗ 没写出 main.js'};零件 ${Object.entries(used).map(([k, v]) => `${k}${v ? '✓' : '✗'}`).join(' ')}(${nUsed}/4);`
+          + `自画 ${notes.map((g) => `${g.kind}×${g.count}`).join(' ') || '0 条'}${bad.length ? ' ←' : ''};沙箱 ${sbx} 次${sawCheck ? ',看到过 UI check' : ''};工具 ${ev.toolCalls.length} 次`,
+        output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls,
+      };
+    });
+  }
   // account(10-10):agent 读得到账号额度(只报百分比)与本对话的上下文 / 步数;账号动作在聊天会话 + 完全通行下照样逐次弹卡。判据与负对照见 lib/account-live.mjs。
   await scenario('account', 'account 「我还剩多少」:账号额度 + 本对话余量,账号动作逐次确认', async () => {
     if (!FAKE_CLOUD) return { ok: false, detail: '给了 TANGU_LIVE_CLOUD_URL:这个场景要用台架自带的假云端(数是已知的),去掉那个环境变量再跑' };
@@ -6823,6 +7083,24 @@ Then reply with only the command output.`,
       const row = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : { ok: false, detail: String(failure?.message || 'Missing evidence').split('\n')[0] };
       record('webpagesui', name, { ...row, ...(failure ? { ok: false } : {}) }, row.ms || 0);
     }
+  }
+  if (ONLY.has('webcardsreal')) {
+    const name = 'webcardsui 真机:本地网页卡 / 服务卡 / Extend 的「网页」「我的网页」卡(本地真 Connect)';
+    let failure;
+    try {
+      const job = promisify(execFile)(process.execPath, [join(root, '../desktop/scripts/webcards-real.live.cjs')], {
+        cwd: join(root, '../desktop'), timeout: 20 * 60_000, maxBuffer: 4 * 1024 * 1024,
+        env: { ...process.env, TANGU_BACKEND_URL: base, TANGU_WP_TOKEN: TOKEN, TANGU_WP_CLOUD: FAKE_CLOUD.url,
+          TANGU_WP_PKG: resolve(opt('extend-pkg', process.env.TANGU_LIVE_EXTEND_PKG || '')), TANGU_WP_OUT: OUT, TANGU_WP_MODEL: MODEL },
+      });
+      const stopUi = () => { try { job.child.kill('SIGTERM'); } catch { /* gone */ } };
+      process.on('exit', stopUi);
+      const ui = await job.finally(() => process.off('exit', stopUi));
+      writeFileSync(join(OUT, 'webcardsui.log'), ui.stdout + ui.stderr);
+    } catch (e) { failure = e; writeFileSync(join(OUT, 'webcardsui.log'), String(e.stdout || '') + String(e.stderr || '') + String(e.message)); }
+    const path = join(OUT, 'webcardsui-evidence.json');
+    const row = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : { ok: false, detail: String(failure?.message || 'Missing evidence').split('\n')[0] };
+    record('webcardsui', name, { ...row, ...(failure ? { ok: false } : {}) }, row.ms || 0);
   }
   await finish();
 } catch (e) {

@@ -8,7 +8,7 @@ import type { ViewProps } from '@lcl/engine/types'
 import { useApp } from '../stores/appStore'
 import { useI18n } from '../i18n'
 import { deleteAgentAvatar, fetchAgentAvatar, getAgentHarness, listAgents, listSkills, listTools, putAgentsMeta, renameAgentDef, saveAgentDef, uploadAgentAvatar } from '../services/backendService'
-import { openAgentProfile, openHumanProfile } from './agentProfileNav'
+import { openAgentCreation, openAgentProfile, openHumanProfile } from './agentProfileNav'
 import { HumanProfile, useMeIdentity } from './HumanProfile'
 import { AgentMemoryPanel } from '../components/AgentMemoryPanel'
 import { AgentLogPanel } from '../components/AgentLogPanel'
@@ -23,7 +23,7 @@ import { TeamProfile } from './TeamProfile'
 import { ProjectProfile, useProjectSubject, useProjectWorkspace } from './ProjectProfile'
 import { AgentSkillsPanel, moveAgentSkillsDraft } from './AgentSkillsPanel'
 import { CapabilityMenu } from '../components/CapabilityMenu'
-import { AgentRemoveDialog } from '../components/RemoveDialog'
+import { AgentUninstallDialog } from '../components/UninstallDialog'
 import { useDetailsSubject } from '../stores/detailsSubject'
 import type { RecordJump } from '../services/recordJump'
 import './agentProfileMessages'
@@ -168,7 +168,7 @@ export function AgentsRosterView() {
   const agent = agents.find((a) => a.slug === selected.slug) || agents[0]
   const creating = selected.creating
   const viewing = (slug: string) => !creating && !selected.me && agent?.slug === slug
-  const setCreating = () => useWorkspace.getState().openView('agent-profile', { reuseKey: 'primary', creating: true, me: false }, 'main')
+  const setCreating = openAgentCreation
   const selectAgent = (slug: string) => { setRosterError(''); openAgentProfile(slug) }
   const emitAgentsChange = () => { window.dispatchEvent(new Event('forsion:agents-changed')); window.tangu?.requestMainAction?.('agents-changed') }
   const filtered = useMemo(() => agents.filter((a) => `${a.name} ${agentDescription(a, t)} ${a.slug}`.toLowerCase().includes(query.toLowerCase())), [agents, query, t])
@@ -194,7 +194,7 @@ export function AgentsRosterView() {
       emitAgentsChange()
     } catch (error: any) { setRosterError(String(error?.message || error)) } finally { setRosterBusy(false); setDragSlug(null) }
   }
-  // 删除走与侧栏同一个确认(同时删除相关文件的勾选项 + store.removeAgent);删掉的是正在看的那个 → 换到名册第一个
+  // 删除走与侧栏同一个卸载确认框(逐项写去向、进回收站);删掉的是正在看的那个 → 换到名册第一个
   const [removing, setRemoving] = useState<NormalAgentDef | null>(null)
   return <aside className="agents-roster">
       {/* 创建入口只留底部那一个(评审 U-25:标题行的 ＋ 与底部链接重复)。 */}
@@ -221,7 +221,7 @@ export function AgentsRosterView() {
       {phone
         ? <ListFab label={t('agentProfile.create')} icon={<Plus />} onClick={() => { setCreating(); setRosterError('') }} />
         : <button className="agent-profile-link agents-roster-create" data-guide-anchor="agent-new" onClick={() => { setCreating(); setRosterError('') }}><Plus size={14} />{t('agentProfile.create')}</button>}
-      {removing && <AgentRemoveDialog agent={removing} onClose={() => setRemoving(null)}
+      {removing && <AgentUninstallDialog slug={removing.slug} name={removing.name} onClose={() => setRemoving(null)}
         onDone={() => { if (agent?.slug === removing.slug) selectAgent(useApp.getState().agentDefs[0]?.slug || '') }} />}
     </aside>
 }

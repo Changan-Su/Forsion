@@ -609,3 +609,45 @@ describe('human/ in the cloud — two devices', () => {
     for (const d of [a, b]) { await d.sync(cloud); d.use(); expect(entriesOf((await loadSchedule('shared'))!).map((e) => e.name).sort()).toEqual(['One', 'Three', 'Two']); }
   });
 });
+
+// 10-28 用户报「本地删除被云端覆盖」时查的 human/ 那半:整份删 HUMAN / SOUL / AGENT.md 会传到云端;
+// MEMORY.md、CALENDAR.db 由旧位置(USER.md、笔记库 Calendar.db)镜像重建 —— 设计如此(整份删除不跨镜像传),不是云端盖回来。
+describe('human/ deletes (10-28)', () => {
+  it('whole-file deletes: three docs stay deleted, the two mirrored files are rebuilt locally', async () => {
+    const cloud = fakeCloud(['human', 'human-folder', 'agent-calendar']);
+    const a = device('a'); await a.enroll(cloud);
+    mkdirSync(join(a.home, 'human'), { recursive: true });
+    for (const f of ['HUMAN.md', 'SOUL.md', 'AGENT.md']) writeFileSync(join(a.home, 'human', f), `${f} body\n`);
+    writeFileSync(a.calendar, CAL([['r1', 'one']]));
+    await a.editMemory(() => '- likes tea\n');
+    await a.sync(cloud); await a.sync(cloud);
+    const after: Record<string, boolean> = {};
+    for (const f of ['HUMAN.md', 'SOUL.md', 'AGENT.md', 'MEMORY.md', 'CALENDAR.db']) {
+      const p = join(a.home, 'human', f);
+      expect(existsSync(p)).toBe(true);
+      rmSync(p); await a.sync(cloud);
+      after[f] = existsSync(p);
+    }
+    expect(after).toEqual({ 'HUMAN.md': false, 'SOUL.md': false, 'AGENT.md': false, 'MEMORY.md': true, 'CALENDAR.db': true });
+    for (const f of ['HUMAN.md', 'SOUL.md', 'AGENT.md']) expect(cloud._rows.get(`__human__\0${f}`)?.deleted).toBe(true);
+    rmSync(a.root, { recursive: true, force: true });
+  });
+
+  it('a line deleted on one device stays deleted on both, in human/, USER.md and the cloud', async () => {
+    const cloud = fakeCloud(['human', 'human-folder', 'agent-calendar']);
+    const a = device('a'); await a.enroll(cloud);
+    await a.editMemory(() => '- likes tea\n- lives in Hangzhou\n- plays piano\n');
+    await a.sync(cloud); await a.sync(cloud);
+    const b = device('b'); await b.enroll(cloud); await b.sync(cloud); await b.sync(cloud);
+    expect(b.human('MEMORY.md')).toContain('Hangzhou');
+    a.use(); await a.editMemory((s) => s.replace('- lives in Hangzhou\n', ''));
+    for (let i = 0; i < 3; i++) { await a.sync(cloud); await b.sync(cloud); }
+    for (const d of [a, b]) {
+      expect(d.human('MEMORY.md')).not.toContain('Hangzhou');
+      expect(readFileSync(join(d.home, 'USER.md'), 'utf8')).not.toContain('Hangzhou');
+    }
+    expect(cloudText(cloud, '__human__', 'MEMORY.md')).not.toContain('Hangzhou');
+    expect(cloudText(cloud, '__user__', 'USER.md')).not.toContain('Hangzhou');
+    rmSync(a.root, { recursive: true, force: true }); rmSync(b.root, { recursive: true, force: true });
+  });
+});

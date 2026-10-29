@@ -8,7 +8,7 @@ import { usePageStore } from '@amadeus/store/pageStore'
 import { openNote, openFile, opensAsTab } from './amadeusNav'
 import { openWsFile, hostTargetFor } from './views/wsFileNav'
 import { whenWorkspaceReady } from './deepLinkInstall'
-import { ensureAmadeusReady } from './amadeusPlugins'
+import { whenAmadeusPluginsReady, ensureAmadeusReady } from './amadeusPlugins'
 import { windowKind } from './windowKind'
 
 const norm = (x: string): string => x.replace(/\\/g, '/').replace(/\/+$/, '')
@@ -41,19 +41,20 @@ function whenVaultKnown(timeoutMs = 5000): Promise<void> {
  *  wsfile 的 params 里有裸文件名 `name`,按全部值比会把库根下的 `a.md` 认成已开着的库外 `~/Desktop/a.md`。 */
 function openTabOf(rel: string): string | undefined {
   const api = (useWorkspace.getState() as unknown as { api?: { panels: Array<{ id: string; params?: Record<string, unknown> }> } }).api
-  const ci = windowsPath(norm(usePageStore.getState().vaultRoot || '') + '/')
+  const ci = windowsPath(norm(rel)) || windowsPath(norm(usePageStore.getState().vaultRoot || '') + '/')
   const same = (v: unknown): boolean => typeof v === 'string' && (ci ? norm(v).toLowerCase() === norm(rel).toLowerCase() : v === rel)
-  return api?.panels.find((p) => !!p.params && Object.entries(p.params).some(([k, v]) => /Path$/.test(k) && same(v)))?.id
+  return api?.panels.find((p) => !!p.params && Object.entries(p.params).some(([k, v]) => (/Path$/.test(k) || k === 'path') && same(v)))?.id
 }
 
 export function openExternalFile(path: string): void {
   const rel = vaultRelOf(path)
   // 已开着 → 直接聚焦那个标签;没开 → 新标签。别用 openNote / openFile 缺省的「就地换掉当前标签」:
   // 用户正看着的东西不该被 Finder 里的一次双击顶掉。
-  const opened = rel ? openTabOf(rel) : undefined
+  const opened = openTabOf(rel ?? norm(path))
   if (opened) useWorkspace.getState().activateLeaf(opened)
   else if (rel && /\.md$/i.test(rel)) void openNote(rel, { newTab: true })
   else if (rel && opensAsTab(rel)) openFile(rel, { newTab: true }) // 库内 PDF 走「默认打开方式」(装了 Better PDF 的人进插件)
+  else if (/\.pdf$/i.test(path)) openFile(norm(path), { newTab: true })
   else openWsFile(hostTargetFor(path, path.split(/[/\\]/).pop() || path))
 }
 
@@ -70,6 +71,7 @@ export function installOpenFiles(): void {
       if (!ps.length) return
       await whenWorkspaceReady()
       await whenVaultKnown()
+      await whenAmadeusPluginsReady().catch((e) => console.error('[open-file] plugin startup failed', e))
       for (const p of ps) openExternalFile(p)
     })
   }

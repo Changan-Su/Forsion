@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { agentSyncDir, atomicSyncWrite, assertSyncPath, readSyncBytes } from './agentSyncPaths.js';
 import { join } from 'node:path';
-import { readdirSync } from 'node:fs';
+import { readdirSync, rmdirSync, rmSync } from 'node:fs';
 import { withMemoryDirectoryLock } from './memoryRepository.js';
 import type { AgentFilesBrain } from '../seams/cloudBrain.js';
 import { agentsDir, DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
@@ -177,4 +177,45 @@ export function captureAgentSyncPermission(slug: string, scope: string, shared =
     if (!current.enabled || (shared && !current.shared) || current.revision !== initial.revision) throw new Error('agent sync consent changed');
     agentSyncDir(slug);
   };
+}
+
+/**
+ * 界面 / 工具删掉的 Agent(10-28):目录连同影子、授权一起没了,下次同步会把云端那份当成「别的设备新建的」整份拉回来。
+ * 删之前按账号记一笔 `agents/.cloudsync-deleted/<slug>/<账号>`,同步先把这个账号云端那份删掉(删除胜,和网页删 Agent 一样)再做别的。
+ * 只记这时还开着同步的账号(有影子的,加上授权 / 总闸里出现过的 —— 第一次上传还没落影子时就删,也得记上):关了同步的 Agent,云端那份不归本机管。
+ * 直接在访达里删文件夹不记,照旧拉回(没有 ≠ 删了)。返回「撤销」:本地没删成时调用,只撤这一次新记的。
+ */
+const REMOVED_DIR = '.cloudsync-deleted';
+const removedDir = (slug: string): string => { agentSyncDir(slug); return assertSyncPath(agentsDir(), join(agentsDir(), REMOVED_DIR, slug)); };
+const SHADOW_RE = /^\.cloudsync-([a-f0-9]{64})\.json$/;
+/** 这个 Agent 现在同步到哪些账号(授权、主开关缺省、已有影子三处取并集,再按授权判)。卸载确认框的「云端副本」那行也看它。 */
+export function agentSyncedScopes(slug: string): string[] {
+  const scopes = new Set([...Object.keys(readPermissions(slug).accounts), ...Object.keys(readDefaults())]);
+  try { for (const name of readdirSync(agentSyncDir(slug))) { const m = SHADOW_RE.exec(name); if (m) scopes.add(m[1]); } } catch { /* 目录已经没了 */ }
+  return [...scopes].filter((scope) => /^[a-f0-9]{64}$/.test(scope) && agentSyncPermission(slug, scope).enabled);
+}
+export function recordAgentRemoval(slug: string): () => void {
+  const added: string[] = [];
+  for (const scope of agentSyncedScopes(slug)) {
+    const file = join(removedDir(slug), scope);
+    if (readSyncBytes(agentsDir(), file) === null) added.push(scope);
+    atomicSyncWrite(agentsDir(), file, String(Date.now()));
+  }
+  return () => { for (const scope of added) clearAgentRemoval(slug, scope); };
+}
+export function pendingAgentRemovals(scope: string): string[] {
+  let slugs: string[];
+  try { slugs = readdirSync(assertSyncPath(agentsDir(), join(agentsDir(), REMOVED_DIR))); } catch { return []; }
+  return slugs.filter((slug) => { try { return readSyncBytes(agentsDir(), join(removedDir(slug), scope)) !== null; } catch { return false; } });
+}
+export function clearAgentRemoval(slug: string, scope: string): void {
+  const dir = removedDir(slug);
+  rmSync(join(dir, scope), { force: true });
+  try { rmdirSync(dir); } catch { /* 还有别的账号没删完 */ }
+}
+/** 从回收站恢复后:撤掉删除记录(不然下轮同步把云端再删一遍),丢掉影子(影子记着「这些文件同步过」,云端却是删除标记,
+ *  会被判成别处删了)。授权 .cloudsync-accounts.json 留着:恢复 = 照原样接着同步,下轮整份重新上传。 */
+export function forgetAgentRemoval(slug: string): void {
+  rmSync(removedDir(slug), { recursive: true, force: true });
+  try { for (const name of readdirSync(agentSyncDir(slug))) if (SHADOW_RE.test(name)) rmSync(join(agentSyncDir(slug), name), { force: true }); } catch { /* 没有影子 */ }
 }

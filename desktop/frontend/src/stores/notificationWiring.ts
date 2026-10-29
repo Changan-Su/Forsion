@@ -14,6 +14,7 @@ import { toLocalDate } from '../views/calendar/dateUtils'
 import type { MdMark } from '@amadeus-shared/mdMarks'
 import type { AmadeusSyncStatus } from '../types'
 import { openPenzorSync, penzorSyncReady } from '../services/syncSetup'
+import { checkQuotaAlerts } from './quotaAlerts'
 
 /** 已弹过的提醒(localStorage:key → 弹出时刻)。key **不含行号** —— 行号会随编辑上下漂,
  *  用「路径 + 提醒时刻 + 文本」才认得出是同一条。7 天前的条目每次启动顺手清掉。 */
@@ -148,6 +149,7 @@ export function installNotificationWiring(): void {
     if (s.runningBySession === prevRunning) return
     const prev = prevRunning
     prevRunning = s.runningBySession
+    if (Object.keys(prev).some((sid) => !s.runningBySession[sid])) void checkQuotaAlerts() // F 段:用完一轮,额度可能变了
     for (const sid of Object.keys(prev)) {
       if (s.runningBySession[sid]) continue
       if (sid === s.activeId) continue // 正看着的会话,结果就在眼前
@@ -162,6 +164,11 @@ export function installNotificationWiring(): void {
       })
     }
   })
+
+  // F. 额度提醒(stores/quotaAlerts.ts,缺省关):不另起轮询 —— 拿到 / 换了模型目录、窗口回到前台、一轮 run 结束(C 段)时
+  //    各判一次;引擎按来源缓存 5 分钟,checkQuotaAlerts 自己再限 60s 一次。
+  useApp.subscribe((s, prev) => { if (s.modelsResp !== prev.modelsResp) void checkQuotaAlerts() })
+  window.addEventListener?.('focus', () => { void checkQuotaAlerts() })
 
   // E. 笔记正文的 `@remind:` 到点提醒。
   // ponytail: 60s 轮询 + 每轮重拉全库标记(主进程索引已在内存里,只是遍历字符串)。天花板 =

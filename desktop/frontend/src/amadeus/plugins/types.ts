@@ -895,6 +895,15 @@ export interface ListDropTarget {
  *  process keeps these files out of the note/page list (its compiler would otherwise rewrite = corrupt them).
  *  The host opens one shared engine view (`amadeus-plugin-file`) that re-derives the type from the file path
  *  at mount time — so a plugin loading after boot still works. */
+/** Per-mounted-file access. External PDFs permit reads of the source and reads/writes
+ * of .<filename>.annot.json (plus timestamped .broken-* recovery copies) only. */
+export interface PluginFileIO {
+  /** Native Save As for an annotated copy; cancel returns null. Never overwrites the source. */
+  saveCopy?(name: string, bytes: Uint8Array): Promise<string | null>
+  readBytes(path: string): Promise<Uint8Array | null>
+  writeBytes(path: string, bytes: Uint8Array): Promise<void>
+}
+
 export interface FileTypeContribution {
   /** Type id, unique within the plugin (kebab-case recommended). */
   id: string
@@ -931,6 +940,9 @@ export interface FileTypeContribution {
    *  Other built-in suffixes (`.excalidraw.md`, `.db`, images) cannot be overridden. Older hosts
    *  ignore this field and return `false` from registerFileType — stand down as documented there. */
   override?: boolean
+  /** Opt in to external desktop PDFs. Use file.io for the source and its annotation sidecar;
+   * ctx.app remains vault-scoped. Older hosts ignore this field. */
+  external?: boolean
   /** Build the editor for one file into the host element; called once per opened instance. Return a
    *  cleanup (flush/save-on-close, clear timers here). Read/write the file via ctx.app.readFile/writeFile.
    *  `file.surface` (2026-08-14, when present): a per-view page surface scoped to this tab — prefer it
@@ -943,8 +955,8 @@ export interface FileTypeContribution {
    *  unsubscribe; the host also drops the subscription when the view closes. */
   mount(
     el: HTMLElement,
-    file: { filePath: string; surface?: PluginPageSurface; onGoto?: (cb: (target: FileGotoTarget) => void) => () => void },
-  ): (() => void) | void
+    file: { filePath: string; io?: PluginFileIO; surface?: PluginPageSurface; onGoto?: (cb: (target: FileGotoTarget) => void) => () => void },
+  ): (() => void | Promise<void>) | void
 }
 
 /** A place inside a file that a link or citation points at (`[[x.pdf#page=3]]`). Only PDFs carry one today. */
@@ -1021,10 +1033,15 @@ export interface ToolResultCall {
 /** A native result card for a tool **your own engine half registered** (ctx.registerToolResultRenderer, 2026-10-19+).
  *  Finished, successful calls of that tool show your card instead of the generic one-line tool record; while the call
  *  runs, when it fails, when `mount` throws, or while your plugin is disabled or reloading, the generic record shows.
- *  A tool your bundle's engine plugins did not register (a core tool, another plugin's tool) is never handed to you. */
+ *  A tool your bundle's engine plugins did not register (a core tool, another plugin's tool) is never handed to you —
+ *  except that signed official Forsion plugins may draw two core tools (2026-10-28+): `publish_web_page` and
+ *  `forsion_account`. The host keeps that list; it cannot be extended from a plugin. */
 export interface ToolResultRendererContribution {
   /** The engine tool name, exactly as your engine half registered it. */
   tool: string
+  /** Narrow which calls get your card (2026-10-28+): return false and that call keeps the generic record, as if you
+   *  had not registered. Gets the parsed arguments. Throwing counts as false. Older hosts ignore it. */
+  match?(call: { tool: string; args: unknown }): boolean
   /** Default `inline`. `desk` = straight into the Agent Desk; falls back to `inline` where there is no Desk (phone, Web
    *  without Desk, Desk turned off). The person can move the card either way afterwards. */
   surface?: ToolResultSurface
@@ -1464,6 +1481,40 @@ export type PluginToolbarControl = {
 }
 export interface PluginControlHandle { update(patch: Partial<Omit<PluginToolbarControl, 'type'>>): void; dispose(): void }
 
+/** A button on `ctx.ui.mountWebCard`. */
+export interface PluginWebCardAction {
+  label: PluginText
+  icon?: PluginIconName | (string & {})
+  /** `danger` = the host's red outline button (take down, delete). Default: the plain small button. */
+  variant?: 'default' | 'primary' | 'danger'
+  disabled?: boolean
+  run(): void
+}
+/** `ctx.ui.mountWebCard` (2026-10-28+). Every text accepts `{ zh, en }` or a function, like the other parts. */
+export interface PluginWebCard {
+  /** `card` (default): large thumbnail on the left, a row of buttons. `row`: a compact list row — small thumbnail,
+   *  name, status and address, plus the ⋯ menu; no note and no buttons. */
+  layout?: 'card' | 'row'
+  name: PluginText
+  /** The pill at the right of the name. `dot` adds the host's process dot (running = still green, as in Background). */
+  status?: { label: PluginText; tone?: 'neutral' | 'ok' | 'muted' | 'danger'; dot?: 'running' | 'stopped' | 'failed' }
+  /** The address line: a URL or a file path. `struck` crosses it out (taken down, stopped); `muted` greys it. */
+  address?: { text: string; icon?: 'globe' | 'file'; struck?: boolean; muted?: boolean }
+  /** One line under the address (size, time, who can open it). Layout `card` only. */
+  note?: PluginText
+  /** An http(s) page the host screenshots for the thumbnail — desktop only, cached per url + `version`; elsewhere, while
+   *  loading and when it fails, a placeholder shows. Omit or null = placeholder. */
+  thumbnail?: { url: string; version?: string } | null
+  /** Placeholder icon from the vocabulary. Default `globe`. */
+  placeholderIcon?: PluginIconName | (string & {})
+  /** Buttons at the left of the button row (layout `card`). */
+  actions?: PluginWebCardAction[]
+  /** Buttons at the right end of the button row (layout `card`). */
+  trailing?: PluginWebCardAction[]
+  /** Rows of the ⋯ menu (both layouts). Omit for no ⋯ button. */
+  menu?: PluginContextMenuEntry[]
+}
+
 /** `ctx.ui.mountEmptyState` and `ListSourceContribution.empty` (2026-10-26+): the host's empty state — icon, one title,
  *  one line saying what will show up here, at most one main button and one secondary link. */
 export interface PluginEmptyState {
@@ -1504,6 +1555,7 @@ export interface PluginUiParts {
   segmented: Omit<PluginToolbarControl, 'type'>
   select: Omit<PluginToolbarControl, 'type'>
   emptyState: PluginEmptyState
+  webCard: PluginWebCard
   icon: { name: PluginIconName | (string & {}); size?: number }
 }
 export interface PluginUiPartHandle<P> { update(patch: Partial<P>): void; dispose(): void }
@@ -1758,13 +1810,17 @@ export interface PluginContext {
     /** The host's empty state in your own view (2026-10-26+) — the same one the built-in views and your list source's
      *  `empty` use. See PluginEmptyState. Feature-detect: `ctx.ui?.mountEmptyState`. */
     mountEmptyState?(el: HTMLElement, opts: PluginEmptyState): { update(patch: Partial<PluginEmptyState>): void; dispose(): void }
+    /** The host's web page card (2026-10-28+): thumbnail, name with a status, one address line, one note line and
+     *  buttons — the card the host itself draws for HTML files and running dev servers in chat, so a page you draw
+     *  reads as the same family. Use it inside a tool result card, a view or a list. Feature-detect on older hosts. */
+    mountWebCard?(el: HTMLElement, card: PluginWebCard): { update(patch: Partial<PluginWebCard>): void; dispose(): void }
     /** Your view's head row (2026-10-26+): the same 32px row `setViewModes` draws, without needing view modes — a title
      *  at the left and your buttons at the right (`handle.actions`). Works together with `setViewModes`: the switch comes
      *  first, then the title, then the buttons of both. `el` = the element `mount()` received. Calling it again on the
      *  same view replaces the previous one; removed on disable / reload / view close. Feature-detect: `ctx.ui?.setViewHead`. */
     setViewHead?(el: HTMLElement, opts?: PluginViewHeadOptions): PluginViewHeadHandle
     /** One typed entry point for the host parts (2026-10-26+): `ctx.ui.mount('menu' | 'popover' | 'dialog' | 'segmented' |
-     *  'select' | 'emptyState' | 'icon', el, props)` → `{ update, dispose }`. Same parts as the calls above; meant for
+     *  'select' | 'emptyState' | 'webCard' | 'icon', el, props)` → `{ update, dispose }`. Same parts as the calls above; meant for
      *  React / Vue plugins, which mount on a ref and dispose in their effect cleanup. Feature-detect: `ctx.ui?.mount`. */
     mount?<K extends keyof PluginUiParts>(name: K, el: HTMLElement, props: PluginUiParts[K]): PluginUiPartHandle<PluginUiParts[K]>
     /** The host tooltip on one of your own elements (2026-10-23+), instead of a native `title` or a hand-made one:
@@ -1980,8 +2036,10 @@ export interface PluginContext {
     registerCompanion(def: import('./deskCompanion').DeskCompanionContribution): import('./deskCompanion').DeskCompanionHandle
   }
   /** 摘要栏插件卡(2026-10-25+,**只在桌面 Tangu 上存在**,同 `ctx.desk`)。往聊天右侧的摘要栏加一张卡,与内置卡
-   *  (进度 / 后台 / 产物 / 来源 / 工作范围 / Agent Desk)同一个栈:用户可折叠、拖动排序,收起状态与顺序由宿主按卡记住;
-   *  插件卡按注册顺序排在 Agent Desk 前面。`title` 给 `{ zh, en }` 跟随界面语言;`defaultCollapsed` 缺省 false。
+   *  (进度 / 后台 / 产物 / 来源 / 工作范围 / Agent Desk)同一个栈:开合跟着内容走(2026-10-29 起)—— `count` 变大就自动展开;
+   *  用户手动开 / 收只管到这一轮对话结束,不落盘;车道放不下时宿主先收掉最久没来新东西的卡、或缩短最后一张的正文。
+   *  顺序由宿主按卡记住(用户拖动 / 右键排序),插件卡按注册顺序排在 Agent Desk 前面。`title` 给 `{ zh, en }` 跟随界面语言;
+   *  `defaultCollapsed` = 没有新内容时收不收(切到一个会话、或卡片在 Agent 没跑的时候出现),缺省 false。
    *  `mount(el, host)` 每个会话的摘要栏各挂一份(换会话 = 卸载重挂,`host.sessionId` 恒定;同屏两个聊天面板挂两份),
    *  返回卸载函数;正文高度上限 240px,超出宿主内滚。`host.update({ count, hidden })` 只改这一份:卡头计数(null = 不显示)、
    *  先不画这张卡(仍挂着,之后可再亮出)。返回 handle 的 `dispose()` 撤卡;禁用 / 重载宿主统一收。

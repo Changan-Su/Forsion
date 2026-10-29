@@ -38,7 +38,12 @@ function createNsisInclude(productId, outputDirectory = __dirname) {
   ].join('\n'))
   writeFileSync(wrapper, [
     include(join(__dirname, 'installer.nsh')),
-    '!macro customHeader', include(registryFile), '!macroend', '',
+    '!macro customHeader', include(registryFile),
+    // Use the stock script so builder still generates and signs its uninstaller.
+    // NSIS resolves the one overridden include from its working directory.
+    `!addincludedir ${quote(resolve(require.resolve('app-builder-lib/package.json'), '..', 'templates/nsis'))}`,
+    `!cd ${quote(require('./windows-installer.cjs').createWindowsInstallerIncludes())}`,
+    '!macroend', '',
   ].join('\n'))
   return wrapper
 }
