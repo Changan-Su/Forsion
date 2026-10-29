@@ -98,6 +98,7 @@ function showZoomHud(): void {
     reset.textContent = useApp.getState().tr('zoomHud.reset')
     reset.hidden = z === endpointDefault
     hud.dataset.open = ''
+    hud.inert = false
     clearTimeout(hudTimer)
     if (!hud.matches(':hover')) hudTimer = setTimeout(hideZoomHud, 1500)
   } catch {
@@ -106,7 +107,9 @@ function showZoomHud(): void {
 }
 
 function hideZoomHud(): void {
-  if (hud) delete hud.dataset.open
+  if (!hud) return
+  delete hud.dataset.open
+  hud.inert = true // 透明后别让 Tab 摸到隐形的「重置」
 }
 
 export function setUiZoom(v: number): void {
@@ -139,6 +142,7 @@ export function resetUiZoom(): void {
 /** 跨窗重放用:按**本窗**当前存值(无值=本端默认)重新应用,不写盘、不广播。 */
 export function applyStoredUiZoom(): void {
   apply(getUiZoom())
+  hideZoomHud() // 别的窗改了比例,本窗还开着的提示数字已过期
 }
 
 /** 首次进入本发布批次时回到端默认；迁移后用户再调的比例继续正常持久化。 */
