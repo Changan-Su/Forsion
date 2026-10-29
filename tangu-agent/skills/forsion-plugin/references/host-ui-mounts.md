@@ -196,6 +196,8 @@ list.addEventListener('drop', async (e) => {
 
 ### Selection bar: ctx.ui.mountSelectionBar and registerSelectionAction scopes (2026-10-13+)
 
+Watched ordinary DOM reading surfaces share continuous line selection bands with chat, notes and result previews. Math is measured as a unit, while native Selection, keyboard extension and copying remain intact. Paint is outside the content DOM and is removed on dispose. Touch pointers and custom PDF/code-editor selection layers retain native paint; `watch: false` continues to use the plugin's own paint and manual `show()` / `hide()`.
+
 The **selection bar** is the strip that appears over selected text. Chat, notes and any plugin view that opts in
 show the same one: the view's own tools plus three shared actions — **Ask Tangu** (hands the text to the side chat
 as a quote), **Translate** (result in a card under the selection) and **⋯** (selection actions from plugins). Which

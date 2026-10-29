@@ -175,6 +175,7 @@ if (!bar) drawOwnMenu(el)                           // 2.13.3 及更早的宿主
 ```
 
 - 缺省由宿主看 `root` 里的 DOM 选区:松开鼠标时出;选区收起、内容滚动或尺寸变了、点到别处时收。输入框和可编辑区里的选区不出。
+- 普通 DOM 阅读选区与聊天、笔记、翻译预览共用连续行带底色；公式按整体测量，保持原生拖选、键盘扩选和复制。绘制层在内容 DOM 外，滚动与缩放后重算，`dispose()` 清理；触屏、PDF 与代码编辑器的专用选区保留原生显示，`watch: false` 继续由插件自己绘制。
 - 宿主看不到的内容(iframe、画布、自己定位的 PDF 文字层)传 `watch: false`,自己调 `bar.show({ text, rect })` 和 `bar.hide()`。`rect` 是选区外接矩形的视口像素(`range.getBoundingClientRect()` 原样给;界面缩放由宿主抵消,不要自己除)。
 - `tools` 是声明式的:一个图标钮(`icon` 取插件图标词表里的名字;为此加了 `highlight`、`underline`、`strikethrough`、`annotate`、`copy`、`cite`),或一个颜色点(`color`)。宿主只画按钮,做什么由 `run` 决定;工具用掉了选区就在 `run` 里清掉选区或调 `bar.hide()`。没有下拉,要更多界面就在 `run` 里开自己的。
 - `ask` 接管「问 Tangu」点了之后做什么(比如带上页码),`false` 去掉这一格;不写就由宿主把文字和 `source` 交给侧栏对话(没有侧栏对话的宿主不画这一枚)。
