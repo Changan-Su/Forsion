@@ -58,6 +58,16 @@ ctx.registerCommand({
 // The view is drawn from host parts (2026-10-26+): view head, toolbar select, ⋯ menu, confirm dialog, empty state and
 // the public .btn classes. They follow theme, language and zoom, so don't hand-make <select>, menus, dialogs or tab bars:
 // check-plugin.mjs --style and the plugin sandbox list any you do. Labels are { zh, en } so a language switch applies at once.
+// Both views (main and Mini) share one store: every change reads the stored counts, applies itself and saves, one at a
+// time, so a view's stale copy never overwrites a number the other view just saved.
+let queue = Promise.resolve()
+const readCounts = (data) => data?.counts || { daily: Number(data?.count) || 0 } // 1.2.0 kept one number under `count`
+const change = (fn) => (queue = queue.catch(() => {}).then(async () => {
+  const counts = { ...readCounts(await ctx.loadData()) }
+  fn(counts)
+  await ctx.saveData({ counts })
+  return counts
+}))
 const COUNTERS = [{ value: 'daily', label: { zh: '每天', en: 'Daily' } }, { value: 'weekly', label: { zh: '每周', en: 'Weekly' } }]
 for (const id of ['counter', 'mini-counter']) {
   ctx.registerView({
@@ -86,10 +96,15 @@ for (const id of ['counter', 'mini-counter']) {
       head.actions.append(pick, add, more)
       const body = el.appendChild(document.createElement('div'))
       body.style.cssText = 'padding:16px;font:var(--ui-font-display) var(--font-ui);color:var(--text);'
-      const save = async (n) => { counts = { ...counts, [counter()]: n }; await ctx.saveData({ counts }); if (!disposed) render() }
-      const inc = async () => { add.disabled = true; try { await save((counts[counter()] || 0) + 1) } finally { if (!disposed) add.disabled = false } }
+      const save = async (fn) => { const next = await change(fn); if (!disposed) { counts = next; render() } }
+      const inc = async () => {
+        const c = counter()
+        add.disabled = true
+        try { await save((all) => { all[c] = (all[c] || 0) + 1 }) } finally { if (!disposed) add.disabled = false }
+      }
       const reset = async () => {
-        if (await ctx.ui.confirm({ title: { zh: '把这个计数器清零?', en: 'Reset this counter?' }, ok: { zh: '清零', en: 'Reset' }, danger: true })) await save(0)
+        const c = counter()
+        if (await ctx.ui.confirm({ title: { zh: '把这个计数器清零?', en: 'Reset this counter?' }, ok: { zh: '清零', en: 'Reset' }, danger: true })) await save((all) => { all[c] = 0 })
       }
       add.onclick = inc
       more.onclick = () => ctx.ui.contextMenu({ anchor: more, align: 'end' }, [
@@ -104,7 +119,7 @@ for (const id of ['counter', 'mini-counter']) {
       const off = view?.onParamsChanged?.((params) => { picker.update({ value: String(params.counterId || 'daily') }); render() })
       Promise.resolve(ctx.loadData()).then((data) => {
         if (disposed) return
-        counts = data?.counts || { daily: Number(data?.count) || 0 } // 1.2.0 kept one number under `count`
+        counts = readCounts(data)
         render()
       })
       render()

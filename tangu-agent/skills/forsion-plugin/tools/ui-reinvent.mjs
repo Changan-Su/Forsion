@@ -4,10 +4,12 @@
 // Used by `check-plugin.mjs --style` and by the engine's plugin_sandbox status, so the agent writing a plugin sees the
 // same notes in both. Heuristic on purpose: only patterns with a named replacement, one line per kind. Lines marked
 // `forsion-style: off` (CSS for an iframe page or an exported file) and comment lines are skipped.
-import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync, lstatSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 const MAX_FILE = 4 * 1024 * 1024;
+const MAX_TOTAL = 12 * 1024 * 1024;
+const MAX_FILES = 200;
 /** An element made in code or markup: createElement('x'), h('x'), jsx('x'), <x …>. */
 const made = (tag) => new RegExp(`(?:createElement|\\bh|\\bel|\\bjsxs?|\\bjsxDEV)\\(\\s*['"\`]${tag}['"\`]|<${tag}[\\s>/]`, 'g');
 const HOST_CLASSES = new Set(['ctx-menu', 'ctx-menu-scroll', 'ui-popover']);
@@ -69,12 +71,23 @@ export function scanUi(files) {
   return [...groups.values()].sort((a, b) => b.count - a.count);
 }
 
-/** The files check-plugin --style reads: the manifest's main file plus every .css file (no dot folders, no node_modules). */
+/** The files check-plugin --style reads: the manifest's main file plus every .css file (no dot folders, no node_modules).
+ *  Runs on every plugin_sandbox status, so it never follows a symlinked folder (a link back to the root would read the same
+ *  files thousands of times) and stops at MAX_FILES / MAX_TOTAL. */
 export function pluginUiFiles(dir) {
   let main = 'main.js';
   try { const m = JSON.parse(readFileSync(join(dir, 'manifest.json'), 'utf8')).main; if (typeof m === 'string' && m) main = m; } catch {}
   const out = [];
-  const read = (rel) => { try { const p = join(dir, rel); if (statSync(p).size <= MAX_FILE) out.push([rel, readFileSync(p, 'utf8')]); } catch {} };
+  let total = 0;
+  const read = (rel) => {
+    try {
+      const p = join(dir, rel);
+      const size = statSync(p).size;
+      if (size > MAX_FILE || total + size > MAX_TOTAL || out.length >= MAX_FILES) return;
+      total += size;
+      out.push([rel, readFileSync(p, 'utf8')]);
+    } catch {}
+  };
   if (existsSync(join(dir, main))) read(main);
   const walk = (rel, depth) => {
     if (depth > 6) return;
@@ -82,9 +95,10 @@ export function pluginUiFiles(dir) {
     for (const n of names) {
       if (n.startsWith('.') || n === 'node_modules') continue;
       const r = rel ? `${rel}/${n}` : n;
-      let st; try { st = statSync(join(dir, r)); } catch { continue; }
+      let st; try { st = lstatSync(join(dir, r)); } catch { continue; }
+      if (st.isSymbolicLink()) continue;
       if (st.isDirectory()) walk(r, depth + 1);
-      else if (n.endsWith('.css')) read(r);
+      else if (n.endsWith('.css') && r !== main) read(r);
     }
   };
   walk('', 0);

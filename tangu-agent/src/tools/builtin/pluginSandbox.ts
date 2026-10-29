@@ -109,22 +109,28 @@ export function resolvePluginDir(raw: unknown, cwd: string | undefined): string 
 }
 
 /** 插件自己画了宿主已有零件的地方(下拉 / 菜单 / 对话框 / 标签栏 / 自摆浮层 / 手写按钮 / iframe):技能 tools/ui-reinvent.mjs,
- *  与 check-plugin --style 同一份扫描。文字是我们自己的,只带 file:line 不引插件源码,所以放在数据区外;扫不动就什么都不说。 */
-export async function uiNotes(dir: string): Promise<string> {
+ *  与 check-plugin --style 同一份扫描。每类一行是我们自己的话,放数据区外;位置(file:line)里的文件名是插件起的,圈进数据区。
+ *  budget = 这段最多占的字数(start 的结果末尾嵌着状态 JSON,整条要留在 48k 结果帽里);扫不动 / 放不下就什么都不说。 */
+export async function uiNotes(dir: string, budget = 6000): Promise<string> {
   try {
     const tools = path.join(builtinSkillsDir(), 'forsion-plugin', 'tools');
     const ui = await import(pathToFileURL(path.join(tools, 'ui-reinvent.mjs')).href);
-    const groups = ui.scanUi(ui.pluginUiFiles(dir));
-    if (!groups.length) return '';
-    const lines = (ui.formatUiNotes(groups, 8) as string[]).map((l) => fenceSafe(l.replace(/[\u0000-\u001f]/g, ' ')));
-    return '\n\nUI check (report only: the plugin still loads, and it may keep its own UI): it draws these itself although the host has a part for them. '
+    const groups = (ui.scanUi(ui.pluginUiFiles(dir)) as Array<{ kind: string; what: string; use: string; count: number; at: string[] }>).slice(0, 8);
+    if (!groups.length || budget < 1500) return '';
+    const head = '\n\nUI check (report only: the plugin still loads, and it may keep its own UI): it draws these itself although the host has a part for them. '
       + 'Switching to the host part makes it match Forsion and follow theme, language and zoom; how to use them: references/host-ui-mounts.md, section "Host parts", in the forsion-plugin skill.\n'
-      + `${lines.join('\n')}${groups.length > 8 ? `\n- … ${groups.length - 8} more kind(s)` : ''}\n`
-      + `Full list: node "${path.join(tools, 'check-plugin.mjs')}" "${dir}" --style`;
+      + groups.map((g) => `- ${g.what} ×${g.count} → ${g.use}`).join('\n')
+      + `\nFull list: run tools/check-plugin.mjs from the forsion-plugin skill on the plugin folder with --style.`;
+    const where = groups.map((g) => `${g.kind}: ${g.at.slice(0, 3).map((a) => a.slice(-120)).join(', ')}`).join('\n');
+    const room = budget - head.length - 400;
+    return room < 200 ? head : head + dataBlock(where.slice(0, Math.min(room, 3000)));
   } catch {
     return '';
   }
 }
+
+/** capToolResult 从 48k 起截头尾;留 2k 余量。 */
+const RESULT_ROOM = 46_000;
 
 const STATUS_HINT = 'Use plugin_sandbox_inspect to look at it again (screenshot / logs / run a command).';
 
@@ -174,8 +180,10 @@ const controlTool: ToolDef = {
     const st = statusOf(r);
     if (!st) return 'Error: plugin_sandbox: the desktop answered with something that is not a sandbox status (an older Forsion?). Nothing more is known.';
     const shot = attach(ctx, r, 'plugin-sandbox.png');
-    return `${action === 'reset' ? 'Reset the sandbox data and started it again.\n' : ''}${describeStatus(st)}${await uiNotes(st.dir)}${logsBlock(st)}\n`
-      + `${shot ? 'A screenshot of the sandbox window is attached. ' : ''}${STATUS_HINT}\n${embedSandboxStatus(st)}`;
+    const head = `${action === 'reset' ? 'Reset the sandbox data and started it again.\n' : ''}${describeStatus(st)}`;
+    const tail = `${logsBlock(st)}\n${shot ? 'A screenshot of the sandbox window is attached. ' : ''}${STATUS_HINT}\n${embedSandboxStatus(st)}`;
+    // 状态 JSON 嵌在末尾,整条超了结果帽就会被截坏:界面体检只拿剩下的地方
+    return head + await uiNotes(st.dir, RESULT_ROOM - head.length - tail.length) + tail;
   },
 };
 
@@ -239,7 +247,7 @@ const inspectTool: ToolDef = {
         : `Error: plugin_sandbox_inspect: no screenshot came back${ctx.collectImage ? '' : ' (this model cannot receive images here)'}.\n${describeStatus(st)}`;
     }
     const ran = action === 'command' ? `Ran command "${fenceSafe(String(opArgs.command))}" in the sandbox${r.error ? ` (it reported: ${fenceSafe(str(r.error, 300))})` : ''}.\n` : '';
-    return ran + describeStatus(st) + await uiNotes(st.dir);
+    return ran + describeStatus(st) + await uiNotes(st.dir, RESULT_ROOM - ran.length - 9000);
   },
 };
 
