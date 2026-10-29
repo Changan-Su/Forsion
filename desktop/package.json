@@ -350,6 +350,7 @@
     "check:facade": "node scripts/facade-scope.check.cjs",
     "check:sessionmode": "node scripts/session-mode.check.cjs",
     "check:orbitside": "node scripts/orbitside.check.cjs",
+    "check:orbit-create": "node scripts/orbit-create.check.cjs",
     "check:sidewidth": "node scripts/side-width.check.cjs",
     "check:mainsplitwidth": "node scripts/main-split-sidewidth.electron.cjs",
     "check:firstclick": "node scripts/first-click.check.cjs",
