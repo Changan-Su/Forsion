@@ -100,7 +100,9 @@ async function main() {
     const expose = 'contextBridge.exposeInMainWorld("tangu", api);'
     const preloadCode = fs.readFileSync(preload, 'utf8')
     assert.ok(preloadCode.includes(expose), 'locate the actual bridge export before removing one capability')
-    fs.writeFileSync(noPickerPreload, preloadCode.replace(expose, 'delete api.pickDirectory;\n' + expose))
+    const syncGate = 'const syncPresent = cloudPresent().has(SYNC_IPC.get);'
+    assert.ok(preloadCode.includes(syncGate), 'locate the desktop-only vault sync bridge')
+    fs.writeFileSync(noPickerPreload, preloadCode.replace(expose, 'delete api.pickDirectory;\n' + expose).replace(syncGate, 'const syncPresent = false;'))
     const nextWindow = app.waitForEvent('window')
     await app.evaluate(async ({ BrowserWindow }, opts) => {
       const w = new BrowserWindow({ width: 1100, height: 850, webPreferences: { preload: opts.preload, contextIsolation: true, sandbox: false } })
@@ -109,14 +111,18 @@ async function main() {
     const noPicker = await nextWindow
     noPicker.on('pageerror', e => errors.push(String(e)))
     await noPicker.waitForSelector('.t2o-head')
-    check('No-picker fixture really has no directory capability', await noPicker.evaluate(() => !window.tangu?.pickDirectory))
+    check('Web/mobile capability fixture has neither a directory picker nor desktop vault-side filtering', await noPicker.evaluate(() => !window.tangu?.pickDirectory && !window.amadeusSync))
     await noPicker.evaluate(() => localStorage.setItem('tangu_locale', 'zh')); await noPicker.reload(); await noPicker.waitForSelector('.t2o-head')
+    await noPicker.locator('.t2o [data-filter="all"]').click()
+    await noPicker.locator('.t2o-row', { hasText: 'Researcher' }).waitFor()
     await noPicker.locator('.t2o [data-filter="project"]').click()
     await noPicker.locator('.t2o-head .t2s-special').click()
     await noPicker.locator('.dialog-input').waitFor()
     check('Without a picker, New project opens the existing name prompt', (await noPicker.locator('.dialog-title').innerText()) === '新项目')
     await noPicker.locator('.dialog-input').fill('New cloud project')
     await noPicker.locator('.dialog-btn[data-primary]').click()
+    await noPicker.waitForTimeout(300)
+    await noPicker.screenshot({ path: path.join(OUT, 'without-picker-observation.png') })
     await noPicker.locator('.t2o .t2s-group', { hasText: 'New cloud project' }).waitFor()
     check('Named project is sent to the API and appears immediately in the project list', cloudProjects.includes('New cloud project'))
     await noPicker.screenshot({ path: path.join(OUT, 'without-picker-created.png') })
