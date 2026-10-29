@@ -2965,12 +2965,14 @@ export function findFileType(
   const n = path.toLowerCase()
   const claims = (o: OwnedFileType): boolean => o.item.extensions.some((ext) => n.endsWith(ext.toLowerCase()))
   if (isBuiltinFileType(path)) {
-    // 绝对路径 = 库外文件(聊天引用里的本机 PDF):插件只读得到库内路径,一律留给内置阅读器。
-    if (!isOverridableBuiltinType(path) || isHostPath(path)) return undefined
+    if (!isOverridableBuiltinType(path)) return undefined
+    // External file views must opt in and have the desktop scoped file bridge.
+    const external = isHostPath(path)
+    if (external && !amadeus?.readExternalPdf) return undefined
     const ext = OVERRIDABLE_BUILTIN_SUFFIXES.find((e) => n.endsWith(e))!
     const pick = fileOpeners[ext]
     if (pick === BUILTIN_OPENER) return undefined
-    const cands = overriders(list, n)
+    const cands = overriders(list, n).filter((o) => !external || o.item.external === true)
     return (cands.find((o) => o.pluginId === pick) ?? cands[0])?.item
   }
   return list.find(claims)?.item

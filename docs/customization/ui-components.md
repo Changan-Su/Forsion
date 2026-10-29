@@ -398,3 +398,5 @@ color-mix(in srgb, var(--green) 14%, transparent)
 ```
 
 - 检查：`node check-plugin.mjs <插件目录> --style` 扫 `main.js` 和目录里的 `.css`，报私有类名、清单外或已弃用的 token、多余兜底、写死的颜色、4px 及以上的圆角和带颜色的阴影。只报告，不改变退出码。给另一份文档用的 CSS（iframe 里的页面、导出文件）在同一行写 `/* forsion-style: off */` 跳过。
+
+`ctx.ui.popover` 的 DOM 外壳关闭时与 `OverlayAt` 共用 `ui-menu-exit` 和退场 token；业务清理立即执行，只有 inert 的视觉副本留到动画结束。减少动态效果遵循宿主规则。

@@ -321,8 +321,12 @@
 /* Header uses the same 30px leading slot and 8px gap as first-level orbit rows. */
 .t2o-head .t2s-special { padding-inline: 14px 6px; gap: 8px; min-height: 40px; }
 .t2o-head .t2s-special-ic { width: 30px; height: 30px; align-items: center; justify-content: center; }
+.t2o-head .t2s-special-group { margin-bottom: 0; }
+/* Keep one 4px gap between the creation row and list, matching the selected round-2 demo. */
+.t2o-head ~ .t2o-projects .t2s-scroll { padding-top: 4px; }
+.t2o-head ~ .t2o-projects .t2s-scroll > .t2s-group:first-child { margin-top: 0; }
 /* 胶囊左右各 12px(5.17,原先对齐 30px 图标左缘的 20px):880 窄窗下四格各只剩 44px、字贴着格边。 */
-.t2o-filters.t2s-vaultseg { width: auto; height: 28px; margin: 0 12px 8px; flex-shrink: 0; }
+.t2o-filters.t2s-vaultseg { width: auto; height: 28px; margin-block: 4px; margin-inline: 12px; flex-shrink: 0; }
 .t2o-filters.t2s-vaultseg button { flex: 1; min-width: 0; padding-inline: 3px; font-size: var(--ui-font-caption, 11px); }
 .t2o-filters .t2s-vaultseg-thumb { width: calc((100% - 4px) / 4); }
 

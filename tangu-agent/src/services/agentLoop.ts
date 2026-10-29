@@ -301,11 +301,28 @@ export function enqueueRun(sessionId: string, runId: string): void {
 }
 
 /** 非阻塞启动一个 run（不 await）。AbortController 同步注册，保证早到的 abort 也生效。仅由 enqueueRun/advanceQueue 调用。 */
+async function waitMcpAdmission(ready: Promise<void>, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) throw new AbortLikeError();
+  let stop!: () => void;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    stop = () => reject(new AbortLikeError());
+    signal.addEventListener('abort', stop, { once: true });
+  });
+  try { await Promise.race([ready, aborted]); }
+  finally { signal.removeEventListener('abort', stop); }
+}
+
 export function startRun(runId: string): void {
   if (exiting) return; // 进程正在退出:行留在 queued,下次启动按持有者已死认领
+  // Reconcile while the admission barrier still observes idle. Register the controller synchronously
+  // afterwards so early aborts work; dispatch waits for this generation to finish connecting.
+  const mcpReady = deps().mcp?.reloadConfig?.() ?? Promise.resolve();
   const ac = new AbortController();
   abortControllers.set(runId, ac);
-  const task = withTaskProjectQueue(runId, ac.signal, () => dispatchRun(runId, ac)).catch(async (err) => {
+  const task = withTaskProjectQueue(runId, ac.signal, async () => {
+    await waitMcpAdmission(mcpReady, ac.signal);
+    return dispatchRun(runId, ac);
+  }).catch(async (err) => {
     // Preparation precedes the main loop's resource setup. It must publish a real terminal
     // outcome too; otherwise a hydration failure releases the queue but leaves the UI hanging.
     const aborted = !(err instanceof DockerCleanupError) && (ac.signal.aborted || err?.name === 'AbortError' || err instanceof AbortLikeError);
@@ -328,7 +345,9 @@ export function startRun(runId: string): void {
   // 远端 steer 染的色在**所有**收尾路径清掉(准备阶段失败 / 外部引擎分支不经 runLoop 的 finally —— Codex 二轮)。
   // P1-K2:活动登记与中止原因同样在所有收尾路径清掉(dispatchRun 登记,这里是唯一一定会跑到的出口)。
   }).finally(() => {
-    runTasks.delete(runId); clearRunRemoteTaint(runId); unregisterRun(runId); abortReasons.delete(runId);
+    runTasks.delete(runId);
+    if (!exiting) void deps().mcp?.reloadConfig?.().catch(e => console.warn('[mcp] settings reload failed:', e?.message));
+    clearRunRemoteTaint(runId); unregisterRun(runId); abortReasons.delete(runId);
     // 父子会话:子会话这一轮的结果送回主会话 / 主会话收它名下积着的回报(终态已落库、队列已推进)。
     if (!exiting) void onChildRunSettled(runId).catch((e) => console.error('[agent-core] child session report failed:', e?.message || e));
   });
@@ -2314,6 +2333,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     let mcpTools: Map<string, import('../mcp/toolBridge.js').LoadedMcpTool> | undefined;
     if (deps().mcp && !planMode && ps.externalTools) {
       const enabledMcp = Array.isArray(agentConfig.enabledMcpServers) ? agentConfig.enabledMcpServers : undefined;
+      await deps().mcp!.reloadConfig?.();
       const snapshot = deps().mcp!.toolsForRun(enabledMcp);
       if (snapshot.size) {
         mcpTools = snapshot;

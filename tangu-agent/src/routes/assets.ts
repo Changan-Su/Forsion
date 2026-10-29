@@ -177,6 +177,7 @@ export function approxToolTokens(defs: unknown[]): number {
 
 router.get('/agent/tools', authMiddleware, async (req: AuthRequest, res) => {
   try {
+    await deps().mcp?.reloadConfig?.();
     // 走 profileStore(appId 可指定):清单反映 admin 覆盖(tool_builtins 白名单等)后的**生效集**,
     // 与 run 的 resolveProfile 同源——admin 面板/Tangu Manager 看到的即真实可用工具。
     const appIdQ = typeof req.query.appId === 'string' && req.query.appId ? req.query.appId : undefined;

@@ -28,7 +28,7 @@ import { activateAllPlugins } from '../plugins/bootstrap.js';
 import { seedExampleCommand } from '../services/customCommands.js';
 import { seedBuiltinSkills } from '../skills/localSkills.js';
 import { remoteLockGuard } from './remoteLockGuard.js'; // P1-K2
-import { drainRunsForExit } from '../services/agentLoop.js';
+import { activeRunCount, drainRunsForExit } from '../services/agentLoop.js';
 import { attachRealtimeVoice } from '../services/realtimeVoice.js';
 
 import { printEffectiveConfig } from './diagnostics.js';
@@ -93,8 +93,8 @@ async function main(): Promise<void> {
   await runBaseSchema(); // base schema 先于 runMigration(后者对 chat_sessions 做 ALTER)
   const { brain, providers } = buildBrain(cfg);
 
-  // MCP(~/.tangu/mcp.json):启动时连一次,server 集进程级冻结(prompt 缓存纪律,配置变更须重启)。
-  const mcp = createMcpManager();
+  // MCP:启动加载;用户配置只在没有活动 run 时重连,每个 run 的工具快照保持冻结。
+  const mcp = createMcpManager(undefined, { canReload: () => activeRunCount() === 0 });
   bootPhase = `mcp(${enabledServers(loadMcpConfig()).map(([name]) => name).join(', ') || '无'})`; // 唯一全由用户配置决定的启动步骤,点名是哪几个
   await mcp.start();
   bindPluginMcp(mcp); // 插件自带的 MCP server(manifest mcpServers)随插件启停加进 / 移出这个 manager

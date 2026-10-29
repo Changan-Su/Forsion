@@ -1,3 +1,5 @@
+import { publicMcpUrl } from '../../../shared/mcpConfig'
+import { McpImportDialog, type McpImportDraft } from './McpImportDialog'
 import { PRODUCT } from '../product'
 import { ModelPickerSettings } from './ModelPickerSettings'
 import { WebSearchSettings } from './WebSearchSettings'
@@ -757,8 +759,10 @@ export const SettingsModal: React.FC<{
   // MCP 页页头合计的分母:本机新对话会用的那个模型(MCP 状态与 models 都来自本机引擎;焦点在别的电脑时也按本机算),
   // 没选过就落到本机目录的 defaultModelId(渲染处)
   const defaultChatModelId = useApp((s) => defaultModelOf(s, HOME_REF) || '')
-  const [editMcp, setEditMcp] = useState<{ name: string; isNew: boolean; command: string; argsText: string; url: string; transport: 'auto' | 'stdio' | 'http' | 'sse'; envText: string } | null>(null)
+  const [editMcp, setEditMcp] = useState<{ name: string; isNew: boolean; command: string; argsText: string; url: string; transport: 'auto' | 'stdio' | 'http' | 'sse'; envText: string; original?: McpServerConfigEntry } | null>(null)
   const [mcpMsg, setMcpMsg] = useState('')
+  const [showMcpImport, setShowMcpImport] = useState(false)
+  const [mcpImportDraft, setMcpImportDraft] = useState<McpImportDraft>({ json: '', name: '' })
 
   // Obsidian 式插件:清单 + 每插件设置页(已启用且有 settings 的插件在「扩展」组下成一级 nav 项)。
   const [pluginAgents, setPluginAgents] = useState<NormalAgentDef[]>([])
@@ -846,12 +850,24 @@ export const SettingsModal: React.FC<{
     void listTools(homeTarget()).then((t) => setMcpStatus(t.mcp ?? [])).catch(() => setMcpStatus([]))
   }
 
-  const writeMcp = (next: Record<string, McpServerConfigEntry>, msg: string): void => {
-    void window.tangu!.writeMcpConfig!({ mcpServers: next }).then((c) => {
+  const writeMcp = async (next: Record<string, McpServerConfigEntry>, msg: string, base = mcpServers): Promise<boolean> => {
+    return window.tangu!.writeMcpConfig!({ mcpServers: next, base }).then((c) => {
       setMcpServers(c.mcpServers)
       setMcpMsg(msg)
-    }).catch((e) => setMcpMsg(`${t('settings.toast.saveFailed')}${ipcErrorText(e)}`)) // 原因码(如 mcp-name-reserved)译成当前语言
+      return true
+    }).catch((e) => { setMcpMsg(`${t('settings.toast.saveFailed')}${ipcErrorText(e)}`); return false }) // 原因码(如 mcp-name-reserved)译成当前语言
   }
+
+  useEffect(() => {
+    if (!p.open || tab !== 'mcp' || !window.tangu?.readMcpConfig) return
+    let alive = true
+    const poll = () => {
+      void window.tangu!.readMcpConfig!().then(c => { if (alive) setMcpServers(c.mcpServers) }).catch(() => {})
+      void listTools(homeTarget()).then(r => { if (alive) setMcpStatus(r.mcp ?? []) }).catch(() => {})
+    }
+    const timer = setInterval(poll, 2000)
+    return () => { alive = false; clearInterval(timer) }
+  }, [p.open, tab])
 
   const refreshAuth = (): void => {
     if (!window.tangu?.authStatus) return
@@ -2524,11 +2540,22 @@ export const SettingsModal: React.FC<{
 
                 {tab === 'mcp' && (
                   <>
+                    {showMcpImport && <McpImportDialog draft={mcpImportDraft} onDraft={setMcpImportDraft} pluginNames={(mcpStatus || []).filter(s => s.origin).map(s => s.server)} onClose={() => setShowMcpImport(false)} onSaved={r => { setMcpServers(r.mcpServers); setMcpMsg(t('mcpImport.saved', { added: r.added.length, replaced: r.replaced.length })); setShowMcpImport(false); setMcpImportDraft({ json: '', name: '' }); refreshMcp() }} />}
                     <div className="field">
-                      <label>{t('settings.mcp.label')}</label>
+                      <div className="mcp-settings-heading"><label>{t('settings.mcp.label')}</label>
+                      {!editMcp && (
+                        <div className="mcp-settings-actions"><button
+                          className="btn ghost sm"
+                          onClick={() => setEditMcp({ name: '', isNew: true, command: '', argsText: '', url: '', transport: 'auto', envText: '' })}
+                        >
+                          <Plus size={13} /> {t('settings.mcp.add')}
+                        </button>{window.tangu?.importMcpConfig && <button className="btn primary sm" onClick={() => setShowMcpImport(true)}>{t('mcpImport.open')}</button>}</div>
+                      )}
+                      </div>
                       <div className="hint" style={{ marginBottom: 8 }}>
                         {t('settings.mcp.intro').split(/(\{path\}|\{tool\})/).map((part, i) => part === '{path}' ? <code key={i}>~/.forsion/mcp.json</code> : part === '{tool}' ? <code key={i}>{t('settings.mcp.toolPattern')}</code> : part)}
                       </div>
+                      <div className="hint" style={{ marginBottom: 8 }}>{t('mcpImport.agentHint')}</div>
                       {mcpTotalSummary()}
                       {Object.keys(mcpServers).length > 0 && (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 10 }}>
@@ -2542,7 +2569,7 @@ export const SettingsModal: React.FC<{
                                 <span className="file-name">
                                   <b>{name}</b>
                                   <span style={{ color: 'var(--text-muted)', marginLeft: 8, fontSize: 'var(--ui-font-meta, 12px)' }}>
-                                    {sc.command ? `${sc.command} ${(sc.args || []).join(' ')}` : sc.url}
+                                    {sc.command ? `${sc.command} ${(sc.args || []).join(' ')}` : publicMcpUrl(sc.url)}
                                   </span>
                                 </span>
                                 {sc.enabled !== false && mcpTokensLabel(st)}
@@ -2562,6 +2589,7 @@ export const SettingsModal: React.FC<{
                                   title={t('settings.btn.edit')}
                                   onClick={() => setEditMcp({
                                     name,
+                                    original: sc,
                                     isNew: false,
                                     command: sc.command || '',
                                     argsText: (sc.args || []).join(' '),
@@ -2610,14 +2638,6 @@ export const SettingsModal: React.FC<{
                           </div>
                         )
                       })()}
-                      {!editMcp && (
-                        <button
-                          className="btn ghost sm"
-                          onClick={() => setEditMcp({ name: '', isNew: true, command: '', argsText: '', url: '', transport: 'auto', envText: '' })}
-                        >
-                          <Plus size={13} /> {t('settings.mcp.add')}
-                        </button>
-                      )}
                       {mcpMsg && !editMcp && <div className="hint" style={{ marginTop: 6 }}>{mcpMsg}</div>}
                     </div>
 
@@ -2687,7 +2707,7 @@ export const SettingsModal: React.FC<{
                           <button
                             className="btn primary sm"
                             disabled={!editMcp.name || (!editMcp.command && !editMcp.url)}
-                            onClick={() => {
+                            onClick={async () => {
                               // 设备 MCP 保留命名空间(dev / dev_*):新名字当场拦下,盘上存量的放行(同主进程口径)
                               if (newReservedMcpNames({ [editMcp.name]: true }, mcpServers).length) {
                                 setMcpMsg(t('ipcerr.mcpNameReserved', { detail: editMcp.name }))
@@ -2699,14 +2719,20 @@ export const SettingsModal: React.FC<{
                                 if (i > 0) env[line.slice(0, i).trim()] = line.slice(i + 1).trim()
                               }
                               const entry: McpServerConfigEntry = {
-                                ...(editMcp.command ? { command: editMcp.command.trim(), args: editMcp.argsText.split(/\s+/).filter(Boolean) } : {}),
+                                ...editMcp.original,
+                                ...(editMcp.command ? { command: editMcp.command.trim(), args: editMcp.original && editMcp.argsText === (editMcp.original.args || []).join(' ') ? (editMcp.original.args || []) : editMcp.argsText.split(/\s+/).filter(Boolean) } : {}),
                                 ...(editMcp.url ? { url: editMcp.url } : {}),
                                 ...(editMcp.transport !== 'auto' ? { transport: editMcp.transport } : {}),
-                                ...(Object.keys(env).length ? { env } : {}),
+                                ...(Object.keys(env).length ? { env: editMcp.original && editMcp.envText === Object.entries(editMcp.original.env || {}).map(([k, v]) => `${k}=${v}`).join('\n') ? editMcp.original.env : env } : {}),
                                 enabled: mcpServers[editMcp.name]?.enabled !== false,
                               }
-                              writeMcp({ ...mcpServers, [editMcp.name]: entry }, t('settings.mcp.savedReconnecting'))
-                              setEditMcp(null)
+                              if (!editMcp.command) { delete entry.command; delete entry.args }
+                              if (!editMcp.url) delete entry.url
+                              if (editMcp.transport === 'auto') delete entry.transport
+                              if (!Object.keys(env).length) delete entry.env
+                              const base = editMcp.original ? { ...mcpServers, [editMcp.name]: editMcp.original } : { ...mcpServers }
+                              if (editMcp.isNew) delete base[editMcp.name]
+                              if (await writeMcp({ ...mcpServers, [editMcp.name]: entry }, t('settings.mcp.savedReconnecting'), base)) setEditMcp(null)
                             }}
                           >
                             {t('settings.btn.save')}

@@ -320,6 +320,7 @@ export interface MirrorTestResult {
 
 /** ~/.tangu/mcp.json 一项。 */
 export interface McpServerConfigEntry {
+  cwd?: string
   command?: string
   args?: string[]
   env?: Record<string, string>
@@ -796,8 +797,9 @@ declare global {
       asrLocalDownload?(): Promise<{ ok: boolean; ready: boolean }>
       asrLocalRemove?(): Promise<{ ok: boolean }>
       onAsrLocalProgress?(cb: (ev: { received: number; total: number }) => void): () => void
+      importMcpConfig?(cfg: { config: unknown; name?: string; replaceNames?: string[]; expected?: Record<string, McpServerConfigEntry> }): Promise<{ mcpServers: Record<string, McpServerConfigEntry>; added: string[]; replaced: string[]; skipped: string[] }>
       readMcpConfig?(): Promise<{ mcpServers: Record<string, McpServerConfigEntry> }>
-      writeMcpConfig?(cfg: { mcpServers: Record<string, McpServerConfigEntry> }): Promise<{ mcpServers: Record<string, McpServerConfigEntry> }>
+      writeMcpConfig?(cfg: { mcpServers: Record<string, McpServerConfigEntry>; base?: Record<string, McpServerConfigEntry> }): Promise<{ mcpServers: Record<string, McpServerConfigEntry> }>
       discoveryScan?(): Promise<DiscoveryResult>
       discoveryImportSkills?(ids: string[]): Promise<{ imported: string[] }>
       discoveryImportMcp?(names: string[]): Promise<{ imported: string[]; reserved?: string[] }>

@@ -1,3 +1,4 @@
+import { applyMcpSnapshot, mergeMcpImport, parseMcpInput } from '../shared/mcpConfig'
 import { assertMarketplaceRequirements } from '../shared/marketplace'
 import { mergeSyncContent,withContentWriteLock,setOfflineContentOwner } from './contentSyncHost'
 import { asrBackendFor } from './asrSelection'
@@ -3522,15 +3523,29 @@ app.whenReady().then(async () => {
     }
   }
   ipcMain.handle('mcp:read', async () => ({ mcpServers: await readMcpServers() }))
-  ipcMain.handle('mcp:write', async (_e, cfg: { mcpServers: Record<string, any> }) => {
-    if (!cfg || typeof cfg.mcpServers !== 'object') throw new Error('非法 MCP 配置')
-    // dev / dev_* 是设备 MCP 的保留命名空间(shared/mcpNames.ts):新加的一律拒,盘上存量的放行(引擎加载时跳过、状态报错)
-    const reserved = newReservedMcpNames(cfg.mcpServers, await readMcpServers())
-    if (reserved.length) throw new Error(`${MCP_NAME_RESERVED}: ${reserved.join(', ')}`)
-    await saveHomeSection('mcp', { mcpServers: cfg.mcpServers }) // 唯一真源:config.json mcp 段(chmod 600)
-    const stored = await loadConfig()
-    if (stored.mode === 'managed') void ensureBackend() // 重启后端重连 MCP(进程级冻结语义)
-    return { mcpServers: cfg.mcpServers }
+  ipcMain.handle('mcp:write', async (_e, cfg: { mcpServers: Record<string, any>; base?: Record<string, any> }) => {
+    const fallback = await readMcpServers()
+    let servers: Record<string, any> = {}
+    await saveHomeSection('mcp', (sec: any) => {
+      const current = sec === undefined ? fallback : sec?.mcpServers ?? {}
+      const reserved = cfg?.mcpServers && typeof cfg.mcpServers === 'object' ? newReservedMcpNames(cfg.mcpServers, current) : []
+      if (reserved.length) throw new Error(`${MCP_NAME_RESERVED}: ${reserved.join(', ')}`)
+      servers = applyMcpSnapshot(current, cfg?.mcpServers, cfg?.base ?? current)
+      return { ...sec, mcpServers: servers }
+    })
+    // The engine reconciles MCP settings at idle via /agent/tools or run settlement; never restart an active reply.
+    return { mcpServers: servers }
+  })
+  ipcMain.handle('mcp:import', async (_e, cfg: { config: unknown; name?: string; replaceNames?: string[]; expected?: Record<string, any> }) => {
+    const incoming = parseMcpInput(cfg?.config, cfg?.name)
+    if (cfg.replaceNames !== undefined && (!Array.isArray(cfg.replaceNames) || cfg.replaceNames.some(n => typeof n !== 'string'))) throw new Error('Invalid MCP replacement names')
+    const fallback = await readMcpServers()
+    let result!: ReturnType<typeof mergeMcpImport>
+    await saveHomeSection('mcp', (sec: any) => {
+      result = mergeMcpImport(sec === undefined ? fallback : sec?.mcpServers ?? {}, incoming, cfg.replaceNames, cfg.expected)
+      return { ...sec, mcpServers: result.servers }
+    })
+    return { mcpServers: result.servers, added: result.added, replaced: result.replaced, skipped: result.skipped }
   })
 
   // ── 拖入式主题(~/.tangu/themes/<id>/{theme.json,theme.css}):主进程读盘 → 渲染端 <style> 注入 ──

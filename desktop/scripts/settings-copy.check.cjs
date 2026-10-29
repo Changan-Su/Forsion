@@ -149,8 +149,8 @@ async function main() {
       const f = document.querySelector('.settings-sub--mcp .field')
       return { label: f?.querySelector('label')?.textContent, codes: [...(f?.querySelector('.hint')?.querySelectorAll('code') || [])].map((c) => c.textContent), add: [...f?.querySelectorAll('button') || []].map((b) => b.textContent?.trim()).find((x) => x?.includes('MCP')) }
     })
-    check('C8 MCP:标题「MCP 服务器」,路径与工具名是代码样式,按钮「添加 MCP 服务器」',
-      mcp.label === 'MCP 服务器' && mcp.codes.join('|') === '~/.forsion/mcp.json|mcp__服务器__工具' && mcp.add === '添加 MCP 服务器', mcp)
+    check('C8 MCP:标题「MCP 服务器」,工具名是代码样式,按钮「添加 MCP 服务器」',
+      mcp.label === 'MCP 服务器' && mcp.codes.join('|') === 'mcp__服务器__工具' && mcp.add === '添加 MCP 服务器', mcp)
 
     // ── B 5.6 状态栏 ──
     fl = await openSettings('statusbar')
