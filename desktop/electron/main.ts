@@ -25,12 +25,13 @@ import { basename, dirname, isAbsolute, join, relative } from 'path'
 import { pathToFileURL } from 'url'
 import { readFile, writeFile, mkdir, readdir, stat, lstat, rename, cp, rm } from 'fs/promises'
 import { writeHostTextFile } from './hostTextWrite'
-import { createSerialQueue, lockedUpdateJson, writePrivateJson } from './configWrite'
+import { clearRecoveryNotice, createSerialQueue, lockedUpdateJson, readJsonRecovering, readRecoveryNotice, writePrivateJson } from './configWrite'
 import { existsSync, mkdirSync, realpathSync, writeFileSync, renameSync, rmSync, watch as fsWatch } from 'fs'
 import { ensureCliInstalled } from './cliInstall'
 import { PRODUCT } from './product'
 import { readSpaceIconDataUrl } from './spaceIcon'
 import { bindDevTanguHome, forsionHomeDir, tanguDataDir, migrateForsionHome, migrateEngineData, migratePair, setDevMode, defaultWorkspaceDir as forsionWorkspaceDir } from './forsionHome'
+import { moveToDesktopTrash } from './trashWriter'
 import { privateHostReason } from './netGuard'
 import { execFile, execFileSync, spawn } from 'child_process'
 import { homedir, hostname, networkInterfaces } from 'os'
@@ -48,6 +49,7 @@ import { randomBytes } from 'node:crypto'
 import { loadTanguCreds, saveTanguCreds, forsionAccountId, loadAccountCloudSettings, saveAccountCloudSettings } from './forsionAuth'
 import { createAccountCore } from './accountCore'
 import { importMcp, importSkills, scanAll } from './discovery'
+import { localProvidersFor, scanLocalProviders, type LocalProviderCandidate } from './discovery/providers'
 import { checkForUpdates, downloadUpdate, installUpdate, canInstallUpdate, betaChannelOn, getUpdaterStatus, updateSourcePref, detectMainland, switchUpdateSource, openUpdateInstaller } from './updater'
 import { parseSourcePref } from '../shared/updateSource'
 import { fetchWebsiteReleases } from './websiteReleases'
@@ -209,15 +211,14 @@ async function loadTanguEnvFile(): Promise<void> {
 // ── ~/.tangu/config.json:与包内 core/config.ts 同格式的「唯一真源」。桌面读写各段(providers/mcp/
 //    cloud/browser/wechat/sandbox/workspace)落此文件;后端(standalone)同读。段存在即权威,缺失回落 legacy。
 const homeConfigPath = (): string => join(tanguHomeDir(), 'config.json')
-async function readHomeConfig(): Promise<Record<string, any>> {
-  try {
-    const p = JSON.parse(await readFile(homeConfigPath(), 'utf8'))
-    if (!p || typeof p !== 'object' || Array.isArray(p)) throw new Error('Invalid config.json: expected an object')
-    return p
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {}
-    throw error // Never overwrite an unreadable security configuration with defaults.
-  }
+/** 坏文件(零字节 / 半截)先从 config-backup/config.json.bak 恢复;恢复不了抛 —— Never overwrite an unreadable security configuration with defaults. */
+const readHomeConfig = (): Promise<Record<string, any>> => readJsonRecovering(homeConfigPath())
+/** 会写恢复标记的两份(config.json、引擎写的 provider-auth.json;后者可能是软链,标记在真身旁边)。 */
+const recoverableConfigFiles = (): string[] => {
+  const auth = join(forsionHomeDir(), 'provider-auth.json')
+  let real = auth
+  try { real = realpathSync(auth) } catch { /* 还没登录过 */ }
+  return [homeConfigPath(), real]
 }
 /** config.json 的读改写:引擎 / CLI 同写这份,持跨进程写锁在写入那一刻的内容上改(configWrite.ts 的 lockedUpdateJson;
  *  mutate 必须同步,返回 undefined = 不写)。原子落位(唯一临时名 + rename,0600 含 token/apiKey):截断直写或共用 .tmp 名
@@ -438,6 +439,10 @@ interface TanguStoredConfig {
   translateModelId: string
   /** 辅助模型 · 补全(插件 ctx.tangu.fim 的行内补全用;落 config.json models.fim;缺省 = 目录里第一个补全模型)。 */
   fimModelId: string
+  /** 额度用完时改用的模型(落 config.json models.quotaFallback;空 = 停下报错)。引擎 llm/quotaRelay.ts 读。 */
+  quotaFallbackModelId: string
+  /** 换之前先问我(models.quotaFallbackAsk):开着时停在失败卡上让人选。 */
+  quotaFallbackAsk: boolean
   /** 默认语音识别模型 id(语音输入转写用;持久化到 config.json asr.modelId;缺省=跟随 app 级 asr 默认)。 */
   asrModelId: string
   /** 语音输入偏好后端:local=本地 SenseVoice(需下载);cloud=自带-key/Forsion 云端。缺省 cloud。 */
@@ -546,6 +551,8 @@ const DEFAULT_CONFIG: TanguStoredConfig = {
   visionMode: 'auto',
   translateModelId: '',
   fimModelId: '',
+  quotaFallbackModelId: '',
+  quotaFallbackAsk: false,
   asrModelId: '',
   asrBackend: 'cloud',
   lastApprovalMode: 'auto-edit',
@@ -795,6 +802,8 @@ async function loadConfig(): Promise<TanguStoredConfig> {
       visionModelId: auxModels.vision || '',
       translateModelId: auxModels.translate || '',
       fimModelId: auxModels.fim || '',
+      quotaFallbackModelId: typeof auxModels.quotaFallback === 'string' ? auxModels.quotaFallback : '',
+      quotaFallbackAsk: auxModels.quotaFallbackAsk === true,
       visionMode: auxModels.visionMode === 'always' || auxModels.visionMode === 'off' ? auxModels.visionMode : 'auto',
     } : {}),
   }
@@ -868,6 +877,8 @@ function applyHomePatch(home: Record<string, any>, patch: Partial<TanguStoredCon
   if ('visionMode' in patch) { auxModels.visionMode = patch.visionMode; mT = true }
   if ('translateModelId' in patch) { auxModels.translate = patch.translateModelId; mT = true }
   if ('fimModelId' in patch) { auxModels.fim = patch.fimModelId; mT = true }
+  if ('quotaFallbackModelId' in patch) { auxModels.quotaFallback = patch.quotaFallbackModelId; mT = true }
+  if ('quotaFallbackAsk' in patch) { auxModels.quotaFallbackAsk = patch.quotaFallbackAsk === true; mT = true }
   if ('sandbox' in patch) { home.sandbox = patch.sandbox; oT = true }
   if ('hostSandbox' in patch) { home.hostSandbox = normalizeHostSandboxConfig(patch.hostSandbox); oT = true }
   if ('defaultWorkspaceDir' in patch) { home.workspace = patch.defaultWorkspaceDir; oT = true }
@@ -2907,6 +2918,8 @@ app.whenReady().then(async () => {
   })
 
   ipcMain.handle('config:get', () => effectiveConfig())
+  ipcMain.handle('config:recoveryNotice', (e) => (isTrustedSender(e) ? readRecoveryNotice(recoverableConfigFiles()) : null))
+  ipcMain.handle('config:clearRecoveryNotice', (e) => (isTrustedSender(e) ? clearRecoveryNotice(recoverableConfigFiles()) : undefined))
   registerDocumentTaskIpc(ipcMain, join(app.getPath('userData'), 'document-task-receipts.json'), isTrustedSender)
   deviceSecrets.registerSecretsIpc(ipcMain, { isTrustedSender, refreshUnitHost }) // P1-K5:secrets:status / retry / resetUnitPairing / relaunch
   registerRemoteSessionsIpc(ipcMain, remoteSessions, isTrustedSender) // P1-K4:remoteSessions:get / setEnabled / setMaxApprovalMode / revoke
@@ -3610,6 +3623,26 @@ app.whenReady().then(async () => {
     if (stored.mode === 'managed') void ensureBackend()
     return list
   })
+  // 导入本机配置(electron/discovery/providers.ts):打开提供方页时查,最多一分钟一次;导入按 id 在主进程重读,key 不经渲染端
+  let localScan: { at: number; list: LocalProviderCandidate[] } | null = null
+  const localScanOpts = async () => { const u = (await loadConfig()).cloudUrl; try { return { skipHosts: u ? [new URL(u).hostname] : [] } } catch { return {} } }
+  ipcMain.handle('providers:scanLocal', async (_e, force?: boolean) => {
+    if (!force && localScan && Date.now() - localScan.at < 60_000) return localScan.list
+    localScan = { at: Date.now(), list: await scanLocalProviders(await readProvidersFile(), await localScanOpts()) }
+    return localScan.list
+  })
+  ipcMain.handle('providers:importLocal', async (_e, ids: string[]) => {
+    const opts = await localScanOpts()
+    const add = await localProvidersFor(Array.isArray(ids) ? ids : [], await readProvidersFile(), opts)
+    localScan = null
+    // 选的那几条在原来的应用里刚改过(指纹变了)或已经加过:一条都没取到就如实报,界面重扫一遍让人重选
+    if (!add.length) throw new Error('import_stale')
+    const list = await updateProvidersFile((cur) => [...cur, ...add.filter((a) => !cur.some((p) => p.providerId === a.providerId))])
+    localScan = null
+    const stored = await loadConfig()
+    if (stored.mode === 'managed') void ensureBackend()
+    return list
+  })
   ipcMain.handle('providers:delete', async (_e, providerId: string) => {
     const list = await updateProvidersFile((cur) => cur.filter((p) => p.providerId !== providerId))
     const stored = await loadConfig()
@@ -4080,12 +4113,24 @@ app.whenReady().then(async () => {
   // ── 后端插件卸载:只动 ~/.tangu/plugins(用户目录);<pkg>/plugins 首方插件结构性安全(不在这里,删不到)。
   // manifest id 可能 ≠ 目录名,须读 manifest 映射。设置清理走后端 DELETE /agent/plugins/:id,重启由前端触发。
   ipcMain.handle('plugins:userInstalled', () => readUserPluginDirs(join(tanguDataDir(), 'plugins')))
-  ipcMain.handle('plugins:uninstall', async (_e, id: string) => marketPluginUpdater.exclusive(async () => {
+  // movedSlug:新版引擎(DELETE ?trash=1)已经把文件夹挪进回收站,这里只撤商店的安装记录。文件夹还在(引擎不在 / 旧引擎)
+  // 也不硬删 —— 确认框说的是进回收站,由主进程挪(restorer=desktop,恢复后需重扫引擎插件)。
+  ipcMain.handle('plugins:uninstall', async (_e, id: string, movedSlug?: string) => marketPluginUpdater.exclusive(async () => {
     if (!isSafeSlug(id)) throw new Error('invalid-plugin-id') // 原因码,渲染层 ipcErrorText 译
     const hit = (await readUserPluginDirs(join(tanguDataDir(), 'plugins'))).find((p) => p.id === id)
-    if (!hit) throw new Error('not-user-plugin') // 内置/首方插件不可卸载
+    if (!hit) {
+      if (typeof movedSlug === 'string' && isSafeSlug(movedSlug)) { await marketPluginUpdater.forget('plugin', movedSlug); return { ok: true } }
+      throw new Error('not-user-plugin') // 内置/首方插件不可卸载
+    }
     await marketPluginUpdater.forget('plugin', hit.slug)
-    await rm(join(tanguDataDir(), 'plugins', hit.slug), { recursive: true, force: true })
+    await moveToDesktopTrash({ ref: id, name: id, paths: [{ path: join(tanguDataDir(), 'plugins', hit.slug), role: 'files' }], extra: { engine: true } })
+    return { ok: true }
+  }))
+  // 卸载走确认框(Agent / 技能 / Forsion 插件进回收站)之后,撤掉商店的安装记录,别让更新器去更新一个已经不在的目录。
+  ipcMain.handle('market:forget', async (e, type: string, slug: string) => marketPluginUpdater.exclusive(async () => {
+    if (!isTrustedSender(e)) throw new Error('Untrusted sender')
+    if (!marketItemDir(tanguHomeDir(), type, slug)) throw new Error('invalid-plugin-id') // 原因码,渲染层 ipcErrorText 译
+    await marketPluginUpdater.forget(type, slug)
     return { ok: true }
   }))
 

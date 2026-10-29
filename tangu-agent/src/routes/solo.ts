@@ -12,7 +12,8 @@ import { Router } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { mkdirSync } from 'node:fs';
 import { authMiddleware, AuthRequest } from '../core/http.js';
-import { query, getDbType } from '../core/db.js';
+import { query } from '../core/db.js';
+import { soloPredicate, type SoloKind } from '../services/sessionCleanup.js';
 import { deps } from '../seams/runtime.js';
 import { getAgent, isValidSlug, libDirOf, resolveMemorySlug } from '../agents/agentRegistry.js';
 import { engineLibDir } from '../core/tanguHome.js';
@@ -23,7 +24,6 @@ import { withKeyLock } from '../core/keyLock.js';
 
 const router = Router();
 const ENGINE_ID_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/i;
-type SoloKind = 'agent' | 'engine';
 
 function ensureLocal(res: any): boolean {
   if (!deps().profile.capabilities.hostExec) {
@@ -60,13 +60,9 @@ async function resolveSolo(kind: string, id: string): Promise<{ kind: SoloKind; 
   return null;
 }
 
-/** 活动私聊会话:未归档 + kind='user' + agent_config 里的轨道身份键等于 id(按方言取 JSON;不写 COALESCE 默认值——
- *  历史会话缺键就是不是私聊,绝不能把它们算进默认 agent 的私聊集合)。 */
+/** 活动私聊会话:未归档的那条(谓词见 sessionCleanup.soloPredicate)。 */
 async function activeSolo(userId: string, appId: string, kind: SoloKind, id: string): Promise<any | null> {
-  const key = kind === 'agent' ? 'soloAgentSlug' : 'soloEngineId';
-  const pred = getDbType() === 'sqlite'
-    ? `(agent_config IS NOT NULL AND json_valid(agent_config) AND json_type(agent_config) = 'object' AND json_extract(agent_config, '$.${key}') = ?)`
-    : `(agent_config IS NOT NULL AND jsonb_typeof(agent_config) = 'object' AND (agent_config ->> '${key}') = ?)`;
+  const pred = soloPredicate(kind);
   const rows = await query<any[]>(
     `SELECT ${SESSION_COLS} FROM chat_sessions WHERE user_id = ? AND app_id = ? AND archived = ? AND kind = 'user' AND ${pred}
      ORDER BY updated_at DESC LIMIT 1`,

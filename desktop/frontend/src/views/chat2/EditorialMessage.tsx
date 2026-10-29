@@ -74,6 +74,7 @@ import { formatDateTime, formatMessageTime } from '../../format/time'
 
 import { TaskCards, TaskTraces, type TaskLanding } from './TaskCards'
 import { MuseApprovalLine, MuseTodoCards, MuseTodoTraces, ProactiveMark, isProactive } from './MuseDm'
+import { FallbackLine, FallbackModelName, QuotaChips, QuotaRemindChip, QUOTA_RE, isQuotaText, quotaResetFromError, stripQuotaAsk } from './QuotaRelay'
 import { CHILD_UPDATE_OPEN, ChildUpdateLine, ForkBlock, ForkScope, childIdsOf } from './ChildSessions'
 import { APPROVAL_UPDATE_OPEN, INQUIRY_UPDATE_OPEN, approvalForCall, parseApprovalUpdate, parseInquiryUpdate, pickPlanInquiry, type ApprovalOutcome } from './approvalQueue'
 import { isRemoteApprover, wasDecidedHere } from '../../components/ApprovalCard'
@@ -180,6 +181,9 @@ const ERR_RULES: Array<[RegExp, string]> = [
   // 引擎自家错误码(agentLoop publish 的 error 字段是裸码):精确规则放前面
   [SUB_EXPIRED_RE, 'chat.err.subExpired'], // 比下面通用的 401 更具体,必须排在它前面
   [/token_quota_exceeded/i, 'chat.err.quota'],
+  [/masking_failed/, 'chat.err.maskFailed'], // 引擎 llm/outboundMask.ts:开着却跑不了 → 这一轮不发
+  [/masking_blocked/, 'chat.err.maskBlocked'],
+  [QUOTA_RE, 'chat.err.quotaUsed'], // 订阅额度 / 账单配额用完:几小时才重置,不是限流(必须排在 429 前面)
   [/engine_unavailable_remote/i, 'chat.err.engineRemote'], // 契约 C6:远程污点 run 不进外部引擎
   [/run_cost_exceeded/i, 'chat.err.runCost'],
   [/input_too_large/i, 'chat.err.inputTooLarge'],
@@ -189,12 +193,17 @@ const ERR_RULES: Array<[RegExp, string]> = [
   [/terminated|ECONNRESET|socket hang up|premature close/i, 'chat.err.dropped'],
   [/ETIMEDOUT|timed? ?out/i, 'chat.err.timeout'],
   [/(^|\D)(401|403)(\D|$)|unauthorized|invalid[ _-]?api[ _-]?key/i, 'chat.err.auth'],
-  [/(^|\D)429(\D|$)|rate[ _-]?limit|insufficient[ _-]?quota/i, 'chat.err.rate'],
+  [/(^|\D)429(\D|$)|rate[ _-]?limit|per ?minute|allocated quota exceeded/i, 'chat.err.rate'],
   [/(^|\D)5\d\d(\D|$)|bad gateway|overloaded/i, 'chat.err.server'],
 ]
 export function humanizeRunError(raw: string | undefined, t: (k: string, v?: Record<string, unknown>) => string): string {
   if (!raw) return t('chat.error')
-  const hit = ERR_RULES.find(([re]) => re.test(raw))
+  raw = stripQuotaAsk(raw)
+  const hit = ERR_RULES.find(([re, key]) => re.test(raw) && (key !== 'chat.err.quotaUsed' || isQuotaText(raw)))
+  if (hit?.[1] === 'chat.err.quotaUsed') {
+    const time = quotaResetFromError(raw)
+    return `${t(time ? 'chat.err.quotaUsedAt' : 'chat.err.quotaUsed', { time })}(${raw})`
+  }
   return hit ? `${t(hit[1])}(${raw})` : raw
 }
 
@@ -287,6 +296,8 @@ function RunErrorRow({ msg, sessionId, modelId, handlers }: { msg: UiMessage; se
       <div className="t2-tool err">
         <span className="t2-status-err">✕ {humanizeRunError(msg.error, t)}</span>
         <ReloginChip error={msg.error} modelId={modelId} />
+        <QuotaRemindChip error={msg.error} sessionId={sessionId} modelId={modelId} />
+        <QuotaChips error={msg.error} messageId={msg.id} sessionId={sessionId} modelId={modelId} />
       </div>
       {(canRetry || (handlers?.onCopy && msg.error)) && (
         <div className="t2-retry-row">
@@ -719,10 +730,12 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
   })
 
   return (
+    <>
+    {msg.fallback && <FallbackLine fb={msg.fallback} />}
     <div ref={setAsst} className="t2-asst" id={`tocmsg-${msg.id}`} data-streaming={msg.status === 'streaming' ? '' : undefined}>
       <div className="t2-avatar" style={!avatarUrl && msg.agentColor ? { background: msg.agentColor, color: '#fff' } : undefined}>{avatarUrl ? <img src={avatarUrl} alt="" /> : firstChar(msg.agentName || agentNameFallback || 'Tangu')}</div>
       <div className="t2-asst-col">
-        <div className="t2-name" style={msg.agentColor ? { color: msg.agentColor } : undefined}>{msg.agentName || agentNameFallback || 'Tangu'}{msg.status === 'streaming' && <span className="t2-dot" />}</div>
+        <div className="t2-name" style={msg.agentColor ? { color: msg.agentColor } : undefined}>{msg.agentName || agentNameFallback || 'Tangu'}{msg.fallback && <FallbackModelName fb={msg.fallback} />}{msg.status === 'streaming' && <span className="t2-dot" />}</div>
         {isProactive(msg) && <ProactiveMark at={msg.timestamp} />}
         {msg.systemPrompt && <SystemPromptBlock content={msg.systemPrompt} />}
         {(() => {
@@ -759,7 +772,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
               return parts.length ? (
                 <Fragment key={i}>
                   {parts.map((part, k) => part.t === 'tools'
-                    ? <ToolGroup key={`tools-${part.events.map((ev) => ev.id).join('-')}-${k + skip}`} events={part.events} running={msg.status === 'streaming'} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} />
+                    ? <ToolGroup key={`tools-${part.events.map((ev) => ev.id).join('-')}-${k + skip}`} events={part.events} running={msg.status === 'streaming'} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} sessionId={runSid} />
                     : part.t === 'marketplace'
                       ? <MarketPluginCards key={`market-${part.event.id}`} event={part.event} />
                     : part.t === 'sandbox'
@@ -776,11 +789,11 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
                 </Fragment>
               ) : null
             })
-            const head = (!!msg.reasoning || !!headEvents) && <ToolGroup key="proc-head" events={headEvents || []} running={streaming} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} {...think(nodes.every((n) => n == null))} />
+            const head = (!!msg.reasoning || !!headEvents) && <ToolGroup key="proc-head" events={headEvents || []} running={streaming} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} sessionId={runSid} {...think(nodes.every((n) => n == null))} />
             return <>{head}{nodes}</>
           }
           // 老序:插件卡片挪到尾部(trailingCards),不在这一行里再列一遍
-          const head = (!!msg.reasoning || !!msg.toolEvents?.length) && <ToolGroup key="proc-head" events={(msg.toolEvents || []).filter((ev) => !cardOf(ev))} running={streaming} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} {...think(!body)} />
+          const head = (!!msg.reasoning || !!msg.toolEvents?.length) && <ToolGroup key="proc-head" events={(msg.toolEvents || []).filter((ev) => !cardOf(ev))} running={streaming} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} sessionId={runSid} {...think(!body)} />
           return (
             <>
               {head}
@@ -895,7 +908,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
         {msg.inquiries?.filter((q) => q !== planInq && q.status !== 'pending').map((q) => (q.status === 'expired' && handlers?.onJumpDeck
           ? <div key={q.inquiryId} className="t2-dim t2-apv-pointer" data-inquiry-expired={q.inquiryId}><CircleX size={12} /><span>{t('chat.inquiry.expiredLine', { q: q.question })}</span></div>
           : <InquiryCard key={q.inquiryId} req={q} onAnswer={() => {}} />))}
-        {msg.status === 'error' && <RunErrorRow msg={msg} sessionId={runSid} modelId={modelId} handlers={handlers} />}
+        {msg.status === 'error' && <RunErrorRow msg={msg} sessionId={runSid} modelId={msg.fallback?.to ?? modelId} handlers={handlers} />}
         {msg.status === 'stopped' && <div className="t2-dim">⏹ {t('chat.aborted')}</div>}
         {/* run 统计行放操作条之前:流式 → 完成时它原地不动,悬停出现的操作条长在下面,不会把它顶走。 */}
         {footer}
@@ -917,6 +930,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
         )}
       </div>
     </div>
+    </>
   )
 }
 

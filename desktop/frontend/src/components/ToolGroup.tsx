@@ -13,6 +13,7 @@ import { toolDiffText } from './toolDiff'
 import { registerMessages, useI18n } from '../i18n'
 import type { ApprovalRequest, ToolEvent } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { ImageGenerationLoader } from '../views/chat2/ImageGenerationLoader'
+import { MaskTag, MaskedText, collectMasked, type MaskedValue } from './MaskedValues'
 import { isSelfWriteReceipt } from '../services/selfUpdates'
 import '../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 import { kickToolOwners, useEngineTools } from '../amadeus/plugins/toolResultCards'
@@ -220,7 +221,7 @@ const ThinkRow: React.FC<{ reasoning: string; label: string; thinking: boolean }
   )
 }
 
-const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc; running: boolean; waiting: boolean; asking?: boolean }> = ({ ev, desc, running, waiting, asking }) => {
+const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc; running: boolean; waiting: boolean; asking?: boolean; masked: MaskedValue[] }> = ({ ev, desc, running, waiting, asking, masked }) => {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
   // 只在展开时构造 diff(P1:文件修改类工具详情渲染 diff 而非裸 JSON)
@@ -237,7 +238,7 @@ const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc; running: boolean; waiting: 
         <span className="tool-row-copy">
           <span className={`tool-row-copy-text${active ? ' chat-run-shimmer-text' : ''}`}>
             <span className="tool-row-verb">{verb}</span>
-            <span className={`tool-row-target${desc.isFile ? ' file' : ''}`}>{desc.target}</span>
+            <span className={`tool-row-target${desc.isFile ? ' file' : ''}`}><MaskedText text={desc.target} masked={masked} /></span>
           </span>
         </span>
         <Stat d={desc} />
@@ -256,14 +257,14 @@ const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc; running: boolean; waiting: 
               {ev.arguments && (
                 <details className="tool-raw-args">
                   <summary>{t('tool.argsLabel')}</summary>
-                  {fmtArgs(ev.arguments)}
+                  <MaskedText text={fmtArgs(ev.arguments)} masked={masked} />
                 </details>
               )}
             </>
-          ) : ev.arguments ? (<><div className="label">{t('tool.argsLabel')}</div>{fmtArgs(ev.arguments)}</>) : null}
+          ) : ev.arguments ? (<><div className="label">{t('tool.argsLabel')}</div><MaskedText text={fmtArgs(ev.arguments)} masked={masked} /></>) : null}
           {/* 挂起的占位结果是写给模型的英文说明,对人换成一句本地化的状态 */}
           {ev.parked ? (<><div className="label">{t('tool.resultLabel')}</div>{t(ASKS_YOU.has(ev.name) ? (asking ? 'tool.waitingYou' : 'tool.parked.askPast') : waiting ? 'tool.parked.waiting' : 'tool.parked.past')}</>)
-            : ev.result !== undefined && (<><div className="label">{t('tool.resultLabel')}</div>{toolResultText(ev, t)}</>)}
+            : ev.result !== undefined && (<><div className="label">{t('tool.resultLabel')}</div><MaskedText text={toolResultText(ev, t)} masked={masked} /></>)}
         </div>
       </AnimatedCollapse>
     </div>
@@ -289,7 +290,9 @@ export const ToolGroup: React.FC<{
   reasoningMs?: number
   /** 思考正在进行(这一行是消息里最后一块时才传 true)。 */
   thinking?: boolean
-}> = ({ events: allEvents, running, approvals, awaitingAnswer, reasoning, reasoningMs, thinking: thinkingProp }) => {
+  /** 这组调用所在的会话(「从不遮住」写进跑这个会话的那台引擎)。 */
+  sessionId?: string
+}> = ({ events: allEvents, running, approvals, awaitingAnswer, reasoning, reasoningMs, thinking: thinkingProp, sessionId }) => {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
   const pluginName = usePluginToolName()
@@ -337,6 +340,7 @@ export const ToolGroup: React.FC<{
   const curDesc = curIdx >= 0 ? descs[curIdx] : null
   const curVerb = curDesc ? toolVerb(curDesc, groupedEvents[curIdx], t) : ''
   const showList = !!reasoning || groupedEvents.length > 0
+  const masked = collectMasked(groupedEvents)
 
   return (
     <>
@@ -367,6 +371,7 @@ export const ToolGroup: React.FC<{
               </span>
             )}
             </RollLine>
+            {masked.length > 0 && <MaskTag masked={masked} sessionId={sessionId} />}
             <span className="tool-group-status">
               {anyParked ? (parkedAsk
                 ? <PauseCircle size={13} style={{ color: 'var(--accent-ink)' }} data-waiting-you="1" aria-label={t('tool.waitingYou')}><title>{t('tool.waitingYou')}</title></PauseCircle>
@@ -377,7 +382,7 @@ export const ToolGroup: React.FC<{
           <AnimatedCollapse open={open}>
             <div className="tool-group-list">
               {!!reasoning && <ThinkRow reasoning={reasoning} label={thinkLabel} thinking={thinking} />}
-              {groupedEvents.map((ev, i) => <ToolRow key={ev.id} ev={ev} desc={descs[i]} running={!!running} waiting={waitingIds.has(ev.id)} asking={asksYou(ev)} />)}
+              {groupedEvents.map((ev, i) => <ToolRow key={ev.id} ev={ev} desc={descs[i]} running={!!running} waiting={waitingIds.has(ev.id)} asking={asksYou(ev)} masked={masked} />)}
             </div>
           </AnimatedCollapse>
         </div>

@@ -975,7 +975,6 @@ const zh: Dict = {
   'settings.amadeusPlugins.agentOwned': '{agent} 自建 Space',
   'settings.amadeusPlugins.blockedInvalid': '插件清单无效：{reason}',
   'settings.amadeusPlugins.uninstall': '卸载',
-  'settings.amadeusPlugins.uninstallConfirm': '确定卸载插件「{name}」？其文件夹将被整体删除；内嵌的引擎插件/Space 一并移除（已播种的 Agent 会保留，可在 Agents 页手动删）。',
   'settings.amadeusPlugins.uninstalled': '已卸载「{name}」',
   'settings.amadeusPlugins.uninstalledRestartPending': '「{name}」文件已删除，但引擎重启未完成——内嵌工具可能仍在运行，请手动重启后端',
   'settings.amadeusPlugins.bundleEngine': '引擎插件 ×{n}',
@@ -1058,7 +1057,6 @@ const zh: Dict = {
   'settings.plugins.rescanNone': '重扫完成：没有变化',
   'settings.plugins.rescanHint': '新装入、更新或移除的插件即时生效；入口引用相对路径模块的插件更新后仍需重启后端',
   'settings.plugins.uninstall': '卸载',
-  'settings.plugins.uninstallConfirm': '卸载「{name}」？将删除插件文件与全部设置。',
   'settings.plugins.uninstalled': '已卸载「{name}」',
   'settings.plugins.scope': '作用域',
   'settings.plugins.scopeGlobal': '全局',
@@ -1098,6 +1096,7 @@ const zh: Dict = {
   'command.zoomIn': '放大页面',
   'command.zoomOut': '缩小页面',
   'command.zoomReset': '重置页面缩放',
+  'zoomHud.reset': '重置',
 
   // 引导 - 主题 / 工作区(新增步骤)
   'onboarding.brand.caption': 'AI 工作台',
@@ -2773,7 +2772,6 @@ const en: Dict = {
   'settings.amadeusPlugins.agentOwned': 'Space built by {agent}',
   'settings.amadeusPlugins.blockedInvalid': 'Invalid manifest: {reason}',
   'settings.amadeusPlugins.uninstall': 'Uninstall',
-  'settings.amadeusPlugins.uninstallConfirm': 'Uninstall "{name}"? Its folder will be deleted; bundled engine plugins/Spaces go with it (seeded agents are kept — delete them on the Agents page if needed).',
   'settings.amadeusPlugins.uninstalled': 'Uninstalled "{name}"',
   'settings.amadeusPlugins.uninstalledRestartPending': '"{name}" files were deleted, but the engine restart did not complete — bundled tools may still be running; restart the backend manually',
   'settings.amadeusPlugins.bundleEngine': 'Engine plugins ×{n}',
@@ -2856,7 +2854,6 @@ const en: Dict = {
   'settings.plugins.rescanNone': 'Rescan done: nothing changed',
   'settings.plugins.rescanHint': 'Picks up plugins added, updated or removed in the folder right away. A plugin whose entry imports relative modules still needs a backend restart after an update',
   'settings.plugins.uninstall': 'Uninstall',
-  'settings.plugins.uninstallConfirm': 'Uninstall "{name}"? This deletes the plugin files and all its settings.',
   'settings.plugins.uninstalled': 'Uninstalled "{name}"',
   'settings.plugins.scope': 'Scope',
   'settings.plugins.scopeGlobal': 'Global',
@@ -2896,6 +2893,7 @@ const en: Dict = {
   'command.zoomIn': 'Zoom in',
   'command.zoomOut': 'Zoom out',
   'command.zoomReset': 'Reset zoom',
+  'zoomHud.reset': 'Reset',
 
   // Onboarding - theme / workspace (new steps)
   'onboarding.brand.caption': 'AI workspace',

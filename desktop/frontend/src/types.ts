@@ -253,6 +253,19 @@ export interface DirectProviderConfig {
   asrModelIds?: string[]
   /** 该 provider 里**没有**多模态的模型(黑名单;默认都算能看图)。命中的模型遇图转交辅助视觉模型。 */
   noVisionModelIds?: string[]
+  /** 推理协议;缺省 OpenAI 兼容 /chat/completions。从 Claude Code / Codex 导入的连接带 anthropic-messages / openai-responses。 */
+  protocol?: 'openai' | 'anthropic-messages' | 'openai-responses'
+}
+
+/** 导入本机配置的一行(主进程给的,不含 key)。 */
+export interface LocalProviderCandidate {
+  id: string
+  source: 'cc-switch' | 'claude-code' | 'codex'
+  name: string
+  host: string
+  keyTail: string
+  models: string[]
+  exists: boolean
 }
 
 /** 「设置 → Git」(引擎 config.json 的 git 段):PROJECT 详情的 git 动作与 agent 自己建分支 / 写提交时都照它。 */
@@ -456,6 +469,9 @@ declare global {
       /** Verified Extend renderer is bundled with the mobile host. */
       extendMobile?: boolean
       getConfig(): Promise<StoredDesktopConfig>
+      /** config.json / provider-auth.json 读坏后从 .bak 恢复过:最近一次的时刻与恢复到的版本时刻(epoch ms);没有 = null。 */
+      configRecoveryNotice?(): Promise<{ at: number; version: number } | null>
+      clearConfigRecoveryNotice?(): Promise<void>
       documentTasks?: import('../../shared/documentTasks').DocumentTaskClaimsApi
       setConfig(patch: Partial<StoredDesktopConfig>): Promise<StoredDesktopConfig>
       backendStatus?(): Promise<BackendStatusInfo>
@@ -735,6 +751,9 @@ declare global {
       }
       listProviders?(): Promise<DirectProviderConfig[]>
       saveProvider?(provider: DirectProviderConfig): Promise<DirectProviderConfig[]>
+      /** 本机 CC Switch / Claude Code / Codex 里能导入的连接(electron/discovery/providers.ts;只有 key 末 4 位)。 */
+      scanLocalProviders?(force?: boolean): Promise<LocalProviderCandidate[]>
+      importLocalProviders?(ids: string[]): Promise<DirectProviderConfig[]>
       deleteProvider?(providerId: string): Promise<DirectProviderConfig[]>
       /** 桌面级共享语音转写:音频(base64)→ 文本。任意功能复用;主进程本地/自带-key,不经引擎。 */
       /** timestamps 不传 = 回纯文本(语音输入);传 true = 回 { text, segments }(视频转录要分段时间戳)。 */
@@ -808,12 +827,14 @@ declare global {
       onMarketInstallProgress?(cb: (ev: MarketInstallProgress) => void): () => void
       marketInstalled?(): Promise<Record<string, Array<{ slug: string; version: string | null; id?: string }>>>
       marketUninstall?(type: string, slug: string): Promise<{ ok: boolean; path: string; type: string; id?: string }>
+      /** 卸载走确认框之后撤掉商店的安装记录(文件已经由回收站那条路挪走)。 */
+      marketForget?(type: string, slug: string): Promise<{ ok: boolean }>
       /** 本宿主能装的市场类型(缺省 = 全部)。Android App 没有本机引擎 / 主题目录 / Space 目录,只声明 ['amadeus-plugin'];
        *  MarketModal 只列这些类型,其余在发现页一句话说明去桌面端装。 */
       marketTypes?: readonly string[]
       /** 后端插件卸载:列用户目录已装(manifest id→目录名)/ 按 id 删目录(仅 ~/.tangu/plugins,首方插件删不到)。 */
       pluginsUserInstalled?(): Promise<Array<{ id: string; slug: string }>>
-      pluginsUninstall?(id: string): Promise<{ ok: boolean }>
+      pluginsUninstall?(id: string, movedSlug?: string): Promise<{ ok: boolean }>
       /** 用户自定义 Space:~/.tangu/spaces/<slug>/space.json(数据化布局配方;market type='space' 同目录)。 */
       spacesList?(): Promise<Array<{ slug: string; json: string; plugin?: string; iconUrl?: string }>>
       spacesSave?(slug: string, json: string): Promise<{ ok: boolean }>
