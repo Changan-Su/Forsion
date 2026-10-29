@@ -33,6 +33,7 @@ import { PageStyleMenuItems, pageStyleAttrs, pageStyleEntries, setNotePageStyle,
 import { editorModeOf, useUiOverlay } from './amadeusOverlayStore'
 import { useUiStore } from '@amadeus/store/uiStore'
 import { amadeus } from '@amadeus/api'
+import { LocalVaultButton } from './amadeusVaultMenu'
 import { UnifiedPage, type UnifiedHistory } from '@amadeus/unified/UnifiedPage'
 import { SEG_SLOT } from '@amadeus/unified/CanvasModeSeg'
 import { NoteFloatingToc } from '@amadeus/unified/NoteFloatingToc'
@@ -1706,14 +1707,14 @@ export function AmadeusPagesView() {
   const foot = (
     <div className="t2s-foot">
       <TrashSection />
-      <button
+      {!cloudLib && amadeus?.listVaults ? <LocalVaultButton vaultRoot={vaultRoot} /> : <button
         className="t2s-special"
         onClick={() => (cloudLib ? setCloudPanel(true) : void ps().openVault())}
         title={cloudLib ? t('amxv.cloudVaultTip') : vaultRoot || undefined}
       >
         <span className="t2s-special-ic"><FolderOpen /></span>
         <span className="t2s-special-title">{cloudLib ? t('amxv.cloudVault') : vaultRoot ? t('amxv.vaultNamed', { name: baseName(vaultRoot) }) : t('amxv.openVault')}</span>
-      </button>
+      </button>}
     </div>
   )
 

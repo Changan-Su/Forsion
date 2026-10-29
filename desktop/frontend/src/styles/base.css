@@ -970,6 +970,11 @@ a:hover { color: var(--accent-ink); }
 /* 菜单小节标题(说明这一串选项是干什么的);`.ctx-menu` 是右键菜单外壳的唯一正典,变体写在它旁边。 */
 /* 分组小标题全 app 一种写法(10-02 c1):与斜杠菜单分组、块菜单「转换为」、多维表菜单小节同为 12px / 中等 / 次要色。 */
 .ctx-menu .ctx-head { padding: 4px 8px 5px; font-size: var(--ui-font-meta, 12px); font-weight: 500; color: var(--text-muted); }
+/* 两行项(CtxItem.detail):名字 + 小字路径 / 状态,超长截断;checked 的勾靠右(底部智库菜单) */
+.ctx-menu .ctx-text { display: flex; flex-direction: column; flex: 1; min-width: 0; line-height: 1.35; }
+.ctx-menu .ctx-text > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ctx-menu .ctx-detail { font-size: var(--ui-font-caption, 11px); color: var(--text-faint); }
+.ctx-menu .ctx-check { margin-left: auto; color: var(--text-muted); }
 
 /* ─── 主区 ─── */
 .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }

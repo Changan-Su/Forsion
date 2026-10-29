@@ -111,6 +111,7 @@ import { attachHostChannel, startP2pProxy, type P2pProxyHandle } from './unitP2p
 import { P2pManager, DEFAULT_STUN } from './p2pWindow'
 import type { ExternalPluginSource } from '@amadeus-shared/ipc'
 import { readConfig as readAmadeusConfig } from './amadeus/settings'
+import { syncVaultRoot } from './amadeus/vaultList'
 import { registerRemoteSync } from './remotesyncIpc'
 import { registerRemoteSyncBackend } from './remotesync/backends'
 import { logActivity, setActivityLogEnabled, pruneActivity, exportActivity, flushAllNoteEdits } from './activityLog'
@@ -606,8 +607,9 @@ const DEFAULT_CONFIG: TanguStoredConfig = {
 async function ensureDefaultWorkspaceDir(stored: TanguStoredConfig): Promise<string> {
   let dir = stored.defaultWorkspaceDir?.trim()
   if (!dir) {
-    // 取 localVault 而非 lastVault:活动侧可能是云镜像,Sessions 落进去会整个被当笔记同步上云。
-    const vault = (await readAmadeusConfig()).localVault
+    // 取本地同步库而非 lastVault:活动侧可能是云镜像,Sessions 落进去会整个被当笔记同步上云;
+    // 也不跟着切库走,会话目录留在第一个库。
+    const vault = syncVaultRoot(await readAmadeusConfig())
     if (vault && (await stat(vault).then((s) => s.isDirectory()).catch(() => false))) dir = join(vault, 'Sessions')
   }
   if (!dir) {
@@ -2737,7 +2739,7 @@ app.whenReady().then(async () => {
         roots: async () => {
           const cfg=await readAmadeusConfig()
           return [{prefix:'',root:forsionWorkspaceDir()},{prefix:'agents',root:join(tanguDataDir(),'agents')},
-            {prefix:'human',root:join(tanguDataDir(),'human')},{prefix:'Amadeus',root:cfg.localVault??join(forsionWorkspaceDir(),'Amadeus')}]
+            {prefix:'human',root:join(tanguDataDir(),'human')},{prefix:'Amadeus',root:syncVaultRoot(cfg)??join(forsionWorkspaceDir(),'Amadeus')}] // 切库不换同步根(vaultList.ts)
         },
         claim: async (owned) => {
           await ensureBackend()

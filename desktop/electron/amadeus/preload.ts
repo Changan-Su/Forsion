@@ -9,6 +9,11 @@ import { cloudPresent } from '../cloudPresent'
 const api: AmadeusApi = {
   openVault: () => ipcRenderer.invoke(IPC.openVault),
   restoreVault: () => ipcRenderer.invoke(IPC.restoreVault),
+  listVaults: () => ipcRenderer.invoke(IPC.listVaults),
+  switchVault: (root) => ipcRenderer.invoke(IPC.switchVault, root),
+  createVault: (name) => ipcRenderer.invoke(IPC.createVault, name),
+  forgetVault: (root) => ipcRenderer.invoke(IPC.forgetVault, root),
+  revealVault: (root) => ipcRenderer.invoke(IPC.revealVault, root),
   listPages: () => ipcRenderer.invoke(IPC.listPages),
   listFiles: () => ipcRenderer.invoke(IPC.listFiles),
   loadPage: (pagePath) => ipcRenderer.invoke(IPC.loadPage, pagePath),
