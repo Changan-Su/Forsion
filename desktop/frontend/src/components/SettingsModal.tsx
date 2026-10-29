@@ -137,6 +137,8 @@ registerMessages({
   'settingsmodal.mcp.logout': { zh: '断开', en: 'Sign out' },
   'settingsmodal.mcp.logoutConfirm': { zh: '断开「{name}」？本机保存的登录会删掉，下次要重新登录。', en: 'Sign out of "{name}"? The sign-in saved on this computer will be removed.' },
   'settingsmodal.mcp.loggedOut': { zh: '已断开「{name}」', en: 'Signed out of "{name}"' },
+  'settingsmodal.mcp.loggedIn': { zh: '已登录「{name}」，新工具从下一轮对话起可用', en: 'Signed in to "{name}". Its tools are available from your next message.' },
+  'settingsmodal.mcp.loginNotDone': { zh: '「{name}」没有登录成功：', en: 'Sign-in to "{name}" didn’t finish: ' },
   'settingsmodal.mcp.total': { zh: 'MCP 工具定义合计每个请求约 {n} token，占当前默认模型窗口的 {pct}%', en: 'MCP tool definitions take ~{n} tokens per request, {pct}% of the default model’s context window' },
   'settingsmodal.mcp.totalNoWindow': { zh: 'MCP 工具定义合计每个请求约 {n} token', en: 'MCP tool definitions take ~{n} tokens per request' },
   'settingsmodal.mcp.heavyNote': { zh: '不常用的可以关掉。按约 4 个字符 = 1 token 估算。', en: 'Turn off the ones you rarely use. Estimated at about 4 characters per token.' },
@@ -861,8 +863,22 @@ export const SettingsModal: React.FC<{
     void listTools(homeTarget()).then((t) => setMcpStatus(t.mcp ?? [])).catch(() => setMcpStatus([]))
   }
 
+  // 正在等浏览器那头的 server:状态轮询看到它连上 / 退回待登录时,把「已打开登录页」那句换成结果
+  // started:见过「登录中 / 连接中」之后的待登录才算失败(点之前发出的那次轮询可能还带着上一次的待登录)
+  const mcpLoginPending = useRef<{ name: string; started: boolean } | null>(null)
+  useEffect(() => {
+    const pending = mcpLoginPending.current
+    const st = pending ? mcpStatus?.find((s) => s.server === pending.name) : undefined
+    if (!pending || !st) return
+    if (st.status === 'logging-in' || st.status === 'connecting') { pending.started = true; return }
+    if (st.status !== 'connected' && !pending.started) return
+    mcpLoginPending.current = null
+    if (st.status === 'connected') setMcpMsg(t('settingsmodal.mcp.loggedIn', { name: pending.name }))
+    else if (st.error) setMcpMsg(`${t('settingsmodal.mcp.loginNotDone', { name: pending.name })}${st.error}`)
+  }, [mcpStatus]) // eslint-disable-line react-hooks/exhaustive-deps
   const loginMcp = (name: string): void => {
     void mcpLogin(homeTarget(), name).then(async (r) => {
+      mcpLoginPending.current = { name, started: false }
       if (r.url) {
         await window.tangu?.openExternal?.(r.url)
         setMcpMsg(t('settingsmodal.mcp.loginOpened', { name }))

@@ -72,6 +72,8 @@ async function main() {
     check('browser callback page loads', await browse(opened) === 200)
     await row().getByText(/^已连接 · \d+ 工具$/).waitFor({ timeout: 20000 })
     check('connected after sign-in, tools listed', true)
+    await win.getByText('已登录「demo」', { exact: false }).waitFor({ timeout: 5000 })
+    check('sign-in message replaced by the result', await win.getByText('已在浏览器打开「demo」', { exact: false }).count() === 0)
     check('sign-out button appears', await row().getByTitle('断开', { exact: true }).count() === 1)
     check('sign-in button gone', await row().getByRole('button', { name: /^登录$/ }).count() === 0)
     const store = JSON.parse(fs.readFileSync(path.join(home, 'connector-auth.json'), 'utf8'))
