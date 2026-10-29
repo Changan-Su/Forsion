@@ -7,7 +7,6 @@
  *  DESIGN §3 规矩 6:栈 data-still / data-moved(刚挂上、刚换会话、刚被 dockview 搬家)时不播;减少动态效果时不播。
  *  Agent Desk 卡有自己的进出场,插件卡正文是插件自己的 DOM,都不归这里管。 */
 import { LAND_MS } from '@lcl/engine'
-import { motion } from '../../theme/motionTokens'
 
 /** 会长出 / 缩回的行:卡片正文(和子会话状态块)的直接子元素里认这几种。进度卡的「正在 xx」「已运行 m:ss」「正在编辑」
  *  也算:它们每次工具调用都出现 / 消失一次,不播的话下面每张卡都跟着一下子挪一行(跳变探针抓到过)。换字不重挂,不会反复播。 */
@@ -27,6 +26,17 @@ export function quiet(stack: HTMLElement): boolean {
     || window.matchMedia('(prefers-reduced-motion: reduce)').matches
 }
 
+/** 折叠那一档(--collapse-duration × --collapse-ease)直接从 :root 读:Tangu UI 不 import 宿主的 theme/motionTokens(check:tangu-boundary)。 */
+function collapseTiming(): { duration: number; easing: string } {
+  const root = getComputedStyle(document.documentElement)
+  const d = root.getPropertyValue('--collapse-duration').trim()
+  const n = parseFloat(d)
+  return {
+    duration: Number.isFinite(n) ? (d.endsWith('ms') ? n : n * 1000) : 200,
+    easing: root.getPropertyValue('--collapse-ease').trim() || 'cubic-bezier(0.32, 0.72, 0, 1)',
+  }
+}
+
 /** 高度 / 上下内边距 / 上下描边 / 透明度从 0 长出(或缩回 0);marginTop(或 marginBottom)从 -gap 回到 0,吃掉它带来的间隔。 */
 function grow(el: HTMLElement, dir: 'in' | 'out', gap: number): Animation | null {
   const h = el.offsetHeight
@@ -41,8 +51,7 @@ function grow(el: HTMLElement, dir: 'in' | 'out', gap: number): Animation | null
   if (side && gap) { zero[side] = `${-gap}px`; full[side] = cs[side] }
   el.style.overflow = 'hidden'
   const a = el.animate(dir === 'in' ? [zero, full] : [full, zero], {
-    duration: motion.ms('collapse'),
-    easing: motion.css('collapse'),
+    ...collapseTiming(),
     fill: dir === 'out' ? 'forwards' : 'none',
   })
   const done = (): void => { if (dir === 'out') el.remove(); else el.style.overflow = '' }
