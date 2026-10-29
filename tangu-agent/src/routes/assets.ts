@@ -243,17 +243,18 @@ router.get('/agent/tools', authMiddleware, async (req: AuthRequest, res) => {
 });
 
 // MCP OAuth 登录 / 断开(mcp/oauth.ts):只给本机 —— 回调在本机回环上,远端设备完成不了;令牌也只存本机。
-for (const action of ['login', 'logout'] as const) {
-  router.post(`/agent/mcp/:name/${action}`, authMiddleware, async (req: AuthRequest, res) => {
-    if (parseRemoteOrigin(req.headers)) return res.status(403).json({ code: 'LOCAL_ONLY', detail: 'MCP sign-in is only available on the computer running the engine.' });
-    const mcp = deps().mcp;
-    if (!mcp) return res.status(404).json({ detail: 'MCP is not available in this engine' });
-    try {
-      res.json(action === 'login' ? await mcp.login(String(req.params.name)) : (await mcp.logout(String(req.params.name)), {}));
-    } catch (e: any) {
-      res.status(400).json({ detail: String(e?.message || e).slice(0, 500) });
-    }
-  });
+// (路径写成字面量:desktop 的 gen-engine-routes 要逐条抽取并分类,unitWeb 把这两条标成 deny-remote)
+async function mcpAuthAction(req: AuthRequest, res: any, act: (mcp: NonNullable<ReturnType<typeof deps>['mcp']>, name: string) => Promise<unknown>) {
+  if (parseRemoteOrigin(req.headers)) return res.status(403).json({ code: 'LOCAL_ONLY', detail: 'MCP sign-in is only available on the computer running the engine.' });
+  const mcp = deps().mcp;
+  if (!mcp) return res.status(404).json({ detail: 'MCP is not available in this engine' });
+  try {
+    res.json(await act(mcp, String(req.params.name)));
+  } catch (e: any) {
+    res.status(400).json({ detail: String(e?.message || e).slice(0, 500) });
+  }
 }
+router.post('/agent/mcp/:name/login', authMiddleware, (req: AuthRequest, res) => mcpAuthAction(req, res, (mcp, name) => mcp.login(name)));
+router.post('/agent/mcp/:name/logout', authMiddleware, (req: AuthRequest, res) => mcpAuthAction(req, res, async (mcp, name) => { await mcp.logout(name); return {}; }));
 
 export default router;
