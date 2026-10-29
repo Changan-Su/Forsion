@@ -93,6 +93,18 @@ describe('use_skill:技能文件夹', () => {
     }
     expect(capToolResult(await load('local:forsion-plugin'))).toContain('## 发布到商店');
   });
+
+  // 10-29 插件开发体验 1B:agent 写的插件自己画下拉 / 菜单 / 对话框,因为「用宿主零件」的规矩和样式契约都在被省掉的中段。
+  // 钉住:界面纪律、零件速查表、样式契约、商店一节到 Agent 自建 Space 的指针,都在模型看得到的前 34k 里。
+  it('forsion-plugin:界面纪律与样式契约在模型看得到的部分', async () => {
+    const out = await load('local:forsion-plugin');
+    const visible = capToolResult(out);
+    for (const s of ["## Desktop plugin UI: use the host's parts", "ctx.ui.mountControl(el, { type: 'select' })", 'ctx.ui.contextMenu({ anchor',
+      'ctx.ui.confirm({ title, danger })', '--style` lists, under "UI parts"', '### 样式契约', '### Android App', 'section `ctx.agent`']) {
+      expect(visible, s).toContain(s);
+    }
+    expect(visible.indexOf('section `ctx.agent`')).toBeLessThan(visible.indexOf('…[tool output too large'));
+  });
 });
 
 describe('use_skill:镜像还是上一版时', () => {
