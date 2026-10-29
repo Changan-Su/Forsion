@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { registerMessages, useI18n } from '../i18n'
-import { McpInputError, checkMcpNames, parseMcpInput, type McpServerMap } from '../../../shared/mcpConfig'
+import { McpInputError, checkMcpNames, parseMcpInput, publicMcpUrl, type McpServerMap } from '../../../shared/mcpConfig'
 import { ipcErrorText } from '../ipcError'
 import './McpImportDialog.css'
 
@@ -38,9 +38,6 @@ registerMessages({
 export interface McpImportDraft { json: string; name: string }
 type ImportResult = { mcpServers: McpServerMap; added: string[]; replaced: string[]; skipped: string[] }
 const placeholder = '{\n  "mcpServers": {\n    "notes": {\n      "url": "https://example.com/mcp"\n    }\n  }\n}'
-function publicEndpoint(url?: string): string {
-  try { const u = new URL(url || ''); return u.origin } catch { return '' }
-}
 export function McpImportDialog({ draft, onDraft, pluginNames, onClose, onSaved }: {
   draft: McpImportDraft; onDraft: (value: McpImportDraft) => void; pluginNames: string[]; onClose: () => void; onSaved: (value: ImportResult) => void
 }) {
@@ -105,7 +102,7 @@ export function McpImportDialog({ draft, onDraft, pluginNames, onClose, onSaved 
         <p className="hint">{t('mcpImport.detected', { count: Object.keys(preview.incoming).length })}</p>
         <div className="mcp-import-results">{Object.entries(preview.incoming).map(([name, config]) => {
           const exists = Object.hasOwn(preview.expected, name)
-          return <div key={name} className="mcp-import-row"><div><b>{name}</b><small>{config.command || publicEndpoint(config.url)}</small></div>
+          return <div key={name} className="mcp-import-row"><div><b>{name}</b><small>{config.command || publicMcpUrl(config.url)}</small></div>
             {exists ? <label><input type="checkbox" checked={replace.includes(name)} onChange={e => setReplace(list => e.target.checked ? [...list, name] : list.filter(n => n !== name))} disabled={busy} />{t('mcpImport.replace')}</label> : <span className="hint">{t('mcpImport.new')}</span>}
           </div>
         })}</div>

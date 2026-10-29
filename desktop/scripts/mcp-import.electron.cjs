@@ -71,8 +71,8 @@ async function main() {
     await open(); await fill({ existing: { command: 'different', enabled: false }, second: { url: 'https://new.example/mcp', enabled: false } }); await inspect(); await save(); await dialog().waitFor({ state: 'hidden' })
     configs = (await read()).mcpServers
     check('named map merges; unselected duplicate remains untouched', JSON.stringify(configs.existing) === JSON.stringify(imported) && configs.second.url === 'https://new.example/mcp')
-    await open(); await fill({ url: 'https://single.example/mcp', headers: { Authorization: 'SECRET_SINGLE' }, enabled: false }); await inspect()
-    await win.locator('#mcp-import-name').waitFor(); await win.locator('#mcp-import-name').fill('single'); await inspect(); await save(); await dialog().waitFor({ state: 'hidden' })
+    await open(); await fill({ url: 'https://single.example/SECRET_PATH/mcp?token=SECRET_QUERY', headers: { Authorization: 'SECRET_SINGLE' }, enabled: false }); await inspect()
+    await win.locator('#mcp-import-name').waitFor(); await win.locator('#mcp-import-name').fill('single'); await inspect(); await dialog().getByText('single', { exact: true }).waitFor(); check('URL path/query credentials hidden in preview', !(await dialog().innerText()).includes('SECRET')); await save(); await dialog().waitFor({ state: 'hidden' })
     check('single object requests name and saves', (await read()).mcpServers.single.headers.Authorization === 'SECRET_SINGLE')
     await open(); await fill({ draft: { url: 'https://draft.example/mcp', unknown: true } }); await inspect()
     check('unsupported field is visible', (await dialog().getByRole('alert').innerText()).includes('不支持'))

@@ -1,3 +1,4 @@
+import { publicMcpUrl } from '../../../shared/mcpConfig'
 import { McpImportDialog, type McpImportDraft } from './McpImportDialog'
 import { PRODUCT } from '../product'
 import { ModelPickerSettings } from './ModelPickerSettings'
@@ -2568,7 +2569,7 @@ export const SettingsModal: React.FC<{
                                 <span className="file-name">
                                   <b>{name}</b>
                                   <span style={{ color: 'var(--text-muted)', marginLeft: 8, fontSize: 'var(--ui-font-meta, 12px)' }}>
-                                    {sc.command ? `${sc.command} ${(sc.args || []).join(' ')}` : sc.url}
+                                    {sc.command ? `${sc.command} ${(sc.args || []).join(' ')}` : publicMcpUrl(sc.url)}
                                   </span>
                                 </span>
                                 {sc.enabled !== false && mcpTokensLabel(st)}

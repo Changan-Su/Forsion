@@ -128,3 +128,8 @@ export function patchMcpEntry(previous: McpConfigEntry, patch: unknown, name: st
   }
   return validateMcpEntry(next, name);
 }
+
+/** URLs can carry credentials in their userinfo, query, or even path. Public summaries expose the origin only. */
+export function publicMcpUrl(value: string | undefined): string {
+  try { return new URL(value || '').origin; } catch { return ''; }
+}
