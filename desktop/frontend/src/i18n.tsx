@@ -1096,6 +1096,7 @@ const zh: Dict = {
   'command.zoomIn': '放大页面',
   'command.zoomOut': '缩小页面',
   'command.zoomReset': '重置页面缩放',
+  'zoomHud.reset': '重置',
 
   // 引导 - 主题 / 工作区(新增步骤)
   'onboarding.brand.caption': 'AI 工作台',
@@ -2892,6 +2893,7 @@ const en: Dict = {
   'command.zoomIn': 'Zoom in',
   'command.zoomOut': 'Zoom out',
   'command.zoomReset': 'Reset zoom',
+  'zoomHud.reset': 'Reset',
 
   // Onboarding - theme / workspace (new steps)
   'onboarding.brand.caption': 'AI workspace',

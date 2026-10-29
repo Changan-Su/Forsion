@@ -5619,3 +5619,27 @@ html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .
 /* 设置 → Git →「提交身份」:正在用的那一级的标签跟着主题色,其余照普通 settings-badge */
 .git-identity-panel .settings-badge[data-state="active"] { color: var(--accent-ink); border-color: currentColor; }
 .git-identity-panel [data-git-identity-level] .settings-badge { margin-right: 6px; }
+
+/* 右下角界面缩放提示(uiZoom.ts 的 showZoomHud,挂在 <html> 上不吃 body zoom):⌘± / ⌘0 时亮出,1.5s 后淡出 */
+.ui-zoom-hud {
+  position: fixed; right: 16px; bottom: 16px; z-index: 2147483000;
+  display: inline-flex; align-items: center; gap: 8px; padding: 5px 5px 5px 12px;
+  font-size: var(--ui-font-meta, 12px); color: var(--text-muted); font-variant-numeric: tabular-nums;
+  background: var(--bg-glass, var(--bg-card)); backdrop-filter: var(--panel-blur, blur(8px));
+  border: var(--border-width, 1px) solid var(--border); border-radius: var(--radius-md, 10px);
+  box-shadow: var(--card-shadow);
+  opacity: 0; translate: 0 6px; pointer-events: none;
+  transition: opacity var(--toast-exit-duration, 140ms) var(--ease-exit, ease-in), translate var(--toast-exit-duration, 140ms) var(--ease-exit, ease-in);
+}
+.ui-zoom-hud[data-open] {
+  opacity: 1; translate: 0 0; pointer-events: auto;
+  transition-duration: var(--toast-enter-duration, 180ms); transition-timing-function: var(--ease-surface, ease-out);
+}
+.ui-zoom-hud-pct { color: var(--text); min-width: 3.2em; text-align: right; }
+.ui-zoom-hud-reset {
+  font: inherit; color: var(--text); padding: 3px 10px; border-radius: var(--radius-sm, 6px);
+  border: 0; background: var(--menu-hover, rgba(127, 127, 127, 0.14)); cursor: pointer;
+}
+.ui-zoom-hud-reset:hover { background: var(--border); }
+.ui-zoom-hud-reset[hidden] { display: none; }
+@media (prefers-reduced-motion: reduce) { .ui-zoom-hud { transition: none; translate: none; } }
