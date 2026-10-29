@@ -99,3 +99,25 @@ describe('行内 <br> 逐字往返', () => {
     } finally { await b.destroy() }
   })
 })
+
+describe('软换行(单个 \\n)按 Obsidian 渲染成换行', () => {
+  it('显示成 <br>,落盘仍是单个 \\n(不改成 `\\` 换行)', async () => {
+    const b = await bootEditor('甲\n\t乙\n')
+    try {
+      const p = b.view.dom.querySelector('p')!
+      expect([...p.childNodes].map((n) => n.nodeName)).toEqual(['#text', 'BR', '#text'])
+      expect(b.saved()).toBe('甲\n\t乙\n') // 真落盘路径(逐字):续行 Tab 原样留在文件里
+    } finally { await b.destroy() }
+  })
+
+  it('DOM 往返(粘贴链路)后仍是软换行', async () => {
+    const b = await bootEditor('x\n')
+    try {
+      const { schema } = b.view.state
+      const dom = DOMSerializer.fromSchema(schema).serializeFragment(b.parse('a\nb\n').content)
+      const slice = DOMParser.fromSchema(schema).parseSlice(dom)
+      b.view.dispatch(b.view.state.tr.replaceWith(0, b.view.state.doc.content.size, slice.content))
+      expect(b.md()).toBe('a\nb\n')
+    } finally { await b.destroy() }
+  })
+})

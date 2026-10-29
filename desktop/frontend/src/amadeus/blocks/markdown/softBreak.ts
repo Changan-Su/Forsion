@@ -259,8 +259,10 @@ export const softBreakRemark = $remark('amadeusSoftBreak', () =>
 // 是分行的,所以看着像「先对后错」)。
 //
 // 收件箱的正文是**信**不是 markdown 文档,按聊天口径:一个 `\n` = 一行。把 break 的 isInline
-// 拍成 false,schema 就出 `<br>`。**只给收件箱挂**(UnifiedPage 的 hardBreaks 开关)——
-// 笔记与分享页仍按标准 markdown 走,那边「软换行=空格」是对的。
+// 拍成 false,schema 就出 `<br>`。**只给收件箱挂**(UnifiedPage 的 hardBreaks 开关)。
+// > 修订 2026-10-29:笔记也改按 Obsidian 口径显示(inlineBr.ts 的 hardbreakWithHtmlSchema 把软换行渲染成 `<br>`,
+// > isInline 不动、落盘仍是 `\n`)。生产装配里这个插件因此已是冗余;笔记**绝不能**改挂它 —— isInline 一拍成 false,
+// > 保存就把每个软换行写成 `\` 换行。
 export function forceHardBreaks(tree: MdNode): void {
   const walk = (n: MdNode): void => {
     if (!n || typeof n !== 'object') return
