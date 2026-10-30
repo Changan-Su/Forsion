@@ -27,6 +27,9 @@
  *   GET      /agent/special/muse/library                Muse Library 目录树(桌面 Agent Space 左栏;含子目录)
  *   GET      /agent/special/muse/library/file?path=     读 Library 里一个文本文件(Muse 自建 Space 的 ctx.agent.library.read)
  *   POST     /agent/special/muse/feedback { text }      往 Muse 的 LOG 追加一条 [feedback] 行(任务卡落点回执等)
+ *   GET      /agent/special/muse/cards?status=          Muse 私聊里要用户点的卡(services/museCards.ts)
+ *   GET      /agent/special/muse/cards/:id              单张卡(流里那一行按 id 读)
+ *   POST     /agent/special/muse/cards/:id/decide { action }  用户点卡:效果在引擎里按 kind 白名单执行,CAS pending,不符 409
  *
  * 本地特性：profile.capabilities.hostExec=false（云端）一律 404；例外 = /agent/special/config(云端返回每用户的按轮 Historian 设置)。
  * 远程来源(x-forsion-remote)读 /agent/special/config 只拿最小投影(开关 + 两个节奏值,remote:true;P1 · K10b)。
@@ -53,11 +56,11 @@ import { resolveTools, declaredApproval } from '../tools/toolRegistry.js';
 import type { ToolContext } from '../tools/toolTypes.js';
 import { loadSchedule, entriesOf, validateEntryInput, upsertEntry, ensureEntry, removeEntry } from '../services/agentSchedule.js';
 import { MUSE_AGENT_SLUG, ensureMuseAgent, getAgent, listAgents, isValidSlug } from '../agents/agentRegistry.js';
-import { runWithAgentSlug } from '../seams/runContext.js';
 import { listApprovals, decideApproval, getApproval } from '../services/pendingApprovals.js';
 import { APPROVAL_LOCAL_ONLY_BODY } from '../services/approvals.js';
 import { museLibraryDir } from '../services/muse.js';
 import { recordRemoteCreated } from '../services/remoteCreated.js'; // P1-K2
+import { appendMuseFeedback, decideMuseCard, getMuseCard, listMuseCards } from '../services/museCards.js';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
@@ -69,13 +72,6 @@ function ensureLocal(res: any): boolean {
     return false;
   }
   return true;
-}
-
-/** 用户对 TODO 的处理写进 Muse 自己的 LOG(英文——下周期 read_log 喂给模型)——反馈闭环。绝不抛。 */
-async function appendMuseFeedback(userId: string, line: string): Promise<void> {
-  try {
-    await runWithAgentSlug(MUSE_AGENT_SLUG, () => deps().brain.memory.appendLogEntry(userId, line));
-  } catch { /* 反馈写失败不阻断主流程 */ }
 }
 
 /** 云端(web/安卓)只有按轮 Historian,每用户一份。回完整形状(Muse 等取缺省)让前端 dirty 判定稳定;cloud:true 让前端只露 Historian 的五项。 */
@@ -624,6 +620,33 @@ router.post('/agent/special/muse/feedback', authMiddleware, async (req: AuthRequ
   if (!text) return res.status(400).json({ detail: 'text required' });
   await appendMuseFeedback(req.user!.userId, `[feedback] ${text}`);
   res.json({ ok: true });
+});
+
+// 私聊里的卡:读与点。点卡对远端放行(手机私聊同一张卡),客户端只传 action,改什么在引擎里定。
+router.get('/agent/special/muse/cards', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    const status = typeof req.query.status === 'string' ? req.query.status : undefined;
+    res.json({ cards: await listMuseCards(req.user!.userId, status) });
+  } catch (e: any) { res.status(500).json({ detail: e?.message || 'cards failed' }); }
+});
+
+router.get('/agent/special/muse/cards/:id', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    const card = await getMuseCard(req.user!.userId, req.params.id);
+    if (!card) return res.status(404).json({ detail: 'card not found' });
+    res.json({ card });
+  } catch (e: any) { res.status(500).json({ detail: e?.message || 'card failed' }); }
+});
+
+router.post('/agent/special/muse/cards/:id/decide', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    const r = await decideMuseCard(req.user!.userId, req.params.id, String(req.body?.action || ''));
+    if (!r.ok) return res.status(r.status).json({ error: r.error, detail: r.detail });
+    res.json({ ok: true, card: r.card });
+  } catch (e: any) { res.status(500).json({ detail: e?.message || 'decide failed' }); }
 });
 
 // ── 异步审批(pending_approvals;Muse ask/agent 档的越界动作) ──────────────

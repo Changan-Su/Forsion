@@ -58,6 +58,15 @@ export const APP_REF_SECTION =
 /** 任务持久性契约:与保留工具证据的历史重放、同 run 插话一起工作,不能靠提示词代替运行时状态。
  *  ⚠️ 引擎级契约:由 agentLoop 直接注入,**不进** guidance 数组(per-app 覆盖是整段替换,会被静默丢掉)。
  *  计划模式不注入(「carry through implementation」与只读工具集直接矛盾)。 */
+/** 解决需求时想到插件(10-30 方案 Muse与Agent升级 B)。所有 Agent 都读,只在有商店面时注入(agentLoop),不进 guidance:per-app 覆盖与 coding 预设会清掉它。
+ *  任务卡格式写全:聊天里没有别处告诉模型这道围栏(inbox_send 的说明只在发信时读)。一次性那句放最后:负对照(live pluginaware)钉它不去查商店。 */
+export const PLUGIN_AWARENESS_SECTION =
+  '## Forsion Plugins\n' +
+  'When the user wants something they will do again and again, or a capability Forsion does not have, call search_marketplace before you answer: a plugin may already do it, and the results appear as cards they can install from. ' +
+  'If nothing fits, help as best you can and offer to build a plugin with a task card at the end of your reply; the work starts only if they pick it:\n' +
+  '```forsion-task\ntitle: Build a plugin that …\nagent: coding\n---\nLoad the forsion-plugin skill, then build … (a self-contained brief: what it does, for whom, how to verify).\n```\n' +
+  'For a one-off question or task, skip all of this: do not search the store, just help.';
+
 export const PERSISTENCE_SECTION =
   '## Task Persistence\n' +
   '- A new message during active work normally updates the existing task; it does not replace the original objective. Incorporate corrections and constraints. For a question or status request, answer briefly, then continue the unfinished authorized task. Replace or abandon it only when the user clearly cancels, pauses, or requests an incompatible objective. If blocked, explain the blocker and what remains.\n' +

@@ -340,6 +340,7 @@ OPT_IN.add('relay'); KEYS.push('relay'); // 假提供方只回 429 usage_limit_r
 OPT_IN.add('appref'); // 四个 run;只在动 APP_REF_SECTION(应用 / 窗口引用那一段提示词)时才有信息量。
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 KEYS.push('marketplace', 'marketplacechat');
+OPT_IN.add('pluginaware'); KEYS.push('pluginaware'); // 四个 run + 假云端的商店;只在动 PLUGIN_AWARENESS_SECTION(解决需求时想到插件)时才有信息量
 KEYS.push('pluginext');
 OPT_IN.add('pluginext'); // 夹具插件在 tangu-plugin.json 里声明 stdio MCP + Stop hook(10-17);只在动 mcp/pluginServers、hooks/pluginHooks、bootstrap 的 attachManifestExtras 时跑
 OPT_IN.add('marketplace'); OPT_IN.add('marketplacechat'); // marketplacechat:同一判据跑在 chat 预设(详情工具要先 load_tools)
@@ -1310,7 +1311,7 @@ if (ONLY.has('notebook') && !NOTEBOOK_NEG) {
 }
 
 // account(10-10):假 Forsion 云端(额度 / 套餐 / 积分是已知数),只在跑它时起;显式给了 TANGU_LIVE_CLOUD_URL 的以那个为准。
-const FAKE_CLOUD = (ONLY.has('account') || ONLY.has('webpublish') || SIM) && !process.env.TANGU_LIVE_CLOUD_URL ? await startFakeCloud(TOKEN, { connect: SIM?.url }) : null;
+const FAKE_CLOUD = (ONLY.has('account') || ONLY.has('webpublish') || ONLY.has('pluginaware') || SIM) && !process.env.TANGU_LIVE_CLOUD_URL ? await startFakeCloud(TOKEN, { connect: SIM?.url }) : null;
 
 const child = spawn(process.execPath, [
   ...(FAULT_FILE ? ['--import', pathToFileURL(join(root, 'scripts', 'lib', 'llm-fault-preload.mjs')).href] : []),
@@ -2425,6 +2426,25 @@ try {
     const ok = !redrawn && !items.some(item => item.minAppVersion === '99.0.0') && ev.done && !ev.error && items.length >= 2 && (!!detail || viaSearch) && !follow.error && follow.done;
     writeFileSync(join(OUT, `${key}-evidence.json`), JSON.stringify({ recommendation: ev, detail: follow, items }, null, 2));
     return { ok, detail: `approved entries=${items.length}; immutable ID detail=${detail ? 'get' : viaSearch ? 'search' : 'none'}; no installation tool exposed`, output: ev.content + '\n\n' + (follow?.content || ''), toolCalls: [...ev.toolCalls, ...(follow?.toolCalls || [])], ttftMs: ttft(ev), tokens: tokensOf(ev) + (follow ? tokensOf(follow) : 0) };
+  });
+
+  // pluginaware(10-30):「反复做的事」先查商店,没有现成的就提议做一个,一次性问题不查(负对照腿,不是 --kind neg:同一次运行里断)。
+  await scenario('pluginaware', 'pluginaware 反复的事先查商店、查不到提议做一个、一次性问题不查', async () => {
+    const opts = [240000, {}, 'desktop/2.13.8', undefined, undefined, undefined, { clientCapabilities: ['marketplace-cards.v1'] }];
+    const leg = (name, text) => run(`live-pluginaware-${name}-${Date.now()}`, text, ...opts);
+    const repeat = await leg('repeat', '我每周都要把上课录音转成文字再整理成笔记，每次都手动来一遍，太烦了。有什么办法？');
+    const nothing = await leg('nothing', '我每天都要手动把咖啡机的除垢提醒抄到日程里，想让 Forsion 自动帮我做这件事。');
+    const math = await leg('math', '17 乘以 23 等于多少？顺便说说怎么心算。');
+    const trans = await leg('trans', '把这句话翻译成英文：今天下午三点开会。');
+    const searched = (ev) => ev.toolCalls.includes('search_marketplace');
+    const taskCard = /```forsion-task[\s\S]*agent:\s*coding[\s\S]*forsion-plugin[\s\S]*```/.test(nothing.content);
+    const err = repeat.error || nothing.error || math.error || trans.error;
+    const ok = !err && searched(repeat) && searched(nothing) && taskCard && !searched(math) && !searched(trans);
+    return {
+      ok, detail: err || `反复:查了=${searched(repeat)};没现成:查了=${searched(nothing)} 任务卡=${taskCard};一次性:算术查了=${searched(math)} 翻译查了=${searched(trans)}`,
+      output: `【反复】\n${repeat.content}\n\n【没现成】\n${nothing.content}\n\n【算术】\n${math.content}\n\n【翻译】\n${trans.content}`,
+      toolCalls: [...repeat.toolCalls, ...nothing.toolCalls, ...math.toolCalls, ...trans.toolCalls], ttftMs: ttft(repeat), tokens: [repeat, nothing, math, trans].reduce((n, ev) => n + tokensOf(ev), 0),
+    };
   });
 
   await scenario('visualfigures', 'visualfigures 图表与流程图组件', async () => {

@@ -12,8 +12,8 @@ import { query } from '../core/db.js';
 import { MUSE_AGENT_SLUG } from '../agents/agentRegistry.js';
 import { endsWithQuestion } from './childSessions.js';
 
-/** proactive = message_user;todo / approval = 引擎替 add_muse_todo / 审批入队发的(各有自己的配额,不占每小时 3 条)。 */
-export type ProactiveOrigin = 'proactive' | 'proactive:todo' | 'proactive:approval';
+/** proactive = message_user;todo / approval = 引擎替 add_muse_todo / 审批入队发的;card = 要用户点的卡(services/museCards.ts)。后三种各有自己的配额,不占每小时 3 条。 */
+export type ProactiveOrigin = 'proactive' | 'proactive:todo' | 'proactive:approval' | 'proactive:card';
 export const MUSE_DM_PER_HOUR = 3;
 export const MUSE_DM_MAX_CHARS = 1500;
 

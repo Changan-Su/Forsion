@@ -121,6 +121,19 @@ export function isHomeSession(s: Pick<SessionRecord, 'location'>): boolean {
 }
 
 /** GET /agent/special/approvals 的一行(引擎 pendingApprovals.PendingApprovalRow 镜像)。 */
+/** Muse 发进私聊、要用户点的卡(services/museCards.ts)。payload 按 kind 各一种形状,只有引擎写得进去。 */
+export type MuseCardKind = 'plugin' | 'feature'
+export interface MuseCardInfo {
+  id: string
+  kind: MuseCardKind
+  key: string | null
+  payload: Record<string, any>
+  status: 'pending' | 'done' | 'dismissed'
+  result: string | null
+  created_at: number
+  decided_at: number | null
+}
+
 export interface PendingApprovalInfo {
   id: string
   session_id: string
@@ -419,7 +432,7 @@ export interface MessageRecord {
   timestamp: number
   model_id: string | null
   is_error: boolean
-  /** Muse 主动发进私聊的消息:proactive / proactive:todo / proactive:approval;其余为空。 */
+  /** Muse 主动发进私聊的消息:proactive / proactive:todo / proactive:approval / proactive:card;其余为空。 */
   origin?: string | null
 }
 
@@ -886,7 +899,7 @@ export interface UiMessage {
   /** system=客户端本地通知行(斜杠命令反馈等;不持久化,reload 会消失)。 */
   role: 'user' | 'assistant' | 'system'
   content: string
-  /** Muse 主动发进私聊的(引擎 chat_messages.origin):proactive / proactive:todo / proactive:approval。 */
+  /** Muse 主动发进私聊的(引擎 chat_messages.origin):proactive / proactive:todo / proactive:approval / proactive:card。 */
   origin?: string
   /** 这一轮换了模型(引擎 status model_fallback;重载时从 origin 'fallback:quota' + model_id 还原):画「改用了」那一行。
    *  reason 'quota' = 额度用完接力;缺省 = 服务端停用模型。重载后只剩 to。 */

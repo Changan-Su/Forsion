@@ -43,6 +43,7 @@ import { loadSchedule, entriesOf, dueHere, markEntryFired, ensureEntry, validate
 import { L } from '../tui/i18n.js';
 import { countPendingApprovals } from './pendingApprovals.js';
 import { sendInboxMessage, stripTodoHeaders, MUSE_SENDER_ID } from '../tools/builtin/inboxSend.js';
+import { recommendHint } from './museCards.js';
 import { readActivityLines, readUserActivityStamps, activityRhythm, activitySince, parseActivityTs, type ActivityRhythm } from './userActivity.js';
 import { notRemoteTaintedSql } from './remoteTaint.js';
 import { museStateFile, readLastCycleAt, readMuseSessionId, patchMuseState, getMuseSleep, setMuseSleep, type MuseSleep } from './museState.js';
@@ -756,6 +757,7 @@ async function startCycle(cfg: MuseConfig, extraKickoff = '', trigger = 'heartbe
     (await folderHint(cfg.allowedFolders)) +
     (await existingTodoHint(userId)) +
     (await museDmHint(userId)) +
+    (await recommendHint(userId)) +
     (await rhythmHint());
   const pending = await countPendingApprovals(userId).catch(() => 0);
   const sleep = await getMuseSleep().catch(() => null);
