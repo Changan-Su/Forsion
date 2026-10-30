@@ -12,6 +12,7 @@ import { presetOf } from '../core/presetTable.js';
 import { isHostSandboxRestricted, isHostSandboxToolAllowed, resolveHostSandboxPolicy } from '../sandbox/hostSandboxPolicy.js';
 import { effectiveRemote } from '../services/remoteOrigin.js';
 import { toolDefinitionIssue, warnInvalidTool } from './toolDefinitionValidation.js';
+import { mcpDeclaredApproval } from '../mcp/connectors.js';
 
 /**
  * 操控整台电脑桌面的工具(Computer Use)。唯一的现成声明是 capabilities.concurrencyKey === 'computer-use' —— 内置捆绑的
@@ -446,7 +447,8 @@ export function declaredApproval(name: string, profile?: Pick<AppProfile, 'toolL
       if (t.name === name && t.capabilities?.approval) found = t.capabilities.approval;
     }
   }
-  return found;
+  // 远端 MCP 工具不在 provider 里:连接器目录的 alwaysAsk 经 manager 注册的回调查(mcp/connectors.ts)
+  return mcpDeclaredApproval(name) ?? found;
 }
 
 /**
