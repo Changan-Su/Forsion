@@ -171,7 +171,7 @@ export interface HostState {
   feedbackOpen: boolean
   feedbackDraft: string
   marketOpen: boolean
-  marketTarget: { itemId?: string; detailTab?: string; q?: string; nonce?: number } | null
+  marketTarget: { itemId?: string; detailTab?: string; q?: string; tab?: string; nonce?: number } | null
   achievementsOpen: boolean
   onboarding: boolean
   /** 这次引导是版本更新后弹的短引导(只在开机的版本检查里置上;手动重开、首启都是完整引导)。 */
@@ -196,7 +196,7 @@ export interface HostState {
    *  target(P1-K6 S2):哪台引擎回的 401;unit = 先复检账号,账号有效只记那台「引擎鉴权」,绝不重启本机引擎。 */
   handleAuthExpired(target?: TargetKey): void
   /** query = 打开时预填的搜索词(插件详情页「在市场中查找」前置插件)。 */
-  openMarket(query?: string, target?: { itemId?: string; detailTab?: string; nonce?: number }): void
+  openMarket(query?: string, target?: { itemId?: string; detailTab?: string; tab?: string; nonce?: number }): void
   closeMarket(): void
   openAchievements(): void
   closeAchievements(): void

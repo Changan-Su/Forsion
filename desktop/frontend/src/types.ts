@@ -329,7 +329,26 @@ export interface McpServerConfigEntry {
   headers?: Record<string, string>
   timeoutMs?: number
   enabled?: boolean
+  oauth?: { clientId?: string; scopes?: string[] }
+  /** 从商店连上的连接器:目录 id(宿主同步地址、引擎读 alwaysAsk)。编辑时原样带着,别丢。 */
+  connector?: string
 }
+
+/** 连接器目录的一条(electron/connectorCatalog.ts 校验过的形状)。 */
+export interface ConnectorEntry {
+  id: string
+  kind: 'remote-mcp' | 'builtin'
+  status: 'published' | 'retired'
+  order: number
+  name: { zh: string; en: string }
+  description: { zh: string; en: string }
+  url?: string
+  oauth?: { clientId?: string; scopes?: string[] }
+  auth?: { type: 'user-key'; applyUrl: string }
+  alwaysAsk?: string[]
+  iconUrl?: string
+}
+export interface ConnectorCatalog { connectors: ConnectorEntry[]; fetchedAt: number | null; offline: boolean }
 
 /** 官网更新动态的一篇(forsion.net/releases;主进程校验过形状)。 */
 export type { WebsiteRelease }
@@ -707,6 +726,12 @@ declare global {
       connectUnpublish?(slug: string): Promise<{ ok: boolean; code?: string; detail?: string }>
       connectListingApply?(p: { slug: string; summary: string }): Promise<{ ok: boolean; code?: string; detail?: string; status?: string }>
       connectListingWithdraw?(slug: string): Promise<{ ok: boolean; code?: string; detail?: string }>
+      /** 连接器目录:refresh = 现拉(拉不到回缓存,offline: true);否则只读本机缓存。只在桌面有。 */
+      connectorsList?(refresh?: boolean): Promise<ConnectorCatalog>
+      /** 把目录条目写进 MCP 配置(带 connector 标记);已连着就原样返回。登录 / 填 Key 另走引擎。 */
+      connectorsConnect?(id: string): Promise<{ name: string; added: boolean }>
+      /** 断开的最后一步:从 MCP 配置删掉这条(只删带连接器标记的)。 */
+      connectorsRemove?(name: string): Promise<void>
       connectStore?(): Promise<{ ok: boolean; detail?: string; base?: string; items?: Array<{ name: string; summary: string; handle: string; slug: string; url: string; updatedAt?: string }> }>
       /** 写回文本文件(工作区 .md 编辑):原子写;expectedMtimeMs 不符返回 conflict。 */
       writeHostFile?(filePath: string, content: string, expectedMtimeMs?: number, createNew?: boolean): Promise<{ ok?: boolean; conflict?: boolean; mtimeMs: number }>

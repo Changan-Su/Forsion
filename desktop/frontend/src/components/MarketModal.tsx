@@ -11,7 +11,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   AlertCircle, ArrowLeft, ArrowRight, Bot, Check, Clock, Coins, Compass, Crown, Download, ExternalLink,
   GitBranch, Globe, LayoutGrid, Library, Loader2, Monitor, Package, PackageOpen, Palette, Puzzle,
-  RefreshCw, Search, Send, Settings, ShieldCheck, Sparkles, Trash2, Wrench, X,
+  RefreshCw, Search, Send, Settings, ShieldCheck, Sparkles, Trash2, Wrench, X, Plug,
 } from 'lucide-react'
 import { Skeleton, useNativeChromeClaim, useNativeChromeInstalled } from '@lcl/engine'
 import { registerMessages, useI18n } from '../i18n'
@@ -39,6 +39,8 @@ import { PluginSettingsView } from './AmadeusPluginsTab'
 import { isPlacedSettingsView } from '../amadeus/plugins/display'
 import { MarketPluginAutoUpdate, useMarketPluginUpdates } from './MarketPluginAutoUpdate'
 import { compareMarketVersions } from '../../../shared/marketPluginUpdates'
+import { ConnectorStore } from './Connectors'
+import { connectorsSupported } from '../services/connectorService'
 import { SkillAgentPicker, applySkillAgentChoice, skillAgentsSupported, useSkillAgents, type SkillAgentChoice } from './MarketSkillAgents'
 
 registerMessages({
@@ -52,7 +54,7 @@ type MarketType = MarketCard['type']
 const STORE_VIEW_ICONS: Record<string, typeof Package> = { crown: Crown, coins: Coins, package: Package, sparkles: Sparkles, globe: Globe, palette: Palette, wrench: Wrench, bot: Bot }
 const storeViewIcon = (name?: string): typeof Package => (name && Object.hasOwn(STORE_VIEW_ICONS, name) ? STORE_VIEW_ICONS[name] : Package)
 const resolveText = (v: string | (() => string) | undefined): string => { try { return (typeof v === 'function' ? v() : v) || '' } catch { return '' } }
-type Tab = 'discover' | MarketType | 'webapp' | 'installed' | 'updates' | 'submit'
+type Tab = 'discover' | MarketType | 'webapp' | 'connector' | 'installed' | 'updates' | 'submit'
 type SortMode = 'popular' | 'latest' | 'name'
 
 const CONTENT_TABS: MarketType[] = ['skill', 'agent', 'plugin', 'space', 'theme', 'amadeus-plugin']
@@ -81,13 +83,15 @@ function categoryTabsFor(types: MarketType[]): Tab[] {
   return [
     ...CONTENT_TABS.filter((tp) => tp === 'plugin' ? PLUGIN_TAB_TYPES.some((x) => types.includes(x)) : !PLUGIN_TAB_TYPES.includes(tp) && types.includes(tp)),
     ...(window.tangu?.connectStore ? (['webapp'] as Tab[]) : []),
+    // 连接器只在桌面(本机引擎)上能连:宿主给了 connectorsList 才有这一栏(照「网页」那条的先例)
+    ...(connectorsSupported() ? (['connector'] as Tab[]) : []),
   ]
 }
 
 interface WebApp { name: string; summary: string; handle: string; slug: string; url: string; updatedAt?: string }
 
-function TypeGlyph({ type, size = 20 }: { type: MarketType | 'webapp'; size?: number }) {
-  const Icon = type === 'skill' ? Wrench
+function TypeGlyph({ type, size = 20 }: { type: MarketType | 'webapp' | 'connector'; size?: number }) {
+  const Icon = type === 'connector' ? Plug : type === 'skill' ? Wrench
     : type === 'agent' ? Bot
       : type === 'plugin' || type === 'amadeus-plugin' ? Puzzle
         : type === 'space' ? LayoutGrid
@@ -133,7 +137,7 @@ function formatDate(value?: string | null): string {
   return formatDateLabel(date, { year: 'always' })
 }
 
-export function MarketModal({ onClose, initialQuery, initialItemId, initialDetailTab }: { onClose?: () => void; initialQuery?: string; initialItemId?: string; initialDetailTab?: string } = {}) {
+export function MarketModal({ onClose, initialQuery, initialItemId, initialDetailTab, initialTab }: { onClose?: () => void; initialQuery?: string; initialItemId?: string; initialDetailTab?: string; initialTab?: string } = {}) {
   const { t } = useI18n()
   const pluginUpdates = useMarketPluginUpdates()
   const settingsViews = usePluginStore((s) => s.settingsViews)
@@ -181,7 +185,7 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
   const scopeLimited = contentTypes.length < CONTENT_TABS.length
   // 本宿主一类都装不了(网页版):没有目录可逛,商店只剩插件提供的页和投稿。
   const storeOnly = contentTypes.length === 0
-  const [tab, setTab] = useState<Tab>('discover')
+  const [tab, setTab] = useState<Tab>(initialTab === 'connector' && connectorsSupported() ? 'connector' : 'discover')
   // 只剩插件页时落在第一张上(Extend 的页晚于商店挂载才注册,所以跟着 storeViews 再判);一张都没有、有投稿就落投稿。
   const firstStoreView = storeOnly && tab === 'discover' && !storeViewKey ? storeViews[0] : undefined
   useEffect(() => {
@@ -512,6 +516,7 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
     theme: t('market.tab.themes'),
     'amadeus-plugin': t('market.tab.plugins'),
     webapp: t('market.tab.webapps'),
+    connector: t('connectors.tab'),
     installed: t('market.tab.installed'),
     updates: t('market.tab.updates'),
     submit: t('market.tab.submit'),
@@ -601,7 +606,7 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
   }
 
   const showSearch = !storeOnly && !detail && !storeView && tab !== 'submit'
-  const showSort = !storeOnly && !detail && !storeView && tab !== 'submit' && tab !== 'webapp'
+  const showSort = !storeOnly && !detail && !storeView && tab !== 'submit' && tab !== 'webapp' && tab !== 'connector'
   /** 左栏高亮:开着插件页时内置入口都不亮。 */
   const navTab: Tab | null = storeView ? null : tab
   const openStoreView = (key: string): void => { setStoreViewKey(key); setDetail(null); setQuery('') }
@@ -624,7 +629,7 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
           <div className="settings-nav-group"><div className="settings-nav-grouphead">{t('market.group.discover')}</div><button className={navTab === 'discover' ? 'active' : ''} onClick={() => switchTab('discover')}><Compass size={15} />{navLabel.discover}</button></div>
           <div className="settings-nav-group">
             <div className="settings-nav-grouphead">{t('market.group.categories')}</div>
-            {categoryTabs.map((id) => <button key={id} className={navTab === id ? 'active' : ''} onClick={() => switchTab(id)}><TypeGlyph type={id as MarketType | 'webapp'} size={15} />{navLabel[id]}</button>)}
+            {categoryTabs.map((id) => <button key={id} className={navTab === id ? 'active' : ''} onClick={() => switchTab(id)}><TypeGlyph type={id as MarketType | 'webapp' | 'connector'} size={15} />{navLabel[id]}</button>)}
           </div>
           </>}
           {storeGroups.map((g) => (
@@ -705,6 +710,8 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
               webLoading ? <Skeleton variant="list" /> : webError ? <div className="mk-state-card"><PackageOpen size={28} /><strong>{webError}</strong><button className="btn sm" onClick={() => { setWebApps(null); setWebError('') }}>{t('market.retry')}</button></div> : visibleWebApps.length === 0 ? <div className="mk-state-card"><Globe size={28} /><strong>{query ? t('market.noResults') : t('market.empty')}</strong><span>{query ? t('market.noResultsHint') : t('market.webHint')}</span></div> : (
                 <div className="mk-webapps"><p className="mk-web-hint">{t('market.webHint')}</p><div className="mk-grid">{visibleWebApps.map((item) => <article key={`${item.handle}/${item.slug}`} className="mk-card" onClick={() => openWebApp(item)}><div className="mk-card-visual"><Globe size={24} /></div><div className="mk-card-content"><div className="mk-card-eyeline"><span>{navLabel.webapp}</span></div><button className="mk-card-title" onClick={(e) => { e.stopPropagation(); openWebApp(item) }}>{item.name}</button><div className="mk-card-summary">{item.summary || t('market.summaryFallback')}</div><div className="mk-card-foot"><span className="mk-card-meta">{item.handle}</span><button className="btn sm primary" onClick={(e) => { e.stopPropagation(); openWebApp(item) }}><Globe size={13} />{t('market.webOpen')}</button></div></div></article>)}</div></div>
               )
+            ) : tab === 'connector' ? (
+              <ConnectorStore query={query} onNotice={setNotice} />
             ) : tab === 'submit' ? (submissionView
               ? <PluginSettingsView pluginId={submissionView.pluginId} def={submissionView.item} bare />
               : <section className="mk-submit"><div className="mk-submit-copy"><span>{t('market.submitKicker')}</span><h2>{t('market.submitTitle')}</h2><p>{t('market.submitHint')}</p><button className="btn primary" onClick={() => void window.tangu?.openAccountCenter?.('submission')}><ExternalLink size={15} />{t('market.submitOpen')}</button></div><div className="mk-submit-art"><PackageOpen size={44} /><strong>{t('market.submitArtTitle')}</strong><span>{t('market.submitArtHint')}</span></div></section>

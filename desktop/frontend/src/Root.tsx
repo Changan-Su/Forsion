@@ -245,7 +245,7 @@ export function Root() {
       <AnimatePresence>
         {a.marketOpen && (
         <FloatingPanelFrame key="market" title={a.tr('market.title')} onClose={() => a.closeMarket()}>
-          <MarketModal key={a.marketTarget?.nonce} initialQuery={a.marketTarget?.q} initialItemId={a.marketTarget?.itemId} initialDetailTab={a.marketTarget?.detailTab} onClose={() => a.closeMarket()} />
+          <MarketModal key={a.marketTarget?.nonce} initialQuery={a.marketTarget?.q} initialItemId={a.marketTarget?.itemId} initialDetailTab={a.marketTarget?.detailTab} initialTab={a.marketTarget?.tab} onClose={() => a.closeMarket()} />
         </FloatingPanelFrame>
         )}
       </AnimatePresence>
