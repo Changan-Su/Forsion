@@ -264,7 +264,12 @@ export const isTeamImageAvatar = (avatar?: string): boolean => /^avatar\.(png|jp
 
 export interface NormalAgentDef {
   slug: string
+  /** 引擎写给老版本的显示名;界面一律走 agentName()。 */
   name: string
+  nameZh?: string
+  nameEn?: string
+  /** 显示哪个名字;缺省 = 跟随界面语言。 */
+  namePref?: 'auto' | 'zh' | 'en'
   /** 版本号(config.toml version,缺省 1.0.0);市场「可更新」检查用。 */
   version?: string
   description: string

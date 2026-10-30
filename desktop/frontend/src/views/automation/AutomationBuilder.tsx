@@ -31,6 +31,7 @@ import { WorkflowCanvas, type FlowNode } from './WorkflowCanvas'
 import { TemplateField } from './TemplateField'
 import './messages'
 import { homeTarget } from '../../services/engine/targets'
+import { agentName } from '../../agentName'
 
 type TriggerKind = 'timer' | 'event_seen' | 'file_chars_gte' | 'manual' | 'db_changed' | 'param'
 type TimerMode = 'daily_at' | 'at' | 'every'
@@ -572,7 +573,7 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
                   <select value={s.agentSlug} onChange={(e) => patchStep(s.key, { agentSlug: e.target.value })}>
                     <option value="">{t('automation.builder.runnerPick')}</option>
                     {agentDefs.filter((d) => d.slug !== 'muse').map((d) => (
-                      <option key={d.slug} value={d.slug}>{d.name}</option>
+                      <option key={d.slug} value={d.slug}>{agentName(d)}</option>
                     ))}
                   </select>
                 </div>

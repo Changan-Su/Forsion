@@ -25,7 +25,7 @@ registerMessages({
   'ws.detail.viewMore': { zh: '查看更多', en: 'View more' },
   'agents.detail.title': { zh: '后台 Agent', en: 'Background agents' },
   'agents.detail.settings': { zh: '设置', en: 'Settings' },
-  'agents.detail.historian': { zh: 'Historian 活动', en: 'Historian activity' },
+  'agents.detail.historian': { zh: '史官活动', en: 'Historian activity' },
   'agents.detail.noActivity': { zh: '暂无活动记录', en: 'No activity yet' },
   'chat.action.copy': { zh: '复制', en: 'Copy' },
   'chat.you': { zh: '你', en: 'You' },
